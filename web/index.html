@@ -2337,6 +2337,10 @@ function setRowsView(root, data, hasHero) { S.rowsView = { root, data, hasHero }
 function renderRows() {
   renderRowsInto($('rows'), S.rows);
   setRowsView($('rows'), S.rows, true);
+  // Default focus ONLY when the user isn't in the menu: rail rollover previews render this
+  // page behind the open rail, and stealing the zone made the next D-pad press move CONTENT
+  // while the user was still walking menu items.
+  if (S.zone === 'rail') return;
   const firstWithItems = S.rows.findIndex((r) => r.items.length);
   if (firstWithItems >= 0) focusCard(firstWithItems, 0);
 }
@@ -2609,6 +2613,10 @@ async function openDetail(it, push = true) {
   updateDetailPlayLabel(it.resume ? { label: `Resume · ${fmt(it.resume)}`, target: it } : { label: 'Play', target: it });
   syncDetailButtons(it);
   $('detail').querySelector('.detailScroll').scrollTop = 0;
+  // TV: focus lands on Play IMMEDIATELY — without this the .focus ring stayed on the now-
+  // hidden grid card, and the first D-pad press measured "nearest" from that stale rect
+  // (usually straight into the cast row, skipping the action buttons entirely).
+  if (document.body.classList.contains('tv')) { S.zone = ''; applyFocus($('dPlay')); }
 
   try {
     const d = await api(`/api/tmdb/${it.type}/${it.tmdbId}?append_to_response=credits,videos,content_ratings,release_dates,recommendations,similar`);
@@ -2815,6 +2823,15 @@ async function openSeasonEpisodes(show, seasonNumber) {
       card.addEventListener('click', () => play(item));
       grid.appendChild(card);
     });
+    // TV: OK on a season should land IN the episodes — focus stayed on the season card and
+    // LEFT/RIGHT kept switching seasons instead of browsing what just opened. Only when the
+    // user is actually in the seasons area (a background watched-mark re-render must not yank).
+    const cur = document.querySelector('.focus');
+    if (document.body.classList.contains('tv') && cur
+        && (cur.classList.contains('seasonCard') || cur.classList.contains('seasonTab'))) {
+      const firstEp = grid.querySelector('.epCard');
+      if (firstEp) applyFocus(firstEp);
+    }
   } catch (e) { grid.innerHTML = `<div class="sub" style="color:var(--muted)">Episodes failed: ${esc(e.message)}</div>`; }
 }
 document.addEventListener('click', () => document.querySelectorAll('.epMenu.open').forEach((m) => m.classList.remove('open')));
@@ -2901,6 +2918,9 @@ function closeDetail() {
   S.detailItem = null;
   S.qualityPref = null; // the toggle is detail-page state — home/hero plays use the account cap
   switchView(S.detailReturn || 'home');
+  // TV: hand focus back to the returned-to view — the ring otherwise stayed on a hidden
+  // detail button and the next D-pad press navigated a ghost page.
+  if (document.body.classList.contains('tv')) { S.zone = ''; clearFocus(); focusContent(); }
 }
 $('dBack').addEventListener('click', closeDetail);
 $('dPlay').addEventListener('click', () => play(detailPlayTarget || S.detailItem));
@@ -2994,7 +3014,11 @@ async function openPerson(id) {
     renderGrid(credits, $('personGrid'));
   } catch (e) { $('personGrid').innerHTML = `<div class="sub" style="color:var(--muted)">Failed: ${esc(e.message)}</div>`; }
 }
-function closePerson() { $('person').classList.remove('open'); $('detail').style.visibility = ''; S.view = 'detail'; }
+function closePerson() {
+  $('person').classList.remove('open'); $('detail').style.visibility = ''; S.view = 'detail';
+  // TV: the ring was still on a (hidden) person-page card — refocus the detail page.
+  if (document.body.classList.contains('tv')) { S.zone = ''; clearFocus(); focusContent(); }
+}
 $('pBack').addEventListener('click', closePerson);
 
 /* ============ player ============ */
@@ -3664,7 +3688,7 @@ async function loadDiscover() {
       renderRowsInto(root, rows);
       S.discoverData = rows;
     });
-    focusCard(0, 0);
+    if (S.zone !== 'rail') focusCard(0, 0); // rollover preview: don't steal the menu's focus
   } catch (e) { root.innerHTML = `<div class="row"><h2>Discover failed: ${esc(e.message)}</h2></div>`; }
 }
 async function buildTrailerRow(list) {
@@ -5545,6 +5569,30 @@ window.addEventListener('hashchange', () => {
 });
 
 function clearFocus() { document.querySelectorAll('.focus').forEach((e) => e.classList.remove('focus')); }
+// Land focus on the CURRENT view's natural element — used when entering content from the
+// rail and when an overlay (detail/person) closes. retried=internal: async views (calendar,
+// home rows) may still be rendering on the first attempt.
+function focusContent(retried) {
+  if (S.view === 'detail') {
+    const first = [...$('dPlay').parentElement.querySelectorAll('button')].find((el) => el.offsetParent !== null);
+    return applyFocus(first || $('dPlay'));
+  }
+  if (S.view === 'settings' || S.view === 'prefs') {
+    const els = formCtls($(S.view === 'prefs' ? 'prefs' : 'settings'));
+    return els[0] && els[0].focus({ preventScroll: false });
+  }
+  if (S.view === 'calendar') {
+    const it = document.querySelector('.calItem');
+    if (!it && !retried) return setTimeout(() => S.view === 'calendar' && focusContent(true), 400);
+    return it ? applyFocus(it) : undefined;
+  }
+  // Search with nothing typed yet: entering the page means "I want to type" — the grid
+  // path silently swallowed keystrokes when the results grid was empty.
+  if (S.view === 'search' && !$('searchInput').value.trim()) return $('searchInput').focus();
+  if (['movies', 'tv', 'search', 'library', 'watchlist', 'livetv', 'person'].includes(S.view)) return focusGrid(S.gridIdx || 0);
+  const v2 = S.rowsView || { hasHero: true };
+  return v2.hasHero ? focusHero(0) : focusCard(S.rowIdx, S.colIdx[S.rowIdx] || 0);
+}
 function applyFocus(el, scroll = true) {
   // Reclaim REAL focus from any lingering form control — a focused <select>/<input> eats
   // every subsequent key natively and the spatial nav goes dead (live TV finding).
@@ -5864,18 +5912,7 @@ document.addEventListener('keydown', (e) => {
     if (k === 'Enter') { if (!e.repeat) focusRailEnter(); return; }
     if (k === 'ArrowRight' || k === 'Escape' || k === 'Backspace') {
       leaveRail(); S.zone = ''; clearFocus();
-      if (S.view === 'detail') {
-        const first = [...$('dPlay').parentElement.querySelectorAll('button')].find((el) => el.offsetParent !== null);
-        return applyFocus(first || $('dPlay'));
-      }
-      if (S.view === 'settings' || S.view === 'prefs') {
-        const els = formCtls($(S.view === 'prefs' ? 'prefs' : 'settings'));
-        return els[0] && els[0].focus({ preventScroll: false });
-      }
-      if (S.view === 'calendar') { const it = document.querySelector('.calItem'); return it ? applyFocus(it) : undefined; }
-      if (['movies', 'tv', 'search', 'library', 'watchlist', 'livetv', 'person'].includes(S.view)) return focusGrid(S.gridIdx || 0);
-      const v2 = S.rowsView || { hasHero: true };
-      return v2.hasHero ? focusHero(0) : focusCard(S.rowIdx, S.colIdx[S.rowIdx] || 0);
+      return focusContent();
     }
     return;
   }

@@ -10,8 +10,8 @@ android {
         applicationId "app.triboon.tv"
         minSdk 21          // Shield (2015+), onn boxes, Chromecast w/ Google TV all clear this
         targetSdk 34
-        versionCode 11
-        versionName "0.1.10"
+        versionCode 12
+        versionName "0.5.1"
     }
 
     buildTypes {
