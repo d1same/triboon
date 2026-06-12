@@ -1207,6 +1207,9 @@ test('trakt: device link, scrobble forward, watchlist push + import', async () =
       if (req.url === '/oauth/device/token') return res.end(JSON.stringify({ access_token: 'acc1', refresh_token: 'ref1', expires_in: 7776000 }));
       if (req.url === '/users/settings') return res.end(JSON.stringify({ user: { username: 'owner-trakt' } }));
       if (req.url === '/sync/watchlist' && req.method === 'GET') return res.end(JSON.stringify([{ movie: { title: 'Pulled Movie', year: 2020, ids: { tmdb: 4242 } } }]));
+      if (req.url === '/sync/watched/movies') return res.end(JSON.stringify([{ movie: { title: 'Seen Movie', year: 2019, ids: { tmdb: 777 } } }]));
+      if (req.url === '/sync/watched/shows') return res.end(JSON.stringify([{ show: { title: 'Seen Show', year: 2018, ids: { tmdb: 888 } }, seasons: [{ number: 1, episodes: [{ number: 1 }, { number: 2 }] }] }]));
+      if (req.url === '/sync/playback') return res.end(JSON.stringify([{ progress: 41.5, paused_at: '2026-06-10T00:00:00.000Z', movie: { title: 'Half Movie', year: 2021, ids: { tmdb: 999 } } }]));
       res.end('{}');
     });
   });
@@ -1244,11 +1247,43 @@ test('trakt: device link, scrobble forward, watchlist push + import', async () =
   const mine = await httpJson(srv.port, 'GET', '/api/watchlist', null, admin);
   assert.ok(mine.json.some((w) => w.key === 'tmdb:movie:4242'), 'pulled movie landed in the local watchlist');
 
-  // Cleanup.
+  // SYNC-DOWN ran automatically right after linking: Trakt watched history became local
+  // watch records (check-marks), in-progress playback became a Continue-Watching entry
+  // carrying Trakt's PERCENT (Trakt never stores seconds).
+  await new Promise((r) => setTimeout(r, 300));
+  const watch = (await httpJson(srv.port, 'GET', '/api/watch', null, admin)).json;
+  const seenMovie = watch.find((w) => w.key === 'tmdb:movie:777');
+  assert.ok(seenMovie && seenMovie.watched, 'Trakt-watched movie imported as watched');
+  assert.ok(watch.find((w) => w.key === 'tmdb:tv:888:s1e1' && w.watched), 'show episodes imported per-episode (e1)');
+  assert.ok(watch.find((w) => w.key === 'tmdb:tv:888:s1e2' && w.watched), 'show episodes imported per-episode (e2)');
+  const half = watch.find((w) => w.key === 'tmdb:movie:999');
+  assert.ok(half && !half.watched && half.traktPct === 41.5, 'in-progress playback imported with the Trakt percent');
+  assert.strictEqual(half.meta.title, 'Half Movie');
+
+  // Manual re-sync: idempotent (everything already imported → 0 new) and never downgrades.
+  const sync = await httpJson(srv.port, 'POST', '/api/trakt/sync', {}, admin);
+  assert.strictEqual(sync.status, 200);
+  assert.strictEqual(sync.json.watched, 0, 're-sync imports nothing twice');
+  assert.strictEqual(sync.json.totalWatched, 3);
+
+  // Explicit ✓ (no playback context) → /sync/history; explicit unwatch → history/remove.
+  await httpJson(srv.port, 'POST', '/api/watch', { key: 'tmdb:movie:603', watched: true, position: 0, duration: 0, meta: {} }, admin);
+  await new Promise((r) => setTimeout(r, 200));
+  const histAdd = calls.find((c) => c.path === '/sync/history' && c.method === 'POST');
+  assert.ok(histAdd && histAdd.body.movies && histAdd.body.movies[0].ids.tmdb === 603, 'mark-watched exported to Trakt history');
+  await httpJson(srv.port, 'POST', '/api/watch', { key: 'tmdb:movie:603', watched: false, unwatch: true, position: 0, duration: 0, meta: {} }, admin);
+  await new Promise((r) => setTimeout(r, 200));
+  const histRm = calls.find((c) => c.path === '/sync/history/remove');
+  assert.ok(histRm && histRm.body.movies && histRm.body.movies[0].ids.tmdb === 603, 'unwatch exported as history remove');
+
+  // Cleanup (incl. the imported records so later suites see a clean slate).
   await httpJson(srv.port, 'POST', '/api/trakt/unlink', {}, admin);
   assert.strictEqual((await httpJson(srv.port, 'GET', '/api/trakt/status', null, admin)).json.linked, false);
   await httpJson(srv.port, 'POST', '/api/watchlist', { key: 'tmdb:tv:1399', on: false }, admin);
   await httpJson(srv.port, 'POST', '/api/watchlist', { key: 'tmdb:movie:4242', on: false }, admin);
+  for (const k of ['tmdb:movie:777', 'tmdb:tv:888:s1e1', 'tmdb:tv:888:s1e2', 'tmdb:movie:999', 'tmdb:movie:603']) {
+    await httpJson(srv.port, 'POST', '/api/watch', { key: k, remove: true }, admin);
+  }
   delete process.env.TRAKT_BASE;
   mock.close();
 });

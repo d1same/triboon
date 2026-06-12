@@ -140,10 +140,22 @@ function xtUrlFor(s, streamId) {
   const base = String(s.xtHost || '').replace(/\/+$/, '');
   return `${base}/live/${encodeURIComponent(s.xtUser || '')}/${encodeURIComponent(s.xtPass || '')}/${streamId}.m3u8`;
 }
+let iptvRefreshing = false;
 async function loadIptvChannels() {
   const s = settings.get();
   const key = s.iptvMode === 'xtream' ? `xt:${s.xtHost}:${s.xtUser}` : `m3u:${s.iptvUrl}`;
   if (iptvCache.key === key && Date.now() - iptvCache.at < 3600000) return iptvCache.channels;
+  // STALE-WHILE-REVALIDATE (TiviMate model): once we have ANY playlist for this source,
+  // no user ever waits on the panel again — serve it instantly and refresh in the background.
+  if (iptvCache.key === key && iptvCache.channels.length) {
+    if (!iptvRefreshing) {
+      iptvRefreshing = true;
+      fetchIptvChannels(s, key)
+        .catch((e) => { console.error('[iptv refresh]', e.message); iptvCache.at = Date.now() - 3000000; }) // retry in ~10min
+        .finally(() => { iptvRefreshing = false; });
+    }
+    return iptvCache.channels;
+  }
   try {
     return await fetchIptvChannels(s, key);
   } catch (e) {
@@ -1108,6 +1120,64 @@ function autoScanTick() {
 }
 setInterval(autoScanTick, 60000).unref(); // checks the admin-set cadence every minute
 
+// ---- Trakt sync-DOWN: the user's watched history + in-progress playback → local state ----
+// Writes into the DEFAULT profile (Trakt accounts are per user; profiles are a local idea).
+// Never downgrades: locally-watched stays watched, a real local position beats an imported %.
+// Trakt stores playback progress as a PERCENT — kept as traktPct; the player seeks to it
+// once the real duration is known.
+async function traktSyncDown(uid) {
+  if (!trakt.status(uid).linked) { const e = new Error('Trakt is not linked'); e.status = 400; throw e; }
+  const [watched, playback] = await Promise.all([trakt.pullWatched(uid), trakt.pullPlayback(uid)]);
+  // Artwork for the continue-watching imports (they become visible cards) — best effort.
+  const art = {};
+  for (let i = 0; i < Math.min(playback.length, 30); i += 6) {
+    await Promise.all(playback.slice(i, i + 6).map(async (p) => {
+      try {
+        const d = await tmdb.get(`/${p.type === 'movie' ? 'movie' : 'tv'}/${p.tmdbId}`);
+        if (d && d.backdrop_path) art[p.key] = `https://image.tmdb.org/t/p/w1280${d.backdrop_path}`;
+      } catch {}
+    }));
+  }
+  const prefix = `${uid}:default:`;
+  let nWatched = 0, nPlayback = 0;
+  store.update('watch', {}, (all) => {
+    for (const w of watched) {
+      const k = prefix + w.key;
+      if (all[k] && all[k].watched) continue;
+      const meta = (all[k] && all[k].meta) || {};
+      all[k] = { position: 0, duration: 0, watched: true, fromTrakt: true,
+        meta: { ...meta, title: meta.title || w.title, year: meta.year || w.year, type: meta.type || (w.type === 'movie' ? 'movie' : 'episode'), tmdbId: w.tmdbId },
+        updatedAt: (all[k] && all[k].updatedAt) || nextStamp() };
+      nWatched++;
+    }
+    for (const p of playback) {
+      const cur = all[prefix + p.key];
+      if (cur && (cur.watched || cur.position > 30)) continue; // local progress wins
+      all[prefix + p.key] = { position: 0, duration: 0, traktPct: Math.round(p.pct * 10) / 10, watched: false, fromTrakt: true,
+        meta: { ...(cur && cur.meta || {}), title: (cur && cur.meta && cur.meta.title) || p.title, year: p.year,
+          type: p.type === 'movie' ? 'movie' : 'episode', tmdbId: p.tmdbId, ...(art[p.key] ? { backdrop: art[p.key] } : {}) },
+        updatedAt: p.pausedAt || nextStamp() };
+      nPlayback++;
+    }
+    return all;
+  });
+  store.update('trakt', {}, (all) => { if (all[uid]) all[uid].syncedAt = Date.now(); return all; });
+  return { ok: true, watched: nWatched, playback: nPlayback, totalWatched: watched.length };
+}
+// Auto-resync every 6h per linked user — one user per tick keeps the calls gentle.
+function traktSyncTick() {
+  const tokens = store.read('trakt', {});
+  for (const [uid, tok] of Object.entries(tokens)) {
+    if (!tok || (tok.syncedAt && Date.now() - tok.syncedAt < 6 * 3600000)) continue;
+    store.update('trakt', {}, (all) => { if (all[uid]) all[uid].syncedAt = Date.now(); return all; }); // claim before the async work
+    traktSyncDown(uid)
+      .then((r) => { if (r.watched || r.playback) console.log(`[trakt] sync: +${r.watched} watched, +${r.playback} in-progress`); })
+      .catch((e) => console.error('[trakt sync]', e.message));
+    break;
+  }
+}
+setInterval(traktSyncTick, 60000).unref();
+
 // ---------- handlers, continued ----------
 Object.assign(H, {
   libraryItems: async (ctx) => {
@@ -1228,10 +1298,20 @@ Object.assign(H, {
       };
       return all;
     });
-    if (b.remove) return send(ctx.res, 200, { ok: true });
-    // Trakt scrobble (fire-and-forget; only for linked users + tmdb-keyed items).
-    if (b.duration > 0 && trakt.status(ctx.user.id).linked) {
-      trakt.scrobble(ctx.user.id, b.key, ((b.position || 0) / b.duration) * 100, !!b.watched);
+    if (b.remove) {
+      // "Mark unwatched" on a movie removes the record AND its Trakt history; the plain
+      // Continue-Watching ✕ (no unwatch flag) stays a local-only tidy-up.
+      if (b.unwatch && trakt.status(ctx.user.id).linked) trakt.history(ctx.user.id, b.key, false);
+      return send(ctx.res, 200, { ok: true });
+    }
+    // Trakt sync-up (fire-and-forget; only for linked users + tmdb-keyed items):
+    // real playback scrobbles; the explicit ✓ button (no playback context) and explicit
+    // unwatch (client sends unwatch:true — progress beacons must never erase history) go
+    // through /sync/history instead.
+    if (trakt.status(ctx.user.id).linked) {
+      if (b.duration > 0) trakt.scrobble(ctx.user.id, b.key, ((b.position || 0) / b.duration) * 100, !!b.watched);
+      else if (b.watched) trakt.history(ctx.user.id, b.key, true);
+      if (b.watched === false && b.unwatch) trakt.history(ctx.user.id, b.key, false);
     }
     send(ctx.res, 200, { ok: true });
   },
@@ -1245,12 +1325,19 @@ Object.assign(H, {
   traktExchange: async (ctx) => {
     const b = await readJson(ctx.req);
     if (!b.code) return send(ctx.res, 400, { error: 'code required' });
-    try { send(ctx.res, 200, await trakt.exchangeCode(ctx.user.id, b.code)); }
-    catch (e) { send(ctx.res, 400, { error: e.message }); }
+    try {
+      const r = await trakt.exchangeCode(ctx.user.id, b.code);
+      if (r.state === 'linked') traktSyncDown(ctx.user.id).catch((e) => console.error('[trakt sync]', e.message));
+      send(ctx.res, 200, r);
+    } catch (e) { send(ctx.res, 400, { error: e.message }); }
   },
   traktPoll: async (ctx) => {
-    try { send(ctx.res, 200, await trakt.linkPoll(ctx.user.id)); }
-    catch (e) { send(ctx.res, 502, { error: 'trakt unreachable' }); }
+    try {
+      const r = await trakt.linkPoll(ctx.user.id);
+      // Fresh link → pull the user's Trakt life in right away (async; UI shows counts later).
+      if (r.state === 'linked') traktSyncDown(ctx.user.id).catch((e) => console.error('[trakt sync]', e.message));
+      send(ctx.res, 200, r);
+    } catch (e) { send(ctx.res, 502, { error: 'trakt unreachable' }); }
   },
   traktUnlink: async (ctx) => { trakt.unlink(ctx.user.id); send(ctx.res, 200, { ok: true }); },
   // Import the user's Trakt watchlist into Triboon's (adds only — nothing is removed).
@@ -1269,6 +1356,13 @@ Object.assign(H, {
     } catch (e) { send(ctx.res, 502, { error: 'trakt unreachable' }); }
   },
 
+  // Pull watched history + in-progress playback FROM Trakt into local watch state.
+  // Manual "Sync now"; also runs automatically right after linking and every 6h (tick below).
+  traktSync: async (ctx) => {
+    try { send(ctx.res, 200, await traktSyncDown(ctx.user.id)); }
+    catch (e) { console.error('[trakt sync]', e.message); send(ctx.res, 502, { error: 'trakt unreachable' }); }
+  },
+
   // Bulk mark — a whole show/season watched or unwatched in one call (the client supplies the
   // episode keys it already knows from TMDB). Unwatch with watched:false removes the entries.
   watchBulk: async (ctx) => {
@@ -1285,6 +1379,14 @@ Object.assign(H, {
       }
       return all;
     });
+    // Trakt: a whole-show bulk syncs as ONE show-level history op (Trakt expands episodes).
+    if (trakt.status(ctx.user.id).linked) {
+      const shows = new Set(items.map((it) => ((/^tmdb:tv:(\d+):/.exec(it && it.key || '')) || [])[1]).filter(Boolean));
+      for (const id of shows) trakt.history(ctx.user.id, `tmdb:tv:${id}`, b.watched !== false);
+      for (const it of items) { // bulk movie marks (rare) go item-level
+        if (/^tmdb:movie:\d+$/.test(it && it.key || '')) trakt.history(ctx.user.id, it.key, b.watched !== false);
+      }
+    }
     send(ctx.res, 200, { ok: true, count: items.length });
   },
 
@@ -1750,6 +1852,7 @@ const ROUTES = [
   { m: 'POST', re: /^\/api\/trakt\/exchange$/, auth: 'user', h: H.traktExchange },
   { m: 'POST', re: /^\/api\/trakt\/unlink$/, auth: 'user', h: H.traktUnlink },
   { m: 'POST', re: /^\/api\/trakt\/pull$/, auth: 'user', h: H.traktPull },
+  { m: 'POST', re: /^\/api\/trakt\/sync$/, auth: 'user', h: H.traktSync },
   { m: 'GET', re: /^\/api\/mounts$/, auth: 'admin', h: H.mounts },
   { m: 'GET', re: /^\/api\/health\/(\w+)$/, auth: 'user', h: H.health },
   { m: 'POST', re: /^\/api\/mount$/, auth: 'admin', h: H.mount },
@@ -1868,6 +1971,15 @@ if (require.main === module) {
   server.listen(PORT, () => {
     console.log(`Triboon → http://localhost:${PORT}`);
     try { getPool(); } catch { /* no provider configured yet — fine */ }
+    // Warm the Live TV playlist off the critical path: the first viewer after a restart
+    // gets the in-memory cache instead of waiting out a multi-MB panel fetch + parse.
+    setTimeout(() => {
+      const s = settings.get();
+      if ((s.iptvMode === 'xtream' && s.xtHost) || s.iptvUrl) {
+        loadIptvChannels().then((ch) => console.log(`[iptv] warmed ${ch.length} channels`))
+          .catch((e) => console.error('[iptv warm]', e.message));
+      }
+    }, 1500).unref();
   });
   // Docker sends SIGTERM on `docker stop` — flush the store and close cleanly instead of
   // being SIGKILLed 10s later with dirty state.

@@ -197,6 +197,58 @@ class Trakt {
       .catch((e) => console.error('[trakt watchlist]', e.message));
   }
 
+  // Explicit ✓/unwatch from the UI → Trakt history (scrobble only covers real playback).
+  // A bare show key marks/unmarks the WHOLE show — matches the bulk mark-series action.
+  history(uid, key, on) {
+    const item = Trakt.itemFor(key);
+    if (!item) return;
+    const body = item.movie ? { movies: [item.movie] }
+      : item.episode ? { shows: [{ ...item.show, seasons: [{ number: item.episode.season, episodes: [{ number: item.episode.number }] }] }] }
+      : { shows: [item.show] };
+    this.api(uid, on ? '/sync/history' : '/sync/history/remove', 'POST', body)
+      .catch((e) => console.error('[trakt history]', e.message));
+  }
+
+  // Everything the user has WATCHED on Trakt → our watch keys. Movies + per-episode shows.
+  async pullWatched(uid) {
+    const keys = [];
+    const mv = await this.api(uid, '/sync/watched/movies', 'GET');
+    for (const e of (mv && mv.status === 200 && Array.isArray(mv.json) ? mv.json : [])) {
+      const id = e.movie && e.movie.ids && e.movie.ids.tmdb;
+      if (id) keys.push({ key: `tmdb:movie:${id}`, title: e.movie.title || '', year: e.movie.year || null, type: 'movie', tmdbId: id });
+    }
+    const sh = await this.api(uid, '/sync/watched/shows', 'GET');
+    for (const e of (sh && sh.status === 200 && Array.isArray(sh.json) ? sh.json : [])) {
+      const id = e.show && e.show.ids && e.show.ids.tmdb;
+      if (!id) continue;
+      for (const s of e.seasons || []) {
+        for (const ep of s.episodes || []) {
+          keys.push({ key: `tmdb:tv:${id}:s${s.number}e${ep.number}`, title: e.show.title || '', year: e.show.year || null, type: 'episode', tmdbId: id });
+        }
+      }
+    }
+    return keys.slice(0, 20000); // a heavy account stays bounded
+  }
+
+  // In-progress playback (Trakt stores a PERCENT, not seconds) → continue-watching imports.
+  async pullPlayback(uid) {
+    const r = await this.api(uid, '/sync/playback', 'GET');
+    if (!r || r.status !== 200 || !Array.isArray(r.json)) return [];
+    const out = [];
+    for (const e of r.json.slice(0, 100)) {
+      const pct = +e.progress || 0;
+      if (pct < 2 || pct > 96) continue; // ends are noise — finished or barely started
+      if (e.movie && e.movie.ids && e.movie.ids.tmdb) {
+        out.push({ key: `tmdb:movie:${e.movie.ids.tmdb}`, pct, title: e.movie.title || '', year: e.movie.year || null, type: 'movie', tmdbId: e.movie.ids.tmdb, pausedAt: Date.parse(e.paused_at || '') || Date.now() });
+      } else if (e.episode && e.show && e.show.ids && e.show.ids.tmdb) {
+        out.push({ key: `tmdb:tv:${e.show.ids.tmdb}:s${e.episode.season}e${e.episode.number}`, pct,
+          title: `${e.show.title || ''} — S${String(e.episode.season).padStart(2, '0')}E${String(e.episode.number).padStart(2, '0')}`,
+          year: e.show.year || null, type: 'episode', tmdbId: e.show.ids.tmdb, pausedAt: Date.parse(e.paused_at || '') || Date.now() });
+      }
+    }
+    return out;
+  }
+
   // Pull the user's Trakt watchlist → [{key, title, type, year}] for merging into ours.
   async pullWatchlist(uid) {
     const r = await this.api(uid, '/sync/watchlist', 'GET');

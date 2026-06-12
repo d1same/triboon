@@ -997,15 +997,19 @@ body.tv #heroCredits{height:16px;margin-bottom:6px;overflow:hidden}
    what's on now + progress + what's next; ↑/↓ only moves the selection — Enter/click tunes. */
 #player .liveOnly{display:none}
 #player.live .liveOnly{display:grid}
-/* 2/3-screen translucent guide — the video keeps playing through it. */
-#pGuide{position:absolute;left:0;right:0;bottom:0;top:auto;height:66vh;z-index:7;display:none;flex-direction:column;
-  background:linear-gradient(0deg,rgba(11,8,18,.72) 45%,rgba(11,8,18,.42) 80%,rgba(11,8,18,0));
+/* Bottom-THIRD translucent guide — the video keeps playing above it; the list scrolls
+   through the WHOLE channel set (owner: 1/3 of the screen, but scrollable). */
+#pGuide{position:absolute;left:0;right:0;bottom:0;top:auto;height:36vh;z-index:7;display:none;flex-direction:column;
+  background:linear-gradient(0deg,rgba(11,8,18,.78) 55%,rgba(11,8,18,.46) 85%,rgba(11,8,18,0));
   backdrop-filter:blur(5px);border-top:1px solid var(--line)}
 body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
 #pGuide.open{display:flex}
-#pGuide .pgHead{font:800 16px "Sora";padding:14px 26px 8px;display:flex;align-items:baseline;justify-content:space-between;flex:none}
+#pGuide .pgHead{font:800 16px "Sora";padding:10px 26px 6px;display:flex;align-items:baseline;justify-content:space-between;flex:none}
 #pGuide .pgHint{font:500 10px "JetBrains Mono";color:var(--muted)}
-#pgList{flex:1;overflow-y:auto;padding:0 16px 14px;scroll-padding:8px}
+#pgList{flex:1;overflow-y:auto;padding:0 16px 14px;scroll-padding:76px 8px 8px} /* top inset clears the pinned back row */
+/* The way back to what you were watching stays PINNED at the top while the list scrolls. */
+.pgRow.pgBack{position:sticky;top:0;z-index:2;background:rgba(17,12,27,.97);margin-bottom:6px;
+  border:1px solid var(--line)}
 .pgRow{display:flex;align-items:center;gap:14px;width:100%;text-align:left;padding:9px 14px;border-radius:13px;margin-bottom:3px;min-height:62px}
 .pgRow:hover,.pgRow:focus{background:rgba(34,25,52,.88);outline:none;box-shadow:inset 0 0 0 2px var(--coral)}
 .pgRow.cur{background:rgba(34,25,52,.55)}
@@ -2157,14 +2161,16 @@ async function loadRows() {
   try {
     const [cw] = await Promise.all([api('/api/watch' + profileQ()), ensureLocalMap().catch(() => null)]);
     S.watchMap = Object.fromEntries(cw.map((w) => [w.key, w]));
-    const items = cw.filter((w) => !w.watched && w.position > 30 && !String(w.key).startsWith('live:')).map((w) => ({
+    // Local progress (position seconds) plus Trakt-imported progress (percent only).
+    const items = cw.filter((w) => !w.watched && (w.position > 30 || w.traktPct > 2) && !String(w.key).startsWith('live:')).map((w) => ({
       // Continue Watching shows the SHOW title only — the "— S02E01 · Episode Name" tail
       // overflowed every card and hero (resume position already encodes where you are).
       key: w.key, title: String(w.meta.title || w.key).replace(/\s*—\s*S\d+E\d+.*$/i, ''), year: w.meta.year || '', genre: w.meta.genre || '',
       rating: w.meta.rating || '—', overview: w.meta.overview || '',
       tmdbId: w.meta.tmdbId, type: w.meta.type, q: w.meta.q,
-      backdrop: w.meta.backdrop || procBackdrop(280, 320, 5), progress: w.duration ? w.position / w.duration : 0,
-      resume: w.position,
+      backdrop: w.meta.backdrop || procBackdrop(280, 320, 5),
+      progress: w.duration ? w.position / w.duration : (w.traktPct || 0) / 100,
+      resume: w.position, _traktPct: w.traktPct || 0,
     }));
     try { items.unshift(...nextEpisodeBumps(cw, items)); } catch {}
     if (items.length) rows.push({ name: 'Continue watching', items });
@@ -2269,7 +2275,7 @@ async function markItemWatched(it, watched) {
     } catch (e) { return toast(e.message); }
   } else {
     try {
-      await api('/api/watch', { method: 'POST', body: { key: it.key, profile: S.profile ? S.profile.id : undefined, meta: wlMeta(it), ...(watched ? { watched: true, position: 0, duration: 0 } : { remove: true }) } });
+      await api('/api/watch', { method: 'POST', body: { key: it.key, profile: S.profile ? S.profile.id : undefined, meta: wlMeta(it), ...(watched ? { watched: true, position: 0, duration: 0 } : { remove: true, unwatch: true }) } });
     } catch (e) { return toast(e.message); }
     if (watched) S.watchMap[it.key] = { watched: true, position: 0, duration: 0 }; else delete S.watchMap[it.key];
   }
@@ -2364,7 +2370,7 @@ function makeCard(it, poster, onFocus) {
     c.innerHTML = (it._nextEp ? `<span class="cardTag">${it._newEp ? 'NEW EPISODE' : 'NEXT EPISODE'}</span>` : '') +
       `<div class="label">${esc(it.title)}</div>` + (it.progress ? `<div class="pb" style="width:${it.progress * 100}%"></div>` : '');
     // Continue Watching cards manage themselves: ✓ / ✕ on the thumbnail (Plex-style).
-    if (it.resume) {
+    if (it.resume || it._traktPct) {
       c.insertAdjacentHTML('beforeend',
         '<button class="cwAct watch" title="Mark watched">✓</button><button class="cwAct rm" title="Remove from Continue Watching">✕</button>');
       c.querySelector('.cwAct.watch').addEventListener('click', (e) => { e.stopPropagation(); cwOp(it, { watched: true, position: 0, duration: 0 }, `“${it.title}” marked watched`); });
@@ -2934,7 +2940,7 @@ async function setEpisodeWatched(item, ep, show, seasonNumber, watched) {
   if (watched) S.watchMap[item.key] = { watched: true, position: 0, duration: 0 };
   else delete S.watchMap[item.key];
   try {
-    await api('/api/watch', { method: 'POST', body: { key: item.key, watched, position: 0, duration: ep.runtime ? ep.runtime * 60 : 0, profile: S.profile ? S.profile.id : undefined, meta: { title: show.title, type: 'episode', tmdbId: show.tmdbId } } });
+    await api('/api/watch', { method: 'POST', body: { key: item.key, watched, unwatch: !watched || undefined, position: 0, duration: ep.runtime ? ep.runtime * 60 : 0, profile: S.profile ? S.profile.id : undefined, meta: { title: show.title, type: 'episode', tmdbId: show.tmdbId } } });
   } catch {}
   openSeasonEpisodes(show, seasonNumber); // re-render marks
 }
@@ -3049,7 +3055,7 @@ $('dPlayed').addEventListener('click', async () => {
   const nowWatched = !(w && w.watched);
   $('dPlayed').classList.toggle('on', nowWatched);
   S.watchMap[it.key] = { ...(w || {}), watched: nowWatched };
-  try { await api('/api/watch', { method: 'POST', body: { key: it.key, watched: nowWatched, position: 0, duration: w ? w.duration : 0, profile: S.profile ? S.profile.id : undefined, meta: wlMeta(it) } }); toast(nowWatched ? 'Marked as watched' : 'Marked unwatched'); }
+  try { await api('/api/watch', { method: 'POST', body: { key: it.key, watched: nowWatched, unwatch: !nowWatched || undefined, position: 0, duration: w ? w.duration : 0, profile: S.profile ? S.profile.id : undefined, meta: wlMeta(it) } }); toast(nowWatched ? 'Marked as watched' : 'Marked unwatched'); }
   catch (e) { toast(e.message); }
 });
 $('dStartOver').addEventListener('click', () => {
@@ -3169,6 +3175,21 @@ function openPlayer(it, mount) {
   // True direct play with audio passthrough is the native ExoPlayer phase, not the shell.
   const preferRemux = mount.playback && mount.playback.method === 'remux' && mount.remuxUrl;
   startSource(preferRemux ? 'remux' : 'direct', it.resume || 0);
+  // Trakt-imported progress is a PERCENT (Trakt never stores seconds) — resume once a real
+  // duration is known: native metadata for direct play, the /api/tracks probe for remux.
+  if (!it.resume && it._traktPct > 1 && it.type !== 'live') {
+    const pct = Math.min(96, it._traktPct);
+    const seekPct = () => {
+      const p2 = S.playing; if (!p2 || p2.item !== it || p2._pctDone) return;
+      const dur = (p2.duration && isFinite(p2.duration) && p2.duration) || (isFinite(v.duration) && v.duration) || 0;
+      if (!dur) return;
+      p2._pctDone = true;
+      seekTo((pct / 100) * dur);
+      toast(`Resuming where you left off on Trakt (${Math.round(pct)}%)`);
+    };
+    v.addEventListener('loadedmetadata', seekPct, { once: true });
+    setTimeout(seekPct, 2500); // remux path: duration arrives via the track probe, not metadata
+  }
   v.onerror = () => failover();
   startHealthPoll(mount.id);
   S.watchTimer = setInterval(saveWatch, 10000);
@@ -4403,6 +4424,29 @@ async function fetchEpg(idx) {
 }
 const fmtT = (ms) => ms ? new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
 
+const LIVE_TTL = 1800000; // 30 min — the server refreshes the playlist in the background
+function fillLiveState(r) {
+  S.liveEpg = !!r.epg;
+  // Picking a category shows its channels AS A GUIDE LIST by default (owner request) —
+  // the ☰/▤ toggle still flips to the logo grid for browsing by eye.
+  if (S.liveGuide === undefined && S.liveEpg) S.liveGuide = true;
+  S.liveChannels = r.channels;
+  S._liveAt = Date.now();
+  S.liveOpen = S.liveOpen || new Set();
+  S.liveHidden = new Set(r.hiddenGroups || []);
+  S.liveGlobalHidden = new Set(r.globalHidden || []); // admin only — enforced server-side for users
+}
+// Warm the channel cache at APP OPEN (TiviMate model): by the time anyone presses Live TV,
+// the multi-MB playlist is already parsed in memory and the page opens instantly.
+function prefetchLiveTv() {
+  if (!S.serverInfo || !S.serverInfo.iptv || (S.user && S.user.iptvAllowed === false)) return;
+  if (S.liveChannels && S.liveChannels.length && Date.now() - (S._liveAt || 0) < LIVE_TTL) return;
+  if (S._livePrefetching) return;
+  S._livePrefetching = true;
+  api('/api/iptv/channels').then((r) => {
+    if (r.configured && r.channels.length) fillLiveState(r);
+  }).catch(() => {}).finally(() => { S._livePrefetching = false; });
+}
 async function loadLiveTv() {
   $('browseTitle').textContent = 'Live TV';
   const grid = $('grid');
@@ -4410,7 +4454,7 @@ async function loadLiveTv() {
   // In-memory channel cache: re-entering Live TV (and the rail's rollover preview) must NOT
   // refetch + reparse a multi-MB 19k-channel payload — that synchronous parse froze the page
   // for seconds, and the D-pad keys pressed during the freeze replayed as a burst afterwards.
-  if (S.liveChannels && S.liveChannels.length && Date.now() - (S._liveAt || 0) < 300000) {
+  if (S.liveChannels && S.liveChannels.length && Date.now() - (S._liveAt || 0) < LIVE_TTL) {
     scaffoldLiveTv(grid);
     return;
   }
@@ -4419,15 +4463,7 @@ async function loadLiveTv() {
     const r = await api('/api/iptv/channels');
     if (!r.configured) { grid.innerHTML = '<div class="gridMore">Live TV isn’t set up — the admin can add an M3U playlist or Xtream login in Settings → Catalog &amp; Live TV.</div>'; return; }
     if (!r.channels.length) { grid.innerHTML = '<div class="gridMore">Playlist loaded but no channels found.</div>'; return; }
-    S.liveEpg = !!r.epg;
-    // Picking a category shows its channels AS A GUIDE LIST by default (owner request) —
-    // the ☰/▤ toggle still flips to the logo grid for browsing by eye.
-    if (S.liveGuide === undefined && S.liveEpg) S.liveGuide = true;
-    S.liveChannels = r.channels;
-    S._liveAt = Date.now();
-    S.liveOpen = S.liveOpen || new Set();
-    S.liveHidden = new Set(r.hiddenGroups || []);
-    S.liveGlobalHidden = new Set(r.globalHidden || []); // admin only — enforced server-side for users
+    fillLiveState(r);
     if (S.view !== 'livetv') return; // user navigated away while the playlist downloaded
     scaffoldLiveTv(grid);
   } catch (e) { grid.innerHTML = `<div class="gridMore">Live TV failed: ${esc(e.message)}</div>`; }
@@ -4652,7 +4688,7 @@ async function renderGuide(body, pool) {
   for (let t = w0; t < w1; t += 1800000) ticks += `<span class="gTick" style="left:${pct(t)}%">${fmtH(t)}</span>`;
   wrap.innerHTML = `<div class="gRow gHead"><div class="gCh"></div><div class="gTl">${ticks}</div></div>`;
 
-  for (const ch of chans) {
+  const addRow = (ch, progs, before) => {
     const row = document.createElement('div'); row.className = 'gRow focusable';
     const i = S.gridItems.length;
     row.dataset.grid = i;
@@ -4661,7 +4697,6 @@ async function renderGuide(body, pool) {
     S.gridItems.push(it);
     const logo = safeUrl(ch.logo);
     let blocks = '';
-    const progs = progsByIdx[ch.idx] || [];
     for (const p of progs) {
       const l = pct(p.start), r = pct(p.stop);
       if (r - l < 0.4) continue;
@@ -4674,24 +4709,40 @@ async function renderGuide(body, pool) {
       <div class="gTl"><div class="gNow" style="left:${pct(now)}%"></div>${blocks}</div>`;
     row.addEventListener('click', () => playChannel(it));
     row.addEventListener('mouseenter', () => pointerHover() && focusGrid(i));
-    wrap.appendChild(row);
-  }
-  // Big categories page IN the guide: a D-pad-clickable "show more" row extends the window
-  // (EPG fetches stay bounded — one extra request per press, never 161 channels at once).
-  if (pool.length > cap) {
-    const more = document.createElement('button');
-    more.className = 'gRow focusable gMore';
-    const gi = S.gridItems.length;
-    more.dataset.grid = gi;
-    S.gridItems.push({ title: 'Show more channels', _isHeader: true });
-    more.innerHTML = `<div class="gCh" style="width:auto;border:0"><span>⌄ Show ${Math.min(24, pool.length - cap)} more channels (${pool.length - cap} left)</span></div>`;
-    more.addEventListener('click', () => {
-      S.liveGuideCap = cap + 24;
-      renderLiveTvBody();
-      if (S.zone === 'grid') setTimeout(() => focusGrid(gi), 600); // land on the first new row
-    });
-    more.addEventListener('mouseenter', () => pointerHover() && focusGrid(gi));
-    wrap.appendChild(more);
+    if (before) wrap.insertBefore(row, before); else wrap.appendChild(row);
+  };
+  for (const ch of chans) addRow(ch, progsByIdx[ch.idx] || []);
+
+  // AUTO-EXTEND: more rows append IN PLACE as the bottom approaches (wheel or D-pad — the
+  // sentinel just has to become visible). The old "Show more" button re-rendered the whole
+  // page: scroll reset + a delayed focus jump = the "guide jumps back up" bug.
+  let count = chans.length;
+  if (pool.length > count) {
+    const sentinel = document.createElement('div');
+    sentinel.style.height = '8px';
+    wrap.appendChild(sentinel);
+    let busy = false;
+    const extend = async () => {
+      if (busy || !wrap.isConnected) return;
+      const next = pool.slice(count, count + 24);
+      if (!next.length) { io.disconnect(); sentinel.remove(); return; }
+      busy = true;
+      try {
+        const g2 = await api('/api/iptv/guide?chs=' + next.map((c) => c.idx).join(','));
+        if (!wrap.isConnected || S.liveGuide !== true) return; // page re-rendered/left meanwhile
+        const progs2 = Object.fromEntries((g2.channels || []).map((c) => [c.idx, c.programmes || []]));
+        for (const ch of next) addRow(ch, progs2[ch.idx] || [], sentinel);
+        count += next.length;
+        S.liveGuideCap = count; // a filter-driven re-render keeps the window the user reached
+      } catch {}
+      busy = false;
+      if (count >= pool.length) { io.disconnect(); sentinel.remove(); }
+      // IO only fires on threshold CROSSINGS — if the sentinel is still on screen after the
+      // append (huge viewport, short rows), keep going until it's actually below the fold.
+      else if (sentinel.getBoundingClientRect().top < innerHeight + 100) extend();
+    };
+    const io = new IntersectionObserver((en) => { if (en.some((x) => x.isIntersecting)) extend(); }, { rootMargin: '300px' });
+    io.observe(sentinel);
   }
   body.appendChild(wrap);
 }
@@ -4794,20 +4845,42 @@ async function togglePlayerGuide() {
   }
   if (!list.length) return toast(S.serverInfo.iptv ? 'Favorite some channels in Live TV first' : 'Live TV is not set up');
   const lp = $('pgList'); lp.innerHTML = '';
-  // Watching a movie/show? Offer the way back at the top.
-  if (S.returnVod && $('player').classList.contains('live')) {
+  // The way back to what you were watching — PINNED at the top of the scrolling list.
+  // Live after a VOD switch: resume the movie. Still on the movie itself: just close.
+  const isLive = $('player').classList.contains('live');
+  const backTo = isLive ? S.returnVod : (S.playing && S.playing.item && S.playing.item.type !== 'live' ? { item: S.playing.item } : null);
+  if (backTo) {
     const back = document.createElement('button');
-    back.className = 'pgRow';
-    back.innerHTML = `<span class="pgInit">←</span><div class="pgBody"><div class="pgName">Back to ${esc(S.returnVod.item.title)}</div>
-      <div class="pgNow">resume at ${fmt(Math.floor(S.returnVod.resume || 0))}</div></div>`;
+    back.className = 'pgRow pgBack';
+    back.innerHTML = `<span class="pgInit">←</span><div class="pgBody"><div class="pgName">Back to ${esc(backTo.item.title)}</div>
+      <div class="pgNow">${isLive ? `resume at ${fmt(Math.floor(backTo.resume || 0))}` : 'keep watching — close the guide'}</div></div>`;
     back.addEventListener('click', () => {
+      if (!isLive) return closePlayerGuide(); // the movie never stopped — just drop the overlay
       const target = { ...S.returnVod.item, resume: S.returnVod.resume };
       S.returnVod = null; closePlayerGuide();
       play(target);
     });
     lp.appendChild(back);
   }
-  list.slice(0, 60).forEach((ch) => {
+  // The WHOLE list scrolls (bounded like the channel grid); EPG loads lazily as rows
+  // become visible — eager fetching for hundreds of rows would hammer the panel.
+  const epgWatch = ('IntersectionObserver' in window) ? new IntersectionObserver((entries) => {
+    for (const en of entries) {
+      if (!en.isIntersecting) continue;
+      epgWatch.unobserve(en.target);
+      const ch = en.target._chObj;
+      if (ch) fetchEpg(ch._channel).then((nn) => {
+        if (!nn || !nn.now || !nn.now.title) return;
+        en.target.querySelector('.pgNow').textContent = nn.now.title + (nn.now.stop ? `  ·  until ${fmtT(nn.now.stop)}` : '');
+        if (nn.now.start && nn.now.stop) {
+          const pct = Math.max(0, Math.min(100, ((Date.now() - nn.now.start) / (nn.now.stop - nn.now.start)) * 100));
+          en.target.querySelector('.pgBar i').style.width = pct + '%';
+        }
+        if (nn.next && nn.next.title) en.target.querySelector('.pgNext').textContent = `Next · ${nn.next.title}${nn.next.start ? ` (${fmtT(nn.next.start)})` : ''}`;
+      });
+    }
+  }, { root: lp, rootMargin: '120px' }) : null;
+  list.slice(0, 400).forEach((ch) => {
     const row = document.createElement('button');
     row.className = 'pgRow' + (ch._channel === S.liveCur ? ' cur' : '');
     const logo = safeUrl(ch._logo);
@@ -4815,22 +4888,14 @@ async function togglePlayerGuide() {
       <div class="pgBody"><div class="pgName">${esc(ch.title)}</div><div class="pgGroup">${esc(ch.genre || '')}</div></div>
       <div class="pgEpg"><div class="pgNow"></div><div class="pgBar"><i></i></div><div class="pgNext"></div></div>`;
     // Selecting a channel KEEPS the guide open — flip through the news, then jump back.
-    row._ch = ch._channel;
+    row._ch = ch._channel; row._chObj = ch;
     row.addEventListener('click', () => {
       playChannel(ch, list);
       markGuideCur();
       row.focus();
     });
     lp.appendChild(row);
-    if (S.liveEpg) fetchEpg(ch._channel).then((nn) => {
-      if (!nn || !nn.now || !nn.now.title) return;
-      row.querySelector('.pgNow').textContent = nn.now.title + (nn.now.stop ? `  ·  until ${fmtT(nn.now.stop)}` : '');
-      if (nn.now.start && nn.now.stop) {
-        const pct = Math.max(0, Math.min(100, ((Date.now() - nn.now.start) / (nn.now.stop - nn.now.start)) * 100));
-        row.querySelector('.pgBar i').style.width = pct + '%';
-      }
-      if (nn.next && nn.next.title) row.querySelector('.pgNext').textContent = `Next · ${nn.next.title}${nn.next.start ? ` (${fmtT(nn.next.start)})` : ''}`;
-    });
+    if (S.liveEpg) { if (epgWatch) epgWatch.observe(row); else fetchEpg(ch._channel); }
   });
   pg.classList.add('open');
   const cur = lp.querySelector('.pgRow.cur') || lp.querySelector('.pgRow');
@@ -4955,10 +5020,22 @@ async function renderTraktBox() {
   }
   if (st.linked) {
     box.innerHTML = `<div class="kv"><span>Linked as</span><span>${esc(st.user || 'Trakt account')}</span></div>
-      <div style="display:flex;gap:10px;margin-top:14px">
-        <button class="btn primary focusable" id="traktImport" style="flex:1;justify-content:center">⇣ Import Trakt watchlist</button>
+      <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">
+        <button class="btn primary focusable" id="traktSync" style="flex:1;justify-content:center">⇅ Sync watched now</button>
+        <button class="btn ghost focusable" id="traktImport">⇣ Watchlist</button>
         <button class="btn ghost focusable" id="traktUnlink">Unlink</button>
-      </div><div class="hint" id="traktMsg">Scrobbling + watchlist pushes are automatic while linked.</div>`;
+      </div><div class="hint" id="traktMsg">Everything is two-way while linked: playback + ✓ marks push to Trakt;
+      your Trakt history and in-progress titles pull back automatically every few hours.</div>`;
+    box.querySelector('#traktSync').addEventListener('click', async () => {
+      const b = box.querySelector('#traktSync');
+      b.disabled = true; b.textContent = 'Syncing…';
+      try {
+        const r = await api('/api/trakt/sync', { method: 'POST', body: {} });
+        toast(`Trakt sync ✓ — ${r.watched} watched + ${r.playback} in-progress imported`);
+        loadRows(); // Continue Watching may have new arrivals
+      } catch (e) { toast('Sync failed: ' + e.message); }
+      b.disabled = false; b.textContent = '⇅ Sync watched now';
+    });
     box.querySelector('#traktImport').addEventListener('click', async () => {
       try {
         const r = await api('/api/trakt/pull', { method: 'POST', body: {} });
@@ -6505,6 +6582,7 @@ async function enterAppShell() {
   try { S.watchMap = Object.fromEntries((await api('/api/watch' + profileQ())).map((w) => [w.key, w])); } catch { S.watchMap = {}; }
   await Promise.all([loadLibraries(), loadWatchlist()]);
   applyMenuPrefs(); // search-first default order + user's hide/reorder choices
+  setTimeout(prefetchLiveTv, 800); // warm Live TV off the boot critical path
   // The boot loader stays up until the FIRST real content paints (bootReady() from the
   // row/grid/detail renderers) — hiding it here flashed an empty home while rows fetched.
   S._booting = true;
