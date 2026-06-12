@@ -90,6 +90,10 @@ body.fullBd #bdInfo.show{opacity:1}
    Width 72 = 12px padding + 48px buttons + 12px, so left/right spacing is symmetric. */
 #rail{position:fixed;z-index:22;left:0;top:0;bottom:0;width:72px;display:none;flex-direction:column;align-items:stretch;gap:6px;padding:24px 12px 18px;
   background:none;overflow-x:hidden;overflow-y:auto;
+  /* Chromium makes scrollable containers keyboard-focusable: when native focus lands on the
+     rail (or any scroller) the UA paints its own bright outline — "the menu shows borders".
+     Our spatial nav draws all focus cues itself. */
+  outline:none;
   /* SAME duration + easing as the content push — different clocks made the returning
      content slide UNDER the still-wide rail on collapse. */
   transition:width .26s cubic-bezier(.22,1,.36,1),background .26s ease}
@@ -138,6 +142,9 @@ body.fullBd #bdInfo.show{opacity:1}
 #navSettings{margin-top:2px}
 
 /* ---------- signature: gradient focus ring ---------- */
+/* All scroll containers: suppress the UA focus outline (Chromium focuses scrollers natively;
+   our spatial nav owns every visible focus cue). */
+#grid:focus,#rows:focus,#discoverRows:focus,#chBody:focus,.detailScroll:focus,#personGrid:focus{outline:none}
 .focusable{outline:none;position:relative}
 .focusable::before{content:"";position:absolute;inset:-4px;border-radius:calc(var(--r) + 5px);padding:2.5px;
   background:var(--grad);opacity:0;transition:opacity .15s;
@@ -4166,8 +4173,16 @@ const fmtT = (ms) => ms ? new Date(ms).toLocaleTimeString([], { hour: 'numeric',
 
 async function loadLiveTv() {
   $('browseTitle').textContent = 'Live TV';
-  const grid = $('grid'); grid.innerHTML = '<div class="gridMore">loading channels… (big playlists can take ~10s the first time, then they’re cached)</div>';
+  const grid = $('grid');
   S.libDone = true;
+  // In-memory channel cache: re-entering Live TV (and the rail's rollover preview) must NOT
+  // refetch + reparse a multi-MB 19k-channel payload — that synchronous parse froze the page
+  // for seconds, and the D-pad keys pressed during the freeze replayed as a burst afterwards.
+  if (S.liveChannels && S.liveChannels.length && Date.now() - (S._liveAt || 0) < 300000) {
+    scaffoldLiveTv(grid);
+    return;
+  }
+  grid.innerHTML = '<div class="gridMore">loading channels… (big playlists can take ~10s the first time, then they’re cached)</div>';
   try {
     const r = await api('/api/iptv/channels');
     if (!r.configured) { grid.innerHTML = '<div class="gridMore">Live TV isn’t set up — the admin can add an M3U playlist or Xtream login in Settings → Catalog &amp; Live TV.</div>'; return; }
@@ -4177,18 +4192,25 @@ async function loadLiveTv() {
     // the ☰/▤ toggle still flips to the logo grid for browsing by eye.
     if (S.liveGuide === undefined && S.liveEpg) S.liveGuide = true;
     S.liveChannels = r.channels;
+    S._liveAt = Date.now();
     S.liveOpen = S.liveOpen || new Set();
-    // Scaffold once: persistent search bar + a re-renderable body. Rendering 5000 cards at
-    // once froze the page — groups now start COLLAPSED and render on demand.
     S.liveHidden = new Set(r.hiddenGroups || []);
     S.liveGlobalHidden = new Set(r.globalHidden || []); // admin only — enforced server-side for users
+    if (S.view !== 'livetv') return; // user navigated away while the playlist downloaded
+    scaffoldLiveTv(grid);
+  } catch (e) { grid.innerHTML = `<div class="gridMore">Live TV failed: ${esc(e.message)}</div>`; }
+}
+// Scaffold the persistent search bar + re-renderable body from S.liveChannels (cached or fresh).
+// Rendering 5000 cards at once froze the page — groups render on demand below the chips.
+function scaffoldLiveTv(grid) {
+  try {
     // Category management lives in Preferences → Live TV now — no ☷ button on the page.
     grid.innerHTML = '<div id="chBar"><input id="chSearch" maxlength="60" autocomplete="off">'
       + (S.liveEpg ? '<button id="chGuideBtn" class="focusable"></button>' : '')
       + '</div><div id="chBody"></div>';
     S.gridRoot = grid;
     const input = $('chSearch');
-    input.placeholder = `Filter ${r.channels.length} channels…`;
+    input.placeholder = `Filter ${S.liveChannels.length} channels…`;
     input.value = S.liveFilter || '';
     input.addEventListener('input', () => {
       S.liveFilter = input.value;
@@ -5396,7 +5418,7 @@ $('iptvSave').addEventListener('click', async () => {
   } else if ($('iptvUrl').value.trim()) body.iptvUrl = $('iptvUrl').value.trim();
   await api('/api/settings', { method: 'POST', body });
   ['iptvUrl', 'xtHost', 'xtUser', 'xtPass', 'epgUrl'].forEach((id) => { $(id).value = ''; });
-  epgMemo.clear(); // a new playlist/guide invalidates cached now/next
+  epgMemo.clear(); S.liveChannels = null; S._liveAt = 0; // a new playlist invalidates the channel cache
   const srvNow = await api('/api/server'); S.serverInfo.iptv = srvNow.iptv; // real saved state, not a guess
   applyMenuPrefs(); // Live TV appears/disappears in the rail
   toast(S.serverInfo.iptv ? 'Live TV saved ✓' : 'Saved — add a playlist or Xtream login to enable Live TV');
@@ -5405,7 +5427,7 @@ $('iptvSave').addEventListener('click', async () => {
 $('iptvOff').addEventListener('click', async () => {
   if (!confirm('Remove the Live TV setup (playlist/login + EPG)? Channels disappear for everyone.')) return;
   await api('/api/settings', { method: 'POST', body: { iptvUrl: null, xtHost: null, xtUser: null, xtPass: null, epgUrl: null } });
-  epgMemo.clear(); S.serverInfo.iptv = false; applyMenuPrefs();
+  epgMemo.clear(); S.liveChannels = null; S._liveAt = 0; S.serverInfo.iptv = false; applyMenuPrefs();
   toast('Live TV removed'); refreshSettings();
 });
 // Settings tabs.
@@ -5676,6 +5698,10 @@ function focusRail(i) {
   clearTimeout(S._railPrevT);
   const nav = btns[S.railIdx] && btns[S.railIdx].dataset.nav;
   if (document.body.classList.contains('tv') && nav && nav !== S.view) {
+    // Live TV's FIRST load downloads + parses the whole playlist (multi-MB) — too heavy for
+    // a hover preview; it needs an explicit OK/→. Once the channel cache is warm it previews
+    // like every other page.
+    if (nav === 'livetv' && !(S.liveChannels && S.liveChannels.length)) return;
     S._railPrevT = setTimeout(() => {
       if (S.zone === 'rail' && S.view !== nav) switchView(nav, true, { keepRail: true });
     }, 450);
@@ -5755,6 +5781,11 @@ function dpadForm(scope, k) {
 }
 document.addEventListener('keydown', (e) => {
   const k = e.key;
+  // FREEZE-FLOOD GUARD: when a heavy render blocks the main thread, the D-pad presses made
+  // during the freeze queue up and then replay in one burst — focus "jumps around" and can
+  // land on a rail item whose rollover then switches pages. A trusted key's timeStamp is its
+  // HARDWARE press time; anything older than 350ms by the time we see it is freeze backlog.
+  if (e.isTrusted && performance.now() - e.timeStamp > 350) { e.preventDefault(); return; }
   const ae = document.activeElement;
   // Checkboxes/radios don't need native key handling (no caret, no IME) — they stay in OUR
   // spatial nav; only text entry, dropdowns and textareas hand the keys back to the platform.
