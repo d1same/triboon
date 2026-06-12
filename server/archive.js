@@ -61,10 +61,12 @@ function orderVolumes(files) {
   return best.members.sort((a, b) => a.key - b.key).map((m) => m.f);
 }
 
-// Pick the playable inner file: video extension wins, then size; junk never wins.
+// Pick the playable inner file: video extension wins, then size; junk never wins. Sample
+// clips are video-extension files too ("…-sample.mkv") — they only win when NOTHING else
+// is playable, and the pipeline then refuses the mount by name.
 function pickInner(files) {
   const scored = files
-    .map((f) => ({ f, score: (JUNK_EXT.test(f.name) ? -1 : f.size) * (VIDEO_EXT.test(f.name) ? 10 : 1) }))
+    .map((f) => ({ f, score: (JUNK_EXT.test(f.name) || /\bsample\b/i.test(f.name) ? -1 : f.size) * (VIDEO_EXT.test(f.name) ? 10 : 1) }))
     .sort((a, b) => b.score - a.score);
   return scored.length ? scored[0].f : null;
 }

@@ -109,6 +109,11 @@ function parseRelease(name) {
   };
 }
 
+// Explicit foreign-language tags in scene names. English-tagged or untagged releases are
+// assumed original-language; MULTi/DL/dual carry the original track alongside the dub.
+const LANG_TAG = /\b(german|french|italian|ita|spanish|castellano|latino|hindi|tamil|telugu|polish|turkish|nordic|swedish|norwegian|danish|finnish|dutch|flemish|russian|rus|czech|hungarian|korean|japanese|vostfr|truefrench)\b/i;
+const DUAL_TAG = /\b(dl|dual|multi|2audio|\d?audios|ita[ ._-]?eng|eng[ ._-]?ita)\b/i;
+
 // Streamability + health → score. Store RAR / flat = instant; compressed = playable but slow;
 // encrypted/unsupported = unplayable in Phase 1.
 const STREAM_SCORE = { flat: 60, store: 60, compressed: -300, encrypted: -100000, unsupported: -100000 };
@@ -147,6 +152,14 @@ function scoreRelease(candidate, policy = {}) {
   // Soundtracks / bonus discs / bare music rips are never what "press play on a movie" means.
   const ntm = notTheMovie(candidate.name);
   if (ntm) add(`not-the-movie:${ntm}`, -100000);
+  // Language shaping (TRaSH "language: not original" spirit): a GERMAN.DL 2160p once beat
+  // the English 1080p on resolution alone. Dubbed-only releases sink hard; DUAL releases
+  // (DL / MULTi / ITA-ENG — original audio still aboard) take a milder hit so they stay
+  // honest fallbacks when nothing English-native exists.
+  if (LANG_TAG.test(candidate.name)) {
+    add(DUAL_TAG.test(candidate.name) ? 'foreign-dual' : 'foreign-dub',
+      DUAL_TAG.test(candidate.name) ? -150 : -350);
+  }
 
   // Admin scoring tweaks (TRaSH-style "custom formats" lite). The built-in weights are the
   // recommended default; admin entries EXTEND them — and for group tiers, OVERRIDE them.
@@ -194,7 +207,12 @@ function scoreRelease(candidate, policy = {}) {
     const target = policy.sizePreferenceGB || (cap >= 4 ? 15 : cap >= 3 ? 8 : 3.5);
     const overshoot = Math.max(0, gb - target * 1.6);
     if (overshoot > 0) add(`oversized ${gb.toFixed(1)}GB`, -Math.min(400, Math.round(overshoot * 25)));
-    if (gb < 0.2) add('suspiciously tiny', -120);
+    // Sample/stub disqualifier: a "2160p" post weighing 68MB IS the sample, not the show —
+    // one auto-played as the real episode (-120 "suspiciously tiny" was nowhere near enough).
+    // Floors: nothing real is <80MB; nothing claiming 1080p/2160p is <300MB.
+    if (gb < 0.08 || (gb < 0.3 && a.resolutionRank >= 3 && a.resolution !== 'unknown')) {
+      add(`sample-or-stub ${(gb * 1000).toFixed(0)}MB`, -100000);
+    } else if (gb < 0.2) add('suspiciously tiny', -120);
   }
 
   return { score: Math.round(score), attributes: a, reasons };

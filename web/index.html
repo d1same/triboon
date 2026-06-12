@@ -351,6 +351,13 @@ body.fullBd #bdInfo.show{opacity:1}
 #player{position:fixed;inset:0;z-index:30;background:#000;display:none}
 #player.open{display:block}
 #player video{width:100%;height:100%;object-fit:contain;background:#000}
+/* Self-rendered subtitles (WebView never painted native cues). Sized by the caption pref;
+   lifts above the control bar while the OSD is visible so text never hides behind it. */
+#subOverlay{position:absolute;left:6%;right:6%;bottom:6.5%;text-align:center;pointer-events:none;z-index:2;
+  font:600 var(--subFs,4.4vh)/1.32 "Albert Sans";color:#fff;white-space:pre-line;
+  text-shadow:0 0 5px rgba(0,0,0,.95),0 2px 8px rgba(0,0,0,.9);transition:bottom .25s}
+#player:has(#osd:not(.hide)) #subOverlay{bottom:17%}
+#subOverlay i{font-style:italic}
 #osd{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:space-between;padding:34px 44px;transition:opacity .35s;
   background:linear-gradient(0deg,rgba(0,0,0,.78),transparent 28%),linear-gradient(180deg,rgba(0,0,0,.55),transparent 22%)}
 #osd.hide{opacity:0;pointer-events:none}
@@ -1023,12 +1030,12 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
 .menuRow button:hover{color:var(--text)}
 
 /* Voice search mic. */
-#micBtn{position:absolute;right:10px;top:50%;transform:translateY(-50%);width:38px;height:38px;border-radius:50%;
+#micBtn{position:absolute;left:10px;top:50%;transform:translateY(-50%);width:38px;height:38px;border-radius:50%;
   display:grid;place-items:center;color:var(--muted);background:rgba(34,25,52,.7)}
 #micBtn.listening{background:var(--gold);color:#160a04;animation:pulseLogo 1s ease-in-out infinite}
 #searchBar{position:fixed}
 #searchBar .wrap{position:relative;width:min(680px,100%)}
-#searchBar input{width:100%;padding-right:56px}
+#searchBar .wrap.hasMic input{padding-left:58px}
 
 /* Button focus, Plex-style: the focused button fills SOLID LIGHT with dark glyphs — calmer
    and more readable than the old coral glow ring. Late in the sheet (+!important) so it also
@@ -1219,9 +1226,11 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
 
 <div id="bdInfo"><div class="bdiT"></div><div class="bdiM"></div><div class="bdiC"></div><div class="bdiO"></div></div>
 
-<div id="searchBar"><div class="wrap"><input id="searchInput" placeholder="Search movies & shows…" autocomplete="off" maxlength="100">
+<div id="searchBar"><div class="wrap">
+  <!-- Mic FIRST (left of the field): on TV the page lands on voice search; typing is one → away. -->
   <button id="micBtn" title="Voice search" style="display:none">
     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+  <input id="searchInput" placeholder="Search movies & shows…" autocomplete="off" maxlength="100">
 </div></div>
 
 <main id="home">
@@ -1700,6 +1709,9 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
       <div class="un-btns"><button class="un-play" id="unPlay">▶ Play now</button><button class="un-cancel" id="unCancel">Dismiss</button></div>
     </div>
   </div>
+  <!-- Subtitles are painted HERE (not by the <track>): WebView's native cue rendering is
+       unreliable — cues go active with nothing on screen. -->
+  <div id="subOverlay" aria-live="off"></div>
   <div id="osd">
     <div class="top">
       <div><div class="title" id="pTitle"></div><div class="src" id="pSrc"></div></div>
@@ -2337,6 +2349,7 @@ function setRowsView(root, data, hasHero) { S.rowsView = { root, data, hasHero }
 function renderRows() {
   renderRowsInto($('rows'), S.rows);
   setRowsView($('rows'), S.rows, true);
+  bootReady(); // home is the usual boot landing — first paint dismisses the boot loader
   // Default focus ONLY when the user isn't in the menu: rail rollover previews render this
   // page behind the open rail, and stealing the zone made the next D-pad press move CONTENT
   // while the user was still walking menu items.
@@ -2622,6 +2635,7 @@ async function openDetail(it, push = true) {
     const d = await api(`/api/tmdb/${it.type}/${it.tmdbId}?append_to_response=credits,videos,content_ratings,release_dates,recommendations,similar`);
     if (reqId !== S.detailReq) return; // a newer detail page superseded this fetch
     S.detailData = d;
+    bootReady(); // a hash-restored detail page is a boot landing
     if (!it.title) { // route-restored page (refresh/back) — fill from TMDB
       it.title = d.title || d.name || '';
       $('dTitle').textContent = it.title;
@@ -3255,6 +3269,7 @@ async function closePlayer() {
   const v = $('video');
   v.onerror = null; v.onplaying = null; v.onwaiting = null; v.ontimeupdate = null; v.onended = null;
   v.pause(); v.removeAttribute('src'); v.load();
+  $('subOverlay').innerHTML = ''; // stale cue text must not greet the next playback
   clearTimeout(S._waitT); clearTimeout(_nudgeT); _nudgeSum = 0; _nudgeBase = null;
   $('player').classList.remove('open', 'live'); $('vlcPanel').classList.remove('show'); $('playerLoader').classList.remove('show');
   closePlayerGuide();
@@ -3529,16 +3544,33 @@ function shiftSubs(delta) {
   for (const c of [...tt.cues]) { c.startTime = Math.max(0, c.startTime + delta); c.endTime = Math.max(0.1, c.endTime + delta); }
   toast(`Subtitle sync ${p._subShift > 0 ? '+' : ''}${p._subShift.toFixed(1)}s`);
 }
+// We render cues OURSELVES into #subOverlay: Android WebView parses WebVTT fine but its
+// native cue PAINTING is unreliable (tracks "showing", cues active, nothing on screen —
+// the "is it under the player?" mystery). mode:'hidden' keeps parsing + cuechange events
+// while we own the pixels — same look everywhere, sized by the caption preference.
+function renderSubCues() {
+  const v = $('video'); const box = $('subOverlay');
+  const tt = v.textTracks && v.textTracks[0];
+  if (!tt || tt.mode === 'disabled' || !tt.activeCues || !tt.activeCues.length) { box.innerHTML = ''; return; }
+  box.innerHTML = '';
+  for (const c of [...tt.activeCues]) {
+    const line = document.createElement('div');
+    try { line.appendChild(c.getCueAsHTML()); }            // keeps <i>/<b> styling, XSS-safe
+    catch { line.textContent = String(c.text || ''); }
+    box.appendChild(line);
+  }
+}
 function applySubtitleTrack() {
   const v = $('video'); const p = S.playing; if (!p) return;
   [...v.querySelectorAll('track')].forEach((t) => t.remove());
+  $('subOverlay').innerHTML = '';
   if (p.subTrack === null || p.subTrack === undefined) return;
   const tr = document.createElement('track');
   tr.kind = 'subtitles'; tr.label = 'Subtitles'; tr.default = true;
   tr.src = typeof p.subTrack === 'string' && p.subTrack.startsWith('os:')
     ? `/api/ossubs/${p.mountId}?lang=${p.subTrack.slice(3)}&tmdb=${(p.item || {}).tmdbId || ''}&t=${p.streamToken}` // online (Wyzie Subs)
     : `${p.subtitleBase}/${p.subTrack}?t=${p.streamToken}`;                      // embedded text track
-  tr.addEventListener('load', () => {
+  const arm = () => {
     try {
       const tt = v.textTracks[0];
       // SEEK SYNC: server-seek restarts make the <video> timeline 0-based at the seek
@@ -3553,12 +3585,15 @@ function applySubtitleTrack() {
           c.endTime = Math.max(0, c.endTime - off);
         }
       }
-      tt.mode = 'showing';
+      tt.mode = 'hidden';            // parse + fire cuechange, but WE paint
+      tt.oncuechange = renderSubCues;
+      renderSubCues();
     } catch {}
-  });
+  };
+  tr.addEventListener('load', arm);
   tr.addEventListener('error', () => toast('Subtitles failed to load — try another language'));
   v.appendChild(tr);
-  setTimeout(() => { try { if (v.textTracks[0]) v.textTracks[0].mode = 'showing'; } catch {} }, 400);
+  setTimeout(arm, 400); // some WebViews skip the load event for tracks — arm anyway
 }
 // Audio selection rides the remux/transcode path — browsers can't switch tracks themselves.
 function setAudio(rel) {
@@ -3680,6 +3715,7 @@ async function loadDiscover() {
     S.discoverData = rows;
     renderRowsInto(root, rows);
     setRowsView(root, rows, false);
+    bootReady();
     // Trailers row: pull trailers for the top trending titles (best-effort, async).
     buildTrailerRow(trend.results.filter((x) => x.poster_path && passesMaturity(x) && catalogOk(x)).slice(0, 12)).then((trItems) => {
       if (!trItems.length) return;
@@ -3750,6 +3786,7 @@ $('grid').addEventListener('scroll', () => {
 });
 
 function renderGrid(items, root = $('grid')) {
+  bootReady(); // hash-restored grid views are a boot landing too
   S.gridRoot = root; root.innerHTML = ''; root.style.setProperty('--tf', '0px');
   S.gridItems = items || [];
   if (!S.gridItems.length) return;
@@ -3816,6 +3853,7 @@ function dayHeading(dateStr) {
   return d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
 }
 async function loadCalendar() {
+  bootReady(); // a hash-restored Calendar is a boot landing
   $('discoverTitle').textContent = 'Calendar';
   $('discoverRows').style.display = 'none';
   const list = $('calList'); list.style.display = 'flex';
@@ -4227,6 +4265,7 @@ async function loadLiveTv() {
 // Scaffold the persistent search bar + re-renderable body from S.liveChannels (cached or fresh).
 // Rendering 5000 cards at once froze the page — groups render on demand below the chips.
 function scaffoldLiveTv(grid) {
+  bootReady(); // a hash-restored Live TV page is a boot landing
   try {
     // Category management lives in Preferences → Live TV now — no ☷ button on the page.
     grid.innerHTML = '<div id="chBar"><input id="chSearch" maxlength="60" autocomplete="off">'
@@ -4959,9 +4998,8 @@ function prefAutoplay() { try { return localStorage.getItem('triboon.autoplay') 
 const SUB_SIZES = { S: '3.2vh', M: '4.4vh', L: '5.8vh' }; // player video is viewport-sized → vh tracks every panel
 function applySubSize() {
   const s = (() => { try { return localStorage.getItem('triboon.subsize') || 'M'; } catch { return 'M'; } })();
-  let st = document.getElementById('cueStyle');
-  if (!st) { st = document.createElement('style'); st.id = 'cueStyle'; document.head.appendChild(st); }
-  st.textContent = `video::cue{font-size:${SUB_SIZES[s] || SUB_SIZES.M}}`; // ::cue needs a real stylesheet rule
+  // Subtitles render in OUR #subOverlay (native ::cue painting never worked on WebView).
+  document.documentElement.style.setProperty('--subFs', SUB_SIZES[s] || SUB_SIZES.M);
   return s;
 }
 applySubSize(); // boot: captions render at the saved size from the first cue
@@ -5044,6 +5082,10 @@ $('searchInput').addEventListener('input', () => {
 });
 $('searchInput').addEventListener('keydown', (e) => {
   if (e.key === 'ArrowDown') { e.preventDefault(); $('searchInput').blur(); focusGrid(0); }
+  // Caret at the very start: ← steps back out to the mic (it sits left of the field now).
+  else if (e.key === 'ArrowLeft' && $('searchInput').selectionStart === 0 && $('micBtn').style.display !== 'none') {
+    e.preventDefault(); $('searchInput').blur(); $('micBtn').focus();
+  }
 });
 // Voice search (Web Speech API — Chrome/Android; the mic shows only when supported).
 // Voice search: browsers use the Web Speech API; the Android TV shell has no speech backend,
@@ -5059,6 +5101,7 @@ const SR = (window.TriboonTV && TriboonTV.startVoice) ? null
   : (window.SpeechRecognition || window.webkitSpeechRecognition);
 if (window.TriboonTV && TriboonTV.startVoice) {
   $('micBtn').style.display = '';
+  $('micBtn').closest('.wrap').classList.add('hasMic');
   $('micBtn').addEventListener('click', () => {
     $('micBtn').classList.add('listening');
     try { TriboonTV.startVoice(); } catch { $('micBtn').classList.remove('listening'); }
@@ -5066,6 +5109,7 @@ if (window.TriboonTV && TriboonTV.startVoice) {
 }
 if (SR) {
   $('micBtn').style.display = '';
+  $('micBtn').closest('.wrap').classList.add('hasMic');
   let rec = null;
   $('micBtn').addEventListener('click', () => {
     if (rec) { rec.stop(); return; }
@@ -5120,7 +5164,7 @@ async function searchChannels(q) {
 async function doSearch() {
   const q = $('searchInput').value.trim();
   const grid = $('grid');
-  if (!q) { renderGrid([]); grid.innerHTML = '<div class="sub" style="color:var(--muted)">Type to search your catalog.</div>'; return; }
+  if (!q) { renderGrid([]); grid.innerHTML = ''; return; }
   if (S.serverInfo.tmdb) {
     try {
       const [r, live] = await Promise.all([
@@ -5521,11 +5565,13 @@ function switchView(v, push = true, opts = {}) {
   if (v === 'watchlist') loadWatchlistView();
   if (v === 'livetv') loadLiveTv();
   if (v === 'search') { $('browseTitle').textContent = 'Search'; renderGrid([]);
-    $('grid').innerHTML = '<div class="gridMore">Type to search your catalog.</div>';
-    // A rollover PREVIEW must not steal focus into the input — the user is still on the menu.
-    if (!opts.keepRail) setTimeout(() => $('searchInput').focus(), 60); }
+    $('grid').innerHTML = '';
+    // A rollover PREVIEW must not steal focus — the user is still on the menu. Landing on
+    // the page proper starts at the MIC (owner: voice first on TV), keyboard input one → away.
+    if (!opts.keepRail) setTimeout(() => focusContent(), 60); }
   if (v === 'settings') refreshSettings();
   if (v === 'prefs') openPrefs();
+  if (['settings', 'prefs', 'search'].includes(v)) bootReady(); // synchronous landings
 }
 document.querySelectorAll('.railBtn[data-nav]').forEach((b) => b.addEventListener('click', () => switchView(b.dataset.nav)));
 
@@ -5586,9 +5632,13 @@ function focusContent(retried) {
     if (!it && !retried) return setTimeout(() => S.view === 'calendar' && focusContent(true), 400);
     return it ? applyFocus(it) : undefined;
   }
-  // Search with nothing typed yet: entering the page means "I want to type" — the grid
-  // path silently swallowed keystrokes when the results grid was empty.
-  if (S.view === 'search' && !$('searchInput').value.trim()) return $('searchInput').focus();
+  // Search with nothing typed yet: land on the MIC first (owner: voice-first on TV; → moves
+  // to the field). Browsers without voice land in the field — the empty grid used to
+  // swallow keystrokes silently.
+  if (S.view === 'search' && !$('searchInput').value.trim()) {
+    if ($('micBtn').style.display !== 'none') return $('micBtn').focus();
+    return $('searchInput').focus();
+  }
   if (['movies', 'tv', 'search', 'library', 'watchlist', 'livetv', 'person'].includes(S.view)) return focusGrid(S.gridIdx || 0);
   const v2 = S.rowsView || { hasHero: true };
   return v2.hasHero ? focusHero(0) : focusCard(S.rowIdx, S.colIdx[S.rowIdx] || 0);
@@ -6080,11 +6130,12 @@ document.addEventListener('keydown', (e) => {
   }
   // ----- Movies / TV / Search / Library / Watchlist / Live TV / Person: poster grid -----
   if (['movies', 'tv', 'search', 'library', 'watchlist', 'livetv', 'person'].includes(S.view)) {
-    // TV remotes: the mic button is a first-class stop above the search results.
+    // TV remotes: the mic (LEFT of the field) is the page's first stop — OK talks, → types.
     if (S.view === 'search' && document.activeElement === $('micBtn')) {
       if (k === 'Enter') return $('micBtn').click();
       if (k === 'ArrowDown') return focusGrid(S.gridIdx || 0);
-      if (k === 'ArrowLeft') { $('micBtn').blur(); return $('searchInput').focus(); }
+      if (k === 'ArrowRight') { $('micBtn').blur(); return $('searchInput').focus(); }
+      if (k === 'ArrowLeft') { $('micBtn').blur(); return enterRail(); }
       return;
     }
     // Live TV: the Guide toggle beside the filter is a native-focus stop too.
@@ -6220,6 +6271,12 @@ function focusRailEnter() {
 }
 
 /* ============ boot ============ */
+// First real content is on screen → fade the boot loader (double-rAF: after the paint).
+function bootReady() {
+  if (!S._booting) return;
+  S._booting = false;
+  requestAnimationFrame(() => requestAnimationFrame(() => $('appLoader').classList.add('hide')));
+}
 async function loadWatchlist() {
   try { const wl = await api('/api/watchlist'); S.watchlist = wl; S.watchlistMap = Object.fromEntries(wl.map((w) => [w.key, w])); }
   catch { S.watchlist = []; S.watchlistMap = {}; }
@@ -6249,7 +6306,10 @@ async function enterAppShell() {
   try { S.watchMap = Object.fromEntries((await api('/api/watch' + profileQ())).map((w) => [w.key, w])); } catch { S.watchMap = {}; }
   await Promise.all([loadLibraries(), loadWatchlist()]);
   applyMenuPrefs(); // search-first default order + user's hide/reorder choices
-  $('appLoader').classList.add('hide'); // ready — fade out the boot loader
+  // The boot loader stays up until the FIRST real content paints (bootReady() from the
+  // row/grid/detail renderers) — hiding it here flashed an empty home while rows fetched.
+  S._booting = true;
+  setTimeout(bootReady, 10000); // safety: never trap the user behind the loader
   // Sidebar PUSHES content: hovering the rail shifts the content area right (not overlay).
   $('rail').addEventListener('mouseenter', () => document.body.classList.add('railOpen'));
   $('rail').addEventListener('mouseleave', () => document.body.classList.remove('railOpen'));

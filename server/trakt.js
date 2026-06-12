@@ -21,9 +21,13 @@ function request(path, { method = 'POST', body, token, clientId, deadlineMs = 15
     const payload = body ? JSON.stringify(body) : null;
     const req = lib.request(url, {
       method,
+      agent: false, // one-shot calls — don't hold keep-alive sockets to api.trakt.tv
       headers: {
         'content-type': 'application/json',
         'trakt-api-version': '2',
+        // Cloudflare fronts api.trakt.tv and 403s UA-less requests with an HTML block page —
+        // which surfaced as "Trakt rejected the client id" while the id was perfectly fine.
+        'user-agent': 'Triboon/0.5 (+https://github.com/d1same/triboon)',
         ...(clientId ? { 'trakt-api-key': clientId } : {}),
         ...(token ? { authorization: `Bearer ${token}` } : {}),
         ...(payload ? { 'content-length': Buffer.byteLength(payload) } : {}),

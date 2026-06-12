@@ -25,6 +25,7 @@ function request(method, url, { key, bearer, body, timeoutMs = 10000, deadlineMs
     const payload = body ? JSON.stringify(body) : null;
     const req = lib.request(url, {
       method,
+      agent: false, // one-shot subtitle calls — no keep-alive sockets held to Wyzie
       headers: {
         'User-Agent': UA, Accept: 'application/json',
         ...(key ? { 'Api-Key': key } : {}),

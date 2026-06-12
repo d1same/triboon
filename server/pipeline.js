@@ -236,6 +236,14 @@ class Pipeline {
       return { fail: `unstreamable: ${vf.tags.join(',')}`, vf };
     }
 
+    // The picked inner file must be the FEATURE, not the sample clip: a sample-only post
+    // (68MB "2160p episode") mounted and auto-played as the real thing. Applies to archive
+    // picks too — some releases keep Sample/ alongside the movie RARs.
+    if (/\bsample\b/i.test(vf.name || '')) {
+      this._recordVerdict(candidate, 'unstreamable', { streamClass: 'sample' });
+      return { fail: `sample file picked (${vf.name})`, vf };
+    }
+
     // Playback read-ahead: keep a generous window of segments in flight AHEAD of the player
     // so the buffer outruns the bitrate — 4K-class releases (>4 GB) get the biggest window.
     // (The mount default stays small: triage/header peeks must not flood the pool.)

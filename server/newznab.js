@@ -19,7 +19,10 @@ function fetchUrl(url, opts = {}) {
     const remaining = deadlineAt - Date.now();
     if (remaining <= 0) return reject(new Error(`deadline exceeded: ${url.split('?')[0]}`));
     const lib = url.startsWith('https') ? https : http;
-    const req = lib.get(url, { headers: { 'User-Agent': 'Triboon/1.0', ...headers } }, (res) => {
+    // agent:false → one-shot connection, no keep-alive: every fetch here is a single search
+    // or NZB download. Node ≥19 keeps agent sockets alive for minutes otherwise — idle
+    // connections held to every indexer (and hung test teardowns waiting on them).
+    const req = lib.get(url, { agent: false, headers: { 'User-Agent': 'Triboon/1.0', ...headers } }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume(); clearTimeout(deadline);
         const next = new URL(res.headers.location, url).href;

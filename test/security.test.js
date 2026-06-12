@@ -66,7 +66,7 @@ function startIndexer() {
       res.writeHead(200);
       return res.end(`<?xml version="1.0"?><rss xmlns:newznab="http://x"><channel><item>
         <title>Sec.Test.2024.1080p.WEB-DL.H.264-NTb</title>
-        <enclosure url="http://127.0.0.1:${port}/nzb" length="120000" type="application/x-nzb"/>
+        <enclosure url="http://127.0.0.1:${port}/nzb" length="4000000000" type="application/x-nzb"/><!-- claims 4GB: tiny declared sizes are now disqualified as sample stubs -->
         </item></channel></rss>`);
     }
     if (u.pathname === '/nzb') { res.writeHead(200); return res.end(RELEASE.nzb); }

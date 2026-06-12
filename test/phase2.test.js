@@ -511,6 +511,65 @@ test('pipeline: auto-advance mounts the next candidate when the current source d
   pool.close(); await mock.close(); ix.server.close(); store.close();
 });
 
+test('pipeline: a picked SAMPLE file fails the candidate and auto-advance finds the feature', async () => {
+  // Real incident: a sample-only post ("From.S01E01.GERMAN.DL.2160p" — 68MB) mounted its
+  // sample.mkv and auto-played as the episode. The indexer DECLARED a big size, so scoring
+  // can't catch it — the mount-level name guard must.
+  const pay1 = seededPayload(90 * 1024, 33);
+  const pay2 = seededPayload(90 * 1024, 44);
+  const r1 = nzbFor(writeRar4Store([{ name: 'movie.2024.2160p-grp-sample.mkv', data: pay1 }], { base: 's1' }), 30000, 's1');
+  const r2 = nzbFor(writeRar4Store([{ name: 'Movie.mkv', data: pay2 }], { base: 's2' }), 30000, 's2');
+  const mock = createMockNntp({ articles: new Map([...r1.articles, ...r2.articles]) });
+  const nntpPort = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 4);
+  const ix = makeMockIndexer([
+    // FLUX outranks NTb (trusted-group tier), so the sample post is GUARANTEED first pick;
+    // it lies about its size, so only the mount-level name guard can catch it.
+    { name: 'Movie.2024.1080p.WEB-DL.H.264-FLUX', size: 7e9, nzb: r1.nzb },
+    { name: 'Movie.2024.1080p.WEB-DL.H.264-NTb', size: 7e9, nzb: r2.nzb },
+  ]);
+  const ixPort = await ix.listen();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const pipeline = new Pipeline({
+    pool: () => pool, verdicts: new VerdictCache(store), mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+
+  try {
+    const r = await pipeline.play({ q: 'movie' }, {});
+    assert.strictEqual(r.candidate.name, 'Movie.2024.1080p.WEB-DL.H.264-NTb', 'sample post skipped');
+    assert.ok(r.attempts.some((a) => /sample/i.test(a.fail)), 'failure names the sample pick');
+  } finally {
+    // finally: an assertion failure must not leak sockets — a leaked mock server keeps the
+    // test runner's event loop alive forever, which reads as a "hung" suite.
+    pool.close(); await mock.close(); ix.server.close(); store.close();
+  }
+});
+
+test('scoring: sample-size stubs and foreign-language dubs sink; duals stay honest fallbacks', () => {
+  // The 68MB "2160p" sample post is disqualified outright on its DECLARED size…
+  const ranked = rankReleases([
+    { name: 'From.S01E01.GERMAN.DL.2160p.WEB.H265-VoDTv', sizeBytes: 68e6 },
+    { name: 'FROM.S01E01.1080p.AMZN.WEB-DL.DDP5.1.H.264-FLUX', sizeBytes: 3e9 },
+  ], {});
+  assert.strictEqual(ranked[0].name.includes('FLUX'), true);
+  assert.ok(ranked[1].score < -5000, `sample-size post disqualified (got ${ranked[1].score})`);
+  // …while a legit small SD episode is merely "tiny", not dead.
+  const sd = rankReleases([{ name: 'Old.Show.S01E01.480p.DVDRip.x264-GRP', sizeBytes: 250e6 }], {});
+  assert.ok(sd[0].score > -5000, 'small SD episode stays playable');
+
+  // Language: English-native > foreign DUAL > dubbed-only, even when the dub has more pixels.
+  const lang = rankReleases([
+    { name: 'Movie.2024.GERMAN.2160p.WEB.H265-DUB', sizeBytes: 12e9 },        // dubbed only
+    { name: 'Movie.2024.GERMAN.DL.2160p.WEB.H265-VoDTv', sizeBytes: 12e9 },   // dual (orig audio aboard)
+    { name: 'Movie.2024.1080p.WEB-DL.DDP5.1.H.264-FLUX', sizeBytes: 7e9 },    // English-native
+  ], {});
+  assert.strictEqual(lang[0].name.includes('FLUX'), true, 'English 1080p beats foreign 2160p');
+  assert.ok(lang.findIndex((c) => c.name.includes('DL.2160p')) < lang.findIndex((c) => c.name.includes('H265-DUB')),
+    'dual ranks above dubbed-only');
+});
+
 test('store: a failing flush never throws and retries once the disk recovers', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
   const s = new Store(dir);
