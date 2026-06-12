@@ -1159,16 +1159,25 @@ body.musicPaused .mEq i{animation-play-state:paused}
 #musicNow::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(11,8,18,.5),rgba(11,8,18,.85))}
 .mnCollapse{position:absolute;top:22px;left:24px;z-index:3;width:46px;height:46px;border-radius:50%;display:grid;place-items:center;background:rgba(34,25,52,.7);color:var(--text)}
 .mnCollapse:hover,.mnCollapse.focus{background:var(--text);color:#160a04;outline:none;box-shadow:0 0 0 3px var(--coral)}
-.mnMain{position:relative;z-index:2;display:flex;align-items:center;gap:54px;padding:64px 7vw 30px;flex-wrap:wrap;justify-content:center}
-.mnCover{width:min(340px,38vw);aspect-ratio:1;border-radius:18px;background:#241934 center/cover;box-shadow:0 30px 80px rgba(0,0,0,.6);flex:none}
-.mnInfo{flex:1;min-width:280px;max-width:560px}
-.mnTitle{font:800 clamp(26px,3.4vw,46px)/1.1 "Sora";letter-spacing:-.02em;margin-bottom:10px}
-.mnArtist{font:600 clamp(15px,1.6vw,20px) "Albert Sans";color:var(--amber);margin-bottom:26px}
-.mnProg{display:flex;align-items:center;gap:14px;margin-bottom:22px}
-.mnProg .mbBar{height:7px}
-.mnCtl{display:flex;align-items:center;gap:18px}
-.mnCtl .mbBtn{width:52px;height:52px}.mnCtl .mbBtn svg{width:26px;height:26px}
-.mnCtl .mbPlay{width:68px;height:68px}.mnCtl .mbPlay svg{width:34px;height:34px}
+.mnMain{position:relative;z-index:2;display:flex;align-items:center;gap:60px;padding:60px 7vw 26px;flex-wrap:wrap;justify-content:center}
+.mnCover{width:min(360px,40vw);aspect-ratio:1;border-radius:14px;background:#241934 center/cover;
+  box-shadow:0 40px 90px rgba(0,0,0,.7),0 0 0 1px rgba(255,255,255,.05);flex:none}
+.mnInfo{flex:1;min-width:300px;max-width:600px}
+.mnEyebrow{font:700 11px "JetBrains Mono";letter-spacing:.22em;text-transform:uppercase;color:var(--muted);margin-bottom:14px}
+.mnTitle{font:800 clamp(28px,3.6vw,50px)/1.08 "Sora";letter-spacing:-.025em;margin-bottom:12px}
+.mnArtist{font:600 clamp(15px,1.6vw,21px) "Albert Sans";color:var(--amber);margin-bottom:30px}
+.mnProg{display:flex;align-items:center;gap:14px;margin-bottom:26px}
+.mnProg .mbBar{height:6px}
+.mnProg .mbFill{box-shadow:0 0 10px rgba(193,59,214,.5)}
+.mnCtl{display:flex;align-items:center;gap:14px}
+.mnCtl .mbBtn{width:50px;height:50px}.mnCtl .mbBtn svg{width:24px;height:24px}
+.mnCtl .mbPlay{width:70px;height:70px;margin:0 6px}.mnCtl .mbPlay svg{width:32px;height:32px}
+/* Shuffle/repeat: muted until ON, then brand-amber — the YouTube Music / Spotify cue. */
+.mnTog{color:var(--muted)}
+.mnTog svg{width:21px!important;height:21px!important}
+.mnTog.on{color:var(--amber)}
+.mnTog.on::after{content:"";position:absolute;bottom:6px;left:50%;transform:translateX(-50%);width:4px;height:4px;border-radius:50%;background:var(--amber)}
+.mnTog{position:relative}
 .mnQueue{position:relative;z-index:2;flex:1;overflow-y:auto;padding:0 7vw 40px}
 .mnQueue h2{font:700 12px "JetBrains Mono";letter-spacing:.18em;text-transform:uppercase;color:var(--amber);margin-bottom:12px}
 #mnQueueList{display:flex;flex-direction:column;gap:3px;max-width:760px}
@@ -1471,6 +1480,7 @@ body.tv #musicNow .mnBg{filter:brightness(.32);transform:none} /* per-frame blur
   <div class="mnMain">
     <div class="mnCover" id="mnCover"></div>
     <div class="mnInfo">
+      <div class="mnEyebrow" id="mnEyebrow">Now playing</div>
       <div class="mnTitle" id="mnTitle"></div>
       <div class="mnArtist" id="mnArtist"></div>
       <div class="mnProg">
@@ -1479,9 +1489,11 @@ body.tv #musicNow .mnBg{filter:brightness(.32);transform:none} /* per-frame blur
         <span class="mbT" id="mnDur">0:00</span>
       </div>
       <div class="mnCtl">
+        <button class="mbBtn mnTog focusable" id="mnShuffle" title="Shuffle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg></button>
         <button class="mbBtn focusable" id="mnPrev"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5v14H5V5h2zm2 7 10 7V5l-10 7z"/></svg></button>
         <button class="mbBtn mbPlay focusable" id="mnPlay"><svg viewBox="0 0 24 24" fill="currentColor" id="mnPlayIco"><path d="M8 5v14l11-7z"/></svg></button>
         <button class="mbBtn focusable" id="mnNext"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M17 5v14h2V5h-2zm-2 7L5 5v14l10-7z"/></svg></button>
+        <button class="mbBtn mnTog focusable" id="mnRepeat" title="Repeat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" id="mnRepeatIco"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg></button>
       </div>
     </div>
   </div>
@@ -5269,9 +5281,33 @@ function musicToggle() {
   if (!S.musicCur) return;
   if (mAudio.paused) mAudio.play().catch(() => {}); else mAudio.pause();
 }
-function musicNext() {
-  if (!S.musicQueue) return;
-  if (S.musicIdx + 1 < S.musicQueue.length) playMusic(S.musicQueue, S.musicIdx + 1);
+function musicNext(auto) {
+  const q = S.musicQueue; if (!q || !q.length) return;
+  if (auto && S.musicRepeat === 'one') { mAudio.currentTime = 0; mAudio.play().catch(() => {}); return; }
+  let next;
+  if (S.musicShuffle && q.length > 1) {
+    do { next = Math.floor(Math.random() * q.length); } while (next === S.musicIdx);
+  } else next = S.musicIdx + 1;
+  if (next >= q.length) {
+    if (S.musicRepeat === 'all') next = 0;
+    else return; // end of queue, no repeat
+  }
+  playMusic(q, next);
+}
+function toggleShuffle() {
+  S.musicShuffle = !S.musicShuffle;
+  $('mnShuffle').classList.toggle('on', S.musicShuffle);
+  toast(S.musicShuffle ? 'Shuffle on' : 'Shuffle off');
+}
+function cycleRepeat() {
+  S.musicRepeat = S.musicRepeat === 'all' ? 'one' : (S.musicRepeat === 'one' ? 'off' : 'all');
+  const btn = $('mnRepeat');
+  btn.classList.toggle('on', S.musicRepeat !== 'off');
+  // The "repeat one" glyph adds a tiny 1 over the loop.
+  $('mnRepeatIco').innerHTML = S.musicRepeat === 'one'
+    ? '<path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/><text x="12" y="15" font-size="9" font-weight="800" text-anchor="middle" fill="currentColor" stroke="none">1</text>'
+    : '<path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>';
+  toast(S.musicRepeat === 'all' ? 'Repeat all' : S.musicRepeat === 'one' ? 'Repeat one' : 'Repeat off');
 }
 function musicPrev() {
   if (!S.musicQueue) return;
@@ -5308,7 +5344,7 @@ mAudio.addEventListener('timeupdate', () => {
   $('mbCur').textContent = $('mnCur').textContent = mmss(mAudio.currentTime);
   if (d && !S.musicCur?.duration) $('mbDur').textContent = $('mnDur').textContent = mmss(d);
 });
-mAudio.addEventListener('ended', musicNext);
+mAudio.addEventListener('ended', () => musicNext(true));
 mAudio.addEventListener('play', () => { document.body.classList.remove('musicPaused'); setPlayIcon(true); });
 mAudio.addEventListener('pause', () => { document.body.classList.add('musicPaused'); setPlayIcon(false); });
 mAudio.addEventListener('error', () => { if (S.musicCur) toast('Could not play that track — skipping'); musicNext(); });
@@ -5324,7 +5360,7 @@ function musicSeekFromEvent(e) {
 }
 $('mbSeek').addEventListener('click', musicSeekFromEvent);
 $('mbPlay').addEventListener('click', musicToggle);
-$('mbNext').addEventListener('click', musicNext);
+$('mbNext').addEventListener('click', () => musicNext());
 $('mbPrev').addEventListener('click', musicPrev);
 $('mbClose').addEventListener('click', closeMusicPlayer);
 $('musicSearch').addEventListener('input', () => { clearTimeout(_musicSearchT); _musicSearchT = setTimeout(doMusicSearch, 450); });
@@ -5334,7 +5370,7 @@ if ('mediaSession' in navigator) {
   try {
     navigator.mediaSession.setActionHandler('play', () => mAudio.play());
     navigator.mediaSession.setActionHandler('pause', () => mAudio.pause());
-    navigator.mediaSession.setActionHandler('nexttrack', musicNext);
+    navigator.mediaSession.setActionHandler('nexttrack', () => musicNext());
     navigator.mediaSession.setActionHandler('previoustrack', musicPrev);
   } catch {}
 }
@@ -5410,8 +5446,10 @@ function focusQueue(i) {
 }
 $('mnCollapse').addEventListener('click', closeMusicNow);
 $('mnPlay').addEventListener('click', musicToggle);
-$('mnNext').addEventListener('click', musicNext);
+$('mnNext').addEventListener('click', () => musicNext());
 $('mnPrev').addEventListener('click', musicPrev);
+$('mnShuffle').addEventListener('click', toggleShuffle);
+$('mnRepeat').addEventListener('click', cycleRepeat);
 $('mnSeek').addEventListener('click', (e) => { const r = $('mnSeek').getBoundingClientRect(); const d = mAudio.duration || (S.musicCur && S.musicCur.duration) || 0; if (d) mAudio.currentTime = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * d; });
 // Click the mini-bar's now-playing area → expand the big page.
 $('musicBar').querySelector('.mbNow').addEventListener('click', openMusicNow);
@@ -6757,8 +6795,8 @@ document.addEventListener('keydown', (e) => {
       if (k === 'Enter' && !e.repeat) { rows[i] && rows[i].click(); return; }
       return;
     }
-    const top = [$('mnCollapse'), $('mnPrev'), $('mnPlay'), $('mnNext')];
-    let ci = top.indexOf(document.querySelector('#musicNow .focus')); if (ci < 0) ci = 2;
+    const top = [$('mnCollapse'), $('mnShuffle'), $('mnPrev'), $('mnPlay'), $('mnNext'), $('mnRepeat')];
+    let ci = top.indexOf(document.querySelector('#musicNow .focus')); if (ci < 0) ci = 3;
     if (k === 'ArrowLeft') return ci > 0 ? applyFocus(top[ci - 1]) : undefined;
     if (k === 'ArrowRight') return applyFocus(top[Math.min(top.length - 1, ci + 1)]);
     if (k === 'ArrowDown') { const rows = queueRows(); if (rows.length) { S.zone = 'musicNowQueue'; return focusQueue(0); } return; }
