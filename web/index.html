@@ -1100,6 +1100,12 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
 #musicSearch{width:100%;background:rgba(22,16,32,.92);border:1px solid var(--line);border-radius:14px;
   padding:13px 16px 13px 42px;color:var(--text);font:500 15px "Albert Sans";outline:none}
 #musicSearch:focus{border-color:var(--magenta)}
+/* Browse strip: mood/genre quick-searches so the page is never an empty box. */
+#musicBrowse{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;flex:none}
+#musicBrowse.hide{display:none}
+.mChip{padding:9px 16px;border-radius:999px;border:1px solid var(--line);background:rgba(34,25,52,.5);
+  font:600 13px "Albert Sans";color:var(--text);white-space:nowrap}
+.mChip:hover,.mChip.focus{background:var(--text);color:#160a04;outline:none;box-shadow:0 0 0 2px var(--coral)}
 #musicList{flex:1;overflow-y:auto;padding-bottom:120px;display:flex;flex-direction:column;gap:4px}
 .musicRow{display:flex;align-items:center;gap:14px;width:100%;text-align:left;padding:8px 12px;border-radius:12px;min-height:60px}
 .musicRow:hover,.musicRow:focus,.musicRow.focus{background:rgba(34,25,52,.85);outline:none;box-shadow:inset 0 0 0 2px var(--coral)}
@@ -1144,6 +1150,31 @@ body.musicOn:not(.tv) #music #musicList{scroll-padding-bottom:84px}
 .mEq i{display:inline-block;width:3px;margin:0 1px;background:var(--amber);border-radius:2px;animation:eqp .9s ease-in-out infinite}
 .mEq i:nth-child(2){animation-delay:.3s}.mEq i:nth-child(3){animation-delay:.6s}
 body.musicPaused .mEq i{animation-play-state:paused}
+.mbNow{cursor:pointer} /* click the now-playing area to expand the big player */
+
+/* Full-screen now-playing page. */
+#musicNow{position:fixed;inset:0;z-index:35;display:none;flex-direction:column;background:var(--ink);overflow:hidden}
+#musicNow.open{display:flex}
+#musicNow .mnBg{position:absolute;inset:0;background-size:cover;background-position:center;filter:blur(60px) brightness(.4);transform:scale(1.2);opacity:.7}
+#musicNow::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(11,8,18,.5),rgba(11,8,18,.85))}
+.mnCollapse{position:absolute;top:22px;left:24px;z-index:3;width:46px;height:46px;border-radius:50%;display:grid;place-items:center;background:rgba(34,25,52,.7);color:var(--text)}
+.mnCollapse:hover,.mnCollapse.focus{background:var(--text);color:#160a04;outline:none;box-shadow:0 0 0 3px var(--coral)}
+.mnMain{position:relative;z-index:2;display:flex;align-items:center;gap:54px;padding:64px 7vw 30px;flex-wrap:wrap;justify-content:center}
+.mnCover{width:min(340px,38vw);aspect-ratio:1;border-radius:18px;background:#241934 center/cover;box-shadow:0 30px 80px rgba(0,0,0,.6);flex:none}
+.mnInfo{flex:1;min-width:280px;max-width:560px}
+.mnTitle{font:800 clamp(26px,3.4vw,46px)/1.1 "Sora";letter-spacing:-.02em;margin-bottom:10px}
+.mnArtist{font:600 clamp(15px,1.6vw,20px) "Albert Sans";color:var(--amber);margin-bottom:26px}
+.mnProg{display:flex;align-items:center;gap:14px;margin-bottom:22px}
+.mnProg .mbBar{height:7px}
+.mnCtl{display:flex;align-items:center;gap:18px}
+.mnCtl .mbBtn{width:52px;height:52px}.mnCtl .mbBtn svg{width:26px;height:26px}
+.mnCtl .mbPlay{width:68px;height:68px}.mnCtl .mbPlay svg{width:34px;height:34px}
+.mnQueue{position:relative;z-index:2;flex:1;overflow-y:auto;padding:0 7vw 40px}
+.mnQueue h2{font:700 12px "JetBrains Mono";letter-spacing:.18em;text-transform:uppercase;color:var(--amber);margin-bottom:12px}
+#mnQueueList{display:flex;flex-direction:column;gap:3px;max-width:760px}
+body.tv #musicNow .mnBg{filter:brightness(.32);transform:none} /* per-frame blur is brutal on the Shield GPU */
+@media (max-width:760px){.mnMain{flex-direction:column;gap:26px;padding-top:80px}.mnCover{width:min(280px,62vw)}}
+
 @media (max-width:600px){#music{left:0!important}#musicBar{left:0}.mbNow{width:auto}.mbProg .mbT{display:none}}
 
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
@@ -1427,8 +1458,38 @@ body.musicPaused .mEq i{animation-play-state:paused}
       <input id="musicSearch" placeholder="Search songs, artists, albums…" autocomplete="off" maxlength="120">
     </div>
   </div>
+  <div id="musicBrowse"></div>
   <div id="musicList"></div>
 </section>
+
+<!-- Full-screen now-playing page: big cover + transport + the up-next queue. Expands from
+     the mini-bar; the audio never stops, this is just a richer view of it. -->
+<div id="musicNow">
+  <div class="mnBg" id="mnBg"></div>
+  <button class="mnCollapse focusable" id="mnCollapse" title="Back to browsing">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button>
+  <div class="mnMain">
+    <div class="mnCover" id="mnCover"></div>
+    <div class="mnInfo">
+      <div class="mnTitle" id="mnTitle"></div>
+      <div class="mnArtist" id="mnArtist"></div>
+      <div class="mnProg">
+        <span class="mbT" id="mnCur">0:00</span>
+        <div class="mbBar focusable" id="mnSeek"><div class="mbFill" id="mnFill"></div></div>
+        <span class="mbT" id="mnDur">0:00</span>
+      </div>
+      <div class="mnCtl">
+        <button class="mbBtn focusable" id="mnPrev"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5v14H5V5h2zm2 7 10 7V5l-10 7z"/></svg></button>
+        <button class="mbBtn mbPlay focusable" id="mnPlay"><svg viewBox="0 0 24 24" fill="currentColor" id="mnPlayIco"><path d="M8 5v14l11-7z"/></svg></button>
+        <button class="mbBtn focusable" id="mnNext"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M17 5v14h2V5h-2zm-2 7L5 5v14l10-7z"/></svg></button>
+      </div>
+    </div>
+  </div>
+  <div class="mnQueue">
+    <h2>Up next</h2>
+    <div id="mnQueueList"></div>
+  </div>
+</div>
 
 <!-- Persistent mini-player: keeps playing across every view (Plex/Spotify model). -->
 <audio id="musicAudio" preload="auto"></audio>
@@ -2277,52 +2338,76 @@ function nextEpisodeBumps(cw, cwItems) {
   }
   return out.sort((a, b) => ((S.localMap[b.key] || {}).addedAt || 0) - ((S.localMap[a.key] || {}).addedAt || 0));
 }
+// Build the Continue Watching cards from a /api/watch payload (next-episode bumps only when
+// the local map is already known — they must never force a boot-time library fetch).
+function buildCwItems(cw) {
+  const items = cw.filter((w) => !w.watched && (w.position > 30 || w.traktPct > 2) && !String(w.key).startsWith('live:')).map((w) => ({
+    // Continue Watching shows the SHOW title only — the "— S02E01 · Episode Name" tail
+    // overflowed every card and hero (resume position already encodes where you are).
+    key: w.key, title: String(w.meta.title || w.key).replace(/\s*—\s*S\d+E\d+.*$/i, ''), year: w.meta.year || '', genre: w.meta.genre || '',
+    rating: w.meta.rating || '—', overview: w.meta.overview || '',
+    tmdbId: w.meta.tmdbId, type: w.meta.type, q: w.meta.q,
+    backdrop: w.meta.backdrop || procBackdrop(280, 320, 5),
+    progress: w.duration ? w.position / w.duration : (w.traktPct || 0) / 100,
+    resume: w.position, _traktPct: w.traktPct || 0,
+  }));
+  if (S.localMap) { try { items.unshift(...nextEpisodeBumps(cw, items)); } catch {} }
+  return items;
+}
+// Recently-added local row — ONLY from already-cached library items (no network here).
+function buildRecentlyAddedRow() {
+  if (!S.localMap) return null; // local libs not indexed yet → skip (enrichHome adds it later)
+  const added = [];
+  for (const lib of (S.libraries || []).filter((l) => l.path)) {
+    const c = (S.libCache || {})[lib.id];
+    if (!c || !c.data) continue;
+    for (const x of (c.data.items || [])) if (x.kind !== 'episode' && x.addedAt) added.push(mapLocal(lib, x));
+  }
+  added.sort((a, b) => (b._added || 0) - (a._added || 0));
+  return added.length ? { name: 'Recently added', poster: true, items: added.slice(0, 16) } : null;
+}
+// Home is IDLE-AT-TOP (safe to re-render without yanking the user) when they're on the rail
+// or still parked on the very first card with the list unscrolled.
+function homeIdleAtTop() {
+  if (S.view !== 'home') return false;
+  if (S.zone === 'rail' || S.zone === 'hero' || !S.zone) return true;
+  return S.zone === 'rows' && S.rowIdx === 0 && (S.colIdx[0] || 0) === 0 && $('rows').scrollTop < 6;
+}
+// After the fast first paint: index local libraries + fetch the Live-TV favorites in the
+// BACKGROUND, then fold those rows in. Heavy library /items fetches NEVER block the home
+// screen now — the regression was awaiting them before the first render.
+async function enrichHome() {
+  if (S._enrichingHome) return; S._enrichingHome = true;
+  try {
+    const jobs = [];
+    if (!S.localMap) jobs.push(ensureLocalMap().catch(() => null));
+    if (S.serverInfo.iptv && S.user && S.user.iptvAllowed !== false && S._homeLiveFav === undefined) {
+      jobs.push(api('/api/iptv/channels?fav=1').then((fav) => {
+        S._homeLiveFav = (fav.configured && fav.channels.length) ? (S.liveEpg = !!fav.epg, fav.channels) : null;
+      }).catch(() => { S._homeLiveFav = null; }));
+    }
+    if (jobs.length) await Promise.all(jobs);
+  } finally { S._enrichingHome = false; }
+  // Only refresh the visible home if the user is still idle at the top (else next visit picks
+  // it up — loadRows is called on every home entry and the caches are warm by then).
+  if (homeIdleAtTop()) loadRows();
+}
 async function loadRows() {
   const rows = [];
-  try {
-    const [cw] = await Promise.all([api('/api/watch' + profileQ()), ensureLocalMap().catch(() => null)]);
-    S.watchMap = Object.fromEntries(cw.map((w) => [w.key, w]));
-    // Local progress (position seconds) plus Trakt-imported progress (percent only).
-    const items = cw.filter((w) => !w.watched && (w.position > 30 || w.traktPct > 2) && !String(w.key).startsWith('live:')).map((w) => ({
-      // Continue Watching shows the SHOW title only — the "— S02E01 · Episode Name" tail
-      // overflowed every card and hero (resume position already encodes where you are).
-      key: w.key, title: String(w.meta.title || w.key).replace(/\s*—\s*S\d+E\d+.*$/i, ''), year: w.meta.year || '', genre: w.meta.genre || '',
-      rating: w.meta.rating || '—', overview: w.meta.overview || '',
-      tmdbId: w.meta.tmdbId, type: w.meta.type, q: w.meta.q,
-      backdrop: w.meta.backdrop || procBackdrop(280, 320, 5),
-      progress: w.duration ? w.position / w.duration : (w.traktPct || 0) / 100,
-      resume: w.position, _traktPct: w.traktPct || 0,
-    }));
-    try { items.unshift(...nextEpisodeBumps(cw, items)); } catch {}
-    if (items.length) rows.push({ name: 'Continue watching', items });
-  } catch {}
-  // Favorited live channels get their own row right under Continue Watching.
-  if (S.serverInfo.iptv && S.user && S.user.iptvAllowed !== false) {
-    try {
-      const fav = await api('/api/iptv/channels?fav=1');
-      if (fav.configured && fav.channels.length) {
-        S.liveEpg = !!fav.epg;
-        rows.push({ name: 'Live TV — your channels', items: fav.channels.slice(0, 14).map((ch, i) => ({
-          key: 'live:' + ch.idx, title: ch.name, genre: ch.group || '',
-          _channel: ch.idx, _logo: ch.logo, _streamUrl: ch.streamUrl, _chid: ch.id,
-          backdrop: procBackdrop(210, 320, (i % 12) + 9), poster: null,
-        })) });
-      }
-    } catch {}
+  let cw = [];
+  try { cw = await api('/api/watch' + profileQ()); S.watchMap = Object.fromEntries(cw.map((w) => [w.key, w])); } catch {}
+  const cwItems = buildCwItems(cw);
+  if (cwItems.length) rows.push({ name: 'Continue watching', items: cwItems });
+  // Favorited live channels — included only if already fetched in the background (no boot fetch).
+  if (S._homeLiveFav && S._homeLiveFav.length) {
+    rows.push({ name: 'Live TV — your channels', items: S._homeLiveFav.slice(0, 14).map((ch, i) => ({
+      key: 'live:' + ch.idx, title: ch.name, genre: ch.group || '',
+      _channel: ch.idx, _logo: ch.logo, _streamUrl: ch.streamUrl, _chid: ch.id,
+      backdrop: procBackdrop(210, 320, (i % 12) + 9), poster: null,
+    })) });
   }
-  // Recently added to the local libraries — newest files first; a show carries its newest
-  // episode's date, so a fresh S02E05 floats the whole show to the front (Plex behavior).
-  try {
-    const added = [];
-    for (const lib of (S.libraries || []).filter((l) => l.path)) {
-      try {
-        const r = await libItems(lib);
-        for (const x of (r.items || [])) if (x.kind !== 'episode' && x.addedAt) added.push(mapLocal(lib, x));
-      } catch {}
-    }
-    added.sort((a, b) => (b._added || 0) - (a._added || 0));
-    if (added.length) rows.push({ name: 'Recently added', poster: true, items: added.slice(0, 16) });
-  } catch {}
+  // Recently added — from cached library items only (enrichHome warms the cache off-path).
+  const ra = buildRecentlyAddedRow(); if (ra) rows.push(ra);
   if (S.serverInfo.tmdb) {
     try {
       if ((S.maxLevel ?? 3) === 0) {
@@ -2365,7 +2450,10 @@ async function loadRows() {
     rows.push({ name: S.user && S.user.role === 'admin' ? 'Connect TMDB in Settings to browse the catalog' : 'Ask your admin to connect TMDB', items: [] });
   }
   S.rows = dedupeRows(rows); // no repeated titles across rows
-  renderRows();
+  renderRows(); // FIRST PAINT — never waited on local libraries or the live channel list
+  // Fold in the local + Live-TV-favorites rows AFTER the screen is up, on idle.
+  const needEnrich = !S.localMap || (S.serverInfo.iptv && S.user && S.user.iptvAllowed !== false && S._homeLiveFav === undefined);
+  if (needEnrich) (window.requestIdleCallback || ((f) => setTimeout(f, 200)))(() => enrichHome());
 }
 
 /* ============ render ============ */
@@ -2561,6 +2649,8 @@ function renderRows() {
   // page behind the open rail, and stealing the zone made the next D-pad press move CONTENT
   // while the user was still walking menu items.
   if (S.zone === 'rail') return;
+  // A background enrichment re-render must not yank the user off the hero onto a card.
+  if (S.zone === 'hero') return focusHero(S.heroIdx || 0);
   const firstWithItems = S.rows.findIndex((r) => r.items.length);
   if (firstWithItems >= 0) focusCard(firstWithItems, 0);
 }
@@ -3759,10 +3849,15 @@ async function setSubtitle(rel) {
       }
     } catch { toast('Subtitle fetch failed — check the server connection'); p.subTrack = null; return; }
   } else {
-    toast('Preparing subtitles — first load can take a moment on a big file…');
+    // DELAYED toast: the server prefetches the first text sub at play start, so most presses
+    // are instant — only warn if the extraction is actually still running after a beat.
+    // applySubtitleTrack's arm() clears this the moment cues are ready.
+    clearTimeout(_subPrepT);
+    _subPrepT = setTimeout(() => toast('Preparing subtitles — first load can take a moment on a big file…'), 650);
   }
   applySubtitleTrack();
 }
+let _subPrepT = 0;
 // Sync nudge: shifts every cue of the active track (the server picks a release-matched sub,
 // but a hardcoded recap/intro offset still happens — ±0.5s taps fix it without re-downloading).
 function shiftSubs(delta) {
@@ -3801,6 +3896,7 @@ function applySubtitleTrack() {
     ? `/api/ossubs/${p.mountId}?lang=${p.subTrack.slice(3)}&tmdb=${(p.item || {}).tmdbId || ''}&t=${p.streamToken}` // online (Wyzie Subs)
     : `${p.subtitleBase}/${p.subTrack}?t=${p.streamToken}`;                      // embedded text track
   const arm = () => {
+    clearTimeout(_subPrepT); // cues are here — cancel the "preparing…" warning if it never fired
     try {
       const tt = v.textTracks[0];
       // SEEK SYNC: server-seek restarts make the <video> timeline 0-based at the seek
@@ -4214,7 +4310,9 @@ async function loadLibraries() {
   let libs = [];
   try { libs = await api('/api/libraries'); } catch {}
   S.libraries = libs;
-  indexLocalLibraries(libs); // async fill — play() checks S.localMap when it exists
+  // NOTE: local-library item indexing is LAZY now (enrichHome after first paint, or play()'s
+  // ensureLocalMap). Eagerly fetching every library's /items here blocked the boot — big
+  // libraries return large payloads, and nothing on the first screen needs them.
   if (S.user) applyMenuPrefs(); // re-apply per-device order/hidden to the rebuilt library buttons
   const wrap = $('railLibs'); wrap.innerHTML = '';
   const isAdmin = S.user && S.user.role === 'admin';
@@ -4647,8 +4745,8 @@ function fillLiveState(r) {
   S.liveHidden = new Set(r.hiddenGroups || []);
   S.liveGlobalHidden = new Set(r.globalHidden || []); // admin only — enforced server-side for users
 }
-// Warm the channel cache at APP OPEN (TiviMate model): by the time anyone presses Live TV,
-// the multi-MB playlist is already parsed in memory and the page opens instantly.
+// Warm the channel cache on INTENT (hover/focus the Live TV rail item) — not at boot, so a
+// big playlist never slows the startup. By the time the click lands it's parsed in memory.
 function prefetchLiveTv() {
   if (!S.serverInfo || !S.serverInfo.iptv || (S.user && S.user.iptvAllowed === false)) return;
   if (S.liveChannels && S.liveChannels.length && Date.now() - (S._liveAt || 0) < LIVE_TTL) return;
@@ -5122,9 +5220,9 @@ const mAudio = $('musicAudio');
 function mmss(s) { s = Math.max(0, Math.round(s || 0)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; }
 function loadMusic() {
   bootReady();
-  $('musicList').dataset.empty = $('musicList').children.length ? '' : '1';
+  if (!$('musicBrowse').children.length) renderMusicBrowse();
   if (!$('musicList').children.length) {
-    $('musicList').innerHTML = '<div class="mNote">Search YouTube Music above to play anything — songs, artists, albums. What you play keeps going while you browse the rest of Triboon.</div>';
+    $('musicList').innerHTML = '<div class="mNote">Pick a vibe above or search anything — songs, artists, albums. What you play keeps going while you browse the rest of Triboon. (Your own YouTube Music playlists are coming once you link your account.)</div>';
   }
   setTimeout(() => { if (S.view === 'music' && !S.zone /* not a rail rollover */) $('musicSearch').focus(); }, 60);
 }
@@ -5164,6 +5262,7 @@ function playMusic(queue, idx) {
   $('musicBar').classList.add('show');
   document.body.classList.add('musicOn');
   updateMusicBar();
+  updateMusicNow();
   markMusicCur();
 }
 function musicToggle() {
@@ -5204,16 +5303,18 @@ function markMusicCur() {
 // Audio element wiring (once).
 mAudio.addEventListener('timeupdate', () => {
   const d = mAudio.duration || (S.musicCur && S.musicCur.duration) || 0;
-  $('mbFill').style.width = d ? Math.min(100, (mAudio.currentTime / d) * 100) + '%' : '0';
-  $('mbCur').textContent = mmss(mAudio.currentTime);
-  if (d && !S.musicCur?.duration) $('mbDur').textContent = mmss(d);
+  const pct = d ? Math.min(100, (mAudio.currentTime / d) * 100) + '%' : '0';
+  $('mbFill').style.width = pct; $('mnFill').style.width = pct;
+  $('mbCur').textContent = $('mnCur').textContent = mmss(mAudio.currentTime);
+  if (d && !S.musicCur?.duration) $('mbDur').textContent = $('mnDur').textContent = mmss(d);
 });
 mAudio.addEventListener('ended', musicNext);
 mAudio.addEventListener('play', () => { document.body.classList.remove('musicPaused'); setPlayIcon(true); });
 mAudio.addEventListener('pause', () => { document.body.classList.add('musicPaused'); setPlayIcon(false); });
 mAudio.addEventListener('error', () => { if (S.musicCur) toast('Could not play that track — skipping'); musicNext(); });
 function setPlayIcon(playing) {
-  $('mbPlayIco').innerHTML = playing ? '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>' : '<path d="M8 5v14l11-7z"/>';
+  const ic = playing ? '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>' : '<path d="M8 5v14l11-7z"/>';
+  $('mbPlayIco').innerHTML = ic; $('mnPlayIco').innerHTML = ic;
 }
 function musicSeekFromEvent(e) {
   const bar = $('mbSeek'); const r = bar.getBoundingClientRect();
@@ -5244,6 +5345,76 @@ function focusMusic(i) {
   applyFocus(rows[S.musicRowIdx], !S.pointer);
   S.zone = 'music';
 }
+// Browse chips — mood/genre quick-searches so the Music page is never an empty box. Real
+// personal YTM playlists need the user's Google cookies (next round); this gives immediate
+// browsable content with zero auth.
+const MUSIC_MOODS = ['Top hits', 'Pop', 'Rock', 'Hip-Hop', 'Electronic', 'Lo-fi beats', 'Jazz', 'Classical', 'Workout', 'Chill', '80s', '90s'];
+function renderMusicBrowse() {
+  const wrap = $('musicBrowse'); wrap.innerHTML = '';
+  MUSIC_MOODS.forEach((m) => {
+    const b = document.createElement('button');
+    b.className = 'mChip focusable'; b.textContent = m; b.dataset.mood = m;
+    b.addEventListener('click', () => { $('musicSearch').value = m === 'Top hits' ? 'top hits 2026' : m + ' music'; doMusicSearch(); });
+    b.addEventListener('mouseenter', () => pointerHover() && focusChip([...wrap.children].indexOf(b)));
+    wrap.appendChild(b);
+  });
+}
+function chipEls() { return [...$('musicBrowse').querySelectorAll('.mChip')]; }
+function focusChip(i) {
+  const c = chipEls(); if (!c.length) return;
+  S.chipIdx = Math.max(0, Math.min(c.length - 1, i));
+  applyFocus(c[S.chipIdx], !S.pointer); S.zone = 'musicChips';
+}
+
+/* ---- Full-screen now-playing page (big cover + queue) ---- */
+function openMusicNow() {
+  if (!S.musicCur) return;
+  $('musicNow').classList.add('open');
+  S.zone = 'musicNow';
+  updateMusicNow();
+  if (document.body.classList.contains('tv')) applyFocus($('mnPlay'));
+}
+function closeMusicNow() {
+  $('musicNow').classList.remove('open');
+  if (S.view === 'music') { S.zone = 'music'; focusContent(); }
+}
+function updateMusicNow() {
+  if (!$('musicNow').classList.contains('open')) return;
+  const t = S.musicCur; if (!t) return;
+  $('mnCover').style.backgroundImage = `url('${safeUrl(t.thumb)}')`;
+  $('mnBg').style.backgroundImage = `url('${safeUrl(t.thumb)}')`;
+  $('mnTitle').textContent = t.title;
+  $('mnArtist').textContent = t.artist || '';
+  $('mnDur').textContent = t.duration ? mmss(t.duration) : mmss(mAudio.duration);
+  renderMusicQueue();
+}
+function renderMusicQueue() {
+  const list = $('mnQueueList'); if (!list) return;
+  const q = S.musicQueue || []; list.innerHTML = '';
+  q.forEach((t, i) => {
+    const row = document.createElement('button');
+    row.className = 'musicRow focusable' + (i === S.musicIdx ? ' cur' : ''); row.dataset.qrow = i;
+    row.innerHTML = `<div class="mThumb" style="background-image:url('${safeUrl(t.thumb)}')"><div class="mEq"><i></i><i></i><i></i></div></div>
+      <div class="mBody"><div class="mT">${esc(t.title)}</div><div class="mA">${esc(t.artist || '')}</div></div>
+      <div class="mD">${t.duration ? mmss(t.duration) : ''}</div>`;
+    row.addEventListener('click', () => playMusic(S.musicQueue, i));
+    row.addEventListener('mouseenter', () => pointerHover() && focusQueue(i));
+    list.appendChild(row);
+  });
+}
+function queueRows() { return [...$('mnQueueList').querySelectorAll('.musicRow')]; }
+function focusQueue(i) {
+  const rows = queueRows(); if (!rows.length) return;
+  S.qRowIdx = Math.max(0, Math.min(rows.length - 1, i));
+  applyFocus(rows[S.qRowIdx], !S.pointer); S.zone = 'musicNowQueue';
+}
+$('mnCollapse').addEventListener('click', closeMusicNow);
+$('mnPlay').addEventListener('click', musicToggle);
+$('mnNext').addEventListener('click', musicNext);
+$('mnPrev').addEventListener('click', musicPrev);
+$('mnSeek').addEventListener('click', (e) => { const r = $('mnSeek').getBoundingClientRect(); const d = mAudio.duration || (S.musicCur && S.musicCur.duration) || 0; if (d) mAudio.currentTime = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * d; });
+// Click the mini-bar's now-playing area → expand the big page.
+$('musicBar').querySelector('.mbNow').addEventListener('click', openMusicNow);
 
 /* ============ preferences: cover size + menu hide/reorder (per device) ============ */
 const MENU_DEFAULT = ['search', 'home', 'watchlist', 'discover', 'calendar', 'movies', 'tv', 'livetv', 'music'];
@@ -6124,6 +6295,7 @@ $('qcApprove').addEventListener('click', async () => {
 
 /* ============ views + spatial nav ============ */
 function switchView(v, push = true, opts = {}) {
+  $('musicNow').classList.remove('open'); // the big music page is an overlay — close on any nav
   S.view = v;
   // Entering any view collapses the rail — but if the menu is open, collapse on the NEXT
   // frame: the new page then paints PUSHED first and slides left in sync with the rail,
@@ -6575,6 +6747,24 @@ document.addEventListener('keydown', (e) => {
     else dpadCycle($('matchModal'), k);
     return;
   }
+  // Full-screen now-playing page: its own focus loop (collapse + transport row → queue list).
+  if ($('musicNow').classList.contains('open')) {
+    if (k === 'Escape' || k === 'Backspace') return closeMusicNow();
+    if (S.zone === 'musicNowQueue') {
+      const rows = queueRows(); let i = S.qRowIdx || 0;
+      if (k === 'ArrowUp') return i === 0 ? applyFocus($('mnPlay')) : focusQueue(i - 1);
+      if (k === 'ArrowDown') return focusQueue(Math.min(rows.length - 1, i + 1));
+      if (k === 'Enter' && !e.repeat) { rows[i] && rows[i].click(); return; }
+      return;
+    }
+    const top = [$('mnCollapse'), $('mnPrev'), $('mnPlay'), $('mnNext')];
+    let ci = top.indexOf(document.querySelector('#musicNow .focus')); if (ci < 0) ci = 2;
+    if (k === 'ArrowLeft') return ci > 0 ? applyFocus(top[ci - 1]) : undefined;
+    if (k === 'ArrowRight') return applyFocus(top[Math.min(top.length - 1, ci + 1)]);
+    if (k === 'ArrowDown') { const rows = queueRows(); if (rows.length) { S.zone = 'musicNowQueue'; return focusQueue(0); } return; }
+    if (k === 'Enter' && !e.repeat) { (top[ci] || $('mnPlay')).click(); return; }
+    return;
+  }
   if ($('catModal') && $('catModal').classList.contains('open')) {
     if (k === 'Escape' || k === 'Backspace') $('catModal').classList.remove('open');
     else dpadCycle($('catModal'), k);
@@ -6763,13 +6953,22 @@ document.addEventListener('keydown', (e) => {
     }
     return;
   }
-  // ----- Music: search field → results list → mini-player bar -----
+  // ----- Music: search field → browse chips → results list → mini-player bar -----
   if (S.view === 'music') {
     const ae = document.activeElement;
     if (ae === $('musicSearch')) {
-      if (k === 'ArrowDown') { const rows = musicRows(); if (rows.length) { ae.blur(); return focusMusic(0); } return; }
+      if (k === 'ArrowDown') { ae.blur(); return chipEls().length ? focusChip(S.chipIdx || 0) : (musicRows().length ? focusMusic(0) : null); }
       if ((k === 'ArrowLeft' && $('musicSearch').selectionStart === 0) || k === 'Escape' || k === 'Backspace') { ae.blur(); return enterRail(); }
       return; // typing passes through
+    }
+    if (S.zone === 'musicChips') {
+      const chips = chipEls(); let i = S.chipIdx || 0;
+      if (k === 'ArrowLeft') return i === 0 ? enterRail() : focusChip(i - 1);
+      if (k === 'ArrowRight') return focusChip(Math.min(chips.length - 1, i + 1));
+      if (k === 'ArrowUp') return $('musicSearch').focus();
+      if (k === 'ArrowDown') return musicRows().length ? focusMusic(0) : $('musicSearch').focus();
+      if (k === 'Enter' && !e.repeat) { chips[i] && chips[i].click(); return; }
+      return;
     }
     const barBtns = [$('mbPrev'), $('mbPlay'), $('mbNext'), $('mbClose')];
     if (S.zone === 'musicBar') {
@@ -6784,7 +6983,7 @@ document.addEventListener('keydown', (e) => {
     const rows = musicRows();
     if (!rows.length) { if (k === 'ArrowLeft' || k === 'ArrowUp') $('musicSearch').focus(); return; }
     let i = S.musicRowIdx || 0;
-    if (k === 'ArrowUp') return i === 0 ? $('musicSearch').focus() : focusMusic(i - 1);
+    if (k === 'ArrowUp') return i === 0 ? (chipEls().length ? focusChip(S.chipIdx || 0) : $('musicSearch').focus()) : focusMusic(i - 1);
     if (k === 'ArrowDown') {
       if (i < rows.length - 1) return focusMusic(i + 1);
       if ($('musicBar').classList.contains('show')) { S.zone = 'musicBar'; return applyFocus($('mbPlay')); } // drop to the player bar
@@ -6910,7 +7109,7 @@ document.addEventListener('keyup', (e) => {
 window.__tvBack = () => {
   const overlay = document.querySelector(
     '.gate.open, #detail.open, #person.open, #player.open, #drawer.open, #trailer.open, ' +
-    '#libModal.open, #matchModal.open, #catModal.open, #cwMenu.open, #trackMenu.open');
+    '#libModal.open, #matchModal.open, #catModal.open, #cwMenu.open, #trackMenu.open, #musicNow.open');
   if (!overlay && S.view === 'home') return 'exit';
   document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
   return 'ok';
@@ -6979,7 +7178,11 @@ async function enterAppShell() {
   try { S.watchMap = Object.fromEntries((await api('/api/watch' + profileQ())).map((w) => [w.key, w])); } catch { S.watchMap = {}; }
   await Promise.all([loadLibraries(), loadWatchlist()]);
   applyMenuPrefs(); // search-first default order + user's hide/reorder choices
-  setTimeout(prefetchLiveTv, 800); // warm Live TV off the boot critical path
+  // Live TV is LAZY now (owner: don't load everything at startup). The 19k-channel parse is
+  // warmed the moment the user shows intent — hovering or focusing the Live TV rail item —
+  // not at boot. The server's stale-while-revalidate cache still makes the first open fast.
+  const nav = $('navLiveTv');
+  if (nav) { nav.addEventListener('mouseenter', prefetchLiveTv); nav.addEventListener('focus', prefetchLiveTv, true); }
   // Sidebar PUSHES content: hovering the rail shifts the content area right (not overlay).
   $('rail').addEventListener('mouseenter', () => document.body.classList.add('railOpen'));
   $('rail').addEventListener('mouseleave', () => document.body.classList.remove('railOpen'));
