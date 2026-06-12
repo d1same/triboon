@@ -1858,7 +1858,7 @@ Object.assign(H, {
     const q = ctx.url.searchParams.get('q') || '';
     if (!q.trim()) return send(ctx.res, 200, { results: [] });
     try {
-      const results = await ytmusic.search(q, { limit: 24, cookiesPath: cookiesPathIfSet() });
+      const results = await ytmusic.search(q, { limit: 24, cookiesPath: cookiesFor(ctx.user.id) });
       // Mint a per-track stream token so the client can build playable URLs without a round-trip.
       send(ctx.res, 200, {
         results: results.map((r) => ({ ...r, streamUrl: `/api/music/stream/${r.id}?t=${auth.streamToken(ctx.user.id, `music:${r.id}`)}` })),
@@ -1876,7 +1876,7 @@ Object.assign(H, {
     const range = ctx.req.headers.range || null;
     const pipeFrom = async (force) => {
       let rec;
-      try { rec = await ytmusic.resolveStream(id, { cookiesPath: cookiesPathIfSet(), force }); }
+      try { rec = await ytmusic.resolveStream(id, { cookiesPath: cookiesFor(ctx.claims.uid), force }); }
       catch (e) { if (!ctx.res.headersSent) send(ctx.res, 502, { error: 'could not resolve track', detail: String(e.message).slice(0, 160) }); return; }
       const u = new URL(rec.url);
       const upstream = https.get(u, { headers: range ? { range } : {} }, (up) => {
@@ -1893,13 +1893,85 @@ Object.assign(H, {
     };
     pipeFrom(false);
   },
+
+  // Link state only — the cookie text NEVER returns to a client.
+  musicStatus: async (ctx) => {
+    const linked = !!((settings.get().ytCookies || {})[ctx.user.id]) || !!cookiesFor(null);
+    send(ctx.res, 200, { ytdlp: !!ytmusic.detectYtdlp(), linked });
+  },
+
+  // Paste an exported cookies.txt (Netscape format, from music.youtube.com while signed in).
+  musicLink: async (ctx) => {
+    const b = await readJson(ctx.req);
+    const text = String(b.cookies || '').replace(/\r/g, '').slice(0, 256 * 1024);
+    // Sanity: must be a Netscape cookie file that actually carries YouTube cookies.
+    if (!/(^|\n)\S*\.?youtube\.com\t/i.test(text) && !/youtube\.com/i.test(text.split('\n').find((l) => !l.startsWith('#')) || '')) {
+      return send(ctx.res, 400, { error: 'that does not look like a cookies.txt with youtube.com cookies — export it from music.youtube.com while signed in' });
+    }
+    settings.update((s) => ({ ...s, ytCookies: { ...(s.ytCookies || {}), [ctx.user.id]: text } }));
+    dropCookieFile(ctx.user.id); // re-materialize with the fresh text on next use
+    send(ctx.res, 200, { linked: true });
+  },
+  musicUnlink: async (ctx) => {
+    settings.update((s) => {
+      const all = { ...(s.ytCookies || {}) }; delete all[ctx.user.id];
+      return { ...s, ytCookies: all };
+    });
+    dropCookieFile(ctx.user.id);
+    send(ctx.res, 200, { linked: false });
+  },
+
+  // The user's own playlists (chips on the Music page). Honest errors — cookies can expire.
+  musicPlaylists: async (ctx) => {
+    if (!ytmusic.detectYtdlp()) return send(ctx.res, 503, { error: 'yt-dlp is not installed on the server' });
+    const cookies = cookiesFor(ctx.user.id);
+    if (!cookies) return send(ctx.res, 200, { linked: false, playlists: [] });
+    try {
+      const playlists = await ytmusic.listPlaylists({ cookiesPath: cookies });
+      send(ctx.res, 200, { linked: true, playlists });
+    } catch (e) {
+      send(ctx.res, 502, { error: 'could not load your playlists — the link may have expired (re-export cookies in Preferences)', detail: String(e.message).slice(0, 160) });
+    }
+  },
+  musicPlaylist: async (ctx) => {
+    if (!ytmusic.detectYtdlp()) return send(ctx.res, 503, { error: 'yt-dlp is not installed on the server' });
+    try {
+      const r = await ytmusic.playlistTracks(ctx.m[1], { cookiesPath: cookiesFor(ctx.user.id) });
+      send(ctx.res, 200, {
+        title: r.title,
+        results: r.tracks.map((t) => ({ ...t, streamUrl: `/api/music/stream/${t.id}?t=${auth.streamToken(ctx.user.id, `music:${t.id}`)}` })),
+      });
+    } catch (e) { send(ctx.res, 502, { error: 'playlist failed to load', detail: String(e.message).slice(0, 160) }); }
+  },
 });
 
-// Optional cookies.txt path (admin uploads it to unlock their own library). null = public mode.
-function cookiesPathIfSet() {
-  const p = path.join(DATA_DIR, 'yt-cookies.txt');
-  try { return fs.statSync(p).size > 0 ? p : null; } catch { return null; }
+// ---- YouTube Music account linking (per user, via an exported cookies.txt) ----
+// The cookie text is a CREDENTIAL: it lives ENCRYPTED in SecureSettings (s.ytCookies[uid]),
+// never round-trips to the UI, and is only materialized into a private temp file while the
+// process runs (yt-dlp needs a file path). A hand-placed data/yt-cookies.txt still works as
+// a server-wide fallback for headless setups.
+const ytCookieFiles = new Map(); // uid -> { path, hash }
+function cookiesFor(uid) {
+  const all = settings.get().ytCookies || {};
+  const text = uid && all[uid];
+  if (!text) { // legacy/global fallback
+    const p = path.join(DATA_DIR, 'yt-cookies.txt');
+    try { return fs.statSync(p).size > 0 ? p : null; } catch { return null; }
+  }
+  const hash = require('crypto').createHash('sha1').update(text).digest('hex');
+  const cur = ytCookieFiles.get(uid);
+  if (cur && cur.hash === hash) return cur.path;
+  const file = path.join(require('os').tmpdir(), `triboon-ytc-${require('crypto').randomBytes(6).toString('hex')}.txt`);
+  fs.writeFileSync(file, text, { mode: 0o600 });
+  if (cur) { try { fs.unlinkSync(cur.path); } catch {} }
+  ytCookieFiles.set(uid, { path: file, hash });
+  return file;
 }
+function dropCookieFile(uid) {
+  const cur = ytCookieFiles.get(uid);
+  if (cur) { try { fs.unlinkSync(cur.path); } catch {} ytCookieFiles.delete(uid); }
+}
+process.on('exit', () => { for (const [, f] of ytCookieFiles) { try { fs.unlinkSync(f.path); } catch {} } });
 
 // One extraction per (mount, track), shared by every requester and IMMUNE to client
 // disconnects. The old per-request spawn was killed when the CC toggle closed the fetch —
@@ -1983,6 +2055,11 @@ const ROUTES = [
   { m: 'POST', re: /^\/api\/trakt\/sync$/, auth: 'user', h: H.traktSync },
   { m: 'GET', re: /^\/api\/music\/search$/, auth: 'user', h: H.musicSearch },
   { m: 'GET', re: /^\/api\/music\/stream\/([\w-]{11})$/, auth: 'stream', h: H.musicStream },
+  { m: 'GET', re: /^\/api\/music\/status$/, auth: 'user', h: H.musicStatus },
+  { m: 'POST', re: /^\/api\/music\/link$/, auth: 'user', h: H.musicLink },
+  { m: 'POST', re: /^\/api\/music\/unlink$/, auth: 'user', h: H.musicUnlink },
+  { m: 'GET', re: /^\/api\/music\/playlists$/, auth: 'user', h: H.musicPlaylists },
+  { m: 'GET', re: /^\/api\/music\/playlist\/([\w-]{2,64})$/, auth: 'user', h: H.musicPlaylist },
   { m: 'GET', re: /^\/api\/mounts$/, auth: 'admin', h: H.mounts },
   { m: 'GET', re: /^\/api\/health\/(\w+)$/, auth: 'user', h: H.health },
   { m: 'POST', re: /^\/api\/mount$/, auth: 'admin', h: H.mount },

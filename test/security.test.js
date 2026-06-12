@@ -1230,6 +1230,20 @@ test('music: auth + token scope binding; honest 503 when yt-dlp is absent', asyn
   }
   // The /api/server flag reflects yt-dlp presence so the UI shows/hides the Music tab.
   assert.strictEqual((await httpJson(srv.port, 'GET', '/api/server')).json.music, present);
+
+  // ---- Account linking (cookies) — validation + encrypted round-trip, no network ----
+  assert.strictEqual((await httpJson(srv.port, 'GET', '/api/music/status', null)).status, 401, 'status needs auth');
+  const bad = await httpJson(srv.port, 'POST', '/api/music/link', { cookies: 'hello world not a cookie file' }, admin);
+  assert.strictEqual(bad.status, 400, 'garbage rejected with guidance');
+  const fakeCookies = '# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t2000000000\tSID\tabc123\n';
+  assert.strictEqual((await httpJson(srv.port, 'POST', '/api/music/link', { cookies: fakeCookies }, admin)).status, 200);
+  const st2 = await httpJson(srv.port, 'GET', '/api/music/status', null, admin);
+  assert.strictEqual(st2.json.linked, true, 'linked after pasting cookies');
+  assert.strictEqual(JSON.stringify(st2.json).includes('abc123'), false, 'cookie text NEVER returns to a client');
+  // The credential lands ENCRYPTED in settings, not as a plaintext file in data/.
+  assert.ok(!fs.existsSync(path.join(process.env.TRIBOON_DATA, 'yt-cookies.txt')), 'no plaintext cookie file written to data/');
+  await httpJson(srv.port, 'POST', '/api/music/unlink', {}, admin);
+  assert.strictEqual((await httpJson(srv.port, 'GET', '/api/music/status', null, admin)).json.linked, false, 'unlink clears it');
 });
 
 test('housekeeping sweep: idle mounts are evicted, active ones survive', async () => {

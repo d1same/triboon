@@ -114,4 +114,33 @@ async function resolveStream(id, { cookiesPath, force = false } = {}) {
 }
 function _peekCached(id) { return _streamCache.get(id) || null; }
 
-module.exports = { detectYtdlp, search, resolveStream, thumbFor, cleanTitle, _resetDetection, _peekCached };
+// The user's OWN playlists (needs cookies). yt-dlp's youtube:tab extractor resolves the YTM
+// library page when authenticated; entries are playlist links (ids often prefixed 'VL').
+async function listPlaylists({ cookiesPath }) {
+  if (!cookiesPath) throw new Error('YouTube Music is not linked');
+  const out = await runJson(['--flat-playlist', '--dump-single-json',
+    'https://music.youtube.com/library/playlists'], { cookiesPath, timeoutMs: 30000 });
+  let data; try { data = JSON.parse(out); } catch { return []; }
+  return (data.entries || [])
+    .map((e) => ({ id: String(e.id || '').replace(/^VL/, ''), title: e.title || 'Playlist',
+      count: num(e.playlist_count) }))
+    .filter((p) => /^[\w-]{2,64}$/.test(p.id) && p.id !== 'LM'); // Liked Songs gets its own pinned chip
+}
+
+// Tracks of one playlist ('LM' = the user's Liked Songs; public lists work without cookies).
+async function playlistTracks(id, { cookiesPath, limit = 200 } = {}) {
+  if (!/^[\w-]{2,64}$/.test(String(id || ''))) throw new Error('bad playlist id');
+  const out = await runJson(['--flat-playlist', '--dump-single-json', '--playlist-items', `1:${Math.max(1, Math.min(500, limit))}`,
+    `https://music.youtube.com/playlist?list=${id}`], { cookiesPath, timeoutMs: 45000 });
+  let data; try { data = JSON.parse(out); } catch { throw new Error('playlist returned no data'); }
+  return {
+    title: data.title || 'Playlist',
+    tracks: (data.entries || []).filter((e) => e && e.id && e.id.length === 11)
+      .map((e) => ({
+        id: e.id, title: cleanTitle(e.title) || e.title || 'Unknown',
+        artist: e.uploader || e.channel || '', duration: num(e.duration), thumb: thumbFor(e.id),
+      })),
+  };
+}
+
+module.exports = { detectYtdlp, search, resolveStream, listPlaylists, playlistTracks, thumbFor, cleanTitle, _resetDetection, _peekCached };

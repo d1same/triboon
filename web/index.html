@@ -1106,6 +1106,8 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
 .mChip{padding:9px 16px;border-radius:999px;border:1px solid var(--line);background:rgba(34,25,52,.5);
   font:600 13px "Albert Sans";color:var(--text);white-space:nowrap}
 .mChip:hover,.mChip.focus{background:var(--text);color:#160a04;outline:none;box-shadow:0 0 0 2px var(--coral)}
+.mChip.mPl{border-color:rgba(255,198,92,.45);color:var(--amber)} /* YOUR playlists stand apart */
+.mChip.mPl:hover,.mChip.mPl.focus{background:var(--amber);color:#160a04}
 #musicList{flex:1;overflow-y:auto;padding-bottom:120px;display:flex;flex-direction:column;gap:4px}
 .musicRow{display:flex;align-items:center;gap:14px;width:100%;text-align:left;padding:8px 12px;border-radius:12px;min-height:60px}
 .musicRow:hover,.musicRow:focus,.musicRow.focus{background:rgba(34,25,52,.85);outline:none;box-shadow:inset 0 0 0 2px var(--coral)}
@@ -1619,6 +1621,14 @@ body.tv #musicNow .mnBg{filter:brightness(.32);transform:none} /* per-frame blur
       <p>Link your Trakt account: what you watch is scrobbled automatically, and your watchlist
          stays in sync both ways.</p>
       <div id="traktBox"><div class="hint">checking…</div></div>
+    </div>
+    <div class="panel"><h2>YouTube Music</h2>
+      <p>Link your account to see <b>your playlists and Liked songs</b> on the Music page.
+         Google blocks direct sign-ins from apps, so linking works with a one-time cookie
+         export from your browser:</p>
+      <p style="margin-top:8px">1&#41; Install a “cookies.txt” exporter extension (e.g. <b>Get cookies.txt LOCALLY</b>)
+         &nbsp;2&#41; open <b>music.youtube.com</b> signed in &nbsp;3&#41; export → paste the file's contents below.</p>
+      <div id="ytmBox"><div class="hint">checking…</div></div>
     </div>
   </div>
 </section>
@@ -5234,9 +5244,29 @@ function loadMusic() {
   bootReady();
   if (!$('musicBrowse').children.length) renderMusicBrowse();
   if (!$('musicList').children.length) {
-    $('musicList').innerHTML = '<div class="mNote">Pick a vibe above or search anything — songs, artists, albums. What you play keeps going while you browse the rest of Triboon. (Your own YouTube Music playlists are coming once you link your account.)</div>';
+    $('musicList').innerHTML = '<div class="mNote">Pick a playlist or vibe above, or search anything — songs, artists, albums. What you play keeps going while you browse the rest of Triboon.</div>';
+  }
+  // Personal playlists (linked accounts) load lazily and slot in ahead of the mood chips.
+  if (S.ytmPlaylists === undefined) {
+    S.ytmPlaylists = null; // in flight
+    api('/api/music/playlists').then((r) => {
+      S.ytmPlaylists = r.linked ? (r.playlists || []) : false; // false = not linked
+      renderMusicBrowse();
+    }).catch(() => { S.ytmPlaylists = false; });
+  } else if (S.ytmPlaylists === null) {
+    S.ytmPlaylists = undefined; // a re-entry after link/unlink cleared it mid-flight — refetch
+    return loadMusic();
   }
   setTimeout(() => { if (S.view === 'music' && !S.zone /* not a rail rollover */) $('musicSearch').focus(); }, 60);
+}
+async function loadPlaylistTracks(id, title) {
+  $('musicList').innerHTML = `<div class="mNote">Loading ${esc(title)}…</div>`;
+  try {
+    const r = await api('/api/music/playlist/' + encodeURIComponent(id));
+    if (S.view !== 'music') return;
+    renderMusicRows(r.results || []);
+    if (!(r.results || []).length) $('musicList').innerHTML = '<div class="mNote">This playlist looks empty.</div>';
+  } catch (e) { $('musicList').innerHTML = `<div class="mNote">${esc(e.message)}</div>`; }
 }
 let _musicSearchT = 0;
 async function doMusicSearch() {
@@ -5387,13 +5417,20 @@ function focusMusic(i) {
 const MUSIC_MOODS = ['Top hits', 'Pop', 'Rock', 'Hip-Hop', 'Electronic', 'Lo-fi beats', 'Jazz', 'Classical', 'Workout', 'Chill', '80s', '90s'];
 function renderMusicBrowse() {
   const wrap = $('musicBrowse'); wrap.innerHTML = '';
-  MUSIC_MOODS.forEach((m) => {
+  const addChip = (label, cls, onClick) => {
     const b = document.createElement('button');
-    b.className = 'mChip focusable'; b.textContent = m; b.dataset.mood = m;
-    b.addEventListener('click', () => { $('musicSearch').value = m === 'Top hits' ? 'top hits 2026' : m + ' music'; doMusicSearch(); });
+    b.className = 'mChip focusable' + (cls ? ' ' + cls : ''); b.textContent = label;
+    b.addEventListener('click', onClick);
     b.addEventListener('mouseenter', () => pointerHover() && focusChip([...wrap.children].indexOf(b)));
     wrap.appendChild(b);
-  });
+  };
+  // YOUR music first (linked accounts): Liked songs + your playlists, amber-tinted.
+  if (Array.isArray(S.ytmPlaylists)) {
+    addChip('♥ Liked songs', 'mPl', () => loadPlaylistTracks('LM', 'Liked songs'));
+    S.ytmPlaylists.slice(0, 30).forEach((p) =>
+      addChip(p.title + (p.count ? ` · ${p.count}` : ''), 'mPl', () => loadPlaylistTracks(p.id, p.title)));
+  }
+  MUSIC_MOODS.forEach((m) => addChip(m, '', () => { $('musicSearch').value = m === 'Top hits' ? 'top hits 2026' : m + ' music'; doMusicSearch(); }));
 }
 function chipEls() { return [...$('musicBrowse').querySelectorAll('.mChip')]; }
 function focusChip(i) {
@@ -5559,6 +5596,51 @@ function openPrefs() { // populates the Preferences PAGE (it's a view now, not a
   renderPinRows();
   renderMenuMgr();
   renderTraktBox();
+  renderYtmBox();
+}
+// YouTube Music link panel (Preferences → Connections): paste an exported cookies.txt.
+// The text is sent ONCE, stored encrypted server-side, and never comes back to the UI.
+async function renderYtmBox() {
+  const box = $('ytmBox');
+  let st;
+  try { st = await api('/api/music/status'); } catch { box.innerHTML = '<div class="hint">server unreachable</div>'; return; }
+  if (!st.ytdlp) {
+    box.innerHTML = '<div class="hint">yt-dlp isn’t installed on this server — Music is disabled. (The Docker image ships it; bare installs: <b>pip install yt-dlp</b>.)</div>';
+    return;
+  }
+  if (st.linked) {
+    box.innerHTML = `<div class="kv"><span>Status</span><span>linked ✓ — your playlists show on the Music page</span></div>
+      <div style="display:flex;gap:10px;margin-top:12px">
+        <button class="btn ghost focusable" id="ytmRelink">Replace cookies…</button>
+        <button class="btn ghost focusable" id="ytmUnlink">Unlink</button>
+      </div>
+      <div class="hint">If playlists stop loading some day, the cookies expired — just re-export and replace.</div>`;
+    box.querySelector('#ytmUnlink').addEventListener('click', async () => {
+      await api('/api/music/unlink', { method: 'POST', body: {} });
+      S.ytmPlaylists = null; toast('YouTube Music unlinked'); renderYtmBox();
+    });
+    box.querySelector('#ytmRelink').addEventListener('click', () => renderYtmPaste(box));
+    return;
+  }
+  renderYtmPaste(box);
+}
+function renderYtmPaste(box) {
+  box.innerHTML = `
+    <textarea id="ytmCookies" rows="5" placeholder="# Netscape HTTP Cookie File&#10;.youtube.com&#9;TRUE&#9;/&#9;…  (paste the whole exported file)"
+      style="width:100%;background:rgba(11,8,18,.7);border:1px solid var(--line);border-radius:12px;padding:12px;color:var(--text);font:500 11.5px 'JetBrains Mono';outline:none;resize:vertical"></textarea>
+    <div style="display:flex;gap:10px;margin-top:10px">
+      <button class="btn primary focusable" id="ytmLink" style="flex:1;justify-content:center">Link YouTube Music</button>
+    </div><div class="hint" id="ytmMsg"></div>`;
+  box.querySelector('#ytmLink').addEventListener('click', async () => {
+    const text = box.querySelector('#ytmCookies').value;
+    if (!text.trim()) return toast('Paste the exported cookies.txt first');
+    try {
+      await api('/api/music/link', { method: 'POST', body: { cookies: text } });
+      S.ytmPlaylists = null; // Music page refetches
+      toast('YouTube Music linked ✓ — your playlists are on the Music page');
+      renderYtmBox();
+    } catch (e) { toast(e.message); }
+  });
 }
 // Trakt link panel (Preferences → Connections): device-code flow, then sync controls.
 async function renderTraktBox() {
