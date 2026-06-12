@@ -20,15 +20,15 @@
   --rail:72px;       /* sidebar width; grows on hover so content slides right (Plex push) */
   --heroLeft:clamp(4px,5vw,190px); /* resolution-adaptive title indent (home hero, page heads, backdrop info) */
   --poster:168px;    /* standardized poster cover width everywhere */
-  --gut:48px;        /* content gutter */
+  --gut:28px;        /* content gutter — tight to the rail (owner: no dead strip by the menu) */
 }
 /* Rail push uses TRANSFORM (compositor-only, buttery on TV) — animating --rail/left forced
    a full page re-layout every frame and stuttered hard on the Shield. Phones keep their
    own off-canvas drawer (the 600px block below overrides). */
 @media (min-width:601px){
   body.railOpen #home,body.railOpen #discover,body.railOpen #browse,body.railOpen #detail,
-  body.railOpen #person,body.railOpen #settings,body.railOpen #searchBar,
-  body.railOpen #bdInfo{transform:translateX(152px)} /* #bdInfo is fixed-pos OUTSIDE the pages — without it the browse backdrop title stayed put while the grid slid */
+  body.railOpen #person,body.railOpen #settings,body.railOpen #prefs,body.railOpen #searchBar,
+  body.railOpen #bdInfo{transform:translateX(152px)} /* #bdInfo is fixed-pos OUTSIDE the pages — without it the browse backdrop title stayed put while the grid slid. #prefs too: it used to load UNDER the expanded menu. */
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%}
@@ -289,14 +289,16 @@ body.fullBd #bdInfo.show{opacity:1}
 #person h2{font:600 15px "Sora";color:var(--muted);margin:0 0 12px 2px}
 #personGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:20px 16px;align-content:start;padding-bottom:30px}
 
-/* ---------- library modal ---------- */
-#libModal{position:fixed;inset:0;z-index:48;display:none;place-items:center;background:rgba(5,3,9,.8);backdrop-filter:blur(6px)}
-#libModal.open{display:grid}
-#libModal .box{width:min(440px,92vw);background:rgba(22,16,32,.96);border:1px solid var(--line);border-radius:20px;padding:28px}
-#libModal h2{font:800 22px "Sora";margin-bottom:4px}
-#libModal .sub{color:var(--muted);font-size:13px;margin-bottom:18px}
+/* ---------- library + fix-match modals (shared chrome) ---------- */
+#libModal,#matchModal{position:fixed;inset:0;z-index:48;display:none;place-items:center;background:rgba(5,3,9,.8);backdrop-filter:blur(6px)}
+#libModal.open,#matchModal.open{display:grid}
+#libModal .box,#matchModal .box{width:min(440px,92vw);background:rgba(22,16,32,.96);border:1px solid var(--line);border-radius:20px;padding:28px}
+#libModal h2,#matchModal h2{font:800 22px "Sora";margin-bottom:4px}
+#libModal .sub,#matchModal .sub{color:var(--muted);font-size:13px;margin-bottom:18px}
 #libModal label{display:block;font:700 11px "JetBrains Mono";letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:14px 0 6px}
-#libModal input{background:rgba(11,8,18,.7);border:1px solid var(--line);border-radius:12px;padding:12px 13px;color:var(--text);font:500 14px "Albert Sans";outline:none}
+#libModal input,#matchModal input{background:rgba(11,8,18,.7);border:1px solid var(--line);border-radius:12px;padding:12px 13px;color:var(--text);font:500 14px "Albert Sans";outline:none}
+#matchModal .box{width:min(520px,94vw)}
+#matchResults{max-height:300px;overflow-y:auto;margin-top:12px;display:flex;flex-direction:column;gap:4px}
 #libModal input,#libModal select{width:100%}
 #libModal input:focus{border-color:var(--magenta)}
 #libModal .modalBtns{display:flex;gap:10px;margin-top:22px}
@@ -445,8 +447,10 @@ body.fullBd #bdInfo.show{opacity:1}
    redesigned detail (season grid → episodes), watchlist/played, icon buttons
    ========================================================================= */
 
-/* Sidebar PUSHES content via transform (left stays static — see the railOpen rule). */
-#home,#discover,#browse,#detail,#person,#settings{left:var(--rail)!important;padding-left:var(--gut)!important;
+/* Sidebar PUSHES content via transform (left stays static — see the railOpen rule).
+   #prefs was missing from BOTH this rule and the push rule — it sat at left:0 under the
+   rail and stayed put when the menu expanded. */
+#home,#discover,#browse,#detail,#person,#settings,#prefs{left:var(--rail)!important;padding-left:var(--gut)!important;
   transition:transform .26s cubic-bezier(.22,1,.36,1);will-change:transform}
 #searchBar{left:calc(var(--rail) + var(--gut))!important;right:var(--gut)!important;
   transition:transform .26s cubic-bezier(.22,1,.36,1);will-change:transform}
@@ -1318,6 +1322,25 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
   </div>
 </div>
 
+<!-- Fix a wrong TMDB match on a scanned library item (admin): pick the right title, or
+     revert to whatever the folder/NFO says. The choice is remembered across rescans. -->
+<div id="matchModal">
+  <div class="box">
+    <h2>Fix TMDB match</h2>
+    <div class="sub" id="matchSub"></div>
+    <div style="display:flex;gap:8px">
+      <input id="matchQ" placeholder="Search TMDB…" maxlength="80" style="flex:1">
+      <button class="btn primary focusable" id="matchGo">Search</button>
+    </div>
+    <div id="matchResults"></div>
+    <div class="modalBtns">
+      <button class="btn ghost focusable" id="matchNone" style="flex:1;justify-content:center">📁 Use folder/NFO info instead</button>
+      <button class="btn ghost focusable" id="matchAuto" style="display:none">↻ Automatic</button>
+      <button class="btn ghost focusable" id="matchCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <section id="browse">
   <div class="browseHead">
     <h1 id="browseTitle">Movies</h1>
@@ -1456,6 +1479,8 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg></button>
           <button class="iconBtn focusable" id="dTrailer" title="Trailer" style="display:none">
             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>
+          <button class="iconBtn focusable" id="dFixMatch" title="Fix TMDB match (library item)" style="display:none">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a4.5 4.5 0 0 0-6 6L3 18v3h3l5.7-5.7a4.5 4.5 0 0 0 6-6L14 13l-3-3z"/></svg></button>
           <div class="qToggle" id="qToggle" title="Playback quality preference">
             <button data-q="3" class="qon">1080p</button><button data-q="4">4K</button></div>
         </div>
@@ -2711,6 +2736,7 @@ async function openDetail(it, push = true) {
   checkAvailability(it);
   updateDetailPlayLabel(it.resume ? { label: `Resume · ${fmt(it.resume)}`, target: it } : { label: 'Play', target: it });
   syncDetailButtons(it);
+  syncFixMatchBtn(it); // admin, library-born items only: fix a wrong TMDB match
   $('detail').querySelector('.detailScroll').scrollTop = 0;
   // TV: focus lands on Play IMMEDIATELY — without this the .focus ring stayed on the now-
   // hidden grid card, and the first D-pad press measured "nearest" from that stale rect
@@ -4136,7 +4162,8 @@ function mapLocal(lib, x, titleOverride) {
   return {
     key: matched && type ? `tmdb:${type}:${x.tmdbId}` : `local:${lib.id}:${x.idx}`,
     title: titleOverride || x.title, year: x.year || '', genre: lib.name,
-    _added: x.addedAt || 0, _genres: x.genres || [], _lib: lib,
+    _added: x.addedAt || 0, _genres: x.genres || [], _lib: lib, _idx: x.idx, _matchOv: x.matchOverride,
+    _kind: x.kind,
     rating: x.rating ? Number(x.rating).toFixed(1) : '—', overview: x.overview || '',
     poster: x.artUrl || (x.poster ? img(x.poster, 'w342') : null) || x.thumbUrl
       || procBackdrop(180 + (x.idx % 14) * 17, 320, (x.idx % 12) + 5),
@@ -4173,6 +4200,7 @@ function openLocalDetail(it) {
   $('qToggle').style.display = 'none'; S.qualityPref = null; // local file = one source, no quality choice
   $('dPlay').disabled = false; $('dPlay').classList.remove('unavail');
   updateDetailPlayLabel({ label: 'Play', target: it });
+  syncFixMatchBtn(it); // unmatched items need this MOST — assign the right TMDB title
   $('detail').querySelector('.detailScroll').scrollTop = 0;
 }
 // Local-library sorting (sortSel swaps to these options on local libs; TMDB pages restore).
@@ -4236,6 +4264,18 @@ async function runLocalLibrary(lib, showIdx) {
       items = r.items.filter((x) => x.kind === 'episode' && x.showIdx === showIdx)
         .map((x) => mapLocal(lib, x,
           `S${String(x.s).padStart(2, '0')}E${String(x.e).padStart(2, '0')}${x.epTitle ? ` · ${x.epTitle}` : ''}`));
+      // Unmatched shows have no detail page (this grid IS their page) — the admin fixes a
+      // wrong/missing TMDB match right here.
+      if (show && isAdmin) {
+        setTimeout(() => {
+          if (S.view !== 'library' || S.localShow !== showIdx) return;
+          const b = document.createElement('button');
+          b.className = 'ghostMini focusable'; b.style.cssText = 'grid-column:1/-1;justify-self:start';
+          b.textContent = '🛠 Fix TMDB match for this show';
+          b.addEventListener('click', () => openMatchModal(mapLocal(lib, show)));
+          $('grid').appendChild(b);
+        }, 0); // after renderGrid below
+      }
     } else {
       $('browseTitle').textContent = lib.name;
       setSortOptions('local');
@@ -4287,6 +4327,71 @@ async function scanLibrary(lib, mode = 'scan') {
     }, 1500);
   } catch (e) { toast('Scan failed: ' + e.message); }
 }
+/* ---- Fix a wrong TMDB match on a library item (admin; survives rescans) ---- */
+function syncFixMatchBtn(it) {
+  const on = !!(S.user && S.user.role === 'admin' && it && it._lib && it._idx !== undefined && it._kind !== 'episode');
+  $('dFixMatch').style.display = on ? '' : 'none';
+  $('dFixMatch').onclick = on ? () => openMatchModal(it) : null;
+}
+function openMatchModal(it) {
+  S.matchItem = it;
+  $('matchSub').textContent = `“${it.title}” in ${it._lib.name}`
+    + (it._matchOv === 'none' ? ' · currently using folder info' : it._matchOv ? ' · manual match active' : '');
+  $('matchQ').value = String(it.title || '').replace(/\s*\(\d{4}\)\s*$/, '');
+  $('matchResults').innerHTML = '';
+  $('matchAuto').style.display = it._matchOv !== undefined ? '' : 'none'; // way back to auto-matching
+  $('matchModal').classList.add('open');
+  runMatchSearch();
+}
+async function runMatchSearch() {
+  const it = S.matchItem; if (!it) return;
+  const q = $('matchQ').value.trim(); if (!q) return;
+  $('matchResults').innerHTML = '<div class="hint">searching…</div>';
+  try {
+    const r = await api(`/api/tmdb/search/${it._lib.kind === 'tv' ? 'tv' : 'movie'}?query=${encodeURIComponent(q)}`);
+    const list = (r.results || []).slice(0, 12);
+    if (!list.length) { $('matchResults').innerHTML = '<div class="hint">No TMDB results — try fewer words, or use the folder info below.</div>'; return; }
+    $('matchResults').innerHTML = '';
+    list.forEach((x) => {
+      const row = document.createElement('button');
+      row.className = 'calItem focusable';
+      row.innerHTML = `<div class="pp" style="background-image:url('${safeUrl(x.poster_path ? img(x.poster_path, 'w154') : '')}')"></div>
+        <div class="ci"><div class="ct">${esc(x.title || x.name || '?')}</div>
+        <div class="cm">${esc((x.release_date || x.first_air_date || '—').slice(0, 4))}${x.overview ? ` · ${esc(x.overview.slice(0, 90))}…` : ''}</div></div>`;
+      row.addEventListener('click', () => applyMatch(x.id));
+      $('matchResults').appendChild(row);
+    });
+  } catch (e) { $('matchResults').innerHTML = `<div class="hint">Search failed: ${esc(e.message)}</div>`; }
+}
+async function applyMatch(tmdbId) {
+  const it = S.matchItem; if (!it) return;
+  $('matchModal').classList.remove('open');
+  toast(tmdbId === null ? 'Reverting to the folder info…' : 'Re-matching…');
+  try {
+    await api(`/api/libraries/${it._lib.id}/match`, { method: 'POST', body: { idx: it._idx, tmdbId } });
+    const poll = setInterval(async () => {
+      try {
+        const st = await api(`/api/libraries/${it._lib.id}/scanstatus`);
+        if (st.running) return;
+        clearInterval(poll);
+        if (st.error) return toast('Failed: ' + st.error);
+        delete (S.libCache || {})[it._lib.id]; S.localMap = null; // identity changed everywhere
+        ensureLocalMap();
+        toast(tmdbId === null ? 'Now showing the folder info ✓' : 'Match fixed ✓');
+        // The open detail page describes the OLD identity — land back on the library grid.
+        $('detail').classList.remove('open');
+        S.currentLib = it._lib;
+        switchView('library');
+      } catch { clearInterval(poll); }
+    }, 1200);
+  } catch (e) { toast('Failed: ' + e.message); }
+}
+$('matchGo').addEventListener('click', runMatchSearch);
+$('matchQ').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); runMatchSearch(); } });
+$('matchNone').addEventListener('click', () => applyMatch(null));
+$('matchAuto').addEventListener('click', () => applyMatch('auto'));
+$('matchCancel').addEventListener('click', () => $('matchModal').classList.remove('open'));
+
 // Local items play directly off disk (no usenet pipeline involved).
 function playLocal(it) {
   openPlayer(it, {
@@ -5608,6 +5713,7 @@ async function refreshSettings() {
       } catch (e) { toast('Delete failed: ' + e.message); }
     }));
   } catch (e) { $('engineStatus').innerHTML = `<div class="kv"><span>Engine</span><span>${esc(e.message)}</span></div>`; }
+  bootReady(); // a hash-restored Settings page is a boot landing — drop the loader only now
 }
 // Cover-size preference (per device).
 document.querySelectorAll('#coverSize button').forEach((b) => b.addEventListener('click', () => {
@@ -5831,7 +5937,9 @@ function switchView(v, push = true, opts = {}) {
     if (!opts.keepRail) setTimeout(() => focusContent(), 60); }
   if (v === 'settings') refreshSettings();
   if (v === 'prefs') openPrefs();
-  if (['settings', 'prefs', 'search'].includes(v)) bootReady(); // synchronous landings
+  // Settings is NOT a synchronous landing: refreshSettings() fills the panels async, and
+  // dropping the loader early flashed an empty page — it calls bootReady() itself when done.
+  if (['prefs', 'search'].includes(v)) bootReady(); // synchronous landings
 }
 document.querySelectorAll('.railBtn[data-nav]').forEach((b) => b.addEventListener('click', () => switchView(b.dataset.nav)));
 
@@ -6216,6 +6324,11 @@ document.addEventListener('keydown', (e) => {
     else dpadCycle($('libModal'), k);
     return;
   }
+  if ($('matchModal').classList.contains('open')) {
+    if (k === 'Escape' || k === 'Backspace') $('matchModal').classList.remove('open');
+    else dpadCycle($('matchModal'), k);
+    return;
+  }
   if ($('catModal') && $('catModal').classList.contains('open')) {
     if (k === 'Escape' || k === 'Backspace') $('catModal').classList.remove('open');
     else dpadCycle($('catModal'), k);
@@ -6520,7 +6633,7 @@ document.addEventListener('keyup', (e) => {
 window.__tvBack = () => {
   const overlay = document.querySelector(
     '.gate.open, #detail.open, #person.open, #player.open, #drawer.open, #trailer.open, ' +
-    '#libModal.open, #catModal.open, #cwMenu.open, #trackMenu.open');
+    '#libModal.open, #matchModal.open, #catModal.open, #cwMenu.open, #trackMenu.open');
   if (!overlay && S.view === 'home') return 'exit';
   document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
   return 'ok';
@@ -6569,6 +6682,13 @@ async function enterApp() {
 }
 async function enterAppShell() {
   showGate(null);
+  // The boot loader covers the shell until the FIRST real content paints. Re-arm it HERE,
+  // before any awaits: the gate screens (login / profile picker) hide the loader, so the
+  // post-gate path used to expose an empty home shell ("Triboon" hero over blank rows)
+  // while watch/libraries/rows were still fetching.
+  S._booting = true;
+  $('appLoader').classList.remove('hide');
+  setTimeout(bootReady, 10000); // safety: never trap the user behind the loader
   applyCoverSize();
   S.maxLevel = (S.profile && (S.profile.level ?? 3)) ?? 3;
   $('rail').classList.add('show');
@@ -6583,10 +6703,6 @@ async function enterAppShell() {
   await Promise.all([loadLibraries(), loadWatchlist()]);
   applyMenuPrefs(); // search-first default order + user's hide/reorder choices
   setTimeout(prefetchLiveTv, 800); // warm Live TV off the boot critical path
-  // The boot loader stays up until the FIRST real content paints (bootReady() from the
-  // row/grid/detail renderers) — hiding it here flashed an empty home while rows fetched.
-  S._booting = true;
-  setTimeout(bootReady, 10000); // safety: never trap the user behind the loader
   // Sidebar PUSHES content: hovering the rail shifts the content area right (not overlay).
   $('rail').addEventListener('mouseenter', () => document.body.classList.add('railOpen'));
   $('rail').addEventListener('mouseleave', () => document.body.classList.remove('railOpen'));

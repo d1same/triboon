@@ -855,6 +855,41 @@ const H = {
   },
 
   libraryScanStatus: async (ctx) => send(ctx.res, 200, scanStates.get(ctx.m[1]) || { running: false, never: true }),
+
+  // Fix a wrong TMDB match (admin): body { idx, tmdbId } — a TMDB id forces that exact
+  // match; null reverts to folder/NFO info. The override is stored ON the item and honored
+  // by every future scan, then a quick rescan applies it (all other items just reuse).
+  libraryMatch: async (ctx) => {
+    const lib = store.read('libraries', { list: [] }).list.find((l) => l.id === ctx.m[1]);
+    if (!lib) return send(ctx.res, 404, { error: 'library not found' });
+    if (!lib.path) return send(ctx.res, 400, { error: 'smart views have no scanned items' });
+    const b = await readJson(ctx.req);
+    const idx = parseInt(b.idx, 10);
+    const rec = store.read('libitems', {})[lib.id];
+    const item = rec && rec.items[idx];
+    if (!item) return send(ctx.res, 404, { error: 'item not found — rescan first' });
+    if (item.kind === 'episode') return send(ctx.res, 400, { error: 'fix the match on the SHOW — its episodes follow' });
+    const ov = b.tmdbId === 'auto' ? 'auto' // clear the override — back to automatic matching
+      : (b.tmdbId === null || b.tmdbId === 'none') ? 'none'
+      : (Number.isInteger(+b.tmdbId) && +b.tmdbId > 0 ? +b.tmdbId : null);
+    if (ov === null) return send(ctx.res, 400, { error: 'tmdbId must be a TMDB id, null for folder info, or "auto"' });
+    store.update('libitems', {}, (s) => {
+      const it = s[lib.id] && s[lib.id].items[idx];
+      if (it) { if (ov === 'auto') { delete it.matchOverride; it.tmdbId = null; } else it.matchOverride = ov; }
+      return s;
+    });
+    const st = scanStates.get(lib.id);
+    if (st && st.running) return send(ctx.res, 202, { started: false, queued: true }); // next scan applies it
+    const state = { running: true, startedAt: Date.now(), progress: 0, mode: 'scan' };
+    scanStates.set(lib.id, state);
+    performScan(lib, state, 'scan')
+      .then((sum) => scanStates.set(lib.id, { running: false, finishedAt: Date.now(), mode: 'scan', ...sum }))
+      .catch((e) => {
+        console.error('[library match]', e.message);
+        scanStates.set(lib.id, { running: false, error: 'rescan failed — check the library path' });
+      });
+    send(ctx.res, 202, { started: true });
+  },
 };
 
 async function performScan(lib, state, mode = 'scan') {
@@ -870,6 +905,10 @@ async function performScan(lib, state, mode = 'scan') {
     const prevItems = (store.read('libitems', {})[lib.id] || { items: [] }).items;
     const prevBy = new Map(prevItems.map((it) => [it.kind === 'show' ? `show:${it.dir || ''}` : it.file, it]));
     const reuse = (key) => { const p = prevBy.get(key); return mode !== 'metadata' && p && p.tmdbId ? p : null; };
+    // Admin match override (set via POST /api/libraries/:id/match), carried across scans:
+    // 'none' = never TMDB-match this item (folder/NFO info only); a number = ALWAYS match
+    // that exact TMDB id (fixes "wrong cover/info" picks for good).
+    const ovOf = (key) => (prevBy.get(key) || {}).matchOverride;
     // A failed lookup (TMDB down, no key) must never WIPE a previously good match — a
     // metadata refresh degrades to "keep what we had" instead of unmatching the library.
     const keepPrev = (item, key) => {
@@ -929,9 +968,13 @@ async function performScan(lib, state, mode = 'scan') {
     // library scans in seconds of disk walk + lookups at 6-wide instead of one-at-a-time.
     const lookupJobs = [];
 
+    // Bounds are RUNAWAY GUARDS, not product limits: episodes count toward the item total,
+    // so the old 1000-item ceiling silently dropped every show after the first ~60 — the
+    // owner's "not all my TV shows appear". Sized for real archives with headroom.
+    const MAX_ITEMS = 25000, MAX_TOP = 5000, MAX_DIR = 2000, MAX_EPS = 1000;
     const scanMovieDir = async (dir, label) => {
       let best = null;
-      for (const f of lsDir(dir).slice(0, 500)) {
+      for (const f of lsDir(dir).slice(0, MAX_DIR)) {
         if (!f.isFile() || !MEDIA.test(f.name)) continue;
         const st = fs.statSync(path.join(dir, f.name));
         if (!best || st.size > best.size) best = { file: path.join(dir, f.name), size: st.size };
@@ -946,15 +989,18 @@ async function performScan(lib, state, mode = 'scan') {
         tmdbId: (nfo && nfo.tmdbId) || null, poster: null, backdrop: null,
         genres: [], addedAt: addedAtOf(best.file, best.file),
       });
-      const prev = reuse(best.file);
-      if (prev) {
+      const ov = ovOf(best.file);
+      if (ov !== undefined) item.matchOverride = ov;
+      const prev = ov === 'none' ? null : reuse(best.file);
+      if (ov === 'none') { item.tmdbId = null; /* folder/NFO info only — by admin decision */ }
+      else if (prev && (typeof ov !== 'number' || prev.tmdbId === ov)) {
         item.tmdbId = prev.tmdbId; item.poster = prev.poster; item.backdrop = prev.backdrop;
         item.genres = prev.genres || []; item.title = prev.title; // prev title is TMDB-final
         item.overview = item.overview || prev.overview; item.rating = item.rating || prev.rating;
       } else if (wantTmdb) lookupJobs.push(async () => {
         // A "tv"-kind library searches TV even for season-less folders (mini-series etc.).
         const kind = lib.kind === 'tv' ? 'tv' : 'movie';
-        const hit = await tmdbLookup(kind, { title: parsed.title, year: item.year, tmdbId: item.tmdbId });
+        const hit = await tmdbLookup(kind, { title: parsed.title, year: item.year, tmdbId: typeof ov === 'number' ? ov : item.tmdbId });
         if (hit) {
           item.tmdbId = hit.id; item.poster = hit.poster_path; item.backdrop = hit.backdrop_path;
           item.genres = genresOf(hit);
@@ -973,13 +1019,16 @@ async function performScan(lib, state, mode = 'scan') {
         overview: (nfo && nfo.plot) || '', rating: (nfo && nfo.rating) || null,
         tmdbId: (nfo && nfo.tmdbId) || null, poster: null, backdrop: null, genres: [],
       });
-      const prevShow = reuse(`show:${dir}`);
-      if (prevShow) {
+      const ovS = ovOf(`show:${dir}`);
+      if (ovS !== undefined) show.matchOverride = ovS;
+      const prevShow = ovS === 'none' ? null : reuse(`show:${dir}`);
+      if (ovS === 'none') { show.tmdbId = null; }
+      else if (prevShow && (typeof ovS !== 'number' || prevShow.tmdbId === ovS)) {
         show.tmdbId = prevShow.tmdbId; show.poster = prevShow.poster; show.backdrop = prevShow.backdrop;
         show.genres = prevShow.genres || []; show.title = prevShow.title;
         show.overview = show.overview || prevShow.overview; show.rating = show.rating || prevShow.rating;
       } else if (wantTmdb) lookupJobs.push(async () => {
-        const hit = await tmdbLookup('tv', { title: parsed.title, year: show.year, tmdbId: show.tmdbId });
+        const hit = await tmdbLookup('tv', { title: parsed.title, year: show.year, tmdbId: typeof ovS === 'number' ? ovS : show.tmdbId });
         if (hit) {
           show.tmdbId = hit.id; show.poster = hit.poster_path; show.backdrop = hit.backdrop_path;
           show.genres = genresOf(hit);
@@ -995,7 +1044,7 @@ async function performScan(lib, state, mode = 'scan') {
         }
       });
       epFiles.sort((a, b) => a.s - b.s || a.e - b.e);
-      for (const ep of epFiles.slice(0, 400)) {
+      for (const ep of epFiles.slice(0, MAX_EPS)) {
         const epNfo = nfoBeside(ep.file);
         pushItem({
           kind: 'episode', file: ep.file, artFile: show.artFile, showIdx: show.idx,
@@ -1014,21 +1063,24 @@ async function performScan(lib, state, mode = 'scan') {
 
     try {
       const top = lsDir(lib.path);
-      for (const e of top.slice(0, 2000)) {
-        if (items.length >= 1000) break;
+      for (const e of top.slice(0, MAX_TOP)) {
+        if (items.length >= MAX_ITEMS) break;
         const full = path.join(lib.path, e.name);
         if (e.isFile() && MEDIA.test(e.name)) {
           const parsed = parseName(e.name);
           const item = pushItem({ kind: 'movie', file: full, artFile: null, title: parsed.title, year: parsed.year,
             overview: '', rating: null, tmdbId: null, poster: null, backdrop: null,
             genres: [], addedAt: addedAtOf(full, full) });
-          const prev = reuse(full);
-          if (prev) {
+          const ov = ovOf(full);
+          if (ov !== undefined) item.matchOverride = ov;
+          const prev = ov === 'none' ? null : reuse(full);
+          if (ov === 'none') { item.tmdbId = null; }
+          else if (prev && (typeof ov !== 'number' || prev.tmdbId === ov)) {
             item.tmdbId = prev.tmdbId; item.poster = prev.poster; item.backdrop = prev.backdrop;
             item.genres = prev.genres || []; item.title = prev.title;
             item.overview = prev.overview || ''; item.rating = prev.rating || null;
           } else if (wantTmdb) lookupJobs.push(async () => {
-            const hit = await tmdbLookup(lib.kind === 'tv' ? 'tv' : 'movie', parsed);
+            const hit = await tmdbLookup(lib.kind === 'tv' ? 'tv' : 'movie', { ...parsed, tmdbId: typeof ov === 'number' ? ov : null });
             if (hit) { item.tmdbId = hit.id; item.poster = hit.poster_path; item.backdrop = hit.backdrop_path;
               item.genres = genresOf(hit);
               item.overview = hit.overview || ''; item.rating = hit.vote_average || null; item.title = hit.title || hit.name || item.title; }
@@ -1040,12 +1092,12 @@ async function performScan(lib, state, mode = 'scan') {
         // Collect episode files (Season subdirs or SxxEyy files in the folder itself).
         const sub = lsDir(full);
         const epFiles = [];
-        for (const f of sub.slice(0, 500)) {
+        for (const f of sub.slice(0, MAX_DIR)) {
           if (f.isFile() && MEDIA.test(f.name) && EP.test(f.name)) {
             const m = EP.exec(f.name);
             epFiles.push({ file: path.join(full, f.name), s: +m[1], e: +m[2] });
           } else if (f.isDirectory() && /season|specials/i.test(f.name)) {
-            for (const g of lsDir(path.join(full, f.name)).slice(0, 500)) {
+            for (const g of lsDir(path.join(full, f.name)).slice(0, MAX_DIR)) {
               if (!g.isFile() || !MEDIA.test(g.name)) continue;
               const m = EP.exec(g.name);
               if (m) epFiles.push({ file: path.join(full, f.name, g.name), s: +m[1], e: +m[2] });
@@ -1060,7 +1112,7 @@ async function performScan(lib, state, mode = 'scan') {
               const eps2 = [];
               for (const g of innerEps) { const m = EP.exec(g.name); eps2.push({ file: path.join(full, f.name, g.name), s: +m[1], e: +m[2] }); }
               for (const sd of innerSeasons) {
-                for (const g of lsDir(path.join(full, f.name, sd.name)).slice(0, 500)) {
+                for (const g of lsDir(path.join(full, f.name, sd.name)).slice(0, MAX_DIR)) {
                   if (!g.isFile() || !MEDIA.test(g.name)) continue;
                   const m = EP.exec(g.name);
                   if (m) eps2.push({ file: path.join(full, f.name, sd.name, g.name), s: +m[1], e: +m[2] });
@@ -1831,6 +1883,7 @@ const ROUTES = [
   { m: 'DELETE', re: /^\/api\/libraries\/(\w+)$/, auth: 'admin', h: H.libraryDelete },
   { m: 'PATCH', re: /^\/api\/libraries\/(\w+)$/, auth: 'admin', h: H.libraryEdit },
   { m: 'POST', re: /^\/api\/libraries\/(\w+)\/scan$/, auth: 'admin', h: H.libraryScan },
+  { m: 'POST', re: /^\/api\/libraries\/(\w+)\/match$/, auth: 'admin', h: H.libraryMatch },
   { m: 'GET', re: /^\/api\/libraries\/(\w+)\/items$/, auth: 'user', h: H.libraryItems },
   { m: 'GET', re: /^\/api\/local\/(\w+)\/art\/(\d+)$/, auth: 'stream', h: H.localArt },
   { m: 'GET', re: /^\/api\/local\/(\w+)\/thumb\/(\d+)$/, auth: 'stream', h: H.localThumb },

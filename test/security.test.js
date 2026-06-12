@@ -535,6 +535,41 @@ test('library scan v3: rescans keep addedAt + matches, count new files; stable c
     await new Promise((r) => setTimeout(r, 50));
   }
 
+  // ---- Match override: revert to folder info / force an exact id; survives rescans ----
+  const movieIdx = items2.find((i) => i.kind === 'movie').idx;
+  assert.strictEqual(items2.find((i) => i.kind === 'movie').title, 'Mock Movie', 'TMDB-matched before the override');
+  const rv = await httpJson(srv.port, 'POST', `/api/libraries/${lib.json.id}/match`, { idx: movieIdx, tmdbId: null }, admin);
+  assert.strictEqual(rv.status, 202);
+  for (let i = 0; i < 200; i++) {
+    const st = await httpJson(srv.port, 'GET', `/api/libraries/${lib.json.id}/scanstatus`, null, admin);
+    if (!st.json.running) break;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  let after = (await httpJson(srv.port, 'GET', `/api/libraries/${lib.json.id}/items`, null, admin)).json.items;
+  let m3 = after.find((i) => i.kind === 'movie');
+  assert.strictEqual(m3.tmdbId, null, 'override "none": no TMDB identity');
+  assert.strictEqual(m3.title, 'Reuse Film', 'folder title restored');
+  assert.strictEqual(m3.matchOverride, 'none', 'override visible to the UI');
+  // A plain rescan must NOT re-match it (the override is remembered).
+  await runScan(lib.json.id);
+  after = (await httpJson(srv.port, 'GET', `/api/libraries/${lib.json.id}/items`, null, admin)).json.items;
+  m3 = after.find((i) => i.kind === 'movie');
+  assert.strictEqual(m3.tmdbId, null, 'override survives later scans');
+  // Episodes are fixed via their SHOW; bogus targets rejected.
+  const epIdx = after.find((i) => i.kind === 'episode').idx;
+  assert.strictEqual((await httpJson(srv.port, 'POST', `/api/libraries/${lib.json.id}/match`, { idx: epIdx, tmdbId: null }, admin)).status, 400);
+  assert.strictEqual((await httpJson(srv.port, 'POST', `/api/libraries/${lib.json.id}/match`, { idx: movieIdx, tmdbId: 'evil' }, admin)).status, 400);
+  // 'auto' clears the override — the next scan matches normally again.
+  assert.strictEqual((await httpJson(srv.port, 'POST', `/api/libraries/${lib.json.id}/match`, { idx: movieIdx, tmdbId: 'auto' }, admin)).status, 202);
+  for (let i = 0; i < 200; i++) {
+    const st = await httpJson(srv.port, 'GET', `/api/libraries/${lib.json.id}/scanstatus`, null, admin);
+    if (!st.json.running) break;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  const m4 = (await httpJson(srv.port, 'GET', `/api/libraries/${lib.json.id}/items`, null, admin)).json.items.find((i) => i.kind === 'movie');
+  assert.strictEqual(m4.title, 'Mock Movie', 'auto: TMDB match restored');
+  assert.strictEqual(m4.matchOverride, undefined, 'override cleared');
+
   // Auto-scan cadence: saves, clamps, and reads back with a real trace.
   const set = await httpJson(srv.port, 'POST', '/api/settings', { libAutoScanMin: 60 }, admin);
   assert.strictEqual(set.status, 200);
