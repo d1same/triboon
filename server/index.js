@@ -1799,6 +1799,11 @@ Object.assign(H, {
       const t = await probeTracks(selfUrl);
       vf._tracks = { available: true, ...t };
       send(ctx.res, 200, vf._tracks);
+      // PREFETCH: the player asks for tracks the moment playback starts — extract the first
+      // text subtitle NOW in the background (the whole interleaved stream must be read, which
+      // took ages when it only began at the user's CC press; cached, so the press is instant).
+      const first = (t.subs || []).find((s) => s.text);
+      if (first) ensureSubtitleVtt(vf, first.rel, ctx.user.id).catch(() => {});
     } catch (e) { send(ctx.res, 200, { available: false, audio: [], subs: [], duration: null, error: e.message }); }
   },
 
@@ -1835,26 +1840,44 @@ Object.assign(H, {
     if (!detectFfmpeg()) return send(ctx.res, 503, { error: 'ffmpeg not available' });
     vf._touched = Date.now();
     const track = parseInt(ctx.m[2], 10) || 0;
-    vf._subCache = vf._subCache || new Map();
-    if (vf._subCache.has(track)) {
-      return send(ctx.res, 200, vf._subCache.get(track), { 'content-type': 'text/vtt; charset=utf-8' });
+    try {
+      const vtt = await ensureSubtitleVtt(vf, track, ctx.claims.uid);
+      if (!ctx.res.writableEnded) send(ctx.res, 200, vtt, { 'content-type': 'text/vtt; charset=utf-8' });
+    } catch (e) {
+      if (!ctx.res.writableEnded) send(ctx.res, 502, { error: 'subtitle extraction failed', detail: String(e.message).slice(0, 200) });
     }
-    const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.claims.uid, vf.id)}`;
-    const ff = spawnSubtitleExtract(selfUrl, track);
-    ff.on('error', (e) => { console.error('[subtitle spawn]', e.message); try { ctx.res.destroy(); } catch {} });
-    const chunks = []; let err = '';
-    ff.stdout.on('data', (d) => chunks.push(d));
-    ff.stderr.on('data', (d) => { err += d; });
-    ctx.req.on('close', () => ff.kill('SIGKILL'));
-    ff.on('close', (codeNum) => {
-      if (ctx.res.writableEnded) return;
-      const vtt = Buffer.concat(chunks).toString('utf8');
-      if (codeNum || !vtt.startsWith('WEBVTT')) return send(ctx.res, 502, { error: 'subtitle extraction failed', detail: err.slice(0, 200) });
-      if (vf._subCache.size < 8) vf._subCache.set(track, vtt);
-      send(ctx.res, 200, vtt, { 'content-type': 'text/vtt; charset=utf-8' });
-    });
   },
 });
+
+// One extraction per (mount, track), shared by every requester and IMMUNE to client
+// disconnects. The old per-request spawn was killed when the CC toggle closed the fetch —
+// so the whole-file read restarted from zero on every retry and the cache never filled
+// ("subtitles don't load until I turn them off and on"). Now the first request (or the
+// play-time prefetch) starts ONE ffmpeg run; everyone else awaits the same promise.
+function ensureSubtitleVtt(vf, track, uid) {
+  vf._subCache = vf._subCache || new Map();
+  if (vf._subCache.has(track)) return Promise.resolve(vf._subCache.get(track));
+  vf._subJobs = vf._subJobs || new Map();
+  if (vf._subJobs.has(track)) return vf._subJobs.get(track);
+  const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(uid, vf.id)}`;
+  const job = new Promise((resolve, reject) => {
+    let ff;
+    try { ff = spawnSubtitleExtract(selfUrl, track); } catch (e) { return reject(e); }
+    const chunks = []; let err = '';
+    ff.on('error', reject);
+    ff.stdout.on('data', (d) => chunks.push(d));
+    ff.stderr.on('data', (d) => { err += d; });
+    ff.on('close', (codeNum) => {
+      const vtt = Buffer.concat(chunks).toString('utf8');
+      if (codeNum || !vtt.startsWith('WEBVTT')) return reject(new Error(err.slice(0, 200) || `ffmpeg exit ${codeNum}`));
+      if (vf._subCache.size < 8) vf._subCache.set(track, vtt);
+      resolve(vtt);
+    });
+  }).finally(() => vf._subJobs.delete(track));
+  vf._subJobs.set(track, job);
+  job.catch(() => {}); // prefetch callers may not attach a handler — never an unhandled rejection
+  return job;
+}
 
 // ---------- route table (deny by default; every route DECLARES auth) ----------
 const ROUTES = [

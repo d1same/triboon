@@ -3680,7 +3680,8 @@ function renderSubCues() {
   const tt = v.textTracks && v.textTracks[0];
   if (!tt || tt.mode === 'disabled' || !tt.activeCues || !tt.activeCues.length) { box.innerHTML = ''; return; }
   box.innerHTML = '';
-  for (const c of [...tt.activeCues]) {
+  // At most the LAST 3 active cues — whatever a broken track claims, never a wall of text.
+  for (const c of [...tt.activeCues].slice(-3)) {
     const line = document.createElement('div');
     try { line.appendChild(c.getCueAsHTML()); }            // keeps <i>/<b> styling, XSS-safe
     catch { line.textContent = String(c.text || ''); }
@@ -3702,14 +3703,17 @@ function applySubtitleTrack() {
       const tt = v.textTracks[0];
       // SEEK SYNC: server-seek restarts make the <video> timeline 0-based at the seek
       // point, but the VTT cues are movie-absolute — unshifted, the subtitles "start from
-      // scratch". Rebase every cue by the stream's start offset.
+      // scratch". Rebase every cue by the stream's start offset. Cues that ENDED before the
+      // seek point are REMOVED — clamping them to [0,0] made every line since the episode
+      // start paint at once after a skip (the wall-of-text screenshot).
       const off = p.startOffset || 0;
       if (off > 0 && tt && tt.cues) {
         for (const c of [...tt.cues]) {
           if (c._shifted) continue;
+          if (c.endTime - off <= 0.2) { try { tt.removeCue(c); } catch {} continue; }
           c._shifted = true;
           c.startTime = Math.max(0, c.startTime - off);
-          c.endTime = Math.max(0, c.endTime - off);
+          c.endTime = Math.max(0.05, c.endTime - off);
         }
       }
       tt.mode = 'hidden';            // parse + fire cuechange, but WE paint
