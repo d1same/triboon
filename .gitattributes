@@ -1,0 +1,9 @@
+# Shell scripts must stay LF — the Docker entrypoint runs in alpine /bin/sh.
+* text=auto
+*.sh text eol=lf
+*.png binary
+*.woff2 binary
+*.apk binary
+*.mkv binary
+*.rar binary
+*.zip binary

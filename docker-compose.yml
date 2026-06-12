@@ -1,0 +1,38 @@
+services:
+  triboon:
+    build: .
+    # Published image (built by GitHub Actions on every push to main):
+    # image: ghcr.io/d1same/triboon:latest
+    container_name: triboon
+    restart: unless-stopped
+    ports:
+      - "7777:7777"
+    volumes:
+      # Persistent state: owner/users, encrypted settings, watch history, verdict cache.
+      # On Unraid use a bind path instead: /mnt/user/appdata/triboon:/data
+      - triboon-data:/data
+      # Optional: read-only media shares for the local Libraries feature.
+      # - /mnt/user/media:/media:ro
+    environment:
+      # File ownership for /data (Unraid convention; defaults shown = nobody:users).
+      PUID: "99"
+      PGID: "100"
+      UMASK: "022"
+      TRIBOON_DATA: /data
+      # Everything else is configured in the web dashboard after first-run setup (providers,
+      # indexers, TMDB — all encrypted at rest). The vars below are OPTIONAL bootstrap
+      # defaults; leave them unset to configure entirely from the UI.
+      #
+      # NNTP_HOST: news.example.com
+      # NNTP_PORT: "563"
+      # NNTP_TLS: "true"
+      # NNTP_USER: your-username
+      # NNTP_PASS: your-password
+      # NNTP_CONNECTIONS: "16"
+      #
+      # TRIBOON_SECRET pins the token-signing/settings-encryption key across redeploys.
+      # Generate one: `openssl rand -hex 32`. If unset, a key is generated and stored in /data.
+      # TRIBOON_SECRET: "<64 hex chars>"
+
+volumes:
+  triboon-data:

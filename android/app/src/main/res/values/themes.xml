@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Fullscreen, ink-black (matches the web UI's ink color #0B0812), no flash of white. -->
+    <style name="TriboonTheme" parent="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:colorBackground">@android:color/black</item>
+        <item name="android:windowContentOverlay">@null</item>
+    </style>
+</resources>

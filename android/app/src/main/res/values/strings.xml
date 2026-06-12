@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Triboon</string>
+    <string name="setup_title">Connect to your Triboon server</string>
+    <string name="setup_hint">http://192.168.1.50:7777</string>
+    <string name="setup_connect">Connect</string>
+    <string name="setup_help">Enter the address shown in Triboon\'s web dashboard.\nSame Wi-Fi/LAN as the server.</string>
+    <string name="press_back_again">Press BACK again to exit</string>
+</resources>

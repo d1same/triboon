@@ -1,0 +1,27 @@
+# Runtime state — contains encrypted credentials, verdict cache with indexer API keys in
+# NZB urls, and signed tokens. NEVER commit.
+data/
+node_modules/
+
+# Local demo/debug artifacts: admin tokens, personal NZBs, play payloads, and REAL MEDIA
+# folders used for library-scan testing. Only the credential-free mock server is tracked.
+demo/*
+!demo/mock-xtream.js
+
+# Local machine settings (approved commands with environment specifics, launch configs).
+.claude/
+
+# Android: machine-local SDK path, build outputs, gradle caches, built APKs, signing keys.
+android/local.properties
+android/.gradle/
+android/build/
+android/app/build/
+*.apk
+*.keystore
+*.jks
+
+# Test/debug scratch output (server logs can echo release names and channel lists).
+*.log
+bench/shots/
+alltests.txt
+p2fail*.txt

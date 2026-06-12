@@ -1,0 +1,12 @@
+{
+  "name": "triboon",
+  "version": "0.1.0",
+  "description": "Press play on anything. Triboon mounts the best healthy NZB from your usenet provider and streams it instantly.",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node --test test/e2e.test.js test/archive.test.js test/phase2.test.js test/security.test.js test/phase4.test.js"
+  },
+  "engines": { "node": ">=20" },
+  "license": "MIT"
+}

@@ -1,0 +1,6 @@
+// Triboon TV — thin Android TV shell around the web UI (see ../CLAUDE.md: the one web UI is
+// the client; this wraps it with TV launcher integration, D-pad/Back bridging, and a
+// first-run server screen. Native ExoPlayer playback is a later phase.)
+plugins {
+    id 'com.android.application' version '8.5.2' apply false
+}

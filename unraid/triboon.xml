@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>triboon</Name>
+  <Repository>ghcr.io/d1same/triboon:latest</Repository>
+  <Registry>https://ghcr.io/d1same/triboon</Registry>
+  <Network>bridge</Network>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/d1same/triboon/issues</Support>
+  <Project>https://github.com/d1same/triboon</Project>
+  <Overview>Self-hosted, Plex-polished, Stremio-style usenet streaming. Press play on any movie or show and Triboon mounts the best healthy NZB from your provider and streams it while unpacking - native RAR/ZIP streaming with seeking, TRaSH-style release ranking, multi-user profiles with invites and Quick Connect, TMDB catalogs, Live TV (IPTV), online subtitles, and an Android TV shell. Configure everything in the web dashboard after first run (providers, indexers, TMDB - encrypted at rest). For legally obtained content.</Overview>
+  <Category>MediaApp:Video MediaServer:Video</Category>
+  <WebUI>http://[IP]:[PORT:7777]</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/d1same/triboon/main/unraid/triboon.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/d1same/triboon/main/logo/triboon.png</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <DonateText/>
+  <DonateLink/>
+  <Config Name="WebUI Port" Target="7777" Default="7777" Mode="tcp" Description="Triboon web dashboard + API." Type="Port" Display="always" Required="true" Mask="false">7777</Config>
+  <Config Name="Appdata" Target="/data" Default="/mnt/user/appdata/triboon" Mode="rw" Description="Persistent state: users, encrypted settings, watch history, verdict cache, thumbnails." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/triboon</Config>
+  <Config Name="Media (optional)" Target="/media" Default="/mnt/user/media" Mode="ro" Description="Optional read-only media share for the local Libraries feature (scan your own files alongside usenet streaming). Point a Library's path at /media/... in the dashboard." Type="Path" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="File owner for /data (99 = nobody)." Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
+  <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="File group for /data (100 = users)." Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
+  <Config Name="UMASK" Target="UMASK" Default="022" Mode="" Description="File-creation mask." Type="Variable" Display="advanced" Required="false" Mask="false">022</Config>
+  <Config Name="TRIBOON_SECRET" Target="TRIBOON_SECRET" Default="" Mode="" Description="Optional: pins the token-signing / settings-encryption key across container rebuilds (64 hex chars, e.g. from `openssl rand -hex 32`). Leave empty to auto-generate into /data on first run." Type="Variable" Display="advanced" Required="false" Mask="true"/>
+</Container>
