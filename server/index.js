@@ -131,8 +131,11 @@ const pipeline = new Pipeline({
 });
 const { fetchUrl: fetchUrlExt, searchIndexer } = require('./newznab');
 const { fetchOnlineSub } = require('./opensubs');
+const IPTV_CACHE_TTL_MS = 24 * 3600000;
+const EPG_CACHE_TTL_MS = 24 * 3600000;
 let iptvCache = { key: null, at: 0, channels: [] };
-let epgCache = { key: null, at: 0, byChannel: new Map() };
+let epgCache = { key: null, at: 0, byChannel: new Map(), byName: new Map() };
+let xtreamEpgCache = { key: null, byStream: new Map() };
 const idHash = (s) => require('crypto').createHash('sha1').update(String(s)).digest('hex').slice(0, 12);
 
 // Channels from either source, normalized: { idx, id (stable), name, logo, group, tvgId, url (secret) }.
@@ -143,17 +146,20 @@ function xtUrlFor(s, streamId) {
   return `${base}/live/${encodeURIComponent(s.xtUser || '')}/${encodeURIComponent(s.xtPass || '')}/${streamId}.m3u8`;
 }
 let iptvRefreshing = false;
+function iptvSourceKey(s) {
+  return s.iptvMode === 'xtream' ? `xt:${s.xtHost}:${s.xtUser}` : `m3u:${s.iptvUrl}`;
+}
 async function loadIptvChannels() {
   const s = settings.get();
-  const key = s.iptvMode === 'xtream' ? `xt:${s.xtHost}:${s.xtUser}` : `m3u:${s.iptvUrl}`;
-  if (iptvCache.key === key && Date.now() - iptvCache.at < 3600000) return iptvCache.channels;
+  const key = iptvSourceKey(s);
+  if (iptvCache.key === key && Date.now() - iptvCache.at < IPTV_CACHE_TTL_MS) return iptvCache.channels;
   // STALE-WHILE-REVALIDATE (TiviMate model): once we have ANY playlist for this source,
   // no user ever waits on the panel again — serve it instantly and refresh in the background.
   if (iptvCache.key === key && iptvCache.channels.length) {
     if (!iptvRefreshing) {
       iptvRefreshing = true;
       fetchIptvChannels(s, key)
-        .catch((e) => { console.error('[iptv refresh]', e.message); iptvCache.at = Date.now() - 3000000; }) // retry in ~10min
+        .catch((e) => { console.error('[iptv refresh]', e.message); iptvCache.at = Date.now() - (IPTV_CACHE_TTL_MS - 600000); }) // retry in ~10min
         .finally(() => { iptvRefreshing = false; });
     }
     return iptvCache.channels;
@@ -168,13 +174,14 @@ async function loadIptvChannels() {
     if (s.iptvMode === 'xtream' && disk && disk.key === key && Array.isArray(disk.channels) && disk.channels.length) {
       console.error(`[iptv] source failed (${e.message}) — serving the last cached playlist (${disk.channels.length} channels)`);
       const channels = disk.channels.map((c) => ({ ...c, url: xtUrlFor(s, c.xtreamId) }));
-      iptvCache = { key, at: Date.now() - 3000000, channels }; // near-stale: retry the panel in ~10min
+      iptvCache = { key, at: Date.now() - (IPTV_CACHE_TTL_MS - 600000), channels }; // near-stale: retry in ~10min
       return channels;
     }
     throw e;
   }
 }
 async function fetchIptvChannels(s, key) {
+  if (iptvCache.key !== key) xtreamEpgCache = { key: null, byStream: new Map() };
   let channels = [];
   if (s.iptvMode === 'xtream' && s.xtHost) {
     const base = String(s.xtHost).replace(/\/+$/, '');
@@ -242,7 +249,19 @@ function normChName(s) {
 async function ensureXmltv() {
   const s = settings.get();
   if (!s.epgUrl) return null;
-  if (epgCache.key === s.epgUrl && Date.now() - epgCache.at < 6 * 3600000) return epgCache;
+  if (epgCache.key === s.epgUrl && Date.now() - epgCache.at < EPG_CACHE_TTL_MS) return epgCache;
+  if (epgCache.key === s.epgUrl && epgCache.byChannel && epgCache.byChannel.size) {
+    if (!epgRefreshing) {
+      epgRefreshing = true;
+      fetchXmltv(s).catch((e) => console.error('[xmltv refresh]', e.message))
+        .finally(() => { epgRefreshing = false; });
+    }
+    return epgCache;
+  }
+  return fetchXmltv(s);
+}
+let epgRefreshing = false;
+async function fetchXmltv(s) {
   const r = await fetchUrlExt(s.epgUrl, { timeoutMs: 20000, deadlineMs: 90000, maxBytes: 48 * 1024 * 1024 });
   let xml = r.body;
   if (xml.length > 40 * 1024 * 1024) xml = xml.subarray(0, 40 * 1024 * 1024); // parse cap
@@ -295,16 +314,47 @@ function xmltvListFor(epg, ch) {
   return list || [];
 }
 const b64 = (s) => { try { return Buffer.from(String(s || ''), 'base64').toString('utf8'); } catch { return ''; } };
+function xtreamProgramme(e) {
+  if (!e) return null;
+  const title = b64(e.title);
+  const start = (+e.start_timestamp || 0) * 1000;
+  const stop = (+e.stop_timestamp || 0) * 1000;
+  return title && start && stop ? { title, start, stop } : null;
+}
+async function xtreamEpgList(ch, { limit = 24 } = {}) {
+  const s = settings.get();
+  if (s.iptvMode !== 'xtream' || !ch.xtreamId) return [];
+  const key = iptvSourceKey(s);
+  if (xtreamEpgCache.key !== key) xtreamEpgCache = { key, byStream: new Map() };
+  const id = String(ch.xtreamId);
+  const hit = xtreamEpgCache.byStream.get(id);
+  if (hit && Date.now() - hit.at < EPG_CACHE_TTL_MS) return hit.list;
+  const base = String(s.xtHost).replace(/\/+$/, '');
+  const u = `${base}/player_api.php?username=${encodeURIComponent(s.xtUser || '')}&password=${encodeURIComponent(s.xtPass || '')}&action=get_short_epg&stream_id=${ch.xtreamId}&limit=${Math.max(2, Math.min(48, limit))}`;
+  try {
+    const r = await fetchUrlExt(u, { timeoutMs: 8000, deadlineMs: 15000, maxBytes: 2 * 1024 * 1024 });
+    let raw;
+    try { raw = (JSON.parse(r.body.toString('utf8') || '{}').epg_listings) || []; } catch { raw = []; }
+    const list = raw.map(xtreamProgramme).filter(Boolean).sort((a, b) => a.start - b.start);
+    xtreamEpgCache.byStream.set(id, { at: Date.now(), list });
+    if (xtreamEpgCache.byStream.size > 5000) xtreamEpgCache.byStream.clear();
+    return list;
+  } catch {
+    if (hit) return hit.list;
+    return [];
+  }
+}
 async function epgNowNext(ch) {
   const s = settings.get();
   if (s.iptvMode === 'xtream' && ch.xtreamId) {
-    const base = String(s.xtHost).replace(/\/+$/, '');
-    const u = `${base}/player_api.php?username=${encodeURIComponent(s.xtUser || '')}&password=${encodeURIComponent(s.xtPass || '')}&action=get_short_epg&stream_id=${ch.xtreamId}&limit=2`;
-    const r = await fetchUrlExt(u, { timeoutMs: 8000, deadlineMs: 15000, maxBytes: 2 * 1024 * 1024 });
-    let list;
-    try { list = (JSON.parse(r.body.toString('utf8') || '{}').epg_listings) || []; } catch { list = []; }
-    const mk = (e) => e && { title: b64(e.title), start: (+e.start_timestamp || 0) * 1000, stop: (+e.stop_timestamp || 0) * 1000 };
-    return { now: mk(list[0]), next: mk(list[1]) };
+    const list = await xtreamEpgList(ch, { limit: 24 });
+    const now = Date.now();
+    const i = list.findIndex((p) => p.start <= now && p.stop > now);
+    if (i === -1) {
+      const next = list.find((p) => p.start > now);
+      return next ? { now: null, next } : {};
+    }
+    return { now: list[i], next: list[i + 1] || null };
   }
   if (s.epgUrl) {
     const epg = await ensureXmltv();
@@ -725,14 +775,7 @@ const H = {
       if (epg && xmltvListFor(epg, ch).length) {
         progs = xmltvListFor(epg, ch).filter((p) => p.stop > from && p.start < to);
       } else if (s.iptvMode === 'xtream' && ch.xtreamId) {
-        try {
-          const base = String(s.xtHost).replace(/\/+$/, '');
-          const u = `${base}/player_api.php?username=${encodeURIComponent(s.xtUser || '')}&password=${encodeURIComponent(s.xtPass || '')}&action=get_short_epg&stream_id=${ch.xtreamId}&limit=10`;
-          const r = await fetchUrlExt(u, { timeoutMs: 8000, deadlineMs: 15000, maxBytes: 2 * 1024 * 1024 });
-          const list = (JSON.parse(r.body.toString('utf8') || '{}').epg_listings) || [];
-          progs = list.map((e) => ({ title: b64(e.title), start: (+e.start_timestamp || 0) * 1000, stop: (+e.stop_timestamp || 0) * 1000 }))
-            .filter((p) => p.stop > from && p.start < to);
-        } catch { progs = []; }
+        progs = (await xtreamEpgList(ch, { limit: 24 })).filter((p) => p.stop > from && p.start < to);
       }
       return { idx: ch.idx, programmes: progs.slice(0, 24) };
     }));

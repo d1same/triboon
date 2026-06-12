@@ -611,6 +611,7 @@ test('iptv: Xtream API channels + short-EPG now/next + per-user favorites; creds
   const http2 = require('http');
   const b64 = (s) => Buffer.from(s).toString('base64');
   const nowS = Math.floor(Date.now() / 1000);
+  let epgCalls = 0;
   const xt = http2.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
     assert.strictEqual(u.searchParams.get('username'), 'xtuser');
@@ -626,6 +627,7 @@ test('iptv: Xtream API channels + short-EPG now/next + per-user favorites; creds
       ]));
     } else if (action === 'get_short_epg') {
       assert.strictEqual(u.searchParams.get('stream_id'), '101');
+      epgCalls++;
       res.end(JSON.stringify({ epg_listings: [
         { title: b64('Evening Bulletin'), start_timestamp: nowS - 600, stop_timestamp: nowS + 600 },
         { title: b64('Late Show'), start_timestamp: nowS + 600, stop_timestamp: nowS + 1800 },
@@ -651,6 +653,12 @@ test('iptv: Xtream API channels + short-EPG now/next + per-user favorites; creds
   const epg = await httpJson(srv.port, 'GET', `/api/iptv/epg/${news.idx}`, null, admin);
   assert.strictEqual(epg.json.now.title, 'Evening Bulletin');
   assert.strictEqual(epg.json.next.title, 'Late Show');
+  const epgAgain = await httpJson(srv.port, 'GET', `/api/iptv/epg/${news.idx}`, null, admin);
+  assert.strictEqual(epgAgain.json.now.title, 'Evening Bulletin');
+  assert.strictEqual(epgCalls, 1, 'same channel now/next is cached');
+  const guide = await httpJson(srv.port, 'GET', `/api/iptv/guide?chs=${news.idx}`, null, admin);
+  assert.strictEqual(guide.json.channels[0].programmes[0].title, 'Evening Bulletin');
+  assert.strictEqual(epgCalls, 1, 'timeline guide reuses the cached channel EPG');
 
   // Favorites: toggle on → reflected per user; off again.
   const on = await httpJson(srv.port, 'POST', '/api/iptv/fav', { id: news.id }, admin);
