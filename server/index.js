@@ -1856,9 +1856,10 @@ Object.assign(H, {
   musicSearch: async (ctx) => {
     if (!ytmusic.detectYtdlp()) return send(ctx.res, 503, { error: 'yt-dlp is not installed on the server' });
     const q = ctx.url.searchParams.get('q') || '';
+    const limit = Math.max(1, Math.min(24, parseInt(ctx.url.searchParams.get('limit') || '24', 10) || 24));
     if (!q.trim()) return send(ctx.res, 200, { results: [] });
     try {
-      const results = await ytmusic.search(q, { limit: 24, cookiesPath: cookiesFor(ctx.user.id) });
+      const results = await ytmusic.search(q, { limit, cookiesPath: cookiesFor(ctx.user.id) });
       // Mint a per-track stream token so the client can build playable URLs without a round-trip.
       send(ctx.res, 200, {
         results: results.map((r) => ({ ...r, streamUrl: `/api/music/stream/${r.id}?t=${auth.streamToken(ctx.user.id, `music:${r.id}`)}` })),
@@ -1871,7 +1872,7 @@ Object.assign(H, {
   // "stale" — we re-resolve ONCE and retry rather than failing the scrub.
   musicStream: async (ctx) => {
     const id = ctx.m[1];
-    if (!streamScopeOk(ctx, `music:${id}`)) return send(ctx.res, 401, { error: 'token not valid for this track' });
+    if (ctx.claims.scope !== 'stream' || ctx.claims.sub !== `music:${id}`) return send(ctx.res, 401, { error: 'token not valid for this track' });
     if (!ytmusic.detectYtdlp()) return send(ctx.res, 503, { error: 'yt-dlp not available' });
     const range = ctx.req.headers.range || null;
     const pipeFrom = async (force) => {
@@ -1879,7 +1880,13 @@ Object.assign(H, {
       try { rec = await ytmusic.resolveStream(id, { cookiesPath: cookiesFor(ctx.claims.uid), force }); }
       catch (e) { if (!ctx.res.headersSent) send(ctx.res, 502, { error: 'could not resolve track', detail: String(e.message).slice(0, 160) }); return; }
       const u = new URL(rec.url);
-      const upstream = https.get(u, { headers: range ? { range } : {} }, (up) => {
+      const upstreamHeaders = {};
+      for (const [k, v] of Object.entries(rec.headers || {})) {
+        if (v !== undefined && v !== null && !/^host$/i.test(k)) upstreamHeaders[k] = String(v);
+      }
+      if (range) upstreamHeaders.range = range;
+      const client = u.protocol === 'http:' ? http : https;
+      const upstream = client.get(u, { headers: upstreamHeaders }, (up) => {
         // Stale/expired URL → one transparent re-resolve before giving up.
         if ((up.statusCode === 403 || up.statusCode === 410) && !force) { up.resume(); return pipeFrom(true); }
         if (up.statusCode >= 400) { up.resume(); if (!ctx.res.headersSent) send(ctx.res, 502, { error: `upstream ${up.statusCode}` }); return; }
@@ -1936,10 +1943,18 @@ Object.assign(H, {
   musicPlaylist: async (ctx) => {
     if (!ytmusic.detectYtdlp()) return send(ctx.res, 503, { error: 'yt-dlp is not installed on the server' });
     try {
-      const r = await ytmusic.playlistTracks(ctx.m[1], { cookiesPath: cookiesFor(ctx.user.id) });
+      const limit = Math.max(1, Math.min(100, parseInt(ctx.url.searchParams.get('limit') || '50', 10) || 50));
+      const offset = Math.max(0, parseInt(ctx.url.searchParams.get('offset') || '0', 10) || 0);
+      const r = await ytmusic.playlistTracks(ctx.m[1], { cookiesPath: cookiesFor(ctx.user.id), limit: limit + 1, offset });
+      const tracks = r.tracks.slice(0, limit);
+      const hasMore = r.tracks.length > limit;
       send(ctx.res, 200, {
         title: r.title,
-        results: r.tracks.map((t) => ({ ...t, streamUrl: `/api/music/stream/${t.id}?t=${auth.streamToken(ctx.user.id, `music:${t.id}`)}` })),
+        offset,
+        limit,
+        hasMore,
+        nextOffset: hasMore ? offset + tracks.length : null,
+        results: tracks.map((t) => ({ ...t, streamUrl: `/api/music/stream/${t.id}?t=${auth.streamToken(ctx.user.id, `music:${t.id}`)}` })),
       });
     } catch (e) { send(ctx.res, 502, { error: 'playlist failed to load', detail: String(e.message).slice(0, 160) }); }
   },

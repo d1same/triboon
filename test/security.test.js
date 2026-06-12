@@ -1206,6 +1206,40 @@ test('stream tokens are bound to one resource: a leaked URL cannot stream anythi
   assert.strictEqual((await httpRaw(srv.port, base1, { token: admin })).status, 200);
 });
 
+test('music: yt-dlp keeps search flat but allows playlist/library enumeration', () => {
+  const ytmusic = require('../server/ytmusic');
+  assert.ok(ytmusic._searchUrl('daft punk').startsWith('https://music.youtube.com/search?'), 'search stays on YouTube Music');
+  assert.strictEqual(ytmusic._optsNoPlaylist(['ytsearch10:test']), true, 'generic YouTube search should not expand playlists');
+  assert.strictEqual(ytmusic._optsNoPlaylist([ytmusic._searchUrl('test')]), false,
+    'YouTube Music search must be allowed to enumerate music results');
+  assert.strictEqual(ytmusic._optsNoPlaylist(['https://music.youtube.com/library/playlists']), false,
+    'linked library lookup must be allowed to enumerate playlists');
+  assert.strictEqual(ytmusic._optsNoPlaylist(['https://www.youtube.com/feed/playlists']), false,
+    'fallback playlist feed must be allowed to enumerate playlists');
+  assert.strictEqual(ytmusic._optsNoPlaylist(['--playlist-items', '1:50', 'https://music.youtube.com/playlist?list=LM']), false,
+    'playlist track loading must be allowed to enumerate tracks');
+  assert.ok(ytmusic._ytArgs(['ytsearch1:test'], null).argv.includes('--no-playlist'));
+  assert.ok(!ytmusic._ytArgs(['https://music.youtube.com/library/playlists'], null, { noPlaylist: false }).argv.includes('--no-playlist'));
+  assert.strictEqual(ytmusic._playlistItemsRange(0, 50), '1:50');
+  assert.strictEqual(ytmusic._playlistItemsRange(50, 51), '51:101');
+});
+
+test('music: playlist parsers turn null yt-dlp JSON into useful link errors', () => {
+  const ytmusic = require('../server/ytmusic');
+  assert.throws(() => ytmusic._parseListPlaylists('null'), /re-export cookies/i);
+  assert.throws(() => ytmusic._parsePlaylistTracks('null'), /re-export cookies/i);
+  assert.deepStrictEqual(ytmusic._parseListPlaylists('{"entries":null}'), []);
+  assert.deepStrictEqual(ytmusic._parseListPlaylists(JSON.stringify({ entries: [
+    { id: 'WL', title: 'Watch later' },
+    { id: 'LL', title: 'Liked videos' },
+    { url: 'https://www.youtube.com/playlist?list=PL123', title: 'Road trip', playlist_count: 12 },
+  ] })), [{ id: 'PL123', title: 'Road trip', count: 12 }]);
+  assert.deepStrictEqual(ytmusic._parsePlaylistTracks('{"title":"Mine","entries":null}'), {
+    title: 'Mine',
+    tracks: [],
+  });
+});
+
 test('music: auth + token scope binding; honest 503 when yt-dlp is absent', async () => {
   const ytmusic = require('../server/ytmusic');
   const present = !!ytmusic.detectYtdlp(); // CI has no yt-dlp; a dev box may.
@@ -1214,6 +1248,8 @@ test('music: auth + token scope binding; honest 503 when yt-dlp is absent', asyn
   const tA = srv.auth.streamToken(srv.auth._users().list[0].id, 'music:AAAAAAAAAAA');
   assert.strictEqual((await httpRaw(srv.port, `/api/music/stream/BBBBBBBBBBB?t=${tA}`)).status, 401,
     'music token for track A rejected on track B');
+  assert.strictEqual((await httpRaw(srv.port, '/api/music/stream/CCCCCCCCCCC', { token: admin })).status, 401,
+    'session tokens cannot directly stream arbitrary YouTube ids');
   // Malformed ids never reach the handler (the route only matches 11-char ids).
   assert.strictEqual((await httpRaw(srv.port, `/api/music/stream/short?t=${tA}`)).status, 404);
 
@@ -1244,6 +1280,67 @@ test('music: auth + token scope binding; honest 503 when yt-dlp is absent', asyn
   assert.ok(!fs.existsSync(path.join(process.env.TRIBOON_DATA, 'yt-cookies.txt')), 'no plaintext cookie file written to data/');
   await httpJson(srv.port, 'POST', '/api/music/unlink', {}, admin);
   assert.strictEqual((await httpJson(srv.port, 'GET', '/api/music/status', null, admin)).json.linked, false, 'unlink clears it');
+});
+
+test('music: playlist endpoint pages tracks and stream proxy forwards yt-dlp headers plus Range', async () => {
+  const ytmusic = require('../server/ytmusic');
+  const oldDetect = ytmusic.detectYtdlp;
+  const oldPlaylist = ytmusic.playlistTracks;
+  const oldResolve = ytmusic.resolveStream;
+  let playlistArgs = null;
+  let upstreamHeaders = null;
+  const upstream = http.createServer((req, res) => {
+    upstreamHeaders = req.headers;
+    assert.strictEqual(req.headers.range, 'bytes=0-3');
+    assert.strictEqual(req.headers['user-agent'], 'TriboonTest');
+    res.writeHead(206, {
+      'content-type': 'audio/mp4',
+      'content-range': 'bytes 0-3/8',
+      'content-length': '4',
+    });
+    res.end('MUSI');
+  });
+  await new Promise((r) => upstream.listen(0, '127.0.0.1', r));
+  try {
+    ytmusic.detectYtdlp = () => ({ cmd: ['mock-ytdlp'], version: 'test' });
+    ytmusic.playlistTracks = async (id, opts) => {
+      playlistArgs = { id, ...opts };
+      return { title: 'Paged', tracks: [
+        { id: 'AAAAAAAAAAA', title: 'One', artist: 'A', thumb: 'one.jpg' },
+        { id: 'BBBBBBBBBBB', title: 'Two', artist: 'B', thumb: 'two.jpg' },
+        { id: 'CCCCCCCCCCC', title: 'Three', artist: 'C', thumb: 'three.jpg' },
+      ] };
+    };
+    const page = await httpJson(srv.port, 'GET', '/api/music/playlist/LM?limit=2&offset=3', null, admin);
+    assert.strictEqual(page.status, 200, page.raw);
+    assert.deepStrictEqual({ id: playlistArgs.id, limit: playlistArgs.limit, offset: playlistArgs.offset }, { id: 'LM', limit: 3, offset: 3 });
+    assert.strictEqual(page.json.title, 'Paged');
+    assert.strictEqual(page.json.offset, 3);
+    assert.strictEqual(page.json.limit, 2);
+    assert.strictEqual(page.json.hasMore, true);
+    assert.strictEqual(page.json.nextOffset, 5);
+    assert.strictEqual(page.json.results.length, 2);
+    assert.ok(/^\/api\/music\/stream\/AAAAAAAAAAA\?t=/.test(page.json.results[0].streamUrl));
+
+    ytmusic.resolveStream = async () => ({
+      url: `http://127.0.0.1:${upstream.address().port}/audio`,
+      mime: 'audio/mp4',
+      headers: { 'User-Agent': 'TriboonTest', Origin: 'https://music.youtube.com' },
+    });
+    const uid = srv.auth._users().list[0].id;
+    const tok = srv.auth.streamToken(uid, 'music:AAAAAAAAAAA');
+    const audio = await httpRaw(srv.port, `/api/music/stream/AAAAAAAAAAA?t=${tok}`, { range: 'bytes=0-3' });
+    assert.strictEqual(audio.status, 206);
+    assert.strictEqual(audio.headers['content-type'], 'audio/mp4');
+    assert.strictEqual(audio.headers['content-range'], 'bytes 0-3/8');
+    assert.strictEqual(audio.body.toString(), 'MUSI');
+    assert.ok(upstreamHeaders, 'upstream was called');
+  } finally {
+    ytmusic.detectYtdlp = oldDetect;
+    ytmusic.playlistTracks = oldPlaylist;
+    ytmusic.resolveStream = oldResolve;
+    upstream.close();
+  }
 });
 
 test('housekeeping sweep: idle mounts are evicted, active ones survive', async () => {

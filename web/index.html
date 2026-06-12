@@ -35,6 +35,10 @@
 html,body{height:100%}
 body{background:var(--ink);color:var(--text);overflow:hidden;font:400 16px/1.5 "Albert Sans",system-ui,sans-serif}
 button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+button,.focusable,.railBtn,.mChip,.musicRow,.mbBtn,.musicAction,.iconBtn,.cbtn,
+.railBtn *,.mChip *,.musicRow *,.mbBtn *,.musicAction *,.iconBtn *,.cbtn *{
+  -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;
+}
 /* Native selects look foreign (white OS chrome) — restyle them to match the design system. */
 select{appearance:none;-webkit-appearance:none;
   background:rgba(11,8,18,.85) url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="12" height="8" viewBox="0 0 12 8"><path d="M1 1.5 6 6.5 11 1.5" fill="none" stroke="%239B8FAD" stroke-width="2" stroke-linecap="round"/></svg>') no-repeat right 13px center;
@@ -1100,19 +1104,54 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
 #musicSearch{width:100%;background:rgba(22,16,32,.92);border:1px solid var(--line);border-radius:14px;
   padding:13px 16px 13px 42px;color:var(--text);font:500 15px "Albert Sans";outline:none}
 #musicSearch:focus{border-color:var(--magenta)}
-/* Browse strip: mood/genre quick-searches so the page is never an empty box. */
-#musicBrowse{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;flex:none}
+/* Plex-inspired Music home: clean hubs with wide artwork cards that fit YTM thumbnails. */
+#musicBrowse{flex:1;overflow-y:auto;padding:0 0 96px;display:flex;flex-direction:column;gap:32px}
 #musicBrowse.hide{display:none}
-.mChip{padding:9px 16px;border-radius:999px;border:1px solid var(--line);background:rgba(34,25,52,.5);
-  font:600 13px "Albert Sans";color:var(--text);white-space:nowrap}
-.mChip:hover,.mChip.focus{background:var(--text);color:#160a04;outline:none;box-shadow:0 0 0 2px var(--coral)}
-.mChip.mPl{border-color:rgba(255,198,92,.45);color:var(--amber)} /* YOUR playlists stand apart */
-.mChip.mPl:hover,.mChip.mPl.focus{background:var(--amber);color:#160a04}
-#musicList{flex:1;overflow-y:auto;padding-bottom:120px;display:flex;flex-direction:column;gap:4px}
+.musicShelf{display:flex;flex-direction:column;gap:14px}
+.musicShelf h2{font:800 24px "Sora";line-height:1.1}
+.musicShelfTop{display:flex;align-items:end;justify-content:space-between;gap:18px}
+.musicShelfTop .mNote{color:var(--muted);font:600 13px "Albert Sans";max-width:46ch}
+.musicTiles{display:grid;grid-template-columns:repeat(4,minmax(190px,1fr));gap:14px}
+.musicRail{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(254px,304px);gap:18px;overflow-x:auto;padding:0 2px 10px;scroll-snap-type:x proximity}
+.mChip{position:relative;display:flex;text-align:left;border:1px solid rgba(255,255,255,.08);background:rgba(29,24,39,.72);color:var(--text);overflow:visible;transition:transform .16s ease,background .16s ease,border-color .16s ease}
+.mChip:hover,.mChip.focus{outline:none;transform:translateY(-1px)}
+.mTile:hover,.mTile.focus{background:rgba(243,239,247,.1);border-color:rgba(251,139,60,.85);box-shadow:inset 0 0 0 2px var(--coral),0 12px 28px rgba(0,0,0,.3)}
+.mTile{min-height:68px;border-radius:8px;padding:0 18px;align-items:center;gap:16px}
+.mTile .mIco{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.08);color:var(--muted);flex:none}
+.mTile .mIco svg{width:21px;height:21px}
+.mTile .mLbl{font:800 18px "Sora";white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mCard{border-radius:8px;flex-direction:column;gap:9px;background:transparent;border-color:transparent;scroll-snap-align:start}
+.mCard:hover,.mCard.focus{box-shadow:none}
+.mCover{width:100%;aspect-ratio:16/9;border-radius:8px;background:#241934 center/cover;display:grid;place-items:center;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.06);overflow:hidden;position:relative;transition:box-shadow .16s ease,filter .16s ease}
+.mCard:hover .mCover,.mCard.focus .mCover{box-shadow:0 0 0 3px var(--coral),0 16px 42px rgba(0,0,0,.42);filter:saturate(1.05)}
+.mCover::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(255,255,255,.03),rgba(0,0,0,.22));pointer-events:none}
+.mCover svg{width:28%;height:42%;opacity:.9;z-index:1}
+.mCover.hasImg svg{display:none}
+.mCover.hasImg::after{background:linear-gradient(180deg,rgba(0,0,0,0),rgba(0,0,0,.2))}
+.mGrad1{background:linear-gradient(135deg,#C13BD6,#FB8B3C 58%,#FFC65C)}
+.mGrad2{background:linear-gradient(135deg,#153B3D,#2B7A78 55%,#FFC65C)}
+.mGrad3{background:linear-gradient(135deg,#241934,#6D3BD6 58%,#FB8B3C)}
+.mGrad4{background:linear-gradient(135deg,#14213D,#C13BD6 60%,#F3EFF7)}
+.mCover.hasImg{background-size:cover;background-position:center;background-repeat:no-repeat}
+.mCard .mLbl{font:800 14.5px "Albert Sans";line-height:1.18;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.mSub{font:600 12.5px "Albert Sans";line-height:1.25;color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.mPl .mCover{box-shadow:inset 0 0 0 2px rgba(255,198,92,.18)}
+.mEmpty{color:var(--muted);font:600 14px "Albert Sans";padding:8px 0}
+.mpActions{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px}
+.musicAction{height:42px;border-radius:999px;padding:0 18px;display:inline-flex;align-items:center;gap:9px;background:rgba(34,25,52,.74);border:1px solid var(--line);color:var(--text);font:800 13px "Albert Sans"}
+.musicAction.primary{background:linear-gradient(135deg,var(--magenta),var(--coral));border-color:transparent;color:white}
+.musicAction:hover,.musicAction.focus{outline:none;box-shadow:0 0 0 3px var(--coral);background:var(--text);color:#160a04}
+.musicAction.primary:hover,.musicAction.primary.focus{background:linear-gradient(135deg,var(--magenta),var(--coral));color:white;box-shadow:0 0 0 3px var(--amber)}
+.musicLoadMore{align-self:center;margin:18px auto 0}
+#musicList{flex:1;overflow-y:auto;padding-bottom:40px;display:flex;flex-direction:column;gap:4px}
+#musicList:empty{display:none}
+#musicList.searchResults{gap:12px;padding-bottom:54px}
 .musicRow{display:flex;align-items:center;gap:14px;width:100%;text-align:left;padding:8px 12px;border-radius:12px;min-height:60px}
-.musicRow:hover,.musicRow:focus,.musicRow.focus{background:rgba(34,25,52,.85);outline:none;box-shadow:inset 0 0 0 2px var(--coral)}
+.musicRow:hover,.musicRow:focus,.musicRow.focus{background:rgba(34,25,52,.55);outline:none;box-shadow:none}
 .musicRow.cur{background:rgba(193,59,214,.14)}
-.musicRow .mThumb{width:46px;height:46px;border-radius:8px;background:#241934 center/cover;flex:none;position:relative;overflow:hidden}
+.musicRow .mThumb{width:46px;height:46px;border-radius:8px;background:#241934 center/178% auto no-repeat;flex:none;position:relative;overflow:hidden}
+.musicRow:hover .mThumb,.musicRow:focus .mThumb,.musicRow.focus .mThumb{box-shadow:0 0 0 3px var(--coral),0 12px 28px rgba(0,0,0,.32)}
 .musicRow .mThumb .mEq{position:absolute;inset:0;display:none;place-items:center;background:rgba(11,8,18,.5)}
 .musicRow.cur .mThumb .mEq{display:grid}
 .musicRow .mBody{min-width:0;flex:1}
@@ -1120,18 +1159,43 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
 .musicRow .mA{font:500 12.5px "Albert Sans";color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .musicRow .mD{font:500 12px "JetBrains Mono";color:var(--muted);flex:none}
 #musicList .mNote{color:var(--muted);font-size:14px;padding:24px 6px;max-width:60ch}
+.mSearchHead{display:flex;align-items:center;justify-content:space-between;gap:14px;margin:6px 2px 0;color:var(--muted);font:800 11px "JetBrains Mono";letter-spacing:.16em;text-transform:uppercase}
+.mSearchHead span:last-child{font:700 12px "Albert Sans";letter-spacing:0;text-transform:none}
+.mArtistHit{min-height:132px;padding:16px;gap:18px;background:linear-gradient(135deg,rgba(193,59,214,.20),rgba(251,139,60,.12));border:1px solid rgba(255,255,255,.08);overflow:hidden;position:relative}
+.mArtistHit::after{content:"";position:absolute;inset:0;background:radial-gradient(circle at 90% 15%,rgba(255,198,92,.22),transparent 34%);pointer-events:none}
+.mArtistHit:hover,.mArtistHit:focus,.mArtistHit.focus{background:linear-gradient(135deg,rgba(193,59,214,.26),rgba(251,139,60,.16));border-color:rgba(255,255,255,.1);box-shadow:none}
+.mArtistArt{width:104px;height:104px;border-radius:8px;background:#241934 center/178% auto no-repeat;box-shadow:0 16px 34px rgba(0,0,0,.34),inset 0 0 0 1px rgba(255,255,255,.08);flex:none;position:relative;z-index:1}
+.mArtistHit:hover .mArtistArt,.mArtistHit:focus .mArtistArt,.mArtistHit.focus .mArtistArt{box-shadow:0 0 0 3px var(--coral),0 18px 42px rgba(0,0,0,.38)}
+.mArtistCopy{position:relative;z-index:1;min-width:0;flex:1}
+.mArtistType{font:800 11px "JetBrains Mono";letter-spacing:.18em;text-transform:uppercase;color:var(--amber);margin-bottom:8px}
+.mArtistName{font:800 clamp(26px,3vw,42px) "Sora";line-height:1.04;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mArtistSub{font:700 14px "Albert Sans";color:var(--muted);margin-top:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mArtistPlay{position:relative;z-index:1;width:48px;height:48px;border-radius:50%;display:grid;place-items:center;background:var(--text);color:#160a04;flex:none;box-shadow:0 10px 26px rgba(0,0,0,.28)}
+.mArtistPlay svg{width:24px;height:24px;margin-left:2px}
+.mSearchSongs{display:grid;grid-template-columns:repeat(2,minmax(260px,1fr));gap:8px 12px}
+.mSearchSongs .musicRow{background:rgba(22,16,32,.42);border:1px solid rgba(255,255,255,.055);min-height:74px;padding:10px 12px}
+.mSearchSongs .musicRow:hover,.mSearchSongs .musicRow:focus,.mSearchSongs .musicRow.focus{background:rgba(34,25,52,.72);border-color:rgba(255,255,255,.08);box-shadow:none}
+.mSearchSongs .musicRow .mThumb{width:56px;height:56px}
+.mSearchSongs .musicRow .mT{font-size:15.5px}
+.mSearchSongs .musicRow .mA{font-size:13px}
+body.tv .mArtistHit{min-height:112px;padding:13px 14px}
+body.tv .mArtistArt{width:86px;height:86px}
+body.tv .mArtistName{font-size:clamp(24px,2.45vw,34px)}
+body.tv .mArtistPlay{width:42px;height:42px}
+body.tv .mSearchSongs .musicRow{min-height:66px}
+body.tv .mSearchSongs .musicRow .mThumb{width:48px;height:48px}
 
 /* Persistent mini-player bar — fixed bottom, above everything but the fullscreen player. */
 #musicAudio{display:none}
-#musicBar{position:fixed;left:var(--rail);right:0;bottom:0;z-index:30;display:none;align-items:center;gap:18px;
+#musicBar{position:fixed;left:var(--rail);right:0;bottom:0;z-index:30;display:none!important;align-items:center;gap:18px;
   padding:10px 22px;background:rgba(13,9,21,.97);border-top:1px solid var(--line);backdrop-filter:blur(10px)}
 body.tv #musicBar{backdrop-filter:none}
-#musicBar.show{display:flex}
+#musicBar.show{display:none!important}
 body.videoOpen #musicBar{display:none} /* the fullscreen video player owns the screen */
-body.musicOn:not(.tv) #home,body.musicOn:not(.tv) #browse,body.musicOn:not(.tv) #discover,
-body.musicOn:not(.tv) #music #musicList{scroll-padding-bottom:84px}
-.mbNow{display:flex;align-items:center;gap:12px;width:240px;flex:none;min-width:0}
-.mbArt{width:48px;height:48px;border-radius:8px;background:#241934 center/cover;flex:none}
+body.tv #musicBar.show{box-shadow:0 -10px 30px rgba(0,0,0,.35)}
+.mbNow{display:flex;align-items:center;gap:12px;width:240px;flex:none;min-width:0;border-radius:10px;padding:4px;margin:-4px}
+.mbNow.focus{box-shadow:0 0 0 3px var(--coral)}
+.mbArt{width:48px;height:48px;border-radius:8px;background:#241934 center/178% auto no-repeat;flex:none}
 .mbMeta{min-width:0}
 .mbTitle{font:600 14px "Albert Sans";overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mbArtist{font:500 12px "Albert Sans";color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -1162,7 +1226,8 @@ body.musicPaused .mEq i{animation-play-state:paused}
 .mnCollapse{position:absolute;top:22px;left:24px;z-index:3;width:46px;height:46px;border-radius:50%;display:grid;place-items:center;background:rgba(34,25,52,.7);color:var(--text)}
 .mnCollapse:hover,.mnCollapse.focus{background:var(--text);color:#160a04;outline:none;box-shadow:0 0 0 3px var(--coral)}
 .mnMain{position:relative;z-index:2;display:flex;align-items:center;gap:60px;padding:60px 7vw 26px;flex-wrap:wrap;justify-content:center}
-.mnCover{width:min(360px,40vw);aspect-ratio:1;border-radius:14px;background:#241934 center/cover;
+#musicNow:not(.queueOpen) .mnMain{flex:1;padding-bottom:70px}
+.mnCover{width:min(360px,40vw);aspect-ratio:1;border-radius:14px;background:#241934 center/178% auto no-repeat;
   box-shadow:0 40px 90px rgba(0,0,0,.7),0 0 0 1px rgba(255,255,255,.05);flex:none}
 .mnInfo{flex:1;min-width:300px;max-width:600px}
 .mnEyebrow{font:700 11px "JetBrains Mono";letter-spacing:.22em;text-transform:uppercase;color:var(--muted);margin-bottom:14px}
@@ -1180,13 +1245,41 @@ body.musicPaused .mEq i{animation-play-state:paused}
 .mnTog.on{color:var(--amber)}
 .mnTog.on::after{content:"";position:absolute;bottom:6px;left:50%;transform:translateX(-50%);width:4px;height:4px;border-radius:50%;background:var(--amber)}
 .mnTog{position:relative}
-.mnQueue{position:relative;z-index:2;flex:1;overflow-y:auto;padding:0 7vw 40px}
+.mnQueueToggle{width:auto!important;border-radius:999px;padding:0 18px;font:800 12px "Albert Sans";gap:8px}
+.mnQueueToggle span{white-space:nowrap}
+.mnQueue{display:none;position:absolute;z-index:3;top:86px;right:clamp(20px,4vw,56px);bottom:32px;width:clamp(320px,30vw,460px);overflow-y:auto;padding:18px 16px 20px;border-radius:8px;background:rgba(18,13,27,.78);border:1px solid rgba(255,255,255,.08);box-shadow:0 30px 80px rgba(0,0,0,.48)}
+#musicNow.queueOpen .mnQueue{display:block}
+#musicNow.queueOpen .mnMain{min-height:100%;padding:54px calc(clamp(320px,30vw,460px) + clamp(44px,8vw,100px)) 28px 6vw;gap:34px;align-content:center}
+#musicNow.queueOpen .mnCover{width:clamp(220px,24vw,310px)}
+#musicNow.queueOpen .mnInfo{max-width:520px;min-width:280px}
+#musicNow.queueOpen .mnEyebrow{margin-bottom:9px}
+#musicNow.queueOpen .mnTitle{font-size:clamp(26px,2.7vw,38px);line-height:1.05;letter-spacing:0;margin-bottom:8px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+#musicNow.queueOpen .mnArtist{font-size:clamp(14px,1.25vw,18px);margin-bottom:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#musicNow.queueOpen .mnProg{margin-bottom:18px}
+#musicNow.queueOpen .mnCtl{gap:10px;flex-wrap:wrap}
+#musicNow.queueOpen .mnCtl .mbBtn{width:44px;height:44px}
+#musicNow.queueOpen .mnCtl .mbBtn svg{width:21px;height:21px}
+#musicNow.queueOpen .mnCtl .mbPlay{width:62px;height:62px;margin:0 4px}
+#musicNow.queueOpen .mnCtl .mbPlay svg{width:28px;height:28px}
+#musicNow.queueOpen .mnQueueToggle{height:44px;padding:0 14px}
 .mnQueue h2{font:700 12px "JetBrains Mono";letter-spacing:.18em;text-transform:uppercase;color:var(--amber);margin-bottom:12px}
-#mnQueueList{display:flex;flex-direction:column;gap:3px;max-width:760px}
+#mnQueueList{display:flex;flex-direction:column;gap:3px;max-width:100%}
 body.tv #musicNow .mnBg{filter:brightness(.32);transform:none} /* per-frame blur is brutal on the Shield GPU */
-@media (max-width:760px){.mnMain{flex-direction:column;gap:26px;padding-top:80px}.mnCover{width:min(280px,62vw)}}
+body.tv #musicNow.queueOpen .mnQueue{top:72px;bottom:28px}
+body.tv #musicNow.queueOpen .mnMain{padding-top:42px;padding-bottom:22px;gap:28px;flex-wrap:nowrap}
+body.tv #musicNow.queueOpen .mnCover{width:clamp(190px,20vw,280px)}
+body.tv #musicNow.queueOpen .mnInfo{max-width:480px;min-width:260px}
+body.tv #musicNow.queueOpen .mnTitle{font-size:clamp(24px,2.35vw,34px);line-height:1.04}
+body.tv #musicNow.queueOpen .mnArtist{margin-bottom:14px}
+body.tv #musicNow.queueOpen .mnProg{margin-bottom:14px}
+body.tv #musicNow.queueOpen .mnCtl{gap:8px}
+body.tv #musicNow.queueOpen .mnCtl .mbBtn{width:42px;height:42px}
+body.tv #musicNow.queueOpen .mnCtl .mbPlay{width:58px;height:58px}
+body.tv #musicNow.queueOpen .mnQueueToggle{height:42px;padding:0 12px}
+@media (max-width:900px){#musicNow.queueOpen .mnMain{min-height:auto;padding-right:7vw}.mnQueue{position:relative;top:auto;right:auto;bottom:auto;width:min(460px,calc(100vw - 32px));margin:0 auto 32px;max-height:42vh}.mnMain{flex-direction:column;gap:26px;padding-top:80px}.mnCover{width:min(280px,62vw)}}
 
-@media (max-width:600px){#music{left:0!important}#musicBar{left:0}.mbNow{width:auto}.mbProg .mbT{display:none}}
+@media (max-width:900px){.musicTiles{grid-template-columns:repeat(2,minmax(0,1fr))}.musicRail{grid-auto-columns:minmax(150px,42vw)}.mSearchSongs{grid-template-columns:1fr}.mArtistName{font-size:28px}.mArtistArt{width:82px;height:82px}}
+@media (max-width:600px){#music{left:0!important}#musicBar{left:0}.mbNow{width:auto}.mbProg .mbT{display:none}.musicTiles{grid-template-columns:1fr}}
 
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
@@ -1496,6 +1589,7 @@ body.tv #musicNow .mnBg{filter:brightness(.32);transform:none} /* per-frame blur
         <button class="mbBtn mbPlay focusable" id="mnPlay"><svg viewBox="0 0 24 24" fill="currentColor" id="mnPlayIco"><path d="M8 5v14l11-7z"/></svg></button>
         <button class="mbBtn focusable" id="mnNext"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M17 5v14h2V5h-2zm-2 7L5 5v14l10-7z"/></svg></button>
         <button class="mbBtn mnTog focusable" id="mnRepeat" title="Repeat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" id="mnRepeatIco"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg></button>
+        <button class="mbBtn mnQueueToggle focusable" id="mnQueueToggle" title="Show playlist"><span>Show playlist</span></button>
       </div>
     </div>
   </div>
@@ -1505,10 +1599,10 @@ body.tv #musicNow .mnBg{filter:brightness(.32);transform:none} /* per-frame blur
   </div>
 </div>
 
-<!-- Persistent mini-player: keeps playing across every view (Plex/Spotify model). -->
+<!-- Music audio lives globally; controls open in the full-screen Music player. -->
 <audio id="musicAudio" preload="auto"></audio>
 <div id="musicBar">
-  <div class="mbNow">
+  <div class="mbNow focusable" id="mbNow" title="Now playing">
     <div class="mbArt" id="mbArt"></div>
     <div class="mbMeta"><div class="mbTitle" id="mbTitle"></div><div class="mbArtist" id="mbArtist"></div></div>
   </div>
@@ -5239,14 +5333,12 @@ $('chGuide').addEventListener('click', togglePlayerGuide);
 // keeps playing while you browse movies/TV (Plex/Spotify model). The Music view is just a
 // search + results list that feeds the queue.
 const mAudio = $('musicAudio');
+const MUSIC_PAGE_SIZE = 50;
 function mmss(s) { s = Math.max(0, Math.round(s || 0)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; }
 function loadMusic() {
   bootReady();
   if (!$('musicBrowse').children.length) renderMusicBrowse();
-  if (!$('musicList').children.length) {
-    $('musicList').innerHTML = '<div class="mNote">Pick a playlist or vibe above, or search anything — songs, artists, albums. What you play keeps going while you browse the rest of Triboon.</div>';
-  }
-  // Personal playlists (linked accounts) load lazily and slot in ahead of the mood chips.
+  // Personal playlists load lazily; tracks wait until a playlist is opened.
   if (S.ytmPlaylists === undefined) {
     S.ytmPlaylists = null; // in flight
     api('/api/music/playlists').then((r) => {
@@ -5259,30 +5351,135 @@ function loadMusic() {
   }
   setTimeout(() => { if (S.view === 'music' && !S.zone /* not a rail rollover */) $('musicSearch').focus(); }, 60);
 }
-async function loadPlaylistTracks(id, title) {
-  $('musicList').innerHTML = `<div class="mNote">Loading ${esc(title)}…</div>`;
+function showMusicHome() {
+  S.musicPage = 'home';
+  S.musicPlaylist = null;
+  $('musicBrowse').classList.remove('hide');
+  $('musicList').classList.remove('searchResults');
+  $('musicList').innerHTML = '';
+}
+function openMusicPlaylist(id, title, meta = {}) {
+  return startMusicPlaylist(id, title, meta);
+}
+async function startMusicPlaylist(id, title, meta = {}) {
+  S.musicPage = 'home';
+  S.musicPlaylist = { id, title, count: meta.count || null, cover: meta.cover || null, tracks: [], offset: 0, hasMore: true, loading: false };
+  $('musicSearch').value = '';
+  $('musicBrowse').classList.remove('hide');
+  $('musicList').innerHTML = '';
+  toast(`Loading ${title}...`);
+  await loadMusicPlaylistPage(true);
+  const p = S.musicPlaylist;
+  if (p && p.tracks.length) playMusic(p.tracks, 0, { showQueue: true, autoplay: false });
+  else toast('That playlist looks empty.');
+}
+async function loadMusicPlaylistPage(reset = false) {
+  const p = S.musicPlaylist; if (!p || p.loading) return;
+  p.loading = true;
+  if (reset) { p.offset = 0; p.tracks = []; p.hasMore = true; }
   try {
-    const r = await api('/api/music/playlist/' + encodeURIComponent(id));
+    const r = await api('/api/music/playlist/' + encodeURIComponent(p.id) + `?limit=${MUSIC_PAGE_SIZE}&offset=${p.offset}`);
     if (S.view !== 'music') return;
-    renderMusicRows(r.results || []);
-    if (!(r.results || []).length) $('musicList').innerHTML = '<div class="mNote">This playlist looks empty.</div>';
-  } catch (e) { $('musicList').innerHTML = `<div class="mNote">${esc(e.message)}</div>`; }
+    const rows = r.results || [];
+    p.title = r.title || p.title;
+    p.hasMore = !!r.hasMore;
+    p.offset = r.nextOffset == null ? p.offset + rows.length : r.nextOffset;
+    p.tracks = reset ? rows : p.tracks.concat(rows);
+    if (!p.cover && rows[0] && rows[0].thumb) p.cover = rows[0].thumb;
+  } catch (e) {
+    toast(`Could not load ${p.title || 'playlist'}: ${e.message}`);
+  }
+  finally { if (p) p.loading = false; }
 }
 let _musicSearchT = 0;
 async function doMusicSearch() {
   const q = $('musicSearch').value.trim();
-  if (!q) return;
-  $('musicList').innerHTML = '<div class="mNote">Searching…</div>';
+  if (!q) { showMusicHome(); return; }
+  S.musicPage = 'search';
+  S.musicPlaylist = null;
+  $('musicBrowse').classList.add('hide');
+  $('musicList').innerHTML = '<div class="mNote">Searching...</div>';
   try {
     const r = await api('/api/music/search?q=' + encodeURIComponent(q));
     if (S.view !== 'music') return;
-    renderMusicRows(r.results || []);
+    renderMusicRows(r.results || [], { search: true, query: q });
   } catch (e) { $('musicList').innerHTML = `<div class="mNote">Search failed: ${esc(e.message)}</div>`; }
 }
-function renderMusicRows(results) {
-  const list = $('musicList'); list.innerHTML = '';
-  if (!results.length) { list.innerHTML = '<div class="mNote">No results — try a different search.</div>'; return; }
+function normMusicText(s) {
+  return String(s || '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').trim();
+}
+function titleCaseMusicQuery(s) {
+  return String(s || '').trim().replace(/\s+/g, ' ').split(' ')
+    .map((p) => p ? p[0].toUpperCase() + p.slice(1) : p).join(' ');
+}
+function looksLikeArtistNameQuery(query, results) {
+  const q = normMusicText(query);
+  if (!q || q.length < 5 || results.length < 3) return false;
+  const generic = /\b(music|song|songs|album|albums|playlist|hits|top|new|release|releases|chart|charts|pop|rock|jazz|classical|workout|chill|electronic|hip hop|rap|country|genre|genres|remix|soundtrack|podcast|mix|live|cover|karaoke|instrumental|lo fi|r and b|rnb)\b/;
+  if (generic.test(q)) return false;
+  const words = q.split(/\s+/).filter(Boolean);
+  if (words.length < 2 || words.length > 4) return false;
+  const titleMatches = results.filter((t) => normMusicText(t.title).includes(q)).length;
+  return titleMatches <= Math.max(2, Math.floor(results.length * .65));
+}
+function inferSearchArtist(results, query) {
+  const q = normMusicText(query);
+  if (!q || q.length < 3) return null;
+  const scores = new Map();
+  results.forEach((t, idx) => {
+    const artist = String(t.artist || '').split(/,|&|\bfeat\.?\b|\bfeaturing\b/i)[0].trim();
+    const a = normMusicText(artist);
+    if (!artist || !a || a.length < 3) return;
+    const direct = a.includes(q) || q.includes(a);
+    const title = normMusicText(t.title);
+    const titlePenalty = title.includes(q) && !direct ? 0.55 : 1;
+    const score = (direct ? 5 : 1) * titlePenalty + Math.max(0, 1.2 - idx * 0.08);
+    const key = a;
+    const cur = scores.get(key) || { artist, score: 0, tracks: [], first: t };
+    cur.score += score;
+    cur.tracks.push(t);
+    if (!cur.first || idx < results.indexOf(cur.first)) cur.first = t;
+    scores.set(key, cur);
+  });
+  const best = [...scores.values()].sort((a, b) => b.score - a.score || b.tracks.length - a.tracks.length)[0];
+  if (!best) {
+    return looksLikeArtistNameQuery(query, results)
+      ? { artist: titleCaseMusicQuery(query), score: 1, tracks: results, first: results[0], inferredFromQuery: true }
+      : null;
+  }
+  const enough = normMusicText(best.artist).includes(q) || q.includes(normMusicText(best.artist)) || best.tracks.length >= Math.max(2, Math.ceil(results.length * .28));
+  if (enough) return best;
+  return looksLikeArtistNameQuery(query, results)
+    ? { artist: titleCaseMusicQuery(query), score: best.score, tracks: results, first: results[0], inferredFromQuery: true }
+    : null;
+}
+function renderMusicRows(results, opts = {}) {
+  const list = $('musicList'); list.innerHTML = ''; list.classList.toggle('searchResults', !!opts.search);
+  if (!results.length) { list.innerHTML = `<div class="mNote">${esc(opts.empty || 'No results - try a different search.')}</div>`; return; }
   S.musicResults = results;
+  const artistHit = opts.search ? inferSearchArtist(results, opts.query) : null;
+  if (artistHit) {
+    let artistTracks = results.filter((t) => normMusicText(t.artist).includes(normMusicText(artistHit.artist)));
+    if (!artistTracks.length && artistHit.inferredFromQuery) artistTracks = results;
+    const artistQueue = [...artistTracks, ...results.filter((t) => !artistTracks.includes(t))];
+    const hero = document.createElement('button');
+    hero.className = 'musicRow mArtistHit focusable';
+    hero.innerHTML = `<div class="mArtistArt" style="background-image:url('${safeUrl((artistHit.first || artistTracks[0] || {}).thumb)}')"></div>
+      <div class="mArtistCopy"><div class="mArtistType">Artist</div><div class="mArtistName">${esc(artistHit.artist)}</div>
+      <div class="mArtistSub">${artistTracks.length} song${artistTracks.length === 1 ? '' : 's'} from this search</div></div>
+      <div class="mArtistPlay"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></div>`;
+    hero.addEventListener('click', () => playMusic(artistQueue, 0, { showQueue: true }));
+    hero.addEventListener('mouseenter', () => pointerHover() && focusMusic(musicRows().indexOf(hero)));
+    list.appendChild(hero);
+  }
+  if (opts.search) {
+    const head = document.createElement('div');
+    head.className = 'mSearchHead';
+    head.innerHTML = `<span>Songs</span><span>${results.length} result${results.length === 1 ? '' : 's'}</span>`;
+    list.appendChild(head);
+  }
+  const songWrap = opts.search ? document.createElement('div') : list;
+  if (opts.search) { songWrap.className = 'mSearchSongs'; list.appendChild(songWrap); }
   results.forEach((t, i) => {
     const row = document.createElement('button');
     row.className = 'musicRow focusable'; row.dataset.mrow = i;
@@ -5290,26 +5487,44 @@ function renderMusicRows(results) {
       <div class="mBody"><div class="mT">${esc(t.title)}</div><div class="mA">${esc(t.artist || '')}</div></div>
       <div class="mD">${t.duration ? mmss(t.duration) : ''}</div>`;
     row.addEventListener('click', () => playMusic(results, i));
-    row.addEventListener('mouseenter', () => pointerHover() && focusMusic(i));
-    list.appendChild(row);
+    row.addEventListener('mouseenter', () => pointerHover() && focusMusic(musicRows().indexOf(row)));
+    songWrap.appendChild(row);
   });
+  if (opts.loadMore) {
+    const more = document.createElement('button');
+    more.className = 'musicAction musicLoadMore focusable';
+    more.textContent = 'Load more';
+    more.addEventListener('click', () => loadMusicPlaylistPage(false));
+    list.appendChild(more);
+  }
   markMusicCur();
 }
-function playMusic(queue, idx) {
+function playMusic(queue, idx, opts = {}) {
   S.musicQueue = queue; S.musicIdx = idx;
   const t = queue[idx]; if (!t) return;
   S.musicCur = t;
+  S.musicLoadFailed = false;
   mAudio.src = t.streamUrl;
-  mAudio.play().catch(() => {});
-  $('musicBar').classList.add('show');
+  if (opts.autoplay !== false) mAudio.play().catch(() => {});
   document.body.classList.add('musicOn');
-  updateMusicBar();
-  updateMusicNow();
+  document.body.classList.toggle('musicPaused', opts.autoplay === false);
+  if (opts.autoplay === false) setPlayIcon(false);
   markMusicCur();
+  openMusicNow({ showQueue: !!opts.showQueue });
 }
 function musicToggle() {
   if (!S.musicCur) return;
   if (mAudio.paused) mAudio.play().catch(() => {}); else mAudio.pause();
+}
+function musicTransport(action = 'toggle') {
+  if (!S.musicCur) return false;
+  if (action === 'play') mAudio.play().catch(() => {});
+  else if (action === 'pause') mAudio.pause();
+  else if (action === 'stop') closeMusicPlayer();
+  else if (action === 'next') musicNext();
+  else if (action === 'prev') musicPrev();
+  else musicToggle();
+  return true;
 }
 function musicNext(auto) {
   const q = S.musicQueue; if (!q || !q.length) return;
@@ -5348,6 +5563,7 @@ function musicPrev() {
 function closeMusicPlayer() {
   mAudio.pause(); mAudio.removeAttribute('src'); mAudio.load();
   S.musicCur = null;
+  $('musicNow').classList.remove('open', 'queueOpen');
   $('musicBar').classList.remove('show');
   document.body.classList.remove('musicOn', 'musicPaused');
   markMusicCur();
@@ -5377,7 +5593,14 @@ mAudio.addEventListener('timeupdate', () => {
 mAudio.addEventListener('ended', () => musicNext(true));
 mAudio.addEventListener('play', () => { document.body.classList.remove('musicPaused'); setPlayIcon(true); });
 mAudio.addEventListener('pause', () => { document.body.classList.add('musicPaused'); setPlayIcon(false); });
-mAudio.addEventListener('error', () => { if (S.musicCur) toast('Could not play that track — skipping'); musicNext(); });
+mAudio.addEventListener('error', () => {
+  if (!S.musicCur || S.musicLoadFailed) return;
+  S.musicLoadFailed = true;
+  try { mAudio.pause(); } catch {}
+  toast('Could not play that track. Press Next to try another.');
+  document.body.classList.add('musicPaused');
+  setPlayIcon(false);
+});
 function setPlayIcon(playing) {
   const ic = playing ? '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>' : '<path d="M8 5v14l11-7z"/>';
   $('mbPlayIco').innerHTML = ic; $('mnPlayIco').innerHTML = ic;
@@ -5393,18 +5616,23 @@ $('mbPlay').addEventListener('click', musicToggle);
 $('mbNext').addEventListener('click', () => musicNext());
 $('mbPrev').addEventListener('click', musicPrev);
 $('mbClose').addEventListener('click', closeMusicPlayer);
-$('musicSearch').addEventListener('input', () => { clearTimeout(_musicSearchT); _musicSearchT = setTimeout(doMusicSearch, 450); });
+$('musicSearch').addEventListener('input', () => {
+  clearTimeout(_musicSearchT);
+  if (!$('musicSearch').value.trim()) { showMusicHome(); return; }
+  _musicSearchT = setTimeout(doMusicSearch, 450);
+});
 $('musicSearch').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); clearTimeout(_musicSearchT); doMusicSearch(); } });
 // Hardware media keys (and some remotes) → transport.
 if ('mediaSession' in navigator) {
   try {
-    navigator.mediaSession.setActionHandler('play', () => mAudio.play());
-    navigator.mediaSession.setActionHandler('pause', () => mAudio.pause());
-    navigator.mediaSession.setActionHandler('nexttrack', () => musicNext());
-    navigator.mediaSession.setActionHandler('previoustrack', musicPrev);
+    navigator.mediaSession.setActionHandler('play', () => musicTransport('play'));
+    navigator.mediaSession.setActionHandler('pause', () => musicTransport('pause'));
+    navigator.mediaSession.setActionHandler('nexttrack', () => musicTransport('next'));
+    navigator.mediaSession.setActionHandler('previoustrack', () => musicTransport('prev'));
   } catch {}
 }
-function musicRows() { return [...document.querySelectorAll('#musicList .musicRow')]; }
+window.__tvMusicTransport = (action) => musicTransport(action);
+function musicRows() { return [...document.querySelectorAll('#musicList .mArtistHit, #musicList .musicRow[data-mrow]')]; }
 function focusMusic(i) {
   const rows = musicRows(); if (!rows.length) return;
   S.musicRowIdx = Math.max(0, Math.min(rows.length - 1, i));
@@ -5415,7 +5643,7 @@ function focusMusic(i) {
 // personal YTM playlists need the user's Google cookies (next round); this gives immediate
 // browsable content with zero auth.
 const MUSIC_MOODS = ['Top hits', 'Pop', 'Rock', 'Hip-Hop', 'Electronic', 'Lo-fi beats', 'Jazz', 'Classical', 'Workout', 'Chill', '80s', '90s'];
-function renderMusicBrowse() {
+function renderMusicBrowseOld() {
   const wrap = $('musicBrowse'); wrap.innerHTML = '';
   const addChip = (label, cls, onClick) => {
     const b = document.createElement('button');
@@ -5432,24 +5660,207 @@ function renderMusicBrowse() {
   }
   MUSIC_MOODS.forEach((m) => addChip(m, '', () => { $('musicSearch').value = m === 'Top hits' ? 'top hits 2026' : m + ' music'; doMusicSearch(); }));
 }
-function chipEls() { return [...$('musicBrowse').querySelectorAll('.mChip')]; }
+const MUSIC_HOME_MOODS = ['Pop', 'Rock', 'Hip-Hop', 'Electronic', 'Lo-fi beats', 'Jazz', 'Classical', 'Workout', 'Chill', '80s', '90s', 'R&B'];
+const MUSIC_EXPLORE = [
+  { title: 'New releases', sub: 'Fresh albums and singles', query: 'new music releases', grad: 'mGrad1', icon: 'spark' },
+  { title: 'Charts', sub: 'Top songs right now', query: 'top songs 2026', grad: 'mGrad2', icon: 'chart' },
+  { title: 'Moods & genres', sub: 'Browse by vibe', query: 'chill music', grad: 'mGrad3', icon: 'smile' },
+  { title: 'Podcasts', sub: 'Music podcasts', query: 'music podcasts', grad: 'mGrad4', icon: 'podcast' },
+];
+const MUSIC_NEW = [
+  { title: 'New albums & singles', sub: 'Today on YouTube Music', query: 'new albums singles' },
+  { title: 'Fresh pop', sub: 'New pop releases', query: 'new pop music' },
+  { title: 'Fresh hip-hop', sub: 'New rap and hip-hop', query: 'new hip hop music' },
+  { title: 'Fresh rock', sub: 'New rock tracks', query: 'new rock music' },
+  { title: 'Fresh electronic', sub: 'New electronic music', query: 'new electronic music' },
+  { title: 'Fresh country', sub: 'New country music', query: 'new country music' },
+];
+const MUSIC_TOP = [
+  { title: 'Top songs', sub: 'Trending music videos', query: 'top songs 2026', grad: 'mGrad2' },
+  { title: 'Most played', sub: 'Popular right now', query: 'most played songs', grad: 'mGrad3' },
+  { title: 'Throwback hits', sub: 'Familiar favorites', query: 'classic hits music', grad: 'mGrad4' },
+  { title: 'Workout hits', sub: 'High-energy tracks', query: 'workout music', grad: 'mGrad1' },
+  { title: 'Focus', sub: 'Deep-work music', query: 'focus music', grad: 'mGrad2' },
+];
+function musicIcon(name) {
+  const icons = {
+    spark: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/>',
+    chart: '<path d="M4 19V5"/><path d="M4 19h16"/><path d="m7 14 4-4 3 3 5-7"/>',
+    smile: '<circle cx="12" cy="12" r="9"/><path d="M8 10h.01M16 10h.01M8 15c1.2 1 2.5 1.5 4 1.5s2.8-.5 4-1.5"/>',
+    podcast: '<path d="M8 14a6 6 0 1 1 8 0"/><path d="M10 18h4"/><path d="M12 14v7"/><circle cx="12" cy="10" r="2"/>',
+    heart: '<path d="M20.8 6.6a5.4 5.4 0 0 0-7.7 0L12 7.7l-1.1-1.1a5.4 5.4 0 0 0-7.7 7.7L12 23l8.8-8.7a5.4 5.4 0 0 0 0-7.7z"/>',
+    music: '<path d="M9 18V6l11-2v11"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="15" r="2.5"/>',
+  };
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icons[name] || icons.music}</svg>`;
+}
+function musicRunQuery(q) {
+  $('musicSearch').value = q;
+  doMusicSearch();
+}
+async function hydrateMusicHomeCovers() {
+  S.musicCoverCache = S.musicCoverCache || {};
+  const cards = [...document.querySelectorAll('#musicBrowse .mCard[data-cover-key]')].slice(0, 12);
+  let active = 0, idx = 0;
+  const run = () => {
+    while (active < 5 && idx < cards.length) {
+      const card = cards[idx++], key = card.dataset.coverKey;
+      if (!key || card.dataset.coverDone) continue;
+      const cached = S.musicCoverCache[key];
+      if (cached) { setMusicCardCover(card, cached); continue; }
+      active++;
+      coverForMusicCard(card).then((thumb) => {
+        if (thumb) { S.musicCoverCache[key] = thumb; setMusicCardCover(card, thumb); }
+      }).catch(() => {}).finally(() => { active--; run(); });
+    }
+  };
+  run();
+}
+async function coverForMusicCard(card) {
+  if (card.dataset.coverPlaylist) {
+    const r = await api('/api/music/playlist/' + encodeURIComponent(card.dataset.coverPlaylist) + '?limit=1');
+    return r.results && r.results[0] && r.results[0].thumb;
+  }
+  if (card.dataset.coverFeed) {
+    S.musicCoverFeedCache = S.musicCoverFeedCache || {};
+    const feed = card.dataset.coverFeed;
+    if (!S.musicCoverFeedCache[feed]) {
+      S.musicCoverFeedCache[feed] = api('/api/music/search?q=' + encodeURIComponent(feed) + '&limit=12')
+        .then((r) => {
+          const seen = new Set();
+          return (r.results || []).filter((t) => {
+            const key = t && (t.thumb || t.id);
+            if (!key || seen.has(key)) return false;
+            seen.add(key); return true;
+          });
+        }).catch(() => []);
+    }
+    const rows = await S.musicCoverFeedCache[feed];
+    const idx = Math.max(0, +(card.dataset.coverIdx || 0));
+    return rows[idx] && rows[idx].thumb || rows[0] && rows[0].thumb;
+  }
+  if (card.dataset.coverQuery) {
+    const r = await api('/api/music/search?q=' + encodeURIComponent(card.dataset.coverQuery) + '&limit=1');
+    return r.results && r.results[0] && r.results[0].thumb;
+  }
+  return null;
+}
+function setMusicCardCover(card, url) {
+  const cover = card.querySelector('.mCover'); if (!cover || !url) return;
+  cover.style.backgroundImage = `url('${safeUrl(url)}')`;
+  cover.classList.add('hasImg');
+  card.dataset.coverDone = '1';
+}
+function renderMusicBrowse() {
+  const wrap = $('musicBrowse'); wrap.innerHTML = '';
+  const addShelf = (title, cls = '') => {
+    const shelf = document.createElement('section');
+    shelf.className = 'musicShelf ' + cls;
+    shelf.innerHTML = `${title ? `<div class="musicShelfTop"><h2>${esc(title)}</h2></div>` : ''}<div class="${cls.includes('topTiles') ? 'musicTiles' : 'musicRail'}"></div>`;
+    wrap.appendChild(shelf);
+    return shelf.lastElementChild;
+  };
+  const addTile = (parent, item, cls, onClick) => {
+    const b = document.createElement('button');
+    b.className = 'mChip focusable ' + cls;
+    b.innerHTML = cls.includes('mTile')
+      ? `<span class="mIco">${musicIcon(item.icon || 'music')}</span><span class="mLbl">${esc(item.title)}</span>`
+      : `<span class="mCover ${esc(item.grad || 'mGrad1')}">${musicIcon(item.icon || 'music')}</span><span class="mLbl">${esc(item.title)}</span><span class="mSub">${esc(item.sub || '')}</span>`;
+    if (item.coverQuery) { b.dataset.coverQuery = item.coverQuery; b.dataset.coverKey = 'q:' + item.coverQuery; }
+    if (item.coverFeed) { b.dataset.coverFeed = item.coverFeed; b.dataset.coverIdx = item.coverIdx || 0; b.dataset.coverKey = 'f:' + item.coverFeed + ':' + b.dataset.coverIdx; }
+    if (item.coverPlaylist) { b.dataset.coverPlaylist = item.coverPlaylist; b.dataset.coverKey = 'p:' + item.coverPlaylist; }
+    b.addEventListener('click', onClick);
+    b.addEventListener('mouseenter', () => pointerHover() && focusChip(chipEls().indexOf(b)));
+    parent.appendChild(b);
+  };
+  const yours = addShelf('Your music', 'topTiles');
+  if (Array.isArray(S.ytmPlaylists)) {
+    addTile(yours, { title: 'Liked Music', sub: 'Your YouTube Music favorites', grad: 'mGrad1', icon: 'heart', coverPlaylist: 'LM' }, 'mCard mPl',
+      () => startMusicPlaylist('LM', 'Liked Music'));
+    S.ytmPlaylists.slice(0, 30).forEach((p, i) =>
+      addTile(yours, { title: p.title, sub: p.count ? `${p.count} tracks` : 'Playlist', grad: `mGrad${(i % 4) + 1}`, icon: 'music', coverPlaylist: p.id }, 'mCard mPl',
+        () => startMusicPlaylist(p.id, p.title, { count: p.count })));
+  } else if (S.ytmPlaylists === null) {
+    yours.innerHTML = '<div class="mEmpty">Loading your YouTube Music library...</div>';
+  } else {
+    yours.innerHTML = '<div class="mEmpty">Link YouTube Music in Preferences to show favorites and playlists here.</div>';
+  }
+  setTimeout(hydrateMusicHomeCovers, 50);
+}
+function chipEls() { return $('musicBrowse').classList.contains('hide') ? [] : [...$('musicBrowse').querySelectorAll('.mChip')]; }
 function focusChip(i) {
   const c = chipEls(); if (!c.length) return;
   S.chipIdx = Math.max(0, Math.min(c.length - 1, i));
   applyFocus(c[S.chipIdx], !S.pointer); S.zone = 'musicChips';
 }
+function focusChipDir(dir) {
+  const chips = chipEls(); if (!chips.length) return false;
+  const cur = chips[Math.max(0, Math.min(chips.length - 1, S.chipIdx || 0))] || chips[0];
+  const a = cur.getBoundingClientRect();
+  const ax = a.left + a.width / 2, ay = a.top + a.height / 2;
+  let best = -1, score = Infinity;
+  chips.forEach((el, i) => {
+    if (el === cur) return;
+    const b = el.getBoundingClientRect();
+    const bx = b.left + b.width / 2, by = b.top + b.height / 2;
+    const dx = bx - ax, dy = by - ay;
+    const sameRow = Math.abs(dy) < Math.max(28, a.height * .55);
+    let ok = false, s = 0;
+    if (dir === 'ArrowRight') { ok = dx > 8 && sameRow; s = dx + Math.abs(dy) * 3; }
+    else if (dir === 'ArrowLeft') { ok = dx < -8 && sameRow; s = -dx + Math.abs(dy) * 3; }
+    else if (dir === 'ArrowDown') { ok = dy > 12; s = dy * 2 + Math.abs(dx); }
+    else if (dir === 'ArrowUp') { ok = dy < -12; s = -dy * 2 + Math.abs(dx); }
+    if (ok && s < score) { score = s; best = i; }
+  });
+  if (best >= 0) { focusChip(best); return true; }
+  return false;
+}
+function musicBarBtns() { return [$('mbNow'), $('mbPrev'), $('mbPlay'), $('mbNext'), $('mbClose')].filter(Boolean); }
+function focusMusicBar(which = 'play') {
+  if (!S.musicCur || document.body.classList.contains('videoOpen')) return false;
+  return openMusicNow();
+}
+function restoreMusicSelection() {
+  S.zone = '';
+  if (S.view === 'music') {
+    const rows = musicRows();
+    if (rows.length) return focusMusic(S.musicRowIdx || 0);
+    const chips = chipEls();
+    if (chips.length) return focusChip(S.chipIdx || 0);
+    return $('musicSearch').focus();
+  }
+  return focusContent();
+}
+function leaveMusicBarUp() {
+  return restoreMusicSelection();
+}
 
 /* ---- Full-screen now-playing page (big cover + queue) ---- */
-function openMusicNow() {
-  if (!S.musicCur) return;
+function openMusicNow(opts = {}) {
+  if (!S.musicCur) return false;
+  if (opts.showQueue) {
+    $('musicNow').classList.add('queueOpen');
+    $('mnQueueToggle').querySelector('span').textContent = 'Hide playlist';
+  } else if (!(S.zone === 'musicNowQueue' && $('musicNow').classList.contains('queueOpen'))) {
+    $('musicNow').classList.remove('queueOpen');
+    $('mnQueueToggle').querySelector('span').textContent = 'Show playlist';
+  }
   $('musicNow').classList.add('open');
   S.zone = 'musicNow';
   updateMusicNow();
   if (document.body.classList.contains('tv')) applyFocus($('mnPlay'));
+  return true;
 }
 function closeMusicNow() {
-  $('musicNow').classList.remove('open');
-  if (S.view === 'music') { S.zone = 'music'; focusContent(); }
+  $('musicNow').classList.remove('open', 'queueOpen');
+  $('mnQueueToggle').querySelector('span').textContent = 'Show playlist';
+  restoreMusicSelection();
+}
+function toggleMusicQueue() {
+  const panel = $('musicNow');
+  const open = !panel.classList.contains('queueOpen');
+  panel.classList.toggle('queueOpen', open);
+  $('mnQueueToggle').querySelector('span').textContent = open ? 'Hide playlist' : 'Show playlist';
+  if (open) renderMusicQueue();
 }
 function updateMusicNow() {
   if (!$('musicNow').classList.contains('open')) return;
@@ -5487,9 +5898,8 @@ $('mnNext').addEventListener('click', () => musicNext());
 $('mnPrev').addEventListener('click', musicPrev);
 $('mnShuffle').addEventListener('click', toggleShuffle);
 $('mnRepeat').addEventListener('click', cycleRepeat);
+$('mnQueueToggle').addEventListener('click', toggleMusicQueue);
 $('mnSeek').addEventListener('click', (e) => { const r = $('mnSeek').getBoundingClientRect(); const d = mAudio.duration || (S.musicCur && S.musicCur.duration) || 0; if (d) mAudio.currentTime = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * d; });
-// Click the mini-bar's now-playing area → expand the big page.
-$('musicBar').querySelector('.mbNow').addEventListener('click', openMusicNow);
 
 /* ============ preferences: cover size + menu hide/reorder (per device) ============ */
 const MENU_DEFAULT = ['search', 'home', 'watchlist', 'discover', 'calendar', 'movies', 'tv', 'livetv', 'music'];
@@ -6543,7 +6953,7 @@ function focusContent(retried) {
   // Music: results present → first row; otherwise the search field.
   if (S.view === 'music') {
     const rows = musicRows();
-    return rows.length ? focusMusic(0) : $('musicSearch').focus();
+    return rows.length ? focusMusic(0) : (chipEls().length ? focusChip(S.chipIdx || 0) : $('musicSearch').focus());
   }
   if (['movies', 'tv', 'search', 'library', 'watchlist', 'livetv', 'person'].includes(S.view)) return focusGrid(S.gridIdx || 0);
   const v2 = S.rowsView || { hasHero: true };
@@ -6820,8 +7230,21 @@ document.addEventListener('keydown', (e) => {
     dpadForm($(S.view === 'prefs' ? 'prefs' : 'settings'), k);
     return;
   }
+  if (inInput && ae === $('musicSearch') && k === 'ArrowDown') {
+    e.preventDefault(); ae.blur();
+    return chipEls().length ? focusChip(S.chipIdx || 0) : (musicRows().length ? focusMusic(0) : focusMusicBar());
+  }
+  if (inInput && /^Media(PlayPause|Play|Pause|Stop|TrackNext|TrackPrevious|NextTrack|PreviousTrack)$/.test(k)) {
+    e.preventDefault();
+    return musicTransport(k === 'MediaPlay' ? 'play'
+      : k === 'MediaPause' ? 'pause'
+        : k === 'MediaStop' ? 'stop'
+          : /Next/.test(k) ? 'next'
+            : /Previous/.test(k) ? 'prev' : 'toggle');
+  }
   if (inInput && k !== 'Escape') return;
-  if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape', 'Backspace', ' ', 'f', 'F', 'PageUp', 'PageDown'].includes(k)) return;
+  if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape', 'Backspace', ' ', 'f', 'F', 'PageUp', 'PageDown',
+    'MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaStop', 'MediaTrackNext', 'MediaTrackPrevious', 'MediaNextTrack', 'MediaPreviousTrack'].includes(k)) return;
   if ((k === 'f' || k === 'F') && S.view !== 'player') return; // F = fullscreen, player only
   if ($('gateProfiles').classList.contains('open')) {
     e.preventDefault(); // without this the TV WebView's native spatial nav ALSO moves → double jumps
@@ -6837,6 +7260,14 @@ document.addEventListener('keydown', (e) => {
   const openGate = [...document.querySelectorAll('.gate')].find((g) => g.classList.contains('open'));
   if (openGate) { e.preventDefault(); dpadCycle(openGate, k); return; }
   e.preventDefault();
+  if (/^Media(PlayPause|Play|Pause|Stop|TrackNext|TrackPrevious|NextTrack|PreviousTrack)$/.test(k)) {
+    return musicTransport(k === 'MediaPlay' ? 'play'
+      : k === 'MediaPause' ? 'pause'
+        : k === 'MediaStop' ? 'stop'
+          : /Next/.test(k) ? 'next'
+            : /Previous/.test(k) ? 'prev' : 'toggle');
+  }
+  if (k === ' ' && S.view !== 'player' && S.musicCur) return musicToggle();
 
   if ($('trailer').classList.contains('open')) {
     if (k === 'Escape' || k === 'Backspace') return closeTrailer();
@@ -6877,11 +7308,15 @@ document.addEventListener('keydown', (e) => {
       if (k === 'Enter' && !e.repeat) { rows[i] && rows[i].click(); return; }
       return;
     }
-    const top = [$('mnCollapse'), $('mnShuffle'), $('mnPrev'), $('mnPlay'), $('mnNext'), $('mnRepeat')];
+    const top = [$('mnCollapse'), $('mnShuffle'), $('mnPrev'), $('mnPlay'), $('mnNext'), $('mnRepeat'), $('mnQueueToggle')];
     let ci = top.indexOf(document.querySelector('#musicNow .focus')); if (ci < 0) ci = 3;
     if (k === 'ArrowLeft') return ci > 0 ? applyFocus(top[ci - 1]) : undefined;
     if (k === 'ArrowRight') return applyFocus(top[Math.min(top.length - 1, ci + 1)]);
-    if (k === 'ArrowDown') { const rows = queueRows(); if (rows.length) { S.zone = 'musicNowQueue'; return focusQueue(0); } return; }
+    if (k === 'ArrowDown') {
+      const rows = queueRows();
+      if ($('musicNow').classList.contains('queueOpen') && rows.length) { S.zone = 'musicNowQueue'; return focusQueue(0); }
+      return;
+    }
     if (k === 'Enter' && !e.repeat) { (top[ci] || $('mnPlay')).click(); return; }
     return;
   }
@@ -6898,12 +7333,27 @@ document.addEventListener('keydown', (e) => {
     if (k === 'Enter' && !e.repeat) { const rows = document.querySelectorAll('.srcRow'); rows[S.drawerIdx] && rows[S.drawerIdx].click(); }
     return;
   }
+  if (S.zone === 'musicBar' && S.view !== 'player') {
+    const btns = musicBarBtns();
+    let i = btns.indexOf(document.querySelector('#musicBar .focus')); if (i < 0) i = btns.indexOf($('mbPlay'));
+    if (k === 'ArrowLeft') return i <= 0 ? enterRail() : applyFocus(btns[i - 1]);
+    if (k === 'ArrowRight') return applyFocus(btns[Math.min(btns.length - 1, i + 1)]);
+    if (k === 'ArrowUp') return leaveMusicBarUp();
+    if (k === 'ArrowDown') return S.musicCur ? openMusicNow() : undefined;
+    if (k === 'Escape' || k === 'Backspace') return leaveMusicBarUp();
+    if (k === 'Enter' && !e.repeat) { (btns[i] || $('mbPlay')).click(); return; }
+    return;
+  }
   // ----- The rail zone, handled ONCE for every page -----
   // Per-view copies drifted: calendar never got one, so entering the menu there dead-ended
   // (no up/down, no way back). ArrowRight re-enters the content the way each view expects.
   if (S.zone === 'rail' && S.view !== 'player') {
     if (k === 'ArrowUp') return focusRail(S.railIdx - 1);
-    if (k === 'ArrowDown') return focusRail(S.railIdx + 1);
+    if (k === 'ArrowDown') {
+      const btns = [...document.querySelectorAll('.railBtn')].filter((b) => b.style.display !== 'none');
+      if (S.railIdx >= btns.length - 1 && focusMusicBar()) return;
+      return focusRail(S.railIdx + 1);
+    }
     if (k === 'Enter') { if (!e.repeat) focusRailEnter(); return; }
     if (k === 'ArrowRight' || k === 'Escape' || k === 'Backspace') {
       leaveRail(); S.zone = ''; clearFocus();
@@ -6992,7 +7442,10 @@ document.addEventListener('keydown', (e) => {
     const items = [...$('calList').querySelectorAll('.calItem')];
     if (!items.length) { if (k === 'ArrowLeft') enterRail(); return; }
     let i = items.findIndex((el) => el.classList.contains('focus')); if (i === -1) i = 0;
-    if (k === 'ArrowDown') i = Math.min(items.length - 1, i + 1);
+    if (k === 'ArrowDown') {
+      if (i >= items.length - 1 && focusMusicBar()) return;
+      i = Math.min(items.length - 1, i + 1);
+    }
     else if (k === 'ArrowUp') i = Math.max(0, i - 1);
     else if (k === 'ArrowLeft') return enterRail();
     else if (k === 'Enter') { if (!e.repeat) items[i] && items[i].click(); return; }
@@ -7034,6 +7487,7 @@ document.addEventListener('keydown', (e) => {
     if (k === 'ArrowRight') ci = Math.min(dRows[ri].length - 1, ci + 1);
     else if (k === 'ArrowLeft') { if (ci === 0) return enterRail(); ci -= 1; }
     else if (k === 'ArrowDown' || k === 'ArrowUp') {
+      if (k === 'ArrowDown' && ri === dRows.length - 1 && focusMusicBar()) return;
       const cur = dRows[ri][ci];
       ri = k === 'ArrowDown' ? Math.min(dRows.length - 1, ri + 1) : Math.max(0, ri - 1);
       // Land on the spatially NEAREST column — carrying the raw index between rows with
@@ -7077,16 +7531,16 @@ document.addEventListener('keydown', (e) => {
   if (S.view === 'music') {
     const ae = document.activeElement;
     if (ae === $('musicSearch')) {
-      if (k === 'ArrowDown') { ae.blur(); return chipEls().length ? focusChip(S.chipIdx || 0) : (musicRows().length ? focusMusic(0) : null); }
+      if (k === 'ArrowDown') { ae.blur(); return chipEls().length ? focusChip(S.chipIdx || 0) : (musicRows().length ? focusMusic(0) : focusMusicBar()); }
       if ((k === 'ArrowLeft' && $('musicSearch').selectionStart === 0) || k === 'Escape' || k === 'Backspace') { ae.blur(); return enterRail(); }
       return; // typing passes through
     }
     if (S.zone === 'musicChips') {
       const chips = chipEls(); let i = S.chipIdx || 0;
-      if (k === 'ArrowLeft') return i === 0 ? enterRail() : focusChip(i - 1);
-      if (k === 'ArrowRight') return focusChip(Math.min(chips.length - 1, i + 1));
-      if (k === 'ArrowUp') return $('musicSearch').focus();
-      if (k === 'ArrowDown') return musicRows().length ? focusMusic(0) : $('musicSearch').focus();
+      if (k === 'ArrowLeft') return focusChipDir(k) || enterRail();
+      if (k === 'ArrowRight') return focusChipDir(k) || focusChip(Math.min(chips.length - 1, i + 1));
+      if (k === 'ArrowUp') return focusChipDir(k) || $('musicSearch').focus();
+      if (k === 'ArrowDown') return focusChipDir(k) || (musicRows().length ? focusMusic(0) : (focusMusicBar() || $('musicSearch').focus()));
       if (k === 'Enter' && !e.repeat) { chips[i] && chips[i].click(); return; }
       return;
     }
@@ -7101,12 +7555,17 @@ document.addEventListener('keydown', (e) => {
       return;
     }
     const rows = musicRows();
-    if (!rows.length) { if (k === 'ArrowLeft' || k === 'ArrowUp') $('musicSearch').focus(); return; }
+    if (!rows.length) {
+      if (k === 'ArrowDown' && focusMusicBar()) return;
+      if (k === 'ArrowLeft') return enterRail();
+      if (k === 'ArrowUp') return $('musicSearch').focus();
+      return;
+    }
     let i = S.musicRowIdx || 0;
     if (k === 'ArrowUp') return i === 0 ? (chipEls().length ? focusChip(S.chipIdx || 0) : $('musicSearch').focus()) : focusMusic(i - 1);
     if (k === 'ArrowDown') {
       if (i < rows.length - 1) return focusMusic(i + 1);
-      if ($('musicBar').classList.contains('show')) { S.zone = 'musicBar'; return applyFocus($('mbPlay')); } // drop to the player bar
+      if (S.musicCur) return focusMusicBar();
       return;
     }
     if (k === 'ArrowLeft') return enterRail();
@@ -7156,7 +7615,12 @@ document.addEventListener('keydown', (e) => {
       return enterRail();
     }
     // Re-focusing in place on the last row still runs the prefetch check (paged grids).
-    if (k === 'ArrowDown') { const t = gridVert(1); return focusGrid(t >= 0 ? t : S.gridIdx); }
+    if (k === 'ArrowDown') {
+      const t = gridVert(1);
+      if (t >= 0) return focusGrid(t);
+      if (focusMusicBar()) return;
+      return focusGrid(S.gridIdx);
+    }
     // Enter activates the focused element's own click handler — cards route themselves
     // (detail / trailer / local file / live channel / group expand). Title covers also get
     // the hold-OK quick menu (watched/watchlist), same as the home rows.
@@ -7194,8 +7658,12 @@ document.addEventListener('keydown', (e) => {
     // anchor. Down-then-up always returns to the exact card you left.
     if (k === 'ArrowUp') return S.rowIdx === 0 ? (view.hasHero ? focusHero(0) : enterRail())
       : focusCard(S.rowIdx - 1, Math.min(ci, rows[S.rowIdx - 1].items.length - 1));
-    if (k === 'ArrowDown') return S.rowIdx < rows.length - 1 && rows[S.rowIdx + 1].items.length
-      && focusCard(S.rowIdx + 1, Math.min(ci, rows[S.rowIdx + 1].items.length - 1));
+    if (k === 'ArrowDown') {
+      if (S.rowIdx < rows.length - 1 && rows[S.rowIdx + 1].items.length) {
+        return focusCard(S.rowIdx + 1, Math.min(ci, rows[S.rowIdx + 1].items.length - 1));
+      }
+      return focusMusicBar();
+    }
     if (k === 'Enter') {
       if (e.repeat) return; // a held OK must not machine-gun activations
       const it = S.focusedItem; if (!it) return;
@@ -7258,8 +7726,9 @@ function focusRailEnter() {
 /* ============ boot ============ */
 // First real content is on screen → fade the boot loader (double-rAF: after the paint).
 function bootReady() {
-  if (!S._booting) return;
+  if (!S._booting && $('appLoader').classList.contains('hide')) return;
   S._booting = false;
+  setTimeout(() => $('appLoader').classList.add('hide'), 0);
   requestAnimationFrame(() => requestAnimationFrame(() => $('appLoader').classList.add('hide')));
 }
 async function loadWatchlist() {

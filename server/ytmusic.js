@@ -34,9 +34,10 @@ function _resetDetection() { _ytdlp = undefined; } // tests
 // Cookies (a Netscape cookies.txt the admin exports from their browser) unlock the user's
 // OWN library/playlists. Optional — public search + play needs none. The caller passes a
 // path; we just append --cookies when present.
-function ytArgs(extra, cookiesPath) {
+function ytArgs(extra, cookiesPath, { noPlaylist = true } = {}) {
   const { cmd } = detectYtdlp() || { cmd: ['yt-dlp'] };
-  const base = ['--no-warnings', '--no-progress', '--no-playlist'];
+  const base = ['--no-warnings', '--no-progress'];
+  if (noPlaylist) base.push('--no-playlist');
   if (cookiesPath) base.push('--cookies', cookiesPath);
   return { bin: cmd[0], argv: [...cmd.slice(1), ...base, ...extra] };
 }
@@ -46,7 +47,7 @@ function runJson(extra, { timeoutMs = 25000, cookiesPath } = {}) {
   return new Promise((resolve, reject) => {
     const yt = detectYtdlp();
     if (!yt) return reject(new Error('yt-dlp not installed on the server'));
-    const { bin, argv } = ytArgs(extra, cookiesPath);
+    const { bin, argv } = ytArgs(extra, cookiesPath, { noPlaylist: optsNoPlaylist(extra) });
     const p = spawn(bin, argv, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     let out = '', err = '';
     const killer = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} reject(new Error('yt-dlp timed out')); }, timeoutMs);
@@ -61,6 +62,18 @@ function runJson(extra, { timeoutMs = 25000, cookiesPath } = {}) {
   });
 }
 
+function optsNoPlaylist(extra) {
+  return !(extra || []).some((x) => /^https:\/\/(music\.youtube\.com\/(search\?|library\/playlists|playlist\?list=)|www\.youtube\.com\/feed\/playlists)/.test(String(x)));
+}
+function searchUrl(query) {
+  return `https://music.youtube.com/search?q=${encodeURIComponent(query)}`;
+}
+function playlistItemsRange(offset = 0, limit = 200) {
+  const start = Math.max(0, parseInt(offset, 10) || 0) + 1;
+  const count = Math.max(1, Math.min(501, parseInt(limit, 10) || 200));
+  return `${start}:${start + count - 1}`;
+}
+
 const num = (n) => (typeof n === 'number' && isFinite(n) ? n : null);
 // id → deterministic YouTube thumbnail (no extra resolve). hqdefault always exists.
 const thumbFor = (id) => (id ? `https://i.ytimg.com/vi/${id}/hqdefault.jpg` : null);
@@ -70,16 +83,23 @@ function cleanTitle(t) {
     .replace(/\s*\|\s*official.*$/i, '').trim();
 }
 
-// A flat YouTube search (one fast call): id + title + uploader(artist) + duration. We use
-// plain ytsearch (not the music.youtube.com search URL) because flat YTM entries omit
-// artist/duration, and the audio stream is identical either way.
+function parseJsonObject(out, message) {
+  let data;
+  try { data = JSON.parse(out); } catch { throw new Error(message); }
+  if (!data || typeof data !== 'object') throw new Error(message);
+  return data;
+}
+
+// A flat YouTube Music search (one fast call). Do not use generic `ytsearch`: Triboon Music
+// must only discover tracks through music.youtube.com, not the whole of YouTube.
 async function search(query, { limit = 20, cookiesPath } = {}) {
   const q = String(query || '').trim().slice(0, 200);
   if (!q) return [];
   const n = Math.max(1, Math.min(40, limit));
-  const out = await runJson(['--flat-playlist', '--dump-single-json', `ytsearch${n}:${q}`], { cookiesPath });
+  const out = await runJson(['--flat-playlist', '--playlist-items', `1:${n}`, '--dump-single-json', searchUrl(q)], { cookiesPath });
   let data; try { data = JSON.parse(out); } catch { return []; }
-  return (data.entries || []).filter((e) => e && e.id && e.id.length === 11) // 11-char = a video; album/playlist browse-ids are longer
+  return (data.entries || [])
+    .filter((e) => e && e.id && e.id.length === 11 && /^https:\/\/music\.youtube\.com\/watch\?v=/.test(String(e.url || '')))
     .map((e) => ({
       id: e.id, title: cleanTitle(e.title) || e.title || 'Unknown',
       artist: e.uploader || e.channel || e.uploader_id || '',
@@ -97,14 +117,23 @@ async function resolveStream(id, { cookiesPath, force = false } = {}) {
   const hit = _streamCache.get(id);
   if (!force && hit && Date.now() < hit.expiresAt) return hit;
   // -J gives the picked format URL + metadata in one shot (title/artist/duration for the bar).
-  const out = await runJson(['-f', 'bestaudio[ext=m4a]/bestaudio/best', '-J', id], { cookiesPath, timeoutMs: 30000 });
-  let j; try { j = JSON.parse(out); } catch { throw new Error('yt-dlp returned no JSON'); }
-  const url = j.url || (j.requested_downloads && j.requested_downloads[0] && j.requested_downloads[0].url)
-    || (Array.isArray(j.formats) && [...j.formats].reverse().find((f) => f.acodec && f.acodec !== 'none' && f.url) || {}).url;
+  const load = async (cookieFile) => {
+    const out = await runJson(['-f', 'bestaudio[ext=m4a]/bestaudio/best', '-J', `https://music.youtube.com/watch?v=${id}`], { cookiesPath: cookieFile, timeoutMs: 30000 });
+    try { return JSON.parse(out); } catch { throw new Error('yt-dlp returned no JSON'); }
+  };
+  let j = await load(cookiesPath);
+  if ((!j || typeof j !== 'object') && cookiesPath) j = await load(null);
+  if (!j || typeof j !== 'object') throw new Error('yt-dlp returned no track data');
+  const picked = (j.requested_downloads && j.requested_downloads[0])
+    || (Array.isArray(j.formats) && [...j.formats].reverse().find((f) => f.acodec && f.acodec !== 'none' && f.url))
+    || null;
+  const url = j.url || (picked && picked.url);
   if (!url) throw new Error('no audio stream found');
+  const headers = { ...(j.http_headers || {}), ...((picked && picked.http_headers) || {}) };
   const rec = {
     url, at: Date.now(), expiresAt: Date.now() + STREAM_TTL_MS,
-    mime: /mime=audio%2Fmp4|\.m4a|ext=m4a/i.test(url) || j.ext === 'm4a' ? 'audio/mp4' : (j.ext === 'webm' ? 'audio/webm' : 'audio/mp4'),
+    headers,
+    mime: /mime=audio%2Fmp4|\.m4a|ext=m4a/i.test(url) || j.ext === 'm4a' || (picked && picked.ext === 'm4a') ? 'audio/mp4' : (j.ext === 'webm' || (picked && picked.ext === 'webm') ? 'audio/webm' : 'audio/mp4'),
     title: cleanTitle(j.title) || j.title || 'Unknown', artist: j.artist || j.uploader || j.channel || '',
     duration: num(j.duration), thumb: thumbFor(id),
   };
@@ -118,24 +147,46 @@ function _peekCached(id) { return _streamCache.get(id) || null; }
 // library page when authenticated; entries are playlist links (ids often prefixed 'VL').
 async function listPlaylists({ cookiesPath }) {
   if (!cookiesPath) throw new Error('YouTube Music is not linked');
-  const out = await runJson(['--flat-playlist', '--dump-single-json',
-    'https://music.youtube.com/library/playlists'], { cookiesPath, timeoutMs: 30000 });
-  let data; try { data = JSON.parse(out); } catch { return []; }
-  return (data.entries || [])
-    .map((e) => ({ id: String(e.id || '').replace(/^VL/, ''), title: e.title || 'Playlist',
-      count: num(e.playlist_count) }))
-    .filter((p) => /^[\w-]{2,64}$/.test(p.id) && p.id !== 'LM'); // Liked Songs gets its own pinned chip
+  const sources = [
+    'https://music.youtube.com/library/playlists',
+    // yt-dlp's YTM library extractor sometimes returns `null` even when the cookies still
+    // work for playlist/LM. The regular YouTube feed lists the same user playlists.
+    'https://www.youtube.com/feed/playlists',
+  ];
+  let lastErr;
+  for (const url of sources) {
+    try {
+      const out = await runJson(['--flat-playlist', '--dump-single-json', url], { cookiesPath, timeoutMs: 30000 });
+      return parseListPlaylists(out);
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error('YouTube Music returned no playlist data — re-export cookies in Preferences');
+}
+function parseListPlaylists(out) {
+  const data = parseJsonObject(out, 'YouTube Music returned no playlist data — re-export cookies in Preferences');
+  return (Array.isArray(data.entries) ? data.entries : [])
+    .map((e) => {
+      let id = String(e.id || '').replace(/^VL/, '');
+      if (!/^[\w-]{2,64}$/.test(id) && e.url) {
+        try { id = new URL(e.url).searchParams.get('list') || id; } catch {}
+      }
+      return { id, title: e.title || 'Playlist', count: num(e.playlist_count) };
+    })
+    .filter((p) => /^[\w-]{2,64}$/.test(p.id) && !['LM', 'LL', 'WL'].includes(p.id)); // Liked Songs gets its own pinned chip
 }
 
 // Tracks of one playlist ('LM' = the user's Liked Songs; public lists work without cookies).
-async function playlistTracks(id, { cookiesPath, limit = 200 } = {}) {
+async function playlistTracks(id, { cookiesPath, limit = 200, offset = 0 } = {}) {
   if (!/^[\w-]{2,64}$/.test(String(id || ''))) throw new Error('bad playlist id');
-  const out = await runJson(['--flat-playlist', '--dump-single-json', '--playlist-items', `1:${Math.max(1, Math.min(500, limit))}`,
+  const out = await runJson(['--flat-playlist', '--dump-single-json', '--playlist-items', playlistItemsRange(offset, limit),
     `https://music.youtube.com/playlist?list=${id}`], { cookiesPath, timeoutMs: 45000 });
-  let data; try { data = JSON.parse(out); } catch { throw new Error('playlist returned no data'); }
+  return parsePlaylistTracks(out);
+}
+function parsePlaylistTracks(out) {
+  const data = parseJsonObject(out, 'playlist returned no data — re-export cookies in Preferences');
   return {
     title: data.title || 'Playlist',
-    tracks: (data.entries || []).filter((e) => e && e.id && e.id.length === 11)
+    tracks: (Array.isArray(data.entries) ? data.entries : []).filter((e) => e && e.id && e.id.length === 11)
       .map((e) => ({
         id: e.id, title: cleanTitle(e.title) || e.title || 'Unknown',
         artist: e.uploader || e.channel || '', duration: num(e.duration), thumb: thumbFor(e.id),
@@ -143,4 +194,4 @@ async function playlistTracks(id, { cookiesPath, limit = 200 } = {}) {
   };
 }
 
-module.exports = { detectYtdlp, search, resolveStream, listPlaylists, playlistTracks, thumbFor, cleanTitle, _resetDetection, _peekCached };
+module.exports = { detectYtdlp, search, resolveStream, listPlaylists, playlistTracks, thumbFor, cleanTitle, _resetDetection, _peekCached, _ytArgs: ytArgs, _optsNoPlaylist: optsNoPlaylist, _searchUrl: searchUrl, _playlistItemsRange: playlistItemsRange, _parseListPlaylists: parseListPlaylists, _parsePlaylistTracks: parsePlaylistTracks };
