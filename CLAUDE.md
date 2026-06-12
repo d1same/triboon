@@ -23,7 +23,10 @@ Locked decisions (do not re-litigate without asking the owner)
 
 Native rebuild of nzbdav + UsenetStreamer concepts (MIT; reference designs, clean-room code).
 Stack: Node 20, zero runtime npm dependencies in server/ (stdlib only). Keep it that way
-unless the owner approves a dependency. Go port is a Phase-1+ option only if profiling demands it.
+unless the owner approves a dependency. External BINARIES we shell out to are sanctioned and
+not "dependencies": ffmpeg (remux/transcode) and yt-dlp (Music — owner-approved 2026-06-12;
+it carries the YouTube cat-and-mouse so the server stays stdlib). Go port is a Phase-1+ option
+only if profiling demands it.
 Playback policy: source-fit → direct play → remux → transcode, strictly in that order.
 Per-user quality caps are enforced at SOURCE SELECTION first (pick a 1080p release for a
 1080p-capped user), transcoder second.
@@ -60,7 +63,9 @@ server/nntp.js — NNTP client + parallel-connect pool + multi-provider failover
 server/vfs.js — NzbFileStream segment map, read-ahead, readAt, triage. server/rar.js — RAR4+RAR5
 header parse → extent map. server/zip.js — ZIP parse. server/archive.js — container detection,
 volume ordering (.r99→.s00 rollover), archive mounts, verdict tags (🐢/encrypted/unsupported).
-server/index.js — HTTP API + Range streaming + static UI. web/index.html — entire UI.
+server/ytmusic.js — YouTube Music via yt-dlp (search + audio-stream resolve; shells to yt-dlp
+like the rest shells to ffmpeg). server/index.js — HTTP API + Range streaming (incl. the music
+audio proxy) + static UI. web/index.html — entire UI (incl. the persistent music mini-player).
 test/ — mock NNTP server + golden e2e suite (byte-exact streams incl. multi-volume RAR, seek
 fuzzing, Range semantics incl. suffix ranges, triage verdicts, <250ms cold-seek budget).
 test/fixtures/ — real-tool archives (see its README); test/archive-fixtures.js — clean-room

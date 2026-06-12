@@ -15,6 +15,8 @@ const { Pipeline } = require('./pipeline');
 const { TmdbProxy } = require('./tmdb');
 const { Trakt } = require('./trakt');
 const { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnTranscode, spawnLiveRemux, spawnSubtitleExtract, makeThumb, LADDER, audioCopyOk } = require('./transcode');
+const ytmusic = require('./ytmusic');
+const https = require('https');
 
 const PORT = parseInt(process.env.PORT || '7777', 10);
 const WEB_DIR = path.join(__dirname, '..', 'web');
@@ -402,6 +404,7 @@ const H = {
     // CC online rows only show when downloads can actually succeed (key + account login).
     opensubs: !!(settings.get().openSubsKey && settings.get().openSubsUser && settings.get().openSubsPass),
     iptv: !!(settings.get().iptvUrl || (settings.get().iptvMode === 'xtream' && settings.get().xtHost)),
+    music: !!ytmusic.detectYtdlp(), // Music tab shows only when yt-dlp is present
   }),
 
   setup: async (ctx) => {
@@ -509,6 +512,7 @@ const H = {
       indexers: (settings.get().indexers || []).length,
       tmdb: !!settings.get().tmdbKey,
       ffmpeg: detectFfmpeg() ? detectFfmpeg().version : null,
+      ytdlp: ytmusic.detectYtdlp() ? ytmusic.detectYtdlp().version : null,
       // Device + runtime info for the Engine panel.
       device: {
         os: `${os.type()} ${os.release()}`, arch: process.arch,
@@ -1847,7 +1851,55 @@ Object.assign(H, {
       if (!ctx.res.writableEnded) send(ctx.res, 502, { error: 'subtitle extraction failed', detail: String(e.message).slice(0, 200) });
     }
   },
+
+  // ---- Music (YouTube Music via yt-dlp) ----
+  musicSearch: async (ctx) => {
+    if (!ytmusic.detectYtdlp()) return send(ctx.res, 503, { error: 'yt-dlp is not installed on the server' });
+    const q = ctx.url.searchParams.get('q') || '';
+    if (!q.trim()) return send(ctx.res, 200, { results: [] });
+    try {
+      const results = await ytmusic.search(q, { limit: 24, cookiesPath: cookiesPathIfSet() });
+      // Mint a per-track stream token so the client can build playable URLs without a round-trip.
+      send(ctx.res, 200, {
+        results: results.map((r) => ({ ...r, streamUrl: `/api/music/stream/${r.id}?t=${auth.streamToken(ctx.user.id, `music:${r.id}`)}` })),
+      });
+    } catch (e) { send(ctx.res, 502, { error: 'music search failed', detail: String(e.message).slice(0, 160) }); }
+  },
+
+  // Range-proxy the audio: resolve (cached) the googlevideo URL, then pipe its bytes with the
+  // client's Range header. googlevideo URLs are IP-locked to US + expire, so a 403/410 means
+  // "stale" — we re-resolve ONCE and retry rather than failing the scrub.
+  musicStream: async (ctx) => {
+    const id = ctx.m[1];
+    if (!streamScopeOk(ctx, `music:${id}`)) return send(ctx.res, 401, { error: 'token not valid for this track' });
+    if (!ytmusic.detectYtdlp()) return send(ctx.res, 503, { error: 'yt-dlp not available' });
+    const range = ctx.req.headers.range || null;
+    const pipeFrom = async (force) => {
+      let rec;
+      try { rec = await ytmusic.resolveStream(id, { cookiesPath: cookiesPathIfSet(), force }); }
+      catch (e) { if (!ctx.res.headersSent) send(ctx.res, 502, { error: 'could not resolve track', detail: String(e.message).slice(0, 160) }); return; }
+      const u = new URL(rec.url);
+      const upstream = https.get(u, { headers: range ? { range } : {} }, (up) => {
+        // Stale/expired URL → one transparent re-resolve before giving up.
+        if ((up.statusCode === 403 || up.statusCode === 410) && !force) { up.resume(); return pipeFrom(true); }
+        if (up.statusCode >= 400) { up.resume(); if (!ctx.res.headersSent) send(ctx.res, 502, { error: `upstream ${up.statusCode}` }); return; }
+        const h = { 'content-type': rec.mime, 'accept-ranges': 'bytes', 'cache-control': 'private, no-store' };
+        for (const k of ['content-length', 'content-range']) if (up.headers[k]) h[k] = up.headers[k];
+        ctx.res.writeHead(up.statusCode === 206 ? 206 : 200, h);
+        up.pipe(ctx.res);
+      });
+      upstream.on('error', () => { try { ctx.res.destroy(); } catch {} });
+      ctx.req.on('close', () => upstream.destroy());
+    };
+    pipeFrom(false);
+  },
 });
+
+// Optional cookies.txt path (admin uploads it to unlock their own library). null = public mode.
+function cookiesPathIfSet() {
+  const p = path.join(DATA_DIR, 'yt-cookies.txt');
+  try { return fs.statSync(p).size > 0 ? p : null; } catch { return null; }
+}
 
 // One extraction per (mount, track), shared by every requester and IMMUNE to client
 // disconnects. The old per-request spawn was killed when the CC toggle closed the fetch —
@@ -1929,6 +1981,8 @@ const ROUTES = [
   { m: 'POST', re: /^\/api\/trakt\/unlink$/, auth: 'user', h: H.traktUnlink },
   { m: 'POST', re: /^\/api\/trakt\/pull$/, auth: 'user', h: H.traktPull },
   { m: 'POST', re: /^\/api\/trakt\/sync$/, auth: 'user', h: H.traktSync },
+  { m: 'GET', re: /^\/api\/music\/search$/, auth: 'user', h: H.musicSearch },
+  { m: 'GET', re: /^\/api\/music\/stream\/([\w-]{11})$/, auth: 'stream', h: H.musicStream },
   { m: 'GET', re: /^\/api\/mounts$/, auth: 'admin', h: H.mounts },
   { m: 'GET', re: /^\/api\/health\/(\w+)$/, auth: 'user', h: H.health },
   { m: 'POST', re: /^\/api\/mount$/, auth: 'admin', h: H.mount },

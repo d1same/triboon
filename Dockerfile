@@ -1,8 +1,13 @@
 FROM node:20-alpine
 WORKDIR /app
 
-# ffmpeg sidecar (remux/transcode path) + su-exec for the PUID/PGID privilege drop.
-RUN apk add --no-cache ffmpeg su-exec
+# ffmpeg sidecar (remux/transcode path) + su-exec for the PUID/PGID privilege drop +
+# yt-dlp for Music (YouTube Music). yt-dlp is the official zipapp (needs python3); pulling it
+# at build time keeps it current, and a rebuild refreshes it when YouTube changes things.
+RUN apk add --no-cache ffmpeg su-exec python3 \
+ && wget -qO /usr/local/bin/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
+ && chmod +x /usr/local/bin/yt-dlp \
+ && /usr/local/bin/yt-dlp --version
 
 COPY package.json ./
 COPY server ./server

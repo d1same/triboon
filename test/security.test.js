@@ -120,7 +120,7 @@ test('security: deny-by-default — every route declares auth; unknown routes 40
     ['GET', '/api/health/abc'], ['POST', '/api/mount'], ['GET', '/api/settings'],
     ['POST', '/api/settings'], ['POST', '/api/invites'], ['GET', '/api/invites'],
     ['GET', '/api/users'], ['GET', '/api/stream/abc'], ['GET', '/api/remux/abc'],
-    ['POST', '/api/quickconnect/123456/approve'],
+    ['POST', '/api/quickconnect/123456/approve'], ['GET', '/api/music/search?q=x'],
   ];
   for (const [m, p] of probes) {
     assert.strictEqual((await httpJson(srv.port, m, p)).status, 401, `anon ${m} ${p}`);
@@ -1204,6 +1204,32 @@ test('stream tokens are bound to one resource: a leaked URL cannot stream anythi
   assert.strictEqual((await httpRaw(srv.port, `${base1}?t=${t0}`)).status, 401, 'token rejected on another resource');
   // A full session token still works everywhere (it is not a leaked-URL artifact).
   assert.strictEqual((await httpRaw(srv.port, base1, { token: admin })).status, 200);
+});
+
+test('music: auth + token scope binding; honest 503 when yt-dlp is absent', async () => {
+  const ytmusic = require('../server/ytmusic');
+  const present = !!ytmusic.detectYtdlp(); // CI has no yt-dlp; a dev box may.
+
+  // A music stream token is bound to ONE track id — a leaked URL can't fetch another track.
+  const tA = srv.auth.streamToken(srv.auth._users().list[0].id, 'music:AAAAAAAAAAA');
+  assert.strictEqual((await httpRaw(srv.port, `/api/music/stream/BBBBBBBBBBB?t=${tA}`)).status, 401,
+    'music token for track A rejected on track B');
+  // Malformed ids never reach the handler (the route only matches 11-char ids).
+  assert.strictEqual((await httpRaw(srv.port, `/api/music/stream/short?t=${tA}`)).status, 404);
+
+  const s = await httpJson(srv.port, 'GET', '/api/music/search?q=test', null, admin);
+  if (present) {
+    assert.strictEqual(s.status, 200, 'search works when yt-dlp is installed');
+    assert.ok(Array.isArray(s.json.results), 'results array');
+    if (s.json.results[0]) {
+      assert.ok(/^\/api\/music\/stream\//.test(s.json.results[0].streamUrl), 'each result carries a tokenized stream URL');
+      assert.ok(s.json.results[0].thumb, 'thumbnail derived from the track id');
+    }
+  } else {
+    assert.strictEqual(s.status, 503, 'no yt-dlp → honest 503, not a hang');
+  }
+  // The /api/server flag reflects yt-dlp presence so the UI shows/hides the Music tab.
+  assert.strictEqual((await httpJson(srv.port, 'GET', '/api/server')).json.music, present);
 });
 
 test('housekeeping sweep: idle mounts are evicted, active ones survive', async () => {
