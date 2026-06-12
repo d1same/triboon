@@ -826,27 +826,53 @@ const H = {
     if (!lib.path) return send(ctx.res, 400, { error: 'library has no local path — it is a smart view' });
     const st = scanStates.get(lib.id);
     if (st && st.running) return send(ctx.res, 409, { error: 'scan already running' });
-    const state = { running: true, startedAt: Date.now(), progress: 0 };
+    // mode 'scan' (default): pick up new/removed files, REUSE every cached TMDB match —
+    // an unchanged library costs a disk walk and zero network. 'metadata': also re-fetch
+    // TMDB for every item (fresh posters/ratings). Plex's "Scan Files" vs "Refresh Metadata".
+    const b = await readJson(ctx.req).catch(() => ({}));
+    const mode = b && b.mode === 'metadata' ? 'metadata' : 'scan';
+    const state = { running: true, startedAt: Date.now(), progress: 0, mode };
     scanStates.set(lib.id, state);
-    performScan(lib, state)
-      .then((sum) => scanStates.set(lib.id, { running: false, finishedAt: Date.now(), ...sum }))
+    performScan(lib, state, mode)
+      .then((sum) => scanStates.set(lib.id, { running: false, finishedAt: Date.now(), mode, ...sum }))
       .catch((e) => {
         console.error('[library scan]', e.message); // full reason (incl. paths) stays server-side
         scanStates.set(lib.id, { running: false, error: 'scan failed — check the library path exists and is readable' });
       });
-    send(ctx.res, 202, { started: true });
+    send(ctx.res, 202, { started: true, mode });
   },
 
   libraryScanStatus: async (ctx) => send(ctx.res, 200, scanStates.get(ctx.m[1]) || { running: false, never: true }),
 };
 
-async function performScan(lib, state) {
+async function performScan(lib, state, mode = 'scan') {
     const VIDEO = /\.(mkv|mp4|avi|m4v|ts|webm|mov)$/i;
     const AUDIO = /\.(mp3|flac|m4a|ogg|opus|wav)$/i;
     const wantAudio = lib.kind === 'music';
     const MEDIA = wantAudio ? AUDIO : VIDEO;
     const EP = /S(\d{1,2})[ ._-]?E(\d{1,3})/i;
     const items = [];
+    // Previous scan, keyed by file path (movies/episodes) or folder (shows): known items
+    // keep their TMDB match + addedAt, so a rescan only hits TMDB for genuinely NEW files.
+    // mode 'metadata' ignores the match cache (fresh lookups) but still preserves addedAt.
+    const prevItems = (store.read('libitems', {})[lib.id] || { items: [] }).items;
+    const prevBy = new Map(prevItems.map((it) => [it.kind === 'show' ? `show:${it.dir || ''}` : it.file, it]));
+    const reuse = (key) => { const p = prevBy.get(key); return mode !== 'metadata' && p && p.tmdbId ? p : null; };
+    // A failed lookup (TMDB down, no key) must never WIPE a previously good match — a
+    // metadata refresh degrades to "keep what we had" instead of unmatching the library.
+    const keepPrev = (item, key) => {
+      const p = prevBy.get(key);
+      if (!p || !p.tmdbId) return;
+      item.tmdbId = p.tmdbId; item.poster = p.poster; item.backdrop = p.backdrop;
+      item.genres = p.genres || []; item.title = p.title;
+      item.overview = item.overview || p.overview; item.rating = item.rating || p.rating;
+    };
+    const mtimeOf = (f) => { try { return Math.round(fs.statSync(f).mtimeMs); } catch { return Date.now(); } };
+    // addedAt = when this file FIRST appeared (drives "Recently added" + new-episode bumps):
+    // known items keep their original stamp; new files use the file's mtime (≈ download time).
+    const addedAtOf = (key, file) => { const p = prevBy.get(key); return (p && p.addedAt) || mtimeOf(file); };
+    // TMDB genre ids — search results carry genre_ids, direct /movie/<id> fetches genres[].
+    const genresOf = (hit) => hit.genre_ids || (hit.genres || []).map((g) => g.id);
     const parseName = (label) => {
       const clean = label.replace(/\.[a-z0-9]+$/i, '');
       const m = /^(.+?)[. (_-]+\(?((?:19|20)\d{2})\)?/.exec(clean);
@@ -906,16 +932,23 @@ async function performScan(lib, state) {
         title: cleanTitle((nfo && nfo.title) || parsed.title), year: (nfo && nfo.year) || parsed.year,
         overview: (nfo && nfo.plot) || '', rating: (nfo && nfo.rating) || null,
         tmdbId: (nfo && nfo.tmdbId) || null, poster: null, backdrop: null,
+        genres: [], addedAt: addedAtOf(best.file, best.file),
       });
-      if (wantTmdb) lookupJobs.push(async () => {
+      const prev = reuse(best.file);
+      if (prev) {
+        item.tmdbId = prev.tmdbId; item.poster = prev.poster; item.backdrop = prev.backdrop;
+        item.genres = prev.genres || []; item.title = prev.title; // prev title is TMDB-final
+        item.overview = item.overview || prev.overview; item.rating = item.rating || prev.rating;
+      } else if (wantTmdb) lookupJobs.push(async () => {
         // A "tv"-kind library searches TV even for season-less folders (mini-series etc.).
         const kind = lib.kind === 'tv' ? 'tv' : 'movie';
         const hit = await tmdbLookup(kind, { title: parsed.title, year: item.year, tmdbId: item.tmdbId });
         if (hit) {
           item.tmdbId = hit.id; item.poster = hit.poster_path; item.backdrop = hit.backdrop_path;
+          item.genres = genresOf(hit);
           item.title = hit.title || hit.name || item.title; // TMDB display name beats messy NFO/folder titles
           item.overview = item.overview || hit.overview || ''; item.rating = item.rating || hit.vote_average || null;
-        }
+        } else keepPrev(item, best.file);
       });
     };
 
@@ -923,21 +956,29 @@ async function performScan(lib, state) {
       const nfo = readNfo(path.join(dir, 'tvshow.nfo'));
       const parsed = parseName(label);
       const show = pushItem({
-        kind: 'show', file: null, artFile: findArt(dir),
+        kind: 'show', file: null, artFile: findArt(dir), dir, // dir = the reuse key across scans
         title: cleanTitle((nfo && nfo.title) || parsed.title), year: (nfo && nfo.year) || parsed.year,
         overview: (nfo && nfo.plot) || '', rating: (nfo && nfo.rating) || null,
-        tmdbId: (nfo && nfo.tmdbId) || null, poster: null, backdrop: null,
+        tmdbId: (nfo && nfo.tmdbId) || null, poster: null, backdrop: null, genres: [],
       });
-      if (wantTmdb) lookupJobs.push(async () => {
+      const prevShow = reuse(`show:${dir}`);
+      if (prevShow) {
+        show.tmdbId = prevShow.tmdbId; show.poster = prevShow.poster; show.backdrop = prevShow.backdrop;
+        show.genres = prevShow.genres || []; show.title = prevShow.title;
+        show.overview = show.overview || prevShow.overview; show.rating = show.rating || prevShow.rating;
+      } else if (wantTmdb) lookupJobs.push(async () => {
         const hit = await tmdbLookup('tv', { title: parsed.title, year: show.year, tmdbId: show.tmdbId });
-        if (!hit) return;
-        show.tmdbId = hit.id; show.poster = hit.poster_path; show.backdrop = hit.backdrop_path;
-        show.title = hit.name || show.title; // TMDB display name beats messy NFO/folder titles
-        show.overview = show.overview || hit.overview || ''; show.rating = show.rating || hit.vote_average || null;
+        if (hit) {
+          show.tmdbId = hit.id; show.poster = hit.poster_path; show.backdrop = hit.backdrop_path;
+          show.genres = genresOf(hit);
+          show.title = hit.name || show.title; // TMDB display name beats messy NFO/folder titles
+          show.overview = show.overview || hit.overview || ''; show.rating = show.rating || hit.vote_average || null;
+        } else keepPrev(show, `show:${dir}`);
+        if (!show.tmdbId) return;
         // Episodes were created before the lookup resolved — sync their show-derived fields.
         for (const it of items) {
           if (it.kind !== 'episode' || it.showIdx !== show.idx) continue;
-          it.tmdbId = show.tmdbId; it.poster = show.poster; it.backdrop = show.backdrop;
+          it.tmdbId = show.tmdbId; it.poster = show.poster; it.backdrop = show.backdrop; it.genres = show.genres;
           it.title = `${show.title} · S${String(it.s).padStart(2, '0')}E${String(it.e).padStart(2, '0')}`;
         }
       });
@@ -949,9 +990,14 @@ async function performScan(lib, state) {
           title: `${show.title} · S${String(ep.s).padStart(2, '0')}E${String(ep.e).padStart(2, '0')}`,
           epTitle: (epNfo && epNfo.title) || null, s: ep.s, e: ep.e,
           year: show.year, overview: (epNfo && epNfo.plot) || '', rating: null,
-          tmdbId: show.tmdbId, poster: show.poster, backdrop: show.backdrop,
+          tmdbId: show.tmdbId, poster: show.poster, backdrop: show.backdrop, genres: show.genres,
+          addedAt: addedAtOf(ep.file, ep.file),
         });
       }
+      // A show's addedAt rides its NEWEST episode — a fresh S02E05 floats the whole show to
+      // the top of "Recently added" (Plex behavior).
+      const eps = items.filter((it) => it.kind === 'episode' && it.showIdx === show.idx);
+      show.addedAt = eps.length ? Math.max(...eps.map((e2) => e2.addedAt || 0)) : ((prevBy.get(`show:${dir}`) || {}).addedAt || Date.now());
     };
 
     try {
@@ -962,11 +1008,19 @@ async function performScan(lib, state) {
         if (e.isFile() && MEDIA.test(e.name)) {
           const parsed = parseName(e.name);
           const item = pushItem({ kind: 'movie', file: full, artFile: null, title: parsed.title, year: parsed.year,
-            overview: '', rating: null, tmdbId: null, poster: null, backdrop: null });
-          if (wantTmdb) lookupJobs.push(async () => {
+            overview: '', rating: null, tmdbId: null, poster: null, backdrop: null,
+            genres: [], addedAt: addedAtOf(full, full) });
+          const prev = reuse(full);
+          if (prev) {
+            item.tmdbId = prev.tmdbId; item.poster = prev.poster; item.backdrop = prev.backdrop;
+            item.genres = prev.genres || []; item.title = prev.title;
+            item.overview = prev.overview || ''; item.rating = prev.rating || null;
+          } else if (wantTmdb) lookupJobs.push(async () => {
             const hit = await tmdbLookup(lib.kind === 'tv' ? 'tv' : 'movie', parsed);
             if (hit) { item.tmdbId = hit.id; item.poster = hit.poster_path; item.backdrop = hit.backdrop_path;
+              item.genres = genresOf(hit);
               item.overview = hit.overview || ''; item.rating = hit.vote_average || null; item.title = hit.title || hit.name || item.title; }
+            else keepPrev(item, full);
           });
           continue;
         }
@@ -1021,8 +1075,38 @@ async function performScan(lib, state) {
     return { ok: true, count: items.length,
       shows: items.filter((i) => i.kind === 'show').length,
       matched: items.filter((i) => i.tmdbId).length,
+      newItems: items.filter((i) => !prevBy.has(i.kind === 'show' ? `show:${i.dir}` : i.file)).length,
       withLocalArt: items.filter((i) => i.artFile).length };
 }
+
+// Library AUTO-SCAN: new episodes/movies dropped into a watched folder appear by themselves —
+// no manual rescan. Interval polling (not fs.watch: unreliable on SMB/NFS mounts, which is
+// exactly where media lives on Unraid). A no-change pass reuses every TMDB match, so it costs
+// one disk walk and zero network. setInterval is unref'd: it must never keep a dying process
+// (or a test run) alive.
+let lastAutoScanAt = 0;
+function autoScanTick() {
+  const mins = Number(settings.get().libAutoScanMin ?? 15);
+  if (!mins || Date.now() - lastAutoScanAt < mins * 60000) return;
+  lastAutoScanAt = Date.now();
+  for (const lib of store.read('libraries', { list: [] }).list) {
+    if (!lib.path) continue;
+    const st = scanStates.get(lib.id);
+    if (st && st.running) continue;
+    const state = { running: true, startedAt: Date.now(), progress: 0, mode: 'scan', auto: true };
+    scanStates.set(lib.id, state);
+    performScan(lib, state, 'scan')
+      .then((sum) => {
+        scanStates.set(lib.id, { running: false, finishedAt: Date.now(), mode: 'scan', auto: true, ...sum });
+        if (sum.newItems) console.log(`[library] auto-scan "${lib.name}": ${sum.newItems} new item(s), ${sum.count} total`);
+      })
+      .catch((e) => {
+        console.error('[library auto-scan]', e.message);
+        scanStates.set(lib.id, { running: false, error: 'auto-scan failed — check the library path' });
+      });
+  }
+}
+setInterval(autoScanTick, 60000).unref(); // checks the admin-set cadence every minute
 
 // ---------- handlers, continued ----------
 Object.assign(H, {
@@ -1036,13 +1120,15 @@ Object.assign(H, {
     const rec = store.read('libitems', {})[ctx.m[1]];
     if (!rec) return send(ctx.res, 200, { items: [] });
     // Never expose absolute paths — items are addressed by index, with tokenized URLs.
+    // STABLE tokens: identical URLs across requests for ~6h, so the browser's HTTP cache
+    // actually holds the covers instead of re-downloading them on every visit.
     send(ctx.res, 200, {
       scannedAt: rec.scannedAt,
-      items: rec.items.map(({ file, artFile, ...rest }) => ({
+      items: rec.items.map(({ file, artFile, dir, ...rest }) => ({
         ...rest,
-        streamUrl: file ? `/api/local/${ctx.m[1]}/${rest.idx}?t=${auth.streamToken(ctx.user.id, `local:${ctx.m[1]}:${rest.idx}`)}` : null,
-        artUrl: artFile ? `/api/local/${ctx.m[1]}/art/${rest.idx}?t=${auth.streamToken(ctx.user.id, `art:${ctx.m[1]}:${rest.idx}`)}` : null,
-        thumbUrl: file ? `/api/local/${ctx.m[1]}/thumb/${rest.idx}?t=${auth.streamToken(ctx.user.id, `thumb:${ctx.m[1]}:${rest.idx}`)}` : null,
+        streamUrl: file ? `/api/local/${ctx.m[1]}/${rest.idx}?t=${auth.stableStreamToken(ctx.user.id, `local:${ctx.m[1]}:${rest.idx}`)}` : null,
+        artUrl: artFile ? `/api/local/${ctx.m[1]}/art/${rest.idx}?t=${auth.stableStreamToken(ctx.user.id, `art:${ctx.m[1]}:${rest.idx}`)}` : null,
+        thumbUrl: file ? `/api/local/${ctx.m[1]}/thumb/${rest.idx}?t=${auth.stableStreamToken(ctx.user.id, `thumb:${ctx.m[1]}:${rest.idx}`)}` : null,
       })),
     });
   },
@@ -1226,6 +1312,7 @@ Object.assign(H, {
       sizeCapMode: s.sizeCapMode || 'auto',
       sizeCap4kGb: s.sizeCap4kGb || null,
       sizeCap1080Gb: s.sizeCap1080Gb || null,
+      libAutoScanMin: s.libAutoScanMin ?? 15, // 0 = auto-scan off
       effectiveSizeCaps: sizeCaps(), // what's actually applied right now (auto-computed or manual)
       scoringGroupsTrusted: s.scoringGroupsTrusted || [],
       scoringGroupsAvoid: s.scoringGroupsAvoid || [],
@@ -1305,6 +1392,10 @@ Object.assign(H, {
         sizeCap1080Gb: b.sizeCap1080Gb !== undefined
           ? (Number(b.sizeCap1080Gb) > 0 ? Math.min(500, Number(b.sizeCap1080Gb)) : null)
           : (s.sizeCap1080Gb ?? null),
+        // Local-library auto-scan cadence in minutes (0 = off, max daily).
+        libAutoScanMin: b.libAutoScanMin !== undefined
+          ? (Number.isFinite(+b.libAutoScanMin) && +b.libAutoScanMin >= 0 ? Math.min(1440, Math.round(+b.libAutoScanMin)) : 15)
+          : (s.libAutoScanMin ?? 15),
         // Scoring tweaks: group names (matched against the release's -GROUP suffix) and
         // keyword=score custom formats. Empty = pure built-in TRaSH-style defaults.
         scoringGroupsTrusted: b.scoringGroupsTrusted !== undefined

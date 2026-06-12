@@ -988,6 +988,11 @@ body.tv #heroCredits{height:16px;margin-bottom:6px;overflow:hidden}
   text-overflow:ellipsis;white-space:nowrap;min-height:13px}
 .liveCard .lcLive{position:absolute;top:8px;left:8px;font:700 9px "JetBrains Mono";letter-spacing:.1em;
   color:#ff6b6b;border:1px solid rgba(255,107,107,.5);border-radius:6px;padding:2px 6px}
+/* NEW/NEXT EPISODE tag on Continue Watching bump cards (a fresh local episode of a show
+   you finished pulls it back into the row). */
+.card .cardTag{position:absolute;top:8px;left:8px;font:700 9px "JetBrains Mono";letter-spacing:.1em;
+  color:var(--amber,#FFC65C);border:1px solid rgba(255,198,92,.5);border-radius:6px;padding:2px 6px;
+  background:rgba(11,8,18,.55)}
 /* In-player TV guide: a translucent BOTTOM-THIRD bar (real TV feel). ~4 channel rows with
    what's on now + progress + what's next; ↑/↓ only moves the selection — Enter/click tunes. */
 #player .liveOnly{display:none}
@@ -1047,6 +1052,9 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
    the focus cue, and ring+fill together read as noise. */
 .btn.focusable.focus::before,.iconBtn.focusable.focus::before,.cbtn.focusable.focus::before,
 .qToggle button.focus::before{opacity:0!important}
+/* The mic is vertically centered with translateY(-50%); the shared focus rule above swapped
+   in translateZ(0) and the button JUMPED 19px up whenever it took focus. Keep centering. */
+#micBtn:focus{transform:translateY(-50%)}
 
 /* ============ Horizontal rows bleed to the MENU edge ============ */
 /* Scrolled covers used to vanish at the content gutter, leaving a dead strip between the
@@ -1565,6 +1573,24 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
     </div>
     <button class="btn primary" id="szSave">Save size limit</button>
     <div class="hint" id="szStatus"></div>
+  </div>
+
+  <div class="panel"><h2>Local libraries</h2>
+    <p>Library folders are re-checked automatically for new movies and episodes. Known items
+       keep their cached TMDB match, so a no-change pass costs one quick disk walk and zero
+       network. Per-library actions (scan now · refresh all metadata) live on each library page.</p>
+    <div class="field">
+      <select id="libScanMin" style="max-width:280px">
+        <option value="0">Off — scan manually only</option>
+        <option value="5">Check every 5 minutes</option>
+        <option value="15">Check every 15 minutes</option>
+        <option value="60">Check every hour</option>
+        <option value="360">Check every 6 hours</option>
+        <option value="1440">Check once a day</option>
+      </select>
+      <button class="btn primary" id="libScanSave">Save</button>
+    </div>
+    <div class="hint" id="libScanStatus"></div>
   </div>
 
   <div class="panel"><h2>Scoring</h2>
@@ -2094,10 +2120,42 @@ async function genres(type) {
   } catch { return []; }
 }
 function profileQ() { return S.profile ? '?profile=' + S.profile.id : ''; }
+// "New episode" bump: you FINISHED S02E04 and S02E05 now exists in a local library → the
+// show comes back to Continue Watching with a NEW/NEXT EPISODE tag (Plex On Deck). This is
+// how people learn a new episode landed without checking the library.
+function nextEpisodeBumps(cw, cwItems) {
+  const byShow = {};
+  for (const w of cw) {
+    const m = /^tmdb:tv:(\d+):s(\d+)e(\d+)$/.exec(w.key);
+    if (!m || !w.watched) continue;
+    const cur = byShow[m[1]];
+    const s = +m[2], ep = +m[3];
+    if (!cur || s > cur.s || (s === cur.s && ep > cur.e)) byShow[m[1]] = { s, e: ep, w };
+  }
+  const out = [];
+  for (const [id, top] of Object.entries(byShow)) {
+    if (cwItems.some((it) => String(it.key).startsWith(`tmdb:tv:${id}:`))) continue; // already showing
+    const nextKey = [`tmdb:tv:${id}:s${top.s}e${top.e + 1}`, `tmdb:tv:${id}:s${top.s + 1}e1`]
+      .find((k) => (S.localMap || {})[k]);
+    if (!nextKey) continue;
+    const wn = (S.watchMap || {})[nextKey];
+    if (wn && (wn.watched || wn.position > 30)) continue; // seen it / already in progress
+    const loc = S.localMap[nextKey], meta = top.w.meta || {};
+    out.push({
+      key: nextKey, title: String(meta.title || loc.name).replace(/\s*—\s*S\d+E\d+.*$/i, ''),
+      year: meta.year || '', genre: meta.genre || '', rating: meta.rating || '—',
+      overview: meta.overview || '', tmdbId: +id, type: 'tv',
+      backdrop: meta.backdrop || procBackdrop(280, 320, 7), progress: 0,
+      _local: { streamUrl: loc.streamUrl, name: loc.name }, _episode: true,
+      _nextEp: true, _newEp: (loc.addedAt || 0) > (top.w.updatedAt || 0),
+    });
+  }
+  return out.sort((a, b) => ((S.localMap[b.key] || {}).addedAt || 0) - ((S.localMap[a.key] || {}).addedAt || 0));
+}
 async function loadRows() {
   const rows = [];
   try {
-    const cw = await api('/api/watch' + profileQ());
+    const [cw] = await Promise.all([api('/api/watch' + profileQ()), ensureLocalMap().catch(() => null)]);
     S.watchMap = Object.fromEntries(cw.map((w) => [w.key, w]));
     const items = cw.filter((w) => !w.watched && w.position > 30 && !String(w.key).startsWith('live:')).map((w) => ({
       // Continue Watching shows the SHOW title only — the "— S02E01 · Episode Name" tail
@@ -2108,6 +2166,7 @@ async function loadRows() {
       backdrop: w.meta.backdrop || procBackdrop(280, 320, 5), progress: w.duration ? w.position / w.duration : 0,
       resume: w.position,
     }));
+    try { items.unshift(...nextEpisodeBumps(cw, items)); } catch {}
     if (items.length) rows.push({ name: 'Continue watching', items });
   } catch {}
   // Favorited live channels get their own row right under Continue Watching.
@@ -2124,6 +2183,19 @@ async function loadRows() {
       }
     } catch {}
   }
+  // Recently added to the local libraries — newest files first; a show carries its newest
+  // episode's date, so a fresh S02E05 floats the whole show to the front (Plex behavior).
+  try {
+    const added = [];
+    for (const lib of (S.libraries || []).filter((l) => l.path)) {
+      try {
+        const r = await libItems(lib);
+        for (const x of (r.items || [])) if (x.kind !== 'episode' && x.addedAt) added.push(mapLocal(lib, x));
+      } catch {}
+    }
+    added.sort((a, b) => (b._added || 0) - (a._added || 0));
+    if (added.length) rows.push({ name: 'Recently added', poster: true, items: added.slice(0, 16) });
+  } catch {}
   if (S.serverInfo.tmdb) {
     try {
       if ((S.maxLevel ?? 3) === 0) {
@@ -2289,7 +2361,8 @@ function makeCard(it, poster, onFocus) {
   } else {
     c.className = 'card focusable';
     c.style.backgroundImage = `url("${it.backdrop}")`;
-    c.innerHTML = `<div class="label">${esc(it.title)}</div>` + (it.progress ? `<div class="pb" style="width:${it.progress * 100}%"></div>` : '');
+    c.innerHTML = (it._nextEp ? `<span class="cardTag">${it._newEp ? 'NEW EPISODE' : 'NEXT EPISODE'}</span>` : '') +
+      `<div class="label">${esc(it.title)}</div>` + (it.progress ? `<div class="pb" style="width:${it.progress * 100}%"></div>` : '');
     // Continue Watching cards manage themselves: ✓ / ✕ on the thumbnail (Plex-style).
     if (it.resume) {
       c.insertAdjacentHTML('beforeend',
@@ -2301,7 +2374,14 @@ function makeCard(it, poster, onFocus) {
   c.addEventListener('click', () => {
     onFocus && onFocus();
     if (it.trailer) return openTrailer(it.trailer, it);
-    if (it._showOpen !== undefined) return runLocalLibrary(S.currentLib, it._showOpen);
+    if (it._nextEp) return playLocal(it); // CW bump card: press = play that episode off disk
+    if (it._showOpen !== undefined) {
+      // From the home "Recently added" row the library view isn't open yet — enter it first.
+      const lib = it._lib || S.currentLib;
+      S.currentLib = lib;
+      if (S.view !== 'library') switchView('library');
+      return runLocalLibrary(lib, it._showOpen);
+    }
     // TMDB-matched local items go to the full detail page (Play resolves locally there);
     // unmatched MOVIES get an NFO-built detail page; episodes inside a show grid play directly.
     if (it._local && !(it.tmdbId && (it.type === 'movie' || it.type === 'tv'))) {
@@ -2310,7 +2390,7 @@ function makeCard(it, poster, onFocus) {
     if (it._channel !== undefined) return playChannel(it);
     openDetail(it);
   });
-  c.addEventListener('mouseenter', () => onFocus && onFocus());
+  c.addEventListener('mouseenter', () => pointerHover() && onFocus && onFocus());
   return c;
 }
 function renderRowsInto(root, rowsData) {
@@ -3744,6 +3824,7 @@ async function buildTrailerRow(list) {
 async function openBrowse(type) {
   S.browseType = type; S.browseGenre = '';
   $('browseTitle').textContent = type === 'movie' ? 'Movies' : 'TV Shows';
+  setSortOptions('tmdb'); // a local library may have swapped in its own sort options
   const gs = await genres(type);
   $('genreSel').innerHTML = '<option value="">All genres</option>' + gs.map((g) => `<option value="${parseInt(g.id, 10) || 0}">${esc(g.name)}</option>`).join('');
   runBrowse(true);
@@ -3772,7 +3853,11 @@ async function runBrowse(reset) {
   } catch (e) { if (page === 1) $('grid').innerHTML = `<div class="gridMore">Failed: ${esc(e.message)}</div>`; }
   S.browseLoading = false;
 }
-$('genreSel').addEventListener('change', () => { S.browseGenre = $('genreSel').value; if (['movies', 'tv'].includes(S.view)) runBrowse(true); });
+$('genreSel').addEventListener('change', () => {
+  S.browseGenre = $('genreSel').value;
+  if (['movies', 'tv'].includes(S.view)) runBrowse(true);
+  else if (S.view === 'library') runLibrary(true);
+});
 $('sortSel').addEventListener('change', () => {
   if (['movies', 'tv'].includes(S.view)) runBrowse(true);
   else if (S.view === 'library') runLibrary(true);
@@ -3929,21 +4014,48 @@ function libIconSvg(lib) {
   const inner = LIB_ICONS[key] || LIB_ICONS.movie;
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">${inner}</svg>`;
 }
+// Per-library items cache: opening a library re-fetched and re-rendered EVERYTHING on every
+// visit. One fetch per library per 5 minutes now (scans invalidate it), and the boot-time
+// localMap build below warms it — so the first library open is instant. Cover art is handled
+// separately: the server mints STABLE art URLs, so the browser's HTTP cache keeps the images.
+async function libItems(lib, force) {
+  const c = (S.libCache = S.libCache || {})[lib.id];
+  if (!force && c) {
+    if (c.inflight) return c.inflight; // boot: localMap + home row + grid share ONE fetch
+    // c.data check matters: performance.now() starts at 0 on page load, so a bare
+    // "now - at < TTL" treated the in-flight sentinel as a fresh hit and returned undefined.
+    if (c.data && performance.now() - c.at < 300000) return c.data;
+  }
+  const inflight = api(`/api/libraries/${lib.id}/items`);
+  S.libCache[lib.id] = { at: 0, inflight, data: c && c.data };
+  try {
+    const data = await inflight;
+    S.libCache[lib.id] = { at: performance.now(), data };
+    return data;
+  } catch (e) { delete S.libCache[lib.id]; throw e; }
+}
 // Map of "what we already own on disk": tmdb keys → local stream URLs. Lets the regular
 // detail pages (and auto next-episode) play your archive files instead of hitting usenet.
 async function indexLocalLibraries(libs) {
   const map = {};
   for (const lib of (libs || []).filter((l) => l.path)) {
     try {
-      const r = await api(`/api/libraries/${lib.id}/items`);
+      const r = await libItems(lib);
       for (const x of (r.items || [])) {
         if (!x.tmdbId || !x.streamUrl) continue;
         const key = x.kind === 'episode' ? `tmdb:tv:${x.tmdbId}:s${x.s}e${x.e}` : `tmdb:movie:${x.tmdbId}`;
-        map[key] = { streamUrl: x.streamUrl, name: x.title };
+        map[key] = { streamUrl: x.streamUrl, name: x.title, addedAt: x.addedAt || 0 };
       }
     } catch {}
   }
   S.localMap = map;
+  return map;
+}
+// loadRows needs the localMap (new-episode bumps) — await the boot build instead of racing it.
+function ensureLocalMap() {
+  if (S.localMap) return Promise.resolve(S.localMap);
+  if (S._localMapJob) return S._localMapJob;
+  return (S._localMapJob = indexLocalLibraries(S.libraries || []).finally(() => { S._localMapJob = null; }));
 }
 async function loadLibraries() {
   let libs = [];
@@ -3967,7 +4079,11 @@ async function loadLibraries() {
     wrap.appendChild(b);
   });
 }
-function openLibrary(lib) { S.currentLib = lib; switchView('library'); }
+function openLibrary(lib) {
+  S.currentLib = lib;
+  $('genreSel').value = ''; // a Movies/TV genre pick must not silently filter the library
+  switchView('library');
+}
 async function runLibrary(reset) {
   const lib = S.currentLib; if (!lib) return;
   if (reset === undefined) reset = true;
@@ -3999,6 +4115,7 @@ function mapLocal(lib, x, titleOverride) {
   return {
     key: matched && type ? `tmdb:${type}:${x.tmdbId}` : `local:${lib.id}:${x.idx}`,
     title: titleOverride || x.title, year: x.year || '', genre: lib.name,
+    _added: x.addedAt || 0, _genres: x.genres || [], _lib: lib,
     rating: x.rating ? Number(x.rating).toFixed(1) : '—', overview: x.overview || '',
     poster: x.artUrl || (x.poster ? img(x.poster, 'w342') : null) || x.thumbUrl
       || procBackdrop(180 + (x.idx % 14) * 17, 320, (x.idx % 12) + 5),
@@ -4037,12 +4154,46 @@ function openLocalDetail(it) {
   updateDetailPlayLabel({ label: 'Play', target: it });
   $('detail').querySelector('.detailScroll').scrollTop = 0;
 }
+// Local-library sorting (sortSel swaps to these options on local libs; TMDB pages restore).
+const SORTS_TMDB = '<option value="primary_release_date.desc" selected>Newest</option><option value="popularity.desc">Most popular</option><option value="vote_average.desc">Top rated</option><option value="revenue.desc">Highest grossing</option>';
+const SORTS_LOCAL = '<option value="added.desc" selected>Recently added</option><option value="title.asc">A – Z</option><option value="year.desc">Release year</option><option value="rating.desc">Top rated</option>';
+function setSortOptions(mode) {
+  const sel = $('sortSel');
+  if (sel.dataset.mode === mode) return;
+  sel.dataset.mode = mode; sel.innerHTML = mode === 'local' ? SORTS_LOCAL : SORTS_TMDB;
+}
+function localSorter(sort) {
+  if (sort === 'title.asc') return (a, b) => String(a.title).localeCompare(String(b.title));
+  if (sort === 'year.desc') return (a, b) => (+b.year || 0) - (+a.year || 0);
+  if (sort === 'rating.desc') return (a, b) => (+b.rating || 0) - (+a.rating || 0);
+  return (a, b) => (b.addedAt || 0) - (a.addedAt || 0); // default: recently added on top
+}
+// Genre dropdown filled from what the library ACTUALLY contains (ids recorded at scan time).
+async function populateLocalGenres(lib, items) {
+  const have = new Set();
+  items.forEach((x) => (x.genres || []).forEach((id) => have.add(id)));
+  const names = await genres(lib.kind === 'tv' ? 'tv' : 'movie');
+  const cur = $('genreSel').value;
+  $('genreSel').innerHTML = '<option value="">All genres</option>' +
+    names.filter((g) => have.has(g.id)).map((g) => `<option value="${parseInt(g.id, 10) || 0}">${esc(g.name)}</option>`).join('');
+  $('genreSel').value = cur; // survive re-renders (sort change, scan refresh)
+}
+function agoStr(ts) {
+  const m = Math.round((Date.now() - ts) / 60000);
+  if (m < 2) return 'just now';
+  if (m < 60) return `${m} min ago`;
+  if (m < 48 * 60) return `${Math.round(m / 60)}h ago`;
+  return `${Math.round(m / 1440)}d ago`;
+}
 async function runLocalLibrary(lib, showIdx) {
-  const grid = $('grid'); grid.innerHTML = '<div class="gridMore">loading…</div>';
+  const grid = $('grid');
   S.libDone = true; // no pagination for local items
   S.localShow = showIdx;
+  const warm = S.libCache && S.libCache[lib.id] && S.libCache[lib.id].at; // cached → no flash
+  if (!warm) grid.innerHTML = '<div class="gridMore">loading…</div>';
   try {
-    const r = await api(`/api/libraries/${lib.id}/items`);
+    const r = await libItems(lib);
+    if (S.view !== 'library' || !S.currentLib || S.currentLib.id !== lib.id) return; // user moved on
     const isAdmin = S.user.role === 'admin';
     if (!r.items.length) {
       grid.innerHTML = `<div class="gridMore">${isAdmin
@@ -4066,22 +4217,40 @@ async function runLocalLibrary(lib, showIdx) {
           `S${String(x.s).padStart(2, '0')}E${String(x.e).padStart(2, '0')}${x.epTitle ? ` · ${x.epTitle}` : ''}`));
     } else {
       $('browseTitle').textContent = lib.name;
-      items = r.items.filter((x) => x.kind !== 'episode').map((x) => mapLocal(lib, x));
+      setSortOptions('local');
+      populateLocalGenres(lib, r.items); // async fill; the current selection is preserved
+      let top = r.items.filter((x) => x.kind !== 'episode');
+      const g = parseInt($('genreSel').value, 10) || 0;
+      if (g) top = top.filter((x) => (x.genres || []).includes(g));
+      top = top.slice().sort(localSorter($('sortSel').value || 'added.desc'));
+      items = top.map((x) => mapLocal(lib, x));
     }
     renderGrid(items);
     if (isAdmin && showIdx === undefined) {
-      const re = document.createElement('button');
-      re.className = 'ghostMini'; re.style.cssText = 'grid-column:1/-1;justify-self:start';
-      re.textContent = `↻ Rescan (${r.items.length} items)`;
-      re.addEventListener('click', () => scanLibrary(lib));
-      grid.appendChild(re);
+      // Plex-style admin actions: cheap file scan (reuses every TMDB match) vs full
+      // metadata refresh. Auto-scan picks up new files on its own (Settings → cadence).
+      const bar = document.createElement('div');
+      bar.style.cssText = 'grid-column:1/-1;display:flex;gap:10px;align-items:center;flex-wrap:wrap';
+      const mk = (label, mode) => {
+        const b = document.createElement('button');
+        b.className = 'ghostMini focusable'; b.textContent = label;
+        b.addEventListener('click', () => scanLibrary(lib, mode));
+        return b;
+      };
+      bar.appendChild(mk('↻ Scan for new items', 'scan'));
+      bar.appendChild(mk('⟳ Refresh all metadata', 'metadata'));
+      const info = document.createElement('span');
+      info.style.cssText = 'color:var(--muted);font-size:12.5px';
+      info.textContent = `${r.items.length} items${r.scannedAt ? ` · scanned ${agoStr(r.scannedAt)}` : ''}`;
+      bar.appendChild(info);
+      grid.appendChild(bar);
     }
   } catch (e) { grid.innerHTML = `<div class="gridMore">Failed: ${esc(e.message)}</div>`; }
 }
-async function scanLibrary(lib) {
-  toast(`Scanning ${lib.path}…`);
+async function scanLibrary(lib, mode = 'scan') {
+  toast(mode === 'metadata' ? `Refreshing metadata for ${lib.name}…` : `Scanning ${lib.path}…`);
   try {
-    await api(`/api/libraries/${lib.id}/scan`, { method: 'POST', body: {} });
+    await api(`/api/libraries/${lib.id}/scan`, { method: 'POST', body: { mode } });
     // The scan runs server-side in the background — poll until it lands.
     const poll = setInterval(async () => {
       try {
@@ -4089,9 +4258,10 @@ async function scanLibrary(lib) {
         if (st.running) return;
         clearInterval(poll);
         if (st.error) return toast('Scan failed: ' + st.error);
-        toast(`Scan complete — ${st.count} items${st.shows ? ` (${st.shows} shows)` : ''}, ${st.matched} TMDB-matched, ${st.withLocalArt} with local art`);
+        toast(`Scan complete — ${st.count} items${st.newItems ? ` (${st.newItems} new)` : ''}, ${st.matched} TMDB-matched`);
+        delete (S.libCache || {})[lib.id]; S.localMap = null; // fresh items everywhere
         if (S.view === 'library' && S.currentLib && S.currentLib.id === lib.id) runLocalLibrary(lib);
-        indexLocalLibraries(S.libraries); // refresh the local-first play map
+        ensureLocalMap(); // refresh the local-first play map
       } catch { clearInterval(poll); }
     }, 1500);
   } catch (e) { toast('Scan failed: ' + e.message); }
@@ -4334,7 +4504,7 @@ function renderLiveTvBody() {
       renderLiveTvBody();
       if (S.zone === 'grid') focusGrid(names.indexOf(name)); // chips are gridItems 0..n-1
     });
-    chip.addEventListener('mouseenter', () => focusGrid(gi));
+    chip.addEventListener('mouseenter', () => pointerHover() && focusGrid(gi));
     bar.appendChild(chip);
   });
   body.appendChild(bar);
@@ -4437,7 +4607,7 @@ function liveTvGroup(body, title, chans, { open, key, extra = '' } = {}) {
     S.liveOpen.has(key) ? S.liveOpen.delete(key) : S.liveOpen.add(key);
     renderLiveTvBody();
   });
-  head.addEventListener('mouseenter', () => focusGrid(gi));
+  head.addEventListener('mouseenter', () => pointerHover() && focusGrid(gi));
   body.appendChild(head);
   if (!open) return;
   const wrap = document.createElement('div'); wrap.className = 'chGrid';
@@ -4503,7 +4673,7 @@ async function renderGuide(body, pool) {
     row.innerHTML = `<div class="gCh">${logo ? `<img src="${logo}" loading="lazy">` : ''}<span>${esc(ch.name)}</span></div>
       <div class="gTl"><div class="gNow" style="left:${pct(now)}%"></div>${blocks}</div>`;
     row.addEventListener('click', () => playChannel(it));
-    row.addEventListener('mouseenter', () => focusGrid(i));
+    row.addEventListener('mouseenter', () => pointerHover() && focusGrid(i));
     wrap.appendChild(row);
   }
   // Big categories page IN the guide: a D-pad-clickable "show more" row extends the window
@@ -4520,7 +4690,7 @@ async function renderGuide(body, pool) {
       renderLiveTvBody();
       if (S.zone === 'grid') setTimeout(() => focusGrid(gi), 600); // land on the first new row
     });
-    more.addEventListener('mouseenter', () => focusGrid(gi));
+    more.addEventListener('mouseenter', () => pointerHover() && focusGrid(gi));
     wrap.appendChild(more);
   }
   body.appendChild(wrap);
@@ -4548,7 +4718,7 @@ function liveTvCard(ch) {
     if (e.target.classList.contains('chFav')) { toggleFav(ch, e.target); return; }
     playChannel(it);
   });
-  card.addEventListener('mouseenter', () => { focusGrid(i); showNow(ch.idx, card); });
+  card.addEventListener('mouseenter', () => { if (!pointerHover()) return; focusGrid(i); showNow(ch.idx, card); });
   card.addEventListener('focus', () => showNow(ch.idx, card));
   return card;
 }
@@ -5284,6 +5454,12 @@ async function refreshSettings() {
     $('szStatus').textContent = $('szMode').value === 'manual'
       ? `saved ✓ — hiding 4K above ${ec.maxSizeGb4k || '∞'} GB · 1080p & below above ${ec.maxSizeGb1080 || '∞'} GB`
       : 'saved ✓ — no hard limit: smaller releases rank first, big remuxes stay in Sources';
+    const lsm = String(s.libAutoScanMin ?? 15);
+    $('libScanMin').value = lsm;
+    if ($('libScanMin').selectedIndex < 0) $('libScanMin').value = '15'; // custom API value → nearest preset
+    $('libScanStatus').textContent = +lsm
+      ? `saved ✓ — checking library folders every ${+lsm >= 60 ? (+lsm / 60) + 'h' : lsm + ' min'} for new files`
+      : 'saved ✓ — auto-scan off; use the scan buttons on each library page';
     $('scTrusted').value = (s.scoringGroupsTrusted || []).join(', ');
     $('scAvoid').value = (s.scoringGroupsAvoid || []).join(', ');
     $('scKeywords').value = (s.scoringKeywords || []).map((k) => `${k.term} = ${k.score}`).join('\n');
@@ -5403,6 +5579,10 @@ $('ixSave').addEventListener('click', async () => {
 });
 $('szMode').addEventListener('change', () => {
   $('szManual').style.display = $('szMode').value === 'manual' ? '' : 'none';
+});
+$('libScanSave').addEventListener('click', async () => {
+  await api('/api/settings', { method: 'POST', body: { libAutoScanMin: parseInt($('libScanMin').value, 10) || 0 } });
+  toast('Library auto-scan saved'); refreshSettings();
 });
 $('szSave').addEventListener('click', async () => {
   const mode = $('szMode').value;
@@ -5543,7 +5723,10 @@ function switchView(v, push = true, opts = {}) {
   $('discover').classList.toggle('open', onDiscover);
   $('browse').classList.toggle('open', isBrowse);
   $('browse').classList.toggle('searchMode', v === 'search');
-  $('browse').classList.toggle('noFilter', v === 'library' || v === 'watchlist' || v === 'livetv');
+  // LOCAL libraries get the genre+sort bar (recently added / A–Z / year / rating, genres
+  // from their own scan); smart views and watchlist/live keep the clean head.
+  $('browse').classList.toggle('noFilter',
+    (v === 'library' && !(S.currentLib && S.currentLib.path)) || v === 'watchlist' || v === 'livetv');
   // Two-row backdrop window applies to poster pages; Live TV keeps its full-height list.
   // Search is a FULL-PAGE results list (no backdrop band, no row window) — sectioned results
   // need the room, and the backdrop just fought the readability of a long grid.
@@ -5643,6 +5826,15 @@ function focusContent(retried) {
   const v2 = S.rowsView || { hasHero: true };
   return v2.hasHero ? focusHero(0) : focusCard(S.rowIdx, S.colIdx[S.rowIdx] || 0);
 }
+// Pointer modality (desktop browser). Wheel-scrolling slides cards under a parked cursor:
+// each mouseenter grabbed focus and the focus logic SCROLLED BACK to frame that card — the
+// grid "kept jumping up a bit" the whole way down. Two rules fix it without touching TV
+// (which never fires mouse events): (1) hover may steal focus only after a REAL mouse move,
+// never a scroll-induced enter; (2) while the mouse owns input, focus moves never scroll.
+let _mouseAt = 0;
+addEventListener('mousemove', () => { _mouseAt = performance.now(); S.pointer = true; }, { passive: true, capture: true });
+addEventListener('wheel', () => { S.pointer = true; }, { passive: true, capture: true });
+function pointerHover() { return S.pointer && performance.now() - _mouseAt < 150; }
 function applyFocus(el, scroll = true) {
   // Reclaim REAL focus from any lingering form control — a focused <select>/<input> eats
   // every subsequent key natively and the spatial nav goes dead (live TV finding).
@@ -5660,7 +5852,7 @@ function focusCard(ri, ci) {
   leaveRail();
   S.zone = 'rows'; S.rowIdx = ri; S.colIdx[ri] = ci;
   const el = view.root.querySelector(`[data-row="${ri}"][data-col="${ci}"]`);
-  applyFocus(el);
+  applyFocus(el, !S.pointer); // hover highlights; only keys/D-pad may move the viewport
   // TV: deterministic vertical alignment — the focused ROW top-aligns in its 1-row window
   // ('nearest' + CSS snap never actually settled, leaving the row above cut mid-card).
   // offsetTop is relative to the POSITIONED ancestor (the fixed page), not the scroll
@@ -5719,7 +5911,7 @@ function focusGrid(i) {
   if (!paged) {
     // Full-page grids (search/person): plain nearest scrolling — row pitch is irregular
     // there (section headers) and the window is the whole page anyway.
-    applyFocus(el, true);
+    applyFocus(el, !S.pointer);
   } else {
     applyFocus(el, false);
     // WHOLE-ROW paging: 'nearest' scrolling leaves half a row peeking at the top AND
@@ -5730,6 +5922,11 @@ function focusGrid(i) {
     const pitch = els.length > cols ? els[cols].offsetTop - els[0].offsetTop : el.offsetHeight + 20;
     const r = Math.round((el.offsetTop - els[0].offsetTop) / Math.max(1, pitch));
     const visRows = Math.max(1, Math.round(g.clientHeight / Math.max(1, pitch)));
+    if (S.pointer) {
+      // Mouse scroll/hover owns the viewport — never yank it back to the focus window.
+      // Resync the D-pad row so the NEXT key press continues from where the user scrolled.
+      S.gridTopRow = Math.max(0, Math.round(g.scrollTop / Math.max(1, pitch)));
+    } else {
     // The aligned top row lives in STATE — reading live scrollTop mid-smooth-scroll
     // compounds drift press after press.
     let topRow = S.gridTopRow || 0;
@@ -5737,6 +5934,7 @@ function focusGrid(i) {
     else if (r > topRow + visRows - 1) topRow = r - visRows + 1; // moving down
     S.gridTopRow = topRow;
     g.scrollTo({ top: topRow * pitch, behavior: 'smooth' });
+    }
     // D-pad pagination: the infinite-scroll listener fires on SCROLL, but focus-driven
     // row paging barely scrolls — fetch the next page once focus nears the loaded edge,
     // or the walk dead-ends at the bottom of page one.
@@ -5884,6 +6082,7 @@ document.addEventListener('keydown', (e) => {
   // land on a rail item whose rollover then switches pages. A trusted key's timeStamp is its
   // HARDWARE press time; anything older than 350ms by the time we see it is freeze backlog.
   if (e.isTrusted && performance.now() - e.timeStamp > 350) { e.preventDefault(); return; }
+  if (e.isTrusted) S.pointer = false; // keyboard takes over → focus moves may scroll again
   const ae = document.activeElement;
   // Checkboxes/radios don't need native key handling (no caret, no IME) — they stay in OUR
   // spatial nav; only text entry, dropdowns and textareas hand the keys back to the platform.
@@ -6163,9 +6362,9 @@ document.addEventListener('keydown', (e) => {
       const t = gridVert(-1);
       if (t >= 0) return focusGrid(t);
       if (S.view === 'search') return $('micBtn').style.display !== 'none' ? $('micBtn').focus() : $('searchInput').focus();
-      // Movies/TV: the genre filter sits above the grid — give the D-pad a stop there.
-      // (Native <select> handling takes over; Escape backs out, change re-runs the browse.)
-      if (['movies', 'tv'].includes(S.view) && $('genreSel').offsetParent) return $('genreSel').focus();
+      // Movies/TV/local Library: the genre filter sits above the grid — give the D-pad a stop
+      // there. (Native <select> handling takes over; Escape backs out, change re-runs the view.)
+      if (['movies', 'tv', 'library'].includes(S.view) && $('genreSel').offsetParent) return $('genreSel').focus();
       // Live TV: the filter bar sits above the category chips — same stop.
       if (S.view === 'livetv' && $('chSearch')) return $('chSearch').focus();
       return enterRail();

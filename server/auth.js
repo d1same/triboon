@@ -228,6 +228,17 @@ class Auth {
   // a leaked VLC URL streams that one thing, not everything the account can reach.
   streamToken(uid, sub) { return this.signToken({ uid, scope: 'stream', sub: sub || null }, STREAM_TTL_MS); }
 
+  // STABLE stream token: same (uid, sub) → the SAME token for a whole 6h window — the expiry
+  // is quantized to the next window edge instead of "now + ttl". Library art/thumb/file URLs
+  // minted per /items request used to differ on every call, so the browser's HTTP cache never
+  // hit and every visit re-downloaded every cover. Validity stays in the 6–12h band.
+  stableStreamToken(uid, sub) {
+    const exp = (Math.floor(Date.now() / STREAM_TTL_MS) + 1) * STREAM_TTL_MS + STREAM_TTL_MS;
+    const payload = Buffer.from(JSON.stringify({ uid, scope: 'stream', sub: sub || null, exp })).toString('base64url');
+    const sig = crypto.createHmac('sha256', this.secret).update(payload).digest('base64url');
+    return `${payload}.${sig}`;
+  }
+
   // ---- invites ----
   createInvite(createdBy, { policy = {} } = {}) {
     const token = crypto.randomBytes(12).toString('base64url');

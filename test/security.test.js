@@ -479,6 +479,71 @@ test('library scan v2: Jellyfin layout — shows/episodes, NFO info, local poste
   assert.strictEqual(ep1.body.toString(), 'EPISODE-ONE');
 });
 
+test('library scan v3: rescans keep addedAt + matches, count new files; stable cover URLs', async () => {
+  const os3 = require('os');
+  const root = fs.mkdtempSync(path.join(os3.tmpdir(), 'triboon-incr-'));
+  const mdir = path.join(root, 'Reuse Film (2020)');
+  fs.mkdirSync(mdir);
+  fs.writeFileSync(path.join(mdir, 'Reuse Film (2020).mkv'), 'FILM-ONE');
+  const sdir = path.join(root, 'Reuse Show (2019)');
+  fs.mkdirSync(path.join(sdir, 'Season 01'), { recursive: true });
+  fs.writeFileSync(path.join(sdir, 'Season 01', 'Reuse Show - S01E01.mp4'), 'EP-ONE');
+
+  const lib = await httpJson(srv.port, 'POST', '/api/libraries', { name: 'Incr', kind: 'movie', path: root }, admin);
+  const scan1 = await runScan(lib.json.id);
+  assert.strictEqual(scan1.json.count, 3); // movie + show + episode
+  assert.strictEqual(scan1.json.newItems, 3, 'first scan: everything counts as new');
+  const items1 = (await httpJson(srv.port, 'GET', `/api/libraries/${lib.json.id}/items`, null, admin)).json.items;
+  const movie1 = items1.find((i) => i.kind === 'movie');
+  const show1 = items1.find((i) => i.kind === 'show');
+  const ep1 = items1.find((i) => i.kind === 'episode');
+  assert.ok(movie1.addedAt > 0 && ep1.addedAt > 0, 'addedAt recorded for files');
+  assert.strictEqual(show1.addedAt, ep1.addedAt, 'a show rides its newest episode\'s addedAt');
+  assert.ok(Array.isArray(movie1.genres), 'genres recorded as an array');
+  assert.ok(items1.every((i) => i.dir === undefined), 'show folder paths never exposed');
+
+  // Stable cover/stream URLs: the SAME tokens across requests, so the browser HTTP cache
+  // can actually hold the artwork (per-request tokens were a permanent cache-buster).
+  const again = (await httpJson(srv.port, 'GET', `/api/libraries/${lib.json.id}/items`, null, admin)).json.items;
+  assert.strictEqual(again.find((i) => i.kind === 'movie').streamUrl, movie1.streamUrl, 'stream URL identical across requests');
+  assert.strictEqual(again.find((i) => i.kind === 'episode').thumbUrl, ep1.thumbUrl, 'thumb URL identical across requests');
+
+  // TOUCH the movie (mtime changes) + drop a brand-new episode → rescan.
+  await new Promise((r) => setTimeout(r, 50));
+  fs.writeFileSync(path.join(mdir, 'Reuse Film (2020).mkv'), 'FILM-ONE-v2');
+  fs.writeFileSync(path.join(sdir, 'Season 01', 'Reuse Show - S01E02.mp4'), 'EP-TWO');
+  const scan2 = await runScan(lib.json.id);
+  assert.strictEqual(scan2.json.count, 4);
+  assert.strictEqual(scan2.json.newItems, 1, 'rescan counts ONLY the new episode');
+  const items2 = (await httpJson(srv.port, 'GET', `/api/libraries/${lib.json.id}/items`, null, admin)).json.items;
+  const movie2 = items2.find((i) => i.kind === 'movie');
+  const ep2new = items2.find((i) => i.kind === 'episode' && i.e === 2);
+  assert.strictEqual(movie2.addedAt, movie1.addedAt,
+    'addedAt survives rescans even when the file is touched (recently-added must not reshuffle)');
+  assert.ok(ep2new.addedAt > ep1.addedAt, 'the new episode is newer');
+  assert.strictEqual(items2.find((i) => i.kind === 'show').addedAt, ep2new.addedAt,
+    'new episode floats the show to the top of recently-added');
+  assert.strictEqual(movie2.title, movie1.title, 'cached TMDB match reused on rescan');
+
+  // Scan modes: 'metadata' is accepted; bogus modes fall back to the default scan.
+  const md = await httpJson(srv.port, 'POST', `/api/libraries/${lib.json.id}/scan`, { mode: 'metadata' }, admin);
+  assert.strictEqual(md.status, 202);
+  assert.strictEqual(md.json.mode, 'metadata');
+  for (let i = 0; i < 200; i++) { // let it finish so later tests see a quiet scanner
+    const st = await httpJson(srv.port, 'GET', `/api/libraries/${lib.json.id}/scanstatus`, null, admin);
+    if (!st.json.running) break;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+
+  // Auto-scan cadence: saves, clamps, and reads back with a real trace.
+  const set = await httpJson(srv.port, 'POST', '/api/settings', { libAutoScanMin: 60 }, admin);
+  assert.strictEqual(set.status, 200);
+  assert.strictEqual((await httpJson(srv.port, 'GET', '/api/settings', null, admin)).json.libAutoScanMin, 60);
+  await httpJson(srv.port, 'POST', '/api/settings', { libAutoScanMin: 0 }, admin);
+  assert.strictEqual((await httpJson(srv.port, 'GET', '/api/settings', null, admin)).json.libAutoScanMin, 0, '0 = off is a saveable choice');
+  await httpJson(srv.port, 'POST', '/api/settings', { libAutoScanMin: 15 }, admin);
+});
+
 test('iptv: M3U parsed into grouped channels; stream URLs tokenized; admin-set url redacted', async () => {
   const http2 = require('http');
   const m3u = `#EXTM3U

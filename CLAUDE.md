@@ -117,6 +117,9 @@ Hard rules
 
 A phase is "done" only when its tests pass AND the owner has seen a demo.
 Never weaken or delete a failing test to make it pass — fix the code or raise it with the owner.
+Releases ALWAYS bump the version: package.json + android versionCode/versionName move
+together (0.5.x → versionCode++), the tag is vX.Y.Z, and the GitHub release carries the
+freshly built APK named triboon-tv-vX.Y.Z.apk plus what-changed notes.
 Security: deny-by-default routing; every new endpoint must declare auth (Phase 3+) and be
 covered by the route-coverage test. Credentials encrypted at rest.
 This is for legally obtained content; keep the project's disclaimer intact.
