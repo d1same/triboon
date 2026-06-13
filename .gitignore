@@ -2,6 +2,14 @@
 # NZB urls, and signed tokens. NEVER commit.
 data/
 node_modules/
+.env
+.env.*
+!.env.example
+cookies.txt
+*.cookies.txt
+*cookies*.txt
+gitleaks-report*.json
+gitleaks-*.json
 
 # Local demo/debug artifacts: admin tokens, personal NZBs, play payloads, and REAL MEDIA
 # folders used for library-scan testing. Only the credential-free mock server is tracked.
@@ -10,6 +18,7 @@ demo/*
 
 # Local machine settings (approved commands with environment specifics, launch configs).
 .claude/
+AGENTS.md
 
 # Android: machine-local SDK path, build outputs, gradle caches, built APKs, signing keys.
 android/local.properties
@@ -19,6 +28,9 @@ android/app/build/
 *.apk
 *.keystore
 *.jks
+*.pem
+*.key
+*.p12
 
 # Test/debug scratch output (server logs can echo release names and channel lists).
 *.log
