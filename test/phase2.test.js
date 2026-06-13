@@ -239,7 +239,7 @@ test('opensubs: SRT→VTT conversion + search-query parsing', () => {
 });
 
 test('subs: pickSub matches the sub to OUR release cut (sync depends on it)', () => {
-  const { pickSub } = require('../server/opensubs');
+  const { pickSub, rankSubs } = require('../server/opensubs');
   // Wyzie's flat result shape: { id, url, format, display, isHearingImpaired }.
   const data = [
     { id: 1, url: 'http://x/1.srt', format: 'srt', display: 'Show.S01E01.720p.BluRay.x264-GRP' },
@@ -251,6 +251,20 @@ test('subs: pickSub matches the sub to OUR release cut (sync depends on it)', ()
   assert.strictEqual(forWeb.id, 2, 'WEB-DL source picks the WEB-DL sub');
   const forBlu = pickSub(data, 'Show.S01E01.1080p.BluRay.x264-GRP.mkv');
   assert.strictEqual(forBlu.id, 1, 'BluRay source matches the BluRay sub');
+  const lotr = [
+    { id: 10, url: 'http://x/theatrical.srt', format: 'srt', display: 'The.Lord.of.the.Rings.The.Return.of.the.King.2003.Theatrical.1080p.BluRay.x264-GRP' },
+    { id: 11, url: 'http://x/extended.srt', format: 'srt', display: 'The.Lord.of.the.Rings.The.Return.of.the.King.2003.Extended.Edition.1080p.BluRay.x264-GRP' },
+  ];
+  assert.strictEqual(pickSub(lotr, 'The.Lord.of.the.Rings.The.Return.of.the.King.2003.1080p.BluRay.x264-GRP.mkv',
+    { durationSeconds: 15796 }).id, 11, 'very long cuts prefer Extended Edition subtitles');
+  assert.strictEqual(pickSub(lotr, 'The.Lord.of.the.Rings.The.Return.of.the.King.2003.Theatrical.1080p.BluRay.x264-GRP.mkv').id,
+    10, 'explicit theatrical releases prefer theatrical subtitles');
+  const ranked = rankSubs(lotr, 'The.Lord.of.the.Rings.The.Return.of.the.King.2003.1080p.BluRay.x264-GRP.mkv',
+    { durationSeconds: 15796 });
+  assert.strictEqual(ranked[0].id, '11', 'ranked variants expose the same auto-selected extended cut');
+  assert.match(ranked[0].label, /Extended/i, 'variant label calls out the cut');
+  assert.ok(ranked[0].selected, 'the best automatic match is marked for the UI');
+  assert.strictEqual(ranked[1].id, '10', 'alternate cuts remain available instead of disappearing');
   assert.notStrictEqual(pickSub(data, '').id, 3, 'bitmap formats never win');
   assert.ok(pickSub([{ id: 9, format: 'srt' }], '') === undefined, 'url-less results are skipped entirely');
 });

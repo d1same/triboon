@@ -4,14 +4,18 @@ plugins {
 
 android {
     namespace 'app.triboon.tv'
-    compileSdk 34
+    compileSdk {
+        version = release(36) {
+            minorApiLevel = 1
+        }
+    }
 
     defaultConfig {
         applicationId "app.triboon.tv"
-        minSdk 21          // Shield (2015+), onn boxes, Chromecast w/ Google TV all clear this
+        minSdk 23          // Media3 1.10.x requires API 23+; Shield/onn/Chromecast TV targets clear this
         targetSdk 34
-        versionCode 20
-        versionName "0.6.3"
+        versionCode 21
+        versionName "0.6.4"
     }
 
     buildTypes {
@@ -30,5 +34,12 @@ android {
     }
 }
 
-// Framework-only on purpose: the shell is a WebView + key bridge, no androidx needed.
-// Keep it dependency-free until the ExoPlayer phase.
+dependencies {
+    def media3Version = "1.10.1"
+    implementation "androidx.media3:media3-exoplayer:$media3Version"
+    implementation "androidx.media3:media3-exoplayer-hls:$media3Version"
+    implementation "androidx.media3:media3-ui:$media3Version"
+}
+
+// The shell stays WebView-first, but Live TV can now hand off to native Media3 playback on
+// Android TV for TiviMate-style HLS startup/buffering. Browser/desktop/phone keep web video.

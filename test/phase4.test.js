@@ -89,6 +89,127 @@ test('source-fit beats transcoding: a cap-fit direct-play release is chosen at S
   assert.ok(ranked[0].name.includes('1080p'), 'capped user gets a 1080p SOURCE, not a transcoded 4K');
 });
 
+test('Android native player: direct source and native chrome stay out of the web player', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
+  assert.match(ui, /tryNativeVideoPlayer\('direct', it\.resume \|\| 0\)/,
+    'ExoPlayer should get a true direct-play attempt before inheriting Chromium remux choices');
+  assert.match(ui, /kind === 'direct' && p\.remuxUrl && !p\.triedRemux[\s\S]+tryNativeVideoPlayer\('remux', at\)/,
+    'native direct failure should try native remux, not the WebView player');
+  assert.match(ui, /tryNativeVideoPlayer\('transcode', at\)/,
+    'native fallback may use native transcode when remux is unavailable');
+  assert.match(ui, /qualityLabel: nativeQualityLabel\(p, kind\)/,
+    'native player should receive a user-facing resolution label');
+  assert.match(ui, /subtitleLabel: sub\.rel \? nativeSubtitleLabel\(sub\.rel\) : ''/,
+    'native player should receive a user-facing Wyzie subtitle label');
+  assert.match(ui, /if \(saved === 'off'\) return \{ blocked: false, rel: '' \}/,
+    'native subtitles should respect explicit per-title Off choices');
+  assert.match(ui, /S\.nativeLiveReturnView = \(S\.view === 'livetv' \|\| document\.querySelector\('#chBody\.liveGuideShell'\)\) \? 'livetv' : S\.view/,
+    'native Live TV should remember when it was launched from the guide');
+  assert.match(ui, /if \(returnView === 'livetv'\) \{[\s\S]+switchView\('livetv', false\)/,
+    'closing native Live TV should restore the guide instead of stale detail history');
+  assert.match(ui, /window\.__tvNativeLiveGuide = async \(\) => \{[\s\S]+await playChannelWeb\(it\);[\s\S]+renderPlayerGuideTimeline\(\$\(\'pGuide\'\), list\)/,
+    'native Live TV guide should hand off to the existing PiP guide surface');
+  assert.match(ui, /if \(!it\) \{[\s\S]+S\.returnVod = \{ item: S\.playing\.item, resume: currentTime\(\) \};[\s\S]+return togglePlayerGuide\(\);/,
+    'native movie/episode guide button should open the same PiP guide and preserve a Back to movie target');
+  assert.match(ui, /return renderGuideProgressive\(body, pool\)/,
+    'Live TV guide should render the guide shell before waiting on provider guide data');
+  assert.match(ui, /const guideList = selectedList\.slice\(0, LIVE_GUIDE_BATCH\)/,
+    'player guide should use the same small initial batch as the Live TV page');
+  assert.match(ui, /fetchGuideBatch\(guideList\)\.then/,
+    'player guide should hydrate guide data asynchronously after opening');
+  assert.match(ui, /if \(!list\.length && S\.liveChannels && S\.liveChannels\.length && Date\.now\(\) - \(S\._liveAt \|\| 0\) < LIVE_TTL\) \{[\s\S]+S\.liveChannels\.map\(liveItemForPlayerGuide\)\.filter\(Boolean\)/,
+    'player guide should reuse a fresh in-memory Live TV catalog instead of fetching the big catalog again');
+  assert.match(ui, /list = S\.liveList = \(fav\.channels \|\| \[\]\)\.map\(liveItemForPlayerGuide\)\.filter\(Boolean\)/,
+    'player guide catalog fallback should keep channel metadata including favorites');
+  assert.doesNotMatch(ui, /selectedList\.slice\(0, 120\)/,
+    'player guide must not request a large category chunk before opening');
+  assert.doesNotMatch(ui, /return renderGuideProgressive\(body, pool\);[\s\S]+body\.innerHTML = '<div class="gridMore">loading guide/,
+    'the old blocking guide renderer should not remain as unreachable dead code');
+  assert.match(ui, /shell\.className = 'pgGuideShell liveGuideShell'/,
+    'PiP guide should share the Live TV guide shell styling');
+  assert.match(ui, /catPane\.className = 'pgCatPane liveCatPane'/,
+    'PiP guide categories should share the Live TV category pane styling');
+  assert.match(ui, /catList\.className = 'pgCats guideCats'/,
+    'PiP guide category list should share the Live TV category list behavior');
+  assert.match(ui, /main\.className = 'pgGuideMain pgTimeline liveGuidePane guideTimeline'/,
+    'PiP guide timeline should use the same timeline surface as Live TV');
+  assert.match(ui, /row\.className = 'pgRow gRow focusable'/,
+    'PiP guide rows should share Live TV row focus behavior');
+  assert.match(ui, /body\.tv:not\(\.railOpen\) #rail:not\(\.expanded\)/,
+    'Android TV should not let sticky CSS hover keep the rail expanded');
+  assert.match(ui, /if \(!document\.body\.classList\.contains\('tv'\)\) document\.body\.classList\.add\('railOpen'\)/,
+    'desktop hover may expand the rail, but Android TV must rely on explicit D-pad state');
+  assert.match(ui, /function focusContent\(retried\) \{[\s\S]+leaveRail\(\);[\s\S]+clearFocus\(\);/,
+    'moving focus into page content should always collapse any stale rail state first');
+  assert.match(ui, /const keepGuidePip = !!\(\$\(\'pGuide\'\) && \$\(\'pGuide\'\)\.classList\.contains\(\'open\'\)\);[\s\S]+if \(!keepGuidePip && tryNativeLivePlayer\(it\)\) return;/,
+    'channel tuning from the PiP guide should stay in the PiP guide instead of relaunching native fullscreen');
+  assert.doesNotMatch(ui, /Native player failed[^`'"]*using web player|using web playback/,
+    'Android native playback should not advertise or trigger the old web player fallback');
+  assert.doesNotMatch(ui, /__tvNativeVideoSwitchToWeb|__tvNativeLiveSwitchToWeb/,
+    'native Android controls should not keep a switch-to-web-player bridge');
+  assert.doesNotMatch(ui, /nativeVideoSubtitleRel[\s\S]+blocked:\s*true[\s\S]+tryNativeVideoPlayer/,
+    'subtitle preference should not prevent Android native direct play; CC can hand off on demand');
+  assert.match(android, /ImageButton nativeButton\(int iconRes, String label, boolean primary\)/,
+    'native controls should use true image buttons so icons stay centered and unclipped');
+  assert.match(android, /nativeButton\(R\.drawable\.ic_player_pause, "Pause", true\)/,
+    'native player should use drawable icons, not text glyph controls');
+  assert.match(android, /KEY_CACHE_VERSION/,
+    'Android WebView cache should be version-scoped instead of wiped on every launch');
+  assert.match(android, /if \(!BuildConfig\.VERSION_NAME\.equals\(cacheVersion\)\) \{[\s\S]+web\.clearCache\(true\)/,
+    'Android should only flush disk cache after an APK version change');
+  assert.doesNotMatch(android, /web\.clearCache\(true\);\s*web\.setBackgroundColor/,
+    'Android should not unconditionally discard cached art/assets during every app start');
+  assert.match(android, /nativePlayerSubline\.setVisibility\(View\.GONE\)/,
+    'native movie/episode chrome should not show the technical file/source line');
+  assert.match(android, /nativeEndsAt\.setText\("Ends at " \+ fmtNativeClock/,
+    'native movie/episode chrome should show when playback will finish');
+  assert.match(android, /dp\(primary \? 46 : 38\)/,
+    'native player buttons should stay compact enough for TV playback');
+  assert.match(android, /dp\(280\), ViewGroup\.LayoutParams\.WRAP_CONTENT/,
+    'native option sheets should stay compact instead of covering the video');
+  assert.match(android, /nativePlayerBadge\.setText\("live"\.equals\(mode\) \? "LIVE" : nativeQualityLabel\)/,
+    'native video badge should show a friendly resolution label, not direct/remux/transcode internals');
+  assert.match(android, /nativePlayerLayer\.requestFocus\(\);[\s\S]+setNativeSubtitleLift\(false\)/,
+    'native chrome should auto-hide even after a control kept focus');
+  assert.match(android, /nativeIsWyzieTrack\(f\)/,
+    'native CC menu should filter subtitle choices to the Wyzie side-loaded subtitle');
+  assert.match(android, /setLabel\(nativeSubtitleLabel\)/,
+    'native subtitle track should use the same plain Wyzie label style as the web player');
+  assert.doesNotMatch(android, /0xFFFFC65C/,
+    'native player focus should not use the oversized yellow button treatment');
+  assert.match(android, /cc\.setOnClickListener\(v -> showNativeTrackMenu\(C\.TRACK_TYPE_TEXT\)\)/,
+    'native CC button should open a native subtitle menu');
+  assert.match(android, /audio\.setOnClickListener\(v -> showNativeTrackMenu\(C\.TRACK_TYPE_AUDIO\)\)/,
+    'native Audio button should open a native audio menu');
+  assert.match(android, /quality\.setOnClickListener\(v -> showNativeQualityMenu\(\)\)/,
+    'native Quality button should stay inside the native player');
+  assert.match(android, /showNativeChoiceSheet\(trackType == C\.TRACK_TYPE_TEXT \? "Subtitles" : "Audio"/,
+    'native track choices should use Triboon chrome, not a stock Android dialog');
+  assert.match(android, /if \("live"\.equals\(nativeMode\) \|\| d <= 0 \|\| d == C\.TIME_UNSET\)/,
+    'live streams should not expose movie-style seeking behavior');
+  assert.match(android, /if \(nativeSheetOpen\(\)\) hideNativeSheet\(\);[\s\S]+else closeNativePlayback\(true\);/,
+    'Back should close native sheets before leaving playback');
+  assert.match(android, /nativeNextBtn\.setOnClickListener\(v -> playNativeNextEpisode\(\)\)/,
+    'Next episode should ask the app to start the next item, not open the old player controls');
+  assert.match(android, /nativeGuideBtn = nativeButton\(R\.drawable\.ic_player_guide, "TV guide", false\)/,
+    'native Live TV should expose a guide button inside Triboon chrome');
+  assert.match(android, /nativeGuideBtn\.setOnClickListener\(v -> openNativeLiveGuide\(\)\)/,
+    'native guide button should hand off to the shared PiP guide path');
+  assert.match(android, /web\.evaluateJavascript\("window\.__tvNativeLiveGuide && window\.__tvNativeLiveGuide\(\)", null\)/,
+    'native guide handoff should call the web guide surface directly');
+  assert.match(android, /web\.setVisibility\(View\.VISIBLE\);[\s\S]+web\.requestFocus\(\);[\s\S]+web\.evaluateJavascript\("window\.__tvNativeLiveGuide/,
+    'native guide handoff should restore the web surface before opening PiP guide');
+  assert.doesNotMatch(android, /openNativeLiveGuide\(\) \{[\s\S]+if \(!"live"\.equals\(nativeMode\)\) return;/,
+    'native movie/episode playback should be allowed to open the same TV guide');
+  assert.match(android, /window\.__tvNativeVideoProgress && __tvNativeVideoProgress/,
+    'opening the guide from native video should preserve the movie resume point first');
+  assert.match(android, /nativeGuideBtn != null\) nativeGuideBtn\.setVisibility\(View\.VISIBLE\)/,
+    'native guide button should be available for both Live TV and movie/episode playback');
+  assert.doesNotMatch(android, /switchNativeToWeb/,
+    'native Android chrome should not keep old-player escape controls');
+});
+
 test('remux: ffmpeg copies streams from our HTTP stream into fragmented MP4', { skip: !HAS_FFMPEG }, async () => {
   // Serve a tiny valid MP4 over http and prove the remux emits an ftyp/moov MP4 stream.
   const http = require('http');

@@ -52,6 +52,23 @@ const RELEASE = nzbFor(writeRar4Store([{ name: 'Sec.Test.mkv', data: PAYLOAD }],
 let tmdbHits = 0;
 const tmdbMock = http.createServer((req, res) => {
   tmdbHits++;
+  const u = new URL(req.url, 'http://x');
+  if (u.pathname === '/3/tv/424242') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({
+      id: 424242, name: 'Next Up Show', first_air_date: '2026-01-01', overview: 'A show that keeps going.',
+      backdrop_path: '/show-backdrop.jpg', poster_path: '/show-poster.jpg',
+      seasons: [{ season_number: 1, episode_count: 3 }],
+    }));
+  }
+  if (u.pathname === '/3/tv/424242/season/1') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ episodes: [
+      { episode_number: 1, name: 'Pilot', air_date: '2026-01-01', overview: 'Seen.' },
+      { episode_number: 2, name: 'Aired Next', air_date: '2026-01-02', overview: 'Ready.', vote_average: 8.2, still_path: '/ep2.jpg' },
+      { episode_number: 3, name: 'Future Next', air_date: '2099-01-01', overview: 'Not yet.' },
+    ] }));
+  }
   res.writeHead(200, { 'content-type': 'application/json' });
   res.end(JSON.stringify({ path: req.url, results: [{ id: 1, title: 'Mock Movie' }] }));
 });
@@ -116,7 +133,7 @@ test('security: deny-by-default — every route declares auth; unknown routes 40
   const probes = [
     ['GET', '/api/me'], ['GET', '/api/status'], ['GET', '/api/search?q=x'],
     ['POST', '/api/play'], ['POST', '/api/advance/abc'], ['GET', '/api/tmdb/trending/all/week'],
-    ['GET', '/api/watch'], ['POST', '/api/watch'], ['GET', '/api/mounts'],
+    ['GET', '/api/watch'], ['GET', '/api/watch/next'], ['POST', '/api/watch'], ['GET', '/api/mounts'],
     ['GET', '/api/health/abc'], ['POST', '/api/mount'], ['GET', '/api/settings'],
     ['POST', '/api/settings'], ['POST', '/api/invites'], ['GET', '/api/invites'],
     ['GET', '/api/users'], ['GET', '/api/stream/abc'], ['GET', '/api/remux/abc'],
@@ -271,6 +288,24 @@ test('watch state: per-user, per-profile, ordered by recency', async () => {
   const u2 = await httpJson(srv.port, 'POST', '/api/login', { name: 'fam', password: 'fam-pass' });
   const other = await httpJson(srv.port, 'GET', '/api/watch', null, u2.json.token);
   assert.strictEqual(other.json.length, 0);
+});
+
+test('watch next: finished episodes keep the next aired episode in Continue Watching', async () => {
+  await httpJson(srv.port, 'POST', '/api/watch', {
+    key: 'tmdb:tv:424242:s1e1', watched: true, position: 0, duration: 1800,
+    meta: { title: 'Next Up Show — S01E01', type: 'episode', tmdbId: 424242 },
+  }, admin);
+  let next = await httpJson(srv.port, 'GET', '/api/watch/next', null, admin);
+  assert.strictEqual(next.status, 200);
+  assert.ok(next.json.some((x) => x.key === 'tmdb:tv:424242:s1e2' && x._nextEp), 'aired S01E02 appears as next episode');
+  assert.ok(!next.json.some((x) => x.key === 'tmdb:tv:424242:s1e3'), 'future S01E03 is held until it airs');
+
+  await httpJson(srv.port, 'POST', '/api/watch', {
+    key: 'tmdb:tv:424242:s1e2', position: 300, duration: 1800,
+    meta: { title: 'Next Up Show — S01E02', type: 'episode', tmdbId: 424242 },
+  }, admin);
+  next = await httpJson(srv.port, 'GET', '/api/watch/next', null, admin);
+  assert.ok(!next.json.some((x) => x.key.startsWith('tmdb:tv:424242:')), 'an in-progress episode wins over next-up suggestions');
 });
 
 test('e2e: HTTP play pipeline — search, play, stream with token, advance 404 when exhausted', async () => {
@@ -598,6 +633,14 @@ http://upstream.example/sports.ts
   assert.deepStrictEqual(ch.json.channels.map((c) => c.group), ['News', 'Sports']);
   assert.ok(ch.json.channels.every((c) => c.url === undefined), 'upstream URLs never exposed');
   assert.ok(ch.json.channels.every((c) => /^\/api\/iptv\/stream\/\d+\?t=/.test(c.streamUrl)));
+  assert.ok(ch.json.channels.every((c) => /^\/api\/iptv\/native\/\d+\?t=/.test(c.nativeUrl)));
+  assert.deepStrictEqual(ch.json.channels.map((c) => c.nativeMime), ['application/x-mpegURL', 'video/mp2t']);
+  const native = await httpRaw(srv.port, ch.json.channels[0].nativeUrl);
+  assert.strictEqual(native.status, 302, 'native URL redirects Android to the upstream stream');
+  assert.strictEqual(native.headers.location, 'http://upstream.example/news1.m3u8');
+  const wrongTok = /[?&]t=([^&]+)/.exec(ch.json.channels[0].nativeUrl)[1];
+  const wrongNative = await httpRaw(srv.port, ch.json.channels[1].nativeUrl.replace(/[?&]t=[^&]+/, '?t=' + wrongTok));
+  assert.strictEqual(wrongNative.status, 401, 'native stream token is bound to the selected channel');
 
   // Settings response shows only the playlist HOST (urls often embed credentials).
   const s = await httpJson(srv.port, 'GET', '/api/settings', null, admin);
@@ -626,7 +669,10 @@ test('iptv: Xtream API channels + short-EPG now/next + per-user favorites; creds
         { stream_id: 102, name: 'Cinema', stream_icon: '', category_id: '99', epg_channel_id: '' },
       ]));
     } else if (action === 'get_short_epg') {
-      assert.strictEqual(u.searchParams.get('stream_id'), '101');
+      if (u.searchParams.get('stream_id') !== '101') {
+        res.end(JSON.stringify({ epg_listings: [] }));
+        return;
+      }
       epgCalls++;
       res.end(JSON.stringify({ epg_listings: [
         { title: b64('Evening Bulletin'), start_timestamp: nowS - 600, stop_timestamp: nowS + 600 },
@@ -659,6 +705,10 @@ test('iptv: Xtream API channels + short-EPG now/next + per-user favorites; creds
   const guide = await httpJson(srv.port, 'GET', `/api/iptv/guide?chs=${news.idx}`, null, admin);
   assert.strictEqual(guide.json.channels[0].programmes[0].title, 'Evening Bulletin');
   assert.strictEqual(epgCalls, 1, 'timeline guide reuses the cached channel EPG');
+  const cinema = ch.json.channels.find((c) => c.name === 'Cinema');
+  const guideFallback = await httpJson(srv.port, 'GET', `/api/iptv/guide?chs=${cinema.idx}`, null, admin);
+  assert.strictEqual(guideFallback.json.channels[0].programmes[0].title, 'Cinema');
+  assert.strictEqual(guideFallback.json.channels[0].programmes[0].synthetic, true, 'channels with no provider EPG still show a channel listing');
 
   // Favorites: toggle on → reflected per user; off again.
   const on = await httpJson(srv.port, 'POST', '/api/iptv/fav', { id: news.id }, admin);
@@ -941,20 +991,34 @@ test('settings: edit provider/indexer in place — blank secret keeps the saved 
 test('subtitles: Wyzie search→file→VTT served per mount (and 503 without a key)', async () => {
   const http2 = require('http');
   let osPort;
+  let searchCalls = 0;
   const osMock = http2.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
     if (u.pathname === '/search') {
+      searchCalls++;
       // Mirrors the real API: key required as a query param, id = TMDB id.
       if (u.searchParams.get('key') !== 'test-key') { res.writeHead(401); return res.end('{}'); }
       if (u.searchParams.get('id') !== '4242') { res.writeHead(200); return res.end('[]'); }
+      assert.strictEqual(u.searchParams.get('source'), 'all', 'Wyzie searches all enabled sources');
+      assert.strictEqual(u.searchParams.get('format'), 'srt,vtt', 'browser-renderable subtitle formats only');
+      if (searchCalls === 1) { res.writeHead(502); return res.end(JSON.stringify({ message: 'temporary scrape failure' })); }
+      if (u.searchParams.get('language') === 'fr' && u.searchParams.get('refresh') !== 'true') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end('[]');
+      }
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify([
         { id: 1, url: `http://127.0.0.1:${osPort}/file.srt`, format: 'srt', display: 'Sec.2024.WEB-DL', language: 'en' },
+        { id: 2, url: `http://127.0.0.1:${osPort}/extended.srt`, format: 'srt', display: 'Sec.2024.Extended.Edition.WEB-DL', language: 'en' },
       ]));
     }
     if (u.pathname === '/file.srt') {
       res.writeHead(200);
       return res.end('1\r\n00:00:01,000 --> 00:00:02,500\r\nHello usenet\r\n');
+    }
+    if (u.pathname === '/extended.srt') {
+      res.writeHead(200);
+      return res.end('1\r\n00:00:03,000 --> 00:00:04,500\r\nExtended cut line\r\n');
     }
     res.writeHead(404); res.end();
   });
@@ -974,16 +1038,42 @@ test('subtitles: Wyzie search→file→VTT served per mount (and 503 without a k
 
   process.env.WYZIE_BASE = `http://127.0.0.1:${osPort}`;
   await httpJson(srv.port, 'POST', '/api/settings', { openSubsKey: 'test-key' }, admin);
+  assert.strictEqual((await httpJson(srv.port, 'GET', '/api/server')).json.opensubs, true,
+    'Wyzie subtitles are enabled by the key alone');
   // No TMDB id (non-catalog play) → clear 502, not a hang.
   const noId = await httpRaw(srv.port, `/api/ossubs/${play.id}?lang=en&t=${play.streamToken}`);
   assert.strictEqual(noId.status, 502, 'no TMDB id fails with guidance');
   assert.match(noId.body.toString(), /TMDB id/);
   const sub = await httpRaw(srv.port, `/api/ossubs/${play.id}?lang=en&tmdb=4242&t=${play.streamToken}`);
   assert.strictEqual(sub.status, 200, sub.body.toString());
+  assert.strictEqual(searchCalls, 2, 'first transient Wyzie 502 was retried once and recovered');
   const vtt = sub.body.toString('utf8');
   assert.ok(vtt.startsWith('WEBVTT'), 'served as WebVTT');
   assert.match(vtt, /00:00:01\.000 --> 00:00:02\.500/, 'SRT timestamps converted');
   assert.match(vtt, /Hello usenet/);
+  const versions = await httpJson(srv.port, 'GET', `/api/ossubs/${play.id}?lang=en&tmdb=4242&list=1&t=${play.streamToken}`, null, admin);
+  assert.strictEqual(versions.status, 200, JSON.stringify(versions.json));
+  assert.ok((versions.json.variants || []).some((v) => v.id === '2' && /Extended/i.test(v.label)),
+    'subtitle versions expose alternate cuts/releases');
+  const pickedVersion = await httpRaw(srv.port, `/api/ossubs/${play.id}?lang=en&tmdb=4242&variant=2&t=${play.streamToken}`);
+  assert.strictEqual(pickedVersion.status, 200, pickedVersion.body.toString());
+  assert.match(pickedVersion.body.toString('utf8'), /Extended cut line/, 'selected subtitle version downloads its own file');
+  const afterVersions = searchCalls;
+  const cached = await httpRaw(srv.port, `/api/ossubs/${play.id}?lang=en&tmdb=4242&t=${play.streamToken}`);
+  assert.strictEqual(cached.status, 200, cached.body.toString());
+  assert.strictEqual(searchCalls, afterVersions, 'second subtitle request used the per-mount cache');
+  const beforeConcurrent = searchCalls;
+  const [es1, es2] = await Promise.all([
+    httpRaw(srv.port, `/api/ossubs/${play.id}?lang=es&tmdb=4242&t=${play.streamToken}`),
+    httpRaw(srv.port, `/api/ossubs/${play.id}?lang=es&tmdb=4242&t=${play.streamToken}`),
+  ]);
+  assert.strictEqual(es1.status, 200, es1.body.toString());
+  assert.strictEqual(es2.status, 200, es2.body.toString());
+  assert.strictEqual(searchCalls, beforeConcurrent + 1, 'concurrent subtitle requests share one Wyzie lookup');
+  const beforeRefresh = searchCalls;
+  const fr = await httpRaw(srv.port, `/api/ossubs/${play.id}?lang=fr&tmdb=4242&t=${play.streamToken}`);
+  assert.strictEqual(fr.status, 200, fr.body.toString());
+  assert.strictEqual(searchCalls, beforeRefresh + 2, 'empty Wyzie search gets one refresh fallback');
 
   delete process.env.WYZIE_BASE;
   await httpJson(srv.port, 'POST', '/api/settings', { openSubsKey: null }, admin);
@@ -1111,6 +1201,67 @@ http://upstream.example/news2.m3u8
 
   await httpJson(srv.port, 'POST', '/api/settings', { iptvUrl: null, epgUrl: null }, admin);
   up.close();
+});
+
+test('iptv: timeline guide returns a full lazy page and falls back to channel listings', async () => {
+  const http2 = require('http');
+  const lines = ['#EXTM3U'];
+  for (let i = 1; i <= 36; i++) {
+    lines.push(`#EXTINF:-1 group-title="Bulk",Bulk Channel ${i} [1080p]`);
+    lines.push(`http://upstream.example/bulk${i}.m3u8`);
+  }
+  const m3uSrv = http2.createServer((req, res) => { res.writeHead(200); res.end(lines.join('\n')); });
+  await new Promise((r) => m3uSrv.listen(0, '127.0.0.1', r));
+  const m3uUrl = `http://127.0.0.1:${m3uSrv.address().port}/bulk.m3u`;
+  await httpJson(srv.port, 'POST', '/api/settings', { iptvMode: 'm3u', iptvUrl: m3uUrl, epgUrl: null }, admin);
+
+  const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+  const ids = ch.json.channels.slice(0, 36).map((c) => c.idx).join(',');
+  const guide = await httpJson(srv.port, 'GET', `/api/iptv/guide?chs=${ids}`, null, admin);
+  assert.strictEqual(guide.json.channels.length, 36, 'server must not truncate the UI guide batch at 24');
+  assert.strictEqual(guide.json.channels[35].programmes[0].title, 'Bulk Channel 36');
+  assert.strictEqual(guide.json.channels[35].programmes[0].synthetic, true);
+
+  await httpJson(srv.port, 'POST', '/api/settings', { iptvUrl: null, epgUrl: null }, admin);
+  m3uSrv.close();
+});
+
+test('iptv: timeline guide caps Xtream EPG fan-out so big categories stay responsive', async () => {
+  const http2 = require('http');
+  let active = 0, maxActive = 0;
+  const xt = http2.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    const action = u.searchParams.get('action');
+    res.setHeader('content-type', 'application/json');
+    if (action === 'get_live_categories') return res.end(JSON.stringify([{ category_id: '1', category_name: 'Bulk' }]));
+    if (action === 'get_live_streams') {
+      return res.end(JSON.stringify(Array.from({ length: 24 }, (_, i) => ({
+        stream_id: 2000 + i, name: `Bulk ${i + 1}`, category_id: '1',
+      }))));
+    }
+    if (action === 'get_short_epg') {
+      active++; maxActive = Math.max(maxActive, active);
+      return setTimeout(() => {
+        active--;
+        res.end(JSON.stringify({ epg_listings: [] }));
+      }, 25);
+    }
+    res.end('[]');
+  });
+  await new Promise((r) => xt.listen(0, '127.0.0.1', r));
+  const host = `http://127.0.0.1:${xt.address().port}`;
+  await httpJson(srv.port, 'POST', '/api/settings',
+    { iptvMode: 'xtream', xtHost: host, xtUser: 'xtuser', xtPass: 'xtpass', epgUrl: null }, admin);
+
+  const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+  const ids = ch.json.channels.map((c) => c.idx).join(',');
+  const guide = await httpJson(srv.port, 'GET', `/api/iptv/guide?chs=${ids}`, null, admin);
+  assert.strictEqual(guide.json.channels.length, 24);
+  assert.ok(maxActive <= 8, `expected bounded EPG fan-out, saw ${maxActive}`);
+  assert.strictEqual(guide.json.channels[23].programmes[0].title, 'Bulk 24', 'fallback listings still fill the guide');
+
+  await httpJson(srv.port, 'POST', '/api/settings', { iptvMode: 'm3u', xtHost: null, xtUser: null, xtPass: null }, admin);
+  xt.close();
 });
 
 test('profiles: edit/delete require the ACCOUNT password; deletion removes the watch history', async () => {
@@ -1389,7 +1540,10 @@ test('trakt: device link, scrobble forward, watchlist push + import', async () =
       if (req.url === '/sync/watchlist' && req.method === 'GET') return res.end(JSON.stringify([{ movie: { title: 'Pulled Movie', year: 2020, ids: { tmdb: 4242 } } }]));
       if (req.url === '/sync/watched/movies') return res.end(JSON.stringify([{ movie: { title: 'Seen Movie', year: 2019, ids: { tmdb: 777 } } }]));
       if (req.url === '/sync/watched/shows') return res.end(JSON.stringify([{ show: { title: 'Seen Show', year: 2018, ids: { tmdb: 888 } }, seasons: [{ number: 1, episodes: [{ number: 1 }, { number: 2 }] }] }]));
-      if (req.url === '/sync/playback') return res.end(JSON.stringify([{ progress: 41.5, paused_at: '2026-06-10T00:00:00.000Z', movie: { title: 'Half Movie', year: 2021, ids: { tmdb: 999 } } }]));
+      if (req.url === '/sync/playback') return res.end(JSON.stringify([
+        { progress: 41.5, paused_at: '2026-06-10T00:00:00.000Z', movie: { title: 'Half Movie', year: 2021, ids: { tmdb: 999 } } },
+        { progress: 22.2, paused_at: '2026-06-11T00:00:00.000Z', show: { title: 'Half Show', year: 2022, ids: { tmdb: 1234 } }, episode: { season: 2, number: 3 } },
+      ]));
       res.end('{}');
     });
   });
@@ -1421,16 +1575,12 @@ test('trakt: device link, scrobble forward, watchlist push + import', async () =
   const wlPush = calls.find((c) => c.path === '/sync/watchlist' && c.method === 'POST');
   assert.ok(wlPush && wlPush.body.shows && wlPush.body.shows[0].ids.tmdb === 1399, 'watchlist add pushed as a show');
 
-  // Import Trakt watchlist → merged into ours.
-  const pull = await httpJson(srv.port, 'POST', '/api/trakt/pull', {}, admin);
-  assert.strictEqual(pull.json.imported, 1);
-  const mine = await httpJson(srv.port, 'GET', '/api/watchlist', null, admin);
-  assert.ok(mine.json.some((w) => w.key === 'tmdb:movie:4242'), 'pulled movie landed in the local watchlist');
-
-  // SYNC-DOWN ran automatically right after linking: Trakt watched history became local
-  // watch records (check-marks), in-progress playback became a Continue-Watching entry
-  // carrying Trakt's PERCENT (Trakt never stores seconds).
+  // SYNC-DOWN ran automatically right after linking: Trakt watchlist landed locally,
+  // watched history became local watch records (check-marks), in-progress playback became
+  // a Continue-Watching entry carrying Trakt's PERCENT (Trakt never stores seconds).
   await new Promise((r) => setTimeout(r, 300));
+  let mine = await httpJson(srv.port, 'GET', '/api/watchlist', null, admin);
+  assert.ok(mine.json.some((w) => w.key === 'tmdb:movie:4242'), 'pulled movie landed in the local watchlist');
   const watch = (await httpJson(srv.port, 'GET', '/api/watch', null, admin)).json;
   const seenMovie = watch.find((w) => w.key === 'tmdb:movie:777');
   assert.ok(seenMovie && seenMovie.watched, 'Trakt-watched movie imported as watched');
@@ -1439,12 +1589,22 @@ test('trakt: device link, scrobble forward, watchlist push + import', async () =
   const half = watch.find((w) => w.key === 'tmdb:movie:999');
   assert.ok(half && !half.watched && half.traktPct === 41.5, 'in-progress playback imported with the Trakt percent');
   assert.strictEqual(half.meta.title, 'Half Movie');
+  const halfEp = watch.find((w) => w.key === 'tmdb:tv:1234:s2e3');
+  assert.ok(halfEp && !halfEp.watched && halfEp.traktPct === 22.2, 'Trakt in-progress episode imports into Continue Watching');
+  assert.strictEqual(halfEp.meta.title, 'Half Show — S02E03');
 
   // Manual re-sync: idempotent (everything already imported → 0 new) and never downgrades.
   const sync = await httpJson(srv.port, 'POST', '/api/trakt/sync', {}, admin);
   assert.strictEqual(sync.status, 200);
   assert.strictEqual(sync.json.watched, 0, 're-sync imports nothing twice');
+  assert.strictEqual(sync.json.watchlist, 0, 'watchlist import is idempotent');
   assert.strictEqual(sync.json.totalWatched, 3);
+  assert.strictEqual(sync.json.totalWatchlist, 1);
+
+  // Import button remains as a watchlist-only manual fallback and is also idempotent.
+  const pull = await httpJson(srv.port, 'POST', '/api/trakt/pull', {}, admin);
+  assert.strictEqual(pull.json.imported, 0);
+  assert.strictEqual(pull.json.total, 1);
 
   // Explicit ✓ (no playback context) → /sync/history; explicit unwatch → history/remove.
   await httpJson(srv.port, 'POST', '/api/watch', { key: 'tmdb:movie:603', watched: true, position: 0, duration: 0, meta: {} }, admin);
@@ -1461,7 +1621,7 @@ test('trakt: device link, scrobble forward, watchlist push + import', async () =
   assert.strictEqual((await httpJson(srv.port, 'GET', '/api/trakt/status', null, admin)).json.linked, false);
   await httpJson(srv.port, 'POST', '/api/watchlist', { key: 'tmdb:tv:1399', on: false }, admin);
   await httpJson(srv.port, 'POST', '/api/watchlist', { key: 'tmdb:movie:4242', on: false }, admin);
-  for (const k of ['tmdb:movie:777', 'tmdb:tv:888:s1e1', 'tmdb:tv:888:s1e2', 'tmdb:movie:999', 'tmdb:movie:603']) {
+  for (const k of ['tmdb:movie:777', 'tmdb:tv:888:s1e1', 'tmdb:tv:888:s1e2', 'tmdb:movie:999', 'tmdb:tv:1234:s2e3', 'tmdb:movie:603']) {
     await httpJson(srv.port, 'POST', '/api/watch', { key: k, remove: true }, admin);
   }
   delete process.env.TRAKT_BASE;

@@ -130,7 +130,10 @@ const pipeline = new Pipeline({
   },
 });
 const { fetchUrl: fetchUrlExt, searchIndexer } = require('./newznab');
-const { fetchOnlineSub } = require('./opensubs');
+const {
+  fetchOnlineSub, searchOnlineSubs, downloadSubtitle, rankSubs,
+  _isTransientError: isTransientSubError,
+} = require('./opensubs');
 const IPTV_CACHE_TTL_MS = 24 * 3600000;
 const EPG_CACHE_TTL_MS = 24 * 3600000;
 let iptvCache = { key: null, at: 0, channels: [] };
@@ -138,12 +141,31 @@ let epgCache = { key: null, at: 0, byChannel: new Map(), byName: new Map() };
 let xtreamEpgCache = { key: null, byStream: new Map() };
 const idHash = (s) => require('crypto').createHash('sha1').update(String(s)).digest('hex').slice(0, 12);
 
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
 // Channels from either source, normalized: { idx, id (stable), name, logo, group, tvgId, url (secret) }.
 // Xtream channel URL is derived from settings — the DISK cache stores channels WITHOUT it
 // (credentials stay encrypted-at-rest in settings only) and rebuilds it on read.
 function xtUrlFor(s, streamId) {
   const base = String(s.xtHost || '').replace(/\/+$/, '');
   return `${base}/live/${encodeURIComponent(s.xtUser || '')}/${encodeURIComponent(s.xtPass || '')}/${streamId}.m3u8`;
+}
+function iptvNativeMime(url) {
+  const u = String(url || '').toLowerCase();
+  if (/\.m3u8(?:[?#]|$)/.test(u)) return 'application/x-mpegURL';
+  if (/\.(?:ts|mpegts)(?:[?#]|$)/.test(u)) return 'video/mp2t';
+  return '';
 }
 let iptvRefreshing = false;
 function iptvSourceKey(s) {
@@ -321,6 +343,25 @@ function xtreamProgramme(e) {
   const stop = (+e.stop_timestamp || 0) * 1000;
   return title && start && stop ? { title, start, stop } : null;
 }
+function fallbackGuideTitle(ch) {
+  let title = String(ch && ch.name || '').trim();
+  if (!title) return '';
+  title = title
+    .replace(/[✶⋆]+/g, ' ')
+    .replace(/^\([^)]*\)\s*:\s*/i, '')
+    .replace(/^[A-Z]{2}\s*\([^)]*\)\s*:\s*/i, '')
+    .replace(/^ENDED\s*:\s*/i, 'Ended: ')
+    .replace(/\s*:\s+(?:USA|UK|US|BR|TR|GLOBAL|EN)\s*:.*$/i, '')
+    .replace(/\s*\[(?:\d{3,4}p|h26[45]|hevc|uhd|fhd|hd|sd|4k-q|raw|extra)\]\s*/gi, ' ')
+    .replace(/\s*\(\d{4}-\d{2}-\d{2}[^)]*\)\s*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return /[a-z0-9]/i.test(title) ? title : '';
+}
+function fallbackProgramme(ch, from, to) {
+  const title = fallbackGuideTitle(ch);
+  return title ? { title, start: from, stop: to, synthetic: true, source: 'channel' } : null;
+}
 async function xtreamEpgList(ch, { limit = 24 } = {}) {
   const s = settings.get();
   if (s.iptvMode !== 'xtream' || !ch.xtreamId) return [];
@@ -329,9 +370,10 @@ async function xtreamEpgList(ch, { limit = 24 } = {}) {
   const id = String(ch.xtreamId);
   const hit = xtreamEpgCache.byStream.get(id);
   if (hit && Date.now() - hit.at < EPG_CACHE_TTL_MS) return hit.list;
+  if (hit && hit.promise) return hit.promise;
   const base = String(s.xtHost).replace(/\/+$/, '');
   const u = `${base}/player_api.php?username=${encodeURIComponent(s.xtUser || '')}&password=${encodeURIComponent(s.xtPass || '')}&action=get_short_epg&stream_id=${ch.xtreamId}&limit=${Math.max(2, Math.min(48, limit))}`;
-  try {
+  const p = (async () => {
     const r = await fetchUrlExt(u, { timeoutMs: 8000, deadlineMs: 15000, maxBytes: 2 * 1024 * 1024 });
     let raw;
     try { raw = (JSON.parse(r.body.toString('utf8') || '{}').epg_listings) || []; } catch { raw = []; }
@@ -339,7 +381,12 @@ async function xtreamEpgList(ch, { limit = 24 } = {}) {
     xtreamEpgCache.byStream.set(id, { at: Date.now(), list });
     if (xtreamEpgCache.byStream.size > 5000) xtreamEpgCache.byStream.clear();
     return list;
+  })();
+  xtreamEpgCache.byStream.set(id, { at: 0, list: hit ? hit.list : [], promise: p });
+  try {
+    return await p;
   } catch {
+    xtreamEpgCache.byStream.delete(id);
     if (hit) return hit.list;
     return [];
   }
@@ -445,14 +492,76 @@ function mountPayload(vf, uid, extra = {}) {
     ...extra,
   };
 }
+function parseEpisodeKey(key) {
+  const m = /^tmdb:tv:(\d+):s(\d+)e(\d+)$/i.exec(String(key || ''));
+  return m ? { showId: m[1], season: +m[2], episode: +m[3] } : null;
+}
+function aired(date) {
+  return !!date && String(date).slice(0, 10) <= new Date().toISOString().slice(0, 10);
+}
+async function nextWatchEpisodes(uid, profile = 'default') {
+  if (!settings.get().tmdbKey) return [];
+  const all = store.read('watch', {});
+  const prefix = `${uid}:${profile}:`;
+  const byShow = {};
+  const inProgress = new Set();
+  for (const [fullKey, w] of Object.entries(all)) {
+    if (!fullKey.startsWith(prefix)) continue;
+    const key = fullKey.slice(prefix.length);
+    const ep = parseEpisodeKey(key);
+    if (!ep) continue;
+    if (!w.watched && (w.position || 0) > 30) { inProgress.add(ep.showId); continue; }
+    if (!w.watched) continue;
+    const cur = byShow[ep.showId];
+    if (!cur || ep.season > cur.season || (ep.season === cur.season && ep.episode > cur.episode)) byShow[ep.showId] = { ...ep, w };
+  }
+  const out = [];
+  for (const [showId, top] of Object.entries(byShow).slice(0, 20)) {
+    if (inProgress.has(showId)) continue;
+    try {
+      const d = await tmdb.get(`/tv/${showId}`);
+      const seasons = (d.seasons || []).filter((s) => s.season_number > 0 && s.episode_count > 0)
+        .sort((a, b) => a.season_number - b.season_number);
+      for (const s of seasons.filter((x) => x.season_number >= top.season)) {
+        const sd = await tmdb.get(`/tv/${showId}/season/${s.season_number}`);
+        const eps = (sd.episodes || []).filter((ep) => ep && ep.episode_number > 0 &&
+          (s.season_number > top.season || ep.episode_number > top.episode) && aired(ep.air_date))
+          .sort((a, b) => a.episode_number - b.episode_number);
+        const next = eps.find((ep) => {
+          const rec = all[`${prefix}tmdb:tv:${showId}:s${s.season_number}e${ep.episode_number}`];
+          return !(rec && (rec.watched || (rec.position || 0) > 30));
+        });
+        if (!next) continue;
+        const title = String((d.name || (top.w.meta && top.w.meta.title) || '')).replace(/\s*—\s*S\d+E\d+.*$/i, '');
+        out.push({
+          key: `tmdb:tv:${showId}:s${s.season_number}e${next.episode_number}`,
+          title,
+          q: `${title} S${String(s.season_number).padStart(2, '0')}E${String(next.episode_number).padStart(2, '0')}`,
+          year: (d.first_air_date || '').slice(0, 4) || (top.w.meta && top.w.meta.year) || '',
+          genre: 'Episode',
+          rating: next.vote_average ? Number(next.vote_average).toFixed(1) : ((top.w.meta && top.w.meta.rating) || '—'),
+          overview: next.overview || d.overview || (top.w.meta && top.w.meta.overview) || '',
+          backdrop: next.still_path ? `https://image.tmdb.org/t/p/w1280${next.still_path}` :
+            (d.backdrop_path ? `https://image.tmdb.org/t/p/w1280${d.backdrop_path}` : ((top.w.meta && top.w.meta.backdrop) || '')),
+          poster: d.poster_path ? `https://image.tmdb.org/t/p/w342${d.poster_path}` : undefined,
+          tmdbId: +showId, type: 'episode', progress: 0, resume: 0,
+          _nextEp: true, _newEp: new Date(`${next.air_date}T00:00:00Z`).getTime() > (top.w.updatedAt || 0),
+          season: s.season_number, episode: next.episode_number,
+        });
+        break;
+      }
+    } catch { /* one bad show must not break the row */ }
+  }
+  return out;
+}
 
 // ---------- handlers ----------
 const H = {
   server: async (ctx) => send(ctx.res, 200, {
     app: 'triboon', phase: 4, needsSetup: !auth.hasUsers(),
     tmdb: !!settings.get().tmdbKey, ffmpeg: !!detectFfmpeg(),
-    // CC online rows only show when downloads can actually succeed (key + account login).
-    opensubs: !!(settings.get().openSubsKey && settings.get().openSubsUser && settings.get().openSubsPass),
+    // Wyzie only needs the free key; no account login is required.
+    opensubs: !!settings.get().openSubsKey,
     iptv: !!(settings.get().iptvUrl || (settings.get().iptvMode === 'xtream' && settings.get().xtHost)),
     music: !!ytmusic.detectYtdlp(), // Music tab shows only when yt-dlp is present
   }),
@@ -726,7 +835,10 @@ const H = {
         hiddenGroups: (store.read('iptvgroups', {})[ctx.user.id]) || [],
         globalHidden: ctx.user.role === 'admin' ? [...globalHidden] : undefined,
         channels: list.map(({ url: _u, ...c }) => ({
-          ...c, fav: favs.has(c.id), streamUrl: `/api/iptv/stream/${c.idx}?t=${auth.streamToken(ctx.user.id, `iptv:${c.idx}`)}`,
+          ...c, fav: favs.has(c.id),
+          streamUrl: `/api/iptv/stream/${c.idx}?t=${auth.streamToken(ctx.user.id, `iptv:${c.idx}`)}`,
+          nativeUrl: `/api/iptv/native/${c.idx}?t=${auth.streamToken(ctx.user.id, `iptv:${c.idx}`)}`,
+          nativeMime: iptvNativeMime(_u),
         })),
       });
     } catch (e) {
@@ -760,25 +872,30 @@ const H = {
 
   // Programme guide for a SET of channels (the timeline view): ?chs=1,2,3 → each channel's
   // programmes inside a ~5h window. XMLTV answers from the cached schedule; Xtream fans out
-  // get_short_epg in parallel (bounded to 24 channels per request).
+  // get_short_epg in parallel (bounded to one lazy UI page per request).
   iptvGuide: async (ctx) => {
     const idxs = String(ctx.url.searchParams.get('chs') || '')
-      .split(',').map((n) => parseInt(n, 10)).filter((n) => Number.isInteger(n) && n >= 0).slice(0, 24);
+      .split(',').map((n) => parseInt(n, 10)).filter((n) => Number.isInteger(n) && n >= 0).slice(0, 48);
     const chans = idxs.map((i) => iptvCache.channels && iptvCache.channels[i]).filter(Boolean);
     if (!chans.length) return send(ctx.res, 200, { channels: [] });
     const from = Date.now() - 90 * 60000, to = Date.now() + 4 * 3600000;
     const s = settings.get();
     let epg = null;
     if (s.epgUrl) { try { epg = await ensureXmltv(); } catch { epg = null; } }
-    const channels = await Promise.all(chans.map(async (ch) => {
+    const channels = await mapLimit(chans, 8, async (ch) => {
       let progs = [];
-      if (epg && xmltvListFor(epg, ch).length) {
-        progs = xmltvListFor(epg, ch).filter((p) => p.stop > from && p.start < to);
-      } else if (s.iptvMode === 'xtream' && ch.xtreamId) {
+      if (s.iptvMode === 'xtream' && ch.xtreamId) {
         progs = (await xtreamEpgList(ch, { limit: 24 })).filter((p) => p.stop > from && p.start < to);
       }
+      if (!progs.length && epg && xmltvListFor(epg, ch).length) {
+        progs = xmltvListFor(epg, ch).filter((p) => p.stop > from && p.start < to);
+      }
+      if (!progs.length) {
+        const fallback = fallbackProgramme(ch, from, to);
+        if (fallback) progs = [fallback];
+      }
       return { idx: ch.idx, programmes: progs.slice(0, 24) };
-    }));
+    });
     send(ctx.res, 200, { from, to, channels });
   },
 
@@ -793,12 +910,29 @@ const H = {
   },
 
   // Live stream: ffmpeg ingests the channel URL (HLS/TS/whatever) → fMP4 the browser plays.
+  iptvNative: async (ctx) => {
+    if (!streamScopeOk(ctx, `iptv:${ctx.m[1]}`)) return send(ctx.res, 401, { error: 'token not valid for this stream' });
+    const ch = iptvCache.channels && iptvCache.channels[parseInt(ctx.m[1], 10)];
+    if (!ch) return send(ctx.res, 404, { error: 'channel not found - open Live TV first' });
+    ctx.res.writeHead(302, {
+      location: ch.url,
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+    });
+    ctx.res.end();
+  },
+
   iptvStream: async (ctx) => {
     if (!streamScopeOk(ctx, `iptv:${ctx.m[1]}`)) return send(ctx.res, 401, { error: 'token not valid for this stream' });
     const ch = iptvCache.channels && iptvCache.channels[parseInt(ctx.m[1], 10)];
     if (!ch) return send(ctx.res, 404, { error: 'channel not found — open Live TV first' });
     if (!detectFfmpeg()) return send(ctx.res, 503, { error: 'ffmpeg required for Live TV' });
-    ctx.res.writeHead(200, { 'content-type': 'video/mp4', 'cache-control': 'no-store' });
+    ctx.res.writeHead(200, {
+      'content-type': 'video/mp4',
+      'cache-control': 'no-store',
+      'x-accel-buffering': 'no',
+    });
+    if (typeof ctx.res.flushHeaders === 'function') ctx.res.flushHeaders();
     // Attempt 1 uses HLS-friendly demuxer options; if ffmpeg dies before emitting a single
     // byte (non-HLS channel, or an older ffmpeg without those options) retry once plain.
     const attempt = (hlsFriendly, retriesLeft) => {
@@ -821,7 +955,8 @@ const H = {
       });
       ctx.req.on('close', () => ff.kill('SIGKILL'));
     };
-    attempt(true, 1);
+    const likelyHls = /\.m3u8(?:[?#]|$)/i.test(ch.url);
+    attempt(likelyHls, likelyHls ? 1 : 0);
   },
 
   // Watchlist (per user): a saved "want to watch" set, separate from watch progress.
@@ -1219,14 +1354,29 @@ function autoScanTick() {
 }
 setInterval(autoScanTick, 60000).unref(); // checks the admin-set cadence every minute
 
-// ---- Trakt sync-DOWN: the user's watched history + in-progress playback → local state ----
+function importTraktWatchlist(uid, items) {
+  let added = 0;
+  store.update('watchlist', {}, (all) => {
+    for (const it of items) {
+      const k = `${uid}:${it.key}`;
+      if (!all[k]) {
+        all[k] = { meta: { title: it.title, type: it.type, tmdbId: it.tmdbId, year: it.year }, addedAt: nextStamp() };
+        added++;
+      }
+    }
+    return all;
+  });
+  return added;
+}
+
+// ---- Trakt sync-DOWN: watchlist + watched history + in-progress playback → local state ----
 // Writes into the DEFAULT profile (Trakt accounts are per user; profiles are a local idea).
 // Never downgrades: locally-watched stays watched, a real local position beats an imported %.
 // Trakt stores playback progress as a PERCENT — kept as traktPct; the player seeks to it
 // once the real duration is known.
 async function traktSyncDown(uid) {
   if (!trakt.status(uid).linked) { const e = new Error('Trakt is not linked'); e.status = 400; throw e; }
-  const [watched, playback] = await Promise.all([trakt.pullWatched(uid), trakt.pullPlayback(uid)]);
+  const [watched, playback, watchlist] = await Promise.all([trakt.pullWatched(uid), trakt.pullPlayback(uid), trakt.pullWatchlist(uid)]);
   // Artwork for the continue-watching imports (they become visible cards) — best effort.
   const art = {};
   for (let i = 0; i < Math.min(playback.length, 30); i += 6) {
@@ -1260,8 +1410,9 @@ async function traktSyncDown(uid) {
     }
     return all;
   });
+  const nWatchlist = importTraktWatchlist(uid, watchlist);
   store.update('trakt', {}, (all) => { if (all[uid]) all[uid].syncedAt = Date.now(); return all; });
-  return { ok: true, watched: nWatched, playback: nPlayback, totalWatched: watched.length };
+  return { ok: true, watched: nWatched, playback: nPlayback, watchlist: nWatchlist, totalWatched: watched.length, totalWatchlist: watchlist.length };
 }
 // Auto-resync every 6h per linked user — one user per tick keeps the calls gentle.
 function traktSyncTick() {
@@ -1270,7 +1421,7 @@ function traktSyncTick() {
     if (!tok || (tok.syncedAt && Date.now() - tok.syncedAt < 6 * 3600000)) continue;
     store.update('trakt', {}, (all) => { if (all[uid]) all[uid].syncedAt = Date.now(); return all; }); // claim before the async work
     traktSyncDown(uid)
-      .then((r) => { if (r.watched || r.playback) console.log(`[trakt] sync: +${r.watched} watched, +${r.playback} in-progress`); })
+      .then((r) => { if (r.watched || r.playback || r.watchlist) console.log(`[trakt] sync: +${r.watched} watched, +${r.playback} in-progress, +${r.watchlist} watchlist`); })
       .catch((e) => console.error('[trakt sync]', e.message));
     break;
   }
@@ -1384,6 +1535,11 @@ Object.assign(H, {
     send(ctx.res, 200, items);
   },
 
+  watchNext: async (ctx) => {
+    const profile = ctx.url.searchParams.get('profile') || 'default';
+    send(ctx.res, 200, await nextWatchEpisodes(ctx.user.id, profile));
+  },
+
   watchSet: async (ctx) => {
     const b = await readJson(ctx.req);
     if (!b.key) return send(ctx.res, 400, { error: 'key required' });
@@ -1443,14 +1599,7 @@ Object.assign(H, {
   traktPull: async (ctx) => {
     try {
       const items = await trakt.pullWatchlist(ctx.user.id);
-      let added = 0;
-      store.update('watchlist', {}, (all) => {
-        for (const it of items) {
-          const k = `${ctx.user.id}:${it.key}`;
-          if (!all[k]) { all[k] = { meta: { title: it.title, type: it.type, tmdbId: it.tmdbId, year: it.year }, addedAt: nextStamp() }; added++; }
-        }
-        return all;
-      });
+      const added = importTraktWatchlist(ctx.user.id, items);
       send(ctx.res, 200, { ok: true, imported: added, total: items.length });
     } catch (e) { send(ctx.res, 502, { error: 'trakt unreachable' }); }
   },
@@ -1846,11 +1995,8 @@ Object.assign(H, {
       const t = await probeTracks(selfUrl);
       vf._tracks = { available: true, ...t };
       send(ctx.res, 200, vf._tracks);
-      // PREFETCH: the player asks for tracks the moment playback starts — extract the first
-      // text subtitle NOW in the background (the whole interleaved stream must be read, which
-      // took ages when it only began at the user's CC press; cached, so the press is instant).
-      const first = (t.subs || []).find((s) => s.text);
-      if (first) ensureSubtitleVtt(vf, first.rel, ctx.user.id).catch(() => {});
+      // The TV player is Wyzie-only for subtitles. Embedded subtitle extraction can require
+      // scanning the whole media stream, so probing tracks must not quietly kick that off.
     } catch (e) { send(ctx.res, 200, { available: false, audio: [], subs: [], duration: null, error: e.message }); }
   },
 
@@ -1865,16 +2011,73 @@ Object.assign(H, {
     vf._touched = Date.now();
     const lang = String(ctx.url.searchParams.get('lang') || 'en').slice(0, 5).replace(/[^a-z-]/gi, '');
     const tmdbId = String(ctx.url.searchParams.get('tmdb') || '').replace(/\D/g, '');
+    const wantsList = ctx.url.searchParams.get('list') === '1';
+    const variant = String(ctx.url.searchParams.get('variant') || '').replace(/[^a-z0-9_.:-]/gi, '').slice(0, 80);
+    const base = process.env.WYZIE_BASE || undefined;
+    const subOpts = {
+      key, tmdbId, query: vf._q || vf.name, lang, releaseName: vf.name,
+      durationSeconds: vf._tracks && vf._tracks.duration,
+      attempts: 3, retryDelayMs: 900,
+      ...(base ? { base } : {}),
+    };
     vf._osCache = vf._osCache || new Map();
-    if (!vf._osCache.has(lang)) {
+    vf._osInflight = vf._osInflight || new Map();
+    vf._osSearchCache = vf._osSearchCache || new Map();
+    vf._osSearchInflight = vf._osSearchInflight || new Map();
+    const searchKey = `${lang}:${tmdbId}`;
+    const getVariants = async () => {
+      if (!vf._osSearchCache.has(searchKey)) {
+        if (!vf._osSearchInflight.has(searchKey)) {
+          const work = searchOnlineSubs(subOpts)
+            .then((data) => {
+              const variants = rankSubs(data, vf.name, { durationSeconds: vf._tracks && vf._tracks.duration }).slice(0, 12);
+              vf._osSearchCache.set(searchKey, variants);
+              return variants;
+            })
+            .finally(() => vf._osSearchInflight.delete(searchKey));
+          vf._osSearchInflight.set(searchKey, work);
+        }
+        await vf._osSearchInflight.get(searchKey);
+      }
+      return vf._osSearchCache.get(searchKey) || [];
+    };
+    if (wantsList) {
       try {
-        const base = process.env.WYZIE_BASE || undefined;
-        vf._osCache.set(lang, await fetchOnlineSub({
-          key, tmdbId, query: vf._q || vf.name, lang, releaseName: vf.name, ...(base ? { base } : {}),
-        }));
-      } catch (e) { return send(ctx.res, 502, { error: e.message }); }
+        const variants = await getVariants();
+        return send(ctx.res, 200, {
+          lang,
+          selectedId: (variants.find((v) => v.selected) || variants[0] || {}).id || null,
+          variants: variants.map((v) => ({
+            id: v.id, label: v.label, display: v.display, language: v.language,
+            format: v.format, hearingImpaired: v.hearingImpaired, score: v.score, selected: !!v.selected,
+          })),
+        });
+      } catch (e) {
+        const status = isTransientSubError(e) ? 504 : 502;
+        return send(ctx.res, status, { error: e.message || 'online subtitles failed' });
+      }
     }
-    send(ctx.res, 200, vf._osCache.get(lang), { 'content-type': 'text/vtt; charset=utf-8' });
+    const cacheKey = variant ? `${lang}:${tmdbId}:${variant}` : `${lang}:${tmdbId}:auto`;
+    if (!vf._osCache.has(cacheKey)) {
+      if (!vf._osInflight.has(cacheKey)) {
+        const work = (async () => {
+          if (!variant) return fetchOnlineSub(subOpts);
+          const variants = await getVariants();
+          const hit = variants.find((v) => v.id === variant);
+          if (!hit || !hit.raw) throw new Error('that subtitle version is no longer available');
+          return downloadSubtitle(hit.raw, { attempts: 3, retryDelayMs: 900 });
+        })().then((vtt) => {
+          vf._osCache.set(cacheKey, vtt);
+          return vtt;
+        }).finally(() => vf._osInflight.delete(cacheKey));
+        vf._osInflight.set(cacheKey, work);
+      }
+      try { await vf._osInflight.get(cacheKey); } catch (e) {
+        const status = isTransientSubError(e) ? 504 : 502;
+        return send(ctx.res, status, { error: e.message || 'online subtitles failed' });
+      }
+    }
+    send(ctx.res, 200, vf._osCache.get(cacheKey), { 'content-type': 'text/vtt; charset=utf-8' });
   },
 
   // Embedded subtitle track → WebVTT. ffmpeg must read the whole stream (subs are interleaved),
@@ -2099,9 +2302,11 @@ const ROUTES = [
   { m: 'GET', re: /^\/api\/iptv\/epg\/(\d+)$/, auth: 'user', h: H.iptvEpg },
   { m: 'GET', re: /^\/api\/iptv\/guide$/, auth: 'user', h: H.iptvGuide },
   { m: 'POST', re: /^\/api\/iptv\/groups$/, auth: 'user', h: H.iptvGroups },
+  { m: 'GET', re: /^\/api\/iptv\/native\/(\d+)$/, auth: 'stream', h: H.iptvNative },
   { m: 'GET', re: /^\/api\/iptv\/stream\/(\d+)$/, auth: 'stream', h: H.iptvStream },
   { m: 'GET', re: /^\/api\/watchlist$/, auth: 'user', h: H.watchlistList },
   { m: 'POST', re: /^\/api\/watchlist$/, auth: 'user', h: H.watchlistToggle },
+  { m: 'GET', re: /^\/api\/watch\/next$/, auth: 'user', h: H.watchNext },
   { m: 'GET', re: /^\/api\/watch$/, auth: 'user', h: H.watchList },
   { m: 'POST', re: /^\/api\/watch$/, auth: 'user', h: H.watchSet },
   { m: 'GET', re: /^\/api\/trakt\/status$/, auth: 'user', h: H.traktStatus },
