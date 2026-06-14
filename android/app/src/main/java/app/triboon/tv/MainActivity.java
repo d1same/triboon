@@ -24,6 +24,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -137,6 +138,8 @@ public class MainActivity extends Activity {
     private boolean nativeUserSeeking;
     private boolean nativeGuideMode;
     private int nativeGuideEpoch;
+    private long nativeLiveUnhealthySinceMs;
+    private long nativeLiveLastRecoveryMs;
     private final Handler nativeProgress = new Handler(Looper.getMainLooper());
     private final Runnable nativeSubtitleTick = new Runnable() {
         @Override public void run() {
@@ -875,6 +878,8 @@ public class MainActivity extends Activity {
             nativeFallbackUrl = fallbackUrl;
             nativeFallbackMime = fallbackMime;
             nativeTriedFallback = false;
+            nativeLiveUnhealthySinceMs = 0L;
+            nativeLiveLastRecoveryMs = 0L;
             nativeHasNext = hasNext;
             nativeHasQualityChoices = hasQualityChoices;
             nativeSubtitleShift = (float) j.optDouble("subtitleShift", nativeShiftFromUrl(subtitleUrl));
@@ -932,6 +937,8 @@ public class MainActivity extends Activity {
                         closeNativePlayback(false);
                         web.evaluateJavascript("window.__tvNativeVideoClosed && __tvNativeVideoClosed("
                                 + pos + "," + dur + ",true)", null);
+                    } else if (state == Player.STATE_ENDED && "live".equals(nativeMode)) {
+                        recoverNativeLivePlayback("ended");
                     }
                 }
 
@@ -941,6 +948,7 @@ public class MainActivity extends Activity {
 
                 @Override public void onIsPlayingChanged(boolean isPlaying) {
                     updateNativeChrome();
+                    if ("live".equals(nativeMode) && isPlaying) nativeLiveUnhealthySinceMs = 0L;
                     scheduleNativeChromeHide();
                 }
             });
@@ -1382,11 +1390,25 @@ public class MainActivity extends Activity {
         nativeUrl = nativeFallbackUrl;
         nativeMime = nativeFallbackMime == null ? "" : nativeFallbackMime;
         nativeQualityLabel = "LIVE";
-        nativePlayerBadge.setText("LIVE");
+        nativeLiveUnhealthySinceMs = 0L;
+        nativeLiveLastRecoveryMs = SystemClock.elapsedRealtime();
+        if (nativePlayerBadge != null) nativePlayerBadge.setText("LIVE");
         nativePlayer.setMediaItem(buildNativeMediaItem());
         nativePlayer.prepare();
         nativePlayer.play();
         return true;
+    }
+
+    private void recoverNativeLivePlayback(String reason) {
+        if (!"live".equals(nativeMode) || nativePlayer == null || nativeUrl == null || nativeUrl.isEmpty()) return;
+        long now = SystemClock.elapsedRealtime();
+        if (now - nativeLiveLastRecoveryMs < 10000L) return;
+        if (tryNativeLiveFallback()) return;
+        nativeLiveLastRecoveryMs = now;
+        nativeLiveUnhealthySinceMs = 0L;
+        nativePlayer.setMediaItem(buildNativeMediaItem());
+        nativePlayer.prepare();
+        nativePlayer.play();
     }
 
     private float nativeShiftFromUrl(String url) {
@@ -2031,6 +2053,7 @@ public class MainActivity extends Activity {
             @Override public void run() {
                 if (!nativePlayerOpen()) return;
                 updateNativeChrome();
+                updateNativeLiveWatchdog();
                 if ("video".equals(nativeMode)) {
                     web.evaluateJavascript("window.__tvNativeVideoProgress && __tvNativeVideoProgress("
                             + nativePosSeconds() + "," + nativeDurSeconds() + ")", null);
@@ -2038,6 +2061,25 @@ public class MainActivity extends Activity {
                 nativeProgress.postDelayed(this, 1000);
             }
         });
+    }
+
+    private void updateNativeLiveWatchdog() {
+        if (!"live".equals(nativeMode) || nativePlayer == null) return;
+        int state = nativePlayer.getPlaybackState();
+        boolean unhealthy = state == Player.STATE_BUFFERING || state == Player.STATE_ENDED
+                || (nativePlayer.getPlayWhenReady() && !nativePlayer.isPlaying());
+        if (!unhealthy) {
+            nativeLiveUnhealthySinceMs = 0L;
+            return;
+        }
+        long now = SystemClock.elapsedRealtime();
+        if (nativeLiveUnhealthySinceMs <= 0L) {
+            nativeLiveUnhealthySinceMs = now;
+            return;
+        }
+        if (now - nativeLiveUnhealthySinceMs >= 12000L) {
+            recoverNativeLivePlayback(state == Player.STATE_BUFFERING ? "buffering" : "stalled");
+        }
     }
 
     private void releaseNativePlayer(boolean notifyClosed) {
@@ -2067,6 +2109,8 @@ public class MainActivity extends Activity {
         nativeFallbackUrl = "";
         nativeFallbackMime = "";
         nativeTriedFallback = false;
+        nativeLiveUnhealthySinceMs = 0L;
+        nativeLiveLastRecoveryMs = 0L;
         nativeHasNext = false;
         nativeHasQualityChoices = false;
         nativeSubtitleUrl = "";

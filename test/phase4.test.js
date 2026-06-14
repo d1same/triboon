@@ -223,6 +223,7 @@ test('music playback stops when leaving the Music section', () => {
 
 test('Android native player: direct source and native chrome stay out of the web player', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
   const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
   const guideIcon = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'drawable', 'ic_player_guide.xml'), 'utf8');
   const audioIcon = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'drawable', 'ic_player_audio.xml'), 'utf8');
@@ -682,6 +683,16 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Live TV should retry the Exo remux fallback before reporting a player error');
   assert.match(android, /private boolean tryNativeLiveFallback\(\) \{[\s\S]+nativeUrl = nativeFallbackUrl;[\s\S]+nativeMime = nativeFallbackMime[\s\S]+nativePlayer\.setMediaItem\(buildNativeMediaItem\(\)\);[\s\S]+nativePlayer\.prepare\(\);[\s\S]+nativePlayer\.play\(\);/,
     'native Live TV fallback should stay inside ExoPlayer instead of opening web playback');
+  assert.match(android, /private void updateNativeLiveWatchdog\(\) \{[\s\S]+state == Player\.STATE_BUFFERING[\s\S]+nativePlayer\.getPlayWhenReady\(\) && !nativePlayer\.isPlaying\(\)[\s\S]+now - nativeLiveUnhealthySinceMs >= 12000L[\s\S]+recoverNativeLivePlayback/,
+    'native Live TV should recover when ExoPlayer stalls in buffering or not-playing state');
+  assert.match(android, /state == Player\.STATE_ENDED && "live"\.equals\(nativeMode\)[\s\S]+recoverNativeLivePlayback\("ended"\)/,
+    'native Live TV should restart instead of staying frozen when a live stream ends quietly');
+  assert.match(android, /private void recoverNativeLivePlayback\(String reason\) \{[\s\S]+if \(tryNativeLiveFallback\(\)\) return;[\s\S]+nativePlayer\.setMediaItem\(buildNativeMediaItem\(\)\);[\s\S]+nativePlayer\.prepare\(\);[\s\S]+nativePlayer\.play\(\);/,
+    'native Live TV recovery should stay inside ExoPlayer and restart the active native stream');
+  assert.match(server, /LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS = 15000[\s\S]+LIVE_REMUX_IDLE_TIMEOUT_MS = 15000/,
+    'Live TV remux fallback should have bounded startup and idle stall timers');
+  assert.match(server, /armIdle\(LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS\);[\s\S]+ff\.stdout\.on\('data'[\s\S]+armIdle\(LIVE_REMUX_IDLE_TIMEOUT_MS\);[\s\S]+ff\.kill\('SIGKILL'\)/,
+    'server Live TV remux should fail fast when ffmpeg stops producing bytes');
   assert.match(android, /if \(nativeSheetOpen\(\)\) hideNativeSheet\(\);[\s\S]+else closeNativePlayback\(true\);/,
     'Back should close native sheets before leaving playback');
   assert.match(android, /boolean waitForLiveClose = notifyClosed && "live"\.equals\(nativeMode\);[\s\S]+web\.postDelayed\(this::showWebAfterNativePlayback, 80\);/,

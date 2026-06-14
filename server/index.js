@@ -139,6 +139,8 @@ const EPG_CACHE_TTL_MS = 24 * 3600000;
 const EPG_CACHE_STALE_MS = 7 * 24 * 3600000;
 const IPTV_WARM_DELAY_MS = 1500;
 const IPTV_WARM_XTREAM_GUIDE_MAX = 96;
+const LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS = 15000;
+const LIVE_REMUX_IDLE_TIMEOUT_MS = 15000;
 let iptvCache = { key: null, at: 0, channels: [] };
 let epgCache = { key: null, at: 0, byChannel: new Map(), byName: new Map() };
 let xtreamEpgCache = { key: null, byStream: new Map() };
@@ -1159,11 +1161,26 @@ const H = {
       try { ff = spawnLiveRemux(ch.url, { hlsFriendly }); }
       catch (e) { console.error('[iptv]', e.message); try { ctx.res.destroy(); } catch {} return; }
       let wrote = false, err = '';
-      ff.stdout.once('data', () => { wrote = true; });
+      let idleTimer = null;
+      const clearIdle = () => { if (idleTimer) clearTimeout(idleTimer); idleTimer = null; };
+      const armIdle = (ms) => {
+        clearIdle();
+        idleTimer = setTimeout(() => {
+          console.error(`[iptv] "${ch.name}" remux stalled without output for ${Math.round(ms / 1000)}s`);
+          try { ff.kill('SIGKILL'); } catch {}
+        }, ms);
+        idleTimer.unref();
+      };
+      armIdle(LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS);
+      ff.stdout.on('data', () => {
+        wrote = true;
+        armIdle(LIVE_REMUX_IDLE_TIMEOUT_MS);
+      });
       ff.stdout.pipe(ctx.res, { end: false });
       ff.stderr.on('data', (d) => { err += d; });
-      ff.on('error', (e) => { console.error('[iptv spawn]', e.message); try { ctx.res.destroy(); } catch {} });
+      ff.on('error', (e) => { clearIdle(); console.error('[iptv spawn]', e.message); try { ctx.res.destroy(); } catch {} });
       ff.on('close', (codeNum) => {
+        clearIdle();
         if (codeNum && !wrote && retriesLeft > 0 && !ctx.res.destroyed) {
           console.error(`[iptv] "${ch.name}" attempt failed (${err.slice(0, 120).trim()}) — retrying plain`);
           return attempt(false, retriesLeft - 1);
@@ -1172,7 +1189,7 @@ const H = {
         if (codeNum && err) console.error(`[iptv] "${ch.name}" exit ${codeNum}:`, err.slice(0, 300));
         try { ctx.res.end(); } catch {}
       });
-      ctx.req.on('close', () => ff.kill('SIGKILL'));
+      ctx.req.on('close', () => { clearIdle(); ff.kill('SIGKILL'); });
     };
     const likelyHls = /\.m3u8(?:[?#]|$)/i.test(ch.url);
     attempt(likelyHls, likelyHls ? 1 : 0);
