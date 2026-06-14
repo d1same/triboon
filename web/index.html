@@ -3177,13 +3177,14 @@ function renderRows() {
   if (firstWithItems >= 0) focusCard(firstWithItems, 0);
 }
 let prefetchTimer = null;
-function prefetchSources(it) {
+function prefetchSources(it, delay = 700) {
+  if (!it || it.type === 'live' || it._local) return;
   // The Stremio trick: search/triage warms server-side while the user reads the title,
   // so pressing Play skips the indexer fan-out entirely (~1s perceived start).
   clearTimeout(prefetchTimer);
   prefetchTimer = setTimeout(() => {
     api('/api/search?' + sourceSearchQuery(it)).catch(() => {});
-  }, 700);
+  }, delay);
 }
 // "Directed by … · Starring …" under the focused title — the detail page's voice on every
 // page. Debounced TMDB fetch (the server proxy caches, so settled focus costs one hit).
@@ -3883,7 +3884,11 @@ function syncDetailButtons(it) {
 }
 
 let detailPlayTarget = null;
-function updateDetailPlayLabel({ label, target }) { detailPlayTarget = target; $('dPlayLabel').textContent = label; }
+function updateDetailPlayLabel({ label, target }) {
+  detailPlayTarget = target;
+  $('dPlayLabel').textContent = label;
+  prefetchSources(target, 0);
+}
 // Availability: a title you OWN plays locally (no Sources drawer needed); a title with ZERO
 // usenet results shows an honest "Unavailable" instead of a Play button that would fail.
 async function checkAvailability(it) {

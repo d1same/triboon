@@ -157,6 +157,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     '4K selection should be exact so fallback stays in the 4K source class');
   assert.match(ui, /function sourceSearchQuery\(it\) \{[\s\S]+maxResolutionRank[\s\S]+preferResolutionRank/,
     'Sources, availability, and prefetch should ask search with the same quality policy as Play');
+  assert.match(ui, /function prefetchSources\(it, delay = 700\) \{[\s\S]+setTimeout\(\(\) => \{[\s\S]+api\('\/api\/search\?' \+ sourceSearchQuery\(it\)\)[\s\S]+\}, delay\);/,
+    'source warmup should be reusable for hover prefetch and immediate Play-target prefetch');
+  assert.match(ui, /function updateDetailPlayLabel\(\{ label, target \}\) \{[\s\S]+detailPlayTarget = target;[\s\S]+prefetchSources\(target, 0\);[\s\S]+\}/,
+    'movie/show details should warm the exact current Play target immediately, including TV episodes');
   assert.match(ui, /pickKey: picked && picked\.pickKey/,
     'manual source playback should send the opaque server pick key, not only a release name');
   assert.match(ui, /play\(it, \{ name: c\.name, pickKey: c\.pickKey, resolutionRank: rk\(c\) \}\)/,

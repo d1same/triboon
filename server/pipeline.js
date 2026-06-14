@@ -126,8 +126,34 @@ class Pipeline {
     this.usage = { onSearch: () => {}, canGrab: () => true, onGrab: () => {}, ...usage };
     this.sessions = new Map();    // id -> PlaySession
     this.searchCache = new Map(); // queryKey -> { at, results, errors } (prefetch-on-browse → instant play)
+    this.searchInflight = new Map(); // queryKey -> Promise(hit), so Play can join an active prefetch
     this.nzbCache = new Map();    // nzbUrl -> xml (small LRU; replays remount instantly)
     this.mountByUrl = new Map();  // nzbUrl -> mount id (live mounts are reused — replay ≈ instant)
+  }
+
+  async _fetchSearchHit(ixs, params, wanted, timeoutMs) {
+    ixs.forEach((ix) => this.usage.onSearch(ix.name)); // a real fan-out costs one API hit per indexer
+    let { results, errors } = await fanout(ixs, params, { timeoutMs });
+    // TITLE VERIFICATION — indexers return loosely-related releases; a release only
+    // qualifies if its name actually contains the wanted title (and episode/year).
+    // Without this, "wrong movie plays" — the #1 trust-killer.
+    results = results.filter((r) => releaseMatches(r.name, wanted));
+    // Fallback: long branded titles ("Brand Name Subtitle SxxEyy") often index under the
+    // shorter brand — retry once with a trimmed QUERY, but verify hits against the FULL
+    // original title so the shorter search can never surface a different film.
+    if (!results.length) {
+      const words = params.q.split(' ');
+      const tail = words.filter((w) => /^(S\d{2}E\d{2}|s\d{2}e\d{2}|(19|20)\d{2})$/.test(w));
+      const head = words.filter((w) => !tail.includes(w));
+      if (head.length > 3) {
+        const simpler = [...head.slice(0, 3), ...tail].join(' ');
+        ixs.forEach((ix) => this.usage.onSearch(ix.name));
+        const retry = await fanout(ixs, { ...params, q: simpler }, { timeoutMs });
+        const verified = retry.results.filter((r) => releaseMatches(r.name, wanted));
+        if (verified.length) { results = verified; errors = retry.errors; }
+      }
+    }
+    return { at: Date.now(), results, errors };
   }
 
   // Search + rank only (powers the Sources drawer). Applies cached verdict adjustments.
@@ -143,30 +169,18 @@ class Pipeline {
     const key = JSON.stringify([params.q, params.imdbid, params.tvdbid, params.season, params.ep]);
     let hit = this.searchCache.get(key);
     if (!hit || Date.now() - hit.at > 60000) {
-      ixs.forEach((ix) => this.usage.onSearch(ix.name)); // a real fan-out costs one API hit per indexer
-      let { results, errors } = await fanout(ixs, params, { timeoutMs });
-      // TITLE VERIFICATION — indexers return loosely-related releases; a release only
-      // qualifies if its name actually contains the wanted title (and episode/year).
-      // Without this, "wrong movie plays" — the #1 trust-killer.
-      results = results.filter((r) => releaseMatches(r.name, wanted));
-      // Fallback: long branded titles ("Brand Name Subtitle SxxEyy") often index under the
-      // shorter brand — retry once with a trimmed QUERY, but verify hits against the FULL
-      // original title so the shorter search can never surface a different film.
-      if (!results.length) {
-        const words = params.q.split(' ');
-        const tail = words.filter((w) => /^(S\d{2}E\d{2}|s\d{2}e\d{2}|(19|20)\d{2})$/.test(w));
-        const head = words.filter((w) => !tail.includes(w));
-        if (head.length > 3) {
-          const simpler = [...head.slice(0, 3), ...tail].join(' ');
-          ixs.forEach((ix) => this.usage.onSearch(ix.name));
-          const retry = await fanout(ixs, { ...params, q: simpler }, { timeoutMs });
-          const verified = retry.results.filter((r) => releaseMatches(r.name, wanted));
-          if (verified.length) { results = verified; errors = retry.errors; }
-        }
+      let pending = this.searchInflight.get(key);
+      if (!pending) {
+        pending = this._fetchSearchHit(ixs, params, wanted, timeoutMs)
+          .then((fresh) => {
+            this.searchCache.set(key, fresh);
+            if (this.searchCache.size > 50) this.searchCache.delete(this.searchCache.keys().next().value);
+            return fresh;
+          })
+          .finally(() => this.searchInflight.delete(key));
+        this.searchInflight.set(key, pending);
       }
-      hit = { at: Date.now(), results, errors };
-      this.searchCache.set(key, hit);
-      if (this.searchCache.size > 50) this.searchCache.delete(this.searchCache.keys().next().value);
+      hit = await pending;
     }
     const { results, errors } = hit;
     // Deep prefetch: warm the TOP candidate's NZB in the background while the user is still

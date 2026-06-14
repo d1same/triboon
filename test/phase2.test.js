@@ -377,6 +377,47 @@ function nzbFor(volumes, partSize, prefix) {
   return { nzb: `<?xml version="1.0"?><nzb>${fileXml}</nzb>`, articles };
 }
 
+test('pipeline: detail warmup and immediate Play share one indexer fan-out', async () => {
+  const payload = seededPayload(90 * 1024, 0xfa5);
+  const good = nzbFor(writeRar4Store([{ name: 'Movie.mkv', data: payload }], { base: 'warm' }), 30000, 'warm');
+  const articles = new Map([...good.articles]);
+  const mock = createMockNntp({ articles });
+  const nntpPort = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 4);
+  let indexerFanouts = 0;
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (u.pathname === '/api') {
+      indexerFanouts++;
+      const port = server.address().port;
+      return setTimeout(() => {
+        res.writeHead(200, { 'content-type': 'application/rss+xml' });
+        res.end(rssFor([{ name: 'Movie.2024.1080p.WEB-DL.H.264-NTb', url: `http://127.0.0.1:${port}/nzb/0`, size: 5e9 }]));
+      }, 80);
+    }
+    if (u.pathname === '/nzb/0') { res.writeHead(200); return res.end(good.nzb); }
+    res.writeHead(404); res.end();
+  });
+  const ixPort = await new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const pipeline = new Pipeline({
+    pool: () => pool, verdicts: new VerdictCache(store), mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+
+  const [search, play] = await Promise.all([
+    pipeline.search({ q: 'Movie 2024' }),
+    pipeline.play({ q: 'Movie 2024' }),
+  ]);
+
+  assert.strictEqual(indexerFanouts, 1, 'a quick Play should join the active detail-page warmup search');
+  assert.strictEqual(search.candidates[0].name, 'Movie.2024.1080p.WEB-DL.H.264-NTb');
+  assert.strictEqual(play.candidate.name, 'Movie.2024.1080p.WEB-DL.H.264-NTb');
+
+  pool.close(); await mock.close(); server.close(); store.close();
+});
+
 test('archive: obfuscated .7z.001 split volumes are detected as unsupported, never streamed as flat', async () => {
   const { mountNzb } = require('../server/archive');
   // Real-world failure: an obfuscated post named 9fZq….7z.001 fell through volume detection,
