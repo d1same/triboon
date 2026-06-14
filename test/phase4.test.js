@@ -10,12 +10,72 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const http = require('http');
+const zlib = require('zlib');
 const { spawnSync } = require('child_process');
 const { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnTranscode, spawnSubtitleExtract } = require('../server/transcode');
 
 const HAS_FFMPEG = !!detectFfmpeg();
 const HAS_FFPROBE = !!detectFfprobe();
 const HAS_ENCODER = !!detectEncoder();
+
+function pngHasTransparentPixels(file) {
+  const png = fs.readFileSync(file);
+  assert.strictEqual(png.toString('ascii', 1, 4), 'PNG', `${file} must be a PNG`);
+  let offset = 8;
+  let width = 0;
+  let height = 0;
+  let bitDepth = 0;
+  let colorType = 0;
+  const idat = [];
+  while (offset < png.length) {
+    const length = png.readUInt32BE(offset);
+    const type = png.toString('ascii', offset + 4, offset + 8);
+    const dataStart = offset + 8;
+    if (type === 'IHDR') {
+      width = png.readUInt32BE(dataStart);
+      height = png.readUInt32BE(dataStart + 4);
+      bitDepth = png[dataStart + 8];
+      colorType = png[dataStart + 9];
+    } else if (type === 'IDAT') {
+      idat.push(png.subarray(dataStart, dataStart + length));
+    } else if (type === 'IEND') {
+      break;
+    }
+    offset = dataStart + length + 4;
+  }
+  assert.strictEqual(bitDepth, 8, `${file} must use 8-bit PNG channels`);
+  assert.ok(colorType === 6 || colorType === 4, `${file} must include an alpha channel`);
+  const channels = colorType === 6 ? 4 : 2;
+  const rowBytes = width * channels;
+  const raw = zlib.inflateSync(Buffer.concat(idat));
+  let pos = 0;
+  let prev = Buffer.alloc(rowBytes);
+  for (let y = 0; y < height; y++) {
+    const filter = raw[pos++];
+    const row = Buffer.from(raw.subarray(pos, pos + rowBytes));
+    pos += rowBytes;
+    for (let x = 0; x < rowBytes; x++) {
+      const left = x >= channels ? row[x - channels] : 0;
+      const up = prev[x];
+      const upLeft = x >= channels ? prev[x - channels] : 0;
+      if (filter === 1) row[x] = (row[x] + left) & 255;
+      else if (filter === 2) row[x] = (row[x] + up) & 255;
+      else if (filter === 3) row[x] = (row[x] + Math.floor((left + up) / 2)) & 255;
+      else if (filter === 4) {
+        const p = left + up - upLeft;
+        const pa = Math.abs(p - left);
+        const pb = Math.abs(p - up);
+        const pc = Math.abs(p - upLeft);
+        row[x] = (row[x] + (pa <= pb && pa <= pc ? left : (pb <= pc ? up : upLeft))) & 255;
+      }
+    }
+    for (let x = channels - 1; x < rowBytes; x += channels) {
+      if (row[x] < 255) return true;
+    }
+    prev = row;
+  }
+  return false;
+}
 
 // Build a tiny MKV with 2 audio tracks (eng + ger) and 1 SRT subtitle track. Returns its path.
 function makeMultitrackFile() {
@@ -497,6 +557,17 @@ test('Android native player: direct source and native chrome stay out of the web
     'native loading overlay should not reuse the non-transparent launcher icon');
   assert.ok(fs.existsSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'drawable', 'ic_loading_logo.png')),
     'native loading overlay should have a dedicated transparent logo asset');
+  for (const rel of [
+    'logo/T-Logo.png',
+    'logo/triboon.png',
+    'web/triboon.png',
+    'android/app/src/main/res/drawable/ic_launcher.png',
+    'android/app/src/main/res/drawable/ic_loading_logo.png',
+    'android/app/src/main/res/drawable/banner.png',
+  ]) {
+    assert.ok(pngHasTransparentPixels(path.join(__dirname, '..', rel)),
+      `${rel} should preserve transparent pixels instead of baking in a background`);
+  }
   assert.match(android, /backdropUrl = j\.optString\("backdropUrl", ""\);[\s\S]+enterNativeFullscreenMode\(\);[\s\S]+showNativeLoading\(title, backdropUrl\);[\s\S]+nativePlayer\.prepare\(\)/,
     'Android should hide the WebView and show the branded native loader before ExoPlayer prepares');
   assert.match(android, /if \("video"\.equals\(m\)\) \{[\s\S]+releaseNativePlayer\(false\);[\s\S]+enterNativeFullscreenMode\(\);[\s\S]+showNativeLoading\(title, backdropUrl\);[\s\S]+__tvNativeVideoError/,
