@@ -377,6 +377,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'entering the rail from movie/show detail or cast/person should not immediately preview Home');
   assert.match(ui, /S\.view === 'watchlist' && S\.zone !== 'rail' && focusGrid\(0\)/,
     'Watchlist empty-state rendering must not steal D-pad focus from the open rail');
+  assert.match(ui, /const focusCalendarStart = \(\) => requestAnimationFrame\(\(\) => S\.view === 'calendar' && S\.zone !== 'rail' && focusContent\(\)\)/,
+    'Calendar async rendering must not steal D-pad focus from the open rail preview');
   assert.match(ui, /if \(keepGuidePip && S\.nativeGuideMode && tryNativeLivePlayer\(it, true\)\) \{[\s\S]+markGuideCur\(\);[\s\S]+return;[\s\S]+\}/,
     'channel tuning from the native PiP guide should retune ExoPlayer without starting web playback');
   assert.match(ui, /if \(!keepGuidePip && tryNativeLivePlayer\(it\)\) return;/,
@@ -409,6 +411,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'native player OK should activate the focused control instead of relying on platform focus guessing');
   assert.match(android, /nativeGuideBtn = nativeButton\(R\.drawable\.ic_player_guide, "TV guide", false\);[\s\S]+controls\.addView\(nativeGuideBtn\);[\s\S]+nativeRewBtn = nativeButton\(R\.drawable\.ic_player_rewind/,
     'native guide button should be the first playback control, matching the web player');
+  assert.match(android, /controls\.addView\(nativeGuideBtn\);\s+controls\.addView\(nativeControlSpacer\(12\)\);[\s\S]+controls\.addView\(nativeRewBtn\);[\s\S]+controls\.addView\(nativePlayBtn\);[\s\S]+controls\.addView\(nativeFwdBtn\);[\s\S]+controls\.addView\(nativeNextBtn\);\s+controls\.addView\(nativeControlSpacer\(12\)\);[\s\S]+controls\.addView\(nativeCcBtn\);[\s\S]+controls\.addView\(nativeAudioBtn\);[\s\S]+controls\.addView\(nativeQualityBtn\);/,
+    'native player controls should group Guide, playback/next, and CC/audio/HD with visual spacing');
+  assert.match(android, /return new ImageButton\[\]\{\s+nativeGuideBtn, nativeRewBtn, nativePlayBtn, nativeFwdBtn,\s+nativeNextBtn, nativeCcBtn, nativeAudioBtn, nativeQualityBtn\s+\};/,
+    'native player D-pad order should match the visible control grouping');
   assert.match(ui, /\.cbtn\.big\{width:58px;height:58px;background:rgba\(34,25,52,\.68\);color:var\(--text\)\}/,
     'web play button should be neutral until focused or hovered');
   assert.doesNotMatch(ui, /\.cbtn\.on\{background:var\(--amber\)|\.btn\.primary,\.cbtn\.big/,
@@ -485,8 +491,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'native video badge should show a friendly resolution label, not direct/remux/transcode internals');
   assert.match(android, /private FrameLayout nativeLoading;[\s\S]+private ImageView nativeLoadingBackdrop;[\s\S]+private TextView nativeLoadingTitle;/,
     'native ExoPlayer should own a branded loading overlay instead of borrowing the web player shell');
-  assert.match(android, /nativeLoading = new FrameLayout\(this\);[\s\S]+loadingLogo\.setImageResource\(R\.drawable\.ic_launcher\);[\s\S]+loadingBrand\.setText\("TRIBOON"\);[\s\S]+loadingStage\.setText\("Starting native stream"\)/,
+  assert.match(android, /nativeLoading = new FrameLayout\(this\);[\s\S]+loadingLogo\.setImageResource\(R\.drawable\.ic_loading_logo\);[\s\S]+loadingBrand\.setText\("TRIBOON"\);[\s\S]+loadingStage\.setText\("Starting native stream"\)/,
     'native loading overlay should show the Triboon brand mark and loading stage');
+  assert.doesNotMatch(android, /loadingLogo\.setImageResource\(R\.drawable\.ic_launcher\)/,
+    'native loading overlay should not reuse the non-transparent launcher icon');
+  assert.ok(fs.existsSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'drawable', 'ic_loading_logo.png')),
+    'native loading overlay should have a dedicated transparent logo asset');
   assert.match(android, /backdropUrl = j\.optString\("backdropUrl", ""\);[\s\S]+enterNativeFullscreenMode\(\);[\s\S]+showNativeLoading\(title, backdropUrl\);[\s\S]+nativePlayer\.prepare\(\)/,
     'Android should hide the WebView and show the branded native loader before ExoPlayer prepares');
   assert.match(android, /if \("video"\.equals\(m\)\) \{[\s\S]+releaseNativePlayer\(false\);[\s\S]+enterNativeFullscreenMode\(\);[\s\S]+showNativeLoading\(title, backdropUrl\);[\s\S]+__tvNativeVideoError/,

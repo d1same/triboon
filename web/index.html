@@ -5544,7 +5544,7 @@ async function loadCalendar() {
   $('discoverTitle').textContent = 'Calendar';
   $('discoverRows').style.display = 'none';
   const list = $('calList'); list.style.display = 'flex';
-  const focusCalendarStart = () => requestAnimationFrame(() => S.view === 'calendar' && focusContent());
+  const focusCalendarStart = () => requestAnimationFrame(() => S.view === 'calendar' && S.zone !== 'rail' && focusContent());
   if (!S.serverInfo.tmdb) { list.innerHTML = '<div class="calEmpty focusable">Connect TMDB in Settings to use Calendar</div>'; focusCalendarStart(); return; }
   list.innerHTML = '<div class="calDayHead">loading…</div>';
   await loadWatchlist();

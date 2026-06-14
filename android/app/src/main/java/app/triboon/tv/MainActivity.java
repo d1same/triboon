@@ -541,6 +541,7 @@ public class MainActivity extends Activity {
         nativeGuideBtn = nativeButton(R.drawable.ic_player_guide, "TV guide", false);
         nativeGuideBtn.setOnClickListener(v -> openNativeLiveGuide());
         controls.addView(nativeGuideBtn);
+        controls.addView(nativeControlSpacer(12));
 
         nativeRewBtn = nativeButton(R.drawable.ic_player_rewind, "Back 10 seconds", false);
         nativeRewBtn.setOnClickListener(v -> nativeSeekBy(-10000));
@@ -559,6 +560,11 @@ public class MainActivity extends Activity {
         nativeFwdBtn.setOnClickListener(v -> nativeSeekBy(30000));
         controls.addView(nativeFwdBtn);
 
+        nativeNextBtn = nativeButton(R.drawable.ic_player_next, "Next episode", false);
+        nativeNextBtn.setOnClickListener(v -> playNativeNextEpisode());
+        controls.addView(nativeNextBtn);
+        controls.addView(nativeControlSpacer(12));
+
         nativeCcBtn = nativeButton(R.drawable.ic_player_cc, "Subtitles", false);
         nativeCcBtn.setOnClickListener(v -> showNativeTrackMenu(C.TRACK_TYPE_TEXT));
         controls.addView(nativeCcBtn);
@@ -570,10 +576,6 @@ public class MainActivity extends Activity {
         nativeQualityBtn = nativeButton(R.drawable.ic_player_quality, "Quality", false);
         nativeQualityBtn.setOnClickListener(v -> showNativeQualityMenu());
         controls.addView(nativeQualityBtn);
-
-        nativeNextBtn = nativeButton(R.drawable.ic_player_next, "Next episode", false);
-        nativeNextBtn.setOnClickListener(v -> playNativeNextEpisode());
-        controls.addView(nativeNextBtn);
 
         nativeChrome.addView(controls, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -622,7 +624,7 @@ public class MainActivity extends Activity {
         loadingCenter.setPadding(dp(36), dp(36), dp(36), dp(36));
 
         ImageView loadingLogo = new ImageView(this);
-        loadingLogo.setImageResource(R.drawable.ic_launcher);
+        loadingLogo.setImageResource(R.drawable.ic_loading_logo);
         loadingLogo.setAlpha(0.96f);
         loadingCenter.addView(loadingLogo, new LinearLayout.LayoutParams(dp(92), dp(92)));
 
@@ -772,6 +774,14 @@ public class MainActivity extends Activity {
             if (hasFocus) showNativeChrome(false);
         });
         return b;
+    }
+
+    private View nativeControlSpacer(int widthDp) {
+        View spacer = new View(this);
+        spacer.setFocusable(false);
+        spacer.setClickable(false);
+        spacer.setLayoutParams(new LinearLayout.LayoutParams(dp(widthDp), dp(1)));
+        return spacer;
     }
 
     private void setNativeButtonIcon(ImageButton b, int iconRes, boolean primary, boolean focused) {
@@ -1136,7 +1146,7 @@ public class MainActivity extends Activity {
     private ImageButton[] nativeControlButtons() {
         return new ImageButton[]{
                 nativeGuideBtn, nativeRewBtn, nativePlayBtn, nativeFwdBtn,
-                nativeCcBtn, nativeAudioBtn, nativeQualityBtn, nativeNextBtn
+                nativeNextBtn, nativeCcBtn, nativeAudioBtn, nativeQualityBtn
         };
     }
 
