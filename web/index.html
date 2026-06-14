@@ -6628,6 +6628,8 @@ function tryNativeLivePlayer(it, guide = false) {
       source: it.genre || it.group || '',
       url: new URL(it._nativeUrl, location.origin).href,
       mime: it._nativeMime || '',
+      fallbackUrl: it._streamUrl ? new URL(it._streamUrl, location.origin).href : '',
+      fallbackMime: it._streamUrl ? 'video/mp4' : '',
       guide,
     }));
     return true;
@@ -8821,7 +8823,21 @@ function focusLiveCategory(idx, select = false) {
     setTimeout(() => focusLiveCategory(i), 0);
     return true;
   }
-  focusGrid(parseInt(cats[i].dataset.grid, 10) || 0);
+  leaveRail();
+  S.zone = 'grid';
+  S.gridIdx = parseInt(cats[i].dataset.grid, 10) || 0;
+  applyFocus(cats[i], false);
+  const pane = cats[i].closest('#chCats');
+  if (pane) {
+    const pad = 10;
+    const top = cats[i].offsetTop;
+    const bottom = top + cats[i].offsetHeight;
+    const viewTop = pane.scrollTop + pad;
+    const viewBottom = pane.scrollTop + pane.clientHeight - pad;
+    if (top < viewTop) pane.scrollTo({ top: Math.max(0, top - pad), behavior: 'auto' });
+    else if (bottom > viewBottom) pane.scrollTo({ top: bottom - pane.clientHeight + pad, behavior: 'auto' });
+  }
+  S.focusedItem = S.gridItems[S.gridIdx] || null;
   return true;
 }
 function focusLiveFilter() {

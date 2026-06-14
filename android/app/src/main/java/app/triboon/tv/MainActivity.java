@@ -53,8 +53,10 @@ import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
 import androidx.media3.common.TrackSelectionOverride;
 import androidx.media3.common.Tracks;
+import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.ui.AspectRatioFrameLayout;
 import androidx.media3.ui.CaptionStyleCompat;
 import androidx.media3.ui.PlayerView;
@@ -113,6 +115,9 @@ public class MainActivity extends Activity {
     private String nativeQualityLabel = "1080p";
     private String nativeUrl = "";
     private String nativeMime = "";
+    private String nativeFallbackUrl = "";
+    private String nativeFallbackMime = "";
+    private boolean nativeTriedFallback = false;
     private boolean nativeHasNext = false;
     private boolean nativeHasQualityChoices = false;
     private String nativeSubtitleUrl = "";
@@ -845,6 +850,8 @@ public class MainActivity extends Activity {
             title = j.optString("title", title);
             String source = j.optString("source", "");
             String mime = j.optString("mime", "");
+            String fallbackUrl = j.optString("fallbackUrl", "");
+            String fallbackMime = j.optString("fallbackMime", "");
             backdropUrl = j.optString("backdropUrl", "");
             long startMs = Math.max(0, Math.round(j.optDouble("start", 0) * 1000));
             String subtitleUrl = j.optString("subtitleUrl", "");
@@ -865,6 +872,9 @@ public class MainActivity extends Activity {
             nativeQualityLabel = qualityLabel.isEmpty() ? ("live".equals(mode) ? "LIVE" : "1080p") : qualityLabel;
             nativeUrl = url;
             nativeMime = mime;
+            nativeFallbackUrl = fallbackUrl;
+            nativeFallbackMime = fallbackMime;
+            nativeTriedFallback = false;
             nativeHasNext = hasNext;
             nativeHasQualityChoices = hasQualityChoices;
             nativeSubtitleShift = (float) j.optDouble("subtitleShift", nativeShiftFromUrl(subtitleUrl));
@@ -885,6 +895,7 @@ public class MainActivity extends Activity {
                     .setPrioritizeTimeOverSizeThresholds(true)
                     .build();
             nativePlayer = new ExoPlayer.Builder(this)
+                    .setMediaSourceFactory(nativeMediaSourceFactory())
                     .setLoadControl(loadControl)
                     .build();
             nativePlayer.addListener(new Player.Listener() {
@@ -899,6 +910,8 @@ public class MainActivity extends Activity {
                         showNativeLoading(playbackTitle, playbackBackdropUrl);
                         web.evaluateJavascript("window.__tvNativeVideoError && __tvNativeVideoError("
                                 + org.json.JSONObject.quote(msg) + "," + pos + "," + dur + ")", null);
+                    } else if (tryNativeLiveFallback()) {
+                        return;
                     } else {
                         closeNativePlayback(false);
                         web.evaluateJavascript("window.__tvNativeLiveError && __tvNativeLiveError("
@@ -1349,7 +1362,31 @@ public class MainActivity extends Activity {
         MediaItem.Builder media = new MediaItem.Builder().setUri(nativeUrl);
         if ("application/x-mpegURL".equals(nativeMime)) media.setMimeType(MimeTypes.APPLICATION_M3U8);
         else if ("video/mp2t".equals(nativeMime)) media.setMimeType(MimeTypes.VIDEO_MP2T);
+        else if ("video/mp4".equals(nativeMime)) media.setMimeType(MimeTypes.VIDEO_MP4);
         return media.build();
+    }
+
+    private DefaultMediaSourceFactory nativeMediaSourceFactory() {
+        DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
+                .setAllowCrossProtocolRedirects(true)
+                .setUserAgent("TriboonTV/" + BuildConfig.VERSION_NAME)
+                .setConnectTimeoutMs(12000)
+                .setReadTimeoutMs(18000);
+        return new DefaultMediaSourceFactory(http);
+    }
+
+    private boolean tryNativeLiveFallback() {
+        if (!"live".equals(nativeMode) || nativePlayer == null || nativeTriedFallback
+                || nativeFallbackUrl == null || nativeFallbackUrl.isEmpty()) return false;
+        nativeTriedFallback = true;
+        nativeUrl = nativeFallbackUrl;
+        nativeMime = nativeFallbackMime == null ? "" : nativeFallbackMime;
+        nativeQualityLabel = "LIVE";
+        nativePlayerBadge.setText("LIVE");
+        nativePlayer.setMediaItem(buildNativeMediaItem());
+        nativePlayer.prepare();
+        nativePlayer.play();
+        return true;
     }
 
     private float nativeShiftFromUrl(String url) {
@@ -2027,6 +2064,9 @@ public class MainActivity extends Activity {
         nativeQualityLabel = "1080p";
         nativeUrl = "";
         nativeMime = "";
+        nativeFallbackUrl = "";
+        nativeFallbackMime = "";
+        nativeTriedFallback = false;
         nativeHasNext = false;
         nativeHasQualityChoices = false;
         nativeSubtitleUrl = "";

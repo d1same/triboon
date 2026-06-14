@@ -435,6 +435,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Live TV category buttons should keep their category identity for D-pad selection');
   assert.match(ui, /if \(k === 'ArrowDown'\) return focusLiveCategory\(ci \+ 1, true\)/,
     'Live TV category down should update the selected category instead of only moving focus');
+  assert.match(ui, /function focusLiveCategory\(idx, select = false\) \{[\s\S]+applyFocus\(cats\[i\], false\);[\s\S]+const pane = cats\[i\]\.closest\('#chCats'\);[\s\S]+pane\.scrollTo\(/,
+    'Live TV category D-pad focus should scroll the category pane directly, not the whole grid');
   assert.match(ui, /function focusRail\(i, opts = \{\}\) \{[\s\S]+preview && !opts\.suppressPreview[\s\S]+preview\.run\(\)/,
     'rail preview should be suppressible for accidental rail entry from detail-style overlays');
   assert.match(ui, /function enterRail\(\) \{[\s\S]+focusRail\(i >= 0 \? i : \(S\.railIdx \|\| 0\), \{ suppressPreview: \['detail', 'person'\]\.includes\(S\.view\) \}\);[\s\S]+\}/,
@@ -449,6 +451,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'normal Live TV tuning should still launch native fullscreen playback');
   assert.match(ui, /if \(nativeLiveRequired\(\)\) \{[\s\S]+Native player could not start this channel[\s\S]+return;[\s\S]+\}[\s\S]+return playChannelWeb\(it\);/,
     'Android Live TV should stop on native startup failure instead of falling back to the web player');
+  assert.match(ui, /fallbackUrl: it\._streamUrl \? new URL\(it\._streamUrl, location\.origin\)\.href : '',[\s\S]+fallbackMime: it\._streamUrl \? 'video\/mp4' : '',/,
+    'Android Live TV should give ExoPlayer a native remux fallback, not a WebView fallback');
   assert.doesNotMatch(ui, /Native player failed[^`'"]*using web player|using web playback/,
     'Android native playback should not advertise or trigger the old web player fallback');
   assert.doesNotMatch(ui, /__tvNativeVideoSwitchToWeb|__tvNativeLiveSwitchToWeb/,
@@ -668,6 +672,14 @@ test('Android native player: direct source and native chrome stay out of the web
     'native player controls should not show success popups over playback');
   assert.match(android, /if \("live"\.equals\(nativeMode\) \|\| d <= 0 \|\| d == C\.TIME_UNSET\)/,
     'live streams should not expose movie-style seeking behavior');
+  assert.match(android, /new DefaultHttpDataSource\.Factory\(\)[\s\S]+setAllowCrossProtocolRedirects\(true\)[\s\S]+setUserAgent\("TriboonTV\/" \+ BuildConfig\.VERSION_NAME\)/,
+    'native ExoPlayer should explicitly allow provider redirects from Triboon Live TV URLs');
+  assert.match(android, /else if \("video\/mp4"\.equals\(nativeMime\)\) media\.setMimeType\(MimeTypes\.VIDEO_MP4\)/,
+    'native Live TV remux fallback should be tagged as MP4 for ExoPlayer');
+  assert.match(android, /else if \(tryNativeLiveFallback\(\)\) \{[\s\S]+return;[\s\S]+\} else \{[\s\S]+__tvNativeLiveError/,
+    'native Live TV should retry the Exo remux fallback before reporting a player error');
+  assert.match(android, /private boolean tryNativeLiveFallback\(\) \{[\s\S]+nativeUrl = nativeFallbackUrl;[\s\S]+nativeMime = nativeFallbackMime[\s\S]+nativePlayer\.setMediaItem\(buildNativeMediaItem\(\)\);[\s\S]+nativePlayer\.prepare\(\);[\s\S]+nativePlayer\.play\(\);/,
+    'native Live TV fallback should stay inside ExoPlayer instead of opening web playback');
   assert.match(android, /if \(nativeSheetOpen\(\)\) hideNativeSheet\(\);[\s\S]+else closeNativePlayback\(true\);/,
     'Back should close native sheets before leaving playback');
   assert.match(android, /boolean waitForLiveClose = notifyClosed && "live"\.equals\(nativeMode\);[\s\S]+web\.postDelayed\(this::showWebAfterNativePlayback, 80\);/,
