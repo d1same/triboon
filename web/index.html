@@ -6254,6 +6254,7 @@ function renderLiveTvBody() {
   ];
   if (!names.length) { body.innerHTML = '<div class="gridMore">Every category is hidden — “☷ Categories” to manage.</div>'; return; }
   if (!names.includes(S.liveCat)) S.liveCat = names[0];
+  S.liveCatNavIdx = Math.max(0, names.indexOf(S.liveCat));
   const list = S.liveCat === '★ Favorites' ? favs : (groups.get(S.liveCat) || []);
   const countForName = (name) => name === '★ Favorites' ? favs.length : ((groups.get(name) || []).length);
   const buildCatButton = (name) => {
@@ -6267,9 +6268,10 @@ function renderLiveTvBody() {
     chip.innerHTML = `<span class="catLabel">${esc(name)}</span><span class="catCount">${count}</span>`;
     chip.addEventListener('click', () => {
       S.liveCat = name;
+      S.liveCatNavIdx = names.indexOf(name);
       S.liveGuideCap = LIVE_GUIDE_BATCH; // fresh category starts with a fresh guide window
       renderLiveTvBody();
-      if (S.zone === 'grid') setTimeout(() => focusLiveCategory(names.indexOf(name)), 0);
+      if (S.zone === 'grid') focusLiveCategory(S.liveCatNavIdx);
     });
     chip.addEventListener('mouseenter', () => pointerHover() && focusGrid(gi));
     return chip;
@@ -8814,17 +8816,21 @@ function focusLiveCategory(idx, select = false) {
   const cats = [...document.querySelectorAll('#chCats .lcat')];
   if (!cats.length) return false;
   const selected = cats.findIndex((el) => el.classList.contains('sel'));
-  const i = Math.max(0, Math.min(cats.length - 1, Number.isFinite(idx) ? idx : selected));
+  const remembered = Number.isFinite(S.liveCatNavIdx) ? S.liveCatNavIdx : selected;
+  const i = Math.max(0, Math.min(cats.length - 1, Number.isFinite(idx) ? idx : remembered));
   const name = cats[i] && cats[i].dataset.liveCat;
   if (select && name && name !== S.liveCat) {
     S.liveCat = name;
+    S.liveCatNavIdx = i;
+    S.liveCatDpadMode = true;
     S.liveGuideCap = LIVE_GUIDE_BATCH;
     renderLiveTvBody();
-    setTimeout(() => focusLiveCategory(i), 0);
-    return true;
+    return focusLiveCategory(i);
   }
   leaveRail();
   S.zone = 'grid';
+  S.liveCatNavIdx = i;
+  S.liveCatDpadMode = true;
   S.gridIdx = parseInt(cats[i].dataset.grid, 10) || 0;
   applyFocus(cats[i], false);
   const pane = cats[i].closest('#chCats');
@@ -8846,6 +8852,7 @@ function focusLiveFilter() {
   clearFocus();
   leaveRail();
   S.zone = 'liveFilter';
+  S.liveCatDpadMode = false;
   input.focus();
   input.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
   return true;
@@ -8857,6 +8864,7 @@ function liveContentEls() {
 function focusFirstLiveContent() {
   const el = liveContentEls()[0];
   if (!el) return false;
+  S.liveCatDpadMode = false;
   focusGrid(parseInt(el.dataset.grid, 10) || 0);
   return true;
 }
@@ -9741,6 +9749,13 @@ document.addEventListener('keydown', (e) => {
       const focusedGuideRow = document.querySelector('#guide .gRow.focusable.focus');
       const focusedChannel = document.querySelector('.liveChannelPane .chCard.focusable.focus');
       const focusedCat = document.querySelector('#chCats .lcat.focusable.focus');
+      const cats = [...document.querySelectorAll('#chCats .lcat')];
+      if ((k === 'ArrowUp' || k === 'ArrowDown') && cats.length && (focusedCat || S.liveCatDpadMode)) {
+        const ci = focusedCat ? cats.indexOf(focusedCat)
+          : Math.max(0, Math.min(cats.length - 1, Number.isFinite(S.liveCatNavIdx) ? S.liveCatNavIdx : 0));
+        if (k === 'ArrowUp') return ci <= 0 ? focusLiveFilter() : focusLiveCategory(ci - 1, true);
+        return focusLiveCategory(ci + 1, true);
+      }
       if (focusedGuideRow) {
         if (k === 'ArrowLeft') return focusLiveCategory();
         if (k === 'ArrowRight') return focusGrid(parseInt(focusedGuideRow.dataset.grid, 10) || S.gridIdx || 0);
@@ -9749,7 +9764,6 @@ document.addEventListener('keydown', (e) => {
         if (k === 'ArrowLeft') return focusLiveCategory();
       }
       if (focusedCat) {
-        const cats = [...document.querySelectorAll('#chCats .lcat')];
         const ci = Math.max(0, cats.indexOf(focusedCat));
         if (k === 'ArrowLeft') return enterRail();
         if (k === 'ArrowRight') return focusFirstLiveContent() || focusGrid(parseInt(focusedCat.dataset.grid, 10) || S.gridIdx || 0);

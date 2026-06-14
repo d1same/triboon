@@ -429,14 +429,16 @@ test('Android native player: direct source and native chrome stay out of the web
     'desktop hover may expand the rail unless a click just collapsed it; Android TV still relies on explicit D-pad state');
   assert.match(ui, /function focusContent\(retried\) \{[\s\S]+leaveRail\(\);[\s\S]+clearFocus\(\);/,
     'moving focus into page content should always collapse any stale rail state first');
-  assert.match(ui, /function focusLiveCategory\(idx, select = false\) \{[\s\S]+if \(select && name && name !== S\.liveCat\) \{[\s\S]+S\.liveCat = name;[\s\S]+renderLiveTvBody\(\);[\s\S]+setTimeout\(\(\) => focusLiveCategory\(i\), 0\);/,
-    'Live TV category D-pad movement should select the highlighted category and rerender channels');
+  assert.match(ui, /function focusLiveCategory\(idx, select = false\) \{[\s\S]+const remembered = Number\.isFinite\(S\.liveCatNavIdx\)[\s\S]+if \(select && name && name !== S\.liveCat\) \{[\s\S]+S\.liveCat = name;[\s\S]+S\.liveCatNavIdx = i;[\s\S]+S\.liveCatDpadMode = true;[\s\S]+renderLiveTvBody\(\);[\s\S]+return focusLiveCategory\(i\);/,
+    'Live TV category D-pad movement should select and immediately refocus the highlighted category for fast repeats');
   assert.match(ui, /chip\.dataset\.liveCat = name/,
     'Live TV category buttons should keep their category identity for D-pad selection');
   assert.match(ui, /if \(k === 'ArrowDown'\) return focusLiveCategory\(ci \+ 1, true\)/,
     'Live TV category down should update the selected category instead of only moving focus');
   assert.match(ui, /function focusLiveCategory\(idx, select = false\) \{[\s\S]+applyFocus\(cats\[i\], false\);[\s\S]+const pane = cats\[i\]\.closest\('#chCats'\);[\s\S]+pane\.scrollTo\(/,
     'Live TV category D-pad focus should scroll the category pane directly, not the whole grid');
+  assert.match(ui, /focusedCat \|\| S\.liveCatDpadMode[\s\S]+Number\.isFinite\(S\.liveCatNavIdx\)[\s\S]+return focusLiveCategory\(ci \+ 1, true\);/,
+    'Live TV category fast-repeat should keep moving from the remembered category index during rerenders');
   assert.match(ui, /function focusRail\(i, opts = \{\}\) \{[\s\S]+preview && !opts\.suppressPreview[\s\S]+preview\.run\(\)/,
     'rail preview should be suppressible for accidental rail entry from detail-style overlays');
   assert.match(ui, /function enterRail\(\) \{[\s\S]+focusRail\(i >= 0 \? i : \(S\.railIdx \|\| 0\), \{ suppressPreview: \['detail', 'person'\]\.includes\(S\.view\) \}\);[\s\S]+\}/,
