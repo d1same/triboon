@@ -131,13 +131,17 @@ function scoreRelease(candidate, policy = {}) {
   let score = 0;
   const add = (label, n) => { if (n) { score += n; reasons.push(`${label} ${n > 0 ? '+' : ''}${n}`); } };
 
-  // Resolution within the cap. Over-cap is heavily penalized so source-fit beats transcoding.
+  // Resolution within the cap. Over-cap is disqualified so "1080p" means pick a 1080p
+  // source, not a better-scored 4K source that will later need transcoding.
   // Unknown resolution is treated as neutral — never penalized as over-cap, never boosted as
   // if it were 720p (a missing token must not outrank a known low-res or get an SD user rejected).
   const cap = Number.isInteger(policy.maxResolutionRank) ? policy.maxResolutionRank : 4;
   if (a.resolution === 'unknown') add('res unknown', 0);
-  else if (a.resolutionRank > cap) add(`over-cap ${a.resolution}`, -500 * (a.resolutionRank - cap));
+  else if (a.resolutionRank > cap) add(`over-cap ${a.resolution}`, -100000);
   else add(`res ${a.resolution}`, a.resolutionRank * 30); // higher allowed res preferred
+  if (Number.isInteger(policy.exactResolutionRank) && a.resolutionRank !== policy.exactResolutionRank) {
+    add(`not-requested-resolution ${a.resolution}`, -100000);
+  }
   // An EXPLICIT resolution pick (the detail-page 4K toggle) outweighs source/size shaping —
   // the user asked for this resolution, so matching releases lead; others stay as fallbacks.
   if (Number.isInteger(policy.preferResolutionRank) && a.resolution !== 'unknown'

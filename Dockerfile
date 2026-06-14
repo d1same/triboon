@@ -1,4 +1,4 @@
-FROM node:20-alpine
+FROM node:24-alpine
 WORKDIR /app
 
 # ffmpeg sidecar (remux/transcode path) + su-exec for the PUID/PGID privilege drop +

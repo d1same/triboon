@@ -94,6 +94,35 @@ function srtToVtt(srt) {
 // Pick the result that best matches OUR release — sync lives and dies on this: a WEB-DL sub
 // on a BluRay cut (or vice versa) drifts by the studio-logo/extended-scene offsets.
 // Wyzie results are flat: { id, url, format, display, language, isHearingImpaired, media }.
+function parseVttTimestamp(ts) {
+  const m = /^(\d{2,}):(\d{2}):(\d{2})\.(\d{3})$/.exec(String(ts || '').trim());
+  if (!m) return null;
+  return (((+m[1] * 60 + +m[2]) * 60 + +m[3]) * 1000) + +m[4];
+}
+
+function formatVttTimestamp(ms) {
+  let n = Math.max(0, Math.round(+ms || 0));
+  const h = Math.floor(n / 3600000); n -= h * 3600000;
+  const m = Math.floor(n / 60000); n -= m * 60000;
+  const s = Math.floor(n / 1000); n -= s * 1000;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(n).padStart(3, '0')}`;
+}
+
+function shiftVtt(vtt, seconds = 0) {
+  const delta = Math.round((Number(seconds) || 0) * 1000);
+  const body = String(vtt || '');
+  if (!delta) return body;
+  return body.replace(/(\d{2,}:\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2,}:\d{2}:\d{2}\.\d{3})([^\r\n]*)/g,
+    (line, start, end, rest) => {
+      const a = parseVttTimestamp(start);
+      const b = parseVttTimestamp(end);
+      if (a === null || b === null) return line;
+      const shiftedStart = Math.max(0, a + delta);
+      const shiftedEnd = Math.max(shiftedStart, b + delta);
+      return `${formatVttTimestamp(shiftedStart)} --> ${formatVttTimestamp(shiftedEnd)}${rest || ''}`;
+    });
+}
+
 function editionTags(s) {
   const x = String(s || '').toLowerCase();
   const tags = new Set();
@@ -309,6 +338,6 @@ async function downloadSubtitle(hit, { attempts = 2, retryDelayMs = 700 } = {}) 
 }
 
 module.exports = {
-  fetchOnlineSub, searchOnlineSubs, downloadSubtitle, rankSubs, srtToVtt, parseQuery, pickSub,
+  fetchOnlineSub, searchOnlineSubs, downloadSubtitle, rankSubs, srtToVtt, shiftVtt, parseQuery, pickSub,
   _request: request, _isTransientError: isTransientError,
 };

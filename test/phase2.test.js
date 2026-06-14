@@ -65,10 +65,10 @@ test('scoring: per-user cap — a 1080p-capped user never gets a 2160p pick', ()
     { name: 'Movie.2024.1080p.WEB-DL.DDP5.1.H.264-NTb', sizeBytes: 7e9 },
   ], { maxResolutionRank: 3 });
   assert.ok(ranked[0].name.includes('1080p'), 'source-fit beats transcoding');
-  assert.ok(ranked[1].score < ranked[0].score - 300, 'over-cap heavily penalized');
+  assert.ok(ranked[1].score < -5000, 'over-cap source is disqualified, not merely demoted');
 });
 
-test('scoring: explicit 4K pick — preferResolutionRank floats 2160p above the press-play default', () => {
+test('scoring: explicit 1080p/4K picks choose the matching source class', () => {
   const releases = [
     { name: 'Movie.2024.2160p.WEB-DL.DDP5.1.HEVC-FLUX', sizeBytes: 30e9 },
     { name: 'Movie.2024.1080p.WEB-DL.DDP5.1.H.264-NTb', sizeBytes: 7e9 },
@@ -76,10 +76,14 @@ test('scoring: explicit 4K pick — preferResolutionRank floats 2160p above the 
   // Press-play default: the lean 1080p WEB-DL wins (size shaping)…
   const auto = rankReleases(releases.map((r) => ({ ...r })), { maxResolutionRank: 4 });
   assert.ok(auto[0].name.includes('1080p'), 'default auto-pick favors the lean 1080p');
+  // Explicit 1080p is a cap AND a preference: 4K must not win and then transcode.
+  const hd = rankReleases(releases.map((r) => ({ ...r })), { maxResolutionRank: 3, preferResolutionRank: 3 });
+  assert.ok(hd[0].name.includes('1080p'), '1080p selection leads with a 1080p source');
+  assert.ok(hd[1].score < -5000, '1080p selection rejects 2160p sources');
   // …but the user explicitly tapping the 4K toggle must put 2160p first, 1080p as fallback.
-  const picked = rankReleases(releases.map((r) => ({ ...r })), { maxResolutionRank: 4, preferResolutionRank: 4 });
+  const picked = rankReleases(releases.map((r) => ({ ...r })), { maxResolutionRank: 4, preferResolutionRank: 4, exactResolutionRank: 4 });
   assert.ok(picked[0].name.includes('2160p'), '4K leads when explicitly selected');
-  assert.ok(picked[1].score > -5000, '1080p stays as a playable auto-advance fallback');
+  assert.ok(picked[1].score < -5000, '4K selection rejects 1080p fallback sources');
   // The preference NEVER overrides the cap — a 1080p-capped user asking for 4K still gets 1080p.
   const capped = rankReleases(releases.map((r) => ({ ...r })), { maxResolutionRank: 3, preferResolutionRank: 4 });
   assert.ok(capped[0].name.includes('1080p'), 'cap still wins over preference');
@@ -228,12 +232,14 @@ test('newznab: decodes XML entities in titles and urls (dedupe keys stay clean)'
 });
 
 test('opensubs: SRT→VTT conversion + search-query parsing', () => {
-  const { srtToVtt, parseQuery } = require('../server/opensubs');
+  const { srtToVtt, shiftVtt, parseQuery } = require('../server/opensubs');
   const vtt = srtToVtt('1\r\n00:00:01,000 --> 00:00:02,500\r\nHello\r\n');
   assert.ok(vtt.startsWith('WEBVTT\n'), 'VTT header prepended');
   assert.match(vtt, /00:00:01\.000 --> 00:00:02\.500/, 'comma timestamps become dots');
   assert.ok(!vtt.includes('\r'), 'CRLF normalized');
   assert.strictEqual(srtToVtt('WEBVTT\n\nalready vtt'), 'WEBVTT\n\nalready vtt', 'VTT passes through');
+  assert.match(shiftVtt(vtt, 0.5), /00:00:01\.500 --> 00:00:03\.000/, 'positive shift moves cues later');
+  assert.match(shiftVtt(vtt, -2), /00:00:00\.000 --> 00:00:00\.500/, 'negative shift clamps cue starts at zero');
   assert.deepStrictEqual(parseQuery('The Boys S01E02'), { title: 'The Boys', season: 1, ep: 2, year: null });
   assert.deepStrictEqual(parseQuery('Movie Name 2024'), { title: 'Movie Name', season: null, ep: null, year: 2024 });
 });

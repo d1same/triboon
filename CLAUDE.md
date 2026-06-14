@@ -22,7 +22,7 @@ Locked decisions (do not re-litigate without asking the owner)
 
 
 Native rebuild of nzbdav + UsenetStreamer concepts (MIT; reference designs, clean-room code).
-Stack: Node 20, zero runtime npm dependencies in server/ (stdlib only). Keep it that way
+Stack: Node 24 LTS, zero runtime npm dependencies in server/ (stdlib only). Keep it that way
 unless the owner approves a dependency. External BINARIES we shell out to are sanctioned and
 not "dependencies": ffmpeg (remux/transcode) and yt-dlp (Music — owner-approved 2026-06-12;
 it carries the YouTube cat-and-mouse so the server stays stdlib). Go port is a Phase-1+ option
@@ -72,8 +72,12 @@ test/fixtures/ — real-tool archives (see its README); test/archive-fixtures.js
 store-RAR/ZIP writers validated against real unrar. bench/ — provider benchmark + real smoke.
 android/ — Android TV shell (framework-only Java WebView wrapper: leanback launcher, D-pad
 passthrough, BACK→web __tvBack() bridge, native JS dialogs, first-run server screen). Build:
-JAVA_HOME=Android Studio jbr, ANDROID_HOME=%LOCALAPPDATA%\Android\Sdk, gradle 8.10.2 in
-C:\Users\opencode\tools → gradle assembleDebug → app/build/outputs/apk/debug.
+JAVA_HOME=Android Studio jbr, ANDROID_HOME=%LOCALAPPDATA%\Android\Sdk. Android Gradle Plugin
+9.2.1 requires Gradle 9.4.1+; this repo pins Gradle 9.5.1 in android/gradle/wrapper.
+Use an external/current Gradle 9.5.1+ binary when one is installed (gradle -p android
+assembleDebug). Use android\gradlew.bat assembleDebug only as the version-safe fallback.
+Do not use the old C:\Users\opencode\tools\gradle-8.10.2 binary. APK output:
+android/app/build/outputs/apk/debug/app-debug.apk.
 
 
 Roadmap (current: Phases 0–4 implemented & verified, 113/113 tests + Docker + real provider)

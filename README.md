@@ -6,7 +6,7 @@ health protection and seamless auto-advance. Self-hosted, Plex-polished, Stremio
 
 **Phases 0–4 implemented & verified** — a usable multi-user product. 113/113 tests, runs in
 Docker with ffmpeg, verified end-to-end against real providers and indexers.
-Zero runtime npm dependencies — Node 20 stdlib only.
+Zero runtime npm dependencies — Node 24 LTS stdlib only.
 
 ## Quick start (Docker)
 
@@ -22,6 +22,21 @@ docker compose up --build          # or: docker run … ghcr.io/d1same/triboon:l
 
 Plain Node (no Docker): `node server/index.js` then open http://localhost:7777. (ffmpeg remux
 is optional — without it, browsers that can't decode MKV get a one-click "open in VLC" handoff.)
+
+## Android TV debug build
+
+Use Android Studio's bundled JBR, the current Android SDK, and Gradle 9.5.1+.
+The Android project uses Android Gradle Plugin 9.2.1, which requires Gradle 9.4.1+.
+
+```powershell
+$env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'
+$env:ANDROID_HOME="$env:LOCALAPPDATA\Android\Sdk"
+gradle -p android assembleDebug
+```
+
+The debug APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`. If a current
+external Gradle is not installed, use the pinned fallback from `android/`: `.\gradlew.bat
+assembleDebug`. Do not use the old `C:\Users\opencode\tools\gradle-8.10.2` binary.
 
 ## Unraid
 

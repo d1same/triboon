@@ -85,6 +85,15 @@ const NZB_FETCH_DEADLINE_MS = 15000; // hard cap — a slow NZB download advance
 const MOUNT_DEADLINE_MS = 30000;     // hard cap — a stalled mount advances instead of hanging Play
 const MAX_ATTEMPTS = 4;       // candidates tried per play before reporting failure
 
+function candidateKey(candidate) {
+  return crypto.createHash('sha1').update([
+    candidate && candidate.indexer || '',
+    candidate && candidate.nzbUrl || '',
+    candidate && candidate.name || '',
+    candidate && candidate.sizeBytes || '',
+  ].join('\0')).digest('hex').slice(0, 16);
+}
+
 // Race a promise against a hard deadline (timer is always cleaned up).
 function withDeadline(promise, ms, msg) {
   let t;
@@ -161,9 +170,19 @@ class Pipeline {
     }
     const { results, errors } = hit;
     // Deep prefetch: warm the TOP candidate's NZB in the background while the user is still
-    // looking at the title page — pressing Play then skips both search AND nzb download.
-    if (!hit.prefetched) {
-      hit.prefetched = true;
+    // looking at the title page. Track it per quality policy: warming the 1080p top pick
+    // must not prevent a later 4K toggle from warming the UHD top pick too.
+    const prefetchKey = JSON.stringify([
+      policy.maxResolutionRank ?? null,
+      policy.preferResolutionRank ?? null,
+      policy.exactResolutionRank ?? null,
+      policy.maxSizeGb4k ?? null,
+      policy.maxSizeGb1080 ?? null,
+      policy.sizePreferenceGB ?? null,
+    ]);
+    if (!hit.prefetchedKeys) hit.prefetchedKeys = new Set();
+    if (!hit.prefetchedKeys.has(prefetchKey)) {
+      hit.prefetchedKeys.add(prefetchKey);
       const top = rankReleases(results.map((r) => ({ ...r })), policy).find((c) => c.score > -5000);
       if (top && !this.nzbCache.has(top.nzbUrl) && this.usage.canGrab(top.indexer)) {
         this.usage.onGrab(top.indexer);
@@ -184,7 +203,7 @@ class Pipeline {
         health: v ? (v.verdict === 'ok' ? 'verified' : v.verdict) : undefined,
       };
     });
-    return { candidates: rankReleases(enriched, policy), errors };
+    return { candidates: rankReleases(enriched, policy).map((c) => ({ ...c, pickKey: candidateKey(c) })), errors };
   }
 
   _recordVerdict(candidate, verdict, detail = {}) {
@@ -273,14 +292,16 @@ class Pipeline {
   }
 
   // Full play: returns { session, vf, candidate, attempts } or throws with detail.
-  // params.pick (exact release name) front-loads a user-chosen source from the Sources drawer;
-  // auto-advance still falls back through the ranked list behind it.
+  // params.pickKey front-loads the exact user-chosen source from the Sources drawer; the old
+  // release-name pick stays as a fallback for older clients. Auto-advance still walks the
+  // ranked list behind that explicit choice.
   async play(params, policy = {}, mountOpts = {}) {
     const { candidates } = await this.search(params, policy);
     let playable = candidates.filter((c) => c.score > -5000);
-    if (params.pick) {
-      const picked = candidates.find((c) => c.name === params.pick);
-      if (picked) playable = [picked, ...playable.filter((c) => c.name !== params.pick)];
+    if (params.pickKey || params.pick) {
+      const picked = candidates.find((c) => params.pickKey && c.pickKey === params.pickKey)
+        || candidates.find((c) => params.pick && c.name === params.pick);
+      if (picked && picked.score > -5000) playable = [picked, ...playable.filter((c) => c.pickKey !== picked.pickKey)];
     }
     if (!playable.length) throw new Error('no playable releases found');
     const session = new PlaySession(params, playable);
@@ -317,4 +338,4 @@ class Pipeline {
   }
 }
 
-module.exports = { Pipeline, GATE_MS, parseWantedTitle, releaseMatches };
+module.exports = { Pipeline, GATE_MS, parseWantedTitle, releaseMatches, candidateKey };

@@ -445,6 +445,7 @@ test('libraries v2: kinds, edit, folder scan, and Range-served local playback', 
   assert.deepStrictEqual(titles, ['Another Film', 'Some Movie']);
   assert.ok(items.json.items.every((i) => i.file === undefined), 'absolute paths never exposed');
   assert.ok(items.json.items.every((i) => /^\/api\/local\//.test(i.streamUrl)), 'tokenized stream URLs');
+  assert.ok(items.json.items.every((i) => /^\/api\/local\/\w+\/\d+\/play$/.test(i.playUrl)), 'local items expose full player prep URLs');
 
   // Local playback with Range.
   const it0 = items.json.items.find((i) => i.title === 'Some Movie');
@@ -456,6 +457,19 @@ test('libraries v2: kinds, edit, folder scan, and Range-served local playback', 
   assert.strictEqual(part.body.toString(), 'VIDEO');
   // Tokenless access denied.
   assert.strictEqual((await httpRaw(srv.port, it0.streamUrl.split('?')[0])).status, 401);
+
+  // Full player prep: added-library files become normal mounts, so they share Movies/TV
+  // player features (track probe, subtitles, remux/transcode fallback, native handoff).
+  const play = await httpJson(srv.port, 'POST', it0.playUrl, { caps: { mkv: true, ac3: true, eac3: true } }, admin);
+  assert.strictEqual(play.status, 200);
+  assert.match(play.json.id, /^l[a-f0-9]{12}$/);
+  assert.strictEqual(play.json.container, 'local');
+  assert.ok(play.json.streamUrl.startsWith(`/api/stream/${play.json.id}?t=`));
+  assert.ok(play.json.tracksUrl.endsWith(`/api/tracks/${play.json.id}`));
+  assert.strictEqual(play.json.subtitleBase, `/api/subtitle/${play.json.id}`);
+  const mounted = await httpRaw(srv.port, play.json.streamUrl, { range: 'bytes=5-9' });
+  assert.strictEqual(mounted.status, 206);
+  assert.strictEqual(mounted.body.toString(), 'VIDEO');
 });
 
 test('library scan v2: Jellyfin layout — shows/episodes, NFO info, local poster art', async () => {
@@ -922,6 +936,38 @@ test('settings: max release size — manual caps hide oversized sources; off res
   ix.close();
 });
 
+test('search: quality policy ranks 1080p and 4K consistently and returns stable pick keys', async () => {
+  const http2 = require('http');
+  const ix = http2.createServer((req, res) => {
+    res.writeHead(200);
+    res.end(`<?xml version="1.0"?><rss xmlns:newznab="http://x"><channel>
+      <item><title>Quality.Policy.2024.2160p.WEB-DL.HEVC-NTb</title><enclosure url="http://x/quality-4k" length="16000000000"/></item>
+      <item><title>Quality.Policy.2024.1080p.WEB-DL.H.264-NTb</title><enclosure url="http://x/quality-1080p" length="6000000000"/></item>
+    </channel></rss>`);
+  });
+  await new Promise((r) => ix.listen(0, '127.0.0.1', r));
+  const prevIx = (await httpJson(srv.port, 'GET', '/api/settings', null, admin)).json.indexers;
+  await httpJson(srv.port, 'POST', '/api/settings', {
+    indexers: [{ name: 'quality', url: `http://127.0.0.1:${ix.address().port}`, apikey: 'x' }],
+    sizeCapMode: 'off',
+  }, admin);
+
+  const base = '/api/search?q=' + encodeURIComponent('Quality Policy 2024');
+  const hd = (await httpJson(srv.port, 'GET', base + '&maxResolutionRank=3&preferResolutionRank=3', null, admin)).json;
+  assert.ok(hd.candidates[0].name.includes('1080p'), '1080p preference should put the 1080p source first');
+  assert.ok(hd.candidates.every((c) => /^[a-f0-9]{16}$/.test(c.pickKey)), 'Sources drawer gets stable opaque pick keys');
+
+  const uhd = (await httpJson(srv.port, 'GET', base + '&maxResolutionRank=4&preferResolutionRank=4', null, admin)).json;
+  assert.ok(uhd.candidates[0].name.includes('2160p'), '4K preference should put the 4K source first');
+  assert.ok(uhd.candidates.find((c) => c.name.includes('1080p')).score < -5000,
+    '4K preference should not silently keep 1080p as a playable fallback');
+  assert.notStrictEqual(uhd.candidates[0].pickKey, hd.candidates.find((c) => c.name.includes('1080p')).pickKey,
+    '1080p and 4K rows remain distinct even when the names are similar');
+
+  await httpJson(srv.port, 'POST', '/api/settings', { sizeCapMode: 'auto', indexers: prevIx }, admin);
+  ix.close();
+});
+
 test('admin: connection tests for saved providers/indexers; daily API limit gates the fan-out', async () => {
   // Provider 0 is the env-bootstrapped mock NNTP — test must succeed with a latency figure.
   const okP = (await httpJson(srv.port, 'POST', '/api/test/provider', { index: 0 }, admin)).json;
@@ -1051,6 +1097,11 @@ test('subtitles: Wyzie search→file→VTT served per mount (and 503 without a k
   assert.ok(vtt.startsWith('WEBVTT'), 'served as WebVTT');
   assert.match(vtt, /00:00:01\.000 --> 00:00:02\.500/, 'SRT timestamps converted');
   assert.match(vtt, /Hello usenet/);
+  const beforeShift = searchCalls;
+  const shiftedSub = await httpRaw(srv.port, `/api/ossubs/${play.id}?lang=en&tmdb=4242&shift=0.5&t=${play.streamToken}`);
+  assert.strictEqual(shiftedSub.status, 200, shiftedSub.body.toString());
+  assert.match(shiftedSub.body.toString('utf8'), /00:00:01\.500 --> 00:00:03\.000/, 'subtitle sync can shift cached VTT without re-downloading it');
+  assert.strictEqual(searchCalls, beforeShift, 'subtitle sync used the cached subtitle body');
   const versions = await httpJson(srv.port, 'GET', `/api/ossubs/${play.id}?lang=en&tmdb=4242&list=1&t=${play.streamToken}`, null, admin);
   assert.strictEqual(versions.status, 200, JSON.stringify(versions.json));
   assert.ok((versions.json.variants || []).some((v) => v.id === '2' && /Extended/i.test(v.label)),

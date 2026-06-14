@@ -46,8 +46,9 @@ function httpRaw(port, p, { range, method = 'GET', token } = {}) {
 
 // Boot a fresh server module with an isolated data dir. Returns { server, shutdown, port, ... }.
 async function bootServer(env = {}) {
-  process.env.TRIBOON_DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-data-'));
-  for (const [k, v] of Object.entries(env)) {
+  const { TRIBOON_DATA, ...restEnv } = env;
+  process.env.TRIBOON_DATA = TRIBOON_DATA || fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-data-'));
+  for (const [k, v] of Object.entries(restEnv)) {
     if (v === null) delete process.env[k]; else process.env[k] = String(v);
   }
   delete require.cache[require.resolve('../server/index.js')];

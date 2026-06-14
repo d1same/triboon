@@ -131,11 +131,14 @@ const pipeline = new Pipeline({
 });
 const { fetchUrl: fetchUrlExt, searchIndexer } = require('./newznab');
 const {
-  fetchOnlineSub, searchOnlineSubs, downloadSubtitle, rankSubs,
+  fetchOnlineSub, searchOnlineSubs, downloadSubtitle, rankSubs, shiftVtt,
   _isTransientError: isTransientSubError,
 } = require('./opensubs');
 const IPTV_CACHE_TTL_MS = 24 * 3600000;
 const EPG_CACHE_TTL_MS = 24 * 3600000;
+const EPG_CACHE_STALE_MS = 7 * 24 * 3600000;
+const IPTV_WARM_DELAY_MS = 1500;
+const IPTV_WARM_XTREAM_GUIDE_MAX = 96;
 let iptvCache = { key: null, at: 0, channels: [] };
 let epgCache = { key: null, at: 0, byChannel: new Map(), byName: new Map() };
 let xtreamEpgCache = { key: null, byStream: new Map() };
@@ -168,8 +171,17 @@ function iptvNativeMime(url) {
   return '';
 }
 let iptvRefreshing = false;
+let iptvWarmRunning = false;
+let iptvWarmTimer = null;
+let iptvWarmSoonTimer = null;
 function iptvSourceKey(s) {
   return s.iptvMode === 'xtream' ? `xt:${s.xtHost}:${s.xtUser}` : `m3u:${s.iptvUrl}`;
+}
+function iptvConfigured(s) {
+  return !!((s.iptvMode === 'xtream' && s.xtHost) || s.iptvUrl);
+}
+function epgSourceKey(s) {
+  return idHash(`${iptvSourceKey(s)}|epg:${s.epgUrl || ''}`);
 }
 async function loadIptvChannels() {
   const s = settings.get();
@@ -268,26 +280,55 @@ function normChName(s) {
     .replace(/\b(uhd|fhd|hd|sd|4k|8k|1080p?|720p?|h26[45]|hevc|raw|vip|plus|backup)\b/g, ' ')
     .replace(/[^a-z0-9]/g, '');
 }
+function hydrateXmltvCache(raw, key) {
+  if (!raw || raw.key !== key || !Array.isArray(raw.byChannel) || !Array.isArray(raw.byName)) return null;
+  const at = Number(raw.at) || 0;
+  if (!at || Date.now() - at > EPG_CACHE_STALE_MS) return null;
+  const byChannel = new Map(raw.byChannel.map(([id, list]) => [String(id), Array.isArray(list) ? list : []]));
+  const byName = new Map(raw.byName.map(([name, id]) => [String(name), String(id)]));
+  return { key, at, byChannel, byName };
+}
+function persistXmltvCache(cache) {
+  try {
+    store.write('epgcache', {
+      key: cache.key,
+      at: cache.at,
+      byChannel: [...cache.byChannel.entries()],
+      byName: [...cache.byName.entries()],
+    });
+  } catch {}
+}
+function refreshXmltvInBackground(s, key) {
+  if (epgRefreshing) return;
+  epgRefreshing = true;
+  fetchXmltv(s, key).catch((e) => console.error('[xmltv refresh]', e.message))
+    .finally(() => { epgRefreshing = false; });
+}
 async function ensureXmltv() {
   const s = settings.get();
   if (!s.epgUrl) return null;
-  if (epgCache.key === s.epgUrl && Date.now() - epgCache.at < EPG_CACHE_TTL_MS) return epgCache;
-  if (epgCache.key === s.epgUrl && epgCache.byChannel && epgCache.byChannel.size) {
-    if (!epgRefreshing) {
-      epgRefreshing = true;
-      fetchXmltv(s).catch((e) => console.error('[xmltv refresh]', e.message))
-        .finally(() => { epgRefreshing = false; });
-    }
+  const key = epgSourceKey(s);
+  if (epgCache.key === key && Date.now() - epgCache.at < EPG_CACHE_TTL_MS) return epgCache;
+  if (epgCache.key === key && epgCache.byChannel && epgCache.byChannel.size) {
+    refreshXmltvInBackground(s, key);
     return epgCache;
   }
-  return fetchXmltv(s);
+  const disk = hydrateXmltvCache(store.read('epgcache', null), key);
+  if (disk && disk.byChannel.size) {
+    epgCache = disk;
+    if (Date.now() - disk.at >= EPG_CACHE_TTL_MS) refreshXmltvInBackground(s, key);
+    return epgCache;
+  }
+  return fetchXmltv(s, key);
 }
 let epgRefreshing = false;
-async function fetchXmltv(s) {
+async function fetchXmltv(s, key = epgSourceKey(s)) {
   const r = await fetchUrlExt(s.epgUrl, { timeoutMs: 20000, deadlineMs: 90000, maxBytes: 48 * 1024 * 1024 });
   let xml = r.body;
   if (xml.length > 40 * 1024 * 1024) xml = xml.subarray(0, 40 * 1024 * 1024); // parse cap
   const text = xml.toString('utf8');
+  const keepFrom = Date.now() - 12 * 3600000;
+  const keepTo = Date.now() + 48 * 3600000;
   // Pass 1 — <channel> display-names: many playlists have no/poor tvg-ids, so the guide is
   // ALSO matched by normalized channel name.
   const byName = new Map();
@@ -318,11 +359,15 @@ async function fetchXmltv(s) {
     if (wanted.size && !wanted.has(m[3])) continue;
     const title = ((/<title[^>]*>([\s\S]*?)<\/title>/.exec(m[4]) || [])[1] || '').replace(/<!\[CDATA\[|\]\]>/g, '').trim();
     if (!title) continue;
+    const start = parseXmltvDate(m[1]);
+    const stop = parseXmltvDate(m[2]);
+    if (!start || !stop || stop < keepFrom || start > keepTo) continue;
     if (!byChannel.has(m[3])) byChannel.set(m[3], []);
-    byChannel.get(m[3]).push({ start: parseXmltvDate(m[1]), stop: parseXmltvDate(m[2]), title });
+    byChannel.get(m[3]).push({ start, stop, title });
   }
   for (const list of byChannel.values()) list.sort((a, b) => a.start - b.start);
-  epgCache = { key: s.epgUrl, at: Date.now(), byChannel, byName };
+  epgCache = { key, at: Date.now(), byChannel, byName };
+  persistXmltvCache(epgCache);
   return epgCache;
 }
 // Programme list for one channel: tvg-id first, normalized display-name second.
@@ -362,26 +407,70 @@ function fallbackProgramme(ch, from, to) {
   const title = fallbackGuideTitle(ch);
   return title ? { title, start: from, stop: to, synthetic: true, source: 'channel' } : null;
 }
+function xtreamEpgStoreKey(key) {
+  return idHash(`xtreamepg:${key}`);
+}
+function hydrateXtreamEpgCache(key) {
+  const raw = store.read('xtreamepgcache', null);
+  if (!raw || raw.key !== xtreamEpgStoreKey(key) || !Array.isArray(raw.streams)) {
+    xtreamEpgCache = { key, byStream: new Map() };
+    return;
+  }
+  const byStream = new Map();
+  for (const [id, entry] of raw.streams) {
+    if (!entry || !Array.isArray(entry.list)) continue;
+    const at = Number(entry.at) || 0;
+    if (at && Date.now() - at <= EPG_CACHE_STALE_MS) byStream.set(String(id), { at, list: entry.list });
+  }
+  xtreamEpgCache = { key, byStream };
+}
+function persistXtreamEpgCache() {
+  try {
+    const streams = [...xtreamEpgCache.byStream.entries()]
+      .filter(([, e]) => e && Array.isArray(e.list))
+      .slice(-5000)
+      .map(([id, e]) => [id, { at: Number(e.at) || 0, list: e.list }]);
+    store.write('xtreamepgcache', { key: xtreamEpgStoreKey(xtreamEpgCache.key), at: Date.now(), streams });
+  } catch {}
+}
+async function fetchXtreamEpgList(s, ch, limit) {
+  const base = String(s.xtHost).replace(/\/+$/, '');
+  const u = `${base}/player_api.php?username=${encodeURIComponent(s.xtUser || '')}&password=${encodeURIComponent(s.xtPass || '')}&action=get_short_epg&stream_id=${ch.xtreamId}&limit=${Math.max(2, Math.min(48, limit))}`;
+  const r = await fetchUrlExt(u, { timeoutMs: 8000, deadlineMs: 15000, maxBytes: 2 * 1024 * 1024 });
+  let raw;
+  try { raw = (JSON.parse(r.body.toString('utf8') || '{}').epg_listings) || []; } catch { raw = []; }
+  return raw.map(xtreamProgramme).filter(Boolean).sort((a, b) => a.start - b.start);
+}
 async function xtreamEpgList(ch, { limit = 24 } = {}) {
   const s = settings.get();
   if (s.iptvMode !== 'xtream' || !ch.xtreamId) return [];
   const key = iptvSourceKey(s);
-  if (xtreamEpgCache.key !== key) xtreamEpgCache = { key, byStream: new Map() };
+  if (xtreamEpgCache.key !== key) hydrateXtreamEpgCache(key);
   const id = String(ch.xtreamId);
   const hit = xtreamEpgCache.byStream.get(id);
   if (hit && Date.now() - hit.at < EPG_CACHE_TTL_MS) return hit.list;
+  if (hit && hit.list && hit.list.length && Date.now() - hit.at <= EPG_CACHE_STALE_MS) {
+    if (!hit.promise) {
+      const p = fetchXtreamEpgList(s, ch, limit).then((list) => {
+        xtreamEpgCache.byStream.set(id, { at: Date.now(), list });
+        if (xtreamEpgCache.byStream.size > 5000) xtreamEpgCache.byStream.clear();
+        persistXtreamEpgCache();
+        return list;
+      }).catch((e) => {
+        xtreamEpgCache.byStream.set(id, { at: hit.at, list: hit.list });
+        throw e;
+      });
+      xtreamEpgCache.byStream.set(id, { ...hit, promise: p });
+    }
+    return hit.list;
+  }
   if (hit && hit.promise) return hit.promise;
-  const base = String(s.xtHost).replace(/\/+$/, '');
-  const u = `${base}/player_api.php?username=${encodeURIComponent(s.xtUser || '')}&password=${encodeURIComponent(s.xtPass || '')}&action=get_short_epg&stream_id=${ch.xtreamId}&limit=${Math.max(2, Math.min(48, limit))}`;
-  const p = (async () => {
-    const r = await fetchUrlExt(u, { timeoutMs: 8000, deadlineMs: 15000, maxBytes: 2 * 1024 * 1024 });
-    let raw;
-    try { raw = (JSON.parse(r.body.toString('utf8') || '{}').epg_listings) || []; } catch { raw = []; }
-    const list = raw.map(xtreamProgramme).filter(Boolean).sort((a, b) => a.start - b.start);
+  const p = fetchXtreamEpgList(s, ch, limit).then((list) => {
     xtreamEpgCache.byStream.set(id, { at: Date.now(), list });
     if (xtreamEpgCache.byStream.size > 5000) xtreamEpgCache.byStream.clear();
+    persistXtreamEpgCache();
     return list;
-  })();
+  });
   xtreamEpgCache.byStream.set(id, { at: 0, list: hit ? hit.list : [], promise: p });
   try {
     return await p;
@@ -412,6 +501,77 @@ async function epgNowNext(ch) {
     return { now: list[i], next: list[i + 1] || null };
   }
   return {};
+}
+function xtreamGuideWarmTargets(channels) {
+  const out = [];
+  const seen = new Set();
+  const add = (ch) => {
+    if (!ch || !ch.xtreamId || seen.has(ch.id)) return;
+    seen.add(ch.id);
+    out.push(ch);
+  };
+  const favIds = new Set();
+  const favs = store.read('iptvfavs', {});
+  for (const list of Object.values(favs || {})) {
+    if (Array.isArray(list)) for (const id of list) favIds.add(String(id));
+  }
+  for (const ch of channels) if (favIds.has(String(ch.id))) add(ch);
+  const cachedStreams = xtreamEpgCache.byStream && xtreamEpgCache.byStream.size
+    ? new Set([...xtreamEpgCache.byStream.keys()].map(String)) : new Set();
+  for (const ch of channels) if (cachedStreams.has(String(ch.xtreamId))) add(ch);
+  channels.slice(0, 48).forEach(add);
+  return out.slice(0, IPTV_WARM_XTREAM_GUIDE_MAX);
+}
+async function warmIptvCaches(reason = 'scheduled') {
+  if (iptvWarmRunning) return { configured: iptvConfigured(settings.get()), skipped: 'running' };
+  const s = settings.get();
+  if (!iptvConfigured(s)) return { configured: false };
+  iptvWarmRunning = true;
+  try {
+    const channels = await loadIptvChannels();
+    const result = { configured: true, reason, channels: channels.length, xmltv: false, xtreamGuide: 0 };
+    if (s.epgUrl) {
+      await ensureXmltv();
+      result.xmltv = true;
+    } else if (s.iptvMode === 'xtream') {
+      const key = iptvSourceKey(s);
+      if (xtreamEpgCache.key !== key) hydrateXtreamEpgCache(key);
+      const targets = xtreamGuideWarmTargets(channels);
+      await mapLimit(targets, 4, async (ch) => {
+        await xtreamEpgList(ch, { limit: 24 });
+      });
+      result.xtreamGuide = targets.length;
+    }
+    return result;
+  } finally {
+    iptvWarmRunning = false;
+  }
+}
+function scheduleIptvWarmSoon(reason = 'changed', delayMs = IPTV_WARM_DELAY_MS) {
+  if (iptvWarmSoonTimer) clearTimeout(iptvWarmSoonTimer);
+  iptvWarmSoonTimer = setTimeout(() => {
+    iptvWarmSoonTimer = null;
+    warmIptvCaches(reason)
+      .then((r) => {
+        if (r && r.configured) console.log(`[iptv] warmed ${r.channels || 0} channels${r.xmltv ? ' + XMLTV' : ''}${r.xtreamGuide ? ` + ${r.xtreamGuide} Xtream guide channel(s)` : ''}`);
+      })
+      .catch((e) => console.error('[iptv warm]', e.message));
+  }, delayMs);
+  iptvWarmSoonTimer.unref();
+}
+function msUntilNextIptvWarm(nowMs = Date.now()) {
+  const next = new Date(nowMs);
+  next.setHours(24, 0, 0, 0);
+  return Math.max(1, next.getTime() - nowMs);
+}
+function scheduleNextIptvWarm() {
+  if (iptvWarmTimer) clearTimeout(iptvWarmTimer);
+  iptvWarmTimer = setTimeout(() => {
+    iptvWarmTimer = null;
+    scheduleIptvWarmSoon('daily-midnight', 1);
+    scheduleNextIptvWarm();
+  }, msUntilNextIptvWarm());
+  iptvWarmTimer.unref();
 }
 const tmdb = new TmdbProxy(store, () => settings.get().tmdbKey, process.env.TMDB_BASE || undefined);
 const trakt = new Trakt(store, () => settings.get());
@@ -476,6 +636,24 @@ function parseCaps(raw) {
   for (const k of ['mkv', 'hevc', 'ac3', 'eac3', 'dts']) caps[k] = !!(raw && raw[k]);
   return caps;
 }
+function parseResolutionRank(raw) {
+  if (raw === undefined || raw === null || raw === '') return null;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 0 && n <= 4 ? n : null;
+}
+function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank } = {}) {
+  let policy = { ...user.policy, ...sizeCaps(), ...scoringPrefs() };
+  const maxRank = parseResolutionRank(maxResolutionRank);
+  if (maxRank !== null) {
+    policy = { ...policy, maxResolutionRank: Math.min(user.policy.maxResolutionRank ?? 4, maxRank) };
+  }
+  const preferRank = parseResolutionRank(preferResolutionRank);
+  if (preferRank !== null && preferRank <= (policy.maxResolutionRank ?? 4)) {
+    policy = { ...policy, preferResolutionRank: preferRank };
+    if (preferRank === 4) policy.exactResolutionRank = 4;
+  }
+  return policy;
+}
 function mountPayload(vf, uid, extra = {}) {
   const st = auth.streamToken(uid, vf.id);
   return {
@@ -491,6 +669,47 @@ function mountPayload(vf, uid, extra = {}) {
     playback: decidePlayback(vf.name, vf._caps || {}),
     ...extra,
   };
+}
+function localItemFor(ctx, libId, idx) {
+  const lib = store.read('libraries', { list: [] }).list.find((l) => l.id === libId);
+  if (!lib || !lib.path) return { status: 404, error: 'library not found' };
+  if (lib.users && lib.users.length && ctx.user.role !== 'admin' && !lib.users.includes(ctx.user.id)) {
+    return { status: 404, error: 'library not found' };
+  }
+  const rec = store.read('libitems', {})[libId];
+  const item = rec && rec.items[parseInt(idx, 10)];
+  if (!item || !item.file) return { status: 404, error: 'item not found' };
+  return { lib, item };
+}
+function localMountFor(ctx, libId, idx, caps = {}) {
+  const found = localItemFor(ctx, libId, idx);
+  if (found.error) return found;
+  let stat;
+  try { stat = fs.statSync(found.item.file); } catch { return { status: 404, error: 'file missing on disk' }; }
+  const id = 'l' + idHash(`${libId}:${idx}:${found.item.file}:${stat.size}:${stat.mtimeMs}`);
+  let vf = mounts.get(id);
+  if (!vf) {
+    const name = path.basename(found.item.file);
+    vf = {
+      id, name, size: stat.size, segmentCount: 1,
+      container: 'local', method: null, streamable: true, tags: [], health: { verdict: 'verified' },
+      mountedAt: Date.now(), _local: { libId, idx: parseInt(idx, 10), file: found.item.file },
+      _q: found.item.title || name,
+      triage: async () => ({ verdict: 'verified', checked: 1, missing: 0, local: true }),
+      read: async function* (start, end) {
+        const rs = fs.createReadStream(found.item.file, { start, end: Math.max(start, end - 1) });
+        try {
+          for await (const chunk of rs) yield chunk;
+        } finally {
+          rs.destroy();
+        }
+      },
+    };
+    mounts.set(id, vf);
+  }
+  vf._caps = parseCaps(caps);
+  vf._touched = Date.now();
+  return { vf, item: found.item };
 }
 function parseEpisodeKey(key) {
   const m = /^tmdb:tv:(\d+):s(\d+)e(\d+)$/i.exec(String(key || ''));
@@ -708,7 +927,10 @@ const H = {
     if (!q) return send(ctx.res, 400, { error: 'q required' });
     const { candidates, errors } = await pipeline.search(
       { q, imdbid: ctx.url.searchParams.get('imdbid') || undefined },
-      { ...ctx.user.policy, ...sizeCaps(), ...scoringPrefs() }
+      playbackPolicyFor(ctx.user, {
+        maxResolutionRank: ctx.url.searchParams.get('maxResolutionRank'),
+        preferResolutionRank: ctx.url.searchParams.get('preferResolutionRank'),
+      })
     );
     send(ctx.res, 200, {
       errors,
@@ -718,7 +940,7 @@ const H = {
       // auto-pick, and a tight slice made every big remux unfindable (they rank ~140th
       // behind the swarm of sane-size variants; the 4K toggle narrows the view client-side).
       candidates: candidates.filter((c) => !(c.reasons || []).some((r) => r.startsWith('over-size-cap'))).slice(0, 250).map((c) => ({
-        name: c.name, sizeBytes: c.sizeBytes, indexer: c.indexer, score: c.score,
+        name: c.name, pickKey: c.pickKey, sizeBytes: c.sizeBytes, indexer: c.indexer, score: c.score,
         reasons: c.reasons, attributes: c.attributes, streamClass: c.streamClass, health: c.health,
       })),
     });
@@ -730,25 +952,19 @@ const H = {
     const t0 = Date.now();
     // HD/UHD toggle: a per-play resolution preference may tighten the cap DOWNWARD, never
     // above the admin-set cap (Plex semantics — user picks within their ceiling).
-    let policy = { ...ctx.user.policy, ...sizeCaps(), ...scoringPrefs() };
-    if (Number.isInteger(body.maxResolutionRank)) {
-      policy = { ...policy, maxResolutionRank: Math.min(ctx.user.policy.maxResolutionRank ?? 4, body.maxResolutionRank) };
-    }
+    const policy = playbackPolicyFor(ctx.user, body);
     // Explicit resolution pick (4K toggle): boost matching releases — but only within the cap,
     // so a capped user can't smuggle UHD past their ceiling via the preference.
-    if (Number.isInteger(body.preferResolutionRank) && body.preferResolutionRank <= (policy.maxResolutionRank ?? 4)) {
-      policy = { ...policy, preferResolutionRank: body.preferResolutionRank };
-    }
     try {
       const { session, vf, candidate, attempts } = await pipeline.play(
-        { q: body.q, imdbid: body.imdbid, tvdbid: body.tvdbid, season: body.season, ep: body.ep, pick: body.pick },
+        { q: body.q, imdbid: body.imdbid, tvdbid: body.tvdbid, season: body.season, ep: body.ep, pick: body.pick, pickKey: body.pickKey },
         policy
       );
       vf._q = body.q; // remembered for online subtitle search (release names match poorly)
       vf._caps = parseCaps(body.caps); session.caps = vf._caps; // hardware claims ride the session
       send(ctx.res, 200, mountPayload(vf, ctx.user.id, {
         sessionId: session.id, mountMs: Date.now() - t0,
-        candidate: { name: candidate.name, score: candidate.score, indexer: candidate.indexer, reasons: candidate.reasons },
+        candidate: { name: candidate.name, pickKey: candidate.pickKey, score: candidate.score, indexer: candidate.indexer, reasons: candidate.reasons, attributes: candidate.attributes },
         attempts,
       }));
     } catch (e) {
@@ -764,7 +980,7 @@ const H = {
       vf._caps = session.caps || {}; // same client, same hardware claims
       send(ctx.res, 200, mountPayload(vf, ctx.user.id, {
         sessionId: session.id, mountMs: Date.now() - t0,
-        candidate: { name: candidate.name, score: candidate.score, indexer: candidate.indexer },
+        candidate: { name: candidate.name, pickKey: candidate.pickKey, score: candidate.score, indexer: candidate.indexer, attributes: candidate.attributes },
         attempts,
       }));
     } catch (e) {
@@ -876,6 +1092,9 @@ const H = {
   iptvGuide: async (ctx) => {
     const idxs = String(ctx.url.searchParams.get('chs') || '')
       .split(',').map((n) => parseInt(n, 10)).filter((n) => Number.isInteger(n) && n >= 0).slice(0, 48);
+    if (idxs.length && (!iptvCache.channels || !iptvCache.channels.length)) {
+      try { await loadIptvChannels(); } catch {}
+    }
     const chans = idxs.map((i) => iptvCache.channels && iptvCache.channels[i]).filter(Boolean);
     if (!chans.length) return send(ctx.res, 200, { channels: [] });
     const from = Date.now() - 90 * 60000, to = Date.now() + 4 * 3600000;
@@ -1447,10 +1666,22 @@ Object.assign(H, {
       items: rec.items.map(({ file, artFile, dir, ...rest }) => ({
         ...rest,
         streamUrl: file ? `/api/local/${ctx.m[1]}/${rest.idx}?t=${auth.stableStreamToken(ctx.user.id, `local:${ctx.m[1]}:${rest.idx}`)}` : null,
+        playUrl: file ? `/api/local/${ctx.m[1]}/${rest.idx}/play` : null,
         artUrl: artFile ? `/api/local/${ctx.m[1]}/art/${rest.idx}?t=${auth.stableStreamToken(ctx.user.id, `art:${ctx.m[1]}:${rest.idx}`)}` : null,
         thumbUrl: file ? `/api/local/${ctx.m[1]}/thumb/${rest.idx}?t=${auth.stableStreamToken(ctx.user.id, `thumb:${ctx.m[1]}:${rest.idx}`)}` : null,
       })),
     });
+  },
+
+  // Prepare a scanned local file as a normal player mount. The old /api/local/:lib/:idx
+  // URL remains for direct downloads/VLC, but the app uses this richer descriptor so added
+  // libraries get the same remux/transcode, track probe, subtitles and native-player flow
+  // as movies and TV episodes mounted from Usenet.
+  localPlay: async (ctx) => {
+    const body = await readJson(ctx.req);
+    const r = localMountFor(ctx, ctx.m[1], ctx.m[2], body.caps || {});
+    if (r.error) return send(ctx.res, r.status || 404, { error: r.error });
+    send(ctx.res, 200, mountPayload(r.vf, ctx.user.id, { local: true }));
   },
 
   // Generated video thumbnail (one frame, scaled to 480w) for library items without art.
@@ -1704,6 +1935,8 @@ Object.assign(H, {
 
   settingsSet: async (ctx) => {
     const b = await readJson(ctx.req);
+    const iptvSourceChanged = ['iptvUrl', 'iptvMode', 'xtHost', 'xtUser', 'xtPass', 'epgUrl']
+      .some((k) => b[k] !== undefined);
     // Ops merge server-side so the UI never needs the decrypted secrets back:
     //   addProvider / removeProvider (index) · addIndexer / removeIndexer (index)
     // Wholesale replacement (providers:/indexers:) still works for tests/automation.
@@ -1814,6 +2047,12 @@ Object.assign(H, {
     // indexer is invisible (and tests of a replaced one read stale results) for 60s.
     pipeline.searchCache.clear();
     send(ctx.res, 200, { ok: true });
+    if (iptvSourceChanged) {
+      iptvCache = { key: null, at: 0, channels: [] };
+      epgCache = { key: null, at: 0, byChannel: new Map(), byName: new Map() };
+      xtreamEpgCache = { key: null, byStream: new Map() };
+      if (iptvWarmTimer) scheduleIptvWarmSoon('settings');
+    }
   },
 
   inviteCreate: async (ctx) => {
@@ -2013,6 +2252,7 @@ Object.assign(H, {
     const tmdbId = String(ctx.url.searchParams.get('tmdb') || '').replace(/\D/g, '');
     const wantsList = ctx.url.searchParams.get('list') === '1';
     const variant = String(ctx.url.searchParams.get('variant') || '').replace(/[^a-z0-9_.:-]/gi, '').slice(0, 80);
+    const shift = Math.max(-120, Math.min(120, Number(ctx.url.searchParams.get('shift') || 0) || 0));
     const base = process.env.WYZIE_BASE || undefined;
     const subOpts = {
       key, tmdbId, query: vf._q || vf.name, lang, releaseName: vf.name,
@@ -2077,7 +2317,8 @@ Object.assign(H, {
         return send(ctx.res, status, { error: e.message || 'online subtitles failed' });
       }
     }
-    send(ctx.res, 200, vf._osCache.get(cacheKey), { 'content-type': 'text/vtt; charset=utf-8' });
+    const vtt = vf._osCache.get(cacheKey);
+    send(ctx.res, 200, shift ? shiftVtt(vtt, shift) : vtt, { 'content-type': 'text/vtt; charset=utf-8' });
   },
 
   // Embedded subtitle track → WebVTT. ffmpeg must read the whole stream (subs are interleaved),
@@ -2293,6 +2534,7 @@ const ROUTES = [
   { m: 'POST', re: /^\/api\/libraries\/(\w+)\/scan$/, auth: 'admin', h: H.libraryScan },
   { m: 'POST', re: /^\/api\/libraries\/(\w+)\/match$/, auth: 'admin', h: H.libraryMatch },
   { m: 'GET', re: /^\/api\/libraries\/(\w+)\/items$/, auth: 'user', h: H.libraryItems },
+  { m: 'POST', re: /^\/api\/local\/(\w+)\/(\d+)\/play$/, auth: 'user', h: H.localPlay },
   { m: 'GET', re: /^\/api\/local\/(\w+)\/art\/(\d+)$/, auth: 'stream', h: H.localArt },
   { m: 'GET', re: /^\/api\/local\/(\w+)\/thumb\/(\d+)$/, auth: 'stream', h: H.localThumb },
   { m: 'GET', re: /^\/api\/libraries\/(\w+)\/scanstatus$/, auth: 'admin', h: H.libraryScanStatus },
@@ -2441,15 +2683,10 @@ if (require.main === module) {
   server.listen(PORT, () => {
     console.log(`Triboon → http://localhost:${PORT}`);
     try { getPool(); } catch { /* no provider configured yet — fine */ }
-    // Warm the Live TV playlist off the critical path: the first viewer after a restart
-    // gets the in-memory cache instead of waiting out a multi-MB panel fetch + parse.
-    setTimeout(() => {
-      const s = settings.get();
-      if ((s.iptvMode === 'xtream' && s.xtHost) || s.iptvUrl) {
-        loadIptvChannels().then((ch) => console.log(`[iptv] warmed ${ch.length} channels`))
-          .catch((e) => console.error('[iptv warm]', e.message));
-      }
-    }, 1500).unref();
+    // Warm Live TV off the viewer path: channels + XMLTV guide (or a bounded Xtream guide
+    // set) are refreshed at local midnight server-side, while stale caches are served instantly.
+    scheduleIptvWarmSoon('startup');
+    scheduleNextIptvWarm();
   });
   // Docker sends SIGTERM on `docker stop` — flush the store and close cleanly instead of
   // being SIGKILLed 10s later with dirty state.
@@ -2460,9 +2697,11 @@ if (require.main === module) {
 
 function shutdown() {
   clearInterval(sweepTimer);
+  if (iptvWarmSoonTimer) clearTimeout(iptvWarmSoonTimer);
+  if (iptvWarmTimer) clearTimeout(iptvWarmTimer);
   if (pool) { pool.close(); pool = null; }
   store.close();
   return new Promise((r) => server.close(r));
 }
 
-module.exports = { server, mounts, getPool, shutdown, sweep, ROUTES, auth, settings, store };
+module.exports = { server, mounts, getPool, shutdown, sweep, ROUTES, auth, settings, store, warmIptvCaches, msUntilNextIptvWarm };
