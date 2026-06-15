@@ -88,12 +88,16 @@ public class MainActivity extends Activity {
     private TextView nativePlayerTitle;
     private TextView nativePlayerSubline;
     private TextView nativePlayerBadge;
+    private TextView nativeChromeTitle;
+    private TextView nativeChromeQuality;
     private TextView nativeClock;
     private TextView nativeEndsAt;
     private FrameLayout nativeLoading;
     private ImageView nativeLoadingBackdrop;
     private TextView nativeLoadingTitle;
     private int nativeLoadingToken;
+    private View nativeControlShade;
+    private LinearLayout nativeMetaBar;
     private LinearLayout nativeChrome;
     private SeekBar nativeSeek;
     private TextView nativeElapsed;
@@ -412,7 +416,7 @@ public class MainActivity extends Activity {
         nativeTop = new LinearLayout(this);
         nativeTop.setOrientation(LinearLayout.VERTICAL);
         nativeTop.setPadding(dp(36), dp(22), dp(36), dp(30));
-        nativeTop.setBackground(nativeFade(0x99000000, 0x00000000));
+        nativeTop.setBackgroundColor(Color.TRANSPARENT);
 
         LinearLayout titleRow = new LinearLayout(this);
         titleRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -487,10 +491,54 @@ public class MainActivity extends Activity {
 
         nativeChrome = new LinearLayout(this);
         nativeChrome.setOrientation(LinearLayout.VERTICAL);
-        nativeChrome.setPadding(dp(34), dp(12), dp(34), dp(20));
-        nativeChrome.setBackground(nativeFade(0x00000000, 0xD8000000));
+        nativeChrome.setPadding(dp(34), dp(12), dp(34), dp(18));
+        nativeChrome.setBackgroundColor(Color.TRANSPARENT);
         nativeChrome.setClipChildren(false);
         nativeChrome.setClipToPadding(false);
+
+        nativeControlShade = new View(this);
+        nativeControlShade.setBackgroundColor(0xD0000000);
+        nativeControlShade.setVisibility(View.GONE);
+        nativeControlShade.setFocusable(false);
+        nativeControlShade.setClickable(false);
+        FrameLayout.LayoutParams shadeLp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(430),
+                android.view.Gravity.BOTTOM);
+        nativePlayerLayer.addView(nativeControlShade, shadeLp);
+
+        nativeMetaBar = new LinearLayout(this);
+        nativeMetaBar.setOrientation(LinearLayout.HORIZONTAL);
+        nativeMetaBar.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        nativeMetaBar.setPadding(dp(34), 0, dp(34), dp(10));
+        nativeMetaBar.setVisibility(View.GONE);
+        nativeMetaBar.setClipChildren(false);
+        nativeMetaBar.setClipToPadding(false);
+
+        nativeChromeTitle = new TextView(this);
+        nativeChromeTitle.setTextColor(Color.WHITE);
+        nativeChromeTitle.setTextSize(18);
+        nativeChromeTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        nativeChromeTitle.setSingleLine(true);
+        nativeChromeTitle.setShadowLayer(6, 0, 2, Color.BLACK);
+        nativeMetaBar.addView(nativeChromeTitle, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+
+        nativeChromeQuality = new TextView(this);
+        nativeChromeQuality.setTextColor(0xFFF3EFF7);
+        nativeChromeQuality.setTextSize(12);
+        nativeChromeQuality.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        nativeChromeQuality.setGravity(android.view.Gravity.CENTER);
+        nativeChromeQuality.setPadding(dp(11), dp(5), dp(11), dp(6));
+        nativeChromeQuality.setBackground(nativePillBg(0x66050309, 0x3AF3EFF7, dp(14)));
+        LinearLayout.LayoutParams qualityLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        qualityLp.setMargins(dp(18), 0, 0, 0);
+        nativeMetaBar.addView(nativeChromeQuality, qualityLp);
+        FrameLayout.LayoutParams metaLp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                android.view.Gravity.BOTTOM);
+        metaLp.setMargins(0, 0, 0, dp(150));
+        nativePlayerLayer.addView(nativeMetaBar, metaLp);
 
         LinearLayout seekRow = new LinearLayout(this);
         seekRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -541,19 +589,36 @@ public class MainActivity extends Activity {
 
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.HORIZONTAL);
-        controls.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICAL);
-        controls.setPadding(0, dp(9), 0, 0);
+        controls.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        controls.setPadding(0, dp(18), 0, 0);
         controls.setClipChildren(false);
         controls.setClipToPadding(false);
 
+        LinearLayout leftControls = new LinearLayout(this);
+        leftControls.setOrientation(LinearLayout.HORIZONTAL);
+        leftControls.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICAL);
+        leftControls.setClipChildren(false);
+        leftControls.setClipToPadding(false);
+
+        LinearLayout centerControls = new LinearLayout(this);
+        centerControls.setOrientation(LinearLayout.HORIZONTAL);
+        centerControls.setGravity(android.view.Gravity.CENTER);
+        centerControls.setClipChildren(false);
+        centerControls.setClipToPadding(false);
+
+        LinearLayout rightControls = new LinearLayout(this);
+        rightControls.setOrientation(LinearLayout.HORIZONTAL);
+        rightControls.setGravity(android.view.Gravity.END | android.view.Gravity.CENTER_VERTICAL);
+        rightControls.setClipChildren(false);
+        rightControls.setClipToPadding(false);
+
         nativeGuideBtn = nativeButton(R.drawable.ic_player_guide, "TV guide", false);
         nativeGuideBtn.setOnClickListener(v -> openNativeLiveGuide());
-        controls.addView(nativeGuideBtn);
-        controls.addView(nativeControlSpacer(12));
+        leftControls.addView(nativeGuideBtn);
 
         nativeRewBtn = nativeButton(R.drawable.ic_player_rewind, "Back 10 seconds", false);
         nativeRewBtn.setOnClickListener(v -> nativeSeekBy(-10000));
-        controls.addView(nativeRewBtn);
+        centerControls.addView(nativeRewBtn);
 
         nativePlayBtn = nativeButton(R.drawable.ic_player_pause, "Pause", true);
         nativePlayBtn.setOnClickListener(v -> {
@@ -562,28 +627,34 @@ public class MainActivity extends Activity {
             else nativePlayer.play();
             updateNativeChrome();
         });
-        controls.addView(nativePlayBtn);
+        centerControls.addView(nativePlayBtn);
 
         nativeFwdBtn = nativeButton(R.drawable.ic_player_forward, "Forward 30 seconds", false);
         nativeFwdBtn.setOnClickListener(v -> nativeSeekBy(30000));
-        controls.addView(nativeFwdBtn);
+        centerControls.addView(nativeFwdBtn);
 
         nativeNextBtn = nativeButton(R.drawable.ic_player_next, "Next episode", false);
         nativeNextBtn.setOnClickListener(v -> playNativeNextEpisode());
-        controls.addView(nativeNextBtn);
-        controls.addView(nativeControlSpacer(12));
+        centerControls.addView(nativeNextBtn);
 
         nativeCcBtn = nativeButton(R.drawable.ic_player_cc, "Subtitles", false);
         nativeCcBtn.setOnClickListener(v -> showNativeTrackMenu(C.TRACK_TYPE_TEXT));
-        controls.addView(nativeCcBtn);
+        rightControls.addView(nativeCcBtn);
 
         nativeAudioBtn = nativeButton(R.drawable.ic_player_audio, "Audio language", false);
         nativeAudioBtn.setOnClickListener(v -> showNativeTrackMenu(C.TRACK_TYPE_AUDIO));
-        controls.addView(nativeAudioBtn);
+        rightControls.addView(nativeAudioBtn);
 
         nativeQualityBtn = nativeButton(R.drawable.ic_player_quality, "Quality", false);
         nativeQualityBtn.setOnClickListener(v -> showNativeQualityMenu());
-        controls.addView(nativeQualityBtn);
+        rightControls.addView(nativeQualityBtn);
+
+        controls.addView(leftControls, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        controls.addView(centerControls, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        controls.addView(rightControls, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
 
         nativeChrome.addView(controls, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -591,6 +662,7 @@ public class MainActivity extends Activity {
         FrameLayout.LayoutParams chromeLp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                 android.view.Gravity.BOTTOM);
+        chromeLp.setMargins(0, 0, 0, dp(28));
         nativePlayerLayer.addView(nativeChrome, chromeLp);
 
         nativeSheet = new LinearLayout(this);
@@ -634,18 +706,7 @@ public class MainActivity extends Activity {
         ImageView loadingLogo = new ImageView(this);
         loadingLogo.setImageResource(R.drawable.ic_loading_logo);
         loadingLogo.setAlpha(0.96f);
-        loadingCenter.addView(loadingLogo, new LinearLayout.LayoutParams(dp(92), dp(92)));
-
-        TextView loadingBrand = new TextView(this);
-        loadingBrand.setText("TRIBOON");
-        loadingBrand.setTextColor(0xFFF9F4FF);
-        loadingBrand.setTextSize(30);
-        loadingBrand.setTypeface(Typeface.DEFAULT_BOLD);
-        loadingBrand.setGravity(android.view.Gravity.CENTER);
-        loadingBrand.setPadding(0, dp(18), 0, 0);
-        loadingBrand.setLetterSpacing(0.08f);
-        loadingCenter.addView(loadingBrand, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        loadingCenter.addView(loadingLogo, new LinearLayout.LayoutParams(dp(112), dp(112)));
 
         nativeLoadingTitle = new TextView(this);
         nativeLoadingTitle.setTextColor(0xDDF3EFF7);
@@ -667,7 +728,7 @@ public class MainActivity extends Activity {
         loadingCenter.addView(loadingSpinner, spinLp);
 
         TextView loadingStage = new TextView(this);
-        loadingStage.setText("Starting native stream");
+        loadingStage.setText("Opening playback");
         loadingStage.setTextColor(0xAAFFC65C);
         loadingStage.setTextSize(11);
         loadingStage.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
@@ -816,10 +877,10 @@ public class MainActivity extends Activity {
                 GradientDrawable.Orientation.LEFT_RIGHT,
                 focused
                         ? new int[]{0xFFEDE8F5, 0xFFD9CBE7}
-                        : new int[]{0x99221934, 0x99221934});
+                        : new int[]{0x18F3EFF7, 0x18F3EFF7});
         d.setShape(GradientDrawable.RECTANGLE);
         d.setCornerRadius(dp(primary ? 23 : 18));
-        d.setStroke(focused ? dp(1) : 0, focused ? 0xFFEDE8F5 : 0x00000000);
+        d.setStroke(0, 0x00000000);
         return d;
     }
 
@@ -955,6 +1016,8 @@ public class MainActivity extends Activity {
 
             nativePlayerView.setPlayer(nativePlayer);
             nativePlayerTitle.setText(title);
+            nativePlayerTitle.setVisibility(View.INVISIBLE);
+            if (nativeChromeTitle != null) nativeChromeTitle.setText(title);
             if ("live".equals(mode)) {
                 nativePlayerSubline.setText(source.isEmpty() ? "Live TV" : source);
                 nativePlayerSubline.setVisibility(View.VISIBLE);
@@ -962,7 +1025,10 @@ public class MainActivity extends Activity {
                 nativePlayerSubline.setText("");
                 nativePlayerSubline.setVisibility(View.GONE);
             }
-            nativePlayerBadge.setText("live".equals(mode) ? "LIVE" : nativeQualityLabel);
+            String chromeQuality = "live".equals(mode) ? "LIVE" : nativeQualityLabel;
+            nativePlayerBadge.setText(chromeQuality);
+            nativePlayerBadge.setVisibility(View.GONE);
+            if (nativeChromeQuality != null) nativeChromeQuality.setText(chromeQuality);
             if (nativeGuideBtn != null) nativeGuideBtn.setVisibility(View.VISIBLE);
             nativeNextBtn.setVisibility(hasNext ? View.VISIBLE : View.GONE);
             nativePlayerLayer.setVisibility(View.VISIBLE);
@@ -1010,6 +1076,8 @@ public class MainActivity extends Activity {
 
     private void showNativeChrome(boolean focusPlay) {
         if (nativeChrome == null) return;
+        if (nativeControlShade != null) nativeControlShade.setVisibility(View.VISIBLE);
+        if (nativeMetaBar != null) nativeMetaBar.setVisibility(View.VISIBLE);
         nativeChrome.setVisibility(View.VISIBLE);
         nativeTop.setVisibility(View.VISIBLE);
         setNativeSubtitleLift(true);
@@ -1028,6 +1096,8 @@ public class MainActivity extends Activity {
         @Override public void run() {
             if (!nativePlayerOpen() || nativeChrome == null) return;
             if (nativeUserSeeking || nativeSheetOpen()) return;
+            if (nativeControlShade != null) nativeControlShade.setVisibility(View.GONE);
+            if (nativeMetaBar != null) nativeMetaBar.setVisibility(View.GONE);
             nativeChrome.setVisibility(View.GONE);
             nativeTop.setVisibility(View.GONE);
             nativePlayerLayer.requestFocus();
@@ -1037,12 +1107,12 @@ public class MainActivity extends Activity {
 
     private void setNativeSubtitleLift(boolean lift) {
         if (nativePlayerView != null && nativePlayerView.getSubtitleView() != null) {
-            nativePlayerView.getSubtitleView().setBottomPaddingFraction(lift ? 0.27f : 0.08f);
-            nativePlayerView.getSubtitleView().setPadding(0, 0, 0, lift ? dp(150) : dp(28));
+            nativePlayerView.getSubtitleView().setBottomPaddingFraction(lift ? 0.30f : 0.08f);
+            nativePlayerView.getSubtitleView().setPadding(0, 0, 0, lift ? dp(178) : dp(28));
         }
         if (nativeSubtitleOverlay != null) {
             FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) nativeSubtitleOverlay.getLayoutParams();
-            lp.bottomMargin = lift ? dp(178) : dp(82);
+            lp.bottomMargin = lift ? dp(206) : dp(82);
             nativeSubtitleOverlay.setLayoutParams(lp);
         }
     }
@@ -1087,7 +1157,10 @@ public class MainActivity extends Activity {
         nativeProgress.removeCallbacks(nativeHideChrome);
         if (nativeSheet != null) nativeSheet.setVisibility(View.GONE);
         if (nativeTop != null) nativeTop.setVisibility(View.GONE);
+        if (nativeMetaBar != null) nativeMetaBar.setVisibility(View.GONE);
         if (nativeChrome != null) nativeChrome.setVisibility(View.GONE);
+        if (nativeControlShade != null) nativeControlShade.setVisibility(View.GONE);
+        if (nativeMetaBar != null) nativeMetaBar.setVisibility(View.GONE);
         nativePlayerLayer.setBackgroundColor(Color.TRANSPARENT);
         nativePlayerLayer.setFocusable(false);
         nativePlayerLayer.setFocusableInTouchMode(false);
@@ -1393,6 +1466,7 @@ public class MainActivity extends Activity {
         nativeLiveUnhealthySinceMs = 0L;
         nativeLiveLastRecoveryMs = SystemClock.elapsedRealtime();
         if (nativePlayerBadge != null) nativePlayerBadge.setText("LIVE");
+        if (nativeChromeQuality != null) nativeChromeQuality.setText("LIVE");
         nativePlayer.setMediaItem(buildNativeMediaItem());
         nativePlayer.prepare();
         nativePlayer.play();
@@ -2091,6 +2165,8 @@ public class MainActivity extends Activity {
             nativeSheet.setVisibility(View.GONE);
             nativeSheet.removeAllViews();
         }
+        if (nativeControlShade != null) nativeControlShade.setVisibility(View.GONE);
+        if (nativeMetaBar != null) nativeMetaBar.setVisibility(View.GONE);
         nativeSheetReturnFocus = null;
         String mode = nativeMode;
         long pos = nativePosSeconds();

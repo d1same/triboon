@@ -165,14 +165,38 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'manual source playback should send the opaque server pick key, not only a release name');
   assert.match(ui, /play\(it, \{ name: c\.name, pickKey: c\.pickKey, resolutionRank: rk\(c\) \}\)/,
     'clicking a Sources row should carry its exact release key and quality class into Play');
+  assert.match(ui, /async function play\(it, pick\) \{[\s\S]+it = resolvePlaybackResume\(it\);[\s\S]+const picked = pick && typeof pick === 'object' \? pick : \(pick \? \{ name: pick \} : null\);[\s\S]+const body = \{ q: queryFor\(it\), pick: picked && picked\.name, pickKey: picked && picked\.pickKey, caps: clientCaps\(\) \};/,
+    'manual source selection should re-resolve the latest resume point before mounting the exact picked release');
+  assert.match(ui, /const pickRank = picked \? normalizeResolutionRank\(picked\.resolutionRank\) : null;[\s\S]+const qRank = pickRank !== null \? pickRank : qualityRankForItem\(it\);[\s\S]+body\.maxResolutionRank = qRank;[\s\S]+body\.preferResolutionRank = qRank;/,
+    'manual source selection should prefer the picked source quality while normal Play uses the current 1080p/4K toggle');
+  assert.match(ui, /\.srcRow \.srcTop\{display:flex;align-items:flex-start;justify-content:space-between[\s\S]+\.srcRow \.srcScore\{[\s\S]+font:800 10px "JetBrains Mono"[\s\S]+\.srcRow\.auto::before\{[\s\S]+background:var\(--grad\)/,
+    'Sources drawer rows should use a structured title, score, and selected-source accent');
+  assert.match(ui, /row\.innerHTML = `<div class="srcTop"><div class="srcTitle"><div class="name">\$\{esc\(c\.name\)\}<\/div>\$\{i === 0 \? '<div class="srcPick">Auto pick<\/div>' : ''\}<\/div><div class="srcScore">Score \$\{esc\(c\.score\)\}<\/div><\/div><div class="chips">\$\{chips\}<\/div>`;/,
+    'Sources drawer should render release names separately from scan-friendly metadata');
   assert.match(ui, /qualityRank:\s*normalizeQualityRank\(w\.meta\.qualityRank\)/,
     'Continue Watching cards should carry the saved quality rank from watch state');
   assert.match(ui, /qualityRank:\s*qualityRankForItem\(p\.item\)/,
     'watch progress saves the current quality rank for future resumes');
+  assert.match(ui, /async function saveWatch\(final\) \{[\s\S]+const pos = currentTime\(\);[\s\S]+if \(!final && Math\.abs\(pos - p\.lastSaved\) < 5\) return;[\s\S]+key: p\.item\.key, position: Math\.floor\(pos\), duration: Math\.floor\(d \|\| 0\),[\s\S]+profile: S\.profile \? S\.profile\.id : undefined,[\s\S]+upsertWatchCache\(\{[\s\S]+position: payload\.position[\s\S]+api\('\/api\/watch', \{ method: 'POST', body: payload \}\)/,
+    'watch progress should save profile-scoped position immediately into the local cache and server');
+  assert.match(ui, /async function closePlayer\(\) \{[\s\S]+const finalWatch = saveWatch\(true\);[\s\S]+if \(\$\(\'detail\'\)\.classList\.contains\(\'open\'\)\) \{[\s\S]+await finalWatch; await loadWatchState\(true\);/,
+    'returning from player to details should flush the final watch position before another source is chosen');
   assert.match(ui, /saveQualityPref\(target,\s*S\.qualityPref\)/,
     'changing the detail quality toggle should persist the per-title preference');
   assert.match(ui, /qualityTitleKey\(S\.detailItem\) === qualityTitleKey\(it\)/,
     'episode resumes should inherit the show-level quality preference');
+  assert.match(ui, /<div class="qToggle" id="qToggle"[\s\S]+id="dSources"[\s\S]+id="dWatchlist"/,
+    'movie/show details should place the 1080p/4K toggle immediately before Sources');
+  assert.match(ui, /#dBtns \.btn\{min-height:52px;border-radius:40px;box-sizing:border-box\}[\s\S]+\.qToggle\{display:flex;align-items:center;min-height:52px;box-sizing:border-box[\s\S]+border-radius:40px[\s\S]+\.qToggle button\{height:42px[\s\S]+border-radius:34px/,
+    'movie/show detail action buttons and the quality selector should share matching height and curve');
+  assert.match(ui, /#dPlay\{position:relative;justify-content:center;min-width:118px\}[\s\S]+#dPlay svg\{position:absolute;left:30px\}[\s\S]+#dPlay\.resumeMode svg\{display:none\}[\s\S]+#dPlayLabel\{display:block;width:100%;text-align:center\}/,
+    'movie/show detail Play and Resume text should be centered inside the whole pill');
+  assert.match(ui, /function updateDetailPlayLabel\(\{ label, target \}\) \{[\s\S]+\$\(\'dPlayLabel\'\)\.textContent = label;[\s\S]+\$\(\'dPlay\'\)\.classList\.toggle\('resumeMode', label === 'Resume'\);/,
+    'movie/show detail Resume should hide the play icon so it cannot overlap the centered label');
+  assert.match(ui, /const detailResume = resumePositionForItem\(it\);[\s\S]+updateDetailPlayLabel\(detailResume \? \{ label: 'Resume', target: \{ \.\.\.it, resume: detailResume \} \}/,
+    'movie details should show Resume without the timestamp while keeping the resume position in the play target');
+  assert.match(ui, /return updateDetailPlayLabel\(\{ label: 'Resume', target: epTarget\(show, \+m\[1\], \+m\[2\], wm\[inProg\]\.position\) \}\)/,
+    'TV show details should show Resume without the timestamp while keeping the episode resume position');
   assert.match(ui, /map\[key\] = \{ streamUrl: x\.streamUrl, playUrl: x\.playUrl, name: x\.title/,
     'local-first Continue Watching entries should keep the rich local player prep URL');
   assert.match(ui, /_local: x\.streamUrl \? \{ streamUrl: x\.streamUrl, playUrl: x\.playUrl, name:/,
@@ -205,7 +229,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Continue Watching should carry poster art into details instead of relying only on backdrop art');
   assert.match(ui, /overview: p\.item\.overview, poster: p\.item\.poster, backdrop: p\.item\.backdrop/,
     'watch progress should save poster art so Continue Watching is stable before and after refresh');
-  assert.match(ui, /function openLocalDetail\(it\) \{[\s\S]+const resume = resumePositionForItem\(it\);[\s\S]+\$\(\'dStartOver\'\)\.style\.display = resume \? '' : 'none';[\s\S]+Resume/,
+  assert.match(ui, /function openLocalDetail\(it\) \{[\s\S]+const resume = resumePositionForItem\(it\);[\s\S]+\$\(\'dStartOver\'\)\.style\.display = resume \? '' : 'none';[\s\S]+updateDetailPlayLabel\(resume \? \{ label: 'Resume', target: \{ \.\.\.it, resume \} \}/,
     'unmatched local library details should expose the same Resume and Start Over behavior');
 });
 
@@ -219,6 +243,12 @@ test('music playback stops when leaving the Music section', () => {
     'starting video playback should stop Music instead of pausing it for later resume');
   assert.doesNotMatch(ui, /S\._musicWasPlaying && S\.musicCur[\s\S]+mAudio\.play\(\)/,
     'closing video playback should not resume music after the user has left Music');
+  assert.match(ui, /mAudio\.addEventListener\('ended', \(\) => musicNext\(true\)\)/,
+    'ended tracks should route through the auto-advance path');
+  assert.match(ui, /playMusic\(q, next, auto \? \{ autoplay: false \} : \{\}\)/,
+    'auto-advance should queue the next music track without starting playback');
+  assert.doesNotMatch(ui, /if \(auto && S\.musicRepeat === 'one'\) \{[\s\S]+mAudio\.play\(\)/,
+    'repeat-one should not restart automatically after a track ends');
 });
 
 test('Android native player: direct source and native chrome stay out of the web player', () => {
@@ -280,6 +310,40 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Android loading should receive the same movie art as the web player loader');
   assert.match(ui, /class="seekLine"[\s\S]+id="seekElapsed"[\s\S]+id="seek"[\s\S]+id="seekTotal"/,
     'web player seek bar should show elapsed time on the left and total duration on the right');
+  assert.match(ui, /id="playerBackBtn"[\s\S]+class="playerMetaRow"[\s\S]+id="pTitle"[\s\S]+id="pQuality"[\s\S]+class="seekLine"/,
+    'web player should show back at top-left and title/quality above the seek bar');
+  assert.match(ui, /#osd\{[\s\S]+padding:clamp\(22px,3vw,42px\) clamp\(24px,3\.6vw,52px\) clamp\(50px,6\.2vw,78px\)/,
+    'web player controls should sit a bit higher above the bottom edge');
+  assert.match(ui, /function updatePlayerMeta\(\) \{[\s\S]+playerQualityLabel\(p\)[\s\S]+\$\(\'pQuality\'\)\.textContent = quality/,
+    'web player should keep the visible quality label synchronized without showing the full source filename');
+  assert.match(ui, /#osd::after\{[\s\S]+height:min\(42vh,380px\)[\s\S]+linear-gradient\(180deg,rgba\(0,0,0,0\) 0%[\s\S]+rgba\(0,0,0,\.56\) 100%\)/,
+    'web player OSD should paint a plain black bottom controller shade without brand glow');
+  assert.match(ui, /\.cbtn\{width:46px;height:46px[\s\S]+background:rgba\(5,3,9,\.4\)[\s\S]+\.cbtn:hover,\.cbtn\.focus,\.cbtn:focus\{background:rgba\(5,3,9,\.56\)/,
+    'web player button circles should use more transparent black fills');
+  assert.match(ui, /#osd \.ctl\{display:grid;grid-template-columns:minmax\(0,1fr\) auto minmax\(0,1fr\)/,
+    'web player control row should visually pin Guide left, playback center, and secondary controls right');
+  assert.match(ui, /class="ctlGroup ctlLeft"[\s\S]+id="chGuide"[\s\S]+class="ctlGroup ctlCenter"[\s\S]+id="back10"[\s\S]+id="playPause"[\s\S]+id="fwd30"[\s\S]+id="nextEpBtn"[\s\S]+class="ctlGroup ctlRight"[\s\S]+id="ccBtn"[\s\S]+id="audBtn"[\s\S]+id="srndBtn"[\s\S]+id="qualBtn"[\s\S]+id="muteBtn"[\s\S]+id="fsBtn"/,
+    'web player should mirror native Guide-left, playback-center, secondary-right button grouping');
+  assert.match(ui, /function playerSurfaceClick\(e\) \{[\s\S]+closest\('#osd \.top,\.playerMetaRow,\.seekLine,\.ctl,#trackMenu,#pGuide,#vlcPanel,#upNext,#playerLoader,button,a,input,select,textarea'\)[\s\S]+return true;[\s\S]+function playerSingleClick\(e\) \{[\s\S]+setTimeout\(\(\) => \{[\s\S]+togglePlay\(\);[\s\S]+\}, 320\);[\s\S]+function playerDoubleClick\(e\) \{[\s\S]+clearTimeout\(_playerSurfaceClickT\);[\s\S]+toggleFullscreen\(\);/,
+    'web player screen clicks should toggle play, while double-click fullscreen cancels the pending pause');
+  assert.match(ui, /\$\('player'\)\.addEventListener\('click', playerSingleClick\);[\s\S]+\$\('player'\)\.addEventListener\('dblclick', playerDoubleClick\);/,
+    'web player should bind separate single-click and double-click surface handlers');
+  assert.match(android, /nativeTop\.setBackgroundColor\(Color\.TRANSPARENT\);/,
+    'native top clock strip should not draw a glow or shade behind the time');
+  assert.match(android, /private View nativeControlShade;[\s\S]+nativeControlShade = new View\(this\);[\s\S]+nativeControlShade\.setBackgroundColor\(0xD0000000\);[\s\S]+MATCH_PARENT, dp\(430\)[\s\S]+nativePlayerLayer\.addView\(nativeControlShade, shadeLp\);/,
+    'native ExoPlayer should paint a flat dark bottom controller shade behind the controls');
+  assert.match(android, /if \(nativeControlShade != null\) nativeControlShade\.setVisibility\(View\.VISIBLE\);[\s\S]+if \(nativeMetaBar != null\) nativeMetaBar\.setVisibility\(View\.VISIBLE\);[\s\S]+nativeChrome\.setVisibility\(View\.VISIBLE\);/,
+    'native ExoPlayer should show the controller shade and metadata bar with the controls');
+  assert.match(android, /nativeControlShade\.setVisibility\(View\.GONE\);[\s\S]+nativeMetaBar\.setVisibility\(View\.GONE\);[\s\S]+nativeChrome\.setVisibility\(View\.GONE\);/,
+    'native ExoPlayer should hide the controller shade and metadata bar with the controls');
+  assert.match(android, /private GradientDrawable nativeButtonBg\(boolean focused, boolean primary\) \{[\s\S]+new int\[\]\{0xFFEDE8F5, 0xFFD9CBE7\}[\s\S]+new int\[\]\{0x18F3EFF7, 0x18F3EFF7\}/,
+    'native ExoPlayer buttons should use a very transparent circle background and switch fully light on focus');
+  assert.match(android, /nativeChrome\.setPadding\(dp\(34\), dp\(12\), dp\(34\), dp\(18\)\);[\s\S]+controls\.setPadding\(0, dp\(18\), 0, 0\);/,
+    'native ExoPlayer control row should balance the play button spacing above and below');
+  assert.match(android, /FrameLayout\.LayoutParams chromeLp = new FrameLayout\.LayoutParams\([\s\S]+android\.view\.Gravity\.BOTTOM\);[\s\S]+chromeLp\.setMargins\(0, 0, 0, dp\(28\)\);/,
+    'native ExoPlayer controls should sit a bit higher above the bottom edge');
+  assert.match(android, /controls\.addView\(leftControls, new LinearLayout\.LayoutParams\([\s\S]+controls\.addView\(centerControls, new LinearLayout\.LayoutParams\([\s\S]+controls\.addView\(rightControls, new LinearLayout\.LayoutParams/,
+    'native ExoPlayer should separate Guide left, playback center, and secondary controls right');
   assert.match(ui, /const cards = document\.createElement\('div'\); cards\.className = 'cards';\s+edgeScroll\(cards\);/,
     'freshly rendered home/discover rows should keep mouse edge auto-scroll');
   assert.match(ui, /if \(!el \|\| el\.dataset\.edgeScroll === '1'\) return;/,
@@ -354,9 +418,13 @@ test('Android native player: direct source and native chrome stay out of the web
     'closing native Live TV should restore the guide instead of stale detail history');
   assert.match(ui, /const wasLiveShell = !!\(S\.playing && S\.playing\.item && S\.playing\.item\.type === 'live' && S\.view === 'player'\);[\s\S]+if \(wasLiveShell\) \{[\s\S]+closePlayer\(\);[\s\S]+return;[\s\S]+\}/,
     'closing native Live TV from its guide/player shell should clear the web player state instead of revealing a stale black player');
+  assert.match(ui, /async function closePlayer\(\) \{[\s\S]+S\.nativeGuideMode = false;[\s\S]+closePlayerGuide\(\);/,
+    'closing the player should clear native guide mode before the shared guide close path can call back into Android');
   assert.match(ui, /window\.__tvNativeLiveGuide = async \(epoch\) => \{[\s\S]+openNativeLiveGuideShell\(it\);[\s\S]+renderPlayerGuideTimeline\(\$\(\'pGuide\'\), list\)/,
     'native Live TV guide should draw the existing PiP guide without starting web playback');
-  assert.match(ui, /window\.__tvNativeLiveGuide = async \(epoch\) => \{[\s\S]+S\.nativeGuideEpoch = Number\.isFinite\(n\) && n > 0 \? n[\s\S]+const it = S\.nativeLivePending;[\s\S]+S\.nativeLivePending = null;[\s\S]+if \(!it\) \{/,
+  assert.match(ui, /function currentNativeLiveGuideItem\(\) \{[\s\S]+S\.playing && S\.playing\.item && S\.playing\.item\.type === 'live'[\s\S]+S\.liveList[\s\S]+S\.liveChannels[\s\S]+return hit;[\s\S]+\}/,
+    'native guide should be able to rebuild the active live item after the first PiP open consumed pending state');
+  assert.match(ui, /window\.__tvNativeLiveGuide = async \(epoch\) => \{[\s\S]+S\.nativeGuideEpoch = Number\.isFinite\(n\) && n > 0 \? n[\s\S]+const it = S\.nativeLivePending \|\| currentNativeLiveGuideItem\(\);[\s\S]+S\.nativeLivePending = null;[\s\S]+if \(!it\) \{/,
     'native guide should consume pending live state without losing the Live TV return target');
   assert.doesNotMatch(ui, /__tvNativeLiveGuide[\s\S]+await playChannelWeb\(it\)/,
     'native Live TV guide should not hand off to the old web player');
@@ -430,8 +498,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'desktop hover may expand the rail unless a click just collapsed it; Android TV still relies on explicit D-pad state');
   assert.match(ui, /function focusContent\(retried\) \{[\s\S]+leaveRail\(\);[\s\S]+clearFocus\(\);/,
     'moving focus into page content should always collapse any stale rail state first');
-  assert.match(ui, /function focusLiveCategory\(idx, select = false\) \{[\s\S]+const remembered = Number\.isFinite\(S\.liveCatNavIdx\)[\s\S]+if \(select && name && name !== S\.liveCat\) \{[\s\S]+S\.liveCat = name;[\s\S]+S\.liveCatNavIdx = i;[\s\S]+S\.liveCatDpadMode = true;[\s\S]+renderLiveTvBody\(\);[\s\S]+return focusLiveCategory\(i\);/,
-    'Live TV category D-pad movement should select and immediately refocus the highlighted category for fast repeats');
+  assert.match(ui, /function focusLiveCategory\(idx, select = false\) \{[\s\S]+applyFocus\(cats\[i\], false\);[\s\S]+if \(select && name && name !== S\.liveCat\) \{[\s\S]+clearTimeout\(S\._liveCatApplyT\);[\s\S]+S\._liveCatApplyT = setTimeout\(\(\) => \{[\s\S]+S\.liveCat = name;[\s\S]+renderLiveTvBody\(\);[\s\S]+focusLiveCategory\(i\);[\s\S]+\}, 140\);/,
+    'Live TV category D-pad movement should keep scrolling immediately and debounce the heavy guide redraw');
+  assert.match(ui, /hit && Date\.now\(\) - hit\.at < \(hit\.syntheticOnly \? 5000 : 60000\)/,
+    'synthetic channel-listing guide batches should not stay sticky in the client cache');
   assert.match(ui, /chip\.dataset\.liveCat = name/,
     'Live TV category buttons should keep their category identity for D-pad selection');
   assert.match(ui, /if \(k === 'ArrowDown'\) return focusLiveCategory\(ci \+ 1, true\)/,
@@ -454,8 +524,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'normal Live TV tuning should still launch native fullscreen playback');
   assert.match(ui, /if \(nativeLiveRequired\(\)\) \{[\s\S]+Native player could not start this channel[\s\S]+return;[\s\S]+\}[\s\S]+return playChannelWeb\(it\);/,
     'Android Live TV should stop on native startup failure instead of falling back to the web player');
-  assert.match(ui, /fallbackUrl: it\._streamUrl \? new URL\(it\._streamUrl, location\.origin\)\.href : '',[\s\S]+fallbackMime: it\._streamUrl \? 'video\/mp4' : '',/,
-    'Android Live TV should give ExoPlayer a native remux fallback, not a WebView fallback');
+  assert.match(ui, /fallbackUrl: it\._nativeFallbackUrl \? new URL\(it\._nativeFallbackUrl, location\.origin\)\.href : '',[\s\S]+fallbackMime: it\._nativeFallbackMime \|\| '',/,
+    'Android Live TV should only receive native provider stream candidates, never the browser remux fallback');
+  assert.match(ui, /_nativeFallbackUrl: ch\.nativeFallbackUrl[\s\S]+_nativeFallbackMime: ch\.nativeFallbackMime \|\| ''/,
+    'Live TV guide/card/search items should preserve native fallback stream metadata');
   assert.doesNotMatch(ui, /Native player failed[^`'"]*using web player|using web playback/,
     'Android native playback should not advertise or trigger the old web player fallback');
   assert.doesNotMatch(ui, /__tvNativeVideoSwitchToWeb|__tvNativeLiveSwitchToWeb/,
@@ -466,8 +538,6 @@ test('Android native player: direct source and native chrome stay out of the web
     'native controls should use true image buttons so icons stay centered and unclipped');
   assert.match(android, /nativeButton\(R\.drawable\.ic_player_pause, "Pause", true\)/,
     'native player should use drawable icons, not text glyph controls');
-  assert.match(android, /controls\.setGravity\(android\.view\.Gravity\.START \| android\.view\.Gravity\.CENTER_VERTICAL\)/,
-    'native player controls should be left-aligned like the web player');
   assert.match(android, /moveNativeControlFocus\(code == KeyEvent\.KEYCODE_DPAD_LEFT \? -1 : 1\)/,
     'native player row should use explicit D-pad left/right navigation so Guide is reachable');
   assert.match(android, /moveNativeVerticalFocus\(code == KeyEvent\.KEYCODE_DPAD_UP \? -1 : 1\)/,
@@ -480,13 +550,13 @@ test('Android native player: direct source and native chrome stay out of the web
     'native seek bar should handle left/right before the button row moves focus');
   assert.match(android, /clickNativeControlFocus\(\)/,
     'native player OK should activate the focused control instead of relying on platform focus guessing');
-  assert.match(android, /nativeGuideBtn = nativeButton\(R\.drawable\.ic_player_guide, "TV guide", false\);[\s\S]+controls\.addView\(nativeGuideBtn\);[\s\S]+nativeRewBtn = nativeButton\(R\.drawable\.ic_player_rewind/,
-    'native guide button should be the first playback control, matching the web player');
-  assert.match(android, /controls\.addView\(nativeGuideBtn\);\s+controls\.addView\(nativeControlSpacer\(12\)\);[\s\S]+controls\.addView\(nativeRewBtn\);[\s\S]+controls\.addView\(nativePlayBtn\);[\s\S]+controls\.addView\(nativeFwdBtn\);[\s\S]+controls\.addView\(nativeNextBtn\);\s+controls\.addView\(nativeControlSpacer\(12\)\);[\s\S]+controls\.addView\(nativeCcBtn\);[\s\S]+controls\.addView\(nativeAudioBtn\);[\s\S]+controls\.addView\(nativeQualityBtn\);/,
-    'native player controls should group Guide, playback/next, and CC/audio/HD with visual spacing');
+  assert.match(android, /controls\.setGravity\(android\.view\.Gravity\.CENTER_VERTICAL\)[\s\S]+centerControls\.setGravity\(android\.view\.Gravity\.CENTER\)[\s\S]+rightControls\.setGravity\(android\.view\.Gravity\.END \| android\.view\.Gravity\.CENTER_VERTICAL\)/,
+    'native player controls should keep playback centered with secondary controls on the right');
+  assert.match(android, /leftControls\.addView\(nativeGuideBtn\);[\s\S]+centerControls\.addView\(nativeRewBtn\);[\s\S]+centerControls\.addView\(nativePlayBtn\);[\s\S]+centerControls\.addView\(nativeFwdBtn\);[\s\S]+centerControls\.addView\(nativeNextBtn\);[\s\S]+rightControls\.addView\(nativeCcBtn\);[\s\S]+rightControls\.addView\(nativeAudioBtn\);[\s\S]+rightControls\.addView\(nativeQualityBtn\);/,
+    'native player should keep Guide left, playback centered, and CC/audio/HD right');
   assert.match(android, /return new ImageButton\[\]\{\s+nativeGuideBtn, nativeRewBtn, nativePlayBtn, nativeFwdBtn,\s+nativeNextBtn, nativeCcBtn, nativeAudioBtn, nativeQualityBtn\s+\};/,
     'native player D-pad order should match the visible control grouping');
-  assert.match(ui, /\.cbtn\.big\{width:58px;height:58px;background:rgba\(34,25,52,\.68\);color:var\(--text\)\}/,
+  assert.match(ui, /\.cbtn\.big\{width:58px;height:58px;background:rgba\(5,3,9,\.4\);color:var\(--text\)\}/,
     'web play button should be neutral until focused or hovered');
   assert.doesNotMatch(ui, /\.cbtn\.on\{background:var\(--amber\)|\.btn\.primary,\.cbtn\.big/,
     'enabled or selected player buttons should not keep the old persistent gold highlight');
@@ -495,9 +565,9 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.match(ui, /ctlButtons\(\) \{[\s\S]+!b\.disabled && !b\.classList\.contains\('disabled'\)/,
     'web player D-pad focus should skip disabled controls');
   assert.match(android, /setNativeButtonIcon\(ImageButton b, int iconRes, boolean primary, boolean focused\) \{[\s\S]+!b\.isEnabled\(\) \? 0x88EDE8F5 : \(focused \? 0xFF0B0812 : 0xFFEDE8F5\)/,
-    'native player icons should only switch tint while focused, not merely because a button is primary');
-  assert.match(android, /focused[\s\S]+\? new int\[\]\{0xFFEDE8F5, 0xFFD9CBE7\}[\s\S]+: new int\[\]\{0x99221934, 0x99221934\}/,
-    'native player buttons should use the highlighted fill only while focused');
+    'native player icons should turn dark when the focused button switches to light mode');
+  assert.match(android, /focused[\s\S]+\? new int\[\]\{0xFFEDE8F5, 0xFFD9CBE7\}[\s\S]+: new int\[\]\{0x18F3EFF7, 0x18F3EFF7\}/,
+    'native player buttons should use a very transparent fill normally and full light fill while focused');
   assert.match(android, /setNativeButtonEnabled\(nativeCcBtn, nativeSubtitleHasOptions\(\)\);[\s\S]+setNativeButtonEnabled\(nativeAudioBtn, nativeAudioHasOptions\(\)\);[\s\S]+setNativeButtonEnabled\(nativeQualityBtn, "video"\.equals\(nativeMode\) && nativeHasQualityChoices\);/,
     'native CC/audio/HD buttons should be disabled when no real options exist');
   assert.match(android, /b == null \|\| b\.getVisibility\(\) != View\.VISIBLE \|\| !b\.isEnabled\(\)/,
@@ -538,6 +608,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'rail Live TV should use the Lucide tv icon');
   assert.match(ui, /data-nav="music"[\s\S]+M9 18V5l12-2v13[\s\S]+circle cx="18" cy="16"/,
     'rail Music should use the Lucide music icon');
+  assert.match(ui, /api\('\/api\/music\/charts'\)[\s\S]+S\.musicCharts = Array\.isArray\(r\.charts\) \? r\.charts : \[\]/,
+    'Music page should load daily and weekly chart rows from the server');
+  assert.match(ui, /async function loadMusicChartsFallback\(\) \{[\s\S]+\/api\/music\/search\?q=' \+ encodeURIComponent\(def\.query\) \+ '&limit=16'[\s\S]+S\.musicCharts = await loadMusicChartsFallback\(\)/,
+    'Music page should fall back to regular music search if the chart endpoint is not active yet');
+  assert.match(ui, /S\.musicCharts\.forEach\(\(chart, ci\) => \{[\s\S]+addShelf\(chart\.title[\s\S]+playMusic\(tracks, i, \{ showQueue: true \}\)/,
+    'Music charts should render as playable Music-home shelves');
   assert.doesNotMatch(android, /ImageButton back = nativeButton\(R\.drawable\.ic_player_back/,
     'native player bottom row should not show a separate Back button');
   assert.match(android, /KEY_CACHE_VERSION/,
@@ -548,9 +624,11 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android should not unconditionally discard cached art/assets during every app start');
   assert.match(android, /nativePlayerSubline\.setVisibility\(View\.GONE\)/,
     'native movie/episode chrome should not show the technical file/source line');
+  assert.match(android, /nativePlayerTitle\.setVisibility\(View\.INVISIBLE\);/,
+    'native hidden title should still reserve left-side space so the time stays top-right');
   assert.match(android, /nativeEndsAt\.setText\("Ends at " \+ fmtNativeClock/,
     'native movie/episode chrome should show when playback will finish');
-  assert.match(android, /nativeChrome\.setPadding\(dp\(34\), dp\(12\), dp\(34\), dp\(20\)\)/,
+  assert.match(android, /nativeChrome\.setPadding\(dp\(34\), dp\(12\), dp\(34\), dp\(18\)\)/,
     'native player seek bar should use wider horizontal space');
   assert.match(android, /dp\(primary \? 46 : 36\)/,
     'native player buttons should stay compact and avoid clipped circles on TV');
@@ -558,12 +636,24 @@ test('Android native player: direct source and native chrome stay out of the web
     'native player focus should not scale buttons and clip the circle');
   assert.match(android, /dp\(280\), ViewGroup\.LayoutParams\.WRAP_CONTENT/,
     'native option sheets should stay compact instead of covering the video');
-  assert.match(android, /nativePlayerBadge\.setText\("live"\.equals\(mode\) \? "LIVE" : nativeQualityLabel\)/,
-    'native video badge should show a friendly resolution label, not direct/remux/transcode internals');
+  assert.match(android, /private LinearLayout nativeMetaBar;[\s\S]+private LinearLayout nativeChrome;/,
+    'native ExoPlayer should have a separate metadata overlay above the seek bar');
+  assert.match(android, /nativeMetaBar = new LinearLayout\(this\);[\s\S]+nativeChromeTitle = new TextView\(this\);[\s\S]+nativeChromeQuality = new TextView\(this\);[\s\S]+nativePlayerLayer\.addView\(nativeMetaBar, metaLp\);/,
+    'native ExoPlayer should place title left and quality right in a visible overlay above the seek bar');
+  assert.match(android, /metaLp\.setMargins\(0, 0, 0, dp\(150\)\);/,
+    'native ExoPlayer metadata overlay should sit above the seek row instead of being buried in the control column');
+  assert.match(android, /String chromeQuality = "live"\.equals\(mode\) \? "LIVE" : nativeQualityLabel;[\s\S]+nativeChromeQuality\.setText\(chromeQuality\)/,
+    'native video quality should show a friendly resolution label, not direct/remux/transcode internals');
   assert.match(android, /private FrameLayout nativeLoading;[\s\S]+private ImageView nativeLoadingBackdrop;[\s\S]+private TextView nativeLoadingTitle;/,
     'native ExoPlayer should own a branded loading overlay instead of borrowing the web player shell');
-  assert.match(android, /nativeLoading = new FrameLayout\(this\);[\s\S]+loadingLogo\.setImageResource\(R\.drawable\.ic_loading_logo\);[\s\S]+loadingBrand\.setText\("TRIBOON"\);[\s\S]+loadingStage\.setText\("Starting native stream"\)/,
-    'native loading overlay should show the Triboon brand mark and loading stage');
+  assert.match(ui, /<link rel="icon" href="T-Logo\.svg"><link rel="alternate icon" href="T-Logo\.png">/,
+    'web favicon should use the T logo assets');
+  assert.match(ui, /id="railLogo"[\s\S]+<img src="T-Logo\.svg" alt="Triboon" onerror="this\.onerror=null;this\.src='T-Logo\.png'"/,
+    'web rail logo should use the T logo assets');
+  assert.match(android, /nativeLoading = new FrameLayout\(this\);[\s\S]+loadingLogo\.setImageResource\(R\.drawable\.ic_loading_logo\);[\s\S]+loadingStage\.setText\("Opening playback"\)/,
+    'native loading overlay should show the T logo mark and cleaner loading stage');
+  assert.doesNotMatch(android, /loadingBrand\.setText\("TRIBOON"\)|TextView loadingBrand/,
+    'native ExoPlayer loader should not show a separate Triboon wordmark under the logo');
   assert.doesNotMatch(android, /loadingLogo\.setImageResource\(R\.drawable\.ic_launcher\)/,
     'native loading overlay should not reuse the non-transparent launcher icon');
   assert.ok(fs.existsSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'drawable', 'ic_loading_logo.png')),
@@ -571,6 +661,7 @@ test('Android native player: direct source and native chrome stay out of the web
   for (const rel of [
     'logo/T-Logo.png',
     'logo/triboon.png',
+    'web/T-Logo.png',
     'web/triboon.png',
     'android/app/src/main/res/drawable/ic_launcher.png',
     'android/app/src/main/res/drawable/ic_loading_logo.png',
@@ -597,6 +688,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'closing or retrying native playback should always clear the loading overlay');
   assert.match(android, /nativePlayerLayer\.requestFocus\(\);[\s\S]+setNativeSubtitleLift\(false\)/,
     'native chrome should auto-hide even after a control kept focus');
+  assert.match(android, /setBottomPaddingFraction\(lift \? 0\.30f : 0\.08f\);[\s\S]+lift \? dp\(178\) : dp\(28\)[\s\S]+lp\.bottomMargin = lift \? dp\(206\) : dp\(82\)/,
+    'native subtitle lift should follow the higher controller band');
   assert.match(android, /showNativeChrome\(code != KeyEvent\.KEYCODE_DPAD_UP\);[\s\S]+nativeSeek\.requestFocus\(\);/,
     'D-pad Up from hidden native chrome should open directly on the seek bar');
   assert.match(android, /nativeIsWyzieTrack\(f\)/,

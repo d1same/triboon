@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Triboon</title>
-<link rel="icon" href="triboon.svg"><link rel="alternate icon" href="triboon.png">
+<link rel="icon" href="T-Logo.svg"><link rel="alternate icon" href="T-Logo.png">
 <style>
 /* Self-hosted variable fonts (CSP-safe, works offline — the old Google Fonts <link> was
    blocked by our Content-Security-Policy and the whole UI fell back to serif). */
@@ -399,7 +399,7 @@ body.tv #filterMenu{backdrop-filter:none}
 /* ---------- sources drawer ---------- */
 #drawerScrim{position:fixed;inset:0;z-index:19;background:rgba(5,3,9,.55);opacity:0;pointer-events:none;transition:opacity .28s ease}
 #drawerScrim.open{opacity:1;pointer-events:auto}
-#drawer{position:fixed;z-index:20;top:0;bottom:0;right:0;width:min(540px,92vw);background:rgba(14,10,22,.98);backdrop-filter:blur(20px);
+#drawer{position:fixed;z-index:20;top:0;bottom:0;right:0;width:min(570px,92vw);background:rgba(14,10,22,.98);backdrop-filter:blur(20px);
   border-left:1px solid var(--line);box-shadow:-30px 0 70px rgba(0,0,0,.5);padding:30px 28px 24px;transition:transform .3s cubic-bezier(.4,0,.2,1);
   transform:translateX(100%);display:flex;flex-direction:column}
 #drawer.open{transform:translateX(0)}
@@ -408,13 +408,22 @@ body.tv #filterMenu{backdrop-filter:none}
 #drawer .drawerClose{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;color:var(--muted);background:rgba(34,25,52,.6);flex:none}
 #drawer .drawerClose svg{width:16px;height:16px}
 #drawer .sub{color:var(--muted);font-size:13px;margin-bottom:18px;line-height:1.45}
-#srcList{overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:4px 4px 8px;margin:0 -4px}
-.srcRow{border-radius:var(--r);background:rgba(34,25,52,.5);border:1px solid var(--line);padding:14px 15px;display:flex;flex-direction:column;gap:9px;text-align:left;transition:background .15s,transform .15s}
-.srcRow:hover{background:rgba(40,30,60,.7)}
-.srcRow .name{font:600 13px "Albert Sans";line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.srcRow .chips{display:flex;gap:6px;flex-wrap:wrap}
-.srcRow .chip{padding:5px 9px;font-size:10px}
-.srcRow.auto{box-shadow:inset 0 0 0 1.5px var(--magenta);background:linear-gradient(135deg,rgba(193,59,214,.12),rgba(251,139,60,.08))}
+#srcList{overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:6px 4px 10px;margin:0 -4px}
+.srcRow{position:relative;overflow:hidden;border-radius:16px;background:linear-gradient(180deg,rgba(31,23,48,.78),rgba(21,16,34,.88));border:1px solid rgba(243,239,247,.1);padding:15px 16px;display:flex;flex-direction:column;gap:11px;text-align:left;transition:background .15s,border-color .15s,transform .15s}
+.srcRow::before{content:"";position:absolute;left:0;top:12px;bottom:12px;width:3px;border-radius:0 999px 999px 0;background:rgba(243,239,247,.16)}
+.srcRow:hover{background:linear-gradient(180deg,rgba(43,33,64,.84),rgba(27,20,42,.92));border-color:rgba(243,239,247,.18)}
+.srcRow .srcTop{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;min-width:0}
+.srcRow .srcTitle{min-width:0;display:flex;flex-direction:column;gap:5px}
+.srcRow .name{font:700 13.5px "Albert Sans";line-height:1.35;overflow-wrap:anywhere;color:var(--text)}
+.srcRow .srcPick{font:800 10px "JetBrains Mono";letter-spacing:.06em;text-transform:uppercase;color:var(--amber)}
+.srcRow .srcScore{flex:none;border-radius:999px;background:rgba(243,239,247,.08);border:1px solid rgba(243,239,247,.1);padding:6px 9px;font:800 10px "JetBrains Mono";color:var(--muted);white-space:nowrap}
+.srcRow .chips{display:flex;gap:7px;flex-wrap:wrap}
+.srcRow .chip{padding:6px 9px;border-radius:9px;background:rgba(243,239,247,.07);border:1px solid rgba(243,239,247,.1);font-size:10px}
+.srcRow .chip.auto{background:rgba(237,232,245,.9);color:#160a04;border-color:transparent}
+.srcRow .chip.qual{color:#f6f0ff}
+.srcRow .chip.size{color:#fbdba5}
+.srcRow.auto{box-shadow:inset 0 0 0 1.5px rgba(237,232,245,.74),0 12px 34px rgba(0,0,0,.2);background:linear-gradient(135deg,rgba(251,139,60,.14),rgba(193,59,214,.12) 42%,rgba(31,23,48,.88))}
+.srcRow.auto::before{top:0;bottom:0;width:4px;background:var(--grad)}
 .srcRow.focusable.focus{transform:none}
 
 /* ---------- player ---------- */
@@ -433,16 +442,23 @@ body.nativeGuideMode #player.guideMode video{display:none}
 #subOverlay{position:absolute;left:6%;right:6%;bottom:6.5%;text-align:center;pointer-events:none;z-index:2;
   font:600 var(--subFs,4.4vh)/1.32 "Albert Sans";color:#fff;white-space:pre-line;
   text-shadow:0 0 5px rgba(0,0,0,.95),0 2px 8px rgba(0,0,0,.9);transition:bottom .25s}
-#player:has(#osd:not(.hide)) #subOverlay{bottom:17%}
+#player:has(#osd:not(.hide)) #subOverlay{bottom:19%}
 #subOverlay i{font-style:italic}
-#osd{position:absolute;inset:0;z-index:6;display:flex;flex-direction:column;justify-content:space-between;padding:clamp(22px,3vw,42px) clamp(24px,3.6vw,52px);transition:opacity .35s;
-  background:linear-gradient(0deg,rgba(0,0,0,.82),rgba(0,0,0,.42) 18%,transparent 34%),linear-gradient(180deg,rgba(0,0,0,.62),rgba(0,0,0,.24) 18%,transparent 32%)}
+#osd{position:absolute;inset:0;z-index:6;display:flex;flex-direction:column;justify-content:space-between;padding:clamp(22px,3vw,42px) clamp(24px,3.6vw,52px) clamp(50px,6.2vw,78px);transition:opacity .35s;
+  background:linear-gradient(180deg,rgba(0,0,0,.62),rgba(0,0,0,.24) 18%,transparent 32%)}
+#osd::after{content:"";position:absolute;left:0;right:0;bottom:0;height:min(42vh,380px);pointer-events:none;z-index:0;
+  background:linear-gradient(180deg,rgba(0,0,0,0) 0%,rgba(0,0,0,.1) 32%,rgba(0,0,0,.28) 66%,rgba(0,0,0,.56) 100%)}
 #osd.hide{opacity:0;pointer-events:none}
+#osd>*{position:relative;z-index:1}
 #osd .top{display:flex;justify-content:space-between;align-items:flex-start;gap:22px}
-#osd .top>div:first-child{min-width:0}
-#osd .title{font:800 clamp(20px,2.2vw,30px)/1.12 "Sora";max-width:min(760px,64vw);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-shadow:0 2px 20px rgba(0,0,0,.8)}
-#osd .src{font:600 11px "JetBrains Mono";color:var(--muted);margin-top:6px;max-width:min(720px,62vw);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-shadow:0 2px 12px rgba(0,0,0,.8)}
+#osd .topLeft{display:flex;align-items:center;min-width:0}
+#osd .title{font:800 clamp(18px,2vw,26px)/1.12 "Sora";max-width:min(760px,64vw);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-shadow:0 2px 20px rgba(0,0,0,.8)}
+#osd .src{display:none}
 #osd .health{display:flex;gap:8px;align-items:center}
+.playerBackBtn{width:42px;height:42px}
+.playerBackBtn svg{width:19px;height:19px}
+.playerMetaRow{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin:0 0 12px}
+.playerMetaQuality{flex:0 0 auto;font:800 13px "JetBrains Mono";letter-spacing:0;color:#fff;padding:5px 10px;border-radius:999px;background:rgba(5,3,9,.4);border:1px solid rgba(243,239,247,.16);text-shadow:0 2px 12px rgba(0,0,0,.8)}
 .seekLine{display:grid;grid-template-columns:56px minmax(0,1fr) 64px;align-items:center;gap:12px;margin-bottom:16px}
 .seekTime{font:700 13px "JetBrains Mono";color:var(--muted);white-space:nowrap;text-shadow:0 2px 12px rgba(0,0,0,.82)}
 .seekTime:last-child{text-align:right}
@@ -453,15 +469,19 @@ body.nativeGuideMode #player.guideMode video{display:none}
 /* D-pad scrub mode: UP from the controls parks focus on the bar itself. */
 #seek.focus{height:8px;background:rgba(243,239,247,.28)}
 #seek.focus .knob{width:19px;height:19px;box-shadow:0 0 0 7px rgba(251,139,60,.45),0 0 18px rgba(193,59,214,.6)}
-#osd .ctl{display:flex;align-items:center;gap:clamp(9px,1.2vw,18px);min-width:0}
+#osd .ctl{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:clamp(10px,1.8vw,26px);min-width:0}
+#osd .ctlGroup{display:flex;align-items:center;gap:clamp(7px,1vw,12px);min-width:0}
+#osd .ctlLeft{justify-content:flex-start}
+#osd .ctlCenter{justify-content:center}
+#osd .ctlRight{justify-content:flex-end}
 #osd .ctl .time{display:none}
-.cbtn{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;background:rgba(34,25,52,.68);color:var(--text);border:0;box-shadow:0 10px 28px rgba(0,0,0,.24)}
-.cbtn:hover,.cbtn.focus,.cbtn:focus{background:rgba(43,32,63,.9);outline:none;box-shadow:0 0 0 2.5px var(--coral),0 14px 36px rgba(0,0,0,.34)}
-.cbtn.big{width:58px;height:58px;background:rgba(34,25,52,.68);color:var(--text)}
+.cbtn{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;background:rgba(5,3,9,.4);color:var(--text);border:0;box-shadow:0 10px 28px rgba(0,0,0,.14)}
+.cbtn:hover,.cbtn.focus,.cbtn:focus{background:rgba(5,3,9,.56);outline:none;box-shadow:0 12px 30px rgba(0,0,0,.2)}
+.cbtn.big{width:58px;height:58px;background:rgba(5,3,9,.4);color:var(--text)}
 .cbtn svg{width:20px;height:20px}
-.cbtn.on{background:rgba(34,25,52,.68);color:var(--text)}
+.cbtn.on{background:rgba(5,3,9,.4);color:var(--text)}
 .cbtn:disabled,.cbtn.disabled,.cbtn:disabled:hover,.cbtn.disabled:hover,.cbtn.focusable.disabled.focus{
-  background:rgba(34,25,52,.34)!important;color:rgba(243,239,247,.42)!important;box-shadow:none!important;cursor:default;opacity:.58;pointer-events:none}
+  background:rgba(5,3,9,.22)!important;color:rgba(243,239,247,.42)!important;box-shadow:none!important;cursor:default;opacity:.58;pointer-events:none}
 .volWrap{display:flex;align-items:center;gap:8px}
 #volSlider{-webkit-appearance:none;appearance:none;width:96px;height:5px;border-radius:4px;background:rgba(243,239,247,.25);cursor:pointer;outline:none}
 #volSlider::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;border-radius:50%;background:#fff;box-shadow:0 0 0 4px rgba(193,59,214,.3)}
@@ -584,15 +604,20 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 #dMeta .rating{color:var(--amber)}
 #dOverview{color:#d9d2e4;max-width:74ch;margin-bottom:22px;font-size:15.5px;line-height:1.6}
 #dBtns{display:flex;gap:12px;align-items:center}
-#dBtns .btn.primary{padding:14px 30px;border-radius:40px;font-weight:700}
+#dBtns .btn{min-height:52px;border-radius:40px;box-sizing:border-box}
+#dBtns .btn.primary{padding:14px 30px;font-weight:700}
+#dPlay{position:relative;justify-content:center;min-width:118px}
+#dPlay svg{position:absolute;left:30px}
+#dPlay.resumeMode svg{display:none}
+#dPlayLabel{display:block;width:100%;text-align:center}
 .iconBtn{width:52px;height:52px;border-radius:50%;display:grid;place-items:center;background:rgba(34,25,52,.7);border:1px solid var(--line);color:var(--text)}
 .iconBtn svg{width:21px;height:21px}
 .iconBtn.on{background:var(--grad);color:#160a04;border-color:transparent}
 .detailScroll .secHead{display:flex;align-items:center;gap:16px;margin:30px 0 14px}
 .detailScroll .secHead h2{margin:0}
 .ghostMini{margin-left:auto;background:rgba(34,25,52,.7);border:1px solid var(--line);border-radius:10px;padding:8px 14px;font:600 12px "Sora";color:var(--text)}
-.qToggle{display:flex;background:rgba(34,25,52,.7);border:1px solid var(--line);border-radius:30px;padding:3px;margin-left:6px}
-.qToggle button{padding:9px 16px;border-radius:30px;font:700 12px "JetBrains Mono";color:var(--muted)}
+.qToggle{display:flex;align-items:center;min-height:52px;box-sizing:border-box;background:rgba(34,25,52,.7);border:1px solid var(--line);border-radius:40px;padding:4px;margin-left:6px}
+.qToggle button{height:42px;padding:0 16px;border-radius:34px;font:700 12px "JetBrains Mono";color:var(--muted)}
 .qToggle button.qon{background:var(--amber);color:#160a04}
 
 /* Season poster cards — single horizontal scroll row */
@@ -835,11 +860,14 @@ body.tv .cwAct,body.tv .epMenuBtn{display:none!important}
   .pgRow .pgGroup,.pgRow .pgNext{font-size:9.5px}
   .pgRow .pgNow{font-size:12px;padding-right:32px}
   #osd .top{gap:12px}
-  #osd .title{max-width:68vw}
-  #osd .src{max-width:64vw}
+  #osd .title{max-width:64vw}
+  .playerMetaRow{gap:10px;margin-bottom:10px}
+  .playerMetaQuality{font-size:11px;padding:4px 8px}
   .seekLine{grid-template-columns:46px minmax(0,1fr) 54px;gap:8px}
   .seekTime{font-size:11px}
-  #osd .ctl{gap:7px;flex-wrap:wrap}
+  #osd .ctl{grid-template-columns:minmax(40px,1fr) auto minmax(40px,1fr);gap:8px}
+  #osd .ctlGroup{gap:6px}
+  #osd .ctlRight{flex-wrap:wrap}
   .cbtn{width:40px;height:40px}
   .cbtn.big{width:50px;height:50px}
   #chBody .chGrid{grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px}
@@ -1327,6 +1355,9 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
 .btn.focusable.focus,.iconBtn.focusable.focus,.cbtn.focusable.focus,#micBtn:focus{
   background:var(--text)!important;color:#160a04!important;border-color:transparent!important;
   box-shadow:0 10px 28px rgba(0,0,0,.45)!important;outline:none;transform:translateZ(0)}
+#osd .cbtn.focusable.focus,#osd .cbtn:focus,#osd .cbtn:hover{
+  background:rgba(5,3,9,.56)!important;color:var(--text)!important;
+  box-shadow:0 12px 30px rgba(0,0,0,.2)!important;outline:none}
 /* The signature gradient ring stays on CARDS and the rail — on buttons the solid fill IS
    the focus cue, and ring+fill together read as noise. */
 .btn.focusable.focus::before,.iconBtn.focusable.focus::before,.cbtn.focusable.focus::before,
@@ -1335,7 +1366,7 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
    in translateZ(0) and the button JUMPED 19px up whenever it took focus. Keep centering. */
 #micBtn:focus{transform:translateY(-50%)}
 .cbtn:disabled,.cbtn.disabled,.cbtn:disabled:hover,.cbtn.disabled:hover,.cbtn.focusable.disabled.focus{
-  background:rgba(34,25,52,.34)!important;color:rgba(243,239,247,.42)!important;box-shadow:none!important;
+  background:rgba(5,3,9,.22)!important;color:rgba(243,239,247,.42)!important;box-shadow:none!important;
   cursor:default;opacity:.58;pointer-events:none;transform:translateZ(0)}
 
 /* ============ Horizontal rows bleed to the MENU edge ============ */
@@ -1596,7 +1627,7 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
     <path d="M85.5 74 A47.7 47.7 0 0 1 72 89.5" fill="none" stroke="rgba(255,255,255,.22)"
       stroke-width="1.7" stroke-linecap="round"/>
   </svg>
-  <img src="triboon.svg" alt="Triboon" onerror="this.onerror=null;this.src='triboon.png'"></div></div></div>
+  <img src="T-Logo.svg" alt="Triboon" onerror="this.onerror=null;this.src='T-Logo.png'"></div></div></div>
 
 <div id="cwMenu" class="epMenu"></div>
 <div id="colorBase"></div>
@@ -1607,7 +1638,7 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
 <!-- ============ auth gates ============ -->
 <div class="gate" id="gateSetup">
   <div class="gateCard">
-    <div class="logoRow"><img src="triboon.svg" onerror="this.onerror=null;this.src='triboon.png'" alt=""><h1>Welcome to Triboon</h1></div>
+    <div class="logoRow"><img src="T-Logo.svg" onerror="this.onerror=null;this.src='T-Logo.png'" alt=""><h1>Welcome to Triboon</h1></div>
     <div class="sub">Create the server owner account. You'll configure usenet &amp; indexers next.</div>
     <label>Name</label><input id="suName" autocomplete="username">
     <label>Password</label><input id="suPass" type="password" autocomplete="new-password">
@@ -1618,7 +1649,7 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
 
 <div class="gate" id="gateLogin">
   <div class="gateCard">
-    <div class="logoRow"><img src="triboon.svg" onerror="this.onerror=null;this.src='triboon.png'" alt=""><h1>Triboon</h1></div>
+    <div class="logoRow"><img src="T-Logo.svg" onerror="this.onerror=null;this.src='T-Logo.png'" alt=""><h1>Triboon</h1></div>
     <div class="sub">Sign in to your server.</div>
     <label>Name</label><input id="liName" autocomplete="username">
     <label>Password</label><input id="liPass" type="password" autocomplete="current-password">
@@ -1658,7 +1689,7 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
 
 <div class="gate" id="gateInvite">
   <div class="gateCard">
-    <div class="logoRow"><img src="triboon.svg" onerror="this.onerror=null;this.src='triboon.png'" alt=""><h1>You're invited</h1></div>
+    <div class="logoRow"><img src="T-Logo.svg" onerror="this.onerror=null;this.src='T-Logo.png'" alt=""><h1>You're invited</h1></div>
     <div class="sub">Create your account on this Triboon server.</div>
     <label>Name</label><input id="ivName">
     <label>Password</label><input id="ivPass" type="password">
@@ -1670,7 +1701,7 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
 <!-- ============ app shell ============ -->
 <button id="burger" aria-label="Menu"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
 <nav id="rail">
-  <div class="logo" id="railLogo" role="button" title="Home" style="cursor:pointer"><img src="triboon.svg" alt="Triboon" onerror="this.onerror=null;this.src='triboon.png'"><span class="wordmark">Triboon</span></div>
+  <div class="logo" id="railLogo" role="button" title="Home" style="cursor:pointer"><img src="T-Logo.svg" alt="Triboon" onerror="this.onerror=null;this.src='T-Logo.png'"><span class="wordmark">Triboon</span></div>
   <button class="railBtn focusable active" data-nav="home" title="Home">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .7-1.5l7-6a2 2 0 0 1 2.6 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="rlabel">Home</span></button>
   <button class="railBtn focusable" data-nav="watchlist" title="Watchlist">
@@ -2016,6 +2047,8 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span id="dPlayLabel">Play</span></button>
           <button class="btn ghost focusable" id="dStartOver" style="display:none">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg> Start over</button>
+          <div class="qToggle" id="qToggle" title="Playback quality preference">
+            <button data-q="3" class="focusable qon">1080p</button><button data-q="4" class="focusable">4K</button></div>
           <button class="iconBtn focusable" id="dSources" title="Sources">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg></button>
           <button class="iconBtn focusable" id="dWatchlist" title="Add to watchlist">
@@ -2026,8 +2059,6 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10 9.5v5l4.5-2.5L10 9.5Z" fill="currentColor" stroke="none"/></svg></button>
           <button class="iconBtn focusable" id="dFixMatch" title="Fix TMDB match (library item)" style="display:none">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a4.5 4.5 0 0 0-6 6L3 18v3h3l5.7-5.7a4.5 4.5 0 0 0 6-6L14 13l-3-3z"/></svg></button>
-          <div class="qToggle" id="qToggle" title="Playback quality preference">
-            <button data-q="3" class="focusable qon">1080p</button><button data-q="4" class="focusable">4K</button></div>
         </div>
       </div>
     </div>
@@ -2298,7 +2329,7 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
         <path d="M85.5 74 A47.7 47.7 0 0 1 72 89.5" fill="none" stroke="rgba(255,255,255,.22)"
           stroke-width="1.7" stroke-linecap="round"/>
       </svg>
-      <img src="triboon.svg" onerror="this.onerror=null;this.src='triboon.png'" alt=""></div>
+      <img src="T-Logo.svg" onerror="this.onerror=null;this.src='T-Logo.png'" alt=""></div>
     <div class="pt" id="plTitle"></div><div class="ps" id="plMsg">preparing stream…</div></div></div>
   <div id="upNext">
     <div class="un-still" id="unStill"></div>
@@ -2314,33 +2345,44 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
   <div id="subOverlay" aria-live="off"></div>
   <div id="osd">
     <div class="top">
-      <div><div class="title" id="pTitle"></div><div class="src" id="pSrc"></div></div>
+      <div class="topLeft"><button class="cbtn focusable playerBackBtn" id="playerBackBtn" title="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button></div>
       <div class="osdRight">
         <div class="osdClock"><span id="clockNow"></span><span id="endsAt"></span></div>
         <div class="health" id="pHealth"></div>
       </div>
     </div>
     <div>
+      <div class="playerMetaRow">
+        <div class="title" id="pTitle"></div>
+        <div class="playerMetaQuality" id="pQuality"></div>
+      </div>
+      <div class="src" id="pSrc"></div>
       <div class="seekLine">
         <span class="seekTime" id="seekElapsed">0:00</span>
         <div id="seek"><div class="buf" id="buf"></div><div class="fill" id="fill"></div><div class="knob" id="knob"></div></div>
         <span class="seekTime" id="seekTotal">0:00</span>
       </div>
       <div class="ctl">
-        <button class="cbtn focusable" id="chGuide" title="TV guide"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12H3"/><path d="M16 6H3"/><path d="M12 18H3"/><path d="m16 12 5 3-5 3v-6Z"/></svg></button>
-        <button class="cbtn focusable" id="back10" title="Back 10s"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v6h6"/><path d="M21 12A9 9 0 0 0 6 5.3L3 8"/></svg></button>
-        <button class="cbtn big focusable" id="playPause"><svg id="ppIcon" viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg></button>
-        <button class="cbtn focusable" id="fwd30" title="Forward 30s"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/></svg></button>
-        <button class="cbtn focusable" id="nextEpBtn" title="Next episode" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" x2="19" y1="5" y2="19"/></svg></button>
-        <button class="cbtn focusable" id="ccBtn" title="Subtitles"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M7 15h4M15 15h2M7 11h2M13 11h4"/></svg></button>
-        <button class="cbtn focusable" id="audBtn" title="Audio language"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 10v3"/><path d="M6 6v11"/><path d="M10 3v18"/><path d="M14 8v7"/><path d="M18 5v13"/><path d="M22 10v3"/></svg></button>
-        <button class="cbtn focusable" id="srndBtn" title="Surround sound" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 10v4h4l5 4V6l-5 4H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg></button>
-        <button class="cbtn focusable" id="qualBtn" title="Quality"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 12H6"/><path d="M10 15V9"/><path d="M14 14.5a.5.5 0 0 0 .5.5h1a2.5 2.5 0 0 0 2.5-2.5v-1A2.5 2.5 0 0 0 15.5 9h-1a.5.5 0 0 0-.5.5z"/><path d="M6 15V9"/><rect x="2" y="5" width="20" height="14" rx="2"/></svg></button>
-        <div class="volWrap">
-          <button class="cbtn focusable" id="muteBtn" title="Mute"><svg id="volIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 10v4h4l5 4V6l-5 4H4z"/><path d="M16.5 9a4 4 0 0 1 0 6"/></svg></button>
-          <input type="range" id="volSlider" min="0" max="100" value="100" title="Volume">
+        <div class="ctlGroup ctlLeft">
+          <button class="cbtn focusable" id="chGuide" title="TV guide"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12H3"/><path d="M16 6H3"/><path d="M12 18H3"/><path d="m16 12 5 3-5 3v-6Z"/></svg></button>
         </div>
-        <button class="cbtn focusable" id="fsBtn" title="Fullscreen (F)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+        <div class="ctlGroup ctlCenter">
+          <button class="cbtn focusable" id="back10" title="Back 10s"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v6h6"/><path d="M21 12A9 9 0 0 0 6 5.3L3 8"/></svg></button>
+          <button class="cbtn big focusable" id="playPause"><svg id="ppIcon" viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg></button>
+          <button class="cbtn focusable" id="fwd30" title="Forward 30s"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/></svg></button>
+          <button class="cbtn focusable" id="nextEpBtn" title="Next episode" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" x2="19" y1="5" y2="19"/></svg></button>
+        </div>
+        <div class="ctlGroup ctlRight">
+          <button class="cbtn focusable" id="ccBtn" title="Subtitles"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M7 15h4M15 15h2M7 11h2M13 11h4"/></svg></button>
+          <button class="cbtn focusable" id="audBtn" title="Audio language"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 10v3"/><path d="M6 6v11"/><path d="M10 3v18"/><path d="M14 8v7"/><path d="M18 5v13"/><path d="M22 10v3"/></svg></button>
+          <button class="cbtn focusable" id="srndBtn" title="Surround sound" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 10v4h4l5 4V6l-5 4H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg></button>
+          <button class="cbtn focusable" id="qualBtn" title="Quality"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 12H6"/><path d="M10 15V9"/><path d="M14 14.5a.5.5 0 0 0 .5.5h1a2.5 2.5 0 0 0 2.5-2.5v-1A2.5 2.5 0 0 0 15.5 9h-1a.5.5 0 0 0-.5.5z"/><path d="M6 15V9"/><rect x="2" y="5" width="20" height="14" rx="2"/></svg></button>
+          <div class="volWrap">
+            <button class="cbtn focusable" id="muteBtn" title="Mute"><svg id="volIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 10v4h4l5 4V6l-5 4H4z"/><path d="M16.5 9a4 4 0 0 1 0 6"/></svg></button>
+            <input type="range" id="volSlider" min="0" max="100" value="100" title="Volume">
+          </div>
+          <button class="cbtn focusable" id="fsBtn" title="Fullscreen (F)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+        </div>
         <div class="time" id="pTime">0:00</div>
       </div>
       <div id="trackMenu"></div>
@@ -2903,7 +2945,8 @@ async function loadRows() {
   if (S._homeLiveFav && S._homeLiveFav.length) {
     rows.push({ name: 'Live TV — your channels', items: S._homeLiveFav.slice(0, 14).map((ch, i) => ({
       key: 'live:' + ch.idx, title: ch.name, genre: ch.group || '',
-      _channel: ch.idx, _logo: ch.logo, _streamUrl: ch.streamUrl, _nativeUrl: ch.nativeUrl, _nativeMime: ch.nativeMime || '', _chid: ch.id,
+      _channel: ch.idx, _logo: ch.logo, _streamUrl: ch.streamUrl, _nativeUrl: ch.nativeUrl, _nativeMime: ch.nativeMime || '',
+      _nativeFallbackUrl: ch.nativeFallbackUrl, _nativeFallbackMime: ch.nativeFallbackMime || '', _chid: ch.id,
       backdrop: procBackdrop(210, 320, (i % 12) + 9), poster: null,
     })) });
   }
@@ -3005,6 +3048,8 @@ function liveChannelForItem(it) {
     streamUrl: it._streamUrl || it.streamUrl,
     nativeUrl: it._nativeUrl || it.nativeUrl,
     nativeMime: it._nativeMime || it.nativeMime || '',
+    nativeFallbackUrl: it._nativeFallbackUrl || it.nativeFallbackUrl,
+    nativeFallbackMime: it._nativeFallbackMime || it.nativeFallbackMime || '',
     logo: it._logo || it.logo || '',
     fav: !!it.fav,
   };
@@ -3486,17 +3531,16 @@ async function openSources(it) {
       const gb = c.sizeBytes ? (c.sizeBytes / 1e9).toFixed(1) + ' GB' : '?';
       const a = c.attributes || {};
       const chips = [
-        i === 0 ? '<span class="chip zap">AUTO</span>' : '',
-        a.resolution && a.resolution !== 'unknown' ? `<span class="chip">${esc(a.resolution)}</span>` : '',
+        i === 0 ? '<span class="chip auto">Auto</span>' : '',
+        a.resolution && a.resolution !== 'unknown' ? `<span class="chip qual">${esc(a.resolution)}</span>` : '',
         a.source && a.source !== 'unknown' ? `<span class="chip">${esc(a.source)}</span>` : '',
-        `<span class="chip">${gb}</span>`,
+        `<span class="chip size">${gb}</span>`,
         c.streamClass === 'compressed' ? '<span class="chip warn">🐢 compressed</span>' : '',
         c.health === 'verified' ? '<span class="chip ok">✅ verified</span>' : '',
         c.health === 'blocked' || c.health === 'mount-failed' ? '<span class="chip warn">⚠ ' + esc(c.health) + '</span>' : '',
-        `<span class="chip">score ${esc(c.score)}</span>`,
       ].join('');
       // Release names are PUBLISHED BY STRANGERS on usenet — the #1 XSS vector in this app.
-      row.innerHTML = `<div class="name">${esc(c.name)}</div><div class="chips">${chips}</div>`;
+      row.innerHTML = `<div class="srcTop"><div class="srcTitle"><div class="name">${esc(c.name)}</div>${i === 0 ? '<div class="srcPick">Auto pick</div>' : ''}</div><div class="srcScore">Score ${esc(c.score)}</div></div><div class="chips">${chips}</div>`;
       row.addEventListener('click', () => { closeDrawer(); play(it, { name: c.name, pickKey: c.pickKey, resolutionRank: rk(c) }); });
       list.appendChild(row);
     });
@@ -3608,7 +3652,7 @@ async function openDetail(it, push = true) {
   // async result, and bumping afterwards orphaned every check (toggle/Unavailable never applied).
   checkAvailability(it);
   const detailResume = resumePositionForItem(it);
-  updateDetailPlayLabel(detailResume ? { label: `Resume · ${fmt(detailResume)}`, target: { ...it, resume: detailResume } } : { label: 'Play', target: it });
+  updateDetailPlayLabel(detailResume ? { label: 'Resume', target: { ...it, resume: detailResume } } : { label: 'Play', target: it });
   syncDetailButtons(it);
   syncFixMatchBtn(it); // admin, library-born items only: fix a wrong TMDB match
   $('detail').querySelector('.detailScroll').scrollTop = 0;
@@ -3862,7 +3906,7 @@ function pickNextUp(show, seasons) {
     .sort((a, b) => wm[b].updatedAt - wm[a].updatedAt)[0];
   if (inProg) {
     const m = /s(\d+)e(\d+)/.exec(inProg);
-    return updateDetailPlayLabel({ label: `Resume · ${fmt(wm[inProg].position)}`, target: epTarget(show, +m[1], +m[2], wm[inProg].position) });
+    return updateDetailPlayLabel({ label: 'Resume', target: epTarget(show, +m[1], +m[2], wm[inProg].position) });
   }
   const watched = Object.keys(wm).filter((k) => k.startsWith(prefix) && wm[k].watched)
     .map((k) => { const m = /s(\d+)e(\d+)/.exec(k); return { s: +m[1], e: +m[2] }; })
@@ -3887,6 +3931,7 @@ let detailPlayTarget = null;
 function updateDetailPlayLabel({ label, target }) {
   detailPlayTarget = target;
   $('dPlayLabel').textContent = label;
+  $('dPlay').classList.toggle('resumeMode', label === 'Resume');
   prefetchSources(target, 0);
 }
 // Availability: a title you OWN plays locally (no Sources drawer needed); a title with ZERO
@@ -4112,6 +4157,23 @@ function playbackStartKind(mount) {
   if (method === 'remux' && mount.remuxUrl) return 'remux';
   return 'direct';
 }
+function currentPlayerKind(p) {
+  if (!p) return 'direct';
+  return p.usingTranscode ? 'transcode' : (p.usingRemux ? 'remux' : 'direct');
+}
+function playerQualityLabel(p) {
+  if (!p || !p.item) return '';
+  if (p.item.type === 'live') return 'LIVE';
+  return nativeQualityLabel(p, currentPlayerKind(p));
+}
+function updatePlayerMeta() {
+  const p = S.playing;
+  const title = p && p.item ? (p.item.title || '') : '';
+  $('pTitle').textContent = title;
+  const quality = playerQualityLabel(p);
+  $('pQuality').textContent = quality;
+  $('pQuality').style.visibility = quality ? 'visible' : 'hidden';
+}
 function openPlayer(it, mount, opts = {}) {
   rememberPlayerReturn();
   // Music is scoped to the Music section; starting video leaves Music, so stop it fully.
@@ -4133,6 +4195,7 @@ function openPlayer(it, mount, opts = {}) {
     duration: 0, lastSaved: 0, triedRemux: false, triedTranscode: false, mountId: mount.id,
     tracks: null, audioTrack: 0, subTrack: null, quality: 1080, nativePos: 0, nativeDuration: 0,
   };
+  updatePlayerMeta();
   applyVolume();
   // Branded buffering overlay (cover + spinner) so mount/transcode latency never looks frozen.
   $('plCover').style.backgroundImage = `url('${it.backdrop || it.poster}')`;
@@ -4215,6 +4278,7 @@ async function loadTracks() {
     if (!S.playing || S.playing.tracksUrl !== p.tracksUrl) return; // player changed meanwhile
     p.tracks = t;
     if (t.duration && !p.duration) p.duration = t.duration;
+    updatePlayerMeta();
     updatePlayerControlAvailability();
     applyTrackPrefs(); // preferred audio/subtitle language + surround button
     updateClocks(); // duration just arrived → "Ends at" can render
@@ -4226,6 +4290,7 @@ function startSource(kind, atSeconds) {
   if (p) p.usingNative = false;
   p.usingRemux = kind === 'remux';
   p.usingTranscode = kind === 'transcode';
+  updatePlayerMeta();
   const serverSeek = p.usingRemux || p.usingTranscode;
   const seekStart = serverSeek ? Math.max(0, Math.floor(atSeconds || 0)) : 0;
   p.startOffset = seekStart;
@@ -4339,6 +4404,7 @@ function tryNativeVideoPlayer(kind, atSeconds) {
   p.usingNative = true;
   p.usingRemux = kind === 'remux';
   p.usingTranscode = kind === 'transcode';
+  updatePlayerMeta();
   p.startOffset = 0;
   p.nativePos = Math.max(0, atSeconds || 0);
   p.nativeDuration = p.duration || 0;
@@ -4522,6 +4588,7 @@ async function autoAdvance(opts = {}) {
     p.duration = 0; p.nativePos = at; p.nativeDuration = 0;
     p.tracks = null; p.subTrack = null; p.audioTrack = 0;
     $('pSrc').textContent = r.candidate ? r.candidate.name : r.name;
+    updatePlayerMeta();
     const startKind = playbackStartKind(r);
     if (nativePreferred && tryNativePlaybackLadder(at)) {
       startNativePlayerHousekeeping(p.item);
@@ -4611,6 +4678,7 @@ $('vlcCopy').addEventListener('click', () => {
   navigator.clipboard.writeText($('vlcUrl').textContent).then(() => toast('Stream URL copied — paste into VLC'));
 });
 $('vlcClose').addEventListener('click', closePlayer);
+$('playerBackBtn').addEventListener('click', closePlayer);
 
 function currentTime() {
   const v = $('video'); const p = S.playing;
@@ -4660,6 +4728,7 @@ async function closePlayer() {
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
   stopWebVideoElement(); // stale media/cue state must not greet the next playback
   clearTimeout(S._waitT); clearTimeout(_nudgeT); _nudgeSum = 0; _nudgeBase = null;
+  S.nativeGuideMode = false;
   $('player').classList.remove('open', 'live', 'guideMode'); $('vlcPanel').classList.remove('show'); $('playerLoader').classList.remove('show');
   document.body.classList.remove('videoOpen');
   document.body.classList.remove('nativeGuideMode');
@@ -4704,6 +4773,29 @@ function startHealthPoll(id) {
 }
 function togglePlay() { const v = $('video'); if (v.src) { v.paused ? v.play() : v.pause(); updPP(); } }
 function updPP() { $('ppIcon').innerHTML = $('video').paused ? '<path d="M8 5v14l11-7z"/>' : '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>'; }
+let _playerSurfaceClickT = null;
+function playerSurfaceClick(e) {
+  if (e.button !== 0 || S.view !== 'player') return false;
+  if (e.target.closest('#osd .top,.playerMetaRow,.seekLine,.ctl,#trackMenu,#pGuide,#vlcPanel,#upNext,#playerLoader,button,a,input,select,textarea')) return false;
+  return true;
+}
+function playerSingleClick(e) {
+  showOsd();
+  if (!playerSurfaceClick(e)) return;
+  clearTimeout(_playerSurfaceClickT);
+  _playerSurfaceClickT = setTimeout(() => {
+    _playerSurfaceClickT = null;
+    togglePlay();
+  }, 320);
+}
+function playerDoubleClick(e) {
+  if (!playerSurfaceClick(e)) return;
+  e.preventDefault();
+  clearTimeout(_playerSurfaceClickT);
+  _playerSurfaceClickT = null;
+  showOsd();
+  toggleFullscreen();
+}
 function fmt(s) { s = Math.max(0, Math.floor(s)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
   return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(x).padStart(2, '0'); }
 function setPlayerTimes(pos, dur) {
@@ -4782,7 +4874,8 @@ function showOsd() {
   }, 3500);
 }
 $('player').addEventListener('mousemove', showOsd);
-$('player').addEventListener('click', showOsd);
+$('player').addEventListener('click', playerSingleClick);
+$('player').addEventListener('dblclick', playerDoubleClick);
 $('player').addEventListener('touchstart', showOsd, { passive: true });
 
 /* ---- CC + audio track menus ---- */
@@ -5772,7 +5865,7 @@ function openLocalDetail(it) {
   $('dPlay').disabled = false; $('dPlay').classList.remove('unavail');
   const resume = resumePositionForItem(it);
   $('dStartOver').style.display = resume ? '' : 'none';
-  updateDetailPlayLabel(resume ? { label: `Resume · ${fmt(resume)}`, target: { ...it, resume } } : { label: 'Play', target: it });
+  updateDetailPlayLabel(resume ? { label: 'Resume', target: { ...it, resume } } : { label: 'Play', target: it });
   syncFixMatchBtn(it); // unmatched items need this MOST — assign the right TMDB title
   $('detail').querySelector('.detailScroll').scrollTop = 0;
 }
@@ -6132,11 +6225,13 @@ async function fetchGuideBatch(chans) {
   const bucket = Math.floor(Date.now() / 1800000); // guide window only shifts every half hour
   const key = `${bucket}:${ids.join(',')}`;
   const hit = guideMemo.get(key);
-  if (hit && Date.now() - hit.at < 60000) return hit.data;
+  if (hit && Date.now() - hit.at < (hit.syntheticOnly ? 5000 : 60000)) return hit.data;
   if (guideMemo.size > 80) guideMemo.clear();
   const g = await api('/api/iptv/guide?chs=' + ids.join(','));
-  const data = Object.fromEntries((g.channels || []).map((c) => [c.idx, c.programmes || []]));
-  guideMemo.set(key, { at: Date.now(), data });
+  const channels = g.channels || [];
+  const data = Object.fromEntries(channels.map((c) => [c.idx, c.programmes || []]));
+  const syntheticOnly = !channels.some((c) => (c.programmes || []).some((p) => p && !p.synthetic));
+  guideMemo.set(key, { at: Date.now(), data, syntheticOnly });
   return data;
 }
 
@@ -6452,7 +6547,9 @@ async function renderGuideProgressive(body, pool) {
     row.dataset.grid = i;
     row.dataset.guideChannel = ch.idx;
     const it = { key: 'live:' + ch.idx, title: ch.name, _channel: ch.idx, genre: ch.group || '',
-      _streamUrl: ch.streamUrl, _nativeUrl: ch.nativeUrl, _nativeMime: ch.nativeMime || '', _chid: ch.id, backdrop: procBackdrop(210, 320, (ch.idx % 12) + 9), poster: null };
+      _streamUrl: ch.streamUrl, _nativeUrl: ch.nativeUrl, _nativeMime: ch.nativeMime || '',
+      _nativeFallbackUrl: ch.nativeFallbackUrl, _nativeFallbackMime: ch.nativeFallbackMime || '',
+      _chid: ch.id, backdrop: procBackdrop(210, 320, (ch.idx % 12) + 9), poster: null };
     S.gridItems.push(it);
     const logo = safeUrl(ch.logo);
     row._fillGuide = (nextProgs, isLoading) => {
@@ -6537,7 +6634,8 @@ function fitLiveGuide(wrap = $('guide')) {
 function liveTvCard(ch) {
   const i = S.gridItems.length;
   const it = { key: 'live:' + ch.idx, title: ch.name, _channel: ch.idx, _logo: ch.logo, genre: ch.group || 'Other',
-    _streamUrl: ch.streamUrl, _nativeUrl: ch.nativeUrl, _nativeMime: ch.nativeMime || '', _chid: ch.id,
+    _streamUrl: ch.streamUrl, _nativeUrl: ch.nativeUrl, _nativeMime: ch.nativeMime || '',
+    _nativeFallbackUrl: ch.nativeFallbackUrl, _nativeFallbackMime: ch.nativeFallbackMime || '', _chid: ch.id,
     backdrop: procBackdrop(200 + (i % 8) * 14, 320, (ch.idx % 12) + 9), poster: null };
   S.gridItems.push(it);
   const card = document.createElement('button');
@@ -6605,7 +6703,6 @@ function openNativeLiveGuideShell(it) {
   $('vlcPanel').classList.remove('show');
   $('playerLoader').classList.remove('show');
   $('upNext').classList.remove('show'); if (S.upNextTimer) clearInterval(S.upNextTimer);
-  $('pTitle').textContent = it.title || 'Live TV';
   $('pSrc').textContent = it.genre || it.group || '';
   $('pHealth').innerHTML = '<span class="liveBadge">LIVE</span>';
   S.playing = {
@@ -6617,6 +6714,7 @@ function openNativeLiveGuideShell(it) {
     startOffset: 0,
     lastSaved: 0,
   };
+  updatePlayerMeta();
 }
 function tryNativeLivePlayer(it, guide = false) {
   if (!canUseNativeLivePlayer() || !it || !it._nativeUrl) return false;
@@ -6630,8 +6728,8 @@ function tryNativeLivePlayer(it, guide = false) {
       source: it.genre || it.group || '',
       url: new URL(it._nativeUrl, location.origin).href,
       mime: it._nativeMime || '',
-      fallbackUrl: it._streamUrl ? new URL(it._streamUrl, location.origin).href : '',
-      fallbackMime: it._streamUrl ? 'video/mp4' : '',
+      fallbackUrl: it._nativeFallbackUrl ? new URL(it._nativeFallbackUrl, location.origin).href : '',
+      fallbackMime: it._nativeFallbackMime || '',
       guide,
     }));
     return true;
@@ -6662,10 +6760,29 @@ window.__tvNativeLiveClosed = () => {
     setTimeout(() => { if (S.view === 'livetv') focusContent(); }, 80);
   }
 };
+function currentNativeLiveGuideItem() {
+  if (!(S.playing && S.playing.item && S.playing.item.type === 'live')) return null;
+  const key = S.playing.item.key || '';
+  const parsed = key.startsWith('live:') ? +key.slice(5) : NaN;
+  const cur = S.liveCur !== undefined && S.liveCur !== null ? S.liveCur : (Number.isFinite(parsed) ? parsed : undefined);
+  const lists = [S.liveList || [], (S.liveChannels || []).map(liveItemForPlayerGuide).filter(Boolean)];
+  for (const list of lists) {
+    const hit = list.find((x) => x && x._channel !== undefined && x._channel === cur);
+    if (hit) return hit;
+  }
+  return {
+    key: key || 'live:current',
+    title: S.playing.name || S.playing.item.title || 'Live TV',
+    _channel: cur,
+    genre: '',
+    backdrop: S.playing.item.backdrop || '',
+    poster: null,
+  };
+}
 window.__tvNativeLiveGuide = async (epoch) => {
   const n = +epoch;
   S.nativeGuideEpoch = Number.isFinite(n) && n > 0 ? n : ((S.nativeGuideEpoch || 0) + 1);
-  const it = S.nativeLivePending;
+  const it = S.nativeLivePending || currentNativeLiveGuideItem();
   S.nativeLivePending = null;
   if (!it) {
     if (S.playing && S.playing.item && S.playing.item.type !== 'live' && S.view === 'player') {
@@ -6776,6 +6893,8 @@ function liveItemForPlayerGuide(ch) {
     _streamUrl: ch.streamUrl,
     _nativeUrl: ch.nativeUrl,
     _nativeMime: ch.nativeMime || '',
+    _nativeFallbackUrl: ch.nativeFallbackUrl,
+    _nativeFallbackMime: ch.nativeFallbackMime || '',
     _chid: ch.id,
     genre: ch.group || ch.genre || 'Other',
     fav: !!ch.fav,
@@ -7009,9 +7128,37 @@ $('chGuide').addEventListener('click', togglePlayerGuide);
 const mAudio = $('musicAudio');
 const MUSIC_PAGE_SIZE = 50;
 function mmss(s) { s = Math.max(0, Math.round(s || 0)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; }
+const MUSIC_CHART_DEFS = [
+  { id: 'daily', title: 'Daily chart', note: 'Top songs today', query: 'top songs today' },
+  { id: 'weekly', title: 'Weekly chart', note: 'Top songs this week', query: 'top songs this week' },
+];
+async function loadMusicChartsFallback() {
+  const charts = [];
+  for (const def of MUSIC_CHART_DEFS) {
+    try {
+      const r = await api('/api/music/search?q=' + encodeURIComponent(def.query) + '&limit=16');
+      charts.push({ ...def, results: r.results || [] });
+    } catch {}
+  }
+  return charts.filter((c) => c.results && c.results.length);
+}
 function loadMusic() {
   bootReady();
   if (!$('musicBrowse').children.length) renderMusicBrowse();
+  if (S.musicCharts === undefined) {
+    S.musicCharts = null;
+    api('/api/music/charts').then((r) => {
+      S.musicCharts = Array.isArray(r.charts) ? r.charts : [];
+      renderMusicBrowse();
+      requestAnimationFrame(() => {
+        if (S.view === 'music' && S.zone !== 'rail' && !$('musicSearch').value.trim()) focusContent();
+      });
+    }).catch(async () => {
+      S.musicCharts = await loadMusicChartsFallback().catch(() => false);
+      if (!S.musicCharts || !S.musicCharts.length) S.musicCharts = false;
+      renderMusicBrowse();
+    });
+  }
   // Personal playlists load lazily; tracks wait until a playlist is opened.
   if (S.ytmPlaylists === undefined) {
     S.ytmPlaylists = null; // in flight
@@ -7205,7 +7352,7 @@ function musicTransport(action = 'toggle') {
 }
 function musicNext(auto) {
   const q = S.musicQueue; if (!q || !q.length) return;
-  if (auto && S.musicRepeat === 'one') { mAudio.currentTime = 0; mAudio.play().catch(() => {}); return; }
+  if (auto && S.musicRepeat === 'one') { mAudio.currentTime = 0; mAudio.pause(); return; }
   let next;
   if (S.musicShuffle && q.length > 1) {
     do { next = Math.floor(Math.random() * q.length); } while (next === S.musicIdx);
@@ -7214,7 +7361,7 @@ function musicNext(auto) {
     if (S.musicRepeat === 'all') next = 0;
     else return; // end of queue, no repeat
   }
-  playMusic(q, next);
+  playMusic(q, next, auto ? { autoplay: false } : {});
 }
 function toggleShuffle() {
   S.musicShuffle = !S.musicShuffle;
@@ -7457,9 +7604,11 @@ function renderMusicBrowse() {
   const addTile = (parent, item, cls, onClick) => {
     const b = document.createElement('button');
     b.className = 'mChip focusable ' + cls;
+    const coverStyle = item.coverUrl ? ` style="background-image:url('${safeUrl(item.coverUrl)}')"` : '';
+    const coverImgClass = item.coverUrl ? ' hasImg' : '';
     b.innerHTML = cls.includes('mTile')
       ? `<span class="mIco">${musicIcon(item.icon || 'music')}</span><span class="mLbl">${esc(item.title)}</span>`
-      : `<span class="mCover ${esc(item.grad || 'mGrad1')}">${musicIcon(item.icon || 'music')}</span><span class="mLbl">${esc(item.title)}</span><span class="mSub">${esc(item.sub || '')}</span>`;
+      : `<span class="mCover ${esc(item.grad || 'mGrad1')}${coverImgClass}"${coverStyle}>${musicIcon(item.icon || 'music')}</span><span class="mLbl">${esc(item.title)}</span><span class="mSub">${esc(item.sub || '')}</span>`;
     if (item.coverQuery) { b.dataset.coverQuery = item.coverQuery; b.dataset.coverKey = 'q:' + item.coverQuery; }
     if (item.coverFeed) { b.dataset.coverFeed = item.coverFeed; b.dataset.coverIdx = item.coverIdx || 0; b.dataset.coverKey = 'f:' + item.coverFeed + ':' + b.dataset.coverIdx; }
     if (item.coverPlaylist) { b.dataset.coverPlaylist = item.coverPlaylist; b.dataset.coverKey = 'p:' + item.coverPlaylist; }
@@ -7467,6 +7616,29 @@ function renderMusicBrowse() {
     b.addEventListener('mouseenter', () => pointerHover() && focusChip(chipEls().indexOf(b)));
     parent.appendChild(b);
   };
+  if (S.musicCharts === null) {
+    const charts = addShelf('Charts');
+    charts.innerHTML = '<div class="mEmpty">Loading daily and weekly charts...</div>';
+  } else if (Array.isArray(S.musicCharts) && S.musicCharts.length) {
+    S.musicCharts.forEach((chart, ci) => {
+      const rail = addShelf(chart.title || (ci ? 'Weekly chart' : 'Daily chart'));
+      const tracks = (chart.results || []).filter((t) => t && t.id);
+      if (!tracks.length) {
+        rail.innerHTML = '<div class="mEmpty">No chart tracks available right now.</div>';
+        return;
+      }
+      tracks.slice(0, 14).forEach((t, i) => addTile(rail, {
+        title: t.title,
+        sub: t.artist || chart.note || '',
+        grad: `mGrad${((i + ci) % 4) + 1}`,
+        icon: 'chart',
+        coverUrl: t.thumb,
+      }, 'mCard mChart', () => playMusic(tracks, i, { showQueue: true })));
+    });
+  } else if (S.musicCharts === false) {
+    const charts = addShelf('Charts');
+    charts.innerHTML = '<div class="mEmpty">Charts are unavailable right now.</div>';
+  }
   const yours = addShelf('Your music', 'topTiles');
   if (Array.isArray(S.ytmPlaylists)) {
     addTile(yours, { title: 'Liked Music', sub: 'Your YouTube Music favorites', grad: 'mGrad1', icon: 'heart', coverPlaylist: 'LM' }, 'mCard mPl',
@@ -8239,7 +8411,8 @@ async function searchChannels(q) {
     return S._chSearchCache
       .filter((ch) => (ch.name || '').toLowerCase().includes(q.toLowerCase())).slice(0, 12)
       .map((ch, i) => ({ key: 'live:' + ch.idx, title: ch.name, genre: ch.group || '', rating: '—',
-        _channel: ch.idx, _logo: ch.logo, _streamUrl: ch.streamUrl, _nativeUrl: ch.nativeUrl, _nativeMime: ch.nativeMime || '', _chid: ch.id,
+        _channel: ch.idx, _logo: ch.logo, _streamUrl: ch.streamUrl, _nativeUrl: ch.nativeUrl, _nativeMime: ch.nativeMime || '',
+        _nativeFallbackUrl: ch.nativeFallbackUrl, _nativeFallbackMime: ch.nativeFallbackMime || '', _chid: ch.id,
         backdrop: procBackdrop(210, 320, (i % 12) + 9), poster: procBackdrop(210, 320, (i % 12) + 9) }));
   } catch { return []; }
 }
@@ -8819,14 +8992,6 @@ function focusLiveCategory(idx, select = false) {
   const remembered = Number.isFinite(S.liveCatNavIdx) ? S.liveCatNavIdx : selected;
   const i = Math.max(0, Math.min(cats.length - 1, Number.isFinite(idx) ? idx : remembered));
   const name = cats[i] && cats[i].dataset.liveCat;
-  if (select && name && name !== S.liveCat) {
-    S.liveCat = name;
-    S.liveCatNavIdx = i;
-    S.liveCatDpadMode = true;
-    S.liveGuideCap = LIVE_GUIDE_BATCH;
-    renderLiveTvBody();
-    return focusLiveCategory(i);
-  }
   leaveRail();
   S.zone = 'grid';
   S.liveCatNavIdx = i;
@@ -8844,6 +9009,16 @@ function focusLiveCategory(idx, select = false) {
     else if (bottom > viewBottom) pane.scrollTo({ top: bottom - pane.clientHeight + pad, behavior: 'auto' });
   }
   S.focusedItem = S.gridItems[S.gridIdx] || null;
+  if (select && name && name !== S.liveCat) {
+    clearTimeout(S._liveCatApplyT);
+    S._liveCatApplyT = setTimeout(() => {
+      if (S.view !== 'livetv') return;
+      S.liveCat = name;
+      S.liveGuideCap = LIVE_GUIDE_BATCH;
+      renderLiveTvBody();
+      focusLiveCategory(i);
+    }, 140);
+  }
   return true;
 }
 function focusLiveFilter() {

@@ -137,7 +137,7 @@ test('security: deny-by-default — every route declares auth; unknown routes 40
     ['GET', '/api/health/abc'], ['POST', '/api/mount'], ['GET', '/api/settings'],
     ['POST', '/api/settings'], ['POST', '/api/invites'], ['GET', '/api/invites'],
     ['GET', '/api/users'], ['GET', '/api/stream/abc'], ['GET', '/api/remux/abc'],
-    ['POST', '/api/quickconnect/123456/approve'], ['GET', '/api/music/search?q=x'],
+    ['POST', '/api/quickconnect/123456/approve'], ['GET', '/api/music/charts'], ['GET', '/api/music/search?q=x'],
   ];
   for (const [m, p] of probes) {
     assert.strictEqual((await httpJson(srv.port, m, p)).status, 401, `anon ${m} ${p}`);
@@ -648,6 +648,7 @@ http://upstream.example/sports.ts
   assert.ok(ch.json.channels.every((c) => c.url === undefined), 'upstream URLs never exposed');
   assert.ok(ch.json.channels.every((c) => /^\/api\/iptv\/stream\/\d+\?t=/.test(c.streamUrl)));
   assert.ok(ch.json.channels.every((c) => /^\/api\/iptv\/native\/\d+\?t=/.test(c.nativeUrl)));
+  assert.ok(ch.json.channels.every((c) => c.nativeFallbackUrl === undefined), 'plain M3U does not invent a second native source');
   assert.deepStrictEqual(ch.json.channels.map((c) => c.nativeMime), ['application/x-mpegURL', 'video/mp2t']);
   const native = await httpRaw(srv.port, ch.json.channels[0].nativeUrl);
   assert.strictEqual(native.status, 302, 'native URL redirects Android to the upstream stream');
@@ -708,6 +709,16 @@ test('iptv: Xtream API channels + short-EPG now/next + per-user favorites; creds
   assert.strictEqual(news.logo, 'http://x/logo1.png');
   assert.strictEqual(ch.json.channels.find((c) => c.name === 'Cinema').group, 'Other', 'unknown category falls back');
   assert.ok(ch.json.channels.every((c) => c.url === undefined), 'upstream URLs (with creds) never exposed');
+  assert.ok(/^\/api\/iptv\/native\/\d+\?t=/.test(news.nativeUrl));
+  assert.strictEqual(news.nativeMime, 'video/mp2t', 'Xtream native playback should try the TS endpoint first');
+  assert.ok(/^\/api\/iptv\/native\/\d+\?alt=1&t=/.test(news.nativeFallbackUrl));
+  assert.strictEqual(news.nativeFallbackMime, 'application/x-mpegURL', 'Xtream native playback should retain HLS as an Exo fallback');
+  const native = await httpRaw(srv.port, news.nativeUrl);
+  assert.strictEqual(native.status, 302);
+  assert.strictEqual(native.headers.location, `${host}/live/xtuser/xtpass/101.ts`);
+  const fallback = await httpRaw(srv.port, news.nativeFallbackUrl);
+  assert.strictEqual(fallback.status, 302);
+  assert.strictEqual(fallback.headers.location, `${host}/live/xtuser/xtpass/101.m3u8`);
 
   // EPG now/next decodes the Xtream base64 listings.
   const epg = await httpJson(srv.port, 'GET', `/api/iptv/epg/${news.idx}`, null, admin);
@@ -1550,6 +1561,38 @@ test('music: playlist endpoint pages tracks and stream proxy forwards yt-dlp hea
     ytmusic.playlistTracks = oldPlaylist;
     ytmusic.resolveStream = oldResolve;
     upstream.close();
+  }
+});
+
+test('music: daily and weekly charts are cached and tokenized', async () => {
+  const ytmusic = require('../server/ytmusic');
+  const oldDetect = ytmusic.detectYtdlp;
+  const oldSearch = ytmusic.search;
+  const calls = [];
+  try {
+    ytmusic.detectYtdlp = () => ({ cmd: ['mock-ytdlp'], version: 'test' });
+    ytmusic.search = async (q, opts) => {
+      calls.push({ q, limit: opts.limit });
+      return [
+        { id: q.includes('week') ? 'WWWWWWWWWWW' : 'DDDDDDDDDDD', title: `${q} one`, artist: 'Chart Artist', thumb: 'chart.jpg' },
+        { id: q.includes('week') ? 'XXXXXXXXXXX' : 'EEEEEEEEEEE', title: `${q} two`, artist: 'Chart Artist', thumb: 'chart2.jpg' },
+      ];
+    };
+    const first = await httpJson(srv.port, 'GET', '/api/music/charts', null, admin);
+    assert.strictEqual(first.status, 200, first.raw);
+    assert.deepStrictEqual(first.json.charts.map((c) => c.id), ['daily', 'weekly']);
+    assert.strictEqual(first.json.charts[0].results.length, 2);
+    assert.ok(/^\/api\/music\/stream\/DDDDDDDDDDD\?t=/.test(first.json.charts[0].results[0].streamUrl));
+    assert.ok(/^\/api\/music\/stream\/WWWWWWWWWWW\?t=/.test(first.json.charts[1].results[0].streamUrl));
+
+    const second = await httpJson(srv.port, 'GET', '/api/music/charts', null, admin);
+    assert.strictEqual(second.status, 200, second.raw);
+    assert.strictEqual(calls.length, 2, 'daily and weekly chart searches are cached after the first request');
+    assert.ok(/^\/api\/music\/stream\/DDDDDDDDDDD\?t=/.test(second.json.charts[0].results[0].streamUrl),
+      'cached chart tracks still receive tokenized stream URLs in the response');
+  } finally {
+    ytmusic.detectYtdlp = oldDetect;
+    ytmusic.search = oldSearch;
   }
 });
 

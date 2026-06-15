@@ -136,6 +136,7 @@ const {
 } = require('./opensubs');
 const IPTV_CACHE_TTL_MS = 24 * 3600000;
 const EPG_CACHE_TTL_MS = 24 * 3600000;
+const EPG_EMPTY_TTL_MS = 5 * 60000;
 const EPG_CACHE_STALE_MS = 7 * 24 * 3600000;
 const IPTV_WARM_DELAY_MS = 1500;
 const IPTV_WARM_XTREAM_GUIDE_MAX = 96;
@@ -162,9 +163,19 @@ async function mapLimit(items, limit, fn) {
 // Channels from either source, normalized: { idx, id (stable), name, logo, group, tvgId, url (secret) }.
 // Xtream channel URL is derived from settings — the DISK cache stores channels WITHOUT it
 // (credentials stay encrypted-at-rest in settings only) and rebuilds it on read.
-function xtUrlFor(s, streamId) {
+function xtUrlFor(s, streamId, ext = 'm3u8') {
   const base = String(s.xtHost || '').replace(/\/+$/, '');
-  return `${base}/live/${encodeURIComponent(s.xtUser || '')}/${encodeURIComponent(s.xtPass || '')}/${streamId}.m3u8`;
+  const safeExt = String(ext || 'm3u8').replace(/[^a-z0-9]/gi, '') || 'm3u8';
+  return `${base}/live/${encodeURIComponent(s.xtUser || '')}/${encodeURIComponent(s.xtPass || '')}/${streamId}.${safeExt}`;
+}
+function xtChannelUrls(s, streamId) {
+  return {
+    url: xtUrlFor(s, streamId, 'm3u8'),
+    nativeUrl: xtUrlFor(s, streamId, 'ts'),
+    nativeMime: 'video/mp2t',
+    nativeFallbackUrl: xtUrlFor(s, streamId, 'm3u8'),
+    nativeFallbackMime: 'application/x-mpegURL',
+  };
 }
 function iptvNativeMime(url) {
   const u = String(url || '').toLowerCase();
@@ -183,7 +194,13 @@ function iptvConfigured(s) {
   return !!((s.iptvMode === 'xtream' && s.xtHost) || s.iptvUrl);
 }
 function epgSourceKey(s) {
-  return idHash(`${iptvSourceKey(s)}|epg:${s.epgUrl || ''}`);
+  return idHash(`${iptvSourceKey(s)}|epg:${xmltvGuideUrl(s) || ''}`);
+}
+function xmltvGuideUrl(s) {
+  if (s.epgUrl) return s.epgUrl;
+  if (s.iptvMode !== 'xtream' || !s.xtHost || !s.xtUser || !s.xtPass) return '';
+  const base = String(s.xtHost || '').replace(/\/+$/, '');
+  return `${base}/xmltv.php?username=${encodeURIComponent(s.xtUser || '')}&password=${encodeURIComponent(s.xtPass || '')}`;
 }
 async function loadIptvChannels() {
   const s = settings.get();
@@ -209,7 +226,7 @@ async function loadIptvChannels() {
     const disk = store.read('iptvcache', null);
     if (s.iptvMode === 'xtream' && disk && disk.key === key && Array.isArray(disk.channels) && disk.channels.length) {
       console.error(`[iptv] source failed (${e.message}) — serving the last cached playlist (${disk.channels.length} channels)`);
-      const channels = disk.channels.map((c) => ({ ...c, url: xtUrlFor(s, c.xtreamId) }));
+      const channels = disk.channels.map((c) => ({ ...c, ...xtChannelUrls(s, c.xtreamId) }));
       iptvCache = { key, at: Date.now() - (IPTV_CACHE_TTL_MS - 600000), channels }; // near-stale: retry in ~10min
       return channels;
     }
@@ -235,7 +252,7 @@ async function fetchIptvChannels(s, key) {
       idx: i, id: 'xt' + x.stream_id, name: x.name || 'Channel ' + x.stream_id,
       logo: x.stream_icon || '', group: cats[String(x.category_id)] || 'Other',
       tvgId: x.epg_channel_id || '', xtreamId: x.stream_id,
-      url: `${base}/live/${encodeURIComponent(s.xtUser || '')}/${encodeURIComponent(s.xtPass || '')}/${x.stream_id}.m3u8`,
+      ...xtChannelUrls(s, x.stream_id),
     }));
   } else if (s.iptvUrl) {
     // Real-world playlists run to tens of thousands of channels — the UI renders groups
@@ -308,7 +325,8 @@ function refreshXmltvInBackground(s, key) {
 }
 async function ensureXmltv() {
   const s = settings.get();
-  if (!s.epgUrl) return null;
+  const xmltvUrl = xmltvGuideUrl(s);
+  if (!xmltvUrl) return null;
   const key = epgSourceKey(s);
   if (epgCache.key === key && Date.now() - epgCache.at < EPG_CACHE_TTL_MS) return epgCache;
   if (epgCache.key === key && epgCache.byChannel && epgCache.byChannel.size) {
@@ -325,9 +343,11 @@ async function ensureXmltv() {
 }
 let epgRefreshing = false;
 async function fetchXmltv(s, key = epgSourceKey(s)) {
-  const r = await fetchUrlExt(s.epgUrl, { timeoutMs: 20000, deadlineMs: 90000, maxBytes: 48 * 1024 * 1024 });
+  const xmltvUrl = xmltvGuideUrl(s);
+  if (!xmltvUrl) return null;
+  const r = await fetchUrlExt(xmltvUrl, { timeoutMs: 20000, deadlineMs: 90000, maxBytes: 128 * 1024 * 1024 });
   let xml = r.body;
-  if (xml.length > 40 * 1024 * 1024) xml = xml.subarray(0, 40 * 1024 * 1024); // parse cap
+  if (xml.length > 120 * 1024 * 1024) xml = xml.subarray(0, 120 * 1024 * 1024); // parse cap
   const text = xml.toString('utf8');
   const keepFrom = Date.now() - 12 * 3600000;
   const keepTo = Date.now() + 48 * 3600000;
@@ -383,11 +403,33 @@ function xmltvListFor(epg, ch) {
   return list || [];
 }
 const b64 = (s) => { try { return Buffer.from(String(s || ''), 'base64').toString('utf8'); } catch { return ''; } };
+function maybeB64(s) {
+  const raw = String(s || '').trim();
+  if (!raw) return '';
+  const compact = raw.replace(/\s+/g, '');
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(compact) || compact.length % 4 === 1) return raw;
+  try {
+    const decoded = Buffer.from(compact, 'base64').toString('utf8').replace(/\0/g, '').trim();
+    if (!decoded || decoded.includes('\uFFFD') || !/[a-z0-9]/i.test(decoded)) return raw;
+    const printable = decoded.replace(/[^\x20-\x7e]/g, '').length / Math.max(1, decoded.length);
+    return printable > 0.85 ? decoded : raw;
+  } catch { return raw; }
+}
+function parseXtreamTime(v) {
+  if (v === undefined || v === null || v === '') return 0;
+  if (typeof v === 'number' || /^\d+$/.test(String(v))) {
+    const n = +v;
+    return n > 100000000000 ? n : n * 1000;
+  }
+  const s = String(v).trim();
+  const parsed = Date.parse(s.includes('T') ? s : s.replace(' ', 'T'));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
 function xtreamProgramme(e) {
   if (!e) return null;
-  const title = b64(e.title);
-  const start = (+e.start_timestamp || 0) * 1000;
-  const stop = (+e.stop_timestamp || 0) * 1000;
+  const title = maybeB64(e.title || e.name);
+  const start = parseXtreamTime(e.start_timestamp ?? e.start ?? e.start_time);
+  const stop = parseXtreamTime(e.stop_timestamp ?? e.end_timestamp ?? e.stop ?? e.end ?? e.end_time);
   return title && start && stop ? { title, start, stop } : null;
 }
 function fallbackGuideTitle(ch) {
@@ -429,19 +471,32 @@ function hydrateXtreamEpgCache(key) {
 function persistXtreamEpgCache() {
   try {
     const streams = [...xtreamEpgCache.byStream.entries()]
-      .filter(([, e]) => e && Array.isArray(e.list))
+      .filter(([, e]) => e && Array.isArray(e.list) && e.list.length)
       .slice(-5000)
       .map(([id, e]) => [id, { at: Number(e.at) || 0, list: e.list }]);
     store.write('xtreamepgcache', { key: xtreamEpgStoreKey(xtreamEpgCache.key), at: Date.now(), streams });
   } catch {}
 }
-async function fetchXtreamEpgList(s, ch, limit) {
+async function fetchXtreamEpgAction(s, ch, limit, action, timeouts = {}) {
   const base = String(s.xtHost).replace(/\/+$/, '');
-  const u = `${base}/player_api.php?username=${encodeURIComponent(s.xtUser || '')}&password=${encodeURIComponent(s.xtPass || '')}&action=get_short_epg&stream_id=${ch.xtreamId}&limit=${Math.max(2, Math.min(48, limit))}`;
-  const r = await fetchUrlExt(u, { timeoutMs: 8000, deadlineMs: 15000, maxBytes: 2 * 1024 * 1024 });
-  let raw;
-  try { raw = (JSON.parse(r.body.toString('utf8') || '{}').epg_listings) || []; } catch { raw = []; }
+  const u = `${base}/player_api.php?username=${encodeURIComponent(s.xtUser || '')}&password=${encodeURIComponent(s.xtPass || '')}&action=${action}&stream_id=${ch.xtreamId}&limit=${Math.max(2, Math.min(48, limit))}`;
+  const r = await fetchUrlExt(u, { timeoutMs: timeouts.timeoutMs || 8000, deadlineMs: timeouts.deadlineMs || 15000, maxBytes: 2 * 1024 * 1024 });
+  let json, raw;
+  try {
+    json = JSON.parse(r.body.toString('utf8') || '{}');
+    raw = Array.isArray(json) ? json : (json.epg_listings || json.epg || json.listings || json.programmes || json.programs || []);
+    if (raw && !Array.isArray(raw) && typeof raw === 'object') raw = Object.values(raw);
+  } catch { raw = []; }
   return raw.map(xtreamProgramme).filter(Boolean).sort((a, b) => a.start - b.start);
+}
+async function fetchXtreamEpgList(s, ch, limit) {
+  const short = await fetchXtreamEpgAction(s, ch, limit, 'get_short_epg');
+  if (short.length) return short;
+  try {
+    return await fetchXtreamEpgAction(s, ch, limit, 'get_simple_data_table', { timeoutMs: 5000, deadlineMs: 9000 });
+  } catch {
+    return short;
+  }
 }
 async function xtreamEpgList(ch, { limit = 24 } = {}) {
   const s = settings.get();
@@ -450,13 +505,13 @@ async function xtreamEpgList(ch, { limit = 24 } = {}) {
   if (xtreamEpgCache.key !== key) hydrateXtreamEpgCache(key);
   const id = String(ch.xtreamId);
   const hit = xtreamEpgCache.byStream.get(id);
-  if (hit && Date.now() - hit.at < EPG_CACHE_TTL_MS) return hit.list;
+  if (hit && Date.now() - hit.at < (hit.list && hit.list.length ? EPG_CACHE_TTL_MS : EPG_EMPTY_TTL_MS)) return hit.list;
   if (hit && hit.list && hit.list.length && Date.now() - hit.at <= EPG_CACHE_STALE_MS) {
     if (!hit.promise) {
       const p = fetchXtreamEpgList(s, ch, limit).then((list) => {
         xtreamEpgCache.byStream.set(id, { at: Date.now(), list });
         if (xtreamEpgCache.byStream.size > 5000) xtreamEpgCache.byStream.clear();
-        persistXtreamEpgCache();
+        if (list.length) persistXtreamEpgCache();
         return list;
       }).catch((e) => {
         xtreamEpgCache.byStream.set(id, { at: hit.at, list: hit.list });
@@ -470,7 +525,7 @@ async function xtreamEpgList(ch, { limit = 24 } = {}) {
   const p = fetchXtreamEpgList(s, ch, limit).then((list) => {
     xtreamEpgCache.byStream.set(id, { at: Date.now(), list });
     if (xtreamEpgCache.byStream.size > 5000) xtreamEpgCache.byStream.clear();
-    persistXtreamEpgCache();
+    if (list.length) persistXtreamEpgCache();
     return list;
   });
   xtreamEpgCache.byStream.set(id, { at: 0, list: hit ? hit.list : [], promise: p });
@@ -488,13 +543,11 @@ async function epgNowNext(ch) {
     const list = await xtreamEpgList(ch, { limit: 24 });
     const now = Date.now();
     const i = list.findIndex((p) => p.start <= now && p.stop > now);
-    if (i === -1) {
-      const next = list.find((p) => p.start > now);
-      return next ? { now: null, next } : {};
-    }
-    return { now: list[i], next: list[i + 1] || null };
+    if (i !== -1) return { now: list[i], next: list[i + 1] || null };
+    const next = list.find((p) => p.start > now);
+    if (next) return { now: null, next };
   }
-  if (s.epgUrl) {
+  if (xmltvGuideUrl(s)) {
     const epg = await ensureXmltv();
     const list = xmltvListFor(epg, ch);
     const now = Date.now();
@@ -532,10 +585,11 @@ async function warmIptvCaches(reason = 'scheduled') {
   try {
     const channels = await loadIptvChannels();
     const result = { configured: true, reason, channels: channels.length, xmltv: false, xtreamGuide: 0 };
-    if (s.epgUrl) {
+    if (xmltvGuideUrl(s)) {
       await ensureXmltv();
       result.xmltv = true;
-    } else if (s.iptvMode === 'xtream') {
+    }
+    if (s.iptvMode === 'xtream') {
       const key = iptvSourceKey(s);
       if (xtreamEpgCache.key !== key) hydrateXtreamEpgCache(key);
       const targets = xtreamGuideWarmTargets(channels);
@@ -774,6 +828,39 @@ async function nextWatchEpisodes(uid, profile = 'default') {
     } catch { /* one bad show must not break the row */ }
   }
   return out;
+}
+
+const MUSIC_CHARTS = [
+  { id: 'daily', title: 'Daily chart', note: 'Top songs today', query: 'top songs today', limit: 16 },
+  { id: 'weekly', title: 'Weekly chart', note: 'Top songs this week', query: 'top songs this week', limit: 16 },
+];
+const musicChartCache = new Map(); // id -> { rows, expiresAt, inflight }
+function nextMusicChartRefresh(id, now = new Date()) {
+  const d = new Date(now);
+  if (id === 'weekly') {
+    const daysUntilMonday = (8 - d.getDay()) % 7 || 7;
+    d.setDate(d.getDate() + daysUntilMonday);
+  } else {
+    d.setDate(d.getDate() + 1);
+  }
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+async function loadMusicChart(def) {
+  const now = Date.now();
+  const hit = musicChartCache.get(def.id);
+  if (hit && hit.rows && now < hit.expiresAt) return hit.rows;
+  if (hit && hit.inflight) return hit.inflight;
+  const inflight = ytmusic.search(def.query, { limit: def.limit }).then((rows) => {
+    const clean = (rows || []).filter((t) => t && /^[\w-]{11}$/.test(String(t.id || ''))).slice(0, def.limit);
+    musicChartCache.set(def.id, { rows: clean, expiresAt: nextMusicChartRefresh(def.id) });
+    return clean;
+  }).catch((e) => {
+    if (hit && hit.rows) return hit.rows;
+    throw e;
+  });
+  musicChartCache.set(def.id, { ...(hit || {}), inflight });
+  return inflight;
 }
 
 // ---------- handlers ----------
@@ -1052,12 +1139,19 @@ const H = {
         epg: !!(s.epgUrl || s.iptvMode === 'xtream'),
         hiddenGroups: (store.read('iptvgroups', {})[ctx.user.id]) || [],
         globalHidden: ctx.user.role === 'admin' ? [...globalHidden] : undefined,
-        channels: list.map(({ url: _u, ...c }) => ({
-          ...c, fav: favs.has(c.id),
-          streamUrl: `/api/iptv/stream/${c.idx}?t=${auth.streamToken(ctx.user.id, `iptv:${c.idx}`)}`,
-          nativeUrl: `/api/iptv/native/${c.idx}?t=${auth.streamToken(ctx.user.id, `iptv:${c.idx}`)}`,
-          nativeMime: iptvNativeMime(_u),
-        })),
+        channels: list.map(({ url: _u, nativeUrl: _nu, nativeFallbackUrl: _nfu, ...c }) => {
+          const token = auth.streamToken(ctx.user.id, `iptv:${c.idx}`);
+          const nativeMime = c.nativeMime || iptvNativeMime(_nu || _u);
+          const nativeFallbackMime = c.nativeFallbackMime || (_nfu ? iptvNativeMime(_nfu) : '');
+          return {
+            ...c, fav: favs.has(c.id),
+            streamUrl: `/api/iptv/stream/${c.idx}?t=${token}`,
+            nativeUrl: `/api/iptv/native/${c.idx}?t=${token}`,
+            nativeMime,
+            nativeFallbackUrl: _nfu ? `/api/iptv/native/${c.idx}?alt=1&t=${token}` : undefined,
+            nativeFallbackMime,
+          };
+        }),
       });
     } catch (e) {
       console.error('[iptv]', e.message);
@@ -1102,7 +1196,7 @@ const H = {
     const from = Date.now() - 90 * 60000, to = Date.now() + 4 * 3600000;
     const s = settings.get();
     let epg = null;
-    if (s.epgUrl) { try { epg = await ensureXmltv(); } catch { epg = null; } }
+    if (xmltvGuideUrl(s)) { try { epg = await ensureXmltv(); } catch { epg = null; } }
     const channels = await mapLimit(chans, 8, async (ch) => {
       let progs = [];
       if (s.iptvMode === 'xtream' && ch.xtreamId) {
@@ -1135,8 +1229,10 @@ const H = {
     if (!streamScopeOk(ctx, `iptv:${ctx.m[1]}`)) return send(ctx.res, 401, { error: 'token not valid for this stream' });
     const ch = iptvCache.channels && iptvCache.channels[parseInt(ctx.m[1], 10)];
     if (!ch) return send(ctx.res, 404, { error: 'channel not found - open Live TV first' });
+    const alt = ctx.url.searchParams.get('alt') === '1';
+    const target = alt && ch.nativeFallbackUrl ? ch.nativeFallbackUrl : (ch.nativeUrl || ch.url);
     ctx.res.writeHead(302, {
-      location: ch.url,
+      location: target,
       'cache-control': 'no-store',
       'x-content-type-options': 'nosniff',
     });
@@ -2357,6 +2453,23 @@ Object.assign(H, {
   },
 
   // ---- Music (YouTube Music via yt-dlp) ----
+  musicCharts: async (ctx) => {
+    if (!ytmusic.detectYtdlp()) return send(ctx.res, 503, { error: 'yt-dlp is not installed on the server' });
+    const charts = (await Promise.all(MUSIC_CHARTS.map(async (def) => {
+      try {
+        const results = await loadMusicChart(def);
+        return {
+          id: def.id,
+          title: def.title,
+          note: def.note,
+          results: results.map((r) => ({ ...r, streamUrl: `/api/music/stream/${r.id}?t=${auth.streamToken(ctx.user.id, `music:${r.id}`)}` })),
+        };
+      } catch (e) {
+        return { id: def.id, title: def.title, note: def.note, results: [], error: String(e.message).slice(0, 120) };
+      }
+    }))).filter((c) => c.results.length);
+    send(ctx.res, 200, { charts });
+  },
   musicSearch: async (ctx) => {
     if (!ytmusic.detectYtdlp()) return send(ctx.res, 503, { error: 'yt-dlp is not installed on the server' });
     const q = ctx.url.searchParams.get('q') || '';
@@ -2575,6 +2688,7 @@ const ROUTES = [
   { m: 'POST', re: /^\/api\/trakt\/unlink$/, auth: 'user', h: H.traktUnlink },
   { m: 'POST', re: /^\/api\/trakt\/pull$/, auth: 'user', h: H.traktPull },
   { m: 'POST', re: /^\/api\/trakt\/sync$/, auth: 'user', h: H.traktSync },
+  { m: 'GET', re: /^\/api\/music\/charts$/, auth: 'user', h: H.musicCharts },
   { m: 'GET', re: /^\/api\/music\/search$/, auth: 'user', h: H.musicSearch },
   { m: 'GET', re: /^\/api\/music\/stream\/([\w-]{11})$/, auth: 'stream', h: H.musicStream },
   { m: 'GET', re: /^\/api\/music\/status$/, auth: 'user', h: H.musicStatus },
