@@ -3223,7 +3223,7 @@ function renderRows() {
 }
 let prefetchTimer = null;
 function prefetchSources(it, delay = 700) {
-  if (!it || it.type === 'live' || it._local) return;
+  if (!it || it.type === 'live' || localTitleHasPlayback(it)) return;
   // The Stremio trick: search/triage warms server-side while the user reads the title,
   // so pressing Play skips the indexer fan-out entirely (~1s perceived start).
   clearTimeout(prefetchTimer);
@@ -3902,6 +3902,7 @@ $('allSeasonsBtn').addEventListener('click', () => S.detailSeasons && renderSeas
 // Main Play button for a show: figure the next-up episode across the whole series.
 function pickNextUp(show, seasons) {
   const prefix = `tmdb:tv:${show.tmdbId}:s`, wm = S.watchMap || {};
+  const localEpisodes = localEpisodesForShow(show);
   const inProg = Object.keys(wm).filter((k) => k.startsWith(prefix) && !wm[k].watched && wm[k].position > 30)
     .sort((a, b) => wm[b].updatedAt - wm[a].updatedAt)[0];
   if (inProg) {
@@ -3911,6 +3912,10 @@ function pickNextUp(show, seasons) {
   const watched = Object.keys(wm).filter((k) => k.startsWith(prefix) && wm[k].watched)
     .map((k) => { const m = /s(\d+)e(\d+)/.exec(k); return { s: +m[1], e: +m[2] }; })
     .sort((a, b) => a.s - b.s || a.e - b.e);
+  if (localEpisodes.length) {
+    const nextLocal = localEpisodes.find((ep) => !(wm[ep.key] && wm[ep.key].watched)) || localEpisodes[localEpisodes.length - 1];
+    return updateDetailPlayLabel({ label: watched.length ? 'Continue' : 'Play', target: epTarget(show, nextLocal.s, nextLocal.e, 0) });
+  }
   let nextS = seasons[0].season_number, nextE = 1;
   if (watched.length) {
     const last = watched[watched.length - 1];
@@ -3934,12 +3939,27 @@ function updateDetailPlayLabel({ label, target }) {
   $('dPlay').classList.toggle('resumeMode', label === 'Resume');
   prefetchSources(target, 0);
 }
+function localEpisodesForShow(show) {
+  if (!show || !show.tmdbId || !S.localMap) return [];
+  const re = new RegExp(`^tmdb:tv:${show.tmdbId}:s(\\d+)e(\\d+)$`, 'i');
+  return Object.keys(S.localMap).map((key) => {
+    const m = re.exec(key);
+    return m ? { key, s: +m[1], e: +m[2], loc: S.localMap[key] } : null;
+  }).filter(Boolean).sort((a, b) => a.s - b.s || a.e - b.e);
+}
+function localTitleHasPlayback(it) {
+  if (!it) return false;
+  if (it._local) return true;
+  if (S.localMap && it.key && S.localMap[it.key]) return true;
+  return it.type === 'tv' && localEpisodesForShow(it).length > 0;
+}
 // Availability: a title you OWN plays locally (no Sources drawer needed); a title with ZERO
 // usenet results shows an honest "Unavailable" instead of a Play button that would fail.
 async function checkAvailability(it) {
   const reqId = S.detailReq;
-  if (S.localMap && it.key && S.localMap[it.key]) {
+  if (localTitleHasPlayback(it)) {
     $('dSources').style.display = 'none'; // your own file — one source, no drawer
+    $('qToggle').style.display = 'none';
     return;
   }
   // Skip only when TMDB is KNOWN to be unconfigured — on a route-restored refresh this runs

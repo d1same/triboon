@@ -122,6 +122,8 @@ public class MainActivity extends Activity {
     private String nativeMime = "";
     private String nativeFallbackUrl = "";
     private String nativeFallbackMime = "";
+    private String nativePlaybackTitle = "Triboon";
+    private String nativePlaybackBackdropUrl = "";
     private boolean nativeTriedFallback = false;
     private boolean nativeHasNext = false;
     private boolean nativeHasQualityChoices = false;
@@ -144,6 +146,7 @@ public class MainActivity extends Activity {
     private int nativeGuideEpoch;
     private long nativeLiveUnhealthySinceMs;
     private long nativeLiveLastRecoveryMs;
+    private long nativeVideoUnhealthySinceMs;
     private final Handler nativeProgress = new Handler(Looper.getMainLooper());
     private final Runnable nativeSubtitleTick = new Runnable() {
         @Override public void run() {
@@ -194,7 +197,7 @@ public class MainActivity extends Activity {
     private void buildWebView() {
         // Lets chrome://inspect (or the DevTools protocol over adb) attach to the page —
         // adb access is owner-gated anyway, and this is how TV-side issues get diagnosed.
-        WebView.setWebContentsDebuggingEnabled(true);
+        WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG);
         web = new WebView(this);
         // The shell HTML is served no-cache by the server. Keep WebView's normal disk cache
         // for art/assets between launches; only flush once after an APK version change.
@@ -381,10 +384,12 @@ public class MainActivity extends Activity {
         nativePlayerLayer.setFocusableInTouchMode(true);
         nativePlayerLayer.setVisibility(View.GONE);
 
-        nativePlayerView = new PlayerView(this);
+        nativePlayerView = (PlayerView) getLayoutInflater().inflate(R.layout.native_player_view, nativePlayerLayer, false);
         nativePlayerView.setUseController(false);
         nativePlayerView.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT);
         nativePlayerView.setBackgroundColor(Color.BLACK);
+        nativePlayerView.setShutterBackgroundColor(Color.TRANSPARENT);
+        nativePlayerView.setKeepContentOnPlayerReset(true);
         nativePlayerView.setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING);
         if (nativePlayerView.getSubtitleView() != null) {
             nativePlayerView.getSubtitleView().setApplyEmbeddedStyles(false);
@@ -497,7 +502,7 @@ public class MainActivity extends Activity {
         nativeChrome.setClipToPadding(false);
 
         nativeControlShade = new View(this);
-        nativeControlShade.setBackgroundColor(0xD0000000);
+        nativeControlShade.setBackground(nativeFade(0x00000000, 0xE0000000));
         nativeControlShade.setVisibility(View.GONE);
         nativeControlShade.setFocusable(false);
         nativeControlShade.setClickable(false);
@@ -926,11 +931,8 @@ public class MainActivity extends Activity {
             boolean hasNext = j.optBoolean("hasNext", false);
             boolean hasQualityChoices = j.optBoolean("qualityChoices", false);
             boolean guide = j.optBoolean("guide", false);
-            final String playbackTitle = title;
-            final String playbackBackdropUrl = backdropUrl;
-
             buildNativePlayerLayer();
-            releaseNativePlayer(false);
+            releaseNativePlayer(false, guide);
             nativeMode = mode;
             nativeKind = j.optString("kind", "direct");
             nativeQualityLabel = qualityLabel.isEmpty() ? ("live".equals(mode) ? "LIVE" : "1080p") : qualityLabel;
@@ -938,9 +940,12 @@ public class MainActivity extends Activity {
             nativeMime = mime;
             nativeFallbackUrl = fallbackUrl;
             nativeFallbackMime = fallbackMime;
+            nativePlaybackTitle = title == null || title.isEmpty() ? "Triboon" : title;
+            nativePlaybackBackdropUrl = backdropUrl == null ? "" : backdropUrl;
             nativeTriedFallback = false;
             nativeLiveUnhealthySinceMs = 0L;
             nativeLiveLastRecoveryMs = 0L;
+            nativeVideoUnhealthySinceMs = 0L;
             nativeHasNext = hasNext;
             nativeHasQualityChoices = hasQualityChoices;
             nativeSubtitleShift = (float) j.optDouble("subtitleShift", nativeShiftFromUrl(subtitleUrl));
@@ -971,11 +976,7 @@ public class MainActivity extends Activity {
                     long dur = nativeDurSeconds();
                     String m = nativeMode;
                     if ("video".equals(m)) {
-                        releaseNativePlayer(false);
-                        enterNativeFullscreenMode();
-                        showNativeLoading(playbackTitle, playbackBackdropUrl);
-                        web.evaluateJavascript("window.__tvNativeVideoError && __tvNativeVideoError("
-                                + org.json.JSONObject.quote(msg) + "," + pos + "," + dur + ")", null);
+                        notifyNativeVideoError(msg, pos, dur);
                     } else if (tryNativeLiveFallback()) {
                         return;
                     } else {
@@ -989,6 +990,7 @@ public class MainActivity extends Activity {
                     updateNativeChrome();
                     if (state == Player.STATE_READY && nativeLoading != null
                             && nativeLoading.getVisibility() == View.VISIBLE) {
+                        nativeVideoUnhealthySinceMs = 0L;
                         hideNativeLoading();
                         if (!nativeGuideMode) showNativeChrome(true);
                     }
@@ -1010,6 +1012,7 @@ public class MainActivity extends Activity {
                 @Override public void onIsPlayingChanged(boolean isPlaying) {
                     updateNativeChrome();
                     if ("live".equals(nativeMode) && isPlaying) nativeLiveUnhealthySinceMs = 0L;
+                    if ("video".equals(nativeMode) && isPlaying) nativeVideoUnhealthySinceMs = 0L;
                     scheduleNativeChromeHide();
                 }
             });
@@ -1465,6 +1468,7 @@ public class MainActivity extends Activity {
         nativeQualityLabel = "LIVE";
         nativeLiveUnhealthySinceMs = 0L;
         nativeLiveLastRecoveryMs = SystemClock.elapsedRealtime();
+        if (nativePlayer.getPlaybackState() != Player.STATE_IDLE) nativePlayer.stop();
         if (nativePlayerBadge != null) nativePlayerBadge.setText("LIVE");
         if (nativeChromeQuality != null) nativeChromeQuality.setText("LIVE");
         nativePlayer.setMediaItem(buildNativeMediaItem());
@@ -1480,9 +1484,21 @@ public class MainActivity extends Activity {
         if (tryNativeLiveFallback()) return;
         nativeLiveLastRecoveryMs = now;
         nativeLiveUnhealthySinceMs = 0L;
+        if (nativePlayer.getPlaybackState() != Player.STATE_IDLE) nativePlayer.stop();
         nativePlayer.setMediaItem(buildNativeMediaItem());
         nativePlayer.prepare();
         nativePlayer.play();
+    }
+
+    private void notifyNativeVideoError(String msg, long pos, long dur) {
+        String title = nativePlaybackTitle;
+        String backdropUrl = nativePlaybackBackdropUrl;
+        releaseNativePlayer(false);
+        enterNativeFullscreenMode();
+        showNativeLoading(title, backdropUrl);
+        web.evaluateJavascript("window.__tvNativeVideoError && __tvNativeVideoError("
+                + org.json.JSONObject.quote(msg == null || msg.isEmpty() ? "native startup stalled" : msg)
+                + "," + pos + "," + dur + ")", null);
     }
 
     private float nativeShiftFromUrl(String url) {
@@ -2128,6 +2144,7 @@ public class MainActivity extends Activity {
                 if (!nativePlayerOpen()) return;
                 updateNativeChrome();
                 updateNativeLiveWatchdog();
+                updateNativeVideoWatchdog();
                 if ("video".equals(nativeMode)) {
                     web.evaluateJavascript("window.__tvNativeVideoProgress && __tvNativeVideoProgress("
                             + nativePosSeconds() + "," + nativeDurSeconds() + ")", null);
@@ -2140,7 +2157,7 @@ public class MainActivity extends Activity {
     private void updateNativeLiveWatchdog() {
         if (!"live".equals(nativeMode) || nativePlayer == null) return;
         int state = nativePlayer.getPlaybackState();
-        boolean unhealthy = state == Player.STATE_BUFFERING || state == Player.STATE_ENDED
+        boolean unhealthy = state == Player.STATE_IDLE || state == Player.STATE_BUFFERING || state == Player.STATE_ENDED
                 || (nativePlayer.getPlayWhenReady() && !nativePlayer.isPlaying());
         if (!unhealthy) {
             nativeLiveUnhealthySinceMs = 0L;
@@ -2152,11 +2169,39 @@ public class MainActivity extends Activity {
             return;
         }
         if (now - nativeLiveUnhealthySinceMs >= 12000L) {
-            recoverNativeLivePlayback(state == Player.STATE_BUFFERING ? "buffering" : "stalled");
+            recoverNativeLivePlayback(state == Player.STATE_IDLE ? "idle" : (state == Player.STATE_BUFFERING ? "buffering" : "stalled"));
+        }
+    }
+
+    private void updateNativeVideoWatchdog() {
+        if (!"video".equals(nativeMode) || nativePlayer == null) return;
+        int state = nativePlayer.getPlaybackState();
+        if (state == Player.STATE_READY && nativePlayer.isPlaying()) {
+            nativeVideoUnhealthySinceMs = 0L;
+            return;
+        }
+        boolean unhealthy = state == Player.STATE_IDLE || state == Player.STATE_BUFFERING
+                || (nativePlayer.getPlayWhenReady() && !nativePlayer.isPlaying());
+        if (!unhealthy) {
+            nativeVideoUnhealthySinceMs = 0L;
+            return;
+        }
+        long now = SystemClock.elapsedRealtime();
+        if (nativeVideoUnhealthySinceMs <= 0L) {
+            nativeVideoUnhealthySinceMs = now;
+            return;
+        }
+        if (now - nativeVideoUnhealthySinceMs >= 18000L) {
+            notifyNativeVideoError(state == Player.STATE_IDLE ? "native player idle" : "native startup stalled",
+                    nativePosSeconds(), nativeDurSeconds());
         }
     }
 
     private void releaseNativePlayer(boolean notifyClosed) {
+        releaseNativePlayer(notifyClosed, false);
+    }
+
+    private void releaseNativePlayer(boolean notifyClosed, boolean preserveGuideMode) {
         nativeProgress.removeCallbacksAndMessages(null);
         nativeSubtitleHandler.removeCallbacksAndMessages(null);
         nativeSubtitleLoadToken++;
@@ -2171,7 +2216,8 @@ public class MainActivity extends Activity {
         String mode = nativeMode;
         long pos = nativePosSeconds();
         long dur = nativeDurSeconds();
-        nativeGuideMode = false;
+        boolean guideMode = nativeGuideMode;
+        nativeGuideMode = preserveGuideMode && guideMode;
         if (nativePlayer != null) {
             nativePlayerView.setPlayer(null);
             nativePlayer.release();
@@ -2184,9 +2230,12 @@ public class MainActivity extends Activity {
         nativeMime = "";
         nativeFallbackUrl = "";
         nativeFallbackMime = "";
+        nativePlaybackTitle = "Triboon";
+        nativePlaybackBackdropUrl = "";
         nativeTriedFallback = false;
         nativeLiveUnhealthySinceMs = 0L;
         nativeLiveLastRecoveryMs = 0L;
+        nativeVideoUnhealthySinceMs = 0L;
         nativeHasNext = false;
         nativeHasQualityChoices = false;
         nativeSubtitleUrl = "";

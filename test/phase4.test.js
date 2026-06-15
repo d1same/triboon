@@ -207,14 +207,24 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'local library playback should resolve resume and leave details for the loading player before mount prep waits');
   assert.match(ui, /function mergeLocalItems\(lib, items\) \{[\s\S]+`tmdb:tv:\$\{x\.tmdbId\}:s\$\{x\.s\}e\$\{x\.e\}`[\s\S]+playUrl: x\.playUrl[\s\S]+S\.localMap = map/,
     'local library scans should hydrate episode keys into the local-first playback map');
+  assert.match(ui, /function localEpisodesForShow\(show\) \{[\s\S]+new RegExp\(`\^tmdb:tv:\$\{show\.tmdbId\}:s[\s\S]+Object\.keys\(S\.localMap\)[\s\S]+sort\(\(a, b\) => a\.s - b\.s \|\| a\.e - b\.e\)/,
+    'matched local TV shows should discover owned episode keys, not only a bare show key');
+  assert.match(ui, /function localTitleHasPlayback\(it\) \{[\s\S]+if \(S\.localMap && it\.key && S\.localMap\[it\.key\]\) return true;[\s\S]+return it\.type === 'tv' && localEpisodesForShow\(it\)\.length > 0;/,
+    'detail availability should treat local TV episodes as playable local ownership');
+  assert.match(ui, /function prefetchSources\(it, delay = 700\) \{[\s\S]+localTitleHasPlayback\(it\)[\s\S]+api\('\/api\/search\?' \+ sourceSearchQuery\(it\)\)/,
+    'local-owned titles should not warm online source searches behind the detail page');
   assert.match(ui, /function queryFor\(it\) \{[\s\S]+if \(it\.tmdbId && \(it\.type === 'movie' \|\| it\.type === 'tv'\) && exact\) return exact;[\s\S]+return it\.q \|\| exact;/,
     'TMDB movie/show cards should play/search by the selected title and year, not a fuzzy raw search query');
   assert.match(ui, /if \(it\._lib && it\._lib\.path\) \{[\s\S]+const r = await libItems\(it\._lib\);[\s\S]+mergeLocalItems\(it\._lib, r\.items \|\| \[\]\);[\s\S]+\}[\s\S]+checkAvailability\(it\);/,
     'TV details opened from an added library should hydrate local episode ownership before availability/play targets are calculated');
+  assert.match(ui, /async function checkAvailability\(it\) \{[\s\S]+if \(localTitleHasPlayback\(it\)\) \{[\s\S]+\$\(\'dSources\'\)\.style\.display = 'none';[\s\S]+\$\(\'qToggle\'\)\.style\.display = 'none';[\s\S]+return;/,
+    'local-owned detail pages should not append no-sources copy after the local map is known');
   assert.match(ui, /function epItemOf\(show, season, ep\) \{[\s\S]+const loc = S\.localMap && S\.localMap\[item\.key\];[\s\S]+return loc \? \{ \.\.\.item, _local: loc \} : item;/,
     'season episode cards should carry local playback when the episode exists in an added library');
   assert.match(ui, /function epTarget\(show, sNum, eNum, resume\) \{[\s\S]+const loc = S\.localMap && S\.localMap\[item\.key\];[\s\S]+return loc \? \{ \.\.\.item, _local: loc \} : item;/,
     'the main TV detail Play/Resume target should carry local playback for owned episodes');
+  assert.match(ui, /function pickNextUp\(show, seasons\) \{[\s\S]+const localEpisodes = localEpisodesForShow\(show\);[\s\S]+if \(localEpisodes\.length\) \{[\s\S]+const nextLocal = localEpisodes\.find\(\(ep\) => !\(wm\[ep\.key\] && wm\[ep\.key\]\.watched\)\)[\s\S]+target: epTarget\(show, nextLocal\.s, nextLocal\.e, 0\)/,
+    'matched local TV show Play should start from the next owned episode rather than a missing online source');
   assert.match(ui, /_local: \{ streamUrl: loc\.streamUrl, playUrl: loc\.playUrl, name: loc\.name \}, _episode: true/,
     'next-episode bumps should keep the rich local player prep URL');
   assert.match(ui, /function startOverItem\(it\) \{[\s\S]+_startOver: true/,
@@ -256,6 +266,7 @@ test('Android native player: direct source and native chrome stay out of the web
   const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
   const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
   const guideIcon = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'drawable', 'ic_player_guide.xml'), 'utf8');
+  const nativePlayerLayout = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'layout', 'native_player_view.xml'), 'utf8');
   const audioIcon = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'drawable', 'ic_player_audio.xml'), 'utf8');
   const ccIcon = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'drawable', 'ic_player_cc.xml'), 'utf8');
   const qualityIcon = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'drawable', 'ic_player_quality.xml'), 'utf8');
@@ -330,8 +341,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'web player should bind separate single-click and double-click surface handlers');
   assert.match(android, /nativeTop\.setBackgroundColor\(Color\.TRANSPARENT\);/,
     'native top clock strip should not draw a glow or shade behind the time');
-  assert.match(android, /private View nativeControlShade;[\s\S]+nativeControlShade = new View\(this\);[\s\S]+nativeControlShade\.setBackgroundColor\(0xD0000000\);[\s\S]+MATCH_PARENT, dp\(430\)[\s\S]+nativePlayerLayer\.addView\(nativeControlShade, shadeLp\);/,
-    'native ExoPlayer should paint a flat dark bottom controller shade behind the controls');
+  assert.match(android, /private View nativeControlShade;[\s\S]+nativeControlShade = new View\(this\);[\s\S]+nativeControlShade\.setBackground\(nativeFade\(0x00000000, 0xE0000000\)\);[\s\S]+MATCH_PARENT, dp\(430\)[\s\S]+nativePlayerLayer\.addView\(nativeControlShade, shadeLp\);/,
+    'native ExoPlayer should paint a plain bottom controller shade that fades away above the seek bar');
   assert.match(android, /if \(nativeControlShade != null\) nativeControlShade\.setVisibility\(View\.VISIBLE\);[\s\S]+if \(nativeMetaBar != null\) nativeMetaBar\.setVisibility\(View\.VISIBLE\);[\s\S]+nativeChrome\.setVisibility\(View\.VISIBLE\);/,
     'native ExoPlayer should show the controller shade and metadata bar with the controls');
   assert.match(android, /nativeControlShade\.setVisibility\(View\.GONE\);[\s\S]+nativeMetaBar\.setVisibility\(View\.GONE\);[\s\S]+nativeChrome\.setVisibility\(View\.GONE\);/,
@@ -776,12 +787,16 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Live TV should retry the Exo remux fallback before reporting a player error');
   assert.match(android, /private boolean tryNativeLiveFallback\(\) \{[\s\S]+nativeUrl = nativeFallbackUrl;[\s\S]+nativeMime = nativeFallbackMime[\s\S]+nativePlayer\.setMediaItem\(buildNativeMediaItem\(\)\);[\s\S]+nativePlayer\.prepare\(\);[\s\S]+nativePlayer\.play\(\);/,
     'native Live TV fallback should stay inside ExoPlayer instead of opening web playback');
-  assert.match(android, /private void updateNativeLiveWatchdog\(\) \{[\s\S]+state == Player\.STATE_BUFFERING[\s\S]+nativePlayer\.getPlayWhenReady\(\) && !nativePlayer\.isPlaying\(\)[\s\S]+now - nativeLiveUnhealthySinceMs >= 12000L[\s\S]+recoverNativeLivePlayback/,
-    'native Live TV should recover when ExoPlayer stalls in buffering or not-playing state');
+  assert.match(android, /private void updateNativeLiveWatchdog\(\) \{[\s\S]+state == Player\.STATE_IDLE \|\| state == Player\.STATE_BUFFERING \|\| state == Player\.STATE_ENDED[\s\S]+nativePlayer\.getPlayWhenReady\(\) && !nativePlayer\.isPlaying\(\)[\s\S]+now - nativeLiveUnhealthySinceMs >= 12000L[\s\S]+recoverNativeLivePlayback\(state == Player\.STATE_IDLE \? "idle"/,
+    'native Live TV should recover when ExoPlayer goes idle, buffers forever, ends, or stops playing');
   assert.match(android, /state == Player\.STATE_ENDED && "live"\.equals\(nativeMode\)[\s\S]+recoverNativeLivePlayback\("ended"\)/,
     'native Live TV should restart instead of staying frozen when a live stream ends quietly');
   assert.match(android, /private void recoverNativeLivePlayback\(String reason\) \{[\s\S]+if \(tryNativeLiveFallback\(\)\) return;[\s\S]+nativePlayer\.setMediaItem\(buildNativeMediaItem\(\)\);[\s\S]+nativePlayer\.prepare\(\);[\s\S]+nativePlayer\.play\(\);/,
     'native Live TV recovery should stay inside ExoPlayer and restart the active native stream');
+  assert.match(android, /private void updateNativeVideoWatchdog\(\) \{[\s\S]+state == Player\.STATE_IDLE \|\| state == Player\.STATE_BUFFERING[\s\S]+now - nativeVideoUnhealthySinceMs >= 18000L[\s\S]+notifyNativeVideoError\(state == Player\.STATE_IDLE \? "native player idle" : "native startup stalled"/,
+    'native movie and episode startup should fail over instead of sitting on preparing stream forever');
+  assert.match(android, /private void notifyNativeVideoError\(String msg, long pos, long dur\) \{[\s\S]+String title = nativePlaybackTitle;[\s\S]+String backdropUrl = nativePlaybackBackdropUrl;[\s\S]+releaseNativePlayer\(false\);[\s\S]+showNativeLoading\(title, backdropUrl\);[\s\S]+__tvNativeVideoError/,
+    'native movie and episode startup watchdog should preserve the branded loader while reporting the failure to the native ladder');
   assert.match(server, /LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS = 15000[\s\S]+LIVE_REMUX_IDLE_TIMEOUT_MS = 15000/,
     'Live TV remux fallback should have bounded startup and idle stall timers');
   assert.match(server, /armIdle\(LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS\);[\s\S]+ff\.stdout\.on\('data'[\s\S]+armIdle\(LIVE_REMUX_IDLE_TIMEOUT_MS\);[\s\S]+ff\.kill\('SIGKILL'\)/,
@@ -804,8 +819,20 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android native PiP should ignore invalid measurements and clamp the rect onscreen');
   assert.match(android, /nativePlayerView\.setResizeMode\(AspectRatioFrameLayout\.RESIZE_MODE_FIT\)/,
     'ExoPlayer content should stay centered and fitted inside the PiP frame');
+  assert.match(nativePlayerLayout, /app:surface_type="texture_view"/,
+    'native PiP guide must use a TextureView surface so ExoPlayer can compose over the WebView guide');
+  assert.match(android, /WebView\.setWebContentsDebuggingEnabled\(BuildConfig\.DEBUG\)/,
+    'Android release builds should not expose WebView debugging while debug APKs stay inspectable');
+  assert.match(android, /nativePlayerView = \(PlayerView\) getLayoutInflater\(\)\.inflate\(R\.layout\.native_player_view, nativePlayerLayer, false\);/,
+    'native player should use the TextureView-backed PlayerView layout');
+  assert.match(android, /nativePlayerView\.setShutterBackgroundColor\(Color\.TRANSPARENT\);[\s\S]+nativePlayerView\.setKeepContentOnPlayerReset\(true\);/,
+    'native retunes should not flash a full black shutter over the guide');
   assert.match(android, /private void enterNativeGuideMode\(\) \{[\s\S]+web\.setVisibility\(View\.VISIBLE\);[\s\S]+web\.requestFocus\(\);[\s\S]+nativePlayerLayer\.bringToFront\(\);/,
     'native guide mode should keep ExoPlayer alive as a PiP over the shared guide surface');
+  assert.match(android, /releaseNativePlayer\(false, guide\);[\s\S]+nativeMode = mode;/,
+    'native Live TV retunes from PiP should preserve guide mode while swapping ExoPlayer instances');
+  assert.match(android, /private void releaseNativePlayer\(boolean notifyClosed, boolean preserveGuideMode\) \{[\s\S]+boolean guideMode = nativeGuideMode;[\s\S]+nativeGuideMode = preserveGuideMode && guideMode;/,
+    'native release should not erase guide mode during PiP retunes');
   assert.doesNotMatch(openGuideMethod, /releaseNativePlayer\(false\)/,
     'opening the guide must not release ExoPlayer');
   assert.match(android, /if \(nativeGuideMode\) \{[\s\S]+if \(code == KeyEvent\.KEYCODE_BACK\) \{[\s\S]+closeNativeGuideMode\(\);/,
