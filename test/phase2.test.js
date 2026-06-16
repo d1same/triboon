@@ -150,6 +150,21 @@ test('title verification: short titles match only releases that ARE that title',
   const hp = parseWantedTitle('harry potter and the sorcerers stone 2001');
   assert.ok(releaseMatches('Harry.Potter.and.the.Sorcerers.Stone.2001.UHD.BluRay.2160p.DDP.7.1.DV.HDR.x265-BHDStudio', hp));
   assert.ok(releaseMatches("Harry.Potter.and.the.Philosopher's.Stone.2001.1080p.BluRay.DTS.x264-ESiR", hp), 'one-word substitution allowed');
+
+  // Long franchise titles must not fuzzily slide into a sibling movie.
+  const fellowship = parseWantedTitle('the lord of the rings the fellowship of the ring 2001');
+  const fellowshipNoYear = parseWantedTitle('the lord of the rings the fellowship of the ring');
+  for (const wanted of [fellowship, fellowshipNoYear]) {
+    assert.ok(releaseMatches('The.Lord.of.the.Rings.The.Fellowship.of.the.Ring.2001.EXTENDED.1080p.BluRay.x264-CtrlHD', wanted),
+      'accepts the exact Fellowship release');
+    assert.ok(releaseMatches('Lord.of.the.Rings.Fellowship.of.the.Ring.2001.1080p.BluRay.x265-GROUP', wanted),
+      'accepts harmless missing articles in release names');
+    for (const wrong of [
+      'The.Lord.of.the.Rings.The.Two.Towers.2002.EXTENDED.1080p.BluRay.x264-CtrlHD',
+      'The.Lord.of.the.Rings.The.Return.of.the.King.2003.EXTENDED.1080p.BluRay.x264-CtrlHD',
+      'The.Lord.of.the.Rings.The.Rings.of.Power.S01E01.1080p.WEB-DL.x264-GROUP',
+    ]) assert.ok(!releaseMatches(wrong, wanted), `rejects sibling LOTR title ${wrong}`);
+  }
 });
 
 test('scoring: admin custom formats — group tiers override built-ins, keywords add their score', () => {
@@ -257,6 +272,17 @@ test('subs: pickSub matches the sub to OUR release cut (sync depends on it)', ()
   assert.strictEqual(forWeb.id, 2, 'WEB-DL source picks the WEB-DL sub');
   const forBlu = pickSub(data, 'Show.S01E01.1080p.BluRay.x264-GRP.mkv');
   assert.strictEqual(forBlu.id, 1, 'BluRay source matches the BluRay sub');
+  const rookie = [
+    { id: 'e1', url: 'http://x/e1.srt', format: 'srt', display: 'The.Rookie.S01E01.1080p.WEB-DL-GRP' },
+    { id: 'e3', url: 'http://x/e3.srt', format: 'srt', display: 'The.Rookie.S01E03.1080p.WEB-DL-GRP' },
+    { id: 'show', url: 'http://x/show.srt', format: 'srt', display: 'The.Rookie.1080p.WEB-DL-GRP' },
+  ];
+  assert.strictEqual(pickSub(rookie, 'The.Rookie.S01E03.1080p.WEB-DL-GRP.mkv').id, 'e3',
+    'TV subtitles must prefer the exact episode over same-show/wrong-episode files');
+  const rookieRanked = rankSubs(rookie, 'The.Rookie.S01E03.1080p.WEB-DL-GRP.mkv');
+  assert.strictEqual(rookieRanked[0].id, 'e3', 'the exact episode is the selected subtitle variant');
+  assert.ok(rookieRanked.find((v) => v.id === 'e1').score < rookieRanked.find((v) => v.id === 'show').score,
+    'wrong-episode subtitle files rank below generic fallback rows');
   const lotr = [
     { id: 10, url: 'http://x/theatrical.srt', format: 'srt', display: 'The.Lord.of.the.Rings.The.Return.of.the.King.2003.Theatrical.1080p.BluRay.x264-GRP' },
     { id: 11, url: 'http://x/extended.srt', format: 'srt', display: 'The.Lord.of.the.Rings.The.Return.of.the.King.2003.Extended.Edition.1080p.BluRay.x264-GRP' },
@@ -570,6 +596,51 @@ test('pipeline: auto-advance mounts the next candidate when the current source d
   await assert.rejects(() => pipeline.advance('nope'), /unknown play session/);
 
   pool.close(); await mock.close(); ix.server.close(); store.close();
+});
+
+test('pipeline: explicit pickKey mounts the chosen source before auto-pick', async () => {
+  const autoPayload = seededPayload(90 * 1024, 51);
+  const pickedPayload = seededPayload(90 * 1024, 52);
+  const auto = nzbFor(writeRar4Store([{ name: 'Auto.mkv', data: autoPayload }], { base: 'auto' }), 30000, 'auto');
+  const picked = nzbFor(writeRar4Store([{ name: 'Picked.mkv', data: pickedPayload }], { base: 'picked' }), 30000, 'picked');
+  const mock = createMockNntp({ articles: new Map([...auto.articles, ...picked.articles]) });
+  const nntpPort = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 4);
+  const ix = makeMockIndexer([
+    { name: 'Manual.Pick.2024.1080p.WEB-DL.H.264-FLUX', size: 6e9, nzb: auto.nzb },
+    { name: 'Manual.Pick.2024.1080p.BluRay.REMUX.AVC-FraMeSToR', size: 49e9, nzb: picked.nzb },
+  ]);
+  const ixPort = await ix.listen();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const pipeline = new Pipeline({
+    pool: () => pool, verdicts: new VerdictCache(store), mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+
+  try {
+    const { candidates } = await pipeline.search({ q: 'Manual Pick 2024' }, {});
+    assert.strictEqual(candidates[0].name, 'Manual.Pick.2024.1080p.WEB-DL.H.264-FLUX',
+      'auto-pick remains the faster/smaller source');
+    const remux = candidates.find((c) => c.name.includes('REMUX'));
+    assert.ok(remux && remux.pickKey, 'manual Sources row has a stable pick key');
+
+    const first = await pipeline.play({ q: 'Manual Pick 2024' }, {});
+    assert.strictEqual(first.candidate.name, 'Manual.Pick.2024.1080p.WEB-DL.H.264-FLUX',
+      'initial play mounts the auto-pick first');
+    const firstChunks = [];
+    for await (const c of first.vf.read(0, first.vf.size)) firstChunks.push(c);
+    assert.ok(Buffer.concat(firstChunks).equals(autoPayload), 'initial auto source streams byte-exact');
+
+    const r = await pipeline.play({ q: 'Manual Pick 2024', pickKey: remux.pickKey }, {});
+    assert.strictEqual(r.candidate.name, remux.name, 'manual source pick is mounted first, not auto-pick');
+    assert.notStrictEqual(r.vf.id, first.vf.id, 'manual source swap creates/returns the selected mount, not the old active one');
+    const chunks = [];
+    for await (const c of r.vf.read(0, r.vf.size)) chunks.push(c);
+    assert.ok(Buffer.concat(chunks).equals(pickedPayload), 'picked source streams byte-exact');
+  } finally {
+    pool.close(); await mock.close(); ix.server.close(); store.close();
+  }
 });
 
 test('pipeline: a picked SAMPLE file fails the candidate and auto-advance finds the feature', async () => {

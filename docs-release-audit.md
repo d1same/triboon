@@ -10,10 +10,10 @@ This is the A-to-Z checklist for keeping web and Android TV working as separate 
 - Search: exact title and year are used for playback search, including tricky titles and multi-word/spin-off cases.
 - Details: Play, Resume, Start over, 1080p/4K preference, Sources, watchlist, watched, trailer, cast, recommendations, seasons, and episode cards all route to the correct target.
 - Sources: source rows show clean title, quality, source type, size, score, selected state, and exact release playback. Manual source selection must resume from the latest saved position.
-- Local library: local movies and matched TV episodes show playable detail pages, skip online source warmups when owned locally, and play the next owned episode without "no sources yet."
+- Local library: local movies and matched TV episodes show playable detail pages, skip online source warmups when owned locally, play the next owned episode without "no sources yet," and open large attached folders without rendering every item at once.
 - Music: playback starts in Music and stops when leaving the Music section.
 - Music: stays on the web audio path for now; ExoPlayer is reserved for video/live playback unless Android TV later needs native audio-session/background behavior.
-- Live TV: playlist cache, EPG cache, category scrolling, channel play, guide, PiP guide, back behavior, and channel retune all stay responsive.
+- Live TV: playlist cache, EPG cache, category scrolling, channel play, guide, PiP guide, back behavior, and channel retune all stay responsive. Category Up/Down stays in the category lane and Right is the only handoff into channel rows.
 - Admin/settings: provider/indexer/library/user/quality-cap edits work in place and invalidate affected caches.
 
 ## Web Player
@@ -73,23 +73,52 @@ This is the A-to-Z checklist for keeping web and Android TV working as separate 
 - For Android TV, prefer native direct play when the device reports codec support; avoid server remux/transcode unless needed.
 - Live TV should serve cached playlist/EPG data immediately and refresh server-side on schedule.
 - ExoPlayer should keep the TextureView-backed surface stable during guide/PiP transitions.
+- Attached local libraries must not block first menu/home focus or rail rollover; home must not fetch full `/api/libraries/:id/items` payloads, rail previews auto-load only the first bounded local-folder page, and library grids request additional bounded pages through scroll/D-pad.
 
 ## Verification Log
 
-- `npm test`: passed 134/134 on June 15, 2026.
-- Android build: `android/gradlew.bat --no-build-cache assembleDebug` passed with Gradle 9.5.1 wrapper fallback.
+- `npm.cmd test`: passed 138/138 on June 16, 2026 after the home startup focus/render coalescing fix.
+- `node --test test/phase4.test.js`: passed 15/15 on June 16, 2026 after the home startup focus/render coalescing fix.
+- Android build: `android/gradlew.bat assembleDebug` passed with Gradle 9.5.1 wrapper fallback on June 16, 2026.
+- Android Java compile: `android/gradlew.bat :app:compileDebugJavaWithJavac --rerun-tasks` passed on June 16, 2026, proving the native player edits compile fresh.
+- Android Gradle hygiene: `android/gradlew.bat :app:compileDebugJavaWithJavac --warning-mode all` passed without Gradle deprecation warnings after modernizing Groovy DSL assignment syntax; AndroidX annotation metadata warnings were removed with a compile-only annotation dependency.
+- Startup smoke: isolated temp server + browser reload reached usable home/menu focus in 174 ms; boot made one `/api/server`, one `/api/me`, one `/api/watch?profile=...`, one `/api/libraries`, and one `/api/watchlist` request.
+- IPTV status: the real local server on `localhost:7777` reported TMDB, ffmpeg, Wyzie subtitles, IPTV, and music enabled. The server was restarted with stdout/stderr captured in `triboon-local.out.log` and `triboon-local.err.log`; startup warmed 9875 channels plus XMLTV and 96 Xtream guide channels.
+- IPTV native logging: `test/security.test.js` covers upstream native playback failures and proves logs include channel/status while omitting credential-bearing provider URLs.
+- IPTV playback probe: Shield WebView session fetched `/api/iptv/channels` with 9875 channels; first native URL returned `video/mp2t` with bytes in about 5.6s, and browser/remux fallback returned `video/mp4` with bytes in about 1.4s.
+- IPTV provider rejection audit: `USA: CNN [1080p]` failed on Shield because the upstream provider returned HTTP 403 for both TS and HLS with `[Bot-Protection]: You are banned for repeated abuse`. This is now sanitized as `provider bot-protection`, short-cached by the native proxy to avoid Exo retry storms, and surfaced by Android as an HTTP provider failure instead of a generic Exo source error.
 - Android install: debug APK installed on Shield at `10.1.20.11:5555`.
-- Android native smoke: started playback on Shield; app state reported native playback active, web video source empty, and ExoPlayer position advancing.
-- Android visual smoke: native video frame rendered; Back returned to the Triboon UI.
+- Android native VOD smoke: started `The Super Mario Galaxy Movie` on Shield; timeline showed `1:38:14`, finish time showed `Ends at`, native rewind moved `0:17 -> 0:00`, native forward jumped to `0:32`, and the web video source stayed empty.
+- Android native resume follow-up: a later Shield restore requested resume at 171s but visually restarted near the beginning; native resume now keeps `nativePendingStartMs` and reapplies the seek once ExoPlayer is READY instead of relying only on the immediate post-`prepare()` seek.
+- Android native Live TV smoke: started channel 0 through the logged-in app path, caught stale web player state blocking D-pad zapping, fixed `setNativeLivePlaybackState`, reloaded the patched WebView, then confirmed Up moved `liveCur 0 -> 1` and Down moved `liveCur 1 -> 0`.
+- Android subtitle smoke: native CC sheet opened with Off, English auto-match, version, and +/-0.5s sync rows; closing the sheet left playback clean.
+- Android visual smoke: native video frame rendered; Back returned to the Triboon UI; after Live TV smoke the movie was restored from saved state.
+- Android repeatable smoke helper: `bench/android-tv-smoke.ps1` launches/inspects the Shield, writes JSON state, pulls a screenshot to `bench/shots`, and can run the disruptive `-LiveZap` check when a real TV zap proof is needed.
+- Android startup D-pad smoke: cold-started the Shield with early D-pad input; web focus was ready at ~198 ms, `/api/watch` returned at ~303 ms, the boot loader was hidden, and focus landed on a card instead of a dead body/WebView focus. This points the old "first 10 seconds frozen" symptom at the frontend first-focus gap, not backend loading.
+- Android startup flicker follow-up: after the IPTV native-error changes, cold-started the Shield with early D-pad input again. Web focus was ready at 329 ms, `/api/watch` returned at 372 ms, the boot loader was hidden, early D-pad input landed on a Continue Watching card, and catalog/enrichment rows stayed deferred while the user was already navigating. The fix coalesces unchanged home rows, preserves focus across background row swaps, and waits for the TV focus/D-pad settle window before applying visible background refreshes.
+- Continue Watching next-up stability: next-episode suggestions are prepared during the watch-state publish path with a short deadline instead of being added by the generic home enrichment pass several seconds later. Shield cold-start smoke showed the first focused Continue Watching card already carried `NEXT EPISODE` while TV focus stayed under one second.
+- Live TV/PiP guide category navigation: category columns now keep their own D-pad lane. Up/Down clamps and applies categories, including at the bottom, and only Right enters the channel rows. `node --test test/phase4.test.js` and `npm.cmd test` passed 138/138 on June 16, 2026 after this fix.
+- Android post-install focus follow-up: immediately after `adb install -r`, Android/Play Protect/launcher package-cache work still creates a short OS-level "no focused window" interval before Triboon is displayed. The native shell now reclaims focus on resume, window focus, page finish, and app-ready, then flushes queued D-pad keys. Post-install Shield smoke reached web focus at 111 ms after the app surface was active and early D-pad landed in the home rows.
+- Local-library performance pass: attached library item payloads no longer warm from home; home only reuses already-cached explicit library data, rail rollover auto-loads a 15-item page for the highlighted local folder instead of the full scanned list, and library grids request additional 15-item pages with D-pad/scroll-triggered append.
+- Local-library Shield probe: cold start reached TV focus at 306 ms. `IR - TV Shows` rail preview originally proved bounded paging by requesting `/api/libraries/dbcd999592/items?offset=0&limit=72&sort=added.desc`, rendering 72 cards from 720 top-level shows, then appending the next bounded page. The UI batch size was later lowered to 15 to make rail previews lighter.
+- Browse backdrop sizing pass: Movies, TV Shows, and attached-library pages now toggle `shortBrowseBd`; TV-class 1080p caps the backdrop at 360px high and non-TV 1080p caps it at 420px so poster grids become visually dominant sooner.
+- Android repeatable smoke helper now supports `-ColdStart -StartupDpad` for first-open focus readiness and `-VodSmoke` for disruptive native VOD resume/forward/rewind checks, in addition to `-LiveZap`.
+- Android native VOD D-pad fix: Shield smoke confirmed subtitles no longer auto-open on playback start, VOD remux D-pad forward remounted from `startOffset 120 -> 173`, rewind remounted back to `171`, and the final screenshot stayed in native playback with no web video source.
+- VOD seek loader polish: repeated movie/episode skips are now quiet seeks. Web and Android remux/transcode seek restarts keep the current playback surface instead of flashing the full preparing loader; startup and true failover can still show the branded loader.
+- ExoPlayer D-pad map fix: visible VOD chrome now gives Left/Right to the button row first, so Play/Pause can move to rewind/forward instead of accidentally skipping. The seek bar can still be selected with Up and scrubbed with Left/Right, hidden VOD surface Left/Right still skips, and Live TV Up/Down remains channel zapping.
+- Subtitle episode-sync fix: Wyzie/online subtitle ranking now gives exact TV episode matches priority and pushes wrong-episode files below generic fallback rows. Android native subtitles now use the same display timeline as the player after remux/transcode resume or seek, and subtitle-version rows keep their own saved sync offset instead of resetting to zero when selected.
+- Android native Live TV guard: after the VOD D-pad changes, Shield Live TV smoke still moved Up from `liveCur 0 -> 1` and Down back `1 -> 0`, proving VOD seeking did not steal live channel zapping.
+- Android smoke helper update: `bench/android-tv-smoke.ps1` now prefers the non-blank WebView DevTools target after APK reinstall, can run `-VodNoSeek` to prove startup overlays stay quiet, and uses exact Android D-pad keycodes for VOD seek checks.
 - Fresh APK smoke: after clean rebuild and reinstall, the Shield opened Triboon, exposed the native `TriboonTV` bridge, and kept the web video source empty when playback was requested.
 - Web smoke: opened `http://localhost:7777/#/home`, verified home/navigation/cards/live rows, opened a movie detail, and started web playback through `/api/remux/...` with title and 1080p label visible.
 - Security quick scan: no tracked-source secret hits found; `npm audit --omit=dev` is not applicable because this stdlib server has no lockfile/runtime npm dependency tree.
 
 ## Remaining Improvements
 
-- Add repeatable Android UI automation for native playback, guide/PiP retune, subtitles, audio, and quality switching. Current Android verification is ADB/CDP smoke plus unit/static tests.
+- Keep expanding `bench/android-tv-smoke.ps1` into full Android UI automation for guide/PiP retune, subtitles, audio, and quality switching. Startup D-pad, native VOD resume/seek, and Live TV zap now have repeatable ADB/CDP modes.
 - Add an HTTPS/local-cert setup path so production APKs can eventually narrow cleartext traffic without breaking LAN installs.
-- Clean Gradle deprecation warnings before the next Android Gradle/Gradle major jump.
+- Replace deprecated Android platform calls reported by Java lint when we next touch display/WebView setup; Gradle 10 configuration deprecations are already cleaned.
 - Add timing telemetry around detail click -> loading, loading -> first frame, source failure -> next source, and live retune -> first frame, especially on Shield.
 - Investigate titles that still sit on "preparing stream" before Android receives a native URL; once ExoPlayer starts, the native startup watchdog now fails over instead of waiting forever.
 - Consider a native-side warm ExoPlayer/surface strategy if measured first-frame time remains slow after source/mount caching.
+- Investigate repeated Shield WebView `tile_manager.cc` tile-memory warnings seen around detail/player transitions; no crash or ExoPlayer fatal error was observed, but it may still contribute to perceived UI jank.

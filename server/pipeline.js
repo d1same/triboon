@@ -37,31 +37,43 @@ const STRUCTURAL_AFTER_TITLE = new RegExp('^(' + [
   'us', 'uk', 'au', 'nz', 'multi', 'dual', 'dubbed', 'ita', 'eng', 'french', 'german',
   'spanish', 'nordic', 'vostfr',
 ].join('|') + ')$');
+const TITLE_WORD_EQUIV = new Map([
+  ['sorcerers', 'philosophers'],
+  ['philosophers', 'sorcerers'],
+]);
+const OPTIONAL_TITLE_ARTICLES = new Set(['the', 'a', 'an']);
+function titleWordMatches(wantedWord, releaseWord) {
+  return wantedWord === releaseWord || TITLE_WORD_EQUIV.get(wantedWord) === releaseWord;
+}
+
 // Does this release NAME actually carry the wanted title, episode, and a compatible year?
-// Three rules learned from "From S01E01" playing Stranger Things:
+// Three rules learned from "From S01E01" playing Stranger Things and long franchise titles:
 //  1. ANCHORED — the title starts at the FIRST token (scene convention: Title.Year/SxxEyy.tags).
 //     "contains the words somewhere" let one-word titles ("From", "It", "Angel") match
 //     mid-name junk: Stranger.Things.Tales.FROM.85, Colin.FROM.Accounts, Up.FROM.the.Grave.
-//  2. NEAR-CONSECUTIVE — long titles tolerate one missing word and one inserted word
-//     (Philosophers↔Sorcerers Stone), short titles none: any gap in a short title is a
-//     different show (The.Curse.of.the.Crown is not The.Crown).
+//  2. CONSECUTIVE — title words must match in order. The only soft spots are harmless
+//     missing articles in release names and explicit known aliases (Sorcerers/Philosophers).
+//     Arbitrary gaps made LOTR-style franchise titles match the wrong movie.
 //  3. STRUCTURAL BOUNDARY — the token after the title must be a year/SxxEyy/quality tag,
 //     never a plain word (From.DUSK.Till.Dawn for "From"; Walking.Dead.DARYL.DIXON for
 //     "The Walking Dead" — the spin-off/longer-title trap).
 function releaseMatches(name, wanted) {
   const norm = ' ' + String(name || '').toLowerCase().replace(/['’`]/g, '').replace(/[^a-z0-9]+/g, ' ') + ' ';
   const toks = norm.trim().split(' ');
-  let ti = 0, missed = 0, skipped = 0, matchedAny = false;
-  const allowed = wanted.words.length >= 4 ? 1 : 0;
-  for (const w of wanted.words) {
-    const at = matchedAny ? toks.indexOf(w, ti) : (toks[0] === w ? 0 : -1);
-    if (at === -1) { if (++missed > allowed) return false; continue; }  // wanted word absent
-    skipped += at - ti;                                                 // name tokens jumped over
-    if (skipped > allowed) return false;
-    ti = at + 1; matchedAny = true;
+  let ti = 0;
+  for (let wi = 0; wi < wanted.words.length; wi++) {
+    const w = wanted.words[wi];
+    const t = toks[ti];
+    if (t === undefined) {
+      if (OPTIONAL_TITLE_ARTICLES.has(w)) continue;
+      return false;
+    }
+    if (titleWordMatches(w, t)) { ti++; continue; }
+    const nextWanted = wanted.words[wi + 1];
+    if (OPTIONAL_TITLE_ARTICLES.has(w) && nextWanted && titleWordMatches(nextWanted, t)) continue;
+    return false;
   }
   if (wanted.words.length) {
-    if (!matchedAny) return false;
     const after = toks[ti];
     if (after !== undefined && !STRUCTURAL_AFTER_TITLE.test(after)) return false;
   }

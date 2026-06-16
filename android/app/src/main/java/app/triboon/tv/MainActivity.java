@@ -19,6 +19,8 @@ import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.media.MediaCodecInfo;
+import android.media.MediaCodecList;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -55,6 +57,7 @@ import androidx.media3.common.Player;
 import androidx.media3.common.TrackSelectionOverride;
 import androidx.media3.common.Tracks;
 import androidx.media3.datasource.DefaultHttpDataSource;
+import androidx.media3.datasource.HttpDataSource;
 import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
@@ -65,6 +68,8 @@ import androidx.media3.ui.PlayerView;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
+import java.util.List;
+import java.util.Map;
 import java.net.HttpURLConnection;
 import java.net.URL;
 
@@ -142,11 +147,23 @@ public class MainActivity extends Activity {
     private float nativeSubtitleShift;
     private boolean nativeHasWyzieSubtitle;
     private boolean nativeUserSeeking;
+    private boolean nativeSeekDpadMode;
     private boolean nativeGuideMode;
     private int nativeGuideEpoch;
+    private View nativeClickArmedView;
+    private long nativeClickArmedAtMs;
+    private boolean nativeOpenSubtitleMenuAfterRefresh;
+    private long nativeKnownDurationMs;
+    private long nativePendingStartMs;
+    private long nativeStartSeekIssuedAtMs;
+    private long nativeStartOffsetMs;
     private long nativeLiveUnhealthySinceMs;
     private long nativeLiveLastRecoveryMs;
     private long nativeVideoUnhealthySinceMs;
+    private static final long NATIVE_VIDEO_STARTUP_STALL_MS = 7000L;
+    private static final long NATIVE_LIVE_STALL_RECOVERY_MS = 45000L;
+    private static final long NATIVE_LIVE_RECOVERY_COOLDOWN_MS = 15000L;
+    private static final int NATIVE_LIVE_READ_TIMEOUT_MS = 60000;
     private final Handler nativeProgress = new Handler(Looper.getMainLooper());
     private final Runnable nativeSubtitleTick = new Runnable() {
         @Override public void run() {
@@ -158,9 +175,12 @@ public class MainActivity extends Activity {
     };
     private long lastBackAtRoot;             // BACK-twice-to-exit window
     private boolean pageReady;               // main frame finished at least once
+    private boolean pageTvReady;             // web focus model installed and has a target
     private volatile boolean pageInputFocused; // page reports text-field focus via the JS bridge
     private android.speech.SpeechRecognizer speech; // in-app voice search (created per use)
     private boolean voicePending;            // mic permission was requested BY a voice tap
+    private int focusRecoveryEpoch;
+    private final java.util.ArrayList<String> pendingTvKeys = new java.util.ArrayList<>();
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -170,6 +190,8 @@ public class MainActivity extends Activity {
 
         root = new FrameLayout(this);
         root.setBackgroundColor(0xFF0B0812); // --ink
+        root.setFocusable(true);
+        root.setFocusableInTouchMode(true);
         setContentView(root);
 
         buildWebView();
@@ -187,6 +209,56 @@ public class MainActivity extends Activity {
                 && !prefs().getBoolean("askedMic", false)) {
             prefs().edit().putBoolean("askedMic", true).apply();
             requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, REQ_MIC);
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        scheduleTvFocusRecovery("resume");
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) scheduleTvFocusRecovery("window");
+    }
+
+    private void scheduleTvFocusRecovery(String reason) {
+        final int epoch = ++focusRecoveryEpoch;
+        recoverTvFocus(reason);
+        long[] delays = new long[] { 80L, 220L, 520L, 1100L };
+        for (long delay : delays) {
+            root.postDelayed(() -> {
+                if (epoch == focusRecoveryEpoch) recoverTvFocus(reason);
+            }, delay);
+        }
+    }
+
+    private void recoverTvFocus(String reason) {
+        if (root == null) return;
+        if (setup != null && setup.getVisibility() == View.VISIBLE) {
+            if (addr != null) addr.requestFocus();
+            return;
+        }
+        if (nativePlayerOpen()) {
+            View current = getCurrentFocus();
+            if (current == null || !current.isShown()) {
+                if (nativePlayBtn != null && nativeChrome != null && nativeChrome.getVisibility() == View.VISIBLE) {
+                    nativePlayBtn.requestFocus();
+                } else if (nativePlayerLayer != null) {
+                    nativePlayerLayer.requestFocus();
+                }
+            }
+            return;
+        }
+        if (web != null && web.getVisibility() == View.VISIBLE) {
+            web.setFocusable(true);
+            web.setFocusableInTouchMode(true);
+            web.requestFocus();
+            if (pageTvReady) flushPendingTvKeys();
+        } else {
+            root.requestFocus();
         }
     }
 
@@ -238,11 +310,22 @@ public class MainActivity extends Activity {
         }
 
         web.setWebViewClient(new WebViewClient() {
-            @Override public void onPageFinished(WebView v, String url) { pageReady = true; }
+            @Override public void onPageStarted(WebView v, String url, android.graphics.Bitmap favicon) {
+                pageReady = false;
+                pageTvReady = false;
+                pendingTvKeys.clear();
+            }
+
+            @Override public void onPageFinished(WebView v, String url) {
+                pageReady = true;
+                scheduleTvFocusRecovery("page");
+            }
 
             @Override public void onReceivedError(WebView v, WebResourceRequest req, WebResourceError err) {
                 if (Build.VERSION.SDK_INT >= 23 && req.isForMainFrame()) {
                     pageReady = false;
+                    pageTvReady = false;
+                    pendingTvKeys.clear();
                     showSetup("Couldn't reach the server — check the address and that Triboon is running.");
                 }
             }
@@ -325,6 +408,15 @@ public class MainActivity extends Activity {
             public void inputFocus(boolean focused) { pageInputFocused = focused; }
 
             @android.webkit.JavascriptInterface
+            public void appReady() {
+                runOnUiThread(() -> {
+                    pageTvReady = true;
+                    scheduleTvFocusRecovery("appReady");
+                    flushPendingTvKeys();
+                });
+            }
+
+            @android.webkit.JavascriptInterface
             public void startVoice() {
                 runOnUiThread(MainActivity.this::startVoiceFlow);
             }
@@ -332,6 +424,11 @@ public class MainActivity extends Activity {
             @android.webkit.JavascriptInterface
             public int nativeChromeVersion() {
                 return 1;
+            }
+
+            @android.webkit.JavascriptInterface
+            public String nativePlaybackCaps() {
+                return buildNativePlaybackCaps();
             }
 
             @android.webkit.JavascriptInterface
@@ -375,6 +472,47 @@ public class MainActivity extends Activity {
         web.requestFocus(View.FOCUS_DOWN);
     }
 
+    private String buildNativePlaybackCaps() {
+        try {
+            org.json.JSONObject j = new org.json.JSONObject();
+            j.put("native", true);
+            j.put("sdk", Build.VERSION.SDK_INT);
+            j.put("manufacturer", Build.MANUFACTURER == null ? "" : Build.MANUFACTURER);
+            j.put("brand", Build.BRAND == null ? "" : Build.BRAND);
+            j.put("model", Build.MODEL == null ? "" : Build.MODEL);
+            j.put("device", Build.DEVICE == null ? "" : Build.DEVICE);
+            j.put("mkv", true); // ExoPlayer's Matroska extractor owns container support.
+            j.put("mp4", true);
+            j.put("h264", nativeDecoderAvailable("video/avc"));
+            j.put("hevc", nativeDecoderAvailable("video/hevc"));
+            j.put("av1", nativeDecoderAvailable("video/av01"));
+            j.put("vp9", nativeDecoderAvailable("video/x-vnd.on2.vp9"));
+            j.put("mpeg2", nativeDecoderAvailable("video/mpeg2"));
+            j.put("aac", nativeDecoderAvailable("audio/mp4a-latm"));
+            j.put("ac3", nativeDecoderAvailable("audio/ac3"));
+            j.put("eac3", nativeDecoderAvailable("audio/eac3") || nativeDecoderAvailable("audio/eac3-joc"));
+            j.put("dts", nativeDecoderAvailable("audio/vnd.dts") || nativeDecoderAvailable("audio/vnd.dts.hd"));
+            j.put("source", "exo-mediacodec");
+            return j.toString();
+        } catch (Exception e) {
+            return "{\"native\":true,\"mkv\":true,\"mp4\":true,\"source\":\"exo-mediacodec\"}";
+        }
+    }
+
+    private boolean nativeDecoderAvailable(String mime) {
+        if (mime == null || mime.isEmpty()) return false;
+        try {
+            MediaCodecInfo[] infos = new MediaCodecList(MediaCodecList.ALL_CODECS).getCodecInfos();
+            for (MediaCodecInfo info : infos) {
+                if (info == null || info.isEncoder()) continue;
+                for (String type : info.getSupportedTypes()) {
+                    if (mime.equalsIgnoreCase(type)) return true;
+                }
+            }
+        } catch (Exception ignored) {}
+        return false;
+    }
+
     // ---------- native Live TV playback ----------
     private void buildNativePlayerLayer() {
         if (nativePlayerLayer != null) return;
@@ -382,10 +520,12 @@ public class MainActivity extends Activity {
         nativePlayerLayer.setBackgroundColor(Color.BLACK);
         nativePlayerLayer.setFocusable(true);
         nativePlayerLayer.setFocusableInTouchMode(true);
+        nativePlayerLayer.setOnKeyListener((v, code, e) -> handleNativeSurfaceKey(e));
         nativePlayerLayer.setVisibility(View.GONE);
 
         nativePlayerView = (PlayerView) getLayoutInflater().inflate(R.layout.native_player_view, nativePlayerLayer, false);
         nativePlayerView.setUseController(false);
+        nativePlayerView.setOnKeyListener((v, code, e) -> handleNativeSurfaceKey(e));
         nativePlayerView.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT);
         nativePlayerView.setBackgroundColor(Color.BLACK);
         nativePlayerView.setShutterBackgroundColor(Color.TRANSPARENT);
@@ -560,6 +700,7 @@ public class MainActivity extends Activity {
         nativeSeek = new SeekBar(this);
         nativeSeek.setMax(1000);
         nativeSeek.setFocusable(true);
+        nativeSeek.setOnKeyListener((v, code, e) -> handleNativeSurfaceKey(e));
         nativeSeek.setPadding(dp(4), 0, dp(4), 0);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             nativeSeek.setProgressTintList(ColorStateList.valueOf(0xFFC13BD6));
@@ -569,8 +710,8 @@ public class MainActivity extends Activity {
         nativeSeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 if (!fromUser || nativePlayer == null) return;
-                long d = nativePlayer.getDuration();
-                if (d > 0 && d != C.TIME_UNSET) nativePlayer.seekTo((d * progress) / 1000);
+                long d = nativeDurationMs();
+                if (d > 0 && d != C.TIME_UNSET) nativeSeekToDisplayPosition((d * progress) / 1000);
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) {
                 nativeUserSeeking = true;
@@ -588,7 +729,8 @@ public class MainActivity extends Activity {
         nativeTime.setTextSize(11);
         nativeTime.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
         nativeTime.setGravity(android.view.Gravity.END | android.view.Gravity.CENTER_VERTICAL);
-        seekRow.addView(nativeTime, new LinearLayout.LayoutParams(dp(64), dp(28)));
+        nativeTime.setMinWidth(dp(72));
+        seekRow.addView(nativeTime, new LinearLayout.LayoutParams(dp(76), dp(28)));
         nativeChrome.addView(seekRow, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -618,15 +760,16 @@ public class MainActivity extends Activity {
         rightControls.setClipToPadding(false);
 
         nativeGuideBtn = nativeButton(R.drawable.ic_player_guide, "TV guide", false);
-        nativeGuideBtn.setOnClickListener(v -> openNativeLiveGuide());
+        nativeGuideBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) openNativeLiveGuide(); });
         leftControls.addView(nativeGuideBtn);
 
         nativeRewBtn = nativeButton(R.drawable.ic_player_rewind, "Back 10 seconds", false);
-        nativeRewBtn.setOnClickListener(v -> nativeSeekBy(-10000));
+        nativeRewBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) nativeSeekBy(-10000); });
         centerControls.addView(nativeRewBtn);
 
         nativePlayBtn = nativeButton(R.drawable.ic_player_pause, "Pause", true);
         nativePlayBtn.setOnClickListener(v -> {
+            if (!consumeNativeControlClick(v)) return;
             if (nativePlayer == null) return;
             if (nativePlayer.isPlaying()) nativePlayer.pause();
             else nativePlayer.play();
@@ -635,23 +778,23 @@ public class MainActivity extends Activity {
         centerControls.addView(nativePlayBtn);
 
         nativeFwdBtn = nativeButton(R.drawable.ic_player_forward, "Forward 30 seconds", false);
-        nativeFwdBtn.setOnClickListener(v -> nativeSeekBy(30000));
+        nativeFwdBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) nativeSeekBy(30000); });
         centerControls.addView(nativeFwdBtn);
 
         nativeNextBtn = nativeButton(R.drawable.ic_player_next, "Next episode", false);
-        nativeNextBtn.setOnClickListener(v -> playNativeNextEpisode());
+        nativeNextBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) playNativeNextEpisode(); });
         centerControls.addView(nativeNextBtn);
 
         nativeCcBtn = nativeButton(R.drawable.ic_player_cc, "Subtitles", false);
-        nativeCcBtn.setOnClickListener(v -> showNativeTrackMenu(C.TRACK_TYPE_TEXT));
+        nativeCcBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) showNativeTrackMenu(C.TRACK_TYPE_TEXT); });
         rightControls.addView(nativeCcBtn);
 
         nativeAudioBtn = nativeButton(R.drawable.ic_player_audio, "Audio language", false);
-        nativeAudioBtn.setOnClickListener(v -> showNativeTrackMenu(C.TRACK_TYPE_AUDIO));
+        nativeAudioBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) showNativeTrackMenu(C.TRACK_TYPE_AUDIO); });
         rightControls.addView(nativeAudioBtn);
 
         nativeQualityBtn = nativeButton(R.drawable.ic_player_quality, "Quality", false);
-        nativeQualityBtn.setOnClickListener(v -> showNativeQualityMenu());
+        nativeQualityBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) showNativeQualityMenu(); });
         rightControls.addView(nativeQualityBtn);
 
         controls.addView(leftControls, new LinearLayout.LayoutParams(
@@ -829,6 +972,7 @@ public class MainActivity extends Activity {
         b.setContentDescription(label);
         b.setFocusable(true);
         b.setClickable(true);
+        b.setOnKeyListener((v, code, e) -> handleNativeSurfaceKey(e));
         b.setTag(iconRes);
         b.setPadding(dp(primary ? 9 : 8), dp(primary ? 9 : 8), dp(primary ? 9 : 8), dp(primary ? 9 : 8));
         b.setScaleType(ImageButton.ScaleType.CENTER_INSIDE);
@@ -923,6 +1067,7 @@ public class MainActivity extends Activity {
             String fallbackMime = j.optString("fallbackMime", "");
             backdropUrl = j.optString("backdropUrl", "");
             long startMs = Math.max(0, Math.round(j.optDouble("start", 0) * 1000));
+            long startOffsetMs = Math.max(0, Math.round(j.optDouble("startOffset", 0) * 1000));
             String subtitleUrl = j.optString("subtitleUrl", "");
             String subtitleLang = j.optString("subtitleLang", "");
             String subtitleLabel = j.optString("subtitleLabel", "");
@@ -931,6 +1076,8 @@ public class MainActivity extends Activity {
             boolean hasNext = j.optBoolean("hasNext", false);
             boolean hasQualityChoices = j.optBoolean("qualityChoices", false);
             boolean guide = j.optBoolean("guide", false);
+            boolean quietSeek = j.optBoolean("quietSeek", false);
+            long knownDurationMs = Math.max(0L, Math.round(j.optDouble("duration", 0) * 1000));
             buildNativePlayerLayer();
             releaseNativePlayer(false, guide);
             nativeMode = mode;
@@ -946,6 +1093,10 @@ public class MainActivity extends Activity {
             nativeLiveUnhealthySinceMs = 0L;
             nativeLiveLastRecoveryMs = 0L;
             nativeVideoUnhealthySinceMs = 0L;
+            nativeKnownDurationMs = knownDurationMs;
+            nativePendingStartMs = "video".equals(mode) ? startMs : 0L;
+            nativeStartSeekIssuedAtMs = 0L;
+            nativeStartOffsetMs = "video".equals(mode) ? startOffsetMs : 0L;
             nativeHasNext = hasNext;
             nativeHasQualityChoices = hasQualityChoices;
             nativeSubtitleShift = (float) j.optDouble("subtitleShift", nativeShiftFromUrl(subtitleUrl));
@@ -959,10 +1110,10 @@ public class MainActivity extends Activity {
             applyNativeSubtitleChoices(j.optJSONArray("subtitleChoices"));
 
             DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
-                    .setBufferDurationsMs("video".equals(mode) ? 10000 : 3500,
-                            "video".equals(mode) ? 60000 : 30000,
-                            "video".equals(mode) ? 1000 : 700,
-                            "video".equals(mode) ? 2500 : 1500)
+                    .setBufferDurationsMs("video".equals(mode) ? 6000 : 8000,
+                            "video".equals(mode) ? 60000 : 60000,
+                            "video".equals(mode) ? 700 : 700,
+                            "video".equals(mode) ? 1800 : 4000)
                     .setPrioritizeTimeOverSizeThresholds(true)
                     .build();
             nativePlayer = new ExoPlayer.Builder(this)
@@ -971,7 +1122,7 @@ public class MainActivity extends Activity {
                     .build();
             nativePlayer.addListener(new Player.Listener() {
                 @Override public void onPlayerError(PlaybackException error) {
-                    String msg = error == null ? "playback failed" : error.getErrorCodeName();
+                    String msg = nativePlaybackErrorMessage(error);
                     long pos = nativePosSeconds();
                     long dur = nativeDurSeconds();
                     String m = nativeMode;
@@ -988,6 +1139,7 @@ public class MainActivity extends Activity {
 
                 @Override public void onPlaybackStateChanged(int state) {
                     updateNativeChrome();
+                    if (state == Player.STATE_READY) applyNativeStartSeekIfReady();
                     if (state == Player.STATE_READY && nativeLoading != null
                             && nativeLoading.getVisibility() == View.VISIBLE) {
                         nativeVideoUnhealthySinceMs = 0L;
@@ -995,8 +1147,8 @@ public class MainActivity extends Activity {
                         if (!nativeGuideMode) showNativeChrome(true);
                     }
                     if (state == Player.STATE_ENDED && "video".equals(nativeMode)) {
-                        long pos = nativePosSeconds();
                         long dur = nativeDurSeconds();
+                        long pos = dur > 0 ? dur : nativePosSeconds();
                         closeNativePlayback(false);
                         web.evaluateJavascript("window.__tvNativeVideoClosed && __tvNativeVideoClosed("
                                 + pos + "," + dur + ",true)", null);
@@ -1035,7 +1187,7 @@ public class MainActivity extends Activity {
             if (nativeGuideBtn != null) nativeGuideBtn.setVisibility(View.VISIBLE);
             nativeNextBtn.setVisibility(hasNext ? View.VISIBLE : View.GONE);
             nativePlayerLayer.setVisibility(View.VISIBLE);
-            if (!guide && "video".equals(mode)) {
+            if (!guide && "video".equals(mode) && !quietSeek) {
                 enterNativeFullscreenMode();
                 showNativeLoading(title, backdropUrl);
             }
@@ -1121,26 +1273,104 @@ public class MainActivity extends Activity {
     }
 
     private long nativePosSeconds() {
-        return nativePlayer == null ? 0 : Math.max(0, nativePlayer.getCurrentPosition() / 1000);
+        return nativeDisplayPositionMs() / 1000;
     }
 
     private long nativeDurSeconds() {
         if (nativePlayer == null) return 0;
-        long d = nativePlayer.getDuration();
+        long d = nativeDurationMs();
         return d > 0 && d != C.TIME_UNSET ? d / 1000 : 0;
+    }
+
+    private long nativeDurationMs() {
+        if (nativePlayer == null) return nativeKnownDurationMs;
+        if (nativeStartOffsetMs > 0L && nativeKnownDurationMs > 0L) return nativeKnownDurationMs;
+        long d = nativePlayer.getDuration();
+        if (d > 0 && d != C.TIME_UNSET) return d;
+        return nativeKnownDurationMs;
+    }
+
+    private long nativeRawPositionMs() {
+        return nativePlayer == null ? 0L : Math.max(0L, nativePlayer.getCurrentPosition());
+    }
+
+    private long nativeDisplayPositionMs() {
+        if (nativePlayer == null) return 0L;
+        return Math.max(0L, nativeStartOffsetMs + nativeRawPositionMs());
+    }
+
+    private boolean nativeVodSeekable() {
+        if (nativePlayer == null || "live".equals(nativeMode)) return false;
+        long d = nativeDurationMs();
+        return nativePlayer.isCurrentMediaItemSeekable() || (d > 0 && d != C.TIME_UNSET);
+    }
+
+    private boolean nativeServerSeekMode() {
+        return "remux".equals(nativeKind) || "transcode".equals(nativeKind);
+    }
+
+    private boolean nativeCanSeekVod() {
+        return nativePlayer != null && "video".equals(nativeMode)
+                && (nativeVodSeekable() || nativeServerSeekMode());
     }
 
     private void nativeSeekBy(long deltaMs) {
         if (nativePlayer == null) return;
-        long d = nativePlayer.getDuration();
-        if ("live".equals(nativeMode) || d <= 0 || d == C.TIME_UNSET) {
+        long d = nativeDurationMs();
+        if ("live".equals(nativeMode) || (!nativeVodSeekable() && !nativeServerSeekMode())) {
             showNativeChrome(false);
             return;
         }
-        long max = d > 0 && d != C.TIME_UNSET ? d : Long.MAX_VALUE;
-        nativePlayer.seekTo(Math.max(0, Math.min(max, nativePlayer.getCurrentPosition() + deltaMs)));
+        long target = Math.max(0, nativeDisplayPositionMs() + deltaMs);
+        if (d > 0 && d != C.TIME_UNSET) target = Math.min(d, target);
+        nativeSeekToDisplayPosition(target);
         updateNativeChrome();
         showNativeChrome(false);
+    }
+
+    private void nativeSeekToDisplayPosition(long displayMs) {
+        if (nativePlayer == null) return;
+        long target = Math.max(0L, displayMs);
+        long d = nativeDurationMs();
+        if (d > 0 && d != C.TIME_UNSET) target = Math.min(d, target);
+        if (nativeServerSeekMode()) {
+            requestNativeVideoSeek(target);
+            return;
+        }
+        nativePlayer.seekTo(Math.max(0L, target - nativeStartOffsetMs));
+    }
+
+    private void requestNativeVideoSeek(long displayMs) {
+        if (web == null || !"video".equals(nativeMode)) return;
+        long pos = Math.max(0L, displayMs / 1000L);
+        web.evaluateJavascript("window.__tvNativeVideoSeek && window.__tvNativeVideoSeek("
+                + pos + "," + nativeDurSeconds() + ")", null);
+    }
+
+    private void applyNativeStartSeekIfReady() {
+        if (nativePlayer == null || nativePendingStartMs <= 0L || !"video".equals(nativeMode)) return;
+        if (nativePlayer.getPlaybackState() != Player.STATE_READY || !nativeVodSeekable()) return;
+        long target = nativePendingStartMs;
+        long d = nativeDurationMs();
+        if (d > 0 && d != C.TIME_UNSET) target = Math.min(d, target);
+        long current = nativeDisplayPositionMs();
+        if (current >= Math.max(0L, target - 3000L)) {
+            nativePendingStartMs = 0L;
+            nativeStartSeekIssuedAtMs = 0L;
+            return;
+        }
+        long now = SystemClock.elapsedRealtime();
+        if (nativeStartSeekIssuedAtMs > 0L && now - nativeStartSeekIssuedAtMs < 1200L) return;
+        nativeStartSeekIssuedAtMs = now;
+        nativeSeekToDisplayPosition(target);
+        updateNativeChrome();
+    }
+
+    private void zapNativeLiveChannel(int dir) {
+        if (!"live".equals(nativeMode) || nativeGuideMode || nativeSheetOpen() || web == null) return;
+        showNativeChrome(false);
+        web.evaluateJavascript("window.__tvNativeLiveZap && window.__tvNativeLiveZap("
+                + (dir >= 0 ? 1 : -1) + ")", null);
     }
 
     private void openNativeLiveGuide() {
@@ -1155,6 +1385,9 @@ public class MainActivity extends Activity {
 
     private void enterNativeGuideMode() {
         if (nativePlayerLayer == null || nativePlayerView == null) return;
+        boolean alreadyGuideMode = nativeGuideMode
+                && web != null && web.getVisibility() == View.VISIBLE
+                && nativePlayerLayer.getVisibility() == View.VISIBLE;
         nativeGuideEpoch++;
         nativeGuideMode = true;
         nativeProgress.removeCallbacks(nativeHideChrome);
@@ -1167,18 +1400,22 @@ public class MainActivity extends Activity {
         nativePlayerLayer.setBackgroundColor(Color.TRANSPARENT);
         nativePlayerLayer.setFocusable(false);
         nativePlayerLayer.setFocusableInTouchMode(false);
-        int screenW = getResources().getDisplayMetrics().widthPixels;
-        int pipW = Math.max(dp(260), Math.min(dp(430), Math.round(screenW * 0.27f)));
-        int pipH = Math.round(pipW * 9f / 16f);
-        FrameLayout.LayoutParams pipLp = new FrameLayout.LayoutParams(
-                pipW, pipH, android.view.Gravity.TOP | android.view.Gravity.START);
-        pipLp.setMargins(dp(38), dp(30), 0, 0);
+        if (!alreadyGuideMode) {
+            int screenW = getResources().getDisplayMetrics().widthPixels;
+            int pipW = Math.max(dp(260), Math.min(dp(430), Math.round(screenW * 0.27f)));
+            int pipH = Math.round(pipW * 9f / 16f);
+            FrameLayout.LayoutParams pipLp = new FrameLayout.LayoutParams(
+                    pipW, pipH, android.view.Gravity.TOP | android.view.Gravity.START);
+            pipLp.setMargins(dp(38), dp(30), 0, 0);
+            nativePlayerView.setLayoutParams(pipLp);
+            nativePlayerView.setAlpha(0f);
+            nativePlayerView.animate().alpha(1f).setDuration(180).setStartDelay(220).start();
+        }
         nativePlayerView.setVisibility(View.VISIBLE);
-        nativePlayerView.setLayoutParams(pipLp);
         setNativeSubtitleLift(false);
         if (nativeSubtitleOverlay != null) nativeSubtitleOverlay.setVisibility(View.GONE);
         web.setVisibility(View.VISIBLE);
-        web.requestFocus();
+        if (!alreadyGuideMode) web.requestFocus();
         web.bringToFront();
         nativePlayerLayer.setVisibility(View.VISIBLE);
         nativePlayerLayer.bringToFront();
@@ -1210,6 +1447,8 @@ public class MainActivity extends Activity {
                     width, height, android.view.Gravity.TOP | android.view.Gravity.START);
             pipLp.setMargins(left, top, 0, 0);
             nativePlayerView.setLayoutParams(pipLp);
+            nativePlayerView.animate().cancel();
+            nativePlayerView.animate().alpha(1f).setDuration(160).start();
         } catch (Exception ignored) {
             // The fixed fallback from enterNativeGuideMode stays in place.
         }
@@ -1222,6 +1461,8 @@ public class MainActivity extends Activity {
         nativePlayerLayer.setFocusable(true);
         nativePlayerLayer.setFocusableInTouchMode(true);
         nativePlayerView.setVisibility(View.VISIBLE);
+        nativePlayerView.animate().cancel();
+        nativePlayerView.setAlpha(1f);
         nativePlayerView.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         nativePlayerLayer.setVisibility(View.VISIBLE);
@@ -1249,6 +1490,7 @@ public class MainActivity extends Activity {
 
     private boolean moveNativeControlFocus(int dir) {
         if (nativeChrome == null || nativeChrome.getVisibility() != View.VISIBLE) return false;
+        nativeSeekDpadMode = false;
         ImageButton[] buttons = nativeControlButtons();
         View current = getCurrentFocus();
         int first = -1, last = -1, cur = -1;
@@ -1281,11 +1523,25 @@ public class MainActivity extends Activity {
         View current = getCurrentFocus();
         for (ImageButton b : nativeControlButtons()) {
             if (b != null && b.getVisibility() == View.VISIBLE && b.isEnabled() && current == b) {
+                armNativeControlClick(b);
                 b.performClick();
                 return true;
             }
         }
         return false;
+    }
+
+    private void armNativeControlClick(View v) {
+        nativeClickArmedView = v;
+        nativeClickArmedAtMs = SystemClock.elapsedRealtime();
+    }
+
+    private boolean consumeNativeControlClick(View v) {
+        long now = SystemClock.elapsedRealtime();
+        boolean ok = v != null && v == nativeClickArmedView && now - nativeClickArmedAtMs < 800L;
+        nativeClickArmedView = null;
+        nativeClickArmedAtMs = 0L;
+        return ok;
     }
 
     private boolean isNativeControl(View current) {
@@ -1297,6 +1553,7 @@ public class MainActivity extends Activity {
     }
 
     private boolean focusNativeDefaultControl() {
+        nativeSeekDpadMode = false;
         ImageButton[] buttons = nativeControlButtons();
         ImageButton target = nativePlayBtn != null && nativePlayBtn.getVisibility() == View.VISIBLE && nativePlayBtn.isEnabled() ? nativePlayBtn : null;
         if (target == null) {
@@ -1310,28 +1567,109 @@ public class MainActivity extends Activity {
         return true;
     }
 
-    private boolean moveNativeVerticalFocus(int dir) {
-        if (nativeChrome == null || nativeChrome.getVisibility() != View.VISIBLE || nativeSheetOpen()) return false;
-        View current = getCurrentFocus();
-        if (dir < 0 && nativeSeek != null && nativeSeek.getVisibility() == View.VISIBLE && current != nativeSeek) {
-            nativeSeek.requestFocus();
-            showNativeChrome(false);
-            return true;
-        }
-        if (dir > 0 && (current == nativeSeek || !isNativeControl(current))) {
-            return focusNativeDefaultControl();
-        }
+    private boolean focusNativeSeekControl() {
+        if (nativeSeek == null || nativeSheetOpen() || !nativeCanSeekVod()) return false;
+        showNativeChrome(false);
+        updateNativeChrome();
+        if (nativeSeek.getVisibility() != View.VISIBLE || !nativeSeek.isEnabled()) return false;
+        nativeSeekDpadMode = true;
+        Runnable focusSeek = new Runnable() {
+            @Override public void run() {
+                if (!nativePlayerOpen() || nativeSeek == null || nativeSheetOpen()) return;
+                if (nativeSeek.getVisibility() == View.VISIBLE && nativeSeek.isEnabled()) {
+                    nativeSeek.requestFocus();
+                }
+            }
+        };
+        focusSeek.run();
+        nativeSeek.postDelayed(focusSeek, 60);
         return true;
     }
 
+    private boolean moveNativeVerticalFocus(int dir) {
+        if (nativeChrome == null || nativeSheetOpen()) return false;
+        View current = getCurrentFocus();
+        if (dir < 0 && current != nativeSeek) {
+            return focusNativeSeekControl();
+        }
+        if (dir > 0 && (current == nativeSeek || nativeSeekDpadMode || !isNativeControl(current))) {
+            return focusNativeDefaultControl();
+        }
+        return isNativeControl(current) || current == nativeSeek;
+    }
+
     private boolean handleNativeSeekBarKey(KeyEvent e) {
-        if (nativeSeek == null || getCurrentFocus() != nativeSeek || nativeSeek.getVisibility() != View.VISIBLE) return false;
+        View current = getCurrentFocus();
+        if (nativeSeek == null || !nativeCanSeekVod()
+                || (current != nativeSeek && (!nativeSeekDpadMode || isNativeControl(current)))
+                || nativeSeek.getVisibility() != View.VISIBLE || !nativeSeek.isEnabled()) return false;
         int code = e.getKeyCode();
         if (code != KeyEvent.KEYCODE_DPAD_LEFT && code != KeyEvent.KEYCODE_DPAD_RIGHT) return false;
         if (e.getAction() == KeyEvent.ACTION_DOWN) {
             nativeSeekBy(code == KeyEvent.KEYCODE_DPAD_RIGHT ? 30000 : -10000);
         }
         return true;
+    }
+
+    private boolean handleNativeSurfaceKey(KeyEvent e) {
+        if (!nativePlayerOpen()) return false;
+        int code = e.getKeyCode();
+        if (handleNativeSheetKey(e)) return true;
+        if (nativeGuideMode) return false;
+        if ("live".equals(nativeMode) && (code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN)) {
+            if (e.getAction() == KeyEvent.ACTION_UP) {
+                zapNativeLiveChannel(code == KeyEvent.KEYCODE_DPAD_UP ? 1 : -1);
+            }
+            return true;
+        }
+        if (nativeChrome != null && nativeChrome.getVisibility() == View.VISIBLE) {
+            if (handleNativeSeekBarKey(e)) return true;
+            if (code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                View current = getCurrentFocus();
+                if (nativeCanSeekVod() && (current == nativeSeek || (nativeSeekDpadMode && !isNativeControl(current)))) {
+                    if (e.getAction() == KeyEvent.ACTION_DOWN) {
+                        nativeSeekBy(code == KeyEvent.KEYCODE_DPAD_RIGHT ? 30000 : -10000);
+                    }
+                    return true;
+                }
+                if (e.getAction() == KeyEvent.ACTION_DOWN) {
+                    moveNativeControlFocus(code == KeyEvent.KEYCODE_DPAD_LEFT ? -1 : 1);
+                }
+                return true;
+            }
+            if (code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN) {
+                if (e.getAction() == KeyEvent.ACTION_DOWN) {
+                    moveNativeVerticalFocus(code == KeyEvent.KEYCODE_DPAD_UP ? -1 : 1);
+                }
+                return true;
+            }
+            if (code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER) {
+                if (e.getAction() == KeyEvent.ACTION_UP && clickNativeControlFocus()) return true;
+                return true;
+            }
+        }
+        if (e.getAction() != KeyEvent.ACTION_DOWN) {
+            return code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN
+                    || code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT
+                    || code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER;
+        }
+        if (code == KeyEvent.KEYCODE_DPAD_UP) return focusNativeSeekControl();
+        if ((code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT)
+                && nativeCanSeekVod()) {
+            nativeSeekDpadMode = true;
+            nativeSeekBy(code == KeyEvent.KEYCODE_DPAD_RIGHT ? 30000 : -10000);
+            return true;
+        }
+        if (code == KeyEvent.KEYCODE_DPAD_DOWN || code == KeyEvent.KEYCODE_DPAD_LEFT
+                || code == KeyEvent.KEYCODE_DPAD_RIGHT) {
+            showNativeChrome(true);
+            return true;
+        }
+        if (code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER) {
+            showNativeChrome(true);
+            return true;
+        }
+        return false;
     }
 
     private boolean handleNativeSheetKey(KeyEvent e) {
@@ -1407,8 +1745,9 @@ public class MainActivity extends Activity {
         long pos = nativePosSeconds();
         long dur = nativeDurSeconds();
         boolean isLive = "live".equals(nativeMode);
+        boolean canSeek = !isLive && nativeVodSeekable();
         if (!nativeUserSeeking) {
-            nativeSeek.setEnabled(!isLive && dur > 0);
+            nativeSeek.setEnabled(canSeek);
             nativeSeek.setVisibility(isLive ? View.GONE : View.VISIBLE);
             nativeSeek.setProgress(!isLive && dur > 0 ? (int) Math.min(1000, Math.max(0, (pos * 1000) / dur)) : 0);
         }
@@ -1420,16 +1759,19 @@ public class MainActivity extends Activity {
         setNativeButtonEnabled(nativeQualityBtn, "video".equals(nativeMode) && nativeHasQualityChoices);
         setNativeButtonEnabled(nativeNextBtn, "video".equals(nativeMode) && nativeHasNext);
         if (nativeElapsed != null) nativeElapsed.setText(isLive ? "LIVE" : fmtNative(pos));
-        nativeTime.setText(!isLive && dur > 0 ? fmtNative(dur) : "");
+        nativeTime.setText(!isLive ? (dur > 0 ? fmtNative(dur) : "--:--") : "");
         long now = System.currentTimeMillis();
         if (nativeClock != null) nativeClock.setText(fmtNativeClock(now));
         if (nativeEndsAt != null) {
             if (!isLive && dur > 0 && pos <= dur) {
                 nativeEndsAt.setText("Ends at " + fmtNativeClock(now + ((dur - pos) * 1000)));
                 nativeEndsAt.setVisibility(View.VISIBLE);
+            } else if (!isLive) {
+                nativeEndsAt.setText("Ends at --:--");
+                nativeEndsAt.setVisibility(View.VISIBLE);
             } else {
-                nativeEndsAt.setText(isLive ? "Live TV" : "");
-                nativeEndsAt.setVisibility(isLive ? View.VISIBLE : View.GONE);
+                nativeEndsAt.setText("Live TV");
+                nativeEndsAt.setVisibility(View.VISIBLE);
             }
         }
         if (nativePlayBtn != null) {
@@ -1455,8 +1797,39 @@ public class MainActivity extends Activity {
                 .setAllowCrossProtocolRedirects(true)
                 .setUserAgent("TriboonTV/" + BuildConfig.VERSION_NAME)
                 .setConnectTimeoutMs(12000)
-                .setReadTimeoutMs(18000);
+                .setReadTimeoutMs("live".equals(nativeMode) ? NATIVE_LIVE_READ_TIMEOUT_MS : 18000);
         return new DefaultMediaSourceFactory(http);
+    }
+
+    private String nativePlaybackErrorMessage(PlaybackException error) {
+        if (error == null) return "playback failed";
+        Throwable t = error;
+        while (t != null) {
+            if (t instanceof HttpDataSource.InvalidResponseCodeException) {
+                HttpDataSource.InvalidResponseCodeException http =
+                        (HttpDataSource.InvalidResponseCodeException) t;
+                String reason = nativeHeader(http.headerFields, "x-triboon-iptv-error");
+                if (reason == null || reason.trim().isEmpty()) {
+                    reason = http.responseCode == 401 || http.responseCode == 403
+                            ? "provider rejected this channel"
+                            : "live stream unavailable";
+                }
+                return reason + " (HTTP " + http.responseCode + ")";
+            }
+            t = t.getCause();
+        }
+        String name = error.getErrorCodeName();
+        return name == null || name.isEmpty() ? "playback failed" : name;
+    }
+
+    private String nativeHeader(Map<String, List<String>> headers, String wanted) {
+        if (headers == null || wanted == null) return "";
+        for (Map.Entry<String, List<String>> e : headers.entrySet()) {
+            if (e.getKey() == null || !wanted.equalsIgnoreCase(e.getKey())) continue;
+            List<String> vals = e.getValue();
+            if (vals != null && !vals.isEmpty() && vals.get(0) != null) return vals.get(0);
+        }
+        return "";
     }
 
     private boolean tryNativeLiveFallback() {
@@ -1480,7 +1853,7 @@ public class MainActivity extends Activity {
     private void recoverNativeLivePlayback(String reason) {
         if (!"live".equals(nativeMode) || nativePlayer == null || nativeUrl == null || nativeUrl.isEmpty()) return;
         long now = SystemClock.elapsedRealtime();
-        if (now - nativeLiveLastRecoveryMs < 10000L) return;
+        if (now - nativeLiveLastRecoveryMs < NATIVE_LIVE_RECOVERY_COOLDOWN_MS) return;
         if (tryNativeLiveFallback()) return;
         nativeLiveLastRecoveryMs = now;
         nativeLiveUnhealthySinceMs = 0L;
@@ -1570,7 +1943,7 @@ public class MainActivity extends Activity {
             nativeSubtitleOverlay.setVisibility(View.GONE);
             return;
         }
-        double t = Math.max(0, nativePlayer.getCurrentPosition() / 1000.0 - nativeSubtitleShift);
+        double t = Math.max(0, nativeDisplayPositionMs() / 1000.0 - nativeSubtitleShift);
         StringBuilder active = new StringBuilder();
         for (NativeCue cue : nativeSubtitleCues) {
             if (t + 0.05 < cue.start) {
@@ -1728,8 +2101,14 @@ public class MainActivity extends Activity {
                 if (choices == null) choices = obj.optJSONArray("subtitleChoices");
             }
             applyNativeSubtitleChoices(choices);
-            if (nativePlayer != null && "video".equals(nativeMode)) showNativeTrackMenu(C.TRACK_TYPE_TEXT);
+            if (nativeOpenSubtitleMenuAfterRefresh && nativePlayer != null && "video".equals(nativeMode)) {
+                nativeOpenSubtitleMenuAfterRefresh = false;
+                showNativeTrackMenu(C.TRACK_TYPE_TEXT);
+            } else {
+                nativeOpenSubtitleMenuAfterRefresh = false;
+            }
         } catch (Exception e) {
+            nativeOpenSubtitleMenuAfterRefresh = false;
             Toast.makeText(this, "Could not load subtitle versions", Toast.LENGTH_SHORT).show();
         }
     }
@@ -1884,8 +2263,9 @@ public class MainActivity extends Activity {
             nativeSubtitleRel = choice.subtitleRel;
             nativeSubtitleLabel = choice.label;
             nativeSubtitleLang = nativeLangFromSubtitleRel(choice.subtitleRel);
-            nativeSubtitleShift = 0f;
-            nativeSubtitleUrl = subtitleUrlForRel(choice.subtitleRel);
+            String selectedSubtitleUrl = subtitleUrlForRel(choice.subtitleRel);
+            nativeSubtitleShift = nativeShiftFromUrl(selectedSubtitleUrl);
+            nativeSubtitleUrl = stripNativeQueryParam(selectedSubtitleUrl, "shift");
             nativeHasWyzieSubtitle = !nativeSubtitleUrl.isEmpty();
             disableNativeTextTracks();
             loadNativeSubtitleOverlay(nativeSubtitleUrl);
@@ -1932,7 +2312,7 @@ public class MainActivity extends Activity {
         if (rel == null || rel.isEmpty()) return "";
         for (int i = 0; i < nativeSubtitleChoiceRels.size(); i++) {
             if (rel.equals(nativeSubtitleChoiceRels.get(i)) && i < nativeSubtitleChoiceUrls.size()) {
-                return stripNativeQueryParam(nativeSubtitleChoiceUrls.get(i), "shift");
+                return nativeSubtitleChoiceUrls.get(i);
             }
         }
         return "";
@@ -1991,6 +2371,7 @@ public class MainActivity extends Activity {
 
     private void requestNativeSubtitleVersions(String lang) {
         if (web == null) return;
+        nativeOpenSubtitleMenuAfterRefresh = true;
         Toast.makeText(this, "Loading subtitle versions...", Toast.LENGTH_SHORT).show();
         web.evaluateJavascript("window.__tvNativeSubtitleVersions && window.__tvNativeSubtitleVersions("
                 + org.json.JSONObject.quote(lang == null || lang.isEmpty() ? "en" : lang)
@@ -2142,6 +2523,7 @@ public class MainActivity extends Activity {
         nativeProgress.post(new Runnable() {
             @Override public void run() {
                 if (!nativePlayerOpen()) return;
+                applyNativeStartSeekIfReady();
                 updateNativeChrome();
                 updateNativeLiveWatchdog();
                 updateNativeVideoWatchdog();
@@ -2157,8 +2539,10 @@ public class MainActivity extends Activity {
     private void updateNativeLiveWatchdog() {
         if (!"live".equals(nativeMode) || nativePlayer == null) return;
         int state = nativePlayer.getPlaybackState();
-        boolean unhealthy = state == Player.STATE_IDLE || state == Player.STATE_BUFFERING || state == Player.STATE_ENDED
-                || (nativePlayer.getPlayWhenReady() && !nativePlayer.isPlaying());
+        boolean waitingForLiveData = state == Player.STATE_BUFFERING
+                || (state == Player.STATE_READY && nativePlayer.getPlayWhenReady()
+                && !nativePlayer.isPlaying() && nativePlayer.isLoading());
+        boolean unhealthy = state == Player.STATE_IDLE || state == Player.STATE_ENDED || waitingForLiveData;
         if (!unhealthy) {
             nativeLiveUnhealthySinceMs = 0L;
             return;
@@ -2168,7 +2552,7 @@ public class MainActivity extends Activity {
             nativeLiveUnhealthySinceMs = now;
             return;
         }
-        if (now - nativeLiveUnhealthySinceMs >= 12000L) {
+        if (now - nativeLiveUnhealthySinceMs >= NATIVE_LIVE_STALL_RECOVERY_MS) {
             recoverNativeLivePlayback(state == Player.STATE_IDLE ? "idle" : (state == Player.STATE_BUFFERING ? "buffering" : "stalled"));
         }
     }
@@ -2191,7 +2575,7 @@ public class MainActivity extends Activity {
             nativeVideoUnhealthySinceMs = now;
             return;
         }
-        if (now - nativeVideoUnhealthySinceMs >= 18000L) {
+        if (now - nativeVideoUnhealthySinceMs >= NATIVE_VIDEO_STARTUP_STALL_MS) {
             notifyNativeVideoError(state == Player.STATE_IDLE ? "native player idle" : "native startup stalled",
                     nativePosSeconds(), nativeDurSeconds());
         }
@@ -2236,6 +2620,12 @@ public class MainActivity extends Activity {
         nativeLiveUnhealthySinceMs = 0L;
         nativeLiveLastRecoveryMs = 0L;
         nativeVideoUnhealthySinceMs = 0L;
+        nativeSeekDpadMode = false;
+        nativeOpenSubtitleMenuAfterRefresh = false;
+        nativeKnownDurationMs = 0L;
+        nativePendingStartMs = 0L;
+        nativeStartSeekIssuedAtMs = 0L;
+        nativeStartOffsetMs = 0L;
         nativeHasNext = false;
         nativeHasQualityChoices = false;
         nativeSubtitleUrl = "";
@@ -2405,34 +2795,7 @@ public class MainActivity extends Activity {
                 }
                 return true;
             }
-            if (handleNativeSheetKey(e)) return true;
-            if (nativeChrome != null && nativeChrome.getVisibility() == View.VISIBLE) {
-                if (handleNativeSeekBarKey(e)) return true;
-                if (code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT) {
-                    if (e.getAction() == KeyEvent.ACTION_DOWN) {
-                        moveNativeControlFocus(code == KeyEvent.KEYCODE_DPAD_LEFT ? -1 : 1);
-                    }
-                    return true;
-                }
-                if (code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN) {
-                    if (e.getAction() == KeyEvent.ACTION_DOWN) {
-                        moveNativeVerticalFocus(code == KeyEvent.KEYCODE_DPAD_UP ? -1 : 1);
-                    }
-                    return true;
-                }
-                if (code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER) {
-                    if (e.getAction() == KeyEvent.ACTION_UP && clickNativeControlFocus()) return true;
-                    return true;
-                }
-            }
-            String nativeDomKey = domKeyFor(code);
-            if (nativeDomKey != null && e.getAction() == KeyEvent.ACTION_DOWN
-                    && nativeChrome != null && nativeChrome.getVisibility() != View.VISIBLE) {
-                showNativeChrome(code != KeyEvent.KEYCODE_DPAD_UP);
-                if (code == KeyEvent.KEYCODE_DPAD_UP && nativeSeek != null
-                        && nativeSeek.getVisibility() == View.VISIBLE) nativeSeek.requestFocus();
-                return true;
-            }
+            if (handleNativeSurfaceKey(e)) return true;
             if (e.getAction() == KeyEvent.ACTION_DOWN && nativePlayer != null) {
                 boolean repeat = e.getRepeatCount() > 0;
                 switch (code) {
@@ -2501,6 +2864,18 @@ public class MainActivity extends Activity {
         return super.dispatchKeyEvent(e);
     }
 
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (nativePlayerOpen() && handleNativeSurfaceKey(event)) return true;
+        return super.onKeyDown(keyCode, event);
+    }
+
+    @Override
+    public boolean onKeyUp(int keyCode, KeyEvent event) {
+        if (nativePlayerOpen() && handleNativeSurfaceKey(event)) return true;
+        return super.onKeyUp(keyCode, event);
+    }
+
     private static String domKeyFor(int code) {
         switch (code) {
             case KeyEvent.KEYCODE_DPAD_UP: return "ArrowUp";
@@ -2514,10 +2889,34 @@ public class MainActivity extends Activity {
     }
 
     private void jsKey(String type, String key, boolean repeat) {
+        if (!pageTvReady && !"keyup".equals(type)) {
+            queuePendingTvKey(key, repeat);
+            return;
+        }
         web.evaluateJavascript(
                 "document.dispatchEvent(new KeyboardEvent('" + type + "',{key:'" + key
                         + "',repeat:" + repeat + ",bubbles:true,cancelable:true}))",
                 null);
+    }
+
+    private void queuePendingTvKey(String key, boolean repeat) {
+        if (key == null || repeat) return;
+        if (pendingTvKeys.size() >= 8) pendingTvKeys.remove(0);
+        pendingTvKeys.add(key);
+    }
+
+    private void flushPendingTvKeys() {
+        if (web == null || pendingTvKeys.isEmpty()) return;
+        java.util.ArrayList<String> copy = new java.util.ArrayList<>(pendingTvKeys);
+        pendingTvKeys.clear();
+        for (String key : copy) {
+            web.evaluateJavascript(
+                    "document.dispatchEvent(new KeyboardEvent('keydown',{key:'" + key
+                            + "',repeat:false,bubbles:true,cancelable:true}));"
+                            + "document.dispatchEvent(new KeyboardEvent('keyup',{key:'" + key
+                            + "',repeat:false,bubbles:true,cancelable:true}))",
+                    null);
+        }
     }
 
     private void jsMusicTransport(String action) {

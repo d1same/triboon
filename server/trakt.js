@@ -1,7 +1,7 @@
 'use strict';
 // Trakt sync. Each USER links their own Trakt account with the device-code flow (enter a
 // short code at trakt.tv/activate — the TV-friendly way), then the server:
-//   - scrobbles playback (pause/stop with progress) as they watch,
+//   - scrobbles playback (/scrobble/stop with progress) as they watch,
 //   - pushes watchlist adds/removes,
 //   - imports their Trakt watchlist on demand.
 // The admin provides the app's client id/secret (a free "API app" on trakt.tv) in Settings.
@@ -64,6 +64,7 @@ class Trakt {
   configured() { return !!this._creds().id; }
 
   _tokens() { return this.store.read('trakt', {}); }
+  _outbox() { return this.store.read('traktOutbox', {}); }
   _saveToken(uid, tok) {
     this.store.update('trakt', {}, (all) => { all[uid] = tok; return all; });
   }
@@ -180,33 +181,123 @@ class Trakt {
     return null;
   }
 
+  _opKey(op) { return `${op.kind}:${op.key}`; }
+
+  _requestForOp(op) {
+    const item = Trakt.itemFor(op.key);
+    if (!item) return null;
+    if (op.kind === 'scrobble') {
+      if (item.show && !item.episode) return null; // bare shows aren't scrobblable
+      return { path: '/scrobble/stop', body: { ...item, progress: op.progress } };
+    }
+    if (op.kind === 'watchlist') {
+      const body = item.movie ? { movies: [item.movie] } : { shows: [item.show] };
+      return { path: op.on ? '/sync/watchlist' : '/sync/watchlist/remove', body };
+    }
+    if (op.kind === 'history') {
+      const body = item.movie ? { movies: [item.movie] }
+        : item.episode ? { shows: [{ ...item.show, seasons: [{ number: item.episode.season, episodes: [{ number: item.episode.number }] }] }] }
+        : { shows: [item.show] };
+      return { path: op.on ? '/sync/history' : '/sync/history/remove', body };
+    }
+    return null;
+  }
+
+  async _sendOp(uid, op) {
+    const req = this._requestForOp(op);
+    if (!req) return { ok: true, skipped: true };
+    const r = await this.api(uid, req.path, 'POST', req.body);
+    if (!r) return { ok: false, status: 0, error: 'not linked' };
+    return { ok: (r.status >= 200 && r.status < 300) || r.status === 409, status: r.status };
+  }
+
+  _queueOp(uid, op, reason) {
+    const now = Date.now();
+    this.store.update('traktOutbox', {}, (all) => {
+      const list = Array.isArray(all[uid]) ? all[uid] : [];
+      const key = this._opKey(op);
+      const kept = list.filter((x) => this._opKey(x) !== key);
+      kept.push({
+        ...op,
+        id: `${now}-${Math.random().toString(36).slice(2)}`,
+        queuedAt: now,
+        attempts: 0,
+        lastError: String(reason || 'failed'),
+      });
+      all[uid] = kept.slice(-500);
+      return all;
+    });
+  }
+
+  _fire(uid, op, label) {
+    this._sendOp(uid, op)
+      .then((r) => { if (!r.ok) this._queueOp(uid, op, r.status || r.error); })
+      .catch((e) => {
+        this._queueOp(uid, op, e.message);
+        console.error(`[trakt ${label}]`, e.message);
+      });
+  }
+
+  async flushOutbox(uid, max = 50) {
+    const now = Date.now();
+    const all = this._outbox();
+    const current = Array.isArray(all[uid]) ? all[uid] : [];
+    const due = current.filter((op) => !op.nextTryAt || op.nextTryAt <= now).slice(0, max);
+    if (!due.length) return { sent: 0, failed: 0, pending: current.length };
+    const sent = new Set();
+    const failed = new Map();
+    for (const op of due) {
+      try {
+        const r = await this._sendOp(uid, op);
+        if (r.ok) sent.add(op.id);
+        else {
+          const attempts = (op.attempts || 0) + 1;
+          failed.set(op.id, {
+            ...op,
+            attempts,
+            lastError: String(r.status || r.error || 'failed'),
+            nextTryAt: now + Math.min(6 * 3600000, 300000 * (2 ** Math.min(attempts, 5))),
+          });
+        }
+      } catch (e) {
+        const attempts = (op.attempts || 0) + 1;
+        failed.set(op.id, {
+          ...op,
+          attempts,
+          lastError: e.message,
+          nextTryAt: now + Math.min(6 * 3600000, 300000 * (2 ** Math.min(attempts, 5))),
+        });
+      }
+    }
+    let pending = 0;
+    this.store.update('traktOutbox', {}, (nextAll) => {
+      const list = Array.isArray(nextAll[uid]) ? nextAll[uid] : [];
+      nextAll[uid] = list.map((op) => failed.get(op.id) || op).filter((op) => !sent.has(op.id)).slice(-500);
+      pending = nextAll[uid].length;
+      return nextAll;
+    });
+    return { sent: sent.size, failed: failed.size, pending };
+  }
+
   // Fire-and-forget playback scrobble (errors only logged — never blocks the player).
   scrobble(uid, key, progress, finished) {
-    const item = Trakt.itemFor(key);
-    if (!item || item.show && !item.episode) return; // bare shows aren't scrobblable
-    const action = finished ? 'stop' : 'pause';
-    this.api(uid, `/scrobble/${action}`, 'POST', { ...item, progress: Math.max(0, Math.min(100, Math.round(progress))) })
-      .catch((e) => console.error('[trakt scrobble]', e.message));
+    let pct = Number.isFinite(+progress) ? +progress : 0;
+    if (finished) pct = 100;
+    else if (pct < 1) return;
+    else pct = Math.min(79, pct); // /scrobble/stop marks watched above 80%.
+    this._fire(uid, { kind: 'scrobble', key, progress: Math.max(1, Math.min(100, Math.round(pct))) }, 'scrobble');
   }
 
   watchlist(uid, key, on) {
-    const item = Trakt.itemFor(key);
-    if (!item) return;
-    const body = item.movie ? { movies: [item.movie] } : { shows: [item.show] };
-    this.api(uid, on ? '/sync/watchlist' : '/sync/watchlist/remove', 'POST', body)
-      .catch((e) => console.error('[trakt watchlist]', e.message));
+    if (!Trakt.itemFor(key)) return;
+    this._fire(uid, { kind: 'watchlist', key, on: !!on }, 'watchlist');
   }
 
   // Explicit ✓/unwatch from the UI → Trakt history (scrobble only covers real playback).
   // A bare show key marks/unmarks the WHOLE show — matches the bulk mark-series action.
   history(uid, key, on) {
-    const item = Trakt.itemFor(key);
-    if (!item) return;
-    const body = item.movie ? { movies: [item.movie] }
-      : item.episode ? { shows: [{ ...item.show, seasons: [{ number: item.episode.season, episodes: [{ number: item.episode.number }] }] }] }
-      : { shows: [item.show] };
-    this.api(uid, on ? '/sync/history' : '/sync/history/remove', 'POST', body)
-      .catch((e) => console.error('[trakt history]', e.message));
+    if (!Trakt.itemFor(key)) return;
+    this._fire(uid, { kind: 'history', key, on: !!on }, 'history');
   }
 
   // Everything the user has WATCHED on Trakt → our watch keys. Movies + per-episode shows.

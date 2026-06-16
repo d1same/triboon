@@ -3,7 +3,7 @@ plugins {
 }
 
 android {
-    namespace 'app.triboon.tv'
+    namespace = 'app.triboon.tv'
     compileSdk {
         version = release(36) {
             minorApiLevel = 1
@@ -11,21 +11,21 @@ android {
     }
 
     defaultConfig {
-        applicationId "app.triboon.tv"
-        minSdk 23          // Media3 1.10.x requires API 23+; Shield/onn/Chromecast TV targets clear this
-        targetSdk 36
-        versionCode 31
-        versionName "1.0.10"
+        applicationId = "app.triboon.tv"
+        minSdk = 23          // Media3 1.10.x requires API 23+; Shield/onn/Chromecast TV targets clear this
+        targetSdk = 36
+        versionCode = 32
+        versionName = "1.1.1"
     }
 
     buildTypes {
         release {
-            minifyEnabled false
+            minifyEnabled = false
         }
     }
 
     buildFeatures {
-        buildConfig true   // AGP 8 stopped generating BuildConfig by default; the UA tag uses it
+        buildConfig = true   // AGP 8 stopped generating BuildConfig by default; the UA tag uses it
     }
 
     compileOptions {
@@ -36,6 +36,7 @@ android {
 
 dependencies {
     def media3Version = "1.10.1"
+    compileOnly "androidx.annotation:annotation:1.9.1"
     implementation "androidx.media3:media3-exoplayer:$media3Version"
     implementation "androidx.media3:media3-exoplayer-hls:$media3Version"
     implementation "androidx.media3:media3-ui:$media3Version"

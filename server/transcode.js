@@ -43,12 +43,15 @@ function decidePlayback(name, caps = {}) {
   const isMp4 = /\.(mp4|m4v)$/i.test(name);
   const isWebm = /\.webm$/i.test(name);
   const isMkv = /\.(mkv|ts)$/i.test(name);
+  const hasKnownContainer = isMp4 || isWebm || isMkv;
   // MKV direct play needs MORE than container support: most MKVs carry AC3-family audio,
   // and Chromium happily claims matroska while decoding none of it — a "direct" DDP MKV
   // plays silent video. Devices with full container+audio hardware DO skip the server
   // entirely (true direct play); everything else gets the video-copy remux.
   if (isMp4 || isWebm || (isMkv && caps.mkv && caps.ac3 && caps.eac3)) return { method: 'direct' };
-  if (isMkv && detectFfmpeg()) return { method: 'remux' };
+  // Usenet release names often do not expose the inner filename extension until after mount.
+  // Treat that unknown container like MKV: remux first when ffmpeg is available.
+  if ((isMkv || !hasKnownContainer) && detectFfmpeg()) return { method: 'remux' };
   return { method: 'direct', warning: 'container may not play in this client — use VLC/Android' };
 }
 

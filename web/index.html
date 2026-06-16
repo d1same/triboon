@@ -21,6 +21,8 @@
   --heroLeft:clamp(4px,5vw,190px); /* resolution-adaptive title indent (home hero, page heads, backdrop info) */
   --poster:168px;    /* standardized poster cover width everywhere */
   --gut:28px;        /* content gutter — tight to the rail (owner: no dead strip by the menu) */
+  --bdW:min(50vw,980px);
+  --bdH:min(56vh,620px);
 }
 /* Rail push uses TRANSFORM (compositor-only, buttery on TV) — animating --rail/left forced
    a full page re-layout every frame and stuttered hard on the Shield. Phones keep their
@@ -53,13 +55,29 @@ select option,select optgroup{background:#161020;color:var(--text)}
 /* ---------- living backdrop ---------- */
 /* A SMALLER image anchored to the top-right, soft-masked so it melts into the colorful base. */
 #backdrop{position:fixed;inset:0;z-index:0}
-#backdrop .layer{position:absolute;top:0;right:0;width:58%;height:68%;background-size:cover;background-position:top center;
+#backdrop .layer{position:absolute;top:0;right:0;width:var(--bdW);height:var(--bdH);background-size:cover;background-position:top center;
   opacity:0;transition:opacity .7s ease,width .5s ease,height .5s ease;
   -webkit-mask:radial-gradient(135% 130% at 100% 0%,#000 34%,transparent 76%);
           mask:radial-gradient(135% 130% at 100% 0%,#000 34%,transparent 76%)}
 #backdrop .layer.show{opacity:1}
 /* TV: tighter backdrop — roughly half the screen, melting away well above the row. */
-body.tv #backdrop .layer{width:52%;height:52%}
+body.tv{--bdW:min(48vw,820px);--bdH:min(50vh,460px)}
+body.shortBrowseBd{--bdH:min(46vh,430px)}
+body.tv.shortBrowseBd{--bdH:min(38vh,360px)}
+@media (max-height:760px){
+  :root{--bdW:min(46vw,680px);--bdH:min(42vh,330px)}
+  body.tv{--bdW:min(44vw,620px);--bdH:min(40vh,300px)}
+  body.shortBrowseBd{--bdH:min(36vh,290px)}
+  body.tv.shortBrowseBd{--bdH:min(34vh,260px)}
+}
+@media (min-width:1700px) and (min-height:900px){
+  :root{--bdW:min(48vw,1040px);--bdH:min(54vh,660px)}
+  body.shortBrowseBd{--bdH:min(42vh,420px)}
+  body.tv.shortBrowseBd{--bdH:min(36vh,360px)}
+}
+@media (max-width:980px){
+  :root{--bdW:min(44vw,420px);--bdH:min(36vh,300px)}
+}
 /* Focused-title info over the backdrop on browse/discover pages — like the home hero, but
    informational only (no buttons; clicking the cover opens it). */
 #bdInfo{position:fixed;top:clamp(76px,15vh,190px);left:calc(var(--rail) + 40px + var(--heroLeft));z-index:4;max-width:760px;pointer-events:none;
@@ -115,14 +133,13 @@ body.fullBd #bdInfo.show{opacity:1}
 #rail:hover,#rail.expanded,body.railOpen #rail{width:236px;background:none}
 /* Icons sit in a FIXED-width slot so they never move horizontally on expand/collapse;
    only the label is revealed. Slot width = collapsed inner width (84 - 2*12 padding = 60). */
-#rail .logo{width:34px;height:34px;margin:0 0 22px;flex:none;padding-left:13px}
-#rail .logo img{width:100%;height:100%;object-fit:contain;filter:drop-shadow(0 4px 14px rgba(193,59,214,.45))}
+#rail .logo{width:max-content;min-width:48px;height:34px;margin:0 0 22px;flex:none;padding:0;display:flex;align-items:center;gap:10px}
+#rail .logo img{width:34px;height:34px;flex:0 0 34px;margin:0 7px;object-fit:contain;filter:drop-shadow(0 4px 14px rgba(193,59,214,.45))}
 .railBtn{height:48px;border-radius:13px;display:flex;align-items:center;justify-content:flex-start;color:var(--muted);position:relative;padding:0;flex:none;transition:background .15s,color .15s}
 .railBtn:hover{color:var(--text);background:rgba(43,32,63,.48)}
 .railBtn svg{width:22px;height:22px;flex:none;margin:0 13px} /* fixed 13+22+13 = 48px slot, matches collapsed width */
 .railBtn .rlabel,#railUser .rlabel{max-width:0;opacity:0;overflow:hidden;white-space:nowrap;font:600 14px "Sora";transition:opacity .12s,max-width .2s}
 /* Wordmark next to the logo — revealed with the labels when the rail expands. */
-#rail .logo{display:flex;align-items:center;gap:10px}
 #rail .logo .wordmark{max-width:0;opacity:0;overflow:hidden;white-space:nowrap;
   font:800 19px "Sora";letter-spacing:-.02em;
   background:linear-gradient(110deg,var(--magenta),var(--coral) 55%,var(--amber));
@@ -181,7 +198,7 @@ body.tv:not(.railOpen) #rail:not(.expanded) #railUser{
 }
 body.tv:not(.railOpen) #rail:not(.expanded) .railBtn svg{margin:0!important}
 body.tv:not(.railOpen) #rail:not(.expanded) .logo{
-  width:48px!important;padding-left:0!important;justify-content:center
+  width:48px!important;min-width:48px!important;padding:0!important;justify-content:flex-start
 }
 body.tv:not(.railOpen) #rail:not(.expanded) #railUser .av{margin:0!important}
 body.tv:not(.railOpen) #rail:not(.expanded) .rlabel,
@@ -399,7 +416,7 @@ body.tv #filterMenu{backdrop-filter:none}
 /* ---------- sources drawer ---------- */
 #drawerScrim{position:fixed;inset:0;z-index:19;background:rgba(5,3,9,.55);opacity:0;pointer-events:none;transition:opacity .28s ease}
 #drawerScrim.open{opacity:1;pointer-events:auto}
-#drawer{position:fixed;z-index:20;top:0;bottom:0;right:0;width:min(570px,92vw);background:rgba(14,10,22,.98);backdrop-filter:blur(20px);
+#drawer{position:fixed;z-index:20;top:0;bottom:0;right:0;width:min(660px,92vw);background:rgba(14,10,22,.98);backdrop-filter:blur(20px);
   border-left:1px solid var(--line);box-shadow:-30px 0 70px rgba(0,0,0,.5);padding:30px 28px 24px;transition:transform .3s cubic-bezier(.4,0,.2,1);
   transform:translateX(100%);display:flex;flex-direction:column}
 #drawer.open{transform:translateX(0)}
@@ -408,22 +425,32 @@ body.tv #filterMenu{backdrop-filter:none}
 #drawer .drawerClose{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;color:var(--muted);background:rgba(34,25,52,.6);flex:none}
 #drawer .drawerClose svg{width:16px;height:16px}
 #drawer .sub{color:var(--muted);font-size:13px;margin-bottom:18px;line-height:1.45}
-#srcList{overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:6px 4px 10px;margin:0 -4px}
-.srcRow{position:relative;overflow:hidden;border-radius:16px;background:linear-gradient(180deg,rgba(31,23,48,.78),rgba(21,16,34,.88));border:1px solid rgba(243,239,247,.1);padding:15px 16px;display:flex;flex-direction:column;gap:11px;text-align:left;transition:background .15s,border-color .15s,transform .15s}
-.srcRow::before{content:"";position:absolute;left:0;top:12px;bottom:12px;width:3px;border-radius:0 999px 999px 0;background:rgba(243,239,247,.16)}
-.srcRow:hover{background:linear-gradient(180deg,rgba(43,33,64,.84),rgba(27,20,42,.92));border-color:rgba(243,239,247,.18)}
-.srcRow .srcTop{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;min-width:0}
+#srcSort{display:none;gap:6px;margin:-6px 0 12px}
+#srcSort button{height:30px;border-radius:999px;padding:0 12px;background:rgba(34,25,52,.68);border:1px solid rgba(243,239,247,.1);color:var(--muted);font:800 10px "JetBrains Mono";letter-spacing:.06em;text-transform:uppercase}
+#srcSort button.sel{background:rgba(237,232,245,.9);border-color:transparent;color:#160a04}
+#srcList{overflow-y:auto;display:flex;flex-direction:column;gap:12px;padding:8px 6px 14px;margin:0 -6px;min-height:0}
+.srcRow{position:relative;overflow:visible;width:100%;box-sizing:border-box;border-radius:15px;background:linear-gradient(180deg,rgba(27,21,42,.92),rgba(18,14,29,.96));border:1px solid rgba(243,239,247,.12);padding:11px 15px 10px;display:grid;grid-template-rows:auto auto;gap:8px;text-align:left;align-items:stretch;justify-content:stretch;transition:background .15s,border-color .15s,transform .15s}
+.srcRow::before{content:"";position:absolute;left:0;top:14px;bottom:14px;width:3px;border-radius:0 999px 999px 0;background:rgba(243,239,247,.16)}
+.srcRow:hover{background:linear-gradient(180deg,rgba(37,29,56,.96),rgba(21,16,34,.98));border-color:rgba(243,239,247,.2)}
+.srcRow .srcTop{display:grid;grid-template-columns:minmax(0,1fr) minmax(74px,88px);align-items:start;gap:10px;min-width:0;width:100%}
 .srcRow .srcTitle{min-width:0;display:flex;flex-direction:column;gap:5px}
-.srcRow .name{font:700 13.5px "Albert Sans";line-height:1.35;overflow-wrap:anywhere;color:var(--text)}
-.srcRow .srcPick{font:800 10px "JetBrains Mono";letter-spacing:.06em;text-transform:uppercase;color:var(--amber)}
-.srcRow .srcScore{flex:none;border-radius:999px;background:rgba(243,239,247,.08);border:1px solid rgba(243,239,247,.1);padding:6px 9px;font:800 10px "JetBrains Mono";color:var(--muted);white-space:nowrap}
-.srcRow .chips{display:flex;gap:7px;flex-wrap:wrap}
-.srcRow .chip{padding:6px 9px;border-radius:9px;background:rgba(243,239,247,.07);border:1px solid rgba(243,239,247,.1);font-size:10px}
+.srcRow .name{font:750 13.5px "Albert Sans";line-height:1.22;color:var(--text);overflow:hidden;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow-wrap:anywhere}
+.srcRow .srcScore{min-width:0;border-radius:999px;background:rgba(243,239,247,.08);border:1px solid rgba(243,239,247,.12);padding:5px 8px;text-align:center;white-space:nowrap;align-self:start;display:flex;align-items:center;justify-content:center;gap:5px}
+.srcRow .srcScore span{display:inline;font:800 8px "JetBrains Mono";letter-spacing:.07em;text-transform:uppercase;color:rgba(243,239,247,.5);margin:0}
+.srcRow .srcScore b{display:inline;font:800 11.5px "JetBrains Mono";color:var(--text)}
+.srcRow .srcMeta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px 10px;width:100%}
+.srcRow .srcKv{min-width:0;border-top:1px solid rgba(243,239,247,.055);padding-top:5px}
+.srcRow .srcKv .k{display:block;font:800 7.8px "JetBrains Mono";letter-spacing:.08em;text-transform:uppercase;color:rgba(243,239,247,.42);margin-bottom:1px}
+.srcRow .srcKv .v{display:block;font:650 10.8px "Albert Sans";color:#e8e0ef;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.srcRow .chips{display:flex;gap:5px;flex-wrap:wrap}
+.srcRow .chip{padding:3px 7px;border-radius:999px;background:rgba(243,239,247,.07);border:1px solid rgba(243,239,247,.1);font:800 8.5px "JetBrains Mono";letter-spacing:.035em;text-transform:uppercase;color:rgba(243,239,247,.72)}
 .srcRow .chip.auto{background:rgba(237,232,245,.9);color:#160a04;border-color:transparent}
-.srcRow .chip.qual{color:#f6f0ff}
-.srcRow .chip.size{color:#fbdba5}
-.srcRow.auto{box-shadow:inset 0 0 0 1.5px rgba(237,232,245,.74),0 12px 34px rgba(0,0,0,.2);background:linear-gradient(135deg,rgba(251,139,60,.14),rgba(193,59,214,.12) 42%,rgba(31,23,48,.88))}
+.srcRow .chip.ok{color:#bdf3c5;border-color:rgba(189,243,197,.2);background:rgba(58,110,69,.16)}
+.srcRow .chip.warn{color:#ffd19a;border-color:rgba(255,209,154,.22);background:rgba(116,72,37,.18)}
+.srcRow.auto{box-shadow:inset 0 0 0 1.5px rgba(237,232,245,.72),0 12px 34px rgba(0,0,0,.2);background:linear-gradient(135deg,rgba(251,139,60,.12),rgba(193,59,214,.11) 42%,rgba(27,21,42,.94))}
 .srcRow.auto::before{top:0;bottom:0;width:4px;background:var(--grad)}
+.srcRow.focusable::after{content:"";position:absolute;inset:-3px;border-radius:18px;border:2px solid rgba(237,232,245,.82);opacity:0;pointer-events:none}
+.srcRow.focusable.focus::after,.srcRow:focus-visible::after{opacity:1}
 .srcRow.focusable.focus{transform:none}
 
 /* ---------- player ---------- */
@@ -607,8 +634,6 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 #dBtns .btn{min-height:52px;border-radius:40px;box-sizing:border-box}
 #dBtns .btn.primary{padding:14px 30px;font-weight:700}
 #dPlay{position:relative;justify-content:center;min-width:118px}
-#dPlay svg{position:absolute;left:30px}
-#dPlay.resumeMode svg{display:none}
 #dPlayLabel{display:block;width:100%;text-align:center}
 .iconBtn{width:52px;height:52px;border-radius:50%;display:grid;place-items:center;background:rgba(34,25,52,.7);border:1px solid var(--line);color:var(--text)}
 .iconBtn svg{width:21px;height:21px}
@@ -1232,9 +1257,11 @@ body.tv #guide,body.tv .guideTimeline{height:clamp(320px,calc(100vh - 245px),820
 #pGuide{position:absolute;inset:0;z-index:7;display:none;flex-direction:column;
   background:linear-gradient(180deg,rgba(10,8,16,.94),rgba(11,8,18,.98));
   backdrop-filter:blur(4px);border:0;border-radius:0;overflow:hidden;box-shadow:none;
-  padding:clamp(14px,2.4vh,30px) clamp(16px,2.6vw,38px) clamp(16px,2.4vh,34px)}
+  padding:clamp(14px,2.4vh,30px) clamp(16px,2.6vw,38px) clamp(16px,2.4vh,34px);
+  opacity:0;transform:translateY(10px);transition:opacity .18s ease,transform .18s ease}
 body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
 #pGuide.open{display:flex}
+#pGuide.ready{opacity:1;transform:none}
 #pgTop{display:grid;grid-template-columns:var(--pipW) minmax(0,1fr);gap:clamp(18px,2.4vw,34px);min-height:calc(var(--pipW) * .5625);
   flex:none;margin-bottom:14px;align-items:stretch}
 .pgVideoSlot{min-width:0;aspect-ratio:16/9;border-radius:10px;background:#000;overflow:hidden;
@@ -2044,7 +2071,7 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
         <div id="dCrew" style="display:none"></div>
         <div id="dBtns">
           <button class="btn primary focusable" id="dPlay">
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span id="dPlayLabel">Play</span></button>
+            <span id="dPlayLabel">Play</span></button>
           <button class="btn ghost focusable" id="dStartOver" style="display:none">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg> Start over</button>
           <div class="qToggle" id="qToggle" title="Playback quality preference">
@@ -2090,6 +2117,11 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
   </div>
   <div class="sub" id="drawerSub"></div>
+  <div id="srcSort" aria-label="Sort sources">
+    <button data-src-sort="best" class="sel">Best</button>
+    <button data-src-sort="largest">Largest</button>
+    <button data-src-sort="smallest">Smallest</button>
+  </div>
   <div id="srcList"></div>
 </aside>
 
@@ -2440,8 +2472,26 @@ const S = {
   user: null, serverInfo: null, rows: [], focusedItem: null,
   view: 'home', zone: 'rows', rowIdx: 0, colIdx: {}, heroIdx: 0, railIdx: 0, drawerIdx: 0, ctlIdx: 1,
   playing: null,      // { sessionId, streamUrl, remuxUrl, item, name, usingRemux, remuxBase, startOffset, duration }
-  osdTimer: null, healthTimer: null, watchTimer: null, qcTimer: null,
+  osdTimer: null, healthTimer: null, watchTimer: null, qcTimer: null, sourceSort: 'best',
 };
+const perf0 = performance.now();
+function appMs() { return Math.round(performance.now() - perf0); }
+function perfMark(name, extra = {}) {
+  const at = appMs();
+  const marks = (S.perfMarks = S.perfMarks || []);
+  marks.push({ name, at, ...extra });
+  if (marks.length > 80) marks.splice(0, marks.length - 80);
+  return at;
+}
+function signalTvReady(reason) {
+  S.tvReadyReason = reason;
+  S.tvReadyAt = perfMark('tv-ready', { reason });
+  try { if (window.TriboonTV && TriboonTV.appReady) TriboonTV.appReady(); } catch {}
+}
+function signalTvReadyOnce(reason) {
+  if (S.tvReadyAt) return;
+  signalTvReady(reason);
+}
 const tokenStore = {
   get: () => { try { return localStorage.getItem('triboon.token'); } catch { return null; } },
   set: (t) => { try { t ? localStorage.setItem('triboon.token', t) : localStorage.removeItem('triboon.token'); } catch {} },
@@ -2834,6 +2884,41 @@ function cwNextFingerprint(cw) {
     .map((w) => [w.key, w.watched ? 1 : 0, Math.floor(w.position || 0), w.updatedAt || 0].join('@'))
     .sort().join('|');
 }
+const HOME_NEXT_WAIT_MS = 900;
+function waitMs(ms, value) {
+  return new Promise((resolve) => setTimeout(() => resolve(value), ms));
+}
+function resetHomeTvNextFor(cw) {
+  const fp = cwNextFingerprint(cw);
+  if (S._homeTvNextFp !== fp) {
+    S._homeTvNextFp = fp;
+    S._homeTvNext = undefined;
+    S._homeTvNextJob = null;
+  }
+  return fp;
+}
+async function prepareHomeTvNext(cw, timeoutMs = HOME_NEXT_WAIT_MS) {
+  const fp = resetHomeTvNextFor(cw);
+  if (!S.serverInfo.tmdb || !String(fp).includes('tmdb:tv:')) {
+    S._homeTvNext = [];
+    return true;
+  }
+  if (Array.isArray(S._homeTvNext)) return true;
+  if (!S._homeTvNextJob) {
+    S._homeTvNextJob = api('/api/watch/next' + profileQ())
+      .then((items) => {
+        if (S._homeTvNextFp === fp) S._homeTvNext = items || [];
+        return S._homeTvNext;
+      })
+      .catch(() => {
+        if (S._homeTvNextFp === fp) S._homeTvNext = [];
+        return S._homeTvNext;
+      })
+      .finally(() => { if (S._homeTvNextFp === fp) S._homeTvNextJob = null; });
+  }
+  if (!timeoutMs) { await S._homeTvNextJob; return true; }
+  return await Promise.race([S._homeTvNextJob.then(() => true), waitMs(timeoutMs, false)]);
+}
 // Build the Continue Watching cards from a /api/watch payload (next-episode bumps only when
 // the local map is already known — they must never force a boot-time library fetch).
 function buildCwItems(cw) {
@@ -2874,6 +2959,25 @@ function homeIdleAtTop() {
   if (S.zone === 'rail' || S.zone === 'hero' || !S.zone) return true;
   return S.zone === 'rows' && S.rowIdx === 0 && (S.colIdx[0] || 0) === 0 && $('rows').scrollTop < 6;
 }
+function homeBackgroundRefreshReady() {
+  if (!homeIdleAtTop()) return false;
+  const now = appMs();
+  if (S.tvReadyAt && now - S.tvReadyAt < 1800) return false;
+  if (S._lastKeyAt && now - S._lastKeyAt < 900) return false;
+  return true;
+}
+function scheduleDeferredHomeRefresh(opts = {}) {
+  clearTimeout(S._homeDeferredRefreshT);
+  S._homeDeferredRefreshT = setTimeout(() => {
+    if (S.view !== 'home') return;
+    if (homeBackgroundRefreshReady()) loadRows({ preserveFocus: true, background: true, ...opts });
+    else scheduleDeferredHomeRefresh(opts);
+  }, 700);
+}
+function refreshHomeWhenSettled(opts = {}) {
+  if (homeBackgroundRefreshReady()) loadRows({ preserveFocus: true, background: true, ...opts });
+  else scheduleDeferredHomeRefresh(opts);
+}
 // After the fast first paint: index local libraries + fetch the Live-TV favorites in the
 // BACKGROUND, then fold those rows in. Heavy library /items fetches NEVER block the home
 // screen now — the regression was awaiting them before the first render.
@@ -2881,10 +2985,7 @@ async function enrichHome() {
   if (S._enrichingHome) return; S._enrichingHome = true;
   try {
     const jobs = [];
-    if (S.serverInfo.tmdb && S._homeTvNext === undefined && S._lastCwForNext) {
-      jobs.push(api('/api/watch/next' + profileQ()).then((items) => { S._homeTvNext = items || []; }).catch(() => { S._homeTvNext = []; }));
-    }
-    if (!S.localMap) jobs.push(ensureLocalMap().catch(() => null));
+    if (!S.localMap && cachedLocalLibraryItemsAvailable()) refreshLocalMapFromCachedLibraries();
     if (S.serverInfo.iptv && S.user && S.user.iptvAllowed !== false && S._homeLiveFav === undefined) {
       jobs.push(api('/api/iptv/channels?fav=1').then((fav) => {
         S._homeLiveFav = (fav.configured && fav.channels.length) ? (S.liveEpg = !!fav.epg, fav.channels) : null;
@@ -2894,7 +2995,7 @@ async function enrichHome() {
   } finally { S._enrichingHome = false; }
   // Only refresh the visible home if the user is still idle at the top (else next visit picks
   // it up — loadRows is called on every home entry and the caches are warm by then).
-  if (homeIdleAtTop()) loadRows();
+  refreshHomeWhenSettled();
 }
 async function loadHomeCatalogRows() {
   const rows = [];
@@ -2931,13 +3032,48 @@ async function loadHomeCatalogRows() {
   }
   return rows;
 }
-async function loadRows() {
+const HOME_CATALOG_TTL = 30 * 60 * 1000;
+function homeCatalogKey() {
+  return [S.serverInfo && S.serverInfo.tmdb ? 'tmdb' : 'none', S.maxLevel ?? 3, S.profile ? S.profile.id : 'default'].join(':');
+}
+function cachedHomeCatalogRows() {
+  const key = homeCatalogKey();
+  if (S._homeCatalogKey !== key || !Array.isArray(S._homeCatalogRows)) return [];
+  return S._homeCatalogRows;
+}
+function homeCatalogFresh() {
+  return cachedHomeCatalogRows().length && Date.now() - (S._homeCatalogAt || 0) < HOME_CATALOG_TTL;
+}
+function refreshHomeCatalogRows() {
+  if (!S.serverInfo.tmdb) return Promise.resolve([]);
+  const key = homeCatalogKey();
+  if (homeCatalogFresh()) return Promise.resolve(cachedHomeCatalogRows());
+  if (S._homeCatalogJob && S._homeCatalogKey === key) return S._homeCatalogJob;
+  S._homeCatalogKey = key;
+  S._homeCatalogJob = loadHomeCatalogRows()
+    .then((rows) => {
+      S._homeCatalogRows = rows || [];
+      S._homeCatalogAt = Date.now();
+      return S._homeCatalogRows;
+    })
+    .catch((e) => { toast('TMDB error: ' + e.message); return []; })
+    .finally(() => { S._homeCatalogJob = null; });
+  return S._homeCatalogJob;
+}
+function scheduleHomeCatalogRefresh() {
+  if (!S.serverInfo.tmdb || homeCatalogFresh()) return;
+  if (S._homeCatalogScheduled) return;
+  S._homeCatalogScheduled = true;
+  (window.requestIdleCallback || ((f) => setTimeout(f, 200)))(() => {
+    S._homeCatalogScheduled = false;
+    refreshHomeCatalogRows().then((rows) => {
+      if (rows.length) refreshHomeWhenSettled({ catalogOnly: true });
+    });
+  });
+}
+function homeRowsFromWatch(cw, loading = false) {
   const rows = [];
-  const watchJob = loadWatchState().catch(() => []);
-  const catalogJob = loadHomeCatalogRows().catch((e) => { toast('TMDB error: ' + e.message); return []; });
-  const cw = await watchJob;
-  const nextFp = cwNextFingerprint(cw);
-  if (S._homeTvNextFp !== nextFp) { S._homeTvNextFp = nextFp; S._homeTvNext = undefined; }
+  resetHomeTvNextFor(cw);
   S._lastCwForNext = cw;
   const cwItems = buildCwItems(cw);
   if (cwItems.length) rows.push({ name: 'Continue watching', items: cwItems });
@@ -2952,14 +3088,75 @@ async function loadRows() {
   }
   // Recently added — from cached library items only (enrichHome warms the cache off-path).
   const ra = buildRecentlyAddedRow(); if (ra) rows.push(ra);
-  rows.push(...await catalogJob);
-  if (!rows.length) {
-    rows.push({ name: S.user && S.user.role === 'admin' ? 'Connect TMDB in Settings to browse the catalog' : 'Ask your admin to connect TMDB', items: [] });
+  rows.push(...cachedHomeCatalogRows());
+  if (!rows.length && !S.serverInfo.tmdb) {
+    rows.push({
+      name: S.user && S.user.role === 'admin' ? 'Connect TMDB in Settings to browse the catalog' : 'Ask your admin to connect TMDB',
+      items: [],
+      emptyLabel: S.user && S.user.role === 'admin' ? 'Open Settings' : 'Waiting for catalog setup',
+    });
   }
-  S.rows = dedupeRows(rows); // no repeated titles across rows
-  renderRows(); // FIRST PAINT — never waited on local libraries or the live channel list
+  if (!rows.length && loading) {
+    rows.push({
+      name: 'Loading home',
+      items: [],
+      emptyLabel: 'Loading...',
+    });
+  }
+  return dedupeRows(rows);
+}
+function cachedWatchRowsForHome() {
+  const key = watchCacheKey();
+  if (S._watchKey === key && Array.isArray(S._watchRows)) return S._watchRows;
+  return [];
+}
+function homeRowsSignature(rows) {
+  return (rows || []).map((row) => [
+    row.name || '',
+    row.poster ? 'poster' : 'backdrop',
+    (row.items || []).map((it) => [
+      it.key || it.id || it.title || '',
+      it.title || '',
+      it.progress ? Math.round(it.progress * 1000) : 0,
+      it.resume || 0,
+      it._nextEp ? 1 : 0,
+      it._newEp ? 1 : 0,
+    ].join(':')).join(','),
+    row.emptyLabel || '',
+  ].join('|')).join('~');
+}
+function publishHomeRows(rows, opts = {}) {
+  const sig = homeRowsSignature(rows);
+  S.rows = rows;
+  if (S._homeRowsSig === sig && $('rows').children.length) return false;
+  S._homeRowsSig = sig;
+  renderRows({ preserveFocus: !!opts.preserveFocus });
+  return true;
+}
+async function loadRows(opts = {}) {
+  const runId = S._homeLoadRun = (S._homeLoadRun || 0) + 1;
+  const key = watchCacheKey();
+  const hasFreshWatch = S._watchKey === key && Array.isArray(S._watchRows) && Date.now() - (S._watchAt || 0) < 10000;
+  if (!opts.catalogOnly && !opts.watchReady && !hasFreshWatch) {
+    perfMark('home-first-render-before-watch');
+    publishHomeRows(homeRowsFromWatch(cachedWatchRowsForHome(), true), opts); // FIRST PAINT: gives Android TV a focus target before /api/watch returns.
+    loadWatchState().then(() => {
+      perfMark('watch-state-ready');
+      if (S.view === 'home' && runId === S._homeLoadRun) loadRows({ ...opts, watchReady: true, preserveFocus: true });
+    }).catch(() => {});
+    if (!opts.catalogOnly) scheduleHomeCatalogRefresh();
+    return;
+  }
+  const cw = opts.watchReady ? cachedWatchRowsForHome() : await loadWatchState().catch(() => []);
+  if (runId !== S._homeLoadRun && !opts.catalogOnly) return;
+  if (!opts.catalogOnly) await prepareHomeTvNext(cw, HOME_NEXT_WAIT_MS);
+  if (runId !== S._homeLoadRun && !opts.catalogOnly) return;
+  perfMark(opts.catalogOnly ? 'home-catalog-render' : 'home-render');
+  publishHomeRows(homeRowsFromWatch(cw, false), { preserveFocus: !!opts.preserveFocus }); // FIRST PAINT — never waited on catalog, local libraries, or the live channel list
+  if (!opts.catalogOnly) scheduleHomeCatalogRefresh();
   // Fold in the local + Live-TV-favorites rows AFTER the screen is up, on idle.
-  const needEnrich = S._homeTvNext === undefined || !S.localMap || (S.serverInfo.iptv && S.user && S.user.iptvAllowed !== false && S._homeLiveFav === undefined);
+  const needLocalCacheRefresh = !S.localMap && cachedLocalLibraryItemsAvailable();
+  const needEnrich = needLocalCacheRefresh || (S.serverInfo.iptv && S.user && S.user.iptvAllowed !== false && S._homeLiveFav === undefined);
   if (needEnrich) (window.requestIdleCallback || ((f) => setTimeout(f, 200)))(() => enrichHome());
 }
 
@@ -3181,11 +3378,22 @@ function renderRowsInto(root, rowsData) {
     sec.innerHTML = `<h2>${esc(row.name)}</h2>`;
     const cards = document.createElement('div'); cards.className = 'cards';
     edgeScroll(cards);
-    row.items.forEach((it, ci) => {
+    const items = row.items || [];
+    items.forEach((it, ci) => {
       const card = makeCard(it, !!row.poster && !it.trailer, () => focusCard(ri, ci));
       card.dataset.row = ri; card.dataset.col = ci;
       cards.appendChild(card);
     });
+    if (!items.length) {
+      const empty = document.createElement('button');
+      empty.className = 'gridMore focusable';
+      empty.dataset.row = ri; empty.dataset.col = 0;
+      empty.textContent = row.emptyLabel || (S.user && S.user.role === 'admin' ? 'Open Settings' : 'Nothing here yet');
+      empty.addEventListener('click', () => {
+        if (S.user && S.user.role === 'admin') switchView('settings');
+      });
+      cards.appendChild(empty);
+    }
     sec.appendChild(cards); root.appendChild(sec);
   });
   sizeRowsWindow(root);
@@ -3208,18 +3416,55 @@ function sizeRowsWindow(root) {
 }
 window.addEventListener('resize', () => { sizeRowsWindow($('rows')); sizeRowsWindow($('discoverRows')); fitLiveGuide(); });
 function setRowsView(root, data, hasHero) { S.rowsView = { root, data, hasHero }; }
-function renderRows() {
+function homeFocusSnapshot() {
+  return {
+    zone: S.zone,
+    rowIdx: S.rowIdx || 0,
+    colIdx: { ...(S.colIdx || {}) },
+    heroIdx: S.heroIdx || 0,
+    scrollTop: $('rows').scrollTop || 0,
+  };
+}
+function restoreHomeFocus(snap) {
+  if (!snap || S.view !== 'home') return false;
+  if (snap.zone === 'rail') return true;
+  if (snap.zone === 'hero') { focusHero(snap.heroIdx || 0); return true; }
+  if (snap.zone !== 'rows') return false;
+  const rowCount = (S.rows || []).length;
+  if (!rowCount) return false;
+  const ri = Math.max(0, Math.min(rowCount - 1, snap.rowIdx || 0));
+  const row = S.rows[ri] || {};
+  const itemCount = (row.items || []).length || 1;
+  const wantedCol = snap.colIdx && Number.isFinite(snap.colIdx[ri]) ? snap.colIdx[ri] : 0;
+  const ci = Math.max(0, Math.min(itemCount - 1, wantedCol));
+  const target = $('rows').querySelector(`[data-row="${ri}"][data-col="${ci}"]`);
+  if (!target) return false;
+  focusCard(ri, ci);
+  $('rows').scrollTop = snap.scrollTop || 0;
+  return true;
+}
+function renderRows(opts = {}) {
+  const snap = opts.preserveFocus ? homeFocusSnapshot() : null;
   renderRowsInto($('rows'), S.rows);
   setRowsView($('rows'), S.rows, true);
   bootReady(); // home is the usual boot landing — first paint dismisses the boot loader
   // Default focus ONLY when the user isn't in the menu: rail rollover previews render this
   // page behind the open rail, and stealing the zone made the next D-pad press move CONTENT
   // while the user was still walking menu items.
+  if (snap && restoreHomeFocus(snap)) {
+    signalTvReadyOnce('home-render');
+    return;
+  }
   if (S.zone === 'rail') return;
   // A background enrichment re-render must not yank the user off the hero onto a card.
   if (S.zone === 'hero') return focusHero(S.heroIdx || 0);
   const firstWithItems = S.rows.findIndex((r) => r.items.length);
   if (firstWithItems >= 0) focusCard(firstWithItems, 0);
+  else {
+    const first = $('rows').querySelector('[data-row][data-col]');
+    if (first) focusCard(parseInt(first.dataset.row, 10) || 0, parseInt(first.dataset.col, 10) || 0);
+  }
+  signalTvReadyOnce('home-render');
 }
 let prefetchTimer = null;
 function prefetchSources(it, delay = 700) {
@@ -3324,17 +3569,30 @@ function queryFor(it) {
 // decodes the source (e.g. a Shield with native HEVC, a TV with DDP) gets TRUE direct play —
 // the server copies bits instead of spending CPU. WebView/Chromium honestly answer "" for
 // AC3/EAC3, which is exactly why those still get the audio-only AAC pass.
+function nativePlaybackCaps() {
+  if (S._nativeCaps !== undefined) return S._nativeCaps;
+  S._nativeCaps = null;
+  try {
+    if (window.TriboonTV && TriboonTV.nativePlaybackCaps) {
+      const caps = JSON.parse(TriboonTV.nativePlaybackCaps() || '{}');
+      if (caps && caps.native) S._nativeCaps = caps;
+    }
+  } catch {}
+  return S._nativeCaps;
+}
 function clientCaps() {
   if (S._caps) return S._caps;
   const v = document.createElement('video');
   const ok = (t) => !!v.canPlayType(t);
-  S._caps = {
+  const webCaps = {
     mkv: ok('video/x-matroska; codecs="avc1.640029"'),
     hevc: ok('video/mp4; codecs="hvc1.1.6.L123.B0"') || ok('video/mp4; codecs="hev1.1.6.L123.B0"'),
     ac3: ok('audio/mp4; codecs="ac-3"'),
     eac3: ok('audio/mp4; codecs="ec-3"'),
     dts: ok('audio/mp4; codecs="dtsc"'),
   };
+  const nativeCaps = nativePlaybackCaps();
+  S._caps = nativeCaps ? { ...webCaps, ...nativeCaps, web: webCaps } : webCaps;
   return S._caps;
 }
 
@@ -3429,6 +3687,7 @@ async function play(it, pick) {
   if (it._local && !it.tmdbId) return playLocal(it); // NFO-only archive item: file is the only source
   const loc = S.localMap && it.key && S.localMap[it.key];
   if (loc && !pick) return playLocal({ ...it, _local: loc });
+  stopActivePlaybackForReplacement();
   const btns = [$('btnPlay'), $('dPlay')];
   btns.forEach((b) => { b.disabled = true; });
   // No status toasts. Pressing Play must leave the detail page immediately; Android still
@@ -3509,6 +3768,7 @@ async function openSources(it) {
   if (!it) return;
   $('drawerSub').textContent = `${it.title} — auto-pick plays the top release. Choose to override.`;
   const list = $('srcList'); list.innerHTML = '<div class="sub">searching indexers…</div>';
+  $('srcSort').style.display = 'none';
   $('drawer').classList.add('open'); $('drawerScrim').classList.add('open');
   try {
     const r = await api('/api/search?' + sourceSearchQuery(it));
@@ -3525,26 +3785,70 @@ async function openSources(it) {
       cands = S.qualityPref === 4 ? cands.filter((c) => rk(c) === 4) : cands.filter((c) => rk(c) !== 4);
       $('drawerSub').textContent = `${it.title} — showing ${S.qualityPref === 4 ? '4K' : 'up to 1080p'} releases. Auto-pick plays the top one.`;
     }
-    cands.forEach((c, i) => {
-      const row = document.createElement('button');
-      row.className = 'srcRow focusable' + (i === 0 ? ' auto' : '');
-      const gb = c.sizeBytes ? (c.sizeBytes / 1e9).toFixed(1) + ' GB' : '?';
-      const a = c.attributes || {};
-      const chips = [
-        i === 0 ? '<span class="chip auto">Auto</span>' : '',
-        a.resolution && a.resolution !== 'unknown' ? `<span class="chip qual">${esc(a.resolution)}</span>` : '',
-        a.source && a.source !== 'unknown' ? `<span class="chip">${esc(a.source)}</span>` : '',
-        `<span class="chip size">${gb}</span>`,
-        c.streamClass === 'compressed' ? '<span class="chip warn">🐢 compressed</span>' : '',
-        c.health === 'verified' ? '<span class="chip ok">✅ verified</span>' : '',
-        c.health === 'blocked' || c.health === 'mount-failed' ? '<span class="chip warn">⚠ ' + esc(c.health) + '</span>' : '',
-      ].join('');
-      // Release names are PUBLISHED BY STRANGERS on usenet — the #1 XSS vector in this app.
-      row.innerHTML = `<div class="srcTop"><div class="srcTitle"><div class="name">${esc(c.name)}</div>${i === 0 ? '<div class="srcPick">Auto pick</div>' : ''}</div><div class="srcScore">Score ${esc(c.score)}</div></div><div class="chips">${chips}</div>`;
-      row.addEventListener('click', () => { closeDrawer(); play(it, { name: c.name, pickKey: c.pickKey, resolutionRank: rk(c) }); });
-      list.appendChild(row);
+    const fmtAttr = (v) => {
+      if (!v || v === 'unknown') return '';
+      const map = { webdl: 'WEB-DL', webrip: 'WEBRip', bluray: 'BluRay', remux: 'Remux', hdtv: 'HDTV', dvd: 'DVD', avc: 'H.264', hevc: 'HEVC', av1: 'AV1', xvid: 'Xvid' };
+      return map[v] || String(v).replace(/-/g, ' ').toUpperCase();
+    };
+    const audioInfo = (a) => {
+      const f = new Set(a.features || []);
+      return [
+        f.has('atmos') ? 'Atmos' : '',
+        f.has('truehd') ? 'TrueHD' : '',
+        f.has('dts-hd') ? 'DTS-HD' : '',
+        f.has('ddp') ? 'DDP' : '',
+        f.has('multi') ? 'Multi' : '',
+      ].filter(Boolean).join(' / ');
+    };
+    const autoKey = cands[0] && cands[0].pickKey;
+    const sizeOf = (c) => Number(c.sizeBytes) || 0;
+    const sortedSources = () => {
+      const arr = [...cands];
+      if (S.sourceSort === 'largest') return arr.sort((a, b) => (sizeOf(b) - sizeOf(a)) || (b.score - a.score));
+      if (S.sourceSort === 'smallest') return arr.sort((a, b) => ((sizeOf(a) || Infinity) - (sizeOf(b) || Infinity)) || (b.score - a.score));
+      return arr;
+    };
+    const syncSortButtons = () => {
+      document.querySelectorAll('#srcSort button').forEach((b) => b.classList.toggle('sel', b.dataset.srcSort === S.sourceSort));
+    };
+    const renderSourceRows = () => {
+      list.innerHTML = '';
+      sortedSources().forEach((c) => {
+        const isAuto = c.pickKey === autoKey;
+        const row = document.createElement('button');
+        row.className = 'srcRow focusable' + (isAuto ? ' auto' : '');
+        const gb = c.sizeBytes ? (c.sizeBytes / 1e9).toFixed(1) + ' GB' : '?';
+        const a = c.attributes || {};
+        const meta = [
+          ['Size', gb],
+          ['Source', fmtAttr(a.source)],
+          ['Indexer', c.indexer || 'Unknown'],
+          ['Codec', fmtAttr(a.codec)],
+          ['Audio', audioInfo(a)],
+          ['Group', a.group || ''],
+        ].filter((x) => x[1]);
+        const metaHtml = meta.map(([k, v]) => `<div class="srcKv"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`).join('');
+        const chips = [
+          isAuto ? '<span class="chip auto">Auto pick</span>' : '',
+          a.resolution && a.resolution !== 'unknown' ? `<span class="chip">${esc(a.resolution)}</span>` : '',
+          c.streamClass === 'compressed' ? '<span class="chip warn">Compressed</span>' : '',
+          c.health === 'verified' ? '<span class="chip ok">Verified</span>' : '',
+          c.health === 'blocked' || c.health === 'mount-failed' ? '<span class="chip warn">' + esc(c.health) + '</span>' : '',
+        ].join('');
+        // Release names are PUBLISHED BY STRANGERS on usenet — the #1 XSS vector in this app.
+        row.innerHTML = `<div class="srcTop"><div class="srcTitle"><div class="name">${esc(c.name)}</div><div class="chips">${chips}</div></div><div class="srcScore"><span>Score</span><b>${esc(c.score)}</b></div></div><div class="srcMeta">${metaHtml}</div>`;
+        row.addEventListener('click', () => { closeDrawer(); play(it, { name: c.name, pickKey: c.pickKey, resolutionRank: rk(c) }); });
+        list.appendChild(row);
+      });
+      focusDrawer(0);
+    };
+    const sortWrap = $('srcSort');
+    sortWrap.style.display = cands.length > 1 ? 'flex' : 'none';
+    syncSortButtons();
+    sortWrap.querySelectorAll('button').forEach((b) => {
+      b.onclick = () => { S.sourceSort = b.dataset.srcSort || 'best'; syncSortButtons(); renderSourceRows(); };
     });
-    focusDrawer(0);
+    renderSourceRows();
   } catch (e) { list.innerHTML = `<div class="sub">Search failed: ${esc(e.message)}</div>`; }
 }
 function closeDrawer() {
@@ -3605,12 +3909,66 @@ async function certAllowed(type, tmdbId) {
   } catch { return false; }
 }
 
+function captureDetailReturn() {
+  if (S.view === 'detail' || S.view === 'person' || S.view === 'player') return;
+  const gridRoot = S.gridRoot || $('grid');
+  const rowRoot = S.rowsView && S.rowsView.root;
+  S.detailReturn = {
+    view: S.view || 'home',
+    zone: S.zone || '',
+    rowIdx: S.rowIdx || 0,
+    colIdx: { ...(S.colIdx || {}) },
+    heroIdx: S.heroIdx || 0,
+    gridIdx: activeGridIdx(),
+    gridTopRow: S.gridTopRow || 0,
+    gridScrollTop: gridRoot ? gridRoot.scrollTop || 0 : 0,
+    rowScrollTop: rowRoot ? rowRoot.scrollTop || 0 : 0,
+    searchQuery: $('searchInput').value,
+  };
+}
+function detailReturnRoute(ret) {
+  const view = (ret && ret.view) || 'home';
+  if (view === 'library' && S.currentLib) return `#/library/${S.currentLib.id}`;
+  return `#/${view}`;
+}
+function replaceRoute(hash) {
+  if (location.hash === hash) return;
+  try { history.replaceState(null, '', hash); }
+  catch { setRoute(hash); }
+}
+function restoreDetailReturn() {
+  const ret = typeof S.detailReturn === 'string' ? { view: S.detailReturn } : (S.detailReturn || { view: 'home' });
+  const view = ret.view || 'home';
+  switchView(view, false, { preservePage: true, preserveSearch: true, restoreFocus: true });
+  replaceRoute(detailReturnRoute(ret));
+  requestAnimationFrame(() => requestAnimationFrame(() => restoreDetailFocus(ret)));
+}
+function restoreDetailFocus(ret) {
+  if (!ret || S.view !== ret.view) return focusContent();
+  const gridRoot = S.gridRoot || $('grid');
+  const rowRoot = S.rowsView && S.rowsView.root;
+  if (ret.searchQuery !== undefined && S.view === 'search') $('searchInput').value = ret.searchQuery;
+  if (rowRoot && Number.isFinite(ret.rowScrollTop)) rowRoot.scrollTop = ret.rowScrollTop;
+  if (gridRoot && Number.isFinite(ret.gridScrollTop)) gridRoot.scrollTop = ret.gridScrollTop;
+  S.gridTopRow = ret.gridTopRow || 0;
+  S.colIdx = { ...(ret.colIdx || S.colIdx || {}) };
+  clearFocus();
+  if (ret.view === 'home' || (S.rowsView && ret.zone === 'rows')) {
+    if (ret.zone === 'hero') return focusHero(ret.heroIdx || 0);
+    return focusCard(ret.rowIdx || 0, (ret.colIdx && ret.colIdx[ret.rowIdx]) || 0);
+  }
+  if (['movies', 'tv', 'search', 'library', 'watchlist', 'livetv'].includes(ret.view)) {
+    return focusGrid(Number.isFinite(ret.gridIdx) ? ret.gridIdx : 0);
+  }
+  focusContent();
+}
+
 async function openDetail(it, push = true) {
   if (!it) return;
   if (!it.tmdbId || !['movie', 'tv'].includes(it.type)) return play(it); // non-TMDB cards play directly
   if (push) setRoute(`#/title/${it.type}/${it.tmdbId}`);
   $('bdInfo').classList.remove('show'); // detail page is translucent — drop the browse info text
-  if (S.view !== 'detail' && S.view !== 'person') S.detailReturn = S.view; // remember where to go Back to
+  captureDetailReturn(); // remember the exact card/list/search result that opened Details
   $('person').classList.remove('open');
   $('detail').style.visibility = ''; // openPerson hides the detail page UNDER it — coming
   // from a person credit, the new detail rendered invisible and the D-pad worked a ghost page
@@ -3927,16 +4285,26 @@ function pickNextUp(show, seasons) {
 }
 
 function syncDetailButtons(it) {
+  if (!it) return;
   $('dWatchlist').classList.toggle('on', !!(S.watchlistMap && S.watchlistMap[it.key]));
   const w = (S.watchMap || {})[it.key];
   $('dPlayed').classList.toggle('on', !!(w && w.watched));
+  if (it.type === 'tv') {
+    if (S.detailSeasons && S.detailSeasons.length) {
+      pickNextUp(it, S.detailSeasons);
+      $('dStartOver').style.display = /Resume|Continue/.test($('dPlayLabel').textContent) ? '' : 'none';
+    }
+    return;
+  }
+  const resume = resumePositionForItem(it);
+  $('dStartOver').style.display = resume ? '' : 'none';
+  updateDetailPlayLabel(resume ? { label: 'Resume', target: { ...it, resume } } : { label: 'Play', target: it });
 }
 
 let detailPlayTarget = null;
 function updateDetailPlayLabel({ label, target }) {
   detailPlayTarget = target;
   $('dPlayLabel').textContent = label;
-  $('dPlay').classList.toggle('resumeMode', label === 'Resume');
   prefetchSources(target, 0);
 }
 function localEpisodesForShow(show) {
@@ -3996,10 +4364,7 @@ function closeDetail() {
   $('detail').classList.remove('open');
   S.detailItem = null;
   S.qualityPref = null; // visible toggle state only; per-title choices stay saved for Continue Watching.
-  switchView(S.detailReturn || 'home');
-  // TV: hand focus back to the returned-to view — the ring otherwise stayed on a hidden
-  // detail button and the next D-pad press navigated a ghost page.
-  if (document.body.classList.contains('tv')) { S.zone = ''; clearFocus(); focusContent(); }
+  restoreDetailReturn();
 }
 $('dBack').addEventListener('click', closeDetail);
 $('dPlay').addEventListener('click', () => play(detailPlayTarget || S.detailItem));
@@ -4140,6 +4505,7 @@ function revealNativeGuideShell() {
   $('playerLoader').classList.remove('show');
 }
 function stopWebVideoElement() {
+  cleanupLiveMse();
   const v = $('video');
   v.onerror = null; v.onplaying = null; v.onwaiting = null; v.ontimeupdate = null; v.onended = null;
   try { v.pause(); } catch {}
@@ -4149,11 +4515,128 @@ function stopWebVideoElement() {
   [...v.querySelectorAll('track')].forEach((t) => t.remove());
   $('subOverlay').innerHTML = '';
 }
+const LIVE_MSE_TYPES = [
+  'video/mp4; codecs="avc1.4d4028, mp4a.40.2"',
+  'video/mp4; codecs="avc1.640029, mp4a.40.2"',
+  'video/mp4; codecs="avc1.42e01e, mp4a.40.2"',
+  'video/mp4',
+];
+function liveMseType() {
+  if (!window.MediaSource) return '';
+  return LIVE_MSE_TYPES.find((t) => {
+    try { return MediaSource.isTypeSupported(t); } catch { return false; }
+  }) || '';
+}
+function cleanupLiveMse() {
+  const st = S.liveMse;
+  if (!st) return;
+  S.liveMse = null;
+  try { st.abort && st.abort.abort(); } catch {}
+  try { st.reader && st.reader.cancel(); } catch {}
+  if (st.objectUrl) {
+    setTimeout(() => { try { URL.revokeObjectURL(st.objectUrl); } catch {} }, 0);
+  }
+}
+function startLiveMseSource(url) {
+  const type = liveMseType();
+  if (!type || !url) return false;
+  const v = $('video');
+  const p = S.playing;
+  if (!p || !p.item || p.item.type !== 'live') return false;
+  cleanupLiveMse();
+  const abort = new AbortController();
+  const ms = new MediaSource();
+  const objectUrl = URL.createObjectURL(ms);
+  const token = Date.now() + ':' + Math.random().toString(16).slice(2);
+  const active = () => S.playing === p && S.liveMse && S.liveMse.token === token;
+  S.liveMse = { abort, objectUrl, token, reader: null };
+  p.usingLiveMse = true;
+  v.src = objectUrl;
+  ms.addEventListener('sourceopen', async () => {
+    if (!active()) return;
+    let sb;
+    try { sb = ms.addSourceBuffer(type); sb.mode = 'segments'; }
+    catch { if (active()) { cleanupLiveMse(); failover(); } return; }
+    const q = [];
+    let appending = false, appended = 0, started = false, streamDone = false, lastTrim = 0;
+    const pump = () => {
+      if (!active() || appending || sb.updating) return;
+      const now = Date.now();
+      if (v.currentTime > 90 && now - lastTrim > 10000 && sb.buffered.length) {
+        lastTrim = now;
+        try {
+          appending = true;
+          sb.remove(0, Math.max(0, v.currentTime - 45));
+          return;
+        } catch { appending = false; }
+      }
+      if (!q.length) {
+        if (streamDone && ms.readyState === 'open') { try { ms.endOfStream(); } catch {} }
+        return;
+      }
+      try {
+        appending = true;
+        const chunk = q.shift();
+        sb.appendBuffer(chunk);
+        appended += chunk.byteLength;
+      } catch (e) {
+        appending = false;
+        if (active()) { cleanupLiveMse(); failover(); }
+      }
+    };
+    sb.addEventListener('updateend', () => {
+      appending = false;
+      if (!started && appended > 1500000) {
+        started = true;
+        v.play().catch(() => {});
+      }
+      pump();
+    });
+    sb.addEventListener('error', () => { if (active()) { cleanupLiveMse(); failover(); } });
+    try {
+      const r = await fetch(url, { signal: abort.signal });
+      if (!r.ok || !r.body) throw new Error('live stream fetch failed');
+      const reader = r.body.getReader();
+      if (active()) S.liveMse.reader = reader;
+      while (active()) {
+        const { done, value } = await reader.read();
+        if (done) { streamDone = true; pump(); break; }
+        q.push(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength));
+        pump();
+        if (q.length > 80) await new Promise((resolve) => sb.addEventListener('updateend', resolve, { once: true }));
+      }
+    } catch (e) {
+      if (active() && e.name !== 'AbortError') { cleanupLiveMse(); failover(); }
+    }
+  }, { once: true });
+  applyVolume();
+  v.play().catch(() => {});
+  return true;
+}
+function stopActivePlaybackForReplacement() {
+  if (!S.playing) return;
+  saveWatch(true);
+  if (canUseNativeVideoPlayer() && window.TriboonTV && window.TriboonTV.closeVideo) {
+    try { window.TriboonTV.closeVideo(); } catch {}
+  }
+  stopWebVideoElement();
+  clearTimeout(S._waitT); clearTimeout(_nudgeT); _nudgeSum = 0; _nudgeBase = null;
+  closeTrackMenu();
+  closePlayerGuide({ fromNative: true });
+  $('upNext').classList.remove('show'); if (S.upNextTimer) clearInterval(S.upNextTimer);
+  if (S.healthTimer) clearInterval(S.healthTimer);
+  if (S.watchTimer) clearInterval(S.watchTimer);
+  S.nextEp = null;
+  S.playing = null;
+  updateNextEpisodeButton();
+  updatePlayerControlAvailability();
+}
 function startNativePlayerHousekeeping(it) {
   stopWebVideoElement();
   if (S.healthTimer) clearInterval(S.healthTimer);
   if (S.watchTimer) clearInterval(S.watchTimer);
   S.watchTimer = setInterval(saveWatch, 10000);
+  loadTracks();
   prepNextEpisode(it);
 }
 function startWebPlayerHousekeeping(mount, it) {
@@ -4207,13 +4690,16 @@ function openPlayer(it, mount, opts = {}) {
   const sourceName = mount.candidate ? mount.candidate.name : mount.name;
   $('pSrc').textContent = sourceName;
   $('pHealth').innerHTML = `<span class="chip">${mount.container}${mount.method ? '/' + mount.method : ''}</span>`;
+  const watchRow = it && it.key && S.watchMap ? S.watchMap[it.key] : null;
+  const knownDuration = Math.max(0, Number(it.duration || (watchRow && watchRow.duration) || 0) || 0);
   S.playing = {
     sessionId: mount.sessionId, streamUrl: mount.streamUrl, remuxUrl: mount.remuxUrl,
     transcodeUrl: mount.transcodeUrl, encoder: mount.encoder,
     tracksUrl: mount.tracksUrl, subtitleBase: mount.subtitleBase, streamToken: mount.streamToken,
     item: it, name: sourceName, fileName: mount.name, usingRemux: false, usingTranscode: false, startOffset: 0,
-    duration: 0, lastSaved: 0, triedRemux: false, triedTranscode: false, mountId: mount.id,
+    duration: knownDuration, lastSaved: 0, triedRemux: false, triedTranscode: false, mountId: mount.id,
     tracks: null, audioTrack: 0, subTrack: null, quality: 1080, nativePos: 0, nativeDuration: 0,
+    nativeStartKind: playbackStartKind(mount), nativeTried: {},
   };
   updatePlayerMeta();
   applyVolume();
@@ -4229,7 +4715,8 @@ function openPlayer(it, mount, opts = {}) {
   // frame over a flashing overlay.
   v.onplaying = () => { S.playing && (S.playing.started = true); clearTimeout(S._waitT); $('playerLoader').classList.remove('show'); };
   v.onwaiting = () => {
-    if (S.view !== 'player' || (S.playing && S.playing.started)) return;
+    const pWait = S.playing;
+    if (S.view !== 'player' || (pWait && (pWait.started || (pWait.suppressSeekLoaderUntil && appMs() < pWait.suppressSeekLoaderUntil)))) return;
     clearTimeout(S._waitT);
     S._waitT = setTimeout(() => { if (S.view === 'player') $('playerLoader').classList.add('show'); }, 700);
   };
@@ -4250,17 +4737,17 @@ function openPlayer(it, mount, opts = {}) {
       if (!S.upNextShown) showUpNext({ ended: true });
       return; // countdown/manual Play Next owns the handoff
     }
-    closePlayer();
+    closePlayer({ ended: true });
   };
   // The server's verdict applies on TV too: the WebView is Chromium, and Chromium CANNOT
   // decode AC3/EAC3 (verified on a real Shield: canPlayType('ec-3') = "") — a forced direct
   // stream of a DDP release plays VIDEO with dead silence and no error to fail over on.
   // True direct play with audio passthrough is the native ExoPlayer phase, not the shell.
   const startKind = playbackStartKind(mount);
-  // Android TV gets the real source first: ExoPlayer can direct-play codecs Chromium
-  // cannot, so do not inherit the browser's remux decision unless native rejects it.
+  // Android TV stays native, but starts with the server's chosen fast path. Archive-backed
+  // MKV direct can make Exo probe/seek slowly; remux is still zero-copy and often starts faster.
   const nativeRequired = nativeVideoRequired(it);
-  const nativeStarted = (opts.nativeFirst || nativeRequired) && tryNativePlaybackLadder(it.resume || 0);
+  const nativeStarted = (opts.nativeFirst || nativeRequired) && tryNativePlaybackLadder(it.resume || 0, startKind);
   if (nativeStarted) {
     startNativePlayerHousekeeping(it);
   } else if (nativeRequired) {
@@ -4292,29 +4779,45 @@ function openPlayer(it, mount, opts = {}) {
 // powers the CC/audio menus and the "Ends at" clock).
 async function loadTracks() {
   const p = S.playing; if (!p || !p.tracksUrl) return;
-  if (p.usingNative && canUseNativeVideoPlayer()) return;
   try {
     const t = await api(p.tracksUrl);
     if (!S.playing || S.playing.tracksUrl !== p.tracksUrl) return; // player changed meanwhile
     p.tracks = t;
     if (t.duration && !p.duration) p.duration = t.duration;
+    if (p.usingNative && canUseNativeVideoPlayer()) {
+      p.nativeDuration = p.duration || p.nativeDuration || 0;
+      updatePlayerMeta();
+      updateClocks();
+      refreshNativeSubtitleChoices();
+      return;
+    }
     updatePlayerMeta();
     updatePlayerControlAvailability();
     applyTrackPrefs(); // preferred audio/subtitle language + surround button
     updateClocks(); // duration just arrived → "Ends at" can render
   } catch { updatePlayerControlAvailability(); }
 }
-function startSource(kind, atSeconds) {
+function startSource(kind, atSeconds, opts = {}) {
   const v = $('video'); const p = S.playing;
   if (p && p.usingNative && canUseNativeVideoPlayer()) return false;
   if (p) p.usingNative = false;
+  if (opts.quietSeek && p) {
+    p.suppressSeekLoaderUntil = appMs() + 4500;
+    clearTimeout(S._waitT);
+    $('playerLoader').classList.remove('show');
+  }
   p.usingRemux = kind === 'remux';
   p.usingTranscode = kind === 'transcode';
+  p.usingLiveMse = false;
   updatePlayerMeta();
   const serverSeek = p.usingRemux || p.usingTranscode;
   const seekStart = serverSeek ? Math.max(0, Math.floor(atSeconds || 0)) : 0;
   p.startOffset = seekStart;
-  if (kind === 'transcode') {
+  cleanupLiveMse();
+  if (p.item && p.item.type === 'live' && kind === 'direct' && startLiveMseSource(p.streamUrl)) {
+    applySubtitleTrack();
+    return true;
+  } else if (kind === 'transcode') {
     v.src = `${p.transcodeUrl}&start=${seekStart}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}`;
   } else if (kind === 'remux') {
     v.src = `${p.remuxUrl}&start=${seekStart}&audio=${p.audioTrack || 0}`;
@@ -4341,14 +4844,10 @@ function nativeVideoRequired(it) {
 }
 function nativeVideoSubtitleRel(p) {
   const saved = loadSubChoice();
-  // Native is the default engine on Android TV. Saved per-title choices win; otherwise a
-  // profile subtitle language loads the Wyzie best match. Explicit Off stays off.
+  // Native is the default engine on Android TV. Only explicit per-title choices turn on at
+  // playback start; profile subtitle language fills the CC menu without popping captions on.
   if (saved && saved !== 'off') return { blocked: false, rel: saved };
   if (saved === 'off') return { blocked: false, rel: '' };
-  const pref = prefLang('slang');
-  if (S.serverInfo && S.serverInfo.opensubs && pref && pref !== 'off') {
-    return { blocked: false, rel: osTrackRel(pref) };
-  }
   return { blocked: false, rel: '' };
 }
 function nativeQualityLabel(p, kind) {
@@ -4413,30 +4912,60 @@ function refreshNativeSubtitleChoices() {
     window.TriboonTV.updateSubtitleChoices(JSON.stringify({ choices: nativeSubtitleChoices() }));
   } catch {}
 }
-function tryNativeVideoPlayer(kind, atSeconds) {
+function nativeKindAvailable(p, kind) {
+  if (!p) return false;
+  if (kind === 'direct') return !!p.streamUrl;
+  if (kind === 'remux') return !!p.remuxUrl;
+  if (kind === 'transcode') return !!p.transcodeUrl;
+  return false;
+}
+function nativePlaybackOrder(p, preferredKind) {
+  const pref = ['direct', 'remux', 'transcode'].includes(preferredKind) ? preferredKind : (p && p.nativeStartKind) || 'direct';
+  const order = pref === 'remux'
+    ? ['remux']
+    : (pref === 'transcode' ? ['transcode', 'remux'] : ['direct', 'remux', 'transcode']);
+  return [...new Set(order)].filter((kind) => nativeKindAvailable(p, kind));
+}
+function nativeMimeForKind(p, kind) {
+  if (kind === 'remux' || kind === 'transcode') return 'video/mp4';
+  const fileName = (p && (p.fileName || p.name)) || '';
+  return /\.(mp4|m4v)(?:[?#].*)?$/i.test(fileName) ? 'video/mp4' : '';
+}
+function tryNativeVideoPlayer(kind, atSeconds, opts = {}) {
   const p = S.playing;
   if (!p || !p.item || p.item.type === 'live' || !canUseNativeVideoPlayer()) return false;
   if (!['direct', 'remux', 'transcode'].includes(kind)) return false;
-  const url = kind === 'remux' ? p.remuxUrl : (kind === 'transcode' ? p.transcodeUrl : p.streamUrl);
-  if (!url) return false;
+  const baseUrl = kind === 'remux' ? p.remuxUrl : (kind === 'transcode' ? p.transcodeUrl : p.streamUrl);
+  if (!baseUrl) return false;
+  const serverSeek = kind === 'remux' || kind === 'transcode';
+  const seekStart = serverSeek ? Math.max(0, Math.floor(atSeconds || 0)) : 0;
+  let nativeUrl = baseUrl;
+  if (kind === 'transcode') {
+    nativeUrl = `${p.transcodeUrl}&start=${seekStart}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}`;
+  } else if (kind === 'remux') {
+    nativeUrl = `${p.remuxUrl}&start=${seekStart}&audio=${p.audioTrack || 0}`;
+  }
   const sub = nativeVideoSubtitleRel(p);
   if (sub.blocked) return false;
   p.usingNative = true;
   p.usingRemux = kind === 'remux';
   p.usingTranscode = kind === 'transcode';
   updatePlayerMeta();
-  p.startOffset = 0;
+  p.startOffset = seekStart;
   p.nativePos = Math.max(0, atSeconds || 0);
   p.nativeDuration = p.duration || 0;
   const nativeBackdrop = p.item.backdrop || p.item.poster || '';
   const payload = {
     title: p.item.title || 'Triboon',
     source: p.name || p.item.q || kind,
-    url: new URL(url, location.origin).href,
+    url: new URL(nativeUrl, location.origin).href,
     backdropUrl: nativeBackdrop ? new URL(nativeBackdrop, location.origin).href : '',
-    start: Math.max(0, atSeconds || 0),
+    start: serverSeek ? 0 : Math.max(0, atSeconds || 0),
+    startOffset: seekStart,
     kind,
+    mime: nativeMimeForKind(p, kind),
     qualityLabel: nativeQualityLabel(p, kind),
+    duration: Math.max(0, p.duration || p.nativeDuration || 0),
     qualityChoices: !!p.transcodeUrl,
     hasNext: p.item.type === 'episode',
     subtitleRel: sub.rel || '',
@@ -4445,6 +4974,7 @@ function tryNativeVideoPlayer(kind, atSeconds) {
     subtitleLabel: sub.rel ? nativeSubtitleLabel(sub.rel) : '',
     subtitleShift: sub.rel ? (loadSubShift(sub.rel) || 0) : 0,
     subtitleChoices: nativeSubtitleChoices(),
+    quietSeek: !!opts.quietSeek,
   };
   if (sub.rel) {
     p.subTrack = sub.rel;
@@ -4452,23 +4982,50 @@ function tryNativeVideoPlayer(kind, atSeconds) {
   }
   try {
     window.TriboonTV.playVideo(JSON.stringify(payload));
+    p.nativeTried = p.nativeTried || {};
+    p.nativeTried[kind] = true;
+    if (kind === 'remux') p.triedRemux = true;
+    if (kind === 'transcode') p.triedTranscode = true;
     return true;
   } catch (e) {
     p.usingNative = false;
     return false;
   }
 }
-function tryNativePlaybackLadder(atSeconds) {
+function tryNativePlaybackLadder(atSeconds, preferredKind) {
   const p = S.playing;
   if (!p || !nativeVideoRequired(p.item)) return false;
-  return tryNativeVideoPlayer('direct', atSeconds)
-    || (p.remuxUrl && tryNativeVideoPlayer('remux', atSeconds))
-    || (p.transcodeUrl && tryNativeVideoPlayer('transcode', atSeconds));
+  p.nativeTried = p.nativeTried || {};
+  for (const kind of nativePlaybackOrder(p, preferredKind)) {
+    if (!p.nativeTried[kind] && tryNativeVideoPlayer(kind, atSeconds)) return true;
+  }
+  return false;
+}
+function tryNextNativeKind(failedKind, atSeconds, msg) {
+  const p = S.playing;
+  if (!p || !nativeVideoRequired(p.item)) return false;
+  p.nativeTried = p.nativeTried || {};
+  p.nativeTried[failedKind] = true;
+  for (const next of nativePlaybackOrder(p, p.nativeStartKind)) {
+    if (p.nativeTried[next]) continue;
+    toast(msg ? `Native ${failedKind} failed - trying ${next} (${msg})` : `Native ${failedKind} failed - trying ${next}`);
+    if (tryNativeVideoPlayer(next, atSeconds)) return true;
+  }
+  return false;
 }
 window.__tvNativeVideoProgress = (pos, dur) => {
   const p = S.playing; if (!p || !p.usingNative) return;
   p.nativePos = Math.max(0, +pos || 0);
   if (+dur > 0) { p.nativeDuration = +dur; p.duration = +dur; }
+};
+window.__tvNativeVideoSeek = (pos, dur) => {
+  const p = S.playing; if (!p || !p.usingNative || !p.item || p.item.type === 'live') return;
+  const at = Math.max(0, +pos || 0);
+  if (+dur > 0) { p.nativeDuration = +dur; p.duration = +dur; }
+  p.nativePos = at;
+  p.suppressSeekLoaderUntil = appMs() + 4500;
+  $('playerLoader').classList.remove('show');
+  tryNativeVideoPlayer(currentPlayerKind(p), at, { quietSeek: true });
 };
 window.__tvNativeVideoClosed = (pos, dur, ended) => {
   const p = S.playing; if (!p || !p.usingNative) return;
@@ -4478,7 +5035,7 @@ window.__tvNativeVideoClosed = (pos, dur, ended) => {
     showUpNext({ ended: true });
     return;
   }
-  closePlayer();
+  closePlayer({ ended: !!ended });
 };
 window.__tvNativeVideoError = (msg, pos, dur) => {
   const p = S.playing; if (!p || !p.usingNative) return;
@@ -4486,16 +5043,7 @@ window.__tvNativeVideoError = (msg, pos, dur) => {
   const at = currentTime();
   const kind = p.usingTranscode ? 'transcode' : (p.usingRemux ? 'remux' : 'direct');
   p.usingNative = false;
-  if (kind === 'direct' && p.remuxUrl && !p.triedRemux) {
-    p.triedRemux = true;
-    toast(msg ? `Native direct failed — trying remux (${msg})` : 'Native direct failed — trying remux');
-    if (tryNativeVideoPlayer('remux', at)) return;
-  }
-  if ((kind === 'direct' || kind === 'remux') && p.transcodeUrl && !p.triedTranscode) {
-    p.triedTranscode = true;
-    toast(msg ? `Native ${kind} failed — trying transcode (${msg})` : `Native ${kind} failed — trying transcode`);
-    if (tryNativeVideoPlayer('transcode', at)) return;
-  }
+  if (tryNextNativeKind(kind, at, msg)) return;
   if (p.sessionId) {
     autoAdvance({ nativePreferred: true });
     return;
@@ -4523,6 +5071,7 @@ window.__tvNativeVideoQuality = (quality, pos, dur) => {
   };
   if (String(quality) === 'orig') {
     p.usingNative = false;
+    p.nativeTried = {};
     p.triedTranscode = false;
     if (tryNativeVideoPlayer('direct', at)) return;
     if (p.remuxUrl && tryNativeVideoPlayer('remux', at)) return;
@@ -4606,11 +5155,12 @@ async function autoAdvance(opts = {}) {
     p.tracksUrl = r.tracksUrl; p.subtitleBase = r.subtitleBase; p.streamToken = r.streamToken;
     p.name = r.candidate ? r.candidate.name : r.name;
     p.duration = 0; p.nativePos = at; p.nativeDuration = 0;
+    p.nativeStartKind = playbackStartKind(r); p.nativeTried = {};
     p.tracks = null; p.subTrack = null; p.audioTrack = 0;
     $('pSrc').textContent = r.candidate ? r.candidate.name : r.name;
     updatePlayerMeta();
     const startKind = playbackStartKind(r);
-    if (nativePreferred && tryNativePlaybackLadder(at)) {
+    if (nativePreferred && tryNativePlaybackLadder(at, startKind)) {
       startNativePlayerHousekeeping(p.item);
       return;
     }
@@ -4732,7 +5282,25 @@ async function saveWatch(final) {
   });
   return api('/api/watch', { method: 'POST', body: payload }).catch(() => {});
 }
-async function closePlayer() {
+function playbackFinishedDetailTarget(item) {
+  if (!item || !item.tmdbId) return null;
+  if (item.type === 'movie') return { ...item, key: item.key || `tmdb:movie:${item.tmdbId}`, type: 'movie' };
+  if (item.type === 'tv') return { ...item, key: item.key || `tmdb:tv:${item.tmdbId}`, type: 'tv' };
+  if (item.type === 'episode') {
+    const title = String(item.title || '').replace(/\s+-\s+S\d+E\d+.*$/i, '').replace(/\s+S\d+E\d+.*$/i, '').trim() || 'Show';
+    return {
+      ...item,
+      key: `tmdb:tv:${item.tmdbId}`,
+      type: 'tv',
+      title,
+      resume: 0,
+    };
+  }
+  return null;
+}
+async function closePlayer(opts = {}) {
+  const closingItem = S.playing && S.playing.item;
+  const finishedTarget = opts && opts.ended ? playbackFinishedDetailTarget(closingItem) : null;
   const finalWatch = saveWatch(true);
   if (canUseNativeVideoPlayer() && window.TriboonTV.closeVideo) {
     try { window.TriboonTV.closeVideo(); } catch {}
@@ -4766,7 +5334,13 @@ async function closePlayer() {
     // Back to the detail page: refresh watch marks and the open season's episode list.
     S.view = 'detail';
     try { await finalWatch; await loadWatchState(true); } catch {}
+    if (S.detailItem) syncDetailButtons(S.detailItem);
     if (S.detailItem && S.detailItem.type === 'tv' && S.detailSeason != null) loadSeason(S.detailItem, S.detailSeason);
+    if (S.zone === 'detail') requestAnimationFrame(() => applyFocus($('dPlay')));
+  } else if (finishedTarget) {
+    S.playerReturn = null;
+    try { await finalWatch; await loadWatchState(true); } catch {}
+    await openDetail(finishedTarget);
   } else {
     const ret = S.playerReturn || { view: 'home' };
     S.playerReturn = null;
@@ -4871,8 +5445,11 @@ function nudgeSeek(delta) {
 function seekTo(seconds) {
   const v = $('video'); const p = S.playing; if (!p) return;
   seconds = Math.max(0, seconds);
-  if (p.usingTranscode) startSource('transcode', seconds);      // server-side seek via -ss
-  else if (p.usingRemux) startSource('remux', seconds);
+  p.suppressSeekLoaderUntil = appMs() + 4500;
+  clearTimeout(S._waitT);
+  $('playerLoader').classList.remove('show');
+  if (p.usingTranscode) startSource('transcode', seconds, { quietSeek: true });      // server-side seek via -ss
+  else if (p.usingRemux) startSource('remux', seconds, { quietSeek: true });
   else v.currentTime = seconds;
   showOsd();
 }
@@ -4953,7 +5530,8 @@ function osSubUrl(p, rel, list = false) {
   });
   if (list) q.set('list', '1');
   if (info.variant) q.set('variant', info.variant);
-  const shift = !list ? (Number.isFinite(+p._subShift) ? +p._subShift : loadSubShift(rel)) : 0;
+  const activeShift = p.subTrack === rel && Number.isFinite(+p._subShift) ? +p._subShift : null;
+  const shift = !list ? (activeShift !== null ? activeShift : loadSubShift(rel)) : 0;
   if (!list && Math.abs(shift) >= 0.05) q.set('shift', shift.toFixed(1));
   return `/api/ossubs/${p.mountId}?${q.toString()}`;
 }
@@ -5055,15 +5633,10 @@ function applyTrackPrefs() {
       if (best && best.rel !== p.audioTrack) setAudio(best.rel);
     }
   }
-  const wantS = prefLang('slang');
   const savedSub = loadSubChoice();
   if (savedSub && p.subTrack == null) {
     if (savedSub !== 'off' && S.serverInfo && S.serverInfo.opensubs && p.mountId && p.item && p.item.tmdbId) {
       setSubtitle(savedSub);
-    }
-  } else if (wantS && wantS !== 'off' && p.subTrack == null) {
-    if (S.serverInfo && S.serverInfo.opensubs && p.mountId && p.item && p.item.tmdbId) {
-      setSubtitle('os:' + osLang(wantS));
     }
   }
   updateSrndBtn();
@@ -5255,6 +5828,7 @@ async function setSubtitle(rel) {
     savePrefLang('slang', 'off');
     saveSubChoice(null);
     if ($('prefSLang')) $('prefSLang').value = 'off';
+    clearTimeout(_subPrepT);
     return applySubtitleTrack();
   }
   // Fetch FIRST so failures surface as a message, not a silent nothing.
@@ -5319,14 +5893,25 @@ function applySubShiftToCues(tt, shift) {
 // native cue PAINTING is unreliable (tracks "showing", cues active, nothing on screen —
 // the "is it under the player?" mystery). mode:'hidden' keeps parsing + cuechange events
 // while we own the pixels — same look everywhere, sized by the caption preference.
+function activeSubtitleCues(tt) {
+  if (!tt || tt.mode === 'disabled') return [];
+  const active = tt.activeCues && tt.activeCues.length ? [...tt.activeCues] : [];
+  if (active.length) return active;
+  const cues = tt.cues ? [...tt.cues] : [];
+  if (!cues.length) return [];
+  const v = $('video');
+  const now = Math.max(0, (v && Number.isFinite(v.currentTime) ? v.currentTime : 0) || 0);
+  return cues.filter((c) => now + 0.05 >= c.startTime && now <= c.endTime + 0.05);
+}
 function renderSubCues() {
   const box = $('subOverlay');
   const p = S.playing;
   const tt = p && p._textTrack;
-  if (!tt || tt.mode === 'disabled' || !tt.activeCues || !tt.activeCues.length) { box.innerHTML = ''; return; }
+  const active = activeSubtitleCues(tt);
+  if (!active.length) { box.innerHTML = ''; return; }
   box.innerHTML = '';
   // At most the LAST 3 active cues — whatever a broken track claims, never a wall of text.
-  for (const c of [...tt.activeCues].slice(-3)) {
+  for (const c of active.slice(-3)) {
     const line = document.createElement('div');
     try { line.appendChild(c.getCueAsHTML()); }            // keeps <i>/<b> styling, XSS-safe
     catch { line.textContent = String(c.text || ''); }
@@ -5335,15 +5920,16 @@ function renderSubCues() {
 }
 function applySubtitleTrack() {
   const v = $('video'); const p = S.playing; if (!p) return;
+  const seq = (p._subSeq || 0) + 1; p._subSeq = seq;
   p._textTrack = null;
   [...v.querySelectorAll('track')].forEach((t) => { try { if (t.track) t.track.mode = 'disabled'; } catch {} t.remove(); });
   try { for (const tt of [...(v.textTracks || [])]) tt.mode = 'disabled'; } catch {}
   $('subOverlay').innerHTML = '';
-  if (p.subTrack === null || p.subTrack === undefined) return;
-  const seq = (p._subSeq || 0) + 1; p._subSeq = seq;
+  if (p.subTrack === null || p.subTrack === undefined) { clearTimeout(_subPrepT); return; }
   const tr = document.createElement('track');
   tr.kind = 'subtitles'; tr.label = 'Subtitles'; tr.default = true;
   if (!(typeof p.subTrack === 'string' && p.subTrack.startsWith('os:'))) {
+    clearTimeout(_subPrepT);
     p.subTrack = null;
     $('ccBtn').classList.remove('on');
     return;
@@ -5582,11 +6168,13 @@ $('grid').addEventListener('scroll', () => {
   const g = $('grid');
   if (g.scrollTop + g.clientHeight < g.scrollHeight - 700) return;
   if (['movies', 'tv'].includes(S.view)) runBrowse(false);
+  else if (S.view === 'library' && S.currentLib && S.currentLib.path) loadMoreLocalLibraryPage(false);
   else if (S.view === 'library') runLibrary(false);
 });
 
 function renderGrid(items, root = $('grid')) {
   bootReady(); // hash-restored grid views are a boot landing too
+  if (!S._keepLocalGridPaging && root === $('grid')) clearLocalGridPaging();
   S.gridRoot = root; root.innerHTML = ''; root.style.setProperty('--tf', '0px');
   S.gridItems = items || [];
   if (!S.gridItems.length) return;
@@ -5613,6 +6201,134 @@ function appendGrid(items) {
     root.appendChild(c);
   });
   S.gridItems = S.gridItems.concat(items);
+}
+
+const LOCAL_GRID_BATCH = 15;
+function clearLocalGridPaging() {
+  S.localGridAll = null;
+  S.localGridShown = 0;
+  S.localPageState = null;
+  S.localPageLoading = false;
+  S.localPageHasMore = false;
+  S.localPageOffset = 0;
+  S.localPageTotal = 0;
+}
+function appendLocalGridMore() {
+  const root = S.gridRoot || $('grid');
+  if (!root || S.view !== 'library' || !(S.currentLib && S.currentLib.path)) return;
+  root.querySelectorAll('.localGridMore').forEach((el) => el.remove());
+  if (S.localPageState) {
+    const shown = S.localPageOffset || S.gridItems.length || 0;
+    const total = S.localPageTotal || shown;
+    if (!S.localPageHasMore || shown >= total) return;
+    const next = Math.min(LOCAL_GRID_BATCH, total - shown);
+    const b = document.createElement('button');
+    b.className = 'gridMore localGridMore focusable';
+    b.dataset.grid = String(S.gridItems.length);
+    b.textContent = `Load ${next} more - ${shown} of ${total}`;
+    b.addEventListener('mouseenter', () => pointerHover() && focusGrid(parseInt(b.dataset.grid, 10) || 0));
+    b.addEventListener('click', () => loadMoreLocalLibraryPage(true));
+    root.appendChild(b);
+    return;
+  }
+  const all = S.localGridAll || [];
+  const shown = S.localGridShown || 0;
+  if (!all.length || shown >= all.length) return;
+  const next = Math.min(LOCAL_GRID_BATCH, all.length - shown);
+  const b = document.createElement('button');
+  b.className = 'gridMore localGridMore focusable';
+  b.dataset.grid = String(S.gridItems.length);
+  b.textContent = `Load ${next} more - ${shown} of ${all.length}`;
+  b.addEventListener('mouseenter', () => pointerHover() && focusGrid(parseInt(b.dataset.grid, 10) || 0));
+  b.addEventListener('click', () => loadMoreLocalGrid(true));
+  root.appendChild(b);
+}
+function loadMoreLocalGrid(focusNew = false) {
+  const all = S.localGridAll || [];
+  if (!all.length) return false;
+  const cur = S.localGridShown || S.gridItems.length || 0;
+  if (cur >= all.length) return false;
+  const root = S.gridRoot || $('grid');
+  const firstNew = S.gridItems.length;
+  root.querySelectorAll('.localGridMore').forEach((el) => el.remove());
+  const next = Math.min(cur + LOCAL_GRID_BATCH, all.length);
+  appendGrid(all.slice(cur, next));
+  S.localGridShown = next;
+  appendLocalGridMore();
+  perfMark('local-library-batch', { shown: next, total: all.length });
+  if (focusNew && S.zone === 'grid') requestAnimationFrame(() => focusGrid(firstNew));
+  return true;
+}
+function appendLocalAdminBar() {
+  const root = S.gridRoot || $('grid');
+  root.querySelectorAll('.localAdminBar').forEach((el) => el.remove());
+  const infoState = S.localPageState;
+  if (!infoState || !infoState.admin || infoState.showIdx !== undefined) return;
+  const bar = document.createElement('div');
+  bar.className = 'localAdminBar';
+  bar.style.cssText = 'grid-column:1/-1;display:flex;gap:10px;align-items:center;flex-wrap:wrap';
+  const mk = (label, mode) => {
+    const b = document.createElement('button');
+    b.className = 'ghostMini focusable'; b.textContent = label;
+    b.addEventListener('click', () => scanLibrary(infoState.lib, mode));
+    return b;
+  };
+  bar.appendChild(mk('Scan for new items', 'scan'));
+  bar.appendChild(mk('Refresh all metadata', 'metadata'));
+  const info = document.createElement('span');
+  info.style.cssText = 'color:var(--muted);font-size:12.5px';
+  info.textContent = `${S.localPageTotal || 0} items${infoState.scannedAt ? ` - scanned ${agoStr(infoState.scannedAt)}` : ''}`;
+  bar.appendChild(info);
+  root.appendChild(bar);
+}
+function renderLocalGridFooter() {
+  const root = S.gridRoot || $('grid');
+  root.querySelectorAll('.localGridMore,.localAdminBar').forEach((el) => el.remove());
+  appendLocalGridMore();
+  appendLocalAdminBar();
+}
+async function loadMoreLocalLibraryPage(focusNew = false) {
+  const state = S.localPageState;
+  if (!state) return loadMoreLocalGrid(focusNew);
+  if (S.localPageLoading || !S.localPageHasMore) return false;
+  S.localPageLoading = true;
+  const root = S.gridRoot || $('grid');
+  const firstNew = S.gridItems.length;
+  root.querySelectorAll('.localGridMore,.localAdminBar').forEach((el) => el.remove());
+  try {
+    const r = await localLibraryPage(state.lib, { offset: S.localPageOffset || 0, showIdx: state.showIdx, sort: state.sort, genre: state.genre });
+    if (S.view !== 'library' || !S.currentLib || S.currentLib.id !== state.lib.id) return false;
+    mergeLocalItems(state.lib, r.items || []);
+    const mapped = mapLocalPageItems(state.lib, r, state.showIdx);
+    appendGrid(mapped);
+    S.localPageOffset = (r.offset || 0) + (r.items || []).length;
+    S.localPageTotal = r.total || S.localPageOffset;
+    S.localPageHasMore = !!r.hasMore;
+    state.scannedAt = r.scannedAt;
+    renderLocalGridFooter();
+    perfMark('local-library-page-append', { shown: S.localPageOffset, total: S.localPageTotal });
+    if (focusNew && S.zone === 'grid') requestAnimationFrame(() => focusGrid(firstNew));
+    return true;
+  } catch (e) {
+    toast(e.message || 'Could not load more library items');
+    renderLocalGridFooter();
+    return false;
+  } finally {
+    S.localPageLoading = false;
+  }
+}
+function renderLocalGridPaged(items) {
+  const all = items || [];
+  S.localGridAll = all;
+  S.localGridShown = Math.min(LOCAL_GRID_BATCH, all.length);
+  S._keepLocalGridPaging = true;
+  try {
+    renderGrid(all.slice(0, S.localGridShown));
+  } finally {
+    S._keepLocalGridPaging = false;
+  }
+  renderLocalGridFooter();
+  perfMark('local-library-render', { shown: S.localGridShown, total: all.length });
 }
 
 /* ============ trailer modal ============ */
@@ -5750,35 +6466,80 @@ async function libItems(lib, force) {
     // "now - at < TTL" treated the in-flight sentinel as a fresh hit and returned undefined.
     if (c.data && performance.now() - c.at < 300000) return c.data;
   }
+  const started = performance.now();
   const inflight = api(`/api/libraries/${lib.id}/items`);
   S.libCache[lib.id] = { at: 0, inflight, data: c && c.data };
   try {
     const data = await inflight;
     S.libCache[lib.id] = { at: performance.now(), data };
+    perfMark('library-items-ready', { lib: lib.id, items: (data.items || []).length, ms: Math.round(performance.now() - started) });
     return data;
   } catch (e) { delete S.libCache[lib.id]; throw e; }
 }
-function mergeLocalItems(lib, items) {
-  const map = S.localMap || {};
+async function localLibraryPage(lib, opts = {}) {
+  const offset = Math.max(0, opts.offset || 0);
+  const limit = Math.max(1, Math.min(500, opts.limit || LOCAL_GRID_BATCH));
+  const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+  if (opts.showIdx !== undefined) params.set('showIdx', String(opts.showIdx));
+  else {
+    params.set('sort', opts.sort || $('sortSel').value || 'added.desc');
+    const g = opts.genre !== undefined ? opts.genre : $('genreSel').value;
+    if (g) params.set('genre', String(g));
+  }
+  const started = performance.now();
+  const data = await api(`/api/libraries/${lib.id}/items?${params.toString()}`);
+  perfMark('library-page-ready', {
+    lib: lib.id,
+    items: (data.items || []).length,
+    total: data.total || 0,
+    offset,
+    ms: Math.round(performance.now() - started),
+  });
+  return data;
+}
+function mergeLocalItemsInto(map, lib, items) {
   for (const x of (items || [])) {
     if (!x.tmdbId || !x.streamUrl) continue;
     const key = x.kind === 'episode' ? `tmdb:tv:${x.tmdbId}:s${x.s}e${x.e}` : `tmdb:movie:${x.tmdbId}`;
     map[key] = { streamUrl: x.streamUrl, playUrl: x.playUrl, name: x.title, addedAt: x.addedAt || 0, libId: lib && lib.id };
   }
+  return map;
+}
+function mergeLocalItems(lib, items) {
+  const map = mergeLocalItemsInto(S.localMap || {}, lib, items);
   S.localMap = map;
   return map;
 }
 // Map of "what we already own on disk": tmdb keys → local stream URLs. Lets the regular
 // detail pages (and auto next-episode) play your archive files instead of hitting usenet.
 async function indexLocalLibraries(libs) {
-  S.localMap = {};
+  const map = {};
   for (const lib of (libs || []).filter((l) => l.path)) {
     try {
       const r = await libItems(lib);
-      mergeLocalItems(lib, r.items || []);
+      mergeLocalItemsInto(map, lib, r.items || []);
     } catch {}
   }
+  S.localMap = map;
   return S.localMap;
+}
+function cachedLocalLibraryItemsAvailable() {
+  return (S.libraries || []).some((lib) => lib.path && S.libCache && S.libCache[lib.id] && S.libCache[lib.id].data);
+}
+function refreshLocalMapFromCachedLibraries() {
+  const libs = (S.libraries || []).filter((l) => l.path);
+  const map = {};
+  let warmed = false;
+  for (const lib of libs) {
+    const c = S.libCache && S.libCache[lib.id];
+    if (!c || !c.data) continue;
+    mergeLocalItemsInto(map, lib, c.data.items || []);
+    warmed = true;
+  }
+  if (!warmed) return null;
+  S.localMap = map;
+  perfMark('local-map-cache-refresh', { keys: Object.keys(map).length });
+  return map;
 }
 // loadRows needs the localMap (new-episode bumps) — await the boot build instead of racing it.
 function ensureLocalMap() {
@@ -5812,12 +6573,14 @@ async function loadLibraries() {
   });
 }
 function openLibrary(lib) {
+  S.libraryPreviewOnly = false;
   S.currentLib = lib;
   $('genreSel').value = ''; // a Movies/TV genre pick must not silently filter the library
   switchView('library');
 }
 async function runLibrary(reset) {
   const lib = S.currentLib; if (!lib) return;
+  S.libraryPreviewOnly = false;
   if (reset === undefined) reset = true;
   $('browseTitle').textContent = lib.name;
   // LOCAL library (has a folder): show the scanned items; smart view otherwise.
@@ -5836,6 +6599,10 @@ async function runLibrary(reset) {
     if (page >= (r.total_pages || 1) || page >= 25) S.libDone = true;
   } catch (e) { if (page === 1) $('grid').innerHTML = `<div class="gridMore">Failed: ${esc(e.message)}</div>`; }
   S.libLoading = false;
+}
+function renderLocalLibraryPreview(lib) {
+  S.libraryPreviewOnly = true;
+  return runLocalLibrary(lib, undefined, { preview: true });
 }
 // Scanned local library: local poster.jpg or TMDB art, direct local playback. TV shows
 // render once at the top level — clicking one drills into its episode grid.
@@ -5862,6 +6629,7 @@ function mapLocal(lib, x, titleOverride) {
 }
 // Detail page for archive items TMDB doesn't know — built entirely from the NFO + local art.
 function openLocalDetail(it) {
+  captureDetailReturn();
   S.view = 'detail'; S.detailItem = it; S.detailData = null; S.detailReq = (S.detailReq || 0) + 1;
   $('bdInfo').classList.remove('show');
   $('person').classList.remove('open');
@@ -5913,6 +6681,14 @@ async function populateLocalGenres(lib, items) {
     names.filter((g) => have.has(g.id)).map((g) => `<option value="${parseInt(g.id, 10) || 0}">${esc(g.name)}</option>`).join('');
   $('genreSel').value = cur; // survive re-renders (sort change, scan refresh)
 }
+async function populateLocalGenreIds(lib, ids) {
+  const have = new Set((ids || []).map((id) => parseInt(id, 10) || 0).filter(Boolean));
+  const names = await genres(lib.kind === 'tv' ? 'tv' : 'movie');
+  const cur = $('genreSel').value;
+  $('genreSel').innerHTML = '<option value="">All genres</option>' +
+    names.filter((g) => have.has(g.id)).map((g) => `<option value="${parseInt(g.id, 10) || 0}">${esc(g.name)}</option>`).join('');
+  $('genreSel').value = cur;
+}
 function agoStr(ts) {
   const m = Math.round((Date.now() - ts) / 60000);
   if (m < 2) return 'just now';
@@ -5920,80 +6696,74 @@ function agoStr(ts) {
   if (m < 48 * 60) return `${Math.round(m / 60)}h ago`;
   return `${Math.round(m / 1440)}d ago`;
 }
-async function runLocalLibrary(lib, showIdx) {
+function mapLocalPageItems(lib, r, showIdx) {
+  if (showIdx !== undefined) {
+    return (r.items || []).map((x) => mapLocal(lib, x,
+      `S${String(x.s).padStart(2, '0')}E${String(x.e).padStart(2, '0')}${x.epTitle ? ` - ${x.epTitle}` : ''}`));
+  }
+  return (r.items || []).map((x) => mapLocal(lib, x));
+}
+async function runLocalLibraryPaged(lib, showIdx, opts = {}) {
   const grid = $('grid');
-  S.libDone = true; // no pagination for local items
+  S.libDone = true; // TMDB library paging is separate from local folder paging.
   S.localShow = showIdx;
-  const warm = S.libCache && S.libCache[lib.id] && S.libCache[lib.id].at; // cached → no flash
-  if (!warm) grid.innerHTML = '<div class="gridMore">loading…</div>';
+  S.libraryPreviewOnly = !!opts.preview;
+  clearLocalGridPaging();
+  setSortOptions('local');
+  $('browseTitle').textContent = lib.name;
+  if (showIdx === undefined) populateLocalGenreIds(lib, []);
+  grid.innerHTML = '<div class="gridMore">loading...</div>';
   try {
-    const r = await libItems(lib);
-    if (S.view !== 'library' || !S.currentLib || S.currentLib.id !== lib.id) return; // user moved on
+    const sort = $('sortSel').value || 'added.desc';
+    const genre = parseInt($('genreSel').value, 10) || 0;
+    const r = await localLibraryPage(lib, { offset: 0, showIdx, sort, genre });
+    if (S.view !== 'library' || !S.currentLib || S.currentLib.id !== lib.id) return;
     mergeLocalItems(lib, r.items || []);
     const isAdmin = S.user.role === 'admin';
-    if (!r.items.length) {
+    const show = r.show || null;
+    if (!r.items.length && !r.total) {
+      if (showIdx !== undefined || genre) {
+        grid.innerHTML = '<div class="gridMore">No matching items.</div>';
+        return;
+      }
       grid.innerHTML = `<div class="gridMore">${isAdmin
-        ? 'No items yet — scan the folder to index your files.<br><br>'
-        : 'This library is empty — ask your admin to scan it.'}</div>`;
+        ? 'No items yet - scan the folder to index your files.<br><br>'
+        : 'This library is empty - ask your admin to scan it.'}</div>`;
       if (isAdmin) {
         const b = document.createElement('button');
         b.className = 'btn primary'; b.style.cssText = 'margin:0 auto';
-        b.textContent = '🔍 Scan ' + (lib.path || '');
+        b.textContent = 'Scan ' + (lib.path || '');
         b.addEventListener('click', () => scanLibrary(lib));
         grid.firstChild.appendChild(b);
       }
       return;
     }
-    let items;
-    if (showIdx !== undefined) {
-      const show = r.items.find((x) => x.idx === showIdx);
-      $('browseTitle').textContent = show ? show.title : lib.name;
-      items = r.items.filter((x) => x.kind === 'episode' && x.showIdx === showIdx)
-        .map((x) => mapLocal(lib, x,
-          `S${String(x.s).padStart(2, '0')}E${String(x.e).padStart(2, '0')}${x.epTitle ? ` · ${x.epTitle}` : ''}`));
-      // Unmatched shows have no detail page (this grid IS their page) — the admin fixes a
-      // wrong/missing TMDB match right here.
-      if (show && isAdmin) {
-        setTimeout(() => {
-          if (S.view !== 'library' || S.localShow !== showIdx) return;
-          const b = document.createElement('button');
-          b.className = 'ghostMini focusable'; b.style.cssText = 'grid-column:1/-1;justify-self:start';
-          b.textContent = '🛠 Fix TMDB match for this show';
-          b.addEventListener('click', () => openMatchModal(mapLocal(lib, show)));
-          $('grid').appendChild(b);
-        }, 0); // after renderGrid below
-      }
-    } else {
-      $('browseTitle').textContent = lib.name;
-      setSortOptions('local');
-      populateLocalGenres(lib, r.items); // async fill; the current selection is preserved
-      let top = r.items.filter((x) => x.kind !== 'episode');
-      const g = parseInt($('genreSel').value, 10) || 0;
-      if (g) top = top.filter((x) => (x.genres || []).includes(g));
-      top = top.slice().sort(localSorter($('sortSel').value || 'added.desc'));
-      items = top.map((x) => mapLocal(lib, x));
+    if (showIdx !== undefined) $('browseTitle').textContent = show ? show.title : lib.name;
+    else populateLocalGenreIds(lib, r.genres || []);
+    const items = mapLocalPageItems(lib, r, showIdx);
+    S.localPageState = { lib, showIdx, sort, genre, scannedAt: r.scannedAt, admin: isAdmin };
+    S.localPageOffset = (r.offset || 0) + (r.items || []).length;
+    S.localPageTotal = r.total || S.localPageOffset;
+    S.localPageHasMore = !!r.hasMore;
+    S._keepLocalGridPaging = true;
+    try {
+      renderGrid(items);
+    } finally {
+      S._keepLocalGridPaging = false;
     }
-    renderGrid(items);
-    if (isAdmin && showIdx === undefined) {
-      // Plex-style admin actions: cheap file scan (reuses every TMDB match) vs full
-      // metadata refresh. Auto-scan picks up new files on its own (Settings → cadence).
-      const bar = document.createElement('div');
-      bar.style.cssText = 'grid-column:1/-1;display:flex;gap:10px;align-items:center;flex-wrap:wrap';
-      const mk = (label, mode) => {
-        const b = document.createElement('button');
-        b.className = 'ghostMini focusable'; b.textContent = label;
-        b.addEventListener('click', () => scanLibrary(lib, mode));
-        return b;
-      };
-      bar.appendChild(mk('↻ Scan for new items', 'scan'));
-      bar.appendChild(mk('⟳ Refresh all metadata', 'metadata'));
-      const info = document.createElement('span');
-      info.style.cssText = 'color:var(--muted);font-size:12.5px';
-      info.textContent = `${r.items.length} items${r.scannedAt ? ` · scanned ${agoStr(r.scannedAt)}` : ''}`;
-      bar.appendChild(info);
-      grid.appendChild(bar);
+    if (show && isAdmin) {
+      const b = document.createElement('button');
+      b.className = 'ghostMini focusable'; b.style.cssText = 'grid-column:1/-1;justify-self:start';
+      b.textContent = 'Fix TMDB match for this show';
+      b.addEventListener('click', () => openMatchModal(mapLocal(lib, show)));
+      grid.appendChild(b);
     }
+    renderLocalGridFooter();
+    perfMark('local-library-render', { shown: S.localPageOffset, total: S.localPageTotal, preview: !!opts.preview });
   } catch (e) { grid.innerHTML = `<div class="gridMore">Failed: ${esc(e.message)}</div>`; }
+}
+async function runLocalLibrary(lib, showIdx, opts = {}) {
+  return runLocalLibraryPaged(lib, showIdx, opts);
 }
 async function scanLibrary(lib, mode = 'scan') {
   toast(mode === 'metadata' ? `Refreshing metadata for ${lib.name}…` : `Scanning ${lib.path}…`);
@@ -6086,6 +6856,7 @@ $('matchCancel').addEventListener('click', () => $('matchModal').classList.remov
 async function playLocal(it) {
   if (!it || !it._local || !it._local.streamUrl) return;
   it = resolvePlaybackResume(it);
+  stopActivePlaybackForReplacement();
   const nativeFirst = nativeVideoRequired(it);
   const playTicket = S._playTicket = (S._playTicket || 0) + 1;
   if (nativeFirst) showNativePlayLoading(it);
@@ -6369,7 +7140,10 @@ function renderLiveTvBody() {
   ];
   if (!names.length) { body.innerHTML = '<div class="gridMore">Every category is hidden — “☷ Categories” to manage.</div>'; return; }
   if (!names.includes(S.liveCat)) S.liveCat = names[0];
-  S.liveCatNavIdx = Math.max(0, names.indexOf(S.liveCat));
+  const selectedCatIdx = Math.max(0, names.indexOf(S.liveCat));
+  S.liveCatNavIdx = S.liveCatDpadMode && Number.isFinite(S.liveCatNavIdx)
+    ? Math.max(0, Math.min(names.length - 1, S.liveCatNavIdx))
+    : selectedCatIdx;
   const list = S.liveCat === '★ Favorites' ? favs : (groups.get(S.liveCat) || []);
   const countForName = (name) => name === '★ Favorites' ? favs.length : ((groups.get(name) || []).length);
   const buildCatButton = (name) => {
@@ -6386,7 +7160,7 @@ function renderLiveTvBody() {
       S.liveCatNavIdx = names.indexOf(name);
       S.liveGuideCap = LIVE_GUIDE_BATCH; // fresh category starts with a fresh guide window
       renderLiveTvBody();
-      if (S.zone === 'grid') focusLiveCategory(S.liveCatNavIdx);
+      if (S.zone === 'grid') requestAnimationFrame(() => focusLiveCategory(S.liveCatNavIdx));
     });
     chip.addEventListener('mouseenter', () => pointerHover() && focusGrid(gi));
     return chip;
@@ -6710,6 +7484,19 @@ function canUseNativeLivePlayer() {
 function nativeLiveRequired() {
   return canUseNativeLivePlayer();
 }
+function setNativeLivePlaybackState(it) {
+  $('pSrc').textContent = it.genre || it.group || '';
+  $('pHealth').innerHTML = '<span class="liveBadge">LIVE</span>';
+  S.playing = {
+    item: { title: it.title || 'Live TV', key: it.key || ('live:' + it._channel), type: 'live', backdrop: it.backdrop, overview: '' },
+    name: it.title || 'Live TV',
+    usingNative: true,
+    nativePos: 0,
+    nativeDuration: 0,
+    startOffset: 0,
+    lastSaved: 0,
+  };
+}
 function openNativeLiveGuideShell(it) {
   rememberPlayerReturn();
   stopWebVideoElement();
@@ -6723,17 +7510,7 @@ function openNativeLiveGuideShell(it) {
   $('vlcPanel').classList.remove('show');
   $('playerLoader').classList.remove('show');
   $('upNext').classList.remove('show'); if (S.upNextTimer) clearInterval(S.upNextTimer);
-  $('pSrc').textContent = it.genre || it.group || '';
-  $('pHealth').innerHTML = '<span class="liveBadge">LIVE</span>';
-  S.playing = {
-    item: { title: it.title || 'Live TV', key: it.key || ('live:' + it._channel), type: 'live', backdrop: it.backdrop, overview: '' },
-    name: it.title || 'Live TV',
-    usingNative: true,
-    nativePos: 0,
-    nativeDuration: 0,
-    startOffset: 0,
-    lastSaved: 0,
-  };
+  setNativeLivePlaybackState(it);
   updatePlayerMeta();
 }
 function tryNativeLivePlayer(it, guide = false) {
@@ -6752,6 +7529,7 @@ function tryNativeLivePlayer(it, guide = false) {
       fallbackMime: it._nativeFallbackMime || '',
       guide,
     }));
+    if (!guide) setNativeLivePlaybackState(it);
     return true;
   } catch (e) {
     S.nativeLivePending = null;
@@ -6799,6 +7577,26 @@ function currentNativeLiveGuideItem() {
     poster: null,
   };
 }
+async function ensurePlayerGuideChannels() {
+  let list = S.liveList || [];
+  if (!list.length && S.liveChannels && S.liveChannels.length && Date.now() - (S._liveAt || 0) < LIVE_TTL) {
+    list = S.liveList = S.liveChannels.map(liveItemForPlayerGuide).filter(Boolean);
+  }
+  if ((!list.length || !(S.liveChannels && S.liveChannels.length)) && S.serverInfo && S.serverInfo.iptv) {
+    try {
+      const fav = await api('/api/iptv/channels');
+      if (fav.configured && fav.channels) {
+        fillLiveState(fav);
+        list = S.liveList = (fav.channels || []).map(liveItemForPlayerGuide).filter(Boolean);
+      }
+      S.liveEpg = !!fav.epg;
+    } catch {}
+  }
+  if (!list.length && S.liveChannels && S.liveChannels.length) {
+    list = S.liveList = S.liveChannels.map(liveItemForPlayerGuide).filter(Boolean);
+  }
+  return list;
+}
 window.__tvNativeLiveGuide = async (epoch) => {
   const n = +epoch;
   S.nativeGuideEpoch = Number.isFinite(n) && n > 0 ? n : ((S.nativeGuideEpoch || 0) + 1);
@@ -6816,9 +7614,12 @@ window.__tvNativeLiveGuide = async (epoch) => {
     return;
   }
   S.nativeGuideMode = true;
-  openNativeLiveGuideShell(it);
-  const list = (S.liveList && S.liveList.length) ? S.liveList : [it];
-  return renderPlayerGuideTimeline($('pGuide'), list);
+  const list = await ensurePlayerGuideChannels();
+  const active = (list.length && it && it._channel !== undefined)
+    ? (list.find((x) => x && x._channel === it._channel) || it)
+    : (it || list[0]);
+  openNativeLiveGuideShell(active);
+  return renderPlayerGuideTimeline($('pGuide'), list.length ? list : [active]);
 };
 window.__tvNativeGuideClosed = (epoch) => {
   const n = +epoch;
@@ -6829,6 +7630,9 @@ window.__tvNativeGuideClosed = (epoch) => {
 window.__tvNativeGuideEpoch = (epoch) => {
   const n = +epoch;
   if (Number.isFinite(n) && n > 0) S.nativeGuideEpoch = n;
+  if (S.nativeGuideMode && $('pGuide').classList.contains('open')) {
+    requestAnimationFrame(() => focusPlayerGuideRow(S._pgFocusChannel ?? S.liveCur, { preventScroll: true }));
+  }
 };
 window.__tvNativeLiveError = (msg) => {
   S.nativeLivePending = null;
@@ -6884,6 +7688,48 @@ function zapChannel(dir) {
   playChannel(next, list); // the guide (if open) stays up — just re-mark the row
   markGuideCur();
 }
+window.__tvNativeLiveZap = (dir) => {
+  if (!(S.playing && S.playing.item && S.playing.item.type === 'live')) return;
+  zapChannel(dir >= 0 ? 1 : -1);
+};
+function focusPlayerGuideRow(channel, opts = {}) {
+  const row = document.querySelector(`.pgGuideMain .pgRow[data-guide-channel="${channel}"]`);
+  if (!row) return false;
+  S.pgCatDpadMode = false;
+  try { row.focus({ preventScroll: !!opts.preventScroll }); } catch { row.focus(); }
+  if (!opts.preventScroll) row.scrollIntoView({ block: opts.block || 'nearest', inline: 'nearest', behavior: 'auto' });
+  return true;
+}
+function focusPlayerGuideCategory(idx, select = false, opts = {}) {
+  const cats = [...document.querySelectorAll('#pGuide .pgCat[data-pg]')];
+  if (!cats.length) return false;
+  const selected = cats.findIndex((el) => el.classList.contains('sel'));
+  const remembered = Number.isFinite(S.pgCatNavIdx) ? S.pgCatNavIdx : selected;
+  const i = Math.max(0, Math.min(cats.length - 1, Number.isFinite(idx) ? idx : remembered));
+  const cat = cats[i];
+  const name = cat && cat.dataset.pgCatName;
+  S.pgCatNavIdx = i;
+  S.pgCatDpadMode = true;
+  if (select && name && name !== S.pgLiveCat) {
+    S.pgLiveCat = name;
+    S._pgFocusCat = name;
+    renderPlayerGuideTimeline($('pGuide'), S.liveList || []);
+    return true;
+  }
+  try { cat.focus({ preventScroll: true }); } catch { cat.focus(); }
+  const pane = cat.closest('.pgCats');
+  if (pane) {
+    const pad = 10;
+    const top = cat.offsetTop;
+    const bottom = top + cat.offsetHeight;
+    const viewTop = pane.scrollTop + pad;
+    const viewBottom = pane.scrollTop + pane.clientHeight - pad;
+    if (top < viewTop) pane.scrollTo({ top: Math.max(0, top - pad), behavior: 'auto' });
+    else if (bottom > viewBottom) pane.scrollTo({ top: bottom - pane.clientHeight + pad, behavior: 'auto' });
+  }
+  if (!opts.preventScroll) cat.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'auto' });
+  return true;
+}
 function markGuideCur() {
   document.querySelectorAll('.pgRow').forEach((r) => {
     const cur = r._ch !== undefined && r._ch === S.liveCur;
@@ -6894,7 +7740,8 @@ function markGuideCur() {
 }
 function closePlayerGuide(opts = {}) {
   S._playerGuideRenderToken = (S._playerGuideRenderToken || 0) + 1;
-  $('pGuide').classList.remove('open');
+  S.pgCatDpadMode = false;
+  $('pGuide').classList.remove('ready', 'open');
   $('pgList').innerHTML = '';
   $('player').classList.remove('guideMode');
   document.body.classList.remove('nativeGuideMode');
@@ -6980,11 +7827,29 @@ async function renderPlayerGuideTimeline(pg, list) {
   });
   const catNames = [...(favs.length ? [favName] : []), ...[...groups.keys()]];
   const currentCh = allChannels.find((x) => x._channel === S.liveCur) || list.find((x) => x._channel === S.liveCur);
-  if (!catNames.length) return toast('No Live TV categories to show');
+  if (!catNames.length) {
+    $('pgInfo').innerHTML = `<div class="ey">Live TV</div>
+      <div class="t">No channels available</div>
+      <div class="m">The guide list could not be loaded.</div>
+      <div class="n">Press Back to return to the player.</div>`;
+    lp.innerHTML = '<div class="gridMore">No Live TV channels available.</div>';
+    $('player').classList.add('guideMode');
+    pg.classList.remove('ready');
+    pg.classList.add('open');
+    scheduleNativeGuidePipSync();
+    requestAnimationFrame(() => {
+      if (renderToken === S._playerGuideRenderToken && pg.classList.contains('open')) pg.classList.add('ready');
+    });
+    return;
+  }
   if (!catNames.includes(S.pgLiveCat)) {
     const currentCat = currentCh && currentCh.genre && catNames.includes(currentCh.genre) ? currentCh.genre : null;
     S.pgLiveCat = currentCat || (catNames.includes(S.liveCat) ? S.liveCat : catNames[0]);
   }
+  const selectedCatIdx = Math.max(0, catNames.indexOf(S.pgLiveCat));
+  S.pgCatNavIdx = S.pgCatDpadMode && Number.isFinite(S.pgCatNavIdx)
+    ? Math.max(0, Math.min(catNames.length - 1, S.pgCatNavIdx))
+    : selectedCatIdx;
   const selectedList = S.pgLiveCat === favName ? favs : (groups.get(S.pgLiveCat) || []);
   const playingTitle = (S.playing && S.playing.item && S.playing.item.title) || $('pTitle').textContent || 'Now playing';
   const sourceText = $('pSrc').textContent || (currentCh && currentCh.genre) || '';
@@ -7030,11 +7895,18 @@ async function renderPlayerGuideTimeline(pg, list) {
     btn.className = 'pgCat lcat focusable' + (name === favName ? ' favCat' : '') + (name === S.pgLiveCat ? ' sel' : '');
     btn.dataset.pg = '1';
     btn.dataset.pgCat = '1';
+    btn.dataset.pgCatName = name;
     btn.innerHTML = `<span class="catLabel">${esc(name)}</span><span class="catCount">${countFor(name)}</span>`;
     btn.addEventListener('click', () => {
       S.pgLiveCat = name;
       S._pgFocusCat = name;
+      S.pgCatNavIdx = catNames.indexOf(name);
+      S.pgCatDpadMode = true;
       renderPlayerGuideTimeline(pg, allChannels);
+    });
+    btn.addEventListener('focus', () => {
+      S.pgCatNavIdx = catNames.indexOf(name);
+      S.pgCatDpadMode = true;
     });
     catList.appendChild(btn);
   });
@@ -7080,10 +7952,12 @@ async function renderPlayerGuideTimeline(pg, list) {
     fillPlayerGuideRow(row, ch, S.liveEpg);
     row._ch = ch._channel; row._chObj = ch;
     row._pgList = selectedList;
+    row.addEventListener('focus', () => { S._pgFocusChannel = ch._channel; S.pgCatDpadMode = false; });
     row.addEventListener('click', () => {
+      S._pgFocusChannel = ch._channel;
       playChannel(ch, selectedList);
       markGuideCur();
-      row.focus();
+      focusPlayerGuideRow(ch._channel, { preventScroll: true });
     });
     row.addEventListener('contextmenu', (e) => {
       e.preventDefault();
@@ -7111,13 +7985,29 @@ async function renderPlayerGuideTimeline(pg, list) {
   shell.appendChild(main);
   lp.appendChild(shell);
   $('player').classList.add('guideMode');
+  pg.classList.remove('ready');
   pg.classList.add('open');
   scheduleNativeGuidePipSync();
+  requestAnimationFrame(() => {
+    if (renderToken === S._playerGuideRenderToken && pg.classList.contains('open')) pg.classList.add('ready');
+  });
   const wantedCat = S._pgFocusCat; S._pgFocusCat = null;
-  const cur = wantedCat
-    ? [...lp.querySelectorAll('.pgCat')].find((b) => b.textContent.includes(wantedCat))
-    : (lp.querySelector('.pgRow.cur') || lp.querySelector('.pgRow[data-pg]') || lp.querySelector('.pgCat.sel') || lp.querySelector('[data-pg]'));
-  if (cur) { cur.focus(); cur.scrollIntoView({ block: 'center' }); }
+  const focusedRow = S._pgFocusChannel !== undefined && S._pgFocusChannel !== null
+    ? lp.querySelector(`.pgRow[data-guide-channel="${S._pgFocusChannel}"]`)
+    : null;
+  const wantedCatEl = wantedCat
+    ? [...lp.querySelectorAll('.pgCat')].find((b) => b.dataset.pgCatName === wantedCat)
+    : null;
+  const cur = (S.pgCatDpadMode ? (wantedCatEl || lp.querySelector('.pgCat.sel')) : focusedRow)
+    || wantedCatEl
+    || lp.querySelector('.pgRow.cur')
+    || lp.querySelector('.pgRow[data-pg]')
+    || lp.querySelector('.pgCat.sel')
+    || lp.querySelector('[data-pg]');
+  if (cur) {
+    try { cur.focus({ preventScroll: true }); } catch { cur.focus(); }
+    cur.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' });
+  }
 }
 // Channel zapper over the video: the current list (favorites / group / search results),
 // with "now playing" filled from EPG for the rows on screen. Available on EVERY player —
@@ -7125,19 +8015,8 @@ async function renderPlayerGuideTimeline(pg, list) {
 async function togglePlayerGuide() {
   const pg = $('pGuide');
   if (pg.classList.contains('open')) return closePlayerGuide();
-  let list = S.liveList || [];
-  if (!list.length && S.liveChannels && S.liveChannels.length && Date.now() - (S._liveAt || 0) < LIVE_TTL) {
-    list = S.liveList = S.liveChannels.map(liveItemForPlayerGuide).filter(Boolean);
-  }
-  if (!list.length && S.serverInfo.iptv) {
-    try { // no list yet (came straight from a movie) — load the same channel set as Live TV
-      const fav = await api('/api/iptv/channels');
-      if (fav.configured && fav.channels) fillLiveState(fav);
-      S.liveEpg = !!fav.epg;
-      list = S.liveList = (fav.channels || []).map(liveItemForPlayerGuide).filter(Boolean);
-    } catch {}
-  }
-  if (!list.length) return toast(S.serverInfo.iptv ? 'No Live TV channels available' : 'Live TV is not set up');
+  const list = await ensurePlayerGuideChannels();
+  if (!list.length) return toast(S.serverInfo && S.serverInfo.iptv ? 'No Live TV channels available' : 'Live TV is not set up');
   return renderPlayerGuideTimeline(pg, list);
 }
 $('chGuide').addEventListener('click', togglePlayerGuide);
@@ -7978,7 +8857,7 @@ async function renderTraktBox() {
       b.disabled = true; b.textContent = 'Syncing…';
       try {
         const r = await api('/api/trakt/sync', { method: 'POST', body: {} });
-        toast(`Trakt sync ✓ — ${r.watched} watched + ${r.playback} in-progress + ${r.watchlist || 0} watchlist imported`);
+        toast(`Trakt sync ✓ — ${r.watched} watched + ${r.playback} in-progress + ${r.watchlist || 0} watchlist imported${r.pushed ? ` + ${r.pushed} pushed` : ''}`);
         loadRows(); // Continue Watching may have new arrivals
         loadWatchlist(); // Watchlist may have new arrivals
       } catch (e) { toast('Sync failed: ' + e.message); }
@@ -8813,7 +9692,7 @@ $('qcApprove').addEventListener('click', async () => {
 /* ============ views + spatial nav ============ */
 function switchView(v, push = true, opts = {}) {
   const prevView = S.view;
-  if (prevView === 'search' && v !== 'search') resetSearchPage();
+  if (prevView === 'search' && v !== 'search' && !opts.preserveSearch) resetSearchPage();
   if (v !== 'livetv') $('grid').classList.remove('liveGuideGrid');
   stopMusicWhenLeavingMusic(v);
   $('musicNow').classList.remove('open'); // the big music page is an overlay — close on any nav
@@ -8832,8 +9711,10 @@ function switchView(v, push = true, opts = {}) {
   if (push) setRoute(v === 'library' && S.currentLib ? `#/library/${S.currentLib.id}` : `#/${v}`);
   const onDiscover = v === 'discover' || v === 'calendar';
   const isBrowse = ['movies', 'tv', 'search', 'library', 'watchlist', 'livetv'].includes(v);
+  const shortBrowseBd = v === 'movies' || v === 'tv' || (v === 'library' && S.currentLib && S.currentLib.path);
   // Browse views show the focused title's backdrop FULL-BLEED (home keeps the corner cutout).
   document.body.classList.toggle('fullBd', isBrowse || v === 'discover');
+  document.body.classList.toggle('shortBrowseBd', !!shortBrowseBd);
   $('home').classList.toggle('show', v === 'home');
   $('discover').classList.toggle('open', onDiscover);
   $('browse').classList.toggle('open', isBrowse);
@@ -8855,22 +9736,25 @@ function switchView(v, push = true, opts = {}) {
   document.querySelectorAll('#railLibs .railBtn').forEach((b) =>
     b.classList.toggle('active', v === 'library' && S.currentLib && b.dataset.libid === S.currentLib.id));
   requestAnimationFrame(adaptRowWindows); // page chrome just changed — refit the row windows
-  if (v === 'home') loadRows();
-  if (v === 'discover') { $('discoverTitle').textContent = 'Discover'; loadDiscover(); }
-  if (v === 'calendar') loadCalendar();
-  if (v === 'movies') openBrowse('movie');
-  if (v === 'tv') openBrowse('tv');
-  if (v === 'library') runLibrary(true);
-  if (v === 'watchlist') loadWatchlistView();
-  if (v === 'livetv') loadLiveTv();
-  if (v === 'search') { $('browseTitle').textContent = 'Search'; resetSearchPage();
-    $('grid').innerHTML = '';
+  if (v === 'home' && !opts.preservePage) loadRows();
+  if (v === 'discover' && !opts.preservePage) { $('discoverTitle').textContent = 'Discover'; loadDiscover(); }
+  if (v === 'calendar' && !opts.preservePage) loadCalendar();
+  if (v === 'movies' && !opts.preservePage) openBrowse('movie');
+  if (v === 'tv' && !opts.preservePage) openBrowse('tv');
+  if (v === 'library' && !opts.preservePage) {
+    if (opts.previewOnly && S.currentLib && S.currentLib.path) runLocalLibrary(S.currentLib, undefined, { preview: true });
+    else runLibrary(true);
+  }
+  if (v === 'watchlist' && !opts.preservePage) loadWatchlistView();
+  if (v === 'livetv' && !opts.preservePage) loadLiveTv();
+  if (v === 'search') { $('browseTitle').textContent = 'Search';
+    if (!opts.preserveSearch && !opts.preservePage) { resetSearchPage(); $('grid').innerHTML = ''; }
     // A rollover PREVIEW must not steal focus — the user is still on the menu. Landing on
     // the page proper starts at the MIC (owner: voice first on TV), keyboard input one → away.
-    if (!opts.keepRail) setTimeout(() => focusContent(), 60); }
-  if (v === 'settings') refreshSettings();
-  if (v === 'prefs') openPrefs();
-  if (v === 'music') loadMusic();
+    if (!opts.keepRail && !opts.restoreFocus) setTimeout(() => focusContent(), 60); }
+  if (v === 'settings' && !opts.preservePage) refreshSettings();
+  if (v === 'prefs' && !opts.preservePage) openPrefs();
+  if (v === 'music' && !opts.preservePage) loadMusic();
   // Settings is NOT a synchronous landing: refreshSettings() fills the panels async, and
   // dropping the loader early flashed an empty page — it calls bootReady() itself when done.
   if (['prefs', 'search', 'music'].includes(v)) bootReady(); // synchronous landings
@@ -8916,6 +9800,7 @@ window.addEventListener('hashchange', () => {
   if (routeSquelch > 0) { routeSquelch--; return; }
   // Browser Back/Forward: close overlays first, then route inside the app.
   if (S.view === 'player') return closePlayer();
+  if ($('detail').classList.contains('open')) return closeDetail();
   applyRoute();
 });
 
@@ -8972,6 +9857,7 @@ function applyFocus(el, scroll = true) {
   clearFocus();
   if (!el) return;
   el.classList.add('focus');
+  signalTvReadyOnce('focus');
   // 'nearest' on both axes: rows advance one card at a time instead of jump-centering
   // (scroll-margin/scroll-padding in CSS keep the focused card clear of edges).
   if (scroll) el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
@@ -9031,13 +9917,12 @@ function focusLiveCategory(idx, select = false) {
   S.focusedItem = S.gridItems[S.gridIdx] || null;
   if (select && name && name !== S.liveCat) {
     clearTimeout(S._liveCatApplyT);
-    S._liveCatApplyT = setTimeout(() => {
-      if (S.view !== 'livetv') return;
-      S.liveCat = name;
-      S.liveGuideCap = LIVE_GUIDE_BATCH;
-      renderLiveTvBody();
-      focusLiveCategory(i);
-    }, 140);
+    S.liveCat = name;
+    S.liveGuideCap = LIVE_GUIDE_BATCH;
+    renderLiveTvBody();
+    requestAnimationFrame(() => {
+      if (S.view === 'livetv') focusLiveCategory(i);
+    });
   }
   return true;
 }
@@ -9238,6 +10123,16 @@ function focusGrid(i) {
   leaveRail();
   S.zone = 'grid'; S.gridIdx = Math.max(0, Math.min(els.length - 1, i));
   const el = els[S.gridIdx];
+  if (S.view === 'livetv') {
+    if (el.classList.contains('lcat')) {
+      S.liveCatDpadMode = true;
+      const cats = [...document.querySelectorAll('#chCats .lcat')];
+      const ci = cats.indexOf(el);
+      if (ci >= 0) S.liveCatNavIdx = ci;
+    } else if (el.classList.contains('gRow') || el.classList.contains('chCard')) {
+      S.liveCatDpadMode = false;
+    }
+  }
   const liveGuideRow = S.view === 'livetv' && el.classList.contains('gRow');
   const paged = $('browse').classList.contains('rowsWin') && (S.gridRoot || $('grid')) === $('grid');
   if (liveGuideRow) {
@@ -9284,6 +10179,7 @@ function focusGrid(i) {
     // or the walk dead-ends at the bottom of page one.
     if (S.gridIdx >= els.length - cols * 2) {
       if (['movies', 'tv'].includes(S.view)) runBrowse(false);
+      else if (S.view === 'library' && S.currentLib && S.currentLib.path) loadMoreLocalLibraryPage(false);
       else if (S.view === 'library' && !(S.currentLib && S.currentLib.path)) runLibrary(false);
     }
   }
@@ -9366,7 +10262,7 @@ function railPreviewAction(btn) {
       run: () => {
         S.currentLib = lib;
         $('genreSel').value = '';
-        switchView('library', true, { keepRail: true });
+        switchView('library', true, { keepRail: true, previewOnly: !!lib.path });
       },
     };
   }
@@ -9470,7 +10366,7 @@ document.addEventListener('keydown', (e) => {
   // land on a rail item whose rollover then switches pages. A trusted key's timeStamp is its
   // HARDWARE press time; anything older than 350ms by the time we see it is freeze backlog.
   if (e.isTrusted && performance.now() - e.timeStamp > 350) { e.preventDefault(); return; }
-  if (e.isTrusted) S.pointer = false; // keyboard takes over → focus moves may scroll again
+  if (e.isTrusted) { S.pointer = false; S._lastKeyAt = appMs(); } // keyboard takes over → focus moves may scroll again
   const ae = document.activeElement;
   // Checkboxes/radios don't need native key handling (no caret, no IME) — they stay in OUR
   // spatial nav; only text entry, dropdowns and textareas hand the keys back to the platform.
@@ -9680,32 +10576,54 @@ document.addEventListener('keydown', (e) => {
       const back = document.querySelector('.pgBackTop[data-pg]');
       const cats = [...document.querySelectorAll('.pgCat[data-pg]')];
       const rows = [...document.querySelectorAll('.pgGuideMain .pgRow[data-pg]')];
-      const moveTo = (el) => { if (el) { el.focus(); el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } };
-      const moveToCat = (el) => {
+      const moveTo = (el) => {
         if (!el) return;
-        if (!el.classList.contains('sel')) el.click();
-        else moveTo(el);
+        if (el.classList && el.classList.contains('pgCat')) {
+          const i = cats.indexOf(el);
+          if (i >= 0) S.pgCatNavIdx = i;
+          S.pgCatDpadMode = true;
+        } else if (el.classList && el.classList.contains('pgRow')) {
+          S.pgCatDpadMode = false;
+        }
+        try { el.focus({ preventScroll: true }); } catch { el.focus(); }
+        el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'auto' });
+      };
+      const moveRowFrom = (delta) => {
+        if (!rows.length) return;
+        let i = rows.indexOf(document.activeElement);
+        if (i < 0) i = rows.findIndex((r) => r.classList.contains('cur'));
+        if (i < 0 && S._pgFocusChannel !== undefined && S._pgFocusChannel !== null) {
+          i = rows.findIndex((r) => r._ch === S._pgFocusChannel);
+        }
+        if (i < 0) i = 0;
+        moveTo(rows[Math.max(0, Math.min(rows.length - 1, i + delta))]);
+      };
+      const catIndex = () => {
+        const activeCat = cats.includes(document.activeElement) ? document.activeElement : null;
+        const idx = activeCat ? cats.indexOf(activeCat)
+          : (Number.isFinite(S.pgCatNavIdx) ? S.pgCatNavIdx : cats.findIndex((c) => c.classList.contains('sel')));
+        return Math.max(0, Math.min(cats.length - 1, idx < 0 ? 0 : idx));
       };
       if (k === 'Escape' || k === 'Backspace') return closePlayerGuide();
       if (active === back) {
         if (k === 'Enter' && !e.repeat) return back.click();
-        if (k === 'ArrowDown') return moveTo(cats.find((c) => c.classList.contains('sel')) || cats[0] || rows[0]);
+        if (k === 'ArrowDown') return cats.length ? focusPlayerGuideCategory(catIndex()) : moveTo(rows[0]);
         if (k === 'ArrowRight') return moveTo(rows.find((r) => r.classList.contains('cur')) || rows[0]);
         return;
       }
-      if (cats.includes(active)) {
-        let i = cats.indexOf(active);
-        if (k === 'ArrowDown') return moveToCat(cats[Math.min(cats.length - 1, i + 1)]);
-        if (k === 'ArrowUp') return i <= 0 && back ? moveTo(back) : moveToCat(cats[Math.max(0, i - 1)]);
+      if (cats.includes(active) || (S.pgCatDpadMode && (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowRight' || k === 'Enter'))) {
+        let i = catIndex();
+        if (k === 'ArrowDown') return focusPlayerGuideCategory(i + 1, true);
+        if (k === 'ArrowUp') return i <= 0 && back ? moveTo(back) : focusPlayerGuideCategory(i - 1, true);
         if (k === 'ArrowRight') return moveTo(rows.find((r) => r.classList.contains('cur')) || rows[0]);
-        if (k === 'Enter' && !e.repeat) return active.click();
+        if (k === 'Enter' && !e.repeat) return cats[i] && cats[i].click();
         return;
       }
       if (rows.includes(active)) {
         let i = rows.indexOf(active);
-        if (k === 'ArrowDown') return moveTo(rows[Math.min(rows.length - 1, i + 1)]);
-        if (k === 'ArrowUp') return i <= 0 && back ? moveTo(back) : moveTo(rows[Math.max(0, i - 1)]);
-        if (k === 'ArrowLeft') return moveTo(cats.find((c) => c.classList.contains('sel')) || cats[0]);
+        if (k === 'ArrowDown') return moveRowFrom(1);
+        if (k === 'ArrowUp') return i <= 0 && back ? moveTo(back) : moveRowFrom(-1);
+        if (k === 'ArrowLeft') return focusPlayerGuideCategory(cats.findIndex((c) => c.classList.contains('sel')));
         if (k === 'Enter' && !e.repeat) {
           S._lpEl = active;
           S._lpTimer = setTimeout(() => {
@@ -9716,7 +10634,10 @@ document.addEventListener('keydown', (e) => {
         }
         return;
       }
-      if (k === 'ArrowDown' || k === 'ArrowRight') return moveTo(rows.find((r) => r.classList.contains('cur')) || cats.find((c) => c.classList.contains('sel')) || rows[0] || cats[0]);
+      if (S.pgCatDpadMode && cats.length) return focusPlayerGuideCategory(catIndex());
+      if (k === 'ArrowDown') return moveRowFrom(1);
+      if (k === 'ArrowUp') return moveRowFrom(-1);
+      if (k === 'ArrowRight') return moveTo(rows.find((r) => r.classList.contains('cur')) || cats.find((c) => c.classList.contains('sel')) || rows[0] || cats[0]);
       if (k === 'Enter' && back) return back.click();
       return;
     }
@@ -9945,7 +10866,8 @@ document.addEventListener('keydown', (e) => {
       const focusedChannel = document.querySelector('.liveChannelPane .chCard.focusable.focus');
       const focusedCat = document.querySelector('#chCats .lcat.focusable.focus');
       const cats = [...document.querySelectorAll('#chCats .lcat')];
-      if ((k === 'ArrowUp' || k === 'ArrowDown') && cats.length && (focusedCat || S.liveCatDpadMode)) {
+      const inLiveCatMode = focusedCat || (S.liveCatDpadMode && !focusedGuideRow && !focusedChannel);
+      if ((k === 'ArrowUp' || k === 'ArrowDown') && cats.length && inLiveCatMode) {
         const ci = focusedCat ? cats.indexOf(focusedCat)
           : Math.max(0, Math.min(cats.length - 1, Number.isFinite(S.liveCatNavIdx) ? S.liveCatNavIdx : 0));
         if (k === 'ArrowUp') return ci <= 0 ? focusLiveFilter() : focusLiveCategory(ci - 1, true);
@@ -10164,6 +11086,9 @@ function focusRailEnter() {
     const lib = (S.libraries || []).find((l) => l.id === libId);
     if (lib) {
       if (!(S.view === 'library' && S.currentLib && S.currentLib.id === lib.id)) openLibrary(lib);
+      else if (S.libraryPreviewOnly) {
+        S.libraryPreviewOnly = false;
+      }
       setTimeout(() => { if (S.view === 'library') focusContent(); }, 80);
       return;
     }
@@ -10176,6 +11101,7 @@ function focusRailEnter() {
 function bootReady() {
   if (!S._booting && $('appLoader').classList.contains('hide')) return;
   S._booting = false;
+  perfMark('boot-ready', { view: S.view });
   setTimeout(() => $('appLoader').classList.add('hide'), 0);
   requestAnimationFrame(() => requestAnimationFrame(() => $('appLoader').classList.add('hide')));
 }
@@ -10183,9 +11109,24 @@ async function loadWatchlist() {
   try { const wl = await api('/api/watchlist'); S.watchlist = wl; S.watchlistMap = Object.fromEntries(wl.map((w) => [w.key, w])); }
   catch { S.watchlist = []; S.watchlistMap = {}; }
 }
+function hydrateAppShellData() {
+  const bootId = S._bootHydrateId = (S._bootHydrateId || 0) + 1;
+  Promise.allSettled([
+    loadWatchState(),
+    loadLibraries(),
+    loadWatchlist(),
+  ]).then(() => {
+    if (bootId !== S._bootHydrateId) return;
+    applyMenuPrefs();
+    if (S.view === 'home') loadRows({ watchReady: true, preserveFocus: true, background: true });
+    else if (S.view === 'watchlist') loadWatchlistView();
+    else if (S.view === 'library' && S.currentLib) runLibrary(false);
+    else if ($('detail').classList.contains('open')) syncDetailButtons(S.detailItem);
+  });
+}
 async function enterApp() {
   if (!S.user) S.user = await api('/api/me');
-  S.serverInfo = await api('/api/server');
+  if (!S.serverInfo || S.serverInfo.needsSetup) S.serverInfo = await api('/api/server');
   // Profile gate (Plex "who's watching"): restore last, else pick if more than one exists.
   const saved = (() => { try { return localStorage.getItem('triboon.profile'); } catch { return null; } })();
   const pr = (S.user.profiles || []).find((p) => p.id === saved);
@@ -10194,6 +11135,7 @@ async function enterApp() {
   showProfilePicker();
 }
 async function enterAppShell() {
+  perfMark('enter-app-shell');
   showGate(null);
   // The boot loader covers the shell until the FIRST real content paints. Re-arm it HERE,
   // before any awaits: the gate screens (login / profile picker) hide the loader, so the
@@ -10211,9 +11153,10 @@ async function enterAppShell() {
   // Admin-only controls are hidden from regular users (server is also API-gated admin-only).
   $('navSettings').style.display = isAdmin ? '' : 'none';
   $('railAddLib').style.display = isAdmin ? '' : 'none';
-  // Preload the profile's watch map so watched check-marks show on first render everywhere.
-  try { await loadWatchState(true); } catch { S.watchMap = {}; }
-  await Promise.all([loadLibraries(), loadWatchlist()]);
+  S.watchMap = S.watchMap || {};
+  S.watchlist = S.watchlist || [];
+  S.watchlistMap = S.watchlistMap || {};
+  S.libraries = S.libraries || [];
   applyMenuPrefs(); // search-first default order + user's hide/reorder choices
   // Live TV is LAZY now (owner: don't load everything at startup). The 19k-channel parse is
   // warmed the moment the user shows intent — hovering or focusing the Live TV rail item —
@@ -10247,6 +11190,9 @@ async function enterAppShell() {
   // Refresh restores the view from the URL hash; plain loads land on home.
   if (location.hash && location.hash !== '#/home') applyRoute();
   else switchView('home');
+  perfMark('shell-route-applied', { view: S.view });
+  bootReady();
+  hydrateAppShellData();
 }
 (async function boot() {
   const invite = new URLSearchParams(location.search).get('invite');

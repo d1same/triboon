@@ -140,11 +140,13 @@ const EPG_EMPTY_TTL_MS = 5 * 60000;
 const EPG_CACHE_STALE_MS = 7 * 24 * 3600000;
 const IPTV_WARM_DELAY_MS = 1500;
 const IPTV_WARM_XTREAM_GUIDE_MAX = 96;
-const LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS = 15000;
-const LIVE_REMUX_IDLE_TIMEOUT_MS = 15000;
+const LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS = 25000;
+const LIVE_REMUX_IDLE_TIMEOUT_MS = 45000;
+const IPTV_NATIVE_ERROR_TTL_MS = 30000;
 let iptvCache = { key: null, at: 0, channels: [] };
 let epgCache = { key: null, at: 0, byChannel: new Map(), byName: new Map() };
 let xtreamEpgCache = { key: null, byStream: new Map() };
+let iptvNativeErrorCache = new Map();
 const idHash = (s) => require('crypto').createHash('sha1').update(String(s)).digest('hex').slice(0, 12);
 
 async function mapLimit(items, limit, fn) {
@@ -182,6 +184,103 @@ function iptvNativeMime(url) {
   if (/\.m3u8(?:[?#]|$)/.test(u)) return 'application/x-mpegURL';
   if (/\.(?:ts|mpegts)(?:[?#]|$)/.test(u)) return 'video/mp2t';
   return '';
+}
+const IPTV_NATIVE_PROXY_UA = 'VLC/3.0.20 LibVLC/3.0.20';
+function iptvNativeLogLabel(meta = {}) {
+  const idx = Number.isInteger(meta.idx) ? `#${meta.idx}` : '#?';
+  const name = String(meta.name || 'channel').replace(/[\r\n]+/g, ' ').slice(0, 80);
+  return `${idx} "${name}"${meta.alt ? ' fallback' : ''}`;
+}
+function iptvNativeFailureReason(status, body) {
+  const text = String(body || '').toLowerCase();
+  if (text.includes('bot-protection') || text.includes('bot protection')) return 'provider bot-protection';
+  if (status === 401 || status === 403) return 'provider rejected this channel';
+  if (status === 404) return 'channel is offline';
+  return 'live stream unavailable';
+}
+function sendIptvNativeError(res, status, reason) {
+  const code = status >= 400 && status < 600 ? status : 502;
+  const body = JSON.stringify({ error: reason });
+  res.writeHead(code, {
+    'content-type': 'application/json',
+    'content-length': Buffer.byteLength(body),
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+    'x-triboon-iptv-error': reason,
+  });
+  res.end(body);
+}
+function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
+  let u;
+  try {
+    u = new URL(target);
+    if (!/^https?:$/.test(u.protocol)) throw new Error('unsupported protocol');
+  } catch {
+    console.error(`[iptv native] ${iptvNativeLogLabel(meta)} invalid upstream url`);
+    return send(ctx.res, 502, { error: 'invalid live stream url' });
+  }
+  if (hops > 5) {
+    console.error(`[iptv native] ${iptvNativeLogLabel(meta)} too many redirects`);
+    return send(ctx.res, 502, { error: 'too many live stream redirects' });
+  }
+  const lib = u.protocol === 'https:' ? https : http;
+  const failureKey = idHash(`${u.protocol}//${u.host}${u.pathname}`);
+  const cachedFailure = iptvNativeErrorCache.get(failureKey);
+  if (cachedFailure && cachedFailure.until > Date.now()) {
+    return sendIptvNativeError(ctx.res, cachedFailure.status, cachedFailure.reason);
+  }
+  const headers = {
+    'user-agent': IPTV_NATIVE_PROXY_UA,
+    accept: '*/*',
+    connection: 'close',
+  };
+  if (ctx.req.headers.range) headers.range = ctx.req.headers.range;
+  const up = lib.request(u, { method: 'GET', headers, agent: false }, (r) => {
+    if (r.statusCode >= 300 && r.statusCode < 400 && r.headers.location) {
+      r.resume();
+      return proxyIptvNative(ctx, new URL(r.headers.location, u).href, hops + 1, meta);
+    }
+    if ((r.statusCode || 0) >= 400) {
+      const chunks = [];
+      let len = 0;
+      r.on('data', (c) => {
+        if (len < 2048) chunks.push(c.slice(0, Math.max(0, 2048 - len)));
+        len += c.length;
+      });
+      r.on('end', () => {
+        const body = Buffer.concat(chunks).toString('utf8');
+        const reason = iptvNativeFailureReason(r.statusCode || 502, body);
+        iptvNativeErrorCache.set(failureKey, {
+          status: r.statusCode || 502,
+          reason,
+          until: Date.now() + IPTV_NATIVE_ERROR_TTL_MS,
+        });
+        if (iptvNativeErrorCache.size > 2000) iptvNativeErrorCache = new Map([...iptvNativeErrorCache].slice(-1000));
+        console.error(`[iptv native] ${iptvNativeLogLabel(meta)} upstream HTTP ${r.statusCode} (${reason})`);
+        if (!ctx.res.headersSent) sendIptvNativeError(ctx.res, r.statusCode || 502, reason);
+      });
+      return;
+    }
+    const out = {
+      'content-type': r.headers['content-type'] || 'application/octet-stream',
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+      'x-accel-buffering': 'no',
+    };
+    for (const h of ['content-length', 'content-range', 'accept-ranges']) {
+      if (r.headers[h]) out[h] = r.headers[h];
+    }
+    ctx.res.writeHead(r.statusCode || 502, out);
+    r.pipe(ctx.res);
+  });
+  up.on('error', (e) => {
+    console.error(`[iptv native] ${iptvNativeLogLabel(meta)} upstream error: ${String(e.message).slice(0, 160)}`);
+    if (!ctx.res.headersSent) send(ctx.res, 502, { error: 'live stream failed' });
+    else try { ctx.res.destroy(e); } catch {}
+  });
+  up.setTimeout(15000, () => up.destroy(new Error('live stream upstream timeout')));
+  ctx.req.on('close', () => up.destroy());
+  up.end();
 }
 let iptvRefreshing = false;
 let iptvWarmRunning = false;
@@ -689,7 +788,12 @@ function streamScopeOk(ctx, resource) {
 // decodes the source natively gets TRUE direct play — no server remux/transcode at all.
 function parseCaps(raw) {
   const caps = {};
-  for (const k of ['mkv', 'hevc', 'ac3', 'eac3', 'dts']) caps[k] = !!(raw && raw[k]);
+  for (const k of ['mkv', 'mp4', 'h264', 'hevc', 'av1', 'vp9', 'mpeg2', 'aac', 'ac3', 'eac3', 'dts', 'native']) {
+    caps[k] = !!(raw && raw[k]);
+  }
+  if (raw && raw.source) caps.source = String(raw.source).slice(0, 64);
+  if (raw && raw.model) caps.model = String(raw.model).slice(0, 64);
+  if (raw && raw.manufacturer) caps.manufacturer = String(raw.manufacturer).slice(0, 64);
   return caps;
 }
 function parseResolutionRank(raw) {
@@ -709,6 +813,22 @@ function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank } = {
     if (preferRank === 4) policy.exactResolutionRank = 4;
   }
   return policy;
+}
+function sourceDrawerCandidates(candidates) {
+  const allowed = candidates.filter((c) => !(c.reasons || []).some((r) => r.startsWith('over-size-cap')));
+  const out = new Map();
+  const keyOf = (c) => c.pickKey || c.nzbUrl || `${c.indexer || ''}:${c.name}:${c.sizeBytes || ''}`;
+  const add = (c) => {
+    const key = keyOf(c);
+    if (!out.has(key)) out.set(key, c);
+  };
+  // Best keeps the default press-play order. Largest makes high-quality remuxes visible
+  // when they are still under the admin cap, even if size shaping pushed them below row 250.
+  allowed.slice(0, 250).forEach(add);
+  allowed.filter((c) => c.sizeBytes > 0)
+    .sort((a, b) => (b.sizeBytes - a.sizeBytes) || (b.score - a.score))
+    .slice(0, 80).forEach(add);
+  return [...out.values()].slice(0, 360);
 }
 function mountPayload(vf, uid, extra = {}) {
   const st = auth.streamToken(uid, vf.id);
@@ -736,6 +856,22 @@ function localItemFor(ctx, libId, idx) {
   const item = rec && rec.items[parseInt(idx, 10)];
   if (!item || !item.file) return { status: 404, error: 'item not found' };
   return { lib, item };
+}
+function localItemPayload(ctx, libId, item) {
+  const { file, artFile, dir, ...rest } = item;
+  return {
+    ...rest,
+    streamUrl: file ? `/api/local/${libId}/${rest.idx}?t=${auth.stableStreamToken(ctx.user.id, `local:${libId}:${rest.idx}`)}` : null,
+    playUrl: file ? `/api/local/${libId}/${rest.idx}/play` : null,
+    artUrl: artFile ? `/api/local/${libId}/art/${rest.idx}?t=${auth.stableStreamToken(ctx.user.id, `art:${libId}:${rest.idx}`)}` : null,
+    thumbUrl: file ? `/api/local/${libId}/thumb/${rest.idx}?t=${auth.stableStreamToken(ctx.user.id, `thumb:${libId}:${rest.idx}`)}` : null,
+  };
+}
+function localItemSorter(sort) {
+  if (sort === 'title.asc') return (a, b) => String(a.title || '').localeCompare(String(b.title || ''));
+  if (sort === 'year.desc') return (a, b) => (+b.year || 0) - (+a.year || 0);
+  if (sort === 'rating.desc') return (a, b) => (+b.rating || 0) - (+a.rating || 0);
+  return (a, b) => (b.addedAt || 0) - (a.addedAt || 0);
 }
 function localMountFor(ctx, libId, idx, caps = {}) {
   const found = localItemFor(ctx, libId, idx);
@@ -1023,12 +1159,10 @@ const H = {
     );
     send(ctx.res, 200, {
       errors,
-      // Over-size-cap releases (MANUAL admin cap only) are hidden outright, unlike health
-      // warnings which stay visible with a chip — a size-capped release can never be the
-      // right pick. The slice is deliberately deep (250): the drawer exists to OVERRIDE
-      // auto-pick, and a tight slice made every big remux unfindable (they rank ~140th
-      // behind the swarm of sane-size variants; the 4K toggle narrows the view client-side).
-      candidates: candidates.filter((c) => !(c.reasons || []).some((r) => r.startsWith('over-size-cap'))).slice(0, 250).map((c) => ({
+      // Sources is an override surface, not the auto-pick queue. Keep the best-ranked rows,
+      // but also include the largest allowed rows so a 50GB cap really lets the admin choose
+      // a 48-50GB release manually.
+      candidates: sourceDrawerCandidates(candidates).map((c) => ({
         name: c.name, pickKey: c.pickKey, sizeBytes: c.sizeBytes, indexer: c.indexer, score: c.score,
         reasons: c.reasons, attributes: c.attributes, streamClass: c.streamClass, health: c.health,
       })),
@@ -1231,12 +1365,7 @@ const H = {
     if (!ch) return send(ctx.res, 404, { error: 'channel not found - open Live TV first' });
     const alt = ctx.url.searchParams.get('alt') === '1';
     const target = alt && ch.nativeFallbackUrl ? ch.nativeFallbackUrl : (ch.nativeUrl || ch.url);
-    ctx.res.writeHead(302, {
-      location: target,
-      'cache-control': 'no-store',
-      'x-content-type-options': 'nosniff',
-    });
-    ctx.res.end();
+    return proxyIptvNative(ctx, target, 0, { idx: ch.idx, name: ch.name, alt });
   },
 
   iptvStream: async (ctx) => {
@@ -1708,6 +1837,7 @@ function importTraktWatchlist(uid, items) {
 // once the real duration is known.
 async function traktSyncDown(uid) {
   if (!trakt.status(uid).linked) { const e = new Error('Trakt is not linked'); e.status = 400; throw e; }
+  const pushed = await trakt.flushOutbox(uid).catch((e) => ({ sent: 0, failed: 1, pending: 0, error: e.message }));
   const [watched, playback, watchlist] = await Promise.all([trakt.pullWatched(uid), trakt.pullPlayback(uid), trakt.pullWatchlist(uid)]);
   // Artwork for the continue-watching imports (they become visible cards) — best effort.
   const art = {};
@@ -1744,7 +1874,9 @@ async function traktSyncDown(uid) {
   });
   const nWatchlist = importTraktWatchlist(uid, watchlist);
   store.update('trakt', {}, (all) => { if (all[uid]) all[uid].syncedAt = Date.now(); return all; });
-  return { ok: true, watched: nWatched, playback: nPlayback, watchlist: nWatchlist, totalWatched: watched.length, totalWatchlist: watchlist.length };
+  return { ok: true, watched: nWatched, playback: nPlayback, watchlist: nWatchlist,
+    pushed: pushed.sent || 0, pendingPush: pushed.pending || 0,
+    totalWatched: watched.length, totalWatchlist: watchlist.length };
 }
 // Auto-resync every 6h per linked user — one user per tick keeps the calls gentle.
 function traktSyncTick() {
@@ -1753,7 +1885,7 @@ function traktSyncTick() {
     if (!tok || (tok.syncedAt && Date.now() - tok.syncedAt < 6 * 3600000)) continue;
     store.update('trakt', {}, (all) => { if (all[uid]) all[uid].syncedAt = Date.now(); return all; }); // claim before the async work
     traktSyncDown(uid)
-      .then((r) => { if (r.watched || r.playback || r.watchlist) console.log(`[trakt] sync: +${r.watched} watched, +${r.playback} in-progress, +${r.watchlist} watchlist`); })
+      .then((r) => { if (r.watched || r.playback || r.watchlist || r.pushed) console.log(`[trakt] sync: +${r.watched} watched, +${r.playback} in-progress, +${r.watchlist} watchlist, ${r.pushed} pushed`); })
       .catch((e) => console.error('[trakt sync]', e.message));
     break;
   }
@@ -1769,20 +1901,50 @@ Object.assign(H, {
     if (lib && lib.users && lib.users.length && ctx.user.role !== 'admin' && !lib.users.includes(ctx.user.id)) {
       return send(ctx.res, 404, { error: 'library not found' });
     }
-    const rec = store.read('libitems', {})[ctx.m[1]];
+    const libId = ctx.m[1];
+    const rec = store.read('libitems', {})[libId];
     if (!rec) return send(ctx.res, 200, { items: [] });
+    const limitRaw = ctx.url.searchParams.get('limit');
+    if (limitRaw !== null) {
+      const limit = Math.max(1, Math.min(500, parseInt(limitRaw, 10) || 15));
+      const offset = Math.max(0, parseInt(ctx.url.searchParams.get('offset') || '0', 10) || 0);
+      const sort = ctx.url.searchParams.get('sort') || 'added.desc';
+      const genre = parseInt(ctx.url.searchParams.get('genre') || '0', 10) || 0;
+      const showIdxRaw = ctx.url.searchParams.get('showIdx');
+      const showIdx = showIdxRaw === null ? null : parseInt(showIdxRaw, 10);
+      const top = (rec.items || []).filter((x) => x.kind !== 'episode');
+      const genres = [...new Set(top.flatMap((x) => x.genres || []))].sort((a, b) => a - b);
+      let items;
+      let show = null;
+      if (Number.isFinite(showIdx)) {
+        show = (rec.items || []).find((x) => x.idx === showIdx) || null;
+        items = (rec.items || [])
+          .filter((x) => x.kind === 'episode' && x.showIdx === showIdx)
+          .sort((a, b) => ((+a.s || 0) - (+b.s || 0)) || ((+a.e || 0) - (+b.e || 0)) || String(a.title || '').localeCompare(String(b.title || '')));
+      } else {
+        items = top;
+        if (genre) items = items.filter((x) => (x.genres || []).includes(genre));
+        items = items.slice().sort(localItemSorter(sort));
+      }
+      const total = items.length;
+      const page = items.slice(offset, offset + limit).map((item) => localItemPayload(ctx, libId, item));
+      return send(ctx.res, 200, {
+        scannedAt: rec.scannedAt,
+        offset,
+        limit,
+        total,
+        hasMore: offset + page.length < total,
+        genres,
+        show: show ? localItemPayload(ctx, libId, show) : null,
+        items: page,
+      });
+    }
     // Never expose absolute paths — items are addressed by index, with tokenized URLs.
     // STABLE tokens: identical URLs across requests for ~6h, so the browser's HTTP cache
     // actually holds the covers instead of re-downloading them on every visit.
     send(ctx.res, 200, {
       scannedAt: rec.scannedAt,
-      items: rec.items.map(({ file, artFile, dir, ...rest }) => ({
-        ...rest,
-        streamUrl: file ? `/api/local/${ctx.m[1]}/${rest.idx}?t=${auth.stableStreamToken(ctx.user.id, `local:${ctx.m[1]}:${rest.idx}`)}` : null,
-        playUrl: file ? `/api/local/${ctx.m[1]}/${rest.idx}/play` : null,
-        artUrl: artFile ? `/api/local/${ctx.m[1]}/art/${rest.idx}?t=${auth.stableStreamToken(ctx.user.id, `art:${ctx.m[1]}:${rest.idx}`)}` : null,
-        thumbUrl: file ? `/api/local/${ctx.m[1]}/thumb/${rest.idx}?t=${auth.stableStreamToken(ctx.user.id, `thumb:${ctx.m[1]}:${rest.idx}`)}` : null,
-      })),
+      items: rec.items.map((item) => localItemPayload(ctx, libId, item)),
     });
   },
 

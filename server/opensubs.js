@@ -141,11 +141,20 @@ function inferredEditionFromDuration(durationSeconds) {
   // when the release name omits "Extended"; subtitles labeled theatrical are usually wrong.
   return n >= 4 * 3600 ? 'extended' : '';
 }
+function episodeKey(s) {
+  const x = String(s || '').toLowerCase();
+  const se = /\bs(\d{1,2})\s?e(\d{1,3})\b/i.exec(x);
+  if (se) return `s${String(+se[1]).padStart(2, '0')}e${String(+se[2]).padStart(2, '0')}`;
+  const xe = /\b(\d{1,2})x(\d{1,3})\b/i.exec(x);
+  if (xe) return `s${String(+xe[1]).padStart(2, '0')}e${String(+xe[2]).padStart(2, '0')}`;
+  return '';
+}
 function pickSub(data, releaseName = '', { durationSeconds = 0 } = {}) {
   const mine = String(releaseName).toLowerCase();
   const myWeb = /\bweb[-. ]?(dl|rip)?\b|amzn|nf(?=[. ])|hulu|atvp|dsnp/i.test(mine);
   const myBlu = /blu-?ray|bd(rip|remux)?\b|remux/i.test(mine);
   const myGroup = (/-([a-z0-9]+)(?:\.(mkv|mp4|avi))?$/i.exec(mine) || [])[1];
+  const myEpisode = episodeKey(mine);
   const myEdition = editionTags(mine);
   const inferredEdition = inferredEditionFromDuration(durationSeconds);
   if (inferredEdition) myEdition.add(inferredEdition);
@@ -153,8 +162,12 @@ function pickSub(data, releaseName = '', { durationSeconds = 0 } = {}) {
     if (!d || !d.url) return -Infinity;
     const rel = `${d.display || ''} ${d.media || ''}`.toLowerCase();
     const relEdition = editionTags(rel);
+    const relEpisode = episodeKey(rel);
     let s = 0;
     if (!/^(srt|vtt|)$/i.test(String(d.format || ''))) s -= 500; // sub/idx etc. can't become VTT
+    if (myEpisode && relEpisode === myEpisode) s += 260;
+    else if (myEpisode && relEpisode) s -= 1000;
+    else if (myEpisode) s -= 80;
     if (myGroup && rel.includes(myGroup)) s += 200;              // same release group ≈ frame-exact
     for (const tag of myEdition) {
       if (relEdition.has(tag)) s += 180;
@@ -202,6 +215,7 @@ function rankSubs(data, releaseName = '', { durationSeconds = 0 } = {}) {
   const myWeb = /\bweb[-. ]?(dl|rip)?\b|amzn|nf(?=[. ])|hulu|atvp|dsnp/i.test(mine);
   const myBlu = /blu-?ray|bd(rip|remux)?\b|remux/i.test(mine);
   const myGroup = (/-([a-z0-9]+)(?:\.(mkv|mp4|avi))?$/i.exec(mine) || [])[1];
+  const myEpisode = episodeKey(mine);
   const myEdition = editionTags(mine);
   const inferredEdition = inferredEditionFromDuration(durationSeconds);
   if (inferredEdition) myEdition.add(inferredEdition);
@@ -209,8 +223,12 @@ function rankSubs(data, releaseName = '', { durationSeconds = 0 } = {}) {
     if (!d || !d.url) return -Infinity;
     const rel = `${d.display || ''} ${d.media || ''}`.toLowerCase();
     const relEdition = editionTags(rel);
+    const relEpisode = episodeKey(rel);
     let s = 0;
     if (!/^(srt|vtt|)$/i.test(String(d.format || ''))) s -= 500;
+    if (myEpisode && relEpisode === myEpisode) s += 260;
+    else if (myEpisode && relEpisode) s -= 1000;
+    else if (myEpisode) s -= 80;
     if (myGroup && rel.includes(myGroup)) s += 200;
     for (const tag of myEdition) {
       if (relEdition.has(tag)) s += 180;

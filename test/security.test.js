@@ -446,6 +446,13 @@ test('libraries v2: kinds, edit, folder scan, and Range-served local playback', 
   assert.ok(items.json.items.every((i) => i.file === undefined), 'absolute paths never exposed');
   assert.ok(items.json.items.every((i) => /^\/api\/local\//.test(i.streamUrl)), 'tokenized stream URLs');
   assert.ok(items.json.items.every((i) => /^\/api\/local\/\w+\/\d+\/play$/.test(i.playUrl)), 'local items expose full player prep URLs');
+  const firstPage = await httpJson(srv.port, 'GET', `/api/libraries/${made.json.id}/items?offset=0&limit=1&sort=title.asc`, null, admin);
+  assert.strictEqual(firstPage.status, 200);
+  assert.strictEqual(firstPage.json.items.length, 1);
+  assert.strictEqual(firstPage.json.total, 2);
+  assert.strictEqual(firstPage.json.hasMore, true);
+  assert.deepStrictEqual(firstPage.json.items.map((i) => i.title), ['Another Film']);
+  assert.ok(firstPage.json.items.every((i) => i.file === undefined), 'paged local items never expose absolute paths');
 
   // Local playback with Range.
   const it0 = items.json.items.find((i) => i.title === 'Some Movie');
@@ -630,15 +637,38 @@ test('library scan v3: rescans keep addedAt + matches, count new files; stable c
 
 test('iptv: M3U parsed into grouped channels; stream URLs tokenized; admin-set url redacted', async () => {
   const http2 = require('http');
-  const m3u = `#EXTM3U
+  let origin = '';
+  let nativeUa = '';
+  const m3uSrv = http2.createServer((req, res) => {
+    if (req.url === '/secret-user/playlist.m3u') {
+      const m3u = `#EXTM3U
 #EXTINF:-1 tvg-logo="http://x/l1.png" group-title="News",News One
-http://upstream.example/news1.m3u8
+${origin}/news1.m3u8
 #EXTINF:-1 group-title="Sports",Sports Plus
-http://upstream.example/sports.ts
+${origin}/sports.ts
 `;
-  const m3uSrv = http2.createServer((req, res) => { res.writeHead(200); res.end(m3u); });
+      res.writeHead(200);
+      res.end(m3u);
+      return;
+    }
+    if (req.url === '/news1.m3u8') {
+      nativeUa = req.headers['user-agent'] || '';
+      res.writeHead(200, { 'content-type': 'application/x-mpegURL' });
+      res.end('#EXTM3U\n#EXT-X-VERSION:3\n');
+      return;
+    }
+    if (req.url === '/sports.ts') {
+      nativeUa = req.headers['user-agent'] || '';
+      res.writeHead(200, { 'content-type': 'video/mp2t' });
+      res.end('TS-BYTES');
+      return;
+    }
+    res.writeHead(404);
+    res.end('nope');
+  });
   await new Promise((r) => m3uSrv.listen(0, '127.0.0.1', r));
-  const m3uUrl = `http://127.0.0.1:${m3uSrv.address().port}/secret-user/playlist.m3u`;
+  origin = `http://127.0.0.1:${m3uSrv.address().port}`;
+  const m3uUrl = `${origin}/secret-user/playlist.m3u`;
   await httpJson(srv.port, 'POST', '/api/settings', { iptvUrl: m3uUrl }, admin);
 
   const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
@@ -651,8 +681,10 @@ http://upstream.example/sports.ts
   assert.ok(ch.json.channels.every((c) => c.nativeFallbackUrl === undefined), 'plain M3U does not invent a second native source');
   assert.deepStrictEqual(ch.json.channels.map((c) => c.nativeMime), ['application/x-mpegURL', 'video/mp2t']);
   const native = await httpRaw(srv.port, ch.json.channels[0].nativeUrl);
-  assert.strictEqual(native.status, 302, 'native URL redirects Android to the upstream stream');
-  assert.strictEqual(native.headers.location, 'http://upstream.example/news1.m3u8');
+  assert.strictEqual(native.status, 200, 'native URL proxies the upstream stream instead of redirecting Android to it');
+  assert.strictEqual(native.headers.location, undefined, 'native proxy must not leak the upstream stream URL');
+  assert.strictEqual(native.body.toString('utf8'), '#EXTM3U\n#EXT-X-VERSION:3\n');
+  assert.ok(nativeUa.includes('VLC/'), 'native proxy should use a provider-compatible server-side user agent');
   const wrongTok = /[?&]t=([^&]+)/.exec(ch.json.channels[0].nativeUrl)[1];
   const wrongNative = await httpRaw(srv.port, ch.json.channels[1].nativeUrl.replace(/[?&]t=[^&]+/, '?t=' + wrongTok));
   assert.strictEqual(wrongNative.status, 401, 'native stream token is bound to the selected channel');
@@ -665,13 +697,67 @@ http://upstream.example/sports.ts
   m3uSrv.close();
 });
 
+test('iptv: native proxy logs upstream errors without leaking provider urls', async () => {
+  const http2 = require('http');
+  let origin = '';
+  let brokenHits = 0;
+  const m3uSrv = http2.createServer((req, res) => {
+    if (req.url === '/secret-user/playlist.m3u') {
+      res.writeHead(200);
+      res.end(`#EXTM3U
+#EXTINF:-1 group-title="News",Broken News
+${origin}/secret-user/broken.ts
+`);
+      return;
+    }
+    if (req.url === '/secret-user/broken.ts') {
+      brokenHits++;
+      res.writeHead(403, { 'content-type': 'text/plain' });
+      res.end('[Bot-Protection]: You are banned for repeated abuse');
+      return;
+    }
+    res.writeHead(404);
+    res.end('nope');
+  });
+  await new Promise((r) => m3uSrv.listen(0, '127.0.0.1', r));
+  origin = `http://127.0.0.1:${m3uSrv.address().port}`;
+  const prevErr = console.error;
+  const logs = [];
+  console.error = (...args) => logs.push(args.map(String).join(' '));
+  try {
+    await httpJson(srv.port, 'POST', '/api/settings', { iptvMode: 'm3u', iptvUrl: `${origin}/secret-user/playlist.m3u` }, admin);
+    const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    assert.strictEqual(ch.json.channels.length, 1);
+    const native = await httpRaw(srv.port, ch.json.channels[0].nativeUrl);
+    assert.strictEqual(native.status, 403, 'native proxy forwards the provider failure status');
+    assert.strictEqual(native.headers['x-triboon-iptv-error'], 'provider bot-protection');
+    const repeat = await httpRaw(srv.port, ch.json.channels[0].nativeUrl);
+    assert.strictEqual(repeat.status, 403, 'cached native failure keeps the same status');
+    assert.strictEqual(brokenHits, 1, 'cached provider rejections prevent Exo retry storms from hammering upstream');
+    const joined = logs.join('\n');
+    assert.match(joined, /\[iptv native\].*"Broken News".*HTTP 403.*provider bot-protection/, 'log identifies the failing channel, status, and sanitized reason');
+    assert.doesNotMatch(joined, /secret-user|broken\.ts|playlist\.m3u/, 'log must not leak provider URL paths or credentials');
+  } finally {
+    console.error = prevErr;
+    await httpJson(srv.port, 'POST', '/api/settings', { iptvUrl: null }, admin);
+    m3uSrv.close();
+  }
+});
+
 test('iptv: Xtream API channels + short-EPG now/next + per-user favorites; creds redacted', async () => {
   const http2 = require('http');
   const b64 = (s) => Buffer.from(s).toString('base64');
   const nowS = Math.floor(Date.now() / 1000);
   let epgCalls = 0;
+  let liveHits = [];
   const xt = http2.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
+    if (u.pathname.startsWith('/live/')) {
+      liveHits.push({ path: u.pathname, ua: req.headers['user-agent'] || '' });
+      res.writeHead(200, { 'content-type': u.pathname.endsWith('.m3u8') ? 'application/x-mpegURL' : 'video/mp2t' });
+      res.end(u.pathname.endsWith('.m3u8') ? '#EXTM3U\n' : 'XTREAM-TS');
+      return;
+    }
     assert.strictEqual(u.searchParams.get('username'), 'xtuser');
     assert.strictEqual(u.searchParams.get('password'), 'xtpass');
     const action = u.searchParams.get('action');
@@ -714,11 +800,16 @@ test('iptv: Xtream API channels + short-EPG now/next + per-user favorites; creds
   assert.ok(/^\/api\/iptv\/native\/\d+\?alt=1&t=/.test(news.nativeFallbackUrl));
   assert.strictEqual(news.nativeFallbackMime, 'application/x-mpegURL', 'Xtream native playback should retain HLS as an Exo fallback');
   const native = await httpRaw(srv.port, news.nativeUrl);
-  assert.strictEqual(native.status, 302);
-  assert.strictEqual(native.headers.location, `${host}/live/xtuser/xtpass/101.ts`);
+  assert.strictEqual(native.status, 200);
+  assert.strictEqual(native.headers.location, undefined, 'native proxy must not expose Xtream credentials in a redirect');
+  assert.strictEqual(native.body.toString('utf8'), 'XTREAM-TS');
+  assert.deepStrictEqual(liveHits.at(-1).path, '/live/xtuser/xtpass/101.ts');
+  assert.ok(liveHits.at(-1).ua.includes('VLC/'), 'native Xtream proxy should use the server-side compatibility user agent');
   const fallback = await httpRaw(srv.port, news.nativeFallbackUrl);
-  assert.strictEqual(fallback.status, 302);
-  assert.strictEqual(fallback.headers.location, `${host}/live/xtuser/xtpass/101.m3u8`);
+  assert.strictEqual(fallback.status, 200);
+  assert.strictEqual(fallback.headers.location, undefined, 'native fallback proxy must not expose Xtream credentials in a redirect');
+  assert.strictEqual(fallback.body.toString('utf8'), '#EXTM3U\n');
+  assert.deepStrictEqual(liveHits.at(-1).path, '/live/xtuser/xtpass/101.m3u8');
 
   // EPG now/next decodes the Xtream base64 listings.
   const epg = await httpJson(srv.port, 'GET', `/api/iptv/epg/${news.idx}`, null, admin);
@@ -943,6 +1034,37 @@ test('settings: max release size — manual caps hide oversized sources; off res
   assert.strictEqual(open.candidates.length, 2, 'cap off → both releases show again');
 
   // restore: auto mode + whatever indexers were configured before this test
+  await httpJson(srv.port, 'POST', '/api/settings', { sizeCapMode: 'auto', indexers: prevIx }, admin);
+  ix.close();
+});
+
+test('search: Sources includes largest allowed releases beyond the best-score window', async () => {
+  const http2 = require('http');
+  const small = Array.from({ length: 300 }, (_, i) =>
+    `<item><title>Big.Visible.2024.1080p.WEB-DL.H.264-NTb.${String(i).padStart(3, '0')}</title><enclosure url="http://x/s${i}" length="${5000000000 + i}"/></item>`);
+  const ix = http2.createServer((req, res) => {
+    res.writeHead(200);
+    res.end(`<?xml version="1.0"?><rss xmlns:newznab="http://x"><channel>
+      ${small.join('\n')}
+      <item><title>Big.Visible.2024.1080p.BluRay.REMUX.AVC-FraMeSToR</title><enclosure url="http://x/big" length="49000000000"/></item>
+      <item><title>Big.Visible.2024.1080p.BluRay.REMUX.AVC-EbP</title><enclosure url="http://x/over" length="51000000000"/></item>
+    </channel></rss>`);
+  });
+  await new Promise((r) => ix.listen(0, '127.0.0.1', r));
+  const prevIx = (await httpJson(srv.port, 'GET', '/api/settings', null, admin)).json.indexers;
+  await httpJson(srv.port, 'POST', '/api/settings', {
+    indexers: [{ name: 'big-visible', url: `http://127.0.0.1:${ix.address().port}`, apikey: 'x' }],
+    sizeCapMode: 'manual', sizeCap1080Gb: 50, sizeCap4kGb: 80,
+  }, admin);
+
+  const r = (await httpJson(srv.port, 'GET', '/api/search?q=' + encodeURIComponent('Big Visible 2024'), null, admin)).json;
+  const names = r.candidates.map((c) => c.name);
+  assert.ok(names.includes('Big.Visible.2024.1080p.BluRay.REMUX.AVC-FraMeSToR'),
+    '49GB release under the 50GB cap stays visible in Sources even if size shaping ranks it low');
+  assert.ok(!names.includes('Big.Visible.2024.1080p.BluRay.REMUX.AVC-EbP'),
+    '51GB release over the 50GB cap is still hidden');
+  assert.ok(r.candidates.length > 250, 'Sources response includes largest allowed rows in addition to the best rows');
+
   await httpJson(srv.port, 'POST', '/api/settings', { sizeCapMode: 'auto', indexers: prevIx }, admin);
   ix.close();
 });
@@ -1622,11 +1744,18 @@ test('fetchUrl: response-size cap aborts oversized bodies instead of buffering t
 test('trakt: device link, scrobble forward, watchlist push + import', async () => {
   const http2 = require('http');
   const calls = [];
+  let retryScrobbleFailed = false;
   const mock = http2.createServer((req, res) => {
     let body = '';
     req.on('data', (c) => { body += c; });
     req.on('end', () => {
-      calls.push({ path: req.url, method: req.method, body: body ? JSON.parse(body) : null, auth: req.headers.authorization });
+      const parsed = body ? JSON.parse(body) : null;
+      calls.push({ path: req.url, method: req.method, body: parsed, auth: req.headers.authorization });
+      if (req.url === '/scrobble/stop' && parsed && parsed.movie && parsed.movie.ids.tmdb === 604 && !retryScrobbleFailed) {
+        retryScrobbleFailed = true;
+        res.writeHead(503, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'temporary' }));
+      }
       res.writeHead(200, { 'content-type': 'application/json' });
       if (req.url === '/oauth/device/code') return res.end(JSON.stringify({ device_code: 'dev123', user_code: 'ABCD1234', verification_url: 'https://trakt.tv/activate', interval: 1, expires_in: 600 }));
       if (req.url === '/oauth/device/token') return res.end(JSON.stringify({ access_token: 'acc1', refresh_token: 'ref1', expires_in: 7776000 }));
@@ -1657,11 +1786,17 @@ test('trakt: device link, scrobble forward, watchlist push + import', async () =
   // Watch save → scrobble (fire-and-forget, give it a beat).
   await httpJson(srv.port, 'POST', '/api/watch', { key: 'tmdb:movie:603', position: 300, duration: 600, meta: {} }, admin);
   await new Promise((r) => setTimeout(r, 200));
-  const scrob = calls.find((c) => c.path === '/scrobble/pause');
+  const scrob = calls.find((c) => c.path === '/scrobble/stop' && c.body && c.body.movie && c.body.movie.ids.tmdb === 603);
   assert.ok(scrob, 'scrobble forwarded to trakt');
   assert.strictEqual(scrob.body.movie.ids.tmdb, 603);
   assert.strictEqual(scrob.body.progress, 50);
   assert.strictEqual(scrob.auth, 'Bearer acc1');
+  assert.ok(!calls.some((c) => c.path === '/scrobble/pause'), 'resume progress uses Trakt stop scrobble, not the removed pause endpoint');
+
+  // A temporary Trakt failure is queued and retried by the next sync.
+  await httpJson(srv.port, 'POST', '/api/watch', { key: 'tmdb:movie:604', position: 120, duration: 600, meta: {} }, admin);
+  await new Promise((r) => setTimeout(r, 200));
+  assert.strictEqual(calls.filter((c) => c.path === '/scrobble/stop' && c.body && c.body.movie && c.body.movie.ids.tmdb === 604).length, 1);
 
   // Watchlist toggle → push.
   await httpJson(srv.port, 'POST', '/api/watchlist', { key: 'tmdb:tv:1399', on: true, meta: {} }, admin);
@@ -1690,6 +1825,7 @@ test('trakt: device link, scrobble forward, watchlist push + import', async () =
   // Manual re-sync: idempotent (everything already imported → 0 new) and never downgrades.
   const sync = await httpJson(srv.port, 'POST', '/api/trakt/sync', {}, admin);
   assert.strictEqual(sync.status, 200);
+  assert.strictEqual(sync.json.pushed, 1, 'queued Trakt export retried during sync');
   assert.strictEqual(sync.json.watched, 0, 're-sync imports nothing twice');
   assert.strictEqual(sync.json.watchlist, 0, 'watchlist import is idempotent');
   assert.strictEqual(sync.json.totalWatched, 3);
@@ -1715,7 +1851,7 @@ test('trakt: device link, scrobble forward, watchlist push + import', async () =
   assert.strictEqual((await httpJson(srv.port, 'GET', '/api/trakt/status', null, admin)).json.linked, false);
   await httpJson(srv.port, 'POST', '/api/watchlist', { key: 'tmdb:tv:1399', on: false }, admin);
   await httpJson(srv.port, 'POST', '/api/watchlist', { key: 'tmdb:movie:4242', on: false }, admin);
-  for (const k of ['tmdb:movie:777', 'tmdb:tv:888:s1e1', 'tmdb:tv:888:s1e2', 'tmdb:movie:999', 'tmdb:tv:1234:s2e3', 'tmdb:movie:603']) {
+  for (const k of ['tmdb:movie:777', 'tmdb:tv:888:s1e1', 'tmdb:tv:888:s1e2', 'tmdb:movie:999', 'tmdb:tv:1234:s2e3', 'tmdb:movie:603', 'tmdb:movie:604']) {
     await httpJson(srv.port, 'POST', '/api/watch', { key: k, remove: true }, admin);
   }
   delete process.env.TRAKT_BASE;
