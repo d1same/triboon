@@ -40,6 +40,7 @@ import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -107,6 +108,8 @@ public class MainActivity extends Activity {
     private SeekBar nativeSeek;
     private TextView nativeElapsed;
     private TextView nativeTime;
+    private HorizontalScrollView nativeEpisodeStrip;
+    private LinearLayout nativeEpisodeList;
     private ImageButton nativePlayBtn;
     private ImageButton nativeRewBtn;
     private ImageButton nativeFwdBtn;
@@ -128,10 +131,14 @@ public class MainActivity extends Activity {
     private String nativeFallbackUrl = "";
     private String nativeFallbackMime = "";
     private String nativePlaybackTitle = "Triboon";
+    private String nativePlaybackSubline = "";
     private String nativePlaybackBackdropUrl = "";
     private boolean nativeTriedFallback = false;
     private boolean nativeHasNext = false;
     private boolean nativeHasQualityChoices = false;
+    private final java.util.ArrayList<NativeEpisode> nativeEpisodes = new java.util.ArrayList<>();
+    private int nativeEpisodeIndex = 0;
+    private boolean nativeEpisodeStripOpen = false;
     private String nativeSubtitleUrl = "";
     private String nativeSubtitleLang = "";
     private String nativeSubtitleLabel = "";
@@ -454,6 +461,11 @@ public class MainActivity extends Activity {
             @android.webkit.JavascriptInterface
             public void updateSubtitleChoices(String json) {
                 runOnUiThread(() -> updateNativeSubtitleChoices(json));
+            }
+
+            @android.webkit.JavascriptInterface
+            public void updateEpisodeChoices(String json) {
+                runOnUiThread(() -> updateNativeEpisodeChoices(json));
             }
 
             @android.webkit.JavascriptInterface
@@ -807,6 +819,22 @@ public class MainActivity extends Activity {
         nativeChrome.addView(controls, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        nativeEpisodeStrip = new HorizontalScrollView(this);
+        nativeEpisodeStrip.setHorizontalScrollBarEnabled(false);
+        nativeEpisodeStrip.setFillViewport(false);
+        nativeEpisodeStrip.setVisibility(View.GONE);
+        nativeEpisodeStrip.setClipChildren(false);
+        nativeEpisodeStrip.setClipToPadding(false);
+        nativeEpisodeStrip.setPadding(0, dp(16), 0, 0);
+        nativeEpisodeList = new LinearLayout(this);
+        nativeEpisodeList.setOrientation(LinearLayout.HORIZONTAL);
+        nativeEpisodeList.setClipChildren(false);
+        nativeEpisodeList.setClipToPadding(false);
+        nativeEpisodeStrip.addView(nativeEpisodeList, new HorizontalScrollView.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        nativeChrome.addView(nativeEpisodeStrip, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(198)));
+
         FrameLayout.LayoutParams chromeLp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                 android.view.Gravity.BOTTOM);
@@ -1068,6 +1096,7 @@ public class MainActivity extends Activity {
             backdropUrl = j.optString("backdropUrl", "");
             long startMs = Math.max(0, Math.round(j.optDouble("start", 0) * 1000));
             long startOffsetMs = Math.max(0, Math.round(j.optDouble("startOffset", 0) * 1000));
+            String episodeLabel = j.optString("episodeLabel", "");
             String subtitleUrl = j.optString("subtitleUrl", "");
             String subtitleLang = j.optString("subtitleLang", "");
             String subtitleLabel = j.optString("subtitleLabel", "");
@@ -1079,7 +1108,18 @@ public class MainActivity extends Activity {
             boolean quietSeek = j.optBoolean("quietSeek", false);
             long knownDurationMs = Math.max(0L, Math.round(j.optDouble("duration", 0) * 1000));
             buildNativePlayerLayer();
-            releaseNativePlayer(false, guide);
+            boolean reuseQuietVideo = quietSeek && "video".equals(mode) && nativePlayer != null
+                    && nativePlayerView != null && nativePlayerOpen() && !guide;
+            if (!reuseQuietVideo) {
+                releaseNativePlayer(false, guide);
+            } else {
+                nativeProgress.removeCallbacks(nativeHideChrome);
+                hideNativeLoading();
+                if (nativeSheet != null) {
+                    nativeSheet.setVisibility(View.GONE);
+                    nativeSheet.removeAllViews();
+                }
+            }
             nativeMode = mode;
             nativeKind = j.optString("kind", "direct");
             nativeQualityLabel = qualityLabel.isEmpty() ? ("live".equals(mode) ? "LIVE" : "1080p") : qualityLabel;
@@ -1088,6 +1128,7 @@ public class MainActivity extends Activity {
             nativeFallbackUrl = fallbackUrl;
             nativeFallbackMime = fallbackMime;
             nativePlaybackTitle = title == null || title.isEmpty() ? "Triboon" : title;
+            nativePlaybackSubline = episodeLabel == null ? "" : episodeLabel;
             nativePlaybackBackdropUrl = backdropUrl == null ? "" : backdropUrl;
             nativeTriedFallback = false;
             nativeLiveUnhealthySinceMs = 0L;
@@ -1108,19 +1149,23 @@ public class MainActivity extends Activity {
                     : subtitleLabel;
             nativeHasWyzieSubtitle = !subtitleUrl.isEmpty();
             applyNativeSubtitleChoices(j.optJSONArray("subtitleChoices"));
+            updateNativeEpisodeChoices(new org.json.JSONObject()
+                    .put("episodes", j.optJSONArray("episodeChoices"))
+                    .toString());
 
-            DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
-                    .setBufferDurationsMs("video".equals(mode) ? 6000 : 8000,
-                            "video".equals(mode) ? 60000 : 60000,
-                            "video".equals(mode) ? 700 : 700,
-                            "video".equals(mode) ? 1800 : 4000)
-                    .setPrioritizeTimeOverSizeThresholds(true)
-                    .build();
-            nativePlayer = new ExoPlayer.Builder(this)
-                    .setMediaSourceFactory(nativeMediaSourceFactory())
-                    .setLoadControl(loadControl)
-                    .build();
-            nativePlayer.addListener(new Player.Listener() {
+            if (!reuseQuietVideo) {
+                DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
+                        .setBufferDurationsMs("video".equals(mode) ? 6000 : 8000,
+                                "video".equals(mode) ? 60000 : 60000,
+                                "video".equals(mode) ? 700 : 700,
+                                "video".equals(mode) ? 1800 : 4000)
+                        .setPrioritizeTimeOverSizeThresholds(true)
+                        .build();
+                nativePlayer = new ExoPlayer.Builder(this)
+                        .setMediaSourceFactory(nativeMediaSourceFactory())
+                        .setLoadControl(loadControl)
+                        .build();
+                nativePlayer.addListener(new Player.Listener() {
                 @Override public void onPlayerError(PlaybackException error) {
                     String msg = nativePlaybackErrorMessage(error);
                     long pos = nativePosSeconds();
@@ -1168,13 +1213,17 @@ public class MainActivity extends Activity {
                     scheduleNativeChromeHide();
                 }
             });
+            }
 
             nativePlayerView.setPlayer(nativePlayer);
             nativePlayerTitle.setText(title);
             nativePlayerTitle.setVisibility(View.INVISIBLE);
             if (nativeChromeTitle != null) nativeChromeTitle.setText(title);
-            if ("live".equals(mode)) {
-                nativePlayerSubline.setText(source.isEmpty() ? "Live TV" : source);
+            String subline = "live".equals(mode)
+                    ? (source.isEmpty() ? "Live TV" : source)
+                    : nativePlaybackSubline;
+            if (!subline.isEmpty()) {
+                nativePlayerSubline.setText(subline);
                 nativePlayerSubline.setVisibility(View.VISIBLE);
             } else {
                 nativePlayerSubline.setText("");
@@ -1250,15 +1299,31 @@ public class MainActivity extends Activity {
     private final Runnable nativeHideChrome = new Runnable() {
         @Override public void run() {
             if (!nativePlayerOpen() || nativeChrome == null) return;
-            if (nativeUserSeeking || nativeSheetOpen()) return;
-            if (nativeControlShade != null) nativeControlShade.setVisibility(View.GONE);
-            if (nativeMetaBar != null) nativeMetaBar.setVisibility(View.GONE);
-            nativeChrome.setVisibility(View.GONE);
-            nativeTop.setVisibility(View.GONE);
-            nativePlayerLayer.requestFocus();
-            setNativeSubtitleLift(false);
+            if (nativeUserSeeking || nativeSheetOpen() || nativeEpisodeStripOpen) return;
+            hideNativeChromeNow();
         }
     };
+
+    private void hideNativeChromeNow() {
+        if (nativeControlShade != null) nativeControlShade.setVisibility(View.GONE);
+        if (nativeMetaBar != null) nativeMetaBar.setVisibility(View.GONE);
+        if (nativeChrome != null) nativeChrome.setVisibility(View.GONE);
+        if (nativeTop != null) nativeTop.setVisibility(View.GONE);
+        parkNativeHiddenFocusOnSeek();
+        setNativeSubtitleLift(false);
+    }
+
+    private boolean dismissNativeChromeForBack() {
+        if (nativeChrome == null || nativeChrome.getVisibility() != View.VISIBLE) return false;
+        nativeProgress.removeCallbacks(nativeHideChrome);
+        hideNativeChromeNow();
+        return true;
+    }
+
+    private void parkNativeHiddenFocusOnSeek() {
+        nativeSeekDpadMode = nativeCanSeekVod();
+        if (nativePlayerLayer != null) nativePlayerLayer.requestFocus();
+    }
 
     private void setNativeSubtitleLift(boolean lift) {
         if (nativePlayerView != null && nativePlayerView.getSubtitleView() != null) {
@@ -1562,8 +1627,8 @@ public class MainActivity extends Activity {
             }
         }
         if (target == null) return false;
-        target.requestFocus();
         showNativeChrome(false);
+        target.requestFocus();
         return true;
     }
 
@@ -1615,6 +1680,7 @@ public class MainActivity extends Activity {
         if (!nativePlayerOpen()) return false;
         int code = e.getKeyCode();
         if (handleNativeSheetKey(e)) return true;
+        if (handleNativeEpisodeStripKey(e)) return true;
         if (nativeGuideMode) return false;
         if ("live".equals(nativeMode) && (code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN)) {
             if (e.getAction() == KeyEvent.ACTION_UP) {
@@ -1639,6 +1705,7 @@ public class MainActivity extends Activity {
             }
             if (code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN) {
                 if (e.getAction() == KeyEvent.ACTION_DOWN) {
+                    if (code == KeyEvent.KEYCODE_DPAD_DOWN && isNativeControl(getCurrentFocus()) && openNativeEpisodeStrip()) return true;
                     moveNativeVerticalFocus(code == KeyEvent.KEYCODE_DPAD_UP ? -1 : 1);
                 }
                 return true;
@@ -1660,8 +1727,13 @@ public class MainActivity extends Activity {
             nativeSeekBy(code == KeyEvent.KEYCODE_DPAD_RIGHT ? 30000 : -10000);
             return true;
         }
-        if (code == KeyEvent.KEYCODE_DPAD_DOWN || code == KeyEvent.KEYCODE_DPAD_LEFT
-                || code == KeyEvent.KEYCODE_DPAD_RIGHT) {
+        if (code == KeyEvent.KEYCODE_DPAD_DOWN) {
+            if (nativeSeekDpadMode && nativeCanSeekVod()) return focusNativeDefaultControl();
+            if (openNativeEpisodeStrip()) return true;
+            showNativeChrome(true);
+            return true;
+        }
+        if (code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT) {
             showNativeChrome(true);
             return true;
         }
@@ -1745,7 +1817,7 @@ public class MainActivity extends Activity {
         long pos = nativePosSeconds();
         long dur = nativeDurSeconds();
         boolean isLive = "live".equals(nativeMode);
-        boolean canSeek = !isLive && nativeVodSeekable();
+        boolean canSeek = !isLive && nativeCanSeekVod();
         if (!nativeUserSeeking) {
             nativeSeek.setEnabled(canSeek);
             nativeSeek.setVisibility(isLive ? View.GONE : View.VISIBLE);
@@ -2113,6 +2185,248 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void clearNativeEpisodes() {
+        nativeEpisodes.clear();
+        nativeEpisodeIndex = 0;
+        nativeEpisodeStripOpen = false;
+        if (nativeEpisodeStrip != null) {
+            nativeEpisodeStrip.animate().cancel();
+            nativeEpisodeStrip.setAlpha(1f);
+            nativeEpisodeStrip.setTranslationY(0f);
+            nativeEpisodeStrip.setVisibility(View.GONE);
+        }
+        if (nativeEpisodeList != null) nativeEpisodeList.removeAllViews();
+    }
+
+    private void updateNativeEpisodeChoices(String json) {
+        try {
+            Object parsed = new org.json.JSONTokener(json == null ? "{}" : json).nextValue();
+            org.json.JSONArray episodes = null;
+            if (parsed instanceof org.json.JSONArray) {
+                episodes = (org.json.JSONArray) parsed;
+            } else if (parsed instanceof org.json.JSONObject) {
+                episodes = ((org.json.JSONObject) parsed).optJSONArray("episodes");
+            }
+            nativeEpisodes.clear();
+            nativeEpisodeIndex = 0;
+            if (episodes != null) {
+                for (int i = 0; i < episodes.length(); i++) {
+                    org.json.JSONObject ep = episodes.optJSONObject(i);
+                    if (ep == null) continue;
+                    NativeEpisode item = new NativeEpisode(
+                            ep.optInt("index", i),
+                            ep.optString("tag", ""),
+                            ep.optString("name", ""),
+                            ep.optString("still", ""),
+                            ep.optBoolean("current", false),
+                            ep.optBoolean("watched", false));
+                    if (item.current) nativeEpisodeIndex = nativeEpisodes.size();
+                    nativeEpisodes.add(item);
+                }
+            }
+            renderNativeEpisodeStrip(false);
+        } catch (Exception ignored) {
+            clearNativeEpisodes();
+        }
+    }
+
+    private GradientDrawable nativeEpisodeCardBg(boolean focused, boolean current) {
+        GradientDrawable d = new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                focused
+                        ? new int[]{0x55221934, 0x22050309}
+                        : current
+                                ? new int[]{0x33261912, 0x11050309}
+                                : new int[]{0x00000000, 0x00000000});
+        d.setCornerRadius(dp(16));
+        return d;
+    }
+
+    private void animateNativeEpisodeStripIn() {
+        if (nativeEpisodeStrip == null) return;
+        nativeEpisodeStrip.animate().cancel();
+        nativeEpisodeStrip.setVisibility(View.VISIBLE);
+        nativeEpisodeStrip.setAlpha(0f);
+        nativeEpisodeStrip.setTranslationY(dp(24));
+        nativeEpisodeStrip.animate()
+                .alpha(1f)
+                .translationY(0f)
+                .setDuration(190)
+                .start();
+    }
+
+    private void animateNativeEpisodeStripOut() {
+        if (nativeEpisodeStrip == null) return;
+        nativeEpisodeStrip.animate().cancel();
+        nativeEpisodeStrip.animate()
+                .alpha(0f)
+                .translationY(dp(18))
+                .setDuration(120)
+                .withEndAction(() -> {
+                    if (!nativeEpisodeStripOpen && nativeEpisodeStrip != null) {
+                        nativeEpisodeStrip.setVisibility(View.GONE);
+                        nativeEpisodeStrip.setAlpha(1f);
+                        nativeEpisodeStrip.setTranslationY(0f);
+                    }
+                })
+                .start();
+    }
+
+    private void loadNativeEpisodeStill(ImageView view, String url) {
+        if (url == null || url.isEmpty()) return;
+        new Thread(() -> {
+            try {
+                HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+                c.setConnectTimeout(4500);
+                c.setReadTimeout(6000);
+                c.setRequestProperty("Accept", "image/*,*/*");
+                Bitmap bm = BitmapFactory.decodeStream(c.getInputStream());
+                if (bm != null) runOnUiThread(() -> {
+                    if (nativePlayerOpen()) view.setImageBitmap(bm);
+                });
+            } catch (Exception ignored) {}
+        }).start();
+    }
+
+    private void renderNativeEpisodeStrip(boolean open) {
+        if (nativeEpisodeStrip == null || nativeEpisodeList == null) return;
+        nativeEpisodeList.removeAllViews();
+        boolean wasOpen = nativeEpisodeStripOpen;
+        nativeEpisodeStripOpen = open && "video".equals(nativeMode) && nativeEpisodes.size() > 0;
+        if (nativeEpisodeStripOpen) {
+            nativeEpisodeStrip.setVisibility(View.VISIBLE);
+        } else {
+            nativeEpisodeStrip.animate().cancel();
+            nativeEpisodeStrip.setAlpha(1f);
+            nativeEpisodeStrip.setTranslationY(0f);
+            nativeEpisodeStrip.setVisibility(View.GONE);
+        }
+        if (nativeEpisodes.isEmpty()) return;
+        for (int i = 0; i < nativeEpisodes.size(); i++) {
+            NativeEpisode ep = nativeEpisodes.get(i);
+            LinearLayout card = new LinearLayout(this);
+            card.setOrientation(LinearLayout.VERTICAL);
+            card.setFocusable(true);
+            card.setFocusableInTouchMode(true);
+            card.setClickable(true);
+            card.setClipChildren(false);
+            card.setClipToPadding(false);
+            card.setPadding(dp(2), dp(2), dp(2), dp(2));
+            card.setBackground(nativeEpisodeCardBg(i == nativeEpisodeIndex && nativeEpisodeStripOpen, ep.current));
+            card.setElevation(i == nativeEpisodeIndex && nativeEpisodeStripOpen ? dp(10) : (ep.current ? dp(5) : 0));
+            card.setOnKeyListener((v, code, e) -> handleNativeSurfaceKey(e));
+            final int idx = i;
+            card.setOnFocusChangeListener((v, hasFocus) -> {
+                if (hasFocus) {
+                    nativeEpisodeIndex = idx;
+                    showNativeChrome(false);
+                    v.setBackground(nativeEpisodeCardBg(true, nativeEpisodes.get(idx).current));
+                    v.setElevation(dp(12));
+                    v.setTranslationY(-dp(3));
+                    if (nativeEpisodeStrip != null) nativeEpisodeStrip.smoothScrollTo(Math.max(0, v.getLeft() - dp(60)), 0);
+                } else {
+                    v.setBackground(nativeEpisodeCardBg(false, nativeEpisodes.get(idx).current));
+                    v.setElevation(nativeEpisodes.get(idx).current ? dp(5) : 0);
+                    v.setTranslationY(0f);
+                }
+            });
+            card.setOnClickListener(v -> chooseNativeEpisode(idx));
+
+            ImageView still = new ImageView(this);
+            still.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            GradientDrawable stillBg = new GradientDrawable();
+            stillBg.setColor(0xFF16101F);
+            stillBg.setCornerRadius(dp(16));
+            still.setBackground(stillBg);
+            still.setClipToOutline(true);
+            card.addView(still, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(126)));
+            loadNativeEpisodeStill(still, ep.still);
+
+            TextView label = new TextView(this);
+            label.setText((ep.watched ? "WATCHED  " : "") + ep.tag);
+            label.setSingleLine(true);
+            label.setTextColor(0xEFFFCC67);
+            label.setTextSize(10);
+            label.setTypeface(Typeface.DEFAULT_BOLD);
+            label.setPadding(dp(1), dp(7), dp(1), 0);
+            card.addView(label, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+            TextView name = new TextView(this);
+            name.setText(ep.name.isEmpty() ? "Episode " + (idx + 1) : ep.name);
+            name.setMaxLines(2);
+            name.setTextColor(0xFFF3EFF7);
+            name.setTextSize(12);
+            name.setTypeface(Typeface.DEFAULT_BOLD);
+            name.setPadding(dp(1), dp(1), dp(1), 0);
+            card.addView(name, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(236), dp(182));
+            lp.setMargins(0, 0, dp(14), 0);
+            nativeEpisodeList.addView(card, lp);
+        }
+        if (nativeEpisodeStripOpen) {
+            focusNativeEpisode(nativeEpisodeIndex);
+            if (!wasOpen) animateNativeEpisodeStripIn();
+        }
+    }
+
+    private boolean openNativeEpisodeStrip() {
+        if (!"video".equals(nativeMode) || nativeEpisodes.isEmpty() || nativeSheetOpen()) return false;
+        showNativeChrome(false);
+        renderNativeEpisodeStrip(true);
+        return true;
+    }
+
+    private boolean closeNativeEpisodeStrip() {
+        if (!nativeEpisodeStripOpen) return false;
+        nativeEpisodeStripOpen = false;
+        animateNativeEpisodeStripOut();
+        focusNativeDefaultControl();
+        return true;
+    }
+
+    private boolean focusNativeEpisode(int idx) {
+        if (nativeEpisodeList == null || nativeEpisodeList.getChildCount() == 0) return false;
+        nativeEpisodeIndex = Math.max(0, Math.min(nativeEpisodeList.getChildCount() - 1, idx));
+        View child = nativeEpisodeList.getChildAt(nativeEpisodeIndex);
+        if (child != null) {
+            child.requestFocus();
+            if (nativeEpisodeStrip != null) nativeEpisodeStrip.smoothScrollTo(Math.max(0, child.getLeft() - dp(60)), 0);
+            return true;
+        }
+        return false;
+    }
+
+    private void chooseNativeEpisode(int idx) {
+        if (idx < 0 || idx >= nativeEpisodes.size()) return;
+        NativeEpisode ep = nativeEpisodes.get(idx);
+        if (ep.current) {
+            closeNativeEpisodeStrip();
+            return;
+        }
+        web.evaluateJavascript("window.__tvNativeEpisodeSelect && window.__tvNativeEpisodeSelect("
+                + ep.index + "," + nativePosSeconds() + "," + nativeDurSeconds() + ")", null);
+    }
+
+    private boolean handleNativeEpisodeStripKey(KeyEvent e) {
+        if (!nativeEpisodeStripOpen) return false;
+        int code = e.getKeyCode();
+        if (code != KeyEvent.KEYCODE_DPAD_LEFT && code != KeyEvent.KEYCODE_DPAD_RIGHT
+                && code != KeyEvent.KEYCODE_DPAD_UP && code != KeyEvent.KEYCODE_DPAD_DOWN
+                && code != KeyEvent.KEYCODE_DPAD_CENTER && code != KeyEvent.KEYCODE_ENTER
+                && code != KeyEvent.KEYCODE_BACK) return false;
+        if (e.getAction() != KeyEvent.ACTION_DOWN) return true;
+        if (code == KeyEvent.KEYCODE_DPAD_LEFT) return focusNativeEpisode(nativeEpisodeIndex - 1);
+        if (code == KeyEvent.KEYCODE_DPAD_RIGHT) return focusNativeEpisode(nativeEpisodeIndex + 1);
+        if (code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_BACK) return closeNativeEpisodeStrip();
+        if (code == KeyEvent.KEYCODE_DPAD_DOWN) return focusNativeEpisode(nativeEpisodeIndex);
+        chooseNativeEpisode(nativeEpisodeIndex);
+        return true;
+    }
+
     private interface NativeChoiceHandler {
         void choose(int index);
     }
@@ -2125,6 +2439,23 @@ public class MainActivity extends Activity {
             this.start = start;
             this.end = end;
             this.text = text;
+        }
+    }
+
+    private static final class NativeEpisode {
+        final int index;
+        final String tag;
+        final String name;
+        final String still;
+        final boolean current;
+        final boolean watched;
+        NativeEpisode(int index, String tag, String name, String still, boolean current, boolean watched) {
+            this.index = index;
+            this.tag = tag == null ? "" : tag;
+            this.name = name == null ? "" : name;
+            this.still = still == null ? "" : still;
+            this.current = current;
+            this.watched = watched;
         }
     }
 
@@ -2210,6 +2541,8 @@ public class MainActivity extends Activity {
         }
         int syncLaterIndex = -1;
         int syncEarlierIndex = -1;
+        int syncLaterBigIndex = -1;
+        int syncEarlierBigIndex = -1;
         int resetIndex = -1;
         if (trackType == C.TRACK_TYPE_TEXT) {
             syncLaterIndex = labels.size();
@@ -2217,6 +2550,12 @@ public class MainActivity extends Activity {
             selected.add(false);
             syncEarlierIndex = labels.size();
             labels.add("Sync: subtitles earlier -0.5s" + nativeSubShiftLabel());
+            selected.add(false);
+            syncLaterBigIndex = labels.size();
+            labels.add("Sync: subtitles later +5s" + nativeSubShiftLabel());
+            selected.add(false);
+            syncEarlierBigIndex = labels.size();
+            labels.add("Sync: subtitles earlier -5s" + nativeSubShiftLabel());
             selected.add(false);
             if (Math.abs(nativeSubtitleShift) >= 0.05f) {
                 resetIndex = labels.size();
@@ -2229,6 +2568,8 @@ public class MainActivity extends Activity {
         for (int i = 0; i < selected.size(); i++) selectedArray[i] = selected.get(i);
         final int later = syncLaterIndex;
         final int earlier = syncEarlierIndex;
+        final int laterBig = syncLaterBigIndex;
+        final int earlierBig = syncEarlierBigIndex;
         final int reset = resetIndex;
         showNativeChoiceSheet(trackType == C.TRACK_TYPE_TEXT ? "Subtitles" : "Audio",
                 labelArray, selectedArray, which -> {
@@ -2238,6 +2579,12 @@ public class MainActivity extends Activity {
                     } else if (which == earlier) {
                         nativeSheetRestoreIndex = earlier;
                         shiftNativeSubtitles(-0.5f);
+                    } else if (which == laterBig) {
+                        nativeSheetRestoreIndex = laterBig;
+                        shiftNativeSubtitles(5f);
+                    } else if (which == earlierBig) {
+                        nativeSheetRestoreIndex = earlierBig;
+                        shiftNativeSubtitles(-5f);
                     } else if (which == reset) {
                         nativeSheetRestoreIndex = later >= 0 ? later : 0;
                         resetNativeSubtitleShift();
@@ -2594,6 +2941,7 @@ public class MainActivity extends Activity {
             nativeSheet.setVisibility(View.GONE);
             nativeSheet.removeAllViews();
         }
+        clearNativeEpisodes();
         if (nativeControlShade != null) nativeControlShade.setVisibility(View.GONE);
         if (nativeMetaBar != null) nativeMetaBar.setVisibility(View.GONE);
         nativeSheetReturnFocus = null;
@@ -2615,6 +2963,7 @@ public class MainActivity extends Activity {
         nativeFallbackUrl = "";
         nativeFallbackMime = "";
         nativePlaybackTitle = "Triboon";
+        nativePlaybackSubline = "";
         nativePlaybackBackdropUrl = "";
         nativeTriedFallback = false;
         nativeLiveUnhealthySinceMs = 0L;
@@ -2791,7 +3140,8 @@ public class MainActivity extends Activity {
             if (code == KeyEvent.KEYCODE_BACK) {
                 if (e.getAction() == KeyEvent.ACTION_UP) {
                     if (nativeSheetOpen()) hideNativeSheet();
-                    else closeNativePlayback(true);
+                    else if (nativeEpisodeStripOpen) closeNativeEpisodeStrip();
+                    else if (!dismissNativeChromeForBack()) closeNativePlayback(true);
                 }
                 return true;
             }

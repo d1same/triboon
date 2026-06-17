@@ -910,18 +910,46 @@ function parseEpisodeKey(key) {
 function aired(date) {
   return !!date && String(date).slice(0, 10) <= new Date().toISOString().slice(0, 10);
 }
+function watchRowsForProfileFromAll(all, uid, profile = 'default') {
+  const active = profile || 'default';
+  const rows = new Map();
+  const add = (prefix, accept) => {
+    for (const [fullKey, value] of Object.entries(all)) {
+      if (!fullKey.startsWith(prefix) || !accept(value)) continue;
+      const key = fullKey.slice(prefix.length);
+      rows.set(key, { key, ...value });
+    }
+  };
+  // Trakt is linked to the account, not a local profile. Imported rows stay in the default
+  // bucket and are exposed as a fallback so every selected profile sees Trakt history/progress,
+  // while normal local default-profile playback remains isolated.
+  if (active !== 'default') add(`${uid}:default:`, (value) => value && value.fromTrakt);
+  add(`${uid}:${active}:`, () => true);
+  return [...rows.values()].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+}
+function watchRowForKeyFromAll(all, uid, profile, key) {
+  const active = profile || 'default';
+  const own = all[`${uid}:${active}:${key}`];
+  if (own) return own;
+  const fallback = all[`${uid}:default:${key}`];
+  return active !== 'default' && fallback && fallback.fromTrakt ? fallback : null;
+}
+function deleteWatchKeyForProfile(all, uid, profile, key) {
+  const active = profile || 'default';
+  delete all[`${uid}:${active}:${key}`];
+  const fallbackKey = `${uid}:default:${key}`;
+  if (active !== 'default' && all[fallbackKey] && all[fallbackKey].fromTrakt) delete all[fallbackKey];
+}
 async function nextWatchEpisodes(uid, profile = 'default') {
   if (!settings.get().tmdbKey) return [];
   const all = store.read('watch', {});
-  const prefix = `${uid}:${profile}:`;
+  const rows = watchRowsForProfileFromAll(all, uid, profile);
   const byShow = {};
   const inProgress = new Set();
-  for (const [fullKey, w] of Object.entries(all)) {
-    if (!fullKey.startsWith(prefix)) continue;
-    const key = fullKey.slice(prefix.length);
-    const ep = parseEpisodeKey(key);
+  for (const w of rows) {
+    const ep = parseEpisodeKey(w.key);
     if (!ep) continue;
-    if (!w.watched && (w.position || 0) > 30) { inProgress.add(ep.showId); continue; }
+    if (!w.watched && ((w.position || 0) > 30 || (w.traktPct || 0) > 2)) { inProgress.add(ep.showId); continue; }
     if (!w.watched) continue;
     const cur = byShow[ep.showId];
     if (!cur || ep.season > cur.season || (ep.season === cur.season && ep.episode > cur.episode)) byShow[ep.showId] = { ...ep, w };
@@ -939,8 +967,8 @@ async function nextWatchEpisodes(uid, profile = 'default') {
           (s.season_number > top.season || ep.episode_number > top.episode) && aired(ep.air_date))
           .sort((a, b) => a.episode_number - b.episode_number);
         const next = eps.find((ep) => {
-          const rec = all[`${prefix}tmdb:tv:${showId}:s${s.season_number}e${ep.episode_number}`];
-          return !(rec && (rec.watched || (rec.position || 0) > 30));
+          const rec = watchRowForKeyFromAll(all, uid, profile, `tmdb:tv:${showId}:s${s.season_number}e${ep.episode_number}`);
+          return !(rec && (rec.watched || (rec.position || 0) > 30 || (rec.traktPct || 0) > 2));
         });
         if (!next) continue;
         const title = String((d.name || (top.w.meta && top.w.meta.title) || '')).replace(/\s*—\s*S\d+E\d+.*$/i, '');
@@ -1831,7 +1859,8 @@ function importTraktWatchlist(uid, items) {
 }
 
 // ---- Trakt sync-DOWN: watchlist + watched history + in-progress playback → local state ----
-// Writes into the DEFAULT profile (Trakt accounts are per user; profiles are a local idea).
+// Writes imported rows into the DEFAULT bucket as account-level Trakt fallback data. Profile
+// reads merge only these fromTrakt rows; local non-Trakt default-profile playback stays isolated.
 // Never downgrades: locally-watched stays watched, a real local position beats an imported %.
 // Trakt stores playback progress as a PERCENT — kept as traktPct; the player seeks to it
 // once the real duration is known.
@@ -2033,12 +2062,7 @@ Object.assign(H, {
   watchList: async (ctx) => {
     const all = store.read('watch', {});
     const profile = ctx.url.searchParams.get('profile') || 'default';
-    const prefix = `${ctx.user.id}:${profile}:`;
-    const items = Object.entries(all)
-      .filter(([k]) => k.startsWith(prefix))
-      .map(([k, v]) => ({ key: k.slice(prefix.length), ...v }))
-      .sort((a, b) => b.updatedAt - a.updatedAt);
-    send(ctx.res, 200, items);
+    send(ctx.res, 200, watchRowsForProfileFromAll(all, ctx.user.id, profile));
   },
 
   watchNext: async (ctx) => {
@@ -2052,7 +2076,8 @@ Object.assign(H, {
     const profile = b.profile || 'default';
     const k = `${ctx.user.id}:${profile}:${b.key}`;
     store.update('watch', {}, (all) => {
-      if (b.remove) { delete all[k]; return all; } // "Remove from Continue Watching"
+      if (b.remove) { deleteWatchKeyForProfile(all, ctx.user.id, profile, b.key); return all; } // "Remove from Continue Watching"
+      if (profile !== 'default' && b.watched === false && b.unwatch) deleteWatchKeyForProfile(all, ctx.user.id, profile, b.key);
       all[k] = {
         position: b.position || 0, duration: b.duration || 0, watched: !!b.watched,
         meta: b.meta || {}, updatedAt: nextStamp(),
@@ -2128,7 +2153,7 @@ Object.assign(H, {
       for (const it of items) {
         if (!it || !it.key) continue;
         const k = prefix + it.key;
-        if (b.watched === false) { delete all[k]; }
+        if (b.watched === false) { deleteWatchKeyForProfile(all, ctx.user.id, profile, it.key); }
         else { all[k] = { position: 0, duration: it.duration || 0, watched: true, meta: it.meta || {}, updatedAt: nextStamp() }; }
       }
       return all;

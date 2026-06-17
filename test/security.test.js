@@ -1782,6 +1782,7 @@ test('trakt: device link, scrobble forward, watchlist push + import', async () =
   const st = await httpJson(srv.port, 'GET', '/api/trakt/status', null, admin);
   assert.strictEqual(st.json.linked, true);
   assert.strictEqual(st.json.user, 'owner-trakt');
+  const traktProfile = (await httpJson(srv.port, 'POST', '/api/me/profiles', { name: 'Trakt Living Room', level: 3 }, admin)).json;
 
   // Watch save → scrobble (fire-and-forget, give it a beat).
   await httpJson(srv.port, 'POST', '/api/watch', { key: 'tmdb:movie:603', position: 300, duration: 600, meta: {} }, admin);
@@ -1822,6 +1823,11 @@ test('trakt: device link, scrobble forward, watchlist push + import', async () =
   assert.ok(halfEp && !halfEp.watched && halfEp.traktPct === 22.2, 'Trakt in-progress episode imports into Continue Watching');
   assert.strictEqual(halfEp.meta.title, 'Half Show — S02E03');
 
+  const profileWatch = (await httpJson(srv.port, 'GET', `/api/watch?profile=${traktProfile.id}`, null, admin)).json;
+  assert.ok(profileWatch.find((w) => w.key === 'tmdb:movie:777' && w.watched), 'Trakt watched history is visible to the active profile');
+  assert.ok(profileWatch.find((w) => w.key === 'tmdb:movie:999' && w.traktPct === 41.5), 'Trakt playback progress is visible to the active profile Continue Watching row');
+  assert.ok(!profileWatch.some((w) => w.key === 'tmdb:movie:603'), 'local default-profile playback does not leak into another profile');
+
   // Manual re-sync: idempotent (everything already imported → 0 new) and never downgrades.
   const sync = await httpJson(srv.port, 'POST', '/api/trakt/sync', {}, admin);
   assert.strictEqual(sync.status, 200);
@@ -1836,6 +1842,12 @@ test('trakt: device link, scrobble forward, watchlist push + import', async () =
   assert.strictEqual(pull.json.imported, 0);
   assert.strictEqual(pull.json.total, 1);
 
+  await httpJson(srv.port, 'POST', '/api/watch', { key: 'tmdb:movie:999', remove: true, profile: traktProfile.id }, admin);
+  const profileAfterRemove = (await httpJson(srv.port, 'GET', `/api/watch?profile=${traktProfile.id}`, null, admin)).json;
+  assert.ok(!profileAfterRemove.some((w) => w.key === 'tmdb:movie:999'), 'removing imported Continue Watching from a profile clears the Trakt fallback');
+  const defaultAfterRemove = (await httpJson(srv.port, 'GET', '/api/watch', null, admin)).json;
+  assert.ok(!defaultAfterRemove.some((w) => w.key === 'tmdb:movie:999'), 'profile removal also clears the shared imported fallback row');
+
   // Explicit ✓ (no playback context) → /sync/history; explicit unwatch → history/remove.
   await httpJson(srv.port, 'POST', '/api/watch', { key: 'tmdb:movie:603', watched: true, position: 0, duration: 0, meta: {} }, admin);
   await new Promise((r) => setTimeout(r, 200));
@@ -1849,6 +1861,7 @@ test('trakt: device link, scrobble forward, watchlist push + import', async () =
   // Cleanup (incl. the imported records so later suites see a clean slate).
   await httpJson(srv.port, 'POST', '/api/trakt/unlink', {}, admin);
   assert.strictEqual((await httpJson(srv.port, 'GET', '/api/trakt/status', null, admin)).json.linked, false);
+  await httpJson(srv.port, 'POST', `/api/me/profiles/${traktProfile.id}/delete`, { password: 'hunter22' }, admin);
   await httpJson(srv.port, 'POST', '/api/watchlist', { key: 'tmdb:tv:1399', on: false }, admin);
   await httpJson(srv.port, 'POST', '/api/watchlist', { key: 'tmdb:movie:4242', on: false }, admin);
   for (const k of ['tmdb:movie:777', 'tmdb:tv:888:s1e1', 'tmdb:tv:888:s1e2', 'tmdb:movie:999', 'tmdb:tv:1234:s2e3', 'tmdb:movie:603', 'tmdb:movie:604']) {
