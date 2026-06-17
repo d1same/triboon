@@ -562,7 +562,7 @@ body.screensaverOn{cursor:none}
   linear-gradient(0deg,rgba(5,3,9,.94) 0%,rgba(5,3,9,.24) 48%,rgba(5,3,9,.7) 100%)}
 #screensaver .ssBrand{position:absolute;left:clamp(28px,5vw,86px);top:clamp(24px,5vh,58px);display:flex;align-items:flex-start;
   width:clamp(156px,13vw,250px);height:clamp(54px,4.7vw,92px);overflow:hidden}
-#screensaver .ssBrand img{width:100%;height:auto;display:block;transform:translateY(-14%);
+#screensaver .ssBrand img{width:100%;height:auto;display:block;
   filter:drop-shadow(0 10px 28px rgba(193,59,214,.32)) drop-shadow(0 14px 44px rgba(0,0,0,.56))}
 #screensaver .ssClock{position:absolute;left:clamp(32px,6vw,96px);bottom:clamp(36px,8vh,92px);max-width:min(720px,72vw);
   text-shadow:0 10px 48px rgba(0,0,0,.72)}
@@ -2494,7 +2494,7 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
 <div id="screensaver" aria-hidden="true">
   <div class="ssBg" id="ssBg"></div>
   <div class="ssWash"></div>
-  <div class="ssBrand"><img src="triboon.png" alt="Triboon" onerror="this.onerror=null;this.src='T-Logo.png'"></div>
+  <div class="ssBrand"><img src="triboon-screensaver.png" alt="Triboon" onerror="this.onerror=null;this.src='triboon.png'"></div>
   <div class="ssDeck" id="ssDeck"></div>
   <div class="ssClock">
     <div id="ssTime"></div>
@@ -6240,6 +6240,10 @@ function subShiftLabel() {
   const p = S.playing; const n = p ? +(p._subShift || 0) : 0;
   return n ? ` (${n > 0 ? '+' : ''}${n.toFixed(1)}s)` : '';
 }
+function subSyncHeadingLabel() {
+  const p = S.playing; const n = p ? +(p._subShift || 0) : 0;
+  return n ? `Subtitle sync ${n > 0 ? '+' : ''}${n.toFixed(1)}s` : 'Subtitle sync';
+}
 // Preferred-language + surround setup once the track list lands.
 function applyTrackPrefs() {
   const p = S.playing; if (!p || !p.tracks) return;
@@ -6383,13 +6387,11 @@ function openTrackMenu(kind, restore = {}) {
     }
     const syncHead = document.createElement('div');
     syncHead.className = 'tmHead';
-    syncHead.textContent = 'Subtitle sync';
+    syncHead.textContent = subSyncHeadingLabel();
     m.appendChild(syncHead);
     if (p.subTrack !== null && p.subTrack !== undefined) {
-      mkRow('Later +0.5s' + subShiftLabel(), false, () => shiftSubs(0.5), { keepOpen: true, key: 'subs-later' });
-      mkRow('Earlier -0.5s' + subShiftLabel(), false, () => shiftSubs(-0.5), { keepOpen: true, key: 'subs-earlier' });
-      mkRow('Later +5s' + subShiftLabel(), false, () => shiftSubs(5), { keepOpen: true, key: 'subs-later-big' });
-      mkRow('Earlier -5s' + subShiftLabel(), false, () => shiftSubs(-5), { keepOpen: true, key: 'subs-earlier-big' });
+      mkRow('Subtitles later', false, () => shiftSubs(0.5), { keepOpen: true, key: 'subs-later' });
+      mkRow('Subtitles earlier', false, () => shiftSubs(-0.5), { keepOpen: true, key: 'subs-earlier' });
       if (p._subShift) mkRow('Reset sync', false, () => resetSubShift(), { keepOpen: true, key: 'subs-reset' });
     } else {
       mkRow('Turn subtitles on first', false, () => toast('Turn subtitles on first'), { keepOpen: true, key: 'subs-sync-disabled' });

@@ -149,8 +149,29 @@ function episodeKey(s) {
   if (xe) return `s${String(+xe[1]).padStart(2, '0')}e${String(+xe[2]).padStart(2, '0')}`;
   return '';
 }
+function subtitleMatchText(d) {
+  return [
+    d && d.display,
+    d && d.media,
+    d && d.release,
+    d && d.fileName,
+    d && d.filename,
+    d && d.file,
+    d && d.origin,
+    d && d.matchedRelease,
+    d && d.matchedFilter,
+  ].filter(Boolean).join(' ');
+}
+function releaseKey(s) {
+  return String(s || '')
+    .split(/[\\/]/).pop()
+    .replace(/\.(mkv|mp4|m4v|avi|mov|ts|srt|vtt)$/i, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+}
 function pickSub(data, releaseName = '', { durationSeconds = 0 } = {}) {
   const mine = String(releaseName).toLowerCase();
+  const myReleaseKey = releaseKey(releaseName);
   const myWeb = /\bweb[-. ]?(dl|rip)?\b|amzn|nf(?=[. ])|hulu|atvp|dsnp/i.test(mine);
   const myBlu = /blu-?ray|bd(rip|remux)?\b|remux/i.test(mine);
   const myGroup = (/-([a-z0-9]+)(?:\.(mkv|mp4|avi))?$/i.exec(mine) || [])[1];
@@ -160,11 +181,14 @@ function pickSub(data, releaseName = '', { durationSeconds = 0 } = {}) {
   if (inferredEdition) myEdition.add(inferredEdition);
   const score = (d) => {
     if (!d || !d.url) return -Infinity;
-    const rel = `${d.display || ''} ${d.media || ''}`.toLowerCase();
+    const rel = subtitleMatchText(d).toLowerCase();
+    const relKey = releaseKey(rel);
     const relEdition = editionTags(rel);
     const relEpisode = episodeKey(rel);
     let s = 0;
     if (!/^(srt|vtt|)$/i.test(String(d.format || ''))) s -= 500; // sub/idx etc. can't become VTT
+    if (myReleaseKey && relKey && relKey.includes(myReleaseKey)) s += 650; // Stremio-style exact file/release hint
+    else if (myReleaseKey && relKey && myReleaseKey.includes(relKey) && relKey.length > 20) s += 220;
     if (myEpisode && relEpisode === myEpisode) s += 260;
     else if (myEpisode && relEpisode) s -= 1000;
     else if (myEpisode) s -= 80;
@@ -207,7 +231,7 @@ function subtitleGroupLabel(d) {
   return m && m[1] ? m[1] : '';
 }
 function subtitleVariantLabel(d) {
-  const rel = `${d && d.display || ''} ${d && d.media || ''}`.toLowerCase();
+  const rel = subtitleMatchText(d).toLowerCase();
   const tags = editionTags(rel);
   const parts = [];
   const ep = episodeKey(rel);
@@ -229,6 +253,7 @@ function rankSubs(data, releaseName = '', { durationSeconds = 0 } = {}) {
   const picked = pickSub(data, releaseName, { durationSeconds });
   const bestKey = picked && (picked.id != null ? String(picked.id) : String(picked.url || ''));
   const mine = String(releaseName).toLowerCase();
+  const myReleaseKey = releaseKey(releaseName);
   const myWeb = /\bweb[-. ]?(dl|rip)?\b|amzn|nf(?=[. ])|hulu|atvp|dsnp/i.test(mine);
   const myBlu = /blu-?ray|bd(rip|remux)?\b|remux/i.test(mine);
   const myGroup = (/-([a-z0-9]+)(?:\.(mkv|mp4|avi))?$/i.exec(mine) || [])[1];
@@ -238,11 +263,14 @@ function rankSubs(data, releaseName = '', { durationSeconds = 0 } = {}) {
   if (inferredEdition) myEdition.add(inferredEdition);
   const score = (d) => {
     if (!d || !d.url) return -Infinity;
-    const rel = `${d.display || ''} ${d.media || ''}`.toLowerCase();
+    const rel = subtitleMatchText(d).toLowerCase();
+    const relKey = releaseKey(rel);
     const relEdition = editionTags(rel);
     const relEpisode = episodeKey(rel);
     let s = 0;
     if (!/^(srt|vtt|)$/i.test(String(d.format || ''))) s -= 500;
+    if (myReleaseKey && relKey && relKey.includes(myReleaseKey)) s += 650;
+    else if (myReleaseKey && relKey && myReleaseKey.includes(relKey) && relKey.length > 20) s += 220;
     if (myEpisode && relEpisode === myEpisode) s += 260;
     else if (myEpisode && relEpisode) s -= 1000;
     else if (myEpisode) s -= 80;
@@ -287,6 +315,12 @@ async function fetchOnlineSub({ key, tmdbId, query, lang = 'en', releaseName = '
   u.searchParams.set('language', lang);
   u.searchParams.set('format', 'srt,vtt');
   u.searchParams.set('source', 'all');
+  if (releaseName) {
+    u.searchParams.set('release', releaseName);
+    u.searchParams.set('origin', releaseName);
+    u.searchParams.set('fileName', releaseName);
+    u.searchParams.set('file', releaseName);
+  }
   if (key) u.searchParams.set('key', key);
   // Wyzie scrapes its sources LIVE — measured ~15s on real keys. The default 10s idle
   // timeout was killing searches that were about to succeed.
@@ -325,7 +359,7 @@ async function fetchOnlineSub({ key, tmdbId, query, lang = 'en', releaseName = '
   return srtToVtt(file.body);
 }
 
-async function searchOnlineSubs({ key, tmdbId, query, lang = 'en', base = DEFAULT_BASE,
+async function searchOnlineSubs({ key, tmdbId, query, lang = 'en', releaseName = '', base = DEFAULT_BASE,
   attempts = 2, retryDelayMs = 700 } = {}) {
   if (!tmdbId) throw permanent('online subtitles need a catalog title (no TMDB id for this play)');
   const w = parseQuery(query || '');
@@ -335,6 +369,12 @@ async function searchOnlineSubs({ key, tmdbId, query, lang = 'en', base = DEFAUL
   u.searchParams.set('language', lang);
   u.searchParams.set('format', 'srt,vtt');
   u.searchParams.set('source', 'all');
+  if (releaseName) {
+    u.searchParams.set('release', releaseName);
+    u.searchParams.set('origin', releaseName);
+    u.searchParams.set('fileName', releaseName);
+    u.searchParams.set('file', releaseName);
+  }
   if (key) u.searchParams.set('key', key);
   const search = (refresh = false) => retryTransient('Wyzie subtitle search', async () => {
     if (refresh) u.searchParams.set('refresh', 'true'); else u.searchParams.delete('refresh');

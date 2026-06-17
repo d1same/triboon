@@ -270,6 +270,12 @@ test('subs: pickSub matches the sub to OUR release cut (sync depends on it)', ()
   ];
   const forWeb = pickSub(data, 'Show.S01E01.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb.mkv');
   assert.strictEqual(forWeb.id, 2, 'WEB-DL source picks the WEB-DL sub');
+  const exactFile = [
+    { id: 'generic', url: 'http://x/generic.srt', format: 'srt', display: 'Show.S01E01.1080p.WEB-DL' },
+    { id: 'exact', url: 'http://x/exact.srt', format: 'srt', fileName: 'Show.S01E01.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb.srt' },
+  ];
+  assert.strictEqual(pickSub(exactFile, 'Show.S01E01.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb.mkv').id, 'exact',
+    'exact subtitle file/release matches beat generic same-title rows');
   const forBlu = pickSub(data, 'Show.S01E01.1080p.BluRay.x264-GRP.mkv');
   assert.strictEqual(forBlu.id, 1, 'BluRay source matches the BluRay sub');
   const rookie = [
@@ -301,6 +307,33 @@ test('subs: pickSub matches the sub to OUR release cut (sync depends on it)', ()
   assert.strictEqual(ranked[1].id, '10', 'alternate cuts remain available instead of disappearing');
   assert.notStrictEqual(pickSub(data, '').id, 3, 'bitmap formats never win');
   assert.ok(pickSub([{ id: 9, format: 'srt' }], '') === undefined, 'url-less results are skipped entirely');
+});
+
+test('subs: Wyzie search receives exact release and filename hints', async () => {
+  const { searchOnlineSubs } = require('../server/opensubs');
+  let seen;
+  const srv = http.createServer((req, res) => {
+    seen = new URL(req.url, 'http://127.0.0.1');
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify([{ id: 'ok', url: 'http://x/sub.srt', format: 'srt', display: 'Show.S01E01.1080p.WEB-DL-GRP' }]));
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  try {
+    const release = 'Show.S01E01.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb.mkv';
+    await searchOnlineSubs({
+      tmdbId: '123', query: 'Show S01E01', lang: 'en', releaseName: release,
+      base: `http://127.0.0.1:${srv.address().port}`,
+    });
+    assert.strictEqual(seen.searchParams.get('id'), '123');
+    assert.strictEqual(seen.searchParams.get('season'), '1');
+    assert.strictEqual(seen.searchParams.get('episode'), '1');
+    assert.strictEqual(seen.searchParams.get('release'), release);
+    assert.strictEqual(seen.searchParams.get('origin'), release);
+    assert.strictEqual(seen.searchParams.get('fileName'), release);
+    assert.strictEqual(seen.searchParams.get('file'), release);
+  } finally {
+    await new Promise((r) => srv.close(r));
+  }
 });
 
 // A response that TRICKLES (a byte under every idle window) defeats socket timeouts — only a

@@ -2541,25 +2541,17 @@ public class MainActivity extends Activity {
         }
         int syncLaterIndex = -1;
         int syncEarlierIndex = -1;
-        int syncLaterBigIndex = -1;
-        int syncEarlierBigIndex = -1;
         int resetIndex = -1;
         if (trackType == C.TRACK_TYPE_TEXT) {
             syncLaterIndex = labels.size();
-            labels.add("Sync: subtitles later +0.5s" + nativeSubShiftLabel());
+            labels.add("Sync: subtitles later");
             selected.add(false);
             syncEarlierIndex = labels.size();
-            labels.add("Sync: subtitles earlier -0.5s" + nativeSubShiftLabel());
-            selected.add(false);
-            syncLaterBigIndex = labels.size();
-            labels.add("Sync: subtitles later +5s" + nativeSubShiftLabel());
-            selected.add(false);
-            syncEarlierBigIndex = labels.size();
-            labels.add("Sync: subtitles earlier -5s" + nativeSubShiftLabel());
+            labels.add("Sync: subtitles earlier");
             selected.add(false);
             if (Math.abs(nativeSubtitleShift) >= 0.05f) {
                 resetIndex = labels.size();
-                labels.add("Reset subtitle sync");
+                labels.add("Reset subtitle sync" + nativeSubShiftLabel());
                 selected.add(false);
             }
         }
@@ -2568,8 +2560,6 @@ public class MainActivity extends Activity {
         for (int i = 0; i < selected.size(); i++) selectedArray[i] = selected.get(i);
         final int later = syncLaterIndex;
         final int earlier = syncEarlierIndex;
-        final int laterBig = syncLaterBigIndex;
-        final int earlierBig = syncEarlierBigIndex;
         final int reset = resetIndex;
         showNativeChoiceSheet(trackType == C.TRACK_TYPE_TEXT ? "Subtitles" : "Audio",
                 labelArray, selectedArray, which -> {
@@ -2579,12 +2569,6 @@ public class MainActivity extends Activity {
                     } else if (which == earlier) {
                         nativeSheetRestoreIndex = earlier;
                         shiftNativeSubtitles(-0.5f);
-                    } else if (which == laterBig) {
-                        nativeSheetRestoreIndex = laterBig;
-                        shiftNativeSubtitles(5f);
-                    } else if (which == earlierBig) {
-                        nativeSheetRestoreIndex = earlierBig;
-                        shiftNativeSubtitles(-5f);
                     } else if (which == reset) {
                         nativeSheetRestoreIndex = later >= 0 ? later : 0;
                         resetNativeSubtitleShift();

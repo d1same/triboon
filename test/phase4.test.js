@@ -559,10 +559,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'app screensaver should own a polished fullscreen visual layer with large time and art deck');
   assert.match(ui, /<div id="screensaver" aria-hidden="true">[\s\S]+<div class="ssBg" id="ssBg"><\/div>[\s\S]+<div class="ssDeck" id="ssDeck"><\/div>[\s\S]+<div id="ssTime"><\/div>/,
     'app screensaver markup should include background, art deck, and clock regions');
-  assert.match(ui, /#screensaver \.ssBrand\{[\s\S]+width:clamp\(156px,13vw,250px\);height:clamp\(54px,4\.7vw,92px\);overflow:hidden[\s\S]+#screensaver \.ssBrand img\{width:100%;height:auto;display:block;transform:translateY\(-14%\)/,
+  assert.match(ui, /#screensaver \.ssBrand\{[\s\S]+width:clamp\(156px,13vw,250px\);height:clamp\(54px,4\.7vw,92px\);overflow:hidden[\s\S]+#screensaver \.ssBrand img\{width:100%;height:auto;display:block;/,
     'screensaver brand should use a compact cropped Triboon wordmark strip');
-  assert.match(ui, /<div class="ssBrand"><img src="triboon\.png" alt="Triboon" onerror="this\.onerror=null;this\.src='T-Logo\.png'"><\/div>/,
-    'screensaver should use the full Triboon logo asset with the compact mark as fallback');
+  assert.match(ui, /<div class="ssBrand"><img src="triboon-screensaver\.png" alt="Triboon" onerror="this\.onerror=null;this\.src='triboon\.png'"><\/div>/,
+    'screensaver should use the transparent tight-crop Triboon logo asset with the full wordmark as fallback');
   assert.match(ui, /const SCREENSAVER_IDLE_MS = 60 \* 1000;[\s\S]+function canShowScreensaver\(\) \{[\s\S]+S\.view === 'player' \|\| \$\('player'\)\.classList\.contains\('open'\)[\s\S]+\.gate\.open,#drawer\.open,#trailer\.open,#libModal\.open,#matchModal\.open,#catModal\.open,#filterMenu\.open,#cwMenu\.open,#trackMenu\.open,#musicNow\.open/,
     'app screensaver should wait one minute and stay out of playback, gates, and active modal surfaces');
   assert.match(ui, /const SCREENSAVER_TRENDING_TTL = 24 \* 60 \* 60 \* 1000;[\s\S]+const SCREENSAVER_TRENDING_STORE = 'triboon\.screensaver\.trending';/,
@@ -660,12 +660,14 @@ test('Android native player: direct source and native chrome stay out of the web
     'native subtitle overlay should compare cues against the episode display clock after remux seeks');
   assert.match(android, /String selectedSubtitleUrl = subtitleUrlForRel\(choice\.subtitleRel\);[\s\S]+nativeSubtitleShift = nativeShiftFromUrl\(selectedSubtitleUrl\);[\s\S]+nativeSubtitleUrl = stripNativeQueryParam\(selectedSubtitleUrl, "shift"\);/,
     'native subtitle version changes should preserve the saved subtitle sync instead of resetting to zero');
-  assert.match(ui, /syncHead\.textContent = 'Subtitle sync'/,
-    'web CC menu should always expose subtitle timing controls');
-  assert.match(ui, /mkRow\('Later \+5s' \+ subShiftLabel\(\), false, \(\) => shiftSubs\(5\)[\s\S]+mkRow\('Earlier -5s' \+ subShiftLabel\(\), false, \(\) => shiftSubs\(-5\)/,
-    'web CC sync controls should include coarse 5-second jumps for badly offset subtitle cuts');
-  assert.match(android, /labels\.add\("Sync: subtitles later \+5s" \+ nativeSubShiftLabel\(\)\);[\s\S]+labels\.add\("Sync: subtitles earlier -5s" \+ nativeSubShiftLabel\(\)\);[\s\S]+shiftNativeSubtitles\(5f\);[\s\S]+shiftNativeSubtitles\(-5f\);/,
-    'native Android CC sync controls should include coarse 5-second jumps');
+  assert.match(ui, /syncHead\.textContent = subSyncHeadingLabel\(\)[\s\S]+mkRow\('Subtitles later', false, \(\) => shiftSubs\(0\.5\)[\s\S]+mkRow\('Subtitles earlier', false, \(\) => shiftSubs\(-0\.5\)/,
+    'web CC sync controls should expose one clean later/earlier pair with the current offset in the heading');
+  assert.doesNotMatch(ui, /Later \+5s|Earlier -5s|shiftSubs\(5\)|shiftSubs\(-5\)/,
+    'web CC sync controls should not show duplicate fine and coarse sync rows');
+  assert.match(android, /labels\.add\("Sync: subtitles later"\);[\s\S]+labels\.add\("Sync: subtitles earlier"\);[\s\S]+shiftNativeSubtitles\(0\.5f\);[\s\S]+shiftNativeSubtitles\(-0\.5f\);/,
+    'native Android CC sync controls should expose one clean later/earlier pair');
+  assert.doesNotMatch(android, /subtitles later \+5s|subtitles earlier -5s|shiftNativeSubtitles\(5f\)|shiftNativeSubtitles\(-5f\)/,
+    'native Android CC sync controls should not show duplicate fine and coarse sync rows');
   assert.match(ui, /mkRow\('Turn subtitles on first'/,
     'web CC sync section should explain when sync needs subtitles enabled first');
   assert.match(ui, /function restoreTrackMenuPosition\(opts = \{\}\) \{[\s\S]+m\.scrollTop = opts\.scrollTop[\s\S]+target\.focus\(\{ preventScroll: true \}\)[\s\S]+applyFocus\(target, false\)/,
@@ -1034,8 +1036,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'web favicon should use the T logo assets');
   assert.match(ui, /id="railLogo"[\s\S]+<img src="T-Logo\.svg" alt="Triboon" onerror="this\.onerror=null;this\.src='T-Logo\.png'"/,
     'web rail logo should use the T logo assets');
-  assert.match(ui, /<div class="ssBrand"><img src="triboon\.png" alt="Triboon" onerror="this\.onerror=null;this\.src='T-Logo\.png'"><\/div>/,
-    'web screensaver should use the full Triboon logo asset');
+  assert.match(ui, /<div class="ssBrand"><img src="triboon-screensaver\.png" alt="Triboon" onerror="this\.onerror=null;this\.src='triboon\.png'"><\/div>/,
+    'web screensaver should use the transparent tight-crop Triboon logo asset');
   assert.match(android, /nativeLoading = new FrameLayout\(this\);[\s\S]+loadingLogo\.setImageResource\(R\.drawable\.ic_loading_logo\);[\s\S]+loadingStage\.setText\("Opening playback"\)/,
     'native loading overlay should show the T logo mark and cleaner loading stage');
   assert.doesNotMatch(android, /loadingBrand\.setText\("TRIBOON"\)|TextView loadingBrand/,
@@ -1049,6 +1051,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'logo/triboon.png',
     'web/T-Logo.png',
     'web/triboon.png',
+    'web/triboon-screensaver.png',
     'android/app/src/main/res/drawable/ic_launcher.png',
     'android/app/src/main/res/drawable/ic_loading_logo.png',
     'android/app/src/main/res/drawable/banner.png',
@@ -1120,7 +1123,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'selecting an online subtitle row should notify the web app instead of leaving the row inert');
   assert.doesNotMatch(android, /No subtitle is loaded for this stream/,
     'native CC should not stop before showing online subtitle choices');
-  assert.match(android, /labels\.add\("Sync: subtitles later \+0\.5s" \+ nativeSubShiftLabel\(\)\)/,
+  assert.match(android, /labels\.add\("Sync: subtitles later"\)/,
     'native CC sheet should include a subtitle-later sync action');
   assert.match(android, /shiftNativeSubtitles\(0\.5f\)/,
     'native subtitle sync action should move subtitles later in 0.5s steps');
