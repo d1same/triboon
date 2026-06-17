@@ -191,19 +191,36 @@ function subtitleVariantId(d, idx = 0) {
   const raw = [d && d.url, d && d.display, d && d.media, idx].join('|');
   return crypto.createHash('sha1').update(raw).digest('hex').slice(0, 16);
 }
+function subtitleSourceLabel(rel) {
+  const x = String(rel || '').toLowerCase();
+  if (/\bweb[-. ]?dl\b/.test(x)) return 'WEB-DL';
+  if (/\bweb[-. ]?rip\b/.test(x)) return 'WEBRip';
+  if (/\bhdtv\b/.test(x)) return 'HDTV';
+  if (/\b(bd)?remux\b/.test(x)) return 'BluRay Remux';
+  if (/blu[-. ]?ray|\bbdrip\b|\bbd\b/.test(x)) return 'BluRay';
+  if (/\bweb\b|amzn|nf(?=[. ])|hulu|atvp|dsnp/i.test(x)) return 'WEB';
+  return '';
+}
+function subtitleGroupLabel(d) {
+  const raw = String(d && (d.display || d.media) || '');
+  const m = /-([a-z0-9]+)(?:\.(?:srt|vtt))?$/i.exec(raw);
+  return m && m[1] ? m[1] : '';
+}
 function subtitleVariantLabel(d) {
   const rel = `${d && d.display || ''} ${d && d.media || ''}`.toLowerCase();
   const tags = editionTags(rel);
   const parts = [];
+  const ep = episodeKey(rel);
+  if (ep) parts.push(ep.toUpperCase());
   if (tags.has('extended')) parts.push('Extended');
   else if (tags.has('theatrical')) parts.push('Theatrical');
   else if (tags.has('directors')) parts.push("Director's cut");
   else if (tags.has('unrated')) parts.push('Unrated');
   else if (tags.has('uncut')) parts.push('Uncut');
   else if (tags.has('imax')) parts.push('IMAX');
-  if (/web|amzn|nf[. ]|hulu|atvp|dsnp/.test(rel)) parts.push('WEB');
-  else if (/blu|bd|remux/.test(rel)) parts.push('BluRay');
-  const group = (/-([a-z0-9]+)(?:\.(srt|vtt))?$/i.exec(String(d && (d.display || d.media) || '')) || [])[1];
+  const source = subtitleSourceLabel(rel);
+  if (source) parts.push(source);
+  const group = subtitleGroupLabel(d);
   if (group) parts.push(group);
   if (d && d.isHearingImpaired) parts.push('SDH');
   return parts.join(' - ') || String((d && (d.display || d.media || d.language)) || 'Subtitle version');

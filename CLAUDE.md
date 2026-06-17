@@ -76,7 +76,7 @@ JAVA_HOME=Android Studio jbr, ANDROID_HOME=%LOCALAPPDATA%\Android\Sdk. Android G
 9.2.1 requires Gradle 9.4.1+; this repo pins Gradle 9.5.1 in android/gradle/wrapper.
 Use an external/current Gradle 9.5.1+ binary when one is installed (gradle -p android
 assembleDebug). Use android\gradlew.bat assembleDebug only as the version-safe fallback.
-Do not use the old C:\Users\opencode\tools\gradle-8.10.2 binary. APK output:
+Do not use an old local Gradle 8.x binary. APK output:
 android/app/build/outputs/apk/debug/app-debug.apk.
 
 

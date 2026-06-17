@@ -2505,7 +2505,7 @@ public class MainActivity extends Activity {
                 String label = i < nativeSubtitleChoiceLabels.size() ? nativeSubtitleChoiceLabels.get(i) : "";
                 String action = i < nativeSubtitleChoiceActions.size() ? nativeSubtitleChoiceActions.get(i) : "";
                 String lang = i < nativeSubtitleChoiceLangs.size() ? nativeSubtitleChoiceLangs.get(i) : "";
-                if (label == null || label.isEmpty()) label = rel.isEmpty() ? "Show subtitle versions" : nativeLabelForSubtitleRel(rel);
+                if (label == null || label.isEmpty()) label = rel.isEmpty() ? "More subtitle versions" : nativeLabelForSubtitleRel(rel);
                 choices.add(new NativeTrackChoice(null, -1, label, false,
                         !rel.isEmpty() && rel.equals(nativeSubtitleRel), rel, action, lang));
             }
@@ -2706,7 +2706,7 @@ public class MainActivity extends Activity {
 
     private String nativeLabelForSubtitleRel(String rel) {
         String lang = nativeLangName(nativeLangFromSubtitleRel(rel));
-        return (lang.isEmpty() ? "Subtitles" : lang) + " - Auto match";
+        return (lang.isEmpty() ? "Subtitles" : lang) + " - Recommended";
     }
 
     private void notifyNativeSubtitleSelect(String rel) {

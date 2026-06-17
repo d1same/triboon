@@ -36,7 +36,7 @@ gradle -p android assembleDebug
 
 The debug APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`. If a current
 external Gradle is not installed, use the pinned fallback from `android/`: `.\gradlew.bat
-assembleDebug`. Do not use the old `C:\Users\opencode\tools\gradle-8.10.2` binary.
+assembleDebug`. Do not use an old local Gradle 8.x binary.
 
 ## Unraid
 

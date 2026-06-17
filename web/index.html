@@ -561,7 +561,7 @@ body.screensaverOn{cursor:none}
   linear-gradient(90deg,rgba(5,3,9,.92) 0%,rgba(5,3,9,.55) 45%,rgba(5,3,9,.16) 100%),
   linear-gradient(0deg,rgba(5,3,9,.94) 0%,rgba(5,3,9,.24) 48%,rgba(5,3,9,.7) 100%)}
 #screensaver .ssBrand{position:absolute;left:clamp(28px,5vw,86px);top:clamp(24px,5vh,58px);display:flex;align-items:flex-start;
-  width:clamp(220px,18vw,340px);height:clamp(76px,6.3vw,126px);overflow:hidden}
+  width:clamp(156px,13vw,250px);height:clamp(54px,4.7vw,92px);overflow:hidden}
 #screensaver .ssBrand img{width:100%;height:auto;display:block;transform:translateY(-14%);
   filter:drop-shadow(0 10px 28px rgba(193,59,214,.32)) drop-shadow(0 14px 44px rgba(0,0,0,.56))}
 #screensaver .ssClock{position:absolute;left:clamp(32px,6vw,96px);bottom:clamp(36px,8vh,92px);max-width:min(720px,72vw);
@@ -5254,8 +5254,50 @@ function bestSubtitleVariantRel(lang) {
   const v = bestSubtitleVariant(lang);
   return v ? osTrackRel(lang, v.id) : '';
 }
+function subtitleVariantDetail(v) {
+  const label = cleanSubtitleLabel(v && v.label || '');
+  return label && !/^subtitle version$/i.test(label) ? label : '';
+}
+function subtitleRecommendedLabel(name, v) {
+  const detail = subtitleVariantDetail(v);
+  return detail ? `${name} - Recommended (${detail})` : `${name} - Recommended`;
+}
 function subtitleVariantRowLabel(name, v) {
-  return `${name} - ${cleanSubtitleLabel(v && v.label || 'Subtitle version')}${v && v.selected ? ' (Best match)' : ''}`;
+  const detail = subtitleVariantDetail(v);
+  return detail ? `${name} - ${detail}` : `${name} - Subtitle version`;
+}
+function savedSubtitleDetail(name) {
+  let label = cleanSubtitleLabel(loadSubChoiceLabel() || '');
+  const prefix = `${name} - `.toLowerCase();
+  if (label.toLowerCase().startsWith(prefix)) label = label.slice(prefix.length).trim();
+  const recommended = /^Recommended\s*\((.+)\)$/i.exec(label);
+  if (recommended) label = recommended[1].trim();
+  if (!label || /^Recommended$/i.test(label) || /^Selected subtitle$/i.test(label)) return '';
+  return label;
+}
+function subtitleLangExpanded(lang) {
+  const p = S.playing;
+  return !!(p && p._osExpandedLangs && p._osExpandedLangs.has(osLang(lang)));
+}
+function setSubtitleLangExpanded(lang, expanded = true) {
+  const p = S.playing; if (!p) return;
+  p._osExpandedLangs = p._osExpandedLangs || new Set();
+  const l = osLang(lang);
+  if (expanded) p._osExpandedLangs.add(l);
+  else p._osExpandedLangs.delete(l);
+}
+function subtitleDefaultChoice(lang) {
+  const p = S.playing;
+  const l = osLang(lang);
+  const name = OS_LANG_NAMES[l] || l.toUpperCase();
+  const best = bestSubtitleVariant(l);
+  if (best && best.id) return { rel: osTrackRel(l, best.id), label: subtitleRecommendedLabel(name, best), best };
+  const cur = p && typeof p.subTrack === 'string' && p.subTrack.startsWith('os:') ? osTrackInfo(p.subTrack) : null;
+  if (cur && cur.lang === l && cur.variant) {
+    const detail = savedSubtitleDetail(name);
+    return { rel: p.subTrack, label: detail ? `${name} - ${detail}` : `${name} - Selected subtitle`, best: null };
+  }
+  return { rel: osTrackRel(l), label: subtitleRecommendedLabel(name, null), best: null };
 }
 async function resolveOnlineSubtitleRel(rel) {
   if (!(typeof rel === 'string' && rel.startsWith('os:'))) return rel;
@@ -5274,7 +5316,7 @@ function nativeSubtitleLabel(rel) {
   if (typeof rel === 'string' && rel.startsWith('os:') && !osTrackInfo(rel).variant) {
     const info = osTrackInfo(rel);
     const name = OS_LANG_NAMES[info.lang] || info.lang.toUpperCase();
-    return `${name} - Auto match`;
+    return subtitleRecommendedLabel(name, bestSubtitleVariant(info.lang));
   }
   return subtitleDisplayName(rel) || loadSubChoiceLabel() || 'Subtitles';
 }
@@ -5300,14 +5342,16 @@ function nativeSubtitleChoices() {
   [...new Set([savedInfo && savedInfo.lang, pref, 'en'].filter(Boolean))].forEach((l) => {
     const name = OS_LANG_NAMES[l] || l.toUpperCase();
     const variants = p._osVariants && p._osVariants[l];
-    if (variants && variants.length) {
+    const pick = subtitleDefaultChoice(l);
+    const expanded = subtitleLangExpanded(l);
+    addChoice({ rel: pick.rel, label: pick.label });
+    if (variants && variants.length && expanded) {
       variants.slice(0, 8).forEach((v) => {
-        addChoice({ rel: osTrackRel(l, v.id), label: subtitleVariantRowLabel(name, v) });
+        const rel = osTrackRel(l, v.id);
+        if (rel !== pick.rel) addChoice({ rel, label: subtitleVariantRowLabel(name, v) });
       });
-    } else {
-      addChoice({ rel: osTrackRel(l), label: `${name} - Auto match` });
-      addChoice({ action: 'versions', lang: l, label: `Show ${name} versions` });
     }
+    if (!expanded) addChoice({ action: 'versions', lang: l, label: `More ${name} subtitles` });
   });
   if (saved && saved !== 'off') {
     const info = String(saved).startsWith('os:') ? osTrackInfo(saved) : null;
@@ -5537,6 +5581,7 @@ window.__tvNativeSubtitleVersions = async (lang, pos, dur) => {
   window.__tvNativeVideoProgress(pos, dur);
   try {
     await loadSubtitleVersions(lang);
+    setSubtitleLangExpanded(lang, true);
     refreshNativeSubtitleChoices();
   } catch (e) {
     toast((e && e.message) || 'Could not load subtitle versions');
@@ -6111,15 +6156,22 @@ function subtitleVersionLabel(rel) {
   return v && v.label ? v.label : '';
 }
 function cleanSubtitleLabel(label) {
-  return String(label || '').replace(/^Wyzie\s*(?:[·-]\s*)?/i, '').replace(/\s+·\s+/g, ' - ').trim();
+  return String(label || '')
+    .replace(/^Wyzie\s*(?:(?:\u00c2?\u00b7)|-)\s*/i, '')
+    .replace(/\s*(?:\u00c2?\u00b7)\s*/g, ' - ')
+    .trim();
 }
 function subtitleDisplayName(rel) {
   if (!rel) return '';
   if (typeof rel === 'string' && rel.startsWith('os:')) {
     const info = osTrackInfo(rel);
     const name = OS_LANG_NAMES[info.lang] || info.lang.toUpperCase();
-    const label = info.variant ? (subtitleVersionLabel(rel) || loadSubChoiceLabel() || 'Selected version') : 'Auto match';
-    return `${name} - ${cleanSubtitleLabel(label)}`;
+    if (!info.variant) return subtitleRecommendedLabel(name, bestSubtitleVariant(info.lang));
+    const best = bestSubtitleVariant(info.lang);
+    const detail = cleanSubtitleLabel(subtitleVersionLabel(rel) || '');
+    if (best && String(best.id) === String(info.variant)) return subtitleRecommendedLabel(name, best);
+    const saved = savedSubtitleDetail(name);
+    return (detail || saved) ? `${name} - ${detail || saved}` : `${name} - Selected subtitle`;
   }
   return 'Embedded subtitles';
 }
@@ -6310,16 +6362,21 @@ function openTrackMenu(kind, restore = {}) {
       langs.forEach((l) => {
         const name = OS_LANG_NAMES[l] || l.toUpperCase();
         const variants = p._osVariants && p._osVariants[l];
-        if (variants && variants.length) {
+        const pick = subtitleDefaultChoice(l);
+        const expanded = subtitleLangExpanded(l);
+        mkRow(pick.label, p.subTrack === pick.rel, () => setSubtitle(pick.rel));
+        if (variants && variants.length && expanded) {
           variants.slice(0, 8).forEach((v) => {
             const rel = osTrackRel(l, v.id);
-            mkRow(subtitleVariantRowLabel(name, v), p.subTrack === rel, () => setSubtitle(rel));
+            if (rel !== pick.rel) mkRow(subtitleVariantRowLabel(name, v), p.subTrack === rel, () => setSubtitle(rel));
           });
-        } else {
-          mkRow(`${name} - Auto match`, p.subTrack === osTrackRel(l), () => setSubtitle(osTrackRel(l)));
-          mkRow(`Show ${name} versions`, false, async () => {
-            try { await loadSubtitleVersions(l); }
+        }
+        if (!expanded) {
+          mkRow(`More ${name} subtitles`, false, async () => {
+            let loaded = false;
+            try { await loadSubtitleVersions(l); loaded = true; }
             catch (e) { toast(e.message || 'Could not load subtitle versions'); }
+            if (loaded) setSubtitleLangExpanded(l, true);
           }, { keepOpen: true, key: 'subs-versions-' + l });
         }
       });
@@ -11931,6 +11988,12 @@ document.addEventListener('keyup', (e) => {
 // Android TV shell hook: the remote's BACK button calls this. Everywhere except the home
 // root it behaves exactly like Escape (close player/detail/menus, back out of views);
 // at the true root it answers 'exit' and the shell shows press-back-again-to-quit.
+function backToBrowseSectionMenu() {
+  const browseSection = S.view === 'movies' || S.view === 'tv' || S.view === 'library';
+  if (!browseSection || S.zone === 'rail' || document.body.classList.contains('railOpen')) return false;
+  enterRail();
+  return true;
+}
 window.__tvBack = () => {
   if (S.screensaverOn) {
     hideScreensaver(true);
@@ -11944,6 +12007,7 @@ window.__tvBack = () => {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
     return 'ok';
   }
+  if (backToBrowseSectionMenu()) return 'ok';
   if (S.view !== 'home') {
     leaveRail(); S.zone = ''; clearFocus();
     switchView('home');

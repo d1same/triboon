@@ -1,5 +1,5 @@
 param(
-  [string]$Device = "10.1.20.11:5555",
+  [string]$Device = $env:TRIBOON_ADB_DEVICE,
   [string]$Package = "app.triboon.tv",
   [string]$Activity = "app.triboon.tv/.MainActivity",
   [int]$DevtoolsPort = 9222,
@@ -20,6 +20,15 @@ $ErrorActionPreference = "Stop"
 $repo = Resolve-Path (Join-Path $PSScriptRoot "..")
 $adb = Join-Path $env:LOCALAPPDATA "Android\Sdk\platform-tools\adb.exe"
 if (!(Test-Path $adb)) { throw "adb not found at $adb" }
+
+if ([string]::IsNullOrWhiteSpace($Device)) {
+  $connected = & $adb devices | Select-String -Pattern "^\S+\s+device$" | ForEach-Object { ($_ -split "\s+")[0] }
+  if (@($connected).Count -eq 1) {
+    $Device = @($connected)[0]
+  } else {
+    throw "Set -Device or TRIBOON_ADB_DEVICE to the target Android TV ADB id."
+  }
+}
 
 function Invoke-Adb {
   param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)

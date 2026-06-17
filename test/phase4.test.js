@@ -559,8 +559,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'app screensaver should own a polished fullscreen visual layer with large time and art deck');
   assert.match(ui, /<div id="screensaver" aria-hidden="true">[\s\S]+<div class="ssBg" id="ssBg"><\/div>[\s\S]+<div class="ssDeck" id="ssDeck"><\/div>[\s\S]+<div id="ssTime"><\/div>/,
     'app screensaver markup should include background, art deck, and clock regions');
-  assert.match(ui, /#screensaver \.ssBrand\{[\s\S]+width:clamp\(220px,18vw,340px\);height:clamp\(76px,6\.3vw,126px\);overflow:hidden[\s\S]+#screensaver \.ssBrand img\{width:100%;height:auto;display:block;transform:translateY\(-14%\)/,
-    'screensaver brand should crop the full Triboon wordmark into a strip, not squeeze it into a square mark');
+  assert.match(ui, /#screensaver \.ssBrand\{[\s\S]+width:clamp\(156px,13vw,250px\);height:clamp\(54px,4\.7vw,92px\);overflow:hidden[\s\S]+#screensaver \.ssBrand img\{width:100%;height:auto;display:block;transform:translateY\(-14%\)/,
+    'screensaver brand should use a compact cropped Triboon wordmark strip');
   assert.match(ui, /<div class="ssBrand"><img src="triboon\.png" alt="Triboon" onerror="this\.onerror=null;this\.src='T-Logo\.png'"><\/div>/,
     'screensaver should use the full Triboon logo asset with the compact mark as fallback');
   assert.match(ui, /const SCREENSAVER_IDLE_MS = 60 \* 1000;[\s\S]+function canShowScreensaver\(\) \{[\s\S]+S\.view === 'player' \|\| \$\('player'\)\.classList\.contains\('open'\)[\s\S]+\.gate\.open,#drawer\.open,#trailer\.open,#libModal\.open,#matchModal\.open,#catModal\.open,#filterMenu\.open,#cwMenu\.open,#trackMenu\.open,#musicNow\.open/,
@@ -587,6 +587,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'profile switches should re-check screensaver trending cache without installing duplicate idle listeners');
   assert.match(ui, /window\.__tvBack = \(\) => \{[\s\S]+if \(S\.screensaverOn\) \{[\s\S]+hideScreensaver\(true\);[\s\S]+resetScreensaverIdle\(\);[\s\S]+return 'ok';/,
     'Android TV Back should wake the screensaver instead of exiting the app');
+  assert.match(ui, /function backToBrowseSectionMenu\(\) \{[\s\S]+S\.view === 'movies' \|\| S\.view === 'tv' \|\| S\.view === 'library'[\s\S]+enterRail\(\);[\s\S]+return true;[\s\S]+\}[\s\S]+if \(backToBrowseSectionMenu\(\)\) return 'ok';[\s\S]+if \(S\.view !== 'home'\) \{/,
+    'Android TV Back should first open the section menu on Movies, TV, and added library pages before returning Home');
   assert.match(ui, /\$\('appClock'\)\.classList\.add\('show'\); updateClocks\(\);\s+installScreensaverIdle\(\);/,
     'screensaver idle timer should start only after the app shell is entered');
   {
@@ -672,22 +674,24 @@ test('Android native player: direct source and native chrome stay out of the web
     'web keep-open track rows should rebuild the menu without jumping back to the top');
   assert.match(ui, /window\.__tvNativeSubtitleShift = \(shift\) => \{[\s\S]+saveSubShift\(p\.subTrack, n\)/,
     'Android subtitle sync changes should persist through the web profile state');
-  assert.match(ui, /function subtitleDisplayName\(rel\) \{[\s\S]+return `\$\{name\} - \$\{cleanSubtitleLabel\(label\)\}`;/,
-    'web and native subtitle labels should use clear language names');
+  assert.match(ui, /function subtitleDisplayName\(rel\) \{[\s\S]+if \(!info\.variant\) return subtitleRecommendedLabel\(name, bestSubtitleVariant\(info\.lang\)\);[\s\S]+const saved = savedSubtitleDetail\(name\);[\s\S]+return \(detail \|\| saved\) \? `\$\{name\} - \$\{detail \|\| saved\}` : `\$\{name\} - Selected subtitle`;/,
+    'web and native subtitle labels should use clear language names without generic auto-match wording');
   assert.match(ui, /function cleanSubtitleLabel\(label\) \{[\s\S]+replace\(\s*\/\^Wyzie/,
     'old saved subtitle labels should drop provider branding when displayed');
   assert.match(ui, /async function resolveOnlineSubtitleRel\(rel\) \{[\s\S]+await loadSubtitleVersions\(info\.lang\)[\s\S]+return best && best\.id \? osTrackRel\(info\.lang, best\.id\) : rel;/,
     'generic online subtitle auto-match should resolve to the ranked concrete version before loading');
-  assert.match(ui, /if \(variants && variants\.length\) \{[\s\S]+subtitleVariantRowLabel\(name, v\)[\s\S]+\} else \{[\s\S]+mkRow\(`\$\{name\} - Auto match`/,
-    'CC menu should not show both generic auto-match and the ranked concrete auto-match once versions are loaded');
-  assert.match(ui, /if \(variants && variants\.length\) \{[\s\S]+addChoice\(\{ rel: osTrackRel\(l, v\.id\), label: subtitleVariantRowLabel\(name, v\) \}\);[\s\S]+\} else \{[\s\S]+addChoice\(\{ rel: osTrackRel\(l\), label: `\$\{name\} - Auto match` \}\);/,
-    'native CC choices should collapse generic auto-match once concrete variants are available');
-  assert.match(ui, /mkRow\(`Show \$\{name\} versions`/,
-    'CC menu should expose named subtitle versions for different cuts');
-  assert.match(ui, /addChoice\(\{ action: 'versions', lang: l, label: `Show \$\{name\} versions` \}\)/,
-    'native Android CC should expose a lazy version-list row when subtitle variants are not loaded yet');
-  assert.match(ui, /window\.__tvNativeSubtitleVersions = async \(lang, pos, dur\) => \{[\s\S]+await loadSubtitleVersions\(lang\);[\s\S]+refreshNativeSubtitleChoices\(\);/,
-    'native Android CC version rows should fetch subtitle variants and refresh the native sheet without selecting a subtitle');
+  assert.match(ui, /function subtitleRecommendedLabel\(name, v\) \{[\s\S]+return detail \? `\$\{name\} - Recommended \(\$\{detail\}\)` : `\$\{name\} - Recommended`;/,
+    'CC menu should show one obvious recommended subtitle row per language');
+  assert.match(ui, /const pick = subtitleDefaultChoice\(l\);[\s\S]+mkRow\(pick\.label, p\.subTrack === pick\.rel, \(\) => setSubtitle\(pick\.rel\)\);[\s\S]+if \(variants && variants\.length && expanded\) \{/,
+    'web CC menu should keep advanced subtitle versions collapsed until the user asks for them');
+  assert.match(ui, /const pick = subtitleDefaultChoice\(l\);[\s\S]+addChoice\(\{ rel: pick\.rel, label: pick\.label \}\);[\s\S]+if \(variants && variants\.length && expanded\) \{/,
+    'native CC choices should mirror the collapsed recommended-first subtitle menu');
+  assert.match(ui, /mkRow\(`More \$\{name\} subtitles`/,
+    'CC menu should expose named subtitle versions through a plain More subtitles row');
+  assert.match(ui, /addChoice\(\{ action: 'versions', lang: l, label: `More \$\{name\} subtitles` \}\)/,
+    'native Android CC should expose a lazy More subtitles row when variants are collapsed');
+  assert.match(ui, /window\.__tvNativeSubtitleVersions = async \(lang, pos, dur\) => \{[\s\S]+await loadSubtitleVersions\(lang\);[\s\S]+setSubtitleLangExpanded\(lang, true\);[\s\S]+refreshNativeSubtitleChoices\(\);/,
+    'native Android CC version rows should fetch and expand subtitle variants without selecting a subtitle');
   assert.match(ui, /window\.TriboonTV\.updateSubtitleChoices\(JSON\.stringify\(\{ choices: nativeSubtitleChoices\(\) \}\)\)/,
     'web should push refreshed subtitle choices back into the native ExoPlayer menu');
   assert.match(ui, /saveSubChoice\(rel, subtitleDisplayName\(rel\)\)/,
@@ -1080,6 +1084,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native subtitle choices should keep the plain labels sent by the web player');
   assert.match(android, /nativeSubtitleLabel = choice\.label;[\s\S]+loadNativeSubtitleOverlay\(nativeSubtitleUrl\)/,
     'native subtitle overlay should use the same plain language labels sent by the web player');
+  assert.match(android, /return \(lang\.isEmpty\(\) \? "Subtitles" : lang\) \+ " - Recommended";/,
+    'native subtitle fallback labels should use Recommended wording, not Auto match');
   assert.match(android, /\? \(!subtitleLang\.isEmpty\(\) \? nativeLangName\(subtitleLang\) : "Subtitles"\)/,
     'native subtitle fallback should use only the language name');
   assert.doesNotMatch(android, /"Wyzie subtitles"|"Wyzie - " \+ nativeLangName|No Wyzie subtitle/,
@@ -1095,7 +1101,7 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.match(android, /applyNativeSubtitleChoices\(j\.optJSONArray\("subtitleChoices"\)\)/,
     'Android should parse subtitle choices sent in the initial native playback payload');
   assert.match(android, /nativeSubtitleChoiceActions\.add\(action\);[\s\S]+nativeSubtitleChoiceLangs\.add\(lang\);/,
-    'Android should retain native subtitle action rows such as Show versions');
+    'Android should retain native subtitle action rows such as More subtitles');
   assert.match(android, /nativeSubtitleChoiceUrls\.add\(url\);/,
     'Android should retain online subtitle URLs so choices are preloaded as native text tracks');
   assert.match(android, /nativeSubtitleChoiceRels\.add\(rel\);/,
@@ -1103,9 +1109,9 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.match(android, /choices\.add\(new NativeTrackChoice\(null, -1, label, false,[\s\S]+rel\.equals\(nativeSubtitleRel\), rel, action, lang\)\)/,
     'native CC sheet should expose selectable online subtitle rows');
   assert.match(android, /"versions"\.equals\(choice\.subtitleAction\)[\s\S]+requestNativeSubtitleVersions\(choice\.subtitleLang\)/,
-    'native CC sheet should load version rows instead of treating Show versions as an inert subtitle');
+    'native CC sheet should load version rows instead of treating More subtitles as an inert subtitle');
   assert.match(android, /private void requestNativeSubtitleVersions\(String lang\) \{[\s\S]+nativeOpenSubtitleMenuAfterRefresh = true;[\s\S]+window\.__tvNativeSubtitleVersions/,
-    'native Show versions should intentionally reopen the menu after refreshed rows arrive');
+    'native More subtitles should intentionally reopen the menu after refreshed rows arrive');
   assert.match(android, /window\.__tvNativeSubtitleVersions && window\.__tvNativeSubtitleVersions/,
     'Android should call the web subtitle-version loader from the native sheet');
   assert.match(android, /"Off", true, nativeSubtitleRel\.isEmpty\(\)\)/,

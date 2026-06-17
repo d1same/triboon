@@ -281,6 +281,8 @@ test('subs: pickSub matches the sub to OUR release cut (sync depends on it)', ()
     'TV subtitles must prefer the exact episode over same-show/wrong-episode files');
   const rookieRanked = rankSubs(rookie, 'The.Rookie.S01E03.1080p.WEB-DL-GRP.mkv');
   assert.strictEqual(rookieRanked[0].id, 'e3', 'the exact episode is the selected subtitle variant');
+  assert.match(rookieRanked[0].label, /S01E03 - WEB-DL - GRP/,
+    'ranked TV subtitle labels should call out episode, source, and release group');
   assert.ok(rookieRanked.find((v) => v.id === 'e1').score < rookieRanked.find((v) => v.id === 'show').score,
     'wrong-episode subtitle files rank below generic fallback rows');
   const lotr = [
