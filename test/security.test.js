@@ -669,34 +669,37 @@ ${origin}/sports.ts
     res.end('nope');
   });
   await new Promise((r) => m3uSrv.listen(0, '127.0.0.1', r));
-  origin = `http://127.0.0.1:${m3uSrv.address().port}`;
-  const m3uUrl = `${origin}/secret-user/playlist.m3u`;
-  await httpJson(srv.port, 'POST', '/api/settings', { iptvUrl: m3uUrl }, admin);
+  try {
+    origin = `http://127.0.0.1:${m3uSrv.address().port}`;
+    const m3uUrl = `${origin}/secret-user/playlist.m3u`;
+    await httpJson(srv.port, 'POST', '/api/settings', { iptvUrl: m3uUrl }, admin);
 
-  const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
-  assert.strictEqual(ch.json.configured, true);
-  assert.strictEqual(ch.json.channels.length, 2);
-  assert.deepStrictEqual(ch.json.channels.map((c) => c.group), ['News', 'Sports']);
-  assert.ok(ch.json.channels.every((c) => c.url === undefined), 'upstream URLs never exposed');
-  assert.ok(ch.json.channels.every((c) => /^\/api\/iptv\/stream\/\d+\?t=/.test(c.streamUrl)));
-  assert.ok(ch.json.channels.every((c) => /^\/api\/iptv\/native\/\d+\?t=/.test(c.nativeUrl)));
-  assert.ok(ch.json.channels.every((c) => c.nativeFallbackUrl === undefined), 'plain M3U does not invent a second native source');
-  assert.deepStrictEqual(ch.json.channels.map((c) => c.nativeMime), ['application/x-mpegURL', 'video/mp2t']);
-  const native = await httpRaw(srv.port, ch.json.channels[0].nativeUrl);
-  assert.strictEqual(native.status, 200, 'native URL proxies the upstream stream instead of redirecting Android to it');
-  assert.strictEqual(native.headers.location, undefined, 'native proxy must not leak the upstream stream URL');
-  assert.strictEqual(native.body.toString('utf8'), '#EXTM3U\n#EXT-X-VERSION:3\n');
-  assert.ok(nativeUa.includes('VLC/'), 'native proxy should use a provider-compatible server-side user agent');
-  const wrongTok = /[?&]t=([^&]+)/.exec(ch.json.channels[0].nativeUrl)[1];
-  const wrongNative = await httpRaw(srv.port, ch.json.channels[1].nativeUrl.replace(/[?&]t=[^&]+/, '?t=' + wrongTok));
-  assert.strictEqual(wrongNative.status, 401, 'native stream token is bound to the selected channel');
+    const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    assert.strictEqual(ch.json.configured, true);
+    assert.strictEqual(ch.json.channels.length, 2);
+    assert.deepStrictEqual(ch.json.channels.map((c) => c.group), ['News', 'Sports']);
+    assert.ok(ch.json.channels.every((c) => c.url === undefined), 'upstream URLs never exposed');
+    assert.ok(ch.json.channels.every((c) => /^\/api\/iptv\/stream\/\d+\?t=/.test(c.streamUrl)));
+    assert.ok(ch.json.channels.every((c) => /^\/api\/iptv\/native\/\d+\?t=/.test(c.nativeUrl)));
+    assert.ok(ch.json.channels.every((c) => c.nativeFallbackUrl === undefined), 'plain M3U does not invent a second native source');
+    assert.deepStrictEqual(ch.json.channels.map((c) => c.nativeMime), ['application/x-mpegURL', 'video/mp2t']);
+    const native = await httpRaw(srv.port, ch.json.channels[0].nativeUrl);
+    assert.strictEqual(native.status, 200, 'native URL proxies the upstream stream instead of redirecting Android to it');
+    assert.strictEqual(native.headers.location, undefined, 'native proxy must not leak the upstream stream URL');
+    assert.strictEqual(native.body.toString('utf8'), '#EXTM3U\n#EXT-X-VERSION:3\n');
+    assert.ok(nativeUa.includes('TriboonTV/') && nativeUa.includes('SMART-TV'),
+      'native proxy should use the provider-compatible smart-TV server-side user agent');
+    const wrongTok = /[?&]t=([^&]+)/.exec(ch.json.channels[0].nativeUrl)[1];
+    const wrongNative = await httpRaw(srv.port, ch.json.channels[1].nativeUrl.replace(/[?&]t=[^&]+/, '?t=' + wrongTok));
+    assert.strictEqual(wrongNative.status, 401, 'native stream token is bound to the selected channel');
 
-  // Settings response shows only the playlist HOST (urls often embed credentials).
-  const s = await httpJson(srv.port, 'GET', '/api/settings', null, admin);
-  assert.ok(!String(s.json.iptvUrl).includes('secret-user'), 'playlist path/credentials redacted');
-
-  await httpJson(srv.port, 'POST', '/api/settings', { iptvUrl: null }, admin); // cleanup
-  m3uSrv.close();
+    // Settings response shows only the playlist HOST (urls often embed credentials).
+    const s = await httpJson(srv.port, 'GET', '/api/settings', null, admin);
+    assert.ok(!String(s.json.iptvUrl).includes('secret-user'), 'playlist path/credentials redacted');
+  } finally {
+    await httpJson(srv.port, 'POST', '/api/settings', { iptvUrl: null }, admin); // cleanup
+    await new Promise((r) => m3uSrv.close(r));
+  }
 });
 
 test('iptv: native proxy logs upstream errors without leaking provider urls', async () => {
