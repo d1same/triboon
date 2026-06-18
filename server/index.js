@@ -180,6 +180,17 @@ function xtChannelUrls(s, streamId) {
     nativeFallbackMime: 'video/mp2t',
   };
 }
+function hydrateXtreamCachedChannels(s, rawChannels) {
+  if (!Array.isArray(rawChannels)) return [];
+  return rawChannels
+    .filter((c) => c && c.xtreamId !== undefined && c.xtreamId !== null && c.xtreamId !== '')
+    .slice(0, 20000)
+    .map((c, i) => ({
+      ...c,
+      idx: i,
+      ...xtChannelUrls(s, c.xtreamId),
+    }));
+}
 function iptvNativeMime(url) {
   const u = String(url || '').toLowerCase();
   if (/\.m3u8(?:[?#]|$)/.test(u)) return 'application/x-mpegURL';
@@ -191,6 +202,25 @@ function iptvNativeLogLabel(meta = {}) {
   const idx = Number.isInteger(meta.idx) ? `#${meta.idx}` : '#?';
   const name = String(meta.name || 'channel').replace(/[\r\n]+/g, ' ').slice(0, 80);
   return `${idx} "${name}"${meta.alt ? ' fallback' : ''}`;
+}
+function iptvSafeHost(raw) {
+  try { return new URL(String(raw || '')).host || 'unknown'; }
+  catch {
+    return String(raw || '')
+      .replace(/^https?:\/\//i, '')
+      .split('/')[0]
+      .replace(/[^\w.:-]/g, '')
+      .slice(0, 80) || 'unknown';
+  }
+}
+function iptvChannelLogLabel(ch = {}) {
+  const idx = Number.isInteger(ch.idx) ? `#${ch.idx}` : '#?';
+  const name = String(ch.name || 'channel').replace(/[\r\n]+/g, ' ').slice(0, 80);
+  const stream = ch.xtreamId !== undefined && ch.xtreamId !== null && ch.xtreamId !== '' ? ` stream=${ch.xtreamId}` : '';
+  return `${idx} "${name}"${stream}`;
+}
+function sanitizeIptvLogError(err) {
+  return sanitizeIptvFfmpegError(err && err.message ? err.message : err) || 'unknown error';
 }
 function iptvNativeFailureReason(status, body) {
   const text = String(body || '').toLowerCase();
@@ -330,10 +360,30 @@ async function loadIptvChannels() {
     if (!iptvRefreshing) {
       iptvRefreshing = true;
       fetchIptvChannels(s, key)
-        .catch((e) => { console.error('[iptv refresh]', e.message); iptvCache.at = Date.now() - (IPTV_CACHE_TTL_MS - 600000); }) // retry in ~10min
+        .catch((e) => {
+          console.error(`[iptv refresh] background channel refresh failed; keeping cached playlist channels=${iptvCache.channels.length}: ${sanitizeIptvLogError(e)}`);
+          iptvCache.at = Date.now() - (IPTV_CACHE_TTL_MS - 600000);
+        }) // retry in ~10min
         .finally(() => { iptvRefreshing = false; });
     }
     return iptvCache.channels;
+  }
+  if (s.iptvMode === 'xtream') {
+    const disk = store.read('iptvcache', null);
+    const channels = disk && disk.key === key ? hydrateXtreamCachedChannels(s, disk.channels) : [];
+    if (channels.length) {
+      iptvCache = { key, at: Number(disk.at) || 0, channels };
+      if (!iptvRefreshing) {
+        iptvRefreshing = true;
+        fetchIptvChannels(s, key)
+          .catch((e) => {
+            console.error(`[iptv refresh] background channel refresh failed; serving persisted Xtream cache channels=${channels.length}: ${sanitizeIptvLogError(e)}`);
+            iptvCache.at = Date.now() - (IPTV_CACHE_TTL_MS - 600000);
+          })
+          .finally(() => { iptvRefreshing = false; });
+      }
+      return channels;
+    }
   }
   try {
     return await fetchIptvChannels(s, key);
@@ -343,8 +393,9 @@ async function loadIptvChannels() {
     // page. Goes stale-but-working until the panel answers again.
     const disk = store.read('iptvcache', null);
     if (s.iptvMode === 'xtream' && disk && disk.key === key && Array.isArray(disk.channels) && disk.channels.length) {
-      console.error(`[iptv] source failed (${e.message}) — serving the last cached playlist (${disk.channels.length} channels)`);
-      const channels = disk.channels.map((c) => ({ ...c, ...xtChannelUrls(s, c.xtreamId) }));
+      const ageMin = Math.max(0, Math.round((Date.now() - (Number(disk.at) || 0)) / 60000));
+      console.error(`[iptv] Xtream source failed; serving last cached playlist channels=${disk.channels.length} age=${ageMin}m: ${sanitizeIptvLogError(e)}`);
+      const channels = hydrateXtreamCachedChannels(s, disk.channels);
       iptvCache = { key, at: Date.now() - (IPTV_CACHE_TTL_MS - 600000), channels }; // near-stale: retry in ~10min
       return channels;
     }
@@ -448,9 +499,21 @@ async function fetchIptvChannels(s, key) {
   if (s.iptvMode === 'xtream' && s.xtHost) {
     const base = String(s.xtHost).replace(/\/+$/, '');
     const apiBase = `${base}/player_api.php?username=${encodeURIComponent(s.xtUser || '')}&password=${encodeURIComponent(s.xtPass || '')}`;
+    const fetchPanel = async (action, opts) => {
+      try {
+        const r = await fetchUrlExt(`${apiBase}&action=${action}`, opts);
+        if ((r.status || 0) >= 400) {
+          const body = r.body.toString('utf8', 0, 2048);
+          throw new Error(`HTTP ${r.status} (${iptvNativeFailureReason(r.status || 502, body)})`);
+        }
+        return r;
+      } catch (e) {
+        throw new Error(`Xtream channel load action=${action} host=${iptvSafeHost(s.xtHost)} failed: ${sanitizeIptvLogError(e)}`);
+      }
+    };
     const [catsR, streamsR] = await Promise.all([
-      fetchUrlExt(`${apiBase}&action=get_live_categories`, { timeoutMs: 10000, deadlineMs: 25000, maxBytes: 5 * 1024 * 1024 }),
-      fetchUrlExt(`${apiBase}&action=get_live_streams`, { timeoutMs: 10000, deadlineMs: 40000, maxBytes: 30 * 1024 * 1024 }),
+      fetchPanel('get_live_categories', { timeoutMs: 10000, deadlineMs: 25000, maxBytes: 5 * 1024 * 1024 }),
+      fetchPanel('get_live_streams', { timeoutMs: 10000, deadlineMs: 40000, maxBytes: 30 * 1024 * 1024 }),
     ]);
     let cats, streams; // hostile/broken JSON → a clean error, not an opaque parse throw
     try {
@@ -674,7 +737,16 @@ function persistXtreamEpgCache() {
 async function fetchXtreamEpgAction(s, ch, limit, action, timeouts = {}) {
   const base = String(s.xtHost).replace(/\/+$/, '');
   const u = `${base}/player_api.php?username=${encodeURIComponent(s.xtUser || '')}&password=${encodeURIComponent(s.xtPass || '')}&action=${action}&stream_id=${ch.xtreamId}&limit=${Math.max(2, Math.min(48, limit))}`;
-  const r = await fetchUrlExt(u, { timeoutMs: timeouts.timeoutMs || 8000, deadlineMs: timeouts.deadlineMs || 15000, maxBytes: 2 * 1024 * 1024 });
+  let r;
+  try {
+    r = await fetchUrlExt(u, { timeoutMs: timeouts.timeoutMs || 8000, deadlineMs: timeouts.deadlineMs || 15000, maxBytes: 2 * 1024 * 1024 });
+  } catch (e) {
+    throw new Error(`action=${action} host=${iptvSafeHost(s.xtHost)} failed: ${sanitizeIptvLogError(e)}`);
+  }
+  if ((r.status || 0) >= 400) {
+    const body = r.body.toString('utf8', 0, 2048);
+    throw new Error(`action=${action} host=${iptvSafeHost(s.xtHost)} HTTP ${r.status} (${iptvNativeFailureReason(r.status || 502, body)})`);
+  }
   let json, raw;
   try {
     json = JSON.parse(r.body.toString('utf8') || '{}');
@@ -688,7 +760,8 @@ async function fetchXtreamEpgList(s, ch, limit) {
   if (short.length) return short;
   try {
     return await fetchXtreamEpgAction(s, ch, limit, 'get_simple_data_table', { timeoutMs: 5000, deadlineMs: 9000 });
-  } catch {
+  } catch (e) {
+    console.error(`[iptv xtream guide] ${iptvChannelLogLabel(ch)} simple-table fallback failed; using empty guide: ${sanitizeIptvLogError(e)}`);
     return short;
   }
 }
@@ -708,8 +781,12 @@ async function xtreamEpgList(ch, { limit = 24 } = {}) {
         if (list.length) persistXtreamEpgCache();
         return list;
       }).catch((e) => {
+        // Stale-cache refresh is fire-and-forget; provider timeouts must not surface as
+        // unhandled rejections that can kill the container.
+        const ageMin = Math.max(0, Math.round((Date.now() - hit.at) / 60000));
+        console.error(`[iptv xtream guide] ${iptvChannelLogLabel(ch)} refresh failed; serving stale cache age=${ageMin}m: ${sanitizeIptvLogError(e)}`);
         xtreamEpgCache.byStream.set(id, { at: hit.at, list: hit.list });
-        throw e;
+        return hit.list;
       });
       xtreamEpgCache.byStream.set(id, { ...hit, promise: p });
     }
@@ -725,7 +802,8 @@ async function xtreamEpgList(ch, { limit = 24 } = {}) {
   xtreamEpgCache.byStream.set(id, { at: 0, list: hit ? hit.list : [], promise: p });
   try {
     return await p;
-  } catch {
+  } catch (e) {
+    console.error(`[iptv xtream guide] ${iptvChannelLogLabel(ch)} fetch failed; using ${hit && hit.list ? 'previous cache' : 'channel-title fallback'}: ${sanitizeIptvLogError(e)}`);
     xtreamEpgCache.byStream.delete(id);
     if (hit) return hit.list;
     return [];
@@ -1079,6 +1157,7 @@ async function nextWatchEpisodes(uid, profile = 'default') {
             (d.backdrop_path ? `https://image.tmdb.org/t/p/w1280${d.backdrop_path}` : ((top.w.meta && top.w.meta.backdrop) || '')),
           poster: d.poster_path ? `https://image.tmdb.org/t/p/w342${d.poster_path}` : undefined,
           tmdbId: +showId, type: 'episode', progress: 0, resume: 0,
+          updatedAt: top.w.updatedAt || 0,
           _nextEp: true, _newEp: new Date(`${next.air_date}T00:00:00Z`).getTime() > (top.w.updatedAt || 0),
           season: s.season_number, episode: next.episode_number,
         });

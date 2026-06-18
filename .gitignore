@@ -38,3 +38,4 @@ bench/shots/
 alltests.txt
 p2fail*.txt
 graphify-out/
+.codex-remote-attachments/

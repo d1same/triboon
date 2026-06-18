@@ -111,6 +111,62 @@ test('iptv: huge M3U playlists stream-parse to the channel cap without waiting f
   }
 });
 
+test('iptv: Xtream channels serve persisted cache immediately after restart and refresh in background', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-channel-cache-'));
+  let streamHits = 0;
+  let streamName = 'Cached News';
+  let streamDelay = 0;
+  const upstream = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    const action = u.searchParams.get('action');
+    res.writeHead(200, { 'content-type': 'application/json' });
+    if (action === 'get_live_categories') return res.end(JSON.stringify([{ category_id: '1', category_name: 'News' }]));
+    if (action === 'get_live_streams') {
+      streamHits++;
+      const body = JSON.stringify([{ stream_id: 901, name: streamName, category_id: '1', epg_channel_id: 'news.cache' }]);
+      if (streamDelay) return setTimeout(() => res.end(body), streamDelay);
+      return res.end(body);
+    }
+    res.end(JSON.stringify({ epg_listings: [] }));
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const host = `http://127.0.0.1:${upstream.address().port}`;
+
+  let first;
+  let second;
+  try {
+    first = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(first.port);
+    await httpJson(first.port, 'POST', '/api/settings',
+      { iptvMode: 'xtream', xtHost: host, xtUser: 'xtuser', xtPass: 'xtpass', epgUrl: null }, admin);
+    const warmed = await httpJson(first.port, 'GET', '/api/iptv/channels', null, admin);
+    assert.strictEqual(warmed.json.channels[0].name, 'Cached News');
+    assert.strictEqual(streamHits, 1, 'first load should fetch and persist the Xtream channel list');
+    first.store.flush();
+    await first.shutdown();
+    first = null;
+
+    streamName = 'Fresh News';
+    streamDelay = 1200;
+    second = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const login = await httpJson(second.port, 'POST', '/api/login', { name: 'owner', password: 'hunter22' });
+    const started = Date.now();
+    const cached = await httpJson(second.port, 'GET', '/api/iptv/channels', null, login.json.token);
+    assert.strictEqual(cached.status, 200);
+    assert.strictEqual(cached.json.channels[0].name, 'Cached News');
+    assert.ok(Date.now() - started < 500, 'restart should serve persisted Xtream channels without waiting on the provider API');
+
+    await new Promise((resolve) => setTimeout(resolve, streamDelay + 350));
+    const fresh = await httpJson(second.port, 'GET', '/api/iptv/channels', null, login.json.token);
+    assert.strictEqual(fresh.json.channels[0].name, 'Fresh News', 'background refresh should replace the stale disk channel list');
+    assert.ok(streamHits >= 2, 'background refresh should still ask Xtream for the current channel list');
+  } finally {
+    if (first) await first.shutdown();
+    if (second) await second.shutdown();
+    upstream.close();
+  }
+});
+
 test('iptv: empty Xtream guide misses are not persisted across restart', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-epg-cache-'));
   const b64 = (s) => Buffer.from(s).toString('base64');
@@ -207,6 +263,80 @@ test('iptv: Xtream guide falls back to simple data table when short EPG is empty
     assert.strictEqual(simpleHits, 1);
   } finally {
     if (srv) await srv.shutdown();
+    upstream.close();
+  }
+});
+
+test('iptv: stale Xtream guide refresh failures do not crash the process', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-stale-guide-refresh-'));
+  const b64 = (s) => Buffer.from(s).toString('base64');
+  const nowS = Math.floor(Date.now() / 1000);
+  let failGuide = false;
+  let epgHits = 0;
+  const upstream = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    const action = u.searchParams.get('action');
+    res.setHeader('content-type', 'application/json');
+    if (action === 'get_live_categories') return res.end(JSON.stringify([{ category_id: '1', category_name: 'News' }]));
+    if (action === 'get_live_streams') {
+      return res.end(JSON.stringify([{ stream_id: 901, name: 'Stale Guide News', category_id: '1' }]));
+    }
+    if (action === 'get_short_epg') {
+      epgHits++;
+      if (failGuide) return req.socket.destroy();
+      return res.end(JSON.stringify({ epg_listings: [
+        { title: b64('Stale But Usable'), start_timestamp: nowS - 60, stop_timestamp: nowS + 3600 },
+      ] }));
+    }
+    res.end('[]');
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const host = `http://127.0.0.1:${upstream.address().port}`;
+
+  let first;
+  let second;
+  const unhandled = [];
+  const onUnhandled = (e) => unhandled.push(e);
+  const logs = [];
+  const prevErr = console.error;
+  try {
+    first = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(first.port);
+    await httpJson(first.port, 'POST', '/api/settings',
+      { iptvMode: 'xtream', xtHost: host, xtUser: 'xtuser', xtPass: 'xtpass', epgUrl: null }, admin);
+    const ch = await httpJson(first.port, 'GET', '/api/iptv/channels', null, admin);
+    const guide = await httpJson(first.port, 'GET', `/api/iptv/guide?chs=${ch.json.channels[0].idx}`, null, admin);
+    assert.strictEqual(guide.json.channels[0].programmes[0].title, 'Stale But Usable');
+    const cached = first.store.read('xtreamepgcache', null);
+    assert.ok(cached && cached.streams && cached.streams.length, 'Xtream guide cache persisted');
+    const staleAt = Date.now() - (2 * 24 * 3600000);
+    cached.at = staleAt;
+    cached.streams = cached.streams.map(([id, e]) => [id, { ...e, at: staleAt }]);
+    first.store.write('xtreamepgcache', cached);
+    first.store.flush();
+    await first.shutdown();
+    first = null;
+
+    failGuide = true;
+    console.error = (...args) => logs.push(args.map(String).join(' '));
+    process.on('unhandledRejection', onUnhandled);
+    second = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const login = await httpJson(second.port, 'POST', '/api/login', { name: 'owner', password: 'hunter22' });
+    const stale = await httpJson(second.port, 'GET', '/api/iptv/guide?chs=0', null, login.json.token);
+    assert.strictEqual(stale.json.channels[0].programmes[0].title, 'Stale But Usable');
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.deepStrictEqual(unhandled, [], 'stale background refresh failure should be swallowed, not crash Node');
+    assert.ok(epgHits >= 2, 'stale cache should still try to refresh in the background');
+    const joined = logs.join('\n');
+    assert.match(joined, /\[iptv xtream guide\].*#0 "Stale Guide News" stream=901.*serving stale cache.*action=get_short_epg.*failed/,
+      'stale refresh failures should explain channel, stream id, cache fallback, and Xtream action');
+    assert.doesNotMatch(joined, /xtuser|xtpass|player_api\.php\?/,
+      'Xtream guide failure logs must not leak credentials or full provider API URLs');
+  } finally {
+    console.error = prevErr;
+    process.off('unhandledRejection', onUnhandled);
+    if (first) await first.shutdown();
+    if (second) await second.shutdown();
     upstream.close();
   }
 });

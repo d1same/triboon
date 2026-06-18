@@ -285,6 +285,12 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'home should briefly prepare next-episode Continue Watching entries before the row is published');
   assert.match(ui, /if \(!opts\.catalogOnly\) await prepareHomeTvNext\(cw, HOME_NEXT_WAIT_MS\);[\s\S]+publishHomeRows\(homeRowsFromWatch\(cw, false\), \{ preserveFocus: !!opts\.preserveFocus, focusSnapshot: opts\.focusSnapshot \}\)/,
     'Continue Watching should publish once with ready next-up entries instead of adding them a few seconds later');
+  assert.match(ui, /function compareContinueWatchingItems\(a, b\) \{[\s\S]+const byRecent = \(b\._cwSortAt \|\| 0\) - \(a\._cwSortAt \|\| 0\);[\s\S]+const byKind = \(a\._nextEp \? 1 : 0\) - \(b\._nextEp \? 1 : 0\);[\s\S]+\}/,
+    'Continue Watching should sort by last watched activity before falling back to card type');
+  assert.match(ui, /function buildCwItems\(cw\) \{[\s\S]+_cwSortAt: w\.updatedAt \|\| 0[\s\S]+items\.push\(stampContinueWatchingSort\(\{ \.\.\.it \}, cw\)\);[\s\S]+items\.push\(\.\.\.nextEpisodeBumps\(cw, items\)\.map\(\(it\) => stampContinueWatchingSort\(it, cw, it\._cwSortAt\)\)\);[\s\S]+return items\.sort\(compareContinueWatchingItems\);/,
+    'Continue Watching should merge next-up cards into the row, then sort the whole row by last watched recency');
+  assert.doesNotMatch(ui, /items\.unshift\(it\)|items\.unshift\(\.\.\.nextEpisodeBumps/,
+    'next-episode cards must not be unshifted ahead of in-progress Continue Watching cards');
   assert.match(ui, /const needLocalCacheRefresh = !S\.localMap && cachedLocalLibraryItemsAvailable\(\);[\s\S]+const needEnrich = needLocalCacheRefresh \|\| \(S\.serverInfo\.iptv/,
     'home should not use the generic background enrich path to mutate Continue Watching with next-up entries');
   assert.match(ui, /function refreshLocalMapFromCachedLibraries\(\) \{[\s\S]+S\.libCache && S\.libCache\[lib\.id\][\s\S]+if \(!c \|\| !c\.data\) continue;[\s\S]+mergeLocalItemsInto\(map, lib, c\.data\.items \|\| \[\]\)[\s\S]+S\.localMap = map;/,
@@ -548,8 +554,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Android player handoff should include the current-season episode choices');
   assert.match(ui, /window\.__tvNativeEpisodeSelect = \(index, pos, dur\) => \{[\s\S]+S\.playerSeasonStrip\.idx = idx;[\s\S]+activatePlayerEpisode\(\);[\s\S]+\};/,
     'native episode-row selection should return through the normal web episode play path');
-  assert.match(android, /private String nativePlaybackSubline = "";[\s\S]+String episodeLabel = j\.optString\("episodeLabel", ""\);[\s\S]+nativePlaybackSubline = episodeLabel == null \? "" : episodeLabel;[\s\S]+String subline = "live"\.equals\(mode\)[\s\S]+: nativePlaybackSubline;[\s\S]+nativePlayerSubline\.setText\(subline\);/,
-    'native Android player should show season/episode metadata below the episode title');
+  assert.match(android, /private String nativePlaybackSubline = "";[\s\S]+String episodeLabel = j\.optString\("episodeLabel", ""\);[\s\S]+nativePlaybackSubline = episodeLabel == null \? "" : episodeLabel;[\s\S]+String subline = isLiveMode \? "" : nativePlaybackSubline;[\s\S]+nativeChromeSubline\.setText\(subline\);[\s\S]+nativeChromeSubline\.setVisibility\(subline\.isEmpty\(\) \? View\.GONE : View\.VISIBLE\);[\s\S]+nativePlayerSubline\.setText\(""\);[\s\S]+nativePlayerSubline\.setVisibility\(View\.GONE\);/,
+    'native Android VOD player should show season/episode metadata in the bottom-left metadata bar, not the top-left chrome');
+  assert.doesNotMatch(android, /nativePlayerSubline\.setText\(subline\)/,
+    'native Android should not put TV episode names in the top-left player subline');
   assert.match(android, /private HorizontalScrollView nativeEpisodeStrip;[\s\S]+private final java\.util\.ArrayList<NativeEpisode> nativeEpisodes = new java\.util\.ArrayList<>\(\);/,
     'native Android player should own a real episode thumbnail row instead of relying on the hidden web overlay');
   assert.match(android, /nativeChrome\.addView\(nativeEpisodeStrip, new LinearLayout\.LayoutParams\([\s\S]+ViewGroup\.LayoutParams\.MATCH_PARENT, dp\(198\)\)\);/,
@@ -598,6 +606,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'screensaver should use the transparent tight-crop Triboon logo asset with the full wordmark as fallback');
   assert.match(ui, /const SCREENSAVER_IDLE_MS = 60 \* 1000;[\s\S]+function canShowScreensaver\(\) \{[\s\S]+S\.view === 'player' \|\| \$\('player'\)\.classList\.contains\('open'\)[\s\S]+\.gate\.open,#drawer\.open,#trailer\.open,#libModal\.open,#matchModal\.open,#catModal\.open,#filterMenu\.open,#cwMenu\.open,#trackMenu\.open,#musicNow\.open/,
     'app screensaver should wait one minute and stay out of playback, gates, and active modal surfaces');
+  assert.match(ui, /function wakeScreensaverForPlayerSurface\(\) \{[\s\S]+if \(S\.screensaverOn\) hideScreensaver\(true\);[\s\S]+resetScreensaverIdle\(\);[\s\S]+\}/,
+    'player and PiP guide surfaces should explicitly wake the screensaver before revealing video UI');
   assert.match(ui, /const SCREENSAVER_TRENDING_TTL = 24 \* 60 \* 60 \* 1000;[\s\S]+const SCREENSAVER_TRENDING_STORE = 'triboon\.screensaver\.trending';/,
     'screensaver trending artwork should use a daily browser cache');
   assert.match(ui, /function loadScreensaverTrendingCache\(\) \{[\s\S]+localStorage\.getItem\(SCREENSAVER_TRENDING_STORE\)[\s\S]+Date\.now\(\) - S\._screensaverTrendingAt < SCREENSAVER_TRENDING_TTL[\s\S]+function saveScreensaverTrendingCache\(key, items\) \{[\s\S]+localStorage\.setItem\(SCREENSAVER_TRENDING_STORE, JSON\.stringify\(payload\)\)/,
@@ -763,8 +773,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native guide should consume pending live state without losing the Live TV return target');
   assert.doesNotMatch(ui, /__tvNativeLiveGuide[\s\S]+await playChannelWeb\(it\)/,
     'native Live TV guide should not hand off to the old web player');
-  assert.match(ui, /function openNativeLiveGuideShell\(it\) \{[\s\S]+stopWebVideoElement\(\);[\s\S]+document\.body\.classList\.add\('nativeGuideMode'\);[\s\S]+S\.nativeGuideMode = true;[\s\S]+\$\(\'player\'\)\.classList\.add\('open', 'guideMode'\);[\s\S]+\$\(\'player\'\)\.classList\.remove\('live'\);[\s\S]+\$\(\'osd\'\)\.classList\.add\('hide'\);/,
-    'native Live TV guide should enter guide mode before the player container can reveal the web player');
+  assert.match(ui, /function openNativeLiveGuideShell\(it\) \{[\s\S]+wakeScreensaverForPlayerSurface\(\);[\s\S]+stopWebVideoElement\(\);[\s\S]+document\.body\.classList\.add\('nativeGuideMode'\);[\s\S]+S\.nativeGuideMode = true;[\s\S]+\$\(\'player\'\)\.classList\.add\('open', 'guideMode'\);[\s\S]+\$\(\'player\'\)\.classList\.remove\('live'\);[\s\S]+\$\(\'osd\'\)\.classList\.add\('hide'\);/,
+    'native Live TV guide should wake screensaver state and enter guide mode before the player container can reveal the web player');
   assert.doesNotMatch(ui, /function openNativeLiveGuideShell\(it\) \{[\s\S]+\$\(\'player\'\)\.classList\.add\('open', 'live'\)/,
     'native Live TV guide must not open the old web live-player shell first');
   assert.match(ui, /function closePlayerGuide\(opts = \{\}\) \{[\s\S]+window\.TriboonTV\.closeGuide\(\)/,
@@ -775,8 +785,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native guide channel retunes should keep the web guide epoch in sync and restore row focus');
   assert.match(ui, /if \(!it\) \{[\s\S]+S\.playing\.item\.type !== 'live' && S\.view === 'player'[\s\S]+S\.returnVod = \{ item: S\.playing\.item, resume: currentTime\(\) \};[\s\S]+revealNativeGuideShell\(\);[\s\S]+return togglePlayerGuide\(\);/,
     'native movie/episode guide button should open the same PiP guide and preserve a Back to movie target');
-  assert.match(ui, /function revealNativeGuideShell\(\) \{[\s\S]+stopWebVideoElement\(\);[\s\S]+document\.body\.classList\.add\('nativeGuideMode'\);[\s\S]+S\.nativeGuideMode = true;[\s\S]+\$\(\'player\'\)\.classList\.add\('open', 'guideMode'\);[\s\S]+\$\(\'player\'\)\.classList\.remove\('live'\);[\s\S]+\$\(\'osd\'\)\.classList\.add\('hide'\);/,
-    'native movie/episode guide button should hide the web video immediately while the guide data loads');
+  assert.match(ui, /function revealNativeGuideShell\(\) \{[\s\S]+wakeScreensaverForPlayerSurface\(\);[\s\S]+stopWebVideoElement\(\);[\s\S]+document\.body\.classList\.add\('nativeGuideMode'\);[\s\S]+S\.nativeGuideMode = true;[\s\S]+\$\(\'player\'\)\.classList\.add\('open', 'guideMode'\);[\s\S]+\$\(\'player\'\)\.classList\.remove\('live'\);[\s\S]+\$\(\'osd\'\)\.classList\.add\('hide'\);/,
+    'native movie/episode guide button should wake the screensaver and hide the web video immediately while the guide data loads');
   assert.match(ui, /return renderGuideProgressive\(body, pool\)/,
     'Live TV guide should render the guide shell before waiting on provider guide data');
   assert.match(ui, /const guideList = selectedList\.slice\(0, LIVE_GUIDE_BATCH\)/,
@@ -1043,12 +1053,18 @@ test('Android native player: direct source and native chrome stay out of the web
     'native movie/episode chrome should not show the technical file/source line');
   assert.match(android, /nativePlayerTitle\.setVisibility\(View\.INVISIBLE\);/,
     'native hidden title should still reserve left-side space so the time stays top-right');
+  assert.match(android, /boolean isLiveMode = "live"\.equals\(mode\);[\s\S]+String subline = isLiveMode \? "" : nativePlaybackSubline;/,
+    'native Live TV chrome should not duplicate the channel/source line in the top-left');
   assert.match(android, /nativeEndsAt\.setText\("Ends at " \+ fmtNativeClock/,
     'native movie/episode chrome should show when playback will finish');
   assert.match(android, /nativeTime\.setText\(!isLive \? \(dur > 0 \? fmtNative\(dur\) : "--:--"\) : ""\);/,
     'native movie/episode seek row should reserve the right-side duration label while Exo resolves duration');
+  assert.match(android, /if \(nativeElapsed != null\) \{[\s\S]+nativeElapsed\.setText\(isLive \? "" : fmtNative\(pos\)\);[\s\S]+nativeElapsed\.setVisibility\(isLive \? View\.GONE : View\.VISIBLE\);[\s\S]+\}[\s\S]+nativeTime\.setText\(!isLive \? \(dur > 0 \? fmtNative\(dur\) : "--:--"\) : ""\);[\s\S]+nativeTime\.setVisibility\(isLive \? View\.GONE : View\.VISIBLE\);/,
+    'native Live TV chrome should hide VOD seek timing labels instead of showing another LIVE label');
   assert.match(android, /nativeEndsAt\.setText\("Ends at --:--"\);[\s\S]+nativeEndsAt\.setVisibility\(View\.VISIBLE\);/,
     'native top-right finish label should stay visible with a placeholder until duration is known');
+  assert.doesNotMatch(android, /nativeEndsAt\.setText\("Live TV"\)/,
+    'native top-right chrome should leave Live TV status to the single LIVE badge');
   assert.match(android, /nativeTime\.setMinWidth\(dp\(72\)\);[\s\S]+seekRow\.addView\(nativeTime, new LinearLayout\.LayoutParams\(dp\(76\), dp\(28\)\)\);/,
     'native right-side seek timer should have enough reserved width for movie durations');
   assert.match(android, /nativeChrome\.setPadding\(dp\(34\), dp\(12\), dp\(34\), dp\(18\)\)/,
@@ -1061,11 +1077,11 @@ test('Android native player: direct source and native chrome stay out of the web
     'native option sheets should stay compact instead of covering the video');
   assert.match(android, /private LinearLayout nativeMetaBar;[\s\S]+private LinearLayout nativeChrome;/,
     'native ExoPlayer should have a separate metadata overlay above the seek bar');
-  assert.match(android, /nativeMetaBar = new LinearLayout\(this\);[\s\S]+nativeChromeTitle = new TextView\(this\);[\s\S]+nativeChromeQuality = new TextView\(this\);[\s\S]+nativePlayerLayer\.addView\(nativeMetaBar, metaLp\);/,
-    'native ExoPlayer should place title left and quality right in a visible overlay above the seek bar');
+  assert.match(android, /nativeMetaBar = new LinearLayout\(this\);[\s\S]+LinearLayout chromeText = new LinearLayout\(this\);[\s\S]+nativeChromeTitle = new TextView\(this\);[\s\S]+nativeChromeSubline = new TextView\(this\);[\s\S]+nativeMetaBar\.addView\(chromeText, new LinearLayout\.LayoutParams\([\s\S]+nativeChromeQuality = new TextView\(this\);[\s\S]+nativePlayerLayer\.addView\(nativeMetaBar, metaLp\);/,
+    'native ExoPlayer should place title and episode subline bottom-left with quality on the right above the seek bar');
   assert.match(android, /metaLp\.setMargins\(0, 0, 0, dp\(150\)\);/,
     'native ExoPlayer metadata overlay should sit above the seek row instead of being buried in the control column');
-  assert.match(android, /String chromeQuality = "live"\.equals\(mode\) \? "LIVE" : nativeQualityLabel;[\s\S]+nativeChromeQuality\.setText\(chromeQuality\)/,
+  assert.match(android, /String chromeQuality = isLiveMode \? "LIVE" : nativeQualityLabel;[\s\S]+nativeChromeQuality\.setText\(chromeQuality\)/,
     'native video quality should show a friendly resolution label, not direct/remux/transcode internals');
   assert.match(android, /private FrameLayout nativeLoading;[\s\S]+private ImageView nativeLoadingBackdrop;[\s\S]+private TextView nativeLoadingTitle;/,
     'native ExoPlayer should own a branded loading overlay instead of borrowing the web player shell');
@@ -1244,8 +1260,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Live TV fallback should stay inside ExoPlayer instead of opening web playback');
   assert.match(android, /NATIVE_LIVE_STALL_RECOVERY_MS = 45000L[\s\S]+NATIVE_LIVE_READ_TIMEOUT_MS = 60000/,
     'native Live TV should allow provider hiccups before declaring the stream timed out');
-  assert.match(android, /setBufferDurationsMs\("video"\.equals\(mode\) \? 6000 : 8000,[\s\S]+"video"\.equals\(mode\) \? 60000 : 60000,[\s\S]+"video"\.equals\(mode\) \? 700 : 700,[\s\S]+"video"\.equals\(mode\) \? 1800 : 4000\)/,
-    'native movies should use a smaller startup buffer than Live TV so first frame appears faster');
+  assert.match(android, /setBufferDurationsMs\("video"\.equals\(mode\) \? 6000 : 4000,[\s\S]+"video"\.equals\(mode\) \? 60000 : 60000,[\s\S]+"video"\.equals\(mode\) \? 700 : 700,[\s\S]+"video"\.equals\(mode\) \? 1800 : 1800\)/,
+    'native Live TV should keep a short startup/rebuffer target so Xtream channel zaps show quickly');
   assert.match(android, /setReadTimeoutMs\("live"\.equals\(nativeMode\) \? NATIVE_LIVE_READ_TIMEOUT_MS : 18000\)/,
     'native Live TV should use a longer provider read timeout than VOD startup');
   assert.match(android, /private void updateNativeLiveWatchdog\(\) \{[\s\S]+boolean waitingForLiveData = state == Player\.STATE_BUFFERING[\s\S]+nativePlayer\.isLoading\(\)[\s\S]+boolean unhealthy = state == Player\.STATE_IDLE \|\| state == Player\.STATE_ENDED \|\| waitingForLiveData[\s\S]+now - nativeLiveUnhealthySinceMs >= NATIVE_LIVE_STALL_RECOVERY_MS[\s\S]+recoverNativeLivePlayback\(state == Player\.STATE_IDLE \? "idle"/,

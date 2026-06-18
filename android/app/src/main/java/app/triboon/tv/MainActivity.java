@@ -95,6 +95,7 @@ public class MainActivity extends Activity {
     private TextView nativePlayerSubline;
     private TextView nativePlayerBadge;
     private TextView nativeChromeTitle;
+    private TextView nativeChromeSubline;
     private TextView nativeChromeQuality;
     private TextView nativeClock;
     private TextView nativeEndsAt;
@@ -671,13 +672,33 @@ public class MainActivity extends Activity {
         nativeMetaBar.setClipChildren(false);
         nativeMetaBar.setClipToPadding(false);
 
+        LinearLayout chromeText = new LinearLayout(this);
+        chromeText.setOrientation(LinearLayout.VERTICAL);
+        chromeText.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        chromeText.setClipChildren(false);
+        chromeText.setClipToPadding(false);
+
         nativeChromeTitle = new TextView(this);
         nativeChromeTitle.setTextColor(Color.WHITE);
         nativeChromeTitle.setTextSize(18);
         nativeChromeTitle.setTypeface(Typeface.DEFAULT_BOLD);
         nativeChromeTitle.setSingleLine(true);
         nativeChromeTitle.setShadowLayer(6, 0, 2, Color.BLACK);
-        nativeMetaBar.addView(nativeChromeTitle, new LinearLayout.LayoutParams(
+        chromeText.addView(nativeChromeTitle, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        nativeChromeSubline = new TextView(this);
+        nativeChromeSubline.setTextColor(0xB8F3EFF7);
+        nativeChromeSubline.setTextSize(12);
+        nativeChromeSubline.setTypeface(Typeface.DEFAULT_BOLD);
+        nativeChromeSubline.setSingleLine(true);
+        nativeChromeSubline.setShadowLayer(5, 0, 2, Color.BLACK);
+        nativeChromeSubline.setPadding(0, dp(3), 0, 0);
+        nativeChromeSubline.setVisibility(View.GONE);
+        chromeText.addView(nativeChromeSubline, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        nativeMetaBar.addView(chromeText, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
 
         nativeChromeQuality = new TextView(this);
@@ -1089,7 +1110,6 @@ public class MainActivity extends Activity {
             String url = j.optString("url", "");
             if (url.isEmpty()) throw new IllegalArgumentException("missing stream url");
             title = j.optString("title", title);
-            String source = j.optString("source", "");
             String mime = j.optString("mime", "");
             String fallbackUrl = j.optString("fallbackUrl", "");
             String fallbackMime = j.optString("fallbackMime", "");
@@ -1121,8 +1141,9 @@ public class MainActivity extends Activity {
                 }
             }
             nativeMode = mode;
+            boolean isLiveMode = "live".equals(mode);
             nativeKind = j.optString("kind", "direct");
-            nativeQualityLabel = qualityLabel.isEmpty() ? ("live".equals(mode) ? "LIVE" : "1080p") : qualityLabel;
+            nativeQualityLabel = qualityLabel.isEmpty() ? (isLiveMode ? "LIVE" : "1080p") : qualityLabel;
             nativeUrl = url;
             nativeMime = mime;
             nativeFallbackUrl = fallbackUrl;
@@ -1155,10 +1176,10 @@ public class MainActivity extends Activity {
 
             if (!reuseQuietVideo) {
                 DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
-                        .setBufferDurationsMs("video".equals(mode) ? 6000 : 8000,
+                        .setBufferDurationsMs("video".equals(mode) ? 6000 : 4000,
                                 "video".equals(mode) ? 60000 : 60000,
                                 "video".equals(mode) ? 700 : 700,
-                                "video".equals(mode) ? 1800 : 4000)
+                                "video".equals(mode) ? 1800 : 1800)
                         .setPrioritizeTimeOverSizeThresholds(true)
                         .build();
                 nativePlayer = new ExoPlayer.Builder(this)
@@ -1219,17 +1240,14 @@ public class MainActivity extends Activity {
             nativePlayerTitle.setText(title);
             nativePlayerTitle.setVisibility(View.INVISIBLE);
             if (nativeChromeTitle != null) nativeChromeTitle.setText(title);
-            String subline = "live".equals(mode)
-                    ? (source.isEmpty() ? "Live TV" : source)
-                    : nativePlaybackSubline;
-            if (!subline.isEmpty()) {
-                nativePlayerSubline.setText(subline);
-                nativePlayerSubline.setVisibility(View.VISIBLE);
-            } else {
-                nativePlayerSubline.setText("");
-                nativePlayerSubline.setVisibility(View.GONE);
+            String subline = isLiveMode ? "" : nativePlaybackSubline;
+            if (nativeChromeSubline != null) {
+                nativeChromeSubline.setText(subline);
+                nativeChromeSubline.setVisibility(subline.isEmpty() ? View.GONE : View.VISIBLE);
             }
-            String chromeQuality = "live".equals(mode) ? "LIVE" : nativeQualityLabel;
+            nativePlayerSubline.setText("");
+            nativePlayerSubline.setVisibility(View.GONE);
+            String chromeQuality = isLiveMode ? "LIVE" : nativeQualityLabel;
             nativePlayerBadge.setText(chromeQuality);
             nativePlayerBadge.setVisibility(View.GONE);
             if (nativeChromeQuality != null) nativeChromeQuality.setText(chromeQuality);
@@ -1830,8 +1848,12 @@ public class MainActivity extends Activity {
         setNativeButtonEnabled(nativeAudioBtn, nativeAudioHasOptions());
         setNativeButtonEnabled(nativeQualityBtn, "video".equals(nativeMode) && nativeHasQualityChoices);
         setNativeButtonEnabled(nativeNextBtn, "video".equals(nativeMode) && nativeHasNext);
-        if (nativeElapsed != null) nativeElapsed.setText(isLive ? "LIVE" : fmtNative(pos));
+        if (nativeElapsed != null) {
+            nativeElapsed.setText(isLive ? "" : fmtNative(pos));
+            nativeElapsed.setVisibility(isLive ? View.GONE : View.VISIBLE);
+        }
         nativeTime.setText(!isLive ? (dur > 0 ? fmtNative(dur) : "--:--") : "");
+        nativeTime.setVisibility(isLive ? View.GONE : View.VISIBLE);
         long now = System.currentTimeMillis();
         if (nativeClock != null) nativeClock.setText(fmtNativeClock(now));
         if (nativeEndsAt != null) {
@@ -1842,8 +1864,8 @@ public class MainActivity extends Activity {
                 nativeEndsAt.setText("Ends at --:--");
                 nativeEndsAt.setVisibility(View.VISIBLE);
             } else {
-                nativeEndsAt.setText("Live TV");
-                nativeEndsAt.setVisibility(View.VISIBLE);
+                nativeEndsAt.setText("");
+                nativeEndsAt.setVisibility(View.GONE);
             }
         }
         if (nativePlayBtn != null) {

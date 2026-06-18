@@ -2941,9 +2941,38 @@ function nextEpisodeBumps(cw, cwItems) {
       backdrop: meta.backdrop || procBackdrop(280, 320, 7), progress: 0,
       _local: { streamUrl: loc.streamUrl, playUrl: loc.playUrl, name: loc.name }, _episode: true,
       _nextEp: true, _newEp: (loc.addedAt || 0) > (top.w.updatedAt || 0),
+      updatedAt: top.w.updatedAt || 0, _cwSortAt: top.w.updatedAt || 0,
     });
   }
   return out.sort((a, b) => ((S.localMap[b.key] || {}).addedAt || 0) - ((S.localMap[a.key] || {}).addedAt || 0));
+}
+function continueWatchingShowId(it) {
+  const m = /^tmdb:tv:(\d+):s\d+e\d+$/i.exec(String((it && it.key) || ''));
+  return m ? m[1] : '';
+}
+function continueWatchingSortAt(cw, it) {
+  const own = Math.max(+(it && it._cwSortAt) || 0, +(it && it.updatedAt) || 0);
+  if (own || !(it && it._nextEp)) return own;
+  const showId = continueWatchingShowId(it);
+  if (!showId) return 0;
+  let best = 0;
+  for (const w of (cw || [])) {
+    if (!w || !w.watched) continue;
+    const m = /^tmdb:tv:(\d+):s\d+e\d+$/i.exec(String(w.key || ''));
+    if (m && m[1] === showId) best = Math.max(best, +w.updatedAt || 0);
+  }
+  return best;
+}
+function stampContinueWatchingSort(it, cw, sortAt) {
+  it._cwSortAt = Math.max(+sortAt || 0, +it.updatedAt || 0, continueWatchingSortAt(cw, it));
+  return it;
+}
+function compareContinueWatchingItems(a, b) {
+  const byRecent = (b._cwSortAt || 0) - (a._cwSortAt || 0);
+  if (byRecent) return byRecent;
+  const byKind = (a._nextEp ? 1 : 0) - (b._nextEp ? 1 : 0);
+  if (byKind) return byKind;
+  return String(a.title || a.key || '').localeCompare(String(b.title || b.key || ''));
 }
 function cwNextFingerprint(cw) {
   return (S.profile && S.profile.id || 'default') + ':' + (cw || [])
@@ -2998,14 +3027,19 @@ function buildCwItems(cw) {
     poster: w.meta.poster || w.meta.backdrop || procBackdrop(280, 320, 5),
     backdrop: w.meta.backdrop || procBackdrop(280, 320, 5),
     progress: w.duration ? w.position / w.duration : (w.traktPct || 0) / 100,
-    resume: w.position, _traktPct: w.traktPct || 0,
+    resume: w.position, _traktPct: w.traktPct || 0, _cwSortAt: w.updatedAt || 0,
   }));
   if (Array.isArray(S._homeTvNext)) {
     const seen = new Set(items.map((it) => it.key));
-    for (const it of S._homeTvNext) if (it && it.key && !seen.has(it.key)) { items.unshift(it); seen.add(it.key); }
+    for (const it of S._homeTvNext) if (it && it.key && !seen.has(it.key)) {
+      items.push(stampContinueWatchingSort({ ...it }, cw));
+      seen.add(it.key);
+    }
   }
-  if (S.localMap) { try { items.unshift(...nextEpisodeBumps(cw, items)); } catch {} }
-  return items;
+  if (S.localMap) {
+    try { items.push(...nextEpisodeBumps(cw, items).map((it) => stampContinueWatchingSort(it, cw, it._cwSortAt))); } catch {}
+  }
+  return items.sort(compareContinueWatchingItems);
 }
 // Recently-added local row — ONLY from already-cached library items (no network here).
 function buildRecentlyAddedRow() {
@@ -4821,7 +4855,12 @@ function closePerson() {
 $('pBack').addEventListener('click', closePerson);
 
 /* ============ player ============ */
+function wakeScreensaverForPlayerSurface() {
+  if (S.screensaverOn) hideScreensaver(true);
+  resetScreensaverIdle();
+}
 function revealWebPlayerShell(it) {
+  wakeScreensaverForPlayerSurface();
   document.body.classList.remove('nativeGuideMode');
   $('player').classList.add('open');
   $('player').classList.toggle('live', it.type === 'live');
@@ -4830,6 +4869,7 @@ function revealWebPlayerShell(it) {
   tick();
 }
 function revealNativeGuideShell() {
+  wakeScreensaverForPlayerSurface();
   stopWebVideoElement();
   document.body.classList.add('videoOpen');
   document.body.classList.add('nativeGuideMode');
@@ -8548,6 +8588,7 @@ function setNativeLivePlaybackState(it) {
 }
 function openNativeLiveGuideShell(it) {
   rememberPlayerReturn();
+  wakeScreensaverForPlayerSurface();
   stopWebVideoElement();
   document.body.classList.add('videoOpen');
   document.body.classList.add('nativeGuideMode');

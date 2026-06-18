@@ -297,7 +297,9 @@ test('watch next: finished episodes keep the next aired episode in Continue Watc
   }, admin);
   let next = await httpJson(srv.port, 'GET', '/api/watch/next', null, admin);
   assert.strictEqual(next.status, 200);
-  assert.ok(next.json.some((x) => x.key === 'tmdb:tv:424242:s1e2' && x._nextEp), 'aired S01E02 appears as next episode');
+  const nextEp = next.json.find((x) => x.key === 'tmdb:tv:424242:s1e2' && x._nextEp);
+  assert.ok(nextEp, 'aired S01E02 appears as next episode');
+  assert.ok(nextEp.updatedAt > 0, 'next episode carries the watched timestamp that should order Continue Watching');
   assert.ok(!next.json.some((x) => x.key === 'tmdb:tv:424242:s1e3'), 'future S01E03 is held until it airs');
 
   await httpJson(srv.port, 'POST', '/api/watch', {
