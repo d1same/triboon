@@ -2482,7 +2482,7 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
     <div id="pgList"></div>
   </div>
   <div id="vlcPanel"><div class="gateCard">
-    <h1>Open in a video player</h1>
+    <h1 id="vlcTitle">Open in a video player</h1>
     <div class="sub">This browser can't decode the file. Paste the stream URL into VLC (Media → Open Network Stream) — seeking works.</div>
     <div id="vlcUrl"></div>
     <button class="btn primary" id="vlcCopy" style="justify-content:center;width:100%">Copy stream URL</button>
@@ -4923,6 +4923,13 @@ function startLiveMseSource(url) {
   S.liveMse = { abort, objectUrl, token, reader: null };
   p.usingLiveMse = true;
   v.src = objectUrl;
+  const requestLivePlay = () => requestVideoPlay(v, { livePrompt: true }).catch(() => {
+    if (active()) {
+      clearTimeout(S._waitT);
+      $('playerLoader').classList.remove('show');
+      showLivePlayPrompt();
+    }
+  });
   ms.addEventListener('sourceopen', async () => {
     if (!active()) return;
     let sb;
@@ -4959,14 +4966,20 @@ function startLiveMseSource(url) {
       appending = false;
       if (!started && appended > 1500000) {
         started = true;
-        v.play().catch(() => {});
+        requestLivePlay();
       }
       pump();
     });
     sb.addEventListener('error', () => { if (active()) { cleanupLiveMse(); failover(); } });
     try {
       const r = await fetch(url, { signal: abort.signal });
-      if (!r.ok || !r.body) throw new Error('live stream fetch failed');
+      if (!r.ok || !r.body) {
+        const reason = r.headers.get('x-triboon-iptv-error') || 'live stream unavailable';
+        const e = new Error(reason);
+        e.liveProviderReason = reason;
+        e.liveProviderStatus = r.status || 0;
+        throw e;
+      }
       const reader = r.body.getReader();
       if (active()) S.liveMse.reader = reader;
       while (active()) {
@@ -4977,14 +4990,18 @@ function startLiveMseSource(url) {
         if (q.length > 80) await new Promise((resolve) => sb.addEventListener('updateend', resolve, { once: true }));
       }
     } catch (e) {
-      if (active() && e.name !== 'AbortError') { cleanupLiveMse(); failover(); }
+      if (active() && e.name !== 'AbortError') {
+        cleanupLiveMse();
+        if (e.liveProviderReason) showLiveProviderError(e.liveProviderReason);
+        else failover();
+      }
     }
   }, { once: true });
   applyVolume();
-  v.play().catch(() => {});
+  requestLivePlay();
   return true;
 }
-function stopActivePlaybackForReplacement() {
+function stopActivePlaybackForReplacement(opts = {}) {
   if (!S.playing) return;
   saveWatch(true);
   if (canUseNativeVideoPlayer() && window.TriboonTV && window.TriboonTV.closeVideo) {
@@ -4993,7 +5010,7 @@ function stopActivePlaybackForReplacement() {
   stopWebVideoElement();
   clearTimeout(S._waitT); clearTimeout(_nudgeT); _nudgeSum = 0; _nudgeBase = null;
   closeTrackMenu();
-  closePlayerGuide({ fromNative: true });
+  if (!opts.preserveGuide) closePlayerGuide({ fromNative: true });
   $('upNext').classList.remove('show'); if (S.upNextTimer) clearInterval(S.upNextTimer);
   if (S.healthTimer) clearInterval(S.healthTimer);
   if (S.watchTimer) clearInterval(S.watchTimer);
@@ -5090,9 +5107,19 @@ function openPlayer(it, mount, opts = {}) {
   // The full-screen loader belongs to STARTUP only (mount + first buffer). Once the first
   // frame has rendered, skips/rebuffers never bring it back — the owner prefers the live
   // frame over a flashing overlay.
+  const clearReadyFrame = () => {
+    hideSeekHoldFrame();
+    const pReady = S.playing;
+    if (pReady && pReady.item && pReady.item.type === 'live' && v.readyState >= 2) {
+      clearTimeout(S._waitT);
+      $('playerLoader').classList.remove('show');
+      $('vlcPanel').classList.remove('show');
+      if (v.paused) showLivePlayPrompt();
+    }
+  };
   v.onplaying = () => { S.playing && (S.playing.started = true); clearTimeout(S._waitT); $('playerLoader').classList.remove('show'); hideSeekHoldFrame(); };
-  v.onloadeddata = hideSeekHoldFrame;
-  v.oncanplay = hideSeekHoldFrame;
+  v.onloadeddata = clearReadyFrame;
+  v.oncanplay = clearReadyFrame;
   v.onwaiting = () => {
     const pWait = S.playing;
     if (S.view !== 'player' || (pWait && (pWait.started || (pWait.suppressSeekLoaderUntil && appMs() < pWait.suppressSeekLoaderUntil)))) return;
@@ -5594,8 +5621,19 @@ window.__tvNativeSubtitleShift = (shift) => {
   p._subShift = n;
   saveSubShift(p.subTrack, n);
 };
+function liveMseHasReadyFrame(p = S.playing) {
+  const v = $('video');
+  const src = v && (v.currentSrc || v.src || '');
+  return !!(p && p.item && p.item.type === 'live' && v && v.readyState >= 2 && !v.error && /^blob:/.test(src));
+}
 function failover() {
   const p = S.playing; if (!p) return;
+  if (liveMseHasReadyFrame(p)) {
+    clearTimeout(S._waitT);
+    $('playerLoader').classList.remove('show');
+    showLivePlayPrompt();
+    return;
+  }
   if (!p.usingRemux && !p.usingTranscode && p.remuxUrl && !p.triedRemux) {
     p.triedRemux = true;
     toast('Direct play not supported here — remuxing on the server…');
@@ -5648,8 +5686,52 @@ async function autoAdvance(opts = {}) {
     showVlcPanel();
   }
 }
+function resetVlcPanel() {
+  const msg = document.querySelector('#vlcPanel .sub');
+  if ($('vlcTitle')) $('vlcTitle').textContent = 'Open in a video player';
+  if (msg) msg.textContent = "This browser can't decode the file. Paste the stream URL into VLC (Media -> Open Network Stream) - seeking works.";
+  $('vlcUrl').style.display = '';
+  $('vlcCopy').style.display = '';
+}
+function showLiveProviderError(reason) {
+  const msg = document.querySelector('#vlcPanel .sub');
+  clearTimeout(S._waitT);
+  clearTimeout(S._liveVlcT);
+  $('playerLoader').classList.remove('show');
+  if ($('vlcTitle')) $('vlcTitle').textContent = 'Live stream unavailable';
+  if (msg) {
+    const label = reason || 'provider rejected this channel';
+    msg.textContent = `${label}. Try another channel, or wait a moment before retrying.`;
+  }
+  $('vlcUrl').textContent = '';
+  $('vlcUrl').style.display = 'none';
+  $('vlcCopy').style.display = 'none';
+  $('vlcPanel').classList.add('show');
+}
 function showVlcPanel() {
   const p = S.playing; if (!p) return;
+  resetVlcPanel();
+  if (liveMseHasReadyFrame(p)) {
+    clearTimeout(S._waitT);
+    $('playerLoader').classList.remove('show');
+    showLivePlayPrompt();
+    return;
+  }
+  if (p.item && p.item.type === 'live') {
+    clearTimeout(S._liveVlcT);
+    S._liveVlcT = setTimeout(() => {
+      if (S.playing !== p) return;
+      if (liveMseHasReadyFrame(p)) {
+        clearTimeout(S._waitT);
+        $('playerLoader').classList.remove('show');
+        showLivePlayPrompt();
+        return;
+      }
+      $('vlcUrl').textContent = location.origin + p.streamUrl;
+      $('vlcPanel').classList.add('show');
+    }, 1500);
+    return;
+  }
   $('vlcUrl').textContent = location.origin + p.streamUrl;
   $('vlcPanel').classList.add('show');
 }
@@ -5845,7 +5927,9 @@ function showUpNext() {
   S.upNextTimer = setInterval(() => { n--; $('unCount').textContent = n; if (n <= 0) playNextEpisode(); }, 1000);
 }
 function maybeShowUpNext(t, d, opts = {}) {
-  if (!d || !S.nextEp || S.upNextShown || (d - t) > 45 || (d - t) <= 0) return;
+  // The countdown begins when the popup appears, so do not surface it earlier than
+  // the actual choice window or autoplay can skip the last part of the episode.
+  if (!d || !S.nextEp || S.upNextShown || (d - t) > UP_NEXT_COUNTDOWN_SECONDS || (d - t) <= 0) return;
   if (!opts.native && $('video').paused) return;
   S.upNextShown = true;
   showUpNext();
@@ -5980,7 +6064,35 @@ function startHealthPoll(id) {
     } catch {}
   }, 20000);
 }
-function togglePlay() { const v = $('video'); if (v.src) { v.paused ? v.play() : v.pause(); updPP(); } }
+function showLivePlayPrompt() {
+  const p = S.playing;
+  if (!p || !p.item || p.item.type !== 'live' || !$('video').paused) return;
+  clearTimeout(S._liveVlcT);
+  $('vlcPanel').classList.remove('show');
+  showOsd();
+  const play = $('playPause');
+  const btns = ctlButtons();
+  const idx = btns.indexOf(play);
+  if (idx >= 0) { S.zone = 'playerCtl'; S.ctlIdx = idx; applyFocus(play); }
+  clearTimeout(S.osdTimer);
+}
+function requestVideoPlay(v, opts = {}) {
+  const r = v.play();
+  if (!r || typeof r.then !== 'function') return Promise.resolve();
+  return r.then(() => {
+    if (opts.livePrompt) showOsd();
+  }).catch((e) => {
+    if (opts.livePrompt) showLivePlayPrompt();
+    throw e;
+  });
+}
+function togglePlay() {
+  const v = $('video');
+  if (!v.src) return;
+  if (v.paused) requestVideoPlay(v, { livePrompt: S.playing && S.playing.item && S.playing.item.type === 'live' }).catch(() => {});
+  else v.pause();
+  updPP();
+}
 function updPP() { $('ppIcon').innerHTML = $('video').paused ? '<path d="M8 5v14l11-7z"/>' : '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>'; }
 let _playerSurfaceClickT = null;
 function playerSurfaceClick(e) {
@@ -8602,6 +8714,8 @@ async function playChannel(it, list) {
   return playChannelWeb(it);
 }
 async function playChannelWeb(it) {
+  const preserveGuide = !!($('pGuide') && $('pGuide').classList.contains('open'));
+  stopActivePlaybackForReplacement({ preserveGuide });
   openPlayer({ title: it.title, key: it.key, type: 'live', backdrop: it.backdrop, overview: '' }, {
     streamUrl: it._streamUrl,
     name: it.title, container: 'live', method: 'remux', id: null, sessionId: null,

@@ -17,6 +17,7 @@ const { Trakt } = require('./trakt');
 const { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnTranscode, spawnLiveRemux, spawnSubtitleExtract, makeThumb, LADDER, audioCopyOk } = require('./transcode');
 const ytmusic = require('./ytmusic');
 const https = require('https');
+const { StringDecoder } = require('string_decoder');
 
 const PORT = parseInt(process.env.PORT || '7777', 10);
 const WEB_DIR = path.join(__dirname, '..', 'web');
@@ -173,10 +174,10 @@ function xtUrlFor(s, streamId, ext = 'm3u8') {
 function xtChannelUrls(s, streamId) {
   return {
     url: xtUrlFor(s, streamId, 'm3u8'),
-    nativeUrl: xtUrlFor(s, streamId, 'ts'),
-    nativeMime: 'video/mp2t',
-    nativeFallbackUrl: xtUrlFor(s, streamId, 'm3u8'),
-    nativeFallbackMime: 'application/x-mpegURL',
+    nativeUrl: xtUrlFor(s, streamId, 'm3u8'),
+    nativeMime: 'application/x-mpegURL',
+    nativeFallbackUrl: xtUrlFor(s, streamId, 'ts'),
+    nativeFallbackMime: 'video/mp2t',
   };
 }
 function iptvNativeMime(url) {
@@ -185,7 +186,7 @@ function iptvNativeMime(url) {
   if (/\.(?:ts|mpegts)(?:[?#]|$)/.test(u)) return 'video/mp2t';
   return '';
 }
-const IPTV_NATIVE_PROXY_UA = 'VLC/3.0.20 LibVLC/3.0.20';
+const IPTV_NATIVE_PROXY_UA = 'Mozilla/5.0 (SMART-TV; Linux) AppleWebKit/537.36 TriboonTV/1.0';
 function iptvNativeLogLabel(meta = {}) {
   const idx = Number.isInteger(meta.idx) ? `#${meta.idx}` : '#?';
   const name = String(meta.name || 'channel').replace(/[\r\n]+/g, ' ').slice(0, 80);
@@ -197,6 +198,24 @@ function iptvNativeFailureReason(status, body) {
   if (status === 401 || status === 403) return 'provider rejected this channel';
   if (status === 404) return 'channel is offline';
   return 'live stream unavailable';
+}
+function iptvRemuxStatusFromFfmpeg(err) {
+  const text = String(err || '');
+  const m = /Server returned\s+(\d{3})/i.exec(text) || /HTTP error\s+(\d{3})/i.exec(text);
+  return m ? parseInt(m[1], 10) : 0;
+}
+function sanitizeIptvFfmpegError(err) {
+  return String(err || '')
+    .replace(/https?:\/\/[^\s"'<>]+/gi, (raw) => {
+      try {
+        const u = new URL(raw.replace(/[),.;]+$/, ''));
+        return `${u.protocol}//${u.host}/redacted`;
+      } catch { return '[redacted-url]'; }
+    })
+    .replace(/\/live\/[^/\s]+\/[^/\s]+\/([^/\s]+)/gi, '/live/redacted/redacted/$1')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 300);
 }
 function sendIptvNativeError(res, status, reason) {
   const code = status >= 400 && status < 600 ? status : 502;
@@ -332,6 +351,97 @@ async function loadIptvChannels() {
     throw e;
   }
 }
+function m3uAttr(meta, name) {
+  const m = new RegExp(`${name}="([^"]*)"`, 'i').exec(meta);
+  return m ? m[1] : '';
+}
+function m3uChannelFromPair(meta, streamUrl, idx) {
+  const name = (meta.split(',').pop() || '').trim();
+  if (!name || !/^https?:\/\//i.test(streamUrl)) return null;
+  return {
+    idx,
+    id: idHash(streamUrl),
+    name,
+    logo: m3uAttr(meta, 'tvg-logo'),
+    group: m3uAttr(meta, 'group-title') || 'Other',
+    tvgId: m3uAttr(meta, 'tvg-id'),
+    url: streamUrl,
+  };
+}
+function fetchM3uChannelsStream(playlistUrl, opts = {}) {
+  const maxChannels = opts.maxChannels || 20000;
+  const maxBytes = opts.maxBytes || 768 * 1024 * 1024;
+  const timeoutMs = opts.timeoutMs || 15000;
+  const deadlineMs = opts.deadlineMs || 180000;
+  const redirects = opts.redirects || 0;
+  if (redirects > 5) return Promise.reject(new Error('m3u playlist has too many redirects'));
+  let u;
+  try { u = new URL(playlistUrl); } catch { return Promise.reject(new Error('invalid m3u playlist url')); }
+  if (!['http:', 'https:'].includes(u.protocol)) return Promise.reject(new Error('invalid m3u playlist protocol'));
+  return new Promise((resolve, reject) => {
+    const channels = [];
+    const decoder = new StringDecoder('utf8');
+    const client = u.protocol === 'https:' ? https : http;
+    let settled = false, bytes = 0, carry = '', pendingMeta = null, req = null, resRef = null;
+    const done = (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      try { if (req) req.destroy(); } catch {}
+      try { if (resRef) resRef.destroy(); } catch {}
+      if (err) reject(err); else resolve(channels);
+    };
+    const consumeLine = (lineRaw) => {
+      const line = String(lineRaw || '').trim();
+      if (!line) return;
+      if (line.startsWith('#EXTINF')) { pendingMeta = line; return; }
+      if (line.startsWith('#')) return;
+      if (!pendingMeta) return;
+      const ch = m3uChannelFromPair(pendingMeta, line, channels.length);
+      pendingMeta = null;
+      if (ch) channels.push(ch);
+      if (channels.length >= maxChannels) done();
+    };
+    const deadline = setTimeout(() => done(new Error(`m3u playlist timed out after ${Math.round(deadlineMs / 1000)}s`)), deadlineMs);
+    req = client.get(u, { headers: { 'user-agent': IPTV_NATIVE_PROXY_UA } }, (res) => {
+      resRef = res;
+      if ([301, 302, 303, 307, 308].includes(res.statusCode || 0) && res.headers.location) {
+        res.resume();
+        try {
+          const nextUrl = new URL(res.headers.location, u).toString();
+          settled = true;
+          clearTimeout(deadline);
+          fetchM3uChannelsStream(nextUrl, { ...opts, redirects: redirects + 1 }).then(resolve, reject);
+        } catch { reject(new Error('invalid m3u playlist redirect')); }
+        return;
+      }
+      if ((res.statusCode || 0) < 200 || (res.statusCode || 0) >= 300) {
+        res.resume();
+        done(new Error(`m3u playlist HTTP ${res.statusCode || 0}`));
+        return;
+      }
+      res.on('data', (chunk) => {
+        bytes += chunk.length;
+        if (bytes > maxBytes) return done(new Error(`m3u playlist too large (>${maxBytes} bytes)`));
+        carry += decoder.write(chunk);
+        const lines = carry.split(/\r?\n/);
+        carry = lines.pop() || '';
+        for (const line of lines) {
+          consumeLine(line);
+          if (settled) return;
+        }
+      });
+      res.on('end', () => {
+        carry += decoder.end();
+        if (carry) consumeLine(carry);
+        done();
+      });
+      res.on('error', (e) => done(e));
+    });
+    req.on('error', (e) => done(e));
+    req.setTimeout(timeoutMs, () => done(new Error('m3u playlist upstream timeout')));
+  });
+}
 async function fetchIptvChannels(s, key) {
   if (iptvCache.key !== key) xtreamEpgCache = { key: null, byStream: new Map() };
   let channels = [];
@@ -354,24 +464,9 @@ async function fetchIptvChannels(s, key) {
       ...xtChannelUrls(s, x.stream_id),
     }));
   } else if (s.iptvUrl) {
-    // Real-world playlists run to tens of thousands of channels — the UI renders groups
-    // lazily, so a high cap is fine; the byte cap is the actual DoS guard.
-    const r = await fetchUrlExt(s.iptvUrl, { timeoutMs: 15000, deadlineMs: 60000, maxBytes: 50 * 1024 * 1024 });
-    const lines = r.body.toString('utf8').split(/\r?\n/);
-    for (let i = 0; i < lines.length && channels.length < 20000; i++) {
-      if (!lines[i].startsWith('#EXTINF')) continue;
-      const meta = lines[i];
-      const name = (meta.split(',').pop() || '').trim();
-      const logo = (/tvg-logo="([^"]*)"/.exec(meta) || [])[1] || '';
-      const group = (/group-title="([^"]*)"/.exec(meta) || [])[1] || 'Other';
-      const tvgId = (/tvg-id="([^"]*)"/.exec(meta) || [])[1] || '';
-      let j = i + 1;
-      while (j < lines.length && lines[j].startsWith('#')) j++;
-      const streamUrl = (lines[j] || '').trim();
-      if (name && /^https?:\/\//.test(streamUrl)) {
-        channels.push({ idx: channels.length, id: idHash(streamUrl), name, logo, group, tvgId, url: streamUrl });
-      }
-    }
+    // Real-world playlists can exceed 500MB because providers mix live, FAST, VOD, and
+    // series in one file. Stream-parse and stop at the channel cap instead of buffering it.
+    channels = await fetchM3uChannelsStream(s.iptvUrl, { maxChannels: 20000 });
   }
   iptvCache = { key, at: Date.now(), channels };
   // Persist Xtream playlists for restart survival — WITHOUT the credential-bearing url
@@ -1401,20 +1496,25 @@ const H = {
     const ch = iptvCache.channels && iptvCache.channels[parseInt(ctx.m[1], 10)];
     if (!ch) return send(ctx.res, 404, { error: 'channel not found — open Live TV first' });
     if (!detectFfmpeg()) return send(ctx.res, 503, { error: 'ffmpeg required for Live TV' });
-    ctx.res.writeHead(200, {
-      'content-type': 'video/mp4',
-      'cache-control': 'no-store',
-      'x-accel-buffering': 'no',
-    });
-    if (typeof ctx.res.flushHeaders === 'function') ctx.res.flushHeaders();
+    const failureKey = idHash(`remux:${ch.idx}:${ch.url}`);
+    const cachedFailure = iptvNativeErrorCache.get(failureKey);
+    if (cachedFailure && cachedFailure.until > Date.now()) {
+      return sendIptvNativeError(ctx.res, cachedFailure.status, cachedFailure.reason);
+    }
     // Attempt 1 uses HLS-friendly demuxer options; if ffmpeg dies before emitting a single
     // byte (non-HLS channel, or an older ffmpeg without those options) retry once plain.
     const attempt = (hlsFriendly, retriesLeft) => {
       let ff;
       try { ff = spawnLiveRemux(ch.url, { hlsFriendly }); }
-      catch (e) { console.error('[iptv]', e.message); try { ctx.res.destroy(); } catch {} return; }
+      catch (e) {
+        console.error('[iptv]', sanitizeIptvFfmpegError(e.message));
+        if (!ctx.res.headersSent) send(ctx.res, 502, { error: 'live stream unavailable' });
+        else try { ctx.res.destroy(); } catch {}
+        return;
+      }
       let wrote = false, err = '';
       let idleTimer = null;
+      let clientClosed = false;
       const clearIdle = () => { if (idleTimer) clearTimeout(idleTimer); idleTimer = null; };
       const armIdle = (ms) => {
         clearIdle();
@@ -1424,25 +1524,58 @@ const H = {
         }, ms);
         idleTimer.unref();
       };
+      const stopForClientClose = () => {
+        if (clientClosed) return;
+        clientClosed = true;
+        clearIdle();
+        try { ff.kill('SIGKILL'); } catch {}
+      };
       armIdle(LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS);
-      ff.stdout.on('data', () => {
-        wrote = true;
+      ff.stdout.on('data', (chunk) => {
+        if (!wrote) {
+          wrote = true;
+          ctx.res.writeHead(200, {
+            'content-type': 'video/mp4',
+            'cache-control': 'no-store',
+            'x-accel-buffering': 'no',
+          });
+          if (typeof ctx.res.flushHeaders === 'function') ctx.res.flushHeaders();
+        }
         armIdle(LIVE_REMUX_IDLE_TIMEOUT_MS);
+        if (!ctx.res.destroyed) ctx.res.write(chunk);
       });
-      ff.stdout.pipe(ctx.res, { end: false });
       ff.stderr.on('data', (d) => { err += d; });
-      ff.on('error', (e) => { clearIdle(); console.error('[iptv spawn]', e.message); try { ctx.res.destroy(); } catch {} });
+      ff.on('error', (e) => {
+        clearIdle();
+        console.error('[iptv spawn]', sanitizeIptvFfmpegError(e.message));
+        if (!ctx.res.headersSent) send(ctx.res, 502, { error: 'live stream unavailable' });
+        else try { ctx.res.destroy(); } catch {}
+      });
       ff.on('close', (codeNum) => {
         clearIdle();
-        if (codeNum && !wrote && retriesLeft > 0 && !ctx.res.destroyed) {
+        ctx.req.off('close', stopForClientClose);
+        ctx.res.off('close', stopForClientClose);
+        if (clientClosed) return;
+        const status = iptvRemuxStatusFromFfmpeg(err);
+        const reason = iptvNativeFailureReason(status || 502, err);
+        const providerRejected = [401, 403, 429].includes(status);
+        err = sanitizeIptvFfmpegError(err);
+        if (codeNum && !wrote && retriesLeft > 0 && !providerRejected && !ctx.res.destroyed) {
           console.error(`[iptv] "${ch.name}" attempt failed (${err.slice(0, 120).trim()}) — retrying plain`);
           return attempt(false, retriesLeft - 1);
         }
+        if (codeNum && !wrote) {
+          iptvNativeErrorCache.set(failureKey, { status: status || 502, reason, until: Date.now() + IPTV_NATIVE_ERROR_TTL_MS });
+          if (iptvNativeErrorCache.size > 2000) iptvNativeErrorCache = new Map([...iptvNativeErrorCache].slice(-1000));
+          console.error(`[iptv] "${ch.name}" exit ${codeNum}: ${err} (${reason})`);
+          if (!ctx.res.headersSent && !ctx.res.destroyed) return sendIptvNativeError(ctx.res, status || 502, reason);
+        }
         // Log the channel NAME only (the url embeds the provider account).
-        if (codeNum && err) console.error(`[iptv] "${ch.name}" exit ${codeNum}:`, err.slice(0, 300));
+        if (codeNum && wrote && err) console.error(`[iptv] "${ch.name}" exit ${codeNum}:`, err.slice(0, 300));
         try { ctx.res.end(); } catch {}
       });
-      ctx.req.on('close', () => { clearIdle(); ff.kill('SIGKILL'); });
+      ctx.req.once('close', stopForClientClose);
+      ctx.res.once('close', stopForClientClose);
     };
     const likelyHls = /\.m3u8(?:[?#]|$)/i.test(ch.url);
     attempt(likelyHls, likelyHls ? 1 : 0);

@@ -796,20 +796,20 @@ test('iptv: Xtream API channels + short-EPG now/next + per-user favorites; creds
   assert.strictEqual(ch.json.channels.find((c) => c.name === 'Cinema').group, 'Other', 'unknown category falls back');
   assert.ok(ch.json.channels.every((c) => c.url === undefined), 'upstream URLs (with creds) never exposed');
   assert.ok(/^\/api\/iptv\/native\/\d+\?t=/.test(news.nativeUrl));
-  assert.strictEqual(news.nativeMime, 'video/mp2t', 'Xtream native playback should try the TS endpoint first');
+  assert.strictEqual(news.nativeMime, 'application/x-mpegURL', 'Xtream native playback should try the HLS endpoint first');
   assert.ok(/^\/api\/iptv\/native\/\d+\?alt=1&t=/.test(news.nativeFallbackUrl));
-  assert.strictEqual(news.nativeFallbackMime, 'application/x-mpegURL', 'Xtream native playback should retain HLS as an Exo fallback');
+  assert.strictEqual(news.nativeFallbackMime, 'video/mp2t', 'Xtream native playback should retain TS as an Exo fallback');
   const native = await httpRaw(srv.port, news.nativeUrl);
   assert.strictEqual(native.status, 200);
   assert.strictEqual(native.headers.location, undefined, 'native proxy must not expose Xtream credentials in a redirect');
-  assert.strictEqual(native.body.toString('utf8'), 'XTREAM-TS');
-  assert.deepStrictEqual(liveHits.at(-1).path, '/live/xtuser/xtpass/101.ts');
-  assert.ok(liveHits.at(-1).ua.includes('VLC/'), 'native Xtream proxy should use the server-side compatibility user agent');
+  assert.strictEqual(native.body.toString('utf8'), '#EXTM3U\n');
+  assert.deepStrictEqual(liveHits.at(-1).path, '/live/xtuser/xtpass/101.m3u8');
+  assert.ok(liveHits.at(-1).ua.includes('TriboonTV/'), 'native Xtream proxy should use the server-side smart-TV user agent');
   const fallback = await httpRaw(srv.port, news.nativeFallbackUrl);
   assert.strictEqual(fallback.status, 200);
   assert.strictEqual(fallback.headers.location, undefined, 'native fallback proxy must not expose Xtream credentials in a redirect');
-  assert.strictEqual(fallback.body.toString('utf8'), '#EXTM3U\n');
-  assert.deepStrictEqual(liveHits.at(-1).path, '/live/xtuser/xtpass/101.m3u8');
+  assert.strictEqual(fallback.body.toString('utf8'), 'XTREAM-TS');
+  assert.deepStrictEqual(liveHits.at(-1).path, '/live/xtuser/xtpass/101.ts');
 
   // EPG now/next decodes the Xtream base64 listings.
   const epg = await httpJson(srv.port, 'GET', `/api/iptv/epg/${news.idx}`, null, admin);

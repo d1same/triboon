@@ -173,7 +173,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'clicking a Sources row should carry its exact release key and quality class into Play');
   assert.match(ui, /async function play\(it, pick\) \{[\s\S]+it = resolvePlaybackResume\(it\);[\s\S]+const picked = pick && typeof pick === 'object' \? pick : \(pick \? \{ name: pick \} : null\);[\s\S]+const body = \{ q: queryFor\(it\), pick: picked && picked\.name, pickKey: picked && picked\.pickKey, caps: clientCaps\(\) \};/,
     'manual source selection should re-resolve the latest resume point before mounting the exact picked release');
-  assert.match(ui, /function stopActivePlaybackForReplacement\(\) \{[\s\S]+saveWatch\(true\);[\s\S]+window\.TriboonTV\.closeVideo\(\);[\s\S]+stopWebVideoElement\(\);[\s\S]+S\.playing = null;[\s\S]+\}/,
+  assert.match(ui, /function stopActivePlaybackForReplacement\(opts = \{\}\) \{[\s\S]+saveWatch\(true\);[\s\S]+window\.TriboonTV\.closeVideo\(\);[\s\S]+stopWebVideoElement\(\);[\s\S]+if \(!opts\.preserveGuide\) closePlayerGuide\(\{ fromNative: true \}\);[\s\S]+S\.playing = null;[\s\S]+\}/,
     'source replacement should stop the active native/web player before the new mount can start');
   assert.match(ui, /async function play\(it, pick\) \{[\s\S]+if \(loc && !pick\) return playLocal[\s\S]+stopActivePlaybackForReplacement\(\);[\s\S]+const nativeFirst = nativeVideoRequired\(it\);/,
     'manual source selection should tear down the old source before showing the new loading/player state');
@@ -205,8 +205,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'native finished playback should either surface Up Next or close through the finished-title return path');
   assert.match(ui, /window\.__tvNativeVideoProgress = \(pos, dur\) => \{[\s\S]+p\.nativePos = Math\.max\(0, \+pos \|\| 0\);[\s\S]+maybeShowUpNext\(p\.nativePos, totalDuration\(\), \{ native: true \}\);[\s\S]+\};/,
     'native episode playback should surface Up Next from progress before ExoPlayer reaches ended');
-  assert.match(ui, /function maybeShowUpNext\(t, d, opts = \{\}\) \{[\s\S]+\(d - t\) > 45[\s\S]+if \(!opts\.native && \$\('video'\)\.paused\) return;[\s\S]+showUpNext\(\);/,
-    'Up Next should appear early enough to choose and work for native progress without relying on the web video paused state');
+  assert.match(ui, /function maybeShowUpNext\(t, d, opts = \{\}\) \{[\s\S]+\(d - t\) > UP_NEXT_COUNTDOWN_SECONDS[\s\S]+if \(!opts\.native && \$\('video'\)\.paused\) return;[\s\S]+showUpNext\(\);/,
+    'Up Next should start only at the 10-second choice window and work for native progress without relying on the web video paused state');
+  assert.doesNotMatch(ui, /\(d - t\) > 45/,
+    'Up Next must not start a 10-second autoplay countdown with 45 seconds still left in the episode');
   assert.match(ui, /const UP_NEXT_COUNTDOWN_SECONDS = 10;[\s\S]+function showUpNext\(\) \{[\s\S]+let n = UP_NEXT_COUNTDOWN_SECONDS; \$\('unCount'\)\.textContent = n;[\s\S]+if \(n <= 0\) playNextEpisode\(\);/,
     'Up Next autoplay should always give the user a 10-second choice window before starting the next episode');
   assert.doesNotMatch(ui, /opts\.ended \? 6 : 10/,
@@ -465,6 +467,37 @@ test('Android native player: direct source and native chrome stay out of the web
     'track probing should feed native duration and subtitle choices without starting web playback');
   assert.match(ui, /function startSource\(kind, atSeconds, opts = \{\}\) \{[\s\S]+if \(p && p\.usingNative && canUseNativeVideoPlayer\(\)\) return false;/,
     'web source swaps should not run underneath native playback');
+  assert.match(ui, /const clearReadyFrame = \(\) => \{[\s\S]+pReady\.item\.type === 'live' && v\.readyState >= 2[\s\S]+\$\(\'playerLoader\'\)\.classList\.remove\('show'\);[\s\S]+v\.onloadeddata = clearReadyFrame;[\s\S]+v\.oncanplay = clearReadyFrame;/,
+    'web Live TV should clear the startup loader once a decoded frame is ready, even if delayed autoplay is blocked');
+  assert.ok(ui.includes("$('vlcPanel').classList.remove('show');")
+      && ui.includes('if (v.paused) showLivePlayPrompt();'),
+    'a decoded web Live TV frame should clear any earlier external-player fallback panel');
+  assert.ok(ui.includes('const requestLivePlay = () => requestVideoPlay(v, { livePrompt: true }).catch(() => {')
+      && ui.includes('showLivePlayPrompt();')
+      && ui.includes('requestLivePlay();'),
+    'web Live TV MSE playback should reveal the ready frame when autoplay is blocked after buffering');
+  assert.ok(ui.includes('function showLivePlayPrompt() {')
+      && ui.includes("if (!p || !p.item || p.item.type !== 'live' || !$('video').paused) return;")
+      && ui.includes('applyFocus(play);')
+      && ui.includes('clearTimeout(S.osdTimer);')
+      && ui.includes('function requestVideoPlay(v, opts = {}) {')
+      && ui.includes("if (v.paused) requestVideoPlay(v, { livePrompt: S.playing && S.playing.item && S.playing.item.type === 'live' }).catch(() => {});"),
+    'blocked browser Live TV autoplay should keep the Play control available instead of throwing an unhandled play rejection');
+  assert.ok(ui.includes('function liveMseHasReadyFrame(p = S.playing) {')
+      && ui.includes("const src = v && (v.currentSrc || v.src || '');")
+      && ui.includes("p.item.type === 'live' && v && v.readyState >= 2 && !v.error && /^blob:/.test(src)")
+      && ui.includes('if (liveMseHasReadyFrame(p)) {')
+      && ui.includes("if (p.item && p.item.type === 'live') {")
+      && ui.includes('S._liveVlcT = setTimeout(() => {')
+      && ui.includes('showVlcPanel() {'),
+    'web Live TV must not open the external-player panel after MSE has decoded a usable frame');
+  assert.ok(ui.includes("const reason = r.headers.get('x-triboon-iptv-error') || 'live stream unavailable';")
+      && ui.includes('e.liveProviderReason = reason;')
+      && ui.includes('if (e.liveProviderReason) showLiveProviderError(e.liveProviderReason);')
+      && ui.includes('function showLiveProviderError(reason) {')
+      && ui.includes('Live stream unavailable')
+      && ui.includes("Try another channel, or wait a moment before retrying."),
+    'web Live TV should surface provider 403/429 failures instead of showing a misleading external-player prompt');
   assert.match(ui, /p\.usingTranscode = kind === 'transcode';[\s\S]+const kind = p\.usingTranscode \? 'transcode' : \(p\.usingRemux \? 'remux' : 'direct'\);/,
     'native fallback state should distinguish direct, remux, and transcode correctly');
   assert.match(ui, /function showNativePlayLoading\(it\) \{[\s\S]+\$\(\'player\'\)\.classList\.remove\('open', 'live', 'guideMode'\);[\s\S]+window\.TriboonTV\.showVideoLoading\(JSON\.stringify/,
@@ -864,6 +897,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'leaving or replacing playback should abort the Live TV MediaSource reader before clearing the video element');
   assert.match(ui, /p\.item && p\.item\.type === 'live' && kind === 'direct' && startLiveMseSource\(p\.streamUrl\)/,
     'only Live TV direct playback should take the web MediaSource path');
+  assert.match(ui, /async function playChannelWeb\(it\) \{[\s\S]+const preserveGuide = !!\(\$\(\'pGuide\'\) && \$\(\'pGuide\'\)\.classList\.contains\(\'open\'\)\);[\s\S]+stopActivePlaybackForReplacement\(\{ preserveGuide \}\);[\s\S]+openPlayer\(\{ title: it\.title, key: it\.key, type: 'live'/,
+    'web Live TV channel changes should close the previous MSE fetch/player connection before opening the new channel');
+  assert.match(server, /let clientClosed = false;[\s\S]+const stopForClientClose = \(\) => \{[\s\S]+clientClosed = true;[\s\S]+ff\.kill\('SIGKILL'\);[\s\S]+ctx\.req\.off\('close', stopForClientClose\);[\s\S]+ctx\.res\.off\('close', stopForClientClose\);[\s\S]+if \(clientClosed\) return;[\s\S]+ctx\.req\.once\('close', stopForClientClose\);[\s\S]+ctx\.res\.once\('close', stopForClientClose\);/,
+    'server Live TV remux should kill ffmpeg exactly once when the browser closes the stream');
   assert.match(ui, /fallbackUrl: it\._nativeFallbackUrl \? new URL\(it\._nativeFallbackUrl, location\.origin\)\.href : '',[\s\S]+fallbackMime: it\._nativeFallbackMime \|\| '',/,
     'Android Live TV should only receive native provider stream candidates, never the browser remux fallback');
   assert.match(ui, /_nativeFallbackUrl: ch\.nativeFallbackUrl[\s\S]+_nativeFallbackMime: ch\.nativeFallbackMime \|\| ''/,
@@ -1173,7 +1210,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'web movie/episode seeking should hold the last rendered frame over remux/transcode source swaps');
   assert.match(ui, /if \(opts\.quietSeek && p\) \{[\s\S]+p\.suppressSeekLoaderUntil = appMs\(\) \+ 4500;[\s\S]+showSeekHoldFrame\(\);[\s\S]+\}/,
     'quiet web seeks should capture the current frame before replacing the media URL');
-  assert.match(ui, /v\.onplaying = \(\) => \{[\s\S]+hideSeekHoldFrame\(\);[\s\S]+\};[\s\S]+v\.onloadeddata = hideSeekHoldFrame;[\s\S]+v\.oncanplay = hideSeekHoldFrame;/,
+  assert.match(ui, /v\.onplaying = \(\) => \{[\s\S]+hideSeekHoldFrame\(\);[\s\S]+\};[\s\S]+v\.onloadeddata = clearReadyFrame;[\s\S]+v\.oncanplay = clearReadyFrame;/,
     'the web seek frame hold should disappear as soon as the replacement stream has a frame');
   assert.match(ui, /v\.onwaiting = \(\) => \{[\s\S]+pWait\.suppressSeekLoaderUntil && appMs\(\) < pWait\.suppressSeekLoaderUntil[\s\S]+return;/,
     'web rebuffer events during a user seek should keep the current frame instead of flashing the loader');

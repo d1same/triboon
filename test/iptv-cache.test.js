@@ -75,6 +75,42 @@ http://upstream.example/cache-news.m3u8
   }
 });
 
+test('iptv: huge M3U playlists stream-parse to the channel cap without waiting for EOF', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-iptv-huge-m3u-'));
+  let sourceClosed = false;
+  let sourceHit = 0;
+  const upstream = http.createServer((req, res) => {
+    sourceHit++;
+    res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' });
+    for (let i = 0; i < 21000; i++) {
+      res.write(`#EXTINF:-1 tvg-id="huge.${i}" group-title="Huge",Huge ${i}\n`);
+      res.write(`http://stream.example/huge-${i}.m3u8\n`);
+    }
+    res.on('close', () => { sourceClosed = true; });
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${upstream.address().port}`;
+  let srv;
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/settings',
+      { iptvMode: 'm3u', iptvUrl: `${base}/huge.m3u`, epgUrl: null }, admin);
+    const started = Date.now();
+    const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    assert.strictEqual(ch.status, 200);
+    assert.strictEqual(ch.json.channels.length, 20000);
+    assert.strictEqual(ch.json.channels[19999].name, 'Huge 19999');
+    assert.strictEqual(sourceHit, 1);
+    assert.ok(Date.now() - started < 5000, 'playlist should resolve at the cap instead of waiting for provider EOF');
+    await new Promise((r) => setTimeout(r, 50));
+    assert.strictEqual(sourceClosed, true, 'server should close the upstream playlist request after reaching the cap');
+  } finally {
+    if (srv) await srv.shutdown();
+    upstream.close();
+  }
+});
+
 test('iptv: empty Xtream guide misses are not persisted across restart', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-epg-cache-'));
   const b64 = (s) => Buffer.from(s).toString('base64');
