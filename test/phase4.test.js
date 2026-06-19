@@ -161,10 +161,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     '1080p and 4K choices should both be sent to /api/play as source-selection policy');
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8'), /if \(preferRank === 4\) policy\.exactResolutionRank = 4;/,
     '4K selection should be exact so fallback stays in the 4K source class');
-  assert.match(ui, /function sourceSearchQuery\(it\) \{[\s\S]+maxResolutionRank[\s\S]+preferResolutionRank/,
-    'Sources, availability, and prefetch should ask search with the same quality policy as Play');
-  assert.match(ui, /function prefetchSources\(it, delay = 700\) \{[\s\S]+setTimeout\(\(\) => \{[\s\S]+api\('\/api\/search\?' \+ sourceSearchQuery\(it\)\)[\s\S]+\}, delay\);/,
-    'source warmup should be reusable for hover prefetch and immediate Play-target prefetch');
+  assert.match(ui, /function sourceSearchQuery\(it, opts = \{\}\) \{[\s\S]+const qRank = opts\.includeQuality === false \? null : qualityRankForItem\(it\);[\s\S]+maxResolutionRank[\s\S]+preferResolutionRank/,
+    'Sources, play warmup, and availability should share one query builder while allowing unfiltered quality discovery');
+  assert.match(ui, /function prefetchSources\(it, delay = 700\) \{[\s\S]+const qRank = qualityRankForItem\(it\);[\s\S]+localTitleHasPlayback\(it\) && localPlaybackFitsQuality\(it, qRank\)[\s\S]+api\('\/api\/search\?' \+ sourceSearchQuery\(it\)\)/,
+    'source warmup should skip matching local files but still warm online 4K when local playback is lower quality');
   assert.match(ui, /function updateDetailPlayLabel\(\{ label, target \}\) \{[\s\S]+detailPlayTarget = target;[\s\S]+prefetchSources\(target, 0\);[\s\S]+\}/,
     'movie/show details should warm the exact current Play target immediately, including TV episodes');
   assert.match(ui, /pickKey: picked && picked\.pickKey/,
@@ -175,20 +175,45 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'manual source selection should re-resolve the latest resume point before mounting the exact picked release');
   assert.match(ui, /function stopActivePlaybackForReplacement\(opts = \{\}\) \{[\s\S]+saveWatch\(true\);[\s\S]+window\.TriboonTV\.closeVideo\(\);[\s\S]+stopWebVideoElement\(\);[\s\S]+if \(!opts\.preserveGuide\) closePlayerGuide\(\{ fromNative: true \}\);[\s\S]+S\.playing = null;[\s\S]+\}/,
     'source replacement should stop the active native/web player before the new mount can start');
-  assert.match(ui, /async function play\(it, pick\) \{[\s\S]+if \(loc && !pick\) return playLocal[\s\S]+stopActivePlaybackForReplacement\(\);[\s\S]+const nativeFirst = nativeVideoRequired\(it\);/,
-    'manual source selection should tear down the old source before showing the new loading/player state');
+  assert.match(ui, /async function play\(it, pick\) \{[\s\S]+if \(loc && !picked && localPlaybackFitsQuality\(\{ \.\.\.it, _local: loc \}, qRank\)\) return playLocal[\s\S]+stopActivePlaybackForReplacement\(\);[\s\S]+const nativeFirst = nativeVideoRequired\(it\);/,
+    'manual source selection and quality mismatches should tear down the old source before showing the new loading/player state');
   assert.match(ui, /const pickRank = picked \? normalizeResolutionRank\(picked\.resolutionRank\) : null;[\s\S]+const qRank = pickRank !== null \? pickRank : qualityRankForItem\(it\);[\s\S]+body\.maxResolutionRank = qRank;[\s\S]+body\.preferResolutionRank = qRank;/,
     'manual source selection should prefer the picked source quality while normal Play uses the current 1080p/4K toggle');
-  assert.match(ui, /#drawer\{position:fixed[\s\S]+width:min\(660px,92vw\)[\s\S]+\.srcRow\{position:relative;overflow:visible;width:100%;box-sizing:border-box[\s\S]+padding:11px 15px 10px[\s\S]+display:grid;grid-template-rows:auto auto[\s\S]+\.srcRow \.srcTop\{display:grid;grid-template-columns:minmax\(0,1fr\) minmax\(74px,88px\)[\s\S]+\.srcRow \.srcScore\{[\s\S]+display:flex;align-items:center[\s\S]+\.srcRow \.srcMeta\{display:grid;grid-template-columns:repeat\(3,minmax\(0,1fr\)\)[\s\S]+\.srcRow\.focusable::after\{/,
-    'Sources drawer rows should stay compact without clipping their title, score, and metadata grid');
-  assert.match(ui, /const meta = \[[\s\S]+\['Size', gb\],[\s\S]+\['Source', fmtAttr\(a\.source\)\],[\s\S]+\['Indexer', c\.indexer \|\| 'Unknown'\],[\s\S]+\['Codec', fmtAttr\(a\.codec\)\],[\s\S]+\['Audio', audioInfo\(a\)\],[\s\S]+\['Group', a\.group \|\| ''\]/,
-    'Sources drawer should expose size, source, indexer, codec, audio, and release group when available');
-  assert.match(ui, /<div id="srcSort"[\s\S]+data-src-sort="best"[\s\S]+data-src-sort="largest"[\s\S]+data-src-sort="smallest"[\s\S]+if \(S\.sourceSort === 'largest'\)[\s\S]+if \(S\.sourceSort === 'smallest'\)/,
+  assert.match(ui, /function qualityRankForItem\(it\) \{[\s\S]+if \(it\._local && !it\.tmdbId\) return null;/,
+    'matched local movies and episodes should still inherit saved 1080p/4K preferences');
+  assert.match(ui, /function releaseResolutionRankFromName\(name\) \{[\s\S]+2160p\|4k\|uhd[\s\S]+return 4;[\s\S]+function localPlaybackFitsQuality\(it, qRank\) \{[\s\S]+if \(qRank === 4\) return rank === 4;[\s\S]+if \(qRank === 3\) return rank !== 4;/,
+    'local playback should be allowed only when it matches the requested source class');
+  assert.match(ui, /const picked = pick && typeof pick === 'object'[\s\S]+const qRank = pickRank !== null \? pickRank : qualityRankForItem\(it\);[\s\S]+if \(loc && !picked && localPlaybackFitsQuality\(\{ \.\.\.it, _local: loc \}, qRank\)\) return playLocal/,
+    'Play should compute quality before the local shortcut so selected 4K cannot be replaced by a local 1080p file');
+  assert.ok([
+    '#srcSort button{height:34px',
+    '.srcRow{position:relative;overflow:visible;width:100%;box-sizing:border-box;border-radius:13px',
+    'display:flex;flex-direction:column',
+    '.srcRow .srcBadges{display:flex',
+    '.srcRow .srcMeta{font:650 11.3px',
+  ].every((s) => ui.includes(s)),
+    'Sources drawer rows should be a less busy TV picker: title, badges, one compact metadata line');
+  assert.match(ui, /const meta = \[[\s\S]+fmtAttr\(a\.source\),[\s\S]+fmtAttr\(a\.codec\),[\s\S]+audioInfo\(a\),[\s\S]+a\.group \|\| '',[\s\S]+c\.indexer \|\| 'Unknown',[\s\S]+\]\.filter\(Boolean\)\.join\(' · '\)/,
+    'Sources drawer should still expose source, codec, audio, group, and indexer in the compact line');
+  assert.match(ui, /<div id="srcSort"[\s\S]+data-src-sort="best" class="focusable sel"[\s\S]+data-src-sort="largest" class="focusable"[\s\S]+data-src-sort="smallest" class="focusable"[\s\S]+if \(S\.sourceSort === 'largest'\)[\s\S]+if \(S\.sourceSort === 'smallest'\)/,
     'Sources drawer should let the same returned rows sort by Best, Largest, or Smallest');
+  assert.match(ui, /function drawerSortButtons\(\) \{[\s\S]+\$\(\'srcSort\'\)\.querySelectorAll\('button'\)[\s\S]+function focusDrawerSort\(i\) \{[\s\S]+S\.zone = 'drawerSort'[\s\S]+applyFocus\(btns\[S\.drawerSortIdx\]\)/,
+    'Sources sort buttons should be part of the D-pad focus model');
+  assert.match(ui, /if \(\$\(\'drawer\'\)\.classList\.contains\('open'\)\) \{[\s\S]+const sortBtns = drawerSortButtons\(\);[\s\S]+const inSort = sortIdx >= 0 \|\| S\.zone === 'drawerSort';[\s\S]+if \(inSort\) \{[\s\S]+if \(k === 'ArrowLeft'\) return focusDrawerSort\(i - 1\);[\s\S]+if \(k === 'ArrowRight'\) return focusDrawerSort\(i \+ 1\);[\s\S]+if \(k === 'ArrowDown'\) return focusDrawer\(0\);[\s\S]+if \(k === 'Enter' && !e\.repeat\) return sortBtns\[i\] && sortBtns\[i\]\.click\(\);/,
+    'Sources D-pad navigation should move across sort buttons, down into rows, and activate sorting');
   assert.match(ui, /const autoKey = cands\[0\] && cands\[0\]\.pickKey;[\s\S]+const isAuto = c\.pickKey === autoKey;[\s\S]+isAuto \? '<span class="chip auto">Auto pick<\/span>'/,
     'Sources sorting should not move the Auto pick badge onto the largest row');
-  assert.match(ui, /row\.innerHTML = `<div class="srcTop"><div class="srcTitle"><div class="name">\$\{esc\(c\.name\)\}<\/div><div class="chips">\$\{chips\}<\/div><\/div><div class="srcScore"><span>Score<\/span><b>\$\{esc\(c\.score\)\}<\/b><\/div><\/div><div class="srcMeta">\$\{metaHtml\}<\/div>`;/,
-    'Sources drawer should render release names separately from scan-friendly metadata');
+  assert.ok([
+    'const displayReleaseName = (name) => {',
+    ".replace(/[._]+/g, ' ')",
+    ".replace(/\\bWEB DL\\b/gi, 'WEB-DL')",
+    ".replace(/\\bH 264\\b/gi, 'H.264')",
+  ].every((s) => ui.includes(s)),
+    'Sources drawer should show readable release names instead of raw dotted post names');
+  assert.match(ui, /row\.title = c\.name \|\| '';[\s\S]+row\.innerHTML = `<div class="srcTop"><div class="srcTitle"><div class="name">\$\{esc\(displayReleaseName\(c\.name\)\)\}<\/div><div class="srcMeta">\$\{esc\(meta \|\| 'Source details unavailable'\)\}<\/div><\/div><div class="srcBadges">\$\{chips\}<\/div><\/div>`;/,
+    'Sources drawer should keep exact release names internally while rendering compact metadata and badges');
+  assert.doesNotMatch(ui, /<div class="srcScore">/,
+    'Sources drawer should not expose internal ranking score in the user-facing row');
   assert.match(ui, /qualityRank:\s*normalizeQualityRank\(w\.meta\.qualityRank\)/,
     'Continue Watching cards should carry the saved quality rank from watch state');
   assert.match(ui, /qualityRank:\s*qualityRankForItem\(p\.item\)/,
@@ -223,8 +248,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Up Next primary action should clearly say Play next episode');
   assert.doesNotMatch(ui, /opts\.ended \? 6 : 10/,
     'the ended fallback path should not shorten the Up Next countdown');
-  assert.match(ui, /saveQualityPref\(target,\s*S\.qualityPref\)/,
-    'changing the detail quality toggle should persist the per-title preference');
+  assert.match(ui, /saveQualityPref\(target,\s*S\.qualityPref\)[\s\S]+paintQualityToggle\(S\.qualityPref\);[\s\S]+prefetchSources\(target, 0\);/,
+    'changing the detail quality toggle should persist and immediately warm the selected source class');
   assert.match(ui, /qualityTitleKey\(S\.detailItem\) === qualityTitleKey\(it\)/,
     'episode resumes should inherit the show-level quality preference');
   assert.match(ui, /<div class="qToggle" id="qToggle"[\s\S]+id="dSources"[\s\S]+id="dWatchlist"/,
@@ -363,14 +388,14 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'detail pages should fetch external IDs before source lookup so old/franchise titles can search by catalog identity');
   assert.match(ui, /function sourceIdentityFor\(it\) \{[\s\S]+if \(it\.imdbId\) out\.imdbid = it\.imdbId;[\s\S]+if \(it\.tvdbId\) out\.tvdbid = it\.tvdbId;[\s\S]+const ep = episodeKeyParts\(it\);[\s\S]+out\.season = ep\.season;[\s\S]+out\.ep = ep\.episode;/,
     'source lookup should preserve IMDb, TVDB, season, and episode identity when available');
-  assert.match(ui, /function sourceSearchQuery\(it\) \{[\s\S]+const ids = sourceIdentityFor\(it\);[\s\S]+params\.set\('imdbid', ids\.imdbid\);[\s\S]+params\.set\('tvdbid', ids\.tvdbid\);[\s\S]+params\.set\('season', String\(ids\.season\)\);[\s\S]+params\.set\('ep', String\(ids\.ep\)\);/,
+  assert.match(ui, /function sourceSearchQuery\(it, opts = \{\}\) \{[\s\S]+const ids = sourceIdentityFor\(it\);[\s\S]+params\.set\('imdbid', ids\.imdbid\);[\s\S]+params\.set\('tvdbid', ids\.tvdbid\);[\s\S]+params\.set\('season', String\(ids\.season\)\);[\s\S]+params\.set\('ep', String\(ids\.ep\)\);/,
     'Sources drawer searches should send external identifiers instead of only a title string');
   assert.match(ui, /const ids = sourceIdentityFor\(it\);[\s\S]+const body = \{ q: queryFor\(it\)[\s\S]+if \(ids\.imdbid\) body\.imdbid = ids\.imdbid;[\s\S]+if \(ids\.tvdbid\) body\.tvdbid = ids\.tvdbid;[\s\S]+if \(ids\.season != null\) body\.season = ids\.season;[\s\S]+if \(ids\.ep != null\) body\.ep = ids\.ep;/,
     'Play should carry the same external identity as the Sources drawer');
   assert.match(ui, /if \(it\._lib && it\._lib\.path\) \{[\s\S]+const r = await libItems\(it\._lib\);[\s\S]+mergeLocalItems\(it\._lib, r\.items \|\| \[\]\);[\s\S]+\}[\s\S]+checkAvailability\(it\);/,
     'TV details opened from an added library should hydrate local episode ownership before availability/play targets are calculated');
-  assert.match(ui, /async function checkAvailability\(it\) \{[\s\S]+if \(localTitleHasPlayback\(it\)\) \{[\s\S]+\$\(\'dSources\'\)\.style\.display = 'none';[\s\S]+\$\(\'qToggle\'\)\.style\.display = 'none';[\s\S]+return;/,
-    'local-owned detail pages should not append no-sources copy after the local map is known');
+  assert.match(ui, /async function checkAvailability\(it\) \{[\s\S]+const hasLocal = localTitleHasPlayback\(it\);[\s\S]+if \(hasLocal && localPlaybackRankForItem\(it\) === 4\) \{[\s\S]+\$\(\'qToggle\'\)\.style\.display = 'none';[\s\S]+api\('\/api\/search\?' \+ sourceSearchQuery\(it, \{ includeQuality: false \}\)\)[\s\S]+has4k && \(hasLower \|\| \(hasLocal && localRank !== 4\)\)[\s\S]+if \(hasLocal\) \{[\s\S]+\$\(\'dSources\'\)\.style\.display = offer \? '' : 'none';[\s\S]+return;/,
+    'local-owned detail pages should still discover online 4K when the local file is lower quality, without showing unavailable');
   assert.match(ui, /if \(it\._showOpen !== undefined\)[\s\S]+openLocalShowDetail\(\{ \.\.\.it, _lib: lib \}\)/,
     'unmatched local TV shows should open a details page instead of a flat episode grid');
   assert.match(ui, /async function openLocalShowDetail\(it\) \{[\s\S]+_localShow: true[\s\S]+loadAllLocalShowEpisodes\(show\._lib, show\._showOpen\)[\s\S]+S\.detailSeasons = localSeasonSummaries\(episodes\)[\s\S]+renderLocalShowSeasonGrid\(show, S\.detailSeasons\)[\s\S]+pickLocalShowPlayTarget\(show, episodes\)/,
@@ -469,6 +494,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'native-first playback should still honor Back/cancel while the loading screen is open');
   assert.match(ui, /const sourceName = mount\.candidate \? mount\.candidate\.name : mount\.name;[\s\S]+item: it, name: sourceName, fileName: mount\.name/,
     'native quality/source labels should use the selected release name, not only the mounted inner filename');
+  assert.match(ui, /sourceAttributes: mount\.candidate && mount\.candidate\.attributes/,
+    'player quality labels should receive the parsed selected-source attributes from /api/play');
+  assert.match(ui, /function resolutionLabel\(res\) \{[\s\S]+v === '2160p'[\s\S]+return '4K'[\s\S]+function nativeQualityLabel\(p, kind\) \{[\s\S]+const attrLabel = resolutionLabel\(p && p\.sourceAttributes && p\.sourceAttributes\.resolution\);[\s\S]+if \(attrLabel\) return attrLabel;/,
+    'player quality labels should prefer selected-source resolution attributes before guessing from filenames or tracks');
+  assert.doesNotMatch(ui, /if \(h >= 400\) return '480p';\s*return '1080p';/,
+    'direct/remux source labels should not invent a 1080p badge when source resolution and tracks are unknown');
   assert.match(ui, /const nativeRequired = nativeVideoRequired\(it\);[\s\S]+const nativeStarted = \(opts\.nativeFirst \|\| nativeRequired\) && tryNativePlaybackLadder\(it\.resume \|\| 0, startKind\);[\s\S]+if \(nativeStarted\) \{[\s\S]+startNativePlayerHousekeeping\(it\);[\s\S]+\} else if \(nativeRequired\) \{[\s\S]+closePlayer\(\);[\s\S]+return;[\s\S]+\} else \{[\s\S]+revealWebPlayerShell\(it\);[\s\S]+startWebPlayerHousekeeping\(mount, it\);[\s\S]+startSource\(startKind, it\.resume \|\| 0\);[\s\S]+\}/,
     'Android native movie playback should never reveal the web player shell when ExoPlayer is available');
   assert.match(ui, /function startNativePlayerHousekeeping\(it\) \{[\s\S]+stopWebVideoElement\(\);[\s\S]+if \(S\.healthTimer\) clearInterval\(S\.healthTimer\);[\s\S]+S\.watchTimer = setInterval\(saveWatch, 10000\);[\s\S]+loadTracks\(\);[\s\S]+prepNextEpisode\(it\);[\s\S]+\}/,

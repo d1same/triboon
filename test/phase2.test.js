@@ -771,6 +771,56 @@ test('pipeline: explicit pickKey mounts the chosen source before auto-pick', asy
   }
 });
 
+test('pipeline: quality policy streams the matching 1080p or 4K source bytes', async () => {
+  const hdPayload = seededPayload(90 * 1024, 61);
+  const uhdPayload = seededPayload(90 * 1024, 62);
+  const hd = nzbFor(writeRar4Store([{ name: 'Quality.1080p.mkv', data: hdPayload }], { base: 'quality-hd' }), 30000, 'quality-hd');
+  const uhd = nzbFor(writeRar4Store([{ name: 'Quality.2160p.mkv', data: uhdPayload }], { base: 'quality-uhd' }), 30000, 'quality-uhd');
+  const mock = createMockNntp({ articles: new Map([...hd.articles, ...uhd.articles]) });
+  const nntpPort = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 4);
+  const ix = makeMockIndexer([
+    { name: 'Quality.Match.2024.2160p.WEB-DL.HEVC-FLUX', size: 16e9, nzb: uhd.nzb },
+    { name: 'Quality.Match.2024.1080p.WEB-DL.H.264-NTb', size: 6e9, nzb: hd.nzb },
+  ]);
+  const ixPort = await ix.listen();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const pipeline = new Pipeline({
+    pool: () => pool, verdicts: new VerdictCache(store), mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+  const readAll = async (vf) => {
+    const chunks = [];
+    for await (const c of vf.read(0, vf.size)) chunks.push(c);
+    return Buffer.concat(chunks);
+  };
+
+  try {
+    const hdPlay = await pipeline.play(
+      { q: 'Quality Match 2024' },
+      { maxResolutionRank: 3, preferResolutionRank: 3 }
+    );
+    assert.strictEqual(hdPlay.candidate.attributes.resolution, '1080p',
+      '1080p selection should mount a 1080p source');
+    assert.ok((await readAll(hdPlay.vf)).equals(hdPayload),
+      '1080p selection should stream bytes from the 1080p NZB');
+
+    const uhdPlay = await pipeline.play(
+      { q: 'Quality Match 2024' },
+      { maxResolutionRank: 4, preferResolutionRank: 4, exactResolutionRank: 4 }
+    );
+    assert.strictEqual(uhdPlay.candidate.attributes.resolution, '2160p',
+      '4K selection should mount a 2160p source');
+    assert.ok(uhdPlay.session.candidates.every((c) => c.attributes.resolution === '2160p'),
+      '4K selection should not leave a 1080p source in the playable queue');
+    assert.ok((await readAll(uhdPlay.vf)).equals(uhdPayload),
+      '4K selection should stream bytes from the 2160p NZB');
+  } finally {
+    pool.close(); await mock.close(); ix.server.close(); store.close();
+  }
+});
+
 test('pipeline: a picked SAMPLE file fails the candidate and auto-advance finds the feature', async () => {
   // Real incident: a sample-only post ("From.S01E01.GERMAN.DL.2160p" — 68MB) mounted its
   // sample.mkv and auto-played as the episode. The indexer DECLARED a big size, so scoring

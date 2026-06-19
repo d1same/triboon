@@ -425,31 +425,25 @@ body.tv #filterMenu{backdrop-filter:none}
 #drawer .drawerClose{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;color:var(--muted);background:rgba(34,25,52,.6);flex:none}
 #drawer .drawerClose svg{width:16px;height:16px}
 #drawer .sub{color:var(--muted);font-size:13px;margin-bottom:18px;line-height:1.45}
-#srcSort{display:none;gap:6px;margin:-6px 0 12px}
-#srcSort button{height:30px;border-radius:999px;padding:0 12px;background:rgba(34,25,52,.68);border:1px solid rgba(243,239,247,.1);color:var(--muted);font:800 10px "JetBrains Mono";letter-spacing:.06em;text-transform:uppercase}
-#srcSort button.sel{background:rgba(237,232,245,.9);border-color:transparent;color:#160a04}
-#srcList{overflow-y:auto;display:flex;flex-direction:column;gap:12px;padding:8px 6px 14px;margin:0 -6px;min-height:0}
-.srcRow{position:relative;overflow:visible;width:100%;box-sizing:border-box;border-radius:15px;background:linear-gradient(180deg,rgba(27,21,42,.92),rgba(18,14,29,.96));border:1px solid rgba(243,239,247,.12);padding:11px 15px 10px;display:grid;grid-template-rows:auto auto;gap:8px;text-align:left;align-items:stretch;justify-content:stretch;transition:background .15s,border-color .15s,transform .15s}
-.srcRow::before{content:"";position:absolute;left:0;top:14px;bottom:14px;width:3px;border-radius:0 999px 999px 0;background:rgba(243,239,247,.16)}
-.srcRow:hover{background:linear-gradient(180deg,rgba(37,29,56,.96),rgba(21,16,34,.98));border-color:rgba(243,239,247,.2)}
-.srcRow .srcTop{display:grid;grid-template-columns:minmax(0,1fr) minmax(74px,88px);align-items:start;gap:10px;min-width:0;width:100%}
-.srcRow .srcTitle{min-width:0;display:flex;flex-direction:column;gap:5px}
-.srcRow .name{font:750 13.5px "Albert Sans";line-height:1.22;color:var(--text);overflow:hidden;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow-wrap:anywhere}
-.srcRow .srcScore{min-width:0;border-radius:999px;background:rgba(243,239,247,.08);border:1px solid rgba(243,239,247,.12);padding:5px 8px;text-align:center;white-space:nowrap;align-self:start;display:flex;align-items:center;justify-content:center;gap:5px}
-.srcRow .srcScore span{display:inline;font:800 8px "JetBrains Mono";letter-spacing:.07em;text-transform:uppercase;color:rgba(243,239,247,.5);margin:0}
-.srcRow .srcScore b{display:inline;font:800 11.5px "JetBrains Mono";color:var(--text)}
-.srcRow .srcMeta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px 10px;width:100%}
-.srcRow .srcKv{min-width:0;border-top:1px solid rgba(243,239,247,.055);padding-top:5px}
-.srcRow .srcKv .k{display:block;font:800 7.8px "JetBrains Mono";letter-spacing:.08em;text-transform:uppercase;color:rgba(243,239,247,.42);margin-bottom:1px}
-.srcRow .srcKv .v{display:block;font:650 10.8px "Albert Sans";color:#e8e0ef;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.srcRow .chips{display:flex;gap:5px;flex-wrap:wrap}
+#srcSort{display:none;gap:8px;margin:-4px 0 14px;flex-wrap:wrap}
+#srcSort button{height:34px;border-radius:999px;padding:0 14px;background:rgba(34,25,52,.68);border:1px solid rgba(243,239,247,.12);color:var(--muted);font:800 10px "JetBrains Mono";letter-spacing:.06em;text-transform:uppercase}
+#srcSort button.sel{background:rgba(237,232,245,.92);border-color:transparent;color:#160a04}
+#srcSort button.focus{box-shadow:0 0 0 2.5px var(--coral);color:var(--text)}
+#srcSort button.sel.focus{color:#160a04}
+#srcList{overflow-y:auto;display:flex;flex-direction:column;gap:9px;padding:8px 5px 14px;margin:0 -5px;min-height:0}
+.srcRow{position:relative;overflow:visible;width:100%;box-sizing:border-box;border-radius:13px;background:rgba(24,18,36,.9);border:1px solid rgba(243,239,247,.1);padding:12px 14px;display:flex;flex-direction:column;gap:7px;text-align:left;align-items:stretch;justify-content:stretch;transition:background .15s,border-color .15s,transform .15s}
+.srcRow:hover{background:rgba(31,24,47,.96);border-color:rgba(243,239,247,.18)}
+.srcRow .srcTop{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:12px;min-width:0;width:100%}
+.srcRow .srcTitle{min-width:0;display:flex;flex-direction:column;gap:6px}
+.srcRow .name{font:750 13.5px "Albert Sans";line-height:1.25;color:var(--text);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere}
+.srcRow .srcBadges{display:flex;align-items:flex-start;justify-content:flex-end;gap:5px;flex-wrap:wrap;max-width:190px}
+.srcRow .srcMeta{font:650 11.3px "Albert Sans";line-height:1.35;color:rgba(232,224,239,.76);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .srcRow .chip{padding:3px 7px;border-radius:999px;background:rgba(243,239,247,.07);border:1px solid rgba(243,239,247,.1);font:800 8.5px "JetBrains Mono";letter-spacing:.035em;text-transform:uppercase;color:rgba(243,239,247,.72)}
 .srcRow .chip.auto{background:rgba(237,232,245,.9);color:#160a04;border-color:transparent}
 .srcRow .chip.ok{color:#bdf3c5;border-color:rgba(189,243,197,.2);background:rgba(58,110,69,.16)}
 .srcRow .chip.warn{color:#ffd19a;border-color:rgba(255,209,154,.22);background:rgba(116,72,37,.18)}
-.srcRow.auto{box-shadow:inset 0 0 0 1.5px rgba(237,232,245,.72),0 12px 34px rgba(0,0,0,.2);background:linear-gradient(135deg,rgba(251,139,60,.12),rgba(193,59,214,.11) 42%,rgba(27,21,42,.94))}
-.srcRow.auto::before{top:0;bottom:0;width:4px;background:var(--grad)}
-.srcRow.focusable::after{content:"";position:absolute;inset:-3px;border-radius:18px;border:2px solid rgba(237,232,245,.82);opacity:0;pointer-events:none}
+.srcRow.auto{box-shadow:inset 3px 0 0 var(--coral);background:linear-gradient(135deg,rgba(251,139,60,.10),rgba(193,59,214,.08) 42%,rgba(24,18,36,.94))}
+.srcRow.focusable::after{content:"";position:absolute;inset:-3px;border-radius:16px;border:2px solid rgba(237,232,245,.82);opacity:0;pointer-events:none}
 .srcRow.focusable.focus::after,.srcRow:focus-visible::after{opacity:1}
 .srcRow.focusable.focus{transform:none}
 
@@ -2169,9 +2163,9 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
   </div>
   <div class="sub" id="drawerSub"></div>
   <div id="srcSort" aria-label="Sort sources">
-    <button data-src-sort="best" class="sel">Best</button>
-    <button data-src-sort="largest">Largest</button>
-    <button data-src-sort="smallest">Smallest</button>
+    <button data-src-sort="best" class="focusable sel">Best</button>
+    <button data-src-sort="largest" class="focusable">Largest</button>
+    <button data-src-sort="smallest" class="focusable">Smallest</button>
   </div>
   <div id="srcList"></div>
 </aside>
@@ -2537,7 +2531,7 @@ const bgLazy = (() => {
 })();
 const S = {
   user: null, serverInfo: null, rows: [], focusedItem: null,
-  view: 'home', zone: 'rows', rowIdx: 0, colIdx: {}, heroIdx: 0, railIdx: 0, drawerIdx: 0, ctlIdx: 1,
+  view: 'home', zone: 'rows', rowIdx: 0, colIdx: {}, heroIdx: 0, railIdx: 0, drawerIdx: 0, drawerSortIdx: 0, ctlIdx: 1,
   playing: null,      // { sessionId, streamUrl, remuxUrl, item, name, usingRemux, remuxBase, startOffset, duration }
   osdTimer: null, healthTimer: null, watchTimer: null, qcTimer: null, sourceSort: 'best',
 };
@@ -3624,7 +3618,9 @@ function renderRows(opts = {}) {
 }
 let prefetchTimer = null;
 function prefetchSources(it, delay = 700) {
-  if (!it || it.type === 'live' || localTitleHasPlayback(it)) return;
+  if (!it || it.type === 'live') return;
+  const qRank = qualityRankForItem(it);
+  if (localTitleHasPlayback(it) && localPlaybackFitsQuality(it, qRank)) return;
   // The Stremio trick: search/triage warms server-side while the user reads the title,
   // so pressing Play skips the indexer fan-out entirely (~1s perceived start).
   clearTimeout(prefetchTimer);
@@ -3840,25 +3836,50 @@ function saveQualityPref(it, rank) {
   } catch {}
 }
 function qualityRankForItem(it) {
-  if (!it || it._local || it.type === 'live') return null;
+  if (!it || it.type === 'live') return null;
+  if (it._local && !it.tmdbId) return null;
   const detailMatches = S.detailItem && qualityTitleKey(S.detailItem) === qualityTitleKey(it);
   return normalizeQualityRank(detailMatches ? S.qualityPref : null)
     || normalizeQualityRank(it.qualityRank)
     || savedQualityPref(it);
 }
-function sourceSearchQuery(it) {
+function sourceSearchQuery(it, opts = {}) {
   const params = new URLSearchParams({ q: queryFor(it) });
   const ids = sourceIdentityFor(it);
   if (ids.imdbid) params.set('imdbid', ids.imdbid);
   if (ids.tvdbid) params.set('tvdbid', ids.tvdbid);
   if (ids.season != null) params.set('season', String(ids.season));
   if (ids.ep != null) params.set('ep', String(ids.ep));
-  const qRank = qualityRankForItem(it);
+  const qRank = opts.includeQuality === false ? null : qualityRankForItem(it);
   if (qRank) {
     params.set('maxResolutionRank', String(qRank));
     params.set('preferResolutionRank', String(qRank));
   }
   return params.toString();
+}
+function releaseResolutionRankFromName(name) {
+  const s = String(name || '').toLowerCase();
+  if (/\b(2160p|4k|uhd)\b/.test(s)) return 4;
+  if (/\b1080p\b/.test(s)) return 3;
+  if (/\b720p\b/.test(s)) return 2;
+  if (/\b576p\b/.test(s)) return 1;
+  if (/\b480p\b/.test(s)) return 0;
+  return null;
+}
+function localPlaybackForItem(it) {
+  if (!it) return null;
+  return it._local || (S.localMap && it.key && S.localMap[it.key]) || null;
+}
+function localPlaybackRankForItem(it) {
+  const loc = localPlaybackForItem(it);
+  return loc ? releaseResolutionRankFromName(loc.name || loc.fileName || loc.streamUrl) : null;
+}
+function localPlaybackFitsQuality(it, qRank) {
+  if (qRank === null || qRank === undefined) return true;
+  const rank = localPlaybackRankForItem(it);
+  if (qRank === 4) return rank === 4;
+  if (qRank === 3) return rank !== 4;
+  return true;
 }
 function paintQualityToggle(rank) {
   const q = normalizeQualityRank(rank) || 3;
@@ -3883,11 +3904,14 @@ async function play(it, pick) {
   if (!it) return;
   it = resolvePlaybackResume(it);
   if (!levelAllows(it.cert)) { toast(`“${it.title}” is rated ${it.cert} — not allowed on this profile`); return; }
+  const picked = pick && typeof pick === 'object' ? pick : (pick ? { name: pick } : null);
+  const pickRank = picked ? normalizeResolutionRank(picked.resolutionRank) : null;
+  const qRank = pickRank !== null ? pickRank : qualityRankForItem(it);
   // Local-first: if this exact title/episode exists in a scanned library, play the file on
-  // disk instead of searching usenet (picking a specific release still uses the pipeline).
+  // disk instead of searching usenet, unless the chosen quality asks for another source class.
   if (it._local && !it.tmdbId) return playLocal(it); // NFO-only archive item: file is the only source
   const loc = S.localMap && it.key && S.localMap[it.key];
-  if (loc && !pick) return playLocal({ ...it, _local: loc });
+  if (loc && !picked && localPlaybackFitsQuality({ ...it, _local: loc }, qRank)) return playLocal({ ...it, _local: loc });
   stopActivePlaybackForReplacement();
   const btns = [$('btnPlay'), $('dPlay')];
   btns.forEach((b) => { b.disabled = true; });
@@ -3899,15 +3923,12 @@ async function play(it, pick) {
   if (nativeFirst) showNativePlayLoading(it);
   else showPlayLoading(it);
   try {
-    const picked = pick && typeof pick === 'object' ? pick : (pick ? { name: pick } : null);
-    const pickRank = picked ? normalizeResolutionRank(picked.resolutionRank) : null;
     const ids = sourceIdentityFor(it);
     const body = { q: queryFor(it), pick: picked && picked.name, pickKey: picked && picked.pickKey, caps: clientCaps() };
     if (ids.imdbid) body.imdbid = ids.imdbid;
     if (ids.tvdbid) body.tvdbid = ids.tvdbid;
     if (ids.season != null) body.season = ids.season;
     if (ids.ep != null) body.ep = ids.ep;
-    const qRank = pickRank !== null ? pickRank : qualityRankForItem(it);
     if (qRank !== null) {
       body.maxResolutionRank = qRank;     // HD/UHD toggle is a source-selection request, not a transcode request.
       body.preferResolutionRank = qRank;  // 1080p prefers 1080p; 4K prefers 2160p, still within the user's cap.
@@ -4006,6 +4027,20 @@ async function openSources(it) {
         f.has('multi') ? 'Multi' : '',
       ].filter(Boolean).join(' / ');
     };
+    const displayReleaseName = (name) => {
+      const cleaned = String(name || '')
+        .replace(/[._]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/\bWEB DL\b/gi, 'WEB-DL')
+        .replace(/\bDDP5 1\b/gi, 'DDP5.1')
+        .replace(/\bDTS HD\b/gi, 'DTS-HD')
+        .replace(/\bH 264\b/gi, 'H.264')
+        .replace(/\bH 265\b/gi, 'H.265')
+        .replace(/\bx 264\b/gi, 'x264')
+        .replace(/\bx 265\b/gi, 'x265');
+      return cleaned || 'Unknown release';
+    };
     const autoKey = cands[0] && cands[0].pickKey;
     const sizeOf = (c) => Number(c.sizeBytes) || 0;
     const sortedSources = () => {
@@ -4017,7 +4052,7 @@ async function openSources(it) {
     const syncSortButtons = () => {
       document.querySelectorAll('#srcSort button').forEach((b) => b.classList.toggle('sel', b.dataset.srcSort === S.sourceSort));
     };
-    const renderSourceRows = () => {
+    const renderSourceRows = (opts = {}) => {
       list.innerHTML = '';
       sortedSources().forEach((c) => {
         const isAuto = c.pickKey === autoKey;
@@ -4026,33 +4061,38 @@ async function openSources(it) {
         const gb = c.sizeBytes ? (c.sizeBytes / 1e9).toFixed(1) + ' GB' : '?';
         const a = c.attributes || {};
         const meta = [
-          ['Size', gb],
-          ['Source', fmtAttr(a.source)],
-          ['Indexer', c.indexer || 'Unknown'],
-          ['Codec', fmtAttr(a.codec)],
-          ['Audio', audioInfo(a)],
-          ['Group', a.group || ''],
-        ].filter((x) => x[1]);
-        const metaHtml = meta.map(([k, v]) => `<div class="srcKv"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`).join('');
+          fmtAttr(a.source),
+          fmtAttr(a.codec),
+          audioInfo(a),
+          a.group || '',
+          c.indexer || 'Unknown',
+        ].filter(Boolean).join(' · ');
         const chips = [
           isAuto ? '<span class="chip auto">Auto pick</span>' : '',
           a.resolution && a.resolution !== 'unknown' ? `<span class="chip">${esc(a.resolution)}</span>` : '',
+          `<span class="chip">${esc(gb)}</span>`,
           c.streamClass === 'compressed' ? '<span class="chip warn">Compressed</span>' : '',
           c.health === 'verified' ? '<span class="chip ok">Verified</span>' : '',
           c.health === 'blocked' || c.health === 'mount-failed' ? '<span class="chip warn">' + esc(c.health) + '</span>' : '',
         ].join('');
+        row.title = c.name || '';
         // Release names are PUBLISHED BY STRANGERS on usenet — the #1 XSS vector in this app.
-        row.innerHTML = `<div class="srcTop"><div class="srcTitle"><div class="name">${esc(c.name)}</div><div class="chips">${chips}</div></div><div class="srcScore"><span>Score</span><b>${esc(c.score)}</b></div></div><div class="srcMeta">${metaHtml}</div>`;
+        row.innerHTML = `<div class="srcTop"><div class="srcTitle"><div class="name">${esc(displayReleaseName(c.name))}</div><div class="srcMeta">${esc(meta || 'Source details unavailable')}</div></div><div class="srcBadges">${chips}</div></div>`;
         row.addEventListener('click', () => { closeDrawer(); play(it, { name: c.name, pickKey: c.pickKey, resolutionRank: rk(c) }); });
         list.appendChild(row);
       });
-      focusDrawer(0);
+      if (opts.focusSort) focusDrawerSort(opts.sortIdx);
+      else focusDrawer(0);
     };
     const sortWrap = $('srcSort');
     sortWrap.style.display = cands.length > 1 ? 'flex' : 'none';
     syncSortButtons();
-    sortWrap.querySelectorAll('button').forEach((b) => {
-      b.onclick = () => { S.sourceSort = b.dataset.srcSort || 'best'; syncSortButtons(); renderSourceRows(); };
+    sortWrap.querySelectorAll('button').forEach((b, sortIdx) => {
+      b.onclick = () => {
+        S.sourceSort = b.dataset.srcSort || 'best';
+        syncSortButtons();
+        renderSourceRows({ focusSort: true, sortIdx });
+      };
     });
     renderSourceRows();
   } catch (e) { list.innerHTML = `<div class="sub">Search failed: ${esc(e.message)}</div>`; }
@@ -4745,7 +4785,8 @@ function localTitleHasPlayback(it) {
 // usenet results shows an honest "Unavailable" instead of a Play button that would fail.
 async function checkAvailability(it) {
   const reqId = S.detailReq;
-  if (localTitleHasPlayback(it)) {
+  const hasLocal = localTitleHasPlayback(it);
+  if (hasLocal && localPlaybackRankForItem(it) === 4) {
     $('dSources').style.display = 'none'; // your own file — one source, no drawer
     $('qToggle').style.display = 'none';
     return;
@@ -4754,7 +4795,7 @@ async function checkAvailability(it) {
   // before /api/server returns, and bailing there left the toggle/Unavailable state unset.
   if (S.serverInfo && !S.serverInfo.tmdb) return;
   try {
-    const r = await api('/api/search?' + sourceSearchQuery(it));
+    const r = await api('/api/search?' + sourceSearchQuery(it, { includeQuality: false }));
     if (reqId !== S.detailReq) return; // user moved on
     // The 1080p/4K toggle only exists when BOTH classes exist for this title — a title with a
     // single version (4K-less older movie, 4K-only release, 720p-only show) gets just
@@ -4762,7 +4803,15 @@ async function checkAvailability(it) {
     const res = new Set((r.candidates || []).map((c) => (c.attributes || {}).resolution));
     const has4k = res.has('2160p');
     const hasLower = [...res].some((x) => x !== '2160p'); // 1080p/720p/SD/unknown
-    const offer = !!(r.candidates && r.candidates.length && has4k && hasLower);
+    const localRank = localPlaybackRankForItem(it);
+    const offer = !!(r.candidates && r.candidates.length && has4k && (hasLower || (hasLocal && localRank !== 4)));
+    if (hasLocal) {
+      $('dSources').style.display = offer ? '' : 'none';
+      $('qToggle').style.display = offer ? '' : 'none';
+      S.qualityPref = offer ? (normalizeQualityRank(it.qualityRank) || savedQualityPref(it) || 3) : null;
+      if (offer) paintQualityToggle(S.qualityPref);
+      return;
+    }
     $('qToggle').style.display = offer ? '' : 'none';
     S.qualityPref = offer ? (normalizeQualityRank(it.qualityRank) || savedQualityPref(it) || 3) : null;
     if (offer) paintQualityToggle(S.qualityPref);
@@ -4797,6 +4846,7 @@ $('qToggle').addEventListener('click', (e) => {
   saveQualityPref(target, S.qualityPref);
   if (target && S.detailItem && qualityTitleKey(target) !== qualityTitleKey(S.detailItem)) saveQualityPref(S.detailItem, S.qualityPref);
   paintQualityToggle(S.qualityPref);
+  prefetchSources(target, 0);
 });
 $('dWatchlist').addEventListener('click', async () => {
   const it = S.detailItem; if (!it) return;
@@ -5185,7 +5235,8 @@ function openPlayer(it, mount, opts = {}) {
     sessionId: mount.sessionId, streamUrl: mount.streamUrl, remuxUrl: mount.remuxUrl,
     transcodeUrl: mount.transcodeUrl, encoder: mount.encoder,
     tracksUrl: mount.tracksUrl, subtitleBase: mount.subtitleBase, streamToken: mount.streamToken,
-    item: it, name: sourceName, fileName: mount.name, usingRemux: false, usingTranscode: false, startOffset: 0,
+    item: it, name: sourceName, fileName: mount.name, sourceAttributes: mount.candidate && mount.candidate.attributes,
+    usingRemux: false, usingTranscode: false, startOffset: 0,
     duration: knownDuration, lastSaved: 0, triedRemux: false, triedTranscode: false, mountId: mount.id,
     tracks: null, audioTrack: 0, subTrack: null, quality: 1080, nativePos: 0, nativeDuration: 0,
     nativeStartKind: playbackStartKind(mount), nativeTried: {},
@@ -5358,17 +5409,25 @@ function nativeVideoSubtitleRel(p) {
   if (saved === 'off') return { blocked: false, rel: '' };
   return { blocked: false, rel: '' };
 }
+function resolutionLabel(res) {
+  const v = String(res || '').toLowerCase();
+  if (v === '2160p' || v === '4k' || v === 'uhd') return '4K';
+  if (/^(1080p|720p|576p|480p)$/.test(v)) return v;
+  return '';
+}
 function nativeQualityLabel(p, kind) {
-  if (kind === 'transcode') return `${p.quality || 1080}p`;
-  const source = [p.name, p.item && p.item.q, p.item && p.item.title].filter(Boolean).join(' ');
+  const attrLabel = resolutionLabel(p && p.sourceAttributes && p.sourceAttributes.resolution);
+  if (attrLabel) return attrLabel;
+  const source = [p && p.name, p && p.item && p.item.q, p && p.item && p.item.title].filter(Boolean).join(' ');
   const m = source.match(/\b(2160p|4k|1080p|720p|480p)\b/i);
-  if (m) return /2160|4k/i.test(m[1]) ? '4K' : m[1].toLowerCase().replace('p', 'p');
+  if (m) return resolutionLabel(m[1]);
   const h = p.tracks && p.tracks.video && p.tracks.video[0] && +p.tracks.video[0].height;
   if (h >= 2000) return '4K';
   if (h >= 1000) return '1080p';
   if (h >= 700) return '720p';
   if (h >= 400) return '480p';
-  return '1080p';
+  if (kind === 'transcode') return `${p.quality || 1080}p`;
+  return '';
 }
 function bestSubtitleVariant(lang) {
   const p = S.playing;
@@ -11501,9 +11560,23 @@ function enterRail() {
   const i = btns.findIndex((b) => b.classList.contains('active'));
   focusRail(i >= 0 ? i : (S.railIdx || 0), { suppressPreview: ['detail', 'person'].includes(S.view) });
 }
+function drawerRows() {
+  return [...document.querySelectorAll('.srcRow')];
+}
+function drawerSortButtons() {
+  return [...$('srcSort').querySelectorAll('button')].filter((b) => b.offsetParent !== null);
+}
+function focusDrawerSort(i) {
+  const btns = drawerSortButtons();
+  if (!btns.length) return;
+  const selected = btns.findIndex((b) => b.classList.contains('sel'));
+  const target = Number.isInteger(i) ? i : (selected >= 0 ? selected : 0);
+  S.zone = 'drawerSort'; S.drawerSortIdx = Math.max(0, Math.min(btns.length - 1, target));
+  applyFocus(btns[S.drawerSortIdx]);
+}
 function focusDrawer(i) {
-  const rows = document.querySelectorAll('.srcRow');
-  if (!rows.length) return;
+  const rows = drawerRows();
+  if (!rows.length) return focusDrawerSort();
   S.zone = 'drawer'; S.drawerIdx = Math.max(0, Math.min(rows.length - 1, i));
   applyFocus(rows[S.drawerIdx]);
 }
@@ -11727,10 +11800,25 @@ document.addEventListener('keydown', (e) => {
   }
 
   if ($('drawer').classList.contains('open')) {
-    if (k === 'Escape' || k === 'Backspace' || k === 'ArrowRight') return closeDrawer();
-    if (k === 'ArrowUp') return focusDrawer(S.drawerIdx - 1);
+    const sortBtns = drawerSortButtons();
+    const rows = drawerRows();
+    const cur = document.querySelector('#drawer .focus');
+    const sortIdx = sortBtns.indexOf(cur);
+    const inSort = sortIdx >= 0 || S.zone === 'drawerSort';
+    if (k === 'Escape' || k === 'Backspace') return closeDrawer();
+    if (inSort) {
+      const i = sortIdx >= 0 ? sortIdx : Math.max(0, Math.min(sortBtns.length - 1, S.drawerSortIdx || 0));
+      if (k === 'ArrowLeft') return focusDrawerSort(i - 1);
+      if (k === 'ArrowRight') return focusDrawerSort(i + 1);
+      if (k === 'ArrowDown') return focusDrawer(0);
+      if (k === 'Enter' && !e.repeat) return sortBtns[i] && sortBtns[i].click();
+      return;
+    }
+    if (k === 'ArrowRight') return closeDrawer();
+    if (k === 'ArrowLeft' && sortBtns.length) return focusDrawerSort();
+    if (k === 'ArrowUp') return S.drawerIdx <= 0 && sortBtns.length ? focusDrawerSort() : focusDrawer(S.drawerIdx - 1);
     if (k === 'ArrowDown') return focusDrawer(S.drawerIdx + 1);
-    if (k === 'Enter' && !e.repeat) { const rows = document.querySelectorAll('.srcRow'); rows[S.drawerIdx] && rows[S.drawerIdx].click(); }
+    if (k === 'Enter' && !e.repeat) rows[S.drawerIdx] && rows[S.drawerIdx].click();
     return;
   }
   if (S.zone === 'musicBar' && S.view !== 'player') {
