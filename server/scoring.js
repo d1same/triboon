@@ -119,7 +119,9 @@ const DUAL_TAG = /\b(dl|dual|multi|2audio|\d?audios|ita[ ._-]?eng|eng[ ._-]?ita)
 const STREAM_SCORE = { flat: 60, store: 60, compressed: -300, encrypted: -100000, unsupported: -100000 };
 const HEALTH_SCORE = {
   verified: 40, unverified: 0, degraded: -120, blocked: -100000,
-  'mount-failed': -400, 'fetch-failed': -200, // remembered failures from the verdict cache
+  missing: -100000,                 // provider confirmed the article is gone
+  'probe-timeout': -800,             // slow first article: skip now, demote for later
+  'mount-failed': -2000, 'fetch-failed': -200, // remembered failures from the verdict cache
 };
 
 // Score one candidate against a user policy.

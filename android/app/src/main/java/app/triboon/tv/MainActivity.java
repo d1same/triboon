@@ -31,6 +31,7 @@ import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
+import android.window.OnBackInvokedDispatcher;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -156,6 +157,7 @@ public class MainActivity extends Activity {
     private boolean nativeHasWyzieSubtitle;
     private boolean nativeUserSeeking;
     private boolean nativeSeekDpadMode;
+    private boolean nativeBackConsumedChromeDown;
     private boolean nativeGuideMode;
     private int nativeGuideEpoch;
     private View nativeClickArmedView;
@@ -184,6 +186,7 @@ public class MainActivity extends Activity {
         }
     };
     private long lastBackAtRoot;             // BACK-twice-to-exit window
+    private long lastSystemBackAt;           // guard duplicate dispatch + OnBackInvoked callbacks
     private boolean pageReady;               // main frame finished at least once
     private boolean pageTvReady;             // web focus model installed and has a target
     private volatile boolean pageInputFocused; // page reports text-field focus via the JS bridge
@@ -206,6 +209,11 @@ public class MainActivity extends Activity {
 
         buildWebView();
         buildSetupScreen();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    OnBackInvokedDispatcher.PRIORITY_DEFAULT,
+                    this::handleSystemBack);
+        }
 
         String server = prefs().getString(KEY_SERVER, "");
         if (server.isEmpty()) showSetup(null);
@@ -464,6 +472,11 @@ public class MainActivity extends Activity {
             @android.webkit.JavascriptInterface
             public void updateSubtitleChoices(String json) {
                 runOnUiThread(() -> updateNativeSubtitleChoices(json));
+            }
+
+            @android.webkit.JavascriptInterface
+            public void updateVideoDuration(String seconds) {
+                runOnUiThread(() -> updateNativeVideoDuration(seconds));
             }
 
             @android.webkit.JavascriptInterface
@@ -1345,10 +1358,38 @@ public class MainActivity extends Activity {
         setNativeSubtitleLift(false);
     }
 
+    private boolean nativeChromeShowingForBack() {
+        return (nativeChrome != null && nativeChrome.getVisibility() == View.VISIBLE)
+                || (nativeControlShade != null && nativeControlShade.getVisibility() == View.VISIBLE)
+                || (nativeMetaBar != null && nativeMetaBar.getVisibility() == View.VISIBLE)
+                || (nativeTop != null && nativeTop.getVisibility() == View.VISIBLE);
+    }
+
     private boolean dismissNativeChromeForBack() {
-        if (nativeChrome == null || nativeChrome.getVisibility() != View.VISIBLE) return false;
+        if (!nativeChromeShowingForBack()) return false;
         nativeProgress.removeCallbacks(nativeHideChrome);
         hideNativeChromeNow();
+        return true;
+    }
+
+    private boolean handleNativeBackKey(KeyEvent e) {
+        if (e.getAction() == KeyEvent.ACTION_DOWN) {
+            if (e.getRepeatCount() == 0) nativeBackConsumedChromeDown = false;
+            if (!nativeGuideMode && !nativeSheetOpen() && !nativeEpisodeStripOpen
+                    && dismissNativeChromeForBack()) {
+                nativeBackConsumedChromeDown = true;
+                lastSystemBackAt = SystemClock.uptimeMillis();
+            }
+            return true;
+        }
+        if (e.getAction() == KeyEvent.ACTION_UP) {
+            if (nativeBackConsumedChromeDown) {
+                nativeBackConsumedChromeDown = false;
+                return true;
+            }
+            handleSystemBack();
+            return true;
+        }
         return true;
     }
 
@@ -1857,6 +1898,17 @@ public class MainActivity extends Activity {
 
     private boolean nativeAudioHasOptions() {
         return nativeSupportedTrackCount(C.TRACK_TYPE_AUDIO) > 1;
+    }
+
+    private void updateNativeVideoDuration(String seconds) {
+        if (nativePlayer == null || !"video".equals(nativeMode)) return;
+        try {
+            double s = Double.parseDouble(seconds == null ? "0" : seconds);
+            if (s <= 0 || Double.isNaN(s) || Double.isInfinite(s)) return;
+            nativeKnownDurationMs = Math.max(nativeKnownDurationMs, Math.round(s * 1000));
+            updateNativeChrome();
+        } catch (Exception ignored) {
+        }
     }
 
     private void updateNativeChrome() {
@@ -3017,6 +3069,7 @@ public class MainActivity extends Activity {
         nativeVideoStarted = false;
         nativeLastVideoDisplayMs = 0L;
         nativeSeekDpadMode = false;
+        nativeBackConsumedChromeDown = false;
         nativeOpenSubtitleMenuAfterRefresh = false;
         nativeKnownDurationMs = 0L;
         nativePendingStartMs = 0L;
@@ -3150,8 +3203,7 @@ public class MainActivity extends Activity {
         if (nativePlayerOpen()) {
             if (nativeGuideMode) {
                 if (code == KeyEvent.KEYCODE_BACK) {
-                    if (e.getAction() == KeyEvent.ACTION_UP) closeNativeGuideMode();
-                    return true;
+                    return handleNativeBackKey(e);
                 }
                 if (e.getAction() == KeyEvent.ACTION_DOWN && nativePlayer != null) {
                     boolean repeat = e.getRepeatCount() > 0;
@@ -3185,12 +3237,7 @@ public class MainActivity extends Activity {
                 return super.dispatchKeyEvent(e);
             }
             if (code == KeyEvent.KEYCODE_BACK) {
-                if (e.getAction() == KeyEvent.ACTION_UP) {
-                    if (nativeSheetOpen()) hideNativeSheet();
-                    else if (nativeEpisodeStripOpen) closeNativeEpisodeStrip();
-                    else if (!dismissNativeChromeForBack()) closeNativePlayback(true);
-                }
-                return true;
+                return handleNativeBackKey(e);
             }
             if (handleNativeSurfaceKey(e)) return true;
             if (e.getAction() == KeyEvent.ACTION_DOWN && nativePlayer != null) {
@@ -3220,7 +3267,7 @@ public class MainActivity extends Activity {
         }
 
         if (code == KeyEvent.KEYCODE_BACK) {
-            if (e.getAction() == KeyEvent.ACTION_UP) handleBack();
+            if (e.getAction() == KeyEvent.ACTION_UP) handleSystemBack();
             return true; // never let the WebView do raw history.back()
         }
 
@@ -3273,6 +3320,12 @@ public class MainActivity extends Activity {
         return super.onKeyUp(keyCode, event);
     }
 
+    @Override
+    @SuppressWarnings("deprecation")
+    public void onBackPressed() {
+        handleSystemBack();
+    }
+
     private static String domKeyFor(int code) {
         switch (code) {
             case KeyEvent.KEYCODE_DPAD_UP: return "ArrowUp";
@@ -3323,6 +3376,30 @@ public class MainActivity extends Activity {
 
     // BACK walks up through the web app (player → detail → home). The page's __tvBack()
     // answers 'exit' only at the home root; then BACK-twice within 2s leaves the app.
+    private void handleSystemBack() {
+        long now = SystemClock.uptimeMillis();
+        if (now - lastSystemBackAt < 160) return;
+        lastSystemBackAt = now;
+
+        if (setup != null && setup.getVisibility() == View.VISIBLE) {
+            if (!prefs().getString(KEY_SERVER, "").isEmpty() && pageReady) {
+                setup.setVisibility(View.GONE);
+                web.requestFocus();
+            } else finish();
+            return;
+        }
+
+        if (nativePlayerOpen()) {
+            if (nativeGuideMode) closeNativeGuideMode();
+            else if (nativeSheetOpen()) hideNativeSheet();
+            else if (nativeEpisodeStripOpen) closeNativeEpisodeStrip();
+            else if (!dismissNativeChromeForBack()) closeNativePlayback(true);
+            return;
+        }
+
+        handleBack();
+    }
+
     private void handleBack() {
         if (!pageReady) { finish(); return; }
         web.evaluateJavascript("window.__tvBack ? window.__tvBack() : 'exit'", result -> {

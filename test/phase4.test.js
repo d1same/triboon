@@ -327,6 +327,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'movies, TV shows, and attached libraries should use the shorter browse backdrop');
   assert.match(ui, /if \(v === 'search'\) \{ \$\('browseTitle'\)\.textContent = 'Search';[\s\S]+if \(!opts\.preserveSearch && !opts\.preservePage\) \{ resetSearchPage\(\); \$\('grid'\)\.innerHTML = ''; \}/,
     'restoring Search from Details should not clear the existing result grid');
+  assert.match(ui, /function tmdbSearchRank\(x, q\) \{[\s\S]+searchSeqIndex\(noLeadArticle, queryWords\)[\s\S]+score \+= 10000[\s\S]+score -= 1800[\s\S]+sort\(bySearchRank\)\.map\(mapTmdb\)/,
+    'TMDB search should rank exact franchise/title-prefix matches above incidental phrase matches');
   assert.match(ui, /window\.addEventListener\('hashchange'[\s\S]+if \(\$\(\'detail\'\)\.classList\.contains\(\'open\'\)\) return closeDetail\(\);[\s\S]+applyRoute\(\);/,
     'browser Back from a title route should use the same detail restore path');
   assert.match(ui, /const detailResume = resumePositionForItem\(it\);[\s\S]+updateDetailPlayLabel\(detailResume \? \{ label: 'Resume', target: \{ \.\.\.it, resume: detailResume \} \}/,
@@ -351,6 +353,14 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'local-owned titles should not warm online source searches behind the detail page');
   assert.match(ui, /function queryFor\(it\) \{[\s\S]+if \(it\.tmdbId && \(it\.type === 'movie' \|\| it\.type === 'tv'\) && exact\) return exact;[\s\S]+return it\.q \|\| exact;/,
     'TMDB movie/show cards should play/search by the selected title and year, not a fuzzy raw search query');
+  assert.match(ui, /append_to_response=credits,videos,content_ratings,release_dates,recommendations,similar,external_ids/,
+    'detail pages should fetch external IDs before source lookup so old/franchise titles can search by catalog identity');
+  assert.match(ui, /function sourceIdentityFor\(it\) \{[\s\S]+if \(it\.imdbId\) out\.imdbid = it\.imdbId;[\s\S]+if \(it\.tvdbId\) out\.tvdbid = it\.tvdbId;[\s\S]+const ep = episodeKeyParts\(it\);[\s\S]+out\.season = ep\.season;[\s\S]+out\.ep = ep\.episode;/,
+    'source lookup should preserve IMDb, TVDB, season, and episode identity when available');
+  assert.match(ui, /function sourceSearchQuery\(it\) \{[\s\S]+const ids = sourceIdentityFor\(it\);[\s\S]+params\.set\('imdbid', ids\.imdbid\);[\s\S]+params\.set\('tvdbid', ids\.tvdbid\);[\s\S]+params\.set\('season', String\(ids\.season\)\);[\s\S]+params\.set\('ep', String\(ids\.ep\)\);/,
+    'Sources drawer searches should send external identifiers instead of only a title string');
+  assert.match(ui, /const ids = sourceIdentityFor\(it\);[\s\S]+const body = \{ q: queryFor\(it\)[\s\S]+if \(ids\.imdbid\) body\.imdbid = ids\.imdbid;[\s\S]+if \(ids\.tvdbid\) body\.tvdbid = ids\.tvdbid;[\s\S]+if \(ids\.season != null\) body\.season = ids\.season;[\s\S]+if \(ids\.ep != null\) body\.ep = ids\.ep;/,
+    'Play should carry the same external identity as the Sources drawer');
   assert.match(ui, /if \(it\._lib && it\._lib\.path\) \{[\s\S]+const r = await libItems\(it\._lib\);[\s\S]+mergeLocalItems\(it\._lib, r\.items \|\| \[\]\);[\s\S]+\}[\s\S]+checkAvailability\(it\);/,
     'TV details opened from an added library should hydrate local episode ownership before availability/play targets are calculated');
   assert.match(ui, /async function checkAvailability\(it\) \{[\s\S]+if \(localTitleHasPlayback\(it\)\) \{[\s\S]+\$\(\'dSources\'\)\.style\.display = 'none';[\s\S]+\$\(\'qToggle\'\)\.style\.display = 'none';[\s\S]+return;/,
@@ -552,8 +562,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'web episode strip should animate open and show borderless rounded 16:9 stills with metadata below the image');
   assert.match(ui, /b\.innerHTML = `<div class="peStill"><\/div><div class="peMeta">[\s\S]+<span class="peName">/,
     'web episode cards should render the episode name below the thumbnail, not overlaid on the still');
-  assert.match(ui, /async function getPlayerEpisodeContext\(it\) \{[\s\S]+episodeKeyParts\(it\)[\s\S]+api\(`\/api\/tmdb\/tv\/\$\{parts\.tmdbId\}`\)[\s\S]+api\(`\/api\/tmdb\/tv\/\$\{parts\.tmdbId\}\/season\/\$\{parts\.season\}`\)/,
-    'player episode strip should load the current TMDB season without depending on the detail page being open');
+  assert.match(ui, /async function getPlayerEpisodeContext\(it\) \{[\s\S]+episodeKeyParts\(it\)[\s\S]+api\(`\/api\/tmdb\/tv\/\$\{parts\.tmdbId\}\?append_to_response=external_ids`\)[\s\S]+api\(`\/api\/tmdb\/tv\/\$\{parts\.tmdbId\}\/season\/\$\{parts\.season\}`\)/,
+    'player episode strip should load the current TMDB season and external IDs without depending on the detail page being open');
   assert.match(ui, /async function prepPlayerSeasonEpisodes\(it\) \{[\s\S]+epItemOf\(ctx\.show, ctx\.season, ep\)[\s\S]+S\.playerSeasonStrip = \{ currentKey: it\.key, items, idx:[\s\S]+updateNativeEpisodeChoices\(\);/,
     'player episode strip should reuse normal episode items and push the same choices to native playback');
   assert.match(ui, /const playerMeta = episodePlayerMeta\(p\.item\);[\s\S]+title: playerMeta\.title \|\| p\.item\.title \|\| 'Triboon',[\s\S]+episodeLabel: playerMeta\.subline \|\| '',/,
@@ -600,6 +610,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'web player screen clicks should toggle play, while double-click fullscreen cancels the pending pause');
   assert.match(ui, /\$\('player'\)\.addEventListener\('click', playerSingleClick\);[\s\S]+\$\('player'\)\.addEventListener\('dblclick', playerDoubleClick\);/,
     'web player should bind separate single-click and double-click surface handlers');
+  assert.match(ui, /function hidePlayerOsdForBack\(\) \{[\s\S]+player\.classList\.contains\('open'\)[\s\S]+osd\.classList\.contains\('hide'\)[\s\S]+osd\.classList\.add\('hide'\)[\s\S]+S\.zone === 'seek'[\s\S]+return true;/,
+    'web player Back should be able to hide visible controls without closing playback');
+  assert.match(ui, /if \(k === 'Escape' \|\| k === 'Backspace'\) \{[\s\S]+if \(hidePlayerOsdForBack\(\)\) return;[\s\S]+return closePlayer\(\);[\s\S]+window\.__tvBack = \(\) => \{[\s\S]+if \(hidePlayerOsdForBack\(\)\) return 'ok';[\s\S]+const overlay = document\.querySelector/,
+    'Escape/Backspace and Android TV Back should hide visible web player controls before closing the player');
   assert.match(ui, /#appClock\{position:fixed;top:18px;right:22px;z-index:21;min-width:108px;height:38px;padding:0 18px[\s\S]+font:800 14px "JetBrains Mono",monospace;letter-spacing:0;[\s\S]+backdrop-filter:blur\(18px\);-webkit-backdrop-filter:blur\(18px\)\}/,
     'main app clock should render as a slightly larger text-only glass badge');
   assert.doesNotMatch(ui, /#appClock::before/,
@@ -1250,6 +1264,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'native remux/transcode seek restarts should be marked as quiet seeks from the web bridge');
   assert.match(ui, /quietSeek: !!opts\.quietSeek/,
     'native playback payload should carry whether this is a user seek instead of startup');
+  assert.match(ui, /window\.TriboonTV && window\.TriboonTV\.updateVideoDuration[\s\S]+window\.TriboonTV\.updateVideoDuration\(String\(p\.nativeDuration\)\)/,
+    'native player should receive the async track-probe duration without restarting playback');
+  assert.match(android, /public void updateVideoDuration\(String seconds\) \{[\s\S]+updateNativeVideoDuration\(seconds\)/,
+    'Android bridge should expose a duration update hook for the native player chrome');
+  assert.match(android, /private void updateNativeVideoDuration\(String seconds\) \{[\s\S]+nativeKnownDurationMs = Math\.max\(nativeKnownDurationMs, Math\.round\(s \* 1000\)\);[\s\S]+updateNativeChrome\(\);/,
+    'Android native chrome should repaint the seek bar, total time, and end clock when duration arrives later');
   assert.match(android, /boolean quietSeek = j\.optBoolean\("quietSeek", false\);[\s\S]+if \(!guide && "video"\.equals\(mode\) && !quietSeek\) \{[\s\S]+showNativeLoading\(title, backdropUrl\);[\s\S]+\}/,
     'Android native seek restarts should not bring the full preparing loader to the front');
   assert.match(android, /boolean reuseQuietVideo = quietSeek && "video"\.equals\(mode\) && nativePlayer != null[\s\S]+if \(!reuseQuietVideo\) \{[\s\S]+releaseNativePlayer\(false, guide\);[\s\S]+\} else \{[\s\S]+hideNativeLoading\(\);[\s\S]+if \(!reuseQuietVideo\) \{[\s\S]+new ExoPlayer\.Builder\(this\)/,
@@ -1311,8 +1331,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'Live TV remux fallback should tolerate provider hiccups while still avoiding endless hangs');
   assert.match(server, /armIdle\(LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS\);[\s\S]+ff\.stdout\.on\('data'[\s\S]+armIdle\(LIVE_REMUX_IDLE_TIMEOUT_MS\);[\s\S]+ff\.kill\('SIGKILL'\)/,
     'server Live TV remux should fail fast when ffmpeg stops producing bytes');
-  assert.match(android, /private void hideNativeChromeNow\(\) \{[\s\S]+nativeControlShade\.setVisibility\(View\.GONE\)[\s\S]+nativeChrome\.setVisibility\(View\.GONE\)[\s\S]+parkNativeHiddenFocusOnSeek\(\);[\s\S]+setNativeSubtitleLift\(false\);[\s\S]+private boolean dismissNativeChromeForBack\(\) \{[\s\S]+nativeChrome\.getVisibility\(\) != View\.VISIBLE[\s\S]+nativeProgress\.removeCallbacks\(nativeHideChrome\);[\s\S]+hideNativeChromeNow\(\);[\s\S]+return true;/,
+  assert.match(android, /private void hideNativeChromeNow\(\) \{[\s\S]+nativeControlShade\.setVisibility\(View\.GONE\)[\s\S]+nativeChrome\.setVisibility\(View\.GONE\)[\s\S]+parkNativeHiddenFocusOnSeek\(\);[\s\S]+setNativeSubtitleLift\(false\);[\s\S]+private boolean nativeChromeShowingForBack\(\) \{[\s\S]+nativeChrome[\s\S]+nativeControlShade[\s\S]+nativeMetaBar[\s\S]+nativeTop[\s\S]+private boolean dismissNativeChromeForBack\(\) \{[\s\S]+if \(!nativeChromeShowingForBack\(\)\) return false;[\s\S]+nativeProgress\.removeCallbacks\(nativeHideChrome\);[\s\S]+hideNativeChromeNow\(\);[\s\S]+return true;/,
     'Back should use the same native chrome hide path as auto-hide before leaving playback');
+  assert.match(android, /private boolean handleNativeBackKey\(KeyEvent e\) \{[\s\S]+KeyEvent\.ACTION_DOWN[\s\S]+dismissNativeChromeForBack\(\)[\s\S]+nativeBackConsumedChromeDown = true;[\s\S]+lastSystemBackAt = SystemClock\.uptimeMillis\(\);[\s\S]+KeyEvent\.ACTION_UP[\s\S]+if \(nativeBackConsumedChromeDown\)[\s\S]+handleSystemBack\(\);/,
+    'native Back should hide visible controls on key-down and consume key-up so duplicate Android callbacks cannot close playback');
+  assert.match(android, /if \(nativeGuideMode\) \{[\s\S]+if \(code == KeyEvent\.KEYCODE_BACK\) \{[\s\S]+return handleNativeBackKey\(e\);[\s\S]+if \(code == KeyEvent\.KEYCODE_BACK\) \{[\s\S]+return handleNativeBackKey\(e\);/,
+    'native Back key events should use the shared guarded Back helper in guide and normal player modes');
   assert.match(android, /if \(nativeSheetOpen\(\)\) hideNativeSheet\(\);[\s\S]+else if \(nativeEpisodeStripOpen\) closeNativeEpisodeStrip\(\);[\s\S]+else if \(!dismissNativeChromeForBack\(\)\) closeNativePlayback\(true\);/,
     'Back should close sheets, then episode rows, then visible controls before leaving playback');
   assert.match(android, /boolean waitForLiveClose = notifyClosed && "live"\.equals\(nativeMode\);[\s\S]+web\.postDelayed\(this::showWebAfterNativePlayback, 80\);/,

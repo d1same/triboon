@@ -1,5 +1,5 @@
-# Runtime state — contains encrypted credentials, verdict cache with indexer API keys in
-# NZB urls, and signed tokens. NEVER commit.
+# Runtime state — contains encrypted credentials, user data, caches, and signed tokens.
+# NEVER commit.
 data/
 node_modules/
 .env
@@ -19,6 +19,8 @@ demo/*
 # Local machine settings (approved commands with environment specifics, launch configs).
 .claude/
 AGENTS.md
+android/.idea/
+android/gradle/gradle-daemon-jvm.properties
 
 # Android: machine-local SDK path, build outputs, gradle caches, built APKs, signing keys.
 android/local.properties
@@ -33,6 +35,7 @@ android/app/build/
 *.p12
 
 # Test/debug scratch output (server logs can echo release names and channel lists).
+dist/
 *.log
 bench/shots/
 alltests.txt

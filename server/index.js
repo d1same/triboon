@@ -174,10 +174,10 @@ function xtUrlFor(s, streamId, ext = 'm3u8') {
 function xtChannelUrls(s, streamId) {
   return {
     url: xtUrlFor(s, streamId, 'm3u8'),
-    nativeUrl: xtUrlFor(s, streamId, 'm3u8'),
-    nativeMime: 'application/x-mpegURL',
-    nativeFallbackUrl: xtUrlFor(s, streamId, 'ts'),
-    nativeFallbackMime: 'video/mp2t',
+    nativeUrl: xtUrlFor(s, streamId, 'ts'),
+    nativeMime: 'video/mp2t',
+    nativeFallbackUrl: xtUrlFor(s, streamId, 'm3u8'),
+    nativeFallbackMime: 'application/x-mpegURL',
   };
 }
 function hydrateXtreamCachedChannels(s, rawChannels) {
@@ -336,7 +336,11 @@ let iptvWarmRunning = false;
 let iptvWarmTimer = null;
 let iptvWarmSoonTimer = null;
 function iptvSourceKey(s) {
-  return s.iptvMode === 'xtream' ? `xt:${s.xtHost}:${s.xtUser}` : `m3u:${s.iptvUrl}`;
+  const mode = s.iptvMode === 'xtream' ? 'xt' : 'm3u';
+  const source = mode === 'xt'
+    ? `${s.xtHost || ''}|${s.xtUser || ''}|${s.xtPass || ''}`
+    : `${s.iptvUrl || ''}`;
+  return `${mode}:${idHash(source)}`;
 }
 function iptvConfigured(s) {
   return !!((s.iptvMode === 'xtream' && s.xtHost) || s.iptvUrl);
@@ -532,11 +536,17 @@ async function fetchIptvChannels(s, key) {
     channels = await fetchM3uChannelsStream(s.iptvUrl, { maxChannels: 20000 });
   }
   iptvCache = { key, at: Date.now(), channels };
-  // Persist Xtream playlists for restart survival — WITHOUT the credential-bearing url
+  // Persist Xtream playlists for restart survival — WITHOUT credential-bearing stream URLs
   // (rebuilt from encrypted settings on read). M3U playlists may embed third-party tokens
   // in every line, so those stay memory-only.
   if (s.iptvMode === 'xtream') {
-    try { store.write('iptvcache', { key, at: Date.now(), channels: channels.map(({ url: _u, ...c }) => c) }); } catch {}
+    try {
+      store.write('iptvcache', {
+        key,
+        at: Date.now(),
+        channels: channels.map(({ url: _u, nativeUrl: _nu, nativeFallbackUrl: _nfu, ...c }) => c),
+      });
+    } catch {}
   }
   return channels;
 }
@@ -1353,7 +1363,13 @@ const H = {
     const q = ctx.url.searchParams.get('q');
     if (!q) return send(ctx.res, 400, { error: 'q required' });
     const { candidates, errors } = await pipeline.search(
-      { q, imdbid: ctx.url.searchParams.get('imdbid') || undefined },
+      {
+        q,
+        imdbid: ctx.url.searchParams.get('imdbid') || undefined,
+        tvdbid: ctx.url.searchParams.get('tvdbid') || undefined,
+        season: ctx.url.searchParams.get('season') || undefined,
+        ep: ctx.url.searchParams.get('ep') || undefined,
+      },
       playbackPolicyFor(ctx.user, {
         maxResolutionRank: ctx.url.searchParams.get('maxResolutionRank'),
         preferResolutionRank: ctx.url.searchParams.get('preferResolutionRank'),

@@ -139,7 +139,7 @@ function inferredEditionFromDuration(durationSeconds) {
   const n = Number(durationSeconds) || 0;
   // Only very long feature films land here. This catches LOTR-style extended editions even
   // when the release name omits "Extended"; subtitles labeled theatrical are usually wrong.
-  return n >= 4 * 3600 ? 'extended' : '';
+  return n >= 3.5 * 3600 ? 'extended' : '';
 }
 function episodeKey(s) {
   const x = String(s || '').toLowerCase();
@@ -193,9 +193,10 @@ function pickSub(data, releaseName = '', { durationSeconds = 0 } = {}) {
     else if (myEpisode && relEpisode) s -= 1000;
     else if (myEpisode) s -= 80;
     if (myGroup && rel.includes(myGroup)) s += 200;              // same release group ≈ frame-exact
+    const matchedEdition = [...myEdition].some((tag) => relEdition.has(tag));
     for (const tag of myEdition) {
       if (relEdition.has(tag)) s += 180;
-      else if (relEdition.size) s -= 160;                         // right movie, wrong cut
+      else if (relEdition.size && !matchedEdition) s -= 160;       // right movie, wrong cut
     }
     if (myWeb && /web|amzn|nf[. ]|hulu|atvp|dsnp/.test(rel)) s += 100;
     if (myBlu && /blu|bd|remux/.test(rel)) s += 100;
@@ -249,6 +250,71 @@ function subtitleVariantLabel(d) {
   if (d && d.isHearingImpaired) parts.push('SDH');
   return parts.join(' - ') || String((d && (d.display || d.media || d.language)) || 'Subtitle version');
 }
+
+function wyzieSearchUrl({ base = DEFAULT_BASE, key, tmdbId, query, lang = 'en', releaseName = '', refresh = false, releaseHints = true } = {}) {
+  const w = parseQuery(query || '');
+  const u = new URL(`${base}/search`);
+  u.searchParams.set('id', String(tmdbId));
+  if (w.season != null) { u.searchParams.set('season', w.season); u.searchParams.set('episode', w.ep); }
+  u.searchParams.set('language', lang);
+  u.searchParams.set('format', 'srt,vtt');
+  u.searchParams.set('source', 'all');
+  if (releaseName && releaseHints) {
+    u.searchParams.set('release', releaseName);
+    u.searchParams.set('origin', releaseName);
+    u.searchParams.set('fileName', releaseName);
+    u.searchParams.set('file', releaseName);
+  }
+  if (refresh) u.searchParams.set('refresh', 'true');
+  if (key) u.searchParams.set('key', key);
+  return u;
+}
+
+function parseWyzieSearchBody(body) {
+  try { return JSON.parse(body); } catch { throw new Error('wyzie returned a non-JSON response'); }
+}
+
+async function wyzieSearchResults({ key, tmdbId, query, lang = 'en', releaseName = '', base = DEFAULT_BASE,
+  attempts = 2, retryDelayMs = 700 } = {}) {
+  const requestSearch = (refresh = false, releaseHints = true) => retryTransient('Wyzie subtitle search', async () => {
+    const u = wyzieSearchUrl({ base, key, tmdbId, query, lang, releaseName, refresh, releaseHints });
+    const r = await request('GET', u.href, { timeoutMs: 25000, deadlineMs: 35000 });
+    if (r.status === 401) throw permanent('Wyzie Subs key missing or invalid');
+    if (r.status !== 200) {
+      let msg = '';
+      try { msg = (JSON.parse(r.body) || {}).message || ''; } catch {}
+      if (releaseHints && r.status === 400 && /no matching release/i.test(msg)) {
+        const e = permanent('Wyzie release filters found no exact match');
+        e.releaseMismatch = true;
+        throw e;
+      }
+      const e = new Error(msg ? `wyzie search HTTP ${r.status}: ${msg}` : `wyzie search HTTP ${r.status}`);
+      if (![408, 429].includes(r.status) && r.status < 500) e.permanent = true;
+      throw e;
+    }
+    return r;
+  }, { attempts, delayMs: retryDelayMs });
+
+  const run = async (releaseHints) => {
+    try {
+      let sr = await requestSearch(false, releaseHints);
+      let data = parseWyzieSearchBody(sr.body);
+      if (Array.isArray(data) && !data.length) {
+        sr = await requestSearch(true, releaseHints);
+        data = parseWyzieSearchBody(sr.body);
+      }
+      return data;
+    } catch (e) {
+      if (releaseHints && e && e.releaseMismatch) return null;
+      throw e;
+    }
+  };
+
+  let data = releaseName ? await run(true) : null;
+  if (!Array.isArray(data) || !data.length) data = await run(false);
+  return data;
+}
+
 function rankSubs(data, releaseName = '', { durationSeconds = 0 } = {}) {
   const picked = pickSub(data, releaseName, { durationSeconds });
   const bestKey = picked && (picked.id != null ? String(picked.id) : String(picked.url || ''));
@@ -275,9 +341,10 @@ function rankSubs(data, releaseName = '', { durationSeconds = 0 } = {}) {
     else if (myEpisode && relEpisode) s -= 1000;
     else if (myEpisode) s -= 80;
     if (myGroup && rel.includes(myGroup)) s += 200;
+    const matchedEdition = [...myEdition].some((tag) => relEdition.has(tag));
     for (const tag of myEdition) {
       if (relEdition.has(tag)) s += 180;
-      else if (relEdition.size) s -= 160;
+      else if (relEdition.size && !matchedEdition) s -= 160;
     }
     if (myWeb && /web|amzn|nf[. ]|hulu|atvp|dsnp/.test(rel)) s += 100;
     if (myBlu && /blu|bd|remux/.test(rel)) s += 100;
@@ -412,7 +479,26 @@ async function downloadSubtitle(hit, { attempts = 2, retryDelayMs = 700 } = {}) 
   return srtToVtt(file.body);
 }
 
+async function fetchOnlineSubV2({ key, tmdbId, query, lang = 'en', releaseName = '', durationSeconds = 0, base = DEFAULT_BASE,
+  attempts = 2, retryDelayMs = 700 } = {}) {
+  if (!tmdbId) throw permanent('online subtitles need a catalog title (no TMDB id for this play)');
+  const data = await wyzieSearchResults({ key, tmdbId, query, lang, releaseName, base, attempts, retryDelayMs });
+  if (!Array.isArray(data) || !data.length) throw permanent(`no ${lang} subtitles found for "${query}"`);
+  const hit = pickSub(data, releaseName, { durationSeconds });
+  if (!hit) throw permanent(`no usable ${lang} subtitle file in the results`);
+  return downloadSubtitle(hit, { attempts, retryDelayMs });
+}
+
+async function searchOnlineSubsV2({ key, tmdbId, query, lang = 'en', releaseName = '', base = DEFAULT_BASE,
+  attempts = 2, retryDelayMs = 700 } = {}) {
+  if (!tmdbId) throw permanent('online subtitles need a catalog title (no TMDB id for this play)');
+  const data = await wyzieSearchResults({ key, tmdbId, query, lang, releaseName, base, attempts, retryDelayMs });
+  if (!Array.isArray(data) || !data.length) throw permanent(`no ${lang} subtitles found for "${query}"`);
+  return data;
+}
+
 module.exports = {
-  fetchOnlineSub, searchOnlineSubs, downloadSubtitle, rankSubs, srtToVtt, shiftVtt, parseQuery, pickSub,
+  fetchOnlineSub: fetchOnlineSubV2, searchOnlineSubs: searchOnlineSubsV2,
+  downloadSubtitle, rankSubs, srtToVtt, shiftVtt, parseQuery, pickSub,
   _request: request, _isTransientError: isTransientError,
 };

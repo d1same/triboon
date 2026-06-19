@@ -88,14 +88,17 @@ function releaseMatches(name, wanted) {
   return true;
 }
 const { rankReleases } = require('./scoring');
-const { mountNzb } = require('./archive');
+const { mountNzb, orderVolumes } = require('./archive');
+const { parseNzb, pickPrimaryFile, fileNameFromSubject } = require('./nzb');
 const crypto = require('crypto');
 
 const GATE_MS = 500;          // bounded upfront health gate (soft timeout)
 const NZB_FETCH_IDLE_MS = 5000;
 const NZB_FETCH_DEADLINE_MS = 15000; // hard cap — a slow NZB download advances to the next source
 const MOUNT_DEADLINE_MS = 30000;     // hard cap — a stalled mount advances instead of hanging Play
-const MAX_ATTEMPTS = 4;       // candidates tried per play before reporting failure
+const FIRST_ARTICLE_PROBE_MS = 800;   // cheap STAT probe catches stale NZBs before BODY fetches
+const MAX_ATTEMPTS = 8;       // source walk: stale indexer rows are common, but startup stays bounded
+const MAX_ADVANCE_MS = 20000; // hard UX budget for one play/advance source walk
 
 function candidateKey(candidate) {
   return crypto.createHash('sha1').update([
@@ -104,6 +107,42 @@ function candidateKey(candidate) {
     candidate && candidate.name || '',
     candidate && candidate.sizeBytes || '',
   ].join('\0')).digest('hex').slice(0, 16);
+}
+
+function nzbVerdictKey(rawUrl) {
+  let stable = String(rawUrl || '');
+  try {
+    const u = new URL(stable);
+    for (const k of [...u.searchParams.keys()]) {
+      if (/^(apikey|api_key|key|token|access_token|auth|password)$/i.test(k)) u.searchParams.delete(k);
+    }
+    u.searchParams.sort();
+    stable = u.href;
+  } catch {}
+  return 'nzb:' + crypto.createHash('sha256').update(stable).digest('hex').slice(0, 32);
+}
+
+function firstProbeMsgId(nzbXml) {
+  const nzb = parseNzb(nzbXml);
+  const candidates = nzb.files.map((f) => ({
+    ...f,
+    name: fileNameFromSubject(f.subject),
+    bytes: f.segments.reduce((s, x) => s + x.bytes, 0),
+  }));
+  const file = orderVolumes(candidates)[0] || pickPrimaryFile(nzb);
+  return file && file.segments && file.segments[0] && file.segments[0].msgId;
+}
+
+function mountVerdictForError(e) {
+  const msg = String((e && e.message) || e || '');
+  return /\b430\b|no such article|missing article/i.test(msg) ? 'missing' : 'mount-failed';
+}
+
+async function probeFirstArticle(pool, msgId) {
+  return await Promise.race([
+    pool.stat(msgId).then((ok) => ok ? 'present' : 'missing').catch(() => 'missing'),
+    new Promise((resolve) => setTimeout(resolve, FIRST_ARTICLE_PROBE_MS, 'timeout')),
+  ]);
 }
 
 // Race a promise against a hard deadline (timer is always cleaned up).
@@ -165,6 +204,20 @@ class Pipeline {
         if (verified.length) { results = verified; errors = retry.errors; }
       }
     }
+    // Some Newznab providers return worse/no results for imdbid/tvdbid searches even when
+    // their plain title index has the release. Fall back to q-only, but keep the same strict
+    // title verifier so catalog identity improves precision without making old films vanish.
+    if (!results.length && (params.imdbid || params.tvdbid)) {
+      const titleOnly = { ...params };
+      delete titleOnly.imdbid;
+      delete titleOnly.tvdbid;
+      delete titleOnly.season;
+      delete titleOnly.ep;
+      ixs.forEach((ix) => this.usage.onSearch(ix.name));
+      const retry = await fanout(ixs, titleOnly, { timeoutMs });
+      const verified = retry.results.filter((r) => releaseMatches(r.name, wanted));
+      if (verified.length) { results = verified; errors = retry.errors; }
+    }
     return { at: Date.now(), results, errors };
   }
 
@@ -222,7 +275,7 @@ class Pipeline {
       }
     }
     const enriched = results.map((r) => {
-      const v = this.verdicts.get(r.nzbUrl) || this.verdicts.get('t:' + normTitle(r.name));
+      const v = this.verdicts.get(nzbVerdictKey(r.nzbUrl)) || this.verdicts.get('t:' + normTitle(r.name));
       return {
         ...r,
         streamClass: v?.detail?.streamClass,
@@ -233,7 +286,7 @@ class Pipeline {
   }
 
   _recordVerdict(candidate, verdict, detail = {}) {
-    this.verdicts.set(candidate.nzbUrl, verdict, detail);
+    this.verdicts.set(nzbVerdictKey(candidate.nzbUrl), verdict, detail);
     this.verdicts.set('t:' + normTitle(candidate.name), verdict, detail);
   }
 
@@ -266,11 +319,28 @@ class Pipeline {
       }
     }
 
+    try {
+      const probe = firstProbeMsgId(xml);
+      if (probe) {
+        const probeVerdict = await probeFirstArticle(this.pool(), probe);
+        if (probeVerdict === 'missing') {
+          this._recordVerdict(candidate, 'missing', { stage: 'first-article' });
+          return { fail: 'missing: first article unavailable' };
+        }
+        if (probeVerdict === 'timeout') {
+          this._recordVerdict(candidate, 'probe-timeout', { stage: 'first-article' });
+          return { fail: 'health: first article probe timed out' };
+        }
+      }
+    } catch {
+      // A malformed NZB should still fail through the normal mount path for a precise reason.
+    }
+
     let vf;
     try {
       vf = await withDeadline(mountNzb(this.pool(), xml, mountOpts), MOUNT_DEADLINE_MS, 'mount timeout');
     } catch (e) {
-      this._recordVerdict(candidate, 'mount-failed');
+      this._recordVerdict(candidate, mountVerdictForError(e));
       return { fail: `mount: ${e.message}` };
     }
 
@@ -338,7 +408,10 @@ class Pipeline {
   // Mount the next viable candidate in the session (used by play and by auto-advance).
   async _advance(session, mountOpts = {}) {
     const attempts = [];
-    while (session.cursor < session.candidates.length && attempts.length < MAX_ATTEMPTS) {
+    const started = Date.now();
+    while (session.cursor < session.candidates.length
+      && attempts.length < MAX_ATTEMPTS
+      && Date.now() - started < MAX_ADVANCE_MS) {
       const candidate = session.candidates[session.cursor++];
       const res = await this._tryCandidate(candidate, mountOpts);
       if (res.vf && !res.fail) {
@@ -364,4 +437,4 @@ class Pipeline {
   }
 }
 
-module.exports = { Pipeline, GATE_MS, parseWantedTitle, releaseMatches, candidateKey };
+module.exports = { Pipeline, GATE_MS, parseWantedTitle, releaseMatches, candidateKey, nzbVerdictKey };

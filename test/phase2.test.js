@@ -11,7 +11,7 @@ const os = require('os');
 const { parseRelease, scoreRelease, rankReleases } = require('../server/scoring');
 const { parseNewznabRss, dedupe, fanout } = require('../server/newznab');
 const { Store, VerdictCache } = require('../server/store');
-const { Pipeline, GATE_MS } = require('../server/pipeline');
+const { Pipeline, GATE_MS, nzbVerdictKey } = require('../server/pipeline');
 const { NntpPool } = require('../server/nntp');
 const { createMockNntp } = require('./mock-nntp');
 const { encodePart } = require('../server/yenc');
@@ -305,6 +305,8 @@ test('subs: pickSub matches the sub to OUR release cut (sync depends on it)', ()
   assert.match(ranked[0].label, /Extended/i, 'variant label calls out the cut');
   assert.ok(ranked[0].selected, 'the best automatic match is marked for the UI');
   assert.strictEqual(ranked[1].id, '10', 'alternate cuts remain available instead of disappearing');
+  assert.strictEqual(rankSubs(lotr, '', { durationSeconds: 13698 })[0].id, '11',
+    'a 3h48 feature still infers an extended cut even if the release name is generic');
   assert.notStrictEqual(pickSub(data, '').id, 3, 'bitmap formats never win');
   assert.ok(pickSub([{ id: 9, format: 'srt' }], '') === undefined, 'url-less results are skipped entirely');
 });
@@ -338,6 +340,37 @@ test('subs: Wyzie search receives exact release and filename hints', async () =>
 
 // A response that TRICKLES (a byte under every idle window) defeats socket timeouts — only a
 // hard total deadline stops it. Same lesson as the NNTP stall bug: timeouts on every wire.
+test('subs: Wyzie release-filter miss falls back to ID-only search', async () => {
+  const { searchOnlineSubs } = require('../server/opensubs');
+  const seen = [];
+  const srv = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://127.0.0.1');
+    seen.push(u);
+    if (u.searchParams.has('release')) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ message: 'No matching release found' }));
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify([{ id: 'fallback', url: 'http://x/sub.srt', format: 'srt', display: 'Show.S01E01.1080p.WEB-DL-GRP' }]));
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  try {
+    const rows = await searchOnlineSubs({
+      tmdbId: '123', query: 'Show S01E01', lang: 'en', releaseName: 'Show.S01E01.Unknown.Release-GRP.mkv',
+      base: `http://127.0.0.1:${srv.address().port}`,
+    });
+    assert.strictEqual(rows[0].id, 'fallback');
+    assert.strictEqual(seen.length, 2);
+    assert.strictEqual(seen[0].searchParams.get('release'), 'Show.S01E01.Unknown.Release-GRP.mkv');
+    assert.strictEqual(seen[1].searchParams.has('release'), false, 'fallback query drops strict release filters');
+    assert.strictEqual(seen[1].searchParams.get('id'), '123');
+    assert.strictEqual(seen[1].searchParams.get('season'), '1');
+    assert.strictEqual(seen[1].searchParams.get('episode'), '1');
+  } finally {
+    await new Promise((r) => srv.close(r));
+  }
+});
+
 test('opensubs/trakt: hard deadline kills trickling responses; redirect loops bounded', async () => {
   const { _request: osReq } = require('../server/opensubs');
   const { _request: tkReq } = require('../server/trakt');
@@ -479,6 +512,36 @@ test('pipeline: detail warmup and immediate Play share one indexer fan-out', asy
   pool.close(); await mock.close(); server.close(); store.close();
 });
 
+test('pipeline: imdb/tvdb source searches fall back to verified title search', async () => {
+  const seen = [];
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    seen.push(Object.fromEntries(u.searchParams.entries()));
+    res.writeHead(200, { 'content-type': 'application/rss+xml' });
+    if (u.searchParams.get('imdbid')) return res.end(rssFor([]));
+    res.end(rssFor([
+      { name: 'The.Lord.of.the.Rings.The.Fellowship.of.the.Ring.2001.Extended.1080p.BluRay.x264-GRP', url: 'http://x/good', size: 8e9 },
+      { name: 'The.Lord.of.the.Rings.The.Return.of.the.King.2003.1080p.BluRay.x264-GRP', url: 'http://x/wrong', size: 8e9 },
+    ]));
+  });
+  const ixPort = await new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
+  const pipeline = new Pipeline({
+    pool: () => null, verdicts: { get: () => null, set: () => {} }, mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+  try {
+    const r = await pipeline.search({ q: 'The Lord of the Rings The Fellowship of the Ring 2001', imdbid: 'tt0120737' });
+    assert.strictEqual(seen[0].t, 'movie', 'first try uses the precise catalog id');
+    assert.strictEqual(seen[0].imdbid, '0120737');
+    assert.strictEqual(seen.at(-1).t, 'search', 'empty id search falls back to title search');
+    assert.deepStrictEqual(r.candidates.map((c) => c.name), [
+      'The.Lord.of.the.Rings.The.Fellowship.of.the.Ring.2001.Extended.1080p.BluRay.x264-GRP',
+    ], 'title fallback still rejects sibling franchise movies');
+  } finally {
+    server.close();
+  }
+});
+
 test('archive: obfuscated .7z.001 split volumes are detected as unsupported, never streamed as flat', async () => {
   const { mountNzb } = require('../server/archive');
   // Real-world failure: an obfuscated post named 9fZq….7z.001 fell through volume detection,
@@ -571,7 +634,7 @@ test('pipeline e2e: ranks, skips dead + unstreamable candidates, plays the good 
   assert.strictEqual(vf.streamable, true);
   assert.ok(mounts.has(vf.id), 'mount registered for streaming');
   assert.strictEqual(session.history.length, 3, 'dead + compressed + good all recorded');
-  assert.match(session.history[0].outcome, /mount|nzb/);
+  assert.match(session.history[0].outcome, /missing|mount|nzb/);
   assert.match(session.history[1].outcome, /unstreamable/);
   assert.ok(elapsed < 5000, `pipeline under the 5s cold budget (took ${elapsed}ms)`);
   // Playback read-ahead boost: streamable mounts leave the conservative default behind so
@@ -766,4 +829,61 @@ test('store: atomic persistence round-trip and verdict TTL', () => {
     assert.strictEqual(vc.get('k1'), null, 'verdict expired after TTL');
     s1.close(); s2.close(); r();
   }, 80));
+});
+
+test('verdict cache: NZB keys are sanitized hashes and legacy secret URLs are scrubbed', () => {
+  const a = nzbVerdictKey('https://api.nzbgeek.info/api?t=get&id=abc&apikey=secret-one');
+  const b = nzbVerdictKey('https://api.nzbgeek.info/api?apikey=secret-two&id=abc&t=get');
+  assert.strictEqual(a, b, 'API key differences do not affect the stable verdict key');
+  assert.ok(a.startsWith('nzb:'), 'verdict key is namespaced');
+  assert.ok(!a.includes('secret'), 'secret is not present in the key');
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  store.write('verdicts', {
+    'https://api.nzbgeek.info/api?t=get&id=abc&apikey=secret-one': { verdict: 'missing', checkedAt: Date.now() },
+    'nzb:already-safe': { verdict: 'verified', checkedAt: Date.now() },
+  });
+  store.flush();
+  const verdicts = new VerdictCache(store);
+  store.flush();
+  const raw = JSON.stringify(store.read('verdicts', {}));
+  assert.ok(!raw.includes('secret-one'), 'legacy URL key with API key is removed');
+  assert.strictEqual(verdicts.get('nzb:already-safe').verdict, 'verified', 'safe key survives scrub');
+  store.close();
+});
+
+test('pipeline: cheap missing-article probe skips stale NZBs past the old four-source cap', async () => {
+  const goodPayload = seededPayload(100 * 1024, 0x5ca1e);
+  const dead = Array.from({ length: 5 }, (_, i) =>
+    nzbFor([{ name: `Dead${i}.mkv`, data: seededPayload(50 * 1024, i + 1) }], 30000, `dead${i}`));
+  const good = nzbFor(writeRar4Store([{ name: 'Movie.mkv', data: goodPayload }], { base: 'good-after-dead' }), 30000, 'good-after-dead');
+
+  const mock = createMockNntp({ articles: new Map([...good.articles]) });
+  const nntpPort = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 4);
+  const ix = makeMockIndexer([
+    ...dead.map((d, i) => ({ name: `Movie.2024.1080p.WEB-DL.H.264-DEAD${i}`, size: 5e9, nzb: d.nzb })),
+    { name: 'Movie.2024.1080p.WEB-DL.H.264-GOOD', size: 5e9, nzb: good.nzb },
+  ]);
+  const ixPort = await ix.listen();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const verdicts = new VerdictCache(store);
+  const pipeline = new Pipeline({
+    pool: () => pool, verdicts, mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'secret-indexer-key' }],
+  });
+
+  const started = Date.now();
+  const r = await pipeline.play({ q: 'movie' }, { maxResolutionRank: 3 });
+  assert.strictEqual(r.candidate.name, 'Movie.2024.1080p.WEB-DL.H.264-GOOD');
+  assert.strictEqual(r.attempts.length, 5, 'five stale sources were skipped before the good one');
+  assert.ok(r.attempts.every((a) => /^missing:/.test(a.fail)), JSON.stringify(r.attempts));
+  assert.ok(Date.now() - started < 5000, 'missing sources are skipped by STAT, not slow BODY mounts');
+  const keys = Object.keys(store.read('verdicts', {}));
+  assert.ok(keys.every((k) => k.startsWith('nzb:') || k.startsWith('t:')), 'verdict keys do not persist raw NZB URLs');
+  assert.ok(!JSON.stringify(store.read('verdicts', {})).includes('secret-indexer-key'), 'verdict cache does not persist indexer secrets');
+
+  pool.close(); await mock.close(); ix.server.close(); store.close();
 });

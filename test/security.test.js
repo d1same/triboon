@@ -801,20 +801,20 @@ test('iptv: Xtream API channels + short-EPG now/next + per-user favorites; creds
   assert.strictEqual(ch.json.channels.find((c) => c.name === 'Cinema').group, 'Other', 'unknown category falls back');
   assert.ok(ch.json.channels.every((c) => c.url === undefined), 'upstream URLs (with creds) never exposed');
   assert.ok(/^\/api\/iptv\/native\/\d+\?t=/.test(news.nativeUrl));
-  assert.strictEqual(news.nativeMime, 'application/x-mpegURL', 'Xtream native playback should try the HLS endpoint first');
+  assert.strictEqual(news.nativeMime, 'video/mp2t', 'Xtream native playback should prefer the TS endpoint for fast channel starts');
   assert.ok(/^\/api\/iptv\/native\/\d+\?alt=1&t=/.test(news.nativeFallbackUrl));
-  assert.strictEqual(news.nativeFallbackMime, 'video/mp2t', 'Xtream native playback should retain TS as an Exo fallback');
+  assert.strictEqual(news.nativeFallbackMime, 'application/x-mpegURL', 'Xtream native playback should retain HLS as a fallback');
   const native = await httpRaw(srv.port, news.nativeUrl);
   assert.strictEqual(native.status, 200);
   assert.strictEqual(native.headers.location, undefined, 'native proxy must not expose Xtream credentials in a redirect');
-  assert.strictEqual(native.body.toString('utf8'), '#EXTM3U\n');
-  assert.deepStrictEqual(liveHits.at(-1).path, '/live/xtuser/xtpass/101.m3u8');
+  assert.strictEqual(native.body.toString('utf8'), 'XTREAM-TS');
+  assert.deepStrictEqual(liveHits.at(-1).path, '/live/xtuser/xtpass/101.ts');
   assert.ok(liveHits.at(-1).ua.includes('TriboonTV/'), 'native Xtream proxy should use the server-side smart-TV user agent');
   const fallback = await httpRaw(srv.port, news.nativeFallbackUrl);
   assert.strictEqual(fallback.status, 200);
   assert.strictEqual(fallback.headers.location, undefined, 'native fallback proxy must not expose Xtream credentials in a redirect');
-  assert.strictEqual(fallback.body.toString('utf8'), 'XTREAM-TS');
-  assert.deepStrictEqual(liveHits.at(-1).path, '/live/xtuser/xtpass/101.ts');
+  assert.strictEqual(fallback.body.toString('utf8'), '#EXTM3U\n');
+  assert.deepStrictEqual(liveHits.at(-1).path, '/live/xtuser/xtpass/101.m3u8');
 
   // EPG now/next decodes the Xtream base64 listings.
   const epg = await httpJson(srv.port, 'GET', `/api/iptv/epg/${news.idx}`, null, admin);
@@ -1339,6 +1339,36 @@ test('search: hyphenated titles — query loses the hyphen, verification still m
     'Spider.Noir.S01E01.1080p.WEB.H264-SuccessfulCrab',
   ].sort(), 'both hyphen and dot spellings of the release verify; Spider-Man does not');
   ix.close();
+});
+
+test('search: source drawer forwards TVDB season and episode identifiers to indexers', async () => {
+  const http2 = require('http');
+  let seen;
+  const ix = http2.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    seen = Object.fromEntries(u.searchParams.entries());
+    res.writeHead(200);
+    res.end(`<?xml version="1.0"?><rss xmlns:newznab="http://x"><channel>
+      <item><title>Route.Show.S01E02.1080p.WEB-DL-GRP</title><enclosure url="http://x/route" length="4000000000"/></item>
+    </channel></rss>`);
+  });
+  await new Promise((r) => ix.listen(0, '127.0.0.1', r));
+  const prevIx = (await httpJson(srv.port, 'GET', '/api/settings', null, admin)).json.indexers;
+  try {
+    await httpJson(srv.port, 'POST', '/api/settings', {
+      indexers: [{ name: 'route', url: `http://127.0.0.1:${ix.address().port}`, apikey: 'x' }],
+    }, admin);
+    const r = await httpJson(srv.port, 'GET', '/api/search?q=' + encodeURIComponent('Route Show S01E02') + '&tvdbid=777&season=1&ep=2', null, admin);
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.json.candidates[0].name, 'Route.Show.S01E02.1080p.WEB-DL-GRP');
+    assert.strictEqual(seen.t, 'tvsearch');
+    assert.strictEqual(seen.tvdbid, '777');
+    assert.strictEqual(seen.season, '1');
+    assert.strictEqual(seen.ep, '2');
+  } finally {
+    await httpJson(srv.port, 'POST', '/api/settings', { indexers: prevIx }, admin);
+    ix.close();
+  }
 });
 
 test('iptv: per-user hidden categories round-trip via /api/iptv/groups', async () => {

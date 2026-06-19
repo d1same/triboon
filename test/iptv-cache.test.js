@@ -142,6 +142,12 @@ test('iptv: Xtream channels serve persisted cache immediately after restart and 
     const warmed = await httpJson(first.port, 'GET', '/api/iptv/channels', null, admin);
     assert.strictEqual(warmed.json.channels[0].name, 'Cached News');
     assert.strictEqual(streamHits, 1, 'first load should fetch and persist the Xtream channel list');
+    const persisted = first.store.read('iptvcache', null);
+    const persistedJson = JSON.stringify(persisted);
+    assert.ok(persisted.key.startsWith('xt:'), 'persisted Xtream cache key keeps source type');
+    assert.ok(!persistedJson.includes(host), 'persisted Xtream cache must not store provider host in plain text');
+    assert.ok(!persistedJson.includes('xtuser'), 'persisted Xtream cache must not store username in plain text');
+    assert.ok(!persistedJson.includes('xtpass'), 'persisted Xtream cache must not store password in plain text');
     first.store.flush();
     await first.shutdown();
     first = null;

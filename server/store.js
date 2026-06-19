@@ -75,10 +75,24 @@ class Store {
   close() { this.flush(); }
 }
 
-// A TTL verdict/health cache keyed by nzb url AND normalized title (two-tier per architecture).
+// A TTL verdict/health cache keyed by sanitized NZB hash AND normalized title.
 class VerdictCache {
-  constructor(store, ttlMs = 6 * 3600 * 1000) { this.store = store; this.ttl = ttlMs; }
+  constructor(store, ttlMs = 6 * 3600 * 1000) {
+    this.store = store; this.ttl = ttlMs;
+    this._scrubUnsafeKeys();
+  }
   _now() { return Date.now(); }
+  _scrubUnsafeKeys() {
+    const all = this.store.read('verdicts', {});
+    let changed = false;
+    for (const k of Object.keys(all)) {
+      if (/^https?:\/\//i.test(k) || /[?&](apikey|api_key|key|token|access_token|auth|password)=/i.test(k)) {
+        delete all[k];
+        changed = true;
+      }
+    }
+    if (changed) this.store.write('verdicts', all);
+  }
   get(key) {
     const all = this.store.read('verdicts', {});
     const v = all[key];

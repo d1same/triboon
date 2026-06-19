@@ -3722,6 +3722,31 @@ function queryFor(it) {
   if (it.tmdbId && (it.type === 'movie' || it.type === 'tv') && exact) return exact;
   return it.q || exact;
 }
+function applyExternalIds(it, d) {
+  if (!it || !d) return it;
+  const ext = d.external_ids || {};
+  const imdb = d.imdb_id || ext.imdb_id || '';
+  const tvdb = ext.tvdb_id || '';
+  if (imdb) it.imdbId = imdb;
+  if (tvdb) it.tvdbId = tvdb;
+  if (detailPlayTarget && detailPlayTarget.tmdbId === it.tmdbId) {
+    if (imdb) detailPlayTarget.imdbId = imdb;
+    if (tvdb) detailPlayTarget.tvdbId = tvdb;
+  }
+  return it;
+}
+function sourceIdentityFor(it) {
+  const out = {};
+  if (!it) return out;
+  if (it.imdbId) out.imdbid = it.imdbId;
+  if (it.tvdbId) out.tvdbid = it.tvdbId;
+  const ep = episodeKeyParts(it);
+  if (ep) {
+    out.season = ep.season;
+    out.ep = ep.episode;
+  }
+  return out;
+}
 
 // REAL hardware capabilities (canPlayType), sent with every play: a device whose hardware
 // decodes the source (e.g. a Shield with native HEVC, a TV with DDP) gets TRUE direct play —
@@ -3810,6 +3835,11 @@ function qualityRankForItem(it) {
 }
 function sourceSearchQuery(it) {
   const params = new URLSearchParams({ q: queryFor(it) });
+  const ids = sourceIdentityFor(it);
+  if (ids.imdbid) params.set('imdbid', ids.imdbid);
+  if (ids.tvdbid) params.set('tvdbid', ids.tvdbid);
+  if (ids.season != null) params.set('season', String(ids.season));
+  if (ids.ep != null) params.set('ep', String(ids.ep));
   const qRank = qualityRankForItem(it);
   if (qRank) {
     params.set('maxResolutionRank', String(qRank));
@@ -3858,7 +3888,12 @@ async function play(it, pick) {
   try {
     const picked = pick && typeof pick === 'object' ? pick : (pick ? { name: pick } : null);
     const pickRank = picked ? normalizeResolutionRank(picked.resolutionRank) : null;
+    const ids = sourceIdentityFor(it);
     const body = { q: queryFor(it), pick: picked && picked.name, pickKey: picked && picked.pickKey, caps: clientCaps() };
+    if (ids.imdbid) body.imdbid = ids.imdbid;
+    if (ids.tvdbid) body.tvdbid = ids.tvdbid;
+    if (ids.season != null) body.season = ids.season;
+    if (ids.ep != null) body.ep = ids.ep;
     const qRank = pickRank !== null ? pickRank : qualityRankForItem(it);
     if (qRank !== null) {
       body.maxResolutionRank = qRank;     // HD/UHD toggle is a source-selection request, not a transcode request.
@@ -4029,7 +4064,7 @@ function epItemOf(show, season, ep) {
     year: show.year, genre: `S${pad2(season.season_number)}E${pad2(ep.episode_number)}`, rating: ep.vote_average ? ep.vote_average.toFixed(1) : show.rating,
     overview: ep.overview || show.overview,
     backdrop: img(ep.still_path) || show.backdrop,
-    tmdbId: show.tmdbId, type: 'episode',
+    tmdbId: show.tmdbId, imdbId: show.imdbId, tvdbId: show.tvdbId, type: 'episode',
     resume: (S.watchMap && S.watchMap[epKeyOf(show, season.season_number, ep.episode_number)] &&
              !S.watchMap[epKeyOf(show, season.season_number, ep.episode_number)].watched)
       ? S.watchMap[epKeyOf(show, season.season_number, ep.episode_number)].position : 0,
@@ -4051,7 +4086,8 @@ function seasonEpisodeCountLabel(season) {
 function epTarget(show, sNum, eNum, resume) {
   const item = {
     key: epKeyOf(show, sNum, eNum), q: `${show.title} S${pad2(sNum)}E${pad2(eNum)}`,
-    title: `${show.title} — S${pad2(sNum)}E${pad2(eNum)}`, type: 'episode', tmdbId: show.tmdbId,
+    title: `${show.title} — S${pad2(sNum)}E${pad2(eNum)}`, type: 'episode',
+    tmdbId: show.tmdbId, imdbId: show.imdbId, tvdbId: show.tvdbId,
     year: show.year, genre: `S${pad2(sNum)}E${pad2(eNum)}`, rating: show.rating, overview: show.overview,
     backdrop: show.backdrop, poster: show.poster, resume: resume || 0,
   };
@@ -4060,7 +4096,8 @@ function epTarget(show, sNum, eNum, resume) {
 }
 function wlMeta(it) {
   return { title: it.title, year: it.year, genre: it.genre, rating: it.rating, type: it.type,
-    tmdbId: it.tmdbId, poster: it.poster, backdrop: it.backdrop, overview: it.overview, q: it.q, cert: it.cert,
+    tmdbId: it.tmdbId, imdbId: it.imdbId, tvdbId: it.tvdbId,
+    poster: it.poster, backdrop: it.backdrop, overview: it.overview, q: it.q, cert: it.cert,
     qualityRank: qualityRankForItem(it) };
 }
 // Restricted profiles: the watchlist/calendar are ACCOUNT-level lists (a parent's adds), not
@@ -4192,9 +4229,14 @@ async function openDetail(it, push = true) {
   requestAnimationFrame(() => { if (S.view === 'detail') applyFocus($('dPlay')); });
 
   try {
-    const d = await api(`/api/tmdb/${it.type}/${it.tmdbId}?append_to_response=credits,videos,content_ratings,release_dates,recommendations,similar`);
+    const d = await api(`/api/tmdb/${it.type}/${it.tmdbId}?append_to_response=credits,videos,content_ratings,release_dates,recommendations,similar,external_ids`);
     if (reqId !== S.detailReq) return; // a newer detail page superseded this fetch
     S.detailData = d;
+    applyExternalIds(it, d);
+    if (it.imdbId || it.tvdbId) {
+      checkAvailability(it);
+      if (detailPlayTarget) prefetchSources(detailPlayTarget, 0);
+    }
     bootReady(); // a hash-restored detail page is a boot landing
     if (!it.title) { // route-restored page (refresh/back) — fill from TMDB
       it.title = d.title || d.name || '';
@@ -5233,6 +5275,11 @@ async function loadTracks() {
     if (t.duration && !p.duration) p.duration = t.duration;
     if (p.usingNative && canUseNativeVideoPlayer()) {
       p.nativeDuration = p.duration || p.nativeDuration || 0;
+      try {
+        if (p.nativeDuration > 0 && window.TriboonTV && window.TriboonTV.updateVideoDuration) {
+          window.TriboonTV.updateVideoDuration(String(p.nativeDuration));
+        }
+      } catch {}
       updatePlayerMeta();
       updateClocks();
       refreshNativeSubtitleChoices();
@@ -5803,8 +5850,8 @@ async function getPlayerEpisodeContext(it) {
   if (S.playerEpisodeContext && S.playerEpisodeContext.key === key) return S.playerEpisodeContext;
   if (S.playerEpisodeContextPromise && S.playerEpisodeContextPromise.key === key) return S.playerEpisodeContextPromise.promise;
   const promise = (async () => {
-    const d = await api(`/api/tmdb/tv/${parts.tmdbId}`);
-    const show = mapTmdb(d); show.tmdbId = parts.tmdbId;
+    const d = await api(`/api/tmdb/tv/${parts.tmdbId}?append_to_response=external_ids`);
+    const show = applyExternalIds(mapTmdb(d), d); show.tmdbId = parts.tmdbId;
     const seasons = (d.seasons || []).filter((x) => x.season_number > 0 && x.episode_count > 0);
     const season = await api(`/api/tmdb/tv/${parts.tmdbId}/season/${parts.season}`);
     const ctx = { key, parts, show, seasons, season };
@@ -5953,7 +6000,7 @@ async function prepNextEpisode(it) {
     const item = epItemOf(ctx.show, season, ep);
     S.nextEp = { item, still: img(ep.still_path, 'w300') || ctx.show.backdrop, epName: ep.name || '', tag: `S${pad2(ns)}E${pad2(ne)}` };
     updateNextEpisodeButton();
-    api('/api/search?q=' + encodeURIComponent(item.q)).catch(() => {}); // warm next episode's sources
+    api('/api/search?' + sourceSearchQuery(item)).catch(() => {}); // warm next episode's sources
   } catch {}
 }
 const UP_NEXT_COUNTDOWN_SECONDS = 10;
@@ -6241,6 +6288,22 @@ function showOsd() {
     if (S.zone === 'seek') S.zone = 'playerCtl';
     clearFocus();
   }, 3500);
+}
+function hidePlayerOsdForBack() {
+  const player = $('player');
+  const osd = $('osd');
+  if (!player.classList.contains('open') || player.classList.contains('guideMode')) return false;
+  if ($('trackMenu').classList.contains('open') || $('playerEpisodes').classList.contains('open')
+      || $('pGuide').classList.contains('open') || $('upNext').classList.contains('show')
+      || $('vlcPanel').classList.contains('show') || $('playerLoader').classList.contains('show')) return false;
+  if (osd.classList.contains('hide')) return false;
+  if (S.osdTimer) clearTimeout(S.osdTimer);
+  osd.classList.add('hide');
+  const pp = ctlButtons().indexOf($('playPause'));
+  S.ctlIdx = pp >= 0 ? pp : 0;
+  if (S.zone === 'seek') S.zone = 'playerCtl';
+  clearFocus();
+  return true;
 }
 $('player').addEventListener('mousemove', showOsd);
 $('player').addEventListener('click', playerSingleClick);
@@ -10413,6 +10476,36 @@ async function searchChannels(q) {
         backdrop: procBackdrop(210, 320, (i % 12) + 9), poster: procBackdrop(210, 320, (i % 12) + 9) }));
   } catch { return []; }
 }
+function searchWords(s) {
+  return String(s || '').toLowerCase().replace(/['’`]/g, '').replace(/[^a-z0-9]+/g, ' ')
+    .trim().split(/\s+/).filter(Boolean);
+}
+function searchWordEq(a, b) {
+  return a === b || a + 's' === b || b + 's' === a;
+}
+function searchSeqIndex(words, query) {
+  if (!words.length || !query.length) return -1;
+  for (let i = 0; i <= words.length - query.length; i++) {
+    let ok = true;
+    for (let j = 0; j < query.length; j++) if (!searchWordEq(words[i + j], query[j])) { ok = false; break; }
+    if (ok) return i;
+  }
+  return -1;
+}
+function tmdbSearchRank(x, q) {
+  const title = x.title || x.name || '';
+  const titleWords = searchWords(title);
+  const queryWords = searchWords(q);
+  const noLeadArticle = titleWords[0] === 'the' ? titleWords.slice(1) : titleWords;
+  const content = queryWords.filter((w) => !['the', 'a', 'an', 'of'].includes(w));
+  const seq = searchSeqIndex(noLeadArticle, queryWords);
+  let score = (Number(x.popularity) || 0) * 20 + (Number(x.vote_count) || 0) * 0.02 + (Number(x.vote_average) || 0) * 5;
+  if (seq === 0) score += 10000;
+  else if (seq > 0) score += Math.max(1000, 2600 - seq * 140);
+  if (content.length && content.every((w) => titleWords.some((t) => searchWordEq(t, w)))) score += 1200;
+  if (content.length && titleWords.length && !searchWordEq(noLeadArticle[0] || titleWords[0], content[0])) score -= 1800;
+  return score;
+}
 async function doSearch() {
   const q = $('searchInput').value.trim();
   const grid = $('grid');
@@ -10425,8 +10518,9 @@ async function doSearch() {
       ]);
       // Maturity applies to SEARCH too — a kids profile must not even see the cover art.
       const ok = (r.results || []).filter((x) => x.media_type !== 'person' && (x.poster_path || x.backdrop_path) && passesMaturity(x));
-      const movies = ok.filter((x) => x.media_type === 'movie').map(mapTmdb);
-      const shows = ok.filter((x) => x.media_type === 'tv').map(mapTmdb);
+      const bySearchRank = (a, b) => tmdbSearchRank(b, q) - tmdbSearchRank(a, q);
+      const movies = ok.filter((x) => x.media_type === 'movie').sort(bySearchRank).map(mapTmdb);
+      const shows = ok.filter((x) => x.media_type === 'tv').sort(bySearchRank).map(mapTmdb);
       if (movies.length || shows.length || live.length) {
         return renderSearchSections([
           { name: 'Movies', items: movies },
@@ -11773,7 +11867,11 @@ document.addEventListener('keydown', (e) => {
       if (k === 'Enter' && !e.repeat) return activatePlayerEpisode();
       return;
     }
-    if (k === 'Escape' || k === 'Backspace') { if (document.fullscreenElement) return document.exitFullscreen().catch(() => {}); return closePlayer(); }
+    if (k === 'Escape' || k === 'Backspace') {
+      if (document.fullscreenElement) return document.exitFullscreen().catch(() => {});
+      if (hidePlayerOsdForBack()) return;
+      return closePlayer();
+    }
     if (k === 'f' || k === 'F') return toggleFullscreen();
     if (k === ' ') return togglePlay();
     if (k === 'ArrowLeft') {
@@ -12164,6 +12262,7 @@ window.__tvBack = () => {
     resetScreensaverIdle();
     return 'ok';
   }
+  if (hidePlayerOsdForBack()) return 'ok';
   const overlay = document.querySelector(
     '.gate.open, #detail.open, #person.open, #player.open, #drawer.open, #trailer.open, ' +
     '#libModal.open, #matchModal.open, #catModal.open, #filterMenu.open, #cwMenu.open, #trackMenu.open, #musicNow.open');
