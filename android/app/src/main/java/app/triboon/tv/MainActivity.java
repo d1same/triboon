@@ -123,6 +123,7 @@ public class MainActivity extends Activity {
     private LinearLayout nativeSheet;
     private View nativeSheetReturnFocus;
     private int nativeSheetRestoreIndex = -1;
+    private int nativeControlIndex = -1;
     private TextView nativeSubtitleOverlay;
     private ExoPlayer nativePlayer;
     private String nativeMode = "";          // "live" or "video"
@@ -1145,7 +1146,9 @@ public class MainActivity extends Activity {
             buildNativePlayerLayer();
             boolean reuseQuietVideo = quietSeek && "video".equals(mode) && nativePlayer != null
                     && nativePlayerView != null && nativePlayerOpen() && !guide;
-            if (!reuseQuietVideo) {
+            boolean reuseLivePlayer = "live".equals(mode) && nativePlayer != null
+                    && nativePlayerView != null && nativePlayerOpen() && !guide;
+            if (!reuseQuietVideo && !reuseLivePlayer) {
                 releaseNativePlayer(false, guide);
             } else {
                 nativeProgress.removeCallbacks(nativeHideChrome);
@@ -1191,7 +1194,7 @@ public class MainActivity extends Activity {
                     .put("episodes", j.optJSONArray("episodeChoices"))
                     .toString());
 
-            if (!reuseQuietVideo) {
+            if (!reuseQuietVideo && !reuseLivePlayer) {
                 DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
                         .setBufferDurationsMs("video".equals(mode) ? 6000 : 4000,
                                 "video".equals(mode) ? 60000 : 60000,
@@ -1284,6 +1287,9 @@ public class MainActivity extends Activity {
             if (!guide && "video".equals(mode) && !quietSeek) {
                 enterNativeFullscreenMode();
                 showNativeLoading(title, backdropUrl);
+            }
+            if (reuseLivePlayer && nativePlayer.getPlaybackState() != Player.STATE_IDLE) {
+                nativePlayer.stop();
             }
             nativePlayer.setMediaItem(buildNativeMediaItem());
             nativePlayer.prepare();
@@ -1395,6 +1401,7 @@ public class MainActivity extends Activity {
 
     private void parkNativeHiddenFocusOnSeek() {
         nativeSeekDpadMode = nativeCanSeekVod();
+        nativeControlIndex = -1;
         if (nativePlayerLayer != null) nativePlayerLayer.requestFocus();
     }
 
@@ -1655,6 +1662,12 @@ public class MainActivity extends Activity {
             if (current == b) cur = i;
         }
         if (first < 0) return false;
+        if (cur < 0 && nativeControlIndex >= first && nativeControlIndex <= last) {
+            ImageButton remembered = buttons[nativeControlIndex];
+            if (remembered != null && remembered.getVisibility() == View.VISIBLE && remembered.isEnabled()) {
+                cur = nativeControlIndex;
+            }
+        }
         int target = cur < 0
                 ? (nativePlayBtn != null && nativePlayBtn.getVisibility() == View.VISIBLE
                     && nativePlayBtn.isEnabled() ? java.util.Arrays.asList(buttons).indexOf(nativePlayBtn) : first)
@@ -1662,6 +1675,7 @@ public class MainActivity extends Activity {
         while (target >= first && target <= last) {
             ImageButton b = buttons[target];
             if (b != null && b.getVisibility() == View.VISIBLE && b.isEnabled()) {
+                nativeControlIndex = target;
                 b.requestFocus();
                 showNativeChrome(false);
                 return true;
@@ -1674,8 +1688,19 @@ public class MainActivity extends Activity {
     private boolean clickNativeControlFocus() {
         if (nativeChrome == null || nativeChrome.getVisibility() != View.VISIBLE) return false;
         View current = getCurrentFocus();
-        for (ImageButton b : nativeControlButtons()) {
+        ImageButton[] buttons = nativeControlButtons();
+        for (int i = 0; i < buttons.length; i++) {
+            ImageButton b = buttons[i];
             if (b != null && b.getVisibility() == View.VISIBLE && b.isEnabled() && current == b) {
+                nativeControlIndex = i;
+                armNativeControlClick(b);
+                b.performClick();
+                return true;
+            }
+        }
+        if (nativeControlIndex >= 0 && nativeControlIndex < buttons.length) {
+            ImageButton b = buttons[nativeControlIndex];
+            if (b != null && b.getVisibility() == View.VISIBLE && b.isEnabled()) {
                 armNativeControlClick(b);
                 b.performClick();
                 return true;
@@ -1716,6 +1741,7 @@ public class MainActivity extends Activity {
         }
         if (target == null) return false;
         showNativeChrome(false);
+        nativeControlIndex = java.util.Arrays.asList(buttons).indexOf(target);
         target.requestFocus();
         return true;
     }
@@ -1726,6 +1752,7 @@ public class MainActivity extends Activity {
         updateNativeChrome();
         if (nativeSeek.getVisibility() != View.VISIBLE || !nativeSeek.isEnabled()) return false;
         nativeSeekDpadMode = true;
+        nativeControlIndex = -1;
         Runnable focusSeek = new Runnable() {
             @Override public void run() {
                 if (!nativePlayerOpen() || nativeSeek == null || nativeSheetOpen()) return;
@@ -3083,6 +3110,7 @@ public class MainActivity extends Activity {
         nativeSubtitleRel = "";
         clearNativeSubtitleChoices();
         nativeSubtitleCues.clear();
+        nativeControlIndex = -1;
         if (nativeSubtitleOverlay != null) {
             nativeSubtitleOverlay.setText("");
             nativeSubtitleOverlay.setVisibility(View.GONE);

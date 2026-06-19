@@ -534,7 +534,7 @@ body.nativeGuideMode #player.guideMode video{display:none}
 .osdClock{display:flex;gap:14px;font:700 13px "JetBrains Mono";color:var(--text);
   background:rgba(11,8,18,.55);border:1px solid var(--line);border-radius:10px;padding:8px 13px}
 .osdClock #endsAt{color:var(--amber)}
-#trackMenu{display:none;position:absolute;bottom:118px;left:44px;min-width:240px;max-height:300px;overflow-y:auto;
+#trackMenu{display:none;position:absolute;bottom:118px;right:44px;width:min(360px,calc(100vw - 88px));min-width:240px;max-height:300px;overflow-y:auto;
   background:rgba(17,12,27,.97);border:1px solid var(--line);border-radius:14px;padding:8px;z-index:5}
 #trackMenu.open{display:block}
 #trackMenu .tmHead{font:700 10.5px "JetBrains Mono";letter-spacing:.14em;text-transform:uppercase;color:var(--amber);padding:8px 10px 6px}
@@ -2421,7 +2421,7 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
       <div class="un-lbl">Up next<span id="unCdWrap"> · <span id="unCount">10</span>s</span></div>
       <div class="un-title" id="unTitle"></div>
       <div class="un-sub" id="unSub"></div>
-      <div class="un-btns"><button class="un-play" id="unPlay">▶ Play now</button><button class="un-cancel" id="unCancel">Dismiss</button></div>
+      <div class="un-btns"><button class="un-play" id="unPlay">Play next episode</button><button class="un-cancel" id="unCancel">Dismiss</button></div>
     </div>
   </div>
   <!-- Subtitles are painted HERE (not by the <track>): WebView's native cue rendering is
@@ -3076,6 +3076,7 @@ function scheduleDeferredHomeRefresh(opts = {}) {
   }, 700);
 }
 function refreshHomeWhenSettled(opts = {}) {
+  if (S._booting && S.view === 'home') return loadRows({ preserveFocus: true, background: true, ...opts });
   if (homeBackgroundRefreshReady()) loadRows({ preserveFocus: true, background: true, ...opts });
   else scheduleDeferredHomeRefresh(opts);
 }
@@ -3226,6 +3227,18 @@ function homeRowsSignature(rows) {
     row.emptyLabel || '',
   ].join('|')).join('~');
 }
+function homeRowsReadyForBoot(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) return false;
+  return list.some((row) => {
+    if ((row.items || []).length) return true;
+    return row.emptyLabel && row.name !== 'Loading home';
+  });
+}
+function maybeBootHomeReady(rows) {
+  if (S.view !== 'home') return;
+  if (homeRowsReadyForBoot(rows)) bootReady();
+}
 function publishHomeRows(rows, opts = {}) {
   const sig = homeRowsSignature(rows);
   S.rows = rows;
@@ -3240,7 +3253,7 @@ async function loadRows(opts = {}) {
   const hasFreshWatch = S._watchKey === key && Array.isArray(S._watchRows) && Date.now() - (S._watchAt || 0) < 10000;
   if (!opts.catalogOnly && !opts.watchReady && !hasFreshWatch) {
     perfMark('home-first-render-before-watch');
-    publishHomeRows(homeRowsFromWatch(cachedWatchRowsForHome(), true), opts); // FIRST PAINT: gives Android TV a focus target before /api/watch returns.
+    publishHomeRows(homeRowsFromWatch(cachedWatchRowsForHome(), true), opts); // Internal first paint: focus target under the splash before /api/watch returns.
     loadWatchState().then(() => {
       perfMark('watch-state-ready');
       if (S.view === 'home' && runId === S._homeLoadRun) loadRows({ ...opts, watchReady: true, preserveFocus: true });
@@ -3253,7 +3266,7 @@ async function loadRows(opts = {}) {
   if (!opts.catalogOnly) await prepareHomeTvNext(cw, HOME_NEXT_WAIT_MS);
   if (runId !== S._homeLoadRun && !opts.catalogOnly) return;
   perfMark(opts.catalogOnly ? 'home-catalog-render' : 'home-render');
-  publishHomeRows(homeRowsFromWatch(cw, false), { preserveFocus: !!opts.preserveFocus, focusSnapshot: opts.focusSnapshot }); // FIRST PAINT — never waited on catalog, local libraries, or the live channel list
+  publishHomeRows(homeRowsFromWatch(cw, false), { preserveFocus: !!opts.preserveFocus, focusSnapshot: opts.focusSnapshot }); // First public paint waits for real rows; local/live enrichment stays off-path.
   if (!opts.catalogOnly) scheduleHomeCatalogRefresh();
   // Fold in the local + Live-TV-favorites rows AFTER the screen is up, on idle.
   const needLocalCacheRefresh = !S.localMap && cachedLocalLibraryItemsAvailable();
@@ -3590,7 +3603,7 @@ function renderRows(opts = {}) {
   const snap = opts.preserveFocus ? (opts.focusSnapshot || homeFocusSnapshot()) : null;
   renderRowsInto($('rows'), S.rows, { resetScroll: !snap });
   setRowsView($('rows'), S.rows, true);
-  bootReady(); // home is the usual boot landing — first paint dismisses the boot loader
+  maybeBootHomeReady(S.rows); // placeholder rows stay behind the original boot loader
   // Default focus ONLY when the user isn't in the menu: rail rollover previews render this
   // page behind the open rail, and stealing the zone made the next D-pad press move CONTENT
   // while the user was still walking menu items.
@@ -12443,7 +12456,6 @@ async function enterAppShell() {
   if (location.hash && location.hash !== '#/home') applyRoute();
   else switchView('home');
   perfMark('shell-route-applied', { view: S.view });
-  bootReady();
   hydrateAppShellData();
 }
 (async function boot() {

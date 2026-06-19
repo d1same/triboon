@@ -1029,6 +1029,14 @@ function mountPayload(vf, uid, extra = {}) {
     ...extra,
   };
 }
+function episodeSubtitleQuery(query, season, ep) {
+  const base = String(query || '').trim();
+  const s = Number(season);
+  const e = Number(ep);
+  if (!Number.isInteger(s) || !Number.isInteger(e) || s <= 0 || e <= 0) return base;
+  if (/\bS\d{1,2}\s*E\d{1,3}\b/i.test(base)) return base;
+  return `${base} S${String(s).padStart(2, '0')}E${String(e).padStart(2, '0')}`.trim();
+}
 function localItemFor(ctx, libId, idx) {
   const lib = store.read('libraries', { list: [] }).list.find((l) => l.id === libId);
   if (!lib || !lib.path) return { status: 404, error: 'library not found' };
@@ -1402,6 +1410,7 @@ const H = {
         policy
       );
       vf._q = body.q; // remembered for online subtitle search (release names match poorly)
+      vf._subQuery = episodeSubtitleQuery(body.q, body.season, body.ep);
       vf._caps = parseCaps(body.caps); session.caps = vf._caps; // hardware claims ride the session
       send(ctx.res, 200, mountPayload(vf, ctx.user.id, {
         sessionId: session.id, mountMs: Date.now() - t0,
@@ -1418,6 +1427,7 @@ const H = {
     try {
       const { session, vf, candidate, attempts } = await pipeline.advance(ctx.m[1]);
       vf._q = session.query && session.query.q;
+      vf._subQuery = episodeSubtitleQuery(vf._q, session.query && session.query.season, session.query && session.query.ep);
       vf._caps = session.caps || {}; // same client, same hardware claims
       send(ctx.res, 200, mountPayload(vf, ctx.user.id, {
         sessionId: session.id, mountMs: Date.now() - t0,
@@ -2783,7 +2793,7 @@ Object.assign(H, {
     const shift = Math.max(-120, Math.min(120, Number(ctx.url.searchParams.get('shift') || 0) || 0));
     const base = process.env.WYZIE_BASE || undefined;
     const subOpts = {
-      key, tmdbId, query: vf._q || vf.name, lang, releaseName: vf.name,
+      key, tmdbId, query: vf._subQuery || vf._q || vf.name, lang, releaseName: vf.name,
       durationSeconds: vf._tracks && vf._tracks.duration,
       attempts: 3, retryDelayMs: 900,
       ...(base ? { base } : {}),

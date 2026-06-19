@@ -219,6 +219,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Up Next must not start a 10-second autoplay countdown with 45 seconds still left in the episode');
   assert.match(ui, /const UP_NEXT_COUNTDOWN_SECONDS = 10;[\s\S]+function showUpNext\(\) \{[\s\S]+let n = UP_NEXT_COUNTDOWN_SECONDS; \$\('unCount'\)\.textContent = n;[\s\S]+if \(n <= 0\) playNextEpisode\(\);/,
     'Up Next autoplay should always give the user a 10-second choice window before starting the next episode');
+  assert.match(ui, /id="unPlay">Play next episode<\/button>/,
+    'Up Next primary action should clearly say Play next episode');
   assert.doesNotMatch(ui, /opts\.ended \? 6 : 10/,
     'the ended fallback path should not shorten the Up Next countdown');
   assert.match(ui, /saveQualityPref\(target,\s*S\.qualityPref\)/,
@@ -251,8 +253,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'background home refreshes should wait until TV focus and D-pad input have settled');
   assert.match(ui, /function scheduleHomeCatalogRefresh\(\) \{[\s\S]+if \(S\._homeCatalogScheduled\) return;[\s\S]+S\._homeCatalogScheduled = true;[\s\S]+refreshHomeCatalogRows\(\)\.then[\s\S]+refreshHomeWhenSettled\(\{ catalogOnly: true \}\)/,
     'home catalog rows should hydrate after first paint instead of blocking the app shell');
-  assert.match(ui, /function homeRowsFromWatch\(cw, loading = false\) \{[\s\S]+rows\.push\(\.\.\.cachedHomeCatalogRows\(\)\);[\s\S]+if \(!rows\.length && loading\)[\s\S]+emptyLabel: 'Loading\.\.\.'[\s\S]+function publishHomeRows\(rows, opts = \{\}\) \{[\s\S]+if \(S\._homeRowsSig === sig && \$\('rows'\)\.children\.length\) return false;[\s\S]+async function loadRows\(opts = \{\}\) \{[\s\S]+const runId = S\._homeLoadRun[\s\S]+!opts\.catalogOnly && !opts\.watchReady && !hasFreshWatch[\s\S]+publishHomeRows\(homeRowsFromWatch\(cachedWatchRowsForHome\(\), true\), opts\); \/\/ FIRST PAINT: gives Android TV a focus target before \/api\/watch returns\.[\s\S]+loadWatchState\(\)\.then/,
-    'home first paint should use cached rows or a focusable placeholder before watch state returns');
+  assert.match(ui, /function refreshHomeWhenSettled\(opts = \{\}\) \{[\s\S]+if \(S\._booting && S\.view === 'home'\) return loadRows\(\{ preserveFocus: true, background: true, \.\.\.opts \}\);[\s\S]+if \(homeBackgroundRefreshReady\(\)\) loadRows/,
+    'boot-time home refresh should publish under the splash instead of waiting for visible idle focus');
+  assert.match(ui, /function homeRowsFromWatch\(cw, loading = false\) \{[\s\S]+rows\.push\(\.\.\.cachedHomeCatalogRows\(\)\);[\s\S]+if \(!rows\.length && loading\)[\s\S]+emptyLabel: 'Loading\.\.\.'[\s\S]+function homeRowsReadyForBoot\(rows\) \{[\s\S]+row\.name !== 'Loading home'[\s\S]+function publishHomeRows\(rows, opts = \{\}\) \{[\s\S]+if \(S\._homeRowsSig === sig && \$\('rows'\)\.children\.length\) return false;[\s\S]+async function loadRows\(opts = \{\}\) \{[\s\S]+const runId = S\._homeLoadRun[\s\S]+!opts\.catalogOnly && !opts\.watchReady && !hasFreshWatch[\s\S]+publishHomeRows\(homeRowsFromWatch\(cachedWatchRowsForHome\(\), true\), opts\); \/\/ Internal first paint: focus target under the splash before \/api\/watch returns\.[\s\S]+loadWatchState\(\)\.then/,
+    'home first paint should create a hidden focus placeholder but keep the splash until real rows exist');
   assert.match(ui, /const cw = opts\.watchReady \? cachedWatchRowsForHome\(\) : await loadWatchState\(\)\.catch\(\(\) => \[\]\);[\s\S]+if \(runId !== S\._homeLoadRun && !opts\.catalogOnly\) return;[\s\S]+publishHomeRows\(homeRowsFromWatch\(cw, false\), \{ preserveFocus: !!opts\.preserveFocus, focusSnapshot: opts\.focusSnapshot \}\);[\s\S]+scheduleHomeCatalogRefresh\(\);/,
     'home should refresh with real watch rows and schedule TMDB catalog refresh after first paint');
   assert.doesNotMatch(ui, /const catalogJob = loadHomeCatalogRows|rows\.push\(\.\.\.await catalogJob\)/,
@@ -279,8 +283,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'the long-press Details action should open details instead of letting episode cards fall through to playback');
   assert.match(ui, /const cwSnap = \(\) => \{ onFocus && onFocus\(\); return homeFocusSnapshot\(\); \};[\s\S]+cwAct\.watch[\s\S]+focusSnapshot: cwSnap\(\)[\s\S]+cwAct\.rm[\s\S]+focusSnapshot: cwSnap\(\)/,
     'on-card Continue Watching buttons should capture their own row position before removing or marking items');
-  assert.match(ui, /async function enterAppShell\(\) \{[\s\S]+S\.watchMap = S\.watchMap \|\| \{\};[\s\S]+applyMenuPrefs\(\);[\s\S]+if \(location\.hash && location\.hash !== '#\/home'\) applyRoute\(\);[\s\S]+else switchView\('home'\);[\s\S]+bootReady\(\);[\s\S]+hydrateAppShellData\(\);/,
-    'Android TV boot should show the menu/home shell before heavy profile data finishes loading');
+  assert.match(ui, /async function enterAppShell\(\) \{[\s\S]+S\.watchMap = S\.watchMap \|\| \{\};[\s\S]+applyMenuPrefs\(\);[\s\S]+if \(location\.hash && location\.hash !== '#\/home'\) applyRoute\(\);[\s\S]+else switchView\('home'\);[\s\S]+perfMark\('shell-route-applied'[\s\S]+hydrateAppShellData\(\);/,
+    'Android TV boot should route the shell immediately but keep the splash until real content paints');
+  assert.doesNotMatch(ui, /else switchView\('home'\);[\s\S]{0,120}bootReady\(\);[\s\S]{0,120}hydrateAppShellData\(\);/,
+    'authenticated home boot must not dismiss the splash before Home rows render');
   assert.match(ui, /async function enterApp\(\) \{[\s\S]+if \(!S\.user\) S\.user = await api\('\/api\/me'\);[\s\S]+if \(!S\.serverInfo \|\| S\.serverInfo\.needsSetup\) S\.serverInfo = await api\('\/api\/server'\);/,
     'authenticated boot should reuse the already fetched server info instead of doing a second blocking server call');
   assert.doesNotMatch(ui, /await Promise\.all\(\[loadLibraries\(\), loadWatchlist\(\)\]\)/,
@@ -467,8 +473,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android native movie playback should never reveal the web player shell when ExoPlayer is available');
   assert.match(ui, /function startNativePlayerHousekeeping\(it\) \{[\s\S]+stopWebVideoElement\(\);[\s\S]+if \(S\.healthTimer\) clearInterval\(S\.healthTimer\);[\s\S]+S\.watchTimer = setInterval\(saveWatch, 10000\);[\s\S]+loadTracks\(\);[\s\S]+prepNextEpisode\(it\);[\s\S]+\}/,
     'native playback should silence the hidden web video while still probing duration metadata');
-  assert.match(ui, /function homeRowsFromWatch\(cw, loading = false\) \{[\s\S]+if \(!rows\.length && loading\) \{[\s\S]+name: 'Loading home'[\s\S]+emptyLabel: 'Loading\.\.\.'[\s\S]+async function loadRows\(opts = \{\}\) \{[\s\S]+!opts\.catalogOnly && !opts\.watchReady && !hasFreshWatch[\s\S]+publishHomeRows\(homeRowsFromWatch\(cachedWatchRowsForHome\(\), true\), opts\); \/\/ FIRST PAINT: gives Android TV a focus target before \/api\/watch returns\./,
-    'home should render a focusable first paint before the watch-state request can freeze Android TV D-pad input');
+  assert.match(ui, /function homeRowsFromWatch\(cw, loading = false\) \{[\s\S]+if \(!rows\.length && loading\) \{[\s\S]+name: 'Loading home'[\s\S]+emptyLabel: 'Loading\.\.\.'[\s\S]+async function loadRows\(opts = \{\}\) \{[\s\S]+!opts\.catalogOnly && !opts\.watchReady && !hasFreshWatch[\s\S]+publishHomeRows\(homeRowsFromWatch\(cachedWatchRowsForHome\(\), true\), opts\); \/\/ Internal first paint: focus target under the splash before \/api\/watch returns\./,
+    'home should render a hidden focus target before the watch-state request can freeze Android TV D-pad input');
   assert.match(ui, /function perfMark\(name, extra = \{\}\) \{[\s\S]+S\.perfMarks[\s\S]+function signalTvReady\(reason\) \{[\s\S]+TriboonTV\.appReady[\s\S]+function signalTvReadyOnce\(reason\)/,
     'web boot should expose timing marks and notify Android when the TV focus model is ready');
   assert.match(android, /public String nativePlaybackCaps\(\) \{[\s\S]+return buildNativePlaybackCaps\(\);[\s\S]+private String buildNativePlaybackCaps\(\) \{[\s\S]+j\.put\("source", "exo-mediacodec"\)/,
@@ -606,6 +612,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'web player control row should visually pin Guide left, playback center, and secondary controls right');
   assert.match(ui, /class="ctlGroup ctlLeft"[\s\S]+id="chGuide"[\s\S]+class="ctlGroup ctlCenter"[\s\S]+id="back10"[\s\S]+id="playPause"[\s\S]+id="fwd30"[\s\S]+id="nextEpBtn"[\s\S]+class="ctlGroup ctlRight"[\s\S]+id="ccBtn"[\s\S]+id="audBtn"[\s\S]+id="srndBtn"[\s\S]+id="qualBtn"[\s\S]+id="muteBtn"[\s\S]+id="fsBtn"/,
     'web player should mirror native Guide-left, playback-center, secondary-right button grouping');
+  assert.match(ui, /#trackMenu\{display:none;position:absolute;bottom:118px;right:44px;width:min\(360px,calc\(100vw - 88px\)\);min-width:240px;/,
+    'web player CC/audio/quality popup should open near the right-side control buttons, not on the left');
   assert.match(ui, /function playerSurfaceClick\(e\) \{[\s\S]+closest\('#osd \.top,\.playerMetaRow,\.seekLine,\.ctl,#playerEpisodes,#trackMenu,#pGuide,#vlcPanel,#upNext,#playerLoader,button,a,input,select,textarea'\)[\s\S]+return true;[\s\S]+function playerSingleClick\(e\) \{[\s\S]+setTimeout\(\(\) => \{[\s\S]+togglePlay\(\);[\s\S]+\}, 320\);[\s\S]+function playerDoubleClick\(e\) \{[\s\S]+clearTimeout\(_playerSurfaceClickT\);[\s\S]+toggleFullscreen\(\);/,
     'web player screen clicks should toggle play, while double-click fullscreen cancels the pending pause');
   assert.match(ui, /\$\('player'\)\.addEventListener\('click', playerSingleClick\);[\s\S]+\$\('player'\)\.addEventListener\('dblclick', playerDoubleClick\);/,
@@ -699,6 +707,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'native player should receive a user-facing subtitle label');
   assert.match(ui, /subtitleRel: sub\.rel \|\| ''[\s\S]+subtitleChoices: nativeSubtitleChoices\(\)/,
     'native player should receive selectable online subtitle choices');
+  assert.match(server, /function episodeSubtitleQuery\(query, season, ep\)[\s\S]+S\$\{String\(s\)\.padStart\(2, '0'\)\}E\$\{String\(e\)\.padStart\(2, '0'\)\}/,
+    'server subtitle lookup should be able to add episode identity even when source filenames are opaque');
+  assert.match(server, /vf\._q = body\.q;[\s\S]+vf\._subQuery = episodeSubtitleQuery\(body\.q, body\.season, body\.ep\);[\s\S]+query: vf\._subQuery \|\| vf\._q \|\| vf\.name/,
+    'online subtitle lookup should use the episode-aware query captured during play');
   assert.match(ui, /function nativeVideoSubtitleRel\(p\) \{[\s\S]+Only explicit per-title choices turn on[\s\S]+if \(saved && saved !== 'off'\) return \{ blocked: false, rel: saved \};[\s\S]+return \{ blocked: false, rel: '' \};[\s\S]+\}/,
     'native playback should not auto-enable profile-language subtitles on start');
   assert.doesNotMatch(ui, /function applyTrackPrefs\(\) \{[\s\S]+setSubtitle\('os:' \+ osLang\(wantS\)\)/,
@@ -715,6 +727,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'native online subtitle choices should switch the live overlay without rebuilding ExoPlayer media');
   assert.doesNotMatch(android, /selectNativeSubtitleTrack\(choice\)|reloadNativeMediaAtCurrentPosition|nativeShiftedSubtitleUrl/,
     'native online subtitle selection and sync should not keep the old media-reload path');
+  assert.match(android, /private int nativeControlIndex = -1;[\s\S]+nativeControlIndex = target;[\s\S]+if \(nativeControlIndex >= 0 && nativeControlIndex < buttons\.length\)[\s\S]+b\.performClick\(\);/,
+    'native D-pad controls should remember the intended row target when Android focus is parked on the seekbar/player surface');
+  assert.match(android, /private void parkNativeHiddenFocusOnSeek\(\) \{[\s\S]+nativeControlIndex = -1;[\s\S]+private boolean focusNativeDefaultControl\(\) \{[\s\S]+nativeControlIndex = java\.util\.Arrays\.asList\(buttons\)\.indexOf\(target\);[\s\S]+private boolean focusNativeSeekControl\(\) \{[\s\S]+nativeControlIndex = -1;/,
+    'native D-pad focus memory should reset when returning to seek mode and seed Play\/Pause when entering controls');
   assert.match(ui, /subtitleShift: sub\.rel \? \(loadSubShift\(sub\.rel\) \|\| 0\) : 0/,
     'native player should receive the saved subtitle timing offset');
   assert.match(ui, /q\.set\('shift', shift\.toFixed\(1\)\)/,
@@ -1238,6 +1254,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native player controls should not show success popups over playback');
   assert.match(android, /private boolean nativeVodSeekable\(\) \{[\s\S]+if \(nativePlayer == null \|\| "live"\.equals\(nativeMode\)\) return false;/,
     'live streams should not expose movie-style seeking behavior');
+  assert.match(android, /boolean reuseLivePlayer = "live"\.equals\(mode\) && nativePlayer != null[\s\S]+if \(!reuseQuietVideo && !reuseLivePlayer\) \{[\s\S]+releaseNativePlayer\(false, guide\);[\s\S]+if \(reuseLivePlayer && nativePlayer\.getPlaybackState\(\) != Player\.STATE_IDLE\) \{[\s\S]+nativePlayer\.stop\(\);[\s\S]+nativePlayer\.setMediaItem\(buildNativeMediaItem\(\)\);/,
+    'native Live TV zaps should reuse ExoPlayer and replace the media item instead of releasing/recreating the whole player');
   assert.ok([
     'private long nativePendingStartMs;',
     'private long nativeStartSeekIssuedAtMs;',
@@ -1272,8 +1290,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android native chrome should repaint the seek bar, total time, and end clock when duration arrives later');
   assert.match(android, /boolean quietSeek = j\.optBoolean\("quietSeek", false\);[\s\S]+if \(!guide && "video"\.equals\(mode\) && !quietSeek\) \{[\s\S]+showNativeLoading\(title, backdropUrl\);[\s\S]+\}/,
     'Android native seek restarts should not bring the full preparing loader to the front');
-  assert.match(android, /boolean reuseQuietVideo = quietSeek && "video"\.equals\(mode\) && nativePlayer != null[\s\S]+if \(!reuseQuietVideo\) \{[\s\S]+releaseNativePlayer\(false, guide\);[\s\S]+\} else \{[\s\S]+hideNativeLoading\(\);[\s\S]+if \(!reuseQuietVideo\) \{[\s\S]+new ExoPlayer\.Builder\(this\)/,
-    'Android native remux/transcode seeks should reuse the existing ExoPlayer surface instead of flashing through release/recreate');
+  assert.match(android, /boolean reuseQuietVideo = quietSeek && "video"\.equals\(mode\) && nativePlayer != null[\s\S]+boolean reuseLivePlayer = "live"\.equals\(mode\) && nativePlayer != null[\s\S]+if \(!reuseQuietVideo && !reuseLivePlayer\) \{[\s\S]+releaseNativePlayer\(false, guide\);[\s\S]+\} else \{[\s\S]+hideNativeLoading\(\);[\s\S]+if \(!reuseQuietVideo && !reuseLivePlayer\) \{[\s\S]+new ExoPlayer\.Builder\(this\)/,
+    'Android native quiet seeks and Live TV retunes should reuse the existing ExoPlayer surface instead of flashing through release/recreate');
   assert.match(android, /private void applyNativeStartSeekIfReady\(\) \{[\s\S]+nativePendingStartMs <= 0L[\s\S]+nativePlayer\.getPlaybackState\(\) != Player\.STATE_READY \|\| !nativeVodSeekable\(\)[\s\S]+current >= Math\.max\(0L, target - 3000L\)[\s\S]+nativePendingStartMs = 0L[\s\S]+now - nativeStartSeekIssuedAtMs < 1200L[\s\S]+nativeSeekToDisplayPosition\(target\)/,
     'native movie resume should retry the pending start seek until ExoPlayer reports the saved position');
   assert.match(android, /private void zapNativeLiveChannel\(int dir\) \{[\s\S]+!"live"\.equals\(nativeMode\)[\s\S]+window\.__tvNativeLiveZap && window\.__tvNativeLiveZap\(/,

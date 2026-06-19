@@ -1184,6 +1184,10 @@ test('subtitles: Wyzie search→file→VTT served per mount (and 503 without a k
       // Mirrors the real API: key required as a query param, id = TMDB id.
       if (u.searchParams.get('key') !== 'test-key') { res.writeHead(401); return res.end('{}'); }
       if (u.searchParams.get('id') !== '4242') { res.writeHead(200); return res.end('[]'); }
+      assert.strictEqual(u.searchParams.get('season'), '1',
+        'episode subtitle searches must preserve season even when the mounted filename is opaque');
+      assert.strictEqual(u.searchParams.get('episode'), '3',
+        'episode subtitle searches must preserve episode even when the mounted filename is opaque');
       assert.strictEqual(u.searchParams.get('source'), 'all', 'Wyzie searches all enabled sources');
       assert.strictEqual(u.searchParams.get('format'), 'srt,vtt', 'browser-renderable subtitle formats only');
       if (searchCalls === 1) { res.writeHead(502); return res.end(JSON.stringify({ message: 'temporary scrape failure' })); }
@@ -1226,6 +1230,7 @@ test('subtitles: Wyzie search→file→VTT served per mount (and 503 without a k
   }, admin);
   const play = (await httpJson(srv.port, 'POST', '/api/play', { q: 'Sec Test 2024' }, admin)).json;
   assert.ok(play.id, JSON.stringify(play));
+  srv.mounts.get(play.id)._subQuery = 'Sec Test 2024 S01E03';
 
   // No key configured → honest 503, not a hang or a fake empty file.
   const no = await httpRaw(srv.port, `/api/ossubs/${play.id}?lang=en&tmdb=4242&t=${play.streamToken}`);
