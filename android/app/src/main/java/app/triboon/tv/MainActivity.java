@@ -168,6 +168,8 @@ public class MainActivity extends Activity {
     private long nativeLiveUnhealthySinceMs;
     private long nativeLiveLastRecoveryMs;
     private long nativeVideoUnhealthySinceMs;
+    private boolean nativeVideoStarted;
+    private long nativeLastVideoDisplayMs;
     private static final long NATIVE_VIDEO_STARTUP_STALL_MS = 7000L;
     private static final long NATIVE_LIVE_STALL_RECOVERY_MS = 45000L;
     private static final long NATIVE_LIVE_RECOVERY_COOLDOWN_MS = 15000L;
@@ -1159,6 +1161,8 @@ public class MainActivity extends Activity {
             nativePendingStartMs = "video".equals(mode) ? startMs : 0L;
             nativeStartSeekIssuedAtMs = 0L;
             nativeStartOffsetMs = "video".equals(mode) ? startOffsetMs : 0L;
+            nativeVideoStarted = false;
+            nativeLastVideoDisplayMs = "video".equals(mode) ? Math.max(startMs, startOffsetMs) : 0L;
             nativeHasNext = hasNext;
             nativeHasQualityChoices = hasQualityChoices;
             nativeSubtitleShift = (float) j.optDouble("subtitleShift", nativeShiftFromUrl(subtitleUrl));
@@ -1205,7 +1209,13 @@ public class MainActivity extends Activity {
 
                 @Override public void onPlaybackStateChanged(int state) {
                     updateNativeChrome();
-                    if (state == Player.STATE_READY) applyNativeStartSeekIfReady();
+                    if (state == Player.STATE_READY) {
+                        if ("video".equals(nativeMode)) {
+                            nativeVideoStarted = true;
+                            rememberNativeVideoPosition();
+                        }
+                        applyNativeStartSeekIfReady();
+                    }
                     if (state == Player.STATE_READY && nativeLoading != null
                             && nativeLoading.getVisibility() == View.VISIBLE) {
                         nativeVideoUnhealthySinceMs = 0L;
@@ -1230,7 +1240,11 @@ public class MainActivity extends Activity {
                 @Override public void onIsPlayingChanged(boolean isPlaying) {
                     updateNativeChrome();
                     if ("live".equals(nativeMode) && isPlaying) nativeLiveUnhealthySinceMs = 0L;
-                    if ("video".equals(nativeMode) && isPlaying) nativeVideoUnhealthySinceMs = 0L;
+                    if ("video".equals(nativeMode) && isPlaying) {
+                        nativeVideoStarted = true;
+                        nativeVideoUnhealthySinceMs = 0L;
+                        rememberNativeVideoPosition();
+                    }
                     scheduleNativeChromeHide();
                 }
             });
@@ -1382,6 +1396,20 @@ public class MainActivity extends Activity {
         return Math.max(0L, nativeStartOffsetMs + nativeRawPositionMs());
     }
 
+    private void rememberNativeVideoPosition() {
+        if (!"video".equals(nativeMode) || nativePlayer == null) return;
+        long pos = nativeDisplayPositionMs();
+        if (pos > 0L) nativeLastVideoDisplayMs = pos;
+    }
+
+    private long safeNativeVideoPosSeconds(long reportedSeconds) {
+        long reportedMs = Math.max(0L, reportedSeconds * 1000L);
+        if (reportedMs <= 1000L && nativeLastVideoDisplayMs > 30000L) {
+            return nativeLastVideoDisplayMs / 1000L;
+        }
+        return Math.max(0L, reportedSeconds);
+    }
+
     private boolean nativeVodSeekable() {
         if (nativePlayer == null || "live".equals(nativeMode)) return false;
         long d = nativeDurationMs();
@@ -1416,6 +1444,7 @@ public class MainActivity extends Activity {
         long target = Math.max(0L, displayMs);
         long d = nativeDurationMs();
         if (d > 0 && d != C.TIME_UNSET) target = Math.min(d, target);
+        nativeLastVideoDisplayMs = target;
         if (nativeServerSeekMode()) {
             requestNativeVideoSeek(target);
             return;
@@ -1960,12 +1989,13 @@ public class MainActivity extends Activity {
     private void notifyNativeVideoError(String msg, long pos, long dur) {
         String title = nativePlaybackTitle;
         String backdropUrl = nativePlaybackBackdropUrl;
+        long safePos = safeNativeVideoPosSeconds(pos);
         releaseNativePlayer(false);
         enterNativeFullscreenMode();
         showNativeLoading(title, backdropUrl);
         web.evaluateJavascript("window.__tvNativeVideoError && __tvNativeVideoError("
                 + org.json.JSONObject.quote(msg == null || msg.isEmpty() ? "native startup stalled" : msg)
-                + "," + pos + "," + dur + ")", null);
+                + "," + safePos + "," + dur + ")", null);
     }
 
     private float nativeShiftFromUrl(String url) {
@@ -2881,6 +2911,7 @@ public class MainActivity extends Activity {
                 updateNativeLiveWatchdog();
                 updateNativeVideoWatchdog();
                 if ("video".equals(nativeMode)) {
+                    rememberNativeVideoPosition();
                     web.evaluateJavascript("window.__tvNativeVideoProgress && __tvNativeVideoProgress("
                             + nativePosSeconds() + "," + nativeDurSeconds() + ")", null);
                 }
@@ -2913,7 +2944,15 @@ public class MainActivity extends Activity {
     private void updateNativeVideoWatchdog() {
         if (!"video".equals(nativeMode) || nativePlayer == null) return;
         int state = nativePlayer.getPlaybackState();
-        if (state == Player.STATE_READY && nativePlayer.isPlaying()) {
+        if (state == Player.STATE_READY) {
+            nativeVideoStarted = true;
+            rememberNativeVideoPosition();
+            nativeVideoUnhealthySinceMs = 0L;
+            return;
+        }
+        // After the first ready frame, normal ExoPlayer rebuffering is playback, not startup
+        // failure. Let Exo keep buffering instead of bouncing through the fallback ladder.
+        if (nativeVideoStarted) {
             nativeVideoUnhealthySinceMs = 0L;
             return;
         }
@@ -2975,6 +3014,8 @@ public class MainActivity extends Activity {
         nativeLiveUnhealthySinceMs = 0L;
         nativeLiveLastRecoveryMs = 0L;
         nativeVideoUnhealthySinceMs = 0L;
+        nativeVideoStarted = false;
+        nativeLastVideoDisplayMs = 0L;
         nativeSeekDpadMode = false;
         nativeOpenSubtitleMenuAfterRefresh = false;
         nativeKnownDurationMs = 0L;

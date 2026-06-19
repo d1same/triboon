@@ -203,8 +203,16 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'finished playback should resolve movies to movie details and final episodes to the show details page');
   assert.match(ui, /window\.__tvNativeVideoClosed = \(pos, dur, ended\) => \{[\s\S]+if \(ended && S\.nextEp\)[\s\S]+closePlayer\(\{ ended: !!ended \}\);/,
     'native finished playback should either surface Up Next or close through the finished-title return path');
-  assert.match(ui, /window\.__tvNativeVideoProgress = \(pos, dur\) => \{[\s\S]+p\.nativePos = Math\.max\(0, \+pos \|\| 0\);[\s\S]+maybeShowUpNext\(p\.nativePos, totalDuration\(\), \{ native: true \}\);[\s\S]+\};/,
+  assert.ok([
+    'function applyNativeVideoProgress(pos, dur, opts = {}) {',
+    'const keepPrev = opts.preserveOnZero && incoming <= 1 && prev > 30;',
+    'p.nativePos = keepPrev ? prev : incoming;',
+    'maybeShowUpNext(p.nativePos, totalDuration(), { native: true });',
+    'window.__tvNativeVideoProgress = (pos, dur) => {\n  applyNativeVideoProgress(pos, dur);',
+  ].every((s) => ui.includes(s)),
     'native episode playback should surface Up Next from progress before ExoPlayer reaches ended');
+  assert.ok(ui.includes('window.__tvNativeVideoError = (msg, pos, dur) => {\n  const p = S.playing; if (!p || !p.usingNative) return;\n  applyNativeVideoProgress(pos, dur, { preserveOnZero: true });\n  const at = currentTime();'),
+    'native player errors should preserve the last good movie position when Exo reports a bogus zero before fallback');
   assert.match(ui, /function maybeShowUpNext\(t, d, opts = \{\}\) \{[\s\S]+\(d - t\) > UP_NEXT_COUNTDOWN_SECONDS[\s\S]+if \(!opts\.native && \$\('video'\)\.paused\) return;[\s\S]+showUpNext\(\);/,
     'Up Next should start only at the 10-second choice window and work for native progress without relying on the web video paused state');
   assert.doesNotMatch(ui, /\(d - t\) > 45/,
@@ -1216,7 +1224,15 @@ test('Android native player: direct source and native chrome stay out of the web
     'native player controls should not show success popups over playback');
   assert.match(android, /private boolean nativeVodSeekable\(\) \{[\s\S]+if \(nativePlayer == null \|\| "live"\.equals\(nativeMode\)\) return false;/,
     'live streams should not expose movie-style seeking behavior');
-  assert.match(android, /private long nativePendingStartMs;[\s\S]+private long nativeStartSeekIssuedAtMs;[\s\S]+private long nativeStartOffsetMs;[\s\S]+nativePendingStartMs = "video"\.equals\(mode\) \? startMs : 0L;[\s\S]+nativeStartOffsetMs = "video"\.equals\(mode\) \? startOffsetMs : 0L;[\s\S]+state == Player\.STATE_READY\) applyNativeStartSeekIfReady\(\)/,
+  assert.ok([
+    'private long nativePendingStartMs;',
+    'private long nativeStartSeekIssuedAtMs;',
+    'private long nativeStartOffsetMs;',
+    'nativePendingStartMs = "video".equals(mode) ? startMs : 0L;',
+    'nativeStartOffsetMs = "video".equals(mode) ? startOffsetMs : 0L;',
+    'if (state == Player.STATE_READY) {',
+    'applyNativeStartSeekIfReady();',
+  ].every((s) => android.includes(s)),
     'native movie resume should keep the requested start time until ExoPlayer is ready');
   assert.match(android, /private long nativeDisplayPositionMs\(\) \{[\s\S]+nativeStartOffsetMs \+ nativeRawPositionMs\(\)[\s\S]+private void nativeSeekToDisplayPosition\(long displayMs\) \{[\s\S]+nativePlayer\.seekTo\(Math\.max\(0L, target - nativeStartOffsetMs\)\)/,
     'native remux/transcode playback should display and save absolute movie time while seeking inside the restarted segment');
@@ -1270,8 +1286,25 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Live TV should restart instead of staying frozen when a live stream ends quietly');
   assert.match(android, /private void recoverNativeLivePlayback\(String reason\) \{[\s\S]+if \(tryNativeLiveFallback\(\)\) return;[\s\S]+nativePlayer\.setMediaItem\(buildNativeMediaItem\(\)\);[\s\S]+nativePlayer\.prepare\(\);[\s\S]+nativePlayer\.play\(\);/,
     'native Live TV recovery should stay inside ExoPlayer and restart the active native stream');
-  assert.match(android, /NATIVE_VIDEO_STARTUP_STALL_MS = 7000L[\s\S]+private void updateNativeVideoWatchdog\(\) \{[\s\S]+state == Player\.STATE_IDLE \|\| state == Player\.STATE_BUFFERING[\s\S]+now - nativeVideoUnhealthySinceMs >= NATIVE_VIDEO_STARTUP_STALL_MS[\s\S]+notifyNativeVideoError\(state == Player\.STATE_IDLE \? "native player idle" : "native startup stalled"/,
-    'native movie and episode startup should fail over quickly instead of sitting on preparing stream forever');
+  assert.ok([
+    'private boolean nativeVideoStarted;',
+    'private void updateNativeVideoWatchdog() {',
+    'if (state == Player.STATE_READY) {\n            nativeVideoStarted = true;',
+    'if (nativeVideoStarted) {\n            nativeVideoUnhealthySinceMs = 0L;\n            return;',
+    'boolean unhealthy = state == Player.STATE_IDLE || state == Player.STATE_BUFFERING',
+    'now - nativeVideoUnhealthySinceMs >= NATIVE_VIDEO_STARTUP_STALL_MS',
+    'notifyNativeVideoError(state == Player.STATE_IDLE ? "native player idle" : "native startup stalled"',
+  ].every((s) => android.includes(s)),
+    'native movie and episode startup should fail over quickly, but normal mid-play rebuffering should not restart the source');
+  assert.ok([
+    'private long nativeLastVideoDisplayMs;',
+    'private long safeNativeVideoPosSeconds(long reportedSeconds) {',
+    'if (reportedMs <= 1000L && nativeLastVideoDisplayMs > 30000L) {',
+    'return nativeLastVideoDisplayMs / 1000L;',
+    'long safePos = safeNativeVideoPosSeconds(pos);',
+    '+ "," + safePos + "," + dur + ")", null);',
+  ].every((s) => android.includes(s)),
+    'native movie and episode fallback should preserve the last good position if Exo reports zero during an error');
   assert.match(android, /private void notifyNativeVideoError\(String msg, long pos, long dur\) \{[\s\S]+String title = nativePlaybackTitle;[\s\S]+String backdropUrl = nativePlaybackBackdropUrl;[\s\S]+releaseNativePlayer\(false\);[\s\S]+showNativeLoading\(title, backdropUrl\);[\s\S]+__tvNativeVideoError/,
     'native movie and episode startup watchdog should preserve the branded loader while reporting the failure to the native ladder');
   assert.match(server, /LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS = 25000[\s\S]+LIVE_REMUX_IDLE_TIMEOUT_MS = 45000/,

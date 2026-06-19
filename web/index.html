@@ -5538,11 +5538,18 @@ function tryNextNativeKind(failedKind, atSeconds, msg) {
   }
   return false;
 }
-window.__tvNativeVideoProgress = (pos, dur) => {
+function applyNativeVideoProgress(pos, dur, opts = {}) {
   const p = S.playing; if (!p || !p.usingNative) return;
-  p.nativePos = Math.max(0, +pos || 0);
+  const incoming = Math.max(0, +pos || 0);
+  const prev = Math.max(0, +p.nativePos || 0);
+  const keepPrev = opts.preserveOnZero && incoming <= 1 && prev > 30;
+  p.nativePos = keepPrev ? prev : incoming;
   if (+dur > 0) { p.nativeDuration = +dur; p.duration = +dur; }
   maybeShowUpNext(p.nativePos, totalDuration(), { native: true });
+  return p.nativePos;
+}
+window.__tvNativeVideoProgress = (pos, dur) => {
+  applyNativeVideoProgress(pos, dur);
 };
 window.__tvNativeVideoSeek = (pos, dur) => {
   const p = S.playing; if (!p || !p.usingNative || !p.item || p.item.type === 'live') return;
@@ -5555,7 +5562,7 @@ window.__tvNativeVideoSeek = (pos, dur) => {
 };
 window.__tvNativeVideoClosed = (pos, dur, ended) => {
   const p = S.playing; if (!p || !p.usingNative) return;
-  window.__tvNativeVideoProgress(pos, dur);
+  applyNativeVideoProgress(pos, dur, { preserveOnZero: !ended });
   if (ended && S.nextEp) {
     saveWatch(true);
     showUpNext();
@@ -5565,7 +5572,7 @@ window.__tvNativeVideoClosed = (pos, dur, ended) => {
 };
 window.__tvNativeVideoError = (msg, pos, dur) => {
   const p = S.playing; if (!p || !p.usingNative) return;
-  window.__tvNativeVideoProgress(pos, dur);
+  applyNativeVideoProgress(pos, dur, { preserveOnZero: true });
   const at = currentTime();
   const kind = p.usingTranscode ? 'transcode' : (p.usingRemux ? 'remux' : 'direct');
   p.usingNative = false;
