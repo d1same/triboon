@@ -118,6 +118,19 @@ Speed levers: per-indexer timeout budget · verdict + NZB caching (two-tier) · 
 tuning · connection pool warm-keep · source-fit-first (avoids transcoder entirely) ·
 HW transcoding only as last resort.
 
+### 4.1 Source search and subtitle contracts
+- Sources drawer and Play share the same `Pipeline` search path. Indexer queries are sanitized
+  for scene naming, then every returned release must pass anchored title verification before
+  ranking. Catalog IDs are tried first, but empty ID searches fall back to title-only search
+  without relaxing title verification, so sibling franchise releases stay out of the result set.
+- Online subtitles use Wyzie. Search requests include TMDB id, season/episode, language, and
+  exact release/file hints so subtitles rank against the mounted release, not only the title.
+- Subtitle file downloads must carry the Wyzie key for Wyzie/custom-base URLs. Keys are not
+  appended to unrelated direct-download hosts. Auto subtitles and manually selected subtitle
+  variants use the same authenticated download helper.
+- Regression coverage lives in `test/phase2.test.js` for title/subtitle matching and in
+  `test/security.test.js` for the full `/api/ossubs` search -> file -> VTT path.
+
 ## 5. Data model (SQLite, WAL mode)
 
 ```

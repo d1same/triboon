@@ -414,16 +414,7 @@ async function fetchOnlineSub({ key, tmdbId, query, lang = 'en', releaseName = '
   if (!Array.isArray(data) || !data.length) throw permanent(`no ${lang} subtitles found for "${query}"`);
   const hit = pickSub(data, releaseName, { durationSeconds });
   if (!hit) throw permanent(`no usable ${lang} subtitle file in the results`);
-  const file = await retryTransient('Wyzie subtitle download', async () => {
-    const r = await request('GET', hit.url, { timeoutMs: 15000, deadlineMs: 25000 });
-    if (r.status !== 200) {
-      const e = new Error(`subtitle file HTTP ${r.status}`);
-      if (![408, 429].includes(r.status) && r.status < 500) e.permanent = true;
-      throw e;
-    }
-    return r;
-  }, { attempts, delayMs: retryDelayMs });
-  return srtToVtt(file.body);
+  return downloadSubtitle(hit, { key, base, attempts, retryDelayMs });
 }
 
 async function searchOnlineSubs({ key, tmdbId, query, lang = 'en', releaseName = '', base = DEFAULT_BASE,
@@ -466,9 +457,37 @@ async function searchOnlineSubs({ key, tmdbId, query, lang = 'en', releaseName =
   if (!Array.isArray(data) || !data.length) throw permanent(`no ${lang} subtitles found for "${query}"`);
   return data;
 }
-async function downloadSubtitle(hit, { attempts = 2, retryDelayMs = 700 } = {}) {
+
+function subtitleDownloadNeedsAuth(rawUrl, base = DEFAULT_BASE) {
+  try {
+    const target = new URL(String(rawUrl || ''));
+    const configured = new URL(String(base || DEFAULT_BASE));
+    const host = target.hostname.toLowerCase();
+    const baseHost = configured.hostname.toLowerCase();
+    return host === baseHost || host === 'sub.wyzie.io' || host === 'sub.wyzie.ru'
+      || host.endsWith('.wyzie.io') || host.endsWith('.wyzie.ru');
+  } catch {
+    return false;
+  }
+}
+
+function subtitleDownloadUrl(rawUrl, { key, base = DEFAULT_BASE } = {}) {
+  if (!key || !subtitleDownloadNeedsAuth(rawUrl, base)) return rawUrl;
+  try {
+    const u = new URL(String(rawUrl));
+    u.searchParams.set('key', key);
+    return u.href;
+  } catch {
+    return rawUrl;
+  }
+}
+
+async function downloadSubtitle(hit, { key, base = DEFAULT_BASE, attempts = 2, retryDelayMs = 700 } = {}) {
+  if (!hit || !hit.url) throw permanent('subtitle result did not include a download url');
+  const needsAuth = !!key && subtitleDownloadNeedsAuth(hit.url, base);
+  const url = subtitleDownloadUrl(hit.url, { key, base });
   const file = await retryTransient('Wyzie subtitle download', async () => {
-    const r = await request('GET', hit && hit.url, { timeoutMs: 15000, deadlineMs: 25000 });
+    const r = await request('GET', url, { key: needsAuth ? key : undefined, timeoutMs: 15000, deadlineMs: 25000 });
     if (r.status !== 200) {
       const e = new Error(`subtitle file HTTP ${r.status}`);
       if (![408, 429].includes(r.status) && r.status < 500) e.permanent = true;
@@ -486,7 +505,7 @@ async function fetchOnlineSubV2({ key, tmdbId, query, lang = 'en', releaseName =
   if (!Array.isArray(data) || !data.length) throw permanent(`no ${lang} subtitles found for "${query}"`);
   const hit = pickSub(data, releaseName, { durationSeconds });
   if (!hit) throw permanent(`no usable ${lang} subtitle file in the results`);
-  return downloadSubtitle(hit, { attempts, retryDelayMs });
+  return downloadSubtitle(hit, { key, base, attempts, retryDelayMs });
 }
 
 async function searchOnlineSubsV2({ key, tmdbId, query, lang = 'en', releaseName = '', base = DEFAULT_BASE,
@@ -501,4 +520,6 @@ module.exports = {
   fetchOnlineSub: fetchOnlineSubV2, searchOnlineSubs: searchOnlineSubsV2,
   downloadSubtitle, rankSubs, srtToVtt, shiftVtt, parseQuery, pickSub,
   _request: request, _isTransientError: isTransientError,
+  _subtitleDownloadNeedsAuth: subtitleDownloadNeedsAuth,
+  _subtitleDownloadUrl: subtitleDownloadUrl,
 };

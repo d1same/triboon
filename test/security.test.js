@@ -1176,6 +1176,7 @@ test('subtitles: Wyzie search→file→VTT served per mount (and 503 without a k
   const http2 = require('http');
   let osPort;
   let searchCalls = 0;
+  const subtitleDownloads = [];
   const osMock = http2.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
     if (u.pathname === '/search') {
@@ -1197,10 +1198,20 @@ test('subtitles: Wyzie search→file→VTT served per mount (and 503 without a k
       ]));
     }
     if (u.pathname === '/file.srt') {
+      subtitleDownloads.push({ path: u.pathname, headerKey: req.headers['api-key'], queryKey: u.searchParams.get('key') });
+      if (req.headers['api-key'] !== 'test-key' && u.searchParams.get('key') !== 'test-key') {
+        res.writeHead(401);
+        return res.end('missing subtitle file key');
+      }
       res.writeHead(200);
       return res.end('1\r\n00:00:01,000 --> 00:00:02,500\r\nHello usenet\r\n');
     }
     if (u.pathname === '/extended.srt') {
+      subtitleDownloads.push({ path: u.pathname, headerKey: req.headers['api-key'], queryKey: u.searchParams.get('key') });
+      if (req.headers['api-key'] !== 'test-key' && u.searchParams.get('key') !== 'test-key') {
+        res.writeHead(401);
+        return res.end('missing subtitle file key');
+      }
       res.writeHead(200);
       return res.end('1\r\n00:00:03,000 --> 00:00:04,500\r\nExtended cut line\r\n');
     }
@@ -1235,6 +1246,8 @@ test('subtitles: Wyzie search→file→VTT served per mount (and 503 without a k
   assert.ok(vtt.startsWith('WEBVTT'), 'served as WebVTT');
   assert.match(vtt, /00:00:01\.000 --> 00:00:02\.500/, 'SRT timestamps converted');
   assert.match(vtt, /Hello usenet/);
+  assert.ok(subtitleDownloads.some((d) => d.path === '/file.srt' && (d.headerKey === 'test-key' || d.queryKey === 'test-key')),
+    'subtitle file download carries the Wyzie key, not just the search request');
   const beforeShift = searchCalls;
   const shiftedSub = await httpRaw(srv.port, `/api/ossubs/${play.id}?lang=en&tmdb=4242&shift=0.5&t=${play.streamToken}`);
   assert.strictEqual(shiftedSub.status, 200, shiftedSub.body.toString());
@@ -1247,6 +1260,8 @@ test('subtitles: Wyzie search→file→VTT served per mount (and 503 without a k
   const pickedVersion = await httpRaw(srv.port, `/api/ossubs/${play.id}?lang=en&tmdb=4242&variant=2&t=${play.streamToken}`);
   assert.strictEqual(pickedVersion.status, 200, pickedVersion.body.toString());
   assert.match(pickedVersion.body.toString('utf8'), /Extended cut line/, 'selected subtitle version downloads its own file');
+  assert.ok(subtitleDownloads.some((d) => d.path === '/extended.srt' && (d.headerKey === 'test-key' || d.queryKey === 'test-key')),
+    'manual subtitle version downloads are authenticated too');
   const afterVersions = searchCalls;
   const cached = await httpRaw(srv.port, `/api/ossubs/${play.id}?lang=en&tmdb=4242&t=${play.streamToken}`);
   assert.strictEqual(cached.status, 200, cached.body.toString());

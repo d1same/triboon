@@ -2833,7 +2833,7 @@ Object.assign(H, {
           const variants = await getVariants();
           const hit = variants.find((v) => v.id === variant);
           if (!hit || !hit.raw) throw new Error('that subtitle version is no longer available');
-          return downloadSubtitle(hit.raw, { attempts: 3, retryDelayMs: 900 });
+          return downloadSubtitle(hit.raw, { key, ...(base ? { base } : {}), attempts: 3, retryDelayMs: 900 });
         })().then((vtt) => {
           vf._osCache.set(cacheKey, vtt);
           return vtt;

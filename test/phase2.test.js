@@ -259,6 +259,34 @@ test('opensubs: SRT→VTT conversion + search-query parsing', () => {
   assert.deepStrictEqual(parseQuery('Movie Name 2024'), { title: 'Movie Name', season: null, ep: null, year: 2024 });
 });
 
+test('subs: Wyzie file download is authenticated without leaking keys to unrelated hosts', async () => {
+  const { downloadSubtitle, _subtitleDownloadUrl } = require('../server/opensubs');
+  let seen;
+  const srv = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://127.0.0.1');
+    seen = { headerKey: req.headers['api-key'], queryKey: u.searchParams.get('key') };
+    if (seen.headerKey !== 'test-key' && seen.queryKey !== 'test-key') {
+      res.writeHead(401);
+      return res.end('missing key');
+    }
+    res.writeHead(200);
+    return res.end('1\r\n00:00:01,000 --> 00:00:02,500\r\nAuthenticated\r\n');
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  try {
+    const base = `http://127.0.0.1:${srv.address().port}`;
+    const vtt = await downloadSubtitle({ url: `${base}/file.srt`, format: 'srt' }, { key: 'test-key', base });
+    assert.ok(vtt.startsWith('WEBVTT'), 'downloaded subtitle converts to WebVTT');
+    assert.match(vtt, /Authenticated/);
+    assert.ok(seen.headerKey === 'test-key' || seen.queryKey === 'test-key',
+      'subtitle file request carries the Wyzie key');
+    assert.strictEqual(_subtitleDownloadUrl('http://cdn.example/sub.srt', { key: 'secret', base }),
+      'http://cdn.example/sub.srt', 'keys are not appended to unrelated subtitle hosts');
+  } finally {
+    await new Promise((r) => srv.close(r));
+  }
+});
+
 test('subs: pickSub matches the sub to OUR release cut (sync depends on it)', () => {
   const { pickSub, rankSubs } = require('../server/opensubs');
   // Wyzie's flat result shape: { id, url, format, display, isHearingImpaired }.
@@ -521,7 +549,9 @@ test('pipeline: imdb/tvdb source searches fall back to verified title search', a
     if (u.searchParams.get('imdbid')) return res.end(rssFor([]));
     res.end(rssFor([
       { name: 'The.Lord.of.the.Rings.The.Fellowship.of.the.Ring.2001.Extended.1080p.BluRay.x264-GRP', url: 'http://x/good', size: 8e9 },
+      { name: 'The.Lord.of.the.Rings.The.Two.Towers.2002.Extended.1080p.BluRay.x264-GRP', url: 'http://x/wrong2', size: 8e9 },
       { name: 'The.Lord.of.the.Rings.The.Return.of.the.King.2003.1080p.BluRay.x264-GRP', url: 'http://x/wrong', size: 8e9 },
+      { name: 'The.Lord.of.the.Rings.The.Rings.of.Power.S01E01.1080p.WEB-DL.x264-GRP', url: 'http://x/wrong3', size: 5e9 },
     ]));
   });
   const ixPort = await new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
