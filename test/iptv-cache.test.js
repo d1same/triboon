@@ -196,6 +196,83 @@ test('iptv: rapid channel changes close the previous upstream stream before open
   }
 });
 
+test('iptv: provider protection failures are only cached briefly so a retune can recover', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-iptv-bot-cache-'));
+  let liveHits = 0;
+  const upstream = http.createServer((req, res) => {
+    if (req.url === '/list.m3u') {
+      res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' });
+      return res.end(`#EXTM3U
+#EXTINF:-1 group-title="Test",Protected News
+http://127.0.0.1:${upstream.address().port}/live/protected.ts
+`);
+    }
+    if (req.url === '/live/protected.ts') {
+      liveHits++;
+      if (liveHits === 1) {
+        res.writeHead(404, { 'content-type': 'text/plain' });
+        return res.end('provider bot-protection');
+      }
+      res.writeHead(200, { 'content-type': 'video/mp2t' });
+      res.write(Buffer.alloc(188, 0x47));
+      return setTimeout(() => res.end(Buffer.alloc(188, 0x47)), 20);
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${upstream.address().port}`;
+  const readNative = (port, p) => new Promise((resolve, reject) => {
+    let done = false;
+    const req = http.get({
+      host: '127.0.0.1',
+      port,
+      path: p,
+      headers: { 'user-agent': 'TriboonTV-test' },
+    }, (res) => {
+      const chunks = [];
+      const finish = () => {
+        if (done) return;
+        done = true;
+        resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString('utf8') });
+      };
+      res.on('data', (c) => {
+        chunks.push(c);
+        if ((res.statusCode || 0) < 400) {
+          try { res.destroy(); } catch {}
+          try { req.destroy(); } catch {}
+          finish();
+        }
+      });
+      res.on('end', finish);
+      res.on('error', () => finish());
+    });
+    req.on('error', (e) => { if (!done) reject(e); });
+  });
+
+  let srv;
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/settings',
+      { iptvMode: 'm3u', iptvUrl: `${base}/list.m3u`, epgUrl: null }, admin);
+    const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    const first = await readNative(srv.port, ch.json.channels[0].nativeUrl);
+    assert.strictEqual(first.status, 404);
+    assert.match(first.body, /provider bot-protection/);
+    const cached = await readNative(srv.port, ch.json.channels[0].nativeUrl);
+    assert.strictEqual(cached.status, 404);
+    assert.strictEqual(liveHits, 1, 'immediate repeat should be dampened by the short protection cache');
+    await new Promise((resolve) => setTimeout(resolve, 1150));
+    const recovered = await readNative(srv.port, ch.json.channels[0].nativeUrl);
+    assert.strictEqual(recovered.status, 200);
+    assert.strictEqual(liveHits, 2, 'provider-protection cache should expire quickly enough for a retune retry');
+  } finally {
+    if (srv) await srv.shutdown();
+    upstream.close();
+  }
+});
+
 test('iptv: Xtream channels serve persisted cache immediately after restart and refresh in background', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-channel-cache-'));
   let streamHits = 0;

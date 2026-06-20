@@ -8856,6 +8856,12 @@ function openNativeLiveGuideShell(it) {
 function tryNativeLivePlayer(it, guide = false) {
   if (!canUseNativeLivePlayer() || !it || !it._nativeUrl) return false;
   try {
+    if (!guide) {
+      S.nativeGuideMode = false;
+      closePlayerGuide({ fromNative: true });
+      document.body.classList.remove('nativeGuideMode');
+      $('player').classList.remove('guideMode');
+    }
     S.nativeLivePending = it;
     S.nativeGuideMode = !!guide;
     S.nativeLiveReturnView = (S.view === 'livetv' || document.querySelector('#chBody.liveGuideShell') || guide) ? 'livetv' : S.view;
@@ -8992,7 +8998,7 @@ async function playChannel(it, list) {
     .items.filter((x) => x._channel !== undefined);
   S.liveList = list || (fromGrid.length ? fromGrid : fromHome);
   S.liveCur = it._channel;
-  const keepGuidePip = !!($('pGuide') && $('pGuide').classList.contains('open'));
+  const keepGuidePip = S.view === 'player' && !!($('pGuide') && $('pGuide').classList.contains('open'));
   if (keepGuidePip && S.nativeGuideMode && tryNativeLivePlayer(it, true)) {
     markGuideCur();
     return;

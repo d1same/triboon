@@ -145,7 +145,8 @@ const IPTV_WARM_XTREAM_GUIDE_MAX = 96;
 const LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS = 25000;
 const LIVE_REMUX_IDLE_TIMEOUT_MS = 45000;
 const IPTV_NATIVE_ERROR_TTL_MS = 30000;
-const IPTV_LIVE_RETUNE_GRACE_MS = 180;
+const IPTV_PROVIDER_PROTECTION_ERROR_TTL_MS = 1000;
+const IPTV_LIVE_RETUNE_GRACE_MS = 650;
 const IPTV_PLAYBACK_API_QUIET_MS = 7000;
 let iptvCache = { key: null, at: 0, channels: [] };
 let epgCache = { key: null, at: 0, byChannel: new Map(), byName: new Map() };
@@ -153,6 +154,7 @@ let xtreamEpgCache = { key: null, byStream: new Map() };
 let iptvNativeErrorCache = new Map();
 let activeIptvLiveStreams = new Map();
 let iptvPlaybackHotUntil = 0;
+let iptvRefreshPausedLogAt = 0;
 const idHash = (s) => require('crypto').createHash('sha1').update(String(s)).digest('hex').slice(0, 12);
 
 async function mapLimit(items, limit, fn) {
@@ -281,9 +283,24 @@ function sanitizeIptvLogError(err) {
 function iptvNativeFailureReason(status, body) {
   const text = String(body || '').toLowerCase();
   if (text.includes('bot-protection') || text.includes('bot protection')) return 'provider bot-protection';
+  if (status === 429) return 'provider rate limit';
   if (status === 401 || status === 403) return 'provider rejected this channel';
   if (status === 404) return 'channel is offline';
   return 'live stream unavailable';
+}
+function iptvNativeFailureCacheTtl(status, reason) {
+  const r = String(reason || '').toLowerCase();
+  if (r.includes('bot-protection') || r.includes('rate limit') || status === 429) {
+    return IPTV_PROVIDER_PROTECTION_ERROR_TTL_MS;
+  }
+  if (status === 401 || status === 403) return IPTV_PROVIDER_PROTECTION_ERROR_TTL_MS;
+  return IPTV_NATIVE_ERROR_TTL_MS;
+}
+function logIptvRefreshPaused(channels, label) {
+  const now = Date.now();
+  if (now - iptvRefreshPausedLogAt < 60000) return;
+  iptvRefreshPausedLogAt = now;
+  console.log(`[iptv refresh] paused channel refresh during playback; keeping ${channels.length} cached ${label} channel(s)`);
 }
 function iptvRemuxStatusFromFfmpeg(err) {
   const text = String(err || '');
@@ -391,7 +408,7 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
           iptvNativeErrorCache.set(failureKey, {
             status: r.statusCode || 502,
             reason,
-            until: Date.now() + IPTV_NATIVE_ERROR_TTL_MS,
+            until: Date.now() + iptvNativeFailureCacheTtl(r.statusCode || 502, reason),
           });
           if (iptvNativeErrorCache.size > 2000) iptvNativeErrorCache = new Map([...iptvNativeErrorCache].slice(-1000));
           console.error(`[iptv native] ${label} upstream HTTP ${r.statusCode} (${reason})`);
@@ -465,13 +482,17 @@ async function loadIptvChannels() {
   // no user ever waits on the panel again — serve it instantly and refresh in the background.
   if (iptvCache.key === key && iptvCache.channels.length) {
     if (!iptvRefreshing) {
-      iptvRefreshing = true;
-      fetchIptvChannels(s, key)
-        .catch((e) => {
-          console.error(`[iptv refresh] background channel refresh failed; keeping cached playlist channels=${iptvCache.channels.length}: ${sanitizeIptvLogError(e)}`);
-          iptvCache.at = Date.now() - (IPTV_CACHE_TTL_MS - 600000);
-        }) // retry in ~10min
-        .finally(() => { iptvRefreshing = false; });
+      if (iptvPlaybackBusy()) {
+        logIptvRefreshPaused(iptvCache.channels, s.iptvMode === 'xtream' ? 'Xtream' : 'playlist');
+      } else {
+        iptvRefreshing = true;
+        fetchIptvChannels(s, key)
+          .catch((e) => {
+            console.error(`[iptv refresh] background channel refresh failed; keeping cached playlist channels=${iptvCache.channels.length}: ${sanitizeIptvLogError(e)}`);
+            iptvCache.at = Date.now() - (IPTV_CACHE_TTL_MS - 600000);
+          }) // retry in ~10min
+          .finally(() => { iptvRefreshing = false; });
+      }
     }
     return iptvCache.channels;
   }
@@ -481,13 +502,17 @@ async function loadIptvChannels() {
     if (channels.length) {
       iptvCache = { key, at: Number(disk.at) || 0, channels };
       if (!iptvRefreshing) {
-        iptvRefreshing = true;
-        fetchIptvChannels(s, key)
-          .catch((e) => {
-            console.error(`[iptv refresh] background channel refresh failed; serving persisted Xtream cache channels=${channels.length}: ${sanitizeIptvLogError(e)}`);
-            iptvCache.at = Date.now() - (IPTV_CACHE_TTL_MS - 600000);
-          })
-          .finally(() => { iptvRefreshing = false; });
+        if (iptvPlaybackBusy()) {
+          logIptvRefreshPaused(channels, 'persisted Xtream');
+        } else {
+          iptvRefreshing = true;
+          fetchIptvChannels(s, key)
+            .catch((e) => {
+              console.error(`[iptv refresh] background channel refresh failed; serving persisted Xtream cache channels=${channels.length}: ${sanitizeIptvLogError(e)}`);
+              iptvCache.at = Date.now() - (IPTV_CACHE_TTL_MS - 600000);
+            })
+            .finally(() => { iptvRefreshing = false; });
+        }
       }
       return channels;
     }
@@ -1793,7 +1818,11 @@ const H = {
         }
         if (codeNum && !wrote) {
           liveSlot.done('failed');
-          iptvNativeErrorCache.set(failureKey, { status: status || 502, reason, until: Date.now() + IPTV_NATIVE_ERROR_TTL_MS });
+          iptvNativeErrorCache.set(failureKey, {
+            status: status || 502,
+            reason,
+            until: Date.now() + iptvNativeFailureCacheTtl(status || 502, reason),
+          });
           if (iptvNativeErrorCache.size > 2000) iptvNativeErrorCache = new Map([...iptvNativeErrorCache].slice(-1000));
           console.error(`[iptv] "${ch.name}" exit ${codeNum}: ${err} (${reason})`);
           if (!ctx.res.headersSent && !ctx.res.destroyed) return sendIptvNativeError(ctx.res, status || 502, reason);

@@ -984,6 +984,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'player guide should show a nonblank empty state instead of leaving a black guide screen');
   assert.match(ui, /if \(!keepGuidePip && tryNativeLivePlayer\(it\)\) return;/,
     'normal Live TV tuning should still launch native fullscreen playback');
+  assert.match(ui, /function tryNativeLivePlayer\(it, guide = false\) \{[\s\S]+if \(!guide\) \{[\s\S]+S\.nativeGuideMode = false;[\s\S]+closePlayerGuide\(\{ fromNative: true \}\);[\s\S]+\$\(\'player\'\)\.classList\.remove\('guideMode'\);[\s\S]+\}[\s\S]+window\.TriboonTV\.playLive/,
+    'normal Live TV tuning should clear stale native guide state before asking ExoPlayer to start');
+  assert.match(ui, /const keepGuidePip = S\.view === 'player' && !!\(\$\(\'pGuide\'\) && \$\(\'pGuide\'\)\.classList\.contains\('open'\)\)/,
+    'stale guide DOM outside the player view must not force later Live TV selections into PiP');
   assert.match(ui, /if \(nativeLiveRequired\(\)\) \{[\s\S]+Native player could not start this channel[\s\S]+return;[\s\S]+\}[\s\S]+return playChannelWeb\(it\);/,
     'Android Live TV should stop on native startup failure instead of falling back to the web player');
   assert.match(ui, /const LIVE_MSE_TYPES = \[[\s\S]+video\/mp4; codecs="avc1\.4d4028, mp4a\.40\.2"[\s\S]+function liveMseType\(\) \{[\s\S]+MediaSource\.isTypeSupported/,
@@ -1138,6 +1142,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android should catch a dead WebView renderer instead of leaving the default web page crashed screen');
   assert.match(android, /private void recoverWebRenderer\(WebView crashedWeb, boolean didCrash, int priorityAtExit\) \{[\s\S]+disposeWebView\(crashedWeb, true\);[\s\S]+buildWebView\(\);[\s\S]+web\.loadUrl\(url\);/,
     'Android should rebuild and reload the TV page after a renderer crash');
+  assert.match(android, /if \(nativeVisible\) \{[\s\S]+if \(nativeGuideMode\) \{[\s\S]+enterNativeFullscreenMode\(\);[\s\S]+\} else \{[\s\S]+web\.setVisibility\(View\.GONE\);/,
+    'if the WebView guide crashes while ExoPlayer is in PiP, recovery should restore fullscreen playback instead of leaving a stuck PiP');
   assert.match(android, /root\.addView\(web, 0, new FrameLayout\.LayoutParams\(/,
     'Android should rebuild the WebView below setup and native player overlays');
   assert.match(android, /WEB_RENDERER_CRASH_LIMIT[\s\S]+tooManyCrashes[\s\S]+showSetup\("The TV page crashed repeatedly/,
@@ -1448,6 +1454,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native guide mode should keep ExoPlayer alive as a PiP without resetting focus/layout during retunes');
   assert.match(android, /releaseNativePlayer\(false, guide\);[\s\S]+nativeMode = mode;/,
     'native Live TV retunes from PiP should preserve guide mode while swapping ExoPlayer instances');
+  assert.match(android, /if \(!guide && isLiveMode\) \{[\s\S]+enterNativeFullscreenMode\(\);[\s\S]+\}[\s\S]+if \(!guide && "video"\.equals\(mode\) && !quietSeek\)/,
+    'non-guide Live TV starts should explicitly restore fullscreen ExoPlayer layout even after a PiP guide crash');
   assert.match(android, /private void releaseNativePlayer\(boolean notifyClosed, boolean preserveGuideMode\) \{[\s\S]+boolean guideMode = nativeGuideMode;[\s\S]+nativeGuideMode = preserveGuideMode && guideMode;/,
     'native release should not erase guide mode during PiP retunes');
   assert.doesNotMatch(openGuideMethod, /releaseNativePlayer\(false\)/,

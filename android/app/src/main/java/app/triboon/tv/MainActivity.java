@@ -570,9 +570,13 @@ public class MainActivity extends Activity {
         setup.setVisibility(View.GONE);
         web.loadUrl(url);
         if (nativeVisible) {
-            web.setVisibility(View.GONE);
-            nativePlayerLayer.bringToFront();
-            nativePlayerLayer.requestFocus();
+            if (nativeGuideMode) {
+                enterNativeFullscreenMode();
+            } else {
+                web.setVisibility(View.GONE);
+                nativePlayerLayer.bringToFront();
+                nativePlayerLayer.requestFocus();
+            }
         } else {
             web.setVisibility(View.VISIBLE);
             scheduleTvFocusRecovery("renderer");
@@ -1399,6 +1403,9 @@ public class MainActivity extends Activity {
             if (nativeGuideBtn != null) nativeGuideBtn.setVisibility(View.VISIBLE);
             nativeNextBtn.setVisibility(hasNext ? View.VISIBLE : View.GONE);
             nativePlayerLayer.setVisibility(View.VISIBLE);
+            if (!guide && isLiveMode) {
+                enterNativeFullscreenMode();
+            }
             if (!guide && "video".equals(mode) && !quietSeek) {
                 enterNativeFullscreenMode();
                 showNativeLoading(title, backdropUrl);
