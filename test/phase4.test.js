@@ -163,10 +163,16 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'TMDB items should preserve original language for source-language scoring');
   assert.match(ui, /function sourceSearchQuery\(it, opts = \{\}\) \{[\s\S]+originalLanguage[\s\S]+preferredAudioLanguage/,
     'Sources searches should carry original-language and preferred-audio hints into scoring');
+  assert.match(ui, /function sourceSearchQuery\(it, opts = \{\}\) \{[\s\S]+params\.set\('caps', JSON\.stringify\(clientCaps\(\)\)\)/,
+    'Sources searches should carry native device caps so source ranking matches Exo playback');
   assert.match(ui, /async function play\(it, pick\) \{[\s\S]+body\.originalLanguage[\s\S]+body\.preferredAudioLanguage/,
     'Play requests should carry original-language and preferred-audio hints into source selection');
-  assert.match(fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8'), /function playbackPolicyFor\(user, \{ maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage \} = \{\}\) \{[\s\S]+policy\.originalLanguage[\s\S]+policy\.preferredAudioLanguage/,
-    'Server playback policy should preserve language hints for the scorer');
+  const serverForPolicy = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.ok(serverForPolicy.includes('function parseCapsQuery(raw) {')
+    && serverForPolicy.includes("caps: parseCapsQuery(ctx.url.searchParams.get('caps'))"),
+    'Sources search should parse native device caps into the server scoring policy');
+  assert.match(serverForPolicy, /function playbackPolicyFor\(user, \{ maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage, caps: rawCaps \} = \{\}\) \{[\s\S]+policy\.originalLanguage[\s\S]+policy\.preferredAudioLanguage[\s\S]+policy\.lowPowerDevice/,
+    'Server playback policy should preserve language/device hints for the scorer');
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8'), /if \(preferRank === 4\) policy\.exactResolutionRank = 4;/,
     '4K selection should be exact so fallback stays in the 4K source class');
   assert.match(ui, /function sourceSearchQuery\(it, opts = \{\}\) \{[\s\S]+const qRank = opts\.includeQuality === false \? null : qualityRankForItem\(it\);[\s\S]+maxResolutionRank[\s\S]+preferResolutionRank/,
@@ -520,11 +526,11 @@ test('Android native player: direct source and native chrome stay out of the web
     'home should render a hidden focus target before the watch-state request can freeze Android TV D-pad input');
   assert.match(ui, /function perfMark\(name, extra = \{\}\) \{[\s\S]+S\.perfMarks[\s\S]+function signalTvReady\(reason\) \{[\s\S]+TriboonTV\.appReady[\s\S]+function signalTvReadyOnce\(reason\)/,
     'web boot should expose timing marks and notify Android when the TV focus model is ready');
-  assert.match(android, /public String nativePlaybackCaps\(\) \{[\s\S]+return buildNativePlaybackCaps\(\);[\s\S]+private String buildNativePlaybackCaps\(\) \{[\s\S]+j\.put\("source", "exo-mediacodec"\)/,
-    'Android should report Exo/MediaCodec playback capabilities instead of relying only on WebView canPlayType');
+  assert.match(android, /public String nativePlaybackCaps\(\) \{[\s\S]+return buildNativePlaybackCaps\(\);[\s\S]+private String buildNativePlaybackCaps\(\) \{[\s\S]+j\.put\("deviceClass", conservative \? "budget-android-tv" : "android-tv"\)[\s\S]+j\.put\("source", "exo-mediacodec"\)/,
+    'Android should report Exo/MediaCodec playback capabilities and conservative device class instead of relying only on WebView canPlayType');
   assert.match(ui, /function nativePlaybackCaps\(\) \{[\s\S]+TriboonTV\.nativePlaybackCaps[\s\S]+JSON\.parse\(TriboonTV\.nativePlaybackCaps\(\)[\s\S]+function clientCaps\(\) \{[\s\S]+const nativeCaps = nativePlaybackCaps\(\);[\s\S]+S\._caps = nativeCaps \? \{ \.\.\.webCaps, \.\.\.nativeCaps, web: webCaps \} : webCaps;/,
     'web play requests should merge native Exo capabilities into the caps sent to the server');
-  assert.match(server, /function parseCaps\(raw\) \{[\s\S]+\['mkv', 'mp4', 'h264', 'hevc', 'av1', 'vp9', 'mpeg2', 'aac', 'ac3', 'eac3', 'dts', 'native'\][\s\S]+caps\.source = String\(raw\.source\)\.slice\(0, 64\)/,
+  assert.match(server, /function parseCaps\(raw\) \{[\s\S]+\['mkv', 'mp4', 'h264', 'hevc', 'dovi', 'av1', 'vp9', 'mpeg2', 'aac', 'ac3', 'eac3', 'dts', 'native', 'lowPower'\][\s\S]+caps\.deviceClass = String\(raw\.deviceClass\)\.slice\(0, 64\)/,
     'server should accept sanitized native playback capability fields');
   assert.match(server, /const imdbRaw = String\(ctx\.url\.searchParams\.get\('imdb'\) \|\| ctx\.url\.searchParams\.get\('imdbid'\) \|\| ''\)\.trim\(\);[\s\S]+const imdbId = \/\^tt\\d\{5,10\}\$\/i\.test\(imdbRaw\) \? imdbRaw\.toLowerCase\(\) : '';[\s\S]+key, tmdbId, imdbId, query: vf\._subQuery \|\| vf\._q \|\| vf\.name[\s\S]+const catalogId = imdbId \|\| tmdbId;/,
     'server subtitle route should accept IMDb ids, prefer them in Wyzie search, and cache by the active catalog id');
@@ -1012,8 +1018,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'web Live TV channel changes should close the previous MSE fetch/player connection before opening the new channel');
   assert.match(server, /let clientClosed = false;[\s\S]+const stopForClientClose = \(\) => \{[\s\S]+clientClosed = true;[\s\S]+ff\.kill\('SIGKILL'\);[\s\S]+ctx\.req\.off\('close', stopForClientClose\);[\s\S]+ctx\.res\.off\('close', stopForClientClose\);[\s\S]+if \(clientClosed\) return;[\s\S]+ctx\.req\.once\('close', stopForClientClose\);[\s\S]+ctx\.res\.once\('close', stopForClientClose\);/,
     'server Live TV remux should kill ffmpeg exactly once when the browser closes the stream');
-  assert.match(ui, /fallbackUrl: it\._nativeFallbackUrl \? new URL\(it\._nativeFallbackUrl, location\.origin\)\.href : '',[\s\S]+fallbackMime: it\._nativeFallbackMime \|\| '',/,
-    'Android Live TV should only receive native provider stream candidates, never the browser remux fallback');
+  assert.match(ui, /addLiveFallback\(it\._nativeFallbackUrl, it\._nativeFallbackMime \|\| ''\);[\s\S]+addLiveFallback\(it\._streamUrl, 'video\/mp4'\);[\s\S]+fallbacks: liveFallbacks,/,
+    'Android Live TV should try provider candidates first, then fall back to the server remux path on weaker devices');
   assert.match(ui, /_nativeFallbackUrl: ch\.nativeFallbackUrl[\s\S]+_nativeFallbackMime: ch\.nativeFallbackMime \|\| ''/,
     'Live TV guide/card/search items should preserve native fallback stream metadata');
   assert.doesNotMatch(ui, /Native player failed[^`'"]*using web player|using web playback/,
@@ -1391,15 +1397,15 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Live TV remux fallback should be tagged as MP4 for ExoPlayer');
   assert.match(android, /else if \(tryNativeLiveFallback\(\)\) \{[\s\S]+return;[\s\S]+\} else \{[\s\S]+__tvNativeLiveError/,
     'native Live TV should retry the Exo remux fallback before reporting a player error');
-  assert.match(android, /private boolean tryNativeLiveFallback\(\) \{[\s\S]+nativeUrl = nativeFallbackUrl;[\s\S]+nativeMime = nativeFallbackMime[\s\S]+nativePlayer\.setMediaItem\(buildNativeMediaItem\(\)\);[\s\S]+nativePlayer\.prepare\(\);[\s\S]+nativePlayer\.play\(\);/,
-    'native Live TV fallback should stay inside ExoPlayer instead of opening web playback');
-  assert.match(android, /NATIVE_LIVE_STALL_RECOVERY_MS = 45000L[\s\S]+NATIVE_LIVE_READ_TIMEOUT_MS = 60000/,
-    'native Live TV should allow provider hiccups before declaring the stream timed out');
-  assert.match(android, /setBufferDurationsMs\("video"\.equals\(mode\) \? 6000 : 4000,[\s\S]+"video"\.equals\(mode\) \? 60000 : 60000,[\s\S]+"video"\.equals\(mode\) \? 700 : 700,[\s\S]+"video"\.equals\(mode\) \? 1800 : 1800\)/,
-    'native Live TV should keep a short startup/rebuffer target so Xtream channel zaps show quickly');
+  assert.match(android, /private boolean tryNativeLiveFallback\(\) \{[\s\S]+nativeFallbackIndex >= nativeFallbackUrls\.size\(\)[\s\S]+nativeUrl = nextUrl;[\s\S]+nativeMime = nextMime[\s\S]+nativePlayer\.setMediaItem\(buildNativeMediaItem\(\)\);[\s\S]+nativePlayer\.prepare\(\);[\s\S]+nativePlayer\.play\(\);/,
+    'native Live TV fallback should walk ordered ExoPlayer candidates instead of opening web playback');
+  assert.match(android, /NATIVE_LIVE_STALL_RECOVERY_MS = 45000L[\s\S]+NATIVE_LIVE_STARTUP_STALL_RECOVERY_MS = 12000L[\s\S]+NATIVE_LIVE_READ_TIMEOUT_MS = 60000/,
+    'native Live TV should recover faster before the first frame while allowing later provider hiccups');
+  assert.match(android, /private DefaultLoadControl nativeLoadControlForMode\(String mode\) \{[\s\S]+nativeConservativePlaybackDevice\(\)[\s\S]+setBufferDurationsMs\(minMs, maxMs, startMs, rebufferMs\)/,
+    'native ExoPlayer should use a conservative buffer profile on Onn-class devices without slowing Shield');
   assert.match(android, /setReadTimeoutMs\("live"\.equals\(nativeMode\) \? NATIVE_LIVE_READ_TIMEOUT_MS : 18000\)/,
     'native Live TV should use a longer provider read timeout than VOD startup');
-  assert.match(android, /private void updateNativeLiveWatchdog\(\) \{[\s\S]+boolean waitingForLiveData = state == Player\.STATE_BUFFERING[\s\S]+nativePlayer\.isLoading\(\)[\s\S]+boolean unhealthy = state == Player\.STATE_IDLE \|\| state == Player\.STATE_ENDED \|\| waitingForLiveData[\s\S]+now - nativeLiveUnhealthySinceMs >= NATIVE_LIVE_STALL_RECOVERY_MS[\s\S]+recoverNativeLivePlayback\(state == Player\.STATE_IDLE \? "idle"/,
+  assert.match(android, /private void updateNativeLiveWatchdog\(\) \{[\s\S]+boolean waitingForLiveData = state == Player\.STATE_BUFFERING[\s\S]+nativePlayer\.isLoading\(\)[\s\S]+boolean unhealthy = state == Player\.STATE_IDLE \|\| state == Player\.STATE_ENDED \|\| waitingForLiveData[\s\S]+long threshold = nativeLiveStarted \? NATIVE_LIVE_STALL_RECOVERY_MS : NATIVE_LIVE_STARTUP_STALL_RECOVERY_MS;[\s\S]+now - nativeLiveUnhealthySinceMs >= threshold[\s\S]+recoverNativeLivePlayback\(state == Player\.STATE_IDLE \? "idle"/,
     'native Live TV should recover only after sustained idle, ended, or real data-wait stalls');
   assert.match(android, /state == Player\.STATE_ENDED && "live"\.equals\(nativeMode\)[\s\S]+recoverNativeLivePlayback\("ended"\)/,
     'native Live TV should restart instead of staying frozen when a live stream ends quietly');

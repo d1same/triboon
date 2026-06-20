@@ -3846,6 +3846,7 @@ function qualityRankForItem(it) {
 }
 function sourceSearchQuery(it, opts = {}) {
   const params = new URLSearchParams({ q: queryFor(it) });
+  try { params.set('caps', JSON.stringify(clientCaps())); } catch {}
   const ids = sourceIdentityFor(it);
   if (ids.imdbid) params.set('imdbid', ids.imdbid);
   if (ids.tvdbid) params.set('tvdbid', ids.tvdbid);
@@ -8875,6 +8876,17 @@ function tryNativeLivePlayer(it, guide = false) {
     S.nativeGuideMode = !!guide;
     S.nativeLiveReturnView = (S.view === 'livetv' || document.querySelector('#chBody.liveGuideShell') || guide) ? 'livetv' : S.view;
     if (guide) openNativeLiveGuideShell(it);
+    const liveFallbacks = [];
+    const addLiveFallback = (url, mime) => {
+      if (!url) return;
+      const abs = new URL(url, location.origin).href;
+      if (abs === new URL(it._nativeUrl, location.origin).href || liveFallbacks.some((x) => x.url === abs)) return;
+      liveFallbacks.push({ url: abs, mime: mime || '' });
+    };
+    addLiveFallback(it._nativeFallbackUrl, it._nativeFallbackMime || '');
+    // Final Android-TV fallback: server-side fMP4 remux. It costs a tiny ffmpeg process, but
+    // saves Onn/Chromecast-class devices when raw provider TS/HLS stalls or the extractor chokes.
+    addLiveFallback(it._streamUrl, 'video/mp4');
     window.TriboonTV.playLive(JSON.stringify({
       title: it.title || 'Live TV',
       source: it.genre || it.group || '',
@@ -8882,6 +8894,7 @@ function tryNativeLivePlayer(it, guide = false) {
       mime: it._nativeMime || '',
       fallbackUrl: it._nativeFallbackUrl ? new URL(it._nativeFallbackUrl, location.origin).href : '',
       fallbackMime: it._nativeFallbackMime || '',
+      fallbacks: liveFallbacks,
       guide,
     }));
     if (!guide) setNativeLivePlaybackState(it);

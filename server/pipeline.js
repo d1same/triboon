@@ -258,6 +258,9 @@ class Pipeline {
       policy.maxSizeGb4k ?? null,
       policy.maxSizeGb1080 ?? null,
       policy.sizePreferenceGB ?? null,
+      policy.lowPowerDevice ? 1 : 0,
+      policy.dolbyVision === false ? 0 : (policy.dolbyVision === true ? 1 : null),
+      policy.deviceClass || null,
     ]);
     if (!hit.prefetchedKeys) hit.prefetchedKeys = new Set();
     if (!hit.prefetchedKeys.has(prefetchKey)) {

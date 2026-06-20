@@ -219,6 +219,19 @@ test('scoring: press-play size shaping — sane-size 4K beats a 60GB remux even 
   assert.ok(ranked[1].score > -5000, 'remux remains pickable');
 });
 
+test('scoring: Onn-class Android TV prefers lighter 4K WEB sources over huge remuxes', () => {
+  const ranked = rankReleases([
+    { name: 'Movie.2024.2160p.UHD.BluRay.REMUX.TrueHD.Atmos-FraMeSToR', sizeBytes: 62e9 },
+    { name: 'Movie.2024.2160p.WEB-DL.DDP5.1.HEVC-FLUX', sizeBytes: 16e9 },
+    { name: 'Movie.2024.2160p.WEBRip.HEVC-GRP', sizeBytes: 8e9 },
+  ], {
+    maxResolutionRank: 4, preferResolutionRank: 4, exactResolutionRank: 4,
+    lowPowerDevice: true, sizePreferenceGB: 10, dolbyVision: false,
+  });
+  assert.ok(ranked[0].name.includes('WEB-DL'), 'budget Android TV should avoid 4K remux as the default pick');
+  assert.ok(ranked.find((r) => r.name.includes('REMUX')), 'heavy remux remains available in ranked sources');
+});
+
 test('scoring: streamability and health verdicts shape the order (Triboon edge)', () => {
   const ranked = rankReleases([
     { name: 'Movie.2024.1080p.BluRay.x264-FGT', sizeBytes: 9e9, streamClass: 'compressed' },

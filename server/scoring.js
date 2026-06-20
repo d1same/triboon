@@ -179,6 +179,11 @@ function scoreRelease(candidate, policy = {}) {
   const cod = matchOne(candidate.name, CODEC); if (cod) add(`codec ${cod.key}`, cod.score);
   for (const f of FEATURE) if (f.re.test(candidate.name)) add(f.key, f.score);
   for (const b of BAD_FLAGS) if (b.re.test(candidate.name)) add(b.key, b.score);
+  if (policy.lowPowerDevice && a.resolutionRank >= 4 && a.resolution !== 'unknown') {
+    if (a.source === 'remux') add('device-heavy-remux', -180);
+    if (a.features.includes('truehd') || a.features.includes('dts-hd')) add('device-heavy-audio', -140);
+    if (a.features.includes('dovi') && policy.dolbyVision === false) add('unsupported-dolby-vision', -220);
+  }
   // Soundtracks / bonus discs / bare music rips are never what "press play on a movie" means.
   const ntm = notTheMovie(candidate.name);
   if (ntm) add(`not-the-movie:${ntm}`, -100000);
@@ -249,6 +254,10 @@ function scoreRelease(candidate, policy = {}) {
     const target = policy.sizePreferenceGB || (cap >= 4 ? 15 : cap >= 3 ? 8 : 3.5);
     const overshoot = Math.max(0, gb - target * 1.6);
     if (overshoot > 0) add(`oversized ${gb.toFixed(1)}GB`, -Math.min(400, Math.round(overshoot * 25)));
+    if (policy.lowPowerDevice && a.resolutionRank >= 4 && a.resolution !== 'unknown') {
+      const heavy4k = Math.max(0, gb - 18);
+      if (heavy4k > 0) add(`device-4k-size ${gb.toFixed(1)}GB`, -Math.min(700, Math.round(heavy4k * 35)));
+    }
     // Sample/stub disqualifier: a "2160p" post weighing 68MB IS the sample, not the show —
     // one auto-played as the real episode (-120 "suspiciously tiny" was nowhere near enough).
     // Floors: nothing real is <80MB; nothing claiming 1080p/2160p is <300MB.

@@ -13,6 +13,8 @@ package app.triboon.tv;
 import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.app.Activity;
+import android.app.ActivityManager;
+import android.content.Context;
 import android.content.res.ColorStateList;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
@@ -139,6 +141,9 @@ public class MainActivity extends Activity {
     private String nativeMime = "";
     private String nativeFallbackUrl = "";
     private String nativeFallbackMime = "";
+    private final java.util.ArrayList<String> nativeFallbackUrls = new java.util.ArrayList<>();
+    private final java.util.ArrayList<String> nativeFallbackMimes = new java.util.ArrayList<>();
+    private int nativeFallbackIndex = 0;
     private String nativePlaybackTitle = "Triboon";
     private String nativePlaybackSubline = "";
     private String nativePlaybackBackdropUrl = "";
@@ -162,6 +167,7 @@ public class MainActivity extends Activity {
     private int nativeSubtitleLoadToken;
     private float nativeSubtitleShift;
     private boolean nativeHasWyzieSubtitle;
+    private boolean nativeLiveStarted;
     private boolean nativeUserSeeking;
     private boolean nativeSeekDpadMode;
     private boolean nativeBackConsumedChromeDown;
@@ -181,6 +187,7 @@ public class MainActivity extends Activity {
     private long nativeLastVideoDisplayMs;
     private static final long NATIVE_VIDEO_STARTUP_STALL_MS = 7000L;
     private static final long NATIVE_LIVE_STALL_RECOVERY_MS = 45000L;
+    private static final long NATIVE_LIVE_STARTUP_STALL_RECOVERY_MS = 12000L;
     private static final long NATIVE_LIVE_RECOVERY_COOLDOWN_MS = 15000L;
     private static final int NATIVE_LIVE_READ_TIMEOUT_MS = 60000;
     private final Handler nativeProgress = new Handler(Looper.getMainLooper());
@@ -628,28 +635,70 @@ public class MainActivity extends Activity {
     private String buildNativePlaybackCaps() {
         try {
             org.json.JSONObject j = new org.json.JSONObject();
+            boolean conservative = nativeConservativePlaybackDevice();
             j.put("native", true);
             j.put("sdk", Build.VERSION.SDK_INT);
             j.put("manufacturer", Build.MANUFACTURER == null ? "" : Build.MANUFACTURER);
             j.put("brand", Build.BRAND == null ? "" : Build.BRAND);
             j.put("model", Build.MODEL == null ? "" : Build.MODEL);
             j.put("device", Build.DEVICE == null ? "" : Build.DEVICE);
+            j.put("ramMb", nativeTotalRamMb());
+            j.put("deviceClass", conservative ? "budget-android-tv" : "android-tv");
+            j.put("lowPower", conservative);
             j.put("mkv", true); // ExoPlayer's Matroska extractor owns container support.
             j.put("mp4", true);
             j.put("h264", nativeDecoderAvailable("video/avc"));
             j.put("hevc", nativeDecoderAvailable("video/hevc"));
+            j.put("dovi", nativeDecoderAvailable("video/dolby-vision"));
             j.put("av1", nativeDecoderAvailable("video/av01"));
             j.put("vp9", nativeDecoderAvailable("video/x-vnd.on2.vp9"));
             j.put("mpeg2", nativeDecoderAvailable("video/mpeg2"));
             j.put("aac", nativeDecoderAvailable("audio/mp4a-latm"));
             j.put("ac3", nativeDecoderAvailable("audio/ac3"));
             j.put("eac3", nativeDecoderAvailable("audio/eac3") || nativeDecoderAvailable("audio/eac3-joc"));
-            j.put("dts", nativeDecoderAvailable("audio/vnd.dts") || nativeDecoderAvailable("audio/vnd.dts.hd"));
+            // Budget TV boxes often expose DTS decoders that still fail in fMP4/remux paths or
+            // burn CPU. Force AAC audio remux there; Shield-class devices can still copy DTS.
+            j.put("dts", !conservative && (nativeDecoderAvailable("audio/vnd.dts") || nativeDecoderAvailable("audio/vnd.dts.hd")));
             j.put("source", "exo-mediacodec");
             return j.toString();
         } catch (Exception e) {
             return "{\"native\":true,\"mkv\":true,\"mp4\":true,\"source\":\"exo-mediacodec\"}";
         }
+    }
+
+    private int nativeTotalRamMb() {
+        try {
+            ActivityManager.MemoryInfo mi = new ActivityManager.MemoryInfo();
+            ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+            if (am == null) return 0;
+            am.getMemoryInfo(mi);
+            return (int) Math.max(0L, mi.totalMem / (1024L * 1024L));
+        } catch (Exception ignored) {
+            return 0;
+        }
+    }
+
+    private boolean nativeIsShieldDevice() {
+        String s = ((Build.MANUFACTURER == null ? "" : Build.MANUFACTURER) + " "
+                + (Build.BRAND == null ? "" : Build.BRAND) + " "
+                + (Build.MODEL == null ? "" : Build.MODEL) + " "
+                + (Build.DEVICE == null ? "" : Build.DEVICE)).toLowerCase(Locale.US);
+        return s.contains("nvidia") || s.contains("shield");
+    }
+
+    private boolean nativeIsOnnDevice() {
+        String s = ((Build.MANUFACTURER == null ? "" : Build.MANUFACTURER) + " "
+                + (Build.BRAND == null ? "" : Build.BRAND) + " "
+                + (Build.MODEL == null ? "" : Build.MODEL) + " "
+                + (Build.DEVICE == null ? "" : Build.DEVICE)).toLowerCase(Locale.US);
+        return s.contains("onn") || s.contains("walmart");
+    }
+
+    private boolean nativeConservativePlaybackDevice() {
+        if (nativeIsShieldDevice()) return false;
+        if (nativeIsOnnDevice()) return true;
+        int ram = nativeTotalRamMb();
+        return ram > 0 && ram <= 2600;
     }
 
     private boolean nativeDecoderAvailable(String mime) {
@@ -1290,12 +1339,25 @@ public class MainActivity extends Activity {
             nativeMime = mime;
             nativeFallbackUrl = fallbackUrl;
             nativeFallbackMime = fallbackMime;
+            nativeFallbackUrls.clear();
+            nativeFallbackMimes.clear();
+            nativeFallbackIndex = 0;
+            addNativeFallback(fallbackUrl, fallbackMime, nativeUrl);
+            org.json.JSONArray fallbacks = j.optJSONArray("fallbacks");
+            if (fallbacks != null) {
+                for (int i = 0; i < fallbacks.length(); i++) {
+                    org.json.JSONObject fb = fallbacks.optJSONObject(i);
+                    if (fb == null) continue;
+                    addNativeFallback(fb.optString("url", ""), fb.optString("mime", ""), nativeUrl);
+                }
+            }
             nativePlaybackTitle = title == null || title.isEmpty() ? "Triboon" : title;
             nativePlaybackSubline = episodeLabel == null ? "" : episodeLabel;
             nativePlaybackBackdropUrl = backdropUrl == null ? "" : backdropUrl;
             nativeTriedFallback = false;
             nativeLiveUnhealthySinceMs = 0L;
             nativeLiveLastRecoveryMs = 0L;
+            nativeLiveStarted = false;
             nativeVideoUnhealthySinceMs = 0L;
             nativeKnownDurationMs = knownDurationMs;
             nativePendingStartMs = "video".equals(mode) ? startMs : 0L;
@@ -1319,16 +1381,9 @@ public class MainActivity extends Activity {
                     .toString());
 
             if (!reuseQuietVideo && !reuseLivePlayer) {
-                DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
-                        .setBufferDurationsMs("video".equals(mode) ? 6000 : 4000,
-                                "video".equals(mode) ? 60000 : 60000,
-                                "video".equals(mode) ? 700 : 700,
-                                "video".equals(mode) ? 1800 : 1800)
-                        .setPrioritizeTimeOverSizeThresholds(true)
-                        .build();
                 nativePlayer = new ExoPlayer.Builder(this)
                         .setMediaSourceFactory(nativeMediaSourceFactory())
-                        .setLoadControl(loadControl)
+                        .setLoadControl(nativeLoadControlForMode(mode))
                         .build();
                 nativePlayer.addListener(new Player.Listener() {
                 @Override public void onPlayerError(PlaybackException error) {
@@ -1353,6 +1408,8 @@ public class MainActivity extends Activity {
                         if ("video".equals(nativeMode)) {
                             nativeVideoStarted = true;
                             rememberNativeVideoPosition();
+                        } else if ("live".equals(nativeMode)) {
+                            nativeLiveStarted = true;
                         }
                         applyNativeStartSeekIfReady();
                     }
@@ -1380,6 +1437,7 @@ public class MainActivity extends Activity {
                 @Override public void onIsPlayingChanged(boolean isPlaying) {
                     updateNativeChrome();
                     if ("live".equals(nativeMode) && isPlaying) nativeLiveUnhealthySinceMs = 0L;
+                    if ("live".equals(nativeMode) && isPlaying) nativeLiveStarted = true;
                     if ("video".equals(nativeMode) && isPlaying) {
                         nativeVideoStarted = true;
                         nativeVideoUnhealthySinceMs = 0L;
@@ -2131,6 +2189,29 @@ public class MainActivity extends Activity {
         return new DefaultMediaSourceFactory(http);
     }
 
+    private DefaultLoadControl nativeLoadControlForMode(String mode) {
+        boolean conservative = nativeConservativePlaybackDevice();
+        boolean video = "video".equals(mode);
+        int minMs = video ? (conservative ? 16000 : 6000) : (conservative ? 8000 : 4000);
+        int maxMs = video ? (conservative ? 120000 : 60000) : 60000;
+        int startMs = video ? (conservative ? 3000 : 700) : (conservative ? 1800 : 700);
+        int rebufferMs = video ? (conservative ? 6000 : 1800) : (conservative ? 3500 : 1800);
+        return new DefaultLoadControl.Builder()
+                .setBufferDurationsMs(minMs, maxMs, startMs, rebufferMs)
+                .setPrioritizeTimeOverSizeThresholds(true)
+                .build();
+    }
+
+    private void addNativeFallback(String url, String mime, String primaryUrl) {
+        String u = url == null ? "" : url.trim();
+        if (u.isEmpty() || u.equals(primaryUrl)) return;
+        for (String existing : nativeFallbackUrls) {
+            if (u.equals(existing)) return;
+        }
+        nativeFallbackUrls.add(u);
+        nativeFallbackMimes.add(mime == null ? "" : mime.trim());
+    }
+
     private String nativePlaybackErrorMessage(PlaybackException error) {
         if (error == null) return "playback failed";
         Throwable t = error;
@@ -2163,14 +2244,20 @@ public class MainActivity extends Activity {
     }
 
     private boolean tryNativeLiveFallback() {
-        if (!"live".equals(nativeMode) || nativePlayer == null || nativeTriedFallback
-                || nativeFallbackUrl == null || nativeFallbackUrl.isEmpty()) return false;
+        if (!"live".equals(nativeMode) || nativePlayer == null) return false;
+        if (nativeFallbackIndex >= nativeFallbackUrls.size()) return false;
+        String nextUrl = nativeFallbackUrls.get(nativeFallbackIndex);
+        String nextMime = nativeFallbackIndex < nativeFallbackMimes.size()
+                ? nativeFallbackMimes.get(nativeFallbackIndex) : "";
+        nativeFallbackIndex++;
         nativeTriedFallback = true;
-        nativeUrl = nativeFallbackUrl;
-        nativeMime = nativeFallbackMime == null ? "" : nativeFallbackMime;
+        nativeUrl = nextUrl;
+        nativeMime = nextMime == null ? "" : nextMime;
         nativeQualityLabel = "LIVE";
         nativeLiveUnhealthySinceMs = 0L;
+        nativeLiveStarted = false;
         nativeLiveLastRecoveryMs = SystemClock.elapsedRealtime();
+        Log.w(TAG, "Live playback switching to fallback " + nativeFallbackIndex + "/" + nativeFallbackUrls.size());
         nativePlayer.stop();
         nativePlayer.clearMediaItems();
         if (nativePlayerBadge != null) nativePlayerBadge.setText("LIVE");
@@ -3179,7 +3266,8 @@ public class MainActivity extends Activity {
             nativeLiveUnhealthySinceMs = now;
             return;
         }
-        if (now - nativeLiveUnhealthySinceMs >= NATIVE_LIVE_STALL_RECOVERY_MS) {
+        long threshold = nativeLiveStarted ? NATIVE_LIVE_STALL_RECOVERY_MS : NATIVE_LIVE_STARTUP_STALL_RECOVERY_MS;
+        if (now - nativeLiveUnhealthySinceMs >= threshold) {
             recoverNativeLivePlayback(state == Player.STATE_IDLE ? "idle" : (state == Player.STATE_BUFFERING ? "buffering" : "stalled"));
         }
     }
@@ -3250,12 +3338,16 @@ public class MainActivity extends Activity {
         nativeMime = "";
         nativeFallbackUrl = "";
         nativeFallbackMime = "";
+        nativeFallbackUrls.clear();
+        nativeFallbackMimes.clear();
+        nativeFallbackIndex = 0;
         nativePlaybackTitle = "Triboon";
         nativePlaybackSubline = "";
         nativePlaybackBackdropUrl = "";
         nativeTriedFallback = false;
         nativeLiveUnhealthySinceMs = 0L;
         nativeLiveLastRecoveryMs = 0L;
+        nativeLiveStarted = false;
         nativeVideoUnhealthySinceMs = 0L;
         nativeVideoStarted = false;
         nativeLastVideoDisplayMs = 0L;

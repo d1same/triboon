@@ -1105,13 +1105,31 @@ function streamScopeOk(ctx, resource) {
 // decodes the source natively gets TRUE direct play — no server remux/transcode at all.
 function parseCaps(raw) {
   const caps = {};
-  for (const k of ['mkv', 'mp4', 'h264', 'hevc', 'av1', 'vp9', 'mpeg2', 'aac', 'ac3', 'eac3', 'dts', 'native']) {
+  for (const k of ['mkv', 'mp4', 'h264', 'hevc', 'dovi', 'av1', 'vp9', 'mpeg2', 'aac', 'ac3', 'eac3', 'dts', 'native', 'lowPower']) {
     caps[k] = !!(raw && raw[k]);
   }
   if (raw && raw.source) caps.source = String(raw.source).slice(0, 64);
   if (raw && raw.model) caps.model = String(raw.model).slice(0, 64);
   if (raw && raw.manufacturer) caps.manufacturer = String(raw.manufacturer).slice(0, 64);
+  if (raw && raw.brand) caps.brand = String(raw.brand).slice(0, 64);
+  if (raw && raw.device) caps.device = String(raw.device).slice(0, 64);
+  if (raw && raw.deviceClass) caps.deviceClass = String(raw.deviceClass).slice(0, 64);
+  if (raw && Number.isFinite(Number(raw.ramMb))) caps.ramMb = Math.max(0, Math.min(262144, Math.round(Number(raw.ramMb))));
   return caps;
+}
+function parseCapsQuery(raw) {
+  if (!raw) return {};
+  try {
+    return JSON.parse(String(raw).slice(0, 4096));
+  } catch {
+    return {};
+  }
+}
+function budgetAndroidTvCaps(caps = {}) {
+  const text = [caps.manufacturer, caps.brand, caps.model, caps.device, caps.deviceClass].filter(Boolean).join(' ').toLowerCase();
+  return !!(caps.lowPower || /(^|\s)(onn|walmart)(\s|$|[._-])/i.test(text)
+    || /budget-android-tv/i.test(text)
+    || (caps.native && caps.ramMb > 0 && caps.ramMb <= 2600 && !/shield|nvidia/i.test(text)));
 }
 function parseResolutionRank(raw) {
   if (raw === undefined || raw === null || raw === '') return null;
@@ -1122,8 +1140,9 @@ function parseLanguageCode(raw) {
   const s = String(raw || '').trim().toLowerCase().replace(/[^a-z]/g, '').slice(0, 3);
   return /^[a-z]{2,3}$/.test(s) ? s : null;
 }
-function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage } = {}) {
+function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage, caps: rawCaps } = {}) {
   let policy = { ...user.policy, ...sizeCaps(), ...scoringPrefs() };
+  const caps = parseCaps(rawCaps || {});
   const maxRank = parseResolutionRank(maxResolutionRank);
   if (maxRank !== null) {
     policy = { ...policy, maxResolutionRank: Math.min(user.policy.maxResolutionRank ?? 4, maxRank) };
@@ -1137,6 +1156,18 @@ function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, orig
   const preferredAudio = parseLanguageCode(preferredAudioLanguage);
   if (original) policy.originalLanguage = original;
   if (preferredAudio) policy.preferredAudioLanguage = preferredAudio;
+  if (caps.native) {
+    policy.deviceCaps = caps;
+    policy.dolbyVision = !!caps.dovi;
+  }
+  if (budgetAndroidTvCaps(caps)) {
+    // Onn/low-memory TV boxes can decode 4K, but huge remux + HD audio is where playback
+    // becomes fragile. Prefer WEB-sized UHD sources; Sources still exposes larger files.
+    policy.lowPowerDevice = true;
+    policy.deviceClass = caps.deviceClass || 'budget-android-tv';
+    const target = (policy.preferResolutionRank ?? policy.maxResolutionRank ?? 4) >= 4 ? 10 : 6;
+    policy.sizePreferenceGB = policy.sizePreferenceGB ? Math.min(policy.sizePreferenceGB, target) : target;
+  }
   return policy;
 }
 function sourceDrawerCandidates(candidates) {
@@ -1529,6 +1560,7 @@ const H = {
         preferResolutionRank: ctx.url.searchParams.get('preferResolutionRank'),
         originalLanguage: ctx.url.searchParams.get('originalLanguage'),
         preferredAudioLanguage: ctx.url.searchParams.get('preferredAudioLanguage'),
+        caps: parseCapsQuery(ctx.url.searchParams.get('caps')),
       })
     );
     send(ctx.res, 200, {
