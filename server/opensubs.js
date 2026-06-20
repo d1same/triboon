@@ -74,8 +74,11 @@ function request(method, url, { key, bearer, body, timeoutMs = 10000, deadlineMs
     }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume(); clearTimeout(deadline);
-        return request(method, new URL(res.headers.location, url).href,
-          { key, timeoutMs, _deadlineAt: deadlineAt, _hops: _hops + 1 }).then(resolve, reject);
+        const next = new URL(res.headers.location, url);
+        const redirectKey = key && subtitleDownloadNeedsAuth(next.href, url) ? key : undefined;
+        if (redirectKey && !next.searchParams.has('key')) next.searchParams.set('key', redirectKey);
+        return request(method, next.href,
+          { key: redirectKey, bearer, timeoutMs, _deadlineAt: deadlineAt, _hops: _hops + 1 }).then(resolve, reject);
       }
       const chunks = [];
       res.on('data', (c) => { if (chunks.reduce((n, x) => n + x.length, 0) < 8e6) chunks.push(c); });

@@ -261,13 +261,21 @@ test('opensubs: SRT→VTT conversion + search-query parsing', () => {
 
 test('subs: Wyzie file download is authenticated without leaking keys to unrelated hosts', async () => {
   const { downloadSubtitle, _subtitleDownloadUrl } = require('../server/opensubs');
-  let seen;
+  const seen = [];
   const srv = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://127.0.0.1');
-    seen = { headerKey: req.headers['api-key'], queryKey: u.searchParams.get('key') };
-    if (seen.headerKey !== 'test-key' && seen.queryKey !== 'test-key') {
+    seen.push({ path: u.pathname, headerKey: req.headers['api-key'], queryKey: u.searchParams.get('key') });
+    if (u.pathname === '/c/mock/id/1') {
+      if (u.searchParams.get('key') !== 'test-key') {
+        res.writeHead(401);
+        return res.end('missing key on Wyzie file route');
+      }
+      res.writeHead(302, { location: '/file.srt?format=srt' });
+      return res.end();
+    }
+    if (u.pathname !== '/file.srt' || u.searchParams.get('key') !== 'test-key') {
       res.writeHead(401);
-      return res.end('missing key');
+      return res.end('missing query key');
     }
     res.writeHead(200);
     return res.end('1\r\n00:00:01,000 --> 00:00:02,500\r\nAuthenticated\r\n');
@@ -275,11 +283,11 @@ test('subs: Wyzie file download is authenticated without leaking keys to unrelat
   await new Promise((r) => srv.listen(0, '127.0.0.1', r));
   try {
     const base = `http://127.0.0.1:${srv.address().port}`;
-    const vtt = await downloadSubtitle({ url: `${base}/file.srt`, format: 'srt' }, { key: 'test-key', base });
+    const vtt = await downloadSubtitle({ url: `${base}/c/mock/id/1?format=srt`, format: 'srt' }, { key: 'test-key', base });
     assert.ok(vtt.startsWith('WEBVTT'), 'downloaded subtitle converts to WebVTT');
     assert.match(vtt, /Authenticated/);
-    assert.ok(seen.headerKey === 'test-key' || seen.queryKey === 'test-key',
-      'subtitle file request carries the Wyzie key');
+    assert.ok(seen.some((h) => h.path === '/file.srt' && h.queryKey === 'test-key'),
+      'subtitle file redirects keep the Wyzie query key on the next same-host request');
     assert.strictEqual(_subtitleDownloadUrl('http://cdn.example/sub.srt', { key: 'secret', base }),
       'http://cdn.example/sub.srt', 'keys are not appended to unrelated subtitle hosts');
   } finally {
