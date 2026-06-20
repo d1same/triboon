@@ -6,7 +6,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const http = require('http');
-const { httpJson, bootServer, setupAdmin } = require('./helpers');
+const { EventEmitter } = require('events');
+const { PassThrough } = require('stream');
+const { httpJson, httpRaw, bootServer, setupAdmin } = require('./helpers');
 
 test('iptv: daily guide warm targets the next local midnight', async () => {
   const srv = await bootServer({ NNTP_HOST: null, TMDB_BASE: null });
@@ -331,6 +333,68 @@ test('iptv: Xtream channels serve persisted cache immediately after restart and 
   } finally {
     if (first) await first.shutdown();
     if (second) await second.shutdown();
+    upstream.close();
+  }
+});
+
+test('iptv: Xtream browser remux fallback ingests TS before HLS', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-remux-ts-first-'));
+  const upstream = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    const action = u.searchParams.get('action');
+    res.writeHead(200, { 'content-type': 'application/json' });
+    if (action === 'get_live_categories') return res.end(JSON.stringify([{ category_id: '1', category_name: 'News' }]));
+    if (action === 'get_live_streams') {
+      return res.end(JSON.stringify([{ stream_id: 777, name: 'TS First News', category_id: '1' }]));
+    }
+    res.end(JSON.stringify({ epg_listings: [] }));
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const host = `http://127.0.0.1:${upstream.address().port}`;
+  const transcode = require('../server/transcode');
+  const originalDetect = transcode.detectFfmpeg;
+  const originalSpawn = transcode.spawnLiveRemux;
+  const calls = [];
+  transcode.detectFfmpeg = () => ({ path: 'ffmpeg' });
+  transcode.spawnLiveRemux = (url, opts = {}) => {
+    calls.push({ url, hlsFriendly: !!opts.hlsFriendly });
+    const child = new EventEmitter();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    const closeOnce = () => {
+      if (child.closed) return;
+      child.closed = true;
+      child.emit('close', 0);
+    };
+    child.kill = () => {
+      closeOnce();
+    };
+    process.nextTick(() => {
+      child.stdout.write(Buffer.from('fmp4'));
+      child.stdout.end();
+      closeOnce();
+    });
+    return child;
+  };
+
+  let srv;
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/settings',
+      { iptvMode: 'xtream', xtHost: host, xtUser: 'xtuser', xtPass: 'xtpass', epgUrl: null }, admin);
+    const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    const out = await httpRaw(srv.port, ch.json.channels[0].streamUrl);
+    assert.strictEqual(out.status, 200);
+    assert.strictEqual(out.headers['content-type'], 'video/mp4');
+    assert.strictEqual(out.body.toString('utf8'), 'fmp4');
+    assert.strictEqual(calls.length, 1, 'successful TS remux should not try the HLS URL');
+    assert.match(calls[0].url, /\/live\/xtuser\/xtpass\/777\.ts$/);
+    assert.strictEqual(calls[0].hlsFriendly, false, 'raw TS remux should not use HLS-only ffmpeg flags');
+  } finally {
+    if (srv) await srv.shutdown();
+    transcode.detectFfmpeg = originalDetect;
+    transcode.spawnLiveRemux = originalSpawn;
     upstream.close();
   }
 });

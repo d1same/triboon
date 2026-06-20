@@ -1018,6 +1018,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'web Live TV channel changes should close the previous MSE fetch/player connection before opening the new channel');
   assert.match(server, /let clientClosed = false;[\s\S]+const stopForClientClose = \(\) => \{[\s\S]+clientClosed = true;[\s\S]+ff\.kill\('SIGKILL'\);[\s\S]+ctx\.req\.off\('close', stopForClientClose\);[\s\S]+ctx\.res\.off\('close', stopForClientClose\);[\s\S]+if \(clientClosed\) return;[\s\S]+ctx\.req\.once\('close', stopForClientClose\);[\s\S]+ctx\.res\.once\('close', stopForClientClose\);/,
     'server Live TV remux should kill ffmpeg exactly once when the browser closes the stream');
+  assert.ok(server.includes('function iptvRemuxTargets(ch = {})')
+    && server.includes("if (ch.nativeUrl && iptvNativeMime(ch.nativeUrl) === 'video/mp2t') add(ch.nativeUrl, 'ts');")
+    && server.includes('try { ff = spawnLiveRemux(target.url, { hlsFriendly }); }'),
+    'server Live TV remux fallback should try Xtream TS before HLS so Android fallback follows the Shield-proven path');
   assert.match(ui, /addLiveFallback\(it\._nativeFallbackUrl, it\._nativeFallbackMime \|\| ''\);[\s\S]+addLiveFallback\(it\._streamUrl, 'video\/mp4'\);[\s\S]+fallbacks: liveFallbacks,/,
     'Android Live TV should try provider candidates first, then fall back to the server remux path on weaker devices');
   assert.match(ui, /_nativeFallbackUrl: ch\.nativeFallbackUrl[\s\S]+_nativeFallbackMime: ch\.nativeFallbackMime \|\| ''/,

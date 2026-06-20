@@ -307,6 +307,26 @@ function iptvRemuxStatusFromFfmpeg(err) {
   const m = /Server returned\s+(\d{3})/i.exec(text) || /HTTP error\s+(\d{3})/i.exec(text);
   return m ? parseInt(m[1], 10) : 0;
 }
+function iptvRemuxTargets(ch = {}) {
+  const out = [];
+  const seen = new Set();
+  const add = (url, label = '') => {
+    const u = String(url || '').trim();
+    if (!u || seen.has(u)) return;
+    seen.add(u);
+    out.push({ url: u, label });
+  };
+  // Xtream panels can reject HLS event URLs even when TS works. The Shield/native path proves
+  // TS is the provider-compatible stream, so server remux should try that first too.
+  if (ch.nativeUrl && iptvNativeMime(ch.nativeUrl) === 'video/mp2t') add(ch.nativeUrl, 'ts');
+  add(ch.url, iptvNativeMime(ch.url) === 'application/x-mpegURL' ? 'hls' : 'primary');
+  add(ch.nativeFallbackUrl, 'fallback');
+  add(ch.nativeUrl, 'native');
+  return out;
+}
+function iptvRemuxTargetLikelyHls(target = {}) {
+  return target.label === 'hls' || target.label === 'fallback' || /\.m3u8(?:[?#]|$)/i.test(target.url || '');
+}
 function sanitizeIptvFfmpegError(err) {
   return String(err || '')
     .replace(/https?:\/\/[^\s"'<>]+/gi, (raw) => {
@@ -1781,18 +1801,29 @@ const H = {
     const ch = iptvCache.channels && iptvCache.channels[parseInt(ctx.m[1], 10)];
     if (!ch) return send(ctx.res, 404, { error: 'channel not found — open Live TV first' });
     if (!detectFfmpeg()) return send(ctx.res, 503, { error: 'ffmpeg required for Live TV' });
-    const failureKey = idHash(`remux:${ch.idx}:${ch.url}`);
-    const cachedFailure = iptvNativeErrorCache.get(failureKey);
-    if (cachedFailure && cachedFailure.until > Date.now()) {
+    const remuxTargets = iptvRemuxTargets(ch);
+    if (!remuxTargets.length) return send(ctx.res, 502, { error: 'invalid live stream url' });
+    const availableTargets = [];
+    let cachedFailure = null;
+    for (const target of remuxTargets) {
+      const cached = iptvNativeErrorCache.get(idHash(`remux:${ch.idx}:${target.url}`));
+      if (cached && cached.until > Date.now()) {
+        if (!cachedFailure) cachedFailure = cached;
+      } else {
+        availableTargets.push(target);
+      }
+    }
+    if (!availableTargets.length && cachedFailure) {
       return sendIptvNativeError(ctx.res, cachedFailure.status, cachedFailure.reason);
     }
     const liveSlot = beginIptvLiveSlot(ctx, { idx: ch.idx, name: ch.name });
     // Attempt 1 uses HLS-friendly demuxer options; if ffmpeg dies before emitting a single
     // byte (non-HLS channel, or an older ffmpeg without those options) retry once plain.
-    const attempt = (hlsFriendly, retriesLeft) => {
+    let targetIndex = 0;
+    const attempt = (target, hlsFriendly, retriesLeft) => {
       if (liveSlot.closed) return;
       let ff;
-      try { ff = spawnLiveRemux(ch.url, { hlsFriendly }); }
+      try { ff = spawnLiveRemux(target.url, { hlsFriendly }); }
       catch (e) {
         liveSlot.done('spawn failed');
         console.error('[iptv]', sanitizeIptvFfmpegError(e.message));
@@ -1859,10 +1890,19 @@ const H = {
         err = sanitizeIptvFfmpegError(err);
         if (codeNum && !wrote && retriesLeft > 0 && !providerRejected && !ctx.res.destroyed) {
           console.error(`[iptv] "${ch.name}" attempt failed (${err.slice(0, 120).trim()}) — retrying plain`);
-          return attempt(false, retriesLeft - 1);
+          return attempt(target, false, retriesLeft - 1);
+        }
+        if (codeNum && !wrote && targetIndex + 1 < availableTargets.length && !ctx.res.destroyed) {
+          const failedLabel = target.label || 'stream';
+          targetIndex++;
+          const next = availableTargets[targetIndex];
+          const nextHls = iptvRemuxTargetLikelyHls(next);
+          console.error(`[iptv] "${ch.name}" ${failedLabel} remux failed (${err.slice(0, 120).trim()}) - trying ${next.label || 'alternate'} source`);
+          return attempt(next, nextHls, nextHls ? 1 : 0);
         }
         if (codeNum && !wrote) {
           liveSlot.done('failed');
+          const failureKey = idHash(`remux:${ch.idx}:${target.url}`);
           iptvNativeErrorCache.set(failureKey, {
             status: status || 502,
             reason,
@@ -1880,12 +1920,13 @@ const H = {
       ctx.req.once('close', stopForClientClose);
       ctx.res.once('close', stopForClientClose);
     };
-    const likelyHls = /\.m3u8(?:[?#]|$)/i.test(ch.url);
     let startDelayTimer = null;
     const startAttempt = () => {
       if (startDelayTimer) startDelayTimer = null;
       if (liveSlot.closed || ctx.res.destroyed) return;
-      attempt(likelyHls, likelyHls ? 1 : 0);
+      const first = availableTargets[targetIndex] || remuxTargets[0];
+      const likelyHls = iptvRemuxTargetLikelyHls(first);
+      attempt(first, likelyHls, likelyHls ? 1 : 0);
     };
     liveSlot.setCloser((reason) => {
       if (startDelayTimer) clearTimeout(startDelayTimer);
