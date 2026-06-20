@@ -2808,6 +2808,7 @@ function mapTmdb(x) {
     title: x.title || x.name, year: (x.release_date || x.first_air_date || '').slice(0, 4),
     genre: type === 'tv' ? 'Series' : 'Movie',
     rating: x.vote_average ? x.vote_average.toFixed(1) : '—',
+    originalLanguage: x.original_language || x.originalLanguage || '',
     overview: x.overview || '',
     backdrop: img(x.backdrop_path) || procBackdrop(260, 30, x.id),
     poster: img(x.poster_path, 'w342') || img(x.backdrop_path, 'w342') || procBackdrop(260, 30, x.id),
@@ -3850,6 +3851,9 @@ function sourceSearchQuery(it, opts = {}) {
   if (ids.tvdbid) params.set('tvdbid', ids.tvdbid);
   if (ids.season != null) params.set('season', String(ids.season));
   if (ids.ep != null) params.set('ep', String(ids.ep));
+  if (it.originalLanguage) params.set('originalLanguage', String(it.originalLanguage));
+  const preferredAudio = prefLang('alang');
+  if (preferredAudio) params.set('preferredAudioLanguage', preferredAudio);
   const qRank = opts.includeQuality === false ? null : qualityRankForItem(it);
   if (qRank) {
     params.set('maxResolutionRank', String(qRank));
@@ -3929,6 +3933,9 @@ async function play(it, pick) {
     if (ids.tvdbid) body.tvdbid = ids.tvdbid;
     if (ids.season != null) body.season = ids.season;
     if (ids.ep != null) body.ep = ids.ep;
+    if (it.originalLanguage) body.originalLanguage = String(it.originalLanguage);
+    const preferredAudio = prefLang('alang');
+    if (preferredAudio) body.preferredAudioLanguage = preferredAudio;
     if (qRank !== null) {
       body.maxResolutionRank = qRank;     // HD/UHD toggle is a source-selection request, not a transcode request.
       body.preferResolutionRank = qRank;  // 1080p prefers 1080p; 4K prefers 2160p, still within the user's cap.
@@ -4117,7 +4124,7 @@ function epItemOf(show, season, ep) {
     year: show.year, genre: `S${pad2(season.season_number)}E${pad2(ep.episode_number)}`, rating: ep.vote_average ? ep.vote_average.toFixed(1) : show.rating,
     overview: ep.overview || show.overview,
     backdrop: img(ep.still_path) || show.backdrop,
-    tmdbId: show.tmdbId, imdbId: show.imdbId, tvdbId: show.tvdbId, type: 'episode',
+    tmdbId: show.tmdbId, imdbId: show.imdbId, tvdbId: show.tvdbId, originalLanguage: show.originalLanguage, type: 'episode',
     resume: (S.watchMap && S.watchMap[epKeyOf(show, season.season_number, ep.episode_number)] &&
              !S.watchMap[epKeyOf(show, season.season_number, ep.episode_number)].watched)
       ? S.watchMap[epKeyOf(show, season.season_number, ep.episode_number)].position : 0,
@@ -4140,7 +4147,7 @@ function epTarget(show, sNum, eNum, resume) {
   const item = {
     key: epKeyOf(show, sNum, eNum), q: `${show.title} S${pad2(sNum)}E${pad2(eNum)}`,
     title: `${show.title} — S${pad2(sNum)}E${pad2(eNum)}`, type: 'episode',
-    tmdbId: show.tmdbId, imdbId: show.imdbId, tvdbId: show.tvdbId,
+    tmdbId: show.tmdbId, imdbId: show.imdbId, tvdbId: show.tvdbId, originalLanguage: show.originalLanguage,
     year: show.year, genre: `S${pad2(sNum)}E${pad2(eNum)}`, rating: show.rating, overview: show.overview,
     backdrop: show.backdrop, poster: show.poster, resume: resume || 0,
   };
@@ -4151,7 +4158,7 @@ function wlMeta(it) {
   return { title: it.title, year: it.year, genre: it.genre, rating: it.rating, type: it.type,
     tmdbId: it.tmdbId, imdbId: it.imdbId, tvdbId: it.tvdbId,
     poster: it.poster, backdrop: it.backdrop, overview: it.overview, q: it.q, cert: it.cert,
-    qualityRank: qualityRankForItem(it) };
+    originalLanguage: it.originalLanguage, qualityRank: qualityRankForItem(it) };
 }
 // Restricted profiles: the watchlist/calendar are ACCOUNT-level lists (a parent's adds), not
 // query-filtered like catalog rows — verify each title's real certification (the same bar as
@@ -6195,7 +6202,7 @@ async function saveWatch(final) {
     watched: d ? pos / d > 0.92 : false, profile: S.profile ? S.profile.id : undefined,
     meta: { title: p.item.title, year: p.item.year, genre: p.item.genre, rating: p.item.rating,
             overview: p.item.overview, poster: p.item.poster, backdrop: p.item.backdrop,
-            tmdbId: p.item.tmdbId, type: p.item.type, q: p.item.q,
+            tmdbId: p.item.tmdbId, type: p.item.type, q: p.item.q, originalLanguage: p.item.originalLanguage,
             qualityRank: qualityRankForItem(p.item) }, // episodes resume + reopen
   };
   upsertWatchCache({
@@ -9367,6 +9374,10 @@ async function togglePlayerGuide() {
   if (pg.classList.contains('open')) return closePlayerGuide();
   const list = await ensurePlayerGuideChannels();
   if (!list.length) return toast(S.serverInfo && S.serverInfo.iptv ? 'No Live TV channels available' : 'Live TV is not set up');
+  if (S.playing && S.playing.usingNative && window.TriboonTV && typeof window.TriboonTV.openGuide === 'function'
+      && !S.nativeGuideMode) {
+    try { window.TriboonTV.openGuide(); return; } catch {}
+  }
   return renderPlayerGuideTimeline(pg, list);
 }
 $('chGuide').addEventListener('click', togglePlayerGuide);
@@ -12477,6 +12488,10 @@ window.__tvBack = () => {
   if (S.screensaverOn) {
     hideScreensaver(true);
     resetScreensaverIdle();
+    return 'ok';
+  }
+  if ($('pGuide') && $('pGuide').classList.contains('open')) {
+    closePlayerGuide();
     return 'ok';
   }
   if (hidePlayerOsdForBack()) return 'ok';

@@ -426,8 +426,11 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
         if (r.headers[h]) out[h] = r.headers[h];
       }
       ctx.res.writeHead(r.statusCode || 502, out);
-      r.on('end', () => stop('upstream ended'));
-      r.pipe(ctx.res);
+      r.on('end', () => {
+        if (!ctx.res.destroyed && !ctx.res.writableEnded) ctx.res.end();
+        stop('upstream ended');
+      });
+      r.pipe(ctx.res, { end: false });
     });
     slot.setCloser((reason) => {
       stop(reason, new Error(`live stream ${reason}`));
@@ -903,7 +906,7 @@ async function fetchXtreamEpgList(s, ch, limit) {
     return short;
   }
 }
-async function xtreamEpgList(ch, { limit = 24 } = {}) {
+async function xtreamEpgList(ch, { limit = 24, allowBusy = false } = {}) {
   const s = settings.get();
   if (s.iptvMode !== 'xtream' || !ch.xtreamId) return [];
   const key = iptvSourceKey(s);
@@ -911,7 +914,7 @@ async function xtreamEpgList(ch, { limit = 24 } = {}) {
   const id = String(ch.xtreamId);
   const hit = xtreamEpgCache.byStream.get(id);
   if (hit && Date.now() - hit.at < (hit.list && hit.list.length ? EPG_CACHE_TTL_MS : EPG_EMPTY_TTL_MS)) return hit.list;
-  if (iptvPlaybackBusy()) return hit && hit.list ? hit.list : [];
+  if (iptvPlaybackBusy() && !allowBusy) return hit && hit.list ? hit.list : [];
   if (hit && hit.list && hit.list.length && Date.now() - hit.at <= EPG_CACHE_STALE_MS) {
     if (!hit.promise) {
       const p = fetchXtreamEpgList(s, ch, limit).then((list) => {
@@ -951,7 +954,7 @@ async function xtreamEpgList(ch, { limit = 24 } = {}) {
 async function epgNowNext(ch) {
   const s = settings.get();
   if (s.iptvMode === 'xtream' && ch.xtreamId) {
-    const list = await xtreamEpgList(ch, { limit: 24 });
+    const list = await xtreamEpgList(ch, { limit: 24, allowBusy: true });
     const now = Date.now();
     const i = list.findIndex((p) => p.start <= now && p.stop > now);
     if (i !== -1) return { now: list[i], next: list[i + 1] || null };
@@ -1115,7 +1118,11 @@ function parseResolutionRank(raw) {
   const n = Number(raw);
   return Number.isInteger(n) && n >= 0 && n <= 4 ? n : null;
 }
-function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank } = {}) {
+function parseLanguageCode(raw) {
+  const s = String(raw || '').trim().toLowerCase().replace(/[^a-z]/g, '').slice(0, 3);
+  return /^[a-z]{2,3}$/.test(s) ? s : null;
+}
+function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage } = {}) {
   let policy = { ...user.policy, ...sizeCaps(), ...scoringPrefs() };
   const maxRank = parseResolutionRank(maxResolutionRank);
   if (maxRank !== null) {
@@ -1126,6 +1133,10 @@ function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank } = {
     policy = { ...policy, preferResolutionRank: preferRank };
     if (preferRank === 4) policy.exactResolutionRank = 4;
   }
+  const original = parseLanguageCode(originalLanguage);
+  const preferredAudio = parseLanguageCode(preferredAudioLanguage);
+  if (original) policy.originalLanguage = original;
+  if (preferredAudio) policy.preferredAudioLanguage = preferredAudio;
   return policy;
 }
 function sourceDrawerCandidates(candidates) {
@@ -1516,6 +1527,8 @@ const H = {
       playbackPolicyFor(ctx.user, {
         maxResolutionRank: ctx.url.searchParams.get('maxResolutionRank'),
         preferResolutionRank: ctx.url.searchParams.get('preferResolutionRank'),
+        originalLanguage: ctx.url.searchParams.get('originalLanguage'),
+        preferredAudioLanguage: ctx.url.searchParams.get('preferredAudioLanguage'),
       })
     );
     send(ctx.res, 200, {
@@ -1697,7 +1710,7 @@ const H = {
     const channels = await mapLimit(chans, 8, async (ch) => {
       let progs = [];
       if (s.iptvMode === 'xtream' && ch.xtreamId) {
-        progs = (await xtreamEpgList(ch, { limit: 24 })).filter((p) => p.stop > from && p.start < to);
+        progs = (await xtreamEpgList(ch, { limit: 24, allowBusy: true })).filter((p) => p.stop > from && p.start < to);
       }
       if (!progs.length && epg && xmltvListFor(epg, ch).length) {
         progs = xmltvListFor(epg, ch).filter((p) => p.stop > from && p.start < to);

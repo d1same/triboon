@@ -791,6 +791,7 @@ test('iptv: Xtream API channels + short-EPG now/next + per-user favorites; creds
   await httpJson(srv.port, 'POST', '/api/settings',
     { iptvMode: 'xtream', xtHost: host, xtUser: 'xtuser', xtPass: 'xtpass' }, admin);
 
+  try {
   const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
   assert.strictEqual(ch.json.configured, true);
   assert.strictEqual(ch.json.epg, true, 'xtream advertises a guide');
@@ -804,19 +805,8 @@ test('iptv: Xtream API channels + short-EPG now/next + per-user favorites; creds
   assert.strictEqual(news.nativeMime, 'video/mp2t', 'Xtream native playback should prefer the TS endpoint for fast channel starts');
   assert.ok(/^\/api\/iptv\/native\/\d+\?alt=1&t=/.test(news.nativeFallbackUrl));
   assert.strictEqual(news.nativeFallbackMime, 'application/x-mpegURL', 'Xtream native playback should retain HLS as a fallback');
-  const native = await httpRaw(srv.port, news.nativeUrl);
-  assert.strictEqual(native.status, 200);
-  assert.strictEqual(native.headers.location, undefined, 'native proxy must not expose Xtream credentials in a redirect');
-  assert.strictEqual(native.body.toString('utf8'), 'XTREAM-TS');
-  assert.deepStrictEqual(liveHits.at(-1).path, '/live/xtuser/xtpass/101.ts');
-  assert.ok(liveHits.at(-1).ua.includes('TriboonTV/'), 'native Xtream proxy should use the server-side smart-TV user agent');
-  const fallback = await httpRaw(srv.port, news.nativeFallbackUrl);
-  assert.strictEqual(fallback.status, 200);
-  assert.strictEqual(fallback.headers.location, undefined, 'native fallback proxy must not expose Xtream credentials in a redirect');
-  assert.strictEqual(fallback.body.toString('utf8'), '#EXTM3U\n');
-  assert.deepStrictEqual(liveHits.at(-1).path, '/live/xtuser/xtpass/101.m3u8');
 
-  // EPG now/next decodes the Xtream base64 listings.
+  // EPG now/next decodes the Xtream base64 listings before playback marks the provider busy.
   const epg = await httpJson(srv.port, 'GET', `/api/iptv/epg/${news.idx}`, null, admin);
   assert.strictEqual(epg.json.now.title, 'Evening Bulletin');
   assert.strictEqual(epg.json.next.title, 'Late Show');
@@ -831,6 +821,18 @@ test('iptv: Xtream API channels + short-EPG now/next + per-user favorites; creds
   assert.strictEqual(guideFallback.json.channels[0].programmes[0].title, 'Cinema');
   assert.strictEqual(guideFallback.json.channels[0].programmes[0].synthetic, true, 'channels with no provider EPG still show a channel listing');
 
+  const native = await httpRaw(srv.port, news.nativeUrl);
+  assert.strictEqual(native.status, 200);
+  assert.strictEqual(native.headers.location, undefined, 'native proxy must not expose Xtream credentials in a redirect');
+  assert.strictEqual(native.body.toString('utf8'), 'XTREAM-TS');
+  assert.deepStrictEqual(liveHits.at(-1).path, '/live/xtuser/xtpass/101.ts');
+  assert.ok(liveHits.at(-1).ua.includes('TriboonTV/'), 'native Xtream proxy should use the server-side smart-TV user agent');
+  const fallback = await httpRaw(srv.port, news.nativeFallbackUrl);
+  assert.strictEqual(fallback.status, 200);
+  assert.strictEqual(fallback.headers.location, undefined, 'native fallback proxy must not expose Xtream credentials in a redirect');
+  assert.strictEqual(fallback.body.toString('utf8'), '#EXTM3U\n');
+  assert.deepStrictEqual(liveHits.at(-1).path, '/live/xtuser/xtpass/101.m3u8');
+
   // Favorites: toggle on → reflected per user; off again.
   const on = await httpJson(srv.port, 'POST', '/api/iptv/fav', { id: news.id }, admin);
   assert.strictEqual(on.json.on, true);
@@ -843,8 +845,10 @@ test('iptv: Xtream API channels + short-EPG now/next + per-user favorites; creds
   assert.ok(!JSON.stringify(s.json).includes('xtpass'), 'xtream password never round-trips');
   assert.strictEqual(s.json.iptvMode, 'xtream');
 
-  await httpJson(srv.port, 'POST', '/api/settings', { iptvMode: 'm3u', xtHost: null, xtUser: null, xtPass: null }, admin);
-  xt.close();
+  } finally {
+    await httpJson(srv.port, 'POST', '/api/settings', { iptvMode: 'm3u', xtHost: null, xtUser: null, xtPass: null }, admin);
+    xt.close();
+  }
 });
 
 let sharedUser = null; // second account used by the access-control tests below
@@ -1223,7 +1227,8 @@ test('subtitles: Wyzie search→file→VTT served per mount (and 503 without a k
   });
   await new Promise((r) => osMock.listen(0, '127.0.0.1', () => { osPort = osMock.address().port; r(); }));
 
-  if (ixServer) ixServer.close();
+  try {
+  if (ixServer && ixServer.listening) await new Promise((r) => ixServer.close(() => r()));
   const ixPort = await startIndexer();
   await httpJson(srv.port, 'POST', '/api/settings', {
     indexers: [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }], openSubsKey: null,
@@ -1243,7 +1248,7 @@ test('subtitles: Wyzie search→file→VTT served per mount (and 503 without a k
   // No TMDB id (non-catalog play) → clear 502, not a hang.
   const noId = await httpRaw(srv.port, `/api/ossubs/${play.id}?lang=en&t=${play.streamToken}`);
   assert.strictEqual(noId.status, 502, 'no TMDB id fails with guidance');
-  assert.match(noId.body.toString(), /TMDB id/);
+  assert.match(noId.body.toString(), /TMDB or IMDb id/);
   const sub = await httpRaw(srv.port, `/api/ossubs/${play.id}?lang=en&tmdb=4242&t=${play.streamToken}`);
   assert.strictEqual(sub.status, 200, sub.body.toString());
   assert.strictEqual(searchCalls, 2, 'first transient Wyzie 502 was retried once and recovered');
@@ -1288,9 +1293,11 @@ test('subtitles: Wyzie search→file→VTT served per mount (and 503 without a k
   assert.strictEqual(missing.json.code, 'no_subtitles',
     'Wyzie no-results should be a clean title-level miss, not a generic server failure');
 
-  delete process.env.WYZIE_BASE;
-  await httpJson(srv.port, 'POST', '/api/settings', { openSubsKey: null }, admin);
-  await new Promise((r) => osMock.close(r));
+  } finally {
+    delete process.env.WYZIE_BASE;
+    await httpJson(srv.port, 'POST', '/api/settings', { openSubsKey: null }, admin).catch(() => {});
+    await new Promise((r) => osMock.close(r));
+  }
 });
 
 test('settings: custom scoring — trusted-group override flips the auto-pick via the real API', async () => {

@@ -109,10 +109,34 @@ function parseRelease(name) {
   };
 }
 
-// Explicit foreign-language tags in scene names. English-tagged or untagged releases are
-// assumed original-language; MULTi/DL/dual carry the original track alongside the dub.
+// Explicit language tags in scene names. English-tagged or untagged releases are assumed
+// original-language for English/unknown titles; for foreign-original titles, tags matching
+// that original language are not punished. MULTi/DL/dual carry an extra audio track.
+const LANGUAGE_ALIASES = new Map([
+  ['eng', 'en'], ['english', 'en'],
+  ['ger', 'de'], ['german', 'de'], ['deu', 'de'],
+  ['fre', 'fr'], ['fra', 'fr'], ['french', 'fr'], ['truefrench', 'fr'], ['vostfr', 'fr'],
+  ['italian', 'it'], ['ita', 'it'],
+  ['spanish', 'es'], ['castellano', 'es'], ['latino', 'es'],
+  ['hindi', 'hi'], ['tamil', 'ta'], ['telugu', 'te'],
+  ['polish', 'pl'], ['turkish', 'tr'],
+  ['swedish', 'sv'], ['norwegian', 'no'], ['danish', 'da'], ['finnish', 'fi'], ['nordic', 'nordic'],
+  ['dutch', 'nl'], ['flemish', 'nl'],
+  ['russian', 'ru'], ['rus', 'ru'],
+  ['czech', 'cs'], ['hungarian', 'hu'],
+  ['korean', 'ko'], ['japanese', 'ja'],
+]);
 const LANG_TAG = /\b(german|french|italian|ita|spanish|castellano|latino|hindi|tamil|telugu|polish|turkish|nordic|swedish|norwegian|danish|finnish|dutch|flemish|russian|rus|czech|hungarian|korean|japanese|vostfr|truefrench)\b/i;
 const DUAL_TAG = /\b(dl|dual|multi|2audio|\d?audios|ita[ ._-]?eng|eng[ ._-]?ita)\b/i;
+function normalizeLanguageCode(raw) {
+  const s = String(raw || '').trim().toLowerCase().replace(/[^a-z]/g, '');
+  if (!s) return '';
+  return LANGUAGE_ALIASES.get(s) || s.slice(0, 2);
+}
+function releaseLanguageTag(name) {
+  const m = LANG_TAG.exec(String(name || ''));
+  return m ? normalizeLanguageCode(m[1]) : '';
+}
 
 // Streamability + health → score. Store RAR / flat = instant; compressed = playable but slow;
 // encrypted/unsupported = unplayable in Phase 1.
@@ -162,9 +186,21 @@ function scoreRelease(candidate, policy = {}) {
   // the English 1080p on resolution alone. Dubbed-only releases sink hard; DUAL releases
   // (DL / MULTi / ITA-ENG — original audio still aboard) take a milder hit so they stay
   // honest fallbacks when nothing English-native exists.
-  if (LANG_TAG.test(candidate.name)) {
-    add(DUAL_TAG.test(candidate.name) ? 'foreign-dual' : 'foreign-dub',
-      DUAL_TAG.test(candidate.name) ? -150 : -350);
+  const taggedLang = releaseLanguageTag(candidate.name);
+  if (taggedLang) {
+    const originalLang = normalizeLanguageCode(policy.originalLanguage);
+    const preferredAudio = normalizeLanguageCode(policy.preferredAudioLanguage || 'en') || 'en';
+    const dual = DUAL_TAG.test(candidate.name);
+    const matchesOriginal = originalLang && originalLang !== 'en' && taggedLang === originalLang;
+    if (matchesOriginal) {
+      add(dual && preferredAudio === 'en' ? 'original-dual-audio' : 'original-language',
+        dual && preferredAudio === 'en' ? 30 : 0);
+      if (!dual && preferredAudio === 'en') add('no-preferred-audio-hint', -40);
+    } else if (taggedLang === preferredAudio && preferredAudio !== 'en') {
+      add(dual ? 'preferred-dual-audio' : 'preferred-language', dual ? 30 : 80);
+    } else {
+      add(dual ? 'foreign-dual' : 'foreign-dub', dual ? -150 : -350);
+    }
   }
 
   // Admin scoring tweaks (TRaSH-style "custom formats" lite). The built-in weights are the
@@ -232,4 +268,4 @@ function rankReleases(candidates, policy = {}) {
     .map(({ _i, ...c }) => c);
 }
 
-module.exports = { parseRelease, scoreRelease, rankReleases, notTheMovie, RES, SOURCE };
+module.exports = { parseRelease, scoreRelease, rankReleases, notTheMovie, normalizeLanguageCode, releaseLanguageTag, RES, SOURCE };

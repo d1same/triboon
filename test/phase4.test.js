@@ -159,6 +159,14 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   assert.match(ui, /body\.maxResolutionRank = qRank;[\s\S]+body\.preferResolutionRank = qRank;/,
     '1080p and 4K choices should both be sent to /api/play as source-selection policy');
+  assert.match(ui, /function mapTmdb\(x\) \{[\s\S]+originalLanguage: x\.original_language \|\| x\.originalLanguage \|\| ''/,
+    'TMDB items should preserve original language for source-language scoring');
+  assert.match(ui, /function sourceSearchQuery\(it, opts = \{\}\) \{[\s\S]+originalLanguage[\s\S]+preferredAudioLanguage/,
+    'Sources searches should carry original-language and preferred-audio hints into scoring');
+  assert.match(ui, /async function play\(it, pick\) \{[\s\S]+body\.originalLanguage[\s\S]+body\.preferredAudioLanguage/,
+    'Play requests should carry original-language and preferred-audio hints into source selection');
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8'), /function playbackPolicyFor\(user, \{ maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage \} = \{\}\) \{[\s\S]+policy\.originalLanguage[\s\S]+policy\.preferredAudioLanguage/,
+    'Server playback policy should preserve language hints for the scorer');
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8'), /if \(preferRank === 4\) policy\.exactResolutionRank = 4;/,
     '4K selection should be exact so fallback stays in the 4K source class');
   assert.match(ui, /function sourceSearchQuery\(it, opts = \{\}\) \{[\s\S]+const qRank = opts\.includeQuality === false \? null : qualityRankForItem\(it\);[\s\S]+maxResolutionRank[\s\S]+preferResolutionRank/,
@@ -657,8 +665,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'web player should bind separate single-click and double-click surface handlers');
   assert.match(ui, /function hidePlayerOsdForBack\(\) \{[\s\S]+player\.classList\.contains\('open'\)[\s\S]+osd\.classList\.contains\('hide'\)[\s\S]+osd\.classList\.add\('hide'\)[\s\S]+S\.zone === 'seek'[\s\S]+return true;/,
     'web player Back should be able to hide visible controls without closing playback');
-  assert.match(ui, /if \(k === 'Escape' \|\| k === 'Backspace'\) \{[\s\S]+if \(hidePlayerOsdForBack\(\)\) return;[\s\S]+return closePlayer\(\);[\s\S]+window\.__tvBack = \(\) => \{[\s\S]+if \(hidePlayerOsdForBack\(\)\) return 'ok';[\s\S]+const overlay = document\.querySelector/,
-    'Escape/Backspace and Android TV Back should hide visible web player controls before closing the player');
+  assert.match(ui, /if \(k === 'Escape' \|\| k === 'Backspace'\) \{[\s\S]+if \(hidePlayerOsdForBack\(\)\) return;[\s\S]+return closePlayer\(\);[\s\S]+window\.__tvBack = \(\) => \{[\s\S]+\$\(\'pGuide\'\)[\s\S]+closePlayerGuide\(\);[\s\S]+if \(hidePlayerOsdForBack\(\)\) return 'ok';[\s\S]+const overlay = document\.querySelector/,
+    'Escape/Backspace and Android TV Back should close PiP guide/controls before closing the player');
   assert.match(ui, /#appClock\{position:fixed;top:18px;right:22px;z-index:21;min-width:108px;height:38px;padding:0 18px[\s\S]+font:800 14px "JetBrains Mono",monospace;letter-spacing:0;[\s\S]+backdrop-filter:blur\(18px\);-webkit-backdrop-filter:blur\(18px\)\}/,
     'main app clock should render as a slightly larger text-only glass badge');
   assert.doesNotMatch(ui, /#appClock::before/,
@@ -866,6 +874,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Live TV guide must not open the old web live-player shell first');
   assert.match(ui, /function closePlayerGuide\(opts = \{\}\) \{[\s\S]+window\.TriboonTV\.closeGuide\(\)/,
     'closing the shared guide from web focus should restore native fullscreen playback');
+  assert.match(ui, /async function togglePlayerGuide\(\) \{[\s\S]+S\.playing && S\.playing\.usingNative[\s\S]+typeof window\.TriboonTV\.openGuide === 'function'[\s\S]+window\.TriboonTV\.openGuide\(\); return;/,
+    'web guide button should ask Android to enter native PiP guide mode while ExoPlayer is already playing');
   assert.match(ui, /window\.__tvNativeGuideClosed = \(epoch\) => \{[\s\S]+n !== S\.nativeGuideEpoch\) return;[\s\S]+closePlayerGuide\(\{ fromNative: true \}\)/,
     'native guide close callback should ignore stale close events from an older PiP guide');
   assert.match(ui, /window\.__tvNativeGuideEpoch = \(epoch\) => \{[\s\S]+S\.nativeGuideEpoch = n;[\s\S]+focusPlayerGuideRow\(S\._pgFocusChannel \?\? S\.liveCur, \{ preventScroll: true \}\)/,
@@ -1466,6 +1476,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Back should leave native guide mode before closing playback');
   assert.match(android, /public void closeGuide\(\) \{[\s\S]+runOnUiThread\(MainActivity\.this::closeNativeGuideMode\)/,
     'web guide close should be able to restore native fullscreen mode');
+  assert.match(android, /public void openGuide\(\) \{[\s\S]+runOnUiThread\(MainActivity\.this::openNativeLiveGuide\)/,
+    'web guide button should be able to put Android native playback into PiP guide mode');
   assert.doesNotMatch(android, /openNativeLiveGuide\(\) \{[\s\S]+if \(!"live"\.equals\(nativeMode\)\) return;/,
     'native movie/episode playback should be allowed to open the same TV guide');
   assert.match(android, /window\.__tvNativeVideoProgress && __tvNativeVideoProgress/,

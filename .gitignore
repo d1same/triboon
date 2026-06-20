@@ -38,6 +38,7 @@ android/app/build/
 dist/
 *.log
 bench/shots/
+bench/stress-results/
 alltests.txt
 p2fail*.txt
 graphify-out/

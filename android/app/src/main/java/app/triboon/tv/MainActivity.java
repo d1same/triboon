@@ -506,6 +506,11 @@ public class MainActivity extends Activity {
             }
 
             @android.webkit.JavascriptInterface
+            public void openGuide() {
+                runOnUiThread(MainActivity.this::openNativeLiveGuide);
+            }
+
+            @android.webkit.JavascriptInterface
             public void setGuidePipRect(String json) {
                 runOnUiThread(() -> applyNativeGuidePipRect(json));
             }

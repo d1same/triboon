@@ -114,13 +114,37 @@ Use this as the minimum repeat pass after player, IPTV, subtitle, or D-pad chang
 - Subtitles: for movies and TV episodes, verify the first recommended subtitle matches the mounted release/file or exact episode, More subtitles reveals alternates, and changing versions after resume/seek does not restart captions from time zero.
 - Back behavior: from Movies, TV Shows, and attached-library grids, Back first opens that section rail/menu. A second Back returns Home.
 
-## Real Device Note
+## Repeatable Stress Pass
 
-The local Shield is currently visible to ADB as:
+For release hardening, run the automated Android TV stress helper against the emulator or a
+connected Android TV device:
 
-```text
-10.1.20.11:5555
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\bench\android-tv-stress.ps1 `
+  -Device emulator-5554 `
+  -PageLoops 3 `
+  -LiveZaps 20 `
+  -PipLoops 5 `
+  -VodSeeks 20 `
+  -NoScreenshot
 ```
 
-Use a real LAN server address for physical devices, not `10.0.2.2`. The `10.0.2.2`
-address is emulator-only.
+The stress pass verifies:
+
+- Home/menu boot reaches a focusable page.
+- Movies, TV Shows, attached libraries, Live TV, Music, Preferences, and Settings can be opened and backed out repeatedly.
+- Movies/TV/library Back first opens the section rail/menu, then returns Home on the next Back.
+- Source selection keeps the 1080p and 4K picks separated for the same title.
+- Native Live TV survives 20 Up/Down channel changes without provider-protection or fatal log markers.
+- Native PiP guide opens and Back returns to fullscreen without leaving the screensaver/background behind.
+- VOD survives 20 forward/rewind media-key seeks without a stuck loader.
+- Online subtitle lookup returns a clean playable/miss response instead of HTTP 401.
+
+Reports are written under `bench/stress-results/`; that folder is ignored by git because it can
+contain machine-specific timing and provider state.
+
+## Real Device Note
+
+For a physical Android TV device, connect ADB normally and pass its device id with `-Device`.
+Use a real LAN server address for physical devices, not `10.0.2.2`. The `10.0.2.2` address is
+emulator-only.

@@ -216,6 +216,7 @@ function pickSub(data, releaseName = '', { durationSeconds = 0 } = {}) {
       if (relEdition.has(tag)) s += 180;
       else if (relEdition.size && !matchedEdition) s -= 160;       // right movie, wrong cut
     }
+    if (!myEdition.size && relEdition.size) s -= 140;              // do not auto-pick Extended/Uncut for theatrical-looking releases
     if (myWeb && /web|amzn|nf[. ]|hulu|atvp|dsnp/.test(rel)) s += 100;
     if (myBlu && /blu|bd|remux/.test(rel)) s += 100;
     if ((myWeb && /blu|bd|remux/.test(rel)) || (myBlu && /web/.test(rel))) s -= 80; // wrong cut
@@ -372,6 +373,7 @@ function rankSubs(data, releaseName = '', { durationSeconds = 0 } = {}) {
       if (relEdition.has(tag)) s += 180;
       else if (relEdition.size && !matchedEdition) s -= 160;
     }
+    if (!myEdition.size && relEdition.size) s -= 140;
     if (myWeb && /web|amzn|nf[. ]|hulu|atvp|dsnp/.test(rel)) s += 100;
     if (myBlu && /blu|bd|remux/.test(rel)) s += 100;
     if ((myWeb && /blu|bd|remux/.test(rel)) || (myBlu && /web/.test(rel))) s -= 80;

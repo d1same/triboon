@@ -383,6 +383,12 @@ test('subs: pickSub matches the sub to OUR release cut (sync depends on it)', ()
     'exact subtitle file/release matches beat generic same-title rows');
   const forBlu = pickSub(data, 'Show.S01E01.1080p.BluRay.x264-GRP.mkv');
   assert.strictEqual(forBlu.id, 1, 'BluRay source matches the BluRay sub');
+  const normalCut = [
+    { id: 'plain', url: 'http://x/plain.srt', format: 'srt', display: 'Sec.Test.2024.WEB-DL-GRP' },
+    { id: 'extended', url: 'http://x/extended.srt', format: 'srt', display: 'Sec.Test.2024.Extended.Edition.WEB-DL-GRP' },
+  ];
+  assert.strictEqual(pickSub(normalCut, 'Sec.Test.2024.WEB-DL-GRP.mkv').id, 'plain',
+    'edition-tagged subtitles must not auto-win for normal theatrical-looking releases');
   const rookie = [
     { id: 'e1', url: 'http://x/e1.srt', format: 'srt', display: 'The.Rookie.S01E01.1080p.WEB-DL-GRP' },
     { id: 'e3', url: 'http://x/e3.srt', format: 'srt', display: 'The.Rookie.S01E03.1080p.WEB-DL-GRP' },
@@ -1007,6 +1013,17 @@ test('scoring: sample-size stubs and foreign-language dubs sink; duals stay hone
   assert.strictEqual(lang[0].name.includes('FLUX'), true, 'English 1080p beats foreign 2160p');
   assert.ok(lang.findIndex((c) => c.name.includes('DL.2160p')) < lang.findIndex((c) => c.name.includes('H265-DUB')),
     'dual ranks above dubbed-only');
+
+  const foreignOriginal = rankReleases([
+    { name: 'Parasite.2019.KOREAN.1080p.BluRay.x264-GRP', sizeBytes: 9e9 },
+    { name: 'Parasite.2019.KOREAN.DL.1080p.BluRay.x264-GRP', sizeBytes: 9e9 },
+    { name: 'Parasite.2019.GERMAN.2160p.WEB.H265-DUB', sizeBytes: 12e9 },
+  ], { originalLanguage: 'ko', preferredAudioLanguage: 'en' });
+  assert.ok(foreignOriginal[0].name.includes('KOREAN.DL.1080p'),
+    'foreign-original titles prefer original-language dual/multi-audio when English audio is desired');
+  assert.ok(foreignOriginal.findIndex((c) => c.name.includes('KOREAN.1080p')) <
+    foreignOriginal.findIndex((c) => c.name.includes('GERMAN.2160p')),
+    'original-language release beats unrelated dubbed 4K for non-English originals');
 });
 
 test('store: a failing flush never throws and retries once the disk recovers', () => {
