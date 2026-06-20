@@ -5614,7 +5614,7 @@ function nativeKindAvailable(p, kind) {
 function nativePlaybackOrder(p, preferredKind) {
   const pref = ['direct', 'remux', 'transcode'].includes(preferredKind) ? preferredKind : (p && p.nativeStartKind) || 'direct';
   const order = pref === 'remux'
-    ? ['remux']
+    ? ['remux', 'transcode']
     : (pref === 'transcode' ? ['transcode', 'remux'] : ['direct', 'remux', 'transcode']);
   return [...new Set(order)].filter((kind) => nativeKindAvailable(p, kind));
 }
@@ -7231,6 +7231,7 @@ function renderScreensaver() {
 }
 function canShowScreensaver() {
   if (!S.user || S._booting || document.visibilityState !== 'visible') return false;
+  if (S.nativeLivePending) return false;
   if (S.view === 'player' || $('player').classList.contains('open')) return false;
   if (document.querySelector('.gate.open,#drawer.open,#trailer.open,#libModal.open,#matchModal.open,#catModal.open,#filterMenu.open,#cwMenu.open,#trackMenu.open,#musicNow.open')) return false;
   return true;
@@ -8856,6 +8857,7 @@ function openNativeLiveGuideShell(it) {
 function tryNativeLivePlayer(it, guide = false) {
   if (!canUseNativeLivePlayer() || !it || !it._nativeUrl) return false;
   try {
+    wakeScreensaverForPlayerSurface();
     if (!guide) {
       S.nativeGuideMode = false;
       closePlayerGuide({ fromNative: true });

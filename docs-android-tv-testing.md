@@ -44,6 +44,13 @@ Start the emulator from Android Studio Device Manager, or from PowerShell:
 & "$env:LOCALAPPDATA\Android\Sdk\emulator\emulator.exe" -avd Triboon_TV_API_36 -netdelay none -netspeed full -no-boot-anim
 ```
 
+For repeat QA after WebView/player crashes or graphics instability, start with the stable
+software-rendered profile used in the v1.1.15 emulator pass:
+
+```powershell
+& "$env:LOCALAPPDATA\Android\Sdk\emulator\emulator.exe" -avd Triboon_TV_API_36 -no-snapshot -gpu swiftshader_indirect -no-boot-anim -netdelay none -netspeed full
+```
+
 Install and launch the debug APK:
 
 ```powershell

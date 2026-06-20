@@ -486,8 +486,8 @@ test('Android native player: direct source and native chrome stay out of the web
     assert.match(row[0], /`test\/(phase2|phase4|security)\.test\.js`/,
       `player regression map should keep ${id} tied to automated verification`);
   }
-  assert.match(ui, /function nativePlaybackOrder\(p, preferredKind\) \{[\s\S]+pref === 'remux'[\s\S]+\? \['remux'\][\s\S]+: \(pref === 'transcode' \? \['transcode', 'remux'\] : \['direct', 'remux', 'transcode'\]\)[\s\S]+function nativeMimeForKind\(p, kind\)/,
-    'ExoPlayer should honor the server-selected fast path and avoid falling back to raw direct after remux-selected sources');
+  assert.match(ui, /function nativePlaybackOrder\(p, preferredKind\) \{[\s\S]+pref === 'remux'[\s\S]+\? \['remux', 'transcode'\][\s\S]+: \(pref === 'transcode' \? \['transcode', 'remux'\] : \['direct', 'remux', 'transcode'\]\)[\s\S]+function nativeMimeForKind\(p, kind\)/,
+    'ExoPlayer should honor the server-selected fast path but let remux fall through to transcode when the device rejects the remuxed codec');
   assert.match(ui, /function resolvePlaybackResume\(it\) \{[\s\S]+if \(it\._startOver\) return \{ \.\.\.it, resume: 0 \};[\s\S]+const pos = resumePositionForItem\(it\);[\s\S]+return pos > 0 \? \{ \.\.\.it, resume: pos \} : it;/,
     'Resume should be resolved from current watch state at click time, after quality changes');
   assert.match(ui, /async function play\(it, pick\) \{[\s\S]+it = resolvePlaybackResume\(it\);/,
@@ -671,8 +671,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'screensaver brand should use a compact cropped Triboon wordmark strip');
   assert.match(ui, /<div class="ssBrand"><img src="triboon-screensaver\.png" alt="Triboon" onerror="this\.onerror=null;this\.src='triboon\.png'"><\/div>/,
     'screensaver should use the transparent tight-crop Triboon logo asset with the full wordmark as fallback');
-  assert.match(ui, /const SCREENSAVER_IDLE_MS = 60 \* 1000;[\s\S]+function canShowScreensaver\(\) \{[\s\S]+S\.view === 'player' \|\| \$\('player'\)\.classList\.contains\('open'\)[\s\S]+\.gate\.open,#drawer\.open,#trailer\.open,#libModal\.open,#matchModal\.open,#catModal\.open,#filterMenu\.open,#cwMenu\.open,#trackMenu\.open,#musicNow\.open/,
-    'app screensaver should wait one minute and stay out of playback, gates, and active modal surfaces');
+  assert.match(ui, /const SCREENSAVER_IDLE_MS = 60 \* 1000;[\s\S]+function canShowScreensaver\(\) \{[\s\S]+S\.nativeLivePending[\s\S]+S\.view === 'player' \|\| \$\('player'\)\.classList\.contains\('open'\)[\s\S]+\.gate\.open,#drawer\.open,#trailer\.open,#libModal\.open,#matchModal\.open,#catModal\.open,#filterMenu\.open,#cwMenu\.open,#trackMenu\.open,#musicNow\.open/,
+    'app screensaver should wait one minute and stay out of native Live TV, playback, gates, and active modal surfaces');
   assert.match(ui, /function wakeScreensaverForPlayerSurface\(\) \{[\s\S]+if \(S\.screensaverOn\) hideScreensaver\(true\);[\s\S]+resetScreensaverIdle\(\);[\s\S]+\}/,
     'player and PiP guide surfaces should explicitly wake the screensaver before revealing video UI');
   assert.match(ui, /const SCREENSAVER_TRENDING_TTL = 24 \* 60 \* 60 \* 1000;[\s\S]+const SCREENSAVER_TRENDING_STORE = 'triboon\.screensaver\.trending';/,
@@ -860,6 +860,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Live TV guide should not hand off to the old web player');
   assert.match(ui, /function openNativeLiveGuideShell\(it\) \{[\s\S]+wakeScreensaverForPlayerSurface\(\);[\s\S]+stopWebVideoElement\(\);[\s\S]+document\.body\.classList\.add\('nativeGuideMode'\);[\s\S]+S\.nativeGuideMode = true;[\s\S]+\$\(\'player\'\)\.classList\.add\('open', 'guideMode'\);[\s\S]+\$\(\'player\'\)\.classList\.remove\('live'\);[\s\S]+\$\(\'osd\'\)\.classList\.add\('hide'\);/,
     'native Live TV guide should wake screensaver state and enter guide mode before the player container can reveal the web player');
+  assert.match(ui, /function tryNativeLivePlayer\(it, guide = false\) \{[\s\S]+try \{[\s\S]+wakeScreensaverForPlayerSurface\(\);[\s\S]+window\.TriboonTV\.playLive/,
+    'native Live TV playback should wake screensaver state before ExoPlayer owns the screen');
   assert.doesNotMatch(ui, /function openNativeLiveGuideShell\(it\) \{[\s\S]+\$\(\'player\'\)\.classList\.add\('open', 'live'\)/,
     'native Live TV guide must not open the old web live-player shell first');
   assert.match(ui, /function closePlayerGuide\(opts = \{\}\) \{[\s\S]+window\.TriboonTV\.closeGuide\(\)/,
