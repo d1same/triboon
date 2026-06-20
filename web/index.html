@@ -536,6 +536,8 @@ body.nativeGuideMode #player.guideMode video{display:none}
 #trackMenu button:hover{background:rgba(34,25,52,.7)}
 #trackMenu button.focus{background:rgba(34,25,52,.9);box-shadow:inset 0 0 0 2px var(--coral)}
 #trackMenu button.sel{color:var(--amber);font-weight:700}
+#trackMenu button:disabled{opacity:.55;cursor:default;color:var(--muted)}
+#trackMenu button:disabled:hover{background:transparent}
 #trackMenu button .mark{margin-left:auto}
 /* In-app clock (top right, like Plex) */
 #appClock{position:fixed;top:18px;right:22px;z-index:21;min-width:108px;height:38px;padding:0 18px;display:none;
@@ -2298,10 +2300,8 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
   </div>
 
   <div class="panel"><h2>Subtitles (Wyzie Subs)</h2>
-    <p>Online subtitles for releases that only carry image-based (BluRay PGS) subs — which can
-       never become text captions. Claim a <b>free</b> API key at
-       <b style="color:var(--amber)">store.wyzie.io/redeem</b> and paste it here — no account
-       login, no download quota. Results are cached per title.</p>
+    <p>Online subtitles for releases that only carry image-based (BluRay PGS) subs. Paste your
+       Wyzie Subs API key here; Triboon keeps it server-side and caches results per title.</p>
     <div class="field"><input id="osKey" placeholder="Wyzie Subs API key"></div>
     <button class="btn primary" id="osSave">Save subtitles key</button>
     <div class="hint" id="osStatus"></div>
@@ -4588,7 +4588,8 @@ function localEpisodeItemOf(show, ep) {
   const name = localEpisodeDisplayName(ep);
   const title = `${show.title} — ${code}${name ? ` · ${name}` : ''}`;
   const item = mapLocal(show._lib, ep, title);
-  return { ...item, type: 'episode', genre: code, backdrop: item.backdrop || show.backdrop, poster: item.poster || show.poster };
+  return { ...item, type: 'episode', q: `${show.title} ${code}`, season: ep.s, episode: ep.e,
+    genre: code, backdrop: item.backdrop || show.backdrop, poster: item.poster || show.poster };
 }
 function pickLocalShowPlayTarget(show, episodes) {
   const items = (episodes || []).slice().sort((a, b) => a.s - b.s || a.e - b.e).map((ep) => localEpisodeItemOf(show, ep));
@@ -5184,9 +5185,9 @@ function startWebPlayerHousekeeping(mount, it) {
   updatePlayerControlAvailability();
   loadTracks();
   const wantLang = prefLang('slang');
-  if (wantLang && it.type !== 'live' && S.serverInfo && S.serverInfo.opensubs && mount.id) {
+  if (wantLang && it.type !== 'live' && S.serverInfo && S.serverInfo.opensubs && mount.id && subtitleCatalogAvailable(it)) {
     const code2 = osLang(wantLang);
-    fetch(`/api/ossubs/${mount.id}?lang=${code2}&tmdb=${it.tmdbId || ''}&t=${mount.streamToken}`).catch(() => {});
+    fetch(`/api/ossubs/${mount.id}?${subtitleRequestParams(it, code2, mount.streamToken).toString()}`).catch(() => {});
   }
   prepPlayerSeasonEpisodes(it);
   prepNextEpisode(it);
@@ -5405,7 +5406,11 @@ function nativeVideoSubtitleRel(p) {
   const saved = loadSubChoice();
   // Native is the default engine on Android TV. Only explicit per-title choices turn on at
   // playback start; profile subtitle language fills the CC menu without popping captions on.
-  if (saved && saved !== 'off') return { blocked: false, rel: saved };
+  if (saved && saved !== 'off') {
+    const info = String(saved).startsWith('os:') ? osTrackInfo(saved) : null;
+    if (info && !info.variant) return { blocked: false, rel: bestSubtitleVariantRel(info.lang) || '' };
+    return { blocked: false, rel: saved };
+  }
   if (saved === 'off') return { blocked: false, rel: '' };
   return { blocked: false, rel: '' };
 }
@@ -5446,19 +5451,21 @@ function subtitleVariantDetail(v) {
 }
 function subtitleRecommendedLabel(name, v) {
   const detail = subtitleVariantDetail(v);
-  return detail ? `${name} - Recommended (${detail})` : `${name} - Recommended`;
+  return detail ? `${name} (${detail})` : name;
 }
 function subtitleVariantRowLabel(name, v) {
   const detail = subtitleVariantDetail(v);
-  return detail ? `${name} - ${detail}` : `${name} - Subtitle version`;
+  return detail ? `${name} (${detail})` : `${name} version`;
 }
 function savedSubtitleDetail(name) {
   let label = cleanSubtitleLabel(loadSubChoiceLabel() || '');
   const prefix = `${name} - `.toLowerCase();
   if (label.toLowerCase().startsWith(prefix)) label = label.slice(prefix.length).trim();
+  const plainDetail = new RegExp('^' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\((.+)\\)$', 'i').exec(label);
+  if (plainDetail) label = plainDetail[1].trim();
   const recommended = /^Recommended\s*\((.+)\)$/i.exec(label);
   if (recommended) label = recommended[1].trim();
-  if (!label || /^Recommended$/i.test(label) || /^Selected subtitle$/i.test(label)) return '';
+  if (!label || /^Recommended$/i.test(label) || /^Selected subtitle$/i.test(label) || /^Best match$/i.test(label)) return '';
   return label;
 }
 function subtitleLangExpanded(lang) {
@@ -5472,6 +5479,42 @@ function setSubtitleLangExpanded(lang, expanded = true) {
   if (expanded) p._osExpandedLangs.add(l);
   else p._osExpandedLangs.delete(l);
 }
+function subtitleNoResultsMessage(lang) {
+  const l = osLang(lang);
+  const name = OS_LANG_NAMES[l] || l.toUpperCase();
+  return `No ${name} subtitles found for this title`;
+}
+function subtitleNoResultsError(lang, message = '') {
+  const e = new Error(message || subtitleNoResultsMessage(lang));
+  e.noSubtitles = true;
+  return e;
+}
+function subtitleResponseNoResults(lang, status, body = {}) {
+  const code = String(body.code || '');
+  const msg = String(body.error || body.message || '');
+  if (code === 'no_subtitles' || /no .*subtitles found/i.test(msg) || (status === 404 && /subtitles/i.test(msg))) {
+    return subtitleNoResultsMessage(lang);
+  }
+  return '';
+}
+function rememberSubtitleMiss(lang, message = '') {
+  const p = S.playing; if (!p) return '';
+  const l = osLang(lang);
+  p._osMissingLangs = p._osMissingLangs || {};
+  const msg = message || subtitleNoResultsMessage(l);
+  p._osMissingLangs[l] = msg;
+  if (p._osVariants) delete p._osVariants[l];
+  return msg;
+}
+function clearSubtitleMiss(lang) {
+  const p = S.playing; if (!p || !p._osMissingLangs) return;
+  delete p._osMissingLangs[osLang(lang)];
+}
+function subtitleMiss(lang) {
+  const p = S.playing;
+  const l = osLang(lang);
+  return p && p._osMissingLangs && p._osMissingLangs[l] ? p._osMissingLangs[l] : '';
+}
 function subtitleDefaultChoice(lang) {
   const p = S.playing;
   const l = osLang(lang);
@@ -5481,7 +5524,7 @@ function subtitleDefaultChoice(lang) {
   const cur = p && typeof p.subTrack === 'string' && p.subTrack.startsWith('os:') ? osTrackInfo(p.subTrack) : null;
   if (cur && cur.lang === l && cur.variant) {
     const detail = savedSubtitleDetail(name);
-    return { rel: p.subTrack, label: detail ? `${name} - ${detail}` : `${name} - Selected subtitle`, best: null };
+    return { rel: p.subTrack, label: detail ? `${name} (${detail})` : name, best: null };
   }
   return { rel: osTrackRel(l), label: subtitleRecommendedLabel(name, null), best: null };
 }
@@ -5489,13 +5532,10 @@ async function resolveOnlineSubtitleRel(rel) {
   if (!(typeof rel === 'string' && rel.startsWith('os:'))) return rel;
   const info = osTrackInfo(rel);
   if (info.variant) return rel;
-  try {
-    const variants = await loadSubtitleVersions(info.lang);
-    const best = (variants || []).find((v) => v.selected) || (variants || [])[0];
-    return best && best.id ? osTrackRel(info.lang, best.id) : rel;
-  } catch {
-    return rel;
-  }
+  const variants = await loadSubtitleVersions(info.lang);
+  const best = (variants || []).find((v) => v.selected) || (variants || [])[0];
+  if (!best || !best.id) throw subtitleNoResultsError(info.lang);
+  return osTrackRel(info.lang, best.id);
 }
 function nativeSubtitleLabel(rel) {
   if (!rel) return '';
@@ -5508,7 +5548,7 @@ function nativeSubtitleLabel(rel) {
 }
 function nativeSubtitleChoices() {
   const p = S.playing;
-  if (!p || !S.serverInfo || !S.serverInfo.opensubs || !p.mountId || !p.item || !p.item.tmdbId) return [];
+  if (!p || !S.serverInfo || !S.serverInfo.opensubs || !p.mountId || !subtitleCatalogAvailable(p.item)) return [];
   const saved = loadSubChoice();
   const pref = prefLang('slang') && prefLang('slang') !== 'off' ? osLang(prefLang('slang')) : '';
   const savedInfo = saved && saved !== 'off' && String(saved).startsWith('os:') ? osTrackInfo(saved) : null;
@@ -5528,8 +5568,17 @@ function nativeSubtitleChoices() {
   [...new Set([savedInfo && savedInfo.lang, pref, 'en'].filter(Boolean))].forEach((l) => {
     const name = OS_LANG_NAMES[l] || l.toUpperCase();
     const variants = p._osVariants && p._osVariants[l];
-    const pick = subtitleDefaultChoice(l);
+    const miss = subtitleMiss(l);
     const expanded = subtitleLangExpanded(l);
+    if (miss) {
+      addChoice({ action: 'missing', lang: l, label: miss });
+      return;
+    }
+    if (!variants || !variants.length) {
+      addChoice({ action: 'versions', lang: l, label: name });
+      return;
+    }
+    const pick = subtitleDefaultChoice(l);
     addChoice({ rel: pick.rel, label: pick.label });
     if (variants && variants.length && expanded) {
       variants.slice(0, 8).forEach((v) => {
@@ -5537,12 +5586,14 @@ function nativeSubtitleChoices() {
         if (rel !== pick.rel) addChoice({ rel, label: subtitleVariantRowLabel(name, v) });
       });
     }
-    if (!expanded) addChoice({ action: 'versions', lang: l, label: `More ${name} subtitles` });
+    if (!expanded) addChoice({ action: 'versions', lang: l, label: `Choose ${name} version` });
   });
   if (saved && saved !== 'off') {
     const info = String(saved).startsWith('os:') ? osTrackInfo(saved) : null;
-    const rel = info && !info.variant ? (bestSubtitleVariantRel(info.lang) || saved) : saved;
-    addChoice({ rel, label: nativeSubtitleLabel(rel) });
+    const rel = info && !info.variant ? bestSubtitleVariantRel(info.lang) : saved;
+    if (rel) addChoice({ rel, label: nativeSubtitleLabel(rel) });
+    else if (info && subtitleMiss(info.lang)) addChoice({ action: 'missing', lang: info.lang, label: subtitleMiss(info.lang) });
+    else if (info) addChoice({ action: 'versions', lang: info.lang, label: OS_LANG_NAMES[info.lang] || info.lang.toUpperCase() });
   }
   return choices;
 }
@@ -5913,7 +5964,15 @@ function updateNextEpisodeButton() {
 }
 function episodeKeyParts(it) {
   const m = it && it.key ? /tmdb:tv:(\d+):s(\d+)e(\d+)/.exec(it.key) : null;
-  return m ? { tmdbId: +m[1], season: +m[2], episode: +m[3] } : null;
+  if (m) return { tmdbId: +m[1], season: +m[2], episode: +m[3] };
+  const tmdbId = +(it && it.tmdbId || 0);
+  if (!tmdbId) return null;
+  const explicitS = +(it.season ?? it.s ?? 0);
+  const explicitE = +(it.episode ?? it.ep ?? it.e ?? 0);
+  if (explicitS > 0 && explicitE > 0) return { tmdbId, season: explicitS, episode: explicitE };
+  const raw = `${it.q || ''} ${it.genre || ''} ${it.title || ''}`;
+  const se = /\bS(\d{1,2})\s*E(\d{1,3})\b/i.exec(raw);
+  return se ? { tmdbId, season: +se[1], episode: +se[2] } : null;
 }
 async function getPlayerEpisodeContext(it) {
   const parts = episodeKeyParts(it);
@@ -6390,7 +6449,7 @@ const LANG_NAMES = { eng: 'English', ger: 'German', fre: 'French', spa: 'Spanish
   nor: 'Norwegian', swe: 'Swedish', dan: 'Danish', fin: 'Finnish', dut: 'Dutch', ara: 'Arabic',
   hin: 'Hindi', per: 'Persian', tur: 'Turkish', pol: 'Polish' };
 function langCode(c) { c = String(c || '').toLowerCase(); return LANG_ALIAS[c] || c; }
-// OpenSubtitles speaks ISO 639-1 (2-letter); ffprobe/track prefs speak 639-2 (3-letter).
+// Online subtitle APIs speak ISO 639-1 (2-letter); ffprobe/track prefs speak 639-2 (3-letter).
 const LANG_3TO2 = { eng: 'en', spa: 'es', fre: 'fr', ger: 'de', ita: 'it', por: 'pt', rus: 'ru',
   ara: 'ar', per: 'fa', hin: 'hi', tur: 'tr', dut: 'nl', pol: 'pl', swe: 'sv', jpn: 'ja',
   kor: 'ko', chi: 'zh', dan: 'da', nor: 'no', fin: 'fi' };
@@ -6428,13 +6487,26 @@ function osTrackRel(lang, variant = '') {
   const l = osLang(lang);
   return variant ? `os:${l}:${variant}` : `os:${l}`;
 }
+function subtitleImdbId(it) {
+  const id = String((it && (it.imdbId || it.imdbid)) || '').trim();
+  return /^tt\d{5,10}$/i.test(id) ? id.toLowerCase() : '';
+}
+function subtitleCatalogAvailable(it) {
+  return !!(it && (it.tmdbId || subtitleImdbId(it)));
+}
+function subtitleRequestParams(it, lang, streamToken) {
+  const q = new URLSearchParams({
+    lang: osLang(lang),
+    tmdb: String((it || {}).tmdbId || ''),
+    t: streamToken || '',
+  });
+  const imdb = subtitleImdbId(it);
+  if (imdb) q.set('imdb', imdb);
+  return q;
+}
 function osSubUrl(p, rel, list = false) {
   const info = osTrackInfo(rel);
-  const q = new URLSearchParams({
-    lang: info.lang,
-    tmdb: String((p.item || {}).tmdbId || ''),
-    t: p.streamToken || '',
-  });
+  const q = subtitleRequestParams(p.item || {}, info.lang, p.streamToken || '');
   if (list) q.set('list', '1');
   if (info.variant) q.set('variant', info.variant);
   const activeShift = p.subTrack === rel && Number.isFinite(+p._subShift) ? +p._subShift : null;
@@ -6465,7 +6537,7 @@ function subtitleDisplayName(rel) {
     const detail = cleanSubtitleLabel(subtitleVersionLabel(rel) || '');
     if (best && String(best.id) === String(info.variant)) return subtitleRecommendedLabel(name, best);
     const saved = savedSubtitleDetail(name);
-    return (detail || saved) ? `${name} - ${detail || saved}` : `${name} - Selected subtitle`;
+    return (detail || saved) ? `${name} (${detail || saved})` : name;
   }
   return 'Embedded subtitles';
 }
@@ -6474,16 +6546,25 @@ async function loadSubtitleVersions(lang) {
   const l = osLang(lang);
   p._osVariants = p._osVariants || {};
   p._osVariantInflight = p._osVariantInflight || {};
+  const miss = subtitleMiss(l);
+  if (miss) throw subtitleNoResultsError(l, miss);
   if (p._osVariants[l]) return p._osVariants[l];
   if (!p._osVariantInflight[l]) {
     p._osVariantInflight[l] = fetch(osSubUrl(p, osTrackRel(l), true)).then(async (r) => {
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
+        const noResults = subtitleResponseNoResults(l, r.status, j);
+        if (noResults) throw subtitleNoResultsError(l, noResults);
         throw new Error(j.error || 'No subtitle versions found');
       }
       const j = await r.json();
       p._osVariants[l] = j.variants || [];
+      if (!p._osVariants[l].length) throw subtitleNoResultsError(l);
+      clearSubtitleMiss(l);
       return p._osVariants[l];
+    }).catch((e) => {
+      if (e && e.noSubtitles) rememberSubtitleMiss(l, e.message);
+      throw e;
     }).finally(() => { if (p._osVariantInflight) delete p._osVariantInflight[l]; });
   }
   return p._osVariantInflight[l];
@@ -6553,7 +6634,7 @@ function applyTrackPrefs() {
   }
   const savedSub = loadSubChoice();
   if (savedSub && p.subTrack == null) {
-    if (savedSub !== 'off' && S.serverInfo && S.serverInfo.opensubs && p.mountId && p.item && p.item.tmdbId) {
+    if (savedSub !== 'off' && S.serverInfo && S.serverInfo.opensubs && p.mountId && subtitleCatalogAvailable(p.item)) {
       setSubtitle(savedSub);
     }
   }
@@ -6588,7 +6669,7 @@ function playerCcHasOptions() {
   const p = S.playing;
   if (!p || !p.item || p.item.type === 'live') return false;
   if (p.subTrack) return true;
-  return !!(S.serverInfo && S.serverInfo.opensubs && p.mountId && p.item.tmdbId);
+  return !!(S.serverInfo && S.serverInfo.opensubs && p.mountId && subtitleCatalogAvailable(p.item));
 }
 function playerQualityHasOptions() {
   const p = S.playing;
@@ -6640,7 +6721,13 @@ function openTrackMenu(kind, restore = {}) {
     if (opts.key) b.dataset.focusKey = opts.key;
     b.innerHTML = `${esc(label)}<span class="mark">${sel ? '✓' : ''}</span>`;
     if (sel) b.classList.add('sel');
+    if (opts.disabled) {
+      b.disabled = true;
+      b.classList.add('disabled');
+      b.setAttribute('aria-disabled', 'true');
+    }
     b.addEventListener('click', async () => {
+      if (opts.disabled) return;
       const keepScrollTop = m.scrollTop;
       if (!opts.keepOpen) closeTrackMenu();
       await fn();
@@ -6660,8 +6747,13 @@ function openTrackMenu(kind, restore = {}) {
       langs.forEach((l) => {
         const name = OS_LANG_NAMES[l] || l.toUpperCase();
         const variants = p._osVariants && p._osVariants[l];
+        const miss = subtitleMiss(l);
         const pick = subtitleDefaultChoice(l);
         const expanded = subtitleLangExpanded(l);
+        if (miss) {
+          mkRow(miss, false, () => {}, { disabled: true, key: 'subs-missing-' + l });
+          return;
+        }
         mkRow(pick.label, p.subTrack === pick.rel, () => setSubtitle(pick.rel));
         if (variants && variants.length && expanded) {
           variants.slice(0, 8).forEach((v) => {
@@ -6670,7 +6762,7 @@ function openTrackMenu(kind, restore = {}) {
           });
         }
         if (!expanded) {
-          mkRow(`More ${name} subtitles`, false, async () => {
+          mkRow(`Choose ${name} version`, false, async () => {
             let loaded = false;
             try { await loadSubtitleVersions(l); loaded = true; }
             catch (e) { toast(e.message || 'Could not load subtitle versions'); }
@@ -6694,7 +6786,7 @@ function openTrackMenu(kind, restore = {}) {
       const note = document.createElement('div');
       note.className = 'tmHead';
       note.style.cssText = 'opacity:.55;font-size:10.5px;text-transform:none;letter-spacing:0';
-      note.textContent = 'Online subtitles are not configured. Add a free Wyzie Subs key in Settings.';
+      note.textContent = 'Online subtitles are not configured. Add a Wyzie Subs key in Settings.';
       if (note.textContent) m.appendChild(note);
     }
   } else if (kind === 'audio') {
@@ -6753,7 +6845,15 @@ async function setSubtitle(rel) {
     clearTimeout(_subPrepT);
     return applySubtitleTrack();
   }
-  rel = await resolveOnlineSubtitleRel(rel);
+  try {
+    rel = await resolveOnlineSubtitleRel(rel);
+  } catch (e) {
+    const info = typeof rel === 'string' && rel.startsWith('os:') ? osTrackInfo(rel) : null;
+    if (info && e && e.noSubtitles) rememberSubtitleMiss(info.lang, e.message);
+    toast((e && e.message) || 'No subtitles found for this title');
+    refreshNativeSubtitleChoices();
+    return;
+  }
   p.subTrack = rel; p._subShift = rel ? loadSubShift(rel) : 0;
   $('ccBtn').classList.toggle('on', rel !== null);
   // Fetch FIRST so failures surface as a message, not a silent nothing.
@@ -6762,9 +6862,13 @@ async function setSubtitle(rel) {
       const r = await fetch(osSubUrl(p, rel));
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
-        toast(j.error || 'No subtitles found for this title');
+        const info = osTrackInfo(rel);
+        const noResults = subtitleResponseNoResults(info.lang, r.status, j);
+        if (noResults) rememberSubtitleMiss(info.lang, noResults);
+        toast(noResults || j.error || 'No subtitles found for this title');
         p.subTrack = null; $('ccBtn').classList.remove('on');
         applySubtitleTrack();
+        refreshNativeSubtitleChoices();
         return;
       }
     } catch { toast('Subtitles failed — check the server connection'); p.subTrack = null; applySubtitleTrack(); return; }
@@ -8090,8 +8194,12 @@ async function playLocal(it) {
   if (nativeFirst) showNativePlayLoading(it);
   else showPlayLoading(it);
   try {
+    const ids = sourceIdentityFor(it);
+    const body = { caps: clientCaps(), q: queryFor(it) };
+    if (ids.season != null) body.season = ids.season;
+    if (ids.ep != null) body.ep = ids.ep;
     const mount = it._local.playUrl
-      ? await api(it._local.playUrl, { method: 'POST', body: { caps: clientCaps() } })
+      ? await api(it._local.playUrl, { method: 'POST', body })
       : {
           streamUrl: it._local.streamUrl, name: it._local.name, container: 'local', method: null,
           id: null, sessionId: null, remuxUrl: null, transcodeUrl: null, tracksUrl: null,
@@ -10720,7 +10828,7 @@ async function refreshSettings() {
     $('osKey').placeholder = s.openSubsKey ? 'key saved ✓ — paste a new one to replace' : 'Wyzie Subs API key';
     $('osStatus').textContent = s.openSubsKey
       ? 'key saved ✓ — subtitles live in the player CC menu'
-      : 'not set up — CC needs a free key from store.wyzie.io/redeem';
+      : 'not set up - CC needs a Wyzie Subs key';
     $('traktStatus').textContent = s.traktClientId
       ? `app saved ✓ (id ${s.traktClientId.slice(0, 10)}…${s.traktClientSecret ? ' · secret ✓' : ' · secret MISSING'}) — users link in Preferences → Connections`
       : 'not configured yet';
@@ -10878,7 +10986,7 @@ $('tmdbSave').addEventListener('click', async () => {
   refreshSettings(); loadRows();
 });
 $('osSave').addEventListener('click', async () => {
-  if (!$('osKey').value.trim()) return toast('Paste your Wyzie Subs key (free at store.wyzie.io/redeem)');
+  if (!$('osKey').value.trim()) return toast('Paste your Wyzie Subs key first');
   await api('/api/settings', { method: 'POST', body: { openSubsKey: $('osKey').value.trim() } });
   const srvNow = await api('/api/server');
   S.serverInfo.opensubs = srvNow.opensubs;

@@ -1283,6 +1283,10 @@ test('subtitles: Wyzie search→file→VTT served per mount (and 503 without a k
   const fr = await httpRaw(srv.port, `/api/ossubs/${play.id}?lang=fr&tmdb=4242&t=${play.streamToken}`);
   assert.strictEqual(fr.status, 200, fr.body.toString());
   assert.strictEqual(searchCalls, beforeRefresh + 2, 'empty Wyzie search gets one refresh fallback');
+  const missing = await httpJson(srv.port, 'GET', `/api/ossubs/${play.id}?lang=en&tmdb=999999&list=1&t=${play.streamToken}`, null, admin);
+  assert.strictEqual(missing.status, 404, JSON.stringify(missing.json));
+  assert.strictEqual(missing.json.code, 'no_subtitles',
+    'Wyzie no-results should be a clean title-level miss, not a generic server failure');
 
   delete process.env.WYZIE_BASE;
   await httpJson(srv.port, 'POST', '/api/settings', { openSubsKey: null }, admin);

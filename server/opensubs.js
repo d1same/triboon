@@ -1,8 +1,7 @@
 'use strict';
-// Wyzie Subs client (sub.wyzie.ru) — free subtitle aggregator: one GET search by TMDB id
-// returns DIRECT subtitle-file URLs (no account login, no download quota; a free API key
-// comes from store.wyzie.io/redeem). Replaced OpenSubtitles, whose API went paid.
-// SRT → WebVTT for the browser <track> element. Stdlib only, like everything in server/.
+// Wyzie Subs client (sub.wyzie.io): one GET search by catalog id returns direct
+// subtitle-file URLs. Auth is a server-side API key query param only.
+// SRT to WebVTT for the browser <track> element. Stdlib only, like everything in server/.
 // This is the CC path that matters in practice: BluRay releases carry only bitmap (PGS)
 // subtitles that can never become text tracks, so online subs are how captions actually show.
 
@@ -18,6 +17,22 @@ function permanent(message) {
   const e = new Error(message);
   e.permanent = true;
   return e;
+}
+function noSubtitles(message) {
+  const e = permanent(message);
+  e.noSubtitles = true;
+  return e;
+}
+function isNoSubtitleError(e) {
+  return !!(e && e.noSubtitles);
+}
+function isNoSubtitleResponse(status, message) {
+  return status === 400 && /no subtitles found/i.test(String(message || ''));
+}
+function noSubtitlesFor(lang, query) {
+  const l = String(lang || 'en').slice(0, 5) || 'en';
+  const q = String(query || 'this title').trim() || 'this title';
+  return noSubtitles(`no ${l} subtitles found for "${q}"`);
 }
 function isTransientError(e) {
   return !e.permanent && /timeout|deadline|socket hang up|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ETIMEDOUT|HTTP (408|429|5\d\d)/i.test(String(e && e.message || e));
@@ -251,10 +266,17 @@ function subtitleVariantLabel(d) {
   return parts.join(' - ') || String((d && (d.display || d.media || d.language)) || 'Subtitle version');
 }
 
-function wyzieSearchUrl({ base = DEFAULT_BASE, key, tmdbId, query, lang = 'en', releaseName = '', refresh = false, releaseHints = true } = {}) {
+function wyzieCatalogId({ tmdbId, imdbId } = {}) {
+  const imdb = String(imdbId || '').trim();
+  if (/^tt\d{5,10}$/i.test(imdb)) return imdb.toLowerCase();
+  const tmdb = String(tmdbId || '').replace(/\D/g, '');
+  return tmdb || '';
+}
+
+function wyzieSearchUrl({ base = DEFAULT_BASE, key, tmdbId, imdbId, query, lang = 'en', releaseName = '', refresh = false, releaseHints = true } = {}) {
   const w = parseQuery(query || '');
   const u = new URL(`${base}/search`);
-  u.searchParams.set('id', String(tmdbId));
+  u.searchParams.set('id', wyzieCatalogId({ tmdbId, imdbId }));
   if (w.season != null) { u.searchParams.set('season', w.season); u.searchParams.set('episode', w.ep); }
   u.searchParams.set('language', lang);
   u.searchParams.set('format', 'srt,vtt');
@@ -274,10 +296,10 @@ function parseWyzieSearchBody(body) {
   try { return JSON.parse(body); } catch { throw new Error('wyzie returned a non-JSON response'); }
 }
 
-async function wyzieSearchResults({ key, tmdbId, query, lang = 'en', releaseName = '', base = DEFAULT_BASE,
+async function wyzieSearchResults({ key, tmdbId, imdbId, query, lang = 'en', releaseName = '', base = DEFAULT_BASE,
   attempts = 2, retryDelayMs = 700 } = {}) {
   const requestSearch = (refresh = false, releaseHints = true) => retryTransient('Wyzie subtitle search', async () => {
-    const u = wyzieSearchUrl({ base, key, tmdbId, query, lang, releaseName, refresh, releaseHints });
+    const u = wyzieSearchUrl({ base, key, tmdbId, imdbId, query, lang, releaseName, refresh, releaseHints });
     const r = await request('GET', u.href, { timeoutMs: 25000, deadlineMs: 35000 });
     if (r.status === 401) throw permanent('Wyzie Subs key missing or invalid');
     if (r.status !== 200) {
@@ -288,6 +310,7 @@ async function wyzieSearchResults({ key, tmdbId, query, lang = 'en', releaseName
         e.releaseMismatch = true;
         throw e;
       }
+      if (isNoSubtitleResponse(r.status, msg)) throw noSubtitlesFor(lang, query);
       const e = new Error(msg ? `wyzie search HTTP ${r.status}: ${msg}` : `wyzie search HTTP ${r.status}`);
       if (![408, 429].includes(r.status) && r.status < 500) e.permanent = true;
       throw e;
@@ -372,6 +395,39 @@ function rankSubs(data, releaseName = '', { durationSeconds = 0 } = {}) {
   return ranked;
 }
 
+function subtitleDownloadCanFallback(e) {
+  const msg = String(e && e.message || e || '');
+  const m = /subtitle file HTTP (\d+)/i.exec(msg);
+  if (!m) return false;
+  const status = +m[1];
+  // 402/429 are account/quota/rate-limit problems. Other file failures are commonly stale
+  // provider links, so keep walking the ranked subtitle list before bothering the viewer.
+  return status !== 402 && status !== 429;
+}
+
+async function downloadBestSubtitle(data, { key, releaseName = '', durationSeconds = 0, preferredId = '',
+  base = DEFAULT_BASE, attempts = 2, retryDelayMs = 700 } = {}) {
+  const ranked = rankSubs(data, releaseName, { durationSeconds });
+  if (!ranked.length) throw permanent(`no usable subtitle file in the results`);
+  let ordered = ranked;
+  if (preferredId) {
+    const id = String(preferredId);
+    const selected = ranked.find((v) => String(v.id) === id);
+    if (!selected) throw new Error('that subtitle version is no longer available');
+    ordered = [selected, ...ranked.filter((v) => v !== selected)];
+  }
+  let last;
+  for (const v of ordered) {
+    try {
+      return await downloadSubtitle(v.raw, { key, base, attempts, retryDelayMs });
+    } catch (e) {
+      last = e;
+      if (!subtitleDownloadCanFallback(e)) throw e;
+    }
+  }
+  throw new Error(`subtitle files could not be downloaded${last ? ` (${last.message || last})` : ''}`);
+}
+
 async function fetchOnlineSub({ key, tmdbId, query, lang = 'en', releaseName = '', durationSeconds = 0, base = DEFAULT_BASE,
   attempts = 2, retryDelayMs = 700 } = {}) {
   if (!tmdbId) throw permanent('online subtitles need a catalog title (no TMDB id for this play)');
@@ -389,18 +445,19 @@ async function fetchOnlineSub({ key, tmdbId, query, lang = 'en', releaseName = '
     u.searchParams.set('file', releaseName);
   }
   if (key) u.searchParams.set('key', key);
-  // Wyzie scrapes its sources LIVE — measured ~15s on real keys. The default 10s idle
+  // Wyzie scrapes its sources live; measured around 15s on real keys. The default 10s idle
   // timeout was killing searches that were about to succeed.
   const search = (refresh = false) => retryTransient('Wyzie subtitle search', async () => {
     if (refresh) u.searchParams.set('refresh', 'true'); else u.searchParams.delete('refresh');
-    const r = await request('GET', u.href, { timeoutMs: 25000, deadlineMs: 35000 });
-    if (r.status === 401) throw permanent('Wyzie Subs key missing or invalid');
-    if (r.status !== 200) {
-      let msg = '';
-      try { msg = (JSON.parse(r.body) || {}).message || ''; } catch {}
-      const e = new Error(msg ? `wyzie search HTTP ${r.status}: ${msg}` : `wyzie search HTTP ${r.status}`);
-      if (![408, 429].includes(r.status) && r.status < 500) e.permanent = true;
-      throw e;
+      const r = await request('GET', u.href, { timeoutMs: 25000, deadlineMs: 35000 });
+      if (r.status === 401) throw permanent('Wyzie Subs key missing or invalid');
+      if (r.status !== 200) {
+        let msg = '';
+        try { msg = (JSON.parse(r.body) || {}).message || ''; } catch {}
+        if (isNoSubtitleResponse(r.status, msg)) throw noSubtitlesFor(lang, query);
+        const e = new Error(msg ? `wyzie search HTTP ${r.status}: ${msg}` : `wyzie search HTTP ${r.status}`);
+        if (![408, 429].includes(r.status) && r.status < 500) e.permanent = true;
+        throw e;
     }
     return r;
   }, { attempts, delayMs: retryDelayMs });
@@ -411,7 +468,7 @@ async function fetchOnlineSub({ key, tmdbId, query, lang = 'en', releaseName = '
     sr = await search(true);
     try { data = JSON.parse(sr.body); } catch { throw new Error('wyzie returned a non-JSON response'); }
   }
-  if (!Array.isArray(data) || !data.length) throw permanent(`no ${lang} subtitles found for "${query}"`);
+  if (!Array.isArray(data) || !data.length) throw noSubtitlesFor(lang, query);
   const hit = pickSub(data, releaseName, { durationSeconds });
   if (!hit) throw permanent(`no usable ${lang} subtitle file in the results`);
   return downloadSubtitle(hit, { key, base, attempts, retryDelayMs });
@@ -436,14 +493,15 @@ async function searchOnlineSubs({ key, tmdbId, query, lang = 'en', releaseName =
   if (key) u.searchParams.set('key', key);
   const search = (refresh = false) => retryTransient('Wyzie subtitle search', async () => {
     if (refresh) u.searchParams.set('refresh', 'true'); else u.searchParams.delete('refresh');
-    const r = await request('GET', u.href, { timeoutMs: 25000, deadlineMs: 35000 });
-    if (r.status === 401) throw permanent('Wyzie Subs key missing or invalid');
-    if (r.status !== 200) {
-      let msg = '';
-      try { msg = (JSON.parse(r.body) || {}).message || ''; } catch {}
-      const e = new Error(msg ? `wyzie search HTTP ${r.status}: ${msg}` : `wyzie search HTTP ${r.status}`);
-      if (![408, 429].includes(r.status) && r.status < 500) e.permanent = true;
-      throw e;
+      const r = await request('GET', u.href, { timeoutMs: 25000, deadlineMs: 35000 });
+      if (r.status === 401) throw permanent('Wyzie Subs key missing or invalid');
+      if (r.status !== 200) {
+        let msg = '';
+        try { msg = (JSON.parse(r.body) || {}).message || ''; } catch {}
+        if (isNoSubtitleResponse(r.status, msg)) throw noSubtitlesFor(lang, query);
+        const e = new Error(msg ? `wyzie search HTTP ${r.status}: ${msg}` : `wyzie search HTTP ${r.status}`);
+        if (![408, 429].includes(r.status) && r.status < 500) e.permanent = true;
+        throw e;
     }
     return r;
   }, { attempts, delayMs: retryDelayMs });
@@ -454,7 +512,7 @@ async function searchOnlineSubs({ key, tmdbId, query, lang = 'en', releaseName =
     sr = await search(true);
     try { data = JSON.parse(sr.body); } catch { throw new Error('wyzie returned a non-JSON response'); }
   }
-  if (!Array.isArray(data) || !data.length) throw permanent(`no ${lang} subtitles found for "${query}"`);
+  if (!Array.isArray(data) || !data.length) throw noSubtitlesFor(lang, query);
   return data;
 }
 
@@ -498,28 +556,28 @@ async function downloadSubtitle(hit, { key, base = DEFAULT_BASE, attempts = 2, r
   return srtToVtt(file.body);
 }
 
-async function fetchOnlineSubV2({ key, tmdbId, query, lang = 'en', releaseName = '', durationSeconds = 0, base = DEFAULT_BASE,
+async function fetchOnlineSubV2({ key, tmdbId, imdbId, query, lang = 'en', releaseName = '', durationSeconds = 0, base = DEFAULT_BASE,
   attempts = 2, retryDelayMs = 700 } = {}) {
-  if (!tmdbId) throw permanent('online subtitles need a catalog title (no TMDB id for this play)');
-  const data = await wyzieSearchResults({ key, tmdbId, query, lang, releaseName, base, attempts, retryDelayMs });
-  if (!Array.isArray(data) || !data.length) throw permanent(`no ${lang} subtitles found for "${query}"`);
-  const hit = pickSub(data, releaseName, { durationSeconds });
-  if (!hit) throw permanent(`no usable ${lang} subtitle file in the results`);
-  return downloadSubtitle(hit, { key, base, attempts, retryDelayMs });
+  if (!wyzieCatalogId({ tmdbId, imdbId })) throw permanent('online subtitles need a catalog title (no TMDB or IMDb id for this play)');
+  const data = await wyzieSearchResults({ key, tmdbId, imdbId, query, lang, releaseName, base, attempts, retryDelayMs });
+  if (!Array.isArray(data) || !data.length) throw noSubtitlesFor(lang, query);
+  return downloadBestSubtitle(data, { key, releaseName, durationSeconds, base, attempts, retryDelayMs });
 }
 
-async function searchOnlineSubsV2({ key, tmdbId, query, lang = 'en', releaseName = '', base = DEFAULT_BASE,
+async function searchOnlineSubsV2({ key, tmdbId, imdbId, query, lang = 'en', releaseName = '', base = DEFAULT_BASE,
   attempts = 2, retryDelayMs = 700 } = {}) {
-  if (!tmdbId) throw permanent('online subtitles need a catalog title (no TMDB id for this play)');
-  const data = await wyzieSearchResults({ key, tmdbId, query, lang, releaseName, base, attempts, retryDelayMs });
-  if (!Array.isArray(data) || !data.length) throw permanent(`no ${lang} subtitles found for "${query}"`);
+  if (!wyzieCatalogId({ tmdbId, imdbId })) throw permanent('online subtitles need a catalog title (no TMDB or IMDb id for this play)');
+  const data = await wyzieSearchResults({ key, tmdbId, imdbId, query, lang, releaseName, base, attempts, retryDelayMs });
+  if (!Array.isArray(data) || !data.length) throw noSubtitlesFor(lang, query);
   return data;
 }
 
 module.exports = {
   fetchOnlineSub: fetchOnlineSubV2, searchOnlineSubs: searchOnlineSubsV2,
-  downloadSubtitle, rankSubs, srtToVtt, shiftVtt, parseQuery, pickSub,
-  _request: request, _isTransientError: isTransientError,
+  downloadSubtitle, downloadBestSubtitle, rankSubs, srtToVtt, shiftVtt, parseQuery, pickSub,
+  _request: request, _isTransientError: isTransientError, _isNoSubtitleError: isNoSubtitleError,
+  _wyzieCatalogId: wyzieCatalogId,
   _subtitleDownloadNeedsAuth: subtitleDownloadNeedsAuth,
   _subtitleDownloadUrl: subtitleDownloadUrl,
+  _subtitleDownloadCanFallback: subtitleDownloadCanFallback,
 };

@@ -11,6 +11,7 @@ package app.triboon.tv;
 // key events, including auto-repeat — which the web UI's long-press OK detection expects.
 
 import android.annotation.SuppressLint;
+import android.annotation.TargetApi;
 import android.app.Activity;
 import android.content.res.ColorStateList;
 import android.content.SharedPreferences;
@@ -27,12 +28,14 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.util.Log;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.window.OnBackInvokedDispatcher;
 import android.webkit.WebChromeClient;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -77,11 +80,14 @@ import java.net.URL;
 
 public class MainActivity extends Activity {
 
+    private static final String TAG = "TriboonTV";
     private static final String PREFS = "triboon";
     private static final String KEY_SERVER = "server";
     private static final String KEY_CACHE_VERSION = "cacheVersion";
     private static final int REQ_VOICE = 31;
     private static final int REQ_MIC = 32;
+    private static final long WEB_RENDERER_CRASH_WINDOW_MS = 15000L;
+    private static final int WEB_RENDERER_CRASH_LIMIT = 2;
 
     private WebView web;
     private LinearLayout setup;
@@ -194,6 +200,8 @@ public class MainActivity extends Activity {
     private android.speech.SpeechRecognizer speech; // in-app voice search (created per use)
     private boolean voicePending;            // mic permission was requested BY a voice tap
     private int focusRecoveryEpoch;
+    private long lastWebRendererGoneAt;
+    private int webRendererGoneCount;
     private final java.util.ArrayList<String> pendingTvKeys = new java.util.ArrayList<>();
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -342,11 +350,18 @@ public class MainActivity extends Activity {
 
             @Override public void onReceivedError(WebView v, WebResourceRequest req, WebResourceError err) {
                 if (Build.VERSION.SDK_INT >= 23 && req.isForMainFrame()) {
-                    pageReady = false;
-                    pageTvReady = false;
-                    pendingTvKeys.clear();
+                    resetWebPageState();
                     showSetup("Couldn't reach the server — check the address and that Triboon is running.");
                 }
+            }
+
+            @Override
+            @TargetApi(Build.VERSION_CODES.O)
+            public boolean onRenderProcessGone(WebView v, RenderProcessGoneDetail detail) {
+                final boolean didCrash = detail != null && detail.didCrash();
+                final int priorityAtExit = detail == null ? -1 : detail.rendererPriorityAtExit();
+                root.post(() -> recoverWebRenderer(v, didCrash, priorityAtExit));
+                return true;
             }
 
             // Stay inside the app: only the configured server's pages render here. The web UI
@@ -496,9 +511,109 @@ public class MainActivity extends Activity {
             }
         }, "TriboonTV");
 
-        root.addView(web, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        addWebViewBehindOverlays();
         web.requestFocus(View.FOCUS_DOWN);
+    }
+
+    private void addWebViewBehindOverlays() {
+        root.addView(web, 0, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    }
+
+    private void resetWebPageState() {
+        pageReady = false;
+        pageTvReady = false;
+        pageInputFocused = false;
+        pendingTvKeys.clear();
+    }
+
+    private void recoverWebRenderer(WebView crashedWeb, boolean didCrash, int priorityAtExit) {
+        boolean setupVisible = setup != null && setup.getVisibility() == View.VISIBLE;
+        boolean nativeVisible = nativePlayerOpen();
+        String url = crashedWeb != null ? crashedWeb.getUrl() : null;
+        if (url == null || url.isEmpty() || "about:blank".equals(url)) {
+            url = prefs().getString(KEY_SERVER, "");
+        }
+
+        long now = SystemClock.uptimeMillis();
+        if (now - lastWebRendererGoneAt > WEB_RENDERER_CRASH_WINDOW_MS) {
+            webRendererGoneCount = 0;
+        }
+        lastWebRendererGoneAt = now;
+        webRendererGoneCount++;
+        boolean tooManyCrashes = webRendererGoneCount > WEB_RENDERER_CRASH_LIMIT;
+
+        Log.e(TAG, "WebView renderer gone"
+                + " didCrash=" + didCrash
+                + " priorityAtExit=" + priorityAtExit
+                + " count=" + webRendererGoneCount
+                + " url=" + redactedWebUrl(url));
+
+        if (fullscreenVideo != null) {
+            try { root.removeView(fullscreenVideo); } catch (Exception ignored) {}
+            fullscreenVideo = null;
+        }
+        disposeWebView(crashedWeb, true);
+        resetWebPageState();
+        buildWebView();
+
+        if (tooManyCrashes) {
+            showSetup("The TV page crashed repeatedly. Reconnect to your server, or restart Triboon if it keeps happening.");
+            return;
+        }
+
+        if (setupVisible || url == null || url.isEmpty()) {
+            showSetup("The TV page crashed and was restarted.");
+            return;
+        }
+
+        setup.setVisibility(View.GONE);
+        web.loadUrl(url);
+        if (nativeVisible) {
+            web.setVisibility(View.GONE);
+            nativePlayerLayer.bringToFront();
+            nativePlayerLayer.requestFocus();
+        } else {
+            web.setVisibility(View.VISIBLE);
+            scheduleTvFocusRecovery("renderer");
+        }
+    }
+
+    private void disposeWebView(WebView target, boolean rendererGone) {
+        if (target == null) return;
+        try {
+            if (root != null) root.removeView(target);
+        } catch (Exception ignored) {}
+        try {
+            target.setWebChromeClient(null);
+            target.setWebViewClient(null);
+            if (!rendererGone) {
+                target.stopLoading();
+                target.loadUrl("about:blank");
+                target.removeAllViews();
+            }
+            target.destroy();
+        } catch (Exception ignored) {}
+        if (target == web) web = null;
+    }
+
+    private String redactedWebUrl(String url) {
+        if (url == null || url.isEmpty()) return "";
+        try {
+            Uri u = Uri.parse(url);
+            if (u == null || u.getHost() == null) return "";
+            StringBuilder out = new StringBuilder();
+            out.append(u.getScheme() == null ? "http" : u.getScheme())
+                    .append("://")
+                    .append(u.getHost());
+            if (u.getPort() >= 0) out.append(":").append(u.getPort());
+            if (u.getPath() != null) out.append(u.getPath());
+            if (u.getQuery() != null) out.append("?[redacted]");
+            if (u.getFragment() != null) out.append("#").append(u.getFragment());
+            return out.toString();
+        } catch (Exception ignored) {
+            return "";
+        }
     }
 
     private String buildNativePlaybackCaps() {
@@ -1288,8 +1403,9 @@ public class MainActivity extends Activity {
                 enterNativeFullscreenMode();
                 showNativeLoading(title, backdropUrl);
             }
-            if (reuseLivePlayer && nativePlayer.getPlaybackState() != Player.STATE_IDLE) {
+            if (reuseLivePlayer) {
                 nativePlayer.stop();
+                nativePlayer.clearMediaItems();
             }
             nativePlayer.setMediaItem(buildNativeMediaItem());
             nativePlayer.prepare();
@@ -2043,7 +2159,8 @@ public class MainActivity extends Activity {
         nativeQualityLabel = "LIVE";
         nativeLiveUnhealthySinceMs = 0L;
         nativeLiveLastRecoveryMs = SystemClock.elapsedRealtime();
-        if (nativePlayer.getPlaybackState() != Player.STATE_IDLE) nativePlayer.stop();
+        nativePlayer.stop();
+        nativePlayer.clearMediaItems();
         if (nativePlayerBadge != null) nativePlayerBadge.setText("LIVE");
         if (nativeChromeQuality != null) nativeChromeQuality.setText("LIVE");
         nativePlayer.setMediaItem(buildNativeMediaItem());
@@ -2059,7 +2176,8 @@ public class MainActivity extends Activity {
         if (tryNativeLiveFallback()) return;
         nativeLiveLastRecoveryMs = now;
         nativeLiveUnhealthySinceMs = 0L;
-        if (nativePlayer.getPlaybackState() != Player.STATE_IDLE) nativePlayer.stop();
+        nativePlayer.stop();
+        nativePlayer.clearMediaItems();
         nativePlayer.setMediaItem(buildNativeMediaItem());
         nativePlayer.prepare();
         nativePlayer.play();
@@ -2101,15 +2219,17 @@ public class MainActivity extends Activity {
                 c.setConnectTimeout(7000);
                 c.setReadTimeout(12000);
                 c.setRequestProperty("Accept", "text/vtt,text/plain,*/*");
-                StringBuilder sb = new StringBuilder();
-                try (java.io.BufferedReader br = new java.io.BufferedReader(
-                        new java.io.InputStreamReader(c.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
-                    String line;
-                    while ((line = br.readLine()) != null) sb.append(line).append('\n');
+                int status = c.getResponseCode();
+                String body;
+                try {
+                    body = readNativeSubtitleResponse(c, status >= 400);
+                    if (status >= 400) {
+                        throw new java.io.IOException("subtitle HTTP " + status + ": " + subtitleErrorSnippet(body));
+                    }
                 } finally {
-                    c.disconnect();
+                    try { c.disconnect(); } catch (Exception ignored) {}
                 }
-                java.util.ArrayList<NativeCue> cues = parseNativeVtt(sb.toString());
+                java.util.ArrayList<NativeCue> cues = parseNativeVtt(body);
                 runOnUiThread(() -> {
                     if (token != nativeSubtitleLoadToken) return;
                     nativeSubtitleCues.clear();
@@ -2119,6 +2239,7 @@ public class MainActivity extends Activity {
                     if (!nativeSubtitleCues.isEmpty()) nativeSubtitleHandler.postDelayed(nativeSubtitleTick, 250);
                 });
             } catch (Exception e) {
+                Log.w(TAG, "Subtitles could not load: " + redactNativeLogMessage(e.getMessage()));
                 runOnUiThread(() -> {
                     if (token != nativeSubtitleLoadToken) return;
                     clearNativeSubtitleOverlay();
@@ -2126,6 +2247,31 @@ public class MainActivity extends Activity {
                 });
             }
         }, "triboon-subtitles").start();
+    }
+
+    private String readNativeSubtitleResponse(HttpURLConnection c, boolean errorStream) throws java.io.IOException {
+        StringBuilder sb = new StringBuilder();
+        java.io.InputStream in = errorStream ? c.getErrorStream() : c.getInputStream();
+        if (in == null) return "";
+        try (java.io.BufferedReader br = new java.io.BufferedReader(
+                new java.io.InputStreamReader(in, java.nio.charset.StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                if (sb.length() < 4 * 1024 * 1024) sb.append(line).append('\n');
+            }
+        }
+        return sb.toString();
+    }
+
+    private String subtitleErrorSnippet(String body) {
+        String s = String.valueOf(body == null ? "" : body).replaceAll("\\s+", " ").trim();
+        if (s.length() > 180) s = s.substring(0, 180);
+        return redactNativeLogMessage(s);
+    }
+
+    private String redactNativeLogMessage(String msg) {
+        return String.valueOf(msg == null ? "" : msg)
+                .replaceAll("(?i)([?&](?:t|key|token|apikey|api_key|password|pass)=)[^&\\s]+", "$1[redacted]");
     }
 
     private void clearNativeSubtitleOverlay() {
@@ -2721,6 +2867,12 @@ public class MainActivity extends Activity {
             showNativeChrome(false);
             return;
         }
+        if (trackType == C.TRACK_TYPE_TEXT && "missing".equals(choice.subtitleAction)) {
+            Toast.makeText(this, choice.label == null || choice.label.isEmpty()
+                    ? "No subtitles found for this title" : choice.label, Toast.LENGTH_SHORT).show();
+            showNativeChrome(false);
+            return;
+        }
         if (trackType == C.TRACK_TYPE_TEXT && choice.subtitleRel != null) {
             nativeSubtitleRel = choice.subtitleRel;
             nativeSubtitleLabel = choice.label;
@@ -2821,7 +2973,7 @@ public class MainActivity extends Activity {
 
     private String nativeLabelForSubtitleRel(String rel) {
         String lang = nativeLangName(nativeLangFromSubtitleRel(rel));
-        return (lang.isEmpty() ? "Subtitles" : lang) + " - Recommended";
+        return lang.isEmpty() ? "Subtitles" : lang;
     }
 
     private void notifyNativeSubtitleSelect(String rel) {
@@ -3137,6 +3289,7 @@ public class MainActivity extends Activity {
     }
 
     private void showWebAfterNativePlayback() {
+        if (web == null) return;
         web.setVisibility(View.VISIBLE);
         web.requestFocus();
     }
@@ -3207,6 +3360,7 @@ public class MainActivity extends Activity {
         url = url.replaceAll("/+$", "");
         prefs().edit().putString(KEY_SERVER, url).apply();
         setup.setVisibility(View.GONE);
+        if (web == null) buildWebView();
         web.setVisibility(View.VISIBLE);
         web.requestFocus();
         web.loadUrl(url);
@@ -3532,12 +3686,15 @@ public class MainActivity extends Activity {
         super.onPause();
         // Stop playback/audio when the app is backgrounded (TV home button).
         closeNativePlayback(true);
-        web.evaluateJavascript("document.querySelectorAll('video').forEach(v=>v.pause())", null);
+        if (web != null) {
+            web.evaluateJavascript("document.querySelectorAll('video').forEach(v=>v.pause())", null);
+        }
     }
 
     @Override
     protected void onDestroy() {
         releaseNativePlayer(false);
+        disposeWebView(web, false);
         if (speech != null) { speech.destroy(); speech = null; }
         super.onDestroy();
     }

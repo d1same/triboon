@@ -370,8 +370,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'local-first Continue Watching entries should keep the rich local player prep URL');
   assert.match(ui, /_local: x\.streamUrl \? \{ streamUrl: x\.streamUrl, playUrl: x\.playUrl, name:/,
     'added-library cards should carry the full local player prep URL');
-  assert.match(ui, /async function playLocal\(it\) \{[\s\S]+await api\(it\._local\.playUrl, \{ method: 'POST', body: \{ caps: clientCaps\(\) \} \}\)[\s\S]+openPlayer\(it, \{ \.\.\.mount/,
-    'added-library playback should use the same prepared player mount shape as Movies and TV');
+  assert.match(ui, /async function playLocal\(it\) \{[\s\S]+const ids = sourceIdentityFor\(it\);[\s\S]+const body = \{ caps: clientCaps\(\), q: queryFor\(it\) \};[\s\S]+if \(ids\.season != null\) body\.season = ids\.season;[\s\S]+if \(ids\.ep != null\) body\.ep = ids\.ep;[\s\S]+await api\(it\._local\.playUrl, \{ method: 'POST', body \}\)[\s\S]+openPlayer\(it, \{ \.\.\.mount/,
+    'added-library playback should use the same prepared player mount shape as Movies and TV while preserving subtitle episode context');
   assert.match(ui, /async function playLocal\(it\) \{[\s\S]+it = resolvePlaybackResume\(it\);[\s\S]+if \(nativeFirst\) showNativePlayLoading\(it\);[\s\S]+else showPlayLoading\(it\);[\s\S]+openPlayer\(it, \{ \.\.\.mount/,
     'local library playback should resolve resume and leave details for the loading player before mount prep waits');
   assert.match(ui, /function mergeLocalItemsInto\(map, lib, items\) \{[\s\S]+`tmdb:tv:\$\{x\.tmdbId\}:s\$\{x\.s\}e\$\{x\.e\}`[\s\S]+playUrl: x\.playUrl[\s\S]+function mergeLocalItems\(lib, items\) \{[\s\S]+S\.localMap = map/,
@@ -402,6 +402,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'local-only show details should group scanned episodes into seasons before rendering episode cards');
   assert.match(ui, /function openLocalShowSeasonEpisodes\(show, seasonNumber\) \{[\s\S]+S\.localDetailEpisodes[\s\S]+localEpisodeItemOf\(show, ep\)[\s\S]+setLocalEpisodeWatched\(item, act === 'watch', seasonNumber\)/,
     'local-only show seasons should open local episode cards that play and mark local episode keys');
+  assert.match(ui, /function localEpisodeItemOf\(show, ep\) \{[\s\S]+q: `\$\{show\.title\} \$\{code\}`[\s\S]+season: ep\.s, episode: ep\.e/,
+    'local episode playback items should preserve query and episode numbers for subtitles');
+  assert.match(ui, /function episodeKeyParts\(it\) \{[\s\S]+it\.season[\s\S]+it\.episode[\s\S]+it\.q[\s\S]+it\.genre[\s\S]+it\.title/,
+    'episode helpers should understand local episode metadata, not just tmdb:tv keys');
   assert.match(ui, /\$\(\'allSeasonsBtn\'\)\.addEventListener\('click', \(\) => \{[\s\S]+S\.detailItem\._localShow[\s\S]+renderLocalShowSeasonGrid\(S\.detailItem, S\.detailSeasons\)[\s\S]+else renderSeasonGrid\(S\.detailItem, S\.detailSeasons\)/,
     'All seasons should return to the local season grid for local-only shows');
   assert.match(ui, /if \(it\._localShow && S\.localDetailEpisodes\) \{[\s\S]+markLocalEpisodeGroupWatched\(it, S\.localDetailEpisodes, nowWatched/,
@@ -514,6 +518,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'web play requests should merge native Exo capabilities into the caps sent to the server');
   assert.match(server, /function parseCaps\(raw\) \{[\s\S]+\['mkv', 'mp4', 'h264', 'hevc', 'av1', 'vp9', 'mpeg2', 'aac', 'ac3', 'eac3', 'dts', 'native'\][\s\S]+caps\.source = String\(raw\.source\)\.slice\(0, 64\)/,
     'server should accept sanitized native playback capability fields');
+  assert.match(server, /const imdbRaw = String\(ctx\.url\.searchParams\.get\('imdb'\) \|\| ctx\.url\.searchParams\.get\('imdbid'\) \|\| ''\)\.trim\(\);[\s\S]+const imdbId = \/\^tt\\d\{5,10\}\$\/i\.test\(imdbRaw\) \? imdbRaw\.toLowerCase\(\) : '';[\s\S]+key, tmdbId, imdbId, query: vf\._subQuery \|\| vf\._q \|\| vf\.name[\s\S]+const catalogId = imdbId \|\| tmdbId;/,
+    'server subtitle route should accept IMDb ids, prefer them in Wyzie search, and cache by the active catalog id');
   assert.match(android, /private boolean pageTvReady;[\s\S]+private final java\.util\.ArrayList<String> pendingTvKeys[\s\S]+public void appReady\(\) \{[\s\S]+pageTvReady = true;[\s\S]+flushPendingTvKeys\(\);/,
     'Android should buffer early D-pad input until the web focus model is ready');
   assert.match(android, /protected void onResume\(\) \{[\s\S]+scheduleTvFocusRecovery\("resume"\)[\s\S]+public void onWindowFocusChanged\(boolean hasFocus\) \{[\s\S]+if \(hasFocus\) scheduleTvFocusRecovery\("window"\)[\s\S]+private void recoverTvFocus\(String reason\) \{[\s\S]+web\.requestFocus\(\);[\s\S]+if \(pageTvReady\) flushPendingTvKeys\(\);/,
@@ -522,8 +528,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android key bridge should not drop early D-pad keydown events during first app paint');
   assert.match(androidSmoke, /\[switch\]\$StartupDpad[\s\S]+\[switch\]\$ColdStart[\s\S]+input keyevent DPAD_RIGHT[\s\S]+input keyevent DPAD_DOWN[\s\S]+perfMarks/,
     'Android smoke helper should be able to reproduce first-open D-pad readiness and report boot timing marks');
-  assert.match(ui, /function startWebPlayerHousekeeping\(mount, it\) \{[\s\S]+v\.onerror = \(\) => failover\(\);[\s\S]+startHealthPoll\(mount\.id\);[\s\S]+loadTracks\(\);[\s\S]+fetch\(`\/api\/ossubs\/\$\{mount\.id\}\?lang=\$\{code2\}&tmdb=\$\{it\.tmdbId \|\| ''\}&t=\$\{mount\.streamToken\}`\)/,
-    'web-only probes and subtitle prefetch should stay in the web playback branch');
+  assert.match(ui, /function startWebPlayerHousekeeping\(mount, it\) \{[\s\S]+v\.onerror = \(\) => failover\(\);[\s\S]+startHealthPoll\(mount\.id\);[\s\S]+loadTracks\(\);[\s\S]+subtitleCatalogAvailable\(it\)[\s\S]+fetch\(`\/api\/ossubs\/\$\{mount\.id\}\?\$\{subtitleRequestParams\(it, code2, mount\.streamToken\)\.toString\(\)\}`\)/,
+    'web-only probes and subtitle prefetch should stay in the web playback branch and carry catalog ids');
   assert.match(ui, /async function loadTracks\(\) \{[\s\S]+if \(p\.usingNative && canUseNativeVideoPlayer\(\)\) \{[\s\S]+p\.nativeDuration = p\.duration \|\| p\.nativeDuration \|\| 0;[\s\S]+refreshNativeSubtitleChoices\(\);[\s\S]+return;[\s\S]+\}/,
     'track probing should feed native duration and subtitle choices without starting web playback');
   assert.match(ui, /function startSource\(kind, atSeconds, opts = \{\}\) \{[\s\S]+if \(p && p\.usingNative && canUseNativeVideoPlayer\(\)\) return false;/,
@@ -742,8 +748,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'server subtitle lookup should be able to add episode identity even when source filenames are opaque');
   assert.match(server, /vf\._q = body\.q;[\s\S]+vf\._subQuery = episodeSubtitleQuery\(body\.q, body\.season, body\.ep\);[\s\S]+query: vf\._subQuery \|\| vf\._q \|\| vf\.name/,
     'online subtitle lookup should use the episode-aware query captured during play');
-  assert.match(ui, /function nativeVideoSubtitleRel\(p\) \{[\s\S]+Only explicit per-title choices turn on[\s\S]+if \(saved && saved !== 'off'\) return \{ blocked: false, rel: saved \};[\s\S]+return \{ blocked: false, rel: '' \};[\s\S]+\}/,
-    'native playback should not auto-enable profile-language subtitles on start');
+  assert.match(server, /function localMountFor\(ctx, libId, idx, caps = \{\}, playCtx = \{\}\)[\s\S]+const q = String\(playCtx\.q \|\| found\.item\.q \|\| found\.item\.title \|\| name\)[\s\S]+const season = playCtx\.season \?\? found\.item\.s[\s\S]+const ep = playCtx\.ep \?\? playCtx\.episode \?\? found\.item\.e[\s\S]+vf\._subQuery = episodeSubtitleQuery\(vf\._q, season, ep\)/,
+    'local library mounts should preserve episode-aware subtitle queries for Wyzie');
+  assert.match(ui, /function nativeVideoSubtitleRel\(p\) \{[\s\S]+Only explicit per-title choices turn on[\s\S]+if \(info && !info\.variant\) return \{ blocked: false, rel: bestSubtitleVariantRel\(info\.lang\) \|\| '' \};[\s\S]+return \{ blocked: false, rel: saved \};[\s\S]+return \{ blocked: false, rel: '' \};[\s\S]+\}/,
+    'native playback should only auto-enable concrete saved subtitle versions on start');
   assert.doesNotMatch(ui, /function applyTrackPrefs\(\) \{[\s\S]+setSubtitle\('os:' \+ osLang\(wantS\)\)/,
     'web playback should keep profile subtitle language as a CC-menu hint, not auto-start captions');
   assert.match(ui, /window\.__tvNativeSubtitleSelect = \(rel, pos, dur\) => \{[\s\S]+saveSubChoice\(rel, subtitleDisplayName\(rel\)\)[\s\S]+p\.usingNative = true;[\s\S]+\};/,
@@ -788,22 +796,30 @@ test('Android native player: direct source and native chrome stay out of the web
     'web keep-open track rows should rebuild the menu without jumping back to the top');
   assert.match(ui, /window\.__tvNativeSubtitleShift = \(shift\) => \{[\s\S]+saveSubShift\(p\.subTrack, n\)/,
     'Android subtitle sync changes should persist through the web profile state');
-  assert.match(ui, /function subtitleDisplayName\(rel\) \{[\s\S]+if \(!info\.variant\) return subtitleRecommendedLabel\(name, bestSubtitleVariant\(info\.lang\)\);[\s\S]+const saved = savedSubtitleDetail\(name\);[\s\S]+return \(detail \|\| saved\) \? `\$\{name\} - \$\{detail \|\| saved\}` : `\$\{name\} - Selected subtitle`;/,
-    'web and native subtitle labels should use clear language names without generic auto-match wording');
+  assert.match(ui, /function subtitleDisplayName\(rel\) \{[\s\S]+if \(!info\.variant\) return subtitleRecommendedLabel\(name, bestSubtitleVariant\(info\.lang\)\);[\s\S]+const saved = savedSubtitleDetail\(name\);[\s\S]+return \(detail \|\| saved\) \? `\$\{name\} \(\$\{detail \|\| saved\}\)` : name;/,
+    'web and native subtitle labels should use plain language names with release details only when useful');
   assert.match(ui, /function cleanSubtitleLabel\(label\) \{[\s\S]+replace\(\s*\/\^Wyzie/,
     'old saved subtitle labels should drop provider branding when displayed');
-  assert.match(ui, /async function resolveOnlineSubtitleRel\(rel\) \{[\s\S]+await loadSubtitleVersions\(info\.lang\)[\s\S]+return best && best\.id \? osTrackRel\(info\.lang, best\.id\) : rel;/,
-    'generic online subtitle auto-match should resolve to the ranked concrete version before loading');
-  assert.match(ui, /function subtitleRecommendedLabel\(name, v\) \{[\s\S]+return detail \? `\$\{name\} - Recommended \(\$\{detail\}\)` : `\$\{name\} - Recommended`;/,
-    'CC menu should show one obvious recommended subtitle row per language');
+  assert.match(ui, /async function resolveOnlineSubtitleRel\(rel\) \{[\s\S]+await loadSubtitleVersions\(info\.lang\)[\s\S]+if \(!best \|\| !best\.id\) throw subtitleNoResultsError\(info\.lang\);[\s\S]+return osTrackRel\(info\.lang, best\.id\);/,
+    'generic online subtitle auto-match must resolve to a ranked concrete version before loading');
+  assert.match(ui, /function subtitleResponseNoResults\(lang, status, body = \{\}\) \{[\s\S]+code === 'no_subtitles'[\s\S]+subtitleNoResultsMessage\(lang\)/,
+    'subtitle no-results responses should become a first-class player state');
+  assert.match(ui, /function subtitleRequestParams\(it, lang, streamToken\) \{[\s\S]+tmdb: String\(\(it \|\| \{\}\)\.tmdbId \|\| ''\)[\s\S]+const imdb = subtitleImdbId\(it\);[\s\S]+if \(imdb\) q\.set\('imdb', imdb\);[\s\S]+return q;/,
+    'online subtitle requests should carry IMDb when available while keeping TMDB fallback');
+  assert.match(ui, /async function loadSubtitleVersions\(lang\) \{[\s\S]+const miss = subtitleMiss\(l\);[\s\S]+if \(miss\) throw subtitleNoResultsError\(l, miss\);[\s\S]+if \(e && e\.noSubtitles\) rememberSubtitleMiss\(l, e\.message\);/,
+    'subtitle version lookup should remember title-level misses instead of keeping broken rows selectable');
+  assert.match(ui, /function subtitleRecommendedLabel\(name, v\) \{[\s\S]+return detail \? `\$\{name\} \(\$\{detail\}\)` : name;/,
+    'CC menu should show one obvious language row without Recommended wording');
   assert.match(ui, /const pick = subtitleDefaultChoice\(l\);[\s\S]+mkRow\(pick\.label, p\.subTrack === pick\.rel, \(\) => setSubtitle\(pick\.rel\)\);[\s\S]+if \(variants && variants\.length && expanded\) \{/,
     'web CC menu should keep advanced subtitle versions collapsed until the user asks for them');
-  assert.match(ui, /const pick = subtitleDefaultChoice\(l\);[\s\S]+addChoice\(\{ rel: pick\.rel, label: pick\.label \}\);[\s\S]+if \(variants && variants\.length && expanded\) \{/,
-    'native CC choices should mirror the collapsed recommended-first subtitle menu');
-  assert.match(ui, /mkRow\(`More \$\{name\} subtitles`/,
-    'CC menu should expose named subtitle versions through a plain More subtitles row');
-  assert.match(ui, /addChoice\(\{ action: 'versions', lang: l, label: `More \$\{name\} subtitles` \}\)/,
-    'native Android CC should expose a lazy More subtitles row when variants are collapsed');
+  assert.match(ui, /if \(!variants \|\| !variants\.length\) \{[\s\S]+addChoice\(\{ action: 'versions', lang: l, label: name \}\);[\s\S]+return;[\s\S]+const pick = subtitleDefaultChoice\(l\);[\s\S]+addChoice\(\{ rel: pick\.rel, label: pick\.label \}\);[\s\S]+if \(variants && variants\.length && expanded\) \{/,
+    'native CC choices should search before exposing a concrete subtitle URL');
+  assert.match(ui, /mkRow\(`Choose \$\{name\} version`/,
+    'CC menu should expose subtitle versions through a clear version-picker row');
+  assert.match(ui, /addChoice\(\{ action: 'versions', lang: l, label: `Choose \$\{name\} version` \}\)/,
+    'native Android CC should expose a lazy version-picker row when variants are collapsed');
+  assert.match(ui, /addChoice\(\{ action: 'missing', lang: l, label: miss \}\)/,
+    'native Android CC should show a clean no-subtitles row after a title-level miss');
   assert.match(ui, /window\.__tvNativeSubtitleVersions = async \(lang, pos, dur\) => \{[\s\S]+await loadSubtitleVersions\(lang\);[\s\S]+setSubtitleLangExpanded\(lang, true\);[\s\S]+refreshNativeSubtitleChoices\(\);/,
     'native Android CC version rows should fetch and expand subtitle variants without selecting a subtitle');
   assert.match(ui, /window\.TriboonTV\.updateSubtitleChoices\(JSON\.stringify\(\{ choices: nativeSubtitleChoices\(\) \}\)\)/,
@@ -1118,6 +1134,16 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android should only flush disk cache after an APK version change');
   assert.doesNotMatch(android, /web\.clearCache\(true\);\s*web\.setBackgroundColor/,
     'Android should not unconditionally discard cached art/assets during every app start');
+  assert.match(android, /onRenderProcessGone\(WebView v, RenderProcessGoneDetail detail\) \{[\s\S]+recoverWebRenderer\(v, didCrash, priorityAtExit\)\);[\s\S]+return true;/,
+    'Android should catch a dead WebView renderer instead of leaving the default web page crashed screen');
+  assert.match(android, /private void recoverWebRenderer\(WebView crashedWeb, boolean didCrash, int priorityAtExit\) \{[\s\S]+disposeWebView\(crashedWeb, true\);[\s\S]+buildWebView\(\);[\s\S]+web\.loadUrl\(url\);/,
+    'Android should rebuild and reload the TV page after a renderer crash');
+  assert.match(android, /root\.addView\(web, 0, new FrameLayout\.LayoutParams\(/,
+    'Android should rebuild the WebView below setup and native player overlays');
+  assert.match(android, /WEB_RENDERER_CRASH_LIMIT[\s\S]+tooManyCrashes[\s\S]+showSetup\("The TV page crashed repeatedly/,
+    'Android renderer recovery should stop retrying after repeated crash loops');
+  assert.match(android, /redactedWebUrl\(url\)/,
+    'Android renderer crash logs should redact URL query tokens');
   assert.match(android, /nativePlayerSubline\.setVisibility\(View\.GONE\)/,
     'native movie/episode chrome should not show the technical file/source line');
   assert.match(android, /nativePlayerTitle\.setVisibility\(View\.INVISIBLE\);/,
@@ -1209,8 +1235,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native subtitle choices should keep the plain labels sent by the web player');
   assert.match(android, /nativeSubtitleLabel = choice\.label;[\s\S]+loadNativeSubtitleOverlay\(nativeSubtitleUrl\)/,
     'native subtitle overlay should use the same plain language labels sent by the web player');
-  assert.match(android, /return \(lang\.isEmpty\(\) \? "Subtitles" : lang\) \+ " - Recommended";/,
-    'native subtitle fallback labels should use Recommended wording, not Auto match');
+  assert.match(android, /return lang\.isEmpty\(\) \? "Subtitles" : lang;/,
+    'native subtitle fallback labels should stay plain and language-first');
   assert.match(android, /\? \(!subtitleLang\.isEmpty\(\) \? nativeLangName\(subtitleLang\) : "Subtitles"\)/,
     'native subtitle fallback should use only the language name');
   assert.doesNotMatch(android, /"Wyzie subtitles"|"Wyzie - " \+ nativeLangName|No Wyzie subtitle/,
@@ -1226,7 +1252,7 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.match(android, /applyNativeSubtitleChoices\(j\.optJSONArray\("subtitleChoices"\)\)/,
     'Android should parse subtitle choices sent in the initial native playback payload');
   assert.match(android, /nativeSubtitleChoiceActions\.add\(action\);[\s\S]+nativeSubtitleChoiceLangs\.add\(lang\);/,
-    'Android should retain native subtitle action rows such as More subtitles');
+    'Android should retain native subtitle action rows such as Choose version');
   assert.match(android, /nativeSubtitleChoiceUrls\.add\(url\);/,
     'Android should retain online subtitle URLs so choices are preloaded as native text tracks');
   assert.match(android, /nativeSubtitleChoiceRels\.add\(rel\);/,
@@ -1234,9 +1260,11 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.match(android, /choices\.add\(new NativeTrackChoice\(null, -1, label, false,[\s\S]+rel\.equals\(nativeSubtitleRel\), rel, action, lang\)\)/,
     'native CC sheet should expose selectable online subtitle rows');
   assert.match(android, /"versions"\.equals\(choice\.subtitleAction\)[\s\S]+requestNativeSubtitleVersions\(choice\.subtitleLang\)/,
-    'native CC sheet should load version rows instead of treating More subtitles as an inert subtitle');
+    'native CC sheet should load version rows instead of treating Choose version as an inert subtitle');
+  assert.match(android, /"missing"\.equals\(choice\.subtitleAction\)[\s\S]+No subtitles found for this title[\s\S]+Toast\.makeText/,
+    'native CC sheet should handle no-subtitles rows without trying to load a subtitle file');
   assert.match(android, /private void requestNativeSubtitleVersions\(String lang\) \{[\s\S]+nativeOpenSubtitleMenuAfterRefresh = true;[\s\S]+window\.__tvNativeSubtitleVersions/,
-    'native More subtitles should intentionally reopen the menu after refreshed rows arrive');
+    'native Choose version should intentionally reopen the menu after refreshed rows arrive');
   assert.match(android, /window\.__tvNativeSubtitleVersions && window\.__tvNativeSubtitleVersions/,
     'Android should call the web subtitle-version loader from the native sheet');
   assert.match(android, /"Off", true, nativeSubtitleRel\.isEmpty\(\)\)/,
@@ -1257,8 +1285,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'native subtitle sync should update the live overlay and persist the offset');
   assert.doesNotMatch(android, /private void applyNativeSubtitleShift\(\) \{[\s\S]+setMediaItem\(/,
     'native subtitle sync must not refresh or rebuild the playing video');
-  assert.match(android, /private void loadNativeSubtitleOverlay\(String url\) \{[\s\S]+parseNativeVtt\(sb\.toString\(\)\)[\s\S]+nativeSubtitleHandler\.postDelayed\(nativeSubtitleTick, 250\)/,
+  assert.match(android, /private void loadNativeSubtitleOverlay\(String url\) \{[\s\S]+int status = c\.getResponseCode\(\);[\s\S]+readNativeSubtitleResponse\(c, status >= 400\)[\s\S]+parseNativeVtt\(body\)[\s\S]+nativeSubtitleHandler\.postDelayed\(nativeSubtitleTick, 250\)/,
     'native online subtitles should be fetched once and rendered by a live Exo overlay');
+  assert.match(android, /throw new java\.io\.IOException\("subtitle HTTP " \+ status \+ ": " \+ subtitleErrorSnippet\(body\)\)/,
+    'native online subtitle failures should log the real HTTP status from the server route');
+  assert.match(android, /private String redactNativeLogMessage\(String msg\)[\s\S]+token\|apikey\|api_key\|password\|pass/,
+    'native subtitle failure logs should redact stream tokens and API-style secrets');
   assert.match(android, /window\.__tvNativeSubtitleShift && window\.__tvNativeSubtitleShift/,
     'native subtitle sync should tell the web app to save the offset');
   assert.match(android, /nativeAudioBtn\.setOnClickListener\(v -> \{ if \(consumeNativeControlClick\(v\)\) showNativeTrackMenu\(C\.TRACK_TYPE_AUDIO\); \}\)/,
@@ -1285,8 +1317,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native player controls should not show success popups over playback');
   assert.match(android, /private boolean nativeVodSeekable\(\) \{[\s\S]+if \(nativePlayer == null \|\| "live"\.equals\(nativeMode\)\) return false;/,
     'live streams should not expose movie-style seeking behavior');
-  assert.match(android, /boolean reuseLivePlayer = "live"\.equals\(mode\) && nativePlayer != null[\s\S]+if \(!reuseQuietVideo && !reuseLivePlayer\) \{[\s\S]+releaseNativePlayer\(false, guide\);[\s\S]+if \(reuseLivePlayer && nativePlayer\.getPlaybackState\(\) != Player\.STATE_IDLE\) \{[\s\S]+nativePlayer\.stop\(\);[\s\S]+nativePlayer\.setMediaItem\(buildNativeMediaItem\(\)\);/,
-    'native Live TV zaps should reuse ExoPlayer and replace the media item instead of releasing/recreating the whole player');
+  assert.match(android, /boolean reuseLivePlayer = "live"\.equals\(mode\) && nativePlayer != null[\s\S]+if \(!reuseQuietVideo && !reuseLivePlayer\) \{[\s\S]+releaseNativePlayer\(false, guide\);[\s\S]+if \(reuseLivePlayer\) \{[\s\S]+nativePlayer\.stop\(\);[\s\S]+nativePlayer\.clearMediaItems\(\);[\s\S]+nativePlayer\.setMediaItem\(buildNativeMediaItem\(\)\);/,
+    'native Live TV zaps should reuse ExoPlayer but explicitly release the old live source before replacing the media item');
   assert.ok([
     'private long nativePendingStartMs;',
     'private long nativeStartSeekIssuedAtMs;',

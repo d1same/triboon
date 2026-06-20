@@ -132,8 +132,9 @@ const pipeline = new Pipeline({
 });
 const { fetchUrl: fetchUrlExt, searchIndexer } = require('./newznab');
 const {
-  fetchOnlineSub, searchOnlineSubs, downloadSubtitle, rankSubs, shiftVtt,
+  fetchOnlineSub, searchOnlineSubs, downloadBestSubtitle, rankSubs, shiftVtt,
   _isTransientError: isTransientSubError,
+  _isNoSubtitleError: isNoSubtitleError,
 } = require('./opensubs');
 const IPTV_CACHE_TTL_MS = 24 * 3600000;
 const EPG_CACHE_TTL_MS = 24 * 3600000;
@@ -144,10 +145,14 @@ const IPTV_WARM_XTREAM_GUIDE_MAX = 96;
 const LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS = 25000;
 const LIVE_REMUX_IDLE_TIMEOUT_MS = 45000;
 const IPTV_NATIVE_ERROR_TTL_MS = 30000;
+const IPTV_LIVE_RETUNE_GRACE_MS = 180;
+const IPTV_PLAYBACK_API_QUIET_MS = 7000;
 let iptvCache = { key: null, at: 0, channels: [] };
 let epgCache = { key: null, at: 0, byChannel: new Map(), byName: new Map() };
 let xtreamEpgCache = { key: null, byStream: new Map() };
 let iptvNativeErrorCache = new Map();
+let activeIptvLiveStreams = new Map();
+let iptvPlaybackHotUntil = 0;
 const idHash = (s) => require('crypto').createHash('sha1').update(String(s)).digest('hex').slice(0, 12);
 
 async function mapLimit(items, limit, fn) {
@@ -202,6 +207,57 @@ function iptvNativeLogLabel(meta = {}) {
   const idx = Number.isInteger(meta.idx) ? `#${meta.idx}` : '#?';
   const name = String(meta.name || 'channel').replace(/[\r\n]+/g, ' ').slice(0, 80);
   return `${idx} "${name}"${meta.alt ? ' fallback' : ''}`;
+}
+function iptvLiveSlotKey(ctx) {
+  const uid = ctx && ctx.claims && ctx.claims.uid ? ctx.claims.uid : 'unknown';
+  const ip = ctx && ctx.req && ctx.req.socket ? (ctx.req.socket.remoteAddress || '') : '';
+  const ua = ctx && ctx.req && ctx.req.headers ? String(ctx.req.headers['user-agent'] || '').slice(0, 80) : '';
+  return idHash(`${uid}|${ip}|${ua}`);
+}
+function markIptvPlaybackHot() {
+  iptvPlaybackHotUntil = Math.max(iptvPlaybackHotUntil, Date.now() + IPTV_PLAYBACK_API_QUIET_MS);
+}
+function iptvPlaybackBusy() {
+  return activeIptvLiveStreams.size > 0 || Date.now() < iptvPlaybackHotUntil;
+}
+function beginIptvLiveSlot(ctx, meta = {}) {
+  markIptvPlaybackHot();
+  const key = iptvLiveSlotKey(ctx);
+  const prev = activeIptvLiveStreams.get(key);
+  let replaced = false;
+  if (prev && typeof prev.close === 'function') {
+    replaced = true;
+    prev.close('retuned');
+  }
+  const label = iptvNativeLogLabel(meta);
+  const entry = {
+    key,
+    label,
+    replaced,
+    closed: false,
+    closer: null,
+    setCloser(fn) { this.closer = typeof fn === 'function' ? fn : null; },
+    close(reason = 'closed') {
+      if (this.closed) return;
+      this.closed = true;
+      try { if (this.closer) this.closer(reason); } catch {}
+      if (activeIptvLiveStreams.get(key) === this) activeIptvLiveStreams.delete(key);
+      if (reason === 'retuned') console.log(`[iptv live] closed previous stream before tuning ${label}`);
+    },
+    done() {
+      if (this.closed) return;
+      this.closed = true;
+      if (activeIptvLiveStreams.get(key) === this) activeIptvLiveStreams.delete(key);
+    },
+  };
+  activeIptvLiveStreams.set(key, entry);
+  return entry;
+}
+function closeAllIptvLiveStreams(reason = 'shutdown') {
+  for (const slot of [...activeIptvLiveStreams.values()]) {
+    if (slot && typeof slot.close === 'function') slot.close(reason);
+  }
+  activeIptvLiveStreams.clear();
 }
 function iptvSafeHost(raw) {
   try { return new URL(String(raw || '')).host || 'unknown'; }
@@ -260,76 +316,123 @@ function sendIptvNativeError(res, status, reason) {
   res.end(body);
 }
 function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
-  let u;
-  try {
-    u = new URL(target);
-    if (!/^https?:$/.test(u.protocol)) throw new Error('unsupported protocol');
-  } catch {
-    console.error(`[iptv native] ${iptvNativeLogLabel(meta)} invalid upstream url`);
-    return send(ctx.res, 502, { error: 'invalid live stream url' });
-  }
-  if (hops > 5) {
-    console.error(`[iptv native] ${iptvNativeLogLabel(meta)} too many redirects`);
-    return send(ctx.res, 502, { error: 'too many live stream redirects' });
-  }
-  const lib = u.protocol === 'https:' ? https : http;
-  const failureKey = idHash(`${u.protocol}//${u.host}${u.pathname}`);
-  const cachedFailure = iptvNativeErrorCache.get(failureKey);
-  if (cachedFailure && cachedFailure.until > Date.now()) {
-    return sendIptvNativeError(ctx.res, cachedFailure.status, cachedFailure.reason);
-  }
-  const headers = {
-    'user-agent': IPTV_NATIVE_PROXY_UA,
-    accept: '*/*',
-    connection: 'close',
+  const slot = beginIptvLiveSlot(ctx, meta);
+  let up = null;
+  let done = false;
+  let delayTimer = null;
+  const label = iptvNativeLogLabel(meta);
+  const stop = (reason = 'closed', err) => {
+    if (done) return;
+    done = true;
+    if (delayTimer) clearTimeout(delayTimer);
+    try { if (up) up.destroy(err || new Error(`live stream ${reason}`)); } catch {}
+    slot.done(reason);
+    ctx.req.off('close', onClientClose);
+    ctx.res.off('close', onClientClose);
   };
-  if (ctx.req.headers.range) headers.range = ctx.req.headers.range;
-  const up = lib.request(u, { method: 'GET', headers, agent: false }, (r) => {
-    if (r.statusCode >= 300 && r.statusCode < 400 && r.headers.location) {
-      r.resume();
-      return proxyIptvNative(ctx, new URL(r.headers.location, u).href, hops + 1, meta);
+  const onClientClose = () => stop('client closed');
+  const fail = (status, body) => {
+    stop('failed');
+    if (!ctx.res.headersSent && !ctx.res.destroyed) {
+      if (typeof body === 'string') send(ctx.res, status, { error: body });
+      else sendIptvNativeError(ctx.res, body.status || status || 502, body.reason || 'live stream unavailable');
     }
-    if ((r.statusCode || 0) >= 400) {
-      const chunks = [];
-      let len = 0;
-      r.on('data', (c) => {
-        if (len < 2048) chunks.push(c.slice(0, Math.max(0, 2048 - len)));
-        len += c.length;
-      });
-      r.on('end', () => {
-        const body = Buffer.concat(chunks).toString('utf8');
-        const reason = iptvNativeFailureReason(r.statusCode || 502, body);
-        iptvNativeErrorCache.set(failureKey, {
-          status: r.statusCode || 502,
-          reason,
-          until: Date.now() + IPTV_NATIVE_ERROR_TTL_MS,
-        });
-        if (iptvNativeErrorCache.size > 2000) iptvNativeErrorCache = new Map([...iptvNativeErrorCache].slice(-1000));
-        console.error(`[iptv native] ${iptvNativeLogLabel(meta)} upstream HTTP ${r.statusCode} (${reason})`);
-        if (!ctx.res.headersSent) sendIptvNativeError(ctx.res, r.statusCode || 502, reason);
-      });
-      return;
+  };
+  slot.setCloser((reason) => {
+    stop(reason, new Error(`live stream ${reason}`));
+    try { if (!ctx.res.destroyed) ctx.res.destroy(); } catch {}
+  });
+  ctx.req.once('close', onClientClose);
+  ctx.res.once('close', onClientClose);
+
+  const open = (rawTarget, hop) => {
+    if (done || slot.closed) return;
+    let u;
+    try {
+      u = new URL(rawTarget);
+      if (!/^https?:$/.test(u.protocol)) throw new Error('unsupported protocol');
+    } catch {
+      console.error(`[iptv native] ${label} invalid upstream url`);
+      return fail(502, 'invalid live stream url');
     }
-    const out = {
-      'content-type': r.headers['content-type'] || 'application/octet-stream',
-      'cache-control': 'no-store',
-      'x-content-type-options': 'nosniff',
-      'x-accel-buffering': 'no',
+    if (hop > 5) {
+      console.error(`[iptv native] ${label} too many redirects`);
+      return fail(502, 'too many live stream redirects');
+    }
+    const failureKey = idHash(`${u.protocol}//${u.host}${u.pathname}`);
+    const cachedFailure = iptvNativeErrorCache.get(failureKey);
+    if (cachedFailure && cachedFailure.until > Date.now()) {
+      return fail(cachedFailure.status, cachedFailure);
+    }
+    const lib = u.protocol === 'https:' ? https : http;
+    const headers = {
+      'user-agent': IPTV_NATIVE_PROXY_UA,
+      accept: '*/*',
+      connection: 'close',
     };
-    for (const h of ['content-length', 'content-range', 'accept-ranges']) {
-      if (r.headers[h]) out[h] = r.headers[h];
-    }
-    ctx.res.writeHead(r.statusCode || 502, out);
-    r.pipe(ctx.res);
-  });
-  up.on('error', (e) => {
-    console.error(`[iptv native] ${iptvNativeLogLabel(meta)} upstream error: ${String(e.message).slice(0, 160)}`);
-    if (!ctx.res.headersSent) send(ctx.res, 502, { error: 'live stream failed' });
-    else try { ctx.res.destroy(e); } catch {}
-  });
-  up.setTimeout(15000, () => up.destroy(new Error('live stream upstream timeout')));
-  ctx.req.on('close', () => up.destroy());
-  up.end();
+    if (ctx.req.headers.range) headers.range = ctx.req.headers.range;
+    up = lib.request(u, { method: 'GET', headers, agent: false }, (r) => {
+      if (done || slot.closed) { r.resume(); return; }
+      if (r.statusCode >= 300 && r.statusCode < 400 && r.headers.location) {
+        r.resume();
+        return open(new URL(r.headers.location, u).href, hop + 1);
+      }
+      if ((r.statusCode || 0) >= 400) {
+        const chunks = [];
+        let len = 0;
+        r.on('data', (c) => {
+          if (len < 2048) chunks.push(c.slice(0, Math.max(0, 2048 - len)));
+          len += c.length;
+        });
+        r.on('end', () => {
+          if (done || slot.closed) return;
+          const body = Buffer.concat(chunks).toString('utf8');
+          const reason = iptvNativeFailureReason(r.statusCode || 502, body);
+          iptvNativeErrorCache.set(failureKey, {
+            status: r.statusCode || 502,
+            reason,
+            until: Date.now() + IPTV_NATIVE_ERROR_TTL_MS,
+          });
+          if (iptvNativeErrorCache.size > 2000) iptvNativeErrorCache = new Map([...iptvNativeErrorCache].slice(-1000));
+          console.error(`[iptv native] ${label} upstream HTTP ${r.statusCode} (${reason})`);
+          fail(r.statusCode || 502, { status: r.statusCode || 502, reason });
+        });
+        return;
+      }
+      const out = {
+        'content-type': r.headers['content-type'] || 'application/octet-stream',
+        'cache-control': 'no-store',
+        'x-content-type-options': 'nosniff',
+        'x-accel-buffering': 'no',
+      };
+      for (const h of ['content-length', 'content-range', 'accept-ranges']) {
+        if (r.headers[h]) out[h] = r.headers[h];
+      }
+      ctx.res.writeHead(r.statusCode || 502, out);
+      r.on('end', () => stop('upstream ended'));
+      r.pipe(ctx.res);
+    });
+    slot.setCloser((reason) => {
+      stop(reason, new Error(`live stream ${reason}`));
+      try { if (!ctx.res.destroyed) ctx.res.destroy(); } catch {}
+    });
+    up.on('error', (e) => {
+      if (done || slot.closed || /live stream (retuned|client closed|shutdown)/i.test(String(e && e.message))) return;
+      console.error(`[iptv native] ${label} upstream error: ${String(e.message).slice(0, 160)}`);
+      if (!ctx.res.headersSent) send(ctx.res, 502, { error: 'live stream failed' });
+      else try { ctx.res.destroy(e); } catch {}
+      stop('upstream error');
+    });
+    up.setTimeout(15000, () => up.destroy(new Error('live stream upstream timeout')));
+    up.end();
+  };
+
+  if (slot.replaced && hops === 0) {
+    delayTimer = setTimeout(() => { delayTimer = null; open(target, hops); }, IPTV_LIVE_RETUNE_GRACE_MS);
+    delayTimer.unref();
+  } else {
+    open(target, hops);
+  }
 }
 let iptvRefreshing = false;
 let iptvWarmRunning = false;
@@ -783,6 +886,7 @@ async function xtreamEpgList(ch, { limit = 24 } = {}) {
   const id = String(ch.xtreamId);
   const hit = xtreamEpgCache.byStream.get(id);
   if (hit && Date.now() - hit.at < (hit.list && hit.list.length ? EPG_CACHE_TTL_MS : EPG_EMPTY_TTL_MS)) return hit.list;
+  if (iptvPlaybackBusy()) return hit && hit.list ? hit.list : [];
   if (hit && hit.list && hit.list.length && Date.now() - hit.at <= EPG_CACHE_STALE_MS) {
     if (!hit.promise) {
       const p = fetchXtreamEpgList(s, ch, limit).then((list) => {
@@ -874,11 +978,13 @@ async function warmIptvCaches(reason = 'scheduled') {
     if (s.iptvMode === 'xtream') {
       const key = iptvSourceKey(s);
       if (xtreamEpgCache.key !== key) hydrateXtreamEpgCache(key);
-      const targets = xtreamGuideWarmTargets(channels);
-      await mapLimit(targets, 4, async (ch) => {
+      const targets = iptvPlaybackBusy() ? [] : xtreamGuideWarmTargets(channels);
+      await mapLimit(targets, 1, async (ch) => {
+        if (iptvPlaybackBusy()) return;
         await xtreamEpgList(ch, { limit: 24 });
       });
       result.xtreamGuide = targets.length;
+      result.xtreamGuidePaused = targets.length === 0 && iptvPlaybackBusy();
     }
     return result;
   } finally {
@@ -891,7 +997,7 @@ function scheduleIptvWarmSoon(reason = 'changed', delayMs = IPTV_WARM_DELAY_MS) 
     iptvWarmSoonTimer = null;
     warmIptvCaches(reason)
       .then((r) => {
-        if (r && r.configured) console.log(`[iptv] warmed ${r.channels || 0} channels${r.xmltv ? ' + XMLTV' : ''}${r.xtreamGuide ? ` + ${r.xtreamGuide} Xtream guide channel(s)` : ''}`);
+        if (r && r.configured) console.log(`[iptv] warmed ${r.channels || 0} channels${r.xmltv ? ' + XMLTV' : ''}${r.xtreamGuide ? ` + ${r.xtreamGuide} Xtream guide channel(s)` : ''}${r.xtreamGuidePaused ? ' + Xtream guide paused during playback' : ''}`);
       })
       .catch((e) => console.error('[iptv warm]', e.message));
   }, delayMs);
@@ -1064,20 +1170,19 @@ function localItemSorter(sort) {
   if (sort === 'rating.desc') return (a, b) => (+b.rating || 0) - (+a.rating || 0);
   return (a, b) => (b.addedAt || 0) - (a.addedAt || 0);
 }
-function localMountFor(ctx, libId, idx, caps = {}) {
+function localMountFor(ctx, libId, idx, caps = {}, playCtx = {}) {
   const found = localItemFor(ctx, libId, idx);
   if (found.error) return found;
   let stat;
   try { stat = fs.statSync(found.item.file); } catch { return { status: 404, error: 'file missing on disk' }; }
   const id = 'l' + idHash(`${libId}:${idx}:${found.item.file}:${stat.size}:${stat.mtimeMs}`);
+  const name = path.basename(found.item.file);
   let vf = mounts.get(id);
   if (!vf) {
-    const name = path.basename(found.item.file);
     vf = {
       id, name, size: stat.size, segmentCount: 1,
       container: 'local', method: null, streamable: true, tags: [], health: { verdict: 'verified' },
       mountedAt: Date.now(), _local: { libId, idx: parseInt(idx, 10), file: found.item.file },
-      _q: found.item.title || name,
       triage: async () => ({ verdict: 'verified', checked: 1, missing: 0, local: true }),
       read: async function* (start, end) {
         const rs = fs.createReadStream(found.item.file, { start, end: Math.max(start, end - 1) });
@@ -1090,6 +1195,11 @@ function localMountFor(ctx, libId, idx, caps = {}) {
     };
     mounts.set(id, vf);
   }
+  const q = String(playCtx.q || found.item.q || found.item.title || name).trim();
+  const season = playCtx.season ?? found.item.s ?? found.item.season;
+  const ep = playCtx.ep ?? playCtx.episode ?? found.item.e ?? found.item.ep;
+  vf._q = q || name;
+  vf._subQuery = episodeSubtitleQuery(vf._q, season, ep);
   vf._caps = parseCaps(caps);
   vf._touched = Date.now();
   return { vf, item: found.item };
@@ -1224,7 +1334,7 @@ const H = {
   server: async (ctx) => send(ctx.res, 200, {
     app: 'triboon', phase: 4, needsSetup: !auth.hasUsers(),
     tmdb: !!settings.get().tmdbKey, ffmpeg: !!detectFfmpeg(),
-    // Wyzie only needs the free key; no account login is required.
+    // Wyzie only needs the server-side API key; no account login is required.
     opensubs: !!settings.get().openSubsKey,
     iptv: !!(settings.get().iptvUrl || (settings.get().iptvMode === 'xtream' && settings.get().xtHost)),
     music: !!ytmusic.detectYtdlp(), // Music tab shows only when yt-dlp is present
@@ -1606,12 +1716,15 @@ const H = {
     if (cachedFailure && cachedFailure.until > Date.now()) {
       return sendIptvNativeError(ctx.res, cachedFailure.status, cachedFailure.reason);
     }
+    const liveSlot = beginIptvLiveSlot(ctx, { idx: ch.idx, name: ch.name });
     // Attempt 1 uses HLS-friendly demuxer options; if ffmpeg dies before emitting a single
     // byte (non-HLS channel, or an older ffmpeg without those options) retry once plain.
     const attempt = (hlsFriendly, retriesLeft) => {
+      if (liveSlot.closed) return;
       let ff;
       try { ff = spawnLiveRemux(ch.url, { hlsFriendly }); }
       catch (e) {
+        liveSlot.done('spawn failed');
         console.error('[iptv]', sanitizeIptvFfmpegError(e.message));
         if (!ctx.res.headersSent) send(ctx.res, 502, { error: 'live stream unavailable' });
         else try { ctx.res.destroy(); } catch {}
@@ -1634,7 +1747,15 @@ const H = {
         clientClosed = true;
         clearIdle();
         try { ff.kill('SIGKILL'); } catch {}
+        liveSlot.done('client closed');
       };
+      liveSlot.setCloser((reason) => {
+        if (clientClosed) return;
+        clientClosed = true;
+        clearIdle();
+        try { ff.kill('SIGKILL'); } catch {}
+        try { if (!ctx.res.destroyed) ctx.res.destroy(); } catch {}
+      });
       armIdle(LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS);
       ff.stdout.on('data', (chunk) => {
         if (!wrote) {
@@ -1652,6 +1773,7 @@ const H = {
       ff.stderr.on('data', (d) => { err += d; });
       ff.on('error', (e) => {
         clearIdle();
+        liveSlot.done('spawn error');
         console.error('[iptv spawn]', sanitizeIptvFfmpegError(e.message));
         if (!ctx.res.headersSent) send(ctx.res, 502, { error: 'live stream unavailable' });
         else try { ctx.res.destroy(); } catch {}
@@ -1670,6 +1792,7 @@ const H = {
           return attempt(false, retriesLeft - 1);
         }
         if (codeNum && !wrote) {
+          liveSlot.done('failed');
           iptvNativeErrorCache.set(failureKey, { status: status || 502, reason, until: Date.now() + IPTV_NATIVE_ERROR_TTL_MS });
           if (iptvNativeErrorCache.size > 2000) iptvNativeErrorCache = new Map([...iptvNativeErrorCache].slice(-1000));
           console.error(`[iptv] "${ch.name}" exit ${codeNum}: ${err} (${reason})`);
@@ -1677,13 +1800,29 @@ const H = {
         }
         // Log the channel NAME only (the url embeds the provider account).
         if (codeNum && wrote && err) console.error(`[iptv] "${ch.name}" exit ${codeNum}:`, err.slice(0, 300));
+        liveSlot.done(codeNum ? 'ended with error' : 'ended');
         try { ctx.res.end(); } catch {}
       });
       ctx.req.once('close', stopForClientClose);
       ctx.res.once('close', stopForClientClose);
     };
     const likelyHls = /\.m3u8(?:[?#]|$)/i.test(ch.url);
-    attempt(likelyHls, likelyHls ? 1 : 0);
+    let startDelayTimer = null;
+    const startAttempt = () => {
+      if (startDelayTimer) startDelayTimer = null;
+      if (liveSlot.closed || ctx.res.destroyed) return;
+      attempt(likelyHls, likelyHls ? 1 : 0);
+    };
+    liveSlot.setCloser((reason) => {
+      if (startDelayTimer) clearTimeout(startDelayTimer);
+      try { if (!ctx.res.destroyed) ctx.res.destroy(); } catch {}
+    });
+    if (liveSlot.replaced) {
+      startDelayTimer = setTimeout(startAttempt, IPTV_LIVE_RETUNE_GRACE_MS);
+      startDelayTimer.unref();
+    } else {
+      startAttempt();
+    }
   },
 
   // Watchlist (per user): a saved "want to watch" set, separate from watch progress.
@@ -2221,7 +2360,7 @@ Object.assign(H, {
   // as movies and TV episodes mounted from Usenet.
   localPlay: async (ctx) => {
     const body = await readJson(ctx.req);
-    const r = localMountFor(ctx, ctx.m[1], ctx.m[2], body.caps || {});
+    const r = localMountFor(ctx, ctx.m[1], ctx.m[2], body.caps || {}, body || {});
     if (r.error) return send(ctx.res, r.status || 404, { error: r.error });
     send(ctx.res, 200, mountPayload(r.vf, ctx.user.id, { local: true }));
   },
@@ -2777,23 +2916,25 @@ Object.assign(H, {
     } catch (e) { send(ctx.res, 200, { available: false, audio: [], subs: [], duration: null, error: e.message }); }
   },
 
-  // Online subtitles (OpenSubtitles) → WebVTT. The practical CC path: BluRay releases carry
+  // Online subtitles (Wyzie) -> WebVTT. The practical CC path: BluRay releases carry
   // only bitmap PGS subs which can never become text tracks. Cached per mount + language.
   ossubs: async (ctx) => {
     if (!streamScopeOk(ctx, ctx.m[1])) return send(ctx.res, 401, { error: 'token not valid for this stream' });
     const vf = mounts.get(ctx.m[1]);
     if (!vf) return send(ctx.res, 404, { error: 'mount not found' });
     const key = settings.get().openSubsKey; // storage key kept across the Wyzie switch
-    if (!key) return send(ctx.res, 503, { error: 'Wyzie Subs is not configured (Settings → Catalog — the key is free)' });
+    if (!key) return send(ctx.res, 503, { error: 'Wyzie Subs is not configured (Settings -> Catalog)' });
     vf._touched = Date.now();
     const lang = String(ctx.url.searchParams.get('lang') || 'en').slice(0, 5).replace(/[^a-z-]/gi, '');
     const tmdbId = String(ctx.url.searchParams.get('tmdb') || '').replace(/\D/g, '');
+    const imdbRaw = String(ctx.url.searchParams.get('imdb') || ctx.url.searchParams.get('imdbid') || '').trim();
+    const imdbId = /^tt\d{5,10}$/i.test(imdbRaw) ? imdbRaw.toLowerCase() : '';
     const wantsList = ctx.url.searchParams.get('list') === '1';
     const variant = String(ctx.url.searchParams.get('variant') || '').replace(/[^a-z0-9_.:-]/gi, '').slice(0, 80);
     const shift = Math.max(-120, Math.min(120, Number(ctx.url.searchParams.get('shift') || 0) || 0));
     const base = process.env.WYZIE_BASE || undefined;
     const subOpts = {
-      key, tmdbId, query: vf._subQuery || vf._q || vf.name, lang, releaseName: vf.name,
+      key, tmdbId, imdbId, query: vf._subQuery || vf._q || vf.name, lang, releaseName: vf.name,
       durationSeconds: vf._tracks && vf._tracks.duration,
       attempts: 3, retryDelayMs: 900,
       ...(base ? { base } : {}),
@@ -2802,7 +2943,18 @@ Object.assign(H, {
     vf._osInflight = vf._osInflight || new Map();
     vf._osSearchCache = vf._osSearchCache || new Map();
     vf._osSearchInflight = vf._osSearchInflight || new Map();
-    const searchKey = `${lang}:${tmdbId}`;
+    const catalogId = imdbId || tmdbId;
+    const searchKey = `${lang}:${catalogId}`;
+    const subtitleFailure = (e) => {
+      const noSubs = isNoSubtitleError(e);
+      return {
+        status: noSubs ? 404 : (isTransientSubError(e) ? 504 : 502),
+        body: {
+          error: noSubs ? 'No subtitles found for this title' : (e.message || 'online subtitles failed'),
+          ...(noSubs ? { code: 'no_subtitles' } : {}),
+        },
+      };
+    };
     const getVariants = async () => {
       if (!vf._osSearchCache.has(searchKey)) {
         if (!vf._osSearchInflight.has(searchKey)) {
@@ -2831,11 +2983,11 @@ Object.assign(H, {
           })),
         });
       } catch (e) {
-        const status = isTransientSubError(e) ? 504 : 502;
-        return send(ctx.res, status, { error: e.message || 'online subtitles failed' });
+        const failure = subtitleFailure(e);
+        return send(ctx.res, failure.status, failure.body);
       }
     }
-    const cacheKey = variant ? `${lang}:${tmdbId}:${variant}` : `${lang}:${tmdbId}:auto`;
+    const cacheKey = variant ? `${lang}:${catalogId}:${variant}` : `${lang}:${catalogId}:auto`;
     if (!vf._osCache.has(cacheKey)) {
       if (!vf._osInflight.has(cacheKey)) {
         const work = (async () => {
@@ -2843,7 +2995,15 @@ Object.assign(H, {
           const variants = await getVariants();
           const hit = variants.find((v) => v.id === variant);
           if (!hit || !hit.raw) throw new Error('that subtitle version is no longer available');
-          return downloadSubtitle(hit.raw, { key, ...(base ? { base } : {}), attempts: 3, retryDelayMs: 900 });
+          return downloadBestSubtitle(variants.map((v) => v.raw).filter(Boolean), {
+            key,
+            releaseName: vf.name,
+            durationSeconds: vf._tracks && vf._tracks.duration,
+            preferredId: variant,
+            ...(base ? { base } : {}),
+            attempts: 3,
+            retryDelayMs: 900,
+          });
         })().then((vtt) => {
           vf._osCache.set(cacheKey, vtt);
           return vtt;
@@ -2851,8 +3011,8 @@ Object.assign(H, {
         vf._osInflight.set(cacheKey, work);
       }
       try { await vf._osInflight.get(cacheKey); } catch (e) {
-        const status = isTransientSubError(e) ? 504 : 502;
-        return send(ctx.res, status, { error: e.message || 'online subtitles failed' });
+        const failure = subtitleFailure(e);
+        return send(ctx.res, failure.status, failure.body);
       }
     }
     const vtt = vf._osCache.get(cacheKey);
@@ -3255,6 +3415,7 @@ function shutdown() {
   clearInterval(sweepTimer);
   if (iptvWarmSoonTimer) clearTimeout(iptvWarmSoonTimer);
   if (iptvWarmTimer) clearTimeout(iptvWarmTimer);
+  closeAllIptvLiveStreams('shutdown');
   if (pool) { pool.close(); pool = null; }
   store.close();
   return new Promise((r) => server.close(r));

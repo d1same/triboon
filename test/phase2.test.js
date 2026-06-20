@@ -287,6 +287,75 @@ test('subs: Wyzie file download is authenticated without leaking keys to unrelat
   }
 });
 
+test('subs: auto-match falls through stale subtitle file links', async () => {
+  const { fetchOnlineSub, downloadBestSubtitle } = require('../server/opensubs');
+  const downloads = [];
+  let base;
+  const results = () => [
+    {
+      id: 'dead',
+      url: `${base}/dead.srt`,
+      format: 'srt',
+      display: 'Movie.2024.1080p.WEB-DL-GRP',
+      fileName: 'Movie.2024.1080p.WEB-DL-GRP.srt',
+    },
+    {
+      id: 'ok',
+      url: `${base}/ok.srt`,
+      format: 'srt',
+      display: 'Movie.2024.1080p.WEB-DL',
+    },
+  ];
+  const srv = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://127.0.0.1');
+    if (u.pathname === '/search') {
+      assert.strictEqual(u.searchParams.get('key'), 'test-key');
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify(results()));
+    }
+    downloads.push(u.pathname);
+    if (u.pathname === '/dead.srt') {
+      res.writeHead(401);
+      return res.end('stale provider link');
+    }
+    if (u.pathname === '/ok.srt') {
+      res.writeHead(200);
+      return res.end('1\r\n00:00:01,000 --> 00:00:02,500\r\nHealthy fallback\r\n');
+    }
+    res.writeHead(404); res.end();
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  try {
+    base = `http://127.0.0.1:${srv.address().port}`;
+    const vtt = await fetchOnlineSub({
+      key: 'test-key',
+      tmdbId: '123',
+      query: 'Movie 2024',
+      lang: 'en',
+      releaseName: 'Movie.2024.1080p.WEB-DL-GRP.mkv',
+      base,
+      attempts: 1,
+      retryDelayMs: 0,
+    });
+    assert.match(vtt, /^WEBVTT/);
+    assert.match(vtt, /Healthy fallback/);
+    assert.deepStrictEqual(downloads, ['/dead.srt', '/ok.srt']);
+    downloads.length = 0;
+    const preferred = await downloadBestSubtitle(results(), {
+      key: 'test-key',
+      releaseName: 'Movie.2024.1080p.WEB-DL-GRP.mkv',
+      preferredId: 'dead',
+      base,
+      attempts: 1,
+      retryDelayMs: 0,
+    });
+    assert.match(preferred, /Healthy fallback/);
+    assert.deepStrictEqual(downloads, ['/dead.srt', '/ok.srt']);
+  } finally {
+    await new Promise((r) => srv.close(r));
+  }
+});
+
 test('subs: pickSub matches the sub to OUR release cut (sync depends on it)', () => {
   const { pickSub, rankSubs } = require('../server/opensubs');
   // Wyzie's flat result shape: { id, url, format, display, isHearingImpaired }.
@@ -355,12 +424,37 @@ test('subs: Wyzie search receives exact release and filename hints', async () =>
       base: `http://127.0.0.1:${srv.address().port}`,
     });
     assert.strictEqual(seen.searchParams.get('id'), '123');
+    assert.strictEqual(seen.searchParams.get('source'), 'all');
     assert.strictEqual(seen.searchParams.get('season'), '1');
     assert.strictEqual(seen.searchParams.get('episode'), '1');
     assert.strictEqual(seen.searchParams.get('release'), release);
     assert.strictEqual(seen.searchParams.get('origin'), release);
     assert.strictEqual(seen.searchParams.get('fileName'), release);
     assert.strictEqual(seen.searchParams.get('file'), release);
+  } finally {
+    await new Promise((r) => srv.close(r));
+  }
+});
+
+test('subs: Wyzie search prefers IMDb id when available for paid provider coverage', async () => {
+  const { searchOnlineSubs, _wyzieCatalogId } = require('../server/opensubs');
+  let seen;
+  const srv = http.createServer((req, res) => {
+    seen = new URL(req.url, 'http://127.0.0.1');
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify([{ id: 'ok', url: 'http://x/sub.srt', format: 'srt', display: 'Catch.Me.If.You.Can.2002.WEB-DL' }]));
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  try {
+    await searchOnlineSubs({
+      tmdbId: '640', imdbId: 'TT0264464', query: 'Catch Me If You Can 2002', lang: 'en',
+      base: `http://127.0.0.1:${srv.address().port}`,
+    });
+    assert.strictEqual(_wyzieCatalogId({ tmdbId: '640', imdbId: 'TT0264464' }), 'tt0264464');
+    assert.strictEqual(seen.searchParams.get('id'), 'tt0264464',
+      'IMDb ids keep the tt prefix for providers that match by IMDb');
+    assert.strictEqual(seen.searchParams.get('source'), 'all',
+      'paid keys query every enabled Wyzie provider');
   } finally {
     await new Promise((r) => srv.close(r));
   }
@@ -394,6 +488,33 @@ test('subs: Wyzie release-filter miss falls back to ID-only search', async () =>
     assert.strictEqual(seen[1].searchParams.get('id'), '123');
     assert.strictEqual(seen[1].searchParams.get('season'), '1');
     assert.strictEqual(seen[1].searchParams.get('episode'), '1');
+  } finally {
+    await new Promise((r) => srv.close(r));
+  }
+});
+
+test('subs: Wyzie no-subtitles response is a clean no-results error', async () => {
+  const { searchOnlineSubs, _isNoSubtitleError } = require('../server/opensubs');
+  let calls = 0;
+  const srv = http.createServer((req, res) => {
+    calls++;
+    res.writeHead(400, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ message: 'No subtitles found' }));
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  try {
+    await assert.rejects(searchOnlineSubs({
+      tmdbId: '123', query: 'Unknown Show S01E01', lang: 'en',
+      base: `http://127.0.0.1:${srv.address().port}`,
+      attempts: 1,
+      retryDelayMs: 0,
+    }), (e) => {
+      assert.strictEqual(_isNoSubtitleError(e), true);
+      assert.strictEqual(e.permanent, true);
+      assert.match(e.message, /no en subtitles found/i);
+      return true;
+    });
+    assert.strictEqual(calls, 1, 'no-results responses do not retry as transient failures');
   } finally {
     await new Promise((r) => srv.close(r));
   }

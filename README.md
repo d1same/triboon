@@ -38,6 +38,17 @@ The debug APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`.
 external Gradle is not installed, use the pinned fallback from `android/`: `.\gradlew.bat
 assembleDebug`. Do not use an old local Gradle 8.x binary.
 
+After Android shell changes, install and smoke-test the APK with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File bench\android-tv-smoke.ps1 -InstallApk -ColdStart -StartupDpad -NoScreenshot
+```
+
+The shell handles Android WebView renderer deaths with `onRenderProcessGone`: it destroys the
+dead WebView, rebuilds it below setup/native-player overlays, and reloads the last route. A real
+renderer crash should log `TriboonTV: WebView renderer gone ...` and return to the app instead of
+leaving Android's default "web page crashed" screen.
+
 ## Unraid
 
 The image is published to **`ghcr.io/d1same/triboon:latest`** (amd64 + arm64) on every push.

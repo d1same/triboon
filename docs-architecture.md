@@ -12,7 +12,7 @@
   and user quality policies from the server dashboard.
 - **Users** install a client app (or open a browser), join via invite link / QR / Quick Connect
   code, and stream. They never see an NZB, an indexer, or an API key.
-- All metadata (TMDB, Trakt, OpenSubtitles) is **proxied through the server** — clients are thin.
+- All metadata (TMDB, Trakt, Wyzie Subs) is **proxied through the server** — clients are thin.
 
 ## 2. System overview
 
@@ -81,7 +81,8 @@ Order of attempts for every play request:
 - Trakt: trending/popular/recommended rows + per-user scrobbling (users link their own Trakt
   account via device-code OAuth; optional).
 - MDBList custom catalogs: v1.5.
-- OpenSubtitles: server-side search/download, converted to WebVTT for browsers, raw for ExoPlayer.
+- Wyzie Subs: server-side `source=all` search/download using IMDb `tt...` IDs when available
+  and TMDB as fallback; converted to WebVTT for browsers and ExoPlayer text overlay.
 
 ### 3.5 Users, Library, Watch State
 - Owner/admin + invited users; profiles per user (incl. kids profile with rating ceiling).
@@ -164,7 +165,7 @@ settings(key, value)            -- usenet providers, indexers, transcode config 
 | **2. Search** | 7–9 | Newznab/Prowlarr fan-out, ranking, STAT health gate, verdict cache, auto-advance | Press-play pipeline e2e (CLI) |
 | **3. Server+Web** | 10–14 | API, auth/invites, TMDB catalog, Web UI (pointer mode), HLS remux path, watch state | Usable product in a browser |
 | **4. Plex-grade** | 15–18 | ffmpeg HW transcode ladder, per-user caps, profiles, TV spatial nav, Quick Connect | Multi-user household |
-| **5. Android** | 19–22 | Kotlin shell + ExoPlayer bridge (TV + phone), Trakt rows + scrobble, OpenSubtitles | The living-room experience |
+| **5. Android** | 19–22 | Kotlin shell + ExoPlayer bridge (TV + phone), Trakt rows + scrobble, Wyzie Subs | The living-room experience |
 | **6. Polish** | 23+ | Tauri desktop, chapter skip-intro + next-ep countdown, par2 repair, MDBList, libmpv desktop | v1.0 |
 
 Non-goals v1: Sonarr/Radarr-compat API, iOS/tvOS, offline downloads, audio-fingerprint intro
@@ -185,7 +186,7 @@ detection, central cloud/relay.
 | Built-in organizing/searching, no arrs | §3.2 + §3.5 Library (no disk files → no arr complexity) |
 | Plex-style: users just connect via URL | §3.5 invites + Quick Connect; §1 product model |
 | Multi-user with invites | §3.5, §5, §6 |
-| Trakt, OpenSubtitles, skip-intro, next-ep | §3.4 + roadmap Phases 5–6 |
+| Trakt, Wyzie Subs, skip-intro, next-ep | §3.4 + roadmap Phases 5–6 |
 | Docker-first install | §1, single image + ffmpeg sidecar |
 
 ### 8.2 Assumptions made explicit
@@ -250,4 +251,4 @@ Built (all clean-room, zero runtime npm dependencies, Node 20 stdlib only):
 ~4ms on replay (live-mount reuse); multi-volume RAR mid-file seek ~175–200ms.
 
 **Next:** ffmpeg HW-accel transcode ladder + HDR tone-map (§3.3 step 4), then Phases 5–6
-(Android/ExoPlayer, Trakt, OpenSubtitles, Tauri, par2 repair, MDBList).
+(Android/ExoPlayer, Trakt, Wyzie Subs, Tauri, par2 repair, MDBList).

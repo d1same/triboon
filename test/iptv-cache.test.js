@@ -111,6 +111,91 @@ test('iptv: huge M3U playlists stream-parse to the channel cap without waiting f
   }
 });
 
+test('iptv: rapid channel changes close the previous upstream stream before opening the next', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-iptv-retune-'));
+  let activeStreams = 0;
+  let maxActiveStreams = 0;
+  let closedStreams = 0;
+  const timers = new Set();
+  const playlist = ['#EXTM3U'];
+  for (let i = 0; i < 6; i++) {
+    playlist.push(`#EXTINF:-1 group-title="Test",Zap ${i}`);
+    playlist.push(`http://127.0.0.1:PORT/live/${i}.ts`);
+  }
+  const upstream = http.createServer((req, res) => {
+    if (req.url === '/list.m3u') {
+      res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' });
+      return res.end(playlist.join('\n').replaceAll('PORT', String(upstream.address().port)));
+    }
+    if (req.url.startsWith('/live/')) {
+      activeStreams++;
+      maxActiveStreams = Math.max(maxActiveStreams, activeStreams);
+      res.writeHead(200, { 'content-type': 'video/mp2t' });
+      res.write(Buffer.alloc(188, 0x47));
+      const t = setInterval(() => {
+        if (!res.destroyed) res.write(Buffer.alloc(188, 0x47));
+      }, 25);
+      timers.add(t);
+      res.on('close', () => {
+        clearInterval(t);
+        timers.delete(t);
+        activeStreams--;
+        closedStreams++;
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${upstream.address().port}`;
+  const openStream = (port, p) => new Promise((resolve, reject) => {
+    const req = http.get({
+      host: '127.0.0.1',
+      port,
+      path: p,
+      headers: { 'user-agent': 'TriboonTV-test' },
+    }, (res) => {
+      res.once('data', () => resolve({ req, res }));
+      res.on('error', () => {});
+    });
+    req.on('error', reject);
+  });
+  const waitFor = async (fn, ms = 2500) => {
+    const until = Date.now() + ms;
+    while (Date.now() < until) {
+      if (fn()) return true;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    return false;
+  };
+
+  let srv;
+  const clients = [];
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/settings',
+      { iptvMode: 'm3u', iptvUrl: `${base}/list.m3u`, epgUrl: null }, admin);
+    const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    assert.strictEqual(ch.status, 200);
+    for (let i = 0; i < 6; i++) {
+      clients.push(await openStream(srv.port, ch.json.channels[i].nativeUrl));
+    }
+    assert.ok(await waitFor(() => activeStreams === 1 && closedStreams >= 5),
+      `expected only the newest channel upstream to remain open; active=${activeStreams} closed=${closedStreams}`);
+    assert.strictEqual(maxActiveStreams, 1, 'retuning should not stack provider stream connections');
+  } finally {
+    for (const c of clients) {
+      try { c.res.destroy(); } catch {}
+      try { c.req.destroy(); } catch {}
+    }
+    if (srv) await srv.shutdown();
+    timers.forEach((t) => clearInterval(t));
+    upstream.close();
+  }
+});
+
 test('iptv: Xtream channels serve persisted cache immediately after restart and refresh in background', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-channel-cache-'));
   let streamHits = 0;
