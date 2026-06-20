@@ -103,6 +103,7 @@ test('boot: fresh server requires setup, then issues a working admin token', asy
 
   const s = await httpJson(srv.port, 'GET', '/api/server');
   assert.strictEqual(s.status, 200);
+  assert.match(s.json.version, /^\d+\.\d+\.\d+/, 'server info should expose the running version for Unraid/update checks');
   assert.strictEqual(s.json.needsSetup, true);
 
   admin = await setupAdmin(srv.port);

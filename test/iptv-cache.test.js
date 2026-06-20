@@ -399,6 +399,63 @@ test('iptv: Xtream browser remux fallback ingests TS before HLS', async () => {
   }
 });
 
+test('iptv: stale Xtream stream ids refresh and retry native playback', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-stale-stream-id-'));
+  let liveStreams = [{ stream_id: 100, name: '|US| NEWS PLUS HD', category_id: '1', epg_channel_id: 'news.plus' }];
+  let oldHits = 0;
+  let freshHits = 0;
+  let streamListHits = 0;
+  const upstream = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    const action = u.searchParams.get('action');
+    if (action) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      if (action === 'get_live_categories') return res.end(JSON.stringify([{ category_id: '1', category_name: 'News' }]));
+      if (action === 'get_live_streams') {
+        streamListHits++;
+        return res.end(JSON.stringify(liveStreams));
+      }
+      return res.end(JSON.stringify({ epg_listings: [] }));
+    }
+    if (u.pathname.endsWith('/100.ts')) {
+      oldHits++;
+      res.writeHead(403, { 'content-type': 'text/plain' });
+      return res.end('old stream id');
+    }
+    if (u.pathname.endsWith('/200.ts')) {
+      freshHits++;
+      res.writeHead(200, { 'content-type': 'video/mp2t' });
+      return res.end('FRESH-TS');
+    }
+    res.writeHead(404);
+    res.end('missing');
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const host = `http://127.0.0.1:${upstream.address().port}`;
+
+  let srv;
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/settings',
+      { iptvMode: 'xtream', xtHost: host, xtUser: 'xtuser', xtPass: 'xtpass', epgUrl: null }, admin);
+    const stale = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    assert.strictEqual(stale.json.channels[0].name, '|US| NEWS PLUS HD');
+    assert.strictEqual(streamListHits, 1);
+
+    liveStreams = [{ stream_id: 200, name: 'USA: News Plus [1080p]', category_id: '1', epg_channel_id: 'news.plus' }];
+    const native = await httpRaw(srv.port, stale.json.channels[0].nativeUrl);
+    assert.strictEqual(native.status, 200, 'native playback should recover after refreshing stale Xtream ids');
+    assert.strictEqual(native.body.toString('utf8'), 'FRESH-TS');
+    assert.strictEqual(oldHits, 1, 'first attempt proves the persisted stream id was stale');
+    assert.strictEqual(freshHits, 1, 'retry should use the refreshed stream id');
+    assert.strictEqual(streamListHits, 2, 'provider list should be force-refreshed after the playback 403');
+  } finally {
+    if (srv) await srv.shutdown();
+    upstream.close();
+  }
+});
+
 test('iptv: empty Xtream guide misses are not persisted across restart', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-epg-cache-'));
   const b64 = (s) => Buffer.from(s).toString('base64');
