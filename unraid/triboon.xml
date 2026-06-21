@@ -8,7 +8,7 @@
   <Privileged>false</Privileged>
   <Support>https://github.com/d1same/triboon/issues</Support>
   <Project>https://github.com/d1same/triboon</Project>
-  <Overview>Self-hosted, Plex-polished, Stremio-style usenet streaming. Press play on any movie or show and Triboon mounts the best healthy NZB from your provider and streams it while unpacking - native RAR/ZIP streaming with seeking, TRaSH-style release ranking, multi-user profiles with invites and Quick Connect, TMDB catalogs, Live TV (IPTV), online subtitles, and an Android TV shell. Configure everything in the web dashboard after first run (providers, indexers, TMDB - encrypted at rest). For legally obtained content.</Overview>
+  <Overview>Self-hosted, Plex-polished, Stremio-style usenet streaming. Press play on any movie or show and Triboon mounts the best healthy NZB from your provider and streams it while unpacking - native RAR/ZIP streaming with seeking, TRaSH-style release ranking, owner-tunable multi-user streaming capacity, multi-user profiles with invites and Quick Connect, TMDB catalogs, source-scoped Live TV/IPTV playlists, online subtitles, and an Android TV shell. Configure everything in the web dashboard after first run (providers, indexers, TMDB - encrypted at rest). For legally obtained content.</Overview>
   <Category>MediaApp:Video MediaServer:Video</Category>
   <WebUI>http://[IP]:[PORT:7777]</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/d1same/triboon/main/unraid/triboon.xml</TemplateURL>

@@ -35,6 +35,29 @@ const mounts = new Map(); // id -> virtual file
 const scanStates = new Map(); // library id -> { running, startedAt, progress, ...summary }
 const thumbJobs = new Map(); // thumb path -> in-flight generation promise (no double-spawn)
 const DATA_DIR = process.env.TRIBOON_DATA || path.join(__dirname, '..', 'data');
+const MAX_PROVIDER_CONNECTIONS = 150;
+
+function clampInt(value, fallback, min, max) {
+  const n = parseInt(value, 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
+
+function providerConnections(value, fallback = 16) {
+  return clampInt(value, fallback, 1, MAX_PROVIDER_CONNECTIONS);
+}
+
+function normalizeProviders(list) {
+  return (Array.isArray(list) ? list : []).map((p) => ({
+    ...p,
+    host: String(p.host || '').trim(),
+    port: parseInt(p.port, 10) || 563,
+    tls: p.tls !== false,
+    user: String(p.user || ''),
+    pass: String(p.pass || ''),
+    connections: providerConnections(p.connections),
+  })).filter((p) => p.host);
+}
 
 function envProvider() {
   if (!process.env.NNTP_HOST) return null;
@@ -44,24 +67,122 @@ function envProvider() {
     tls: (process.env.NNTP_TLS || 'true') === 'true',
     user: process.env.NNTP_USER || '',
     pass: process.env.NNTP_PASS || '',
-    connections: parseInt(process.env.NNTP_CONNECTIONS || '16', 10),
+    connections: providerConnections(process.env.NNTP_CONNECTIONS || '16'),
   };
 }
 function providerList() {
   const s = settings.get();
-  const list = (s.providers && s.providers.length) ? s.providers : [envProvider()].filter(Boolean);
+  const list = (s.providers && s.providers.length) ? normalizeProviders(s.providers) : [envProvider()].filter(Boolean);
   return list;
+}
+
+function normalizeStreamingPerformance(raw = {}) {
+  const profile = ['auto', 'fast', 'balanced', 'large', 'custom'].includes(raw.profile) ? raw.profile : 'auto';
+  const mix = ['1080p', '4k', 'mixed'].includes(raw.streamMix) ? raw.streamMix : 'mixed';
+  return {
+    profile,
+    expectedUsers: clampInt(raw.expectedUsers, 4, 1, 50),
+    remoteUsers: clampInt(raw.remoteUsers, 0, 0, 50),
+    streamMix: mix,
+    serverDownloadMbps: clampInt(raw.serverDownloadMbps, 0, 0, 100000),
+    serverUploadMbps: clampInt(raw.serverUploadMbps, 0, 0, 100000),
+    buffer1080Sec: clampInt(raw.buffer1080Sec, 180, 30, 600),
+    buffer4kSec: clampInt(raw.buffer4kSec, 90, 30, 360),
+    startupReservePct: clampInt(raw.startupReservePct, 25, 10, 50),
+    maxConnPerStream1080: clampInt(raw.maxConnPerStream1080, 12, 4, 60),
+    maxConnPerStream4k: clampInt(raw.maxConnPerStream4k, 20, 6, 80),
+    healthProbeLimit: clampInt(raw.healthProbeLimit, 6, 2, 12),
+  };
+}
+
+function totalProviderConnections(provs = providerList()) {
+  return provs.reduce((n, p) => n + providerConnections(p.connections), 0);
+}
+
+function streamingRuntimeProfile() {
+  const perf = normalizeStreamingPerformance(settings.get().streamingPerformance || {});
+  const totalConnections = totalProviderConnections();
+  const usableConnections = Math.max(0, Math.floor(totalConnections * 0.85));
+  const reserveConnections = usableConnections
+    ? Math.max(2, Math.ceil(usableConnections * perf.startupReservePct / 100))
+    : 0;
+  return { ...perf, totalConnections, usableConnections, reserveConnections };
+}
+
+function recommendStreamingPerformance(input = {}, s = settings.get()) {
+  const current = normalizeStreamingPerformance({ ...(s.streamingPerformance || {}), ...input });
+  const providers = normalizeProviders(s.providers || []);
+  if (!providers.length) {
+    const env = envProvider();
+    if (env) providers.push(env);
+  }
+  const totalConnections = providers.reduce((n, p) => n + providerConnections(p.connections), 0);
+  const usableConnections = Math.max(0, Math.floor(totalConnections * 0.85));
+  const reservePct = totalConnections >= 80 ? 20 : 25;
+  const reserveConnections = usableConnections ? Math.max(2, Math.ceil(usableConnections * reservePct / 100)) : 0;
+  const activeBudget = Math.max(0, usableConnections - reserveConnections);
+  const perUser = current.expectedUsers ? Math.max(1, Math.floor(activeBudget / current.expectedUsers)) : activeBudget;
+
+  const mixMbps = current.streamMix === '4k' ? 55 : current.streamMix === '1080p' ? 12 : 28;
+  const usableDown = current.serverDownloadMbps ? current.serverDownloadMbps * 0.8 : 0;
+  const projectedDown = current.expectedUsers * mixMbps;
+  const tightDownload = usableDown > 0 && projectedDown > usableDown * 0.75;
+  const generousDownload = usableDown > 0 && projectedDown < usableDown * 0.45;
+
+  const rec1080 = Math.max(4, Math.min(24, perUser >= 16 ? 14 : perUser >= 10 ? 12 : perUser >= 6 ? 8 : 6));
+  const rec4k = Math.max(6, Math.min(36, perUser >= 24 ? 24 : perUser >= 16 ? 18 : perUser >= 10 ? 14 : 10));
+  const buffer1080Sec = tightDownload ? 90 : generousDownload ? 240 : 180;
+  const buffer4kSec = tightDownload ? 60 : generousDownload ? 120 : 90;
+  const remotePerStreamMbps = current.remoteUsers && current.serverUploadMbps
+    ? Math.max(1, Math.floor((current.serverUploadMbps * 0.8) / current.remoteUsers))
+    : 0;
+
+  const warnings = [];
+  if (!providers.length) warnings.push('Add at least one usenet provider before applying a streaming profile.');
+  if (!current.serverDownloadMbps) warnings.push('Server download speed is unknown, so download pressure is estimated from connections only.');
+  if (current.remoteUsers && !current.serverUploadMbps) warnings.push('Remote users need an upload speed value for a reliable remote-stream recommendation.');
+  if (tightDownload) warnings.push('Projected playback load is close to the safe download budget; read-ahead should stay conservative.');
+  if (totalConnections && perUser < 6) warnings.push('Connection budget per user is tight; add provider connections or lower expected simultaneous users.');
+  if (remotePerStreamMbps && remotePerStreamMbps < 20 && current.streamMix !== '1080p') warnings.push('Remote upload budget is low for 4K; use per-user quality caps for remote users.');
+
+  const recommendation = normalizeStreamingPerformance({
+    ...current,
+    profile: 'auto',
+    startupReservePct: reservePct,
+    buffer1080Sec,
+    buffer4kSec,
+    maxConnPerStream1080: rec1080,
+    maxConnPerStream4k: rec4k,
+    healthProbeLimit: perUser < 6 ? 4 : 6,
+  });
+
+  return {
+    ok: true,
+    recommendation,
+    capacity: {
+      providers: providers.length,
+      totalConnections,
+      usableConnections,
+      reserveConnections,
+      playbackConnections: activeBudget,
+      perUserConnections: perUser,
+      projectedDownloadMbps: projectedDown,
+      usableDownloadMbps: usableDown ? Math.floor(usableDown) : 0,
+      remotePerStreamMbps,
+    },
+    warnings,
+  };
 }
 
 let pool = null, poolKey = '';
 function getPool() {
   const list = providerList();
   if (!list.length) { const e = new Error('no usenet provider configured'); e.status = 409; throw e; }
-  const key = JSON.stringify(list.map((p) => [p.host, p.port, p.user]));
+  const key = JSON.stringify(list.map((p) => [p.host, p.port, p.user, p.connections]));
   if (pool && poolKey === key) return pool;
   if (pool) pool.close();
   poolKey = key;
-  pool = new NntpPool(list, Math.max(...list.map((p) => p.connections || 16)));
+  pool = new NntpPool(list, Math.max(...list.map((p) => providerConnections(p.connections))));
   pool.warm(4); // first play shouldn't pay the cold TLS+AUTH wall
   return pool;
 }
@@ -108,6 +229,7 @@ const ixByName = (name) => (settings.get().indexers || []).find((i) => i.name ==
 
 const pipeline = new Pipeline({
   pool: getPool, verdicts, mounts,
+  performance: streamingRuntimeProfile,
   // API-exhausted indexers drop out of the fan-out for the rest of the day. If EVERY indexer
   // is exhausted, say so honestly instead of the generic "no indexers configured".
   indexers: () => {
@@ -155,6 +277,10 @@ const IPTV_PLAYBACK_API_QUIET_MS = 7000;
 let iptvCache = { key: null, at: 0, channels: [] };
 let epgCache = { key: null, at: 0, byChannel: new Map(), byName: new Map() };
 let xtreamEpgCache = { key: null, byStream: new Map() };
+let iptvSourceCaches = new Map(); // sourceId -> { key, at, channels }
+let epgSourceCaches = new Map();  // sourceId -> { key, at, byChannel, byName }
+let xtreamEpgSourceCaches = new Map(); // sourceId -> { key, byStream }
+let iptvRefreshingSources = new Set();
 let iptvNativeErrorCache = new Map();
 let activeIptvLiveStreams = new Map();
 let iptvPlaybackHotUntil = 0;
@@ -172,6 +298,167 @@ async function mapLimit(items, limit, fn) {
   });
   await Promise.all(workers);
   return out;
+}
+
+const IPTV_LEGACY_SOURCE_ID = 'default';
+function cleanIptvSourceId(id, fallback = IPTV_LEGACY_SOURCE_ID) {
+  const s = String(id || '').replace(/[^\w-]/g, '').slice(0, 40);
+  return s || fallback;
+}
+function normalizeIptvMode(v) {
+  return v === 'xtream' ? 'xtream' : 'm3u';
+}
+function iptvUrlHost(raw) {
+  try { return new URL(String(raw || '')).host || null; } catch { return raw ? '•••' : null; }
+}
+function iptvSourceName(src = {}) {
+  const explicit = String(src.name || '').trim().slice(0, 48);
+  if (explicit) return explicit;
+  if (normalizeIptvMode(src.iptvMode || src.mode) === 'xtream') return iptvUrlHost(src.xtHost) || 'Xtream playlist';
+  return iptvUrlHost(src.iptvUrl) || 'M3U playlist';
+}
+function normalizeIptvSource(raw = {}, fallbackId = IPTV_LEGACY_SOURCE_ID) {
+  const mode = normalizeIptvMode(raw.iptvMode || raw.mode || raw.type);
+  const src = {
+    id: cleanIptvSourceId(raw.id, fallbackId),
+    name: iptvSourceName(raw),
+    iptvMode: mode,
+    enabled: raw.enabled !== false,
+    iptvUrl: raw.iptvUrl || raw.url || null,
+    xtHost: raw.xtHost || raw.host || null,
+    xtUser: raw.xtUser || raw.username || raw.user || null,
+    xtPass: raw.xtPass || raw.password || raw.pass || null,
+    epgUrl: raw.epgUrl || raw.xmltvUrl || null,
+    users: Array.isArray(raw.users) ? raw.users.map(String).slice(0, 100) : [],
+  };
+  if (mode === 'xtream') src.iptvUrl = null;
+  else { src.xtHost = null; src.xtUser = null; src.xtPass = null; }
+  return src;
+}
+function iptvSourceConfigured(src = {}) {
+  return !!(src.enabled !== false && ((src.iptvMode === 'xtream' && src.xtHost) || src.iptvUrl));
+}
+function legacyIptvSource(s = {}) {
+  const mode = normalizeIptvMode(s.iptvMode);
+  if (!((mode === 'xtream' && s.xtHost) || s.iptvUrl)) return null;
+  return normalizeIptvSource({
+    id: IPTV_LEGACY_SOURCE_ID,
+    name: 'Default Live TV',
+    iptvMode: mode,
+    iptvUrl: s.iptvUrl || null,
+    xtHost: s.xtHost || null,
+    xtUser: s.xtUser || null,
+    xtPass: s.xtPass || null,
+    epgUrl: s.epgUrl || null,
+    users: Array.isArray(s.iptvUsers) ? s.iptvUsers : [],
+  }, IPTV_LEGACY_SOURCE_ID);
+}
+function iptvSourcesFromSettings(s = settings.get()) {
+  const seen = new Set();
+  const out = [];
+  const push = (src) => {
+    const norm = normalizeIptvSource(src, `src_${idHash(JSON.stringify(src || {}))}`);
+    if (!iptvSourceConfigured(norm) || seen.has(norm.id)) return;
+    seen.add(norm.id);
+    out.push(norm);
+  };
+  if (Array.isArray(s.iptvSources) && s.iptvSources.length) s.iptvSources.forEach(push);
+  const legacy = legacyIptvSource(s);
+  if (!out.length && legacy) push(legacy);
+  return out;
+}
+function iptvConfigured(s = settings.get()) {
+  return iptvSourcesFromSettings(s).length > 0;
+}
+function userCanAccessIptvSource(user, src = {}) {
+  const users = Array.isArray(src.users) ? src.users : [];
+  return !user || user.role === 'admin' || !users.length || users.includes(user.id);
+}
+function iptvSourcesForUser(user, s = settings.get()) {
+  return iptvSourcesFromSettings(s).filter((src) => userCanAccessIptvSource(user, src));
+}
+function redactIptvSource(src = {}) {
+  return {
+    id: src.id,
+    name: src.name,
+    iptvMode: src.iptvMode,
+    mode: src.iptvMode,
+    enabled: src.enabled !== false,
+    iptvUrl: src.iptvUrl ? iptvUrlHost(src.iptvUrl) : null,
+    xtHost: src.xtHost ? iptvUrlHost(src.xtHost) : null,
+    epgUrl: src.epgUrl ? iptvUrlHost(src.epgUrl) : null,
+    users: src.users || [],
+  };
+}
+function makeIptvSourceFromBody(b = {}, existing = null) {
+  const mode = normalizeIptvMode(b.iptvMode || b.mode || (existing && existing.iptvMode));
+  const src = normalizeIptvSource({
+    id: existing && existing.id ? existing.id : `src_${require('crypto').randomBytes(5).toString('hex')}`,
+    name: b.name !== undefined ? b.name : (existing && existing.name),
+    iptvMode: mode,
+    iptvUrl: b.iptvUrl !== undefined ? (b.iptvUrl || null) : (existing && existing.iptvUrl),
+    xtHost: b.xtHost !== undefined ? (b.xtHost || null) : (existing && existing.xtHost),
+    xtUser: b.xtUser !== undefined ? (b.xtUser || null) : (existing && existing.xtUser),
+    xtPass: b.xtPass !== undefined ? (b.xtPass || null) : (existing && existing.xtPass),
+    epgUrl: b.epgUrl !== undefined ? (b.epgUrl || null) : (existing && existing.epgUrl),
+    users: b.iptvUsers !== undefined ? b.iptvUsers : (b.users !== undefined ? b.users : (existing && existing.users)),
+    enabled: b.enabled !== undefined ? b.enabled !== false : !(existing && existing.enabled === false),
+  });
+  if (!iptvSourceConfigured(src)) {
+    const e = new Error(mode === 'xtream' ? 'Xtream host is required' : 'M3U playlist URL is required');
+    e.status = 400;
+    throw e;
+  }
+  return src;
+}
+function clearIptvAggregateCache() {
+  iptvCache = { key: null, at: 0, channels: [] };
+}
+function clearIptvSourceRuntime(sourceId) {
+  const id = cleanIptvSourceId(sourceId);
+  iptvSourceCaches.delete(id);
+  epgSourceCaches.delete(id);
+  xtreamEpgSourceCaches.delete(id);
+  iptvRefreshingSources.delete(id);
+  clearIptvAggregateCache();
+  if (epgCache.sourceId === id) epgCache = { key: null, at: 0, byChannel: new Map(), byName: new Map() };
+  if (xtreamEpgCache.sourceId === id) xtreamEpgCache = { key: null, byStream: new Map() };
+}
+function clearAllIptvRuntime() {
+  iptvSourceCaches.clear();
+  epgSourceCaches.clear();
+  xtreamEpgSourceCaches.clear();
+  iptvRefreshingSources.clear();
+  clearIptvAggregateCache();
+  epgCache = { key: null, at: 0, byChannel: new Map(), byName: new Map() };
+  xtreamEpgCache = { key: null, byStream: new Map() };
+  iptvNativeErrorCache = new Map();
+}
+function readIptvDiskCaches() {
+  const all = store.read('iptvcaches', {});
+  if (all && typeof all === 'object' && !Array.isArray(all)) return all;
+  const legacy = store.read('iptvcache', null);
+  return legacy ? { [IPTV_LEGACY_SOURCE_ID]: legacy } : {};
+}
+function writeIptvDiskCache(sourceId, value) {
+  const id = cleanIptvSourceId(sourceId);
+  store.update('iptvcaches', {}, (all) => {
+    if (!all || typeof all !== 'object' || Array.isArray(all)) all = {};
+    all[id] = value;
+    return all;
+  });
+  if (id === IPTV_LEGACY_SOURCE_ID) store.write('iptvcache', value);
+}
+function deleteIptvDiskCache(sourceId) {
+  const id = cleanIptvSourceId(sourceId);
+  store.update('iptvcaches', {}, (all) => {
+    if (!all || typeof all !== 'object' || Array.isArray(all)) all = {};
+    delete all[id];
+    return all;
+  });
+  if (id === IPTV_LEGACY_SOURCE_ID) store.write('iptvcache', null);
+  store.update('xtreamepgcaches', {}, (all) => { delete all[id]; return all; });
+  store.update('epgcaches', {}, (all) => { delete all[id]; return all; });
 }
 
 // Channels from either source, normalized: { idx, id (stable), name, logo, group, tvgId, url (secret) }.
@@ -523,10 +810,7 @@ function iptvSourceKey(s) {
   const source = mode === 'xt'
     ? `${s.xtHost || ''}|${s.xtUser || ''}|${s.xtPass || ''}`
     : `${s.iptvUrl || ''}`;
-  return `${mode}:${idHash(source)}`;
-}
-function iptvConfigured(s) {
-  return !!((s.iptvMode === 'xtream' && s.xtHost) || s.iptvUrl);
+  return `${cleanIptvSourceId(s.id)}:${mode}:${idHash(source)}`;
 }
 function epgSourceKey(s) {
   return idHash(`${iptvSourceKey(s)}|epg:${xmltvGuideUrl(s) || ''}`);
@@ -562,6 +846,15 @@ function findRefreshedXtreamChannel(staleCh, channels) {
   }
   return matches.find((c) => String(c.xtreamId || '') !== staleStream) || matches[0];
 }
+function persistXtreamChannelCache(key, channels, sourceId = IPTV_LEGACY_SOURCE_ID) {
+  try {
+    writeIptvDiskCache(sourceId, {
+      key,
+      at: Date.now(),
+      channels: channels.map(({ url: _u, nativeUrl: _nu, nativeFallbackUrl: _nfu, ...c }) => c),
+    });
+  } catch {}
+}
 function xtreamPanelFetchOptions(opts = {}) {
   return {
     ...opts,
@@ -573,20 +866,78 @@ function xtreamPanelFetchOptions(opts = {}) {
     },
   };
 }
+function xtreamM3uPlaylistUrl(s) {
+  const base = String(s.xtHost || '').replace(/\/+$/, '');
+  return `${base}/get.php?username=${encodeURIComponent(s.xtUser || '')}&password=${encodeURIComponent(s.xtPass || '')}&output=ts&type=m3u_plus&_=${Date.now().toString(36)}`;
+}
+function xtreamIdFromStreamUrl(raw) {
+  try {
+    const u = new URL(String(raw || ''));
+    const m = /\/live\/[^/]+\/[^/]+\/(\d+)\.(?:ts|m3u8)(?:$|[?#])/i.exec(u.pathname);
+    return m ? m[1] : '';
+  } catch { return ''; }
+}
+async function fetchXtreamM3uChannelsForPlayback(s, key, reason) {
+  const list = await fetchM3uChannelsStream(xtreamM3uPlaylistUrl(s), {
+    maxChannels: 20000,
+    timeoutMs: 15000,
+    deadlineMs: 90000,
+    headers: {
+      'cache-control': 'no-cache',
+      pragma: 'no-cache',
+      'user-agent': IPTV_NATIVE_PROXY_UA,
+    },
+  });
+  const channels = list.map((c, i) => {
+    const xtreamId = xtreamIdFromStreamUrl(c.url);
+    if (!xtreamId) return { ...c, idx: i };
+    return {
+      ...c,
+      idx: i,
+      id: 'xt' + xtreamId,
+      xtreamId,
+      ...xtChannelUrls(s, xtreamId),
+    };
+  }).filter((c) => c.xtreamId);
+  if (channels.length) {
+    const sourceId = cleanIptvSourceId(s.id);
+    const nextCache = { key, at: Date.now(), channels };
+    iptvSourceCaches.set(sourceId, nextCache);
+    persistXtreamChannelCache(key, channels, sourceId);
+    clearIptvAggregateCache();
+    console.error(`[iptv refresh] Xtream M3U fallback refreshed ${channels.length} channel(s) after ${reason}`);
+  }
+  return channels;
+}
 async function refreshXtreamChannelForPlayback(staleCh, reason = 'playback rejection') {
-  const s = settings.get();
+  const s = sourceForIptvChannel(staleCh) || iptvSourcesFromSettings(settings.get())[0] || settings.get();
   if (s.iptvMode !== 'xtream' || !staleCh || !staleCh.xtreamId) return null;
   const key = iptvSourceKey(s);
-  if (!iptvPlaybackRefreshPromise) {
+  const sourceId = cleanIptvSourceId(s.id);
+  if (!iptvPlaybackRefreshPromise || iptvPlaybackRefreshPromise.sourceId !== sourceId) {
     iptvPlaybackRefreshPromise = fetchIptvChannels(s, key)
       .catch((e) => {
         console.error(`[iptv refresh] forced Xtream channel refresh failed after ${reason}: ${sanitizeIptvLogError(e)}`);
         return [];
       })
       .finally(() => { iptvPlaybackRefreshPromise = null; });
+    iptvPlaybackRefreshPromise.sourceId = sourceId;
   }
   const channels = await iptvPlaybackRefreshPromise;
-  const next = findRefreshedXtreamChannel(staleCh, channels);
+  let next = findRefreshedXtreamChannel(staleCh, channels);
+  let source = 'API';
+  if (!next || String(next.xtreamId || '') === String(staleCh.xtreamId || '')) {
+    try {
+      const m3uChannels = await fetchXtreamM3uChannelsForPlayback(s, key, reason);
+      const m3uNext = findRefreshedXtreamChannel(staleCh, m3uChannels);
+      if (m3uNext) {
+        next = m3uNext;
+        source = 'M3U';
+      }
+    } catch (e) {
+      console.error(`[iptv refresh] Xtream M3U fallback failed after ${reason}: ${sanitizeIptvLogError(e)}`);
+    }
+  }
   if (!next) {
     console.error(`[iptv refresh] forced Xtream channel refresh found no replacement after ${reason}: "${staleCh.name}" stream=${staleCh.xtreamId}`);
     return null;
@@ -595,68 +946,122 @@ async function refreshXtreamChannelForPlayback(staleCh, reason = 'playback rejec
     console.error(`[iptv refresh] forced Xtream channel refresh kept same stream after ${reason}: "${staleCh.name}" stream=${staleCh.xtreamId}`);
     return null;
   }
-  console.error(`[iptv refresh] stale Xtream channel refreshed after ${reason}: "${staleCh.name}" stream=${staleCh.xtreamId} -> stream=${next.xtreamId}`);
+  console.error(`[iptv refresh] stale Xtream channel refreshed via ${source} after ${reason}: "${staleCh.name}" stream=${staleCh.xtreamId} -> stream=${next.xtreamId}`);
   return next;
 }
-async function loadIptvChannels() {
-  const s = settings.get();
-  const key = iptvSourceKey(s);
-  if (iptvCache.key === key && Date.now() - iptvCache.at < IPTV_CACHE_TTL_MS) return iptvCache.channels;
-  // STALE-WHILE-REVALIDATE (TiviMate model): once we have ANY playlist for this source,
-  // no user ever waits on the panel again — serve it instantly and refresh in the background.
-  if (iptvCache.key === key && iptvCache.channels.length) {
-    if (!iptvRefreshing) {
-      if (iptvPlaybackBusy()) {
-        logIptvRefreshPaused(iptvCache.channels, s.iptvMode === 'xtream' ? 'Xtream' : 'playlist');
-      } else {
-        iptvRefreshing = true;
-        fetchIptvChannels(s, key)
-          .catch((e) => {
-            console.error(`[iptv refresh] background channel refresh failed; keeping cached playlist channels=${iptvCache.channels.length}: ${sanitizeIptvLogError(e)}`);
-            iptvCache.at = Date.now() - (IPTV_CACHE_TTL_MS - 600000);
-          }) // retry in ~10min
-          .finally(() => { iptvRefreshing = false; });
-      }
-    }
-    return iptvCache.channels;
+function sourceForIptvChannel(ch = {}) {
+  const id = ch && ch.sourceId ? cleanIptvSourceId(ch.sourceId) : IPTV_LEGACY_SOURCE_ID;
+  return iptvSourcesFromSettings(settings.get()).find((src) => src.id === id) || null;
+}
+function scopeIptvChannels(src, channels) {
+  const sourceId = cleanIptvSourceId(src.id);
+  return (channels || []).slice(0, 20000).map((c, i) => {
+    const rawId = String(c.sourceRawId || c.id || c.xtreamId || idHash(c.url || `${c.name}:${i}`));
+    const scopedId = rawId.startsWith(`${sourceId}:`) ? rawId : `${sourceId}:${rawId}`;
+    const sourceGroup = c.sourceGroup || c.group || 'Other';
+    return {
+      ...c,
+      id: scopedId,
+      sourceRawId: rawId.startsWith(`${sourceId}:`) ? rawId.slice(sourceId.length + 1) : rawId,
+      sourceId,
+      sourceName: src.name,
+      sourceIdx: Number.isInteger(c.sourceIdx) ? c.sourceIdx : i,
+      idx: i,
+      sourceGroup,
+      group: sourceGroup,
+    };
+  });
+}
+function aggregateIptvChannels(rows) {
+  const activeRows = rows.filter((r) => r && Array.isArray(r.channels) && r.channels.length);
+  const multiple = activeRows.length > 1;
+  let idx = 0;
+  return activeRows.flatMap(({ src, channels }) => channels.map((c) => {
+    const sourceGroup = c.sourceGroup || c.group || 'Other';
+    return {
+      ...c,
+      idx: idx++,
+      sourceIdx: Number.isInteger(c.sourceIdx) ? c.sourceIdx : c.idx,
+      group: multiple ? `${src.name} · ${sourceGroup}` : sourceGroup,
+      sourceGroup,
+    };
+  }));
+}
+function sourceCacheLabel(src, channels) {
+  return `${src.iptvMode === 'xtream' ? 'Xtream' : 'playlist'} source=${src.name} channels=${channels.length}`;
+}
+async function backgroundRefreshIptvSource(src, key, cachedChannels, label) {
+  const sourceId = cleanIptvSourceId(src.id);
+  if (iptvRefreshingSources.has(sourceId)) return;
+  if (iptvPlaybackBusy()) {
+    logIptvRefreshPaused(cachedChannels, label);
+    return;
   }
-  if (s.iptvMode === 'xtream') {
-    const disk = store.read('iptvcache', null);
-    const channels = disk && disk.key === key ? hydrateXtreamCachedChannels(s, disk.channels) : [];
+  iptvRefreshingSources.add(sourceId);
+  fetchIptvChannels(src, key)
+    .then(() => clearIptvAggregateCache())
+    .catch((e) => {
+      console.error(`[iptv refresh] background channel refresh failed; keeping cached ${sourceCacheLabel(src, cachedChannels)}: ${sanitizeIptvLogError(e)}`);
+      const hit = iptvSourceCaches.get(sourceId);
+      if (hit) hit.at = Date.now() - (IPTV_CACHE_TTL_MS - 600000);
+    })
+    .finally(() => { iptvRefreshingSources.delete(sourceId); });
+}
+async function loadIptvChannelsForSource(src) {
+  const sourceId = cleanIptvSourceId(src.id);
+  const key = iptvSourceKey(src);
+  const hit = iptvSourceCaches.get(sourceId);
+  if (hit && hit.key === key && Date.now() - hit.at < IPTV_CACHE_TTL_MS) return hit.channels;
+  if (hit && hit.key === key && hit.channels.length) {
+    backgroundRefreshIptvSource(src, key, hit.channels, src.iptvMode === 'xtream' ? 'Xtream' : 'playlist');
+    return hit.channels;
+  }
+  if (src.iptvMode === 'xtream') {
+    const disk = readIptvDiskCaches()[sourceId];
+    const channels = disk && disk.key === key ? scopeIptvChannels(src, hydrateXtreamCachedChannels(src, disk.channels)) : [];
     if (channels.length) {
-      iptvCache = { key, at: Number(disk.at) || 0, channels };
-      if (!iptvRefreshing) {
-        if (iptvPlaybackBusy()) {
-          logIptvRefreshPaused(channels, 'persisted Xtream');
-        } else {
-          iptvRefreshing = true;
-          fetchIptvChannels(s, key)
-            .catch((e) => {
-              console.error(`[iptv refresh] background channel refresh failed; serving persisted Xtream cache channels=${channels.length}: ${sanitizeIptvLogError(e)}`);
-              iptvCache.at = Date.now() - (IPTV_CACHE_TTL_MS - 600000);
-            })
-            .finally(() => { iptvRefreshing = false; });
-        }
-      }
+      const next = { key, at: Number(disk.at) || 0, channels };
+      iptvSourceCaches.set(sourceId, next);
+      backgroundRefreshIptvSource(src, key, channels, 'persisted Xtream');
       return channels;
     }
   }
   try {
-    return await fetchIptvChannels(s, key);
+    return await fetchIptvChannels(src, key);
   } catch (e) {
-    // Panel down or rate-limiting (Xtream panels ban bursty playlist fetches — e.g. a few
-    // server restarts in a row): serve the last good playlist from disk instead of a dead
-    // page. Goes stale-but-working until the panel answers again.
-    const disk = store.read('iptvcache', null);
-    if (s.iptvMode === 'xtream' && disk && disk.key === key && Array.isArray(disk.channels) && disk.channels.length) {
+    const disk = readIptvDiskCaches()[sourceId];
+    if (src.iptvMode === 'xtream' && disk && disk.key === key && Array.isArray(disk.channels) && disk.channels.length) {
       const ageMin = Math.max(0, Math.round((Date.now() - (Number(disk.at) || 0)) / 60000));
-      console.error(`[iptv] Xtream source failed; serving last cached playlist channels=${disk.channels.length} age=${ageMin}m: ${sanitizeIptvLogError(e)}`);
-      const channels = hydrateXtreamCachedChannels(s, disk.channels);
-      iptvCache = { key, at: Date.now() - (IPTV_CACHE_TTL_MS - 600000), channels }; // near-stale: retry in ~10min
+      console.error(`[iptv] Xtream source failed; serving last cached playlist source=${src.name} channels=${disk.channels.length} age=${ageMin}m: ${sanitizeIptvLogError(e)}`);
+      const channels = scopeIptvChannels(src, hydrateXtreamCachedChannels(src, disk.channels));
+      iptvSourceCaches.set(sourceId, { key, at: Date.now() - (IPTV_CACHE_TTL_MS - 600000), channels });
       return channels;
     }
     throw e;
   }
+}
+async function loadIptvChannels(sources = iptvSourcesFromSettings(settings.get())) {
+  const usable = (sources || []).filter(iptvSourceConfigured);
+  if (!usable.length) {
+    clearIptvAggregateCache();
+    return [];
+  }
+  const aggregateKey = usable.map((src) => `${src.id}:${iptvSourceKey(src)}`).join('|');
+  if (iptvCache.key === aggregateKey && Date.now() - iptvCache.at < IPTV_CACHE_TTL_MS) return iptvCache.channels;
+  const rows = [];
+  const errors = [];
+  await mapLimit(usable, Math.min(3, usable.length), async (src) => {
+    try {
+      rows.push({ src, channels: await loadIptvChannelsForSource(src) });
+    } catch (e) {
+      errors.push({ src, error: e });
+      console.error(`[iptv] source "${src.name}" failed: ${sanitizeIptvLogError(e)}`);
+    }
+  });
+  if (!rows.length && errors.length) throw errors[0].error;
+  const channels = aggregateIptvChannels(rows);
+  iptvCache = { key: aggregateKey, at: Date.now(), channels };
+  return channels;
 }
 function m3uAttr(meta, name) {
   const m = new RegExp(`${name}="([^"]*)"`, 'i').exec(meta);
@@ -710,7 +1115,7 @@ function fetchM3uChannelsStream(playlistUrl, opts = {}) {
       if (channels.length >= maxChannels) done();
     };
     const deadline = setTimeout(() => done(new Error(`m3u playlist timed out after ${Math.round(deadlineMs / 1000)}s`)), deadlineMs);
-    req = client.get(u, { headers: { 'user-agent': IPTV_NATIVE_PROXY_UA } }, (res) => {
+    req = client.get(u, { headers: { ...(opts.headers || {}), 'user-agent': (opts.headers && opts.headers['user-agent']) || IPTV_NATIVE_PROXY_UA } }, (res) => {
       resRef = res;
       if ([301, 302, 303, 307, 308].includes(res.statusCode || 0) && res.headers.location) {
         res.resume();
@@ -750,7 +1155,9 @@ function fetchM3uChannelsStream(playlistUrl, opts = {}) {
   });
 }
 async function fetchIptvChannels(s, key) {
-  if (iptvCache.key !== key) xtreamEpgCache = { key: null, byStream: new Map() };
+  const sourceId = cleanIptvSourceId(s.id);
+  const curXt = xtreamEpgSourceCaches.get(sourceId);
+  if (!curXt || curXt.key !== key) xtreamEpgSourceCaches.delete(sourceId);
   let channels = [];
   if (s.iptvMode === 'xtream' && s.xtHost) {
     const base = String(s.xtHost).replace(/\/+$/, '');
@@ -788,18 +1195,13 @@ async function fetchIptvChannels(s, key) {
     // series in one file. Stream-parse and stop at the channel cap instead of buffering it.
     channels = await fetchM3uChannelsStream(s.iptvUrl, { maxChannels: 20000 });
   }
-  iptvCache = { key, at: Date.now(), channels };
+  channels = scopeIptvChannels(s, channels);
+  iptvSourceCaches.set(sourceId, { key, at: Date.now(), channels });
   // Persist Xtream playlists for restart survival — WITHOUT credential-bearing stream URLs
   // (rebuilt from encrypted settings on read). M3U playlists may embed third-party tokens
   // in every line, so those stay memory-only.
   if (s.iptvMode === 'xtream') {
-    try {
-      store.write('iptvcache', {
-        key,
-        at: Date.now(),
-        channels: channels.map(({ url: _u, nativeUrl: _nu, nativeFallbackUrl: _nfu, ...c }) => c),
-      });
-    } catch {}
+    persistXtreamChannelCache(key, channels, sourceId);
   }
   return channels;
 }
@@ -829,40 +1231,50 @@ function hydrateXmltvCache(raw, key) {
 }
 function persistXmltvCache(cache) {
   try {
-    store.write('epgcache', {
+    const sourceId = cleanIptvSourceId(cache.sourceId);
+    const body = {
       key: cache.key,
       at: cache.at,
       byChannel: [...cache.byChannel.entries()],
       byName: [...cache.byName.entries()],
-    });
+    };
+    store.update('epgcaches', {}, (all) => { all[sourceId] = body; return all; });
+    if (sourceId === IPTV_LEGACY_SOURCE_ID) store.write('epgcache', body);
   } catch {}
 }
-function refreshXmltvInBackground(s, key) {
-  if (epgRefreshing) return;
-  epgRefreshing = true;
-  fetchXmltv(s, key).catch((e) => console.error('[xmltv refresh]', e.message))
-    .finally(() => { epgRefreshing = false; });
+function refreshXmltvInBackground(s, key, sourceChannels) {
+  const sourceId = cleanIptvSourceId(s.id);
+  if (epgRefreshingSources.has(sourceId)) return;
+  epgRefreshingSources.add(sourceId);
+  fetchXmltv(s, key, sourceChannels).catch((e) => console.error('[xmltv refresh]', e.message))
+    .finally(() => { epgRefreshingSources.delete(sourceId); });
 }
-async function ensureXmltv() {
-  const s = settings.get();
+async function ensureXmltv(s = iptvSourcesFromSettings(settings.get())[0], sourceChannels = null) {
   const xmltvUrl = xmltvGuideUrl(s);
   if (!xmltvUrl) return null;
+  const sourceId = cleanIptvSourceId(s.id);
   const key = epgSourceKey(s);
-  if (epgCache.key === key && Date.now() - epgCache.at < EPG_CACHE_TTL_MS) return epgCache;
-  if (epgCache.key === key && epgCache.byChannel && epgCache.byChannel.size) {
-    refreshXmltvInBackground(s, key);
-    return epgCache;
+  const hit = epgSourceCaches.get(sourceId);
+  if (hit && hit.key === key && Date.now() - hit.at < EPG_CACHE_TTL_MS) return hit;
+  if (hit && hit.key === key && hit.byChannel && hit.byChannel.size) {
+    refreshXmltvInBackground(s, key, sourceChannels);
+    return hit;
   }
-  const disk = hydrateXmltvCache(store.read('epgcache', null), key);
+  const diskAll = store.read('epgcaches', {});
+  const diskRaw = diskAll && diskAll[sourceId] ? diskAll[sourceId] : (sourceId === IPTV_LEGACY_SOURCE_ID ? store.read('epgcache', null) : null);
+  const disk = hydrateXmltvCache(diskRaw, key);
   if (disk && disk.byChannel.size) {
+    disk.sourceId = sourceId;
+    epgSourceCaches.set(sourceId, disk);
     epgCache = disk;
-    if (Date.now() - disk.at >= EPG_CACHE_TTL_MS) refreshXmltvInBackground(s, key);
-    return epgCache;
+    if (Date.now() - disk.at >= EPG_CACHE_TTL_MS) refreshXmltvInBackground(s, key, sourceChannels);
+    return disk;
   }
-  return fetchXmltv(s, key);
+  return fetchXmltv(s, key, sourceChannels);
 }
 let epgRefreshing = false;
-async function fetchXmltv(s, key = epgSourceKey(s)) {
+let epgRefreshingSources = new Set();
+async function fetchXmltv(s, key = epgSourceKey(s), sourceChannels = null) {
   const xmltvUrl = xmltvGuideUrl(s);
   if (!xmltvUrl) return null;
   const r = await fetchUrlExt(xmltvUrl, { timeoutMs: 20000, deadlineMs: 90000, maxBytes: 128 * 1024 * 1024 });
@@ -887,7 +1299,8 @@ async function fetchXmltv(s, key = epgSourceKey(s)) {
   }
   // Which guide ids do we actually carry? (tvg-id direct + name-resolved)
   const wanted = new Set();
-  for (const c of iptvCache.channels) {
+  const carried = sourceChannels || (iptvSourceCaches.get(cleanIptvSourceId(s.id)) || {}).channels || [];
+  for (const c of carried) {
     if (c.tvgId) wanted.add(c.tvgId);
     const viaName = byName.get(normChName(c.name));
     if (viaName) wanted.add(viaName);
@@ -908,7 +1321,8 @@ async function fetchXmltv(s, key = epgSourceKey(s)) {
     byChannel.get(m[3]).push({ start, stop, title });
   }
   for (const list of byChannel.values()) list.sort((a, b) => a.start - b.start);
-  epgCache = { key, at: Date.now(), byChannel, byName };
+  epgCache = { key, sourceId: cleanIptvSourceId(s.id), at: Date.now(), byChannel, byName };
+  epgSourceCaches.set(epgCache.sourceId, epgCache);
   persistXmltvCache(epgCache);
   return epgCache;
 }
@@ -974,11 +1388,15 @@ function fallbackProgramme(ch, from, to) {
 function xtreamEpgStoreKey(key) {
   return idHash(`xtreamepg:${key}`);
 }
-function hydrateXtreamEpgCache(key) {
-  const raw = store.read('xtreamepgcache', null);
+function hydrateXtreamEpgCache(key, sourceId = IPTV_LEGACY_SOURCE_ID) {
+  const sid = cleanIptvSourceId(sourceId);
+  const all = store.read('xtreamepgcaches', {});
+  const raw = all && all[sid] ? all[sid] : (sid === IPTV_LEGACY_SOURCE_ID ? store.read('xtreamepgcache', null) : null);
   if (!raw || raw.key !== xtreamEpgStoreKey(key) || !Array.isArray(raw.streams)) {
-    xtreamEpgCache = { key, byStream: new Map() };
-    return;
+    const empty = { key, sourceId: sid, byStream: new Map() };
+    xtreamEpgSourceCaches.set(sid, empty);
+    xtreamEpgCache = empty;
+    return empty;
   }
   const byStream = new Map();
   for (const [id, entry] of raw.streams) {
@@ -986,15 +1404,20 @@ function hydrateXtreamEpgCache(key) {
     const at = Number(entry.at) || 0;
     if (at && Date.now() - at <= EPG_CACHE_STALE_MS) byStream.set(String(id), { at, list: entry.list });
   }
-  xtreamEpgCache = { key, byStream };
+  xtreamEpgCache = { key, sourceId: sid, byStream };
+  xtreamEpgSourceCaches.set(sid, xtreamEpgCache);
+  return xtreamEpgCache;
 }
-function persistXtreamEpgCache() {
+function persistXtreamEpgCache(cache = xtreamEpgCache) {
   try {
-    const streams = [...xtreamEpgCache.byStream.entries()]
+    const sourceId = cleanIptvSourceId(cache.sourceId);
+    const streams = [...cache.byStream.entries()]
       .filter(([, e]) => e && Array.isArray(e.list) && e.list.length)
       .slice(-5000)
       .map(([id, e]) => [id, { at: Number(e.at) || 0, list: e.list }]);
-    store.write('xtreamepgcache', { key: xtreamEpgStoreKey(xtreamEpgCache.key), at: Date.now(), streams });
+    const body = { key: xtreamEpgStoreKey(cache.key), at: Date.now(), streams };
+    store.update('xtreamepgcaches', {}, (all) => { all[sourceId] = body; return all; });
+    if (sourceId === IPTV_LEGACY_SOURCE_ID) store.write('xtreamepgcache', body);
   } catch {}
 }
 async function fetchXtreamEpgAction(s, ch, limit, action, timeouts = {}) {
@@ -1029,52 +1452,54 @@ async function fetchXtreamEpgList(s, ch, limit) {
   }
 }
 async function xtreamEpgList(ch, { limit = 24, allowBusy = false } = {}) {
-  const s = settings.get();
+  const s = sourceForIptvChannel(ch) || iptvSourcesFromSettings(settings.get())[0] || settings.get();
   if (s.iptvMode !== 'xtream' || !ch.xtreamId) return [];
+  const sourceId = cleanIptvSourceId(s.id);
   const key = iptvSourceKey(s);
-  if (xtreamEpgCache.key !== key) hydrateXtreamEpgCache(key);
+  let cache = xtreamEpgSourceCaches.get(sourceId);
+  if (!cache || cache.key !== key) cache = hydrateXtreamEpgCache(key, sourceId);
   const id = String(ch.xtreamId);
-  const hit = xtreamEpgCache.byStream.get(id);
+  const hit = cache.byStream.get(id);
   if (hit && Date.now() - hit.at < (hit.list && hit.list.length ? EPG_CACHE_TTL_MS : EPG_EMPTY_TTL_MS)) return hit.list;
   if (iptvPlaybackBusy() && !allowBusy) return hit && hit.list ? hit.list : [];
   if (hit && hit.list && hit.list.length && Date.now() - hit.at <= EPG_CACHE_STALE_MS) {
     if (!hit.promise) {
       const p = fetchXtreamEpgList(s, ch, limit).then((list) => {
-        xtreamEpgCache.byStream.set(id, { at: Date.now(), list });
-        if (xtreamEpgCache.byStream.size > 5000) xtreamEpgCache.byStream.clear();
-        if (list.length) persistXtreamEpgCache();
+        cache.byStream.set(id, { at: Date.now(), list });
+        if (cache.byStream.size > 5000) cache.byStream.clear();
+        if (list.length) persistXtreamEpgCache(cache);
         return list;
       }).catch((e) => {
         // Stale-cache refresh is fire-and-forget; provider timeouts must not surface as
         // unhandled rejections that can kill the container.
         const ageMin = Math.max(0, Math.round((Date.now() - hit.at) / 60000));
         console.error(`[iptv xtream guide] ${iptvChannelLogLabel(ch)} refresh failed; serving stale cache age=${ageMin}m: ${sanitizeIptvLogError(e)}`);
-        xtreamEpgCache.byStream.set(id, { at: hit.at, list: hit.list });
+        cache.byStream.set(id, { at: hit.at, list: hit.list });
         return hit.list;
       });
-      xtreamEpgCache.byStream.set(id, { ...hit, promise: p });
+      cache.byStream.set(id, { ...hit, promise: p });
     }
     return hit.list;
   }
   if (hit && hit.promise) return hit.promise;
   const p = fetchXtreamEpgList(s, ch, limit).then((list) => {
-    xtreamEpgCache.byStream.set(id, { at: Date.now(), list });
-    if (xtreamEpgCache.byStream.size > 5000) xtreamEpgCache.byStream.clear();
-    if (list.length) persistXtreamEpgCache();
+    cache.byStream.set(id, { at: Date.now(), list });
+    if (cache.byStream.size > 5000) cache.byStream.clear();
+    if (list.length) persistXtreamEpgCache(cache);
     return list;
   });
-  xtreamEpgCache.byStream.set(id, { at: 0, list: hit ? hit.list : [], promise: p });
+  cache.byStream.set(id, { at: 0, list: hit ? hit.list : [], promise: p });
   try {
     return await p;
   } catch (e) {
     console.error(`[iptv xtream guide] ${iptvChannelLogLabel(ch)} fetch failed; using ${hit && hit.list ? 'previous cache' : 'channel-title fallback'}: ${sanitizeIptvLogError(e)}`);
-    xtreamEpgCache.byStream.delete(id);
+    cache.byStream.delete(id);
     if (hit) return hit.list;
     return [];
   }
 }
 async function epgNowNext(ch) {
-  const s = settings.get();
+  const s = sourceForIptvChannel(ch) || iptvSourcesFromSettings(settings.get())[0] || settings.get();
   if (s.iptvMode === 'xtream' && ch.xtreamId) {
     const list = await xtreamEpgList(ch, { limit: 24, allowBusy: true });
     const now = Date.now();
@@ -1084,7 +1509,7 @@ async function epgNowNext(ch) {
     if (next) return { now: null, next };
   }
   if (xmltvGuideUrl(s)) {
-    const epg = await ensureXmltv();
+    const epg = await ensureXmltv(s, (iptvSourceCaches.get(cleanIptvSourceId(s.id)) || {}).channels || []);
     const list = xmltvListFor(epg, ch);
     const now = Date.now();
     const i = list.findIndex((p) => p.start <= now && p.stop > now);
@@ -1093,7 +1518,7 @@ async function epgNowNext(ch) {
   }
   return {};
 }
-function xtreamGuideWarmTargets(channels) {
+function xtreamGuideWarmTargets(channels, cache = xtreamEpgCache) {
   const out = [];
   const seen = new Set();
   const add = (ch) => {
@@ -1104,37 +1529,50 @@ function xtreamGuideWarmTargets(channels) {
   const favIds = new Set();
   const favs = store.read('iptvfavs', {});
   for (const list of Object.values(favs || {})) {
-    if (Array.isArray(list)) for (const id of list) favIds.add(String(id));
+      if (Array.isArray(list)) for (const id of list) favIds.add(String(id));
   }
   for (const ch of channels) if (favIds.has(String(ch.id))) add(ch);
-  const cachedStreams = xtreamEpgCache.byStream && xtreamEpgCache.byStream.size
-    ? new Set([...xtreamEpgCache.byStream.keys()].map(String)) : new Set();
+  const cachedStreams = cache.byStream && cache.byStream.size
+    ? new Set([...cache.byStream.keys()].map(String)) : new Set();
   for (const ch of channels) if (cachedStreams.has(String(ch.xtreamId))) add(ch);
   channels.slice(0, 48).forEach(add);
   return out.slice(0, IPTV_WARM_XTREAM_GUIDE_MAX);
 }
 async function warmIptvCaches(reason = 'scheduled') {
   if (iptvWarmRunning) return { configured: iptvConfigured(settings.get()), skipped: 'running' };
-  const s = settings.get();
-  if (!iptvConfigured(s)) return { configured: false };
+  const sources = iptvSourcesFromSettings(settings.get());
+  if (!sources.length) return { configured: false };
   iptvWarmRunning = true;
   try {
-    const channels = await loadIptvChannels();
-    const result = { configured: true, reason, channels: channels.length, xmltv: false, xtreamGuide: 0 };
-    if (xmltvGuideUrl(s)) {
-      await ensureXmltv();
-      result.xmltv = true;
-    }
-    if (s.iptvMode === 'xtream') {
-      const key = iptvSourceKey(s);
-      if (xtreamEpgCache.key !== key) hydrateXtreamEpgCache(key);
-      const targets = iptvPlaybackBusy() ? [] : xtreamGuideWarmTargets(channels);
-      await mapLimit(targets, 1, async (ch) => {
-        if (iptvPlaybackBusy()) return;
-        await xtreamEpgList(ch, { limit: 24 });
-      });
-      result.xtreamGuide = targets.length;
-      result.xtreamGuidePaused = targets.length === 0 && iptvPlaybackBusy();
+    const result = { configured: true, reason, channels: 0, sources: 0, xmltv: false, xtreamGuide: 0 };
+    await mapLimit(sources, Math.min(3, sources.length), async (src) => {
+      const channels = await loadIptvChannelsForSource(src);
+      result.channels += channels.length;
+      result.sources++;
+      if (xmltvGuideUrl(src)) {
+        await ensureXmltv(src, channels);
+        result.xmltv = true;
+      }
+      if (src.iptvMode === 'xtream') {
+        const key = iptvSourceKey(src);
+        let cache = xtreamEpgSourceCaches.get(src.id);
+        if (!cache || cache.key !== key) cache = hydrateXtreamEpgCache(key, src.id);
+        const targets = iptvPlaybackBusy() ? [] : xtreamGuideWarmTargets(channels, cache);
+        await mapLimit(targets, 1, async (ch) => {
+          if (iptvPlaybackBusy()) return;
+          await xtreamEpgList(ch, { limit: 24 });
+        });
+        result.xtreamGuide += targets.length;
+        result.xtreamGuidePaused = result.xtreamGuidePaused || (targets.length === 0 && iptvPlaybackBusy());
+      }
+    });
+    if (sources.length) {
+      const cachedRows = sources.map((src) => ({ src, channels: (iptvSourceCaches.get(src.id) || {}).channels || [] }));
+      iptvCache = {
+        key: sources.map((src) => `${src.id}:${iptvSourceKey(src)}`).join('|'),
+        at: Date.now(),
+        channels: aggregateIptvChannels(cachedRows),
+      };
     }
     return result;
   } finally {
@@ -1525,7 +1963,7 @@ const H = {
     tmdb: !!settings.get().tmdbKey, ffmpeg: !!detectFfmpeg(),
     // Wyzie only needs the server-side API key; no account login is required.
     opensubs: !!settings.get().openSubsKey,
-    iptv: !!(settings.get().iptvUrl || (settings.get().iptvMode === 'xtream' && settings.get().xtHost)),
+    iptv: iptvConfigured(settings.get()),
     music: !!ytmusic.detectYtdlp(), // Music tab shows only when yt-dlp is present
   }),
 
@@ -1548,8 +1986,8 @@ const H = {
 
   me: async (ctx) => {
     const s = settings.get();
-    const iptvAllowed = ctx.user.role === 'admin'
-      || !(s.iptvUsers && s.iptvUsers.length) || s.iptvUsers.includes(ctx.user.id);
+    const sources = iptvSourcesFromSettings(s);
+    const iptvAllowed = ctx.user.role === 'admin' || sources.some((src) => userCanAccessIptvSource(ctx.user, src));
     send(ctx.res, 200, { ...auth.publicUser(ctx.user), iptvAllowed });
   },
 
@@ -1631,6 +2069,7 @@ const H = {
         connections: provs[0].connections || 16, providers: provs.length,
         totalConnections: provs.reduce((n, p) => n + (p.connections || 16), 0),
       } : null,
+      streaming: streamingRuntimeProfile(),
       indexers: (settings.get().indexers || []).length,
       tmdb: !!settings.get().tmdbKey,
       ffmpeg: detectFfmpeg() ? detectFfmpeg().version : null,
@@ -1782,14 +2221,10 @@ const H = {
   // ---- IPTV v2: M3U or Xtream Codes API; EPG now/next; per-user favorites ----
   iptvChannels: async (ctx) => {
     const s = settings.get();
-    const configured = (s.iptvMode === 'xtream' && s.xtHost) || s.iptvUrl;
-    if (!configured) return send(ctx.res, 200, { configured: false, channels: [] });
-    // Live TV can be restricted to specific users, exactly like libraries (empty = everyone).
-    if (s.iptvUsers && s.iptvUsers.length && ctx.user.role !== 'admin' && !s.iptvUsers.includes(ctx.user.id)) {
-      return send(ctx.res, 200, { configured: false, channels: [] });
-    }
+    const sources = iptvSourcesForUser(ctx.user, s);
+    if (!sources.length) return send(ctx.res, 200, { configured: false, sources: [], channels: [] });
     try {
-      const channels = await loadIptvChannels();
+      const channels = await loadIptvChannels(sources);
       const favs = new Set((store.read('iptvfavs', {})[ctx.user.id]) || []);
       // Admin-enforced hidden categories are stripped server-side for regular users — they
       // can't re-enable them. Admins still see everything (they manage the list).
@@ -1800,7 +2235,8 @@ const H = {
       if (ctx.url.searchParams.get('fav')) list = list.filter((c) => favs.has(c.id));
       send(ctx.res, 200, {
         configured: true,
-        epg: !!(s.epgUrl || s.iptvMode === 'xtream'),
+        sources: sources.map(redactIptvSource),
+        epg: sources.some((src) => !!(xmltvGuideUrl(src) || src.iptvMode === 'xtream')),
         hiddenGroups: (store.read('iptvgroups', {})[ctx.user.id]) || [],
         globalHidden: ctx.user.role === 'admin' ? [...globalHidden] : undefined,
         channels: list.map(({ url: _u, nativeUrl: _nu, nativeFallbackUrl: _nfu, ...c }) => {
@@ -1821,6 +2257,69 @@ const H = {
       console.error('[iptv]', e.message);
       send(ctx.res, 502, { error: 'live tv source failed — check the playlist/Xtream settings' });
     }
+  },
+
+  iptvSourcesList: async (ctx) => {
+    const sources = iptvSourcesFromSettings(settings.get()).map(redactIptvSource);
+    send(ctx.res, 200, { sources });
+  },
+
+  iptvSourceCreate: async (ctx) => {
+    const b = await readJson(ctx.req);
+    let src;
+    try { src = makeIptvSourceFromBody(b); }
+    catch (e) { return send(ctx.res, e.status || 400, { error: e.message }); }
+    settings.update((s) => {
+      const list = iptvSourcesFromSettings(s).filter((x) => x.id !== src.id);
+      list.push(src);
+      return {
+        ...s,
+        iptvSources: list,
+        iptvUrl: null, xtHost: null, xtUser: null, xtPass: null, epgUrl: null, iptvUsers: [],
+      };
+    });
+    clearIptvSourceRuntime(src.id);
+    scheduleIptvWarmSoon('source-added');
+    send(ctx.res, 200, { source: redactIptvSource(src) });
+  },
+
+  iptvSourceDelete: async (ctx) => {
+    const sourceId = cleanIptvSourceId(ctx.m[1]);
+    let removed = null;
+    settings.update((s) => {
+      const list = iptvSourcesFromSettings(s);
+      removed = list.find((src) => src.id === sourceId) || null;
+      const nextList = list.filter((src) => src.id !== sourceId);
+      const next = { ...s, iptvSources: nextList };
+      if (!nextList.length) {
+        next.iptvUrl = null; next.xtHost = null; next.xtUser = null; next.xtPass = null; next.epgUrl = null; next.iptvUsers = [];
+      }
+      if (removed) {
+        const prefix = `${removed.name} · `;
+        next.iptvHiddenGroups = (next.iptvHiddenGroups || []).filter((g) => !String(g).startsWith(prefix));
+      }
+      return next;
+    });
+    clearIptvSourceRuntime(sourceId);
+    deleteIptvDiskCache(sourceId);
+    store.update('iptvfavs', {}, (all) => {
+      const prefix = `${sourceId}:`;
+      for (const uid of Object.keys(all || {})) {
+        if (Array.isArray(all[uid])) all[uid] = all[uid].filter((id) => !String(id).startsWith(prefix));
+      }
+      return all;
+    });
+    if (removed) {
+      const prefix = `${removed.name} · `;
+      store.update('iptvgroups', {}, (all) => {
+        for (const uid of Object.keys(all || {})) {
+          if (Array.isArray(all[uid])) all[uid] = all[uid].filter((g) => !String(g).startsWith(prefix));
+        }
+        return all;
+      });
+    }
+    scheduleIptvWarmSoon('source-deleted');
+    send(ctx.res, 200, { ok: true, removed: !!removed });
   },
 
   // Per-user category visibility: hide provider groups you never watch (synced across devices).
@@ -1858,13 +2357,15 @@ const H = {
     const chans = idxs.map((i) => iptvCache.channels && iptvCache.channels[i]).filter(Boolean);
     if (!chans.length) return send(ctx.res, 200, { channels: [] });
     const from = Date.now() - 90 * 60000, to = Date.now() + 4 * 3600000;
-    const s = settings.get();
-    let epg = null;
-    if (xmltvGuideUrl(s)) { try { epg = await ensureXmltv(); } catch { epg = null; } }
     const channels = await mapLimit(chans, 8, async (ch) => {
+      const src = sourceForIptvChannel(ch) || iptvSourcesFromSettings(settings.get())[0] || settings.get();
       let progs = [];
-      if (s.iptvMode === 'xtream' && ch.xtreamId) {
+      if (src.iptvMode === 'xtream' && ch.xtreamId) {
         progs = (await xtreamEpgList(ch, { limit: 24, allowBusy: true })).filter((p) => p.stop > from && p.start < to);
+      }
+      let epg = null;
+      if (xmltvGuideUrl(src)) {
+        try { epg = await ensureXmltv(src, (iptvSourceCaches.get(cleanIptvSourceId(src.id)) || {}).channels || []); } catch { epg = null; }
       }
       if (!progs.length && epg && xmltvListFor(epg, ch).length) {
         progs = xmltvListFor(epg, ch).filter((p) => p.stop > from && p.start < to);
@@ -1880,6 +2381,9 @@ const H = {
 
   // EPG now/next for one channel: Xtream short-EPG, or the configured XMLTV guide.
   iptvEpg: async (ctx) => {
+    if (!iptvCache.channels || !iptvCache.channels.length) {
+      try { await loadIptvChannels(iptvSourcesForUser(ctx.user, settings.get())); } catch {}
+    }
     const ch = iptvCache.channels && iptvCache.channels[parseInt(ctx.m[1], 10)];
     if (!ch) return send(ctx.res, 404, { error: 'channel not found' });
     try {
@@ -1891,6 +2395,10 @@ const H = {
   // Live stream: ffmpeg ingests the channel URL (HLS/TS/whatever) → fMP4 the browser plays.
   iptvNative: async (ctx) => {
     if (!streamScopeOk(ctx, `iptv:${ctx.m[1]}`)) return send(ctx.res, 401, { error: 'token not valid for this stream' });
+    if (!iptvCache.channels || !iptvCache.channels.length) {
+      const user = ctx.user || auth.getUser(ctx.claims.uid);
+      try { await loadIptvChannels(iptvSourcesForUser(user, settings.get())); } catch {}
+    }
     const ch = iptvCache.channels && iptvCache.channels[parseInt(ctx.m[1], 10)];
     if (!ch) return send(ctx.res, 404, { error: 'channel not found - open Live TV first' });
     const alt = ctx.url.searchParams.get('alt') === '1';
@@ -1900,6 +2408,10 @@ const H = {
 
   iptvStream: async (ctx) => {
     if (!streamScopeOk(ctx, `iptv:${ctx.m[1]}`)) return send(ctx.res, 401, { error: 'token not valid for this stream' });
+    if (!iptvCache.channels || !iptvCache.channels.length) {
+      const user = ctx.user || auth.getUser(ctx.claims.uid);
+      try { await loadIptvChannels(iptvSourcesForUser(user, settings.get())); } catch {}
+    }
     let ch = iptvCache.channels && iptvCache.channels[parseInt(ctx.m[1], 10)];
     if (!ch) return send(ctx.res, 404, { error: 'channel not found — open Live TV first' });
     if (!detectFfmpeg()) return send(ctx.res, 503, { error: 'ffmpeg required for Live TV' });
@@ -2797,6 +3309,8 @@ Object.assign(H, {
 
   settingsGet: async (ctx) => {
     const s = settings.get();
+    const iptvSources = iptvSourcesFromSettings(s);
+    const primaryIptv = iptvSources[0] || legacyIptvSource(s) || {};
     send(ctx.res, 200, { // secrets redacted — the UI shows presence, not values
       providers: (s.providers || []).map((p) => ({ host: p.host, port: p.port, tls: !!p.tls, user: p.user ? '•••' : '', connections: p.connections || 16 })),
       indexers: (s.indexers || []).map((i) => ({
@@ -2809,22 +3323,30 @@ Object.assign(H, {
       openSubsUser: s.openSubsUser || null, // username isn't a secret; the password is
       openSubsPass: s.openSubsPass ? '•••' : null,
       // M3U/Xtream details often embed credentials — expose only hosts/flags.
-      iptvUrl: s.iptvUrl ? (() => { try { return new URL(s.iptvUrl).host; } catch { return '•••'; } })() : null,
-      iptvMode: s.iptvMode || 'm3u',
-      xtHost: s.xtHost ? (() => { try { return new URL(s.xtHost).host; } catch { return '•••'; } })() : null,
-      epgUrl: s.epgUrl ? (() => { try { return new URL(s.epgUrl).host; } catch { return '•••'; } })() : null,
+      iptvSources: iptvSources.map(redactIptvSource),
+      iptvUrl: primaryIptv.iptvUrl ? iptvUrlHost(primaryIptv.iptvUrl) : null,
+      iptvMode: primaryIptv.iptvMode || 'm3u',
+      xtHost: primaryIptv.xtHost ? iptvUrlHost(primaryIptv.xtHost) : null,
+      epgUrl: primaryIptv.epgUrl ? iptvUrlHost(primaryIptv.epgUrl) : null,
       traktClientId: s.traktClientId || null, // public identifier — safe to show
       traktClientSecret: s.traktClientSecret ? '•••' : null,
-      iptvUsers: s.iptvUsers || [], // user ids, not secrets
+      iptvUsers: primaryIptv.users || [], // user ids, not secrets
       sizeCapMode: s.sizeCapMode || 'auto',
       sizeCap4kGb: s.sizeCap4kGb || null,
       sizeCap1080Gb: s.sizeCap1080Gb || null,
       libAutoScanMin: s.libAutoScanMin ?? 15, // 0 = auto-scan off
       effectiveSizeCaps: sizeCaps(), // what's actually applied right now (auto-computed or manual)
+      maxProviderConnections: MAX_PROVIDER_CONNECTIONS,
+      streamingPerformance: normalizeStreamingPerformance(s.streamingPerformance || {}),
       scoringGroupsTrusted: s.scoringGroupsTrusted || [],
       scoringGroupsAvoid: s.scoringGroupsAvoid || [],
       scoringKeywords: s.scoringKeywords || [],
     });
+  },
+
+  streamingRecommend: async (ctx) => {
+    const b = await readJson(ctx.req);
+    send(ctx.res, 200, recommendStreamingPerformance(b, settings.get()));
   },
 
   // Connection tests for SAVED entries (creds stay server-side, never round-trip to the UI).
@@ -2863,12 +3385,13 @@ Object.assign(H, {
     const b = await readJson(ctx.req);
     const iptvSourceChanged = ['iptvUrl', 'iptvMode', 'xtHost', 'xtUser', 'xtPass', 'epgUrl']
       .some((k) => b[k] !== undefined);
+    const iptvAccessChanged = b.iptvUsers !== undefined;
     // Ops merge server-side so the UI never needs the decrypted secrets back:
     //   addProvider / removeProvider (index) · addIndexer / removeIndexer (index)
     // Wholesale replacement (providers:/indexers:) still works for tests/automation.
     settings.update((s) => {
       const next = {
-        providers: b.providers !== undefined ? b.providers : [...(s.providers || [])],
+        providers: b.providers !== undefined ? normalizeProviders(b.providers) : normalizeProviders(s.providers || []),
         indexers: b.indexers !== undefined ? b.indexers : [...(s.indexers || [])],
         tmdbKey: b.tmdbKey !== undefined ? b.tmdbKey : s.tmdbKey,
         openSubsKey: b.openSubsKey !== undefined ? (b.openSubsKey || null) : (s.openSubsKey ?? null),
@@ -2881,6 +3404,7 @@ Object.assign(H, {
         xtUser: b.xtUser !== undefined ? (b.xtUser || null) : s.xtUser,
         xtPass: b.xtPass !== undefined ? (b.xtPass || null) : s.xtPass,
         epgUrl: b.epgUrl !== undefined ? (b.epgUrl || null) : s.epgUrl,
+        iptvSources: Array.isArray(s.iptvSources) ? s.iptvSources : [],
         // Admin-enforced hidden IPTV categories — removed from EVERY non-admin user's list.
         iptvHiddenGroups: b.iptvHiddenGroups !== undefined
           ? (Array.isArray(b.iptvHiddenGroups) ? b.iptvHiddenGroups.map((g) => String(g).slice(0, 80)).slice(0, 500) : [])
@@ -2905,6 +3429,9 @@ Object.assign(H, {
         libAutoScanMin: b.libAutoScanMin !== undefined
           ? (Number.isFinite(+b.libAutoScanMin) && +b.libAutoScanMin >= 0 ? Math.min(1440, Math.round(+b.libAutoScanMin)) : 15)
           : (s.libAutoScanMin ?? 15),
+        streamingPerformance: b.streamingPerformance !== undefined
+          ? normalizeStreamingPerformance(b.streamingPerformance || {})
+          : normalizeStreamingPerformance(s.streamingPerformance || {}),
         // Scoring tweaks: group names (matched against the release's -GROUP suffix) and
         // keyword=score custom formats. Empty = pure built-in TRaSH-style defaults.
         scoringGroupsTrusted: b.scoringGroupsTrusted !== undefined
@@ -2927,7 +3454,7 @@ Object.assign(H, {
           host: String(b.addProvider.host), port: parseInt(b.addProvider.port, 10) || 563,
           tls: b.addProvider.tls !== false, user: String(b.addProvider.user || ''),
           pass: String(b.addProvider.pass || ''),
-          connections: Math.max(1, Math.min(60, parseInt(b.addProvider.connections, 10) || 16)),
+          connections: providerConnections(b.addProvider.connections),
         });
       }
       if (Number.isInteger(b.removeProvider)) next.providers.splice(b.removeProvider, 1);
@@ -2940,7 +3467,7 @@ Object.assign(H, {
           tls: e.tls !== undefined ? !!e.tls : cur.tls,
           user: e.user !== undefined ? String(e.user) : cur.user,
           pass: e.pass ? String(e.pass) : cur.pass,
-          connections: Math.max(1, Math.min(60, parseInt(e.connections, 10) || cur.connections || 16)),
+          connections: providerConnections(e.connections, cur.connections || 16),
         };
       }
       if (b.addIndexer && b.addIndexer.url) {
@@ -2966,6 +3493,32 @@ Object.assign(H, {
             ? (parseInt(e.grabDayLimit, 10) > 0 ? parseInt(e.grabDayLimit, 10) : null) : (cur.grabDayLimit ?? null),
         };
       }
+      if (iptvSourceChanged || iptvAccessChanged) {
+        const currentSources = iptvSourcesFromSettings(s);
+        const existing = currentSources[0] || legacyIptvSource(s) || { id: IPTV_LEGACY_SOURCE_ID, name: 'Default Live TV' };
+        const explicitClear = b.iptvUrl === null && b.xtHost === null && b.xtUser === null && b.xtPass === null;
+        if (explicitClear) {
+          next.iptvSources = [];
+          next.iptvUrl = null; next.xtHost = null; next.xtUser = null; next.xtPass = null; next.epgUrl = null; next.iptvUsers = [];
+        } else {
+          try {
+            const merged = makeIptvSourceFromBody({ ...b, iptvUsers: next.iptvUsers }, existing);
+            next.iptvSources = [merged, ...currentSources.filter((src) => src.id !== merged.id)];
+            next.iptvMode = merged.iptvMode;
+            next.iptvUrl = merged.iptvUrl;
+            next.xtHost = merged.xtHost;
+            next.xtUser = merged.xtUser;
+            next.xtPass = merged.xtPass;
+            next.epgUrl = merged.epgUrl;
+            next.iptvUsers = merged.users;
+          } catch {
+            if (!existing || ['iptvUrl', 'xtHost', 'xtUser', 'xtPass'].some((k) => b[k] === null)) {
+              next.iptvSources = [];
+              next.iptvUrl = null; next.xtHost = null; next.xtUser = null; next.xtPass = null; next.epgUrl = null; next.iptvUsers = [];
+            }
+          }
+        }
+      }
       return next;
     });
     pool = null; poolKey = ''; // provider change → fresh pool next use
@@ -2973,11 +3526,9 @@ Object.assign(H, {
     // indexer is invisible (and tests of a replaced one read stale results) for 60s.
     pipeline.searchCache.clear();
     send(ctx.res, 200, { ok: true });
-    if (iptvSourceChanged) {
-      iptvCache = { key: null, at: 0, channels: [] };
-      epgCache = { key: null, at: 0, byChannel: new Map(), byName: new Map() };
-      xtreamEpgCache = { key: null, byStream: new Map() };
-      if (iptvWarmTimer) scheduleIptvWarmSoon('settings');
+    if (iptvSourceChanged || iptvAccessChanged) {
+      clearAllIptvRuntime();
+      scheduleIptvWarmSoon('settings');
     }
   },
 
@@ -3416,7 +3967,24 @@ Object.assign(H, {
 // never round-trips to the UI, and is only materialized into a private temp file while the
 // process runs (yt-dlp needs a file path). A hand-placed data/yt-cookies.txt still works as
 // a server-wide fallback for headless setups.
+function unlinkYtCookieMap(map) {
+  for (const [, f] of map) {
+    try { fs.unlinkSync(f.path); } catch {}
+  }
+  map.clear();
+}
+const YT_COOKIE_CLEANUP_KEY = Symbol.for('triboon.ytCookieCleanup');
+const ytCookieCleanupState = globalThis[YT_COOKIE_CLEANUP_KEY] || (() => {
+  const state = { maps: new Set() };
+  process.on('exit', () => {
+    for (const map of Array.from(state.maps)) unlinkYtCookieMap(map);
+    state.maps.clear();
+  });
+  globalThis[YT_COOKIE_CLEANUP_KEY] = state;
+  return state;
+})();
 const ytCookieFiles = new Map(); // uid -> { path, hash }
+ytCookieCleanupState.maps.add(ytCookieFiles);
 function cookiesFor(uid) {
   const all = settings.get().ytCookies || {};
   const text = uid && all[uid];
@@ -3437,7 +4005,10 @@ function dropCookieFile(uid) {
   const cur = ytCookieFiles.get(uid);
   if (cur) { try { fs.unlinkSync(cur.path); } catch {} ytCookieFiles.delete(uid); }
 }
-process.on('exit', () => { for (const [, f] of ytCookieFiles) { try { fs.unlinkSync(f.path); } catch {} } });
+function cleanupYtCookieFiles() {
+  unlinkYtCookieMap(ytCookieFiles);
+  ytCookieCleanupState.maps.delete(ytCookieFiles);
+}
 
 // One extraction per (mount, track), shared by every requester and IMMUNE to client
 // disconnects. The old per-request spawn was killed when the CC toggle closed the fetch —
@@ -3503,6 +4074,9 @@ const ROUTES = [
   { m: 'GET', re: /^\/api\/local\/(\w+)\/thumb\/(\d+)$/, auth: 'stream', h: H.localThumb },
   { m: 'GET', re: /^\/api\/libraries\/(\w+)\/scanstatus$/, auth: 'admin', h: H.libraryScanStatus },
   { m: 'GET', re: /^\/api\/local\/(\w+)\/(\d+)$/, auth: 'stream', h: H.localStream },
+  { m: 'GET', re: /^\/api\/iptv\/sources$/, auth: 'admin', h: H.iptvSourcesList },
+  { m: 'POST', re: /^\/api\/iptv\/sources$/, auth: 'admin', h: H.iptvSourceCreate },
+  { m: 'DELETE', re: /^\/api\/iptv\/sources\/([\w-]+)$/, auth: 'admin', h: H.iptvSourceDelete },
   { m: 'GET', re: /^\/api\/iptv\/channels$/, auth: 'user', h: H.iptvChannels },
   { m: 'POST', re: /^\/api\/iptv\/fav$/, auth: 'user', h: H.iptvFav },
   { m: 'GET', re: /^\/api\/iptv\/epg\/(\d+)$/, auth: 'user', h: H.iptvEpg },
@@ -3535,6 +4109,7 @@ const ROUTES = [
   { m: 'POST', re: /^\/api\/mount$/, auth: 'admin', h: H.mount },
   { m: 'GET', re: /^\/api\/settings$/, auth: 'admin', h: H.settingsGet },
   { m: 'POST', re: /^\/api\/settings$/, auth: 'admin', h: H.settingsSet },
+  { m: 'POST', re: /^\/api\/streaming\/recommend$/, auth: 'admin', h: H.streamingRecommend },
   { m: 'POST', re: /^\/api\/test\/provider$/, auth: 'admin', h: H.testProvider },
   { m: 'POST', re: /^\/api\/test\/indexer$/, auth: 'admin', h: H.testIndexer },
   { m: 'POST', re: /^\/api\/invites$/, auth: 'admin', h: H.inviteCreate },
@@ -3665,6 +4240,7 @@ function shutdown() {
   if (iptvWarmSoonTimer) clearTimeout(iptvWarmSoonTimer);
   if (iptvWarmTimer) clearTimeout(iptvWarmTimer);
   closeAllIptvLiveStreams('shutdown');
+  cleanupYtCookieFiles();
   if (pool) { pool.close(); pool = null; }
   store.close();
   return new Promise((r) => server.close(r));

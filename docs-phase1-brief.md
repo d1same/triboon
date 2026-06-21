@@ -1,11 +1,10 @@
 # Phase 1 running brief — streaming RAR with seeking
 
-> PERSISTENCE DECISION (2026-06-11): architecture names SQLite, but Node 20 has no stdlib
-> SQLite (node:sqlite is Node 22+) and the zero-runtime-dependency rule is locked. Triboon
-> uses a stdlib JSON store (server/store.js, atomic write + WAL-ish .tmp rename) for users,
-> settings, watch state, and the verdict cache. Swap to node:sqlite when the runtime moves to
-> Node 22, behind the same store interface. Owner authorized "fully production level"
-> autonomous build incl. per-phase demos waived in favor of one consolidated end demo.
+> PERSISTENCE DECISION (updated 2026-06-21): Triboon runs on Node 24 LTS with the
+> zero-runtime-dependency server rule intact. Persistence is the stdlib JSON store
+> in `server/store.js` with atomic writes, encrypted settings through `server/auth.js`,
+> and explicit store-bucket ownership documented in `docs-architecture.md`. SQLite is
+> no longer the current architecture target unless the owner reopens that decision.
 
 Status: **code + tests complete (27/27), real-provider verified — AWAITING OWNER VLC DEMO**
 (2026-06-11). Owner delegated technical decisions ("I trust your judgment") and confirmed the
@@ -54,6 +53,11 @@ semantics and working seek, judged against time-to-first-frame. Done = owner str
 RAR'd NZB from Easynews in VLC with working seeking, and says so.
 
 ## Speed model (clarified 2026-06-10)
+
+Current note (2026-06-21): this Phase 1 speed model remains the reason for
+prefetch and bounded health checks, but live runtime tuning moved to the
+capacity model in `docs-streaming-performance.md`. Do not treat the old Easynews
+16-connection benchmark as the current read-ahead rule.
 
 Owner wants a perceived **press-Play → first frame within ~1 second**. The Stremio +
 UsenetStreamer feel comes from resolving sources *before* play (while the user looks at the

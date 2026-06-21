@@ -129,7 +129,7 @@ class ArchiveVirtualFile {
       idxs.add(Math.floor(Math.random() * all.length));
     }
     const results = await Promise.all(
-      [...idxs].map((i) => this.vols[0].pool.stat(all[i].msgId).catch(() => false))
+      [...idxs].map((i) => this.vols[0].pool.stat(all[i].msgId, 'health').catch(() => false))
     );
     const missing = results.filter((ok) => !ok).length;
     this.health = {

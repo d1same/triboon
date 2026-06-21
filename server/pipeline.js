@@ -140,7 +140,7 @@ function mountVerdictForError(e) {
 
 async function probeFirstArticle(pool, msgId) {
   return await Promise.race([
-    pool.stat(msgId).then((ok) => ok ? 'present' : 'missing').catch(() => 'missing'),
+    pool.stat(msgId, 'startup').then((ok) => ok ? 'present' : 'missing').catch(() => 'missing'),
     new Promise((resolve) => setTimeout(resolve, FIRST_ARTICLE_PROBE_MS, 'timeout')),
   ]);
 }
@@ -166,7 +166,7 @@ class PlaySession {
 }
 
 class Pipeline {
-  constructor({ pool, verdicts, mounts, indexers = () => [], usage = {} }) {
+  constructor({ pool, verdicts, mounts, indexers = () => [], usage = {}, performance = () => null }) {
     this.pool = pool;             // () => NntpPool (lazy, settings-driven)
     this.verdicts = verdicts;     // VerdictCache
     this.mounts = mounts;         // shared Map(id -> vf) owned by the HTTP server
@@ -175,6 +175,7 @@ class Pipeline {
     // onSearch fires per indexer per actual fan-out (cache hits are free); canGrab/onGrab
     // gate and count NZB downloads (cached NZBs and live-mount reuse never count).
     this.usage = { onSearch: () => {}, canGrab: () => true, onGrab: () => {}, ...usage };
+    this.performance = performance; // admin streaming profile: connection fairness + buffers
     this.sessions = new Map();    // id -> PlaySession
     this.searchCache = new Map(); // queryKey -> { at, results, errors } (prefetch-on-browse → instant play)
     this.searchInflight = new Map(); // queryKey -> Promise(hit), so Play can join an active prefetch
@@ -366,16 +367,24 @@ class Pipeline {
     // so the buffer outruns the bitrate — 4K-class releases (>4 GB) get the biggest window.
     // (The mount default stays small: triage/header peeks must not flood the pool.)
     const big = (vf.size || 0) > 4e9;
+    const perf = this.performance() || {};
+    const activeMounts = [...this.mounts.values()].filter((m) => Date.now() - (m._touched || 0) < 120000).length + 1;
+    const usable = perf.usableConnections || 0;
+    const reserve = perf.reserveConnections || 0;
+    const perStreamBudget = usable > reserve ? Math.max(4, Math.floor((usable - reserve) / Math.max(1, activeMounts))) : Infinity;
+    const configuredWindow = big ? (perf.maxConnPerStream4k || 20) : (perf.maxConnPerStream1080 || 12);
+    const targetReadAhead = Math.max(4, Math.min(configuredWindow, perStreamBudget));
+    const targetCache = Math.max(targetReadAhead * 4, big ? 80 : 48);
     for (const v of (vf.vols || [vf])) {
-      v.readAhead = big ? 20 : 12;
-      v.cacheMax = big ? 80 : 48;
+      v.readAhead = targetReadAhead;
+      v.cacheMax = targetCache;
     }
 
     // Bounded gate: verdict within 500ms or we play anyway and keep checking in background.
     // (Provider quirk, see bench/RESULTS.md: healthy STATs answer in ~60-250ms; only MISSES
     // are slow — so "no answer by 500ms" usually means trouble, but we never block on it.)
     const gate = await Promise.race([
-      vf.triage(6).catch(() => null),
+      vf.triage(perf.healthProbeLimit || 6).catch(() => null),
       new Promise((r) => setTimeout(r, GATE_MS, 'timeout')),
     ]);
     const streamClass = vf.container === 'flat' ? 'flat' : vf.method; // consistent across both paths

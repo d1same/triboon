@@ -136,7 +136,7 @@ test('security: deny-by-default — every route declares auth; unknown routes 40
     ['POST', '/api/play'], ['POST', '/api/advance/abc'], ['GET', '/api/tmdb/trending/all/week'],
     ['GET', '/api/watch'], ['GET', '/api/watch/next'], ['POST', '/api/watch'], ['GET', '/api/mounts'],
     ['GET', '/api/health/abc'], ['POST', '/api/mount'], ['GET', '/api/settings'],
-    ['POST', '/api/settings'], ['POST', '/api/invites'], ['GET', '/api/invites'],
+    ['POST', '/api/settings'], ['POST', '/api/streaming/recommend'], ['POST', '/api/invites'], ['GET', '/api/invites'],
     ['GET', '/api/users'], ['GET', '/api/stream/abc'], ['GET', '/api/remux/abc'],
     ['POST', '/api/quickconnect/123456/approve'], ['GET', '/api/music/charts'], ['GET', '/api/music/search?q=x'],
   ];
@@ -163,7 +163,7 @@ test('security: role separation — user tokens cannot reach admin routes', asyn
 
   for (const [m, p] of [['GET', '/api/settings'], ['POST', '/api/settings'], ['POST', '/api/invites'],
     ['GET', '/api/invites'], ['GET', '/api/users'], ['POST', '/api/mount'],
-    ['POST', '/api/libraries'], ['DELETE', '/api/libraries/abc']]) {
+    ['POST', '/api/libraries'], ['DELETE', '/api/libraries/abc'], ['POST', '/api/streaming/recommend']]) {
     assert.strictEqual((await httpJson(srv.port, m, p, {}, user)).status, 403, `user → ${m} ${p}`);
   }
   // …but user routes work.
@@ -208,6 +208,35 @@ test('settings ops: add/remove multiple providers and indexers, secrets never ro
   assert.ok(!s.json.providers.some((p) => p.host === 'news.b.com'), 'provider removed');
   // restore single test provider for later tests
   await httpJson(srv.port, 'POST', '/api/settings', { providers: [{ host: '127.0.0.1', port: nntpPort, tls: false, user: 'u', pass: 'super-secret-pass', connections: 4 }] }, admin);
+});
+
+test('settings: streaming performance handles high-connection providers and recommendations', async () => {
+  await httpJson(srv.port, 'POST', '/api/settings', {
+    providers: [{ host: 'news.big.example', port: 563, tls: true, user: 'u', pass: 'pw', connections: 100 }],
+    streamingPerformance: {
+      expectedUsers: 8, remoteUsers: 3, streamMix: 'mixed',
+      serverDownloadMbps: 1000, serverUploadMbps: 200,
+      buffer1080Sec: 180, buffer4kSec: 90,
+    },
+  }, admin);
+  const s = await httpJson(srv.port, 'GET', '/api/settings', null, admin);
+  assert.strictEqual(s.json.providers[0].connections, 100, '100-connection usenet plans are preserved');
+  assert.strictEqual(s.json.maxProviderConnections, 150);
+  assert.strictEqual(s.json.streamingPerformance.expectedUsers, 8);
+
+  const rec = await httpJson(srv.port, 'POST', '/api/streaming/recommend', {
+    expectedUsers: 10, remoteUsers: 4, streamMix: 'mixed',
+    serverDownloadMbps: 1000, serverUploadMbps: 200,
+  }, admin);
+  assert.strictEqual(rec.status, 200);
+  assert.strictEqual(rec.json.capacity.totalConnections, 100);
+  assert.ok(rec.json.capacity.reserveConnections > 0, 'start/seek reserve is modeled');
+  assert.ok(rec.json.recommendation.maxConnPerStream1080 >= 4, 'recommendation includes per-stream budget');
+  assert.ok(rec.json.recommendation.buffer1080Sec >= 30, 'recommendation includes buffer target');
+
+  await httpJson(srv.port, 'POST', '/api/settings', {
+    providers: [{ host: '127.0.0.1', port: nntpPort, tls: false, user: 'u', pass: 'super-secret-pass', connections: 4 }],
+  }, admin);
 });
 
 test('libraries: admin CRUD, users read-only, validation', async () => {

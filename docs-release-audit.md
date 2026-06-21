@@ -13,7 +13,7 @@ This is the A-to-Z checklist for keeping web and Android TV working as separate 
 - Local library: local movies and matched TV episodes show playable detail pages, skip online source warmups when owned locally, play the next owned episode without "no sources yet," and open large attached folders without rendering every item at once.
 - Music: playback starts in Music and stops when leaving the Music section.
 - Music: stays on the web audio path for now; ExoPlayer is reserved for video/live playback unless Android TV later needs native audio-session/background behavior.
-- Live TV: playlist cache, EPG cache, category scrolling, channel play, guide, PiP guide, back behavior, and channel retune all stay responsive. Category Up/Down stays in the category lane and Right is the only handoff into channel rows.
+- Live TV: source-scoped playlist caches, EPG caches, Xtream guide caches, category scrolling, channel play, guide, PiP guide, back behavior, source add/delete cleanup, and channel retune all stay responsive. Category Up/Down stays in the category lane and Right is the only handoff into channel rows.
 - Admin/settings: provider/indexer/library/user/quality-cap edits work in place and invalidate affected caches.
 
 ## Web Player
@@ -69,14 +69,46 @@ This is the A-to-Z checklist for keeping web and Android TV working as separate 
 - Pressing Play should show loading immediately and reuse warmed search/mount data when available.
 - Availability/source prefetch should run for online titles but skip owned local-library titles.
 - Bounded health gate stays fast and background triage advances without blocking playback.
+- Multi-user VOD capacity follows `docs-streaming-performance.md`: provider
+  connection limits round-trip per account, multiple usenet providers combine
+  without losing individual caps, startup/seek work outranks read-ahead, and
+  active playback bytes outrank health/background work.
+- Settings -> Streaming performance should show owner-facing recommendations
+  based on provider connections, expected users, remote users, bandwidth, stream
+  mix, buffer targets, per-stream connection windows, and startup reserve.
 - Keep successful source/mount/watch-state data hot long enough for quick resume and source switches.
 - For Android TV, prefer native direct play when the device reports codec support; avoid server remux/transcode unless needed.
-- Live TV should serve cached playlist/EPG data immediately and refresh server-side on schedule.
+- Live TV should serve source-scoped cached playlist/EPG data immediately, refresh server-side on schedule, and never let one playlist's stale channel ids or favorites bleed into another playlist.
 - ExoPlayer should keep the TextureView-backed surface stable during guide/PiP transitions.
 - Attached local libraries must not block first menu/home focus or rail rollover; home must not fetch full `/api/libraries/:id/items` payloads, rail previews auto-load only the first bounded local-folder page, and library grids request additional bounded pages through scroll/D-pad.
 
 ## Verification Log
 
+- Release v1.1.21 streaming/IPTV capacity verification: full `npm.cmd test`
+  passed 164/164 after the version bump, covering the recent IPTV source/cache,
+  Xtream refresh/retry, native proxy redaction, playback, security, subtitle,
+  and streaming-performance recommendation paths. Android build passed with the
+  repo Gradle wrapper and Android Studio JBR:
+  `android/gradlew.bat -p android clean assembleDebug`. `aapt dump badging`
+  for `dist/triboon-tv-v1.1.21.apk` reported `versionCode='52'` and
+  `versionName='1.1.21'`; release APK SHA-256 is
+  `D67A8715CC8C693EDD3C4F2EEE27C372361564DB10F2C1FE1CCA000D42BF1645`.
+  This release adds owner-tunable multi-user VOD capacity, higher per-provider
+  usenet connection caps, startup/seek NNTP priority over read-ahead, adaptive
+  read-ahead under active-user pressure, source-scoped IPTV cleanup/refresh
+  hardening, and the documentation contract in `docs-streaming-performance.md`.
+- Streaming performance capacity pass: Settings now supports high-connection
+  providers up to the current 150 cap, owner-tunable multi-user streaming
+  profiles, and an admin-only recommendation endpoint. Runtime playback now
+  reserves startup/seek capacity, prioritizes NNTP startup/seek over playback,
+  playback over health, and health over read-ahead, and shrinks read-ahead under
+  active-stream pressure. Documentation source of truth is
+  `docs-streaming-performance.md`; player regression contract is P14.
+  Verification passed `node --check server/index.js`,
+  `node --check server/pipeline.js`, `node --check server/nntp.js`,
+  `node --check server/vfs.js`, focused `node --test test/e2e.test.js`,
+  `node --test test/security.test.js`, `node --test test/phase2.test.js`, full
+  `npm.cmd test` 164/164, and `git diff --check`.
 - `npm.cmd test`: passed 138/138 on June 16, 2026 after the home startup focus/render coalescing fix.
 - `node --test test/phase4.test.js`: passed 15/15 on June 16, 2026 after the home startup focus/render coalescing fix.
 - Android build: `android/gradlew.bat assembleDebug` passed with Gradle 9.5.1 wrapper fallback on June 16, 2026.
@@ -139,6 +171,8 @@ This is the A-to-Z checklist for keeping web and Android TV working as separate 
 - Release v1.1.16 hardening: source selection now carries TMDB original-language and preferred-audio hints into scoring, so English/default titles still demote foreign-only/dubbed releases while non-English originals can prefer original-language or dual/multi-audio sources. Subtitle auto-match now demotes edition-tagged subtitle files for normal theatrical-looking releases while still preferring extended/uncut rows when duration or release text proves that cut. Xtream guide/now-next requests remain available to visible UI during playback, background IPTV warmups pause while playback is active, finite native IPTV proxy responses explicitly end and release their live slot, and Android native playback opens the guide through the native bridge instead of stacking a web guide over ExoPlayer.
 - Release v1.1.16 Android stress QA: `bench/android-tv-stress.ps1` on the Android TV emulator passed with 3 page-churn loops, 20 native Live TV zaps, 5 PiP guide open/back cycles, 20 VOD forward/rewind seeks, source-quality checks for 1080p vs 4K, subtitle lookup returning HTTP 200 with variants and no 401, and no fatal/provider-protection markers in the log scan. The emulator still logged an expected HEVC decoder capability failure for one VOD source, and the app fell through without a stuck loader.
 - Release v1.1.20 Shield IPTV stale-cache audit: ADB/CDP against the NVIDIA Shield showed the APK still installed at v1.1.18, but the production server was already v1.1.19, proving the remaining failure was server-side. The Shield WebView reported 11,462 Xtream channels and sampled dead stream IDs such as CNN `290812`, ESPN `829512`, NESN `829489`, and BBC `714835`; direct provider API from the same account returned 9,876 current streams with working CNN/NESN/TNT IDs such as `13442`, `13583`, and `37655`. The server returned sanitized backend HTTP 403 in under 1 second for native TS, HLS fallback, and browser remux, so ExoPlayer never received playable media bytes. Fix: Xtream channel refreshes now cache-bust provider panel calls with no-cache headers and the smart-TV UA, and cached native/remux 401/403/429 failures must trigger the same forced stale-ID refresh instead of short-circuiting playback. Verification passed `node --check server/index.js`, `node --test test/iptv-cache.test.js` 13/13, `node --test test/security.test.js` 61/61, full `npm.cmd test` 158/158, `git diff --check`, and `android/gradlew.bat assembleDebug`. `aapt dump badging dist/triboon-tv-v1.1.20.apk` reported `versionCode='51'` and `versionName='1.1.20'`; release APK SHA-256 is `53A619F540FCE0BFB1D5A27F1DC34CDC212A0C9F5A05ABFE34323C2D51975043`.
+- IPTV source-scoping pass: Live TV playlists now behave like first-class sources. New `/api/iptv/sources` add/list/delete routes store M3U/Xtream sources in encrypted settings, legacy single-playlist settings migrate through the compatibility `default` source, and each source owns its channel cache, XMLTV cache, Xtream guide cache, scoped channel ids, and delete cleanup. Multiple playlists can coexist without channel-id/favorite/group collisions; deleting one source removes its cache and source-prefixed favorites, then re-adding the same URL fetches a fresh playlist instead of reviving deleted state. Verification passed `node --check server/index.js`, `node --test test/iptv-cache.test.js` 16/16, `node --test test/security.test.js` 61/61, full `npm.cmd test` 161/161, browser Settings source add/delete smoke, `git diff --check`, and a targeted secret scan with no real credentials found.
+- Node listener warning fix: repeated isolated test boots no longer stack process `exit` listeners from the YouTube Music temporary-cookie cleanup path. `server/index.js` now registers one process-level cleanup registry through `Symbol.for('triboon.ytCookieCleanup')`, tracks per-server cookie maps, unregisters a map during `shutdown()`, and still removes temp cookie files on process exit. Regression coverage in `test/iptv-cache.test.js` boots/shuts down the server 12 times and asserts listener count stays bounded. Verification passed `node --check server/index.js`, `NODE_OPTIONS=--trace-warnings node --test test/iptv-cache.test.js` 17/17 with no `MaxListenersExceededWarning`, `node --test test/security.test.js` 62/62, `npm.cmd test` 164/164, and `git diff --check`.
 - Release v1.1.19 Shield IPTV stale-ID fix: ADB/CDP on the NVIDIA Shield confirmed Triboon TV v1.1.18 was trying native Live TV TS/HLS/remux fallbacks but every path received sanitized backend HTTP 403 before media bytes. The provider API and direct provider media probes succeeded from the same Xtream account, while the production app served 11,462 cached channels against a current provider list of 9,876 channels, proving stale persisted Xtream stream IDs rather than an Android decoder failure. Native proxy and server remux now force-refresh the Xtream channel list on 401/403, match the same cleaned channel name/group, retry the refreshed stream ID once, and expose `/api/server.version` so Unraid/update status can be verified from the running server. Verification passed `node --test test/iptv-cache.test.js` 12/12, `node --test test/security.test.js` 61/61, the focused Android native player regression, full `npm.cmd test` 157/157, `git diff --check`, and `android/gradlew.bat assembleDebug`. `aapt dump badging dist/triboon-tv-v1.1.19.apk` reported `versionCode='50'` and `versionName='1.1.19'`; release APK SHA-256 is `3E02F3520AD4470406638AF09DDD77DFDB93F60E00249166F74C3FC949D029A8`.
 - Release v1.1.18 IPTV fallback fix: Android/native Live TV still tries provider TS/HLS first, but the server fMP4 remux fallback now also ingests Xtream TS before HLS so Onn/Chromecast-class fallback follows the same provider-compatible path that works on Shield instead of tripping HLS-only 403s. Verification passed `node --test test/iptv-cache.test.js` 11/11, `node --test test/security.test.js` 61/61, the focused Android native player regression, full `npm.cmd test` 156/156, `git diff --check`, and `android/gradlew.bat assembleDebug`. `aapt dump badging dist/triboon-tv-v1.1.18.apk` reported `versionCode='49'` and `versionName='1.1.18'`; release APK SHA-256 is `554056CA9B6D8E9BEB4EAA13FC3898486494E49A533D81C016FA034D8B0ED13F`.
 - Release v1.1.16 verification: full `npm.cmd test` passed 154/154; standalone `node --test test/security.test.js` passed 61/61 after fixing the subtitle-test cleanup hang; `git diff --check` passed; `android/gradlew.bat -p android assembleDebug` passed; `aapt dump badging dist/triboon-tv-v1.1.16.apk` reported `versionCode='47'` and `versionName='1.1.16'`; release APK SHA-256 is `DD61BA9F901EA3BC0F56691DEEB3C6A3DBCEEA289D3ADF49A7E7B5F1CA9DDF0A`.

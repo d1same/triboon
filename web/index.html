@@ -2186,6 +2186,44 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
   <div class="setGrid" data-stab="server">
   <div class="panel"><h2>Engine</h2><p>Live status from the Triboon server.</p><div id="engineStatus"></div></div>
 
+  <div class="panel"><h2>Streaming performance</h2>
+    <p>Let Triboon size buffering and connection use from your provider capacity, server network,
+       and expected simultaneous users. Auto keeps starts and seeks ahead of background buffering.</p>
+    <div class="field">
+      <input id="perfUsers" placeholder="expected users" title="simultaneous users to plan for" style="max-width:150px">
+      <input id="perfRemote" placeholder="remote users" title="remote users depend on upload speed" style="max-width:135px">
+      <select id="perfMix" style="max-width:150px">
+        <option value="mixed">Mixed</option>
+        <option value="1080p">Mostly 1080p</option>
+        <option value="4k">Mostly 4K</option>
+      </select>
+    </div>
+    <div class="field">
+      <input id="perfDown" placeholder="download Mbps" title="server download speed" style="max-width:155px">
+      <input id="perfUp" placeholder="upload Mbps" title="server upload speed for remote users" style="max-width:145px">
+      <select id="perfProfile" style="max-width:155px">
+        <option value="auto">Auto</option>
+        <option value="fast">Fast start</option>
+        <option value="balanced">Balanced</option>
+        <option value="large">Large buffer</option>
+        <option value="custom">Custom</option>
+      </select>
+    </div>
+    <div class="field">
+      <input id="perfBuf1080" placeholder="1080p buffer seconds" style="max-width:190px">
+      <input id="perfBuf4k" placeholder="4K buffer seconds" style="max-width:170px">
+    </div>
+    <div class="field">
+      <input id="perfConn1080" placeholder="1080p stream connections" style="max-width:210px">
+      <input id="perfConn4k" placeholder="4K stream connections" style="max-width:190px">
+      <input id="perfReserve" placeholder="start/seek reserve %" style="max-width:175px">
+    </div>
+    <button class="btn primary" id="perfTest">Test &amp; recommend</button>
+    <button class="btn ghost" id="perfApply">Apply recommendation</button>
+    <button class="btn ghost" id="perfSave">Save custom</button>
+    <div class="hint" id="perfStatus"></div>
+  </div>
+
   <div class="panel"><h2>Usenet providers</h2>
     <p>Add one or more NNTP providers — extras act as failover when articles are missing.
        Each has its own connection limit. Credentials are encrypted at rest and never sent to clients.</p>
@@ -2208,7 +2246,7 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
     <div class="field">
       <input id="npUser" placeholder="username" style="flex:1">
       <input id="npPass" placeholder="password" type="password" style="flex:1">
-      <input id="npConn" placeholder="connections (16)" title="max connections for this provider" style="max-width:150px">
+      <input id="npConn" placeholder="connections (16, max 150)" title="max connections for this provider" style="max-width:190px">
     </div>
     <button class="btn primary" id="npSave">Add provider</button>
   </div>
@@ -2321,6 +2359,8 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
   <div class="panel"><h2>Live TV (IPTV)</h2>
     <p>M3U playlist or an Xtream Codes login — a “Live TV” section appears for everyone, with
        channel logos, groups, favorites and a now/next guide.</p>
+    <div id="iptvSourceList" style="margin:0 0 14px"></div>
+    <div class="field"><input id="iptvName" placeholder="Playlist name (optional)"></div>
     <div class="field">
       <select id="iptvMode" style="max-width:210px">
         <option value="m3u">M3U playlist URL</option>
@@ -2339,8 +2379,8 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
     <p style="margin:10px 0 6px">Share with <span style="color:var(--muted)">(nobody ticked = everyone)</span></p>
     <div id="iptvUsers" style="max-height:130px;overflow-y:auto;margin-bottom:12px"></div>
     <div style="display:flex;gap:10px;flex-wrap:wrap">
-      <button class="btn primary" id="iptvSave">Save Live TV</button>
-      <button class="btn ghost" id="iptvOff">Remove setup…</button>
+      <button class="btn primary" id="iptvSave">Add playlist</button>
+      <button class="btn ghost" id="iptvOff">Remove all…</button>
     </div>
     <div class="hint" id="iptvStatus"></div>
   </div>
@@ -10756,6 +10796,48 @@ async function doSearch() {
 }
 
 /* ============ settings ============ */
+function perfFormValues() {
+  return {
+    profile: $('perfProfile').value || 'auto',
+    expectedUsers: parseInt($('perfUsers').value || '4', 10) || 4,
+    remoteUsers: parseInt($('perfRemote').value || '0', 10) || 0,
+    streamMix: $('perfMix').value || 'mixed',
+    serverDownloadMbps: parseInt($('perfDown').value || '0', 10) || 0,
+    serverUploadMbps: parseInt($('perfUp').value || '0', 10) || 0,
+    buffer1080Sec: parseInt($('perfBuf1080').value || '180', 10) || 180,
+    buffer4kSec: parseInt($('perfBuf4k').value || '90', 10) || 90,
+    maxConnPerStream1080: parseInt($('perfConn1080').value || '12', 10) || 12,
+    maxConnPerStream4k: parseInt($('perfConn4k').value || '20', 10) || 20,
+    startupReservePct: parseInt($('perfReserve').value || '25', 10) || 25,
+  };
+}
+function setPerfForm(p = {}) {
+  $('perfProfile').value = p.profile || 'auto';
+  $('perfUsers').value = p.expectedUsers ?? 4;
+  $('perfRemote').value = p.remoteUsers ?? 0;
+  $('perfMix').value = p.streamMix || 'mixed';
+  $('perfDown').value = p.serverDownloadMbps || '';
+  $('perfUp').value = p.serverUploadMbps || '';
+  $('perfBuf1080').value = p.buffer1080Sec ?? 180;
+  $('perfBuf4k').value = p.buffer4kSec ?? 90;
+  $('perfConn1080').value = p.maxConnPerStream1080 ?? 12;
+  $('perfConn4k').value = p.maxConnPerStream4k ?? 20;
+  $('perfReserve').value = p.startupReservePct ?? 25;
+}
+function renderPerfResult(r, saved) {
+  if (!r || !r.capacity) {
+    $('perfStatus').textContent = saved ? 'saved - adaptive streaming profile is active' : 'not configured yet';
+    return;
+  }
+  const c = r.capacity;
+  const rec = r.recommendation || saved || {};
+  const warn = (r.warnings || []).length ? ` Notes: ${(r.warnings || []).join(' ')}` : '';
+  $('perfStatus').textContent =
+    `${c.providers || 0} provider(s), ${c.totalConnections || 0} total connections, ` +
+    `${c.reserveConnections || 0} reserved for starts/seeks. ` +
+    `Recommend ${rec.buffer1080Sec || '?'}s 1080p buffer, ${rec.buffer4kSec || '?'}s 4K buffer, ` +
+    `${rec.maxConnPerStream1080 || '?'}x/stream 1080p, ${rec.maxConnPerStream4k || '?'}x/stream 4K.${warn}`;
+}
 async function refreshSettings() {
   try {
     const st = await api('/api/status');
@@ -10773,6 +10855,9 @@ async function refreshSettings() {
       <div class="kv"><span>yt-dlp (music)</span><span>${st.ytdlp ? esc(st.ytdlp) + ' — Music enabled' : 'not found — Music tab hidden'}</span></div>
       <div class="kv"><span>Active mounts</span><span>${st.mounts}</span></div>`;
     const s = await api('/api/settings');
+    setPerfForm(s.streamingPerformance || {});
+    renderPerfResult({ capacity: { ...(st.streaming || {}), providers: st.nntp ? st.nntp.providers : 0 }, recommendation: s.streamingPerformance || {}, warnings: [] }, s.streamingPerformance || {});
+    S.perfRecommendation = null;
     S.settingsCache = s; // for the ✎ edit flow (secrets stay redacted)
     $('npList').innerHTML = s.providers.length ? s.providers.map((p, i) =>
       `<div class="kv"><span>${esc(p.host)}:${esc(p.port)} ${p.tls ? '🔒' : ''} ${p.user ? '· <span style="color:var(--amber)">login saved ✓</span>' : ''}</span>
@@ -10866,10 +10951,22 @@ async function refreshSettings() {
       : 'not configured yet';
     $('traktId').placeholder = s.traktClientId ? 'client id saved ✓ — paste to replace' : 'Trakt client id';
     $('traktSecret').placeholder = s.traktClientSecret ? 'client secret saved ✓ — paste to replace' : 'Trakt client secret';
+    const iptvSources = s.iptvSources || [];
+    $('iptvSourceList').innerHTML = iptvSources.length ? iptvSources.map((src) => {
+      const label = src.iptvMode === 'xtream'
+        ? `Xtream · ${src.xtHost || 'saved host'}`
+        : `M3U · ${src.iptvUrl || 'saved playlist'}`;
+      const guide = src.epgUrl ? ` · EPG ${src.epgUrl}` : (src.iptvMode === 'xtream' ? ' · built-in guide' : '');
+      return `<div class="kv"><span><b>${esc(src.name || 'Live TV')}</b><br><small>${esc(label + guide)}</small></span>
+        <button class="iconBtn focusable" data-iptvdel="${esc(src.id)}" data-name="${esc(src.name || 'Live TV')}" title="Remove playlist">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m-9 0 1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/></svg>
+        </button></div>`;
+    }).join('') : '<div class="hint">No playlists yet.</div>';
     $('iptvMode').value = s.iptvMode === 'xtream' ? 'xtream' : 'm3u';
     $('iptvMode').dispatchEvent(new Event('change'));
     $('iptvStatus').textContent =
-      s.iptvMode === 'xtream' && s.xtHost ? `saved ✓ — Xtream: ${s.xtHost}${s.epgUrl ? ` · EPG: ${s.epgUrl}` : ' · built-in guide'}`
+      iptvSources.length ? `${iptvSources.length} playlist${iptvSources.length > 1 ? 's' : ''} saved ✓`
+      : s.iptvMode === 'xtream' && s.xtHost ? `saved ✓ — Xtream: ${s.xtHost}${s.epgUrl ? ` · EPG: ${s.epgUrl}` : ' · built-in guide'}`
       : s.iptvUrl ? `saved ✓ — playlist: ${s.iptvUrl}${s.epgUrl ? ` · EPG: ${s.epgUrl}` : ''}` : 'not set up yet';
     $('iptvUrl').placeholder = s.iptvUrl ? `saved ✓ (${s.iptvUrl}) — paste to replace` : 'https://provider.example/playlist.m3u';
     $('xtHost').placeholder = s.xtHost ? `saved ✓ (${s.xtHost}) — type to replace` : 'http://provider.example:8080';
@@ -10919,6 +11016,15 @@ async function refreshSettings() {
         toast(`User ${b.dataset.uname} deleted`); refreshSettings();
       } catch (e) { toast('Delete failed: ' + e.message); }
     }));
+    document.querySelectorAll('[data-iptvdel]').forEach((b) => b.addEventListener('click', async () => {
+      if (!confirm(`Remove "${b.dataset.name}"? Its channel cache, guide cache and favorites are removed too.`)) return;
+      try {
+        await api(`/api/iptv/sources/${b.dataset.iptvdel}`, { method: 'DELETE' });
+        clearLiveClientCaches({ channels: true });
+        const srvNow = await api('/api/server'); S.serverInfo.iptv = srvNow.iptv; applyMenuPrefs();
+        toast('Playlist removed'); refreshSettings();
+      } catch (e) { toast('Remove failed: ' + e.message); }
+    }));
   } catch (e) { $('engineStatus').innerHTML = `<div class="kv"><span>Engine</span><span>${esc(e.message)}</span></div>`; }
   bootReady(); // a hash-restored Settings page is a boot landing — drop the loader only now
   requestAnimationFrame(() => {
@@ -10931,6 +11037,32 @@ document.querySelectorAll('#coverSize button').forEach((b) => b.addEventListener
   document.querySelectorAll('#coverSize button').forEach((x) => x.classList.toggle('sel', x === b));
   applyCoverSize();
 }));
+$('perfTest').addEventListener('click', async () => {
+  $('perfTest').disabled = true;
+  $('perfStatus').textContent = 'testing capacity and building recommendation...';
+  try {
+    const r = await api('/api/streaming/recommend', { method: 'POST', body: perfFormValues() });
+    S.perfRecommendation = r.recommendation;
+    setPerfForm(r.recommendation || {});
+    renderPerfResult(r);
+    toast('Streaming recommendation ready');
+  } catch (e) {
+    $('perfStatus').textContent = 'recommendation failed: ' + e.message;
+    toast('Recommendation failed: ' + e.message);
+  }
+  $('perfTest').disabled = false;
+});
+$('perfApply').addEventListener('click', async () => {
+  const rec = S.perfRecommendation || perfFormValues();
+  await api('/api/settings', { method: 'POST', body: { streamingPerformance: rec } });
+  toast('Streaming recommendation applied');
+  refreshSettings();
+});
+$('perfSave').addEventListener('click', async () => {
+  await api('/api/settings', { method: 'POST', body: { streamingPerformance: { ...perfFormValues(), profile: 'custom' } } });
+  toast('Streaming performance saved');
+  refreshSettings();
+});
 $('npPreset').addEventListener('change', () => {
   const v = $('npPreset').value;
   if (!v || v === 'custom') { if (v === 'custom') $('npHost').focus(); return; }
@@ -11046,28 +11178,36 @@ $('iptvMode').addEventListener('change', () => {
   $('iptvXtRows').style.display = xt ? '' : 'none';
 });
 $('iptvSave').addEventListener('click', async () => {
-  // Blank fields KEEP the saved values — saving just the user checkboxes used to post nulls
-  // and silently wipe the whole Live TV setup. Removal is its own explicit button.
   const xt = $('iptvMode').value === 'xtream';
-  const body = { iptvMode: xt ? 'xtream' : 'm3u',
-    iptvUsers: [...document.querySelectorAll('#iptvUsers input:checked')].map((i) => i.dataset.uid) };
+  const body = {
+    name: $('iptvName').value.trim(),
+    iptvMode: xt ? 'xtream' : 'm3u',
+    users: [...document.querySelectorAll('#iptvUsers input:checked')].map((i) => i.dataset.uid),
+  };
   if ($('epgUrl').value.trim()) body.epgUrl = $('epgUrl').value.trim();
   if (xt) {
-    if ($('xtHost').value.trim()) body.xtHost = $('xtHost').value.trim();
-    if ($('xtUser').value.trim()) body.xtUser = $('xtUser').value.trim();
-    if ($('xtPass').value) body.xtPass = $('xtPass').value;
-  } else if ($('iptvUrl').value.trim()) body.iptvUrl = $('iptvUrl').value.trim();
-  await api('/api/settings', { method: 'POST', body });
-  ['iptvUrl', 'xtHost', 'xtUser', 'xtPass', 'epgUrl'].forEach((id) => { $(id).value = ''; });
+    if (!$('xtHost').value.trim() || !$('xtUser').value.trim() || !$('xtPass').value) return toast('Enter Xtream host, username and password');
+    body.xtHost = $('xtHost').value.trim();
+    body.xtUser = $('xtUser').value.trim();
+    body.xtPass = $('xtPass').value;
+  } else {
+    if (!$('iptvUrl').value.trim()) return toast('Enter a playlist URL');
+    body.iptvUrl = $('iptvUrl').value.trim();
+  }
+  await api('/api/iptv/sources', { method: 'POST', body });
+  ['iptvName', 'iptvUrl', 'xtHost', 'xtUser', 'xtPass', 'epgUrl'].forEach((id) => { $(id).value = ''; });
   clearLiveClientCaches({ channels: true }); // new provider/EPG invalidates browser-side UI caches
   const srvNow = await api('/api/server'); S.serverInfo.iptv = srvNow.iptv; // real saved state, not a guess
   applyMenuPrefs(); // Live TV appears/disappears in the rail
-  toast(S.serverInfo.iptv ? 'Live TV saved ✓' : 'Saved — add a playlist or Xtream login to enable Live TV');
+  toast('Playlist added ✓');
   refreshSettings();
 });
 $('iptvOff').addEventListener('click', async () => {
-  if (!confirm('Remove the Live TV setup (playlist/login + EPG)? Channels disappear for everyone.')) return;
-  await api('/api/settings', { method: 'POST', body: { iptvUrl: null, xtHost: null, xtUser: null, xtPass: null, epgUrl: null } });
+  if (!confirm('Remove every Live TV playlist? Channels disappear for everyone and IPTV caches are cleared.')) return;
+  const r = await api('/api/iptv/sources').catch(() => ({ sources: [] }));
+  const sources = r.sources || [];
+  for (const src of sources) await api(`/api/iptv/sources/${src.id}`, { method: 'DELETE' });
+  if (!sources.length) await api('/api/settings', { method: 'POST', body: { iptvUrl: null, xtHost: null, xtUser: null, xtPass: null, epgUrl: null } });
   clearLiveClientCaches({ channels: true }); S.serverInfo.iptv = false; applyMenuPrefs();
   toast('Live TV removed'); refreshSettings();
 });

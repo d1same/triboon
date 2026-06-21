@@ -8,11 +8,24 @@ const crypto = require('crypto');
 const http = require('http');
 const { encodePart, decode, crc32 } = require('../server/yenc');
 const { parseNzb, pickPrimaryFile } = require('../server/nzb');
-const { NntpPool } = require('../server/nntp');
+const { NntpPool, ProviderPool } = require('../server/nntp');
 const { VirtualFile } = require('../server/vfs');
 const { createMockNntp } = require('./mock-nntp');
 
 // ---------- helpers ----------
+test('nntp: startup work outranks queued read-ahead when a provider is saturated', async () => {
+  const pool = new ProviderPool({}, 1);
+  pool.conns.push({ alive: true, lastUsed: Date.now(), close() {} });
+  let releaseFirst;
+  const first = pool.run(() => new Promise((resolve) => { releaseFirst = resolve; }), 'readAhead');
+  const order = [];
+  const low = pool.run(async () => { order.push('readAhead'); }, 'readAhead');
+  const high = pool.run(async () => { order.push('startup'); }, 'startup');
+  releaseFirst();
+  await Promise.all([first, low, high]);
+  assert.deepStrictEqual(order, ['startup', 'readAhead']);
+});
+
 function makeRelease(name, size, partSize) {
   // Deterministic pseudo-random payload (seeded) so failures are reproducible.
   const data = Buffer.allocUnsafe(size);

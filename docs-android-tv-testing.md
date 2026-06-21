@@ -106,11 +106,13 @@ $adb = "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe"
 Use this as the minimum repeat pass after player, IPTV, subtitle, or D-pad changes:
 
 - Home wake: leave the app idle until the screensaver appears, press OK, and confirm Home returns with the previous row/card focus intact.
+- Live TV source management: in Settings, add at least one M3U or Xtream playlist through `#/settings`, confirm it appears in the playlist list, delete it, and confirm Live TV no longer shows channels or favorites from that source. If two playlists are available, add both and confirm duplicate channel names do not collide.
 - Live TV guide: open `#/livetv`, hold Down in the category rail, and confirm focus stays in categories. Press Right explicitly to enter channels.
 - PiP guide: open the player guide from native playback, confirm the PiP window appears over the guide background, then repeat the category-rail Down test.
 - Live channel start: on Xtream lines, confirm channel API rows expose `video/mp2t` as the primary native MIME and `application/x-mpegURL` as fallback. Real-provider measurement on 2026-06-19 showed TS first-byte around 0.6s on sampled channels, while HLS often took 2-8.5s.
 - Live zapping: while playing native Live TV, press Up/Down and confirm the old ExoPlayer is released before the new one initializes in logcat.
 - VOD native player: start a movie, confirm duration/end time appears, Left/Right on the button row moves focus, seek-bar mode scrubs only from the seek bar, and Back hides controls before closing playback.
+- VOD capacity: when provider or buffering behavior changes, confirm Settings -> Streaming performance still reports the expected provider connection total and that repeated VOD seek/start actions do not wait behind background read-ahead. See `docs-streaming-performance.md`.
 - Subtitles: for movies and TV episodes, verify the first recommended subtitle matches the mounted release/file or exact episode, More subtitles reveals alternates, and changing versions after resume/seek does not restart captions from time zero.
 - Back behavior: from Movies, TV Shows, and attached-library grids, Back first opens that section rail/menu. A second Back returns Home.
 
@@ -135,9 +137,11 @@ The stress pass verifies:
 - Movies, TV Shows, attached libraries, Live TV, Music, Preferences, and Settings can be opened and backed out repeatedly.
 - Movies/TV/library Back first opens the section rail/menu, then returns Home on the next Back.
 - Source selection keeps the 1080p and 4K picks separated for the same title.
+- Live TV source add/delete keeps channel caches source-scoped; deleting and re-adding a playlist fetches fresh channel rows instead of reviving deleted state.
 - Native Live TV survives 20 Up/Down channel changes without provider-protection or fatal log markers.
 - Native PiP guide opens and Back returns to fullscreen without leaving the screensaver/background behind.
 - VOD survives 20 forward/rewind media-key seeks without a stuck loader.
+- VOD startup/seek remains responsive while other playback/background work is active; if this fails, review provider capacity, startup reserve, and NNTP priority lanes in `docs-streaming-performance.md`.
 - Online subtitle lookup returns a clean playable/miss response instead of HTTP 401.
 
 Reports are written under `bench/stress-results/`; that folder is ignored by git because it can

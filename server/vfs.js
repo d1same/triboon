@@ -49,10 +49,10 @@ class NzbFileStream {
     }
   }
 
-  _fetchSegment(i) {
+  _fetchSegment(i, priority = 'playback') {
     if (this.cache.has(i)) return Promise.resolve(this.cache.get(i));
     if (this.inflight.has(i)) return this.inflight.get(i);
-    const p = this.pool.body(this.segments[i].msgId).then((raw) => {
+    const p = this.pool.body(this.segments[i].msgId, priority).then((raw) => {
       const dec = decode(raw);
       if (!dec.crcOk) throw new Error(`segment ${i} CRC mismatch`);
       if (dec.size !== null) this.size = dec.size;
@@ -76,10 +76,10 @@ class NzbFileStream {
       for (let a = 1; a <= this.readAhead; a++) {
         const n = segIdx + a;
         if (n < this.segments.length && !this.cache.has(n) && !this.inflight.has(n)) {
-          this._fetchSegment(n).catch(() => {});
+          this._fetchSegment(n, 'readAhead').catch(() => {});
         }
       }
-      const data = await this._fetchSegment(segIdx);
+      const data = await this._fetchSegment(segIdx, 'playback');
       const segStart = segIdx * this.partSize;
       const from = offset - segStart;
       const to = Math.min(data.length, end - segStart);
@@ -111,7 +111,7 @@ class NzbFileStream {
       idxs.add(Math.floor(Math.random() * this.segments.length));
     }
     const results = await Promise.all(
-      [...idxs].map((i) => this.pool.stat(this.segments[i].msgId).catch(() => false))
+      [...idxs].map((i) => this.pool.stat(this.segments[i].msgId, 'health').catch(() => false))
     );
     const missing = results.filter((ok) => !ok).length;
     this.health = {

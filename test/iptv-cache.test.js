@@ -21,6 +21,22 @@ test('iptv: daily guide warm targets the next local midnight', async () => {
   }
 });
 
+test('server: repeated isolated boots do not stack process exit listeners', async () => {
+  const before = process.listenerCount('exit');
+  let max = before;
+  for (let i = 0; i < 12; i++) {
+    const srv = await bootServer({ NNTP_HOST: null, TMDB_BASE: null });
+    try {
+      max = Math.max(max, process.listenerCount('exit'));
+    } finally {
+      await srv.shutdown();
+    }
+  }
+  const after = process.listenerCount('exit');
+  assert.ok(max <= before + 1, `expected at most one shared cleanup listener, saw ${max - before}`);
+  assert.ok(after <= before + 1, `shutdown should not leave per-boot exit listeners behind, saw ${after - before}`);
+});
+
 test('iptv: parsed XMLTV guide survives server restart without refetching the guide', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-iptv-cache-'));
   const pad = (n) => String(n).padStart(2, '0');
@@ -107,6 +123,102 @@ test('iptv: huge M3U playlists stream-parse to the channel cap without waiting f
     assert.ok(Date.now() - started < 5000, 'playlist should resolve at the cap instead of waiting for provider EOF');
     await new Promise((r) => setTimeout(r, 50));
     assert.strictEqual(sourceClosed, true, 'server should close the upstream playlist request after reaching the cap');
+  } finally {
+    if (srv) await srv.shutdown();
+    upstream.close();
+  }
+});
+
+test('iptv: playlists are source-scoped and deleting one removes its channels and favorites', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-iptv-sources-'));
+  const playlist = (name, group, url) => `#EXTM3U
+#EXTINF:-1 group-title="${group}",${name}
+${url}
+`;
+  const upstream = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' });
+    if (req.url === '/alpha.m3u') return res.end(playlist('Shared News', 'News', 'http://stream.example/shared.ts'));
+    if (req.url === '/beta.m3u') return res.end(playlist('Shared News', 'News', 'http://stream.example/shared.ts'));
+    res.writeHead(404);
+    res.end('missing');
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${upstream.address().port}`;
+  let srv;
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    const alpha = await httpJson(srv.port, 'POST', '/api/iptv/sources',
+      { name: 'Alpha TV', iptvMode: 'm3u', iptvUrl: `${base}/alpha.m3u` }, admin);
+    const beta = await httpJson(srv.port, 'POST', '/api/iptv/sources',
+      { name: 'Beta TV', iptvMode: 'm3u', iptvUrl: `${base}/beta.m3u` }, admin);
+    assert.strictEqual(alpha.status, 200);
+    assert.strictEqual(beta.status, 200);
+
+    const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    assert.strictEqual(ch.status, 200);
+    assert.strictEqual(ch.json.channels.length, 2);
+    assert.deepStrictEqual(ch.json.channels.map((c) => c.sourceName).sort(), ['Alpha TV', 'Beta TV']);
+    assert.strictEqual(new Set(ch.json.channels.map((c) => c.id)).size, 2,
+      'same upstream stream URL in two playlists still gets two source-scoped channel ids');
+    assert.ok(ch.json.channels.every((c) => /^Alpha TV · News$|^Beta TV · News$/.test(c.group)),
+      'duplicate provider groups are source-prefixed only when multiple playlists are active');
+
+    const alphaChannel = ch.json.channels.find((c) => c.sourceName === 'Alpha TV');
+    await httpJson(srv.port, 'POST', '/api/iptv/fav', { id: alphaChannel.id }, admin);
+    const fav = await httpJson(srv.port, 'GET', '/api/iptv/channels?fav=1', null, admin);
+    assert.deepStrictEqual(fav.json.channels.map((c) => c.sourceName), ['Alpha TV']);
+
+    const del = await httpJson(srv.port, 'DELETE', `/api/iptv/sources/${alpha.json.source.id}`, null, admin);
+    assert.strictEqual(del.status, 200);
+    const after = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    assert.strictEqual(after.json.channels.length, 1);
+    assert.strictEqual(after.json.channels[0].sourceName, 'Beta TV');
+    assert.strictEqual(after.json.channels[0].group, 'News', 'single remaining playlist returns normal group labels');
+    const favAfter = await httpJson(srv.port, 'GET', '/api/iptv/channels?fav=1', null, admin);
+    assert.strictEqual(favAfter.json.channels.length, 0, 'deleted playlist favorites are removed with the source');
+  } finally {
+    if (srv) await srv.shutdown();
+    upstream.close();
+  }
+});
+
+test('iptv: deleting and re-adding a source starts from a clean playlist cache', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-iptv-source-clean-'));
+  let version = 'old';
+  let listHits = 0;
+  const upstream = http.createServer((req, res) => {
+    if (req.url === '/list.m3u') {
+      listHits++;
+      res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' });
+      return res.end(`#EXTM3U
+#EXTINF:-1 group-title="News",${version === 'old' ? 'Old News' : 'Fresh News'}
+http://stream.example/${version}.ts
+`);
+    }
+    res.writeHead(404);
+    res.end('missing');
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${upstream.address().port}`;
+  let srv;
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    const first = await httpJson(srv.port, 'POST', '/api/iptv/sources',
+      { name: 'Reload TV', iptvMode: 'm3u', iptvUrl: `${base}/list.m3u` }, admin);
+    const oldChannels = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    assert.strictEqual(oldChannels.json.channels[0].name, 'Old News');
+    assert.strictEqual(listHits, 1);
+
+    await httpJson(srv.port, 'DELETE', `/api/iptv/sources/${first.json.source.id}`, null, admin);
+    version = 'fresh';
+    await httpJson(srv.port, 'POST', '/api/iptv/sources',
+      { name: 'Reload TV', iptvMode: 'm3u', iptvUrl: `${base}/list.m3u` }, admin);
+    const fresh = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    assert.strictEqual(fresh.json.channels.length, 1);
+    assert.strictEqual(fresh.json.channels[0].name, 'Fresh News');
+    assert.strictEqual(listHits, 2, 're-added playlist must fetch fresh instead of reusing the deleted source cache');
   } finally {
     if (srv) await srv.shutdown();
     upstream.close();
@@ -308,7 +420,7 @@ test('iptv: Xtream channels serve persisted cache immediately after restart and 
     assert.strictEqual(streamHits, 1, 'first load should fetch and persist the Xtream channel list');
     const persisted = first.store.read('iptvcache', null);
     const persistedJson = JSON.stringify(persisted);
-    assert.ok(persisted.key.startsWith('xt:'), 'persisted Xtream cache key keeps source type');
+    assert.ok(/:xt:/.test(persisted.key), 'persisted Xtream cache key keeps source type');
     assert.ok(!persistedJson.includes(host), 'persisted Xtream cache must not store provider host in plain text');
     assert.ok(!persistedJson.includes('xtuser'), 'persisted Xtream cache must not store username in plain text');
     assert.ok(!persistedJson.includes('xtpass'), 'persisted Xtream cache must not store password in plain text');
@@ -520,6 +632,74 @@ test('iptv: cached stale Xtream 403 still refreshes and retries native playback'
     assert(panelRequests.every((p) => p.bust), 'Xtream panel requests should cache-bust provider/CDN responses');
     assert(panelRequests.every((p) => /no-cache/i.test(p.cacheControl)), 'Xtream panel requests should ask the provider not to serve cached lists');
     assert(panelRequests.every((p) => /TriboonTV/i.test(p.ua)), 'Xtream panel requests should use the IPTV smart-TV user agent');
+  } finally {
+    if (srv) await srv.shutdown();
+    upstream.close();
+  }
+});
+
+test('iptv: stale Xtream API can recover from the provider M3U playlist', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-m3u-stale-recovery-'));
+  const apiStreams = [{ stream_id: 100, name: '|UK| CNN HD', category_id: '1', epg_channel_id: 'cnn.uk' }];
+  let playlistStreams = [{ stream_id: 100, name: '|UK| CNN HD' }];
+  let oldHits = 0;
+  let freshHits = 0;
+  let m3uHits = 0;
+  let host = '';
+  const upstream = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    const action = u.searchParams.get('action');
+    if (action) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      if (action === 'get_live_categories') return res.end(JSON.stringify([{ category_id: '1', category_name: 'News' }]));
+      if (action === 'get_live_streams') return res.end(JSON.stringify(apiStreams));
+      return res.end(JSON.stringify({ epg_listings: [] }));
+    }
+    if (u.pathname.endsWith('/get.php')) {
+      m3uHits++;
+      res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' });
+      res.write('#EXTM3U\n');
+      for (const s of playlistStreams) {
+        res.write(`#EXTINF:-1 tvg-id="cnn" group-title="News",${s.name}\n`);
+        res.write(`${host}/live/xtuser/xtpass/${s.stream_id}.ts\n`);
+      }
+      return res.end();
+    }
+    if (u.pathname.endsWith('/100.ts')) {
+      oldHits++;
+      res.writeHead(403, { 'content-type': 'text/plain' });
+      return res.end('old stream id');
+    }
+    if (u.pathname.endsWith('/200.ts')) {
+      freshHits++;
+      res.writeHead(200, { 'content-type': 'video/mp2t' });
+      return res.end('FRESH-M3U-CNN');
+    }
+    res.writeHead(404);
+    res.end('missing');
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  host = `http://127.0.0.1:${upstream.address().port}`;
+
+  let srv;
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/settings',
+      { iptvMode: 'xtream', xtHost: host, xtUser: 'xtuser', xtPass: 'xtpass', epgUrl: null }, admin);
+    const stale = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    assert.strictEqual(stale.json.channels[0].xtreamId, 100);
+
+    playlistStreams = [{ stream_id: 200, name: 'USA: CNN [1080p]' }];
+    const native = await httpRaw(srv.port, stale.json.channels[0].nativeUrl);
+    assert.strictEqual(native.status, 200, 'native playback should recover through Xtream M3U when player_api stays stale');
+    assert.strictEqual(native.body.toString('utf8'), 'FRESH-M3U-CNN');
+    assert.strictEqual(oldHits, 1, 'the stale API id should fail once');
+    assert.strictEqual(freshHits, 1, 'the M3U-discovered id should be retried');
+    assert.strictEqual(m3uHits, 1, 'stale API refresh should fall back to one M3U playlist fetch');
+
+    const refreshed = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    assert.strictEqual(refreshed.json.channels[0].xtreamId, '200', 'M3U fallback should replace the persisted Xtream cache');
   } finally {
     if (srv) await srv.shutdown();
     upstream.close();

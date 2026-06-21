@@ -1,134 +1,157 @@
-CLAUDE.md — Triboon
+CLAUDE.md - Triboon
 
-Triboon is a self-hosted, Plex-polished, Stremio-style streaming app. Pressing play on any
-movie/show instantly mounts the best healthy NZB from the admin's usenet provider and streams
-it while unpacking, with continuous health protection. Speed is the #1 product value.
-See docs-architecture.md for the full architecture, data model, and verify criteria.
+Triboon is a self-hosted, Plex-polished, Stremio-style streaming app. Pressing
+play on any movie/show mounts the best healthy NZB from the admin's usenet
+provider and streams it while unpacking, with continuous health protection.
+Speed is the #1 product value. See `docs-architecture.md` for the current
+architecture, data model, runtime map, and verify criteria.
 
-Working process (ALWAYS follow — this is the owner's method)
+## Working Process
 
+Always follow the owner's method:
 
-Brainstorm + Devil's Advocate — before building any feature, expand the idea AND challenge
-it: what could fail, what are we assuming, what would users hate, what's overcomplicated.
-Interview + Capture — when requirements are ambiguous, ask the owner short rounds of
-questions, keep a running brief, and play it back ("Is this right?") before building.
-Verify Before Trusting — never declare work done without running it. Run npm test
-after every engine change. Add tests for new behavior BEFORE marking complete. For UI work,
-start the server (node server/index.js), open http://localhost:7777, and visually check.
-Audit your own output for contradictions with this file and docs-architecture.md.
+- Brainstorm + devil's advocate before building a feature: what could fail,
+  what are we assuming, what would users hate, what is overcomplicated.
+- Interview + capture when requirements are ambiguous. Ask short rounds of
+  questions, keep a running brief, and play it back before building.
+- Verify before trusting. Never call work done without running it.
+- Run `npm.cmd test` after engine or broad behavior changes on Windows.
+- Add tests for new behavior before marking complete.
+- For UI work, start `node server/index.js`, open `http://localhost:7777`, and
+  visually check.
+- Audit your own output against this file and `docs-architecture.md`.
 
+## Locked Decisions
 
-Locked decisions (do not re-litigate without asking the owner)
+- Native clean-room rebuild of nzbdav + UsenetStreamer concepts.
+- Server stack: Node 24 LTS, zero runtime npm dependencies in `server/`.
+- Approved external binaries: ffmpeg for remux/transcode and yt-dlp for Music.
+- Playback policy: source-fit, direct play, remux, transcode, in that order.
+- Per-user quality caps are enforced at source selection first, transcoder
+  second.
+- Clients: one web UI in `web/index.html` for browser/TV spatial navigation,
+  with Android TV as a Java WebView shell plus native Media3/ExoPlayer handoff.
+- Product model: admin configures usenet, indexers, TMDB, subtitles, Trakt,
+  Live TV, and libraries; users never see credentials.
+- Health: bounded upfront gate plus background triage and auto-advance with
+  timestamp resume. Never block playback on exhaustive checks.
+- Streaming performance: provider connection limits, multi-provider capacity,
+  startup/seek reserves, NNTP priority lanes, and adaptive read-ahead are owned
+  by `docs-streaming-performance.md`. Do not revert to fixed connection-count
+  tuning without updating that reference and tests.
+- Catalogs: TMDB metadata, Trakt sync, built-in search/library. MDBList later.
+- Design system: ink, magenta-to-coral gradient, amber accents, Sora display,
+  Albert Sans body, JetBrains Mono badges, gradient focus ring, backdrop
+  crossfade following focus.
 
+## Commands
 
-Native rebuild of nzbdav + UsenetStreamer concepts (MIT; reference designs, clean-room code).
-Stack: Node 24 LTS, zero runtime npm dependencies in server/ (stdlib only). Keep it that way
-unless the owner approves a dependency. External BINARIES we shell out to are sanctioned and
-not "dependencies": ffmpeg (remux/transcode) and yt-dlp (Music — owner-approved 2026-06-12;
-it carries the YouTube cat-and-mouse so the server stays stdlib). Go port is a Phase-1+ option
-only if profiling demands it.
-Playback policy: source-fit → direct play → remux → transcode, strictly in that order.
-Per-user quality caps are enforced at SOURCE SELECTION first (pick a 1080p release for a
-1080p-capped user), transcoder second.
-Clients: one web UI (TV spatial nav, D-pad) → browser + Tauri desktop; thin Android shell
-with native ExoPlayer later. UI lives in web/index.html (single file for now).
-Product model: admin configures everything (usenet, indexers, TMDB); users join via invite
-link / QR / Quick Connect code and never see credentials. Multi-user, profiles, watch state.
-Health: bounded upfront gate (≤500ms) + background triage + auto-advance with timestamp
-resume. Never block playback on exhaustive checks.
-Catalogs: TMDB metadata + Trakt rows; MDBList later. No Sonarr/Radarr — built-in search/Library.
-Design system: ink #0B0812, magenta #C13BD6 → coral #FB8B3C gradient, amber #FFC65C;
-Sora display / Albert Sans body / JetBrains Mono badges. Signature: gradient focus ring +
-backdrop crossfade following focus. Backdrops ARE the interface.
+- `npm.cmd test` - full Node test suite. Current baseline: 164/164 tests.
+- `node server/index.js` - starts the app at `http://localhost:7777`.
+- `docker compose up --build` - containerized app with ffmpeg and `/data`.
+- Android build:
+  - `JAVA_HOME=C:\Program Files\Android\Android Studio\jbr`
+  - `ANDROID_HOME=%LOCALAPPDATA%\Android\Sdk`
+  - Prefer current external Gradle 9.5.1+ with `gradle -p android assembleDebug`.
+  - Use `android\gradlew.bat assembleDebug` as version-safe fallback.
+  - Do not use `C:\Users\opencode\tools\gradle-8.10.2`.
 
+Everything is configured in the web dashboard after first-run setup and is
+encrypted at rest in `./data`. `TRIBOON_DATA` overrides the state directory.
+`TRIBOON_SECRET` should be stable in production; otherwise the app generates a
+secret into `./data`.
 
-Commands
+## Repo Map
 
+- `server/yenc.js` - yEnc decode/encode.
+- `server/nzb.js` - NZB parse, primary-file pick, password metadata.
+- `server/nntp.js` - NNTP client, priority lanes, connection pool,
+  combined multi-provider failover.
+- `server/vfs.js` - segment map, playback/read-ahead priority, `readAt`,
+  triage.
+- `server/rar.js`, `server/zip.js`, `server/archive.js` - archive parsing,
+  volume ordering, seekable extents, verdict tags.
+- `server/newznab.js`, `server/scoring.js`, `server/pipeline.js` - indexer
+  fan-out, ranking, title verification, health gate, auto-advance.
+- `server/transcode.js` - ffmpeg/ffprobe probe, remux, transcode, tracks.
+- `server/opensubs.js` - Wyzie subtitle search/ranking/download.
+- `server/trakt.js` - Trakt OAuth, import/export, scrobble outbox.
+- `server/index.js` - HTTP API, deny-by-default routes, Range streaming, Live
+  TV source manager, local libraries, static UI.
+- `web/index.html` - entire UI, including player, settings, Live TV, D-pad
+  navigation, screensaver, music mini-player.
+- `android/` - Android TV shell, native Media3/ExoPlayer, D-pad/back bridge,
+  PiP guide recovery, APK build.
+- `test/` - mock NNTP server, archive fixtures, phase tests, security tests,
+  IPTV cache/source tests.
+- `bench/` - provider/debug scripts and Android TV smoke/stress helpers.
+- `docs-streaming-performance.md` - canonical multi-user VOD capacity,
+  provider-connection, read-ahead, and health-gate reference.
 
-npm test — full suite (node:test, 113 tests). Must stay green; this gates every phase.
-node server/index.js — http://localhost:7777. Everything (providers, indexers, TMDB) is
-configured in the web dashboard after first-run setup and encrypted at rest in ./data; env
-NNTP_* still works as an optional bootstrap. State dir override: TRIBOON_DATA. Token/settings
-key: TRIBOON_SECRET (else generated into ./data).
-docker compose up --build — containerized, ffmpeg included, /data on a named volume.
-First run: open the UI → create owner → Settings → add provider/indexer/TMDB → press Play.
-Auth: API is deny-by-default; stream URLs carry a signed ?t= token so VLC can play them.
+## Roadmap And Current State
 
+Current: Phases 0-5 core are implemented in the current Node/Web/Android stack,
+with 164/164 tests passing on the latest verification pass.
 
-Repo map
+- Phase 1 done: store-RAR4/RAR5 and ZIP streaming with seeking, multi-volume
+  support, multi-provider failover, compressed/encrypted/7z detected and tagged.
+- Phase 2 done: Newznab/Prowlarr/NZBHydra fan-out, scoring, verdict cache,
+  title verification, press-play pipeline.
+- Phase 3 done: auth, stream tokens, invites, Quick Connect, encrypted settings,
+  TMDB proxy/cache, profiles, watch state.
+- Phase 4 done: per-user caps at source selection, remux/transcode manager,
+  web UI, player, Sources drawer, D-pad navigation.
+- Phase 5 core in progress/done by area: Android native Media3/ExoPlayer
+  playback, native Live TV, PiP guide, subtitles, Trakt sync, screensaver,
+  local-library performance, source-scoped IPTV playlists, and owner-tunable
+  multi-user streaming capacity.
 
+Important current Live TV decision:
 
-server/yenc.js — yEnc decode (hot path) + encode (tests). server/nzb.js — NZB parse + primary-file pick + password meta.
-server/nntp.js — NNTP client + parallel-connect pool + multi-provider failover (STAT/BODY).
-server/vfs.js — NzbFileStream segment map, read-ahead, readAt, triage. server/rar.js — RAR4+RAR5
-header parse → extent map. server/zip.js — ZIP parse. server/archive.js — container detection,
-volume ordering (.r99→.s00 rollover), archive mounts, verdict tags (🐢/encrypted/unsupported).
-server/ytmusic.js — YouTube Music via yt-dlp (search + audio-stream resolve; shells to yt-dlp
-like the rest shells to ffmpeg). server/index.js — HTTP API + Range streaming (incl. the music
-audio proxy) + static UI. web/index.html — entire UI (incl. the persistent music mini-player).
-test/ — mock NNTP server + golden e2e suite (byte-exact streams incl. multi-volume RAR, seek
-fuzzing, Range semantics incl. suffix ranges, triage verdicts, <250ms cold-seek budget).
-test/fixtures/ — real-tool archives (see its README); test/archive-fixtures.js — clean-room
-store-RAR/ZIP writers validated against real unrar. bench/ — provider benchmark + real smoke.
-android/ — Android TV shell (framework-only Java WebView wrapper: leanback launcher, D-pad
-passthrough, BACK→web __tvBack() bridge, native JS dialogs, first-run server screen). Build:
-JAVA_HOME=Android Studio jbr, ANDROID_HOME=%LOCALAPPDATA%\Android\Sdk. Android Gradle Plugin
-9.2.1 requires Gradle 9.4.1+; this repo pins Gradle 9.5.1 in android/gradle/wrapper.
-Use an external/current Gradle 9.5.1+ binary when one is installed (gradle -p android
-assembleDebug). Use android\gradlew.bat assembleDebug only as the version-safe fallback.
-Do not use an old local Gradle 8.x binary. APK output:
-android/app/build/outputs/apk/debug/app-debug.apk.
+- IPTV providers are first-class sources/playlists. Each M3U or Xtream source
+  owns its source id, channel cache, XMLTV cache, Xtream guide cache,
+  source-scoped channel ids, favorites cleanup, and delete cleanup.
+- Legacy single-playlist settings migrate through the compatibility `default`
+  source only when no `settings.iptvSources[]` exists.
+- Deleting a source must clear runtime caches, persisted source caches, and
+  source-prefixed favorites/groups.
+- Browser Live TV uses server fMP4 remux; Android TV uses ExoPlayer against
+  provider TS/HLS first, then server remux fallback.
 
+Important current VOD performance decision:
 
-Roadmap (current: Phases 0–4 implemented & verified, 113/113 tests + Docker + real provider)
+- Settings -> Streaming performance owns expected users, remote users, server
+  bandwidth, quality mix, buffer targets, per-stream connection windows, and
+  startup reserve.
+- Usenet provider connection counts are saved per account up to the current
+  server cap of 150; multiple providers combine by least-loaded healthy pool
+  while keeping individual caps.
+- NNTP priority order is startup/seek, playback, health, read-ahead, background.
+  Health and read-ahead must never outrank bytes needed by the active player.
+- Future buffering changes must preserve the same capacity contract and update
+  `docs-streaming-performance.md` plus player regression contract `P14`.
 
+Still open:
 
-Phase 1 (DONE — owner streamed a real RAR'd NZB in VLC with seeking): native streaming
-store-RAR4/RAR5 + ZIP with seeking, multi-volume (.r99→.s00 rollover), multi-provider
-failover, par2/junk awareness. Compressed RAR / encrypted / 7z are DETECTED + verdict-tagged
-(🐢/blocked), not yet playable — store covers ~95%+ of video. See docs-phase1-brief.md.
-Phase 2 (DONE): newznab/Prowlarr/NZBHydra fan-out (server/newznab.js, hard per-indexer
-budget), TRaSH-Guides-style ranking (server/scoring.js — group/source/codec tiers, HDR/audio
-boosts, LQ penalties, PLUS Triboon-only streamability + health + per-user cap signals, tuned
-for press-play not archiving), verdict cache (server/store.js), press-play pipeline with
-bounded 500ms health gate + auto-advance + prefetch/NZB/live-mount caching (server/pipeline.js).
-Title verification (server/pipeline.js releaseMatches): wanted title ANCHORED at the start of
-the release name, near-consecutive words, structural token (year/SxxEyy/quality) required right
-after — fixes one-word titles ("From" played Stranger Things Tales From 85) and spin-off traps
-(Daryl Dixon for The Walking Dead). Settings changes invalidate the search cache.
-Phase 3 (DONE): scrypt auth + HMAC tokens + stream tokens for VLC, first-run setup, single-use
-invites, profiles, Quick Connect; deny-by-default route table (server/index.js ROUTES) with a
-route-coverage test; settings encrypted at rest AES-256-GCM (server/auth.js SecureSettings);
-TMDB server-side proxy + cache (server/tmdb.js); per-profile watch state.
-Phase 4 core (DONE): per-user resolution caps enforced at SOURCE selection; ffmpeg remux
-manager (server/transcode.js, source-fit→direct→remux→transcode), graceful no-ffmpeg degrade;
-full Plex-style web UI (web/index.html — setup/login/QC/invite, TMDB rows, single Play button,
-Sources drawer, player w/ resume + auto-advance + VLC handoff, admin settings, D-pad nav).
-Phase 4 polish (DONE): admin size caps + scoring tweaks + per-indexer daily limits + provider/
-indexer tests & in-place edit; combined multi-provider load balancing (server/nntp.js);
-Wyzie Subs online CC (server/opensubs.js — free key from store.wyzie.io/redeem, search by
-TMDB id; replaced OpenSubtitles whose API went paid. BluRay releases carry bitmap-only PGS
-subs, so online CC is the path that matters). Client capability claims (canPlayType → caps
-on /api/play): true direct play when the hardware decodes container+codecs; otherwise remux
-copies video and converts ONLY unsupported audio to AAC (server/transcode.js audioCopyOk).
-A/V sync flags (delay_moov + noaccurate_seek + make_zero + 500ms fragments) are MEASUREMENT-
-GATED via bench/sync-variants.js — never change them without re-measuring (plain empty_moov
-shifted copied B-frame video +83ms vs audio; accurate seek + copy baked in seconds of desync
-after every skip). bench/sync-debug.js + bench/search-debug.js drive the live server/indexers.
-Phase 5 (IN PROGRESS): Android TV shell built (android/, WebView + key bridge, APK builds;
-D-pad audited across every view incl. CC/audio-menu loop, genre filter, quality toggle,
-long-press OK on Continue Watching) — pending owner demo on real hardware. NEXT: ExoPlayer
-handoff; ffmpeg HW-accel ladder + HDR tone-map; Trakt rows + scrobble; Tauri; par2; MDBList.
+- Broader Android hardware QA matrix for Shield, Onn, Fire TV, Chromecast,
+  Google TV, and low-memory devices.
+- Real multi-user VOD stress runs across several 1080p and 4K starts/seeks.
+- Tauri desktop.
+- par2 repair and compressed RAR streaming improvements.
+- MDBList and richer catalog rows.
+- Intro/credit skip.
+- Release automation polish.
 
+## Hard Rules
 
-Hard rules
-
-
-A phase is "done" only when its tests pass AND the owner has seen a demo.
-Never weaken or delete a failing test to make it pass — fix the code or raise it with the owner.
-Releases ALWAYS bump the version: package.json + android versionCode/versionName move
-together (0.5.x → versionCode++), the tag is vX.Y.Z, and the GitHub release carries the
-freshly built APK named triboon-tv-vX.Y.Z.apk plus what-changed notes.
-Security: deny-by-default routing; every new endpoint must declare auth (Phase 3+) and be
-covered by the route-coverage test. Credentials encrypted at rest.
-This is for legally obtained content; keep the project's disclaimer intact.
+- A phase is done only when tests pass and the owner has seen the demo.
+- Never weaken or delete a failing test to make it pass. Fix the code or raise
+  it with the owner.
+- Releases always bump `package.json` and Android versionCode/versionName
+  together; the tag is `vX.Y.Z`; the GitHub release carries a fresh APK named
+  `triboon-tv-vX.Y.Z.apk` with what-changed notes.
+- Security: deny-by-default routing; every new endpoint must declare auth and
+  be covered by route-coverage tests.
+- Credentials are encrypted at rest and must never be committed, logged, or
+  written into docs.
+- This is for legally obtained content; keep the project disclaimer intact.

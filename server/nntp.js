@@ -150,7 +150,7 @@ class ProviderPool {
     this.opts = opts;
     this.size = size;
     this.conns = [];
-    this.queue = []; // pending tasks { fn, resolve, reject }
+    this.queue = []; // pending tasks { fn, resolve, reject, priority }
     this.busy = new Set();
     this.connecting = 0;   // in-flight connection attempts
     this.lastErr = null;   // most recent connect failure
@@ -190,12 +190,26 @@ class ProviderPool {
     }
   }
 
-  // Run fn(conn) on a free connection; queue if all busy.
-  run(fn) {
+  _priorityRank(priority) {
+    return ({ startup: 0, seek: 0, playback: 1, health: 2, readAhead: 3, background: 4 })[priority] ?? 1;
+  }
+
+  // Run fn(conn) on a free connection; queue by priority if all busy.
+  run(fn, priority = 'playback') {
     return new Promise((resolve, reject) => {
-      this.queue.push({ fn, resolve, reject });
+      this.queue.push({ fn, resolve, reject, priority });
       this._pump();
     });
+  }
+
+  _shiftTask() {
+    if (this.queue.length <= 1) return this.queue.shift();
+    let best = 0, rank = this._priorityRank(this.queue[0].priority);
+    for (let i = 1; i < this.queue.length; i++) {
+      const r = this._priorityRank(this.queue[i].priority);
+      if (r < rank) { best = i; rank = r; }
+    }
+    return this.queue.splice(best, 1)[0];
   }
 
   _pump() {
@@ -213,7 +227,7 @@ class ProviderPool {
     for (const c of this.conns) {
       if (!this.queue.length) break;
       if (this.busy.has(c) || !c.alive) continue;
-      const task = this.queue.shift();
+      const task = this._shiftTask();
       this.busy.add(c);
       task.fn(c)
         .then(task.resolve, (e) => {
@@ -229,8 +243,8 @@ class ProviderPool {
     }
   }
 
-  stat(msgId) { return this.run((c) => c.stat(msgId)); }
-  body(msgId) { return this.run((c) => c.body(msgId)); }
+  stat(msgId, priority = 'health') { return this.run((c) => c.stat(msgId), priority); }
+  body(msgId, priority = 'playback') { return this.run((c) => c.body(msgId), priority); }
   // Circuit breaker: a provider with zero live connections and a connect failure in the last
   // 60s is "down" — multi-provider routing deprioritizes it instead of paying the failure on
   // EVERY article. It self-heals: after 60s (or one successful connect) it's back in rotation.
@@ -267,22 +281,22 @@ class NntpPool {
   }
 
   // True if ANY provider has the article.
-  async stat(msgId) {
+  async stat(msgId, priority = 'health') {
     for (const p of this._ordered()) {
-      try { if (await p.stat(msgId)) return true; } catch { /* provider down → try next */ }
+      try { if (await p.stat(msgId, priority)) return true; } catch { /* provider down → try next */ }
     }
     return false;
   }
 
-  async body(msgId) {
+  async body(msgId, priority = 'playback') {
     let lastErr;
     for (const p of this._ordered()) {
-      try { return await p.body(msgId); } catch (e) { lastErr = e; }
+      try { return await p.body(msgId, priority); } catch (e) { lastErr = e; }
     }
     throw lastErr;
   }
 
-  run(fn) { return this._ordered()[0].run(fn); }
+  run(fn, priority = 'playback') { return this._ordered()[0].run(fn, priority); }
   close() { for (const p of this.providers) p.close(); }
 }
 
