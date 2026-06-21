@@ -3564,7 +3564,9 @@ public class MainActivity extends Activity {
         // Exception: while the page has a text field/dropdown focused, native handling
         // (caret movement, IME, select pickers) must win — the JS bridge tells us.
         String domKey = domKeyFor(code);
-        if (domKey != null && !pageInputFocused && setup.getVisibility() != View.VISIBLE) {
+        boolean dpadArrow = code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN
+                || code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT;
+        if (domKey != null && (!pageInputFocused || dpadArrow) && setup.getVisibility() != View.VISIBLE) {
             if (e.getAction() == KeyEvent.ACTION_DOWN) jsKey("keydown", domKey, e.getRepeatCount() > 0);
             else if (e.getAction() == KeyEvent.ACTION_UP) jsKey("keyup", domKey, false);
             return true;

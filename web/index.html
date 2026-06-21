@@ -1162,6 +1162,9 @@ body.tv #heroCredits{height:16px;margin-bottom:6px;overflow:hidden}
 .profileAction:hover,.profileAction.focus{background:rgba(52,39,75,.9);border-color:rgba(251,139,60,.42)}
 .profileAction.danger{color:#ff9b9b}
 .profileAction.primary{background:var(--gold);border:0;color:#160a04}
+.profileSessionCard{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:14px;padding:14px;border:1px solid rgba(243,239,247,.09);
+  border-radius:14px;background:rgba(12,8,22,.58)}
+.profileSessionCard .profileActions{justify-content:flex-start}
 .pinForm{width:100%;grid-column:1/-1;display:flex;gap:8px;margin-top:2px;flex-wrap:wrap}
 .pinForm input,.pinForm select{flex:1;min-width:130px;background:rgba(11,8,18,.7);border:1px solid var(--line);border-radius:10px;
   padding:10px 12px;color:var(--text);font:650 12.5px "JetBrains Mono";outline:none}
@@ -2214,6 +2217,16 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
   <div class="setGrid" data-ptab="profiles" hidden>
     <div class="panel"><h2>Profiles &amp; PINs</h2>
       <p>Parental locks: setting or changing a PIN always asks for the account password.</p>
+      <div class="profileSessionCard">
+        <div class="profileIdentity">
+          <div class="profileName" id="prefCurrentProfile">Current profile</div>
+          <div class="profileMeta"><span class="profileLevelChip lvl3" id="prefCurrentProfileLevel">Active viewer</span></div>
+        </div>
+        <div class="profileActions">
+          <button class="profileAction focusable" id="prefSwitchProfile">Switch profile</button>
+          <button class="profileAction danger focusable" id="prefSignOut">Sign out</button>
+        </div>
+      </div>
       <div id="prefPins"></div>
     </div>
   </div>
@@ -2857,7 +2870,10 @@ function showGate(which) {
   for (const g of ['gateSetup', 'gateLogin', 'gateQc', 'gateInvite', 'gateProfiles', 'gatePin']) $(g).classList.remove('open');
   ['rail', 'home'].forEach((id) => $(id).classList.remove('show'));
   $('searchBar').classList.remove('show'); $('settings').classList.remove('open');
-  if (which) $('gate' + which[0].toUpperCase() + which.slice(1)).classList.add('open');
+  if (which) {
+    $('gate' + which[0].toUpperCase() + which.slice(1)).classList.add('open');
+    requestAnimationFrame(() => signalTvReadyOnce('gate-' + which));
+  }
 }
 
 /* ============ profiles (who's watching) ============ */
@@ -2873,6 +2889,8 @@ const PROFILE_ICON_PATHS = {
   trash: '<path d="M4 7h16"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/>',
   key: '<circle cx="8" cy="14" r="4"/><path d="M12 14h8"/><path d="M17 14v3"/><path d="M20 14v-2"/>',
   plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
+  switch: '<path d="M16 3h5v5"/><path d="M4 20 21 3"/><path d="M21 16v5h-5"/><path d="m15 15 6 6"/><path d="M4 4l5 5"/>',
+  logout: '<path d="M10 17l5-5-5-5"/><path d="M15 12H3"/><path d="M21 4v16"/>',
 };
 function profileIcon(name, extraClass = '') {
   const cls = extraClass ? ` ${extraClass}` : '';
@@ -2891,6 +2909,21 @@ function profileLevelAvatar(level) {
   return `<div class="profileLevelIcon lvl${idx}">${profileIcon(LEVEL_ICON[idx])}</div>`;
 }
 function profileInitial(name) { return (name || '?').trim()[0].toUpperCase(); }
+function signOutAccount() {
+  tokenStore.set(null);
+  try { localStorage.removeItem('triboon.profile'); } catch {}
+  location.reload();
+}
+function openProfilePreferences() {
+  showGate(null);
+  switchView('prefs');
+  const tab = document.querySelector('#prefTabs button[data-tab="profiles"]');
+  if (tab) tab.click();
+  setTimeout(() => {
+    const first = $('prefSwitchProfile') || $('prefPins').querySelector('button,input,select');
+    if (first) first.focus({ preventScroll: false });
+  }, 80);
+}
 function showProfilePicker() {
   const grid = $('profileGrid'); grid.innerHTML = '';
   (S.user.profiles || []).forEach((pr) => {
@@ -2913,12 +2946,12 @@ function showProfilePicker() {
     wrap.style.cssText = 'margin-top:30px;display:flex;gap:26px;justify-content:center';
     const prefs = document.createElement('button');
     prefs.style.cssText = 'color:var(--muted);font:600 13px Sora';
-    prefs.textContent = '⚙ Preferences';
-    prefs.addEventListener('click', openPrefs);
+    prefs.textContent = 'Preferences';
+    prefs.addEventListener('click', openProfilePreferences);
     so = document.createElement('button'); so.id = 'profileSignout';
     so.style.cssText = 'color:var(--muted);font:600 13px Sora';
     so.textContent = 'Sign out';
-    so.addEventListener('click', () => { tokenStore.set(null); try { localStorage.removeItem('triboon.profile'); } catch {} location.reload(); });
+    so.addEventListener('click', signOutAccount);
     wrap.appendChild(prefs); wrap.appendChild(so);
     $('gateProfiles').firstElementChild.appendChild(wrap);
   }
@@ -3022,6 +3055,8 @@ $('qcStart').addEventListener('click', async () => {
 $('qcCancel').addEventListener('click', () => { if (S.qcTimer) clearInterval(S.qcTimer); showGate('login'); });
 // Profile / account button → "who's watching" switcher (with Sign out inside).
 $('railUser').addEventListener('click', () => { collapseRailAfterClick(); showProfilePicker(); });
+$('prefSwitchProfile').addEventListener('click', showProfilePicker);
+$('prefSignOut').addEventListener('click', signOutAccount);
 $('railLogo').addEventListener('click', () => { if (S.view === 'player') return; closeDetail(); switchView('home'); collapseRailAfterClick(); });
 
 /* ============ catalog ============ */
@@ -10582,6 +10617,17 @@ function renderThemePicker(elId) {
   });
 }
 applyTheme(); // boot: restore the saved accent before first paint settles
+function renderProfileSessionActions() {
+  const pr = S.profile || {};
+  const name = pr.name || (S.user && S.user.name) || 'Current profile';
+  const level = profileLevelIndex(pr.level);
+  $('prefCurrentProfile').textContent = name;
+  const lvl = $('prefCurrentProfileLevel');
+  lvl.className = `profileLevelChip lvl${level}`;
+  lvl.innerHTML = `${profileIcon(LEVEL_ICON[level])}<span>${esc(LEVELS[level])}</span>`;
+  $('prefSwitchProfile').innerHTML = `${profileIcon('switch')}<span>Switch profile</span>`;
+  $('prefSignOut').innerHTML = `${profileIcon('logout')}<span>Sign out</span>`;
+}
 function openPrefs() { // populates the Preferences PAGE (it's a view now, not a popup)
   const cz = applyCoverSize();
   document.querySelectorAll('#prefCoverSize button').forEach((b) => b.classList.toggle('sel', b.dataset.sz === cz));
@@ -10609,6 +10655,7 @@ function openPrefs() { // populates the Preferences PAGE (it's a view now, not a
   // Live TV categories shortcut (per-user list lives here too)
   const hasIptv = S.serverInfo && S.serverInfo.iptv;
   $('prefTabLive').style.display = hasIptv ? '' : 'none';
+  renderProfileSessionActions();
   renderPinRows();
   renderMenuMgr();
   renderTraktBox();
@@ -12504,6 +12551,11 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     return dpadBrowseFilter(k);
   }
+  if (inInput && (S.view === 'settings' || S.view === 'prefs') && k.startsWith('Arrow')) {
+    e.preventDefault();
+    dpadForm($(S.view === 'prefs' ? 'prefs' : 'settings'), k);
+    return;
+  }
   if (inInput && k === 'Escape') { ae.blur(); e.preventDefault(); return; } // leave the field first
   // TV form UX: a focused <select> consumes EVERY arrow as a value change, trapping the
   // navigation on Settings/Preferences. All four arrows MOVE instead; OK opens the picker.
@@ -13274,6 +13326,7 @@ function bootReady() {
   if (!S._booting && $('appLoader').classList.contains('hide')) return;
   S._booting = false;
   perfMark('boot-ready', { view: S.view });
+  signalTvReadyOnce('boot-ready');
   setTimeout(() => $('appLoader').classList.add('hide'), 0);
   requestAnimationFrame(() => requestAnimationFrame(() => $('appLoader').classList.add('hide')));
 }

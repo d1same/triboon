@@ -312,6 +312,13 @@ function normalizeIptvMode(v) {
 function iptvUrlHost(raw) {
   try { return new URL(String(raw || '')).host || null; } catch { return raw ? '•••' : null; }
 }
+function normalizeIptvHttpUrl(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return null;
+  if (/^https?:\/\//i.test(s)) return s;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) return s;
+  return `http://${s}`;
+}
 function iptvSourceName(src = {}) {
   const explicit = String(src.name || '').trim().slice(0, 48);
   if (explicit) return explicit;
@@ -325,11 +332,11 @@ function normalizeIptvSource(raw = {}, fallbackId = IPTV_LEGACY_SOURCE_ID) {
     name: iptvSourceName(raw),
     iptvMode: mode,
     enabled: raw.enabled !== false,
-    iptvUrl: raw.iptvUrl || raw.url || null,
-    xtHost: raw.xtHost || raw.host || null,
+    iptvUrl: normalizeIptvHttpUrl(raw.iptvUrl || raw.url),
+    xtHost: normalizeIptvHttpUrl(raw.xtHost || raw.host),
     xtUser: raw.xtUser || raw.username || raw.user || null,
     xtPass: raw.xtPass || raw.password || raw.pass || null,
-    epgUrl: raw.epgUrl || raw.xmltvUrl || null,
+    epgUrl: normalizeIptvHttpUrl(raw.epgUrl || raw.xmltvUrl),
     users: Array.isArray(raw.users) ? raw.users.map(String).slice(0, 100) : [],
   };
   if (mode === 'xtream') src.iptvUrl = null;
@@ -1217,21 +1224,40 @@ async function fetchIptvChannels(s, key) {
         throw new Error(`Xtream channel load action=${action} host=${iptvSafeHost(s.xtHost)} failed: ${sanitizeIptvLogError(e)}`);
       }
     };
-    const [catsR, streamsR] = await Promise.all([
-      fetchPanel('get_live_categories', { timeoutMs: 10000, deadlineMs: 25000, maxBytes: 5 * 1024 * 1024 }),
-      fetchPanel('get_live_streams', { timeoutMs: 10000, deadlineMs: 40000, maxBytes: 30 * 1024 * 1024 }),
-    ]);
-    let cats, streams; // hostile/broken JSON → a clean error, not an opaque parse throw
     try {
-      cats = Object.fromEntries((JSON.parse(catsR.body.toString('utf8') || '[]') || []).map((c) => [String(c.category_id), c.category_name]));
-      streams = JSON.parse(streamsR.body.toString('utf8') || '[]') || [];
-    } catch { throw new Error('xtream returned invalid JSON (check host/credentials)'); }
-    channels = streams.slice(0, 20000).map((x, i) => ({
-      idx: i, id: 'xt' + x.stream_id, name: x.name || 'Channel ' + x.stream_id,
-      logo: x.stream_icon || '', group: cats[String(x.category_id)] || 'Other',
-      tvgId: x.epg_channel_id || '', xtreamId: x.stream_id,
-      ...xtChannelUrls(s, x.stream_id),
-    }));
+      const [catsR, streamsR] = await Promise.all([
+        fetchPanel('get_live_categories', { timeoutMs: 10000, deadlineMs: 25000, maxBytes: 5 * 1024 * 1024 }),
+        fetchPanel('get_live_streams', { timeoutMs: 10000, deadlineMs: 40000, maxBytes: 30 * 1024 * 1024 }),
+      ]);
+      let cats = {};
+      try {
+        cats = Object.fromEntries((JSON.parse(catsR.body.toString('utf8') || '[]') || []).map((c) => [String(c.category_id), c.category_name]));
+      } catch (e) {
+        console.error(`[iptv xtream] optional category JSON failed for source "${String(s.name || 'Live TV').slice(0, 80)}": ${sanitizeIptvLogError(e)}; loading streams without categories`);
+      }
+      let streams;
+      try {
+        streams = JSON.parse(streamsR.body.toString('utf8') || '[]') || [];
+      } catch {
+        throw new Error('xtream stream list returned invalid JSON (check host/credentials)');
+      }
+      channels = streams.slice(0, 20000).map((x, i) => ({
+        idx: i, id: 'xt' + x.stream_id, name: x.name || 'Channel ' + x.stream_id,
+        logo: x.stream_icon || '', group: cats[String(x.category_id)] || 'Other',
+        tvgId: x.epg_channel_id || '', xtreamId: x.stream_id,
+        ...xtChannelUrls(s, x.stream_id),
+      }));
+    } catch (panelError) {
+      let fallback = [];
+      try {
+        fallback = await fetchXtreamM3uChannelsForPlayback(s, key, 'panel channel list failure');
+      } catch (fallbackError) {
+        throw new Error(`${sanitizeIptvLogError(panelError)}; Xtream M3U fallback failed: ${sanitizeIptvLogError(fallbackError)}`);
+      }
+      if (!fallback.length) throw new Error(`${sanitizeIptvLogError(panelError)}; Xtream M3U fallback returned no live channels`);
+      console.error(`[iptv xtream] source "${String(s.name || 'Live TV').slice(0, 80)}" loaded ${fallback.length} channel(s) from M3U after panel list failed: ${sanitizeIptvLogError(panelError)}`);
+      channels = fallback;
+    }
   } else if (s.iptvUrl) {
     // Real-world playlists can exceed 500MB because providers mix live, FAST, VOD, and
     // series in one file. Stream-parse and stop at the channel cap instead of buffering it.

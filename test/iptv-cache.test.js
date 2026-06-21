@@ -623,6 +623,73 @@ test('iptv: Xtream stream list still loads when optional categories are rejected
   }
 });
 
+test('iptv: Xtream channel list falls back to M3U when panel stream API is rejected', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-m3u-channel-fallback-'));
+  let streamsHit = 0;
+  let playlistHit = 0;
+  const upstream = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (u.pathname === '/player_api.php') {
+      const action = u.searchParams.get('action');
+      if (action === 'get_live_categories') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify([{ category_id: '1', category_name: 'News' }]));
+      }
+      if (action === 'get_live_streams') {
+        streamsHit++;
+        res.writeHead(403, { 'content-type': 'text/plain' });
+        return res.end('provider rejected panel stream list');
+      }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ epg_listings: [] }));
+    }
+    if (u.pathname === '/get.php') {
+      playlistHit++;
+      res.writeHead(200, { 'content-type': 'audio/x-mpegurl' });
+      return res.end([
+        '#EXTM3U',
+        '#EXTINF:-1 tvg-id="fallback.news" tvg-name="Fallback News" group-title="News",Fallback News',
+        `http://${req.headers.host}/live/xtuser/xtpass/991.ts`,
+        '',
+      ].join('\n'));
+    }
+    res.writeHead(200, { 'content-type': 'video/mp2t' });
+    res.end('ts');
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const hostNoScheme = `127.0.0.1:${upstream.address().port}`;
+
+  let srv;
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    const created = await httpJson(srv.port, 'POST', '/api/iptv/sources',
+      { name: 'Apollo', iptvMode: 'xtream', xtHost: hostNoScheme, xtUser: 'xtuser', xtPass: 'xtpass', epgUrl: null }, admin);
+    const sourceId = created.json.source.id;
+    assert.strictEqual(created.json.source.xtHost, hostNoScheme, 'public settings should only expose the provider host');
+
+    const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    assert.strictEqual(ch.status, 200);
+    assert.strictEqual(ch.json.channels.length, 1);
+    assert.strictEqual(ch.json.channels[0].name, 'Fallback News');
+    assert.strictEqual(ch.json.channels[0].group, 'News');
+    assert.strictEqual(String(ch.json.channels[0].xtreamId), '991');
+    assert.strictEqual(ch.json.sourceErrors.length, 0, 'M3U fallback should make the source healthy');
+    assert.strictEqual(streamsHit, 1, 'panel stream list should be tried once');
+    assert.strictEqual(playlistHit, 1, 'M3U playlist should be used after the panel stream list rejection');
+
+    const persisted = (srv.store.read('iptvcaches', {}) || {})[sourceId];
+    const persistedJson = JSON.stringify(persisted);
+    assert.ok(persisted && persisted.channels && persisted.channels.length === 1, 'fallback playlist should be persisted for restart');
+    assert.ok(!persistedJson.includes(hostNoScheme), 'persisted fallback cache must not store provider host in plain text');
+    assert.ok(!persistedJson.includes('xtuser'), 'persisted fallback cache must not store username in plain text');
+    assert.ok(!persistedJson.includes('xtpass'), 'persisted fallback cache must not store password in plain text');
+  } finally {
+    if (srv) await srv.shutdown();
+    upstream.close();
+  }
+});
+
 test('iptv: sync status clears stale Xtream category errors after streams load', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-status-stale-category-'));
   const upstream = http.createServer((req, res) => {
