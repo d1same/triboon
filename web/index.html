@@ -309,12 +309,16 @@ body.tv:not(.railOpen) #rail:not(.expanded) .railBtn .del{opacity:0!important}
 #filterMenuTitle{font:800 12px "JetBrains Mono";letter-spacing:.18em;text-transform:uppercase;color:var(--amber);padding:3px 6px 13px}
 #filterMenuList{overflow-y:auto;display:flex;flex-direction:column;gap:4px;min-height:0}
 #filterMenuList button{display:flex;align-items:center;width:100%;gap:12px;text-align:left;border-radius:10px;
-  padding:13px 14px;font:700 15px "Albert Sans";color:var(--text)}
+  padding:13px 14px;font:700 15px "Albert Sans";color:var(--text);border:1px solid transparent;
+  transition:background .15s,color .15s,box-shadow .15s,border-color .15s}
 #filterMenuList button:hover{background:rgba(34,25,52,.7)}
-#filterMenuList button.focus{background:rgba(34,25,52,.92);box-shadow:inset 0 0 0 2px var(--coral)}
-#filterMenuList button.sel{color:var(--amber)}
+#filterMenuList button.focusable::before{display:none!important}
+#filterMenuList button.focus{background:var(--text);color:#160a04;border-color:transparent;box-shadow:0 10px 28px rgba(0,0,0,.45)}
+#filterMenuList button.sel{background:var(--gold);color:#160a04;border-color:transparent}
+#filterMenuList button.sel.focus{background:var(--text);color:#160a04}
 #filterMenuList button .label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #filterMenuList button .mark{margin-left:auto;font:800 14px "JetBrains Mono";color:var(--amber)}
+#filterMenuList button.sel .mark,#filterMenuList button.focus .mark{color:#160a04}
 body.tv #filterMenu{backdrop-filter:none}
 #genreChips{display:flex;gap:7px;flex-wrap:wrap;max-width:64vw}
 .gChip{padding:8px 13px;border-radius:11px;background:rgba(34,25,52,.55);border:1px solid var(--line);font:600 12px "Sora";color:var(--muted)}
@@ -337,34 +341,40 @@ body.tv #filterMenu{backdrop-filter:none}
 .trailerCard .play div{width:50px;height:50px;border-radius:50%;background:var(--grad);display:grid;place-items:center;color:#160a04;box-shadow:0 8px 24px rgba(0,0,0,.5)}
 
 /* ---------- trailer modal ---------- */
-#trailer{position:fixed;inset:0;z-index:45;display:none;place-items:center;background:linear-gradient(180deg,rgba(8,5,14,.98),rgba(5,3,9,.96));backdrop-filter:blur(8px);padding:28px}
+#trailer{position:fixed;inset:0;z-index:45;display:none;place-items:center;background:#050308;padding:28px;overflow:hidden;--trailerBackdrop:none}
+#trailer::before{content:"";position:absolute;inset:-70px;background-image:var(--trailerBackdrop);background-size:cover;background-position:center;filter:blur(34px) brightness(.72) saturate(1.2);transform:scale(1.12);opacity:.94}
+#trailer::after{content:"";position:absolute;inset:0;background:radial-gradient(circle at 50% 38%,rgba(7,5,11,.04),rgba(7,5,11,.3) 52%,rgba(7,5,11,.8) 100%),linear-gradient(180deg,rgba(5,3,9,.16),rgba(5,3,9,.72))}
 #trailer.open{display:grid}
-.trailerShell{width:min(96vw,calc((100vh - 210px) * 16 / 9));max-width:1500px;display:flex;flex-direction:column;gap:14px}
-.trailerTop,.trailerBar{display:flex;align-items:center;justify-content:space-between;gap:14px;background:#120b1e;border:1px solid rgba(237,232,245,.1);box-shadow:0 16px 48px rgba(0,0,0,.34)}
-.trailerTop{min-height:66px;border-radius:18px;padding:12px 14px 12px 18px}
-.trailerKicker{font:800 10px "Sora";letter-spacing:.18em;text-transform:uppercase;color:var(--muted);margin-bottom:3px}
-#trailerTitle{font:800 clamp(18px,2.3vw,30px) "Sora";line-height:1.08;max-width:min(68vw,980px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.trailerShell{position:relative;z-index:1;width:min(96vw,calc((100vh - 170px) * 16 / 9));max-width:1500px;display:flex;flex-direction:column;gap:12px}
 .trailerStage{position:relative;border-radius:18px;overflow:hidden;background:#000;box-shadow:0 34px 92px rgba(0,0,0,.72);aspect-ratio:16/9}
 #trailer .box{position:absolute;inset:0;background:#000}
 #trailer iframe{width:100%;height:100%;border:0;opacity:0;transition:opacity .22s ease}
 #trailer.loaded iframe{opacity:1}
 .trailerLoading{position:absolute;inset:0;z-index:1;display:grid;place-items:center;background:#050308;color:var(--muted);font:800 13px "Sora";letter-spacing:.12em;text-transform:uppercase}
 #trailer.loaded .trailerLoading{opacity:0;pointer-events:none;transition:opacity .18s ease}
-.trailerBar{min-height:68px;border-radius:18px;padding:12px}
+.trailerBar{min-height:58px;border-radius:0;padding:0 6px;display:flex;align-items:center;justify-content:space-between;gap:14px;background:transparent;backdrop-filter:none;box-shadow:none}
 .trailerActions{display:flex;align-items:center;gap:10px;min-width:0}
-.trailerCtl,.trailerIconBtn{height:44px;border:1px solid rgba(237,232,245,.12);background:#201831;color:var(--text);display:inline-flex;align-items:center;justify-content:center;gap:9px;font:800 13px "Sora";box-shadow:0 10px 30px rgba(0,0,0,.22)}
-.trailerCtl{border-radius:14px;padding:0 17px}
-.trailerIconBtn{width:44px;border-radius:50%;padding:0;flex:0 0 auto}
-.trailerCtl svg,.trailerIconBtn svg{width:18px;height:18px;display:block}
-#trailerPlay{background:var(--grad);color:#160a04;border-color:transparent;min-width:118px}
-#trailerWl.on{background:var(--gold);color:#160a04;border-color:transparent}
-.trailerSource{margin-left:auto;color:var(--muted);font:700 12px "Sora";white-space:nowrap}
+.trailerCtl,.trailerBack{position:relative;height:auto;color:var(--text);display:inline-flex;align-items:center;justify-content:center;gap:10px;box-shadow:none;transition:background .16s ease,color .16s ease,transform .16s ease,box-shadow .16s ease,border-color .16s ease}
+.trailerCtl{min-height:52px;border-radius:40px;padding:14px 26px;font:600 15.5px "Albert Sans",system-ui,sans-serif;letter-spacing:.01em}
+.trailerBack{position:absolute;z-index:2;left:28px;top:24px;border-radius:12px;padding:10px 14px;background:rgba(17,12,27,.6);color:var(--muted);font:600 13px "Sora";backdrop-filter:none}
+.trailerCtl svg,.trailerBack svg{width:18px;height:18px;display:block}
+.trailerCtl > *,.trailerBack > *{position:relative;z-index:1}
+.trailerCtl::after,.trailerBack::after{display:none}
+#trailer .focusable::before{display:none}
+#trailer .focusable.focus,#trailer .focusable:focus-visible{transform:none}
+.trailerCtl.focus,.trailerCtl:focus-visible,.trailerBack.focus,.trailerBack:focus-visible{background:var(--text);color:#160a04;border-color:transparent;box-shadow:0 10px 28px rgba(0,0,0,.45)}
+#trailerWl{background:rgba(34,25,52,.72);border:1px solid var(--line)}
+#trailerWl.on{background:var(--gold);color:#160a04;border-color:transparent;font-weight:700}
+#trailerWl.on.focus,#trailerWl.on:focus-visible{background:var(--text);color:#160a04}
+#trailerClose{background:rgba(34,25,52,.72);border:1px solid var(--line)}
+.trailerSource{color:rgba(233,225,243,.72);font:800 11px "Sora";letter-spacing:.14em;text-transform:uppercase;white-space:nowrap;text-shadow:0 2px 14px rgba(0,0,0,.78)}
 @media(max-width:700px){
   #trailer{padding:14px}
+  .trailerBack{left:14px;top:14px}
   .trailerShell{width:100%}
-  .trailerTop,.trailerBar{border-radius:14px}
+  .trailerBar{border-radius:14px}
   .trailerSource{display:none}
-  .trailerActions{width:100%}
+  .trailerActions{width:100%;justify-content:flex-end}
   .trailerCtl{flex:1;padding:0 10px}
 }
 
@@ -829,8 +839,11 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 .castCard.focusable.focus::before{opacity:0!important}
 .seasonTab.focus{box-shadow:0 0 0 2px var(--coral)}
 
-/* Inputs: clearer focus, never clipped. (Button focus = solid fill, end of sheet.) */
-.filterBar select.focus{box-shadow:0 0 0 2px var(--coral);transform:translateZ(0)}
+/* Browse filter controls follow the same solid focus language as Details buttons. */
+.filterBar select.focusable::before{display:none!important}
+.filterBar select.focus{
+  background:var(--text)!important;color:#160a04!important;border-color:transparent!important;
+  box-shadow:0 10px 28px rgba(0,0,0,.45);transform:translateZ(0)}
 .btn,.iconBtn,.cbtn{position:relative}
 
 @media (max-width:760px){
@@ -1063,9 +1076,15 @@ body.tv .cwAct,body.tv .epMenuBtn{display:none!important}
 .epMenu{position:absolute;right:10px;top:44px;z-index:5;min-width:200px;background:rgba(17,12,27,.98);border:1px solid var(--line);
   border-radius:12px;padding:6px;display:none}
 .epMenu.open{display:block}
-.epMenu button{display:flex;width:100%;text-align:left;padding:10px 12px;border-radius:8px;font:500 13px "Albert Sans";gap:8px}
+.epMenu button{display:flex;align-items:center;width:100%;text-align:left;padding:10px 12px;border-radius:10px;
+  font:600 13.5px "Albert Sans";gap:10px;color:var(--text);border:1px solid transparent;
+  transition:background .15s,color .15s,box-shadow .15s,border-color .15s}
 .epMenu button:hover{background:rgba(34,25,52,.7)}
-.epMenu button.focus{background:rgba(34,25,52,.9);box-shadow:inset 0 0 0 2px var(--coral)}
+.epMenu button.focus{background:var(--text);color:#160a04;border-color:transparent;box-shadow:0 10px 28px rgba(0,0,0,.45)}
+.epMenu button.focusable::before{display:none!important}
+.epMenu .menuIcon{width:20px;height:20px;border-radius:999px;display:grid;place-items:center;flex:0 0 20px;color:currentColor}
+.epMenu .menuIcon svg{width:18px;height:18px;display:block}
+.epMenu .menuLabel{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* Continue Watching list management — ✓/✕ live ON each thumbnail (hover/focus reveals them,
    touch keeps them visible), same pattern as the episode ⋯ button. */
@@ -1100,7 +1119,7 @@ body.tv #hero p{-webkit-line-clamp:3;line-height:1.5;height:4.5em;margin-bottom:
 body.tv #heroCredits{height:16px;margin-bottom:6px;overflow:hidden}
 /* Long-press OK menu for Continue Watching cards — floats over the pressed card. */
 #cwMenu{position:fixed;right:auto;top:auto;z-index:75;min-width:240px}
-#cwMenu button.focus{background:rgba(34,25,52,.9);box-shadow:inset 0 0 0 2px var(--coral)}
+#cwMenu button.focus{background:var(--text);color:#160a04;border-color:transparent;box-shadow:0 10px 28px rgba(0,0,0,.45)}
 
 /* Maturity level chips in the profile editor. */
 .levelPick{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
@@ -1541,6 +1560,27 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
   background:rgba(5,3,9,.22)!important;color:rgba(243,239,247,.42)!important;box-shadow:none!important;
   cursor:default;opacity:.58;pointer-events:none;transform:translateZ(0)}
 
+/* Trailer controls use fill changes for focus; never draw the app-wide hollow ring. */
+#trailer .trailerCtl,#trailer .trailerBack{
+  appearance:none!important;-webkit-appearance:none!important;outline:0!important;
+  -webkit-tap-highlight-color:transparent}
+#trailer .trailerCtl::before,#trailer .trailerBack::before,
+#trailer .trailerCtl.focus::before,#trailer .trailerBack.focus::before,
+#trailer .trailerCtl:focus::before,#trailer .trailerBack:focus::before,
+#trailer .trailerCtl:focus-visible::before,#trailer .trailerBack:focus-visible::before{
+  content:none!important;display:none!important;opacity:0!important}
+#trailer .trailerCtl.focus,#trailer .trailerCtl:focus,#trailer .trailerCtl:focus-visible,
+#trailer .trailerBack.focus,#trailer .trailerBack:focus,#trailer .trailerBack:focus-visible{
+  border-color:transparent!important;outline:0!important;transform:none!important;
+  box-shadow:0 10px 28px rgba(0,0,0,.45)!important;
+  background:var(--text)!important;color:#160a04!important;filter:none}
+#trailer .trailerBack.focus,#trailer .trailerBack:focus,#trailer .trailerBack:focus-visible{
+  background:var(--text)!important;color:#160a04!important}
+#trailer #trailerWl.on.focus,#trailer #trailerWl.on:focus,#trailer #trailerWl.on:focus-visible{
+  background:var(--text)!important;color:#160a04!important}
+#trailer #trailerClose.focus,#trailer #trailerClose:focus,#trailer #trailerClose:focus-visible{
+  background:var(--text)!important;color:#160a04!important}
+
 /* ============ Horizontal rows bleed to the MENU edge ============ */
 /* Scrolled covers used to vanish at the content gutter, leaving a dead strip between the
    rail and the clip point — rows now extend left so art clips right at the menu column. */
@@ -1566,6 +1606,33 @@ body:not(.tv) #settings .setGrid[data-stab="display"]{grid-template-columns:repe
 #settings input:focus,#prefs input:focus,#settings textarea:focus,#prefs textarea:focus,
 #settings select:focus,#prefs select:focus,#settings input[type=checkbox]:focus,#prefs input[type=checkbox]:focus{
   outline:none;box-shadow:0 0 0 2.5px var(--coral)}
+
+/* Settings/Preferences button authority: same primary/ghost/focus path as Details. */
+#settings button.focusable::before,#prefs button.focusable::before{display:none!important}
+#settings .btn,#prefs .btn{
+  min-height:44px;border-radius:40px;align-items:center;justify-content:center;
+  font:600 14px "Albert Sans",system-ui,sans-serif;letter-spacing:.01em}
+#settings .btn.primary,#prefs .btn.primary,
+#prefs .profileAction.primary,#prefs .profileAddBtn{
+  background:var(--gold)!important;color:#160a04!important;border-color:transparent!important}
+#settings .btn.ghost,#prefs .btn.ghost,#settings .ghostMini,#prefs .ghostMini,
+#prefs .profileAction{
+  background:rgba(34,25,52,.72);border:1px solid var(--line);color:var(--text);box-shadow:none}
+#settings .ghostMini,#prefs .ghostMini,#prefs .profileAction,#prefs .profileAddBtn{
+  min-height:40px;border-radius:40px;padding:9px 15px;font:600 13.5px "Albert Sans",system-ui,sans-serif;
+  display:inline-flex;align-items:center;justify-content:center;gap:8px}
+#prefs .profileAction.danger{color:#ff9b9b}
+#settings .testBtn,#prefs .testBtn{
+  min-height:30px;border-radius:40px;padding:5px 12px}
+#setTabs button,#prefTabs button{
+  box-shadow:none!important}
+#setTabs button.on,#prefTabs button.on{
+  background:var(--gold);border-color:transparent;color:#160a04;box-shadow:none!important}
+#settings button.focus,#prefs button.focus,#settings button:focus,#prefs button:focus{
+  background:var(--text)!important;color:#160a04!important;border-color:transparent!important;
+  box-shadow:0 10px 28px rgba(0,0,0,.45)!important;outline:none!important;transform:none}
+#settings button.focus svg,#prefs button.focus svg,#settings button:focus svg,#prefs button:focus svg{
+  color:currentColor}
 
 /* ============ Music (YouTube Music) ============ */
 #music{position:fixed;inset:0;z-index:8;display:none;flex-direction:column;
@@ -2101,32 +2168,27 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
 </div>
 
 <div id="trailer">
-  <div class="trailerShell" role="dialog" aria-modal="true" aria-labelledby="trailerTitle">
-    <div class="trailerTop">
-      <div>
-        <div class="trailerKicker">Trailer</div>
-        <div id="trailerTitle">Trailer</div>
-      </div>
-      <button id="trailerClose" class="trailerIconBtn focusable" title="Close trailer" aria-label="Close trailer">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
-      </button>
-    </div>
+  <button id="trailerBack" class="trailerBack focusable" title="Back" aria-label="Back">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+    <span>Back</span>
+  </button>
+  <div class="trailerShell" role="dialog" aria-modal="true" aria-label="Trailer">
     <div class="trailerStage">
       <div class="trailerLoading" id="trailerLoading">Loading trailer</div>
       <div class="box" id="trailerBox"></div>
     </div>
     <div class="trailerBar">
+      <div class="trailerSource">YouTube trailer</div>
       <div class="trailerActions">
-        <button id="trailerPlay" class="trailerCtl focusable" title="Pause trailer" aria-label="Pause trailer">
-          <svg id="trailerPlayIcon" viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>
-          <span id="trailerPlayLabel">Pause</span>
-        </button>
         <button id="trailerWl" class="trailerCtl focusable" title="Add to watchlist" aria-label="Add to watchlist" style="display:none">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M6 4h12v16l-6-3.6L6 20z"/></svg>
           <span>Watchlist</span>
         </button>
+        <button id="trailerClose" class="trailerCtl focusable" title="Close trailer" aria-label="Close trailer">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+          <span>Close</span>
+        </button>
       </div>
-      <div class="trailerSource">YouTube</div>
     </div>
   </div>
 </div>
@@ -3677,6 +3739,20 @@ async function markItemWatched(it, watched) {
   }
   if (S.view === 'home') loadRows({ preserveFocus: !!snap, focusSnapshot: snap });
 }
+const ACTION_MENU_ICONS = {
+  info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/></svg>',
+  play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>',
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
+  circle: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="8"/></svg>',
+  bookmark: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M6 4h12v16l-6-3.6L6 20z"/></svg>',
+  bookmarkOff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h12v16l-6-3.6L6 20z"/><path d="M5 5l14 14"/></svg>',
+  remove: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
+  star: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3l-5.6 2.9 1.1-6.2L3 9.6l6.2-.9z"/></svg>',
+  starOff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linejoin="round"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3l-5.6 2.9 1.1-6.2L3 9.6l6.2-.9z"/></svg>',
+};
+function actionMenuButton(act, icon, label) {
+  return `<button class="focusable" data-act="${esc(act)}"><span class="menuIcon" aria-hidden="true">${ACTION_MENU_ICONS[icon] || ''}</span><span class="menuLabel">${esc(label)}</span></button>`;
+}
 // Long-press OK on ANY cover (Android TV / D-pad) → a small action menu. Continue Watching
 // cards add their resume/remove entries; every title gets watched-toggle + watchlist.
 function openItemMenu(it, card) {
@@ -3685,11 +3761,11 @@ function openItemMenu(it, card) {
   const watched = isWatched(it);
   const onWl = !!(S.watchlistMap && S.watchlistMap[it.key]);
   m.innerHTML =
-    `<button data-act="info">ⓘ Details</button>` +
-    (it.resume ? `<button data-act="resume">▶ Resume · ${fmt(it.resume)}</button>` : '') +
-    (watched ? '<button data-act="unwatch">○ Mark unwatched</button>' : '<button data-act="watch">✓ Mark watched</button>') +
-    (it.tmdbId ? `<button data-act="wl">${onWl ? '✕ Remove from watchlist' : '🔖 Add to watchlist'}</button>` : '') +
-    (it.resume ? '<button data-act="rm">✕ Remove from Continue Watching</button>' : '');
+    actionMenuButton('info', 'info', 'Details') +
+    (it.resume ? actionMenuButton('resume', 'play', `Resume · ${fmt(it.resume)}`) : '') +
+    (watched ? actionMenuButton('unwatch', 'circle', 'Mark unwatched') : actionMenuButton('watch', 'check', 'Mark watched')) +
+    (it.tmdbId ? actionMenuButton('wl', onWl ? 'bookmarkOff' : 'bookmark', onWl ? 'Remove from watchlist' : 'Add to watchlist') : '') +
+    (it.resume ? actionMenuButton('rm', 'remove', 'Remove from Continue Watching') : '');
   const r = card ? card.getBoundingClientRect() : { left: innerWidth / 2 - 120, top: innerHeight / 2 - 90, height: 0 };
   m.style.left = Math.max(8, Math.min(innerWidth - 260, r.left + 10)) + 'px';
   m.style.top = Math.max(8, Math.min(innerHeight - 230, r.top + 10)) + 'px';
@@ -3697,7 +3773,9 @@ function openItemMenu(it, card) {
   S.cwMenuIdx = 0;
   applyFocus(m.querySelector('button'));
   m.onclick = (e) => {
-    const act = e.target.dataset && e.target.dataset.act; if (!act) return;
+    const btn = e.target.closest && e.target.closest('button[data-act]');
+    if (!btn || !m.contains(btn)) return;
+    const act = btn.dataset.act;
     const snap = S.view === 'home' ? homeFocusSnapshot() : null;
     e.stopPropagation(); closeCwMenu();
     if (act === 'resume') play(it);
@@ -3733,8 +3811,8 @@ function openLiveChannelMenu(it, card, list) {
   const ch = liveChannelForItem(it);
   if (!ch || !ch.id) return;
   const m = $('cwMenu');
-  m.innerHTML = `<button data-act="play">▶ Play channel</button>` +
-    `<button data-act="fav">${ch.fav ? '★ Remove favorite' : '☆ Add favorite'}</button>`;
+  m.innerHTML = actionMenuButton('play', 'play', 'Play channel') +
+    actionMenuButton('fav', ch.fav ? 'star' : 'starOff', ch.fav ? 'Remove favorite' : 'Add favorite');
   const r = card ? card.getBoundingClientRect() : { left: innerWidth / 2 - 120, top: innerHeight / 2 - 80, height: 0 };
   m.style.left = Math.max(8, Math.min(innerWidth - 260, r.left + 10)) + 'px';
   m.style.top = Math.max(8, Math.min(innerHeight - 180, r.top + 10)) + 'px';
@@ -3743,7 +3821,9 @@ function openLiveChannelMenu(it, card, list) {
   S.cwMenuIdx = 0;
   applyFocus(m.querySelector('button'));
   m.onclick = async (e) => {
-    const act = e.target.dataset && e.target.dataset.act; if (!act) return;
+    const btn = e.target.closest && e.target.closest('button[data-act]');
+    if (!btn || !m.contains(btn)) return;
+    const act = btn.dataset.act;
     e.stopPropagation(); closeCwMenu();
     if (act === 'play') playChannel(it, list);
     else if (act === 'fav') {
@@ -8011,10 +8091,8 @@ function renderLocalGridPaged(items) {
 }
 
 /* ============ trailer modal ============ */
-const TRAILER_ICON_PLAY = '<path d="M8 5v14l11-7z"/>';
-const TRAILER_ICON_PAUSE = '<path d="M7 5h4v14H7zM13 5h4v14h-4z"/>';
 function trailerControls() {
-  return [$('trailerPlay'), $('trailerWl'), $('trailerClose')]
+  return [$('trailerBack'), $('trailerWl'), $('trailerClose')]
     .filter((el) => el && el.offsetParent !== null && getComputedStyle(el).display !== 'none');
 }
 function focusTrailerControl(idx = S.trailerCtlIdx || 0) {
@@ -8023,33 +8101,22 @@ function focusTrailerControl(idx = S.trailerCtlIdx || 0) {
   S.trailerCtlIdx = Math.max(0, Math.min(controls.length - 1, idx));
   applyFocus(controls[S.trailerCtlIdx], false);
 }
-function trailerCommand(func) {
-  const frame = $('trailerBox').querySelector('iframe');
-  if (!frame || !frame.contentWindow) return;
-  frame.contentWindow.postMessage(JSON.stringify({ event: 'command', func, args: [] }), 'https://www.youtube.com');
-}
-function setTrailerPaused(paused, sendCommand = false) {
-  S.trailerPaused = !!paused;
-  $('trailerPlayIcon').innerHTML = paused ? TRAILER_ICON_PLAY : TRAILER_ICON_PAUSE;
-  $('trailerPlayLabel').textContent = paused ? 'Play' : 'Pause';
-  $('trailerPlay').title = paused ? 'Play trailer' : 'Pause trailer';
-  $('trailerPlay').setAttribute('aria-label', $('trailerPlay').title);
-  if (sendCommand) trailerCommand(paused ? 'pauseVideo' : 'playVideo');
-}
-function toggleTrailerPlay() { setTrailerPaused(!S.trailerPaused, true); }
 function openTrailer(tr, it) {
   if (!tr || !tr.key) return toast('Trailer is unavailable');
   S.trailerReturnEl = document.querySelector('.focus') || document.activeElement;
   S.trailerCtlIdx = 0;
   const title = tr.title || (it && it.title) || 'Trailer';
-  $('trailerTitle').textContent = title;
-  $('trailer').classList.remove('loaded');
-  $('trailer').setAttribute('aria-hidden', 'false');
-  setTrailerPaused(false, false);
+  const trailerEl = $('trailer');
+  const art = (it && (it.backdrop || it.poster)) || (tr.item && (tr.item.backdrop || tr.item.poster)) || '';
+  const safeArt = safeUrl(art || '');
+  if (safeArt) trailerEl.style.setProperty('--trailerBackdrop', `url("${safeArt}")`);
+  else trailerEl.style.removeProperty('--trailerBackdrop');
+  trailerEl.classList.remove('loaded');
+  trailerEl.setAttribute('aria-hidden', 'false');
   const origin = encodeURIComponent(location.origin || 'http://localhost');
   // referrerpolicy matters: with no referrer YouTube refuses to authorize many embeds.
   $('trailerBox').innerHTML =
-    `<iframe title="${esc(title)} trailer" src="https://www.youtube.com/embed/${encodeURIComponent(tr.key)}?autoplay=1&rel=0&playsinline=1&controls=0&modestbranding=1&iv_load_policy=3&enablejsapi=1&origin=${origin}" referrerpolicy="strict-origin-when-cross-origin" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe>`;
+    `<iframe title="${esc(title)} trailer" src="https://www.youtube.com/embed/${encodeURIComponent(tr.key)}?autoplay=1&rel=0&playsinline=1&controls=1&modestbranding=1&iv_load_policy=3&origin=${origin}" referrerpolicy="strict-origin-when-cross-origin" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe>`;
   const frame = $('trailerBox').querySelector('iframe');
   if (frame) frame.addEventListener('load', () => $('trailer').classList.add('loaded'), { once: true });
   // Watchlist straight from the trailer.
@@ -8062,10 +8129,9 @@ function openTrailer(tr, it) {
     wl.title = wl.classList.contains('on') ? 'Remove from watchlist' : 'Add to watchlist';
     wl.setAttribute('aria-label', wl.title);
   } else wl.style.display = 'none';
-  $('trailer').classList.add('open');
-  requestAnimationFrame(() => focusTrailerControl(0));
+  trailerEl.classList.add('open');
+  requestAnimationFrame(() => focusTrailerControl(S.trailerItem && S.trailerItem.key ? 1 : 0));
 }
-$('trailerPlay').addEventListener('click', toggleTrailerPlay);
 $('trailerWl').addEventListener('click', async () => {
   const it = S.trailerItem; if (!it) return;
   const on = !(S.watchlistMap && S.watchlistMap[it.key]);
@@ -8081,14 +8147,15 @@ $('trailerWl').addEventListener('click', async () => {
 function closeTrailer() {
   $('trailer').classList.remove('open', 'loaded');
   $('trailer').setAttribute('aria-hidden', 'true');
+  $('trailer').style.removeProperty('--trailerBackdrop');
   $('trailerBox').innerHTML = '';
   S.trailerItem = null;
-  S.trailerPaused = false;
   const ret = S.trailerReturnEl && document.contains(S.trailerReturnEl) ? S.trailerReturnEl : null;
   S.trailerReturnEl = null;
   if (ret) requestAnimationFrame(() => applyFocus(ret, false));
 }
 $('trailerClose').addEventListener('click', closeTrailer);
+$('trailerBack').addEventListener('click', closeTrailer);
 $('trailer').addEventListener('click', (e) => { if (e.target.id === 'trailer') closeTrailer(); });
 
 /* ============ calendar — only what you're watching or have watchlisted ============ */
@@ -11787,6 +11854,7 @@ function wireSectionRailDpad(rootId, tabsId, panelAttr) {
   tabs.addEventListener('keydown', (e) => {
     if (e.key !== 'ArrowRight') return;
     e.preventDefault();
+    e.stopPropagation();
     focusActiveSettingsPanel(rootId, panelAttr);
   });
 }
@@ -12475,16 +12543,18 @@ function dpadCycle(scope, k) {
   els[i] && els[i].focus({ preventScroll: false });
 }
 function formCtls(scope) {
+  if (!scope) return [];
   return [...scope.querySelectorAll('button, input, select, a')].filter((el) => el.offsetParent !== null && !el.disabled);
 }
 // GEOMETRIC D-pad for the full-page forms (Settings/Preferences): ↑/↓ move between visual
 // ROWS, ←/→ within a row, ← past the row's left edge exits to the rail. The DOM-order
 // cycle made ↓ crawl through every sibling in a row and could never reach the menu.
 function dpadForm(scope, k) {
-  const els = formCtls(scope); if (!els.length) return;
+  const els = formCtls(scope); if (!els.length) return false;
   const cur = document.activeElement;
-  if (!els.includes(cur)) { els[0].focus({ preventScroll: false }); return; }
-  if (k === 'Enter') return formActivate(cur);
+  const opts = arguments[2] || {};
+  if (!els.includes(cur)) { els[0].focus({ preventScroll: false }); return true; }
+  if (k === 'Enter') { formActivate(cur); return true; }
   const r = cur.getBoundingClientRect();
   const SAME = 12; // controls within ±12px top count as the same visual row
   let best = null, bestScore = Infinity;
@@ -12499,8 +12569,58 @@ function dpadForm(scope, k) {
     else if (k === 'ArrowUp') { ok = dy < -SAME; score = -dy * 3 + Math.abs(dx); }
     if (ok && score < bestScore) { bestScore = score; best = el; }
   }
-  if (best) return best.focus({ preventScroll: false });
-  if (k === 'ArrowLeft') { cur.blur(); enterRail(); } // nothing further left → the menu
+  if (best) { best.focus({ preventScroll: false }); return true; }
+  if (k === 'ArrowLeft' && opts.leftEdge !== false) { cur.blur(); enterRail(); return true; } // nothing further left → the menu
+  return false;
+}
+function sectionFormConfig() {
+  if (S.view === 'prefs') return { root: $('prefs'), tabs: $('prefTabs'), panelAttr: 'data-ptab' };
+  if (S.view === 'settings') return { root: $('settings'), tabs: $('setTabs'), panelAttr: 'data-stab' };
+  return null;
+}
+function sectionTabButtons(cfg) {
+  return cfg && cfg.tabs ? formCtls(cfg.tabs).filter((el) => el.tagName === 'BUTTON') : [];
+}
+function activeSectionPanel(cfg) {
+  return cfg && cfg.root ? cfg.root.querySelector(`[${cfg.panelAttr}]:not([hidden])`) : null;
+}
+function focusActiveSectionTab(cfg) {
+  const tabs = sectionTabButtons(cfg);
+  const tab = tabs.find((b) => b.classList.contains('on')) || tabs[0];
+  if (!tab) return false;
+  tab.focus({ preventScroll: false });
+  return true;
+}
+function dpadSectionForm(k) {
+  const cfg = sectionFormConfig();
+  if (!cfg) return false;
+  const tabs = sectionTabButtons(cfg);
+  const active = document.activeElement;
+  const inTabs = cfg.tabs && cfg.tabs.contains(active);
+  if (inTabs) {
+    let i = tabs.indexOf(active);
+    if (i < 0) i = Math.max(0, tabs.findIndex((b) => b.classList.contains('on')));
+    if (k === 'Enter') { formActivate(tabs[i] || active); return true; }
+    if (k === 'ArrowUp') { (tabs[Math.max(0, i - 1)] || tabs[0])?.focus({ preventScroll: false }); return true; }
+    if (k === 'ArrowDown') { (tabs[Math.min(tabs.length - 1, i + 1)] || tabs[tabs.length - 1])?.focus({ preventScroll: false }); return true; }
+    if (k === 'ArrowRight') {
+      const first = formCtls(activeSectionPanel(cfg))[0];
+      if (first) first.focus({ preventScroll: false });
+      return true;
+    }
+    if (k === 'ArrowLeft') { active.blur(); enterRail(); return true; }
+    return true;
+  }
+  const panel = activeSectionPanel(cfg);
+  const panelControls = panel ? formCtls(panel) : [];
+  if (panelControls.includes(active)) {
+    const moved = dpadForm(panel, k, { leftEdge: false });
+    if (!moved && (k === 'ArrowLeft' || k === 'ArrowUp')) return focusActiveSectionTab(cfg);
+    return true;
+  }
+  if (k === 'ArrowLeft') { enterRail(); return true; }
+  if (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowRight' || k === 'Enter') return focusActiveSectionTab(cfg);
+  return false;
 }
 document.addEventListener('keydown', (e) => {
   const k = e.key;
@@ -12553,7 +12673,7 @@ document.addEventListener('keydown', (e) => {
   }
   if (inInput && (S.view === 'settings' || S.view === 'prefs') && k.startsWith('Arrow')) {
     e.preventDefault();
-    dpadForm($(S.view === 'prefs' ? 'prefs' : 'settings'), k);
+    dpadSectionForm(k);
     return;
   }
   if (inInput && k === 'Escape') { ae.blur(); e.preventDefault(); return; } // leave the field first
@@ -12562,7 +12682,7 @@ document.addEventListener('keydown', (e) => {
   if (inInput && ae.tagName === 'SELECT' && k.startsWith('Arrow')
       && (S.view === 'settings' || S.view === 'prefs')) {
     e.preventDefault();
-    dpadForm($(S.view === 'prefs' ? 'prefs' : 'settings'), k);
+    dpadSectionForm(k);
     return;
   }
   if (inInput && /^Media(PlayPause|Play|Pause|Stop|TrackNext|TrackPrevious|NextTrack|PreviousTrack)$/.test(k)) {
@@ -12594,9 +12714,7 @@ document.addEventListener('keydown', (e) => {
   if (/^Media(PlayPause|Play|Pause|Stop|TrackNext|TrackPrevious|NextTrack|PreviousTrack)$/.test(k)) {
     if ($('trailer').classList.contains('open')) {
       if (k === 'MediaStop') return closeTrailer();
-      if (k === 'MediaPlay') return setTrailerPaused(false, true);
-      if (k === 'MediaPause') return setTrailerPaused(true, true);
-      return toggleTrailerPlay();
+      return;
     }
     return musicTransport(k === 'MediaPlay' ? 'play'
       : k === 'MediaPause' ? 'pause'
@@ -12608,7 +12726,6 @@ document.addEventListener('keydown', (e) => {
 
   if ($('trailer').classList.contains('open')) {
     if (k === 'Escape' || k === 'Backspace') return closeTrailer();
-    if (k === ' ' && !e.repeat) return toggleTrailerPlay();
     const controls = trailerControls();
     if (!controls.length) return;
     let i = controls.findIndex((el) => el.classList.contains('focus'));
@@ -12879,7 +12996,7 @@ document.addEventListener('keydown', (e) => {
   }
   if (S.view === 'settings' || S.view === 'prefs') {
     if (k === 'Escape' || k === 'Backspace') return switchView('home');
-    dpadForm($(S.view === 'prefs' ? 'prefs' : 'settings'), k); // ↑/↓ rows, ←/→ in-row, ← edge = rail
+    dpadSectionForm(k); // tabs stay vertical; Right enters the active panel; Left returns to tabs/rail.
     return;
   }
   if (S.view === 'calendar') {
