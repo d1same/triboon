@@ -221,21 +221,46 @@ body.tv:not(.railOpen) #rail:not(.expanded) .railBtn .del{opacity:0!important}
 .card,.btn,.srcRow,.railBtn,.field input{transition:transform .18s ease}
 
 /* ---------- auth screens ---------- */
-.gate{position:fixed;inset:0;z-index:50;display:none;place-items:center;background:radial-gradient(1200px 600px at 70% 20%,rgba(193,59,214,.14),transparent),var(--ink)}
+#gateBackdrop{position:fixed;inset:0;z-index:44;display:none;overflow:hidden;background:var(--ink)}
+body.authOpen #gateBackdrop{display:block}
+.gateBackdropLayer{position:absolute;inset:-4%;background-size:cover;background-position:center;opacity:0;filter:brightness(.58) saturate(1.1);transform:scale(1);transition:opacity 1.1s ease,transform 8s ease}
+.gateBackdropLayer.show{opacity:1;transform:scale(1.045)}
+#gateBackdrop::before{content:"";position:absolute;inset:0;z-index:2;background:linear-gradient(90deg,rgba(8,6,13,.96) 0%,rgba(8,6,13,.82) 27%,rgba(8,6,13,.42) 58%,rgba(8,6,13,.16) 100%),linear-gradient(0deg,rgba(8,6,13,.92) 0%,rgba(8,6,13,.2) 48%,rgba(8,6,13,.34) 100%)}
+#gateBackdrop::after{content:"";position:absolute;inset:0;z-index:3;background:radial-gradient(900px 520px at 20% 72%,rgba(251,82,124,.22),transparent 60%),radial-gradient(760px 440px at 88% 18%,rgba(251,139,60,.16),transparent 62%)}
+#gatePosterStrip{position:absolute;right:clamp(26px,6vw,110px);bottom:clamp(28px,7vh,88px);z-index:4;display:grid;grid-template-columns:repeat(4,minmax(78px,9vw));gap:14px;transform:rotate(-2deg);opacity:.88;pointer-events:none}
+.gatePoster{aspect-ratio:2/3;border-radius:18px;background-size:cover;background-position:center;box-shadow:0 22px 50px rgba(0,0,0,.42);overflow:hidden}
+.gatePoster:nth-child(2n){transform:translateY(22px)}
+.gatePoster:nth-child(3n){transform:translateY(-12px)}
+#gateArtCaption{position:absolute;right:clamp(26px,6vw,110px);bottom:18px;z-index:5;max-width:min(520px,42vw);color:rgba(243,239,247,.74);font:750 12px "JetBrains Mono";letter-spacing:.12em;text-transform:uppercase;text-align:right;text-shadow:0 2px 16px rgba(0,0,0,.55)}
+.gate{position:fixed;inset:0;z-index:50;display:none;place-items:center start;padding:clamp(28px,5vw,74px);background:transparent}
 .gate.open{display:grid}
-.gateCard{width:min(420px,92vw);background:rgba(22,16,32,.9);border:1px solid var(--line);border-radius:22px;padding:34px}
-.gateCard .logoRow{display:flex;align-items:center;gap:12px;margin-bottom:8px}
-.gateCard .logoRow img{width:38px;height:38px}
-.gateCard h1{font:800 26px "Sora"}
-.gateCard .sub{color:var(--muted);font-size:14px;margin-bottom:22px}
-.gateCard label{display:block;font:700 11px "JetBrains Mono";letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:14px 0 6px}
-.gateCard input{width:100%;background:rgba(11,8,18,.7);border:1px solid var(--line);border-radius:12px;padding:13px 14px;color:var(--text);font:500 15px "Albert Sans";outline:none}
-.gateCard input:focus{border-color:var(--magenta)}
-.gateCard .btn{width:100%;justify-content:center;margin-top:22px}
-.gateCard .err{color:#ff8d8d;font-size:13px;min-height:18px;margin-top:10px}
-.gateCard .alt{margin-top:16px;text-align:center;font-size:13px;color:var(--muted)}
-.gateCard .alt button{color:var(--amber)}
-#qcCode{font:700 40px "JetBrains Mono";letter-spacing:.3em;text-align:center;background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent;margin:18px 0 6px}
+.gateCard{position:relative;z-index:1;width:min(480px,calc(100vw - 40px));margin-left:clamp(0px,7vw,126px);background:linear-gradient(145deg,rgba(24,17,35,.86),rgba(10,7,15,.72));border:0;border-radius:30px;padding:38px;box-shadow:0 28px 84px rgba(0,0,0,.48);backdrop-filter:blur(18px)}
+.gateCard::before{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;background:linear-gradient(145deg,rgba(255,255,255,.12),transparent 42%),linear-gradient(0deg,rgba(251,139,60,.10),transparent 64%)}
+.gateCard > *{position:relative;z-index:1}
+.gateCard .logoRow{display:flex;align-items:center;gap:14px;margin-bottom:10px}
+.gateCard .logoRow img{width:44px;height:44px;filter:drop-shadow(0 8px 22px rgba(251,82,124,.28))}
+.gateCard h1{font:850 32px "Sora";line-height:1.04;letter-spacing:0}
+.gateCard .sub{color:rgba(243,239,247,.76);font-size:15px;line-height:1.5;margin:8px 0 24px}
+.gateCard label{display:block;font:800 11px "JetBrains Mono";letter-spacing:.14em;text-transform:uppercase;color:rgba(243,239,247,.62);margin:16px 0 8px}
+.gateCard input{width:100%;min-height:54px;background:rgba(255,255,255,.08);border:0;border-radius:16px;padding:15px 16px;color:var(--text);font:700 17px "Albert Sans";outline:none;box-shadow:inset 0 0 0 1px rgba(243,239,247,.08)}
+.gateCard input:focus{box-shadow:0 0 0 3px rgba(251,139,60,.42),inset 0 0 0 1px rgba(251,139,60,.72)}
+.gateCard .btn{width:100%;min-height:56px;justify-content:center;margin-top:24px;font-size:16px;border-radius:17px;box-shadow:0 16px 32px rgba(193,59,214,.23)}
+.gateCard .err{color:#ffadad;font-weight:700;font-size:13px;min-height:18px;margin-top:12px}
+.gateCard .alt{margin-top:18px;text-align:center;font-size:14px;color:rgba(243,239,247,.7)}
+.gateCard .alt button{color:#ffd08b;font-weight:850}
+.profileGatePanel{position:relative;z-index:1;padding:34px 38px;border-radius:30px;background:linear-gradient(145deg,rgba(24,17,35,.72),rgba(10,7,15,.54));box-shadow:0 28px 84px rgba(0,0,0,.42);backdrop-filter:blur(16px)}
+#qcCode{font:800 44px "JetBrains Mono";letter-spacing:.26em;text-align:center;background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent;margin:20px 0 8px}
+body.tv .gate{padding:46px 60px}
+body.tv .gateCard{width:min(520px,48vw);padding:42px;margin-left:clamp(30px,8vw,150px)}
+body.tv .gateCard h1{font-size:36px}
+body.tv .gateCard input,body.tv .gateCard .btn{min-height:62px;font-size:19px}
+@media (max-width:760px){
+  .gate{place-items:end center;padding:20px}
+  .gateCard{margin-left:0;width:100%;padding:28px;border-radius:24px}
+  #gatePosterStrip{display:none}
+  #gateArtCaption{left:20px;right:20px;bottom:auto;top:18px;max-width:none;text-align:left}
+  .gateCard h1{font-size:28px}
+}
 .profCard{position:relative;width:150px;display:flex;flex-direction:column;align-items:center;gap:10px;background:none;color:var(--text)}
 .profCard .av{width:128px;height:128px;border-radius:24px;background:linear-gradient(145deg,rgba(34,25,52,.92),rgba(11,8,18,.96));
   border:1px solid rgba(243,239,247,.11);display:grid;place-items:center;color:var(--amber);
@@ -767,10 +792,14 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 .seasonCard.focusable::before{display:none}
 
 /* Season tabs (episode view) */
-#seasonTabs{display:flex;gap:8px;overflow-x:auto;padding:4px 2px 14px}
-.seasonTab{flex:none;padding:9px 15px;border-radius:10px;background:rgba(34,25,52,.5);border:1px solid var(--line);
-  font:700 11px "JetBrains Mono";letter-spacing:.08em;text-transform:uppercase;color:var(--muted);white-space:nowrap}
-.seasonTab.sel{background:rgba(255,198,92,.16);border-color:rgba(255,198,92,.5);color:var(--amber)}
+#seasonTabs{display:flex;gap:10px;overflow-x:auto;padding:4px 2px 14px}
+.seasonTab{flex:none;min-height:42px;padding:10px 18px;border-radius:40px;background:rgba(34,25,52,.72);border:1px solid var(--line);
+  font:700 12px "Albert Sans",system-ui,sans-serif;letter-spacing:.01em;color:var(--text);white-space:nowrap;
+  transition:background .15s,color .15s,box-shadow .15s,border-color .15s}
+.seasonTab.focusable::before{display:none!important}
+.seasonTab.sel{background:var(--gold);border-color:transparent;color:#160a04}
+.seasonTab.focus,.seasonTab.sel.focus{background:var(--text);color:#160a04;border-color:transparent;box-shadow:0 10px 28px rgba(0,0,0,.45)}
+#allSeasonsBtn{min-height:42px;border-radius:40px;padding:10px 18px;font:700 12px "Albert Sans",system-ui,sans-serif}
 
 /* Episode cards — single horizontal scroll row */
 #epGrid{display:flex;gap:18px;overflow-x:auto;padding:4px 2px 8px}
@@ -837,7 +866,7 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
    text too, which read as a glitch. */
 .castCard.focusable.focus{transform:none;box-shadow:none}
 .castCard.focusable.focus::before{opacity:0!important}
-.seasonTab.focus{box-shadow:0 0 0 2px var(--coral)}
+.seasonTab.focus{background:var(--text);color:#160a04;border-color:transparent;box-shadow:0 10px 28px rgba(0,0,0,.45)}
 
 /* Browse filter controls follow the same solid focus language as Details buttons. */
 .filterBar select.focusable::before{display:none!important}
@@ -1090,6 +1119,7 @@ body.tv .cwAct,body.tv .epMenuBtn{display:none!important}
    touch keeps them visible), same pattern as the episode ⋯ button. */
 .cwAct{position:absolute;top:8px;width:30px;height:30px;border-radius:50%;background:rgba(11,8,18,.82);
   display:grid;place-items:center;color:var(--text);font-size:13px;z-index:3;opacity:0;transition:opacity .15s}
+.cwAct svg{width:16px;height:16px;display:block}
 .cwAct.watch{right:44px}.cwAct.rm{right:8px}
 .card:hover .cwAct,.card.focus .cwAct{opacity:1}
 .cwAct:hover{background:rgba(193,59,214,.85)}
@@ -1876,6 +1906,12 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
 <div id="backdrop"><div class="layer" id="bdA"></div><div class="layer" id="bdB"></div></div>
 <div id="scrim"></div>
 <div id="colorGlow"></div>
+<div id="gateBackdrop" aria-hidden="true">
+  <div class="gateBackdropLayer show" id="gateBdA"></div>
+  <div class="gateBackdropLayer" id="gateBdB"></div>
+  <div id="gatePosterStrip"></div>
+  <div id="gateArtCaption"></div>
+</div>
 
 <!-- ============ auth gates ============ -->
 <div class="gate" id="gateSetup">
@@ -1912,7 +1948,7 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
 </div>
 
 <div class="gate" id="gateProfiles">
-  <div style="text-align:center;width:min(680px,92vw)">
+  <div class="profileGatePanel" style="text-align:center;width:min(680px,92vw)">
     <h1 style="font:800 30px Sora;margin-bottom:8px">Who's watching?</h1>
     <div class="sub" style="color:var(--muted);margin-bottom:34px">Pick a profile.</div>
     <div id="profileGrid" style="display:flex;gap:26px;flex-wrap:wrap;justify-content:center"></div>
@@ -2882,6 +2918,81 @@ function procBackdrop(hue, hue2, grain) {
   return url;
 }
 
+const gateArtState = { loaded: false, loading: false, items: [], idx: 0, flip: false, timer: null };
+function gateFallbackArt() {
+  return [
+    { title: 'Triboon', kind: 'movie', backdrop: procBackdrop(284, 22, 9101), poster: procBackdrop(284, 22, 9102) },
+    { title: 'Private Cinema', kind: 'tv', backdrop: procBackdrop(330, 36, 9201), poster: procBackdrop(330, 36, 9202) },
+    { title: 'Movie Night', kind: 'movie', backdrop: procBackdrop(214, 18, 9301), poster: procBackdrop(214, 18, 9302) },
+    { title: 'Series Queue', kind: 'tv', backdrop: procBackdrop(20, 288, 9401), poster: procBackdrop(20, 288, 9402) },
+  ];
+}
+function cssBg(url) { return `url("${String(url || '').replace(/"/g, '%22')}")`; }
+function renderGatePosterStrip() {
+  const strip = $('gatePosterStrip');
+  if (!strip) return;
+  strip.replaceChildren();
+  const items = gateArtState.items.length ? gateArtState.items : gateFallbackArt();
+  items.slice(0, 8).forEach((item) => {
+    const card = document.createElement('div');
+    card.className = 'gatePoster';
+    card.style.backgroundImage = cssBg(item.poster || item.backdrop);
+    strip.appendChild(card);
+  });
+}
+function setGateArtwork(item, immediate = false) {
+  if (!item || !item.backdrop) return;
+  const showEl = gateArtState.flip ? $('gateBdA') : $('gateBdB');
+  const hideEl = gateArtState.flip ? $('gateBdB') : $('gateBdA');
+  gateArtState.flip = !gateArtState.flip;
+  showEl.style.backgroundImage = cssBg(item.backdrop);
+  const caption = $('gateArtCaption');
+  if (caption) caption.textContent = item.title ? `${item.kind === 'tv' ? 'Series' : 'Movie'} - ${item.title}` : '';
+  const swap = () => { showEl.classList.add('show'); hideEl.classList.remove('show'); };
+  if (immediate) swap(); else requestAnimationFrame(swap);
+}
+function startGateArtCycle() {
+  if (!document.body.classList.contains('authOpen')) return;
+  const current = () => gateArtState.items.length ? gateArtState.items : gateFallbackArt();
+  const first = current();
+  if (!first.length) return;
+  if (!gateArtState.timer) {
+    gateArtState.timer = setInterval(() => {
+      if (!document.body.classList.contains('authOpen')) return;
+      const items = current();
+      if (!items.length) return;
+      gateArtState.idx = (gateArtState.idx + 1) % items.length;
+      setGateArtwork(items[gateArtState.idx]);
+    }, 8500);
+  }
+  setGateArtwork(first[gateArtState.idx % first.length], true);
+}
+function stopGateArtCycle() {
+  if (gateArtState.timer) clearInterval(gateArtState.timer);
+  gateArtState.timer = null;
+}
+async function loadGateArt() {
+  if (gateArtState.loaded || gateArtState.loading) return;
+  gateArtState.loading = true;
+  try {
+    const data = await api('/api/auth-art');
+    gateArtState.items = Array.isArray(data.items) && data.items.length ? data.items : gateFallbackArt();
+  } catch {
+    gateArtState.items = gateFallbackArt();
+  } finally {
+    gateArtState.loaded = true;
+    gateArtState.loading = false;
+    renderGatePosterStrip();
+    startGateArtCycle();
+  }
+}
+function ensureGateArt() {
+  if (!gateArtState.items.length) gateArtState.items = gateFallbackArt();
+  renderGatePosterStrip();
+  startGateArtCycle();
+  loadGateArt();
+}
+
 /* ============ gates ============ */
 const COVER_SIZES = { S: '150px', M: '190px', L: '230px' };
 // TV layout is 1280 CSS px in a fixed 16:9 (720px tall). Sized against Plex's Android TV
@@ -2929,6 +3040,8 @@ function adaptRowWindows() {
 window.addEventListener('resize', () => { clearTimeout(adaptRowWindows._t); adaptRowWindows._t = setTimeout(applyCoverSize, 80); });
 function showGate(which) {
   if (which) $('appLoader').classList.add('hide'); // gate screens: drop the boot loader (app path hides it after content loads)
+  document.body.classList.toggle('authOpen', !!which);
+  if (which) ensureGateArt(); else stopGateArtCycle();
   for (const g of ['gateSetup', 'gateLogin', 'gateQc', 'gateInvite', 'gateProfiles', 'gatePin']) $(g).classList.remove('open');
   ['rail', 'home'].forEach((id) => $(id).classList.remove('show'));
   $('searchBar').classList.remove('show'); $('settings').classList.remove('open');
@@ -3898,6 +4011,10 @@ function makeCard(it, poster, onFocus) {
     if (it.resume || it._traktPct) {
       c.insertAdjacentHTML('beforeend',
         '<button class="cwAct watch" title="Mark watched">✓</button><button class="cwAct rm" title="Remove from Continue Watching">✕</button>');
+      const cwWatchBtn = c.querySelector('.cwAct.watch');
+      const cwRemoveBtn = c.querySelector('.cwAct.rm');
+      if (cwWatchBtn) { cwWatchBtn.innerHTML = ACTION_MENU_ICONS.check; cwWatchBtn.setAttribute('aria-label', 'Mark watched'); }
+      if (cwRemoveBtn) { cwRemoveBtn.innerHTML = ACTION_MENU_ICONS.remove; cwRemoveBtn.setAttribute('aria-label', 'Remove from Continue Watching'); }
       const cwSnap = () => { onFocus && onFocus(); return homeFocusSnapshot(); };
       c.querySelector('.cwAct.watch').addEventListener('click', (e) => { e.stopPropagation(); cwOp(it, { watched: true, position: 0, duration: 0 }, `“${it.title}” marked watched`, { focusSnapshot: cwSnap() }); });
       c.querySelector('.cwAct.rm').addEventListener('click', (e) => { e.stopPropagation(); cwOp(it, { remove: true }, `“${it.title}” removed from Continue Watching`, { focusSnapshot: cwSnap() }); });
@@ -4981,8 +5098,8 @@ async function openSeasonEpisodes(show, seasonNumber) {
     ep.air_date ? fmtDate(ep.air_date) : '', ep.runtime ? ep.runtime + 'm' : ''].filter(Boolean).join(' · '))}</span></div>
           <button class="epMenuBtn" title="Episode options">⋯</button>
           <div class="epMenu">
-            <button data-act="start">▶ Play from start</button>
-            ${w && w.watched ? '<button data-act="unwatch">○ Mark unwatched</button>' : '<button data-act="watch">✓ Mark watched</button>'}
+            ${actionMenuButton('start', 'play', 'Play from start')}
+            ${w && w.watched ? actionMenuButton('unwatch', 'circle', 'Mark unwatched') : actionMenuButton('watch', 'check', 'Mark watched')}
           </div>
         </div>`;
       const menu = card.querySelector('.epMenu');
@@ -4992,7 +5109,9 @@ async function openSeasonEpisodes(show, seasonNumber) {
         menu.classList.toggle('open');
       });
       menu.addEventListener('click', (e) => {
-        const act = e.target.dataset.act; if (!act) return;
+        const btn = e.target.closest && e.target.closest('button[data-act]');
+        if (!btn || !menu.contains(btn)) return;
+        const act = btn.dataset.act;
         e.stopPropagation(); menu.classList.remove('open');
         if (act === 'start') play(startOverItem(item));
         else setEpisodeWatched(item, ep, show, seasonNumber, act === 'watch');
@@ -5076,8 +5195,8 @@ function openLocalShowSeasonEpisodes(show, seasonNumber) {
           <span class="em">${esc(code)}</span></div>
         <button class="epMenuBtn" title="Episode options">⋯</button>
         <div class="epMenu">
-          <button data-act="start">▶ Play from start</button>
-          ${w && w.watched ? '<button data-act="unwatch">○ Mark unwatched</button>' : '<button data-act="watch">✓ Mark watched</button>'}
+          ${actionMenuButton('start', 'play', 'Play from start')}
+          ${w && w.watched ? actionMenuButton('unwatch', 'circle', 'Mark unwatched') : actionMenuButton('watch', 'check', 'Mark watched')}
         </div>
       </div>`;
     const menu = card.querySelector('.epMenu');
@@ -5087,7 +5206,9 @@ function openLocalShowSeasonEpisodes(show, seasonNumber) {
       menu.classList.toggle('open');
     });
     menu.addEventListener('click', (e) => {
-      const act = e.target.dataset.act; if (!act) return;
+      const btn = e.target.closest && e.target.closest('button[data-act]');
+      if (!btn || !menu.contains(btn)) return;
+      const act = btn.dataset.act;
       e.stopPropagation(); menu.classList.remove('open');
       if (act === 'start') play(startOverItem(item));
       else setLocalEpisodeWatched(item, act === 'watch', seasonNumber);

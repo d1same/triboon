@@ -332,7 +332,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'restricted watchlist filtering should not call /api/tmdb/episode for episode records');
   assert.match(ui, /\.\.\.\(S\.watchlist \|\| \[\]\)\.map\(\(w\) => \(\{ \.\.\.w\.meta, _key: w\.key \}\)\)[\s\S]+Object\.entries\(S\.watchMap \|\| \{\}\)[\s\S]+const t = certTargetForMeta\(m, m\._key \|\| ''\);[\s\S]+uniq\.set\(t\.type \+ ':' \+ t\.tmdbId, \{ \.\.\.m, \.\.\.t \}\);/,
     'calendar should normalize in-progress episode metas to their TV show before fetching upcoming dates');
-  assert.ok(ui.indexOf('`<button data-act="info">') < ui.indexOf('(it.resume ? `<button data-act="resume">'),
+  assert.ok(ui.indexOf("actionMenuButton('info', 'info', 'Details')") < ui.indexOf("(it.resume ? actionMenuButton('resume', 'play'"),
     'the long-press menu should default to Details, with Resume as a deliberate second action');
   assert.match(ui, /if \(act === 'resume'\) play\(it\);[\s\S]+else if \(act === 'info'\) openDetail\(detailTargetForItem\(it\)\);/,
     'the long-press Details action should open details instead of letting episode cards fall through to playback');

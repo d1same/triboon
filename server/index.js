@@ -1830,6 +1830,56 @@ function scheduleNextIptvWarm() {
 }
 const tmdb = new TmdbProxy(store, () => settings.get().tmdbKey, process.env.TMDB_BASE || undefined);
 const trakt = new Trakt(store, () => settings.get());
+const AUTH_ART_TTL_MS = 6 * 3600 * 1000;
+let authArtCache = { expiresAt: 0, items: [] };
+
+function tmdbImageUrl(p, size = 'w1280') {
+  const path = String(p || '');
+  if (!/^\/[A-Za-z0-9_.-]+$/.test(path)) return null;
+  return `https://image.tmdb.org/t/p/${size}${path}`;
+}
+
+function normalizeAuthArtItem(x) {
+  if (!x || x.media_type === 'person') return null;
+  const kind = x.media_type === 'tv' || (!x.media_type && x.name) ? 'tv' : 'movie';
+  const title = String(x.title || x.name || '').trim();
+  const backdrop = tmdbImageUrl(x.backdrop_path, 'w1280');
+  if (!title || !backdrop) return null;
+  return {
+    tmdbId: Number.isFinite(Number(x.id)) ? Number(x.id) : undefined,
+    title: title.slice(0, 96),
+    kind,
+    backdrop,
+    poster: tmdbImageUrl(x.poster_path, 'w342') || backdrop,
+  };
+}
+
+async function loadAuthArt() {
+  const now = Date.now();
+  if (authArtCache.items.length && now < authArtCache.expiresAt) return { items: authArtCache.items, cached: true };
+  const feeds = await Promise.allSettled([
+    tmdb.get('/trending/all/day'),
+    tmdb.get('/discover/movie?sort_by=popularity.desc&vote_count.gte=300&include_adult=false&page=1'),
+    tmdb.get('/discover/tv?sort_by=popularity.desc&vote_count.gte=100&include_adult=false&page=1'),
+  ]);
+  const seen = new Set();
+  const items = [];
+  for (const feed of feeds) {
+    const rows = feed.status === 'fulfilled' && Array.isArray(feed.value.results) ? feed.value.results : [];
+    for (const row of rows) {
+      const item = normalizeAuthArtItem(row);
+      if (!item) continue;
+      const key = `${item.kind}:${item.tmdbId || item.title.toLowerCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      items.push(item);
+      if (items.length >= 18) break;
+    }
+    if (items.length >= 18) break;
+  }
+  if (items.length) authArtCache = { expiresAt: now + AUTH_ART_TTL_MS, items };
+  return { items: items.length ? items : authArtCache.items, cached: false };
+}
 
 // ---------- helpers ----------
 function send(res, code, body, headers = {}) {
@@ -2190,6 +2240,20 @@ const H = {
     iptv: iptvConfigured(settings.get()),
     music: !!ytmusic.detectYtdlp(), // Music tab shows only when yt-dlp is present
   }),
+
+  authArt: async (ctx) => {
+    if (!settings.get().tmdbKey) {
+      return send(ctx.res, 200, { configured: false, items: [] }, { 'cache-control': 'public, max-age=120' });
+    }
+    try {
+      const data = await loadAuthArt();
+      send(ctx.res, 200, { configured: true, items: data.items, cached: data.cached },
+        { 'cache-control': 'public, max-age=900' });
+    } catch {
+      send(ctx.res, 200, { configured: true, items: authArtCache.items || [] },
+        { 'cache-control': 'public, max-age=120' });
+    }
+  },
 
   setup: async (ctx) => {
     if (auth.hasUsers()) return send(ctx.res, 403, { error: 'already set up' });
@@ -4280,6 +4344,7 @@ function ensureSubtitleVtt(vf, track, uid) {
 // ---------- route table (deny by default; every route DECLARES auth) ----------
 const ROUTES = [
   { m: 'GET', re: /^\/api\/server$/, auth: 'public', h: H.server },
+  { m: 'GET', re: /^\/api\/auth-art$/, auth: 'public', h: H.authArt },
   { m: 'POST', re: /^\/api\/setup$/, auth: 'public', h: H.setup },
   { m: 'POST', re: /^\/api\/login$/, auth: 'public', h: H.login },
   { m: 'POST', re: /^\/api\/invite\/accept$/, auth: 'public', h: H.inviteAccept },

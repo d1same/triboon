@@ -70,7 +70,10 @@ const tmdbMock = http.createServer((req, res) => {
     ] }));
   }
   res.writeHead(200, { 'content-type': 'application/json' });
-  res.end(JSON.stringify({ path: req.url, results: [{ id: 1, title: 'Mock Movie' }] }));
+  res.end(JSON.stringify({
+    path: req.url,
+    results: [{ id: 1, media_type: 'movie', title: 'Mock Movie', backdrop_path: '/mock-backdrop.jpg', poster_path: '/mock-poster.jpg' }],
+  }));
 });
 
 // Mock indexer for HTTP play tests.
@@ -287,6 +290,21 @@ test('tmdb: proxy injects the server key and caches responses', async () => {
   assert.strictEqual(tmdbHits, 1, 'second request served from cache');
   // Traversal attempts are rejected — by URL normalization (→404) or the path guard (→400).
   assert.ok((await httpJson(srv.port, 'GET', '/api/tmdb/%2e%2e/evil', null, admin)).status >= 400, 'encoded traversal rejected');
+});
+
+test('tmdb: login artwork is public but only exposes safe art metadata', async () => {
+  const art = await httpJson(srv.port, 'GET', '/api/auth-art');
+  assert.strictEqual(art.status, 200);
+  assert.strictEqual(art.json.configured, true);
+  assert.ok(Array.isArray(art.json.items));
+  assert.ok(art.json.items.length >= 1, 'auth gate receives artwork when TMDB is configured');
+  const first = art.json.items[0];
+  assert.strictEqual(first.title, 'Mock Movie');
+  assert.strictEqual(first.kind, 'movie');
+  assert.strictEqual(first.backdrop, 'https://image.tmdb.org/t/p/w1280/mock-backdrop.jpg');
+  assert.strictEqual(first.poster, 'https://image.tmdb.org/t/p/w342/mock-poster.jpg');
+  assert.ok(!Object.prototype.hasOwnProperty.call(first, 'path'), 'upstream request path is not exposed');
+  assert.ok(!art.raw.includes('super-secret-tmdb-key'), 'server TMDB key never leaves the API');
 });
 
 test('tmdb: detail, discover, genre, video, and search paths all pass proxy validation', async () => {
