@@ -404,6 +404,27 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
     const failureKey = idHash(`${u.protocol}//${u.host}${u.pathname}`);
     const cachedFailure = iptvNativeErrorCache.get(failureKey);
     if (cachedFailure && cachedFailure.until > Date.now()) {
+      if (!refreshedForStaleChannel && [401, 403, 429].includes(cachedFailure.status)) {
+        refreshedForStaleChannel = true;
+        const staleCh = iptvCache.channels && Number.isInteger(meta.idx) ? iptvCache.channels[meta.idx] : null;
+        refreshXtreamChannelForPlayback(staleCh, `cached native HTTP ${cachedFailure.status}`)
+          .then((nextCh) => {
+            const nextTarget = nextCh
+              ? (meta.alt && nextCh.nativeFallbackUrl ? nextCh.nativeFallbackUrl : (nextCh.nativeUrl || nextCh.url))
+              : '';
+            if (nextTarget && nextTarget !== rawTarget && !done && !slot.closed) {
+              console.error(`[iptv native] ${label} retrying refreshed Xtream channel #${nextCh.idx} "${nextCh.name}" after cached failure`);
+              open(nextTarget, hop + 1);
+              return;
+            }
+            fail(cachedFailure.status, cachedFailure);
+          })
+          .catch((e) => {
+            console.error(`[iptv refresh] cached native failure refresh failed: ${sanitizeIptvLogError(e)}`);
+            fail(cachedFailure.status, cachedFailure);
+          });
+        return;
+      }
       return fail(cachedFailure.status, cachedFailure);
     }
     const lib = u.protocol === 'https:' ? https : http;
@@ -541,6 +562,17 @@ function findRefreshedXtreamChannel(staleCh, channels) {
   }
   return matches.find((c) => String(c.xtreamId || '') !== staleStream) || matches[0];
 }
+function xtreamPanelFetchOptions(opts = {}) {
+  return {
+    ...opts,
+    headers: {
+      ...(opts.headers || {}),
+      'cache-control': 'no-cache',
+      pragma: 'no-cache',
+      'user-agent': IPTV_NATIVE_PROXY_UA,
+    },
+  };
+}
 async function refreshXtreamChannelForPlayback(staleCh, reason = 'playback rejection') {
   const s = settings.get();
   if (s.iptvMode !== 'xtream' || !staleCh || !staleCh.xtreamId) return null;
@@ -555,7 +587,14 @@ async function refreshXtreamChannelForPlayback(staleCh, reason = 'playback rejec
   }
   const channels = await iptvPlaybackRefreshPromise;
   const next = findRefreshedXtreamChannel(staleCh, channels);
-  if (!next || String(next.xtreamId || '') === String(staleCh.xtreamId || '')) return null;
+  if (!next) {
+    console.error(`[iptv refresh] forced Xtream channel refresh found no replacement after ${reason}: "${staleCh.name}" stream=${staleCh.xtreamId}`);
+    return null;
+  }
+  if (String(next.xtreamId || '') === String(staleCh.xtreamId || '')) {
+    console.error(`[iptv refresh] forced Xtream channel refresh kept same stream after ${reason}: "${staleCh.name}" stream=${staleCh.xtreamId}`);
+    return null;
+  }
   console.error(`[iptv refresh] stale Xtream channel refreshed after ${reason}: "${staleCh.name}" stream=${staleCh.xtreamId} -> stream=${next.xtreamId}`);
   return next;
 }
@@ -718,7 +757,8 @@ async function fetchIptvChannels(s, key) {
     const apiBase = `${base}/player_api.php?username=${encodeURIComponent(s.xtUser || '')}&password=${encodeURIComponent(s.xtPass || '')}`;
     const fetchPanel = async (action, opts) => {
       try {
-        const r = await fetchUrlExt(`${apiBase}&action=${action}`, opts);
+        const u = `${apiBase}&action=${action}&_=${Date.now().toString(36)}`;
+        const r = await fetchUrlExt(u, xtreamPanelFetchOptions(opts));
         if ((r.status || 0) >= 400) {
           const body = r.body.toString('utf8', 0, 2048);
           throw new Error(`HTTP ${r.status} (${iptvNativeFailureReason(r.status || 502, body)})`);
@@ -1867,6 +1907,7 @@ const H = {
     if (!remuxTargets.length) return send(ctx.res, 502, { error: 'invalid live stream url' });
     let availableTargets = [];
     let cachedFailure = null;
+    let refreshedForStaleChannel = false;
     const rebuildRemuxTargets = () => {
       remuxTargets = iptvRemuxTargets(ch);
       availableTargets = [];
@@ -1882,13 +1923,22 @@ const H = {
     };
     rebuildRemuxTargets();
     if (!availableTargets.length && cachedFailure) {
-      return sendIptvNativeError(ctx.res, cachedFailure.status, cachedFailure.reason);
+      if ([401, 403, 429].includes(cachedFailure.status)) {
+        refreshedForStaleChannel = true;
+        const nextCh = await refreshXtreamChannelForPlayback(ch, `cached remux HTTP ${cachedFailure.status}`);
+        if (nextCh) {
+          ch = nextCh;
+          rebuildRemuxTargets();
+        }
+      }
+      if (!availableTargets.length && cachedFailure) {
+        return sendIptvNativeError(ctx.res, cachedFailure.status, cachedFailure.reason);
+      }
     }
     const liveSlot = beginIptvLiveSlot(ctx, { idx: ch.idx, name: ch.name });
     // Attempt 1 uses HLS-friendly demuxer options; if ffmpeg dies before emitting a single
     // byte (non-HLS channel, or an older ffmpeg without those options) retry once plain.
     let targetIndex = 0;
-    let refreshedForStaleChannel = false;
     const attempt = (target, hlsFriendly, retriesLeft) => {
       if (liveSlot.closed) return;
       let ff;

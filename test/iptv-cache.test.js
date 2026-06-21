@@ -456,6 +456,76 @@ test('iptv: stale Xtream stream ids refresh and retry native playback', async ()
   }
 });
 
+test('iptv: cached stale Xtream 403 still refreshes and retries native playback', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-cached-stale-403-'));
+  let liveStreams = [{ stream_id: 100, name: '|UK| CNN HD', category_id: '1', epg_channel_id: 'cnn.uk' }];
+  let oldHits = 0;
+  let freshHits = 0;
+  let streamListHits = 0;
+  const panelRequests = [];
+  const upstream = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    const action = u.searchParams.get('action');
+    if (action) {
+      panelRequests.push({
+        action,
+        bust: u.searchParams.has('_'),
+        cacheControl: req.headers['cache-control'] || '',
+        pragma: req.headers.pragma || '',
+        ua: req.headers['user-agent'] || '',
+      });
+      res.writeHead(200, { 'content-type': 'application/json' });
+      if (action === 'get_live_categories') return res.end(JSON.stringify([{ category_id: '1', category_name: 'News' }]));
+      if (action === 'get_live_streams') {
+        streamListHits++;
+        return res.end(JSON.stringify(liveStreams));
+      }
+      return res.end(JSON.stringify({ epg_listings: [] }));
+    }
+    if (u.pathname.endsWith('/100.ts')) {
+      oldHits++;
+      res.writeHead(403, { 'content-type': 'text/plain' });
+      return res.end('old stream id');
+    }
+    if (u.pathname.endsWith('/200.ts')) {
+      freshHits++;
+      res.writeHead(200, { 'content-type': 'video/mp2t' });
+      return res.end('FRESH-CNN');
+    }
+    res.writeHead(404);
+    res.end('missing');
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const host = `http://127.0.0.1:${upstream.address().port}`;
+
+  let srv;
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/settings',
+      { iptvMode: 'xtream', xtHost: host, xtUser: 'xtuser', xtPass: 'xtpass', epgUrl: null }, admin);
+    const stale = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    assert.strictEqual(stale.json.channels[0].xtreamId, 100);
+
+    const first = await httpRaw(srv.port, stale.json.channels[0].nativeUrl);
+    assert.strictEqual(first.status, 403, 'first playback proves the cached stream id is stale');
+
+    liveStreams = [{ stream_id: 200, name: 'USA: CNN [1080p]', category_id: '1', epg_channel_id: 'cnn.usa' }];
+    const second = await httpRaw(srv.port, stale.json.channels[0].nativeUrl);
+    assert.strictEqual(second.status, 200, 'cached 403 must still trigger a forced Xtream refresh');
+    assert.strictEqual(second.body.toString('utf8'), 'FRESH-CNN');
+    assert.strictEqual(oldHits, 1, 'cached failure path should not hit the old stream id again');
+    assert.strictEqual(freshHits, 1, 'retry should use the refreshed stream id');
+    assert.strictEqual(streamListHits, 3, 'initial list, failed-refresh list, and cached-failure refresh list should run');
+    assert(panelRequests.every((p) => p.bust), 'Xtream panel requests should cache-bust provider/CDN responses');
+    assert(panelRequests.every((p) => /no-cache/i.test(p.cacheControl)), 'Xtream panel requests should ask the provider not to serve cached lists');
+    assert(panelRequests.every((p) => /TriboonTV/i.test(p.ua)), 'Xtream panel requests should use the IPTV smart-TV user agent');
+  } finally {
+    if (srv) await srv.shutdown();
+    upstream.close();
+  }
+});
+
 test('iptv: empty Xtream guide misses are not persisted across restart', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-epg-cache-'));
   const b64 = (s) => Buffer.from(s).toString('base64');
