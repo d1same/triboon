@@ -584,6 +584,97 @@ test('iptv: Xtream channels serve persisted cache immediately after restart and 
   }
 });
 
+test('iptv: Xtream stream list still loads when optional categories are rejected', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-category-403-'));
+  let streamsHit = 0;
+  const upstream = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    const action = u.searchParams.get('action');
+    if (action === 'get_live_categories') {
+      res.writeHead(403, { 'content-type': 'text/plain' });
+      return res.end('provider rejected categories');
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    if (action === 'get_live_streams') {
+      streamsHit++;
+      return res.end(JSON.stringify([{ stream_id: 902, name: 'Categoryless News', category_id: 'blocked', epg_channel_id: 'cat.news' }]));
+    }
+    res.end(JSON.stringify({ epg_listings: [] }));
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const host = `http://127.0.0.1:${upstream.address().port}`;
+
+  let srv;
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/settings',
+      { iptvMode: 'xtream', xtHost: host, xtUser: 'xtuser', xtPass: 'xtpass', epgUrl: null }, admin);
+    const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    assert.strictEqual(ch.status, 200);
+    assert.strictEqual(ch.json.channels.length, 1);
+    assert.strictEqual(ch.json.channels[0].name, 'Categoryless News');
+    assert.strictEqual(ch.json.channels[0].group, 'Other', 'category 403 should fall back to a generic group');
+    assert.strictEqual(ch.json.sourceErrors.length, 0, 'optional category failures should not mark the source failed');
+    assert.strictEqual(streamsHit, 1, 'stream list should still be fetched');
+  } finally {
+    if (srv) await srv.shutdown();
+    upstream.close();
+  }
+});
+
+test('iptv: sync status clears stale Xtream category errors after streams load', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-status-stale-category-'));
+  const upstream = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    const action = u.searchParams.get('action');
+    if (action === 'get_live_categories') {
+      res.writeHead(403, { 'content-type': 'text/plain' });
+      return res.end('provider rejected categories');
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    if (action === 'get_live_streams') {
+      return res.end(JSON.stringify([{ stream_id: 911, name: 'Recovered News', category_id: 'blocked', epg_channel_id: 'recovered.news' }]));
+    }
+    res.end(JSON.stringify({ epg_listings: [] }));
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const host = `http://127.0.0.1:${upstream.address().port}`;
+
+  let srv;
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    const created = await httpJson(srv.port, 'POST', '/api/iptv/sources',
+      { name: 'Apollo', iptvMode: 'xtream', xtHost: host, xtUser: 'xtuser', xtPass: 'xtpass', epgUrl: null }, admin);
+    const sourceId = created.json.source.id;
+    srv.store.write('iptvsync', {
+      sourceErrors: [{
+        sourceId,
+        sourceName: 'Apollo',
+        mode: 'xtream',
+        error: 'Xtream channel load action=get_live_categories host=example-xtream.invalid failed: HTTP 403 (provider rejected this channel)',
+      }],
+      lastResult: { channels: 0, sourceErrors: [] },
+    });
+
+    const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    assert.strictEqual(ch.status, 200);
+    assert.strictEqual(ch.json.channels.length, 1);
+    assert.strictEqual(ch.json.sourceErrors.length, 0);
+
+    const status = await httpJson(srv.port, 'GET', '/api/iptv/status', null, admin);
+    assert.strictEqual(status.status, 200);
+    assert.strictEqual(status.json.channelCount, 1);
+    assert.strictEqual(status.json.loadedSourceCount, 1);
+    assert.strictEqual(status.json.sourceErrors.length, 0, 'healthy channels should hide stale channel-load errors');
+    assert.strictEqual(status.json.sources[0].error, null);
+  } finally {
+    if (srv) await srv.shutdown();
+    upstream.close();
+  }
+});
+
 test('iptv: Xtream browser remux fallback ingests TS before HLS', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-remux-ts-first-'));
   const upstream = http.createServer((req, res) => {

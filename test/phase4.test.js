@@ -1176,6 +1176,16 @@ test('Android native player: direct source and native chrome stay out of the web
     'rail Live TV should use the Lucide tv icon');
   assert.match(ui, /data-nav="music"[\s\S]+M9 18V5l12-2v13[\s\S]+circle cx="18" cy="16"/,
     'rail Music should use the Lucide music icon');
+  assert.match(ui, /function visibleRailButtons\(\) \{[\s\S]+getComputedStyle\(b\)[\s\S]+cs\.display !== 'none'[\s\S]+b\.getClientRects\(\)\.length > 0/,
+    'rail D-pad should use actual rendered visibility so bottom items like Preferences/Settings remain reachable');
+  assert.match(ui, /function focusRail\(i, opts = \{\}\) \{[\s\S]+const btns = visibleRailButtons\(\)/,
+    'rail focus movement should use rendered-visible menu buttons');
+  assert.match(ui, /function enterRail\(\) \{[\s\S]+const btns = visibleRailButtons\(\)/,
+    'entering the rail should land on a rendered-visible active item');
+  assert.match(ui, /function focusRailEnter\(\) \{[\s\S]+const btns = visibleRailButtons\(\)/,
+    'pressing OK in the rail should activate the rendered-visible focused item');
+  assert.match(ui, /toast\(r\.result && r\.result\.skipped === 'running' \? 'Live TV refresh already running' : 'Live TV refresh complete'\)/,
+    'Live TV manual refresh should not say complete when a source-added or scheduled sync is already running');
   assert.match(ui, /api\('\/api\/music\/charts'\)[\s\S]+S\.musicCharts = Array\.isArray\(r\.charts\) \? r\.charts : \[\]/,
     'Music page should load daily and weekly chart rows from the server');
   assert.match(ui, /async function loadMusicChartsFallback\(\) \{[\s\S]+\/api\/music\/search\?q=' \+ encodeURIComponent\(def\.query\) \+ '&limit=16'[\s\S]+S\.musicCharts = await loadMusicChartsFallback\(\)/,

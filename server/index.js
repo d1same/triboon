@@ -1010,6 +1010,14 @@ function publicIptvError(err = {}) {
     error: sanitizeIptvLogError(err.error || '').slice(0, 220),
   };
 }
+function isIptvChannelLoadError(errorText) {
+  const text = String(errorText || '').toLowerCase();
+  return text.includes('xtream channel load')
+    || text.includes('m3u playlist')
+    || text.includes('playlist upstream')
+    || text.includes('no live channels found')
+    || text.includes('xtream returned invalid json');
+}
 async function backgroundRefreshIptvSource(src, key, cachedChannels, label) {
   const sourceId = cleanIptvSourceId(src.id);
   if (iptvRefreshingSources.has(sourceId)) return;
@@ -1202,6 +1210,10 @@ async function fetchIptvChannels(s, key) {
         }
         return r;
       } catch (e) {
+        if (action === 'get_live_categories') {
+          console.error(`[iptv xtream] optional category load failed for source "${String(s.name || 'Live TV').slice(0, 80)}": ${sanitizeIptvLogError(e)}; loading streams without categories`);
+          return { status: 200, body: Buffer.from('[]') };
+        }
         throw new Error(`Xtream channel load action=${action} host=${iptvSafeHost(s.xtHost)} failed: ${sanitizeIptvLogError(e)}`);
       }
     };
@@ -1606,15 +1618,14 @@ function iptvGuideStatusForSource(src, channels = []) {
 function iptvSyncSnapshot() {
   const sources = iptvSourcesFromSettings(settings.get());
   const state = readIptvSyncState();
-  const sourceErrors = (iptvCache.sourceErrors && iptvCache.sourceErrors.length ? iptvCache.sourceErrors : (state.sourceErrors || []))
+  const savedSourceErrors = (iptvCache.sourceErrors && iptvCache.sourceErrors.length ? iptvCache.sourceErrors : (state.sourceErrors || []))
     .map(publicIptvError);
   const nextScheduledAt = [iptvWarmSoonNextAt, iptvWarmNextAt].filter((n) => n && n > Date.now()).sort((a, b) => a - b)[0] || 0;
-  const sourceStatus = sources.map((src) => {
+  const sourceStatusBase = sources.map((src) => {
     const sourceId = cleanIptvSourceId(src.id);
     const runtime = iptvSourceCaches.get(sourceId);
     const channels = runtime && Array.isArray(runtime.channels) ? runtime.channels : [];
     const guide = iptvGuideStatusForSource(src, channels);
-    const err = sourceErrors.find((e) => e.sourceId === sourceId) || null;
     return {
       sourceId,
       sourceName: src.name,
@@ -1625,8 +1636,13 @@ function iptvSyncSnapshot() {
       guideChannels: guide.guideChannels,
       guideCachedAt: guide.cachedAt,
       refreshing: iptvRefreshingSources.has(sourceId) || epgRefreshingSources.has(sourceId),
-      error: err ? err.error : null,
     };
+  });
+  const loadedSourceIds = new Set(sourceStatusBase.filter((s) => s.channelCount > 0).map((s) => s.sourceId));
+  const sourceErrors = savedSourceErrors.filter((e) => !(loadedSourceIds.has(e.sourceId) && isIptvChannelLoadError(e.error)));
+  const sourceStatus = sourceStatusBase.map((row) => {
+    const err = sourceErrors.find((e) => e.sourceId === row.sourceId) || null;
+    return { ...row, error: err ? err.error : null };
   });
   const channelCount = (iptvCache.channels || []).length
     || sourceStatus.reduce((sum, s) => sum + (Number(s.channelCount) || 0), 0);

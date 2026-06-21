@@ -337,16 +337,36 @@ body.tv #filterMenu{backdrop-filter:none}
 .trailerCard .play div{width:50px;height:50px;border-radius:50%;background:var(--grad);display:grid;place-items:center;color:#160a04;box-shadow:0 8px 24px rgba(0,0,0,.5)}
 
 /* ---------- trailer modal ---------- */
-#trailer{position:fixed;inset:0;z-index:45;display:none;place-items:center;background:rgba(5,3,9,.94);backdrop-filter:blur(6px)}
+#trailer{position:fixed;inset:0;z-index:45;display:none;place-items:center;background:linear-gradient(180deg,rgba(8,5,14,.98),rgba(5,3,9,.96));backdrop-filter:blur(8px);padding:28px}
 #trailer.open{display:grid}
-/* Near-fullscreen: as wide as fits while keeping 16:9 inside ~92% of the viewport. */
-#trailer .box{width:min(94vw,calc(88vh * 16 / 9));aspect-ratio:16/9;border-radius:16px;overflow:hidden;box-shadow:0 30px 90px rgba(0,0,0,.7);background:#000}
-#trailer iframe{width:100%;height:100%;border:0}
-#trailerClose{position:fixed;top:22px;right:28px;z-index:46;width:44px;height:44px;border-radius:50%;background:rgba(34,25,52,.8);
-  display:grid;place-items:center;color:var(--text);font-size:20px}
-#trailerWl{position:fixed;top:22px;right:84px;z-index:46;height:44px;border-radius:22px;background:rgba(34,25,52,.85);
-  border:1px solid var(--line);display:flex;align-items:center;gap:8px;padding:0 18px;color:var(--text);font:600 13px "Sora"}
+.trailerShell{width:min(96vw,calc((100vh - 210px) * 16 / 9));max-width:1500px;display:flex;flex-direction:column;gap:14px}
+.trailerTop,.trailerBar{display:flex;align-items:center;justify-content:space-between;gap:14px;background:#120b1e;border:1px solid rgba(237,232,245,.1);box-shadow:0 16px 48px rgba(0,0,0,.34)}
+.trailerTop{min-height:66px;border-radius:18px;padding:12px 14px 12px 18px}
+.trailerKicker{font:800 10px "Sora";letter-spacing:.18em;text-transform:uppercase;color:var(--muted);margin-bottom:3px}
+#trailerTitle{font:800 clamp(18px,2.3vw,30px) "Sora";line-height:1.08;max-width:min(68vw,980px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.trailerStage{position:relative;border-radius:18px;overflow:hidden;background:#000;box-shadow:0 34px 92px rgba(0,0,0,.72);aspect-ratio:16/9}
+#trailer .box{position:absolute;inset:0;background:#000}
+#trailer iframe{width:100%;height:100%;border:0;opacity:0;transition:opacity .22s ease}
+#trailer.loaded iframe{opacity:1}
+.trailerLoading{position:absolute;inset:0;z-index:1;display:grid;place-items:center;background:#050308;color:var(--muted);font:800 13px "Sora";letter-spacing:.12em;text-transform:uppercase}
+#trailer.loaded .trailerLoading{opacity:0;pointer-events:none;transition:opacity .18s ease}
+.trailerBar{min-height:68px;border-radius:18px;padding:12px}
+.trailerActions{display:flex;align-items:center;gap:10px;min-width:0}
+.trailerCtl,.trailerIconBtn{height:44px;border:1px solid rgba(237,232,245,.12);background:#201831;color:var(--text);display:inline-flex;align-items:center;justify-content:center;gap:9px;font:800 13px "Sora";box-shadow:0 10px 30px rgba(0,0,0,.22)}
+.trailerCtl{border-radius:14px;padding:0 17px}
+.trailerIconBtn{width:44px;border-radius:50%;padding:0;flex:0 0 auto}
+.trailerCtl svg,.trailerIconBtn svg{width:18px;height:18px;display:block}
+#trailerPlay{background:var(--grad);color:#160a04;border-color:transparent;min-width:118px}
 #trailerWl.on{background:var(--gold);color:#160a04;border-color:transparent}
+.trailerSource{margin-left:auto;color:var(--muted);font:700 12px "Sora";white-space:nowrap}
+@media(max-width:700px){
+  #trailer{padding:14px}
+  .trailerShell{width:100%}
+  .trailerTop,.trailerBar{border-radius:14px}
+  .trailerSource{display:none}
+  .trailerActions{width:100%}
+  .trailerCtl{flex:1;padding:0 10px}
+}
 
 /* ---------- detail page ---------- */
 #detail{position:fixed;inset:0;z-index:7;display:none;overflow-y:auto;padding:0 0 40px 116px}
@@ -2078,9 +2098,34 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
 </div>
 
 <div id="trailer">
-  <button id="trailerClose">✕</button>
-  <button id="trailerWl" class="focusable" style="display:none">🔖 <span>Watchlist</span></button>
-  <div class="box" id="trailerBox"></div>
+  <div class="trailerShell" role="dialog" aria-modal="true" aria-labelledby="trailerTitle">
+    <div class="trailerTop">
+      <div>
+        <div class="trailerKicker">Trailer</div>
+        <div id="trailerTitle">Trailer</div>
+      </div>
+      <button id="trailerClose" class="trailerIconBtn focusable" title="Close trailer" aria-label="Close trailer">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+    </div>
+    <div class="trailerStage">
+      <div class="trailerLoading" id="trailerLoading">Loading trailer</div>
+      <div class="box" id="trailerBox"></div>
+    </div>
+    <div class="trailerBar">
+      <div class="trailerActions">
+        <button id="trailerPlay" class="trailerCtl focusable" title="Pause trailer" aria-label="Pause trailer">
+          <svg id="trailerPlayIcon" viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>
+          <span id="trailerPlayLabel">Pause</span>
+        </button>
+        <button id="trailerWl" class="trailerCtl focusable" title="Add to watchlist" aria-label="Add to watchlist" style="display:none">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M6 4h12v16l-6-3.6L6 20z"/></svg>
+          <span>Watchlist</span>
+        </button>
+      </div>
+      <div class="trailerSource">YouTube</div>
+    </div>
+  </div>
 </div>
 
 <section id="prefs">
@@ -7931,10 +7976,47 @@ function renderLocalGridPaged(items) {
 }
 
 /* ============ trailer modal ============ */
+const TRAILER_ICON_PLAY = '<path d="M8 5v14l11-7z"/>';
+const TRAILER_ICON_PAUSE = '<path d="M7 5h4v14H7zM13 5h4v14h-4z"/>';
+function trailerControls() {
+  return [$('trailerPlay'), $('trailerWl'), $('trailerClose')]
+    .filter((el) => el && el.offsetParent !== null && getComputedStyle(el).display !== 'none');
+}
+function focusTrailerControl(idx = S.trailerCtlIdx || 0) {
+  const controls = trailerControls();
+  if (!controls.length) return;
+  S.trailerCtlIdx = Math.max(0, Math.min(controls.length - 1, idx));
+  applyFocus(controls[S.trailerCtlIdx], false);
+}
+function trailerCommand(func) {
+  const frame = $('trailerBox').querySelector('iframe');
+  if (!frame || !frame.contentWindow) return;
+  frame.contentWindow.postMessage(JSON.stringify({ event: 'command', func, args: [] }), 'https://www.youtube.com');
+}
+function setTrailerPaused(paused, sendCommand = false) {
+  S.trailerPaused = !!paused;
+  $('trailerPlayIcon').innerHTML = paused ? TRAILER_ICON_PLAY : TRAILER_ICON_PAUSE;
+  $('trailerPlayLabel').textContent = paused ? 'Play' : 'Pause';
+  $('trailerPlay').title = paused ? 'Play trailer' : 'Pause trailer';
+  $('trailerPlay').setAttribute('aria-label', $('trailerPlay').title);
+  if (sendCommand) trailerCommand(paused ? 'pauseVideo' : 'playVideo');
+}
+function toggleTrailerPlay() { setTrailerPaused(!S.trailerPaused, true); }
 function openTrailer(tr, it) {
+  if (!tr || !tr.key) return toast('Trailer is unavailable');
+  S.trailerReturnEl = document.querySelector('.focus') || document.activeElement;
+  S.trailerCtlIdx = 0;
+  const title = tr.title || (it && it.title) || 'Trailer';
+  $('trailerTitle').textContent = title;
+  $('trailer').classList.remove('loaded');
+  $('trailer').setAttribute('aria-hidden', 'false');
+  setTrailerPaused(false, false);
+  const origin = encodeURIComponent(location.origin || 'http://localhost');
   // referrerpolicy matters: with no referrer YouTube refuses to authorize many embeds.
   $('trailerBox').innerHTML =
-    `<iframe src="https://www.youtube.com/embed/${encodeURIComponent(tr.key)}?autoplay=1&rel=0" referrerpolicy="strict-origin-when-cross-origin" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe>`;
+    `<iframe title="${esc(title)} trailer" src="https://www.youtube.com/embed/${encodeURIComponent(tr.key)}?autoplay=1&rel=0&playsinline=1&controls=0&modestbranding=1&iv_load_policy=3&enablejsapi=1&origin=${origin}" referrerpolicy="strict-origin-when-cross-origin" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe>`;
+  const frame = $('trailerBox').querySelector('iframe');
+  if (frame) frame.addEventListener('load', () => $('trailer').classList.add('loaded'), { once: true });
   // Watchlist straight from the trailer.
   S.trailerItem = it || tr.item || null;
   const wl = $('trailerWl');
@@ -7942,9 +8024,13 @@ function openTrailer(tr, it) {
     wl.style.display = '';
     wl.classList.toggle('on', !!(S.watchlistMap && S.watchlistMap[S.trailerItem.key]));
     wl.querySelector('span').textContent = wl.classList.contains('on') ? 'On watchlist' : 'Watchlist';
+    wl.title = wl.classList.contains('on') ? 'Remove from watchlist' : 'Add to watchlist';
+    wl.setAttribute('aria-label', wl.title);
   } else wl.style.display = 'none';
   $('trailer').classList.add('open');
+  requestAnimationFrame(() => focusTrailerControl(0));
 }
+$('trailerPlay').addEventListener('click', toggleTrailerPlay);
 $('trailerWl').addEventListener('click', async () => {
   const it = S.trailerItem; if (!it) return;
   const on = !(S.watchlistMap && S.watchlistMap[it.key]);
@@ -7952,10 +8038,21 @@ $('trailerWl').addEventListener('click', async () => {
   if (on) S.watchlistMap[it.key] = { meta: wlMeta(it) }; else delete S.watchlistMap[it.key];
   $('trailerWl').classList.toggle('on', on);
   $('trailerWl').querySelector('span').textContent = on ? 'On watchlist' : 'Watchlist';
-  try { await api('/api/watchlist', { method: 'POST', body: { key: it.key, on, meta: wlMeta(it) } }); toast(on ? `“${it.title}” added to watchlist` : 'Removed from watchlist'); }
+  $('trailerWl').title = on ? 'Remove from watchlist' : 'Add to watchlist';
+  $('trailerWl').setAttribute('aria-label', $('trailerWl').title);
+  try { await api('/api/watchlist', { method: 'POST', body: { key: it.key, on, meta: wlMeta(it) } }); toast(on ? `"${it.title}" added to watchlist` : 'Removed from watchlist'); }
   catch (e) { toast(e.message); }
 });
-function closeTrailer() { $('trailer').classList.remove('open'); $('trailerBox').innerHTML = ''; }
+function closeTrailer() {
+  $('trailer').classList.remove('open', 'loaded');
+  $('trailer').setAttribute('aria-hidden', 'true');
+  $('trailerBox').innerHTML = '';
+  S.trailerItem = null;
+  S.trailerPaused = false;
+  const ret = S.trailerReturnEl && document.contains(S.trailerReturnEl) ? S.trailerReturnEl : null;
+  S.trailerReturnEl = null;
+  if (ret) requestAnimationFrame(() => applyFocus(ret, false));
+}
 $('trailerClose').addEventListener('click', closeTrailer);
 $('trailer').addEventListener('click', (e) => { if (e.target.id === 'trailer') closeTrailer(); });
 
@@ -11614,7 +11711,7 @@ $('iptvRefresh').addEventListener('click', async () => {
     const r = await api('/api/iptv/refresh', { method: 'POST', body: { force: true } });
     clearLiveClientCaches({ channels: true });
     renderIptvSyncStatus(r.status || {});
-    toast('Live TV refresh complete');
+    toast(r.result && r.result.skipped === 'running' ? 'Live TV refresh already running' : 'Live TV refresh complete');
     refreshSettings();
   } catch (e) {
     $('iptvSyncStatus').textContent = 'Refresh failed: ' + e.message;
@@ -12220,6 +12317,13 @@ function collapseStaleRail() {
   if (S.zone === 'rail' && $('rail').querySelector('.focus')) return;
   leaveRail();
 }
+function visibleRailButtons() {
+  return [...document.querySelectorAll('.railBtn')].filter((b) => {
+    if (!b || b.disabled) return false;
+    const cs = getComputedStyle(b);
+    return cs.display !== 'none' && cs.visibility !== 'hidden' && b.getClientRects().length > 0;
+  });
+}
 function railPreviewAction(btn) {
   if (!btn) return null;
   const nav = btn.dataset.nav;
@@ -12247,7 +12351,7 @@ function railPreviewAction(btn) {
   return null;
 }
 function focusRail(i, opts = {}) {
-  const btns = [...document.querySelectorAll('.railBtn')].filter((b) => b.style.display !== 'none');
+  const btns = visibleRailButtons();
   S.zone = 'rail'; S.railIdx = Math.max(0, Math.min(btns.length - 1, i));
   $('rail').classList.add('expanded'); // D-pad has no hover — show the labels while we're here
   document.body.classList.add('railOpen');
@@ -12268,7 +12372,7 @@ function focusRail(i, opts = {}) {
 // in the default menu order, so blindly focusing slot 0 "started from search again" every time.
 function enterRail() {
   blurTextEntry();
-  const btns = [...document.querySelectorAll('.railBtn')].filter((b) => b.style.display !== 'none');
+  const btns = visibleRailButtons();
   const i = btns.findIndex((b) => b.classList.contains('active'));
   focusRail(i >= 0 ? i : (S.railIdx || 0), { suppressPreview: ['detail', 'person'].includes(S.view) });
 }
@@ -12436,22 +12540,30 @@ document.addEventListener('keydown', (e) => {
   if (openGate) { e.preventDefault(); dpadCycle(openGate, k); return; }
   e.preventDefault();
   if (/^Media(PlayPause|Play|Pause|Stop|TrackNext|TrackPrevious|NextTrack|PreviousTrack)$/.test(k)) {
+    if ($('trailer').classList.contains('open')) {
+      if (k === 'MediaStop') return closeTrailer();
+      if (k === 'MediaPlay') return setTrailerPaused(false, true);
+      if (k === 'MediaPause') return setTrailerPaused(true, true);
+      return toggleTrailerPlay();
+    }
     return musicTransport(k === 'MediaPlay' ? 'play'
       : k === 'MediaPause' ? 'pause'
         : k === 'MediaStop' ? 'stop'
           : /Next/.test(k) ? 'next'
             : /Previous/.test(k) ? 'prev' : 'toggle');
   }
-  if (k === ' ' && S.view !== 'player' && S.musicCur) return musicToggle();
+  if (k === ' ' && !$('trailer').classList.contains('open') && S.view !== 'player' && S.musicCur) return musicToggle();
 
   if ($('trailer').classList.contains('open')) {
     if (k === 'Escape' || k === 'Backspace') return closeTrailer();
-    // Remote access to "Add to watchlist": any arrow highlights the button, OK presses it.
-    const wl = $('trailerWl');
-    if (wl.style.display !== 'none') {
-      if (k === 'Enter' && !e.repeat) { wl.classList.contains('focus') ? wl.click() : applyFocus(wl, false); return; }
-      if (k.startsWith('Arrow')) return applyFocus(wl, false);
-    }
+    if (k === ' ' && !e.repeat) return toggleTrailerPlay();
+    const controls = trailerControls();
+    if (!controls.length) return;
+    let i = controls.findIndex((el) => el.classList.contains('focus'));
+    if (i === -1) i = Math.max(0, Math.min(controls.length - 1, S.trailerCtlIdx || 0));
+    if (k === 'ArrowRight' || k === 'ArrowDown') return focusTrailerControl(i + 1);
+    if (k === 'ArrowLeft' || k === 'ArrowUp') return focusTrailerControl(i - 1);
+    if (k === 'Enter' && !e.repeat) return controls[i].click();
     return;
   }
   if ($('cwMenu').classList.contains('open')) {
@@ -12550,7 +12662,7 @@ document.addEventListener('keydown', (e) => {
   if (S.zone === 'rail' && S.view !== 'player') {
     if (k === 'ArrowUp') return focusRail(S.railIdx - 1);
     if (k === 'ArrowDown') {
-      const btns = [...document.querySelectorAll('.railBtn')].filter((b) => b.style.display !== 'none');
+      const btns = visibleRailButtons();
       if (S.railIdx >= btns.length - 1 && focusMusicBar()) return;
       return focusRail(S.railIdx + 1);
     }
@@ -13129,7 +13241,7 @@ document.addEventListener('focusout', () => setTimeout(() => {
   collapseStaleRail();
 }, 0));
 function focusRailEnter() {
-  const btns = [...document.querySelectorAll('.railBtn')].filter((b) => b.style.display !== 'none');
+  const btns = visibleRailButtons();
   const btn = btns[S.railIdx];
   if (!btn) return;
   const nav = btn.dataset.nav;
