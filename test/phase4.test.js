@@ -232,6 +232,22 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Continue Watching cards should carry the saved quality rank from watch state');
   assert.match(ui, /qualityRank:\s*qualityRankForItem\(p\.item\)/,
     'watch progress saves the current quality rank for future resumes');
+  assert.match(ui, /function continueWatchingIdentity\(it\) \{[\s\S]+\^tmdb:tv:\(\\d\+\):s\\d\+e\\d\+\$[\s\S]+return `tv:\$\{m\[1\]\}`[\s\S]+\^tmdb:movie:\(\\d\+\)\$[\s\S]+return `movie:\$\{m\[1\]\}`/,
+    'Continue Watching should canonicalize movies and all episodes of a show before row rendering');
+  assert.match(ui, /function mergeContinueWatchingItem\(a, b\) \{[\s\S]+preferContinueWatchingItem\(a, b\)[\s\S]+normalizeQualityRank\(keep\.qualityRank\)[\s\S]+merged\._cwSortAt = Math\.max/,
+    'Continue Watching canonical merges should prefer active/recent cards while preserving quality');
+  assert.match(ui, /function buildCwItems\(cw\) \{[\s\S]+const seen = new Set\(items\.map\(\(it\) => continueWatchingIdentity\(it\) \|\| it\.key\)\)[\s\S]+return dedupeContinueWatchingItems\(items\)\.sort\(compareContinueWatchingItems\);/,
+    'Continue Watching should dedupe next-up and in-progress cards by canonical identity');
+  assert.match(ui, /function nextEpisodeBumps\(cw, cwItems\) \{[\s\S]+continueWatchingIdentity\(it\) === `tv:\$\{id\}`/,
+    'local next-episode bumps should not add a second card for a show already in Continue Watching');
+  assert.match(ui, /if \(!opts\.catalogOnly && !opts\.watchReady && !hasFreshWatch && !opts\.preserveFocus\) \{/,
+    'Continue Watching row actions should not publish an empty placeholder row while preserving focus');
+  assert.match(ui, /async function cwOp\(it, body, msg, opts = \{\}\) \{[\s\S]+if \(body\.remove\) removeWatchCacheKey\(it\.key\);[\s\S]+loadRows\(\{ preserveFocus: !!snap, focusSnapshot: snap, watchReady: true \}\);[\s\S]+loadWatchState\(true\)/,
+    'Continue Watching remove/mark actions should update local cache, keep focus, then refresh quietly');
+  assert.match(ui, /function epItemOf\(show, season, ep\) \{[\s\S]+qualityRank: qualityRankForItem\(show\)[\s\S]+function epTarget\(show, sNum, eNum, resume\) \{[\s\S]+qualityRank: qualityRankForItem\(show\)/,
+    'episode targets created from details should inherit the current show quality preference');
+  assert.match(ui, /async function prepPlayerSeasonEpisodes\(it\) \{[\s\S]+const inheritedQuality = qualityRankForItem\(it\);[\s\S]+const item = inheritedQuality \? \{ \.\.\.base, qualityRank: inheritedQuality \} : base;[\s\S]+async function prepNextEpisode\(it\) \{[\s\S]+const inheritedQuality = qualityRankForItem\(it\);[\s\S]+const item = inheritedQuality \? \{ \.\.\.base, qualityRank: inheritedQuality \} : base;/,
+    'player episode strip and Up Next should continue the same 4K/1080p class');
   assert.match(ui, /async function saveWatch\(final\) \{[\s\S]+const pos = currentTime\(\);[\s\S]+if \(!final && Math\.abs\(pos - p\.lastSaved\) < 5\) return;[\s\S]+key: p\.item\.key, position: Math\.floor\(pos\), duration: Math\.floor\(d \|\| 0\),[\s\S]+profile: S\.profile \? S\.profile\.id : undefined,[\s\S]+upsertWatchCache\(\{[\s\S]+position: payload\.position[\s\S]+api\('\/api\/watch', \{ method: 'POST', body: payload \}\)/,
     'watch progress should save profile-scoped position immediately into the local cache and server');
   assert.match(ui, /async function closePlayer\(opts = \{\}\) \{[\s\S]+const finalWatch = saveWatch\(true\);[\s\S]+if \(\$\(\'detail\'\)\.classList\.contains\(\'open\'\)\) \{[\s\S]+await finalWatch; await loadWatchState\(true\);[\s\S]+if \(S\.detailItem\) syncDetailButtons\(S\.detailItem\);/,
@@ -340,8 +356,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Continue Watching should publish once with ready next-up entries instead of adding them a few seconds later');
   assert.match(ui, /function compareContinueWatchingItems\(a, b\) \{[\s\S]+const byRecent = \(b\._cwSortAt \|\| 0\) - \(a\._cwSortAt \|\| 0\);[\s\S]+const byKind = \(a\._nextEp \? 1 : 0\) - \(b\._nextEp \? 1 : 0\);[\s\S]+\}/,
     'Continue Watching should sort by last watched activity before falling back to card type');
-  assert.match(ui, /function buildCwItems\(cw\) \{[\s\S]+_cwSortAt: w\.updatedAt \|\| 0[\s\S]+items\.push\(stampContinueWatchingSort\(\{ \.\.\.it \}, cw\)\);[\s\S]+items\.push\(\.\.\.nextEpisodeBumps\(cw, items\)\.map\(\(it\) => stampContinueWatchingSort\(it, cw, it\._cwSortAt\)\)\);[\s\S]+return items\.sort\(compareContinueWatchingItems\);/,
-    'Continue Watching should merge next-up cards into the row, then sort the whole row by last watched recency');
+  assert.match(ui, /function buildCwItems\(cw\) \{[\s\S]+_cwSortAt: w\.updatedAt \|\| 0[\s\S]+items\.push\(stampContinueWatchingSort\(\{ \.\.\.it \}, cw\)\);[\s\S]+items\.push\(\.\.\.nextEpisodeBumps\(cw, items\)\.map\(\(it\) => stampContinueWatchingSort\(it, cw, it\._cwSortAt\)\)\);[\s\S]+return dedupeContinueWatchingItems\(items\)\.sort\(compareContinueWatchingItems\);/,
+    'Continue Watching should merge next-up cards into the row, dedupe by canonical identity, then sort by recency');
   assert.doesNotMatch(ui, /items\.unshift\(it\)|items\.unshift\(\.\.\.nextEpisodeBumps/,
     'next-episode cards must not be unshifted ahead of in-progress Continue Watching cards');
   assert.match(ui, /const needLocalCacheRefresh = !S\.localMap && cachedLocalLibraryItemsAvailable\(\);[\s\S]+const needEnrich = needLocalCacheRefresh \|\| \(S\.serverInfo\.iptv/,
@@ -456,6 +472,20 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'watch progress should save poster art so Continue Watching is stable before and after refresh');
   assert.match(ui, /function openLocalDetail\(it\) \{[\s\S]+const resume = resumePositionForItem\(it\);[\s\S]+\$\(\'dStartOver\'\)\.style\.display = resume \? '' : 'none';[\s\S]+updateDetailPlayLabel\(resume \? \{ label: 'Resume', target: \{ \.\.\.it, resume \} \}/,
     'unmatched local library details should expose the same Resume and Start Over behavior');
+});
+
+test('preferences profile manager has TV-friendly profile icons and add action', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /const PROFILE_ICON_PATHS = \{[\s\S]+kids:[\s\S]+family:[\s\S]+adult:/,
+    'profile maturity levels should use professional inline icons');
+  assert.match(ui, /function profileLevelChip\(level\) \{[\s\S]+profileIcon\(LEVEL_ICON\[idx\]\)[\s\S]+LEVELS\[idx\]/,
+    'profile maturity chips should be generated from labels and icons, not emoji');
+  assert.match(ui, /row\.innerHTML = `\$\{profileLevelAvatar\(level\)\}[\s\S]+class="profileActions"[\s\S]+data-act="pin"/,
+    'profile settings rows should render identity, actions, and PIN as explicit D-pad targets');
+  assert.match(ui, /addForm\.className = 'pinForm addProfileForm'[\s\S]+class="profileAddBtn focusable"/,
+    'the add-profile control should use the styled TV-friendly primary button');
+  assert.doesNotMatch(ui, /LEVEL_BADGE/,
+    'profile UI should not reintroduce emoji maturity badges');
 });
 
 test('music playback stops when leaving the Music section', () => {
@@ -685,8 +715,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'screensaver brand should use a compact cropped Triboon wordmark strip');
   assert.match(ui, /<div class="ssBrand"><img src="triboon-screensaver\.png" alt="Triboon" onerror="this\.onerror=null;this\.src='triboon\.png'"><\/div>/,
     'screensaver should use the transparent tight-crop Triboon logo asset with the full wordmark as fallback');
-  assert.match(ui, /const SCREENSAVER_IDLE_MS = 60 \* 1000;[\s\S]+function canShowScreensaver\(\) \{[\s\S]+S\.nativeLivePending[\s\S]+S\.view === 'player' \|\| \$\('player'\)\.classList\.contains\('open'\)[\s\S]+\.gate\.open,#drawer\.open,#trailer\.open,#libModal\.open,#matchModal\.open,#catModal\.open,#filterMenu\.open,#cwMenu\.open,#trackMenu\.open,#musicNow\.open/,
-    'app screensaver should wait one minute and stay out of native Live TV, playback, gates, and active modal surfaces');
+  assert.match(ui, /const SCREENSAVER_IDLE_DEFAULT_SECONDS = 60;[\s\S]+const SCREENSAVER_IDLE_OPTIONS = \[0, 60, 120, 300, 600\];[\s\S]+function prefScreensaverDelayMs\(\) \{[\s\S]+return seconds > 0 \? seconds \* 1000 : 0;[\s\S]+function canShowScreensaver\(\) \{[\s\S]+S\.nativeLivePending[\s\S]+S\.view === 'player' \|\| \$\('player'\)\.classList\.contains\('open'\)[\s\S]+\.gate\.open,#drawer\.open,#trailer\.open,#libModal\.open,#matchModal\.open,#catModal\.open,#filterMenu\.open,#cwMenu\.open,#trackMenu\.open,#musicNow\.open[\s\S]+function resetScreensaverIdle\(\) \{[\s\S]+const idleMs = prefScreensaverDelayMs\(\);[\s\S]+if \(!idleMs\) return;[\s\S]+setTimeout\(showScreensaver, idleMs\);/,
+    'app screensaver should default to one minute, allow profile timing, and stay out of native Live TV, playback, gates, and active modal surfaces');
   assert.match(ui, /function wakeScreensaverForPlayerSurface\(\) \{[\s\S]+if \(S\.screensaverOn\) hideScreensaver\(true\);[\s\S]+resetScreensaverIdle\(\);[\s\S]+\}/,
     'player and PiP guide surfaces should explicitly wake the screensaver before revealing video UI');
   assert.match(ui, /const SCREENSAVER_TRENDING_TTL = 24 \* 60 \* 60 \* 1000;[\s\S]+const SCREENSAVER_TRENDING_STORE = 'triboon\.screensaver\.trending';/,
@@ -764,10 +794,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'online subtitle lookup should use the episode-aware query captured during play');
   assert.match(server, /function localMountFor\(ctx, libId, idx, caps = \{\}, playCtx = \{\}\)[\s\S]+const q = String\(playCtx\.q \|\| found\.item\.q \|\| found\.item\.title \|\| name\)[\s\S]+const season = playCtx\.season \?\? found\.item\.s[\s\S]+const ep = playCtx\.ep \?\? playCtx\.episode \?\? found\.item\.e[\s\S]+vf\._subQuery = episodeSubtitleQuery\(vf\._q, season, ep\)/,
     'local library mounts should preserve episode-aware subtitle queries for Wyzie');
-  assert.match(ui, /function nativeVideoSubtitleRel\(p\) \{[\s\S]+Only explicit per-title choices turn on[\s\S]+if \(info && !info\.variant\) return \{ blocked: false, rel: bestSubtitleVariantRel\(info\.lang\) \|\| '' \};[\s\S]+return \{ blocked: false, rel: saved \};[\s\S]+return \{ blocked: false, rel: '' \};[\s\S]+\}/,
-    'native playback should only auto-enable concrete saved subtitle versions on start');
-  assert.doesNotMatch(ui, /function applyTrackPrefs\(\) \{[\s\S]+setSubtitle\('os:' \+ osLang\(wantS\)\)/,
-    'web playback should keep profile subtitle language as a CC-menu hint, not auto-start captions');
+  assert.match(ui, /function nativeVideoSubtitleRel\(p\) \{[\s\S]+Explicit per-title choices win[\s\S]+if \(info && !info\.variant\) return \{ blocked: false, rel: bestSubtitleVariantRel\(info\.lang\) \|\| saved \};[\s\S]+const autoRel = autoSubtitleRelFor\(p\);[\s\S]+return \{ blocked: false, rel: bestSubtitleVariantRel\(info\.lang\) \|\| autoRel \};[\s\S]+\}/,
+    'native playback should use saved subtitle choices first, then profile auto-subtitle mode');
+  assert.match(ui, /function applyTrackPrefs\(\) \{[\s\S]+const savedSub = loadSubChoice\(\);[\s\S]+if \(\(!savedSub \|\| \(savedSub === 'off' && prefSubtitleMode\(\) === 'always'\)\) && p\.subTrack == null\) \{[\s\S]+const autoRel = autoSubtitleRelFor\(p\);[\s\S]+if \(autoRel\) setSubtitle\(autoRel\);/,
+    'web playback should auto-start the profile subtitle language only when subtitle mode is always');
   assert.match(ui, /window\.__tvNativeSubtitleSelect = \(rel, pos, dur\) => \{[\s\S]+saveSubChoice\(rel, subtitleDisplayName\(rel\)\)[\s\S]+p\.usingNative = true;[\s\S]+\};/,
     'native subtitle row selection should persist the choice without restarting ExoPlayer');
   assert.doesNotMatch(ui, /window\.__tvNativeSubtitleSelect = \(rel, pos, dur\) => \{[\s\S]+tryNativeVideoPlayer\(kind, at\)/,
@@ -842,8 +872,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'per-title subtitle choices should remember the friendly version label');
   assert.doesNotMatch(ui, /mkRow\(`Wyzie |return `Wyzie |Wyzie \u00b7 [^`'"]*Version/,
     'player subtitle labels should not show provider branding');
-  assert.match(ui, /if \(saved === 'off'\) return \{ blocked: false, rel: '' \}/,
-    'native subtitles should respect explicit per-title Off choices');
+  assert.match(ui, /if \(saved === 'off' && prefSubtitleMode\(\) !== 'always'\) return \{ blocked: false, rel: '' \}/,
+    'native subtitles should respect explicit per-title Off choices unless the profile is set to always show subtitles');
   assert.match(ui, /function activeSubtitleCues\(tt\) \{[\s\S]+tt\.activeCues[\s\S]+tt\.cues[\s\S]+\$\(\'video\'\)[\s\S]+v\.currentTime[\s\S]+c\.startTime[\s\S]+c\.endTime[\s\S]+\}/,
     'web subtitle rendering should fall back to scanning loaded cues when activeCues is empty');
   assert.match(ui, /function renderSubCues\(\) \{[\s\S]+const active = activeSubtitleCues\(tt\);[\s\S]+for \(const c of active\.slice\(-3\)\)/,

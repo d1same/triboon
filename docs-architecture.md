@@ -85,6 +85,7 @@ flowchart LR
 | Subtitles | `server/opensubs.js`, `server/index.js`, `web/index.html`, `MainActivity.java` | Wyzie search/download, release/file hints, WebVTT, web/native display timelines. |
 | Local libraries | `server/index.js`, `web/index.html` | Folder scan, bounded library pages, local playback, local artwork. |
 | Live TV | `server/index.js`, `web/index.html`, `MainActivity.java` | Source-scoped M3U/Xtream/XMLTV, web remux path, Android native Exo path. |
+| Continue Watching | `docs-continue-watching.md`, `server/index.js`, `web/index.html` | Canonical movie/show identity, resume state, quality carry-forward, next-up, and D-pad focus after row actions. |
 | Android shell | `android/app/src/main/java/app/triboon/tv/MainActivity.java` | WebView bridge, D-pad/back handling, native video/Live TV, PiP guide recovery. |
 
 ## Press Play Pipeline
@@ -117,6 +118,9 @@ Rules that must not drift:
 - Android capability claims come from the native bridge, not WebView guesses.
 - After ExoPlayer reaches READY, normal buffering must not remount or restart
   a movie from the beginning.
+- Continue Watching follows `docs-continue-watching.md`: one canonical Home card
+  per movie/show, active progress beats next-up, and the saved 4K/1080p source
+  class carries into remaining TV episodes.
 
 ## Streaming Performance / Multi-User Capacity
 

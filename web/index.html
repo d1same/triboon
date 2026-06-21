@@ -236,12 +236,20 @@ body.tv:not(.railOpen) #rail:not(.expanded) .railBtn .del{opacity:0!important}
 .gateCard .alt{margin-top:16px;text-align:center;font-size:13px;color:var(--muted)}
 .gateCard .alt button{color:var(--amber)}
 #qcCode{font:700 40px "JetBrains Mono";letter-spacing:.3em;text-align:center;background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent;margin:18px 0 6px}
-.profCard{display:flex;flex-direction:column;align-items:center;gap:12px;background:none}
-.profCard .av{width:128px;height:128px;border-radius:22px;background:var(--grad);display:grid;place-items:center;font:800 46px "Sora";color:#160a04;transition:transform .15s,box-shadow .15s}
-.profCard.add .av{background:rgba(34,25,52,.7);border:2px dashed var(--line);color:var(--muted);font-weight:400}
-.profCard.kid .av{background:linear-gradient(135deg,#46c8e6,#7CE6A0)}
-.profCard:hover .av,.profCard.focus .av{transform:scale(1.06);box-shadow:0 0 0 3px var(--coral)}
-.profCard .pn{font:600 16px "Sora"}
+.profCard{position:relative;width:150px;display:flex;flex-direction:column;align-items:center;gap:10px;background:none;color:var(--text)}
+.profCard .av{width:128px;height:128px;border-radius:24px;background:linear-gradient(145deg,rgba(34,25,52,.92),rgba(11,8,18,.96));
+  border:1px solid rgba(243,239,247,.11);display:grid;place-items:center;color:var(--amber);
+  transition:transform .15s,box-shadow .15s,border-color .15s;background-clip:padding-box}
+.profCard .av svg{width:58px;height:58px;stroke-width:1.65}
+.profCard .av.lvl0{color:#7CE6A0;background:linear-gradient(145deg,rgba(26,72,62,.86),rgba(10,26,26,.96))}
+.profCard .av.lvl1{color:#78C7FF;background:linear-gradient(145deg,rgba(30,55,83,.86),rgba(11,17,31,.96))}
+.profCard .av.lvl2{color:#FFC65C;background:linear-gradient(145deg,rgba(82,57,24,.82),rgba(28,18,12,.96))}
+.profCard .av.lvl3{color:#F3EFF7;background:linear-gradient(145deg,rgba(72,42,88,.86),rgba(18,11,26,.96))}
+.profCard.add .av{background:rgba(34,25,52,.7);border:1.5px dashed rgba(243,239,247,.2);color:var(--muted)}
+.profCard:hover .av,.profCard.focus .av{transform:scale(1.05);border-color:rgba(251,139,60,.62);box-shadow:0 0 0 3px rgba(251,139,60,.44),0 18px 46px rgba(0,0,0,.36)}
+.profCard .pn{font:750 15px "Sora";max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.profCard .profileLevelChip{font-size:10px;padding:5px 8px}
+.profCard .profileCardSub{font:700 10px "JetBrains Mono";letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
 .profCard.focusable::before{display:none}
 
 /* ---------- home ---------- */
@@ -589,14 +597,18 @@ body.screensaverOn{cursor:none}
 
 /* ---------- settings ---------- */
 #settings,#prefs{position:fixed;inset:0;z-index:8;display:none;padding:50px 60px 60px 140px;overflow-y:auto}
-#settings.open,#prefs.open{display:block}
+#settings.open,#prefs.open{display:grid;grid-template-columns:minmax(210px,260px) minmax(0,1fr);gap:18px 38px;align-content:start}
 #settings h1,#prefs h1{font:800 34px "Sora";margin-bottom:6px}
 #settings .sub,#prefs .sub{color:var(--muted);margin-bottom:22px}
-#setTabs,#prefTabs{display:flex;gap:8px;margin-bottom:26px;flex-wrap:wrap}
-#setTabs button,#prefTabs button{background:rgba(22,16,32,.88);border:1px solid var(--line);border-radius:999px;color:var(--muted);
-  font:600 13px "Albert Sans";padding:10px 18px;cursor:pointer;transition:all .15s}
-#setTabs button:hover,#prefTabs button:hover{color:var(--text)}
-#setTabs button.on,#prefTabs button.on{color:var(--ink);background:var(--gold);border-color:transparent;font-weight:700}
+#settings h1,#settings>.sub,#prefs h1,#prefs>.sub{grid-column:1/-1}
+#setTabs,#prefTabs{grid-column:1;position:sticky;top:18px;display:flex;flex-direction:column;gap:8px;margin:0;align-self:start}
+#setTabs button,#prefTabs button{display:grid;grid-template-columns:32px minmax(0,1fr);align-items:center;gap:12px;width:100%;
+  min-height:48px;text-align:left;background:rgba(22,16,32,.62);border:1px solid rgba(243,239,247,.07);
+  border-radius:14px;color:var(--muted);font:700 13px "Albert Sans";padding:8px 13px;cursor:pointer;transition:background .15s,border-color .15s,color .15s,box-shadow .15s}
+#setTabs button svg,#prefTabs button svg{width:20px;height:20px;color:currentColor}
+#setTabs button:hover,#prefTabs button:hover{color:var(--text);background:rgba(34,25,52,.78)}
+#setTabs button.on,#prefTabs button.on{color:var(--text);background:rgba(255,198,92,.12);border-color:rgba(255,198,92,.34);box-shadow:inset 3px 0 0 var(--amber)}
+#setTabs button.focus,#prefTabs button.focus,#setTabs button:focus,#prefTabs button:focus{outline:none;box-shadow:0 0 0 2.5px var(--coral),inset 3px 0 0 var(--amber)}
 .setGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(480px,100%),1fr));gap:18px;align-items:start;max-width:2200px} /* up to 4 columns on big screens, wraps down to 1 on phones */
 .testBtn{font:700 10px "JetBrains Mono";letter-spacing:.06em;text-transform:uppercase;padding:4px 11px;margin-left:10px;cursor:pointer;
   border:1px solid rgba(255,198,92,.45);border-radius:999px;color:var(--amber);background:rgba(255,198,92,.08);transition:background .15s,border-color .15s}
@@ -604,8 +616,9 @@ body.screensaverOn{cursor:none}
 .testBtn.ok{border-color:rgba(110,231,160,.55);color:#6ee7a0;background:rgba(110,231,160,.1)}
 .testBtn.bad{border-color:rgba(255,141,141,.55);color:#ff8d8d;background:rgba(255,141,141,.1)}
 .setGrid[hidden]{display:none}
+#settings>.setGrid,#prefs>.setGrid{grid-column:2;grid-row:3;min-width:0}
 .setGrid .panel{max-width:none;margin-bottom:0}
-.panel{background:rgba(22,16,32,.88);border:1px solid var(--line);border-radius:18px;padding:24px;max-width:680px;margin-bottom:18px}
+.panel{background:rgba(22,16,32,.72);border:1px solid rgba(243,239,247,.075);border-radius:14px;padding:22px;max-width:680px;margin-bottom:18px}
 .panel h2{font:700 16px "Sora";margin-bottom:4px}
 .panel p{color:var(--muted);font-size:13.5px;margin-bottom:14px}
 .field{display:flex;gap:10px;margin-bottom:10px;flex-wrap:wrap}
@@ -615,7 +628,27 @@ body.screensaverOn{cursor:none}
 .kv{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--line);font-size:13.5px}
 .kv span:last-child{font-family:"JetBrains Mono";color:var(--muted);max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .hint{font:500 11px "JetBrains Mono";color:var(--muted);margin-top:10px;word-break:break-all}
+.syncGrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:2px 0 14px}
+.syncCard{min-height:70px;border:1px solid rgba(243,239,247,.075);border-radius:12px;padding:12px;background:rgba(11,8,18,.42)}
+.syncCard .k{font:800 10px "JetBrains Mono";letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
+.syncCard .v{font:800 17px "Sora";color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.syncSources{display:grid;gap:8px;margin:10px 0 14px}
+.syncSource{display:grid;grid-template-columns:minmax(130px,1.2fr) minmax(0,2fr);gap:10px;align-items:center;
+  border:1px solid rgba(243,239,247,.07);border-radius:12px;padding:10px 12px;background:rgba(22,16,32,.48)}
+.syncSource b{font:800 13px "Sora";overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.syncSource small{display:block;color:var(--muted);font:600 10px "JetBrains Mono";margin-top:3px}
+.syncSource .syncMeta{font:600 11px "JetBrains Mono";color:var(--muted);overflow-wrap:anywhere}
+.syncDot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#6ee7a0;margin-right:8px;box-shadow:0 0 16px rgba(110,231,160,.45)}
+.syncSource.warn .syncDot{background:var(--amber);box-shadow:0 0 16px rgba(255,198,92,.4)}
+.syncSource.bad .syncDot{background:#ff8d8d;box-shadow:0 0 16px rgba(255,141,141,.4)}
+@media (max-width:1100px){.syncGrid{grid-template-columns:repeat(2,minmax(0,1fr))}.syncSource{grid-template-columns:1fr}}
 .panel .btn{padding:11px 18px;font-size:14px}
+@media (max-width:900px){
+  #settings.open,#prefs.open{display:block}
+  #setTabs,#prefTabs{position:static;flex-direction:row;overflow-x:auto;scroll-padding:0 16px;margin-bottom:20px}
+  #setTabs button,#prefTabs button{width:auto;min-width:150px;grid-template-columns:24px minmax(0,1fr)}
+  #settings>.setGrid,#prefs>.setGrid{grid-column:auto;grid-row:auto}
+}
 
 /* =========================================================================
    Round 4 — push-sidebar layout, standardized covers, goldish headers,
@@ -1053,7 +1086,9 @@ body.tv #heroCredits{height:16px;margin-bottom:6px;overflow:hidden}
 .levelPick{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
 .levelPick button{padding:9px 14px;border-radius:11px;background:rgba(34,25,52,.6);border:1px solid var(--line);font:600 12.5px "Sora";color:var(--muted)}
 .levelPick button.sel{background:var(--grad);color:#160a04;border-color:transparent}
-.profCard .lock{position:absolute;bottom:42px;right:6px;font-size:14px}
+.profCard .lock{position:absolute;top:8px;right:8px;width:28px;height:28px;border-radius:999px;display:grid;place-items:center;
+  background:rgba(11,8,18,.78);border:1px solid rgba(243,239,247,.16);color:var(--amber);box-shadow:0 8px 22px rgba(0,0,0,.28)}
+.profCard .lock svg{width:14px;height:14px}
 
 /* PIN gate. */
 #gatePin .gateCard{text-align:center}
@@ -1079,13 +1114,45 @@ body.tv #heroCredits{height:16px;margin-bottom:6px;overflow:hidden}
 .swatch:hover{transform:scale(1.1)}
 .swatch.sel{border-color:#fff;box-shadow:0 0 0 3px rgba(255,255,255,.25)}
 /* Profile PIN rows */
-.pinRow{display:flex;align-items:center;gap:10px;padding:9px 4px;border-bottom:1px solid var(--line);flex-wrap:wrap}
-.pinRow .pn{flex:1;font:600 13.5px "Albert Sans"}
-.pinRow .lockTag{font:500 10px "JetBrains Mono";color:var(--amber)}
-.pinRow button{background:rgba(34,25,52,.8);border:1px solid var(--line);border-radius:10px;padding:7px 12px;font:600 12px "Sora";color:var(--text)}
-.pinForm{width:100%;display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
-.pinForm input{flex:1;min-width:110px;background:rgba(11,8,18,.7);border:1px solid var(--line);border-radius:10px;padding:9px 11px;color:var(--text);font:500 12.5px "JetBrains Mono";outline:none}
-.pinForm input:focus{border-color:var(--magenta)}
+#prefPins{display:flex;flex-direction:column;gap:10px}
+.profileSvg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.pinRow{display:grid;grid-template-columns:48px minmax(0,1fr) auto;align-items:center;gap:12px;padding:12px;
+  border:1px solid rgba(243,239,247,.08);border-radius:14px;background:rgba(11,8,18,.34)}
+.profileLevelIcon{width:48px;height:48px;border-radius:14px;display:grid;place-items:center;border:1px solid rgba(243,239,247,.09);
+  background:rgba(34,25,52,.65);color:var(--amber)}
+.profileLevelIcon svg{width:25px;height:25px}
+.profileLevelIcon.lvl0{color:#7CE6A0;background:rgba(26,72,62,.46)}
+.profileLevelIcon.lvl1{color:#78C7FF;background:rgba(30,55,83,.46)}
+.profileLevelIcon.lvl2{color:#FFC65C;background:rgba(82,57,24,.44)}
+.profileLevelIcon.lvl3{color:#F3EFF7;background:rgba(72,42,88,.44)}
+.profileIdentity{min-width:0;display:flex;flex-direction:column;gap:6px}
+.profileName{font:800 14px "Sora";white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.profileMeta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.profileLevelChip,.lockTag{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:5px 8px;
+  border:1px solid rgba(243,239,247,.09);background:rgba(34,25,52,.48);font:800 10px "JetBrains Mono";letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.profileLevelChip svg,.lockTag svg{width:13px;height:13px}
+.profileLevelChip.lvl0{color:#7CE6A0;border-color:rgba(124,230,160,.22);background:rgba(124,230,160,.08)}
+.profileLevelChip.lvl1{color:#78C7FF;border-color:rgba(120,199,255,.22);background:rgba(120,199,255,.08)}
+.profileLevelChip.lvl2{color:#FFC65C;border-color:rgba(255,198,92,.24);background:rgba(255,198,92,.08)}
+.profileLevelChip.lvl3{color:#F3EFF7;border-color:rgba(243,239,247,.18);background:rgba(243,239,247,.06)}
+.lockTag{color:var(--amber);border-color:rgba(255,198,92,.22);background:rgba(255,198,92,.07)}
+.profileActions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.profileAction{min-height:38px;display:inline-flex;align-items:center;gap:7px;background:rgba(34,25,52,.78);border:1px solid rgba(243,239,247,.09);
+  border-radius:10px;padding:8px 12px;font:800 12px "Sora";color:var(--text)}
+.profileAction:hover,.profileAction.focus{background:rgba(52,39,75,.9);border-color:rgba(251,139,60,.42)}
+.profileAction.danger{color:#ff9b9b}
+.profileAction.primary{background:var(--gold);border:0;color:#160a04}
+.pinForm{width:100%;grid-column:1/-1;display:flex;gap:8px;margin-top:2px;flex-wrap:wrap}
+.pinForm input,.pinForm select{flex:1;min-width:130px;background:rgba(11,8,18,.7);border:1px solid var(--line);border-radius:10px;
+  padding:10px 12px;color:var(--text);font:650 12.5px "JetBrains Mono";outline:none}
+.pinForm input:focus,.pinForm select:focus{border-color:var(--magenta)}
+.pinForm .profileAction{min-height:40px}
+.addProfileForm{align-items:center;padding:12px;border:1px dashed rgba(243,239,247,.16);border-radius:14px;background:rgba(11,8,18,.28)}
+.addProfileForm input{min-height:42px}
+.profileAddBtn{min-height:42px;display:inline-flex;align-items:center;justify-content:center;gap:8px;border-radius:11px;background:linear-gradient(135deg,#FFC65C,#FB8B3C);color:#160a04;border:0;
+  padding:10px 16px;font:900 12.5px "Sora";white-space:nowrap}
+.profileAddBtn svg{width:17px;height:17px}
+@media (max-width:760px){.pinRow{grid-template-columns:42px minmax(0,1fr)}.profileActions{grid-column:1/-1;justify-content:flex-start}.profileLevelIcon{width:42px;height:42px}}
 .btn.primary,.chip.zap,#upNext .un-play{background:var(--gold)!important;color:#160a04}
 .qToggle button.qon{background:var(--gold)}
 .epCard .pbtn{background:var(--gold)}
@@ -1150,6 +1217,14 @@ body.tv #heroCredits{height:16px;margin-bottom:6px;overflow:hidden}
 /* Live TV: search bar + collapsible group sections (5000-channel playlists stay instant). */
 #chBar,#chBody{grid-column:1/-1}
 #chBar{margin-bottom:6px}
+.liveWarn{grid-column:1/-1;margin:0 0 12px;padding:12px 14px;border:1px solid rgba(255,198,92,.18);
+  border-radius:14px;background:rgba(255,198,92,.06);color:rgba(255,231,176,.9);font:700 12px "Albert Sans"}
+.liveEmpty{max-width:760px;margin:8vh auto 0;text-align:left;color:var(--text);font:600 15px "Albert Sans";line-height:1.5}
+.liveDiag{margin-top:12px;display:grid;gap:8px}
+.liveDiagRow{display:grid;grid-template-columns:minmax(120px,190px) minmax(0,1fr);gap:10px;align-items:start;
+  padding:10px 12px;border-radius:12px;background:rgba(22,16,32,.72);border:1px solid rgba(243,239,247,.08)}
+.liveDiagRow b{font:800 12px "Sora";color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.liveDiagRow span{font:600 12px "JetBrains Mono";color:var(--muted);overflow-wrap:anywhere}
 /* Live TV category chips/list: chips for channel browsing, a left rail for guide mode. */
 #chCats{display:flex;gap:8px;overflow-x:auto;padding:8px 2px 14px;flex-wrap:nowrap;scroll-padding:0 60px}
 .lcat{flex:none;padding:9px 15px;border-radius:999px;background:rgba(34,25,52,.55);border:1px solid var(--line);
@@ -1451,20 +1526,23 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
 #castRow{margin-left:calc(0px - var(--gut));padding-left:calc(var(--gut) + 4px)}
 #epGrid,#seasonGrid{margin-left:calc(0px - var(--gut));padding-left:calc(var(--gut) + 8px)}
 
-/* ============ Settings & Preferences — flat reskin ============ */
-/* No boxed cards, no table chrome, no backdrop noise: amber mono section labels (the same
-   voice as the row titles), controls standing directly on the ink. */
-#settings .panel,#prefs .panel{background:none;border:0;border-radius:0;padding:2px 0 6px}
-#settings .panel h2,#prefs .panel h2{font:700 12px "JetBrains Mono";letter-spacing:.18em;text-transform:uppercase;color:var(--amber);margin-bottom:7px}
-#settings .panel p,#prefs .panel p{font-size:13px;max-width:560px}
-#settings .kv,#prefs .kv{border-bottom:0;padding:7px 0}
-/* D-pad walks these forms with NATIVE focus — make it visible on-brand. */
+/* ============ Settings & Preferences ============ */
+#settings .panel,#prefs .panel{box-shadow:0 18px 42px rgba(0,0,0,.16)}
+#settings .panel h2,#prefs .panel h2{font:800 17px "Sora";letter-spacing:0;color:var(--text);margin-bottom:6px}
+#settings .panel p,#prefs .panel p{font-size:13px;max-width:680px;line-height:1.5}
+#settings .kv,#prefs .kv{border-bottom:1px solid rgba(243,239,247,.06);padding:9px 0}
+#settings .setGrid,#prefs .setGrid{grid-template-columns:minmax(0,920px);gap:18px;max-width:980px}
+body:not(.tv) #settings .setGrid[data-stab="sources"],
+body:not(.tv) #settings .setGrid[data-stab="catalog"],
+body:not(.tv) #settings .setGrid[data-stab="rules"],
+body:not(.tv) #settings .setGrid[data-stab="display"]{grid-template-columns:repeat(2,minmax(0,1fr));max-width:1280px}
+#settings .field select,#prefs .field select,#settings select,#prefs select{
+  background:rgba(11,8,18,.72);border:1px solid var(--line);border-radius:12px;
+  padding:12px 13px;color:var(--text);font:700 13px "Albert Sans";outline:none}
 #settings button:focus,#prefs button:focus,#settings a:focus,#prefs a:focus,
-#settings input[type=checkbox]:focus,#prefs input[type=checkbox]:focus{outline:none;box-shadow:0 0 0 2.5px var(--coral)}
-/* Preferences read as ONE calm column; Settings (denser, admin) as exactly two. */
-#prefs .setGrid{grid-template-columns:1fr;max-width:720px;gap:26px}
-#settings .setGrid{grid-template-columns:repeat(2,minmax(0,1fr));gap:26px 70px;max-width:1500px}
-@media (max-width:1000px){#settings .setGrid{grid-template-columns:1fr}}
+#settings input:focus,#prefs input:focus,#settings textarea:focus,#prefs textarea:focus,
+#settings select:focus,#prefs select:focus,#settings input[type=checkbox]:focus,#prefs input[type=checkbox]:focus{
+  outline:none;box-shadow:0 0 0 2.5px var(--coral)}
 
 /* ============ Music (YouTube Music) ============ */
 #music{position:fixed;inset:0;z-index:8;display:none;flex-direction:column;
@@ -2010,11 +2088,12 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
   <div class="sub">Your personal setup — display, menu, Live TV and profiles. Saved per device or per account where it makes sense.</div>
 
   <div id="prefTabs">
-    <button data-tab="display" class="on focusable">Display</button>
-    <button data-tab="menu" class="focusable">Menu</button>
-    <button data-tab="livetv" class="focusable" id="prefTabLive">Live TV</button>
-    <button data-tab="profiles" class="focusable">Profiles &amp; PINs</button>
-    <button data-tab="connect" class="focusable">Connections</button>
+    <button data-tab="display" class="on focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="12" rx="2"/><path d="M8 21h8M12 17v4"/></svg><span>Display</span></button>
+    <button data-tab="playback" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M10 8l6 4-6 4V8Z" fill="currentColor" stroke="none"/></svg><span>Playback</span></button>
+    <button data-tab="menu" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 7h14M5 12h14M5 17h14"/></svg><span>Menu</span></button>
+    <button data-tab="livetv" class="focusable" id="prefTabLive"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="6" width="16" height="12" rx="2"/><path d="M9 3l3 3 3-3"/></svg><span>Live TV</span></button>
+    <button data-tab="profiles" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="9" r="3"/><path d="M4 20c.8-3 2.5-5 5-5s4.2 2 5 5"/><path d="M17 10v4M15 12h4"/></svg><span>Profiles &amp; PINs</span></button>
+    <button data-tab="connect" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12a3 3 0 0 1 3-3h3a3 3 0 1 1 0 6h-2"/><path d="M15 12a3 3 0 0 1-3 3H9a3 3 0 1 1 0-6h2"/></svg><span>Connections</span></button>
   </div>
 
   <div class="setGrid" data-ptab="display">
@@ -2028,11 +2107,25 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
       <p>Accent colors for buttons, focus rings and badges.</p>
       <div id="themePick"></div>
     </div>
+    <div class="panel"><h2>Screensaver</h2>
+      <p>When Triboon is idle outside playback, show the artwork screensaver after this delay.</p>
+      <div class="sizePick" id="prefScreensaverDelay">
+        <button data-ssv="60">1 min</button><button data-ssv="120">2 min</button><button data-ssv="300">5 min</button><button data-ssv="600">10 min</button><button data-ssv="0">Off</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="setGrid" data-ptab="playback" hidden>
     <div class="panel"><h2>Playback languages</h2>
       <p>When a file carries your language, it's selected automatically (audio picks the best
          surround layout available in that language).</p>
       <div class="field"><select id="prefALang" style="flex:1"></select></div>
       <div class="field"><select id="prefSLang" style="flex:1"></select></div>
+      <p style="margin-top:14px">Subtitle startup behavior.</p>
+      <div class="sizePick" id="prefSubtitleMode">
+        <button data-submode="manual">Choose per title</button><button data-submode="always">Always show subtitles</button>
+      </div>
+      <div class="hint">Always uses the selected subtitle language, or English when no subtitle language is selected.</div>
     </div>
     <div class="panel"><h2>Playback</h2>
       <p>Auto-play starts the next episode after a 10-second countdown — off shows the
@@ -2177,10 +2270,13 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
   <div class="sub">Admin-only. Users of this server never see this screen.</div>
 
   <div id="setTabs">
-    <button data-tab="server" class="on focusable">Server</button>
-    <button data-tab="catalog" class="focusable">Catalog &amp; Live TV</button>
-    <button data-tab="users" class="focusable">Users &amp; Devices</button>
-    <button data-tab="display" class="focusable">Display</button>
+    <button data-tab="server" class="on focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8M8 13h5"/></svg><span>Status</span></button>
+    <button data-tab="sources" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h10"/><circle cx="18" cy="17" r="2"/></svg><span>Providers</span></button>
+    <button data-tab="catalog" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="4" width="14" height="16" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/></svg><span>Catalog</span></button>
+    <button data-tab="livetv" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="6" width="16" height="12" rx="2"/><path d="M9 3l3 3 3-3"/></svg><span>Live TV</span></button>
+    <button data-tab="rules" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 5h12M6 12h12M6 19h12"/><path d="M9 5v14"/></svg><span>Libraries &amp; Rules</span></button>
+    <button data-tab="users" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3"/><path d="M4 19c.9-3.2 2.6-5 5-5s4.1 1.8 5 5"/><path d="M17 10v6M14 13h6"/></svg><span>Users &amp; Devices</span></button>
+    <button data-tab="display" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="12" rx="2"/><path d="M8 21h8M12 17v4"/></svg><span>Appearance</span></button>
   </div>
 
   <div class="setGrid" data-stab="server">
@@ -2223,7 +2319,9 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
     <button class="btn ghost" id="perfSave">Save custom</button>
     <div class="hint" id="perfStatus"></div>
   </div>
+  </div>
 
+  <div class="setGrid" data-stab="sources" hidden>
   <div class="panel"><h2>Usenet providers</h2>
     <p>Add one or more NNTP providers — extras act as failover when articles are missing.
        Each has its own connection limit. Credentials are encrypted at rest and never sent to clients.</p>
@@ -2278,7 +2376,9 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
     </div>
     <button class="btn primary" id="ixSave">Add indexer</button>
   </div>
+  </div>
 
+  <div class="setGrid" data-stab="rules" hidden>
   <div class="panel"><h2>Max release size</h2>
     <p><b>Auto</b> sets no hard limit — ranking simply prefers sizes that start fast, while
        every release stays in Sources. <b>Manual</b> HIDES releases above your GB caps from
@@ -2354,6 +2454,18 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
     <div class="field"><input id="traktSecret" type="password" placeholder="Trakt client secret"></div>
     <button class="btn primary" id="traktSave">Save Trakt app</button>
     <div class="hint" id="traktStatus"></div>
+  </div>
+  </div>
+
+  <div class="setGrid" data-stab="livetv" hidden>
+  <div class="panel"><h2>Guide sync</h2>
+    <p>Live TV loads from the server cache first. The server refreshes guides on a schedule and keeps stale data available while a refresh runs.</p>
+    <div class="syncGrid" id="iptvSyncSummary"></div>
+    <div class="syncSources" id="iptvSyncSources"></div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <button class="btn primary" id="iptvRefresh">Refresh now</button>
+    </div>
+    <div class="hint" id="iptvSyncStatus"></div>
   </div>
 
   <div class="panel"><h2>Live TV (IPTV)</h2>
@@ -2705,21 +2817,49 @@ function showGate(which) {
 
 /* ============ profiles (who's watching) ============ */
 const LEVELS = ['Kids', 'Teen', 'Family', 'Adult'];      // 0..3, filters the catalog
-const LEVEL_BADGE = ['🧒', '🧑', '👪', '🔞'];
+const LEVEL_ICON = ['kids', 'teen', 'family', 'adult'];
+const PROFILE_ICON_PATHS = {
+  kids: '<circle cx="12" cy="8.2" r="3.2"/><path d="M6.5 20c.9-3.2 2.7-4.8 5.5-4.8s4.6 1.6 5.5 4.8"/><path d="M7.2 5.8 5.5 4.1"/><path d="M16.8 5.8l1.7-1.7"/>',
+  teen: '<circle cx="12" cy="8.5" r="3.4"/><path d="M5.8 20c1-3.5 3.1-5.3 6.2-5.3s5.2 1.8 6.2 5.3"/><path d="M8 4.4c1.1-1 2.4-1.4 4-1.4s2.9.5 4 1.4"/>',
+  family: '<circle cx="9" cy="8.5" r="3"/><path d="M3.7 20c.8-3.2 2.6-4.8 5.3-4.8s4.5 1.6 5.3 4.8"/><circle cx="16.5" cy="10" r="2.5"/><path d="M14.3 16c2.7.3 4.4 1.6 5.2 4"/>',
+  adult: '<path d="M12 3.4 19 6v5.5c0 4.2-2.7 7.4-7 9.1-4.3-1.7-7-4.9-7-9.1V6l7-2.6Z"/><path d="m9 12 2 2 4-4"/>',
+  lock: '<rect x="6" y="10" width="12" height="10" rx="2"/><path d="M8.5 10V7.8a3.5 3.5 0 0 1 7 0V10"/>',
+  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5Z"/>',
+  trash: '<path d="M4 7h16"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/>',
+  key: '<circle cx="8" cy="14" r="4"/><path d="M12 14h8"/><path d="M17 14v3"/><path d="M20 14v-2"/>',
+  plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
+};
+function profileIcon(name, extraClass = '') {
+  const cls = extraClass ? ` ${extraClass}` : '';
+  return `<svg class="profileSvg${cls}" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${PROFILE_ICON_PATHS[name] || PROFILE_ICON_PATHS.adult}</svg>`;
+}
+function profileLevelIndex(level) {
+  const n = Number(level);
+  return Number.isInteger(n) && n >= 0 && n < LEVELS.length ? n : 3;
+}
+function profileLevelChip(level) {
+  const idx = profileLevelIndex(level);
+  return `<span class="profileLevelChip lvl${idx}">${profileIcon(LEVEL_ICON[idx])}<span>${esc(LEVELS[idx])}</span></span>`;
+}
+function profileLevelAvatar(level) {
+  const idx = profileLevelIndex(level);
+  return `<div class="profileLevelIcon lvl${idx}">${profileIcon(LEVEL_ICON[idx])}</div>`;
+}
 function profileInitial(name) { return (name || '?').trim()[0].toUpperCase(); }
 function showProfilePicker() {
   const grid = $('profileGrid'); grid.innerHTML = '';
   (S.user.profiles || []).forEach((pr) => {
+    const level = profileLevelIndex(pr.level);
     const c = document.createElement('button');
-    c.className = 'profCard focusable' + ((pr.level ?? 3) === 0 ? ' kid' : '');
-    c.innerHTML = `<div class="av">${esc(profileInitial(pr.name))}</div>${pr.locked ? '<span class="lock">🔒</span>' : ''}` +
-      `<div class="pn">${esc(pr.name)} ${LEVEL_BADGE[pr.level ?? 3]}</div>`;
+    c.className = 'profCard focusable';
+    c.innerHTML = `<div class="av lvl${level}">${profileIcon(LEVEL_ICON[level])}</div>${pr.locked ? `<span class="lock">${profileIcon('lock')}</span>` : ''}` +
+      `<div class="pn">${esc(pr.name)}</div>${profileLevelChip(level)}`;
     c.addEventListener('click', () => attemptProfile(pr));
     grid.appendChild(c);
   });
   const add = document.createElement('button');
   add.className = 'profCard add focusable';
-  add.innerHTML = '<div class="av">+</div><div class="pn">Add profile</div>';
+  add.innerHTML = `<div class="av">${profileIcon('plus')}</div><div class="pn">Add profile</div><div class="profileCardSub">New viewer</div>`;
   add.addEventListener('click', addProfileFlow);
   grid.appendChild(add);
   let so = $('profileSignout');
@@ -2785,7 +2925,7 @@ function selectProfile(pr) {
 // Inline add-profile editor (name + maturity level + optional PIN) via a small prompt flow.
 async function addProfileFlow() {
   const name = prompt('Profile name?'); if (!name || !name.trim()) return;
-  const lvlStr = prompt('Maturity level — 0 Kids · 1 Teen · 2 Family · 3 Adult', '2');
+  const lvlStr = prompt('Maturity level - 0 Kids, 1 Teen, 2 Family, 3 Adult', '2');
   const level = Math.max(0, Math.min(3, parseInt(lvlStr, 10)));
   let pin;
   if (confirm('Lock this profile with a 4-digit PIN (parental lock)?')) {
@@ -2931,6 +3071,15 @@ function upsertWatchCache(row) {
   S._watchRows = rows;
   S._watchAt = Date.now();
 }
+function removeWatchCacheKey(key) {
+  key = String(key || '');
+  if (!key) return;
+  S.watchMap = S.watchMap || {};
+  delete S.watchMap[key];
+  if (Array.isArray(S._watchRows)) S._watchRows = S._watchRows.filter((w) => w && w.key !== key);
+  S._watchKey = watchCacheKey();
+  S._watchAt = Date.now();
+}
 async function loadWatchState(force) {
   const key = watchCacheKey();
   if (!force && S._watchKey === key && Array.isArray(S._watchRows) && Date.now() - (S._watchAt || 0) < 10000) return S._watchRows;
@@ -2948,6 +3097,67 @@ async function loadWatchState(force) {
   }).finally(() => { S._watchJob = null; });
   return S._watchJob;
 }
+function continueWatchingCleanTitle(s) {
+  return String(s || '').toLowerCase()
+    .replace(/\s*(?:-|\u2013|\u2014)\s*S\d{1,2}E\d{1,3}.*$/i, '')
+    .replace(/\b(2160p|1080p|720p|576p|480p|4k|uhd|hdr10?|dv|dolby\s*vision|web[-.\s]?dl|webrip|bluray|brrip|remux|x26[45]|h\.?26[45]|hevc|avc)\b/gi, ' ')
+    .replace(/[._()[\]{}]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+function continueWatchingIdentity(it) {
+  if (!it) return '';
+  const key = String(it.key || '');
+  let m = /^tmdb:tv:(\d+):s\d+e\d+$/i.exec(key);
+  if (m) return `tv:${m[1]}`;
+  m = /^tmdb:tv:(\d+)$/i.exec(key);
+  if (m) return `tv:${m[1]}`;
+  m = /^tmdb:movie:(\d+)$/i.exec(key);
+  if (m) return `movie:${m[1]}`;
+  if (it.tmdbId && (it.type === 'tv' || it.type === 'episode' || it._episode)) return `tv:${it.tmdbId}`;
+  if (it.tmdbId && it.type === 'movie') return `movie:${it.tmdbId}`;
+  const raw = String(it.title || it.q || (it._local && it._local.name) || key || '');
+  const clean = continueWatchingCleanTitle(raw);
+  if (clean) {
+    const looksEpisode = it.type === 'episode' || it._episode || /\bS\d{1,2}E\d{1,3}\b/i.test(raw);
+    return `${looksEpisode ? 'tv' : (it.type || 'title')}:${clean}`;
+  }
+  return key ? `key:${key}` : '';
+}
+function preferContinueWatchingItem(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  const activeA = !a._nextEp && ((+a.resume || 0) > 30 || (+a._traktPct || 0) > 2 || (+a.progress || 0) > 0);
+  const activeB = !b._nextEp && ((+b.resume || 0) > 30 || (+b._traktPct || 0) > 2 || (+b.progress || 0) > 0);
+  if (activeA !== activeB) return activeB ? b : a;
+  if (!!a._nextEp !== !!b._nextEp) return a._nextEp ? b : a;
+  const at = +a._cwSortAt || +a.updatedAt || 0;
+  const bt = +b._cwSortAt || +b.updatedAt || 0;
+  return bt >= at ? b : a;
+}
+function mergeContinueWatchingItem(a, b) {
+  const keep = preferContinueWatchingItem(a, b);
+  const other = keep === a ? b : a;
+  if (!other) return keep;
+  const merged = { ...other, ...keep };
+  for (const f of ['poster', 'backdrop', 'overview', 'year', 'genre', 'rating', 'q', 'tmdbId', 'type', 'originalLanguage']) {
+    if ((merged[f] === undefined || merged[f] === null || merged[f] === '') && other[f]) merged[f] = other[f];
+  }
+  if (!merged._local && other._local) merged._local = other._local;
+  const keepQ = normalizeQualityRank(keep.qualityRank);
+  const otherQ = normalizeQualityRank(other.qualityRank);
+  if (keepQ || otherQ) merged.qualityRank = keepQ || otherQ;
+  merged._cwSortAt = Math.max(+a._cwSortAt || +a.updatedAt || 0, +b._cwSortAt || +b.updatedAt || 0);
+  return merged;
+}
+function dedupeContinueWatchingItems(items) {
+  const byIdentity = new Map();
+  for (const it of (items || [])) {
+    const id = continueWatchingIdentity(it) || homeItemKey(it);
+    byIdentity.set(id, byIdentity.has(id) ? mergeContinueWatchingItem(byIdentity.get(id), it) : it);
+  }
+  return [...byIdentity.values()];
+}
 // "New episode" bump: you FINISHED S02E04 and S02E05 now exists in a local library → the
 // show comes back to Continue Watching with a NEW/NEXT EPISODE tag (Plex On Deck). This is
 // how people learn a new episode landed without checking the library.
@@ -2962,7 +3172,7 @@ function nextEpisodeBumps(cw, cwItems) {
   }
   const out = [];
   for (const [id, top] of Object.entries(byShow)) {
-    if (cwItems.some((it) => String(it.key).startsWith(`tmdb:tv:${id}:`))) continue; // already showing
+    if (cwItems.some((it) => continueWatchingIdentity(it) === `tv:${id}`)) continue; // already showing this show
     const nextKey = [`tmdb:tv:${id}:s${top.s}e${top.e + 1}`, `tmdb:tv:${id}:s${top.s + 1}e1`]
       .find((k) => (S.localMap || {})[k]);
     if (!nextKey) continue;
@@ -2974,6 +3184,7 @@ function nextEpisodeBumps(cw, cwItems) {
       year: meta.year || '', genre: meta.genre || '', rating: meta.rating || '—',
       overview: meta.overview || '', tmdbId: +id, type: 'tv',
       backdrop: meta.backdrop || procBackdrop(280, 320, 7), progress: 0,
+      qualityRank: normalizeQualityRank(meta.qualityRank),
       _local: { streamUrl: loc.streamUrl, playUrl: loc.playUrl, name: loc.name }, _episode: true,
       _nextEp: true, _newEp: (loc.addedAt || 0) > (top.w.updatedAt || 0),
       updatedAt: top.w.updatedAt || 0, _cwSortAt: top.w.updatedAt || 0,
@@ -3065,16 +3276,18 @@ function buildCwItems(cw) {
     resume: w.position, _traktPct: w.traktPct || 0, _cwSortAt: w.updatedAt || 0,
   }));
   if (Array.isArray(S._homeTvNext)) {
-    const seen = new Set(items.map((it) => it.key));
+    const seen = new Set(items.map((it) => continueWatchingIdentity(it) || it.key));
     for (const it of S._homeTvNext) if (it && it.key && !seen.has(it.key)) {
+      const id = continueWatchingIdentity(it) || it.key;
+      if (seen.has(id)) continue;
       items.push(stampContinueWatchingSort({ ...it }, cw));
-      seen.add(it.key);
+      seen.add(id);
     }
   }
   if (S.localMap) {
     try { items.push(...nextEpisodeBumps(cw, items).map((it) => stampContinueWatchingSort(it, cw, it._cwSortAt))); } catch {}
   }
-  return items.sort(compareContinueWatchingItems);
+  return dedupeContinueWatchingItems(items).sort(compareContinueWatchingItems);
 }
 // Recently-added local row — ONLY from already-cached library items (no network here).
 function buildRecentlyAddedRow() {
@@ -3256,6 +3469,7 @@ function homeRowsSignature(rows) {
       it.title || '',
       it.progress ? Math.round(it.progress * 1000) : 0,
       it.resume || 0,
+      it.qualityRank || 0,
       it._nextEp ? 1 : 0,
       it._newEp ? 1 : 0,
     ].join(':')).join(','),
@@ -3286,7 +3500,7 @@ async function loadRows(opts = {}) {
   const runId = S._homeLoadRun = (S._homeLoadRun || 0) + 1;
   const key = watchCacheKey();
   const hasFreshWatch = S._watchKey === key && Array.isArray(S._watchRows) && Date.now() - (S._watchAt || 0) < 10000;
-  if (!opts.catalogOnly && !opts.watchReady && !hasFreshWatch) {
+  if (!opts.catalogOnly && !opts.watchReady && !hasFreshWatch && !opts.preserveFocus) {
     perfMark('home-first-render-before-watch');
     publishHomeRows(homeRowsFromWatch(cachedWatchRowsForHome(), true), opts); // Internal first paint: focus target under the splash before /api/watch returns.
     loadWatchState().then(() => {
@@ -3315,8 +3529,21 @@ async function cwOp(it, body, msg, opts = {}) {
   const snap = opts.focusSnapshot || (S.view === 'home' ? homeFocusSnapshot() : null);
   try {
     await api('/api/watch', { method: 'POST', body: { key: it.key, profile: S.profile ? S.profile.id : undefined, meta: wlMeta(it), ...body } });
-    invalidateWatchCache();
-    toast(msg); loadRows({ preserveFocus: !!snap, focusSnapshot: snap });
+    if (body.remove) removeWatchCacheKey(it.key);
+    else upsertWatchCache({
+      ...(S.watchMap && S.watchMap[it.key] || {}),
+      key: it.key,
+      position: body.position || 0,
+      duration: body.duration || 0,
+      watched: !!body.watched,
+      meta: wlMeta(it),
+      updatedAt: Date.now(),
+    });
+    toast(msg);
+    loadRows({ preserveFocus: !!snap, focusSnapshot: snap, watchReady: true });
+    loadWatchState(true).then(() => {
+      if (S.view === 'home') loadRows({ preserveFocus: true, focusSnapshot: homeFocusSnapshot(), watchReady: true });
+    }).catch(() => {});
   } catch (e) { toast(e.message); }
 }
 function showTitleFromEpisodeItem(it) {
@@ -4165,6 +4392,7 @@ function epItemOf(show, season, ep) {
     year: show.year, genre: `S${pad2(season.season_number)}E${pad2(ep.episode_number)}`, rating: ep.vote_average ? ep.vote_average.toFixed(1) : show.rating,
     overview: ep.overview || show.overview,
     backdrop: img(ep.still_path) || show.backdrop,
+    qualityRank: qualityRankForItem(show),
     tmdbId: show.tmdbId, imdbId: show.imdbId, tvdbId: show.tvdbId, originalLanguage: show.originalLanguage, type: 'episode',
     resume: (S.watchMap && S.watchMap[epKeyOf(show, season.season_number, ep.episode_number)] &&
              !S.watchMap[epKeyOf(show, season.season_number, ep.episode_number)].watched)
@@ -4190,7 +4418,7 @@ function epTarget(show, sNum, eNum, resume) {
     title: `${show.title} — S${pad2(sNum)}E${pad2(eNum)}`, type: 'episode',
     tmdbId: show.tmdbId, imdbId: show.imdbId, tvdbId: show.tvdbId, originalLanguage: show.originalLanguage,
     year: show.year, genre: `S${pad2(sNum)}E${pad2(eNum)}`, rating: show.rating, overview: show.overview,
-    backdrop: show.backdrop, poster: show.poster, resume: resume || 0,
+    backdrop: show.backdrop, poster: show.poster, qualityRank: qualityRankForItem(show), resume: resume || 0,
   };
   const loc = S.localMap && S.localMap[item.key];
   return loc ? { ...item, _local: loc } : item;
@@ -4637,7 +4865,8 @@ function localEpisodeItemOf(show, ep) {
   const title = `${show.title} — ${code}${name ? ` · ${name}` : ''}`;
   const item = mapLocal(show._lib, ep, title);
   return { ...item, type: 'episode', q: `${show.title} ${code}`, season: ep.s, episode: ep.e,
-    genre: code, backdrop: item.backdrop || show.backdrop, poster: item.poster || show.poster };
+    genre: code, backdrop: item.backdrop || show.backdrop, poster: item.poster || show.poster,
+    qualityRank: qualityRankForItem(show) };
 }
 function pickLocalShowPlayTarget(show, episodes) {
   const items = (episodes || []).slice().sort((a, b) => a.s - b.s || a.e - b.e).map((ep) => localEpisodeItemOf(show, ep));
@@ -5232,8 +5461,8 @@ function startWebPlayerHousekeeping(mount, it) {
   S.watchTimer = setInterval(saveWatch, 10000);
   updatePlayerControlAvailability();
   loadTracks();
-  const wantLang = prefLang('slang');
-  if (wantLang && it.type !== 'live' && S.serverInfo && S.serverInfo.opensubs && mount.id && subtitleCatalogAvailable(it)) {
+  const wantLang = prefSubtitleMode() === 'always' ? preferredAutoSubtitleLang() : prefLang('slang');
+  if (wantLang && wantLang !== 'off' && it.type !== 'live' && S.serverInfo && S.serverInfo.opensubs && mount.id && subtitleCatalogAvailable(it)) {
     const code2 = osLang(wantLang);
     fetch(`/api/ossubs/${mount.id}?${subtitleRequestParams(it, code2, mount.streamToken).toString()}`).catch(() => {});
   }
@@ -5452,14 +5681,19 @@ function nativeVideoRequired(it) {
 }
 function nativeVideoSubtitleRel(p) {
   const saved = loadSubChoice();
-  // Native is the default engine on Android TV. Only explicit per-title choices turn on at
-  // playback start; profile subtitle language fills the CC menu without popping captions on.
+  // Native is the default engine on Android TV. Explicit per-title choices win; the profile
+  // "always show subtitles" setting can then pick the preferred language at playback start.
   if (saved && saved !== 'off') {
     const info = String(saved).startsWith('os:') ? osTrackInfo(saved) : null;
-    if (info && !info.variant) return { blocked: false, rel: bestSubtitleVariantRel(info.lang) || '' };
+    if (info && !info.variant) return { blocked: false, rel: bestSubtitleVariantRel(info.lang) || saved };
     return { blocked: false, rel: saved };
   }
-  if (saved === 'off') return { blocked: false, rel: '' };
+  if (saved === 'off' && prefSubtitleMode() !== 'always') return { blocked: false, rel: '' };
+  const autoRel = autoSubtitleRelFor(p);
+  if (autoRel) {
+    const info = osTrackInfo(autoRel);
+    return { blocked: false, rel: bestSubtitleVariantRel(info.lang) || autoRel };
+  }
   return { blocked: false, rel: '' };
 }
 function resolutionLabel(res) {
@@ -5857,8 +6091,11 @@ window.__tvNativeSubtitleSelect = (rel, pos, dur) => {
   if (!rel) {
     p.subTrack = null;
     p._subShift = 0;
-    savePrefLang('slang', 'off');
-    saveSubChoice(null);
+    if (prefSubtitleMode() === 'always') saveSubChoice('');
+    else {
+      savePrefLang('slang', 'off');
+      saveSubChoice(null);
+    }
   } else {
     const info = osTrackInfo(rel);
     p.subTrack = rel;
@@ -6099,8 +6336,10 @@ async function prepPlayerSeasonEpisodes(it) {
     const ctx = await getPlayerEpisodeContext(it);
     if (!ctx || token !== S._playerSeasonStripToken || !S.playing || !S.playing.item || S.playing.item.key !== it.key) return;
     const eps = (ctx.season.episodes || []).filter((ep) => ep && ep.episode_number > 0);
+    const inheritedQuality = qualityRankForItem(it);
     const items = eps.map((ep) => {
-      const item = epItemOf(ctx.show, ctx.season, ep);
+      const base = epItemOf(ctx.show, ctx.season, ep);
+      const item = inheritedQuality ? { ...base, qualityRank: inheritedQuality } : base;
       const w = S.watchMap && S.watchMap[item.key];
       return {
         item,
@@ -6176,7 +6415,9 @@ async function prepNextEpisode(it) {
     }
     const season = ns === s ? ctx.season : await api(`/api/tmdb/tv/${tmdbId}/season/${ns}`);
     const ep = (season.episodes || []).find((x) => x.episode_number === ne); if (!ep) return;
-    const item = epItemOf(ctx.show, season, ep);
+    const base = epItemOf(ctx.show, season, ep);
+    const inheritedQuality = qualityRankForItem(it);
+    const item = inheritedQuality ? { ...base, qualityRank: inheritedQuality } : base;
     S.nextEp = { item, still: img(ep.still_path, 'w300') || ctx.show.backdrop, epName: ep.name || '', tag: `S${pad2(ns)}E${pad2(ne)}` };
     updateNextEpisodeButton();
     api('/api/search?' + sourceSearchQuery(item)).catch(() => {}); // warm next episode's sources
@@ -6513,6 +6754,9 @@ function trackLabel(t, fallback) {
 function prefLangKey(kind) {
   return S.profile && S.profile.id ? `triboon.profile.${S.profile.id}.${kind}` : `triboon.${kind}`;
 }
+function profilePrefKey(name) {
+  return S.profile && S.profile.id ? `triboon.profile.${S.profile.id}.${name}` : `triboon.${name}`;
+}
 function prefLang(kind) {
   try {
     const scoped = localStorage.getItem(prefLangKey(kind));
@@ -6522,6 +6766,19 @@ function prefLang(kind) {
 }
 function savePrefLang(kind, value) {
   try { localStorage.setItem(prefLangKey(kind), value || (kind === 'slang' ? 'off' : '')); } catch {}
+}
+function prefSubtitleMode() {
+  try { return localStorage.getItem(profilePrefKey('subtitleMode')) === 'always' ? 'always' : 'manual'; }
+  catch { return 'manual'; }
+}
+function savePrefSubtitleMode(value) {
+  try { localStorage.setItem(profilePrefKey('subtitleMode'), value === 'always' ? 'always' : 'manual'); } catch {}
+}
+function preferredAutoSubtitleLang() {
+  const sub = prefLang('slang');
+  if (sub && sub !== 'off') return sub;
+  const audio = prefLang('alang');
+  return audio || 'eng';
 }
 function osLang(c) {
   const code = langCode(c);
@@ -6541,6 +6798,14 @@ function subtitleImdbId(it) {
 }
 function subtitleCatalogAvailable(it) {
   return !!(it && (it.tmdbId || subtitleImdbId(it)));
+}
+function canAutoSubtitle(p) {
+  return !!(p && p.item && p.item.type !== 'live'
+    && S.serverInfo && S.serverInfo.opensubs && p.mountId && subtitleCatalogAvailable(p.item));
+}
+function autoSubtitleRelFor(p) {
+  if (prefSubtitleMode() !== 'always' || !canAutoSubtitle(p)) return '';
+  return osTrackRel(preferredAutoSubtitleLang());
 }
 function subtitleRequestParams(it, lang, streamToken) {
   const q = new URLSearchParams({
@@ -6685,6 +6950,11 @@ function applyTrackPrefs() {
     if (savedSub !== 'off' && S.serverInfo && S.serverInfo.opensubs && p.mountId && subtitleCatalogAvailable(p.item)) {
       setSubtitle(savedSub);
     }
+    if (savedSub === 'off' && prefSubtitleMode() !== 'always') return updateSrndBtn();
+  }
+  if ((!savedSub || (savedSub === 'off' && prefSubtitleMode() === 'always')) && p.subTrack == null) {
+    const autoRel = autoSubtitleRelFor(p);
+    if (autoRel) setSubtitle(autoRel);
   }
   updateSrndBtn();
 }
@@ -6887,9 +7157,13 @@ async function setSubtitle(rel) {
   if (rel === null) {
     p.subTrack = rel; p._subShift = 0;
     $('ccBtn').classList.remove('on');
-    savePrefLang('slang', 'off');
-    saveSubChoice(null);
-    if ($('prefSLang')) $('prefSLang').value = 'off';
+    if (prefSubtitleMode() === 'always') {
+      saveSubChoice('');
+    } else {
+      savePrefLang('slang', 'off');
+      saveSubChoice(null);
+      if ($('prefSLang')) $('prefSLang').value = 'off';
+    }
     clearTimeout(_subPrepT);
     return applySubtitleTrack();
   }
@@ -7118,10 +7392,25 @@ setInterval(updateClocks, 15000);
 updateClocks();
 
 /* ---- app screensaver ---- */
-const SCREENSAVER_IDLE_MS = 60 * 1000;
+const SCREENSAVER_IDLE_DEFAULT_SECONDS = 60;
+const SCREENSAVER_IDLE_OPTIONS = [0, 60, 120, 300, 600];
 const SCREENSAVER_ROTATE_MS = 12 * 1000;
 const SCREENSAVER_TRENDING_TTL = 24 * 60 * 60 * 1000;
 const SCREENSAVER_TRENDING_STORE = 'triboon.screensaver.trending';
+function prefScreensaverDelaySeconds() {
+  try {
+    const n = parseInt(localStorage.getItem(profilePrefKey('screensaverDelay')) || '', 10);
+    return SCREENSAVER_IDLE_OPTIONS.includes(n) ? n : SCREENSAVER_IDLE_DEFAULT_SECONDS;
+  } catch { return SCREENSAVER_IDLE_DEFAULT_SECONDS; }
+}
+function savePrefScreensaverDelay(seconds) {
+  const n = SCREENSAVER_IDLE_OPTIONS.includes(+seconds) ? +seconds : SCREENSAVER_IDLE_DEFAULT_SECONDS;
+  try { localStorage.setItem(profilePrefKey('screensaverDelay'), String(n)); } catch {}
+}
+function prefScreensaverDelayMs() {
+  const seconds = prefScreensaverDelaySeconds();
+  return seconds > 0 ? seconds * 1000 : 0;
+}
 function screensaverSafeBg(url) {
   const raw = String(url || '');
   if (/^data:image\//i.test(raw)) return raw;
@@ -7310,7 +7599,9 @@ function hideScreensaver(woke = false) {
 function resetScreensaverIdle() {
   clearTimeout(S._screensaverIdleT);
   if (document.visibilityState !== 'visible') return;
-  S._screensaverIdleT = setTimeout(showScreensaver, SCREENSAVER_IDLE_MS);
+  const idleMs = prefScreensaverDelayMs();
+  if (!idleMs) return;
+  S._screensaverIdleT = setTimeout(showScreensaver, idleMs);
 }
 function noteScreensaverActivity(e) {
   if (S.screensaverOn) {
@@ -8429,12 +8720,33 @@ function fillLiveState(r) {
   // Picking a category shows its channels AS A GUIDE LIST by default (owner request) —
   // the ☰/▤ toggle still flips to the logo grid for browsing by eye.
   if (S.liveGuide === undefined && S.liveEpg) S.liveGuide = true;
+  S.liveSourceErrors = Array.isArray(r.sourceErrors) ? r.sourceErrors : [];
   S.liveChannels = r.channels;
   S._chSearchCache = r.channels;
   S._liveAt = Date.now();
   S.liveOpen = S.liveOpen || new Set();
   S.liveHidden = new Set(r.hiddenGroups || []);
   S.liveGlobalHidden = new Set(r.globalHidden || []); // admin only — enforced server-side for users
+}
+function liveSourceErrorsHtml(errors = []) {
+  const rows = (errors || []).slice(0, 5).map((e) => {
+    const name = e && e.sourceName ? e.sourceName : 'Live TV';
+    const msg = e && e.error ? e.error : 'source failed';
+    return `<div class="liveDiagRow"><b>${esc(name)}</b><span>${esc(msg)}</span></div>`;
+  }).join('');
+  const more = errors.length > 5 ? `<div class="liveDiagRow"><b>More</b><span>${errors.length - 5} additional source issue(s)</span></div>` : '';
+  return rows || more ? `<div class="liveDiag">${rows}${more}</div>` : '';
+}
+function liveNoChannelsHtml(errors = []) {
+  const intro = errors.length
+    ? 'No live channels found. Check the source below, or remove TV-show/VOD playlists from Live TV.'
+    : 'No live channels found. Live TV expects M3U/Xtream live-channel entries. TV-show/VOD playlists belong in Libraries/Sources.';
+  return `<div class="gridMore liveEmpty">${esc(intro)}${liveSourceErrorsHtml(errors)}</div>`;
+}
+function liveSourceWarningHtml(errors = []) {
+  if (!errors.length) return '';
+  const label = errors.length === 1 ? '1 Live TV source did not load' : `${errors.length} Live TV sources did not load`;
+  return `<div class="liveWarn">${esc(label)}${liveSourceErrorsHtml(errors)}</div>`;
 }
 // Warm the channel list on INTENT (hover/focus the Live TV rail item) — not at boot, so a
 // big playlist never slows startup. The server keeps the heavy playlist/EPG cache warm.
@@ -8461,8 +8773,8 @@ async function loadLiveTv() {
   try {
     const r = await api('/api/iptv/channels');
     if (!r.configured) { grid.innerHTML = '<div class="gridMore">Live TV isn’t set up — the admin can add an M3U playlist or Xtream login in Settings → Catalog &amp; Live TV.</div>'; return; }
-    if (!r.channels.length) { grid.innerHTML = '<div class="gridMore">Playlist loaded but no channels found.</div>'; return; }
     fillLiveState(r);
+    if (!r.channels.length) { grid.innerHTML = liveNoChannelsHtml(S.liveSourceErrors); return; }
     if (S.view !== 'livetv') return; // user navigated away while the playlist downloaded
     scaffoldLiveTv(grid);
   } catch (e) { grid.innerHTML = `<div class="gridMore">Live TV failed: ${esc(e.message)}</div>`; }
@@ -8475,7 +8787,7 @@ function scaffoldLiveTv(grid) {
     // Category management lives in Preferences → Live TV now — no ☷ button on the page.
     grid.innerHTML = '<div id="chBar"><input id="chSearch" maxlength="60" autocomplete="off">'
       + (S.liveEpg ? '<button id="chGuideBtn" class="focusable"></button>' : '')
-      + '</div><div id="chBody"></div>';
+      + `</div>${liveSourceWarningHtml(S.liveSourceErrors || [])}<div id="chBody"></div>`;
     S.gridRoot = grid;
     const input = $('chSearch');
     input.placeholder = `Filter ${S.liveChannels.length} channels…`;
@@ -10182,7 +10494,7 @@ function openPrefs() { // populates the Preferences PAGE (it's a view now, not a
     const cur = prefLang(kind);
     const head = kind === 'alang'
       ? '<option value="">Audio: first track (default)</option>'
-      : `<option value="off" ${(!cur || cur === 'off') ? 'selected' : ''}>Subtitles: off unless I turn them on</option>`;
+      : `<option value="off" ${(!cur || cur === 'off') ? 'selected' : ''}>Subtitles: no preferred language</option>`;
     return head + Object.entries(LANG_NAMES).map(([c, n]) =>
       `<option value="${c}" ${cur === c ? 'selected' : ''}>${kind === 'alang' ? 'Audio' : 'Subtitles'}: ${n}</option>`).join('');
   };
@@ -10191,8 +10503,12 @@ function openPrefs() { // populates the Preferences PAGE (it's a view now, not a
   // Playback: auto-play + caption size pickers reflect the saved choice
   document.querySelectorAll('#prefAutoplay button').forEach((b) =>
     b.classList.toggle('sel', b.dataset.ap === (prefAutoplay() ? '1' : '0')));
+  document.querySelectorAll('#prefSubtitleMode button').forEach((b) =>
+    b.classList.toggle('sel', b.dataset.submode === prefSubtitleMode()));
   const ss = applySubSize();
   document.querySelectorAll('#prefSubSize button').forEach((b) => b.classList.toggle('sel', b.dataset.ss === ss));
+  document.querySelectorAll('#prefScreensaverDelay button').forEach((b) =>
+    b.classList.toggle('sel', +b.dataset.ssv === prefScreensaverDelaySeconds()));
   // Live TV categories shortcut (per-user list lives here too)
   const hasIptv = S.serverInfo && S.serverInfo.iptv;
   $('prefTabLive').style.display = hasIptv ? '' : 'none';
@@ -10330,7 +10646,10 @@ async function renderTraktBox() {
 }
 // Preferences tabs
 document.querySelectorAll('#prefTabs button').forEach((b) => b.addEventListener('click', () => {
-  document.querySelectorAll('#prefTabs button').forEach((x) => x.classList.toggle('on', x === b));
+  document.querySelectorAll('#prefTabs button').forEach((x) => {
+    x.classList.toggle('on', x === b);
+    x.setAttribute('aria-selected', x === b ? 'true' : 'false');
+  });
   document.querySelectorAll('[data-ptab]').forEach((g) => { g.hidden = g.dataset.ptab !== b.dataset.tab; });
   if (b.dataset.tab === 'livetv') renderPrefLiveCats(); // chips live on the page now — fill on entry
 }));
@@ -10338,24 +10657,30 @@ document.querySelectorAll('#prefTabs button').forEach((b) => b.addEventListener(
 function renderPinRows() {
   const wrap = $('prefPins'); wrap.innerHTML = '';
   (S.user.profiles || []).forEach((pr) => {
+    const level = profileLevelIndex(pr.level);
     const row = document.createElement('div');
     row.className = 'pinRow';
-    row.innerHTML = `<span class="pn">${esc(pr.name)} ${LEVEL_BADGE[pr.level ?? 3] || ''}</span>
-      ${pr.locked ? '<span class="lockTag">🔒 PIN set</span>' : ''}
-      <button class="focusable" data-act="edit" style="color:var(--amber)">✎ Edit</button>
-      <button class="focusable" data-act="del" style="color:#ff8d8d">Delete</button>
-      <button class="focusable">${pr.locked ? 'Change / remove PIN' : 'Set PIN'}</button>`;
+    row.innerHTML = `${profileLevelAvatar(level)}
+      <div class="profileIdentity">
+        <div class="profileName">${esc(pr.name)}</div>
+        <div class="profileMeta">${profileLevelChip(level)}${pr.locked ? `<span class="lockTag">${profileIcon('lock')}<span>PIN set</span></span>` : ''}</div>
+      </div>
+      <div class="profileActions">
+        <button class="profileAction focusable" data-act="edit">${profileIcon('edit')}<span>Edit</span></button>
+        <button class="profileAction danger focusable" data-act="del">${profileIcon('trash')}<span>Delete</span></button>
+        <button class="profileAction focusable" data-act="pin">${profileIcon('key')}<span>${pr.locked ? 'Change PIN' : 'Set PIN'}</span></button>
+      </div>`;
     // Edit (rename + maturity level) — like PINs, gated on the ACCOUNT password.
     row.querySelector('[data-act="edit"]').addEventListener('click', () => {
       if (row.querySelector('.pinForm')) { row.querySelector('.pinForm').remove(); return; }
       const f = document.createElement('div');
       f.className = 'pinForm';
       f.innerHTML = `<input placeholder="name" value="${esc(pr.name)}" maxlength="20">
-        <select style="background:rgba(11,8,18,.7);border:1px solid var(--line);border-radius:10px;color:var(--text);padding:9px 28px 9px 11px;font:500 12.5px 'JetBrains Mono'">
-          ${LEVELS.map((l, i) => `<option value="${i}" ${i === (pr.level ?? 3) ? 'selected' : ''}>${LEVEL_BADGE[i]} ${l}</option>`).join('')}
+        <select aria-label="Profile maturity level">
+          ${LEVELS.map((l, i) => `<option value="${i}" ${i === level ? 'selected' : ''}>${l}</option>`).join('')}
         </select>
         <input type="password" placeholder="account password" autocomplete="current-password">
-        <button class="focusable" style="background:var(--gold);color:#160a04;border:0">Save</button>`;
+        <button class="profileAction primary focusable">${profileIcon('edit')}<span>Save</span></button>`;
       f.querySelector('button').addEventListener('click', async () => {
         const [nameI, pwI] = f.querySelectorAll('input');
         try {
@@ -10377,7 +10702,7 @@ function renderPinRows() {
       const f = document.createElement('div');
       f.className = 'pinForm';
       f.innerHTML = `<input type="password" placeholder="account password to confirm delete" autocomplete="current-password">
-        <button class="focusable" style="background:#ff8d8d;color:#160a04;border:0">Delete “${esc(pr.name)}” + its watch history</button>`;
+        <button class="profileAction danger focusable">${profileIcon('trash')}<span>Delete ${esc(pr.name)} + watch history</span></button>`;
       f.querySelector('button').addEventListener('click', async () => {
         try {
           await api(`/api/me/profiles/${pr.id}/delete`, { method: 'POST', body: { password: f.querySelector('input').value } });
@@ -10390,14 +10715,14 @@ function renderPinRows() {
       row.appendChild(f);
       f.querySelector('input').focus();
     });
-    const btn = row.querySelector('button:not([data-act])');
+    const btn = row.querySelector('[data-act="pin"]');
     btn.addEventListener('click', () => {
       if (row.querySelector('.pinForm')) { row.querySelector('.pinForm').remove(); return; }
       const f = document.createElement('div');
       f.className = 'pinForm';
       f.innerHTML = `<input type="password" placeholder="account password" autocomplete="current-password">
         <input type="password" placeholder="new 4-digit PIN (empty = remove)" maxlength="4" inputmode="numeric">
-        <button class="focusable" style="background:var(--gold);color:#160a04;border:0">Save</button>`;
+        <button class="profileAction primary focusable">${profileIcon('key')}<span>Save PIN</span></button>`;
       f.querySelector('button').addEventListener('click', async () => {
         const [pw, pin] = [...f.querySelectorAll('input')].map((i) => i.value);
         try {
@@ -10420,12 +10745,12 @@ function renderPinRows() {
   // Add-profile lives HERE too (not only on the Who's-watching screen, which auto-skips
   // for accounts with 0-1 profiles — making it otherwise unreachable).
   const addForm = document.createElement('div');
-  addForm.className = 'pinForm';
-  addForm.innerHTML = `<input placeholder="profile name" maxlength="20">
-    <select style="background:rgba(11,8,18,.7);border:1px solid var(--line);border-radius:10px;color:var(--text);padding:9px 28px 9px 11px;font:500 12.5px 'JetBrains Mono'">
-      ${LEVELS.map((l, i) => `<option value="${i}" ${i === 3 ? 'selected' : ''}>${LEVEL_BADGE[i]} ${l}</option>`).join('')}
+  addForm.className = 'pinForm addProfileForm';
+  addForm.innerHTML = `<input placeholder="profile name" maxlength="20" aria-label="Profile name">
+    <select aria-label="Profile maturity level">
+      ${LEVELS.map((l, i) => `<option value="${i}" ${i === 3 ? 'selected' : ''}>${l}</option>`).join('')}
     </select>
-    <button class="focusable" style="background:var(--gold);color:#160a04;border:0">Add profile</button>`;
+    <button class="profileAddBtn focusable">${profileIcon('plus')}<span>Add profile</span></button>`;
   addForm.querySelector('button').addEventListener('click', async () => {
     const name = addForm.querySelector('input').value.trim();
     if (!name) return toast('Enter a profile name');
@@ -10534,10 +10859,21 @@ document.querySelectorAll('#prefAutoplay button').forEach((b) => b.addEventListe
   document.querySelectorAll('#prefAutoplay button').forEach((x) => x.classList.toggle('sel', x === b));
   toast(b.dataset.ap === '1' ? 'Next episode will auto-play' : 'Auto-play off — Up Next waits for you');
 }));
+document.querySelectorAll('#prefSubtitleMode button').forEach((b) => b.addEventListener('click', () => {
+  savePrefSubtitleMode(b.dataset.submode);
+  document.querySelectorAll('#prefSubtitleMode button').forEach((x) => x.classList.toggle('sel', x === b));
+  toast(b.dataset.submode === 'always' ? 'Subtitles will start automatically' : 'Subtitles will stay manual');
+}));
 document.querySelectorAll('#prefSubSize button').forEach((b) => b.addEventListener('click', () => {
   try { localStorage.setItem('triboon.subsize', b.dataset.ss); } catch {}
   document.querySelectorAll('#prefSubSize button').forEach((x) => x.classList.toggle('sel', x === b));
   applySubSize();
+}));
+document.querySelectorAll('#prefScreensaverDelay button').forEach((b) => b.addEventListener('click', () => {
+  savePrefScreensaverDelay(+b.dataset.ssv);
+  document.querySelectorAll('#prefScreensaverDelay button').forEach((x) => x.classList.toggle('sel', x === b));
+  resetScreensaverIdle();
+  toast(+b.dataset.ssv ? `Screensaver starts after ${b.textContent}` : 'Screensaver disabled');
 }));
 $('prefALang').addEventListener('change', () => { savePrefLang('alang', $('prefALang').value); toast('Audio language saved'); });
 $('prefSLang').addEventListener('change', () => { savePrefLang('slang', $('prefSLang').value); toast('Subtitle language saved'); });
@@ -10838,6 +11174,65 @@ function renderPerfResult(r, saved) {
     `Recommend ${rec.buffer1080Sec || '?'}s 1080p buffer, ${rec.buffer4kSec || '?'}s 4K buffer, ` +
     `${rec.maxConnPerStream1080 || '?'}x/stream 1080p, ${rec.maxConnPerStream4k || '?'}x/stream 4K.${warn}`;
 }
+function syncTime(ts) {
+  const n = Number(ts) || 0;
+  if (!n) return 'never';
+  return `${agoStr(n)} (${new Date(n).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })})`;
+}
+function syncScheduleTime(ts) {
+  const n = Number(ts) || 0;
+  if (!n) return 'not scheduled';
+  const diff = n - Date.now();
+  let rel;
+  if (diff <= 0) rel = agoStr(n);
+  else if (diff < 60000) rel = 'in <1 min';
+  else if (diff < 3600000) rel = `in ${Math.round(diff / 60000)} min`;
+  else if (diff < 48 * 3600000) rel = `in ${Math.round(diff / 3600000)}h`;
+  else rel = `in ${Math.round(diff / 86400000)}d`;
+  return `${rel} (${new Date(n).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })})`;
+}
+function guideKindLabel(kind) {
+  if (kind === 'xtream+xmltv') return 'Xtream + XMLTV';
+  if (kind === 'xmltv') return 'XMLTV';
+  if (kind === 'xtream') return 'Xtream';
+  return 'No guide';
+}
+function renderIptvSyncStatus(st = {}) {
+  const summary = $('iptvSyncSummary');
+  const sources = $('iptvSyncSources');
+  if (!summary || !sources) return;
+  const errors = Array.isArray(st.sourceErrors) ? st.sourceErrors : [];
+  const last = st.finishedAt || (st.lastResult && st.lastResult.finishedAt);
+  summary.innerHTML = [
+    ['Channels', st.configured ? String(st.channelCount || 0) : 'not set up'],
+    ['Guide', st.configured ? `${st.guideSourceCount || 0}/${st.sourceCount || 0} sources` : 'not set up'],
+    ['Sources', st.configured ? `${st.loadedSourceCount || 0}/${st.sourceCount || 0} loaded` : 'none'],
+    ['Next sync', st.running ? 'running now' : syncScheduleTime(st.nextScheduledAt)],
+  ].map(([k, v]) => `<div class="syncCard"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`).join('');
+  const srcRows = (st.sources || []).map((src) => {
+    const bad = src.error;
+    const warn = !bad && !src.channelCount;
+    const cls = bad ? 'bad' : (warn ? 'warn' : '');
+    const guide = `${guideKindLabel(src.guideKind)} - ${src.guideChannels || 0} cached`;
+    const ch = `${src.channelCount || 0} channels${src.channelCachedAt ? ` - ${agoStr(src.channelCachedAt)}` : ''}`;
+    const err = src.error ? `<br><span style="color:#ffb4b4">${esc(src.error)}</span>` : '';
+    return `<div class="syncSource ${cls}"><div><b><span class="syncDot"></span>${esc(src.sourceName || 'Live TV')}</b>
+      <small>${esc(src.mode === 'xtream' ? 'Xtream' : 'M3U playlist')}</small></div>
+      <div class="syncMeta">${esc(ch)}<br>${esc(guide)}${err}</div></div>`;
+  }).join('');
+  sources.innerHTML = srcRows || '<div class="hint">No Live TV sources saved.</div>';
+  $('iptvSyncStatus').textContent = !st.configured
+    ? 'No Live TV sources saved yet.'
+    : st.running
+    ? 'Refresh running now. Stale guide data still serves while it runs.'
+    : errors.length ? `${errors.length} source issue${errors.length > 1 ? 's' : ''} - working sources still stay available.`
+      : last ? `Last refresh ${syncTime(last)}. Channels refresh daily; guide data refreshes about every 12 hours.`
+        : 'Waiting for the first server refresh.';
+}
+async function refreshIptvSyncStatus() {
+  try { renderIptvSyncStatus(await api('/api/iptv/status')); }
+  catch (e) { $('iptvSyncStatus').textContent = 'Live TV sync status failed: ' + e.message; }
+}
 async function refreshSettings() {
   try {
     const st = await api('/api/status');
@@ -10968,6 +11363,7 @@ async function refreshSettings() {
       iptvSources.length ? `${iptvSources.length} playlist${iptvSources.length > 1 ? 's' : ''} saved ✓`
       : s.iptvMode === 'xtream' && s.xtHost ? `saved ✓ — Xtream: ${s.xtHost}${s.epgUrl ? ` · EPG: ${s.epgUrl}` : ' · built-in guide'}`
       : s.iptvUrl ? `saved ✓ — playlist: ${s.iptvUrl}${s.epgUrl ? ` · EPG: ${s.epgUrl}` : ''}` : 'not set up yet';
+    refreshIptvSyncStatus();
     $('iptvUrl').placeholder = s.iptvUrl ? `saved ✓ (${s.iptvUrl}) — paste to replace` : 'https://provider.example/playlist.m3u';
     $('xtHost').placeholder = s.xtHost ? `saved ✓ (${s.xtHost}) — type to replace` : 'http://provider.example:8080';
     $('xtUser').placeholder = s.iptvMode === 'xtream' && s.xtHost ? 'username saved ✓ — type to replace' : 'username';
@@ -11211,11 +11607,47 @@ $('iptvOff').addEventListener('click', async () => {
   clearLiveClientCaches({ channels: true }); S.serverInfo.iptv = false; applyMenuPrefs();
   toast('Live TV removed'); refreshSettings();
 });
+$('iptvRefresh').addEventListener('click', async () => {
+  $('iptvRefresh').disabled = true;
+  $('iptvSyncStatus').textContent = 'Refreshing Live TV channels and guide...';
+  try {
+    const r = await api('/api/iptv/refresh', { method: 'POST', body: { force: true } });
+    clearLiveClientCaches({ channels: true });
+    renderIptvSyncStatus(r.status || {});
+    toast('Live TV refresh complete');
+    refreshSettings();
+  } catch (e) {
+    $('iptvSyncStatus').textContent = 'Refresh failed: ' + e.message;
+    toast('Live TV refresh failed: ' + e.message);
+  } finally {
+    $('iptvRefresh').disabled = false;
+  }
+});
 // Settings tabs.
 document.querySelectorAll('#setTabs button').forEach((b) => b.addEventListener('click', () => {
-  document.querySelectorAll('#setTabs button').forEach((x) => x.classList.toggle('on', x === b));
-  document.querySelectorAll('.setGrid').forEach((g) => { g.hidden = g.dataset.stab !== b.dataset.tab; });
+  document.querySelectorAll('#setTabs button').forEach((x) => {
+    x.classList.toggle('on', x === b);
+    x.setAttribute('aria-selected', x === b ? 'true' : 'false');
+  });
+  document.querySelectorAll('#settings [data-stab]').forEach((g) => { g.hidden = g.dataset.stab !== b.dataset.tab; });
 }));
+function focusActiveSettingsPanel(rootId, panelAttr) {
+  const root = $(rootId);
+  const active = root && root.querySelector(`[${panelAttr}]:not([hidden])`);
+  const first = active && formCtls(active)[0];
+  if (first) first.focus({ preventScroll: false });
+}
+function wireSectionRailDpad(rootId, tabsId, panelAttr) {
+  const tabs = $(tabsId);
+  if (!tabs) return;
+  tabs.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    focusActiveSettingsPanel(rootId, panelAttr);
+  });
+}
+wireSectionRailDpad('prefs', 'prefTabs', 'data-ptab');
+wireSectionRailDpad('settings', 'setTabs', 'data-stab');
 $('invGo').addEventListener('click', async () => {
   const r = await api('/api/invites', { method: 'POST', body: { policy: { maxResolutionRank: parseInt($('invCap').value, 10) } } });
   const link = `${location.origin}/?invite=${r.token}`;

@@ -138,6 +138,7 @@ test('security: deny-by-default — every route declares auth; unknown routes 40
     ['GET', '/api/health/abc'], ['POST', '/api/mount'], ['GET', '/api/settings'],
     ['POST', '/api/settings'], ['POST', '/api/streaming/recommend'], ['POST', '/api/invites'], ['GET', '/api/invites'],
     ['GET', '/api/users'], ['GET', '/api/stream/abc'], ['GET', '/api/remux/abc'],
+    ['GET', '/api/iptv/status'], ['POST', '/api/iptv/refresh'],
     ['POST', '/api/quickconnect/123456/approve'], ['GET', '/api/music/charts'], ['GET', '/api/music/search?q=x'],
   ];
   for (const [m, p] of probes) {
@@ -163,7 +164,8 @@ test('security: role separation — user tokens cannot reach admin routes', asyn
 
   for (const [m, p] of [['GET', '/api/settings'], ['POST', '/api/settings'], ['POST', '/api/invites'],
     ['GET', '/api/invites'], ['GET', '/api/users'], ['POST', '/api/mount'],
-    ['POST', '/api/libraries'], ['DELETE', '/api/libraries/abc'], ['POST', '/api/streaming/recommend']]) {
+    ['POST', '/api/libraries'], ['DELETE', '/api/libraries/abc'], ['POST', '/api/streaming/recommend'],
+    ['GET', '/api/iptv/status'], ['POST', '/api/iptv/refresh']]) {
     assert.strictEqual((await httpJson(srv.port, m, p, {}, user)).status, 403, `user → ${m} ${p}`);
   }
   // …but user routes work.
@@ -323,13 +325,14 @@ test('watch state: per-user, per-profile, ordered by recency', async () => {
 test('watch next: finished episodes keep the next aired episode in Continue Watching', async () => {
   await httpJson(srv.port, 'POST', '/api/watch', {
     key: 'tmdb:tv:424242:s1e1', watched: true, position: 0, duration: 1800,
-    meta: { title: 'Next Up Show — S01E01', type: 'episode', tmdbId: 424242 },
+    meta: { title: 'Next Up Show — S01E01', type: 'episode', tmdbId: 424242, qualityRank: 4 },
   }, admin);
   let next = await httpJson(srv.port, 'GET', '/api/watch/next', null, admin);
   assert.strictEqual(next.status, 200);
   const nextEp = next.json.find((x) => x.key === 'tmdb:tv:424242:s1e2' && x._nextEp);
   assert.ok(nextEp, 'aired S01E02 appears as next episode');
   assert.ok(nextEp.updatedAt > 0, 'next episode carries the watched timestamp that should order Continue Watching');
+  assert.strictEqual(nextEp.qualityRank, 4, 'next episode inherits the saved show quality class');
   assert.ok(!next.json.some((x) => x.key === 'tmdb:tv:424242:s1e3'), 'future S01E03 is held until it airs');
 
   await httpJson(srv.port, 'POST', '/api/watch', {

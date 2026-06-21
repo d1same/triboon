@@ -10,12 +10,13 @@ const { EventEmitter } = require('events');
 const { PassThrough } = require('stream');
 const { httpJson, httpRaw, bootServer, setupAdmin } = require('./helpers');
 
-test('iptv: daily guide warm targets the next local midnight', async () => {
+test('iptv: guide warm targets the next 12-hour boundary', async () => {
   const srv = await bootServer({ NNTP_HOST: null, TMDB_BASE: null });
   try {
+    assert.strictEqual(srv.msUntilNextIptvWarm(new Date(2026, 0, 2, 0, 0, 0, 0).getTime()), 12 * 3600000);
+    assert.strictEqual(srv.msUntilNextIptvWarm(new Date(2026, 0, 2, 11, 59, 59, 500).getTime()), 500);
     assert.strictEqual(srv.msUntilNextIptvWarm(new Date(2026, 0, 2, 12, 0, 0, 0).getTime()), 12 * 3600000);
     assert.strictEqual(srv.msUntilNextIptvWarm(new Date(2026, 0, 2, 23, 59, 59, 500).getTime()), 500);
-    assert.strictEqual(srv.msUntilNextIptvWarm(new Date(2026, 0, 2, 0, 0, 0, 0).getTime()), 24 * 3600000);
   } finally {
     await srv.shutdown();
   }
@@ -89,6 +90,65 @@ http://upstream.example/cache-news.m3u8
   } finally {
     if (first) await first.shutdown();
     if (second) await second.shutdown();
+    upstream.close();
+  }
+});
+
+test('iptv: admin sync status and refresh report channel and guide cache health', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-iptv-sync-status-'));
+  const pad = (n) => String(n).padStart(2, '0');
+  const stamp = (d) => `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00 +0000`;
+  const t0 = new Date(Date.now() - 10 * 60000);
+  const t1 = new Date(Date.now() + 50 * 60000);
+  let playlistHits = 0;
+  let guideHits = 0;
+  const upstream = http.createServer((req, res) => {
+    res.writeHead(200);
+    if (req.url === '/list.m3u') {
+      playlistHits++;
+      return res.end(`#EXTM3U
+#EXTINF:-1 tvg-id="sync.news" group-title="News",Sync News
+http://stream.example/sync-news.ts
+`);
+    }
+    if (req.url === '/guide.xml') {
+      guideHits++;
+      return res.end(`<?xml version="1.0"?><tv>
+<programme start="${stamp(t0)}" stop="${stamp(t1)}" channel="sync.news"><title>Sync Morning</title></programme>
+</tv>`);
+    }
+    res.end('missing');
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${upstream.address().port}`;
+  let srv;
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/iptv/sources',
+      { name: 'Sync TV', iptvMode: 'm3u', iptvUrl: `${base}/list.m3u`, epgUrl: `${base}/guide.xml` }, admin);
+
+    const refresh = await httpJson(srv.port, 'POST', '/api/iptv/refresh', { force: true }, admin);
+    assert.strictEqual(refresh.status, 200);
+    assert.strictEqual(refresh.json.result.channels, 1);
+    assert.strictEqual(refresh.json.result.xmltv, true);
+    assert.strictEqual(refresh.json.status.configured, true);
+    assert.strictEqual(refresh.json.status.channelCount, 1);
+    assert.strictEqual(refresh.json.status.guideSourceCount, 1);
+    assert.strictEqual(refresh.json.status.sources[0].sourceName, 'Sync TV');
+    assert.strictEqual(refresh.json.status.sources[0].guideKind, 'xmltv');
+    assert.strictEqual(refresh.json.status.sources[0].guideChannels, 1);
+    assert.ok(refresh.json.status.finishedAt >= refresh.json.status.startedAt);
+    assert.ok(playlistHits >= 1, 'manual refresh should fetch the playlist at least once');
+    assert.ok(guideHits >= 1, 'manual refresh should fetch the guide at least once');
+
+    const status = await httpJson(srv.port, 'GET', '/api/iptv/status', null, admin);
+    assert.strictEqual(status.status, 200);
+    assert.strictEqual(status.json.channelCount, 1);
+    assert.strictEqual(status.json.sourceErrors.length, 0);
+    assert.strictEqual(status.json.lastResult.channels, 1);
+  } finally {
+    if (srv) await srv.shutdown();
     upstream.close();
   }
 });
@@ -177,6 +237,81 @@ ${url}
     assert.strictEqual(after.json.channels[0].group, 'News', 'single remaining playlist returns normal group labels');
     const favAfter = await httpJson(srv.port, 'GET', '/api/iptv/channels?fav=1', null, admin);
     assert.strictEqual(favAfter.json.channels.length, 0, 'deleted playlist favorites are removed with the source');
+  } finally {
+    if (srv) await srv.shutdown();
+    upstream.close();
+  }
+});
+
+test('iptv: one bad source reports diagnostics without hiding healthy channels', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-iptv-partial-source-'));
+  const upstream = http.createServer((req, res) => {
+    if (req.url === '/good.m3u') {
+      res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' });
+      return res.end(`#EXTM3U
+#EXTINF:-1 group-title="News",Working News
+http://stream.example/working-news.ts
+`);
+    }
+    if (req.url === '/bad.m3u') {
+      res.writeHead(404, { 'content-type': 'text/plain' });
+      return res.end('missing');
+    }
+    res.writeHead(404);
+    res.end('missing');
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${upstream.address().port}`;
+  let srv;
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/iptv/sources',
+      { name: 'Good TV', iptvMode: 'm3u', iptvUrl: `${base}/good.m3u` }, admin);
+    await httpJson(srv.port, 'POST', '/api/iptv/sources',
+      { name: 'Bad TV', iptvMode: 'm3u', iptvUrl: `${base}/bad.m3u` }, admin);
+
+    const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    assert.strictEqual(ch.status, 200);
+    assert.strictEqual(ch.json.channels.length, 1);
+    assert.strictEqual(ch.json.channels[0].sourceName, 'Good TV');
+    assert.strictEqual(ch.json.sourceErrors.length, 1);
+    assert.strictEqual(ch.json.sourceErrors[0].sourceName, 'Bad TV');
+    assert.match(ch.json.sourceErrors[0].error, /m3u playlist HTTP 404/);
+    assert.ok(!JSON.stringify(ch.json.sourceErrors).includes(String(upstream.address().port)),
+      'source diagnostics must not leak provider URLs or credentials');
+  } finally {
+    if (srv) await srv.shutdown();
+    upstream.close();
+  }
+});
+
+test('iptv: non-live playlists return empty-state diagnostics instead of a hard failure', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-iptv-non-live-source-'));
+  const upstream = http.createServer((req, res) => {
+    if (req.url === '/series.m3u') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ series: [{ title: 'Episode playlist, not live TV' }] }));
+    }
+    res.writeHead(404);
+    res.end('missing');
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${upstream.address().port}`;
+  let srv;
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/iptv/sources',
+      { name: 'Show Playlist', iptvMode: 'm3u', iptvUrl: `${base}/series.m3u` }, admin);
+
+    const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    assert.strictEqual(ch.status, 200);
+    assert.strictEqual(ch.json.configured, true);
+    assert.strictEqual(ch.json.channels.length, 0);
+    assert.strictEqual(ch.json.sourceErrors.length, 1);
+    assert.strictEqual(ch.json.sourceErrors[0].sourceName, 'Show Playlist');
+    assert.match(ch.json.sourceErrors[0].error, /no live channels found/);
   } finally {
     if (srv) await srv.shutdown();
     upstream.close();
