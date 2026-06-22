@@ -1,46 +1,159 @@
-# Triboon
+<p align="center">
+  <img src="logo/triboon.png" alt="Triboon" width="190">
+</p>
 
-Press play on anything. Triboon mounts the best healthy NZB from your usenet
-provider and streams it instantly, seeking inside the archive while it is still
-on the server, with continuous health protection and seamless auto-advance.
-Self-hosted, Plex-polished, Stremio-style.
+<h1 align="center">Triboon</h1>
 
-Current implementation: Phases 0-5 core are implemented in the Node/Web/Android
-stack. The current verification baseline is `npm.cmd test` at 164/164 tests,
-with focused IPTV, security, and NNTP scheduling coverage for the source-scoped
-Live TV model and multi-user streaming capacity model. The server runtime stays
-dependency-light: Node 24 LTS stdlib in `server/`, with approved external
-binaries such as ffmpeg and yt-dlp.
+<p align="center">
+  Self-hosted streaming for movies, shows, local libraries, music, subtitles, Trakt, and Live TV.
+  Press Play and Triboon finds, mounts, and streams the best healthy source.
+</p>
+
+<p align="center">
+  <a href="https://github.com/d1same/triboon/releases/latest">Latest release</a>
+  |
+  <a href="https://github.com/d1same/triboon/releases/latest/download/triboon-tv.apk">Android TV APK</a>
+  |
+  <a href="#quick-start">Quick start</a>
+  |
+  <a href="#unraid">Unraid</a>
+</p>
+
+## What It Does
+
+Triboon is a Plex-polished, Stremio-style app you run yourself. The admin adds
+providers, indexers, metadata, subtitles, Trakt, local folders, and optional
+IPTV playlists. Users sign in, pick a profile, browse, and press Play.
+
+Playback is built around speed:
+
+```text
+source-fit -> direct play -> remux -> transcode
+```
+
+That means Triboon tries to choose the right source first, direct-play whenever
+the device can handle it, and only remux or transcode when the client needs
+help.
+
+## Highlights
+
+- Movies and TV shows with TMDB metadata, detail pages, seasons, episodes,
+  recommendations, cast pages, watchlist, and Continue Watching.
+- Best-source search across Newznab-compatible indexers, with quality caps,
+  title verification, health checks, and automatic source failover.
+- Usenet streaming directly from archives while they are still remote, with
+  Range seeking and resume support.
+- Local libraries for owned media, with lazy loading so large folders do not
+  freeze the app.
+- Live TV through M3U or Xtream playlists, including source-scoped caches,
+  guide data, favorites, Android TV native playback, and browser remux.
+- Wyzie subtitles, audio-track selection, subtitle sync, Trakt import/export,
+  Music, Android TV shell, and Unraid-friendly Docker hosting.
+- Multi-user profiles, invite links, Quick Connect, profile PINs, and encrypted
+  settings.
 
 ## Quick Start
 
+Docker is the easiest way to run Triboon:
+
 ```bash
 docker compose up --build
-# open http://localhost:7777
 ```
 
-1. Create the owner account.
-2. Open Settings and add a usenet provider, a Newznab-compatible indexer, and a
-   TMDB v3 key. Optional integrations include Wyzie subtitles, Trakt, music, and
-   Live TV sources.
-3. Browse the catalog and press Play. Search, rank, mount, and stream happen
-   automatically.
+Open:
 
-Plain Node, without Docker:
+```text
+http://localhost:7777
+```
+
+Then:
+
+1. Create the owner account.
+2. Open Settings.
+3. Add TMDB, usenet, and a Newznab-compatible indexer.
+4. Optionally add Wyzie subtitles, Trakt, local libraries, music, or Live TV.
+5. Browse and press Play.
+
+Plain Node also works when Node 24+ is installed:
 
 ```bash
 node server/index.js
-# open http://localhost:7777
 ```
 
-ffmpeg is optional but strongly recommended. Without it, browsers that cannot
-decode a source may need the external-player handoff.
+ffmpeg is optional but strongly recommended. Without ffmpeg, some browser or
+device combinations may need external-player handoff instead of in-app remux or
+transcode.
 
-## Android TV Debug Build
+## Android TV
 
-Use Android Studio's bundled JBR, the current Android SDK, and Gradle 9.5.1+.
-The Android project uses Android Gradle Plugin 9.2.1, which requires Gradle
-9.4.1+.
+The stable Android TV download is always:
+
+```text
+https://github.com/d1same/triboon/releases/latest/download/triboon-tv.apk
+```
+
+Each release also keeps one versioned APK for history:
+
+```text
+triboon-tv-vX.Y.Z.apk
+```
+
+The APK filename does not control Android updates. Android accepts an update
+when the package id and signing key match and the new `versionCode` is higher.
+
+## Unraid
+
+Use the published image:
+
+```text
+ghcr.io/d1same/triboon:latest
+```
+
+Recommended mappings:
+
+- `/data` -> `/mnt/user/appdata/triboon`
+- Optional local media share -> `/media` as read-only
+
+Recommended environment:
+
+- `PUID` and `PGID` for your Unraid user/group
+- `UMASK`
+- `TRIBOON_SECRET` so sessions and encrypted settings survive rebuilds
+
+The Unraid template lives in `unraid/triboon.xml`.
+
+## Security And Privacy
+
+- Credentials and provider settings are encrypted at rest in the data folder.
+- API routes are deny-by-default and covered by route tests.
+- Stream URLs use signed, scoped tokens.
+- IPTV/provider URLs with credentials are redacted from logs and caches.
+- Local runtime data, logs, old APKs, screenshots, and secrets are ignored by
+  git.
+- Development-only test/demo folders are excluded from GitHub source archives.
+
+Do not commit your `data/` folder, `.env` files, API keys, cookies, provider
+credentials, logs, or personal media/test captures.
+
+## Development
+
+The server intentionally keeps runtime dependencies light: Node 24 LTS and the
+standard library in `server/`, with approved external binaries such as ffmpeg
+and yt-dlp.
+
+Run the app locally:
+
+```bash
+npm start
+```
+
+Run the verification suite:
+
+```bash
+npm test
+```
+
+Build the Android debug APK:
 
 ```powershell
 $env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'
@@ -48,227 +161,33 @@ $env:ANDROID_HOME="$env:LOCALAPPDATA\Android\Sdk"
 gradle -p android assembleDebug
 ```
 
-The debug APK is written to:
+The APK output is:
 
 ```text
 android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-For public Android updates, publish stable and versioned GitHub release assets
-from the same universal shell APK build:
-
-- `triboon-tv-vX.Y.Z.apk` keeps the exact versioned artifact for audit/history.
-- `triboon-tv.apk` is the stable update artifact for Downloader-style installs.
-  The fixed URL is `https://github.com/d1same/triboon/releases/latest/download/triboon-tv.apk`.
-- `android-tv.apk` is the generic stable Android TV alias for the same APK:
-  `https://github.com/d1same/triboon/releases/latest/download/android-tv.apk`.
-- `android-mobile-vX.Y.Z.apk` and `android-mobile.apk` are the matching mobile
-  aliases for the same build, with
-  `https://github.com/d1same/triboon/releases/latest/download/android-mobile.apk`
-  as the stable mobile link.
-
-The APK filename does not control whether Android accepts an update; Android
-uses the package id, signing key, and higher `versionCode`.
-
-If a current external Gradle is not installed, use the pinned fallback from
-`android/`:
+If a current external Gradle is not installed, use the pinned wrapper from the
+`android/` folder:
 
 ```powershell
 .\gradlew.bat assembleDebug
 ```
 
-Do not use an old local Gradle 8.x binary.
+## Project Map
 
-After Android shell changes, install and smoke-test the APK with:
+- `server/` - API, auth, source search, usenet streaming, IPTV, subtitles,
+  Trakt, remux/transcode, persistence, and static serving.
+- `web/index.html` - the single-file web UI used by browser, desktop wrapper,
+  and Android WebView shell.
+- `android/` - Android TV shell with D-pad bridge and native Media3/ExoPlayer.
+- `unraid/` - Unraid template.
+- `docs-architecture.md` - deeper architecture and data-flow notes.
+- `docs-player-regression-map.md` - player behavior contracts and regression
+  checklist.
+- `docs-release-audit.md` - release verification history.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File bench\android-tv-smoke.ps1 -InstallApk -ColdStart -StartupDpad -NoScreenshot
-```
+## Legal
 
-The shell handles Android WebView renderer deaths with `onRenderProcessGone`:
-it destroys the dead WebView, rebuilds it below setup/native-player overlays,
-and reloads the last route instead of leaving Android's default crashed page.
-
-## Unraid
-
-The image is published to `ghcr.io/d1same/triboon:latest` on pushes that build
-the release image.
-
-- Template: use `unraid/triboon.xml` or its raw URL in Unraid's Docker template
-  repository flow.
-- Data path: map `/data` to `/mnt/user/appdata/triboon`.
-- Optional media path: map a media share read-only to `/media` for local
-  Libraries.
-- Permissions: the container starts as root only to fix ownership, then drops to
-  `PUID:PGID` with `UMASK`.
-- Stable secret: set `TRIBOON_SECRET` so sessions and encrypted settings survive
-  image rebuilds.
-
-## How Play Works
-
-```text
-focus a title -> background prefetch of indexer search and top NZB
-press Play    -> fan-out search/cache -> rank under quality cap
-              -> fetch and mount the best release
-              -> bounded health gate -> stream URL
-first frame   -> HTTP Range bytes stream from usenet; seeking maps to articles
-failure       -> auto-advance to the next ranked release at the same timestamp
-```
-
-Playback policy is always:
-
-```text
-source-fit -> direct play -> remux -> transcode
-```
-
-That means a 1080p-capped user should get a good 1080p source first, not a 4K
-source that needs transcoding.
-
-## Streaming Performance Model
-
-Triboon manages VOD performance as a capacity model. Admins can enter each
-usenet provider's real connection limit, expected simultaneous users, remote
-users, server bandwidth, quality mix, buffer targets, and per-stream connection
-windows in Settings -> Streaming performance.
-
-The server combines multiple usenet providers without losing each account's own
-cap, keeps a startup/seek reserve, and schedules NNTP work by priority:
-
-```text
-startup / seek -> playback -> health -> read-ahead -> background
-```
-
-Read-ahead grows when the server is idle and shrinks when more active streams
-exist, so a large 4K stream should not block another user's first frame or seek.
-The detailed contract is in `docs-streaming-performance.md`; player regression
-contract `P14` in `docs-player-regression-map.md` tracks the code paths and
-tests that protect it.
-
-## Live TV Model
-
-Live TV sources are first-class playlists. Admins can add multiple M3U or
-Xtream sources, and each source owns its own channel cache, XMLTV cache, Xtream
-guide cache, source-scoped channel ids, favorites cleanup, and delete behavior.
-
-Important rules:
-
-- Deleting a source removes its runtime cache, persisted source caches, and
-  source-prefixed favorites/groups.
-- Re-adding the same playlist starts fresh instead of reviving stale channel
-  ids.
-- Xtream disk caches do not store credential-bearing stream URLs; URLs are
-  rebuilt from encrypted settings.
-- Browser Live TV uses the server fMP4 remux path.
-- Android TV uses native Media3/ExoPlayer first, with provider TS/HLS and then
-  server remux fallback.
-- Users can add personal M3U or Xtream playlists from Preferences. These are
-  stored encrypted on the server like shared playlists, marked as owned by that
-  user, visible only to that account, and available from browser, Android TV,
-  and any other signed-in client.
-- Android TV can also save personal IPTV sources on the device. These Xtream or
-  M3U entries are stored in Android Keystore-backed private storage, loaded from
-  the Android device network, merged into Live TV in the web UI, and direct-
-  played by ExoPlayer; they are not sent to the server or shared with other
-  users.
-- Provider failures are logged with sanitized reasons and without credential
-  URLs.
-
-See `docs-architecture.md` and `docs-player-regression-map.md` for the full
-source/cache/player map.
-
-## What's Inside
-
-| Module | Responsibility |
-| --- | --- |
-| `server/yenc.js` | yEnc decode and encode tests. |
-| `server/nzb.js` | NZB parse, primary-file pick, password metadata. |
-| `server/nntp.js` | NNTP client, priority lanes, parallel-connect pool, combined multi-provider failover. |
-| `server/vfs.js` | Segment-map byte stream, playback/read-ahead priorities, triage. |
-| `server/rar.js`, `server/zip.js` | RAR4/RAR5 and ZIP header parse to seekable extent maps. |
-| `server/archive.js` | Container detection, volume ordering, archive mounts, verdict tags. |
-| `server/newznab.js` | Indexer fan-out, hard per-indexer budget, dedupe. |
-| `server/scoring.js` | TRaSH-style ranking plus Triboon streamability, language, health, and cap signals. |
-| `server/pipeline.js` | Press-play search, rank, mount, health gate, auto-advance, cache. |
-| `server/store.js` | Atomic JSON persistence and TTL verdict cache. |
-| `server/auth.js` | scrypt auth, HMAC tokens, invites, Quick Connect, AES-256-GCM settings. |
-| `server/tmdb.js`, `server/trakt.js` | TMDB proxy/cache, Trakt sync, scrobble outbox. |
-| `server/opensubs.js` | Wyzie subtitle search/ranking/download helpers. |
-| `server/transcode.js` | ffmpeg/ffprobe probe, remux, transcode, audio-track selection, subtitle extraction. |
-| `server/index.js` | HTTP API, deny-by-default routes, Range streaming, Live TV source manager, static UI. |
-| `web/index.html` | Entire app UI: setup/login, home/catalogs, libraries, Live TV, settings, player, D-pad nav. |
-| `android/.../MainActivity.java` | Android TV WebView shell, key bridge, native Media3/ExoPlayer, PiP guide recovery. |
-
-## Security
-
-- Deny-by-default routing: every endpoint declares `public`, `user`, `admin`, or
-  `stream` auth. A route-coverage test enforces this.
-- Passwords use scrypt; session and stream URLs use HMAC-signed tokens.
-- Stream tokens are scoped to one mount, file, channel, or local item.
-- Provider, indexer, TMDB, Wyzie, Trakt, and IPTV credentials are encrypted at
-  rest.
-- Remote strings from indexers, IPTV, subtitles, and metadata are escaped before
-  reaching the UI.
-- Provider URLs with credentials must not be logged, cached in plain channel
-  rows, committed, or printed in release notes.
-- Login, profile PINs, invites, and Quick Connect are rate-limited.
-
-## Verified
-
-The current suite covers:
-
-- yEnc, NZB parsing, primary-file picking.
-- Store-RAR4/RAR5 and ZIP streaming, multi-volume archives, fuzzed seeks, HTTP
-  Range semantics, suffix ranges, and cold-seek budget.
-- Compressed/encrypted/7z detection with honest blocked verdicts.
-- Multi-provider failover, combined provider capacity, bounded press-play health
-  gate, and startup/seek priority over read-ahead.
-- Title-safe source selection, scoring, caps, language policy, and manual
-  source selection.
-- Auth, settings encryption, invite/Quick Connect flows, route coverage, stream
-  token binding, and security headers.
-- TMDB, Trakt, watch state, Continue Watching, local libraries, subtitles,
-  player D-pad behavior, Android native player contracts, and Live TV.
-- IPTV source-scoped caches, source delete cleanup, clean re-add, large M3U
-  stream parsing, XMLTV persistence, retune cleanup, and sanitized provider
-  failures.
-
-Run:
-
-```bash
-npm.cmd test
-```
-
-For Live TV work also run:
-
-```bash
-node --test test/iptv-cache.test.js
-node --test test/security.test.js
-```
-
-For streaming-capacity work also run:
-
-```bash
-node --test test/e2e.test.js
-node --test test/security.test.js
-node --test test/phase2.test.js
-```
-
-## TV Controls
-
-Arrow keys are the D-pad. Enter selects. Esc/Backspace goes back. Space toggles
-play/pause. The focus ring is the cursor; backdrops follow the selected item.
-
-## Roadmap Ahead
-
-- Broader Android hardware QA for Shield, Onn, Fire TV, Chromecast, Google TV,
-  and low-memory devices.
-- Real multi-user playback stress testing that starts and seeks several 1080p
-  and 4K streams together against a configured provider stack.
-- Tauri desktop.
-- par2 repair and compressed RAR improvements.
-- MDBList and richer catalog rows.
-- Intro/credit skip once playback and resume remain stable.
-- Release automation polish: version bump, APK build, GitHub release, stable
-  TV/mobile APK aliases, and Unraid update confirmation.
-
-For legally obtained content only.
+Triboon is for legally obtained content only. You are responsible for the
+providers, playlists, indexers, files, and accounts you configure.

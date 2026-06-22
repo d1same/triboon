@@ -1,4 +1,4 @@
-# Shell scripts must stay LF — the Docker entrypoint runs in alpine /bin/sh.
+# Shell scripts must stay LF - the Docker entrypoint runs in alpine /bin/sh.
 * text=auto
 *.sh text eol=lf
 *.png binary
@@ -7,3 +7,35 @@
 *.mkv binary
 *.rar binary
 *.zip binary
+
+# Keep GitHub source archives focused on runnable app code and public docs.
+# These folders can stay tracked for engineering, but normal release downloads
+# do not need internal tests, mock demos, local captures, or generated artifacts.
+/bench export-ignore
+/bench/** export-ignore
+/demo export-ignore
+/demo/** export-ignore
+/test export-ignore
+/test/** export-ignore
+/data export-ignore
+/data/** export-ignore
+/dist export-ignore
+/dist/** export-ignore
+/logs export-ignore
+/logs/** export-ignore
+/graphify-out export-ignore
+/graphify-out/** export-ignore
+/.agents export-ignore
+/.agents/** export-ignore
+/.claude export-ignore
+/.claude/** export-ignore
+/.codex export-ignore
+/.codex/** export-ignore
+/.codex-remote-attachments export-ignore
+/.codex-remote-attachments/** export-ignore
+/*.log export-ignore
+/*.apk export-ignore
+/*.cookies.txt export-ignore
+/cookies.txt export-ignore
+/gitleaks-report*.json export-ignore
+/gitleaks-*.json export-ignore
