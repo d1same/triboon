@@ -21,6 +21,7 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.media.MediaCodecInfo;
 import android.media.MediaCodecList;
@@ -2200,9 +2201,7 @@ public class MainActivity extends Activity {
         FrameLayout loadingMark = new FrameLayout(this);
         ProgressBar loadingRing = new ProgressBar(this);
         loadingRing.setIndeterminate(true);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            loadingRing.setIndeterminateTintList(ColorStateList.valueOf(0xFFFB8B3C));
-        }
+        loadingRing.setIndeterminateDrawable(nativeLoadingRingDrawable());
         loadingMark.addView(loadingRing, new FrameLayout.LayoutParams(
                 dp(136), dp(136), android.view.Gravity.CENTER));
 
@@ -2269,6 +2268,13 @@ public class MainActivity extends Activity {
                 new int[]{0xEE050309, 0xB80B0812, 0xD8110618});
         d.setShape(GradientDrawable.RECTANGLE);
         return d;
+    }
+
+    private Drawable nativeLoadingRingDrawable() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            return getResources().getDrawable(R.drawable.native_loading_ring, getTheme());
+        }
+        return getResources().getDrawable(R.drawable.native_loading_ring);
     }
 
     private void showNativeLoading(String title, String backdropUrl) {

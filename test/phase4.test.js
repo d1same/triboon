@@ -299,6 +299,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'closing details should restore the previous page in place instead of rebuilding it from scratch');
   assert.match(ui, /function restoreDetailFocus\(ret\) \{[\s\S]+if \(ret\.searchQuery !== undefined && S\.view === 'search'\) \$\('searchInput'\)\.value = ret\.searchQuery;[\s\S]+return focusCard\(ret\.rowIdx \|\| 0[\s\S]+return focusGrid\(Number\.isFinite\(ret\.gridIdx\) \? ret\.gridIdx : 0\)/,
     'detail back should return focus to the same home/list/search cover');
+  assert.match(ui, /function restoreDetailFocusRoots\(ret\) \{[\s\S]+ret\.view === 'home'[\s\S]+setRowsView\(\$\('rows'\), S\.rows \|\| \[\], true\);[\s\S]+\['movies', 'tv', 'search', 'library', 'watchlist', 'livetv'\]\.includes\(ret\.view\)[\s\S]+S\.gridRoot = \$\('grid'\);[\s\S]+function restoreDetailFocus\(ret\) \{[\s\S]+restoreDetailFocusRoots\(ret\);/,
+    'detail back should rebind Home/Browse focus roots before restoring saved focus');
   assert.match(ui, /function hydrateAppShellData\(\) \{[\s\S]+Promise\.allSettled\(\[[\s\S]+loadWatchState\(\),[\s\S]+loadLibraries\(\),[\s\S]+loadWatchlist\(\),[\s\S]+\]\)\.then[\s\S]+if \(S\.view === 'home'\) loadRows\(\{ watchReady: true, preserveFocus: true, background: true \}\)/,
     'startup hydration should run watch state, libraries, and watchlist after the shell is usable while reusing the first watch-state request');
   assert.match(ui, /async function refreshAfterTraktSync\(\) \{[\s\S]+invalidateWatchCache\(\);[\s\S]+Promise\.allSettled\(\[loadWatchState\(true\), loadWatchlist\(\)\]\)[\s\S]+S\.view === 'home'[\s\S]+S\.view === 'calendar'[\s\S]+syncDetailButtons\(S\.detailItem\);[\s\S]+\}/,
@@ -311,7 +313,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'home catalog rows should hydrate after first paint instead of blocking the app shell');
   assert.match(ui, /function refreshHomeWhenSettled\(opts = \{\}\) \{[\s\S]+if \(S\._booting && S\.view === 'home'\) return loadRows\(\{ preserveFocus: true, background: true, \.\.\.opts \}\);[\s\S]+if \(homeBackgroundRefreshReady\(\)\) loadRows/,
     'boot-time home refresh should publish under the splash instead of waiting for visible idle focus');
-  assert.match(ui, /function homeRowsFromWatch\(cw, loading = false\) \{[\s\S]+rows\.push\(\.\.\.cachedHomeCatalogRows\(\)\);[\s\S]+if \(!rows\.length && loading\)[\s\S]+emptyLabel: 'Loading\.\.\.'[\s\S]+function homeRowsReadyForBoot\(rows\) \{[\s\S]+row\.name !== 'Loading home'[\s\S]+function publishHomeRows\(rows, opts = \{\}\) \{[\s\S]+if \(S\._homeRowsSig === sig && \$\('rows'\)\.children\.length\) return false;[\s\S]+async function loadRows\(opts = \{\}\) \{[\s\S]+const runId = S\._homeLoadRun[\s\S]+!opts\.catalogOnly && !opts\.watchReady && !hasFreshWatch[\s\S]+publishHomeRows\(homeRowsFromWatch\(cachedWatchRowsForHome\(\), true\), opts\); \/\/ Internal first paint: focus target under the splash before \/api\/watch returns\.[\s\S]+loadWatchState\(\)\.then/,
+  assert.match(ui, /function homeRowsFromWatch\(cw, loading = false\) \{[\s\S]+rows\.push\(\.\.\.cachedHomeCatalogRows\(\)\);[\s\S]+if \(!rows\.length && loading\)[\s\S]+emptyLabel: 'Loading\.\.\.'[\s\S]+function homeRowsReadyForBoot\(rows\) \{[\s\S]+row\.name !== 'Loading home'[\s\S]+function publishHomeRows\(rows, opts = \{\}\) \{[\s\S]+if \(S\._homeRowsSig === sig && \$\('rows'\)\.children\.length\) \{[\s\S]+return false;[\s\S]+async function loadRows\(opts = \{\}\) \{[\s\S]+const runId = S\._homeLoadRun[\s\S]+!opts\.catalogOnly && !opts\.watchReady && !hasFreshWatch[\s\S]+publishHomeRows\(homeRowsFromWatch\(cachedWatchRowsForHome\(\), true\), opts\); \/\/ Internal first paint: focus target under the splash before \/api\/watch returns\.[\s\S]+loadWatchState\(\)\.then/,
     'home first paint should create a hidden focus placeholder but keep the splash until real rows exist');
   assert.match(ui, /const cw = opts\.watchReady \? cachedWatchRowsForHome\(\) : await loadWatchState\(\)\.catch\(\(\) => \[\]\);[\s\S]+if \(runId !== S\._homeLoadRun && !opts\.catalogOnly\) return;[\s\S]+publishHomeRows\(homeRowsFromWatch\(cw, false\), \{ preserveFocus: !!opts\.preserveFocus, focusSnapshot: opts\.focusSnapshot \}\);[\s\S]+scheduleHomeCatalogRefresh\(\);/,
     'home should refresh with real watch rows and schedule TMDB catalog refresh after first paint');
@@ -379,20 +381,34 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'attached library rail rollover should request previewOnly mode');
   assert.match(ui, /if \(v === 'library' && !opts\.preservePage\) \{[\s\S]+opts\.previewOnly && S\.currentLib && S\.currentLib\.path[\s\S]+runLocalLibrary\(S\.currentLib, undefined, \{ preview: true \}\)[\s\S]+else runLibrary\(true\);/,
     'switchView should auto-load the first local-folder page during rail preview');
+  assert.match(ui, /if \(!opts\.keepRail\) \{[\s\S]+if \(S\.zone === 'rail'\) S\.zone = '';[\s\S]+leaveRail\(\);/,
+    'real section switches should clear rail mode so the destination page can own focus');
   assert.match(ui, /else if \(S\.libraryPreviewOnly\) \{[\s\S]+S\.libraryPreviewOnly = false;[\s\S]+\}[\s\S]+setTimeout\(\(\) => \{ if \(S\.view === 'library'\) focusContent\(\); \}, 80\);/,
     'pressing OK on an auto-previewed attached-library rail item should enter content without reloading the page');
   assert.match(ui, /--bdW:min\(50vw,980px\);[\s\S]+--bdH:min\(56vh,620px\);[\s\S]+#backdrop \.layer\{[\s\S]+width:var\(--bdW\);height:var\(--bdH\)/,
     'browser backdrop should use capped viewport-aware dimensions instead of percentage takeover');
   assert.match(ui, /body\.tv\{--bdW:min\(48vw,820px\);--bdH:min\(50vh,460px\)\}[\s\S]+body\.shortBrowseBd\{--bdH:min\(46vh,430px\)\}[\s\S]+body\.tv\.shortBrowseBd\{--bdH:min\(38vh,360px\)\}[\s\S]+@media \(max-height:760px\)\{[\s\S]+--bdH:min\(34vh,260px\)[\s\S]+@media \(max-width:980px\)\{[\s\S]+--bdW:min\(44vw,420px\)/,
     'TV, short browser, narrow browser, and poster browse viewports should tighten backdrop size');
-  assert.match(ui, /const shortBrowseBd = v === 'movies' \|\| v === 'tv' \|\| \(v === 'library' && S\.currentLib && S\.currentLib\.path\);[\s\S]+document\.body\.classList\.toggle\('shortBrowseBd', !!shortBrowseBd\);/,
-    'movies, TV shows, and attached libraries should use the shorter browse backdrop');
+  assert.match(ui, /body\.shortBrowseBd:not\(\.tv\) #bdInfo[\s\S]+-webkit-line-clamp:1[\s\S]+@media \(max-height:820px\)[\s\S]+body\.shortBrowseBd:not\(\.tv\) #bdInfo \.bdiC,[\s\S]+display:none/,
+    'browser poster browse pages should compact the focused-title band without touching TV');
+  assert.match(ui, /function browserBrowseCoverPx\(size\) \{[\s\S]+document\.body\.classList\.contains\('tv'\)[\s\S]+window\.innerHeight <= 820[\s\S]+return size === 'L' \? '190px'[\s\S]+const px = window\.innerWidth <= 600 \? '140px' : \(browserBrowseCoverPx\(s\) \|\| table\[s\] \|\| table\.M\);[\s\S]+const shortBrowserBrowse = document\.body\.classList\.contains\('shortBrowseBd'\) && !document\.body\.classList\.contains\('tv'\);[\s\S]+shortBrowserBrowse \? \(h <= 820 \? 128/,
+    'desktop/tablet browse pages should use compact browser poster sizing and a compact row reserve');
+  assert.match(ui, /const shortBrowseBd = v === 'movies' \|\| v === 'tv' \|\| v === 'watchlist' \|\| \(v === 'library' && S\.currentLib && S\.currentLib\.path\);[\s\S]+document\.body\.classList\.toggle\('shortBrowseBd', !!shortBrowseBd\);/,
+    'movies, TV shows, watchlist, and attached libraries should use the shorter browse backdrop');
+  assert.match(ui, /let pendingLibraryRouteJob = null;[\s\S]+function applyLibraryRoute\(id\) \{[\s\S]+switchView\('library', false\);[\s\S]+function deferLibraryRoute\(id\) \{[\s\S]+loadLibraries\(\)[\s\S]+if \(parts\[0\] !== 'library' \|\| parts\[1\] !== id\) return;[\s\S]+if \(!applyLibraryRoute\(id\)\) switchView\('home', false\);[\s\S]+if \(view === 'library' && parts\[1\]\) \{[\s\S]+deferLibraryRoute\(parts\[1\]\);/,
+    'library hash routes should wait for async library metadata instead of falling through to Home');
   assert.match(ui, /if \(v === 'search'\) \{ \$\('browseTitle'\)\.textContent = 'Search';[\s\S]+if \(!opts\.preserveSearch && !opts\.preservePage\) \{ resetSearchPage\(\); \$\('grid'\)\.innerHTML = ''; \}/,
     'restoring Search from Details should not clear the existing result grid');
   assert.match(ui, /function tmdbSearchRank\(x, q\) \{[\s\S]+searchSeqIndex\(noLeadArticle, queryWords\)[\s\S]+score \+= 10000[\s\S]+score -= 1800[\s\S]+sort\(bySearchRank\)\.map\(mapTmdb\)/,
     'TMDB search should rank exact franchise/title-prefix matches above incidental phrase matches');
-  assert.match(ui, /window\.addEventListener\('hashchange'[\s\S]+if \(\$\(\'detail\'\)\.classList\.contains\(\'open\'\)\) return closeDetail\(\);[\s\S]+applyRoute\(\);/,
-    'browser Back from a title route should use the same detail restore path');
+  assert.match(ui, /if \(S\._homeRowsSig === sig && \$\('rows'\)\.children\.length\) \{[\s\S]+if \(S\.view === 'home'\) \{[\s\S]+setRowsView\(\$\('rows'\), S\.rows, true\);[\s\S]+\}[\s\S]+S\.view === 'home' && S\.zone !== 'rail' && !document\.querySelector\('#home \.focus'\)[\s\S]+focusContent\(\);[\s\S]+return false;/,
+    'returning Home with cached rows should repoint the row model and reclaim focus from hidden pages');
+  assert.match(ui, /if \(\(S\.maxLevel \?\? 3\) < 3\) \{[\s\S]+renderRowsInto\(root, rows\);[\s\S]+setRowsView\(root, rows, false\);[\s\S]+if \(S\.zone !== 'rail'\) focusCard\(0, 0\);/,
+    'restricted-profile Discover rows should still focus the first visible card after rendering');
+  assert.match(ui, /buildTrailerRow\(trend\.results[\s\S]+const focused = root\.querySelector\('\.focus'\);[\s\S]+const focusRow = focused \? parseInt\(focused\.dataset\.row[\s\S]+renderRowsInto\(root, rows, \{ resetScroll: false \}\);[\s\S]+setRowsView\(root, rows, false\);[\s\S]+if \(S\.view === 'discover' && S\.zone !== 'rail'\) \{[\s\S]+focusCard\(safeRow, safeCol, \{ scroll: false, align: false \}\);/,
+    'Discover trailer-row hydration should preserve or restore card focus after the async rerender');
+  assert.match(ui, /function routeIsTitle\(\) \{[\s\S]+\^#\\\/\?title\\\/\(movie\|tv\)\\\/\\d\+[\s\S]+window\.addEventListener\('hashchange'[\s\S]+if \(\$\(\'detail\'\)\.classList\.contains\(\'open\'\) && !routeIsTitle\(\)\) return closeDetail\(\);[\s\S]+applyRoute\(\);/,
+    'browser Back from one title route to another should route to the previous detail instead of jumping to the original browse page');
   assert.match(ui, /const detailResume = resumePositionForItem\(it\);[\s\S]+updateDetailPlayLabel\(detailResume \? \{ label: 'Resume', target: \{ \.\.\.it, resume: detailResume \} \}/,
     'movie details should show Resume without the timestamp while keeping the resume position in the play target');
   assert.match(ui, /return updateDetailPlayLabel\(\{ label: 'Resume', target: epTarget\(show, \+m\[1\], \+m\[2\], wm\[inProg\]\.position\) \}\)/,
@@ -532,6 +548,7 @@ test('Android native player: direct source and native chrome stay out of the web
   const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
   const manifest = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'AndroidManifest.xml'), 'utf8');
   const playerMap = fs.readFileSync(path.join(__dirname, '..', 'docs-player-regression-map.md'), 'utf8');
+  const loadingRing = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'drawable', 'native_loading_ring.xml'), 'utf8');
   const guideIcon = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'drawable', 'ic_player_guide.xml'), 'utf8');
   const nativePlayerLayout = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'layout', 'native_player_view.xml'), 'utf8');
   const audioIcon = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'drawable', 'ic_player_audio.xml'), 'utf8');
@@ -1043,6 +1060,18 @@ test('Android native player: direct source and native chrome stay out of the web
     'desktop hover may expand the rail unless a click just collapsed it; Android TV still relies on explicit D-pad state');
   assert.match(ui, /function focusContent\(retried\) \{[\s\S]+leaveRail\(\);[\s\S]+clearFocus\(\);/,
     'moving focus into page content should always collapse any stale rail state first');
+  assert.match(ui, /if \(k === 'ArrowDown'\) return focusCard\(S\.rowIdx, 0\);[\s\S]+if \(k === 'ArrowUp'\) return S\.rowIdx === 0 \? \(view\.hasHero \? focusHero\(0\) : enterRail\(\)\)[\s\S]+: focusCard\(S\.rowIdx - 1, 0\);[\s\S]+return focusCard\(S\.rowIdx \+ 1, 0\);/,
+    'Home and Discover vertical row moves should start at the first thumbnail in the destination row');
+  assert.match(ui, /function applyRoute\(\) \{[\s\S]+switchView\(target, false\);[\s\S]+requestAnimationFrame\(\(\) => requestAnimationFrame\(\(\) => \{[\s\S]+focusContent\(\);[\s\S]+\}\)\);[\s\S]+\}/,
+    'browser Back/Forward should land focus on the visible route instead of leaving a stale rail focus ring');
+  assert.match(ui, /window\.addEventListener\('hashchange', \(\) => \{[\s\S]+if \(\$\(\'person\'\)\.classList\.contains\('open'\)\) \{[\s\S]+closePerson\(\);[\s\S]+setRoute\(`#\/title\/\$\{cur\.type\}\/\$\{cur\.tmdbId\}`\);[\s\S]+return;[\s\S]+\}[\s\S]+if \(\$\(\'detail\'\)\.classList\.contains\('open'\) && !routeIsTitle\(\)\) return closeDetail\(\);[\s\S]+applyRoute\(\);[\s\S]+\}\);/,
+    'browser Back from a cast/person overlay should close the person first, and detail-to-detail history should route instead of jumping to the original browse page');
+  assert.match(ui, /function liveNoChannelsHtml\(errors = \[\]\) \{[\s\S]+gridMore liveEmpty focusable[\s\S]+function focusLiveGridMessage\(\) \{[\s\S]+S\.view === 'livetv' && S\.zone !== 'rail'[\s\S]+focusGrid\(0\);/,
+    'Live TV empty channel states should be focusable and claim D-pad focus');
+  assert.match(ui, /grid\.innerHTML = '<div class="gridMore focusable">loading channels[\s\S]+focusLiveGridMessage\(\);[\s\S]+if \(!r\.configured\) \{ grid\.innerHTML = '<div class="gridMore focusable">[\s\S]+focusLiveGridMessage\(\); return; \}[\s\S]+if \(!r\.channels\.length\) \{ grid\.innerHTML = liveNoChannelsHtml\(S\.liveSourceErrors\); focusLiveGridMessage\(\); return; \}[\s\S]+catch \(e\) \{ grid\.innerHTML = `<div class="gridMore focusable">Live TV failed:/,
+    'Live TV loading, not-configured, no-channel, and failed states should not strand focus');
+  assert.match(ui, /No channels match\.<\/div>'; focusLiveGridMessage\(\);[\s\S]+Every category is hidden[\s\S]+focusLiveGridMessage\(\);[\s\S]+No channels to show - favorite some channels or use the filter[\s\S]+focusLiveGridMessage\(\);/,
+    'Live TV in-page empty states should stay remote-focusable after search/category changes');
   assert.match(ui, /const selectedCatIdx = Math\.max\(0, names\.indexOf\(S\.liveCat\)\);[\s\S]+S\.liveCatNavIdx = S\.liveCatDpadMode && Number\.isFinite\(S\.liveCatNavIdx\)[\s\S]+: selectedCatIdx;/,
     'Live TV rerenders should preserve the D-pad category focus index instead of snapping to the selected category');
   assert.match(ui, /function focusLiveCategory\(idx, select = false\) \{[\s\S]+applyFocus\(cats\[i\], false\);[\s\S]+if \(select && name && name !== S\.liveCat\) \{[\s\S]+clearTimeout\(S\._liveCatApplyT\);[\s\S]+S\.liveCat = name;[\s\S]+renderLiveTvBody\(\);[\s\S]+requestAnimationFrame\(\(\) => \{[\s\S]+focusLiveCategory\(i\);[\s\S]+\}\);/,
@@ -1307,6 +1336,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'native loading title should stay prominent without overflowing on TV');
   assert.match(android, /nativeLoadingStage\.setText\("Finding best source"\);[\s\S]+nativeLoadingDetail\.setText\("Preparing native playback"\);/,
     'native loading overlay should show concise playback status and detail text');
+  assert.match(android, /loadingRing\.setIndeterminateDrawable\(nativeLoadingRingDrawable\(\)\);[\s\S]+R\.drawable\.native_loading_ring/,
+    'native ExoPlayer loading overlay should use the thin Triboon ring instead of the stock chunky ProgressBar spinner');
+  assert.match(loadingRing, /android:shape="ring"[\s\S]+android:thickness="2dp"[\s\S]+android:shape="ring"[\s\S]+android:thickness="3dp"[\s\S]+android:type="sweep"/,
+    'native loading ring should stay browser-like: a thin track plus thin rotating sweep arc');
   assert.match(android, /private String nativeLoadingStageFor\(String mode, String kind\)[\s\S]+Tuning channel[\s\S]+Opening direct play[\s\S]+private String nativeLoadingDetailFor\(String mode, String kind, String qualityLabel, String sourceLabel, long startOffsetMs\)[\s\S]+"Direct Play"\);[\s\S]+String detail = method \+ " - " \+ quality;[\s\S]+sourceLabel\.trim\(\)[\s\S]+Resume %d:%02d/,
     'native loading copy should adapt for Live TV, direct play, quality, source, and resume state');
   assert.doesNotMatch(android, /loadingBrand\.setText\("TRIBOON"\)|TextView loadingBrand/,

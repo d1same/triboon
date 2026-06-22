@@ -84,15 +84,36 @@ This is the A-to-Z checklist for keeping web and Android TV working as separate 
 
 ## Release Packaging
 
-- Android TV releases publish both APK asset names from the same build:
-  `triboon-tv-vX.Y.Z.apk` for audit/history and `triboon-tv.apk` for the stable
-  Downloader URL:
-  `https://github.com/d1same/triboon/releases/latest/download/triboon-tv.apk`.
+- Android releases publish stable and versioned APK asset names from the same
+  universal shell build: `triboon-tv-vX.Y.Z.apk`, `android-tv-vX.Y.Z.apk`, and
+  `android-mobile-vX.Y.Z.apk` for audit/history, plus `triboon-tv.apk`,
+  `android-tv.apk`, and `android-mobile.apk` for stable Downloader-style links:
+  `https://github.com/d1same/triboon/releases/latest/download/triboon-tv.apk`
+  and
+  `https://github.com/d1same/triboon/releases/latest/download/android-tv.apk`
+  and
+  `https://github.com/d1same/triboon/releases/latest/download/android-mobile.apk`.
 - Android update acceptance depends on the package id, signing key, and higher
   `versionCode`; the APK filename is only for download/link stability.
 
 ## Verification Log
 
+- Release v1.5.10 verification: browser/mobile browse surfaces keep the
+  backdrop compact or hidden so rows stay visible, Home/Discover vertical D-pad
+  moves start at the first thumbnail in the destination row, detail/person
+  browser history restores through the visible route instead of jumping back to
+  the original page, Live TV empty/error states remain focusable, and Android
+  native loading now uses a thin Triboon spinner ring instead of the stock
+  chunky ProgressBar. Release packaging now publishes the existing TV stable
+  alias plus generic Android TV/mobile stable aliases from the same universal
+  shell build. Verification passed inline `web/index.html` script parse,
+  `git diff --check`, full `npm.cmd test` 176/176, Android `assembleDebug`,
+  and `aapt dump badging dist/triboon-tv-v1.5.10.apk`. Badging reported
+  `versionCode='63'` and `versionName='1.5.10'`; all v1.5.10 APK aliases
+  (`triboon-tv-v1.5.10.apk`, `triboon-tv.apk`, `android-tv-v1.5.10.apk`,
+  `android-tv.apk`, `android-mobile-v1.5.10.apk`, and `android-mobile.apk`)
+  share SHA-256
+  `2E324CEF51CDDEBAA203C151EB8DDACC6B54CDB29DD87B1DEDEA9420B77D610C`.
 - Release v1.5.9 verification: the Android app shell now treats taps in the
   top-left Android chrome/menu area as the Triboon menu toggle, making the
   stable APK match the latest local web UI after the v1.5.8 IPTV playlist-edit

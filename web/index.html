@@ -94,6 +94,20 @@ body.fullBd #bdInfo.show{opacity:1}
 #bdInfo .bdiO{color:#d9d2e4;font-size:15.5px;line-height:1.6;max-width:74ch;display:-webkit-box;
   -webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;text-shadow:0 2px 12px rgba(0,0,0,.8)}
 @media (max-height:899px){#bdInfo{top:70px}#bdInfo .bdiO{-webkit-line-clamp:3}}
+/* Poster-browse pages are catalog-first in browsers: keep the focused title band compact
+   enough that at least two rows can fit on common desktop/tablet heights. TV keeps its
+   separate Plex-sized layout below. */
+body.shortBrowseBd:not(.tv) #bdInfo{top:clamp(58px,11vh,126px);max-width:min(720px,52vw)}
+body.shortBrowseBd:not(.tv) #bdInfo .bdiT{font-size:clamp(30px,3.6vw,52px);margin-bottom:8px}
+body.shortBrowseBd:not(.tv) #bdInfo .bdiM{margin-bottom:8px}
+body.shortBrowseBd:not(.tv) #bdInfo .bdiC{margin-bottom:6px}
+body.shortBrowseBd:not(.tv) #bdInfo .bdiO{font-size:14.5px;line-height:1.45;-webkit-line-clamp:1}
+@media (max-height:820px) and (min-width:601px){
+  body.shortBrowseBd:not(.tv) #bdInfo{top:58px;max-width:min(620px,56vw)}
+  body.shortBrowseBd:not(.tv) #bdInfo .bdiT{font-size:clamp(28px,3.3vw,42px)}
+  body.shortBrowseBd:not(.tv) #bdInfo .bdiC,
+  body.shortBrowseBd:not(.tv) #bdInfo .bdiO{display:none}
+}
 @media (max-width:600px){
   #guide{height:clamp(340px,calc(100vh - 172px),620px)}
 }
@@ -998,10 +1012,23 @@ body.tv .cwAct,body.tv .epMenuBtn{display:none!important}
   body.railOpen{--rail:0px}
   #home,#discover,#browse,#detail,#person,#settings,#prefs,#music{padding-left:16px!important;padding-right:16px!important}
   #searchBar{left:16px;right:16px}
-  #home{padding-left:16px!important}
+  #home{padding:62px 16px 18px 16px!important;justify-content:flex-end}
+  #hero{max-width:calc(100vw - 80px);margin:0 0 14px 48px;padding:0}
+  #hero .eyebrow{margin-bottom:8px;font-size:10px;letter-spacing:.18em}
+  #hero h1{font-size:clamp(28px,9vw,38px);line-height:1.08;margin-bottom:8px}
+  #hero .meta{margin-bottom:7px}
+  #heroCredits{min-height:0;margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #hero p{font-size:14.5px;line-height:1.42;-webkit-line-clamp:2;margin-bottom:12px;max-width:100%}
+  #heroBtns{gap:9px;flex-wrap:wrap}
+  #heroBtns .btn{padding:11px 16px;font-size:14px}
+  #rows{max-height:min(58vh,calc(100vh - 260px));gap:14px}
   #browse.rowsWin #grid{flex:1!important;max-height:none!important;margin-top:0!important}
-  #browse .browseHead{margin-left:48px;margin-top:0;justify-content:flex-start}
-  #hero{max-width:92vw;margin-left:48px}
+  #browse .browseHead{margin-left:48px;margin-top:0;margin-bottom:12px;justify-content:flex-start}
+  #browse{padding-top:62px!important}
+  #grid{gap:18px 12px;padding-top:0}
+  #discover{padding-top:62px!important}
+  #discover h1{margin-left:48px;margin-bottom:10px}
+  #discoverRows{margin-top:0;max-height:calc(100vh - 122px);gap:16px}
   #detail .back{top:14px;left:66px!important}
   #detail .detailScroll{padding:0 16px 44px}
   #detail .detailHero{display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-start;gap:18px;min-height:0;padding-top:82px}
@@ -3058,11 +3085,21 @@ const COVER_SIZES = { S: '150px', M: '190px', L: '230px' };
 // app on the same Shield: ~230 physical px posters, ONE row under a tall backdrop band.
 // M=155 CSS × 1.5 scale ≈ Plex's exact poster size.
 const COVER_SIZES_TV = { S: '135px', M: '155px', L: '175px' };
+function isPosterBrowseView() {
+  return ['movies', 'tv', 'watchlist'].includes(S.view)
+    || (S.view === 'library' && S.currentLib && S.currentLib.path);
+}
+function browserBrowseCoverPx(size) {
+  if (document.body.classList.contains('tv') || window.innerWidth <= 600 || !isPosterBrowseView()) return null;
+  if (window.innerHeight <= 820) return size === 'L' ? '150px' : (size === 'S' ? '128px' : '136px');
+  if (window.innerHeight <= 899) return size === 'L' ? '170px' : (size === 'S' ? '136px' : '150px');
+  return size === 'L' ? '190px' : (size === 'S' ? '144px' : '168px');
+}
 function applyCoverSize() {
   const s = (() => { try { return localStorage.getItem('triboon.cover') || 'M'; } catch { return 'M'; } })();
   const table = document.body.classList.contains('tv') ? COVER_SIZES_TV : COVER_SIZES;
   // Phones always get compact covers — 190px posters mean ONE giant column on a 375px screen.
-  const px = window.innerWidth <= 600 ? '140px' : (table[s] || table.M);
+  const px = window.innerWidth <= 600 ? '140px' : (browserBrowseCoverPx(s) || table[s] || table.M);
   document.documentElement.style.setProperty('--poster', px);
   adaptRowWindows();
   return s;
@@ -3074,8 +3111,10 @@ function applyCoverSize() {
 function adaptRowWindows() {
   const rowH = (parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--poster')) || 190) * 1.5 + 106;
   const h = window.innerHeight;
-  // Home + Discover rows: the hero/backdrop text above needs ~120px beyond the rows.
-  document.documentElement.style.setProperty('--winRows', h >= rowH * 2 + 118 ? 2 : 1);
+  const phoneLayout = window.innerWidth <= 600 && !document.body.classList.contains('tv');
+  // Home + Discover rows: desktop keeps room for the hero/backdrop text; phones hide the
+  // backdrop and use a compact hero, so they need a much smaller reserve.
+  document.documentElement.style.setProperty('--winRows', h >= rowH * 2 + (phoneLayout ? 34 : 118) ? 2 : 1);
   // Browse grid window: two full rows only when their top edge clears BOTH the page header
   // and the focused-title text block (#bdInfo: top clamp(76,15vh,190) + ~170px of text).
   const grid = $('grid'), browse = $('browse');
@@ -3083,7 +3122,10 @@ function adaptRowWindows() {
   if (!browse.classList.contains('rowsWin')) { grid.style.maxHeight = ''; return; }
   const head = browse.querySelector('.browseHead');
   const headBottom = head && head.offsetHeight ? head.getBoundingClientRect().bottom : 96;
-  const heroReserve = (h <= 899 ? 70 : Math.min(Math.max(h * 0.15, 76), 190)) + 170;
+  const shortBrowserBrowse = document.body.classList.contains('shortBrowseBd') && !document.body.classList.contains('tv');
+  const heroReserve = phoneLayout ? 0
+    : shortBrowserBrowse ? (h <= 820 ? 128 : (h <= 899 ? 168 : 220))
+    : (h <= 899 ? 70 : Math.min(Math.max(h * 0.15, 76), 190)) + 170;
   const top2 = h - 24 - (rowH * 2 - 10); // grid top edge if we allow two rows
   // TV: ONE row of Plex-sized posters under a tall backdrop band (matched against Plex on
   // the same hardware) — skip the desktop heuristics (they assume taller browser windows).
@@ -3806,7 +3848,15 @@ function maybeBootHomeReady(rows) {
 function publishHomeRows(rows, opts = {}) {
   const sig = homeRowsSignature(rows);
   S.rows = rows;
-  if (S._homeRowsSig === sig && $('rows').children.length) return false;
+  if (S._homeRowsSig === sig && $('rows').children.length) {
+    if (S.view === 'home') {
+      setRowsView($('rows'), S.rows, true);
+    }
+    if (S.view === 'home' && S.zone !== 'rail' && !document.querySelector('#home .focus')) {
+      requestAnimationFrame(() => { if (S.view === 'home' && !document.querySelector('#home .focus')) focusContent(); });
+    }
+    return false;
+  }
   S._homeRowsSig = sig;
   renderRows({ preserveFocus: !!opts.preserveFocus, focusSnapshot: opts.focusSnapshot });
   return true;
@@ -4818,8 +4868,14 @@ function restoreDetailReturn() {
   replaceRoute(detailReturnRoute(ret));
   requestAnimationFrame(() => requestAnimationFrame(() => restoreDetailFocus(ret)));
 }
+function restoreDetailFocusRoots(ret) {
+  if (!ret) return;
+  if (ret.view === 'home') setRowsView($('rows'), S.rows || [], true);
+  else if (['movies', 'tv', 'search', 'library', 'watchlist', 'livetv'].includes(ret.view)) S.gridRoot = $('grid');
+}
 function restoreDetailFocus(ret) {
   if (!ret || S.view !== ret.view) return focusContent();
+  restoreDetailFocusRoots(ret);
   const gridRoot = S.gridRoot || $('grid');
   const rowRoot = S.rowsView && S.rowsView.root;
   if (ret.searchQuery !== undefined && S.view === 'search') $('searchInput').value = ret.searchQuery;
@@ -8026,6 +8082,7 @@ async function loadDiscover() {
       S.discoverData = rows;
       renderRowsInto(root, rows);
       setRowsView(root, rows, false);
+      if (S.zone !== 'rail') focusCard(0, 0);
     } catch (e) { root.innerHTML = `<div class="row"><h2>Discover failed: ${esc(e.message)}</h2></div>`; }
     return;
   }
@@ -8054,10 +8111,21 @@ async function loadDiscover() {
     // Trailers row: pull trailers for the top trending titles (best-effort, async).
     buildTrailerRow(trend.results.filter((x) => x.poster_path && passesMaturity(x) && catalogOk(x)).slice(0, 12)).then((trItems) => {
       if (!trItems.length) return;
+      const focused = root.querySelector('.focus');
+      const focusRow = focused ? parseInt(focused.dataset.row || '-1', 10) : -1;
+      const focusCol = focused ? parseInt(focused.dataset.col || '0', 10) : 0;
       const row = { name: '▶ Latest trailers', items: trItems };
       rows.splice(1, 0, row);
-      renderRowsInto(root, rows);
+      renderRowsInto(root, rows, { resetScroll: false });
+      setRowsView(root, rows, false);
       S.discoverData = rows;
+      if (S.view === 'discover' && S.zone !== 'rail') {
+        const wantedRow = focusRow >= 0 ? focusRow + (focusRow >= 1 ? 1 : 0) : 0;
+        const safeRow = rows[wantedRow] && rows[wantedRow].items && rows[wantedRow].items.length ? wantedRow : 0;
+        const maxCol = rows[safeRow] && rows[safeRow].items ? rows[safeRow].items.length - 1 : 0;
+        const safeCol = Math.max(0, Math.min(Number.isFinite(focusCol) ? focusCol : 0, maxCol));
+        focusCard(safeRow, safeCol, { scroll: false, align: false });
+      }
     });
     if (S.zone !== 'rail') focusCard(0, 0); // rollover preview: don't steal the menu's focus
   } catch (e) { root.innerHTML = `<div class="row"><h2>Discover failed: ${esc(e.message)}</h2></div>`; }
@@ -9350,7 +9418,12 @@ function liveNoChannelsHtml(errors = []) {
   const intro = errors.length
     ? 'No live channels found. Check the source below, or remove TV-show/VOD playlists from Live TV.'
     : 'No live channels found. Live TV expects M3U/Xtream live-channel entries. TV-show/VOD playlists belong in Libraries/Sources.';
-  return `<div class="gridMore liveEmpty">${esc(intro)}${liveSourceErrorsHtml(errors)}</div>`;
+  return `<div class="gridMore liveEmpty focusable">${esc(intro)}${liveSourceErrorsHtml(errors)}</div>`;
+}
+function focusLiveGridMessage() {
+  requestAnimationFrame(() => {
+    if (S.view === 'livetv' && S.zone !== 'rail') focusGrid(0);
+  });
 }
 function liveSourceWarningHtml(errors = []) {
   if (!errors.length) return '';
@@ -9378,15 +9451,16 @@ async function loadLiveTv() {
     scaffoldLiveTv(grid);
     return;
   }
-  grid.innerHTML = '<div class="gridMore">loading channels… (big playlists can take ~10s the first time, then they’re cached)</div>';
+  grid.innerHTML = '<div class="gridMore focusable">loading channels… (big playlists can take ~10s the first time, then they’re cached)</div>';
+  focusLiveGridMessage();
   try {
     const r = await loadLiveChannelsCombined();
-    if (!r.configured) { grid.innerHTML = '<div class="gridMore">Live TV isn’t set up — add a server playlist in Settings, or add a personal Android TV playlist in Preferences.</div>'; return; }
+    if (!r.configured) { grid.innerHTML = '<div class="gridMore focusable">Live TV isn’t set up — add a server playlist in Settings, or add a personal Android TV playlist in Preferences.</div>'; focusLiveGridMessage(); return; }
     fillLiveState(r);
-    if (!r.channels.length) { grid.innerHTML = liveNoChannelsHtml(S.liveSourceErrors); return; }
+    if (!r.channels.length) { grid.innerHTML = liveNoChannelsHtml(S.liveSourceErrors); focusLiveGridMessage(); return; }
     if (S.view !== 'livetv') return; // user navigated away while the playlist downloaded
     scaffoldLiveTv(grid);
-  } catch (e) { grid.innerHTML = `<div class="gridMore">Live TV failed: ${esc(e.message)}</div>`; }
+  } catch (e) { grid.innerHTML = `<div class="gridMore focusable">Live TV failed: ${esc(e.message)}</div>`; focusLiveGridMessage(); }
 }
 // Scaffold the persistent search bar + re-renderable body from S.liveChannels (cached or fresh).
 // Rendering 5000 cards at once froze the page — groups render on demand below the chips.
@@ -9419,7 +9493,7 @@ function scaffoldLiveTv(grid) {
     });
     renderLiveTvBody();
     requestAnimationFrame(() => { if (S.view === 'livetv' && S.zone !== 'rail') focusGrid(0); });
-  } catch (e) { grid.innerHTML = `<div class="gridMore">Live TV failed: ${esc(e.message)}</div>`; }
+  } catch (e) { grid.innerHTML = `<div class="gridMore focusable">Live TV failed: ${esc(e.message)}</div>`; focusLiveGridMessage(); }
 }
 function renderLiveTvBody() {
   const body = $('chBody'); if (!body) return;
@@ -9435,7 +9509,7 @@ function renderLiveTvBody() {
     const hits = S.liveChannels.filter((c) => (c.name || '').toLowerCase().includes(q));
     if (S.liveGuide && S.liveEpg) return renderGuide(body, hits);
     liveTvGroup(body, `Results for “${S.liveFilter.trim()}”`, hits.slice(0, 300), { open: true, extra: hits.length > 300 ? `${hits.length - 300} more — narrow the search` : '' });
-    if (!hits.length) body.innerHTML = '<div class="gridMore">No channels match.</div>';
+    if (!hits.length) { body.innerHTML = '<div class="gridMore focusable">No channels match.</div>'; focusLiveGridMessage(); }
     return;
   }
   // CATEGORY CHIPS row (replaced the collapsing group accordion — the D-pad kept tripping
@@ -9447,7 +9521,7 @@ function renderLiveTvBody() {
     ...(favs.length ? ['★ Favorites'] : []),
     ...[...groups.keys()].filter((g) => !(S.liveHidden && S.liveHidden.has(g))),
   ];
-  if (!names.length) { body.innerHTML = '<div class="gridMore">Every category is hidden — “☷ Categories” to manage.</div>'; return; }
+  if (!names.length) { body.innerHTML = '<div class="gridMore focusable">Every category is hidden — “☷ Categories” to manage.</div>'; focusLiveGridMessage(); return; }
   if (!names.includes(S.liveCat)) S.liveCat = names[0];
   const selectedCatIdx = Math.max(0, names.indexOf(S.liveCat));
   S.liveCatNavIdx = S.liveCatDpadMode && Number.isFinite(S.liveCatNavIdx)
@@ -9605,7 +9679,7 @@ async function renderGuideProgressive(body, pool) {
   }
   const cap = S.liveGuideCap || LIVE_GUIDE_BATCH;
   const chans = pool.slice(0, cap);
-  if (!chans.length) { body.innerHTML = '<div class="gridMore">No channels to show - favorite some channels or use the filter.</div>'; return; }
+  if (!chans.length) { body.innerHTML = '<div class="gridMore focusable">No channels to show - favorite some channels or use the filter.</div>'; focusLiveGridMessage(); return; }
   if (S.liveGuide !== true || !$('chBody')) return;
 
   const now = Date.now();
@@ -12642,6 +12716,7 @@ function switchView(v, push = true, opts = {}) {
   // instead of appearing already behind the still-wide menu.
   // keepRail = rollover PREVIEW from the menu: the page switches behind the still-open rail.
   if (!opts.keepRail) {
+    if (S.zone === 'rail') S.zone = '';
     if (document.body.classList.contains('railOpen')) {
       requestAnimationFrame(() => requestAnimationFrame(leaveRail));
     } else leaveRail();
@@ -12651,10 +12726,11 @@ function switchView(v, push = true, opts = {}) {
   if (push) setRoute(v === 'library' && S.currentLib ? `#/library/${S.currentLib.id}` : `#/${v}`);
   const onDiscover = v === 'discover' || v === 'calendar';
   const isBrowse = ['movies', 'tv', 'search', 'library', 'watchlist', 'livetv'].includes(v);
-  const shortBrowseBd = v === 'movies' || v === 'tv' || (v === 'library' && S.currentLib && S.currentLib.path);
+  const shortBrowseBd = v === 'movies' || v === 'tv' || v === 'watchlist' || (v === 'library' && S.currentLib && S.currentLib.path);
   // Browse views show the focused title's backdrop FULL-BLEED (home keeps the corner cutout).
   document.body.classList.toggle('fullBd', isBrowse || v === 'discover');
   document.body.classList.toggle('shortBrowseBd', !!shortBrowseBd);
+  applyCoverSize();
   $('home').classList.toggle('show', v === 'home');
   $('discover').classList.toggle('open', onDiscover);
   $('browse').classList.toggle('open', isBrowse);
@@ -12741,30 +12817,69 @@ document.addEventListener('click', (e) => {
 
 /* ============ browser history: back button + refresh restore views ============ */
 let routeSquelch = 0;
+let pendingLibraryRouteJob = null;
 function setRoute(hash) {
   if (location.hash === hash) return;
   routeSquelch++;
   location.hash = hash; // pushes a history entry; hashchange below is squelched for our own sets
 }
+function routeParts() {
+  return location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
+}
+function applyLibraryRoute(id) {
+  const lib = (S.libraries || []).find((l) => l.id === id);
+  if (!lib) return false;
+  S.currentLib = lib;
+  switchView('library', false);
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (S.view === 'library' && !document.querySelector('#detail.open,#person.open,#player.open')) focusContent();
+  }));
+  return true;
+}
+function deferLibraryRoute(id) {
+  if (pendingLibraryRouteJob) return;
+  pendingLibraryRouteJob = loadLibraries()
+    .catch(() => null)
+    .then(() => {
+      pendingLibraryRouteJob = null;
+      const parts = routeParts();
+      if (parts[0] !== 'library' || parts[1] !== id) return;
+      if (!applyLibraryRoute(id)) switchView('home', false);
+    });
+}
 function applyRoute() {
-  const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
+  const parts = routeParts();
   const view = parts[0] || 'home';
   if (view === 'title' && parts[1] && parts[2]) {
     // #/title/<movie|tv>/<tmdbId> — refresh/back lands straight on the detail page.
     return openDetail({ type: parts[1], tmdbId: +parts[2], title: '', key: `tmdb:${parts[1]}:${parts[2]}` }, false);
   }
   if (view === 'library' && parts[1]) {
-    const lib = (S.libraries || []).find((l) => l.id === parts[1]);
-    if (lib) { S.currentLib = lib; return switchView('library', false); }
+    if (applyLibraryRoute(parts[1])) return;
+    deferLibraryRoute(parts[1]);
+    return;
   }
   const KNOWN = ['home', 'movies', 'tv', 'search', 'discover', 'calendar', 'watchlist', 'livetv', 'music', 'settings', 'prefs'];
-  switchView(KNOWN.includes(view) ? view : 'home', false);
+  const target = KNOWN.includes(view) ? view : 'home';
+  switchView(target, false);
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (S.view === target && !document.querySelector('#detail.open,#person.open,#player.open')) focusContent();
+  }));
+}
+function routeIsTitle() {
+  return /^#\/?title\/(movie|tv)\/\d+/.test(location.hash || '');
 }
 window.addEventListener('hashchange', () => {
   if (routeSquelch > 0) { routeSquelch--; return; }
   // Browser Back/Forward: close overlays first, then route inside the app.
   if (S.view === 'player') return closePlayer();
-  if ($('detail').classList.contains('open')) return closeDetail();
+  if ($('person').classList.contains('open')) {
+    const cur = S.detailItem;
+    closePerson();
+    if (cur && cur.tmdbId && ['movie', 'tv'].includes(cur.type)) setRoute(`#/title/${cur.type}/${cur.tmdbId}`);
+    return;
+  }
+  if ($('detail').classList.contains('open') && !routeIsTitle()) return closeDetail();
   applyRoute();
 });
 
@@ -14068,7 +14183,7 @@ document.addEventListener('keydown', (e) => {
   if (S.zone === 'hero') {
     if (k === 'ArrowLeft') return S.heroIdx === 0 ? enterRail() : focusHero(0);
     if (k === 'ArrowRight') return focusHero(1);
-    if (k === 'ArrowDown') return focusCard(S.rowIdx, S.colIdx[S.rowIdx] || 0);
+    if (k === 'ArrowDown') return focusCard(S.rowIdx, 0);
     if (k === 'Enter') { const b = heroFocusables()[S.heroIdx]; if (b) b.click(); return; }
   } else {
     const row = rows[S.rowIdx];
@@ -14076,15 +14191,13 @@ document.addEventListener('keydown', (e) => {
     const ci = S.colIdx[S.rowIdx] || 0;
     if (k === 'ArrowLeft') return ci === 0 ? enterRail() : focusCard(S.rowIdx, ci - 1);
     if (k === 'ArrowRight') return focusCard(S.rowIdx, Math.min(row.items.length - 1, ci + 1));
-    // Vertical moves carry the CURRENT column (spatial, like Netflix) — re-using the target
-    // row's remembered column replays where you were 10 minutes ago and feels like a random
-    // teleport. The per-row memory still serves rail/hero re-entry, where there's no spatial
-    // anchor. Down-then-up always returns to the exact card you left.
+    // Vertical row changes intentionally land on the first thumbnail so D-pad
+    // browsing starts each row predictably instead of carrying a hidden column.
     if (k === 'ArrowUp') return S.rowIdx === 0 ? (view.hasHero ? focusHero(0) : enterRail())
-      : focusCard(S.rowIdx - 1, Math.min(ci, rows[S.rowIdx - 1].items.length - 1));
+      : focusCard(S.rowIdx - 1, 0);
     if (k === 'ArrowDown') {
       if (S.rowIdx < rows.length - 1 && rows[S.rowIdx + 1].items.length) {
-        return focusCard(S.rowIdx + 1, Math.min(ci, rows[S.rowIdx + 1].items.length - 1));
+        return focusCard(S.rowIdx + 1, 0);
       }
       return focusMusicBar();
     }

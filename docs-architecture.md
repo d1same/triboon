@@ -319,7 +319,8 @@ Still open / future hardening:
 - MDBList and richer catalog rows.
 - Intro/credit skip after the playback foundation stays stable.
 - Release automation polish: version bump, APK build, GitHub release, stable
-  Android TV APK alias, and Unraid update confirmation for every public release.
+  Android TV/mobile APK aliases, and Unraid update confirmation for every
+  public release.
 
 ## Verification Checklist For Architecture Changes
 
@@ -336,9 +337,14 @@ Run the narrow test for the area touched, then the broader suite before a releas
   and visually check the route.
 - Android TV behavior: build the APK, run the emulator/Shield smoke or
   `bench/android-tv-stress.ps1`, and inspect logs for fatal/provider errors.
-- Android TV release packaging: attach both `triboon-tv-vX.Y.Z.apk` and the
-  stable alias `triboon-tv.apk` to the GitHub release. The stable Downloader URL
-  is `https://github.com/d1same/triboon/releases/latest/download/triboon-tv.apk`;
+- Android release packaging: attach `triboon-tv-vX.Y.Z.apk`, `triboon-tv.apk`,
+  `android-tv-vX.Y.Z.apk`, `android-tv.apk`, `android-mobile-vX.Y.Z.apk`, and
+  `android-mobile.apk` to the GitHub release. Stable Downloader URLs are
+  `https://github.com/d1same/triboon/releases/latest/download/triboon-tv.apk`
+  and
+  `https://github.com/d1same/triboon/releases/latest/download/android-tv.apk`
+  and
+  `https://github.com/d1same/triboon/releases/latest/download/android-mobile.apk`;
   Android update acceptance still depends on package id, signing key, and a
   higher versionCode.
 - Documentation: scan for stale phase counts, old stack names, old cache

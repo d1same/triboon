@@ -54,12 +54,18 @@ The debug APK is written to:
 android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-For public Android TV updates, publish two GitHub release assets from the same
-APK build:
+For public Android updates, publish stable and versioned GitHub release assets
+from the same universal shell APK build:
 
 - `triboon-tv-vX.Y.Z.apk` keeps the exact versioned artifact for audit/history.
 - `triboon-tv.apk` is the stable update artifact for Downloader-style installs.
   The fixed URL is `https://github.com/d1same/triboon/releases/latest/download/triboon-tv.apk`.
+- `android-tv.apk` is the generic stable Android TV alias for the same APK:
+  `https://github.com/d1same/triboon/releases/latest/download/android-tv.apk`.
+- `android-mobile-vX.Y.Z.apk` and `android-mobile.apk` are the matching mobile
+  aliases for the same build, with
+  `https://github.com/d1same/triboon/releases/latest/download/android-mobile.apk`
+  as the stable mobile link.
 
 The APK filename does not control whether Android accepts an update; Android
 uses the package id, signing key, and higher `versionCode`.
@@ -262,7 +268,7 @@ play/pause. The focus ring is the cursor; backdrops follow the selected item.
 - par2 repair and compressed RAR improvements.
 - MDBList and richer catalog rows.
 - Intro/credit skip once playback and resume remain stable.
-- Release automation polish: version bump, APK build, GitHub release, and
-  Unraid update confirmation.
+- Release automation polish: version bump, APK build, GitHub release, stable
+  TV/mobile APK aliases, and Unraid update confirmation.
 
 For legally obtained content only.

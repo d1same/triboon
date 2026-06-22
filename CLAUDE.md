@@ -148,8 +148,10 @@ Still open:
 - Never weaken or delete a failing test to make it pass. Fix the code or raise
   it with the owner.
 - Releases always bump `package.json` and Android versionCode/versionName
-  together; the tag is `vX.Y.Z`; the GitHub release carries a fresh APK named
-  `triboon-tv-vX.Y.Z.apk` with what-changed notes.
+  together; the tag is `vX.Y.Z`; the GitHub release carries stable and
+  versioned APK assets from the same build: `triboon-tv-vX.Y.Z.apk`,
+  `triboon-tv.apk`, `android-tv-vX.Y.Z.apk`, `android-tv.apk`,
+  `android-mobile-vX.Y.Z.apk`, and `android-mobile.apk`.
 - Security: deny-by-default routing; every new endpoint must declare auth and
   be covered by route-coverage tests.
 - Credentials are encrypted at rest and must never be committed, logged, or
