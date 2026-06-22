@@ -12712,6 +12712,19 @@ function toggleMobileNav(e) {
   burgerTouchAt = Date.now();
   document.body.classList.toggle('mobileNav');
 }
+function androidBurgerHit(e) {
+  if (!document.body.classList.contains('androidApp')) return false;
+  const p = (e.changedTouches && e.changedTouches[0]) || e;
+  return p.clientX <= 132 && p.clientY <= 132;
+}
+document.addEventListener('pointerup', (e) => {
+  if (!androidBurgerHit(e)) return;
+  toggleMobileNav(e);
+}, true);
+document.addEventListener('touchend', (e) => {
+  if (!androidBurgerHit(e)) return;
+  toggleMobileNav(e);
+}, true);
 $('burger').addEventListener('pointerup', toggleMobileNav);
 $('burger').addEventListener('click', (e) => {
   if (Date.now() - burgerTouchAt < 500) return;

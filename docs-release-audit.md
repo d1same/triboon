@@ -93,6 +93,15 @@ This is the A-to-Z checklist for keeping web and Android TV working as separate 
 
 ## Verification Log
 
+- Release v1.5.9 verification: the Android app shell now treats taps in the
+  top-left Android chrome/menu area as the Triboon menu toggle, making the
+  stable APK match the latest local web UI after the v1.5.8 IPTV playlist-edit
+  release. Verification passed inline `web/index.html` script parse,
+  `git diff --check`, full `npm.cmd test` 176/176, and Android
+  `assembleDebug`. `aapt dump badging dist/triboon-tv-v1.5.9.apk` reported
+  `versionCode='62'` and
+  `versionName='1.5.9'`; release APK SHA-256 is
+  `818B0C571B8A3E15BF2AB0B97059679F973C88234387DFD2654E0C519A2C5467`.
 - Release v1.5.8 verification: IPTV playlists are editable from both admin
   Settings and user Preferences without exposing saved credentials. Edits reuse
   the existing source id, keep saved sensitive fields when edit inputs are
