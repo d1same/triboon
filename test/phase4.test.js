@@ -506,6 +506,25 @@ test('music playback stops when leaving the Music section', () => {
     'repeat-one should not restart automatically after a track ends');
 });
 
+test('subtitle startup preference contract: always mode applies online captions before track probing', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const playerMap = fs.readFileSync(path.join(__dirname, '..', 'docs-player-regression-map.md'), 'utf8');
+  assert.match(ui, /function prefSubtitleMode\(\) \{[\s\S]+const scoped = localStorage\.getItem\(profilePrefKey\('subtitleMode'\)\);[\s\S]+if \(scoped !== null\) return scoped === 'always' \? 'always' : 'manual';[\s\S]+localStorage\.getItem\('triboon\.subtitleMode'\) === 'always'/,
+    'profile subtitle mode should fall back to the legacy global always/manual setting');
+  assert.match(ui, /function startupSubtitleRelFor\(p, saved = loadSubChoice\(\)\) \{[\s\S]+Explicit per-title choices win[\s\S]+if \(subtitleRelPlayable\(p, saved\)\) return saved;[\s\S]+if \(saved === 'off' && prefSubtitleMode\(\) !== 'always'\) return '';[\s\S]+return autoSubtitleRelFor\(p\);[\s\S]+\}/,
+    'startup subtitle choice should share saved, off, and always-mode rules');
+  assert.match(ui, /function startWebPlayerHousekeeping\(mount, it\) \{[\s\S]+loadTracks\(\);[\s\S]+if \(!applyStartupSubtitlePref\(\)\) \{[\s\S]+fetch\(`\/api\/ossubs\/\$\{mount\.id\}\?\$\{subtitleRequestParams\(it, code2, mount\.streamToken\)\.toString\(\)\}`\)/,
+    'web player should try to enable always-mode subtitles before falling back to warmup prefetch');
+  assert.match(ui, /function applyStartupSubtitlePref\(\) \{[\s\S]+const rel = concreteSubtitleRel\(startupSubtitleRelFor\(p\)\);[\s\S]+Promise\.resolve\(setSubtitle\(rel\)\)\.finally/,
+    'always-mode subtitles should be applied without waiting for the track probe to finish');
+  assert.match(ui, /function applyTrackPrefs\(\) \{[\s\S]+if \(p\.usingNative && canUseNativeVideoPlayer\(\)\) return;[\s\S]+applyStartupSubtitlePref\(\);[\s\S]+if \(!p\.tracks\) \{ updateSrndBtn\(\); return; \}/,
+    'track preference setup should still apply startup subtitles when tracks are not available yet');
+  assert.match(ui, /function nativeVideoSubtitleRel\(p\) \{\s+return \{ blocked: false, rel: concreteSubtitleRel\(startupSubtitleRelFor\(p\)\) \};\s+\}/,
+    'native ExoPlayer startup should use the same subtitle startup contract as web playback');
+  assert.match(playerMap, /Profile always-show subtitles must auto-enable the preferred online subtitle at startup/,
+    'player regression map should document the always-subtitles startup contract');
+});
+
 test('Android native player: direct source and native chrome stay out of the web player', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
@@ -794,10 +813,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'online subtitle lookup should use the episode-aware query captured during play');
   assert.match(server, /function localMountFor\(ctx, libId, idx, caps = \{\}, playCtx = \{\}\)[\s\S]+const q = String\(playCtx\.q \|\| found\.item\.q \|\| found\.item\.title \|\| name\)[\s\S]+const season = playCtx\.season \?\? found\.item\.s[\s\S]+const ep = playCtx\.ep \?\? playCtx\.episode \?\? found\.item\.e[\s\S]+vf\._subQuery = episodeSubtitleQuery\(vf\._q, season, ep\)/,
     'local library mounts should preserve episode-aware subtitle queries for Wyzie');
-  assert.match(ui, /function nativeVideoSubtitleRel\(p\) \{[\s\S]+Explicit per-title choices win[\s\S]+if \(info && !info\.variant\) return \{ blocked: false, rel: bestSubtitleVariantRel\(info\.lang\) \|\| saved \};[\s\S]+const autoRel = autoSubtitleRelFor\(p\);[\s\S]+return \{ blocked: false, rel: bestSubtitleVariantRel\(info\.lang\) \|\| autoRel \};[\s\S]+\}/,
-    'native playback should use saved subtitle choices first, then profile auto-subtitle mode');
-  assert.match(ui, /function applyTrackPrefs\(\) \{[\s\S]+const savedSub = loadSubChoice\(\);[\s\S]+if \(\(!savedSub \|\| \(savedSub === 'off' && prefSubtitleMode\(\) === 'always'\)\) && p\.subTrack == null\) \{[\s\S]+const autoRel = autoSubtitleRelFor\(p\);[\s\S]+if \(autoRel\) setSubtitle\(autoRel\);/,
-    'web playback should auto-start the profile subtitle language only when subtitle mode is always');
+  assert.match(ui, /function startupSubtitleRelFor\(p, saved = loadSubChoice\(\)\) \{[\s\S]+Explicit per-title choices win[\s\S]+if \(subtitleRelPlayable\(p, saved\)\) return saved;[\s\S]+if \(saved === 'off' && prefSubtitleMode\(\) !== 'always'\) return '';[\s\S]+return autoSubtitleRelFor\(p\);[\s\S]+\}/,
+    'startup subtitles should use saved choices first, then profile always-subtitle mode');
+  assert.match(ui, /function nativeVideoSubtitleRel\(p\) \{\s+return \{ blocked: false, rel: concreteSubtitleRel\(startupSubtitleRelFor\(p\)\) \};\s+\}/,
+    'native playback should use the shared startup subtitle contract');
+  assert.match(ui, /function applyStartupSubtitlePref\(\) \{[\s\S]+const rel = concreteSubtitleRel\(startupSubtitleRelFor\(p\)\);[\s\S]+Promise\.resolve\(setSubtitle\(rel\)\)\.finally/,
+    'web playback should auto-start the profile subtitle language before track probing when subtitle mode is always');
   assert.match(ui, /window\.__tvNativeSubtitleSelect = \(rel, pos, dur\) => \{[\s\S]+saveSubChoice\(rel, subtitleDisplayName\(rel\)\)[\s\S]+p\.usingNative = true;[\s\S]+\};/,
     'native subtitle row selection should persist the choice without restarting ExoPlayer');
   assert.doesNotMatch(ui, /window\.__tvNativeSubtitleSelect = \(rel, pos, dur\) => \{[\s\S]+tryNativeVideoPlayer\(kind, at\)/,
@@ -872,7 +893,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'per-title subtitle choices should remember the friendly version label');
   assert.doesNotMatch(ui, /mkRow\(`Wyzie |return `Wyzie |Wyzie \u00b7 [^`'"]*Version/,
     'player subtitle labels should not show provider branding');
-  assert.match(ui, /if \(saved === 'off' && prefSubtitleMode\(\) !== 'always'\) return \{ blocked: false, rel: '' \}/,
+  assert.match(ui, /if \(saved === 'off' && prefSubtitleMode\(\) !== 'always'\) return '';/,
     'native subtitles should respect explicit per-title Off choices unless the profile is set to always show subtitles');
   assert.match(ui, /function activeSubtitleCues\(tt\) \{[\s\S]+tt\.activeCues[\s\S]+tt\.cues[\s\S]+\$\(\'video\'\)[\s\S]+v\.currentTime[\s\S]+c\.startTime[\s\S]+c\.endTime[\s\S]+\}/,
     'web subtitle rendering should fall back to scanning loaded cues when activeCues is empty');

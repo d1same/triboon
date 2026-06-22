@@ -5765,10 +5765,12 @@ function startWebPlayerHousekeeping(mount, it) {
   S.watchTimer = setInterval(saveWatch, 10000);
   updatePlayerControlAvailability();
   loadTracks();
-  const wantLang = prefSubtitleMode() === 'always' ? preferredAutoSubtitleLang() : prefLang('slang');
-  if (wantLang && wantLang !== 'off' && it.type !== 'live' && S.serverInfo && S.serverInfo.opensubs && mount.id && subtitleCatalogAvailable(it)) {
-    const code2 = osLang(wantLang);
-    fetch(`/api/ossubs/${mount.id}?${subtitleRequestParams(it, code2, mount.streamToken).toString()}`).catch(() => {});
+  if (!applyStartupSubtitlePref()) {
+    const wantLang = prefSubtitleMode() === 'always' ? preferredAutoSubtitleLang() : prefLang('slang');
+    if (wantLang && wantLang !== 'off' && it.type !== 'live' && S.serverInfo && S.serverInfo.opensubs && mount.id && subtitleCatalogAvailable(it)) {
+      const code2 = osLang(wantLang);
+      fetch(`/api/ossubs/${mount.id}?${subtitleRequestParams(it, code2, mount.streamToken).toString()}`).catch(() => {});
+    }
   }
   prepPlayerSeasonEpisodes(it);
   prepNextEpisode(it);
@@ -5984,21 +5986,7 @@ function nativeVideoRequired(it) {
   return !!(it && it.type !== 'live' && canUseNativeVideoPlayer());
 }
 function nativeVideoSubtitleRel(p) {
-  const saved = loadSubChoice();
-  // Native is the default engine on Android TV. Explicit per-title choices win; the profile
-  // "always show subtitles" setting can then pick the preferred language at playback start.
-  if (saved && saved !== 'off') {
-    const info = String(saved).startsWith('os:') ? osTrackInfo(saved) : null;
-    if (info && !info.variant) return { blocked: false, rel: bestSubtitleVariantRel(info.lang) || saved };
-    return { blocked: false, rel: saved };
-  }
-  if (saved === 'off' && prefSubtitleMode() !== 'always') return { blocked: false, rel: '' };
-  const autoRel = autoSubtitleRelFor(p);
-  if (autoRel) {
-    const info = osTrackInfo(autoRel);
-    return { blocked: false, rel: bestSubtitleVariantRel(info.lang) || autoRel };
-  }
-  return { blocked: false, rel: '' };
+  return { blocked: false, rel: concreteSubtitleRel(startupSubtitleRelFor(p)) };
 }
 function resolutionLabel(res) {
   const v = String(res || '').toLowerCase();
@@ -6260,6 +6248,7 @@ function tryNativeVideoPlayer(kind, atSeconds, opts = {}) {
   if (sub.rel) {
     p.subTrack = sub.rel;
     p._subShift = loadSubShift(sub.rel);
+    p._subtitleDisabledThisSession = false;
   }
   try {
     window.TriboonTV.playVideo(JSON.stringify(payload));
@@ -6395,6 +6384,7 @@ window.__tvNativeSubtitleSelect = (rel, pos, dur) => {
   if (!rel) {
     p.subTrack = null;
     p._subShift = 0;
+    p._subtitleDisabledThisSession = true;
     if (prefSubtitleMode() === 'always') saveSubChoice('');
     else {
       savePrefLang('slang', 'off');
@@ -6404,6 +6394,7 @@ window.__tvNativeSubtitleSelect = (rel, pos, dur) => {
     const info = osTrackInfo(rel);
     p.subTrack = rel;
     p._subShift = loadSubShift(rel);
+    p._subtitleDisabledThisSession = false;
     savePrefLang('slang', info.lang);
     saveSubChoice(rel, subtitleDisplayName(rel));
   }
@@ -7072,7 +7063,11 @@ function savePrefLang(kind, value) {
   try { localStorage.setItem(prefLangKey(kind), value || (kind === 'slang' ? 'off' : '')); } catch {}
 }
 function prefSubtitleMode() {
-  try { return localStorage.getItem(profilePrefKey('subtitleMode')) === 'always' ? 'always' : 'manual'; }
+  try {
+    const scoped = localStorage.getItem(profilePrefKey('subtitleMode'));
+    if (scoped !== null) return scoped === 'always' ? 'always' : 'manual';
+    return localStorage.getItem('triboon.subtitleMode') === 'always' ? 'always' : 'manual';
+  }
   catch { return 'manual'; }
 }
 function savePrefSubtitleMode(value) {
@@ -7110,6 +7105,24 @@ function canAutoSubtitle(p) {
 function autoSubtitleRelFor(p) {
   if (prefSubtitleMode() !== 'always' || !canAutoSubtitle(p)) return '';
   return osTrackRel(preferredAutoSubtitleLang());
+}
+function subtitleRelPlayable(p, rel) {
+  if (!rel || rel === 'off') return false;
+  if (typeof rel === 'string' && rel.startsWith('os:')) return canAutoSubtitle(p);
+  return false;
+}
+function concreteSubtitleRel(rel) {
+  if (!(typeof rel === 'string' && rel.startsWith('os:'))) return rel || '';
+  const info = osTrackInfo(rel);
+  return info && !info.variant ? (bestSubtitleVariantRel(info.lang) || rel) : rel;
+}
+function startupSubtitleRelFor(p, saved = loadSubChoice()) {
+  if (!p || p._subtitleDisabledThisSession) return '';
+  // Explicit per-title choices win. The profile "always show subtitles" setting then
+  // picks the preferred online language at playback start, even if the user had saved Off.
+  if (subtitleRelPlayable(p, saved)) return saved;
+  if (saved === 'off' && prefSubtitleMode() !== 'always') return '';
+  return autoSubtitleRelFor(p);
 }
 function subtitleRequestParams(it, lang, streamToken) {
   const q = new URLSearchParams({
@@ -7236,10 +7249,25 @@ function subSyncHeadingLabel() {
   const p = S.playing; const n = p ? +(p._subShift || 0) : 0;
   return n ? `Subtitle sync ${n > 0 ? '+' : ''}${n.toFixed(1)}s` : 'Subtitle sync';
 }
-// Preferred-language + surround setup once the track list lands.
+function applyStartupSubtitlePref() {
+  const p = S.playing; if (!p) return false;
+  if (p.usingNative && canUseNativeVideoPlayer()) return false;
+  if (p.subTrack !== null && p.subTrack !== undefined) return false;
+  if (p._subtitleStartupLoading) return true;
+  const rel = concreteSubtitleRel(startupSubtitleRelFor(p));
+  if (!rel) return false;
+  p._subtitleStartupLoading = true;
+  Promise.resolve(setSubtitle(rel)).finally(() => {
+    if (S.playing === p) p._subtitleStartupLoading = false;
+  });
+  return true;
+}
+// Preferred-language subtitle startup can run before probing; audio/surround wait for tracks.
 function applyTrackPrefs() {
-  const p = S.playing; if (!p || !p.tracks) return;
+  const p = S.playing; if (!p) return;
   if (p.usingNative && canUseNativeVideoPlayer()) return;
+  applyStartupSubtitlePref();
+  if (!p.tracks) { updateSrndBtn(); return; }
   const wantA = prefLang('alang');
   if (wantA && (p.tracks.audio || []).length > 1) {
     const cur = p.tracks.audio.find((a) => a.rel === p.audioTrack);
@@ -7248,17 +7276,6 @@ function applyTrackPrefs() {
         .sort((a, b) => (b.channels || 0) - (a.channels || 0))[0];
       if (best && best.rel !== p.audioTrack) setAudio(best.rel);
     }
-  }
-  const savedSub = loadSubChoice();
-  if (savedSub && p.subTrack == null) {
-    if (savedSub !== 'off' && S.serverInfo && S.serverInfo.opensubs && p.mountId && subtitleCatalogAvailable(p.item)) {
-      setSubtitle(savedSub);
-    }
-    if (savedSub === 'off' && prefSubtitleMode() !== 'always') return updateSrndBtn();
-  }
-  if ((!savedSub || (savedSub === 'off' && prefSubtitleMode() === 'always')) && p.subTrack == null) {
-    const autoRel = autoSubtitleRelFor(p);
-    if (autoRel) setSubtitle(autoRel);
   }
   updateSrndBtn();
 }
@@ -7460,6 +7477,7 @@ async function setSubtitle(rel) {
   const p = S.playing; if (!p) return;
   if (rel === null) {
     p.subTrack = rel; p._subShift = 0;
+    p._subtitleDisabledThisSession = true;
     $('ccBtn').classList.remove('on');
     if (prefSubtitleMode() === 'always') {
       saveSubChoice('');
@@ -7471,6 +7489,7 @@ async function setSubtitle(rel) {
     clearTimeout(_subPrepT);
     return applySubtitleTrack();
   }
+  p._subtitleDisabledThisSession = false;
   try {
     rel = await resolveOnlineSubtitleRel(rel);
   } catch (e) {

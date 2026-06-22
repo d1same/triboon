@@ -93,6 +93,18 @@ This is the A-to-Z checklist for keeping web and Android TV working as separate 
 
 ## Verification Log
 
+- Release v1.5.7 verification: profile always-show subtitles now auto-enable
+  the preferred online subtitle at startup on web and native playback without
+  waiting for web track probing, while manual mode stays quiet and an in-video
+  Off choice is not undone by later probes. The player regression map documents
+  this subtitle startup contract. Verification passed `node --check
+  server/index.js`, inline `web/index.html` script parse, `git diff --check`,
+  focused `node --test --test-name-pattern "subtitle startup preference
+  contract|Android native player" test/phase4.test.js`, full `npm.cmd test`
+  175/175, and Android `assembleDebug`. `aapt dump badging
+  dist/triboon-tv-v1.5.7.apk` reported `versionCode='60'` and
+  `versionName='1.5.7'`; release APK SHA-256 is
+  `C3F928DEA53C78EF2B6FB418D52F59A55F9F6469884CC7501B66140848B78B98`.
 - Release v1.5.6 verification: auth gates and the idle screensaver now use the
   updated transparent `web/triboon.png` wordmark with cropped layout sizing,
   and the phase4 regression contract was updated to lock that new logo path in.
