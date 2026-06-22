@@ -93,6 +93,15 @@ This is the A-to-Z checklist for keeping web and Android TV working as separate 
 
 ## Verification Log
 
+- Release v1.5.6 verification: auth gates and the idle screensaver now use the
+  updated transparent `web/triboon.png` wordmark with cropped layout sizing,
+  and the phase4 regression contract was updated to lock that new logo path in.
+  Verification passed `node --check server/index.js`, inline `web/index.html`
+  script parse, `git diff --check`, focused `node --test --test-name-pattern
+  "Android native player" test/phase4.test.js`, full `npm.cmd test` 174/174,
+  and Android `assembleDebug`. `aapt dump badging dist/triboon-tv-v1.5.6.apk`
+  reported `versionCode='59'` and `versionName='1.5.6'`; release APK SHA-256
+  is `DBB552AD5149E74C81331AA977879DD6CC4FE975A5DCA98B61087E5F13E96FE5`.
 - Release v1.5.5 verification: browser/account IPTV sources now save through
   `/api/me/iptv/sources`, are isolated per user, share the server source/cache
   model across browser and Android TV, and keep Android device-only IPTV as a

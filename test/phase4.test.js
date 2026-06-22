@@ -711,10 +711,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'app screensaver should own a polished fullscreen visual layer with large time and art deck');
   assert.match(ui, /<div id="screensaver" aria-hidden="true">[\s\S]+<div class="ssBg" id="ssBg"><\/div>[\s\S]+<div class="ssDeck" id="ssDeck"><\/div>[\s\S]+<div id="ssTime"><\/div>/,
     'app screensaver markup should include background, art deck, and clock regions');
-  assert.match(ui, /#screensaver \.ssBrand\{[\s\S]+width:clamp\(156px,13vw,250px\);height:clamp\(54px,4\.7vw,92px\);overflow:hidden[\s\S]+#screensaver \.ssBrand img\{width:100%;height:auto;display:block;/,
-    'screensaver brand should use a compact cropped Triboon wordmark strip');
-  assert.match(ui, /<div class="ssBrand"><img src="triboon-screensaver\.png" alt="Triboon" onerror="this\.onerror=null;this\.src='triboon\.png'"><\/div>/,
-    'screensaver should use the transparent tight-crop Triboon logo asset with the full wordmark as fallback');
+  assert.match(ui, /#screensaver \.ssBrand\{[\s\S]+width:clamp\(172px,14vw,270px\);height:clamp\(58px,5vw,96px\);overflow:hidden[\s\S]+#screensaver \.ssBrand img\{width:100%;height:auto;display:block;[\s\S]+transform:translateY\(-25%\);/,
+    'screensaver brand should use the updated cropped Triboon wordmark');
+  assert.match(ui, /<div class="ssBrand"><img src="triboon\.png" alt="Triboon"><\/div>/,
+    'screensaver should use the updated transparent Triboon wordmark asset');
   assert.match(ui, /const SCREENSAVER_IDLE_DEFAULT_SECONDS = 60;[\s\S]+const SCREENSAVER_IDLE_OPTIONS = \[0, 60, 120, 300, 600\];[\s\S]+function prefScreensaverDelayMs\(\) \{[\s\S]+return seconds > 0 \? seconds \* 1000 : 0;[\s\S]+function canShowScreensaver\(\) \{[\s\S]+S\.nativeLivePending[\s\S]+S\.view === 'player' \|\| \$\('player'\)\.classList\.contains\('open'\)[\s\S]+\.gate\.open,#drawer\.open,#trailer\.open,#libModal\.open,#matchModal\.open,#catModal\.open,#filterMenu\.open,#cwMenu\.open,#trackMenu\.open,#musicNow\.open[\s\S]+function resetScreensaverIdle\(\) \{[\s\S]+const idleMs = prefScreensaverDelayMs\(\);[\s\S]+if \(!idleMs\) return;[\s\S]+setTimeout\(showScreensaver, idleMs\);/,
     'app screensaver should default to one minute, allow profile timing, and stay out of native Live TV, playback, gates, and active modal surfaces');
   assert.match(ui, /function wakeScreensaverForPlayerSurface\(\) \{[\s\S]+if \(S\.screensaverOn\) hideScreensaver\(true\);[\s\S]+resetScreensaverIdle\(\);[\s\S]+\}/,
@@ -1252,8 +1252,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'web favicon should use the T logo assets');
   assert.match(ui, /id="railLogo"[\s\S]+<img src="T-Logo\.svg" alt="Triboon" onerror="this\.onerror=null;this\.src='T-Logo\.png'"/,
     'web rail logo should use the T logo assets');
-  assert.match(ui, /<div class="ssBrand"><img src="triboon-screensaver\.png" alt="Triboon" onerror="this\.onerror=null;this\.src='triboon\.png'"><\/div>/,
-    'web screensaver should use the transparent tight-crop Triboon logo asset');
+  assert.match(ui, /<div class="ssBrand"><img src="triboon\.png" alt="Triboon"><\/div>/,
+    'web screensaver should use the updated transparent Triboon wordmark asset');
   assert.match(android, /nativeLoading = new FrameLayout\(this\);[\s\S]+FrameLayout loadingMark = new FrameLayout\(this\);[\s\S]+ProgressBar loadingRing = new ProgressBar\(this\);[\s\S]+loadingLogo\.setImageResource\(R\.drawable\.ic_loading_logo\);[\s\S]+loadingCenter\.addView\(loadingMark, new LinearLayout\.LayoutParams\(dp\(136\), dp\(136\)\)\);/,
     'native loading overlay should wrap the T logo with a modern progress ring');
   assert.match(android, /nativeLoadingTitle\.setTextSize\(24\);[\s\S]+nativeLoadingTitle\.setMaxLines\(2\);[\s\S]+nativeLoadingTitle\.setEllipsize\(TextUtils\.TruncateAt\.END\);/,
