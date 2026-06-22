@@ -84,7 +84,7 @@ flowchart LR
 | Playback decision | `server/transcode.js`, `server/index.js`, `web/index.html`, `android/.../MainActivity.java` | Source-fit, direct, remux, transcode; Android native caps feed server policy. |
 | Subtitles | `server/opensubs.js`, `server/index.js`, `web/index.html`, `MainActivity.java` | Wyzie search/download, release/file hints, WebVTT, web/native display timelines. |
 | Local libraries | `server/index.js`, `web/index.html` | Folder scan, bounded library pages, local playback, local artwork. |
-| Live TV | `server/index.js`, `web/index.html`, `MainActivity.java` | Source-scoped M3U/Xtream/XMLTV, web remux path, Android native Exo path. |
+| Live TV | `server/index.js`, `web/index.html`, `MainActivity.java` | Source-scoped shared M3U/Xtream/XMLTV, web remux path, Android native Exo path, and Android device-local personal IPTV. |
 | Continue Watching | `docs-continue-watching.md`, `server/index.js`, `web/index.html` | Canonical movie/show identity, resume state, quality carry-forward, next-up, and D-pad focus after row actions. |
 | Android shell | `android/app/src/main/java/app/triboon/tv/MainActivity.java` | WebView bridge, D-pad/back handling, native video/Live TV, PiP guide recovery. |
 
@@ -161,9 +161,14 @@ global IPTV cache that every provider shares.
 flowchart TD
   SettingsUI["Settings Live TV form\nweb/index.html"] --> Add["POST /api/iptv/sources"]
   SettingsUI --> Delete["DELETE /api/iptv/sources/:id"]
+  PrefUI["Preferences Live TV form\nweb/index.html"] --> MyAdd["POST /api/me/iptv/sources"]
+  PrefUI --> MyDelete["DELETE /api/me/iptv/sources/:id"]
   Add --> EncSettings["Encrypted settings.iptvSources"]
+  MyAdd --> EncSettings
+  MyDelete --> EncSettings
   Delete --> EncSettings
   Delete --> Cleanup["clearIptvSourceRuntime\n+ delete source disk caches\n+ remove source favorites/groups"]
+  MyDelete --> Cleanup
 
   EncSettings --> Sources["iptvSourcesFromSettings\nlegacy default source fallback"]
   Sources --> UserSources["iptvSourcesForUser"]
@@ -176,12 +181,19 @@ flowchart TD
   Guide --> PiP["Live TV guide\nplayer PiP guide"]
   Playback --> Android["Android ExoPlayer\nprovider TS/HLS then server remux"]
   Playback --> Web["Browser MSE\nserver fMP4 remux"]
+  AndroidPrefs["Android Preferences\npersonal IPTV on this TV"] --> AndroidStore["Android Keystore-backed\nprivate storage"]
+  AndroidStore --> AndroidDirect["Device-side Xtream/M3U load\nno server/VPN hop"]
+  AndroidDirect --> LiveUI
+  AndroidDirect --> Android
 ```
 
 Source contract:
 
 - `settings.iptvSources[]` stores source identity, type, display name, M3U URL or
   Xtream host/user/pass, optional XMLTV URL, enabled flag, and user visibility.
+- User-owned playlists are also stored in `settings.iptvSources[]`, with
+  `ownerUserId` and a one-user visibility list. Browser, Android TV, and other
+  signed-in clients use the same account source through `/api/me/iptv/sources`.
 - Legacy single-source settings (`iptvMode`, `iptvUrl`, `xtHost`, `xtUser`,
   `xtPass`, `epgUrl`, `iptvUsers`) still migrate through a compatibility
   `default` source only when no new source list exists.
@@ -201,9 +213,19 @@ Playback contract:
 
 - Browser Live TV uses the server fMP4 remux path and must close the previous
   fetch/reader/remux before opening the next channel.
+- Account personal IPTV uses the same server playback, guide, source cache, and
+  delete cleanup path as shared playlists. Stream URLs bind both the channel
+  position and source-scoped channel id so a stale channel cache cannot drift to
+  another user's source.
 - Android TV tries native provider-compatible URLs first. Xtream prefers TS,
   with HLS as fallback, then the server remux path for devices that cannot
   handle the provider stream directly.
+- Android TV can also hold personal IPTV sources in the native app. Those
+  sources are loaded by `MainActivity.java` from the Android device network,
+  merged into `web/index.html` Live TV rows, and played directly by ExoPlayer.
+  They are encrypted with Android Keystore-backed app storage, intentionally not
+  sent to the Triboon server, not included in server guide caches, and not
+  shared with other users or devices.
 - Provider errors are sanitized. Logs may include source id, channel name,
   status, and reason, but never credential-bearing provider URLs.
 - A provider 401/403/429 against a cached Xtream stream id must force-refresh
@@ -235,6 +257,7 @@ The current implementation uses JSON buckets through `server/store.js`.
 | `verdicts`, `ixusage`, `tmdb-cache` | `server/store.js`, `server/index.js`, `server/tmdb.js` | Health verdicts, per-indexer daily usage, metadata cache. |
 | `iptvcaches`, `epgcaches`, `xtreamepgcaches` | `server/index.js` | Source-scoped channel, XMLTV, and Xtream guide caches. |
 | `iptvfavs`, `iptvgroups` | `server/index.js` | Per-user Live TV favorites and hidden groups. |
+| Android `personalIptvSources` | `MainActivity.java` | Device-local IPTV sources saved through Android Keystore-backed private preferences, redacted before the web UI reads them. |
 
 When changing persistence, update:
 
@@ -295,8 +318,8 @@ Still open / future hardening:
 - par2 repair and compressed RAR streaming improvements.
 - MDBList and richer catalog rows.
 - Intro/credit skip after the playback foundation stays stable.
-- Release automation polish: version bump, APK build, GitHub release, and Unraid
-  update confirmation for every public release.
+- Release automation polish: version bump, APK build, GitHub release, stable
+  Android TV APK alias, and Unraid update confirmation for every public release.
 
 ## Verification Checklist For Architecture Changes
 
@@ -313,6 +336,11 @@ Run the narrow test for the area touched, then the broader suite before a releas
   and visually check the route.
 - Android TV behavior: build the APK, run the emulator/Shield smoke or
   `bench/android-tv-stress.ps1`, and inspect logs for fatal/provider errors.
+- Android TV release packaging: attach both `triboon-tv-vX.Y.Z.apk` and the
+  stable alias `triboon-tv.apk` to the GitHub release. The stable Downloader URL
+  is `https://github.com/d1same/triboon/releases/latest/download/triboon-tv.apk`;
+  Android update acceptance still depends on package id, signing key, and a
+  higher versionCode.
 - Documentation: scan for stale phase counts, old stack names, old cache
   ownership statements, and old fixed-connection/read-ahead tuning before
   calling the work done.

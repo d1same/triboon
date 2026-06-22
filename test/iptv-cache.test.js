@@ -243,6 +243,61 @@ ${url}
   }
 });
 
+test('iptv: sync status ignores source errors for deleted playlists', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-iptv-deleted-source-status-'));
+  const srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+  try {
+    const admin = await setupAdmin(srv.port);
+    srv.store.write('iptvsync', {
+      sourceErrors: [{
+        sourceId: 'src_deleted',
+        sourceName: 'apollo',
+        mode: 'xtream',
+        error: 'Xtream channel load action=get_live_streams host=provider.example failed: HTTP 403',
+      }],
+    });
+
+    const empty = await httpJson(srv.port, 'GET', '/api/iptv/status', null, admin);
+    assert.strictEqual(empty.status, 200);
+    assert.strictEqual(empty.json.configured, false);
+    assert.deepStrictEqual(empty.json.sourceErrors, [], 'deleted playlist errors must not show when no playlist is saved');
+
+    const created = await httpJson(srv.port, 'POST', '/api/iptv/sources',
+      { name: 'Fresh TV', iptvMode: 'm3u', iptvUrl: 'http://example.invalid/list.m3u' }, admin);
+    assert.strictEqual(created.status, 200);
+    const activeId = created.json.source.id;
+    srv.store.write('iptvsync', {
+      sourceErrors: [
+        {
+          sourceId: 'src_deleted',
+          sourceName: 'apollo',
+          mode: 'xtream',
+          error: 'old Xtream HTTP 403',
+        },
+        {
+          sourceId: activeId,
+          sourceName: 'Fresh TV',
+          mode: 'm3u',
+          error: 'm3u playlist HTTP 404',
+        },
+      ],
+    });
+
+    const active = await httpJson(srv.port, 'GET', '/api/iptv/status', null, admin);
+    assert.strictEqual(active.json.sourceErrors.length, 1);
+    assert.strictEqual(active.json.sourceErrors[0].sourceName, 'Fresh TV');
+    assert.match(active.json.sourceErrors[0].error, /m3u playlist HTTP 404/);
+
+    const del = await httpJson(srv.port, 'DELETE', `/api/iptv/sources/${activeId}`, null, admin);
+    assert.strictEqual(del.status, 200);
+    const afterDelete = await httpJson(srv.port, 'GET', '/api/iptv/status', null, admin);
+    assert.strictEqual(afterDelete.json.configured, false);
+    assert.deepStrictEqual(afterDelete.json.sourceErrors, [], 'removing the playlist clears its visible sync issue');
+  } finally {
+    await srv.shutdown();
+  }
+});
+
 test('iptv: one bad source reports diagnostics without hiding healthy channels', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-iptv-partial-source-'));
   const upstream = http.createServer((req, res) => {
@@ -354,6 +409,91 @@ http://stream.example/${version}.ts
     assert.strictEqual(fresh.json.channels.length, 1);
     assert.strictEqual(fresh.json.channels[0].name, 'Fresh News');
     assert.strictEqual(listHits, 2, 're-added playlist must fetch fresh instead of reusing the deleted source cache');
+  } finally {
+    if (srv) await srv.shutdown();
+    upstream.close();
+  }
+});
+
+test('iptv: users can add personal server playlists from Preferences without leaking sources', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-user-iptv-'));
+  const upstream = http.createServer((req, res) => {
+    if (req.url === '/alice.m3u') {
+      res.writeHead(200, { 'content-type': 'audio/x-mpegurl' });
+      return res.end(`#EXTM3U
+#EXTINF:-1 tvg-id="alice.news" group-title="News",Alice News
+http://${req.headers.host}/alice.ts
+`);
+    }
+    if (req.url === '/bob.m3u') {
+      res.writeHead(200, { 'content-type': 'audio/x-mpegurl' });
+      return res.end(`#EXTM3U
+#EXTINF:-1 tvg-id="bob.news" group-title="News",Bob News
+http://${req.headers.host}/bob.ts
+`);
+    }
+    if (req.url === '/alice.ts') {
+      res.writeHead(200, { 'content-type': 'video/mp2t' });
+      return res.end('alice-ts');
+    }
+    if (req.url === '/bob.ts') {
+      res.writeHead(200, { 'content-type': 'video/mp2t' });
+      return res.end('bob-ts');
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${upstream.address().port}`;
+
+  let srv;
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    const inviteA = await httpJson(srv.port, 'POST', '/api/invites', { policy: {} }, admin);
+    const aliceJoin = await httpJson(srv.port, 'POST', '/api/invite/accept',
+      { token: inviteA.json.token, name: 'alice', password: 'alice-pass' });
+    const inviteB = await httpJson(srv.port, 'POST', '/api/invites', { policy: {} }, admin);
+    const bobJoin = await httpJson(srv.port, 'POST', '/api/invite/accept',
+      { token: inviteB.json.token, name: 'bob', password: 'bob-pass' });
+    const alice = aliceJoin.json.token;
+    const bob = bobJoin.json.token;
+
+    const created = await httpJson(srv.port, 'POST', '/api/me/iptv/sources',
+      { name: 'Alice IPTV', iptvMode: 'm3u', iptvUrl: `${base}/alice.m3u` }, alice);
+    assert.strictEqual(created.status, 200);
+    assert.strictEqual(created.json.source.personal, true);
+    assert.strictEqual(created.json.source.iptvUrl, `127.0.0.1:${upstream.address().port}`, 'personal source details are redacted to host');
+
+    const aliceSources = await httpJson(srv.port, 'GET', '/api/me/iptv/sources', null, alice);
+    assert.strictEqual(aliceSources.json.sources.length, 1);
+    const bobSources = await httpJson(srv.port, 'GET', '/api/me/iptv/sources', null, bob);
+    assert.strictEqual(bobSources.json.sources.length, 0, 'other users cannot list a personal source');
+    assert.strictEqual((await httpJson(srv.port, 'GET', '/api/me', null, alice)).json.iptvAllowed, true);
+    assert.strictEqual((await httpJson(srv.port, 'GET', '/api/me', null, bob)).json.iptvAllowed, false);
+
+    const aliceView = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, alice);
+    assert.strictEqual(aliceView.json.configured, true);
+    assert.deepStrictEqual(aliceView.json.channels.map((c) => c.name), ['Alice News']);
+    assert.match(aliceView.json.channels[0].nativeUrl, /cid=/, 'stream URLs should bind the token to the channel id');
+    const bobViewBefore = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, bob);
+    assert.strictEqual(bobViewBefore.json.configured, false);
+
+    await httpJson(srv.port, 'POST', '/api/me/iptv/sources',
+      { name: 'Bob IPTV', iptvMode: 'm3u', iptvUrl: `${base}/bob.m3u` }, bob);
+    const bobView = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, bob);
+    assert.deepStrictEqual(bobView.json.channels.map((c) => c.name), ['Bob News']);
+
+    const aliceNative = await httpRaw(srv.port, aliceView.json.channels[0].nativeUrl);
+    assert.strictEqual(aliceNative.status, 200);
+    assert.strictEqual(aliceNative.body.toString('utf8'), 'alice-ts', 'stream lookup reloads the cache for the token owner');
+
+    const forbidden = await httpJson(srv.port, 'DELETE', `/api/me/iptv/sources/${created.json.source.id}`, null, bob);
+    assert.strictEqual(forbidden.status, 403, 'users cannot remove someone else personal source');
+    const removed = await httpJson(srv.port, 'DELETE', `/api/me/iptv/sources/${created.json.source.id}`, null, alice);
+    assert.strictEqual(removed.status, 200);
+    assert.strictEqual(removed.json.removed, true);
+    assert.strictEqual((await httpJson(srv.port, 'GET', '/api/me/iptv/sources', null, alice)).json.sources.length, 0);
   } finally {
     if (srv) await srv.shutdown();
     upstream.close();

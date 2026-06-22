@@ -82,8 +82,29 @@ This is the A-to-Z checklist for keeping web and Android TV working as separate 
 - ExoPlayer should keep the TextureView-backed surface stable during guide/PiP transitions.
 - Attached local libraries must not block first menu/home focus or rail rollover; home must not fetch full `/api/libraries/:id/items` payloads, rail previews auto-load only the first bounded local-folder page, and library grids request additional bounded pages through scroll/D-pad.
 
+## Release Packaging
+
+- Android TV releases publish both APK asset names from the same build:
+  `triboon-tv-vX.Y.Z.apk` for audit/history and `triboon-tv.apk` for the stable
+  Downloader URL:
+  `https://github.com/d1same/triboon/releases/latest/download/triboon-tv.apk`.
+- Android update acceptance depends on the package id, signing key, and higher
+  `versionCode`; the APK filename is only for download/link stability.
+
 ## Verification Log
 
+- Release v1.5.5 verification: browser/account IPTV sources now save through
+  `/api/me/iptv/sources`, are isolated per user, share the server source/cache
+  model across browser and Android TV, and keep Android device-only IPTV as a
+  separate optional path. Stream URLs now bind both channel position and
+  source-scoped channel id, and release docs now require both
+  `triboon-tv-vX.Y.Z.apk` and stable `triboon-tv.apk` assets for Downloader
+  updates. Verification passed `node --check server/index.js`, inline
+  `web/index.html` script parse, `git diff --check`, full `npm.cmd test`
+  174/174, and Android `assembleDebug`. `aapt dump badging
+  dist/triboon-tv-v1.5.5.apk` reported `versionCode='58'` and
+  `versionName='1.5.5'`; release APK SHA-256 is
+  `186501FC6938D212E29C0B76D0B6A5252A052E855DE5F0CE0421452D359E0DE3`.
 - Release v1.1.21 streaming/IPTV capacity verification: full `npm.cmd test`
   passed 164/164 after the version bump, covering the recent IPTV source/cache,
   Xtream refresh/retry, native proxy redaction, playback, security, subtitle,

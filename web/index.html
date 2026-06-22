@@ -245,6 +245,7 @@ body.authOpen #gateBackdrop{display:block}
 .gateCard input{width:100%;min-height:54px;background:rgba(255,255,255,.08);border:0;border-radius:16px;padding:15px 16px;color:var(--text);font:700 17px "Albert Sans";outline:none;box-shadow:inset 0 0 0 1px rgba(243,239,247,.08)}
 .gateCard input:focus{box-shadow:0 0 0 3px rgba(251,139,60,.42),inset 0 0 0 1px rgba(251,139,60,.72)}
 .gateCard .btn{width:100%;min-height:56px;justify-content:center;margin-top:24px;font-size:16px;border-radius:17px;box-shadow:0 16px 32px rgba(193,59,214,.23)}
+.gateCard .btn.primary{background:linear-gradient(135deg,#C13BD6,#FB8B3C)!important;color:#160a04!important}
 .gateCard .err{color:#ffadad;font-weight:700;font-size:13px;min-height:18px;margin-top:12px}
 .gateCard .alt{margin-top:18px;text-align:center;font-size:14px;color:rgba(243,239,247,.7)}
 .gateCard .alt button{color:#ffd08b;font-weight:850}
@@ -391,7 +392,6 @@ body.tv #filterMenu{backdrop-filter:none}
 #trailerWl{background:rgba(34,25,52,.72);border:1px solid var(--line)}
 #trailerWl.on{background:var(--gold);color:#160a04;border-color:transparent;font-weight:700}
 #trailerWl.on.focus,#trailerWl.on:focus-visible{background:var(--text);color:#160a04}
-#trailerClose{background:rgba(34,25,52,.72);border:1px solid var(--line)}
 .trailerSource{color:rgba(233,225,243,.72);font:800 11px "Sora";letter-spacing:.14em;text-transform:uppercase;white-space:nowrap;text-shadow:0 2px 14px rgba(0,0,0,.78)}
 @media(max-width:700px){
   #trailer{padding:14px}
@@ -1362,6 +1362,12 @@ body.tv #heroCredits{height:16px;margin-bottom:6px;overflow:hidden}
 #prefCatList .catRow{border-bottom:0;border-radius:10px;padding:8px 10px}
 #prefCatList .catRow:hover{background:rgba(34,25,52,.45)}
 #prefCatList input:focus,#catList input:focus{outline:none;box-shadow:0 0 0 2.5px var(--coral);border-radius:4px}
+.personalIptvList{display:grid;gap:8px;margin:0 0 12px}
+.personalIptvRow{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;
+  border:1px solid rgba(243,239,247,.08);border-radius:12px;background:rgba(11,8,18,.38)}
+.personalIptvRow b{display:block;font:800 13px "Sora";white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.personalIptvRow small{display:block;color:var(--muted);font:700 11px "JetBrains Mono";white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.personalIptvActions{display:flex;gap:8px;flex:none}
 #chGuideBtn{flex:none;background:rgba(22,16,32,.85);border:1px solid var(--line);border-radius:12px;
   color:var(--text);font:600 13px "Sora";padding:12px 18px;transition:all .15s}
 #chGuideBtn:hover,#chGuideBtn.focus{border-color:var(--coral)}
@@ -1608,9 +1614,6 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
   background:var(--text)!important;color:#160a04!important}
 #trailer #trailerWl.on.focus,#trailer #trailerWl.on:focus,#trailer #trailerWl.on:focus-visible{
   background:var(--text)!important;color:#160a04!important}
-#trailer #trailerClose.focus,#trailer #trailerClose:focus,#trailer #trailerClose:focus-visible{
-  background:var(--text)!important;color:#160a04!important}
-
 /* ============ Horizontal rows bleed to the MENU edge ============ */
 /* Scrolled covers used to vanish at the content gutter, leaving a dead strip between the
    rail and the clip point — rows now extend left so art clips right at the menu column. */
@@ -2220,10 +2223,6 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M6 4h12v16l-6-3.6L6 20z"/></svg>
           <span>Watchlist</span>
         </button>
-        <button id="trailerClose" class="trailerCtl focusable" title="Close trailer" aria-label="Close trailer">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
-          <span>Close</span>
-        </button>
       </div>
     </div>
   </div>
@@ -2295,6 +2294,27 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
   </div>
 
   <div class="setGrid" data-ptab="livetv" hidden>
+    <div class="panel" id="prefPersonalIptvPanel"><h2>My IPTV playlists</h2>
+      <p>Save a personal M3U or Xtream playlist to your account. Browser, Android TV, and other signed-in clients see the same source; Android TV can also keep a device-only playlist.</p>
+      <div id="personalIptvList" class="personalIptvList"><div class="hint">No personal playlists saved.</div></div>
+      <div class="field"><input id="personalIptvName" placeholder="Playlist name"></div>
+      <div class="field"><select id="personalIptvMode" class="focusable" style="max-width:220px">
+        <option value="xtream">Xtream Codes API</option>
+        <option value="m3u">M3U playlist URL</option>
+      </select></div>
+      <div class="field"><input id="personalIptvHost" placeholder="Server URL or M3U URL"></div>
+      <div class="field"><input id="personalIptvEpg" placeholder="XMLTV EPG URL (optional)"></div>
+      <div class="field" id="personalIptvXtreamFields">
+        <input id="personalIptvUser" placeholder="Username">
+        <input id="personalIptvPass" type="password" placeholder="Password">
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn primary focusable" id="personalIptvSave">Save to my account</button>
+        <button class="btn ghost focusable" id="personalIptvSaveDevice" style="display:none">Save on this TV only</button>
+        <button class="btn ghost focusable" id="personalIptvRefresh">Refresh channels</button>
+      </div>
+      <div class="hint" id="personalIptvStatus"></div>
+    </div>
     <div class="panel" id="prefLiveWrap"><h2>Channel categories</h2>
       <p>Untick the categories you never watch — they disappear from your channel list and
          guide. Changes save automatically.</p>
@@ -3591,8 +3611,8 @@ async function enrichHome() {
   try {
     const jobs = [];
     if (!S.localMap && cachedLocalLibraryItemsAvailable()) refreshLocalMapFromCachedLibraries();
-    if (S.serverInfo.iptv && S.user && S.user.iptvAllowed !== false && S._homeLiveFav === undefined) {
-      jobs.push(api('/api/iptv/channels?fav=1').then((fav) => {
+    if (liveTvAvailable() && S._homeLiveFav === undefined) {
+      jobs.push(loadLiveChannelsCombined({ fav: true }).then((fav) => {
         S._homeLiveFav = (fav.configured && fav.channels.length) ? (S.liveEpg = !!fav.epg, fav.channels) : null;
       }).catch(() => { S._homeLiveFav = null; }));
     }
@@ -3685,9 +3705,10 @@ function homeRowsFromWatch(cw, loading = false) {
   // Favorited live channels — included only if already fetched in the background (no boot fetch).
   if (S._homeLiveFav && S._homeLiveFav.length) {
     rows.push({ name: 'Live TV — your channels', items: S._homeLiveFav.slice(0, 14).map((ch, i) => ({
-      key: 'live:' + ch.idx, title: ch.name, genre: ch.group || '',
+      key: ch.key || ('live:' + ch.idx), title: ch.name, genre: ch.group || '',
       _channel: ch.idx, _logo: ch.logo, _streamUrl: ch.streamUrl, _nativeUrl: ch.nativeUrl, _nativeMime: ch.nativeMime || '',
       _nativeFallbackUrl: ch.nativeFallbackUrl, _nativeFallbackMime: ch.nativeFallbackMime || '', _chid: ch.id,
+      _personal: isPersonalChannel(ch), _sourceName: ch.sourceName || '',
       backdrop: procBackdrop(210, 320, (i % 12) + 9), poster: null,
     })) });
   }
@@ -3774,7 +3795,7 @@ async function loadRows(opts = {}) {
   if (!opts.catalogOnly) scheduleHomeCatalogRefresh();
   // Fold in the local + Live-TV-favorites rows AFTER the screen is up, on idle.
   const needLocalCacheRefresh = !S.localMap && cachedLocalLibraryItemsAvailable();
-  const needEnrich = needLocalCacheRefresh || (S.serverInfo.iptv && S.user && S.user.iptvAllowed !== false && S._homeLiveFav === undefined);
+  const needEnrich = needLocalCacheRefresh || (liveTvAvailable() && S._homeLiveFav === undefined);
   if (needEnrich) (window.requestIdleCallback || ((f) => setTimeout(f, 200)))(() => enrichHome());
 }
 
@@ -8213,7 +8234,7 @@ function renderLocalGridPaged(items) {
 
 /* ============ trailer modal ============ */
 function trailerControls() {
-  return [$('trailerBack'), $('trailerWl'), $('trailerClose')]
+  return [$('trailerBack'), $('trailerWl')]
     .filter((el) => el && el.offsetParent !== null && getComputedStyle(el).display !== 'none');
 }
 function focusTrailerControl(idx = S.trailerCtlIdx || 0) {
@@ -8275,7 +8296,6 @@ function closeTrailer() {
   S.trailerReturnEl = null;
   if (ret) requestAnimationFrame(() => applyFocus(ret, false));
 }
-$('trailerClose').addEventListener('click', closeTrailer);
 $('trailerBack').addEventListener('click', closeTrailer);
 $('trailer').addEventListener('click', (e) => { if (e.target.id === 'trailer') closeTrailer(); });
 
@@ -8998,6 +9018,7 @@ $('libCreate').addEventListener('click', async () => {
 const epgMemo = new Map(); // channel idx -> { at, data } (now/next, short UI-only freshness, bounded)
 const LIVE_GUIDE_BATCH = 24;
 async function fetchEpg(idx) {
+  if (!Number.isFinite(+idx) || +idx < 0) return {};
   const m = epgMemo.get(idx);
   if (m && Date.now() - m.at < 90000) return m.data;
   if (epgMemo.size > 300) epgMemo.clear(); // bounded — stale entries are refetched on demand
@@ -9010,7 +9031,10 @@ async function fetchEpg(idx) {
 const fmtT = (ms) => ms ? new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
 const guideMemo = new Map(); // timeline batch -> { at, data }; short UI-only cache, server owns EPG freshness
 async function fetchGuideBatch(chans) {
-  const ids = (chans || []).map((c) => c && (c.idx ?? c._channel)).filter((n) => Number.isInteger(n));
+  const ids = (chans || [])
+    .filter((c) => c && !isPersonalChannel(c))
+    .map((c) => c && (c.idx ?? c._channel))
+    .filter((n) => Number.isInteger(n) && n >= 0);
   if (!ids.length || !S.liveEpg) return {};
   const bucket = Math.floor(Date.now() / 1800000); // guide window only shifts every half hour
   const key = `${bucket}:${ids.join(',')}`;
@@ -9026,6 +9050,127 @@ async function fetchGuideBatch(chans) {
 }
 
 const LIVE_TTL = 5 * 60000; // server owns the 24h refresh; browser only avoids immediate refetch loops
+const PERSONAL_IPTV_FAV_KEY = 'triboon.personalIptv.favs';
+const PERSONAL_IPTV_HIDDEN_KEY = 'triboon.personalIptv.hidden';
+function personalIptvBridge() {
+  try {
+    return window.TriboonTV && typeof window.TriboonTV.personalIptvVersion === 'function'
+      && window.TriboonTV.personalIptvVersion() >= 1 ? window.TriboonTV : null;
+  } catch { return null; }
+}
+function personalIptvSources() {
+  const bridge = personalIptvBridge();
+  if (!bridge || typeof bridge.personalIptvSources !== 'function') return [];
+  try {
+    const rows = JSON.parse(bridge.personalIptvSources() || '[]');
+    return Array.isArray(rows) ? rows : [];
+  } catch { return []; }
+}
+function personalIptvConfigured() { return personalIptvSources().length > 0; }
+function liveTvAvailable() {
+  const serverLive = !!(S.serverInfo && S.serverInfo.iptv && (!S.user || S.user.iptvAllowed !== false));
+  return serverLive || personalIptvConfigured();
+}
+function personalIptvSet(key) {
+  try {
+    const arr = JSON.parse(localStorage.getItem(key) || '[]');
+    return new Set(Array.isArray(arr) ? arr.filter(Boolean).map(String) : []);
+  } catch { return new Set(); }
+}
+function savePersonalIptvSet(key, set) {
+  try { localStorage.setItem(key, JSON.stringify([...set].filter(Boolean).map(String))); } catch {}
+}
+function personalFavSet() { return personalIptvSet(PERSONAL_IPTV_FAV_KEY); }
+function personalHiddenSet() { return personalIptvSet(PERSONAL_IPTV_HIDDEN_KEY); }
+function savePersonalHiddenSet(set) { savePersonalIptvSet(PERSONAL_IPTV_HIDDEN_KEY, set); }
+function isPersonalChannel(ch) {
+  return !!(ch && (ch.personal || ch._personal || String(ch.id || ch._chid || '').startsWith('device:')));
+}
+function normalizePersonalIptvPayload(payload = {}) {
+  const favs = personalFavSet();
+  let i = 0;
+  const channels = (Array.isArray(payload.channels) ? payload.channels : []).map((raw) => {
+    const id = String(raw.id || `device:unknown:${i}`);
+    const idx = Number.isFinite(+raw.idx) ? +raw.idx : (-900000 - i);
+    i++;
+    return {
+      ...raw,
+      id,
+      idx,
+      personal: true,
+      sourceName: raw.sourceName || 'This TV',
+      group: raw.group || 'Other',
+      fav: favs.has(id),
+      nativeMime: raw.nativeMime || '',
+      nativeFallbackMime: raw.nativeFallbackMime || '',
+    };
+  });
+  return {
+    configured: !!payload.configured || channels.length > 0 || personalIptvConfigured(),
+    channels,
+    sourceErrors: Array.isArray(payload.sourceErrors) ? payload.sourceErrors : [],
+  };
+}
+window.__tvPersonalIptvLoaded = (token, raw) => {
+  const wait = S._personalIptvWait;
+  if (!wait || wait.token !== token) return;
+  clearTimeout(wait.timer);
+  S._personalIptvWait = null;
+  try {
+    wait.resolve(normalizePersonalIptvPayload(JSON.parse(raw || '{}')));
+  } catch {
+    wait.resolve({ configured: personalIptvConfigured(), channels: [], sourceErrors: [{ sourceName: 'This TV', error: 'Personal IPTV response was invalid' }] });
+  }
+};
+function loadPersonalIptvChannels(timeoutMs = 18000) {
+  const bridge = personalIptvBridge();
+  if (!bridge || typeof bridge.personalIptvLoad !== 'function') {
+    return Promise.resolve({ configured: false, channels: [], sourceErrors: [] });
+  }
+  if (!personalIptvConfigured()) {
+    return Promise.resolve({ configured: false, channels: [], sourceErrors: [] });
+  }
+  const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      if (S._personalIptvWait && S._personalIptvWait.token === token) S._personalIptvWait = null;
+      resolve({ configured: true, channels: [], sourceErrors: [{ sourceName: 'This TV', error: 'Personal IPTV timed out' }] });
+    }, timeoutMs);
+    S._personalIptvWait = { token, resolve, timer };
+    try { bridge.personalIptvLoad(token); }
+    catch {
+      clearTimeout(timer);
+      S._personalIptvWait = null;
+      resolve({ configured: true, channels: [], sourceErrors: [{ sourceName: 'This TV', error: 'Personal IPTV bridge failed' }] });
+    }
+  });
+}
+async function loadLiveChannelsCombined({ fav = false } = {}) {
+  const allowServer = !!(S.serverInfo && S.serverInfo.iptv && (!S.user || S.user.iptvAllowed !== false));
+  let server = { configured: false, epg: false, channels: [], hiddenGroups: [], globalHidden: [], sourceErrors: [] };
+  if (allowServer) {
+    try {
+      server = await api('/api/iptv/channels' + (fav ? '?fav=1' : ''));
+    } catch (e) {
+      server = { ...server, configured: true, sourceErrors: [{ sourceName: 'Server Live TV', error: e.message || 'server playlist failed' }] };
+    }
+  }
+  let personal = await loadPersonalIptvChannels(fav ? 12000 : 18000);
+  if (fav) personal = { ...personal, channels: (personal.channels || []).filter((c) => c.fav) };
+  const personalHidden = personalHiddenSet();
+  const channels = [
+    ...(Array.isArray(server.channels) ? server.channels : []),
+    ...(personal.channels || []),
+  ];
+  return {
+    configured: !!server.configured || !!personal.configured,
+    epg: !!server.epg,
+    channels,
+    hiddenGroups: [...new Set([...(server.hiddenGroups || []), ...personalHidden])],
+    globalHidden: server.globalHidden || [],
+    sourceErrors: [...(server.sourceErrors || []), ...(personal.sourceErrors || [])],
+  };
+}
 function clearLiveClientCaches({ channels = false } = {}) {
   epgMemo.clear();
   guideMemo.clear();
@@ -9071,11 +9216,11 @@ function liveSourceWarningHtml(errors = []) {
 // Warm the channel list on INTENT (hover/focus the Live TV rail item) — not at boot, so a
 // big playlist never slows startup. The server keeps the heavy playlist/EPG cache warm.
 function prefetchLiveTv() {
-  if (!S.serverInfo || !S.serverInfo.iptv || (S.user && S.user.iptvAllowed === false)) return;
+  if (!liveTvAvailable()) return;
   if (S.liveChannels && S.liveChannels.length && Date.now() - (S._liveAt || 0) < LIVE_TTL) return;
   if (S._livePrefetching) return;
   S._livePrefetching = true;
-  api('/api/iptv/channels').then((r) => {
+  loadLiveChannelsCombined().then((r) => {
     if (r.configured && r.channels.length) fillLiveState(r);
   }).catch(() => {}).finally(() => { S._livePrefetching = false; });
 }
@@ -9091,8 +9236,8 @@ async function loadLiveTv() {
   }
   grid.innerHTML = '<div class="gridMore">loading channels… (big playlists can take ~10s the first time, then they’re cached)</div>';
   try {
-    const r = await api('/api/iptv/channels');
-    if (!r.configured) { grid.innerHTML = '<div class="gridMore">Live TV isn’t set up — the admin can add an M3U playlist or Xtream login in Settings → Catalog &amp; Live TV.</div>'; return; }
+    const r = await loadLiveChannelsCombined();
+    if (!r.configured) { grid.innerHTML = '<div class="gridMore">Live TV isn’t set up — add a server playlist in Settings, or add a personal Android TV playlist in Preferences.</div>'; return; }
     fillLiveState(r);
     if (!r.channels.length) { grid.innerHTML = liveNoChannelsHtml(S.liveSourceErrors); return; }
     if (S.view !== 'livetv') return; // user navigated away while the playlist downloaded
@@ -9360,10 +9505,11 @@ async function renderGuideProgressive(body, pool) {
     const i = S.gridItems.length;
     row.dataset.grid = i;
     row.dataset.guideChannel = ch.idx;
-    const it = { key: 'live:' + ch.idx, title: ch.name, _channel: ch.idx, genre: ch.group || '',
+    const it = { key: ch.key || ('live:' + ch.idx), title: ch.name, _channel: ch.idx, genre: ch.group || '',
       _streamUrl: ch.streamUrl, _nativeUrl: ch.nativeUrl, _nativeMime: ch.nativeMime || '',
       _nativeFallbackUrl: ch.nativeFallbackUrl, _nativeFallbackMime: ch.nativeFallbackMime || '',
-      _chid: ch.id, backdrop: procBackdrop(210, 320, (ch.idx % 12) + 9), poster: null };
+      _chid: ch.id, _personal: isPersonalChannel(ch), _sourceName: ch.sourceName || '',
+      backdrop: procBackdrop(210, 320, (Math.abs(ch.idx) % 12) + 9), poster: null };
     S.gridItems.push(it);
     const logo = safeUrl(ch.logo);
     row._fillGuide = (nextProgs, isLoading) => {
@@ -9447,10 +9593,11 @@ function fitLiveGuide(wrap = $('guide')) {
 
 function liveTvCard(ch) {
   const i = S.gridItems.length;
-  const it = { key: 'live:' + ch.idx, title: ch.name, _channel: ch.idx, _logo: ch.logo, genre: ch.group || 'Other',
+  const it = { key: ch.key || ('live:' + ch.idx), title: ch.name, _channel: ch.idx, _logo: ch.logo, genre: ch.group || 'Other',
     _streamUrl: ch.streamUrl, _nativeUrl: ch.nativeUrl, _nativeMime: ch.nativeMime || '',
     _nativeFallbackUrl: ch.nativeFallbackUrl, _nativeFallbackMime: ch.nativeFallbackMime || '', _chid: ch.id,
-    backdrop: procBackdrop(200 + (i % 8) * 14, 320, (ch.idx % 12) + 9), poster: null };
+    _personal: isPersonalChannel(ch), _sourceName: ch.sourceName || '',
+    backdrop: procBackdrop(200 + (i % 8) * 14, 320, (Math.abs(ch.idx) % 12) + 9), poster: null };
   S.gridItems.push(it);
   const card = document.createElement('button');
   card.className = 'chCard focusable'; card.dataset.grid = i;
@@ -9480,6 +9627,24 @@ async function showNow(idx, card) {
   if (el && nn && nn.now && nn.now.title) el.textContent = `NOW · ${nn.now.title}`;
 }
 async function toggleFav(ch, star) {
+  if (isPersonalChannel(ch)) {
+    const favs = personalFavSet();
+    const id = String(ch.id || ch._chid || '');
+    const on = !favs.has(id);
+    if (on) favs.add(id); else favs.delete(id);
+    savePersonalIptvSet(PERSONAL_IPTV_FAV_KEY, favs);
+    ch.fav = on;
+    (S.liveChannels || []).forEach((c) => { if (String(c.id) === id) c.fav = on; });
+    document.querySelectorAll('.chFav[data-chid]').forEach((el) => {
+      if (el.dataset.chid !== id) return;
+      el.textContent = on ? '★' : '☆';
+      el.classList.toggle('on', on);
+    });
+    if (star) { star.textContent = on ? '★' : '☆'; star.classList.toggle('on', on); }
+    toast(on ? `★ ${ch.name} added to favorites` : `${ch.name} removed from favorites`);
+    if (S.view === 'livetv' && S.liveCat === '★ Favorites') setTimeout(renderLiveTvBody, 120);
+    return;
+  }
   try {
     const r = await api('/api/iptv/fav', { method: 'POST', body: { id: ch.id } });
     ch.fav = r.on;
@@ -9622,9 +9787,9 @@ async function ensurePlayerGuideChannels() {
   if (!list.length && S.liveChannels && S.liveChannels.length && Date.now() - (S._liveAt || 0) < LIVE_TTL) {
     list = S.liveList = S.liveChannels.map(liveItemForPlayerGuide).filter(Boolean);
   }
-  if ((!list.length || !(S.liveChannels && S.liveChannels.length)) && S.serverInfo && S.serverInfo.iptv) {
+  if ((!list.length || !(S.liveChannels && S.liveChannels.length)) && liveTvAvailable()) {
     try {
-      const fav = await api('/api/iptv/channels');
+      const fav = await loadLiveChannelsCombined();
       if (fav.configured && fav.channels) {
         fillLiveState(fav);
         list = S.liveList = (fav.channels || []).map(liveItemForPlayerGuide).filter(Boolean);
@@ -9795,7 +9960,7 @@ function liveItemForPlayerGuide(ch) {
   if (!ch) return null;
   if (ch._channel !== undefined) return ch;
   return {
-    key: 'live:' + ch.idx,
+    key: ch.key || ('live:' + ch.idx),
     title: ch.name || ch.title || 'Live channel',
     _channel: ch.idx,
     _logo: ch.logo || '',
@@ -9805,9 +9970,11 @@ function liveItemForPlayerGuide(ch) {
     _nativeFallbackUrl: ch.nativeFallbackUrl,
     _nativeFallbackMime: ch.nativeFallbackMime || '',
     _chid: ch.id,
+    _personal: isPersonalChannel(ch),
+    _sourceName: ch.sourceName || '',
     genre: ch.group || ch.genre || 'Other',
     fav: !!ch.fav,
-    backdrop: procBackdrop(210, 320, ((parseInt(ch.idx, 10) || 0) % 12) + 9),
+    backdrop: procBackdrop(210, 320, (Math.abs(parseInt(ch.idx, 10) || 0) % 12) + 9),
     poster: null,
   };
 }
@@ -10749,7 +10916,7 @@ function applyMenuPrefs() {
     const btn = rail.querySelector(`.railBtn[data-nav="${nav}"]`);
     if (!btn) continue;
     const hideByPref = p.hidden.includes(nav);
-    if (nav === 'livetv') btn.style.display = (!hideByPref && S.serverInfo && S.serverInfo.iptv && S.user && S.user.iptvAllowed !== false) ? '' : 'none';
+    if (nav === 'livetv') btn.style.display = (!hideByPref && liveTvAvailable()) ? '' : 'none';
     else if (nav === 'music') btn.style.display = (!hideByPref && S.serverInfo && S.serverInfo.music) ? '' : 'none';
     else btn.style.display = hideByPref ? 'none' : '';
   }
@@ -10840,9 +11007,9 @@ function openPrefs() { // populates the Preferences PAGE (it's a view now, not a
   document.querySelectorAll('#prefSubSize button').forEach((b) => b.classList.toggle('sel', b.dataset.ss === ss));
   document.querySelectorAll('#prefScreensaverDelay button').forEach((b) =>
     b.classList.toggle('sel', +b.dataset.ssv === prefScreensaverDelaySeconds()));
-  // Live TV categories shortcut (per-user list lives here too)
-  const hasIptv = S.serverInfo && S.serverInfo.iptv;
-  $('prefTabLive').style.display = hasIptv ? '' : 'none';
+  // Live TV preferences stay discoverable even before a playlist exists.
+  $('prefTabLive').style.display = '';
+  renderPrefPersonalIptv();
   renderProfileSessionActions();
   renderPinRows();
   renderMenuMgr();
@@ -11209,13 +11376,163 @@ document.querySelectorAll('#prefScreensaverDelay button').forEach((b) => b.addEv
 }));
 $('prefALang').addEventListener('change', () => { savePrefLang('alang', $('prefALang').value); toast('Audio language saved'); });
 $('prefSLang').addEventListener('change', () => { savePrefLang('slang', $('prefSLang').value); toast('Subtitle language saved'); });
+function personalIptvFormBody() {
+  const mode = $('personalIptvMode').value === 'm3u' ? 'm3u' : 'xtream';
+  const host = $('personalIptvHost').value.trim();
+  const body = {
+    name: $('personalIptvName').value.trim(),
+    iptvMode: mode,
+    mode,
+  };
+  if ($('personalIptvEpg').value.trim()) body.epgUrl = $('personalIptvEpg').value.trim();
+  if (mode === 'xtream') {
+    body.xtHost = host;
+    body.xtUser = $('personalIptvUser').value.trim();
+    body.xtPass = $('personalIptvPass').value;
+  } else {
+    body.iptvUrl = host;
+    body.url = host;
+  }
+  return body;
+}
+function clearPersonalIptvForm() {
+  ['personalIptvName', 'personalIptvHost', 'personalIptvEpg', 'personalIptvUser', 'personalIptvPass']
+    .forEach((id) => { const el = $(id); if (el) el.value = ''; });
+}
+async function refreshLiveAvailabilityFlags() {
+  try {
+    const [srvNow, me] = await Promise.all([api('/api/server'), api('/api/me')]);
+    S.serverInfo = { ...(S.serverInfo || {}), ...srvNow };
+    S.user = { ...(S.user || {}), ...me };
+  } catch {}
+}
+async function loadAccountIptvSources() {
+  const r = await api('/api/me/iptv/sources');
+  return Array.isArray(r.sources) ? r.sources : [];
+}
+async function renderPrefPersonalIptv() {
+  const panel = $('prefPersonalIptvPanel');
+  if (!panel) return;
+  const bridge = personalIptvBridge();
+  panel.style.display = '';
+  const mode = $('personalIptvMode').value || 'xtream';
+  $('personalIptvXtreamFields').style.display = mode === 'xtream' ? '' : 'none';
+  $('personalIptvSaveDevice').style.display = bridge ? '' : 'none';
+  ['personalIptvName', 'personalIptvMode', 'personalIptvHost', 'personalIptvEpg', 'personalIptvUser', 'personalIptvPass', 'personalIptvSave', 'personalIptvRefresh']
+    .forEach((id) => { const el = $(id); if (el) el.disabled = false; });
+  const list = $('personalIptvList');
+  list.innerHTML = '<div class="hint">Loading personal playlists...</div>';
+  let accountRows = [];
+  let accountError = '';
+  try { accountRows = await loadAccountIptvSources(); }
+  catch (e) { accountError = e.message || 'account playlists failed'; }
+  const deviceRows = bridge ? personalIptvSources() : [];
+  const accountHtml = accountRows.map((src) => {
+    const modeLabel = src.iptvMode === 'xtream' ? 'Xtream' : 'M3U';
+    const host = src.iptvMode === 'xtream' ? src.xtHost : src.iptvUrl;
+    return `<div class="personalIptvRow">
+      <span><b>${esc(src.name || 'My IPTV')}</b><small>${esc('Account - ' + modeLabel + ' - ' + (host || 'saved source'))}</small></span>
+      <span class="personalIptvActions"><button class="ghostMini focusable" data-account-iptv-del="${esc(src.id)}">Remove</button></span>
+    </div>`;
+  }).join('');
+  const deviceHtml = deviceRows.map((src) => `<div class="personalIptvRow">
+    <span><b>${esc(src.name || 'This TV IPTV')}</b><small>${esc('This TV only - ' + ((src.mode === 'm3u' ? 'M3U' : 'Xtream') + ' - ' + (src.host || src.url || 'device source')))}</small></span>
+    <span class="personalIptvActions"><button class="ghostMini focusable" data-device-iptv-del="${esc(src.id)}">Remove</button></span>
+  </div>`).join('');
+  const empty = !accountRows.length && !deviceRows.length && !accountError;
+  list.innerHTML = (accountError ? `<div class="hint">Account playlists failed: ${esc(accountError)}</div>` : '')
+    + accountHtml + deviceHtml
+    + (empty ? '<div class="hint">No personal playlists saved.</div>' : '');
+  list.querySelectorAll('[data-account-iptv-del]').forEach((btn) => btn.addEventListener('click', async () => {
+    try {
+      const r = await api(`/api/me/iptv/sources/${btn.dataset.accountIptvDel}`, { method: 'DELETE' });
+      if (!r.ok && !r.removed) throw new Error(r.error || 'remove failed');
+      clearLiveClientCaches({ channels: true });
+      S._homeLiveFav = undefined;
+      await refreshLiveAvailabilityFlags();
+      applyMenuPrefs();
+      renderPrefPersonalIptv();
+      toast('Personal playlist removed');
+    } catch (e) { toast('Remove failed: ' + e.message); }
+  }));
+  list.querySelectorAll('[data-device-iptv-del]').forEach((btn) => btn.addEventListener('click', () => {
+    try {
+      const r = JSON.parse(bridge.personalIptvDelete(btn.dataset.deviceIptvDel) || '{}');
+      if (!r.ok) throw new Error(r.error || 'remove failed');
+      clearLiveClientCaches({ channels: true });
+      S._homeLiveFav = undefined;
+      applyMenuPrefs();
+      renderPrefPersonalIptv();
+      toast('Personal playlist removed');
+    } catch (e) { toast('Remove failed: ' + e.message); }
+  }));
+  const total = accountRows.length + deviceRows.length;
+  $('personalIptvStatus').textContent = total ? `${accountRows.length} account playlist${accountRows.length === 1 ? '' : 's'}${bridge ? `, ${deviceRows.length} on this TV` : ''}` : '';
+}
+async function refreshPersonalIptvStatus() {
+  const status = $('personalIptvStatus');
+  status.textContent = 'Checking channels...';
+  await refreshLiveAvailabilityFlags();
+  const r = await loadLiveChannelsCombined();
+  const errors = (r.sourceErrors || []).map((e) => e.error).filter(Boolean);
+  status.textContent = r.channels.length
+    ? `${r.channels.length} channels ready`
+    : (errors[0] || 'No channels found');
+  if (r.channels.length) {
+    clearLiveClientCaches({ channels: true });
+    fillLiveState(await loadLiveChannelsCombined());
+    applyMenuPrefs();
+  }
+}
+async function savePersonalIptvFromPrefs() {
+  const mode = $('personalIptvMode').value === 'm3u' ? 'm3u' : 'xtream';
+  const body = personalIptvFormBody();
+  if (mode === 'xtream') {
+    if (!body.xtHost || !body.xtUser || !body.xtPass) return toast('Enter Xtream host, username and password');
+  } else if (!body.iptvUrl) return toast('Enter a playlist URL');
+  try {
+    await api('/api/me/iptv/sources', { method: 'POST', body });
+    clearPersonalIptvForm();
+    clearLiveClientCaches({ channels: true });
+    S._homeLiveFav = undefined;
+    await refreshLiveAvailabilityFlags();
+    applyMenuPrefs();
+    renderPrefPersonalIptv();
+    toast('Personal playlist saved');
+    refreshPersonalIptvStatus();
+  } catch (e) { toast('Save failed: ' + e.message); }
+}
+function savePersonalIptvOnDeviceFromPrefs() {
+  const bridge = personalIptvBridge();
+  if (!bridge) return toast('Personal IPTV is Android TV only');
+  const body = personalIptvFormBody();
+  body.host = body.xtHost || body.iptvUrl || '';
+  body.url = body.iptvUrl || body.host;
+  body.user = body.xtUser || '';
+  body.pass = body.xtPass || '';
+  try {
+    const r = JSON.parse(bridge.personalIptvSave(JSON.stringify(body)) || '{}');
+    if (!r.ok) throw new Error(r.error || 'save failed');
+    clearPersonalIptvForm();
+    clearLiveClientCaches({ channels: true });
+    S._homeLiveFav = undefined;
+    applyMenuPrefs();
+    renderPrefPersonalIptv();
+    toast('Personal playlist saved on this TV');
+    refreshPersonalIptvStatus();
+  } catch (e) { toast('Save failed: ' + e.message); }
+}
+$('personalIptvMode').addEventListener('change', renderPrefPersonalIptv);
+$('personalIptvSave').addEventListener('click', savePersonalIptvFromPrefs);
+$('personalIptvSaveDevice').addEventListener('click', savePersonalIptvOnDeviceFromPrefs);
+$('personalIptvRefresh').addEventListener('click', refreshPersonalIptvStatus);
 // Live TV categories INLINE on the Preferences page (the modal hop felt like a detour):
 // same chips as the guide's quick dialog, but self-saving — no Save button to hunt for.
 async function renderPrefLiveCats() {
   const list = $('prefCatList'); if (!list) return;
   if (!S.liveChannels) { // categories need the channel list — fetch it on demand
     try {
-      const r = await api('/api/iptv/channels');
+      const r = await loadLiveChannelsCombined();
       S.liveChannels = r.channels || []; S.liveHidden = new Set(r.hiddenGroups || []);
       S.liveGlobalHidden = new Set(r.globalHidden || []); S.liveEpg = !!r.epg;
     } catch (e) { list.innerHTML = `<div class="hint">Live TV not reachable: ${esc(e.message)}</div>`; return; }
@@ -11226,6 +11543,10 @@ async function renderPrefLiveCats() {
   const counts = {};
   S.liveChannels.forEach((c) => { const g = c.group || 'Other'; counts[g] = (counts[g] || 0) + 1; });
   list.innerHTML = '';
+  if (!Object.keys(counts).length) {
+    list.innerHTML = '<div class="hint">No channel categories yet.</div>';
+    return;
+  }
   // Vertical LIST, one category per row — ↓ moves one category per press (the chip cloud
   // made the walk meander sideways and felt slow).
   Object.keys(counts).forEach((g) => {
@@ -11251,7 +11572,10 @@ function savePrefLiveCats() { // debounced — a burst of presses saves once
         S.liveGlobalHidden = new Set(hidden);
         toast(hidden.length ? `${hidden.length} categories hidden for ALL users` : 'Global hide list cleared');
       } else {
-        await api('/api/iptv/groups', { method: 'POST', body: { hidden } });
+        savePersonalHiddenSet(new Set(hidden));
+        if (S.serverInfo && S.serverInfo.iptv && (!S.user || S.user.iptvAllowed !== false)) {
+          await api('/api/iptv/groups', { method: 'POST', body: { hidden } });
+        }
         S.liveHidden = new Set(hidden);
         toast(hidden.length ? `${hidden.length} categories hidden` : 'All categories visible');
       }
@@ -11381,10 +11705,10 @@ function renderSearchSections(sections) {
 // Live TV channels matching the query. Reuse the current Live TV list briefly; the server owns
 // playlist freshness and answers from its warm cache.
 async function searchChannels(q) {
-  if (!S.serverInfo.iptv || !S.user || S.user.iptvAllowed === false) return [];
+  if (!liveTvAvailable()) return [];
   try {
     if (!S._chSearchCache || Date.now() - (S._liveAt || 0) >= LIVE_TTL) {
-      const r = await api('/api/iptv/channels');
+      const r = await loadLiveChannelsCombined();
       if (r.configured) fillLiveState(r);
       else S._chSearchCache = [];
     }

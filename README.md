@@ -54,6 +54,16 @@ The debug APK is written to:
 android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
+For public Android TV updates, publish two GitHub release assets from the same
+APK build:
+
+- `triboon-tv-vX.Y.Z.apk` keeps the exact versioned artifact for audit/history.
+- `triboon-tv.apk` is the stable update artifact for Downloader-style installs.
+  The fixed URL is `https://github.com/d1same/triboon/releases/latest/download/triboon-tv.apk`.
+
+The APK filename does not control whether Android accepts an update; Android
+uses the package id, signing key, and higher `versionCode`.
+
 If a current external Gradle is not installed, use the pinned fallback from
 `android/`:
 
@@ -145,6 +155,15 @@ Important rules:
 - Browser Live TV uses the server fMP4 remux path.
 - Android TV uses native Media3/ExoPlayer first, with provider TS/HLS and then
   server remux fallback.
+- Users can add personal M3U or Xtream playlists from Preferences. These are
+  stored encrypted on the server like shared playlists, marked as owned by that
+  user, visible only to that account, and available from browser, Android TV,
+  and any other signed-in client.
+- Android TV can also save personal IPTV sources on the device. These Xtream or
+  M3U entries are stored in Android Keystore-backed private storage, loaded from
+  the Android device network, merged into Live TV in the web UI, and direct-
+  played by ExoPlayer; they are not sent to the server or shared with other
+  users.
 - Provider failures are logged with sanitized reasons and without credential
   URLs.
 

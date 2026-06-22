@@ -29,6 +29,13 @@ flowchart TD
   NativeApi --> Android["Android ExoPlayer\nTS/HLS then remux fallback"]
   WebApi --> Browser["Browser MSE\nserver fMP4 remux"]
   SourcesApi --> DeleteCleanup["delete cleanup\nruntime maps + source disk caches\n+ favorites/groups"]
+  UserPrefs["Preferences\naccount IPTV source"] --> UserApi["/api/me/iptv/sources"]
+  UserApi --> SharedSourceModel["Encrypted server source\nownerUserId + one-user visibility"]
+  SharedSourceModel --> LiveApi
+  AndroidPrefs["Preferences\npersonal IPTV on this TV"] --> AndroidStore["Android private prefs"]
+  AndroidStore --> DeviceLoad["device-side Xtream/M3U load"]
+  DeviceLoad --> LiveMerge["web Live TV rows\nmerged client-side"]
+  LiveMerge --> Android
 ```
 
 IPTV fix checklist:
@@ -43,7 +50,16 @@ IPTV fix checklist:
 5. Confirm Android native zapping releases the previous ExoPlayer stream before
    opening the next provider URL.
 6. Confirm provider errors are sanitized and do not log credential URLs.
-7. Run `test/iptv-cache.test.js`; run `test/security.test.js` when routes,
+7. For account personal IPTV, confirm Preferences -> Live TV is discoverable
+   before any playlist exists, browser clients can add/remove M3U or Xtream
+   sources through `/api/me/iptv/sources`, the source is visible only to that
+   user, and stream URLs bind both channel index and channel id.
+8. For Android device-only IPTV, confirm "Save on this TV only" appears only
+   when the Android bridge exists. Confirm the source is encrypted in Android
+   Keystore-backed private storage and device-local only: the server never
+   receives credentials, favorites use local storage, guide fetches skip
+   negative/device channel indexes, and ExoPlayer gets direct provider URLs.
+9. Run `test/iptv-cache.test.js`; run `test/security.test.js` when routes,
    tokens, logging, or credentials are touched.
 
 ## Contracts

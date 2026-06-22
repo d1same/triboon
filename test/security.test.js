@@ -139,6 +139,7 @@ test('security: deny-by-default — every route declares auth; unknown routes 40
     ['POST', '/api/play'], ['POST', '/api/advance/abc'], ['GET', '/api/tmdb/trending/all/week'],
     ['GET', '/api/watch'], ['GET', '/api/watch/next'], ['POST', '/api/watch'], ['GET', '/api/mounts'],
     ['GET', '/api/health/abc'], ['POST', '/api/mount'], ['GET', '/api/settings'],
+    ['GET', '/api/me/iptv/sources'], ['POST', '/api/me/iptv/sources'], ['DELETE', '/api/me/iptv/sources/abc'],
     ['POST', '/api/settings'], ['POST', '/api/streaming/recommend'], ['POST', '/api/invites'], ['GET', '/api/invites'],
     ['GET', '/api/users'], ['GET', '/api/stream/abc'], ['GET', '/api/remux/abc'],
     ['GET', '/api/iptv/status'], ['POST', '/api/iptv/refresh'],
@@ -730,8 +731,8 @@ ${origin}/sports.ts
     assert.strictEqual(ch.json.channels.length, 2);
     assert.deepStrictEqual(ch.json.channels.map((c) => c.group), ['News', 'Sports']);
     assert.ok(ch.json.channels.every((c) => c.url === undefined), 'upstream URLs never exposed');
-    assert.ok(ch.json.channels.every((c) => /^\/api\/iptv\/stream\/\d+\?t=/.test(c.streamUrl)));
-    assert.ok(ch.json.channels.every((c) => /^\/api\/iptv\/native\/\d+\?t=/.test(c.nativeUrl)));
+    assert.ok(ch.json.channels.every((c) => /^\/api\/iptv\/stream\/\d+\?cid=[^&]+&t=/.test(c.streamUrl)));
+    assert.ok(ch.json.channels.every((c) => /^\/api\/iptv\/native\/\d+\?cid=[^&]+&t=/.test(c.nativeUrl)));
     assert.ok(ch.json.channels.every((c) => c.nativeFallbackUrl === undefined), 'plain M3U does not invent a second native source');
     assert.deepStrictEqual(ch.json.channels.map((c) => c.nativeMime), ['application/x-mpegURL', 'video/mp2t']);
     const native = await httpRaw(srv.port, ch.json.channels[0].nativeUrl);
@@ -741,7 +742,7 @@ ${origin}/sports.ts
     assert.ok(nativeUa.includes('TriboonTV/') && nativeUa.includes('SMART-TV'),
       'native proxy should use the provider-compatible smart-TV server-side user agent');
     const wrongTok = /[?&]t=([^&]+)/.exec(ch.json.channels[0].nativeUrl)[1];
-    const wrongNative = await httpRaw(srv.port, ch.json.channels[1].nativeUrl.replace(/[?&]t=[^&]+/, '?t=' + wrongTok));
+    const wrongNative = await httpRaw(srv.port, ch.json.channels[1].nativeUrl.replace(/([?&])t=[^&]+/, '$1t=' + wrongTok));
     assert.strictEqual(wrongNative.status, 401, 'native stream token is bound to the selected channel');
 
     // Settings response shows only the playlist HOST (urls often embed credentials).
@@ -852,9 +853,9 @@ test('iptv: Xtream API channels + short-EPG now/next + per-user favorites; creds
   assert.strictEqual(news.logo, 'http://x/logo1.png');
   assert.strictEqual(ch.json.channels.find((c) => c.name === 'Cinema').group, 'Other', 'unknown category falls back');
   assert.ok(ch.json.channels.every((c) => c.url === undefined), 'upstream URLs (with creds) never exposed');
-  assert.ok(/^\/api\/iptv\/native\/\d+\?t=/.test(news.nativeUrl));
+  assert.ok(/^\/api\/iptv\/native\/\d+\?cid=[^&]+&t=/.test(news.nativeUrl));
   assert.strictEqual(news.nativeMime, 'video/mp2t', 'Xtream native playback should prefer the TS endpoint for fast channel starts');
-  assert.ok(/^\/api\/iptv\/native\/\d+\?alt=1&t=/.test(news.nativeFallbackUrl));
+  assert.ok(/^\/api\/iptv\/native\/\d+\?alt=1&cid=[^&]+&t=/.test(news.nativeFallbackUrl));
   assert.strictEqual(news.nativeFallbackMime, 'application/x-mpegURL', 'Xtream native playback should retain HLS as a fallback');
 
   // EPG now/next decodes the Xtream base64 listings before playback marks the provider busy.

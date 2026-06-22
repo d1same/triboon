@@ -360,7 +360,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Continue Watching should merge next-up cards into the row, dedupe by canonical identity, then sort by recency');
   assert.doesNotMatch(ui, /items\.unshift\(it\)|items\.unshift\(\.\.\.nextEpisodeBumps/,
     'next-episode cards must not be unshifted ahead of in-progress Continue Watching cards');
-  assert.match(ui, /const needLocalCacheRefresh = !S\.localMap && cachedLocalLibraryItemsAvailable\(\);[\s\S]+const needEnrich = needLocalCacheRefresh \|\| \(S\.serverInfo\.iptv/,
+  assert.match(ui, /const needLocalCacheRefresh = !S\.localMap && cachedLocalLibraryItemsAvailable\(\);[\s\S]+const needEnrich = needLocalCacheRefresh \|\| \(liveTvAvailable\(\) && S\._homeLiveFav === undefined\);/,
     'home should not use the generic background enrich path to mutate Continue Watching with next-up entries');
   assert.match(ui, /function refreshLocalMapFromCachedLibraries\(\) \{[\s\S]+S\.libCache && S\.libCache\[lib\.id\][\s\S]+if \(!c \|\| !c\.data\) continue;[\s\S]+mergeLocalItemsInto\(map, lib, c\.data\.items \|\| \[\]\)[\s\S]+S\.localMap = map;/,
     'home local-library ownership refresh should publish a map only from explicit library caches');
@@ -1024,7 +1024,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'Calendar async rendering must not steal D-pad focus from the open rail preview');
   assert.match(ui, /if \(keepGuidePip && S\.nativeGuideMode && tryNativeLivePlayer\(it, true\)\) \{[\s\S]+markGuideCur\(\);[\s\S]+return;[\s\S]+\}/,
     'channel tuning from the native PiP guide should retune ExoPlayer without starting web playback');
-  assert.match(ui, /async function ensurePlayerGuideChannels\(\) \{[\s\S]+api\('\/api\/iptv\/channels'\)[\s\S]+fillLiveState\(fav\)[\s\S]+return list;[\s\S]+\}/,
+  assert.match(ui, /async function ensurePlayerGuideChannels\(\) \{[\s\S]+loadLiveChannelsCombined\(\)[\s\S]+fillLiveState\(fav\)[\s\S]+return list;[\s\S]+\}/,
     'native and web player guide openings should share the same channel-list loader');
   assert.match(ui, /window\.__tvNativeLiveGuide = async \(epoch\) => \{[\s\S]+const list = await ensurePlayerGuideChannels\(\);[\s\S]+openNativeLiveGuideShell\(active\);[\s\S]+return renderPlayerGuideTimeline\(\$\(\'pGuide\'\), list\.length \? list : \[active\]\);[\s\S]+\};/,
     'Android guide handoff should load real guide rows before rendering the native PiP guide shell');
@@ -1246,7 +1246,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'native ExoPlayer metadata overlay should sit above the seek row instead of being buried in the control column');
   assert.match(android, /String chromeQuality = isLiveMode \? "LIVE" : nativeQualityLabel;[\s\S]+nativeChromeQuality\.setText\(chromeQuality\)/,
     'native video quality should show a friendly resolution label, not direct/remux/transcode internals');
-  assert.match(android, /private FrameLayout nativeLoading;[\s\S]+private ImageView nativeLoadingBackdrop;[\s\S]+private TextView nativeLoadingTitle;/,
+  assert.match(android, /private FrameLayout nativeLoading;[\s\S]+private ImageView nativeLoadingBackdrop;[\s\S]+private TextView nativeLoadingTitle;[\s\S]+private TextView nativeLoadingStage;[\s\S]+private TextView nativeLoadingDetail;/,
     'native ExoPlayer should own a branded loading overlay instead of borrowing the web player shell');
   assert.match(ui, /<link rel="icon" href="T-Logo\.svg"><link rel="alternate icon" href="T-Logo\.png">/,
     'web favicon should use the T logo assets');
@@ -1254,8 +1254,14 @@ test('Android native player: direct source and native chrome stay out of the web
     'web rail logo should use the T logo assets');
   assert.match(ui, /<div class="ssBrand"><img src="triboon-screensaver\.png" alt="Triboon" onerror="this\.onerror=null;this\.src='triboon\.png'"><\/div>/,
     'web screensaver should use the transparent tight-crop Triboon logo asset');
-  assert.match(android, /nativeLoading = new FrameLayout\(this\);[\s\S]+loadingLogo\.setImageResource\(R\.drawable\.ic_loading_logo\);[\s\S]+loadingStage\.setText\("Opening playback"\)/,
-    'native loading overlay should show the T logo mark and cleaner loading stage');
+  assert.match(android, /nativeLoading = new FrameLayout\(this\);[\s\S]+FrameLayout loadingMark = new FrameLayout\(this\);[\s\S]+ProgressBar loadingRing = new ProgressBar\(this\);[\s\S]+loadingLogo\.setImageResource\(R\.drawable\.ic_loading_logo\);[\s\S]+loadingCenter\.addView\(loadingMark, new LinearLayout\.LayoutParams\(dp\(136\), dp\(136\)\)\);/,
+    'native loading overlay should wrap the T logo with a modern progress ring');
+  assert.match(android, /nativeLoadingTitle\.setTextSize\(24\);[\s\S]+nativeLoadingTitle\.setMaxLines\(2\);[\s\S]+nativeLoadingTitle\.setEllipsize\(TextUtils\.TruncateAt\.END\);/,
+    'native loading title should stay prominent without overflowing on TV');
+  assert.match(android, /nativeLoadingStage\.setText\("Finding best source"\);[\s\S]+nativeLoadingDetail\.setText\("Preparing native playback"\);/,
+    'native loading overlay should show concise playback status and detail text');
+  assert.match(android, /private String nativeLoadingStageFor\(String mode, String kind\)[\s\S]+Tuning channel[\s\S]+Opening direct play[\s\S]+private String nativeLoadingDetailFor\(String mode, String kind, String qualityLabel, String sourceLabel, long startOffsetMs\)[\s\S]+"Direct Play"\);[\s\S]+String detail = method \+ " - " \+ quality;[\s\S]+sourceLabel\.trim\(\)[\s\S]+Resume %d:%02d/,
+    'native loading copy should adapt for Live TV, direct play, quality, source, and resume state');
   assert.doesNotMatch(android, /loadingBrand\.setText\("TRIBOON"\)|TextView loadingBrand/,
     'native ExoPlayer loader should not show a separate Triboon wordmark under the logo');
   assert.doesNotMatch(android, /loadingLogo\.setImageResource\(R\.drawable\.ic_launcher\)/,
@@ -1275,15 +1281,15 @@ test('Android native player: direct source and native chrome stay out of the web
     assert.ok(pngHasTransparentPixels(path.join(__dirname, '..', rel)),
       `${rel} should preserve transparent pixels instead of baking in a background`);
   }
-  assert.match(android, /backdropUrl = j\.optString\("backdropUrl", ""\);[\s\S]+enterNativeFullscreenMode\(\);[\s\S]+showNativeLoading\(title, backdropUrl\);[\s\S]+nativePlayer\.prepare\(\)/,
+  assert.match(android, /backdropUrl = j\.optString\("backdropUrl", ""\);[\s\S]+enterNativeFullscreenMode\(\);[\s\S]+showNativeLoading\(title, backdropUrl,[\s\S]+nativeLoadingDetailFor\(mode, loadingKind, loadingQuality, loadingSource, loadingStartOffsetMs\)\);[\s\S]+nativePlayer\.prepare\(\)/,
     'Android should hide the WebView and show the branded native loader before ExoPlayer prepares');
-  assert.match(android, /if \("video"\.equals\(m\)\) \{[\s\S]+releaseNativePlayer\(false\);[\s\S]+enterNativeFullscreenMode\(\);[\s\S]+showNativeLoading\(title, backdropUrl\);[\s\S]+__tvNativeVideoError/,
+  assert.match(android, /if \("video"\.equals\(m\)\) \{[\s\S]+releaseNativePlayer\(false\);[\s\S]+enterNativeFullscreenMode\(\);[\s\S]+showNativeLoading\(title, backdropUrl, "Retrying playback",[\s\S]+__tvNativeVideoError/,
     'native movie fallbacks should keep the Android layer up instead of revealing the WebView player between retries');
   assert.match(android, /public void closeVideo\(\) \{[\s\S]+closeNativePlayback\(false\)/,
     'web-side native failure cleanup should be able to close the Android video layer without using the web player');
   assert.match(android, /public void showVideoLoading\(String json\) \{[\s\S]+showNativeVideoLoading\(json\)/,
     'web should be able to show Android native loading before the stream URL is mounted');
-  assert.match(android, /private void showNativeVideoLoading\(String json\) \{[\s\S]+enterNativeFullscreenMode\(\);[\s\S]+showNativeLoading\(title, backdropUrl\);[\s\S]+\}/,
+  assert.match(android, /private void showNativeVideoLoading\(String json\) \{[\s\S]+enterNativeFullscreenMode\(\);[\s\S]+showNativeLoading\(title, backdropUrl, stage, detail\);[\s\S]+\}/,
     'Android native loading should own the screen before ExoPlayer is created');
   assert.match(ui, /async function closePlayer\(opts = \{\}\) \{[\s\S]+window\.TriboonTV\.closeVideo/,
     'closing the web player state on Android should also close any native ExoPlayer overlay');
@@ -1419,7 +1425,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android bridge should expose a duration update hook for the native player chrome');
   assert.match(android, /private void updateNativeVideoDuration\(String seconds\) \{[\s\S]+nativeKnownDurationMs = Math\.max\(nativeKnownDurationMs, Math\.round\(s \* 1000\)\);[\s\S]+updateNativeChrome\(\);/,
     'Android native chrome should repaint the seek bar, total time, and end clock when duration arrives later');
-  assert.match(android, /boolean quietSeek = j\.optBoolean\("quietSeek", false\);[\s\S]+if \(!guide && "video"\.equals\(mode\) && !quietSeek\) \{[\s\S]+showNativeLoading\(title, backdropUrl\);[\s\S]+\}/,
+  assert.match(android, /boolean quietSeek = j\.optBoolean\("quietSeek", false\);[\s\S]+if \(!guide && "video"\.equals\(mode\) && !quietSeek\) \{[\s\S]+showNativeLoading\(title, backdropUrl,[\s\S]+nativeLoadingDetailFor\(mode, loadingKind, loadingQuality, loadingSource, loadingStartOffsetMs\)\);[\s\S]+\}/,
     'Android native seek restarts should not bring the full preparing loader to the front');
   assert.match(android, /boolean reuseQuietVideo = quietSeek && "video"\.equals\(mode\) && nativePlayer != null[\s\S]+boolean reuseLivePlayer = "live"\.equals\(mode\) && nativePlayer != null[\s\S]+if \(!reuseQuietVideo && !reuseLivePlayer\) \{[\s\S]+releaseNativePlayer\(false, guide\);[\s\S]+\} else \{[\s\S]+hideNativeLoading\(\);[\s\S]+if \(!reuseQuietVideo && !reuseLivePlayer\) \{[\s\S]+new ExoPlayer\.Builder\(this\)/,
     'Android native quiet seeks and Live TV retunes should reuse the existing ExoPlayer surface instead of flashing through release/recreate');
@@ -1433,6 +1439,24 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Live TV D-pad zapping should reuse the web channel list order');
   assert.match(ui, /function setNativeLivePlaybackState\(it\) \{[\s\S]+type: 'live'[\s\S]+usingNative: true[\s\S]+\}[\s\S]+if \(!guide\) setNativeLivePlaybackState\(it\);/,
     'fullscreen native Live TV should update web player state before D-pad Up/Down can zap channels');
+  assert.match(android, /public int personalIptvVersion\(\)[\s\S]+public String personalIptvSources\(\)[\s\S]+public String personalIptvSave\(String json\)[\s\S]+public void personalIptvLoad\(String token\)/,
+    'Android TV should expose a device-local IPTV bridge without replacing server-side playlists');
+  assert.match(android, /KEY_PERSONAL_IPTV[\s\S]+personalIptvStoredSources\(\)[\s\S]+encryptPersonalIptvJson[\s\S]+AndroidKeyStore[\s\S]+loadPersonalXtreamSource[\s\S]+get_live_streams[\s\S]+loadPersonalM3uSource[\s\S]+BufferedReader/,
+    'Android personal IPTV should keep encrypted local sources on-device and load Xtream/M3U channel rows without the server network');
+  assert.match(ui, /function loadLiveChannelsCombined\(\{ fav = false \} = \{\}\) \{[\s\S]+api\('\/api\/iptv\/channels'[\s\S]+loadPersonalIptvChannels[\s\S]+sourceErrors/,
+    'web Live TV should merge server playlists and Android device-local playlists into one channel list');
+  assert.match(ui, /function openPrefs\(\)[\s\S]+\$\('prefTabLive'\)\.style\.display = '';[\s\S]+renderPrefPersonalIptv\(\);/,
+    'Preferences should always expose Live TV so users can find the personal IPTV setup before a playlist exists');
+  assert.match(ui, /Save to my account[\s\S]+personalIptvSaveDevice[\s\S]+Save on this TV only/,
+    'Preferences should make account IPTV the default path and keep Android device-only IPTV as an optional path');
+  assert.match(ui, /async function loadAccountIptvSources\(\) \{[\s\S]+api\('\/api\/me\/iptv\/sources'\)[\s\S]+async function renderPrefPersonalIptv\(\) \{[\s\S]+panel\.style\.display = '';[\s\S]+personalIptvSaveDevice'\)\.style\.display = bridge \? '' : 'none'[\s\S]+el\.disabled = false/,
+    'Personal IPTV setup should stay visible and usable in browser while showing device-only controls only on Android TV');
+  assert.match(ui, /async function savePersonalIptvFromPrefs\(\) \{[\s\S]+api\('\/api\/me\/iptv\/sources', \{ method: 'POST', body \}\)[\s\S]+refreshLiveAvailabilityFlags\(\)/,
+    'browser Preferences should save personal IPTV to the signed-in account through the server source model');
+  assert.doesNotMatch(ui, /#prefPersonalIptvPanel\s*\{[^}]*display\s*:\s*none/,
+    'CSS must not hide the Personal IPTV panel after JavaScript enables the Preferences tab');
+  assert.match(ui, /function toggleFav\(ch, star\) \{[\s\S]+isPersonalChannel\(ch\)[\s\S]+PERSONAL_IPTV_FAV_KEY[\s\S]+api\('\/api\/iptv\/fav'/,
+    'personal IPTV favorites should stay local while server IPTV favorites still use the server API');
   assert.match(android, /new DefaultHttpDataSource\.Factory\(\)[\s\S]+setAllowCrossProtocolRedirects\(true\)[\s\S]+setUserAgent\("TriboonTV\/" \+ BuildConfig\.VERSION_NAME\)/,
     'native ExoPlayer should explicitly allow provider redirects from Triboon Live TV URLs');
   assert.match(android, /private String nativePlaybackErrorMessage\(PlaybackException error\) \{[\s\S]+HttpDataSource\.InvalidResponseCodeException[\s\S]+nativeHeader\(http\.headerFields, "x-triboon-iptv-error"\)[\s\S]+return reason \+ " \(HTTP " \+ http\.responseCode \+ "\)";/,
@@ -1474,7 +1498,7 @@ test('Android native player: direct source and native chrome stay out of the web
     '+ "," + safePos + "," + dur + ")", null);',
   ].every((s) => android.includes(s)),
     'native movie and episode fallback should preserve the last good position if Exo reports zero during an error');
-  assert.match(android, /private void notifyNativeVideoError\(String msg, long pos, long dur\) \{[\s\S]+String title = nativePlaybackTitle;[\s\S]+String backdropUrl = nativePlaybackBackdropUrl;[\s\S]+releaseNativePlayer\(false\);[\s\S]+showNativeLoading\(title, backdropUrl\);[\s\S]+__tvNativeVideoError/,
+  assert.match(android, /private void notifyNativeVideoError\(String msg, long pos, long dur\) \{[\s\S]+String title = nativePlaybackTitle;[\s\S]+String backdropUrl = nativePlaybackBackdropUrl;[\s\S]+releaseNativePlayer\(false\);[\s\S]+showNativeLoading\(title, backdropUrl, "Retrying playback",[\s\S]+__tvNativeVideoError/,
     'native movie and episode startup watchdog should preserve the branded loader while reporting the failure to the native ladder');
   assert.match(server, /LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS = 25000[\s\S]+LIVE_REMUX_IDLE_TIMEOUT_MS = 45000/,
     'Live TV remux fallback should tolerate provider hiccups while still avoiding endless hangs');

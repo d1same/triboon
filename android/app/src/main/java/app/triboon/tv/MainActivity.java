@@ -30,6 +30,10 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.security.keystore.KeyGenParameterSpec;
+import android.security.keystore.KeyProperties;
+import android.text.TextUtils;
+import android.util.Base64;
 import android.util.Log;
 import android.view.KeyEvent;
 import android.view.View;
@@ -72,13 +76,27 @@ import androidx.media3.ui.AspectRatioFrameLayout;
 import androidx.media3.ui.CaptionStyleCompat;
 import androidx.media3.ui.PlayerView;
 
+import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.KeyStore;
+import java.net.URLEncoder;
 import java.util.List;
 import java.util.Map;
 import java.net.HttpURLConnection;
 import java.net.URL;
+
+import javax.crypto.Cipher;
+import javax.crypto.KeyGenerator;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.GCMParameterSpec;
 
 public class MainActivity extends Activity {
 
@@ -86,6 +104,13 @@ public class MainActivity extends Activity {
     private static final String PREFS = "triboon";
     private static final String KEY_SERVER = "server";
     private static final String KEY_CACHE_VERSION = "cacheVersion";
+    private static final String KEY_PERSONAL_IPTV = "personalIptvSources";
+    private static final String PERSONAL_IPTV_KEY_ALIAS = "triboon_personal_iptv";
+    private static final String PERSONAL_IPTV_ENC_PREFIX = "v1:";
+    private static final int PERSONAL_IPTV_MAX_CHANNELS = 20000;
+    private static final int PERSONAL_IPTV_MAX_BYTES = 32 * 1024 * 1024;
+    private static final int PERSONAL_IPTV_CONNECT_TIMEOUT_MS = 12000;
+    private static final int PERSONAL_IPTV_READ_TIMEOUT_MS = 20000;
     private static final int REQ_VOICE = 31;
     private static final int REQ_MIC = 32;
     private static final long WEB_RENDERER_CRASH_WINDOW_MS = 15000L;
@@ -111,6 +136,8 @@ public class MainActivity extends Activity {
     private FrameLayout nativeLoading;
     private ImageView nativeLoadingBackdrop;
     private TextView nativeLoadingTitle;
+    private TextView nativeLoadingStage;
+    private TextView nativeLoadingDetail;
     private int nativeLoadingToken;
     private View nativeControlShade;
     private LinearLayout nativeMetaBar;
@@ -473,6 +500,31 @@ public class MainActivity extends Activity {
             }
 
             @android.webkit.JavascriptInterface
+            public int personalIptvVersion() {
+                return 1;
+            }
+
+            @android.webkit.JavascriptInterface
+            public String personalIptvSources() {
+                return personalIptvSourcesRedacted();
+            }
+
+            @android.webkit.JavascriptInterface
+            public String personalIptvSave(String json) {
+                return savePersonalIptvSource(json);
+            }
+
+            @android.webkit.JavascriptInterface
+            public String personalIptvDelete(String id) {
+                return deletePersonalIptvSource(id);
+            }
+
+            @android.webkit.JavascriptInterface
+            public void personalIptvLoad(String token) {
+                loadPersonalIptvChannels(token);
+            }
+
+            @android.webkit.JavascriptInterface
             public void playLive(String json) {
                 runOnUiThread(() -> startNativeLive(json));
             }
@@ -537,6 +589,428 @@ public class MainActivity extends Activity {
         pageTvReady = false;
         pageInputFocused = false;
         pendingTvKeys.clear();
+    }
+
+    private org.json.JSONArray personalIptvStoredSources() {
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray(readPersonalIptvJson());
+            return arr;
+        } catch (Exception ignored) {
+            return new org.json.JSONArray();
+        }
+    }
+
+    private void savePersonalIptvStoredSources(org.json.JSONArray arr) {
+        prefs().edit().putString(KEY_PERSONAL_IPTV, encryptPersonalIptvJson(arr == null ? "[]" : arr.toString())).apply();
+    }
+
+    private String readPersonalIptvJson() {
+        String stored = prefs().getString(KEY_PERSONAL_IPTV, "[]");
+        if (stored == null || stored.isEmpty()) return "[]";
+        if (!stored.startsWith(PERSONAL_IPTV_ENC_PREFIX)) return stored;
+        try {
+            String body = stored.substring(PERSONAL_IPTV_ENC_PREFIX.length());
+            int sep = body.indexOf(':');
+            if (sep <= 0) return "[]";
+            byte[] iv = Base64.decode(body.substring(0, sep), Base64.NO_WRAP);
+            byte[] cipherText = Base64.decode(body.substring(sep + 1), Base64.NO_WRAP);
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(Cipher.DECRYPT_MODE, personalIptvSecretKey(), new GCMParameterSpec(128, iv));
+            return new String(cipher.doFinal(cipherText), StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            Log.w(TAG, "Personal IPTV decrypt failed: " + e.getClass().getSimpleName());
+            return "[]";
+        }
+    }
+
+    private String encryptPersonalIptvJson(String json) {
+        try {
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(Cipher.ENCRYPT_MODE, personalIptvSecretKey());
+            byte[] iv = cipher.getIV();
+            byte[] cipherText = cipher.doFinal((json == null ? "[]" : json).getBytes(StandardCharsets.UTF_8));
+            return PERSONAL_IPTV_ENC_PREFIX
+                    + Base64.encodeToString(iv, Base64.NO_WRAP)
+                    + ":"
+                    + Base64.encodeToString(cipherText, Base64.NO_WRAP);
+        } catch (Exception e) {
+            Log.w(TAG, "Personal IPTV encrypt failed: " + e.getClass().getSimpleName());
+            return json == null ? "[]" : json;
+        }
+    }
+
+    private SecretKey personalIptvSecretKey() throws Exception {
+        KeyStore ks = KeyStore.getInstance("AndroidKeyStore");
+        ks.load(null);
+        KeyStore.Entry entry = ks.getEntry(PERSONAL_IPTV_KEY_ALIAS, null);
+        if (entry instanceof KeyStore.SecretKeyEntry) {
+            return ((KeyStore.SecretKeyEntry) entry).getSecretKey();
+        }
+        KeyGenerator kg = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore");
+        kg.init(new KeyGenParameterSpec.Builder(PERSONAL_IPTV_KEY_ALIAS,
+                KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setRandomizedEncryptionRequired(true)
+                .build());
+        return kg.generateKey();
+    }
+
+    private org.json.JSONArray personalIptvRedactedArray() {
+        org.json.JSONArray stored = personalIptvStoredSources();
+        org.json.JSONArray out = new org.json.JSONArray();
+        for (int i = 0; i < stored.length(); i++) {
+            org.json.JSONObject src = stored.optJSONObject(i);
+            if (src == null) continue;
+            org.json.JSONObject row = new org.json.JSONObject();
+            try {
+                String mode = src.optString("mode", "xtream");
+                row.put("id", src.optString("id", ""));
+                row.put("mode", mode);
+                row.put("name", src.optString("name", "Personal IPTV"));
+                row.put("host", "m3u".equals(mode) ? hostLabel(src.optString("url", "")) : hostLabel(src.optString("host", "")));
+                row.put("hasUser", !src.optString("user", "").isEmpty());
+                out.put(row);
+            } catch (Exception ignored) {
+            }
+        }
+        return out;
+    }
+
+    private String personalIptvSourcesRedacted() {
+        return personalIptvRedactedArray().toString();
+    }
+
+    private String savePersonalIptvSource(String json) {
+        try {
+            org.json.JSONObject j = new org.json.JSONObject(json == null ? "{}" : json);
+            String mode = "m3u".equals(j.optString("mode", "xtream")) ? "m3u" : "xtream";
+            String name = cleanText(j.optString("name", ""));
+            org.json.JSONObject src = new org.json.JSONObject();
+            src.put("mode", mode);
+            if ("m3u".equals(mode)) {
+                String url = normalizeHttpUrl(j.optString("url", j.optString("host", "")), false);
+                if (url.isEmpty()) throw new IllegalArgumentException("M3U URL required");
+                src.put("url", url);
+                if (name.isEmpty()) name = hostLabel(url);
+            } else {
+                String host = normalizeHttpUrl(j.optString("host", ""), true);
+                String user = j.optString("user", "").trim();
+                String pass = j.optString("pass", "");
+                if (host.isEmpty() || user.isEmpty() || pass.isEmpty()) {
+                    throw new IllegalArgumentException("Xtream host, username and password required");
+                }
+                src.put("host", host);
+                src.put("user", user);
+                src.put("pass", pass);
+                if (name.isEmpty()) name = hostLabel(host);
+            }
+            src.put("name", name.isEmpty() ? "Personal IPTV" : name);
+            String id = j.optString("id", "");
+            if (id.isEmpty()) {
+                id = "p" + shaHex(mode + "|" + src.optString("host", "") + "|" + src.optString("url", "")
+                        + "|" + src.optString("user", "")).substring(0, 14);
+            }
+            src.put("id", id);
+
+            org.json.JSONArray stored = personalIptvStoredSources();
+            org.json.JSONArray next = new org.json.JSONArray();
+            boolean replaced = false;
+            for (int i = 0; i < stored.length(); i++) {
+                org.json.JSONObject old = stored.optJSONObject(i);
+                if (old == null) continue;
+                if (id.equals(old.optString("id", ""))) {
+                    next.put(src);
+                    replaced = true;
+                } else {
+                    next.put(old);
+                }
+            }
+            if (!replaced) next.put(src);
+            savePersonalIptvStoredSources(next);
+            return new org.json.JSONObject()
+                    .put("ok", true)
+                    .put("sources", personalIptvRedactedArray())
+                    .toString();
+        } catch (Exception e) {
+            return bridgeError(e);
+        }
+    }
+
+    private String deletePersonalIptvSource(String id) {
+        try {
+            String wanted = id == null ? "" : id.trim();
+            org.json.JSONArray stored = personalIptvStoredSources();
+            org.json.JSONArray next = new org.json.JSONArray();
+            for (int i = 0; i < stored.length(); i++) {
+                org.json.JSONObject src = stored.optJSONObject(i);
+                if (src == null || wanted.equals(src.optString("id", ""))) continue;
+                next.put(src);
+            }
+            savePersonalIptvStoredSources(next);
+            return new org.json.JSONObject()
+                    .put("ok", true)
+                    .put("sources", personalIptvRedactedArray())
+                    .toString();
+        } catch (Exception e) {
+            return bridgeError(e);
+        }
+    }
+
+    private String bridgeError(Exception e) {
+        try {
+            return new org.json.JSONObject()
+                    .put("ok", false)
+                    .put("error", e == null || e.getMessage() == null ? "failed" : e.getMessage())
+                    .toString();
+        } catch (Exception ignored) {
+            return "{\"ok\":false,\"error\":\"failed\"}";
+        }
+    }
+
+    private void loadPersonalIptvChannels(String token) {
+        final String callbackToken = token == null ? "" : token;
+        new Thread(() -> {
+            String result;
+            try {
+                org.json.JSONArray sources = personalIptvStoredSources();
+                org.json.JSONArray channels = new org.json.JSONArray();
+                org.json.JSONArray errors = new org.json.JSONArray();
+                int[] idx = new int[]{-900000};
+                for (int i = 0; i < sources.length() && channels.length() < PERSONAL_IPTV_MAX_CHANNELS; i++) {
+                    org.json.JSONObject src = sources.optJSONObject(i);
+                    if (src == null) continue;
+                    try {
+                        if ("m3u".equals(src.optString("mode", ""))) loadPersonalM3uSource(src, channels, idx);
+                        else loadPersonalXtreamSource(src, channels, idx);
+                    } catch (Exception e) {
+                        errors.put(new org.json.JSONObject()
+                                .put("sourceName", src.optString("name", "Personal IPTV"))
+                                .put("error", e == null || e.getMessage() == null ? "source failed" : e.getMessage()));
+                    }
+                }
+                result = new org.json.JSONObject()
+                        .put("configured", sources.length() > 0)
+                        .put("channels", channels)
+                        .put("sourceErrors", errors)
+                        .put("sources", personalIptvRedactedArray())
+                        .toString();
+            } catch (Exception e) {
+                try {
+                    result = new org.json.JSONObject()
+                            .put("configured", personalIptvStoredSources().length() > 0)
+                            .put("channels", new org.json.JSONArray())
+                            .put("sourceErrors", new org.json.JSONArray()
+                                    .put(new org.json.JSONObject().put("sourceName", "This TV").put("error", e.getMessage())))
+                            .toString();
+                } catch (Exception ignored) {
+                    result = "{\"configured\":false,\"channels\":[],\"sourceErrors\":[]}";
+                }
+            }
+            final String callbackResult = result;
+            runOnUiThread(() -> {
+                if (web == null) return;
+                web.evaluateJavascript("window.__tvPersonalIptvLoaded && window.__tvPersonalIptvLoaded("
+                        + org.json.JSONObject.quote(callbackToken) + ","
+                        + org.json.JSONObject.quote(callbackResult) + ")", null);
+            });
+        }, "TriboonPersonalIptv").start();
+    }
+
+    private void loadPersonalXtreamSource(org.json.JSONObject src, org.json.JSONArray channels, int[] idx) throws Exception {
+        String base = normalizeHttpUrl(src.optString("host", ""), true);
+        String user = src.optString("user", "");
+        String pass = src.optString("pass", "");
+        if (base.isEmpty() || user.isEmpty() || pass.isEmpty()) throw new IOException("Xtream credentials missing");
+        String streamsUrl = base + "/player_api.php?username=" + q(user) + "&password=" + q(pass) + "&action=get_live_streams";
+        org.json.JSONArray streams = new org.json.JSONArray(personalHttpGetText(streamsUrl, PERSONAL_IPTV_MAX_BYTES));
+        org.json.JSONObject cats = new org.json.JSONObject();
+        try {
+            String catUrl = base + "/player_api.php?username=" + q(user) + "&password=" + q(pass) + "&action=get_live_categories";
+            org.json.JSONArray catRows = new org.json.JSONArray(personalHttpGetText(catUrl, 2 * 1024 * 1024));
+            for (int i = 0; i < catRows.length(); i++) {
+                org.json.JSONObject c = catRows.optJSONObject(i);
+                if (c != null) cats.put(String.valueOf(c.opt("category_id")), c.optString("category_name", ""));
+            }
+        } catch (Exception ignored) {
+        }
+        for (int i = 0; i < streams.length() && channels.length() < PERSONAL_IPTV_MAX_CHANNELS; i++) {
+            org.json.JSONObject row = streams.optJSONObject(i);
+            if (row == null) continue;
+            String streamId = String.valueOf(row.opt("stream_id"));
+            if (streamId == null || streamId.equals("null") || streamId.trim().isEmpty()) continue;
+            String name = cleanText(row.optString("name", "Live channel"));
+            String group = cleanText(cats.optString(String.valueOf(row.opt("category_id")), row.optString("category_name", "Other")));
+            String logo = row.optString("stream_icon", "");
+            String ts = base + "/live/" + path(user) + "/" + path(pass) + "/" + path(streamId) + ".ts";
+            String hls = base + "/live/" + path(user) + "/" + path(pass) + "/" + path(streamId) + ".m3u8";
+            channels.put(personalChannel(src, idx[0]--, name, logo, group, ts, "video/mp2t", hls, "application/x-mpegURL"));
+        }
+    }
+
+    private void loadPersonalM3uSource(org.json.JSONObject src, org.json.JSONArray channels, int[] idx) throws Exception {
+        String url = normalizeHttpUrl(src.optString("url", ""), false);
+        if (url.isEmpty()) throw new IOException("M3U URL missing");
+        HttpURLConnection conn = openPersonalHttp(url);
+        try {
+            int code = conn.getResponseCode();
+            if (code < 200 || code >= 300) throw new IOException("m3u playlist HTTP " + code);
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                String ext = "";
+                String line;
+                long bytes = 0L;
+                URL baseUrl = new URL(url);
+                while ((line = reader.readLine()) != null && channels.length() < PERSONAL_IPTV_MAX_CHANNELS) {
+                    bytes += line.length() + 1L;
+                    if (bytes > 128L * 1024L * 1024L) break;
+                    line = line.trim();
+                    if (line.isEmpty()) continue;
+                    if (line.startsWith("#EXTINF")) {
+                        ext = line;
+                        continue;
+                    }
+                    if (line.startsWith("#")) continue;
+                    if (ext.isEmpty()) continue;
+                    String stream = line;
+                    if (!stream.startsWith("http://") && !stream.startsWith("https://")) {
+                        stream = new URL(baseUrl, stream).toString();
+                    }
+                    String name = cleanText(m3uName(ext));
+                    String logo = m3uAttr(ext, "tvg-logo");
+                    String group = cleanText(m3uAttr(ext, "group-title"));
+                    if (name.isEmpty()) name = "Live channel";
+                    if (group.isEmpty()) group = "Other";
+                    channels.put(personalChannel(src, idx[0]--, name, logo, group, stream, liveMime(stream), "", ""));
+                    ext = "";
+                }
+            }
+        } finally {
+            conn.disconnect();
+        }
+    }
+
+    private org.json.JSONObject personalChannel(org.json.JSONObject src, int idx, String name, String logo,
+                                                String group, String url, String mime,
+                                                String fallbackUrl, String fallbackMime) throws Exception {
+        String sourceId = src.optString("id", "personal");
+        return new org.json.JSONObject()
+                .put("id", "device:" + sourceId + ":" + shaHex(url).substring(0, 14))
+                .put("idx", idx)
+                .put("personal", true)
+                .put("sourceId", sourceId)
+                .put("sourceName", src.optString("name", "This TV"))
+                .put("name", name == null || name.trim().isEmpty() ? "Live channel" : name.trim())
+                .put("logo", logo == null ? "" : logo.trim())
+                .put("group", group == null || group.trim().isEmpty() ? "Other" : group.trim())
+                .put("streamUrl", url)
+                .put("nativeUrl", url)
+                .put("nativeMime", mime == null ? "" : mime)
+                .put("nativeFallbackUrl", fallbackUrl == null ? "" : fallbackUrl)
+                .put("nativeFallbackMime", fallbackMime == null ? "" : fallbackMime);
+    }
+
+    private HttpURLConnection openPersonalHttp(String url) throws IOException {
+        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+        conn.setInstanceFollowRedirects(true);
+        conn.setConnectTimeout(PERSONAL_IPTV_CONNECT_TIMEOUT_MS);
+        conn.setReadTimeout(PERSONAL_IPTV_READ_TIMEOUT_MS);
+        conn.setRequestProperty("User-Agent", "TriboonTV/" + BuildConfig.VERSION_NAME);
+        conn.setRequestProperty("Accept", "*/*");
+        conn.setRequestProperty("Connection", "close");
+        return conn;
+    }
+
+    private String personalHttpGetText(String url, int maxBytes) throws Exception {
+        HttpURLConnection conn = openPersonalHttp(url);
+        try {
+            int code = conn.getResponseCode();
+            if (code < 200 || code >= 300) throw new IOException("HTTP " + code);
+            InputStream in = conn.getInputStream();
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buf = new byte[16384];
+            int n;
+            int total = 0;
+            while ((n = in.read(buf)) >= 0) {
+                total += n;
+                if (total > maxBytes) throw new IOException("provider response too large");
+                out.write(buf, 0, n);
+            }
+            return new String(out.toByteArray(), StandardCharsets.UTF_8);
+        } finally {
+            conn.disconnect();
+        }
+    }
+
+    private String normalizeHttpUrl(String input, boolean stripPath) {
+        String s = input == null ? "" : input.trim();
+        if (s.isEmpty()) return "";
+        if (!s.startsWith("http://") && !s.startsWith("https://")) s = "http://" + s;
+        if (stripPath) {
+            try {
+                Uri u = Uri.parse(s);
+                if (u == null || u.getHost() == null || u.getHost().isEmpty()) return "";
+                String scheme = u.getScheme() == null ? "http" : u.getScheme();
+                String out = scheme + "://" + u.getHost();
+                if (u.getPort() > 0) out += ":" + u.getPort();
+                return out;
+            } catch (Exception ignored) {
+            }
+        }
+        return s;
+    }
+
+    private String hostLabel(String input) {
+        try {
+            Uri u = Uri.parse(input == null ? "" : input);
+            String host = u == null ? "" : u.getHost();
+            return host == null || host.isEmpty() ? cleanText(input) : host;
+        } catch (Exception ignored) {
+            return cleanText(input);
+        }
+    }
+
+    private String q(String s) throws Exception {
+        return URLEncoder.encode(s == null ? "" : s, StandardCharsets.UTF_8.name());
+    }
+
+    private String path(String s) throws Exception {
+        return q(s).replace("+", "%20");
+    }
+
+    private String liveMime(String url) {
+        String u = url == null ? "" : url.toLowerCase(Locale.US);
+        if (u.contains(".m3u8")) return "application/x-mpegURL";
+        if (u.contains(".ts")) return "video/mp2t";
+        if (u.contains(".mp4")) return "video/mp4";
+        return "";
+    }
+
+    private String cleanText(String s) {
+        return s == null ? "" : s.replace('\n', ' ').replace('\r', ' ').trim();
+    }
+
+    private String m3uAttr(String line, String attr) {
+        String needle = attr + "=\"";
+        int start = line == null ? -1 : line.indexOf(needle);
+        if (start < 0) return "";
+        start += needle.length();
+        int end = line.indexOf('"', start);
+        return end > start ? line.substring(start, end).trim() : "";
+    }
+
+    private String m3uName(String line) {
+        String byName = m3uAttr(line, "tvg-name");
+        if (!byName.isEmpty()) return byName;
+        int comma = line == null ? -1 : line.lastIndexOf(',');
+        return comma >= 0 && comma + 1 < line.length() ? line.substring(comma + 1).trim() : "";
+    }
+
+    private String shaHex(String input) throws Exception {
+        MessageDigest md = MessageDigest.getInstance("SHA-256");
+        byte[] hash = md.digest((input == null ? "" : input).getBytes(StandardCharsets.UTF_8));
+        StringBuilder sb = new StringBuilder(hash.length * 2);
+        for (byte b : hash) sb.append(String.format(Locale.US, "%02x", b & 0xff));
+        return sb.toString();
     }
 
     private void recoverWebRenderer(WebView crashedWeb, boolean didCrash, int priorityAtExit) {
@@ -1089,39 +1563,57 @@ public class MainActivity extends Activity {
         loadingCenter.setGravity(android.view.Gravity.CENTER);
         loadingCenter.setPadding(dp(36), dp(36), dp(36), dp(36));
 
+        FrameLayout loadingMark = new FrameLayout(this);
+        ProgressBar loadingRing = new ProgressBar(this);
+        loadingRing.setIndeterminate(true);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            loadingRing.setIndeterminateTintList(ColorStateList.valueOf(0xFFFB8B3C));
+        }
+        loadingMark.addView(loadingRing, new FrameLayout.LayoutParams(
+                dp(136), dp(136), android.view.Gravity.CENTER));
+
         ImageView loadingLogo = new ImageView(this);
         loadingLogo.setImageResource(R.drawable.ic_loading_logo);
         loadingLogo.setAlpha(0.96f);
-        loadingCenter.addView(loadingLogo, new LinearLayout.LayoutParams(dp(112), dp(112)));
+        loadingMark.addView(loadingLogo, new FrameLayout.LayoutParams(
+                dp(74), dp(74), android.view.Gravity.CENTER));
+        loadingCenter.addView(loadingMark, new LinearLayout.LayoutParams(dp(136), dp(136)));
 
         nativeLoadingTitle = new TextView(this);
         nativeLoadingTitle.setTextColor(0xDDF3EFF7);
-        nativeLoadingTitle.setTextSize(15);
+        nativeLoadingTitle.setTextSize(24);
         nativeLoadingTitle.setTypeface(Typeface.DEFAULT_BOLD);
         nativeLoadingTitle.setGravity(android.view.Gravity.CENTER);
-        nativeLoadingTitle.setSingleLine(true);
-        nativeLoadingTitle.setPadding(0, dp(8), 0, 0);
+        nativeLoadingTitle.setMaxLines(2);
+        nativeLoadingTitle.setEllipsize(TextUtils.TruncateAt.END);
+        nativeLoadingTitle.setPadding(0, dp(18), 0, 0);
         loadingCenter.addView(nativeLoadingTitle, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+                dp(620), ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        ProgressBar loadingSpinner = new ProgressBar(this);
-        loadingSpinner.setIndeterminate(true);
+        nativeLoadingStage = new TextView(this);
+        nativeLoadingStage.setText("Finding best source");
+        nativeLoadingStage.setTextColor(0xEEFFC65C);
+        nativeLoadingStage.setTextSize(12);
+        nativeLoadingStage.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        nativeLoadingStage.setGravity(android.view.Gravity.CENTER);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            loadingSpinner.setIndeterminateTintList(ColorStateList.valueOf(0xFFC13BD6));
+            nativeLoadingStage.setLetterSpacing(0.12f);
         }
-        LinearLayout.LayoutParams spinLp = new LinearLayout.LayoutParams(dp(34), dp(34));
-        spinLp.topMargin = dp(18);
-        loadingCenter.addView(loadingSpinner, spinLp);
-
-        TextView loadingStage = new TextView(this);
-        loadingStage.setText("Opening playback");
-        loadingStage.setTextColor(0xAAFFC65C);
-        loadingStage.setTextSize(11);
-        loadingStage.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
-        loadingStage.setGravity(android.view.Gravity.CENTER);
-        loadingStage.setPadding(0, dp(12), 0, 0);
-        loadingCenter.addView(loadingStage, new LinearLayout.LayoutParams(
+        nativeLoadingStage.setAllCaps(true);
+        nativeLoadingStage.setPadding(0, dp(16), 0, 0);
+        loadingCenter.addView(nativeLoadingStage, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        nativeLoadingDetail = new TextView(this);
+        nativeLoadingDetail.setText("Preparing native playback");
+        nativeLoadingDetail.setTextColor(0x99F3EFF7);
+        nativeLoadingDetail.setTextSize(13);
+        nativeLoadingDetail.setGravity(android.view.Gravity.CENTER);
+        nativeLoadingDetail.setSingleLine(true);
+        nativeLoadingDetail.setEllipsize(TextUtils.TruncateAt.END);
+        nativeLoadingDetail.setPadding(0, dp(8), 0, 0);
+        loadingCenter.addView(nativeLoadingDetail, new LinearLayout.LayoutParams(
+                dp(520), ViewGroup.LayoutParams.WRAP_CONTENT));
 
         nativeLoading.addView(loadingCenter, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -1146,9 +1638,19 @@ public class MainActivity extends Activity {
     }
 
     private void showNativeLoading(String title, String backdropUrl) {
+        showNativeLoading(title, backdropUrl, "Finding best source", "Mounting best release");
+    }
+
+    private void showNativeLoading(String title, String backdropUrl, String stage, String detail) {
         if (nativeLoading == null) return;
         int token = ++nativeLoadingToken;
         nativeLoadingTitle.setText(title == null || title.isEmpty() ? "Preparing stream" : title);
+        if (nativeLoadingStage != null) {
+            nativeLoadingStage.setText(stage == null || stage.isEmpty() ? "Opening playback" : stage);
+        }
+        if (nativeLoadingDetail != null) {
+            nativeLoadingDetail.setText(detail == null || detail.isEmpty() ? "Media3 / ExoPlayer" : detail);
+        }
         nativeLoadingBackdrop.setImageDrawable(null);
         nativeLoading.setVisibility(View.VISIBLE);
         nativeLoading.bringToFront();
@@ -1174,6 +1676,31 @@ public class MainActivity extends Activity {
                 if (finalBitmap != null) nativeLoadingBackdrop.setImageBitmap(finalBitmap);
             });
         }, "TriboonNativeBackdrop").start();
+    }
+
+    private String nativeLoadingStageFor(String mode, String kind) {
+        if ("live".equals(mode)) return "Tuning channel";
+        if ("transcode".equals(kind)) return "Opening transcode";
+        if ("remux".equals(kind)) return "Opening remux";
+        return "Opening direct play";
+    }
+
+    private String nativeLoadingDetailFor(String mode, String kind, String qualityLabel, String sourceLabel, long startOffsetMs) {
+        if ("live".equals(mode)) return "Live TV - native playback";
+        String quality = qualityLabel == null || qualityLabel.trim().isEmpty() ? "HD" : qualityLabel.trim();
+        String method = "transcode".equals(kind) ? "Transcode"
+                : ("remux".equals(kind) ? "Remux" : "Direct Play");
+        String detail = method + " - " + quality;
+        if (sourceLabel != null && !sourceLabel.trim().isEmpty()) {
+            detail += " - " + sourceLabel.trim();
+        }
+        if (startOffsetMs >= 30000L) {
+            long totalSeconds = startOffsetMs / 1000L;
+            long minutes = totalSeconds / 60L;
+            long seconds = totalSeconds % 60L;
+            detail += String.format(Locale.US, " - Resume %d:%02d", minutes, seconds);
+        }
+        return detail;
     }
 
     private void hideNativeLoading() {
@@ -1278,22 +1805,30 @@ public class MainActivity extends Activity {
     private void showNativeVideoLoading(String json) {
         String title = "Triboon";
         String backdropUrl = "";
+        String stage = "Finding best source";
+        String detail = "Mounting best release";
         try {
             org.json.JSONObject j = new org.json.JSONObject(json == null ? "{}" : json);
             title = j.optString("title", title);
             backdropUrl = j.optString("backdropUrl", "");
+            stage = j.optString("stage", stage);
+            detail = j.optString("detail", detail);
         } catch (Exception ignored) {
         }
         buildNativePlayerLayer();
         releaseNativePlayer(false);
         nativeMode = "video";
         enterNativeFullscreenMode();
-        showNativeLoading(title, backdropUrl);
+        showNativeLoading(title, backdropUrl, stage, detail);
     }
 
     private void startNativePlayback(String json, String mode) {
         String title = "video".equals(mode) ? "Triboon" : "Live TV";
         String backdropUrl = "";
+        String loadingKind = "direct";
+        String loadingQuality = "";
+        String loadingSource = "";
+        long loadingStartOffsetMs = 0L;
         try {
             org.json.JSONObject j = new org.json.JSONObject(json == null ? "{}" : json);
             String url = j.optString("url", "");
@@ -1311,11 +1846,14 @@ public class MainActivity extends Activity {
             String subtitleLabel = j.optString("subtitleLabel", "");
             String subtitleRel = j.optString("subtitleRel", "");
             String qualityLabel = j.optString("qualityLabel", "");
+            loadingQuality = qualityLabel;
+            loadingSource = j.optString("source", "");
             boolean hasNext = j.optBoolean("hasNext", false);
             boolean hasQualityChoices = j.optBoolean("qualityChoices", false);
             boolean guide = j.optBoolean("guide", false);
             boolean quietSeek = j.optBoolean("quietSeek", false);
             long knownDurationMs = Math.max(0L, Math.round(j.optDouble("duration", 0) * 1000));
+            loadingStartOffsetMs = startOffsetMs;
             buildNativePlayerLayer();
             boolean reuseQuietVideo = quietSeek && "video".equals(mode) && nativePlayer != null
                     && nativePlayerView != null && nativePlayerOpen() && !guide;
@@ -1334,7 +1872,9 @@ public class MainActivity extends Activity {
             nativeMode = mode;
             boolean isLiveMode = "live".equals(mode);
             nativeKind = j.optString("kind", "direct");
+            loadingKind = nativeKind;
             nativeQualityLabel = qualityLabel.isEmpty() ? (isLiveMode ? "LIVE" : "1080p") : qualityLabel;
+            loadingQuality = nativeQualityLabel;
             nativeUrl = url;
             nativeMime = mime;
             nativeFallbackUrl = fallbackUrl;
@@ -1471,7 +2011,9 @@ public class MainActivity extends Activity {
             }
             if (!guide && "video".equals(mode) && !quietSeek) {
                 enterNativeFullscreenMode();
-                showNativeLoading(title, backdropUrl);
+                showNativeLoading(title, backdropUrl,
+                        nativeLoadingStageFor(mode, loadingKind),
+                        nativeLoadingDetailFor(mode, loadingKind, loadingQuality, loadingSource, loadingStartOffsetMs));
             }
             if (reuseLivePlayer) {
                 nativePlayer.stop();
@@ -1500,7 +2042,8 @@ public class MainActivity extends Activity {
                 releaseNativePlayer(false);
                 nativeMode = "video";
                 enterNativeFullscreenMode();
-                showNativeLoading(title, backdropUrl);
+                showNativeLoading(title, backdropUrl, "Retrying playback",
+                        nativeLoadingDetailFor(mode, loadingKind, loadingQuality, loadingSource, loadingStartOffsetMs));
                 web.evaluateJavascript("window.__tvNativeVideoError && __tvNativeVideoError("
                         + org.json.JSONObject.quote(msg) + ",0,0)", null);
             } else {
@@ -2285,10 +2828,14 @@ public class MainActivity extends Activity {
     private void notifyNativeVideoError(String msg, long pos, long dur) {
         String title = nativePlaybackTitle;
         String backdropUrl = nativePlaybackBackdropUrl;
+        String kind = nativeKind;
+        String quality = nativeQualityLabel;
+        long startOffsetMs = nativeStartOffsetMs;
         long safePos = safeNativeVideoPosSeconds(pos);
         releaseNativePlayer(false);
         enterNativeFullscreenMode();
-        showNativeLoading(title, backdropUrl);
+        showNativeLoading(title, backdropUrl, "Retrying playback",
+                nativeLoadingDetailFor("video", kind, quality, "", startOffsetMs));
         web.evaluateJavascript("window.__tvNativeVideoError && __tvNativeVideoError("
                 + org.json.JSONObject.quote(msg == null || msg.isEmpty() ? "native startup stalled" : msg)
                 + "," + safePos + "," + dur + ")", null);
