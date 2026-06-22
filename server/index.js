@@ -17,6 +17,8 @@ const { Trakt } = require('./trakt');
 const { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnTranscode, spawnLiveRemux, spawnSubtitleExtract, makeThumb, LADDER, audioCopyOk } = require('./transcode');
 const ytmusic = require('./ytmusic');
 const https = require('https');
+const dns = require('dns').promises;
+const net = require('net');
 const { StringDecoder } = require('string_decoder');
 
 const PORT = parseInt(process.env.PORT || '7777', 10);
@@ -272,9 +274,11 @@ const IPTV_WARM_XTREAM_GUIDE_MAX = 96;
 const LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS = 25000;
 const LIVE_REMUX_IDLE_TIMEOUT_MS = 45000;
 const IPTV_NATIVE_ERROR_TTL_MS = 30000;
-const IPTV_PROVIDER_PROTECTION_ERROR_TTL_MS = 1000;
+const IPTV_PROVIDER_PROTECTION_ERROR_TTL_MS = 5 * 60000;
 const IPTV_LIVE_RETUNE_GRACE_MS = 650;
 const IPTV_PLAYBACK_API_QUIET_MS = 7000;
+const IPTV_GROUP_SEPARATOR = ' \u00B7 ';
+const IPTV_PRIVATE_URL_CACHE_MS = 30 * 60000;
 let iptvCache = { key: null, at: 0, channels: [] };
 let epgCache = { key: null, at: 0, byChannel: new Map(), byName: new Map() };
 let xtreamEpgCache = { key: null, byStream: new Map() };
@@ -318,6 +322,172 @@ function normalizeIptvHttpUrl(raw) {
   if (/^https?:\/\//i.test(s)) return s;
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) return s;
   return `http://${s}`;
+}
+function allowPrivateIptvTargets() {
+  return /^(1|true|yes)$/i.test(String(process.env.TRIBOON_ALLOW_PRIVATE_IPTV || ''));
+}
+const iptvUrlSafetyCache = new Map();
+function cleanUrlHostForPolicy(hostname) {
+  return String(hostname || '').trim().replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase();
+}
+function isPrivateIpv4(ip) {
+  const parts = String(ip || '').split('.').map((p) => Number(p));
+  if (parts.length !== 4 || parts.some((p) => !Number.isInteger(p) || p < 0 || p > 255)) return false;
+  const [a, b] = parts;
+  return a === 0 || a === 10 || a === 127
+    || (a === 100 && b >= 64 && b <= 127)
+    || (a === 169 && b === 254)
+    || (a === 172 && b >= 16 && b <= 31)
+    || (a === 192 && b === 168)
+    || (a === 198 && (b === 18 || b === 19))
+    || a >= 224;
+}
+function ipv6Words(ip) {
+  let s = cleanUrlHostForPolicy(ip).split('%')[0];
+  if (!s || !s.includes(':')) return null;
+  if (s.includes('.')) {
+    const i = s.lastIndexOf(':');
+    const dotted = s.slice(i + 1);
+    const parts = dotted.split('.').map((p) => Number(p));
+    if (parts.length !== 4 || parts.some((p) => !Number.isInteger(p) || p < 0 || p > 255)) return null;
+    s = `${s.slice(0, i)}:${((parts[0] << 8) | parts[1]).toString(16)}:${((parts[2] << 8) | parts[3]).toString(16)}`;
+  }
+  const halves = s.split('::');
+  if (halves.length > 2) return null;
+  const left = halves[0] ? halves[0].split(':') : [];
+  const right = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  if (left.some((x) => !x) || right.some((x) => !x)) return null;
+  const missing = halves.length === 2 ? 8 - left.length - right.length : 0;
+  const words = [...left, ...Array(Math.max(0, missing)).fill('0'), ...right]
+    .map((x) => parseInt(x, 16));
+  if (words.length !== 8 || words.some((x) => !Number.isInteger(x) || x < 0 || x > 0xffff)) return null;
+  return words;
+}
+function ipv4FromWords(words, i) {
+  const hi = words[i], lo = words[i + 1];
+  return `${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`;
+}
+function embeddedIpv4FromIpv6(ip) {
+  const w = ipv6Words(ip);
+  if (!w) return null;
+  const firstFiveZero = w.slice(0, 5).every((x) => x === 0);
+  const firstSixZero = firstFiveZero && w[5] === 0;
+  if (firstFiveZero && w[5] === 0xffff) return ipv4FromWords(w, 6); // ::ffff:127.0.0.1
+  if (firstSixZero) return ipv4FromWords(w, 6); // deprecated ::127.0.0.1 / ::7f00:1
+  if (w[0] === 0x64 && w[1] === 0xff9b && w.slice(2, 6).every((x) => x === 0)) return ipv4FromWords(w, 6); // 64:ff9b::/96 NAT64
+  if (w[0] === 0x2002) return ipv4FromWords(w, 1); // 6to4 embeds IPv4 in 2002::/16
+  return null;
+}
+function isPrivateIpv6(ip) {
+  const s = cleanUrlHostForPolicy(ip);
+  if (!s) return false;
+  if (s === '::' || s === '::1') return true;
+  if (s.startsWith('fe80:') || s.startsWith('fe8') || s.startsWith('fe9') || s.startsWith('fea') || s.startsWith('feb')) return true;
+  if (s.startsWith('fc') || s.startsWith('fd')) return true;
+  const embedded = embeddedIpv4FromIpv6(s);
+  if (embedded && isPrivateIpv4(embedded)) return true;
+  return false;
+}
+function isPrivateIptvHost(hostname) {
+  const host = cleanUrlHostForPolicy(hostname);
+  if (!host) return true;
+  if (host === 'localhost' || host.endsWith('.localhost')) return true;
+  const ipKind = net.isIP(host);
+  if (ipKind === 4) return isPrivateIpv4(host);
+  if (ipKind === 6) return isPrivateIpv6(host);
+  return false;
+}
+function iptvPolicyError(label, detail) {
+  const e = new Error(`${label} is not allowed: ${detail}`);
+  e.status = 400;
+  return e;
+}
+async function resolveIptvHost(host) {
+  let timer;
+  try {
+    return await Promise.race([
+      dns.lookup(host, { all: true, verbatim: true }),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('dns timeout')), 3000);
+        if (timer.unref) timer.unref();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+function pinnedIptvLookup(address, family) {
+  return (_host, opts, cb) => {
+    if (typeof opts === 'function') { cb = opts; opts = {}; }
+    const pinnedFamily = family || net.isIP(address) || 4;
+    process.nextTick(() => {
+      if (opts && opts.all) cb(null, [{ address, family: pinnedFamily }]);
+      else cb(null, address, pinnedFamily);
+    });
+  };
+}
+function iptvHostHeader(u) {
+  const host = u && u.host ? String(u.host) : '';
+  return host && !/[\r\n]/.test(host) ? host : '';
+}
+function pinnedIptvHref(u, address, family) {
+  if (!address) return u.href;
+  const cleanAddress = String(address).split('%')[0];
+  const ipFamily = family || net.isIP(cleanAddress);
+  const host = ipFamily === 6 ? `[${cleanAddress}]` : cleanAddress;
+  const port = u.port ? `:${u.port}` : '';
+  return `${u.protocol}//${host}${port}${u.pathname}${u.search}${u.hash}`;
+}
+async function validateAndPinIptvUrl(raw, label = 'IPTV URL') {
+  const text = String(raw || '').trim();
+  let u;
+  try { u = new URL(text); }
+  catch { throw iptvPolicyError(label, 'invalid URL'); }
+  if (!['http:', 'https:'].includes(u.protocol)) throw iptvPolicyError(label, 'only http/https URLs are supported');
+  if (allowPrivateIptvTargets()) return { href: u.href, pinnedHref: u.href, hostHeader: '' };
+  const host = cleanUrlHostForPolicy(u.hostname);
+  if (isPrivateIptvHost(host)) throw iptvPolicyError(label, 'private, loopback, or link-local hosts are blocked by default');
+  let picked = null;
+  if (net.isIP(host)) {
+    picked = { address: host, family: net.isIP(host) };
+  } else {
+    const hit = iptvUrlSafetyCache.get(host);
+    if (!hit || hit.expiresAt <= Date.now()) {
+      let addrs;
+      try { addrs = await resolveIptvHost(host); }
+      catch { throw iptvPolicyError(label, 'host could not be resolved safely'); }
+      if (!addrs.length) throw iptvPolicyError(label, 'host has no DNS addresses');
+      const blocked = addrs.find((a) => isPrivateIptvHost(a && a.address));
+      if (blocked) throw iptvPolicyError(label, 'DNS resolves to a private, loopback, or link-local address');
+      iptvUrlSafetyCache.set(host, { expiresAt: Date.now() + IPTV_PRIVATE_URL_CACHE_MS, addrs });
+      if (iptvUrlSafetyCache.size > 1000) iptvUrlSafetyCache.clear();
+    }
+    const safeHit = iptvUrlSafetyCache.get(host);
+    picked = safeHit && Array.isArray(safeHit.addrs) ? safeHit.addrs[0] : null;
+  }
+  return {
+    href: u.href,
+    pinnedHref: pinnedIptvHref(u, picked && picked.address, picked && picked.family),
+    hostHeader: iptvHostHeader(u),
+    address: picked && picked.address,
+    family: picked && picked.family,
+    lookup: picked && picked.address ? pinnedIptvLookup(picked.address, picked.family) : undefined,
+  };
+}
+async function assertIptvUrlAllowed(raw, label = 'IPTV URL') {
+  return (await validateAndPinIptvUrl(raw, label)).href;
+}
+async function assertIptvSourceAllowed(src = {}) {
+  if (src.iptvMode === 'xtream') {
+    if (src.xtHost) await assertIptvUrlAllowed(src.xtHost, 'Xtream host');
+  } else if (src.iptvUrl) {
+    await assertIptvUrlAllowed(src.iptvUrl, 'M3U playlist URL');
+  }
+  if (src.epgUrl) await assertIptvUrlAllowed(src.epgUrl, 'XMLTV EPG URL');
+  return src;
+}
+function iptvFetchOptions(opts = {}) {
+  return { ...opts, validateUrl: (url) => validateAndPinIptvUrl(url, 'IPTV upstream URL') };
 }
 function iptvSourceName(src = {}) {
   const explicit = String(src.name || '').trim().slice(0, 48);
@@ -459,7 +629,7 @@ function cleanupDeletedIptvSource(sourceId, removed = null) {
     return all;
   });
   if (removed) {
-    const prefix = `${removed.name} · `;
+    const prefix = `${removed.name}${IPTV_GROUP_SEPARATOR}`;
     store.update('iptvgroups', {}, (all) => {
       for (const uid of Object.keys(all || {})) {
         if (Array.isArray(all[uid])) all[uid] = all[uid].filter((g) => !String(g).startsWith(prefix));
@@ -482,7 +652,7 @@ function cleanupEditedIptvSource(sourceId, before = null, after = null) {
     });
   }
   if (before && before.name && (!after || before.name !== after.name || upstreamChanged)) {
-    const prefix = `${before.name} Â· `;
+    const prefix = `${before.name}${IPTV_GROUP_SEPARATOR}`;
     store.update('iptvgroups', {}, (all) => {
       for (const uid of Object.keys(all || {})) {
         if (Array.isArray(all[uid])) all[uid] = all[uid].filter((g) => !String(g).startsWith(prefix));
@@ -655,10 +825,15 @@ function iptvNativeFailureReason(status, body) {
 function iptvNativeFailureCacheTtl(status, reason) {
   const r = String(reason || '').toLowerCase();
   if (r.includes('bot-protection') || r.includes('rate limit') || status === 429) {
-    return IPTV_PROVIDER_PROTECTION_ERROR_TTL_MS;
+    return iptvProviderProtectionTtlMs();
   }
-  if (status === 401 || status === 403) return IPTV_PROVIDER_PROTECTION_ERROR_TTL_MS;
+  if (status === 401 || status === 403) return iptvProviderProtectionTtlMs();
   return IPTV_NATIVE_ERROR_TTL_MS;
+}
+function iptvProviderProtectionTtlMs() {
+  const raw = Number(process.env.TRIBOON_IPTV_PROVIDER_PROTECTION_TTL_MS);
+  if (!Number.isFinite(raw) || raw <= 0) return IPTV_PROVIDER_PROTECTION_ERROR_TTL_MS;
+  return Math.max(1000, Math.min(15 * 60000, Math.floor(raw)));
 }
 function logIptvRefreshPaused(channels, label) {
   const now = Date.now();
@@ -749,6 +924,13 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
 
   const open = (rawTarget, hop) => {
     if (done || slot.closed) return;
+    validateAndPinIptvUrl(rawTarget, 'Live stream URL').then((pin) => openAllowed(rawTarget, hop, pin)).catch((e) => {
+      console.error(`[iptv native] ${label} blocked upstream url: ${sanitizeIptvLogError(e)}`);
+      fail(e.status || 400, e.message || 'blocked live stream url');
+    });
+  };
+  const openAllowed = (rawTarget, hop, pin = null) => {
+    if (done || slot.closed) return;
     let u;
     try {
       u = new URL(rawTarget);
@@ -794,7 +976,12 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
       connection: 'close',
     };
     if (ctx.req.headers.range) headers.range = ctx.req.headers.range;
-    up = lib.request(u, { method: 'GET', headers, agent: false }, (r) => {
+    up = lib.request(u, {
+      method: 'GET',
+      headers,
+      agent: false,
+      ...(pin && typeof pin.lookup === 'function' ? { lookup: pin.lookup } : {}),
+    }, (r) => {
       if (done || slot.closed) { r.resume(); return; }
       if (r.statusCode >= 300 && r.statusCode < 400 && r.headers.location) {
         r.resume();
@@ -986,8 +1173,8 @@ async function fetchXtreamM3uChannelsForPlayback(s, key, reason) {
   return channels;
 }
 async function refreshXtreamChannelForPlayback(staleCh, reason = 'playback rejection') {
-  const s = sourceForIptvChannel(staleCh) || iptvSourcesFromSettings(settings.get())[0] || settings.get();
-  if (s.iptvMode !== 'xtream' || !staleCh || !staleCh.xtreamId) return null;
+  const s = sourceForIptvChannel(staleCh);
+  if (!s || s.iptvMode !== 'xtream' || !staleCh || !staleCh.xtreamId) return null;
   const key = iptvSourceKey(s);
   const sourceId = cleanIptvSourceId(s.id);
   if (!iptvPlaybackRefreshPromise || iptvPlaybackRefreshPromise.sourceId !== sourceId) {
@@ -1058,7 +1245,7 @@ function aggregateIptvChannels(rows) {
       ...c,
       idx: idx++,
       sourceIdx: Number.isInteger(c.sourceIdx) ? c.sourceIdx : c.idx,
-      group: multiple ? `${src.name} · ${sourceGroup}` : sourceGroup,
+      group: multiple ? `${src.name}${IPTV_GROUP_SEPARATOR}${sourceGroup}` : sourceGroup,
       sourceGroup,
     };
   }));
@@ -1220,7 +1407,11 @@ function fetchM3uChannelsStream(playlistUrl, opts = {}) {
   let u;
   try { u = new URL(playlistUrl); } catch { return Promise.reject(new Error('invalid m3u playlist url')); }
   if (!['http:', 'https:'].includes(u.protocol)) return Promise.reject(new Error('invalid m3u playlist protocol'));
-  return new Promise((resolve, reject) => {
+  let validated = null;
+  return Promise.resolve()
+    .then(() => validateAndPinIptvUrl(playlistUrl, 'M3U playlist URL'))
+    .then((v) => { validated = v; })
+    .then(() => new Promise((resolve, reject) => {
     const channels = [];
     const decoder = new StringDecoder('utf8');
     const client = u.protocol === 'https:' ? https : http;
@@ -1245,7 +1436,11 @@ function fetchM3uChannelsStream(playlistUrl, opts = {}) {
       if (channels.length >= maxChannels) done();
     };
     const deadline = setTimeout(() => done(new Error(`m3u playlist timed out after ${Math.round(deadlineMs / 1000)}s`)), deadlineMs);
-    req = client.get(u, { headers: { ...(opts.headers || {}), 'user-agent': (opts.headers && opts.headers['user-agent']) || IPTV_NATIVE_PROXY_UA } }, (res) => {
+    const requestOptions = {
+      headers: { ...(opts.headers || {}), 'user-agent': (opts.headers && opts.headers['user-agent']) || IPTV_NATIVE_PROXY_UA },
+      ...(validated && typeof validated.lookup === 'function' ? { lookup: validated.lookup } : {}),
+    };
+    req = client.get(u, requestOptions, (res) => {
       resRef = res;
       if ([301, 302, 303, 307, 308].includes(res.statusCode || 0) && res.headers.location) {
         res.resume();
@@ -1282,7 +1477,7 @@ function fetchM3uChannelsStream(playlistUrl, opts = {}) {
     });
     req.on('error', (e) => done(e));
     req.setTimeout(timeoutMs, () => done(new Error('m3u playlist upstream timeout')));
-  });
+  }));
 }
 async function fetchIptvChannels(s, key) {
   const sourceId = cleanIptvSourceId(s.id);
@@ -1295,7 +1490,7 @@ async function fetchIptvChannels(s, key) {
     const fetchPanel = async (action, opts) => {
       try {
         const u = `${apiBase}&action=${action}&_=${Date.now().toString(36)}`;
-        const r = await fetchUrlExt(u, xtreamPanelFetchOptions(opts));
+        const r = await fetchUrlExt(u, iptvFetchOptions(xtreamPanelFetchOptions(opts)));
         if ((r.status || 0) >= 400) {
           const body = r.body.toString('utf8', 0, 2048);
           throw new Error(`HTTP ${r.status} (${iptvNativeFailureReason(r.status || 502, body)})`);
@@ -1366,6 +1561,10 @@ function parseXmltvDate(s) { // "20260611043000 +0000"
   const off = m[7] ? (parseInt(m[7].slice(0, 3), 10) * 60 + parseInt(m[7][0] + m[7].slice(3), 10)) * 60000 : 0;
   return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) - off;
 }
+function xmlAttr(attrs, name) {
+  const m = new RegExp(`\\b${name}="([^"]*)"`, 'i').exec(String(attrs || ''));
+  return m ? m[1] : '';
+}
 // Channel names normalized for guide matching: "UK: BBC One [1080p] HD" ≈ "BBC One".
 function normChName(s) {
   return String(s || '').toLowerCase()
@@ -1430,7 +1629,7 @@ let epgRefreshingSources = new Set();
 async function fetchXmltv(s, key = epgSourceKey(s), sourceChannels = null) {
   const xmltvUrl = xmltvGuideUrl(s);
   if (!xmltvUrl) return null;
-  const r = await fetchUrlExt(xmltvUrl, { timeoutMs: 20000, deadlineMs: 90000, maxBytes: 128 * 1024 * 1024 });
+  const r = await fetchUrlExt(xmltvUrl, iptvFetchOptions({ timeoutMs: 20000, deadlineMs: 90000, maxBytes: 128 * 1024 * 1024 }));
   let xml = r.body;
   if (xml.length > 120 * 1024 * 1024) xml = xml.subarray(0, 120 * 1024 * 1024); // parse cap
   const text = xml.toString('utf8');
@@ -1460,18 +1659,21 @@ async function fetchXmltv(s, key = epgSourceKey(s), sourceChannels = null) {
   }
   // Pass 2 — programmes for carried channels only.
   const byChannel = new Map();
-  const re = /<programme[^>]*start="([^"]+)"[^>]*stop="([^"]+)"[^>]*channel="([^"]+)"[^>]*>([\s\S]*?)<\/programme>/g;
+  const re = /<programme\b([^>]*)>([\s\S]*?)<\/programme>/g;
   n = 0;
   while ((m = re.exec(text)) && n < 200000) {
     n++;
-    if (wanted.size && !wanted.has(m[3])) continue;
-    const title = ((/<title[^>]*>([\s\S]*?)<\/title>/.exec(m[4]) || [])[1] || '').replace(/<!\[CDATA\[|\]\]>/g, '').trim();
+    const attrs = m[1] || '';
+    const channelId = xmlAttr(attrs, 'channel');
+    if (!channelId) continue;
+    if (wanted.size && !wanted.has(channelId)) continue;
+    const title = ((/<title[^>]*>([\s\S]*?)<\/title>/.exec(m[2]) || [])[1] || '').replace(/<!\[CDATA\[|\]\]>/g, '').trim();
     if (!title) continue;
-    const start = parseXmltvDate(m[1]);
-    const stop = parseXmltvDate(m[2]);
+    const start = parseXmltvDate(xmlAttr(attrs, 'start'));
+    const stop = parseXmltvDate(xmlAttr(attrs, 'stop'));
     if (!start || !stop || stop < keepFrom || start > keepTo) continue;
-    if (!byChannel.has(m[3])) byChannel.set(m[3], []);
-    byChannel.get(m[3]).push({ start, stop, title });
+    if (!byChannel.has(channelId)) byChannel.set(channelId, []);
+    byChannel.get(channelId).push({ start, stop, title });
   }
   for (const list of byChannel.values()) list.sort((a, b) => a.start - b.start);
   epgCache = { key, sourceId: cleanIptvSourceId(s.id), at: Date.now(), byChannel, byName };
@@ -1578,7 +1780,7 @@ async function fetchXtreamEpgAction(s, ch, limit, action, timeouts = {}) {
   const u = `${base}/player_api.php?username=${encodeURIComponent(s.xtUser || '')}&password=${encodeURIComponent(s.xtPass || '')}&action=${action}&stream_id=${ch.xtreamId}&limit=${Math.max(2, Math.min(48, limit))}`;
   let r;
   try {
-    r = await fetchUrlExt(u, { timeoutMs: timeouts.timeoutMs || 8000, deadlineMs: timeouts.deadlineMs || 15000, maxBytes: 2 * 1024 * 1024 });
+    r = await fetchUrlExt(u, iptvFetchOptions({ timeoutMs: timeouts.timeoutMs || 8000, deadlineMs: timeouts.deadlineMs || 15000, maxBytes: 2 * 1024 * 1024 }));
   } catch (e) {
     throw new Error(`action=${action} host=${iptvSafeHost(s.xtHost)} failed: ${sanitizeIptvLogError(e)}`);
   }
@@ -1604,22 +1806,36 @@ async function fetchXtreamEpgList(s, ch, limit) {
     return short;
   }
 }
+function xtreamGuideFailureTtlMs(err) {
+  const text = String(err && err.message ? err.message : err || '').toLowerCase();
+  if (text.includes('bot-protection') || text.includes('rate limit') || /\b(401|403|429)\b/.test(text)) {
+    return iptvProviderProtectionTtlMs();
+  }
+  return EPG_EMPTY_TTL_MS;
+}
+function pruneXtreamEpgStreamCache(cache) {
+  if (!cache || !cache.byStream || cache.byStream.size <= 5000) return;
+  const entries = [...cache.byStream.entries()]
+    .sort((a, b) => ((a[1] && (a[1].at || a[1].until)) || 0) - ((b[1] && (b[1].at || b[1].until)) || 0));
+  for (const [id] of entries.slice(0, Math.max(1, entries.length - 4500))) cache.byStream.delete(id);
+}
 async function xtreamEpgList(ch, { limit = 24, allowBusy = false } = {}) {
-  const s = sourceForIptvChannel(ch) || iptvSourcesFromSettings(settings.get())[0] || settings.get();
-  if (s.iptvMode !== 'xtream' || !ch.xtreamId) return [];
+  const s = sourceForIptvChannel(ch);
+  if (!s || s.iptvMode !== 'xtream' || !ch.xtreamId) return [];
   const sourceId = cleanIptvSourceId(s.id);
   const key = iptvSourceKey(s);
   let cache = xtreamEpgSourceCaches.get(sourceId);
   if (!cache || cache.key !== key) cache = hydrateXtreamEpgCache(key, sourceId);
   const id = String(ch.xtreamId);
   const hit = cache.byStream.get(id);
+  if (hit && hit.until && Date.now() < hit.until) return hit.list || [];
   if (hit && Date.now() - hit.at < (hit.list && hit.list.length ? EPG_CACHE_TTL_MS : EPG_EMPTY_TTL_MS)) return hit.list;
   if (iptvPlaybackBusy() && !allowBusy) return hit && hit.list ? hit.list : [];
   if (hit && hit.list && hit.list.length && Date.now() - hit.at <= EPG_CACHE_STALE_MS) {
     if (!hit.promise) {
       const p = fetchXtreamEpgList(s, ch, limit).then((list) => {
         cache.byStream.set(id, { at: Date.now(), list });
-        if (cache.byStream.size > 5000) cache.byStream.clear();
+        pruneXtreamEpgStreamCache(cache);
         if (list.length) persistXtreamEpgCache(cache);
         return list;
       }).catch((e) => {
@@ -1637,7 +1853,7 @@ async function xtreamEpgList(ch, { limit = 24, allowBusy = false } = {}) {
   if (hit && hit.promise) return hit.promise;
   const p = fetchXtreamEpgList(s, ch, limit).then((list) => {
     cache.byStream.set(id, { at: Date.now(), list });
-    if (cache.byStream.size > 5000) cache.byStream.clear();
+    pruneXtreamEpgStreamCache(cache);
     if (list.length) persistXtreamEpgCache(cache);
     return list;
   });
@@ -1646,13 +1862,15 @@ async function xtreamEpgList(ch, { limit = 24, allowBusy = false } = {}) {
     return await p;
   } catch (e) {
     console.error(`[iptv xtream guide] ${iptvChannelLogLabel(ch)} fetch failed; using ${hit && hit.list ? 'previous cache' : 'channel-title fallback'}: ${sanitizeIptvLogError(e)}`);
-    cache.byStream.delete(id);
+    cache.byStream.set(id, { at: hit && hit.at ? hit.at : Date.now(), list: hit && hit.list ? hit.list : [], until: Date.now() + xtreamGuideFailureTtlMs(e) });
+    pruneXtreamEpgStreamCache(cache);
     if (hit) return hit.list;
     return [];
   }
 }
 async function epgNowNext(ch) {
-  const s = sourceForIptvChannel(ch) || iptvSourcesFromSettings(settings.get())[0] || settings.get();
+  const s = sourceForIptvChannel(ch);
+  if (!s) return {};
   if (s.iptvMode === 'xtream' && ch.xtreamId) {
     const list = await xtreamEpgList(ch, { limit: 24, allowBusy: true });
     const now = Date.now();
@@ -1916,7 +2134,7 @@ function scheduleNextIptvWarm() {
   iptvWarmTimer.unref();
 }
 const tmdb = new TmdbProxy(store, () => settings.get().tmdbKey, process.env.TMDB_BASE || undefined);
-const trakt = new Trakt(store, () => settings.get());
+const trakt = new Trakt(store, () => settings.get(), (mutator) => settings.update(mutator));
 const AUTH_ART_TTL_MS = 6 * 3600 * 1000;
 let authArtCache = { expiresAt: 0, items: [] };
 
@@ -2016,10 +2234,42 @@ function throttled(ctx, key, opts) {
     { 'retry-after': String(Math.ceil(r.retryMs / 1000)) });
   return true;
 }
+function throttleUserRoute(ctx, routeKey, opts) {
+  const uid = (ctx.user && ctx.user.id) || (ctx.claims && ctx.claims.uid) || clientIp(ctx);
+  return throttled(ctx, `route:${routeKey}:${uid}`, opts);
+}
 // A stream-scope token must be bound to the resource it's used on. Session tokens pass.
 function streamScopeOk(ctx, resource) {
   if (ctx.claims.scope !== 'stream') return true;
   return ctx.claims.sub === resource;
+}
+function mountAccessOk(ctx, vf) {
+  if (!vf) return false;
+  if (ctx.user && ctx.user.role === 'admin') return true;
+  if (ctx.claims && ctx.claims.scope === 'stream') return true;
+  return !vf._ownerUid || (ctx.user && vf._ownerUid === ctx.user.id);
+}
+const USER_MOUNT_CAP = 8;
+function rememberMountOwner(vf, uid) {
+  if (!vf || !uid) return vf;
+  vf._ownerUid = vf._ownerUid || uid;
+  vf._touched = Date.now();
+  return vf;
+}
+function trimUserMounts(uid, keepId = null, limit = USER_MOUNT_CAP) {
+  if (!uid) return [];
+  const owned = [...mounts.values()]
+    .filter((vf) => vf && vf._ownerUid === uid && vf.id !== keepId)
+    .sort((a, b) => (a._touched || a.mountedAt || 0) - (b._touched || b.mountedAt || 0));
+  const evicted = [];
+  while (owned.length >= limit) {
+    const vf = owned.shift();
+    if (!vf) break;
+    mounts.delete(vf.id);
+    evicted.push(vf.id);
+  }
+  for (const [url, id] of pipeline.mountByUrl) if (evicted.includes(id)) pipeline.mountByUrl.delete(url);
+  return evicted;
 }
 // Client capability claims (canPlayType results sent with the play request). Hardware that
 // decodes the source natively gets TRUE direct play — no server remux/transcode at all.
@@ -2130,7 +2380,7 @@ function episodeSubtitleQuery(query, season, ep) {
   if (/\bS\d{1,2}\s*E\d{1,3}\b/i.test(base)) return base;
   return `${base} S${String(s).padStart(2, '0')}E${String(e).padStart(2, '0')}`.trim();
 }
-function localItemFor(ctx, libId, idx) {
+function localLibraryItemFor(ctx, libId, idx) {
   const lib = store.read('libraries', { list: [] }).list.find((l) => l.id === libId);
   if (!lib || !lib.path) return { status: 404, error: 'library not found' };
   if (lib.users && lib.users.length && ctx.user.role !== 'admin' && !lib.users.includes(ctx.user.id)) {
@@ -2138,8 +2388,15 @@ function localItemFor(ctx, libId, idx) {
   }
   const rec = store.read('libitems', {})[libId];
   const item = rec && rec.items[parseInt(idx, 10)];
-  if (!item || !item.file) return { status: 404, error: 'item not found' };
+  if (!item) return { status: 404, error: 'item not found' };
   return { lib, item };
+}
+function localItemFor(ctx, libId, idx) {
+  const found = localLibraryItemFor(ctx, libId, idx);
+  if (found.error) return found;
+  const item = found.item;
+  if (!item || !item.file) return { status: 404, error: 'item not found' };
+  return found;
 }
 function localItemPayload(ctx, libId, item) {
   const { file, artFile, dir, ...rest } = item;
@@ -2150,6 +2407,19 @@ function localItemPayload(ctx, libId, item) {
     artUrl: artFile ? `/api/local/${libId}/art/${rest.idx}?t=${auth.stableStreamToken(ctx.user.id, `art:${libId}:${rest.idx}`)}` : null,
     thumbUrl: file ? `/api/local/${libId}/thumb/${rest.idx}?t=${auth.stableStreamToken(ctx.user.id, `thumb:${libId}:${rest.idx}`)}` : null,
   };
+}
+function tokenizedLocalUrl(raw) {
+  try {
+    const u = new URL(String(raw || ''), 'http://triboon.local');
+    return u.pathname.startsWith('/api/local/') && u.searchParams.has('t');
+  } catch { return false; }
+}
+function sanitizeStoredMediaMeta(meta = {}) {
+  const out = { ...(meta && typeof meta === 'object' ? meta : {}) };
+  for (const key of ['poster', 'backdrop']) {
+    if (tokenizedLocalUrl(out[key])) delete out[key];
+  }
+  return out;
 }
 function localItemSorter(sort) {
   if (sort === 'title.asc') return (a, b) => String(a.title || '').localeCompare(String(b.title || ''));
@@ -2188,7 +2458,8 @@ function localMountFor(ctx, libId, idx, caps = {}, playCtx = {}) {
   vf._q = q || name;
   vf._subQuery = episodeSubtitleQuery(vf._q, season, ep);
   vf._caps = parseCaps(caps);
-  vf._touched = Date.now();
+  rememberMountOwner(vf, ctx.user.id);
+  trimUserMounts(ctx.user.id, vf.id);
   return { vf, item: found.item };
 }
 function parseEpisodeKey(key) {
@@ -2288,7 +2559,44 @@ const MUSIC_CHARTS = [
   { id: 'daily', title: 'Daily chart', note: 'Top songs today', query: 'top songs today', limit: 16 },
   { id: 'weekly', title: 'Weekly chart', note: 'Top songs this week', query: 'top songs this week', limit: 16 },
 ];
+const MUSIC_HOME_WEEKLY_FEEDS = [
+  { id: 'top-playlists-week', title: 'Top playlists this week', sub: 'Fresh shared mixes and creator queues', query: 'top playlists this week music', coverFeed: 'top playlists this week music', icon: 'chart', grad: 'mGrad2' },
+  { id: 'new-music-mix', title: 'New Music Mix', sub: 'Fresh songs to sample first', query: 'new music mix', coverFeed: 'new music mix', icon: 'spark', grad: 'mGrad1' },
+  { id: 'viral-hits', title: 'Viral hits', sub: 'Songs moving fast right now', query: 'viral hits music this week', coverFeed: 'viral hits music this week', icon: 'spark', grad: 'mGrad3' },
+  { id: 'weekend-party', title: 'Weekend playlist', sub: 'Upbeat picks for later', query: 'weekend party playlist', coverFeed: 'weekend party playlist', icon: 'music', grad: 'mGrad4' },
+];
+const MUSIC_HOME_MOOD_FEEDS = [
+  { id: 'focus', title: 'Focus', sub: 'Clean background energy', query: 'focus music mix', coverFeed: 'focus music mix', icon: 'smile', grad: 'mGrad2' },
+  { id: 'chill', title: 'Chill', sub: 'Low-key listening', query: 'chill music mix', coverFeed: 'chill music mix', icon: 'smile', grad: 'mGrad3' },
+  { id: 'workout', title: 'Workout', sub: 'High-energy tracks', query: 'workout music mix', coverFeed: 'workout music mix', icon: 'music', grad: 'mGrad1' },
+  { id: 'road-trip', title: 'Road Trip', sub: 'Long-drive songs', query: 'road trip music mix', coverFeed: 'road trip music mix', icon: 'music', grad: 'mGrad4' },
+];
+function musicSeason(now = new Date()) {
+  const m = now.getMonth();
+  if (m >= 2 && m <= 4) return { id: 'spring', title: 'Spring Mix', query: 'spring music mix' };
+  if (m >= 5 && m <= 7) return { id: 'summer', title: 'Summer Mix', query: 'summer music mix' };
+  if (m >= 8 && m <= 10) return { id: 'fall', title: 'Fall Mix', query: 'fall music mix' };
+  return { id: 'winter', title: 'Winter Mix', query: 'winter music mix' };
+}
+function musicSeasonFeeds(now = new Date()) {
+  const season = musicSeason(now);
+  return [
+    { id: `${season.id}-mix`, title: season.title, sub: 'Seasonal songs for now', query: season.query, coverFeed: season.query, icon: 'spark', grad: 'mGrad1' },
+    { id: `${season.id}-hits`, title: `${season.title} Hits`, sub: 'Popular seasonal picks', query: `${season.query} hits`, coverFeed: `${season.query} hits`, icon: 'chart', grad: 'mGrad2' },
+    { id: `${season.id}-chill`, title: `${season.title} Chill`, sub: 'Softer seasonal listening', query: `${season.query} chill`, coverFeed: `${season.query} chill`, icon: 'smile', grad: 'mGrad3' },
+    { id: `${season.id}-party`, title: `${season.title} Party`, sub: 'More energy, less searching', query: `${season.query} party`, coverFeed: `${season.query} party`, icon: 'music', grad: 'mGrad4' },
+  ];
+}
+function musicHomeFeedShelves(now = new Date()) {
+  return [
+    { id: 'personal', title: 'Your playlists', kind: 'personal', note: 'Liked Music and linked YouTube Music playlists always render first.' },
+    { id: 'weekly-playlists', title: 'Top playlists this week', kind: 'feeds', note: 'Playlist-style mixes generated from YouTube Music search.', refresh: 'weekly', items: MUSIC_HOME_WEEKLY_FEEDS },
+    { id: 'seasonal-mixes', title: 'Seasonal mixes', kind: 'feeds', note: 'Updated by the current season.', refresh: 'weekly', items: musicSeasonFeeds(now) },
+    { id: 'moods', title: 'Moods & moments', kind: 'feeds', note: 'Quick mixes for common listening modes.', refresh: 'daily', items: MUSIC_HOME_MOOD_FEEDS },
+  ];
+}
 const musicChartCache = new Map(); // id -> { rows, expiresAt, inflight }
+const musicSearchCache = new Map(); // key -> { rows, expiresAt, inflight }
 function nextMusicChartRefresh(id, now = new Date()) {
   const d = new Date(now);
   if (id === 'weekly') {
@@ -2299,6 +2607,29 @@ function nextMusicChartRefresh(id, now = new Date()) {
   }
   d.setHours(0, 0, 0, 0);
   return d.getTime();
+}
+function musicSearchCacheKey(q, limit, scope) {
+  return `${scope || 'public'}:${limit}:${String(q || '').trim().toLowerCase()}`;
+}
+async function loadMusicSearch(q, { limit = 20, cookiesPath, scope = 'public', priority = 0 } = {}) {
+  const query = String(q || '').trim();
+  const n = Math.max(1, Math.min(40, limit));
+  const key = musicSearchCacheKey(query, n, scope);
+  const now = Date.now();
+  const hit = musicSearchCache.get(key);
+  if (hit && hit.rows && now < hit.expiresAt) return hit.rows;
+  if (hit && hit.inflight) return hit.inflight;
+  const inflight = ytmusic.search(query, { limit: n, cookiesPath, priority }).then((rows) => {
+    const clean = (rows || []).filter((t) => t && /^[\w-]{11}$/.test(String(t.id || ''))).slice(0, n);
+    musicSearchCache.set(key, { rows: clean, expiresAt: now + 12 * 3600 * 1000 });
+    while (musicSearchCache.size > 80) musicSearchCache.delete(musicSearchCache.keys().next().value);
+    return clean;
+  }).catch((e) => {
+    if (hit && hit.rows) return hit.rows;
+    throw e;
+  });
+  musicSearchCache.set(key, { ...(hit || {}), inflight });
+  return inflight;
 }
 async function loadMusicChart(def) {
   const now = Date.now();
@@ -2315,6 +2646,32 @@ async function loadMusicChart(def) {
   });
   musicChartCache.set(def.id, { ...(hit || {}), inflight });
   return inflight;
+}
+function tokenizedMusicTrack(uid, r) {
+  return { ...r, streamUrl: `/api/music/stream/${r.id}?t=${auth.streamToken(uid, `music:${r.id}`)}` };
+}
+async function loadMusicChartResponses(uid, { wait = true } = {}) {
+  return (await Promise.all(MUSIC_CHARTS.map(async (def) => {
+    try {
+      let results;
+      if (wait) {
+        results = await loadMusicChart(def);
+      } else {
+        const hit = musicChartCache.get(def.id);
+        if (hit && hit.rows && Date.now() < hit.expiresAt) results = hit.rows;
+        else { loadMusicChart(def).catch(() => {}); return null; }
+      }
+      return {
+        id: def.id,
+        title: def.title,
+        note: def.note,
+        kind: 'tracks',
+        results: results.map((r) => tokenizedMusicTrack(uid, r)),
+      };
+    } catch (e) {
+      return { id: def.id, title: def.title, note: def.note, kind: 'tracks', results: [], error: String(e.message).slice(0, 120) };
+    }
+  }))).filter((c) => c && c.results.length);
 }
 
 // ---------- handlers ----------
@@ -2459,11 +2816,13 @@ const H = {
   },
 
   mount: async (ctx) => {
+    if (throttleUserRoute(ctx, 'mount', { max: 8, windowMs: 60000, lockMs: 60000 })) return;
     const xml = (await readBody(ctx.req)).toString('utf8');
     const t0 = Date.now();
     const vf = await mountNzb(getPool(), xml);
-    vf._touched = Date.now();
+    rememberMountOwner(vf, ctx.user.id);
     mounts.set(vf.id, vf);
+    trimUserMounts(ctx.user.id, vf.id);
     vf.triage().catch((e) => console.error('[mount triage]', e.message));
     send(ctx.res, 200, mountPayload(vf, ctx.user.id, { mountMs: Date.now() - t0 }));
   },
@@ -2477,12 +2836,14 @@ const H = {
   health: async (ctx) => {
     const vf = mounts.get(ctx.m[1]);
     if (!vf) return send(ctx.res, 404, { error: 'mount not found' });
+    if (!mountAccessOk(ctx, vf)) return send(ctx.res, 404, { error: 'mount not found' });
     send(ctx.res, 200, await vf.triage());
   },
 
   search: async (ctx) => {
     const q = ctx.url.searchParams.get('q');
     if (!q) return send(ctx.res, 400, { error: 'q required' });
+    if (throttleUserRoute(ctx, 'search', { max: 40, windowMs: 60000, lockMs: 60000 })) return;
     const { candidates, errors } = await pipeline.search(
       {
         q,
@@ -2514,6 +2875,7 @@ const H = {
   play: async (ctx) => {
     const body = await readJson(ctx.req);
     if (!body.q) return send(ctx.res, 400, { error: 'q required' });
+    if (throttleUserRoute(ctx, 'play', { max: 20, windowMs: 60000, lockMs: 60000 })) return;
     const t0 = Date.now();
     // HD/UHD toggle: a per-play resolution preference may tighten the cap DOWNWARD, never
     // above the admin-set cap (Plex semantics — user picks within their ceiling).
@@ -2525,9 +2887,12 @@ const H = {
         { q: body.q, imdbid: body.imdbid, tvdbid: body.tvdbid, season: body.season, ep: body.ep, pick: body.pick, pickKey: body.pickKey },
         policy
       );
+      session.uid = ctx.user.id;
       vf._q = body.q; // remembered for online subtitle search (release names match poorly)
       vf._subQuery = episodeSubtitleQuery(body.q, body.season, body.ep);
       vf._caps = parseCaps(body.caps); session.caps = vf._caps; // hardware claims ride the session
+      rememberMountOwner(vf, ctx.user.id);
+      trimUserMounts(ctx.user.id, vf.id);
       send(ctx.res, 200, mountPayload(vf, ctx.user.id, {
         sessionId: session.id, mountMs: Date.now() - t0,
         candidate: { name: candidate.name, pickKey: candidate.pickKey, score: candidate.score, indexer: candidate.indexer, reasons: candidate.reasons, attributes: candidate.attributes },
@@ -2539,12 +2904,19 @@ const H = {
   },
 
   advance: async (ctx) => {
+    if (throttleUserRoute(ctx, 'advance', { max: 30, windowMs: 60000, lockMs: 60000 })) return;
     const t0 = Date.now();
     try {
+      const existing = pipeline.sessions.get(ctx.m[1]);
+      if (!existing) return send(ctx.res, 404, { error: 'unknown play session', attempts: [] });
+      if (existing.uid && existing.uid !== ctx.user.id) return send(ctx.res, 404, { error: 'unknown play session', attempts: [] });
+      existing.uid = ctx.user.id;
       const { session, vf, candidate, attempts } = await pipeline.advance(ctx.m[1]);
       vf._q = session.query && session.query.q;
       vf._subQuery = episodeSubtitleQuery(vf._q, session.query && session.query.season, session.query && session.query.ep);
       vf._caps = session.caps || {}; // same client, same hardware claims
+      rememberMountOwner(vf, ctx.user.id);
+      trimUserMounts(ctx.user.id, vf.id);
       send(ctx.res, 200, mountPayload(vf, ctx.user.id, {
         sessionId: session.id, mountMs: Date.now() - t0,
         candidate: { name: candidate.name, pickKey: candidate.pickKey, score: candidate.score, indexer: candidate.indexer, attributes: candidate.attributes },
@@ -2655,6 +3027,8 @@ const H = {
     } catch (e) {
       return send(ctx.res, e.status || 400, { error: e.message });
     }
+    try { await assertIptvSourceAllowed(src); }
+    catch (e) { return send(ctx.res, e.status || 400, { error: e.message }); }
     src.users = [ctx.user.id];
     src.ownerUserId = ctx.user.id;
     if (iptvOwnedSourcesForUser(ctx.user, settings.get()).length >= 10) {
@@ -2679,42 +3053,35 @@ const H = {
     const b = await readJson(ctx.req);
     let updated = null;
     let previous = null;
-    let forbidden = false;
-    let err = null;
+    const list = iptvSourcesFromSettings(settings.get());
+    const idx = list.findIndex((src) => src.id === sourceId);
+    if (idx < 0) return send(ctx.res, 404, { error: 'playlist not found' });
+    previous = list[idx];
+    if (previous.ownerUserId !== ctx.user.id) return send(ctx.res, 403, { error: 'not your playlist' });
+    try {
+      updated = makeIptvSourceFromBody(iptvEditBodyForExisting({
+        ...b,
+        users: [ctx.user.id],
+        ownerUserId: ctx.user.id,
+      }, previous), previous);
+      await assertIptvSourceAllowed(updated);
+    } catch (e) {
+      return send(ctx.res, e.status || 400, { error: e.message || 'playlist update failed' });
+    }
+    updated.users = [ctx.user.id];
+    updated.ownerUserId = ctx.user.id;
     settings.update((s) => {
-      const list = iptvSourcesFromSettings(s);
-      const idx = list.findIndex((src) => src.id === sourceId);
-      if (idx < 0) {
-        err = Object.assign(new Error('playlist not found'), { status: 404 });
-        return s;
-      }
-      previous = list[idx];
-      if (previous.ownerUserId !== ctx.user.id) {
-        forbidden = true;
-        return s;
-      }
-      try {
-        updated = makeIptvSourceFromBody(iptvEditBodyForExisting({
-          ...b,
-          users: [ctx.user.id],
-          ownerUserId: ctx.user.id,
-        }, previous), previous);
-      } catch (e) {
-        err = e;
-        return s;
-      }
-      updated.users = [ctx.user.id];
-      updated.ownerUserId = ctx.user.id;
-      const nextList = [...list];
-      nextList[idx] = updated;
+      const current = iptvSourcesFromSettings(s);
+      const currentIdx = current.findIndex((src) => src.id === sourceId);
+      if (currentIdx < 0) return s;
+      const nextList = [...current];
+      nextList[currentIdx] = updated;
       return {
         ...s,
         iptvSources: nextList,
         iptvUrl: null, xtHost: null, xtUser: null, xtPass: null, epgUrl: null, iptvUsers: [],
       };
     });
-    if (forbidden) return send(ctx.res, 403, { error: 'not your playlist' });
-    if (err) return send(ctx.res, err.status || 400, { error: err.message || 'playlist update failed' });
     cleanupEditedIptvSource(sourceId, previous, updated);
     scheduleIptvWarmSoon('user-source-updated');
     send(ctx.res, 200, { source: redactIptvSource(updated) });
@@ -2738,7 +3105,7 @@ const H = {
         next.iptvUrl = null; next.xtHost = null; next.xtUser = null; next.xtPass = null; next.epgUrl = null; next.iptvUsers = [];
       }
       if (removed) {
-        const prefix = `${removed.name} · `;
+        const prefix = `${removed.name}${IPTV_GROUP_SEPARATOR}`;
         next.iptvHiddenGroups = (next.iptvHiddenGroups || []).filter((g) => !String(g).startsWith(prefix));
       }
       return next;
@@ -2766,6 +3133,8 @@ const H = {
     let src;
     try { src = makeIptvSourceFromBody(b); }
     catch (e) { return send(ctx.res, e.status || 400, { error: e.message }); }
+    try { await assertIptvSourceAllowed(src); }
+    catch (e) { return send(ctx.res, e.status || 400, { error: e.message }); }
     settings.update((s) => {
       const list = iptvSourcesFromSettings(s).filter((x) => x.id !== src.id);
       list.push(src);
@@ -2785,30 +3154,28 @@ const H = {
     const b = await readJson(ctx.req);
     let updated = null;
     let previous = null;
-    let err = null;
+    const list = iptvSourcesFromSettings(settings.get());
+    const idx = list.findIndex((src) => src.id === sourceId);
+    if (idx < 0) return send(ctx.res, 404, { error: 'playlist not found' });
+    previous = list[idx];
+    try {
+      updated = makeIptvSourceFromBody(iptvEditBodyForExisting(b, previous), previous);
+      await assertIptvSourceAllowed(updated);
+    } catch (e) {
+      return send(ctx.res, e.status || 400, { error: e.message || 'playlist update failed' });
+    }
     settings.update((s) => {
-      const list = iptvSourcesFromSettings(s);
-      const idx = list.findIndex((src) => src.id === sourceId);
-      if (idx < 0) {
-        err = Object.assign(new Error('playlist not found'), { status: 404 });
-        return s;
-      }
-      previous = list[idx];
-      try {
-        updated = makeIptvSourceFromBody(iptvEditBodyForExisting(b, previous), previous);
-      } catch (e) {
-        err = e;
-        return s;
-      }
-      const nextList = [...list];
-      nextList[idx] = updated;
+      const current = iptvSourcesFromSettings(s);
+      const currentIdx = current.findIndex((src) => src.id === sourceId);
+      if (currentIdx < 0) return s;
+      const nextList = [...current];
+      nextList[currentIdx] = updated;
       return {
         ...s,
         iptvSources: nextList,
         iptvUrl: null, xtHost: null, xtUser: null, xtPass: null, epgUrl: null, iptvUsers: [],
       };
     });
-    if (err) return send(ctx.res, err.status || 400, { error: err.message || 'playlist update failed' });
     cleanupEditedIptvSource(sourceId, previous, updated);
     scheduleIptvWarmSoon('source-updated');
     send(ctx.res, 200, { source: redactIptvSource(updated) });
@@ -2826,7 +3193,7 @@ const H = {
         next.iptvUrl = null; next.xtHost = null; next.xtUser = null; next.xtPass = null; next.epgUrl = null; next.iptvUsers = [];
       }
       if (removed) {
-        const prefix = `${removed.name} · `;
+        const prefix = `${removed.name}${IPTV_GROUP_SEPARATOR}`;
         next.iptvHiddenGroups = (next.iptvHiddenGroups || []).filter((g) => !String(g).startsWith(prefix));
       }
       return next;
@@ -2863,22 +3230,31 @@ const H = {
   // programmes inside a ~5h window. XMLTV answers from the cached schedule; Xtream fans out
   // get_short_epg in parallel (bounded to one lazy UI page per request).
   iptvGuide: async (ctx) => {
+    if (throttleUserRoute(ctx, 'iptv-guide', { max: 60, windowMs: 60000, lockMs: 60000 })) return;
     const idxs = String(ctx.url.searchParams.get('chs') || '')
       .split(',').map((n) => parseInt(n, 10)).filter((n) => Number.isInteger(n) && n >= 0).slice(0, 48);
+    const cids = String(ctx.url.searchParams.get('cids') || '')
+      .split(',').map((s) => s.trim()).filter(Boolean).slice(0, idxs.length);
     if (idxs.length) {
       try { await ensureIptvChannelStateForUser(ctx.user); } catch {}
     }
-    const chans = idxs.map((i) => iptvCache.channels && iptvCache.channels[i]).filter(Boolean);
+    const chans = idxs.map((i, n) => {
+      const ch = iptvCache.channels && iptvCache.channels[i];
+      if (!ch) return null;
+      if (cids[n] && String(ch.id) !== cids[n]) return null;
+      return ch;
+    }).filter(Boolean);
+    if (cids.length && chans.length !== idxs.length) return send(ctx.res, 409, { error: 'channel list changed - reopen Live TV' });
     if (!chans.length) return send(ctx.res, 200, { channels: [] });
     const from = Date.now() - 90 * 60000, to = Date.now() + 4 * 3600000;
     const channels = await mapLimit(chans, 8, async (ch) => {
-      const src = sourceForIptvChannel(ch) || iptvSourcesFromSettings(settings.get())[0] || settings.get();
+      const src = sourceForIptvChannel(ch);
       let progs = [];
-      if (src.iptvMode === 'xtream' && ch.xtreamId) {
+      if (src && src.iptvMode === 'xtream' && ch.xtreamId) {
         progs = (await xtreamEpgList(ch, { limit: 24, allowBusy: true })).filter((p) => p.stop > from && p.start < to);
       }
       let epg = null;
-      if (xmltvGuideUrl(src)) {
+      if (src && xmltvGuideUrl(src)) {
         try { epg = await ensureXmltv(src, (iptvSourceCaches.get(cleanIptvSourceId(src.id)) || {}).channels || []); } catch { epg = null; }
       }
       if (!progs.length && epg && xmltvListFor(epg, ch).length) {
@@ -2895,6 +3271,7 @@ const H = {
 
   // EPG now/next for one channel: Xtream short-EPG, or the configured XMLTV guide.
   iptvEpg: async (ctx) => {
+    if (throttleUserRoute(ctx, 'iptv-epg', { max: 90, windowMs: 60000, lockMs: 60000 })) return;
     try { await ensureIptvChannelStateForUser(ctx.user); } catch {}
     const ch = iptvCache.channels && iptvCache.channels[parseInt(ctx.m[1], 10)];
     if (!ch) return send(ctx.res, 404, { error: 'channel not found' });
@@ -2965,10 +3342,24 @@ const H = {
     // Attempt 1 uses HLS-friendly demuxer options; if ffmpeg dies before emitting a single
     // byte (non-HLS channel, or an older ffmpeg without those options) retry once plain.
     let targetIndex = 0;
-    const attempt = (target, hlsFriendly, retriesLeft) => {
+    const attempt = async (target, hlsFriendly, retriesLeft) => {
       if (liveSlot.closed) return;
+      let pin;
+      try { pin = await validateAndPinIptvUrl(target.url, 'Live stream URL'); }
+      catch (e) {
+        liveSlot.done('blocked upstream');
+        console.error(`[iptv] "${ch.name}" blocked remux upstream: ${sanitizeIptvLogError(e)}`);
+        if (!ctx.res.headersSent) send(ctx.res, e.status || 400, { error: e.message || 'blocked live stream url' });
+        else try { ctx.res.destroy(); } catch {}
+        return;
+      }
       let ff;
-      try { ff = spawnLiveRemux(target.url, { hlsFriendly }); }
+      try {
+        ff = spawnLiveRemux(pin.pinnedHref || pin.href || target.url, {
+          hlsFriendly,
+          headers: pin.hostHeader ? { Host: pin.hostHeader } : undefined,
+        });
+      }
       catch (e) {
         liveSlot.done('spawn failed');
         console.error('[iptv]', sanitizeIptvFfmpegError(e.message));
@@ -3014,7 +3405,14 @@ const H = {
           if (typeof ctx.res.flushHeaders === 'function') ctx.res.flushHeaders();
         }
         armIdle(LIVE_REMUX_IDLE_TIMEOUT_MS);
-        if (!ctx.res.destroyed) ctx.res.write(chunk);
+        if (!ctx.res.destroyed && !ctx.res.write(chunk)) {
+          try { ff.stdout.pause(); } catch {}
+          ctx.res.once('drain', () => {
+            if (!clientClosed && !ctx.res.destroyed) {
+              try { ff.stdout.resume(); } catch {}
+            }
+          });
+        }
       });
       ff.stderr.on('data', (d) => { err += d; });
       ff.on('error', (e) => {
@@ -3554,17 +3952,17 @@ async function traktSyncDown(uid) {
     return all;
   });
   const nWatchlist = importTraktWatchlist(uid, watchlist);
-  store.update('trakt', {}, (all) => { if (all[uid]) all[uid].syncedAt = Date.now(); return all; });
+  trakt.markSynced(uid);
   return { ok: true, watched: nWatched, playback: nPlayback, watchlist: nWatchlist,
     pushed: pushed.sent || 0, pendingPush: pushed.pending || 0,
     totalWatched: watched.length, totalWatchlist: watchlist.length };
 }
 // Auto-resync every 6h per linked user — one user per tick keeps the calls gentle.
 function traktSyncTick() {
-  const tokens = store.read('trakt', {});
+  const tokens = trakt.linkedTokens();
   for (const [uid, tok] of Object.entries(tokens)) {
     if (!tok || (tok.syncedAt && Date.now() - tok.syncedAt < 6 * 3600000)) continue;
-    store.update('trakt', {}, (all) => { if (all[uid]) all[uid].syncedAt = Date.now(); return all; }); // claim before the async work
+    trakt.markSynced(uid); // claim before the async work
     traktSyncDown(uid)
       .then((r) => { if (r.watched || r.playback || r.watchlist || r.pushed) console.log(`[trakt] sync: +${r.watched} watched, +${r.playback} in-progress, +${r.watchlist} watchlist, ${r.pushed} pushed`); })
       .catch((e) => console.error('[trakt sync]', e.message));
@@ -3621,8 +4019,8 @@ Object.assign(H, {
       });
     }
     // Never expose absolute paths — items are addressed by index, with tokenized URLs.
-    // STABLE tokens: identical URLs across requests for ~6h, so the browser's HTTP cache
-    // actually holds the covers instead of re-downloading them on every visit.
+    // STABLE tokens: identical URLs within a short cache bucket, while the signature still
+    // expires inside the normal 6h stream-token window.
     send(ctx.res, 200, {
       scannedAt: rec.scannedAt,
       items: rec.items.map((item) => localItemPayload(ctx, libId, item)),
@@ -3645,8 +4043,9 @@ Object.assign(H, {
   // library costs nothing until covers actually scroll into view.
   localThumb: async (ctx) => {
     if (!streamScopeOk(ctx, `thumb:${ctx.m[1]}:${ctx.m[2]}`)) return send(ctx.res, 401, { error: 'token not valid' });
-    const rec = store.read('libitems', {})[ctx.m[1]];
-    const item = rec && rec.items[parseInt(ctx.m[2], 10)];
+    const found = localItemFor(ctx, ctx.m[1], ctx.m[2]);
+    if (found.error) return send(ctx.res, found.status || 404, { error: found.error });
+    const item = found.item;
     if (!item || !item.file || !detectFfmpeg()) return send(ctx.res, 404, { error: 'no thumbnail' });
     const dir = path.join(DATA_DIR, 'thumbs');
     try { fs.mkdirSync(dir, { recursive: true }); } catch {}
@@ -3671,8 +4070,9 @@ Object.assign(H, {
   // stream-auth with the token bound to exactly one art file.
   localArt: async (ctx) => {
     if (!streamScopeOk(ctx, `art:${ctx.m[1]}:${ctx.m[2]}`)) return send(ctx.res, 401, { error: 'token not valid for this art' });
-    const rec = store.read('libitems', {})[ctx.m[1]];
-    const item = rec && rec.items[parseInt(ctx.m[2], 10)];
+    const found = localLibraryItemFor(ctx, ctx.m[1], ctx.m[2]);
+    if (found.error) return send(ctx.res, found.status || 404, { error: found.error });
+    const item = found.item;
     if (!item || !item.artFile) return send(ctx.res, 404, { error: 'no art' });
     let stat;
     try { stat = fs.statSync(item.artFile); } catch { return send(ctx.res, 404, { error: 'art missing on disk' }); }
@@ -3687,8 +4087,9 @@ Object.assign(H, {
   // scan record only — the client can only reference an index, never a path).
   localStream: async (ctx) => {
     if (!streamScopeOk(ctx, `local:${ctx.m[1]}:${ctx.m[2]}`)) return send(ctx.res, 401, { error: 'token not valid for this stream' });
-    const rec = store.read('libitems', {})[ctx.m[1]];
-    const item = rec && rec.items[parseInt(ctx.m[2], 10)];
+    const found = localItemFor(ctx, ctx.m[1], ctx.m[2]);
+    if (found.error) return send(ctx.res, found.status || 404, { error: found.error });
+    const item = found.item;
     if (!item || !item.file) return send(ctx.res, 404, { error: 'item not found' });
     let stat;
     try { stat = fs.statSync(item.file); } catch { return send(ctx.res, 404, { error: 'file missing on disk' }); }
@@ -3732,7 +4133,7 @@ Object.assign(H, {
       if (profile !== 'default' && b.watched === false && b.unwatch) deleteWatchKeyForProfile(all, ctx.user.id, profile, b.key);
       all[k] = {
         position: b.position || 0, duration: b.duration || 0, watched: !!b.watched,
-        meta: b.meta || {}, updatedAt: nextStamp(),
+        meta: sanitizeStoredMediaMeta(b.meta), updatedAt: nextStamp(),
       };
       return all;
     });
@@ -3806,7 +4207,7 @@ Object.assign(H, {
         if (!it || !it.key) continue;
         const k = prefix + it.key;
         if (b.watched === false) { deleteWatchKeyForProfile(all, ctx.user.id, profile, it.key); }
-        else { all[k] = { position: 0, duration: it.duration || 0, watched: true, meta: it.meta || {}, updatedAt: nextStamp() }; }
+        else { all[k] = { position: 0, duration: it.duration || 0, watched: true, meta: sanitizeStoredMediaMeta(it.meta), updatedAt: nextStamp() }; }
       }
       return all;
     });
@@ -3900,6 +4301,22 @@ Object.assign(H, {
     const iptvSourceChanged = ['iptvUrl', 'iptvMode', 'xtHost', 'xtUser', 'xtPass', 'epgUrl']
       .some((k) => b[k] !== undefined);
     const iptvAccessChanged = b.iptvUsers !== undefined;
+    let mergedIptvSource = null;
+    let clearLegacyIptvSource = false;
+    if (iptvSourceChanged || iptvAccessChanged) {
+      const cur = settings.get();
+      const currentSources = iptvSourcesFromSettings(cur);
+      const existing = currentSources[0] || legacyIptvSource(cur) || { id: IPTV_LEGACY_SOURCE_ID, name: 'Default Live TV' };
+      clearLegacyIptvSource = b.iptvUrl === null && b.xtHost === null && b.xtUser === null && b.xtPass === null;
+      if (!clearLegacyIptvSource) {
+        try {
+          mergedIptvSource = makeIptvSourceFromBody({ ...b, iptvUsers: b.iptvUsers !== undefined ? b.iptvUsers : (cur.iptvUsers || []) }, existing);
+          await assertIptvSourceAllowed(mergedIptvSource);
+        } catch (e) {
+          return send(ctx.res, e.status || 400, { error: e.message || 'Live TV source is invalid' });
+        }
+      }
+    }
     // Ops merge server-side so the UI never needs the decrypted secrets back:
     //   addProvider / removeProvider (index) · addIndexer / removeIndexer (index)
     // Wholesale replacement (providers:/indexers:) still works for tests/automation.
@@ -4009,28 +4426,18 @@ Object.assign(H, {
       }
       if (iptvSourceChanged || iptvAccessChanged) {
         const currentSources = iptvSourcesFromSettings(s);
-        const existing = currentSources[0] || legacyIptvSource(s) || { id: IPTV_LEGACY_SOURCE_ID, name: 'Default Live TV' };
-        const explicitClear = b.iptvUrl === null && b.xtHost === null && b.xtUser === null && b.xtPass === null;
-        if (explicitClear) {
+        if (clearLegacyIptvSource) {
           next.iptvSources = [];
           next.iptvUrl = null; next.xtHost = null; next.xtUser = null; next.xtPass = null; next.epgUrl = null; next.iptvUsers = [];
-        } else {
-          try {
-            const merged = makeIptvSourceFromBody({ ...b, iptvUsers: next.iptvUsers }, existing);
-            next.iptvSources = [merged, ...currentSources.filter((src) => src.id !== merged.id)];
-            next.iptvMode = merged.iptvMode;
-            next.iptvUrl = merged.iptvUrl;
-            next.xtHost = merged.xtHost;
-            next.xtUser = merged.xtUser;
-            next.xtPass = merged.xtPass;
-            next.epgUrl = merged.epgUrl;
-            next.iptvUsers = merged.users;
-          } catch {
-            if (!existing || ['iptvUrl', 'xtHost', 'xtUser', 'xtPass'].some((k) => b[k] === null)) {
-              next.iptvSources = [];
-              next.iptvUrl = null; next.xtHost = null; next.xtUser = null; next.xtPass = null; next.epgUrl = null; next.iptvUsers = [];
-            }
-          }
+        } else if (mergedIptvSource) {
+          next.iptvSources = [mergedIptvSource, ...currentSources.filter((src) => src.id !== mergedIptvSource.id)];
+          next.iptvMode = mergedIptvSource.iptvMode;
+          next.iptvUrl = mergedIptvSource.iptvUrl;
+          next.xtHost = mergedIptvSource.xtHost;
+          next.xtUser = mergedIptvSource.xtUser;
+          next.xtPass = mergedIptvSource.xtPass;
+          next.epgUrl = mergedIptvSource.epgUrl;
+          next.iptvUsers = mergedIptvSource.users;
         }
       }
       return next;
@@ -4121,6 +4528,7 @@ Object.assign(H, {
     if (!streamScopeOk(ctx, ctx.m[1])) return send(ctx.res, 401, { error: 'token not valid for this stream' });
     const vf = mounts.get(ctx.m[1]);
     if (!vf) return send(ctx.res, 404, { error: 'mount not found' });
+    if (!mountAccessOk(ctx, vf)) return send(ctx.res, 404, { error: 'mount not found' });
     if (!vf.streamable) return send(ctx.res, 409, { error: 'mount is not streamable', tags: vf.tags });
     vf._touched = Date.now();
     const total = vf.size;
@@ -4158,6 +4566,7 @@ Object.assign(H, {
     if (!streamScopeOk(ctx, ctx.m[1])) return send(ctx.res, 401, { error: 'token not valid for this stream' });
     const vf = mounts.get(ctx.m[1]);
     if (!vf) return send(ctx.res, 404, { error: 'mount not found' });
+    if (!mountAccessOk(ctx, vf)) return send(ctx.res, 404, { error: 'mount not found' });
     if (!vf.streamable) return send(ctx.res, 409, { error: 'mount is not streamable', tags: vf.tags });
     if (!detectFfmpeg()) return send(ctx.res, 503, { error: 'ffmpeg not available on this server' });
     vf._touched = Date.now();
@@ -4193,6 +4602,7 @@ Object.assign(H, {
     if (!streamScopeOk(ctx, ctx.m[1])) return send(ctx.res, 401, { error: 'token not valid for this stream' });
     const vf = mounts.get(ctx.m[1]);
     if (!vf) return send(ctx.res, 404, { error: 'mount not found' });
+    if (!mountAccessOk(ctx, vf)) return send(ctx.res, 404, { error: 'mount not found' });
     if (!vf.streamable) return send(ctx.res, 409, { error: 'mount is not streamable', tags: vf.tags });
     if (!detectEncoder()) return send(ctx.res, 503, { error: 'no H.264 encoder available on this server' });
     vf._touched = Date.now();
@@ -4216,6 +4626,7 @@ Object.assign(H, {
   tracks: async (ctx) => {
     const vf = mounts.get(ctx.m[1]);
     if (!vf) return send(ctx.res, 404, { error: 'mount not found' });
+    if (!mountAccessOk(ctx, vf)) return send(ctx.res, 404, { error: 'mount not found' });
     if (!vf.streamable) return send(ctx.res, 409, { error: 'mount is not streamable', tags: vf.tags });
     vf._touched = Date.now();
     if (!detectFfprobe()) return send(ctx.res, 200, { available: false, audio: [], subs: [], duration: null });
@@ -4236,6 +4647,7 @@ Object.assign(H, {
     if (!streamScopeOk(ctx, ctx.m[1])) return send(ctx.res, 401, { error: 'token not valid for this stream' });
     const vf = mounts.get(ctx.m[1]);
     if (!vf) return send(ctx.res, 404, { error: 'mount not found' });
+    if (!mountAccessOk(ctx, vf)) return send(ctx.res, 404, { error: 'mount not found' });
     const key = settings.get().openSubsKey; // storage key kept across the Wyzie switch
     if (!key) return send(ctx.res, 503, { error: 'Wyzie Subs is not configured (Settings -> Catalog)' });
     vf._touched = Date.now();
@@ -4339,6 +4751,7 @@ Object.assign(H, {
     if (!streamScopeOk(ctx, ctx.m[1])) return send(ctx.res, 401, { error: 'token not valid for this stream' });
     const vf = mounts.get(ctx.m[1]);
     if (!vf) return send(ctx.res, 404, { error: 'mount not found' });
+    if (!mountAccessOk(ctx, vf)) return send(ctx.res, 404, { error: 'mount not found' });
     if (!vf.streamable) return send(ctx.res, 409, { error: 'mount is not streamable' });
     if (!detectFfmpeg()) return send(ctx.res, 503, { error: 'ffmpeg not available' });
     vf._touched = Date.now();
@@ -4352,21 +4765,28 @@ Object.assign(H, {
   },
 
   // ---- Music (YouTube Music via yt-dlp) ----
+  musicHome: async (ctx) => {
+    if (!ytmusic.detectYtdlp()) return send(ctx.res, 503, { error: 'yt-dlp is not installed on the server' });
+    const chartShelves = await loadMusicChartResponses(ctx.user.id, { wait: false });
+    const chartHomeShelves = chartShelves.map((s) => ({
+      ...s,
+      id: s.id === 'daily' ? 'trending-now' : 'top-songs-week',
+      title: s.id === 'daily' ? 'Trending now' : 'Top songs this week',
+    }));
+    const shelves = [
+      ...musicHomeFeedShelves(),
+      ...chartHomeShelves,
+    ];
+    send(ctx.res, 200, {
+      version: 1,
+      generatedAt: new Date().toISOString(),
+      order: shelves.map((s) => s.id),
+      shelves,
+    });
+  },
   musicCharts: async (ctx) => {
     if (!ytmusic.detectYtdlp()) return send(ctx.res, 503, { error: 'yt-dlp is not installed on the server' });
-    const charts = (await Promise.all(MUSIC_CHARTS.map(async (def) => {
-      try {
-        const results = await loadMusicChart(def);
-        return {
-          id: def.id,
-          title: def.title,
-          note: def.note,
-          results: results.map((r) => ({ ...r, streamUrl: `/api/music/stream/${r.id}?t=${auth.streamToken(ctx.user.id, `music:${r.id}`)}` })),
-        };
-      } catch (e) {
-        return { id: def.id, title: def.title, note: def.note, results: [], error: String(e.message).slice(0, 120) };
-      }
-    }))).filter((c) => c.results.length);
+    const charts = await loadMusicChartResponses(ctx.user.id);
     send(ctx.res, 200, { charts });
   },
   musicSearch: async (ctx) => {
@@ -4375,10 +4795,15 @@ Object.assign(H, {
     const limit = Math.max(1, Math.min(24, parseInt(ctx.url.searchParams.get('limit') || '24', 10) || 24));
     if (!q.trim()) return send(ctx.res, 200, { results: [] });
     try {
-      const results = await ytmusic.search(q, { limit, cookiesPath: cookiesFor(ctx.user.id) });
+      const cookies = cookiesFor(ctx.user.id);
+      const results = await loadMusicSearch(q, {
+        limit,
+        cookiesPath: cookies,
+        scope: cookies ? `user:${ctx.user.id}` : 'public',
+      });
       // Mint a per-track stream token so the client can build playable URLs without a round-trip.
       send(ctx.res, 200, {
-        results: results.map((r) => ({ ...r, streamUrl: `/api/music/stream/${r.id}?t=${auth.streamToken(ctx.user.id, `music:${r.id}`)}` })),
+        results: results.map((r) => tokenizedMusicTrack(ctx.user.id, r)),
       });
     } catch (e) { send(ctx.res, 502, { error: 'music search failed', detail: String(e.message).slice(0, 160) }); }
   },
@@ -4419,8 +4844,17 @@ Object.assign(H, {
 
   // Link state only — the cookie text NEVER returns to a client.
   musicStatus: async (ctx) => {
-    const linked = !!((settings.get().ytCookies || {})[ctx.user.id]) || !!cookiesFor(null);
-    send(ctx.res, 200, { ytdlp: !!ytmusic.detectYtdlp(), linked });
+    const s = settings.get();
+    const accountLinked = !!((s.ytCookies || {})[ctx.user.id]);
+    const serverLinked = !accountLinked && !!cookiesFor(null);
+    const issue = (s.ytCookieIssues || {})[ctx.user.id] || null;
+    send(ctx.res, 200, {
+      ytdlp: !!ytmusic.detectYtdlp(),
+      linked: accountLinked || serverLinked,
+      linkSource: accountLinked ? 'account' : (serverLinked ? 'server' : 'none'),
+      needsRelink: !!(accountLinked && issue),
+      linkIssue: accountLinked && issue ? { at: issue.at || 0, message: String(issue.message || '').slice(0, 160) } : null,
+    });
   },
 
   // Paste an exported cookies.txt (Netscape format, from music.youtube.com while signed in).
@@ -4431,14 +4865,18 @@ Object.assign(H, {
     if (!/(^|\n)\S*\.?youtube\.com\t/i.test(text) && !/youtube\.com/i.test(text.split('\n').find((l) => !l.startsWith('#')) || '')) {
       return send(ctx.res, 400, { error: 'that does not look like a cookies.txt with youtube.com cookies — export it from music.youtube.com while signed in' });
     }
-    settings.update((s) => ({ ...s, ytCookies: { ...(s.ytCookies || {}), [ctx.user.id]: text } }));
+    settings.update((s) => {
+      const issues = { ...(s.ytCookieIssues || {}) }; delete issues[ctx.user.id];
+      return { ...s, ytCookies: { ...(s.ytCookies || {}), [ctx.user.id]: text }, ytCookieIssues: issues };
+    });
     dropCookieFile(ctx.user.id); // re-materialize with the fresh text on next use
     send(ctx.res, 200, { linked: true });
   },
   musicUnlink: async (ctx) => {
     settings.update((s) => {
       const all = { ...(s.ytCookies || {}) }; delete all[ctx.user.id];
-      return { ...s, ytCookies: all };
+      const issues = { ...(s.ytCookieIssues || {}) }; delete issues[ctx.user.id];
+      return { ...s, ytCookies: all, ytCookieIssues: issues };
     });
     dropCookieFile(ctx.user.id);
     send(ctx.res, 200, { linked: false });
@@ -4451,8 +4889,20 @@ Object.assign(H, {
     if (!cookies) return send(ctx.res, 200, { linked: false, playlists: [] });
     try {
       const playlists = await ytmusic.listPlaylists({ cookiesPath: cookies });
+      settings.update((s) => {
+        const issues = { ...(s.ytCookieIssues || {}) };
+        if (!issues[ctx.user.id]) return s;
+        delete issues[ctx.user.id];
+        return { ...s, ytCookieIssues: issues };
+      });
       send(ctx.res, 200, { linked: true, playlists });
     } catch (e) {
+      if ((settings.get().ytCookies || {})[ctx.user.id]) {
+        settings.update((s) => ({
+          ...s,
+          ytCookieIssues: { ...(s.ytCookieIssues || {}), [ctx.user.id]: { at: Date.now(), message: String(e.message || e).slice(0, 160) } },
+        }));
+      }
       send(ctx.res, 502, { error: 'could not load your playlists — the link may have expired (re-export cookies in Preferences)', detail: String(e.message).slice(0, 160) });
     }
   },
@@ -4470,7 +4920,7 @@ Object.assign(H, {
         limit,
         hasMore,
         nextOffset: hasMore ? offset + tracks.length : null,
-        results: tracks.map((t) => ({ ...t, streamUrl: `/api/music/stream/${t.id}?t=${auth.streamToken(ctx.user.id, `music:${t.id}`)}` })),
+        results: tracks.map((t) => tokenizedMusicTrack(ctx.user.id, t)),
       });
     } catch (e) { send(ctx.res, 502, { error: 'playlist failed to load', detail: String(e.message).slice(0, 160) }); }
   },
@@ -4618,6 +5068,7 @@ const ROUTES = [
   { m: 'POST', re: /^\/api\/trakt\/unlink$/, auth: 'user', h: H.traktUnlink },
   { m: 'POST', re: /^\/api\/trakt\/pull$/, auth: 'user', h: H.traktPull },
   { m: 'POST', re: /^\/api\/trakt\/sync$/, auth: 'user', h: H.traktSync },
+  { m: 'GET', re: /^\/api\/music\/home$/, auth: 'user', h: H.musicHome },
   { m: 'GET', re: /^\/api\/music\/charts$/, auth: 'user', h: H.musicCharts },
   { m: 'GET', re: /^\/api\/music\/search$/, auth: 'user', h: H.musicSearch },
   { m: 'GET', re: /^\/api\/music\/stream\/([\w-]{11})$/, auth: 'stream', h: H.musicStream },
@@ -4670,7 +5121,8 @@ const server = http.createServer(async (req, res) => {
         if (!claims) return reject(401, { error: 'authentication required' });
         ctx.claims = claims;
         ctx.user = auth.getUser(claims.uid);
-        if (!ctx.user && route.auth !== 'stream') return reject(401, { error: 'unknown user' });
+        if (!ctx.user) return reject(401, { error: 'unknown user' });
+        if (!auth.claimsValidForUser(claims, ctx.user)) return reject(401, { error: 'session expired' });
         if (route.auth === 'admin' && ctx.user.role !== 'admin') return reject(403, { error: 'admin only' });
       }
       return await route.h(ctx);

@@ -26,6 +26,15 @@ test('nntp: startup work outranks queued read-ahead when a provider is saturated
   assert.deepStrictEqual(order, ['startup', 'readAhead']);
 });
 
+test('nntp: generic run falls through to the next provider', async () => {
+  const pool = new NntpPool([{}, {}], 1);
+  pool.providers = [
+    { busy: new Set(), queue: [], size: 1, down: () => true, run: async () => { throw new Error('primary down'); }, close() {} },
+    { busy: new Set(), queue: [], size: 1, down: () => false, run: async () => 'ok', close() {} },
+  ];
+  assert.strictEqual(await pool.run(async () => 'unused', 'startup'), 'ok');
+});
+
 function makeRelease(name, size, partSize) {
   // Deterministic pseudo-random payload (seeded) so failures are reproducible.
   const data = Buffer.allocUnsafe(size);
@@ -92,6 +101,12 @@ test('yEnc CRC catches corruption', () => {
   enc[idx] = enc[idx] === 0x41 ? 0x42 : 0x41;
   const dec = decode(enc);
   assert.strictEqual(dec.crcOk, false);
+});
+
+test('yEnc decoder ignores a dangling escape byte instead of reading past the line', () => {
+  const body = Buffer.from('=ybegin line=128 size=1 name=x\r\n=\r\n=yend size=0 pcrc32=00000000\r\n', 'latin1');
+  const dec = decode(body);
+  assert.strictEqual(dec.data.length, 0);
 });
 
 // ---------- unit: NZB ----------

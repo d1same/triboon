@@ -10,6 +10,33 @@
 // So the browser plays /api/music/stream/<id>?t=… and we Range-proxy the bytes.
 
 const { spawn, spawnSync } = require('child_process');
+const YTDLP_CONCURRENCY = Math.max(1, Math.min(4, parseInt(process.env.TRIBOON_YTDLP_CONCURRENCY || '2', 10) || 2));
+let ytdlpActive = 0;
+const ytdlpQueue = [];
+let ytdlpSeq = 0;
+
+function pumpYtdlpQueue() {
+  while (ytdlpActive < YTDLP_CONCURRENCY && ytdlpQueue.length) {
+    const job = ytdlpQueue.shift();
+    ytdlpActive++;
+    Promise.resolve()
+      .then(job.fn)
+      .then(job.resolve, job.reject)
+      .finally(() => {
+        ytdlpActive--;
+        pumpYtdlpQueue();
+      });
+  }
+}
+function withYtdlpSlot(fn, { priority = 0 } = {}) {
+  return new Promise((resolve, reject) => {
+    const job = { fn, resolve, reject, priority: Number(priority) || 0, seq: ++ytdlpSeq };
+    const idx = ytdlpQueue.findIndex((j) => job.priority > j.priority);
+    if (idx >= 0) ytdlpQueue.splice(idx, 0, job);
+    else ytdlpQueue.push(job);
+    pumpYtdlpQueue();
+  });
+}
 
 // Detection mirrors detectFfmpeg: env override → a `yt-dlp` binary on PATH → the pip module
 // (`python -m yt_dlp`), so it works whether yt-dlp is a standalone exe or a pip install.
@@ -42,21 +69,35 @@ function ytArgs(extra, cookiesPath, { noPlaylist = true } = {}) {
   return { bin: cmd[0], argv: [...cmd.slice(1), ...base, ...extra] };
 }
 
+function friendlyYtdlpError(stderr, fallback) {
+  const msg = String(stderr || '');
+  const line = msg.split('\n').find((l) => /error|warning|429|403|forbidden|sign in|bot|captcha|rate/i.test(l)) || fallback || 'yt-dlp failed';
+  if (/429|too many requests|rate.?limit/i.test(msg)) return new Error('yt-dlp provider rate-limited this request');
+  if (/sign in to confirm|confirm you.?re not a bot|bot|captcha/i.test(msg)) return new Error('yt-dlp provider bot-protection blocked this request');
+  if (/403|forbidden/i.test(msg)) return new Error('yt-dlp provider rejected this request');
+  return new Error(String(line || fallback || 'yt-dlp failed').trim());
+}
+
 // Run yt-dlp and collect stdout JSON (single object or NDJSON), with a hard timeout.
-function runJson(extra, { timeoutMs = 25000, cookiesPath } = {}) {
+function runJson(extra, { timeoutMs = 25000, cookiesPath, priority = 0 } = {}) {
+  return withYtdlpSlot(() => runJsonNow(extra, { timeoutMs, cookiesPath }), { priority });
+}
+function runJsonNow(extra, { timeoutMs = 25000, cookiesPath } = {}) {
   return new Promise((resolve, reject) => {
     const yt = detectYtdlp();
     if (!yt) return reject(new Error('yt-dlp not installed on the server'));
     const { bin, argv } = ytArgs(extra, cookiesPath, { noPlaylist: optsNoPlaylist(extra) });
     const p = spawn(bin, argv, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     let out = '', err = '';
-    const killer = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} reject(new Error('yt-dlp timed out')); }, timeoutMs);
+    let timedOut = false;
+    const killer = setTimeout(() => { timedOut = true; try { p.kill('SIGKILL'); } catch {} }, timeoutMs);
     p.stdout.on('data', (d) => { if (out.length < 16e6) out += d; });
     p.stderr.on('data', (d) => { err += d; });
-    p.on('error', (e) => { clearTimeout(killer); reject(e); });
+    p.on('error', (e) => { clearTimeout(killer); reject(timedOut ? new Error('yt-dlp timed out') : e); });
     p.on('close', (code) => {
       clearTimeout(killer);
-      if (code !== 0 && !out) return reject(new Error(err.split('\n').find((l) => /error/i.test(l)) || `yt-dlp exit ${code}`));
+      if (timedOut) return reject(new Error('yt-dlp timed out'));
+      if (code !== 0 && !out) return reject(friendlyYtdlpError(err, `yt-dlp exit ${code}`));
       resolve(out);
     });
   });
@@ -92,11 +133,11 @@ function parseJsonObject(out, message) {
 
 // A flat YouTube Music search (one fast call). Do not use generic `ytsearch`: Triboon Music
 // must only discover tracks through music.youtube.com, not the whole of YouTube.
-async function search(query, { limit = 20, cookiesPath } = {}) {
+async function search(query, { limit = 20, cookiesPath, priority = 0 } = {}) {
   const q = String(query || '').trim().slice(0, 200);
   if (!q) return [];
   const n = Math.max(1, Math.min(40, limit));
-  const out = await runJson(['--flat-playlist', '--playlist-items', `1:${n}`, '--dump-single-json', searchUrl(q)], { cookiesPath });
+  const out = await runJson(['--flat-playlist', '--playlist-items', `1:${n}`, '--dump-single-json', searchUrl(q)], { cookiesPath, priority });
   let data; try { data = JSON.parse(out); } catch { return []; }
   return (data.entries || [])
     .filter((e) => e && e.id && e.id.length === 11 && /^https:\/\/music\.youtube\.com\/watch\?v=/.test(String(e.url || '')))
@@ -112,13 +153,22 @@ async function search(query, { limit = 20, cookiesPath } = {}) {
 // preferred for the broadest <audio> support, opus/webm as the fallback.
 const _streamCache = new Map(); // id -> { url, at, expiresAt, title, artist, thumb, duration }
 const STREAM_TTL_MS = 3 * 3600 * 1000;
+function setStreamCache(id, rec) {
+  while (_streamCache.size >= 200) {
+    const oldest = _streamCache.keys().next().value;
+    if (oldest === undefined) break;
+    _streamCache.delete(oldest);
+  }
+  _streamCache.set(id, rec);
+}
 async function resolveStream(id, { cookiesPath, force = false } = {}) {
   if (!/^[\w-]{11}$/.test(String(id || ''))) throw new Error('bad track id');
   const hit = _streamCache.get(id);
   if (!force && hit && Date.now() < hit.expiresAt) return hit;
   // -J gives the picked format URL + metadata in one shot (title/artist/duration for the bar).
   const load = async (cookieFile) => {
-    const out = await runJson(['-f', 'bestaudio[ext=m4a]/bestaudio/best', '-J', `https://music.youtube.com/watch?v=${id}`], { cookiesPath: cookieFile, timeoutMs: 30000 });
+    const out = await runJson(['-f', 'bestaudio[ext=m4a]/bestaudio/best', '-J', `https://music.youtube.com/watch?v=${id}`],
+      { cookiesPath: cookieFile, timeoutMs: 30000, priority: 10 });
     try { return JSON.parse(out); } catch { throw new Error('yt-dlp returned no JSON'); }
   };
   let j = await load(cookiesPath);
@@ -137,8 +187,7 @@ async function resolveStream(id, { cookiesPath, force = false } = {}) {
     title: cleanTitle(j.title) || j.title || 'Unknown', artist: j.artist || j.uploader || j.channel || '',
     duration: num(j.duration), thumb: thumbFor(id),
   };
-  if (_streamCache.size > 200) _streamCache.clear(); // bounded; entries are cheap to rebuild
-  _streamCache.set(id, rec);
+  setStreamCache(id, rec);
   return rec;
 }
 function _peekCached(id) { return _streamCache.get(id) || null; }
@@ -194,4 +243,6 @@ function parsePlaylistTracks(out) {
   };
 }
 
-module.exports = { detectYtdlp, search, resolveStream, listPlaylists, playlistTracks, thumbFor, cleanTitle, _resetDetection, _peekCached, _ytArgs: ytArgs, _optsNoPlaylist: optsNoPlaylist, _searchUrl: searchUrl, _playlistItemsRange: playlistItemsRange, _parseListPlaylists: parseListPlaylists, _parsePlaylistTracks: parsePlaylistTracks };
+function _queueStats() { return { active: ytdlpActive, queued: ytdlpQueue.length, concurrency: YTDLP_CONCURRENCY }; }
+
+module.exports = { detectYtdlp, search, resolveStream, listPlaylists, playlistTracks, thumbFor, cleanTitle, _resetDetection, _peekCached, _queueStats, _withYtdlpSlot: withYtdlpSlot, _friendlyYtdlpError: friendlyYtdlpError, _ytArgs: ytArgs, _optsNoPlaylist: optsNoPlaylist, _searchUrl: searchUrl, _playlistItemsRange: playlistItemsRange, _parseListPlaylists: parseListPlaylists, _parsePlaylistTracks: parsePlaylistTracks };

@@ -10,7 +10,7 @@ const http = require('http');
 const crypto = require('crypto');
 const { encodePart } = require('../server/yenc');
 const { seededPayload, writeRar4Store, writeRar5Store, writeZipStore } = require('./archive-fixtures');
-const { parseRarVolumes } = require('../server/rar');
+const { parseRarVolumes, RAR5_SIG } = require('../server/rar');
 const { parseZip } = require('../server/zip');
 const { detectContainer, orderVolumes, mountNzb } = require('../server/archive');
 const { parseNzb, nzbPassword } = require('../server/nzb');
@@ -31,6 +31,16 @@ async function reassemble(parsedFile, volBufs) {
 }
 
 const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
+function vint(n) {
+  const out = [];
+  do {
+    let b = n & 0x7f;
+    n = Math.floor(n / 128);
+    if (n) b |= 0x80;
+    out.push(b);
+  } while (n);
+  return Buffer.from(out);
+}
 
 // Build an NZB + mock articles from archive volumes (one usenet "file" per volume), with
 // par2/nfo junk thrown in to prove the volume-set collector ignores them.
@@ -158,6 +168,17 @@ test('zip: store zip parses, picks across multiple inner files, reassembles byte
   assert.strictEqual(mkv.size, PAYLOAD.length);
   assert.strictEqual(mkv.method, 'store');
   assert.strictEqual(sha(await reassemble(mkv, [buf])), sha(PAYLOAD));
+});
+
+test('archive parsers reject impossible metadata sizes before oversized reads', async () => {
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt32LE(129 * 1024 * 1024, 12);
+  eocd.writeUInt32LE(0, 16);
+  await assert.rejects(() => parseZip(memVol(eocd, 'evil.zip')), /central-directory too large/);
+
+  const hugeHeader = Buffer.concat([RAR5_SIG, Buffer.alloc(4), vint(16 * 1024 * 1024 + 1)]);
+  await assert.rejects(() => parseRarVolumes([memVol(hugeHeader, 'evil.rar')]), /impossible header size/);
 });
 
 test('detect: container signatures', () => {

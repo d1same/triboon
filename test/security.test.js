@@ -143,7 +143,7 @@ test('security: deny-by-default — every route declares auth; unknown routes 40
     ['POST', '/api/settings'], ['POST', '/api/streaming/recommend'], ['POST', '/api/invites'], ['GET', '/api/invites'],
     ['GET', '/api/users'], ['GET', '/api/stream/abc'], ['GET', '/api/remux/abc'],
     ['GET', '/api/iptv/status'], ['POST', '/api/iptv/refresh'], ['GET', '/api/iptv/sources'], ['POST', '/api/iptv/sources'], ['PATCH', '/api/iptv/sources/abc'], ['DELETE', '/api/iptv/sources/abc'],
-    ['POST', '/api/quickconnect/123456/approve'], ['GET', '/api/music/charts'], ['GET', '/api/music/search?q=x'],
+    ['POST', '/api/quickconnect/123456/approve'], ['GET', '/api/music/home'], ['GET', '/api/music/charts'], ['GET', '/api/music/search?q=x'],
   ];
   for (const [m, p] of probes) {
     assert.strictEqual((await httpJson(srv.port, m, p)).status, 401, `anon ${m} ${p}`);
@@ -341,6 +341,22 @@ test('watch state: per-user, per-profile, ordered by recency', async () => {
   assert.strictEqual(other.json.length, 0);
 });
 
+test('watch state: tokenized local artwork is not persisted into Continue Watching', async () => {
+  await httpJson(srv.port, 'POST', '/api/watch', {
+    key: 'local:lib1:7', position: 120, duration: 7200,
+    meta: {
+      title: 'Local Movie',
+      poster: '/api/local/lib1/art/7?t=expired-token',
+      backdrop: 'http://triboon.local/api/local/lib1/thumb/7?t=expired-token',
+    },
+  }, admin);
+  const list = await httpJson(srv.port, 'GET', '/api/watch', null, admin);
+  const row = list.json.find((w) => w.key === 'local:lib1:7');
+  assert.ok(row);
+  assert.strictEqual(row.meta.poster, undefined);
+  assert.strictEqual(row.meta.backdrop, undefined);
+});
+
 test('watch next: finished episodes keep the next aired episode in Continue Watching', async () => {
   await httpJson(srv.port, 'POST', '/api/watch', {
     key: 'tmdb:tv:424242:s1e1', watched: true, position: 0, duration: 1800,
@@ -391,6 +407,9 @@ test('e2e: HTTP play pipeline — search, play, stream with token, advance 404 w
   assert.strictEqual((await httpRaw(srv.port, bare)).status, 401);
   const viaSession = await httpRaw(srv.port, bare, { token: admin, range: 'bytes=0-99' });
   assert.strictEqual(viaSession.status, 206, 'session bearer token also valid for streams (browser case)');
+  const otherUser = await httpJson(srv.port, 'POST', '/api/login', { name: 'fam', password: 'fam-pass' });
+  assert.strictEqual((await httpRaw(srv.port, bare, { token: otherUser.json.token, range: 'bytes=0-99' })).status, 404,
+    'another user session cannot read or probe this mount by guessing the mount id');
 
   // Advance: only one candidate → exhausted.
   const adv = await httpJson(srv.port, 'POST', `/api/advance/${play.json.sessionId}`, {}, admin);
@@ -906,13 +925,21 @@ test('iptv: Xtream API channels + short-EPG now/next + per-user favorites; creds
 let sharedUser = null; // second account used by the access-control tests below
 
 test('libraries: user allowlist — restricted libraries are invisible to excluded users', async () => {
+  const os = require('os');
+  const hiddenRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-hidden-lib-'));
+  const hiddenMovieDir = path.join(hiddenRoot, 'Hidden Film (2026)');
+  fs.mkdirSync(hiddenMovieDir, { recursive: true });
+  fs.writeFileSync(path.join(hiddenMovieDir, 'hidden.mp4'), 'HIDDEN-BYTES');
+  const JPEG = Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0, 16, 74, 70, 73, 70]);
+  fs.writeFileSync(path.join(hiddenMovieDir, 'poster.jpg'), JPEG);
   const inv = await httpJson(srv.port, 'POST', '/api/invites', { policy: { maxResolutionRank: 3 } }, admin);
   const acc = await httpJson(srv.port, 'POST', '/api/invite/accept', { token: inv.json.token, name: 'libuser', password: 'pw1234' });
   assert.strictEqual(acc.status, 200);
   sharedUser = { token: acc.json.token, id: acc.json.user.id };
 
-  const hidden = await httpJson(srv.port, 'POST', '/api/libraries', { name: 'HiddenLib', kind: 'other', users: ['someoneelse'] }, admin);
+  const hidden = await httpJson(srv.port, 'POST', '/api/libraries', { name: 'HiddenLib', kind: 'other', path: hiddenRoot, users: ['someoneelse'] }, admin);
   const shared = await httpJson(srv.port, 'POST', '/api/libraries', { name: 'SharedLib', kind: 'other', users: [sharedUser.id] }, admin);
+  assert.strictEqual((await runScan(hidden.json.id)).status, 200);
 
   const seen = (await httpJson(srv.port, 'GET', '/api/libraries', null, sharedUser.token)).json.map((l) => l.name);
   assert.ok(!seen.includes('HiddenLib'), 'excluded user cannot see the restricted library');
@@ -922,6 +949,15 @@ test('libraries: user allowlist — restricted libraries are invisible to exclud
   // Items endpoint is gated too (it mints the local stream/art tokens).
   assert.strictEqual((await httpJson(srv.port, 'GET', `/api/libraries/${hidden.json.id}/items`, null, sharedUser.token)).status, 404);
   assert.strictEqual((await httpJson(srv.port, 'GET', `/api/libraries/${shared.json.id}/items`, null, sharedUser.token)).status, 200);
+  const hiddenItems = (await httpJson(srv.port, 'GET', `/api/libraries/${hidden.json.id}/items`, null, admin)).json.items;
+  const hiddenMovie = hiddenItems.find((i) => i.kind === 'movie');
+  assert.ok(hiddenMovie && hiddenMovie.streamUrl && hiddenMovie.artUrl, 'admin can mint local stream/art URLs for the restricted library');
+  assert.strictEqual((await httpRaw(srv.port, hiddenMovie.streamUrl, { token: sharedUser.token })).status, 404,
+    'excluded user cannot IDOR the local stream route with a session token');
+  assert.strictEqual((await httpRaw(srv.port, hiddenMovie.artUrl, { token: sharedUser.token })).status, 404,
+    'excluded user cannot IDOR the local art route with a session token');
+  assert.strictEqual((await httpJson(srv.port, 'POST', hiddenMovie.playUrl, { caps: {} }, sharedUser.token)).status, 404,
+    'excluded user cannot prepare a restricted local file as a player mount');
 
   await httpJson(srv.port, 'DELETE', `/api/libraries/${hidden.json.id}`, null, admin);
   await httpJson(srv.port, 'DELETE', `/api/libraries/${shared.json.id}`, null, admin);
@@ -1477,7 +1513,7 @@ http://upstream.example/news2.m3u8
 `;
   const xmltv = `<?xml version="1.0"?><tv>
 <channel id="news2.x"><display-name>News Two</display-name></channel>
-<programme start="${stamp(t0)}" stop="${stamp(t1)}" channel="news1.x"><title>Morning Desk</title></programme>
+<programme channel="news1.x" stop="${stamp(t1)}" start="${stamp(t0)}"><title>Morning Desk</title></programme>
 <programme start="${stamp(t1)}" stop="${stamp(t2)}" channel="news1.x"><title>Midday Report</title></programme>
 <programme start="${stamp(t0)}" stop="${stamp(t1)}" channel="news2.x"><title>Second Channel Show</title></programme>
 </tv>`;
@@ -1667,6 +1703,29 @@ test('stream tokens are bound to one resource: a leaked URL cannot stream anythi
   assert.strictEqual((await httpRaw(srv.port, base1, { token: admin })).status, 200);
 });
 
+test('stream tokens: stable cache tokens stay under the 6h validity window', () => {
+  const uid = srv.auth.verifyToken(admin, 'session').uid;
+  const realNow = Date.now;
+  const base = Date.UTC(2026, 0, 1, 3, 10, 0);
+  try {
+    Date.now = () => base;
+    const first = srv.auth.stableStreamToken(uid, 'art:library:7');
+    Date.now = () => base + 30 * 60 * 1000;
+    const sameBucket = srv.auth.stableStreamToken(uid, 'art:library:7');
+    assert.strictEqual(sameBucket, first, 'same URL inside the one-hour cache bucket');
+
+    const claims = JSON.parse(Buffer.from(first.split('.')[0], 'base64url').toString('utf8'));
+    assert.ok(claims.exp > base, 'token is usable after minting');
+    assert.ok(claims.exp <= base + 6 * 3600 * 1000, 'stable token never exceeds the 6h stream-token TTL');
+
+    Date.now = () => base + 61 * 60 * 1000;
+    const nextBucket = srv.auth.stableStreamToken(uid, 'art:library:7');
+    assert.notStrictEqual(nextBucket, first, 'cache URL rotates after the stable bucket');
+  } finally {
+    Date.now = realNow;
+  }
+});
+
 test('music: yt-dlp keeps search flat but allows playlist/library enumeration', () => {
   const ytmusic = require('../server/ytmusic');
   assert.ok(ytmusic._searchUrl('daft punk').startsWith('https://music.youtube.com/search?'), 'search stays on YouTube Music');
@@ -1689,6 +1748,9 @@ test('music: playlist parsers turn null yt-dlp JSON into useful link errors', ()
   const ytmusic = require('../server/ytmusic');
   assert.throws(() => ytmusic._parseListPlaylists('null'), /re-export cookies/i);
   assert.throws(() => ytmusic._parsePlaylistTracks('null'), /re-export cookies/i);
+  assert.match(ytmusic._friendlyYtdlpError('ERROR: HTTP Error 429: Too Many Requests').message, /rate-limited/i);
+  assert.match(ytmusic._friendlyYtdlpError('ERROR: Sign in to confirm you are not a bot').message, /bot-protection/i);
+  assert.match(ytmusic._friendlyYtdlpError('ERROR: HTTP Error 403: Forbidden').message, /rejected/i);
   assert.deepStrictEqual(ytmusic._parseListPlaylists('{"entries":null}'), []);
   assert.deepStrictEqual(ytmusic._parseListPlaylists(JSON.stringify({ entries: [
     { id: 'WL', title: 'Watch later' },
@@ -1699,6 +1761,38 @@ test('music: playlist parsers turn null yt-dlp JSON into useful link errors', ()
     title: 'Mine',
     tracks: [],
   });
+});
+
+test('music: yt-dlp work is globally queued so home/search reloads cannot fan out unbounded processes', async () => {
+  const ytmusic = require('../server/ytmusic');
+  const seen = [];
+  const jobs = Array.from({ length: ytmusic._queueStats().concurrency + 4 }, (_, i) => ytmusic._withYtdlpSlot(async () => {
+    seen.push(ytmusic._queueStats().active);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return i;
+  }));
+  await Promise.all(jobs);
+  assert.ok(seen.length >= 4, 'test should exercise queued work');
+  assert.ok(Math.max(...seen) <= ytmusic._queueStats().concurrency, 'active yt-dlp jobs stay capped');
+  assert.strictEqual(ytmusic._queueStats().active, 0, 'queue releases every slot after work completes');
+
+  const releases = [];
+  let started = 0;
+  let startedResolve;
+  const startedAll = new Promise((resolve) => { startedResolve = resolve; });
+  const blockers = Array.from({ length: ytmusic._queueStats().concurrency }, () => ytmusic._withYtdlpSlot(() => new Promise((resolve) => {
+    releases.push(resolve);
+    started++;
+    if (started >= ytmusic._queueStats().concurrency) startedResolve();
+  })));
+  await startedAll;
+  const order = [];
+  const lowA = ytmusic._withYtdlpSlot(async () => { order.push('low-a'); });
+  const lowB = ytmusic._withYtdlpSlot(async () => { order.push('low-b'); });
+  const high = ytmusic._withYtdlpSlot(async () => { order.push('high-play'); }, { priority: 10 });
+  releases.forEach((release) => release());
+  await Promise.all([...blockers, lowA, lowB, high]);
+  assert.strictEqual(order[0], 'high-play', 'active playback resolve should start before queued background searches');
 });
 
 test('music: auth + token scope binding; honest 503 when yt-dlp is absent', async () => {
@@ -1736,11 +1830,31 @@ test('music: auth + token scope binding; honest 503 when yt-dlp is absent', asyn
   assert.strictEqual((await httpJson(srv.port, 'POST', '/api/music/link', { cookies: fakeCookies }, admin)).status, 200);
   const st2 = await httpJson(srv.port, 'GET', '/api/music/status', null, admin);
   assert.strictEqual(st2.json.linked, true, 'linked after pasting cookies');
+  assert.strictEqual(st2.json.linkSource, 'account', 'status distinguishes account cookies from server fallback');
+  assert.strictEqual(st2.json.needsRelink, false, 'freshly linked cookies should not look expired');
   assert.strictEqual(JSON.stringify(st2.json).includes('abc123'), false, 'cookie text NEVER returns to a client');
   // The credential lands ENCRYPTED in settings, not as a plaintext file in data/.
   assert.ok(!fs.existsSync(path.join(process.env.TRIBOON_DATA, 'yt-cookies.txt')), 'no plaintext cookie file written to data/');
+  const oldDetect2 = ytmusic.detectYtdlp;
+  const oldList = ytmusic.listPlaylists;
+  try {
+    ytmusic.detectYtdlp = () => ({ cmd: ['mock-ytdlp'], version: 'test' });
+    ytmusic.listPlaylists = async () => { throw new Error('cookies expired'); };
+    const expired = await httpJson(srv.port, 'GET', '/api/music/playlists', null, admin);
+    assert.strictEqual(expired.status, 502);
+    const stExpired = await httpJson(srv.port, 'GET', '/api/music/status', null, admin);
+    assert.strictEqual(stExpired.json.linked, true, 'expired cookies are still a linked account, not never-linked');
+    assert.strictEqual(stExpired.json.needsRelink, true, 'playlist failures mark the link as needing relink');
+    assert.match(stExpired.json.linkIssue.message, /cookies expired/);
+  } finally {
+    ytmusic.detectYtdlp = oldDetect2;
+    ytmusic.listPlaylists = oldList;
+  }
   await httpJson(srv.port, 'POST', '/api/music/unlink', {}, admin);
-  assert.strictEqual((await httpJson(srv.port, 'GET', '/api/music/status', null, admin)).json.linked, false, 'unlink clears it');
+  const stUnlinked = await httpJson(srv.port, 'GET', '/api/music/status', null, admin);
+  assert.strictEqual(stUnlinked.json.linked, false, 'unlink clears it');
+  assert.strictEqual(stUnlinked.json.linkSource, 'none');
+  assert.strictEqual(stUnlinked.json.needsRelink, false);
 });
 
 test('music: playlist endpoint pages tracks and stream proxy forwards yt-dlp headers plus Range', async () => {
@@ -1804,7 +1918,7 @@ test('music: playlist endpoint pages tracks and stream proxy forwards yt-dlp hea
   }
 });
 
-test('music: daily and weekly charts are cached and tokenized', async () => {
+test('music: home shelves and charts are cached and tokenized', async () => {
   const ytmusic = require('../server/ytmusic');
   const oldDetect = ytmusic.detectYtdlp;
   const oldSearch = ytmusic.search;
@@ -1830,6 +1944,23 @@ test('music: daily and weekly charts are cached and tokenized', async () => {
     assert.strictEqual(calls.length, 2, 'daily and weekly chart searches are cached after the first request');
     assert.ok(/^\/api\/music\/stream\/DDDDDDDDDDD\?t=/.test(second.json.charts[0].results[0].streamUrl),
       'cached chart tracks still receive tokenized stream URLs in the response');
+
+    const home = await httpJson(srv.port, 'GET', '/api/music/home', null, admin);
+    assert.strictEqual(home.status, 200, home.raw);
+    assert.strictEqual(home.json.shelves[0].id, 'personal', 'personal playlists are the first Music Home shelf');
+    assert.ok(home.json.shelves.find((s) => s.id === 'weekly-playlists' && s.kind === 'feeds'),
+      'Music Home exposes weekly playlist-style discovery');
+    assert.ok(home.json.shelves.find((s) => s.id === 'seasonal-mixes' && s.kind === 'feeds'),
+      'Music Home exposes seasonal mixes');
+    const trending = home.json.shelves.find((s) => s.id === 'trending-now');
+    assert.ok(trending && /^\/api\/music\/stream\/DDDDDDDDDDD\?t=/.test(trending.results[0].streamUrl),
+      'Music Home track shelves are playable with scoped stream tokens');
+    const feedA = await httpJson(srv.port, 'GET', '/api/music/search?q=cover-feed-cache-test&limit=12', null, admin);
+    const feedB = await httpJson(srv.port, 'GET', '/api/music/search?q=cover-feed-cache-test&limit=12', null, admin);
+    assert.strictEqual(feedA.status, 200, feedA.raw);
+    assert.strictEqual(feedB.status, 200, feedB.raw);
+    assert.strictEqual(calls.filter((c) => c.q === 'cover-feed-cache-test').length, 1,
+      'deterministic Music cover/search feeds are cached server-side across reloads');
   } finally {
     ytmusic.detectYtdlp = oldDetect;
     ytmusic.search = oldSearch;
@@ -1857,6 +1988,30 @@ test('fetchUrl: response-size cap aborts oversized bodies instead of buffering t
     /too large/,
   );
   big.close();
+});
+
+test('fetchUrl: validator-provided lookup pins the already-checked upstream address', async () => {
+  const { fetchUrl } = require('../server/newznab');
+  const up = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    res.end(`host=${req.headers.host}`);
+  });
+  await new Promise((r) => up.listen(0, '127.0.0.1', r));
+  try {
+    const r = await fetchUrl(`http://pin-only.invalid:${up.address().port}/ok`, {
+      validateUrl: () => ({
+        lookup: (host, opts, cb) => {
+          if (typeof opts === 'function') { cb = opts; opts = {}; }
+          if (opts && opts.all) cb(null, [{ address: '127.0.0.1', family: 4 }]);
+          else cb(null, '127.0.0.1', 4);
+        },
+      }),
+    });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.toString(), `host=pin-only.invalid:${up.address().port}`);
+  } finally {
+    up.close();
+  }
 });
 
 test('trakt: device link, scrobble forward, watchlist push + import', async () => {
@@ -1897,6 +2052,12 @@ test('trakt: device link, scrobble forward, watchlist push + import', async () =
   assert.strictEqual(link.json.userCode, 'ABCD1234');
   const poll = await httpJson(srv.port, 'POST', '/api/trakt/poll', {}, admin);
   assert.strictEqual(poll.json.state, 'linked');
+  const rawTrakt = fs.existsSync(path.join(process.env.TRIBOON_DATA, 'trakt.json'))
+    ? fs.readFileSync(path.join(process.env.TRIBOON_DATA, 'trakt.json'), 'utf8')
+    : '';
+  const rawSettings = fs.readFileSync(path.join(process.env.TRIBOON_DATA, 'settings.json'), 'utf8');
+  assert.ok(!rawTrakt.includes('acc1') && !rawTrakt.includes('ref1'), 'Trakt OAuth tokens are not stored in the plaintext trakt table');
+  assert.ok(!rawSettings.includes('acc1') && !rawSettings.includes('ref1'), 'Trakt OAuth tokens are encrypted inside settings');
   const st = await httpJson(srv.port, 'GET', '/api/trakt/status', null, admin);
   assert.strictEqual(st.json.linked, true);
   assert.strictEqual(st.json.user, 'owner-trakt');
@@ -1990,10 +2151,13 @@ test('trakt: device link, scrobble forward, watchlist push + import', async () =
 });
 
 test('password change: requires the current password, old one stops working', async () => {
+  const oldAdmin = admin;
   assert.strictEqual((await httpJson(srv.port, 'POST', '/api/me/password',
     { oldPassword: 'wrong', newPassword: 'newpass1' }, admin)).status, 400);
   assert.strictEqual((await httpJson(srv.port, 'POST', '/api/me/password',
     { oldPassword: 'hunter22', newPassword: 'newpass1' }, admin)).status, 200);
+  assert.strictEqual((await httpJson(srv.port, 'GET', '/api/me', null, oldAdmin)).status, 401,
+    'password change revokes already-issued session tokens');
   assert.strictEqual((await httpJson(srv.port, 'POST', '/api/login', { name: 'owner', password: 'hunter22' })).status, 401);
   const re = await httpJson(srv.port, 'POST', '/api/login', { name: 'owner', password: 'newpass1' });
   assert.strictEqual(re.status, 200);

@@ -6,17 +6,21 @@
 
 const RAR4_SIG = Buffer.from([0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x00]);
 const RAR5_SIG = Buffer.from([0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x01, 0x00]);
+const MAX_RAR_HEADER_SIZE = 16 * 1024 * 1024;
+const MAX_RAR_NAME_SIZE = 256 * 1024;
 
 // vint: little-endian base-128, high bit = continuation. Returns [value, bytesRead].
 function readVint(buf, off) {
   let value = 0n, shift = 0n, i = off;
   for (;;) {
     if (i >= buf.length) throw new Error('rar5: truncated vint');
+    if (i - off >= 10) throw new Error('rar5: oversized vint');
     const b = buf[i++];
     value |= BigInt(b & 0x7f) << shift;
     shift += 7n;
     if (!(b & 0x80)) break;
   }
+  if (value > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('rar5: vint too large');
   return [Number(value), i - off];
 }
 
@@ -35,6 +39,7 @@ async function walkRar4Volume(vol, volIdx) {
     const flags = head.readUInt16LE(3);
     const hsize = head.readUInt16LE(5);
     if (hsize < 7) throw new Error(`rar4: bad header size at ${off}`);
+    if (hsize > MAX_RAR_HEADER_SIZE || off + hsize > vol.size) throw new Error(`rar4: impossible header size at ${off}`);
 
     if (type === 0x73) { // main header
       if (flags & 0x0080) { headersEncrypted = true; break; } // -hp: everything after is encrypted
@@ -48,6 +53,7 @@ async function walkRar4Volume(vol, volIdx) {
       let unpSize = h.readUInt32LE(11);
       const method = h[25];
       const nameSize = h.readUInt16LE(26);
+      if (nameSize > MAX_RAR_NAME_SIZE) throw new Error(`rar4: impossible name size at ${off}`);
       let nameOff = 32;
       if (flags & 0x100) { // large file: 64-bit sizes
         packSize += h.readUInt32LE(32) * 2 ** 32;
@@ -55,6 +61,7 @@ async function walkRar4Volume(vol, volIdx) {
         nameOff += 8;
       }
       let name = h.subarray(nameOff, nameOff + nameSize);
+      if (name.length < nameSize) throw new Error(`rar4: truncated name at ${off}`);
       // Unicode-name variant stores "ansi\0encoded-unicode"; NUL never appears in real names.
       const nul = name.indexOf(0);
       if (nul !== -1) name = name.subarray(0, nul);
@@ -63,6 +70,7 @@ async function walkRar4Volume(vol, volIdx) {
         encrypted: !!(flags & 0x04), splitBefore: !!(flags & 0x01), splitAfter: !!(flags & 0x02),
         vol: volIdx, dataOffset: off + hsize, packSize,
       });
+      if (off + hsize + packSize > vol.size) throw new Error(`rar4: impossible data size at ${off}`);
       off += hsize + packSize;
     } else if (type === 0x7b) { // end of archive
       break;
@@ -73,6 +81,7 @@ async function walkRar4Volume(vol, volIdx) {
         if (add.length < 4) throw new Error(`rar4: truncated block at ${off}`);
         addSize = add.readUInt32LE(0);
       }
+      if (off + hsize + addSize > vol.size) throw new Error(`rar4: impossible block size at ${off}`);
       off += hsize + addSize;
     }
   }
@@ -89,7 +98,9 @@ async function walkRar5Volume(vol, volIdx) {
     const peek = await vol.readAt(off, 16); // crc(4) + size vint (≤3 bytes here) + body start
     if (peek.length < 6) break;
     const [hsize, sizeLen] = readVint(peek, 4);
+    if (hsize < 1 || hsize > MAX_RAR_HEADER_SIZE) throw new Error(`rar5: impossible header size at ${off}`);
     const headerTotal = 4 + sizeLen + hsize;
+    if (off + headerTotal > vol.size) throw new Error(`rar5: header outside volume at ${off}`);
     const block = await vol.readAt(off, headerTotal);
     if (block.length < headerTotal) throw new Error(`rar5: truncated header at ${off}`);
     const body = block.subarray(4 + sizeLen);
@@ -100,6 +111,8 @@ async function walkRar5Volume(vol, volIdx) {
     let extraSize = 0, dataSize = 0;
     if (hflags & 0x0001) { const [v, n] = readVint(body, c); extraSize = v; c += n; }
     if (hflags & 0x0002) { const [v, n] = readVint(body, c); dataSize = v; c += n; }
+    if (extraSize > body.length - c) throw new Error(`rar5: impossible extra size at ${off}`);
+    if (off + headerTotal + dataSize > vol.size) throw new Error(`rar5: impossible data size at ${off}`);
 
     if (type === 4) { headersEncrypted = true; break; } // archive encryption header (-hp)
     if (type === 5) break; // end of archive
@@ -113,16 +126,19 @@ async function walkRar5Volume(vol, volIdx) {
       const [compInfo, e] = readVint(body, c); c += e;
       const [, g] = readVint(body, c); c += g; // host OS
       const [nameLen, n] = readVint(body, c); c += n;
+      const headerDataEnd = body.length - extraSize;
+      if (nameLen > MAX_RAR_NAME_SIZE || c + nameLen > headerDataEnd) throw new Error(`rar5: impossible name size at ${off}`);
       const name = body.subarray(c, c + nameLen).toString('utf8');
 
       // File encryption lives in the extra area: records of [size vint · type vint · …], type 1.
       let encrypted = false;
       if (extraSize > 0) {
-        let x = body.length - extraSize;
+        let x = headerDataEnd;
         while (x < body.length) {
           const [recSize, rs] = readVint(body, x);
           const [recType] = readVint(body, x + rs);
           if (recType === 1) encrypted = true;
+          if (recSize < 1 || x + rs + recSize > body.length) throw new Error(`rar5: impossible extra record at ${off}`);
           x += rs + recSize;
         }
       }

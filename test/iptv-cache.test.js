@@ -38,6 +38,44 @@ test('server: repeated isolated boots do not stack process exit listeners', asyn
   assert.ok(after <= before + 1, `shutdown should not leave per-boot exit listeners behind, saw ${after - before}`);
 });
 
+test('iptv: private and loopback playlist URLs are blocked unless explicitly allowed', async () => {
+  const srv = await bootServer({ NNTP_HOST: null, TMDB_BASE: null, TRIBOON_ALLOW_PRIVATE_IPTV: '0' });
+  try {
+    const admin = await setupAdmin(srv.port);
+    const blocked = await httpJson(srv.port, 'POST', '/api/iptv/sources',
+      { name: 'Loopback', iptvMode: 'm3u', iptvUrl: 'http://127.0.0.1:9/list.m3u' }, admin);
+    assert.strictEqual(blocked.status, 400);
+    assert.match(blocked.json.error, /private|loopback|blocked/i);
+
+    const personal = await httpJson(srv.port, 'POST', '/api/me/iptv/sources',
+      { name: 'Mine', iptvMode: 'm3u', iptvUrl: 'http://localhost/list.m3u' }, admin);
+    assert.strictEqual(personal.status, 400);
+    assert.match(personal.json.error, /private|loopback|blocked/i);
+
+    const legacy = await httpJson(srv.port, 'POST', '/api/settings',
+      { iptvMode: 'm3u', iptvUrl: 'http://169.254.169.254/latest/meta-data' }, admin);
+    assert.strictEqual(legacy.status, 400);
+    assert.match(legacy.json.error, /private|loopback|blocked/i);
+
+    const mapped = [
+      'http://[::ffff:169.254.169.254]/latest/meta-data',
+      'http://[::ffff:127.0.0.1]/list.m3u',
+      'http://[::ffff:10.0.0.5]/list.m3u',
+      'http://[64:ff9b::7f00:1]/list.m3u',
+      'http://[::7f00:1]/list.m3u',
+      'http://[2002:7f00:1::]/list.m3u',
+    ];
+    for (const iptvUrl of mapped) {
+      const r = await httpJson(srv.port, 'POST', '/api/me/iptv/sources',
+        { name: 'Mapped', iptvMode: 'm3u', iptvUrl }, admin);
+      assert.strictEqual(r.status, 400, `${iptvUrl} should be blocked`);
+      assert.match(r.json.error, /private|loopback|blocked/i);
+    }
+  } finally {
+    await srv.shutdown();
+  }
+});
+
 test('iptv: parsed XMLTV guide survives server restart without refetching the guide', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-iptv-cache-'));
   const pad = (n) => String(n).padStart(2, '0');
@@ -74,8 +112,10 @@ http://upstream.example/cache-news.m3u8
     assert.strictEqual(warmed.configured, true);
     assert.strictEqual(warmed.xmltv, true, 'server-side warm should parse XMLTV before a client opens Live TV');
     const ch = await httpJson(first.port, 'GET', '/api/iptv/channels', null, admin);
-    const guide = await httpJson(first.port, 'GET', `/api/iptv/guide?chs=${ch.json.channels[0].idx}`, null, admin);
+    const guide = await httpJson(first.port, 'GET', `/api/iptv/guide?chs=${ch.json.channels[0].idx}&cids=${encodeURIComponent(ch.json.channels[0].id)}`, null, admin);
     assert.strictEqual(guide.json.channels[0].programmes[0].title, 'Cached Morning');
+    const staleGuide = await httpJson(first.port, 'GET', `/api/iptv/guide?chs=${ch.json.channels[0].idx}&cids=stale-channel-id`, null, admin);
+    assert.strictEqual(staleGuide.status, 409, 'guide requests bind channel indexes to stable ids');
     assert.strictEqual(guideHits, 1, 'guide endpoint used the server-warmed XMLTV cache');
     first.store.flush();
     await first.shutdown();
@@ -638,7 +678,7 @@ test('iptv: rapid channel changes close the previous upstream stream before open
   }
 });
 
-test('iptv: provider protection failures are only cached briefly so a retune can recover', async () => {
+test('iptv: provider protection failures are dampened but recover after the configured window', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-iptv-bot-cache-'));
   let liveHits = 0;
   const upstream = http.createServer((req, res) => {
@@ -694,7 +734,12 @@ http://127.0.0.1:${upstream.address().port}/live/protected.ts
 
   let srv;
   try {
-    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    srv = await bootServer({
+      TRIBOON_DATA: dataDir,
+      NNTP_HOST: null,
+      TMDB_BASE: null,
+      TRIBOON_IPTV_PROVIDER_PROTECTION_TTL_MS: '1000',
+    });
     const admin = await setupAdmin(srv.port);
     await httpJson(srv.port, 'POST', '/api/settings',
       { iptvMode: 'm3u', iptvUrl: `${base}/list.m3u`, epgUrl: null }, admin);
@@ -955,7 +1000,7 @@ test('iptv: Xtream browser remux fallback ingests TS before HLS', async () => {
   const calls = [];
   transcode.detectFfmpeg = () => ({ path: 'ffmpeg' });
   transcode.spawnLiveRemux = (url, opts = {}) => {
-    calls.push({ url, hlsFriendly: !!opts.hlsFriendly });
+    calls.push({ url, hlsFriendly: !!opts.hlsFriendly, headers: opts.headers || null });
     const child = new EventEmitter();
     child.stdout = new PassThrough();
     child.stderr = new PassThrough();
@@ -989,6 +1034,7 @@ test('iptv: Xtream browser remux fallback ingests TS before HLS', async () => {
     assert.strictEqual(calls.length, 1, 'successful TS remux should not try the HLS URL');
     assert.match(calls[0].url, /\/live\/xtuser\/xtpass\/777\.ts$/);
     assert.strictEqual(calls[0].hlsFriendly, false, 'raw TS remux should not use HLS-only ffmpeg flags');
+    assert.strictEqual(calls[0].headers, null, 'test-local IPTV uses the private-target opt-in, so no production Host override is needed');
   } finally {
     if (srv) await srv.shutdown();
     transcode.detectFfmpeg = originalDetect;

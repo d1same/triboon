@@ -22,10 +22,10 @@ canonical reference.
 - Playback order: source-fit, direct play, remux, transcode.
 - Security: deny-by-default route table in `server/index.js`; every endpoint must
   declare `public`, `user`, `admin`, or `stream` auth and be covered by tests.
-- Current verification baseline after the multi-user streaming performance
-  pass: full `npm.cmd test` covers 164 tests; focused IPTV, security, and NNTP
-  priority tests cover the current source model, route table, and capacity
-  scheduling.
+- Current verification baseline after the release-audit hardening pass: full
+  `npm.cmd test` covers 186 tests; focused IPTV, security, Android native
+  player, Music, and NNTP priority tests cover the current source model, route
+  table, device bridge, process queue, and capacity scheduling.
 
 ## System Map
 
@@ -76,15 +76,16 @@ flowchart LR
 
 | Area | Owner files | Notes |
 | --- | --- | --- |
-| Auth and encrypted settings | `server/auth.js`, `server/index.js` | Users, invites, Quick Connect, HMAC stream tokens, AES-256-GCM settings. |
+| Auth and encrypted settings | `server/auth.js`, `server/index.js` | Users, invites, Quick Connect, HKDF-separated HMAC session/stream tokens, session epochs, AES-256-GCM settings. |
 | Persistence | `server/store.js` | Atomic JSON buckets under the data directory; no SQLite dependency. |
-| Metadata | `server/tmdb.js`, `server/trakt.js`, `server/index.js` | TMDB proxy/cache, Trakt link/sync/outbox, profile watch state. |
+| Metadata | `server/tmdb.js`, `server/trakt.js`, `server/index.js` | TMDB proxy/cache, encrypted Trakt link tokens, Trakt sync/outbox, profile watch state. |
 | Search and source ranking | `server/newznab.js`, `server/scoring.js`, `server/pipeline.js` | Title-safe matching, quality caps at source selection, health-aware ranking. |
 | Streaming engine | `server/nzb.js`, `server/nntp.js`, `server/vfs.js`, `server/rar.js`, `server/zip.js`, `server/archive.js`, `docs-streaming-performance.md` | Clean-room NZB mount, article reads, RAR/ZIP extent maps, Range streaming, provider capacity, priority lanes, adaptive read-ahead. |
 | Playback decision | `server/transcode.js`, `server/index.js`, `web/index.html`, `android/.../MainActivity.java` | Source-fit, direct, remux, transcode; Android native caps feed server policy. |
 | Subtitles | `server/opensubs.js`, `server/index.js`, `web/index.html`, `MainActivity.java` | Wyzie search/download, release/file hints, WebVTT, web/native display timelines. |
 | Local libraries | `server/index.js`, `web/index.html` | Folder scan, bounded library pages, local playback, local artwork. |
 | Live TV | `server/index.js`, `web/index.html`, `MainActivity.java` | Source-scoped shared M3U/Xtream/XMLTV, web remux path, Android native Exo path, and Android device-local personal IPTV. |
+| Music Home | `server/ytmusic.js`, `server/index.js`, `web/index.html` | YouTube Music search/home/charts via bounded `yt-dlp` queue, tokenized audio proxy, web mini-player, and no ExoPlayer handoff for audio yet. |
 | Continue Watching | `docs-continue-watching.md`, `server/index.js`, `web/index.html` | Canonical movie/show identity, resume state, quality carry-forward, next-up, and D-pad focus after row actions. |
 | Android shell | `android/app/src/main/java/app/triboon/tv/MainActivity.java` | WebView bridge, D-pad/back handling, native video/Live TV, PiP guide recovery. |
 
@@ -226,6 +227,15 @@ Playback contract:
   They are encrypted with Android Keystore-backed app storage, intentionally not
   sent to the Triboon server, not included in server guide caches, and not
   shared with other users or devices.
+- Every server IPTV URL open runs through the SSRF guard. Node HTTP fetches use
+  a pinned DNS lookup, and the browser fMP4 remux path gives ffmpeg a pinned IP
+  URL plus the original `Host` header with upstream redirects disabled.
+- Android device-local IPTV validates every resolved address, including
+  IPv4-mapped IPv6 and NAT64 forms. ExoPlayer and subtitle/manual HTTP fetches
+  connect to the pinned address and send the original `Host` header. Hostname
+  HTTPS device-local IPTV is not allowed in this Android shell because it cannot
+  be DNS-pinned without replacing the TLS socket stack; add those providers as
+  account/server IPTV instead.
 - Provider errors are sanitized. Logs may include source id, channel name,
   status, and reason, but never credential-bearing provider URLs.
 - A provider 401/403/429 against a cached Xtream stream id must force-refresh
@@ -249,10 +259,10 @@ The current implementation uses JSON buckets through `server/store.js`.
 | Store bucket | Owner | Purpose |
 | --- | --- | --- |
 | `secret` | `server/auth.js` | Generated app secret when `TRIBOON_SECRET` is not supplied. |
-| `settings` | `SecureSettings` | Encrypted admin settings: providers, indexers, TMDB, subtitles, Trakt app, Live TV sources, streaming performance profile. |
-| `users`, `invites` | `server/auth.js`, `server/index.js` | Accounts, roles, profile policy, invites. |
+| `settings` | `SecureSettings` | Encrypted admin settings: providers, indexers, TMDB, subtitles, Trakt app and linked Trakt OAuth tokens, Live TV sources, streaming performance profile. |
+| `users`, `invites` | `server/auth.js`, `server/index.js` | Accounts, roles, profile policy, session epoch, invites. |
 | `watch`, `watchlist` | `server/index.js`, `server/trakt.js` | Per-profile progress, watched state, watchlist, Trakt-imported fallback rows. |
-| `trakt`, `traktOutbox` | `server/trakt.js` | User tokens, sync state, queued scrobble/export operations. |
+| `trakt`, `traktOutbox` | `server/trakt.js` | Legacy migration/sync marker bucket and queued scrobble/export operations. OAuth tokens must live encrypted inside `settings.traktTokens`, not plaintext `trakt.json`. |
 | `libraries`, `libitems` | `server/index.js` | Attached local folders and scanned item snapshots. |
 | `verdicts`, `ixusage`, `tmdb-cache` | `server/store.js`, `server/index.js`, `server/tmdb.js` | Health verdicts, per-indexer daily usage, metadata cache. |
 | `iptvcaches`, `epgcaches`, `xtreamepgcaches` | `server/index.js` | Source-scoped channel, XMLTV, and Xtream guide caches. |
@@ -279,8 +289,15 @@ When changing persistence, update:
 
 ### Android TV
 
-- Owns native Media3/ExoPlayer playback for VOD and Live TV.
+- Owns native Media3/ExoPlayer playback for VOD and Live TV. The fullscreen
+  path uses a `SurfaceView` player surface, decoder fallback, closest-sync
+  seeks, seeded bandwidth, bounded/back buffers, live target-offset tuning,
+  conservative-device HLS caps, and audio offload where Android supports it.
 - Sends native capability claims to the web UI/server before source selection.
+- Shows a native setup/compatibility screen before loading the WebView, refuses
+  very old WebView providers, hardware-layers the WebView, defers APK-update
+  cache clearing until after first paint, and trims caches on Android low-memory
+  callbacks.
 - Routes Back through the web `__tvBack()` contract unless native sheets/player
   chrome need to close first.
 - Recovers WebView renderer crashes by restoring the last app route or promoting
@@ -291,12 +308,32 @@ When changing persistence, update:
 - Every new endpoint must be added to `ROUTES` with the correct auth level.
 - Stream routes require signed stream tokens bound to one mount, file, channel,
   or local item.
+- New session/stream tokens use HKDF-separated HMAC keys. Legacy HMAC tokens are
+  accepted only during normal expiry, and password changes bump the user's
+  session epoch so already-issued sessions and stream links stop working.
+- Session-token access to mount helpers is limited to the mount owner; scoped
+  stream tokens remain valid only for their bound mount/resource.
+- Restricted local-library stream, art, thumbnail, and play endpoints must use
+  the same library `users[]` ACL as item listing.
 - Credentials live in encrypted settings and must not appear in caches, logs,
   UI strings, screenshots, or Git history.
+- Trakt OAuth tokens are credentials. Store them only through `SecureSettings`
+  and migrate/clear legacy plaintext `data/trakt.json` token fields.
+- Server-side IPTV playlist, guide, and native proxy fetches validate every DNS
+  result and connect through the already-validated pinned address. Android
+  device-local IPTV validates playlist, guide, and playback URLs before network
+  open, rejects local/private targets including embedded IPv4-in-IPv6 and
+  NAT64/6to4 forms, keeps only a short host-safety cache, and fails closed if
+  Keystore encryption is unavailable.
 - Remote strings from indexers, providers, metadata, Live TV playlists, and
   subtitles must be escaped before UI insertion.
 - Size caps stay on fetched playlists, guides, NZBs, subtitle files, and any
   other untrusted provider response.
+- RAR/ZIP/NNTP parser metadata is untrusted: impossible header, central
+  directory, name/extra, data, or NNTP BODY sizes must fail before large reads
+  or allocations.
+- Expensive source/guide/playback routes should keep per-user throttles so one
+  client cannot burn shared indexer/provider quota.
 
 ## Current Roadmap
 
@@ -321,6 +358,10 @@ Still open / future hardening:
 - Release automation polish: version bump, APK build, GitHub release, stable
   Android TV/mobile APK aliases, and Unraid update confirmation for every
   public release.
+- Profile-scoped server sessions for true parental-control enforcement on raw
+  `/api/search` and `/api/play`. Current catalog UI filters maturity before a
+  title is shown, but arbitrary raw NZB queries do not carry reliable ratings;
+  do not claim a hard kids boundary until profile tokens are part of route auth.
 
 ## Verification Checklist For Architecture Changes
 
@@ -337,14 +378,12 @@ Run the narrow test for the area touched, then the broader suite before a releas
   and visually check the route.
 - Android TV behavior: build the APK, run the emulator/Shield smoke or
   `bench/android-tv-stress.ps1`, and inspect logs for fatal/provider errors.
-- Android release packaging: attach `triboon-tv-vX.Y.Z.apk`, `triboon-tv.apk`,
-  `android-tv-vX.Y.Z.apk`, `android-tv.apk`, `android-mobile-vX.Y.Z.apk`, and
-  `android-mobile.apk` to the GitHub release. Stable Downloader URLs are
+- Android release packaging: attach `triboon-tv-vX.Y.Z.apk`,
+  `triboon-mobile-vX.Y.Z.apk`, `triboon-tv.apk`, and `triboon-mobile.apk` to
+  the GitHub release. Stable Downloader URLs are
   `https://github.com/d1same/triboon/releases/latest/download/triboon-tv.apk`
   and
-  `https://github.com/d1same/triboon/releases/latest/download/android-tv.apk`
-  and
-  `https://github.com/d1same/triboon/releases/latest/download/android-mobile.apk`;
+  `https://github.com/d1same/triboon/releases/latest/download/triboon-mobile.apk`;
   Android update acceptance still depends on package id, signing key, and a
   higher versionCode.
 - Documentation: scan for stale phase counts, old stack names, old cache

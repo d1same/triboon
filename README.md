@@ -14,6 +14,8 @@
   |
   <a href="https://github.com/d1same/triboon/releases/latest/download/triboon-tv.apk">Android TV APK</a>
   |
+  <a href="https://github.com/d1same/triboon/releases/latest/download/triboon-mobile.apk">Android Mobile APK</a>
+  |
   <a href="#quick-start">Quick start</a>
   |
   <a href="#unraid">Unraid</a>
@@ -84,7 +86,7 @@ ffmpeg is optional but strongly recommended. Without ffmpeg, some browser or
 device combinations may need external-player handoff instead of in-app remux or
 transcode.
 
-## Android TV
+## Android APKs
 
 The stable Android TV download is always:
 
@@ -92,10 +94,17 @@ The stable Android TV download is always:
 https://github.com/d1same/triboon/releases/latest/download/triboon-tv.apk
 ```
 
-Each release also keeps one versioned APK for history:
+The stable Android phone/tablet download is always:
+
+```text
+https://github.com/d1same/triboon/releases/latest/download/triboon-mobile.apk
+```
+
+Each release also keeps versioned APKs for history:
 
 ```text
 triboon-tv-vX.Y.Z.apk
+triboon-mobile-vX.Y.Z.apk
 ```
 
 The APK filename does not control Android updates. Android accepts an update

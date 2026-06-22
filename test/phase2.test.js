@@ -588,6 +588,20 @@ test('newznab: parses RSS, dedupes by title + size window', () => {
   assert.strictEqual(dd[0].sizeBytes, 4000000000);
 });
 
+test('newznab: dedupe stays near-linear on large unique result sets', () => {
+  const rows = Array.from({ length: 10000 }, (_, i) => ({
+    name: `Movie ${i} 2026 1080p WEB-DL-GRP`,
+    sizeBytes: 1_000_000_000 + i,
+    nzbUrl: `https://indexer.test/${i}.nzb`,
+    indexer: i % 2 ? 'b' : 'a',
+  }));
+  const t0 = Date.now();
+  const out = dedupe(rows);
+  const elapsed = Date.now() - t0;
+  assert.strictEqual(out.length, rows.length);
+  assert.ok(elapsed < 750, `dedupe should not rescan every prior row for unrelated titles (${elapsed}ms)`);
+});
+
 test('newznab: fan-out keeps the fast indexer when another times out', async () => {
   const fast = http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'application/rss+xml' });
@@ -1051,6 +1065,18 @@ test('store: a failing flush never throws and retries once the disk recovers', (
   s.flush();
   assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(realDir, 't.json'), 'utf8')), { a: 1 });
   s.close();
+});
+
+test('store: data directory is owner-only on POSIX filesystems', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const s = new Store(dir);
+  try {
+    if (process.platform !== 'win32') {
+      assert.strictEqual(fs.statSync(dir).mode & 0o777, 0o700);
+    }
+  } finally {
+    s.close();
+  }
 });
 
 test('store: atomic persistence round-trip and verdict TTL', () => {

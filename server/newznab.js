@@ -14,7 +14,11 @@ function fetchUrl(url, opts = {}) {
   const { timeoutMs = 5000, deadlineMs = 30000, headers = {}, maxBytes = 64 * 1024 * 1024 } = opts;
   const deadlineAt = opts._deadlineAt || (Date.now() + deadlineMs);
   const hops = opts._hops || 0;
-  return new Promise((resolve, reject) => {
+  let validated = null;
+  return Promise.resolve()
+    .then(() => (typeof opts.validateUrl === 'function' ? opts.validateUrl(url) : null))
+    .then((v) => { validated = v; })
+    .then(() => new Promise((resolve, reject) => {
     if (hops > 5) return reject(new Error(`too many redirects: ${url.split('?')[0]}`));
     const remaining = deadlineAt - Date.now();
     if (remaining <= 0) return reject(new Error(`deadline exceeded: ${url.split('?')[0]}`));
@@ -22,11 +26,16 @@ function fetchUrl(url, opts = {}) {
     // agent:false → one-shot connection, no keep-alive: every fetch here is a single search
     // or NZB download. Node ≥19 keeps agent sockets alive for minutes otherwise — idle
     // connections held to every indexer (and hung test teardowns waiting on them).
-    const req = lib.get(url, { agent: false, headers: { 'User-Agent': 'Triboon/1.0', ...headers } }, (res) => {
+    const requestOptions = {
+      agent: false,
+      headers: { 'User-Agent': 'Triboon/1.0', ...headers },
+      ...(validated && typeof validated.lookup === 'function' ? { lookup: validated.lookup } : {}),
+    };
+    const req = lib.get(url, requestOptions, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume(); clearTimeout(deadline);
         const next = new URL(res.headers.location, url).href;
-        return fetchUrl(next, { timeoutMs, headers, maxBytes, _deadlineAt: deadlineAt, _hops: hops + 1 }).then(resolve, reject);
+        return fetchUrl(next, { timeoutMs, headers, maxBytes, validateUrl: opts.validateUrl, _deadlineAt: deadlineAt, _hops: hops + 1 }).then(resolve, reject);
       }
       // Response-size cap: a hostile/broken upstream must not be able to balloon memory.
       const chunks = []; let len = 0;
@@ -40,7 +49,7 @@ function fetchUrl(url, opts = {}) {
     const deadline = setTimeout(() => req.destroy(new Error(`deadline after ${deadlineMs}ms: ${url.split('?')[0]}`)), remaining);
     req.on('error', (e) => { clearTimeout(deadline); reject(e); });
     req.setTimeout(timeoutMs, () => req.destroy(new Error(`timeout after ${timeoutMs}ms: ${url.split('?')[0]}`)));
-  });
+  }));
 }
 
 function attr(block, name) {
@@ -102,11 +111,17 @@ function normTitle(name) {
 // Dedupe: same normalized title AND size within 2% window → keep the first (indexer order).
 function dedupe(results) {
   const out = [];
+  const buckets = new Map();
   for (const r of results) {
     const key = normTitle(r.name);
-    const dup = out.find((o) => normTitle(o.name) === key &&
+    const bucket = buckets.get(key) || [];
+    const dup = bucket.find((o) =>
       (!r.sizeBytes || !o.sizeBytes || Math.abs(o.sizeBytes - r.sizeBytes) <= Math.max(o.sizeBytes, r.sizeBytes) * 0.02));
-    if (!dup) out.push(r);
+    if (!dup) {
+      out.push(r);
+      bucket.push(r);
+      buckets.set(key, bucket);
+    }
   }
   return out;
 }

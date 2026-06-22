@@ -11,6 +11,8 @@ const CONNECT_TIMEOUT_MS = 8000;   // TCP+TLS+greeting+AUTH must complete within
 const COMMAND_TIMEOUT_MS = 10000;  // healthy responses are ~60-250ms (bench/RESULTS.md)
 const IDLE_RECYCLE_MS = 30000;     // idle sockets are presumed NAT-dropped — reconnect (~150ms)
 
+const MAX_NNTP_BODY_BYTES = 64 * 1024 * 1024; // one yEnc article should never be remotely this large
+
 class NntpConnection {
   constructor(opts) {
     this.opts = opts; // { host, port, tls, user, pass, connectTimeoutMs?, commandTimeoutMs? }
@@ -97,7 +99,15 @@ class NntpConnection {
           w.resolve({ status: w.statusLine, body: Buffer.alloc(0) });
           continue;
         }
+        if (this.buf.length > MAX_NNTP_BODY_BYTES) {
+          this._fail(new Error('NNTP body too large'));
+          return;
+        }
         return; // wait for more data
+      }
+      if (term > MAX_NNTP_BODY_BYTES) {
+        this._fail(new Error('NNTP body too large'));
+        return;
       }
       let body = this.buf.subarray(0, term + 2); // keep trailing CRLF of last line
       this.buf = this.buf.subarray(term + 5);
@@ -167,6 +177,7 @@ class ProviderPool {
   }
 
   _ensure(target = this.size) {
+    if (this.down()) return;
     while (!this.closed && this.conns.length + this.connecting < target) {
       this.connecting++;
       const c = new NntpConnection(this.opts);
@@ -223,6 +234,12 @@ class ProviderPool {
       if (!this.busy.has(c) && now - c.lastUsed > idleMs) { c.close(); return false; }
       return true;
     });
+    if (this.queue.length && this.conns.length === 0 && this.connecting === 0 && this.down()) {
+      const q = this.queue; this.queue = [];
+      const err = this.lastErr || new Error('provider temporarily unavailable');
+      for (const t of q) t.reject(err);
+      return;
+    }
     if (this.queue.length && this.conns.length + this.connecting < this.size) this._ensure();
     for (const c of this.conns) {
       if (!this.queue.length) break;
@@ -249,7 +266,8 @@ class ProviderPool {
   // 60s is "down" — multi-provider routing deprioritizes it instead of paying the failure on
   // EVERY article. It self-heals: after 60s (or one successful connect) it's back in rotation.
   down() {
-    return this.conns.length === 0 && !!this.lastConnectFailAt && Date.now() - this.lastConnectFailAt < 60000;
+    const backoffMs = this.opts.reconnectBackoffMs || 60000;
+    return this.conns.length === 0 && !!this.lastConnectFailAt && Date.now() - this.lastConnectFailAt < backoffMs;
   }
   close() { this.closed = true; for (const c of this.conns) c.close(); this.conns = []; }
 }
@@ -296,7 +314,13 @@ class NntpPool {
     throw lastErr;
   }
 
-  run(fn, priority = 'playback') { return this._ordered()[0].run(fn, priority); }
+  async run(fn, priority = 'playback') {
+    let lastErr;
+    for (const p of this._ordered()) {
+      try { return await p.run(fn, priority); } catch (e) { lastErr = e; }
+    }
+    throw lastErr || new Error('no NNTP providers available');
+  }
   close() { for (const p of this.providers) p.close(); }
 }
 

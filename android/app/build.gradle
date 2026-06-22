@@ -2,6 +2,19 @@ plugins {
     id 'com.android.application'
 }
 
+def releaseSetting = { name ->
+    def prop = project.findProperty(name)
+    if (prop != null) return String.valueOf(prop)
+    def env = System.getenv(name)
+    return env == null ? null : String.valueOf(env)
+}
+def releaseStoreFilePath = releaseSetting('TRIBOON_RELEASE_STORE_FILE')
+def releaseStorePassword = releaseSetting('TRIBOON_RELEASE_STORE_PASSWORD')
+def releaseKeyAlias = releaseSetting('TRIBOON_RELEASE_KEY_ALIAS')
+def releaseKeyPassword = releaseSetting('TRIBOON_RELEASE_KEY_PASSWORD')
+def hasReleaseSigning = [releaseStoreFilePath, releaseStorePassword, releaseKeyAlias, releaseKeyPassword]
+    .every { it != null && String.valueOf(it).trim() }
+
 android {
     namespace = 'app.triboon.tv'
     compileSdk {
@@ -14,13 +27,29 @@ android {
         applicationId = "app.triboon.tv"
         minSdk = 23          // Media3 1.10.x requires API 23+; Shield/onn/Chromecast TV targets clear this
         targetSdk = 36
-        versionCode = 63
-        versionName = "1.5.10"
+        versionCode = 64
+        versionName = "1.7.0"
+    }
+
+    signingConfigs {
+        release {
+            if (hasReleaseSigning) {
+                storeFile = file(releaseStoreFilePath)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
     }
 
     buildTypes {
         release {
-            minifyEnabled = false
+            minifyEnabled = true
+            shrinkResources = true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.release
+            }
         }
     }
 
@@ -31,6 +60,17 @@ android {
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+tasks.matching { it.name == 'assembleRelease' || it.name == 'bundleRelease' }.configureEach {
+    doFirst {
+        if (!hasReleaseSigning) {
+            throw new GradleException('Release signing is required. Set TRIBOON_RELEASE_STORE_FILE, TRIBOON_RELEASE_STORE_PASSWORD, TRIBOON_RELEASE_KEY_ALIAS, and TRIBOON_RELEASE_KEY_PASSWORD outside git.')
+        }
+        if (!file(releaseStoreFilePath).isFile()) {
+            throw new GradleException("Release keystore not found: ${releaseStoreFilePath}")
+        }
     }
 }
 

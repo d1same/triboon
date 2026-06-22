@@ -50,18 +50,24 @@ IPTV fix checklist:
 5. Confirm Android native zapping releases the previous ExoPlayer stream before
    opening the next provider URL.
 6. Confirm provider errors are sanitized and do not log credential URLs.
-7. For account personal IPTV, confirm Preferences -> Live TV is discoverable
+7. Confirm server IPTV URL opens use the shared SSRF guard: Node fetches pin
+   DNS with the validated lookup, and ffmpeg browser-remux receives a pinned IP
+   URL plus original `Host` header with redirects disabled.
+8. For account personal IPTV, confirm Preferences -> Live TV is discoverable
    before any playlist exists, browser clients can add/remove M3U or Xtream
    sources through `/api/me/iptv/sources`, the source is visible only to that
    user, and stream URLs bind both channel index and channel id.
-8. For Android device-only IPTV, confirm "Save on this device only" appears
+9. For Android device-only IPTV, confirm "Save on this device only" appears
    only when the Android bridge exists. Confirm the source is encrypted in Android
    Keystore-backed private storage and device-local only: the server never
    receives credentials, favorites use local storage, Xtream and M3U channel
    rows plus guide rows reuse the encrypted 24-hour TV cache, XMLTV batch
    requests reuse one downloaded guide file, guide fetches skip negative/device
-   channel indexes, and ExoPlayer gets direct provider URLs.
-9. Confirm user and admin IPTV Settings show saved playlist status first and
+   channel indexes, and ExoPlayer/device subtitle fetches use pinned provider
+   addresses with the original `Host` header. Hostname HTTPS device-local IPTV
+   belongs in the server/account source path until the Android shell has a TLS
+   pinning socket stack.
+10. Confirm user and admin IPTV Settings show saved playlist status first and
    keep server/username/password fields collapsed until Add playlist is chosen.
    Saved playlists must be editable from the list. Edits reuse the same source
    id, keep saved sensitive fields when edit inputs are blank, clear that

@@ -2,6 +2,67 @@
 
 This is the A-to-Z checklist for keeping web and Android TV working as separate player surfaces. Web may use the web player. Android TV must route every movie, episode, local-library item, and live channel to native Media3/ExoPlayer, with no web-player fallback.
 
+## Open Production Issue Tracker
+
+Last audit pass: 2026-06-22. This is the active issue list gathered from the
+owner reports, the v1.5.10 production-readiness review, Settings/Preferences
+review, graph map, and direct code checks. Treat this section as the release
+triage board: every fix should update the status, the connected contract, and
+the verification evidence.
+
+Severity key:
+
+- P0: security, release integrity, or device-safety blocker.
+- P1: user-visible playback, IPTV, performance, or crash risk.
+- P2: correctness/scale issue that can become serious under load or edge data.
+- P3: polish, clarity, stale docs, or low-risk cleanup.
+
+| ID | Severity | Status | Finding | Connected surfaces | Required fix / verification |
+| --- | --- | --- | --- | --- | --- |
+| A1 | P0 | Fixed gate; signed release pending | Public APK is debug-signed. `dist/triboon-tv-v1.5.10.apk` verified with Android debug certificate. | `android/app/build.gradle`, release workflow, GitHub release assets, Android updater. | Gradle release builds now require `TRIBOON_RELEASE_*` signing values outside git and fail without them. Verified `assembleRelease` stops with the signing error; final `apksigner verify --print-certs` still belongs to the first real signed release. |
+| A2 | P0 | Fixed | IPTV URL SSRF/private-network risk. Server and Android accepted arbitrary IPTV URLs without blocking loopback, link-local, metadata IPs, or private targets. | `server/index.js` IPTV source creation/fetch/remux, `/api/me/iptv/sources`, Android `openPersonalHttp`, ExoPlayer, native subtitles, server/device-local IPTV. | Server and Android now validate playlist, EPG, redirect, stream, and native subtitle targets before opening them. Node fetches pin DNS through the validated lookup, ffmpeg remux receives a pinned IP URL plus original `Host` header with redirects disabled, Android device-local HTTP connects to the pinned address with Host, and legacy plaintext device IPTV prefs are purged instead of read. |
+| A3 | P0 | Fixed with LAN exception | Android WebView bridge was broad, mixed content was always allowed, cleartext is global, and bridge methods did not enforce a verified Triboon origin before sensitive actions. | `MainActivity.java`, `AndroidManifest.xml`, JS bridge, personal IPTV, native playback, guide controls. | Bridge methods and navigation are gated to the exact configured server origin, mixed content is compatibility mode, file/content access is disabled, WebView debugging remains debug-only, and cleartext is explicit through network security config. Cleartext stays enabled for self-hosted/LAN HTTP installs by product design. |
+| A4 | P1 | Fixed | YouTube Music could spawn many `yt-dlp` processes through Music Home/search without a global queue. | `server/ytmusic.js`, `server/index.js` Music Home, `web/index.html` cover hydration. | `yt-dlp` work now runs through a global bounded queue with timeout cleanup. `test/security.test.js` asserts active jobs never exceed the queue concurrency. |
+| A5 | P1 | Fixed | IPTV guide/provider-protection negative cache was too short and some failed guide fetches deleted cache entries, causing repeated provider calls. | IPTV source caches, Xtream guide cache, Settings guide sync, Live TV/PiP guide. | Provider protection now uses configurable longer dampening, guide failures keep stale data with source-scoped negative cache, and IPTV cache tests cover recovery/backoff behavior. |
+| A6 | P1 | Fixed | Browser Live TV remux wrote ffmpeg stdout chunks directly to the HTTP response without respecting backpressure. | `/api/iptv/stream`, ffmpeg remux, browser player, channel changes. | Browser Live TV remux now pauses/resumes ffmpeg stdout on HTTP backpressure; rapid retune coverage confirms old upstream streams close before the next opens. |
+| A7 | P1 | Fixed; device smoke still recommended | Android audio/lifecycle handling was incomplete: no audio focus/noisy receiver path found, and `onPause()` closed native playback on every pause. | ExoPlayer, Android home/app switch, HDMI/audio devices, PiP/guide transitions. | ExoPlayer now requests media audio focus, handles noisy-device changes, pauses rather than releases on background, keeps PiP playback alive when Android enters system PiP, and pauses WebView timers while backgrounded. Verified by Android compile and phase4 static regression. |
+| A8 | P1 | Fixed | ProviderPool hard-down/auth failure had weak reconnect backoff; a single bad provider could be retried too eagerly in later operations. | `server/nntp.js`, provider health, startup/search/streaming. | Provider pools now honor hard-down backoff and reject queued work while down instead of cycling bad providers. Existing provider health tests plus full suite pass. |
+| A9 | P1 | Fixed | `NntpPool.run()` used only the first ordered provider, unlike `stat()`/`body()` failover. | `server/nntp.js`, utility NNTP operations, provider failover. | `run()` now tries ordered providers consistently; `test/e2e.test.js` covers fall-through to the next provider. |
+| A10 | P2 | Fixed | IPTV group cleanup had a mojibake separator on one path. | `server/index.js` IPTV group/favorite cleanup. | Group/favorite source prefixes now share the same middle-dot separator constant. Covered by IPTV source cleanup tests. |
+| A11 | P2 | Fixed | Live TV guide fallback could still reach legacy/empty IPTV settings after source-scoped fixes, so stale channel paths could query `null`/bad hosts. | `sourceForIptvChannel`, `xtreamEpgList`, `iptvGuide`, legacy settings compatibility. | Guide/playback refresh now requires the channel's own valid source and avoids raw legacy fallback for stale source-scoped channels. IPTV deleted-source/stale-cache tests pass. |
+| A12 | P2 | Fixed | Verdict cache expired on read but did not prune stale disk entries on write, so long-lived servers could grow old verdict data. | `server/store.js`, source verdict cache, data folder. | Verdict cache writes now prune expired entries and bound total entries. Store/verdict tests pass in the full suite. |
+| A13 | P2 | Fixed | XMLTV programme parser was regex/order fragile and assumed attribute order. | XMLTV ingest, M3U/XMLTV playlists, guide matching. | XMLTV programme attributes are parsed independent of order; security test fixture now covers alternate attribute order. |
+| A14 | P2 | Fixed | Newznab dedupe was O(n^2) and recomputed normalized titles inside `find`, which could hurt large result sets. | `server/newznab.js`, search fan-out, source drawer speed. | Newznab dedupe now buckets by normalized title; phase2 scale test dedupes 10k unique rows under the performance guard. |
+| A15 | P2 | Fixed | yEnc escape at end-of-buffer could advance past input before CRC caught corruption. | `server/yenc.js`, NZB decode path. | Dangling yEnc escapes are guarded, with a corrupt-input regression in `test/e2e.test.js`. |
+| A16 | P2 | Fixed | Stable stream-token lifetime was wider than a strict 6-hour interpretation because old cache-stable URLs used a 6-12 hour quantized expiry. | `server/auth.js`, VLC/native stream URLs, docs. | Stable cache tokens now rotate on a one-hour bucket while staying inside the normal 6-hour stream-token TTL; `test/security.test.js` covers the max validity window. |
+| A17 | P3 | Fixed in code; visual smoke recommended | Main Live TV browse empty state may still feel blank compared with admin Settings and Preferences empty states. Code has an empty component, but this needs visual confirmation on the actual landing view. | `web/index.html` Live TV page, Settings Live TV, Preferences Live TV, TV focus. | Main Live TV no-source copy now gives a clear setup path and remains focusable. Needs browser/Android visual smoke during release QA. |
+| A18 | P3 | Fixed | Appearance controls for cover size/theme exist in both admin Settings and user Preferences. | Settings -> Display, Preferences -> Display, device-local preferences. | Labels now clarify admin display defaults versus per-device display preferences. |
+| A19 | P3 | Fixed | Catalog tab Trakt confirmation printed a partial OAuth client-id prefix while other sensitive settings were fully redacted. Client IDs are not secret, but the display was inconsistent. | `web/index.html` Trakt settings confirmation, Settings -> Catalog. | Trakt confirmation now uses generic saved/missing wording instead of showing an OAuth client-id prefix. |
+| A20 | P3 | Fixed | Engine status populated asynchronously on cold Settings open; guide sync showed a next-sync time even with zero sources. Harmless but visually noisy. | Settings engine status, Guide sync panel. | Engine panel starts with `Checking...`; Guide sync reports `disabled` when no source is configured. |
+| A21 | P3 | Fixed | Docs/test baseline had stale counts and old APK alias wording; `.gitattributes` did not lock Java LF; local `dist/` contains old duplicate APK names even though they are not tracked/public. | `AGENTS.md`, `CLAUDE.md`, `docs-architecture.md`, `.gitattributes`, local `dist/`. | Docs now show the current test baseline and the TV/mobile stable APK release contract; `.gitattributes` pins Java/Gradle/XML LF and export-ignores internal folders. |
+| A22 | P3 | Fixed | Music Home behavior was present in code/tests but not fully reflected in roadmap/release docs. | `web/index.html`, `server/index.js`, `test/security.test.js`, docs. | `docs-architecture.md` now documents Music Home ownership, queueing, tokenized proxy, and web-audio-only scope. |
+| A23 | P1 | Fixed | Graph refresh found follow-up issues after the release-hardening pass: embedded IPv4-in-IPv6 IPTV SSRF gaps, tokenized local artwork in saved watch metadata, Music playback priority/cache behavior, stale guide index drift, and low-memory cache pressure. | `server/index.js`, `server/ytmusic.js`, `web/index.html`, `MainActivity.java`, IPTV guide, Continue Watching, YouTube Music. | Server IPTV URL guards now decode IPv4-mapped/compatible, NAT64, and 6to4 literals before private-network checks; watch state strips expiring local artwork tokens and remints local art from canonical keys; active Music playback resolves ahead of background work with bounded cache/autoskip UX; guide requests bind source-scoped channel ids; Android low-memory callbacks clear live/music client caches. Verified by `npm.cmd test` 183/183 plus focused IPTV/security/phase4 tests. |
+| A24 | P1 | Fixed; hardware matrix still open | Android punch-list compatibility gaps remained for older WebView providers, weak-box decoder fallback, Live HLS ABR caps, slow native seeks, Live TV target offset/bandwidth seeding, low-memory WebView pressure, loading backdrop decode spikes, device-local IPTV URL validation, native subtitle URL validation, and release shrink hardening. | `MainActivity.java`, `native_player_view.xml`, `AndroidManifest.xml`, `network_security_config.xml`, `android/app/build.gradle`, `proguard-rules.pro`, Android TV/mobile playback. | Android now refuses too-old WebView providers with a native setup message, hardware-layers/pre-rasterizes the WebView, defers APK cache clearing, uses SurfaceView, enables decoder fallback, closest-sync seek, live config, seeded bandwidth, conservative-device Live HLS caps, VOD audio offload, bounded/back buffers, mobile system PiP, stronger trim-memory cleanup, downsampled native backdrops, explicit cleartext config, R8 shrink rules, stricter device-local IPTV validation including embedded private-address forms, ExoPlayer/HTTP Host headers for pinned IPTV, native subtitle URL validation, and legacy plaintext personal-IPTV purge. Verified by Android debug build and release R8 minify task; real Shield/Onn/Fire matrix remains a release smoke requirement. |
+
+Closed, stale, or partly-covered audit items:
+
+- Public GitHub release duplicate APKs: v1.7.0 and later should expose four
+  intentional Android assets only: versioned TV/mobile APKs plus stable
+  `triboon-tv.apk` and `triboon-mobile.apk` aliases.
+- Rapid IPTV retune cleanup: currently covered by focused IPTV tests and prior
+  logs showing the previous stream closes before tuning the next one. Keep this
+  in the stress pass because it is easy to regress.
+- `host=unknown`/invalid guide spam: fixed by clearing aggregate channel state
+  when no IPTV source exists and by requiring a valid source for source-scoped
+  guide/playback refreshes.
+- Music Home process fan-out: fixed by the bounded `yt-dlp` queue and covered by
+  a focused queue-concurrency regression test.
+- Stable stream-token duration: closed by keeping one-hour cache-stable URLs
+  inside the normal 6-hour stream-token lifetime.
+- Graph refresh follow-up: closed by adding embedded-IPv4 IPTV URL rejection,
+  durable Continue Watching local artwork, Music priority/caching/autoskip
+  behavior, guide channel-id binding, and Android low-memory cache trimming.
+
 ## Product Surface
 
 - First run: owner setup, encrypted settings, provider/indexer/TMDB setup, and profile creation work from the web UI and Android shell.
@@ -79,22 +140,77 @@ This is the A-to-Z checklist for keeping web and Android TV working as separate 
 - Keep successful source/mount/watch-state data hot long enough for quick resume and source switches.
 - For Android TV, prefer native direct play when the device reports codec support; avoid server remux/transcode unless needed.
 - Live TV should serve source-scoped cached playlist/EPG data immediately, refresh server-side on schedule, and never let one playlist's stale channel ids or favorites bleed into another playlist.
-- ExoPlayer should keep the TextureView-backed surface stable during guide/PiP transitions.
+- ExoPlayer should keep the SurfaceView-backed fullscreen surface stable during guide/PiP transitions.
 - Attached local libraries must not block first menu/home focus or rail rollover; home must not fetch full `/api/libraries/:id/items` payloads, rail previews auto-load only the first bounded local-folder page, and library grids request additional bounded pages through scroll/D-pad.
 
 ## Release Packaging
 
-- Android releases publish exactly two APK asset names from the same universal
-  shell build: `triboon-tv-vX.Y.Z.apk` for audit/history and `triboon-tv.apk`
-  as the stable Downloader-style link:
-  `https://github.com/d1same/triboon/releases/latest/download/triboon-tv.apk`.
-  Avoid extra Android TV/mobile aliases; they make the public release look
+- Android releases publish four APK asset names from the same universal shell
+  build: `triboon-tv-vX.Y.Z.apk` and `triboon-mobile-vX.Y.Z.apk` for
+  audit/history, plus `triboon-tv.apk` and `triboon-mobile.apk` as stable
+  Downloader-style links:
+  `https://github.com/d1same/triboon/releases/latest/download/triboon-tv.apk`
+  and
+  `https://github.com/d1same/triboon/releases/latest/download/triboon-mobile.apk`.
+  Avoid any other Android APK aliases; they make the public release look
   duplicated even when all files contain the same APK bytes.
 - Android update acceptance depends on the package id, signing key, and higher
   `versionCode`; the APK filename is only for download/link stability.
 
 ## Verification Log
 
+- Release v1.7.0 verification: Android native guide/PiP now keeps the
+  SurfaceView-backed `PlayerView` fully opaque and animates only a sibling
+  reveal scrim, preventing SurfaceView alpha-blend regressions on TV chipsets.
+  Native subtitle overlay fetches now validate through
+  `validateNativeSubtitleOverlayUrl()` inside the fetch helper while preserving
+  pinned personal-IPTV Host headers, so future subtitle callers cannot bypass
+  trusted-server/device-local URL checks. Release packaging now carries stable
+  TV and mobile aliases from the same universal APK build. Verification passed
+  `node --check server/index.js`, `server/transcode.js`, and `server/store.js`;
+  `git diff --check`; focused `node --test test/phase4.test.js` 17/17; full
+  `npm.cmd test` 186/186; Android `assembleDebug`; Android
+  `:app:minifyReleaseWithR8`; tracked-file credential scan for the
+  owner-provided API/provider values; `aapt dump badging
+  dist/triboon-tv-v1.7.0.apk` reported `versionCode='64'` and
+  `versionName='1.7.0'`; and `apksigner verify --print-certs` verified the
+  APK. Release assets `triboon-tv-v1.7.0.apk`, `triboon-tv.apk`,
+  `triboon-mobile-v1.7.0.apk`, and `triboon-mobile.apk` share SHA-256
+  `CEF55F2769A25538560758F01FF6342D809BDDD37B122A0EBDC677FA6DCB22C2`.
+- Security closure pass on June 22, 2026: closed the remaining rebind/SSRF
+  findings from the Android/server review. Native subtitle URLs now pass through
+  the same trusted-server/device-local validation as playback URLs; Android
+  device-local HTTP playback and subtitle fetches use pinned addresses plus the
+  original Host header; legacy plaintext personal-IPTV prefs are purged; server
+  Live TV browser remux gives ffmpeg a pinned IP URL plus Host header and
+  disables upstream redirects; and the JSON data directory is chmodded `0700`.
+  Verification passed `node --check server/index.js`, `server/transcode.js`,
+  and `server/store.js`; `git diff --check`; focused Android native-player,
+  IPTV cache/remux, and store-permission tests; full `test/security.test.js`,
+  `test/phase4.test.js`, and `test/phase2.test.js`; Android `assembleDebug`;
+  Android `:app:minifyReleaseWithR8`; and full `npm.cmd test` 186/186.
+- Android compatibility punch-list pass on June 22, 2026: closed the current
+  WebView provider floor, SurfaceView/ExoPlayer tuning, device-local IPTV URL
+  validation, low-memory lifecycle, mobile PiP, WebView hardening, and Android
+  R8/resource-shrink follow-ups in A24. Verification passed `git diff --check`,
+  Android `assembleDebug`, Android `:app:minifyReleaseWithR8`, focused
+  `node --test --test-name-pattern "Android native player" test/phase4.test.js`,
+  and full `npm.cmd test` 185/185.
+- Release-audit hardening pass on June 22, 2026: closed the security,
+  IPTV/backpressure, Music queue, NNTP failover, XMLTV, Newznab scale, yEnc,
+  Settings polish, docs, and Android lifecycle items in the open tracker except
+  the first real signed APK certificate verification. Stable stream tokens now
+  rotate by one-hour cache buckets while staying inside the 6-hour stream-token
+  TTL. Verification passed `node --check` for the
+  touched server/test modules, `node --test test/iptv-cache.test.js` 27/27,
+  `node --test test/security.test.js` 66/66, `node --test test/phase4.test.js`
+  17/17, focused `test/e2e.test.js` NNTP/yEnc regressions, focused
+  `test/phase2.test.js` Newznab dedupe regressions, Android
+  `:app:compileDebugJavaWithJavac`, expected-failure Android
+  `:app:assembleRelease` without signing secrets, and full `npm.cmd test`
+  183/183 after the graph refresh follow-up regressions were added. A temporary
+  server smoke also confirmed the Live TV shell empty-state copy is present and
+  `/api/iptv/channels` + `/api/iptv/status` return clean zero-source states.
 - Release v1.5.10 verification: browser/mobile browse surfaces keep the
   backdrop compact or hidden so rows stay visible, Home/Discover vertical D-pad
   moves start at the first thumbnail in the destination row, detail/person
@@ -282,6 +398,7 @@ This is the A-to-Z checklist for keeping web and Android TV working as separate 
 - Release v1.1.2 verification: `git diff --check` passed; `npm.cmd test` passed 138/138; `android/gradlew.bat clean assembleDebug` passed; `aapt dump badging dist/triboon-tv-v1.1.2.apk` reported `versionCode='33'` and `versionName='1.1.2'`; release APK SHA-256 is `282D22B689DA0718500835AFE843136077E11582CC0A28C5B108CA6B4477F9C3`.
 - Web smoke: opened `http://localhost:7777/#/home`, verified home/navigation/cards/live rows, opened a movie detail, and started web playback through `/api/remux/...` with title and 1080p label visible.
 - Security quick scan: no tracked-source secret hits found; `npm audit --omit=dev` is not applicable because this stdlib server has no lockfile/runtime npm dependency tree.
+- Security sweep follow-up: fixed the confirmed high-risk audit items. Trakt OAuth tokens now live in encrypted `settings.traktTokens` with legacy plaintext `data/trakt.json` migration/clear; local-library stream/art/thumb/play paths enforce the same `lib.users` ACL as item listing; server IPTV playlist/XMLTV/native proxy requests validate all DNS answers and connect to the pinned address; Android personal IPTV storage fails closed on Keystore encryption failure, disables app backup, validates native playback URLs before ExoPlayer, and no longer allows cross-protocol redirects; JSON store writes are chmodded `0600` on supported filesystems. Additional hardening added per-user throttles for search/play/advance/IPTV guide endpoints, per-user mount trimming, session epochs that revoke old sessions/stream links after password changes, HKDF-separated HMAC/settings keys with legacy verification/decrypt fallback, mount-owner checks for session-token helper access, bounded RAR/ZIP metadata parsing, an NNTP BODY size cap, and an ffmpeg live-remux protocol whitelist. Focused verification passed `node --test test/security.test.js` 67/67, `node --test test/archive.test.js` 21/21, `node --test test/phase4.test.js` 17/17, `node --test test/iptv-cache.test.js` 27/27, and `node --test test/e2e.test.js` 14/14. Remaining design note: true hard parental-control enforcement for arbitrary raw `/api/search` and `/api/play` needs profile-scoped server sessions because raw NZB queries do not carry trustworthy ratings.
 
 ## Remaining Improvements
 

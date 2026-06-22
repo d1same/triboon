@@ -46,7 +46,7 @@ Always follow the owner's method:
 
 ## Commands
 
-- `npm.cmd test` - full Node test suite. Current baseline: 164/164 tests.
+- `npm.cmd test` - full Node test suite. Current baseline: 186/186 tests.
 - `node server/index.js` - starts the app at `http://localhost:7777`.
 - `docker compose up --build` - containerized app with ffmpeg and `/data`.
 - Android build:
@@ -54,6 +54,9 @@ Always follow the owner's method:
   - `ANDROID_HOME=%LOCALAPPDATA%\Android\Sdk`
   - Prefer current external Gradle 9.5.1+ with `gradle -p android assembleDebug`.
   - Use `android\gradlew.bat assembleDebug` as version-safe fallback.
+  - Release builds require local signing values outside git:
+    `TRIBOON_RELEASE_STORE_FILE`, `TRIBOON_RELEASE_STORE_PASSWORD`,
+    `TRIBOON_RELEASE_KEY_ALIAS`, and `TRIBOON_RELEASE_KEY_PASSWORD`.
   - Do not use `C:\Users\opencode\tools\gradle-8.10.2`.
 
 Everything is configured in the web dashboard after first-run setup and is
@@ -91,7 +94,7 @@ secret into `./data`.
 ## Roadmap And Current State
 
 Current: Phases 0-5 core are implemented in the current Node/Web/Android stack,
-with 164/164 tests passing on the latest verification pass.
+with 186/186 tests passing on the latest verification pass.
 
 - Phase 1 done: store-RAR4/RAR5 and ZIP streaming with seeking, multi-volume
   support, multi-provider failover, compressed/encrypted/7z detected and tagged.
@@ -148,10 +151,12 @@ Still open:
 - Never weaken or delete a failing test to make it pass. Fix the code or raise
   it with the owner.
 - Releases always bump `package.json` and Android versionCode/versionName
-  together; the tag is `vX.Y.Z`; the GitHub release carries stable and
-  versioned APK assets from the same build: `triboon-tv-vX.Y.Z.apk`,
-  `triboon-tv.apk`, `android-tv-vX.Y.Z.apk`, `android-tv.apk`,
-  `android-mobile-vX.Y.Z.apk`, and `android-mobile.apk`.
+  together; the tag is `vX.Y.Z`; the GitHub release carries versioned APKs
+  (`triboon-tv-vX.Y.Z.apk`, `triboon-mobile-vX.Y.Z.apk`) plus stable aliases
+  (`triboon-tv.apk`, `triboon-mobile.apk`). Stable aliases must be attached to
+  the latest GitHub release so `/releases/latest/download/triboon-tv.apk` and
+  `/releases/latest/download/triboon-mobile.apk` always resolve to the newest
+  build.
 - Security: deny-by-default routing; every new endpoint must declare auth and
   be covered by route-coverage tests.
 - Credentials are encrypted at rest and must never be committed, logged, or

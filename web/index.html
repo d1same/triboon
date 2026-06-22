@@ -1719,6 +1719,15 @@ body:not(.tv) #settings .setGrid[data-stab="display"]{grid-template-columns:repe
   box-shadow:0 10px 28px rgba(0,0,0,.45)!important;outline:none!important;transform:none}
 #settings button.focus svg,#prefs button.focus svg,#settings button:focus svg,#prefs button:focus svg{
   color:currentColor}
+.ytmConnect{display:grid;grid-template-columns:auto minmax(0,1fr);gap:14px;align-items:start;padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(22,16,32,.56)}
+.ytmConnectIcon{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(135deg,var(--magenta),var(--coral));color:white}
+.ytmConnectIcon svg{width:24px;height:24px}
+.ytmConnect h3{font:800 17px "Sora";margin:1px 0 4px}
+.ytmConnect p{margin:0;color:var(--muted);font:600 13px "Albert Sans";line-height:1.45}
+.ytmSteps{margin:12px 0 0;padding-left:18px;color:var(--muted);font:600 12.5px "Albert Sans";line-height:1.45}
+.ytmImportBox{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px;padding:12px;border:1px dashed rgba(255,255,255,.18);border-radius:8px;background:rgba(11,8,18,.46)}
+.ytmImportBox span{color:var(--muted);font:700 12px "JetBrains Mono";overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ytmPaste{width:100%;background:rgba(11,8,18,.7);border:1px solid var(--line);border-radius:8px;padding:12px;color:var(--text);font:500 11.5px "JetBrains Mono";outline:none;resize:vertical;margin-top:10px}
 
 /* ============ Music (YouTube Music) ============ */
 #music{position:fixed;inset:0;z-index:8;display:none;flex-direction:column;
@@ -1768,6 +1777,8 @@ body:not(.tv) #settings .setGrid[data-stab="display"]{grid-template-columns:repe
 .mCard .mLbl{font:800 14.5px "Albert Sans";line-height:1.18;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .mSub{font:600 12.5px "Albert Sans";line-height:1.25;color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .mPl .mCover{box-shadow:inset 0 0 0 2px rgba(255,198,92,.18)}
+.mConnect .mCover{background:linear-gradient(135deg,rgba(193,59,214,.88),rgba(251,139,60,.86));box-shadow:inset 0 0 0 1px rgba(255,255,255,.16)}
+.mConnect .mSub{color:rgba(243,239,247,.86)}
 .mEmpty{color:var(--muted);font:600 14px "Albert Sans";padding:8px 0}
 .mpActions{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px}
 .musicAction{height:42px;border-radius:999px;padding:0 18px;display:inline-flex;align-items:center;gap:9px;background:rgba(34,25,52,.74);border:1px solid var(--line);color:var(--text);font:800 13px "Albert Sans"}
@@ -1877,8 +1888,7 @@ body.musicPaused .mEq i{animation-play-state:paused}
 .mnTog.on{color:var(--amber)}
 .mnTog.on::after{content:"";position:absolute;bottom:6px;left:50%;transform:translateX(-50%);width:4px;height:4px;border-radius:50%;background:var(--amber)}
 .mnTog{position:relative}
-.mnQueueToggle{width:auto!important;border-radius:999px;padding:0 14px;font:800 12px "Albert Sans";gap:8px}
-.mnQueueToggle span{white-space:nowrap}
+.mnQueueToggle{width:46px!important;border-radius:50%;padding:0;font:800 12px "Albert Sans"}
 .mnQueue{display:block;position:relative;z-index:3;flex:1 1 auto;width:min(820px,calc(100vw - 320px));min-height:0;overflow-y:auto;padding:18px 16px 20px;margin:32px auto 34px;border-radius:8px;background:rgba(18,13,27,.78);border:1px solid rgba(255,255,255,.08);box-shadow:0 30px 80px rgba(0,0,0,.36)}
 .mnQueue h2{font:700 12px "JetBrains Mono";letter-spacing:.18em;text-transform:uppercase;color:var(--amber);margin-bottom:12px}
 #mnQueueList{display:flex;flex-direction:column;gap:3px;max-width:100%}
@@ -2225,8 +2235,8 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
         <button class="mbBtn mbPlay focusable" id="mnPlay"><svg viewBox="0 0 24 24" fill="currentColor" id="mnPlayIco"><path d="M8 5v14l11-7z"/></svg></button>
         <button class="mbBtn focusable" id="mnNext"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M17 5v14h2V5h-2zm-2 7L5 5v14l10-7z"/></svg></button>
         <button class="mbBtn mnTog focusable" id="mnRepeat" title="Repeat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" id="mnRepeatIco"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg></button>
-        <button class="mbBtn mnQueueToggle focusable" id="mnQueueToggle" title="Hide playlist">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/></svg><span>Hide playlist</span></button>
+        <button class="mbBtn mnQueueToggle focusable" id="mnQueueToggle" title="Hide queue" aria-label="Hide queue">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
       </div>
     </div>
   </div>
@@ -2295,13 +2305,13 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
   </div>
 
   <div class="setGrid" data-ptab="display">
-    <div class="panel"><h2>Cover size</h2>
+    <div class="panel"><h2>Cover size on this device</h2>
       <p>How big poster art renders in rows and grids (saved on this device).</p>
       <div class="sizePick" id="prefCoverSize">
         <button data-sz="S">Small</button><button data-sz="M">Medium</button><button data-sz="L">Large</button>
       </div>
     </div>
-    <div class="panel"><h2>Theme</h2>
+    <div class="panel"><h2>Theme on this device</h2>
       <p>Accent colors for buttons, focus rings and badges.</p>
       <div id="themePick"></div>
     </div>
@@ -2422,11 +2432,8 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
       <div id="traktBox"><div class="hint">checking…</div></div>
     </div>
     <div class="panel"><h2>YouTube Music</h2>
-      <p>Link your account to see <b>your playlists and Liked songs</b> on the Music page.
-         Google blocks direct sign-ins from apps, so linking works with a one-time cookie
-         export from your browser:</p>
-      <p style="margin-top:8px">1&#41; Install a “cookies.txt” exporter extension (e.g. <b>Get cookies.txt LOCALLY</b>)
-         &nbsp;2&#41; open <b>music.youtube.com</b> signed in &nbsp;3&#41; export → paste the file's contents below.</p>
+      <p>Connect your account to place <b>Liked Music and your playlists</b> at the top of the Music page.
+         Public mixes, weekly picks and seasonal rows work without connecting.</p>
       <div id="ytmBox"><div class="hint">checking…</div></div>
     </div>
   </div>
@@ -2515,7 +2522,7 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
   </div>
 
   <div class="setGrid" data-stab="server">
-  <div class="panel"><h2>Engine</h2><p>Live status from the Triboon server.</p><div id="engineStatus"></div></div>
+  <div class="panel"><h2>Engine</h2><p>Live status from the Triboon server.</p><div id="engineStatus"><div class="kv"><span>Engine</span><span>Checking...</span></div></div></div>
 
   <div class="panel"><h2>Streaming performance</h2>
     <p>Let Triboon size buffering and connection use from your provider capacity, server network,
@@ -2755,14 +2762,14 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
   </div>
 
   <div class="setGrid" data-stab="display" hidden>
-  <div class="panel"><h2>Display</h2>
+  <div class="panel"><h2>Display defaults</h2>
     <p>Cover-art size for poster rows and grids (saved on this device). Every user can also set
        this — plus hide or reorder their menu — under <b>Preferences</b> in their own sidebar.</p>
     <div class="sizePick" id="coverSize">
       <button data-sz="S">Small</button><button data-sz="M">Medium</button><button data-sz="L">Large</button>
     </div>
   </div>
-  <div class="panel"><h2>Theme</h2>
+  <div class="panel"><h2>Theme defaults</h2>
     <p>Accent colors for buttons, focus rings and badges (saved on this device).</p>
     <div id="themePickSet"></div>
   </div>
@@ -3401,6 +3408,22 @@ function isWatched(it) {
   }
   return false;
 }
+function isTokenizedLocalUrl(u) {
+  try {
+    const x = new URL(String(u || ''), location.origin);
+    return x.origin === location.origin && x.pathname.startsWith('/api/local/') && x.searchParams.has('t');
+  } catch { return false; }
+}
+function durableArtUrl(u) {
+  return isTokenizedLocalUrl(u) ? '' : (u || '');
+}
+function freshLocalArtForKey(key) {
+  const loc = S.localMap && key && S.localMap[key];
+  if (!loc) return {};
+  const poster = loc.poster || loc.artUrl || loc.thumbUrl || '';
+  const backdrop = loc.backdrop || loc.artUrl || loc.thumbUrl || poster || '';
+  return { poster, backdrop };
+}
 
 /* genre lists (cached), used by Movies/TV filter chips */
 const genreCache = {};
@@ -3539,7 +3562,7 @@ function nextEpisodeBumps(cw, cwItems) {
       key: nextKey, title: String(meta.title || loc.name).replace(/\s*—\s*S\d+E\d+.*$/i, ''),
       year: meta.year || '', genre: meta.genre || '', rating: meta.rating || '—',
       overview: meta.overview || '', tmdbId: +id, type: 'tv',
-      backdrop: meta.backdrop || procBackdrop(280, 320, 7), progress: 0,
+      backdrop: loc.backdrop || durableArtUrl(meta.backdrop) || durableArtUrl(meta.poster) || procBackdrop(280, 320, 7), progress: 0,
       qualityRank: normalizeQualityRank(meta.qualityRank),
       _local: { streamUrl: loc.streamUrl, playUrl: loc.playUrl, name: loc.name }, _episode: true,
       _nextEp: true, _newEp: (loc.addedAt || 0) > (top.w.updatedAt || 0),
@@ -3620,17 +3643,22 @@ async function prepareHomeTvNext(cw, timeoutMs = HOME_NEXT_WAIT_MS) {
 // Build the Continue Watching cards from a /api/watch payload (next-episode bumps only when
 // the local map is already known — they must never force a boot-time library fetch).
 function buildCwItems(cw) {
-  const items = cw.filter((w) => !w.watched && (w.position > 30 || w.traktPct > 2) && !String(w.key).startsWith('live:')).map((w) => ({
+  const items = cw.filter((w) => !w.watched && (w.position > 30 || w.traktPct > 2) && !String(w.key).startsWith('live:')).map((w) => {
+    const art = freshLocalArtForKey(w.key);
+    const poster = art.poster || durableArtUrl(w.meta.poster) || durableArtUrl(w.meta.backdrop);
+    const backdrop = art.backdrop || durableArtUrl(w.meta.backdrop) || durableArtUrl(w.meta.poster);
+    return {
     // Continue Watching shows the SHOW title only — the "— S02E01 · Episode Name" tail
     // overflowed every card and hero (resume position already encodes where you are).
     key: w.key, title: String(w.meta.title || w.key).replace(/\s*—\s*S\d+E\d+.*$/i, ''), year: w.meta.year || '', genre: w.meta.genre || '',
     rating: w.meta.rating || '—', overview: w.meta.overview || '',
     tmdbId: w.meta.tmdbId, type: w.meta.type, q: w.meta.q, qualityRank: normalizeQualityRank(w.meta.qualityRank),
-    poster: w.meta.poster || w.meta.backdrop || procBackdrop(280, 320, 5),
-    backdrop: w.meta.backdrop || procBackdrop(280, 320, 5),
+    poster: poster || procBackdrop(280, 320, 5),
+    backdrop: backdrop || procBackdrop(280, 320, 5),
     progress: w.duration ? w.position / w.duration : (w.traktPct || 0) / 100,
     resume: w.position, _traktPct: w.traktPct || 0, _cwSortAt: w.updatedAt || 0,
-  }));
+    };
+  });
   if (Array.isArray(S._homeTvNext)) {
     const seen = new Set(items.map((it) => continueWatchingIdentity(it) || it.key));
     for (const it of S._homeTvNext) if (it && it.key && !seen.has(it.key)) {
@@ -4813,7 +4841,7 @@ function epTarget(show, sNum, eNum, resume) {
 function wlMeta(it) {
   return { title: it.title, year: it.year, genre: it.genre, rating: it.rating, type: it.type,
     tmdbId: it.tmdbId, imdbId: it.imdbId, tvdbId: it.tvdbId,
-    poster: it.poster, backdrop: it.backdrop, overview: it.overview, q: it.q, cert: it.cert,
+    poster: durableArtUrl(it.poster), backdrop: durableArtUrl(it.backdrop), overview: it.overview, q: it.q, cert: it.cert,
     originalLanguage: it.originalLanguage, qualityRank: qualityRankForItem(it) };
 }
 // Restricted profiles: the watchlist/calendar are ACCOUNT-level lists (a parent's adds), not
@@ -6867,13 +6895,11 @@ async function saveWatch(final) {
   if (!final && Math.abs(pos - p.lastSaved) < 5) return;
   p.lastSaved = pos;
   const d = totalDuration();
+  const meta = wlMeta(p.item);
   const payload = {
     key: p.item.key, position: Math.floor(pos), duration: Math.floor(d || 0),
     watched: d ? pos / d > 0.92 : false, profile: S.profile ? S.profile.id : undefined,
-    meta: { title: p.item.title, year: p.item.year, genre: p.item.genre, rating: p.item.rating,
-            overview: p.item.overview, poster: p.item.poster, backdrop: p.item.backdrop,
-            tmdbId: p.item.tmdbId, type: p.item.type, q: p.item.q, originalLanguage: p.item.originalLanguage,
-            qualityRank: qualityRankForItem(p.item) }, // episodes resume + reopen
+    meta, // episodes resume + reopen
   };
   upsertWatchCache({
     key: payload.key, position: payload.position, duration: payload.duration,
@@ -8568,9 +8594,18 @@ async function localLibraryPage(lib, opts = {}) {
 }
 function mergeLocalItemsInto(map, lib, items) {
   for (const x of (items || [])) {
-    if (!x.tmdbId || !x.streamUrl) continue;
+    if (!x.streamUrl) continue;
+    const poster = x.artUrl || (x.poster ? img(x.poster, 'w342') : null) || x.thumbUrl || '';
+    const backdrop = (x.backdrop ? img(x.backdrop) : null) || x.artUrl || x.thumbUrl || poster || '';
+    const rec = {
+      streamUrl: x.streamUrl, playUrl: x.playUrl, name: x.title, addedAt: x.addedAt || 0,
+      libId: lib && lib.id, artUrl: x.artUrl || '', thumbUrl: x.thumbUrl || '', poster, backdrop,
+    };
+    const localKey = lib && lib.id ? `local:${lib.id}:${x.idx}` : '';
+    if (localKey) map[localKey] = rec;
+    if (!x.tmdbId) continue;
     const key = x.kind === 'episode' ? `tmdb:tv:${x.tmdbId}:s${x.s}e${x.e}` : `tmdb:movie:${x.tmdbId}`;
-    map[key] = { streamUrl: x.streamUrl, playUrl: x.playUrl, name: x.title, addedAt: x.addedAt || 0, libId: lib && lib.id };
+    map[key] = rec;
   }
   return map;
 }
@@ -9191,7 +9226,9 @@ async function fetchGuideBatch(chans) {
     else {
       if (guideMemo.size > 80) guideMemo.clear();
       try {
-        const g = await api('/api/iptv/guide?chs=' + ids.join(','));
+        const cids = (chans || []).filter((c) => c && c.idx >= 0).map((c) => encodeURIComponent(c.id || ''));
+        const cidParam = cids.length ? '&cids=' + cids.join(',') : '';
+        const g = await api('/api/iptv/guide?chs=' + ids.join(',') + cidParam);
         const channels = g.channels || [];
         const serverData = Object.fromEntries(channels.map((c) => [c.idx, c.programmes || []]));
         const syntheticOnly = !channels.some((c) => (c.programmes || []).some((p) => p && !p.synthetic));
@@ -9392,6 +9429,13 @@ function clearLiveClientCaches({ channels = false } = {}) {
     S._liveAt = 0;
   }
 }
+window.__tvTrimMemory = () => {
+  try {
+    clearLiveClientCaches();
+    S.musicCoverCache = {};
+    S.musicCoverFeedCache = {};
+  } catch {}
+};
 function fillLiveState(r) {
   S.liveEpg = !!r.epg;
   // Picking a category shows its channels AS A GUIDE LIST by default (owner request) —
@@ -9455,7 +9499,7 @@ async function loadLiveTv() {
   focusLiveGridMessage();
   try {
     const r = await loadLiveChannelsCombined();
-    if (!r.configured) { grid.innerHTML = '<div class="gridMore focusable">Live TV isn’t set up — add a server playlist in Settings, or add a personal Android TV playlist in Preferences.</div>'; focusLiveGridMessage(); return; }
+    if (!r.configured) { grid.innerHTML = '<div class="gridMore focusable">Live TV is not set up yet. Add a server playlist in Settings, or add your own playlist in Preferences.</div>'; focusLiveGridMessage(); return; }
     fillLiveState(r);
     if (!r.channels.length) { grid.innerHTML = liveNoChannelsHtml(S.liveSourceErrors); focusLiveGridMessage(); return; }
     if (S.view !== 'livetv') return; // user navigated away while the playlist downloaded
@@ -10468,7 +10512,27 @@ const MUSIC_CHART_DEFS = [
   { id: 'daily', title: 'Daily chart', note: 'Top songs today', query: 'top songs today' },
   { id: 'weekly', title: 'Weekly chart', note: 'Top songs this week', query: 'top songs this week' },
 ];
-async function loadMusicChartsFallback() {
+const MUSIC_HOME_FALLBACK_FEEDS = [
+  { id: 'weekly-playlists', title: 'Top playlists this week', kind: 'feeds', items: [
+    { title: 'Top playlists this week', sub: 'Fresh shared mixes', query: 'top playlists this week music', coverFeed: 'top playlists this week music', icon: 'chart', grad: 'mGrad2' },
+    { title: 'New Music Mix', sub: 'Fresh songs to sample first', query: 'new music mix', coverFeed: 'new music mix', icon: 'spark', grad: 'mGrad1' },
+    { title: 'Viral hits', sub: 'Songs moving fast right now', query: 'viral hits music this week', coverFeed: 'viral hits music this week', icon: 'spark', grad: 'mGrad3' },
+    { title: 'Weekend playlist', sub: 'Upbeat picks for later', query: 'weekend party playlist', coverFeed: 'weekend party playlist', icon: 'music', grad: 'mGrad4' },
+  ] },
+  { id: 'seasonal-mixes', title: 'Seasonal mixes', kind: 'feeds', items: [
+    { title: 'Summer Mix', sub: 'Seasonal songs for now', query: 'summer music mix', coverFeed: 'summer music mix', icon: 'spark', grad: 'mGrad1' },
+    { title: 'Summer Hits', sub: 'Popular seasonal picks', query: 'summer music mix hits', coverFeed: 'summer music mix hits', icon: 'chart', grad: 'mGrad2' },
+    { title: 'Summer Chill', sub: 'Softer seasonal listening', query: 'summer music mix chill', coverFeed: 'summer music mix chill', icon: 'smile', grad: 'mGrad3' },
+    { title: 'Summer Party', sub: 'More energy, less searching', query: 'summer music mix party', coverFeed: 'summer music mix party', icon: 'music', grad: 'mGrad4' },
+  ] },
+  { id: 'moods', title: 'Moods & moments', kind: 'feeds', items: [
+    { title: 'Focus', sub: 'Clean background energy', query: 'focus music mix', coverFeed: 'focus music mix', icon: 'smile', grad: 'mGrad2' },
+    { title: 'Chill', sub: 'Low-key listening', query: 'chill music mix', coverFeed: 'chill music mix', icon: 'smile', grad: 'mGrad3' },
+    { title: 'Workout', sub: 'High-energy tracks', query: 'workout music mix', coverFeed: 'workout music mix', icon: 'music', grad: 'mGrad1' },
+    { title: 'Road Trip', sub: 'Long-drive songs', query: 'road trip music mix', coverFeed: 'road trip music mix', icon: 'music', grad: 'mGrad4' },
+  ] },
+];
+async function loadMusicHomeFallback() {
   const charts = [];
   for (const def of MUSIC_CHART_DEFS) {
     try {
@@ -10476,22 +10540,34 @@ async function loadMusicChartsFallback() {
       charts.push({ ...def, results: r.results || [] });
     } catch {}
   }
-  return charts.filter((c) => c.results && c.results.length);
+  return {
+    version: 0,
+    shelves: [
+      { id: 'personal', title: 'Your playlists', kind: 'personal' },
+      ...MUSIC_HOME_FALLBACK_FEEDS,
+      ...charts.filter((c) => c.results && c.results.length).map((c) => ({
+        id: c.id === 'daily' ? 'trending-now' : 'top-songs-week',
+        title: c.id === 'daily' ? 'Trending now' : 'Top songs this week',
+        note: c.note,
+        kind: 'tracks',
+        results: c.results,
+      })),
+    ],
+  };
 }
 function loadMusic() {
   bootReady();
   if (!$('musicBrowse').children.length) renderMusicBrowse();
-  if (S.musicCharts === undefined) {
-    S.musicCharts = null;
-    api('/api/music/charts').then((r) => {
-      S.musicCharts = Array.isArray(r.charts) ? r.charts : [];
+  if (S.musicHome === undefined) {
+    S.musicHome = null;
+    api('/api/music/home').then((r) => {
+      S.musicHome = r && Array.isArray(r.shelves) ? r : { shelves: [] };
       renderMusicBrowse();
       requestAnimationFrame(() => {
         if (S.view === 'music' && S.zone !== 'rail' && !$('musicSearch').value.trim()) focusContent();
       });
     }).catch(async () => {
-      S.musicCharts = await loadMusicChartsFallback().catch(() => false);
-      if (!S.musicCharts || !S.musicCharts.length) S.musicCharts = false;
+      S.musicHome = await loadMusicHomeFallback().catch(() => false);
       renderMusicBrowse();
     });
   }
@@ -10665,20 +10741,31 @@ function playMusic(queue, idx, opts = {}) {
   S.musicCur = t;
   S.musicLoadFailed = false;
   mAudio.src = t.streamUrl;
-  if (opts.autoplay !== false) mAudio.play().catch(() => {});
+  if (opts.autoplay !== false) safeMusicPlay({ notify: opts.notify !== false });
   document.body.classList.add('musicOn');
   document.body.classList.toggle('musicPaused', opts.autoplay === false);
   if (opts.autoplay === false) setPlayIcon(false);
   markMusicCur();
   openMusicNow({ showQueue: !!opts.showQueue });
 }
+function safeMusicPlay(opts = {}) {
+  const p = mAudio.play();
+  if (p && typeof p.catch === 'function') {
+    p.catch(() => {
+      document.body.classList.add('musicPaused');
+      setPlayIcon(false);
+      if (opts.notify !== false) toast('Press play to start music.');
+    });
+  }
+  return p;
+}
 function musicToggle() {
   if (!S.musicCur) return;
-  if (mAudio.paused) mAudio.play().catch(() => {}); else mAudio.pause();
+  if (mAudio.paused) safeMusicPlay(); else mAudio.pause();
 }
 function musicTransport(action = 'toggle') {
   if (!S.musicCur) return false;
-  if (action === 'play') mAudio.play().catch(() => {});
+  if (action === 'play') safeMusicPlay();
   else if (action === 'pause') mAudio.pause();
   else if (action === 'stop') closeMusicPlayer();
   else if (action === 'next') musicNext();
@@ -10688,7 +10775,7 @@ function musicTransport(action = 'toggle') {
 }
 function musicNext(auto) {
   const q = S.musicQueue; if (!q || !q.length) return;
-  if (auto && S.musicRepeat === 'one') { mAudio.currentTime = 0; mAudio.pause(); return; }
+  if (auto && S.musicRepeat === 'one') { mAudio.currentTime = 0; safeMusicPlay({ notify: false }); return; }
   let next;
   if (S.musicShuffle && q.length > 1) {
     do { next = Math.floor(Math.random() * q.length); } while (next === S.musicIdx);
@@ -10697,7 +10784,7 @@ function musicNext(auto) {
     if (S.musicRepeat === 'all') next = 0;
     else return; // end of queue, no repeat
   }
-  playMusic(q, next, auto ? { autoplay: false } : {});
+  playMusic(q, next, { showQueue: $('musicNow').classList.contains('open'), notify: !auto });
 }
 function toggleShuffle() {
   S.musicShuffle = !S.musicShuffle;
@@ -10763,9 +10850,11 @@ mAudio.addEventListener('error', () => {
   if (!S.musicCur || S.musicLoadFailed) return;
   S.musicLoadFailed = true;
   try { mAudio.pause(); } catch {}
-  toast('Could not play that track. Press Next to try another.');
+  const canSkip = (S.musicQueue || []).length > 1 && (S.musicIdx < S.musicQueue.length - 1 || S.musicRepeat === 'all' || S.musicShuffle);
+  toast(canSkip ? 'Track unavailable. Skipping...' : 'Could not play that track.');
   document.body.classList.add('musicPaused');
   setPlayIcon(false);
+  if (canSkip) setTimeout(() => { if (S.musicLoadFailed) musicNext(true); }, 350);
 });
 function setPlayIcon(playing) {
   const ic = playing ? '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>' : '<path d="M8 5v14l11-7z"/>';
@@ -10816,49 +10905,6 @@ function focusMusic(i) {
   applyFocus(rows[S.musicRowIdx], !S.pointer);
   S.zone = 'music';
 }
-// Browse chips — mood/genre quick-searches so the Music page is never an empty box. Real
-// personal YTM playlists need the user's Google cookies (next round); this gives immediate
-// browsable content with zero auth.
-const MUSIC_MOODS = ['Top hits', 'Pop', 'Rock', 'Hip-Hop', 'Electronic', 'Lo-fi beats', 'Jazz', 'Classical', 'Workout', 'Chill', '80s', '90s'];
-function renderMusicBrowseOld() {
-  const wrap = $('musicBrowse'); wrap.innerHTML = '';
-  const addChip = (label, cls, onClick) => {
-    const b = document.createElement('button');
-    b.className = 'mChip focusable' + (cls ? ' ' + cls : ''); b.textContent = label;
-    b.addEventListener('click', onClick);
-    b.addEventListener('mouseenter', () => pointerHover() && focusChip([...wrap.children].indexOf(b)));
-    wrap.appendChild(b);
-  };
-  // YOUR music first (linked accounts): Liked songs + your playlists, amber-tinted.
-  if (Array.isArray(S.ytmPlaylists)) {
-    addChip('♥ Liked songs', 'mPl', () => loadPlaylistTracks('LM', 'Liked songs'));
-    S.ytmPlaylists.slice(0, 30).forEach((p) =>
-      addChip(p.title + (p.count ? ` · ${p.count}` : ''), 'mPl', () => loadPlaylistTracks(p.id, p.title)));
-  }
-  MUSIC_MOODS.forEach((m) => addChip(m, '', () => { $('musicSearch').value = m === 'Top hits' ? 'top hits 2026' : m + ' music'; doMusicSearch(); }));
-}
-const MUSIC_HOME_MOODS = ['Pop', 'Rock', 'Hip-Hop', 'Electronic', 'Lo-fi beats', 'Jazz', 'Classical', 'Workout', 'Chill', '80s', '90s', 'R&B'];
-const MUSIC_EXPLORE = [
-  { title: 'New releases', sub: 'Fresh albums and singles', query: 'new music releases', grad: 'mGrad1', icon: 'spark' },
-  { title: 'Charts', sub: 'Top songs right now', query: 'top songs 2026', grad: 'mGrad2', icon: 'chart' },
-  { title: 'Moods & genres', sub: 'Browse by vibe', query: 'chill music', grad: 'mGrad3', icon: 'smile' },
-  { title: 'Podcasts', sub: 'Music podcasts', query: 'music podcasts', grad: 'mGrad4', icon: 'podcast' },
-];
-const MUSIC_NEW = [
-  { title: 'New albums & singles', sub: 'Today on YouTube Music', query: 'new albums singles' },
-  { title: 'Fresh pop', sub: 'New pop releases', query: 'new pop music' },
-  { title: 'Fresh hip-hop', sub: 'New rap and hip-hop', query: 'new hip hop music' },
-  { title: 'Fresh rock', sub: 'New rock tracks', query: 'new rock music' },
-  { title: 'Fresh electronic', sub: 'New electronic music', query: 'new electronic music' },
-  { title: 'Fresh country', sub: 'New country music', query: 'new country music' },
-];
-const MUSIC_TOP = [
-  { title: 'Top songs', sub: 'Trending music videos', query: 'top songs 2026', grad: 'mGrad2' },
-  { title: 'Most played', sub: 'Popular right now', query: 'most played songs', grad: 'mGrad3' },
-  { title: 'Throwback hits', sub: 'Familiar favorites', query: 'classic hits music', grad: 'mGrad4' },
-  { title: 'Workout hits', sub: 'High-energy tracks', query: 'workout music', grad: 'mGrad1' },
-  { title: 'Focus', sub: 'Deep-work music', query: 'focus music', grad: 'mGrad2' },
-];
 function musicIcon(name) {
   const icons = {
     spark: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/>',
@@ -10873,6 +10919,31 @@ function musicIcon(name) {
 function musicRunQuery(q) {
   $('musicSearch').value = q;
   doMusicSearch();
+}
+async function startMusicFeed(item) {
+  const q = String(item && (item.query || item.coverFeed || item.title) || '').trim();
+  if (!q) return;
+  toast(`Loading ${item.title || 'mix'}...`);
+  try {
+    const r = await api('/api/music/search?q=' + encodeURIComponent(q) + '&limit=24');
+    const rows = r.results || [];
+    if (!rows.length) return toast('No songs found for that mix yet.');
+    playMusic(rows, 0, { showQueue: true });
+  } catch (e) {
+    toast('Could not load mix: ' + e.message);
+  }
+}
+function openMusicConnect() {
+  switchView('prefs');
+  let tries = 0;
+  const focusConnect = () => {
+    const tab = document.querySelector('#prefTabs button[data-tab="connect"]');
+    if (tab) tab.click();
+    const btn = $('ytmStartLink') || $('ytmRelink');
+    if (btn) return applyFocus(btn, !S.pointer);
+    if (++tries < 30) requestAnimationFrame(focusConnect);
+  };
+  requestAnimationFrame(focusConnect);
 }
 async function hydrateMusicHomeCovers() {
   S.musicCoverCache = S.musicCoverCache || {};
@@ -10929,10 +11000,10 @@ function setMusicCardCover(card, url) {
 }
 function renderMusicBrowse() {
   const wrap = $('musicBrowse'); wrap.innerHTML = '';
-  const addShelf = (title, cls = '') => {
+  const addShelf = (title, cls = '', note = '') => {
     const shelf = document.createElement('section');
     shelf.className = 'musicShelf ' + cls;
-    shelf.innerHTML = `${title ? `<div class="musicShelfTop"><h2>${esc(title)}</h2></div>` : ''}<div class="${cls.includes('topTiles') ? 'musicTiles' : 'musicRail'}"></div>`;
+    shelf.innerHTML = `${title ? `<div class="musicShelfTop"><h2>${esc(title)}</h2>${note ? `<div class="mNote">${esc(note)}</div>` : ''}</div>` : ''}<div class="${cls.includes('topTiles') ? 'musicTiles' : 'musicRail'}"></div>`;
     wrap.appendChild(shelf);
     bindEdgeScroll(shelf);
     return shelf.lastElementChild;
@@ -10952,30 +11023,7 @@ function renderMusicBrowse() {
     b.addEventListener('mouseenter', () => pointerHover() && focusChip(chipEls().indexOf(b)));
     parent.appendChild(b);
   };
-  if (S.musicCharts === null) {
-    const charts = addShelf('Charts');
-    charts.innerHTML = '<div class="mEmpty">Loading daily and weekly charts...</div>';
-  } else if (Array.isArray(S.musicCharts) && S.musicCharts.length) {
-    S.musicCharts.forEach((chart, ci) => {
-      const rail = addShelf(chart.title || (ci ? 'Weekly chart' : 'Daily chart'));
-      const tracks = (chart.results || []).filter((t) => t && t.id);
-      if (!tracks.length) {
-        rail.innerHTML = '<div class="mEmpty">No chart tracks available right now.</div>';
-        return;
-      }
-      tracks.slice(0, 14).forEach((t, i) => addTile(rail, {
-        title: t.title,
-        sub: t.artist || chart.note || '',
-        grad: `mGrad${((i + ci) % 4) + 1}`,
-        icon: 'chart',
-        coverUrl: t.thumb,
-      }, 'mCard mChart', () => playMusic(tracks, i, { showQueue: true })));
-    });
-  } else if (S.musicCharts === false) {
-    const charts = addShelf('Charts');
-    charts.innerHTML = '<div class="mEmpty">Charts are unavailable right now.</div>';
-  }
-  const yours = addShelf('Your music', 'topTiles');
+  const yours = addShelf('Your playlists', 'topTiles', 'Liked Music and your YouTube Music playlists stay first.');
   if (Array.isArray(S.ytmPlaylists)) {
     addTile(yours, { title: 'Liked Music', sub: 'Your YouTube Music favorites', grad: 'mGrad1', icon: 'heart', coverPlaylist: 'LM' }, 'mCard mPl',
       () => startMusicPlaylist('LM', 'Liked Music'));
@@ -10985,7 +11033,40 @@ function renderMusicBrowse() {
   } else if (S.ytmPlaylists === null) {
     yours.innerHTML = '<div class="mEmpty">Loading your YouTube Music library...</div>';
   } else {
-    yours.innerHTML = '<div class="mEmpty">Link YouTube Music in Preferences to show favorites and playlists here.</div>';
+    addTile(yours, { title: 'Connect YouTube Music', sub: 'Add your account to show Liked Music and playlists here.', grad: 'mGrad1', icon: 'music', coverFeed: 'liked music playlist' }, 'mCard mConnect',
+      openMusicConnect);
+  }
+  if (S.musicHome === null) {
+    const loading = addShelf('For you');
+    loading.innerHTML = '<div class="mEmpty">Loading weekly and seasonal mixes...</div>';
+  } else if (S.musicHome === false) {
+    const unavailable = addShelf('For you');
+    unavailable.innerHTML = '<div class="mEmpty">Music discovery is unavailable right now.</div>';
+  } else {
+    const shelves = ((S.musicHome && S.musicHome.shelves) || []).filter((s) => s && s.kind !== 'personal');
+    shelves.forEach((shelf) => {
+      if (shelf.kind === 'feeds') {
+        const rail = addShelf(shelf.title || 'Mixes', '', shelf.note || '');
+        (shelf.items || []).slice(0, 14).forEach((item, i) => addTile(rail, {
+          ...item,
+          sub: item.sub || shelf.note || '',
+          grad: item.grad || `mGrad${(i % 4) + 1}`,
+          icon: item.icon || 'music',
+          coverFeed: item.coverFeed || item.query || item.title,
+        }, 'mCard mFeed', () => startMusicFeed(item)));
+      } else if (shelf.kind === 'tracks') {
+        const tracks = (shelf.results || []).filter((t) => t && t.id);
+        if (!tracks.length) return;
+        const rail = addShelf(shelf.title || 'Trending now', '', shelf.note || '');
+        tracks.slice(0, 14).forEach((t, i) => addTile(rail, {
+          title: t.title,
+          sub: t.artist || shelf.note || '',
+          grad: `mGrad${((i + 1) % 4) + 1}`,
+          icon: 'chart',
+          coverUrl: t.thumb,
+        }, 'mCard mChart', () => playMusic(tracks, i, { showQueue: true })));
+      }
+    });
   }
   setTimeout(hydrateMusicHomeCovers, 50);
 }
@@ -11067,8 +11148,8 @@ function toggleMusicQueue() {
 function updateMusicQueueToggle() {
   const hidden = $('musicNow').classList.contains('queueHidden') || !!S.musicQueueHidden;
   const btn = $('mnQueueToggle');
-  btn.title = hidden ? 'Show playlist' : 'Hide playlist';
-  btn.querySelector('span').textContent = hidden ? 'Show playlist' : 'Hide playlist';
+  btn.title = hidden ? 'Show queue' : 'Hide queue';
+  btn.setAttribute('aria-label', btn.title);
 }
 function updateMusicNow() {
   if (!$('musicNow').classList.contains('open')) return;
@@ -11245,21 +11326,17 @@ function openPrefs() { // populates the Preferences PAGE (it's a view now, not a
 }
 // YouTube Music link panel (Preferences → Connections): paste an exported cookies.txt.
 // The text is sent ONCE, stored encrypted server-side, and never comes back to the UI.
-async function renderYtmBox() {
-  const box = $('ytmBox');
-  let st;
-  try { st = await api('/api/music/status'); } catch { box.innerHTML = '<div class="hint">server unreachable</div>'; return; }
-  if (!st.ytdlp) {
-    box.innerHTML = '<div class="hint">yt-dlp isn’t installed on this server — Music is disabled. (The Docker image ships it; bare installs: <b>pip install yt-dlp</b>.)</div>';
-    return;
-  }
+function renderYtmConnectBox(box, st) {
   if (st.linked) {
-    box.innerHTML = `<div class="kv"><span>Status</span><span>linked ✓ — your playlists show on the Music page</span></div>
-      <div style="display:flex;gap:10px;margin-top:12px">
-        <button class="btn ghost focusable" id="ytmRelink">Replace cookies…</button>
-        <button class="btn ghost focusable" id="ytmUnlink">Unlink</button>
-      </div>
-      <div class="hint">If playlists stop loading some day, the cookies expired — just re-export and replace.</div>`;
+    box.innerHTML = `<div class="ytmConnect">
+      <div class="ytmConnectIcon">${musicIcon('music')}</div>
+      <div><h3>YouTube Music connected</h3><p>Your Liked Music and playlists appear first on the Music page.</p></div>
+    </div>
+    <div style="display:flex;gap:10px;margin-top:12px">
+      <button class="btn ghost focusable" id="ytmRelink">Replace connection</button>
+      <button class="btn ghost focusable" id="ytmUnlink">Unlink</button>
+    </div>
+    <div class="hint">If playlists stop loading later, refresh the YouTube session file and replace the connection.</div>`;
     box.querySelector('#ytmUnlink').addEventListener('click', async () => {
       await api('/api/music/unlink', { method: 'POST', body: {} });
       S.ytmPlaylists = null; toast('YouTube Music unlinked'); renderYtmBox();
@@ -11267,25 +11344,72 @@ async function renderYtmBox() {
     box.querySelector('#ytmRelink').addEventListener('click', () => renderYtmPaste(box));
     return;
   }
-  renderYtmPaste(box);
+  box.innerHTML = `<div class="ytmConnect">
+    <div class="ytmConnectIcon">${musicIcon('music')}</div>
+    <div><h3>Connect YouTube Music</h3><p>Bring in Liked Music and your playlists. Public search, weekly picks, and seasonal mixes work even before you connect.</p>
+      <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap">
+        <button class="btn primary focusable" id="ytmStartLink">Connect account</button>
+        <button class="btn ghost focusable" id="ytmAdvancedLink">Advanced import</button>
+      </div>
+    </div>
+  </div>`;
+  box.querySelector('#ytmStartLink').addEventListener('click', () => renderYtmPaste(box));
+  box.querySelector('#ytmAdvancedLink').addEventListener('click', () => renderYtmPaste(box, { showPaste: true }));
 }
-function renderYtmPaste(box) {
+function renderYtmImportBox(box, opts = {}) {
   box.innerHTML = `
-    <textarea id="ytmCookies" rows="5" placeholder="# Netscape HTTP Cookie File&#10;.youtube.com&#9;TRUE&#9;/&#9;…  (paste the whole exported file)"
-      style="width:100%;background:rgba(11,8,18,.7);border:1px solid var(--line);border-radius:12px;padding:12px;color:var(--text);font:500 11.5px 'JetBrains Mono';outline:none;resize:vertical"></textarea>
-    <div style="display:flex;gap:10px;margin-top:10px">
-      <button class="btn primary focusable" id="ytmLink" style="flex:1;justify-content:center">Link YouTube Music</button>
-    </div><div class="hint" id="ytmMsg"></div>`;
+    <div class="ytmConnect">
+      <div class="ytmConnectIcon">${musicIcon('music')}</div>
+      <div><h3>Import YouTube Music session</h3><p>Use a cookies.txt exported while signed in to music.youtube.com. Triboon stores it encrypted and only uses it to load your playlists.</p>
+        <ol class="ytmSteps"><li>Export cookies.txt from the signed-in browser.</li><li>Choose the file here, or paste it manually.</li><li>Triboon validates it before showing playlists.</li></ol>
+      </div>
+    </div>
+    <div class="ytmImportBox">
+      <span id="ytmFileName">No session file selected</span>
+      <button class="btn ghost focusable" id="ytmPick">Choose file</button>
+      <input id="ytmFile" type="file" accept=".txt,text/plain" style="display:none">
+    </div>
+    <textarea id="ytmCookies" rows="5" class="ytmPaste" placeholder="Advanced paste: paste the exported cookies.txt here"${opts.showPaste ? '' : ' hidden'}></textarea>
+    <div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap">
+      <button class="btn primary focusable" id="ytmLink" style="flex:1;justify-content:center">Connect YouTube Music</button>
+      <button class="btn ghost focusable" id="ytmCancel">Cancel</button>
+    </div><div class="hint" id="ytmMsg">The raw session text is never shown again after saving.</div>`;
+  let selectedText = '';
+  const file = box.querySelector('#ytmFile');
+  box.querySelector('#ytmPick').addEventListener('click', () => file.click());
+  file.addEventListener('change', async () => {
+    const f = file.files && file.files[0];
+    if (!f) return;
+    try {
+      selectedText = await f.text();
+      box.querySelector('#ytmFileName').textContent = f.name;
+      box.querySelector('#ytmMsg').textContent = 'Session file ready. Connect to validate it.';
+    } catch { toast('Could not read that file'); }
+  });
+  box.querySelector('#ytmCancel').addEventListener('click', renderYtmBox);
   box.querySelector('#ytmLink').addEventListener('click', async () => {
-    const text = box.querySelector('#ytmCookies').value;
-    if (!text.trim()) return toast('Paste the exported cookies.txt first');
+    const text = selectedText || box.querySelector('#ytmCookies').value;
+    if (!text.trim()) return toast('Choose or paste the YouTube Music session file first');
     try {
       await api('/api/music/link', { method: 'POST', body: { cookies: text } });
-      S.ytmPlaylists = null; // Music page refetches
-      toast('YouTube Music linked ✓ — your playlists are on the Music page');
+      S.ytmPlaylists = null;
+      toast('YouTube Music connected - your playlists are on the Music page');
       renderYtmBox();
     } catch (e) { toast(e.message); }
   });
+}
+async function renderYtmBox() {
+  const box = $('ytmBox');
+  let st;
+  try { st = await api('/api/music/status'); } catch { box.innerHTML = '<div class="hint">server unreachable</div>'; return; }
+  if (!st.ytdlp) {
+    box.innerHTML = '<div class="hint">yt-dlp is not installed on this server - Music is disabled. The Docker image ships it; bare installs can add it with pip install yt-dlp.</div>';
+    return;
+  }
+  return renderYtmConnectBox(box, st);
+}
+function renderYtmPaste(box, opts = {}) {
+  return renderYtmImportBox(box, opts);
 }
 // Trakt link panel (Preferences → Connections): device-code flow, then sync controls.
 async function renderTraktBox() {
@@ -12172,7 +12296,7 @@ function renderIptvSyncStatus(st = {}) {
     ['Channels', st.configured ? String(st.channelCount || 0) : 'not set up'],
     ['Guide', st.configured ? `${st.guideSourceCount || 0}/${st.sourceCount || 0} sources` : 'not set up'],
     ['Sources', st.configured ? `${st.loadedSourceCount || 0}/${st.sourceCount || 0} loaded` : 'none'],
-    ['Next sync', st.running ? 'running now' : syncScheduleTime(st.nextScheduledAt)],
+    ['Next sync', st.running ? 'running now' : (st.configured ? syncScheduleTime(st.nextScheduledAt) : 'disabled')],
   ].map(([k, v]) => `<div class="syncCard"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`).join('');
   const srcRows = (st.sources || []).map((src) => {
     const bad = src.error;
@@ -12307,7 +12431,7 @@ async function refreshSettings() {
       ? 'key saved ✓ — subtitles live in the player CC menu'
       : 'not set up - CC needs a Wyzie Subs key';
     $('traktStatus').textContent = s.traktClientId
-      ? `app saved ✓ (id ${s.traktClientId.slice(0, 10)}…${s.traktClientSecret ? ' · secret ✓' : ' · secret MISSING'}) — users link in Preferences → Connections`
+      ? `app saved ✓ (${s.traktClientSecret ? 'secret saved' : 'secret missing'}) — users link in Preferences → Connections`
       : 'not configured yet';
     $('traktId').placeholder = s.traktClientId ? 'client id saved ✓ — paste to replace' : 'Trakt client id';
     $('traktSecret').placeholder = s.traktClientSecret ? 'client secret saved ✓ — paste to replace' : 'Trakt client secret';

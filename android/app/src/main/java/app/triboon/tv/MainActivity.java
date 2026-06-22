@@ -14,8 +14,12 @@ import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.app.Activity;
 import android.app.ActivityManager;
+import android.app.PictureInPictureParams;
 import android.content.Context;
+import android.content.pm.ActivityInfo;
+import android.content.pm.PackageInfo;
 import android.content.res.ColorStateList;
+import android.content.res.Configuration;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -34,6 +38,7 @@ import android.os.SystemClock;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
 import android.text.TextUtils;
+import android.util.Rational;
 import android.util.Base64;
 import android.util.Log;
 import android.view.KeyEvent;
@@ -64,6 +69,7 @@ import androidx.media3.common.C;
 import androidx.media3.common.Format;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.MimeTypes;
+import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
 import androidx.media3.common.TrackSelectionOverride;
@@ -71,8 +77,11 @@ import androidx.media3.common.Tracks;
 import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.datasource.HttpDataSource;
 import androidx.media3.exoplayer.DefaultLoadControl;
+import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.SeekParameters;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
+import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter;
 import androidx.media3.ui.AspectRatioFrameLayout;
 import androidx.media3.ui.CaptionStyleCompat;
 import androidx.media3.ui.PlayerView;
@@ -92,6 +101,7 @@ import java.net.URLEncoder;
 import java.util.List;
 import java.util.Map;
 import java.net.HttpURLConnection;
+import java.net.InetAddress;
 import java.net.URL;
 
 import javax.crypto.Cipher;
@@ -121,6 +131,11 @@ public class MainActivity extends Activity {
     private static final int REQ_MIC = 32;
     private static final long WEB_RENDERER_CRASH_WINDOW_MS = 15000L;
     private static final int WEB_RENDERER_CRASH_LIMIT = 2;
+    private static final int MIN_WEBVIEW_MAJOR = 88;
+    private static final long PERSONAL_IPTV_HOST_SAFETY_TTL_MS = 60000L;
+    private static final int NATIVE_BACKDROP_MAX_BYTES = 6 * 1024 * 1024;
+    private static final int NATIVE_BACKDROP_MAX_WIDTH = 1280;
+    private static final int NATIVE_BACKDROP_MAX_HEIGHT = 720;
 
     private WebView web;
     private LinearLayout setup;
@@ -130,6 +145,7 @@ public class MainActivity extends Activity {
     private View fullscreenVideo;            // WebChromeClient custom view (HTML5 fullscreen)
     private FrameLayout nativePlayerLayer;   // Android-native player overlay
     private PlayerView nativePlayerView;
+    private View nativeGuidePipRevealScrim;
     private LinearLayout nativeTop;
     private TextView nativePlayerTitle;
     private TextView nativePlayerSubline;
@@ -167,15 +183,18 @@ public class MainActivity extends Activity {
     private int nativeControlIndex = -1;
     private TextView nativeSubtitleOverlay;
     private ExoPlayer nativePlayer;
+    private DefaultHttpDataSource.Factory nativeHttpDataSourceFactory;
     private String nativeMode = "";          // "live" or "video"
     private String nativeKind = "direct";
     private String nativeQualityLabel = "1080p";
     private String nativeUrl = "";
     private String nativeMime = "";
+    private String nativeHostHeader = "";
     private String nativeFallbackUrl = "";
     private String nativeFallbackMime = "";
     private final java.util.ArrayList<String> nativeFallbackUrls = new java.util.ArrayList<>();
     private final java.util.ArrayList<String> nativeFallbackMimes = new java.util.ArrayList<>();
+    private final java.util.ArrayList<String> nativeFallbackHostHeaders = new java.util.ArrayList<>();
     private int nativeFallbackIndex = 0;
     private String nativePlaybackTitle = "Triboon";
     private String nativePlaybackSubline = "";
@@ -187,6 +206,7 @@ public class MainActivity extends Activity {
     private int nativeEpisodeIndex = 0;
     private boolean nativeEpisodeStripOpen = false;
     private String nativeSubtitleUrl = "";
+    private String nativeSubtitleHostHeader = "";
     private String nativeSubtitleLang = "";
     private String nativeSubtitleLabel = "";
     private String nativeSubtitleRel = "";
@@ -243,6 +263,10 @@ public class MainActivity extends Activity {
     private long lastWebRendererGoneAt;
     private int webRendererGoneCount;
     private final java.util.ArrayList<String> pendingTvKeys = new java.util.ArrayList<>();
+    private final java.util.HashMap<String, PersonalIptvHostPin> personalIptvHostSafetyCache = new java.util.HashMap<>();
+    private String nativePlaybackCapsCache;
+    private MediaCodecInfo[] nativeDecoderInfoCache;
+    private boolean nativeVoiceDucked;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -255,16 +279,23 @@ public class MainActivity extends Activity {
         root.setFocusable(true);
         root.setFocusableInTouchMode(true);
         setContentView(root);
+        applySystemUiPolicy();
 
-        buildWebView();
         buildSetupScreen();
+        if (!ensureWebViewReady()) {
+            showSetup(webViewUnavailableMessage());
+            return;
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
                     OnBackInvokedDispatcher.PRIORITY_DEFAULT,
                     this::handleSystemBack);
         }
 
-        String server = prefs().getString(KEY_SERVER, "");
+        String server = normalizeServerUrl(prefs().getString(KEY_SERVER, ""));
+        if (!server.equals(prefs().getString(KEY_SERVER, ""))) {
+            prefs().edit().putString(KEY_SERVER, server).apply();
+        }
         if (server.isEmpty()) showSetup(null);
         else web.loadUrl(server);
 
@@ -283,13 +314,21 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        applySystemUiPolicy();
+        if (web != null) {
+            web.onResume();
+            web.resumeTimers();
+        }
         scheduleTvFocusRecovery("resume");
     }
 
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
-        if (hasFocus) scheduleTvFocusRecovery("window");
+        if (hasFocus) {
+            applySystemUiPolicy();
+            scheduleTvFocusRecovery("window");
+        }
     }
 
     private void scheduleTvFocusRecovery(String reason) {
@@ -334,7 +373,281 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void applySystemUiPolicy() {
+        try {
+            if (isTvDevice()) {
+                setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+            } else {
+                setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                WindowManager.LayoutParams lp = getWindow().getAttributes();
+                lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+                getWindow().setAttributes(lp);
+            }
+            View decor = getWindow().getDecorView();
+            decor.setSystemUiVisibility(
+                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                            | View.SYSTEM_UI_FLAG_FULLSCREEN
+                            | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                            | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                            | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                            | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private boolean ensureWebViewReady() {
+        String problem = webViewSupportProblem();
+        if (problem != null) {
+            Log.e(TAG, problem);
+            return false;
+        }
+        if (web != null) return true;
+        try {
+            buildWebView();
+            return true;
+        } catch (Throwable t) {
+            Log.e(TAG, "WebView startup failed", t);
+            disposeWebView(web, false);
+            return false;
+        }
+    }
+
+    private String webViewUnavailableMessage() {
+        String problem = webViewSupportProblem();
+        if (problem != null) return problem;
+        return "Android System WebView could not start. Update Android System WebView or Chrome, then reopen Triboon.";
+    }
+
+    private String webViewSupportProblem() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return null;
+        try {
+            PackageInfo pkg = WebView.getCurrentWebViewPackage();
+            if (pkg == null) {
+                return "Android System WebView is missing or disabled. Update or enable Android System WebView or Chrome, then reopen Triboon.";
+            }
+            int major = parseMajorVersion(pkg.versionName);
+            if (major > 0 && major < MIN_WEBVIEW_MAJOR) {
+                return "Android System WebView is too old for Triboon. Update Android System WebView or Chrome, then reopen the app.";
+            }
+            return null;
+        } catch (Throwable t) {
+            Log.e(TAG, "WebView provider check failed", t);
+            return "Android System WebView is not available. Update Android System WebView or Chrome, then reopen Triboon.";
+        }
+    }
+
+    private int parseMajorVersion(String versionName) {
+        if (versionName == null) return 0;
+        try {
+            String first = versionName.trim().split("\\.", 2)[0];
+            return first.isEmpty() ? 0 : Integer.parseInt(first);
+        } catch (Exception ignored) {
+            return 0;
+        }
+    }
+
     private SharedPreferences prefs() { return getSharedPreferences(PREFS, MODE_PRIVATE); }
+
+    private String normalizeServerUrl(String raw) {
+        String url = raw == null ? "" : raw.trim();
+        if (url.isEmpty()) return "";
+        if (!url.startsWith("http://") && !url.startsWith("https://")) url = "http://" + url;
+        return url.replaceAll("/+$", "");
+    }
+
+    private int normalizedPort(Uri u) {
+        if (u == null) return -1;
+        int port = u.getPort();
+        if (port > 0) return port;
+        String scheme = u.getScheme() == null ? "" : u.getScheme().toLowerCase(Locale.US);
+        if ("https".equals(scheme)) return 443;
+        if ("http".equals(scheme)) return 80;
+        return -1;
+    }
+
+    private boolean sameOrigin(Uri a, Uri b) {
+        if (a == null || b == null) return false;
+        String as = a.getScheme() == null ? "" : a.getScheme().toLowerCase(Locale.US);
+        String bs = b.getScheme() == null ? "" : b.getScheme().toLowerCase(Locale.US);
+        String ah = a.getHost() == null ? "" : a.getHost().toLowerCase(Locale.US);
+        String bh = b.getHost() == null ? "" : b.getHost().toLowerCase(Locale.US);
+        return !as.isEmpty() && as.equals(bs) && !ah.isEmpty() && ah.equals(bh)
+                && normalizedPort(a) == normalizedPort(b);
+    }
+
+    private boolean isTrustedServerUrl(String raw) {
+        String server = normalizeServerUrl(prefs().getString(KEY_SERVER, ""));
+        if (server.isEmpty() || raw == null || raw.trim().isEmpty()) return false;
+        try {
+            return sameOrigin(Uri.parse(raw), Uri.parse(server));
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private boolean trustedBridgeOrigin() {
+        return web != null && isTrustedServerUrl(web.getUrl());
+    }
+
+    private boolean isBlockedPersonalIptvAddress(InetAddress addr) {
+        if (addr == null) return true;
+        if (addr.isAnyLocalAddress() || addr.isLoopbackAddress() || addr.isLinkLocalAddress()
+                || addr.isSiteLocalAddress() || addr.isMulticastAddress()) return true;
+        byte[] b = addr.getAddress();
+        if (b == null) return true;
+        if (b.length == 4) return isBlockedIpv4Bytes(b, 0);
+        if (b.length == 16) {
+            int b0 = b[0] & 0xff;
+            int b1 = b[1] & 0xff;
+            int b2 = b[2] & 0xff;
+            int b3 = b[3] & 0xff;
+            if ((b0 & 0xfe) == 0xfc) return true;                 // Unique local fc00::/7
+            if (b0 == 0x20 && b1 == 0x02) return true;             // 6to4 can embed private IPv4
+            if (b0 == 0x20 && b1 == 0x01 && b2 == 0 && b3 == 0) return true; // Teredo
+            boolean mapped = true;
+            for (int i = 0; i < 10; i++) mapped = mapped && b[i] == 0;
+            if (mapped && (b[10] & 0xff) == 0xff && (b[11] & 0xff) == 0xff) {
+                return isBlockedIpv4Bytes(b, 12);
+            }
+            if (b0 == 0 && b1 == 0x64 && b2 == 0xff && b3 == 0x9b) {
+                return isBlockedIpv4Bytes(b, 12);                 // Well-known NAT64 prefix
+            }
+        }
+        return false;
+    }
+
+    private boolean isBlockedIpv4Bytes(byte[] b, int offset) {
+        if (b == null || b.length < offset + 4) return true;
+        int a = b[offset] & 0xff;
+        int c = b[offset + 1] & 0xff;
+        if (a == 0 || a == 10 || a == 127) return true;
+        if (a == 100 && c >= 64 && c <= 127) return true;          // CGNAT
+        if (a == 169 && c == 254) return true;
+        if (a == 172 && c >= 16 && c <= 31) return true;
+        if (a == 192 && (c == 0 || c == 168)) return true;
+        if (a == 198 && (c == 18 || c == 19)) return true;
+        return a >= 224;
+    }
+
+    private static class ValidatedNativeUrl {
+        final String originalUrl;
+        final String connectUrl;
+        final String hostHeader;
+
+        ValidatedNativeUrl(String originalUrl, String connectUrl, String hostHeader) {
+            this.originalUrl = originalUrl == null ? "" : originalUrl;
+            this.connectUrl = connectUrl == null ? "" : connectUrl;
+            this.hostHeader = hostHeader == null ? "" : hostHeader;
+        }
+    }
+
+    private static class PersonalIptvHostPin {
+        final InetAddress address;
+        final long expiresAt;
+
+        PersonalIptvHostPin(InetAddress address, long expiresAt) {
+            this.address = address;
+            this.expiresAt = expiresAt;
+        }
+    }
+
+    private String hostHeaderFor(Uri u) {
+        if (u == null || u.getHost() == null || u.getHost().trim().isEmpty()) return "";
+        String host = u.getHost().trim();
+        if (host.indexOf(':') >= 0 && !host.startsWith("[") && !host.endsWith("]")) {
+            host = "[" + host + "]";
+        }
+        int port = u.getPort();
+        String scheme = u.getScheme() == null ? "" : u.getScheme().toLowerCase(Locale.US);
+        boolean defaultPort = ("http".equals(scheme) && port == 80) || ("https".equals(scheme) && port == 443);
+        return port > 0 && !defaultPort ? host + ":" + port : host;
+    }
+
+    private String addressAuthority(InetAddress address, int port, String scheme) {
+        String host = address == null ? "" : address.getHostAddress();
+        if (host.indexOf('%') >= 0) host = host.substring(0, host.indexOf('%'));
+        if (host.indexOf(':') >= 0 && !host.startsWith("[") && !host.endsWith("]")) {
+            host = "[" + host + "]";
+        }
+        boolean defaultPort = ("http".equals(scheme) && port == 80) || ("https".equals(scheme) && port == 443);
+        return port > 0 && !defaultPort ? host + ":" + port : host;
+    }
+
+    private boolean hostHeaderSafe(String hostHeader) {
+        return hostHeader != null && !hostHeader.trim().isEmpty()
+                && hostHeader.indexOf('\r') < 0 && hostHeader.indexOf('\n') < 0;
+    }
+
+    private boolean hostLooksLiteral(String host) {
+        if (host == null) return false;
+        String h = host.trim();
+        if (h.isEmpty()) return false;
+        return h.indexOf(':') >= 0 || h.matches("^[0-9.]+$");
+    }
+
+    private ValidatedNativeUrl validateAndPinPersonalIptvUrl(String raw) throws IOException {
+        String url = normalizeHttpUrl(raw, false);
+        Uri u = Uri.parse(url);
+        String scheme = u == null || u.getScheme() == null ? "" : u.getScheme().toLowerCase(Locale.US);
+        String host = u == null || u.getHost() == null ? "" : u.getHost().trim();
+        if (!"http".equals(scheme) && !"https".equals(scheme)) throw new IOException("only http/https URLs are supported");
+        if (host.isEmpty()) throw new IOException("host is missing");
+        if ("localhost".equalsIgnoreCase(host) || host.toLowerCase(Locale.US).endsWith(".localhost")) {
+            throw new IOException("local/private IPTV hosts are blocked on this device");
+        }
+        String cacheKey = scheme + "|" + host.toLowerCase(Locale.US) + "|" + normalizedPort(u);
+        long now = SystemClock.elapsedRealtime();
+        PersonalIptvHostPin cached = personalIptvHostSafetyCache.get(cacheKey);
+        InetAddress picked = cached != null && cached.expiresAt > now ? cached.address : null;
+        if (picked == null) {
+            InetAddress[] addresses = InetAddress.getAllByName(host);
+            if (addresses == null || addresses.length == 0) throw new IOException("host could not be resolved");
+            for (InetAddress address : addresses) {
+                if (isBlockedPersonalIptvAddress(address)) {
+                    throw new IOException("local/private IPTV hosts are blocked on this device");
+                }
+            }
+            picked = addresses[0];
+            personalIptvHostSafetyCache.put(cacheKey, new PersonalIptvHostPin(picked, now + PERSONAL_IPTV_HOST_SAFETY_TTL_MS));
+        }
+        if ("https".equals(scheme) && !hostLooksLiteral(host)) {
+            throw new IOException("device-local HTTPS IPTV cannot be DNS-pinned on this Android build; add this playlist to the server instead");
+        }
+        String hostHeader = hostHeaderFor(u);
+        if (!hostHeaderSafe(hostHeader)) throw new IOException("invalid IPTV host");
+        String pinnedAuthority = addressAuthority(picked, u.getPort(), scheme);
+        String pinnedUrl = u.buildUpon().encodedAuthority(pinnedAuthority).build().toString();
+        return new ValidatedNativeUrl(url, pinnedUrl, hostHeader);
+    }
+
+    private String validatedPersonalIptvUrl(String raw) throws IOException {
+        return validateAndPinPersonalIptvUrl(raw).originalUrl;
+    }
+
+    private ValidatedNativeUrl validateNativePlaybackUrl(String raw) throws IOException {
+        String url = normalizeHttpUrl(raw, false);
+        if (url.isEmpty()) throw new IOException("missing stream url");
+        if (isTrustedServerUrl(url)) return new ValidatedNativeUrl(url, url, "");
+        return validateAndPinPersonalIptvUrl(url);
+    }
+
+    private ValidatedNativeUrl validateNativeSubtitleOverlayUrl(String raw, String pinnedHostHeader) throws IOException {
+        ValidatedNativeUrl safe = validateNativePlaybackUrl(raw);
+        String hostHeader = safe.hostHeader;
+        try {
+            String connectHost = Uri.parse(safe.connectUrl).getHost();
+            if (hostHeaderSafe(pinnedHostHeader) && hostLooksLiteral(connectHost)) {
+                hostHeader = pinnedHostHeader.trim();
+            }
+        } catch (Exception ignored) {}
+        return new ValidatedNativeUrl(safe.originalUrl, safe.connectUrl, hostHeader);
+    }
+
+    private String validatedNativePlaybackUrl(String raw) throws IOException {
+        return validateNativePlaybackUrl(raw).connectUrl;
+    }
 
     private boolean isTvDevice() {
         android.app.UiModeManager ui = (android.app.UiModeManager) getSystemService(UI_MODE_SERVICE);
@@ -359,19 +672,31 @@ public class MainActivity extends Activity {
         // adb access is owner-gated anyway, and this is how TV-side issues get diagnosed.
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG);
         web = new WebView(this);
+        web.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            web.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false);
+        }
         // The shell HTML is served no-cache by the server. Keep WebView's normal disk cache
         // for art/assets between launches; only flush once after an APK version change.
         String cacheVersion = prefs().getString(KEY_CACHE_VERSION, "");
         if (!BuildConfig.VERSION_NAME.equals(cacheVersion)) {
-            web.clearCache(true);
-            prefs().edit().putString(KEY_CACHE_VERSION, BuildConfig.VERSION_NAME).apply();
+            web.postDelayed(() -> {
+                if (web == null) return;
+                web.clearCache(true);
+                prefs().edit().putString(KEY_CACHE_VERSION, BuildConfig.VERSION_NAME).apply();
+            }, 5500);
         }
         web.setBackgroundColor(0xFF0B0812);
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);                       // login token lives in localStorage
         s.setMediaPlaybackRequiresUserGesture(false);       // press-play = instant playback
-        s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        s.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
+        s.setAllowFileAccess(false);
+        s.setAllowContentAccess(false);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            s.setOffscreenPreRaster(true);
+        }
         s.setSupportZoom(false);
         // Tag the UA so the web UI can adapt. Phones stay in responsive touch mode; TVs get
         // the D-pad shell class and direct-play-first TV treatment.
@@ -429,9 +754,8 @@ public class MainActivity extends Activity {
             // Stay inside the app: only the configured server's pages render here. The web UI
             // hands video off to intent URLs only on desktop (VLC), so anything else is noise.
             @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest req) {
-                String server = prefs().getString(KEY_SERVER, "");
                 Uri u = req.getUrl();
-                return server.isEmpty() || u == null || !server.contains(u.getHost() == null ? "__no_host__" : u.getHost());
+                return u == null || !isTrustedServerUrl(u.toString());
             }
         });
 
@@ -501,10 +825,14 @@ public class MainActivity extends Activity {
         // the transcript goes back to the page through window.__tvVoice.
         web.addJavascriptInterface(new Object() {
             @android.webkit.JavascriptInterface
-            public void inputFocus(boolean focused) { pageInputFocused = focused; }
+            public void inputFocus(boolean focused) {
+                if (!trustedBridgeOrigin()) return;
+                pageInputFocused = focused;
+            }
 
             @android.webkit.JavascriptInterface
             public void appReady() {
+                if (!trustedBridgeOrigin()) return;
                 runOnUiThread(() -> {
                     pageTvReady = true;
                     scheduleTvFocusRecovery("appReady");
@@ -514,96 +842,115 @@ public class MainActivity extends Activity {
 
             @android.webkit.JavascriptInterface
             public void startVoice() {
+                if (!trustedBridgeOrigin()) return;
                 runOnUiThread(MainActivity.this::startVoiceFlow);
             }
 
             @android.webkit.JavascriptInterface
             public int nativeChromeVersion() {
+                if (!trustedBridgeOrigin()) return 0;
                 return 1;
             }
 
             @android.webkit.JavascriptInterface
             public String nativePlaybackCaps() {
+                if (!trustedBridgeOrigin()) return "{}";
                 return buildNativePlaybackCaps();
             }
 
             @android.webkit.JavascriptInterface
             public int personalIptvVersion() {
+                if (!trustedBridgeOrigin()) return 0;
                 return 1;
             }
 
             @android.webkit.JavascriptInterface
             public String personalIptvSources() {
+                if (!trustedBridgeOrigin()) return "[]";
                 return personalIptvSourcesRedacted();
             }
 
             @android.webkit.JavascriptInterface
             public String personalIptvSave(String json) {
+                if (!trustedBridgeOrigin()) return "{\"ok\":false,\"error\":\"untrusted page\"}";
                 return savePersonalIptvSource(json);
             }
 
             @android.webkit.JavascriptInterface
             public String personalIptvDelete(String id) {
+                if (!trustedBridgeOrigin()) return "{\"ok\":false,\"error\":\"untrusted page\"}";
                 return deletePersonalIptvSource(id);
             }
 
             @android.webkit.JavascriptInterface
             public void personalIptvLoad(String token) {
+                if (!trustedBridgeOrigin()) return;
                 loadPersonalIptvChannels(token);
             }
 
             @android.webkit.JavascriptInterface
             public void personalIptvGuide(String token, String json) {
+                if (!trustedBridgeOrigin()) return;
                 loadPersonalIptvGuide(token, json);
             }
 
             @android.webkit.JavascriptInterface
             public void playLive(String json) {
+                if (!trustedBridgeOrigin()) return;
                 runOnUiThread(() -> startNativeLive(json));
             }
 
             @android.webkit.JavascriptInterface
             public void playVideo(String json) {
+                if (!trustedBridgeOrigin()) return;
                 runOnUiThread(() -> startNativeVideo(json));
             }
 
             @android.webkit.JavascriptInterface
             public void showVideoLoading(String json) {
+                if (!trustedBridgeOrigin()) return;
                 runOnUiThread(() -> showNativeVideoLoading(json));
             }
 
             @android.webkit.JavascriptInterface
             public void closeVideo() {
+                if (!trustedBridgeOrigin()) return;
                 runOnUiThread(() -> closeNativePlayback(false));
             }
 
             @android.webkit.JavascriptInterface
             public void updateSubtitleChoices(String json) {
+                if (!trustedBridgeOrigin()) return;
                 runOnUiThread(() -> updateNativeSubtitleChoices(json));
             }
 
             @android.webkit.JavascriptInterface
             public void updateVideoDuration(String seconds) {
+                if (!trustedBridgeOrigin()) return;
                 runOnUiThread(() -> updateNativeVideoDuration(seconds));
             }
 
             @android.webkit.JavascriptInterface
             public void updateEpisodeChoices(String json) {
+                if (!trustedBridgeOrigin()) return;
                 runOnUiThread(() -> updateNativeEpisodeChoices(json));
             }
 
             @android.webkit.JavascriptInterface
             public void closeGuide() {
+                if (!trustedBridgeOrigin()) return;
                 runOnUiThread(MainActivity.this::closeNativeGuideMode);
             }
 
             @android.webkit.JavascriptInterface
             public void openGuide() {
+                if (!trustedBridgeOrigin()) return;
                 runOnUiThread(MainActivity.this::openNativeLiveGuide);
             }
 
             @android.webkit.JavascriptInterface
             public void setGuidePipRect(String json) {
+                if (!trustedBridgeOrigin()) return;
                 runOnUiThread(() -> applyNativeGuidePipRect(json));
             }
         }, "TriboonTV");
@@ -651,9 +998,15 @@ public class MainActivity extends Activity {
     }
 
     private String readPersonalEncryptedPref(String key, String fallback) {
-        String stored = prefs().getString(key, fallback);
+        android.content.SharedPreferences p = prefs();
+        if (!p.contains(key)) return fallback;
+        String stored = p.getString(key, fallback);
         if (stored == null || stored.isEmpty()) return fallback;
-        if (!stored.startsWith(PERSONAL_IPTV_ENC_PREFIX)) return stored;
+        if (!stored.startsWith(PERSONAL_IPTV_ENC_PREFIX)) {
+            p.edit().remove(key).apply();
+            Log.w(TAG, "Cleared legacy plaintext personal IPTV pref");
+            return fallback;
+        }
         try {
             String body = stored.substring(PERSONAL_IPTV_ENC_PREFIX.length());
             int sep = body.indexOf(':');
@@ -682,7 +1035,11 @@ public class MainActivity extends Activity {
     }
 
     private void writePersonalCacheObject(String key, org.json.JSONObject obj) {
-        writePersonalEncryptedPref(key, obj == null ? "{}" : obj.toString());
+        try {
+            writePersonalEncryptedPref(key, obj == null ? "{}" : obj.toString());
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Personal IPTV cache write skipped: " + e.getMessage());
+        }
     }
 
     private String encryptPersonalIptvJson(String json) {
@@ -697,7 +1054,7 @@ public class MainActivity extends Activity {
                     + Base64.encodeToString(cipherText, Base64.NO_WRAP);
         } catch (Exception e) {
             Log.w(TAG, "Personal IPTV encrypt failed: " + e.getClass().getSimpleName());
-            return json == null ? "[]" : json;
+            throw new IllegalStateException("secure personal IPTV storage is unavailable", e);
         }
     }
 
@@ -1105,7 +1462,7 @@ public class MainActivity extends Activity {
         org.json.JSONArray stale = personalM3uChannelCache(src, false);
         String url = normalizeHttpUrl(src.optString("url", ""), false);
         if (url.isEmpty()) throw new IOException("M3U URL missing");
-        HttpURLConnection conn = openPersonalHttp(url);
+        HttpURLConnection conn = openPersonalHttpFollowingRedirects(url);
         try {
             int code = conn.getResponseCode();
             if (code < 200 || code >= 300) throw new IOException("m3u playlist HTTP " + code);
@@ -1414,7 +1771,8 @@ public class MainActivity extends Activity {
         String epgUrl = src.optString("epgUrl", "");
         String xml = xmltvBatchCache == null ? null : xmltvBatchCache.get(epgUrl);
         if (xml == null) {
-            xml = personalHttpGetText(epgUrl, 96 * 1024 * 1024);
+            int maxGuideBytes = nativeConservativePlaybackDevice() ? 32 * 1024 * 1024 : 96 * 1024 * 1024;
+            xml = personalHttpGetText(epgUrl, maxGuideBytes);
             if (xmltvBatchCache != null) xmltvBatchCache.put(epgUrl, xml);
         }
         String wantedId = ch.optString("tvgId", "");
@@ -1525,9 +1883,13 @@ public class MainActivity extends Activity {
                                                 String group, String url, String mime,
                                                 String fallbackUrl, String fallbackMime,
                                                 String xtreamId, String tvgId) throws Exception {
+        String safeUrl = validatedPersonalIptvUrl(url);
+        String safeFallbackUrl = fallbackUrl == null || fallbackUrl.trim().isEmpty()
+                ? ""
+                : validatedPersonalIptvUrl(fallbackUrl);
         String sourceId = src.optString("id", "personal");
         return new org.json.JSONObject()
-                .put("id", "device:" + sourceId + ":" + shaHex(url).substring(0, 14))
+                .put("id", "device:" + sourceId + ":" + shaHex(safeUrl).substring(0, 14))
                 .put("idx", idx)
                 .put("personal", true)
                 .put("sourceId", sourceId)
@@ -1537,26 +1899,42 @@ public class MainActivity extends Activity {
                 .put("name", name == null || name.trim().isEmpty() ? "Live channel" : name.trim())
                 .put("logo", logo == null ? "" : logo.trim())
                 .put("group", group == null || group.trim().isEmpty() ? "Other" : group.trim())
-                .put("streamUrl", url)
-                .put("nativeUrl", url)
+                .put("streamUrl", safeUrl)
+                .put("nativeUrl", safeUrl)
                 .put("nativeMime", mime == null ? "" : mime)
-                .put("nativeFallbackUrl", fallbackUrl == null ? "" : fallbackUrl)
+                .put("nativeFallbackUrl", safeFallbackUrl)
                 .put("nativeFallbackMime", fallbackMime == null ? "" : fallbackMime);
     }
 
     private HttpURLConnection openPersonalHttp(String url) throws IOException {
-        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
-        conn.setInstanceFollowRedirects(true);
+        ValidatedNativeUrl safe = validateAndPinPersonalIptvUrl(url);
+        HttpURLConnection conn = (HttpURLConnection) new URL(safe.connectUrl).openConnection();
+        conn.setInstanceFollowRedirects(false);
         conn.setConnectTimeout(PERSONAL_IPTV_CONNECT_TIMEOUT_MS);
         conn.setReadTimeout(PERSONAL_IPTV_READ_TIMEOUT_MS);
         conn.setRequestProperty("User-Agent", "TriboonTV/" + BuildConfig.VERSION_NAME);
         conn.setRequestProperty("Accept", "*/*");
         conn.setRequestProperty("Connection", "close");
+        if (hostHeaderSafe(safe.hostHeader)) conn.setRequestProperty("Host", safe.hostHeader);
         return conn;
     }
 
+    private HttpURLConnection openPersonalHttpFollowingRedirects(String url) throws IOException {
+        String current = validatedPersonalIptvUrl(url);
+        for (int hop = 0; hop < 5; hop++) {
+            HttpURLConnection conn = openPersonalHttp(current);
+            int code = conn.getResponseCode();
+            if (code < 300 || code >= 400) return conn;
+            String location = conn.getHeaderField("Location");
+            conn.disconnect();
+            if (location == null || location.trim().isEmpty()) throw new IOException("redirect without location");
+            current = validatedPersonalIptvUrl(new URL(new URL(current), location).toString());
+        }
+        throw new IOException("too many redirects");
+    }
+
     private String personalHttpGetText(String url, int maxBytes) throws Exception {
-        HttpURLConnection conn = openPersonalHttp(url);
+        HttpURLConnection conn = openPersonalHttpFollowingRedirects(url);
         try {
             int code = conn.getResponseCode();
             if (code < 200 || code >= 300) throw new IOException("HTTP " + code);
@@ -1674,9 +2052,13 @@ public class MainActivity extends Activity {
             try { root.removeView(fullscreenVideo); } catch (Exception ignored) {}
             fullscreenVideo = null;
         }
+        trimAndroidMemoryCaches(true);
         disposeWebView(crashedWeb, true);
         resetWebPageState();
-        buildWebView();
+        if (!ensureWebViewReady()) {
+            showSetup(webViewUnavailableMessage());
+            return;
+        }
 
         if (tooManyCrashes) {
             showSetup("The TV page crashed repeatedly. Reconnect to your server, or restart Triboon if it keeps happening.");
@@ -1742,6 +2124,7 @@ public class MainActivity extends Activity {
     }
 
     private String buildNativePlaybackCaps() {
+        if (nativePlaybackCapsCache != null) return nativePlaybackCapsCache;
         try {
             org.json.JSONObject j = new org.json.JSONObject();
             boolean conservative = nativeConservativePlaybackDevice();
@@ -1769,9 +2152,11 @@ public class MainActivity extends Activity {
             // burn CPU. Force AAC audio remux there; Shield-class devices can still copy DTS.
             j.put("dts", !conservative && (nativeDecoderAvailable("audio/vnd.dts") || nativeDecoderAvailable("audio/vnd.dts.hd")));
             j.put("source", "exo-mediacodec");
-            return j.toString();
+            nativePlaybackCapsCache = j.toString();
+            return nativePlaybackCapsCache;
         } catch (Exception e) {
-            return "{\"native\":true,\"mkv\":true,\"mp4\":true,\"source\":\"exo-mediacodec\"}";
+            nativePlaybackCapsCache = "{\"native\":true,\"mkv\":true,\"mp4\":true,\"source\":\"exo-mediacodec\"}";
+            return nativePlaybackCapsCache;
         }
     }
 
@@ -1813,7 +2198,7 @@ public class MainActivity extends Activity {
     private boolean nativeDecoderAvailable(String mime) {
         if (mime == null || mime.isEmpty()) return false;
         try {
-            MediaCodecInfo[] infos = new MediaCodecList(MediaCodecList.ALL_CODECS).getCodecInfos();
+            MediaCodecInfo[] infos = nativeDecoderInfos();
             for (MediaCodecInfo info : infos) {
                 if (info == null || info.isEncoder()) continue;
                 for (String type : info.getSupportedTypes()) {
@@ -1824,6 +2209,13 @@ public class MainActivity extends Activity {
         return false;
     }
 
+    private MediaCodecInfo[] nativeDecoderInfos() {
+        if (nativeDecoderInfoCache == null) {
+            nativeDecoderInfoCache = new MediaCodecList(MediaCodecList.ALL_CODECS).getCodecInfos();
+        }
+        return nativeDecoderInfoCache;
+    }
+
     // ---------- native Live TV playback ----------
     private void buildNativePlayerLayer() {
         if (nativePlayerLayer != null) return;
@@ -1832,11 +2224,13 @@ public class MainActivity extends Activity {
         nativePlayerLayer.setFocusable(true);
         nativePlayerLayer.setFocusableInTouchMode(true);
         nativePlayerLayer.setOnKeyListener((v, code, e) -> handleNativeSurfaceKey(e));
+        nativePlayerLayer.setOnClickListener(v -> toggleNativeChromeByTouch());
         nativePlayerLayer.setVisibility(View.GONE);
 
         nativePlayerView = (PlayerView) getLayoutInflater().inflate(R.layout.native_player_view, nativePlayerLayer, false);
         nativePlayerView.setUseController(false);
         nativePlayerView.setOnKeyListener((v, code, e) -> handleNativeSurfaceKey(e));
+        nativePlayerView.setOnClickListener(v -> toggleNativeChromeByTouch());
         nativePlayerView.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT);
         nativePlayerView.setBackgroundColor(Color.BLACK);
         nativePlayerView.setShutterBackgroundColor(Color.TRANSPARENT);
@@ -1851,6 +2245,14 @@ public class MainActivity extends Activity {
                     CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW, Color.BLACK, Typeface.DEFAULT_BOLD));
         }
         nativePlayerLayer.addView(nativePlayerView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        nativeGuidePipRevealScrim = new View(this);
+        nativeGuidePipRevealScrim.setBackgroundColor(0xFF050309);
+        nativeGuidePipRevealScrim.setFocusable(false);
+        nativeGuidePipRevealScrim.setClickable(false);
+        nativeGuidePipRevealScrim.setVisibility(View.GONE);
+        nativePlayerLayer.addView(nativeGuidePipRevealScrim, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         nativeSubtitleOverlay = new TextView(this);
@@ -2304,7 +2706,7 @@ public class MainActivity extends Activity {
                 conn.setConnectTimeout(3500);
                 conn.setReadTimeout(5000);
                 conn.setInstanceFollowRedirects(true);
-                bitmap = BitmapFactory.decodeStream(conn.getInputStream());
+                bitmap = decodeNativeBackdrop(readLimitedBytes(conn.getInputStream(), NATIVE_BACKDROP_MAX_BYTES));
             } catch (Exception ignored) {
             } finally {
                 if (conn != null) conn.disconnect();
@@ -2316,6 +2718,38 @@ public class MainActivity extends Activity {
                 if (finalBitmap != null) nativeLoadingBackdrop.setImageBitmap(finalBitmap);
             });
         }, "TriboonNativeBackdrop").start();
+    }
+
+    private byte[] readLimitedBytes(InputStream in, int maxBytes) throws IOException {
+        try {
+            ByteArrayOutputStream out = new ByteArrayOutputStream(Math.min(maxBytes, 256 * 1024));
+            byte[] buf = new byte[16384];
+            int total = 0;
+            int n;
+            while ((n = in.read(buf)) >= 0) {
+                total += n;
+                if (total > maxBytes) throw new IOException("image too large");
+                out.write(buf, 0, n);
+            }
+            return out.toByteArray();
+        } finally {
+            try { in.close(); } catch (Exception ignored) {}
+        }
+    }
+
+    private Bitmap decodeNativeBackdrop(byte[] bytes) {
+        if (bytes == null || bytes.length == 0) return null;
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.length, bounds);
+        BitmapFactory.Options opts = new BitmapFactory.Options();
+        opts.inSampleSize = 1;
+        while ((bounds.outWidth / opts.inSampleSize) > NATIVE_BACKDROP_MAX_WIDTH
+                || (bounds.outHeight / opts.inSampleSize) > NATIVE_BACKDROP_MAX_HEIGHT) {
+            opts.inSampleSize *= 2;
+        }
+        opts.inPreferredConfig = Bitmap.Config.RGB_565;
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.length, opts);
     }
 
     private String nativeLoadingStageFor(String mode, String kind) {
@@ -2471,11 +2905,14 @@ public class MainActivity extends Activity {
         long loadingStartOffsetMs = 0L;
         try {
             org.json.JSONObject j = new org.json.JSONObject(json == null ? "{}" : json);
-            String url = j.optString("url", "");
+            ValidatedNativeUrl primaryUrl = validateNativePlaybackUrl(j.optString("url", ""));
+            String url = primaryUrl.connectUrl;
             if (url.isEmpty()) throw new IllegalArgumentException("missing stream url");
             title = j.optString("title", title);
             String mime = j.optString("mime", "");
-            String fallbackUrl = j.optString("fallbackUrl", "");
+            String fallbackRaw = j.optString("fallbackUrl", "");
+            ValidatedNativeUrl fallbackPin = fallbackRaw.trim().isEmpty() ? null : validateNativePlaybackUrl(fallbackRaw);
+            String fallbackUrl = fallbackPin == null ? "" : fallbackPin.connectUrl;
             String fallbackMime = j.optString("fallbackMime", "");
             backdropUrl = j.optString("backdropUrl", "");
             long startMs = Math.max(0, Math.round(j.optDouble("start", 0) * 1000));
@@ -2516,19 +2953,25 @@ public class MainActivity extends Activity {
             nativeQualityLabel = qualityLabel.isEmpty() ? (isLiveMode ? "LIVE" : "1080p") : qualityLabel;
             loadingQuality = nativeQualityLabel;
             nativeUrl = url;
+            nativeHostHeader = primaryUrl.hostHeader;
             nativeMime = mime;
             nativeFallbackUrl = fallbackUrl;
             nativeFallbackMime = fallbackMime;
             nativeFallbackUrls.clear();
             nativeFallbackMimes.clear();
+            nativeFallbackHostHeaders.clear();
             nativeFallbackIndex = 0;
-            addNativeFallback(fallbackUrl, fallbackMime, nativeUrl);
+            addNativeFallback(fallbackUrl, fallbackMime, nativeUrl, fallbackPin == null ? "" : fallbackPin.hostHeader);
             org.json.JSONArray fallbacks = j.optJSONArray("fallbacks");
             if (fallbacks != null) {
                 for (int i = 0; i < fallbacks.length(); i++) {
                     org.json.JSONObject fb = fallbacks.optJSONObject(i);
                     if (fb == null) continue;
-                    addNativeFallback(fb.optString("url", ""), fb.optString("mime", ""), nativeUrl);
+                    String fbUrl = fb.optString("url", "");
+                    if (!fbUrl.trim().isEmpty()) {
+                        ValidatedNativeUrl fbPin = validateNativePlaybackUrl(fbUrl);
+                        addNativeFallback(fbPin.connectUrl, fb.optString("mime", ""), nativeUrl, fbPin.hostHeader);
+                    }
                 }
             }
             nativePlaybackTitle = title == null || title.isEmpty() ? "Triboon" : title;
@@ -2548,23 +2991,33 @@ public class MainActivity extends Activity {
             nativeHasNext = hasNext;
             nativeHasQualityChoices = hasQualityChoices;
             nativeSubtitleShift = (float) j.optDouble("subtitleShift", nativeShiftFromUrl(subtitleUrl));
-            nativeSubtitleUrl = stripNativeQueryParam(subtitleUrl, "shift");
+            String cleanSubtitleUrl = stripNativeQueryParam(subtitleUrl, "shift");
+            ValidatedNativeUrl subtitlePin = cleanSubtitleUrl.isEmpty() ? null : validateNativePlaybackUrl(cleanSubtitleUrl);
+            nativeSubtitleUrl = subtitlePin == null ? "" : subtitlePin.connectUrl;
+            nativeSubtitleHostHeader = subtitlePin == null ? "" : subtitlePin.hostHeader;
             nativeSubtitleLang = subtitleLang;
             nativeSubtitleRel = subtitleRel;
             nativeSubtitleLabel = subtitleLabel.isEmpty()
                     ? (!subtitleLang.isEmpty() ? nativeLangName(subtitleLang) : "Subtitles")
                     : subtitleLabel;
-            nativeHasWyzieSubtitle = !subtitleUrl.isEmpty();
+            nativeHasWyzieSubtitle = subtitlePin != null;
             applyNativeSubtitleChoices(j.optJSONArray("subtitleChoices"));
             updateNativeEpisodeChoices(new org.json.JSONObject()
                     .put("episodes", j.optJSONArray("episodeChoices"))
                     .toString());
 
             if (!reuseQuietVideo && !reuseLivePlayer) {
-                nativePlayer = new ExoPlayer.Builder(this)
+                nativePlayer = new ExoPlayer.Builder(this, nativeRenderersFactory())
                         .setMediaSourceFactory(nativeMediaSourceFactory())
                         .setLoadControl(nativeLoadControlForMode(mode))
+                        .setBandwidthMeter(nativeBandwidthMeterForMode(mode))
+                        .setSeekParameters(SeekParameters.CLOSEST_SYNC)
                         .build();
+                nativePlayer.setAudioAttributes(new AudioAttributes.Builder()
+                        .setUsage(C.USAGE_MEDIA)
+                        .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                        .build(), true);
+                nativePlayer.setHandleAudioBecomingNoisy(true);
                 nativePlayer.addListener(new Player.Listener() {
                 @Override public void onPlayerError(PlaybackException error) {
                     String msg = nativePlaybackErrorMessage(error);
@@ -2629,6 +3082,7 @@ public class MainActivity extends Activity {
             }
 
             nativePlayerView.setPlayer(nativePlayer);
+            applyNativeTrackSelectionDefaults(isLiveMode);
             nativePlayerTitle.setText(title);
             nativePlayerTitle.setVisibility(View.INVISIBLE);
             if (nativeChromeTitle != null) nativeChromeTitle.setText(title);
@@ -2659,6 +3113,7 @@ public class MainActivity extends Activity {
                 nativePlayer.stop();
                 nativePlayer.clearMediaItems();
             }
+            applyNativeHttpHostHeader();
             nativePlayer.setMediaItem(buildNativeMediaItem());
             nativePlayer.prepare();
             if (startMs > 0) nativePlayer.seekTo(startMs);
@@ -2707,6 +3162,12 @@ public class MainActivity extends Activity {
         setNativeSubtitleLift(true);
         if (focusPlay && nativePlayBtn != null && !nativeSheetOpen()) nativePlayBtn.requestFocus();
         scheduleNativeChromeHide();
+    }
+
+    private void toggleNativeChromeByTouch() {
+        if (!nativePlayerOpen() || nativeGuideMode || nativeSheetOpen() || nativeEpisodeStripOpen) return;
+        if (nativeChromeShowingForBack()) hideNativeChromeNow();
+        else showNativeChrome(false);
     }
 
     private void scheduleNativeChromeHide() {
@@ -2912,6 +3373,38 @@ public class MainActivity extends Activity {
                 + nativeGuideEpoch + ")", null);
     }
 
+    private void syncNativeGuidePipRevealScrim(FrameLayout.LayoutParams pipLp) {
+        if (nativeGuidePipRevealScrim == null || pipLp == null) return;
+        FrameLayout.LayoutParams scrimLp = new FrameLayout.LayoutParams(
+                pipLp.width, pipLp.height, pipLp.gravity);
+        scrimLp.setMargins(pipLp.leftMargin, pipLp.topMargin, pipLp.rightMargin, pipLp.bottomMargin);
+        nativeGuidePipRevealScrim.setLayoutParams(scrimLp);
+    }
+
+    private void revealNativeGuidePip(FrameLayout.LayoutParams pipLp) {
+        if (nativeGuidePipRevealScrim == null || pipLp == null) return;
+        syncNativeGuidePipRevealScrim(pipLp);
+        nativeGuidePipRevealScrim.animate().cancel();
+        nativeGuidePipRevealScrim.setAlpha(1f);
+        nativeGuidePipRevealScrim.setVisibility(View.VISIBLE);
+        nativeGuidePipRevealScrim.bringToFront();
+        nativeGuidePipRevealScrim.animate()
+                .alpha(0f)
+                .setDuration(180)
+                .setStartDelay(220)
+                .withEndAction(() -> {
+                    if (nativeGuidePipRevealScrim != null) nativeGuidePipRevealScrim.setVisibility(View.GONE);
+                })
+                .start();
+    }
+
+    private void hideNativeGuidePipReveal() {
+        if (nativeGuidePipRevealScrim == null) return;
+        nativeGuidePipRevealScrim.animate().cancel();
+        nativeGuidePipRevealScrim.setVisibility(View.GONE);
+        nativeGuidePipRevealScrim.setAlpha(1f);
+    }
+
     private void enterNativeGuideMode() {
         if (nativePlayerLayer == null || nativePlayerView == null) return;
         boolean alreadyGuideMode = nativeGuideMode
@@ -2937,9 +3430,9 @@ public class MainActivity extends Activity {
                     pipW, pipH, android.view.Gravity.TOP | android.view.Gravity.START);
             pipLp.setMargins(dp(38), dp(30), 0, 0);
             nativePlayerView.setLayoutParams(pipLp);
-            nativePlayerView.setAlpha(0f);
-            nativePlayerView.animate().alpha(1f).setDuration(180).setStartDelay(220).start();
+            revealNativeGuidePip(pipLp);
         }
+        nativePlayerView.setAlpha(1f);
         nativePlayerView.setVisibility(View.VISIBLE);
         setNativeSubtitleLift(false);
         if (nativeSubtitleOverlay != null) nativeSubtitleOverlay.setVisibility(View.GONE);
@@ -2976,8 +3469,8 @@ public class MainActivity extends Activity {
                     width, height, android.view.Gravity.TOP | android.view.Gravity.START);
             pipLp.setMargins(left, top, 0, 0);
             nativePlayerView.setLayoutParams(pipLp);
-            nativePlayerView.animate().cancel();
-            nativePlayerView.animate().alpha(1f).setDuration(160).start();
+            nativePlayerView.setAlpha(1f);
+            syncNativeGuidePipRevealScrim(pipLp);
         } catch (Exception ignored) {
             // The fixed fallback from enterNativeGuideMode stays in place.
         }
@@ -2992,6 +3485,7 @@ public class MainActivity extends Activity {
         nativePlayerView.setVisibility(View.VISIBLE);
         nativePlayerView.animate().cancel();
         nativePlayerView.setAlpha(1f);
+        hideNativeGuidePipReveal();
         nativePlayerView.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         nativePlayerLayer.setVisibility(View.VISIBLE);
@@ -3355,21 +3849,76 @@ public class MainActivity extends Activity {
         }
     }
 
+    private DefaultRenderersFactory nativeRenderersFactory() {
+        return new DefaultRenderersFactory(this)
+                .setEnableDecoderFallback(true)
+                .setEnableAudioOutputPlaybackParameters(true);
+    }
+
+    private DefaultBandwidthMeter nativeBandwidthMeterForMode(String mode) {
+        boolean conservative = nativeConservativePlaybackDevice();
+        long estimate = "live".equals(mode)
+                ? (conservative ? 5_000_000L : 12_000_000L)
+                : (conservative ? 22_000_000L : 80_000_000L);
+        return new DefaultBandwidthMeter.Builder(this)
+                .setInitialBitrateEstimate(estimate)
+                .build();
+    }
+
+    private void applyNativeTrackSelectionDefaults(boolean isLiveMode) {
+        if (nativePlayer == null) return;
+        androidx.media3.common.TrackSelectionParameters.Builder params =
+                nativePlayer.getTrackSelectionParameters().buildUpon()
+                        .setPreferredAudioLanguages("en")
+                        .setViewportSizeToPhysicalDisplaySize(true);
+        if (isLiveMode && nativeConservativePlaybackDevice()) {
+            params.setMaxVideoSize(1920, 1080)
+                    .setMaxVideoBitrate(10_000_000);
+        } else {
+            params.clearVideoSizeConstraints();
+        }
+        if (!isLiveMode && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            params.setAudioOffloadPreferences(
+                    new androidx.media3.common.TrackSelectionParameters.AudioOffloadPreferences.Builder()
+                            .setAudioOffloadMode(androidx.media3.common.TrackSelectionParameters.AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_ENABLED)
+                            .build());
+        }
+        nativePlayer.setTrackSelectionParameters(params.build());
+    }
+
     private MediaItem buildNativeMediaItem() {
         MediaItem.Builder media = new MediaItem.Builder().setUri(nativeUrl);
         if ("application/x-mpegURL".equals(nativeMime)) media.setMimeType(MimeTypes.APPLICATION_M3U8);
         else if ("video/mp2t".equals(nativeMime)) media.setMimeType(MimeTypes.VIDEO_MP2T);
         else if ("video/mp4".equals(nativeMime)) media.setMimeType(MimeTypes.VIDEO_MP4);
+        if ("live".equals(nativeMode)) {
+            media.setLiveConfiguration(new MediaItem.LiveConfiguration.Builder()
+                    .setTargetOffsetMs(nativeConservativePlaybackDevice() ? 8000L : 5000L)
+                    .setMinOffsetMs(2500L)
+                    .setMaxOffsetMs(nativeConservativePlaybackDevice() ? 18000L : 14000L)
+                    .setMinPlaybackSpeed(0.97f)
+                    .setMaxPlaybackSpeed(1.03f)
+                    .build());
+        }
         return media.build();
     }
 
     private DefaultMediaSourceFactory nativeMediaSourceFactory() {
         DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
-                .setAllowCrossProtocolRedirects(true)
+                .setAllowCrossProtocolRedirects(false)
                 .setUserAgent("TriboonTV/" + BuildConfig.VERSION_NAME)
                 .setConnectTimeoutMs(12000)
                 .setReadTimeoutMs("live".equals(nativeMode) ? NATIVE_LIVE_READ_TIMEOUT_MS : 18000);
+        nativeHttpDataSourceFactory = http;
+        applyNativeHttpHostHeader();
         return new DefaultMediaSourceFactory(http);
+    }
+
+    private void applyNativeHttpHostHeader() {
+        if (nativeHttpDataSourceFactory == null) return;
+        java.util.HashMap<String, String> headers = new java.util.HashMap<>();
+        if (hostHeaderSafe(nativeHostHeader)) headers.put("Host", nativeHostHeader);
+        nativeHttpDataSourceFactory.setDefaultRequestProperties(headers);
     }
 
     private DefaultLoadControl nativeLoadControlForMode(String mode) {
@@ -3379,13 +3928,19 @@ public class MainActivity extends Activity {
         int maxMs = video ? (conservative ? 120000 : 60000) : 60000;
         int startMs = video ? (conservative ? 3000 : 700) : (conservative ? 1800 : 700);
         int rebufferMs = video ? (conservative ? 6000 : 1800) : (conservative ? 3500 : 1800);
+        int targetBytes = video
+                ? (conservative ? 96 : 192) * 1024 * 1024
+                : (conservative ? 36 : 64) * 1024 * 1024;
+        int backBufferMs = video ? (conservative ? 30000 : 60000) : 5000;
         return new DefaultLoadControl.Builder()
                 .setBufferDurationsMs(minMs, maxMs, startMs, rebufferMs)
+                .setTargetBufferBytes(targetBytes)
+                .setBackBuffer(backBufferMs, false)
                 .setPrioritizeTimeOverSizeThresholds(true)
                 .build();
     }
 
-    private void addNativeFallback(String url, String mime, String primaryUrl) {
+    private void addNativeFallback(String url, String mime, String primaryUrl, String hostHeader) {
         String u = url == null ? "" : url.trim();
         if (u.isEmpty() || u.equals(primaryUrl)) return;
         for (String existing : nativeFallbackUrls) {
@@ -3393,6 +3948,7 @@ public class MainActivity extends Activity {
         }
         nativeFallbackUrls.add(u);
         nativeFallbackMimes.add(mime == null ? "" : mime.trim());
+        nativeFallbackHostHeaders.add(hostHeaderSafe(hostHeader) ? hostHeader.trim() : "");
     }
 
     private String nativePlaybackErrorMessage(PlaybackException error) {
@@ -3432,9 +3988,12 @@ public class MainActivity extends Activity {
         String nextUrl = nativeFallbackUrls.get(nativeFallbackIndex);
         String nextMime = nativeFallbackIndex < nativeFallbackMimes.size()
                 ? nativeFallbackMimes.get(nativeFallbackIndex) : "";
+        String nextHostHeader = nativeFallbackIndex < nativeFallbackHostHeaders.size()
+                ? nativeFallbackHostHeaders.get(nativeFallbackIndex) : "";
         nativeFallbackIndex++;
         nativeTriedFallback = true;
         nativeUrl = nextUrl;
+        nativeHostHeader = hostHeaderSafe(nextHostHeader) ? nextHostHeader : "";
         nativeMime = nextMime == null ? "" : nextMime;
         nativeQualityLabel = "LIVE";
         nativeLiveUnhealthySinceMs = 0L;
@@ -3443,6 +4002,7 @@ public class MainActivity extends Activity {
         Log.w(TAG, "Live playback switching to fallback " + nativeFallbackIndex + "/" + nativeFallbackUrls.size());
         nativePlayer.stop();
         nativePlayer.clearMediaItems();
+        applyNativeHttpHostHeader();
         if (nativePlayerBadge != null) nativePlayerBadge.setText("LIVE");
         if (nativeChromeQuality != null) nativeChromeQuality.setText("LIVE");
         nativePlayer.setMediaItem(buildNativeMediaItem());
@@ -3499,12 +4059,26 @@ public class MainActivity extends Activity {
             nativeSubtitleOverlay.setVisibility(View.GONE);
         }
         if (cleanUrl.isEmpty()) return;
+        final ValidatedNativeUrl subtitleUrl;
+        try {
+            subtitleUrl = validateNativeSubtitleOverlayUrl(cleanUrl, nativeSubtitleHostHeader);
+        } catch (Exception e) {
+            Log.w(TAG, "Subtitles could not load: " + redactNativeLogMessage(e.getMessage()));
+            clearNativeSubtitleOverlay();
+            Toast.makeText(this, "Subtitles could not load", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final String fetchUrl = subtitleUrl.connectUrl;
+        final String hostHeader = hostHeaderSafe(subtitleUrl.hostHeader) ? subtitleUrl.hostHeader : "";
         new Thread(() -> {
             try {
-                HttpURLConnection c = (HttpURLConnection) new URL(cleanUrl).openConnection();
+                HttpURLConnection c = (HttpURLConnection) new URL(fetchUrl).openConnection();
                 c.setConnectTimeout(7000);
                 c.setReadTimeout(12000);
                 c.setRequestProperty("Accept", "text/vtt,text/plain,*/*");
+                if (hostHeaderSafe(hostHeader)) {
+                    c.setRequestProperty("Host", hostHeader);
+                }
                 int status = c.getResponseCode();
                 String body;
                 try {
@@ -4165,8 +4739,21 @@ public class MainActivity extends Activity {
             nativeSubtitleLang = nativeLangFromSubtitleRel(choice.subtitleRel);
             String selectedSubtitleUrl = subtitleUrlForRel(choice.subtitleRel);
             nativeSubtitleShift = nativeShiftFromUrl(selectedSubtitleUrl);
-            nativeSubtitleUrl = stripNativeQueryParam(selectedSubtitleUrl, "shift");
-            nativeHasWyzieSubtitle = !nativeSubtitleUrl.isEmpty();
+            String cleanSubtitleUrl = stripNativeQueryParam(selectedSubtitleUrl, "shift");
+            try {
+                ValidatedNativeUrl subtitlePin = cleanSubtitleUrl.isEmpty() ? null : validateNativePlaybackUrl(cleanSubtitleUrl);
+                nativeSubtitleUrl = subtitlePin == null ? "" : subtitlePin.connectUrl;
+                nativeSubtitleHostHeader = subtitlePin == null ? "" : subtitlePin.hostHeader;
+                nativeHasWyzieSubtitle = subtitlePin != null;
+            } catch (Exception ex) {
+                Log.w(TAG, "Blocked subtitle URL: " + redactNativeLogMessage(ex.getMessage()));
+                nativeSubtitleUrl = "";
+                nativeSubtitleHostHeader = "";
+                nativeHasWyzieSubtitle = false;
+                Toast.makeText(this, "Subtitle URL was blocked", Toast.LENGTH_SHORT).show();
+                showNativeChrome(false);
+                return;
+            }
             disableNativeTextTracks();
             loadNativeSubtitleOverlay(nativeSubtitleUrl);
             notifyNativeSubtitleSelect(choice.subtitleRel);
@@ -4180,6 +4767,7 @@ public class MainActivity extends Activity {
             if (trackType == C.TRACK_TYPE_TEXT) {
                 nativeSubtitleRel = "";
                 nativeSubtitleUrl = "";
+                nativeSubtitleHostHeader = "";
                 nativeSubtitleShift = 0f;
                 nativeHasWyzieSubtitle = false;
                 clearNativeSubtitleOverlay();
@@ -4189,6 +4777,7 @@ public class MainActivity extends Activity {
             if (trackType == C.TRACK_TYPE_TEXT) {
                 nativeSubtitleRel = "";
                 nativeSubtitleUrl = "";
+                nativeSubtitleHostHeader = "";
                 nativeSubtitleShift = 0f;
                 nativeHasWyzieSubtitle = false;
                 clearNativeSubtitleOverlay();
@@ -4500,6 +5089,7 @@ public class MainActivity extends Activity {
         nativeSubtitleHandler.removeCallbacksAndMessages(null);
         nativeSubtitleLoadToken++;
         hideNativeLoading();
+        hideNativeGuidePipReveal();
         if (nativeSheet != null) {
             nativeSheet.setVisibility(View.GONE);
             nativeSheet.removeAllViews();
@@ -4522,11 +5112,14 @@ public class MainActivity extends Activity {
         nativeKind = "direct";
         nativeQualityLabel = "1080p";
         nativeUrl = "";
+        nativeHostHeader = "";
         nativeMime = "";
         nativeFallbackUrl = "";
         nativeFallbackMime = "";
         nativeFallbackUrls.clear();
         nativeFallbackMimes.clear();
+        nativeFallbackHostHeaders.clear();
+        nativeHttpDataSourceFactory = null;
         nativeFallbackIndex = 0;
         nativePlaybackTitle = "Triboon";
         nativePlaybackSubline = "";
@@ -4548,6 +5141,7 @@ public class MainActivity extends Activity {
         nativeHasNext = false;
         nativeHasQualityChoices = false;
         nativeSubtitleUrl = "";
+        nativeSubtitleHostHeader = "";
         nativeSubtitleLang = "";
         nativeSubtitleLabel = "";
         nativeSubtitleRel = "";
@@ -4649,10 +5243,8 @@ public class MainActivity extends Activity {
     }
 
     private void connect() {
-        String url = addr.getText().toString().trim();
+        String url = normalizeServerUrl(addr.getText().toString());
         if (url.isEmpty()) return;
-        if (!url.startsWith("http://") && !url.startsWith("https://")) url = "http://" + url;
-        url = url.replaceAll("/+$", "");
         prefs().edit().putString(KEY_SERVER, url).apply();
         if (!isTvDevice()) {
             hidePhoneKeyboard(addr);
@@ -4660,7 +5252,10 @@ public class MainActivity extends Activity {
             root.requestFocus();
         }
         setup.setVisibility(View.GONE);
-        if (web == null) buildWebView();
+        if (!ensureWebViewReady()) {
+            showSetup(webViewUnavailableMessage());
+            return;
+        }
         web.setVisibility(View.VISIBLE);
         if (isTvDevice()) web.requestFocus();
         web.loadUrl(url);
@@ -4915,11 +5510,13 @@ public class MainActivity extends Activity {
         if (android.speech.SpeechRecognizer.isRecognitionAvailable(this)) { listenInApp(); return; }
         // Last resort: some boxes ship a recognizer activity that DOES return results.
         try {
+            duckNativePlaybackForVoice();
             android.content.Intent i = new android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
             i.putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
                     android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
             startActivityForResult(i, REQ_VOICE);
         } catch (Exception ex) {
+            restoreNativePlaybackAfterVoice();
             Toast.makeText(this, "Voice input isn't available on this device", Toast.LENGTH_SHORT).show();
             voiceResult("");
         }
@@ -4927,6 +5524,7 @@ public class MainActivity extends Activity {
 
     private void listenInApp() {
         if (speech != null) { speech.destroy(); speech = null; }
+        duckNativePlaybackForVoice();
         speech = android.speech.SpeechRecognizer.createSpeechRecognizer(this);
         android.content.Intent i = new android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
         i.putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
@@ -4946,14 +5544,39 @@ public class MainActivity extends Activity {
             @Override public void onEndOfSpeech() {}
             @Override public void onPartialResults(Bundle b) {}
             @Override public void onEvent(int type, Bundle b) {}
-            private void done() { if (speech != null) { speech.destroy(); speech = null; } }
+            private void done() {
+                restoreNativePlaybackAfterVoice();
+                if (speech != null) { speech.destroy(); speech = null; }
+            }
         });
         speech.startListening(i);
     }
 
     // Empty text = cancelled/failed: the page just stops the mic pulse animation.
     private void voiceResult(String text) {
+        if (web == null) return;
         web.evaluateJavascript("window.__tvVoice && __tvVoice(" + org.json.JSONObject.quote(text) + ")", null);
+    }
+
+    private void duckNativePlaybackForVoice() {
+        if (nativePlayer == null || nativeVoiceDucked) return;
+        try {
+            nativePlayer.setVolume(0.25f);
+            nativeVoiceDucked = true;
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void restoreNativePlaybackAfterVoice() {
+        if (nativePlayer == null || !nativeVoiceDucked) {
+            nativeVoiceDucked = false;
+            return;
+        }
+        try {
+            nativePlayer.setVolume(1f);
+        } catch (Exception ignored) {
+        }
+        nativeVoiceDucked = false;
     }
 
     @Override
@@ -4981,17 +5604,69 @@ public class MainActivity extends Activity {
             java.util.ArrayList<String> r = data.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS);
             if (r != null && !r.isEmpty() && r.get(0) != null) text = r.get(0);
         }
-        web.evaluateJavascript("window.__tvVoice && __tvVoice(" + org.json.JSONObject.quote(text) + ")", null);
+        restoreNativePlaybackAfterVoice();
+        voiceResult(text);
     }
 
     @Override
     protected void onPause() {
         super.onPause();
-        // Stop playback/audio when the app is backgrounded (TV home button).
-        closeNativePlayback(true);
+        boolean inPip = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInPictureInPictureMode();
+        if (nativePlayer != null && !inPip) nativePlayer.pause();
         if (web != null) {
             web.evaluateJavascript("document.querySelectorAll('video').forEach(v=>v.pause())", null);
+            if (!inPip) {
+                web.onPause();
+                web.pauseTimers();
+            }
         }
+    }
+
+    @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+            trimAndroidMemoryCaches(level >= android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE);
+        }
+    }
+
+    @Override
+    protected void onUserLeaveHint() {
+        super.onUserLeaveHint();
+        enterNativePictureInPictureIfUseful();
+    }
+
+    @Override
+    public void onPictureInPictureModeChanged(boolean isInPictureInPictureMode, Configuration newConfig) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
+        if (isInPictureInPictureMode) hideNativeChromeNow();
+        else if (nativePlayerOpen()) showNativeChrome(false);
+    }
+
+    private boolean enterNativePictureInPictureIfUseful() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || isTvDevice()) return false;
+        if (!nativePlayerOpen() || nativePlayer == null || nativeGuideMode) return false;
+        try {
+            PictureInPictureParams params = new PictureInPictureParams.Builder()
+                    .setAspectRatio(new Rational(16, 9))
+                    .build();
+            return enterPictureInPictureMode(params);
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private void trimAndroidMemoryCaches(boolean aggressive) {
+        personalIptvHostSafetyCache.clear();
+        if (nativeLoadingBackdrop != null) nativeLoadingBackdrop.setImageDrawable(null);
+        if (web != null) {
+            web.evaluateJavascript("window.__tvTrimMemory && window.__tvTrimMemory()", null);
+            if (aggressive) {
+                web.clearCache(false);
+                web.freeMemory();
+            }
+        }
+        if (aggressive) System.gc();
     }
 
     @Override

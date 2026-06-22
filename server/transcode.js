@@ -235,9 +235,20 @@ function spawnRemux(streamUrl, { startSeconds = 0, audioTrack = 0, transcodeAudi
 //  - audio is RE-ENCODED to AAC stereo: TS audio is ADTS-framed (invalid in MP4 without a
 //    bitstream filter) and often AC-3/MP2 which browsers can't decode anyway. Video is
 //    stream-copied (H.264 in practice), so the CPU cost is trivial.
-function spawnLiveRemux(url, { hlsFriendly = true } = {}) {
+function ffmpegHeaderLines(headers = {}) {
+  return Object.entries(headers || {})
+    .filter(([k, v]) => /^[A-Za-z0-9-]+$/.test(String(k || ''))
+      && typeof v === 'string'
+      && v.trim()
+      && !/[\r\n]/.test(v))
+    .map(([k, v]) => `${k}: ${v}\r\n`)
+    .join('');
+}
+
+function spawnLiveRemux(url, { hlsFriendly = true, headers = null } = {}) {
   const ff = detectFfmpeg();
   if (!ff) throw new Error('ffmpeg not available');
+  const headerLines = ffmpegHeaderLines(headers);
   // hlsFriendly: real providers serve HLS whose segment URLs have no media extension
   // (".../play"), which ffmpeg 8 rejects by default. These are HLS-demuxer-PRIVATE options —
   // on a non-HLS input ffmpeg hard-fails with "Option not found", so the caller retries
@@ -246,8 +257,11 @@ function spawnLiveRemux(url, { hlsFriendly = true } = {}) {
     '-hide_banner', '-loglevel', 'error',
     '-user_agent', 'Mozilla/5.0 (SMART-TV; Linux) AppleWebKit/537.36 TriboonTV/1.0',
     '-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '4',
+    '-max_redirects', '0',
     '-analyzeduration', '1000000', '-probesize', '1000000',
+    ...(headerLines ? ['-headers', headerLines] : []),
     ...(hlsFriendly ? ['-extension_picky', '0', '-allowed_extensions', 'ALL'] : []),
+    '-protocol_whitelist', 'file,http,https,tcp,tls,crypto,udp,rtp,httpproxy',
     '-i', url,
     '-map', '0:v:0?', '-map', '0:a:0?',
     '-c:v', 'copy',

@@ -51,9 +51,11 @@ function request(path, { method = 'POST', body, token, clientId, deadlineMs = 15
 }
 
 class Trakt {
-  constructor(store, getSettings) {
+  constructor(store, getSettings, updateSettings = null) {
     this.store = store;
     this.getSettings = getSettings;
+    this.updateSettings = updateSettings;
+    this.tokenMigrationChecked = false;
     this.pendingCodes = new Map(); // uid -> { deviceCode, interval, expiresAt }
   }
 
@@ -63,16 +65,62 @@ class Trakt {
   }
   configured() { return !!this._creds().id; }
 
-  _tokens() { return this.store.read('trakt', {}); }
+  _secureTokens() {
+    const s = this.getSettings() || {};
+    return s.traktTokens && typeof s.traktTokens === 'object' && !Array.isArray(s.traktTokens)
+      ? s.traktTokens
+      : {};
+  }
+  _tokens() {
+    let current = this._secureTokens();
+    if (this.tokenMigrationChecked || !this.updateSettings) return current;
+    this.tokenMigrationChecked = true;
+    const legacy = this.store.read('trakt', {});
+    const legacyTokens = legacy && typeof legacy === 'object' && !Array.isArray(legacy) ? legacy : {};
+    if (!Object.keys(legacyTokens).length) return current;
+    const merged = { ...legacyTokens, ...current };
+    this.updateSettings((s) => ({
+      ...s,
+      traktTokens: {
+        ...legacyTokens,
+        ...(s.traktTokens && typeof s.traktTokens === 'object' && !Array.isArray(s.traktTokens) ? s.traktTokens : {}),
+      },
+    }));
+    this.store.write('trakt', {});
+    this.store.flush();
+    return merged;
+  }
   _outbox() { return this.store.read('traktOutbox', {}); }
+  _saveTokens(all) {
+    const next = all && typeof all === 'object' && !Array.isArray(all) ? all : {};
+    if (this.updateSettings) {
+      this.updateSettings((s) => ({ ...s, traktTokens: next }));
+    } else {
+      this.store.write('trakt', next);
+      this.store.flush();
+    }
+  }
   _saveToken(uid, tok) {
-    this.store.update('trakt', {}, (all) => { all[uid] = tok; return all; });
+    const all = { ...this._tokens(), [uid]: tok };
+    this._saveTokens(all);
   }
   status(uid) {
     const t = this._tokens()[uid];
     return { configured: this.configured(), linked: !!t, user: t ? t.username || null : null };
   }
-  unlink(uid) { this.store.update('trakt', {}, (all) => { delete all[uid]; return all; }); }
+  unlink(uid) {
+    const all = { ...this._tokens() };
+    delete all[uid];
+    this._saveTokens(all);
+  }
+  linkedTokens() { return this._tokens(); }
+  markSynced(uid, at = Date.now()) {
+    const all = { ...this._tokens() };
+    if (!all[uid]) return false;
+    all[uid] = { ...all[uid], syncedAt: at };
+    this._saveTokens(all);
+    return true;
+  }
 
   // ---- device-code linking ----
   async linkStart(uid) {

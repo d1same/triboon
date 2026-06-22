@@ -48,6 +48,9 @@ function httpRaw(port, p, { range, method = 'GET', token } = {}) {
 async function bootServer(env = {}) {
   const { TRIBOON_DATA, ...restEnv } = env;
   process.env.TRIBOON_DATA = TRIBOON_DATA || fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-data-'));
+  if (!Object.prototype.hasOwnProperty.call(restEnv, 'TRIBOON_ALLOW_PRIVATE_IPTV')) {
+    process.env.TRIBOON_ALLOW_PRIVATE_IPTV = '1';
+  }
   for (const [k, v] of Object.entries(restEnv)) {
     if (v === null) delete process.env[k]; else process.env[k] = String(v);
   }

@@ -76,7 +76,12 @@ function decode(articleBuf) {
     } else if (inBody) {
       for (let i = pos; i < lineEnd; i++) {
         let c = text[i];
-        if (c === 0x3d) { i++; c = (text[i] - 64) & 0xff; out[o++] = (c - 42) & 0xff; }
+        if (c === 0x3d) {
+          if (i + 1 >= lineEnd) break;
+          i++;
+          c = (text[i] - 64) & 0xff;
+          out[o++] = (c - 42) & 0xff;
+        }
         else out[o++] = (c - 42) & 0xff;
       }
     }

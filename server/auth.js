@@ -10,8 +10,19 @@ const crypto = require('crypto');
 const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 64 };
 const TOKEN_TTL_MS = 30 * 24 * 3600 * 1000;   // session: 30 days
 const STREAM_TTL_MS = 6 * 3600 * 1000;        // stream link: 6 hours (covers any movie + pauses)
+const STABLE_STREAM_BUCKET_MS = 60 * 60 * 1000; // cache-stable URLs, still max 6h validity
 const INVITE_TTL_MS = 48 * 3600 * 1000;
 const QC_TTL_MS = 60 * 1000;
+
+function deriveKey(secret, label) {
+  return Buffer.from(crypto.hkdfSync(
+    'sha256',
+    Buffer.from(String(secret || ''), 'utf8'),
+    Buffer.from('triboon', 'utf8'),
+    Buffer.from(String(label || ''), 'utf8'),
+    32
+  ));
+}
 
 // Per-key attempt throttle for brute-forceable endpoints (login, profile PIN, invites, QC).
 // Windowed counter + lockout — small, in-memory, self-cleaning. The map is bounded so a bot
@@ -52,6 +63,7 @@ class Auth {
       if (!sec.value) { sec.value = crypto.randomBytes(32).toString('hex'); store.write('secret', sec); store.flush(); }
       this.secret = sec.value;
     }
+    this.tokenKey = deriveKey(this.secret, 'auth-token-hmac-v1');
     this.quickConnect = new Map(); // code -> { createdAt, deviceName, token? }
   }
 
@@ -68,6 +80,7 @@ class Auth {
     const { salt, hash } = hashPassword(password);
     const user = {
       id: crypto.randomBytes(6).toString('hex'), name, role, salt, hash,
+      sessionEpoch: 0,
       policy: { maxResolutionRank: 4, allowTranscode: true, ...policy },
       profiles: [{ id: crypto.randomBytes(4).toString('hex'), name, kid: false }],
       createdAt: new Date().toISOString(),
@@ -166,6 +179,7 @@ class Auth {
     if (String(newPassword || '').length < 4) throw new Error('new password too short');
     const { salt, hash } = hashPassword(String(newPassword));
     u.salt = salt; u.hash = hash;
+    u.sessionEpoch = (u.sessionEpoch || 0) + 1;
     this._saveUsers(users);
     return true;
   }
@@ -188,6 +202,7 @@ class Auth {
     if (String(newPassword).length < 4) throw new Error('new password too short');
     const { salt, hash } = hashPassword(String(newPassword));
     u.salt = salt; u.hash = hash;
+    u.sessionEpoch = (u.sessionEpoch || 0) + 1;
     this._saveUsers(users);
     return true;
   }
@@ -195,7 +210,7 @@ class Auth {
   login(name, password) {
     const u = this._users().list.find((x) => x.name.toLowerCase() === String(name).toLowerCase());
     if (!u || !verifyPassword(String(password), u.salt, u.hash)) throw new Error('invalid credentials');
-    return { token: this.signToken({ uid: u.id, role: u.role, scope: 'session' }, TOKEN_TTL_MS), user: this.publicUser(u) };
+    return { token: this.signToken({ uid: u.id, role: u.role, scope: 'session', epoch: u.sessionEpoch || 0 }, TOKEN_TTL_MS), user: this.publicUser(u) };
   }
 
   getUser(uid) {
@@ -206,16 +221,26 @@ class Auth {
   // ---- tokens: base64url(payload).hmac ----
   signToken(claims, ttlMs) {
     const payload = Buffer.from(JSON.stringify({ ...claims, exp: Date.now() + ttlMs })).toString('base64url');
-    const sig = crypto.createHmac('sha256', this.secret).update(payload).digest('base64url');
+    const sig = crypto.createHmac('sha256', this.tokenKey).update(payload).digest('base64url');
     return `${payload}.${sig}`;
   }
 
   verifyToken(token, scope = 'session') {
     if (!token || typeof token !== 'string' || !token.includes('.')) return null;
     const [payload, sig] = token.split('.');
-    const want = crypto.createHmac('sha256', this.secret).update(payload).digest('base64url');
-    const a = Buffer.from(sig || '', 'utf8'), b = Buffer.from(want, 'utf8');
-    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+    const sigBuf = Buffer.from(sig || '', 'utf8');
+    const signatures = [
+      crypto.createHmac('sha256', this.tokenKey).update(payload).digest('base64url'),
+      // Legacy sessions were signed directly with TRIBOON_SECRET. Accept them until they
+      // expire or a password change bumps the user's session epoch.
+      crypto.createHmac('sha256', this.secret).update(payload).digest('base64url'),
+    ];
+    let ok = false;
+    for (const want of signatures) {
+      const wantBuf = Buffer.from(want, 'utf8');
+      if (sigBuf.length === wantBuf.length && crypto.timingSafeEqual(sigBuf, wantBuf)) { ok = true; break; }
+    }
+    if (!ok) return null;
     let claims;
     try { claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')); } catch { return null; }
     // Reject missing/non-numeric exp too: a token with no expiry must never validate.
@@ -224,19 +249,32 @@ class Auth {
     return claims;
   }
 
+  claimsValidForUser(claims, user) {
+    if (!claims || !user) return false;
+    return (claims.epoch || 0) === (user.sessionEpoch || 0);
+  }
+
   // Stream tokens are BOUND to one resource (mount id / local:<lib>:<idx> / iptv:<idx>):
   // a leaked VLC URL streams that one thing, not everything the account can reach.
-  streamToken(uid, sub) { return this.signToken({ uid, scope: 'stream', sub: sub || null }, STREAM_TTL_MS); }
+  streamToken(uid, sub) {
+    const u = this.getUser(uid);
+    return this.signToken({ uid, scope: 'stream', sub: sub || null, epoch: u ? (u.sessionEpoch || 0) : 0 }, STREAM_TTL_MS);
+  }
 
-  // STABLE stream token: same (uid, sub) → the SAME token for a whole 6h window — the expiry
-  // is quantized to the next window edge instead of "now + ttl". Library art/thumb/file URLs
-  // minted per /items request used to differ on every call, so the browser's HTTP cache never
-  // hit and every visit re-downloaded every cover. Validity stays in the 6–12h band.
+  // STABLE stream token: same (uid, sub) -> same token for a one-hour cache bucket, with
+  // expiry capped at the normal 6h stream-token lifetime. Library art/thumb/file URLs minted
+  // per /items request used to differ on every call, so the browser cache never held covers.
   stableStreamToken(uid, sub) {
-    const exp = (Math.floor(Date.now() / STREAM_TTL_MS) + 1) * STREAM_TTL_MS + STREAM_TTL_MS;
+    const now = Date.now();
+    const exp = Math.min(now + STREAM_TTL_MS,
+      Math.floor(now / STABLE_STREAM_BUCKET_MS) * STABLE_STREAM_BUCKET_MS + STREAM_TTL_MS);
+    const u = this.getUser(uid);
     const payload = Buffer.from(JSON.stringify({ uid, scope: 'stream', sub: sub || null, exp })).toString('base64url');
-    const sig = crypto.createHmac('sha256', this.secret).update(payload).digest('base64url');
-    return `${payload}.${sig}`;
+    const withEpoch = JSON.stringify({ uid, scope: 'stream', sub: sub || null, epoch: u ? (u.sessionEpoch || 0) : 0, exp });
+    const epochPayload = Buffer.from(withEpoch).toString('base64url');
+    const sig = crypto.createHmac('sha256', this.tokenKey).update(epochPayload).digest('base64url');
+    if (payload === epochPayload) return `${payload}.${sig}`;
+    return `${epochPayload}.${sig}`;
   }
 
   // ---- invites ----
@@ -300,7 +338,7 @@ class Auth {
     if (!e) throw new Error('code expired or unknown');
     const u = this.getUser(approverUid);
     if (!u) throw new Error('unknown user');
-    e.token = this.signToken({ uid: u.id, role: u.role, scope: 'session' }, TOKEN_TTL_MS);
+    e.token = this.signToken({ uid: u.id, role: u.role, scope: 'session', epoch: u.sessionEpoch || 0 }, TOKEN_TTL_MS);
     return { ok: true, deviceName: e.deviceName };
   }
   qcPoll(code) {
@@ -317,7 +355,8 @@ class Auth {
 class SecureSettings {
   constructor(store, secret) {
     this.store = store;
-    this.key = crypto.createHash('sha256').update('triboon-settings:' + secret).digest();
+    this.key = deriveKey(secret, 'settings-aes-gcm-v1');
+    this.legacyKey = crypto.createHash('sha256').update('triboon-settings:' + secret).digest();
   }
   _encrypt(obj) {
     const iv = crypto.randomBytes(12);
@@ -325,10 +364,14 @@ class SecureSettings {
     const ct = Buffer.concat([cipher.update(JSON.stringify(obj), 'utf8'), cipher.final()]);
     return { iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), data: ct.toString('base64') };
   }
-  _decrypt(blob) {
-    const decipher = crypto.createDecipheriv('aes-256-gcm', this.key, Buffer.from(blob.iv, 'base64'));
+  _decryptWithKey(blob, key) {
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(blob.iv, 'base64'));
     decipher.setAuthTag(Buffer.from(blob.tag, 'base64'));
     return JSON.parse(Buffer.concat([decipher.update(Buffer.from(blob.data, 'base64')), decipher.final()]).toString('utf8'));
+  }
+  _decrypt(blob) {
+    try { return this._decryptWithKey(blob, this.key); }
+    catch (e) { return this._decryptWithKey(blob, this.legacyKey); }
   }
   get() {
     const blob = this.store.read('settings', null);
@@ -343,4 +386,4 @@ class SecureSettings {
   update(mutator) { return this.set(mutator(this.get())); }
 }
 
-module.exports = { Auth, SecureSettings, RateLimiter, hashPassword, verifyPassword };
+module.exports = { Auth, SecureSettings, RateLimiter, hashPassword, verifyPassword, deriveKey };

@@ -9,7 +9,8 @@ const path = require('path');
 class Store {
   constructor(dir = process.env.TRIBOON_DATA || path.join(__dirname, '..', 'data')) {
     this.dir = dir;
-    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    try { fs.chmodSync(dir, 0o700); } catch {}
     this.cache = new Map();   // table -> object
     this.dirty = new Set();
     this.timer = null;
@@ -61,10 +62,14 @@ class Store {
       const file = this._file(table);
       try {
         const tmp = file + '.tmp';
-        fs.writeFileSync(tmp, json);
+        fs.writeFileSync(tmp, json, { mode: 0o600 });
         fs.renameSync(tmp, file);
+        try { fs.chmodSync(file, 0o600); } catch {}
       } catch {
-        try { fs.writeFileSync(file, json); }
+        try {
+          fs.writeFileSync(file, json, { mode: 0o600 });
+          try { fs.chmodSync(file, 0o600); } catch {}
+        }
         catch (e2) { failed.add(table); this.lastFlushError = e2; }
       }
     }
@@ -77,11 +82,23 @@ class Store {
 
 // A TTL verdict/health cache keyed by sanitized NZB hash AND normalized title.
 class VerdictCache {
-  constructor(store, ttlMs = 6 * 3600 * 1000) {
-    this.store = store; this.ttl = ttlMs;
+  constructor(store, ttlMs = 6 * 3600 * 1000, maxEntries = 20000) {
+    this.store = store; this.ttl = ttlMs; this.maxEntries = maxEntries;
     this._scrubUnsafeKeys();
   }
   _now() { return Date.now(); }
+  _prune(all) {
+    const now = this._now();
+    for (const [k, v] of Object.entries(all || {})) {
+      if (!v || !v.checkedAt || now - v.checkedAt > this.ttl) delete all[k];
+    }
+    const keys = Object.keys(all || {});
+    if (keys.length > this.maxEntries) {
+      keys.sort((a, b) => ((all[a] && all[a].checkedAt) || 0) - ((all[b] && all[b].checkedAt) || 0));
+      for (const k of keys.slice(0, keys.length - this.maxEntries)) delete all[k];
+    }
+    return all;
+  }
   _scrubUnsafeKeys() {
     const all = this.store.read('verdicts', {});
     let changed = false;
@@ -102,6 +119,7 @@ class VerdictCache {
   }
   set(key, verdict, detail = {}) {
     this.store.update('verdicts', {}, (all) => {
+      all = this._prune(all);
       all[key] = { verdict, detail, checkedAt: this._now() };
       return all;
     });
