@@ -263,10 +263,11 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'const keepPrev = opts.preserveOnZero && incoming <= 1 && prev > 30;',
     'p.nativePos = keepPrev ? prev : incoming;',
     'maybeShowUpNext(p.nativePos, totalDuration(), { native: true });',
-    'window.__tvNativeVideoProgress = (pos, dur) => {\n  applyNativeVideoProgress(pos, dur);',
   ].every((s) => ui.includes(s)),
     'native episode playback should surface Up Next from progress before ExoPlayer reaches ended');
-  assert.ok(ui.includes('window.__tvNativeVideoError = (msg, pos, dur) => {\n  const p = S.playing; if (!p || !p.usingNative) return;\n  applyNativeVideoProgress(pos, dur, { preserveOnZero: true });\n  const at = currentTime();'),
+  assert.match(ui, /window\.__tvNativeVideoProgress = \(pos, dur\) => \{\s+applyNativeVideoProgress\(pos, dur\);/,
+    'native progress bridge should forward ExoPlayer progress into the Up Next timer path');
+  assert.match(ui, /window\.__tvNativeVideoError = \(msg, pos, dur\) => \{\s+const p = S\.playing; if \(!p \|\| !p\.usingNative\) return;\s+applyNativeVideoProgress\(pos, dur, \{ preserveOnZero: true \}\);\s+const at = currentTime\(\);/,
     'native player errors should preserve the last good movie position when Exo reports a bogus zero before fallback');
   assert.match(ui, /function maybeShowUpNext\(t, d, opts = \{\}\) \{[\s\S]+\(d - t\) > UP_NEXT_COUNTDOWN_SECONDS[\s\S]+if \(!opts\.native && \$\('video'\)\.paused\) return;[\s\S]+showUpNext\(\);/,
     'Up Next should start only at the 10-second choice window and work for native progress without relying on the web video paused state');
@@ -529,6 +530,7 @@ test('Android native player: direct source and native chrome stay out of the web
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
   const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
+  const manifest = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'AndroidManifest.xml'), 'utf8');
   const playerMap = fs.readFileSync(path.join(__dirname, '..', 'docs-player-regression-map.md'), 'utf8');
   const guideIcon = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'drawable', 'ic_player_guide.xml'), 'utf8');
   const nativePlayerLayout = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'layout', 'native_player_view.xml'), 'utf8');
@@ -543,6 +545,30 @@ test('Android native player: direct source and native chrome stay out of the web
     android.indexOf('private void openNativeLiveGuide()'),
     android.indexOf('private void enterNativeGuideMode()'),
   );
+  assert.doesNotMatch(manifest, /android:screenOrientation="landscape"/,
+    'Android phone APK must not force the full shell into landscape');
+  assert.match(android, /boolean isTv = isTvDevice\(\);[\s\S]+TriboonTV\/[\s\S]+TriboonAndroid\//,
+    'Android shell should tag TV and phone WebViews differently');
+  assert.match(android, /int contentWidth = Math\.max\(dp\(260\), Math\.min\(getResources\(\)\.getDisplayMetrics\(\)\.widthPixels - \(pad \* 2\), dp\(520\)\)\);[\s\S]+setup\.addView\(addr, new LinearLayout\.LayoutParams\(contentWidth/,
+    'Android first-run server setup screen should fit phone portrait widths');
+  assert.doesNotMatch(android, /addr\.setMinWidth/,
+    'Android setup URL field should not use a fixed TV-width minimum on phones');
+  assert.match(android, /if \(isTvDevice\(\)\) \{[\s\S]+addr\.requestFocus\(\);[\s\S]+\} else \{[\s\S]+root\.requestFocus\(\);[\s\S]+\}/,
+    'Android phone setup screen should not auto-open the keyboard before the user taps the server URL field');
+  assert.match(android, /if \(setup != null && setup\.getVisibility\(\) == View\.VISIBLE\) \{[\s\S]+if \(isTvDevice\(\)\) \{[\s\S]+addr\.requestFocus\(\);[\s\S]+\} else \{[\s\S]+root\.requestFocus\(\);[\s\S]+\}[\s\S]+return;/,
+    'Android focus recovery should not reopen the phone keyboard on first-run setup');
+  assert.match(android, /private void hidePhoneKeyboard\(View tokenView\) \{[\s\S]+hideSoftInputFromWindow/,
+    'Android phone shell should have a soft-keyboard hide helper');
+  assert.match(android, /private void clearPhoneInitialWebInputFocus\(\) \{[\s\S]+document\.activeElement[\s\S]+hidePhoneKeyboard\(web\);/,
+    'Android phone WebView should blur web login/profile inputs after page load');
+  assert.match(android, /private void connect\(\) \{[\s\S]+if \(!isTvDevice\(\)\) \{[\s\S]+hidePhoneKeyboard\(addr\);[\s\S]+addr\.clearFocus\(\);[\s\S]+root\.requestFocus\(\);[\s\S]+\}[\s\S]+if \(!isTvDevice\(\)\) clearPhoneInitialWebInputFocus\(\);/,
+    'Android phone WebView should not auto-open the keyboard on web login/profile gates');
+  assert.ok(ui.includes("if (/TriboonTV/.test(navigator.userAgent)) document.body.classList.add('tv');")
+    && ui.includes("if (/TriboonAndroid/.test(navigator.userAgent)) document.body.classList.add('androidApp');"),
+    'phone WebView should not receive TV-only CSS just because it runs inside the Android shell');
+  assert.ok(ui.includes('body.androidApp .gate{place-items:center;padding:18px}')
+    && ui.includes('body.androidApp #gateArtCaption{display:none}'),
+    'Android phone auth gates should use a phone-app layout without TV auth caption chrome');
   for (const id of ['P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8', 'P9', 'P10', 'P11', 'P12']) {
     const row = playerMap.match(new RegExp(`\\| ${id} \\|[^\\n]+`));
     assert.ok(row, `player regression map should include ${id}`);
@@ -1462,18 +1488,54 @@ test('Android native player: direct source and native chrome stay out of the web
     'fullscreen native Live TV should update web player state before D-pad Up/Down can zap channels');
   assert.match(android, /public int personalIptvVersion\(\)[\s\S]+public String personalIptvSources\(\)[\s\S]+public String personalIptvSave\(String json\)[\s\S]+public void personalIptvLoad\(String token\)/,
     'Android TV should expose a device-local IPTV bridge without replacing server-side playlists');
-  assert.match(android, /KEY_PERSONAL_IPTV[\s\S]+personalIptvStoredSources\(\)[\s\S]+encryptPersonalIptvJson[\s\S]+AndroidKeyStore[\s\S]+loadPersonalXtreamSource[\s\S]+get_live_streams[\s\S]+loadPersonalM3uSource[\s\S]+BufferedReader/,
-    'Android personal IPTV should keep encrypted local sources on-device and load Xtream/M3U channel rows without the server network');
-  assert.match(ui, /function loadLiveChannelsCombined\(\{ fav = false \} = \{\}\) \{[\s\S]+api\('\/api\/iptv\/channels'[\s\S]+loadPersonalIptvChannels[\s\S]+sourceErrors/,
-    'web Live TV should merge server playlists and Android device-local playlists into one channel list');
+  assert.match(android, /public void personalIptvGuide\(String token, String json\) \{[\s\S]+loadPersonalIptvGuide\(token, json\)/,
+    'Android TV should expose a device-local guide bridge for personal IPTV channels');
+  assert.match(android, /KEY_PERSONAL_IPTV[\s\S]+KEY_PERSONAL_IPTV_CHANNEL_CACHE[\s\S]+KEY_PERSONAL_IPTV_GUIDE_CACHE[\s\S]+PERSONAL_IPTV_CACHE_TTL_MS = 24L \* 60L \* 60L \* 1000L[\s\S]+personalIptvStoredSources\(\)[\s\S]+encryptPersonalIptvJson[\s\S]+AndroidKeyStore/,
+    'Android personal IPTV should keep sources plus channel/guide caches encrypted on-device with a 24-hour freshness target');
+  assert.match(android, /loadPersonalXtreamSource[\s\S]+personalXtreamChannelCache\(src, true\)[\s\S]+get_live_streams[\s\S]+putPersonalXtreamCachedChannels[\s\S]+loadPersonalM3uSource[\s\S]+personalM3uChannelCache\(src, true\)[\s\S]+BufferedReader[\s\S]+putPersonalM3uCachedChannels/,
+    'Android personal IPTV should load Xtream/M3U channels locally and reuse local channel caches instead of hitting the provider every visit');
+  assert.match(android, /loadPersonalIptvGuide[\s\S]+personalXtreamGuide[\s\S]+fetchPersonalXtreamGuideAction[\s\S]+get_short_epg[\s\S]+get_simple_data_table[\s\S]+personalXmltvGuide[\s\S]+parseXmltvDate/,
+    'Android personal IPTV guide should support cached Xtream guide rows and optional XMLTV guide rows');
+  assert.match(android, /private String savePersonalIptvSource\(String json\) \{[\s\S]+String id = j\.optString\("id", ""\)\.trim\(\);[\s\S]+existing = old;[\s\S]+if \(host\.isEmpty\(\) && sameMode\) host = existing\.optString\("host", ""\);[\s\S]+if \(pass\.isEmpty\(\) && sameMode\) pass = existing\.optString\("pass", ""\);/,
+    'Android device-local IPTV edits should merge by id and keep saved sensitive fields when edit inputs are blank');
+  assert.match(android, /java\.util\.HashMap<String, String> xmltvBatchCache = new java\.util\.HashMap<>\(\)[\s\S]+personalXmltvGuide\(src, ch, xmltvBatchCache\)[\s\S]+fetchPersonalXmltvGuide\(org\.json\.JSONObject src, org\.json\.JSONObject ch,[\s\S]+xmltvBatchCache\.get\(epgUrl\)[\s\S]+xmltvBatchCache\.put\(epgUrl, xml\)/,
+    'Android XMLTV guide batches should reuse one downloaded XMLTV file across requested channels');
+  assert.match(ui, /function fetchEpg\(idx\) \{[\s\S]+isPersonalChannel\(ch\)[\s\S]+fetchPersonalGuideBatch\(\[ch\]\)/,
+    'web now/next lookup should route Android personal channels through the device guide bridge');
+  assert.match(ui, /function fetchGuideBatch\(chans\) \{[\s\S]+const personal =[\s\S]+fetchPersonalGuideBatch\(personal\)/,
+    'web timeline guide should merge server guide data with Android device-local personal guide data');
+  assert.match(ui, /window\.__tvPersonalIptvGuideLoaded[\s\S]+function fetchPersonalGuideBatch\(chans[\s\S]+bridge\.personalIptvGuide\(token, JSON\.stringify\(\{ channels: rows \}\)\)/,
+    'web should request personal IPTV programme batches from Android and cache the returned guide window');
+  assert.match(ui, /function loadLiveChannelsCombined\(\{ fav = false \} = \{\}\) \{[\s\S]+api\('\/api\/iptv\/channels'[\s\S]+loadPersonalIptvChannels[\s\S]+epg: !!server\.epg \|\| !!personal\.epg[\s\S]+sourceErrors/,
+    'web Live TV should merge server playlists and Android device-local playlists plus their guide availability into one channel list');
   assert.match(ui, /function openPrefs\(\)[\s\S]+\$\('prefTabLive'\)\.style\.display = '';[\s\S]+renderPrefPersonalIptv\(\);/,
     'Preferences should always expose Live TV so users can find the personal IPTV setup before a playlist exists');
-  assert.match(ui, /Save to my account[\s\S]+personalIptvSaveDevice[\s\S]+Save on this TV only/,
-    'Preferences should make account IPTV the default path and keep Android device-only IPTV as an optional path');
-  assert.match(ui, /async function loadAccountIptvSources\(\) \{[\s\S]+api\('\/api\/me\/iptv\/sources'\)[\s\S]+async function renderPrefPersonalIptv\(\) \{[\s\S]+panel\.style\.display = '';[\s\S]+personalIptvSaveDevice'\)\.style\.display = bridge \? '' : 'none'[\s\S]+el\.disabled = false/,
-    'Personal IPTV setup should stay visible and usable in browser while showing device-only controls only on Android TV');
-  assert.match(ui, /async function savePersonalIptvFromPrefs\(\) \{[\s\S]+api\('\/api\/me\/iptv\/sources', \{ method: 'POST', body \}\)[\s\S]+refreshLiveAvailabilityFlags\(\)/,
-    'browser Preferences should save personal IPTV to the signed-in account through the server source model');
+  assert.match(ui, /Save to my account[\s\S]+personalIptvSaveDevice[\s\S]+Save on this device only/,
+    'Preferences should make account IPTV the default path and keep Android device-local IPTV as an optional path');
+  assert.ok(ui.includes('id="personalIptvAddOpen">Add playlist')
+    && ui.includes('id="personalIptvForm" class="iptvAddForm" hidden')
+    && ui.includes('id="personalIptvCancel">Cancel')
+    && ui.includes('data-account-iptv-edit')
+    && ui.includes('data-device-iptv-edit'),
+    'Personal IPTV setup should keep add fields collapsed until the user chooses Add playlist and allow fixing saved playlist mistakes');
+  assert.ok(ui.includes('function updatePersonalIptvFormState()')
+    && ui.includes("const form = $('personalIptvForm');")
+    && ui.includes('if (form) form.hidden = !open;')
+    && ui.includes("$('personalIptvSaveDevice').style.display = bridge && (!edit || edit.kind === 'device') ? '' : 'none';")
+    && ui.includes('function setPersonalIptvAdding(open'),
+    'Personal IPTV setup should stay usable in browser while showing device-only controls only in the Android app');
+  assert.ok(ui.includes('id="iptvAddOpen">Add playlist')
+    && ui.includes('id="iptvAddForm" class="iptvAddForm" hidden')
+    && ui.includes('id="iptvCancel">Cancel')
+    && ui.includes('data-iptvedit')
+    && ui.includes('function updateIptvAddFormState()')
+    && ui.includes("const form = $('iptvAddForm');")
+    && ui.includes('if (form) form.hidden = !open;'),
+    'Admin IPTV setup should also keep server/username/password fields collapsed until Add playlist and allow playlist edits');
+  assert.match(ui, /async function savePersonalIptvFromPrefs\(\) \{[\s\S]+api\(`\/api\/me\/iptv\/sources\/\$\{edit\.id\}`,[\s\S]+method: 'PATCH'[\s\S]+api\('\/api\/me\/iptv\/sources', \{ method: 'POST', body \}\)[\s\S]+refreshLiveAvailabilityFlags\(\)/,
+    'browser Preferences should save personal IPTV to the signed-in account through the server source model and PATCH existing sources');
+  assert.match(ui, /\$\(\'iptvSave\'\)\.addEventListener\('click'[\s\S]+api\(`\/api\/iptv\/sources\/\$\{edit\.id\}`,[\s\S]+method: 'PATCH'[\s\S]+api\('\/api\/iptv\/sources', \{ method: 'POST', body \}\)/,
+    'admin Settings should PATCH an edited IPTV source instead of adding a duplicate');
   assert.doesNotMatch(ui, /#prefPersonalIptvPanel\s*\{[^}]*display\s*:\s*none/,
     'CSS must not hide the Personal IPTV panel after JavaScript enables the Preferences tab');
   assert.match(ui, /function toggleFav\(ch, star\) \{[\s\S]+isPersonalChannel\(ch\)[\s\S]+PERSONAL_IPTV_FAV_KEY[\s\S]+api\('\/api\/iptv\/fav'/,

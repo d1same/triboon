@@ -468,6 +468,45 @@ function cleanupDeletedIptvSource(sourceId, removed = null) {
     });
   }
 }
+function cleanupEditedIptvSource(sourceId, before = null, after = null) {
+  clearIptvSourceRuntime(sourceId);
+  deleteIptvDiskCache(sourceId);
+  const upstreamChanged = before && after && iptvSourceKey(before) !== iptvSourceKey(after);
+  if (upstreamChanged) {
+    store.update('iptvfavs', {}, (all) => {
+      const prefix = `${sourceId}:`;
+      for (const uid of Object.keys(all || {})) {
+        if (Array.isArray(all[uid])) all[uid] = all[uid].filter((id) => !String(id).startsWith(prefix));
+      }
+      return all;
+    });
+  }
+  if (before && before.name && (!after || before.name !== after.name || upstreamChanged)) {
+    const prefix = `${before.name} Â· `;
+    store.update('iptvgroups', {}, (all) => {
+      for (const uid of Object.keys(all || {})) {
+        if (Array.isArray(all[uid])) all[uid] = all[uid].filter((g) => !String(g).startsWith(prefix));
+      }
+      return all;
+    });
+  }
+}
+function iptvEditBodyForExisting(b = {}, existing = null) {
+  if (!existing) return b;
+  const out = { ...b };
+  const mode = normalizeIptvMode(out.iptvMode || out.mode || existing.iptvMode);
+  const sameMode = mode === existing.iptvMode;
+  if (sameMode && mode === 'xtream') {
+    if (out.xtHost !== undefined && !String(out.xtHost || '').trim()) delete out.xtHost;
+    if (out.xtUser !== undefined && !String(out.xtUser || '').trim()) delete out.xtUser;
+    if (out.xtPass !== undefined && out.xtPass === '') delete out.xtPass;
+  }
+  if (sameMode && mode === 'm3u' && out.iptvUrl !== undefined && !String(out.iptvUrl || '').trim()) {
+    delete out.iptvUrl;
+  }
+  if (out.epgUrl !== undefined && !String(out.epgUrl || '').trim()) out.epgUrl = null;
+  return out;
+}
 function readIptvDiskCaches() {
   const all = store.read('iptvcaches', {});
   if (all && typeof all === 'object' && !Array.isArray(all)) return all;
@@ -2635,6 +2674,52 @@ const H = {
     send(ctx.res, 200, { source: redactIptvSource(src) });
   },
 
+  myIptvSourceUpdate: async (ctx) => {
+    const sourceId = cleanIptvSourceId(ctx.m[1]);
+    const b = await readJson(ctx.req);
+    let updated = null;
+    let previous = null;
+    let forbidden = false;
+    let err = null;
+    settings.update((s) => {
+      const list = iptvSourcesFromSettings(s);
+      const idx = list.findIndex((src) => src.id === sourceId);
+      if (idx < 0) {
+        err = Object.assign(new Error('playlist not found'), { status: 404 });
+        return s;
+      }
+      previous = list[idx];
+      if (previous.ownerUserId !== ctx.user.id) {
+        forbidden = true;
+        return s;
+      }
+      try {
+        updated = makeIptvSourceFromBody(iptvEditBodyForExisting({
+          ...b,
+          users: [ctx.user.id],
+          ownerUserId: ctx.user.id,
+        }, previous), previous);
+      } catch (e) {
+        err = e;
+        return s;
+      }
+      updated.users = [ctx.user.id];
+      updated.ownerUserId = ctx.user.id;
+      const nextList = [...list];
+      nextList[idx] = updated;
+      return {
+        ...s,
+        iptvSources: nextList,
+        iptvUrl: null, xtHost: null, xtUser: null, xtPass: null, epgUrl: null, iptvUsers: [],
+      };
+    });
+    if (forbidden) return send(ctx.res, 403, { error: 'not your playlist' });
+    if (err) return send(ctx.res, err.status || 400, { error: err.message || 'playlist update failed' });
+    cleanupEditedIptvSource(sourceId, previous, updated);
+    scheduleIptvWarmSoon('user-source-updated');
+    send(ctx.res, 200, { source: redactIptvSource(updated) });
+  },
+
   myIptvSourceDelete: async (ctx) => {
     const sourceId = cleanIptvSourceId(ctx.m[1]);
     let removed = null;
@@ -2693,6 +2778,40 @@ const H = {
     clearIptvSourceRuntime(src.id);
     scheduleIptvWarmSoon('source-added');
     send(ctx.res, 200, { source: redactIptvSource(src) });
+  },
+
+  iptvSourceUpdate: async (ctx) => {
+    const sourceId = cleanIptvSourceId(ctx.m[1]);
+    const b = await readJson(ctx.req);
+    let updated = null;
+    let previous = null;
+    let err = null;
+    settings.update((s) => {
+      const list = iptvSourcesFromSettings(s);
+      const idx = list.findIndex((src) => src.id === sourceId);
+      if (idx < 0) {
+        err = Object.assign(new Error('playlist not found'), { status: 404 });
+        return s;
+      }
+      previous = list[idx];
+      try {
+        updated = makeIptvSourceFromBody(iptvEditBodyForExisting(b, previous), previous);
+      } catch (e) {
+        err = e;
+        return s;
+      }
+      const nextList = [...list];
+      nextList[idx] = updated;
+      return {
+        ...s,
+        iptvSources: nextList,
+        iptvUrl: null, xtHost: null, xtUser: null, xtPass: null, epgUrl: null, iptvUsers: [],
+      };
+    });
+    if (err) return send(ctx.res, err.status || 400, { error: err.message || 'playlist update failed' });
+    cleanupEditedIptvSource(sourceId, previous, updated);
+    scheduleIptvWarmSoon('source-updated');
+    send(ctx.res, 200, { source: redactIptvSource(updated) });
   },
 
   iptvSourceDelete: async (ctx) => {
@@ -4454,6 +4573,7 @@ const ROUTES = [
   { m: 'POST', re: /^\/api\/me\/profiles\/(\w+)\/pin$/, auth: 'user', h: H.profileSetPin },
   { m: 'GET', re: /^\/api\/me\/iptv\/sources$/, auth: 'user', h: H.myIptvSourcesList },
   { m: 'POST', re: /^\/api\/me\/iptv\/sources$/, auth: 'user', h: H.myIptvSourceCreate },
+  { m: 'PATCH', re: /^\/api\/me\/iptv\/sources\/([\w-]+)$/, auth: 'user', h: H.myIptvSourceUpdate },
   { m: 'DELETE', re: /^\/api\/me\/iptv\/sources\/([\w-]+)$/, auth: 'user', h: H.myIptvSourceDelete },
   { m: 'POST', re: /^\/api\/watch\/bulk$/, auth: 'user', h: H.watchBulk },
   { m: 'GET', re: /^\/api\/status$/, auth: 'user', h: H.status },
@@ -4475,6 +4595,7 @@ const ROUTES = [
   { m: 'GET', re: /^\/api\/local\/(\w+)\/(\d+)$/, auth: 'stream', h: H.localStream },
   { m: 'GET', re: /^\/api\/iptv\/sources$/, auth: 'admin', h: H.iptvSourcesList },
   { m: 'POST', re: /^\/api\/iptv\/sources$/, auth: 'admin', h: H.iptvSourceCreate },
+  { m: 'PATCH', re: /^\/api\/iptv\/sources\/([\w-]+)$/, auth: 'admin', h: H.iptvSourceUpdate },
   { m: 'DELETE', re: /^\/api\/iptv\/sources\/([\w-]+)$/, auth: 'admin', h: H.iptvSourceDelete },
   { m: 'GET', re: /^\/api\/iptv\/status$/, auth: 'admin', h: H.iptvSyncStatus },
   { m: 'POST', re: /^\/api\/iptv\/refresh$/, auth: 'admin', h: H.iptvSyncRefresh },

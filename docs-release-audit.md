@@ -93,6 +93,19 @@ This is the A-to-Z checklist for keeping web and Android TV working as separate 
 
 ## Verification Log
 
+- Release v1.5.8 verification: IPTV playlists are editable from both admin
+  Settings and user Preferences without exposing saved credentials. Edits reuse
+  the existing source id, keep saved sensitive fields when edit inputs are
+  blank, clear that source's channel/guide cache, and warm the updated playlist
+  in the background instead of adding a duplicate. Android device-only IPTV uses
+  the same merge-by-id behavior in encrypted local storage. Verification passed
+  inline `web/index.html` script parse, `node --test test/iptv-cache.test.js`
+  26/26, `node --test test/security.test.js` 63/63, focused
+  `node --test --test-name-pattern "Android native player" test/phase4.test.js`,
+  full `npm.cmd test` 176/176, `git diff --check`, and Android
+  `assembleDebug`. `aapt dump badging dist/triboon-tv-v1.5.8.apk` reported
+  `versionCode='61'` and `versionName='1.5.8'`; release APK SHA-256 is
+  `A1E09FBECF53F3AC7E5631ABF16DD87EFFEC1AB7E9B46E8A66D16DCB76075C83`.
 - Release v1.5.7 verification: profile always-show subtitles now auto-enable
   the preferred online subtitle at startup on web and native playback without
   waiting for web track probing, while manual mode stays quiet and an in-video

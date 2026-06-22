@@ -139,10 +139,10 @@ test('security: deny-by-default — every route declares auth; unknown routes 40
     ['POST', '/api/play'], ['POST', '/api/advance/abc'], ['GET', '/api/tmdb/trending/all/week'],
     ['GET', '/api/watch'], ['GET', '/api/watch/next'], ['POST', '/api/watch'], ['GET', '/api/mounts'],
     ['GET', '/api/health/abc'], ['POST', '/api/mount'], ['GET', '/api/settings'],
-    ['GET', '/api/me/iptv/sources'], ['POST', '/api/me/iptv/sources'], ['DELETE', '/api/me/iptv/sources/abc'],
+    ['GET', '/api/me/iptv/sources'], ['POST', '/api/me/iptv/sources'], ['PATCH', '/api/me/iptv/sources/abc'], ['DELETE', '/api/me/iptv/sources/abc'],
     ['POST', '/api/settings'], ['POST', '/api/streaming/recommend'], ['POST', '/api/invites'], ['GET', '/api/invites'],
     ['GET', '/api/users'], ['GET', '/api/stream/abc'], ['GET', '/api/remux/abc'],
-    ['GET', '/api/iptv/status'], ['POST', '/api/iptv/refresh'],
+    ['GET', '/api/iptv/status'], ['POST', '/api/iptv/refresh'], ['GET', '/api/iptv/sources'], ['POST', '/api/iptv/sources'], ['PATCH', '/api/iptv/sources/abc'], ['DELETE', '/api/iptv/sources/abc'],
     ['POST', '/api/quickconnect/123456/approve'], ['GET', '/api/music/charts'], ['GET', '/api/music/search?q=x'],
   ];
   for (const [m, p] of probes) {

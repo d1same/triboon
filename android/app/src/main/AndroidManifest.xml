@@ -18,7 +18,7 @@
         </intent>
     </queries>
 
-    <!-- TV-first: leanback launcher, no touchscreen required (Shield / onn / Google TV). -->
+    <!-- Universal shell: TV launcher support without excluding phones/tablets. -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
@@ -35,7 +35,6 @@
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
-            android:screenOrientation="landscape"
             android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout|smallestScreenSize|density|uiMode">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

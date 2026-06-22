@@ -469,6 +469,14 @@ http://${req.headers.host}/bob.ts
     assert.strictEqual(aliceSources.json.sources.length, 1);
     const bobSources = await httpJson(srv.port, 'GET', '/api/me/iptv/sources', null, bob);
     assert.strictEqual(bobSources.json.sources.length, 0, 'other users cannot list a personal source');
+    const forbiddenEdit = await httpJson(srv.port, 'PATCH', `/api/me/iptv/sources/${created.json.source.id}`,
+      { name: 'Bob should not edit this' }, bob);
+    assert.strictEqual(forbiddenEdit.status, 403, 'users cannot edit someone else personal source');
+    const edited = await httpJson(srv.port, 'PATCH', `/api/me/iptv/sources/${created.json.source.id}`,
+      { name: 'Alice IPTV Fixed', iptvMode: 'm3u' }, alice);
+    assert.strictEqual(edited.status, 200);
+    assert.strictEqual(edited.json.source.id, created.json.source.id, 'personal edit should keep the source id stable');
+    assert.strictEqual(edited.json.source.name, 'Alice IPTV Fixed');
     assert.strictEqual((await httpJson(srv.port, 'GET', '/api/me', null, alice)).json.iptvAllowed, true);
     assert.strictEqual((await httpJson(srv.port, 'GET', '/api/me', null, bob)).json.iptvAllowed, false);
 
@@ -494,6 +502,51 @@ http://${req.headers.host}/bob.ts
     assert.strictEqual(removed.status, 200);
     assert.strictEqual(removed.json.removed, true);
     assert.strictEqual((await httpJson(srv.port, 'GET', '/api/me/iptv/sources', null, alice)).json.sources.length, 0);
+  } finally {
+    if (srv) await srv.shutdown();
+    upstream.close();
+  }
+});
+
+test('iptv: admin playlist edit updates the source in place and clears stale channels', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-iptv-edit-'));
+  const upstream = http.createServer((req, res) => {
+    if (req.url === '/one.m3u') {
+      res.writeHead(200);
+      return res.end(`#EXTM3U
+#EXTINF:-1 tvg-id="one.news" group-title="News",One News
+http://${req.headers.host}/one.ts
+`);
+    }
+    if (req.url === '/two.m3u') {
+      res.writeHead(200);
+      return res.end(`#EXTM3U
+#EXTINF:-1 tvg-id="two.news" group-title="News",Two News
+http://${req.headers.host}/two.ts
+`);
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${upstream.address().port}`;
+  let srv;
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    const created = await httpJson(srv.port, 'POST', '/api/iptv/sources',
+      { name: 'First playlist', iptvMode: 'm3u', iptvUrl: `${base}/one.m3u` }, admin);
+    assert.strictEqual(created.status, 200);
+    const firstChannels = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    assert.deepStrictEqual(firstChannels.json.channels.map((c) => c.name), ['One News']);
+
+    const edited = await httpJson(srv.port, 'PATCH', `/api/iptv/sources/${created.json.source.id}`,
+      { name: 'Second playlist', iptvMode: 'm3u', iptvUrl: `${base}/two.m3u` }, admin);
+    assert.strictEqual(edited.status, 200);
+    assert.strictEqual(edited.json.source.id, created.json.source.id, 'admin edit should keep the source id stable');
+    assert.strictEqual(edited.json.source.name, 'Second playlist');
+    const afterEdit = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    assert.deepStrictEqual(afterEdit.json.channels.map((c) => c.name), ['Two News']);
   } finally {
     if (srv) await srv.shutdown();
     upstream.close();
