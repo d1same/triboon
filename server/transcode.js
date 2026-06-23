@@ -37,6 +37,21 @@ function detectFfprobe() {
   return null;
 }
 
+let _ffmpegHttpOptions; // cached protocol option help text
+function supportsFfmpegHttpOption(option) {
+  const ff = detectFfmpeg();
+  if (!ff) return false;
+  if (_ffmpegHttpOptions === undefined) {
+    try {
+      const r = spawnSync(ff.path, ['-hide_banner', '-h', 'protocol=http'], { timeout: 5000, windowsHide: true });
+      _ffmpegHttpOptions = `${r.stdout || ''}\n${r.stderr || ''}`;
+    } catch {
+      _ffmpegHttpOptions = '';
+    }
+  }
+  return new RegExp(`(^|\\s)-${option}\\s`).test(_ffmpegHttpOptions);
+}
+
 // Decide the playback method for a mount + client capabilities.
 // caps: { mkv, hevc, ac3, eac3, dts } — the client's canPlayType results.
 function releaseAudioProfile(name) {
@@ -292,7 +307,7 @@ function spawnLiveRemux(url, { hlsFriendly = true, headers = null } = {}) {
     '-hide_banner', '-loglevel', 'error',
     '-user_agent', 'Mozilla/5.0 (SMART-TV; Linux) AppleWebKit/537.36 TriboonTV/1.0',
     '-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '4',
-    '-max_redirects', '0',
+    ...(supportsFfmpegHttpOption('max_redirects') ? ['-max_redirects', '0'] : []),
     '-analyzeduration', '1000000', '-probesize', '1000000',
     ...(headerLines ? ['-headers', headerLines] : []),
     ...(hlsFriendly ? ['-extension_picky', '0', '-allowed_extensions', 'ALL'] : []),
@@ -335,4 +350,4 @@ function spawnSubtitleExtract(streamUrl, subTrack) {
   ], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
 }
 
-module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnTranscode, spawnLiveRemux, spawnSubtitleExtract, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk };
+module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnTranscode, spawnLiveRemux, spawnSubtitleExtract, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, supportsFfmpegHttpOption };

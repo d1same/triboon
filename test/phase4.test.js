@@ -12,7 +12,7 @@ const path = require('path');
 const http = require('http');
 const zlib = require('zlib');
 const { spawnSync } = require('child_process');
-const { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnLiveRemux, spawnTranscode, spawnSubtitleExtract } = require('../server/transcode');
+const { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnLiveRemux, spawnTranscode, spawnSubtitleExtract, supportsFfmpegHttpOption } = require('../server/transcode');
 
 const HAS_FFMPEG = !!detectFfmpeg();
 const HAS_FFPROBE = !!detectFfprobe();
@@ -1358,8 +1358,8 @@ test('Android native player: direct source and native chrome stay out of the web
     && server.includes('spawnLiveRemux(iptvRemuxInputHref(pin, target.url)')
     && server.includes('headers: pin.hostHeader ? { Host: pin.hostHeader } : undefined'),
     'server Live TV remux fallback should try Xtream TS before HLS and preserve HTTPS provider SNI');
-  assert.match(transcode, /function ffmpegHeaderLines\(headers = \{\}\)[\s\S]+\`\$\{k\}: \$\{v\}\\r\\n\`[\s\S]+function spawnLiveRemux\(url, \{ hlsFriendly = true, headers = null \} = \{\}\)[\s\S]+'-max_redirects', '0'[\s\S]+\.\.\.\(headerLines \? \['-headers', headerLines\] : \[\]\)[\s\S]+'-i', url/,
-    'ffmpeg Live TV remux should receive sanitized Host headers and keep its own redirect following disabled after URL pinning');
+  assert.match(transcode, /function ffmpegHeaderLines\(headers = \{\}\)[\s\S]+\`\$\{k\}: \$\{v\}\\r\\n\`[\s\S]+function spawnLiveRemux\(url, \{ hlsFriendly = true, headers = null \} = \{\}\)[\s\S]+supportsFfmpegHttpOption\('max_redirects'\) \? \['-max_redirects', '0'\] : \[\][\s\S]+\.\.\.\(headerLines \? \['-headers', headerLines\] : \[\]\)[\s\S]+'-i', url/,
+    'ffmpeg Live TV remux should receive sanitized Host headers and disable ffmpeg redirect following when the installed build supports that option');
   assert.match(server, /function resolveIptvRemuxRedirect\(rawTarget, maxHops = 5\) \{[\s\S]+validateAndPinIptvUrl\(current, 'Live stream URL'\)[\s\S]+new URL\(res\.headers\.location, u\)\.href[\s\S]+throw new Error\('too many live stream redirects'\)/,
     'server Live TV remux should resolve provider redirects itself so every hop is validated before ffmpeg retries');
   assert.match(server, /const redirectHls = hlsFriendly \|\| iptvRemuxTargetLikelyHls\(redirected\);/,
@@ -2146,6 +2146,11 @@ test('live tv browser remux keeps AAC surround instead of forcing stereo', () =>
     'Live TV browser remux should encode browser-safe AAC without a hard stereo downmix');
   assert.doesNotMatch(transcode, /function spawnLiveRemux[\s\S]+'-ac', '2'[\s\S]+\]\, \{ stdio/,
     'Live TV browser remux should not force every channel to stereo');
+});
+
+test('ffmpeg HTTP option detection is cached and safe on older builds', () => {
+  assert.strictEqual(typeof supportsFfmpegHttpOption('max_redirects'), 'boolean');
+  assert.strictEqual(supportsFfmpegHttpOption('definitely_not_a_real_option'), false);
 });
 
 test('live tv remux preserves 5.1 channel count as AAC when ffmpeg can encode it', { skip: !HAS_FFMPEG || !HAS_FFPROBE }, async () => {
