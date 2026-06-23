@@ -738,11 +738,11 @@ test('Android native player: direct source and native chrome stay out of the web
     'native stats button should be the last ExoPlayer right-side control after CC/audio/quality');
   assert.match(android, /private ScrollView nativeSheetScroll;[\s\S]+private LinearLayout nativeSheetRows;/,
     'native ExoPlayer choice sheets should have a dedicated scroll viewport');
-  assert.match(android, /private int nativeSheetRowsViewportHeight\(int count\) \{[\s\S]+screen - dp\(260\)[\s\S]+return Math\.min\(max, needed\);[\s\S]+\}/,
+  assert.match(android, /private int nativeSheetWidthPx\(\) \{[\s\S]+if \(isTvDevice\(\)\) return dp\(328\);[\s\S]+screen - dp\(32\)[\s\S]+private int nativeSheetBottomMarginPx\(\) \{[\s\S]+if \(isTvDevice\(\)\) return dp\(96\);[\s\S]+screen \/ 5[\s\S]+private int nativeSheetRowsViewportHeight\(int count\) \{[\s\S]+screen - nativeSheetVerticalReservePx\(\)[\s\S]+return Math\.min\(max, needed\);[\s\S]+\}/,
     'native ExoPlayer subtitle/audio/quality sheets should stay bounded on smaller screens');
   assert.match(android, /nativeSheetScroll = new ScrollView\(this\);[\s\S]+nativeSheetRows = new LinearLayout\(this\);[\s\S]+nativeSheetRows\.addView\(row\);[\s\S]+nativeSheet\.addView\(nativeSheetScroll, new LinearLayout\.LayoutParams\([\s\S]+nativeSheetRowsViewportHeight\(labels\.length\)\)\);/,
     'native ExoPlayer choice rows should scroll inside the bounded sheet instead of growing offscreen');
-  assert.match(android, /private java\.util\.ArrayList<View> nativeSheetFocusableRows\(\)[\s\S]+nativeSheetRows != null \? nativeSheetRows : nativeSheet[\s\S]+private void focusNativeSheetRow\([\s\S]+smoothScrollTo\(0, Math\.max\(0, row\.getTop\(\) - dp\(8\)\)\)/,
+  assert.match(android, /private java\.util\.ArrayList<View> nativeSheetFocusableRows\(\)[\s\S]+nativeSheetRows != null \? nativeSheetRows : nativeSheet[\s\S]+private void focusNativeSheetRow\([\s\S]+scrollTo\(0, Math\.max\(0, row\.getTop\(\) - dp\(8\)\)\)/,
     'native ExoPlayer D-pad focus should keep the highlighted sheet row visible');
   assert.match(android, /row\.setSingleLine\(true\);[\s\S]+row\.setEllipsize\(TextUtils\.TruncateAt\.END\);[\s\S]+ViewGroup\.LayoutParams\.MATCH_PARENT, dp\(38\)/,
     'native ExoPlayer sheet rows should keep fixed height and ellipsize long track labels');
@@ -1566,8 +1566,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native player buttons should stay compact and avoid clipped circles on TV');
   assert.doesNotMatch(android, /setScale[XY]\(hasFocus/,
     'native player focus should not scale buttons and clip the circle');
-  assert.match(android, /dp\(328\), ViewGroup\.LayoutParams\.WRAP_CONTENT/,
-    'native option sheets should stay compact while giving player rows enough room');
+  assert.match(android, /private void updateNativeSheetLayout\(\) \{[\s\S]+lp\.width = nativeSheetWidthPx\(\);[\s\S]+lp\.gravity = android\.view\.Gravity\.END \| android\.view\.Gravity\.BOTTOM;[\s\S]+lp\.setMargins\(side, 0, side, nativeSheetBottomMarginPx\(\)\);[\s\S]+nativeSheet\.setLayoutParams\(lp\);[\s\S]+\}/,
+    'native option sheets should stay compact on TV and fit phone landscape screens');
   assert.match(android, /nativeTop = new LinearLayout\(this\);[\s\S]+nativePlayerTitle = new TextView\(this\);[\s\S]+nativePlayerSubline = new TextView\(this\);[\s\S]+nativePlayerLayer\.addView\(nativeTop, titleLp\);/,
     'native ExoPlayer should place title and episode subline in the top-left metadata cluster');
   assert.match(android, /if \(nativeMetaBar != null\) nativeMetaBar\.setVisibility\(View\.GONE\);[\s\S]+nativeChrome\.setVisibility\(View\.VISIBLE\);[\s\S]+nativeTop\.setVisibility\(View\.VISIBLE\);/,

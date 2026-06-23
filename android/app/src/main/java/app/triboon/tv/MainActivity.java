@@ -2811,9 +2811,10 @@ public class MainActivity extends Activity {
         nativeSheet.setVisibility(View.GONE);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) nativeSheet.setElevation(dp(10));
         FrameLayout.LayoutParams sheetLp = new FrameLayout.LayoutParams(
-                dp(328), ViewGroup.LayoutParams.WRAP_CONTENT,
+                nativeSheetWidthPx(), ViewGroup.LayoutParams.WRAP_CONTENT,
                 android.view.Gravity.END | android.view.Gravity.BOTTOM);
-        sheetLp.setMargins(0, 0, dp(42), dp(96));
+        int sheetSide = nativeSheetSideMarginPx();
+        sheetLp.setMargins(sheetSide, 0, sheetSide, nativeSheetBottomMarginPx());
         nativePlayerLayer.addView(nativeSheet, sheetLp);
 
         nativeLoading = new FrameLayout(this);
@@ -5200,9 +5201,42 @@ public class MainActivity extends Activity {
         showNativeChoiceSheet(title, labels, null, handler);
     }
 
+    private int nativeSheetWidthPx() {
+        int screen = Math.max(1, getResources().getDisplayMetrics().widthPixels);
+        if (isTvDevice()) return dp(328);
+        return Math.max(dp(260), Math.min(dp(328), screen - dp(32)));
+    }
+
+    private int nativeSheetSideMarginPx() {
+        return isTvDevice() ? dp(42) : dp(16);
+    }
+
+    private int nativeSheetBottomMarginPx() {
+        if (isTvDevice()) return dp(96);
+        int screen = Math.max(1, getResources().getDisplayMetrics().heightPixels);
+        return Math.max(dp(68), Math.min(dp(96), screen / 5));
+    }
+
+    private int nativeSheetVerticalReservePx() {
+        return isTvDevice() ? dp(260) : dp(190);
+    }
+
+    private void updateNativeSheetLayout() {
+        if (nativeSheet == null) return;
+        ViewGroup.LayoutParams raw = nativeSheet.getLayoutParams();
+        if (!(raw instanceof FrameLayout.LayoutParams)) return;
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) raw;
+        int side = nativeSheetSideMarginPx();
+        lp.width = nativeSheetWidthPx();
+        lp.height = ViewGroup.LayoutParams.WRAP_CONTENT;
+        lp.gravity = android.view.Gravity.END | android.view.Gravity.BOTTOM;
+        lp.setMargins(side, 0, side, nativeSheetBottomMarginPx());
+        nativeSheet.setLayoutParams(lp);
+    }
+
     private int nativeSheetRowsViewportHeight(int count) {
         int screen = Math.max(1, getResources().getDisplayMetrics().heightPixels);
-        int max = Math.max(dp(132), Math.min(dp(360), screen - dp(260)));
+        int max = Math.max(dp(96), Math.min(dp(360), screen - nativeSheetVerticalReservePx()));
         int needed = Math.max(dp(43), count * dp(43) + dp(6));
         return Math.min(max, needed);
     }
@@ -5225,7 +5259,7 @@ public class MainActivity extends Activity {
         View row = rows.get(safe);
         row.requestFocus();
         if (nativeSheetScroll != null) {
-            nativeSheetScroll.post(() -> nativeSheetScroll.smoothScrollTo(0, Math.max(0, row.getTop() - dp(8))));
+            nativeSheetScroll.post(() -> nativeSheetScroll.scrollTo(0, Math.max(0, row.getTop() - dp(8))));
         }
     }
 
@@ -5236,6 +5270,7 @@ public class MainActivity extends Activity {
         nativeSheet.removeAllViews();
         nativeSheetScroll = null;
         nativeSheetRows = null;
+        updateNativeSheetLayout();
 
         TextView head = new TextView(this);
         head.setText(title);
