@@ -110,7 +110,7 @@ async function searchIndexer(indexer, params, { timeoutMs = 2000 } = {}) {
   // 100 (most indexers' max): the default sort is recency, so a tight limit silently
   // drops older releases — every big BluRay remux of a 15-year-old film, for instance.
   u.searchParams.set('limit', params.limit || 100);
-  const r = await fetchUrl(u.href, { timeoutMs, deadlineMs: timeoutMs * 3 }); // hard per-indexer budget
+  const r = await fetchUrl(u.href, { timeoutMs, deadlineMs: timeoutMs }); // hard per-indexer budget
   if (r.status !== 200) throw new Error(`${indexer.name}: HTTP ${r.status}`);
   return parseNewznabRss(r.body.toString('utf8'), indexer.name);
 }

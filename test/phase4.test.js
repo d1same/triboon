@@ -1995,6 +1995,28 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'top-level page layers should not keep permanent compositor reservations');
   assert.match(ui, /\.cbtn:hover,\.cbtn\.focus,\.cbtn:focus\{[\s\S]+rgba\(251,139,60,\.82\)/,
     'player OSD button focus should have a visible coral ring over video');
+  assert.match(ui, /#subOverlay\{[^}]*max-height:32vh;overflow:hidden;[\s\S]+while \(box\.scrollHeight > box\.clientHeight && box\.firstElementChild\) box\.removeChild\(box\.firstElementChild\);/,
+    'self-rendered subtitle text should stay bounded inside the video frame');
+  assert.match(ui, /b\.addEventListener\('focus', \(\) => \{[\s\S]+scrollIntoView\(\{ block: 'nearest', inline: 'nearest' \}\)/,
+    'long subtitle/audio/quality menus should keep the focused row inside the panel');
+  assert.match(ui, /@media \(max-width:600px\)\{[\s\S]+#hero \.meta,#heroCredits,#hero p\{display:none!important\}[\s\S]+#rows\{max-height:calc\(100vh - 176px\);/,
+    'mobile Home should drop backdrop-style hero copy and give the rows most of the screen');
+  assert.match(ui, /body\.mobileShell #hero \.meta,body\.mobileShell #heroCredits,body\.mobileShell #hero p\{display:none!important\}[\s\S]+body\.mobileShell #rows\{max-height:calc\(100vh - 176px\);/,
+    'Android mobile shell should get the same compact Home treatment as narrow browsers');
+  assert.match(ui, /function sizeRowsWindow\(root\) \{[\s\S]+const compactHome = root\.id === 'rows'[\s\S]+window\.innerWidth <= 600[\s\S]+document\.body\.classList\.contains\('mobileShell'\)[\s\S]+if \(compactHome\) \{ root\.style\.maxHeight = ''; return; \}/,
+    'mobile Home should not receive an inline desktop/TV row-window max-height');
+  assert.match(ui, /function resetSearchPage\(opts = \{\}\) \{[\s\S]+if \(opts\.landing !== false && S\.view === 'search'\) renderSearchLanding\(\);/,
+    'Search should land on useful results instead of a blank grid');
+  assert.match(ui, /prevView === 'search' && v !== 'search'[\s\S]+resetSearchPage\(\{ landing: false \}\);/,
+    'leaving Search should clear state without starting a background landing fetch');
+  assert.match(ui, /async function renderSearchLanding\(\) \{[\s\S]+\/api\/tmdb\/trending\/all\/week[\s\S]+renderSearchSections\(sections\)/,
+    'Search landing should reuse TMDB discovery rows');
+  assert.match(ui, /if \(!q\) \{ renderSearchLanding\(\); return; \}/,
+    'empty Search queries should keep the landing state visible');
+  assert.match(ui, /renderGrid\(cards\);[\s\S]+if \(!cards\.length\) grid\.innerHTML = '<div class="gridMore">No matches\.<\/div>';/,
+    'fallback source search should show an empty state instead of a silent blank page');
+  assert.doesNotMatch(ui, /id="musicBar"|musicBarBtns|S\.zone === 'musicBar'|\$\('mb/,
+    'dead hidden mini-player bar and its focus/control wiring should not ship');
   assert.match(ui, /--safeT:max\(env\(safe-area-inset-top\),0px\);[\s\S]+--overscan:0px;[\s\S]+body\.tv\{--bdW:[^}]+--overscan:2\.5vmin\}/,
     'TV and mobile chrome should reserve safe-area/overscan space');
   assert.match(ui, /--appClockReserve:168px;[\s\S]+--appClockClear:72px;[\s\S]+\.browseHead\{[\s\S]+margin-top:clamp\(38px,7vh,var\(--appClockClear\)\);[\s\S]+padding-right:calc\(var\(--appClockReserve\) \+ var\(--safeR\) \+ var\(--overscan\)\);[\s\S]+#browse \.browseHead\{[^}]+padding-right:0/,
@@ -2003,7 +2025,7 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'health/watch timers should clear through one shared player cleanup path');
   assert.match(ui, /<div id="railMain">[\s\S]+<div id="railLibs"><\/div>[\s\S]+<\/div>\s+<div id="railFooter">[\s\S]+id="railAddLib"[\s\S]+id="navPrefs"[\s\S]+id="navSettings"[\s\S]+id="railUser" class="railBtn focusable"/,
     'library rows should scroll separately from a pinned utility rail footer');
-  assert.match(ui, /#railMain\{[\s\S]+overflow-y:auto[\s\S]+#railFooter\{[\s\S]+flex:none[\s\S]+border-top:/,
+  assert.match(ui, /#railMain\{[\s\S]*overflow-y:auto[\s\S]*#railFooter\{[\s\S]*flex:none[\s\S]*border-top:/,
     'rail footer should stay fixed while library/menu items scroll');
   assert.match(ui, /function applyMenuPrefs\(\) \{[\s\S]+const railMain = \$\('railMain'\) \|\| \$\('rail'\);[\s\S]+railMain\.querySelector\(`\.railBtn\[data-nav="\$\{nav\}"\]`\)[\s\S]+railMain\.insertBefore\(btn, firstMainNav\(\)\);/,
     'menu preference reordering should only move buttons inside the scrollable rail body, never pinned footer buttons');

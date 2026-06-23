@@ -588,10 +588,11 @@ body.nativeGuideMode #player.guideMode video{display:none}
 #player.guideMode #subOverlay{display:none}
 /* Self-rendered subtitles (WebView never painted native cues). Sized by the caption pref;
    lifts above the control bar while the OSD is visible so text never hides behind it. */
-#subOverlay{position:absolute;left:6%;right:6%;bottom:6.5%;text-align:center;pointer-events:none;z-index:2;
-  font:600 var(--subFs,4.4vh)/1.32 "Albert Sans";color:#fff;white-space:pre-line;
+#subOverlay{position:absolute;left:6%;right:6%;bottom:6.5%;max-height:32vh;overflow:hidden;text-align:center;pointer-events:none;z-index:2;
+  font:600 var(--subFs,4.4vh)/1.32 "Albert Sans";color:#fff;white-space:pre-line;display:flex;flex-direction:column;justify-content:flex-end;gap:.12em;
   text-shadow:0 0 5px rgba(0,0,0,.95),0 2px 8px rgba(0,0,0,.9);transition:bottom .25s}
 #player:has(#osd:not(.hide)) #subOverlay{bottom:19%}
+#player:has(#osd:not(.hide)) #subOverlay{max-height:24vh}
 #subOverlay i{font-style:italic}
 #osd{position:absolute;inset:0;z-index:6;display:flex;flex-direction:column;justify-content:space-between;padding:clamp(22px,3vw,42px) clamp(24px,3.6vw,52px) clamp(50px,6.2vw,78px);transition:opacity .35s;
   background:linear-gradient(180deg,rgba(0,0,0,.62),rgba(0,0,0,.24) 18%,transparent 32%)}
@@ -668,6 +669,7 @@ body.nativeGuideMode #player.guideMode video{display:none}
 #trackMenu button:disabled{opacity:.55;cursor:default;color:var(--muted)}
 #trackMenu button:disabled:hover{background:transparent}
 #trackMenu button .mark{margin-left:auto;font:900 12px "Sora";color:currentColor}
+@media (max-height:560px){#trackMenu{bottom:86px;max-height:calc(100vh - 128px)}}
 /* In-app clock (top right, like Plex) */
 #appClock{position:fixed;top:calc(18px + var(--safeT) + var(--overscan));right:calc(22px + var(--safeR) + var(--overscan));z-index:21;min-width:108px;height:38px;padding:0 18px;display:none;
   align-items:center;justify-content:center;pointer-events:none;color:var(--text);font:800 14px "JetBrains Mono",monospace;letter-spacing:0;
@@ -1089,16 +1091,14 @@ body.tv .cwAct,body.tv .epMenuBtn{display:none!important}
   #home,#discover,#browse,#detail,#person,#settings,#prefs,#music{padding-left:16px!important;padding-right:16px!important}
   #searchBar{left:16px;right:16px}
   #home{padding:62px 16px 18px 16px!important;justify-content:flex-start}
-  #hero{max-width:calc(100vw - 32px);margin:0 auto 14px;padding:0;text-align:center;align-items:center}
+  #hero{max-width:calc(100vw - 32px);margin:0 auto 8px;padding:0;text-align:center;align-items:center}
   #hero .eyebrow{margin-bottom:8px;font-size:10px;letter-spacing:.18em}
   #hero h1{font-size:clamp(24px,7.4vw,32px);line-height:1.08;margin-bottom:8px}
-  #hero .meta{margin-bottom:7px;justify-content:center}
-  #heroCredits{min-height:0;margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;width:100%}
-  #hero p{font-size:13.5px;line-height:1.38;-webkit-line-clamp:2;margin:0 auto 12px;max-width:min(100%,430px)}
+  #hero .meta,#heroCredits,#hero p{display:none!important}
   #heroBtns{width:100%;justify-content:center;gap:8px;flex-wrap:nowrap}
   #heroBtns .btn{flex:1 1 0;min-width:0;max-width:178px;padding:10px 10px;font-size:12.8px;justify-content:center;white-space:nowrap}
   #heroBtns .btn svg{width:15px;height:15px;flex:0 0 auto}
-  #rows{max-height:calc(100vh - 280px);gap:14px}
+  #rows{max-height:calc(100vh - 176px);gap:14px}
   #browse.rowsWin #grid{flex:1!important;max-height:none!important;margin-top:0!important}
   #browse .browseHead{margin-left:48px;margin-top:8px;margin-bottom:12px;justify-content:flex-start;padding-right:0}
   #browse{padding-top:62px!important}
@@ -1141,16 +1141,14 @@ body.mobileShell #person,body.mobileShell #settings,body.mobileShell #prefs,body
   padding-left:16px!important;padding-right:16px!important}
 body.mobileShell #searchBar{left:16px;right:16px}
 body.mobileShell #home{padding:62px 16px 18px 16px!important;justify-content:flex-start}
-body.mobileShell #hero{max-width:calc(100vw - 32px);margin:0 auto 14px;padding:0;text-align:center;align-items:center}
+body.mobileShell #hero{max-width:calc(100vw - 32px);margin:0 auto 8px;padding:0;text-align:center;align-items:center}
 body.mobileShell #hero .eyebrow{margin-bottom:8px;font-size:10px;letter-spacing:.18em}
 body.mobileShell #hero h1{font-size:clamp(24px,7.4vw,32px);line-height:1.08;margin-bottom:8px}
-body.mobileShell #hero .meta{margin-bottom:7px;justify-content:center}
-body.mobileShell #heroCredits{min-height:0;margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;width:100%}
-body.mobileShell #hero p{font-size:13.5px;line-height:1.38;-webkit-line-clamp:2;margin:0 auto 12px;max-width:min(100%,430px)}
+body.mobileShell #hero .meta,body.mobileShell #heroCredits,body.mobileShell #hero p{display:none!important}
 body.mobileShell #heroBtns{width:100%;justify-content:center;gap:8px;flex-wrap:nowrap}
 body.mobileShell #heroBtns .btn{flex:1 1 0;min-width:0;max-width:178px;padding:10px 10px;font-size:12.8px;justify-content:center;white-space:nowrap}
 body.mobileShell #heroBtns .btn svg{width:15px;height:15px;flex:0 0 auto}
-body.mobileShell #rows{max-height:calc(100vh - 280px);gap:14px}
+body.mobileShell #rows{max-height:calc(100vh - 176px);gap:14px}
 body.mobileShell #browse.rowsWin #grid{flex:1!important;max-height:none!important;margin-top:0!important}
 body.mobileShell #browse .browseHead{margin-left:48px;margin-top:8px;margin-bottom:12px;justify-content:flex-start;padding-right:0}
 body.mobileShell #browse{padding-top:62px!important}
@@ -1974,20 +1972,8 @@ body.tv .mArtistPlay{width:42px;height:42px}
 body.tv .mSearchSongs .musicRow{min-height:66px}
 body.tv .mSearchSongs .musicRow .mThumb{width:48px;height:48px}
 
-/* Persistent mini-player bar — fixed bottom, above everything but the fullscreen player. */
+/* Music audio lives globally; controls are in the full-screen now-playing page. */
 #musicAudio{display:none}
-#musicBar{position:fixed;left:var(--rail);right:0;bottom:0;z-index:30;display:none!important;align-items:center;gap:18px;
-  padding:10px 22px;background:rgba(13,9,21,.97);border-top:1px solid var(--line);backdrop-filter:blur(10px)}
-body.tv #musicBar{backdrop-filter:none}
-#musicBar.show{display:none!important}
-body.videoOpen #musicBar{display:none} /* the fullscreen video player owns the screen */
-body.tv #musicBar.show{box-shadow:0 -10px 30px rgba(0,0,0,.35)}
-.mbNow{display:flex;align-items:center;gap:12px;width:240px;flex:none;min-width:0;border-radius:10px;padding:4px;margin:-4px}
-.mbNow.focus{box-shadow:0 0 0 3px var(--coral)}
-.mbArt{width:48px;height:48px;border-radius:8px;background:#241934 center/178% auto no-repeat;flex:none}
-.mbMeta{min-width:0}
-.mbTitle{font:600 14px "Albert Sans";overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.mbArtist{font:500 12px "Albert Sans";color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mbCtl{display:flex;align-items:center;gap:6px;flex:none}
 .mbBtn{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;color:var(--text)}
 .mbBtn:focus,.mnCollapse:focus{outline:none}
@@ -2007,7 +1993,6 @@ body.tv #musicBar.show{box-shadow:0 -10px 30px rgba(0,0,0,.35)}
 .mEq i{display:inline-block;width:3px;margin:0 1px;background:var(--amber);border-radius:2px;animation:eqp .9s ease-in-out infinite}
 .mEq i:nth-child(2){animation-delay:.3s}.mEq i:nth-child(3){animation-delay:.6s}
 body.musicPaused .mEq i{animation-play-state:paused}
-.mbNow{cursor:pointer} /* click the now-playing area to expand the big player */
 
 /* Full-screen now-playing page. */
 #musicNow{position:fixed;inset:0;z-index:35;display:none;flex-direction:column;background:var(--ink);overflow:hidden}
@@ -2059,7 +2044,7 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
 @media (max-width:900px){.mnMain{flex-direction:column;gap:22px;padding:80px 16px 26px}.mnCover{width:min(230px,55vw)}.mnQueue{width:min(420px,calc(100vw - 48px));margin:22px auto 28px;max-height:38vh}#musicNow.queueHidden .mnMain{width:100%;padding-bottom:52px}#musicNow.queueHidden .mnCover{width:min(260px,58vw)}}
 
 @media (max-width:900px){.musicTiles{grid-template-columns:repeat(2,minmax(0,1fr))}.musicRail{grid-auto-columns:minmax(150px,42vw)}.mSearchSongs{grid-template-columns:1fr}.mArtistName{font-size:28px}.mArtistArt{width:82px;height:82px}}
-@media (max-width:600px){#music{left:0!important}#musicBar{left:0}.mbNow{width:auto}.mbProg .mbT{display:none}.musicTiles{grid-template-columns:1fr}}
+@media (max-width:600px){#music{left:0!important}.mbProg .mbT{display:none}.musicTiles{grid-template-columns:1fr}}
 
 /* Content text-size preference: scoped to media/content surfaces only.
    The rail, Settings, Preferences, auth gates and player controls keep fixed geometry. */
@@ -2466,27 +2451,6 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
 
 <!-- Music audio lives globally; controls open in the full-screen Music player. -->
 <audio id="musicAudio" preload="auto"></audio>
-<div id="musicBar">
-  <div class="mbNow focusable" id="mbNow" title="Now playing">
-    <div class="mbArt" id="mbArt"></div>
-    <div class="mbMeta"><div class="mbTitle" id="mbTitle"></div><div class="mbArtist" id="mbArtist"></div></div>
-  </div>
-  <div class="mbCtl">
-    <button class="mbBtn focusable" id="mbPrev" title="Previous">
-      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5v14H5V5h2zm2 7 10 7V5l-10 7z"/></svg></button>
-    <button class="mbBtn mbPlay focusable" id="mbPlay" title="Play/Pause">
-      <svg viewBox="0 0 24 24" fill="currentColor" id="mbPlayIco"><path d="M8 5v14l11-7z"/></svg></button>
-    <button class="mbBtn focusable" id="mbNext" title="Next">
-      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M17 5v14h2V5h-2zm-2 7L5 5v14l10-7z"/></svg></button>
-  </div>
-  <div class="mbProg">
-    <span class="mbT" id="mbCur">0:00</span>
-    <div class="mbBar focusable" id="mbSeek" title="Seek"><div class="mbFill" id="mbFill"></div></div>
-    <span class="mbT" id="mbDur">0:00</span>
-    <button class="mbBtn mbClose focusable" id="mbClose" title="Close player">✕</button>
-  </div>
-</div>
-
 <div id="trailer">
   <button id="trailerBack" class="trailerBack focusable" title="Back" aria-label="Back">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
@@ -4494,6 +4458,9 @@ function renderRowsInto(root, rowsData, opts = {}) {
 function sizeRowsWindow(root) {
   const rows = [...root.querySelectorAll('.row')];
   if (!rows.length) { root.style.maxHeight = ''; return; }
+  const compactHome = root.id === 'rows' && !document.body.classList.contains('tv')
+    && (window.innerWidth <= 600 || document.body.classList.contains('mobileShell'));
+  if (compactHome) { root.style.maxHeight = ''; return; }
   // TV: ONE row at a time (Plex-style) — its 720px layout can't fit two poster rows whole,
   // and a cut-off row above the focused one reads as broken from the couch.
   const n = document.body.classList.contains('tv') ? 1 : (innerHeight < 900 ? 1 : 2);
@@ -7996,6 +7963,9 @@ function openTrackMenu(kind, restore = {}) {
       }
     });
     m.appendChild(b);
+    b.addEventListener('focus', () => {
+      try { b.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch {}
+    });
   };
   if (kind === 'cc') {
     mkRow('Off', p.subTrack === null, () => setSubtitle(null));
@@ -8212,6 +8182,7 @@ function renderSubCues() {
     catch { line.textContent = String(c.text || ''); }
     box.appendChild(line);
   }
+  while (box.scrollHeight > box.clientHeight && box.firstElementChild) box.removeChild(box.firstElementChild);
 }
 function applySubtitleTrack() {
   const v = $('video'); const p = S.playing; if (!p) return;
@@ -11561,7 +11532,6 @@ function closeMusicPlayer() {
   S.musicCur = null;
   S._musicWasPlaying = false;
   $('musicNow').classList.remove('open', 'queueOpen');
-  $('musicBar').classList.remove('show');
   document.body.classList.remove('musicOn', 'musicPaused');
   markMusicCur();
 }
@@ -11571,11 +11541,7 @@ function stopMusicWhenLeavingMusic(nextView) {
   S._musicWasPlaying = false;
 }
 function updateMusicBar() {
-  const t = S.musicCur; if (!t) return;
-  $('mbArt').style.backgroundImage = `url('${safeUrl(t.thumb)}')`;
-  $('mbTitle').textContent = t.title;
-  $('mbArtist').textContent = t.artist || '';
-  $('mbDur').textContent = t.duration ? mmss(t.duration) : mmss(mAudio.duration);
+  updateMusicNow();
 }
 function markMusicCur() {
   const curId = S.musicCur && S.musicCur.id;
@@ -11588,9 +11554,9 @@ function markMusicCur() {
 mAudio.addEventListener('timeupdate', () => {
   const d = mAudio.duration || (S.musicCur && S.musicCur.duration) || 0;
   const pct = d ? Math.min(100, (mAudio.currentTime / d) * 100) + '%' : '0';
-  $('mbFill').style.width = pct; $('mnFill').style.width = pct;
-  $('mbCur').textContent = $('mnCur').textContent = mmss(mAudio.currentTime);
-  if (d && !S.musicCur?.duration) $('mbDur').textContent = $('mnDur').textContent = mmss(d);
+  $('mnFill').style.width = pct;
+  $('mnCur').textContent = mmss(mAudio.currentTime);
+  if (d && !S.musicCur?.duration) $('mnDur').textContent = mmss(d);
 });
 mAudio.addEventListener('ended', () => musicNext(true));
 mAudio.addEventListener('play', () => { document.body.classList.remove('musicPaused'); setPlayIcon(true); });
@@ -11607,19 +11573,8 @@ mAudio.addEventListener('error', () => {
 });
 function setPlayIcon(playing) {
   const ic = playing ? '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>' : '<path d="M8 5v14l11-7z"/>';
-  $('mbPlayIco').innerHTML = ic; $('mnPlayIco').innerHTML = ic;
+  $('mnPlayIco').innerHTML = ic;
 }
-function musicSeekFromEvent(e) {
-  const bar = $('mbSeek'); const r = bar.getBoundingClientRect();
-  const frac = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
-  const d = mAudio.duration || (S.musicCur && S.musicCur.duration) || 0;
-  if (d) mAudio.currentTime = frac * d;
-}
-$('mbSeek').addEventListener('click', musicSeekFromEvent);
-$('mbPlay').addEventListener('click', musicToggle);
-$('mbNext').addEventListener('click', () => musicNext());
-$('mbPrev').addEventListener('click', musicPrev);
-$('mbClose').addEventListener('click', closeMusicPlayer);
 $('musicSearch').addEventListener('input', () => {
   clearTimeout(_musicSearchT);
   if (!$('musicSearch').value.trim()) { showMusicHome(); return; }
@@ -11852,7 +11807,6 @@ function focusMusicSearch() {
   S.zone = 'musicSearch';
   return $('musicSearch').focus();
 }
-function musicBarBtns() { return [$('mbNow'), $('mbPrev'), $('mbPlay'), $('mbNext'), $('mbClose')].filter(Boolean); }
 function focusMusicBar(which = 'play') {
   if (!S.musicCur || document.body.classList.contains('videoOpen')) return false;
   return openMusicNow();
@@ -13002,13 +12956,13 @@ $('prefReset').addEventListener('click', () => {
 
 /* ============ global search ============ */
 let searchTimer = null;
-function resetSearchPage() {
+function resetSearchPage(opts = {}) {
   clearTimeout(searchTimer);
   searchTimer = null;
   $('searchInput').value = '';
   $('micBtn').classList.remove('listening');
   S.gridItems = []; S.gridIdx = 0; S.gridTopRow = 0; S.gridRoot = $('grid');
-  if (S.view === 'search') { renderGrid([]); $('grid').innerHTML = ''; }
+  if (opts.landing !== false && S.view === 'search') renderSearchLanding();
 }
 $('searchInput').addEventListener('input', () => {
   clearTimeout(searchTimer);
@@ -13152,10 +13106,67 @@ function tmdbSearchRank(x, q) {
   if (content.length && titleWords.length && !searchWordEq(noLeadArticle[0] || titleWords[0], content[0])) score -= 1800;
   return score;
 }
+async function renderSearchLanding() {
+  const grid = $('grid');
+  S.gridRoot = grid;
+  S.gridItems = [];
+  S.gridIdx = 0;
+  S.gridTopRow = 0;
+  resetGridVirtual(grid);
+  if (S.view !== 'search') return;
+  if (!S.serverInfo.tmdb) {
+    grid.innerHTML = '<div class="gridMore">Connect TMDB to browse search picks.</div>';
+    return;
+  }
+  if (S.searchLanding && Date.now() - S.searchLanding.at < 15 * 60000) {
+    renderSearchSections(S.searchLanding.sections);
+    return;
+  }
+  grid.innerHTML = '<div class="gridMore">Loading...</div>';
+  try {
+    const restricted = (S.maxLevel ?? 3) < 3;
+    const kid = (S.maxLevel ?? 3) === 0;
+    const g = restricted && kid ? '&with_genres=' + encodeURIComponent('10751|16') : '';
+    const tvG = restricted && kid ? '&with_genres=' + encodeURIComponent('10762|16') : '';
+    const calls = restricted
+      ? [
+          api(`/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=100${g}` + CATALOG_Q + certParams()),
+          api(`/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=60${tvG}` + CATALOG_Q),
+        ]
+      : [
+          api('/api/tmdb/trending/all/week'),
+          api(`/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=200&with_original_language=en${CATALOG_Q}`),
+          api(`/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=100&with_original_language=en${CATALOG_Q}`),
+        ];
+    const results = await Promise.all(calls);
+    const mapGrid = (r, type) => (r.results || [])
+      .filter((x) => x.media_type !== 'person'
+        && (!type || x.media_type === type || (!x.media_type && (type === 'movie' || type === 'tv')))
+        && (x.poster_path || x.backdrop_path) && passesMaturity(x) && catalogOk(x))
+      .slice(0, 18)
+      .map(mapTmdb);
+    const sections = restricted
+      ? [
+          { name: 'Popular movies', items: mapGrid(results[0], 'movie') },
+          { name: 'Popular series', items: mapGrid(results[1], 'tv') },
+        ]
+      : [
+          { name: 'Trending', items: mapGrid(results[0]) },
+          { name: 'Popular movies', items: mapGrid(results[1], 'movie') },
+          { name: 'Popular series', items: mapGrid(results[2], 'tv') },
+        ];
+    S.searchLanding = { at: Date.now(), sections };
+    if (S.view === 'search' && !$('searchInput').value.trim()) renderSearchSections(sections);
+  } catch (e) {
+    if (S.view === 'search' && !$('searchInput').value.trim()) {
+      grid.innerHTML = `<div class="gridMore">Search picks failed: ${esc(e.message)}</div>`;
+    }
+  }
+}
 async function doSearch() {
   const q = $('searchInput').value.trim();
   const grid = $('grid');
-  if (!q) { renderGrid([]); grid.innerHTML = ''; return; }
+  if (!q) { renderSearchLanding(); return; }
   if (S.serverInfo.tmdb) {
     try {
       const [r, live] = await Promise.all([
@@ -13181,11 +13192,13 @@ async function doSearch() {
   // No TMDB (or no metadata hits): search indexers directly and synthesize poster cards.
   try {
     const r = await api('/api/search?q=' + encodeURIComponent(q));
-    renderGrid(r.candidates.slice(0, 24).map((c, i) => ({
+    const cards = r.candidates.slice(0, 24).map((c, i) => ({
       key: 't:' + c.name, title: c.name.slice(0, 70), year: '', genre: c.indexer, type: null,
       rating: '—', q: c.name, overview: (c.reasons || []).join(' · '),
       poster: procBackdrop(200 + i * 12, 320, i + 3), backdrop: procBackdrop(200 + i * 12, 320, i + 3),
-    })));
+    }));
+    renderGrid(cards);
+    if (!cards.length) grid.innerHTML = '<div class="gridMore">No matches.</div>';
   } catch (e) { toast('Search failed: ' + e.message); }
 }
 
@@ -13868,7 +13881,7 @@ function switchView(v, push = true, opts = {}) {
   const prevView = S.view;
   hideScreensaver();
   resetScreensaverIdle();
-  if (prevView === 'search' && v !== 'search' && !opts.preserveSearch) resetSearchPage();
+  if (prevView === 'search' && v !== 'search' && !opts.preserveSearch) resetSearchPage({ landing: false });
   if (v !== 'livetv') $('grid').classList.remove('liveGuideGrid');
   stopMusicWhenLeavingMusic(v);
   $('musicNow').classList.remove('open'); // the big music page is an overlay — close on any nav
@@ -14955,17 +14968,6 @@ document.addEventListener('keydown', (e) => {
     if (k === 'Enter' && !e.repeat) rows[S.drawerIdx] && rows[S.drawerIdx].click();
     return;
   }
-  if (S.zone === 'musicBar' && S.view !== 'player') {
-    const btns = musicBarBtns();
-    let i = btns.indexOf(document.querySelector('#musicBar .focus')); if (i < 0) i = btns.indexOf($('mbPlay'));
-    if (k === 'ArrowLeft') return i <= 0 ? enterRail() : applyFocus(btns[i - 1]);
-    if (k === 'ArrowRight') return applyFocus(btns[Math.min(btns.length - 1, i + 1)]);
-    if (k === 'ArrowUp') return leaveMusicBarUp();
-    if (k === 'ArrowDown') return S.musicCur ? openMusicNow() : undefined;
-    if (k === 'Escape' || k === 'Backspace') return leaveMusicBarUp();
-    if (k === 'Enter' && !e.repeat) { (btns[i] || $('mbPlay')).click(); return; }
-    return;
-  }
   // ----- The rail zone, handled ONCE for every page -----
   // Per-view copies drifted: calendar never got one, so entering the menu there dead-ended
   // (no up/down, no way back). ArrowRight re-enters the content the way each view expects.
@@ -15269,16 +15271,6 @@ document.addEventListener('keydown', (e) => {
       if (k === 'ArrowUp') return focusChipDir(k) || focusMusicSearch();
       if (k === 'ArrowDown') return focusChipDir(k) || (musicRows().length ? focusMusic(0) : (focusMusicBar() || focusMusicSearch()));
       if (k === 'Enter' && !e.repeat) { chips[i] && chips[i].click(); return; }
-      return;
-    }
-    const barBtns = [$('mbPrev'), $('mbPlay'), $('mbNext'), $('mbClose')];
-    if (S.zone === 'musicBar') {
-      // applyFocus is CLASS-based (no native activeElement) — read the focused button from .focus.
-      let i = barBtns.indexOf(document.querySelector('#musicBar .focus')); if (i < 0) i = 1;
-      if (k === 'ArrowLeft') return i === 0 ? (S.zone = 'music', enterRail()) : applyFocus(barBtns[i - 1]);
-      if (k === 'ArrowRight') return applyFocus(barBtns[Math.min(barBtns.length - 1, i + 1)]);
-      if (k === 'ArrowUp') { S.zone = 'music'; return focusMusic(S.musicRowIdx || 0); }
-      if (k === 'Enter' && !e.repeat) { (barBtns[i] || $('mbPlay')).click(); return; }
       return;
     }
     const rows = musicRows();

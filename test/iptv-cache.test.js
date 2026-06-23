@@ -64,6 +64,7 @@ test('iptv: private and loopback playlist URLs are blocked unless explicitly all
       'http://[64:ff9b::7f00:1]/list.m3u',
       'http://[::7f00:1]/list.m3u',
       'http://[2002:7f00:1::]/list.m3u',
+      'http://[2001:0:4136:e378:8000:63bf:3fff:fdd2]/list.m3u',
     ];
     for (const iptvUrl of mapped) {
       const r = await httpJson(srv.port, 'POST', '/api/me/iptv/sources',

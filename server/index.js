@@ -382,6 +382,7 @@ function embeddedIpv4FromIpv6(ip) {
   if (firstSixZero) return ipv4FromWords(w, 6); // deprecated ::127.0.0.1 / ::7f00:1
   if (w[0] === 0x64 && w[1] === 0xff9b && w.slice(2, 6).every((x) => x === 0)) return ipv4FromWords(w, 6); // 64:ff9b::/96 NAT64
   if (w[0] === 0x2002) return ipv4FromWords(w, 1); // 6to4 embeds IPv4 in 2002::/16
+  if (w[0] === 0x2001 && w[1] === 0x0000) return '0.0.0.0'; // Teredo 2001:0::/32 embeds client IPv4
   return null;
 }
 function isPrivateIpv6(ip) {
@@ -2466,17 +2467,28 @@ function mountAccessOk(ctx, vf) {
   return !vf._ownerUid || (ctx.user && vf._ownerUid === ctx.user.id);
 }
 const USER_MOUNT_CAP = 8;
+const SESSION_TTL_MS = 12 * 3600000;
 function rememberMountOwner(vf, uid) {
   if (!vf || !uid) return vf;
   vf._ownerUid = vf._ownerUid || uid;
   vf._touched = Date.now();
   return vf;
 }
+function sessionProtectedMountIds(now = Date.now()) {
+  const protectedIds = new Set();
+  for (const s of pipeline.sessions.values()) {
+    if (!s || !s.currentMountId) continue;
+    if (now - (s.createdAt || 0) <= SESSION_TTL_MS) protectedIds.add(s.currentMountId);
+  }
+  return protectedIds;
+}
 function trimUserMounts(uid, keepId = null, limit = USER_MOUNT_CAP) {
   if (!uid) return [];
+  const protectedIds = sessionProtectedMountIds();
   const owned = [...mounts.values()]
     .filter((vf) => vf && vf._ownerUid === uid && vf.id !== keepId)
-    .sort((a, b) => (a._touched || a.mountedAt || 0) - (b._touched || b.mountedAt || 0));
+    .sort((a, b) => (Number(protectedIds.has(a.id)) - Number(protectedIds.has(b.id)))
+      || ((a._touched || a.mountedAt || 0) - (b._touched || b.mountedAt || 0)));
   const evicted = [];
   while (owned.length >= limit) {
     const vf = owned.shift();
@@ -5815,13 +5827,15 @@ server.on('clientError', (err, socket) => {
 // old play sessions, and purge expired Quick Connect codes.
 const MOUNT_IDLE_MS = 45 * 60000;   // idle = no stream/remux/tracks/subtitle touch
 const MOUNT_CAP = 16;
-const SESSION_TTL_MS = 12 * 3600000;
 function sweep(now = Date.now()) {
   const evicted = [];
-  const idle = [...mounts.values()].filter((vf) => now - (vf._touched || vf.mountedAt || 0) > MOUNT_IDLE_MS);
+  const protectedIds = sessionProtectedMountIds(now);
+  const idle = [...mounts.values()].filter((vf) =>
+    !protectedIds.has(vf.id) && now - (vf._touched || vf.mountedAt || 0) > MOUNT_IDLE_MS);
   for (const vf of idle) { mounts.delete(vf.id); evicted.push(vf.id); }
   if (mounts.size > MOUNT_CAP) {
-    const byAge = [...mounts.values()].sort((a, b) => (a._touched || 0) - (b._touched || 0));
+    const byAge = [...mounts.values()].sort((a, b) => (Number(protectedIds.has(a.id)) - Number(protectedIds.has(b.id)))
+      || ((a._touched || a.mountedAt || 0) - (b._touched || b.mountedAt || 0)));
     for (const vf of byAge.slice(0, mounts.size - MOUNT_CAP)) { mounts.delete(vf.id); evicted.push(vf.id); }
   }
   for (const [url, id] of pipeline.mountByUrl) if (!mounts.has(id)) pipeline.mountByUrl.delete(url);
@@ -5864,4 +5878,4 @@ function shutdown() {
   return new Promise((r) => server.close(r));
 }
 
-module.exports = { server, mounts, getPool, shutdown, sweep, ROUTES, auth, settings, store, warmIptvCaches, msUntilNextIptvWarm };
+module.exports = { server, mounts, pipeline, getPool, shutdown, sweep, ROUTES, auth, settings, store, warmIptvCaches, msUntilNextIptvWarm };

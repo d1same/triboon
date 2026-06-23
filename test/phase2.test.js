@@ -650,26 +650,67 @@ test('newznab: dedupe stays near-linear on large unique result sets', () => {
 });
 
 test('newznab: fan-out keeps the fast indexer when another times out', async () => {
+  const fastSockets = new Set();
   const fast = http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'application/rss+xml' });
     res.end(rssFor([{ name: 'Movie.1080p.WEB-DL-FLUX', url: 'http://f/1', size: 5e9 }]));
   });
+  fast.on('connection', (sock) => {
+    fastSockets.add(sock);
+    sock.on('close', () => fastSockets.delete(sock));
+  });
+  const slowSockets = new Set();
   const slow = http.createServer(() => { /* never responds */ });
+  slow.on('connection', (sock) => {
+    slowSockets.add(sock);
+    sock.on('close', () => slowSockets.delete(sock));
+  });
   await new Promise((r) => fast.listen(0, '127.0.0.1', r));
   await new Promise((r) => slow.listen(0, '127.0.0.1', r));
 
-  const t0 = Date.now();
-  const { results, errors } = await fanout([
-    { name: 'fast', url: `http://127.0.0.1:${fast.address().port}`, apikey: 'k' },
-    { name: 'slow', url: `http://127.0.0.1:${slow.address().port}`, apikey: 'k' },
-  ], { q: 'movie' }, { timeoutMs: 400 });
-  const elapsed = Date.now() - t0;
+  try {
+    const t0 = Date.now();
+    const { results, errors } = await fanout([
+      { name: 'fast', url: `http://127.0.0.1:${fast.address().port}`, apikey: 'k' },
+      { name: 'slow', url: `http://127.0.0.1:${slow.address().port}`, apikey: 'k' },
+    ], { q: 'movie' }, { timeoutMs: 400 });
+    const elapsed = Date.now() - t0;
 
-  assert.strictEqual(results.length, 1);
-  assert.strictEqual(errors.length, 1);
-  assert.match(errors[0].error, /timeout/);
-  assert.ok(elapsed < 1500, `fan-out bounded by budget (took ${elapsed}ms)`);
-  fast.close(); slow.close();
+    assert.strictEqual(results.length, 1);
+    assert.strictEqual(errors.length, 1);
+    assert.match(errors[0].error, /timeout|deadline/);
+    assert.ok(elapsed < 1500, `fan-out bounded by budget (took ${elapsed}ms)`);
+  } finally {
+    for (const sock of fastSockets) sock.destroy();
+    for (const sock of slowSockets) sock.destroy();
+    if (typeof fast.closeAllConnections === 'function') fast.closeAllConnections();
+    if (typeof slow.closeAllConnections === 'function') slow.closeAllConnections();
+    fast.close();
+    slow.close();
+  }
+});
+
+test('newznab: search timeout is a hard total budget, not a 3x trickle window', async () => {
+  const trickle = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/rss+xml' });
+    const t = setInterval(() => res.write(' '), 40);
+    res.on('close', () => clearInterval(t));
+  });
+  await new Promise((r) => trickle.listen(0, '127.0.0.1', r));
+  try {
+    const t0 = Date.now();
+    await assert.rejects(
+      () => searchIndexer(
+        { name: 'trickle', url: `http://127.0.0.1:${trickle.address().port}`, apikey: 'k' },
+        { q: 'movie' },
+        { timeoutMs: 250 }
+      ),
+      /deadline/
+    );
+    assert.ok(Date.now() - t0 < 1200, 'trickling indexers cannot stretch source search into a long wait');
+  } finally {
+    await new Promise((r) => trickle.close(r));
+  }
 });
 
 // ---------- pipeline e2e ----------
@@ -931,6 +972,41 @@ test('pipeline e2e: ranks, skips dead + unstreamable candidates, plays the good 
   assert.strictEqual(compC.streamClass, 'compressed', 'compressed verdict cached');
 
   pool.close(); await mock.close(); ix.server.close(); store.close();
+});
+
+test('pipeline: active mount rebalance shrinks read-ahead when another stream starts', async () => {
+  const now = Date.now();
+  const mounts = new Map();
+  const pipeline = new Pipeline({
+    pool: () => null,
+    verdicts: { get: () => null, set: () => {} },
+    mounts,
+    performance: () => ({
+      usableConnections: 20,
+      reserveConnections: 4,
+      maxConnPerStream1080: 12,
+      maxConnPerStream4k: 20,
+    }),
+  });
+  const mk = (id) => ({
+    id, size: 2e9, streamable: true, _touched: now, trimCalls: 0,
+    trimCache() { this.trimCalls++; },
+  });
+
+  const first = mk('first');
+  mounts.set(first.id, first);
+  assert.strictEqual(pipeline.rebalancePlaybackWindows(now), 1);
+  assert.strictEqual(first.readAhead, 12, 'single active stream gets the configured 1080p window');
+  assert.strictEqual(first.cacheMaxBytes, 96 * 1024 * 1024, 'single stream gets the full 1080p cache budget');
+
+  const second = mk('second');
+  mounts.set(second.id, second);
+  assert.strictEqual(pipeline.rebalancePlaybackWindows(now), 2);
+  assert.strictEqual(first.readAhead, 8, 'existing stream shrinks to the fair connection share');
+  assert.strictEqual(second.readAhead, 8, 'new stream receives the same fair connection share');
+  assert.strictEqual(first.cacheMaxBytes, 48 * 1024 * 1024, 'existing stream cache budget shrinks with concurrency');
+  assert.strictEqual(second.cacheMaxBytes, 48 * 1024 * 1024, 'new stream cache budget matches concurrency');
+  assert.ok(first.trimCalls >= 2, 'rebalance trims retained decoded bytes after shrinking');
 });
 
 test('pipeline: auto-advance mounts the next candidate when the current source dies', async () => {

@@ -2248,11 +2248,17 @@ test('housekeeping sweep: idle mounts are evicted, active ones survive', async (
   const mk = (id, touched) => ({ id, _touched: touched, name: id, size: 1, streamable: true, tags: [] });
   srv.mounts.set('idle-x', mk('idle-x', now - 60 * 60000));
   srv.mounts.set('fresh-x', mk('fresh-x', now));
+  srv.mounts.set('paused-x', mk('paused-x', now - 60 * 60000));
+  srv.pipeline.sessions.set('paused-session-x', { id: 'paused-session-x', createdAt: now, currentMountId: 'paused-x' });
   const evicted = srv.sweep(now);
   assert.ok(evicted.includes('idle-x'), 'idle mount evicted');
   assert.ok(!srv.mounts.has('idle-x'));
   assert.ok(srv.mounts.has('fresh-x'), 'recently-touched mount survives');
+  assert.ok(!evicted.includes('paused-x'), 'paused session mount not treated as idle');
+  assert.ok(srv.mounts.has('paused-x'), 'paused session mount survives for resume');
   srv.mounts.delete('fresh-x');
+  srv.mounts.delete('paused-x');
+  srv.pipeline.sessions.delete('paused-session-x');
 });
 
 test('fetchUrl: response-size cap aborts oversized bodies instead of buffering them', async () => {

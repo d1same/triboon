@@ -183,6 +183,44 @@ class Pipeline {
     this.mountByUrl = new Map();  // nzbUrl -> mount id (live mounts are reused — replay ≈ instant)
   }
 
+  _playbackWindowFor(vf, activeMounts, perf = this.performance() || {}) {
+    const big = (vf.size || 0) > 4e9;
+    const activeCount = Math.max(1, activeMounts || 1);
+    const usable = perf.usableConnections || 0;
+    const reserve = perf.reserveConnections || 0;
+    const perStreamBudget = usable > reserve ? Math.max(4, Math.floor((usable - reserve) / activeCount)) : Infinity;
+    const configuredWindow = big ? (perf.maxConnPerStream4k || 20) : (perf.maxConnPerStream1080 || 12);
+    const readAhead = Math.max(4, Math.min(configuredWindow, perStreamBudget));
+    return {
+      readAhead,
+      cacheMax: Math.max(readAhead * 3, big ? 48 : 36),
+      cacheMaxBytes: (big
+        ? Math.max(96, Math.floor(192 / activeCount))
+        : Math.max(48, Math.floor(96 / activeCount))) * 1024 * 1024,
+    };
+  }
+
+  _applyPlaybackWindow(vf, activeMounts, perf = this.performance() || {}) {
+    if (!vf) return null;
+    const win = this._playbackWindowFor(vf, activeMounts, perf);
+    for (const v of (vf.vols || [vf])) {
+      v.readAhead = win.readAhead;
+      v.cacheMax = win.cacheMax;
+      v.cacheMaxBytes = win.cacheMaxBytes;
+      if (typeof v.trimCache === 'function') v.trimCache();
+    }
+    return win;
+  }
+
+  rebalancePlaybackWindows(now = Date.now()) {
+    const perf = this.performance() || {};
+    const active = [...this.mounts.values()]
+      .filter((m) => m && m.streamable && now - (m._touched || 0) < 120000);
+    const activeCount = Math.max(1, active.length);
+    for (const vf of active) this._applyPlaybackWindow(vf, activeCount, perf);
+    return active.length;
+  }
+
   async _fetchSearchHit(ixs, params, wanted, timeoutMs) {
     ixs.forEach((ix) => this.usage.onSearch(ix.name)); // a real fan-out costs one API hit per indexer
     let { results, errors } = await fanout(ixs, params, { timeoutMs });
@@ -375,24 +413,9 @@ class Pipeline {
     // so the buffer outruns the bitrate — 4K-class releases (>4 GB) get the biggest window.
     // Segment sizes vary by release; the mount default stays small so triage/header peeks
     // never flood the pool.
-    const big = (vf.size || 0) > 4e9;
     const perf = this.performance() || {};
     const activeMounts = [...this.mounts.values()].filter((m) => Date.now() - (m._touched || 0) < 120000).length + 1;
-    const usable = perf.usableConnections || 0;
-    const reserve = perf.reserveConnections || 0;
-    const perStreamBudget = usable > reserve ? Math.max(4, Math.floor((usable - reserve) / Math.max(1, activeMounts))) : Infinity;
-    const configuredWindow = big ? (perf.maxConnPerStream4k || 20) : (perf.maxConnPerStream1080 || 12);
-    const targetReadAhead = Math.max(4, Math.min(configuredWindow, perStreamBudget));
-    const targetCache = Math.max(targetReadAhead * 3, big ? 48 : 36);
-    const targetCacheBytes = big
-      ? Math.max(96, Math.floor(192 / Math.max(1, activeMounts))) * 1024 * 1024
-      : Math.max(48, Math.floor(96 / Math.max(1, activeMounts))) * 1024 * 1024;
-    for (const v of (vf.vols || [vf])) {
-      v.readAhead = targetReadAhead;
-      v.cacheMax = targetCache;
-      v.cacheMaxBytes = targetCacheBytes;
-      if (typeof v.trimCache === 'function') v.trimCache();
-    }
+    this._applyPlaybackWindow(vf, activeMounts, perf);
 
     // Bounded gate: verdict within 500ms or we play anyway and keep checking in background.
     // (Provider quirk, see bench/RESULTS.md: healthy STATs answer in ~60-250ms; only MISSES
@@ -445,6 +468,8 @@ class Pipeline {
         if (candidate.name) res.vf._releaseName = candidate.name;
         this.mounts.set(res.vf.id, res.vf);
         this.mountByUrl.set(candidate.nzbUrl, res.vf.id);
+        session.currentMountId = res.vf.id;
+        this.rebalancePlaybackWindows();
         session.history.push({ name: candidate.name, outcome: 'playing' });
         return { session, vf: res.vf, candidate, attempts };
       }
