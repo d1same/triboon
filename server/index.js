@@ -10,6 +10,7 @@ const path = require('path');
 const { NntpPool, NntpConnection } = require('./nntp');
 const { mountNzb } = require('./archive');
 const { Store, VerdictCache } = require('./store');
+const { LibraryDb } = require('./library-db');
 const { Auth, SecureSettings, RateLimiter } = require('./auth');
 const { Pipeline } = require('./pipeline');
 const { TmdbProxy } = require('./tmdb');
@@ -36,7 +37,9 @@ const verdicts = new VerdictCache(store);
 const mounts = new Map(); // id -> virtual file
 const scanStates = new Map(); // library id -> { running, startedAt, progress, ...summary }
 const thumbJobs = new Map(); // thumb path -> in-flight generation promise (no double-spawn)
+const activitySessions = new Map(); // heartbeat-only "now watching"; never persisted
 const DATA_DIR = process.env.TRIBOON_DATA || path.join(__dirname, '..', 'data');
+const libraryDb = new LibraryDb(DATA_DIR);
 const MAX_PROVIDER_CONNECTIONS = 150;
 
 function clampInt(value, fallback, min, max) {
@@ -1109,6 +1112,45 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
   } else {
     open(target, hops);
   }
+}
+function shouldResolveIptvRemuxRedirect(err) {
+  const text = String(err || '');
+  return /redirect|server returned\s+30\d|http error\s+30\d|error opening input|i\/o error/i.test(text);
+}
+async function resolveIptvRemuxRedirect(rawTarget, maxHops = 5) {
+  let current = String(rawTarget || '').trim();
+  for (let hop = 0; hop <= maxHops; hop++) {
+    const pin = await validateAndPinIptvUrl(current, 'Live stream URL');
+    const u = new URL(pin.href);
+    const lib = u.protocol === 'https:' ? https : http;
+    const next = await new Promise((resolve, reject) => {
+      const req = lib.request(u, {
+        method: 'GET',
+        headers: {
+          'user-agent': IPTV_NATIVE_PROXY_UA,
+          accept: '*/*',
+          connection: 'close',
+        },
+        agent: false,
+        ...(pin && typeof pin.lookup === 'function' ? { lookup: pin.lookup } : {}),
+      }, (res) => {
+        const status = res.statusCode || 0;
+        if (status >= 300 && status < 400 && res.headers.location) {
+          res.resume();
+          resolve(new URL(res.headers.location, u).href);
+          return;
+        }
+        req.destroy();
+        resolve('');
+      });
+      req.on('error', reject);
+      req.setTimeout(6000, () => req.destroy(new Error('live remux redirect probe timeout')));
+      req.end();
+    });
+    if (!next) return current;
+    current = next;
+  }
+  throw new Error('too many live stream redirects');
 }
 let iptvRefreshing = false;
 let iptvWarmRunning = false;
@@ -2470,14 +2512,57 @@ function episodeSubtitleQuery(query, season, ep) {
   if (/\bS\d{1,2}\s*E\d{1,3}\b/i.test(base)) return base;
   return `${base} S${String(s).padStart(2, '0')}E${String(e).padStart(2, '0')}`.trim();
 }
+function libraryRecord(libId, max) {
+  if (libraryDb.available) {
+    const rec = libraryDb.readLibrary(libId, max);
+    if (rec) return rec;
+  }
+  return store.read('libitems', {})[libId] || null;
+}
+function libraryItemByIndex(libId, idx) {
+  if (libraryDb.available) {
+    const item = libraryDb.item(libId, idx);
+    if (item) return item;
+  }
+  const rec = store.read('libitems', {})[libId];
+  return rec && rec.items ? rec.items[parseInt(idx, 10)] : null;
+}
+function saveLibraryScan(libId, scannedAt, items) {
+  if (libraryDb.available && libraryDb.replaceLibrary(libId, scannedAt, items)) {
+    store.update('libitems', {}, (s) => { delete s[libId]; return s; });
+    return true;
+  }
+  store.update('libitems', {}, (s) => { s[libId] = { scannedAt, items }; return s; });
+  return false;
+}
+function allowedLocalLibraryIds(ctx) {
+  return store.read('libraries', { list: [] }).list
+    .filter((lib) => lib && lib.id && lib.path)
+    .filter((lib) => !(lib.users && lib.users.length && ctx.user.role !== 'admin' && !lib.users.includes(ctx.user.id)))
+    .map((lib) => String(lib.id));
+}
+function activityUserName(uid) {
+  const user = store.read('users', { list: [] }).list.find((u) => u.id === uid);
+  return user ? user.name : 'User';
+}
+function scrubActivityText(v, max = 160) {
+  return String(v || '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, max);
+}
+function activeActivityRows() {
+  const now = Date.now();
+  const ttl = 45000;
+  for (const [id, row] of activitySessions) {
+    if (!row || now - (row.updatedAt || 0) > ttl) activitySessions.delete(id);
+  }
+  return [...activitySessions.values()].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+}
 function localLibraryItemFor(ctx, libId, idx) {
   const lib = store.read('libraries', { list: [] }).list.find((l) => l.id === libId);
   if (!lib || !lib.path) return { status: 404, error: 'library not found' };
   if (lib.users && lib.users.length && ctx.user.role !== 'admin' && !lib.users.includes(ctx.user.id)) {
     return { status: 404, error: 'library not found' };
   }
-  const rec = store.read('libitems', {})[libId];
-  const item = rec && rec.items[parseInt(idx, 10)];
+  const item = libraryItemByIndex(libId, idx);
   if (!item) return { status: 404, error: 'item not found' };
   return { lib, item };
 }
@@ -3520,10 +3605,23 @@ const H = {
         const status = iptvRemuxStatusFromFfmpeg(err);
         const reason = iptvNativeFailureReason(status || 502, err);
         const providerRejected = [401, 403, 429].includes(status);
+        err = sanitizeIptvFfmpegError(err);
+        if (codeNum && !wrote && !providerRejected && !target.redirectResolved && shouldResolveIptvRemuxRedirect(err) && !ctx.res.destroyed) {
+          try {
+            const redirectUrl = await resolveIptvRemuxRedirect(target.url);
+            if (redirectUrl && redirectUrl !== target.url && !ctx.res.destroyed) {
+              const redirected = { ...target, url: redirectUrl, label: target.label ? `${target.label} redirect` : 'redirect', redirectResolved: true };
+              const redirectHls = hlsFriendly || iptvRemuxTargetLikelyHls(redirected);
+              console.error(`[iptv] "${ch.name}" ${target.label || 'stream'} remux resolved provider redirect - retrying safely`);
+              return attempt(redirected, redirectHls, redirectHls ? 1 : 0);
+            }
+          } catch (e) {
+            console.error(`[iptv] "${ch.name}" redirect probe failed: ${sanitizeIptvLogError(e)}`);
+          }
+        }
         if (codeNum && !wrote && !providerRejected && pin && typeof pin.onFailure === 'function') {
           try { pin.onFailure(); } catch {}
         }
-        err = sanitizeIptvFfmpegError(err);
         if (codeNum && !wrote && retriesLeft > 0 && !providerRejected && !ctx.res.destroyed) {
           console.error(`[iptv] "${ch.name}" attempt failed (${err.slice(0, 120).trim()}) — retrying plain`);
           return attempt(target, false, retriesLeft - 1);
@@ -3615,6 +3713,7 @@ const H = {
   libraryDelete: async (ctx) => {
     store.update('libraries', { list: [] }, (s) => { s.list = s.list.filter((l) => l.id !== ctx.m[1]); return s; });
     store.update('libitems', {}, (s) => { delete s[ctx.m[1]]; return s; });
+    libraryDb.deleteLibrary(ctx.m[1]);
     send(ctx.res, 200, { ok: true });
   },
 
@@ -3679,19 +3778,21 @@ const H = {
     if (!lib.path) return send(ctx.res, 400, { error: 'smart views have no scanned items' });
     const b = await readJson(ctx.req);
     const idx = parseInt(b.idx, 10);
-    const rec = store.read('libitems', {})[lib.id];
-    const item = rec && rec.items[idx];
+    const item = libraryItemByIndex(lib.id, idx);
     if (!item) return send(ctx.res, 404, { error: 'item not found — rescan first' });
     if (item.kind === 'episode') return send(ctx.res, 400, { error: 'fix the match on the SHOW — its episodes follow' });
     const ov = b.tmdbId === 'auto' ? 'auto' // clear the override — back to automatic matching
       : (b.tmdbId === null || b.tmdbId === 'none') ? 'none'
       : (Number.isInteger(+b.tmdbId) && +b.tmdbId > 0 ? +b.tmdbId : null);
     if (ov === null) return send(ctx.res, 400, { error: 'tmdbId must be a TMDB id, null for folder info, or "auto"' });
-    store.update('libitems', {}, (s) => {
-      const it = s[lib.id] && s[lib.id].items[idx];
-      if (it) { if (ov === 'auto') { delete it.matchOverride; it.tmdbId = null; } else it.matchOverride = ov; }
-      return s;
-    });
+    if (ov === 'auto') { delete item.matchOverride; item.tmdbId = null; } else item.matchOverride = ov;
+    if (!(libraryDb.available && libraryDb.updateItem(lib.id, idx, item))) {
+      store.update('libitems', {}, (s) => {
+        const it = s[lib.id] && s[lib.id].items[idx];
+        if (it) { if (ov === 'auto') { delete it.matchOverride; it.tmdbId = null; } else it.matchOverride = ov; }
+        return s;
+      });
+    }
     const st = scanStates.get(lib.id);
     if (st && st.running) return send(ctx.res, 202, { started: false, queued: true }); // next scan applies it
     const state = { running: true, startedAt: Date.now(), progress: 0, mode: 'scan' };
@@ -3716,7 +3817,7 @@ async function performScan(lib, state, mode = 'scan') {
     // Previous scan, keyed by file path (movies/episodes) or folder (shows): known items
     // keep their TMDB match + addedAt, so a rescan only hits TMDB for genuinely NEW files.
     // mode 'metadata' ignores the match cache (fresh lookups) but still preserves addedAt.
-    const prevItems = (store.read('libitems', {})[lib.id] || { items: [] }).items;
+    const prevItems = (libraryRecord(lib.id) || { items: [] }).items;
     const prevBy = new Map(prevItems.map((it) => [it.kind === 'show' ? `show:${it.dir || ''}` : it.file, it]));
     const reuse = (key) => { const p = prevBy.get(key); return mode !== 'metadata' && p && p.tmdbId ? p : null; };
     // Admin match override (set via POST /api/libraries/:id/match), carried across scans:
@@ -3949,7 +4050,7 @@ async function performScan(lib, state, mode = 'scan') {
       await Promise.all(lookupJobs.slice(i, i + 6).map((j) => j().catch(() => {})));
       state.progress = Math.min(items.length, state.progress + 6);
     }
-    store.update('libitems', {}, (s) => { s[lib.id] = { scannedAt: Date.now(), items }; return s; });
+    saveLibraryScan(lib.id, Date.now(), items);
     return { ok: true, count: items.length,
       shows: items.filter((i) => i.kind === 'show').length,
       matched: items.filter((i) => i.tmdbId).length,
@@ -4066,6 +4167,38 @@ setInterval(traktSyncTick, 60000).unref();
 
 // ---------- handlers, continued ----------
 Object.assign(H, {
+  localLookup: async (ctx) => {
+    const raw = [
+      ...ctx.url.searchParams.getAll('key'),
+      ...String(ctx.url.searchParams.get('keys') || '').split(','),
+    ].map((s) => String(s || '').trim()).filter(Boolean).slice(0, 200);
+    if (!raw.length) return send(ctx.res, 200, { items: {} });
+    const allowed = allowedLocalLibraryIds(ctx);
+    const out = {};
+    if (libraryDb.available) {
+      const found = libraryDb.lookup(raw, allowed);
+      for (const [key, row] of Object.entries(found)) {
+        out[key] = localItemPayload(ctx, row.libId, row.item);
+      }
+      return send(ctx.res, 200, { items: out });
+    }
+    const wanted = new Set(raw);
+    const all = store.read('libitems', {});
+    for (const libId of allowed) {
+      const rec = all[libId];
+      for (const item of (rec && rec.items) || []) {
+        if (!item || !item.tmdbId) continue;
+        const key = item.kind === 'movie'
+          ? `tmdb:movie:${item.tmdbId}`
+          : item.kind === 'episode'
+            ? `tmdb:tv:${item.tmdbId}:s${item.s}e${item.e}`
+            : '';
+        if (key && wanted.has(key) && !out[key]) out[key] = localItemPayload(ctx, libId, item);
+      }
+    }
+    send(ctx.res, 200, { items: out });
+  },
+
   libraryItems: async (ctx) => {
     // Restricted libraries are invisible to excluded users (stream/art tokens are only minted
     // here, so this is the single gate for local playback too).
@@ -4074,7 +4207,7 @@ Object.assign(H, {
       return send(ctx.res, 404, { error: 'library not found' });
     }
     const libId = ctx.m[1];
-    const rec = store.read('libitems', {})[libId];
+    const rec = libraryRecord(libId);
     if (!rec) return send(ctx.res, 200, { items: [] });
     const limitRaw = ctx.url.searchParams.get('limit');
     if (limitRaw !== null) {
@@ -4084,6 +4217,19 @@ Object.assign(H, {
       const genre = parseInt(ctx.url.searchParams.get('genre') || '0', 10) || 0;
       const showIdxRaw = ctx.url.searchParams.get('showIdx');
       const showIdx = showIdxRaw === null ? null : parseInt(showIdxRaw, 10);
+      if (libraryDb.available) {
+        const pageRec = libraryDb.page(libId, { offset, limit, sort, genre, showIdx });
+        if (pageRec) return send(ctx.res, 200, {
+          scannedAt: pageRec.scannedAt,
+          offset: pageRec.offset,
+          limit: pageRec.limit,
+          total: pageRec.total,
+          hasMore: pageRec.hasMore,
+          genres: pageRec.genres,
+          show: pageRec.show ? localItemPayload(ctx, libId, pageRec.show) : null,
+          items: pageRec.items.map((item) => localItemPayload(ctx, libId, item)),
+        });
+      }
       const top = (rec.items || []).filter((x) => x.kind !== 'episode');
       const genres = [...new Set(top.flatMap((x) => x.genres || []))].sort((a, b) => a - b);
       let items;
@@ -4245,6 +4391,47 @@ Object.assign(H, {
       else if (b.watched) trakt.history(ctx.user.id, b.key, true);
       if (b.watched === false && b.unwatch) trakt.history(ctx.user.id, b.key, false);
     }
+    send(ctx.res, 200, { ok: true });
+  },
+
+  activityList: async (ctx) => {
+    send(ctx.res, 200, { sessions: activeActivityRows() });
+  },
+
+  activitySet: async (ctx) => {
+    const b = await readJson(ctx.req).catch(() => ({}));
+    const id = scrubActivityText(b.sessionId || b.id || '', 80);
+    if (!id) return send(ctx.res, 400, { error: 'sessionId required' });
+    if (b.state === 'stopped' || b.stop || b.remove) {
+      activitySessions.delete(id);
+      return send(ctx.res, 200, { ok: true });
+    }
+    const duration = Math.max(0, Number(b.duration || 0) || 0);
+    const position = Math.max(0, Number(b.position || 0) || 0);
+    const percent = duration ? Math.max(0, Math.min(100, Math.round((position / duration) * 100))) : 0;
+    const existing = activitySessions.get(id) || {};
+    activitySessions.set(id, {
+      id,
+      sessionId: id,
+      userId: ctx.user.id,
+      userName: activityUserName(ctx.user.id),
+      profile: scrubActivityText(b.profile || '', 40),
+      title: scrubActivityText(b.title || (b.meta && b.meta.title) || 'Playing', 180),
+      subline: scrubActivityText(b.subline || '', 120),
+      key: scrubActivityText(b.key || '', 140),
+      type: scrubActivityText(b.type || '', 30),
+      player: scrubActivityText(b.player || '', 30),
+      mode: scrubActivityText(b.mode || '', 30),
+      device: scrubActivityText(b.device || ctx.req.headers['user-agent'] || '', 90),
+      source: scrubActivityText(b.source || '', 220),
+      fileName: scrubActivityText(b.fileName || '', 220),
+      size: Math.max(0, Number(b.size || 0) || 0),
+      position,
+      duration,
+      percent,
+      startedAt: existing.startedAt || Date.now(),
+      updatedAt: Date.now(),
+    });
     send(ctx.res, 200, { ok: true });
   },
 
@@ -5146,6 +5333,7 @@ const ROUTES = [
   { m: 'POST', re: /^\/api\/advance\/(\w+)$/, auth: 'user', h: H.advance },
   { m: 'GET', re: /^\/api\/tmdb\/(.+)$/, auth: 'user', h: H.tmdbProxy },
   { m: 'GET', re: /^\/api\/libraries$/, auth: 'user', h: H.librariesList },
+  { m: 'GET', re: /^\/api\/libraries\/local-lookup$/, auth: 'user', h: H.localLookup },
   { m: 'POST', re: /^\/api\/libraries$/, auth: 'admin', h: H.libraryCreate },
   { m: 'DELETE', re: /^\/api\/libraries\/(\w+)$/, auth: 'admin', h: H.libraryDelete },
   { m: 'PATCH', re: /^\/api\/libraries\/(\w+)$/, auth: 'admin', h: H.libraryEdit },
@@ -5175,6 +5363,8 @@ const ROUTES = [
   { m: 'GET', re: /^\/api\/watch\/next$/, auth: 'user', h: H.watchNext },
   { m: 'GET', re: /^\/api\/watch$/, auth: 'user', h: H.watchList },
   { m: 'POST', re: /^\/api\/watch$/, auth: 'user', h: H.watchSet },
+  { m: 'GET', re: /^\/api\/activity$/, auth: 'admin', h: H.activityList },
+  { m: 'POST', re: /^\/api\/activity$/, auth: 'user', h: H.activitySet },
   { m: 'GET', re: /^\/api\/trakt\/status$/, auth: 'user', h: H.traktStatus },
   { m: 'POST', re: /^\/api\/trakt\/link$/, auth: 'user', h: H.traktLink },
   { m: 'POST', re: /^\/api\/trakt\/poll$/, auth: 'user', h: H.traktPoll },
@@ -5332,6 +5522,7 @@ function shutdown() {
   closeAllIptvLiveStreams('shutdown');
   cleanupYtCookieFiles();
   if (pool) { pool.close(); pool = null; }
+  libraryDb.close();
   store.close();
   return new Promise((r) => server.close(r));
 }

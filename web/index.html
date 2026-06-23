@@ -691,9 +691,9 @@ body.screensaverOn{cursor:none}
 @keyframes ssPan{from{transform:scale(1.04) translate3d(-1.4%,0,0)}to{transform:scale(1.1) translate3d(1.4%,-1.2%,0)}}
 @keyframes ssDeckFloat{from{transform:translateY(-50%) translate3d(0,-8px,0)}to{transform:translateY(-50%) translate3d(0,10px,0)}}
 @media (max-width:900px){#ssDeck{opacity:.34;width:78vw;right:-18vw}#screensaver .ssClock{max-width:82vw}#ssTitle{max-width:22ch}}
-#vlcPanel{position:absolute;inset:0;display:none;place-items:center;background:rgba(0,0,0,.82)}
+#vlcPanel{position:absolute;inset:0;display:none;place-items:center;background:rgba(0,0,0,.82);padding:24px;box-sizing:border-box}
 #vlcPanel.show{display:grid}
-#vlcPanel .gateCard{text-align:center}
+#vlcPanel .gateCard{text-align:center;margin-left:0;width:min(520px,calc(100vw - 48px))}
 #vlcUrl{font:500 12px "JetBrains Mono";word-break:break-all;background:rgba(11,8,18,.7);border:1px solid var(--line);border-radius:10px;padding:12px;margin:14px 0;user-select:all}
 
 /* ---------- toast ---------- */
@@ -748,6 +748,20 @@ body.screensaverOn{cursor:none}
 .syncDot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#6ee7a0;margin-right:8px;box-shadow:0 0 16px rgba(110,231,160,.45)}
 .syncSource.warn .syncDot{background:var(--amber);box-shadow:0 0 16px rgba(255,198,92,.4)}
 .syncSource.bad .syncDot{background:#ff8d8d;box-shadow:0 0 16px rgba(255,141,141,.4)}
+.activityRows{display:grid;gap:10px}
+.activityRow{display:grid;grid-template-columns:minmax(160px,1.1fr) minmax(0,1.7fr) minmax(110px,.45fr);gap:12px;align-items:center;
+  border:1px solid rgba(243,239,247,.07);border-radius:12px;padding:12px;background:rgba(11,8,18,.42)}
+.activityRow b{font:800 13px "Sora";display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.activityRow small,.activityRow .arMeta{display:block;color:var(--muted);font:600 11px "JetBrains Mono";overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.activityBar{height:6px;border-radius:999px;background:rgba(243,239,247,.16);overflow:hidden;margin-top:7px}
+.activityBar span{display:block;height:100%;background:var(--grad);width:var(--pct,0%)}
+#playerStats{display:none;position:absolute;right:44px;bottom:176px;width:min(420px,calc(100vw - 88px));z-index:7;
+  background:rgba(17,12,27,.96);border:1px solid var(--line);border-radius:14px;padding:14px;box-shadow:0 18px 52px rgba(0,0,0,.38)}
+#playerStats.open{display:block}
+#playerStats h3{font:800 13px "Sora";margin:0 0 8px}
+#playerStats .statGrid{display:grid;grid-template-columns:minmax(90px,.6fr) minmax(0,1fr);gap:7px 12px;font:600 11px "JetBrains Mono"}
+#playerStats .statGrid span:nth-child(odd){color:var(--muted)}
+#playerStats .statGrid span:nth-child(even){color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media (max-width:1100px){.syncGrid{grid-template-columns:repeat(2,minmax(0,1fr))}.syncSource{grid-template-columns:1fr}}
 .panel .btn{padding:11px 18px;font-size:14px}
 @media (max-width:900px){
@@ -2458,6 +2472,14 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
          stays in sync both ways.</p>
       <div id="traktBox"><div class="hint">checking…</div></div>
     </div>
+    <div class="panel"><h2>App updates</h2>
+      <p>Install the latest Android TV or phone APK from the stable GitHub release links.</p>
+      <div class="field">
+        <button class="btn primary focusable" id="apkTvUpdate">Update Android TV</button>
+        <button class="btn ghost focusable" id="apkMobileUpdate">Update Android phone</button>
+      </div>
+      <div class="hint" id="apkUpdateStatus">Current app: checking...</div>
+    </div>
     <div class="panel"><h2>YouTube Music</h2>
       <p>Connect your account to place <b>Liked Music and your playlists</b> at the top of the Music page.
          Public mixes, weekly picks and seasonal rows work without connecting.</p>
@@ -2540,6 +2562,7 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
 
   <div id="setTabs">
     <button data-tab="server" class="on focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8M8 13h5"/></svg><span>Status</span></button>
+    <button data-tab="activity" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h4l2-5 4 10 2-5h4"/><circle cx="19" cy="6" r="2"/></svg><span>Now Watching</span></button>
     <button data-tab="sources" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h10"/><circle cx="18" cy="17" r="2"/></svg><span>Providers</span></button>
     <button data-tab="catalog" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="4" width="14" height="16" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/></svg><span>Catalog</span></button>
     <button data-tab="livetv" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="6" width="16" height="12" rx="2"/><path d="M9 3l3 3 3-3"/></svg><span>Live TV</span></button>
@@ -2587,6 +2610,15 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
     <button class="btn ghost" id="perfApply">Apply recommendation</button>
     <button class="btn ghost" id="perfSave">Save custom</button>
     <div class="hint" id="perfStatus"></div>
+  </div>
+  </div>
+
+  <div class="setGrid" data-stab="activity" hidden>
+  <div class="panel"><h2>Users connected</h2>
+    <p>Live playback heartbeats from web and Android players. Sessions disappear automatically when playback closes or stops reporting.</p>
+    <div id="activityList" class="activityRows"><div class="hint">No one is watching right now.</div></div>
+    <button class="btn primary focusable" id="activityRefresh">Refresh</button>
+    <div class="hint" id="activityStatus"></div>
   </div>
   </div>
 
@@ -2881,6 +2913,7 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
           <button class="cbtn focusable" id="nextEpBtn" title="Next episode" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" x2="19" y1="5" y2="19"/></svg></button>
         </div>
         <div class="ctlGroup ctlRight">
+          <button class="cbtn focusable" id="statsBtn" title="Playback stats"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01"/><path d="M11 12h1v5h1"/></svg></button>
           <button class="cbtn focusable" id="ccBtn" title="Subtitles"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M7 15h4M15 15h2M7 11h2M13 11h4"/></svg></button>
           <button class="cbtn focusable" id="audBtn" title="Audio language"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 10v3"/><path d="M6 6v11"/><path d="M10 3v18"/><path d="M14 8v7"/><path d="M18 5v13"/><path d="M22 10v3"/></svg></button>
           <button class="cbtn focusable" id="srndBtn" title="Surround sound" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 10v4h4l5 4V6l-5 4H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg></button>
@@ -2895,6 +2928,7 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
       </div>
       <div id="playerEpisodes"></div>
       <div id="trackMenu"></div>
+      <div id="playerStats"></div>
     </div>
   </div>
   <div id="pGuide">
@@ -2966,7 +3000,7 @@ const S = {
   user: null, serverInfo: null, rows: [], focusedItem: null,
   view: 'home', zone: 'rows', rowIdx: 0, colIdx: {}, heroIdx: 0, railIdx: 0, drawerIdx: 0, drawerSortIdx: 0, ctlIdx: 1,
   playing: null,      // { sessionId, streamUrl, remuxUrl, item, name, usingRemux, remuxBase, startOffset, duration }
-  osdTimer: null, healthTimer: null, watchTimer: null, qcTimer: null, sourceSort: 'best',
+  osdTimer: null, healthTimer: null, watchTimer: null, activityTimer: null, qcTimer: null, sourceSort: 'best',
 };
 const perf0 = performance.now();
 function appMs() { return Math.round(performance.now() - perf0); }
@@ -4638,6 +4672,10 @@ async function play(it, pick) {
   const picked = pick && typeof pick === 'object' ? pick : (pick ? { name: pick } : null);
   const pickRank = picked ? normalizeResolutionRank(picked.resolutionRank) : null;
   const qRank = pickRank !== null ? pickRank : qualityRankForItem(it);
+  if (!picked && !it._local) {
+    const loc = await ensureLocalPlaybackForItem(it);
+    if (loc) it = { ...it, _local: loc };
+  }
   const localExact = !picked && localPlaybackForItem(it) ? { ...it, _local: localPlaybackForItem(it) } : null;
   // Local-first: if this exact title/episode exists in a scanned library, play the file on
   // disk instead of searching usenet, unless the chosen quality asks for another source class.
@@ -5008,7 +5046,9 @@ async function openDetail(it, push = true) {
   // hydrate from that cache before seasons and the main Play target are calculated.
   if (it._lib && it._lib.path) {
     try {
-      const r = await libItems(it._lib);
+      const r = it._kind === 'show'
+        ? await loadAllLocalShowEpisodes(it._lib, it._idx)
+        : { items: it._local ? [it] : [] };
       if (reqId !== S.detailReq) return;
       mergeLocalItems(it._lib, r.items || []);
     } catch {}
@@ -5902,16 +5942,19 @@ function clearPlaybackTimers() {
   if (S.upNextTimer) { clearInterval(S.upNextTimer); S.upNextTimer = null; }
   if (S.healthTimer) { clearInterval(S.healthTimer); S.healthTimer = null; }
   if (S.watchTimer) { clearInterval(S.watchTimer); S.watchTimer = null; }
+  if (S.activityTimer) { clearInterval(S.activityTimer); S.activityTimer = null; }
 }
 function stopActivePlaybackForReplacement(opts = {}) {
   if (!S.playing) return;
   saveWatch(true);
+  stopActivityHeartbeat();
   if (canUseNativeVideoPlayer() && window.TriboonTV && window.TriboonTV.closeVideo) {
     try { window.TriboonTV.closeVideo(); } catch {}
   }
   stopWebVideoElement();
   clearPlaybackTimers();
   closeTrackMenu();
+  $('playerStats').classList.remove('open');
   if (!opts.preserveGuide) closePlayerGuide({ fromNative: true });
   $('upNext').classList.remove('show');
   closePlayerEpisodes();
@@ -5926,6 +5969,7 @@ function startNativePlayerHousekeeping(it) {
   if (S.healthTimer) clearInterval(S.healthTimer);
   if (S.watchTimer) clearInterval(S.watchTimer);
   S.watchTimer = setInterval(saveWatch, 10000);
+  startActivityHeartbeat();
   loadTracks();
   prepPlayerSeasonEpisodes(it);
   prepNextEpisode(it);
@@ -5936,6 +5980,7 @@ function startWebPlayerHousekeeping(mount, it) {
   startHealthPoll(mount.id);
   if (S.watchTimer) clearInterval(S.watchTimer);
   S.watchTimer = setInterval(saveWatch, 10000);
+  startActivityHeartbeat();
   updatePlayerControlAvailability();
   loadTracks();
   if (!applyStartupSubtitlePref()) {
@@ -5993,6 +6038,7 @@ function openPlayer(it, mount, opts = {}) {
     transcodeUrl: mount.transcodeUrl, encoder: mount.encoder,
     tracksUrl: mount.tracksUrl, subtitleBase: mount.subtitleBase, streamToken: mount.streamToken,
     item: it, name: sourceName, fileName: mount.name, sourceAttributes: mount.candidate && mount.candidate.attributes,
+    size: mount.size || (mount.candidate && mount.candidate.sizeBytes) || 0,
     usingRemux: false, usingTranscode: false, startOffset: 0,
     duration: knownDuration, lastSaved: 0, triedRemux: false, triedTranscode: false, mountId: mount.id,
     tracks: null, audioTrack: 0, subTrack: null, quality: 1080, nativePos: 0, nativeDuration: 0,
@@ -6472,6 +6518,12 @@ function applyNativeVideoProgress(pos, dur, opts = {}) {
 window.__tvNativeVideoProgress = (pos, dur) => {
   applyNativeVideoProgress(pos, dur);
 };
+window.__tvNativeVideoStats = (raw) => {
+  const p = S.playing; if (!p || !p.usingNative) return;
+  try { p.nativeStats = typeof raw === 'string' ? JSON.parse(raw) : (raw || {}); }
+  catch { p.nativeStats = {}; }
+  if ($('playerStats').classList.contains('open')) renderPlayerStats();
+};
 window.__tvNativeVideoSeek = (pos, dur) => {
   const p = S.playing; if (!p || !p.usingNative || !p.item || p.item.type === 'live') return;
   const at = Math.max(0, +pos || 0);
@@ -6931,6 +6983,7 @@ $('vlcCopy').addEventListener('click', () => {
 });
 $('vlcClose').addEventListener('click', closePlayer);
 $('playerBackBtn').addEventListener('click', closePlayer);
+window.addEventListener('pagehide', () => { if (S.playing) stopActivityHeartbeat(); });
 
 function currentTime() {
   const v = $('video'); const p = S.playing;
@@ -6942,6 +6995,102 @@ function totalDuration() {
   if (p && p.usingNative) return p.nativeDuration || p.duration || 0;
   if (p && (p.usingRemux || p.usingTranscode)) return p.duration || 0; // fragment streams hide duration
   return v.duration && isFinite(v.duration) ? v.duration : (p && p.duration) || 0;
+}
+function fmtBytes(n) {
+  n = Number(n) || 0;
+  if (n >= 1099511627776) return (n / 1099511627776).toFixed(2) + ' TB';
+  if (n >= 1073741824) return (n / 1073741824).toFixed(2) + ' GB';
+  if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+  if (n >= 1024) return Math.round(n / 1024) + ' KB';
+  return n ? n + ' B' : '—';
+}
+function playerModeLabel(p = S.playing) {
+  if (!p) return '';
+  if (p.usingNative) return 'ExoPlayer';
+  if (p.usingTranscode) return 'Transcode';
+  if (p.usingRemux) return 'Remux';
+  if (p.usingLiveMse) return 'Live remux';
+  return 'Direct';
+}
+function activityPayload(state = 'watching') {
+  const p = S.playing; if (!p || !p.item) return null;
+  const meta = episodePlayerMeta(p.item);
+  return {
+    sessionId: p.sessionId || p.mountId || p.streamUrl || p.item.key || String(Date.now()),
+    state,
+    key: p.item.key || '',
+    type: p.item.type || '',
+    title: meta.title || p.item.title || 'Playing',
+    subline: meta.subline || '',
+    profile: S.profile ? S.profile.name || S.profile.id : '',
+    player: p.usingNative ? 'exo' : 'web',
+    mode: playerModeLabel(p),
+    source: p.name || '',
+    fileName: p.fileName || '',
+    size: p.size || 0,
+    position: state === 'stopped' ? 0 : Math.floor(currentTime() || 0),
+    duration: Math.floor(totalDuration() || p.duration || 0),
+    device: navigator.userAgent || '',
+  };
+}
+function sendActivity(state = 'watching', opts = {}) {
+  const payload = activityPayload(state);
+  if (!payload) return Promise.resolve();
+  const headers = { 'content-type': 'application/json' };
+  const tok = tokenStore.get();
+  if (tok) headers.authorization = 'Bearer ' + tok;
+  return fetch('/api/activity', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload),
+    keepalive: !!opts.keepalive,
+  }).catch(() => {});
+}
+function startActivityHeartbeat() {
+  if (S.activityTimer) clearInterval(S.activityTimer);
+  sendActivity('watching');
+  S.activityTimer = setInterval(() => sendActivity('watching'), 10000);
+}
+function stopActivityHeartbeat() {
+  if (S.activityTimer) { clearInterval(S.activityTimer); S.activityTimer = null; }
+  return sendActivity('stopped', { keepalive: true });
+}
+function collectPlayerStats() {
+  const p = S.playing, v = $('video');
+  const rows = [];
+  if (!p) return rows;
+  const native = p.nativeStats || {};
+  const q = !p.usingNative && v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : null;
+  let buffered = 0;
+  try {
+    if (p.usingNative) buffered = native.bufferedSec || 0;
+    else if (v.buffered && v.buffered.length) buffered = Math.max(0, (p.startOffset || 0) + v.buffered.end(v.buffered.length - 1) - currentTime());
+  } catch {}
+  rows.push(['Player', playerModeLabel(p)]);
+  rows.push(['Quality', playerQualityLabel(p) || native.quality || '—']);
+  rows.push(['Source', p.name || '—']);
+  rows.push(['File', p.fileName || '—']);
+  rows.push(['Size', fmtBytes(p.size)]);
+  rows.push(['Position', `${fmt(currentTime())}${totalDuration() ? ' / ' + fmt(totalDuration()) : ''}`]);
+  rows.push(['Buffered', buffered ? `${Math.round(buffered)}s ahead` : '—']);
+  rows.push(['Video', native.video || (v.videoWidth ? `${v.videoWidth}×${v.videoHeight}` : '—')]);
+  rows.push(['Audio', native.audio || (p.tracks && p.tracks.audio && p.tracks.audio[p.audioTrack] && p.tracks.audio[p.audioTrack].codec) || '—']);
+  rows.push(['Dropped', native.droppedFrames !== undefined ? String(native.droppedFrames) : (q ? String(q.droppedVideoFrames || 0) : '—')]);
+  rows.push(['Bandwidth', native.bandwidth ? `${Math.round(native.bandwidth / 1000)} kbps` : '—']);
+  return rows;
+}
+function renderPlayerStats() {
+  const box = $('playerStats'); if (!box) return;
+  const rows = collectPlayerStats();
+  box.innerHTML = `<h3>Playback stats</h3><div class="statGrid">${
+    rows.map(([k, v]) => `<span>${esc(k)}</span><span title="${esc(v)}">${esc(v)}</span>`).join('')
+  }</div>`;
+}
+function togglePlayerStats() {
+  const box = $('playerStats'); if (!box) return;
+  const open = !box.classList.contains('open');
+  if (open) { renderPlayerStats(); box.classList.add('open'); showOsd(); }
+  else box.classList.remove('open');
 }
 async function saveWatch(final) {
   const p = S.playing; if (!p || !p.item) return;
@@ -6982,6 +7131,7 @@ async function closePlayer(opts = {}) {
   const closingItem = S.playing && S.playing.item;
   const finishedTarget = opts && opts.ended ? playbackFinishedDetailTarget(closingItem) : null;
   const finalWatch = saveWatch(true);
+  const finalActivity = stopActivityHeartbeat();
   if (canUseNativeVideoPlayer() && window.TriboonTV.closeVideo) {
     try { window.TriboonTV.closeVideo(); } catch {}
   }
@@ -7005,6 +7155,7 @@ async function closePlayer(opts = {}) {
   closePlayerEpisodes();
   $('upNext').classList.remove('show');
   closeTrackMenu();
+  $('playerStats').classList.remove('open');
   S.playerSeasonStrip = null;
   S.nextEp = null; updateNextEpisodeButton();
   S.playing = null;
@@ -7013,13 +7164,13 @@ async function closePlayer(opts = {}) {
     S.playerReturn = null;
     // Back to the detail page: refresh watch marks and the open season's episode list.
     S.view = 'detail';
-    try { await finalWatch; await loadWatchState(true); } catch {}
+    try { await finalWatch; await finalActivity; await loadWatchState(true); } catch {}
     if (S.detailItem) syncDetailButtons(S.detailItem);
     if (S.detailItem && S.detailItem.type === 'tv' && S.detailSeason != null) loadSeason(S.detailItem, S.detailSeason);
     if (S.zone === 'detail') requestAnimationFrame(() => applyFocus($('dPlay')));
   } else if (finishedTarget) {
     S.playerReturn = null;
-    try { await finalWatch; await loadWatchState(true); } catch {}
+    try { await finalWatch; await finalActivity; await loadWatchState(true); } catch {}
     await openDetail(finishedTarget);
   } else {
     const ret = S.playerReturn || { view: 'home' };
@@ -7117,6 +7268,7 @@ function tick() {
   const v = $('video');
   if (v.buffered && v.buffered.length && d) $('buf').style.width = Math.min(100, ((S.playing.startOffset + v.buffered.end(v.buffered.length - 1)) / d) * 100) + '%';
   setPlayerTimes(t, d);
+  if ($('playerStats').classList.contains('open')) renderPlayerStats();
   updPP();
   requestAnimationFrame(() => setTimeout(tick, 250));
 }
@@ -7124,6 +7276,7 @@ $('playPause').addEventListener('click', togglePlay);
 $('back10').addEventListener('click', () => nudgeSeek(-10));
 $('fwd30').addEventListener('click', () => nudgeSeek(30));
 $('nextEpBtn').addEventListener('click', playNextEpisode);
+$('statsBtn').addEventListener('click', togglePlayerStats);
 $('seek').addEventListener('click', (e) => {
   const r = e.currentTarget.getBoundingClientRect();
   const d = totalDuration(); if (!d) return;
@@ -8816,6 +8969,43 @@ function mergeLocalItems(lib, items) {
   S.localMap = map;
   return map;
 }
+function localRecFromPayload(x) {
+  if (!x || !x.streamUrl) return null;
+  const poster = x.artUrl || (x.poster ? img(x.poster, 'w342') : null) || x.thumbUrl || '';
+  const backdrop = (x.backdrop ? img(x.backdrop) : null) || x.artUrl || x.thumbUrl || poster || '';
+  return {
+    streamUrl: x.streamUrl, playUrl: x.playUrl, name: x.title, addedAt: x.addedAt || 0,
+    artUrl: x.artUrl || '', thumbUrl: x.thumbUrl || '', poster, backdrop,
+  };
+}
+function localLookupKeyForItem(it) {
+  if (!it || !it.tmdbId) return '';
+  if (it.type === 'movie') return `tmdb:movie:${it.tmdbId}`;
+  const ids = sourceIdentityFor(it);
+  if (ids.season != null && ids.ep != null) return `tmdb:tv:${it.tmdbId}:s${ids.season}e${ids.ep}`;
+  return '';
+}
+async function fetchLocalPlaybackKeys(keys) {
+  keys = [...new Set((keys || []).map(String).filter(Boolean))]
+    .filter((k) => !(S.localMap && S.localMap[k])).slice(0, 100);
+  if (!keys.length) return S.localMap || {};
+  const params = new URLSearchParams();
+  keys.forEach((k) => params.append('key', k));
+  const r = await api(`/api/libraries/local-lookup?${params.toString()}`).catch(() => ({ items: {} }));
+  S.localMap = S.localMap || {};
+  for (const [key, payload] of Object.entries(r.items || {})) {
+    const rec = localRecFromPayload(payload);
+    if (rec) S.localMap[key] = rec;
+  }
+  return S.localMap;
+}
+async function ensureLocalPlaybackForItem(it) {
+  const key = localLookupKeyForItem(it);
+  if (!key) return null;
+  if (S.localMap && S.localMap[key]) return S.localMap[key];
+  await fetchLocalPlaybackKeys([key]);
+  return S.localMap && S.localMap[key] || null;
+}
 // Map of "what we already own on disk": tmdb keys → local stream URLs. Lets the regular
 // detail pages (and auto next-episode) play your archive files instead of hitting usenet.
 async function indexLocalLibraries(libs) {
@@ -8851,7 +9041,10 @@ function refreshLocalMapFromCachedLibraries() {
 function ensureLocalMap() {
   if (S.localMap) return Promise.resolve(S.localMap);
   if (S._localMapJob) return S._localMapJob;
-  return (S._localMapJob = indexLocalLibraries(S.libraries || []).finally(() => { S._localMapJob = null; }));
+  const cached = refreshLocalMapFromCachedLibraries();
+  if (cached) return Promise.resolve(cached);
+  S.localMap = {};
+  return Promise.resolve(S.localMap);
 }
 async function loadLibraries() {
   let libs = [];
@@ -11493,6 +11686,39 @@ function renderProfileSessionActions() {
   $('prefSwitchProfile').innerHTML = `${profileIcon('switch')}<span>Switch profile</span>`;
   $('prefSignOut').innerHTML = `${profileIcon('logout')}<span>Sign out</span>`;
 }
+const APK_LINKS = {
+  tv: 'https://github.com/d1same/triboon/releases/latest/download/triboon-tv.apk',
+  mobile: 'https://github.com/d1same/triboon/releases/latest/download/triboon-mobile.apk',
+};
+async function renderAppUpdateBox() {
+  const status = $('apkUpdateStatus');
+  if (!status) return;
+  let current = (S.serverInfo && S.serverInfo.version) || '';
+  try {
+    if (window.TriboonTV && TriboonTV.appVersion) {
+      const app = JSON.parse(TriboonTV.appVersion() || '{}');
+      if (app.versionName) current = `Android app ${app.versionName} (${app.versionCode || '?'})`;
+    }
+  } catch {}
+  let latest = '';
+  try {
+    const r = await fetch('https://api.github.com/repos/d1same/triboon/releases/latest', { cache: 'no-store' });
+    const j = await r.json();
+    latest = j && j.tag_name ? ` Latest release: ${j.tag_name}.` : '';
+  } catch {}
+  status.textContent = `${current ? 'Current: ' + current + '.' : 'Current version unknown.'}${latest} Stable APK links always point to the newest release.`;
+}
+function openApkUpdate(kind) {
+  const url = APK_LINKS[kind] || APK_LINKS.tv;
+  try {
+    if (window.TriboonTV && TriboonTV.openAppUpdate) {
+      TriboonTV.openAppUpdate(url);
+      toast('Opening APK update link');
+      return;
+    }
+  } catch {}
+  window.open(url, '_blank', 'noopener');
+}
 function openPrefs() { // populates the Preferences PAGE (it's a view now, not a popup)
   const cz = applyCoverSize();
   document.querySelectorAll('#prefCoverSize button').forEach((b) => b.classList.toggle('sel', b.dataset.sz === cz));
@@ -11524,6 +11750,7 @@ function openPrefs() { // populates the Preferences PAGE (it's a view now, not a
   renderPinRows();
   renderMenuMgr();
   renderTraktBox();
+  renderAppUpdateBox();
   renderYtmBox();
   requestAnimationFrame(() => {
     if (S.view === 'prefs' && (!document.activeElement || document.activeElement === document.body)) focusContent();
@@ -12527,6 +12754,36 @@ async function refreshIptvSyncStatus() {
   try { renderIptvSyncStatus(await api('/api/iptv/status')); }
   catch (e) { $('iptvSyncStatus').textContent = 'Live TV sync status failed: ' + e.message; }
 }
+function renderActivity(sessions = []) {
+  const list = $('activityList'); if (!list) return;
+  if (!sessions.length) {
+    list.innerHTML = '<div class="hint">No one is watching right now.</div>';
+    $('activityStatus').textContent = 'Last checked ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    return;
+  }
+  list.innerHTML = sessions.map((s) => {
+    const pct = Math.max(0, Math.min(100, +s.percent || 0));
+    const pos = s.duration ? `${fmt(s.position || 0)} / ${fmt(s.duration || 0)}` : (s.position ? fmt(s.position) : 'Live');
+    const file = s.fileName || s.source || '';
+    return `<div class="activityRow">
+      <div><b>${esc(s.userName || 'User')}</b><small>${esc(s.profile || s.player || '')}</small></div>
+      <div><b>${esc(s.title || 'Playing')}</b><small>${esc((s.subline ? s.subline + ' - ' : '') + (file || s.mode || ''))}</small>
+        <div class="activityBar" style="--pct:${pct}%"><span></span></div></div>
+      <div class="arMeta">${esc(pos)}<br>${esc(agoStr(s.updatedAt || Date.now()))}</div>
+    </div>`;
+  }).join('');
+  $('activityStatus').textContent = `${sessions.length} active session${sessions.length === 1 ? '' : 's'}`;
+}
+async function refreshActivity() {
+  const box = $('activityList'); if (!box) return;
+  try {
+    const r = await api('/api/activity');
+    renderActivity(r.sessions || []);
+  } catch (e) {
+    box.innerHTML = `<div class="hint">Activity unavailable: ${esc(e.message)}</div>`;
+    $('activityStatus').textContent = '';
+  }
+}
 async function refreshSettings() {
   try {
     const st = await api('/api/status');
@@ -12543,6 +12800,7 @@ async function refreshSettings() {
       <div class="kv"><span>ffmpeg (remux)</span><span>${st.ffmpeg ? st.ffmpeg.replace('ffmpeg version ', '').slice(0, 28) : 'not found — direct play & VLC only'}</span></div>
       <div class="kv"><span>yt-dlp (music)</span><span>${st.ytdlp ? esc(st.ytdlp) + ' — Music enabled' : 'not found — Music tab hidden'}</span></div>
       <div class="kv"><span>Active mounts</span><span>${st.mounts}</span></div>`;
+    refreshActivity();
     const s = await api('/api/settings');
     setPerfForm(s.streamingPerformance || {});
     renderPerfResult({ capacity: { ...(st.streaming || {}), providers: st.nntp ? st.nntp.providers : 0 }, recommendation: s.streamingPerformance || {}, warnings: [] }, s.streamingPerformance || {});
@@ -13013,6 +13271,9 @@ function wireSectionRailDpad(rootId, tabsId, panelAttr) {
 }
 wireSectionRailDpad('prefs', 'prefTabs', 'data-ptab');
 wireSectionRailDpad('settings', 'setTabs', 'data-stab');
+$('activityRefresh').addEventListener('click', refreshActivity);
+$('apkTvUpdate').addEventListener('click', () => openApkUpdate('tv'));
+$('apkMobileUpdate').addEventListener('click', () => openApkUpdate('mobile'));
 $('invGo').addEventListener('click', async () => {
   const r = await api('/api/invites', { method: 'POST', body: { policy: { maxResolutionRank: parseInt($('invCap').value, 10) } } });
   const link = `${location.origin}/?invite=${r.token}`;
@@ -13794,7 +14055,7 @@ function focusDrawer(i) {
   applyFocus(rows[S.drawerIdx]);
 }
 function ctlButtons() {
-  return ['chGuide', 'back10', 'playPause', 'fwd30', 'nextEpBtn', 'ccBtn', 'audBtn', 'srndBtn', 'qualBtn', 'muteBtn', 'fsBtn']
+  return ['chGuide', 'back10', 'playPause', 'fwd30', 'nextEpBtn', 'statsBtn', 'ccBtn', 'audBtn', 'srndBtn', 'qualBtn', 'muteBtn', 'fsBtn']
     .map((id) => $(id)).filter((b) => b && !b.disabled && !b.classList.contains('disabled') && b.style.display !== 'none' && b.offsetParent !== null);
 }
 function focusSeek() {

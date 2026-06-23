@@ -17,13 +17,14 @@ canonical reference.
 - Server: Node 24 LTS, stdlib runtime, no runtime npm dependencies in `server/`.
 - UI: `web/index.html`, one web app with TV D-pad navigation and browser support.
 - Android TV: Java WebView shell with native Media3/ExoPlayer for video and Live TV.
-- Data: atomic JSON store in `TRIBOON_DATA` plus encrypted settings through
-  `server/auth.js` `SecureSettings`.
+- Data: atomic JSON store in `TRIBOON_DATA`, encrypted settings through
+  `server/auth.js` `SecureSettings`, and a local-media-only SQLite catalog
+  (`library.sqlite`) for large attached folders.
 - Playback order: source-fit, direct play, remux, transcode.
 - Security: deny-by-default route table in `server/index.js`; every endpoint must
   declare `public`, `user`, `admin`, or `stream` auth and be covered by tests.
 - Current verification baseline after the release-audit hardening pass: full
-  `npm.cmd test` covers 186 tests; focused IPTV, security, Android native
+  `npm.cmd test` covers 201 tests; focused IPTV, security, Android native
   player, Music, and NNTP priority tests cover the current source model, route
   table, device bridge, process queue, and capacity scheduling.
 
@@ -49,6 +50,7 @@ flowchart LR
   end
 
   Store["Atomic JSON store\nsettings encrypted at rest"]
+  LocalDb["Local media SQLite catalog\nlibrary.sqlite"]
   Providers["Usenet providers\nNewznab indexers\nTMDB/Trakt/Wyzie\nM3U/Xtream/XMLTV"]
 
   Web --> Routes
@@ -66,6 +68,7 @@ flowchart LR
   Catalog --> Store
   Pipeline --> Store
   IPTV --> Store
+  Routes --> LocalDb
   Stream --> Providers
   Catalog --> Providers
   Subs --> Providers
@@ -77,17 +80,17 @@ flowchart LR
 | Area | Owner files | Notes |
 | --- | --- | --- |
 | Auth and encrypted settings | `server/auth.js`, `server/index.js` | Users, invites, Quick Connect, HKDF-separated HMAC session/stream tokens, session epochs, AES-256-GCM settings. |
-| Persistence | `server/store.js` | Atomic JSON buckets under the data directory; no SQLite dependency. |
+| Persistence | `server/store.js`, `server/library-db.js` | JSON remains the app state store. `library.sqlite` indexes scanned local-media items only, so 80k+ attached files can page and look up without loading every item into the UI. |
 | Metadata | `server/tmdb.js`, `server/trakt.js`, `server/index.js` | TMDB proxy/cache, encrypted Trakt link tokens, Trakt sync/outbox, profile watch state. |
 | Search and source ranking | `server/newznab.js`, `server/scoring.js`, `server/pipeline.js` | Title-safe matching, quality caps at source selection, health-aware ranking. |
 | Streaming engine | `server/nzb.js`, `server/nntp.js`, `server/vfs.js`, `server/rar.js`, `server/zip.js`, `server/archive.js`, `docs-streaming-performance.md` | Clean-room NZB mount, article reads, RAR/ZIP extent maps, Range streaming, provider capacity, priority lanes, adaptive read-ahead. |
 | Playback decision | `server/transcode.js`, `server/index.js`, `web/index.html`, `android/.../MainActivity.java` | Source-fit, direct, remux, transcode; Android native caps feed server policy. |
 | Subtitles | `server/opensubs.js`, `server/index.js`, `web/index.html`, `MainActivity.java` | Wyzie search/download, release/file hints, WebVTT, web/native display timelines. |
-| Local libraries | `server/index.js`, `web/index.html` | Folder scan, bounded library pages, local playback, local artwork. |
+| Local libraries | `server/index.js`, `server/library-db.js`, `web/index.html` | Folder scan, SQLite-backed bounded pages/lookups, local playback, local artwork. |
 | Live TV | `server/index.js`, `web/index.html`, `MainActivity.java` | Source-scoped shared M3U/Xtream/XMLTV, web remux path, Android native Exo path, and Android device-local personal IPTV. |
 | Music Home | `server/ytmusic.js`, `server/index.js`, `web/index.html` | YouTube Music search/home/charts via bounded `yt-dlp` queue, tokenized audio proxy, web mini-player, and no ExoPlayer handoff for audio yet. |
 | Continue Watching | `docs-continue-watching.md`, `server/index.js`, `web/index.html` | Canonical movie/show identity, resume state, quality carry-forward, next-up, and D-pad focus after row actions. |
-| Android shell | `android/app/src/main/java/app/triboon/tv/MainActivity.java` | WebView bridge, D-pad/back handling, native video/Live TV, PiP guide recovery. |
+| Android shell | `android/app/src/main/java/app/triboon/tv/MainActivity.java` | WebView bridge, D-pad/back handling, native video/Live TV, PiP guide recovery, APK update links. |
 
 ## Press Play Pipeline
 
@@ -254,7 +257,10 @@ Related verification:
 
 ## Data Model
 
-The current implementation uses JSON buckets through `server/store.js`.
+The app state store remains JSON buckets through `server/store.js`. Large
+attached local-library scans are the one exception: scanned media items live in
+`TRIBOON_DATA/library.sqlite` via `server/library-db.js`, while the library
+definitions stay in JSON.
 
 | Store bucket | Owner | Purpose |
 | --- | --- | --- |
@@ -263,7 +269,9 @@ The current implementation uses JSON buckets through `server/store.js`.
 | `users`, `invites` | `server/auth.js`, `server/index.js` | Accounts, roles, profile policy, session epoch, invites. |
 | `watch`, `watchlist` | `server/index.js`, `server/trakt.js` | Per-profile progress, watched state, watchlist, Trakt-imported fallback rows. |
 | `trakt`, `traktOutbox` | `server/trakt.js` | Legacy migration/sync marker bucket and queued scrobble/export operations. OAuth tokens must live encrypted inside `settings.traktTokens`, not plaintext `trakt.json`. |
-| `libraries`, `libitems` | `server/index.js` | Attached local folders and scanned item snapshots. |
+| `libraries` | `server/index.js` | Attached local folders, owner visibility, kind, path, and display metadata. |
+| `library.sqlite` | `server/library-db.js` | Scanned local media catalog: item payloads, TMDB ids, episode keys, genres, sort/page indexes, and local lookup support. |
+| `libitems` | `server/index.js` | Legacy scanned-item compatibility bucket. New successful scans delete the JSON copy when SQLite is available. |
 | `verdicts`, `ixusage`, `tmdb-cache` | `server/store.js`, `server/index.js`, `server/tmdb.js` | Health verdicts, per-indexer daily usage, metadata cache. |
 | `iptvcaches`, `epgcaches`, `xtreamepgcaches` | `server/index.js` | Source-scoped channel, XMLTV, and Xtream guide caches. |
 | `iptvfavs`, `iptvgroups` | `server/index.js` | Per-user Live TV favorites and hidden groups. |
@@ -284,6 +292,14 @@ When changing persistence, update:
   and player overlay behavior.
 - Must show a usable shell in under 1 second on Android TV-class devices.
 - Must lazy-load large local libraries and catalogs after first focus.
+- Uses `/api/libraries/local-lookup` to resolve playable local copies on demand
+  instead of loading every attached-library item on startup.
+- Sends `/api/activity` heartbeats while a user is watching. Admin Settings
+  shows the in-memory "Now Watching" view; this is not persisted and should be
+  treated as presence, not history.
+- The player stats panel is a basic support/debug view: player path, quality,
+  source/file label, size, position, buffer, video/audio format, dropped frames
+  where available, and bandwidth estimate where available.
 - Must keep Live TV categories in their own lane: Up/Down stays in categories,
   Right enters channels.
 
@@ -294,6 +310,8 @@ When changing persistence, update:
   seeks, seeded bandwidth, bounded/back buffers, live target-offset tuning,
   conservative-device HLS caps, and audio offload where Android supports it.
 - Sends native capability claims to the web UI/server before source selection.
+- Sends native playback stats back to the web UI during ExoPlayer playback and
+  exposes the stable GitHub APK aliases through a guarded update-link bridge.
 - Shows a native setup/compatibility screen before loading the WebView, refuses
   very old WebView providers, hardware-layers the WebView, defers APK-update
   cache clearing until after first paint, and trims caches on Android low-memory
@@ -385,7 +403,7 @@ Run the narrow test for the area touched, then the broader suite before a releas
   and
   `https://github.com/d1same/triboon/releases/latest/download/triboon-mobile.apk`;
   Android update acceptance still depends on package id, signing key, and a
-  higher versionCode.
+  higher versionCode. Keep this aligned with `docs-app-updates.md`.
 - Documentation: scan for stale phase counts, old stack names, old cache
   ownership statements, and old fixed-connection/read-ahead tuning before
   calling the work done.

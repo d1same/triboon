@@ -137,11 +137,11 @@ test('security: deny-by-default — every route declares auth; unknown routes 40
   const probes = [
     ['GET', '/api/me'], ['GET', '/api/status'], ['GET', '/api/search?q=x'],
     ['POST', '/api/play'], ['POST', '/api/advance/abc'], ['GET', '/api/tmdb/trending/all/week'],
-    ['GET', '/api/watch'], ['GET', '/api/watch/next'], ['POST', '/api/watch'], ['GET', '/api/mounts'],
+    ['GET', '/api/watch'], ['GET', '/api/watch/next'], ['POST', '/api/watch'], ['GET', '/api/activity'], ['POST', '/api/activity'], ['GET', '/api/mounts'],
     ['GET', '/api/health/abc'], ['POST', '/api/mount'], ['GET', '/api/settings'],
     ['GET', '/api/me/iptv/sources'], ['POST', '/api/me/iptv/sources'], ['PATCH', '/api/me/iptv/sources/abc'], ['DELETE', '/api/me/iptv/sources/abc'],
     ['POST', '/api/settings'], ['POST', '/api/streaming/recommend'], ['POST', '/api/invites'], ['GET', '/api/invites'],
-    ['GET', '/api/users'], ['GET', '/api/stream/abc'], ['GET', '/api/remux/abc'],
+    ['GET', '/api/users'], ['GET', '/api/libraries/local-lookup?key=tmdb:movie:1'], ['GET', '/api/stream/abc'], ['GET', '/api/remux/abc'],
     ['GET', '/api/iptv/status'], ['POST', '/api/iptv/refresh'], ['GET', '/api/iptv/sources'], ['POST', '/api/iptv/sources'], ['PATCH', '/api/iptv/sources/abc'], ['DELETE', '/api/iptv/sources/abc'],
     ['POST', '/api/quickconnect/123456/approve'], ['GET', '/api/music/home'], ['GET', '/api/music/charts'], ['GET', '/api/music/search?q=x'],
   ];
@@ -175,6 +175,40 @@ test('security: role separation — user tokens cannot reach admin routes', asyn
   // …but user routes work.
   assert.strictEqual((await httpJson(srv.port, 'GET', '/api/status', null, user)).status, 200);
   assert.strictEqual((await httpJson(srv.port, 'GET', '/api/libraries', null, user)).status, 200, 'users can READ libraries');
+});
+
+test('activity: users heartbeat playback and only admins see now-watching rows', async () => {
+  const login = await httpJson(srv.port, 'POST', '/api/login', { name: 'fam', password: 'fam-pass' });
+  assert.strictEqual(login.status, 200);
+  const user = login.json.token;
+  const sessionId = 'test-session-activity';
+  const posted = await httpJson(srv.port, 'POST', '/api/activity', {
+    sessionId,
+    state: 'watching',
+    title: 'The Test Movie',
+    subline: '4K Direct Play',
+    type: 'movie',
+    player: 'exo',
+    position: 600,
+    duration: 6000,
+    size: 42_000_000_000,
+  }, user);
+  assert.strictEqual(posted.status, 200);
+
+  assert.strictEqual((await httpJson(srv.port, 'GET', '/api/activity', null, user)).status, 403,
+    'plain users cannot see other users watching');
+  const visible = await httpJson(srv.port, 'GET', '/api/activity', null, admin);
+  assert.strictEqual(visible.status, 200);
+  const row = visible.json.sessions.find((s) => s.sessionId === sessionId);
+  assert.ok(row, 'admin sees the active session');
+  assert.strictEqual(row.userName, 'fam');
+  assert.strictEqual(row.title, 'The Test Movie');
+  assert.strictEqual(row.percent, 10);
+
+  const stopped = await httpJson(srv.port, 'POST', '/api/activity', { sessionId, state: 'stopped' }, user);
+  assert.strictEqual(stopped.status, 200);
+  const after = await httpJson(srv.port, 'GET', '/api/activity', null, admin);
+  assert.ok(!after.json.sessions.some((s) => s.sessionId === sessionId), 'stop heartbeat removes the row');
 });
 
 test('watchlist: per-user toggle add/remove, isolation', async () => {

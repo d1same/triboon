@@ -1043,6 +1043,146 @@ test('iptv: Xtream browser remux fallback ingests TS before HLS', async () => {
   }
 });
 
+test('iptv: browser remux safely resolves provider redirects before retrying ffmpeg', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-remux-redirect-'));
+  const upstreamHits = [];
+  const upstream = http.createServer((req, res) => {
+    upstreamHits.push(req.url);
+    const u = new URL(req.url, 'http://x');
+    const action = u.searchParams.get('action');
+    if (action) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      if (action === 'get_live_categories') return res.end(JSON.stringify([{ category_id: '1', category_name: 'News' }]));
+      if (action === 'get_live_streams') {
+        return res.end(JSON.stringify([{ stream_id: 777, name: 'Redirect News', category_id: '1' }]));
+      }
+      return res.end(JSON.stringify({ epg_listings: [] }));
+    }
+    if (u.pathname === '/edge/777.ts') {
+      res.writeHead(200, { 'content-type': 'video/mp2t' });
+      return res.end('edge stream');
+    }
+    if (u.pathname.endsWith('/777.ts')) {
+      res.writeHead(302, { location: '/edge/777.ts' });
+      return res.end();
+    }
+    res.writeHead(200, { 'content-type': 'video/mp2t' });
+    res.end('edge stream');
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const host = `http://127.0.0.1:${upstream.address().port}`;
+  const transcode = require('../server/transcode');
+  const originalDetect = transcode.detectFfmpeg;
+  const originalSpawn = transcode.spawnLiveRemux;
+  const calls = [];
+  transcode.detectFfmpeg = () => ({ path: 'ffmpeg' });
+  transcode.spawnLiveRemux = (url, opts = {}) => {
+    calls.push({ url, hlsFriendly: !!opts.hlsFriendly, headers: opts.headers || null });
+    const child = new EventEmitter();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => child.emit('close', 1);
+    process.nextTick(() => {
+      if (calls.length === 1) {
+        child.stderr.write(Buffer.from('Error opening input: I/O error'));
+        child.stderr.end();
+        child.emit('close', 1);
+        return;
+      }
+      child.stdout.write(Buffer.from('fmp4'));
+      child.stdout.end();
+      child.emit('close', 0);
+    });
+    return child;
+  };
+
+  let srv;
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/settings',
+      { iptvMode: 'xtream', xtHost: host, xtUser: 'xtuser', xtPass: 'xtpass', epgUrl: null }, admin);
+    const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    const out = await httpRaw(srv.port, ch.json.channels[0].streamUrl);
+    assert.strictEqual(out.status, 200);
+    assert.strictEqual(out.body.toString('utf8'), 'fmp4');
+    assert.strictEqual(calls.length, 2, 'ffmpeg should retry once after the server resolves the safe provider redirect');
+    assert.match(calls[0].url, /\/live\/xtuser\/xtpass\/777\.ts$/);
+    assert.match(calls[1].url, /\/edge\/777\.ts$/);
+    assert.ok(upstreamHits.some((url) => /\/live\/xtuser\/xtpass\/777\.ts$/.test(url)),
+      'server should probe the original provider URL to read the redirect target safely');
+  } finally {
+    if (srv) await srv.shutdown();
+    transcode.detectFfmpeg = originalDetect;
+    transcode.spawnLiveRemux = originalSpawn;
+    upstream.close();
+  }
+});
+
+test('iptv: redirected HLS remux keeps HLS-friendly ffmpeg flags', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-hls-remux-redirect-flags-'));
+  const upstream = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (u.pathname === '/playlist.m3u') {
+      const self = `http://127.0.0.1:${upstream.address().port}`;
+      res.writeHead(200, { 'content-type': 'audio/x-mpegurl' });
+      return res.end(`#EXTM3U\n#EXTINF:-1 group-title="News",Redirect HLS\n${self}/hls/start.m3u8\n`);
+    }
+    if (u.pathname === '/hls/start.m3u8') {
+      res.writeHead(302, { location: '/edge/play' });
+      return res.end();
+    }
+    res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' });
+    res.end('#EXTM3U\n#EXT-X-ENDLIST\n');
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const host = `http://127.0.0.1:${upstream.address().port}`;
+  const transcode = require('../server/transcode');
+  const originalDetect = transcode.detectFfmpeg;
+  const originalSpawn = transcode.spawnLiveRemux;
+  const calls = [];
+  transcode.detectFfmpeg = () => ({ path: 'ffmpeg' });
+  transcode.spawnLiveRemux = (url, opts = {}) => {
+    calls.push({ url, hlsFriendly: !!opts.hlsFriendly });
+    const child = new EventEmitter();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    process.nextTick(() => {
+      if (calls.length === 1) {
+        child.stderr.write(Buffer.from('Error opening input: I/O error'));
+        child.stderr.end();
+        child.emit('close', 1);
+        return;
+      }
+      child.stdout.write(Buffer.from('fmp4'));
+      child.stdout.end();
+      child.emit('close', 0);
+    });
+    child.kill = () => child.emit('close', 1);
+    return child;
+  };
+
+  let srv;
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/settings',
+      { iptvMode: 'm3u', iptvUrl: `${host}/playlist.m3u`, epgUrl: null }, admin);
+    const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    const out = await httpRaw(srv.port, ch.json.channels[0].streamUrl);
+    assert.strictEqual(out.status, 200);
+    assert.match(calls[0].url, /\/hls\/start\.m3u8$/);
+    assert.strictEqual(calls[0].hlsFriendly, true);
+    assert.match(calls[1].url, /\/edge\/play$/);
+    assert.strictEqual(calls[1].hlsFriendly, true, 'redirected extensionless HLS URLs still need the HLS demuxer flags');
+  } finally {
+    if (srv) await srv.shutdown();
+    transcode.detectFfmpeg = originalDetect;
+    transcode.spawnLiveRemux = originalSpawn;
+    upstream.close();
+  }
+});
+
 test('iptv: stale Xtream stream ids refresh and retry native playback', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-stale-stream-id-'));
   let liveStreams = [{ stream_id: 100, name: '|US| NEWS PLUS HD', category_id: '1', epg_channel_id: 'news.plus' }];

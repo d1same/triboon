@@ -88,6 +88,9 @@ transcode.
 
 ## Android APKs
 
+Triboon keeps stable APK URLs for in-app updates and Downloader shortcuts. The
+full naming contract lives in [`docs-app-updates.md`](docs-app-updates.md).
+
 The stable Android TV download is always:
 
 ```text

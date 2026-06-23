@@ -252,7 +252,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'player episode strip and Up Next should continue the same 4K/1080p class');
   assert.match(ui, /async function saveWatch\(final\) \{[\s\S]+const pos = currentTime\(\);[\s\S]+if \(!final && Math\.abs\(pos - p\.lastSaved\) < 5\) return;[\s\S]+key: p\.item\.key, position: Math\.floor\(pos\), duration: Math\.floor\(d \|\| 0\),[\s\S]+profile: S\.profile \? S\.profile\.id : undefined,[\s\S]+upsertWatchCache\(\{[\s\S]+position: payload\.position[\s\S]+api\('\/api\/watch', \{ method: 'POST', body: payload \}\)/,
     'watch progress should save profile-scoped position immediately into the local cache and server');
-  assert.match(ui, /async function closePlayer\(opts = \{\}\) \{[\s\S]+const finalWatch = saveWatch\(true\);[\s\S]+if \(\$\(\'detail\'\)\.classList\.contains\(\'open\'\)\) \{[\s\S]+await finalWatch; await loadWatchState\(true\);[\s\S]+if \(S\.detailItem\) syncDetailButtons\(S\.detailItem\);/,
+  assert.match(ui, /async function closePlayer\(opts = \{\}\) \{[\s\S]+const finalWatch = saveWatch\(true\);[\s\S]+const finalActivity = stopActivityHeartbeat\(\);[\s\S]+if \(\$\(\'detail\'\)\.classList\.contains\(\'open\'\)\) \{[\s\S]+await finalWatch; await finalActivity; await loadWatchState\(true\);[\s\S]+if \(S\.detailItem\) syncDetailButtons\(S\.detailItem\);/,
     'returning from player to details should flush the final watch position and refresh the visible Resume/Start Over buttons before another source is chosen');
   assert.match(ui, /function syncDetailButtons\(it\) \{[\s\S]+const resume = resumePositionForItem\(it\);[\s\S]+\$\(\'dStartOver\'\)\.style\.display = resume \? '' : 'none';[\s\S]+updateDetailPlayLabel\(resume \? \{ label: 'Resume', target: \{ \.\.\.it, resume \} \} : \{ label: 'Play', target: it \}\);/,
     'detail button sync should recompute movie Resume/Play from the latest watch map');
@@ -453,8 +453,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Sources drawer searches should send external identifiers instead of only a title string');
   assert.match(ui, /const ids = sourceIdentityFor\(it\);[\s\S]+const body = \{ q: queryFor\(it\)[\s\S]+if \(ids\.imdbid\) body\.imdbid = ids\.imdbid;[\s\S]+if \(ids\.tvdbid\) body\.tvdbid = ids\.tvdbid;[\s\S]+if \(ids\.season != null\) body\.season = ids\.season;[\s\S]+if \(ids\.ep != null\) body\.ep = ids\.ep;/,
     'Play should carry the same external identity as the Sources drawer');
-  assert.match(ui, /if \(it\._lib && it\._lib\.path\) \{[\s\S]+const r = await libItems\(it\._lib\);[\s\S]+mergeLocalItems\(it\._lib, r\.items \|\| \[\]\);[\s\S]+\}[\s\S]+checkAvailability\(it\);/,
-    'TV details opened from an added library should hydrate local episode ownership before availability/play targets are calculated');
+  assert.match(ui, /if \(it\._lib && it\._lib\.path\) \{[\s\S]+const r = it\._kind === 'show'[\s\S]+await loadAllLocalShowEpisodes\(it\._lib, it\._idx\)[\s\S]+mergeLocalItems\(it\._lib, r\.items \|\| \[\]\);[\s\S]+\}[\s\S]+checkAvailability\(it\);/,
+    'TV details opened from an added library should hydrate all local episode ownership before availability/play targets are calculated');
   assert.match(ui, /async function checkAvailability\(it\) \{[\s\S]+const hasLocal = localTitleHasPlayback\(it\);[\s\S]+if \(hasLocal && localPlaybackRankForItem\(it\) === 4\) \{[\s\S]+\$\(\'qToggle\'\)\.style\.display = 'none';[\s\S]+api\('\/api\/search\?' \+ sourceSearchQuery\(it, \{ includeQuality: false \}\)\)[\s\S]+has4k && \(hasLower \|\| \(hasLocal && localRank !== 4\)\)[\s\S]+if \(hasLocal\) \{[\s\S]+\$\(\'dSources\'\)\.style\.display = offer \? '' : 'none';[\s\S]+return;/,
     'local-owned detail pages should still discover online 4K when the local file is lower quality, without showing unavailable');
   assert.match(ui, /if \(it\._showOpen !== undefined\)[\s\S]+openLocalShowDetail\(\{ \.\.\.it, _lib: lib \}\)/,
@@ -585,6 +585,7 @@ test('Android native player: direct source and native chrome stay out of the web
   const rewindIcon = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'drawable', 'ic_player_rewind.xml'), 'utf8');
   const forwardIcon = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'drawable', 'ic_player_forward.xml'), 'utf8');
   const nextIcon = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'drawable', 'ic_player_next.xml'), 'utf8');
+  const infoIcon = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'drawable', 'ic_player_info.xml'), 'utf8');
   const androidSmoke = fs.readFileSync(path.join(__dirname, '..', 'bench', 'android-tv-smoke.ps1'), 'utf8');
   const openGuideMethod = android.slice(
     android.indexOf('private void openNativeLiveGuide()'),
@@ -616,6 +617,25 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.ok(ui.includes('body.androidApp .gate{place-items:center;padding:18px}')
     && ui.includes('body.androidApp #gateArtCaption{display:none}'),
     'Android phone auth gates should use a phone-app layout without TV auth caption chrome');
+  assert.ok(ui.includes('id="statsBtn"') && ui.includes("return ['chGuide', 'back10', 'playPause', 'fwd30', 'nextEpBtn', 'statsBtn'")
+    && ui.includes('function collectPlayerStats()') && ui.includes('window.__tvNativeVideoStats'),
+    'web player stats must be a D-pad reachable control and accept native ExoPlayer stats');
+  assert.ok(ui.includes('data-stab="activity"') && ui.includes("api('/api/activity')") && ui.includes('id="activityRefresh"'),
+    'admin Settings should expose a focusable Now Watching panel backed by the activity API');
+  assert.ok(ui.includes('id="apkTvUpdate"') && ui.includes('id="apkMobileUpdate"')
+    && ui.includes('releases/latest/download/triboon-tv.apk')
+    && ui.includes('releases/latest/download/triboon-mobile.apk'),
+    'Preferences should expose stable Android TV and mobile update links');
+  assert.match(android, /public String appVersion\(\)[\s\S]+BuildConfig\.VERSION_NAME[\s\S]+public void openAppUpdate\(String url\)[\s\S]+openExternalUrl\(url\)/,
+    'Android bridge should expose app version and a guarded app-update opener');
+  assert.match(android, /allowedAppUpdateUrl\(Uri uri\)[\s\S]+triboon-tv\.apk[\s\S]+triboon-mobile\.apk[\s\S]+openExternalUrl\(String rawUrl\)/,
+    'Android app-update bridge should only open the stable Triboon GitHub APK aliases');
+  assert.match(android, /nativeStatsBtn = nativeButton\(R\.drawable\.ic_player_info, "Playback stats", false\)[\s\S]+showNativeStatsSheet\(\)[\s\S]+nativeNextBtn, nativeStatsBtn, nativeCcBtn/,
+    'native stats button should be in the ExoPlayer D-pad control row before CC/audio/quality');
+  assert.match(android, /private String nativeStatsJson\(\)[\s\S]+nativeVideoStatsLabel[\s\S]+nativeAudioStatsLabel[\s\S]+nativeBandwidthEstimate/,
+    'native stats should report video, audio, and bandwidth estimates to the web player stats panel');
+  assert.match(infoIcon, /M12,3 A9,9[\s\S]+M12,11 V16/,
+    'native playback stats icon should be present as a vector asset');
   for (const id of ['P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8', 'P9', 'P10', 'P11', 'P12']) {
     const row = playerMap.match(new RegExp(`\\| ${id} \\|[^\\n]+`));
     assert.ok(row, `player regression map should include ${id}`);
@@ -1201,7 +1221,11 @@ test('Android native player: direct source and native chrome stay out of the web
     && server.includes('headers: pin.hostHeader ? { Host: pin.hostHeader } : undefined'),
     'server Live TV remux fallback should try Xtream TS before HLS and preserve HTTPS provider SNI');
   assert.match(transcode, /function ffmpegHeaderLines\(headers = \{\}\)[\s\S]+\`\$\{k\}: \$\{v\}\\r\\n\`[\s\S]+function spawnLiveRemux\(url, \{ hlsFriendly = true, headers = null \} = \{\}\)[\s\S]+'-max_redirects', '0'[\s\S]+\.\.\.\(headerLines \? \['-headers', headerLines\] : \[\]\)[\s\S]+'-i', url/,
-    'ffmpeg Live TV remux should receive sanitized Host headers and refuse upstream redirects after URL pinning');
+    'ffmpeg Live TV remux should receive sanitized Host headers and keep its own redirect following disabled after URL pinning');
+  assert.match(server, /function resolveIptvRemuxRedirect\(rawTarget, maxHops = 5\) \{[\s\S]+validateAndPinIptvUrl\(current, 'Live stream URL'\)[\s\S]+new URL\(res\.headers\.location, u\)\.href[\s\S]+throw new Error\('too many live stream redirects'\)/,
+    'server Live TV remux should resolve provider redirects itself so every hop is validated before ffmpeg retries');
+  assert.match(server, /const redirectHls = hlsFriendly \|\| iptvRemuxTargetLikelyHls\(redirected\);/,
+    'redirected HLS Live TV URLs should keep HLS-friendly ffmpeg flags even if the final provider URL is extensionless');
   assert.match(ui, /addLiveFallback\(it\._nativeFallbackUrl, it\._nativeFallbackMime \|\| ''\);[\s\S]+addLiveFallback\(it\._streamUrl, 'video\/mp4'\);[\s\S]+fallbacks: liveFallbacks,/,
     'Android Live TV should try provider candidates first, then fall back to the server remux path on weaker devices');
   assert.match(ui, /_nativeFallbackUrl: ch\.nativeFallbackUrl[\s\S]+_nativeFallbackMime: ch\.nativeFallbackMime \|\| ''/,
@@ -1270,9 +1294,9 @@ test('Android native player: direct source and native chrome stay out of the web
     'native player OK should activate the focused control instead of relying on platform focus guessing');
   assert.match(android, /controls\.setGravity\(android\.view\.Gravity\.CENTER_VERTICAL\)[\s\S]+centerControls\.setGravity\(android\.view\.Gravity\.CENTER\)[\s\S]+rightControls\.setGravity\(android\.view\.Gravity\.END \| android\.view\.Gravity\.CENTER_VERTICAL\)/,
     'native player controls should keep playback centered with secondary controls on the right');
-  assert.match(android, /leftControls\.addView\(nativeGuideBtn\);[\s\S]+centerControls\.addView\(nativeRewBtn\);[\s\S]+centerControls\.addView\(nativePlayBtn\);[\s\S]+centerControls\.addView\(nativeFwdBtn\);[\s\S]+centerControls\.addView\(nativeNextBtn\);[\s\S]+rightControls\.addView\(nativeCcBtn\);[\s\S]+rightControls\.addView\(nativeAudioBtn\);[\s\S]+rightControls\.addView\(nativeQualityBtn\);/,
-    'native player should keep Guide left, playback centered, and CC/audio/HD right');
-  assert.match(android, /return new ImageButton\[\]\{\s+nativeGuideBtn, nativeRewBtn, nativePlayBtn, nativeFwdBtn,\s+nativeNextBtn, nativeCcBtn, nativeAudioBtn, nativeQualityBtn\s+\};/,
+  assert.match(android, /leftControls\.addView\(nativeGuideBtn\);[\s\S]+centerControls\.addView\(nativeRewBtn\);[\s\S]+centerControls\.addView\(nativePlayBtn\);[\s\S]+centerControls\.addView\(nativeFwdBtn\);[\s\S]+centerControls\.addView\(nativeNextBtn\);[\s\S]+rightControls\.addView\(nativeStatsBtn\);[\s\S]+rightControls\.addView\(nativeCcBtn\);[\s\S]+rightControls\.addView\(nativeAudioBtn\);[\s\S]+rightControls\.addView\(nativeQualityBtn\);/,
+    'native player should keep Guide left, playback centered, and stats/CC/audio/HD right');
+  assert.match(android, /return new ImageButton\[\]\{\s+nativeGuideBtn, nativeRewBtn, nativePlayBtn, nativeFwdBtn,\s+nativeNextBtn, nativeStatsBtn, nativeCcBtn, nativeAudioBtn, nativeQualityBtn\s+\};/,
     'native player D-pad order should match the visible control grouping');
   assert.match(ui, /\.cbtn\.big\{width:58px;height:58px;background:rgba\(5,3,9,\.4\);color:var\(--text\)\}/,
     'web play button should be neutral until focused or hovered');
@@ -1561,7 +1585,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'native online subtitle choices should switch through the live subtitle overlay');
   assert.match(android, /private void applyNativeTrackChoice\(int trackType, NativeTrackChoice choice\) \{[\s\S]+nativePlayer\.setTrackSelectionParameters\(b\.build\(\)\);[\s\S]+showNativeChrome\(false\);[\s\S]+\}/,
     'native CC/audio choices should update quietly without a confirmation toast');
-  assert.doesNotMatch(android, /Subtitles: |Audio: |Toast\.makeText\(this, label/,
+  assert.doesNotMatch(android, /Toast\.makeText\(this,\s*"Subtitles:|Toast\.makeText\(this,\s*"Audio:|Toast\.makeText\(this,\s*label/,
     'native player controls should not show success popups over playback');
   assert.match(android, /private boolean nativeVodSeekable\(\) \{[\s\S]+if \(nativePlayer == null \|\| "live"\.equals\(nativeMode\)\) return false;/,
     'live streams should not expose movie-style seeking behavior');
