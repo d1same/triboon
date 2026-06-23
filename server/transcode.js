@@ -187,8 +187,8 @@ function spawnTranscode(streamUrl, { startSeconds = 0, audioTrack = 0, height = 
 }
 
 // Browser-decodable audio codecs (Chromium/WebView/Safari common ground). Everything else
-// (ac3/eac3/dts/truehd/pcm…) stream-copied into fMP4 either hard-errors the <video> — the
-// "codec not supported" toast on every DDP movie — or plays silent video on Android WebView.
+// (ac3/eac3/dts/truehd/pcm...) stream-copied into fMP4 either hard-errors the <video> - the
+// "codec not supported" toast on every DDP movie - or plays silent video on Android WebView.
 const BROWSER_SAFE_AUDIO = new Set(['aac', 'mp3', 'opus', 'vorbis', 'flac']);
 function audioNeedsTranscode(codec) { return !BROWSER_SAFE_AUDIO.has(String(codec || '').toLowerCase()); }
 
@@ -211,14 +211,15 @@ function audioDescriptor(codecOrTrack) {
 function audioCopyOk(codec, caps = {}) {
   const c = audioDescriptor(codec);
   const primary = c.split(/\s+/)[0] || c;
+  const passthrough = !!(caps.native && caps.passthrough);
   if (!c) return !!(caps.ac3 && caps.eac3);
   if (BROWSER_SAFE_AUDIO.has(primary)) return true;
-  if (/\b(true[ ._-]?hd|mlp)\b/.test(c)) return false;
-  if (/\b(dts[ ._-]?hd|dts[ ._-]?x|dtsma|dts[ ._-]?ma)\b/.test(c)) return false;
+  if (/\b(true[ ._-]?hd|mlp)\b/.test(c)) return passthrough && !!caps.truehd;
+  if (/\b(dts[ ._-]?hd|dts[ ._-]?x|dtsma|dts[ ._-]?ma)\b/.test(c)) return passthrough && !!caps.dtsHd;
   if (primary === 'ac3') return !!caps.ac3;
   if (primary === 'eac3' || primary === 'eac3-joc' || c.includes('e-ac-3')) return !!(caps.eac3 || caps.eac3Joc);
   if (primary.startsWith('dts')) return !!caps.dts;
-  return false; // truehd/pcm/mlp: no <video>-tag path on any client
+  return false; // pcm/unknown: no safe browser path; native should direct-play the source instead.
 }
 
 // Spawn an ffmpeg remux reading the mount over our own HTTP (so ffmpeg can seek via Range),
@@ -265,9 +266,10 @@ function spawnRemux(streamUrl, { startSeconds = 0, audioTrack = 0, transcodeAudi
 // Differs from file remux on three points learned from real providers:
 //  - a browser-like User-Agent (providers block ffmpeg's default "Lavf"),
 //  - reconnect flags (live HTTP sources hiccup),
-//  - audio is RE-ENCODED to AAC stereo: TS audio is ADTS-framed (invalid in MP4 without a
-//    bitstream filter) and often AC-3/MP2 which browsers can't decode anyway. Video is
-//    stream-copied (H.264 in practice), so the CPU cost is trivial.
+//  - audio is RE-ENCODED to browser-safe AAC, but channel count is not forced to stereo.
+//    TS audio is ADTS-framed (invalid in MP4 without a bitstream filter) and often AC-3/MP2
+//    which browsers can't decode anyway. Video is stream-copied (H.264 in practice), so the
+//    CPU cost is trivial while 5.1-capable channels can stay 5.1.
 function ffmpegHeaderLines(headers = {}) {
   return Object.entries(headers || {})
     .filter(([k, v]) => /^[A-Za-z0-9-]+$/.test(String(k || ''))
@@ -298,7 +300,7 @@ function spawnLiveRemux(url, { hlsFriendly = true, headers = null } = {}) {
     '-i', url,
     '-map', '0:v:0?', '-map', '0:a:0?',
     '-c:v', 'copy',
-    '-c:a', 'aac', '-b:a', '160k', '-ac', '2',
+    '-c:a', 'aac', '-b:a', '384k',
     '-fflags', '+genpts',
     '-flush_packets', '1', '-muxdelay', '0', '-muxpreload', '0',
     '-frag_duration', '250000',

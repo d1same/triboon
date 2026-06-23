@@ -12,7 +12,7 @@ const path = require('path');
 const http = require('http');
 const zlib = require('zlib');
 const { spawnSync } = require('child_process');
-const { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnTranscode, spawnSubtitleExtract } = require('../server/transcode');
+const { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnLiveRemux, spawnTranscode, spawnSubtitleExtract } = require('../server/transcode');
 
 const HAS_FFMPEG = !!detectFfmpeg();
 const HAS_FFPROBE = !!detectFfprobe();
@@ -2119,9 +2119,11 @@ test('client caps: hardware that decodes the codec gets a bit-exact copy (true d
   // Unknown codec (no probe yet): trust a broad AC3-family claim, else convert.
   assert.strictEqual(audioCopyOk('', tv), true);
   assert.strictEqual(audioCopyOk('', { ac3: true }), false);
-  // TrueHD never copies — no <video>-tag path on any client.
-  assert.strictEqual(audioCopyOk('truehd', { native: true, passthrough: true, truehd: true }), false);
-  assert.strictEqual(audioCopyOk({ codec: 'dts', profile: 'DTS-HD MA' }, { native: true, passthrough: true, dts: true, dtsHd: true }), false);
+  // Lossless codecs copy only for native passthrough devices; plain browser/WebView stays AAC.
+  assert.strictEqual(audioCopyOk('truehd', { native: true, passthrough: true, truehd: true }), true);
+  assert.strictEqual(audioCopyOk('truehd', { truehd: true }), false);
+  assert.strictEqual(audioCopyOk({ codec: 'dts', profile: 'DTS-HD MA' }, { native: true, passthrough: true, dts: true, dtsHd: true }), true);
+  assert.strictEqual(audioCopyOk({ codec: 'dts', profile: 'DTS-HD MA' }, { dts: true, dtsHd: true }), false);
   // MKV direct play needs container AND audio hardware — Chromium claims matroska while
   // decoding no AC3 family, which used to mean silent video on "direct".
   assert.strictEqual(decidePlayback('Movie.mkv', { mkv: true }).method, detectFfmpeg() ? 'remux' : 'direct');
@@ -2133,6 +2135,37 @@ test('client caps: hardware that decodes the codec gets a bit-exact copy (true d
   assert.strictEqual(decidePlayback('Movie.2024.2160p.BluRay.DTS-HD.MA.mkv',
     { native: true, mkv: true, ac3: true, eac3: true, passthrough: true, dtsHd: true }).method, 'direct');
   assert.strictEqual(decidePlayback('Movie.1992.1080p.BluRay.X264-GROUP', {}).method, detectFfmpeg() ? 'remux' : 'direct');
+});
+
+test('live tv browser remux keeps AAC surround instead of forcing stereo', () => {
+  const transcode = fs.readFileSync(path.join(__dirname, '..', 'server', 'transcode.js'), 'utf8');
+  assert.match(transcode, /function spawnLiveRemux\(url, \{ hlsFriendly = true, headers = null \} = \{\}\)[\s\S]+'-c:a', 'aac', '-b:a', '384k'[\s\S]+'-fflags', '\+genpts'/,
+    'Live TV browser remux should encode browser-safe AAC without a hard stereo downmix');
+  assert.doesNotMatch(transcode, /function spawnLiveRemux[\s\S]+'-ac', '2'[\s\S]+\]\, \{ stdio/,
+    'Live TV browser remux should not force every channel to stereo');
+});
+
+test('live tv remux preserves 5.1 channel count as AAC when ffmpeg can encode it', { skip: !HAS_FFMPEG || !HAS_FFPROBE }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-live-51-'));
+  const src = path.join(dir, 'live.ts');
+  const gen = spawnSync(detectFfmpeg().path, [
+    '-y', '-hide_banner', '-loglevel', 'error',
+    '-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=12:duration=2',
+    '-f', 'lavfi', '-i', 'anullsrc=channel_layout=5.1:sample_rate=48000',
+    '-shortest', '-c:v', 'libx264', '-preset', 'ultrafast',
+    '-c:a', 'ac3', '-ac', '6', '-f', 'mpegts', src,
+  ], { timeout: 120000, windowsHide: true });
+  if (gen.status !== 0) return;
+  const { server, url } = await serveFile(src);
+  try {
+    const out = await collect(spawnLiveRemux(url, { hlsFriendly: false }));
+    assert.ok(out.length > 2000, 'live remux produced output');
+    const outFile = path.join(dir, 'live.mp4');
+    fs.writeFileSync(outFile, out);
+    const t = await probeTracks(outFile);
+    assert.strictEqual(t.audio[0].codec, 'aac', 'Live TV browser fallback still emits browser-safe AAC');
+    assert.strictEqual(t.audio[0].channels, 6, '5.1 Live TV audio is no longer hard-downmixed to stereo');
+  } finally { server.close(); }
 });
 
 test('remux: AC3 source with transcodeAudio → AAC audio, video still copied', { skip: !HAS_FFMPEG || !HAS_FFPROBE }, async () => {
