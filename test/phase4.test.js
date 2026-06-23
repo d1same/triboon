@@ -651,9 +651,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android phone playback rotation should be released when the native player closes');
   assert.ok(ui.includes('#heroBtns{width:100%;justify-content:center;gap:8px;flex-wrap:nowrap}')
     && ui.includes('#hero h1{font-size:clamp(24px,7.4vw,32px)')
-    && ui.includes('#dBtns{flex-wrap:nowrap;justify-content:flex-start;gap:5px;overflow-x:auto')
-    && ui.includes('body.mobileShell #dBtns{flex-wrap:nowrap;justify-content:flex-start;gap:5px;overflow-x:auto'),
-    'mobile hero should stay centered while detail actions start onscreen in one scrollable row');
+    && ui.includes('#dBtns{flex-wrap:wrap;justify-content:center;align-items:center;gap:6px;overflow:visible')
+    && ui.includes('#dBtns #dPlay{flex:1 1 132px;min-width:118px;max-width:176px}')
+    && ui.includes('#dBtns #dStartOver{flex:1 1 132px;min-width:126px;max-width:176px}')
+    && ui.includes('body.mobileShell #dBtns{flex-wrap:wrap;justify-content:center;align-items:center;gap:6px;overflow:visible')
+    && ui.includes('body.mobileShell #dBtns #dStartOver{flex:1 1 132px;min-width:126px;max-width:176px}'),
+    'mobile hero should stay centered while detail actions wrap into stable readable rows');
   assert.ok(ui.includes('#person .personHead{flex-direction:column;align-items:center;gap:16px')
     && ui.includes('#person .personHead .pInfo{width:100%;text-align:center}')
     && ui.includes('body.mobileShell #person .personHead{flex-direction:column;align-items:center;gap:16px')
