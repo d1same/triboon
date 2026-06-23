@@ -288,6 +288,11 @@ test('settings: streaming performance handles high-connection providers and reco
   assert.ok(rec.json.recommendation.maxConnPerStream1080 >= 4, 'recommendation includes per-stream budget');
   assert.ok(rec.json.recommendation.buffer1080Sec >= 30, 'recommendation includes buffer target');
 
+  const status = await httpJson(srv.port, 'GET', '/api/status', null, admin);
+  assert.ok(status.json.streaming.usableConnections > 0, 'status exposes the active streaming capacity profile');
+  assert.ok(status.json.pipeline.search, 'status exposes aggregate source-search telemetry');
+  assert.ok(status.json.playback, 'status exposes aggregate playback telemetry');
+
   await httpJson(srv.port, 'POST', '/api/settings', {
     providers: [{ host: '127.0.0.1', port: nntpPort, tls: false, user: 'u', pass: 'super-secret-pass', connections: 4 }],
   }, admin);

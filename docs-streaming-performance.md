@@ -33,7 +33,7 @@ Settings -> Streaming performance owns the capacity profile:
 | Stream mix | Mostly 1080p, mostly 4K, or mixed | Estimates bandwidth pressure and picks safer defaults. |
 | Server download Mbps | Server-to-usenet download budget | Used by the recommendation flow; 80% is treated as safe usable capacity. |
 | Server upload Mbps | Server-to-remote-user upload budget | Used for remote streaming warnings. |
-| 1080p / 4K buffer targets | Owner-facing desired buffer ahead | Saved as seconds, translated into bounded article windows by the engine. |
+| 1080p / 4K read-ahead goals | Owner-facing server-side read-ahead goal | Saved as seconds, translated into bounded article windows by the engine. |
 | Per-stream 1080p / 4K connections | Maximum article window for one active stream | Caps read-ahead so a single stream does not monopolize the pool. |
 | Startup reserve | Percentage of usable connections held back | Keeps new starts and seeks responsive. |
 
@@ -126,7 +126,11 @@ If these priorities change, add or update a focused test in `test/e2e.test.js`.
 
 ## Read-Ahead Model
 
-`buffer1080Sec` and `buffer4kSec` are owner-facing targets. The current engine
+`buffer1080Sec` and `buffer4kSec` are owner-facing server read-ahead goals, not
+a promise that the browser or ExoPlayer will show that many seconds in its
+visible media buffer. The visible player buffer depends on the client decoder
+and how aggressively it asks for byte ranges; it may be only a few seconds even
+while Triboon has hot decoded articles ready server-side. The current engine
 does not blindly download several minutes into a separate disk cache. Instead,
 it converts capacity into a bounded article read-ahead window:
 
@@ -156,12 +160,32 @@ stream routes are touched or housekeeping removes mounts. That lets existing
 streams shrink their read-ahead/cache budget as additional users become active,
 instead of keeping the larger window they received at mount time.
 
+Each active file also tracks coarse playback read pressure: segment waits,
+maximum segment wait, cache hits, bytes served, and temporary adaptive
+read-ahead boosts. A boost is allowed only after a real playback segment waits
+past the drain threshold, expires automatically, and is capped by the same
+streaming profile. The base window remains the fair-share value; adaptive
+read-ahead may borrow only bounded spare reserve and must never exceed the
+per-stream cap.
+
+`/api/status` exposes aggregate pipeline and playback counters without release
+names, NZB URLs, provider credentials, or stream tokens. Use those counters
+before changing fan-out, probe, mount, health-gate, or read-ahead behavior.
+
+Detail-page source warmup is part of the startup budget. A title-only warmup
+can be reused by the later Play request once IMDb/TVDB ids arrive, because
+release names are still verified against the wanted title/year/episode before
+ranking. Warmed NZB downloads are joinable: if Play arrives while the top
+candidate NZB is still downloading, it waits on that in-flight fetch instead of
+starting a duplicate grab.
+
 ## Health Checks
 
 The upfront health gate remains bounded. Healthy releases usually answer STAT
 quickly; missing articles can take much longer. Triboon races triage against the
 gate timer, records verdicts when available, and continues background triage at
-lower priority.
+lower priority. If the gate times out, the original triage continues in the
+background; do not start a second health-probe batch for the same candidate.
 
 Do not make health checks outrank active playback or startup. That turns
 protection into the thing causing slowness.
@@ -190,8 +214,8 @@ must be clearly separate because it can create provider load and noisy results.
 | Provider connections | 1-150 per account |
 | Expected users | 1-50, default 4 |
 | Remote users | 0-50, default 0 |
-| 1080p buffer target | 30-600 sec, default 180 |
-| 4K buffer target | 30-360 sec, default 90 |
+| 1080p read-ahead goal | 30-600 sec, default 180 |
+| 4K read-ahead goal | 30-360 sec, default 90 |
 | Startup reserve | 10-50%, default 25% |
 | 1080p per-stream cap | 4-60 connections, default 12 |
 | 4K per-stream cap | 6-80 connections, default 20 |
@@ -207,7 +231,9 @@ Before changing performance behavior, check:
 4. Read-ahead and decoded-cache byte budgets shrink when active mounts increase.
 5. Health probes remain bounded and lower priority than active playback.
 6. `/api/status` and Settings show the same runtime profile.
-7. Docs remain aligned: this file, `docs-architecture.md`, `docs-player-regression-map.md`, `README.md`, and `bench/RESULTS.md`.
+7. Adaptive read-ahead stays capped by the streaming profile and decays after
+   the stream recovers.
+8. Docs remain aligned: this file, `docs-architecture.md`, `docs-player-regression-map.md`, `README.md`, and `bench/RESULTS.md`.
 
 Minimum verification:
 

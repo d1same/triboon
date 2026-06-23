@@ -139,10 +139,24 @@ function mountVerdictForError(e) {
 }
 
 async function probeFirstArticle(pool, msgId) {
-  return await Promise.race([
-    pool.stat(msgId, 'startup').then((ok) => ok ? 'present' : 'missing').catch(() => 'missing'),
-    new Promise((resolve) => setTimeout(resolve, FIRST_ARTICLE_PROBE_MS, 'timeout')),
-  ]);
+  const ac = new AbortController();
+  let timer;
+  try {
+    return await Promise.race([
+      pool.stat(msgId, 'startup', { signal: ac.signal })
+        .then((ok) => ok ? 'present' : 'missing')
+        .catch((e) => (e && e.code === 'ABORT_ERR') ? 'timeout' : 'missing'),
+      new Promise((resolve) => {
+        timer = setTimeout(() => {
+          ac.abort();
+          resolve('timeout');
+        }, FIRST_ARTICLE_PROBE_MS);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+    ac.abort();
+  }
 }
 
 // Race a promise against a hard deadline (timer is always cleaned up).
@@ -180,7 +194,140 @@ class Pipeline {
     this.searchCache = new Map(); // queryKey -> { at, results, errors } (prefetch-on-browse → instant play)
     this.searchInflight = new Map(); // queryKey -> Promise(hit), so Play can join an active prefetch
     this.nzbCache = new Map();    // nzbUrl -> xml (small LRU; replays remount instantly)
+    this.nzbInflight = new Map(); // nzbUrl -> Promise(xml), so Play joins detail-page prefetch
     this.mountByUrl = new Map();  // nzbUrl -> mount id (live mounts are reused — replay ≈ instant)
+    this.metrics = {
+      searchCacheHits: 0,
+      searchCacheMisses: 0,
+      searchInflightJoins: 0,
+      searchFanouts: 0,
+      searchFanoutMs: 0,
+      searchFanoutMaxMs: 0,
+      nzbCacheHits: 0,
+      nzbInflightJoins: 0,
+      nzbFetches: 0,
+      nzbPrefetches: 0,
+      firstProbePresent: 0,
+      firstProbeMissing: 0,
+      firstProbeTimeout: 0,
+      firstProbeError: 0,
+      firstProbeMs: 0,
+      firstProbeMaxMs: 0,
+      mountAttempts: 0,
+      mountSuccesses: 0,
+      mountFailures: 0,
+      mountMs: 0,
+      mountMaxMs: 0,
+      healthGateTimeouts: 0,
+      healthGateBlocked: 0,
+      healthGateResults: 0,
+      healthGateMs: 0,
+      healthGateMaxMs: 0,
+      windowRebalances: 0,
+    };
+  }
+
+  metricsSnapshot() {
+    const m = this.metrics;
+    const avg = (sum, count) => count ? Math.round(sum / count) : 0;
+    const firstProbeCount = m.firstProbePresent + m.firstProbeMissing + m.firstProbeTimeout + m.firstProbeError;
+    const healthCount = m.healthGateTimeouts + m.healthGateBlocked + m.healthGateResults;
+    return {
+      search: {
+        cacheHits: m.searchCacheHits,
+        cacheMisses: m.searchCacheMisses,
+        inflightJoins: m.searchInflightJoins,
+        fanouts: m.searchFanouts,
+        avgFanoutMs: avg(m.searchFanoutMs, m.searchFanouts),
+        maxFanoutMs: m.searchFanoutMaxMs,
+      },
+      nzb: {
+        cacheHits: m.nzbCacheHits,
+        inflightJoins: m.nzbInflightJoins,
+        fetches: m.nzbFetches,
+        prefetches: m.nzbPrefetches,
+      },
+      firstProbe: {
+        present: m.firstProbePresent,
+        missing: m.firstProbeMissing,
+        timeout: m.firstProbeTimeout,
+        error: m.firstProbeError,
+        avgMs: avg(m.firstProbeMs, firstProbeCount),
+        maxMs: m.firstProbeMaxMs,
+      },
+      mount: {
+        attempts: m.mountAttempts,
+        successes: m.mountSuccesses,
+        failures: m.mountFailures,
+        avgMs: avg(m.mountMs, m.mountAttempts),
+        maxMs: m.mountMaxMs,
+      },
+      healthGate: {
+        timeouts: m.healthGateTimeouts,
+        blocked: m.healthGateBlocked,
+        results: m.healthGateResults,
+        avgMs: avg(m.healthGateMs, healthCount),
+        maxMs: m.healthGateMaxMs,
+      },
+      windowRebalances: m.windowRebalances,
+    };
+  }
+
+  async _fanoutMeasured(ixs, params, opts) {
+    const t0 = Date.now();
+    try {
+      return await fanout(ixs, params, opts);
+    } finally {
+      const ms = Date.now() - t0;
+      this.metrics.searchFanouts++;
+      this.metrics.searchFanoutMs += ms;
+      this.metrics.searchFanoutMaxMs = Math.max(this.metrics.searchFanoutMaxMs, ms);
+    }
+  }
+
+  _searchCacheKey(params, opts = {}) {
+    return JSON.stringify([
+      params.q,
+      opts.ignoreCatalogIds ? undefined : params.imdbid,
+      opts.ignoreCatalogIds ? undefined : params.tvdbid,
+      params.season,
+      params.ep,
+    ]);
+  }
+
+  _getFreshSearchHit(key) {
+    const hit = this.searchCache.get(key);
+    return hit && Date.now() - hit.at <= 60000 ? hit : null;
+  }
+
+  _rememberSearchHit(key, hit) {
+    this.searchCache.set(key, hit);
+    if (this.searchCache.size > 50) this.searchCache.delete(this.searchCache.keys().next().value);
+  }
+
+  _rememberNzb(url, xml) {
+    this.nzbCache.set(url, xml);
+    if (this.nzbCache.size > 15) this.nzbCache.delete(this.nzbCache.keys().next().value);
+  }
+
+  _startNzbFetch(candidate, opts = {}) {
+    let pending = this.nzbInflight.get(candidate.nzbUrl);
+    if (pending) {
+      this.metrics.nzbInflightJoins++;
+      return pending;
+    }
+    if (opts.prefetch) this.metrics.nzbPrefetches++;
+    else this.metrics.nzbFetches++;
+    pending = fetchUrl(candidate.nzbUrl, { timeoutMs: NZB_FETCH_IDLE_MS, deadlineMs: NZB_FETCH_DEADLINE_MS, maxBytes: 100 * 1024 * 1024 })
+      .then((r) => {
+        const xml = r.body.toString('utf8');
+        if (r.status !== 200 || !/<file\b/i.test(xml)) throw new Error(`nzb fetch HTTP ${r.status}`);
+        this._rememberNzb(candidate.nzbUrl, xml);
+        return xml;
+      })
+      .finally(() => this.nzbInflight.delete(candidate.nzbUrl));
+    this.nzbInflight.set(candidate.nzbUrl, pending);
+    return pending;
   }
 
   _playbackWindowFor(vf, activeMounts, perf = this.performance() || {}) {
@@ -191,8 +338,14 @@ class Pipeline {
     const perStreamBudget = usable > reserve ? Math.max(4, Math.floor((usable - reserve) / activeCount)) : Infinity;
     const configuredWindow = big ? (perf.maxConnPerStream4k || 20) : (perf.maxConnPerStream1080 || 12);
     const readAhead = Math.max(4, Math.min(configuredWindow, perStreamBudget));
+    const borrowedReserve = reserve > 2 ? Math.floor(reserve / 2) : 0;
+    const adaptiveBudget = usable > reserve
+      ? Math.max(readAhead, Math.floor((usable - Math.max(1, reserve - borrowedReserve)) / activeCount))
+      : readAhead;
+    const maxReadAhead = Math.max(readAhead, Math.min(configuredWindow, adaptiveBudget, readAhead + 4));
     return {
       readAhead,
+      maxReadAhead,
       cacheMax: Math.max(readAhead * 3, big ? 48 : 36),
       cacheMaxBytes: (big
         ? Math.max(96, Math.floor(192 / activeCount))
@@ -204,10 +357,14 @@ class Pipeline {
     if (!vf) return null;
     const win = this._playbackWindowFor(vf, activeMounts, perf);
     for (const v of (vf.vols || [vf])) {
-      v.readAhead = win.readAhead;
-      v.cacheMax = win.cacheMax;
-      v.cacheMaxBytes = win.cacheMaxBytes;
-      if (typeof v.trimCache === 'function') v.trimCache();
+      if (typeof v.applyPlaybackWindow === 'function') v.applyPlaybackWindow(win);
+      else {
+        v.readAhead = win.readAhead;
+        v.maxReadAhead = win.maxReadAhead;
+        v.cacheMax = win.cacheMax;
+        v.cacheMaxBytes = win.cacheMaxBytes;
+        if (typeof v.trimCache === 'function') v.trimCache();
+      }
     }
     return win;
   }
@@ -218,12 +375,13 @@ class Pipeline {
       .filter((m) => m && m.streamable && now - (m._touched || 0) < 120000);
     const activeCount = Math.max(1, active.length);
     for (const vf of active) this._applyPlaybackWindow(vf, activeCount, perf);
+    this.metrics.windowRebalances++;
     return active.length;
   }
 
   async _fetchSearchHit(ixs, params, wanted, timeoutMs) {
     ixs.forEach((ix) => this.usage.onSearch(ix.name)); // a real fan-out costs one API hit per indexer
-    let { results, errors } = await fanout(ixs, params, { timeoutMs });
+    let { results, errors } = await this._fanoutMeasured(ixs, params, { timeoutMs });
     // TITLE VERIFICATION — indexers return loosely-related releases; a release only
     // qualifies if its name actually contains the wanted title (and episode/year).
     // Without this, "wrong movie plays" — the #1 trust-killer.
@@ -238,7 +396,7 @@ class Pipeline {
       if (head.length > 3) {
         const simpler = [...head.slice(0, 3), ...tail].join(' ');
         ixs.forEach((ix) => this.usage.onSearch(ix.name));
-        const retry = await fanout(ixs, { ...params, q: simpler }, { timeoutMs });
+        const retry = await this._fanoutMeasured(ixs, { ...params, q: simpler }, { timeoutMs });
         const verified = retry.results.filter((r) => releaseMatches(r.name, wanted));
         if (verified.length) { results = verified; errors = retry.errors; }
       }
@@ -251,7 +409,7 @@ class Pipeline {
       delete titleOnly.imdbid;
       delete titleOnly.tvdbid;
       ixs.forEach((ix) => this.usage.onSearch(ix.name));
-      const retry = await fanout(ixs, titleOnly, { timeoutMs });
+      const retry = await this._fanoutMeasured(ixs, titleOnly, { timeoutMs });
       const verified = retry.results.filter((r) => releaseMatches(r.name, wanted));
       if (verified.length) { results = verified; errors = retry.errors; }
     }
@@ -273,21 +431,36 @@ class Pipeline {
       params.q = `${params.q} S${String(season).padStart(2, '0')}E${String(ep).padStart(2, '0')}`.trim();
     }
     const wanted = parseWantedTitle(params.q);
-    const key = JSON.stringify([params.q, params.imdbid, params.tvdbid, params.season, params.ep]);
-    let hit = this.searchCache.get(key);
-    if (!hit || Date.now() - hit.at > 60000) {
+    const key = this._searchCacheKey(params);
+    const titleKey = this._searchCacheKey(params, { ignoreCatalogIds: true });
+    let hit = this._getFreshSearchHit(key);
+    if (!hit && (params.imdbid || params.tvdbid)) {
+      hit = this._getFreshSearchHit(titleKey);
+      if (hit) this._rememberSearchHit(key, hit);
+    }
+    if (hit) {
+      this.metrics.searchCacheHits++;
+    } else {
+      this.metrics.searchCacheMisses++;
       let pending = this.searchInflight.get(key);
+      let pendingKey = key;
+      if (!pending && (params.imdbid || params.tvdbid)) {
+        pending = this.searchInflight.get(titleKey);
+        pendingKey = titleKey;
+      }
+      if (pending) this.metrics.searchInflightJoins++;
       if (!pending) {
         pending = this._fetchSearchHit(ixs, params, wanted, timeoutMs)
           .then((fresh) => {
-            this.searchCache.set(key, fresh);
-            if (this.searchCache.size > 50) this.searchCache.delete(this.searchCache.keys().next().value);
+            this._rememberSearchHit(key, fresh);
+            this._rememberSearchHit(titleKey, fresh);
             return fresh;
           })
           .finally(() => this.searchInflight.delete(key));
         this.searchInflight.set(key, pending);
       }
       hit = await pending;
+      if (pendingKey !== key) this._rememberSearchHit(key, hit);
     }
     const { results, errors } = hit;
     // Deep prefetch: warm the TOP candidate's NZB in the background while the user is still
@@ -310,13 +483,7 @@ class Pipeline {
       const top = rankReleases(results.map((r) => ({ ...r })), policy).find((c) => c.score > -5000);
       if (top && !this.nzbCache.has(top.nzbUrl) && this.usage.canGrab(top.indexer)) {
         this.usage.onGrab(top.indexer);
-        fetchUrl(top.nzbUrl, { timeoutMs: NZB_FETCH_IDLE_MS, deadlineMs: NZB_FETCH_DEADLINE_MS })
-          .then((r) => {
-            if (r.status === 200 && /<file\b/i.test(r.body.toString('utf8').slice(0, 4096))) {
-              this.nzbCache.set(top.nzbUrl, r.body.toString('utf8'));
-              if (this.nzbCache.size > 15) this.nzbCache.delete(this.nzbCache.keys().next().value);
-            }
-          }).catch(() => {});
+        this._startNzbFetch(top, { prefetch: true }).catch(() => {});
       }
     }
     const enriched = results.map((r) => {
@@ -349,47 +516,73 @@ class Pipeline {
       this.mountByUrl.delete(candidate.nzbUrl);
     }
     let xml = this.nzbCache.get(candidate.nzbUrl);
-    if (!xml) {
+    if (xml) this.metrics.nzbCacheHits++;
+    else {
+      const pendingNzb = this.nzbInflight.get(candidate.nzbUrl);
+      if (pendingNzb) {
+        try {
+          xml = await this._startNzbFetch(candidate);
+        } catch (e) {
+          this._recordVerdict(candidate, 'fetch-failed');
+          return { fail: `nzb: ${e.message}` };
+        }
+      } else {
       // Daily grab limit: skipping is about the INDEXER's quota, not the release's health —
       // no verdict is recorded, so the release plays fine tomorrow (or via another indexer).
       if (!this.usage.canGrab(candidate.indexer)) {
         return { fail: `nzb: ${candidate.indexer} daily NZB limit reached` };
       }
       try {
-        const r = await fetchUrl(candidate.nzbUrl, { timeoutMs: NZB_FETCH_IDLE_MS, deadlineMs: NZB_FETCH_DEADLINE_MS, maxBytes: 100 * 1024 * 1024 });
-        xml = r.body.toString('utf8');
-        if (r.status !== 200 || !/<file\b/i.test(xml)) throw new Error(`nzb fetch HTTP ${r.status}`);
+        xml = await this._startNzbFetch(candidate);
         this.usage.onGrab(candidate.indexer);
-        this.nzbCache.set(candidate.nzbUrl, xml);
-        if (this.nzbCache.size > 15) this.nzbCache.delete(this.nzbCache.keys().next().value);
       } catch (e) {
         this._recordVerdict(candidate, 'fetch-failed');
         return { fail: `nzb: ${e.message}` };
+      }
       }
     }
 
     try {
       const probe = firstProbeMsgId(xml);
       if (probe) {
+        const probeT0 = Date.now();
         const probeVerdict = await probeFirstArticle(this.pool(), probe);
+        const probeMs = Date.now() - probeT0;
+        this.metrics.firstProbeMs += probeMs;
+        this.metrics.firstProbeMaxMs = Math.max(this.metrics.firstProbeMaxMs, probeMs);
         if (probeVerdict === 'missing') {
+          this.metrics.firstProbeMissing++;
           this._recordVerdict(candidate, 'missing', { stage: 'first-article' });
           return { fail: 'missing: first article unavailable' };
         }
         // Timeout here is only "not enough evidence yet", especially over VPNs or slower
         // providers. Do not kill a candidate before the real mount/BODY path can prove it.
         if (probeVerdict === 'timeout') {
+          this.metrics.firstProbeTimeout++;
           candidate._probeTimeout = true;
+        } else {
+          this.metrics.firstProbePresent++;
         }
       }
     } catch {
+      this.metrics.firstProbeError++;
       // A malformed NZB should still fail through the normal mount path for a precise reason.
     }
 
     let vf;
+    const mountT0 = Date.now();
+    this.metrics.mountAttempts++;
     try {
       vf = await withDeadline(mountNzb(this.pool(), xml, mountOpts), MOUNT_DEADLINE_MS, 'mount timeout');
+      const mountMs = Date.now() - mountT0;
+      this.metrics.mountSuccesses++;
+      this.metrics.mountMs += mountMs;
+      this.metrics.mountMaxMs = Math.max(this.metrics.mountMaxMs, mountMs);
     } catch (e) {
+      const mountMs = Date.now() - mountT0;
+      this.metrics.mountFailures++;
+      this.metrics.mountMs += mountMs;
+      this.metrics.mountMaxMs = Math.max(this.metrics.mountMaxMs, mountMs);
       this._recordVerdict(candidate, mountVerdictForError(e));
       return { fail: `mount: ${e.message}` };
     }
@@ -420,18 +613,28 @@ class Pipeline {
     // Bounded gate: verdict within 500ms or we play anyway and keep checking in background.
     // (Provider quirk, see bench/RESULTS.md: healthy STATs answer in ~60-250ms; only MISSES
     // are slow — so "no answer by 500ms" usually means trouble, but we never block on it.)
+    const gateT0 = Date.now();
+    const triage = vf.triage(perf.healthProbeLimit || 6).catch(() => null);
     const gate = await Promise.race([
-      vf.triage(perf.healthProbeLimit || 6).catch(() => null),
+      triage,
       new Promise((r) => setTimeout(r, GATE_MS, 'timeout')),
     ]);
+    const gateMs = Date.now() - gateT0;
+    this.metrics.healthGateMs += gateMs;
+    this.metrics.healthGateMaxMs = Math.max(this.metrics.healthGateMaxMs, gateMs);
     const streamClass = vf.container === 'flat' ? 'flat' : vf.method; // consistent across both paths
     if (gate === 'timeout') {
-      vf.triage(8).then((h) => this._recordVerdict(candidate, h.verdict, { streamClass })).catch(() => {});
+      this.metrics.healthGateTimeouts++;
+      triage.then((h) => { if (h && h.verdict) this._recordVerdict(candidate, h.verdict, { streamClass }); }).catch(() => {});
     } else if (gate && gate.verdict === 'blocked') {
+      this.metrics.healthGateBlocked++;
       this._recordVerdict(candidate, 'blocked', { streamClass });
       return { fail: 'health: blocked', vf };
     } else if (gate) {
+      this.metrics.healthGateResults++;
       this._recordVerdict(candidate, gate.verdict, { streamClass });
+    } else {
+      this.metrics.healthGateResults++;
     }
     return { vf };
   }

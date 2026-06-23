@@ -160,6 +160,31 @@ test('vfs: decoded segment cache is capped by bytes, not only segment count', as
   assert.ok(vf.cache.size <= 2, 'byte cap should evict older decoded segments even when segment cap is high');
 });
 
+test('vfs: playback waits temporarily widen read-ahead within the stream cap', async () => {
+  const { data, articles, nzb } = makeRelease('Drain.Test.mkv', 120000, 20000);
+  const pool = {
+    body: async (msgId) => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return articles.get(msgId);
+    },
+    stat: async () => true,
+  };
+  const vf = new VirtualFile(pool, nzb, { readAhead: 1, cacheSegments: 12, cacheBytes: 1024 * 1024 });
+  vf.readWaitBoostMs = 5;
+  vf.applyPlaybackWindow({ readAhead: 1, maxReadAhead: 3, cacheMax: 12, cacheMaxBytes: 1024 * 1024 });
+  await vf.mount();
+
+  const chunks = [];
+  for await (const chunk of vf.read(0, data.length, { priority: 'startup' })) chunks.push(chunk);
+  assert.ok(Buffer.concat(chunks).equals(data), 'adaptive read-ahead still streams byte-exact data');
+
+  const stats = vf.playbackSnapshot();
+  assert.ok(stats.adaptiveBoosts >= 1, 'playback wait should trigger a temporary boost');
+  assert.ok(stats.readAhead > stats.baseReadAhead, 'boost should widen beyond the fair-share base');
+  assert.ok(stats.readAhead <= stats.maxReadAhead, 'boost should stay capped by the playback window');
+  assert.ok(stats.maxSegmentWaitMs >= 5, 'wait telemetry should record the slow segment');
+});
+
 function makeRelease(name, size, partSize) {
   // Deterministic pseudo-random payload (seeded) so failures are reproducible.
   const data = Buffer.allocUnsafe(size);

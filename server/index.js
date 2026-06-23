@@ -2608,6 +2608,50 @@ function mountPayload(vf, uid, extra = {}) {
     ...extra,
   };
 }
+function playbackRuntimeStats(now = Date.now()) {
+  const active = [...mounts.values()].filter((m) => m && m.streamable && now - (m._touched || 0) < 120000);
+  const out = {
+    activeMounts: active.length,
+    files: 0,
+    reads: 0,
+    segmentsServed: 0,
+    cacheHits: 0,
+    segmentWaits: 0,
+    segmentWaitMs: 0,
+    maxSegmentWaitMs: 0,
+    readBytes: 0,
+    adaptiveBoosts: 0,
+    boostedFiles: 0,
+    cacheBytes: 0,
+    inflightSegments: 0,
+    readAheadBaseMax: 0,
+    readAheadCurrentMax: 0,
+    readAheadCeilingMax: 0,
+  };
+  for (const vf of active) {
+    for (const v of (vf.vols || [vf])) {
+      if (!v || typeof v.playbackSnapshot !== 'function') continue;
+      const s = v.playbackSnapshot();
+      out.files++;
+      out.reads += s.reads || 0;
+      out.segmentsServed += s.segmentsServed || 0;
+      out.cacheHits += s.cacheHits || 0;
+      out.segmentWaits += s.segmentWaits || 0;
+      out.segmentWaitMs += s.segmentWaitMs || 0;
+      out.maxSegmentWaitMs = Math.max(out.maxSegmentWaitMs, s.maxSegmentWaitMs || 0);
+      out.readBytes += s.readBytes || 0;
+      out.adaptiveBoosts += s.adaptiveBoosts || 0;
+      if ((s.readAhead || 0) > (s.baseReadAhead || 0)) out.boostedFiles++;
+      out.cacheBytes += s.cacheBytes || 0;
+      out.inflightSegments += s.inflightSegments || 0;
+      out.readAheadBaseMax = Math.max(out.readAheadBaseMax, s.baseReadAhead || 0);
+      out.readAheadCurrentMax = Math.max(out.readAheadCurrentMax, s.readAhead || 0);
+      out.readAheadCeilingMax = Math.max(out.readAheadCeilingMax, s.maxReadAhead || 0);
+    }
+  }
+  out.avgSegmentWaitMs = out.segmentWaits ? Math.round(out.segmentWaitMs / out.segmentWaits) : 0;
+  return out;
+}
 function subtitleReleaseName(vf) {
   return String((vf && (vf._releaseName || vf._sourceName || vf.name)) || '').trim();
 }
@@ -3122,6 +3166,8 @@ const H = {
         totalConnections: provs.reduce((n, p) => n + (p.connections || 16), 0),
       } : null,
       streaming: streamingRuntimeProfile(),
+      pipeline: pipeline.metricsSnapshot(),
+      playback: playbackRuntimeStats(),
       indexers: (settings.get().indexers || []).length,
       tmdb: !!settings.get().tmdbKey,
       ffmpeg: detectFfmpeg() ? detectFfmpeg().version : null,

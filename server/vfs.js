@@ -9,6 +9,10 @@ const { parseNzb, pickPrimaryFile, fileNameFromSubject } = require('./nzb');
 const crypto = require('crypto');
 
 const DEFAULT_CACHE_BYTES = 128 * 1024 * 1024;
+const READ_WAIT_BOOST_MS = 250;
+const READ_AHEAD_BOOST_SEGMENTS = 2;
+const READ_AHEAD_BOOST_TTL_MS = 30000;
+const READ_AHEAD_BOOST_COOLDOWN_MS = 5000;
 
 function abortError() {
   const e = new Error('read aborted');
@@ -36,6 +40,11 @@ class NzbFileStream {
     this.size = null;       // learned from =ybegin size=
     this.partSize = null;   // learned from segment 1 (=ypart end - begin)
     this.readAhead = readAhead;
+    this.baseReadAhead = readAhead;
+    this.maxReadAhead = readAhead;
+    this.adaptiveReadAheadUntil = 0;
+    this.lastReadAheadBoostAt = 0;
+    this.readWaitBoostMs = READ_WAIT_BOOST_MS;
     this.cache = new Map(); // segIndex -> Buffer (decoded)
     this.cacheOrder = [];
     this.cacheMax = cacheSegments;
@@ -44,6 +53,66 @@ class NzbFileStream {
     this.inflight = new Map(); // segIndex -> Promise<Buffer>
     this.readAheadEpoch = 0;
     this.health = { verdict: 'unverified', checkedAt: null, missing: 0, sampled: 0 };
+    this.playbackStats = {
+      reads: 0,
+      segmentsServed: 0,
+      cacheHits: 0,
+      segmentWaits: 0,
+      segmentWaitMs: 0,
+      maxSegmentWaitMs: 0,
+      readBytes: 0,
+      adaptiveBoosts: 0,
+      lastBoostAt: null,
+    };
+  }
+
+  applyPlaybackWindow(win = {}) {
+    const readAhead = Math.max(0, Math.floor(win.readAhead ?? this.readAhead ?? 0));
+    const maxReadAhead = Math.max(readAhead, Math.floor(win.maxReadAhead ?? readAhead));
+    const now = Date.now();
+    this.baseReadAhead = readAhead;
+    this.maxReadAhead = maxReadAhead;
+    if (!this.adaptiveReadAheadUntil || this.adaptiveReadAheadUntil <= now || this.readAhead < readAhead) {
+      this.readAhead = readAhead;
+      this.adaptiveReadAheadUntil = 0;
+    } else {
+      this.readAhead = Math.min(this.readAhead, this.maxReadAhead);
+    }
+    if (Number.isFinite(win.cacheMax) && win.cacheMax > 0) this.cacheMax = Math.floor(win.cacheMax);
+    if (Number.isFinite(win.cacheMaxBytes) && win.cacheMaxBytes > 0) this.cacheMaxBytes = Math.floor(win.cacheMaxBytes);
+    this.trimCache();
+  }
+
+  _resetExpiredAdaptiveReadAhead(now = Date.now()) {
+    if (this.adaptiveReadAheadUntil && this.adaptiveReadAheadUntil <= now) {
+      this.readAhead = this.baseReadAhead;
+      this.adaptiveReadAheadUntil = 0;
+    }
+  }
+
+  _maybeBoostReadAhead(waitMs, now = Date.now()) {
+    if (waitMs < this.readWaitBoostMs) return;
+    if (this.readAhead >= this.maxReadAhead) return;
+    if (now - this.lastReadAheadBoostAt < READ_AHEAD_BOOST_COOLDOWN_MS) return;
+    this.readAhead = Math.min(this.maxReadAhead, Math.max(this.readAhead + READ_AHEAD_BOOST_SEGMENTS, this.baseReadAhead + READ_AHEAD_BOOST_SEGMENTS));
+    this.adaptiveReadAheadUntil = now + READ_AHEAD_BOOST_TTL_MS;
+    this.lastReadAheadBoostAt = now;
+    this.playbackStats.adaptiveBoosts++;
+    this.playbackStats.lastBoostAt = new Date(now).toISOString();
+  }
+
+  playbackSnapshot() {
+    this._resetExpiredAdaptiveReadAhead();
+    return {
+      readAhead: this.readAhead,
+      baseReadAhead: this.baseReadAhead,
+      maxReadAhead: this.maxReadAhead,
+      adaptiveUntil: this.adaptiveReadAheadUntil ? new Date(this.adaptiveReadAheadUntil).toISOString() : null,
+      cacheSegments: this.cache.size,
+      cacheBytes: this.cacheBytes,
+      inflightSegments: this.inflight.size,
+      ...this.playbackStats,
+    };
   }
 
   async mount(priority = 'startup') {
@@ -135,8 +204,10 @@ class NzbFileStream {
     if (this.partSize === null) await this.mount(priority);
     end = Math.min(end, this.size);
     let offset = start;
+    this.playbackStats.reads++;
     while (offset < end) {
       if (aborted()) return;
+      this._resetExpiredAdaptiveReadAhead();
       const segIdx = this._segForOffset(offset);
       // Kick read-ahead (fire and forget).
       if (readAheadEpoch === this.readAheadEpoch && !aborted()) {
@@ -148,11 +219,21 @@ class NzbFileStream {
         }
       }
       let data;
+      const wasCached = this.cache.has(segIdx);
+      const waitStart = Date.now();
       try {
         data = await this._fetchSegment(segIdx, activePriority, { signal });
       } catch (e) {
         if (aborted() || e.code === 'ABORT_ERR') return;
         throw e;
+      }
+      const waitMs = Date.now() - waitStart;
+      if (wasCached) this.playbackStats.cacheHits++;
+      else {
+        this.playbackStats.segmentWaits++;
+        this.playbackStats.segmentWaitMs += waitMs;
+        this.playbackStats.maxSegmentWaitMs = Math.max(this.playbackStats.maxSegmentWaitMs, waitMs);
+        if (activePriority === 'playback') this._maybeBoostReadAhead(waitMs);
       }
       if (activePriority === 'startup' || activePriority === 'seek') activePriority = 'playback';
       if (aborted()) return;
@@ -160,6 +241,8 @@ class NzbFileStream {
       const from = offset - segStart;
       const to = Math.min(data.length, end - segStart);
       if (from >= to) throw new Error(`read out of range: seg ${segIdx} off ${offset}`);
+      this.playbackStats.segmentsServed++;
+      this.playbackStats.readBytes += to - from;
       yield data.subarray(from, to);
       offset = segStart + to;
     }

@@ -668,6 +668,10 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.ok(ui.includes('id="statsBtn"') && ui.includes("return ['chGuide', 'back10', 'playPause', 'fwd30', 'nextEpBtn', 'ccBtn', 'audBtn', 'srndBtn', 'qualBtn', 'muteBtn', 'fsBtn', 'statsBtn']")
     && ui.includes('function collectPlayerStats()') && ui.includes('window.__tvNativeVideoStats'),
     'web player stats must be the last D-pad reachable control and accept native ExoPlayer stats');
+  assert.ok(ui.includes('Server target') && ui.includes('Server read-ahead')
+    && ui.includes("const label = k === 'Buffered' ? 'Player buffer' : k")
+    && ui.includes('function refreshPlayerRuntimeStats('),
+    'Playback stats should separate visible player buffer from Triboon server read-ahead');
   assert.ok(ui.includes('data-stab="activity"') && ui.includes("api('/api/activity')") && ui.includes('id="activityRefresh"'),
     'admin Settings should expose a focusable Now Watching panel backed by the activity API');
   assert.ok(ui.includes('function playerStreamKind(') && ui.includes('streamKind: playerStreamKind(p)')
@@ -678,6 +682,17 @@ test('Android native player: direct source and native chrome stay out of the web
     'Streaming performance settings should keep labeled rows and one professional action group');
   assert.match(ui, /\.settingsRow\{display:grid;grid-template-columns:repeat\(3,minmax\(0,1fr\)\)[\s\S]+\.settingsActions\{display:flex;align-items:center;gap:10px;flex-wrap:wrap/,
     'Settings form rows and action buttons should share stable spacing rules');
+  assert.ok(ui.includes('class="perfSummary" id="perfSummary"')
+    && ui.includes('Calculate recommendation')
+    && ui.includes('1080p read-ahead goal')
+    && ui.includes('4K read-ahead goal')
+    && ui.includes('id="perfApply" disabled')
+    && ui.includes('function perfSetApplyEnabled(')
+    && ui.includes('playback: st.playback || {}')
+    && !ui.includes('S.perfRecommendation || perfFormValues()'),
+    'Streaming performance should show active runtime capacity and keep recommendation apply separate from manual save');
+  assert.match(ui, /\.settingsControl input\{[\s\S]+background:rgba\(11,8,18,\.72\)[\s\S]+border:1px solid var\(--line\)/,
+    'Settings numeric inputs should use Triboon dark field chrome instead of native white inputs');
   assert.ok(ui.includes('id="prefContentTextSize"') && ui.includes("localStorage.setItem('triboon.textsize'")
     && ui.includes('function applyContentTextSize()'),
     'Preferences should expose a per-device content text-size picker');

@@ -757,6 +757,7 @@ test('pipeline: detail warmup and immediate Play share one indexer fan-out', asy
   const nntpPort = await mock.listen();
   const pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 4);
   let indexerFanouts = 0;
+  let nzbHits = 0;
   const server = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
     if (u.pathname === '/api') {
@@ -767,7 +768,10 @@ test('pipeline: detail warmup and immediate Play share one indexer fan-out', asy
         res.end(rssFor([{ name: 'Movie.2024.1080p.WEB-DL.H.264-NTb', url: `http://127.0.0.1:${port}/nzb/0`, size: 5e9 }]));
       }, 80);
     }
-    if (u.pathname === '/nzb/0') { res.writeHead(200); return res.end(good.nzb); }
+    if (u.pathname === '/nzb/0') {
+      nzbHits++;
+      return setTimeout(() => { res.writeHead(200); res.end(good.nzb); }, 160);
+    }
     res.writeHead(404); res.end();
   });
   const ixPort = await new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
@@ -786,8 +790,114 @@ test('pipeline: detail warmup and immediate Play share one indexer fan-out', asy
   assert.strictEqual(indexerFanouts, 1, 'a quick Play should join the active detail-page warmup search');
   assert.strictEqual(search.candidates[0].name, 'Movie.2024.1080p.WEB-DL.H.264-NTb');
   assert.strictEqual(play.candidate.name, 'Movie.2024.1080p.WEB-DL.H.264-NTb');
+  assert.strictEqual(nzbHits, 1, 'Play should join the detail-page NZB prefetch instead of downloading it twice');
+  const metrics = pipeline.metricsSnapshot();
+  assert.strictEqual(metrics.search.fanouts, 1, 'metrics should preserve the single fan-out proof');
+  assert.ok(metrics.search.inflightJoins >= 1, 'metrics should show Play joined the warmup search');
+  assert.ok(metrics.nzb.prefetches >= 1, 'detail warmup should still start the cheap NZB prefetch');
+  assert.ok(metrics.nzb.inflightJoins >= 1, 'metrics should show Play joined the active NZB prefetch');
+  assert.strictEqual(metrics.mount.successes, 1, 'playback should mount exactly one chosen source');
+  assert.ok(metrics.firstProbe.present >= 1, 'first-article probe should record the healthy source');
 
   pool.close(); await mock.close(); server.close(); store.close();
+});
+
+test('pipeline: exact-id Play reuses title-only detail warmup search', async () => {
+  const payload = seededPayload(60 * 1024, 0xfa6);
+  const good = nzbFor([{ name: 'Movie.mkv', data: payload }], 30000, 'idwarm');
+  const articles = new Map([...good.articles]);
+  const mock = createMockNntp({ articles });
+  const nntpPort = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 4);
+  let indexerFanouts = 0;
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (u.pathname === '/api') {
+      indexerFanouts++;
+      const port = server.address().port;
+      res.writeHead(200, { 'content-type': 'application/rss+xml' });
+      return res.end(rssFor([{ name: 'Movie.2024.1080p.WEB-DL.H.264-NTb', url: `http://127.0.0.1:${port}/nzb/0`, size: 5e9 }]));
+    }
+    if (u.pathname === '/nzb/0') { res.writeHead(200); return res.end(good.nzb); }
+    res.writeHead(404); res.end();
+  });
+  const ixPort = await new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const pipeline = new Pipeline({
+    pool: () => pool, verdicts: new VerdictCache(store), mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+
+  await pipeline.search({ q: 'Movie 2024' });
+  const play = await pipeline.play({ q: 'Movie 2024', imdbid: 'tt1234567' });
+
+  assert.strictEqual(indexerFanouts, 1, 'Play with catalog ids should reuse the title-only warmup search');
+  assert.strictEqual(play.candidate.name, 'Movie.2024.1080p.WEB-DL.H.264-NTb');
+  assert.ok(pipeline.metricsSnapshot().search.cacheHits >= 1, 'metrics should record the warmup cache hit');
+
+  pool.close(); await mock.close(); server.close(); store.close();
+});
+
+test('pipeline: timed-out health gate does not duplicate background triage', async () => {
+  const payload = seededPayload(90 * 1024, 0xfa7);
+  const good = nzbFor([{ name: 'Movie.mkv', data: payload }], 30000, 'slowhealth');
+  const articles = new Map([...good.articles]);
+  let startupStats = 0;
+  let startupAborts = 0;
+  let healthStats = 0;
+  const slowPool = {
+    stat(msgId, priority = 'health', opts = {}) {
+      if (priority === 'startup') startupStats++;
+      else healthStats++;
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => resolve(true), priority === 'startup' ? 2000 : 900);
+        if (opts.signal) {
+          opts.signal.addEventListener('abort', () => {
+            clearTimeout(timer);
+            startupAborts++;
+            const e = new Error('aborted');
+            e.code = 'ABORT_ERR';
+            reject(e);
+          }, { once: true });
+        }
+      });
+    },
+    body(msgId) {
+      const body = articles.get(msgId);
+      if (!body) return Promise.reject(new Error('missing body'));
+      return Promise.resolve(body);
+    },
+  };
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (u.pathname === '/api') {
+      const port = server.address().port;
+      res.writeHead(200, { 'content-type': 'application/rss+xml' });
+      return res.end(rssFor([{ name: 'Movie.2024.1080p.WEB-DL.H.264-NTb', url: `http://127.0.0.1:${port}/nzb/0`, size: 5e9 }]));
+    }
+    if (u.pathname === '/nzb/0') { res.writeHead(200); return res.end(good.nzb); }
+    res.writeHead(404); res.end();
+  });
+  const ixPort = await new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const pipeline = new Pipeline({
+    pool: () => slowPool, verdicts: new VerdictCache(store), mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+
+  await pipeline.play({ q: 'Movie 2024' });
+
+  assert.strictEqual(startupStats, 1, 'first-article probe should start once');
+  assert.strictEqual(startupAborts, 1, 'timed-out first-article probe should abort its STAT');
+  assert.strictEqual(healthStats, 4, 'health gate timeout should keep the original triage instead of starting a second batch');
+  const metrics = pipeline.metricsSnapshot();
+  assert.ok(metrics.firstProbe.timeout >= 1, 'metrics should record the probe timeout');
+  assert.ok(metrics.healthGate.timeouts >= 1, 'metrics should record the bounded health-gate timeout');
+
+  await new Promise((r) => setTimeout(r, 950));
+  server.close(); store.close();
 });
 
 test('pipeline: imdb/tvdb source searches fall back to verified title search', async () => {
@@ -997,6 +1107,7 @@ test('pipeline: active mount rebalance shrinks read-ahead when another stream st
   mounts.set(first.id, first);
   assert.strictEqual(pipeline.rebalancePlaybackWindows(now), 1);
   assert.strictEqual(first.readAhead, 12, 'single active stream gets the configured 1080p window');
+  assert.strictEqual(first.maxReadAhead, 12, 'single stream cannot boost past the configured 1080p cap');
   assert.strictEqual(first.cacheMaxBytes, 96 * 1024 * 1024, 'single stream gets the full 1080p cache budget');
 
   const second = mk('second');
@@ -1004,9 +1115,12 @@ test('pipeline: active mount rebalance shrinks read-ahead when another stream st
   assert.strictEqual(pipeline.rebalancePlaybackWindows(now), 2);
   assert.strictEqual(first.readAhead, 8, 'existing stream shrinks to the fair connection share');
   assert.strictEqual(second.readAhead, 8, 'new stream receives the same fair connection share');
+  assert.strictEqual(first.maxReadAhead, 9, 'existing stream may only borrow bounded spare reserve');
+  assert.strictEqual(second.maxReadAhead, 9, 'new stream boost ceiling matches the fair reserve model');
   assert.strictEqual(first.cacheMaxBytes, 48 * 1024 * 1024, 'existing stream cache budget shrinks with concurrency');
   assert.strictEqual(second.cacheMaxBytes, 48 * 1024 * 1024, 'new stream cache budget matches concurrency');
   assert.ok(first.trimCalls >= 2, 'rebalance trims retained decoded bytes after shrinking');
+  assert.strictEqual(pipeline.metricsSnapshot().windowRebalances, 2, 'rebalance telemetry should track window recalculations');
 });
 
 test('pipeline: auto-advance mounts the next candidate when the current source dies', async () => {

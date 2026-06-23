@@ -756,6 +756,19 @@ body.screensaverOn{cursor:none}
 .settingsControl{display:grid;gap:6px;min-width:0}
 .settingsControl>span{color:var(--muted);font:800 10px "JetBrains Mono";letter-spacing:.08em;text-transform:uppercase}
 .settingsControl input,.settingsControl select{width:100%;max-width:none!important;min-width:0;box-sizing:border-box}
+.settingsControl input{
+  min-height:40px;background:rgba(11,8,18,.72);border:1px solid var(--line);border-radius:12px;
+  padding:11px 13px;color:var(--text);font:700 13px "Albert Sans",system-ui,sans-serif;outline:none}
+.settingsControl input::placeholder{color:rgba(243,239,247,.42)}
+.settingsControl input:focus{border-color:var(--magenta)}
+.perfSummary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:16px 0 2px}
+.perfCard{min-height:74px;border:1px solid rgba(243,239,247,.08);border-radius:12px;padding:12px;background:rgba(11,8,18,.42)}
+.perfCard .k{font:800 10px "JetBrains Mono";letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+.perfCard .v{font:800 17px "Sora";color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.perfCard small{display:block;margin-top:3px;color:var(--muted);font:700 10px "JetBrains Mono";white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.perfStatusLine{font:700 12px "Albert Sans";color:var(--text)}
+.perfWarnings{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.perfWarnings span{border:1px solid rgba(255,198,92,.26);background:rgba(255,198,92,.08);color:var(--amber);border-radius:999px;padding:5px 8px;font:700 10px "JetBrains Mono";letter-spacing:.02em}
 .settingsActions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:16px}
 .settingsActions .btn{margin:0;white-space:nowrap}
 .settingsActions .btn.primary{min-width:160px}
@@ -809,6 +822,7 @@ body.screensaverOn{cursor:none}
 }
 @media (max-width:700px){
   .settingsRow,.settingsRow.two{grid-template-columns:1fr}
+  .perfSummary{grid-template-columns:repeat(2,minmax(0,1fr))}
   .settingsActions{align-items:stretch}
   .settingsActions .btn{flex:1 1 160px}
 }
@@ -1867,6 +1881,8 @@ body:not(.tv) #settings .setGrid[data-stab="display"]{grid-template-columns:repe
 #settings .btn.ghost,#prefs .btn.ghost,#settings .ghostMini,#prefs .ghostMini,
 #prefs .profileAction{
   background:rgba(34,25,52,.72);border:1px solid var(--line);color:var(--text);box-shadow:none}
+#settings .btn:disabled,#prefs .btn:disabled{
+  opacity:.48;cursor:not-allowed;transform:none}
 #settings .ghostMini,#prefs .ghostMini,#prefs .profileAction,#prefs .profileAddBtn{
   min-height:40px;border-radius:40px;padding:9px 15px;font:600 13.5px "Albert Sans",system-ui,sans-serif;
   display:inline-flex;align-items:center;justify-content:center;gap:8px}
@@ -2755,12 +2771,18 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
   <div class="panel"><h2>Engine</h2><p>Live status from the Triboon server.</p><div id="engineStatus"><div class="kv"><span>Engine</span><span>Checking...</span></div></div></div>
 
   <div class="panel"><h2>Streaming performance</h2>
-    <p>Let Triboon size buffering and connection use from your provider capacity, server network,
-       and expected simultaneous users. Auto keeps starts and seeks ahead of background buffering.</p>
+    <p>Let Triboon size server read-ahead and connection use from your provider capacity, server network,
+       and expected simultaneous users. Auto keeps starts and seeks ahead of background read-ahead.</p>
+    <div class="perfSummary" id="perfSummary" aria-live="polite">
+      <div class="perfCard"><div class="k">Providers</div><div class="v">--</div><small>waiting for server</small></div>
+      <div class="perfCard"><div class="k">Playback pool</div><div class="v">--</div><small>available articles</small></div>
+      <div class="perfCard"><div class="k">Start reserve</div><div class="v">--</div><small>starts and seeks</small></div>
+      <div class="perfCard"><div class="k">Live pressure</div><div class="v">--</div><small>active playback</small></div>
+    </div>
     <div class="settingsForm">
       <div class="settingsRow">
-        <label class="settingsControl"><span>Expected users</span><input id="perfUsers" placeholder="4" title="simultaneous users to plan for"></label>
-        <label class="settingsControl"><span>Remote users</span><input id="perfRemote" placeholder="0" title="remote users depend on upload speed"></label>
+        <label class="settingsControl"><span>Expected users</span><input id="perfUsers" type="number" min="1" max="50" inputmode="numeric" placeholder="4" title="simultaneous users to plan for"></label>
+        <label class="settingsControl"><span>Remote users</span><input id="perfRemote" type="number" min="0" max="50" inputmode="numeric" placeholder="0" title="remote users depend on upload speed"></label>
         <label class="settingsControl"><span>Stream mix</span><select id="perfMix">
           <option value="mixed">Mixed</option>
           <option value="1080p">Mostly 1080p</option>
@@ -2768,8 +2790,8 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
         </select></label>
       </div>
       <div class="settingsRow">
-        <label class="settingsControl"><span>Download Mbps</span><input id="perfDown" placeholder="server download" title="server download speed"></label>
-        <label class="settingsControl"><span>Upload Mbps</span><input id="perfUp" placeholder="server upload" title="server upload speed for remote users"></label>
+        <label class="settingsControl"><span>Download Mbps</span><input id="perfDown" type="number" min="0" max="100000" inputmode="numeric" placeholder="server download" title="server download speed"></label>
+        <label class="settingsControl"><span>Upload Mbps</span><input id="perfUp" type="number" min="0" max="100000" inputmode="numeric" placeholder="server upload" title="server upload speed for remote users"></label>
         <label class="settingsControl"><span>Profile</span><select id="perfProfile">
           <option value="auto">Auto</option>
           <option value="fast">Fast start</option>
@@ -2779,18 +2801,18 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
         </select></label>
       </div>
       <div class="settingsRow two">
-        <label class="settingsControl"><span>1080p buffer</span><input id="perfBuf1080" placeholder="seconds"></label>
-        <label class="settingsControl"><span>4K buffer</span><input id="perfBuf4k" placeholder="seconds"></label>
+        <label class="settingsControl"><span>1080p read-ahead goal</span><input id="perfBuf1080" type="number" min="30" max="600" inputmode="numeric" placeholder="seconds"></label>
+        <label class="settingsControl"><span>4K read-ahead goal</span><input id="perfBuf4k" type="number" min="30" max="360" inputmode="numeric" placeholder="seconds"></label>
       </div>
       <div class="settingsRow">
-        <label class="settingsControl"><span>1080p connections</span><input id="perfConn1080" placeholder="per stream"></label>
-        <label class="settingsControl"><span>4K connections</span><input id="perfConn4k" placeholder="per stream"></label>
-        <label class="settingsControl"><span>Start/seek reserve</span><input id="perfReserve" placeholder="% of connections"></label>
+        <label class="settingsControl"><span>1080p connections</span><input id="perfConn1080" type="number" min="4" max="60" inputmode="numeric" placeholder="per stream"></label>
+        <label class="settingsControl"><span>4K connections</span><input id="perfConn4k" type="number" min="6" max="80" inputmode="numeric" placeholder="per stream"></label>
+        <label class="settingsControl"><span>Start/seek reserve</span><input id="perfReserve" type="number" min="10" max="50" inputmode="numeric" placeholder="% of connections"></label>
       </div>
     </div>
     <div class="settingsActions">
-      <button class="btn primary" id="perfTest">Test &amp; recommend</button>
-      <button class="btn ghost" id="perfApply">Apply recommendation</button>
+      <button class="btn primary" id="perfTest">Calculate recommendation</button>
+      <button class="btn ghost" id="perfApply" disabled>Apply recommendation</button>
       <button class="btn ghost" id="perfSave">Save custom</button>
     </div>
     <div class="hint settingsStatus" id="perfStatus"></div>
@@ -3200,6 +3222,7 @@ const S = {
   view: 'home', zone: 'rows', rowIdx: 0, colIdx: {}, heroIdx: 0, railIdx: 0, drawerIdx: 0, drawerSortIdx: 0, ctlIdx: 1,
   playing: null,      // { sessionId, streamUrl, remuxUrl, item, name, usingRemux, remuxBase, startOffset, duration }
   osdTimer: null, healthTimer: null, watchTimer: null, activityTimer: null, qcTimer: null, sourceSort: 'best',
+  streamingRuntime: null, playbackRuntime: null, runtimeStatsAt: 0, runtimeStatsPending: false,
 };
 const perf0 = performance.now();
 function appMs() { return Math.round(performance.now() - perf0); }
@@ -7289,6 +7312,21 @@ function fmtMbps(bitsPerSecond) {
   const mbps = n / 1000000;
   return `${mbps >= 10 ? Math.round(mbps) : mbps.toFixed(1)} Mbps`;
 }
+async function refreshPlayerRuntimeStats(force = false) {
+  if (!S.playing || S.runtimeStatsPending) return;
+  const now = Date.now();
+  if (!force && now - (S.runtimeStatsAt || 0) < 5000) return;
+  S.runtimeStatsPending = true;
+  try {
+    const st = await api('/api/status');
+    S.streamingRuntime = st.streaming || null;
+    S.playbackRuntime = st.playback || null;
+    S.runtimeStatsAt = Date.now();
+  } catch {
+  } finally {
+    S.runtimeStatsPending = false;
+  }
+}
 function playerModeLabel(p = S.playing) {
   if (!p) return '';
   if (p.usingNative) return 'ExoPlayer';
@@ -7374,6 +7412,17 @@ function collectPlayerStats() {
   rows.push(['File', p.fileName || '—']);
   rows.push(['Size', fmtBytes(p.size || native.size)]);
   rows.push(['Position', `${fmt(currentTime())}${totalDuration() ? ' / ' + fmt(totalDuration()) : ''}`]);
+  const runtime = S.playbackRuntime || {};
+  const streaming = S.streamingRuntime || {};
+  const targetSec = p.item && p.item.type === 'live'
+    ? 0
+    : ((p.size || native.size || 0) > 4e9 ? streaming.buffer4kSec : streaming.buffer1080Sec);
+  if (targetSec || runtime.files) {
+    rows.push(['Server target', targetSec ? `${targetSec}s read-ahead goal` : '--']);
+    rows.push(['Server read-ahead', runtime.files
+      ? `${runtime.readAheadCurrentMax || 0}/${runtime.readAheadCeilingMax || 0} articles - ${fmtBytes(runtime.cacheBytes)} hot`
+      : 'waiting for server stats']);
+  }
   rows.push(['Buffered', buffered ? `${Math.round(buffered)}s ahead` : '—']);
   rows.push(['Video', native.video || (v.videoWidth ? `${v.videoWidth}×${v.videoHeight}` : '—')]);
   rows.push(['Audio', native.audio || (p.tracks && p.tracks.audio && p.tracks.audio[p.audioTrack] && p.tracks.audio[p.audioTrack].codec) || '—']);
@@ -7383,15 +7432,25 @@ function collectPlayerStats() {
 }
 function renderPlayerStats() {
   const box = $('playerStats'); if (!box) return;
+  refreshPlayerRuntimeStats().catch(() => {});
   const rows = collectPlayerStats();
   box.innerHTML = `<h3>Playback stats</h3><div class="statGrid">${
-    rows.map(([k, v]) => `<span>${esc(k)}</span><span title="${esc(v)}">${esc(v)}</span>`).join('')
+    rows.map(([k, v]) => {
+      const label = k === 'Buffered' ? 'Player buffer' : k;
+      return `<span>${esc(label)}</span><span title="${esc(v)}">${esc(v)}</span>`;
+    }).join('')
   }</div>`;
 }
 function togglePlayerStats() {
   const box = $('playerStats'); if (!box) return;
   const open = !box.classList.contains('open');
-  if (open) { closeTrackMenu(); renderPlayerStats(); box.classList.add('open'); showOsd(); }
+  if (open) {
+    closeTrackMenu();
+    refreshPlayerRuntimeStats(true).then(() => {
+      if ($('playerStats').classList.contains('open')) renderPlayerStats();
+    }).catch(() => {});
+    renderPlayerStats(); box.classList.add('open'); showOsd();
+  }
   else closePlayerStats();
 }
 async function saveWatch(final) {
@@ -13272,19 +13331,49 @@ function setPerfForm(p = {}) {
   $('perfConn4k').value = p.maxConnPerStream4k ?? 20;
   $('perfReserve').value = p.startupReservePct ?? 25;
 }
+function perfSetApplyEnabled(on) {
+  const b = $('perfApply');
+  if (!b) return;
+  b.disabled = !on;
+  b.classList.toggle('disabled', !on);
+  b.setAttribute('aria-disabled', on ? 'false' : 'true');
+}
+function perfProfileLabel(v) {
+  return ({ auto: 'Auto', fast: 'Fast start', balanced: 'Balanced', large: 'Large buffer', custom: 'Custom' })[v] || 'Auto';
+}
+function perfNum(v, suffix = '') {
+  const n = Number(v) || 0;
+  return n ? `${n}${suffix}` : '--';
+}
 function renderPerfResult(r, saved) {
+  const summary = $('perfSummary');
   if (!r || !r.capacity) {
-    $('perfStatus').textContent = saved ? 'saved - adaptive streaming profile is active' : 'not configured yet';
+    if (summary) summary.innerHTML = `
+      <div class="perfCard"><div class="k">Providers</div><div class="v">--</div><small>not configured</small></div>
+      <div class="perfCard"><div class="k">Playback pool</div><div class="v">--</div><small>waiting for server</small></div>
+      <div class="perfCard"><div class="k">Start reserve</div><div class="v">--</div><small>starts and seeks</small></div>
+      <div class="perfCard"><div class="k">Live pressure</div><div class="v">--</div><small>active playback</small></div>`;
+    $('perfStatus').innerHTML = saved ? '<div class="perfStatusLine">Active now: adaptive streaming profile is saved.</div>' : '<div class="perfStatusLine">Not configured yet.</div>';
     return;
   }
   const c = r.capacity;
   const rec = r.recommendation || saved || {};
-  const warn = (r.warnings || []).length ? ` Notes: ${(r.warnings || []).join(' ')}` : '';
-  $('perfStatus').textContent =
-    `${c.providers || 0} provider(s), ${c.totalConnections || 0} total connections, ` +
-    `${c.reserveConnections || 0} reserved for starts/seeks. ` +
-    `Recommend ${rec.buffer1080Sec || '?'}s 1080p buffer, ${rec.buffer4kSec || '?'}s 4K buffer, ` +
-    `${rec.maxConnPerStream1080 || '?'}x/stream 1080p, ${rec.maxConnPerStream4k || '?'}x/stream 4K.${warn}`;
+  const live = r.playback || {};
+  const playbackPool = c.playbackConnections ?? Math.max(0, (c.usableConnections || 0) - (c.reserveConnections || 0));
+  const wait = live.segmentWaits ? `${live.avgSegmentWaitMs || 0}ms wait` : 'no waits';
+  const pressure = live.activeMounts ? `${live.activeMounts} active` : 'idle';
+  if (summary) summary.innerHTML = `
+    <div class="perfCard"><div class="k">Providers</div><div class="v">${esc(c.providers || 0)} / ${esc(c.totalConnections || 0)}</div><small>configured / connections</small></div>
+    <div class="perfCard"><div class="k">Playback pool</div><div class="v">${esc(playbackPool)}</div><small>${esc(c.usableConnections || 0)} usable total</small></div>
+    <div class="perfCard"><div class="k">Start reserve</div><div class="v">${esc(c.reserveConnections || 0)}</div><small>${esc(rec.startupReservePct || c.startupReservePct || 25)}% held back</small></div>
+    <div class="perfCard"><div class="k">Live pressure</div><div class="v">${esc(pressure)}</div><small>${esc(wait)}${live.adaptiveBoosts ? ` - ${esc(live.adaptiveBoosts)} boosts` : ''}</small></div>`;
+  const headline = saved ? 'Active now' : 'Recommendation preview';
+  const warn = (r.warnings || []).map((w) => `<span>${esc(w)}</span>`).join('');
+  $('perfStatus').innerHTML =
+    `<div class="perfStatusLine">${headline}: ${esc(perfProfileLabel(rec.profile))} - ` +
+    `${esc(perfNum(rec.buffer1080Sec, 's'))} 1080p read-ahead goal, ${esc(perfNum(rec.buffer4kSec, 's'))} 4K read-ahead goal, ` +
+    `${esc(perfNum(rec.maxConnPerStream1080, 'x'))}/stream 1080p, ${esc(perfNum(rec.maxConnPerStream4k, 'x'))}/stream 4K.</div>` +
+    (warn ? `<div class="perfWarnings">${warn}</div>` : '');
 }
 function syncTime(ts) {
   const n = Number(ts) || 0;
@@ -13414,8 +13503,15 @@ async function refreshSettings() {
     refreshActivity();
     const s = await api('/api/settings');
     setPerfForm(s.streamingPerformance || {});
-    renderPerfResult({ capacity: { ...(st.streaming || {}), providers: st.nntp ? st.nntp.providers : 0 }, recommendation: s.streamingPerformance || {}, warnings: [] }, s.streamingPerformance || {});
     S.perfRecommendation = null;
+    perfSetApplyEnabled(false);
+    renderPerfResult({
+      capacity: { ...(st.streaming || {}), providers: st.nntp ? st.nntp.providers : 0 },
+      recommendation: s.streamingPerformance || {},
+      playback: st.playback || {},
+      pipeline: st.pipeline || {},
+      warnings: [],
+    }, s.streamingPerformance || {});
     S.settingsCache = s; // for the ✎ edit flow (secrets stay redacted)
     $('npList').innerHTML = s.providers.length ? s.providers.map((p, i) =>
       `<div class="kv"><span>${esc(p.host)}:${esc(p.port)} ${p.tls ? '🔒' : ''} ${p.user ? '· <span style="color:var(--amber)">login saved ✓</span>' : ''}</span>
@@ -13611,27 +13707,39 @@ document.querySelectorAll('#coverSize button').forEach((b) => b.addEventListener
 }));
 $('perfTest').addEventListener('click', async () => {
   $('perfTest').disabled = true;
-  $('perfStatus').textContent = 'testing capacity and building recommendation...';
+  perfSetApplyEnabled(false);
+  $('perfStatus').textContent = 'calculating recommendation...';
   try {
     const r = await api('/api/streaming/recommend', { method: 'POST', body: perfFormValues() });
     S.perfRecommendation = r.recommendation;
     setPerfForm(r.recommendation || {});
     renderPerfResult(r);
+    perfSetApplyEnabled(!!S.perfRecommendation);
     toast('Streaming recommendation ready');
   } catch (e) {
+    S.perfRecommendation = null;
+    perfSetApplyEnabled(false);
     $('perfStatus').textContent = 'recommendation failed: ' + e.message;
     toast('Recommendation failed: ' + e.message);
   }
   $('perfTest').disabled = false;
 });
 $('perfApply').addEventListener('click', async () => {
-  const rec = S.perfRecommendation || perfFormValues();
+  const rec = S.perfRecommendation;
+  if (!rec) {
+    perfSetApplyEnabled(false);
+    return toast('Calculate a recommendation first');
+  }
   await api('/api/settings', { method: 'POST', body: { streamingPerformance: rec } });
+  S.perfRecommendation = null;
+  perfSetApplyEnabled(false);
   toast('Streaming recommendation applied');
   refreshSettings();
 });
 $('perfSave').addEventListener('click', async () => {
   await api('/api/settings', { method: 'POST', body: { streamingPerformance: { ...perfFormValues(), profile: 'custom' } } });
+  S.perfRecommendation = null;
+  perfSetApplyEnabled(false);
   toast('Streaming performance saved');
   refreshSettings();
 });

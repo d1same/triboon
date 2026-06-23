@@ -119,6 +119,10 @@ Rules that must not drift:
 - User quality caps are enforced before transcoding, at source selection.
 - The Sources drawer and the Play button share the same title verification and
   ranking path; manual source selection must mount the chosen release.
+- Detail-page source warmup is a startup-speed feature. Title-only warmup
+  results can feed the later exact-id Play request, and Play joins an in-flight
+  NZB prefetch for the selected release instead of downloading the same NZB
+  twice.
 - Android capability claims come from the native bridge, not WebView guesses.
   Video caps are decoder-based, but HD-audio passthrough caps must come from
   the active HDMI/ARC/eARC audio output encodings. TrueHD/Atmos/DTS-HD releases
