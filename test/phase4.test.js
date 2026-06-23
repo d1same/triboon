@@ -103,17 +103,20 @@ function serveFile(file) {
   const server = http.createServer((req, res) => {
     const stat = fs.statSync(file);
     const range = req.headers.range && /bytes=(\d*)-(\d*)/.exec(req.headers.range);
+    const ext = path.extname(file).toLowerCase();
+    const type = ext === '.ts' ? 'video/mp2t' : ext === '.mp4' ? 'video/mp4' : ext === '.mkv' ? 'video/x-matroska' : 'application/octet-stream';
     if (range && range[1] !== '') {
       const start = +range[1];
       const end = range[2] ? +range[2] : stat.size - 1;
-      res.writeHead(206, { 'content-range': `bytes ${start}-${end}/${stat.size}`, 'content-length': end - start + 1, 'accept-ranges': 'bytes' });
+      res.writeHead(206, { 'content-type': type, 'content-range': `bytes ${start}-${end}/${stat.size}`, 'content-length': end - start + 1, 'accept-ranges': 'bytes' });
       fs.createReadStream(file, { start, end }).pipe(res);
     } else {
-      res.writeHead(200, { 'content-length': stat.size, 'accept-ranges': 'bytes' });
+      res.writeHead(200, { 'content-type': type, 'content-length': stat.size, 'accept-ranges': 'bytes' });
       fs.createReadStream(file).pipe(res);
     }
   });
-  return new Promise((r) => server.listen(0, '127.0.0.1', () => r({ server, url: `http://127.0.0.1:${server.address().port}/multi.mkv` })));
+  const name = encodeURIComponent(path.basename(file));
+  return new Promise((r) => server.listen(0, '127.0.0.1', () => r({ server, url: `http://127.0.0.1:${server.address().port}/${name}` })));
 }
 
 function collect(stream) {
@@ -2150,9 +2153,9 @@ test('live tv remux preserves 5.1 channel count as AAC when ffmpeg can encode it
   const src = path.join(dir, 'live.ts');
   const gen = spawnSync(detectFfmpeg().path, [
     '-y', '-hide_banner', '-loglevel', 'error',
-    '-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=12:duration=2',
+    '-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=12:duration=3',
     '-f', 'lavfi', '-i', 'anullsrc=channel_layout=5.1:sample_rate=48000',
-    '-shortest', '-c:v', 'libx264', '-preset', 'ultrafast',
+    '-shortest', '-c:v', 'libx264', '-preset', 'ultrafast', '-g', '12',
     '-c:a', 'ac3', '-ac', '6', '-f', 'mpegts', src,
   ], { timeout: 120000, windowsHide: true });
   if (gen.status !== 0) return;
