@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
     <!-- Triboon is self-hosted and IPTV providers commonly remain HTTP-only.
-         Cleartext is explicit here instead of relying on platform defaults. -->
+         The setup flow rejects public http:// server addresses; this config keeps
+         local/private server HTTP and provider HTTP intentional instead of implicit. -->
     <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
             <certificates src="system" />

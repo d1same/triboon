@@ -315,7 +315,11 @@ public class MainActivity extends Activity {
             prefs().edit().putString(KEY_SERVER, server).apply();
         }
         if (server.isEmpty()) showSetup(null);
-        else web.loadUrl(server);
+        else {
+            String serverError = serverUrlValidationError(server);
+            if (!serverError.isEmpty()) showSetup(serverError);
+            else web.loadUrl(server);
+        }
 
         // First launch: ask for the mic up front so voice search Just Works later. One-shot —
         // if the user declines here, we only re-ask when they actually tap the mic button.
@@ -474,6 +478,66 @@ public class MainActivity extends Activity {
         url = url.replaceAll("(?i)%3a", ":").replaceAll("(?i)%2f", "/");
         if (!url.startsWith("http://") && !url.startsWith("https://")) url = "http://" + url;
         return url.replaceAll("/+$", "");
+    }
+
+    private String serverUrlValidationError(String url) {
+        try {
+            Uri u = Uri.parse(url == null ? "" : url.trim());
+            String scheme = u.getScheme() == null ? "" : u.getScheme().toLowerCase(Locale.US);
+            if ("https".equals(scheme)) return "";
+            if (!"http".equals(scheme)) return "Use an http or https Triboon server address.";
+            if (isLocalCleartextServerHost(u.getHost())) return "";
+        } catch (Exception ignored) {
+        }
+        return "Use HTTPS for remote Triboon addresses. Plain HTTP is limited to local/private LAN servers.";
+    }
+
+    private boolean isLocalCleartextServerHost(String host) {
+        if (host == null) return false;
+        String h = host.trim().toLowerCase(Locale.US);
+        if (h.isEmpty()) return false;
+        if (h.startsWith("[") && h.endsWith("]")) h = h.substring(1, h.length() - 1);
+        if (isAndroidLoopbackAlias(h)) return true;
+        if (h.indexOf('.') < 0) return true; // short LAN names like "triboon" or "nas".
+        if (h.endsWith(".local") || h.endsWith(".lan") || h.endsWith(".home.arpa")) return true;
+        if (!hostLooksLiteral(h)) return false;
+        try {
+            return isLocalCleartextServerAddress(InetAddress.getByName(h));
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private boolean isLocalCleartextServerAddress(InetAddress addr) {
+        if (addr == null) return false;
+        if (addr.isLoopbackAddress() || addr.isLinkLocalAddress() || addr.isSiteLocalAddress()) return true;
+        byte[] b = addr.getAddress();
+        if (b == null) return false;
+        if (b.length == 4) return isLocalCleartextIpv4Bytes(b, 0);
+        if (b.length == 16) {
+            int b0 = b[0] & 0xff;
+            if ((b0 & 0xfe) == 0xfc) return true; // Unique local fc00::/7
+            boolean mapped = true;
+            for (int i = 0; i < 10; i++) mapped = mapped && b[i] == 0;
+            if (mapped && (b[10] & 0xff) == 0xff && (b[11] & 0xff) == 0xff) {
+                return isLocalCleartextIpv4Bytes(b, 12);
+            }
+            if (b0 == 0 && (b[1] & 0xff) == 0x64 && (b[2] & 0xff) == 0xff && (b[3] & 0xff) == 0x9b) {
+                return isLocalCleartextIpv4Bytes(b, 12); // Well-known NAT64 prefix.
+            }
+        }
+        return false;
+    }
+
+    private boolean isLocalCleartextIpv4Bytes(byte[] b, int offset) {
+        if (b == null || b.length < offset + 4) return false;
+        int a = b[offset] & 0xff;
+        int c = b[offset + 1] & 0xff;
+        if (a == 10 || a == 127) return true;
+        if (a == 100 && c >= 64 && c <= 127) return true; // Private overlay/Tailscale-style CGNAT.
+        if (a == 169 && c == 254) return true;
+        if (a == 172 && c >= 16 && c <= 31) return true;
+        return a == 192 && c == 168;
     }
 
     private int normalizedPort(Uri u) {
@@ -5644,6 +5708,12 @@ public class MainActivity extends Activity {
     private void connect() {
         String url = normalizeServerUrl(addr.getText().toString());
         if (url.isEmpty()) return;
+        String serverError = serverUrlValidationError(url);
+        if (!serverError.isEmpty()) {
+            setupMsg.setText(serverError);
+            addr.requestFocus();
+            return;
+        }
         prefs().edit().putString(KEY_SERVER, url).apply();
         if (!isTvDevice()) {
             hidePhoneKeyboard(addr);

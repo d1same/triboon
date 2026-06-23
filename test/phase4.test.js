@@ -1785,6 +1785,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android phone/tablet playback should be eligible for system PiP');
   assert.match(networkSecurity, /<base-config cleartextTrafficPermitted="true">[\s\S]+<certificates src="system" \/>/,
     'network security config should keep self-hosted/IPTV HTTP intentional instead of relying on platform defaults');
+  assert.match(android, /private String serverUrlValidationError\(String url\) \{[\s\S]+"https"\.equals\(scheme\)[\s\S]+!"http"\.equals\(scheme\)[\s\S]+isLocalCleartextServerHost\(u\.getHost\(\)\)[\s\S]+Plain HTTP is limited to local\/private LAN servers/,
+    'Android setup should allow LAN HTTP but reject remote/public HTTP server addresses before WebView load');
+  assert.match(android, /private boolean isLocalCleartextServerHost\(String host\) \{[\s\S]+isAndroidLoopbackAlias\(h\)[\s\S]+h\.indexOf\('\.'\) < 0[\s\S]+h\.endsWith\("\.local"\)[\s\S]+hostLooksLiteral\(h\)[\s\S]+isLocalCleartextServerAddress\(InetAddress\.getByName\(h\)\)/,
+    'Android cleartext server scope should include loopback, short LAN names, .local/.lan/.home.arpa, and private IP literals');
+  assert.match(android, /String serverError = serverUrlValidationError\(server\);[\s\S]+if \(!serverError\.isEmpty\(\)\) showSetup\(serverError\);[\s\S]+else web\.loadUrl\(server\);[\s\S]+String serverError = serverUrlValidationError\(url\);[\s\S]+if \(!serverError\.isEmpty\(\)\) \{[\s\S]+setupMsg\.setText\(serverError\);[\s\S]+return;[\s\S]+\}[\s\S]+prefs\(\)\.edit\(\)\.putString\(KEY_SERVER, url\)\.apply\(\);/,
+    'Android should reject unsafe HTTP before saving it or loading it into WebView');
   assert.ok(android.includes('MIN_WEBVIEW_MAJOR = 88')
       && android.includes('WebView.getCurrentWebViewPackage()')
       && android.includes('showSetup(webViewUnavailableMessage())'),
