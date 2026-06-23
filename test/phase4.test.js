@@ -316,6 +316,14 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'background home refreshes should wait until TV focus and D-pad input have settled');
   assert.match(ui, /function scheduleHomeCatalogRefresh\(\) \{[\s\S]+if \(S\._homeCatalogScheduled\) return;[\s\S]+S\._homeCatalogScheduled = true;[\s\S]+refreshHomeCatalogRows\(\)\.then[\s\S]+refreshHomeWhenSettled\(\{ catalogOnly: true \}\)/,
     'home catalog rows should hydrate after first paint instead of blocking the app shell');
+  assert.match(ui, /const HOME_CATALOG_INITIAL = 16;[\s\S]+function homeCatalogRow\(name, path, result, kind = 'catalog'\)[\s\S]+items: all\.slice\(0, HOME_CATALOG_INITIAL\),[\s\S]+buffer: all\.slice\(HOME_CATALOG_INITIAL\)/,
+    'home catalog rows should keep first paint small while retaining overflow items for lazy loading');
+  assert.match(ui, /rows\.push\(homeCatalogRow\('Trending this week', paths\[0\], trend, 'catalog'\)\);[\s\S]+rows\.push\(homeCatalogRow\('Popular movies', paths\[1\], movies, 'catalog'\)\);[\s\S]+rows\.push\(homeCatalogRow\('Popular series', paths\[2\], tv, 'catalog'\)\);/,
+    'home Trending, Popular Movies, and Popular Series rows should be lazy catalog rows');
+  assert.match(ui, /function bindHomeRowLazy\(cards, root, ri\) \{[\s\S]+cards\.addEventListener\('scroll', \(\) => maybeLoadMoreHomeRow\(root, ri\), \{ passive: true \}\);[\s\S]+async function loadMoreHomeRow\(root, ri\) \{[\s\S]+api\(homeCatalogPathWithPage\(lazy\.path, page\)\)[\s\S]+appendHomeRowCards\(root, ri, added, firstNew\)/,
+    'home catalog rows should append more cards on row scroll without repainting the whole page');
+  assert.match(ui, /function focusCard\(ri, ci, opts = \{\}\) \{[\s\S]+maybeLoadMoreHomeRow\(view\.root, ri\);/,
+    'home catalog lazy loading should also trigger from D-pad focus near the right edge');
   assert.match(ui, /function refreshHomeWhenSettled\(opts = \{\}\) \{[\s\S]+if \(S\._booting && S\.view === 'home'\) return loadRows\(\{ preserveFocus: true, background: true, \.\.\.opts \}\);[\s\S]+if \(homeBackgroundRefreshReady\(\)\) loadRows/,
     'boot-time home refresh should publish under the splash instead of waiting for visible idle focus');
   assert.match(ui, /function homeRowsFromWatch\(cw, loading = false\) \{[\s\S]+rows\.push\(\.\.\.cachedHomeCatalogRows\(\)\);[\s\S]+if \(!rows\.length && loading\)[\s\S]+emptyLabel: 'Loading\.\.\.'[\s\S]+function homeRowsReadyForBoot\(rows\) \{[\s\S]+row\.name !== 'Loading home'[\s\S]+function publishHomeRows\(rows, opts = \{\}\) \{[\s\S]+if \(S\._homeRowsSig === sig && \$\('rows'\)\.children\.length\) \{[\s\S]+return false;[\s\S]+async function loadRows\(opts = \{\}\) \{[\s\S]+const runId = S\._homeLoadRun[\s\S]+!opts\.catalogOnly && !opts\.watchReady && !hasFreshWatch[\s\S]+publishHomeRows\(homeRowsFromWatch\(cachedWatchRowsForHome\(\), true\), opts\); \/\/ Internal first paint: focus target under the splash before \/api\/watch returns\.[\s\S]+loadWatchState\(\)\.then/,
@@ -665,6 +673,12 @@ test('Android native player: direct source and native chrome stay out of the web
     && ui.includes('body.mobileShell #person .personHead{flex-direction:column;align-items:center;gap:16px')
     && ui.includes('body.mobileShell #person .personHead .pInfo{width:100%;text-align:center}'),
     'mobile person pages should stack the profile header instead of squeezing text beside the poster');
+  assert.match(ui, /const DETAIL_CAST_BATCH = 20;[\s\S]+function appendCastBatch\(row\)[\s\S]+row\.addEventListener\('scroll', maybeLoadMoreCast, \{ passive: true \}\)/,
+    'detail cast rows should keep the first render bounded and append more cast as the row scrolls');
+  assert.match(ui, /const PERSON_WORKS_BATCH = 24;[\s\S]+\.map\(mapTmdb\);\s+renderPersonWorks\(credits\);[\s\S]+function loadMorePersonWorks\(focusNew = false\)[\s\S]+if \(start === 0\) renderGrid\(batch, \$\('personGrid'\)\);[\s\S]+else appendGrid\(batch\);/,
+    'person known-for pages should lazy-render all filtered credits in batches instead of slicing to a fixed cap');
+  assert.match(ui, /\$\('person'\)\.addEventListener\('scroll', maybeLoadMorePersonWorks, \{ passive: true \}\);[\s\S]+if \(S\.view === 'person' && S\.gridIdx >= \(S\.gridItems \|\| \[\]\)\.length - Math\.max\(2, gridCols\(\) \* 2\)\) \{[\s\S]+loadMorePersonWorks\(false\);/,
+    'person known-for lazy loading should work for both scrolling and D-pad focus near the loaded edge');
   assert.ok(ui.includes('id="statsBtn"') && ui.includes("return ['chGuide', 'back10', 'playPause', 'fwd30', 'nextEpBtn', 'ccBtn', 'audBtn', 'srndBtn', 'qualBtn', 'muteBtn', 'fsBtn', 'statsBtn']")
     && ui.includes('function collectPlayerStats()') && ui.includes('window.__tvNativeVideoStats'),
     'web player stats must be the last D-pad reachable control and accept native ExoPlayer stats');
@@ -996,6 +1010,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'web player should mirror native Guide-left, playback-center, secondary-right button grouping with info last');
   assert.match(ui, /#trackMenu\{display:none;position:absolute;bottom:118px;right:44px;width:min\(390px,calc\(100vw - 88px\)\);min-width:260px;max-height:min\(420px,calc\(100vh - 220px\)\);[\s\S]+backdrop-filter:blur\(18px\)/,
     'web player CC/audio/quality popup should open near the right-side control buttons with polished glass styling');
+  assert.match(ui, /#trackMenu button\{display:flex;width:100%;min-height:44px;/,
+    'track menu rows should meet the 44px touch target floor');
   assert.match(ui, /function playerSurfaceClick\(e\) \{[\s\S]+closest\('#osd \.top,\.playerMetaRow,\.seekLine,\.ctl,#playerEpisodes,#trackMenu,#playerStats,#pGuide,#vlcPanel,#upNext,#playerLoader,button,a,input,select,textarea'\)[\s\S]+return true;[\s\S]+function playerSingleClick\(e\) \{[\s\S]+setTimeout\(\(\) => \{[\s\S]+togglePlay\(\);[\s\S]+\}, 320\);[\s\S]+function playerDoubleClick\(e\) \{[\s\S]+clearTimeout\(_playerSurfaceClickT\);[\s\S]+toggleFullscreen\(\);/,
     'web player screen clicks should toggle play, while double-click fullscreen cancels the pending pause');
   assert.match(ui, /\$\('player'\)\.addEventListener\('click', playerSingleClick\);[\s\S]+\$\('player'\)\.addEventListener\('dblclick', playerDoubleClick\);/,

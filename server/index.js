@@ -382,7 +382,7 @@ function embeddedIpv4FromIpv6(ip) {
   if (firstSixZero) return ipv4FromWords(w, 6); // deprecated ::127.0.0.1 / ::7f00:1
   if (w[0] === 0x64 && w[1] === 0xff9b && w.slice(2, 6).every((x) => x === 0)) return ipv4FromWords(w, 6); // 64:ff9b::/96 NAT64
   if (w[0] === 0x2002) return ipv4FromWords(w, 1); // 6to4 embeds IPv4 in 2002::/16
-  if (w[0] === 0x2001 && w[1] === 0x0000) return '0.0.0.0'; // Teredo 2001:0::/32 embeds client IPv4
+  if (w[0] === 0x2001 && w[1] === 0x0000) return '0.0.0.0'; // Teredo tunnels are blanket-blocked instead of decoded.
   return null;
 }
 function isPrivateIpv6(ip) {
@@ -520,6 +520,7 @@ async function validateAndPinIptvUrl(raw, label = 'IPTV URL') {
     cacheHost: net.isIP(host) ? '' : host,
     address: picked && picked.address,
     family: picked && picked.family,
+    addressCount: safeHit && Array.isArray(safeHit.addrs) ? safeHit.addrs.length : (picked ? 1 : 0),
     lookup: picked && picked.address ? pinnedIptvLookup(picked.address, picked.family) : undefined,
     onFailure: () => markIptvPinnedAddressFailure({ cacheHost: net.isIP(host) ? '' : host, address: picked && picked.address, family: picked && picked.family }),
   };
@@ -982,14 +983,14 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
   ctx.req.once('aborted', onClientClose);
   ctx.res.once('close', onClientClose);
 
-  const open = (rawTarget, hop) => {
+  const open = (rawTarget, hop, pinRetries = 0) => {
     if (done || slot.closed) return;
-    validateAndPinIptvUrl(rawTarget, 'Live stream URL').then((pin) => openAllowed(rawTarget, hop, pin)).catch((e) => {
+    validateAndPinIptvUrl(rawTarget, 'Live stream URL').then((pin) => openAllowed(rawTarget, hop, pin, pinRetries)).catch((e) => {
       console.error(`[iptv native] ${label} blocked upstream url: ${sanitizeIptvLogError(e)}`);
       fail(e.status || 400, e.message || 'blocked live stream url');
     });
   };
-  const openAllowed = (rawTarget, hop, pin = null) => {
+  const openAllowed = (rawTarget, hop, pin = null, pinRetries = 0) => {
     if (done || slot.closed) return;
     let u;
     try {
@@ -1040,6 +1041,22 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
       if (pin && typeof pin.onFailure === 'function') {
         try { pin.onFailure(); } catch {}
       }
+    };
+    const retryPinnedAddress = (reason) => {
+      markPinFailure();
+      if (ctx.res.headersSent || ctx.res.destroyed || done || slot.closed) return false;
+      if (!pin || !pin.cacheHost || !pin.address || (pin.addressCount || 0) <= pinRetries + 1) return false;
+      clearFirstByteTimer();
+      const old = up; up = null;
+      try {
+        if (old) {
+          old.removeAllListeners('error');
+          old.destroy(new Error('live stream retrying pinned address'));
+        }
+      } catch {}
+      console.error(`[iptv native] ${label} pinned upstream failed (${reason}); retrying next address`);
+      open(rawTarget, hop, pinRetries + 1);
+      return true;
     };
     up = lib.request(u, {
       method: 'GET',
@@ -1100,6 +1117,7 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
       }
       ctx.res.writeHead(r.statusCode || 502, out);
       firstByteTimer = setTimeout(() => {
+        if (retryPinnedAddress('startup timeout')) return;
         markPinFailure();
         fail(504, { status: 504, reason: 'live stream startup timeout' });
       }, IPTV_NATIVE_FIRST_BYTE_TIMEOUT_MS);
@@ -1117,6 +1135,7 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
     });
     up.on('error', (e) => {
       if (done || slot.closed || /live stream (retuned|client closed|shutdown)/i.test(String(e && e.message))) return;
+      if (retryPinnedAddress('connection error')) return;
       markPinFailure();
       console.error(`[iptv native] ${label} upstream error: ${String(e.message).slice(0, 160)}`);
       if (!ctx.res.headersSent) send(ctx.res, 502, { error: 'live stream failed' });
@@ -1124,11 +1143,16 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
       stop('upstream error');
     });
     firstByteTimer = setTimeout(() => {
+      if (retryPinnedAddress('startup timeout')) return;
       markPinFailure();
       fail(504, { status: 504, reason: 'live stream startup timeout' });
     }, IPTV_NATIVE_FIRST_BYTE_TIMEOUT_MS);
     firstByteTimer.unref();
-    up.setTimeout(IPTV_NATIVE_FIRST_BYTE_TIMEOUT_MS, () => { markPinFailure(); up.destroy(new Error('live stream upstream timeout')); });
+    up.setTimeout(IPTV_NATIVE_FIRST_BYTE_TIMEOUT_MS, () => {
+      if (retryPinnedAddress('upstream timeout')) return;
+      markPinFailure();
+      up.destroy(new Error('live stream upstream timeout'));
+    });
     up.end();
   };
 

@@ -661,7 +661,7 @@ body.nativeGuideMode #player.guideMode video{display:none}
   box-shadow:0 24px 70px rgba(0,0,0,.48),inset 0 1px 0 rgba(255,255,255,.06);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);scrollbar-width:thin}
 #trackMenu.open{display:block}
 #trackMenu .tmHead{font:800 10.5px "JetBrains Mono";letter-spacing:.12em;text-transform:uppercase;color:var(--amber);padding:8px 12px 7px}
-#trackMenu button{display:flex;width:100%;min-height:42px;text-align:left;padding:10px 13px;border-radius:12px;font:700 13.5px/1.2 "Albert Sans";gap:10px;align-items:center;
+#trackMenu button{display:flex;width:100%;min-height:44px;text-align:left;padding:10px 13px;border-radius:12px;font:700 13.5px/1.2 "Albert Sans";gap:10px;align-items:center;
   background:transparent;border:1px solid transparent;color:rgba(243,239,247,.9);transition:background .14s,border-color .14s,box-shadow .14s,color .14s}
 #trackMenu button:hover{background:rgba(243,239,247,.07);border-color:rgba(243,239,247,.08)}
 #trackMenu button.focus{background:rgba(237,232,245,.92);border-color:rgba(237,232,245,.95);color:#0b0812;box-shadow:0 0 0 3px rgba(251,139,60,.58)}
@@ -4031,38 +4031,86 @@ async function enrichHome() {
   // it up — loadRows is called on every home entry and the caches are warm by then).
   refreshHomeWhenSettled();
 }
+const HOME_CATALOG_INITIAL = 16;
+const HOME_CATALOG_PAGE_LIMIT = 10;
+function homeCatalogPathWithPage(path, page) {
+  const p = Math.max(1, parseInt(page, 10) || 1);
+  return /([?&])page=\d+/.test(path)
+    ? path.replace(/([?&])page=\d+/, `$1page=${p}`)
+    : `${path}${path.includes('?') ? '&' : '?'}page=${p}`;
+}
+function homeCatalogItemOk(kind, x) {
+  if (!x || !x.poster_path || !passesMaturity(x)) return false;
+  return kind === 'catalog' ? catalogOk(x) : true;
+}
+function homeCatalogItems(result, kind) {
+  return ((result && result.results) || []).filter((x) => homeCatalogItemOk(kind, x)).map(mapTmdb);
+}
+function homeCatalogRow(name, path, result, kind = 'catalog') {
+  const all = homeCatalogItems(result, kind);
+  const page = Math.max(1, parseInt(result && result.page, 10) || 1);
+  const totalPages = Math.min(HOME_CATALOG_PAGE_LIMIT, Math.max(page, parseInt(result && result.total_pages, 10) || page));
+  return {
+    name,
+    poster: true,
+    items: all.slice(0, HOME_CATALOG_INITIAL),
+    lazy: {
+      path,
+      kind,
+      page,
+      totalPages,
+      buffer: all.slice(HOME_CATALOG_INITIAL),
+      loading: false,
+      done: page >= totalPages && all.length <= HOME_CATALOG_INITIAL,
+    },
+  };
+}
 async function loadHomeCatalogRows() {
   const rows = [];
   if (!S.serverInfo.tmdb) return rows;
   if ((S.maxLevel ?? 3) === 0) {
     // Kids profiles get rows BUILT for them, instead of filtering grown-up lists down.
+    const paths = [
+      '/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=80&with_genres=10751' + CATALOG_Q + certParams(),
+      '/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=80&with_genres=16' + CATALOG_Q + certParams(),
+      '/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=30&with_genres=10762|16' + CATALOG_Q,
+    ];
     const [fam, anim, kidTv] = await Promise.all([
-      api('/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=80&with_genres=10751' + CATALOG_Q + certParams()),
-      api('/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=80&with_genres=16' + CATALOG_Q + certParams()),
-      api('/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=30&with_genres=10762|16' + CATALOG_Q),
+      api(homeCatalogPathWithPage(paths[0], 1)),
+      api(homeCatalogPathWithPage(paths[1], 1)),
+      api(homeCatalogPathWithPage(paths[2], 1)),
     ]);
-    rows.push({ name: 'Family movie night', poster: true, items: (fam.results || []).filter((x) => x.poster_path && passesMaturity(x)).slice(0, 16).map(mapTmdb) });
-    rows.push({ name: 'Animation', poster: true, items: (anim.results || []).filter((x) => x.poster_path && passesMaturity(x)).slice(0, 16).map(mapTmdb) });
-    rows.push({ name: 'Kids series', poster: true, items: (kidTv.results || []).filter((x) => x.poster_path && passesMaturity(x)).slice(0, 16).map(mapTmdb) });
+    rows.push(homeCatalogRow('Family movie night', paths[0], fam, 'maturity'));
+    rows.push(homeCatalogRow('Animation', paths[1], anim, 'maturity'));
+    rows.push(homeCatalogRow('Kids series', paths[2], kidTv, 'maturity'));
   } else if ((S.maxLevel ?? 3) < 3) {
+    const paths = [
+      '/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=100' + CATALOG_Q + certParams(),
+      '/api/tmdb/discover/movie?sort_by=vote_average.desc&vote_count.gte=400' + CATALOG_Q + certParams(),
+      '/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=60' + CATALOG_Q,
+    ];
     const [mv, topM, tvs] = await Promise.all([
-      api('/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=100' + CATALOG_Q + certParams()),
-      api('/api/tmdb/discover/movie?sort_by=vote_average.desc&vote_count.gte=400' + CATALOG_Q + certParams()),
-      api('/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=60' + CATALOG_Q),
+      api(homeCatalogPathWithPage(paths[0], 1)),
+      api(homeCatalogPathWithPage(paths[1], 1)),
+      api(homeCatalogPathWithPage(paths[2], 1)),
     ]);
-    rows.push({ name: 'Popular movies', poster: true, items: (mv.results || []).filter((x) => x.poster_path && passesMaturity(x)).slice(0, 16).map(mapTmdb) });
-    rows.push({ name: 'Top rated movies', poster: true, items: (topM.results || []).filter((x) => x.poster_path && passesMaturity(x)).slice(0, 16).map(mapTmdb) });
-    rows.push({ name: 'Popular series', poster: true, items: (tvs.results || []).filter((x) => x.poster_path && passesMaturity(x)).slice(0, 16).map(mapTmdb) });
+    rows.push(homeCatalogRow('Popular movies', paths[0], mv, 'maturity'));
+    rows.push(homeCatalogRow('Top rated movies', paths[1], topM, 'maturity'));
+    rows.push(homeCatalogRow('Popular series', paths[2], tvs, 'maturity'));
   } else {
+    const paths = [
+      '/api/tmdb/trending/all/week',
+      `/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=200&with_original_language=en${CATALOG_Q}`,
+      `/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=100&with_original_language=en${CATALOG_Q}`,
+    ];
     const [trend, movies, tv] = await Promise.all([
-      api('/api/tmdb/trending/all/week'),
-      api(`/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=200&with_original_language=en${CATALOG_Q}`),
-      api(`/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=100&with_original_language=en${CATALOG_Q}`),
+      api(homeCatalogPathWithPage(paths[0], 1)),
+      api(homeCatalogPathWithPage(paths[1], 1)),
+      api(homeCatalogPathWithPage(paths[2], 1)),
     ]);
-    const ok = (x) => x.poster_path && passesMaturity(x) && catalogOk(x);
-    rows.push({ name: 'Trending this week', poster: true, items: trend.results.filter(ok).slice(0, 16).map(mapTmdb) });
-    rows.push({ name: 'Popular movies', poster: true, items: movies.results.filter(ok).slice(0, 16).map(mapTmdb) });
-    rows.push({ name: 'Popular series', poster: true, items: tv.results.filter(ok).slice(0, 16).map(mapTmdb) });
+    rows.push(homeCatalogRow('Trending this week', paths[0], trend, 'catalog'));
+    rows.push(homeCatalogRow('Popular movies', paths[1], movies, 'catalog'));
+    rows.push(homeCatalogRow('Popular series', paths[2], tv, 'catalog'));
   }
   return rows;
 }
@@ -4487,6 +4535,7 @@ function renderRowsInto(root, rowsData, opts = {}) {
     sec.innerHTML = `<h2>${esc(row.name)}</h2>`;
     const cards = document.createElement('div'); cards.className = 'cards';
     edgeScroll(cards);
+    if (row.lazy) bindHomeRowLazy(cards, root, ri);
     const items = row.items || [];
     items.forEach((it, ci) => {
       const card = makeCard(it, !!row.poster && !it.trailer, () => focusCard(ri, ci));
@@ -4536,6 +4585,94 @@ function sizeRowsWindow(root) {
 }
 window.addEventListener('resize', () => { sizeRowsWindow($('rows')); sizeRowsWindow($('discoverRows')); fitLiveGuide(); });
 function setRowsView(root, data, hasHero) { S.rowsView = { root, data, hasHero }; }
+function rowsViewForRoot(root) {
+  const view = S.rowsView;
+  return view && view.root === root ? view : null;
+}
+function rowDataFor(root, ri) {
+  const view = rowsViewForRoot(root);
+  return view && view.data ? view.data[ri] : null;
+}
+function homeRowsSeenKeys(rows) {
+  const seen = new Set();
+  (rows || []).forEach((row) => (row.items || []).forEach((it) => {
+    const key = homeItemKey(it);
+    if (key) seen.add(key);
+  }));
+  return seen;
+}
+function appendHomeRowCards(root, ri, items, firstNew) {
+  const view = rowsViewForRoot(root);
+  const row = view && view.data && view.data[ri];
+  const cards = rowCardsAt(root, ri);
+  if (!view || !row || !cards || !items.length) return false;
+  items.forEach((it, k) => {
+    const ci = firstNew + k;
+    const card = makeCard(it, !!row.poster && !it.trailer, () => focusCard(ri, ci));
+    card.dataset.row = ri; card.dataset.col = ci;
+    cards.appendChild(card);
+  });
+  sizeRowsWindow(root);
+  return true;
+}
+function bindHomeRowLazy(cards, root, ri) {
+  if (!cards || cards.dataset.homeLazy === '1') return;
+  cards.dataset.homeLazy = '1';
+  cards.addEventListener('scroll', () => maybeLoadMoreHomeRow(root, ri), { passive: true });
+}
+function maybeLoadMoreHomeRow(root, ri) {
+  const row = rowDataFor(root, ri);
+  if (!row || !row.lazy || row.lazy.loading || row.lazy.done) return;
+  const cards = rowCardsAt(root, ri);
+  if (!cards) return;
+  const nearEnd = cards.scrollLeft + cards.clientWidth >= cards.scrollWidth - Math.max(260, cards.clientWidth * 0.45);
+  const focusNearEnd = S.zone === 'rows' && S.rowIdx === ri
+    && (S.colIdx[ri] || 0) >= (row.items || []).length - 4;
+  if (nearEnd || focusNearEnd) loadMoreHomeRow(root, ri);
+}
+async function loadMoreHomeRow(root, ri) {
+  const view = rowsViewForRoot(root);
+  const row = view && view.data && view.data[ri];
+  const lazy = row && row.lazy;
+  if (!view || !row || !lazy || lazy.loading || lazy.done) return false;
+  lazy.loading = true;
+  const firstNew = (row.items || []).length;
+  const added = [];
+  const seen = homeRowsSeenKeys(view.data);
+  const take = (items) => {
+    const keep = [];
+    const rest = [];
+    for (const it of (items || [])) {
+      const key = homeItemKey(it);
+      if (!key || seen.has(key)) continue;
+      if (keep.length < HOME_CATALOG_INITIAL) { keep.push(it); seen.add(key); }
+      else rest.push(it);
+    }
+    row.items.push(...keep);
+    added.push(...keep);
+    if (rest.length) lazy.buffer = rest.concat(lazy.buffer || []);
+  };
+  try {
+    if ((lazy.buffer || []).length) {
+      const buffered = lazy.buffer || [];
+      lazy.buffer = [];
+      take(buffered);
+    } else if ((lazy.page || 1) < Math.min(lazy.totalPages || 1, HOME_CATALOG_PAGE_LIMIT)) {
+      const page = (lazy.page || 1) + 1;
+      const result = await api(homeCatalogPathWithPage(lazy.path, page));
+      lazy.page = page;
+      lazy.totalPages = Math.min(HOME_CATALOG_PAGE_LIMIT, Math.max(page, parseInt(result && result.total_pages, 10) || page));
+      take(homeCatalogItems(result, lazy.kind || 'catalog'));
+    }
+    lazy.done = !(lazy.buffer || []).length && (lazy.page || 1) >= Math.min(lazy.totalPages || 1, HOME_CATALOG_PAGE_LIMIT);
+    if (added.length && appendHomeRowCards(root, ri, added, firstNew)) return true;
+  } catch (e) {
+    console.warn('[home] catalog row lazy load failed', e);
+  } finally {
+    lazy.loading = false;
+  }
+  return false;
+}
 function homeItemKey(it) { return it ? String(it.key || it.id || it.title || '') : ''; }
 function rowCardsAt(root, ri) {
   const row = root && root.querySelectorAll('.row')[ri];
@@ -5266,6 +5403,7 @@ async function openDetail(it, push = true) {
   $('seasonGrid').innerHTML = ''; $('epGrid').innerHTML = ''; $('epGrid').style.display = 'none';
   $('seasonTabs').style.display = 'none'; $('seasonTabs').innerHTML = ''; $('allSeasonsBtn').style.display = 'none';
   $('castRow').innerHTML = ''; $('relatedRow').innerHTML = ''; $('dRelatedWrap').style.display = 'none';
+  S.detailCastAll = null; S.detailCastShown = 0;
   $('dCrew').innerHTML = ''; $('dCrew').style.display = 'none';
   $('dPlay').disabled = false; $('dPlay').classList.remove('unavail'); $('dSources').style.display = '';
   // Quality toggle starts HIDDEN and defaulted to 1080p — checkAvailability reveals it only
@@ -5398,19 +5536,48 @@ function certOf(d, type) {
   } catch { return ''; }
 }
 
+const DETAIL_CAST_BATCH = 20;
+const PERSON_WORKS_BATCH = 24;
+
+function castCard(c) {
+  const b = document.createElement('button');
+  b.className = 'castCard focusable';
+  b.innerHTML = `<div class="ph" style="background-image:url('${safeUrl(img(c.profile_path, 'w185') || '')}')"></div>` +
+    `<div class="nm">${esc(c.name)}</div><div class="ch">${esc(c.character || '')}</div>`;
+  b.addEventListener('click', () => openPerson(c.id));
+  b.addEventListener('focus', () => maybeLoadMoreCast());
+  return b;
+}
+function appendCastBatch(row) {
+  const all = S.detailCastAll || [];
+  const start = S.detailCastShown || 0;
+  if (!all.length || start >= all.length) return false;
+  const next = Math.min(start + DETAIL_CAST_BATCH, all.length);
+  all.slice(start, next).forEach((c) => row.appendChild(castCard(c)));
+  S.detailCastShown = next;
+  return true;
+}
+function maybeLoadMoreCast() {
+  const row = $('castRow');
+  if (!row || !(S.detailCastAll || []).length || (S.detailCastShown || 0) >= S.detailCastAll.length) return;
+  const nearEnd = row.scrollLeft + row.clientWidth >= row.scrollWidth - Math.max(260, row.clientWidth * 0.45);
+  const cards = [...row.querySelectorAll('.castCard')];
+  const focusNearEnd = document.activeElement && document.activeElement.classList
+    && document.activeElement.classList.contains('castCard') && cards.indexOf(document.activeElement) >= cards.length - 4;
+  if (nearEnd || focusNearEnd) appendCastBatch(row);
+}
 function renderCast(cast) {
-  const list = cast.slice(0, 20);
+  const list = (cast || []).filter((c) => c && c.id && c.name);
   if (!list.length) return;
   $('dCastWrap').style.display = '';
   const row = $('castRow'); row.innerHTML = '';
-  list.forEach((c) => {
-    const b = document.createElement('button');
-    b.className = 'castCard focusable';
-    b.innerHTML = `<div class="ph" style="background-image:url('${safeUrl(img(c.profile_path, 'w185') || '')}')"></div>` +
-      `<div class="nm">${esc(c.name)}</div><div class="ch">${esc(c.character || '')}</div>`;
-    b.addEventListener('click', () => openPerson(c.id));
-    row.appendChild(b);
-  });
+  S.detailCastAll = list;
+  S.detailCastShown = 0;
+  appendCastBatch(row);
+  if (!row.dataset.castLazyBound) {
+    row.addEventListener('scroll', maybeLoadMoreCast, { passive: true });
+    row.dataset.castLazyBound = '1';
+  }
   bindEdgeScroll(row);
 }
 
@@ -5970,18 +6137,53 @@ async function openPerson(id) {
       .filter((c) => (c.media_type === 'movie' || c.media_type === 'tv') && (c.poster_path || c.backdrop_path) && passesMaturity(c))
       .filter((c) => { const k = c.media_type + c.id; if (seen.has(k)) return false; seen.add(k); return true; })
       .sort((a, b) => (b.popularity || 0) - (a.popularity || 0))
-      .slice(0, 40).map(mapTmdb);
-    renderGrid(credits, $('personGrid'));
+      .map(mapTmdb);
+    renderPersonWorks(credits);
     requestAnimationFrame(() => { if (S.view === 'person') focusGrid(0); });
   } catch (e) { $('personGrid').innerHTML = `<div class="sub" style="color:var(--muted)">Failed: ${esc(e.message)}</div>`; }
 }
+function renderPersonWorks(works) {
+  S.personWorksAll = works || [];
+  S.personWorksShown = 0;
+  if (!S.personWorksAll.length) {
+    renderGrid([], $('personGrid'));
+    $('personGrid').innerHTML = '<div class="gridMore">No known works</div>';
+    return;
+  }
+  loadMorePersonWorks();
+}
+function loadMorePersonWorks(focusNew = false) {
+  if (S.view !== 'person') return false;
+  const all = S.personWorksAll || [];
+  const start = S.personWorksShown || 0;
+  if (!all.length || start >= all.length) return false;
+  const next = Math.min(start + PERSON_WORKS_BATCH, all.length);
+  const batch = all.slice(start, next);
+  if (start === 0) renderGrid(batch, $('personGrid'));
+  else appendGrid(batch);
+  S.personWorksShown = next;
+  requestAnimationFrame(() => {
+    if (S.view !== 'person') return;
+    const pane = $('person');
+    if (pane.scrollHeight <= pane.clientHeight + 120) loadMorePersonWorks(false);
+    if (focusNew) focusGrid(start);
+  });
+  return true;
+}
+function maybeLoadMorePersonWorks() {
+  if (S.view !== 'person' || !(S.personWorksAll || []).length || (S.personWorksShown || 0) >= S.personWorksAll.length) return;
+  const pane = $('person');
+  if (pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 900) loadMorePersonWorks(false);
+}
 function closePerson() {
   $('person').classList.remove('open'); $('detail').style.visibility = ''; S.view = 'detail';
+  S.personWorksAll = null; S.personWorksShown = 0;
   if (S.detailItem && S.detailItem.backdrop) setBackdrop(S.detailItem.backdrop);
   // TV: the ring was still on a (hidden) person-page card — refocus the detail page.
   if (document.body.classList.contains('tv')) { S.zone = ''; clearFocus(); focusContent(); }
 }
 $('pBack').addEventListener('click', closePerson);
+$('person').addEventListener('scroll', maybeLoadMorePersonWorks, { passive: true });
 
 /* ============ player ============ */
 function wakeScreensaverForPlayerSurface() {
@@ -14316,6 +14518,7 @@ function focusCard(ri, ci, opts = {}) {
   }
   const it = view.data[ri] && view.data[ri].items[ci];
   if (it) { if (view.hasHero) setHero(it); else { S.focusedItem = it; setBackdrop(it.backdrop); setBdInfo(it); } }
+  maybeLoadMoreHomeRow(view.root, ri);
 }
 function gridEls() { return [...(S.gridRoot || $('grid')).querySelectorAll('.pcard, .card, .chCard, .chGroupHead, .gRow.focusable, .lcat, .gridMore.focusable')]; }
 function gridElForIndex(i) {
@@ -14681,6 +14884,9 @@ function focusGrid(i) {
     S.focusedItem = it;
     // Search is a clean full-page list — no backdrop swapping under the results.
     if (S.view !== 'search' && S.view !== 'person' && !liveGuideRow) { setBackdrop(it.backdrop); setBdInfo(it); }
+  }
+  if (S.view === 'person' && S.gridIdx >= (S.gridItems || []).length - Math.max(2, gridCols() * 2)) {
+    loadMorePersonWorks(false);
   }
 }
 // Title + rating + overview over the full-bleed backdrop (browse/discover views only).

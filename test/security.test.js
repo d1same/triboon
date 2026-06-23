@@ -2357,6 +2357,10 @@ test('iptv: pinned DNS cache rotates and sidelines failed upstream addresses', (
     'a failed pinned address should be sidelined briefly and the next address tried first');
   assert.match(serverCode, /validateAndPinIptvUrl[\s\S]+cacheHost: net\.isIP\(host\) \? '' : host,[\s\S]+onFailure: \(\) => markIptvPinnedAddressFailure/,
     'validated IPTV pins should carry enough metadata to mark connection failures');
+  assert.match(serverCode, /addressCount: safeHit && Array\.isArray\(safeHit\.addrs\) \? safeHit\.addrs\.length : \(picked \? 1 : 0\),/,
+    'validated IPTV pins should carry the safe DNS pool size for bounded same-request retry');
+  assert.match(serverCode, /const retryPinnedAddress = \(reason\) => \{[\s\S]+markPinFailure\(\);[\s\S]+ctx\.res\.headersSent[\s\S]+pin\.addressCount[\s\S]+open\(rawTarget, hop, pinRetries \+ 1\);[\s\S]+return true;/,
+    'native Live TV should retry the next pinned address in the same request before any response bytes are sent');
   assert.match(newznabCode, /validated && typeof validated\.onFailure === 'function'[\s\S]+validated\.onFailure\(e\)/,
     'generic IPTV fetches should report failed pinned connections back to the validator');
 });
