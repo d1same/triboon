@@ -47,8 +47,18 @@ function fetchUrl(url, opts = {}) {
       res.on('end', () => { clearTimeout(deadline); resolve({ status: res.statusCode, body: Buffer.concat(chunks) }); });
     });
     const deadline = setTimeout(() => req.destroy(new Error(`deadline after ${deadlineMs}ms: ${url.split('?')[0]}`)), remaining);
-    req.on('error', (e) => { clearTimeout(deadline); reject(e); });
-    req.setTimeout(timeoutMs, () => req.destroy(new Error(`timeout after ${timeoutMs}ms: ${url.split('?')[0]}`)));
+    req.on('error', (e) => {
+      if (validated && typeof validated.onFailure === 'function') {
+        try { validated.onFailure(e); } catch {}
+      }
+      clearTimeout(deadline); reject(e);
+    });
+    req.setTimeout(timeoutMs, () => {
+      if (validated && typeof validated.onFailure === 'function') {
+        try { validated.onFailure(new Error('timeout')); } catch {}
+      }
+      req.destroy(new Error(`timeout after ${timeoutMs}ms: ${url.split('?')[0]}`));
+    });
   }));
 }
 
@@ -89,10 +99,11 @@ async function searchIndexer(indexer, params, { timeoutMs = 2000 } = {}) {
   const base = indexer.url.replace(/\/+$/, '');
   const u = new URL(base.endsWith('/api') ? base : `${base}/api`);
   u.searchParams.set('apikey', indexer.apikey || '');
-  u.searchParams.set('t', params.imdbid ? 'movie' : params.tvdbid ? 'tvsearch' : 'search');
+  const tvSearch = params.tvdbid || (params.season != null && params.ep != null);
+  u.searchParams.set('t', tvSearch ? 'tvsearch' : params.imdbid ? 'movie' : 'search');
   if (params.q) u.searchParams.set('q', params.q);
-  if (params.imdbid) u.searchParams.set('imdbid', String(params.imdbid).replace(/^tt/, ''));
   if (params.tvdbid) u.searchParams.set('tvdbid', params.tvdbid);
+  if (params.imdbid && !tvSearch) u.searchParams.set('imdbid', String(params.imdbid).replace(/^tt/, ''));
   if (params.season != null) u.searchParams.set('season', params.season);
   if (params.ep != null) u.searchParams.set('ep', params.ep);
   if (params.cat) u.searchParams.set('cat', params.cat);

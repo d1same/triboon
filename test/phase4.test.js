@@ -189,7 +189,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'manual source selection should re-resolve the latest resume point before mounting the exact picked release');
   assert.match(ui, /function stopActivePlaybackForReplacement\(opts = \{\}\) \{[\s\S]+saveWatch\(true\);[\s\S]+window\.TriboonTV\.closeVideo\(\);[\s\S]+stopWebVideoElement\(\);[\s\S]+if \(!opts\.preserveGuide\) closePlayerGuide\(\{ fromNative: true \}\);[\s\S]+S\.playing = null;[\s\S]+\}/,
     'source replacement should stop the active native/web player before the new mount can start');
-  assert.match(ui, /async function play\(it, pick\) \{[\s\S]+if \(loc && !picked && localPlaybackFitsQuality\(\{ \.\.\.it, _local: loc \}, qRank\)\) return playLocal[\s\S]+stopActivePlaybackForReplacement\(\);[\s\S]+const nativeFirst = nativeVideoRequired\(it\);/,
+  assert.match(ui, /async function play\(it, pick\) \{[\s\S]+const localExact = !picked && localPlaybackForItem\(it\) \? \{ \.\.\.it, _local: localPlaybackForItem\(it\) \} : null;[\s\S]+if \(localExact && localPlaybackFitsQuality\(localExact, qRank\)\) return playLocal\(localExact\);[\s\S]+stopActivePlaybackForReplacement\(\);[\s\S]+const nativeFirst = nativeVideoRequired\(it\);/,
     'manual source selection and quality mismatches should tear down the old source before showing the new loading/player state');
   assert.match(ui, /const pickRank = picked \? normalizeResolutionRank\(picked\.resolutionRank\) : null;[\s\S]+const qRank = pickRank !== null \? pickRank : qualityRankForItem\(it\);[\s\S]+body\.maxResolutionRank = qRank;[\s\S]+body\.preferResolutionRank = qRank;/,
     'manual source selection should prefer the picked source quality while normal Play uses the current 1080p/4K toggle');
@@ -197,8 +197,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'matched local movies and episodes should still inherit saved 1080p/4K preferences');
   assert.match(ui, /function releaseResolutionRankFromName\(name\) \{[\s\S]+2160p\|4k\|uhd[\s\S]+return 4;[\s\S]+function localPlaybackFitsQuality\(it, qRank\) \{[\s\S]+if \(qRank === 4\) return rank === 4;[\s\S]+if \(qRank === 3\) return rank !== 4;/,
     'local playback should be allowed only when it matches the requested source class');
-  assert.match(ui, /const picked = pick && typeof pick === 'object'[\s\S]+const qRank = pickRank !== null \? pickRank : qualityRankForItem\(it\);[\s\S]+if \(loc && !picked && localPlaybackFitsQuality\(\{ \.\.\.it, _local: loc \}, qRank\)\) return playLocal/,
+  assert.match(ui, /const picked = pick && typeof pick === 'object'[\s\S]+const qRank = pickRank !== null \? pickRank : qualityRankForItem\(it\);[\s\S]+const localExact = !picked && localPlaybackForItem\(it\) \? \{ \.\.\.it, _local: localPlaybackForItem\(it\) \} : null;[\s\S]+if \(localExact && localPlaybackFitsQuality\(localExact, qRank\)\) return playLocal/,
     'Play should compute quality before the local shortcut so selected 4K cannot be replaced by a local 1080p file');
+  assert.match(ui, /catch \(e\) \{[\s\S]+if \(localExact && !picked && \/no playable\|no \.\*candidate\|all candidates failed\/i\.test\(String\(e && e\.message \|\| ''\)\)\) \{[\s\S]+return playLocal\(localExact\);[\s\S]+\}/,
+    'Local library files should fall back to disk playback when online source search has no playable candidate');
   assert.ok([
     '#srcSort button{height:34px',
     '.srcRow{position:relative;overflow:visible;width:100%;box-sizing:border-box;border-radius:13px',
@@ -341,12 +343,24 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'the long-press Details action should open details instead of letting episode cards fall through to playback');
   assert.match(ui, /const cwSnap = \(\) => \{ onFocus && onFocus\(\); return homeFocusSnapshot\(\); \};[\s\S]+cwAct\.watch[\s\S]+focusSnapshot: cwSnap\(\)[\s\S]+cwAct\.rm[\s\S]+focusSnapshot: cwSnap\(\)/,
     'on-card Continue Watching buttons should capture their own row position before removing or marking items');
-  assert.match(ui, /async function enterAppShell\(\) \{[\s\S]+S\.watchMap = S\.watchMap \|\| \{\};[\s\S]+applyMenuPrefs\(\);[\s\S]+if \(location\.hash && location\.hash !== '#\/home'\) applyRoute\(\);[\s\S]+else switchView\('home'\);[\s\S]+perfMark\('shell-route-applied'[\s\S]+hydrateAppShellData\(\);/,
+  assert.match(ui, /async function restoreInitialRoute\(\) \{[\s\S]+if \(!location\.hash \|\| location\.hash === '#\/home'\) \{[\s\S]+switchView\('home'\);[\s\S]+const routeResult = applyRoute\(\);[\s\S]+await routeResult;[\s\S]+route restore failed; falling back to home[\s\S]+replaceRoute\('#\/home'\);[\s\S]+switchView\('home'\);[\s\S]+\}/,
+    'refresh route restore should fall back to Home when a stale route fails after an update');
+  assert.match(ui, /async function enterAppShell\(\) \{[\s\S]+S\.watchMap = S\.watchMap \|\| \{\};[\s\S]+applyMenuPrefs\(\);[\s\S]+await restoreInitialRoute\(\);[\s\S]+perfMark\('shell-route-applied'[\s\S]+hydrateAppShellData\(\);/,
     'Android TV boot should route the shell immediately but keep the splash until real content paints');
   assert.doesNotMatch(ui, /else switchView\('home'\);[\s\S]{0,120}bootReady\(\);[\s\S]{0,120}hydrateAppShellData\(\);/,
     'authenticated home boot must not dismiss the splash before Home rows render');
   assert.match(ui, /async function enterApp\(\) \{[\s\S]+if \(!S\.user\) S\.user = await api\('\/api\/me'\);[\s\S]+if \(!S\.serverInfo \|\| S\.serverInfo\.needsSetup\) S\.serverInfo = await api\('\/api\/server'\);/,
     'authenticated boot should reuse the already fetched server info instead of doing a second blocking server call');
+  assert.match(ui, /const tokenStore = \{[\s\S]+localStorage\.getItem\('triboon\.token'\)[\s\S]+sessionStorage\.getItem\('triboon\.token'\)[\s\S]+localStorage\.setItem\('triboon\.token', t\)[\s\S]+sessionStorage\.setItem\('triboon\.token', t\)/,
+    'session tokens should survive refresh even when one browser storage backend is flaky');
+  assert.match(ui, /if \(r\.status === 401[\s\S]+const e = new Error\('signed out'\);[\s\S]+e\.status = 401;[\s\S]+throw e;/,
+    'API auth failures should carry a 401 status so boot can distinguish expired sessions from transient startup failures');
+  assert.match(ui, /async function restoreSavedSession\(\) \{[\s\S]+S\.user = await api\('\/api\/me'\);[\s\S]+if \(e && e\.status === 401\) \{[\s\S]+tokenStore\.set\(null\);[\s\S]+return false;[\s\S]+session check failed; keeping saved token[\s\S]+setTimeout\(\(\) => location\.reload\(\), 1800\);[\s\S]+await enterApp\(\);[\s\S]+app shell failed after session restore[\s\S]+replaceRoute\('#\/home'\);[\s\S]+await enterApp\(\);[\s\S]+showGate\('login'\);/,
+    'refresh boot should retry only the /api/me session check; app-shell errors must not loop as server wakeups');
+  assert.match(ui, /if \(tokenStore\.get\(\)\) \{[\s\S]+if \(await restoreSavedSession\(\)\) return;[\s\S]+\}/,
+    'boot should run the narrow saved-session restore before falling back to the login gate');
+  assert.doesNotMatch(ui, /Server is still waking up\. Retrying/,
+    'the app should not show a misleading server-wakeup loop for shell restore failures');
   assert.doesNotMatch(ui, /await Promise\.all\(\[loadLibraries\(\), loadWatchlist\(\)\]\)/,
     'startup should not block first focus on libraries and watchlist');
   assert.match(ui, /async function enrichHome\(\) \{[\s\S]+if \(!S\.localMap && cachedLocalLibraryItemsAvailable\(\)\) refreshLocalMapFromCachedLibraries\(\);/,
@@ -387,7 +401,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'pressing OK on an auto-previewed attached-library rail item should enter content without reloading the page');
   assert.match(ui, /--bdW:min\(50vw,980px\);[\s\S]+--bdH:min\(56vh,620px\);[\s\S]+#backdrop \.layer\{[\s\S]+width:var\(--bdW\);height:var\(--bdH\)/,
     'browser backdrop should use capped viewport-aware dimensions instead of percentage takeover');
-  assert.match(ui, /body\.tv\{--bdW:min\(48vw,820px\);--bdH:min\(50vh,460px\)\}[\s\S]+body\.shortBrowseBd\{--bdH:min\(46vh,430px\)\}[\s\S]+body\.tv\.shortBrowseBd\{--bdH:min\(38vh,360px\)\}[\s\S]+@media \(max-height:760px\)\{[\s\S]+--bdH:min\(34vh,260px\)[\s\S]+@media \(max-width:980px\)\{[\s\S]+--bdW:min\(44vw,420px\)/,
+  assert.match(ui, /body\.tv\{--bdW:min\(48vw,820px\);--bdH:min\(50vh,460px\);--overscan:2\.5vmin\}[\s\S]+body\.shortBrowseBd\{--bdH:min\(46vh,430px\)\}[\s\S]+body\.tv\.shortBrowseBd\{--bdH:min\(38vh,360px\)\}[\s\S]+@media \(max-height:760px\)\{[\s\S]+--bdH:min\(34vh,260px\)[\s\S]+@media \(max-width:980px\)\{[\s\S]+--bdW:min\(44vw,420px\)/,
     'TV, short browser, narrow browser, and poster browse viewports should tighten backdrop size');
   assert.match(ui, /body\.shortBrowseBd:not\(\.tv\) #bdInfo[\s\S]+-webkit-line-clamp:1[\s\S]+@media \(max-height:820px\)[\s\S]+body\.shortBrowseBd:not\(\.tv\) #bdInfo \.bdiC,[\s\S]+display:none/,
     'browser poster browse pages should compact the focused-title band without touching TV');
@@ -544,6 +558,14 @@ test('subtitle startup preference contract: always mode applies online captions 
     'player regression map should document the always-subtitles startup contract');
 });
 
+test('Live TV startup warm is delayed so app login and first playback stay responsive', () => {
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(server, /const IPTV_STARTUP_WARM_DELAY_MS = Math\.max\(30000, Math\.min\(10 \* 60000, Number\(process\.env\.TRIBOON_IPTV_STARTUP_WARM_DELAY_MS \|\| 120000\)\)\);/,
+    'startup warm should default to a long delay with bounded override');
+  assert.match(server, /scheduleIptvWarmSoon\('startup', IPTV_STARTUP_WARM_DELAY_MS\);/,
+    'startup warm must not use the short source-change delay');
+});
+
 test('Android native player: direct source and native chrome stay out of the web player', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
@@ -589,6 +611,8 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.ok(ui.includes("if (/TriboonTV/.test(navigator.userAgent)) document.body.classList.add('tv');")
     && ui.includes("if (/TriboonAndroid/.test(navigator.userAgent)) document.body.classList.add('androidApp');"),
     'phone WebView should not receive TV-only CSS just because it runs inside the Android shell');
+  assert.match(androidGradle, /every Android app video surface hands off[\s\S]+movies, episodes, local library files, and Live TV[\s\S]+Browser and[\s\S]+desktop builds keep the HTML video path/,
+    'Android TV and mobile APK policy should be native ExoPlayer for every video surface, not phone-web-video');
   assert.ok(ui.includes('body.androidApp .gate{place-items:center;padding:18px}')
     && ui.includes('body.androidApp #gateArtCaption{display:none}'),
     'Android phone auth gates should use a phone-app layout without TV auth caption chrome');
@@ -606,6 +630,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'playback should not rely on a stale detail target resume timestamp');
   assert.match(ui, /const nativeFirst = nativeVideoRequired\(it\);[\s\S]+if \(nativeFirst\) showNativePlayLoading\(it\);[\s\S]+else showPlayLoading\(it\);/,
     'pressing Play on Android should immediately use the native branded loading screen, not the web player shell');
+  assert.match(ui, /function nativeVideoRequired\(it\) \{[\s\S]+VOD only: movies, episodes, and local-library files use the playVideo ExoPlayer bridge[\s\S]+return !!\(it && it\.type !== 'live' && canUseNativeVideoPlayer\(\)\);[\s\S]+\}/,
+    'Android movies, episodes, and local library files should require the ExoPlayer VOD bridge');
+  assert.match(ui, /async function playLocal\(it\) \{[\s\S]+const nativeFirst = nativeVideoRequired\(it\);[\s\S]+openPlayer\(it, \{ \.\.\.mount,[\s\S]+\}, \{ nativeFirst \}\);/,
+    'added-library movie and episode playback should use the same ExoPlayer handoff as catalog playback');
   assert.match(ui, /if \(S\.view !== 'player'\) return;[\s\S]+openPlayer\(it, r, \{ nativeFirst \}\)/,
     'native-first playback should still honor Back/cancel while the loading screen is open');
   assert.match(ui, /const sourceName = mount\.candidate \? mount\.candidate\.name : mount\.name;[\s\S]+item: it, name: sourceName, fileName: mount\.name/,
@@ -630,12 +658,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'web play requests should merge native Exo capabilities into the caps sent to the server');
   assert.match(server, /function parseCaps\(raw\) \{[\s\S]+\['mkv', 'mp4', 'h264', 'hevc', 'dovi', 'av1', 'vp9', 'mpeg2', 'aac', 'ac3', 'eac3', 'dts', 'native', 'lowPower'\][\s\S]+caps\.deviceClass = String\(raw\.deviceClass\)\.slice\(0, 64\)/,
     'server should accept sanitized native playback capability fields');
-  assert.match(server, /const imdbRaw = String\(ctx\.url\.searchParams\.get\('imdb'\) \|\| ctx\.url\.searchParams\.get\('imdbid'\) \|\| ''\)\.trim\(\);[\s\S]+const imdbId = \/\^tt\\d\{5,10\}\$\/i\.test\(imdbRaw\) \? imdbRaw\.toLowerCase\(\) : '';[\s\S]+key, tmdbId, imdbId, query: vf\._subQuery \|\| vf\._q \|\| vf\.name[\s\S]+const catalogId = imdbId \|\| tmdbId;/,
+  assert.match(server, /const imdbRaw = String\(ctx\.url\.searchParams\.get\('imdb'\) \|\| ctx\.url\.searchParams\.get\('imdbid'\) \|\| ''\)\.trim\(\);[\s\S]+const imdbId = \/\^tt\\d\{5,10\}\$\/i\.test\(imdbRaw\) \? imdbRaw\.toLowerCase\(\) : '';[\s\S]+const releaseName = subtitleReleaseName\(vf\) \|\| vf\.name;[\s\S]+key, tmdbId, imdbId, query: vf\._subQuery \|\| vf\._q \|\| releaseName \|\| vf\.name[\s\S]+const catalogId = imdbId \|\| tmdbId;/,
     'server subtitle route should accept IMDb ids, prefer them in Wyzie search, and cache by the active catalog id');
   assert.match(android, /private boolean pageTvReady;[\s\S]+private final java\.util\.ArrayList<String> pendingTvKeys[\s\S]+public void appReady\(\) \{[\s\S]+pageTvReady = true;[\s\S]+flushPendingTvKeys\(\);/,
     'Android should buffer early D-pad input until the web focus model is ready');
-  assert.match(android, /private boolean trustedBridgeOrigin\(\) \{[\s\S]+isTrustedServerUrl\(web\.getUrl\(\)\)[\s\S]+public void playVideo\(String json\) \{[\s\S]+if \(!trustedBridgeOrigin\(\)\) return;[\s\S]+startNativeVideo\(json\)/,
-    'Android JS bridge methods should be gated to the configured Triboon server origin before native playback or device data access');
+  assert.match(android, /private volatile String currentWebUrl[\s\S]+private boolean trustedBridgeOrigin\(\) \{[\s\S]+isTrustedServerUrl\(currentWebUrl\)[\s\S]+onPageStarted\(WebView v, String url[\s\S]+currentWebUrl = url == null \? "" : url;[\s\S]+onPageFinished\(WebView v, String url[\s\S]+currentWebUrl = url == null \? "" : url;[\s\S]+public void playVideo\(String json\) \{[\s\S]+if \(!trustedBridgeOrigin\(\)\) return;[\s\S]+startNativeVideo\(json\)/,
+    'Android JS bridge methods should be gated to the configured Triboon server origin without calling WebView methods on the JavaBridge thread');
   assert.match(android, /shouldOverrideUrlLoading\(WebView v, WebResourceRequest req\)[\s\S]+return u == null \|\| !isTrustedServerUrl\(u\.toString\(\)\);/,
     'Android WebView should only navigate inside the exact configured Triboon server origin');
   assert.match(android, /setMixedContentMode\(WebSettings\.MIXED_CONTENT_COMPATIBILITY_MODE\)/,
@@ -803,7 +831,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'web player Back should be able to hide visible controls without closing playback');
   assert.match(ui, /if \(k === 'Escape' \|\| k === 'Backspace'\) \{[\s\S]+if \(hidePlayerOsdForBack\(\)\) return;[\s\S]+return closePlayer\(\);[\s\S]+window\.__tvBack = \(\) => \{[\s\S]+\$\(\'pGuide\'\)[\s\S]+closePlayerGuide\(\);[\s\S]+if \(hidePlayerOsdForBack\(\)\) return 'ok';[\s\S]+const overlay = document\.querySelector/,
     'Escape/Backspace and Android TV Back should close PiP guide/controls before closing the player');
-  assert.match(ui, /#appClock\{position:fixed;top:18px;right:22px;z-index:21;min-width:108px;height:38px;padding:0 18px[\s\S]+font:800 14px "JetBrains Mono",monospace;letter-spacing:0;[\s\S]+backdrop-filter:blur\(18px\);-webkit-backdrop-filter:blur\(18px\)\}/,
+  assert.match(ui, /#appClock\{position:fixed;top:calc\(18px \+ var\(--safeT\) \+ var\(--overscan\)\);right:calc\(22px \+ var\(--safeR\) \+ var\(--overscan\)\);z-index:21;min-width:108px;height:38px;padding:0 18px[\s\S]+font:800 14px "JetBrains Mono",monospace;letter-spacing:0;[\s\S]+backdrop-filter:blur\(18px\);-webkit-backdrop-filter:blur\(18px\)\}/,
     'main app clock should render as a slightly larger text-only glass badge');
   assert.doesNotMatch(ui, /#appClock::before/,
     'main app clock should not draw an icon before the time');
@@ -890,8 +918,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'native player should receive selectable online subtitle choices');
   assert.match(server, /function episodeSubtitleQuery\(query, season, ep\)[\s\S]+S\$\{String\(s\)\.padStart\(2, '0'\)\}E\$\{String\(e\)\.padStart\(2, '0'\)\}/,
     'server subtitle lookup should be able to add episode identity even when source filenames are opaque');
-  assert.match(server, /vf\._q = body\.q;[\s\S]+vf\._subQuery = episodeSubtitleQuery\(body\.q, body\.season, body\.ep\);[\s\S]+query: vf\._subQuery \|\| vf\._q \|\| vf\.name/,
+  assert.match(server, /vf\._q = body\.q;[\s\S]+vf\._subQuery = episodeSubtitleQuery\(body\.q, body\.season, body\.ep\);/,
     'online subtitle lookup should use the episode-aware query captured during play');
+  assert.match(server, /function subtitleReleaseName\(vf\) \{[\s\S]+vf\._releaseName[\s\S]+const releaseName = subtitleReleaseName\(vf\) \|\| vf\.name;[\s\S]+query: vf\._subQuery \|\| vf\._q \|\| releaseName \|\| vf\.name[\s\S]+rankSubs\(data, releaseName[\s\S]+downloadBestSubtitle\([\s\S]+releaseName,/,
+    'online subtitle lookup should rank and download using the selected source release name');
   assert.match(server, /function localMountFor\(ctx, libId, idx, caps = \{\}, playCtx = \{\}\)[\s\S]+const q = String\(playCtx\.q \|\| found\.item\.q \|\| found\.item\.title \|\| name\)[\s\S]+const season = playCtx\.season \?\? found\.item\.s[\s\S]+const ep = playCtx\.ep \?\? playCtx\.episode \?\? found\.item\.e[\s\S]+vf\._subQuery = episodeSubtitleQuery\(vf\._q, season, ep\)/,
     'local library mounts should preserve episode-aware subtitle queries for Wyzie');
   assert.match(ui, /function startupSubtitleRelFor\(p, saved = loadSubChoice\(\)\) \{[\s\S]+Explicit per-title choices win[\s\S]+if \(subtitleRelPlayable\(p, saved\)\) return saved;[\s\S]+if \(saved === 'off' && prefSubtitleMode\(\) !== 'always'\) return '';[\s\S]+return autoSubtitleRelFor\(p\);[\s\S]+\}/,
@@ -1146,6 +1176,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'player guide should show a nonblank empty state instead of leaving a black guide screen');
   assert.match(ui, /if \(!keepGuidePip && tryNativeLivePlayer\(it\)\) return;/,
     'normal Live TV tuning should still launch native fullscreen playback');
+  assert.match(ui, /function nativeLiveRequired\(\) \{[\s\S]+Android TV and Android mobile never fall back to the HTML\/MSE live player once the[\s\S]+return canUseNativeLivePlayer\(\);[\s\S]+\}/,
+    'Android TV and mobile Live TV should require ExoPlayer whenever the native live bridge exists');
   assert.match(ui, /function tryNativeLivePlayer\(it, guide = false\) \{[\s\S]+if \(!guide\) \{[\s\S]+S\.nativeGuideMode = false;[\s\S]+closePlayerGuide\(\{ fromNative: true \}\);[\s\S]+\$\(\'player\'\)\.classList\.remove\('guideMode'\);[\s\S]+\}[\s\S]+window\.TriboonTV\.playLive/,
     'normal Live TV tuning should clear stale native guide state before asking ExoPlayer to start');
   assert.match(ui, /const keepGuidePip = S\.view === 'player' && !!\(\$\(\'pGuide\'\) && \$\(\'pGuide\'\)\.classList\.contains\('open'\)\)/,
@@ -1165,9 +1197,9 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.ok(server.includes('function iptvRemuxTargets(ch = {})')
     && server.includes("if (ch.nativeUrl && iptvNativeMime(ch.nativeUrl) === 'video/mp2t') add(ch.nativeUrl, 'ts');")
     && server.includes("validateAndPinIptvUrl(target.url, 'Live stream URL')")
-    && server.includes('spawnLiveRemux(pin.pinnedHref || pin.href || target.url')
+    && server.includes('spawnLiveRemux(iptvRemuxInputHref(pin, target.url)')
     && server.includes('headers: pin.hostHeader ? { Host: pin.hostHeader } : undefined'),
-    'server Live TV remux fallback should try Xtream TS before HLS so Android fallback follows the Shield-proven path');
+    'server Live TV remux fallback should try Xtream TS before HLS and preserve HTTPS provider SNI');
   assert.match(transcode, /function ffmpegHeaderLines\(headers = \{\}\)[\s\S]+\`\$\{k\}: \$\{v\}\\r\\n\`[\s\S]+function spawnLiveRemux\(url, \{ hlsFriendly = true, headers = null \} = \{\}\)[\s\S]+'-max_redirects', '0'[\s\S]+\.\.\.\(headerLines \? \['-headers', headerLines\] : \[\]\)[\s\S]+'-i', url/,
     'ffmpeg Live TV remux should receive sanitized Host headers and refuse upstream redirects after URL pinning');
   assert.match(ui, /addLiveFallback\(it\._nativeFallbackUrl, it\._nativeFallbackMime \|\| ''\);[\s\S]+addLiveFallback\(it\._streamUrl, 'video\/mp4'\);[\s\S]+fallbacks: liveFallbacks,/,
@@ -1770,6 +1802,62 @@ test('Android native player: direct source and native chrome stay out of the web
     'native guide button should be available for both Live TV and movie/episode playback');
   assert.doesNotMatch(android, /switchNativeToWeb/,
     'native Android chrome should not keep old-player escape controls');
+});
+
+test('web browse grids stay windowed and D-pad uses logical grid indexes', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /const VIRTUAL_GRID_VIEWS = new Set\(\['movies', 'tv', 'watchlist'\]\);/,
+    'high-volume poster pages should opt into grid virtualization');
+  assert.match(ui, /function renderVirtualGridWindow\(targetIdx = S\.gridIdx \|\| 0, opts = \{\}\) \{[\s\S]+root\.dataset\.virtualized = '1';[\s\S]+gridSpacerTop[\s\S]+for \(let i = start; i < end; i\+\+\)[\s\S]+gridSpacerBottom/,
+    'virtualized grids should render a bounded card window with top/bottom spacers');
+  assert.match(ui, /function renderGrid\(items, root = \$\('grid'\)\) \{[\s\S]+if \(shouldVirtualizeGrid\(root\)\) \{[\s\S]+renderVirtualGridWindow\(0, \{ topRow: 0 \}\);[\s\S]+\} else \{/,
+    'initial grid render should choose the virtual path before appending every card');
+  assert.match(ui, /function appendGrid\(items\) \{[\s\S]+S\.gridItems = S\.gridItems\.concat\(items \|\| \[\]\);[\s\S]+if \(shouldVirtualizeGrid\(root\)\) \{[\s\S]+renderVirtualGridWindow\(S\.gridIdx \|\| 0/,
+    'infinite scroll should extend the logical list without mounting every previous card');
+  assert.match(ui, /function refreshVirtualGridGeometry\(\) \{[\s\S]+resetGridVirtual\(root\);[\s\S]+renderVirtualGridWindow\(idx, \{ topRow: Math\.max\(0, oldRow - 1\) \}\);[\s\S]+restoreVirtualGridFocus\(idx\);[\s\S]+\}/,
+    'resize and cover-size changes should invalidate stale virtual columns/pitch and redraw the current window');
+  assert.match(ui, /function applyCoverSize\(\) \{[\s\S]+adaptRowWindows\(\);[\s\S]+scheduleVirtualGridGeometryRefresh\(\);/,
+    'cover-size and resize paths should refresh virtual grid geometry');
+  assert.match(ui, /function activeGridIdx\(\) \{[\s\S]+el\.dataset && el\.dataset\.grid !== undefined[\s\S]+parseInt\(el\.dataset\.grid, 10\)/,
+    'D-pad focus should recover the absolute item index from data-grid');
+  assert.match(ui, /const itemIdx = parseInt\(el\.dataset\.grid, 10\);[\s\S]+const it = Number\.isFinite\(itemIdx\) \? \(S\.gridItems \|\| \[\]\)\[itemIdx\] : null;/,
+    'focusable guide/category/message rows should not borrow stale grid metadata when no backing item exists');
+  assert.doesNotMatch(ui, /const itemIdx = Number\.isFinite\(parseInt\(el\.dataset\.grid, 10\)\) \? parseInt\(el\.dataset\.grid, 10\) : S\.gridIdx;/,
+    'message rows must not fall back to the previous logical grid index');
+  assert.match(ui, /function focusLiveGridMessage\(\) \{[\s\S]+bootReady\(\);[\s\S]+S\.view === 'livetv'[\s\S]+focusGrid\(0\);/,
+    'Live TV loading, empty, and source-error messages should clear the global boot overlay');
+  assert.match(ui, /function scheduleVirtualGridFromScroll\(root = S\.gridRoot \|\| \$\('grid'\)\) \{[\s\S]+renderVirtualGridWindow\(idx, \{ fromScroll: true, topRow \}\);[\s\S]+restoreVirtualGridFocus\(idx\);/,
+    'scroll-triggered window swaps should restore the active focus ring immediately');
+  assert.match(ui, /if \(shouldVirtualizeGrid\(S\.gridRoot \|\| \$\('grid'\)\)\) \{[\s\S]+const cols = Math\.max\(1, virtualGridCols[\s\S]+if \(k === 'ArrowLeft'\)[\s\S]+if \(k === 'ArrowDown'\)/,
+    'virtual grids should navigate with cached uniform-grid row math instead of full-DOM offset scans');
+  assert.match(ui, /api\.unobserveRoot = \(root\) => \{[\s\S]+querySelectorAll\('\[data-bg\]'\)[\s\S]+io\.unobserve\(el\)/,
+    'removed virtual cards should be unobserved by the poster lazy-loader');
+});
+
+test('web shell avoids known TV paint/focus regressions', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /<link rel="preload" href="fonts\/Sora\.woff2" as="font" type="font\/woff2" crossorigin>/,
+    'self-hosted display fonts should be preloaded for first paint');
+  assert.doesNotMatch(ui, /transition:opacity \.7s ease,width|transition:opacity \.7s ease,[^;]*height/,
+    'backdrop crossfade should not animate width or height');
+  assert.doesNotMatch(ui, /will-change:transform/,
+    'top-level page layers should not keep permanent compositor reservations');
+  assert.match(ui, /\.cbtn:hover,\.cbtn\.focus,\.cbtn:focus\{[\s\S]+rgba\(251,139,60,\.82\)/,
+    'player OSD button focus should have a visible coral ring over video');
+  assert.match(ui, /--safeT:max\(env\(safe-area-inset-top\),0px\);[\s\S]+--overscan:0px;[\s\S]+body\.tv\{--bdW:[^}]+--overscan:2\.5vmin\}/,
+    'TV and mobile chrome should reserve safe-area/overscan space');
+  assert.match(ui, /--appClockReserve:168px;[\s\S]+--appClockClear:72px;[\s\S]+\.browseHead\{[\s\S]+margin-top:clamp\(38px,7vh,var\(--appClockClear\)\);[\s\S]+padding-right:calc\(var\(--appClockReserve\) \+ var\(--safeR\) \+ var\(--overscan\)\);[\s\S]+#browse \.browseHead\{[^}]+padding-right:0/,
+    'browse genre/sort controls should reserve the fixed clock corner and drop cleanly on small screens');
+  assert.match(ui, /function clearPlaybackTimers\(\) \{[\s\S]+S\.healthTimer[\s\S]+S\.watchTimer[\s\S]+\}/,
+    'health/watch timers should clear through one shared player cleanup path');
+  assert.match(ui, /<div id="railMain">[\s\S]+<div id="railLibs"><\/div>[\s\S]+<\/div>\s+<div id="railFooter">[\s\S]+id="railAddLib"[\s\S]+id="navPrefs"[\s\S]+id="navSettings"[\s\S]+id="railUser" class="railBtn focusable"/,
+    'library rows should scroll separately from a pinned utility rail footer');
+  assert.match(ui, /#railMain\{[\s\S]+overflow-y:auto[\s\S]+#railFooter\{[\s\S]+flex:none[\s\S]+border-top:/,
+    'rail footer should stay fixed while library/menu items scroll');
+  assert.match(ui, /function applyMenuPrefs\(\) \{[\s\S]+const railMain = \$\('railMain'\) \|\| \$\('rail'\);[\s\S]+railMain\.querySelector\(`\.railBtn\[data-nav="\$\{nav\}"\]`\)[\s\S]+railMain\.insertBefore\(btn, firstMainNav\(\)\);/,
+    'menu preference reordering should only move buttons inside the scrollable rail body, never pinned footer buttons');
+  assert.doesNotMatch(ui, /rail\.insertBefore\(btn/,
+    'pinned rail footer must not be reordered through the old direct-rail insert path');
 });
 
 test('remux: ffmpeg copies streams from our HTTP stream into fragmented MP4', { skip: !HAS_FFMPEG }, async () => {

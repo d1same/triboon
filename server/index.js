@@ -269,6 +269,7 @@ const EPG_CACHE_TTL_MS = 12 * 3600000;
 const EPG_EMPTY_TTL_MS = 5 * 60000;
 const EPG_CACHE_STALE_MS = 7 * 24 * 3600000;
 const IPTV_WARM_DELAY_MS = 1500;
+const IPTV_STARTUP_WARM_DELAY_MS = Math.max(30000, Math.min(10 * 60000, Number(process.env.TRIBOON_IPTV_STARTUP_WARM_DELAY_MS || 120000)));
 const IPTV_WARM_INTERVAL_MS = 12 * 3600000;
 const IPTV_WARM_XTREAM_GUIDE_MAX = 96;
 const LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS = 25000;
@@ -438,6 +439,47 @@ function pinnedIptvHref(u, address, family) {
   const port = u.port ? `:${u.port}` : '';
   return `${u.protocol}//${host}${port}${u.pathname}${u.search}${u.hash}`;
 }
+function iptvRemuxInputHref(pin, fallbackUrl) {
+  const href = (pin && pin.href) || fallbackUrl;
+  if (!href) return href;
+  try {
+    const u = new URL(href);
+    // ffmpeg derives TLS SNI from the URL host. Keep HTTPS provider hostnames intact so
+    // Cloudflare/shared panels present the right certificate; plain HTTP can use the pinned IP.
+    if (u.protocol === 'https:') return href;
+  } catch {}
+  return (pin && pin.pinnedHref) || href;
+}
+function cachedIptvAddressKey(addr = {}) {
+  return `${addr.family || net.isIP(addr.address) || 4}:${String(addr.address || '').split('%')[0]}`;
+}
+function pickCachedIptvAddress(host) {
+  const hit = iptvUrlSafetyCache.get(host);
+  if (!hit || !Array.isArray(hit.addrs) || !hit.addrs.length) return null;
+  const now = Date.now();
+  const failures = hit.failures || {};
+  const addrs = hit.addrs.filter((a) => {
+    const badUntil = failures[cachedIptvAddressKey(a)] || 0;
+    return !badUntil || badUntil <= now;
+  });
+  const pool = addrs.length ? addrs : hit.addrs;
+  if (!addrs.length) hit.failures = {};
+  const offset = Math.max(0, hit.next || 0);
+  const picked = pool[offset % pool.length];
+  const pickedIdx = hit.addrs.findIndex((a) => cachedIptvAddressKey(a) === cachedIptvAddressKey(picked));
+  hit.next = pickedIdx >= 0 ? pickedIdx + 1 : offset + 1;
+  return picked || null;
+}
+function markIptvPinnedAddressFailure(pin, ttlMs = 60000) {
+  if (!pin || !pin.cacheHost || !pin.address) return;
+  const hit = iptvUrlSafetyCache.get(pin.cacheHost);
+  if (!hit || !Array.isArray(hit.addrs)) return;
+  const key = cachedIptvAddressKey(pin);
+  hit.failures = hit.failures || {};
+  hit.failures[key] = Date.now() + ttlMs;
+  const idx = hit.addrs.findIndex((a) => cachedIptvAddressKey(a) === key);
+  if (idx >= 0) hit.next = idx + 1;
+}
 async function validateAndPinIptvUrl(raw, label = 'IPTV URL') {
   const text = String(raw || '').trim();
   let u;
@@ -463,15 +505,17 @@ async function validateAndPinIptvUrl(raw, label = 'IPTV URL') {
       if (iptvUrlSafetyCache.size > 1000) iptvUrlSafetyCache.clear();
     }
     const safeHit = iptvUrlSafetyCache.get(host);
-    picked = safeHit && Array.isArray(safeHit.addrs) ? safeHit.addrs[0] : null;
+    picked = safeHit && Array.isArray(safeHit.addrs) ? pickCachedIptvAddress(host) : null;
   }
   return {
     href: u.href,
     pinnedHref: pinnedIptvHref(u, picked && picked.address, picked && picked.family),
     hostHeader: iptvHostHeader(u),
+    cacheHost: net.isIP(host) ? '' : host,
     address: picked && picked.address,
     family: picked && picked.family,
     lookup: picked && picked.address ? pinnedIptvLookup(picked.address, picked.family) : undefined,
+    onFailure: () => markIptvPinnedAddressFailure({ cacheHost: net.isIP(host) ? '' : host, address: picked && picked.address, family: picked && picked.family }),
   };
 }
 async function assertIptvUrlAllowed(raw, label = 'IPTV URL') {
@@ -976,6 +1020,11 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
       connection: 'close',
     };
     if (ctx.req.headers.range) headers.range = ctx.req.headers.range;
+    const markPinFailure = () => {
+      if (pin && typeof pin.onFailure === 'function') {
+        try { pin.onFailure(); } catch {}
+      }
+    };
     up = lib.request(u, {
       method: 'GET',
       headers,
@@ -1044,12 +1093,13 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
     });
     up.on('error', (e) => {
       if (done || slot.closed || /live stream (retuned|client closed|shutdown)/i.test(String(e && e.message))) return;
+      markPinFailure();
       console.error(`[iptv native] ${label} upstream error: ${String(e.message).slice(0, 160)}`);
       if (!ctx.res.headersSent) send(ctx.res, 502, { error: 'live stream failed' });
       else try { ctx.res.destroy(e); } catch {}
       stop('upstream error');
     });
-    up.setTimeout(15000, () => up.destroy(new Error('live stream upstream timeout')));
+    up.setTimeout(15000, () => { markPinFailure(); up.destroy(new Error('live stream upstream timeout')); });
     up.end();
   };
 
@@ -1440,6 +1490,11 @@ function fetchM3uChannelsStream(playlistUrl, opts = {}) {
       headers: { ...(opts.headers || {}), 'user-agent': (opts.headers && opts.headers['user-agent']) || IPTV_NATIVE_PROXY_UA },
       ...(validated && typeof validated.lookup === 'function' ? { lookup: validated.lookup } : {}),
     };
+    const markPinFailure = () => {
+      if (validated && typeof validated.onFailure === 'function') {
+        try { validated.onFailure(); } catch {}
+      }
+    };
     req = client.get(u, requestOptions, (res) => {
       resRef = res;
       if ([301, 302, 303, 307, 308].includes(res.statusCode || 0) && res.headers.location) {
@@ -1473,10 +1528,10 @@ function fetchM3uChannelsStream(playlistUrl, opts = {}) {
         if (carry) consumeLine(carry);
         done();
       });
-      res.on('error', (e) => done(e));
+      res.on('error', (e) => { markPinFailure(); done(e); });
     });
-    req.on('error', (e) => done(e));
-    req.setTimeout(timeoutMs, () => done(new Error('m3u playlist upstream timeout')));
+    req.on('error', (e) => { markPinFailure(); done(e); });
+    req.setTimeout(timeoutMs, () => { markPinFailure(); done(new Error('m3u playlist upstream timeout')); });
   }));
 }
 async function fetchIptvChannels(s, key) {
@@ -1759,7 +1814,8 @@ function hydrateXtreamEpgCache(key, sourceId = IPTV_LEGACY_SOURCE_ID) {
     const at = Number(entry.at) || 0;
     if (at && Date.now() - at <= EPG_CACHE_STALE_MS) byStream.set(String(id), { at, list: entry.list });
   }
-  xtreamEpgCache = { key, sourceId: sid, byStream };
+  const guideBlockedUntil = Number(raw.guideBlockedUntil) || 0;
+  xtreamEpgCache = { key, sourceId: sid, byStream, guideBlockedUntil };
   xtreamEpgSourceCaches.set(sid, xtreamEpgCache);
   return xtreamEpgCache;
 }
@@ -1770,7 +1826,9 @@ function persistXtreamEpgCache(cache = xtreamEpgCache) {
       .filter(([, e]) => e && Array.isArray(e.list) && e.list.length)
       .slice(-5000)
       .map(([id, e]) => [id, { at: Number(e.at) || 0, list: e.list }]);
+    const guideBlockedUntil = Number(cache.guideBlockedUntil) || 0;
     const body = { key: xtreamEpgStoreKey(cache.key), at: Date.now(), streams };
+    if (guideBlockedUntil > Date.now()) body.guideBlockedUntil = guideBlockedUntil;
     store.update('xtreamepgcaches', {}, (all) => { all[sourceId] = body; return all; });
     if (sourceId === IPTV_LEGACY_SOURCE_ID) store.write('xtreamepgcache', body);
   } catch {}
@@ -1813,6 +1871,24 @@ function xtreamGuideFailureTtlMs(err) {
   }
   return EPG_EMPTY_TTL_MS;
 }
+function isXtreamGuideProviderProtection(err) {
+  const text = String(err && err.message ? err.message : err || '').toLowerCase();
+  return text.includes('bot-protection') || text.includes('rate limit') || /\b(401|403|429)\b/.test(text);
+}
+function xtreamGuideSourceBlocked(cache) {
+  return !!(cache && Number(cache.guideBlockedUntil || 0) > Date.now());
+}
+function markXtreamGuideSourceBlocked(cache, err, src = {}) {
+  if (!cache || !isXtreamGuideProviderProtection(err)) return false;
+  const until = Date.now() + xtreamGuideFailureTtlMs(err);
+  if (Number(cache.guideBlockedUntil || 0) >= until - 1000) return true;
+  cache.guideBlockedUntil = until;
+  cache.guideBlockedReason = sanitizeIptvLogError(err);
+  persistXtreamEpgCache(cache);
+  const ttlSec = Math.max(1, Math.round((until - Date.now()) / 1000));
+  console.warn(`[iptv xtream guide] source "${src.name || cache.sourceId || 'Xtream'}" paused for ${ttlSec}s after provider rejection: ${cache.guideBlockedReason}`);
+  return true;
+}
 function pruneXtreamEpgStreamCache(cache) {
   if (!cache || !cache.byStream || cache.byStream.size <= 5000) return;
   const entries = [...cache.byStream.entries()]
@@ -1831,9 +1907,12 @@ async function xtreamEpgList(ch, { limit = 24, allowBusy = false } = {}) {
   if (hit && hit.until && Date.now() < hit.until) return hit.list || [];
   if (hit && Date.now() - hit.at < (hit.list && hit.list.length ? EPG_CACHE_TTL_MS : EPG_EMPTY_TTL_MS)) return hit.list;
   if (iptvPlaybackBusy() && !allowBusy) return hit && hit.list ? hit.list : [];
+  if (xtreamGuideSourceBlocked(cache)) return hit && hit.list ? hit.list : [];
   if (hit && hit.list && hit.list.length && Date.now() - hit.at <= EPG_CACHE_STALE_MS) {
     if (!hit.promise) {
       const p = fetchXtreamEpgList(s, ch, limit).then((list) => {
+        cache.guideBlockedUntil = 0;
+        cache.guideBlockedReason = '';
         cache.byStream.set(id, { at: Date.now(), list });
         pruneXtreamEpgStreamCache(cache);
         if (list.length) persistXtreamEpgCache(cache);
@@ -1841,8 +1920,9 @@ async function xtreamEpgList(ch, { limit = 24, allowBusy = false } = {}) {
       }).catch((e) => {
         // Stale-cache refresh is fire-and-forget; provider timeouts must not surface as
         // unhandled rejections that can kill the container.
+        markXtreamGuideSourceBlocked(cache, e, s);
         const ageMin = Math.max(0, Math.round((Date.now() - hit.at) / 60000));
-        console.error(`[iptv xtream guide] ${iptvChannelLogLabel(ch)} refresh failed; serving stale cache age=${ageMin}m: ${sanitizeIptvLogError(e)}`);
+        if (!xtreamGuideSourceBlocked(cache)) console.error(`[iptv xtream guide] ${iptvChannelLogLabel(ch)} refresh failed; serving stale cache age=${ageMin}m: ${sanitizeIptvLogError(e)}`);
         cache.byStream.set(id, { at: hit.at, list: hit.list });
         return hit.list;
       });
@@ -1852,6 +1932,8 @@ async function xtreamEpgList(ch, { limit = 24, allowBusy = false } = {}) {
   }
   if (hit && hit.promise) return hit.promise;
   const p = fetchXtreamEpgList(s, ch, limit).then((list) => {
+    cache.guideBlockedUntil = 0;
+    cache.guideBlockedReason = '';
     cache.byStream.set(id, { at: Date.now(), list });
     pruneXtreamEpgStreamCache(cache);
     if (list.length) persistXtreamEpgCache(cache);
@@ -1861,7 +1943,8 @@ async function xtreamEpgList(ch, { limit = 24, allowBusy = false } = {}) {
   try {
     return await p;
   } catch (e) {
-    console.error(`[iptv xtream guide] ${iptvChannelLogLabel(ch)} fetch failed; using ${hit && hit.list ? 'previous cache' : 'channel-title fallback'}: ${sanitizeIptvLogError(e)}`);
+    const sourceBlocked = markXtreamGuideSourceBlocked(cache, e, s);
+    if (!sourceBlocked) console.error(`[iptv xtream guide] ${iptvChannelLogLabel(ch)} fetch failed; using ${hit && hit.list ? 'previous cache' : 'channel-title fallback'}: ${sanitizeIptvLogError(e)}`);
     cache.byStream.set(id, { at: hit && hit.at ? hit.at : Date.now(), list: hit && hit.list ? hit.list : [], until: Date.now() + xtreamGuideFailureTtlMs(e) });
     pruneXtreamEpgStreamCache(cache);
     if (hit) return hit.list;
@@ -2057,9 +2140,11 @@ async function warmIptvCaches(reason = 'scheduled', opts = {}) {
           const key = iptvSourceKey(src);
           let cache = xtreamEpgSourceCaches.get(sourceId);
           if (!cache || cache.key !== key) cache = hydrateXtreamEpgCache(key, sourceId);
-          const targets = iptvPlaybackBusy() ? [] : xtreamGuideWarmTargets(channels, cache);
+          const guideBlocked = xtreamGuideSourceBlocked(cache);
+          const targets = (iptvPlaybackBusy() || guideBlocked) ? [] : xtreamGuideWarmTargets(channels, cache);
           await mapLimit(targets, 1, async (ch) => {
             if (iptvPlaybackBusy()) return;
+            if (xtreamGuideSourceBlocked(cache)) return;
             if (force && cache && cache.byStream) cache.byStream.delete(String(ch.xtreamId));
             await xtreamEpgList(ch, { limit: 24 });
           });
@@ -2069,6 +2154,8 @@ async function warmIptvCaches(reason = 'scheduled', opts = {}) {
           sourceStatus.guideChannels = Math.max(sourceStatus.guideChannels, cachedGuideCount);
           result.xtreamGuide += targets.length;
           result.xtreamGuidePaused = result.xtreamGuidePaused || (targets.length === 0 && iptvPlaybackBusy());
+          result.xtreamGuideBackoff = result.xtreamGuideBackoff || (targets.length === 0 && guideBlocked);
+          if (guideBlocked) sourceStatus.guidePaused = 'provider backoff';
         } catch (e) {
           const err = iptvSourceErrorPayload(src, new Error(`Xtream guide failed: ${sanitizeIptvLogError(e)}`));
           result.sourceErrors.push(err);
@@ -2103,7 +2190,7 @@ function scheduleIptvWarmSoon(reason = 'changed', delayMs = IPTV_WARM_DELAY_MS) 
     iptvWarmSoonNextAt = 0;
     warmIptvCaches(reason)
       .then((r) => {
-        if (r && r.configured) console.log(`[iptv] warmed ${r.channels || 0} channels${r.xmltv ? ' + XMLTV' : ''}${r.xtreamGuide ? ` + ${r.xtreamGuide} Xtream guide channel(s)` : ''}${r.xtreamGuidePaused ? ' + Xtream guide paused during playback' : ''}`);
+        if (r && r.configured) console.log(`[iptv] warmed ${r.channels || 0} channels${r.xmltv ? ' + XMLTV' : ''}${r.xtreamGuide ? ` + ${r.xtreamGuide} Xtream guide channel(s)` : ''}${r.xtreamGuidePaused ? ' + Xtream guide paused during playback' : ''}${r.xtreamGuideBackoff ? ' + Xtream guide paused by provider backoff' : ''}`);
       })
       .catch((e) => console.error('[iptv warm]', e.message));
   }, delayMs);
@@ -2371,6 +2458,9 @@ function mountPayload(vf, uid, extra = {}) {
     playback: decidePlayback(vf.name, vf._caps || {}),
     ...extra,
   };
+}
+function subtitleReleaseName(vf) {
+  return String((vf && (vf._releaseName || vf._sourceName || vf.name)) || '').trim();
 }
 function episodeSubtitleQuery(query, season, ep) {
   const base = String(query || '').trim();
@@ -3355,7 +3445,7 @@ const H = {
       }
       let ff;
       try {
-        ff = spawnLiveRemux(pin.pinnedHref || pin.href || target.url, {
+        ff = spawnLiveRemux(iptvRemuxInputHref(pin, target.url), {
           hlsFriendly,
           headers: pin.hostHeader ? { Host: pin.hostHeader } : undefined,
         });
@@ -3430,6 +3520,9 @@ const H = {
         const status = iptvRemuxStatusFromFfmpeg(err);
         const reason = iptvNativeFailureReason(status || 502, err);
         const providerRejected = [401, 403, 429].includes(status);
+        if (codeNum && !wrote && !providerRejected && pin && typeof pin.onFailure === 'function') {
+          try { pin.onFailure(); } catch {}
+        }
         err = sanitizeIptvFfmpegError(err);
         if (codeNum && !wrote && retriesLeft > 0 && !providerRejected && !ctx.res.destroyed) {
           console.error(`[iptv] "${ch.name}" attempt failed (${err.slice(0, 120).trim()}) — retrying plain`);
@@ -4551,15 +4644,35 @@ Object.assign(H, {
     headers['content-length'] = String(end - start);
     ctx.res.writeHead(code, headers);
     if (ctx.req.method === 'HEAD') return ctx.res.end();
+    const readSignal = { aborted: false };
+    const stopRead = () => {
+      readSignal.aborted = true;
+      if (vf && typeof vf.cancelReadAhead === 'function') vf.cancelReadAhead();
+    };
+    const readPriority = start === 0 ? 'startup' : 'seek';
+    ctx.req.once('close', stopRead);
+    ctx.res.once('close', stopRead);
     try {
-      for await (const chunk of vf.read(start, end)) {
-        if (!ctx.res.write(chunk)) await new Promise((r) => ctx.res.once('drain', r));
-        if (ctx.res.destroyed) break;
+      for await (const chunk of vf.read(start, end, { priority: readPriority, signal: readSignal })) {
+        if (readSignal.aborted || ctx.res.destroyed) break;
+        if (!ctx.res.write(chunk)) await new Promise((resolve) => {
+          const done = () => {
+            ctx.res.off('drain', done);
+            ctx.res.off('close', done);
+            resolve();
+          };
+          ctx.res.once('drain', done);
+          ctx.res.once('close', done);
+        });
+        if (readSignal.aborted || ctx.res.destroyed) break;
       }
     } catch (e) {
-      console.error(`[stream ${vf.id}]`, e.message); // player sees the cut → calls /api/advance
+      if (!readSignal.aborted) console.error(`[stream ${vf.id}]`, e.message);
+    } finally {
+      ctx.req.off('close', stopRead);
+      ctx.res.off('close', stopRead);
     }
-    ctx.res.end();
+    if (!ctx.res.destroyed && !ctx.res.writableEnded) ctx.res.end();
   },
 
   remux: async (ctx) => {
@@ -4659,8 +4772,9 @@ Object.assign(H, {
     const variant = String(ctx.url.searchParams.get('variant') || '').replace(/[^a-z0-9_.:-]/gi, '').slice(0, 80);
     const shift = Math.max(-120, Math.min(120, Number(ctx.url.searchParams.get('shift') || 0) || 0));
     const base = process.env.WYZIE_BASE || undefined;
+    const releaseName = subtitleReleaseName(vf) || vf.name;
     const subOpts = {
-      key, tmdbId, imdbId, query: vf._subQuery || vf._q || vf.name, lang, releaseName: vf.name,
+      key, tmdbId, imdbId, query: vf._subQuery || vf._q || releaseName || vf.name, lang, releaseName,
       durationSeconds: vf._tracks && vf._tracks.duration,
       attempts: 3, retryDelayMs: 900,
       ...(base ? { base } : {}),
@@ -4686,7 +4800,7 @@ Object.assign(H, {
         if (!vf._osSearchInflight.has(searchKey)) {
           const work = searchOnlineSubs(subOpts)
             .then((data) => {
-              const variants = rankSubs(data, vf.name, { durationSeconds: vf._tracks && vf._tracks.duration }).slice(0, 12);
+              const variants = rankSubs(data, releaseName, { durationSeconds: vf._tracks && vf._tracks.duration }).slice(0, 12);
               vf._osSearchCache.set(searchKey, variants);
               return variants;
             })
@@ -4723,7 +4837,7 @@ Object.assign(H, {
           if (!hit || !hit.raw) throw new Error('that subtitle version is no longer available');
           return downloadBestSubtitle(variants.map((v) => v.raw).filter(Boolean), {
             key,
-            releaseName: vf.name,
+            releaseName,
             durationSeconds: vf._tracks && vf._tracks.duration,
             preferredId: variant,
             ...(base ? { base } : {}),
@@ -5197,9 +5311,9 @@ if (require.main === module) {
   server.listen(PORT, () => {
     console.log(`Triboon → http://localhost:${PORT}`);
     try { getPool(); } catch { /* no provider configured yet — fine */ }
-    // Warm Live TV off the viewer path: channels + XMLTV guide (or a bounded Xtream guide
-    // set) refresh every 12 hours server-side, while stale caches are served instantly.
-    scheduleIptvWarmSoon('startup');
+    // Startup should stay responsive first. Stale Live TV caches are served instantly on demand;
+    // the heavy network refresh can begin after login/playback/TV navigation have settled.
+    scheduleIptvWarmSoon('startup', IPTV_STARTUP_WARM_DELAY_MS);
     scheduleNextIptvWarm();
   });
   // Docker sends SIGTERM on `docker stop` — flush the store and close cleanly instead of

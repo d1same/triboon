@@ -97,8 +97,8 @@ const NZB_FETCH_IDLE_MS = 5000;
 const NZB_FETCH_DEADLINE_MS = 15000; // hard cap — a slow NZB download advances to the next source
 const MOUNT_DEADLINE_MS = 30000;     // hard cap — a stalled mount advances instead of hanging Play
 const FIRST_ARTICLE_PROBE_MS = 800;   // cheap STAT probe catches stale NZBs before BODY fetches
-const MAX_ATTEMPTS = 8;       // source walk: stale indexer rows are common, but startup stays bounded
-const MAX_ADVANCE_MS = 20000; // hard UX budget for one play/advance source walk
+const MAX_ATTEMPTS = 18;      // source walk: stale indexer rows are common; keep going past one bad release family
+const MAX_ADVANCE_MS = 45000; // hard UX budget for one play/advance source walk
 
 function candidateKey(candidate) {
   return crypto.createHash('sha1').update([
@@ -212,8 +212,6 @@ class Pipeline {
       const titleOnly = { ...params };
       delete titleOnly.imdbid;
       delete titleOnly.tvdbid;
-      delete titleOnly.season;
-      delete titleOnly.ep;
       ixs.forEach((ix) => this.usage.onSearch(ix.name));
       const retry = await fanout(ixs, titleOnly, { timeoutMs });
       const verified = retry.results.filter((r) => releaseMatches(r.name, wanted));
@@ -231,6 +229,11 @@ class Pipeline {
     // spaces too: "Spider-Noir" found nothing while "Spider Noir" matched 30 releases.
     const sanitize = (q) => String(q || '').replace(/['’`]/g, '').replace(/[:&,!?./\\()\[\]\-_;]+/g, ' ').replace(/\s+/g, ' ').trim();
     params = { ...params, q: sanitize(params.q) };
+    const season = Number(params.season);
+    const ep = Number(params.ep);
+    if (Number.isInteger(season) && Number.isInteger(ep) && season > 0 && ep > 0 && !/\bS\d{1,2}\s*E\d{1,3}\b/i.test(params.q)) {
+      params.q = `${params.q} S${String(season).padStart(2, '0')}E${String(ep).padStart(2, '0')}`.trim();
+    }
     const wanted = parseWantedTitle(params.q);
     const key = JSON.stringify([params.q, params.imdbid, params.tvdbid, params.season, params.ep]);
     let hit = this.searchCache.get(key);
@@ -300,7 +303,11 @@ class Pipeline {
     const liveId = this.mountByUrl.get(candidate.nzbUrl);
     if (liveId) {
       const live = this.mounts.get(liveId);
-      if (live && live.streamable) { live._touched = Date.now(); return { vf: live }; }
+      if (live && live.streamable) {
+        live._touched = Date.now();
+        if (candidate.name) live._releaseName = candidate.name;
+        return { vf: live };
+      }
       this.mountByUrl.delete(candidate.nzbUrl);
     }
     let xml = this.nzbCache.get(candidate.nzbUrl);
@@ -331,9 +338,10 @@ class Pipeline {
           this._recordVerdict(candidate, 'missing', { stage: 'first-article' });
           return { fail: 'missing: first article unavailable' };
         }
+        // Timeout here is only "not enough evidence yet", especially over VPNs or slower
+        // providers. Do not kill a candidate before the real mount/BODY path can prove it.
         if (probeVerdict === 'timeout') {
-          this._recordVerdict(candidate, 'probe-timeout', { stage: 'first-article' });
-          return { fail: 'health: first article probe timed out' };
+          candidate._probeTimeout = true;
         }
       }
     } catch {
@@ -428,6 +436,7 @@ class Pipeline {
       const res = await this._tryCandidate(candidate, mountOpts);
       if (res.vf && !res.fail) {
         res.vf._touched = Date.now();
+        if (candidate.name) res.vf._releaseName = candidate.name;
         this.mounts.set(res.vf.id, res.vf);
         this.mountByUrl.set(candidate.nzbUrl, res.vf.id);
         session.history.push({ name: candidate.name, outcome: 'playing' });

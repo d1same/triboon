@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Triboon</title>
 <link rel="icon" href="T-Logo.svg"><link rel="alternate icon" href="T-Logo.png">
+<link rel="preload" href="fonts/Sora.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/AlbertSans.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/JetBrainsMono.woff2" as="font" type="font/woff2" crossorigin>
 <style>
 /* Self-hosted variable fonts (CSP-safe, works offline — the old Google Fonts <link> was
    blocked by our Content-Security-Policy and the whole UI fell back to serif). */
@@ -23,6 +26,13 @@
   --gut:28px;        /* content gutter — tight to the rail (owner: no dead strip by the menu) */
   --bdW:min(50vw,980px);
   --bdH:min(56vh,620px);
+  --safeT:max(env(safe-area-inset-top),0px);
+  --safeR:max(env(safe-area-inset-right),0px);
+  --safeB:max(env(safe-area-inset-bottom),0px);
+  --safeL:max(env(safe-area-inset-left),0px);
+  --overscan:0px;
+  --appClockReserve:168px;
+  --appClockClear:72px;
 }
 /* Rail push uses TRANSFORM (compositor-only, buttery on TV) — animating --rail/left forced
    a full page re-layout every frame and stuttered hard on the Shield. Phones keep their
@@ -56,12 +66,12 @@ select option,select optgroup{background:#161020;color:var(--text)}
 /* A SMALLER image anchored to the top-right, soft-masked so it melts into the colorful base. */
 #backdrop{position:fixed;inset:0;z-index:0}
 #backdrop .layer{position:absolute;top:0;right:0;width:var(--bdW);height:var(--bdH);background-size:cover;background-position:top center;
-  opacity:0;transition:opacity .7s ease,width .5s ease,height .5s ease;
+  opacity:0;transition:opacity .7s ease;
   -webkit-mask:radial-gradient(135% 130% at 100% 0%,#000 34%,transparent 76%);
           mask:radial-gradient(135% 130% at 100% 0%,#000 34%,transparent 76%)}
 #backdrop .layer.show{opacity:1}
 /* TV: tighter backdrop — roughly half the screen, melting away well above the row. */
-body.tv{--bdW:min(48vw,820px);--bdH:min(50vh,460px)}
+body.tv{--bdW:min(48vw,820px);--bdH:min(50vh,460px);--overscan:2.5vmin}
 body.shortBrowseBd{--bdH:min(46vh,430px)}
 body.tv.shortBrowseBd{--bdH:min(38vh,360px)}
 @media (max-height:760px){
@@ -129,8 +139,8 @@ body.shortBrowseBd:not(.tv) #bdInfo .bdiO{font-size:14.5px;line-height:1.45;-web
 /* ---------- rail (expands on hover) ---------- */
 /* Collapsed rail: NO background at all — it lives on the ink like the rest of the page.
    Width 72 = 12px padding + 48px buttons + 12px, so left/right spacing is symmetric. */
-#rail{position:fixed;z-index:22;left:0;top:0;bottom:0;width:72px;display:none;flex-direction:column;align-items:stretch;gap:6px;padding:24px 12px 18px;
-  background:none;overflow-x:hidden;overflow-y:auto;
+#rail{position:fixed;z-index:22;left:calc(var(--safeL) + var(--overscan));top:calc(var(--safeT) + var(--overscan));bottom:calc(var(--safeB) + var(--overscan));width:72px;display:none;flex-direction:column;align-items:stretch;gap:8px;padding:24px 12px 18px;
+  background:none;overflow:hidden;
   /* Chromium makes scrollable containers keyboard-focusable: when native focus lands on the
      rail (or any scroller) the UA paints its own bright outline — "the menu shows borders".
      Our spatial nav draws all focus cues itself. */
@@ -139,6 +149,9 @@ body.shortBrowseBd:not(.tv) #bdInfo .bdiO{font-size:14.5px;line-height:1.45;-web
      content slide UNDER the still-wide rail on collapse. */
   transition:width .26s cubic-bezier(.22,1,.36,1),background .26s ease}
 #rail.show{display:flex}
+#railMain{min-height:0;flex:1 1 auto;display:flex;flex-direction:column;align-items:stretch;gap:6px;overflow-x:hidden;overflow-y:auto;padding-bottom:4px;scrollbar-width:none}
+#railMain::-webkit-scrollbar{width:0;height:0}
+#railFooter{flex:none;display:flex;flex-direction:column;align-items:stretch;gap:6px;padding-top:10px;border-top:1px solid rgba(243,239,247,.11)}
 /* Expanded = a real overlay (collapsed is 72px; var(--rail) ALSO became 72px in a restyle,
    which silently turned expansion into a no-op — labels faded in but stayed clipped).
    Translucent + blurred so the content stays present behind it (Plex-style). */
@@ -187,11 +200,10 @@ body.railClickCollapsed #rail:hover .railBtn .del{opacity:0}
 #rail:hover .railSec,#rail.expanded .railSec,body.railOpen .railSec{height:auto;opacity:.7}
 #libSec{display:none!important}
 #railLibs{display:contents}
-#railAddLib{margin-bottom:4px}
-/* Sign-out pinned to the bottom with a clear divider + breathing room above it. */
-#railUser{margin-top:auto;height:48px;border-radius:13px;display:flex;align-items:center;justify-content:flex-start;color:var(--muted);flex:none;padding:0;
-  position:relative;margin-top:auto}
-#railUser::before{content:"";position:absolute;top:-10px;left:8px;right:8px;height:1px;background:var(--line)}
+#railAddLib{margin-bottom:0}
+/* Utility footer stays visible even when libraries overflow the 720p rail. */
+#railUser{height:48px;border-radius:13px;display:flex;align-items:center;justify-content:flex-start;color:var(--muted);flex:none;padding:0;position:relative}
+#railUser::before{display:none}
 #railUser:hover{color:var(--text);background:rgba(43,32,63,.48)}
 #railUser.focusable::before{top:-10px;left:8px;right:8px;bottom:auto;height:1px;padding:0;border-radius:0;background:var(--line);opacity:1;
   -webkit-mask:none;mask:none}
@@ -205,6 +217,10 @@ body.railClickCollapsed #rail:hover .railBtn .del{opacity:0}
 body.tv:not(.railOpen) #rail:not(.expanded){
   width:72px!important;background:transparent!important;align-items:center;
   padding-left:0!important;padding-right:0!important
+}
+body.tv:not(.railOpen) #rail:not(.expanded) #railMain,
+body.tv:not(.railOpen) #rail:not(.expanded) #railFooter{
+  width:48px!important;align-items:center
 }
 body.tv:not(.railOpen) #rail:not(.expanded) .railBtn,
 body.tv:not(.railOpen) #rail:not(.expanded) #railUser{
@@ -599,7 +615,7 @@ body.nativeGuideMode #player.guideMode video{display:none}
 #osd .ctlRight{justify-content:flex-end}
 #osd .ctl .time{display:none}
 .cbtn{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;background:rgba(5,3,9,.4);color:var(--text);border:0;box-shadow:0 10px 28px rgba(0,0,0,.14)}
-.cbtn:hover,.cbtn.focus,.cbtn:focus{background:rgba(5,3,9,.56);outline:none;box-shadow:0 12px 30px rgba(0,0,0,.2)}
+.cbtn:hover,.cbtn.focus,.cbtn:focus{background:rgba(5,3,9,.56);outline:none;box-shadow:0 0 0 3px rgba(251,139,60,.82),0 12px 30px rgba(0,0,0,.28)}
 .cbtn.big{width:58px;height:58px;background:rgba(5,3,9,.4);color:var(--text)}
 .cbtn svg{width:20px;height:20px}
 .cbtn.on{background:rgba(5,3,9,.4);color:var(--text)}
@@ -638,7 +654,7 @@ body.nativeGuideMode #player.guideMode video{display:none}
 #trackMenu button:disabled:hover{background:transparent}
 #trackMenu button .mark{margin-left:auto}
 /* In-app clock (top right, like Plex) */
-#appClock{position:fixed;top:18px;right:22px;z-index:21;min-width:108px;height:38px;padding:0 18px;display:none;
+#appClock{position:fixed;top:calc(18px + var(--safeT) + var(--overscan));right:calc(22px + var(--safeR) + var(--overscan));z-index:21;min-width:108px;height:38px;padding:0 18px;display:none;
   align-items:center;justify-content:center;pointer-events:none;color:var(--text);font:800 14px "JetBrains Mono",monospace;letter-spacing:0;
   background:linear-gradient(180deg,rgba(34,25,52,.78),rgba(11,8,18,.64));border:1px solid rgba(243,239,247,.13);
   border-radius:999px;box-shadow:0 12px 32px rgba(0,0,0,.24),inset 0 1px 0 rgba(255,255,255,.08);
@@ -682,7 +698,7 @@ body.screensaverOn{cursor:none}
 
 /* ---------- toast ---------- */
 #toast{position:fixed;z-index:60;left:50%;bottom:36px;transform:translate(-50%,80px);opacity:0;background:rgba(17,12,27,.95);
-  border:1px solid var(--line);border-radius:12px;padding:12px 18px;font:500 13.5px "Albert Sans";transition:all .3s;display:flex;gap:10px;align-items:center}
+  border:1px solid var(--line);border-radius:12px;padding:12px 18px;font:500 13.5px "Albert Sans";transition:transform .3s,opacity .3s;display:flex;gap:10px;align-items:center}
 #toast.show{transform:translate(-50%,0);opacity:1}
 #toast .dot{width:8px;height:8px;border-radius:50%;background:var(--grad);flex:none}
 
@@ -750,9 +766,9 @@ body.screensaverOn{cursor:none}
    #prefs was missing from BOTH this rule and the push rule — it sat at left:0 under the
    rail and stayed put when the menu expanded. */
 #home,#discover,#browse,#detail,#person,#settings,#prefs{left:var(--rail)!important;padding-left:var(--gut)!important;
-  transition:transform .26s cubic-bezier(.22,1,.36,1);will-change:transform}
+  transition:transform .26s cubic-bezier(.22,1,.36,1)}
 #searchBar{left:calc(var(--rail) + var(--gut))!important;right:var(--gut)!important;
-  transition:transform .26s cubic-bezier(.22,1,.36,1);will-change:transform}
+  transition:transform .26s cubic-bezier(.22,1,.36,1)}
 
 /* Goldish section headers (Plex/Overseerr look). */
 .row h2,#person h2,.secHead h2{color:var(--amber);font:700 13px "JetBrains Mono",monospace;letter-spacing:.18em;text-transform:uppercase}
@@ -770,6 +786,8 @@ body.screensaverOn{cursor:none}
 
 /* Infinite-scroll sentinel spinner */
 .gridMore{grid-column:1/-1;text-align:center;color:var(--muted);font:600 12px "JetBrains Mono";padding:18px}
+.gridSpacer{grid-column:1/-1;height:var(--gridSpacerH,0px);min-height:0;pointer-events:none}
+.gridSpacer:empty{display:block}
 
 /* Scroll-fade: content fades out at the top edge as it scrolls up (--tf grows with
    scrollTop). HOLD fully transparent for the first 55% of the band — a plain ramp left the
@@ -929,8 +947,8 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 #rail{transition:width .26s cubic-bezier(.22,1,.36,1),background .26s!important}
 .railBtn .rlabel,#rail .rlabel{transition:opacity .2s ease,max-width .32s cubic-bezier(.22,1,.36,1)!important}
 /* Content push animates TRANSFORM (compositor-smooth), synced to the rail's .26s clock. */
-#home,#discover,#browse,#detail,#person,#settings,#searchBar,#detail .back{transition:transform .26s cubic-bezier(.22,1,.36,1)!important;will-change:transform}
-/* Sign-out collapses to just the avatar when the rail is collapsed (no stray text). */
+#home,#discover,#browse,#detail,#person,#settings,#searchBar,#detail .back{transition:transform .26s cubic-bezier(.22,1,.36,1)!important}
+/* Profile footer collapses to just the avatar when the rail is collapsed (no stray text). */
 #railUser .rlabel{font-weight:600}
 
 /* Tighter gutter; content sits just clear of the collapsed rail (no covers under the menu). */
@@ -976,9 +994,14 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 /* Page titles are redundant chrome — the rail marks where you are and backdrops own the
    space. Hiding (not removing) keeps #browseTitle for screen readers and route logic. */
 #browseTitle,#discoverTitle{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
-/* Start the head BELOW the fixed top-right clock — same corner, and the rail push slides
-   the dropdowns right, so horizontal gutters can't prevent the overlap; a vertical drop can. */
-.browseHead{justify-content:flex-end;margin-top:30px}
+/* Browse filters and the fixed clock share the top-right corner. Reserve that corner so
+   genre/sort controls never slide under the clock on 720p/TV/tablet-width screens. */
+.browseHead{
+  justify-content:flex-end;
+  margin-top:clamp(38px,7vh,var(--appClockClear));
+  padding-right:calc(var(--appClockReserve) + var(--safeR) + var(--overscan));
+  box-sizing:border-box;
+}
 /* The rail push slid the right-anchored dropdowns off the screen edge — counter-translate
    the head on the same clock so the filters stay exactly put while the page slides. */
 .browseHead{transition:transform .26s cubic-bezier(.22,1,.36,1)}
@@ -1023,7 +1046,7 @@ body.tv .cwAct,body.tv .epMenuBtn{display:none!important}
   #heroBtns .btn{padding:11px 16px;font-size:14px}
   #rows{max-height:min(58vh,calc(100vh - 260px));gap:14px}
   #browse.rowsWin #grid{flex:1!important;max-height:none!important;margin-top:0!important}
-  #browse .browseHead{margin-left:48px;margin-top:0;margin-bottom:12px;justify-content:flex-start}
+  #browse .browseHead{margin-left:48px;margin-top:8px;margin-bottom:12px;justify-content:flex-start;padding-right:0}
   #browse{padding-top:62px!important}
   #grid{gap:18px 12px;padding-top:0}
   #discover{padding-top:62px!important}
@@ -1732,7 +1755,7 @@ body:not(.tv) #settings .setGrid[data-stab="display"]{grid-template-columns:repe
 /* ============ Music (YouTube Music) ============ */
 #music{position:fixed;inset:0;z-index:8;display:none;flex-direction:column;
   left:var(--rail)!important;padding:46px var(--gut) 0 var(--gut);overflow:hidden;
-  transition:transform .26s cubic-bezier(.22,1,.36,1);will-change:transform}
+  transition:transform .26s cubic-bezier(.22,1,.36,1)}
 #music.open{display:flex}
 .musicHead{display:flex;align-items:center;gap:24px;flex-wrap:wrap;margin-bottom:18px;flex:none}
 .musicHead h1{font:800 30px "Sora"}
@@ -2045,6 +2068,7 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
 <!-- ============ app shell ============ -->
 <button id="burger" aria-label="Menu"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
 <nav id="rail">
+  <div id="railMain">
   <div class="logo" id="railLogo" role="button" title="Home" style="cursor:pointer"><img src="T-Logo.svg" alt="Triboon" onerror="this.onerror=null;this.src='T-Logo.png'"><span class="wordmark">Triboon</span></div>
   <button class="railBtn focusable active" data-nav="home" title="Home">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .7-1.5l7-6a2 2 0 0 1 2.6 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="rlabel">Home</span></button>
@@ -2066,13 +2090,16 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg><span class="rlabel">Music</span></button>
   <div id="libSec" style="display:none"></div><!-- libraries flow inline with the nav — no section header -->
   <div id="railLibs"></div>
+  </div>
+  <div id="railFooter">
   <button class="railBtn focusable" id="railAddLib" title="Add library" style="display:none">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg><span class="rlabel">Add library</span></button>
   <button class="railBtn focusable" id="navPrefs" data-nav="prefs" title="Preferences">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2.4"/><circle cx="8" cy="17" r="2.4"/></svg><span class="rlabel">Preferences</span></button>
   <button class="railBtn focusable" data-nav="settings" title="Settings" id="navSettings" style="display:none">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z"/></svg><span class="rlabel">Settings</span></button>
-  <button id="railUser" class="focusable" title="Sign out"><span class="av"></span><span class="rlabel">Sign out</span></button>
+  <button id="railUser" class="railBtn focusable" title="Switch profile"><span class="av"></span><span class="rlabel">Switch profile</span></button>
+  </div>
 </nav>
 
 <div id="bdInfo"><div class="bdiT"></div><div class="bdiM"></div><div class="bdiC"></div><div class="bdiO"></div></div>
@@ -2919,7 +2946,7 @@ const bgLazy = (() => {
     el.style.backgroundImage = `url("${u}")`;
     delete el.dataset.bg;
   };
-  return (el, url) => {
+  const api = (el, url) => {
     const safe = safeUrl(url || '');
     if (!el || !safe) return;
     el.dataset.bg = safe;
@@ -2929,6 +2956,11 @@ const bgLazy = (() => {
     }, { rootMargin: '900px 300px' });
     io.observe(el);
   };
+  api.unobserveRoot = (root) => {
+    if (!io || !root || !root.querySelectorAll) return;
+    root.querySelectorAll('[data-bg]').forEach((el) => io.unobserve(el));
+  };
+  return api;
 })();
 const S = {
   user: null, serverInfo: null, rows: [], focusedItem: null,
@@ -2955,8 +2987,14 @@ function signalTvReadyOnce(reason) {
   signalTvReady(reason);
 }
 const tokenStore = {
-  get: () => { try { return localStorage.getItem('triboon.token'); } catch { return null; } },
-  set: (t) => { try { t ? localStorage.setItem('triboon.token', t) : localStorage.removeItem('triboon.token'); } catch {} },
+  get: () => {
+    try { const t = localStorage.getItem('triboon.token'); if (t) return t; } catch {}
+    try { return sessionStorage.getItem('triboon.token'); } catch { return null; }
+  },
+  set: (t) => {
+    try { t ? localStorage.setItem('triboon.token', t) : localStorage.removeItem('triboon.token'); } catch {}
+    try { t ? sessionStorage.setItem('triboon.token', t) : sessionStorage.removeItem('triboon.token'); } catch {}
+  },
 };
 async function api(path, opts = {}) {
   const headers = { ...(opts.headers || {}) };
@@ -2964,7 +3002,12 @@ async function api(path, opts = {}) {
   if (tok) headers.authorization = 'Bearer ' + tok;
   if (opts.body && typeof opts.body !== 'string') { opts.body = JSON.stringify(opts.body); headers['content-type'] = 'application/json'; }
   const r = await fetch(path, { ...opts, headers });
-  if (r.status === 401 && !path.startsWith('/api/login') && !path.startsWith('/api/setup')) { showGate('login'); throw new Error('signed out'); }
+  if (r.status === 401 && !path.startsWith('/api/login') && !path.startsWith('/api/setup')) {
+    const e = new Error('signed out');
+    e.status = 401;
+    showGate('login');
+    throw e;
+  }
   const json = await r.json().catch(() => ({}));
   if (!r.ok) { const e = new Error(json.error || ('HTTP ' + r.status)); e.status = r.status; e.detail = json; throw e; }
   return json;
@@ -3109,6 +3152,7 @@ function applyCoverSize() {
   const px = window.innerWidth <= 600 ? '140px' : (browserBrowseCoverPx(s) || table[s] || table.M);
   document.documentElement.style.setProperty('--poster', px);
   adaptRowWindows();
+  scheduleVirtualGridGeometryRefresh();
   return s;
 }
 // Row windows sized from REAL geometry (viewport × poster size × header/hero space) instead
@@ -4594,11 +4638,11 @@ async function play(it, pick) {
   const picked = pick && typeof pick === 'object' ? pick : (pick ? { name: pick } : null);
   const pickRank = picked ? normalizeResolutionRank(picked.resolutionRank) : null;
   const qRank = pickRank !== null ? pickRank : qualityRankForItem(it);
+  const localExact = !picked && localPlaybackForItem(it) ? { ...it, _local: localPlaybackForItem(it) } : null;
   // Local-first: if this exact title/episode exists in a scanned library, play the file on
   // disk instead of searching usenet, unless the chosen quality asks for another source class.
   if (it._local && !it.tmdbId) return playLocal(it); // NFO-only archive item: file is the only source
-  const loc = S.localMap && it.key && S.localMap[it.key];
-  if (loc && !picked && localPlaybackFitsQuality({ ...it, _local: loc }, qRank)) return playLocal({ ...it, _local: loc });
+  if (localExact && localPlaybackFitsQuality(localExact, qRank)) return playLocal(localExact);
   stopActivePlaybackForReplacement();
   const btns = [$('btnPlay'), $('dPlay')];
   btns.forEach((b) => { b.disabled = true; });
@@ -4630,6 +4674,10 @@ async function play(it, pick) {
     openPlayer(it, r, { nativeFirst });
   } catch (e) {
     closePlayer();
+    if (localExact && !picked && /no playable|no .*candidate|all candidates failed/i.test(String(e && e.message || ''))) {
+      toast('No matching online source - playing your library file');
+      return playLocal(localExact);
+    }
     const tried = (e.detail && e.detail.attempts || []).length;
     toast(`No playable source — ${e.message}${tried ? ` (${tried} tried)` : ''}`);
   } finally {
@@ -5606,7 +5654,7 @@ function edgeScroll(el) {
   el.dataset.edgeScroll = '1';
   let dir = 0, raf = null;
   const step = () => {
-    if (!dir) { raf = null; return; }
+    if (!dir || !el.isConnected) { dir = 0; raf = null; return; }
     el.scrollLeft += dir * 14;
     raf = requestAnimationFrame(step);
   };
@@ -5849,6 +5897,12 @@ function startLiveMseSource(url) {
   requestLivePlay();
   return true;
 }
+function clearPlaybackTimers() {
+  clearTimeout(S._waitT); clearTimeout(_nudgeT); _nudgeSum = 0; _nudgeBase = null;
+  if (S.upNextTimer) { clearInterval(S.upNextTimer); S.upNextTimer = null; }
+  if (S.healthTimer) { clearInterval(S.healthTimer); S.healthTimer = null; }
+  if (S.watchTimer) { clearInterval(S.watchTimer); S.watchTimer = null; }
+}
 function stopActivePlaybackForReplacement(opts = {}) {
   if (!S.playing) return;
   saveWatch(true);
@@ -5856,12 +5910,10 @@ function stopActivePlaybackForReplacement(opts = {}) {
     try { window.TriboonTV.closeVideo(); } catch {}
   }
   stopWebVideoElement();
-  clearTimeout(S._waitT); clearTimeout(_nudgeT); _nudgeSum = 0; _nudgeBase = null;
+  clearPlaybackTimers();
   closeTrackMenu();
   if (!opts.preserveGuide) closePlayerGuide({ fromNative: true });
-  $('upNext').classList.remove('show'); if (S.upNextTimer) clearInterval(S.upNextTimer);
-  if (S.healthTimer) clearInterval(S.healthTimer);
-  if (S.watchTimer) clearInterval(S.watchTimer);
+  $('upNext').classList.remove('show');
   closePlayerEpisodes();
   S.playerSeasonStrip = null;
   S.nextEp = null;
@@ -6104,6 +6156,9 @@ function canUseNativeVideoPlayer() {
   } catch { return false; }
 }
 function nativeVideoRequired(it) {
+  // VOD only: movies, episodes, and local-library files use the playVideo ExoPlayer bridge.
+  // Live TV uses playLive below because the payload carries provider-native candidates,
+  // guide/PiP state, and channel-zap behavior instead of the VOD remux/transcode ladder.
   return !!(it && it.type !== 'live' && canUseNativeVideoPlayer());
 }
 function nativeVideoSubtitleRel(p) {
@@ -6940,7 +6995,7 @@ async function closePlayer(opts = {}) {
   // closed leaves the menus visible but unclickable.
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
   stopWebVideoElement(); // stale media/cue state must not greet the next playback
-  clearTimeout(S._waitT); clearTimeout(_nudgeT); _nudgeSum = 0; _nudgeBase = null;
+  clearPlaybackTimers();
   S.nativeGuideMode = false;
   $('player').classList.remove('open', 'live', 'guideMode'); $('vlcPanel').classList.remove('show'); $('playerLoader').classList.remove('show');
   document.body.classList.remove('videoOpen');
@@ -6948,9 +7003,7 @@ async function closePlayer(opts = {}) {
   S._musicWasPlaying = false;
   closePlayerGuide();
   closePlayerEpisodes();
-  $('upNext').classList.remove('show'); if (S.upNextTimer) clearInterval(S.upNextTimer);
-  if (S.healthTimer) clearInterval(S.healthTimer);
-  if (S.watchTimer) clearInterval(S.watchTimer);
+  $('upNext').classList.remove('show');
   closeTrackMenu();
   S.playerSeasonStrip = null;
   S.nextEp = null; updateNextEpisodeButton();
@@ -7820,6 +7873,7 @@ function clockStr(d) {
   return `${h}:${m} ${ap}`;
 }
 function updateClocks() {
+  if (document.visibilityState !== 'visible') return;
   const now = new Date();
   $('appClock').textContent = clockStr(now);
   $('clockNow').textContent = clockStr(now);
@@ -7830,7 +7884,8 @@ function updateClocks() {
     $('endsAt').textContent = `Ends at ${clockStr(ends)}`;
   } else $('endsAt').textContent = '';
 }
-setInterval(updateClocks, 15000);
+S.clockTimer = setInterval(updateClocks, 15000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') updateClocks(); });
 updateClocks();
 
 /* ---- app screensaver ---- */
@@ -8219,24 +8274,164 @@ $('filterMenu').addEventListener('click', (e) => {
 // Infinite scroll: append the next page as the grid nears its bottom.
 $('grid').addEventListener('scroll', () => {
   const g = $('grid');
+  scheduleVirtualGridFromScroll(g);
   if (g.scrollTop + g.clientHeight < g.scrollHeight - 700) return;
   if (['movies', 'tv'].includes(S.view)) runBrowse(false);
   else if (S.view === 'library' && S.currentLib && S.currentLib.path) loadMoreLocalLibraryPage(false);
   else if (S.view === 'library') runLibrary(false);
 });
 
+const VIRTUAL_GRID_VIEWS = new Set(['movies', 'tv', 'watchlist']);
+const VIRTUAL_GRID_OVERSCAN_ROWS = 4;
+function mainGridRoot(root = S.gridRoot || $('grid')) { return root && root === $('grid'); }
+function shouldVirtualizeGrid(root = S.gridRoot || $('grid')) {
+  return mainGridRoot(root) && VIRTUAL_GRID_VIEWS.has(S.view)
+    && $('browse').classList.contains('rowsWin') && (S.gridItems || []).length > 0;
+}
+function clearGridDom(root) {
+  if (bgLazy.unobserveRoot) bgLazy.unobserveRoot(root);
+  root.replaceChildren();
+}
+function resetGridVirtual(root = S.gridRoot || $('grid')) {
+  if (root) {
+    root.dataset.virtualized = '';
+    root.style.removeProperty('--gridSpacerH');
+  }
+  S.gridVirt = null;
+}
+function virtualGridCols(root = S.gridRoot || $('grid')) {
+  const tpl = root ? getComputedStyle(root).gridTemplateColumns : '';
+  const cols = tpl && tpl !== 'none' ? tpl.trim().split(/\s+/).filter(Boolean).length : 0;
+  return Math.max(1, cols || gridCols());
+}
+function estimatedVirtualGridPitch() {
+  const poster = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--poster')) || 168;
+  return Math.max(190, poster * 1.5 + 62);
+}
+function measureVirtualGridPitch(root, fallback) {
+  const cards = [...root.querySelectorAll('.pcard[data-grid]')];
+  if (cards.length < 2) return fallback;
+  const tops = [];
+  cards.forEach((c) => {
+    const t = Math.round(c.offsetTop);
+    if (!tops.some((x) => Math.abs(x - t) <= 2)) tops.push(t);
+  });
+  tops.sort((a, b) => a - b);
+  return tops.length > 1 ? Math.max(50, tops[1] - tops[0]) : fallback;
+}
+function virtualGridVisibleRows(root, pitch) {
+  const h = root && root.clientHeight ? root.clientHeight : window.innerHeight;
+  return Math.max(1, Math.ceil(h / Math.max(1, pitch)));
+}
+function setSpacerHeight(el, h) {
+  el.style.setProperty('--gridSpacerH', `${Math.max(0, Math.round(h))}px`);
+}
+function renderVirtualGridWindow(targetIdx = S.gridIdx || 0, opts = {}) {
+  const root = S.gridRoot || $('grid');
+  if (!shouldVirtualizeGrid(root)) return false;
+  const items = S.gridItems || [];
+  const count = items.length;
+  const cols = virtualGridCols(root);
+  const prev = S.gridVirt || {};
+  let pitch = prev.pitch || estimatedVirtualGridPitch();
+  const totalRows = Math.max(1, Math.ceil(count / cols));
+  const visibleRows = virtualGridVisibleRows(root, pitch);
+  const focusIdx = Math.max(0, Math.min(count - 1, Number.isFinite(targetIdx) ? targetIdx : 0));
+  const focusRow = Math.floor(focusIdx / cols);
+  let topRow = Number.isFinite(opts.topRow) ? opts.topRow
+    : opts.fromScroll ? Math.floor((root.scrollTop || 0) / Math.max(1, pitch))
+      : (Number.isFinite(S.gridTopRow) ? S.gridTopRow : Math.floor((root.scrollTop || 0) / Math.max(1, pitch)));
+  topRow = Math.max(0, Math.min(Math.max(0, totalRows - visibleRows), topRow));
+  if (!opts.fromScroll) {
+    if (focusRow < topRow) topRow = focusRow;
+    else if (focusRow >= topRow + visibleRows) topRow = Math.max(0, focusRow - visibleRows + 1);
+  }
+  const firstRow = Math.max(0, topRow - VIRTUAL_GRID_OVERSCAN_ROWS);
+  const lastRow = Math.min(totalRows, topRow + visibleRows + VIRTUAL_GRID_OVERSCAN_ROWS);
+  const start = firstRow * cols;
+  const end = Math.min(count, lastRow * cols);
+  clearGridDom(root);
+  root.dataset.virtualized = '1';
+  const frag = document.createDocumentFragment();
+  const top = document.createElement('div');
+  top.className = 'gridSpacer gridSpacerTop';
+  setSpacerHeight(top, firstRow * pitch);
+  frag.appendChild(top);
+  for (let i = start; i < end; i++) {
+    const c = makeCard(items[i], true, () => focusGrid(i));
+    c.dataset.grid = i;
+    frag.appendChild(c);
+  }
+  const bottom = document.createElement('div');
+  bottom.className = 'gridSpacer gridSpacerBottom';
+  setSpacerHeight(bottom, Math.max(0, totalRows - lastRow) * pitch);
+  frag.appendChild(bottom);
+  root.appendChild(frag);
+  pitch = measureVirtualGridPitch(root, pitch);
+  setSpacerHeight(root.querySelector('.gridSpacerTop'), firstRow * pitch);
+  setSpacerHeight(root.querySelector('.gridSpacerBottom'), Math.max(0, totalRows - lastRow) * pitch);
+  S.gridVirt = { root, cols, pitch, visibleRows, totalRows, firstRow, lastRow };
+  S.gridTopRow = topRow;
+  return true;
+}
+function scheduleVirtualGridFromScroll(root = S.gridRoot || $('grid')) {
+  if (!shouldVirtualizeGrid(root) || S._gridScrollRaf) return;
+  S._gridScrollRaf = requestAnimationFrame(() => {
+    S._gridScrollRaf = null;
+    const v = S.gridVirt;
+    if (!v || v.root !== root) return;
+    const topRow = Math.max(0, Math.floor((root.scrollTop || 0) / Math.max(1, v.pitch || 1)));
+    if (topRow < v.firstRow + 1 || topRow + v.visibleRows > v.lastRow - 1) {
+      const idx = activeGridIdx();
+      renderVirtualGridWindow(idx, { fromScroll: true, topRow });
+      restoreVirtualGridFocus(idx);
+    }
+  });
+}
+function restoreVirtualGridFocus(idx = activeGridIdx()) {
+  if (S.zone !== 'grid') return;
+  requestAnimationFrame(() => {
+    if (!shouldVirtualizeGrid(S.gridRoot || $('grid'))) return;
+    const el = gridElForIndex(idx);
+    if (el) applyFocus(el, false);
+  });
+}
+function refreshVirtualGridGeometry() {
+  const root = S.gridRoot || $('grid');
+  if (!shouldVirtualizeGrid(root)) return;
+  const count = gridLogicalCount();
+  if (!count) return;
+  const idx = Math.max(0, Math.min(count - 1, activeGridIdx()));
+  const oldCols = (S.gridVirt && S.gridVirt.cols) || virtualGridCols(root);
+  const oldRow = Math.floor(idx / Math.max(1, oldCols));
+  resetGridVirtual(root);
+  renderVirtualGridWindow(idx, { topRow: Math.max(0, oldRow - 1) });
+  restoreVirtualGridFocus(idx);
+}
+function scheduleVirtualGridGeometryRefresh() {
+  if (S._gridGeomRaf) cancelAnimationFrame(S._gridGeomRaf);
+  S._gridGeomRaf = requestAnimationFrame(() => {
+    S._gridGeomRaf = null;
+    refreshVirtualGridGeometry();
+  });
+}
 function renderGrid(items, root = $('grid')) {
   bootReady(); // hash-restored grid views are a boot landing too
   if (!S._keepLocalGridPaging && root === $('grid')) clearLocalGridPaging();
-  S.gridRoot = root; root.innerHTML = ''; root.style.setProperty('--tf', '0px');
+  S.gridRoot = root; clearGridDom(root); root.style.setProperty('--tf', '0px');
   S.gridItems = items || [];
+  S.gridIdx = 0; S.gridTopRow = 0; resetGridVirtual(root);
   if (!S.gridItems.length) return;
-  S.gridItems.forEach((it, i) => {
-    const c = makeCard(it, true, () => focusGrid(i));
-    c.dataset.grid = i;
-    root.appendChild(c);
-  });
-  S.gridIdx = 0; S.gridTopRow = 0;
+  if (shouldVirtualizeGrid(root)) adaptRowWindows();
+  if (shouldVirtualizeGrid(root)) {
+    renderVirtualGridWindow(0, { topRow: 0 });
+  } else {
+    S.gridItems.forEach((it, i) => {
+      const c = makeCard(it, true, () => focusGrid(i));
+      c.dataset.grid = i;
+      root.appendChild(c);
+    });
+  }
   adaptRowWindows(); // window height needs the REAL row pitch, measurable only after render
   if (root === $('grid') && ['movies', 'tv', 'library', 'watchlist'].includes(S.view) && S.zone !== 'rail') {
     requestAnimationFrame(() => {
@@ -8246,14 +8441,21 @@ function renderGrid(items, root = $('grid')) {
 }
 function appendGrid(items) {
   const root = S.gridRoot || $('grid');
-  const start = S.gridItems.length;
-  items.forEach((it, k) => {
+  S.gridItems = S.gridItems.concat(items || []);
+  if (shouldVirtualizeGrid(root)) {
+    const pitch = (S.gridVirt && S.gridVirt.pitch) || estimatedVirtualGridPitch();
+    const topRow = root.scrollTop > 0 ? Math.floor((root.scrollTop || 0) / Math.max(1, pitch)) : (S.gridTopRow || 0);
+    renderVirtualGridWindow(S.gridIdx || 0, { topRow, fromScroll: root.scrollTop > 0 });
+    adaptRowWindows();
+    return;
+  }
+  const start = S.gridItems.length - (items || []).length;
+  (items || []).forEach((it, k) => {
     const i = start + k;
     const c = makeCard(it, true, () => focusGrid(i));
     c.dataset.grid = i;
     root.appendChild(c);
   });
-  S.gridItems = S.gridItems.concat(items);
 }
 
 const LOCAL_GRID_BATCH = 15;
@@ -9465,6 +9667,7 @@ function liveNoChannelsHtml(errors = []) {
   return `<div class="gridMore liveEmpty focusable">${esc(intro)}${liveSourceErrorsHtml(errors)}</div>`;
 }
 function focusLiveGridMessage() {
+  bootReady(); // Live TV message states are real first paint too (loading / empty / source error).
   requestAnimationFrame(() => {
     if (S.view === 'livetv' && S.zone !== 'rail') focusGrid(0);
   });
@@ -9929,6 +10132,8 @@ function canUseNativeLivePlayer() {
   } catch { return false; }
 }
 function nativeLiveRequired() {
+  // Android TV and Android mobile never fall back to the HTML/MSE live player once the
+  // current native bridge is available. Browsers still use the web Live TV path.
   return canUseNativeLivePlayer();
 }
 function setNativeLivePlaybackState(it) {
@@ -11209,16 +11414,16 @@ function saveMenuPrefs(p) { try { localStorage.setItem('triboon.menu', JSON.stri
 // Reorder + hide the rail nav buttons per user preference (search first by default).
 function applyMenuPrefs() {
   const p = menuPrefs();
-  const rail = $('rail');
-  const anchor = $('navLiveTv') ? $('navLiveTv').nextSibling : $('libSec'); // insert before Libraries section
+  const railMain = $('railMain') || $('rail');
+  const firstMainNav = () => [...railMain.children].find((el) => el.matches && el.matches('.railBtn[data-nav]')) || $('libSec');
   const order = [...p.order, ...MENU_DEFAULT.filter((n) => !p.order.includes(n))];
   for (const nav of [...order].reverse()) {
-    const btn = rail.querySelector(`.railBtn[data-nav="${nav}"]`);
+    const btn = railMain.querySelector(`.railBtn[data-nav="${nav}"]`);
     if (!btn) continue;
-    rail.insertBefore(btn, rail.querySelector('.railBtn[data-nav]') || $('libSec'));
+    railMain.insertBefore(btn, firstMainNav());
   }
   for (const nav of MENU_DEFAULT) {
-    const btn = rail.querySelector(`.railBtn[data-nav="${nav}"]`);
+    const btn = railMain.querySelector(`.railBtn[data-nav="${nav}"]`);
     if (!btn) continue;
     const hideByPref = p.hidden.includes(nav);
     if (nav === 'livetv') btn.style.display = (!hideByPref && liveTvAvailable()) ? '' : 'none';
@@ -12867,6 +13072,7 @@ function switchView(v, push = true, opts = {}) {
   // Search is a FULL-PAGE results list (no backdrop band, no row window) — sectioned results
   // need the room, and the backdrop just fought the readability of a long grid.
   $('browse').classList.toggle('rowsWin', ['movies', 'tv', 'watchlist', 'library'].includes(v));
+  if (!VIRTUAL_GRID_VIEWS.has(v)) resetGridVirtual($('grid'));
   $('settings').classList.toggle('open', v === 'settings');
   $('prefs').classList.toggle('open', v === 'prefs');
   $('music').classList.toggle('open', v === 'music');
@@ -12990,6 +13196,20 @@ function applyRoute() {
     if (S.view === target && !document.querySelector('#detail.open,#person.open,#player.open')) focusContent();
   }));
 }
+async function restoreInitialRoute() {
+  if (!location.hash || location.hash === '#/home') {
+    switchView('home');
+    return;
+  }
+  try {
+    const routeResult = applyRoute();
+    if (routeResult && typeof routeResult.then === 'function') await routeResult;
+  } catch (e) {
+    console.error('[boot] route restore failed; falling back to home', e);
+    replaceRoute('#/home');
+    switchView('home');
+  }
+}
 function routeIsTitle() {
   return /^#\/?title\/(movie|tv)\/\d+/.test(location.hash || '');
 }
@@ -13089,10 +13309,20 @@ function focusCard(ri, ci, opts = {}) {
   if (it) { if (view.hasHero) setHero(it); else { S.focusedItem = it; setBackdrop(it.backdrop); setBdInfo(it); } }
 }
 function gridEls() { return [...(S.gridRoot || $('grid')).querySelectorAll('.pcard, .card, .chCard, .chGroupHead, .gRow.focusable, .lcat, .gridMore.focusable')]; }
+function gridElForIndex(i) {
+  const root = S.gridRoot || $('grid');
+  return root ? root.querySelector(`[data-grid="${parseInt(i, 10) || 0}"]`) : null;
+}
+function gridLogicalCount() {
+  const n = (S.gridItems || []).length;
+  return n || gridEls().length;
+}
 function activeGridIdx() {
   const els = gridEls();
-  const i = els.findIndex((el) => el.classList.contains('focus'));
-  return i >= 0 ? i : Math.max(0, Math.min(els.length - 1, S.gridIdx || 0));
+  const el = els.find((x) => x.classList.contains('focus'));
+  if (el && el.dataset && el.dataset.grid !== undefined) return parseInt(el.dataset.grid, 10) || 0;
+  const i = els.indexOf(el);
+  return i >= 0 ? i : Math.max(0, Math.min(gridLogicalCount() - 1, S.gridIdx || 0));
 }
 function focusLiveCategory(idx, select = false) {
   const cats = [...document.querySelectorAll('#chCats .lcat')];
@@ -13234,6 +13464,7 @@ function dpadBrowseFilter(k) {
   }
 }
 function gridCols() {
+  if (shouldVirtualizeGrid(S.gridRoot || $('grid')) && S.gridVirt && S.gridVirt.cols) return S.gridVirt.cols;
   const els = gridEls(); if (els.length < 2) return 1;
   // The computed template is exact and immune to mid-animation reflows (rail slide,
   // smooth scroll) that made the offsetTop probe miscount columns on TV.
@@ -13322,9 +13553,46 @@ function focusPersonBack() {
   $('person').scrollTo({ top: 0, behavior: 'smooth' });
 }
 function focusGrid(i) {
+  if (shouldVirtualizeGrid(S.gridRoot || $('grid'))) {
+    const count = gridLogicalCount(); if (!count) return;
+    leaveRail();
+    S.zone = 'grid'; S.gridIdx = Math.max(0, Math.min(count - 1, Number.isFinite(i) ? i : 0));
+    const root = S.gridRoot || $('grid');
+    const cols = virtualGridCols(root);
+    const v = S.gridVirt || {};
+    const pitch = v.pitch || estimatedVirtualGridPitch();
+    const row = Math.floor(S.gridIdx / Math.max(1, cols));
+    const visibleRows = virtualGridVisibleRows(root, pitch);
+    let topRow = S.pointer ? Math.floor((root.scrollTop || 0) / Math.max(1, pitch)) : (S.gridTopRow || 0);
+    if (row < topRow) topRow = row;
+    else if (row > topRow + visibleRows - 1) topRow = Math.max(0, row - visibleRows + 1);
+    const mounted = gridElForIndex(S.gridIdx);
+    const needsWindow = !mounted || !S.gridVirt || row < S.gridVirt.firstRow || row >= S.gridVirt.lastRow;
+    if (needsWindow) renderVirtualGridWindow(S.gridIdx, { topRow });
+    else S.gridTopRow = topRow;
+    const el = gridElForIndex(S.gridIdx);
+    if (!el) return;
+    applyFocus(el, false);
+    if (S.pointer) {
+      S.gridTopRow = Math.max(0, Math.round((root.scrollTop || 0) / Math.max(1, (S.gridVirt && S.gridVirt.pitch) || pitch)));
+    } else {
+      const exactPitch = (S.gridVirt && S.gridVirt.pitch) || pitch;
+      root.scrollTo({ top: (S.gridTopRow || 0) * exactPitch, behavior: 'smooth' });
+    }
+    const it = (S.gridItems || [])[S.gridIdx];
+    if (it) {
+      S.focusedItem = it;
+      if (S.view !== 'search' && S.view !== 'person') { setBackdrop(it.backdrop); setBdInfo(it); }
+    }
+    if (S.gridIdx >= count - cols * 2) {
+      if (['movies', 'tv'].includes(S.view)) runBrowse(false);
+      else if (S.view === 'library' && !(S.currentLib && S.currentLib.path)) runLibrary(false);
+    }
+    return;
+  }
   const els = gridEls(); if (!els.length) return;
   leaveRail();
-  S.zone = 'grid'; S.gridIdx = Math.max(0, Math.min(els.length - 1, i));
+  S.zone = 'grid'; S.gridIdx = Math.max(0, Math.min(els.length - 1, Number.isFinite(i) ? i : 0));
   const el = els[S.gridIdx];
   if (S.view === 'livetv') {
     if (el.classList.contains('lcat')) {
@@ -13386,8 +13654,8 @@ function focusGrid(i) {
       else if (S.view === 'library' && !(S.currentLib && S.currentLib.path)) runLibrary(false);
     }
   }
-  const itemIdx = Number.isFinite(parseInt(el.dataset.grid, 10)) ? parseInt(el.dataset.grid, 10) : S.gridIdx;
-  const it = S.gridItems[itemIdx];
+  const itemIdx = parseInt(el.dataset.grid, 10);
+  const it = Number.isFinite(itemIdx) ? (S.gridItems || [])[itemIdx] : null;
   if (it) {
     S.focusedItem = it;
     // Search is a clean full-page list — no backdrop swapping under the results.
@@ -13424,6 +13692,7 @@ function leaveRail() {
   // Focusing a bottom rail item (Preferences/Settings) scrolls the rail list — never leave
   // it stuck scrolled, or the logo sits half off the top of the screen afterwards.
   $('rail').scrollTop = 0;
+  if ($('railMain')) $('railMain').scrollTop = 0;
 }
 function collapseRailAfterClick() {
   document.body.classList.add('railClickCollapsed');
@@ -14226,6 +14495,37 @@ document.addEventListener('keydown', (e) => {
       }
     }
     S.gridIdx = activeGridIdx();
+    if (shouldVirtualizeGrid(S.gridRoot || $('grid'))) {
+      const count = gridLogicalCount();
+      if (!count) return enterRail();
+      const cols = Math.max(1, virtualGridCols(S.gridRoot || $('grid')));
+      const cur = gridElForIndex(S.gridIdx);
+      if (k === 'ArrowLeft') return S.gridIdx <= 0 || S.gridIdx % cols === 0 ? enterRail() : focusGrid(S.gridIdx - 1);
+      if (k === 'ArrowRight') return focusGrid(Math.min(count - 1, S.gridIdx + 1));
+      if (k === 'ArrowUp') {
+        const t = S.gridIdx - cols;
+        if (t >= 0) return focusGrid(t);
+        if (['movies', 'tv', 'library'].includes(S.view) && $('genreSel').offsetParent) return focusBrowseFilter(0);
+        return enterRail();
+      }
+      if (k === 'ArrowDown') {
+        const t = S.gridIdx + cols;
+        if (t < count) return focusGrid(t);
+        return focusGrid(S.gridIdx);
+      }
+      if (k === 'Enter') {
+        if (e.repeat) return;
+        const el = cur || gridElForIndex(S.gridIdx); if (!el) return;
+        const it = (S.gridItems || [])[S.gridIdx];
+        if (it && it.tmdbId && ['movie', 'tv'].includes(it.type)) {
+          S._lpEl = el;
+          S._lpTimer = setTimeout(() => { S._lpTimer = null; S._lpEl = null; openItemMenu(it, el); }, 450);
+          return;
+        }
+        el.click(); return;
+      }
+      return;
+    }
     const els = gridEls(), n = els.length, cur = els[S.gridIdx];
     if (S.view === 'livetv' && document.querySelector('#chBody.liveGuideShell')) {
       const onCat = cur && cur.classList.contains('lcat');
@@ -14284,8 +14584,8 @@ document.addEventListener('keydown', (e) => {
     if (k === 'Enter') {
       if (e.repeat) return;
       const el = gridEls()[S.gridIdx]; if (!el) return;
-      const itemIdx = Number.isFinite(parseInt(el.dataset.grid, 10)) ? parseInt(el.dataset.grid, 10) : S.gridIdx;
-      const it = S.gridItems[itemIdx];
+      const itemIdx = parseInt(el.dataset.grid, 10);
+      const it = Number.isFinite(itemIdx) ? (S.gridItems || [])[itemIdx] : null;
       if (S.view === 'livetv' && it && it._channel !== undefined) {
         S._lpEl = el;
         S._lpTimer = setTimeout(() => { S._lpTimer = null; S._lpEl = null; openLiveChannelMenu(it, el); }, 450);
@@ -14549,11 +14849,42 @@ async function enterAppShell() {
     el._fadeWired = true;
     el.addEventListener('scroll', () => el.style.setProperty('--tf', Math.min(72, el.scrollTop) + 'px'), { passive: true });
   }
-  // Refresh restores the view from the URL hash; plain loads land on home.
-  if (location.hash && location.hash !== '#/home') applyRoute();
-  else switchView('home');
+  // Refresh restores the view from the URL hash; stale/bad routes fall back to Home instead
+  // of leaving the app behind a dead "refresh after update" shell.
+  await restoreInitialRoute();
   perfMark('shell-route-applied', { view: S.view });
   hydrateAppShellData();
+}
+async function restoreSavedSession() {
+  try {
+    S.user = await api('/api/me');
+  } catch (e) {
+    if (e && e.status === 401) {
+      tokenStore.set(null);
+      return false;
+    }
+    console.warn('[boot] session check failed; keeping saved token', e);
+    $('appLoader').classList.add('hide');
+    toast('Connection hiccup. Retrying...');
+    setTimeout(() => location.reload(), 1800);
+    return true;
+  }
+  try {
+    await enterApp();
+  } catch (e) {
+    console.error('[boot] app shell failed after session restore', e);
+    try {
+      replaceRoute('#/home');
+      await enterApp();
+      toast('Opened Home after update.');
+    } catch (e2) {
+      console.error('[boot] home fallback failed after session restore', e2);
+      $('appLoader').classList.add('hide');
+      showGate('login');
+      toast('App updated. Please sign in again.');
+    }
+  }
+  return true;
 }
 (async function boot() {
   const invite = new URLSearchParams(location.search).get('invite');
@@ -14563,7 +14894,7 @@ async function enterAppShell() {
   if (invite) return showGate('invite');
   if (info.needsSetup) return showGate('setup');
   if (tokenStore.get()) {
-    try { return await enterApp(); } catch { tokenStore.set(null); }
+    if (await restoreSavedSession()) return;
   }
   showGate('login');
 })();

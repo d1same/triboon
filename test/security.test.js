@@ -1269,10 +1269,18 @@ test('subtitles: Wyzie search→file→VTT served per mount (and 503 without a k
   let osPort;
   let searchCalls = 0;
   const subtitleDownloads = [];
+  const subtitleSearches = [];
   const osMock = http2.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
     if (u.pathname === '/search') {
       searchCalls++;
+      subtitleSearches.push({
+        id: u.searchParams.get('id'),
+        release: u.searchParams.get('release'),
+        origin: u.searchParams.get('origin'),
+        fileName: u.searchParams.get('fileName'),
+        file: u.searchParams.get('file'),
+      });
       // Mirrors the real API: key required as a query param, id = TMDB id.
       if (u.searchParams.get('key') !== 'test-key') { res.writeHead(401); return res.end('{}'); }
       if (u.searchParams.get('id') !== '4242') { res.writeHead(200); return res.end('[]'); }
@@ -1323,7 +1331,11 @@ test('subtitles: Wyzie search→file→VTT served per mount (and 503 without a k
   }, admin);
   const play = (await httpJson(srv.port, 'POST', '/api/play', { q: 'Sec Test 2024' }, admin)).json;
   assert.ok(play.id, JSON.stringify(play));
-  srv.mounts.get(play.id)._subQuery = 'Sec Test 2024 S01E03';
+  const pickedRelease = play.candidate && play.candidate.name;
+  assert.strictEqual(pickedRelease, 'Sec.Test.2024.1080p.WEB-DL.H.264-NTb');
+  const mounted = srv.mounts.get(play.id);
+  mounted.name = 'Feature.mkv';
+  mounted._subQuery = 'Sec Test 2024 S01E03';
 
   // No key configured → honest 503, not a hang or a fake empty file.
   const no = await httpRaw(srv.port, `/api/ossubs/${play.id}?lang=en&tmdb=4242&t=${play.streamToken}`);
@@ -1344,6 +1356,11 @@ test('subtitles: Wyzie search→file→VTT served per mount (and 503 without a k
   assert.ok(vtt.startsWith('WEBVTT'), 'served as WebVTT');
   assert.match(vtt, /00:00:01\.000 --> 00:00:02\.500/, 'SRT timestamps converted');
   assert.match(vtt, /Hello usenet/);
+  assert.ok(subtitleSearches.some((s) => s.release === pickedRelease && s.origin === pickedRelease
+    && s.fileName === pickedRelease && s.file === pickedRelease),
+  'subtitle release hints should use the exact selected source, not the mounted inner filename');
+  assert.ok(!subtitleSearches.some((s) => s.release === 'Feature.mkv'),
+    'generic mounted filenames should not drive Wyzie release matching');
   assert.ok(subtitleDownloads.some((d) => d.path === '/file.srt' && (d.headerKey === 'test-key' || d.queryKey === 'test-key')),
     'subtitle file download carries the Wyzie key, not just the search request');
   const beforeShift = searchCalls;
@@ -2012,6 +2029,44 @@ test('fetchUrl: validator-provided lookup pins the already-checked upstream addr
   } finally {
     up.close();
   }
+});
+
+test('iptv: pinned DNS cache rotates and sidelines failed upstream addresses', () => {
+  const serverCode = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  const newznabCode = fs.readFileSync(path.join(__dirname, '..', 'server', 'newznab.js'), 'utf8');
+  assert.match(serverCode, /function pickCachedIptvAddress\(host\) \{[\s\S]+hit\.failures[\s\S]+const pool = addrs\.length \? addrs : hit\.addrs;[\s\S]+hit\.next = pickedIdx >= 0 \? pickedIdx \+ 1 : offset \+ 1;/,
+    'IPTV pinning should rotate across the validated DNS set instead of always using addrs[0]');
+  assert.match(serverCode, /function markIptvPinnedAddressFailure\(pin, ttlMs = 60000\) \{[\s\S]+hit\.failures\[key\] = Date\.now\(\) \+ ttlMs;[\s\S]+hit\.next = idx \+ 1;/,
+    'a failed pinned address should be sidelined briefly and the next address tried first');
+  assert.match(serverCode, /validateAndPinIptvUrl[\s\S]+cacheHost: net\.isIP\(host\) \? '' : host,[\s\S]+onFailure: \(\) => markIptvPinnedAddressFailure/,
+    'validated IPTV pins should carry enough metadata to mark connection failures');
+  assert.match(newznabCode, /validated && typeof validated\.onFailure === 'function'[\s\S]+validated\.onFailure\(e\)/,
+    'generic IPTV fetches should report failed pinned connections back to the validator');
+});
+
+test('iptv: live-remux preserves HTTPS hostnames for provider TLS SNI', () => {
+  const serverCode = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(serverCode, /function iptvRemuxInputHref\(pin, fallbackUrl\) \{[\s\S]+if \(u\.protocol === 'https:'\) return href;[\s\S]+return \(pin && pin\.pinnedHref\) \|\| href;[\s\S]+\}/,
+    'HTTPS IPTV remux should pass the original hostname to ffmpeg so TLS SNI/certificates still work');
+  assert.match(serverCode, /spawnLiveRemux\(iptvRemuxInputHref\(pin, target\.url\), \{[\s\S]+headers: pin\.hostHeader \? \{ Host: pin\.hostHeader \} : undefined/,
+    'Live TV remux should use the SNI-safe URL helper while keeping a sanitized Host header');
+});
+
+test('streaming: HTTP range reads use startup/seek lanes and cancel stale read-ahead on close', () => {
+  const serverCode = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  const vfsCode = fs.readFileSync(path.join(__dirname, '..', 'server', 'vfs.js'), 'utf8');
+  assert.match(serverCode, /const readPriority = start === 0 \? 'startup' : 'seek';[\s\S]+ctx\.req\.once\('close', stopRead\);[\s\S]+vf\.read\(start, end, \{ priority: readPriority, signal: readSignal \}\)/,
+    'the stream route should mark initial reads as startup and non-zero ranges as seek');
+  assert.match(serverCode, /const stopRead = \(\) => \{[\s\S]+readSignal\.aborted = true;[\s\S]+vf\.cancelReadAhead\(\);[\s\S]+\}/,
+    'client disconnects should stop future read-ahead scheduling');
+  assert.match(vfsCode, /cancelReadAhead\(\) \{[\s\S]+this\.readAheadEpoch\+\+;[\s\S]+\}/,
+    'virtual files should expose a safe read-ahead cancel hook');
+  assert.match(vfsCode, /async mount\(priority = 'startup'\)[\s\S]+this\._fetchSegment\(0, priority \|\| 'startup'\)/,
+    'mount should fetch the first segment through the startup lane so play start cannot queue behind read-ahead');
+  assert.match(vfsCode, /async readAt\(start, len, opts = \{\}\)[\s\S]+const priority = opts\.priority \|\| 'startup';[\s\S]+this\._fetchSegment\(first \+ k, priority\)/,
+    'header/random access reads used during mount should also stay on the startup lane');
+  assert.match(vfsCode, /async \*read\(start, end, opts = \{\}\) \{[\s\S]+const priority = opts\.priority \|\| 'playback';[\s\S]+let activePriority = priority;[\s\S]+readAheadEpoch === this\.readAheadEpoch[\s\S]+this\._fetchSegment\(segIdx, activePriority\)[\s\S]+activePriority = 'playback'/,
+    'virtual file reads should pass caller priority into the first real article fetch, then return to playback while gating read-ahead');
 });
 
 test('trakt: device link, scrobble forward, watchlist push + import', async () => {

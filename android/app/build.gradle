@@ -82,5 +82,6 @@ dependencies {
     implementation "androidx.media3:media3-ui:$media3Version"
 }
 
-// The shell stays WebView-first, but Live TV can now hand off to native Media3 playback on
-// Android TV for TiviMate-style HLS startup/buffering. Browser/desktop/phone keep web video.
+// The shell stays WebView-first for browsing, but every Android app video surface hands off
+// to native Media3/ExoPlayer: movies, episodes, local library files, and Live TV. Browser and
+// desktop builds keep the HTML video path.

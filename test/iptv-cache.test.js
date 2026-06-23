@@ -1338,6 +1338,58 @@ test('iptv: Xtream guide falls back to simple data table when short EPG is empty
   }
 });
 
+test('iptv: Xtream guide provider rejection backs off per source instead of hammering channels', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-guide-backoff-'));
+  let epgHits = 0;
+  const upstream = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    const action = u.searchParams.get('action');
+    if (action === 'get_live_categories') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify([{ category_id: '1', category_name: 'News' }]));
+    }
+    if (action === 'get_live_streams') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify([
+        { stream_id: 101, name: 'Backoff News 1', category_id: '1', epg_channel_id: 'backoff.1' },
+        { stream_id: 102, name: 'Backoff News 2', category_id: '1', epg_channel_id: 'backoff.2' },
+        { stream_id: 103, name: 'Backoff News 3', category_id: '1', epg_channel_id: 'backoff.3' },
+      ]));
+    }
+    if (action === 'get_short_epg' || action === 'get_simple_data_table') {
+      epgHits++;
+      res.writeHead(403, { 'content-type': 'text/plain' });
+      return res.end('[Bot-Protection]: guide requests rejected');
+    }
+    res.writeHead(404);
+    res.end('nope');
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const host = `http://127.0.0.1:${upstream.address().port}`;
+
+  let srv;
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/iptv/sources',
+      { name: 'Backoff TV', iptvMode: 'xtream', xtHost: host, xtUser: 'xtuser', xtPass: 'xtpass' }, admin);
+
+    const first = await srv.warmIptvCaches('test-backoff', { force: true });
+    assert.strictEqual(first.configured, true);
+    assert.strictEqual(first.channels, 3);
+    assert.ok(epgHits <= 2, `provider rejection should stop after the first channel fallback, saw ${epgHits} guide calls`);
+    const hitsAfterFirstWarm = epgHits;
+
+    const second = await srv.warmIptvCaches('test-backoff-again');
+    assert.strictEqual(second.configured, true);
+    assert.strictEqual(epgHits, hitsAfterFirstWarm, 'source-level backoff should skip guide calls on the next warm');
+    assert.strictEqual(second.xtreamGuideBackoff, true);
+  } finally {
+    if (srv) await srv.shutdown();
+    upstream.close();
+  }
+});
+
 test('iptv: stale Xtream guide refresh failures do not crash the process', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-stale-guide-refresh-'));
   const b64 = (s) => Buffer.from(s).toString('base64');

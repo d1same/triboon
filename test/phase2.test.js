@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { parseRelease, scoreRelease, rankReleases } = require('../server/scoring');
-const { parseNewznabRss, dedupe, fanout } = require('../server/newznab');
+const { parseNewznabRss, dedupe, fanout, searchIndexer } = require('../server/newznab');
 const { Store, VerdictCache } = require('../server/store');
 const { Pipeline, GATE_MS, nzbVerdictKey } = require('../server/pipeline');
 const { NntpPool } = require('../server/nntp');
@@ -257,6 +257,31 @@ test('newznab: decodes XML entities in titles and urls (dedupe keys stay clean)'
   const parsed = parseNewznabRss(xml, 'ix');
   assert.strictEqual(parsed[0].name, 'Tom & Jerry 2024 1080p WEB-DL');
   assert.strictEqual(parsed[0].nzbUrl, 'http://x/a?b=1&c=2');
+});
+
+test('newznab: TV episodes use tvsearch even when an IMDb id is also present', async () => {
+  let seen;
+  const srv = http.createServer((req, res) => {
+    seen = new URL(req.url, 'http://127.0.0.1');
+    res.writeHead(200, { 'content-type': 'application/rss+xml' });
+    res.end(rssFor([{ name: 'House.S03E22.1080p.WEB-DL.H.264-NTb', url: 'http://x/house.nzb', size: 2e9 }]));
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  try {
+    const rows = await searchIndexer(
+      { name: 'ix', url: `http://127.0.0.1:${srv.address().port}`, apikey: 'secret' },
+      { q: 'House S03E22', imdbid: 'tt0412142', tvdbid: '73255', season: 3, ep: 22 },
+      { timeoutMs: 1000 }
+    );
+    assert.strictEqual(seen.searchParams.get('t'), 'tvsearch');
+    assert.strictEqual(seen.searchParams.get('tvdbid'), '73255');
+    assert.strictEqual(seen.searchParams.get('season'), '3');
+    assert.strictEqual(seen.searchParams.get('ep'), '22');
+    assert.strictEqual(seen.searchParams.has('imdbid'), false, 'IMDb must not force movie search for an episode');
+    assert.strictEqual(rows[0].name, 'House.S03E22.1080p.WEB-DL.H.264-NTb');
+  } finally {
+    await new Promise((r) => srv.close(r));
+  }
 });
 
 test('opensubs: SRT→VTT conversion + search-query parsing', () => {
@@ -734,6 +759,41 @@ test('pipeline: imdb/tvdb source searches fall back to verified title search', a
   }
 });
 
+test('pipeline: TV episode fallback keeps SxxEyy instead of broad show search', async () => {
+  const seen = [];
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    seen.push(Object.fromEntries(u.searchParams.entries()));
+    res.writeHead(200, { 'content-type': 'application/rss+xml' });
+    if (u.searchParams.get('tvdbid')) return res.end(rssFor([]));
+    res.end(rssFor([
+      { name: 'House.S03E22.1080p.WEB-DL.H.264-NTb', url: 'http://x/good', size: 2e9 },
+      { name: 'House.S03E21.1080p.WEB-DL.H.264-NTb', url: 'http://x/wrong-episode', size: 2e9 },
+      { name: 'House.of.Cards.S03E22.1080p.WEB-DL.H.264-NTb', url: 'http://x/wrong-show', size: 2e9 },
+    ]));
+  });
+  const ixPort = await new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
+  const pipeline = new Pipeline({
+    pool: () => null, verdicts: { get: () => null, set: () => {} }, mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+  try {
+    const r = await pipeline.search({ q: 'House', imdbid: 'tt0412142', tvdbid: '73255', season: 3, ep: 22 });
+    assert.strictEqual(seen[0].t, 'tvsearch');
+    assert.strictEqual(seen[0].tvdbid, '73255');
+    assert.strictEqual(seen[0].q, 'House S03E22');
+    assert.strictEqual(seen.at(-1).t, 'tvsearch', 'fallback without ids remains an episode search');
+    assert.strictEqual(seen.at(-1).q, 'House S03E22');
+    assert.strictEqual(seen.at(-1).season, '3');
+    assert.strictEqual(seen.at(-1).ep, '22');
+    assert.deepStrictEqual(r.candidates.map((c) => c.name), [
+      'House.S03E22.1080p.WEB-DL.H.264-NTb',
+    ]);
+  } finally {
+    server.close();
+  }
+});
+
 test('archive: obfuscated .7z.001 split volumes are detected as unsupported, never streamed as flat', async () => {
   const { mountNzb } = require('../server/archive');
   // Real-world failure: an obfuscated post named 9fZq….7z.001 fell through volume detection,
@@ -1149,6 +1209,36 @@ test('pipeline: cheap missing-article probe skips stale NZBs past the old four-s
   const keys = Object.keys(store.read('verdicts', {}));
   assert.ok(keys.every((k) => k.startsWith('nzb:') || k.startsWith('t:')), 'verdict keys do not persist raw NZB URLs');
   assert.ok(!JSON.stringify(store.read('verdicts', {})).includes('secret-indexer-key'), 'verdict cache does not persist indexer secrets');
+
+  pool.close(); await mock.close(); ix.server.close(); store.close();
+});
+
+test('pipeline: slow first-article probe does not reject an otherwise playable source', async () => {
+  const payload = seededPayload(90 * 1024, 0x51a0);
+  const good = nzbFor([{ name: 'Movie.mkv', data: payload }], 200000, 'slow-probe');
+
+  // Simulate a healthy provider that answers just after the cheap 800ms startup STAT budget.
+  // The probe is only an optimization; timeout must continue into the real mount path.
+  const mock = createMockNntp({ articles: new Map([...good.articles]), latencyMs: 950 });
+  const nntpPort = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 4);
+  const ix = makeMockIndexer([
+    { name: 'Movie.2024.1080p.WEB-DL.H.264-SLOWPROBE', size: 5e9, nzb: good.nzb },
+  ]);
+  const ixPort = await ix.listen();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const verdicts = new VerdictCache(store);
+  const pipeline = new Pipeline({
+    pool: () => pool, verdicts, mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'secret-indexer-key' }],
+  });
+
+  const r = await pipeline.play({ q: 'movie' }, { maxResolutionRank: 3 });
+  assert.strictEqual(r.candidate.name, 'Movie.2024.1080p.WEB-DL.H.264-SLOWPROBE');
+  assert.deepStrictEqual(r.attempts, [], 'slow STAT preflight is not a candidate failure');
+  const verdictJson = JSON.stringify(store.read('verdicts', {}));
+  assert.ok(!verdictJson.includes('probe-timeout'), 'slow preflight does not poison the verdict cache');
 
   pool.close(); await mock.close(); ix.server.close(); store.close();
 });

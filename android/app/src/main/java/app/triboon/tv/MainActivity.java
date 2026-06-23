@@ -256,6 +256,7 @@ public class MainActivity extends Activity {
     private long lastSystemBackAt;           // guard duplicate dispatch + OnBackInvoked callbacks
     private boolean pageReady;               // main frame finished at least once
     private boolean pageTvReady;             // web focus model installed and has a target
+    private volatile String currentWebUrl = ""; // WebView URL mirrored on UI thread for JavaBridge checks
     private volatile boolean pageInputFocused; // page reports text-field focus via the JS bridge
     private android.speech.SpeechRecognizer speech; // in-app voice search (created per use)
     private boolean voicePending;            // mic permission was requested BY a voice tap
@@ -488,7 +489,7 @@ public class MainActivity extends Activity {
     }
 
     private boolean trustedBridgeOrigin() {
-        return web != null && isTrustedServerUrl(web.getUrl());
+        return isTrustedServerUrl(currentWebUrl);
     }
 
     private boolean isBlockedPersonalIptvAddress(InetAddress addr) {
@@ -726,11 +727,13 @@ public class MainActivity extends Activity {
             @Override public void onPageStarted(WebView v, String url, android.graphics.Bitmap favicon) {
                 pageReady = false;
                 pageTvReady = false;
+                currentWebUrl = url == null ? "" : url;
                 pendingTvKeys.clear();
             }
 
             @Override public void onPageFinished(WebView v, String url) {
                 pageReady = true;
+                currentWebUrl = url == null ? "" : url;
                 scheduleTvFocusRecovery("page");
                 if (!isTvDevice()) clearPhoneInitialWebInputFocus();
             }
@@ -967,6 +970,7 @@ public class MainActivity extends Activity {
     private void resetWebPageState() {
         pageReady = false;
         pageTvReady = false;
+        currentWebUrl = "";
         pageInputFocused = false;
         pendingTvKeys.clear();
     }

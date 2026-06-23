@@ -22,13 +22,14 @@ class NzbFileStream {
     this.cacheOrder = [];
     this.cacheMax = cacheSegments;
     this.inflight = new Map(); // segIndex -> Promise<Buffer>
+    this.readAheadEpoch = 0;
     this.health = { verdict: 'unverified', checkedAt: null, missing: 0, sampled: 0 };
   }
 
-  async mount() {
+  async mount(priority = 'startup') {
     if (this.size !== null && this.partSize !== null) return this;
     const t0 = Date.now();
-    const first = await this._fetchSegment(0);
+    const first = await this._fetchSegment(0, priority || 'startup');
     if (this.partSize === null) this.partSize = first.length; // single-part post without =ypart
     if (this.size === null) this.size = first.length * this.segments.length; // worst-case fallback
     this.mountMs = Date.now() - t0;
@@ -65,21 +66,36 @@ class NzbFileStream {
     return p;
   }
 
+  cancelReadAhead() {
+    this.readAheadEpoch++;
+  }
+
   // Read [start, end) — returns an async generator of Buffers, with read-ahead.
-  async *read(start, end) {
-    if (this.partSize === null) await this.mount();
+  async *read(start, end, opts = {}) {
+    if (typeof opts === 'string') opts = { priority: opts };
+    const priority = opts.priority || 'playback';
+    let activePriority = priority;
+    const signal = opts.signal || null;
+    const readAheadEpoch = ++this.readAheadEpoch;
+    const aborted = () => !!(signal && signal.aborted);
+    if (this.partSize === null) await this.mount(priority);
     end = Math.min(end, this.size);
     let offset = start;
     while (offset < end) {
+      if (aborted()) return;
       const segIdx = this._segForOffset(offset);
       // Kick read-ahead (fire and forget).
-      for (let a = 1; a <= this.readAhead; a++) {
-        const n = segIdx + a;
-        if (n < this.segments.length && !this.cache.has(n) && !this.inflight.has(n)) {
-          this._fetchSegment(n, 'readAhead').catch(() => {});
+      if (readAheadEpoch === this.readAheadEpoch && !aborted()) {
+        for (let a = 1; a <= this.readAhead; a++) {
+          const n = segIdx + a;
+          if (n < this.segments.length && !this.cache.has(n) && !this.inflight.has(n)) {
+            this._fetchSegment(n, 'readAhead').catch(() => {});
+          }
         }
       }
-      const data = await this._fetchSegment(segIdx, 'playback');
+      const data = await this._fetchSegment(segIdx, activePriority);
+      if (activePriority === 'startup' || activePriority === 'seek') activePriority = 'playback';
+      if (aborted()) return;
       const segStart = segIdx * this.partSize;
       const from = offset - segStart;
       const to = Math.min(data.length, end - segStart);
@@ -91,14 +107,16 @@ class NzbFileStream {
 
   // Random-access for header parsing: fetches ONLY the segments covering [start, start+len),
   // in parallel, with no read-ahead — header peeks must not flood the pool with prefetch.
-  async readAt(start, len) {
-    if (this.partSize === null) await this.mount();
+  async readAt(start, len, opts = {}) {
+    if (typeof opts === 'string') opts = { priority: opts };
+    const priority = opts.priority || 'startup';
+    if (this.partSize === null) await this.mount(priority);
     const end = Math.min(start + len, this.size);
     if (start >= end) return Buffer.alloc(0);
     const first = this._segForOffset(start);
     const last = this._segForOffset(end - 1);
     const parts = await Promise.all(
-      Array.from({ length: last - first + 1 }, (_, k) => this._fetchSegment(first + k))
+      Array.from({ length: last - first + 1 }, (_, k) => this._fetchSegment(first + k, priority))
     );
     const base = first * this.partSize;
     return Buffer.concat(parts).subarray(start - base, end - base);

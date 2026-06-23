@@ -35,6 +35,67 @@ test('nntp: generic run falls through to the next provider', async () => {
   assert.strictEqual(await pool.run(async () => 'unused', 'startup'), 'ok');
 });
 
+test('vfs: caller priority reaches article reads and aborted reads do not fetch', async () => {
+  const { articles, nzb } = makeRelease('Priority.Test.mkv', 160000, 40000);
+  const calls = [];
+  const pool = {
+    body: async (msgId, priority = 'playback') => {
+      calls.push({ msgId, priority });
+      return articles.get(msgId);
+    },
+    stat: async () => true,
+  };
+  const vf = new VirtualFile(pool, nzb, { readAhead: 2 });
+  await vf.mount();
+  assert.strictEqual(calls[0].priority, 'startup', 'mount should fetch the first segment on the startup lane');
+  calls.length = 0;
+  vf.cache.clear();
+  vf.cacheOrder = [];
+  vf.inflight.clear();
+
+  const startup = [];
+  for await (const chunk of vf.read(0, 20000, { priority: 'startup' })) startup.push(chunk);
+  assert.ok(Buffer.concat(startup).length > 0);
+  assert.strictEqual(calls.find((c) => c.msgId === 'seg1@triboon.test').priority, 'startup');
+  assert.ok(calls.some((c) => c.priority === 'readAhead'), 'reader should still prefetch later segments at readAhead priority');
+
+  const vfSeek = new VirtualFile(pool, nzb, { readAhead: 0 });
+  await vfSeek.mount();
+  calls.length = 0;
+  vfSeek.cache.clear();
+  vfSeek.cacheOrder = [];
+  vfSeek.inflight.clear();
+  const seek = [];
+  for await (const chunk of vfSeek.read(0, 60000, { priority: 'seek' })) seek.push(chunk);
+  assert.ok(Buffer.concat(seek).length > 40000);
+  assert.deepStrictEqual(
+    calls.filter((c) => c.msgId === 'seg1@triboon.test' || c.msgId === 'seg2@triboon.test').map((c) => c.priority),
+    ['seek', 'playback'],
+    'urgent startup/seek priority should boost the first needed segment, then return to normal playback',
+  );
+
+  calls.length = 0;
+  vfSeek.cache.clear();
+  vfSeek.cacheOrder = [];
+  vfSeek.inflight.clear();
+  await vfSeek.readAt(40000, 1000);
+  assert.strictEqual(
+    calls.find((c) => c.msgId === 'seg2@triboon.test').priority,
+    'startup',
+    'header/random access reads used during mount should stay ahead of read-ahead work',
+  );
+
+  calls.length = 0;
+  vf.cache.clear();
+  vf.cacheOrder = [];
+  vf.inflight.clear();
+  const aborted = { aborted: true };
+  const got = [];
+  for await (const chunk of vf.read(0, 20000, { priority: 'seek', signal: aborted })) got.push(chunk);
+  assert.strictEqual(got.length, 0);
+  assert.deepStrictEqual(calls, [], 'aborted reads should stop before queueing article work');
+});
+
 function makeRelease(name, size, partSize) {
   // Deterministic pseudo-random payload (seeded) so failures are reproducible.
   const data = Buffer.allocUnsafe(size);
