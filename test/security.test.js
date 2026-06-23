@@ -8,6 +8,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const crypto = require('crypto');
 const zlib = require('zlib');
 const { httpJson, httpRaw, bootServer, setupAdmin } = require('./helpers');
 const { createMockNntp } = require('./mock-nntp');
@@ -27,6 +28,12 @@ async function runScan(libId) {
     await new Promise((res) => setTimeout(res, 50));
   }
   throw new Error('scan never finished');
+}
+
+function legacySignedToken(auth, claims, ttlMs = 60000) {
+  const payload = Buffer.from(JSON.stringify({ ...claims, exp: Date.now() + ttlMs })).toString('base64url');
+  const sig = crypto.createHmac('sha256', auth.secret).update(payload).digest('base64url');
+  return `${payload}.${sig}`;
 }
 
 function nzbFor(volumes, partSize, prefix) {
@@ -460,12 +467,32 @@ test('e2e: HTTP play pipeline — search, play, stream with token, advance 404 w
 
 test('security: a forged token with no exp claim is rejected (immortal-token footgun)', async () => {
   // Craft a token signed with the server secret but WITHOUT an exp field.
-  const crypto = require('crypto');
   const secret = srv.auth.secret;
   const payload = Buffer.from(JSON.stringify({ uid: 'x', role: 'admin', scope: 'session' })).toString('base64url');
   const sig = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
   const forged = `${payload}.${sig}`;
   assert.strictEqual((await httpJson(srv.port, 'GET', '/api/me', null, forged)).status, 401);
+});
+
+test('security: legacy raw-secret tokens are session-only compatibility, not stream auth', async () => {
+  const claims = srv.auth.verifyToken(admin, 'session');
+  const legacySession = legacySignedToken(srv.auth, {
+    uid: claims.uid,
+    role: claims.role,
+    scope: 'session',
+    epoch: claims.epoch,
+  });
+  assert.strictEqual((await httpJson(srv.port, 'GET', '/api/me', null, legacySession)).status, 200,
+    'existing browser sessions signed by older builds keep working until normal expiry');
+
+  const legacyStream = legacySignedToken(srv.auth, {
+    uid: claims.uid,
+    scope: 'stream',
+    sub: 'music:AAAAAAAAAAA',
+    epoch: claims.epoch,
+  });
+  assert.strictEqual((await httpRaw(srv.port, `/api/music/stream/AAAAAAAAAAA?t=${legacyStream}`)).status, 401,
+    'old raw-secret stream URLs are not accepted on playback routes');
 });
 
 test('security: concurrent accepts of one single-use invite — exactly one wins', async () => {

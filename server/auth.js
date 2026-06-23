@@ -229,12 +229,10 @@ class Auth {
     if (!token || typeof token !== 'string' || !token.includes('.')) return null;
     const [payload, sig] = token.split('.');
     const sigBuf = Buffer.from(sig || '', 'utf8');
-    const signatures = [
-      crypto.createHmac('sha256', this.tokenKey).update(payload).digest('base64url'),
-      // Legacy sessions were signed directly with TRIBOON_SECRET. Accept them until they
-      // expire or a password change bumps the user's session epoch.
-      crypto.createHmac('sha256', this.secret).update(payload).digest('base64url'),
-    ];
+    const signatures = [crypto.createHmac('sha256', this.tokenKey).update(payload).digest('base64url')];
+    // Legacy sessions were signed directly with TRIBOON_SECRET. Keep old browser logins
+    // alive through expiry, but never accept legacy raw-secret signatures for stream URLs.
+    if (scope === 'session') signatures.push(crypto.createHmac('sha256', this.secret).update(payload).digest('base64url'));
     let ok = false;
     for (const want of signatures) {
       const wantBuf = Buffer.from(want, 'utf8');

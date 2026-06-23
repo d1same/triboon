@@ -357,9 +357,10 @@ When changing persistence, update:
 - Every new endpoint must be added to `ROUTES` with the correct auth level.
 - Stream routes require signed stream tokens bound to one mount, file, channel,
   or local item.
-- New session/stream tokens use HKDF-separated HMAC keys. Legacy HMAC tokens are
-  accepted only during normal expiry, and password changes bump the user's
-  session epoch so already-issued sessions and stream links stop working.
+- New session/stream tokens use HKDF-separated HMAC keys. Legacy raw-secret
+  session tokens are accepted only during normal expiry; stream URLs must use
+  the HKDF-scoped key. Password changes bump the user's session epoch so
+  already-issued sessions and stream links stop working.
 - Session-token access to mount helpers is limited to the mount owner; scoped
   stream tokens remain valid only for their bound mount/resource.
 - Restricted local-library stream, art, thumbnail, and play endpoints must use
