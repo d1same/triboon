@@ -105,7 +105,7 @@ body.fullBd #bdInfo.show{opacity:1}
 /* Credits line ("Directed by … · Starring …") — detail-page voice, one ellipsized line so
    it can never reflow anything. min-height keeps the block stable while the fetch lands. */
 #bdInfo .bdiC,#heroCredits{font:600 12.5px "Albert Sans";color:var(--amber);margin-bottom:8px;max-width:52ch;
-  min-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 2px 12px rgba(0,0,0,.8)}
+  height:16px;min-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 2px 12px rgba(0,0,0,.8)}
 #bdInfo .bdiO{color:#d9d2e4;font-size:15.5px;line-height:1.6;max-width:74ch;display:-webkit-box;
   -webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;text-shadow:0 2px 12px rgba(0,0,0,.8)}
 @media (max-height:899px){#bdInfo{top:70px}#bdInfo .bdiO{-webkit-line-clamp:3}}
@@ -345,8 +345,9 @@ body.androidApp #gateArtCaption{display:none}
    with a resolution-adaptive left indent — same alignment as page heads and backdrop info. */
 #hero{max-width:46vw;margin-top:auto;margin-bottom:auto;margin-left:var(--heroLeft);padding:30px 0}
 #hero .eyebrow{font:700 11px/1 "JetBrains Mono";letter-spacing:.22em;color:var(--amber);text-transform:uppercase;margin-bottom:14px}
-#hero h1{font:800 clamp(30px,4.2vw,58px)/1.04 "Sora";letter-spacing:-.02em;margin-bottom:14px}
-#hero .meta{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+#hero h1{font:800 clamp(30px,4.2vw,58px)/1.04 "Sora";letter-spacing:-.02em;margin-bottom:14px;
+  height:2.08em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+#hero .meta{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;height:28px;overflow:hidden;align-content:flex-start}
 .metaLine{display:flex;align-items:center;gap:7px;flex-wrap:wrap;color:var(--muted);
   font:600 13.5px/1.2 "Albert Sans";letter-spacing:0;text-shadow:0 2px 14px rgba(0,0,0,.72)}
 .metaLine .rating{color:var(--amber)}
@@ -357,8 +358,8 @@ body.androidApp #gateArtCaption{display:none}
 .chip.ok{color:var(--success);border-color:rgba(124,230,160,.35)}
 .chip.warn{color:var(--amber);border-color:rgba(255,198,92,.35)}
 .chip.zap{color:var(--onAccent);background:var(--gold);border:0}
-#hero p{color:var(--muted);max-width:54ch;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;margin-bottom:20px}
-#heroBtns{display:flex;gap:12px}
+#hero p{color:var(--muted);max-width:54ch;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;margin-bottom:20px;line-height:1.5;height:4.5em}
+#heroBtns{display:flex;gap:12px;min-height:46px;align-items:center}
 .btn{display:flex;align-items:center;gap:10px;padding:14px 26px;border-radius:var(--r);font:600 15.5px "Albert Sans",system-ui,sans-serif;letter-spacing:.01em}
 .btn.primary{background:var(--gold);color:var(--onAccent)}
 .btn.ghost{background:var(--soft);border:1px solid var(--line)}
@@ -1036,7 +1037,9 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
    adaptRowWindows() overrides max-height inline with the exact 1/2-row fit. */
 #browse.rowsWin #grid{flex:none;margin-top:auto;max-height:calc(var(--rowH) * 2 - 10px)}
 @media (max-height:899px){
-  #hero p{-webkit-line-clamp:2}
+  #hero h1{height:1.04em;-webkit-line-clamp:1}
+  #hero .meta{height:26px}
+  #hero p{height:3em;-webkit-line-clamp:2}
 }
 /* Wide screens: rows breathe more so 2K+ doesn't look crammed. */
 @media (min-width:1700px){
@@ -1093,7 +1096,7 @@ body.tv .cwAct,body.tv .epMenuBtn{display:none!important}
   #home{padding:62px 16px 18px 16px!important;justify-content:flex-start}
   #hero{max-width:calc(100vw - 32px);margin:0 auto 8px;padding:0;text-align:center;align-items:center}
   #hero .eyebrow{margin-bottom:8px;font-size:10px;letter-spacing:.18em}
-  #hero h1{font-size:clamp(24px,7.4vw,32px);line-height:1.08;margin-bottom:8px}
+  #hero h1{font-size:clamp(24px,7.4vw,32px);line-height:1.08;margin-bottom:8px;height:2.16em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   #hero .meta,#heroCredits,#hero p{display:none!important}
   #heroBtns{width:100%;justify-content:center;gap:8px;flex-wrap:nowrap}
   #heroBtns .btn{flex:1 1 0;min-width:0;max-width:178px;padding:10px 10px;font-size:12.8px;justify-content:center;white-space:nowrap}
@@ -1143,7 +1146,7 @@ body.mobileShell #searchBar{left:16px;right:16px}
 body.mobileShell #home{padding:62px 16px 18px 16px!important;justify-content:flex-start}
 body.mobileShell #hero{max-width:calc(100vw - 32px);margin:0 auto 8px;padding:0;text-align:center;align-items:center}
 body.mobileShell #hero .eyebrow{margin-bottom:8px;font-size:10px;letter-spacing:.18em}
-body.mobileShell #hero h1{font-size:clamp(24px,7.4vw,32px);line-height:1.08;margin-bottom:8px}
+body.mobileShell #hero h1{font-size:clamp(24px,7.4vw,32px);line-height:1.08;margin-bottom:8px;height:2.16em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 body.mobileShell #hero .meta,body.mobileShell #heroCredits,body.mobileShell #hero p{display:none!important}
 body.mobileShell #heroBtns{width:100%;justify-content:center;gap:8px;flex-wrap:nowrap}
 body.mobileShell #heroBtns .btn{flex:1 1 0;min-width:0;max-width:178px;padding:10px 10px;font-size:12.8px;justify-content:center;white-space:nowrap}
@@ -4455,6 +4458,16 @@ function renderRowsInto(root, rowsData, opts = {}) {
 // The row window shows EXACTLY the first two rows (one on short screens) — measured from
 // the real rendered heights, so a short Continue-Watching row + Live TV row fit precisely
 // and "Trending" stays below the fold until you scroll. Everything above is backdrop room.
+function rowsWindowHeight(root, rows, n, gap) {
+  const visible = rows.slice(0, Math.min(n, rows.length));
+  if (!visible.length) return 0;
+  if (document.body.classList.contains('tv') && n === 1) {
+    return Math.max(...rows.map((row) => row.offsetHeight || 0)) + 8;
+  }
+  let h = 0;
+  for (const row of visible) h += row.offsetHeight;
+  return h + (visible.length - 1) * gap + 6;
+}
 function sizeRowsWindow(root) {
   const rows = [...root.querySelectorAll('.row')];
   if (!rows.length) { root.style.maxHeight = ''; return; }
@@ -4465,10 +4478,7 @@ function sizeRowsWindow(root) {
   // and a cut-off row above the focused one reads as broken from the couch.
   const n = document.body.classList.contains('tv') ? 1 : (innerHeight < 900 ? 1 : 2);
   const gap = parseFloat(getComputedStyle(root).rowGap || getComputedStyle(root).gap) || 22;
-  let h = 0;
-  for (let i = 0; i < Math.min(n, rows.length); i++) h += rows[i].offsetHeight;
-  h += (Math.min(n, rows.length) - 1) * gap + 6;
-  root.style.maxHeight = h + 'px';
+  root.style.maxHeight = rowsWindowHeight(root, rows, n, gap) + 'px';
 }
 window.addEventListener('resize', () => { sizeRowsWindow($('rows')); sizeRowsWindow($('discoverRows')); fitLiveGuide(); });
 function setRowsView(root, data, hasHero) { S.rowsView = { root, data, hasHero }; }
@@ -11942,7 +11952,7 @@ function applyMenuPrefs() {
   }
 }
 // Professional media themes: grown-up role palettes built around calm neutrals.
-// Triboon is the default because its charcoal/coral system matches the brand best.
+// Triboon is the default; keep the name while using a Plex-style charcoal/gold palette.
 const THEME_TOKEN_MAP = {
   ink: '--ink', surface: '--surface', raise: '--raise',
   m: '--magenta', c: '--coral', a: '--amber',
@@ -11953,14 +11963,14 @@ const THEME_TOKEN_MAP = {
 };
 const THEMES = {
   triboonCoral: {
-    label: 'Triboon', tone: 'charcoal + coral',
-    ink: '#222222', surface: '#2B2B2B', raise: '#444444',
-    m: '#444444', c: '#FF5A5F', a: '#FF5A5F',
-    text: '#F7F7F7', muted: '#B8B8B8', line: 'rgba(255,255,255,.13)',
-    field: 'rgba(34,34,34,.78)', soft: 'rgba(68,68,68,.64)', panel: 'rgba(34,34,34,.96)',
-    focus: '#FF5A5F', focusSoft: 'rgba(255,90,95,.34)', onAccent: '#1A1A1A',
+    label: 'Triboon', tone: 'charcoal + gold',
+    ink: '#1F1F1F', surface: '#282A2D', raise: '#3A3D41',
+    m: '#4A4A4A', c: '#E5A00D', a: '#F2B63D',
+    text: '#F7F5EF', muted: '#B7B2A8', line: 'rgba(229,160,13,.14)',
+    field: 'rgba(31,31,31,.80)', soft: 'rgba(58,61,65,.64)', panel: 'rgba(31,31,31,.96)',
+    focus: '#E5A00D', focusSoft: 'rgba(229,160,13,.36)', onAccent: '#151515',
     success: '#87DFA4', danger: '#FF8F93',
-    scrim: 'linear-gradient(90deg,rgba(34,34,34,.84) 0%,rgba(34,34,34,.54) 28%,rgba(34,34,34,.18) 58%,rgba(34,34,34,.05) 100%),linear-gradient(0deg,rgba(34,34,34,.74) 0%,rgba(34,34,34,.24) 26%,rgba(34,34,34,.04) 60%,rgba(34,34,34,.10) 100%)',
+    scrim: 'linear-gradient(90deg,rgba(31,31,31,.84) 0%,rgba(31,31,31,.54) 28%,rgba(31,31,31,.18) 58%,rgba(31,31,31,.05) 100%),linear-gradient(0deg,rgba(31,31,31,.74) 0%,rgba(31,31,31,.24) 26%,rgba(31,31,31,.04) 60%,rgba(31,31,31,.10) 100%)',
   },
   cinema: {
     label: 'Carbon Gold', tone: 'carbon + brass',
@@ -14159,9 +14169,9 @@ function focusCard(ri, ci, opts = {}) {
     const rowEl = el.closest('.row');
     const first = view.root.querySelector('.row');
     if (rowEl && first) {
-      // The 1-row window matches the FOCUSED row's real height (rows differ: 16:9
-      // Continue-Watching thumbs vs posters) — a fixed height cut the taller rows.
-      view.root.style.maxHeight = (rowEl.offsetHeight + 8) + 'px';
+      // Keep the window height stable while rows differ (16:9 Continue Watching vs posters).
+      // A per-focused-row height made the whole Home rail bounce during D-pad movement.
+      sizeRowsWindow(view.root);
       view.root.scrollTo({ top: Math.max(0, rowEl.offsetTop - first.offsetTop), behavior: 'smooth' });
     }
   }

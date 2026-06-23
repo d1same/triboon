@@ -673,15 +673,16 @@ test('Android native player: direct source and native chrome stay out of the web
     'theme choices should remap full design roles, not only the three accent colors');
   assert.ok(['triboonCoral', 'cinema', 'studio', 'velvet', 'teal', 'evergreen', 'contrast'].every((name) => ui.includes(`${name}: {`)),
     'theme list should include calmer cinematic professional options');
-  assert.match(ui, /scrim: 'linear-gradient\(90deg,rgba\(34,34,34,\.84\) 0%,rgba\(34,34,34,\.54\) 28%,rgba\(34,34,34,\.18\) 58%,rgba\(34,34,34,\.05\) 100%\),linear-gradient\(0deg,rgba\(34,34,34,\.74\) 0%,rgba\(34,34,34,\.24\) 26%,rgba\(34,34,34,\.04\) 60%,rgba\(34,34,34,\.10\) 100%\)'/,
+  assert.match(ui, /scrim: 'linear-gradient\(90deg,rgba\(31,31,31,\.84\) 0%,rgba\(31,31,31,\.54\) 28%,rgba\(31,31,31,\.18\) 58%,rgba\(31,31,31,\.05\) 100%\),linear-gradient\(0deg,rgba\(31,31,31,\.74\) 0%,rgba\(31,31,31,\.24\) 26%,rgba\(31,31,31,\.04\) 60%,rgba\(31,31,31,\.10\) 100%\)'/,
     'theme scrims should keep browser backdrop art visible instead of applying a full-screen blackout');
   assert.ok(!ui.includes("scrim: 'linear-gradient(180deg"),
     'theme scrims should not regress to the old opaque vertical wash');
   assert.match(ui, /const THEME_ALIASES = \{[\s\S]+graphite: 'studio'[\s\S]+triboon: 'triboonCoral'[\s\S]+trioon: 'triboonCoral'[\s\S]+arctic: 'teal'[\s\S]+forest: 'evergreen'/,
     'legacy stored theme names should map to the nearest new professional palette');
-  assert.ok(ui.includes("label: 'Triboon'") && ui.includes("ink: '#222222'")
-    && ui.includes("raise: '#444444'") && ui.includes("c: '#FF5A5F'"),
-    'Triboon Coral theme should use the requested charcoal, dark gray and hot coral palette');
+  assert.ok(ui.includes("label: 'Triboon'") && ui.includes("tone: 'charcoal + gold'")
+    && ui.includes("ink: '#1F1F1F'") && ui.includes("c: '#E5A00D'")
+    && ui.includes("a: '#F2B63D'"),
+    'Triboon theme should keep its name while using a Plex-style charcoal and gold palette');
   assert.ok(ui.includes("label: 'Carbon Gold'") && ui.includes("label: 'Studio Slate'")
     && ui.includes("label: 'Warm Taupe'") && ui.includes("label: 'Deep Teal'")
     && ui.includes("label: 'Olive Slate'"),
@@ -721,6 +722,16 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android app-update bridge should only open the stable Triboon GitHub APK aliases');
   assert.match(android, /nativeQualityBtn = nativeButton\(R\.drawable\.ic_player_quality, "Quality", false\)[\s\S]+rightControls\.addView\(nativeQualityBtn\);[\s\S]+nativeStatsBtn = nativeButton\(R\.drawable\.ic_player_info, "Playback stats", false\)[\s\S]+showNativeStatsSheet\(\)[\s\S]+rightControls\.addView\(nativeStatsBtn\);/,
     'native stats button should be the last ExoPlayer right-side control after CC/audio/quality');
+  assert.match(android, /private ScrollView nativeSheetScroll;[\s\S]+private LinearLayout nativeSheetRows;/,
+    'native ExoPlayer choice sheets should have a dedicated scroll viewport');
+  assert.match(android, /private int nativeSheetRowsViewportHeight\(int count\) \{[\s\S]+screen - dp\(260\)[\s\S]+return Math\.min\(max, needed\);[\s\S]+\}/,
+    'native ExoPlayer subtitle/audio/quality sheets should stay bounded on smaller screens');
+  assert.match(android, /nativeSheetScroll = new ScrollView\(this\);[\s\S]+nativeSheetRows = new LinearLayout\(this\);[\s\S]+nativeSheetRows\.addView\(row\);[\s\S]+nativeSheet\.addView\(nativeSheetScroll, new LinearLayout\.LayoutParams\([\s\S]+nativeSheetRowsViewportHeight\(labels\.length\)\)\);/,
+    'native ExoPlayer choice rows should scroll inside the bounded sheet instead of growing offscreen');
+  assert.match(android, /private java\.util\.ArrayList<View> nativeSheetFocusableRows\(\)[\s\S]+nativeSheetRows != null \? nativeSheetRows : nativeSheet[\s\S]+private void focusNativeSheetRow\([\s\S]+smoothScrollTo\(0, Math\.max\(0, row\.getTop\(\) - dp\(8\)\)\)/,
+    'native ExoPlayer D-pad focus should keep the highlighted sheet row visible');
+  assert.match(android, /row\.setSingleLine\(true\);[\s\S]+row\.setEllipsize\(TextUtils\.TruncateAt\.END\);[\s\S]+ViewGroup\.LayoutParams\.MATCH_PARENT, dp\(38\)/,
+    'native ExoPlayer sheet rows should keep fixed height and ellipsize long track labels');
   assert.match(android, /private String nativeStatsJson\(\)[\s\S]+nativeVideoStatsLabel[\s\S]+nativeAudioStatsLabel[\s\S]+nativeBandwidthEstimate/,
     'native stats should report video, audio, and bandwidth estimates to the web player stats panel');
   assert.match(ui, /qualityLabel: nativeQualityLabel\(p, kind\),[\s\S]+size: p\.size \|\| 0,[\s\S]+duration: Math\.max/,
@@ -1660,7 +1671,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'native subtitle sync action should move subtitles later in 0.5s steps');
   assert.match(android, /nativeSheetRestoreIndex = later;[\s\S]+shiftNativeSubtitles\(0\.5f\);[\s\S]+nativeSheetRestoreIndex = earlier;[\s\S]+shiftNativeSubtitles\(-0\.5f\)/,
     'native subtitle sync adjustments should reopen the CC sheet on the sync row');
-  assert.match(android, /int focusIndex = nativeSheetRestoreIndex >= 0 \? nativeSheetRestoreIndex \+ 1 : 1;[\s\S]+nativeSheet\.getChildAt\(focusIndex\)\.requestFocus\(\);/,
+  assert.match(android, /int focusIndex = nativeSheetRestoreIndex >= 0 \? nativeSheetRestoreIndex : 0;[\s\S]+java\.util\.ArrayList<View> rows = nativeSheetFocusableRows\(\);[\s\S]+focusNativeSheetRow\(rows, focusIndex\);/,
     'native choice sheets should honor a requested restore row after rebuilding');
   assert.match(android, /private void applyNativeSubtitleShift\(\) \{[\s\S]+updateNativeSubtitleOverlay\(\);[\s\S]+window\.__tvNativeSubtitleShift && window\.__tvNativeSubtitleShift/,
     'native subtitle sync should update the live overlay and persist the offset');
@@ -1690,7 +1701,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'native option sheets should be focus containers so rows can receive D-pad focus');
   assert.match(android, /if \(handleNativeSheetKey\(e\)\) return true;/,
     'native sheets should own D-pad and OK before the player button row handler');
-  assert.match(android, /private boolean handleNativeSheetKey\(KeyEvent e\) \{[\s\S]+KEYCODE_DPAD_UP[\s\S]+KEYCODE_DPAD_DOWN[\s\S]+rows\.get\(next\)\.requestFocus\(\);[\s\S]+rows\.get\(cur\)\.performClick\(\);[\s\S]+\}/,
+  assert.match(android, /private boolean handleNativeSheetKey\(KeyEvent e\) \{[\s\S]+KEYCODE_DPAD_UP[\s\S]+KEYCODE_DPAD_DOWN[\s\S]+focusNativeSheetRow\(rows, next\);[\s\S]+rows\.get\(cur\)\.performClick\(\);[\s\S]+\}/,
     'native option sheets should support D-pad row movement and OK activation');
   assert.match(android, /nativeSubtitleRel = choice\.subtitleRel;[\s\S]+disableNativeTextTracks\(\);[\s\S]+loadNativeSubtitleOverlay\(nativeSubtitleUrl\);/,
     'native online subtitle choices should switch through the live subtitle overlay');
@@ -1999,10 +2010,20 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'self-rendered subtitle text should stay bounded inside the video frame');
   assert.match(ui, /b\.addEventListener\('focus', \(\) => \{[\s\S]+scrollIntoView\(\{ block: 'nearest', inline: 'nearest' \}\)/,
     'long subtitle/audio/quality menus should keep the focused row inside the panel');
+  assert.match(ui, /#hero h1\{[^}]*height:2\.08em;[\s\S]+#hero \.meta\{[^}]*height:28px;[\s\S]+#hero p\{[^}]*height:4\.5em/,
+    'desktop Home hero title, metadata, and overview should reserve stable height while focus changes');
+  assert.match(ui, /function rowsWindowHeight\(root, rows, n, gap\) \{[\s\S]+document\.body\.classList\.contains\('tv'\) && n === 1[\s\S]+Math\.max\(\.\.\.rows\.map/,
+    'TV Home row window should use the tallest row height instead of resizing per focused row');
+  assert.doesNotMatch(ui, /view\.root\.style\.maxHeight = \(rowEl\.offsetHeight \+ 8\) \+ 'px';/,
+    'TV Home focus should not resize the row window to each focused row height');
   assert.match(ui, /@media \(max-width:600px\)\{[\s\S]+#hero \.meta,#heroCredits,#hero p\{display:none!important\}[\s\S]+#rows\{max-height:calc\(100vh - 176px\);/,
     'mobile Home should drop backdrop-style hero copy and give the rows most of the screen');
+  assert.match(ui, /#hero h1\{font-size:clamp\(24px,7\.4vw,32px\);line-height:1\.08;margin-bottom:8px;height:2\.16em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden\}/,
+    'mobile Home title should reserve a stable two-line height so rows do not jump between cards');
   assert.match(ui, /body\.mobileShell #hero \.meta,body\.mobileShell #heroCredits,body\.mobileShell #hero p\{display:none!important\}[\s\S]+body\.mobileShell #rows\{max-height:calc\(100vh - 176px\);/,
     'Android mobile shell should get the same compact Home treatment as narrow browsers');
+  assert.match(ui, /body\.mobileShell #hero h1\{font-size:clamp\(24px,7\.4vw,32px\);line-height:1\.08;margin-bottom:8px;height:2\.16em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden\}/,
+    'Android mobile shell Home title should use the same stable two-line height');
   assert.match(ui, /function sizeRowsWindow\(root\) \{[\s\S]+const compactHome = root\.id === 'rows'[\s\S]+window\.innerWidth <= 600[\s\S]+document\.body\.classList\.contains\('mobileShell'\)[\s\S]+if \(compactHome\) \{ root\.style\.maxHeight = ''; return; \}/,
     'mobile Home should not receive an inline desktop/TV row-window max-height');
   assert.match(ui, /function resetSearchPage\(opts = \{\}\) \{[\s\S]+if \(opts\.landing !== false && S\.view === 'search'\) renderSearchLanding\(\);/,

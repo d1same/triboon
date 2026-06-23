@@ -65,6 +65,7 @@ import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
+import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -185,6 +186,8 @@ public class MainActivity extends Activity {
     private ImageButton nativeStatsBtn;
     private ImageButton nativeNextBtn;
     private LinearLayout nativeSheet;
+    private ScrollView nativeSheetScroll;
+    private LinearLayout nativeSheetRows;
     private View nativeSheetReturnFocus;
     private int nativeSheetRestoreIndex = -1;
     private int nativeControlIndex = -1;
@@ -3907,21 +3910,17 @@ public class MainActivity extends Activity {
         if (code != KeyEvent.KEYCODE_DPAD_UP && code != KeyEvent.KEYCODE_DPAD_DOWN
                 && code != KeyEvent.KEYCODE_DPAD_LEFT && code != KeyEvent.KEYCODE_DPAD_RIGHT
                 && code != KeyEvent.KEYCODE_DPAD_CENTER && code != KeyEvent.KEYCODE_ENTER) return false;
-        java.util.ArrayList<View> rows = new java.util.ArrayList<>();
-        for (int i = 1; i < nativeSheet.getChildCount(); i++) {
-            View row = nativeSheet.getChildAt(i);
-            if (row != null && row.getVisibility() == View.VISIBLE && row.isFocusable()) rows.add(row);
-        }
+        java.util.ArrayList<View> rows = nativeSheetFocusableRows();
         if (rows.isEmpty()) return true;
         int cur = rows.indexOf(getCurrentFocus());
         if (cur < 0) {
             cur = 0;
-            rows.get(cur).requestFocus();
+            focusNativeSheetRow(rows, cur);
         }
         if (e.getAction() == KeyEvent.ACTION_DOWN) {
             if (code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN) {
                 int next = code == KeyEvent.KEYCODE_DPAD_UP ? Math.max(0, cur - 1) : Math.min(rows.size() - 1, cur + 1);
-                rows.get(next).requestFocus();
+                focusNativeSheetRow(rows, next);
             }
             return true;
         }
@@ -5125,6 +5124,8 @@ public class MainActivity extends Activity {
         if (nativeSheet == null) return;
         nativeSheet.setVisibility(View.GONE);
         nativeSheet.removeAllViews();
+        nativeSheetScroll = null;
+        nativeSheetRows = null;
         if (nativeSheetReturnFocus != null) nativeSheetReturnFocus.requestFocus();
         nativeSheetReturnFocus = null;
         nativeSheetRestoreIndex = -1;
@@ -5135,11 +5136,42 @@ public class MainActivity extends Activity {
         showNativeChoiceSheet(title, labels, null, handler);
     }
 
+    private int nativeSheetRowsViewportHeight(int count) {
+        int screen = Math.max(1, getResources().getDisplayMetrics().heightPixels);
+        int max = Math.max(dp(132), Math.min(dp(360), screen - dp(260)));
+        int needed = Math.max(dp(43), count * dp(43) + dp(6));
+        return Math.min(max, needed);
+    }
+
+    private java.util.ArrayList<View> nativeSheetFocusableRows() {
+        java.util.ArrayList<View> rows = new java.util.ArrayList<>();
+        ViewGroup parent = nativeSheetRows != null ? nativeSheetRows : nativeSheet;
+        if (parent == null) return rows;
+        int start = parent == nativeSheet ? 1 : 0;
+        for (int i = start; i < parent.getChildCount(); i++) {
+            View row = parent.getChildAt(i);
+            if (row != null && row.getVisibility() == View.VISIBLE && row.isFocusable()) rows.add(row);
+        }
+        return rows;
+    }
+
+    private void focusNativeSheetRow(java.util.ArrayList<View> rows, int index) {
+        if (rows == null || rows.isEmpty()) return;
+        int safe = Math.max(0, Math.min(rows.size() - 1, index));
+        View row = rows.get(safe);
+        row.requestFocus();
+        if (nativeSheetScroll != null) {
+            nativeSheetScroll.post(() -> nativeSheetScroll.smoothScrollTo(0, Math.max(0, row.getTop() - dp(8))));
+        }
+    }
+
     private void showNativeChoiceSheet(String title, String[] labels, boolean[] selectedRows, NativeChoiceHandler handler) {
         if (nativeSheet == null) return;
         nativeProgress.removeCallbacks(nativeHideChrome);
         nativeSheetReturnFocus = getCurrentFocus();
         nativeSheet.removeAllViews();
+        nativeSheetScroll = null;
+        nativeSheetRows = null;
 
         TextView head = new TextView(this);
         head.setText(title);
@@ -5150,6 +5182,15 @@ public class MainActivity extends Activity {
         nativeSheet.addView(head, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        nativeSheetScroll = new ScrollView(this);
+        nativeSheetScroll.setFillViewport(false);
+        nativeSheetScroll.setClipToPadding(false);
+        nativeSheetScroll.setPadding(0, 0, 0, dp(2));
+        nativeSheetRows = new LinearLayout(this);
+        nativeSheetRows.setOrientation(LinearLayout.VERTICAL);
+        nativeSheetScroll.addView(nativeSheetRows, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
         for (int i = 0; i < labels.length; i++) {
             final int index = i;
             boolean selected = selectedRows != null && i < selectedRows.length && selectedRows[i];
@@ -5158,17 +5199,17 @@ public class MainActivity extends Activity {
                 hideNativeSheet();
                 handler.choose(index);
             });
-            nativeSheet.addView(row);
+            nativeSheetRows.addView(row);
         }
+        nativeSheet.addView(nativeSheetScroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, nativeSheetRowsViewportHeight(labels.length)));
 
         nativeSheet.setVisibility(View.VISIBLE);
         nativeSheet.bringToFront();
-        int focusIndex = nativeSheetRestoreIndex >= 0 ? nativeSheetRestoreIndex + 1 : 1;
+        int focusIndex = nativeSheetRestoreIndex >= 0 ? nativeSheetRestoreIndex : 0;
         nativeSheetRestoreIndex = -1;
-        if (nativeSheet.getChildCount() > 1) {
-            focusIndex = Math.max(1, Math.min(nativeSheet.getChildCount() - 1, focusIndex));
-            nativeSheet.getChildAt(focusIndex).requestFocus();
-        }
+        java.util.ArrayList<View> rows = nativeSheetFocusableRows();
+        if (!rows.isEmpty()) focusNativeSheetRow(rows, focusIndex);
     }
 
     private TextView nativeSheetRow(String label, boolean selected) {
@@ -5179,6 +5220,7 @@ public class MainActivity extends Activity {
         row.setTypeface(Typeface.DEFAULT_BOLD);
         row.setGravity(android.view.Gravity.CENTER_VERTICAL);
         row.setSingleLine(true);
+        row.setEllipsize(TextUtils.TruncateAt.END);
         row.setFocusable(true);
         row.setClickable(true);
         row.setPadding(dp(14), 0, dp(14), 0);
