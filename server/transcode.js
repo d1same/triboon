@@ -39,16 +39,34 @@ function detectFfprobe() {
 
 // Decide the playback method for a mount + client capabilities.
 // caps: { mkv, hevc, ac3, eac3, dts } — the client's canPlayType results.
+function releaseAudioProfile(name) {
+  const s = String(name || '');
+  return {
+    truehd: /\b(true[ ._-]?hd|mlp)\b/i.test(s),
+    dtsHd: /\b(dts[ ._-]?hd|dts[ ._-]?x|dtsma|dts[ ._-]?ma)\b/i.test(s),
+  };
+}
+
+function releaseLosslessAudioDirectOk(name, caps = {}) {
+  const a = releaseAudioProfile(name);
+  if (!a.truehd && !a.dtsHd) return true;
+  const passthrough = !!(caps.native && caps.passthrough);
+  if (a.truehd && !(passthrough && caps.truehd)) return false;
+  if (a.dtsHd && !(passthrough && caps.dtsHd)) return false;
+  return true;
+}
+
 function decidePlayback(name, caps = {}) {
   const isMp4 = /\.(mp4|m4v)$/i.test(name);
   const isWebm = /\.webm$/i.test(name);
   const isMkv = /\.(mkv|ts)$/i.test(name);
   const hasKnownContainer = isMp4 || isWebm || isMkv;
+  const losslessAudioOk = releaseLosslessAudioDirectOk(name, caps);
   // MKV direct play needs MORE than container support: most MKVs carry AC3-family audio,
   // and Chromium happily claims matroska while decoding none of it — a "direct" DDP MKV
   // plays silent video. Devices with full container+audio hardware DO skip the server
   // entirely (true direct play); everything else gets the video-copy remux.
-  if (isMp4 || isWebm || (isMkv && caps.mkv && caps.ac3 && caps.eac3)) return { method: 'direct' };
+  if (isMp4 || isWebm || (isMkv && caps.mkv && caps.ac3 && caps.eac3 && losslessAudioOk)) return { method: 'direct' };
   // Usenet release names often do not expose the inner filename extension until after mount.
   // Treat that unknown container like MKV: remux first when ffmpeg is available.
   if ((isMkv || !hasKnownContainer) && detectFfmpeg()) return { method: 'remux' };
@@ -85,6 +103,7 @@ function probeTracks(url) {
           const base = {
             rel: rel[t === 'subtitle' ? 'subtitle' : t]++,
             codec: s.codec_name,
+            profile: s.profile || '',
             lang: (s.tags && (s.tags.language || s.tags.LANGUAGE)) || '',
             title: (s.tags && (s.tags.title || s.tags.TITLE)) || '',
           };
@@ -178,13 +197,27 @@ function audioNeedsTranscode(codec) { return !BROWSER_SAFE_AUDIO.has(String(code
 // with the play request — e.g. a TV that decodes DDP natively → true direct audio, zero
 // server CPU). Unknown codec (no probe yet): trust a broad AC3+EAC3 claim, else convert —
 // a wrong "copy" is a hard playback error, a wrong "convert" is a cheap AAC pass.
+function audioDescriptor(codecOrTrack) {
+  if (codecOrTrack && typeof codecOrTrack === 'object') {
+    return [
+      codecOrTrack.codec,
+      codecOrTrack.profile,
+      codecOrTrack.title,
+    ].filter(Boolean).join(' ').toLowerCase();
+  }
+  return String(codecOrTrack || '').toLowerCase();
+}
+
 function audioCopyOk(codec, caps = {}) {
-  const c = String(codec || '').toLowerCase();
+  const c = audioDescriptor(codec);
+  const primary = c.split(/\s+/)[0] || c;
   if (!c) return !!(caps.ac3 && caps.eac3);
-  if (BROWSER_SAFE_AUDIO.has(c)) return true;
-  if (c === 'ac3') return !!caps.ac3;
-  if (c === 'eac3') return !!caps.eac3;
-  if (c.startsWith('dts')) return !!caps.dts;
+  if (BROWSER_SAFE_AUDIO.has(primary)) return true;
+  if (/\b(true[ ._-]?hd|mlp)\b/.test(c)) return false;
+  if (/\b(dts[ ._-]?hd|dts[ ._-]?x|dtsma|dts[ ._-]?ma)\b/.test(c)) return false;
+  if (primary === 'ac3') return !!caps.ac3;
+  if (primary === 'eac3' || primary === 'eac3-joc' || c.includes('e-ac-3')) return !!(caps.eac3 || caps.eac3Joc);
+  if (primary.startsWith('dts')) return !!caps.dts;
   return false; // truehd/pcm/mlp: no <video>-tag path on any client
 }
 

@@ -2404,7 +2404,7 @@ function trimUserMounts(uid, keepId = null, limit = USER_MOUNT_CAP) {
 // decodes the source natively gets TRUE direct play — no server remux/transcode at all.
 function parseCaps(raw) {
   const caps = {};
-  for (const k of ['mkv', 'mp4', 'h264', 'hevc', 'dovi', 'av1', 'vp9', 'mpeg2', 'aac', 'ac3', 'eac3', 'dts', 'native', 'lowPower']) {
+  for (const k of ['mkv', 'mp4', 'h264', 'hevc', 'dovi', 'av1', 'vp9', 'mpeg2', 'aac', 'ac3', 'eac3', 'eac3Joc', 'dts', 'dtsHd', 'truehd', 'passthrough', 'native', 'lowPower']) {
     caps[k] = !!(raw && raw[k]);
   }
   if (raw && raw.source) caps.source = String(raw.source).slice(0, 64);
@@ -2413,6 +2413,7 @@ function parseCaps(raw) {
   if (raw && raw.brand) caps.brand = String(raw.brand).slice(0, 64);
   if (raw && raw.device) caps.device = String(raw.device).slice(0, 64);
   if (raw && raw.deviceClass) caps.deviceClass = String(raw.deviceClass).slice(0, 64);
+  if (raw && raw.audioOutput) caps.audioOutput = String(raw.audioOutput).slice(0, 64);
   if (raw && Number.isFinite(Number(raw.ramMb))) caps.ramMb = Math.max(0, Math.min(262144, Math.round(Number(raw.ramMb))));
   return caps;
 }
@@ -2458,6 +2459,12 @@ function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, orig
   if (caps.native) {
     policy.deviceCaps = caps;
     policy.dolbyVision = !!caps.dovi;
+    policy.audioPassthrough = !!caps.passthrough;
+    policy.audioTrueHd = !!caps.truehd;
+    policy.audioEac3 = !!caps.eac3;
+    policy.audioEac3Joc = !!caps.eac3Joc;
+    policy.audioDts = !!caps.dts;
+    policy.audioDtsHd = !!caps.dtsHd;
   }
   if (budgetAndroidTvCaps(caps)) {
     // Onn/low-memory TV boxes can decode 4K, but huge remux + HD audio is where playback
@@ -4924,7 +4931,7 @@ Object.assign(H, {
     // anything else gets a cheap AAC pass — video is always copied either way. A background
     // probe upgrades the unknown-codec guess for seek-restarts.
     const aud = vf._tracks && vf._tracks.audio && vf._tracks.audio[audioTrack];
-    const transcodeAudio = !audioCopyOk(aud && aud.codec, vf._caps);
+    const transcodeAudio = !audioCopyOk(aud, vf._caps);
     if (!vf._tracks && detectFfprobe() && !vf._probing) {
       vf._probing = true;
       probeTracks(selfUrl).then((t) => { vf._tracks = { available: true, ...t }; }).catch(() => {}).finally(() => { vf._probing = false; });

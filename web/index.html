@@ -600,16 +600,16 @@ body.nativeGuideMode #player.guideMode video{display:none}
 #osd.hide{opacity:0;pointer-events:none}
 #osd>*{position:relative;z-index:1}
 #osd .top{display:flex;justify-content:space-between;align-items:flex-start;gap:22px}
-#osd .topLeft{display:flex;align-items:center;min-width:0}
-#osd .title{font:800 clamp(18px,2vw,26px)/1.12 "Sora";max-width:min(760px,64vw);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-shadow:0 2px 20px rgba(0,0,0,.8)}
+#osd .topLeft{display:flex;align-items:flex-start;gap:14px;min-width:0;max-width:min(820px,66vw)}
+#osd .title{font:800 clamp(18px,2vw,26px)/1.12 "Sora";max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-shadow:0 2px 20px rgba(0,0,0,.8)}
 #osd .src{display:none}
 #osd .health{display:flex;gap:8px;align-items:center}
 .playerBackBtn{width:42px;height:42px}
 .playerBackBtn svg{width:19px;height:19px}
-.playerMetaRow{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin:0 0 12px}
-.playerMetaText{min-width:0}
+.playerMetaRow{display:flex;align-items:flex-start;justify-content:flex-start;gap:12px;min-width:0;padding-top:1px}
+.playerMetaText{min-width:0;flex:1 1 auto}
 .playerEpisode{margin-top:5px;color:var(--muted);font:800 13px "JetBrains Mono";letter-spacing:0;text-shadow:0 2px 12px rgba(0,0,0,.82)}
-.playerMetaQuality{flex:0 0 auto;font:800 13px "JetBrains Mono";letter-spacing:0;color:#fff;padding:5px 10px;border-radius:999px;background:rgba(5,3,9,.4);border:1px solid rgba(243,239,247,.16);text-shadow:0 2px 12px rgba(0,0,0,.8)}
+.playerMetaQuality{flex:0 0 auto;margin-top:1px;font:800 12px "JetBrains Mono";letter-spacing:0;color:#fff;padding:5px 10px;border-radius:999px;background:rgba(5,3,9,.4);border:1px solid rgba(243,239,247,.16);text-shadow:0 2px 12px rgba(0,0,0,.8)}
 .seekLine{display:grid;grid-template-columns:56px minmax(0,1fr) 64px;align-items:center;gap:12px;margin-bottom:16px}
 .seekTime{font:700 13px "JetBrains Mono";color:var(--muted);white-space:nowrap;text-shadow:0 2px 12px rgba(0,0,0,.82)}
 .seekTime:last-child{text-align:right}
@@ -654,17 +654,20 @@ body.nativeGuideMode #player.guideMode video{display:none}
 .osdClock{display:flex;gap:14px;font:700 13px "JetBrains Mono";color:var(--text);
   background:rgba(11,8,18,.55);border:1px solid var(--line);border-radius:10px;padding:8px 13px}
 .osdClock #endsAt{color:var(--amber)}
-#trackMenu{display:none;position:absolute;bottom:118px;right:44px;width:min(360px,calc(100vw - 88px));min-width:240px;max-height:300px;overflow-y:auto;
-  background:rgba(17,12,27,.97);border:1px solid var(--line);border-radius:14px;padding:8px;z-index:5}
+#trackMenu{display:none;position:absolute;bottom:118px;right:44px;width:min(390px,calc(100vw - 88px));min-width:260px;max-height:min(420px,calc(100vh - 220px));overflow-y:auto;
+  background:linear-gradient(180deg,rgba(25,18,38,.98),rgba(11,8,18,.96));border:1px solid rgba(243,239,247,.14);border-radius:18px;padding:10px;z-index:7;
+  box-shadow:0 24px 70px rgba(0,0,0,.48),inset 0 1px 0 rgba(255,255,255,.06);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);scrollbar-width:thin}
 #trackMenu.open{display:block}
-#trackMenu .tmHead{font:700 10.5px "JetBrains Mono";letter-spacing:.14em;text-transform:uppercase;color:var(--amber);padding:8px 10px 6px}
-#trackMenu button{display:flex;width:100%;text-align:left;padding:10px 12px;border-radius:9px;font:500 13.5px "Albert Sans";gap:8px;align-items:center}
-#trackMenu button:hover{background:rgba(34,25,52,.7)}
-#trackMenu button.focus{background:rgba(34,25,52,.9);box-shadow:inset 0 0 0 2px var(--coral)}
-#trackMenu button.sel{color:var(--amber);font-weight:700}
+#trackMenu .tmHead{font:800 10.5px "JetBrains Mono";letter-spacing:.12em;text-transform:uppercase;color:var(--amber);padding:8px 12px 7px}
+#trackMenu button{display:flex;width:100%;min-height:42px;text-align:left;padding:10px 13px;border-radius:12px;font:700 13.5px/1.2 "Albert Sans";gap:10px;align-items:center;
+  background:transparent;border:1px solid transparent;color:rgba(243,239,247,.9);transition:background .14s,border-color .14s,box-shadow .14s,color .14s}
+#trackMenu button:hover{background:rgba(243,239,247,.07);border-color:rgba(243,239,247,.08)}
+#trackMenu button.focus{background:rgba(237,232,245,.92);border-color:rgba(237,232,245,.95);color:#0b0812;box-shadow:0 0 0 3px rgba(251,139,60,.58)}
+#trackMenu button.sel{color:var(--amber);background:rgba(255,198,92,.10);border-color:rgba(255,198,92,.22);font-weight:800}
+#trackMenu button.sel.focus{color:#0b0812;background:rgba(237,232,245,.94);border-color:rgba(237,232,245,.98)}
 #trackMenu button:disabled{opacity:.55;cursor:default;color:var(--muted)}
 #trackMenu button:disabled:hover{background:transparent}
-#trackMenu button .mark{margin-left:auto}
+#trackMenu button .mark{margin-left:auto;font:900 12px "Sora";color:currentColor}
 /* In-app clock (top right, like Plex) */
 #appClock{position:fixed;top:calc(18px + var(--safeT) + var(--overscan));right:calc(22px + var(--safeR) + var(--overscan));z-index:21;min-width:108px;height:38px;padding:0 18px;display:none;
   align-items:center;justify-content:center;pointer-events:none;color:var(--text);font:800 14px "JetBrains Mono",monospace;letter-spacing:0;
@@ -784,12 +787,14 @@ body.screensaverOn{cursor:none}
 .activityStream.live{color:#b9ddff;background:rgba(110,178,255,.12);border-color:rgba(110,178,255,.25)}
 .activityBar{height:6px;border-radius:999px;background:rgba(243,239,247,.16);overflow:hidden;margin-top:7px}
 .activityBar span{display:block;height:100%;background:var(--grad);width:var(--pct,0%)}
-#playerStats{display:none;position:absolute;right:44px;bottom:176px;width:min(420px,calc(100vw - 88px));z-index:7;
-  background:rgba(17,12,27,.96);border:1px solid var(--line);border-radius:14px;padding:14px;box-shadow:0 18px 52px rgba(0,0,0,.38)}
+#playerStats{display:none;position:absolute;right:44px;bottom:176px;width:min(440px,calc(100vw - 88px));z-index:7;
+  background:linear-gradient(180deg,rgba(25,18,38,.98),rgba(11,8,18,.96));border:1px solid rgba(243,239,247,.14);border-radius:18px;padding:16px;
+  box-shadow:0 24px 70px rgba(0,0,0,.48),inset 0 1px 0 rgba(255,255,255,.06);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
 #playerStats.open{display:block}
-#playerStats h3{font:800 13px "Sora";margin:0 0 8px}
-#playerStats .statGrid{display:grid;grid-template-columns:minmax(90px,.6fr) minmax(0,1fr);gap:7px 12px;font:600 11px "JetBrains Mono"}
-#playerStats .statGrid span:nth-child(odd){color:var(--muted)}
+#playerStats h3{font:800 14px "Sora";margin:0 0 11px}
+#playerStats .statGrid{display:grid;grid-template-columns:minmax(92px,.56fr) minmax(0,1fr);gap:7px 10px;font:700 11px "JetBrains Mono"}
+#playerStats .statGrid span{min-height:30px;display:flex;align-items:center;border-bottom:1px solid rgba(243,239,247,.06)}
+#playerStats .statGrid span:nth-child(odd){color:rgba(243,239,247,.62);text-transform:uppercase;font-size:9.5px;letter-spacing:.06em}
 #playerStats .statGrid span:nth-child(even){color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media (max-width:1100px){.syncGrid{grid-template-columns:repeat(2,minmax(0,1fr))}.syncSource{grid-template-columns:1fr}}
 .panel .btn{padding:11px 18px;font-size:14px}
@@ -1189,8 +1194,9 @@ body.mobileShell #detail .back{top:14px;left:66px!important}
   .pgRow .pgGroup,.pgRow .pgNext{font-size:9.5px}
   .pgRow .pgNow{font-size:12px;padding-right:32px}
   #osd .top{gap:12px}
-  #osd .title{max-width:64vw}
-  .playerMetaRow{gap:10px;margin-bottom:10px}
+  #osd .topLeft{gap:10px;max-width:66vw}
+  #osd .title{max-width:100%}
+  .playerMetaRow{gap:8px}
   .playerMetaQuality{font-size:11px;padding:4px 8px}
   .seekLine{grid-template-columns:46px minmax(0,1fr) 54px;gap:8px}
   .seekTime{font-size:11px}
@@ -3075,20 +3081,22 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
   <div id="subOverlay" aria-live="off"></div>
   <div id="osd">
     <div class="top">
-      <div class="topLeft"><button class="cbtn focusable playerBackBtn" id="playerBackBtn" title="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button></div>
+      <div class="topLeft">
+        <button class="cbtn focusable playerBackBtn" id="playerBackBtn" title="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button>
+        <div class="playerMetaRow">
+          <div class="playerMetaText">
+            <div class="title" id="pTitle"></div>
+            <div class="playerEpisode" id="pEpisode"></div>
+          </div>
+          <div class="playerMetaQuality" id="pQuality"></div>
+        </div>
+      </div>
       <div class="osdRight">
         <div class="osdClock"><span id="clockNow"></span><span id="endsAt"></span></div>
         <div class="health" id="pHealth"></div>
       </div>
     </div>
     <div>
-      <div class="playerMetaRow">
-        <div class="playerMetaText">
-          <div class="title" id="pTitle"></div>
-          <div class="playerEpisode" id="pEpisode"></div>
-        </div>
-        <div class="playerMetaQuality" id="pQuality"></div>
-      </div>
       <div class="src" id="pSrc"></div>
       <div class="seekLine">
         <span class="seekTime" id="seekElapsed">0:00</span>
@@ -3106,7 +3114,6 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
           <button class="cbtn focusable" id="nextEpBtn" title="Next episode" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" x2="19" y1="5" y2="19"/></svg></button>
         </div>
         <div class="ctlGroup ctlRight">
-          <button class="cbtn focusable" id="statsBtn" title="Playback stats"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01"/><path d="M11 12h1v5h1"/></svg></button>
           <button class="cbtn focusable" id="ccBtn" title="Subtitles"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M7 15h4M15 15h2M7 11h2M13 11h4"/></svg></button>
           <button class="cbtn focusable" id="audBtn" title="Audio language"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 10v3"/><path d="M6 6v11"/><path d="M10 3v18"/><path d="M14 8v7"/><path d="M18 5v13"/><path d="M22 10v3"/></svg></button>
           <button class="cbtn focusable" id="srndBtn" title="Surround sound" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 10v4h4l5 4V6l-5 4H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg></button>
@@ -3116,6 +3123,7 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
             <input type="range" id="volSlider" min="0" max="100" value="100" title="Volume">
           </div>
           <button class="cbtn focusable" id="fsBtn" title="Fullscreen (F)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+          <button class="cbtn focusable" id="statsBtn" title="Playback stats"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01"/><path d="M11 12h1v5h1"/></svg></button>
         </div>
         <div class="time" id="pTime">0:00</div>
       </div>
@@ -6650,6 +6658,7 @@ function tryNativeVideoPlayer(kind, atSeconds, opts = {}) {
     kind,
     mime: nativeMimeForKind(p, kind),
     qualityLabel: nativeQualityLabel(p, kind),
+    size: p.size || 0,
     duration: Math.max(0, p.duration || p.nativeDuration || 0),
     qualityChoices: !!p.transcodeUrl,
     hasNext: p.item.type === 'episode',
@@ -7266,6 +7275,12 @@ function fmtBytes(n) {
   if (n >= 1024) return Math.round(n / 1024) + ' KB';
   return n ? n + ' B' : '—';
 }
+function fmtMbps(bitsPerSecond) {
+  const n = Number(bitsPerSecond) || 0;
+  if (n <= 0) return '—';
+  const mbps = n / 1000000;
+  return `${mbps >= 10 ? Math.round(mbps) : mbps.toFixed(1)} Mbps`;
+}
 function playerModeLabel(p = S.playing) {
   if (!p) return '';
   if (p.usingNative) return 'ExoPlayer';
@@ -7349,13 +7364,13 @@ function collectPlayerStats() {
   rows.push(['Quality', playerQualityLabel(p) || native.quality || '—']);
   rows.push(['Source', p.name || '—']);
   rows.push(['File', p.fileName || '—']);
-  rows.push(['Size', fmtBytes(p.size)]);
+  rows.push(['Size', fmtBytes(p.size || native.size)]);
   rows.push(['Position', `${fmt(currentTime())}${totalDuration() ? ' / ' + fmt(totalDuration()) : ''}`]);
   rows.push(['Buffered', buffered ? `${Math.round(buffered)}s ahead` : '—']);
   rows.push(['Video', native.video || (v.videoWidth ? `${v.videoWidth}×${v.videoHeight}` : '—')]);
   rows.push(['Audio', native.audio || (p.tracks && p.tracks.audio && p.tracks.audio[p.audioTrack] && p.tracks.audio[p.audioTrack].codec) || '—']);
   rows.push(['Dropped', native.droppedFrames !== undefined ? String(native.droppedFrames) : (q ? String(q.droppedVideoFrames || 0) : '—')]);
-  rows.push(['Bandwidth', native.bandwidth ? `${Math.round(native.bandwidth / 1000)} kbps` : '—']);
+  rows.push(['Bandwidth', fmtMbps(native.bandwidth)]);
   return rows;
 }
 function renderPlayerStats() {
@@ -7368,8 +7383,8 @@ function renderPlayerStats() {
 function togglePlayerStats() {
   const box = $('playerStats'); if (!box) return;
   const open = !box.classList.contains('open');
-  if (open) { renderPlayerStats(); box.classList.add('open'); showOsd(); }
-  else box.classList.remove('open');
+  if (open) { closeTrackMenu(); renderPlayerStats(); box.classList.add('open'); showOsd(); }
+  else closePlayerStats();
 }
 async function saveWatch(final) {
   const p = S.playing; if (!p || !p.item) return;
@@ -7434,7 +7449,7 @@ async function closePlayer(opts = {}) {
   closePlayerEpisodes();
   $('upNext').classList.remove('show');
   closeTrackMenu();
-  $('playerStats').classList.remove('open');
+  closePlayerStats();
   S.playerSeasonStrip = null;
   S.nextEp = null; updateNextEpisodeButton();
   S.playing = null;
@@ -7508,7 +7523,7 @@ function updPP() { $('ppIcon').innerHTML = $('video').paused ? '<path d="M8 5v14
 let _playerSurfaceClickT = null;
 function playerSurfaceClick(e) {
   if (e.button !== 0 || S.view !== 'player') return false;
-  if (e.target.closest('#osd .top,.playerMetaRow,.seekLine,.ctl,#playerEpisodes,#trackMenu,#pGuide,#vlcPanel,#upNext,#playerLoader,button,a,input,select,textarea')) return false;
+  if (e.target.closest('#osd .top,.playerMetaRow,.seekLine,.ctl,#playerEpisodes,#trackMenu,#playerStats,#pGuide,#vlcPanel,#upNext,#playerLoader,button,a,input,select,textarea')) return false;
   return true;
 }
 function playerSingleClick(e) {
@@ -7598,7 +7613,7 @@ function showOsd() {
   S.osdTimer = setTimeout(() => {
     // An open CC/audio menu means the user is READING it — never hide it from under them
     // (3.5s is shorter than picking a subtitle on a remote). Check again in a beat.
-    if ($('trackMenu').classList.contains('open')) return showOsd();
+    if ($('trackMenu').classList.contains('open') || $('playerStats').classList.contains('open')) return showOsd();
     $('osd').classList.add('hide');
     // Fade-out RESETS the remembered control: the next OSD wake lands on play/pause, not
     // whatever button was used minutes ago.
@@ -7612,7 +7627,7 @@ function hidePlayerOsdForBack() {
   const player = $('player');
   const osd = $('osd');
   if (!player.classList.contains('open') || player.classList.contains('guideMode')) return false;
-  if ($('trackMenu').classList.contains('open') || $('playerEpisodes').classList.contains('open')
+  if ($('trackMenu').classList.contains('open') || $('playerStats').classList.contains('open') || $('playerEpisodes').classList.contains('open')
       || $('pGuide').classList.contains('open') || $('upNext').classList.contains('show')
       || $('vlcPanel').classList.contains('show') || $('playerLoader').classList.contains('show')) return false;
   if (osd.classList.contains('hide')) return false;
@@ -7931,6 +7946,7 @@ function updatePlayerControlAvailability() {
   if (!p) ['ccBtn', 'audBtn', 'qualBtn', 'nextEpBtn'].forEach((id) => setPlayerControlEnabled(id, false));
 }
 function closeTrackMenu() { $('trackMenu').classList.remove('open'); }
+function closePlayerStats() { $('playerStats').classList.remove('open'); }
 function restoreTrackMenuPosition(opts = {}) {
   const m = $('trackMenu');
   if (!m || !m.classList.contains('open')) return;
@@ -7953,6 +7969,7 @@ function openTrackMenu(kind, restore = {}) {
   if (kind === 'audio' && !playerAudioHasOptions()) return;
   if (kind === 'quality' && !playerQualityHasOptions()) return;
   if (!p.tracks && kind !== 'cc') return; // CC works without a probe (online subtitles)
+  closePlayerStats();
   p.tracks = p.tracks || { audio: [], subs: [] };
   const m = $('trackMenu'); m.innerHTML = '';
   S.trackMenuKind = kind;
@@ -14598,7 +14615,7 @@ function focusDrawer(i) {
   applyFocus(rows[S.drawerIdx]);
 }
 function ctlButtons() {
-  return ['chGuide', 'back10', 'playPause', 'fwd30', 'nextEpBtn', 'statsBtn', 'ccBtn', 'audBtn', 'srndBtn', 'qualBtn', 'muteBtn', 'fsBtn']
+  return ['chGuide', 'back10', 'playPause', 'fwd30', 'nextEpBtn', 'ccBtn', 'audBtn', 'srndBtn', 'qualBtn', 'muteBtn', 'fsBtn', 'statsBtn']
     .map((id) => $(id)).filter((b) => b && !b.disabled && !b.classList.contains('disabled') && b.style.display !== 'none' && b.offsetParent !== null);
 }
 function focusSeek() {
@@ -15033,6 +15050,11 @@ document.addEventListener('keydown', (e) => {
       if (k === 'ArrowDown') return applyFocus(btns[Math.min(btns.length - 1, i + 1)]);
       if (k === 'ArrowUp') return applyFocus(btns[Math.max(0, i - 1)]);
       if (k === 'Enter' && !e.repeat) { btns[i] && btns[i].click(); }
+      return;
+    }
+    if ($('playerStats').classList.contains('open') && (k === 'Escape' || k === 'Backspace')) {
+      closePlayerStats();
+      showOsd();
       return;
     }
     if ($('playerEpisodes').classList.contains('open')) {
@@ -15473,6 +15495,11 @@ window.__tvBack = () => {
   }
   if ($('pGuide') && $('pGuide').classList.contains('open')) {
     closePlayerGuide();
+    return 'ok';
+  }
+  if ($('playerStats') && $('playerStats').classList.contains('open')) {
+    closePlayerStats();
+    showOsd();
     return 'ok';
   }
   if (hidePlayerOsdForBack()) return 'ok';

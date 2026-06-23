@@ -96,6 +96,21 @@ test('vfs: caller priority reaches article reads and aborted reads do not fetch'
   assert.deepStrictEqual(calls, [], 'aborted reads should stop before queueing article work');
 });
 
+test('vfs: decoded segment cache is capped by bytes, not only segment count', async () => {
+  const { articles, nzb } = makeRelease('Cache.Bytes.Test.mkv', 180000, 45000);
+  const pool = {
+    body: async (msgId) => articles.get(msgId),
+    stat: async () => true,
+  };
+  const vf = new VirtualFile(pool, nzb, { readAhead: 0, cacheSegments: 24, cacheBytes: 90000 });
+  await vf.mount();
+  const chunks = [];
+  for await (const chunk of vf.read(0, 180000)) chunks.push(chunk);
+  assert.strictEqual(Buffer.concat(chunks).length, 180000);
+  assert.ok(vf.cacheBytes <= vf.cacheMaxBytes, `cache kept ${vf.cacheBytes} bytes over ${vf.cacheMaxBytes}`);
+  assert.ok(vf.cache.size <= 2, 'byte cap should evict older decoded segments even when segment cap is high');
+});
+
 function makeRelease(name, size, partSize) {
   // Deterministic pseudo-random payload (seeded) so failures are reproducible.
   const data = Buffer.allocUnsafe(size);

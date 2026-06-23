@@ -179,6 +179,19 @@ function scoreRelease(candidate, policy = {}) {
   const cod = matchOne(candidate.name, CODEC); if (cod) add(`codec ${cod.key}`, cod.score);
   for (const f of FEATURE) if (f.re.test(candidate.name)) add(f.key, f.score);
   for (const b of BAD_FLAGS) if (b.re.test(candidate.name)) add(b.key, b.score);
+  const hasTrueHd = a.features.includes('truehd');
+  const hasDtsHd = a.features.includes('dts-hd');
+  const hasAtmos = a.features.includes('atmos');
+  const hasDdp = a.features.includes('ddp');
+  if (hasTrueHd || hasDtsHd || hasAtmos) {
+    const pass = !!policy.audioPassthrough;
+    if (hasTrueHd) add(policy.audioTrueHd && pass ? 'passthrough-truehd' : 'unsupported-truehd', policy.audioTrueHd && pass ? 110 : -120);
+    if (hasDtsHd) add(policy.audioDtsHd && pass ? 'passthrough-dts-hd' : 'unsupported-dts-hd', policy.audioDtsHd && pass ? 90 : -110);
+    if (hasAtmos) {
+      const atmosOk = pass && ((hasTrueHd && policy.audioTrueHd) || (hasDdp && policy.audioEac3Joc) || (!hasTrueHd && !hasDtsHd && policy.audioEac3Joc));
+      add(atmosOk ? 'passthrough-atmos' : 'unsupported-atmos', atmosOk ? 55 : -45);
+    }
+  }
   if (policy.lowPowerDevice && a.resolutionRank >= 4 && a.resolution !== 'unknown') {
     if (a.source === 'remux') add('device-heavy-remux', -180);
     if (a.features.includes('truehd') || a.features.includes('dts-hd')) add('device-heavy-audio', -140);

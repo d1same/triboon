@@ -28,6 +28,9 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.media.AudioDeviceInfo;
+import android.media.AudioFormat;
+import android.media.AudioManager;
 import android.media.MediaCodecInfo;
 import android.media.MediaCodecList;
 import android.net.Uri;
@@ -204,6 +207,7 @@ public class MainActivity extends Activity {
     private String nativePlaybackTitle = "Triboon";
     private String nativePlaybackSubline = "";
     private String nativePlaybackBackdropUrl = "";
+    private long nativePlaybackSizeBytes = 0L;
     private boolean nativeTriedFallback = false;
     private boolean nativeHasNext = false;
     private boolean nativeHasQualityChoices = false;
@@ -242,9 +246,13 @@ public class MainActivity extends Activity {
     private long nativeLiveLastRecoveryMs;
     private long nativeVideoUnhealthySinceMs;
     private boolean nativeVideoStarted;
+    private boolean nativeVideoMemoryTrimmedDuringBuffer;
+    private boolean nativeVideoErrorNotified;
     private long nativeLastVideoDisplayMs;
     private long nativeLastStatsMs;
     private static final long NATIVE_VIDEO_STARTUP_STALL_MS = 7000L;
+    private static final long NATIVE_VIDEO_REBUFFER_TRIM_MS = 15000L;
+    private static final long NATIVE_VIDEO_REBUFFER_RECOVERY_MS = 45000L;
     private static final long NATIVE_LIVE_STALL_RECOVERY_MS = 45000L;
     private static final long NATIVE_LIVE_STARTUP_STALL_RECOVERY_MS = 12000L;
     private static final long NATIVE_LIVE_RECOVERY_COOLDOWN_MS = 15000L;
@@ -2209,6 +2217,14 @@ public class MainActivity extends Activity {
         try {
             org.json.JSONObject j = new org.json.JSONObject();
             boolean conservative = nativeConservativePlaybackDevice();
+            org.json.JSONObject sink = nativeAudioSinkCaps(conservative);
+            boolean sinkAc3 = sink.optBoolean("ac3");
+            boolean sinkEac3 = sink.optBoolean("eac3");
+            boolean sinkEac3Joc = sink.optBoolean("eac3Joc");
+            boolean sinkDts = sink.optBoolean("dts");
+            boolean sinkDtsHd = sink.optBoolean("dtsHd");
+            boolean sinkTrueHd = sink.optBoolean("truehd");
+            boolean passthrough = sink.optBoolean("passthrough");
             j.put("native", true);
             j.put("sdk", Build.VERSION.SDK_INT);
             j.put("manufacturer", Build.MANUFACTURER == null ? "" : Build.MANUFACTURER);
@@ -2227,12 +2243,17 @@ public class MainActivity extends Activity {
             j.put("vp9", nativeDecoderAvailable("video/x-vnd.on2.vp9"));
             j.put("mpeg2", nativeDecoderAvailable("video/mpeg2"));
             j.put("aac", nativeDecoderAvailable("audio/mp4a-latm"));
-            j.put("ac3", nativeDecoderAvailable("audio/ac3"));
-            j.put("eac3", nativeDecoderAvailable("audio/eac3") || nativeDecoderAvailable("audio/eac3-joc"));
+            j.put("ac3", nativeDecoderAvailable("audio/ac3") || sinkAc3);
+            j.put("eac3", nativeDecoderAvailable("audio/eac3") || nativeDecoderAvailable("audio/eac3-joc") || sinkEac3 || sinkEac3Joc);
+            j.put("eac3Joc", !conservative && (nativeDecoderAvailable("audio/eac3-joc") || sinkEac3Joc));
             // Budget TV boxes often expose DTS decoders that still fail in fMP4/remux paths or
             // burn CPU. Force AAC audio remux there; Shield-class devices can still copy DTS.
-            j.put("dts", !conservative && (nativeDecoderAvailable("audio/vnd.dts") || nativeDecoderAvailable("audio/vnd.dts.hd")));
-            j.put("source", "exo-mediacodec");
+            j.put("dts", !conservative && (nativeDecoderAvailable("audio/vnd.dts") || nativeDecoderAvailable("audio/vnd.dts.hd") || sinkDts || sinkDtsHd));
+            j.put("dtsHd", !conservative && sinkDtsHd);
+            j.put("truehd", !conservative && sinkTrueHd);
+            j.put("passthrough", !conservative && passthrough);
+            j.put("audioOutput", sink.optString("output", ""));
+            j.put("source", "exo-mediacodec+audio-output");
             nativePlaybackCapsCache = j.toString();
             return nativePlaybackCapsCache;
         } catch (Exception e) {
@@ -2274,6 +2295,71 @@ public class MainActivity extends Activity {
         if (nativeIsOnnDevice()) return true;
         int ram = nativeTotalRamMb();
         return ram > 0 && ram <= 2600;
+    }
+
+    private org.json.JSONObject nativeAudioSinkCaps(boolean conservative) {
+        org.json.JSONObject out = new org.json.JSONObject();
+        try {
+            out.put("ac3", false);
+            out.put("eac3", false);
+            out.put("eac3Joc", false);
+            out.put("dts", false);
+            out.put("dtsHd", false);
+            out.put("truehd", false);
+            out.put("passthrough", false);
+            out.put("output", "");
+            if (conservative || Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return out;
+            AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+            if (am == null) return out;
+            AudioDeviceInfo[] devices = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS);
+            boolean any = false;
+            String output = "";
+            for (AudioDeviceInfo d : devices) {
+                if (d == null || !nativePassthroughAudioDevice(d)) continue;
+                int[] enc = d.getEncodings();
+                if (enc == null || enc.length == 0) continue;
+                if (output.isEmpty()) output = nativeAudioDeviceLabel(d);
+                boolean ac3 = nativeEncodingSupported(enc, AudioFormat.ENCODING_AC3);
+                boolean eac3 = nativeEncodingSupported(enc, AudioFormat.ENCODING_E_AC3);
+                boolean eac3Joc = nativeEncodingSupported(enc, AudioFormat.ENCODING_E_AC3_JOC);
+                boolean dts = nativeEncodingSupported(enc, AudioFormat.ENCODING_DTS);
+                boolean dtsHd = nativeEncodingSupported(enc, AudioFormat.ENCODING_DTS_HD);
+                boolean truehd = nativeEncodingSupported(enc, AudioFormat.ENCODING_DOLBY_TRUEHD);
+                out.put("ac3", out.optBoolean("ac3") || ac3);
+                out.put("eac3", out.optBoolean("eac3") || eac3 || eac3Joc);
+                out.put("eac3Joc", out.optBoolean("eac3Joc") || eac3Joc);
+                out.put("dts", out.optBoolean("dts") || dts || dtsHd);
+                out.put("dtsHd", out.optBoolean("dtsHd") || dtsHd);
+                out.put("truehd", out.optBoolean("truehd") || truehd);
+                any = any || ac3 || eac3 || eac3Joc || dts || dtsHd || truehd;
+            }
+            out.put("passthrough", any);
+            out.put("output", output);
+        } catch (Exception ignored) {}
+        return out;
+    }
+
+    private boolean nativePassthroughAudioDevice(AudioDeviceInfo d) {
+        if (d == null) return false;
+        int type = d.getType();
+        return type == AudioDeviceInfo.TYPE_HDMI
+                || type == AudioDeviceInfo.TYPE_HDMI_ARC
+                || type == AudioDeviceInfo.TYPE_HDMI_EARC;
+    }
+
+    private boolean nativeEncodingSupported(int[] encodings, int encoding) {
+        if (encodings == null) return false;
+        for (int e : encodings) if (e == encoding) return true;
+        return false;
+    }
+
+    private String nativeAudioDeviceLabel(AudioDeviceInfo d) {
+        if (d == null) return "";
+        int type = d.getType();
+        if (type == AudioDeviceInfo.TYPE_HDMI_EARC) return "eARC";
+        if (type == AudioDeviceInfo.TYPE_HDMI_ARC) return "ARC";
+        if (type == AudioDeviceInfo.TYPE_HDMI) return "HDMI";
+        return "";
     }
 
     private boolean nativeDecoderAvailable(String mime) {
@@ -2599,10 +2685,6 @@ public class MainActivity extends Activity {
         nativeNextBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) playNativeNextEpisode(); });
         centerControls.addView(nativeNextBtn);
 
-        nativeStatsBtn = nativeButton(R.drawable.ic_player_info, "Playback stats", false);
-        nativeStatsBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) showNativeStatsSheet(); });
-        rightControls.addView(nativeStatsBtn);
-
         nativeCcBtn = nativeButton(R.drawable.ic_player_cc, "Subtitles", false);
         nativeCcBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) showNativeTrackMenu(C.TRACK_TYPE_TEXT); });
         rightControls.addView(nativeCcBtn);
@@ -2614,6 +2696,10 @@ public class MainActivity extends Activity {
         nativeQualityBtn = nativeButton(R.drawable.ic_player_quality, "Quality", false);
         nativeQualityBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) showNativeQualityMenu(); });
         rightControls.addView(nativeQualityBtn);
+
+        nativeStatsBtn = nativeButton(R.drawable.ic_player_info, "Playback stats", false);
+        nativeStatsBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) showNativeStatsSheet(); });
+        rightControls.addView(nativeStatsBtn);
 
         controls.addView(leftControls, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
@@ -2649,7 +2735,7 @@ public class MainActivity extends Activity {
 
         nativeSheet = new LinearLayout(this);
         nativeSheet.setOrientation(LinearLayout.VERTICAL);
-        nativeSheet.setPadding(dp(12), dp(10), dp(12), dp(12));
+        nativeSheet.setPadding(dp(14), dp(12), dp(14), dp(14));
         nativeSheet.setBackground(nativePanelBg());
         nativeSheet.setFocusable(true);
         nativeSheet.setFocusableInTouchMode(true);
@@ -2658,9 +2744,9 @@ public class MainActivity extends Activity {
         nativeSheet.setVisibility(View.GONE);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) nativeSheet.setElevation(dp(10));
         FrameLayout.LayoutParams sheetLp = new FrameLayout.LayoutParams(
-                dp(280), ViewGroup.LayoutParams.WRAP_CONTENT,
+                dp(328), ViewGroup.LayoutParams.WRAP_CONTENT,
                 android.view.Gravity.END | android.view.Gravity.BOTTOM);
-        sheetLp.setMargins(0, 0, dp(38), dp(78));
+        sheetLp.setMargins(0, 0, dp(42), dp(96));
         nativePlayerLayer.addView(nativeSheet, sheetLp);
 
         nativeLoading = new FrameLayout(this);
@@ -2886,8 +2972,8 @@ public class MainActivity extends Activity {
                 GradientDrawable.Orientation.TOP_BOTTOM,
                 new int[]{0xE80B0812, 0xE812091D});
         d.setShape(GradientDrawable.RECTANGLE);
-        d.setCornerRadius(dp(12));
-        d.setStroke(dp(1), 0x22F3EFF7);
+        d.setCornerRadius(dp(16));
+        d.setStroke(dp(1), 0x2EF3EFF7);
         return d;
     }
 
@@ -3016,6 +3102,7 @@ public class MainActivity extends Activity {
             boolean guide = j.optBoolean("guide", false);
             boolean quietSeek = j.optBoolean("quietSeek", false);
             long knownDurationMs = Math.max(0L, Math.round(j.optDouble("duration", 0) * 1000));
+            long playbackSizeBytes = Math.max(0L, j.optLong("size", 0L));
             loadingStartOffsetMs = startOffsetMs;
             if (!guide) setPhonePlaybackOrientation(true);
             buildNativePlayerLayer();
@@ -3064,11 +3151,14 @@ public class MainActivity extends Activity {
             nativePlaybackTitle = title == null || title.isEmpty() ? "Triboon" : title;
             nativePlaybackSubline = episodeLabel == null ? "" : episodeLabel;
             nativePlaybackBackdropUrl = backdropUrl == null ? "" : backdropUrl;
+            nativePlaybackSizeBytes = playbackSizeBytes;
             nativeTriedFallback = false;
             nativeLiveUnhealthySinceMs = 0L;
             nativeLiveLastRecoveryMs = 0L;
             nativeLiveStarted = false;
             nativeVideoUnhealthySinceMs = 0L;
+            nativeVideoMemoryTrimmedDuringBuffer = false;
+            nativeVideoErrorNotified = false;
             nativeKnownDurationMs = knownDurationMs;
             nativePendingStartMs = "video".equals(mode) ? startMs : 0L;
             nativeStartSeekIssuedAtMs = 0L;
@@ -3173,19 +3263,19 @@ public class MainActivity extends Activity {
             nativePlayerView.setPlayer(nativePlayer);
             applyNativeTrackSelectionDefaults(isLiveMode);
             nativePlayerTitle.setText(title);
-            nativePlayerTitle.setVisibility(View.INVISIBLE);
-            if (nativeChromeTitle != null) nativeChromeTitle.setText(title);
+            nativePlayerTitle.setVisibility(View.VISIBLE);
+            if (nativeChromeTitle != null) nativeChromeTitle.setText("");
             String subline = isLiveMode ? "" : nativePlaybackSubline;
             if (nativeChromeSubline != null) {
-                nativeChromeSubline.setText(subline);
-                nativeChromeSubline.setVisibility(subline.isEmpty() ? View.GONE : View.VISIBLE);
+                nativeChromeSubline.setText("");
+                nativeChromeSubline.setVisibility(View.GONE);
             }
-            nativePlayerSubline.setText("");
-            nativePlayerSubline.setVisibility(View.GONE);
             String chromeQuality = isLiveMode ? "LIVE" : nativeQualityLabel;
+            nativePlayerSubline.setText(subline);
+            nativePlayerSubline.setVisibility(subline.isEmpty() ? View.GONE : View.VISIBLE);
             nativePlayerBadge.setText(chromeQuality);
-            nativePlayerBadge.setVisibility(View.GONE);
-            if (nativeChromeQuality != null) nativeChromeQuality.setText(chromeQuality);
+            nativePlayerBadge.setVisibility(View.VISIBLE);
+            if (nativeChromeQuality != null) nativeChromeQuality.setText("");
             if (nativeGuideBtn != null) nativeGuideBtn.setVisibility(View.VISIBLE);
             nativeNextBtn.setVisibility(hasNext ? View.VISIBLE : View.GONE);
             nativePlayerLayer.setVisibility(View.VISIBLE);
@@ -3245,7 +3335,7 @@ public class MainActivity extends Activity {
     private void showNativeChrome(boolean focusPlay) {
         if (nativeChrome == null) return;
         if (nativeControlShade != null) nativeControlShade.setVisibility(View.VISIBLE);
-        if (nativeMetaBar != null) nativeMetaBar.setVisibility(View.VISIBLE);
+        if (nativeMetaBar != null) nativeMetaBar.setVisibility(View.GONE);
         nativeChrome.setVisibility(View.VISIBLE);
         nativeTop.setVisibility(View.VISIBLE);
         setNativeSubtitleLift(true);
@@ -3596,7 +3686,7 @@ public class MainActivity extends Activity {
     private ImageButton[] nativeControlButtons() {
         return new ImageButton[]{
                 nativeGuideBtn, nativeRewBtn, nativePlayBtn, nativeFwdBtn,
-                nativeNextBtn, nativeStatsBtn, nativeCcBtn, nativeAudioBtn, nativeQualityBtn
+                nativeNextBtn, nativeCcBtn, nativeAudioBtn, nativeQualityBtn, nativeStatsBtn
         };
     }
 
@@ -4015,20 +4105,36 @@ public class MainActivity extends Activity {
     private DefaultLoadControl nativeLoadControlForMode(String mode) {
         boolean conservative = nativeConservativePlaybackDevice();
         boolean video = "video".equals(mode);
-        int minMs = video ? (conservative ? 16000 : 6000) : (conservative ? 8000 : 4000);
-        int maxMs = video ? (conservative ? 120000 : 60000) : 60000;
-        int startMs = video ? (conservative ? 3000 : 700) : (conservative ? 1800 : 700);
-        int rebufferMs = video ? (conservative ? 6000 : 1800) : (conservative ? 3500 : 1800);
-        int targetBytes = video
-                ? (conservative ? 96 : 192) * 1024 * 1024
-                : (conservative ? 36 : 64) * 1024 * 1024;
-        int backBufferMs = video ? (conservative ? 30000 : 60000) : 5000;
+        boolean heavyVod = video && nativeLikelyHeavyVod();
+        int minMs = video ? (conservative ? 12000 : (heavyVod ? 10000 : 6000)) : (conservative ? 8000 : 4000);
+        int maxMs = video ? (conservative ? 60000 : (heavyVod ? 45000 : 60000)) : 60000;
+        int startMs = video ? (conservative ? 2500 : 900) : (conservative ? 1800 : 700);
+        int rebufferMs = video ? (conservative ? 5000 : (heavyVod ? 2500 : 1800)) : (conservative ? 3500 : 1800);
+        int targetMb = video
+                ? (conservative ? 48 : (heavyVod ? 128 : 64))
+                : (conservative ? 24 : 48);
+        int targetBytes = targetMb * 1024 * 1024;
+        int backBufferMs = video ? (conservative ? 8000 : 12000) : 3000;
+        if (video) {
+            Log.i(TAG, "Native VOD buffer profile quality=" + nativeQualityLabel
+                    + " sizeMB=" + nativePlaybackSizeBytes / (1024 * 1024)
+                    + " conservative=" + conservative
+                    + " targetMB=" + targetMb
+                    + " maxMs=" + maxMs
+                    + " backBufferMs=" + backBufferMs);
+        }
         return new DefaultLoadControl.Builder()
                 .setBufferDurationsMs(minMs, maxMs, startMs, rebufferMs)
                 .setTargetBufferBytes(targetBytes)
                 .setBackBuffer(backBufferMs, false)
                 .setPrioritizeTimeOverSizeThresholds(true)
                 .build();
+    }
+
+    private boolean nativeLikelyHeavyVod() {
+        if (nativePlaybackSizeBytes >= 18L * 1024L * 1024L * 1024L) return true;
+        String label = nativeQualityLabel == null ? "" : nativeQualityLabel.toLowerCase(Locale.US);
+        return label.contains("2160") || label.contains("4k") || label.contains("uhd");
     }
 
     private void addNativeFallback(String url, String mime, String primaryUrl, String hostHeader) {
@@ -4117,6 +4223,8 @@ public class MainActivity extends Activity {
     }
 
     private void notifyNativeVideoError(String msg, long pos, long dur) {
+        if (nativeVideoErrorNotified) return;
+        nativeVideoErrorNotified = true;
         String title = nativePlaybackTitle;
         String backdropUrl = nativePlaybackBackdropUrl;
         String kind = nativeKind;
@@ -5034,9 +5142,9 @@ public class MainActivity extends Activity {
         TextView head = new TextView(this);
         head.setText(title);
         head.setTextColor(0xFFF9F4FF);
-        head.setTextSize(13);
+        head.setTextSize(14);
         head.setTypeface(Typeface.DEFAULT_BOLD);
-        head.setPadding(dp(6), 0, dp(6), dp(8));
+        head.setPadding(dp(8), 0, dp(8), dp(10));
         nativeSheet.addView(head, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -5065,17 +5173,17 @@ public class MainActivity extends Activity {
         TextView row = new TextView(this);
         row.setText(label);
         row.setTextColor(selected ? 0xFFF9F4FF : 0xDDF3EFF7);
-        row.setTextSize(11);
+        row.setTextSize(12);
         row.setTypeface(Typeface.DEFAULT_BOLD);
         row.setGravity(android.view.Gravity.CENTER_VERTICAL);
         row.setSingleLine(true);
         row.setFocusable(true);
         row.setClickable(true);
-        row.setPadding(dp(12), 0, dp(12), 0);
+        row.setPadding(dp(14), 0, dp(14), 0);
         row.setBackground(nativeSheetRowBg(false, selected));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(32));
-        lp.topMargin = dp(3);
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(38));
+        lp.topMargin = dp(5);
         row.setLayoutParams(lp);
         row.setOnFocusChangeListener((v, hasFocus) -> {
             v.setBackground(nativeSheetRowBg(hasFocus, selected));
@@ -5092,8 +5200,8 @@ public class MainActivity extends Activity {
                         : selected
                         ? new int[]{0x553A1647, 0x44281436}
                         : new int[]{0x1812091D, 0x2212091D});
-        d.setCornerRadius(dp(8));
-        d.setStroke(dp(1), focused ? 0x77F3EFF7 : selected ? 0x55F3EFF7 : 0x00000000);
+        d.setCornerRadius(dp(11));
+        d.setStroke(dp(1), focused ? 0x88F3EFF7 : selected ? 0x55FFC65C : 0x16F3EFF7);
         return d;
     }
 
@@ -5110,9 +5218,20 @@ public class MainActivity extends Activity {
 
     private String nativeBitrateLabel(int bitrate) {
         if (bitrate <= 0) return "";
-        return bitrate >= 1_000_000
-                ? String.format(Locale.US, "%.1f Mbps", bitrate / 1_000_000.0)
-                : Math.round(bitrate / 1000.0) + " kbps";
+        double mbps = bitrate / 1_000_000.0;
+        return mbps >= 10
+                ? Math.round(mbps) + " Mbps"
+                : String.format(Locale.US, "%.1f Mbps", mbps);
+    }
+
+    private String nativeFileSizeLabel(long bytes) {
+        if (bytes <= 0) return "";
+        double n = bytes;
+        if (n >= 1099511627776.0) return String.format(Locale.US, "%.2f TB", n / 1099511627776.0);
+        if (n >= 1073741824.0) return String.format(Locale.US, "%.2f GB", n / 1073741824.0);
+        if (n >= 1048576.0) return String.format(Locale.US, "%.1f MB", n / 1048576.0);
+        if (n >= 1024.0) return Math.round(n / 1024.0) + " KB";
+        return bytes + " B";
     }
 
     private String nativeVideoStatsLabel(Format f) {
@@ -5162,6 +5281,7 @@ public class MainActivity extends Activity {
             j.put("kind", nativeKind == null ? "" : nativeKind);
             j.put("quality", nativeQualityLabel == null ? "" : nativeQualityLabel);
             j.put("title", nativePlaybackTitle == null ? "" : nativePlaybackTitle);
+            j.put("size", nativePlaybackSizeBytes);
             j.put("video", nativeVideoStatsLabel(video));
             j.put("audio", nativeAudioStatsLabel(audio));
             j.put("bufferedSec", Math.round(nativeBufferedAheadMs() / 1000.0));
@@ -5179,6 +5299,7 @@ public class MainActivity extends Activity {
         rows.add("Mode: " + mode);
         rows.add("Path: " + (nativeKind == null || nativeKind.isEmpty() ? "direct" : nativeKind));
         rows.add("Quality: " + (nativeQualityLabel == null || nativeQualityLabel.isEmpty() ? "Auto" : nativeQualityLabel));
+        rows.add("Size: " + (nativePlaybackSizeBytes > 0 ? nativeFileSizeLabel(nativePlaybackSizeBytes) : "Unknown"));
         String video = nativeVideoStatsLabel(nativeSelectedFormat(C.TRACK_TYPE_VIDEO));
         String audio = nativeAudioStatsLabel(nativeSelectedFormat(C.TRACK_TYPE_AUDIO));
         rows.add("Video: " + (video.isEmpty() ? "Detecting" : video));
@@ -5186,7 +5307,7 @@ public class MainActivity extends Activity {
         long buffered = nativeBufferedAheadMs();
         rows.add("Buffered: " + (buffered > 0 ? Math.round(buffered / 1000.0) + "s ahead" : "Detecting"));
         long bw = nativeBandwidthEstimate();
-        rows.add("Bandwidth: " + (bw > 0 ? Math.round(bw / 1000.0) + " kbps" : "Detecting"));
+        rows.add("Bandwidth: " + (bw > 0 ? nativeBitrateLabel((int) Math.min(Integer.MAX_VALUE, bw)) : "Detecting"));
         return rows.toArray(new String[0]);
     }
 
@@ -5258,12 +5379,34 @@ public class MainActivity extends Activity {
             nativeVideoStarted = true;
             rememberNativeVideoPosition();
             nativeVideoUnhealthySinceMs = 0L;
+            nativeVideoMemoryTrimmedDuringBuffer = false;
             return;
         }
-        // After the first ready frame, normal ExoPlayer rebuffering is playback, not startup
-        // failure. Let Exo keep buffering instead of bouncing through the fallback ladder.
         if (nativeVideoStarted) {
-            nativeVideoUnhealthySinceMs = 0L;
+            boolean waitingForData = state == Player.STATE_BUFFERING
+                    || (nativePlayer.getPlayWhenReady() && !nativePlayer.isPlaying() && nativePlayer.isLoading());
+            boolean unhealthy = state == Player.STATE_IDLE || waitingForData;
+            if (!unhealthy) {
+                nativeVideoUnhealthySinceMs = 0L;
+                nativeVideoMemoryTrimmedDuringBuffer = false;
+                return;
+            }
+            long now = SystemClock.elapsedRealtime();
+            if (nativeVideoUnhealthySinceMs <= 0L) {
+                nativeVideoUnhealthySinceMs = now;
+                return;
+            }
+            long elapsed = now - nativeVideoUnhealthySinceMs;
+            if (!nativeVideoMemoryTrimmedDuringBuffer && elapsed >= NATIVE_VIDEO_REBUFFER_TRIM_MS) {
+                nativeVideoMemoryTrimmedDuringBuffer = true;
+                Log.w(TAG, "Native VOD rebuffer still waiting after " + elapsed + "ms; trimming UI caches");
+                trimAndroidMemoryCaches(false);
+            }
+            if (elapsed >= NATIVE_VIDEO_REBUFFER_RECOVERY_MS) {
+                Log.w(TAG, "Native VOD rebuffer stalled after " + elapsed + "ms; retrying same source");
+                notifyNativeVideoError(state == Player.STATE_IDLE ? "native player idle" : "native rebuffer stalled",
+                        nativePosSeconds(), nativeDurSeconds());
+            }
             return;
         }
         boolean unhealthy = state == Player.STATE_IDLE || state == Player.STATE_BUFFERING
@@ -5306,10 +5449,15 @@ public class MainActivity extends Activity {
         long dur = nativeDurSeconds();
         boolean guideMode = nativeGuideMode;
         nativeGuideMode = preserveGuideMode && guideMode;
-        if (nativePlayer != null) {
-            nativePlayerView.setPlayer(null);
-            nativePlayer.release();
-            nativePlayer = null;
+        ExoPlayer player = nativePlayer;
+        nativePlayer = null;
+        if (player != null) {
+            if (nativePlayerView != null) nativePlayerView.setPlayer(null);
+            try {
+                player.release();
+            } catch (RuntimeException e) {
+                Log.w(TAG, "Native player release ignored: " + e.getClass().getSimpleName());
+            }
         }
         nativeMode = "";
         nativeKind = "direct";
@@ -5333,6 +5481,7 @@ public class MainActivity extends Activity {
         nativeLiveLastRecoveryMs = 0L;
         nativeLiveStarted = false;
         nativeVideoUnhealthySinceMs = 0L;
+        nativeVideoMemoryTrimmedDuringBuffer = false;
         nativeVideoStarted = false;
         nativeLastVideoDisplayMs = 0L;
         nativeLastStatsMs = 0L;

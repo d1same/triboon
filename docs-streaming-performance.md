@@ -116,10 +116,16 @@ usable = floor(totalProviderConnections * 0.85)
 reserve = ceil(usable * startupReservePct)
 perStreamBudget = floor((usable - reserve) / activeMounts)
 targetReadAhead = min(configured per-stream cap, perStreamBudget)
-targetCache = max(targetReadAhead * 4, 48 or 80 segments)
+targetCache = max(targetReadAhead * 3, 36 or 48 segments)
+targetCacheBytes = 48-96 MB for 1080p-class, 96-192 MB for 4K-class,
+  divided down as active mounts increase
 ```
 
 Large files use the 4K window; smaller files use the 1080p window.
+The segment window decides how many decoded articles can stay hot; the byte
+window is the hard memory guard. Do not tune one without the other: NNTP article
+segments are not a fixed size, so a segment-only cache can be safe on one
+release and dangerous on a large 4K remux.
 
 This keeps hot streams buffered while preserving connection room for another
 user's first frame or seek. A future disk-backed multi-minute buffer is allowed,
@@ -173,7 +179,7 @@ Before changing performance behavior, check:
 1. Provider settings still round-trip high connection counts.
 2. Multiple providers keep individual caps and combine in capacity output.
 3. Startup/seek work still outranks queued read-ahead.
-4. Read-ahead shrinks when active mounts increase.
+4. Read-ahead and decoded-cache byte budgets shrink when active mounts increase.
 5. Health probes remain bounded and lower priority than active playback.
 6. `/api/status` and Settings show the same runtime profile.
 7. Docs remain aligned: this file, `docs-architecture.md`, `docs-player-regression-map.md`, `README.md`, and `bench/RESULTS.md`.
@@ -197,6 +203,8 @@ not wait behind background read-ahead.
 - Do not hardcode "16 warm connections" as the runtime rule. That was a useful
   2026-06-10 Easynews benchmark, not the current capacity model.
 - Do not let read-ahead use every provider connection.
+- Do not cap playback cache by segment count alone; large 4K articles must have
+  a decoded-byte budget too.
 - Do not treat total provider connections as available playback connections;
   keep usable and reserve budgets.
 - Do not add a server runtime npm dependency for this area without owner

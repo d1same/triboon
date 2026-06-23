@@ -8,8 +8,10 @@ const { decode } = require('./yenc');
 const { parseNzb, pickPrimaryFile, fileNameFromSubject } = require('./nzb');
 const crypto = require('crypto');
 
+const DEFAULT_CACHE_BYTES = 128 * 1024 * 1024;
+
 class NzbFileStream {
-  constructor(pool, fileEntry, { readAhead = 4, cacheSegments = 24 } = {}) {
+  constructor(pool, fileEntry, { readAhead = 4, cacheSegments = 24, cacheBytes = DEFAULT_CACHE_BYTES } = {}) {
     this.pool = pool;
     this.file = fileEntry;
     this.name = fileNameFromSubject(fileEntry.subject);
@@ -21,6 +23,8 @@ class NzbFileStream {
     this.cache = new Map(); // segIndex -> Buffer (decoded)
     this.cacheOrder = [];
     this.cacheMax = cacheSegments;
+    this.cacheMaxBytes = Number.isFinite(cacheBytes) && cacheBytes > 0 ? cacheBytes : DEFAULT_CACHE_BYTES;
+    this.cacheBytes = 0;
     this.inflight = new Map(); // segIndex -> Promise<Buffer>
     this.readAheadEpoch = 0;
     this.health = { verdict: 'unverified', checkedAt: null, missing: 0, sampled: 0 };
@@ -42,11 +46,26 @@ class NzbFileStream {
 
   _cachePut(i, buf) {
     if (this.cache.has(i)) return;
+    if (this.cache.size === 0 && this.cacheOrder.length === 0 && this.cacheBytes !== 0) {
+      this.cacheBytes = 0;
+    }
     this.cache.set(i, buf);
+    this.cacheBytes += buf.length;
     this.cacheOrder.push(i);
-    while (this.cacheOrder.length > this.cacheMax) {
-      const evict = this.cacheOrder.shift();
-      this.cache.delete(evict);
+    this.trimCache();
+  }
+
+  _cacheDrop(i) {
+    const old = this.cache.get(i);
+    if (!old) return;
+    this.cache.delete(i);
+    this.cacheBytes = Math.max(0, this.cacheBytes - old.length);
+  }
+
+  trimCache() {
+    while (this.cacheOrder.length > 1
+        && (this.cacheOrder.length > this.cacheMax || this.cacheBytes > this.cacheMaxBytes)) {
+      this._cacheDrop(this.cacheOrder.shift());
     }
   }
 

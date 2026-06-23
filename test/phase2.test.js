@@ -89,6 +89,28 @@ test('scoring: explicit 1080p/4K picks choose the matching source class', () => 
   assert.ok(capped[0].name.includes('1080p'), 'cap still wins over preference');
 });
 
+test('scoring: Atmos/TrueHD remuxes are preferred only for capable passthrough devices', () => {
+  const releases = [
+    { name: 'Movie.2024.2160p.UHD.BluRay.REMUX.TrueHD.Atmos.HEVC-FraMeSToR', sizeBytes: 20e9 },
+    { name: 'Movie.2024.2160p.WEB-DL.DDP5.1.Atmos.HEVC-FLUX', sizeBytes: 15e9 },
+  ];
+  const plain = rankReleases(releases.map((r) => ({ ...r })), { maxResolutionRank: 4 });
+  assert.ok(plain[0].name.includes('WEB-DL'), 'without passthrough, the safer DDP WEB-DL wins');
+  const capable = rankReleases(releases.map((r) => ({ ...r })), {
+    maxResolutionRank: 4,
+    audioPassthrough: true,
+    audioTrueHd: true,
+  });
+  assert.ok(capable[0].name.includes('REMUX.TrueHD.Atmos'), 'TrueHD passthrough devices can prefer the lossless Atmos remux');
+  const budget = rankReleases(releases.map((r) => ({ ...r })), {
+    maxResolutionRank: 4,
+    lowPowerDevice: true,
+    audioPassthrough: true,
+    audioTrueHd: true,
+  });
+  assert.ok(budget[0].name.includes('WEB-DL'), 'budget devices stay conservative even if a broad passthrough flag appears');
+});
+
 test('scoring: soundtracks, bonus discs and bare audio rips are disqualified outright', () => {
   // Both top names are the REAL releases that bit users: the soundtrack album auto-played
   // for a film with no video releases yet, and the bonus disc outranked the actual movie.
@@ -862,7 +884,7 @@ test('pipeline e2e: ranks, skips dead + unstreamable candidates, plays the good 
   // Scoring must order: dead (remux, trusted) > comp (bluray) > good (webrip) so the
   // pipeline walks all three and ends on good.
   const ix = makeMockIndexer([
-    { name: 'Movie.2024.1080p.BluRay.REMUX.TrueHD-FraMeSToR', size: 9e9, nzb: dead.nzb },
+    { name: 'Movie.2024.1080p.BluRay.REMUX.DDP5.1-FraMeSToR', size: 9e9, nzb: dead.nzb },
     { name: 'Movie.2024.1080p.BluRay.x264.DTS-FGT', size: 8e9, nzb: comp.nzb },
     { name: 'Movie.2024.1080p.WEBRip.x264-GECKOS', size: 7e9, nzb: good.nzb },
   ]);
@@ -889,11 +911,12 @@ test('pipeline e2e: ranks, skips dead + unstreamable candidates, plays the good 
   assert.match(session.history[0].outcome, /missing|mount|nzb/);
   assert.match(session.history[1].outcome, /unstreamable/);
   assert.ok(elapsed < 5000, `pipeline under the 5s cold budget (took ${elapsed}ms)`);
-  // Playback read-ahead boost: streamable mounts leave the conservative default behind so
-  // the buffer runs ahead of the player (4 GB+ releases get an even bigger window).
+  // Playback read-ahead boost: streamable mounts leave the conservative default behind, while
+  // decoded segment retention stays byte-capped so large 4K posts cannot balloon memory.
   for (const v of (vf.vols || [vf])) {
     assert.strictEqual(v.readAhead, 12, 'playback mount read-ahead boosted');
-    assert.strictEqual(v.cacheMax, 48, 'playback mount cache window boosted');
+    assert.strictEqual(v.cacheMax, 36, 'playback mount cache window boosted without retaining too many decoded segments');
+    assert.strictEqual(v.cacheMaxBytes, 96 * 1024 * 1024, 'playback mount cache byte budget set');
   }
 
   // Bytes are the proof: stream the mounted result and compare.

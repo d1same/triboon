@@ -371,9 +371,10 @@ class Pipeline {
       return { fail: `sample file picked (${vf.name})`, vf };
     }
 
-    // Playback read-ahead: keep a generous window of segments in flight AHEAD of the player
+    // Playback read-ahead: keep work ahead of the player, but bound retained decoded bytes.
     // so the buffer outruns the bitrate — 4K-class releases (>4 GB) get the biggest window.
-    // (The mount default stays small: triage/header peeks must not flood the pool.)
+    // Segment sizes vary by release; the mount default stays small so triage/header peeks
+    // never flood the pool.
     const big = (vf.size || 0) > 4e9;
     const perf = this.performance() || {};
     const activeMounts = [...this.mounts.values()].filter((m) => Date.now() - (m._touched || 0) < 120000).length + 1;
@@ -382,10 +383,15 @@ class Pipeline {
     const perStreamBudget = usable > reserve ? Math.max(4, Math.floor((usable - reserve) / Math.max(1, activeMounts))) : Infinity;
     const configuredWindow = big ? (perf.maxConnPerStream4k || 20) : (perf.maxConnPerStream1080 || 12);
     const targetReadAhead = Math.max(4, Math.min(configuredWindow, perStreamBudget));
-    const targetCache = Math.max(targetReadAhead * 4, big ? 80 : 48);
+    const targetCache = Math.max(targetReadAhead * 3, big ? 48 : 36);
+    const targetCacheBytes = big
+      ? Math.max(96, Math.floor(192 / Math.max(1, activeMounts))) * 1024 * 1024
+      : Math.max(48, Math.floor(96 / Math.max(1, activeMounts))) * 1024 * 1024;
     for (const v of (vf.vols || [vf])) {
       v.readAhead = targetReadAhead;
       v.cacheMax = targetCache;
+      v.cacheMaxBytes = targetCacheBytes;
+      if (typeof v.trimCache === 'function') v.trimCache();
     }
 
     // Bounded gate: verdict within 500ms or we play anyway and keep checking in background.

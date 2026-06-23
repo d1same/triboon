@@ -120,6 +120,11 @@ Rules that must not drift:
 - The Sources drawer and the Play button share the same title verification and
   ranking path; manual source selection must mount the chosen release.
 - Android capability claims come from the native bridge, not WebView guesses.
+  Video caps are decoder-based, but HD-audio passthrough caps must come from
+  the active HDMI/ARC/eARC audio output encodings. TrueHD/Atmos/DTS-HD releases
+  are preferred and direct-played only when the current native device reports
+  matching passthrough support; budget devices and browsers keep the safer
+  WEB-sized/remux-to-AAC path.
 - After ExoPlayer reaches READY, normal buffering must not remount or restart
   a movie from the beginning.
 - Continue Watching follows `docs-continue-watching.md`: one canonical Home card
@@ -241,9 +246,9 @@ Playback contract:
   delete cleanup path as shared playlists. Stream URLs bind both the channel
   position and source-scoped channel id so a stale channel cache cannot drift to
   another user's source.
-- Android TV tries native provider-compatible URLs first. Xtream prefers TS,
-  with HLS as fallback, then the server remux path for devices that cannot
-  handle the provider stream directly.
+- Android TV/mobile tries native provider-compatible HLS/MPEG-TS URLs first.
+  Xtream prefers TS, with HLS as fallback, then the server stereo-AAC fMP4 remux
+  path for devices or providers that cannot hold the native stream directly.
 - Android TV can also hold personal IPTV sources in the native app. Those
   sources are loaded by `MainActivity.java` from the Android device network,
   merged into `web/index.html` Live TV rows, and played directly by ExoPlayer.
@@ -327,9 +332,15 @@ When changing persistence, update:
 
 - Owns native Media3/ExoPlayer playback for VOD and Live TV. The fullscreen
   path uses a `SurfaceView` player surface, decoder fallback, closest-sync
-  seeks, seeded bandwidth, bounded/back buffers, live target-offset tuning,
-  conservative-device HLS caps, and audio offload where Android supports it.
-- Sends native capability claims to the web UI/server before source selection.
+  seeks, seeded bandwidth, byte-bounded VOD buffers, short back buffers, live
+  target-offset tuning, conservative-device HLS caps, and audio offload where
+  Android supports it. Sustained post-start VOD stalls trim UI caches and retry
+  the same source at the last trustworthy timestamp instead of silently
+  switching release or quality.
+- Sends native capability claims to the web UI/server before source selection,
+  including HDMI/ARC/eARC audio-output passthrough flags for AC3, E-AC3, E-AC3
+  JOC, DTS, DTS-HD, and TrueHD. Conservative/budget device detection is allowed
+  to suppress HD-audio passthrough even when a codec appears in MediaCodec.
 - Sends native playback stats back to the web UI during ExoPlayer playback and
   exposes the stable GitHub APK aliases through a guarded update-link bridge.
 - Shows a native setup/compatibility screen before loading the WebView, refuses
