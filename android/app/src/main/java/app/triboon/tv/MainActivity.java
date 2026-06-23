@@ -252,6 +252,7 @@ public class MainActivity extends Activity {
     private boolean nativeVideoMemoryTrimmedDuringBuffer;
     private boolean nativeVideoErrorNotified;
     private long nativeLastVideoDisplayMs;
+    private long nativeLastAutoResumeSeekMs;
     private long nativeLastStatsMs;
     private static final long NATIVE_VIDEO_STARTUP_STALL_MS = 7000L;
     private static final long NATIVE_VIDEO_REBUFFER_TRIM_MS = 15000L;
@@ -3233,6 +3234,7 @@ public class MainActivity extends Activity {
             nativeStartOffsetMs = "video".equals(mode) ? startOffsetMs : 0L;
             nativeVideoStarted = false;
             nativeLastVideoDisplayMs = "video".equals(mode) ? Math.max(startMs, startOffsetMs) : 0L;
+            nativeLastAutoResumeSeekMs = 0L;
             nativeHasNext = hasNext;
             nativeHasQualityChoices = hasQualityChoices;
             nativeSubtitleShift = (float) j.optDouble("subtitleShift", nativeShiftFromUrl(subtitleUrl));
@@ -3524,6 +3526,19 @@ public class MainActivity extends Activity {
     private void rememberNativeVideoPosition() {
         if (!"video".equals(nativeMode) || nativePlayer == null) return;
         long pos = nativeDisplayPositionMs();
+        if (nativeServerSeekMode() && nativeVideoStarted && nativeLastVideoDisplayMs > 0L) {
+            long backwardsBy = nativeLastVideoDisplayMs - pos;
+            if (backwardsBy > 5000L) {
+                long now = SystemClock.elapsedRealtime();
+                if (nativeLastAutoResumeSeekMs <= 0L || now - nativeLastAutoResumeSeekMs >= 1500L) {
+                    nativeLastAutoResumeSeekMs = now;
+                    Log.w(TAG, "Native VOD segment jumped back by " + backwardsBy
+                            + "ms; resuming same source at " + nativeLastVideoDisplayMs + "ms");
+                    requestNativeVideoSeek(nativeLastVideoDisplayMs);
+                }
+                return;
+            }
+        }
         if (pos > 0L) nativeLastVideoDisplayMs = pos;
     }
 

@@ -1739,6 +1739,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native movie resume should keep the requested start time until ExoPlayer is ready');
   assert.match(android, /private long nativeDisplayPositionMs\(\) \{[\s\S]+nativeStartOffsetMs \+ nativeRawPositionMs\(\)[\s\S]+private void nativeSeekToDisplayPosition\(long displayMs\) \{[\s\S]+nativePlayer\.seekTo\(Math\.max\(0L, target - nativeStartOffsetMs\)\)/,
     'native remux/transcode playback should display and save absolute movie time while seeking inside the restarted segment');
+  assert.match(android, /private long nativeLastAutoResumeSeekMs;[\s\S]+nativeLastAutoResumeSeekMs = 0L;[\s\S]+private void rememberNativeVideoPosition\(\) \{[\s\S]+nativeServerSeekMode\(\)[\s\S]+nativeLastVideoDisplayMs - pos[\s\S]+backwardsBy > 5000L[\s\S]+requestNativeVideoSeek\(nativeLastVideoDisplayMs\)/,
+    'native remux/transcode playback should recover same-source segment restarts at the last absolute movie time');
   assert.match(ui, /function seekTo\(seconds\) \{[\s\S]+p\.suppressSeekLoaderUntil = appMs\(\) \+ 4500;[\s\S]+clearTimeout\(S\._waitT\);[\s\S]+\$\(\'playerLoader\'\)\.classList\.remove\(\'show\'\);[\s\S]+startSource\('transcode', seconds, \{ quietSeek: true \}\)[\s\S]+startSource\('remux', seconds, \{ quietSeek: true \}\)/,
     'web movie/episode seeking should not show the full startup loader during repeated skips');
   assert.match(ui, /<canvas id="seekHold" aria-hidden="true"><\/canvas>[\s\S]+function showSeekHoldFrame\(\) \{[\s\S]+drawImage\(v, 0, 0, c\.width, c\.height\);[\s\S]+c\.classList\.add\('show'\);/,
