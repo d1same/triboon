@@ -2056,8 +2056,12 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'dead hidden mini-player bar and its focus/control wiring should not ship');
   assert.match(ui, /--safeT:max\(env\(safe-area-inset-top\),0px\);[\s\S]+--overscan:0px;[\s\S]+body\.tv\{--bdW:[^}]+--overscan:2\.5vmin\}/,
     'TV and mobile chrome should reserve safe-area/overscan space');
-  assert.match(ui, /--appClockReserve:168px;[\s\S]+--appClockClear:72px;[\s\S]+\.browseHead\{[\s\S]+margin-top:clamp\(38px,7vh,var\(--appClockClear\)\);[\s\S]+padding-right:calc\(var\(--appClockReserve\) \+ var\(--safeR\) \+ var\(--overscan\)\);[\s\S]+#browse \.browseHead\{[^}]+padding-right:0/,
-    'browse genre/sort controls should reserve the fixed clock corner and drop cleanly on small screens');
+  assert.ok(ui.includes('--appClockReserve:144px;')
+    && ui.includes('.browseHead .filterBar{position:fixed;top:calc(18px + var(--safeT) + var(--overscan));right:calc(var(--appClockReserve) + var(--safeR) + var(--overscan));z-index:22')
+    && ui.includes('body.railOpen .browseHead{transform:translateX(-152px)}')
+    && ui.includes('#browse .browseHead{margin-left:48px;margin-top:8px;margin-bottom:12px;justify-content:flex-start;padding-right:0}')
+    && ui.includes('body.mobileShell #browse .filterBar{position:static;top:auto;right:auto;z-index:auto;flex-wrap:wrap;max-width:100%}'),
+    'browse genre/sort controls should sit beside the fixed clock on desktop while dropping cleanly on phone shells');
   assert.match(ui, /function clearPlaybackTimers\(\) \{[\s\S]+S\.healthTimer[\s\S]+S\.watchTimer[\s\S]+\}/,
     'health/watch timers should clear through one shared player cleanup path');
   assert.match(ui, /<div id="railMain">[\s\S]+<div id="railLibs"><\/div>[\s\S]+<\/div>\s+<div id="railFooter">[\s\S]+id="railAddLib"[\s\S]+id="navPrefs"[\s\S]+id="navSettings"[\s\S]+id="railUser" class="railBtn focusable"/,

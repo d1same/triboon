@@ -36,7 +36,7 @@
   --safeB:max(env(safe-area-inset-bottom),0px);
   --safeL:max(env(safe-area-inset-left),0px);
   --overscan:0px;
-  --appClockReserve:168px;
+  --appClockReserve:144px;
   --appClockClear:72px;
 }
 /* Rail push uses TRANSFORM (compositor-only, buttery on TV) — animating --rail/left forced
@@ -1052,13 +1052,19 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 /* Browse page titles are redundant chrome — the rail marks where you are and backdrops own
    the space. Discover stays row-first, so its title remains visible. */
 #browseTitle{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
-/* Browse filters and the fixed clock share the top-right corner. Reserve that corner so
-   genre/sort controls never slide under the clock on 720p/TV/tablet-width screens. */
+/* Browse filters are top chrome now: pinned just left of the fixed clock instead of
+   floating over the backdrop/title band. */
 .browseHead{
-  justify-content:flex-end;
-  margin-top:clamp(38px,7vh,var(--appClockClear));
-  padding-right:calc(var(--appClockReserve) + var(--safeR) + var(--overscan));
+  justify-content:flex-start;
+  margin-top:0;
+  margin-bottom:0;
+  padding-right:0;
   box-sizing:border-box;
+}
+@media (min-width:601px){
+  .browseHead .filterBar{position:fixed;top:calc(18px + var(--safeT) + var(--overscan));right:calc(var(--appClockReserve) + var(--safeR) + var(--overscan));z-index:22;flex-wrap:nowrap;max-width:calc(100vw - var(--rail) - var(--appClockReserve) - 72px)}
+  .browseHead .filterBar select{min-width:154px}
+  .browseHead .filterBar #sortSel{min-width:164px}
 }
 /* The rail push slid the right-anchored dropdowns off the screen edge — counter-translate
    the head on the same clock so the filters stay exactly put while the page slides. */
@@ -1160,6 +1166,8 @@ body.mobileShell #heroBtns .btn svg{width:15px;height:15px;flex:0 0 auto}
 body.mobileShell #rows{max-height:calc(100vh - 176px);gap:14px}
 body.mobileShell #browse.rowsWin #grid{flex:1!important;max-height:none!important;margin-top:0!important}
 body.mobileShell #browse .browseHead{margin-left:48px;margin-top:8px;margin-bottom:12px;justify-content:flex-start;padding-right:0}
+body.mobileShell #browse .filterBar{position:static;top:auto;right:auto;z-index:auto;flex-wrap:wrap;max-width:100%}
+body.mobileShell #browse .filterBar select{min-width:0}
 body.mobileShell #browse{padding-top:62px!important}
 body.mobileShell #grid{gap:18px 12px;padding-top:0}
 body.mobileShell #discover{padding-top:62px!important}
