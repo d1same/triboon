@@ -71,6 +71,24 @@ Source of truth in code:
 | Segment fetch priority | `server/vfs.js`, `server/archive.js` |
 | Settings UI | `web/index.html` Streaming performance card |
 
+## Live TV Startup And Retune
+
+Live TV has a separate rule from VOD: a silent or rejected provider channel must
+fail quickly and release its socket, because the user is usually channel
+surfing. The browser route (`/api/iptv/stream/:idx`) remuxes with ffmpeg for
+web playback, while Android uses `/api/iptv/native/:idx` and ExoPlayer.
+
+- Channel lists load as lean metadata first; playback URLs are minted only when
+  the user presses Play.
+- Browser remux prefers HLS when present, keeps one total first-byte startup
+  deadline, and does not refresh huge Xtream playlists inside a failing player
+  request.
+- Native IPTV proxy has its own first-byte timeout and returns a clean player
+  error instead of hanging forever.
+- The local HTTP server disables socket reuse for app/player requests so
+  cancelled playback cannot leave half-closed sockets that make the app look
+  like it is "still waking up."
+
 ## Provider Combining
 
 Multiple usenet accounts add capacity, but each account keeps its own

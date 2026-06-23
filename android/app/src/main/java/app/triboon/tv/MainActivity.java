@@ -4089,7 +4089,9 @@ public class MainActivity extends Activity {
                 .setAllowCrossProtocolRedirects(false)
                 .setUserAgent("TriboonTV/" + BuildConfig.VERSION_NAME)
                 .setConnectTimeoutMs(12000)
-                .setReadTimeoutMs("live".equals(nativeMode) ? NATIVE_LIVE_READ_TIMEOUT_MS : 18000);
+                .setReadTimeoutMs("live".equals(nativeMode)
+                        ? NATIVE_LIVE_READ_TIMEOUT_MS
+                        : (nativeLikelyHeavyVod() ? 45000 : 18000));
         nativeHttpDataSourceFactory = http;
         applyNativeHttpHostHeader();
         return new DefaultMediaSourceFactory(http);
@@ -4106,15 +4108,15 @@ public class MainActivity extends Activity {
         boolean conservative = nativeConservativePlaybackDevice();
         boolean video = "video".equals(mode);
         boolean heavyVod = video && nativeLikelyHeavyVod();
-        int minMs = video ? (conservative ? 12000 : (heavyVod ? 10000 : 6000)) : (conservative ? 8000 : 4000);
-        int maxMs = video ? (conservative ? 60000 : (heavyVod ? 45000 : 60000)) : 60000;
-        int startMs = video ? (conservative ? 2500 : 900) : (conservative ? 1800 : 700);
-        int rebufferMs = video ? (conservative ? 5000 : (heavyVod ? 2500 : 1800)) : (conservative ? 3500 : 1800);
+        int minMs = video ? (conservative ? (heavyVod ? 18000 : 12000) : (heavyVod ? 24000 : 6000)) : (conservative ? 8000 : 4000);
+        int maxMs = video ? (conservative ? (heavyVod ? 90000 : 60000) : (heavyVod ? 180000 : 60000)) : 60000;
+        int startMs = video ? (conservative ? (heavyVod ? 3500 : 2500) : (heavyVod ? 2500 : 900)) : (conservative ? 1800 : 700);
+        int rebufferMs = video ? (conservative ? (heavyVod ? 7000 : 5000) : (heavyVod ? 6000 : 1800)) : (conservative ? 3500 : 1800);
         int targetMb = video
-                ? (conservative ? 48 : (heavyVod ? 128 : 64))
+                ? (conservative ? (heavyVod ? 96 : 48) : (heavyVod ? 384 : 64))
                 : (conservative ? 24 : 48);
         int targetBytes = targetMb * 1024 * 1024;
-        int backBufferMs = video ? (conservative ? 8000 : 12000) : 3000;
+        int backBufferMs = video ? (conservative ? (heavyVod ? 15000 : 8000) : (heavyVod ? 30000 : 12000)) : 3000;
         if (video) {
             Log.i(TAG, "Native VOD buffer profile quality=" + nativeQualityLabel
                     + " sizeMB=" + nativePlaybackSizeBytes / (1024 * 1024)

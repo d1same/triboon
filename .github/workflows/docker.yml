@@ -21,9 +21,8 @@ jobs:
           node-version: 24
       # ffmpeg unlocks the remux/transcode tests (they self-skip without it).
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
-      # Release gate: engine/archive/player/IPTV/subtitle coverage. The legacy security
-      # harness is tracked separately because it can hang and block Docker publishing.
-      - run: node --test test/e2e.test.js test/archive.test.js test/phase2.test.js test/phase4.test.js test/iptv-cache.test.js
+      # Release gate: engine/archive/player/IPTV/subtitle/security/library coverage.
+      - run: npm test
 
   docker:
     needs: test

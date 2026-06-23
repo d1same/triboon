@@ -59,7 +59,19 @@ class LibraryDb {
 
   close() {
     if (!this.db) return;
+    this.checkpoint();
     try { this.db.close(); } catch {}
+  }
+
+  checkpoint() {
+    if (!this.available || !this.db) return false;
+    try {
+      this.db.exec('PRAGMA wal_checkpoint(TRUNCATE); PRAGMA optimize;');
+      return true;
+    } catch (e) {
+      this.error = e;
+      return false;
+    }
   }
 
   _parsePayload(row) {
@@ -117,6 +129,7 @@ class LibraryDb {
         );
       }
       this.db.exec('COMMIT');
+      this.checkpoint();
       return true;
     } catch (e) {
       try { this.db.exec('ROLLBACK'); } catch {}
@@ -130,6 +143,7 @@ class LibraryDb {
     try {
       this.db.prepare('DELETE FROM library_items WHERE lib_id = ?').run(libId);
       this.db.prepare('DELETE FROM library_meta WHERE lib_id = ?').run(libId);
+      this.checkpoint();
       return true;
     } catch (e) { this.error = e; return false; }
   }

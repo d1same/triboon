@@ -568,10 +568,10 @@ test('subtitle startup preference contract: always mode applies online captions 
 
 test('Live TV startup warm is delayed so app login and first playback stay responsive', () => {
   const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
-  assert.match(server, /const IPTV_STARTUP_WARM_DELAY_MS = Math\.max\(30000, Math\.min\(10 \* 60000, Number\(process\.env\.TRIBOON_IPTV_STARTUP_WARM_DELAY_MS \|\| 120000\)\)\);/,
+  assert.match(server, /const IPTV_STARTUP_WARM_DELAY_MS = Math\.max\(5 \* 60000, Math\.min\(30 \* 60000, Number\(process\.env\.TRIBOON_IPTV_STARTUP_WARM_DELAY_MS \|\| 10 \* 60000\)\)\);/,
     'startup warm should default to a long delay with bounded override');
-  assert.match(server, /scheduleIptvWarmSoon\('startup', IPTV_STARTUP_WARM_DELAY_MS\);/,
-    'startup warm must not use the short source-change delay');
+  assert.match(server, /scheduleIptvWarmSoon\('startup', IPTV_STARTUP_WARM_DELAY_MS, \{ skipGuide: true \}\);/,
+    'startup warm must not use the short source-change delay or heavy guide parse');
 });
 
 test('Android native player: direct source and native chrome stay out of the web player', () => {
@@ -624,7 +624,7 @@ test('Android native player: direct source and native chrome stay out of the web
     && ui.includes("if (/TriboonAndroid/.test(navigator.userAgent)) document.body.classList.add('androidApp');")
     && ui.includes("if (/TriboonAndroid/.test(navigator.userAgent) && !/TriboonTV/.test(navigator.userAgent)) document.body.classList.add('mobileShell');"),
     'phone WebView should not receive TV-only CSS just because it runs inside the Android shell');
-  assert.match(ui, /body\.mobileShell #backdrop \.layer\{display:none!important;opacity:0!important\}[\s\S]+body\.mobileShell #burger\{display:grid\}[\s\S]+body\.mobileShell #home\{padding:62px 16px 18px 16px!important;justify-content:flex-end\}/,
+  assert.match(ui, /body\.mobileShell #backdrop \.layer\{display:none!important;opacity:0!important\}[\s\S]+body\.mobileShell #burger\{display:grid\}[\s\S]+body\.mobileShell #home\{padding:62px 16px 18px 16px!important;justify-content:flex-start\}/,
     'Android phone WebView should get the compact mobile shell even when its CSS viewport is wider than 600px');
   assert.match(ui, /function androidBurgerHit\(e\) \{[\s\S]+const burger = \$\('burger'\);[\s\S]+burger\.contains\(e\.target\)[\s\S]+return p\.clientX <= 132 && p\.clientY <= 132;/,
     'Android top-left burger hitbox should not double-toggle taps already delivered to the burger button');
@@ -1788,8 +1788,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'web timeline guide should merge server guide data with Android device-local personal guide data');
   assert.match(ui, /window\.__tvPersonalIptvGuideLoaded[\s\S]+function fetchPersonalGuideBatch\(chans[\s\S]+bridge\.personalIptvGuide\(token, JSON\.stringify\(\{ channels: rows \}\)\)/,
     'web should request personal IPTV programme batches from Android and cache the returned guide window');
-  assert.match(ui, /function loadLiveChannelsCombined\(\{ fav = false \} = \{\}\) \{[\s\S]+api\('\/api\/iptv\/channels'[\s\S]+loadPersonalIptvChannels[\s\S]+epg: !!server\.epg \|\| !!personal\.epg[\s\S]+sourceErrors/,
-    'web Live TV should merge server playlists and Android device-local playlists plus their guide availability into one channel list');
+  assert.match(ui, /function loadLiveChannelsCombined\(\{ fav = false \} = \{\}\) \{[\s\S]+new URLSearchParams\(\{ lean: '1' \}\)[\s\S]+if \(fav\) q\.set\('fav', '1'\);[\s\S]+api\('\/api\/iptv\/channels\?' \+ q\.toString\(\)\)[\s\S]+loadPersonalIptvChannels[\s\S]+epg: !!server\.epg \|\| !!personal\.epg[\s\S]+sourceErrors/,
+    'web Live TV should merge server playlists and Android device-local playlists through a lean channel payload');
+  assert.match(ui, /async function hydrateLivePlaybackUrls\(it\) \{[\s\S]+api\(`\/api\/iptv\/play\/\$\{idx\}\$\{q\.toString\(\) \? '\?' \+ q\.toString\(\) : ''\}`\)[\s\S]+it\._streamUrl = r\.streamUrl[\s\S]+full\.nativeFallbackUrl = it\._nativeFallbackUrl/,
+    'web Live TV should mint playback URLs only for the selected server channel');
+  assert.match(server, /iptvPlay: async \(ctx\) => \{[\s\S]+ensureIptvChannelStateForUser\(ctx\.user\)[\s\S]+const channelScope = `iptv:\$\{ch\.idx\}:\$\{ch\.id\}`;[\s\S]+auth\.streamToken\(ctx\.user\.id, channelScope\)[\s\S]+streamUrl: `\/api\/iptv\/stream\/\$\{ch\.idx\}\?cid=\$\{cid\}&t=\$\{token\}`/,
+    'server Live TV should expose a per-channel playback URL endpoint without bloating the channel list');
   assert.match(ui, /function openPrefs\(\)[\s\S]+\$\('prefTabLive'\)\.style\.display = '';[\s\S]+renderPrefPersonalIptv\(\);/,
     'Preferences should always expose Live TV so users can find the personal IPTV setup before a playlist exists');
   assert.match(ui, /Save to my account[\s\S]+personalIptvSaveDevice[\s\S]+Save on this device only/,
@@ -1836,8 +1840,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Live TV should recover faster before the first frame while allowing later provider hiccups');
   assert.match(android, /private DefaultLoadControl nativeLoadControlForMode\(String mode\) \{[\s\S]+nativeConservativePlaybackDevice\(\)[\s\S]+setBufferDurationsMs\(minMs, maxMs, startMs, rebufferMs\)/,
     'native ExoPlayer should use a conservative buffer profile on Onn-class devices without slowing Shield');
-  assert.match(android, /boolean heavyVod = video && nativeLikelyHeavyVod\(\)[\s\S]+int targetMb = video[\s\S]+conservative \? 48 : \(heavyVod \? 128 : 64\)[\s\S]+int backBufferMs = video \? \(conservative \? 8000 : 12000\)/,
-    'native ExoPlayer should bound heavy 4K VOD memory instead of using a huge target buffer and long back-buffer');
+  assert.match(android, /boolean heavyVod = video && nativeLikelyHeavyVod\(\)[\s\S]+int targetMb = video[\s\S]+conservative \? \(heavyVod \? 96 : 48\) : \(heavyVod \? 384 : 64\)[\s\S]+int backBufferMs = video \? \(conservative \? \(heavyVod \? 15000 : 8000\) : \(heavyVod \? 30000 : 12000\)\)/,
+    'native ExoPlayer should build a deeper heavy-4K buffer on capable devices while staying bounded on low-memory hardware');
   assert.match(android, /new ExoPlayer\.Builder\(this, nativeRenderersFactory\(\)\)[\s\S]+setBandwidthMeter\(nativeBandwidthMeterForMode\(mode\)\)[\s\S]+setSeekParameters\(SeekParameters\.CLOSEST_SYNC\)/,
     'native ExoPlayer should use decoder fallback plumbing, seeded bandwidth, and closest-sync seeking');
   assert.match(android, /private DefaultRenderersFactory nativeRenderersFactory\(\) \{[\s\S]+setEnableDecoderFallback\(true\)[\s\S]+setEnableAudioOutputPlaybackParameters\(true\)/,
@@ -1850,8 +1854,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Live TV media items should carry target-offset and catch-up speed hints');
   assert.match(android, /setTargetBufferBytes\(targetBytes\)[\s\S]+setBackBuffer\(backBufferMs, false\)/,
     'native ExoPlayer should bound memory while keeping short VOD rewinds fast');
-  assert.match(android, /setReadTimeoutMs\("live"\.equals\(nativeMode\) \? NATIVE_LIVE_READ_TIMEOUT_MS : 18000\)/,
-    'native Live TV should use a longer provider read timeout than VOD startup');
+  assert.match(android, /setReadTimeoutMs\("live"\.equals\(nativeMode\)[\s\S]+NATIVE_LIVE_READ_TIMEOUT_MS[\s\S]+nativeLikelyHeavyVod\(\) \? 45000 : 18000\)/,
+    'native Live TV should use a longer provider read timeout, and huge VOD should tolerate slower usenet reads');
+  assert.match(android, /heavyVod \? 24000 : 6000[\s\S]+heavyVod \? 180000 : 60000[\s\S]+heavyVod \? 384 : 64/,
+    'high-end Android devices should build a deeper ExoPlayer buffer for very large 4K VOD');
   assert.match(android, /private void updateNativeLiveWatchdog\(\) \{[\s\S]+boolean waitingForLiveData = state == Player\.STATE_BUFFERING[\s\S]+nativePlayer\.isLoading\(\)[\s\S]+boolean unhealthy = state == Player\.STATE_IDLE \|\| state == Player\.STATE_ENDED \|\| waitingForLiveData[\s\S]+long threshold = nativeLiveStarted \? NATIVE_LIVE_STALL_RECOVERY_MS : NATIVE_LIVE_STARTUP_STALL_RECOVERY_MS;[\s\S]+now - nativeLiveUnhealthySinceMs >= threshold[\s\S]+recoverNativeLivePlayback\(state == Player\.STATE_IDLE \? "idle"/,
     'native Live TV should recover only after sustained idle, ended, or real data-wait stalls');
   assert.match(android, /state == Player\.STATE_ENDED && "live"\.equals\(nativeMode\)[\s\S]+recoverNativeLivePlayback\("ended"\)/,
@@ -1875,8 +1881,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native movie and episode fallback should preserve the last good position if Exo reports zero during an error');
   assert.match(android, /private void notifyNativeVideoError\(String msg, long pos, long dur\) \{[\s\S]+String title = nativePlaybackTitle;[\s\S]+String backdropUrl = nativePlaybackBackdropUrl;[\s\S]+releaseNativePlayer\(false\);[\s\S]+showNativeLoading\(title, backdropUrl, "Retrying playback",[\s\S]+__tvNativeVideoError/,
     'native movie and episode startup watchdog should preserve the branded loader while reporting the failure to the native ladder');
-  assert.match(server, /LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS = 25000[\s\S]+LIVE_REMUX_IDLE_TIMEOUT_MS = 45000/,
-    'Live TV remux fallback should tolerate provider hiccups while still avoiding endless hangs');
+  assert.match(server, /LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS = 12000[\s\S]+LIVE_REMUX_IDLE_TIMEOUT_MS = 45000/,
+    'Live TV remux fallback should fail silent/bad channels quickly while still avoiding endless hangs');
   assert.match(server, /armIdle\(LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS\);[\s\S]+ff\.stdout\.on\('data'[\s\S]+armIdle\(LIVE_REMUX_IDLE_TIMEOUT_MS\);[\s\S]+ff\.kill\('SIGKILL'\)/,
     'server Live TV remux should fail fast when ffmpeg stops producing bytes');
   assert.match(android, /private void hideNativeChromeNow\(\) \{[\s\S]+nativeControlShade\.setVisibility\(View\.GONE\)[\s\S]+nativeChrome\.setVisibility\(View\.GONE\)[\s\S]+parkNativeHiddenFocusOnSeek\(\);[\s\S]+setNativeSubtitleLift\(false\);[\s\S]+private boolean nativeChromeShowingForBack\(\) \{[\s\S]+nativeChrome[\s\S]+nativeControlShade[\s\S]+nativeMetaBar[\s\S]+nativeTop[\s\S]+private boolean dismissNativeChromeForBack\(\) \{[\s\S]+if \(!nativeChromeShowingForBack\(\)\) return false;[\s\S]+nativeProgress\.removeCallbacks\(nativeHideChrome\);[\s\S]+hideNativeChromeNow\(\);[\s\S]+return true;/,
@@ -1961,6 +1967,10 @@ test('web browse grids stay windowed and D-pad uses logical grid indexes', () =>
     'cover-size and resize paths should refresh virtual grid geometry');
   assert.match(ui, /function activeGridIdx\(\) \{[\s\S]+el\.dataset && el\.dataset\.grid !== undefined[\s\S]+parseInt\(el\.dataset\.grid, 10\)/,
     'D-pad focus should recover the absolute item index from data-grid');
+  assert.match(ui, /function focusedGridAtVisualRowStart\(\) \{[\s\S]+document\.querySelector\('\.pcard\.focus, \.card\.focus[\s\S]+return Math\.abs\(pr\.top - cr\.top\) > 6;[\s\S]+\}/,
+    'D-pad Left should have a visual-row-start fallback when virtualized grid state drifts');
+  assert.match(ui, /if \(k === 'ArrowLeft' && focusedGridAtVisualRowStart\(\)\) return enterRail\(\);[\s\S]+S\.gridIdx = activeGridIdx\(\);/,
+    'grid D-pad handling should exit to the rail before stale logical indexes can trap focus');
   assert.match(ui, /const itemIdx = parseInt\(el\.dataset\.grid, 10\);[\s\S]+const it = Number\.isFinite\(itemIdx\) \? \(S\.gridItems \|\| \[\]\)\[itemIdx\] : null;/,
     'focusable guide/category/message rows should not borrow stale grid metadata when no backing item exists');
   assert.doesNotMatch(ui, /const itemIdx = Number\.isFinite\(parseInt\(el\.dataset\.grid, 10\)\) \? parseInt\(el\.dataset\.grid, 10\) : S\.gridIdx;/,

@@ -980,8 +980,8 @@ test('iptv: sync status clears stale Xtream category errors after streams load',
   }
 });
 
-test('iptv: Xtream browser remux fallback ingests TS before HLS', async () => {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-remux-ts-first-'));
+test('iptv: Xtream browser remux prefers HLS while native playback keeps TS', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-remux-hls-first-'));
   const upstream = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
     const action = u.searchParams.get('action');
@@ -1027,13 +1027,15 @@ test('iptv: Xtream browser remux fallback ingests TS before HLS', async () => {
     await httpJson(srv.port, 'POST', '/api/settings',
       { iptvMode: 'xtream', xtHost: host, xtUser: 'xtuser', xtPass: 'xtpass', epgUrl: null }, admin);
     const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    assert.match(ch.json.channels[0].nativeUrl, /\/native\//, 'native clients still receive the direct TS proxy URL');
+    assert.match(ch.json.channels[0].nativeMime, /video\/mp2t/);
     const out = await httpRaw(srv.port, ch.json.channels[0].streamUrl);
     assert.strictEqual(out.status, 200);
     assert.strictEqual(out.headers['content-type'], 'video/mp4');
     assert.strictEqual(out.body.toString('utf8'), 'fmp4');
-    assert.strictEqual(calls.length, 1, 'successful TS remux should not try the HLS URL');
-    assert.match(calls[0].url, /\/live\/xtuser\/xtpass\/777\.ts$/);
-    assert.strictEqual(calls[0].hlsFriendly, false, 'raw TS remux should not use HLS-only ffmpeg flags');
+    assert.strictEqual(calls.length, 1, 'successful HLS remux should not also open the TS URL');
+    assert.match(calls[0].url, /\/live\/xtuser\/xtpass\/777\.m3u8$/);
+    assert.strictEqual(calls[0].hlsFriendly, true, 'HLS remux should use the HLS demuxer flags immediately');
     assert.strictEqual(calls[0].headers, null, 'test-local IPTV uses the private-target opt-in, so no production Host override is needed');
   } finally {
     if (srv) await srv.shutdown();
@@ -1043,8 +1045,8 @@ test('iptv: Xtream browser remux fallback ingests TS before HLS', async () => {
   }
 });
 
-test('iptv: browser remux safely resolves provider redirects before retrying ffmpeg', async () => {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-remux-redirect-'));
+test('iptv: browser remux retries HLS plainly before opening alternate IPTV URLs', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-remux-hls-retry-'));
   const upstreamHits = [];
   const upstream = http.createServer((req, res) => {
     upstreamHits.push(req.url);
@@ -1106,11 +1108,13 @@ test('iptv: browser remux safely resolves provider redirects before retrying ffm
     const out = await httpRaw(srv.port, ch.json.channels[0].streamUrl);
     assert.strictEqual(out.status, 200);
     assert.strictEqual(out.body.toString('utf8'), 'fmp4');
-    assert.strictEqual(calls.length, 2, 'ffmpeg should retry once after the server resolves the safe provider redirect');
-    assert.match(calls[0].url, /\/live\/xtuser\/xtpass\/777\.ts$/);
-    assert.match(calls[1].url, /\/edge\/777\.ts$/);
-    assert.ok(upstreamHits.some((url) => /\/live\/xtuser\/xtpass\/777\.ts$/.test(url)),
-      'server should probe the original provider URL to read the redirect target safely');
+    assert.strictEqual(calls.length, 2, 'ffmpeg should retry the preferred HLS URL once before opening alternate IPTV URLs');
+    assert.match(calls[0].url, /\/live\/xtuser\/xtpass\/777\.m3u8$/);
+    assert.strictEqual(calls[0].hlsFriendly, true);
+    assert.match(calls[1].url, /\/live\/xtuser\/xtpass\/777\.m3u8$/);
+    assert.strictEqual(calls[1].hlsFriendly, false, 'plain retry keeps older ffmpeg builds working without HLS-only flags');
+    assert.ok(!upstreamHits.some((url) => /\/live\/xtuser\/xtpass\/777\.ts$/.test(url)),
+      'successful HLS retry should not consume a TS provider connection');
   } finally {
     if (srv) await srv.shutdown();
     transcode.detectFfmpeg = originalDetect;
@@ -1181,6 +1185,24 @@ test('iptv: redirected HLS remux keeps HLS-friendly ffmpeg flags', async () => {
     transcode.spawnLiveRemux = originalSpawn;
     upstream.close();
   }
+});
+
+test('iptv: live remux bad-channel probes stay bounded', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(src, /const LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS = 12000;/,
+    'browser live-remux first-byte waits should fail fast enough for channel zapping');
+  assert.match(src, /const IPTV_NATIVE_FIRST_BYTE_TIMEOUT_MS = 10000;/,
+    'native IPTV proxy should also fail fast when a provider accepts but sends no media');
+  assert.match(src, /const startupDeadline = Date\.now\(\) \+ LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS;[\s\S]+startupTimedOut[\s\S]+finishLiveStartupTimeout/,
+    'browser remux retries should share one total startup deadline instead of chaining indefinitely');
+  assert.match(src, /req\.setTimeout\(2500, \(\) => req\.destroy\(new Error\('live remux redirect probe timeout'\)\)\)/,
+    'redirect detection should not stall a dead IPTV stream for many seconds');
+  assert.match(src, /!target\.redirectProbeFailed[\s\S]+target\.redirectProbeFailed = true;/,
+    'each remux target should run at most one redirect probe before falling through');
+  assert.doesNotMatch(src, /refreshXtreamChannelForPlayback\(ch, `(?:cached )?remux HTTP/,
+    'browser remux failures should not refresh huge Xtream playlists inside the player request');
+  assert.match(src, /const stopForClientClose = \(\) => \{[\s\S]+ctx\.req\.socket[\s\S]+socket\.destroy\(\)[\s\S]+ff\.kill\('SIGKILL'\)[\s\S]+ctx\.res\.destroy\(\)[\s\S]+liveSlot\.done\('client closed'\)/,
+    'aborted web-player remuxes should close the server response instead of leaving CloseWait sockets');
 });
 
 test('iptv: stale Xtream stream ids refresh and retry native playback', async () => {

@@ -1088,7 +1088,7 @@ body.tv .cwAct,body.tv .epMenuBtn{display:none!important}
   body.railOpen{--rail:0px}
   #home,#discover,#browse,#detail,#person,#settings,#prefs,#music{padding-left:16px!important;padding-right:16px!important}
   #searchBar{left:16px;right:16px}
-  #home{padding:62px 16px 18px 16px!important;justify-content:flex-end}
+  #home{padding:62px 16px 18px 16px!important;justify-content:flex-start}
   #hero{max-width:calc(100vw - 32px);margin:0 auto 14px;padding:0;text-align:center;align-items:center}
   #hero .eyebrow{margin-bottom:8px;font-size:10px;letter-spacing:.18em}
   #hero h1{font-size:clamp(24px,7.4vw,32px);line-height:1.08;margin-bottom:8px}
@@ -1098,7 +1098,7 @@ body.tv .cwAct,body.tv .epMenuBtn{display:none!important}
   #heroBtns{width:100%;justify-content:center;gap:8px;flex-wrap:nowrap}
   #heroBtns .btn{flex:1 1 0;min-width:0;max-width:178px;padding:10px 10px;font-size:12.8px;justify-content:center;white-space:nowrap}
   #heroBtns .btn svg{width:15px;height:15px;flex:0 0 auto}
-  #rows{max-height:min(58vh,calc(100vh - 260px));gap:14px}
+  #rows{max-height:calc(100vh - 280px);gap:14px}
   #browse.rowsWin #grid{flex:1!important;max-height:none!important;margin-top:0!important}
   #browse .browseHead{margin-left:48px;margin-top:8px;margin-bottom:12px;justify-content:flex-start;padding-right:0}
   #browse{padding-top:62px!important}
@@ -1140,7 +1140,7 @@ body.mobileShell #home,body.mobileShell #discover,body.mobileShell #browse,body.
 body.mobileShell #person,body.mobileShell #settings,body.mobileShell #prefs,body.mobileShell #music{
   padding-left:16px!important;padding-right:16px!important}
 body.mobileShell #searchBar{left:16px;right:16px}
-body.mobileShell #home{padding:62px 16px 18px 16px!important;justify-content:flex-end}
+body.mobileShell #home{padding:62px 16px 18px 16px!important;justify-content:flex-start}
 body.mobileShell #hero{max-width:calc(100vw - 32px);margin:0 auto 14px;padding:0;text-align:center;align-items:center}
 body.mobileShell #hero .eyebrow{margin-bottom:8px;font-size:10px;letter-spacing:.18em}
 body.mobileShell #hero h1{font-size:clamp(24px,7.4vw,32px);line-height:1.08;margin-bottom:8px}
@@ -1150,7 +1150,7 @@ body.mobileShell #hero p{font-size:13.5px;line-height:1.38;-webkit-line-clamp:2;
 body.mobileShell #heroBtns{width:100%;justify-content:center;gap:8px;flex-wrap:nowrap}
 body.mobileShell #heroBtns .btn{flex:1 1 0;min-width:0;max-width:178px;padding:10px 10px;font-size:12.8px;justify-content:center;white-space:nowrap}
 body.mobileShell #heroBtns .btn svg{width:15px;height:15px;flex:0 0 auto}
-body.mobileShell #rows{max-height:min(58vh,calc(100vh - 260px));gap:14px}
+body.mobileShell #rows{max-height:calc(100vh - 280px);gap:14px}
 body.mobileShell #browse.rowsWin #grid{flex:1!important;max-height:none!important;margin-top:0!important}
 body.mobileShell #browse .browseHead{margin-left:48px;margin-top:8px;margin-bottom:12px;justify-content:flex-start;padding-right:0}
 body.mobileShell #browse{padding-top:62px!important}
@@ -10119,7 +10119,9 @@ async function loadLiveChannelsCombined({ fav = false } = {}) {
   let server = { configured: false, epg: false, channels: [], hiddenGroups: [], globalHidden: [], sourceErrors: [] };
   if (allowServer) {
     try {
-      server = await api('/api/iptv/channels' + (fav ? '?fav=1' : ''));
+      const q = new URLSearchParams({ lean: '1' });
+      if (fav) q.set('fav', '1');
+      server = await api('/api/iptv/channels?' + q.toString());
     } catch (e) {
       server = { ...server, configured: true, sourceErrors: [{ sourceName: 'Server Live TV', error: e.message || 'server playlist failed' }] };
     }
@@ -10842,6 +10844,8 @@ async function playChannel(it, list) {
     .items.filter((x) => x._channel !== undefined);
   S.liveList = list || (fromGrid.length ? fromGrid : fromHome);
   S.liveCur = it._channel;
+  try { it = await hydrateLivePlaybackUrls(it); }
+  catch (e) { toast('Live stream unavailable: ' + e.message); return; }
   const keepGuidePip = S.view === 'player' && !!($('pGuide') && $('pGuide').classList.contains('open'));
   if (keepGuidePip && S.nativeGuideMode && tryNativeLivePlayer(it, true)) {
     markGuideCur();
@@ -10853,6 +10857,28 @@ async function playChannel(it, list) {
     return;
   }
   return playChannelWeb(it);
+}
+async function hydrateLivePlaybackUrls(it) {
+  if (!it || it._personal || (it._streamUrl && it._nativeUrl)) return it;
+  const idx = it._channel;
+  if (idx === undefined || idx === null) return it;
+  const q = new URLSearchParams();
+  if (it._chid) q.set('cid', it._chid);
+  const r = await api(`/api/iptv/play/${idx}${q.toString() ? '?' + q.toString() : ''}`);
+  it._streamUrl = r.streamUrl || it._streamUrl || '';
+  it._nativeUrl = r.nativeUrl || it._nativeUrl || '';
+  it._nativeMime = r.nativeMime || it._nativeMime || '';
+  it._nativeFallbackUrl = r.nativeFallbackUrl || it._nativeFallbackUrl || '';
+  it._nativeFallbackMime = r.nativeFallbackMime || it._nativeFallbackMime || '';
+  const full = liveChannelByIdx(idx);
+  if (full) {
+    full.streamUrl = it._streamUrl;
+    full.nativeUrl = it._nativeUrl;
+    full.nativeMime = it._nativeMime;
+    full.nativeFallbackUrl = it._nativeFallbackUrl;
+    full.nativeFallbackMime = it._nativeFallbackMime;
+  }
+  return it;
 }
 async function playChannelWeb(it) {
   const preserveGuide = !!($('pGuide') && $('pGuide').classList.contains('open'));
@@ -11015,7 +11041,7 @@ async function renderPlayerGuideTimeline(pg, list) {
   const progFitClass = (w) => w < 3 ? ' micro' : (w < 10 ? ' tiny' : (w < 16 ? ' short' : ''));
   const isLive = $('player').classList.contains('live');
   const allChannels = ((S.liveChannels && S.liveChannels.length) ? S.liveChannels : list)
-    .map(liveItemForPlayerGuide).filter((x) => x && x._channel !== undefined && x._streamUrl);
+    .map(liveItemForPlayerGuide).filter((x) => x && x._channel !== undefined);
   const favName = '★ Favorites';
   const favs = allChannels.filter((c) => c.fav);
   const groups = new Map();
@@ -14369,6 +14395,18 @@ function personGridVert(dir) {
   });
   return best;
 }
+function focusedGridAtVisualRowStart() {
+  const cur = document.querySelector('.pcard.focus, .card.focus, .chCard.focus, .chGroupHead.focus, .gRow.focus, .lcat.focus, .gridMore.focus');
+  if (!cur) return false;
+  const els = gridEls();
+  const i = els.indexOf(cur);
+  if (i <= 0) return true;
+  const prev = els[i - 1];
+  if (!prev) return true;
+  const cr = cur.getBoundingClientRect();
+  const pr = prev.getBoundingClientRect();
+  return Math.abs(pr.top - cr.top) > 6;
+}
 function focusPersonBack() {
   applyFocus($('pBack'), false);
   $('person').scrollTo({ top: 0, behavior: 'smooth' });
@@ -15320,6 +15358,10 @@ document.addEventListener('keydown', (e) => {
         if (k === 'ArrowDown') return focusLiveCategory(ci + 1, true);
       }
     }
+    // Defensive TV exit hatch: virtualized/local-library grids can re-render while a D-pad
+    // sequence is in flight. If the focused card is visually first in its row, Left should
+    // always reach the rail instead of getting stuck on a stale logical index.
+    if (k === 'ArrowLeft' && focusedGridAtVisualRowStart()) return enterRail();
     S.gridIdx = activeGridIdx();
     if (shouldVirtualizeGrid(S.gridRoot || $('grid'))) {
       const count = gridLogicalCount();

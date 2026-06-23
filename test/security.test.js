@@ -8,6 +8,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const zlib = require('zlib');
 const { httpJson, httpRaw, bootServer, setupAdmin } = require('./helpers');
 const { createMockNntp } = require('./mock-nntp');
 const { encodePart } = require('../server/yenc');
@@ -794,6 +795,35 @@ ${origin}/sports.ts
     assert.ok(ch.json.channels.every((c) => /^\/api\/iptv\/native\/\d+\?cid=[^&]+&t=/.test(c.nativeUrl)));
     assert.ok(ch.json.channels.every((c) => c.nativeFallbackUrl === undefined), 'plain M3U does not invent a second native source');
     assert.deepStrictEqual(ch.json.channels.map((c) => c.nativeMime), ['application/x-mpegURL', 'video/mp2t']);
+    const lean = await httpJson(srv.port, 'GET', '/api/iptv/channels?lean=1', null, admin);
+    assert.strictEqual(lean.json.channels.length, 2);
+    assert.ok(lean.json.channels.every((c) => c.streamUrl === undefined && c.nativeUrl === undefined),
+      'lean channel payload should not carry per-channel signed playback URLs');
+    assert.ok(lean.json.channels.every((c) => c.xtreamId === undefined && c.tvgId === undefined && c.sourceRawId === undefined),
+      'lean channel payload should keep provider bookkeeping server-side');
+    const gzLean = await new Promise((resolve, reject) => {
+      const req = http.request({
+        host: '127.0.0.1', port: srv.port, path: '/api/iptv/channels?lean=1', method: 'GET',
+        headers: { authorization: `Bearer ${admin}`, 'accept-encoding': 'gzip' },
+      }, (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
+      });
+      req.on('error', reject);
+      req.end();
+    });
+    assert.strictEqual(gzLean.status, 200);
+    assert.strictEqual(gzLean.headers['content-encoding'], 'gzip', 'large JSON API responses should gzip when clients accept it');
+    assert.strictEqual(JSON.parse(zlib.gunzipSync(gzLean.body).toString('utf8')).channels.length, 2);
+    const selected = lean.json.channels[0];
+    const play = await httpJson(srv.port, 'GET', `/api/iptv/play/${selected.idx}?cid=${encodeURIComponent(selected.id)}`, null, admin);
+    assert.strictEqual(play.status, 200);
+    assert.match(play.json.streamUrl, /^\/api\/iptv\/stream\/\d+\?cid=[^&]+&t=/);
+    assert.match(play.json.nativeUrl, /^\/api\/iptv\/native\/\d+\?cid=[^&]+&t=/);
+    assert.strictEqual(play.json.nativeMime, 'application/x-mpegURL');
+    const changed = await httpJson(srv.port, 'GET', `/api/iptv/play/${selected.idx}?cid=wrong-channel`, null, admin);
+    assert.strictEqual(changed.status, 404, 'per-channel playback minting should reject stale channel ids');
     const native = await httpRaw(srv.port, ch.json.channels[0].nativeUrl);
     assert.strictEqual(native.status, 200, 'native URL proxies the upstream stream instead of redirecting Android to it');
     assert.strictEqual(native.headers.location, undefined, 'native proxy must not leak the upstream stream URL');
@@ -1213,6 +1243,7 @@ test('search: quality policy ranks 1080p and 4K consistently and returns stable 
     res.end(`<?xml version="1.0"?><rss xmlns:newznab="http://x"><channel>
       <item><title>Quality.Policy.2024.2160p.WEB-DL.HEVC-NTb</title><enclosure url="http://x/quality-4k" length="16000000000"/></item>
       <item><title>Quality.Policy.2024.1080p.WEB-DL.H.264-NTb</title><enclosure url="http://x/quality-1080p" length="6000000000"/></item>
+      <item><title>Quality.Policy.2024.Hybrid.1080p.UHD.BluRay.DDP.Atmos.x265-SQS</title><enclosure url="http://x/quality-1080p-uhd-source" length="12000000000"/></item>
     </channel></rss>`);
   });
   await new Promise((r) => ix.listen(0, '127.0.0.1', r));
@@ -1226,6 +1257,9 @@ test('search: quality policy ranks 1080p and 4K consistently and returns stable 
   const hd = (await httpJson(srv.port, 'GET', base + '&maxResolutionRank=3&preferResolutionRank=3', null, admin)).json;
   assert.ok(hd.candidates[0].name.includes('1080p'), '1080p preference should put the 1080p source first');
   assert.ok(hd.candidates.every((c) => /^[a-f0-9]{16}$/.test(c.pickKey)), 'Sources drawer gets stable opaque pick keys');
+  const uhdSource1080 = hd.candidates.find((c) => c.name.includes('Hybrid.1080p.UHD'));
+  assert.strictEqual(uhdSource1080.attributes.resolution, '1080p',
+    'a 1080p encode sourced from UHD must still classify as 1080p');
 
   const uhd = (await httpJson(srv.port, 'GET', base + '&maxResolutionRank=4&preferResolutionRank=4', null, admin)).json;
   assert.ok(uhd.candidates[0].name.includes('2160p'), '4K preference should put the 4K source first');
@@ -1716,6 +1750,20 @@ test('security headers: CSP on the app shell, nosniff everywhere', async () => {
   assert.strictEqual(page.headers['x-content-type-options'], 'nosniff');
   const api = await httpJson(srv.port, 'GET', '/api/server');
   assert.strictEqual(api.headers['x-content-type-options'], 'nosniff');
+});
+
+test('http server hardening: aborted request bodies and stale sockets are bounded', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(src, /function readBody\(req, limit = 50 \* 1024 \* 1024\) \{[\s\S]+setTimeout\(\(\) => \{[\s\S]+fail\('request body timeout', 408\);[\s\S]+\}, 10000\);[\s\S]+req\.once\('aborted', onAborted\);[\s\S]+req\.once\('close', onClose\);/,
+    'request body reads should fail on abort/close and have a hard timeout');
+  assert.match(src, /res\.shouldKeepAlive = false;/,
+    'the local app server should not reuse sockets after player requests');
+  assert.match(src, /const server = http\.createServer\(async \(req, res\) => \{[\s\S]+const closeAbortedRequest = \(\) => \{[\s\S]+req\.socket[\s\S]+socket\.destroy\(\)[\s\S]+req\.destroy\(\);[\s\S]+res\.destroy\(\)[\s\S]+\};[\s\S]+req\.on\('aborted', closeAbortedRequest\);[\s\S]+req\.on\('close', \(\) => \{[\s\S]+closeAbortedRequest\(\);[\s\S]+\}\);[\s\S]+if \(e && e\.status === 499\) \{[\s\S]+req\.socket[\s\S]+socket\.destroy\(\)[\s\S]+req\.destroy\(\);[\s\S]+res\.destroy\(\)[\s\S]+return;[\s\S]+\}/,
+    'outer request aborts should destroy both sides and avoid writing an error body to a dead socket');
+  assert.match(src, /res\.on\('close', \(\) => \{[\s\S]+!res\.writableEnded[\s\S]+req\.socket[\s\S]+socket\.destroy\(\)[\s\S]+\}\);/,
+    'stream responses closed before a clean end should not leave server sockets in CloseWait');
+  assert.match(src, /server\.requestTimeout = 30000;[\s\S]+server\.headersTimeout = 10000;[\s\S]+server\.keepAliveTimeout = 5000;[\s\S]+server\.maxRequestsPerSocket = 1;[\s\S]+server\.on\('clientError', \(err, socket\) => \{[\s\S]+socket\.destroy\(\)/,
+    'HTTP sockets should have explicit server-level timeouts and client-error cleanup');
 });
 
 test('rate limit: repeated failed logins for one account lock out with 429', async () => {

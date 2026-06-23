@@ -6,11 +6,15 @@
 // and a giant remux does NOT outscore a clean direct-play release for a capped device.
 
 const RES = [
-  { key: '2160p', score: 0, rank: 4, re: /\b(2160p|4k|uhd)\b/i },
+  { key: '2160p', score: 0, rank: 4, re: /\b2160p\b/i },
   { key: '1080p', score: 0, rank: 3, re: /\b1080p\b/i },
   { key: '720p', score: 0, rank: 2, re: /\b720p\b/i },
   { key: '576p', score: 0, rank: 1, re: /\b576p\b/i },
-  { key: '480p', score: 0, rank: 0, re: /\b(480p|sd)\b/i },
+  { key: '480p', score: 0, rank: 0, re: /\b480p\b/i },
+  // Source markers like "UHD BluRay" often mean a 1080p encode sourced from UHD.
+  // Treat them as 4K only when no explicit height token appears earlier in the table.
+  { key: '2160p', score: 0, rank: 4, re: /\b(4k|uhd)\b/i },
+  { key: '480p', score: 0, rank: 0, re: /\bsd\b/i },
 ];
 
 // Source tiers — Remux is top quality but huge; WEB-DL is the press-play sweet spot.

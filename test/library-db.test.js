@@ -19,6 +19,7 @@ test('library sqlite catalog pages and looks up local media without genre false 
       { idx: 4, kind: 'episode', showIdx: 3, title: 'Episode Two', tmdbId: 424242, s: 1, e: 2, addedAt: 1001, file: '/media/show/s01e02.mkv' },
     ];
     assert.strictEqual(db.replaceLibrary('libA', 12345, items), true);
+    assert.strictEqual(db.checkpoint(), true, 'library SQLite catalog can checkpoint stale WAL pages after scans');
 
     const first = db.page('libA', { offset: 0, limit: 2, sort: 'added.desc' });
     assert.strictEqual(first.total, 3, 'top-level page excludes episodes');
