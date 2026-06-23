@@ -97,7 +97,13 @@ class ArchiveVirtualFile {
     }
   }
 
-  async *read(start, end) {
+  cancelReadAhead() {
+    for (const v of this.vols) {
+      if (v && typeof v.cancelReadAhead === 'function') v.cancelReadAhead();
+    }
+  }
+
+  async *read(start, end, opts = {}) {
     if (!this.streamable) throw new Error(`mount is not streamable (${this.tags.join(', ')})`);
     end = Math.min(end, this.size);
     // Binary search the first extent containing `start`.
@@ -114,7 +120,7 @@ class ArchiveVirtualFile {
       const e = this.extents[idx];
       const from = e.offset + (offset - e.innerStart);
       const take = Math.min(e.innerStart + e.length, end) - offset;
-      yield* this.vols[e.vol].read(from, from + take);
+      yield* this.vols[e.vol].read(from, from + take, opts);
       offset += take;
       idx++;
     }

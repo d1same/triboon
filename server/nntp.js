@@ -13,6 +13,26 @@ const IDLE_RECYCLE_MS = 30000;     // idle sockets are presumed NAT-dropped — 
 
 const MAX_NNTP_BODY_BYTES = 64 * 1024 * 1024; // one yEnc article should never be remotely this large
 
+function abortError() {
+  const e = new Error('NNTP command aborted');
+  e.code = 'ABORT_ERR';
+  return e;
+}
+
+function isAbortError(e) {
+  return e && (e.code === 'ABORT_ERR' || e.name === 'AbortError');
+}
+
+function signalAborted(signal) {
+  return !!(signal && signal.aborted);
+}
+
+function addAbortListener(signal, fn) {
+  if (!signal || typeof signal.addEventListener !== 'function') return () => {};
+  signal.addEventListener('abort', fn, { once: true });
+  return () => signal.removeEventListener('abort', fn);
+}
+
 class NntpConnection {
   constructor(opts) {
     this.opts = opts; // { host, port, tls, user, pass, connectTimeoutMs?, commandTimeoutMs? }
@@ -63,7 +83,11 @@ class NntpConnection {
     this.alive = false;
     clearTimeout(this._connectTimer);
     const ws = this.waiters; this.waiters = [];
-    for (const w of ws) { clearTimeout(w.timer); w.reject(err); }
+    for (const w of ws) {
+      clearTimeout(w.timer);
+      if (typeof w.cleanupAbort === 'function') w.cleanupAbort();
+      w.reject(err);
+    }
     try { this.sock.destroy(); } catch {}
   }
 
@@ -81,6 +105,7 @@ class NntpConnection {
         if (!isMulti) {
           this.waiters.shift();
           clearTimeout(w.timer);
+          if (typeof w.cleanupAbort === 'function') w.cleanupAbort();
           this.lastUsed = Date.now();
           w.resolve({ status: w.statusLine, body: null });
           continue;
@@ -95,6 +120,7 @@ class NntpConnection {
           this.buf = this.buf.subarray(3);
           this.waiters.shift();
           clearTimeout(w.timer);
+          if (typeof w.cleanupAbort === 'function') w.cleanupAbort();
           this.lastUsed = Date.now();
           w.resolve({ status: w.statusLine, body: Buffer.alloc(0) });
           continue;
@@ -116,15 +142,19 @@ class NntpConnection {
       if (body[0] === 0x2e && body[1] === 0x2e) body = body.subarray(1);
       this.waiters.shift();
       clearTimeout(w.timer);
+      if (typeof w.cleanupAbort === 'function') w.cleanupAbort();
       this.lastUsed = Date.now();
       w.resolve({ status: w.statusLine, body });
     }
   }
 
-  _cmd(line, multiline = false) {
+  _cmd(line, multiline = false, opts = {}) {
     return new Promise((resolve, reject) => {
+      const signal = opts.signal;
+      if (signalAborted(signal)) return reject(abortError());
       if (!this.sock || this.sock.destroyed) return reject(new Error('NNTP not connected'));
       const w = { resolve, reject, multiline };
+      w.cleanupAbort = addAbortListener(signal, () => this._fail(abortError()));
       // A timed-out command means a dead or wedged socket — kill the connection (rejecting
       // anything queued behind it) rather than leaving the caller waiting forever.
       w.timer = setTimeout(
@@ -137,13 +167,13 @@ class NntpConnection {
     });
   }
 
-  async stat(msgId) {
-    const r = await this._cmd(`STAT <${msgId.replace(/[<>]/g, '')}>`);
+  async stat(msgId, opts = {}) {
+    const r = await this._cmd(`STAT <${msgId.replace(/[<>]/g, '')}>`, false, opts);
     return r.status.startsWith('223');
   }
 
-  async body(msgId) {
-    const r = await this._cmd(`BODY <${msgId.replace(/[<>]/g, '')}>`, true);
+  async body(msgId, opts = {}) {
+    const r = await this._cmd(`BODY <${msgId.replace(/[<>]/g, '')}>`, true, opts);
     if (!r.status.startsWith('222')) {
       const err = new Error(`BODY ${msgId}: ${r.status}`);
       err.code = r.status.slice(0, 3);
@@ -206,21 +236,49 @@ class ProviderPool {
   }
 
   // Run fn(conn) on a free connection; queue by priority if all busy.
-  run(fn, priority = 'playback') {
+  run(fn, priority = 'playback', opts = {}) {
     return new Promise((resolve, reject) => {
-      this.queue.push({ fn, resolve, reject, priority });
+      const signal = opts.signal;
+      if (signalAborted(signal)) return reject(abortError());
+      const task = { fn, resolve, reject, priority, signal };
+      task.cleanupAbort = addAbortListener(signal, () => {
+        const idx = this.queue.indexOf(task);
+        if (idx !== -1) {
+          this.queue.splice(idx, 1);
+          task.cleanupAbort();
+          reject(abortError());
+        }
+      });
+      this.queue.push(task);
       this._pump();
     });
   }
 
   _shiftTask() {
-    if (this.queue.length <= 1) return this.queue.shift();
-    let best = 0, rank = this._priorityRank(this.queue[0].priority);
-    for (let i = 1; i < this.queue.length; i++) {
-      const r = this._priorityRank(this.queue[i].priority);
-      if (r < rank) { best = i; rank = r; }
+    while (this.queue.length) {
+      if (this.queue.length <= 1) {
+        const task = this.queue.shift();
+        if (signalAborted(task.signal)) {
+          if (typeof task.cleanupAbort === 'function') task.cleanupAbort();
+          task.reject(abortError());
+          continue;
+        }
+        return task;
+      }
+      let best = 0, rank = this._priorityRank(this.queue[0].priority);
+      for (let i = 1; i < this.queue.length; i++) {
+        const r = this._priorityRank(this.queue[i].priority);
+        if (r < rank) { best = i; rank = r; }
+      }
+      const task = this.queue.splice(best, 1)[0];
+      if (signalAborted(task.signal)) {
+        if (typeof task.cleanupAbort === 'function') task.cleanupAbort();
+        task.reject(abortError());
+        continue;
+      }
+      return task;
     }
-    return this.queue.splice(best, 1)[0];
+    return null;
   }
 
   _pump() {
@@ -245,13 +303,15 @@ class ProviderPool {
       if (!this.queue.length) break;
       if (this.busy.has(c) || !c.alive) continue;
       const task = this._shiftTask();
+      if (!task) break;
+      if (typeof task.cleanupAbort === 'function') task.cleanupAbort();
       this.busy.add(c);
       task.fn(c)
         .then(task.resolve, (e) => {
           // An NNTP status reply (e.code = '430' etc.) is a real answer — pass it through.
           // A connection-level failure (timeout/closed/reset) gets ONE retry on a fresh
           // connection so a single dead socket can't sink a whole mount.
-          if (!task.retried && !/^\d{3}$/.test(String(e && e.code || ''))) {
+          if (!isAbortError(e) && !task.retried && !/^\d{3}$/.test(String(e && e.code || ''))) {
             task.retried = true;
             this.queue.push(task);
           } else task.reject(e);
@@ -260,8 +320,8 @@ class ProviderPool {
     }
   }
 
-  stat(msgId, priority = 'health') { return this.run((c) => c.stat(msgId), priority); }
-  body(msgId, priority = 'playback') { return this.run((c) => c.body(msgId), priority); }
+  stat(msgId, priority = 'health', opts = {}) { return this.run((c) => c.stat(msgId, opts), priority, opts); }
+  body(msgId, priority = 'playback', opts = {}) { return this.run((c) => c.body(msgId, opts), priority, opts); }
   // Circuit breaker: a provider with zero live connections and a connect failure in the last
   // 60s is "down" — multi-provider routing deprioritizes it instead of paying the failure on
   // EVERY article. It self-heals: after 60s (or one successful connect) it's back in rotation.
@@ -299,25 +359,28 @@ class NntpPool {
   }
 
   // True if ANY provider has the article.
-  async stat(msgId, priority = 'health') {
+  async stat(msgId, priority = 'health', opts = {}) {
     for (const p of this._ordered()) {
-      try { if (await p.stat(msgId, priority)) return true; } catch { /* provider down → try next */ }
+      try { if (await p.stat(msgId, priority, opts)) return true; } catch (e) {
+        if (isAbortError(e)) throw e;
+        /* provider down -> try next */
+      }
     }
     return false;
   }
 
-  async body(msgId, priority = 'playback') {
+  async body(msgId, priority = 'playback', opts = {}) {
     let lastErr;
     for (const p of this._ordered()) {
-      try { return await p.body(msgId, priority); } catch (e) { lastErr = e; }
+      try { return await p.body(msgId, priority, opts); } catch (e) { if (isAbortError(e)) throw e; lastErr = e; }
     }
     throw lastErr;
   }
 
-  async run(fn, priority = 'playback') {
+  async run(fn, priority = 'playback', opts = {}) {
     let lastErr;
     for (const p of this._ordered()) {
-      try { return await p.run(fn, priority); } catch (e) { lastErr = e; }
+      try { return await p.run(fn, priority, opts); } catch (e) { if (isAbortError(e)) throw e; lastErr = e; }
     }
     throw lastErr || new Error('no NNTP providers available');
   }

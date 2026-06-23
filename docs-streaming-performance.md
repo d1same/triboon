@@ -118,7 +118,9 @@ Rules:
 - startup and seek work must beat queued read-ahead,
 - active playback bytes must beat health checks,
 - health checks must beat background read-ahead,
-- read-ahead may grow only when capacity exists.
+- read-ahead may grow only when capacity exists,
+- cancelled readers must remove queued read-ahead and abort running BODY work
+  when no other active reader still needs that article.
 
 If these priorities change, add or update a focused test in `test/e2e.test.js`.
 
@@ -148,6 +150,11 @@ release and dangerous on a large 4K remux.
 This keeps hot streams buffered while preserving connection room for another
 user's first frame or seek. A future disk-backed multi-minute buffer is allowed,
 but it must preserve the same reserve and priority rules.
+
+Playback windows are applied when a mount is selected and rebalanced again when
+stream routes are touched or housekeeping removes mounts. That lets existing
+streams shrink their read-ahead/cache budget as additional users become active,
+instead of keeping the larger window they received at mount time.
 
 ## Health Checks
 

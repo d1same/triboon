@@ -26,6 +26,23 @@ test('nntp: startup work outranks queued read-ahead when a provider is saturated
   assert.deepStrictEqual(order, ['startup', 'readAhead']);
 });
 
+test('nntp: aborted queued work is removed before it reaches a provider lane', async () => {
+  const pool = new ProviderPool({}, 1);
+  pool.conns.push({ alive: true, lastUsed: Date.now(), close() {} });
+  let releaseFirst;
+  const first = pool.run(() => new Promise((resolve) => { releaseFirst = resolve; }), 'playback');
+  const ac = new AbortController();
+  let ran = false;
+  const cancelled = pool.run(async () => { ran = true; }, 'readAhead', { signal: ac.signal }).catch((e) => e);
+
+  ac.abort();
+  releaseFirst();
+  await first;
+  const err = await cancelled;
+  assert.strictEqual(ran, false, 'aborted read-ahead work should never consume the lane');
+  assert.strictEqual(err.code, 'ABORT_ERR');
+});
+
 test('nntp: generic run falls through to the next provider', async () => {
   const pool = new NntpPool([{}, {}], 1);
   pool.providers = [
@@ -94,6 +111,38 @@ test('vfs: caller priority reaches article reads and aborted reads do not fetch'
   for await (const chunk of vf.read(0, 20000, { priority: 'seek', signal: aborted })) got.push(chunk);
   assert.strictEqual(got.length, 0);
   assert.deepStrictEqual(calls, [], 'aborted reads should stop before queueing article work');
+
+  const vfInflight = new VirtualFile(pool, nzb, { readAhead: 0 });
+  await vfInflight.mount();
+  calls.length = 0;
+  vfInflight.cache.clear();
+  vfInflight.cacheOrder = [];
+  vfInflight.inflight.clear();
+  const ac = new AbortController();
+  let bodyStarted;
+  let bodyAborted = false;
+  const started = new Promise((resolve) => { bodyStarted = resolve; });
+  vfInflight.pool = {
+    body: (msgId, priority, opts = {}) => {
+      calls.push({ msgId, priority });
+      bodyStarted();
+      return new Promise((resolve, reject) => {
+        opts.signal.addEventListener('abort', () => {
+          bodyAborted = true;
+          const e = new Error('aborted');
+          e.code = 'ABORT_ERR';
+          reject(e);
+        }, { once: true });
+      });
+    },
+    stat: async () => true,
+  };
+  const iter = vfInflight.read(0, 20000, { priority: 'seek', signal: ac.signal });
+  const pending = iter.next();
+  await started;
+  ac.abort();
+  assert.deepStrictEqual(await pending, { value: undefined, done: true });
+  assert.strictEqual(bodyAborted, true, 'aborting the last reader should abort the in-flight article BODY');
 });
 
 test('vfs: decoded segment cache is capped by bytes, not only segment count', async () => {

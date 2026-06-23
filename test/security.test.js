@@ -2261,6 +2261,26 @@ test('housekeeping sweep: idle mounts are evicted, active ones survive', async (
   srv.pipeline.sessions.delete('paused-session-x');
 });
 
+test('housekeeping sweep: cap trimming preserves paused session mounts', async () => {
+  const now = Date.now();
+  const mk = (id, touched) => ({ id, _touched: touched, name: id, size: 1, streamable: true, tags: [] });
+  const ids = [];
+  for (let i = 0; i < 18; i++) {
+    const id = `cap-${i}`;
+    ids.push(id);
+    srv.mounts.set(id, mk(id, now - (30 + i) * 1000));
+  }
+  srv.mounts.set('paused-cap-x', mk('paused-cap-x', now - 60 * 60000));
+  srv.pipeline.sessions.set('paused-cap-session-x', { id: 'paused-cap-session-x', createdAt: now, currentMountId: 'paused-cap-x' });
+  const evicted = srv.sweep(now);
+  assert.ok(srv.mounts.has('paused-cap-x'), 'paused session mount survives global cap trimming');
+  assert.ok(!evicted.includes('paused-cap-x'), 'protected paused mount is not reported as evicted');
+  assert.ok(evicted.length >= 3, 'ordinary old mounts are trimmed before protected sessions');
+  for (const id of ids) srv.mounts.delete(id);
+  srv.mounts.delete('paused-cap-x');
+  srv.pipeline.sessions.delete('paused-cap-session-x');
+});
+
 test('fetchUrl: response-size cap aborts oversized bodies instead of buffering them', async () => {
   const { fetchUrl } = require('../server/newznab');
   const big = http.createServer((req, res) => { res.writeHead(200); res.end(Buffer.alloc(2 * 1024 * 1024)); });
@@ -2320,9 +2340,9 @@ test('iptv: live-remux preserves HTTPS hostnames for provider TLS SNI', () => {
 test('streaming: HTTP range reads use startup/seek lanes and cancel stale read-ahead on close', () => {
   const serverCode = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
   const vfsCode = fs.readFileSync(path.join(__dirname, '..', 'server', 'vfs.js'), 'utf8');
-  assert.match(serverCode, /const readPriority = start === 0 \? 'startup' : 'seek';[\s\S]+ctx\.req\.once\('close', stopRead\);[\s\S]+vf\.read\(start, end, \{ priority: readPriority, signal: readSignal \}\)/,
+  assert.match(serverCode, /vf\._touched = Date\.now\(\);[\s\S]+pipeline\.rebalancePlaybackWindows\(\);[\s\S]+const readPriority = start === 0 \? 'startup' : 'seek';[\s\S]+ctx\.req\.once\('close', stopRead\);[\s\S]+vf\.read\(start, end, \{ priority: readPriority, signal: readSignal \}\)/,
     'the stream route should mark initial reads as startup and non-zero ranges as seek');
-  assert.match(serverCode, /const stopRead = \(\) => \{[\s\S]+readSignal\.aborted = true;[\s\S]+vf\.cancelReadAhead\(\);[\s\S]+\}/,
+  assert.match(serverCode, /const readController = new AbortController\(\);[\s\S]+const readSignal = readController\.signal;[\s\S]+const stopRead = \(\) => \{[\s\S]+readController\.abort\(\);[\s\S]+vf\.cancelReadAhead\(\);[\s\S]+\}/,
     'client disconnects should stop future read-ahead scheduling');
   assert.match(vfsCode, /cancelReadAhead\(\) \{[\s\S]+this\.readAheadEpoch\+\+;[\s\S]+\}/,
     'virtual files should expose a safe read-ahead cancel hook');
@@ -2330,7 +2350,7 @@ test('streaming: HTTP range reads use startup/seek lanes and cancel stale read-a
     'mount should fetch the first segment through the startup lane so play start cannot queue behind read-ahead');
   assert.match(vfsCode, /async readAt\(start, len, opts = \{\}\)[\s\S]+const priority = opts\.priority \|\| 'startup';[\s\S]+this\._fetchSegment\(first \+ k, priority\)/,
     'header/random access reads used during mount should also stay on the startup lane');
-  assert.match(vfsCode, /async \*read\(start, end, opts = \{\}\) \{[\s\S]+const priority = opts\.priority \|\| 'playback';[\s\S]+let activePriority = priority;[\s\S]+readAheadEpoch === this\.readAheadEpoch[\s\S]+this\._fetchSegment\(segIdx, activePriority\)[\s\S]+activePriority = 'playback'/,
+  assert.match(vfsCode, /async \*read\(start, end, opts = \{\}\) \{[\s\S]+const priority = opts\.priority \|\| 'playback';[\s\S]+let activePriority = priority;[\s\S]+readAheadEpoch === this\.readAheadEpoch[\s\S]+this\._fetchSegment\(segIdx, activePriority, \{ signal \}\)[\s\S]+activePriority = 'playback'/,
     'virtual file reads should pass caller priority into the first real article fetch, then return to playback while gating read-ahead');
 });
 

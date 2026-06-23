@@ -10,6 +10,22 @@ const crypto = require('crypto');
 
 const DEFAULT_CACHE_BYTES = 128 * 1024 * 1024;
 
+function abortError() {
+  const e = new Error('read aborted');
+  e.code = 'ABORT_ERR';
+  return e;
+}
+
+function signalAborted(signal) {
+  return !!(signal && signal.aborted);
+}
+
+function addAbortListener(signal, fn) {
+  if (!signal || typeof signal.addEventListener !== 'function') return () => {};
+  signal.addEventListener('abort', fn, { once: true });
+  return () => signal.removeEventListener('abort', fn);
+}
+
 class NzbFileStream {
   constructor(pool, fileEntry, { readAhead = 4, cacheSegments = 24, cacheBytes = DEFAULT_CACHE_BYTES } = {}) {
     this.pool = pool;
@@ -69,20 +85,39 @@ class NzbFileStream {
     }
   }
 
-  _fetchSegment(i, priority = 'playback') {
+  _fetchSegment(i, priority = 'playback', opts = {}) {
     if (this.cache.has(i)) return Promise.resolve(this.cache.get(i));
-    if (this.inflight.has(i)) return this.inflight.get(i);
-    const p = this.pool.body(this.segments[i].msgId, priority).then((raw) => {
-      const dec = decode(raw);
-      if (!dec.crcOk) throw new Error(`segment ${i} CRC mismatch`);
-      if (dec.size !== null) this.size = dec.size;
-      if (dec.part && i === 0) this.partSize = dec.part.end - dec.part.begin;
-      this.inflight.delete(i);
-      this._cachePut(i, dec.data);
-      return dec.data;
-    }).catch((e) => { this.inflight.delete(i); throw e; });
-    this.inflight.set(i, p);
-    return p;
+    const signal = opts.signal || null;
+    if (signalAborted(signal)) return Promise.reject(abortError());
+    let rec = this.inflight.get(i);
+    if (!rec) {
+      const controller = new AbortController();
+      rec = { consumers: 0, controller, promise: null };
+      rec.promise = this.pool.body(this.segments[i].msgId, priority, { signal: controller.signal }).then((raw) => {
+        const dec = decode(raw);
+        if (!dec.crcOk) throw new Error(`segment ${i} CRC mismatch`);
+        if (dec.size !== null) this.size = dec.size;
+        if (dec.part && i === 0) this.partSize = dec.part.end - dec.part.begin;
+        this.inflight.delete(i);
+        this._cachePut(i, dec.data);
+        return dec.data;
+      }).catch((e) => { this.inflight.delete(i); throw e; });
+      this.inflight.set(i, rec);
+    }
+    rec.consumers++;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      rec.consumers = Math.max(0, rec.consumers - 1);
+      if (typeof removeAbort === 'function') removeAbort();
+      if (rec.consumers === 0 && this.inflight.get(i) === rec
+          && !rec.controller.signal.aborted && signalAborted(signal)) {
+        rec.controller.abort();
+      }
+    };
+    let removeAbort = addAbortListener(signal, release);
+    return rec.promise.finally(release);
   }
 
   cancelReadAhead() {
@@ -108,11 +143,17 @@ class NzbFileStream {
         for (let a = 1; a <= this.readAhead; a++) {
           const n = segIdx + a;
           if (n < this.segments.length && !this.cache.has(n) && !this.inflight.has(n)) {
-            this._fetchSegment(n, 'readAhead').catch(() => {});
+            this._fetchSegment(n, 'readAhead', { signal }).catch(() => {});
           }
         }
       }
-      const data = await this._fetchSegment(segIdx, activePriority);
+      let data;
+      try {
+        data = await this._fetchSegment(segIdx, activePriority, { signal });
+      } catch (e) {
+        if (aborted() || e.code === 'ABORT_ERR') return;
+        throw e;
+      }
       if (activePriority === 'startup' || activePriority === 'seek') activePriority = 'playback';
       if (aborted()) return;
       const segStart = segIdx * this.partSize;

@@ -2493,6 +2493,7 @@ function trimUserMounts(uid, keepId = null, limit = USER_MOUNT_CAP) {
   while (owned.length >= limit) {
     const vf = owned.shift();
     if (!vf) break;
+    if (protectedIds.has(vf.id)) continue;
     mounts.delete(vf.id);
     evicted.push(vf.id);
   }
@@ -5013,6 +5014,7 @@ Object.assign(H, {
     if (!mountAccessOk(ctx, vf)) return send(ctx.res, 404, { error: 'mount not found' });
     if (!vf.streamable) return send(ctx.res, 409, { error: 'mount is not streamable', tags: vf.tags });
     vf._touched = Date.now();
+    pipeline.rebalancePlaybackWindows();
     const total = vf.size;
     let start = 0, end = total;
     let code = 200;
@@ -5033,9 +5035,10 @@ Object.assign(H, {
     headers['content-length'] = String(end - start);
     ctx.res.writeHead(code, headers);
     if (ctx.req.method === 'HEAD') return ctx.res.end();
-    const readSignal = { aborted: false };
+    const readController = new AbortController();
+    const readSignal = readController.signal;
     const stopRead = () => {
-      readSignal.aborted = true;
+      if (!readSignal.aborted) readController.abort();
       if (vf && typeof vf.cancelReadAhead === 'function') vf.cancelReadAhead();
     };
     const readPriority = start === 0 ? 'startup' : 'seek';
@@ -5834,12 +5837,20 @@ function sweep(now = Date.now()) {
     !protectedIds.has(vf.id) && now - (vf._touched || vf.mountedAt || 0) > MOUNT_IDLE_MS);
   for (const vf of idle) { mounts.delete(vf.id); evicted.push(vf.id); }
   if (mounts.size > MOUNT_CAP) {
-    const byAge = [...mounts.values()].sort((a, b) => (Number(protectedIds.has(a.id)) - Number(protectedIds.has(b.id)))
-      || ((a._touched || a.mountedAt || 0) - (b._touched || b.mountedAt || 0)));
-    for (const vf of byAge.slice(0, mounts.size - MOUNT_CAP)) { mounts.delete(vf.id); evicted.push(vf.id); }
+    const removable = [...mounts.values()]
+      .filter((vf) => !protectedIds.has(vf.id))
+      .sort((a, b) => ((a._touched || a.mountedAt || 0) - (b._touched || b.mountedAt || 0)));
+    let overflow = mounts.size - MOUNT_CAP;
+    for (const vf of removable) {
+      if (overflow <= 0) break;
+      mounts.delete(vf.id);
+      evicted.push(vf.id);
+      overflow--;
+    }
   }
   for (const [url, id] of pipeline.mountByUrl) if (!mounts.has(id)) pipeline.mountByUrl.delete(url);
   for (const [id, s] of pipeline.sessions) if (now - (s.createdAt || 0) > SESSION_TTL_MS) pipeline.sessions.delete(id);
+  if (evicted.length) pipeline.rebalancePlaybackWindows(now);
   auth.sweepQuickConnect();
   if (evicted.length) console.log(`[sweep] evicted ${evicted.length} idle mount(s), ${mounts.size} live`);
   return evicted;

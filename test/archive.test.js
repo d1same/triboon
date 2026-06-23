@@ -12,7 +12,7 @@ const { encodePart } = require('../server/yenc');
 const { seededPayload, writeRar4Store, writeRar5Store, writeZipStore } = require('./archive-fixtures');
 const { parseRarVolumes, RAR5_SIG } = require('../server/rar');
 const { parseZip } = require('../server/zip');
-const { detectContainer, orderVolumes, mountNzb } = require('../server/archive');
+const { detectContainer, orderVolumes, mountNzb, ArchiveVirtualFile } = require('../server/archive');
 const { parseNzb, nzbPassword } = require('../server/nzb');
 const { NntpPool } = require('../server/nntp');
 const { createMockNntp } = require('./mock-nntp');
@@ -41,6 +41,38 @@ function vint(n) {
   } while (n);
   return Buffer.from(out);
 }
+
+test('archive virtual files propagate read options and cancellation to volume streams', async () => {
+  const seen = [];
+  let cancelCalls = 0;
+  const vol = {
+    size: 3,
+    segments: [{ msgId: 'seg1@test' }],
+    async *read(start, end, opts = {}) {
+      seen.push({ start, end, opts });
+      yield Buffer.from('abc');
+    },
+    cancelReadAhead() { cancelCalls++; },
+  };
+  const vf = new ArchiveVirtualFile({
+    vols: [vol],
+    inner: { name: 'Feature.mkv', size: 3, extents: [{ vol: 0, offset: 5, length: 3 }] },
+    container: 'rar',
+    method: 'store',
+    streamable: true,
+    tags: [],
+  });
+  const ac = new AbortController();
+  const chunks = [];
+  for await (const chunk of vf.read(0, 3, { priority: 'seek', signal: ac.signal })) chunks.push(chunk);
+  assert.strictEqual(Buffer.concat(chunks).toString(), 'abc');
+  assert.strictEqual(seen[0].start, 5);
+  assert.strictEqual(seen[0].end, 8);
+  assert.strictEqual(seen[0].opts.priority, 'seek');
+  assert.strictEqual(seen[0].opts.signal, ac.signal);
+  vf.cancelReadAhead();
+  assert.strictEqual(cancelCalls, 1);
+});
 
 // Build an NZB + mock articles from archive volumes (one usenet "file" per volume), with
 // par2/nfo junk thrown in to prove the volume-set collector ignores them.
