@@ -1031,7 +1031,7 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
    the focused title's text and clipped the second row. */
 :root{--rowH:calc(var(--poster) * 1.5 + 106px);--winRows:2}
 #rows{max-height:calc((var(--rowH) + 13px) * var(--winRows))}
-#discoverRows{flex:none!important;margin-top:auto;max-height:calc((var(--rowH) + 13px) * var(--winRows))}
+#discoverRows{flex:1!important;margin-top:0;max-height:none}
 /* Browse pages (Movies/TV/Search/Watchlist/libraries — NOT Live TV): the grid becomes a
    bottom-anchored row window so the focused title's backdrop owns the space above.
    adaptRowWindows() overrides max-height inline with the exact 1/2-row fit. */
@@ -1049,9 +1049,9 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 }
 /* Page heads (Movies/TV/Search/…) share the hero's adaptive indent. */
 .browseHead,#discover h1{margin-left:var(--heroLeft)}
-/* Page titles are redundant chrome — the rail marks where you are and backdrops own the
-   space. Hiding (not removing) keeps #browseTitle for screen readers and route logic. */
-#browseTitle,#discoverTitle{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+/* Browse page titles are redundant chrome — the rail marks where you are and backdrops own
+   the space. Discover stays row-first, so its title remains visible. */
+#browseTitle{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 /* Browse filters and the fixed clock share the top-right corner. Reserve that corner so
    genre/sort controls never slide under the clock on 720p/TV/tablet-width screens. */
 .browseHead{
@@ -4471,6 +4471,7 @@ function rowsWindowHeight(root, rows, n, gap) {
 function sizeRowsWindow(root) {
   const rows = [...root.querySelectorAll('.row')];
   if (!rows.length) { root.style.maxHeight = ''; return; }
+  if (root.id === 'discoverRows') { root.style.maxHeight = ''; return; }
   const compactHome = root.id === 'rows' && !document.body.classList.contains('tv')
     && (window.innerWidth <= 600 || document.body.classList.contains('mobileShell'));
   if (compactHome) { root.style.maxHeight = ''; return; }
@@ -13912,8 +13913,8 @@ function switchView(v, push = true, opts = {}) {
   const onDiscover = v === 'discover' || v === 'calendar';
   const isBrowse = ['movies', 'tv', 'search', 'library', 'watchlist', 'livetv'].includes(v);
   const shortBrowseBd = v === 'movies' || v === 'tv' || v === 'watchlist' || (v === 'library' && S.currentLib && S.currentLib.path);
-  // Browse views show the focused title's backdrop FULL-BLEED (home keeps the corner cutout).
-  document.body.classList.toggle('fullBd', isBrowse || v === 'discover');
+  // Browse views show the focused title's backdrop info. Discover is row-first chrome.
+  document.body.classList.toggle('fullBd', isBrowse);
   document.body.classList.toggle('shortBrowseBd', !!shortBrowseBd);
   applyCoverSize();
   $('home').classList.toggle('show', v === 'home');

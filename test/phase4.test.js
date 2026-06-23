@@ -411,6 +411,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'desktop/tablet browse pages should use compact browser poster sizing and a compact row reserve');
   assert.match(ui, /const shortBrowseBd = v === 'movies' \|\| v === 'tv' \|\| v === 'watchlist' \|\| \(v === 'library' && S\.currentLib && S\.currentLib\.path\);[\s\S]+document\.body\.classList\.toggle\('shortBrowseBd', !!shortBrowseBd\);/,
     'movies, TV shows, watchlist, and attached libraries should use the shorter browse backdrop');
+  assert.match(ui, /document\.body\.classList\.toggle\('fullBd', isBrowse\);/,
+    'Discover should stay row-first instead of enabling the focused-title backdrop overlay');
   assert.match(ui, /let pendingLibraryRouteJob = null;[\s\S]+function applyLibraryRoute\(id\) \{[\s\S]+switchView\('library', false\);[\s\S]+function deferLibraryRoute\(id\) \{[\s\S]+loadLibraries\(\)[\s\S]+if \(parts\[0\] !== 'library' \|\| parts\[1\] !== id\) return;[\s\S]+if \(!applyLibraryRoute\(id\)\) switchView\('home', false\);[\s\S]+if \(view === 'library' && parts\[1\]\) \{[\s\S]+deferLibraryRoute\(parts\[1\]\);/,
     'library hash routes should wait for async library metadata instead of falling through to Home');
   assert.match(ui, /if \(v === 'search'\) \{ \$\('browseTitle'\)\.textContent = 'Search';[\s\S]+if \(!opts\.preserveSearch && !opts\.preservePage\) \{ resetSearchPage\(\); \$\('grid'\)\.innerHTML = ''; \}/,
@@ -2012,6 +2014,14 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'long subtitle/audio/quality menus should keep the focused row inside the panel');
   assert.match(ui, /#hero h1\{[^}]*height:2\.08em;[\s\S]+#hero \.meta\{[^}]*height:28px;[\s\S]+#hero p\{[^}]*height:4\.5em/,
     'desktop Home hero title, metadata, and overview should reserve stable height while focus changes');
+  assert.match(ui, /#discoverRows\{flex:1!important;margin-top:0;max-height:none\}/,
+    'Discover rows should fill from the visible page title instead of bottom-anchoring like Home/Browse');
+  assert.match(ui, /function sizeRowsWindow\(root\) \{[\s\S]+if \(root\.id === 'discoverRows'\) \{ root\.style\.maxHeight = ''; return; \}/,
+    'Discover rows should not receive the inline Home row-window max-height');
+  assert.match(ui, /#browseTitle\{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect\(0 0 0 0\);white-space:nowrap\}/,
+    'Browse title may stay visually hidden while Discover title remains visible');
+  assert.doesNotMatch(ui, /#browseTitle,#discoverTitle\{position:absolute;width:1px;height:1px;/,
+    'Discover title should not be hidden with the Browse title');
   assert.match(ui, /function rowsWindowHeight\(root, rows, n, gap\) \{[\s\S]+document\.body\.classList\.contains\('tv'\) && n === 1[\s\S]+Math\.max\(\.\.\.rows\.map/,
     'TV Home row window should use the tallest row height instead of resizing per focused row');
   assert.doesNotMatch(ui, /view\.root\.style\.maxHeight = \(rowEl\.offsetHeight \+ 8\) \+ 'px';/,
