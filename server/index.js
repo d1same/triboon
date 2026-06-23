@@ -2825,6 +2825,43 @@ async function loadMusicChart(def) {
 function tokenizedMusicTrack(uid, r) {
   return { ...r, streamUrl: `/api/music/stream/${r.id}?t=${auth.streamToken(uid, `music:${r.id}`)}` };
 }
+const ytOauthPending = new Map(); // uid -> pending device-code auth
+function ytOauthClient(s = settings.get()) {
+  const clientId = String(s.ytOAuthClientId || '').trim();
+  const clientSecret = String(s.ytOAuthClientSecret || '').trim();
+  return clientId && clientSecret ? { clientId, clientSecret } : null;
+}
+function ytOauthToken(uid, s = settings.get()) {
+  const all = s.ytOAuthTokens || {};
+  const token = all[uid];
+  return token && token.access_token && token.refresh_token ? token : null;
+}
+async function ytmusicOauthFor(uid) {
+  const s = settings.get();
+  const client = ytOauthClient(s);
+  const token = ytOauthToken(uid, s);
+  if (!client || !token) return null;
+  const expiresAt = parseInt(token.expires_at, 10) || 0;
+  if (expiresAt > Math.floor(Date.now() / 1000) + 120) return { token, client };
+  const fresh = await ytmusic.refreshOAuthToken(token, client);
+  settings.update((cur) => {
+    const issues = { ...(cur.ytOAuthIssues || {}) }; delete issues[uid];
+    return { ...cur, ytOAuthTokens: { ...(cur.ytOAuthTokens || {}), [uid]: fresh }, ytOAuthIssues: issues };
+  });
+  return { token: fresh, client };
+}
+function clearYtmIssue(uid, kind) {
+  settings.update((s) => {
+    const next = { ...s };
+    if (kind === 'oauth' || kind === 'all') {
+      const issues = { ...(next.ytOAuthIssues || {}) }; delete issues[uid]; next.ytOAuthIssues = issues;
+    }
+    if (kind === 'cookie' || kind === 'all') {
+      const issues = { ...(next.ytCookieIssues || {}) }; delete issues[uid]; next.ytCookieIssues = issues;
+    }
+    return next;
+  });
+}
 async function loadMusicChartResponses(uid, { wait = true } = {}) {
   return (await Promise.all(MUSIC_CHARTS.map(async (def) => {
     try {
@@ -2858,6 +2895,7 @@ const H = {
     opensubs: !!settings.get().openSubsKey,
     iptv: iptvConfigured(settings.get()),
     music: !!ytmusic.detectYtdlp(), // Music tab shows only when yt-dlp is present
+    musicCatalog: !!ytmusic.detectYtMusicApi(),
   }),
 
   authArt: async (ctx) => {
@@ -4422,6 +4460,8 @@ Object.assign(H, {
       type: scrubActivityText(b.type || '', 30),
       player: scrubActivityText(b.player || '', 30),
       mode: scrubActivityText(b.mode || '', 30),
+      streamKind: scrubActivityText(b.streamKind || '', 30),
+      streamLabel: scrubActivityText(b.streamLabel || '', 60),
       device: scrubActivityText(b.device || ctx.req.headers['user-agent'] || '', 90),
       source: scrubActivityText(b.source || '', 220),
       fileName: scrubActivityText(b.fileName || '', 220),
@@ -4525,6 +4565,8 @@ Object.assign(H, {
       epgUrl: primaryIptv.epgUrl ? iptvUrlHost(primaryIptv.epgUrl) : null,
       traktClientId: s.traktClientId || null, // public identifier — safe to show
       traktClientSecret: s.traktClientSecret ? '•••' : null,
+      ytOAuthClientId: s.ytOAuthClientId || null, // public identifier — safe to show
+      ytOAuthClientSecret: s.ytOAuthClientSecret ? '•••' : null,
       iptvUsers: primaryIptv.users || [], // user ids, not secrets
       sizeCapMode: s.sizeCapMode || 'auto',
       sizeCap4kGb: s.sizeCap4kGb || null,
@@ -4622,6 +4664,8 @@ Object.assign(H, {
           : (s.iptvHiddenGroups || []),
         traktClientId: b.traktClientId !== undefined ? (b.traktClientId || null) : s.traktClientId,
         traktClientSecret: b.traktClientSecret !== undefined ? (b.traktClientSecret || null) : s.traktClientSecret,
+        ytOAuthClientId: b.ytOAuthClientId !== undefined ? (b.ytOAuthClientId || null) : s.ytOAuthClientId,
+        ytOAuthClientSecret: b.ytOAuthClientSecret !== undefined ? (b.ytOAuthClientSecret || null) : s.ytOAuthClientSecret,
         // Live TV user allowlist (empty = everyone) — same model as library sharing.
         iptvUsers: b.iptvUsers !== undefined
           ? (Array.isArray(b.iptvUsers) ? b.iptvUsers.map(String).slice(0, 100) : [])
@@ -5108,6 +5152,18 @@ Object.assign(H, {
       });
     } catch (e) { send(ctx.res, 502, { error: 'music search failed', detail: String(e.message).slice(0, 160) }); }
   },
+  musicRadio: async (ctx) => {
+    if (!ytmusic.detectYtdlp()) return send(ctx.res, 503, { error: 'yt-dlp is not installed on the server' });
+    if (!ytmusic.detectYtMusicApi()) return send(ctx.res, 503, { error: 'ytmusicapi is not installed on the server' });
+    try {
+      const limit = Math.max(1, Math.min(40, parseInt(ctx.url.searchParams.get('limit') || '24', 10) || 24));
+      const r = await ytmusic.watchQueue(ctx.m[1], { limit });
+      send(ctx.res, 200, {
+        playlistId: r.playlistId || null,
+        results: (r.tracks || []).map((t) => tokenizedMusicTrack(ctx.user.id, t)),
+      });
+    } catch (e) { send(ctx.res, 502, { error: 'music radio failed', detail: String(e.message).slice(0, 160) }); }
+  },
 
   // Range-proxy the audio: resolve (cached) the googlevideo URL, then pipe its bytes with the
   // client's Range header. googlevideo URLs are IP-locked to US + expire, so a 403/410 means
@@ -5146,16 +5202,87 @@ Object.assign(H, {
   // Link state only — the cookie text NEVER returns to a client.
   musicStatus: async (ctx) => {
     const s = settings.get();
+    const oauthLinked = !!ytOauthToken(ctx.user.id, s);
     const accountLinked = !!((s.ytCookies || {})[ctx.user.id]);
-    const serverLinked = !accountLinked && !!cookiesFor(null);
-    const issue = (s.ytCookieIssues || {})[ctx.user.id] || null;
+    const serverLinked = !oauthLinked && !accountLinked && !!cookiesFor(null);
+    const oauthIssue = (s.ytOAuthIssues || {})[ctx.user.id] || null;
+    const cookieIssue = (s.ytCookieIssues || {})[ctx.user.id] || null;
+    const issue = oauthLinked ? oauthIssue : cookieIssue;
+    const ytdlp = ytmusic.detectYtdlp();
+    const catalog = ytmusic.detectYtMusicApi();
+    const oauthClient = ytOauthClient(s);
     send(ctx.res, 200, {
-      ytdlp: !!ytmusic.detectYtdlp(),
-      linked: accountLinked || serverLinked,
-      linkSource: accountLinked ? 'account' : (serverLinked ? 'server' : 'none'),
-      needsRelink: !!(accountLinked && issue),
-      linkIssue: accountLinked && issue ? { at: issue.at || 0, message: String(issue.message || '').slice(0, 160) } : null,
+      ytdlp: !!ytdlp,
+      ytdlpVersion: ytdlp ? ytdlp.version || null : null,
+      catalog: !!catalog,
+      catalogVersion: catalog ? catalog.version || null : null,
+      oauthConfigured: !!oauthClient,
+      oauthAvailable: !!(oauthClient && catalog),
+      linked: oauthLinked || accountLinked || serverLinked,
+      linkSource: oauthLinked ? 'oauth' : (accountLinked ? 'account' : (serverLinked ? 'server' : 'none')),
+      needsRelink: !!((oauthLinked || accountLinked) && issue),
+      linkIssue: (oauthLinked || accountLinked) && issue ? { at: issue.at || 0, message: String(issue.message || '').slice(0, 160) } : null,
     });
+  },
+  musicOAuthStart: async (ctx) => {
+    if (!ytmusic.detectYtMusicApi()) return send(ctx.res, 503, { error: 'ytmusicapi is not installed on the server' });
+    const client = ytOauthClient();
+    if (!client) return send(ctx.res, 400, { error: 'YouTube Music OAuth app is not configured yet' });
+    try {
+      const r = await ytmusic.beginOAuth(client);
+      if (!r.deviceCode || !r.userCode) return send(ctx.res, 502, { error: 'YouTube Music OAuth returned no device code' });
+      ytOauthPending.set(ctx.user.id, {
+        deviceCode: r.deviceCode,
+        expiresAt: Date.now() + r.expiresIn * 1000,
+        intervalMs: r.interval * 1000,
+      });
+      send(ctx.res, 200, {
+        status: 'pending',
+        userCode: r.userCode,
+        verificationUrl: r.verificationUrl,
+        verificationUrlComplete: r.verificationUrlComplete,
+        expiresIn: r.expiresIn,
+        intervalMs: r.interval * 1000,
+      });
+    } catch (e) { send(ctx.res, 502, { error: 'YouTube Music OAuth failed to start', detail: String(e.message).slice(0, 160) }); }
+  },
+  musicOAuthPoll: async (ctx) => {
+    if (!ytmusic.detectYtMusicApi()) return send(ctx.res, 503, { error: 'ytmusicapi is not installed on the server' });
+    const pending = ytOauthPending.get(ctx.user.id);
+    if (!pending) return send(ctx.res, 404, { error: 'No YouTube Music sign-in is waiting' });
+    if (Date.now() > pending.expiresAt) {
+      ytOauthPending.delete(ctx.user.id);
+      return send(ctx.res, 410, { error: 'YouTube Music sign-in code expired' });
+    }
+    const client = ytOauthClient();
+    if (!client) return send(ctx.res, 400, { error: 'YouTube Music OAuth app is not configured yet' });
+    try {
+      const token = await ytmusic.completeOAuth({ ...client, deviceCode: pending.deviceCode });
+      ytOauthPending.delete(ctx.user.id);
+      settings.update((s) => {
+        const cookies = { ...(s.ytCookies || {}) }; delete cookies[ctx.user.id];
+        const cIssues = { ...(s.ytCookieIssues || {}) }; delete cIssues[ctx.user.id];
+        const oIssues = { ...(s.ytOAuthIssues || {}) }; delete oIssues[ctx.user.id];
+        return {
+          ...s,
+          ytCookies: cookies,
+          ytCookieIssues: cIssues,
+          ytOAuthTokens: { ...(s.ytOAuthTokens || {}), [ctx.user.id]: token },
+          ytOAuthIssues: oIssues,
+        };
+      });
+      dropCookieFile(ctx.user.id);
+      send(ctx.res, 200, { status: 'linked', linked: true });
+    } catch (e) {
+      if (e.code === 'authorization_pending') return send(ctx.res, 200, { status: 'pending', intervalMs: pending.intervalMs });
+      if (e.code === 'slow_down') {
+        pending.intervalMs = Math.min(15000, pending.intervalMs + 5000);
+        return send(ctx.res, 200, { status: 'pending', intervalMs: pending.intervalMs });
+      }
+      if (e.code === 'expired_token' || e.code === 'access_denied') ytOauthPending.delete(ctx.user.id);
+      const status = e.code === 'expired_token' ? 410 : (e.code === 'access_denied' ? 403 : 502);
+      send(ctx.res, status, { error: 'YouTube Music sign-in failed', detail: String(e.message).slice(0, 160) });
+    }
   },
 
   // Paste an exported cookies.txt (Netscape format, from music.youtube.com while signed in).
@@ -5168,7 +5295,9 @@ Object.assign(H, {
     }
     settings.update((s) => {
       const issues = { ...(s.ytCookieIssues || {}) }; delete issues[ctx.user.id];
-      return { ...s, ytCookies: { ...(s.ytCookies || {}), [ctx.user.id]: text }, ytCookieIssues: issues };
+      const oauth = { ...(s.ytOAuthTokens || {}) }; delete oauth[ctx.user.id];
+      const oauthIssues = { ...(s.ytOAuthIssues || {}) }; delete oauthIssues[ctx.user.id];
+      return { ...s, ytCookies: { ...(s.ytCookies || {}), [ctx.user.id]: text }, ytCookieIssues: issues, ytOAuthTokens: oauth, ytOAuthIssues: oauthIssues };
     });
     dropCookieFile(ctx.user.id); // re-materialize with the fresh text on next use
     send(ctx.res, 200, { linked: true });
@@ -5177,8 +5306,11 @@ Object.assign(H, {
     settings.update((s) => {
       const all = { ...(s.ytCookies || {}) }; delete all[ctx.user.id];
       const issues = { ...(s.ytCookieIssues || {}) }; delete issues[ctx.user.id];
-      return { ...s, ytCookies: all, ytCookieIssues: issues };
+      const oauth = { ...(s.ytOAuthTokens || {}) }; delete oauth[ctx.user.id];
+      const oauthIssues = { ...(s.ytOAuthIssues || {}) }; delete oauthIssues[ctx.user.id];
+      return { ...s, ytCookies: all, ytCookieIssues: issues, ytOAuthTokens: oauth, ytOAuthIssues: oauthIssues };
     });
+    ytOauthPending.delete(ctx.user.id);
     dropCookieFile(ctx.user.id);
     send(ctx.res, 200, { linked: false });
   },
@@ -5186,19 +5318,31 @@ Object.assign(H, {
   // The user's own playlists (chips on the Music page). Honest errors — cookies can expire.
   musicPlaylists: async (ctx) => {
     if (!ytmusic.detectYtdlp()) return send(ctx.res, 503, { error: 'yt-dlp is not installed on the server' });
-    const cookies = cookiesFor(ctx.user.id);
-    if (!cookies) return send(ctx.res, 200, { linked: false, playlists: [] });
+    let oauth = null;
+    try { oauth = await ytmusicOauthFor(ctx.user.id); } catch (e) {
+      settings.update((s) => ({
+        ...s,
+        ytOAuthIssues: { ...(s.ytOAuthIssues || {}), [ctx.user.id]: { at: Date.now(), message: String(e.message || e).slice(0, 160) } },
+      }));
+    }
+    const cookies = oauth ? null : cookiesFor(ctx.user.id);
+    if (!oauth && !cookies) return send(ctx.res, 200, { linked: false, playlists: [] });
     try {
-      const playlists = await ytmusic.listPlaylists({ cookiesPath: cookies });
-      settings.update((s) => {
-        const issues = { ...(s.ytCookieIssues || {}) };
-        if (!issues[ctx.user.id]) return s;
-        delete issues[ctx.user.id];
-        return { ...s, ytCookieIssues: issues };
+      const playlists = await ytmusic.listPlaylists({
+        cookiesPath: cookies,
+        oauthToken: oauth && oauth.token,
+        oauthClientId: oauth && oauth.client.clientId,
+        oauthClientSecret: oauth && oauth.client.clientSecret,
       });
-      send(ctx.res, 200, { linked: true, playlists });
+      clearYtmIssue(ctx.user.id, oauth ? 'oauth' : 'cookie');
+      send(ctx.res, 200, { linked: true, linkSource: oauth ? 'oauth' : 'account', playlists });
     } catch (e) {
-      if ((settings.get().ytCookies || {})[ctx.user.id]) {
+      if (oauth) {
+        settings.update((s) => ({
+          ...s,
+          ytOAuthIssues: { ...(s.ytOAuthIssues || {}), [ctx.user.id]: { at: Date.now(), message: String(e.message || e).slice(0, 160) } },
+        }));
+      } else if ((settings.get().ytCookies || {})[ctx.user.id]) {
         settings.update((s) => ({
           ...s,
           ytCookieIssues: { ...(s.ytCookieIssues || {}), [ctx.user.id]: { at: Date.now(), message: String(e.message || e).slice(0, 160) } },
@@ -5212,7 +5356,16 @@ Object.assign(H, {
     try {
       const limit = Math.max(1, Math.min(100, parseInt(ctx.url.searchParams.get('limit') || '50', 10) || 50));
       const offset = Math.max(0, parseInt(ctx.url.searchParams.get('offset') || '0', 10) || 0);
-      const r = await ytmusic.playlistTracks(ctx.m[1], { cookiesPath: cookiesFor(ctx.user.id), limit: limit + 1, offset });
+      let oauth = null;
+      try { oauth = await ytmusicOauthFor(ctx.user.id); } catch { oauth = null; }
+      const r = await ytmusic.playlistTracks(ctx.m[1], {
+        cookiesPath: oauth ? null : cookiesFor(ctx.user.id),
+        oauthToken: oauth && oauth.token,
+        oauthClientId: oauth && oauth.client.clientId,
+        oauthClientSecret: oauth && oauth.client.clientSecret,
+        limit: limit + 1,
+        offset,
+      });
       const tracks = r.tracks.slice(0, limit);
       const hasMore = r.tracks.length > limit;
       send(ctx.res, 200, {
@@ -5375,8 +5528,11 @@ const ROUTES = [
   { m: 'GET', re: /^\/api\/music\/home$/, auth: 'user', h: H.musicHome },
   { m: 'GET', re: /^\/api\/music\/charts$/, auth: 'user', h: H.musicCharts },
   { m: 'GET', re: /^\/api\/music\/search$/, auth: 'user', h: H.musicSearch },
+  { m: 'GET', re: /^\/api\/music\/radio\/([\w-]{11})$/, auth: 'user', h: H.musicRadio },
   { m: 'GET', re: /^\/api\/music\/stream\/([\w-]{11})$/, auth: 'stream', h: H.musicStream },
   { m: 'GET', re: /^\/api\/music\/status$/, auth: 'user', h: H.musicStatus },
+  { m: 'POST', re: /^\/api\/music\/oauth\/start$/, auth: 'user', h: H.musicOAuthStart },
+  { m: 'POST', re: /^\/api\/music\/oauth\/poll$/, auth: 'user', h: H.musicOAuthPoll },
   { m: 'POST', re: /^\/api\/music\/link$/, auth: 'user', h: H.musicLink },
   { m: 'POST', re: /^\/api\/music\/unlink$/, auth: 'user', h: H.musicUnlink },
   { m: 'GET', re: /^\/api\/music\/playlists$/, auth: 'user', h: H.musicPlaylists },

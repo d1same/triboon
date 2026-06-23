@@ -10,10 +10,21 @@
 // So the browser plays /api/music/stream/<id>?t=… and we Range-proxy the bytes.
 
 const { spawn, spawnSync } = require('child_process');
+const https = require('https');
 const YTDLP_CONCURRENCY = Math.max(1, Math.min(4, parseInt(process.env.TRIBOON_YTDLP_CONCURRENCY || '2', 10) || 2));
+const YTMUSICAPI_CONCURRENCY = Math.max(1, Math.min(3, parseInt(process.env.TRIBOON_YTMUSICAPI_CONCURRENCY || '2', 10) || 2));
+const YTMUSIC_OAUTH_SCOPE = 'https://www.googleapis.com/auth/youtube';
+const YTMUSIC_OAUTH_CODE_URL = 'https://www.youtube.com/o/oauth2/device/code';
+const YTMUSIC_OAUTH_TOKEN_URL = 'https://oauth2.googleapis.com/token';
+const YTMUSIC_OAUTH_GRANT = 'http://oauth.net/grant_type/device/1.0';
+const YTMUSIC_OAUTH_UA = 'Mozilla/5.0 Triboon/1.0 Cobalt/Version';
 let ytdlpActive = 0;
 const ytdlpQueue = [];
 let ytdlpSeq = 0;
+let ytmApiActive = 0;
+const ytmApiQueue = [];
+let ytmApiSeq = 0;
+let _oauthPostForTest = null;
 
 function pumpYtdlpQueue() {
   while (ytdlpActive < YTDLP_CONCURRENCY && ytdlpQueue.length) {
@@ -37,6 +48,28 @@ function withYtdlpSlot(fn, { priority = 0 } = {}) {
     pumpYtdlpQueue();
   });
 }
+function pumpYtmApiQueue() {
+  while (ytmApiActive < YTMUSICAPI_CONCURRENCY && ytmApiQueue.length) {
+    const job = ytmApiQueue.shift();
+    ytmApiActive++;
+    Promise.resolve()
+      .then(job.fn)
+      .then(job.resolve, job.reject)
+      .finally(() => {
+        ytmApiActive--;
+        pumpYtmApiQueue();
+      });
+  }
+}
+function withYtmApiSlot(fn, { priority = 0 } = {}) {
+  return new Promise((resolve, reject) => {
+    const job = { fn, resolve, reject, priority: Number(priority) || 0, seq: ++ytmApiSeq };
+    const idx = ytmApiQueue.findIndex((j) => job.priority > j.priority);
+    if (idx >= 0) ytmApiQueue.splice(idx, 0, job);
+    else ytmApiQueue.push(job);
+    pumpYtmApiQueue();
+  });
+}
 
 // Detection mirrors detectFfmpeg: env override → a `yt-dlp` binary on PATH → the pip module
 // (`python -m yt_dlp`), so it works whether yt-dlp is a standalone exe or a pip install.
@@ -57,6 +90,34 @@ function detectYtdlp() {
   return null;
 }
 function _resetDetection() { _ytdlp = undefined; } // tests
+
+// Optional fast catalog helper. ytmusicapi is excellent for search/radio metadata, but it is
+// not a playback resolver; yt-dlp remains the only thing that turns a track id into a direct
+// audio stream. Docker installs it, while bare installs can skip it and keep the old path.
+let _ytmApi; // { cmd:[python], version } | null
+let _ytmApiRunnerForTest = null;
+function detectYtMusicApi() {
+  if (_ytmApiRunnerForTest) return { cmd: ['test-python'], version: 'test' };
+  if (_ytmApi !== undefined) return _ytmApi;
+  if (process.env.TRIBOON_YTMUSICAPI === '0') { _ytmApi = null; return null; }
+  const script = "import ytmusicapi; print(getattr(ytmusicapi, '__version__', 'unknown'))";
+  for (const py of [process.env.PYTHON_PATH, 'python3', 'python'].filter(Boolean)) {
+    try {
+      const r = spawnSync(py, ['-c', script], { timeout: 8000, windowsHide: true });
+      if (r.status === 0) {
+        _ytmApi = { cmd: [py], version: String(r.stdout).trim().split('\n')[0] || 'unknown' };
+        return _ytmApi;
+      }
+    } catch { /* try next */ }
+  }
+  _ytmApi = null;
+  return null;
+}
+function _resetYtMusicApiDetection() { _ytmApi = undefined; _ytmApiRunnerForTest = null; }
+function _setYtMusicApiRunnerForTest(fn) {
+  _ytmApiRunnerForTest = typeof fn === 'function' ? fn : null;
+  _ytmApi = _ytmApiRunnerForTest ? { cmd: ['test-python'], version: 'test' } : undefined;
+}
 
 // Cookies (a Netscape cookies.txt the admin exports from their browser) unlock the user's
 // OWN library/playlists. Optional — public search + play needs none. The caller passes a
@@ -131,12 +192,258 @@ function parseJsonObject(out, message) {
   return data;
 }
 
+const YTMUSICAPI_SCRIPT = String.raw`
+import json
+import sys
+from ytmusicapi import YTMusic, OAuthCredentials
+
+payload = json.loads(sys.stdin.read() or "{}")
+action = payload.get("action")
+
+def make_client():
+    token = payload.get("oauthToken")
+    client_id = payload.get("clientId")
+    client_secret = payload.get("clientSecret")
+    if token and client_id and client_secret:
+        return YTMusic(token, oauth_credentials=OAuthCredentials(client_id=client_id, client_secret=client_secret))
+    return YTMusic()
+
+yt = make_client()
+
+if action == "search":
+    rows = yt.search(str(payload.get("query") or "")[:200], filter="songs", limit=max(1, min(40, int(payload.get("limit") or 20))))
+    print(json.dumps({"rows": rows}))
+elif action == "watch":
+    video_id = str(payload.get("id") or "")
+    limit = max(1, min(50, int(payload.get("limit") or 25)))
+    data = yt.get_watch_playlist(videoId=video_id, limit=limit)
+    print(json.dumps({"rows": data.get("tracks") or [], "playlistId": data.get("playlistId")}))
+elif action == "library_playlists":
+    limit = max(1, min(100, int(payload.get("limit") or 50)))
+    rows = yt.get_library_playlists(limit=limit)
+    print(json.dumps({"rows": rows}))
+elif action == "playlist":
+    playlist_id = str(payload.get("id") or "")
+    limit = max(1, min(501, int(payload.get("limit") or 100)))
+    if playlist_id == "LM":
+        data = yt.get_liked_songs(limit=limit)
+        data["title"] = data.get("title") or "Liked Music"
+    else:
+        data = yt.get_playlist(playlist_id, limit=limit)
+    print(json.dumps({"title": data.get("title") or "Playlist", "rows": data.get("tracks") or []}))
+else:
+    raise SystemExit("unknown ytmusicapi action")
+`;
+
+function oauthPost(url, data, { timeoutMs = 15000 } = {}) {
+  if (_oauthPostForTest) return Promise.resolve(_oauthPostForTest(url, data));
+  return new Promise((resolve, reject) => {
+    const body = new URLSearchParams(data).toString();
+    const u = new URL(url);
+    const req = https.request(u, {
+      method: 'POST',
+      timeout: timeoutMs,
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        'content-length': Buffer.byteLength(body),
+        'user-agent': YTMUSIC_OAUTH_UA,
+      },
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (d) => { if (chunks.reduce((n, c) => n + c.length, 0) < 2e6) chunks.push(d); });
+      res.on('end', () => {
+        let parsed;
+        const raw = Buffer.concat(chunks).toString('utf8');
+        try { parsed = JSON.parse(raw || '{}'); } catch { parsed = { error: raw || `HTTP ${res.statusCode}` }; }
+        if (parsed && parsed.error) {
+          const e = new Error(parsed.error_description || parsed.error);
+          e.code = parsed.error;
+          e.status = res.statusCode;
+          e.payload = parsed;
+          return reject(e);
+        }
+        if (res.statusCode >= 400) {
+          const e = new Error(parsed.error_description || parsed.error || `OAuth HTTP ${res.statusCode}`);
+          e.status = res.statusCode;
+          e.payload = parsed;
+          return reject(e);
+        }
+        resolve(parsed);
+      });
+    });
+    req.on('timeout', () => req.destroy(new Error('YouTube Music OAuth timed out')));
+    req.on('error', reject);
+    req.end(body);
+  });
+}
+
+function normalizeOAuthClient(clientId, clientSecret) {
+  const id = String(clientId || '').trim();
+  const secret = String(clientSecret || '').trim();
+  if (!id || !secret) throw new Error('YouTube Music OAuth app is not configured');
+  return { clientId: id, clientSecret: secret };
+}
+
+async function beginOAuth({ clientId, clientSecret }) {
+  const c = normalizeOAuthClient(clientId, clientSecret);
+  const r = await oauthPost(YTMUSIC_OAUTH_CODE_URL, { client_id: c.clientId, scope: YTMUSIC_OAUTH_SCOPE });
+  const verificationUrl = r.verification_url || r.verification_uri || 'https://www.google.com/device';
+  return {
+    deviceCode: String(r.device_code || ''),
+    userCode: String(r.user_code || ''),
+    verificationUrl,
+    verificationUrlComplete: r.verification_url_complete || (r.user_code ? `${verificationUrl}?user_code=${encodeURIComponent(r.user_code)}` : verificationUrl),
+    expiresIn: Math.max(1, parseInt(r.expires_in, 10) || 1800),
+    interval: Math.max(3, parseInt(r.interval, 10) || 5),
+  };
+}
+
+function normalizeOAuthToken(raw, previous = null) {
+  if (!raw || typeof raw !== 'object') throw new Error('YouTube Music OAuth returned no token');
+  const expiresIn = Math.max(1, parseInt(raw.expires_in, 10) || 3600);
+  const token = {
+    access_token: String(raw.access_token || ''),
+    refresh_token: String(raw.refresh_token || (previous && previous.refresh_token) || ''),
+    scope: String(raw.scope || (previous && previous.scope) || YTMUSIC_OAUTH_SCOPE),
+    token_type: String(raw.token_type || (previous && previous.token_type) || 'Bearer'),
+    expires_in: expiresIn,
+    expires_at: Math.floor(Date.now() / 1000) + expiresIn,
+  };
+  if (raw.refresh_token_expires_in !== undefined) token.refresh_token_expires_in = parseInt(raw.refresh_token_expires_in, 10) || 0;
+  if (!token.access_token || !token.refresh_token) throw new Error('YouTube Music OAuth returned an incomplete token');
+  return token;
+}
+
+async function completeOAuth({ clientId, clientSecret, deviceCode }) {
+  const c = normalizeOAuthClient(clientId, clientSecret);
+  const code = String(deviceCode || '').trim();
+  if (!code) throw new Error('missing device code');
+  const raw = await oauthPost(YTMUSIC_OAUTH_TOKEN_URL, {
+    client_id: c.clientId,
+    client_secret: c.clientSecret,
+    grant_type: YTMUSIC_OAUTH_GRANT,
+    code,
+  });
+  return normalizeOAuthToken(raw);
+}
+
+async function refreshOAuthToken(token, { clientId, clientSecret }) {
+  const c = normalizeOAuthClient(clientId, clientSecret);
+  const refreshToken = token && token.refresh_token;
+  if (!refreshToken) throw new Error('YouTube Music OAuth token cannot refresh');
+  const raw = await oauthPost(YTMUSIC_OAUTH_TOKEN_URL, {
+    client_id: c.clientId,
+    client_secret: c.clientSecret,
+    grant_type: 'refresh_token',
+    refresh_token: refreshToken,
+  });
+  return normalizeOAuthToken(raw, token);
+}
+
+function runYtMusicApiRaw(action, body, { timeoutMs = 12000, priority = 0 } = {}) {
+  return withYtmApiSlot(() => runYtMusicApiRawNow(action, body, { timeoutMs }), { priority });
+}
+function runYtMusicApiRawNow(action, body, { timeoutMs = 12000 } = {}) {
+  if (_ytmApiRunnerForTest) return Promise.resolve(_ytmApiRunnerForTest(action, body));
+  return new Promise((resolve, reject) => {
+    const py = detectYtMusicApi();
+    if (!py) return reject(new Error('ytmusicapi is not installed'));
+    const p = spawn(py.cmd[0], ['-c', YTMUSICAPI_SCRIPT], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    let out = '', err = '';
+    let timedOut = false;
+    const killer = setTimeout(() => { timedOut = true; try { p.kill('SIGKILL'); } catch {} }, timeoutMs);
+    p.stdout.on('data', (d) => { if (out.length < 8e6) out += d; });
+    p.stderr.on('data', (d) => { if (err.length < 64e3) err += d; });
+    p.on('error', (e) => { clearTimeout(killer); reject(timedOut ? new Error('ytmusicapi timed out') : e); });
+    p.on('close', (code) => {
+      clearTimeout(killer);
+      if (timedOut) return reject(new Error('ytmusicapi timed out'));
+      if (code !== 0) return reject(new Error(String(err || `ytmusicapi exit ${code}`).trim()));
+      try { resolve(JSON.parse(out)); } catch { reject(new Error('ytmusicapi returned invalid JSON')); }
+    });
+    p.stdin.end(JSON.stringify({ action, ...body }));
+  });
+}
+
+function parseDurationText(v) {
+  if (typeof v === 'number' && isFinite(v)) return v;
+  const s = String(v || '').trim();
+  if (!/^\d+(?::\d{1,2}){1,2}$/.test(s)) return null;
+  const parts = s.split(':').map((x) => parseInt(x, 10));
+  if (parts.some((x) => !isFinite(x))) return null;
+  return parts.reduce((acc, x) => acc * 60 + x, 0);
+}
+function bestThumb(thumbnails, fallbackId) {
+  const rows = Array.isArray(thumbnails) ? thumbnails : [];
+  const best = rows
+    .filter((t) => t && typeof t.url === 'string')
+    .sort((a, b) => ((b.width || 0) * (b.height || 0)) - ((a.width || 0) * (a.height || 0)))[0];
+  return (best && best.url) || thumbFor(fallbackId);
+}
+function artistNames(item) {
+  if (Array.isArray(item && item.artists)) {
+    const names = item.artists.map((a) => a && a.name).filter(Boolean);
+    if (names.length) return names.join(', ');
+  }
+  return (item && (item.artist || item.uploader || item.channel || item.author)) || '';
+}
+function normalizeYtMusicApiTrack(item) {
+  if (!item || typeof item !== 'object') return null;
+  const id = String(item.videoId || item.id || '');
+  if (!/^[\w-]{11}$/.test(id)) return null;
+  return {
+    id,
+    title: cleanTitle(item.title) || item.title || 'Unknown',
+    artist: artistNames(item),
+    duration: num(item.duration_seconds) || num(item.duration) || parseDurationText(item.duration),
+    thumb: bestThumb(item.thumbnails, id),
+    album: item.album && item.album.name ? item.album.name : undefined,
+    source: 'ytmusicapi',
+  };
+}
+
+function normalizeYtMusicApiPlaylist(item) {
+  if (!item || typeof item !== 'object') return null;
+  const id = String(item.playlistId || item.id || '').replace(/^VL/, '');
+  if (!/^[\w-]{2,80}$/.test(id) || ['LM', 'LL', 'WL'].includes(id)) return null;
+  return {
+    id,
+    title: item.title || 'Playlist',
+    count: num(item.count) || num(item.trackCount),
+    cover: bestThumb(item.thumbnails, null),
+    source: 'ytmusicapi',
+  };
+}
+
+async function searchWithYtMusicApi(query, limit, { priority = 0 } = {}) {
+  const data = await runYtMusicApiRaw('search', { query, limit }, { priority, timeoutMs: 12000 });
+  return (Array.isArray(data.rows) ? data.rows : [])
+    .map(normalizeYtMusicApiTrack)
+    .filter(Boolean)
+    .slice(0, limit);
+}
+async function watchQueue(id, { limit = 25, priority = 0 } = {}) {
+  if (!/^[\w-]{11}$/.test(String(id || ''))) throw new Error('bad track id');
+  const n = Math.max(1, Math.min(50, parseInt(limit, 10) || 25));
+  const data = await runYtMusicApiRaw('watch', { id, limit: n }, { priority, timeoutMs: 14000 });
+  return {
+    playlistId: data.playlistId || null,
+    tracks: (Array.isArray(data.rows) ? data.rows : []).map(normalizeYtMusicApiTrack).filter(Boolean).slice(0, n),
+  };
+}
+
 // A flat YouTube Music search (one fast call). Do not use generic `ytsearch`: Triboon Music
 // must only discover tracks through music.youtube.com, not the whole of YouTube.
 async function search(query, { limit = 20, cookiesPath, priority = 0 } = {}) {
   const q = String(query || '').trim().slice(0, 200);
   if (!q) return [];
   const n = Math.max(1, Math.min(40, limit));
+  if (!cookiesPath && detectYtMusicApi()) {
+    try {
+      const fast = await searchWithYtMusicApi(q, n, { priority });
+      if (fast.length) return fast;
+    } catch { /* fall back to yt-dlp */ }
+  }
   const out = await runJson(['--flat-playlist', '--playlist-items', `1:${n}`, '--dump-single-json', searchUrl(q)], { cookiesPath, priority });
   let data; try { data = JSON.parse(out); } catch { return []; }
   return (data.entries || [])
@@ -194,7 +501,13 @@ function _peekCached(id) { return _streamCache.get(id) || null; }
 
 // The user's OWN playlists (needs cookies). yt-dlp's youtube:tab extractor resolves the YTM
 // library page when authenticated; entries are playlist links (ids often prefixed 'VL').
-async function listPlaylists({ cookiesPath }) {
+async function listPlaylists({ cookiesPath, oauthToken, oauthClientId, oauthClientSecret }) {
+  if (oauthToken && oauthClientId && oauthClientSecret) {
+    const data = await runYtMusicApiRaw('library_playlists', {
+      oauthToken, clientId: oauthClientId, clientSecret: oauthClientSecret, limit: 100,
+    }, { timeoutMs: 16000 });
+    return (Array.isArray(data.rows) ? data.rows : []).map(normalizeYtMusicApiPlaylist).filter(Boolean);
+  }
   if (!cookiesPath) throw new Error('YouTube Music is not linked');
   const sources = [
     'https://music.youtube.com/library/playlists',
@@ -225,8 +538,17 @@ function parseListPlaylists(out) {
 }
 
 // Tracks of one playlist ('LM' = the user's Liked Songs; public lists work without cookies).
-async function playlistTracks(id, { cookiesPath, limit = 200, offset = 0 } = {}) {
+async function playlistTracks(id, { cookiesPath, oauthToken, oauthClientId, oauthClientSecret, limit = 200, offset = 0 } = {}) {
   if (!/^[\w-]{2,64}$/.test(String(id || ''))) throw new Error('bad playlist id');
+  if (oauthToken && oauthClientId && oauthClientSecret) {
+    const n = Math.max(1, Math.min(100, parseInt(limit, 10) || 50));
+    const off = Math.max(0, parseInt(offset, 10) || 0);
+    const data = await runYtMusicApiRaw('playlist', {
+      oauthToken, clientId: oauthClientId, clientSecret: oauthClientSecret, id, limit: off + n,
+    }, { timeoutMs: 20000 });
+    const rows = (Array.isArray(data.rows) ? data.rows : []).map(normalizeYtMusicApiTrack).filter(Boolean);
+    return { title: data.title || (id === 'LM' ? 'Liked Music' : 'Playlist'), tracks: rows.slice(off, off + n) };
+  }
   const out = await runJson(['--flat-playlist', '--dump-single-json', '--playlist-items', playlistItemsRange(offset, limit),
     `https://music.youtube.com/playlist?list=${id}`], { cookiesPath, timeoutMs: 45000 });
   return parsePlaylistTracks(out);
@@ -244,5 +566,26 @@ function parsePlaylistTracks(out) {
 }
 
 function _queueStats() { return { active: ytdlpActive, queued: ytdlpQueue.length, concurrency: YTDLP_CONCURRENCY }; }
+function _ytmApiQueueStats() { return { active: ytmApiActive, queued: ytmApiQueue.length, concurrency: YTMUSICAPI_CONCURRENCY }; }
+function _setOAuthPostForTest(fn) { _oauthPostForTest = typeof fn === 'function' ? fn : null; }
 
-module.exports = { detectYtdlp, search, resolveStream, listPlaylists, playlistTracks, thumbFor, cleanTitle, _resetDetection, _peekCached, _queueStats, _withYtdlpSlot: withYtdlpSlot, _friendlyYtdlpError: friendlyYtdlpError, _ytArgs: ytArgs, _optsNoPlaylist: optsNoPlaylist, _searchUrl: searchUrl, _playlistItemsRange: playlistItemsRange, _parseListPlaylists: parseListPlaylists, _parsePlaylistTracks: parsePlaylistTracks };
+module.exports = {
+  detectYtdlp, detectYtMusicApi,
+  search, resolveStream, listPlaylists, playlistTracks, watchQueue,
+  beginOAuth, completeOAuth, refreshOAuthToken,
+  thumbFor, cleanTitle,
+  _resetDetection, _resetYtMusicApiDetection, _setYtMusicApiRunnerForTest,
+  _setOAuthPostForTest,
+  _peekCached, _queueStats, _ytmApiQueueStats,
+  _withYtdlpSlot: withYtdlpSlot,
+  _friendlyYtdlpError: friendlyYtdlpError,
+  _ytArgs: ytArgs,
+  _optsNoPlaylist: optsNoPlaylist,
+  _searchUrl: searchUrl,
+  _playlistItemsRange: playlistItemsRange,
+  _parseListPlaylists: parseListPlaylists,
+  _parsePlaylistTracks: parsePlaylistTracks,
+  _normalizeYtMusicApiTrack: normalizeYtMusicApiTrack,
+  _normalizeYtMusicApiPlaylist: normalizeYtMusicApiPlaylist,
+  _normalizeOAuthToken: normalizeOAuthToken,
+};

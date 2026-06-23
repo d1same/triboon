@@ -146,6 +146,8 @@ public class MainActivity extends Activity {
     private View fullscreenVideo;            // WebChromeClient custom view (HTML5 fullscreen)
     private FrameLayout nativePlayerLayer;   // Android-native player overlay
     private PlayerView nativePlayerView;
+    private int phoneOrientationBeforePlayback = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
+    private boolean phonePlaybackOrientationLocked = false;
     private View nativeGuidePipRevealScrim;
     private LinearLayout nativeTop;
     private TextView nativePlayerTitle;
@@ -382,7 +384,7 @@ public class MainActivity extends Activity {
         try {
             if (isTvDevice()) {
                 setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
-            } else {
+            } else if (!phonePlaybackOrientationLocked) {
                 setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -458,6 +460,7 @@ public class MainActivity extends Activity {
     private String normalizeServerUrl(String raw) {
         String url = raw == null ? "" : raw.trim();
         if (url.isEmpty()) return "";
+        url = url.replaceAll("(?i)%3a", ":").replaceAll("(?i)%2f", "/");
         if (!url.startsWith("http://") && !url.startsWith("https://")) url = "http://" + url;
         return url.replaceAll("/+$", "");
     }
@@ -478,8 +481,16 @@ public class MainActivity extends Activity {
         String bs = b.getScheme() == null ? "" : b.getScheme().toLowerCase(Locale.US);
         String ah = a.getHost() == null ? "" : a.getHost().toLowerCase(Locale.US);
         String bh = b.getHost() == null ? "" : b.getHost().toLowerCase(Locale.US);
-        return !as.isEmpty() && as.equals(bs) && !ah.isEmpty() && ah.equals(bh)
-                && normalizedPort(a) == normalizedPort(b);
+        if (as.isEmpty() || !as.equals(bs) || ah.isEmpty() || normalizedPort(a) != normalizedPort(b)) {
+            return false;
+        }
+        return ah.equals(bh) || (isAndroidLoopbackAlias(ah) && isAndroidLoopbackAlias(bh));
+    }
+
+    private boolean isAndroidLoopbackAlias(String host) {
+        if (host == null) return false;
+        String h = host.toLowerCase(Locale.US);
+        return "localhost".equals(h) || "127.0.0.1".equals(h) || "::1".equals(h) || "10.0.2.2".equals(h);
     }
 
     private boolean isTrustedServerUrl(String raw) {
@@ -687,6 +698,24 @@ public class MainActivity extends Activity {
     private boolean isTvDevice() {
         android.app.UiModeManager ui = (android.app.UiModeManager) getSystemService(UI_MODE_SERVICE);
         return ui != null && ui.getCurrentModeType() == android.content.res.Configuration.UI_MODE_TYPE_TELEVISION;
+    }
+
+    private void setPhonePlaybackOrientation(boolean active) {
+        if (isTvDevice()) return;
+        try {
+            if (active) {
+                if (!phonePlaybackOrientationLocked) {
+                    phoneOrientationBeforePlayback = getRequestedOrientation();
+                    phonePlaybackOrientationLocked = true;
+                }
+                setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+            } else if (phonePlaybackOrientationLocked) {
+                phonePlaybackOrientationLocked = false;
+                setRequestedOrientation(phoneOrientationBeforePlayback);
+                phoneOrientationBeforePlayback = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
+            }
+        } catch (Exception ignored) {
+        }
     }
 
     private void hidePhoneKeyboard(View tokenView) {
@@ -2945,6 +2974,7 @@ public class MainActivity extends Activity {
             detail = j.optString("detail", detail);
         } catch (Exception ignored) {
         }
+        setPhonePlaybackOrientation(true);
         buildNativePlayerLayer();
         releaseNativePlayer(false);
         nativeMode = "video";
@@ -2987,6 +3017,7 @@ public class MainActivity extends Activity {
             boolean quietSeek = j.optBoolean("quietSeek", false);
             long knownDurationMs = Math.max(0L, Math.round(j.optDouble("duration", 0) * 1000));
             loadingStartOffsetMs = startOffsetMs;
+            if (!guide) setPhonePlaybackOrientation(true);
             buildNativePlayerLayer();
             boolean reuseQuietVideo = quietSeek && "video".equals(mode) && nativePlayer != null
                     && nativePlayerView != null && nativePlayerOpen() && !guide;
@@ -3097,6 +3128,8 @@ public class MainActivity extends Activity {
                         if ("video".equals(nativeMode)) {
                             nativeVideoStarted = true;
                             rememberNativeVideoPosition();
+                            web.evaluateJavascript("window.__tvNativeVideoReady && __tvNativeVideoReady("
+                                    + nativePosSeconds() + "," + nativeDurSeconds() + ")", null);
                         } else if ("live".equals(nativeMode)) {
                             nativeLiveStarted = true;
                         }
@@ -5337,6 +5370,7 @@ public class MainActivity extends Activity {
     private void closeNativePlayback(boolean notifyClosed) {
         boolean waitForLiveClose = notifyClosed && "live".equals(nativeMode);
         releaseNativePlayer(notifyClosed);
+        setPhonePlaybackOrientation(false);
         if (nativePlayerLayer != null) nativePlayerLayer.setVisibility(View.GONE);
         if (waitForLiveClose) {
             web.postDelayed(this::showWebAfterNativePlayback, 80);
@@ -5844,6 +5878,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         releaseNativePlayer(false);
+        setPhonePlaybackOrientation(false);
         disposeWebView(web, false);
         if (speech != null) { speech.destroy(); speech = null; }
         super.onDestroy();

@@ -151,7 +151,11 @@ credentials, logs, or personal media/test captures.
 
 The server intentionally keeps runtime dependencies light: Node 24 LTS and the
 standard library in `server/`, with approved external binaries such as ffmpeg
-and yt-dlp.
+and yt-dlp. Docker also includes `ytmusicapi` for faster YouTube Music catalog
+search/radio metadata and Google device-code account linking; bare installs can
+add it with `python -m pip install ytmusicapi==1.12.1` or skip it and fall back
+to the slower `yt-dlp` search path plus manual cookies.txt linking. Playback
+resolution still uses `yt-dlp`.
 
 Run the app locally:
 

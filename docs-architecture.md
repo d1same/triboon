@@ -88,7 +88,7 @@ flowchart LR
 | Subtitles | `server/opensubs.js`, `server/index.js`, `web/index.html`, `MainActivity.java` | Wyzie search/download, release/file hints, WebVTT, web/native display timelines. |
 | Local libraries | `server/index.js`, `server/library-db.js`, `web/index.html` | Folder scan, SQLite-backed bounded pages/lookups, local playback, local artwork. |
 | Live TV | `server/index.js`, `web/index.html`, `MainActivity.java` | Source-scoped shared M3U/Xtream/XMLTV, web remux path, Android native Exo path, and Android device-local personal IPTV. |
-| Music Home | `server/ytmusic.js`, `server/index.js`, `web/index.html` | YouTube Music search/home/charts via bounded `yt-dlp` queue, tokenized audio proxy, web mini-player, and no ExoPlayer handoff for audio yet. |
+| Music Home | `server/ytmusic.js`, `server/index.js`, `web/index.html` | YouTube Music search/home/charts via optional `ytmusicapi` catalog helper, Google device-code account linking with encrypted per-user tokens, bounded `yt-dlp` playback resolver, tokenized audio proxy, web mini-player, and no ExoPlayer handoff for audio yet. |
 | Continue Watching | `docs-continue-watching.md`, `server/index.js`, `web/index.html` | Canonical movie/show identity, resume state, quality carry-forward, next-up, and D-pad focus after row actions. |
 | Android shell | `android/app/src/main/java/app/triboon/tv/MainActivity.java` | WebView bridge, D-pad/back handling, native video/Live TV, PiP guide recovery, APK update links. |
 
@@ -125,6 +125,26 @@ Rules that must not drift:
 - Continue Watching follows `docs-continue-watching.md`: one canonical Home card
   per movie/show, active progress beats next-up, and the saved 4K/1080p source
   class carries into remaining TV episodes.
+
+## Now Watching / Activity
+
+Players send a lightweight `/api/activity` heartbeat while playback is active.
+Regular users can only write their own heartbeat; only admins can read the
+Settings -> Now Watching list. The row is intentionally in-memory and short TTL
+so stale sessions disappear if a browser, TV, or network connection dies.
+
+The heartbeat carries both the client path and the stream treatment:
+
+- `player`: `web` or `exo`, showing which player surface owns playback.
+- `mode`: the player transport label, such as Direct, Remux, Transcode, or
+  ExoPlayer.
+- `streamKind` / `streamLabel`: the owner-facing quality status. Movies and
+  episodes show `Original`, `Original (remux)`, or `Transcoding`; Live TV shows
+  `Live`.
+
+This distinction matters because remux is still original-quality playback, while
+transcoding means Triboon is actively converting the stream for device support
+or a requested quality cap.
 
 ## Streaming Performance / Multi-User Capacity
 

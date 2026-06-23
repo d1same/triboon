@@ -401,6 +401,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'pressing OK on an auto-previewed attached-library rail item should enter content without reloading the page');
   assert.match(ui, /--bdW:min\(50vw,980px\);[\s\S]+--bdH:min\(56vh,620px\);[\s\S]+#backdrop \.layer\{[\s\S]+width:var\(--bdW\);height:var\(--bdH\)/,
     'browser backdrop should use capped viewport-aware dimensions instead of percentage takeover');
+  assert.match(ui, /--scrim:\s*linear-gradient\(90deg,rgba\(11,8,18,\.86\) 0%,rgba\(11,8,18,\.56\) 28%,rgba\(11,8,18,\.20\) 58%,rgba\(11,8,18,\.06\) 100%\),\s*linear-gradient\(0deg,rgba\(11,8,18,\.76\) 0%,rgba\(11,8,18,\.24\) 26%,rgba\(11,8,18,\.04\) 60%,rgba\(11,8,18,\.10\) 100%\)/,
+    'browser backdrop scrim should protect text without blacking out the artwork');
   assert.match(ui, /body\.tv\{--bdW:min\(48vw,820px\);--bdH:min\(50vh,460px\);--overscan:2\.5vmin\}[\s\S]+body\.shortBrowseBd\{--bdH:min\(46vh,430px\)\}[\s\S]+body\.tv\.shortBrowseBd\{--bdH:min\(38vh,360px\)\}[\s\S]+@media \(max-height:760px\)\{[\s\S]+--bdH:min\(34vh,260px\)[\s\S]+@media \(max-width:980px\)\{[\s\S]+--bdW:min\(44vw,420px\)/,
     'TV, short browser, narrow browser, and poster browse viewports should tighten backdrop size');
   assert.match(ui, /body\.shortBrowseBd:not\(\.tv\) #bdInfo[\s\S]+-webkit-line-clamp:1[\s\S]+@media \(max-height:820px\)[\s\S]+body\.shortBrowseBd:not\(\.tv\) #bdInfo \.bdiC,[\s\S]+display:none/,
@@ -437,6 +439,12 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'local library playback should resolve resume and leave details for the loading player before mount prep waits');
   assert.match(ui, /function mergeLocalItemsInto\(map, lib, items\) \{[\s\S]+playUrl: x\.playUrl[\s\S]+`tmdb:tv:\$\{x\.tmdbId\}:s\$\{x\.s\}e\$\{x\.e\}`[\s\S]+map\[key\] = rec;[\s\S]+function mergeLocalItems\(lib, items\) \{[\s\S]+S\.localMap = map/,
     'local library scans should hydrate episode keys into the local-first playback map');
+  assert.match(ui, /<div id="libEditActions" class="libEditActions" style="display:none">[\s\S]+id="libScanNow"[\s\S]+id="libMetaNow"/,
+    'the added-library edit panel should expose scan and metadata-refresh actions');
+  assert.match(ui, /function updateLibEditActions\(lib\) \{[\s\S]+lib && lib\.id && lib\.path[\s\S]+style\.display = local \? '' : 'none'[\s\S]+Save changes first if you edited the path or sharing/,
+    'scan actions should only show for saved local-folder libraries and warn about unsaved edits');
+  assert.match(ui, /\$\('libScanNow'\)\.addEventListener\('click', \(\) => \{[\s\S]+scanLibrary\(lib, 'scan'\)[\s\S]+\$\('libMetaNow'\)\.addEventListener\('click', \(\) => \{[\s\S]+scanLibrary\(lib, 'metadata'\)/,
+    'edit-panel scan buttons should reuse the existing library scan API paths');
   assert.match(ui, /function localEpisodesForShow\(show\) \{[\s\S]+new RegExp\(`\^tmdb:tv:\$\{show\.tmdbId\}:s[\s\S]+Object\.keys\(S\.localMap\)[\s\S]+sort\(\(a, b\) => a\.s - b\.s \|\| a\.e - b\.e\)/,
     'matched local TV shows should discover owned episode keys, not only a bare show key');
   assert.match(ui, /function localTitleHasPlayback\(it\) \{[\s\S]+if \(S\.localMap && it\.key && S\.localMap\[it\.key\]\) return true;[\s\S]+return it\.type === 'tv' && localEpisodesForShow\(it\)\.length > 0;/,
@@ -609,19 +617,88 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android phone WebView should blur web login/profile inputs after page load');
   assert.match(android, /private void connect\(\) \{[\s\S]+if \(!isTvDevice\(\)\) \{[\s\S]+hidePhoneKeyboard\(addr\);[\s\S]+addr\.clearFocus\(\);[\s\S]+root\.requestFocus\(\);[\s\S]+\}[\s\S]+if \(!isTvDevice\(\)\) clearPhoneInitialWebInputFocus\(\);/,
     'Android phone WebView should not auto-open the keyboard on web login/profile gates');
+  assert.ok(android.includes('url = url.replaceAll("(?i)%3a", ":").replaceAll("(?i)%2f", "/");')
+    && android.includes('prefs().edit().putString(KEY_SERVER, server).apply();'),
+    'Android setup should normalize encoded colon/slash server URLs so native bridge origin checks keep working');
   assert.ok(ui.includes("if (/TriboonTV/.test(navigator.userAgent)) document.body.classList.add('tv');")
-    && ui.includes("if (/TriboonAndroid/.test(navigator.userAgent)) document.body.classList.add('androidApp');"),
+    && ui.includes("if (/TriboonAndroid/.test(navigator.userAgent)) document.body.classList.add('androidApp');")
+    && ui.includes("if (/TriboonAndroid/.test(navigator.userAgent) && !/TriboonTV/.test(navigator.userAgent)) document.body.classList.add('mobileShell');"),
     'phone WebView should not receive TV-only CSS just because it runs inside the Android shell');
+  assert.match(ui, /body\.mobileShell #backdrop \.layer\{display:none!important;opacity:0!important\}[\s\S]+body\.mobileShell #burger\{display:grid\}[\s\S]+body\.mobileShell #home\{padding:62px 16px 18px 16px!important;justify-content:flex-end\}/,
+    'Android phone WebView should get the compact mobile shell even when its CSS viewport is wider than 600px');
+  assert.match(ui, /function androidBurgerHit\(e\) \{[\s\S]+const burger = \$\('burger'\);[\s\S]+burger\.contains\(e\.target\)[\s\S]+return p\.clientX <= 132 && p\.clientY <= 132;/,
+    'Android top-left burger hitbox should not double-toggle taps already delivered to the burger button');
+  assert.match(ui, /\$\('burger'\)\.addEventListener\('pointerdown'[\s\S]+\$\('burger'\)\.addEventListener\('touchend'[\s\S]+Date\.now\(\) - burgerTouchAt < 500/,
+    'phone burger should have pointer and touch handling with duplicate-tap protection');
   assert.match(androidGradle, /every Android app video surface hands off[\s\S]+movies, episodes, local library files, and Live TV[\s\S]+Browser and[\s\S]+desktop builds keep the HTML video path/,
     'Android TV and mobile APK policy should be native ExoPlayer for every video surface, not phone-web-video');
   assert.ok(ui.includes('body.androidApp .gate{place-items:center;padding:18px}')
     && ui.includes('body.androidApp #gateArtCaption{display:none}'),
     'Android phone auth gates should use a phone-app layout without TV auth caption chrome');
+  assert.match(android, /private int phoneOrientationBeforePlayback = ActivityInfo\.SCREEN_ORIENTATION_UNSPECIFIED;[\s\S]+private boolean phonePlaybackOrientationLocked = false;/,
+    'Android phone player should remember the previous orientation before forcing playback landscape');
+  assert.match(android, /private void applySystemUiPolicy\(\) \{[\s\S]+else if \(!phonePlaybackOrientationLocked\) \{[\s\S]+SCREEN_ORIENTATION_UNSPECIFIED/,
+    'Android lifecycle focus recovery must not reset phone playback orientation while native video is open');
+  assert.match(android, /private void setPhonePlaybackOrientation\(boolean active\) \{[\s\S]+SCREEN_ORIENTATION_SENSOR_LANDSCAPE[\s\S]+setRequestedOrientation\(phoneOrientationBeforePlayback\)/,
+    'Android phone native playback should rotate to landscape and restore the prior shell orientation when closed');
+  assert.match(android, /private void showNativeVideoLoading\(String json\) \{[\s\S]+setPhonePlaybackOrientation\(true\);[\s\S]+buildNativePlayerLayer\(\);/,
+    'Android phones should rotate as soon as the native loading player opens, before source health finishes');
+  assert.match(android, /if \(!guide\) setPhonePlaybackOrientation\(true\);[\s\S]+buildNativePlayerLayer\(\)/,
+    'Android phones should rotate only full-screen native playback, not guide PiP handoffs');
+  assert.match(android, /private void closeNativePlayback\(boolean notifyClosed\) \{[\s\S]+releaseNativePlayer\(notifyClosed\);[\s\S]+setPhonePlaybackOrientation\(false\);/,
+    'Android phone playback rotation should be released when the native player closes');
+  assert.ok(ui.includes('#heroBtns{width:100%;justify-content:center;gap:8px;flex-wrap:nowrap}')
+    && ui.includes('#hero h1{font-size:clamp(24px,7.4vw,32px)')
+    && ui.includes('#dBtns{flex-wrap:nowrap;justify-content:center;gap:8px;overflow-x:auto'),
+    'mobile hero and detail actions should stay centered in one row with smaller titles');
   assert.ok(ui.includes('id="statsBtn"') && ui.includes("return ['chGuide', 'back10', 'playPause', 'fwd30', 'nextEpBtn', 'statsBtn'")
     && ui.includes('function collectPlayerStats()') && ui.includes('window.__tvNativeVideoStats'),
     'web player stats must be a D-pad reachable control and accept native ExoPlayer stats');
   assert.ok(ui.includes('data-stab="activity"') && ui.includes("api('/api/activity')") && ui.includes('id="activityRefresh"'),
     'admin Settings should expose a focusable Now Watching panel backed by the activity API');
+  assert.ok(ui.includes('function playerStreamKind(') && ui.includes('streamKind: playerStreamKind(p)')
+    && ui.includes('streamLabel: playerStreamLabel(p)') && ui.includes('function activityStreamLabel(')
+    && ui.includes('activityStream'),
+    'Now Watching should show whether each session is original, remuxed, live, or transcoding');
+  assert.match(ui, /<div class="settingsForm">[\s\S]+<span>Expected users<\/span><input id="perfUsers"[\s\S]+<span>Start\/seek reserve<\/span><input id="perfReserve"[\s\S]+<div class="settingsActions">[\s\S]+id="perfTest"[\s\S]+id="perfApply"[\s\S]+id="perfSave"/,
+    'Streaming performance settings should keep labeled rows and one professional action group');
+  assert.match(ui, /\.settingsRow\{display:grid;grid-template-columns:repeat\(3,minmax\(0,1fr\)\)[\s\S]+\.settingsActions\{display:flex;align-items:center;gap:10px;flex-wrap:wrap/,
+    'Settings form rows and action buttons should share stable spacing rules');
+  assert.ok(ui.includes('id="prefContentTextSize"') && ui.includes("localStorage.setItem('triboon.textsize'")
+    && ui.includes('function applyContentTextSize()'),
+    'Preferences should expose a per-device content text-size picker');
+  assert.match(ui, /Content text-size preference:[\s\S]+The rail, Settings, Preferences, auth gates and player controls keep fixed geometry[\s\S]+#hero h1\{font-size:var\(--ctHeroTitle\)[\s\S]+\.pgRow \.pgName\{font-size:var\(--ctLiveTitle\)[\s\S]+\.musicRow \.mT/,
+    'content text size should scope to media/content pages without resizing the rail or settings chrome');
+  assert.match(ui, /const THEME_TOKEN_MAP = \{[\s\S]+ink: '--ink'[\s\S]+surface: '--surface'[\s\S]+focus: '--focus'[\s\S]+scrim: '--scrim'/,
+    'theme choices should remap full design roles, not only the three accent colors');
+  assert.ok(['triboonCoral', 'cinema', 'studio', 'velvet', 'teal', 'evergreen', 'contrast'].every((name) => ui.includes(`${name}: {`)),
+    'theme list should include calmer cinematic professional options');
+  assert.match(ui, /scrim: 'linear-gradient\(90deg,rgba\(34,34,34,\.84\) 0%,rgba\(34,34,34,\.54\) 28%,rgba\(34,34,34,\.18\) 58%,rgba\(34,34,34,\.05\) 100%\),linear-gradient\(0deg,rgba\(34,34,34,\.74\) 0%,rgba\(34,34,34,\.24\) 26%,rgba\(34,34,34,\.04\) 60%,rgba\(34,34,34,\.10\) 100%\)'/,
+    'theme scrims should keep browser backdrop art visible instead of applying a full-screen blackout');
+  assert.ok(!ui.includes("scrim: 'linear-gradient(180deg"),
+    'theme scrims should not regress to the old opaque vertical wash');
+  assert.match(ui, /const THEME_ALIASES = \{[\s\S]+graphite: 'studio'[\s\S]+triboon: 'triboonCoral'[\s\S]+trioon: 'triboonCoral'[\s\S]+arctic: 'teal'[\s\S]+forest: 'evergreen'/,
+    'legacy stored theme names should map to the nearest new professional palette');
+  assert.ok(ui.includes("label: 'Triboon'") && ui.includes("ink: '#222222'")
+    && ui.includes("raise: '#444444'") && ui.includes("c: '#FF5A5F'"),
+    'Triboon Coral theme should use the requested charcoal, dark gray and hot coral palette');
+  assert.ok(ui.includes("label: 'Carbon Gold'") && ui.includes("label: 'Studio Slate'")
+    && ui.includes("label: 'Warm Taupe'") && ui.includes("label: 'Deep Teal'")
+    && ui.includes("label: 'Olive Slate'"),
+    'alternate themes should be grown-up neutral palettes, not playful mood colors');
+  assert.ok(ui.includes("localStorage.getItem('triboon.theme') || 'triboonCoral'")
+    && ui.includes('THEMES[name] || THEMES.triboonCoral'),
+    'Triboon should be the default and fallback theme');
+  assert.match(ui, /function applyTheme\(\) \{[\s\S]+Object\.entries\(THEME_TOKEN_MAP\)[\s\S]+setProperty\('--grad', t\.c\)[\s\S]+setProperty\('--gold', t\.a\)[\s\S]+document\.body\.dataset\.theme = name/,
+    'theme application should update role tokens plus solid action colors');
+  assert.ok(!ui.includes('--grad:linear-gradient') && !ui.includes('--gold:linear-gradient')
+    && !ui.includes('.musicAction.primary{background:linear-gradient')
+    && !ui.match(/\.ytmConnectIcon[^{]*\{[^}]*linear-gradient/),
+    'buttons and icon-like action controls should use solid professional fills, not gradients');
+  assert.match(ui, /#themePick,#themePickSet\{display:grid[\s\S]+\.themeMeta[\s\S]+\.themeName[\s\S]+\.themeTone[\s\S]+\.themePalette/,
+    'theme picker should render understated material cards with names and tone labels');
+  assert.match(ui, /b\.innerHTML = `[\s\S]+themeMeta[\s\S]+themeName[\s\S]+themeTone[\s\S]+themePalette[\s\S]+<i><\/i><i><\/i><i><\/i>/,
+    'theme picker should use restrained palette strips instead of illustrative color-picking icons');
   assert.ok(ui.includes('id="apkTvUpdate"') && ui.includes('id="apkMobileUpdate"')
     && ui.includes('releases/latest/download/triboon-tv.apk')
     && ui.includes('releases/latest/download/triboon-mobile.apk'),
@@ -684,6 +761,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android should buffer early D-pad input until the web focus model is ready');
   assert.match(android, /private volatile String currentWebUrl[\s\S]+private boolean trustedBridgeOrigin\(\) \{[\s\S]+isTrustedServerUrl\(currentWebUrl\)[\s\S]+onPageStarted\(WebView v, String url[\s\S]+currentWebUrl = url == null \? "" : url;[\s\S]+onPageFinished\(WebView v, String url[\s\S]+currentWebUrl = url == null \? "" : url;[\s\S]+public void playVideo\(String json\) \{[\s\S]+if \(!trustedBridgeOrigin\(\)\) return;[\s\S]+startNativeVideo\(json\)/,
     'Android JS bridge methods should be gated to the configured Triboon server origin without calling WebView methods on the JavaBridge thread');
+  assert.match(android, /private boolean sameOrigin\(Uri a, Uri b\) \{[\s\S]+normalizedPort\(a\) != normalizedPort\(b\)[\s\S]+return ah\.equals\(bh\) \|\| \(isAndroidLoopbackAlias\(ah\) && isAndroidLoopbackAlias\(bh\)\);[\s\S]+private boolean isAndroidLoopbackAlias\(String host\) \{[\s\S]+"10\.0\.2\.2"\.equals\(h\)/,
+    'Android bridge trust should allow only same-port localhost/10.0.2.2 aliases for emulator testing');
   assert.match(android, /shouldOverrideUrlLoading\(WebView v, WebResourceRequest req\)[\s\S]+return u == null \|\| !isTrustedServerUrl\(u\.toString\(\)\);/,
     'Android WebView should only navigate inside the exact configured Triboon server origin');
   assert.match(android, /setMixedContentMode\(WebSettings\.MIXED_CONTENT_COMPATIBILITY_MODE\)/,
@@ -726,6 +805,16 @@ test('Android native player: direct source and native chrome stay out of the web
     'track probing should feed native duration and subtitle choices without starting web playback');
   assert.match(ui, /function startSource\(kind, atSeconds, opts = \{\}\) \{[\s\S]+if \(p && p\.usingNative && canUseNativeVideoPlayer\(\)\) return false;/,
     'web source swaps should not run underneath native playback');
+  assert.match(ui, /function markVodPlaybackStarted\(p\) \{[\s\S]+p\.started = true;[\s\S]+function vodPlaybackStarted\(p\) \{[\s\S]+p\.nativeReady[\s\S]+function recoverSamePlaybackSource\(reason = ''\) \{[\s\S]+tryNativeVideoPlayer\(kind, at, \{ quietSeek: true \}\)[\s\S]+startSource\(kind, at, \{ quietSeek: true \}\)/,
+    'VOD playback should record the post-start boundary and recover the same source/kind after a mid-stream interruption');
+  assert.match(ui, /function failover\(\) \{[\s\S]+if \(vodPlaybackStarted\(p\)\) \{[\s\S]+recoverSamePlaybackSource\('playback interrupted'\);[\s\S]+return;[\s\S]+if \(!p\.usingRemux && !p\.usingTranscode/,
+    'web media errors after a real VOD frame must not silently switch to remux/transcode or another release');
+  assert.match(ui, /async function autoAdvance\(opts = \{\}\) \{[\s\S]+if \(vodPlaybackStarted\(p\) && !opts\.allowMidstreamAdvance\) \{[\s\S]+recoverSamePlaybackSource\('source failed'\);[\s\S]+return;[\s\S]+const at = currentTime\(\);/,
+    'auto-advance should remain a startup/source-failure path, not a mid-movie release switch');
+  assert.match(ui, /window\.__tvNativeVideoReady = \(pos, dur\) => \{[\s\S]+p\.nativeReady = true;[\s\S]+markVodPlaybackStarted\(p\);[\s\S]+window\.__tvNativeVideoError = \(msg, pos, dur\) => \{[\s\S]+if \(vodPlaybackStarted\(p\)\) \{[\s\S]+recoverSamePlaybackSource\(msg \|\| 'native playback interrupted'\);[\s\S]+return;/,
+    'native ExoPlayer errors after READY should recover the same source instead of walking the fallback ladder');
+  assert.match(android, /if \(state == Player\.STATE_READY\) \{[\s\S]+if \("video"\.equals\(nativeMode\)\) \{[\s\S]+nativeVideoStarted = true;[\s\S]+window\.__tvNativeVideoReady && __tvNativeVideoReady/,
+    'Android ExoPlayer STATE_READY should mark the web VOD session as post-start before later errors are handled');
   assert.match(ui, /const clearReadyFrame = \(\) => \{[\s\S]+pReady\.item\.type === 'live' && v\.readyState >= 2[\s\S]+\$\(\'playerLoader\'\)\.classList\.remove\('show'\);[\s\S]+v\.onloadeddata = clearReadyFrame;[\s\S]+v\.oncanplay = clearReadyFrame;/,
     'web Live TV should clear the startup loader once a decoded frame is ready, even if delayed autoplay is blocked');
   assert.ok(ui.includes("$('vlcPanel').classList.remove('show');")
@@ -863,7 +952,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'screensaver brand should use the updated cropped Triboon wordmark');
   assert.match(ui, /<div class="ssBrand"><img src="triboon\.png" alt="Triboon"><\/div>/,
     'screensaver should use the updated transparent Triboon wordmark asset');
-  assert.match(ui, /const SCREENSAVER_IDLE_DEFAULT_SECONDS = 60;[\s\S]+const SCREENSAVER_IDLE_OPTIONS = \[0, 60, 120, 300, 600\];[\s\S]+function prefScreensaverDelayMs\(\) \{[\s\S]+return seconds > 0 \? seconds \* 1000 : 0;[\s\S]+function canShowScreensaver\(\) \{[\s\S]+S\.nativeLivePending[\s\S]+S\.view === 'player' \|\| \$\('player'\)\.classList\.contains\('open'\)[\s\S]+\.gate\.open,#drawer\.open,#trailer\.open,#libModal\.open,#matchModal\.open,#catModal\.open,#filterMenu\.open,#cwMenu\.open,#trackMenu\.open,#musicNow\.open[\s\S]+function resetScreensaverIdle\(\) \{[\s\S]+const idleMs = prefScreensaverDelayMs\(\);[\s\S]+if \(!idleMs\) return;[\s\S]+setTimeout\(showScreensaver, idleMs\);/,
+  assert.match(ui, /const SCREENSAVER_IDLE_DEFAULT_SECONDS = 60;[\s\S]+const SCREENSAVER_IDLE_OPTIONS = \[0, 60, 120, 300, 600\];[\s\S]+function normalizeScreensaverDelaySeconds\(value\) \{[\s\S]+if \(n > 0 && n < 60\) return normalizeScreensaverDelaySeconds\(n \* 60\);[\s\S]+function prefScreensaverDelaySeconds\(\) \{[\s\S]+localStorage\.getItem\(profilePrefKey\('screensaverDelay'\)\)[\s\S]+localStorage\.getItem\('triboon\.screensaverDelay'\)[\s\S]+return normalizeScreensaverDelaySeconds\(raw\);[\s\S]+function savePrefScreensaverDelay\(seconds\) \{[\s\S]+const n = normalizeScreensaverDelaySeconds\(seconds\);[\s\S]+function prefScreensaverDelayMs\(\) \{[\s\S]+return seconds > 0 \? seconds \* 1000 : 0;[\s\S]+function canShowScreensaver\(\) \{[\s\S]+S\.nativeLivePending[\s\S]+S\.view === 'player' \|\| \$\('player'\)\.classList\.contains\('open'\)[\s\S]+\.gate\.open,#drawer\.open,#trailer\.open,#libModal\.open,#matchModal\.open,#catModal\.open,#filterMenu\.open,#cwMenu\.open,#trackMenu\.open,#musicNow\.open[\s\S]+function resetScreensaverIdle\(\) \{[\s\S]+const idleMs = prefScreensaverDelayMs\(\);[\s\S]+if \(!idleMs\) return;[\s\S]+setTimeout\(showScreensaver, idleMs\);/,
     'app screensaver should default to one minute, allow profile timing, and stay out of native Live TV, playback, gates, and active modal surfaces');
   assert.match(ui, /function wakeScreensaverForPlayerSurface\(\) \{[\s\S]+if \(S\.screensaverOn\) hideScreensaver\(true\);[\s\S]+resetScreensaverIdle\(\);[\s\S]+\}/,
     'player and PiP guide surfaces should explicitly wake the screensaver before revealing video UI');
@@ -1378,8 +1467,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Music connect focus should wait for Preferences rendering instead of using a fixed timer race');
   assert.match(ui, /id="mnQueueToggle" title="Hide queue" aria-label="Hide queue"[\s\S]+function updateMusicQueueToggle\(\) \{[\s\S]+btn\.title = hidden \? 'Show queue' : 'Hide queue'[\s\S]+btn\.setAttribute\('aria-label', btn\.title\)/,
     'Music now-playing queue control should be icon-only and use queue labels');
-  assert.match(ui, /function renderYtmConnectBox\(box, st\) \{[\s\S]+Connect YouTube Music[\s\S]+ytmStartLink[\s\S]+function renderYtmImportBox\(box, opts = \{\}\) \{[\s\S]+ytmFile[\s\S]+api\('\/api\/music\/link'/,
-    'YouTube Music linking should present a connect/import flow instead of a raw paste-first box');
+  assert.match(ui, /function renderYtmConnectBox\(box, st\) \{[\s\S]+Set up account[\s\S]+Manual paste[\s\S]+function renderYtmImportBox\(box, opts = \{\}\) \{[\s\S]+ytmOpenMusic[\s\S]+ytmPick[\s\S]+ytmShowPaste[\s\S]+api\('\/api\/music\/link'/,
+    'YouTube Music linking should present a guided setup flow with manual paste hidden as an advanced path');
   assert.doesNotMatch(android, /ImageButton back = nativeButton\(R\.drawable\.ic_player_back/,
     'native player bottom row should not show a separate Back button');
   assert.match(android, /KEY_CACHE_VERSION/,

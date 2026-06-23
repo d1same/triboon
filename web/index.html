@@ -18,7 +18,12 @@
   --ink:#0B0812; --surface:#161020; --raise:#221934;
   --magenta:#C13BD6; --coral:#FB8B3C; --amber:#FFC65C;
   --text:#F3EFF7; --muted:#9B8FAD; --line:rgba(243,239,247,.08);
-  --grad:linear-gradient(135deg,var(--magenta),var(--coral));
+  --field:rgba(11,8,18,.72); --soft:rgba(34,25,52,.7); --panel:rgba(22,16,32,.94);
+  --focus:var(--coral); --focusSoft:rgba(251,139,60,.42); --onAccent:#160a04;
+  --success:#7CE6A0; --danger:#ff8d8d;
+  --scrim:linear-gradient(90deg,rgba(11,8,18,.86) 0%,rgba(11,8,18,.56) 28%,rgba(11,8,18,.20) 58%,rgba(11,8,18,.06) 100%),
+          linear-gradient(0deg,rgba(11,8,18,.76) 0%,rgba(11,8,18,.24) 26%,rgba(11,8,18,.04) 60%,rgba(11,8,18,.10) 100%);
+  --grad:var(--coral);
   --r:14px;
   --rail:72px;       /* sidebar width; grows on hover so content slides right (Plex push) */
   --heroLeft:clamp(4px,5vw,190px); /* resolution-adaptive title indent (home hero, page heads, backdrop info) */
@@ -53,13 +58,13 @@ button,.focusable,.railBtn,.mChip,.musicRow,.mbBtn,.musicAction,.iconBtn,.cbtn,
 }
 /* Native selects look foreign (white OS chrome) — restyle them to match the design system. */
 select{appearance:none;-webkit-appearance:none;
-  background:rgba(11,8,18,.85) url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="12" height="8" viewBox="0 0 12 8"><path d="M1 1.5 6 6.5 11 1.5" fill="none" stroke="%239B8FAD" stroke-width="2" stroke-linecap="round"/></svg>') no-repeat right 13px center;
+  background:var(--field) url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="12" height="8" viewBox="0 0 12 8"><path d="M1 1.5 6 6.5 11 1.5" fill="none" stroke="%239B8FAD" stroke-width="2" stroke-linecap="round"/></svg>') no-repeat right 13px center;
   border:1px solid var(--line);border-radius:12px;color:var(--text);
   padding:11px 36px 11px 13px;font:500 13.5px "Albert Sans",system-ui,sans-serif;outline:none;cursor:pointer;
   transition:border-color .15s}
 select:hover{border-color:rgba(243,239,247,.2)}
 select:focus{border-color:var(--magenta)}
-select option,select optgroup{background:#161020;color:var(--text)}
+select option,select optgroup{background:var(--surface);color:var(--text)}
 ::-webkit-scrollbar{display:none}
 
 /* ---------- living backdrop ---------- */
@@ -129,9 +134,7 @@ body.shortBrowseBd:not(.tv) #bdInfo .bdiO{font-size:14.5px;line-height:1.45;-web
   background:radial-gradient(70% 70% at 12% 92%,rgba(193,59,214,.20),transparent 60%),
              radial-gradient(55% 55% at 0% 100%,rgba(251,139,60,.16),transparent 70%),
              radial-gradient(50% 60% at 100% 0%,rgba(255,198,92,.10),transparent 60%)}
-#scrim{position:fixed;inset:0;z-index:2;pointer-events:none;
-  background:linear-gradient(90deg,var(--ink) 0%,rgba(11,8,18,.72) 26%,rgba(11,8,18,.2) 54%,transparent 80%),
-             linear-gradient(0deg,var(--ink) 0%,rgba(11,8,18,.5) 22%,transparent 50%)}
+#scrim{position:fixed;inset:0;z-index:2;pointer-events:none;background:var(--scrim)}
 #colorGlow{position:fixed;inset:0;z-index:3;pointer-events:none;mix-blend-mode:screen;opacity:.9;
   background:radial-gradient(45% 55% at 6% 96%,rgba(193,59,214,.28),transparent 62%),
              radial-gradient(40% 45% at 30% 100%,rgba(251,139,60,.18),transparent 66%)}
@@ -174,8 +177,9 @@ body.shortBrowseBd:not(.tv) #bdInfo .bdiO{font-size:14.5px;line-height:1.45;-web
   transition:opacity .2s ease,max-width .32s cubic-bezier(.22,1,.36,1)}
 #rail:hover .logo .wordmark,#rail.expanded .logo .wordmark,body.railOpen .logo .wordmark{max-width:120px;opacity:1}
 /* Burger (phones): the rail is off-canvas; this toggles it as an overlay. */
-#burger{position:fixed;top:14px;left:14px;z-index:30;display:none;width:42px;height:42px;border-radius:12px;
-  place-items:center;background:rgba(22,16,32,.9);border:1px solid var(--line);color:var(--text)}
+#burger{position:fixed;top:14px;left:14px;z-index:60;display:none;width:42px;height:42px;border-radius:12px;
+  place-items:center;background:var(--panel);border:1px solid var(--line);color:var(--text);
+  pointer-events:auto;touch-action:manipulation;-webkit-user-select:none;user-select:none}
 #rail:hover .rlabel,#rail.expanded .rlabel,body.railOpen .rlabel,
 #rail:hover #railUser .rlabel,#rail.expanded #railUser .rlabel,body.railOpen #railUser .rlabel{max-width:150px;opacity:1}
 body.railClickCollapsed #rail:hover{width:72px;background:none}
@@ -184,16 +188,14 @@ body.railClickCollapsed #rail:hover #railUser .rlabel,
 body.railClickCollapsed #rail:hover .logo .wordmark{max-width:0;opacity:0}
 body.railClickCollapsed #rail:hover .railSec{height:0;opacity:0}
 body.railClickCollapsed #rail:hover .railBtn .del{opacity:0}
-.railBtn.active{color:var(--text);background:rgba(34,25,52,.65)}
-.railBtn.active::after,.railBtn.focusable.focus::after,.railBtn:focus-visible::after{content:"";position:absolute;width:3px;height:22px;left:-12px;border-radius:4px;background:var(--grad)}
+.railBtn.active{color:var(--text);background:var(--soft)}
+.railBtn.active::after,.railBtn.focusable.focus::after,.railBtn:focus-visible::after{content:"";position:absolute;width:3px;height:22px;left:-12px;border-radius:4px;background:var(--focus)}
 .railBtn.focusable::before{display:none}
 .railBtn.focusable.focus,.railBtn:focus-visible{
   transform:none;color:var(--text);
-  background:linear-gradient(90deg,rgba(193,59,214,.18),rgba(251,139,60,.1) 72%,rgba(34,25,52,.36));
-  box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
+  background:var(--soft);box-shadow:inset 0 0 0 1px var(--line)}
 .railBtn.focusable.focus::after,.railBtn:focus-visible::after{height:24px;box-shadow:0 0 14px rgba(251,139,60,.38)}
-.railBtn.active.focusable.focus,.railBtn.active:focus-visible{
-  background:linear-gradient(90deg,rgba(193,59,214,.24),rgba(251,139,60,.14) 74%,rgba(34,25,52,.48))}
+.railBtn.active.focusable.focus,.railBtn.active:focus-visible{background:var(--soft)}
 .railBtn .del{margin-left:auto;margin-right:12px;opacity:0;color:var(--muted);font-size:15px;width:18px;flex:none}
 #rail:hover .railBtn:hover .del,body.railOpen .railBtn:hover .del{opacity:.7}
 .railSec{font:700 10px "JetBrains Mono";letter-spacing:.16em;color:var(--muted);text-transform:uppercase;padding:16px 14px 6px;height:0;opacity:0;overflow:hidden;transition:opacity .12s;white-space:nowrap}
@@ -208,9 +210,8 @@ body.railClickCollapsed #rail:hover .railBtn .del{opacity:0}
 #railUser.focusable::before{top:-10px;left:8px;right:8px;bottom:auto;height:1px;padding:0;border-radius:0;background:var(--line);opacity:1;
   -webkit-mask:none;mask:none}
 #railUser.focusable.focus,#railUser:focus-visible{transform:none;color:var(--text);
-  background:linear-gradient(90deg,rgba(193,59,214,.18),rgba(251,139,60,.1) 72%,rgba(34,25,52,.36));
-  box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
-#railUser .av{width:24px;height:24px;border-radius:50%;background:var(--grad);display:grid;place-items:center;font:700 12px "Sora";color:#160a04;flex:none;margin:0 12px}
+  background:var(--soft);box-shadow:inset 0 0 0 1px var(--line)}
+#railUser .av{width:24px;height:24px;border-radius:50%;background:var(--focus);display:grid;place-items:center;font:700 12px "Sora";color:var(--onAccent);flex:none;margin:0 12px}
 #navSettings{margin-top:2px}
 /* Android TV WebView can leave CSS :hover latched after remote navigation. On TV, the rail
    expands only from our explicit D-pad state, never from hover. Desktop keeps hover expand. */
@@ -276,7 +277,7 @@ body.authOpen #gateBackdrop{display:block}
 .gateCard input{width:100%;min-height:54px;background:rgba(255,255,255,.08);border:0;border-radius:16px;padding:15px 16px;color:var(--text);font:700 17px "Albert Sans";outline:none;box-shadow:inset 0 0 0 1px rgba(243,239,247,.08)}
 .gateCard input:focus{box-shadow:0 0 0 3px rgba(251,139,60,.42),inset 0 0 0 1px rgba(251,139,60,.72)}
 .gateCard .btn{width:100%;min-height:56px;justify-content:center;margin-top:24px;font-size:16px;border-radius:17px;box-shadow:0 16px 32px rgba(193,59,214,.23)}
-.gateCard .btn.primary{background:linear-gradient(135deg,#C13BD6,#FB8B3C)!important;color:#160a04!important}
+.gateCard .btn.primary{background:var(--gold)!important;color:var(--onAccent)!important}
 .gateCard .err{color:#ffadad;font-weight:700;font-size:13px;min-height:18px;margin-top:12px}
 .gateCard .alt{margin-top:18px;text-align:center;font-size:14px;color:rgba(243,239,247,.7)}
 .gateCard .alt button{color:#ffd08b;font-weight:850}
@@ -313,6 +314,14 @@ body.androidApp #gateArtCaption{display:none}
 @media (max-width:760px){
   body.androidApp .gateCard{width:min(100%,420px)}
 }
+@media (max-width:600px){
+  body.androidApp .gate{padding:12px}
+  body.androidApp .gateCard{width:min(100%,390px);max-height:calc(100dvh - 24px);padding:22px;border-radius:22px}
+  body.androidApp .gateCard h1{font-size:24px}
+  body.androidApp .gateCard .sub{font-size:13.5px;line-height:1.35;margin:5px 0 14px}
+  body.androidApp .gateCard input{min-height:48px;padding:12px 14px}
+  body.androidApp .gateCard .btn{min-height:50px;margin-top:14px}
+}
 .profCard{position:relative;width:150px;display:flex;flex-direction:column;align-items:center;gap:10px;background:none;color:var(--text)}
 .profCard .av{width:128px;height:128px;border-radius:24px;background:linear-gradient(145deg,rgba(34,25,52,.92),rgba(11,8,18,.96));
   border:1px solid rgba(243,239,247,.11);display:grid;place-items:center;color:var(--amber);
@@ -343,16 +352,16 @@ body.androidApp #gateArtCaption{display:none}
 .metaLine .rating{color:var(--amber)}
 .metaLine .dot{opacity:.5}
 #hero .meta .metaLine,#bdInfo .bdiM .metaLine{margin-bottom:0}
-.chip{font:700 11px/1 "JetBrains Mono";letter-spacing:.06em;color:var(--text);padding:7px 10px;border-radius:8px;background:rgba(34,25,52,.7);border:1px solid var(--line)}
-.chip.hot{background:linear-gradient(135deg,rgba(193,59,214,.25),rgba(251,139,60,.25));border-color:rgba(251,139,60,.4)}
-.chip.ok{color:#7CE6A0;border-color:rgba(124,230,160,.35)}
+.chip{font:700 11px/1 "JetBrains Mono";letter-spacing:.06em;color:var(--text);padding:7px 10px;border-radius:8px;background:var(--soft);border:1px solid var(--line)}
+.chip.hot{background:var(--soft);border-color:var(--focus);color:var(--text)}
+.chip.ok{color:var(--success);border-color:rgba(124,230,160,.35)}
 .chip.warn{color:var(--amber);border-color:rgba(255,198,92,.35)}
-.chip.zap{color:#160a04;background:var(--grad);border:0}
+.chip.zap{color:var(--onAccent);background:var(--gold);border:0}
 #hero p{color:var(--muted);max-width:54ch;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;margin-bottom:20px}
 #heroBtns{display:flex;gap:12px}
 .btn{display:flex;align-items:center;gap:10px;padding:14px 26px;border-radius:var(--r);font:600 15.5px "Albert Sans",system-ui,sans-serif;letter-spacing:.01em}
-.btn.primary{background:var(--grad);color:#160a04}
-.btn.ghost{background:rgba(34,25,52,.72);border:1px solid var(--line)}
+.btn.primary{background:var(--gold);color:var(--onAccent)}
+.btn.ghost{background:var(--soft);border:1px solid var(--line)}
 .btn svg{width:18px;height:18px}
 .btn[disabled]{opacity:.6;cursor:wait}
 #rows{display:flex;flex-direction:column;gap:16px;max-height:46vh;overflow-y:auto}
@@ -381,25 +390,25 @@ body.androidApp #gateArtCaption{display:none}
 .filterBar select{font:600 13px "Sora"} /* inherits the global dark select style */
 #filterMenu{position:fixed;inset:0;z-index:49;display:none;place-items:center;background:rgba(5,3,9,.72);backdrop-filter:blur(6px)}
 #filterMenu.open{display:grid}
-#filterMenu .box{width:min(560px,86vw);max-height:82vh;display:flex;flex-direction:column;background:rgba(22,16,32,.97);
+#filterMenu .box{width:min(560px,86vw);max-height:82vh;display:flex;flex-direction:column;background:var(--panel);
   border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:0 30px 90px rgba(0,0,0,.58)}
 #filterMenuTitle{font:800 12px "JetBrains Mono";letter-spacing:.18em;text-transform:uppercase;color:var(--amber);padding:3px 6px 13px}
 #filterMenuList{overflow-y:auto;display:flex;flex-direction:column;gap:4px;min-height:0}
 #filterMenuList button{display:flex;align-items:center;width:100%;gap:12px;text-align:left;border-radius:10px;
   padding:13px 14px;font:700 15px "Albert Sans";color:var(--text);border:1px solid transparent;
   transition:background .15s,color .15s,box-shadow .15s,border-color .15s}
-#filterMenuList button:hover{background:rgba(34,25,52,.7)}
+#filterMenuList button:hover{background:var(--soft)}
 #filterMenuList button.focusable::before{display:none!important}
-#filterMenuList button.focus{background:var(--text);color:#160a04;border-color:transparent;box-shadow:0 10px 28px rgba(0,0,0,.45)}
-#filterMenuList button.sel{background:var(--gold);color:#160a04;border-color:transparent}
-#filterMenuList button.sel.focus{background:var(--text);color:#160a04}
+#filterMenuList button.focus{background:var(--text);color:var(--onAccent);border-color:transparent;box-shadow:0 10px 28px rgba(0,0,0,.45)}
+#filterMenuList button.sel{background:var(--gold);color:var(--onAccent);border-color:transparent}
+#filterMenuList button.sel.focus{background:var(--text);color:var(--onAccent)}
 #filterMenuList button .label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #filterMenuList button .mark{margin-left:auto;font:800 14px "JetBrains Mono";color:var(--amber)}
-#filterMenuList button.sel .mark,#filterMenuList button.focus .mark{color:#160a04}
+#filterMenuList button.sel .mark,#filterMenuList button.focus .mark{color:var(--onAccent)}
 body.tv #filterMenu{backdrop-filter:none}
 #genreChips{display:flex;gap:7px;flex-wrap:wrap;max-width:64vw}
-.gChip{padding:8px 13px;border-radius:11px;background:rgba(34,25,52,.55);border:1px solid var(--line);font:600 12px "Sora";color:var(--muted)}
-.gChip.sel{background:var(--grad);color:#160a04;border-color:transparent}
+.gChip{padding:8px 13px;border-radius:11px;background:var(--soft);border:1px solid var(--line);font:600 12px "Sora";color:var(--muted)}
+.gChip.sel{background:var(--grad);color:var(--onAccent);border-color:transparent}
 #grid{flex:1;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:20px 16px;align-content:start;padding:6px 4px 30px}
 #grid .pcard{flex:none}
 #browse.searchMode{padding-top:110px} /* clears the floating search bar incl. section headers */
@@ -415,7 +424,7 @@ body.tv #filterMenu{backdrop-filter:none}
 .trailerCard .art{aspect-ratio:16/9}
 .trailerCard .art::after{content:"";position:absolute;inset:0;background:radial-gradient(circle at center,rgba(193,59,214,.0),rgba(11,8,18,.4))}
 .trailerCard .play{position:absolute;inset:0;display:grid;place-items:center;z-index:2}
-.trailerCard .play div{width:50px;height:50px;border-radius:50%;background:var(--grad);display:grid;place-items:center;color:#160a04;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+.trailerCard .play div{width:50px;height:50px;border-radius:50%;background:var(--gold);display:grid;place-items:center;color:var(--onAccent);box-shadow:0 8px 24px rgba(0,0,0,.5)}
 
 /* ---------- trailer modal ---------- */
 #trailer{position:fixed;inset:0;z-index:45;display:none;place-items:center;background:#050308;padding:28px;overflow:hidden;--trailerBackdrop:none}
@@ -491,15 +500,18 @@ body.tv #filterMenu{backdrop-filter:none}
 /* ---------- library + fix-match modals (shared chrome) ---------- */
 #libModal,#matchModal{position:fixed;inset:0;z-index:48;display:none;place-items:center;background:rgba(5,3,9,.8);backdrop-filter:blur(6px)}
 #libModal.open,#matchModal.open{display:grid}
-#libModal .box,#matchModal .box{width:min(440px,92vw);background:rgba(22,16,32,.96);border:1px solid var(--line);border-radius:20px;padding:28px}
+#libModal .box,#matchModal .box{width:min(440px,92vw);background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:28px}
 #libModal h2,#matchModal h2{font:800 22px "Sora";margin-bottom:4px}
 #libModal .sub,#matchModal .sub{color:var(--muted);font-size:13px;margin-bottom:18px}
 #libModal label{display:block;font:700 11px "JetBrains Mono";letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:14px 0 6px}
-#libModal input,#matchModal input{background:rgba(11,8,18,.7);border:1px solid var(--line);border-radius:12px;padding:12px 13px;color:var(--text);font:500 14px "Albert Sans";outline:none}
+#libModal input,#matchModal input{background:var(--field);border:1px solid var(--line);border-radius:12px;padding:12px 13px;color:var(--text);font:500 14px "Albert Sans";outline:none}
 #matchModal .box{width:min(520px,94vw)}
 #matchResults{max-height:300px;overflow-y:auto;margin-top:12px;display:flex;flex-direction:column;gap:4px}
 #libModal input,#libModal select{width:100%}
 #libModal input:focus{border-color:var(--magenta)}
+#libModal .libEditActions{margin-top:14px;padding:12px;border:1px solid var(--line);border-radius:14px;background:rgba(255,255,255,.035)}
+#libModal .libEditActionBtns{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+#libModal .libEditActionBtns .btn{min-height:40px}
 #libModal .modalBtns{display:flex;gap:10px;margin-top:22px}
 #seasonChips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
 .seasonChip{padding:10px 16px;border-radius:12px;background:rgba(34,25,52,.6);border:1px solid var(--line);
@@ -710,49 +722,66 @@ body.screensaverOn{cursor:none}
 #settings h1,#settings>.sub,#prefs h1,#prefs>.sub{grid-column:1/-1}
 #setTabs,#prefTabs{grid-column:1;position:sticky;top:18px;display:flex;flex-direction:column;gap:8px;margin:0;align-self:start}
 #setTabs button,#prefTabs button{display:grid;grid-template-columns:32px minmax(0,1fr);align-items:center;gap:12px;width:100%;
-  min-height:48px;text-align:left;background:rgba(22,16,32,.62);border:1px solid rgba(243,239,247,.07);
+  min-height:48px;text-align:left;background:var(--panel);border:1px solid var(--line);
   border-radius:14px;color:var(--muted);font:700 13px "Albert Sans";padding:8px 13px;cursor:pointer;transition:background .15s,border-color .15s,color .15s,box-shadow .15s}
 #setTabs button svg,#prefTabs button svg{width:20px;height:20px;color:currentColor}
-#setTabs button:hover,#prefTabs button:hover{color:var(--text);background:rgba(34,25,52,.78)}
+#setTabs button:hover,#prefTabs button:hover{color:var(--text);background:var(--soft)}
 #setTabs button.on,#prefTabs button.on{color:var(--text);background:rgba(255,198,92,.12);border-color:rgba(255,198,92,.34);box-shadow:inset 3px 0 0 var(--amber)}
-#setTabs button.focus,#prefTabs button.focus,#setTabs button:focus,#prefTabs button:focus{outline:none;box-shadow:0 0 0 2.5px var(--coral),inset 3px 0 0 var(--amber)}
+#setTabs button.focus,#prefTabs button.focus,#setTabs button:focus,#prefTabs button:focus{outline:none;box-shadow:0 0 0 2.5px var(--focusSoft),inset 3px 0 0 var(--focus)}
 .setGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(480px,100%),1fr));gap:18px;align-items:start;max-width:2200px} /* up to 4 columns on big screens, wraps down to 1 on phones */
 .testBtn{font:700 10px "JetBrains Mono";letter-spacing:.06em;text-transform:uppercase;padding:4px 11px;margin-left:10px;cursor:pointer;
   border:1px solid rgba(255,198,92,.45);border-radius:999px;color:var(--amber);background:rgba(255,198,92,.08);transition:background .15s,border-color .15s}
 .testBtn:hover{background:rgba(255,198,92,.22)}
-.testBtn.ok{border-color:rgba(110,231,160,.55);color:#6ee7a0;background:rgba(110,231,160,.1)}
-.testBtn.bad{border-color:rgba(255,141,141,.55);color:#ff8d8d;background:rgba(255,141,141,.1)}
+.testBtn.ok{border-color:rgba(110,231,160,.55);color:var(--success);background:rgba(110,231,160,.1)}
+.testBtn.bad{border-color:rgba(255,141,141,.55);color:var(--danger);background:rgba(255,141,141,.1)}
 .setGrid[hidden]{display:none}
 #settings>.setGrid,#prefs>.setGrid{grid-column:2;grid-row:3;min-width:0}
 .setGrid .panel{max-width:none;margin-bottom:0}
-.panel{background:rgba(22,16,32,.72);border:1px solid rgba(243,239,247,.075);border-radius:14px;padding:22px;max-width:680px;margin-bottom:18px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;max-width:680px;margin-bottom:18px}
 .panel h2{font:700 16px "Sora";margin-bottom:4px}
 .panel p{color:var(--muted);font-size:13.5px;margin-bottom:14px}
 .field{display:flex;gap:10px;margin-bottom:10px;flex-wrap:wrap}
-.field input,.field textarea{flex:1;min-width:120px;background:rgba(11,8,18,.7);border:1px solid var(--line);border-radius:12px;padding:12px 13px;color:var(--text);font:500 13px "JetBrains Mono";outline:none}
-.field input:focus,.field textarea:focus{border-color:var(--magenta)}
+.field input,.field textarea{flex:1;min-width:120px;background:var(--field);border:1px solid var(--line);border-radius:12px;padding:12px 13px;color:var(--text);font:500 13px "JetBrains Mono";outline:none}
+.field input:focus,.field textarea:focus{border-color:var(--focus)}
 .field textarea{resize:vertical;line-height:1.6}
+.settingsForm{display:grid;gap:14px;margin-top:16px}
+.settingsRow{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;align-items:end}
+.settingsRow.two{grid-template-columns:repeat(2,minmax(0,1fr))}
+.settingsControl{display:grid;gap:6px;min-width:0}
+.settingsControl>span{color:var(--muted);font:800 10px "JetBrains Mono";letter-spacing:.08em;text-transform:uppercase}
+.settingsControl input,.settingsControl select{width:100%;max-width:none!important;min-width:0;box-sizing:border-box}
+.settingsActions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:16px}
+.settingsActions .btn{margin:0;white-space:nowrap}
+.settingsActions .btn.primary{min-width:160px}
+.settingsActions .btn.ghost{min-width:128px}
+.settingsStatus{margin-top:14px;line-height:1.55;word-break:normal;overflow-wrap:anywhere}
 .kv{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--line);font-size:13.5px}
 .kv span:last-child{font-family:"JetBrains Mono";color:var(--muted);max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .hint{font:500 11px "JetBrains Mono";color:var(--muted);margin-top:10px;word-break:break-all}
 .syncGrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:2px 0 14px}
-.syncCard{min-height:70px;border:1px solid rgba(243,239,247,.075);border-radius:12px;padding:12px;background:rgba(11,8,18,.42)}
+.syncCard{min-height:70px;border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--field)}
 .syncCard .k{font:800 10px "JetBrains Mono";letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
 .syncCard .v{font:800 17px "Sora";color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .syncSources{display:grid;gap:8px;margin:10px 0 14px}
 .syncSource{display:grid;grid-template-columns:minmax(130px,1.2fr) minmax(0,2fr);gap:10px;align-items:center;
-  border:1px solid rgba(243,239,247,.07);border-radius:12px;padding:10px 12px;background:rgba(22,16,32,.48)}
+  border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:var(--soft)}
 .syncSource b{font:800 13px "Sora";overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .syncSource small{display:block;color:var(--muted);font:600 10px "JetBrains Mono";margin-top:3px}
 .syncSource .syncMeta{font:600 11px "JetBrains Mono";color:var(--muted);overflow-wrap:anywhere}
-.syncDot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#6ee7a0;margin-right:8px;box-shadow:0 0 16px rgba(110,231,160,.45)}
+.syncDot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--success);margin-right:8px;box-shadow:0 0 16px rgba(110,231,160,.45)}
 .syncSource.warn .syncDot{background:var(--amber);box-shadow:0 0 16px rgba(255,198,92,.4)}
-.syncSource.bad .syncDot{background:#ff8d8d;box-shadow:0 0 16px rgba(255,141,141,.4)}
+.syncSource.bad .syncDot{background:var(--danger);box-shadow:0 0 16px rgba(255,141,141,.4)}
 .activityRows{display:grid;gap:10px}
 .activityRow{display:grid;grid-template-columns:minmax(160px,1.1fr) minmax(0,1.7fr) minmax(110px,.45fr);gap:12px;align-items:center;
-  border:1px solid rgba(243,239,247,.07);border-radius:12px;padding:12px;background:rgba(11,8,18,.42)}
+  border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--field)}
 .activityRow b{font:800 13px "Sora";display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .activityRow small,.activityRow .arMeta{display:block;color:var(--muted);font:600 11px "JetBrains Mono";overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.activityStream{display:inline-flex;align-items:center;min-height:24px;max-width:100%;margin-top:8px;padding:0 10px;border-radius:999px;border:1px solid rgba(255,255,255,.14);
+  background:rgba(255,255,255,.06);color:var(--muted);font:800 11px "Sora";white-space:nowrap}
+.activityStream.original{color:#ffe2a3;background:rgba(255,198,92,.12);border-color:rgba(255,198,92,.28)}
+.activityStream.remux{color:#c5ffe0;background:rgba(94,233,160,.11);border-color:rgba(94,233,160,.24)}
+.activityStream.transcode{color:#ffb4b4;background:rgba(255,120,120,.11);border-color:rgba(255,120,120,.25)}
+.activityStream.live{color:#b9ddff;background:rgba(110,178,255,.12);border-color:rgba(110,178,255,.25)}
 .activityBar{height:6px;border-radius:999px;background:rgba(243,239,247,.16);overflow:hidden;margin-top:7px}
 .activityBar span{display:block;height:100%;background:var(--grad);width:var(--pct,0%)}
 #playerStats{display:none;position:absolute;right:44px;bottom:176px;width:min(420px,calc(100vw - 88px));z-index:7;
@@ -769,6 +798,11 @@ body.screensaverOn{cursor:none}
   #setTabs,#prefTabs{position:static;flex-direction:row;overflow-x:auto;scroll-padding:0 16px;margin-bottom:20px}
   #setTabs button,#prefTabs button{width:auto;min-width:150px;grid-template-columns:24px minmax(0,1fr)}
   #settings>.setGrid,#prefs>.setGrid{grid-column:auto;grid-row:auto}
+}
+@media (max-width:700px){
+  .settingsRow,.settingsRow.two{grid-template-columns:1fr}
+  .settingsActions{align-items:stretch}
+  .settingsActions .btn{flex:1 1 160px}
 }
 
 /* =========================================================================
@@ -1038,26 +1072,27 @@ body.tv .cwAct,body.tv .epMenuBtn{display:none!important}
 @media (max-width:600px){
   #backdrop .layer{display:none!important;opacity:0!important}
   body.fullBd #bdInfo.show,#bdInfo{display:none!important;opacity:0!important}
-  #scrim{background:linear-gradient(180deg,rgba(11,8,18,.96) 0%,rgba(11,8,18,.82) 48%,rgba(11,8,18,.96) 100%)}
+  #scrim{background:var(--scrim)}
   #colorGlow{opacity:.72}
   #burger{display:grid}
   nav#rail{transform:translateX(-110%);transition:transform .28s cubic-bezier(.22,1,.36,1);
     width:248px!important;z-index:40;box-shadow:18px 0 50px rgba(0,0,0,.5)}
-  body.mobileNav nav#rail{transform:translateX(0);background:rgba(11,8,18,.97);backdrop-filter:blur(8px)}
+  body.mobileNav nav#rail{transform:translateX(0);background:var(--panel);backdrop-filter:blur(8px)}
   body.mobileNav nav#rail .rlabel,body.mobileNav nav#rail .wordmark{max-width:150px;opacity:1}
   :root{--rail:0px}
   body.railOpen{--rail:0px}
   #home,#discover,#browse,#detail,#person,#settings,#prefs,#music{padding-left:16px!important;padding-right:16px!important}
   #searchBar{left:16px;right:16px}
   #home{padding:62px 16px 18px 16px!important;justify-content:flex-end}
-  #hero{max-width:calc(100vw - 80px);margin:0 0 14px 48px;padding:0}
+  #hero{max-width:calc(100vw - 32px);margin:0 auto 14px;padding:0;text-align:center;align-items:center}
   #hero .eyebrow{margin-bottom:8px;font-size:10px;letter-spacing:.18em}
-  #hero h1{font-size:clamp(28px,9vw,38px);line-height:1.08;margin-bottom:8px}
-  #hero .meta{margin-bottom:7px}
-  #heroCredits{min-height:0;margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  #hero p{font-size:14.5px;line-height:1.42;-webkit-line-clamp:2;margin-bottom:12px;max-width:100%}
-  #heroBtns{gap:9px;flex-wrap:wrap}
-  #heroBtns .btn{padding:11px 16px;font-size:14px}
+  #hero h1{font-size:clamp(24px,7.4vw,32px);line-height:1.08;margin-bottom:8px}
+  #hero .meta{margin-bottom:7px;justify-content:center}
+  #heroCredits{min-height:0;margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;width:100%}
+  #hero p{font-size:13.5px;line-height:1.38;-webkit-line-clamp:2;margin:0 auto 12px;max-width:min(100%,430px)}
+  #heroBtns{width:100%;justify-content:center;gap:8px;flex-wrap:nowrap}
+  #heroBtns .btn{flex:1 1 0;min-width:0;max-width:178px;padding:10px 10px;font-size:12.8px;justify-content:center;white-space:nowrap}
+  #heroBtns .btn svg{width:15px;height:15px;flex:0 0 auto}
   #rows{max-height:min(58vh,calc(100vh - 260px));gap:14px}
   #browse.rowsWin #grid{flex:1!important;max-height:none!important;margin-top:0!important}
   #browse .browseHead{margin-left:48px;margin-top:8px;margin-bottom:12px;justify-content:flex-start;padding-right:0}
@@ -1068,16 +1103,57 @@ body.tv .cwAct,body.tv .epMenuBtn{display:none!important}
   #discoverRows{margin-top:0;max-height:calc(100vh - 122px);gap:16px}
   #detail .back{top:14px;left:66px!important}
   #detail .detailScroll{padding:0 16px 44px}
-  #detail .detailHero{display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-start;gap:18px;min-height:0;padding-top:82px}
+  #detail .detailHero{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:18px;min-height:0;padding-top:82px}
   #detail .dPoster{width:min(42vw,150px);flex:0 0 auto;border-radius:13px}
-  #detail .dInfo{width:100%;max-width:100%;padding-bottom:0}
-  #dTitle{font-size:clamp(30px,10vw,42px);max-width:100%}
-  #dOverview{max-width:100%;font-size:15px}
-  #dCrew{max-width:100%;line-height:1.45}
-  #dBtns{flex-wrap:wrap}
-  #dBtns .btn.primary{padding:13px 22px}
-  .qToggle{margin-left:0}
+  #detail .dInfo{width:100%;max-width:100%;padding-bottom:0;text-align:center}
+  #dTitle{font-size:clamp(24px,7.8vw,34px);max-width:100%}
+  #dOverview{max-width:100%;font-size:14px;margin-left:auto;margin-right:auto}
+  #dCrew{max-width:100%;line-height:1.4}
+  #dBtns{flex-wrap:nowrap;justify-content:center;gap:8px;overflow-x:auto;max-width:100%;padding:0 2px 6px;scrollbar-width:none}
+  #dBtns::-webkit-scrollbar{display:none}
+  #dBtns .btn{min-width:0;white-space:nowrap;justify-content:center;padding:11px 13px;font-size:12.8px}
+  #dBtns .btn.primary{padding:11px 16px;flex:1 0 auto}
+  #dBtns .iconBtn{flex:0 0 44px;width:44px;height:44px}
+  .qToggle{margin-left:0;flex:0 0 auto}
 }
+
+/* Android phone WebView can report a wider CSS viewport than a normal mobile browser.
+   Keep the shell compact by app class so the menu and home hero behave like a phone. */
+body.mobileShell #backdrop .layer{display:none!important;opacity:0!important}
+body.mobileShell.fullBd #bdInfo.show,body.mobileShell #bdInfo{display:none!important;opacity:0!important}
+body.mobileShell #scrim{background:var(--scrim)}
+body.mobileShell #colorGlow{opacity:.72}
+body.mobileShell #burger{display:grid}
+body.mobileShell nav#rail{transform:translateX(-110%);transition:transform .28s cubic-bezier(.22,1,.36,1);
+  width:248px!important;z-index:40;box-shadow:18px 0 50px rgba(0,0,0,.5)}
+body.mobileShell.mobileNav nav#rail{transform:translateX(0);background:var(--panel);backdrop-filter:blur(8px)}
+body.mobileShell.mobileNav nav#rail .rlabel,
+body.mobileShell.mobileNav nav#rail .wordmark{max-width:150px;opacity:1}
+body.mobileShell{--rail:0px}
+body.mobileShell.railOpen{--rail:0px}
+body.mobileShell #home,body.mobileShell #discover,body.mobileShell #browse,body.mobileShell #detail,
+body.mobileShell #person,body.mobileShell #settings,body.mobileShell #prefs,body.mobileShell #music{
+  padding-left:16px!important;padding-right:16px!important}
+body.mobileShell #searchBar{left:16px;right:16px}
+body.mobileShell #home{padding:62px 16px 18px 16px!important;justify-content:flex-end}
+body.mobileShell #hero{max-width:calc(100vw - 32px);margin:0 auto 14px;padding:0;text-align:center;align-items:center}
+body.mobileShell #hero .eyebrow{margin-bottom:8px;font-size:10px;letter-spacing:.18em}
+body.mobileShell #hero h1{font-size:clamp(24px,7.4vw,32px);line-height:1.08;margin-bottom:8px}
+body.mobileShell #hero .meta{margin-bottom:7px;justify-content:center}
+body.mobileShell #heroCredits{min-height:0;margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;width:100%}
+body.mobileShell #hero p{font-size:13.5px;line-height:1.38;-webkit-line-clamp:2;margin:0 auto 12px;max-width:min(100%,430px)}
+body.mobileShell #heroBtns{width:100%;justify-content:center;gap:8px;flex-wrap:nowrap}
+body.mobileShell #heroBtns .btn{flex:1 1 0;min-width:0;max-width:178px;padding:10px 10px;font-size:12.8px;justify-content:center;white-space:nowrap}
+body.mobileShell #heroBtns .btn svg{width:15px;height:15px;flex:0 0 auto}
+body.mobileShell #rows{max-height:min(58vh,calc(100vh - 260px));gap:14px}
+body.mobileShell #browse.rowsWin #grid{flex:1!important;max-height:none!important;margin-top:0!important}
+body.mobileShell #browse .browseHead{margin-left:48px;margin-top:8px;margin-bottom:12px;justify-content:flex-start;padding-right:0}
+body.mobileShell #browse{padding-top:62px!important}
+body.mobileShell #grid{gap:18px 12px;padding-top:0}
+body.mobileShell #discover{padding-top:62px!important}
+body.mobileShell #discover h1{margin-left:48px;margin-bottom:10px}
+body.mobileShell #discoverRows{margin-top:0;max-height:calc(100vh - 122px);gap:16px}
+body.mobileShell #detail .back{top:14px;left:66px!important}
 
 /* Phones: tighter guide + overlay panels, smaller channel tiles. (#guide prefix keeps these
    winning over the base rules that appear later in the sheet.) */
@@ -1253,28 +1329,41 @@ body.tv #heroCredits{height:16px;margin-bottom:6px;overflow:hidden}
 
 /* Cover-size preference (settings) buttons. */
 .sizePick{display:flex;gap:8px}
-.sizePick button{padding:9px 16px;border-radius:11px;background:rgba(34,25,52,.6);border:1px solid var(--line);font:600 13px "Sora";color:var(--muted)}
-.sizePick button.sel{background:var(--grad);color:#160a04;border-color:transparent}
+.sizePick button{padding:9px 16px;border-radius:11px;background:var(--soft);border:1px solid var(--line);font:600 13px "Sora";color:var(--muted)}
+.sizePick button.sel{background:var(--grad);color:var(--onAccent);border-color:transparent}
 
 /* =========================================================================
    Round 10 — film-reel loader, amber primaries, bigger art, row snap,
    preferences, Live TV, scanned libraries, voice search.
    ========================================================================= */
 
-/* Primary actions go amber-gold (less pink); magenta/coral stays as accent. */
-:root{--gold:linear-gradient(135deg,var(--amber),var(--coral))} /* var-based so themes recolor it */
-/* Theme swatches in Preferences */
-#themePick{display:flex;gap:10px;flex-wrap:wrap}
-.swatch{width:44px;height:44px;border-radius:50%;border:2px solid transparent;cursor:pointer;transition:transform .15s}
-.swatch:hover{transform:scale(1.1)}
-.swatch.sel{border-color:#fff;box-shadow:0 0 0 3px rgba(255,255,255,.25)}
+/* Primary actions are solid and restrained; gradients stay in ambient artwork only. */
+:root{--gold:var(--amber)} /* var-based so themes recolor it */
+/* Theme previews in Preferences + Settings: understated material cards, no illustrative icons. */
+#themePick,#themePickSet{display:grid;grid-template-columns:repeat(auto-fit,minmax(196px,1fr));gap:10px}
+.themeChoice{min-height:94px;border-radius:12px;border:1px solid var(--line);background:var(--soft);cursor:pointer;
+  display:grid;grid-template-rows:auto 16px;gap:12px;padding:14px;text-align:left;position:relative;overflow:hidden;
+  transition:transform .15s,border-color .15s,box-shadow .15s,background .15s}
+.themeChoice::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--preview-focus);opacity:.74}
+.themeChoice:hover,.themeChoice.focus{transform:translateY(-1px);border-color:var(--focus);box-shadow:0 0 0 2.5px var(--focusSoft)}
+.themeChoice.sel{border-color:var(--focus);box-shadow:inset 3px 0 0 var(--focus),0 0 0 2.5px var(--focusSoft)}
+.themeChoice.sel::after{content:"";position:absolute;left:14px;right:14px;bottom:10px;height:2px;border-radius:99px;background:var(--preview-focus);opacity:.9}
+.themeMeta{min-width:0;padding-left:2px;display:flex;flex-direction:column;gap:4px}
+.themeName{display:block;font:800 13px "Sora";color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.themeTone{display:block;font:700 9.5px "JetBrains Mono";letter-spacing:.08em;text-transform:uppercase;color:var(--muted);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.themePalette{display:grid;grid-template-columns:1.5fr 1fr .7fr;gap:6px;align-items:end;padding-left:2px}
+.themePalette i{height:12px;border-radius:999px;display:block;border:1px solid rgba(255,255,255,.10)}
+.themePalette i:nth-child(1){background:linear-gradient(90deg,var(--preview-ink),var(--preview-surface))}
+.themePalette i:nth-child(2){background:var(--preview-accent)}
+.themePalette i:nth-child(3){background:var(--preview-focus)}
 /* Profile PIN rows */
 #prefPins{display:flex;flex-direction:column;gap:10px}
 .profileSvg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;flex:none}
 .pinRow{display:grid;grid-template-columns:48px minmax(0,1fr) auto;align-items:center;gap:12px;padding:12px;
-  border:1px solid rgba(243,239,247,.08);border-radius:14px;background:rgba(11,8,18,.34)}
-.profileLevelIcon{width:48px;height:48px;border-radius:14px;display:grid;place-items:center;border:1px solid rgba(243,239,247,.09);
-  background:rgba(34,25,52,.65);color:var(--amber)}
+  border:1px solid var(--line);border-radius:14px;background:var(--field)}
+.profileLevelIcon{width:48px;height:48px;border-radius:14px;display:grid;place-items:center;border:1px solid var(--line);
+  background:var(--soft);color:var(--amber)}
 .profileLevelIcon svg{width:25px;height:25px}
 .profileLevelIcon.lvl0{color:#7CE6A0;background:rgba(26,72,62,.46)}
 .profileLevelIcon.lvl1{color:#78C7FF;background:rgba(30,55,83,.46)}
@@ -1292,26 +1381,26 @@ body.tv #heroCredits{height:16px;margin-bottom:6px;overflow:hidden}
 .profileLevelChip.lvl3{color:#F3EFF7;border-color:rgba(243,239,247,.18);background:rgba(243,239,247,.06)}
 .lockTag{color:var(--amber);border-color:rgba(255,198,92,.22);background:rgba(255,198,92,.07)}
 .profileActions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
-.profileAction{min-height:38px;display:inline-flex;align-items:center;gap:7px;background:rgba(34,25,52,.78);border:1px solid rgba(243,239,247,.09);
+.profileAction{min-height:38px;display:inline-flex;align-items:center;gap:7px;background:var(--soft);border:1px solid var(--line);
   border-radius:10px;padding:8px 12px;font:800 12px "Sora";color:var(--text)}
-.profileAction:hover,.profileAction.focus{background:rgba(52,39,75,.9);border-color:rgba(251,139,60,.42)}
-.profileAction.danger{color:#ff9b9b}
-.profileAction.primary{background:var(--gold);border:0;color:#160a04}
-.profileSessionCard{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:14px;padding:14px;border:1px solid rgba(243,239,247,.09);
-  border-radius:14px;background:rgba(12,8,22,.58)}
+.profileAction:hover,.profileAction.focus{background:var(--panel);border-color:var(--focus)}
+.profileAction.danger{color:var(--danger)}
+.profileAction.primary{background:var(--gold);border:0;color:var(--onAccent)}
+.profileSessionCard{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:14px;padding:14px;border:1px solid var(--line);
+  border-radius:14px;background:var(--field)}
 .profileSessionCard .profileActions{justify-content:flex-start}
 .pinForm{width:100%;grid-column:1/-1;display:flex;gap:8px;margin-top:2px;flex-wrap:wrap}
-.pinForm input,.pinForm select{flex:1;min-width:130px;background:rgba(11,8,18,.7);border:1px solid var(--line);border-radius:10px;
+.pinForm input,.pinForm select{flex:1;min-width:130px;background:var(--field);border:1px solid var(--line);border-radius:10px;
   padding:10px 12px;color:var(--text);font:650 12.5px "JetBrains Mono";outline:none}
-.pinForm input:focus,.pinForm select:focus{border-color:var(--magenta)}
+.pinForm input:focus,.pinForm select:focus{border-color:var(--focus)}
 .pinForm .profileAction{min-height:40px}
-.addProfileForm{align-items:center;padding:12px;border:1px dashed rgba(243,239,247,.16);border-radius:14px;background:rgba(11,8,18,.28)}
+.addProfileForm{align-items:center;padding:12px;border:1px dashed var(--line);border-radius:14px;background:var(--field)}
 .addProfileForm input{min-height:42px}
-.profileAddBtn{min-height:42px;display:inline-flex;align-items:center;justify-content:center;gap:8px;border-radius:11px;background:linear-gradient(135deg,#FFC65C,#FB8B3C);color:#160a04;border:0;
+.profileAddBtn{min-height:42px;display:inline-flex;align-items:center;justify-content:center;gap:8px;border-radius:11px;background:var(--gold);color:var(--onAccent);border:0;
   padding:10px 16px;font:900 12.5px "Sora";white-space:nowrap}
 .profileAddBtn svg{width:17px;height:17px}
 @media (max-width:760px){.pinRow{grid-template-columns:42px minmax(0,1fr)}.profileActions{grid-column:1/-1;justify-content:flex-start}.profileLevelIcon{width:42px;height:42px}}
-.btn.primary,.chip.zap,#upNext .un-play{background:var(--gold)!important;color:#160a04}
+.btn.primary,.chip.zap,#upNext .un-play{background:var(--gold)!important;color:var(--onAccent)}
 .qToggle button.qon{background:var(--gold)}
 .epCard .pbtn{background:var(--gold)}
 
@@ -1757,14 +1846,29 @@ body:not(.tv) #settings .setGrid[data-stab="display"]{grid-template-columns:repe
 #settings button.focus svg,#prefs button.focus svg,#settings button:focus svg,#prefs button:focus svg{
   color:currentColor}
 .ytmConnect{display:grid;grid-template-columns:auto minmax(0,1fr);gap:14px;align-items:start;padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(22,16,32,.56)}
-.ytmConnectIcon{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(135deg,var(--magenta),var(--coral));color:white}
+.ytmConnectIcon{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;background:var(--gold);color:var(--onAccent);border:1px solid var(--line)}
 .ytmConnectIcon svg{width:24px;height:24px}
 .ytmConnect h3{font:800 17px "Sora";margin:1px 0 4px}
 .ytmConnect p{margin:0;color:var(--muted);font:600 13px "Albert Sans";line-height:1.45}
+.ytmConnectActions,.ytmGuidedActions{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
+.ytmGuidedActions .btn{justify-content:center}
+.ytmStepCards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}
+.ytmStepCard{padding:11px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(11,8,18,.42)}
+.ytmStepCard strong{display:block;font:800 12px "Sora";margin-bottom:4px;color:var(--text)}
+.ytmStepCard span{display:block;color:var(--muted);font:650 12px "Albert Sans";line-height:1.35}
 .ytmSteps{margin:12px 0 0;padding-left:18px;color:var(--muted);font:600 12.5px "Albert Sans";line-height:1.45}
 .ytmImportBox{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px;padding:12px;border:1px dashed rgba(255,255,255,.18);border-radius:8px;background:rgba(11,8,18,.46)}
 .ytmImportBox span{color:var(--muted);font:700 12px "JetBrains Mono";overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ytmPaste{width:100%;background:rgba(11,8,18,.7);border:1px solid var(--line);border-radius:8px;padding:12px;color:var(--text);font:500 11.5px "JetBrains Mono";outline:none;resize:vertical;margin-top:10px}
+@media (max-width:600px){
+  .ytmConnect{grid-template-columns:1fr;text-align:center}
+  .ytmConnectIcon{margin:0 auto}
+  .ytmConnectActions,.ytmGuidedActions{justify-content:center;flex-wrap:nowrap}
+  .ytmConnectActions .btn,.ytmGuidedActions .btn{flex:1 1 0;min-width:0;padding-left:12px;padding-right:12px}
+  .ytmStepCards{grid-template-columns:1fr}
+  .ytmImportBox{align-items:stretch;flex-direction:column;text-align:center}
+  .ytmImportBox .btn{justify-content:center}
+}
 
 /* ============ Music (YouTube Music) ============ */
 #music{position:fixed;inset:0;z-index:8;display:none;flex-direction:column;
@@ -1819,9 +1923,9 @@ body:not(.tv) #settings .setGrid[data-stab="display"]{grid-template-columns:repe
 .mEmpty{color:var(--muted);font:600 14px "Albert Sans";padding:8px 0}
 .mpActions{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px}
 .musicAction{height:42px;border-radius:999px;padding:0 18px;display:inline-flex;align-items:center;gap:9px;background:rgba(34,25,52,.74);border:1px solid var(--line);color:var(--text);font:800 13px "Albert Sans"}
-.musicAction.primary{background:linear-gradient(135deg,var(--magenta),var(--coral));border-color:transparent;color:white}
+.musicAction.primary{background:var(--gold);border-color:transparent;color:var(--onAccent)}
 .musicAction:hover,.musicAction.focus{outline:none;box-shadow:0 0 0 3px var(--coral);background:var(--text);color:#160a04}
-.musicAction.primary:hover,.musicAction.primary.focus{background:linear-gradient(135deg,var(--magenta),var(--coral));color:white;box-shadow:0 0 0 3px var(--amber)}
+.musicAction.primary:hover,.musicAction.primary.focus{background:var(--gold);color:var(--onAccent);box-shadow:0 0 0 3px var(--focusSoft)}
 .musicLoadMore{align-self:center;margin:18px auto 0}
 #musicList{flex:1;overflow-y:auto;padding-bottom:40px;display:flex;flex-direction:column;gap:4px}
 #musicList:empty{display:none}
@@ -1950,6 +2054,66 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
 
 @media (max-width:900px){.musicTiles{grid-template-columns:repeat(2,minmax(0,1fr))}.musicRail{grid-auto-columns:minmax(150px,42vw)}.mSearchSongs{grid-template-columns:1fr}.mArtistName{font-size:28px}.mArtistArt{width:82px;height:82px}}
 @media (max-width:600px){#music{left:0!important}#musicBar{left:0}.mbNow{width:auto}.mbProg .mbT{display:none}.musicTiles{grid-template-columns:1fr}}
+
+/* Content text-size preference: scoped to media/content surfaces only.
+   The rail, Settings, Preferences, auth gates and player controls keep fixed geometry. */
+body{
+  --ctHeroTitle:clamp(30px,4.2vw,58px);--ctHeroCopy:16px;--ctHeroMeta:13.5px;
+  --ctSection:13px;--ctBrowseTitle:30px;--ctBackdropTitle:clamp(34px,4.6vw,64px);
+  --ctBackdropCopy:15.5px;--ctBackdropMeta:13.5px;--ctCardTitle:13px;--ctCardMeta:10.5px;--ctCardTag:9px;
+  --ctDetailTitle:clamp(34px,4.6vw,64px);--ctDetailCopy:15.5px;--ctDetailMeta:13.5px;
+  --ctEpisodeTitle:14px;--ctEpisodeCopy:13px;--ctCalendarTitle:15px;--ctCalendarMeta:12px;
+  --ctLiveTitle:12.5px;--ctLiveMeta:10px;--ctLiveNow:12.5px;--ctMusicTitle:15px;--ctMusicMeta:12.5px;
+  --ctMusicSearchTitle:15.5px;--ctMusicSearchMeta:13px;
+  --ctLineScale:1;
+}
+body.contentTextS{
+  --ctHeroTitle:clamp(28px,3.85vw,52px);--ctHeroCopy:14px;--ctHeroMeta:12.5px;
+  --ctSection:12px;--ctBrowseTitle:27px;--ctBackdropTitle:clamp(30px,4vw,56px);
+  --ctBackdropCopy:14px;--ctBackdropMeta:12px;--ctCardTitle:12px;--ctCardMeta:9.8px;--ctCardTag:8.4px;
+  --ctDetailTitle:clamp(30px,4vw,56px);--ctDetailCopy:14px;--ctDetailMeta:12.5px;
+  --ctEpisodeTitle:13px;--ctEpisodeCopy:12px;--ctCalendarTitle:14px;--ctCalendarMeta:11px;
+  --ctLiveTitle:11.5px;--ctLiveMeta:9.2px;--ctLiveNow:11.5px;--ctMusicTitle:14px;--ctMusicMeta:11.5px;
+  --ctMusicSearchTitle:14.5px;--ctMusicSearchMeta:12px;
+  --ctLineScale:.94;
+}
+body.contentTextL{
+  --ctHeroTitle:clamp(34px,4.75vw,66px);--ctHeroCopy:17px;--ctHeroMeta:14.5px;
+  --ctSection:14px;--ctBrowseTitle:34px;--ctBackdropTitle:clamp(38px,5vw,72px);
+  --ctBackdropCopy:17px;--ctBackdropMeta:14.5px;--ctCardTitle:14.5px;--ctCardMeta:11.5px;--ctCardTag:10px;
+  --ctDetailTitle:clamp(38px,5vw,72px);--ctDetailCopy:17px;--ctDetailMeta:14.5px;
+  --ctEpisodeTitle:15.5px;--ctEpisodeCopy:14px;--ctCalendarTitle:16.5px;--ctCalendarMeta:13px;
+  --ctLiveTitle:14px;--ctLiveMeta:11px;--ctLiveNow:13.5px;--ctMusicTitle:16.5px;--ctMusicMeta:13.5px;
+  --ctMusicSearchTitle:17px;--ctMusicSearchMeta:14px;
+  --ctLineScale:1.12;
+}
+#hero h1{font-size:var(--ctHeroTitle)}
+#hero p{font-size:var(--ctHeroCopy)}
+#hero .meta{font-size:var(--ctHeroMeta)}
+.row h2,#person h2,.secHead h2{font-size:var(--ctSection)}
+#discover h1,#browse .browseHead h1{font-size:var(--ctBrowseTitle)}
+#bdInfo .bdiT{font-size:var(--ctBackdropTitle)}
+#bdInfo .bdiM .metaLine{font-size:var(--ctBackdropMeta)}
+#bdInfo .bdiO{font-size:var(--ctBackdropCopy)}
+.card .label,.pcard .cap{font-size:var(--ctCardTitle)}
+.pcard .sub{font-size:var(--ctCardMeta)}
+.card .cardTag{font-size:var(--ctCardTag)}
+#dTitle{font-size:var(--ctDetailTitle)}
+#dOverview{font-size:var(--ctDetailCopy)}
+#dMeta,#dCrew{font-size:var(--ctDetailMeta)}
+.seasonCard .cap,.epCard .et,.castCard .nm{font-size:var(--ctEpisodeTitle)}
+.epRow .eo,.epCard .eo{font-size:var(--ctEpisodeCopy)}
+.calItem .ct{font-size:var(--ctCalendarTitle)}
+.calItem .cm,.calDayHead .rel{font-size:var(--ctCalendarMeta)}
+.chCard .chName,.lcat,.chGroupHead .cgName,.pgRow .pgName{font-size:var(--ctLiveTitle)}
+.chCard .chGroup,.chGroupHead .cgCount,.pgRow .pgGroup,.pgRow .pgNext{font-size:var(--ctLiveMeta)}
+.pgRow .pgNow{font-size:var(--ctLiveNow)}
+.musicRow .mT{font-size:var(--ctMusicTitle)}
+.musicRow .mA,.musicRow .mD{font-size:var(--ctMusicMeta)}
+.mSearchSongs .musicRow .mT{font-size:var(--ctMusicSearchTitle)}
+.mSearchSongs .musicRow .mA{font-size:var(--ctMusicSearchMeta)}
+body.tv #hero h1{font-size:min(var(--ctHeroTitle),42px);height:calc(39px * var(--ctLineScale))}
+body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
 
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
@@ -2189,6 +2353,13 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
     </select>
     <label>Local path <span style="text-transform:none;color:var(--muted)">(optional)</span></label>
     <input id="libPath" placeholder="/media/movies — for a future local library">
+    <div id="libEditActions" class="libEditActions" style="display:none">
+      <div class="hint" id="libEditActionsHint"></div>
+      <div class="libEditActionBtns">
+        <button class="btn ghost focusable" id="libScanNow">Scan library</button>
+        <button class="btn ghost focusable" id="libMetaNow">Refresh metadata</button>
+      </div>
+    </div>
     <label>Share with <span style="text-transform:none;color:var(--muted)">(nobody ticked = everyone)</span></label>
     <div id="libUsers" style="max-height:130px;overflow-y:auto"></div>
     <div class="modalBtns">
@@ -2350,6 +2521,12 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
       <p>How big poster art renders in rows and grids (saved on this device).</p>
       <div class="sizePick" id="prefCoverSize">
         <button data-sz="S">Small</button><button data-sz="M">Medium</button><button data-sz="L">Large</button>
+      </div>
+    </div>
+    <div class="panel"><h2>Content text size</h2>
+      <p>Text size for movies, shows, music, Live TV and library pages. The left menu and Settings stay fixed.</p>
+      <div class="sizePick" id="prefContentTextSize">
+        <button data-ts="S">Compact</button><button data-ts="M">Standard</button><button data-ts="L">Larger</button>
       </div>
     </div>
     <div class="panel"><h2>Theme on this device</h2>
@@ -2577,39 +2754,43 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
   <div class="panel"><h2>Streaming performance</h2>
     <p>Let Triboon size buffering and connection use from your provider capacity, server network,
        and expected simultaneous users. Auto keeps starts and seeks ahead of background buffering.</p>
-    <div class="field">
-      <input id="perfUsers" placeholder="expected users" title="simultaneous users to plan for" style="max-width:150px">
-      <input id="perfRemote" placeholder="remote users" title="remote users depend on upload speed" style="max-width:135px">
-      <select id="perfMix" style="max-width:150px">
-        <option value="mixed">Mixed</option>
-        <option value="1080p">Mostly 1080p</option>
-        <option value="4k">Mostly 4K</option>
-      </select>
+    <div class="settingsForm">
+      <div class="settingsRow">
+        <label class="settingsControl"><span>Expected users</span><input id="perfUsers" placeholder="4" title="simultaneous users to plan for"></label>
+        <label class="settingsControl"><span>Remote users</span><input id="perfRemote" placeholder="0" title="remote users depend on upload speed"></label>
+        <label class="settingsControl"><span>Stream mix</span><select id="perfMix">
+          <option value="mixed">Mixed</option>
+          <option value="1080p">Mostly 1080p</option>
+          <option value="4k">Mostly 4K</option>
+        </select></label>
+      </div>
+      <div class="settingsRow">
+        <label class="settingsControl"><span>Download Mbps</span><input id="perfDown" placeholder="server download" title="server download speed"></label>
+        <label class="settingsControl"><span>Upload Mbps</span><input id="perfUp" placeholder="server upload" title="server upload speed for remote users"></label>
+        <label class="settingsControl"><span>Profile</span><select id="perfProfile">
+          <option value="auto">Auto</option>
+          <option value="fast">Fast start</option>
+          <option value="balanced">Balanced</option>
+          <option value="large">Large buffer</option>
+          <option value="custom">Custom</option>
+        </select></label>
+      </div>
+      <div class="settingsRow two">
+        <label class="settingsControl"><span>1080p buffer</span><input id="perfBuf1080" placeholder="seconds"></label>
+        <label class="settingsControl"><span>4K buffer</span><input id="perfBuf4k" placeholder="seconds"></label>
+      </div>
+      <div class="settingsRow">
+        <label class="settingsControl"><span>1080p connections</span><input id="perfConn1080" placeholder="per stream"></label>
+        <label class="settingsControl"><span>4K connections</span><input id="perfConn4k" placeholder="per stream"></label>
+        <label class="settingsControl"><span>Start/seek reserve</span><input id="perfReserve" placeholder="% of connections"></label>
+      </div>
     </div>
-    <div class="field">
-      <input id="perfDown" placeholder="download Mbps" title="server download speed" style="max-width:155px">
-      <input id="perfUp" placeholder="upload Mbps" title="server upload speed for remote users" style="max-width:145px">
-      <select id="perfProfile" style="max-width:155px">
-        <option value="auto">Auto</option>
-        <option value="fast">Fast start</option>
-        <option value="balanced">Balanced</option>
-        <option value="large">Large buffer</option>
-        <option value="custom">Custom</option>
-      </select>
+    <div class="settingsActions">
+      <button class="btn primary" id="perfTest">Test &amp; recommend</button>
+      <button class="btn ghost" id="perfApply">Apply recommendation</button>
+      <button class="btn ghost" id="perfSave">Save custom</button>
     </div>
-    <div class="field">
-      <input id="perfBuf1080" placeholder="1080p buffer seconds" style="max-width:190px">
-      <input id="perfBuf4k" placeholder="4K buffer seconds" style="max-width:170px">
-    </div>
-    <div class="field">
-      <input id="perfConn1080" placeholder="1080p stream connections" style="max-width:210px">
-      <input id="perfConn4k" placeholder="4K stream connections" style="max-width:190px">
-      <input id="perfReserve" placeholder="start/seek reserve %" style="max-width:175px">
-    </div>
-    <button class="btn primary" id="perfTest">Test &amp; recommend</button>
-    <button class="btn ghost" id="perfApply">Apply recommendation</button>
-    <button class="btn ghost" id="perfSave">Save custom</button>
-    <div class="hint" id="perfStatus"></div>
+    <div class="hint settingsStatus" id="perfStatus"></div>
   </div>
   </div>
 
@@ -2617,7 +2798,7 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
   <div class="panel"><h2>Users connected</h2>
     <p>Live playback heartbeats from web and Android players. Sessions disappear automatically when playback closes or stops reporting.</p>
     <div id="activityList" class="activityRows"><div class="hint">No one is watching right now.</div></div>
-    <button class="btn primary focusable" id="activityRefresh">Refresh</button>
+    <div class="settingsActions"><button class="btn primary focusable" id="activityRefresh">Refresh</button></div>
     <div class="hint" id="activityStatus"></div>
   </div>
   </div>
@@ -2647,7 +2828,7 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
       <input id="npPass" placeholder="password" type="password" style="flex:1">
       <input id="npConn" placeholder="connections (16, max 150)" title="max connections for this provider" style="max-width:190px">
     </div>
-    <button class="btn primary" id="npSave">Add provider</button>
+    <div class="settingsActions"><button class="btn primary" id="npSave">Add provider</button></div>
   </div>
 
   <div class="panel"><h2>Indexers</h2>
@@ -2675,7 +2856,7 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
       <input id="ixApiLim" placeholder="API hits/day (optional)" title="your indexer tier's daily API limit" style="max-width:185px">
       <input id="ixGrabLim" placeholder="NZB grabs/day (optional)" title="your indexer tier's daily download limit" style="max-width:185px">
     </div>
-    <button class="btn primary" id="ixSave">Add indexer</button>
+    <div class="settingsActions"><button class="btn primary" id="ixSave">Add indexer</button></div>
   </div>
   </div>
 
@@ -2701,7 +2882,7 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
   <div class="panel"><h2>Local libraries</h2>
     <p>Library folders are re-checked automatically for new movies and episodes. Known items
        keep their cached TMDB match, so a no-change pass costs one quick disk walk and zero
-       network. Per-library actions (scan now · refresh all metadata) live on each library page.</p>
+       network. Per-library actions (scan now · refresh all metadata) live in each library's Edit panel.</p>
     <div class="field">
       <select id="libScanMin" style="max-width:280px">
         <option value="0">Off — scan manually only</option>
@@ -2724,8 +2905,10 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
     <div class="field"><input id="scTrusted" placeholder="Trusted groups +50 — e.g. FLUX, NTb, FraMeSToR"></div>
     <div class="field"><input id="scAvoid" placeholder="Avoid groups −50 — e.g. YTS, MeGusta"></div>
     <div class="field"><textarea id="scKeywords" rows="4" placeholder="keyword = score (one per line, ±5000)&#10;Atmos = 25&#10;KORSUB = -300"></textarea></div>
-    <button class="btn primary" id="scSave">Save scoring</button>
-    <button class="btn ghost" id="scReset">Reset to defaults</button>
+    <div class="settingsActions">
+      <button class="btn primary" id="scSave">Save scoring</button>
+      <button class="btn ghost" id="scReset">Reset to defaults</button>
+    </div>
     <div class="hint" id="scStatus"></div>
   </div>
   </div>
@@ -2734,7 +2917,7 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
   <div class="panel"><h2>TMDB metadata</h2>
     <p>Server-side TMDB key — clients browse through the server proxy and never see it.</p>
     <div class="field"><input id="tmdbKey" placeholder="TMDB API key (v3)"></div>
-    <button class="btn primary" id="tmdbSave">Save key</button>
+    <div class="settingsActions"><button class="btn primary" id="tmdbSave">Save key</button></div>
     <div class="hint" id="tmdbStatus"></div>
   </div>
 
@@ -2742,7 +2925,7 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
     <p>Online subtitles for releases that only carry image-based (BluRay PGS) subs. Paste your
        Wyzie Subs API key here; Triboon keeps it server-side and caches results per title.</p>
     <div class="field"><input id="osKey" placeholder="Wyzie Subs API key"></div>
-    <button class="btn primary" id="osSave">Save subtitles key</button>
+    <div class="settingsActions"><button class="btn primary" id="osSave">Save subtitles key</button></div>
     <div class="hint" id="osStatus"></div>
   </div>
 
@@ -2753,8 +2936,18 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
     <button class="hint focusable" id="traktUri" style="cursor:pointer;text-align:left;margin-bottom:12px;color:var(--amber)">urn:ietf:wg:oauth:2.0:oob</button>
     <div class="field"><input id="traktId" placeholder="Trakt client id"></div>
     <div class="field"><input id="traktSecret" type="password" placeholder="Trakt client secret"></div>
-    <button class="btn primary" id="traktSave">Save Trakt app</button>
+    <div class="settingsActions"><button class="btn primary" id="traktSave">Save Trakt app</button></div>
     <div class="hint" id="traktStatus"></div>
+  </div>
+
+  <div class="panel"><h2>YouTube Music OAuth</h2>
+    <p>Optional easier account linking for YouTube Music playlists. Create a Google OAuth client
+       for <b>TVs and Limited Input devices</b>, enable the YouTube Data API, then paste its id
+       and secret here. Playback still uses yt-dlp.</p>
+    <div class="field"><input id="ytOAuthId" placeholder="Google OAuth client id"></div>
+    <div class="field"><input id="ytOAuthSecret" type="password" placeholder="Google OAuth client secret"></div>
+    <div class="settingsActions"><button class="btn primary" id="ytOAuthSave">Save YouTube Music OAuth app</button></div>
+    <div class="hint" id="ytOAuthStatus"></div>
   </div>
   </div>
 
@@ -2763,7 +2956,7 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
     <p>Live TV loads from the server cache first. The server refreshes guides on a schedule and keeps stale data available while a refresh runs.</p>
     <div class="syncGrid" id="iptvSyncSummary"></div>
     <div class="syncSources" id="iptvSyncSources"></div>
-    <div style="display:flex;gap:10px;flex-wrap:wrap">
+    <div class="settingsActions">
       <button class="btn primary" id="iptvRefresh">Refresh now</button>
     </div>
     <div class="hint" id="iptvSyncStatus"></div>
@@ -2967,6 +3160,7 @@ const $ = (id) => document.getElementById(id);
 // remote owns volume; the app is permanently fullscreen) and prefers direct play.
 if (/TriboonTV/.test(navigator.userAgent)) document.body.classList.add('tv');
 if (/TriboonAndroid/.test(navigator.userAgent)) document.body.classList.add('androidApp');
+if (/TriboonAndroid/.test(navigator.userAgent) && !/TriboonTV/.test(navigator.userAgent)) document.body.classList.add('mobileShell');
 // XSS guards: ALL remote strings (TMDB fields, indexer release names, M3U/Xtream channel
 // data, scanned-library titles, user/profile names) must pass esc() before innerHTML, and
 // remote URLs must pass safeUrl() before src/url() (blocks javascript:/data: schemes).
@@ -6066,7 +6260,7 @@ function openPlayer(it, mount, opts = {}) {
       if (v.paused) showLivePlayPrompt();
     }
   };
-  v.onplaying = () => { S.playing && (S.playing.started = true); clearTimeout(S._waitT); $('playerLoader').classList.remove('show'); hideSeekHoldFrame(); };
+  v.onplaying = () => { markVodPlaybackStarted(S.playing); clearTimeout(S._waitT); $('playerLoader').classList.remove('show'); hideSeekHoldFrame(); };
   v.onloadeddata = clearReadyFrame;
   v.oncanplay = clearReadyFrame;
   v.onwaiting = () => {
@@ -6082,6 +6276,7 @@ function openPlayer(it, mount, opts = {}) {
   v.ontimeupdate = () => {
     if (v.currentTime === lastTu) return;
     lastTu = v.currentTime;
+    if (v.currentTime > 0) markVodPlaybackStarted(S.playing);
     if ($('playerLoader').classList.contains('show')) { clearTimeout(S._waitT); $('playerLoader').classList.remove('show'); }
     hideSeekHoldFrame();
   };
@@ -6518,6 +6713,12 @@ function applyNativeVideoProgress(pos, dur, opts = {}) {
 window.__tvNativeVideoProgress = (pos, dur) => {
   applyNativeVideoProgress(pos, dur);
 };
+window.__tvNativeVideoReady = (pos, dur) => {
+  const p = S.playing; if (!p || !p.usingNative) return;
+  applyNativeVideoProgress(pos, dur);
+  p.nativeReady = true;
+  markVodPlaybackStarted(p);
+};
 window.__tvNativeVideoStats = (raw) => {
   const p = S.playing; if (!p || !p.usingNative) return;
   try { p.nativeStats = typeof raw === 'string' ? JSON.parse(raw) : (raw || {}); }
@@ -6548,6 +6749,10 @@ window.__tvNativeVideoError = (msg, pos, dur) => {
   applyNativeVideoProgress(pos, dur, { preserveOnZero: true });
   const at = currentTime();
   const kind = p.usingTranscode ? 'transcode' : (p.usingRemux ? 'remux' : 'direct');
+  if (vodPlaybackStarted(p)) {
+    recoverSamePlaybackSource(msg || 'native playback interrupted');
+    return;
+  }
   p.usingNative = false;
   if (tryNextNativeKind(kind, at, msg)) return;
   if (p.sessionId) {
@@ -6651,12 +6856,65 @@ function liveMseHasReadyFrame(p = S.playing) {
   const src = v && (v.currentSrc || v.src || '');
   return !!(p && p.item && p.item.type === 'live' && v && v.readyState >= 2 && !v.error && /^blob:/.test(src));
 }
+function markVodPlaybackStarted(p) {
+  if (!p || !p.item || p.item.type === 'live') return;
+  p.started = true;
+  if (!p.startedAt) p.startedAt = appMs();
+}
+function vodPlaybackStarted(p) {
+  return !!(p && p.item && p.item.type !== 'live' && (p.started || p.startedAt || p.nativeReady));
+}
+function currentPlaybackUrl(p, atSeconds = currentTime()) {
+  if (!p) return '';
+  const kind = currentPlayerKind(p);
+  const start = Math.max(0, Math.floor(atSeconds || 0));
+  if (kind === 'transcode' && p.transcodeUrl) return `${p.transcodeUrl}&start=${start}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}`;
+  if (kind === 'remux' && p.remuxUrl) return `${p.remuxUrl}&start=${start}&audio=${p.audioTrack || 0}`;
+  return p.streamUrl || '';
+}
+function showPlaybackInterrupted(reason = '') {
+  const p = S.playing; if (!p) return;
+  resetVlcPanel();
+  const msg = document.querySelector('#vlcPanel .sub');
+  if ($('vlcTitle')) $('vlcTitle').textContent = 'Playback interrupted';
+  if (msg) {
+    msg.textContent = reason
+      ? `The current source stopped responding (${reason}). Triboon kept the same release instead of changing sources.`
+      : 'The current source stopped responding. Triboon kept the same release instead of changing sources.';
+  }
+  const url = currentPlaybackUrl(p);
+  $('vlcUrl').textContent = url ? location.origin + url : '';
+  $('vlcUrl').style.display = url ? '' : 'none';
+  $('vlcCopy').style.display = url ? '' : 'none';
+  $('vlcPanel').classList.add('show');
+}
+function recoverSamePlaybackSource(reason = '') {
+  const p = S.playing; if (!vodPlaybackStarted(p)) return false;
+  const kind = currentPlayerKind(p);
+  const at = currentTime();
+  const key = `${p.mountId || p.sessionId || p.streamUrl || ''}:${kind}`;
+  const now = appMs();
+  if (p._sameSourceRecoveryKey === key && now - (p._sameSourceRecoveryAt || 0) < 60000) {
+    showPlaybackInterrupted(reason);
+    return true;
+  }
+  p._sameSourceRecoveryKey = key;
+  p._sameSourceRecoveryAt = now;
+  toast('Stream hiccup - resuming the same source...');
+  if (p.usingNative && canUseNativeVideoPlayer() && tryNativeVideoPlayer(kind, at, { quietSeek: true })) return true;
+  p.usingNative = false;
+  return startSource(kind, at, { quietSeek: true }) || (showPlaybackInterrupted(reason), true);
+}
 function failover() {
   const p = S.playing; if (!p) return;
   if (liveMseHasReadyFrame(p)) {
     clearTimeout(S._waitT);
     $('playerLoader').classList.remove('show');
     showLivePlayPrompt();
+    return;
+  }
+  if (vodPlaybackStarted(p)) {
+    recoverSamePlaybackSource('playback interrupted');
     return;
   }
   if (!p.usingRemux && !p.usingTranscode && p.remuxUrl && !p.triedRemux) {
@@ -6675,6 +6933,10 @@ function failover() {
 }
 async function autoAdvance(opts = {}) {
   const p = S.playing; if (!p || !p.sessionId) return showVlcPanel();
+  if (vodPlaybackStarted(p) && !opts.allowMidstreamAdvance) {
+    recoverSamePlaybackSource('source failed');
+    return;
+  }
   const at = currentTime();
   const nativePreferred = !!opts.nativePreferred || (p.usingNative && canUseNativeVideoPlayer());
   toast('Source failed — advancing to the next release…');
@@ -7012,6 +7274,21 @@ function playerModeLabel(p = S.playing) {
   if (p.usingLiveMse) return 'Live remux';
   return 'Direct';
 }
+function playerStreamKind(p = S.playing) {
+  if (!p || !p.item) return '';
+  if (p.item.type === 'live') return 'live';
+  if (p.usingTranscode) return 'transcode';
+  if (p.usingRemux) return 'remux';
+  return 'original';
+}
+function playerStreamLabel(p = S.playing) {
+  const kind = playerStreamKind(p);
+  if (kind === 'transcode') return 'Transcoding';
+  if (kind === 'remux') return 'Original (remux)';
+  if (kind === 'original') return 'Original';
+  if (kind === 'live') return 'Live';
+  return '';
+}
 function activityPayload(state = 'watching') {
   const p = S.playing; if (!p || !p.item) return null;
   const meta = episodePlayerMeta(p.item);
@@ -7025,6 +7302,8 @@ function activityPayload(state = 'watching') {
     profile: S.profile ? S.profile.name || S.profile.id : '',
     player: p.usingNative ? 'exo' : 'web',
     mode: playerModeLabel(p),
+    streamKind: playerStreamKind(p),
+    streamLabel: playerStreamLabel(p),
     source: p.name || '',
     fileName: p.fileName || '',
     size: p.size || 0,
@@ -8047,14 +8326,23 @@ const SCREENSAVER_IDLE_OPTIONS = [0, 60, 120, 300, 600];
 const SCREENSAVER_ROTATE_MS = 12 * 1000;
 const SCREENSAVER_TRENDING_TTL = 24 * 60 * 60 * 1000;
 const SCREENSAVER_TRENDING_STORE = 'triboon.screensaver.trending';
+function normalizeScreensaverDelaySeconds(value) {
+  const n = parseInt(value, 10);
+  if (!Number.isFinite(n)) return SCREENSAVER_IDLE_DEFAULT_SECONDS;
+  if (SCREENSAVER_IDLE_OPTIONS.includes(n)) return n;
+  // Some older/manual saves used minutes (5) while the runtime stores seconds (300).
+  if (n > 0 && n < 60) return normalizeScreensaverDelaySeconds(n * 60);
+  return SCREENSAVER_IDLE_DEFAULT_SECONDS;
+}
 function prefScreensaverDelaySeconds() {
   try {
-    const n = parseInt(localStorage.getItem(profilePrefKey('screensaverDelay')) || '', 10);
-    return SCREENSAVER_IDLE_OPTIONS.includes(n) ? n : SCREENSAVER_IDLE_DEFAULT_SECONDS;
+    let raw = localStorage.getItem(profilePrefKey('screensaverDelay'));
+    if (raw === null && S.profile && S.profile.id) raw = localStorage.getItem('triboon.screensaverDelay');
+    return normalizeScreensaverDelaySeconds(raw);
   } catch { return SCREENSAVER_IDLE_DEFAULT_SECONDS; }
 }
 function savePrefScreensaverDelay(seconds) {
-  const n = SCREENSAVER_IDLE_OPTIONS.includes(+seconds) ? +seconds : SCREENSAVER_IDLE_DEFAULT_SECONDS;
+  const n = normalizeScreensaverDelaySeconds(seconds);
   try { localStorage.setItem(profilePrefKey('screensaverDelay'), String(n)); } catch {}
 }
 function prefScreensaverDelayMs() {
@@ -9516,6 +9804,13 @@ async function deleteLibrary(lib) {
 }
 $('railAddLib').addEventListener('click', () => { collapseRailAfterClick(); openLibModal(null); });
 // Create OR edit (pass an existing library to edit it).
+function updateLibEditActions(lib) {
+  const local = !!(lib && lib.id && lib.path);
+  $('libEditActions').style.display = local ? '' : 'none';
+  $('libEditActionsHint').textContent = local
+    ? 'Scan the saved folder now. Save changes first if you edited the path or sharing.'
+    : '';
+}
 async function openLibModal(lib) {
   S.editingLib = lib || null;
   $('libModalTitle').textContent = lib ? `Edit “${lib.name}”` : 'New library';
@@ -9525,6 +9820,7 @@ async function openLibModal(lib) {
   $('libIcon').value = lib ? (lib.icon || 'auto') : 'auto';
   $('libPath').value = lib ? (lib.path || '') : '';
   $('libSort').value = lib ? (lib.sort || 'popularity.desc') : 'popularity.desc';
+  updateLibEditActions(lib);
   await fillLibGenres();
   if (lib && lib.genreId) $('libGenre').value = lib.genreId;
   // Share-with: tick specific users to restrict the library (none ticked = everyone sees it).
@@ -9550,6 +9846,18 @@ async function fillLibGenres() {
 $('libType').addEventListener('change', fillLibGenres);
 $('libCancel').addEventListener('click', () => $('libModal').classList.remove('open'));
 $('libModal').addEventListener('click', (e) => { if (e.target.id === 'libModal') $('libModal').classList.remove('open'); });
+$('libScanNow').addEventListener('click', () => {
+  const lib = S.editingLib;
+  if (!(lib && lib.path)) return toast('Save this library with a local path before scanning');
+  $('libModal').classList.remove('open');
+  scanLibrary(lib, 'scan');
+});
+$('libMetaNow').addEventListener('click', () => {
+  const lib = S.editingLib;
+  if (!(lib && lib.path)) return toast('Save this library with a local path before refreshing metadata');
+  $('libModal').classList.remove('open');
+  scanLibrary(lib, 'metadata');
+});
 $('libCreate').addEventListener('click', async () => {
   const name = $('libName').value.trim(); if (!name) return;
   const body = {
@@ -11636,45 +11944,142 @@ function applyMenuPrefs() {
     if (btn) btn.style.display = p.hidden.includes(key) ? 'none' : '';
   }
 }
-// Accent themes: a handful of curated palettes remapping the brand CSS variables.
-// Business-class (subdued) palettes first — Graphite is the DEFAULT; the colorful ones
-// stay as opt-in choices.
+// Professional media themes: grown-up role palettes built around calm neutrals.
+// Triboon is the default because its charcoal/coral system matches the brand best.
+const THEME_TOKEN_MAP = {
+  ink: '--ink', surface: '--surface', raise: '--raise',
+  m: '--magenta', c: '--coral', a: '--amber',
+  text: '--text', muted: '--muted', line: '--line',
+  field: '--field', soft: '--soft', panel: '--panel',
+  focus: '--focus', focusSoft: '--focusSoft', onAccent: '--onAccent',
+  success: '--success', danger: '--danger', scrim: '--scrim',
+};
 const THEMES = {
-  graphite: { m: '#64748B', c: '#94A3B8', a: '#C3CDDB', label: 'Graphite' },
-  steel: { m: '#46618C', c: '#6C87B4', a: '#A6BBD8', label: 'Steel' },
-  triboon: { m: '#C13BD6', c: '#FB8B3C', a: '#FFC65C', label: 'Triboon' },
-  ocean: { m: '#3B82F6', c: '#22D3EE', a: '#7DD3FC', label: 'Ocean' },
-  emerald: { m: '#0EA47A', c: '#84CC16', a: '#FDE047', label: 'Emerald' },
-  crimson: { m: '#E11D48', c: '#F97316', a: '#FBBF24', label: 'Crimson' },
-  violet: { m: '#7C3AED', c: '#EC4899', a: '#F0ABFC', label: 'Violet' },
+  triboonCoral: {
+    label: 'Triboon', tone: 'charcoal + coral',
+    ink: '#222222', surface: '#2B2B2B', raise: '#444444',
+    m: '#444444', c: '#FF5A5F', a: '#FF5A5F',
+    text: '#F7F7F7', muted: '#B8B8B8', line: 'rgba(255,255,255,.13)',
+    field: 'rgba(34,34,34,.78)', soft: 'rgba(68,68,68,.64)', panel: 'rgba(34,34,34,.96)',
+    focus: '#FF5A5F', focusSoft: 'rgba(255,90,95,.34)', onAccent: '#1A1A1A',
+    success: '#87DFA4', danger: '#FF8F93',
+    scrim: 'linear-gradient(90deg,rgba(34,34,34,.84) 0%,rgba(34,34,34,.54) 28%,rgba(34,34,34,.18) 58%,rgba(34,34,34,.05) 100%),linear-gradient(0deg,rgba(34,34,34,.74) 0%,rgba(34,34,34,.24) 26%,rgba(34,34,34,.04) 60%,rgba(34,34,34,.10) 100%)',
+  },
+  cinema: {
+    label: 'Carbon Gold', tone: 'carbon + brass',
+    ink: '#171717', surface: '#202020', raise: '#34312A',
+    m: '#5A5142', c: '#C8A96A', a: '#D8BE82',
+    text: '#F3F0EA', muted: '#AFA79B', line: 'rgba(216,190,130,.14)',
+    field: 'rgba(23,23,23,.78)', soft: 'rgba(52,49,42,.62)', panel: 'rgba(25,25,25,.96)',
+    focus: '#D8BE82', focusSoft: 'rgba(216,190,130,.30)', onAccent: '#17130C',
+    success: '#8ACB9C', danger: '#E89292',
+    scrim: 'linear-gradient(90deg,rgba(23,23,23,.84) 0%,rgba(23,23,23,.54) 28%,rgba(23,23,23,.18) 58%,rgba(23,23,23,.05) 100%),linear-gradient(0deg,rgba(23,23,23,.74) 0%,rgba(23,23,23,.24) 26%,rgba(23,23,23,.04) 60%,rgba(23,23,23,.10) 100%)',
+  },
+  studio: {
+    label: 'Studio Slate', tone: 'slate + steel',
+    ink: '#18202A', surface: '#202A35', raise: '#303A46',
+    m: '#5D6A78', c: '#8FA6BF', a: '#B8C4D0',
+    text: '#F0F4F8', muted: '#A7B1BC', line: 'rgba(184,196,208,.13)',
+    field: 'rgba(24,32,42,.78)', soft: 'rgba(48,58,70,.62)', panel: 'rgba(29,38,49,.96)',
+    focus: '#9DB2C8', focusSoft: 'rgba(157,178,200,.30)', onAccent: '#10151B',
+    success: '#86CDA3', danger: '#E89A9A',
+    scrim: 'linear-gradient(90deg,rgba(24,32,42,.84) 0%,rgba(24,32,42,.54) 28%,rgba(24,32,42,.18) 58%,rgba(24,32,42,.05) 100%),linear-gradient(0deg,rgba(24,32,42,.74) 0%,rgba(24,32,42,.24) 26%,rgba(24,32,42,.04) 60%,rgba(24,32,42,.10) 100%)',
+  },
+  velvet: {
+    label: 'Warm Taupe', tone: 'taupe + copper',
+    ink: '#221F1C', surface: '#2C2824', raise: '#403A34',
+    m: '#6E6256', c: '#C59364', a: '#D4A979',
+    text: '#F5F0EA', muted: '#B5A89C', line: 'rgba(212,169,121,.13)',
+    field: 'rgba(34,31,28,.78)', soft: 'rgba(64,58,52,.62)', panel: 'rgba(38,35,31,.96)',
+    focus: '#D4A979', focusSoft: 'rgba(212,169,121,.30)', onAccent: '#17110C',
+    success: '#8FC89A', danger: '#E99A95',
+    scrim: 'linear-gradient(90deg,rgba(34,31,28,.84) 0%,rgba(34,31,28,.54) 28%,rgba(34,31,28,.18) 58%,rgba(34,31,28,.05) 100%),linear-gradient(0deg,rgba(34,31,28,.74) 0%,rgba(34,31,28,.24) 26%,rgba(34,31,28,.04) 60%,rgba(34,31,28,.10) 100%)',
+  },
+  teal: {
+    label: 'Deep Teal', tone: 'teal + mist',
+    ink: '#152322', surface: '#1D2D2C', raise: '#30403F',
+    m: '#536B68', c: '#83B6AF', a: '#A8C9C4',
+    text: '#ECF4F2', muted: '#9FB6B2', line: 'rgba(168,201,196,.13)',
+    field: 'rgba(21,35,34,.78)', soft: 'rgba(48,64,63,.62)', panel: 'rgba(24,40,39,.96)',
+    focus: '#91C4BE', focusSoft: 'rgba(145,196,190,.30)', onAccent: '#0E1716',
+    success: '#8CCB9E', danger: '#E99A95',
+    scrim: 'linear-gradient(90deg,rgba(21,35,34,.84) 0%,rgba(21,35,34,.54) 28%,rgba(21,35,34,.18) 58%,rgba(21,35,34,.05) 100%),linear-gradient(0deg,rgba(21,35,34,.74) 0%,rgba(21,35,34,.24) 26%,rgba(21,35,34,.04) 60%,rgba(21,35,34,.10) 100%)',
+  },
+  evergreen: {
+    label: 'Olive Slate', tone: 'olive + stone',
+    ink: '#1D221D', surface: '#262C25', raise: '#384036',
+    m: '#63715F', c: '#A3B585', a: '#C4CEA5',
+    text: '#F0F2EA', muted: '#AAB4A3', line: 'rgba(196,206,165,.13)',
+    field: 'rgba(29,34,29,.78)', soft: 'rgba(56,64,54,.62)', panel: 'rgba(32,38,32,.96)',
+    focus: '#B1C18F', focusSoft: 'rgba(177,193,143,.30)', onAccent: '#10140D',
+    success: '#93C99B', danger: '#E99A95',
+    scrim: 'linear-gradient(90deg,rgba(29,34,29,.84) 0%,rgba(29,34,29,.54) 28%,rgba(29,34,29,.18) 58%,rgba(29,34,29,.05) 100%),linear-gradient(0deg,rgba(29,34,29,.74) 0%,rgba(29,34,29,.24) 26%,rgba(29,34,29,.04) 60%,rgba(29,34,29,.10) 100%)',
+  },
+  contrast: {
+    label: 'High Contrast', tone: 'TV clarity',
+    ink: '#000000', surface: '#050505', raise: '#111111',
+    m: '#FAFAFA', c: '#FFE066', a: '#5EEAD4',
+    text: '#FFFFFF', muted: '#D1D5DB', line: 'rgba(255,255,255,.24)',
+    field: 'rgba(0,0,0,.88)', soft: 'rgba(24,24,24,.92)', panel: 'rgba(6,6,6,.98)',
+    focus: '#FFE066', focusSoft: 'rgba(255,224,102,.48)', onAccent: '#000000',
+    success: '#5EEAD4', danger: '#FF7A7A',
+    scrim: 'linear-gradient(90deg,rgba(0,0,0,.90) 0%,rgba(0,0,0,.68) 28%,rgba(0,0,0,.34) 58%,rgba(0,0,0,.16) 100%),linear-gradient(0deg,rgba(0,0,0,.86) 0%,rgba(0,0,0,.48) 26%,rgba(0,0,0,.16) 60%,rgba(0,0,0,.24) 100%)',
+  },
+};
+const THEME_ALIASES = {
+  graphite: 'studio', triboon: 'triboonCoral', trioon: 'triboonCoral', arctic: 'teal', forest: 'evergreen', ember: 'velvet',
+  steel: 'studio', ocean: 'teal', emerald: 'evergreen', crimson: 'velvet', violet: 'velvet',
 };
 function applyTheme() {
-  const name = (() => { try { return localStorage.getItem('triboon.theme') || 'graphite'; } catch { return 'graphite'; } })();
-  const t = THEMES[name] || THEMES.graphite;
+  let name = (() => { try { return localStorage.getItem('triboon.theme') || 'triboonCoral'; } catch { return 'triboonCoral'; } })();
+  if (!THEMES[name] && THEME_ALIASES[name]) name = THEME_ALIASES[name];
+  const t = THEMES[name] || THEMES.triboonCoral;
   const r = document.documentElement.style;
-  r.setProperty('--magenta', t.m); r.setProperty('--coral', t.c); r.setProperty('--amber', t.a);
+  Object.entries(THEME_TOKEN_MAP).forEach(([key, cssVar]) => r.setProperty(cssVar, t[key]));
+  r.setProperty('--grad', t.c);
+  r.setProperty('--gold', t.a);
+  if (document.body) document.body.dataset.theme = name;
   return name;
 }
-// One swatch picker, two homes: user Preferences and admin Settings → Display.
+// One theme picker, two homes: user Preferences and admin Settings Display.
 function renderThemePicker(elId) {
   const tp = $(elId); if (!tp) return;
   const cur = applyTheme();
   tp.innerHTML = '';
   Object.entries(THEMES).forEach(([name, t]) => {
     const b = document.createElement('button');
-    b.className = 'swatch focusable' + (name === cur ? ' sel' : '');
-    b.title = t.label;
-    b.style.background = `linear-gradient(135deg,${t.m},${t.c} 60%,${t.a})`;
+    b.className = 'themeChoice focusable' + (name === cur ? ' sel' : '');
+    b.dataset.theme = name;
+    b.title = `${t.label} theme`;
+    b.setAttribute('aria-label', `${t.label} theme`);
+    b.style.setProperty('--preview-ink', t.ink);
+    b.style.setProperty('--preview-surface', t.surface);
+    b.style.setProperty('--preview-accent', t.c);
+    b.style.setProperty('--preview-focus', t.focus);
+    b.style.setProperty('--preview-text', t.text);
+    b.style.setProperty('--preview-muted', t.muted);
+    b.innerHTML = `
+      <span class="themeMeta"><span class="themeName">${esc(t.label)}</span><span class="themeTone">${esc(t.tone || 'theme')}</span></span>
+      <span class="themePalette" aria-hidden="true"><i></i><i></i><i></i></span>`;
     b.addEventListener('click', () => {
       try { localStorage.setItem('triboon.theme', name); } catch {}
       applyTheme();
-      tp.querySelectorAll('.swatch').forEach((x) => x.classList.toggle('sel', x === b));
+      document.querySelectorAll('#themePick .themeChoice,#themePickSet .themeChoice').forEach((x) => x.classList.toggle('sel', x.dataset.theme === name));
       toast(`Theme: ${t.label}`);
     });
     tp.appendChild(b);
   });
 }
 applyTheme(); // boot: restore the saved accent before first paint settles
+function applyContentTextSize() {
+  let s = 'M';
+  try { s = localStorage.getItem('triboon.textsize') || 'M'; } catch {}
+  if (!['S', 'M', 'L'].includes(s)) s = 'M';
+  document.body.classList.toggle('contentTextS', s === 'S');
+  document.body.classList.toggle('contentTextL', s === 'L');
+  return s;
+}
+applyContentTextSize(); // boot: content pages use the saved text size before rows render
 function renderProfileSessionActions() {
   const pr = S.profile || {};
   const name = pr.name || (S.user && S.user.name) || 'Current profile';
@@ -11722,6 +12127,8 @@ function openApkUpdate(kind) {
 function openPrefs() { // populates the Preferences PAGE (it's a view now, not a popup)
   const cz = applyCoverSize();
   document.querySelectorAll('#prefCoverSize button').forEach((b) => b.classList.toggle('sel', b.dataset.sz === cz));
+  const ts = applyContentTextSize();
+  document.querySelectorAll('#prefContentTextSize button').forEach((b) => b.classList.toggle('sel', b.dataset.ts === ts));
   renderThemePicker('themePick');
   // Preferred playback languages
   const langOpts = (kind) => {
@@ -11756,58 +12163,81 @@ function openPrefs() { // populates the Preferences PAGE (it's a view now, not a
     if (S.view === 'prefs' && (!document.activeElement || document.activeElement === document.body)) focusContent();
   });
 }
-// YouTube Music link panel (Preferences → Connections): paste an exported cookies.txt.
+// YouTube Music link panel (Preferences -> Connections): guided session import.
 // The text is sent ONCE, stored encrypted server-side, and never comes back to the UI.
 function renderYtmConnectBox(box, st) {
   if (st.linked) {
+    const sourceLabel = st.linkSource === 'oauth' ? 'Google sign-in' : 'browser session';
     box.innerHTML = `<div class="ytmConnect">
       <div class="ytmConnectIcon">${musicIcon('music')}</div>
       <div><h3>YouTube Music connected</h3><p>Your Liked Music and playlists appear first on the Music page.</p></div>
     </div>
-    <div style="display:flex;gap:10px;margin-top:12px">
+    <div class="ytmConnectActions">
       <button class="btn ghost focusable" id="ytmRelink">Replace connection</button>
       <button class="btn ghost focusable" id="ytmUnlink">Unlink</button>
     </div>
-    <div class="hint">If playlists stop loading later, refresh the YouTube session file and replace the connection.</div>`;
+    <div class="hint">Connected with ${esc(sourceLabel)}. If playlists stop loading later, run the setup again. Triboon keeps credentials encrypted and never shows them back.</div>`;
     box.querySelector('#ytmUnlink').addEventListener('click', async () => {
       await api('/api/music/unlink', { method: 'POST', body: {} });
       S.ytmPlaylists = null; toast('YouTube Music unlinked'); renderYtmBox();
     });
-    box.querySelector('#ytmRelink').addEventListener('click', () => renderYtmPaste(box));
+    box.querySelector('#ytmRelink').addEventListener('click', () => st.oauthAvailable ? startYtmOAuth(box) : renderYtmPaste(box, { guided: true }));
     return;
   }
+  const canOAuth = !!st.oauthAvailable;
+  const oauthHint = canOAuth
+    ? 'Sign in on Google with a TV-style code. No cookie files needed.'
+    : (st.oauthConfigured ? 'Google sign-in needs ytmusicapi on the server.' : 'Ask the admin to save a YouTube Music OAuth app in Settings.');
   box.innerHTML = `<div class="ytmConnect">
     <div class="ytmConnectIcon">${musicIcon('music')}</div>
     <div><h3>Connect YouTube Music</h3><p>Bring in Liked Music and your playlists. Public search, weekly picks, and seasonal mixes work even before you connect.</p>
-      <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap">
-        <button class="btn primary focusable" id="ytmStartLink">Connect account</button>
-        <button class="btn ghost focusable" id="ytmAdvancedLink">Advanced import</button>
+      <div class="hint" style="margin:8px 0">${esc(oauthHint)}</div>
+      <div class="ytmConnectActions">
+        <button class="btn primary focusable" id="ytmStartLink">${canOAuth ? 'Connect with Google' : 'Set up account'}</button>
+        <button class="btn ghost focusable" id="ytmAdvancedLink">Manual paste</button>
       </div>
     </div>
   </div>`;
-  box.querySelector('#ytmStartLink').addEventListener('click', () => renderYtmPaste(box));
+  box.querySelector('#ytmStartLink').addEventListener('click', () => canOAuth ? startYtmOAuth(box) : renderYtmPaste(box, { guided: true }));
   box.querySelector('#ytmAdvancedLink').addEventListener('click', () => renderYtmPaste(box, { showPaste: true }));
 }
 function renderYtmImportBox(box, opts = {}) {
   box.innerHTML = `
     <div class="ytmConnect">
       <div class="ytmConnectIcon">${musicIcon('music')}</div>
-      <div><h3>Import YouTube Music session</h3><p>Use a cookies.txt exported while signed in to music.youtube.com. Triboon stores it encrypted and only uses it to load your playlists.</p>
-        <ol class="ytmSteps"><li>Export cookies.txt from the signed-in browser.</li><li>Choose the file here, or paste it manually.</li><li>Triboon validates it before showing playlists.</li></ol>
+      <div><h3>Set up YouTube Music</h3><p>Open YouTube Music, make sure you are signed in, then import a browser session export. You do not need developer tools or individual cookie hunting.</p>
+        <div class="ytmGuidedActions">
+          <button class="btn ghost focusable" id="ytmOpenMusic">Open YouTube Music</button>
+        </div>
+        <div class="ytmStepCards">
+          <div class="ytmStepCard"><strong>1. Sign in</strong><span>Use the same browser account that has your music library.</span></div>
+          <div class="ytmStepCard"><strong>2. Export session</strong><span>Use a cookies.txt browser helper for YouTube only.</span></div>
+          <div class="ytmStepCard"><strong>3. Import once</strong><span>Choose the file below. Triboon validates and encrypts it.</span></div>
+        </div>
       </div>
     </div>
     <div class="ytmImportBox">
       <span id="ytmFileName">No session file selected</span>
-      <button class="btn ghost focusable" id="ytmPick">Choose file</button>
+      <button class="btn ghost focusable" id="ytmPick">Choose session file</button>
       <input id="ytmFile" type="file" accept=".txt,text/plain" style="display:none">
     </div>
-    <textarea id="ytmCookies" rows="5" class="ytmPaste" placeholder="Advanced paste: paste the exported cookies.txt here"${opts.showPaste ? '' : ' hidden'}></textarea>
+    <textarea id="ytmCookies" rows="5" class="ytmPaste" placeholder="Manual paste: paste the exported YouTube session file here"${opts.showPaste ? '' : ' hidden'}></textarea>
+    ${opts.showPaste ? '' : '<button class="btn ghost focusable" id="ytmShowPaste" style="margin-top:10px">Manual paste instead</button>'}
     <div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap">
       <button class="btn primary focusable" id="ytmLink" style="flex:1;justify-content:center">Connect YouTube Music</button>
       <button class="btn ghost focusable" id="ytmCancel">Cancel</button>
-    </div><div class="hint" id="ytmMsg">The raw session text is never shown again after saving.</div>`;
+    </div><div class="hint" id="ytmMsg">Browser security blocks direct sign-in sharing between sites, so Triboon imports a session file once and stores it encrypted.</div>`;
   let selectedText = '';
   const file = box.querySelector('#ytmFile');
+  const openMusic = box.querySelector('#ytmOpenMusic');
+  if (openMusic) openMusic.addEventListener('click', () => window.open('https://music.youtube.com/library/playlists', '_blank', 'noopener'));
+  const showPaste = box.querySelector('#ytmShowPaste');
+  if (showPaste) showPaste.addEventListener('click', () => {
+    const paste = box.querySelector('#ytmCookies');
+    paste.hidden = false;
+    showPaste.remove();
+    paste.focus();
+  });
   box.querySelector('#ytmPick').addEventListener('click', () => file.click());
   file.addEventListener('change', async () => {
     const f = file.files && file.files[0];
@@ -11815,13 +12245,13 @@ function renderYtmImportBox(box, opts = {}) {
     try {
       selectedText = await f.text();
       box.querySelector('#ytmFileName').textContent = f.name;
-      box.querySelector('#ytmMsg').textContent = 'Session file ready. Connect to validate it.';
+      box.querySelector('#ytmMsg').textContent = 'Session file ready. Connect to validate and encrypt it.';
     } catch { toast('Could not read that file'); }
   });
   box.querySelector('#ytmCancel').addEventListener('click', renderYtmBox);
   box.querySelector('#ytmLink').addEventListener('click', async () => {
     const text = selectedText || box.querySelector('#ytmCookies').value;
-    if (!text.trim()) return toast('Choose or paste the YouTube Music session file first');
+    if (!text.trim()) return toast('Choose the YouTube Music session file first, or use Manual paste');
     try {
       await api('/api/music/link', { method: 'POST', body: { cookies: text } });
       S.ytmPlaylists = null;
@@ -11830,8 +12260,66 @@ function renderYtmImportBox(box, opts = {}) {
     } catch (e) { toast(e.message); }
   });
 }
+function clearYtmOAuthPoll() {
+  if (S.ytmOAuthPoll) { clearInterval(S.ytmOAuthPoll); S.ytmOAuthPoll = 0; }
+}
+function renderYtmOAuthPending(box, r) {
+  clearYtmOAuthPoll();
+  box.innerHTML = `<div class="ytmConnect">
+    <div class="ytmConnectIcon">${musicIcon('music')}</div>
+    <div><h3>Finish on Google</h3><p>Enter this code on the Google device page, then return here. Triboon will finish automatically.</p>
+      <div class="ytmStepCards">
+        <div class="ytmStepCard"><strong>Code</strong><span style="font:800 24px JetBrains Mono;color:var(--text);letter-spacing:.08em">${esc(r.userCode || '')}</span></div>
+        <div class="ytmStepCard"><strong>Page</strong><span>${esc(r.verificationUrl || 'google.com/device')}</span></div>
+      </div>
+      <div class="ytmConnectActions">
+        <button class="btn primary focusable" id="ytmOpenOAuth">Open Google</button>
+        <button class="btn ghost focusable" id="ytmOAuthCancel">Cancel</button>
+      </div>
+      <div class="hint" id="ytmOAuthMsg">Waiting for approval...</div>
+    </div>
+  </div>`;
+  box.querySelector('#ytmOpenOAuth').addEventListener('click', () => window.open(r.verificationUrlComplete || r.verificationUrl, '_blank', 'noopener'));
+  box.querySelector('#ytmOAuthCancel').addEventListener('click', () => { clearYtmOAuthPoll(); renderYtmBox(); });
+  const poll = async () => {
+    try {
+      const p = await api('/api/music/oauth/poll', { method: 'POST', body: {} });
+      if (p && p.status === 'linked') {
+        clearYtmOAuthPoll();
+        S.ytmPlaylists = null;
+        toast('YouTube Music connected');
+        return renderYtmBox();
+      }
+      const msg = box.querySelector('#ytmOAuthMsg');
+      if (msg) msg.textContent = 'Waiting for approval...';
+    } catch (e) {
+      clearYtmOAuthPoll();
+      const msg = box.querySelector('#ytmOAuthMsg');
+      if (msg) msg.textContent = e.message;
+      toast(e.message);
+    }
+  };
+  S.ytmOAuthPoll = setInterval(poll, Math.max(3000, r.intervalMs || 5000));
+}
+async function startYtmOAuth(box) {
+  clearYtmOAuthPoll();
+  box.innerHTML = '<div class="hint">Starting Google sign-in...</div>';
+  try {
+    const r = await api('/api/music/oauth/start', { method: 'POST', body: {} });
+    renderYtmOAuthPending(box, r);
+  } catch (e) {
+    box.innerHTML = `<div class="hint">${esc(e.message)}</div>
+      <div class="ytmConnectActions" style="margin-top:10px">
+        <button class="btn ghost focusable" id="ytmManualAfterOAuth">Manual paste</button>
+        <button class="btn ghost focusable" id="ytmBackAfterOAuth">Back</button>
+      </div>`;
+    box.querySelector('#ytmManualAfterOAuth').addEventListener('click', () => renderYtmPaste(box, { showPaste: true }));
+    box.querySelector('#ytmBackAfterOAuth').addEventListener('click', renderYtmBox);
+  }
+}
 async function renderYtmBox() {
   const box = $('ytmBox');
+  clearYtmOAuthPoll();
   let st;
   try { st = await api('/api/music/status'); } catch { box.innerHTML = '<div class="hint">server unreachable</div>'; return; }
   if (!st.ytdlp) {
@@ -12122,6 +12610,12 @@ document.querySelectorAll('#prefCoverSize button').forEach((b) => b.addEventList
   try { localStorage.setItem('triboon.cover', b.dataset.sz); } catch {}
   document.querySelectorAll('#prefCoverSize button').forEach((x) => x.classList.toggle('sel', x === b));
   applyCoverSize();
+}));
+document.querySelectorAll('#prefContentTextSize button').forEach((b) => b.addEventListener('click', () => {
+  try { localStorage.setItem('triboon.textsize', b.dataset.ts); } catch {}
+  document.querySelectorAll('#prefContentTextSize button').forEach((x) => x.classList.toggle('sel', x === b));
+  applyContentTextSize();
+  toast(b.dataset.ts === 'L' ? 'Content text is larger' : (b.dataset.ts === 'S' ? 'Content text is compact' : 'Content text is standard'));
 }));
 // Playback prefs (per device, Stremio parity): auto-play next episode + caption size.
 function prefAutoplay() { try { return localStorage.getItem('triboon.autoplay') !== '0'; } catch { return true; } }
@@ -12754,6 +13248,23 @@ async function refreshIptvSyncStatus() {
   try { renderIptvSyncStatus(await api('/api/iptv/status')); }
   catch (e) { $('iptvSyncStatus').textContent = 'Live TV sync status failed: ' + e.message; }
 }
+function activityStreamKind(s = {}) {
+  const raw = String(s.streamKind || s.streamLabel || s.mode || '').toLowerCase();
+  if (raw.includes('transcod') || raw.includes('optimized')) return 'transcode';
+  if (raw.includes('remux')) return 'remux';
+  if (raw.includes('live')) return 'live';
+  if (raw.includes('direct') || raw.includes('original')) return 'original';
+  return '';
+}
+function activityStreamLabel(s = {}) {
+  if (s.streamLabel) return s.streamLabel;
+  const kind = activityStreamKind(s);
+  if (kind === 'transcode') return 'Transcoding';
+  if (kind === 'remux') return 'Original (remux)';
+  if (kind === 'original') return 'Original';
+  if (kind === 'live') return 'Live';
+  return s.mode || '';
+}
 function renderActivity(sessions = []) {
   const list = $('activityList'); if (!list) return;
   if (!sessions.length) {
@@ -12765,9 +13276,12 @@ function renderActivity(sessions = []) {
     const pct = Math.max(0, Math.min(100, +s.percent || 0));
     const pos = s.duration ? `${fmt(s.position || 0)} / ${fmt(s.duration || 0)}` : (s.position ? fmt(s.position) : 'Live');
     const file = s.fileName || s.source || '';
+    const streamKind = activityStreamKind(s);
+    const streamLabel = activityStreamLabel(s);
+    const streamBadge = streamLabel ? `<span class="activityStream ${esc(streamKind)}">${esc(streamLabel)}</span>` : '';
     return `<div class="activityRow">
-      <div><b>${esc(s.userName || 'User')}</b><small>${esc(s.profile || s.player || '')}</small></div>
-      <div><b>${esc(s.title || 'Playing')}</b><small>${esc((s.subline ? s.subline + ' - ' : '') + (file || s.mode || ''))}</small>
+      <div><b>${esc(s.userName || 'User')}</b><small>${esc(s.profile || s.player || '')}</small>${streamBadge}</div>
+      <div><b>${esc(s.title || 'Playing')}</b><small>${esc((s.subline ? s.subline + ' - ' : '') + (file || s.mode || streamLabel || ''))}</small>
         <div class="activityBar" style="--pct:${pct}%"><span></span></div></div>
       <div class="arMeta">${esc(pos)}<br>${esc(agoStr(s.updatedAt || Date.now()))}</div>
     </div>`;
@@ -12880,7 +13394,7 @@ async function refreshSettings() {
     if ($('libScanMin').selectedIndex < 0) $('libScanMin').value = '15'; // custom API value → nearest preset
     $('libScanStatus').textContent = +lsm
       ? `saved ✓ — checking library folders every ${+lsm >= 60 ? (+lsm / 60) + 'h' : lsm + ' min'} for new files`
-      : 'saved ✓ — auto-scan off; use the scan buttons on each library page';
+      : 'saved ✓ — auto-scan off; use the scan buttons in each library edit panel';
     $('scTrusted').value = (s.scoringGroupsTrusted || []).join(', ');
     $('scAvoid').value = (s.scoringGroupsAvoid || []).join(', ');
     $('scKeywords').value = (s.scoringKeywords || []).map((k) => `${k.term} = ${k.score}`).join('\n');
@@ -12898,6 +13412,11 @@ async function refreshSettings() {
       : 'not configured yet';
     $('traktId').placeholder = s.traktClientId ? 'client id saved ✓ — paste to replace' : 'Trakt client id';
     $('traktSecret').placeholder = s.traktClientSecret ? 'client secret saved ✓ — paste to replace' : 'Trakt client secret';
+    $('ytOAuthStatus').textContent = s.ytOAuthClientId
+      ? `app saved ✓ (${s.ytOAuthClientSecret ? 'secret saved' : 'secret missing'}) — users link in Preferences → Connections`
+      : 'not configured yet';
+    $('ytOAuthId').placeholder = s.ytOAuthClientId ? 'client id saved ✓ — paste to replace' : 'Google OAuth client id';
+    $('ytOAuthSecret').placeholder = s.ytOAuthClientSecret ? 'client secret saved ✓ — paste to replace' : 'Google OAuth client secret';
     const iptvSources = s.iptvSources || [];
     S.adminIptvSources = iptvSources;
     $('iptvSourceList').innerHTML = iptvSources.length ? iptvSources.map((src) => {
@@ -13126,6 +13645,16 @@ $('traktSave').addEventListener('click', async () => {
   await api('/api/settings', { method: 'POST', body });
   $('traktId').value = ''; $('traktSecret').value = '';
   toast('Trakt app saved — users can now link in Preferences → Connections');
+  refreshSettings();
+});
+$('ytOAuthSave').addEventListener('click', async () => {
+  const body = {};
+  if ($('ytOAuthId').value.trim()) body.ytOAuthClientId = $('ytOAuthId').value.trim();
+  if ($('ytOAuthSecret').value) body.ytOAuthClientSecret = $('ytOAuthSecret').value;
+  if (!Object.keys(body).length) return toast('Enter the YouTube Music OAuth id/secret');
+  await api('/api/settings', { method: 'POST', body });
+  $('ytOAuthId').value = ''; $('ytOAuthSecret').value = '';
+  toast('YouTube Music OAuth app saved - users can link in Preferences');
   refreshSettings();
 });
 function updateIptvAddFormState() {
@@ -13381,6 +13910,8 @@ function toggleMobileNav(e) {
 }
 function androidBurgerHit(e) {
   if (!document.body.classList.contains('androidApp')) return false;
+  const burger = $('burger');
+  if (burger && (e.target === burger || burger.contains(e.target))) return false;
   const p = (e.changedTouches && e.changedTouches[0]) || e;
   return p.clientX <= 132 && p.clientY <= 132;
 }
@@ -13392,7 +13923,19 @@ document.addEventListener('touchend', (e) => {
   if (!androidBurgerHit(e)) return;
   toggleMobileNav(e);
 }, true);
+$('burger').addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+});
+$('burger').addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+}, { passive: false });
 $('burger').addEventListener('pointerup', toggleMobileNav);
+$('burger').addEventListener('touchend', (e) => {
+  if (Date.now() - burgerTouchAt < 500) return;
+  toggleMobileNav(e);
+}, { passive: false });
 $('burger').addEventListener('click', (e) => {
   if (Date.now() - burgerTouchAt < 500) return;
   toggleMobileNav(e);

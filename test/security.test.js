@@ -143,7 +143,8 @@ test('security: deny-by-default — every route declares auth; unknown routes 40
     ['POST', '/api/settings'], ['POST', '/api/streaming/recommend'], ['POST', '/api/invites'], ['GET', '/api/invites'],
     ['GET', '/api/users'], ['GET', '/api/libraries/local-lookup?key=tmdb:movie:1'], ['GET', '/api/stream/abc'], ['GET', '/api/remux/abc'],
     ['GET', '/api/iptv/status'], ['POST', '/api/iptv/refresh'], ['GET', '/api/iptv/sources'], ['POST', '/api/iptv/sources'], ['PATCH', '/api/iptv/sources/abc'], ['DELETE', '/api/iptv/sources/abc'],
-    ['POST', '/api/quickconnect/123456/approve'], ['GET', '/api/music/home'], ['GET', '/api/music/charts'], ['GET', '/api/music/search?q=x'],
+    ['POST', '/api/quickconnect/123456/approve'], ['GET', '/api/music/home'], ['GET', '/api/music/charts'], ['GET', '/api/music/search?q=x'], ['GET', '/api/music/radio/AAAAAAAAAAA'],
+    ['POST', '/api/music/oauth/start'], ['POST', '/api/music/oauth/poll'],
   ];
   for (const [m, p] of probes) {
     assert.strictEqual((await httpJson(srv.port, m, p)).status, 401, `anon ${m} ${p}`);
@@ -189,6 +190,9 @@ test('activity: users heartbeat playback and only admins see now-watching rows',
     subline: '4K Direct Play',
     type: 'movie',
     player: 'exo',
+    mode: 'ExoPlayer',
+    streamKind: 'transcode',
+    streamLabel: 'Transcoding',
     position: 600,
     duration: 6000,
     size: 42_000_000_000,
@@ -203,6 +207,8 @@ test('activity: users heartbeat playback and only admins see now-watching rows',
   assert.ok(row, 'admin sees the active session');
   assert.strictEqual(row.userName, 'fam');
   assert.strictEqual(row.title, 'The Test Movie');
+  assert.strictEqual(row.streamKind, 'transcode');
+  assert.strictEqual(row.streamLabel, 'Transcoding');
   assert.strictEqual(row.percent, 10);
 
   const stopped = await httpJson(srv.port, 'POST', '/api/activity', { sessionId, state: 'stopped' }, user);
@@ -1812,6 +1818,177 @@ test('music: playlist parsers turn null yt-dlp JSON into useful link errors', ()
     title: 'Mine',
     tracks: [],
   });
+});
+
+test('music: optional ytmusicapi catalog search is fast-path normalized and bounded', async () => {
+  const ytmusic = require('../server/ytmusic');
+  const calls = [];
+  try {
+    ytmusic._setYtMusicApiRunnerForTest(async (action, body) => {
+      calls.push({ action, body });
+      return {
+        rows: [
+          {
+            videoId: 'AAAAAAAAAAA',
+            title: 'Around the World (Official Audio)',
+            artists: [{ name: 'Daft Punk' }],
+            album: { name: 'Homework' },
+            duration: '7:10',
+            thumbnails: [
+              { url: 'small.jpg', width: 120, height: 90 },
+              { url: 'large.jpg', width: 544, height: 544 },
+            ],
+          },
+          { videoId: 'bad', title: 'Bad row' },
+        ],
+      };
+    });
+    const rows = await ytmusic.search('  Daft Punk  ', { limit: 5 });
+    assert.deepStrictEqual(calls, [{ action: 'search', body: { query: 'Daft Punk', limit: 5 } }]);
+    assert.deepStrictEqual(rows, [{
+      id: 'AAAAAAAAAAA',
+      title: 'Around the World',
+      artist: 'Daft Punk',
+      duration: 430,
+      thumb: 'large.jpg',
+      album: 'Homework',
+      source: 'ytmusicapi',
+    }]);
+  } finally {
+    ytmusic._setYtMusicApiRunnerForTest(null);
+    ytmusic._resetYtMusicApiDetection();
+  }
+});
+
+test('music: optional ytmusicapi watch queue returns tokenized radio tracks', async () => {
+  const ytmusic = require('../server/ytmusic');
+  const oldDetect = ytmusic.detectYtdlp;
+  try {
+    ytmusic.detectYtdlp = () => ({ cmd: ['mock-ytdlp'], version: 'test' });
+    ytmusic._setYtMusicApiRunnerForTest(async (action, body) => {
+      assert.strictEqual(action, 'watch');
+      assert.deepStrictEqual(body, { id: 'AAAAAAAAAAA', limit: 2 });
+      return {
+        playlistId: 'RDAMVMAAAAAAAAAAA',
+        rows: [
+          { videoId: 'BBBBBBBBBBB', title: 'Track B', artists: [{ name: 'Artist B' }], duration: '3:01' },
+          { videoId: 'CCCCCCCCCCC', title: 'Track C', artists: [{ name: 'Artist C' }], duration: '4:02' },
+        ],
+      };
+    });
+    const r = await httpJson(srv.port, 'GET', '/api/music/radio/AAAAAAAAAAA?limit=2', null, admin);
+    assert.strictEqual(r.status, 200, r.raw);
+    assert.strictEqual(r.json.playlistId, 'RDAMVMAAAAAAAAAAA');
+    assert.deepStrictEqual(r.json.results.map((x) => x.id), ['BBBBBBBBBBB', 'CCCCCCCCCCC']);
+    assert.ok(/^\/api\/music\/stream\/BBBBBBBBBBB\?t=/.test(r.json.results[0].streamUrl));
+    assert.strictEqual(r.json.results[0].duration, 181);
+  } finally {
+    ytmusic.detectYtdlp = oldDetect;
+    ytmusic._setYtMusicApiRunnerForTest(null);
+    ytmusic._resetYtMusicApiDetection();
+  }
+});
+
+test('music: Google device OAuth links a user and loads playlists through ytmusicapi', async () => {
+  const ytmusic = require('../server/ytmusic');
+  const oldDetect = ytmusic.detectYtdlp;
+  const calls = [];
+  let tokenPolls = 0;
+  try {
+    ytmusic.detectYtdlp = () => ({ cmd: ['mock-ytdlp'], version: 'test' });
+    ytmusic._setOAuthPostForTest(async (url, data) => {
+      if (/device\/code/.test(url)) {
+        assert.strictEqual(data.client_id, 'yt-client');
+        assert.match(data.scope, /youtube/);
+        return {
+          device_code: 'device-123',
+          user_code: 'ABC-DEF',
+          verification_url: 'https://www.google.com/device',
+          expires_in: 600,
+          interval: 1,
+        };
+      }
+      if (/oauth2\.googleapis\.com\/token/.test(url) && data.code === 'device-123') {
+        tokenPolls++;
+        if (tokenPolls === 1) {
+          const pending = new Error('authorization_pending');
+          pending.code = 'authorization_pending';
+          throw pending;
+        }
+        return {
+          access_token: 'yt-access-secret',
+          refresh_token: 'yt-refresh-secret',
+          scope: 'https://www.googleapis.com/auth/youtube',
+          token_type: 'Bearer',
+          expires_in: 3600,
+        };
+      }
+      throw new Error(`unexpected OAuth call ${url}`);
+    });
+    ytmusic._setYtMusicApiRunnerForTest(async (action, body) => {
+      calls.push({ action, body });
+      assert.strictEqual(body.clientId, 'yt-client');
+      assert.strictEqual(body.clientSecret, 'yt-secret');
+      assert.strictEqual(body.oauthToken.access_token, 'yt-access-secret');
+      if (action === 'library_playlists') {
+        return { rows: [{ playlistId: 'PLROAD123', title: 'Road Mix', count: 12 }] };
+      }
+      if (action === 'playlist') {
+        assert.strictEqual(body.id, 'PLROAD123');
+        return {
+          title: 'Road Mix',
+          rows: [
+            { videoId: 'BBBBBBBBBBB', title: 'First', artists: [{ name: 'One' }], duration: '3:01' },
+            { videoId: 'CCCCCCCCCCC', title: 'Second', artists: [{ name: 'Two' }], duration: '4:02' },
+            { videoId: 'DDDDDDDDDDD', title: 'Third', artists: [{ name: 'Three' }], duration: '5:03' },
+          ],
+        };
+      }
+      throw new Error(`unexpected ytmusicapi action ${action}`);
+    });
+
+    const saved = await httpJson(srv.port, 'POST', '/api/settings', { ytOAuthClientId: 'yt-client', ytOAuthClientSecret: 'yt-secret' }, admin);
+    assert.strictEqual(saved.status, 200);
+    const settingsView = await httpJson(srv.port, 'GET', '/api/settings', null, admin);
+    assert.strictEqual(settingsView.json.ytOAuthClientId, 'yt-client');
+    assert.strictEqual(settingsView.json.ytOAuthClientSecret, '•••');
+    const rawSettings = fs.readFileSync(path.join(process.env.TRIBOON_DATA, 'settings.json'), 'utf8');
+    assert.ok(!rawSettings.includes('yt-secret'), 'OAuth client secret is encrypted at rest');
+
+    const started = await httpJson(srv.port, 'POST', '/api/music/oauth/start', {}, admin);
+    assert.strictEqual(started.status, 200, started.raw);
+    assert.strictEqual(started.json.userCode, 'ABC-DEF');
+    assert.match(started.json.verificationUrlComplete, /ABC-DEF/);
+
+    const pending = await httpJson(srv.port, 'POST', '/api/music/oauth/poll', {}, admin);
+    assert.strictEqual(pending.status, 200);
+    assert.strictEqual(pending.json.status, 'pending');
+
+    const linked = await httpJson(srv.port, 'POST', '/api/music/oauth/poll', {}, admin);
+    assert.strictEqual(linked.status, 200, linked.raw);
+    assert.strictEqual(linked.json.linked, true);
+    const status = await httpJson(srv.port, 'GET', '/api/music/status', null, admin);
+    assert.strictEqual(status.json.linkSource, 'oauth');
+    assert.strictEqual(JSON.stringify(status.json).includes('yt-access-secret'), false, 'OAuth tokens never return to the client');
+
+    const playlists = await httpJson(srv.port, 'GET', '/api/music/playlists', null, admin);
+    assert.strictEqual(playlists.status, 200, playlists.raw);
+    assert.strictEqual(playlists.json.linkSource, 'oauth');
+    assert.deepStrictEqual(playlists.json.playlists, [{ id: 'PLROAD123', title: 'Road Mix', count: 12, cover: null, source: 'ytmusicapi' }]);
+
+    const page = await httpJson(srv.port, 'GET', '/api/music/playlist/PLROAD123?limit=2&offset=1', null, admin);
+    assert.strictEqual(page.status, 200, page.raw);
+    assert.strictEqual(page.json.title, 'Road Mix');
+    assert.deepStrictEqual(page.json.results.map((x) => x.id), ['CCCCCCCCCCC', 'DDDDDDDDDDD']);
+    assert.ok(/^\/api\/music\/stream\/CCCCCCCCCCC\?t=/.test(page.json.results[0].streamUrl));
+
+    await httpJson(srv.port, 'POST', '/api/music/unlink', {}, admin);
+  } finally {
+    ytmusic.detectYtdlp = oldDetect;
+    ytmusic._setOAuthPostForTest(null);
+    ytmusic._setYtMusicApiRunnerForTest(null);
+    ytmusic._resetYtMusicApiDetection();
+  }
 });
 
 test('music: yt-dlp work is globally queued so home/search reloads cannot fan out unbounded processes', async () => {
