@@ -651,8 +651,14 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android phone playback rotation should be released when the native player closes');
   assert.ok(ui.includes('#heroBtns{width:100%;justify-content:center;gap:8px;flex-wrap:nowrap}')
     && ui.includes('#hero h1{font-size:clamp(24px,7.4vw,32px)')
-    && ui.includes('#dBtns{flex-wrap:nowrap;justify-content:center;gap:8px;overflow-x:auto'),
-    'mobile hero and detail actions should stay centered in one row with smaller titles');
+    && ui.includes('#dBtns{flex-wrap:nowrap;justify-content:flex-start;gap:5px;overflow-x:auto')
+    && ui.includes('body.mobileShell #dBtns{flex-wrap:nowrap;justify-content:flex-start;gap:5px;overflow-x:auto'),
+    'mobile hero should stay centered while detail actions start onscreen in one scrollable row');
+  assert.ok(ui.includes('#person .personHead{flex-direction:column;align-items:center;gap:16px')
+    && ui.includes('#person .personHead .pInfo{width:100%;text-align:center}')
+    && ui.includes('body.mobileShell #person .personHead{flex-direction:column;align-items:center;gap:16px')
+    && ui.includes('body.mobileShell #person .personHead .pInfo{width:100%;text-align:center}'),
+    'mobile person pages should stack the profile header instead of squeezing text beside the poster');
   assert.ok(ui.includes('id="statsBtn"') && ui.includes("return ['chGuide', 'back10', 'playPause', 'fwd30', 'nextEpBtn', 'ccBtn', 'audBtn', 'srndBtn', 'qualBtn', 'muteBtn', 'fsBtn', 'statsBtn']")
     && ui.includes('function collectPlayerStats()') && ui.includes('window.__tvNativeVideoStats'),
     'web player stats must be the last D-pad reachable control and accept native ExoPlayer stats');

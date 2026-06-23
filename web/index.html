@@ -1117,12 +1117,18 @@ body.tv .cwAct,body.tv .epMenuBtn{display:none!important}
   #dTitle{font-size:clamp(24px,7.8vw,34px);max-width:100%}
   #dOverview{max-width:100%;font-size:14px;margin-left:auto;margin-right:auto}
   #dCrew{max-width:100%;line-height:1.4}
-  #dBtns{flex-wrap:nowrap;justify-content:center;gap:8px;overflow-x:auto;max-width:100%;padding:0 2px 6px;scrollbar-width:none}
+  #dBtns{flex-wrap:nowrap;justify-content:flex-start;gap:5px;overflow-x:auto;max-width:100%;padding:0 0 6px;scrollbar-width:none}
   #dBtns::-webkit-scrollbar{display:none}
   #dBtns .btn{min-width:0;white-space:nowrap;justify-content:center;padding:11px 13px;font-size:12.8px}
   #dBtns .btn.primary{padding:11px 16px;flex:1 0 auto}
   #dBtns .iconBtn{flex:0 0 44px;width:44px;height:44px}
-  .qToggle{margin-left:0;flex:0 0 auto}
+  .qToggle{margin-left:0;flex:0 0 auto;min-height:44px;padding:3px}
+  .qToggle button{height:36px;padding:0 8px;font-size:11px}
+  #person .personHead{flex-direction:column;align-items:center;gap:16px;margin:14px 0 24px}
+  #person .personHead .pPhoto{flex:0 0 auto;width:min(42vw,150px)}
+  #person .personHead .pInfo{width:100%;text-align:center}
+  #person .personHead h1{font-size:clamp(24px,7.8vw,34px);margin-bottom:8px}
+  #person .personHead #pBio{max-width:100%;font-size:14px;line-height:1.5;-webkit-line-clamp:5}
 }
 
 /* Android phone WebView can report a wider CSS viewport than a normal mobile browser.
@@ -1160,6 +1166,18 @@ body.mobileShell #discover{padding-top:62px!important}
 body.mobileShell #discover h1{margin-left:48px;margin-bottom:10px}
 body.mobileShell #discoverRows{margin-top:0;max-height:calc(100vh - 122px);gap:16px}
 body.mobileShell #detail .back{top:14px;left:66px!important}
+body.mobileShell #dBtns{flex-wrap:nowrap;justify-content:flex-start;gap:5px;overflow-x:auto;max-width:100%;padding:0 0 6px;scrollbar-width:none}
+body.mobileShell #dBtns::-webkit-scrollbar{display:none}
+body.mobileShell #dBtns .btn{min-width:0;white-space:nowrap;justify-content:center;padding:11px 13px;font-size:12.8px}
+body.mobileShell #dBtns .btn.primary{padding:11px 16px;flex:1 0 auto}
+body.mobileShell #dBtns .iconBtn{flex:0 0 44px;width:44px;height:44px}
+body.mobileShell .qToggle{margin-left:0;flex:0 0 auto;min-height:44px;padding:3px}
+body.mobileShell .qToggle button{height:36px;padding:0 8px;font-size:11px}
+body.mobileShell #person .personHead{flex-direction:column;align-items:center;gap:16px;margin:14px 0 24px}
+body.mobileShell #person .personHead .pPhoto{flex:0 0 auto;width:min(42vw,150px)}
+body.mobileShell #person .personHead .pInfo{width:100%;text-align:center}
+body.mobileShell #person .personHead h1{font-size:clamp(24px,7.8vw,34px);margin-bottom:8px}
+body.mobileShell #person .personHead #pBio{max-width:100%;font-size:14px;line-height:1.5;-webkit-line-clamp:5}
 
 /* Phones: tighter guide + overlay panels, smaller channel tiles. (#guide prefix keeps these
    winning over the base rules that appear later in the sheet.) */
