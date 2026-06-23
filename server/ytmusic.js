@@ -13,6 +13,7 @@ const { spawn, spawnSync } = require('child_process');
 const https = require('https');
 const YTDLP_CONCURRENCY = Math.max(1, Math.min(4, parseInt(process.env.TRIBOON_YTDLP_CONCURRENCY || '2', 10) || 2));
 const YTMUSICAPI_CONCURRENCY = Math.max(1, Math.min(3, parseInt(process.env.TRIBOON_YTMUSICAPI_CONCURRENCY || '2', 10) || 2));
+const PLAYLIST_LIST_LIMIT = Math.max(12, Math.min(60, parseInt(process.env.TRIBOON_MUSIC_PLAYLIST_LIST_LIMIT || '36', 10) || 36));
 const YTMUSIC_OAUTH_SCOPE = 'https://www.googleapis.com/auth/youtube';
 const YTMUSIC_OAUTH_CODE_URL = 'https://www.youtube.com/o/oauth2/device/code';
 const YTMUSIC_OAUTH_TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -140,24 +141,33 @@ function friendlyYtdlpError(stderr, fallback) {
 }
 
 // Run yt-dlp and collect stdout JSON (single object or NDJSON), with a hard timeout.
-function runJson(extra, { timeoutMs = 25000, cookiesPath, priority = 0 } = {}) {
-  return withYtdlpSlot(() => runJsonNow(extra, { timeoutMs, cookiesPath }), { priority });
+function runJson(extra, { timeoutMs = 25000, cookiesPath, priority = 0, maxStdoutBytes = 16e6 } = {}) {
+  return withYtdlpSlot(() => runJsonNow(extra, { timeoutMs, cookiesPath, maxStdoutBytes }), { priority });
 }
-function runJsonNow(extra, { timeoutMs = 25000, cookiesPath } = {}) {
+function runJsonNow(extra, { timeoutMs = 25000, cookiesPath, maxStdoutBytes = 16e6 } = {}) {
   return new Promise((resolve, reject) => {
     const yt = detectYtdlp();
     if (!yt) return reject(new Error('yt-dlp not installed on the server'));
     const { bin, argv } = ytArgs(extra, cookiesPath, { noPlaylist: optsNoPlaylist(extra) });
     const p = spawn(bin, argv, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     let out = '', err = '';
-    let timedOut = false;
+    let timedOut = false, tooLarge = false, outBytes = 0;
     const killer = setTimeout(() => { timedOut = true; try { p.kill('SIGKILL'); } catch {} }, timeoutMs);
-    p.stdout.on('data', (d) => { if (out.length < 16e6) out += d; });
+    p.stdout.on('data', (d) => {
+      outBytes += d.length || 0;
+      if (outBytes > maxStdoutBytes) {
+        tooLarge = true;
+        try { p.kill('SIGKILL'); } catch {}
+        return;
+      }
+      out += d;
+    });
     p.stderr.on('data', (d) => { err += d; });
     p.on('error', (e) => { clearTimeout(killer); reject(timedOut ? new Error('yt-dlp timed out') : e); });
     p.on('close', (code) => {
       clearTimeout(killer);
       if (timedOut) return reject(new Error('yt-dlp timed out'));
+      if (tooLarge) return reject(new Error('yt-dlp output too large'));
       if (code !== 0 && !out) return reject(friendlyYtdlpError(err, `yt-dlp exit ${code}`));
       resolve(out);
     });
@@ -501,12 +511,13 @@ function _peekCached(id) { return _streamCache.get(id) || null; }
 
 // The user's OWN playlists (needs cookies). yt-dlp's youtube:tab extractor resolves the YTM
 // library page when authenticated; entries are playlist links (ids often prefixed 'VL').
-async function listPlaylists({ cookiesPath, oauthToken, oauthClientId, oauthClientSecret }) {
+async function listPlaylists({ cookiesPath, oauthToken, oauthClientId, oauthClientSecret, limit = PLAYLIST_LIST_LIMIT }) {
+  const n = Math.max(1, Math.min(PLAYLIST_LIST_LIMIT, parseInt(limit, 10) || PLAYLIST_LIST_LIMIT));
   if (oauthToken && oauthClientId && oauthClientSecret) {
     const data = await runYtMusicApiRaw('library_playlists', {
-      oauthToken, clientId: oauthClientId, clientSecret: oauthClientSecret, limit: 100,
-    }, { timeoutMs: 16000 });
-    return (Array.isArray(data.rows) ? data.rows : []).map(normalizeYtMusicApiPlaylist).filter(Boolean);
+      oauthToken, clientId: oauthClientId, clientSecret: oauthClientSecret, limit: n,
+    }, { timeoutMs: 12000 });
+    return (Array.isArray(data.rows) ? data.rows : []).map(normalizeYtMusicApiPlaylist).filter(Boolean).slice(0, n);
   }
   if (!cookiesPath) throw new Error('YouTube Music is not linked');
   const sources = [
@@ -518,8 +529,12 @@ async function listPlaylists({ cookiesPath, oauthToken, oauthClientId, oauthClie
   let lastErr;
   for (const url of sources) {
     try {
-      const out = await runJson(['--flat-playlist', '--dump-single-json', url], { cookiesPath, timeoutMs: 30000 });
-      return parseListPlaylists(out);
+      const out = await runJson(['--flat-playlist', '--playlist-items', `1:${n}`, '--dump-single-json', url], {
+        cookiesPath,
+        timeoutMs: url.includes('music.youtube.com') ? 12000 : 10000,
+        maxStdoutBytes: 2e6,
+      });
+      return parseListPlaylists(out).slice(0, n);
     } catch (e) { lastErr = e; }
   }
   throw lastErr || new Error('YouTube Music returned no playlist data — re-export cookies in Preferences');

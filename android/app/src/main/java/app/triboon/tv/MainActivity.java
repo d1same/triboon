@@ -755,6 +755,25 @@ public class MainActivity extends Activity {
         return validateAndPinPersonalIptvUrl(url);
     }
 
+    private String nativeThrowableMessage(Throwable e) {
+        String msg = e == null ? "" : e.getMessage();
+        if (msg == null || msg.trim().isEmpty()) {
+            msg = e == null ? "native player failed" : e.getClass().getSimpleName();
+        }
+        return msg;
+    }
+
+    private ValidatedNativeUrl optionalNativeFallbackUrl(String raw, String label) {
+        String url = raw == null ? "" : raw.trim();
+        if (url.isEmpty()) return null;
+        try {
+            return validateNativePlaybackUrl(url);
+        } catch (Exception e) {
+            Log.w(TAG, "Skipping invalid native fallback " + label + ": " + nativeThrowableMessage(e));
+            return null;
+        }
+    }
+
     private ValidatedNativeUrl validateNativeSubtitleOverlayUrl(String raw, String pinnedHostHeader) throws IOException {
         ValidatedNativeUrl safe = validateNativePlaybackUrl(raw);
         String hostHeader = safe.hostHeader;
@@ -3129,12 +3148,16 @@ public class MainActivity extends Activity {
             detail = j.optString("detail", detail);
         } catch (Exception ignored) {
         }
-        setPhonePlaybackOrientation(true);
-        buildNativePlayerLayer();
-        releaseNativePlayer(false);
-        nativeMode = "video";
-        enterNativeFullscreenMode();
-        showNativeLoading(title, backdropUrl, stage, detail);
+        try {
+            setPhonePlaybackOrientation(true);
+            releaseNativePlayer(false);
+            buildNativePlayerLayer();
+            nativeMode = "video";
+            enterNativeFullscreenMode();
+            showNativeLoading(title, backdropUrl, stage, detail);
+        } catch (Throwable e) {
+            handleNativePlaybackStartFailure(e, "video", title, backdropUrl, "direct", "", "", 0L);
+        }
     }
 
     private void startNativePlayback(String json, String mode) {
@@ -3152,7 +3175,7 @@ public class MainActivity extends Activity {
             title = j.optString("title", title);
             String mime = j.optString("mime", "");
             String fallbackRaw = j.optString("fallbackUrl", "");
-            ValidatedNativeUrl fallbackPin = fallbackRaw.trim().isEmpty() ? null : validateNativePlaybackUrl(fallbackRaw);
+            ValidatedNativeUrl fallbackPin = optionalNativeFallbackUrl(fallbackRaw, "primary fallback");
             String fallbackUrl = fallbackPin == null ? "" : fallbackPin.connectUrl;
             String fallbackMime = j.optString("fallbackMime", "");
             backdropUrl = j.optString("backdropUrl", "");
@@ -3212,8 +3235,10 @@ public class MainActivity extends Activity {
                     if (fb == null) continue;
                     String fbUrl = fb.optString("url", "");
                     if (!fbUrl.trim().isEmpty()) {
-                        ValidatedNativeUrl fbPin = validateNativePlaybackUrl(fbUrl);
-                        addNativeFallback(fbPin.connectUrl, fb.optString("mime", ""), nativeUrl, fbPin.hostHeader);
+                        ValidatedNativeUrl fbPin = optionalNativeFallbackUrl(fbUrl, "fallback " + i);
+                        if (fbPin != null) {
+                            addNativeFallback(fbPin.connectUrl, fb.optString("mime", ""), nativeUrl, fbPin.hostHeader);
+                        }
                     }
                 }
             }
@@ -3379,21 +3404,47 @@ public class MainActivity extends Activity {
                         + nativeGuideEpoch + ")", null);
             }
             else if (!"video".equals(mode)) showNativeChrome(true);
-        } catch (Exception e) {
-            String msg = e.getMessage() == null ? "native player failed" : e.getMessage();
-            if ("video".equals(mode)) {
-                buildNativePlayerLayer();
+        } catch (Throwable e) {
+            handleNativePlaybackStartFailure(e, mode, title, backdropUrl, loadingKind,
+                    loadingQuality, loadingSource, loadingStartOffsetMs);
+        }
+    }
+
+    private void handleNativePlaybackStartFailure(Throwable e, String mode, String title, String backdropUrl,
+                                                  String loadingKind, String loadingQuality,
+                                                  String loadingSource, long loadingStartOffsetMs) {
+        String msg = nativeThrowableMessage(e);
+        Log.e(TAG, "Native playback startup failed (" + mode + "): " + msg, e);
+        try {
+            trimAndroidMemoryCaches(true);
+        } catch (Throwable ignored) {
+        }
+        if ("video".equals(mode)) {
+            try {
                 releaseNativePlayer(false);
+                buildNativePlayerLayer();
                 nativeMode = "video";
                 enterNativeFullscreenMode();
                 showNativeLoading(title, backdropUrl, "Retrying playback",
                         nativeLoadingDetailFor(mode, loadingKind, loadingQuality, loadingSource, loadingStartOffsetMs));
+            } catch (Throwable overlayError) {
+                Log.w(TAG, "Native retry overlay failed: " + nativeThrowableMessage(overlayError));
+            }
+            try {
                 web.evaluateJavascript("window.__tvNativeVideoError && __tvNativeVideoError("
                         + org.json.JSONObject.quote(msg) + ",0,0)", null);
-            } else {
+            } catch (Throwable ignored) {
+            }
+        } else {
+            try {
                 closeNativePlayback(false);
+            } catch (Throwable closeError) {
+                Log.w(TAG, "Native live close after startup failure ignored: " + nativeThrowableMessage(closeError));
+            }
+            try {
                 web.evaluateJavascript("window.__tvNativeLiveError && __tvNativeLiveError("
                         + org.json.JSONObject.quote(msg) + ")", null);
+            } catch (Throwable ignored) {
             }
         }
     }
@@ -4187,15 +4238,15 @@ public class MainActivity extends Activity {
         boolean conservative = nativeConservativePlaybackDevice();
         boolean video = "video".equals(mode);
         boolean heavyVod = video && nativeLikelyHeavyVod();
-        int minMs = video ? (conservative ? (heavyVod ? 18000 : 12000) : (heavyVod ? 24000 : 6000)) : (conservative ? 8000 : 4000);
-        int maxMs = video ? (conservative ? (heavyVod ? 90000 : 60000) : (heavyVod ? 180000 : 60000)) : 60000;
+        int minMs = video ? (conservative ? (heavyVod ? 14000 : 8000) : (heavyVod ? 16000 : 5000)) : (conservative ? 8000 : 4000);
+        int maxMs = video ? (conservative ? (heavyVod ? 60000 : 45000) : (heavyVod ? 90000 : 45000)) : 60000;
         int startMs = video ? (conservative ? (heavyVod ? 3500 : 2500) : (heavyVod ? 2500 : 900)) : (conservative ? 1800 : 700);
         int rebufferMs = video ? (conservative ? (heavyVod ? 7000 : 5000) : (heavyVod ? 6000 : 1800)) : (conservative ? 3500 : 1800);
         int targetMb = video
-                ? (conservative ? (heavyVod ? 96 : 48) : (heavyVod ? 384 : 64))
+                ? (conservative ? (heavyVod ? 48 : 32) : (heavyVod ? 128 : 48))
                 : (conservative ? 24 : 48);
         int targetBytes = targetMb * 1024 * 1024;
-        int backBufferMs = video ? (conservative ? (heavyVod ? 15000 : 8000) : (heavyVod ? 30000 : 12000)) : 3000;
+        int backBufferMs = video ? (conservative ? (heavyVod ? 8000 : 5000) : (heavyVod ? 12000 : 8000)) : 3000;
         if (video) {
             Log.i(TAG, "Native VOD buffer profile quality=" + nativeQualityLabel
                     + " sizeMB=" + nativePlaybackSizeBytes / (1024 * 1024)
@@ -5610,11 +5661,17 @@ public class MainActivity extends Activity {
         ExoPlayer player = nativePlayer;
         nativePlayer = null;
         if (player != null) {
-            if (nativePlayerView != null) nativePlayerView.setPlayer(null);
+            if (nativePlayerView != null) {
+                try {
+                    nativePlayerView.setPlayer(null);
+                } catch (Throwable e) {
+                    Log.w(TAG, "Native player view detach ignored: " + nativeThrowableMessage(e));
+                }
+            }
             try {
                 player.release();
-            } catch (RuntimeException e) {
-                Log.w(TAG, "Native player release ignored: " + e.getClass().getSimpleName());
+            } catch (Throwable e) {
+                Log.w(TAG, "Native player release ignored: " + nativeThrowableMessage(e));
             }
         }
         nativeMode = "";

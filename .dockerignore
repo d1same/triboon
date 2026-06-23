@@ -5,4 +5,8 @@ node_modules
 .git
 bench
 test
+android
+dist
+graphify-out
+*.apk
 *.md

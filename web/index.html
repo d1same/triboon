@@ -1396,7 +1396,7 @@ body.tv #heroCredits{height:16px;margin-bottom:6px;overflow:hidden}
   display:grid;grid-template-rows:auto 16px;gap:12px;padding:14px;text-align:left;position:relative;overflow:hidden;
   transition:transform .15s,border-color .15s,box-shadow .15s,background .15s}
 .themeChoice::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--preview-focus);opacity:.74}
-.themeChoice:hover,.themeChoice.focus{transform:translateY(-1px);border-color:var(--focus);box-shadow:0 0 0 2.5px var(--focusSoft)}
+.themeChoice:hover,.themeChoice.focus,.themeChoice:focus,.themeChoice:focus-visible{transform:translateY(-1px);border-color:var(--focus);box-shadow:0 0 0 2.5px var(--focusSoft);outline:none}
 .themeChoice.sel{border-color:var(--focus);box-shadow:inset 3px 0 0 var(--focus),0 0 0 2.5px var(--focusSoft)}
 .themeChoice.sel::after{content:"";position:absolute;left:14px;right:14px;bottom:10px;height:2px;border-radius:99px;background:var(--preview-focus);opacity:.9}
 .themeMeta{min-width:0;padding-left:2px;display:flex;flex-direction:column;gap:4px}
@@ -1889,14 +1889,24 @@ body:not(.tv) #settings .setGrid[data-stab="display"]{grid-template-columns:repe
 #prefs .profileAction.danger{color:#ff9b9b}
 #settings .testBtn,#prefs .testBtn{
   min-height:30px;border-radius:40px;padding:5px 12px}
+#settings .rm,#prefs .rm{
+  min-width:30px;min-height:30px;border-radius:999px;padding:4px 8px;background:rgba(34,25,52,.52);
+  border:1px solid rgba(243,239,247,.08);display:inline-flex;align-items:center;justify-content:center}
+#settings .setGrid button,#prefs .setGrid button{
+  transition:background .15s ease,color .15s ease,border-color .15s ease,box-shadow .15s ease,transform .15s ease}
 #setTabs button,#prefTabs button{
   box-shadow:none!important}
 #setTabs button.on,#prefTabs button.on{
   background:var(--gold);border-color:transparent;color:#160a04;box-shadow:none!important}
-#settings button.focus,#prefs button.focus,#settings button:focus,#prefs button:focus{
+#settings .setGrid button:not(.themeChoice):hover,#prefs .setGrid button:not(.themeChoice):hover,
+#settings .setGrid button:not(.themeChoice).focus,#prefs .setGrid button:not(.themeChoice).focus,
+#settings .setGrid button:not(.themeChoice):focus,#prefs .setGrid button:not(.themeChoice):focus,
+#settings .setGrid button:not(.themeChoice):focus-visible,#prefs .setGrid button:not(.themeChoice):focus-visible{
   background:var(--text)!important;color:#160a04!important;border-color:transparent!important;
   box-shadow:0 10px 28px rgba(0,0,0,.45)!important;outline:none!important;transform:none}
-#settings button.focus svg,#prefs button.focus svg,#settings button:focus svg,#prefs button:focus svg{
+#settings .setGrid button:not(.themeChoice).focus svg,#prefs .setGrid button:not(.themeChoice).focus svg,
+#settings .setGrid button:not(.themeChoice):focus svg,#prefs .setGrid button:not(.themeChoice):focus svg,
+#settings .setGrid button:not(.themeChoice):focus-visible svg,#prefs .setGrid button:not(.themeChoice):focus-visible svg{
   color:currentColor}
 .ytmConnect{display:grid;grid-template-columns:auto minmax(0,1fr);gap:14px;align-items:start;padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(22,16,32,.56)}
 .ytmConnectIcon{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;background:var(--gold);color:var(--onAccent);border:1px solid var(--line)}
@@ -2570,7 +2580,7 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
       <div class="sizePick" id="prefSubtitleMode">
         <button data-submode="manual">Choose per title</button><button data-submode="always">Always show subtitles</button>
       </div>
-      <div class="hint">Always uses the selected subtitle language, or English when no subtitle language is selected.</div>
+      <div class="hint">Choose per title never starts captions automatically. Always uses the selected subtitle language, or English when no subtitle language is selected.</div>
     </div>
     <div class="panel"><h2>Playback</h2>
       <p>Auto-play starts the next episode after a 10-second countdown — off shows the
@@ -8006,10 +8016,10 @@ function concreteSubtitleRel(rel) {
 }
 function startupSubtitleRelFor(p, saved = loadSubChoice()) {
   if (!p || p._subtitleDisabledThisSession) return '';
-  // Explicit per-title choices win. The profile "always show subtitles" setting then
-  // picks the preferred online language at playback start, even if the user had saved Off.
+  // Manual mode is truly manual at startup; Always mode can reuse a saved online
+  // subtitle choice, otherwise it picks the preferred online language.
+  if (prefSubtitleMode() !== 'always') return '';
   if (subtitleRelPlayable(p, saved)) return saved;
-  if (saved === 'off' && prefSubtitleMode() !== 'always') return '';
   return autoSubtitleRelFor(p);
 }
 function subtitleRequestParams(it, lang, streamToken) {
@@ -11528,10 +11538,10 @@ $('chGuide').addEventListener('click', togglePlayerGuide);
 // Music playback is section-scoped: leaving Music stops the audio instead of carrying a
 // persistent mini-player across movies, TV, settings, or Live TV.
 const mAudio = $('musicAudio');
-const MUSIC_PAGE_SIZE = 50;
+const MUSIC_PAGE_SIZE = 24;
+const MUSIC_PLAYLIST_INITIAL = 12;
 function mmss(s) { s = Math.max(0, Math.round(s || 0)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; }
 const MUSIC_CHART_DEFS = [
-  { id: 'daily', title: 'Daily chart', note: 'Top songs today', query: 'top songs today' },
   { id: 'weekly', title: 'Weekly chart', note: 'Top songs this week', query: 'top songs this week' },
 ];
 const MUSIC_HOME_FALLBACK_FEEDS = [
@@ -11539,26 +11549,13 @@ const MUSIC_HOME_FALLBACK_FEEDS = [
     { title: 'Top playlists this week', sub: 'Fresh shared mixes', query: 'top playlists this week music', coverFeed: 'top playlists this week music', icon: 'chart', grad: 'mGrad2' },
     { title: 'New Music Mix', sub: 'Fresh songs to sample first', query: 'new music mix', coverFeed: 'new music mix', icon: 'spark', grad: 'mGrad1' },
     { title: 'Viral hits', sub: 'Songs moving fast right now', query: 'viral hits music this week', coverFeed: 'viral hits music this week', icon: 'spark', grad: 'mGrad3' },
-    { title: 'Weekend playlist', sub: 'Upbeat picks for later', query: 'weekend party playlist', coverFeed: 'weekend party playlist', icon: 'music', grad: 'mGrad4' },
-  ] },
-  { id: 'seasonal-mixes', title: 'Seasonal mixes', kind: 'feeds', items: [
-    { title: 'Summer Mix', sub: 'Seasonal songs for now', query: 'summer music mix', coverFeed: 'summer music mix', icon: 'spark', grad: 'mGrad1' },
-    { title: 'Summer Hits', sub: 'Popular seasonal picks', query: 'summer music mix hits', coverFeed: 'summer music mix hits', icon: 'chart', grad: 'mGrad2' },
-    { title: 'Summer Chill', sub: 'Softer seasonal listening', query: 'summer music mix chill', coverFeed: 'summer music mix chill', icon: 'smile', grad: 'mGrad3' },
-    { title: 'Summer Party', sub: 'More energy, less searching', query: 'summer music mix party', coverFeed: 'summer music mix party', icon: 'music', grad: 'mGrad4' },
-  ] },
-  { id: 'moods', title: 'Moods & moments', kind: 'feeds', items: [
-    { title: 'Focus', sub: 'Clean background energy', query: 'focus music mix', coverFeed: 'focus music mix', icon: 'smile', grad: 'mGrad2' },
-    { title: 'Chill', sub: 'Low-key listening', query: 'chill music mix', coverFeed: 'chill music mix', icon: 'smile', grad: 'mGrad3' },
-    { title: 'Workout', sub: 'High-energy tracks', query: 'workout music mix', coverFeed: 'workout music mix', icon: 'music', grad: 'mGrad1' },
-    { title: 'Road Trip', sub: 'Long-drive songs', query: 'road trip music mix', coverFeed: 'road trip music mix', icon: 'music', grad: 'mGrad4' },
   ] },
 ];
 async function loadMusicHomeFallback() {
   const charts = [];
   for (const def of MUSIC_CHART_DEFS) {
     try {
-      const r = await api('/api/music/search?q=' + encodeURIComponent(def.query) + '&limit=16');
+      const r = await api('/api/music/search?q=' + encodeURIComponent(def.query) + '&limit=12');
       charts.push({ ...def, results: r.results || [] });
     } catch {}
   }
@@ -11568,8 +11565,8 @@ async function loadMusicHomeFallback() {
       { id: 'personal', title: 'Your playlists', kind: 'personal' },
       ...MUSIC_HOME_FALLBACK_FEEDS,
       ...charts.filter((c) => c.results && c.results.length).map((c) => ({
-        id: c.id === 'daily' ? 'trending-now' : 'top-songs-week',
-        title: c.id === 'daily' ? 'Trending now' : 'Top songs this week',
+        id: 'top-songs-week',
+        title: 'Top songs this week',
         note: c.note,
         kind: 'tracks',
         results: c.results,
@@ -11597,12 +11594,13 @@ function loadMusic() {
   if (S.ytmPlaylists === undefined) {
     S.ytmPlaylists = null; // in flight
     api('/api/music/playlists').then((r) => {
+      S.musicPlaylistLimit = MUSIC_PLAYLIST_INITIAL;
       S.ytmPlaylists = r.linked ? (r.playlists || []) : false; // false = not linked
       renderMusicBrowse();
       requestAnimationFrame(() => {
         if (S.view === 'music' && S.zone !== 'rail' && !$('musicSearch').value.trim()) focusContent();
       });
-    }).catch(() => { S.ytmPlaylists = false; });
+    }).catch(() => { S.ytmPlaylists = false; renderMusicBrowse(); });
   } else if (S.ytmPlaylists === null) {
     S.ytmPlaylists = undefined; // a re-entry after link/unlink cleared it mid-flight — refetch
     return loadMusic();
@@ -11953,10 +11951,10 @@ function openMusicConnect() {
 }
 async function hydrateMusicHomeCovers() {
   S.musicCoverCache = S.musicCoverCache || {};
-  const cards = [...document.querySelectorAll('#musicBrowse .mCard[data-cover-key]')].slice(0, 12);
+  const cards = [...document.querySelectorAll('#musicBrowse .mCard[data-cover-key]')].slice(0, 6);
   let active = 0, idx = 0;
   const run = () => {
-    while (active < 5 && idx < cards.length) {
+    while (active < 2 && idx < cards.length) {
       const card = cards[idx++], key = card.dataset.coverKey;
       if (!key || card.dataset.coverDone) continue;
       const cached = S.musicCoverCache[key];
@@ -12031,11 +12029,23 @@ function renderMusicBrowse() {
   };
   const yours = addShelf('Your playlists', 'topTiles', 'Liked Music and your YouTube Music playlists stay first.');
   if (Array.isArray(S.ytmPlaylists)) {
-    addTile(yours, { title: 'Liked Music', sub: 'Your YouTube Music favorites', grad: 'mGrad1', icon: 'heart', coverPlaylist: 'LM' }, 'mCard mPl',
+    if (!Number.isFinite(S.musicPlaylistLimit)) S.musicPlaylistLimit = MUSIC_PLAYLIST_INITIAL;
+    addTile(yours, { title: 'Liked Music', sub: 'Your YouTube Music favorites', grad: 'mGrad1', icon: 'heart' }, 'mCard mPl',
       () => startMusicPlaylist('LM', 'Liked Music'));
-    S.ytmPlaylists.slice(0, 30).forEach((p, i) =>
-      addTile(yours, { title: p.title, sub: p.count ? `${p.count} tracks` : 'Playlist', grad: `mGrad${(i % 4) + 1}`, icon: 'music', coverPlaylist: p.id }, 'mCard mPl',
+    S.ytmPlaylists.slice(0, S.musicPlaylistLimit).forEach((p, i) =>
+      addTile(yours, { title: p.title, sub: p.count ? `${p.count} tracks` : 'Playlist', grad: `mGrad${(i % 4) + 1}`, icon: 'music', coverUrl: p.cover || '' }, 'mCard mPl',
         () => startMusicPlaylist(p.id, p.title, { count: p.count })));
+    if (S.ytmPlaylists.length > S.musicPlaylistLimit) {
+      addTile(yours, {
+        title: 'More playlists',
+        sub: `${S.ytmPlaylists.length - S.musicPlaylistLimit} more`,
+        grad: 'mGrad4',
+        icon: 'music',
+      }, 'mCard mMore', () => {
+        S.musicPlaylistLimit = Math.min(S.ytmPlaylists.length, (S.musicPlaylistLimit || MUSIC_PLAYLIST_INITIAL) + MUSIC_PLAYLIST_INITIAL);
+        renderMusicBrowse();
+      });
+    }
   } else if (S.ytmPlaylists === null) {
     yours.innerHTML = '<div class="mEmpty">Loading your YouTube Music library...</div>';
   } else {
@@ -12044,7 +12054,7 @@ function renderMusicBrowse() {
   }
   if (S.musicHome === null) {
     const loading = addShelf('For you');
-    loading.innerHTML = '<div class="mEmpty">Loading weekly and seasonal mixes...</div>';
+    loading.innerHTML = '<div class="mEmpty">Loading weekly music picks...</div>';
   } else if (S.musicHome === false) {
     const unavailable = addShelf('For you');
     unavailable.innerHTML = '<div class="mEmpty">Music discovery is unavailable right now.</div>';
@@ -12351,6 +12361,7 @@ function renderThemePicker(elId) {
     b.dataset.theme = name;
     b.title = `${t.label} theme`;
     b.setAttribute('aria-label', `${t.label} theme`);
+    b.setAttribute('aria-pressed', name === cur ? 'true' : 'false');
     b.style.setProperty('--preview-ink', t.ink);
     b.style.setProperty('--preview-surface', t.surface);
     b.style.setProperty('--preview-accent', t.c);
@@ -12363,7 +12374,7 @@ function renderThemePicker(elId) {
     b.addEventListener('click', () => {
       try { localStorage.setItem('triboon.theme', name); } catch {}
       applyTheme();
-      document.querySelectorAll('#themePick .themeChoice,#themePickSet .themeChoice').forEach((x) => x.classList.toggle('sel', x.dataset.theme === name));
+      syncChoiceButtons('#themePick .themeChoice,#themePickSet .themeChoice', (x) => x.dataset.theme === name);
       toast(`Theme: ${t.label}`);
     });
     tp.appendChild(b);
@@ -12423,11 +12434,18 @@ function openApkUpdate(kind) {
   } catch {}
   window.open(url, '_blank', 'noopener');
 }
+function syncChoiceButtons(selector, isSelected) {
+  document.querySelectorAll(selector).forEach((b) => {
+    const selected = !!isSelected(b);
+    b.classList.toggle('sel', selected);
+    b.setAttribute('aria-pressed', selected ? 'true' : 'false');
+  });
+}
 function openPrefs() { // populates the Preferences PAGE (it's a view now, not a popup)
   const cz = applyCoverSize();
-  document.querySelectorAll('#prefCoverSize button').forEach((b) => b.classList.toggle('sel', b.dataset.sz === cz));
+  syncChoiceButtons('#prefCoverSize button', (b) => b.dataset.sz === cz);
   const ts = applyContentTextSize();
-  document.querySelectorAll('#prefContentTextSize button').forEach((b) => b.classList.toggle('sel', b.dataset.ts === ts));
+  syncChoiceButtons('#prefContentTextSize button', (b) => b.dataset.ts === ts);
   renderThemePicker('themePick');
   // Preferred playback languages
   const langOpts = (kind) => {
@@ -12441,14 +12459,11 @@ function openPrefs() { // populates the Preferences PAGE (it's a view now, not a
   $('prefALang').innerHTML = langOpts('alang');
   $('prefSLang').innerHTML = langOpts('slang');
   // Playback: auto-play + caption size pickers reflect the saved choice
-  document.querySelectorAll('#prefAutoplay button').forEach((b) =>
-    b.classList.toggle('sel', b.dataset.ap === (prefAutoplay() ? '1' : '0')));
-  document.querySelectorAll('#prefSubtitleMode button').forEach((b) =>
-    b.classList.toggle('sel', b.dataset.submode === prefSubtitleMode()));
+  syncChoiceButtons('#prefAutoplay button', (b) => b.dataset.ap === (prefAutoplay() ? '1' : '0'));
+  syncChoiceButtons('#prefSubtitleMode button', (b) => b.dataset.submode === prefSubtitleMode());
   const ss = applySubSize();
-  document.querySelectorAll('#prefSubSize button').forEach((b) => b.classList.toggle('sel', b.dataset.ss === ss));
-  document.querySelectorAll('#prefScreensaverDelay button').forEach((b) =>
-    b.classList.toggle('sel', +b.dataset.ssv === prefScreensaverDelaySeconds()));
+  syncChoiceButtons('#prefSubSize button', (b) => b.dataset.ss === ss);
+  syncChoiceButtons('#prefScreensaverDelay button', (b) => +b.dataset.ssv === prefScreensaverDelaySeconds());
   // Live TV preferences stay discoverable even before a playlist exists.
   $('prefTabLive').style.display = '';
   renderPrefPersonalIptv();
@@ -12478,6 +12493,7 @@ function renderYtmConnectBox(box, st) {
     <div class="hint">Connected with ${esc(sourceLabel)}. If playlists stop loading later, run the setup again. Triboon keeps credentials encrypted and never shows them back.</div>`;
     box.querySelector('#ytmUnlink').addEventListener('click', async () => {
       await api('/api/music/unlink', { method: 'POST', body: {} });
+      S.musicPlaylistLimit = MUSIC_PLAYLIST_INITIAL;
       S.ytmPlaylists = null; toast('YouTube Music unlinked'); renderYtmBox();
     });
     box.querySelector('#ytmRelink').addEventListener('click', () => st.oauthAvailable ? startYtmOAuth(box) : renderYtmPaste(box, { guided: true }));
@@ -12489,7 +12505,7 @@ function renderYtmConnectBox(box, st) {
     : (st.oauthConfigured ? 'Google sign-in needs ytmusicapi on the server.' : 'Ask the admin to save a YouTube Music OAuth app in Settings.');
   box.innerHTML = `<div class="ytmConnect">
     <div class="ytmConnectIcon">${musicIcon('music')}</div>
-    <div><h3>Connect YouTube Music</h3><p>Bring in Liked Music and your playlists. Public search, weekly picks, and seasonal mixes work even before you connect.</p>
+    <div><h3>Connect YouTube Music</h3><p>Bring in Liked Music and your playlists. Public search and weekly picks work even before you connect.</p>
       <div class="hint" style="margin:8px 0">${esc(oauthHint)}</div>
       <div class="ytmConnectActions">
         <button class="btn primary focusable" id="ytmStartLink">${canOAuth ? 'Connect with Google' : 'Set up account'}</button>
@@ -12553,6 +12569,7 @@ function renderYtmImportBox(box, opts = {}) {
     if (!text.trim()) return toast('Choose the YouTube Music session file first, or use Manual paste');
     try {
       await api('/api/music/link', { method: 'POST', body: { cookies: text } });
+      S.musicPlaylistLimit = MUSIC_PLAYLIST_INITIAL;
       S.ytmPlaylists = null;
       toast('YouTube Music connected - your playlists are on the Music page');
       renderYtmBox();
@@ -12585,6 +12602,7 @@ function renderYtmOAuthPending(box, r) {
       const p = await api('/api/music/oauth/poll', { method: 'POST', body: {} });
       if (p && p.status === 'linked') {
         clearYtmOAuthPoll();
+        S.musicPlaylistLimit = MUSIC_PLAYLIST_INITIAL;
         S.ytmPlaylists = null;
         toast('YouTube Music connected');
         return renderYtmBox();
@@ -12907,12 +12925,12 @@ function renderMenuMgr(restore = null) {
 }
 document.querySelectorAll('#prefCoverSize button').forEach((b) => b.addEventListener('click', () => {
   try { localStorage.setItem('triboon.cover', b.dataset.sz); } catch {}
-  document.querySelectorAll('#prefCoverSize button').forEach((x) => x.classList.toggle('sel', x === b));
+  syncChoiceButtons('#prefCoverSize button', (x) => x === b);
   applyCoverSize();
 }));
 document.querySelectorAll('#prefContentTextSize button').forEach((b) => b.addEventListener('click', () => {
   try { localStorage.setItem('triboon.textsize', b.dataset.ts); } catch {}
-  document.querySelectorAll('#prefContentTextSize button').forEach((x) => x.classList.toggle('sel', x === b));
+  syncChoiceButtons('#prefContentTextSize button', (x) => x === b);
   applyContentTextSize();
   toast(b.dataset.ts === 'L' ? 'Content text is larger' : (b.dataset.ts === 'S' ? 'Content text is compact' : 'Content text is standard'));
 }));
@@ -12928,22 +12946,22 @@ function applySubSize() {
 applySubSize(); // boot: captions render at the saved size from the first cue
 document.querySelectorAll('#prefAutoplay button').forEach((b) => b.addEventListener('click', () => {
   try { localStorage.setItem('triboon.autoplay', b.dataset.ap); } catch {}
-  document.querySelectorAll('#prefAutoplay button').forEach((x) => x.classList.toggle('sel', x === b));
+  syncChoiceButtons('#prefAutoplay button', (x) => x === b);
   toast(b.dataset.ap === '1' ? 'Next episode will auto-play' : 'Auto-play off — Up Next waits for you');
 }));
 document.querySelectorAll('#prefSubtitleMode button').forEach((b) => b.addEventListener('click', () => {
   savePrefSubtitleMode(b.dataset.submode);
-  document.querySelectorAll('#prefSubtitleMode button').forEach((x) => x.classList.toggle('sel', x === b));
+  syncChoiceButtons('#prefSubtitleMode button', (x) => x === b);
   toast(b.dataset.submode === 'always' ? 'Subtitles will start automatically' : 'Subtitles will stay manual');
 }));
 document.querySelectorAll('#prefSubSize button').forEach((b) => b.addEventListener('click', () => {
   try { localStorage.setItem('triboon.subsize', b.dataset.ss); } catch {}
-  document.querySelectorAll('#prefSubSize button').forEach((x) => x.classList.toggle('sel', x === b));
+  syncChoiceButtons('#prefSubSize button', (x) => x === b);
   applySubSize();
 }));
 document.querySelectorAll('#prefScreensaverDelay button').forEach((b) => b.addEventListener('click', () => {
   savePrefScreensaverDelay(+b.dataset.ssv);
-  document.querySelectorAll('#prefScreensaverDelay button').forEach((x) => x.classList.toggle('sel', x === b));
+  syncChoiceButtons('#prefScreensaverDelay button', (x) => x === b);
   resetScreensaverIdle();
   toast(+b.dataset.ssv ? `Screensaver starts after ${b.textContent}` : 'Screensaver disabled');
 }));
@@ -13840,7 +13858,7 @@ async function refreshSettings() {
     $('xtPass').placeholder = s.iptvMode === 'xtream' && s.xtHost ? 'password saved ✓ — type to replace' : 'password';
     $('epgUrl').placeholder = s.epgUrl ? `saved ✓ (${s.epgUrl}) — paste to replace` : 'XMLTV EPG url (optional)';
     const cz = applyCoverSize();
-    document.querySelectorAll('#coverSize button').forEach((b) => b.classList.toggle('sel', b.dataset.sz === cz));
+    syncChoiceButtons('#coverSize button', (b) => b.dataset.sz === cz);
     renderThemePicker('themePickSet');
     const users = await api('/api/users');
     // Live TV share-with checklist (same model as library sharing).
@@ -13904,7 +13922,7 @@ async function refreshSettings() {
 // Cover-size preference (per device).
 document.querySelectorAll('#coverSize button').forEach((b) => b.addEventListener('click', () => {
   try { localStorage.setItem('triboon.cover', b.dataset.sz); } catch {}
-  document.querySelectorAll('#coverSize button').forEach((x) => x.classList.toggle('sel', x === b));
+  syncChoiceButtons('#coverSize button', (x) => x === b);
   applyCoverSize();
 }));
 $('perfTest').addEventListener('click', async () => {

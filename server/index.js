@@ -496,6 +496,7 @@ async function validateAndPinIptvUrl(raw, label = 'IPTV URL') {
   const host = cleanUrlHostForPolicy(u.hostname);
   if (isPrivateIptvHost(host)) throw iptvPolicyError(label, 'private, loopback, or link-local hosts are blocked by default');
   let picked = null;
+  let safeHit = null;
   if (net.isIP(host)) {
     picked = { address: host, family: net.isIP(host) };
   } else {
@@ -510,7 +511,7 @@ async function validateAndPinIptvUrl(raw, label = 'IPTV URL') {
       iptvUrlSafetyCache.set(host, { expiresAt: Date.now() + IPTV_PRIVATE_URL_CACHE_MS, addrs });
       if (iptvUrlSafetyCache.size > 1000) iptvUrlSafetyCache.clear();
     }
-    const safeHit = iptvUrlSafetyCache.get(host);
+    safeHit = iptvUrlSafetyCache.get(host);
     picked = safeHit && Array.isArray(safeHit.addrs) ? pickCachedIptvAddress(host) : null;
   }
   return {
@@ -2906,47 +2907,23 @@ async function nextWatchEpisodes(uid, profile = 'default') {
 }
 
 const MUSIC_CHARTS = [
-  { id: 'daily', title: 'Daily chart', note: 'Top songs today', query: 'top songs today', limit: 16 },
-  { id: 'weekly', title: 'Weekly chart', note: 'Top songs this week', query: 'top songs this week', limit: 16 },
+  { id: 'weekly', title: 'Weekly chart', note: 'Top songs this week', query: 'top songs this week', limit: 12 },
 ];
 const MUSIC_HOME_WEEKLY_FEEDS = [
   { id: 'top-playlists-week', title: 'Top playlists this week', sub: 'Fresh shared mixes and creator queues', query: 'top playlists this week music', coverFeed: 'top playlists this week music', icon: 'chart', grad: 'mGrad2' },
   { id: 'new-music-mix', title: 'New Music Mix', sub: 'Fresh songs to sample first', query: 'new music mix', coverFeed: 'new music mix', icon: 'spark', grad: 'mGrad1' },
   { id: 'viral-hits', title: 'Viral hits', sub: 'Songs moving fast right now', query: 'viral hits music this week', coverFeed: 'viral hits music this week', icon: 'spark', grad: 'mGrad3' },
-  { id: 'weekend-party', title: 'Weekend playlist', sub: 'Upbeat picks for later', query: 'weekend party playlist', coverFeed: 'weekend party playlist', icon: 'music', grad: 'mGrad4' },
 ];
-const MUSIC_HOME_MOOD_FEEDS = [
-  { id: 'focus', title: 'Focus', sub: 'Clean background energy', query: 'focus music mix', coverFeed: 'focus music mix', icon: 'smile', grad: 'mGrad2' },
-  { id: 'chill', title: 'Chill', sub: 'Low-key listening', query: 'chill music mix', coverFeed: 'chill music mix', icon: 'smile', grad: 'mGrad3' },
-  { id: 'workout', title: 'Workout', sub: 'High-energy tracks', query: 'workout music mix', coverFeed: 'workout music mix', icon: 'music', grad: 'mGrad1' },
-  { id: 'road-trip', title: 'Road Trip', sub: 'Long-drive songs', query: 'road trip music mix', coverFeed: 'road trip music mix', icon: 'music', grad: 'mGrad4' },
-];
-function musicSeason(now = new Date()) {
-  const m = now.getMonth();
-  if (m >= 2 && m <= 4) return { id: 'spring', title: 'Spring Mix', query: 'spring music mix' };
-  if (m >= 5 && m <= 7) return { id: 'summer', title: 'Summer Mix', query: 'summer music mix' };
-  if (m >= 8 && m <= 10) return { id: 'fall', title: 'Fall Mix', query: 'fall music mix' };
-  return { id: 'winter', title: 'Winter Mix', query: 'winter music mix' };
-}
-function musicSeasonFeeds(now = new Date()) {
-  const season = musicSeason(now);
-  return [
-    { id: `${season.id}-mix`, title: season.title, sub: 'Seasonal songs for now', query: season.query, coverFeed: season.query, icon: 'spark', grad: 'mGrad1' },
-    { id: `${season.id}-hits`, title: `${season.title} Hits`, sub: 'Popular seasonal picks', query: `${season.query} hits`, coverFeed: `${season.query} hits`, icon: 'chart', grad: 'mGrad2' },
-    { id: `${season.id}-chill`, title: `${season.title} Chill`, sub: 'Softer seasonal listening', query: `${season.query} chill`, coverFeed: `${season.query} chill`, icon: 'smile', grad: 'mGrad3' },
-    { id: `${season.id}-party`, title: `${season.title} Party`, sub: 'More energy, less searching', query: `${season.query} party`, coverFeed: `${season.query} party`, icon: 'music', grad: 'mGrad4' },
-  ];
-}
-function musicHomeFeedShelves(now = new Date()) {
+function musicHomeFeedShelves() {
   return [
     { id: 'personal', title: 'Your playlists', kind: 'personal', note: 'Liked Music and linked YouTube Music playlists always render first.' },
-    { id: 'weekly-playlists', title: 'Top playlists this week', kind: 'feeds', note: 'Playlist-style mixes generated from YouTube Music search.', refresh: 'weekly', items: MUSIC_HOME_WEEKLY_FEEDS },
-    { id: 'seasonal-mixes', title: 'Seasonal mixes', kind: 'feeds', note: 'Updated by the current season.', refresh: 'weekly', items: musicSeasonFeeds(now) },
-    { id: 'moods', title: 'Moods & moments', kind: 'feeds', note: 'Quick mixes for common listening modes.', refresh: 'daily', items: MUSIC_HOME_MOOD_FEEDS },
+    { id: 'weekly-playlists', title: 'Top playlists this week', kind: 'feeds', note: 'Weekly picks only, kept short so Music opens quickly.', refresh: 'weekly', items: MUSIC_HOME_WEEKLY_FEEDS },
   ];
 }
 const musicChartCache = new Map(); // id -> { rows, expiresAt, inflight }
 const musicSearchCache = new Map(); // key -> { rows, expiresAt, inflight }
+const musicPlaylistListCache = new Map(); // user/source -> { playlists, expiresAt, inflight }
+const MUSIC_PLAYLIST_LIST_LIMIT = Math.max(12, Math.min(60, parseInt(process.env.TRIBOON_MUSIC_PLAYLIST_LIST_LIMIT || '36', 10) || 36));
 function nextMusicChartRefresh(id, now = new Date()) {
   const d = new Date(now);
   if (id === 'weekly') {
@@ -3036,6 +3013,35 @@ function clearYtmIssue(uid, kind) {
     }
     return next;
   });
+}
+function musicPlaylistListCacheKey(uid, source) {
+  return `${uid || 'anon'}:${source || 'none'}`;
+}
+function clearMusicPlaylistCaches(uid) {
+  for (const key of [...musicPlaylistListCache.keys()]) {
+    if (key.startsWith(`${uid}:`)) musicPlaylistListCache.delete(key);
+  }
+}
+async function loadUserMusicPlaylists(uid, source, loader) {
+  const key = musicPlaylistListCacheKey(uid, source);
+  const now = Date.now();
+  const hit = musicPlaylistListCache.get(key);
+  if (hit && hit.playlists && now < hit.expiresAt) return hit.playlists;
+  if (hit && hit.inflight) return hit.inflight;
+  const inflight = Promise.resolve()
+    .then(loader)
+    .then((playlists) => {
+      const clean = (playlists || []).filter((p) => p && p.id && p.title).slice(0, MUSIC_PLAYLIST_LIST_LIMIT);
+      musicPlaylistListCache.set(key, { playlists: clean, expiresAt: Date.now() + 15 * 60 * 1000 });
+      while (musicPlaylistListCache.size > 100) musicPlaylistListCache.delete(musicPlaylistListCache.keys().next().value);
+      return clean;
+    })
+    .catch((e) => {
+      if (hit && hit.playlists) return hit.playlists;
+      throw e;
+    });
+  musicPlaylistListCache.set(key, { ...(hit || {}), inflight });
+  return inflight;
 }
 async function loadMusicChartResponses(uid, { wait = true } = {}) {
   return (await Promise.all(MUSIC_CHARTS.map(async (def) => {
@@ -5346,8 +5352,8 @@ Object.assign(H, {
     const chartShelves = await loadMusicChartResponses(ctx.user.id, { wait: false });
     const chartHomeShelves = chartShelves.map((s) => ({
       ...s,
-      id: s.id === 'daily' ? 'trending-now' : 'top-songs-week',
-      title: s.id === 'daily' ? 'Trending now' : 'Top songs this week',
+      id: 'top-songs-week',
+      title: 'Top songs this week',
     }));
     const shelves = [
       ...musicHomeFeedShelves(),
@@ -5502,6 +5508,7 @@ Object.assign(H, {
           ytOAuthIssues: oIssues,
         };
       });
+      clearMusicPlaylistCaches(ctx.user.id);
       dropCookieFile(ctx.user.id);
       send(ctx.res, 200, { status: 'linked', linked: true });
     } catch (e) {
@@ -5530,6 +5537,7 @@ Object.assign(H, {
       const oauthIssues = { ...(s.ytOAuthIssues || {}) }; delete oauthIssues[ctx.user.id];
       return { ...s, ytCookies: { ...(s.ytCookies || {}), [ctx.user.id]: text }, ytCookieIssues: issues, ytOAuthTokens: oauth, ytOAuthIssues: oauthIssues };
     });
+    clearMusicPlaylistCaches(ctx.user.id);
     dropCookieFile(ctx.user.id); // re-materialize with the fresh text on next use
     send(ctx.res, 200, { linked: true });
   },
@@ -5542,6 +5550,7 @@ Object.assign(H, {
       return { ...s, ytCookies: all, ytCookieIssues: issues, ytOAuthTokens: oauth, ytOAuthIssues: oauthIssues };
     });
     ytOauthPending.delete(ctx.user.id);
+    clearMusicPlaylistCaches(ctx.user.id);
     dropCookieFile(ctx.user.id);
     send(ctx.res, 200, { linked: false });
   },
@@ -5559,14 +5568,16 @@ Object.assign(H, {
     const cookies = oauth ? null : cookiesFor(ctx.user.id);
     if (!oauth && !cookies) return send(ctx.res, 200, { linked: false, playlists: [] });
     try {
-      const playlists = await ytmusic.listPlaylists({
+      const source = oauth ? 'oauth' : 'account';
+      const playlists = await loadUserMusicPlaylists(ctx.user.id, source, () => ytmusic.listPlaylists({
         cookiesPath: cookies,
         oauthToken: oauth && oauth.token,
         oauthClientId: oauth && oauth.client.clientId,
         oauthClientSecret: oauth && oauth.client.clientSecret,
-      });
+        limit: MUSIC_PLAYLIST_LIST_LIMIT,
+      }));
       clearYtmIssue(ctx.user.id, oauth ? 'oauth' : 'cookie');
-      send(ctx.res, 200, { linked: true, linkSource: oauth ? 'oauth' : 'account', playlists });
+      send(ctx.res, 200, { linked: true, linkSource: source, playlists });
     } catch (e) {
       if (oauth) {
         settings.update((s) => ({

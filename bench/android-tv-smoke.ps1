@@ -150,7 +150,9 @@ if ($LiveZap) {
   const token = localStorage.getItem('triboon.token') || '';
   if (!token) return { ok: false, error: 'missing token' };
   const j = await fetch('/api/iptv/channels', { headers: { authorization: 'Bearer ' + token } }).then((r) => r.json());
-  const list = (j.channels || []).slice(0, 12).map(liveItemForPlayerGuide).filter(Boolean);
+  const all = (j.channels || []).map(liveItemForPlayerGuide).filter(Boolean);
+  const videoLike = all.filter((x) => !/\[radio\]|\bradio\b|offline/i.test([x.title || '', x.genre || '', x.group || ''].join(' ')));
+  const list = (videoLike.length ? videoLike : all).slice(0, 12);
   S.liveChannels = j.channels || [];
   S.liveList = list;
   const it = list[0];

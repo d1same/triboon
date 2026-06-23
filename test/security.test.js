@@ -2055,6 +2055,12 @@ test('music: Google device OAuth links a user and loads playlists through ytmusi
     assert.strictEqual(playlists.status, 200, playlists.raw);
     assert.strictEqual(playlists.json.linkSource, 'oauth');
     assert.deepStrictEqual(playlists.json.playlists, [{ id: 'PLROAD123', title: 'Road Mix', count: 12, cover: null, source: 'ytmusicapi' }]);
+    const playlistsAgain = await httpJson(srv.port, 'GET', '/api/music/playlists', null, admin);
+    assert.strictEqual(playlistsAgain.status, 200, playlistsAgain.raw);
+    assert.strictEqual(calls.filter((c) => c.action === 'library_playlists').length, 1,
+      'linked Music playlist list should be cached across quick re-entries');
+    assert.strictEqual(calls.find((c) => c.action === 'library_playlists').body.limit, 36,
+      'linked Music playlist list should stay bounded so the Music page opens quickly');
 
     const page = await httpJson(srv.port, 'GET', '/api/music/playlist/PLROAD123?limit=2&offset=1', null, admin);
     assert.strictEqual(page.status, 200, page.raw);
@@ -2242,15 +2248,14 @@ test('music: home shelves and charts are cached and tokenized', async () => {
     };
     const first = await httpJson(srv.port, 'GET', '/api/music/charts', null, admin);
     assert.strictEqual(first.status, 200, first.raw);
-    assert.deepStrictEqual(first.json.charts.map((c) => c.id), ['daily', 'weekly']);
+    assert.deepStrictEqual(first.json.charts.map((c) => c.id), ['weekly']);
     assert.strictEqual(first.json.charts[0].results.length, 2);
-    assert.ok(/^\/api\/music\/stream\/DDDDDDDDDDD\?t=/.test(first.json.charts[0].results[0].streamUrl));
-    assert.ok(/^\/api\/music\/stream\/WWWWWWWWWWW\?t=/.test(first.json.charts[1].results[0].streamUrl));
+    assert.ok(/^\/api\/music\/stream\/WWWWWWWWWWW\?t=/.test(first.json.charts[0].results[0].streamUrl));
 
     const second = await httpJson(srv.port, 'GET', '/api/music/charts', null, admin);
     assert.strictEqual(second.status, 200, second.raw);
-    assert.strictEqual(calls.length, 2, 'daily and weekly chart searches are cached after the first request');
-    assert.ok(/^\/api\/music\/stream\/DDDDDDDDDDD\?t=/.test(second.json.charts[0].results[0].streamUrl),
+    assert.strictEqual(calls.length, 1, 'weekly chart searches are cached after the first request');
+    assert.ok(/^\/api\/music\/stream\/WWWWWWWWWWW\?t=/.test(second.json.charts[0].results[0].streamUrl),
       'cached chart tracks still receive tokenized stream URLs in the response');
 
     const home = await httpJson(srv.port, 'GET', '/api/music/home', null, admin);
@@ -2258,11 +2263,18 @@ test('music: home shelves and charts are cached and tokenized', async () => {
     assert.strictEqual(home.json.shelves[0].id, 'personal', 'personal playlists are the first Music Home shelf');
     assert.ok(home.json.shelves.find((s) => s.id === 'weekly-playlists' && s.kind === 'feeds'),
       'Music Home exposes weekly playlist-style discovery');
-    assert.ok(home.json.shelves.find((s) => s.id === 'seasonal-mixes' && s.kind === 'feeds'),
-      'Music Home exposes seasonal mixes');
-    const trending = home.json.shelves.find((s) => s.id === 'trending-now');
-    assert.ok(trending && /^\/api\/music\/stream\/DDDDDDDDDDD\?t=/.test(trending.results[0].streamUrl),
+    assert.ok(!home.json.shelves.find((s) => s.id === 'seasonal-mixes' || s.id === 'moods' || s.id === 'trending-now'),
+      'Music Home keeps first load short instead of rendering extra daily/mood shelves');
+    const weekly = home.json.shelves.find((s) => s.id === 'top-songs-week');
+    assert.ok(weekly && /^\/api\/music\/stream\/WWWWWWWWWWW\?t=/.test(weekly.results[0].streamUrl),
       'Music Home track shelves are playable with scoped stream tokens');
+    const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+    assert.match(ui, /const MUSIC_PAGE_SIZE = 24;[\s\S]+const MUSIC_PLAYLIST_INITIAL = 12;/,
+      'Music playlists should first-load a small page and reveal more personal playlists locally');
+    assert.match(ui, /S\.ytmPlaylists\.slice\(0, S\.musicPlaylistLimit\)[\s\S]+title: 'More playlists'[\s\S]+S\.musicPlaylistLimit = Math\.min\(S\.ytmPlaylists\.length/,
+      'Music page should cap personal playlist cards at first paint with a More playlists reveal');
+    assert.doesNotMatch(ui, /coverPlaylist: p\.id|coverPlaylist: 'LM'/,
+      'Music page should not prefetch playlist tracks just to paint personal playlist covers');
     const feedA = await httpJson(srv.port, 'GET', '/api/music/search?q=cover-feed-cache-test&limit=12', null, admin);
     const feedB = await httpJson(srv.port, 'GET', '/api/music/search?q=cover-feed-cache-test&limit=12', null, admin);
     assert.strictEqual(feedA.status, 200, feedA.raw);
@@ -2357,6 +2369,10 @@ test('iptv: pinned DNS cache rotates and sidelines failed upstream addresses', (
     'a failed pinned address should be sidelined briefly and the next address tried first');
   assert.match(serverCode, /validateAndPinIptvUrl[\s\S]+cacheHost: net\.isIP\(host\) \? '' : host,[\s\S]+onFailure: \(\) => markIptvPinnedAddressFailure/,
     'validated IPTV pins should carry enough metadata to mark connection failures');
+  assert.match(serverCode, /let safeHit = null;[\s\S]+safeHit = iptvUrlSafetyCache\.get\(host\);[\s\S]+addressCount: safeHit && Array\.isArray\(safeHit\.addrs\)/,
+    'validated IPTV pins should keep the cached DNS metadata in function scope for returned retry metadata');
+  assert.doesNotMatch(serverCode, /const safeHit = iptvUrlSafetyCache\.get\(host\);/,
+    'safeHit must not be block-scoped or native/remux playback can fail before opening the provider URL');
   assert.match(serverCode, /addressCount: safeHit && Array\.isArray\(safeHit\.addrs\) \? safeHit\.addrs\.length : \(picked \? 1 : 0\),/,
     'validated IPTV pins should carry the safe DNS pool size for bounded same-request retry');
   assert.match(serverCode, /const retryPinnedAddress = \(reason\) => \{[\s\S]+markPinFailure\(\);[\s\S]+ctx\.res\.headersSent[\s\S]+pin\.addressCount[\s\S]+open\(rawTarget, hop, pinRetries \+ 1\);[\s\S]+return true;/,

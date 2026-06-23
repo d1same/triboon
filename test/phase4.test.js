@@ -565,8 +565,8 @@ test('subtitle startup preference contract: always mode applies online captions 
   const playerMap = fs.readFileSync(path.join(__dirname, '..', 'docs-player-regression-map.md'), 'utf8');
   assert.match(ui, /function prefSubtitleMode\(\) \{[\s\S]+const scoped = localStorage\.getItem\(profilePrefKey\('subtitleMode'\)\);[\s\S]+if \(scoped !== null\) return scoped === 'always' \? 'always' : 'manual';[\s\S]+localStorage\.getItem\('triboon\.subtitleMode'\) === 'always'/,
     'profile subtitle mode should fall back to the legacy global always/manual setting');
-  assert.match(ui, /function startupSubtitleRelFor\(p, saved = loadSubChoice\(\)\) \{[\s\S]+Explicit per-title choices win[\s\S]+if \(subtitleRelPlayable\(p, saved\)\) return saved;[\s\S]+if \(saved === 'off' && prefSubtitleMode\(\) !== 'always'\) return '';[\s\S]+return autoSubtitleRelFor\(p\);[\s\S]+\}/,
-    'startup subtitle choice should share saved, off, and always-mode rules');
+  assert.match(ui, /function startupSubtitleRelFor\(p, saved = loadSubChoice\(\)\) \{[\s\S]+Manual mode is truly manual at startup[\s\S]+if \(prefSubtitleMode\(\) !== 'always'\) return '';[\s\S]+if \(subtitleRelPlayable\(p, saved\)\) return saved;[\s\S]+return autoSubtitleRelFor\(p\);[\s\S]+\}/,
+    'manual subtitle mode should not auto-enable saved online captions while always mode can reuse saved online choices');
   assert.match(ui, /function startWebPlayerHousekeeping\(mount, it\) \{[\s\S]+loadTracks\(\);[\s\S]+if \(!applyStartupSubtitlePref\(\)\) \{[\s\S]+fetch\(`\/api\/ossubs\/\$\{mount\.id\}\?\$\{subtitleRequestParams\(it, code2, mount\.streamToken\)\.toString\(\)\}`\)/,
     'web player should try to enable always-mode subtitles before falling back to warmup prefetch');
   assert.match(ui, /function applyStartupSubtitlePref\(\) \{[\s\S]+const rel = concreteSubtitleRel\(startupSubtitleRelFor\(p\)\);[\s\S]+Promise\.resolve\(setSubtitle\(rel\)\)\.finally/,
@@ -577,6 +577,20 @@ test('subtitle startup preference contract: always mode applies online captions 
     'native ExoPlayer startup should use the same subtitle startup contract as web playback');
   assert.match(playerMap, /Profile always-show subtitles must auto-enable the preferred online subtitle at startup/,
     'player regression map should document the always-subtitles startup contract');
+});
+
+test('local library title match modal keeps manual, folder-info, and automatic actions wired', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /function openMatchModal\(it\) \{[\s\S]+matchAuto'\)\.style\.display = it\._matchOv !== undefined \? '' : 'none'/,
+    'match modal should expose the Automatic reset only when an override exists');
+  assert.ok(ui.includes("row.addEventListener('click', () => applyMatch(x.id));"),
+    'TMDB search result rows should apply the selected manual TMDB id');
+  assert.ok(ui.includes("await api(`/api/libraries/${it._lib.id}/match`, { method: 'POST', body: { idx: it._idx, tmdbId } });"),
+    'match modal should send only the library item index plus selected match value');
+  assert.ok(ui.includes("$('matchNone').addEventListener('click', () => applyMatch(null));"),
+    'folder/NFO button should request the safe no-TMDB override');
+  assert.ok(ui.includes("$('matchAuto').addEventListener('click', () => applyMatch('auto'));"),
+    'Automatic button should clear the override and return to normal matching');
 });
 
 test('Live TV startup warm is delayed so app login and first playback stay responsive', () => {
@@ -743,6 +757,17 @@ test('Android native player: direct source and native chrome stay out of the web
     'theme picker should render understated material cards with names and tone labels');
   assert.match(ui, /b\.innerHTML = `[\s\S]+themeMeta[\s\S]+themeName[\s\S]+themeTone[\s\S]+themePalette[\s\S]+<i><\/i><i><\/i><i><\/i>/,
     'theme picker should use restrained palette strips instead of illustrative color-picking icons');
+  assert.match(ui, /\.themeChoice:hover,\.themeChoice\.focus,\.themeChoice:focus,\.themeChoice:focus-visible\{[\s\S]+outline:none/,
+    'theme picker cards should react to native focus as well as D-pad focus classes');
+  assert.match(ui, /#settings \.setGrid button:not\(\.themeChoice\):hover,#prefs \.setGrid button:not\(\.themeChoice\):hover,[\s\S]+#settings \.setGrid button:not\(\.themeChoice\):focus-visible,#prefs \.setGrid button:not\(\.themeChoice\):focus-visible\{[\s\S]+background:var\(--text\)!important;color:#160a04!important/,
+    'Settings and Preferences content buttons should visibly fill on hover, keyboard focus, and D-pad focus');
+  assert.match(ui, /function syncChoiceButtons\(selector, isSelected\) \{[\s\S]+classList\.toggle\('sel', selected\)[\s\S]+setAttribute\('aria-pressed', selected \? 'true' : 'false'\)/,
+    'selection-style buttons should share visual and pressed-state updates');
+  ['#prefCoverSize button', '#prefContentTextSize button', '#prefAutoplay button', '#prefSubtitleMode button', '#prefSubSize button', '#prefScreensaverDelay button', '#coverSize button'].forEach((selector) => {
+    assert.ok(ui.includes(`syncChoiceButtons('${selector}'`), `${selector} should use the shared selected-button sync`);
+  });
+  assert.match(ui, /b\.setAttribute\('aria-pressed', name === cur \? 'true' : 'false'\)[\s\S]+syncChoiceButtons\('#themePick \.themeChoice,#themePickSet \.themeChoice'/,
+    'theme cards should expose and update pressed state with the same selected-button sync');
   assert.ok(ui.includes('id="apkTvUpdate"') && ui.includes('id="apkMobileUpdate"')
     && ui.includes('releases/latest/download/triboon-tv.apk')
     && ui.includes('releases/latest/download/triboon-mobile.apk'),
@@ -1113,8 +1138,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'online subtitle lookup should rank and download using the selected source release name');
   assert.match(server, /function localMountFor\(ctx, libId, idx, caps = \{\}, playCtx = \{\}\)[\s\S]+const q = String\(playCtx\.q \|\| found\.item\.q \|\| found\.item\.title \|\| name\)[\s\S]+const season = playCtx\.season \?\? found\.item\.s[\s\S]+const ep = playCtx\.ep \?\? playCtx\.episode \?\? found\.item\.e[\s\S]+vf\._subQuery = episodeSubtitleQuery\(vf\._q, season, ep\)/,
     'local library mounts should preserve episode-aware subtitle queries for Wyzie');
-  assert.match(ui, /function startupSubtitleRelFor\(p, saved = loadSubChoice\(\)\) \{[\s\S]+Explicit per-title choices win[\s\S]+if \(subtitleRelPlayable\(p, saved\)\) return saved;[\s\S]+if \(saved === 'off' && prefSubtitleMode\(\) !== 'always'\) return '';[\s\S]+return autoSubtitleRelFor\(p\);[\s\S]+\}/,
-    'startup subtitles should use saved choices first, then profile always-subtitle mode');
+  assert.match(ui, /function startupSubtitleRelFor\(p, saved = loadSubChoice\(\)\) \{[\s\S]+Manual mode is truly manual at startup[\s\S]+if \(prefSubtitleMode\(\) !== 'always'\) return '';[\s\S]+if \(subtitleRelPlayable\(p, saved\)\) return saved;[\s\S]+return autoSubtitleRelFor\(p\);[\s\S]+\}/,
+    'startup subtitles should stay off in manual mode and only auto-start for profile always-subtitle mode');
   assert.match(ui, /function nativeVideoSubtitleRel\(p\) \{\s+return \{ blocked: false, rel: concreteSubtitleRel\(startupSubtitleRelFor\(p\)\) \};\s+\}/,
     'native playback should use the shared startup subtitle contract');
   assert.match(ui, /function applyStartupSubtitlePref\(\) \{[\s\S]+const rel = concreteSubtitleRel\(startupSubtitleRelFor\(p\)\);[\s\S]+Promise\.resolve\(setSubtitle\(rel\)\)\.finally/,
@@ -1193,8 +1218,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'per-title subtitle choices should remember the friendly version label');
   assert.doesNotMatch(ui, /mkRow\(`Wyzie |return `Wyzie |Wyzie \u00b7 [^`'"]*Version/,
     'player subtitle labels should not show provider branding');
-  assert.match(ui, /if \(saved === 'off' && prefSubtitleMode\(\) !== 'always'\) return '';/,
-    'native subtitles should respect explicit per-title Off choices unless the profile is set to always show subtitles');
+  assert.match(ui, /if \(prefSubtitleMode\(\) !== 'always'\) return '';/,
+    'native subtitles should respect manual mode before considering saved online subtitle choices');
   assert.match(ui, /function activeSubtitleCues\(tt\) \{[\s\S]+tt\.activeCues[\s\S]+tt\.cues[\s\S]+\$\(\'video\'\)[\s\S]+v\.currentTime[\s\S]+c\.startTime[\s\S]+c\.endTime[\s\S]+\}/,
     'web subtitle rendering should fall back to scanning loaded cues when activeCues is empty');
   assert.match(ui, /function renderSubCues\(\) \{[\s\S]+const active = activeSubtitleCues\(tt\);[\s\S]+for \(const c of active\.slice\(-3\)\)/,
@@ -1533,10 +1558,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'Live TV timeline guide requests should bind channel indexes to stable channel ids');
   assert.match(ui, /api\('\/api\/music\/home'\)[\s\S]+S\.musicHome = r && Array\.isArray\(r\.shelves\) \? r : \{ shelves: \[\] \}/,
     'Music page should load the server-side Music Home shelf contract');
-  assert.match(ui, /async function loadMusicHomeFallback\(\) \{[\s\S]+\/api\/music\/search\?q=' \+ encodeURIComponent\(def\.query\) \+ '&limit=16'[\s\S]+S\.musicHome = await loadMusicHomeFallback\(\)/,
+  assert.match(ui, /async function loadMusicHomeFallback\(\) \{[\s\S]+\/api\/music\/search\?q=' \+ encodeURIComponent\(def\.query\) \+ '&limit=12'[\s\S]+S\.musicHome = await loadMusicHomeFallback\(\)/,
     'Music page should fall back to regular music search if the home endpoint is not active yet');
   assert.match(ui, /const yours = addShelf\('Your playlists'[\s\S]+if \(Array\.isArray\(S\.ytmPlaylists\)\)[\s\S]+Connect YouTube Music[\s\S]+S\.musicHome/,
-    'Music Home should render personal playlists before weekly, seasonal, and chart shelves');
+    'Music Home should render personal playlists before weekly and chart shelves');
   assert.match(ui, /function startMusicFeed\(item\) \{[\s\S]+\/api\/music\/search\?q=' \+ encodeURIComponent\(q\) \+ '&limit=24'[\s\S]+playMusic\(rows, 0, \{ showQueue: true \}\)/,
     'Music feed cards should start generated queues instead of only opening raw search');
   assert.match(ui, /function safeMusicPlay\(opts = \{\}\) \{[\s\S]+mAudio\.play\(\)[\s\S]+toast\('Press play to start music\.'\)/,
@@ -1898,14 +1923,18 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Live TV remux fallback should be tagged as MP4 for ExoPlayer');
   assert.match(android, /else if \(tryNativeLiveFallback\(\)\) \{[\s\S]+return;[\s\S]+\} else \{[\s\S]+__tvNativeLiveError/,
     'native Live TV should retry the Exo remux fallback before reporting a player error');
+  assert.match(android, /private ValidatedNativeUrl optionalNativeFallbackUrl\(String raw, String label\) \{[\s\S]+validateNativePlaybackUrl\(url\)[\s\S]+Skipping invalid native fallback[\s\S]+return null;/,
+    'invalid optional native IPTV fallbacks should be skipped instead of aborting the whole native playback start');
+  assert.match(android, /ValidatedNativeUrl fallbackPin = optionalNativeFallbackUrl\(fallbackRaw, "primary fallback"\)[\s\S]+optionalNativeFallbackUrl\(fbUrl, "fallback " \+ i\)[\s\S]+if \(fbPin != null\)/,
+    'native playback should best-effort validate ordered fallbacks while still attempting the primary URL');
   assert.match(android, /private boolean tryNativeLiveFallback\(\) \{[\s\S]+nativeFallbackIndex >= nativeFallbackUrls\.size\(\)[\s\S]+nativeUrl = nextUrl;[\s\S]+nativeMime = nextMime[\s\S]+nativePlayer\.setMediaItem\(buildNativeMediaItem\(\)\);[\s\S]+nativePlayer\.prepare\(\);[\s\S]+nativePlayer\.play\(\);/,
     'native Live TV fallback should walk ordered ExoPlayer candidates instead of opening web playback');
   assert.match(android, /NATIVE_LIVE_STALL_RECOVERY_MS = 45000L[\s\S]+NATIVE_LIVE_STARTUP_STALL_RECOVERY_MS = 12000L[\s\S]+NATIVE_LIVE_READ_TIMEOUT_MS = 60000/,
     'native Live TV should recover faster before the first frame while allowing later provider hiccups');
   assert.match(android, /private DefaultLoadControl nativeLoadControlForMode\(String mode\) \{[\s\S]+nativeConservativePlaybackDevice\(\)[\s\S]+setBufferDurationsMs\(minMs, maxMs, startMs, rebufferMs\)/,
     'native ExoPlayer should use a conservative buffer profile on Onn-class devices without slowing Shield');
-  assert.match(android, /boolean heavyVod = video && nativeLikelyHeavyVod\(\)[\s\S]+int targetMb = video[\s\S]+conservative \? \(heavyVod \? 96 : 48\) : \(heavyVod \? 384 : 64\)[\s\S]+int backBufferMs = video \? \(conservative \? \(heavyVod \? 15000 : 8000\) : \(heavyVod \? 30000 : 12000\)\)/,
-    'native ExoPlayer should build a deeper heavy-4K buffer on capable devices while staying bounded on low-memory hardware');
+  assert.match(android, /boolean heavyVod = video && nativeLikelyHeavyVod\(\)[\s\S]+int targetMb = video[\s\S]+conservative \? \(heavyVod \? 48 : 32\) : \(heavyVod \? 128 : 48\)[\s\S]+int backBufferMs = video \? \(conservative \? \(heavyVod \? 8000 : 5000\) : \(heavyVod \? 12000 : 8000\)\)/,
+    'native ExoPlayer should keep heavy VOD buffers bounded so Android TV devices are not killed by memory pressure');
   assert.match(android, /new ExoPlayer\.Builder\(this, nativeRenderersFactory\(\)\)[\s\S]+setBandwidthMeter\(nativeBandwidthMeterForMode\(mode\)\)[\s\S]+setSeekParameters\(SeekParameters\.CLOSEST_SYNC\)/,
     'native ExoPlayer should use decoder fallback plumbing, seeded bandwidth, and closest-sync seeking');
   assert.match(android, /private DefaultRenderersFactory nativeRenderersFactory\(\) \{[\s\S]+setEnableDecoderFallback\(true\)[\s\S]+setEnableAudioOutputPlaybackParameters\(true\)/,
@@ -1920,8 +1949,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native ExoPlayer should bound memory while keeping short VOD rewinds fast');
   assert.match(android, /setReadTimeoutMs\("live"\.equals\(nativeMode\)[\s\S]+NATIVE_LIVE_READ_TIMEOUT_MS[\s\S]+nativeLikelyHeavyVod\(\) \? 45000 : 18000\)/,
     'native Live TV should use a longer provider read timeout, and huge VOD should tolerate slower usenet reads');
-  assert.match(android, /heavyVod \? 24000 : 6000[\s\S]+heavyVod \? 180000 : 60000[\s\S]+heavyVod \? 384 : 64/,
-    'high-end Android devices should build a deeper ExoPlayer buffer for very large 4K VOD');
+  assert.match(android, /heavyVod \? 16000 : 5000[\s\S]+heavyVod \? 90000 : 45000[\s\S]+heavyVod \? 128 : 48/,
+    'high-end Android devices should still get a deeper 4K VOD profile without reserving hundreds of megabytes');
   assert.match(android, /private void updateNativeLiveWatchdog\(\) \{[\s\S]+boolean waitingForLiveData = state == Player\.STATE_BUFFERING[\s\S]+nativePlayer\.isLoading\(\)[\s\S]+boolean unhealthy = state == Player\.STATE_IDLE \|\| state == Player\.STATE_ENDED \|\| waitingForLiveData[\s\S]+long threshold = nativeLiveStarted \? NATIVE_LIVE_STALL_RECOVERY_MS : NATIVE_LIVE_STARTUP_STALL_RECOVERY_MS;[\s\S]+now - nativeLiveUnhealthySinceMs >= threshold[\s\S]+recoverNativeLivePlayback\(state == Player\.STATE_IDLE \? "idle"/,
     'native Live TV should recover only after sustained idle, ended, or real data-wait stalls');
   assert.match(android, /state == Player\.STATE_ENDED && "live"\.equals\(nativeMode\)[\s\S]+recoverNativeLivePlayback\("ended"\)/,
@@ -1932,6 +1961,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native movie and episode startup should fail over quickly, while sustained mid-play stalls trim memory and retry the same source');
   assert.match(android, /private boolean nativeVideoErrorNotified;[\s\S]+private void notifyNativeVideoError\(String msg, long pos, long dur\) \{[\s\S]+if \(nativeVideoErrorNotified\) return;[\s\S]+nativeVideoErrorNotified = true;[\s\S]+releaseNativePlayer\(false\);/,
     'native movie and episode error reporting should be one-shot per playback attempt');
+  assert.match(android, /catch \(Throwable e\) \{[\s\S]+handleNativePlaybackStartFailure\(e, mode, title, backdropUrl, loadingKind,[\s\S]+private void handleNativePlaybackStartFailure\(Throwable e,[\s\S]+trimAndroidMemoryCaches\(true\)[\s\S]+__tvNativeVideoError[\s\S]+__tvNativeLiveError/,
+    'native startup should catch low-level Android player failures and report them to the web recovery ladder instead of crashing the app');
   assert.match(android, /ExoPlayer player = nativePlayer;[\s\S]+nativePlayer = null;[\s\S]+if \(player != null\) \{[\s\S]+nativePlayerView\.setPlayer\(null\);[\s\S]+player\.release\(\);/,
     'native ExoPlayer release should use a local reference so nested callbacks cannot double-release the player');
   assert.ok([
