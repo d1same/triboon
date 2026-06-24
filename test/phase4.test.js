@@ -614,7 +614,7 @@ test('music search supports voice and TV result focus without side-note clutter'
     'Music mic should be a real Android TV focus stop');
 });
 
-test('subtitle startup preference contract: always mode prefers built-in captions before online fallback', () => {
+test('subtitle startup preference contract: admin can toggle built-in captions', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   const playerMap = fs.readFileSync(path.join(__dirname, '..', 'docs-player-regression-map.md'), 'utf8');
   const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
@@ -624,12 +624,18 @@ test('subtitle startup preference contract: always mode prefers built-in caption
   const webHousekeeping = ui.slice(webHousekeepingStart, webHousekeepingEnd);
   assert.match(ui, /function prefSubtitleMode\(\) \{[\s\S]+const scoped = localStorage\.getItem\(profilePrefKey\('subtitleMode'\)\);[\s\S]+if \(scoped !== null\) return scoped === 'always' \? 'always' : 'manual';[\s\S]+localStorage\.getItem\('triboon\.subtitleMode'\) === 'always'/,
     'profile subtitle mode should fall back to the legacy global always/manual setting');
-  assert.match(ui, /function bestBuiltInSubtitleRel\(\) \{[\s\S]+return bestReleaseSubtitleRel\(\) \|\| bestEmbeddedSubtitleRel\(\);[\s\S]+\}/,
-    'automatic subtitle startup should treat same-release sidecars and embedded text tracks as built-in choices');
-  assert.match(ui, /function autoSubtitleRelFor\(p\) \{[\s\S]+if \(p && p\.tracksUrl && !p\.tracks\) return '';[\s\S]+return osTrackRel\(preferredAutoSubtitleLang\(\)\);[\s\S]+\}/,
-    'online fallback should wait until the track probe had a chance to find built-in subtitles');
+  assert.match(ui, /function builtInSubtitlesEnabled\(\) \{[\s\S]+S\.serverInfo && S\.serverInfo\.builtInSubtitlesEnabled === true[\s\S]+\}/,
+    'built-in subtitle behavior should come from server settings instead of a hardcoded test flag');
+  assert.match(ui, /<select id="builtInSubsMode"[\s\S]+<option value="off">Online only<\/option>[\s\S]+<option value="on">Built-in first, then online<\/option>/,
+    'admin Settings should expose an online-only/built-in-first subtitle toggle');
+  assert.match(ui, /const body = \{ builtInSubtitlesEnabled: \$\('builtInSubsMode'\)\.value === 'on' \};[\s\S]+if \(key\) body\.openSubsKey = key;/,
+    'saving subtitle settings should allow toggling built-ins without erasing the saved online key');
+  assert.match(ui, /function bestBuiltInSubtitleRel\(\) \{[\s\S]+if \(!builtInSubtitlesEnabled\(\)\) return '';[\s\S]+return bestReleaseSubtitleRel\(\) \|\| bestEmbeddedSubtitleRel\(\);[\s\S]+\}/,
+    'automatic subtitle startup should skip same-release and embedded built-in choices when the admin disables them');
+  assert.match(ui, /function autoSubtitleRelFor\(p\) \{[\s\S]+if \(builtInSubtitlesEnabled\(\) && p && p\.tracksUrl && !p\.tracks\) return '';[\s\S]+return osTrackRel\(preferredAutoSubtitleLang\(\)\);[\s\S]+\}/,
+    'online subtitles should not wait for the track probe while built-in subtitles are disabled by settings');
   assert.match(ui, /function startupSubtitleRelFor\(p, saved = loadSubChoice\(\)\) \{[\s\S]+Manual mode is truly manual at startup[\s\S]+if \(prefSubtitleMode\(\) !== 'always'\) return '';[\s\S]+if \(saved === 'off'\) return '';[\s\S]+if \(subtitleRelPlayable\(p, saved\)\) return saved;[\s\S]+const builtIn = bestBuiltInSubtitleRel\(\);[\s\S]+if \(builtIn\) return builtIn;[\s\S]+return autoSubtitleRelFor\(p\);[\s\S]+\}/,
-    'manual subtitle mode should not auto-enable saved captions while always mode can reuse saved choices or prefer built-in subtitles');
+    'manual subtitle mode should not auto-enable saved captions while always mode can reuse saved online choices');
   assert.match(webHousekeeping, /loadTracks\(\);[\s\S]+if \(!applyStartupSubtitlePref\(\)\) \{/,
     'web player should try to enable always-mode subtitles before entering online warmup');
   assert.ok(webHousekeeping.includes('fetch(`/api/ossubs/${mount.id}?${subtitleRequestParams(it, code2, mount.streamToken).toString()}`).catch(() => {});'),
@@ -637,15 +643,17 @@ test('subtitle startup preference contract: always mode prefers built-in caption
   assert.match(ui, /function applyStartupSubtitlePref\(\) \{[\s\S]+const rel = concreteSubtitleRel\(startupSubtitleRelFor\(p\)\);[\s\S]+Promise\.resolve\(setSubtitle\(rel, \{ startup: true \}\)\)\.finally/,
     'always-mode subtitles should be applied without waiting for the track probe to finish');
   assert.match(webHousekeeping, /await fetchPlayerTracks\(p, 1400\)[\s\S]+if \(bestBuiltInSubtitleRel\(\) && prefSubtitleMode\(\) === 'always'\) \{[\s\S]+applyStartupSubtitlePref\(\);[\s\S]+return;[\s\S]+\}[\s\S]+if \(prefSubtitleMode\(\) === 'always' && applyStartupSubtitlePref\(\)\) return;[\s\S]+\/api\/ossubs/,
-    'web startup should wait briefly for built-in subtitles before prefetching online subtitles');
+    'web startup should still retain the built-in-first branch for when built-ins are re-enabled');
   assert.match(ui, /const releaseSubs = visibleReleaseSubChoices\(\);[\s\S]+releaseSubs\.slice\(0, 6\)\.forEach[\s\S]+releaseSubLabel\(sub\)/,
     'CC menu should list same-release subtitles ahead of online subtitle choices');
+  assert.match(ui, /function releaseSubChoices\(\) \{\s+if \(!builtInSubtitlesEnabled\(\)\) return \[\];[\s\S]+return \(p && p\.tracks && Array\.isArray\(p\.tracks\.releaseSubs\)\) \? p\.tracks\.releaseSubs : \[\];[\s\S]+\}/,
+    'same-release sidecar subtitle rows should be hidden while built-ins are disabled');
   assert.match(ui, /function releaseSubLabel\(sub\) \{[\s\S]+return builtInSubtitleLabel\(/,
-    'same-release sidecar subtitle rows should use the same simple built-in label as embedded text tracks');
+    'same-release sidecar subtitle rows should keep the built-in label for when built-ins are re-enabled');
   assert.match(ui, /function builtInSubtitleLabel\(label\) \{[\s\S]+sourceSubtitleLabel\('Built-in', label\)/,
     'local subtitle sources should have one user-facing built-in label');
-  assert.match(ui, /function embeddedSubChoices\(\) \{[\s\S]+return subs\.filter\(\(s\) => s && s\.text === true\);[\s\S]+\}/,
-    'only text-based embedded subtitles should be exposed as built-in choices');
+  assert.match(ui, /function embeddedSubChoices\(\) \{\s+if \(!builtInSubtitlesEnabled\(\)\) return \[\];[\s\S]+return subs\.filter\(\(s\) => s && s\.text === true\);[\s\S]+\}/,
+    'embedded text subtitle rows should be hidden while built-ins are disabled');
   assert.match(ui, /function embeddedSubLabel\(sub\) \{[\s\S]+return sourceSubtitleLabel\('Built-in'/,
     'embedded text subtitle rows should be labeled as built-in');
   assert.match(ui, /function visibleReleaseSubChoices\(\) \{[\s\S]+showAllLocalSubtitles\(\) \? all : all\.filter\(\(s\) => subtitleChoiceMatchesPreferred\(s\)\);[\s\S]+\}/,
@@ -653,7 +661,7 @@ test('subtitle startup preference contract: always mode prefers built-in caption
   assert.match(ui, /function visibleEmbeddedSubChoices\(\) \{[\s\S]+showAllLocalSubtitles\(\) \? all : all\.filter\(\(s\) => subtitleChoiceMatchesPreferred\(s\)\);[\s\S]+\}/,
     'built-in subtitle rows should be filtered to the preferred subtitle language unless the user expands all languages');
   assert.match(ui, /const embeddedSubs = visibleEmbeddedSubChoices\(\);[\s\S]+embeddedSubs\.slice\(0, 8\)\.forEach[\s\S]+embeddedSubLabel\(sub\)/,
-    'CC menu should list preferred-language built-in text subtitles before online subtitle choices');
+    'CC menu keeps the built-in row code available for when built-ins are re-enabled');
   assert.match(ui, /hiddenLocalSubtitleCount\(\)[\s\S]+Show all subtitle languages[\s\S]+setShowAllLocalSubtitles\(true\)/,
     'CC menu should offer an explicit way to reveal hidden local subtitle languages');
   assert.match(ui, /Promise\.resolve\(setSubtitle\(rel, \{ startup: true \}\)\)\.finally/,
@@ -680,8 +688,8 @@ test('subtitle startup preference contract: always mode prefers built-in caption
     'turning subtitles off in always mode should persist only the per-title off choice, not the global subtitle language');
   assert.match(ui, /window\.__tvNativeSubtitleSelect = \(rel, pos, dur\) => \{[\s\S]+if \(!rel\) \{[\s\S]+if \(prefSubtitleMode\(\) === 'always'\) saveSubChoice\(null\);[\s\S]+else \{[\s\S]+savePrefLang\('slang', 'off'\);/,
     'native subtitle off should follow the same per-title always-mode behavior as the web CC menu');
-  assert.match(ui, /function scheduleEmbeddedSubtitlePrewarm\(p = S\.playing\) \{[\s\S]+setTimeout\(\(\) => \{[\s\S]+fetch\(embeddedSubUrl\(p, rel, \{ mode: 'prewarm' \}\)\)/,
-    'built-in subtitle extraction should prewarm in the background after track probing');
+  assert.match(ui, /function scheduleEmbeddedSubtitlePrewarm\(p = S\.playing\) \{\s+if \(!builtInSubtitlesEnabled\(\)\) return;[\s\S]+setTimeout\(\(\) => \{[\s\S]+fetch\(embeddedSubUrl\(p, rel, \{ mode: 'prewarm' \}\)\)/,
+    'built-in subtitle extraction should not prewarm while online-only mode is active');
   assert.match(ui, /fetch\(embeddedSubUrl\(p, rel, \{ mode: 'prewarm' \}\)\)[\s\S]+}, 1200\);/,
     'built-in subtitle prewarm should start soon after track probing without blocking source startup');
   assert.match(ui, /function onlineFallbackRelForBuiltIn\(rel\) \{[\s\S]+const sub = embeddedSubForRel\(rel\);[\s\S]+const lang = sub && sub\.lang \? osLang\(sub\.lang\) : osLang\(preferredAutoSubtitleLang\(\)\);[\s\S]+return osTrackRel\(lang \|\| 'en'\);[\s\S]+\}/,
@@ -731,8 +739,8 @@ test('subtitle startup preference contract: always mode prefers built-in caption
     'embedded subtitle extraction should require real cue timings before treating WebVTT as valid');
   assert.match(server, /if \(!subtitleVttHasCues\(vtt\)\) return fail\(new Error\('embedded subtitle extraction returned no text cues'\)\);[\s\S]+vf\._subFailures\.delete\(track\);[\s\S]+vf\._subCache\.set\(track, vtt\)/,
     'cue-less WebVTT should fail before it can poison the embedded subtitle cache');
-  assert.match(playerMap, /Profile always-show subtitles must prefer built-in subtitle files and embedded text tracks before online fallback/,
-    'player regression map should document the always-subtitles startup contract');
+  assert.match(playerMap, /Admin Settings owns whether built-in subtitles are enabled/,
+    'player regression map should document the admin-controlled subtitle source mode');
 });
 
 test('local library title match modal keeps manual, folder-info, and automatic actions wired', () => {
@@ -776,6 +784,9 @@ test('Android native player: direct source and native chrome stay out of the web
   const forwardIcon = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'drawable', 'ic_player_forward.xml'), 'utf8');
   const nextIcon = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'drawable', 'ic_player_next.xml'), 'utf8');
   const infoIcon = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'drawable', 'ic_player_info.xml'), 'utf8');
+  const startSourceBlock = ui.slice(ui.indexOf('function startSource('), ui.indexOf('// The full ladder, in policy order'));
+  const failoverBlock = ui.slice(ui.indexOf('function failover()'), ui.indexOf('async function autoAdvance'));
+  const showVlcPanelBlock = ui.slice(ui.indexOf('function showVlcPanel()'), ui.indexOf('/* ---- next episode'));
   const androidSmoke = fs.readFileSync(path.join(__dirname, '..', 'bench', 'android-tv-smoke.ps1'), 'utf8');
   const openGuideMethod = android.slice(
     android.indexOf('private void openNativeLiveGuide()'),
@@ -1135,10 +1146,25 @@ test('Android native player: direct source and native chrome stay out of the web
       && ui.includes("const src = v && (v.currentSrc || v.src || '');")
       && ui.includes("p.item.type === 'live' && v && v.readyState >= 2 && !v.error && /^blob:/.test(src)")
       && ui.includes('if (liveMseHasReadyFrame(p)) {')
-      && ui.includes("if (p.item && p.item.type === 'live') {")
-      && ui.includes('S._liveVlcT = setTimeout(() => {')
+      && ui.includes('showLivePlayPrompt();')
       && ui.includes('showVlcPanel() {'),
     'web Live TV must not open the external-player panel after MSE has decoded a usable frame');
+  assert.ok(startSourceBlock.includes("if (p.item && p.item.type === 'live') {")
+      && startSourceBlock.includes("kind === 'direct' && startLiveMseSource(p.streamUrl)")
+      && startSourceBlock.includes('showLiveProviderError(liveMseType()')
+      && startSourceBlock.includes('Live TV playback is not supported by this browser')
+      && startSourceBlock.indexOf("if (p.item && p.item.type === 'live') {") < startSourceBlock.indexOf("} else if (kind === 'transcode')"),
+    'web Live TV must not fall through to assigning the remux URL as a plain video src when MSE is unavailable');
+  assert.ok(failoverBlock.includes("if (p.item && p.item.type === 'live') {")
+      && failoverBlock.includes("showLiveProviderError('Live stream unavailable');")
+      && failoverBlock.indexOf("if (p.item && p.item.type === 'live') {") < failoverBlock.indexOf('if (vodPlaybackStarted(p))'),
+    'web Live TV failover should stay in Triboon with a live error instead of opening the VOD external-player path');
+  assert.ok(showVlcPanelBlock.includes("if (p.item && p.item.type === 'live') {")
+      && showVlcPanelBlock.includes("showLiveProviderError('Live stream unavailable');")
+      && showVlcPanelBlock.indexOf("if (p.item && p.item.type === 'live') {") < showVlcPanelBlock.indexOf("$('vlcUrl').textContent = location.origin + p.streamUrl;"),
+    'the generic external-player fallback should be VOD-only, not Live TV');
+  assert.ok(!showVlcPanelBlock.includes('S._liveVlcT = setTimeout'),
+    'Live TV should not show a delayed external-player stream URL panel');
   assert.ok(ui.includes("const reason = r.headers.get('x-triboon-iptv-error') || 'live stream unavailable';")
       && ui.includes('e.liveProviderReason = reason;')
       && ui.includes('if (e.liveProviderReason) showLiveProviderError(e.liveProviderReason);')
@@ -1172,6 +1198,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'native remux/transcode playback should use server-side start URLs and pass the absolute display offset');
   assert.match(ui, /class="seekLine"[\s\S]+id="seekElapsed"[\s\S]+id="seek"[\s\S]+id="seekTotal"/,
     'web player seek bar should show elapsed time on the left and total duration on the right');
+  assert.match(ui, /#seek\{[^}]*touch-action:none[^}]*\}[\s\S]+#seek::before\{[^}]*height:44px/,
+    'web player seek bar should expose a phone-sized touch target without changing its visual height');
+  assert.match(ui, /function beginSeekPointer\(e\) \{[\s\S]+previewSeekSeconds\(target\);[\s\S]+function moveSeekPointer\(e\) \{[\s\S]+previewSeekSeconds\(target\);[\s\S]+function endSeekPointer\(e, commit = true\) \{[\s\S]+if \(commit\) seekTo\(target\);[\s\S]+\$\(\'seek\'\)\.addEventListener\(\'pointerdown\', beginSeekPointer\);[\s\S]+\$\(\'seek\'\)\.addEventListener\(\'pointermove\', moveSeekPointer\);[\s\S]+\$\(\'seek\'\)\.addEventListener\(\'pointerup\', \(e\) => endSeekPointer\(e, true\)\);/,
+    'mobile web player seek bar should support tap-and-drag pointer seeking');
   assert.match(ui, /class="topLeft"[\s\S]+id="playerBackBtn"[\s\S]+class="playerMetaRow"[\s\S]+id="pTitle"[\s\S]+id="pEpisode"[\s\S]+id="pQuality"[\s\S]+class="osdRight"[\s\S]+class="seekLine"/,
     'web player should keep back, title, episode, and the hidden live-only badge in the top-left metadata cluster');
   assert.match(ui, /#osd\{[\s\S]+padding:clamp\(22px,3vw,42px\) clamp\(24px,3\.6vw,52px\) clamp\(50px,6\.2vw,78px\)/,
@@ -1385,8 +1415,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native player startup should avoid waiting on slow built-in subtitle extraction when online fallback is available');
   assert.match(ui, /subtitleRel: subPayload\.rel[\s\S]+subtitleChoices: nativeSubtitleChoices\(\)/,
     'native player should receive selectable subtitle choices');
-  assert.match(ui, /visibleEmbeddedSubChoices\(\)\.slice\(0, 8\)\.forEach\(\(sub\) => \{[\s\S]+addChoice\(\{ rel, label: embeddedSubLabel\(sub\) \}\);[\s\S]+\}\);/,
-    'native player should receive preferred-language built-in text subtitle choices when tracks are detected');
+  assert.match(ui, /function embeddedSubChoices\(\) \{\s+if \(!builtInSubtitlesEnabled\(\)\) return \[\];[\s\S]+return subs\.filter\(\(s\) => s && s\.text === true\);[\s\S]+\}/,
+    'native subtitle choices should also hide embedded built-in rows while online-only mode is active');
   assert.match(ui, /window\.__tvNativeSubtitleShowAll = \(pos, dur\) => \{[\s\S]+setShowAllLocalSubtitles\(true\);[\s\S]+refreshNativeSubtitleChoices\(\);[\s\S]+\};/,
     'native player should be able to reveal all hidden local subtitle languages');
   assert.match(android, /"local_all"\.equals\(choice\.subtitleAction\)[\s\S]+requestNativeSubtitleShowAll\(\);/,
@@ -1402,7 +1432,7 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.match(server, /function localMountFor\(ctx, libId, idx, caps = \{\}, playCtx = \{\}\)[\s\S]+const q = String\(playCtx\.q \|\| found\.item\.q \|\| found\.item\.title \|\| name\)[\s\S]+const season = playCtx\.season \?\? found\.item\.s[\s\S]+const ep = playCtx\.ep \?\? playCtx\.episode \?\? found\.item\.e[\s\S]+vf\._subQuery = episodeSubtitleQuery\(vf\._q, season, ep\)/,
     'local library mounts should preserve episode-aware subtitle queries for Wyzie');
   assert.match(ui, /function startupSubtitleRelFor\(p, saved = loadSubChoice\(\)\) \{[\s\S]+Manual mode is truly manual at startup[\s\S]+if \(prefSubtitleMode\(\) !== 'always'\) return '';[\s\S]+if \(saved === 'off'\) return '';[\s\S]+if \(subtitleRelPlayable\(p, saved\)\) return saved;[\s\S]+const builtIn = bestBuiltInSubtitleRel\(\);[\s\S]+if \(builtIn\) return builtIn;[\s\S]+return autoSubtitleRelFor\(p\);[\s\S]+\}/,
-    'startup subtitles should stay off in manual mode and prefer built-in subtitles for profile always-subtitle mode');
+    'startup subtitles should stay off in manual mode and prefer online subtitles while built-ins are disabled');
   assert.match(ui, /function nativeVideoSubtitleRel\(p\) \{\s+return \{ blocked: false, rel: concreteSubtitleRel\(startupSubtitleRelFor\(p\)\) \};\s+\}/,
     'native playback should use the shared startup subtitle contract');
   assert.match(ui, /function applyStartupSubtitlePref\(\) \{[\s\S]+const rel = concreteSubtitleRel\(startupSubtitleRelFor\(p\)\);[\s\S]+Promise\.resolve\(setSubtitle\(rel, \{ startup: true \}\)\)\.finally/,
@@ -1673,19 +1703,20 @@ test('Android native player: direct source and native chrome stay out of the web
     'player guide should show a nonblank empty state instead of leaving a black guide screen');
   assert.match(ui, /if \(!keepGuidePip && tryNativeLivePlayer\(it\)\) return;/,
     'normal Live TV tuning should still launch native fullscreen playback');
-  assert.match(ui, /function nativeLiveRequired\(\) \{[\s\S]+Android TV and Android mobile never fall back to the HTML\/MSE live player once the[\s\S]+return canUseNativeLivePlayer\(\);[\s\S]+\}/,
-    'Android TV and mobile Live TV should require ExoPlayer whenever the native live bridge exists');
+  assert.match(ui, /function isTriboonAndroidShell\(\) \{[\s\S]+\/TriboonTV\|TriboonAndroid\/\.test\(navigator\.userAgent \|\| ''\)[\s\S]+\}[\s\S]+function nativeLiveRequired\(\) \{[\s\S]+installed APK is too old to expose playLive[\s\S]+return isTriboonAndroidShell\(\);[\s\S]+\}/,
+    'Android TV and mobile Live TV should require ExoPlayer based on the Android shell, not on whether the bridge is currently usable');
   assert.match(ui, /function tryNativeLivePlayer\(it, guide = false\) \{[\s\S]+if \(!guide\) \{[\s\S]+S\.nativeGuideMode = false;[\s\S]+closePlayerGuide\(\{ fromNative: true \}\);[\s\S]+\$\(\'player\'\)\.classList\.remove\('guideMode'\);[\s\S]+\}[\s\S]+window\.TriboonTV\.playLive/,
     'normal Live TV tuning should clear stale native guide state before asking ExoPlayer to start');
   assert.match(ui, /const keepGuidePip = S\.view === 'player' && !!\(\$\(\'pGuide\'\) && \$\(\'pGuide\'\)\.classList\.contains\('open'\)\)/,
     'stale guide DOM outside the player view must not force later Live TV selections into PiP');
-  assert.match(ui, /if \(nativeLiveRequired\(\)\) \{\s*toast\('Native player could not start this channel'\);\s*return;\s*\}\s*return playChannelWeb\(it\);/,
-    'Android Live TV should stop on native startup failure instead of falling back to the web player');
+  assert.match(ui, /if \(nativeLiveRequired\(\)\) \{[\s\S]+canUseNativeLivePlayer\(\)[\s\S]+Native player could not start this channel[\s\S]+Update the Android app to play Live TV[\s\S]+return;[\s\S]+\}[\s\S]+return playChannelWeb\(it\);/,
+    'Android Live TV should stop on native startup failure or stale APK bridge instead of falling back to the web player');
   assert.match(ui, /const LIVE_MSE_TYPES = \[[\s\S]+video\/mp4; codecs="avc1\.4d4028, mp4a\.40\.2"[\s\S]+function liveMseType\(\) \{[\s\S]+MediaSource\.isTypeSupported/,
     'web Live TV should use MediaSource for the server fMP4 remux instead of a plain infinite video src');
   assert.match(ui, /function stopWebVideoElement\(\) \{[\s\S]+cleanupLiveMse\(\);[\s\S]+v\.removeAttribute\('src'\)/,
     'leaving or replacing playback should abort the Live TV MediaSource reader before clearing the video element');
-  assert.match(ui, /p\.item && p\.item\.type === 'live' && kind === 'direct' && startLiveMseSource\(p\.streamUrl\)/,
+  assert.ok(startSourceBlock.includes("if (p.item && p.item.type === 'live') {")
+      && startSourceBlock.includes("kind === 'direct' && startLiveMseSource(p.streamUrl)"),
     'only Live TV direct playback should take the web MediaSource path');
   assert.match(ui, /async function playChannelWeb\(it\) \{[\s\S]+const preserveGuide = !!\(\$\(\'pGuide\'\) && \$\(\'pGuide\'\)\.classList\.contains\(\'open\'\)\);[\s\S]+stopActivePlaybackForReplacement\(\{ preserveGuide \}\);[\s\S]+openPlayer\(\{ title: it\.title, key: it\.key, type: 'live'/,
     'web Live TV channel changes should close the previous MSE fetch/player connection before opening the new channel');
@@ -1709,7 +1740,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'server Live TV remux should resolve provider redirects itself so every hop is validated before ffmpeg retries');
   assert.match(server, /const redirectHls = hlsFriendly \|\| iptvRemuxTargetLikelyHls\(redirected\);/,
     'redirected HLS Live TV URLs should keep HLS-friendly ffmpeg flags even if the final provider URL is extensionless');
-  assert.match(ui, /addLiveFallback\(it\._nativeFallbackUrl, it\._nativeFallbackMime \|\| ''\);[\s\S]+addLiveFallback\(it\._streamUrl, 'video\/mp4'\);[\s\S]+fallbacks: liveFallbacks,/,
+  assert.match(ui, /const primaryUrl = it\._nativeUrl \|\| it\._streamUrl;[\s\S]+const primaryMime = it\._nativeUrl \? \(it\._nativeMime \|\| ''\) : 'video\/mp4';[\s\S]+const primaryAbs = new URL\(primaryUrl, location\.origin\)\.href;[\s\S]+addLiveFallback\(it\._nativeFallbackUrl, it\._nativeFallbackMime \|\| ''\);[\s\S]+addLiveFallback\(it\._streamUrl, 'video\/mp4'\);[\s\S]+url: primaryAbs,[\s\S]+mime: primaryMime,[\s\S]+fallbacks: liveFallbacks,/,
     'Android Live TV should try provider candidates first, then fall back to the server remux path on weaker devices');
   assert.match(ui, /_nativeFallbackUrl: ch\.nativeFallbackUrl[\s\S]+_nativeFallbackMime: ch\.nativeFallbackMime \|\| ''/,
     'Live TV guide/card/search items should preserve native fallback stream metadata');
@@ -1787,8 +1818,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'web play button should be neutral until focused or hovered');
   assert.doesNotMatch(ui, /\.cbtn\.on\{background:var\(--amber\)|\.btn\.primary,\.cbtn\.big/,
     'enabled or selected player buttons should not keep the old persistent gold highlight');
-  assert.match(ui, /function updatePlayerControlAvailability\(\) \{[\s\S]+setPlayerControlEnabled\('ccBtn', playerCcHasOptions\(\)\);[\s\S]+setPlayerControlEnabled\('audBtn', playerAudioHasOptions\(\)\);[\s\S]+setPlayerControlEnabled\('qualBtn', playerQualityHasOptions\(\)\);/,
-    'web CC/audio/HD buttons should be disabled when no real options exist');
+  assert.match(ui, /function playerCcCanOpen\(\) \{[\s\S]+p\.item\.type !== 'live'[\s\S]+p\.mountId \|\| p\.tracksUrl \|\| subtitleCatalogAvailable\(p\.item\)/,
+    'web CC should open for mounted VOD even when it needs to show unavailable-subtitle diagnostics');
+  assert.match(ui, /function updatePlayerControlAvailability\(\) \{[\s\S]+setPlayerControlEnabled\('ccBtn', playerCcCanOpen\(\)\);[\s\S]+setPlayerControlEnabled\('audBtn', playerAudioHasOptions\(\)\);[\s\S]+setPlayerControlEnabled\('qualBtn', playerQualityHasOptions\(\)\);/,
+    'web CC should stay selectable for VOD while audio/HD buttons remain disabled without real options');
+  assert.match(ui, /const ccProbePending = builtInSubtitlesEnabled\(\) && kind === 'cc' && !p\.tracks && !!p\.tracksUrl;[\s\S]+fetchPlayerTracks\(p, 2500\)[\s\S]+Built-in subtitles off in Settings/,
+    'web CC menu should avoid built-in probing in online-only mode and explain why local rows are hidden');
   assert.match(ui, /ctlButtons\(\) \{[\s\S]+!b\.disabled && !b\.classList\.contains\('disabled'\)/,
     'web player D-pad focus should skip disabled controls');
   assert.match(android, /setNativeButtonIcon\(ImageButton b, int iconRes, boolean primary, boolean focused\) \{[\s\S]+!b\.isEnabled\(\) \? 0x88EDE8F5 : \(focused \? 0xFF0B0812 : 0xFFEDE8F5\)/,

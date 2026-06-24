@@ -622,7 +622,8 @@ body.nativeGuideMode #player.guideMode video{display:none}
 .seekLine{display:grid;grid-template-columns:56px minmax(0,1fr) 64px;align-items:center;gap:12px;margin-bottom:16px}
 .seekTime{font:700 13px "JetBrains Mono";color:var(--muted);white-space:nowrap;text-shadow:0 2px 12px rgba(0,0,0,.82)}
 .seekTime:last-child{text-align:right}
-#seek{height:6px;border-radius:999px;background:rgba(243,239,247,.18);position:relative;cursor:pointer}
+#seek{height:6px;border-radius:999px;background:rgba(243,239,247,.18);position:relative;cursor:pointer;touch-action:none}
+#seek::before{content:"";position:absolute;left:0;right:0;top:50%;height:44px;transform:translateY(-50%)}
 #seek .fill{position:absolute;left:0;top:0;bottom:0;border-radius:4px;background:var(--grad)}
 #seek .buf{position:absolute;left:0;top:0;bottom:0;border-radius:4px;background:rgba(243,239,247,.22)}
 #seek .knob{position:absolute;top:50%;width:15px;height:15px;border-radius:50%;background:#fff;transform:translate(-50%,-50%);box-shadow:0 0 0 5px rgba(193,59,214,.3)}
@@ -3049,7 +3050,13 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
     <p>Online subtitles for releases that only carry image-based (BluRay PGS) subs. Paste your
        Wyzie Subs API key here; Triboon keeps it server-side and caches results per title.</p>
     <div class="field"><input id="osKey" placeholder="Wyzie Subs API key"></div>
-    <div class="settingsActions"><button class="btn primary" id="osSave">Save subtitles key</button></div>
+    <div class="field">
+      <select id="builtInSubsMode" style="max-width:360px">
+        <option value="off">Online only</option>
+        <option value="on">Built-in first, then online</option>
+      </select>
+    </div>
+    <div class="settingsActions"><button class="btn primary" id="osSave">Save subtitles</button></div>
     <div class="hint" id="osStatus"></div>
   </div>
 
@@ -6839,8 +6846,14 @@ function startSource(kind, atSeconds, opts = {}) {
   const seekStart = serverSeek ? Math.max(0, Math.floor(atSeconds || 0)) : 0;
   p.startOffset = seekStart;
   cleanupLiveMse();
-  if (p.item && p.item.type === 'live' && kind === 'direct' && startLiveMseSource(p.streamUrl)) {
-    applySubtitleTrack();
+  if (p.item && p.item.type === 'live') {
+    if (kind === 'direct' && startLiveMseSource(p.streamUrl)) {
+      applySubtitleTrack();
+      return true;
+    }
+    showLiveProviderError(liveMseType()
+      ? 'Live stream unavailable'
+      : 'Live TV playback is not supported by this browser');
     return true;
   } else if (kind === 'transcode') {
     v.src = `${p.transcodeUrl}&start=${seekStart}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}`;
@@ -7592,6 +7605,10 @@ function failover() {
     showLivePlayPrompt();
     return;
   }
+  if (p.item && p.item.type === 'live') {
+    showLiveProviderError('Live stream unavailable');
+    return;
+  }
   if (vodPlaybackStarted(p)) {
     recoverSamePlaybackSource('playback interrupted');
     return;
@@ -7686,19 +7703,7 @@ function showVlcPanel() {
     return;
   }
   if (p.item && p.item.type === 'live') {
-    setPlayerGuideLiveTuningPending(null);
-    clearTimeout(S._liveVlcT);
-    S._liveVlcT = setTimeout(() => {
-      if (S.playing !== p) return;
-      if (liveMseHasReadyFrame(p)) {
-        clearTimeout(S._waitT);
-        $('playerLoader').classList.remove('show');
-        showLivePlayPrompt();
-        return;
-      }
-      $('vlcUrl').textContent = location.origin + p.streamUrl;
-      $('vlcPanel').classList.add('show');
-    }, 1500);
+    showLiveProviderError('Live stream unavailable');
     return;
   }
   $('vlcUrl').textContent = location.origin + p.streamUrl;
@@ -8307,7 +8312,57 @@ $('back10').addEventListener('click', () => nudgeSeek(-10));
 $('fwd30').addEventListener('click', () => nudgeSeek(30));
 $('nextEpBtn').addEventListener('click', playNextEpisode);
 $('statsBtn').addEventListener('click', togglePlayerStats);
+let _seekDrag = null, _seekClickSuppressUntil = 0;
+function seekSecondsFromPointer(e) {
+  const el = $('seek');
+  const r = el.getBoundingClientRect();
+  const d = totalDuration();
+  const x = e && Number.isFinite(e.clientX) ? e.clientX : NaN;
+  if (!d || !r.width || !Number.isFinite(x)) return null;
+  return Math.max(0, Math.min(1, (x - r.left) / r.width)) * d;
+}
+function previewSeekSeconds(seconds) {
+  const d = totalDuration();
+  if (!d || !Number.isFinite(seconds)) return;
+  const target = Math.max(0, Math.min(d, seconds));
+  const pct = Math.min(100, (target / d) * 100);
+  $('fill').style.width = pct + '%';
+  $('knob').style.left = pct + '%';
+  setPlayerTimes(target, d);
+  showOsd();
+}
+function beginSeekPointer(e) {
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  const target = seekSecondsFromPointer(e);
+  if (target === null) return;
+  if (e.cancelable) e.preventDefault();
+  _seekDrag = { id: e.pointerId, target };
+  try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+  previewSeekSeconds(target);
+}
+function moveSeekPointer(e) {
+  if (!_seekDrag || _seekDrag.id !== e.pointerId) return;
+  const target = seekSecondsFromPointer(e);
+  if (target === null) return;
+  if (e.cancelable) e.preventDefault();
+  _seekDrag.target = target;
+  previewSeekSeconds(target);
+}
+function endSeekPointer(e, commit = true) {
+  if (!_seekDrag || _seekDrag.id !== e.pointerId) return;
+  if (e.cancelable) e.preventDefault();
+  const target = _seekDrag.target;
+  _seekDrag = null;
+  _seekClickSuppressUntil = appMs() + 500;
+  try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
+  if (commit) seekTo(target);
+}
+$('seek').addEventListener('pointerdown', beginSeekPointer);
+$('seek').addEventListener('pointermove', moveSeekPointer);
+$('seek').addEventListener('pointerup', (e) => endSeekPointer(e, true));
+$('seek').addEventListener('pointercancel', (e) => endSeekPointer(e, false));
 $('seek').addEventListener('click', (e) => {
+  if (appMs() < _seekClickSuppressUntil) return;
   const r = e.currentTarget.getBoundingClientRect();
   const d = totalDuration(); if (!d) return;
   seekTo(((e.clientX - r.left) / r.width) * d);
@@ -8396,6 +8451,9 @@ const LANG_2TO3 = Object.fromEntries(Object.entries(LANG_3TO2).map(([k, v]) => [
 const OS_LANG_NAMES = { en: 'English', es: 'Spanish', fr: 'French', de: 'German', it: 'Italian',
   pt: 'Portuguese', ru: 'Russian', ar: 'Arabic', fa: 'Persian', hi: 'Hindi', tr: 'Turkish',
   nl: 'Dutch', pl: 'Polish', sv: 'Swedish', ja: 'Japanese', ko: 'Korean', zh: 'Chinese' };
+function builtInSubtitlesEnabled() {
+  return !!(S.serverInfo && S.serverInfo.builtInSubtitlesEnabled === true);
+}
 function langName(c) { return LANG_NAMES[langCode(c)] || c || ''; }
 function trackLabel(t, fallback) {
   const lang = langName(t.lang);
@@ -8453,6 +8511,7 @@ function releaseSubId(rel) {
   return String(rel || '').startsWith('rs:') ? String(rel).slice(3) : '';
 }
 function releaseSubChoices() {
+  if (!builtInSubtitlesEnabled()) return [];
   const p = S.playing;
   return (p && p.tracks && Array.isArray(p.tracks.releaseSubs)) ? p.tracks.releaseSubs : [];
 }
@@ -8505,6 +8564,7 @@ function embeddedSubIndex(rel) {
   return Number.isFinite(n) && n >= 0 ? n : -1;
 }
 function embeddedSubChoices() {
+  if (!builtInSubtitlesEnabled()) return [];
   const p = S.playing;
   const subs = p && p.tracks && Array.isArray(p.tracks.subs) ? p.tracks.subs : [];
   return subs.filter((s) => s && s.text === true);
@@ -8539,6 +8599,7 @@ function embeddedSubLabel(sub) {
   return sourceSubtitleLabel('Built-in', `${lang || 'Unknown'}${flags}`);
 }
 function scheduleEmbeddedSubtitlePrewarm(p = S.playing) {
+  if (!builtInSubtitlesEnabled()) return;
   if (!p || !p.mountId || p.item && p.item.type === 'live' || p._embeddedSubPrewarmScheduled) return;
   const rel = bestEmbeddedSubtitleRel();
   if (!rel) return;
@@ -8568,6 +8629,7 @@ function bestEmbeddedSubtitleRel() {
   return sorted[0] ? embeddedSubRel(sorted[0].rel) : '';
 }
 function bestBuiltInSubtitleRel() {
+  if (!builtInSubtitlesEnabled()) return '';
   return bestReleaseSubtitleRel() || bestEmbeddedSubtitleRel();
 }
 function subtitleImdbId(it) {
@@ -8602,13 +8664,13 @@ function bestReleaseSubtitleRel() {
 }
 function autoSubtitleRelFor(p) {
   if (prefSubtitleMode() !== 'always' || !canAutoSubtitle(p)) return '';
-  if (p && p.tracksUrl && !p.tracks) return '';
+  if (builtInSubtitlesEnabled() && p && p.tracksUrl && !p.tracks) return '';
   return osTrackRel(preferredAutoSubtitleLang());
 }
 function subtitleRelPlayable(p, rel) {
   if (!rel || rel === 'off') return false;
-  if (typeof rel === 'string' && rel.startsWith('rs:')) return !!releaseSubForRel(rel);
-  if (typeof rel === 'string' && rel.startsWith('em:')) return !!embeddedSubForRel(rel);
+  if (typeof rel === 'string' && rel.startsWith('rs:')) return builtInSubtitlesEnabled() && !!releaseSubForRel(rel);
+  if (typeof rel === 'string' && rel.startsWith('em:')) return builtInSubtitlesEnabled() && !!embeddedSubForRel(rel);
   if (typeof rel === 'string' && rel.startsWith('os:')) return canAutoSubtitle(p);
   return false;
 }
@@ -8820,10 +8882,14 @@ function playerAudioHasOptions() {
 function playerCcHasOptions() {
   const p = S.playing;
   if (!p || !p.item || p.item.type === 'live') return false;
-  if (p.subTrack) return true;
+  if (p.subTrack) return subtitleRelPlayable(p, p.subTrack);
   if (releaseSubChoices().length) return true;
   if (embeddedSubChoices().length) return true;
   return !!(S.serverInfo && S.serverInfo.opensubs && p.mountId && subtitleCatalogAvailable(p.item));
+}
+function playerCcCanOpen() {
+  const p = S.playing;
+  return !!(p && p.item && p.item.type !== 'live' && (p.mountId || p.tracksUrl || subtitleCatalogAvailable(p.item)));
 }
 function playerQualityHasOptions() {
   const p = S.playing;
@@ -8835,7 +8901,7 @@ function playerQualityHasOptions() {
 function updatePlayerControlAvailability() {
   const p = S.playing;
   ['ccBtn', 'audBtn', 'qualBtn'].forEach((id) => { const b = $(id); if (b) b.style.display = ''; });
-  setPlayerControlEnabled('ccBtn', playerCcHasOptions());
+  setPlayerControlEnabled('ccBtn', playerCcCanOpen());
   setPlayerControlEnabled('audBtn', playerAudioHasOptions());
   setPlayerControlEnabled('qualBtn', playerQualityHasOptions());
   setPlayerControlEnabled('nextEpBtn', !!(S.nextEp && S.view === 'player'));
@@ -8861,12 +8927,19 @@ function restoreTrackMenuPosition(opts = {}) {
 }
 function openTrackMenu(kind, restore = {}) {
   const p = S.playing; if (!p) return;
-  if (kind === 'cc' && !playerCcHasOptions()) return;
+  if (kind === 'cc' && !playerCcCanOpen()) return;
   if (kind === 'audio' && !playerAudioHasOptions()) return;
   if (kind === 'quality' && !playerQualityHasOptions()) return;
   if (!p.tracks && kind !== 'cc') return; // CC works without a probe (online subtitles)
   closePlayerStats();
-  p.tracks = p.tracks || { audio: [], subs: [] };
+  const ccProbePending = builtInSubtitlesEnabled() && kind === 'cc' && !p.tracks && !!p.tracksUrl;
+  if (ccProbePending) {
+    fetchPlayerTracks(p, 2500).then(() => {
+      if (S.playing === p && S.trackMenuKind === 'cc' && $('trackMenu').classList.contains('open')) {
+        openTrackMenu('cc', { scrollTop: $('trackMenu').scrollTop });
+      }
+    }).catch(() => {});
+  }
   const m = $('trackMenu'); m.innerHTML = '';
   S.trackMenuKind = kind;
   const head = document.createElement('div'); head.className = 'tmHead';
@@ -8899,11 +8972,13 @@ function openTrackMenu(kind, restore = {}) {
   if (kind === 'cc') {
     mkRow('Off', p.subTrack === null, () => setSubtitle(null));
     const releaseSubs = visibleReleaseSubChoices();
+    let localRows = 0;
     if (releaseSubs.length) {
       const pickRel = bestReleaseSubtitleRel();
       releaseSubs.slice(0, 6).forEach((sub) => {
         const rel = releaseSubRel(sub.id);
         mkRow(releaseSubLabel(sub), p.subTrack === rel || (!p.subTrack && rel === pickRel), () => setSubtitle(rel));
+        localRows++;
       });
     }
     const embeddedSubs = visibleEmbeddedSubChoices();
@@ -8911,6 +8986,7 @@ function openTrackMenu(kind, restore = {}) {
       embeddedSubs.slice(0, 8).forEach((sub) => {
         const rel = embeddedSubRel(sub.rel);
         mkRow(embeddedSubLabel(sub), p.subTrack === rel, () => setSubtitle(rel));
+        localRows++;
       });
     }
     if (hiddenLocalSubtitleCount()) {
@@ -8920,7 +8996,8 @@ function openTrackMenu(kind, restore = {}) {
     }
     // Online subtitles remain the fallback for releases with no usable text sidecar
     // or only bitmap embedded subtitles.
-    if (S.serverInfo && S.serverInfo.opensubs) {
+    const onlineAvailable = !!(S.serverInfo && S.serverInfo.opensubs && p.mountId && subtitleCatalogAvailable(p.item));
+    if (onlineAvailable) {
       const pref = prefLang('slang') && prefLang('slang') !== 'off' ? osLang(prefLang('slang')) : '';
       const langs = [...new Set([pref, 'en'].filter(Boolean))];
       langs.forEach((l) => {
@@ -8948,6 +9025,15 @@ function openTrackMenu(kind, restore = {}) {
             if (loaded) setSubtitleLangExpanded(l, true);
           }, { keepOpen: true, key: 'subs-versions-' + l });
         }
+      });
+    }
+    if (!localRows && !onlineAvailable) {
+      const localStatus = builtInSubtitlesEnabled()
+        ? (ccProbePending ? 'Checking built-in subtitles...' : 'No built-in text subtitles found')
+        : 'Built-in subtitles off in Settings';
+      mkRow(localStatus, false, () => {}, {
+        disabled: true,
+        key: ccProbePending ? 'subs-checking-local' : 'subs-no-local',
       });
     }
     const syncHead = document.createElement('div');
@@ -11715,10 +11801,13 @@ function canUseNativeLivePlayer() {
       && window.TriboonTV.nativeChromeVersion && window.TriboonTV.nativeChromeVersion() >= 1);
   } catch { return false; }
 }
+function isTriboonAndroidShell() {
+  return /TriboonTV|TriboonAndroid/.test(navigator.userAgent || '');
+}
 function nativeLiveRequired() {
-  // Android TV and Android mobile never fall back to the HTML/MSE live player once the
-  // current native bridge is available. Browsers still use the web Live TV path.
-  return canUseNativeLivePlayer();
+  // Android TV and Android mobile never fall back to the HTML/MSE live player. If the
+  // installed APK is too old to expose playLive, stop with a native-player/update message.
+  return isTriboonAndroidShell();
 }
 function setNativeLivePlaybackState(it) {
   $('pSrc').textContent = it.genre || it.group || '';
@@ -11768,7 +11857,10 @@ function openNativeLiveGuideShell(it, opts = {}) {
   else commitNativeLivePlayback(it);
 }
 function tryNativeLivePlayer(it, guide = false) {
-  if (!canUseNativeLivePlayer() || !it || !it._nativeUrl) return false;
+  if (!canUseNativeLivePlayer() || !it) return false;
+  const primaryUrl = it._nativeUrl || it._streamUrl;
+  if (!primaryUrl) return false;
+  const primaryMime = it._nativeUrl ? (it._nativeMime || '') : 'video/mp4';
   try {
     wakeScreensaverForPlayerSurface();
     if (!guide) {
@@ -11782,10 +11874,11 @@ function tryNativeLivePlayer(it, guide = false) {
     S.nativeLiveReturnView = (S.view === 'livetv' || document.querySelector('#chBody.liveGuideShell') || guide) ? 'livetv' : S.view;
     if (guide) openNativeLiveGuideShell(it, { pending: true });
     const liveFallbacks = [];
+    const primaryAbs = new URL(primaryUrl, location.origin).href;
     const addLiveFallback = (url, mime) => {
       if (!url) return;
       const abs = new URL(url, location.origin).href;
-      if (abs === new URL(it._nativeUrl, location.origin).href || liveFallbacks.some((x) => x.url === abs)) return;
+      if (abs === primaryAbs || liveFallbacks.some((x) => x.url === abs)) return;
       liveFallbacks.push({ url: abs, mime: mime || '' });
     };
     addLiveFallback(it._nativeFallbackUrl, it._nativeFallbackMime || '');
@@ -11795,8 +11888,8 @@ function tryNativeLivePlayer(it, guide = false) {
     window.TriboonTV.playLive(JSON.stringify({
       title: it.title || 'Live TV',
       source: it.genre || it.group || '',
-      url: new URL(it._nativeUrl, location.origin).href,
-      mime: it._nativeMime || '',
+      url: primaryAbs,
+      mime: primaryMime,
       fallbackUrl: it._nativeFallbackUrl ? new URL(it._nativeFallbackUrl, location.origin).href : '',
       fallbackMime: it._nativeFallbackMime || '',
       fallbacks: liveFallbacks,
@@ -11952,7 +12045,9 @@ async function playChannel(it, list) {
   }
   if (!keepGuidePip && tryNativeLivePlayer(it)) return;
   if (nativeLiveRequired()) {
-    toast('Native player could not start this channel');
+    toast(canUseNativeLivePlayer()
+      ? 'Native player could not start this channel'
+      : 'Update the Android app to play Live TV');
     return;
   }
   return playChannelWeb(it);
@@ -14782,9 +14877,10 @@ async function refreshSettings() {
     $('tmdbStatus').textContent = s.tmdbKey ? 'key saved ✓ — encrypted at rest' : 'no key yet';
     $('tmdbKey').placeholder = s.tmdbKey ? 'key saved ✓ — paste a new one to replace' : 'TMDB API key (v3)';
     $('osKey').placeholder = s.openSubsKey ? 'key saved ✓ — paste a new one to replace' : 'Wyzie Subs API key';
+    $('builtInSubsMode').value = s.builtInSubtitlesEnabled ? 'on' : 'off';
     $('osStatus').textContent = s.openSubsKey
-      ? 'key saved ✓ — subtitles live in the player CC menu'
-      : 'not set up - CC needs a Wyzie Subs key';
+      ? `key saved ✓ — ${s.builtInSubtitlesEnabled ? 'built-in first, online fallback' : 'online-only testing'}`
+      : `${s.builtInSubtitlesEnabled ? 'built-in first' : 'online-only testing'} — add a Wyzie Subs key for online captions`;
     $('traktStatus').textContent = s.traktClientId
       ? `app saved ✓ (${s.traktClientSecret ? 'secret saved' : 'secret missing'}) — users link in Preferences → Connections`
       : 'not configured yet';
@@ -15015,11 +15111,14 @@ $('tmdbSave').addEventListener('click', async () => {
   refreshSettings(); loadRows();
 });
 $('osSave').addEventListener('click', async () => {
-  if (!$('osKey').value.trim()) return toast('Paste your Wyzie Subs key first');
-  await api('/api/settings', { method: 'POST', body: { openSubsKey: $('osKey').value.trim() } });
+  const key = $('osKey').value.trim();
+  const body = { builtInSubtitlesEnabled: $('builtInSubsMode').value === 'on' };
+  if (key) body.openSubsKey = key;
+  await api('/api/settings', { method: 'POST', body });
   const srvNow = await api('/api/server');
   S.serverInfo.opensubs = srvNow.opensubs;
-  toast('Subtitles ready in the player CC menu');
+  S.serverInfo.builtInSubtitlesEnabled = srvNow.builtInSubtitlesEnabled;
+  toast(body.builtInSubtitlesEnabled ? 'Built-in subtitles enabled' : 'Online-only subtitles enabled');
   $('osKey').value = '';
   refreshSettings();
 });

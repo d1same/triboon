@@ -3188,6 +3188,7 @@ const H = {
     tmdb: !!settings.get().tmdbKey, ffmpeg: !!detectFfmpeg(),
     // Wyzie only needs the server-side API key; no account login is required.
     opensubs: !!settings.get().openSubsKey,
+    builtInSubtitlesEnabled: settings.get().builtInSubtitlesEnabled === true,
     iptv: iptvConfigured(settings.get()),
     music: !!ytmusic.detectYtdlp(), // Music tab shows only when yt-dlp is present
     musicCatalog: !!ytmusic.detectYtMusicApi(),
@@ -4911,6 +4912,7 @@ Object.assign(H, {
       })),
       tmdbKey: s.tmdbKey ? '•••' : null,
       openSubsKey: s.openSubsKey ? '•••' : null,
+      builtInSubtitlesEnabled: s.builtInSubtitlesEnabled === true,
       openSubsUser: s.openSubsUser || null, // username isn't a secret; the password is
       openSubsPass: s.openSubsPass ? '•••' : null,
       // M3U/Xtream details often embed credentials — expose only hosts/flags.
@@ -5004,6 +5006,9 @@ Object.assign(H, {
         indexers: b.indexers !== undefined ? b.indexers : [...(s.indexers || [])],
         tmdbKey: b.tmdbKey !== undefined ? b.tmdbKey : s.tmdbKey,
         openSubsKey: b.openSubsKey !== undefined ? (b.openSubsKey || null) : (s.openSubsKey ?? null),
+        builtInSubtitlesEnabled: b.builtInSubtitlesEnabled !== undefined
+          ? b.builtInSubtitlesEnabled === true
+          : s.builtInSubtitlesEnabled === true,
         // Downloads need the user's opensubtitles.com login (the API key alone only searches).
         openSubsUser: b.openSubsUser !== undefined ? (b.openSubsUser || null) : (s.openSubsUser ?? null),
         openSubsPass: b.openSubsPass !== undefined ? (b.openSubsPass || null) : (s.openSubsPass ?? null),

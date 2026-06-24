@@ -116,6 +116,8 @@ test('boot: fresh server requires setup, then issues a working admin token', asy
   assert.strictEqual(s.status, 200);
   assert.match(s.json.version, /^\d+\.\d+\.\d+/, 'server info should expose the running version for Unraid/update checks');
   assert.strictEqual(s.json.needsSetup, true);
+  assert.strictEqual(s.json.builtInSubtitlesEnabled, false,
+    'built-in subtitles default to off while online-only testing is enabled');
 
   admin = await setupAdmin(srv.port);
   const me = await httpJson(srv.port, 'GET', '/api/me', null, admin);
@@ -296,6 +298,20 @@ test('settings: streaming performance handles high-connection providers and reco
   await httpJson(srv.port, 'POST', '/api/settings', {
     providers: [{ host: '127.0.0.1', port: nntpPort, tls: false, user: 'u', pass: 'super-secret-pass', connections: 4 }],
   }, admin);
+});
+
+test('settings: built-in subtitle mode round-trips to player server info', async () => {
+  await httpJson(srv.port, 'POST', '/api/settings', { builtInSubtitlesEnabled: true }, admin);
+  let s = await httpJson(srv.port, 'GET', '/api/settings', null, admin);
+  assert.strictEqual(s.json.builtInSubtitlesEnabled, true, 'admin setting should save built-in subtitle mode');
+  assert.strictEqual((await httpJson(srv.port, 'GET', '/api/server')).json.builtInSubtitlesEnabled, true,
+    'all players should receive the built-in subtitle mode through /api/server');
+
+  await httpJson(srv.port, 'POST', '/api/settings', { builtInSubtitlesEnabled: false }, admin);
+  s = await httpJson(srv.port, 'GET', '/api/settings', null, admin);
+  assert.strictEqual(s.json.builtInSubtitlesEnabled, false, 'admin setting should be able to return to online-only mode');
+  assert.strictEqual((await httpJson(srv.port, 'GET', '/api/server')).json.builtInSubtitlesEnabled, false,
+    'player server info should reflect online-only mode');
 });
 
 test('libraries: admin CRUD, users read-only, validation', async () => {

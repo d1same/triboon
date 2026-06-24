@@ -23,8 +23,8 @@ canonical reference.
 - Playback order: source-fit, direct play, remux, transcode.
 - Security: deny-by-default route table in `server/index.js`; every endpoint must
   declare `public`, `user`, `admin`, or `stream` auth and be covered by tests.
-- Current verification baseline after the release-audit hardening pass: full
-  `npm.cmd test` covers 201 tests; focused IPTV, security, Android native
+- Current verification baseline after the Live TV and subtitle release pass: full
+  `npm.cmd test` covers 226 tests; focused IPTV, security, Android native
   player, Music, and NNTP priority tests cover the current source model, route
   table, device bridge, process queue, and capacity scheduling.
 
