@@ -434,12 +434,16 @@ Run the narrow test for the area touched, then the broader suite before a releas
   `bench/android-tv-stress.ps1`, and inspect logs for fatal/provider errors.
 - Android release packaging: attach `triboon-tv-vX.Y.Z.apk`,
   `triboon-mobile-vX.Y.Z.apk`, `triboon-tv.apk`, and `triboon-mobile.apk` to
-  the GitHub release. Stable Downloader URLs are
+  the GitHub release from the same commit/version as the server and container
+  image. Stable Downloader URLs are
   `https://github.com/d1same/triboon/releases/latest/download/triboon-tv.apk`
   and
   `https://github.com/d1same/triboon/releases/latest/download/triboon-mobile.apk`;
-  Android update acceptance still depends on package id, signing key, and a
-  higher versionCode. Keep this aligned with `docs-app-updates.md`.
+  Android update acceptance still depends on package id, matching signing
+  certificate, and a higher versionCode. Keep this aligned with
+  `docs-app-updates.md`, and do not call a release done until GitHub Actions has
+  published the Unraid/container image and both stable APK URLs download the
+  newest APKs.
 - Documentation: scan for stale phase counts, old stack names, old cache
   ownership statements, and old fixed-connection/read-ahead tuning before
   calling the work done.

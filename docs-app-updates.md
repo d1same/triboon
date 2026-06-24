@@ -38,12 +38,28 @@ updates only when all of these are true:
 - The APK is signed with the same signing key.
 - The new Android `versionCode` is higher than the installed one.
 
+The signing certificate is part of the update chain. Before publishing APKs,
+compare the new APK certificate against the current stable APK certificate from
+`/releases/latest/download/triboon-tv.apk` or
+`/releases/latest/download/triboon-mobile.apk`. If the certificate changes,
+Android will treat the APK as a different signing lineage and the normal update
+will fail. Do not publish replacement stable APK aliases until the certificate
+match and higher `versionCode` are confirmed.
+
 For every public release, bump these together:
 
 - `package.json` version.
 - Android `versionName`.
 - Android `versionCode`.
 - Git tag `vX.Y.Z`.
+
+The public release is not complete until all update surfaces are current:
+
+- GitHub `main` has the version bump and release fixes.
+- Git tag `vX.Y.Z` points at the same commit.
+- GitHub Actions has published the Unraid/container image for `latest` and the
+  semver tag.
+- The GitHub release has the two versioned APKs and the two stable APK aliases.
 
 ## In-App Update Behavior
 
@@ -58,8 +74,23 @@ must not attempt silent installs.
 
 Before calling a release done:
 
-- Build Android TV and mobile APKs from the same version.
+- Run the full test suite and the focused smoke checks needed for the changed
+  area.
+- Build or let GitHub Actions publish the Unraid/container image, then confirm
+  the workflow succeeded.
+- Build Android TV and mobile APK assets from the same version and same commit
+  as the server/container release.
+- Confirm the APK `versionName` matches `X.Y.Z` and `versionCode` is higher
+  than the prior release.
+- Confirm the APK signing certificate matches the current stable APK signing
+  certificate.
 - Attach all four APK assets listed above to the GitHub release.
-- Confirm both stable URLs download the newest APKs.
-- Confirm Android accepts the update over the prior installed build.
+- Confirm both stable URLs download the newest APKs, and verify the downloaded
+  files still have the expected version and certificate.
+- Confirm Android accepts the update over the prior installed build when a
+  device/emulator is available.
 - Keep secrets, local `data/`, logs, databases, and old scratch APKs out of git.
+
+Never tag a public release, mark a release as latest, or tell users to update
+Unraid/Android until the code, container image, versioned APKs, and stable APK
+aliases all point to the same version.
