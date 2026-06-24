@@ -76,6 +76,19 @@ test('vfs: caller priority reaches article reads and aborted reads do not fetch'
   assert.strictEqual(calls.find((c) => c.msgId === 'seg1@triboon.test').priority, 'startup');
   assert.ok(calls.some((c) => c.priority === 'readAhead'), 'reader should still prefetch later segments at readAhead priority');
 
+  calls.length = 0;
+  vf.cache.clear();
+  vf.cacheOrder = [];
+  vf.inflight.clear();
+  const bg = [];
+  for await (const chunk of vf.read(0, 20000, { priority: 'background' })) bg.push(chunk);
+  assert.ok(Buffer.concat(bg).length > 0);
+  assert.deepStrictEqual(
+    calls.map((c) => c.priority),
+    ['background'],
+    'background subtitle reads should not trigger read-ahead or outrank playback work',
+  );
+
   const vfSeek = new VirtualFile(pool, nzb, { readAhead: 0 });
   await vfSeek.mount();
   calls.length = 0;

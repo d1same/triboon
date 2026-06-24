@@ -5238,7 +5238,11 @@ Object.assign(H, {
       if (!readSignal.aborted) readController.abort();
       if (vf && typeof vf.cancelReadAhead === 'function') vf.cancelReadAhead();
     };
-    const readPriority = start === 0 ? 'startup' : 'seek';
+    const requestedPriority = String(ctx.url.searchParams.get('priority') || '').toLowerCase();
+    const explicitPriority = requestedPriority === 'read-ahead' ? 'readAhead' : requestedPriority;
+    const readPriority = ['background', 'readAhead', 'health'].includes(explicitPriority)
+      ? explicitPriority
+      : (start === 0 ? 'startup' : 'seek');
     ctx.req.once('close', stopRead);
     ctx.res.once('close', stopRead);
     try {
@@ -5498,6 +5502,12 @@ Object.assign(H, {
     const track = parseInt(ctx.m[2], 10) || 0;
     try {
       const mode = String(ctx.url.searchParams.get('mode') || '').toLowerCase();
+      if (mode === 'prewarm') {
+        ensureSubtitleVtt(vf, track, ctx.claims.uid, { mode }).catch((e) => {
+          console.error(`[subtitle ${vf.id}:${track}] prewarm failed: ${String(e && e.message || e).slice(0, 200)}`);
+        });
+        return send(ctx.res, 202, { ok: true, status: 'prewarming' });
+      }
       const vtt = await ensureSubtitleVtt(vf, track, ctx.claims.uid, { mode });
       if (!ctx.res.writableEnded) send(ctx.res, 200, vtt, { 'content-type': 'text/vtt; charset=utf-8' });
     } catch (e) {
@@ -5837,14 +5847,14 @@ function cleanupYtCookieFiles() {
 function embeddedSubtitleTimeoutMs(mode = '') {
   const configured = parseInt(process.env.TRIBOON_EMBEDDED_SUB_TIMEOUT_MS || '', 10);
   if (Number.isFinite(configured) && configured > 0) return Math.max(15000, Math.min(120000, configured));
-  return mode === 'manual' ? 120000 : 45000;
+  return mode === 'manual' || mode === 'prewarm' ? 120000 : 45000;
 }
 function ensureSubtitleVtt(vf, track, uid, opts = {}) {
   vf._subCache = vf._subCache || new Map();
   if (vf._subCache.has(track)) return Promise.resolve(vf._subCache.get(track));
   vf._subJobs = vf._subJobs || new Map();
   if (vf._subJobs.has(track)) return vf._subJobs.get(track);
-  const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(uid, vf.id)}`;
+  const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(uid, vf.id)}&priority=background`;
   const timeoutMs = embeddedSubtitleTimeoutMs(opts.mode);
   const job = new Promise((resolve, reject) => {
     let ff; let done = false;

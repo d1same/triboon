@@ -12,6 +12,8 @@ package app.triboon.tv;
 
 import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
+import android.animation.ObjectAnimator;
+import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.PictureInPictureParams;
@@ -47,6 +49,7 @@ import android.util.Log;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.animation.LinearInterpolator;
 import android.view.WindowManager;
 import android.window.OnBackInvokedDispatcher;
 import android.webkit.WebChromeClient;
@@ -163,9 +166,22 @@ public class MainActivity extends Activity {
     private FrameLayout nativeLoading;
     private ImageView nativeLoadingBackdrop;
     private TextView nativeLoadingTitle;
-    private TextView nativeLoadingStage;
-    private TextView nativeLoadingDetail;
+    private TextView nativeLoadingStatus;
+    private View nativeLoadingLaneGlow;
+    private ObjectAnimator nativeLoadingLaneAnimator;
     private int nativeLoadingToken;
+    private int nativeLoadingStatusIndex;
+    private final String[] nativeLoadingStatuses = new String[]{"Preparing", "Mounting", "Checking health..."};
+    private final Runnable nativeLoadingStatusTick = new Runnable() {
+        @Override public void run() {
+            if (nativeLoading == null || nativeLoading.getVisibility() != View.VISIBLE || nativeLoadingStatus == null) return;
+            nativeLoadingStatusIndex = Math.min(nativeLoadingStatusIndex + 1, nativeLoadingStatuses.length - 1);
+            nativeLoadingStatus.setText(nativeLoadingStatuses[nativeLoadingStatusIndex]);
+            if (nativeLoadingStatusIndex < nativeLoadingStatuses.length - 1) {
+                nativeProgress.postDelayed(this, 1050L);
+            }
+        }
+    };
     private View nativeControlShade;
     private LinearLayout nativeMetaBar;
     private LinearLayout nativeChrome;
@@ -2863,17 +2879,13 @@ public class MainActivity extends Activity {
         loadingCenter.setGravity(android.view.Gravity.CENTER);
         loadingCenter.setPadding(dp(36), dp(36), dp(36), dp(36));
 
-        TextView loadingMark = new TextView(this);
-        loadingMark.setText("Triboon");
-        loadingMark.setTextColor(0xEEF3EFF7);
-        loadingMark.setTextSize(32);
-        loadingMark.setTypeface(Typeface.DEFAULT_BOLD);
-        loadingMark.setGravity(android.view.Gravity.CENTER);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            loadingMark.setLetterSpacing(0.02f);
-        }
-        loadingCenter.addView(loadingMark, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        ImageView loadingMark = new ImageView(this);
+        loadingMark.setImageResource(R.drawable.native_loading_wordmark);
+        loadingMark.setAdjustViewBounds(true);
+        loadingMark.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        loadingMark.setAlpha(0.96f);
+        LinearLayout.LayoutParams markLp = new LinearLayout.LayoutParams(dp(250), ViewGroup.LayoutParams.WRAP_CONTENT);
+        loadingCenter.addView(loadingMark, markLp);
 
         nativeLoadingTitle = new TextView(this);
         nativeLoadingTitle.setTextColor(0xDDF3EFF7);
@@ -2886,46 +2898,30 @@ public class MainActivity extends Activity {
         loadingCenter.addView(nativeLoadingTitle, new LinearLayout.LayoutParams(
                 dp(620), ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        nativeLoadingStage = new TextView(this);
-        nativeLoadingStage.setText("Finding best source");
-        nativeLoadingStage.setTextColor(0xEEFFC65C);
-        nativeLoadingStage.setTextSize(12);
-        nativeLoadingStage.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
-        nativeLoadingStage.setGravity(android.view.Gravity.CENTER);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            nativeLoadingStage.setLetterSpacing(0.12f);
-        }
-        nativeLoadingStage.setAllCaps(true);
-        nativeLoadingStage.setPadding(0, dp(16), 0, 0);
-        loadingCenter.addView(nativeLoadingStage, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        View loadingLane = new View(this);
+        FrameLayout loadingLane = new FrameLayout(this);
         loadingLane.setBackground(nativeLoadingLaneBg());
-        LinearLayout.LayoutParams laneLp = new LinearLayout.LayoutParams(dp(320), dp(4));
-        laneLp.setMargins(0, dp(12), 0, 0);
+        loadingLane.setClipChildren(true);
+        nativeLoadingLaneGlow = new View(this);
+        nativeLoadingLaneGlow.setBackground(nativeLoadingLaneGlowBg());
+        FrameLayout.LayoutParams glowLp = new FrameLayout.LayoutParams(dp(92), dp(4));
+        glowLp.leftMargin = -dp(92);
+        loadingLane.addView(nativeLoadingLaneGlow, glowLp);
+        LinearLayout.LayoutParams laneLp = new LinearLayout.LayoutParams(dp(300), dp(4));
+        laneLp.setMargins(0, dp(16), 0, 0);
         loadingCenter.addView(loadingLane, laneLp);
 
-        LinearLayout loadingSteps = new LinearLayout(this);
-        loadingSteps.setOrientation(LinearLayout.HORIZONTAL);
-        loadingSteps.setGravity(android.view.Gravity.CENTER);
-        loadingSteps.setPadding(0, dp(10), 0, 0);
-        loadingSteps.addView(nativeLoadingStep("Source"));
-        loadingSteps.addView(nativeLoadingStep("Health"));
-        loadingSteps.addView(nativeLoadingStep("Buffer"));
-        loadingCenter.addView(loadingSteps, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        nativeLoadingDetail = new TextView(this);
-        nativeLoadingDetail.setText("Preparing native playback");
-        nativeLoadingDetail.setTextColor(0x99F3EFF7);
-        nativeLoadingDetail.setTextSize(13);
-        nativeLoadingDetail.setGravity(android.view.Gravity.CENTER);
-        nativeLoadingDetail.setSingleLine(true);
-        nativeLoadingDetail.setEllipsize(TextUtils.TruncateAt.END);
-        nativeLoadingDetail.setPadding(0, dp(10), 0, 0);
-        loadingCenter.addView(nativeLoadingDetail, new LinearLayout.LayoutParams(
-                dp(520), ViewGroup.LayoutParams.WRAP_CONTENT));
+        nativeLoadingStatus = new TextView(this);
+        nativeLoadingStatus.setTextColor(0xAAF3EFF7);
+        nativeLoadingStatus.setTextSize(12);
+        nativeLoadingStatus.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        nativeLoadingStatus.setGravity(android.view.Gravity.CENTER);
+        nativeLoadingStatus.setSingleLine(true);
+        nativeLoadingStatus.setEllipsize(TextUtils.TruncateAt.END);
+        nativeLoadingStatus.setText("Preparing");
+        LinearLayout.LayoutParams statusLp = new LinearLayout.LayoutParams(
+                dp(360), ViewGroup.LayoutParams.WRAP_CONTENT);
+        statusLp.setMargins(0, dp(10), 0, 0);
+        loadingCenter.addView(nativeLoadingStatus, statusLp);
 
         nativeLoading.addView(loadingCenter, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -2952,57 +2948,29 @@ public class MainActivity extends Activity {
     private GradientDrawable nativeLoadingLaneBg() {
         GradientDrawable d = new GradientDrawable(
                 GradientDrawable.Orientation.LEFT_RIGHT,
-                new int[]{0x22FFFFFF, 0xDDB8A46A, 0xEEFFFFFF, 0xDDB8A46A, 0x22FFFFFF});
+                new int[]{0x18FFFFFF, 0x2AF3EFF7, 0x18FFFFFF});
+        d.setStroke(dp(1), 0x22FFFFFF);
         d.setCornerRadius(dp(999));
         return d;
     }
 
-    private GradientDrawable nativeLoadingStepBg() {
+    private GradientDrawable nativeLoadingLaneGlowBg() {
         GradientDrawable d = new GradientDrawable(
                 GradientDrawable.Orientation.LEFT_RIGHT,
-                new int[]{0x55B8A46A, 0x22FFFFFF});
+                new int[]{0x00FFFFFF, 0xCCB8A46A, 0xFFFFFFFF, 0xCCB8A46A, 0x00FFFFFF});
         d.setCornerRadius(dp(999));
-        d.setStroke(dp(1), 0x18FFFFFF);
         return d;
-    }
-
-    private TextView nativeLoadingStep(String label) {
-        TextView step = new TextView(this);
-        step.setText(label);
-        step.setTextColor(0xCCF3EFF7);
-        step.setTextSize(10);
-        step.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
-        step.setGravity(android.view.Gravity.CENTER);
-        step.setAllCaps(true);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            step.setLetterSpacing(0.08f);
-        }
-        step.setBackground(nativeLoadingStepBg());
-        step.setPadding(dp(14), dp(6), dp(14), dp(6));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.setMargins(dp(4), 0, dp(4), 0);
-        step.setLayoutParams(lp);
-        return step;
     }
 
     private void showNativeLoading(String title, String backdropUrl) {
-        showNativeLoading(title, backdropUrl, "Finding best source", "Mounting best release");
-    }
-
-    private void showNativeLoading(String title, String backdropUrl, String stage, String detail) {
         if (nativeLoading == null) return;
         int token = ++nativeLoadingToken;
         nativeLoadingTitle.setText(title == null || title.isEmpty() ? "Preparing stream" : title);
-        if (nativeLoadingStage != null) {
-            nativeLoadingStage.setText(stage == null || stage.isEmpty() ? "Opening playback" : stage);
-        }
-        if (nativeLoadingDetail != null) {
-            nativeLoadingDetail.setText(detail == null || detail.isEmpty() ? "Media3 / ExoPlayer" : detail);
-        }
+        startNativeLoadingStatus();
         nativeLoadingBackdrop.setImageDrawable(null);
         nativeLoading.setVisibility(View.VISIBLE);
         nativeLoading.bringToFront();
+        startNativeLoadingLane();
         if (backdropUrl == null || backdropUrl.trim().isEmpty()) return;
         String art = backdropUrl.trim();
         new Thread(() -> {
@@ -3059,34 +3027,44 @@ public class MainActivity extends Activity {
         return BitmapFactory.decodeByteArray(bytes, 0, bytes.length, opts);
     }
 
-    private String nativeLoadingStageFor(String mode, String kind) {
-        if ("live".equals(mode)) return "Tuning channel";
-        if ("transcode".equals(kind)) return "Opening transcode";
-        if ("remux".equals(kind)) return "Opening remux";
-        return "Opening direct play";
-    }
-
-    private String nativeLoadingDetailFor(String mode, String kind, String qualityLabel, String sourceLabel, long startOffsetMs) {
-        if ("live".equals(mode)) return "Live TV - native playback";
-        String method = "transcode".equals(kind) ? "Transcode"
-                : ("remux".equals(kind) ? "Remux" : "Direct Play");
-        String detail = method;
-        if (sourceLabel != null && !sourceLabel.trim().isEmpty()) {
-            detail += " - " + sourceLabel.trim();
-        }
-        if (startOffsetMs >= 30000L) {
-            long totalSeconds = startOffsetMs / 1000L;
-            long minutes = totalSeconds / 60L;
-            long seconds = totalSeconds % 60L;
-            detail += String.format(Locale.US, " - Resume %d:%02d", minutes, seconds);
-        }
-        return detail;
-    }
-
     private void hideNativeLoading() {
         nativeLoadingToken++;
+        stopNativeLoadingStatus();
+        if (nativeLoadingLaneAnimator != null) {
+            nativeLoadingLaneAnimator.cancel();
+            nativeLoadingLaneAnimator = null;
+        }
+        if (nativeLoadingLaneGlow != null) nativeLoadingLaneGlow.setTranslationX(-dp(92));
         if (nativeLoading != null) nativeLoading.setVisibility(View.GONE);
         if (nativeLoadingBackdrop != null) nativeLoadingBackdrop.setImageDrawable(null);
+    }
+
+    private void startNativeLoadingStatus() {
+        if (nativeLoadingStatus == null) return;
+        nativeProgress.removeCallbacks(nativeLoadingStatusTick);
+        nativeLoadingStatusIndex = 0;
+        nativeLoadingStatus.setText(nativeLoadingStatuses[nativeLoadingStatusIndex]);
+        nativeProgress.postDelayed(nativeLoadingStatusTick, 850L);
+    }
+
+    private void stopNativeLoadingStatus() {
+        nativeProgress.removeCallbacks(nativeLoadingStatusTick);
+        nativeLoadingStatusIndex = 0;
+        if (nativeLoadingStatus != null) nativeLoadingStatus.setText(nativeLoadingStatuses[nativeLoadingStatusIndex]);
+    }
+
+    private void startNativeLoadingLane() {
+        if (nativeLoadingLaneGlow == null) return;
+        if (nativeLoadingLaneAnimator != null) {
+            nativeLoadingLaneAnimator.cancel();
+            nativeLoadingLaneAnimator = null;
+        }
+        nativeLoadingLaneGlow.setTranslationX(-dp(92));
+        nativeLoadingLaneAnimator = ObjectAnimator.ofFloat(nativeLoadingLaneGlow, "translationX", -dp(92), dp(320));
+        nativeLoadingLaneAnimator.setDuration(1350L);
+        nativeLoadingLaneAnimator.setRepeatCount(ValueAnimator.INFINITE);
+        nativeLoadingLaneAnimator.setInterpolator(new LinearInterpolator());
+        nativeLoadingLaneAnimator.start();
     }
 
     private GradientDrawable nativeFade(int start, int end) {
@@ -3185,14 +3163,10 @@ public class MainActivity extends Activity {
     private void showNativeVideoLoading(String json) {
         String title = "Triboon";
         String backdropUrl = "";
-        String stage = "Finding best source";
-        String detail = "Mounting best release";
         try {
             org.json.JSONObject j = new org.json.JSONObject(json == null ? "{}" : json);
             title = j.optString("title", title);
             backdropUrl = j.optString("backdropUrl", "");
-            stage = j.optString("stage", stage);
-            detail = j.optString("detail", detail);
         } catch (Exception ignored) {
         }
         try {
@@ -3201,7 +3175,7 @@ public class MainActivity extends Activity {
             buildNativePlayerLayer();
             nativeMode = "video";
             enterNativeFullscreenMode();
-            showNativeLoading(title, backdropUrl, stage, detail);
+            showNativeLoading(title, backdropUrl);
         } catch (Throwable e) {
             handleNativePlaybackStartFailure(e, "video", title, backdropUrl, "direct", "", "", 0L);
         }
@@ -3428,9 +3402,7 @@ public class MainActivity extends Activity {
             }
             if (!guide && "video".equals(mode) && !quietSeek) {
                 enterNativeFullscreenMode();
-                showNativeLoading(title, backdropUrl,
-                        nativeLoadingStageFor(mode, loadingKind),
-                        nativeLoadingDetailFor(mode, loadingKind, loadingQuality, loadingSource, loadingStartOffsetMs));
+                showNativeLoading(title, backdropUrl);
             }
             if (reuseLivePlayer) {
                 nativePlayer.stop();
@@ -3474,8 +3446,7 @@ public class MainActivity extends Activity {
                 buildNativePlayerLayer();
                 nativeMode = "video";
                 enterNativeFullscreenMode();
-                showNativeLoading(title, backdropUrl, "Retrying playback",
-                        nativeLoadingDetailFor(mode, loadingKind, loadingQuality, loadingSource, loadingStartOffsetMs));
+                showNativeLoading(title, backdropUrl);
             } catch (Throwable overlayError) {
                 Log.w(TAG, "Native retry overlay failed: " + nativeThrowableMessage(overlayError));
             }
@@ -4428,8 +4399,7 @@ public class MainActivity extends Activity {
         long safePos = safeNativeVideoPosSeconds(pos);
         releaseNativePlayer(false);
         enterNativeFullscreenMode();
-        showNativeLoading(title, backdropUrl, "Retrying playback",
-                nativeLoadingDetailFor("video", kind, quality, "", startOffsetMs));
+        showNativeLoading(title, backdropUrl);
         web.evaluateJavascript("window.__tvNativeVideoError && __tvNativeVideoError("
                 + org.json.JSONObject.quote(msg == null || msg.isEmpty() ? "native startup stalled" : msg)
                 + "," + safePos + "," + dur + ")", null);

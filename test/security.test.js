@@ -2428,8 +2428,8 @@ test('iptv: live-remux preserves HTTPS hostnames for provider TLS SNI', () => {
 test('streaming: HTTP range reads use startup/seek lanes and cancel stale read-ahead on close', () => {
   const serverCode = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
   const vfsCode = fs.readFileSync(path.join(__dirname, '..', 'server', 'vfs.js'), 'utf8');
-  assert.match(serverCode, /vf\._touched = Date\.now\(\);[\s\S]+pipeline\.rebalancePlaybackWindows\(\);[\s\S]+const readPriority = start === 0 \? 'startup' : 'seek';[\s\S]+ctx\.req\.once\('close', stopRead\);[\s\S]+vf\.read\(start, end, \{ priority: readPriority, signal: readSignal \}\)/,
-    'the stream route should mark initial reads as startup and non-zero ranges as seek');
+  assert.match(serverCode, /vf\._touched = Date\.now\(\);[\s\S]+pipeline\.rebalancePlaybackWindows\(\);[\s\S]+const requestedPriority = String\(ctx\.url\.searchParams\.get\('priority'\)[\s\S]+const explicitPriority = requestedPriority === 'read-ahead' \? 'readAhead' : requestedPriority;[\s\S]+const readPriority = \['background', 'readAhead', 'health'\]\.includes\(explicitPriority\)[\s\S]+: \(start === 0 \? 'startup' : 'seek'\);[\s\S]+ctx\.req\.once\('close', stopRead\);[\s\S]+vf\.read\(start, end, \{ priority: readPriority, signal: readSignal \}\)/,
+    'the stream route should mark normal initial reads as startup, non-zero ranges as seek, and allow explicit background readers for subtitle extraction');
   assert.match(serverCode, /const readController = new AbortController\(\);[\s\S]+const readSignal = readController\.signal;[\s\S]+const stopRead = \(\) => \{[\s\S]+readController\.abort\(\);[\s\S]+vf\.cancelReadAhead\(\);[\s\S]+\}/,
     'client disconnects should stop future read-ahead scheduling');
   assert.match(vfsCode, /cancelReadAhead\(\) \{[\s\S]+this\.readAheadEpoch\+\+;[\s\S]+\}/,
@@ -2438,8 +2438,8 @@ test('streaming: HTTP range reads use startup/seek lanes and cancel stale read-a
     'mount should fetch the first segment through the startup lane so play start cannot queue behind read-ahead');
   assert.match(vfsCode, /async readAt\(start, len, opts = \{\}\)[\s\S]+const priority = opts\.priority \|\| 'startup';[\s\S]+this\._fetchSegment\(first \+ k, priority\)/,
     'header/random access reads used during mount should also stay on the startup lane');
-  assert.match(vfsCode, /async \*read\(start, end, opts = \{\}\) \{[\s\S]+const priority = opts\.priority \|\| 'playback';[\s\S]+let activePriority = priority;[\s\S]+readAheadEpoch === this\.readAheadEpoch[\s\S]+this\._fetchSegment\(segIdx, activePriority, \{ signal \}\)[\s\S]+activePriority = 'playback'/,
-    'virtual file reads should pass caller priority into the first real article fetch, then return to playback while gating read-ahead');
+  assert.match(vfsCode, /async \*read\(start, end, opts = \{\}\) \{[\s\S]+const priority = opts\.priority \|\| 'playback';[\s\S]+let activePriority = priority;[\s\S]+priority !== 'background' && priority !== 'health' && readAheadEpoch === this\.readAheadEpoch[\s\S]+this\._fetchSegment\(segIdx, activePriority, \{ signal \}\)[\s\S]+activePriority = 'playback'/,
+    'virtual file reads should pass caller priority into the first real article fetch, return to playback, and keep background readers from scheduling read-ahead');
 });
 
 test('trakt: device link, scrobble forward, watchlist push + import', async () => {

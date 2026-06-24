@@ -210,7 +210,7 @@ class NzbFileStream {
       this._resetExpiredAdaptiveReadAhead();
       const segIdx = this._segForOffset(offset);
       // Kick read-ahead (fire and forget).
-      if (readAheadEpoch === this.readAheadEpoch && !aborted()) {
+      if (priority !== 'background' && priority !== 'health' && readAheadEpoch === this.readAheadEpoch && !aborted()) {
         for (let a = 1; a <= this.readAhead; a++) {
           const n = segIdx + a;
           if (n < this.segments.length && !this.cache.has(n) && !this.inflight.has(n)) {
