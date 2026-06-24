@@ -13,6 +13,7 @@ const { parseZip } = require('./zip');
 const SIG_7Z = Buffer.from([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c]);
 const VIDEO_EXT = /\.(mkv|mp4|avi|m4v|ts|webm|mov)$/i;
 const JUNK_EXT = /\.(par2|nfo|sfv|srr|srt|sub|idx|txt|jpg|png|sample)$/i;
+const TEXT_SUB_EXT = /\.(srt|vtt|ass|ssa)$/i;
 
 function detectContainer(buf) {
   if (buf.length >= 8 && buf.subarray(0, 8).equals(RAR5_SIG)) return 'rar5';
@@ -71,8 +72,70 @@ function pickInner(files) {
   return scored.length ? scored[0].f : null;
 }
 
+function releaseSubExt(name) {
+  const m = /\.([a-z0-9]+)$/i.exec(String(name || ''));
+  return m ? m[1].toLowerCase() : '';
+}
+
+function releaseSubLanguage(name) {
+  const n = String(name || '').toLowerCase();
+  const token = (re, lang) => (re.test(n) ? lang : '');
+  return token(/(?:^|[.\s_-])(en|eng|english)(?:[.\s_-]|$)/, 'eng')
+    || token(/(?:^|[.\s_-])(es|spa|spanish)(?:[.\s_-]|$)/, 'spa')
+    || token(/(?:^|[.\s_-])(fr|fre|fra|french)(?:[.\s_-]|$)/, 'fra')
+    || token(/(?:^|[.\s_-])(de|ger|deu|german)(?:[.\s_-]|$)/, 'deu')
+    || token(/(?:^|[.\s_-])(it|ita|italian)(?:[.\s_-]|$)/, 'ita')
+    || token(/(?:^|[.\s_-])(pt|por|portuguese)(?:[.\s_-]|$)/, 'por')
+    || '';
+}
+
+function releaseSubFlags(name) {
+  const n = String(name || '').toLowerCase();
+  return {
+    forced: /(?:^|[.\s_-])forced(?:[.\s_-]|$)/.test(n),
+    sdh: /(?:^|[.\s_-])(sdh|hi|hearing[.\s_-]?impaired)(?:[.\s_-]|$)/.test(n),
+  };
+}
+
+function releaseSubScore(sub, videoName = '') {
+  const name = String(sub.name || '');
+  const ext = releaseSubExt(name);
+  let s = ext === 'srt' ? 60 : ext === 'vtt' ? 55 : 35;
+  const flags = releaseSubFlags(name);
+  if (flags.forced) s -= 8;
+  if (flags.sdh) s -= 4;
+  const base = String(videoName || '').replace(/\.[^.]+$/, '').toLowerCase();
+  const subBase = name.replace(/\.[^.]+$/, '').toLowerCase();
+  if (base && subBase.includes(base)) s += 40;
+  if (releaseSubLanguage(name) === 'eng') s += 10;
+  return s;
+}
+
+function publicReleaseSub(sub, idx, videoName) {
+  const flags = releaseSubFlags(sub.name);
+  return {
+    id: `r${idx}`,
+    name: sub.name,
+    ext: releaseSubExt(sub.name),
+    lang: releaseSubLanguage(sub.name),
+    forced: flags.forced,
+    sdh: flags.sdh,
+    size: sub.size || sub.bytes || 0,
+    score: releaseSubScore(sub, videoName),
+    source: 'release',
+  };
+}
+
+function releaseSubCandidates(files, videoName = '') {
+  return (files || [])
+    .filter((f) => f && TEXT_SUB_EXT.test(f.name || '') && String(f.name || '') !== String(videoName || ''))
+    .filter((f) => !f.method || (f.method === 'store' && !f.encrypted))
+    .map((f, idx) => ({ ...publicReleaseSub(f, idx, videoName), _source: f }))
+    .sort((a, b) => b.score - a.score || String(a.name).localeCompare(String(b.name)));
+}
+
 class ArchiveVirtualFile {
-  constructor({ vols, inner, container, method, streamable, tags, password }) {
+  constructor({ vols, inner, container, method, streamable, tags, password, releaseSubs = [] }) {
     this.id = crypto.randomBytes(6).toString('hex');
     this.vols = vols;
     this.container = container;
@@ -84,6 +147,7 @@ class ArchiveVirtualFile {
     this.size = inner ? inner.size : vols.reduce((s, v) => s + v.size, 0);
     this.health = { verdict: 'unverified', checkedAt: null, missing: 0, sampled: 0 };
     this.segmentCount = vols.reduce((s, v) => s + v.segments.length, 0);
+    this.releaseSubs = releaseSubs;
 
     // Cumulative extent table for O(log n) seek: inner offset → (volume, volume offset).
     this.extents = [];
@@ -146,6 +210,24 @@ class ArchiveVirtualFile {
     };
     return this.health;
   }
+
+  async readReleaseSub(id, maxBytes = 5 * 1024 * 1024) {
+    const sub = (this.releaseSubs || []).find((s) => String(s.id) === String(id));
+    if (!sub || !sub._source || !sub._source.extents) throw new Error('release subtitle not found');
+    if ((sub.size || 0) > maxBytes) throw new Error('release subtitle is too large');
+    const vf = new ArchiveVirtualFile({
+      vols: this.vols,
+      inner: sub._source,
+      container: this.container,
+      method: sub._source.method || this.method,
+      streamable: true,
+      tags: [],
+      password: this.password,
+    });
+    const chunks = [];
+    for await (const c of vf.read(0, vf.size, { priority: 'playback' })) chunks.push(c);
+    return Buffer.concat(chunks);
+  }
 }
 
 // Mount any NZB: flat post, RAR set, ZIP, or 7z. Returns a virtual file exposing
@@ -201,16 +283,34 @@ async function mountNzb(pool, nzbXml, opts = {}) {
 
   return new ArchiveVirtualFile({
     vols, inner, container, method: inner.method, streamable, tags, password,
+    releaseSubs: releaseSubCandidates(parsed.files, inner.name),
   });
 }
 
 function mountFlat(pool, nzb, opts) {
-  const vf = new NzbFileStream(pool, pickPrimaryFile(nzb), opts);
+  const primary = pickPrimaryFile(nzb);
+  const vf = new NzbFileStream(pool, primary, opts);
   vf.container = 'flat';
   vf.method = null;
   vf.streamable = true;
   vf.tags = [];
   vf.segmentCount = vf.segments.length;
+  const files = nzb.files.map((f) => ({
+    ...f,
+    name: fileNameFromSubject(f.subject),
+    bytes: f.segments.reduce((s, x) => s + x.bytes, 0),
+  }));
+  vf.releaseSubs = releaseSubCandidates(files, fileNameFromSubject(primary.subject));
+  vf.readReleaseSub = async (id, maxBytes = 5 * 1024 * 1024) => {
+    const sub = (vf.releaseSubs || []).find((s) => String(s.id) === String(id));
+    if (!sub || !sub._source) throw new Error('release subtitle not found');
+    if ((sub.size || sub.bytes || 0) > maxBytes) throw new Error('release subtitle is too large');
+    const sf = new NzbFileStream(pool, sub._source, { ...opts, readAhead: 0, cacheSegments: 2, cacheBytes: maxBytes });
+    await sf.mount('playback');
+    const chunks = [];
+    for await (const c of sf.read(0, Math.min(sf.size || maxBytes, maxBytes), { priority: 'playback' })) chunks.push(c);
+    return Buffer.concat(chunks);
+  };
   return vf.mount();
 }
 

@@ -26,7 +26,6 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Typeface;
-import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.media.AudioDeviceInfo;
 import android.media.AudioFormat;
@@ -64,7 +63,6 @@ import android.widget.HorizontalScrollView;
 import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
@@ -152,7 +150,7 @@ public class MainActivity extends Activity {
     private PlayerView nativePlayerView;
     private int phoneOrientationBeforePlayback = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
     private boolean phonePlaybackOrientationLocked = false;
-    private View nativeGuidePipRevealScrim;
+    private TextView nativeGuidePipRevealScrim;
     private LinearLayout nativeTop;
     private TextView nativePlayerTitle;
     private TextView nativePlayerSubline;
@@ -217,6 +215,7 @@ public class MainActivity extends Activity {
     private final java.util.ArrayList<NativeEpisode> nativeEpisodes = new java.util.ArrayList<>();
     private int nativeEpisodeIndex = 0;
     private boolean nativeEpisodeStripOpen = false;
+    private long nativeEpisodeScrollAtMs = 0L;
     private String nativeSubtitleUrl = "";
     private String nativeSubtitleHostHeader = "";
     private String nativeSubtitleLang = "";
@@ -2501,7 +2500,12 @@ public class MainActivity extends Activity {
         nativePlayerLayer.addView(nativePlayerView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        nativeGuidePipRevealScrim = new View(this);
+        nativeGuidePipRevealScrim = new TextView(this);
+        nativeGuidePipRevealScrim.setText("Tuning channel...");
+        nativeGuidePipRevealScrim.setTextColor(0xDDF3EFF7);
+        nativeGuidePipRevealScrim.setTextSize(10);
+        nativeGuidePipRevealScrim.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        nativeGuidePipRevealScrim.setGravity(android.view.Gravity.CENTER);
         nativeGuidePipRevealScrim.setBackgroundColor(0xFF050309);
         nativeGuidePipRevealScrim.setFocusable(false);
         nativeGuidePipRevealScrim.setClickable(false);
@@ -2822,14 +2826,14 @@ public class MainActivity extends Activity {
 
         nativeSheet = new LinearLayout(this);
         nativeSheet.setOrientation(LinearLayout.VERTICAL);
-        nativeSheet.setPadding(dp(14), dp(12), dp(14), dp(14));
+        nativeSheet.setPadding(dp(12), dp(10), dp(12), dp(12));
         nativeSheet.setBackground(nativePanelBg());
         nativeSheet.setFocusable(true);
         nativeSheet.setFocusableInTouchMode(true);
         nativeSheet.setClickable(true);
         nativeSheet.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);
         nativeSheet.setVisibility(View.GONE);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) nativeSheet.setElevation(dp(10));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) nativeSheet.setElevation(dp(8));
         FrameLayout.LayoutParams sheetLp = new FrameLayout.LayoutParams(
                 nativeSheetWidthPx(), ViewGroup.LayoutParams.WRAP_CONTENT,
                 android.view.Gravity.END | android.view.Gravity.BOTTOM);
@@ -2859,19 +2863,17 @@ public class MainActivity extends Activity {
         loadingCenter.setGravity(android.view.Gravity.CENTER);
         loadingCenter.setPadding(dp(36), dp(36), dp(36), dp(36));
 
-        FrameLayout loadingMark = new FrameLayout(this);
-        ProgressBar loadingRing = new ProgressBar(this);
-        loadingRing.setIndeterminate(true);
-        loadingRing.setIndeterminateDrawable(nativeLoadingRingDrawable());
-        loadingMark.addView(loadingRing, new FrameLayout.LayoutParams(
-                dp(136), dp(136), android.view.Gravity.CENTER));
-
-        ImageView loadingLogo = new ImageView(this);
-        loadingLogo.setImageResource(R.drawable.ic_loading_logo);
-        loadingLogo.setAlpha(0.96f);
-        loadingMark.addView(loadingLogo, new FrameLayout.LayoutParams(
-                dp(74), dp(74), android.view.Gravity.CENTER));
-        loadingCenter.addView(loadingMark, new LinearLayout.LayoutParams(dp(136), dp(136)));
+        TextView loadingMark = new TextView(this);
+        loadingMark.setText("Triboon");
+        loadingMark.setTextColor(0xEEF3EFF7);
+        loadingMark.setTextSize(32);
+        loadingMark.setTypeface(Typeface.DEFAULT_BOLD);
+        loadingMark.setGravity(android.view.Gravity.CENTER);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            loadingMark.setLetterSpacing(0.02f);
+        }
+        loadingCenter.addView(loadingMark, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         nativeLoadingTitle = new TextView(this);
         nativeLoadingTitle.setTextColor(0xDDF3EFF7);
@@ -2898,6 +2900,22 @@ public class MainActivity extends Activity {
         loadingCenter.addView(nativeLoadingStage, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        View loadingLane = new View(this);
+        loadingLane.setBackground(nativeLoadingLaneBg());
+        LinearLayout.LayoutParams laneLp = new LinearLayout.LayoutParams(dp(320), dp(4));
+        laneLp.setMargins(0, dp(12), 0, 0);
+        loadingCenter.addView(loadingLane, laneLp);
+
+        LinearLayout loadingSteps = new LinearLayout(this);
+        loadingSteps.setOrientation(LinearLayout.HORIZONTAL);
+        loadingSteps.setGravity(android.view.Gravity.CENTER);
+        loadingSteps.setPadding(0, dp(10), 0, 0);
+        loadingSteps.addView(nativeLoadingStep("Source"));
+        loadingSteps.addView(nativeLoadingStep("Health"));
+        loadingSteps.addView(nativeLoadingStep("Buffer"));
+        loadingCenter.addView(loadingSteps, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
         nativeLoadingDetail = new TextView(this);
         nativeLoadingDetail.setText("Preparing native playback");
         nativeLoadingDetail.setTextColor(0x99F3EFF7);
@@ -2905,7 +2923,7 @@ public class MainActivity extends Activity {
         nativeLoadingDetail.setGravity(android.view.Gravity.CENTER);
         nativeLoadingDetail.setSingleLine(true);
         nativeLoadingDetail.setEllipsize(TextUtils.TruncateAt.END);
-        nativeLoadingDetail.setPadding(0, dp(8), 0, 0);
+        nativeLoadingDetail.setPadding(0, dp(10), 0, 0);
         loadingCenter.addView(nativeLoadingDetail, new LinearLayout.LayoutParams(
                 dp(520), ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -2931,11 +2949,41 @@ public class MainActivity extends Activity {
         return d;
     }
 
-    private Drawable nativeLoadingRingDrawable() {
+    private GradientDrawable nativeLoadingLaneBg() {
+        GradientDrawable d = new GradientDrawable(
+                GradientDrawable.Orientation.LEFT_RIGHT,
+                new int[]{0x22FFFFFF, 0xDDB8A46A, 0xEEFFFFFF, 0xDDB8A46A, 0x22FFFFFF});
+        d.setCornerRadius(dp(999));
+        return d;
+    }
+
+    private GradientDrawable nativeLoadingStepBg() {
+        GradientDrawable d = new GradientDrawable(
+                GradientDrawable.Orientation.LEFT_RIGHT,
+                new int[]{0x55B8A46A, 0x22FFFFFF});
+        d.setCornerRadius(dp(999));
+        d.setStroke(dp(1), 0x18FFFFFF);
+        return d;
+    }
+
+    private TextView nativeLoadingStep(String label) {
+        TextView step = new TextView(this);
+        step.setText(label);
+        step.setTextColor(0xCCF3EFF7);
+        step.setTextSize(10);
+        step.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        step.setGravity(android.view.Gravity.CENTER);
+        step.setAllCaps(true);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            return getResources().getDrawable(R.drawable.native_loading_ring, getTheme());
+            step.setLetterSpacing(0.08f);
         }
-        return getResources().getDrawable(R.drawable.native_loading_ring);
+        step.setBackground(nativeLoadingStepBg());
+        step.setPadding(dp(14), dp(6), dp(14), dp(6));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.setMargins(dp(4), 0, dp(4), 0);
+        step.setLayoutParams(lp);
+        return step;
     }
 
     private void showNativeLoading(String title, String backdropUrl) {
@@ -3020,10 +3068,9 @@ public class MainActivity extends Activity {
 
     private String nativeLoadingDetailFor(String mode, String kind, String qualityLabel, String sourceLabel, long startOffsetMs) {
         if ("live".equals(mode)) return "Live TV - native playback";
-        String quality = qualityLabel == null || qualityLabel.trim().isEmpty() ? "HD" : qualityLabel.trim();
         String method = "transcode".equals(kind) ? "Transcode"
                 : ("remux".equals(kind) ? "Remux" : "Direct Play");
-        String detail = method + " - " + quality;
+        String detail = method;
         if (sourceLabel != null && !sourceLabel.trim().isEmpty()) {
             detail += " - " + sourceLabel.trim();
         }
@@ -3058,10 +3105,10 @@ public class MainActivity extends Activity {
     private GradientDrawable nativePanelBg() {
         GradientDrawable d = new GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{0xE80B0812, 0xE812091D});
+                new int[]{0xF0181A1D, 0xF00D0F12});
         d.setShape(GradientDrawable.RECTANGLE);
-        d.setCornerRadius(dp(16));
-        d.setStroke(dp(1), 0x2EF3EFF7);
+        d.setCornerRadius(dp(10));
+        d.setStroke(dp(1), 0x12FFFFFF);
         return d;
     }
 
@@ -3317,6 +3364,8 @@ public class MainActivity extends Activity {
                                     + nativePosSeconds() + "," + nativeDurSeconds() + ")", null);
                         } else if ("live".equals(nativeMode)) {
                             nativeLiveStarted = true;
+                            hideNativeGuidePipReveal();
+                            web.evaluateJavascript("window.__tvNativeLiveReady && __tvNativeLiveReady()", null);
                         }
                         applyNativeStartSeekIfReady();
                     }
@@ -3365,11 +3414,11 @@ public class MainActivity extends Activity {
                 nativeChromeSubline.setText("");
                 nativeChromeSubline.setVisibility(View.GONE);
             }
-            String chromeQuality = isLiveMode ? "LIVE" : nativeQualityLabel;
+            String chromeQuality = isLiveMode ? "LIVE" : "";
             nativePlayerSubline.setText(subline);
             nativePlayerSubline.setVisibility(subline.isEmpty() ? View.GONE : View.VISIBLE);
             nativePlayerBadge.setText(chromeQuality);
-            nativePlayerBadge.setVisibility(View.VISIBLE);
+            nativePlayerBadge.setVisibility(chromeQuality.isEmpty() ? View.GONE : View.VISIBLE);
             if (nativeChromeQuality != null) nativeChromeQuality.setText("");
             if (nativeGuideBtn != null) nativeGuideBtn.setVisibility(View.VISIBLE);
             nativeNextBtn.setVisibility(hasNext ? View.VISIBLE : View.GONE);
@@ -3695,12 +3744,18 @@ public class MainActivity extends Activity {
     }
 
     private void revealNativeGuidePip(FrameLayout.LayoutParams pipLp) {
+        revealNativeGuidePip(pipLp, false);
+    }
+
+    private void revealNativeGuidePip(FrameLayout.LayoutParams pipLp, boolean holdUntilReady) {
         if (nativeGuidePipRevealScrim == null || pipLp == null) return;
         syncNativeGuidePipRevealScrim(pipLp);
         nativeGuidePipRevealScrim.animate().cancel();
+        nativeGuidePipRevealScrim.setText("Tuning channel...");
         nativeGuidePipRevealScrim.setAlpha(1f);
         nativeGuidePipRevealScrim.setVisibility(View.VISIBLE);
         nativeGuidePipRevealScrim.bringToFront();
+        if (holdUntilReady) return;
         nativeGuidePipRevealScrim.animate()
                 .alpha(0f)
                 .setDuration(180)
@@ -3744,6 +3799,11 @@ public class MainActivity extends Activity {
             pipLp.setMargins(dp(38), dp(30), 0, 0);
             nativePlayerView.setLayoutParams(pipLp);
             revealNativeGuidePip(pipLp);
+        } else if ("live".equals(nativeMode)) {
+            try {
+                revealNativeGuidePip((FrameLayout.LayoutParams) nativePlayerView.getLayoutParams(), true);
+            } catch (Throwable ignored) {
+            }
         }
         nativePlayerView.setAlpha(1f);
         nativePlayerView.setVisibility(View.VISIBLE);
@@ -3751,6 +3811,9 @@ public class MainActivity extends Activity {
         if (nativeSubtitleOverlay != null) nativeSubtitleOverlay.setVisibility(View.GONE);
         web.setVisibility(View.VISIBLE);
         if (!alreadyGuideMode) web.requestFocus();
+        else web.postDelayed(() -> {
+            if (nativeGuideMode && web != null) web.requestFocus();
+        }, 40);
         web.bringToFront();
         nativePlayerLayer.setVisibility(View.VISIBLE);
         nativePlayerLayer.bringToFront();
@@ -4657,6 +4720,7 @@ public class MainActivity extends Activity {
         nativeEpisodes.clear();
         nativeEpisodeIndex = 0;
         nativeEpisodeStripOpen = false;
+        nativeEpisodeScrollAtMs = 0L;
         if (nativeEpisodeStrip != null) {
             nativeEpisodeStrip.animate().cancel();
             nativeEpisodeStrip.setAlpha(1f);
@@ -4670,10 +4734,13 @@ public class MainActivity extends Activity {
         try {
             Object parsed = new org.json.JSONTokener(json == null ? "{}" : json).nextValue();
             org.json.JSONArray episodes = null;
+            int focusIndex = -1;
             if (parsed instanceof org.json.JSONArray) {
                 episodes = (org.json.JSONArray) parsed;
             } else if (parsed instanceof org.json.JSONObject) {
-                episodes = ((org.json.JSONObject) parsed).optJSONArray("episodes");
+                org.json.JSONObject obj = (org.json.JSONObject) parsed;
+                episodes = obj.optJSONArray("episodes");
+                focusIndex = obj.optInt("focusIndex", -1);
             }
             nativeEpisodes.clear();
             nativeEpisodeIndex = 0;
@@ -4692,6 +4759,7 @@ public class MainActivity extends Activity {
                     nativeEpisodes.add(item);
                 }
             }
+            if (focusIndex >= 0 && focusIndex < nativeEpisodes.size()) nativeEpisodeIndex = focusIndex;
             renderNativeEpisodeStrip(false);
         } catch (Exception ignored) {
             clearNativeEpisodes();
@@ -4701,12 +4769,17 @@ public class MainActivity extends Activity {
     private GradientDrawable nativeEpisodeCardBg(boolean focused, boolean current) {
         GradientDrawable d = new GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
-                focused
-                        ? new int[]{0x55221934, 0x22050309}
-                        : current
-                                ? new int[]{0x33261912, 0x11050309}
-                                : new int[]{0x00000000, 0x00000000});
+                new int[]{0x00000000, 0x00000000});
         d.setCornerRadius(dp(16));
+        return d;
+    }
+
+    private GradientDrawable nativeEpisodeStillFrame(boolean focused, boolean current) {
+        GradientDrawable d = new GradientDrawable();
+        d.setShape(GradientDrawable.RECTANGLE);
+        d.setColor(0x00000000);
+        d.setCornerRadius(dp(12));
+        if (focused || current) d.setStroke(dp(1), focused ? 0x88C6B37A : 0x66C6B37A);
         return d;
     }
 
@@ -4756,6 +4829,19 @@ public class MainActivity extends Activity {
         }).start();
     }
 
+    private void scrollNativeEpisodeIntoView(View child) {
+        if (nativeEpisodeStrip == null || child == null) return;
+        int target = Math.max(0, child.getLeft() - dp(60));
+        if (Math.abs(nativeEpisodeStrip.getScrollX() - target) < dp(4)) return;
+        long now = SystemClock.elapsedRealtime();
+        if (now - nativeEpisodeScrollAtMs < 140) {
+            nativeEpisodeStrip.scrollTo(target, 0);
+        } else {
+            nativeEpisodeStrip.smoothScrollTo(target, 0);
+        }
+        nativeEpisodeScrollAtMs = now;
+    }
+
     private void renderNativeEpisodeStrip(boolean open) {
         if (nativeEpisodeStrip == null || nativeEpisodeList == null) return;
         nativeEpisodeList.removeAllViews();
@@ -4781,31 +4867,38 @@ public class MainActivity extends Activity {
             card.setClipToPadding(false);
             card.setPadding(dp(2), dp(2), dp(2), dp(2));
             card.setBackground(nativeEpisodeCardBg(i == nativeEpisodeIndex && nativeEpisodeStripOpen, ep.current));
-            card.setElevation(i == nativeEpisodeIndex && nativeEpisodeStripOpen ? dp(10) : (ep.current ? dp(5) : 0));
+            card.setElevation(0);
             card.setOnKeyListener((v, code, e) -> handleNativeSurfaceKey(e));
             final int idx = i;
             card.setOnFocusChangeListener((v, hasFocus) -> {
+                v.animate().cancel();
                 if (hasFocus) {
                     nativeEpisodeIndex = idx;
                     showNativeChrome(false);
                     v.setBackground(nativeEpisodeCardBg(true, nativeEpisodes.get(idx).current));
-                    v.setElevation(dp(12));
-                    v.setTranslationY(-dp(3));
-                    if (nativeEpisodeStrip != null) nativeEpisodeStrip.smoothScrollTo(Math.max(0, v.getLeft() - dp(60)), 0);
+                    ImageView focusedStill = v.findViewWithTag("nativeEpisodeStill");
+                    if (focusedStill != null) focusedStill.setForeground(nativeEpisodeStillFrame(true, nativeEpisodes.get(idx).current));
+                    v.setElevation(0);
+                    v.animate().translationY(-dp(3)).setDuration(120).start();
+                    scrollNativeEpisodeIntoView(v);
                 } else {
                     v.setBackground(nativeEpisodeCardBg(false, nativeEpisodes.get(idx).current));
-                    v.setElevation(nativeEpisodes.get(idx).current ? dp(5) : 0);
-                    v.setTranslationY(0f);
+                    ImageView blurredStill = v.findViewWithTag("nativeEpisodeStill");
+                    if (blurredStill != null) blurredStill.setForeground(nativeEpisodeStillFrame(false, nativeEpisodes.get(idx).current));
+                    v.setElevation(0);
+                    v.animate().translationY(0f).setDuration(100).start();
                 }
             });
             card.setOnClickListener(v -> chooseNativeEpisode(idx));
 
             ImageView still = new ImageView(this);
+            still.setTag("nativeEpisodeStill");
             still.setScaleType(ImageView.ScaleType.CENTER_CROP);
             GradientDrawable stillBg = new GradientDrawable();
             stillBg.setColor(0xFF16101F);
-            stillBg.setCornerRadius(dp(16));
+            stillBg.setCornerRadius(dp(12));
             still.setBackground(stillBg);
+            still.setForeground(nativeEpisodeStillFrame(i == nativeEpisodeIndex && nativeEpisodeStripOpen, ep.current));
             still.setClipToOutline(true);
             card.addView(still, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, dp(126)));
@@ -4861,8 +4954,9 @@ public class MainActivity extends Activity {
         nativeEpisodeIndex = Math.max(0, Math.min(nativeEpisodeList.getChildCount() - 1, idx));
         View child = nativeEpisodeList.getChildAt(nativeEpisodeIndex);
         if (child != null) {
+            boolean alreadyFocused = child.hasFocus();
             child.requestFocus();
-            if (nativeEpisodeStrip != null) nativeEpisodeStrip.smoothScrollTo(Math.max(0, child.getLeft() - dp(60)), 0);
+            if (alreadyFocused) scrollNativeEpisodeIntoView(child);
             return true;
         }
         return false;
@@ -5064,6 +5158,11 @@ public class MainActivity extends Activity {
             showNativeChrome(false);
             return;
         }
+        if (trackType == C.TRACK_TYPE_TEXT && "local_all".equals(choice.subtitleAction)) {
+            requestNativeSubtitleShowAll();
+            showNativeChrome(false);
+            return;
+        }
         if (trackType == C.TRACK_TYPE_TEXT && choice.subtitleRel != null) {
             nativeSubtitleRel = choice.subtitleRel;
             nativeSubtitleLabel = choice.label;
@@ -5196,6 +5295,14 @@ public class MainActivity extends Activity {
         web.evaluateJavascript("window.__tvNativeSubtitleVersions && window.__tvNativeSubtitleVersions("
                 + org.json.JSONObject.quote(lang == null || lang.isEmpty() ? "en" : lang)
                 + "," + nativePosSeconds() + "," + nativeDurSeconds() + ")", null);
+    }
+
+    private void requestNativeSubtitleShowAll() {
+        if (web == null) return;
+        nativeOpenSubtitleMenuAfterRefresh = true;
+        Toast.makeText(this, "Showing all subtitle languages", Toast.LENGTH_SHORT).show();
+        web.evaluateJavascript("window.__tvNativeSubtitleShowAll && window.__tvNativeSubtitleShowAll("
+                + nativePosSeconds() + "," + nativeDurSeconds() + ")", null);
     }
 
     private String nativeCodecName(String mime, String codecs) {
@@ -5340,10 +5447,10 @@ public class MainActivity extends Activity {
 
         TextView head = new TextView(this);
         head.setText(title);
-        head.setTextColor(0xFFF9F4FF);
-        head.setTextSize(14);
+        head.setTextColor(0xFFEDE8F5);
+        head.setTextSize(13);
         head.setTypeface(Typeface.DEFAULT_BOLD);
-        head.setPadding(dp(8), 0, dp(8), dp(10));
+        head.setPadding(dp(8), 0, dp(8), dp(9));
         nativeSheet.addView(head, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -5380,7 +5487,7 @@ public class MainActivity extends Activity {
     private TextView nativeSheetRow(String label, boolean selected) {
         TextView row = new TextView(this);
         row.setText(label);
-        row.setTextColor(selected ? 0xFFF9F4FF : 0xDDF3EFF7);
+        row.setTextColor(selected ? 0xFFF4E6B7 : 0xDDF3EFF7);
         row.setTextSize(12);
         row.setTypeface(Typeface.DEFAULT_BOLD);
         row.setGravity(android.view.Gravity.CENTER_VERTICAL);
@@ -5388,15 +5495,15 @@ public class MainActivity extends Activity {
         row.setEllipsize(TextUtils.TruncateAt.END);
         row.setFocusable(true);
         row.setClickable(true);
-        row.setPadding(dp(14), 0, dp(14), 0);
+        row.setPadding(dp(12), 0, dp(12), 0);
         row.setBackground(nativeSheetRowBg(false, selected));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(38));
-        lp.topMargin = dp(5);
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(40));
+        lp.topMargin = dp(4);
         row.setLayoutParams(lp);
         row.setOnFocusChangeListener((v, hasFocus) -> {
             v.setBackground(nativeSheetRowBg(hasFocus, selected));
-            ((TextView) v).setTextColor(hasFocus ? 0xFF0B0812 : selected ? 0xFFF9F4FF : 0xDDF3EFF7);
+            ((TextView) v).setTextColor(hasFocus ? 0xFFF9F4FF : selected ? 0xFFF4E6B7 : 0xDDF3EFF7);
         });
         return row;
     }
@@ -5405,12 +5512,12 @@ public class MainActivity extends Activity {
         GradientDrawable d = new GradientDrawable(
                 GradientDrawable.Orientation.LEFT_RIGHT,
                 focused
-                        ? new int[]{0xFFEDE8F5, 0xFFD8C8E8}
+                        ? new int[]{0xFF2B3137, 0xFF252A30}
                         : selected
-                        ? new int[]{0x553A1647, 0x44281436}
-                        : new int[]{0x1812091D, 0x2212091D});
-        d.setCornerRadius(dp(11));
-        d.setStroke(dp(1), focused ? 0x88F3EFF7 : selected ? 0x55FFC65C : 0x16F3EFF7);
+                        ? new int[]{0x403A3424, 0x30312D22}
+                        : new int[]{0x0012091D, 0x0012091D});
+        d.setCornerRadius(dp(8));
+        d.setStroke(dp(1), focused ? 0x66B8A46A : selected ? 0x55B8A46A : 0x00000000);
         return d;
     }
 
@@ -5883,7 +5990,10 @@ public class MainActivity extends Activity {
                     }
                 }
                 String guideDomKey = domKeyFor(code);
-                if (guideDomKey != null && !pageInputFocused) {
+                boolean guideDpad = code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN
+                        || code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT
+                        || code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER;
+                if (guideDomKey != null && (!pageInputFocused || guideDpad)) {
                     if (e.getAction() == KeyEvent.ACTION_DOWN) jsKey("keydown", guideDomKey, e.getRepeatCount() > 0);
                     else if (e.getAction() == KeyEvent.ACTION_UP) jsKey("keyup", guideDomKey, false);
                     return true;

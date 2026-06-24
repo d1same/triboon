@@ -264,7 +264,7 @@ const pipeline = new Pipeline({
 });
 const { fetchUrl: fetchUrlExt, searchIndexer } = require('./newznab');
 const {
-  fetchOnlineSub, searchOnlineSubs, downloadBestSubtitle, rankSubs, shiftVtt,
+  fetchOnlineSub, searchOnlineSubs, downloadBestSubtitle, rankSubs, srtToVtt, shiftVtt,
   _isTransientError: isTransientSubError,
   _isNoSubtitleError: isNoSubtitleError,
 } = require('./opensubs');
@@ -791,6 +791,30 @@ function iptvNativeMime(url) {
   return '';
 }
 const IPTV_NATIVE_PROXY_UA = 'Mozilla/5.0 (SMART-TV; Linux) AppleWebKit/537.36 TriboonTV/1.0';
+const IPTV_PLAYBACK_USER_AGENTS = [
+  IPTV_NATIVE_PROXY_UA,
+  'VLC/3.0.20 LibVLC/3.0.20',
+  'IPTVSmartersPro/4.0',
+];
+function iptvPlaybackUserAgent(idx = 0) {
+  return IPTV_PLAYBACK_USER_AGENTS[Math.max(0, Math.min(IPTV_PLAYBACK_USER_AGENTS.length - 1, idx))] || IPTV_NATIVE_PROXY_UA;
+}
+function shouldRetryIptvUserAgent(status, reason, uaIndex = 0) {
+  if (uaIndex >= IPTV_PLAYBACK_USER_AGENTS.length - 1) return false;
+  const r = String(reason || '').toLowerCase();
+  return (status === 401 || status === 403) && (r.includes('bot-protection') || r.includes('bot protection'));
+}
+function iptvStatusFromError(err) {
+  const m = /HTTP\s+(\d{3})/i.exec(String(err && err.message ? err.message : err || ''));
+  return m ? parseInt(m[1], 10) : 0;
+}
+function shouldRetryIptvFetchUserAgent(err, uaIndex = 0) {
+  if (uaIndex >= IPTV_PLAYBACK_USER_AGENTS.length - 1) return false;
+  const status = iptvStatusFromError(err);
+  const text = String(err && err.message ? err.message : err || '').toLowerCase();
+  return (status === 401 || status === 403)
+    && (text.includes('bot-protection') || text.includes('bot protection') || text.includes('m3u playlist http'));
+}
 function iptvNativeLogLabel(meta = {}) {
   const idx = Number.isInteger(meta.idx) ? `#${meta.idx}` : '#?';
   const name = String(meta.name || 'channel').replace(/[\r\n]+/g, ' ').slice(0, 80);
@@ -984,14 +1008,14 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
   ctx.req.once('aborted', onClientClose);
   ctx.res.once('close', onClientClose);
 
-  const open = (rawTarget, hop, pinRetries = 0) => {
+  const open = (rawTarget, hop, pinRetries = 0, uaIndex = 0) => {
     if (done || slot.closed) return;
-    validateAndPinIptvUrl(rawTarget, 'Live stream URL').then((pin) => openAllowed(rawTarget, hop, pin, pinRetries)).catch((e) => {
+    validateAndPinIptvUrl(rawTarget, 'Live stream URL').then((pin) => openAllowed(rawTarget, hop, pin, pinRetries, uaIndex)).catch((e) => {
       console.error(`[iptv native] ${label} blocked upstream url: ${sanitizeIptvLogError(e)}`);
       fail(e.status || 400, e.message || 'blocked live stream url');
     });
   };
-  const openAllowed = (rawTarget, hop, pin = null, pinRetries = 0) => {
+  const openAllowed = (rawTarget, hop, pin = null, pinRetries = 0, uaIndex = 0) => {
     if (done || slot.closed) return;
     let u;
     try {
@@ -1033,7 +1057,7 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
     }
     const lib = u.protocol === 'https:' ? https : http;
     const headers = {
-      'user-agent': IPTV_NATIVE_PROXY_UA,
+      'user-agent': iptvPlaybackUserAgent(uaIndex),
       accept: '*/*',
       connection: 'close',
     };
@@ -1056,7 +1080,7 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
         }
       } catch {}
       console.error(`[iptv native] ${label} pinned upstream failed (${reason}); retrying next address`);
-      open(rawTarget, hop, pinRetries + 1);
+      open(rawTarget, hop, pinRetries + 1, uaIndex);
       return true;
     };
     up = lib.request(u, {
@@ -1094,6 +1118,10 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
               console.error(`[iptv native] ${label} retrying refreshed Xtream channel #${nextCh.idx} "${nextCh.name}"`);
               return open(nextTarget, hop + 1);
             }
+          }
+          if (shouldRetryIptvUserAgent(status, reason, uaIndex) && !done && !slot.closed) {
+            console.error(`[iptv native] ${label} provider bot-protection with playback identity ${uaIndex + 1}; retrying alternate identity`);
+            return open(rawTarget, hop, pinRetries, uaIndex + 1);
           }
           iptvNativeErrorCache.set(failureKey, {
             status,
@@ -1262,13 +1290,14 @@ function persistXtreamChannelCache(key, channels, sourceId = IPTV_LEGACY_SOURCE_
   } catch {}
 }
 function xtreamPanelFetchOptions(opts = {}) {
+  const headers = { ...(opts.headers || {}) };
+  if (!headers['user-agent']) headers['user-agent'] = IPTV_NATIVE_PROXY_UA;
   return {
     ...opts,
     headers: {
-      ...(opts.headers || {}),
+      ...headers,
       'cache-control': 'no-cache',
       pragma: 'no-cache',
-      'user-agent': IPTV_NATIVE_PROXY_UA,
     },
   };
 }
@@ -1284,16 +1313,29 @@ function xtreamIdFromStreamUrl(raw) {
   } catch { return ''; }
 }
 async function fetchXtreamM3uChannelsForPlayback(s, key, reason) {
-  const list = await fetchM3uChannelsStream(xtreamM3uPlaylistUrl(s), {
-    maxChannels: 20000,
-    timeoutMs: 15000,
-    deadlineMs: 90000,
-    headers: {
-      'cache-control': 'no-cache',
-      pragma: 'no-cache',
-      'user-agent': IPTV_NATIVE_PROXY_UA,
-    },
-  });
+  let list = [];
+  let lastError = null;
+  for (let uaIndex = 0; uaIndex < IPTV_PLAYBACK_USER_AGENTS.length; uaIndex++) {
+    try {
+      list = await fetchM3uChannelsStream(xtreamM3uPlaylistUrl(s), {
+        maxChannels: 20000,
+        timeoutMs: 15000,
+        deadlineMs: 90000,
+        headers: {
+          'cache-control': 'no-cache',
+          pragma: 'no-cache',
+          'user-agent': iptvPlaybackUserAgent(uaIndex),
+        },
+      });
+      lastError = null;
+      break;
+    } catch (e) {
+      lastError = e;
+      if (!shouldRetryIptvFetchUserAgent(e, uaIndex)) throw e;
+      console.error(`[iptv refresh] Xtream M3U fallback hit provider protection with playback identity ${uaIndex + 1}; retrying alternate identity`);
+    }
+  }
+  if (lastError) throw lastError;
   const channels = list.map((c, i) => {
     const xtreamId = xtreamIdFromStreamUrl(c.url);
     if (!xtreamId) return { ...c, idx: i };
@@ -1636,14 +1678,26 @@ async function fetchIptvChannels(s, key) {
     const base = String(s.xtHost).replace(/\/+$/, '');
     const apiBase = `${base}/player_api.php?username=${encodeURIComponent(s.xtUser || '')}&password=${encodeURIComponent(s.xtPass || '')}`;
     const fetchPanel = async (action, opts) => {
+      let lastError = null;
       try {
         const u = `${apiBase}&action=${action}&_=${Date.now().toString(36)}`;
-        const r = await fetchUrlExt(u, iptvFetchOptions(xtreamPanelFetchOptions(opts)));
-        if ((r.status || 0) >= 400) {
-          const body = r.body.toString('utf8', 0, 2048);
-          throw new Error(`HTTP ${r.status} (${iptvNativeFailureReason(r.status || 502, body)})`);
+        for (let uaIndex = 0; uaIndex < IPTV_PLAYBACK_USER_AGENTS.length; uaIndex++) {
+          try {
+            const r = await fetchUrlExt(u, iptvFetchOptions(xtreamPanelFetchOptions({
+              ...opts,
+              headers: { ...(opts && opts.headers ? opts.headers : {}), 'user-agent': iptvPlaybackUserAgent(uaIndex) },
+            })));
+            if ((r.status || 0) >= 400) {
+              const body = r.body.toString('utf8', 0, 2048);
+              throw new Error(`HTTP ${r.status} (${iptvNativeFailureReason(r.status || 502, body)})`);
+            }
+            return r;
+          } catch (e) {
+            lastError = e;
+            if (!shouldRetryIptvFetchUserAgent(e, uaIndex)) throw e;
+            console.error(`[iptv xtream] ${action} hit provider protection with playback identity ${uaIndex + 1}; retrying alternate identity`);
+          }
         }
-        return r;
       } catch (e) {
         if (action === 'get_live_categories') {
           console.error(`[iptv xtream] optional category load failed for source "${String(s.name || 'Live TV').slice(0, 80)}": ${sanitizeIptvLogError(e)}; loading streams without categories`);
@@ -1651,6 +1705,7 @@ async function fetchIptvChannels(s, key) {
         }
         throw new Error(`Xtream channel load action=${action} host=${iptvSafeHost(s.xtHost)} failed: ${sanitizeIptvLogError(e)}`);
       }
+      throw lastError || new Error('Xtream channel load failed');
     };
     try {
       const [catsR, streamsR] = await Promise.all([
@@ -2680,6 +2735,65 @@ function playbackRuntimeStats(now = Date.now()) {
 function subtitleReleaseName(vf) {
   return String((vf && (vf._releaseName || vf._sourceName || vf.name)) || '').trim();
 }
+function publicReleaseSubs(vf) {
+  return (vf && Array.isArray(vf.releaseSubs) ? vf.releaseSubs : []).map((s) => ({
+    id: s.id,
+    name: s.name,
+    ext: s.ext,
+    lang: s.lang || '',
+    forced: !!s.forced,
+    sdh: !!s.sdh,
+    size: s.size || 0,
+    score: s.score || 0,
+    source: 'release',
+  }));
+}
+function assTimeToVtt(ts) {
+  const m = /^(\d+):(\d{2}):(\d{2})[.](\d{1,2})$/.exec(String(ts || '').trim());
+  if (!m) return null;
+  return `${String(+m[1]).padStart(2, '0')}:${m[2]}:${m[3]}.${String(m[4]).padEnd(3, '0')}`;
+}
+function assTextToPlain(text) {
+  return String(text || '')
+    .replace(/\{[^}]*\}/g, '')
+    .replace(/\\N/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/\\h/g, ' ')
+    .trim();
+}
+function assToVtt(body) {
+  const lines = String(body || '').replace(/^\uFEFF/, '').replace(/\r/g, '').split('\n');
+  let format = [];
+  const cues = [];
+  for (const line of lines) {
+    if (/^Format:/i.test(line)) {
+      format = line.slice(line.indexOf(':') + 1).split(',').map((x) => x.trim().toLowerCase());
+      continue;
+    }
+    if (!/^Dialogue:/i.test(line)) continue;
+    const raw = line.slice(line.indexOf(':') + 1);
+    const parts = raw.split(',');
+    const textIdx = format.indexOf('text');
+    const startIdx = format.indexOf('start');
+    const endIdx = format.indexOf('end');
+    if (startIdx < 0 || endIdx < 0) continue;
+    const minParts = Math.max(startIdx, endIdx, textIdx < 0 ? 9 : textIdx) + 1;
+    if (parts.length < minParts) continue;
+    const start = assTimeToVtt(parts[startIdx]);
+    const end = assTimeToVtt(parts[endIdx]);
+    const text = assTextToPlain(parts.slice(textIdx < 0 ? 9 : textIdx).join(','));
+    if (start && end && text) cues.push(`${start} --> ${end}\n${text}`);
+  }
+  if (!cues.length) throw new Error('release subtitle has no readable text cues');
+  return `WEBVTT\n\n${cues.join('\n\n')}\n`;
+}
+function releaseSubtitleToVtt(buf, ext) {
+  const body = Buffer.isBuffer(buf) ? buf.toString('utf8') : String(buf || '');
+  const kind = String(ext || '').toLowerCase();
+  if (kind === 'vtt' || body.replace(/^\uFEFF/, '').startsWith('WEBVTT')) return body.replace(/^\uFEFF/, '');
+  if (kind === 'ass' || kind === 'ssa' || /^\s*\[Script Info\]/i.test(body)) return assToVtt(body);
+  return srtToVtt(body);
+}
 function episodeSubtitleQuery(query, season, ep) {
   const base = String(query || '').trim();
   const s = Number(season);
@@ -2825,7 +2939,7 @@ function watchRowsForProfileFromAll(all, uid, profile = 'default') {
   const rows = new Map();
   const add = (prefix, accept) => {
     for (const [fullKey, value] of Object.entries(all)) {
-      if (!fullKey.startsWith(prefix) || !accept(value)) continue;
+      if (!fullKey.startsWith(prefix) || !value || value.hidden || !accept(value)) continue;
       const key = fullKey.slice(prefix.length);
       rows.set(key, { key, ...value });
     }
@@ -2878,7 +2992,7 @@ async function nextWatchEpisodes(uid, profile = 'default') {
           .sort((a, b) => a.episode_number - b.episode_number);
         const next = eps.find((ep) => {
           const rec = watchRowForKeyFromAll(all, uid, profile, `tmdb:tv:${showId}:s${s.season_number}e${ep.episode_number}`);
-          return !(rec && (rec.watched || (rec.position || 0) > 30 || (rec.traktPct || 0) > 2));
+          return !(rec && (rec.hidden || rec.watched || (rec.position || 0) > 30 || (rec.traktPct || 0) > 2));
         });
         if (!next) continue;
         const title = String((d.name || (top.w.meta && top.w.meta.title) || '')).replace(/\s*—\s*S\d+E\d+.*$/i, '');
@@ -4642,6 +4756,13 @@ Object.assign(H, {
     const k = `${ctx.user.id}:${profile}:${b.key}`;
     store.update('watch', {}, (all) => {
       if (b.remove) { deleteWatchKeyForProfile(all, ctx.user.id, profile, b.key); return all; } // "Remove from Continue Watching"
+      if (b.hidden) {
+        all[k] = {
+          position: 0, duration: 0, watched: false, hidden: true,
+          meta: sanitizeStoredMediaMeta(b.meta), updatedAt: nextStamp(),
+        };
+        return all;
+      }
       if (profile !== 'default' && b.watched === false && b.unwatch) deleteWatchKeyForProfile(all, ctx.user.id, profile, b.key);
       all[k] = {
         position: b.position || 0, duration: b.duration || 0, watched: !!b.watched,
@@ -5161,7 +5282,8 @@ Object.assign(H, {
     // anything else gets a cheap AAC pass — video is always copied either way. A background
     // probe upgrades the unknown-codec guess for seek-restarts.
     const aud = vf._tracks && vf._tracks.audio && vf._tracks.audio[audioTrack];
-    const transcodeAudio = !audioCopyOk(aud, vf._caps);
+    const forceAudioSafe = ctx.url.searchParams.get('audioSafe') === '1';
+    const transcodeAudio = forceAudioSafe || !audioCopyOk(aud, vf._caps);
     if (!vf._tracks && detectFfprobe() && !vf._probing) {
       vf._probing = true;
       probeTracks(selfUrl).then((t) => { vf._tracks = { available: true, ...t }; }).catch(() => {}).finally(() => { vf._probing = false; });
@@ -5210,16 +5332,52 @@ Object.assign(H, {
     if (!mountAccessOk(ctx, vf)) return send(ctx.res, 404, { error: 'mount not found' });
     if (!vf.streamable) return send(ctx.res, 409, { error: 'mount is not streamable', tags: vf.tags });
     vf._touched = Date.now();
-    if (!detectFfprobe()) return send(ctx.res, 200, { available: false, audio: [], subs: [], duration: null });
+    const releaseSubs = publicReleaseSubs(vf);
+    if (!detectFfprobe()) return send(ctx.res, 200, { available: false, audio: [], subs: [], releaseSubs, duration: null });
     if (vf._tracks) return send(ctx.res, 200, vf._tracks);
     try {
       const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.user.id, vf.id)}`;
       const t = await probeTracks(selfUrl);
-      vf._tracks = { available: true, ...t };
+      vf._tracks = { available: true, ...t, releaseSubs };
       send(ctx.res, 200, vf._tracks);
       // The TV player is Wyzie-only for subtitles. Embedded subtitle extraction can require
       // scanning the whole media stream, so probing tracks must not quietly kick that off.
-    } catch (e) { send(ctx.res, 200, { available: false, audio: [], subs: [], duration: null, error: e.message }); }
+    } catch (e) { send(ctx.res, 200, { available: false, audio: [], subs: [], releaseSubs, duration: null, error: e.message }); }
+  },
+
+  // Same-release sidecar subtitles from the NZB/archive. These are read only when selected,
+  // so playback startup and source health checks do not wait on subtitle extraction.
+  releasesub: async (ctx) => {
+    if (!streamScopeOk(ctx, ctx.m[1])) return send(ctx.res, 401, { error: 'token not valid for this stream' });
+    const vf = mounts.get(ctx.m[1]);
+    if (!vf) return send(ctx.res, 404, { error: 'mount not found' });
+    if (!mountAccessOk(ctx, vf)) return send(ctx.res, 404, { error: 'mount not found' });
+    if (!vf.streamable) return send(ctx.res, 409, { error: 'mount is not streamable' });
+    if (typeof vf.readReleaseSub !== 'function') return send(ctx.res, 404, { error: 'release subtitle not found' });
+    vf._touched = Date.now();
+    const id = String(ctx.m[2] || '').replace(/[^a-z0-9_-]/gi, '').slice(0, 32);
+    const sub = (vf.releaseSubs || []).find((s) => String(s.id) === id);
+    if (!sub) return send(ctx.res, 404, { error: 'release subtitle not found' });
+    const shift = Math.max(-120, Math.min(120, Number(ctx.url.searchParams.get('shift') || 0) || 0));
+    vf._releaseSubCache = vf._releaseSubCache || new Map();
+    vf._releaseSubJobs = vf._releaseSubJobs || new Map();
+    if (!vf._releaseSubCache.has(id)) {
+      if (!vf._releaseSubJobs.has(id)) {
+        const work = vf.readReleaseSub(id)
+          .then((buf) => releaseSubtitleToVtt(buf, sub.ext))
+          .then((vtt) => {
+            vf._releaseSubCache.set(id, vtt);
+            return vtt;
+          })
+          .finally(() => vf._releaseSubJobs.delete(id));
+        vf._releaseSubJobs.set(id, work);
+      }
+      try { await vf._releaseSubJobs.get(id); } catch (e) {
+        return send(ctx.res, 502, { error: 'release subtitle failed', detail: String(e.message || e).slice(0, 200) });
+      }
+    }
+    const vtt = vf._releaseSubCache.get(id);
+    send(ctx.res, 200, shift ? shiftVtt(vtt, shift) : vtt, { 'content-type': 'text/vtt; charset=utf-8' });
   },
 
   // Online subtitles (Wyzie) -> WebVTT. The practical CC path: BluRay releases carry
@@ -5339,7 +5497,8 @@ Object.assign(H, {
     vf._touched = Date.now();
     const track = parseInt(ctx.m[2], 10) || 0;
     try {
-      const vtt = await ensureSubtitleVtt(vf, track, ctx.claims.uid);
+      const mode = String(ctx.url.searchParams.get('mode') || '').toLowerCase();
+      const vtt = await ensureSubtitleVtt(vf, track, ctx.claims.uid, { mode });
       if (!ctx.res.writableEnded) send(ctx.res, 200, vtt, { 'content-type': 'text/vtt; charset=utf-8' });
     } catch (e) {
       if (!ctx.res.writableEnded) send(ctx.res, 502, { error: 'subtitle extraction failed', detail: String(e.message).slice(0, 200) });
@@ -5675,24 +5834,40 @@ function cleanupYtCookieFiles() {
 // so the whole-file read restarted from zero on every retry and the cache never filled
 // ("subtitles don't load until I turn them off and on"). Now the first request (or the
 // play-time prefetch) starts ONE ffmpeg run; everyone else awaits the same promise.
-function ensureSubtitleVtt(vf, track, uid) {
+function embeddedSubtitleTimeoutMs(mode = '') {
+  const configured = parseInt(process.env.TRIBOON_EMBEDDED_SUB_TIMEOUT_MS || '', 10);
+  if (Number.isFinite(configured) && configured > 0) return Math.max(15000, Math.min(120000, configured));
+  return mode === 'manual' ? 120000 : 45000;
+}
+function ensureSubtitleVtt(vf, track, uid, opts = {}) {
   vf._subCache = vf._subCache || new Map();
   if (vf._subCache.has(track)) return Promise.resolve(vf._subCache.get(track));
   vf._subJobs = vf._subJobs || new Map();
   if (vf._subJobs.has(track)) return vf._subJobs.get(track);
   const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(uid, vf.id)}`;
+  const timeoutMs = embeddedSubtitleTimeoutMs(opts.mode);
   const job = new Promise((resolve, reject) => {
-    let ff;
+    let ff; let done = false;
+    const finish = (fn, value) => {
+      if (done) return;
+      done = true;
+      clearTimeout(killer);
+      fn(value);
+    };
     try { ff = spawnSubtitleExtract(selfUrl, track); } catch (e) { return reject(e); }
     const chunks = []; let err = '';
-    ff.on('error', reject);
+    const killer = setTimeout(() => {
+      try { ff.kill('SIGKILL'); } catch {}
+      finish(reject, new Error(`embedded subtitle extraction timed out after ${Math.round(timeoutMs / 1000)}s`));
+    }, timeoutMs);
+    ff.on('error', (e) => finish(reject, e));
     ff.stdout.on('data', (d) => chunks.push(d));
     ff.stderr.on('data', (d) => { err += d; });
     ff.on('close', (codeNum) => {
       const vtt = Buffer.concat(chunks).toString('utf8');
-      if (codeNum || !vtt.startsWith('WEBVTT')) return reject(new Error(err.slice(0, 200) || `ffmpeg exit ${codeNum}`));
+      if (codeNum || !vtt.startsWith('WEBVTT')) return finish(reject, new Error(err.slice(0, 200) || `ffmpeg exit ${codeNum}`));
       if (vf._subCache.size < 8) vf._subCache.set(track, vtt);
-      resolve(vtt);
+      finish(resolve, vtt);
     });
   }).finally(() => vf._subJobs.delete(track));
   vf._subJobs.set(track, job);
@@ -5798,6 +5973,7 @@ const ROUTES = [
   { m: 'GET', re: /^\/api\/transcode\/(\w+)$/, auth: 'stream', h: H.transcode },
   { m: 'GET', re: /^\/api\/tracks\/(\w+)$/, auth: 'user', h: H.tracks },
   { m: 'GET', re: /^\/api\/subtitle\/(\w+)\/(\d+)$/, auth: 'stream', h: H.subtitle },
+  { m: 'GET', re: /^\/api\/releasesub\/(\w+)\/([a-z0-9_-]+)$/, auth: 'stream', h: H.releasesub },
   { m: 'GET', re: /^\/api\/ossubs\/(\w+)$/, auth: 'stream', h: H.ossubs },
 ];
 

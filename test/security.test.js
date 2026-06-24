@@ -424,6 +424,15 @@ test('watch next: finished episodes keep the next aired episode in Continue Watc
   assert.ok(!next.json.some((x) => x.key === 'tmdb:tv:424242:s1e3'), 'future S01E03 is held until it airs');
 
   await httpJson(srv.port, 'POST', '/api/watch', {
+    key: 'tmdb:tv:424242:s1e2', hidden: true,
+    meta: { title: 'Next Up Show — S01E02', type: 'episode', tmdbId: 424242 },
+  }, admin);
+  next = await httpJson(srv.port, 'GET', '/api/watch/next', null, admin);
+  assert.ok(!next.json.some((x) => x.key === 'tmdb:tv:424242:s1e2'), 'dismissed next episode stays out of Continue Watching');
+  const visibleRows = await httpJson(srv.port, 'GET', '/api/watch', null, admin);
+  assert.ok(!visibleRows.json.some((x) => x.key === 'tmdb:tv:424242:s1e2'), 'hidden dismiss row is not returned as normal watch progress');
+
+  await httpJson(srv.port, 'POST', '/api/watch', {
     key: 'tmdb:tv:424242:s1e2', position: 300, duration: 1800,
     meta: { title: 'Next Up Show — S01E02', type: 'episode', tmdbId: 424242 },
   }, admin);
@@ -909,9 +918,10 @@ ${origin}/secret-user/broken.ts
     const native = await httpRaw(srv.port, ch.json.channels[0].nativeUrl);
     assert.strictEqual(native.status, 403, 'native proxy forwards the provider failure status');
     assert.strictEqual(native.headers['x-triboon-iptv-error'], 'provider bot-protection');
+    assert.strictEqual(brokenHits, 3, 'native proxy keeps provider-protection retries bounded to approved player identities');
     const repeat = await httpRaw(srv.port, ch.json.channels[0].nativeUrl);
     assert.strictEqual(repeat.status, 403, 'cached native failure keeps the same status');
-    assert.strictEqual(brokenHits, 1, 'cached provider rejections prevent Exo retry storms from hammering upstream');
+    assert.strictEqual(brokenHits, 3, 'cached provider rejections prevent Exo retry storms from hammering upstream again');
     const joined = logs.join('\n');
     assert.match(joined, /\[iptv native\].*"Broken News".*HTTP 403.*provider bot-protection/, 'log identifies the failing channel, status, and sanitized reason');
     assert.doesNotMatch(joined, /secret-user|broken\.ts|playlist\.m3u/, 'log must not leak provider URL paths or credentials');
@@ -1442,6 +1452,32 @@ test('subtitles: Wyzie search→file→VTT served per mount (and 503 without a k
   const mounted = srv.mounts.get(play.id);
   mounted.name = 'Feature.mkv';
   mounted._subQuery = 'Sec Test 2024 S01E03';
+  mounted.releaseSubs = [{
+    id: 'r0',
+    name: 'Sec.Test.2024.en.srt',
+    ext: 'srt',
+    lang: 'eng',
+    size: 48,
+    score: 120,
+    source: 'release',
+  }];
+  mounted.readReleaseSub = async (id) => {
+    assert.strictEqual(id, 'r0');
+    return Buffer.from('1\r\n00:00:05,000 --> 00:00:06,500\r\nRelease subtitle\r\n');
+  };
+
+  const tracks = await httpJson(srv.port, 'GET', `/api/tracks/${play.id}`, null, admin);
+  assert.strictEqual(tracks.status, 200, JSON.stringify(tracks.json));
+  assert.deepStrictEqual((tracks.json.releaseSubs || []).map((s) => ({ id: s.id, name: s.name, lang: s.lang, source: s.source })),
+    [{ id: 'r0', name: 'Sec.Test.2024.en.srt', lang: 'eng', source: 'release' }],
+    'tracks exposes same-release subtitles without leaking reader internals');
+  assert.strictEqual((await httpRaw(srv.port, `/api/releasesub/${play.id}/r0?t=wrong`)).status, 401,
+    'release subtitle route requires a stream token bound to this mount');
+  const relSub = await httpRaw(srv.port, `/api/releasesub/${play.id}/r0?shift=0.5&t=${play.streamToken}`);
+  assert.strictEqual(relSub.status, 200, relSub.body.toString());
+  assert.match(relSub.body.toString('utf8'), /^WEBVTT/);
+  assert.match(relSub.body.toString('utf8'), /00:00:05\.500 --> 00:00:07\.000/);
+  assert.match(relSub.body.toString('utf8'), /Release subtitle/);
 
   // No key configured → honest 503, not a hang or a fake empty file.
   const no = await httpRaw(srv.port, `/api/ossubs/${play.id}?lang=en&tmdb=4242&t=${play.streamToken}`);
@@ -2375,7 +2411,7 @@ test('iptv: pinned DNS cache rotates and sidelines failed upstream addresses', (
     'safeHit must not be block-scoped or native/remux playback can fail before opening the provider URL');
   assert.match(serverCode, /addressCount: safeHit && Array\.isArray\(safeHit\.addrs\) \? safeHit\.addrs\.length : \(picked \? 1 : 0\),/,
     'validated IPTV pins should carry the safe DNS pool size for bounded same-request retry');
-  assert.match(serverCode, /const retryPinnedAddress = \(reason\) => \{[\s\S]+markPinFailure\(\);[\s\S]+ctx\.res\.headersSent[\s\S]+pin\.addressCount[\s\S]+open\(rawTarget, hop, pinRetries \+ 1\);[\s\S]+return true;/,
+  assert.match(serverCode, /const retryPinnedAddress = \(reason\) => \{[\s\S]+markPinFailure\(\);[\s\S]+ctx\.res\.headersSent[\s\S]+pin\.addressCount[\s\S]+open\(rawTarget, hop, pinRetries \+ 1, uaIndex\);[\s\S]+return true;/,
     'native Live TV should retry the next pinned address in the same request before any response bytes are sent');
   assert.match(newznabCode, /validated && typeof validated\.onFailure === 'function'[\s\S]+validated\.onFailure\(e\)/,
     'generic IPTV fetches should report failed pinned connections back to the validator');

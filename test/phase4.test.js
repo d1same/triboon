@@ -247,7 +247,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'local next-episode bumps should not add a second card for a show already in Continue Watching');
   assert.match(ui, /if \(!opts\.catalogOnly && !opts\.watchReady && !hasFreshWatch && !opts\.preserveFocus\) \{/,
     'Continue Watching row actions should not publish an empty placeholder row while preserving focus');
-  assert.match(ui, /async function cwOp\(it, body, msg, opts = \{\}\) \{[\s\S]+if \(body\.remove\) removeWatchCacheKey\(it\.key\);[\s\S]+loadRows\(\{ preserveFocus: !!snap, focusSnapshot: snap, watchReady: true \}\);[\s\S]+loadWatchState\(true\)/,
+  assert.match(ui, /async function cwOp\(it, body, msg, opts = \{\}\) \{[\s\S]+if \(body\.remove \|\| body\.hidden\) removeWatchCacheKey\(it\.key\);[\s\S]+loadRows\(\{ preserveFocus: !!snap, focusSnapshot: snap, watchReady: true \}\);[\s\S]+loadWatchState\(true\)/,
     'Continue Watching remove/mark actions should update local cache, keep focus, then refresh quietly');
   assert.match(ui, /function epItemOf\(show, season, ep\) \{[\s\S]+qualityRank: qualityRankForItem\(show\)[\s\S]+function epTarget\(show, sNum, eNum, resume\) \{[\s\S]+qualityRank: qualityRankForItem\(show\)/,
     'episode targets created from details should inherit the current show quality preference');
@@ -348,11 +348,29 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'restricted watchlist filtering should not call /api/tmdb/episode for episode records');
   assert.match(ui, /\.\.\.\(S\.watchlist \|\| \[\]\)\.map\(\(w\) => \(\{ \.\.\.w\.meta, _key: w\.key \}\)\)[\s\S]+Object\.entries\(S\.watchMap \|\| \{\}\)[\s\S]+const t = certTargetForMeta\(m, m\._key \|\| ''\);[\s\S]+uniq\.set\(t\.type \+ ':' \+ t\.tmdbId, \{ \.\.\.m, \.\.\.t \}\);/,
     'calendar should normalize in-progress episode metas to their TV show before fetching upcoming dates');
-  assert.ok(ui.indexOf("actionMenuButton('info', 'info', 'Details')") < ui.indexOf("(it.resume ? actionMenuButton('resume', 'play'"),
+  assert.match(ui, /function calendarWeekDates\(start = todayStr\(\)\) \{[\s\S]+Array\.from\(\{ length: 7 \}/,
+    'Calendar should render a fixed seven-day horizon');
+  assert.match(ui, /const weekDates = calendarWeekDates\(today\);[\s\S]+const weekEnd = weekDates\[weekDates\.length - 1\];[\s\S]+ne\.air_date >= today && ne\.air_date <= weekEnd[\s\S]+d\.release_date >= today && d\.release_date <= weekEnd/,
+    'Calendar should filter TV episodes and movie releases to the next seven days');
+  assert.match(ui, /const activeDates = weekDates\.filter\(\(date\) => \(byDay\[date\] \|\| \[\]\)\.length\);[\s\S]+if \(!activeDates\.length\)[\s\S]+Nothing scheduled in the next 7 days[\s\S]+for \(const date of activeDates\)/,
+    'Calendar should skip empty dates while keeping a clean weekly empty state');
+  assert.match(ui, /\.calItems\{display:flex;gap:16px;overflow-x:auto[\s\S]+\.calItem\{position:relative;flex:0 0 132px;display:flex;flex-direction:column[\s\S]+\.calItem \.pp\{width:100%;aspect-ratio:2\/3/,
+    'Calendar should use poster-first cards instead of wide text agenda rows');
+  assert.ok(ui.indexOf("actionMenuButton('info', 'info', 'Details')") < ui.indexOf("actionMenuButton('resume', 'play'"),
     'the long-press menu should default to Details, with Resume as a deliberate second action');
   assert.match(ui, /if \(act === 'resume'\) play\(it\);[\s\S]+else if \(act === 'info'\) openDetail\(detailTargetForItem\(it\)\);/,
     'the long-press Details action should open details instead of letting episode cards fall through to playback');
-  assert.match(ui, /const cwSnap = \(\) => \{ onFocus && onFocus\(\); return homeFocusSnapshot\(\); \};[\s\S]+cwAct\.watch[\s\S]+focusSnapshot: cwSnap\(\)[\s\S]+cwAct\.rm[\s\S]+focusSnapshot: cwSnap\(\)/,
+  assert.match(ui, /function isContinueWatchingItem\(it\) \{[\s\S]+it\._cw \|\| it\._nextEp \|\| \(\+it\._traktPct \|\| 0\) > 2[\s\S]+!w\.hidden[\s\S]+\}/,
+    'Continue Watching detection should cover resume rows, Trakt/imported rows, and generated next-up cards');
+  assert.match(ui, /function openItemMenu\(it, card\) \{[\s\S]+const isCw = isContinueWatchingItem\(it\);[\s\S]+isCw \? actionMenuButton\('rm', 'remove', 'Remove from Continue Watching'\)[\s\S]+else if \(act === 'rm'\) removeContinueWatchingItem\(it, snap\);/,
+    'Continue Watching long-press menus should always expose Remove and route through the shared remove helper');
+  assert.match(ui, /function continueWatchingRemoveBody\(it\) \{[\s\S]+it && it\._nextEp && !existing[\s\S]+\{ hidden: true, position: 0, duration: 0 \}[\s\S]+\{ remove: true \}/,
+    'generated next-up cards should be dismissed instead of deleted from a non-existent progress row');
+  assert.match(ui, /if \(isContinueWatchingItem\(it\)\) \{[\s\S]+cwAct\.watch[\s\S]+cwAct\.rm[\s\S]+removeContinueWatchingItem\(it, cwSnap\(\)\)/,
+    'all Continue Watching card shapes should get the on-thumbnail watched and remove controls');
+  assert.match(ui, /if \(!it\.trailer && \(isContinueWatchingItem\(it\) \|\| \(it\.tmdbId && \['movie', 'tv'\]\.includes\(it\.type\)\)\)\) \{[\s\S]+openItemMenu\(it, el\);/,
+    'Home row D-pad long-OK should open the menu for every Continue Watching card before playback can fire');
+  assert.match(ui, /const cwSnap = \(\) => \{ onFocus && onFocus\(\); return homeFocusSnapshot\(\); \};[\s\S]+cwAct\.watch[\s\S]+focusSnapshot: cwSnap\(\)[\s\S]+cwAct\.rm[\s\S]+removeContinueWatchingItem\(it, cwSnap\(\)\)/,
     'on-card Continue Watching buttons should capture their own row position before removing or marking items');
   assert.match(ui, /async function restoreInitialRoute\(\) \{[\s\S]+if \(!location\.hash \|\| location\.hash === '#\/home'\) \{[\s\S]+switchView\('home'\);[\s\S]+const routeResult = applyRoute\(\);[\s\S]+await routeResult;[\s\S]+route restore failed; falling back to home[\s\S]+replaceRoute\('#\/home'\);[\s\S]+switchView\('home'\);[\s\S]+\}/,
     'refresh route restore should fall back to Home when a stale route fails after an update');
@@ -366,8 +384,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'session tokens should survive refresh even when one browser storage backend is flaky');
   assert.match(ui, /if \(r\.status === 401[\s\S]+const e = new Error\('signed out'\);[\s\S]+e\.status = 401;[\s\S]+throw e;/,
     'API auth failures should carry a 401 status so boot can distinguish expired sessions from transient startup failures');
-  assert.match(ui, /async function restoreSavedSession\(\) \{[\s\S]+S\.user = await api\('\/api\/me'\);[\s\S]+if \(e && e\.status === 401\) \{[\s\S]+tokenStore\.set\(null\);[\s\S]+return false;[\s\S]+session check failed; keeping saved token[\s\S]+setTimeout\(\(\) => location\.reload\(\), 1800\);[\s\S]+await enterApp\(\);[\s\S]+app shell failed after session restore[\s\S]+replaceRoute\('#\/home'\);[\s\S]+await enterApp\(\);[\s\S]+showGate\('login'\);/,
+  assert.match(ui, /async function restoreSavedSession\(\) \{[\s\S]+S\.user = await api\('\/api\/me'\);[\s\S]+if \(e && e\.status === 401\) \{[\s\S]+tokenStore\.set\(null\);[\s\S]+return false;[\s\S]+session check failed; keeping saved token[\s\S]+setTimeout\(\(\) => location\.reload\(\), 1800\);[\s\S]+await enterApp\(\);[\s\S]+app shell failed after session restore[\s\S]+replaceRoute\('#\/home'\);[\s\S]+await enterApp\(\);[\s\S]+if \(e2 && e2\.status === 401\) \{[\s\S]+tokenStore\.set\(null\);[\s\S]+return false;[\s\S]+document\.body\.classList\.remove\('authOpen'\);[\s\S]+Home had trouble opening after the update/,
     'refresh boot should retry only the /api/me session check; app-shell errors must not loop as server wakeups');
+  assert.doesNotMatch(ui, /home fallback failed after session restore[\s\S]{0,500}showGate\('login'\)/,
+    'app-shell restore failures should not masquerade as a signed-out login state');
   assert.match(ui, /if \(tokenStore\.get\(\)\) \{[\s\S]+if \(await restoreSavedSession\(\)\) return;[\s\S]+\}/,
     'boot should run the narrow saved-session restore before falling back to the login gate');
   assert.doesNotMatch(ui, /Server is still waking up\. Retrying/,
@@ -384,7 +404,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Continue Watching should publish once with ready next-up entries instead of adding them a few seconds later');
   assert.match(ui, /function compareContinueWatchingItems\(a, b\) \{[\s\S]+const byRecent = \(b\._cwSortAt \|\| 0\) - \(a\._cwSortAt \|\| 0\);[\s\S]+const byKind = \(a\._nextEp \? 1 : 0\) - \(b\._nextEp \? 1 : 0\);[\s\S]+\}/,
     'Continue Watching should sort by last watched activity before falling back to card type');
-  assert.match(ui, /function buildCwItems\(cw\) \{[\s\S]+_cwSortAt: w\.updatedAt \|\| 0[\s\S]+items\.push\(stampContinueWatchingSort\(\{ \.\.\.it \}, cw\)\);[\s\S]+items\.push\(\.\.\.nextEpisodeBumps\(cw, items\)\.map\(\(it\) => stampContinueWatchingSort\(it, cw, it\._cwSortAt\)\)\);[\s\S]+return dedupeContinueWatchingItems\(items\)\.sort\(compareContinueWatchingItems\);/,
+  assert.match(ui, /function buildCwItems\(cw\) \{[\s\S]+_cw: true, _cwSortAt: w\.updatedAt \|\| 0[\s\S]+items\.push\(stampContinueWatchingSort\(\{ \.\.\.it, _cw: true \}, cw\)\);[\s\S]+items\.push\(\.\.\.nextEpisodeBumps\(cw, items\)\.map\(\(it\) => stampContinueWatchingSort\(it, cw, it\._cwSortAt\)\)\);[\s\S]+return dedupeContinueWatchingItems\(items\)\.sort\(compareContinueWatchingItems\);/,
     'Continue Watching should merge next-up cards into the row, dedupe by canonical identity, then sort by recency');
   assert.doesNotMatch(ui, /items\.unshift\(it\)|items\.unshift\(\.\.\.nextEpisodeBumps/,
     'next-episode cards must not be unshifted ahead of in-progress Continue Watching cards');
@@ -420,13 +440,13 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'browser poster browse pages should compact the focused-title band without touching TV');
   assert.match(ui, /function browserBrowseCoverPx\(size\) \{[\s\S]+document\.body\.classList\.contains\('tv'\)[\s\S]+window\.innerHeight <= 820[\s\S]+return size === 'L' \? '190px'[\s\S]+const px = window\.innerWidth <= 600 \? '140px' : \(browserBrowseCoverPx\(s\) \|\| table\[s\] \|\| table\.M\);[\s\S]+const shortBrowserBrowse = document\.body\.classList\.contains\('shortBrowseBd'\) && !document\.body\.classList\.contains\('tv'\);[\s\S]+shortBrowserBrowse \? \(h <= 820 \? 128/,
     'desktop/tablet browse pages should use compact browser poster sizing and a compact row reserve');
-  assert.match(ui, /const shortBrowseBd = v === 'movies' \|\| v === 'tv' \|\| v === 'watchlist' \|\| \(v === 'library' && S\.currentLib && S\.currentLib\.path\);[\s\S]+document\.body\.classList\.toggle\('shortBrowseBd', !!shortBrowseBd\);/,
-    'movies, TV shows, watchlist, and attached libraries should use the shorter browse backdrop');
+  assert.match(ui, /const shortBrowseBd = v === 'discover' \|\| v === 'movies' \|\| v === 'tv' \|\| v === 'watchlist' \|\| \(v === 'library' && S\.currentLib && S\.currentLib\.path\);[\s\S]+document\.body\.classList\.toggle\('shortBrowseBd', !!shortBrowseBd\);/,
+    'Discover, movies, TV shows, watchlist, and attached libraries should use the shorter browse backdrop');
   assert.match(ui, /document\.body\.classList\.toggle\('fullBd', isBrowse\);/,
     'Discover should stay row-first instead of enabling the focused-title backdrop overlay');
   assert.match(ui, /let pendingLibraryRouteJob = null;[\s\S]+function applyLibraryRoute\(id\) \{[\s\S]+switchView\('library', false\);[\s\S]+function deferLibraryRoute\(id\) \{[\s\S]+loadLibraries\(\)[\s\S]+if \(parts\[0\] !== 'library' \|\| parts\[1\] !== id\) return;[\s\S]+if \(!applyLibraryRoute\(id\)\) switchView\('home', false\);[\s\S]+if \(view === 'library' && parts\[1\]\) \{[\s\S]+deferLibraryRoute\(parts\[1\]\);/,
     'library hash routes should wait for async library metadata instead of falling through to Home');
-  assert.match(ui, /if \(v === 'search'\) \{ \$\('browseTitle'\)\.textContent = 'Search';[\s\S]+if \(!opts\.preserveSearch && !opts\.preservePage\) \{ resetSearchPage\(\); \$\('grid'\)\.innerHTML = ''; \}/,
+  assert.match(ui, /if \(v === 'search'\) \{ \$\('browseTitle'\)\.textContent = 'Search';[\s\S]+if \(!opts\.preserveSearch && !opts\.preservePage\) resetSearchPage\(\);/,
     'restoring Search from Details should not clear the existing result grid');
   assert.match(ui, /function tmdbSearchRank\(x, q\) \{[\s\S]+searchSeqIndex\(noLeadArticle, queryWords\)[\s\S]+score \+= 10000[\s\S]+score -= 1800[\s\S]+sort\(bySearchRank\)\.map\(mapTmdb\)/,
     'TMDB search should rank exact franchise/title-prefix matches above incidental phrase matches');
@@ -482,7 +502,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'unmatched local TV shows should open a details page instead of a flat episode grid');
   assert.match(ui, /async function openLocalShowDetail\(it\) \{[\s\S]+_localShow: true[\s\S]+loadAllLocalShowEpisodes\(show\._lib, show\._showOpen\)[\s\S]+S\.detailSeasons = localSeasonSummaries\(episodes\)[\s\S]+renderLocalShowSeasonGrid\(show, S\.detailSeasons\)[\s\S]+pickLocalShowPlayTarget\(show, episodes\)/,
     'local-only show details should group scanned episodes into seasons before rendering episode cards');
-  assert.match(ui, /function openLocalShowSeasonEpisodes\(show, seasonNumber\) \{[\s\S]+S\.localDetailEpisodes[\s\S]+localEpisodeItemOf\(show, ep\)[\s\S]+setLocalEpisodeWatched\(item, act === 'watch', seasonNumber\)/,
+  assert.match(ui, /function openLocalShowSeasonEpisodes\(show, seasonNumber, opts = \{\}\) \{[\s\S]+S\.localDetailEpisodes[\s\S]+localEpisodeItemOf\(show, ep\)[\s\S]+setLocalEpisodeWatched\(item, act === 'watch', seasonNumber\)/,
     'local-only show seasons should open local episode cards that play and mark local episode keys');
   assert.match(ui, /function localEpisodeItemOf\(show, ep\) \{[\s\S]+q: `\$\{show\.title\} \$\{code\}`[\s\S]+season: ep\.s, episode: ep\.e/,
     'local episode playback items should preserve query and episode numbers for subtitles');
@@ -508,6 +528,16 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'the main TV detail Play/Resume target should carry local playback for owned episodes');
   assert.match(ui, /function pickNextUp\(show, seasons\) \{[\s\S]+const localEpisodes = localEpisodesForShow\(show\);[\s\S]+if \(localEpisodes\.length\) \{[\s\S]+const nextLocal = localEpisodes\.find\(\(ep\) => !\(wm\[ep\.key\] && wm\[ep\.key\]\.watched\)\)[\s\S]+target: epTarget\(show, nextLocal\.s, nextLocal\.e, 0\)/,
     'matched local TV show Play should start from the next owned episode rather than a missing online source');
+  assert.match(ui, /function detailPlayEpisodeParts\(\) \{[\s\S]+episodeKeyParts\(detailPlayTarget \|\| \{\}\)[\s\S]+function detailPlayShouldFocusEpisode\(\) \{[\s\S]+Resume\|Continue[\s\S]+async function focusDetailPlayEpisode\(show, opts = \{\}\) \{[\s\S]+openSeasonEpisodes\(show, parts\.season, \{ focusEpisode: parts\.episode, reqId: opts\.reqId \}\)[\s\S]+function queueDetailPlayEpisodeFocus\(show, reqId\) \{[\s\S]+focusDetailPlayEpisode\(show, \{ reqId \}\)/,
+    'TV show details should auto-open and focus the Resume/Continue episode instead of leaving users at the top of the show');
+  assert.match(ui, /async function openSeasonEpisodes\(show, seasonNumber, opts = \{\}\) \{[\s\S]+card\.dataset\.season = String\(seasonNumber\);[\s\S]+card\.dataset\.episode = String\(ep\.episode_number\);[\s\S]+focusRenderedDetailEpisode\(\{ season: seasonNumber, episode: focusEpisode \}\)/,
+    'TMDB season episode grids should expose exact season/episode focus targets');
+  assert.match(ui, /function openLocalShowSeasonEpisodes\(show, seasonNumber, opts = \{\}\) \{[\s\S]+card\.dataset\.season = String\(seasonNumber\);[\s\S]+card\.dataset\.episode = String\(ep\.e\);[\s\S]+focusRenderedDetailEpisode\(\{ season: seasonNumber, episode: focusEpisode \}\)/,
+    'local-only season episode grids should expose exact season/episode focus targets');
+  assert.match(ui, /renderSeasonGrid\(it, seasons\);[\s\S]+pickNextUp\(it, seasons\);[\s\S]+queueDetailPlayEpisodeFocus\(it, reqId\);/,
+    'TMDB show details should focus the computed current episode after the Play target is known');
+  assert.match(ui, /renderLocalShowSeasonGrid\(show, S\.detailSeasons\);[\s\S]+pickLocalShowPlayTarget\(show, episodes\);[\s\S]+queueDetailPlayEpisodeFocus\(show, reqId\);/,
+    'local show details should focus the computed current episode after scanned episode targets are known');
   assert.match(ui, /_local: \{ streamUrl: loc\.streamUrl, playUrl: loc\.playUrl, name: loc\.name \}, _episode: true/,
     'next-episode bumps should keep the rich local player prep URL');
   assert.match(ui, /function startOverItem\(it\) \{[\s\S]+_startOver: true/,
@@ -548,7 +578,7 @@ test('music playback stops when leaving the Music section', () => {
     'leaving Music should stop and clear the section-scoped audio player');
   assert.match(ui, /function switchView\(v, push = true, opts = \{\}\) \{[\s\S]+stopMusicWhenLeavingMusic\(v\);[\s\S]+\$\(\'musicNow\'\)\.classList\.remove\('open'\)/,
     'all normal page navigation should enforce the Music stop rule');
-  assert.match(ui, /function openPlayer\(it, mount, opts = \{\}\) \{[\s\S]+if \(S\.musicCur\) closeMusicPlayer\(\);[\s\S]+S\._musicWasPlaying = false;/,
+  assert.match(ui, /async function openPlayer\(it, mount, opts = \{\}\) \{[\s\S]+if \(S\.musicCur\) closeMusicPlayer\(\);[\s\S]+S\._musicWasPlaying = false;/,
     'starting video playback should stop Music instead of pausing it for later resume');
   assert.doesNotMatch(ui, /S\._musicWasPlaying && S\.musicCur[\s\S]+mAudio\.play\(\)/,
     'closing video playback should not resume music after the user has left Music');
@@ -560,21 +590,80 @@ test('music playback stops when leaving the Music section', () => {
     'repeat-one should restart cleanly through the safe music play path');
 });
 
-test('subtitle startup preference contract: always mode applies online captions before track probing', () => {
+test('music search supports voice and TV result focus without side-note clutter', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.ok(ui.includes('id="musicMicBtn" class="focusable" title="Voice search" aria-label="Voice search"'),
+    'Music search should expose the same voice affordance as main Search');
+  assert.doesNotMatch(ui, /Liked Music and your YouTube Music playlists stay first|Weekly picks only, kept short so Music opens quickly/,
+    'Music shelf headers should not render right-aligned helper text');
+  assert.match(ui, /const addShelf = \(title, cls = ''\) => \{[\s\S]+<div class="musicShelfTop"><h2>\$\{esc\(title\)\}<\/h2><\/div>[\s\S]+musicTiles[\s\S]+musicRail/,
+    'Music shelf headers should render only the shelf title above the cards');
+  assert.match(ui, /function musicSearchAndFocusResults\(\) \{[\s\S]+clearTimeout\(_musicSearchT\);[\s\S]+doMusicSearch\(\)\.then\(\(\) => focusMusicResultsSoon\(\)\)/,
+    'Music Enter/voice search should submit immediately and wait for result focus');
+  assert.match(ui, /function moveMusicSearchDown\(\) \{[\s\S]+if \(q\) \{ musicSearchAndFocusResults\(\); return; \}[\s\S]+chipEls\(\)\.length[\s\S]+musicRows\(\)\.length/,
+    'Music ArrowDown should not strand focus in the input while search results load');
+  assert.match(ui, /window\.__tvVoice = \(text\) => \{[\s\S]+tvVoiceTarget === 'music' && S\.view === 'music'[\s\S]+submitMusicVoiceSearch\(text\)/,
+    'Android native voice callback should route to Music when the Music mic launched it');
+  assert.match(ui, /function setupMusicVoiceSearch\(\) \{[\s\S]+TriboonTV\.startVoice[\s\S]+setTvVoiceTarget\('music'\)[\s\S]+new SR\(\)/,
+    'Music voice search should support both Android native recognition and browser SpeechRecognition');
+  assert.match(ui, /if \(inInput && ae === \$\('musicSearch'\)\) \{[\s\S]+k === 'ArrowDown' \|\| k === 'Enter'[\s\S]+moveMusicSearchDown\(\)/,
+    'document-level D-pad handling should submit or move from Music search consistently');
+  assert.match(ui, /k === 'ArrowRight'[\s\S]+\$\(\'musicMicBtn\'\)\.style\.display !== 'none'[\s\S]+clearFocus\(\);[\s\S]+S\.zone = 'musicSearch';[\s\S]+\$\(\'musicMicBtn\'\)\.focus\(\)/,
+    'Music search should clear stale row focus before handing D-pad focus to the mic');
+  assert.match(ui, /if \(ae === \$\('musicMicBtn'\)\) \{[\s\S]+\$\(\'musicMicBtn\'\)\.click\(\)[\s\S]+moveMusicSearchDown\(\)/,
+    'Music mic should be a real Android TV focus stop');
+});
+
+test('subtitle startup preference contract: always mode prefers release captions before online fallback', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   const playerMap = fs.readFileSync(path.join(__dirname, '..', 'docs-player-regression-map.md'), 'utf8');
+  const webHousekeepingStart = ui.indexOf('function startWebPlayerHousekeeping(mount, it) {');
+  const webHousekeepingEnd = ui.indexOf('function playbackStartKind(mount)', webHousekeepingStart);
+  assert.ok(webHousekeepingStart >= 0 && webHousekeepingEnd > webHousekeepingStart, 'web player housekeeping function should be present');
+  const webHousekeeping = ui.slice(webHousekeepingStart, webHousekeepingEnd);
   assert.match(ui, /function prefSubtitleMode\(\) \{[\s\S]+const scoped = localStorage\.getItem\(profilePrefKey\('subtitleMode'\)\);[\s\S]+if \(scoped !== null\) return scoped === 'always' \? 'always' : 'manual';[\s\S]+localStorage\.getItem\('triboon\.subtitleMode'\) === 'always'/,
     'profile subtitle mode should fall back to the legacy global always/manual setting');
-  assert.match(ui, /function startupSubtitleRelFor\(p, saved = loadSubChoice\(\)\) \{[\s\S]+Manual mode is truly manual at startup[\s\S]+if \(prefSubtitleMode\(\) !== 'always'\) return '';[\s\S]+if \(subtitleRelPlayable\(p, saved\)\) return saved;[\s\S]+return autoSubtitleRelFor\(p\);[\s\S]+\}/,
-    'manual subtitle mode should not auto-enable saved online captions while always mode can reuse saved online choices');
-  assert.match(ui, /function startWebPlayerHousekeeping\(mount, it\) \{[\s\S]+loadTracks\(\);[\s\S]+if \(!applyStartupSubtitlePref\(\)\) \{[\s\S]+fetch\(`\/api\/ossubs\/\$\{mount\.id\}\?\$\{subtitleRequestParams\(it, code2, mount\.streamToken\)\.toString\(\)\}`\)/,
-    'web player should try to enable always-mode subtitles before falling back to warmup prefetch');
-  assert.match(ui, /function applyStartupSubtitlePref\(\) \{[\s\S]+const rel = concreteSubtitleRel\(startupSubtitleRelFor\(p\)\);[\s\S]+Promise\.resolve\(setSubtitle\(rel\)\)\.finally/,
+  assert.match(ui, /function startupSubtitleRelFor\(p, saved = loadSubChoice\(\)\) \{[\s\S]+Manual mode is truly manual at startup[\s\S]+if \(prefSubtitleMode\(\) !== 'always'\) return '';[\s\S]+if \(subtitleRelPlayable\(p, saved\)\) return saved;[\s\S]+if \(bestReleaseSubtitleRel\(\)\) return 'release:auto';[\s\S]+return autoSubtitleRelFor\(p\);[\s\S]+\}/,
+    'manual subtitle mode should not auto-enable saved captions while always mode can reuse saved choices or prefer a same-release subtitle');
+  assert.match(webHousekeeping, /loadTracks\(\);[\s\S]+if \(!applyStartupSubtitlePref\(\)\) \{/,
+    'web player should try to enable always-mode subtitles before entering online warmup');
+  assert.ok(webHousekeeping.includes('fetch(`/api/ossubs/${mount.id}?${subtitleRequestParams(it, code2, mount.streamToken).toString()}`).catch(() => {});'),
+    'web player should try to enable always-mode subtitles before falling back to online warmup prefetch');
+  assert.match(ui, /function applyStartupSubtitlePref\(\) \{[\s\S]+const rel = concreteSubtitleRel\(startupSubtitleRelFor\(p\)\);[\s\S]+Promise\.resolve\(setSubtitle\(rel, \{ startup: true \}\)\)\.finally/,
     'always-mode subtitles should be applied without waiting for the track probe to finish');
+  assert.match(webHousekeeping, /await fetchPlayerTracks\(p, 1400\)[\s\S]+if \(bestReleaseSubtitleRel\(\) && prefSubtitleMode\(\) === 'always'\) \{[\s\S]+applyStartupSubtitlePref\(\);[\s\S]+return;[\s\S]+\}[\s\S]+\/api\/ossubs/,
+    'web startup should wait briefly for same-release subtitles before prefetching online subtitles');
+  assert.match(ui, /const releaseSubs = visibleReleaseSubChoices\(\);[\s\S]+releaseSubs\.slice\(0, 6\)\.forEach[\s\S]+releaseSubLabel\(sub\)/,
+    'CC menu should list same-release subtitles ahead of online subtitle choices');
+  assert.match(ui, /function embeddedSubChoices\(\) \{[\s\S]+return subs\.filter\(\(s\) => s && s\.text === true\);[\s\S]+\}/,
+    'only text-based embedded subtitles should be exposed as built-in choices');
+  assert.match(ui, /function visibleReleaseSubChoices\(\) \{[\s\S]+showAllLocalSubtitles\(\) \? all : all\.filter\(\(s\) => subtitleChoiceMatchesPreferred\(s\)\);[\s\S]+\}/,
+    'same-release subtitle rows should be filtered to the preferred subtitle language unless the user expands all languages');
+  assert.match(ui, /function visibleEmbeddedSubChoices\(\) \{[\s\S]+showAllLocalSubtitles\(\) \? all : all\.filter\(\(s\) => subtitleChoiceMatchesPreferred\(s\)\);[\s\S]+\}/,
+    'built-in subtitle rows should be filtered to the preferred subtitle language unless the user expands all languages');
+  assert.match(ui, /const embeddedSubs = visibleEmbeddedSubChoices\(\);[\s\S]+embeddedSubs\.slice\(0, 8\)\.forEach[\s\S]+embeddedSubLabel\(sub\)/,
+    'CC menu should list preferred-language built-in text subtitles before online subtitle choices');
+  assert.match(ui, /hiddenLocalSubtitleCount\(\)[\s\S]+Show all subtitle languages[\s\S]+setShowAllLocalSubtitles\(true\)/,
+    'CC menu should offer an explicit way to reveal hidden local subtitle languages');
+  assert.match(ui, /Promise\.resolve\(setSubtitle\(rel, \{ startup: true \}\)\)\.finally/,
+    'startup auto-subtitle selection should mark the request so fallback behavior is explicit');
+  assert.match(ui, /rel\.startsWith\('em:'\) \? embeddedSubUrl\(p, rel, \{ mode: opts\.startup \? 'startup' : 'manual' \}\) : subtitleUrlForRel\(p, rel\)/,
+    'manual built-in subtitle selection should get a longer extraction window than startup auto-selection');
+  assert.match(ui, /rel\.startsWith\('em:'\) && opts\.startup && canAutoSubtitle\(p\)[\s\S]+Built-in subtitles took too long - trying online subtitles[\s\S]+return setSubtitle\(osTrackRel\(preferredAutoSubtitleLang\(\)\)\)/,
+    'built-in subtitle extraction failures should only fall back to online subtitles during startup auto-mode');
+  assert.match(ui, /p\._subVttText = await r\.text\(\);[\s\S]+p\._subVttRel = rel;/,
+    'subtitle selection should keep the verified VTT body for the player attach path');
+  assert.match(ui, /p\.subTrack\.startsWith\('os:'\) \|\| p\.subTrack\.startsWith\('rs:'\) \|\| p\.subTrack\.startsWith\('em:'\)/,
+    'built-in subtitle rels should be allowed through the web subtitle attach path');
+  assert.match(ui, /URL\.createObjectURL\(new Blob\(\[p\._subVttText\], \{ type: 'text\/vtt;charset=utf-8' \}\)\)/,
+    'web subtitles should attach the already-fetched VTT text through a blob URL');
   assert.match(ui, /function applyTrackPrefs\(\) \{[\s\S]+if \(p\.usingNative && canUseNativeVideoPlayer\(\)\) return;[\s\S]+applyStartupSubtitlePref\(\);[\s\S]+if \(!p\.tracks\) \{ updateSrndBtn\(\); return; \}/,
     'track preference setup should still apply startup subtitles when tracks are not available yet');
   assert.match(ui, /function nativeVideoSubtitleRel\(p\) \{\s+return \{ blocked: false, rel: concreteSubtitleRel\(startupSubtitleRelFor\(p\)\) \};\s+\}/,
     'native ExoPlayer startup should use the same subtitle startup contract as web playback');
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(server, /return mode === 'manual' \? 120000 : 45000;/,
+    'manual embedded subtitle extraction should wait longer than startup auto-selection');
   assert.match(playerMap, /Profile always-show subtitles must auto-enable the preferred online subtitle at startup/,
     'player regression map should document the always-subtitles startup contract');
 });
@@ -611,7 +700,6 @@ test('Android native player: direct source and native chrome stay out of the web
   const networkSecurity = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'xml', 'network_security_config.xml'), 'utf8');
   const proguardRules = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'proguard-rules.pro'), 'utf8');
   const playerMap = fs.readFileSync(path.join(__dirname, '..', 'docs-player-regression-map.md'), 'utf8');
-  const loadingRing = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'drawable', 'native_loading_ring.xml'), 'utf8');
   const guideIcon = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'drawable', 'ic_player_guide.xml'), 'utf8');
   const nativePlayerLayout = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'layout', 'native_player_view.xml'), 'utf8');
   const audioIcon = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'drawable', 'ic_player_audio.xml'), 'utf8');
@@ -730,25 +818,25 @@ test('Android native player: direct source and native chrome stay out of the web
     'theme choices should remap full design roles, not only the three accent colors');
   assert.ok(['triboonCoral', 'cinema', 'studio', 'velvet', 'teal', 'evergreen', 'contrast'].every((name) => ui.includes(`${name}: {`)),
     'theme list should include calmer cinematic professional options');
-  assert.match(ui, /scrim: 'linear-gradient\(90deg,rgba\(31,31,31,\.84\) 0%,rgba\(31,31,31,\.54\) 28%,rgba\(31,31,31,\.18\) 58%,rgba\(31,31,31,\.05\) 100%\),linear-gradient\(0deg,rgba\(31,31,31,\.74\) 0%,rgba\(31,31,31,\.24\) 26%,rgba\(31,31,31,\.04\) 60%,rgba\(31,31,31,\.10\) 100%\)'/,
+  assert.match(ui, /scrim: 'linear-gradient\(90deg,rgba\(18,20,22,\.84\) 0%,rgba\(18,20,22,\.54\) 28%,rgba\(18,20,22,\.18\) 58%,rgba\(18,20,22,\.05\) 100%\),linear-gradient\(0deg,rgba\(18,20,22,\.74\) 0%,rgba\(18,20,22,\.24\) 26%,rgba\(18,20,22,\.04\) 60%,rgba\(18,20,22,\.10\) 100%\)'/,
     'theme scrims should keep browser backdrop art visible instead of applying a full-screen blackout');
   assert.ok(!ui.includes("scrim: 'linear-gradient(180deg"),
     'theme scrims should not regress to the old opaque vertical wash');
   assert.match(ui, /const THEME_ALIASES = \{[\s\S]+graphite: 'studio'[\s\S]+triboon: 'triboonCoral'[\s\S]+trioon: 'triboonCoral'[\s\S]+arctic: 'teal'[\s\S]+forest: 'evergreen'/,
     'legacy stored theme names should map to the nearest new professional palette');
-  assert.ok(ui.includes("label: 'Triboon'") && ui.includes("tone: 'charcoal + gold'")
-    && ui.includes("ink: '#1F1F1F'") && ui.includes("c: '#E5A00D'")
-    && ui.includes("a: '#F2B63D'"),
-    'Triboon theme should keep its name while using a Plex-style charcoal and gold palette');
-  assert.ok(ui.includes("label: 'Carbon Gold'") && ui.includes("label: 'Studio Slate'")
-    && ui.includes("label: 'Warm Taupe'") && ui.includes("label: 'Deep Teal'")
-    && ui.includes("label: 'Olive Slate'"),
+  assert.ok(ui.includes("label: 'Executive Graphite'") && ui.includes("tone: 'graphite + champagne'")
+    && ui.includes("ink: '#121416'") && ui.includes("c: '#8D9AA4'")
+    && ui.includes("a: '#B8A46A'"),
+    'default theme should use a restrained graphite and champagne business palette');
+  assert.ok(ui.includes("label: 'Carbon Brass'") && ui.includes("label: 'Boardroom Slate'")
+    && ui.includes("label: 'Walnut Smoke'") && ui.includes("label: 'Harbor Steel'")
+    && ui.includes("label: 'Olive Boardroom'"),
     'alternate themes should be grown-up neutral palettes, not playful mood colors');
   assert.ok(ui.includes("localStorage.getItem('triboon.theme') || 'triboonCoral'")
     && ui.includes('THEMES[name] || THEMES.triboonCoral'),
-    'Triboon should be the default and fallback theme');
-  assert.match(ui, /function applyTheme\(\) \{[\s\S]+Object\.entries\(THEME_TOKEN_MAP\)[\s\S]+setProperty\('--grad', t\.c\)[\s\S]+setProperty\('--gold', t\.a\)[\s\S]+document\.body\.dataset\.theme = name/,
-    'theme application should update role tokens plus solid action colors');
+    'Executive Graphite should be the default and fallback theme');
+  assert.match(ui, /function applyTheme\(\) \{[\s\S]+Object\.entries\(THEME_TOKEN_MAP\)[\s\S]+setProperty\('--grad', t\.c\)[\s\S]+setProperty\('--gold', t\.a\)[\s\S]+\['btn', 'btnHover', 'btnSelected', 'btnSelectedHover', 'btnPrimary', 'btnPrimaryHover', 'btnFocusText',[\s\S]+'artFocusLine', 'artFocusGlow', 'artFocusTileLine', 'artFocusTileBorder', 'artFocusTileGlow'\][\s\S]+document\.body\.dataset\.theme = name/,
+    'theme application should update role tokens plus shared button state colors');
   assert.ok(!ui.includes('--grad:linear-gradient') && !ui.includes('--gold:linear-gradient')
     && !ui.includes('.musicAction.primary{background:linear-gradient')
     && !ui.match(/\.ytmConnectIcon[^{]*\{[^}]*linear-gradient/),
@@ -759,8 +847,23 @@ test('Android native player: direct source and native chrome stay out of the web
     'theme picker should use restrained palette strips instead of illustrative color-picking icons');
   assert.match(ui, /\.themeChoice:hover,\.themeChoice\.focus,\.themeChoice:focus,\.themeChoice:focus-visible\{[\s\S]+outline:none/,
     'theme picker cards should react to native focus as well as D-pad focus classes');
-  assert.match(ui, /#settings \.setGrid button:not\(\.themeChoice\):hover,#prefs \.setGrid button:not\(\.themeChoice\):hover,[\s\S]+#settings \.setGrid button:not\(\.themeChoice\):focus-visible,#prefs \.setGrid button:not\(\.themeChoice\):focus-visible\{[\s\S]+background:var\(--text\)!important;color:#160a04!important/,
+  assert.match(ui, /#setTabs button,#prefTabs button\{\s*box-shadow:none!important\}[\s\S]+#setTabs button:hover,#prefTabs button:hover,[\s\S]+#setTabs button:focus-visible,#prefTabs button:focus-visible\{[\s\S]+background:var\(--btnHover\)!important;color:var\(--btnFocusText\)!important[\s\S]+#setTabs button\.on\.focus,#prefTabs button\.on\.focus,[\s\S]+#setTabs button\.on:focus-visible,#prefTabs button\.on:focus-visible\{[\s\S]+background:var\(--btnSelectedHover\)!important;color:var\(--text\)!important/,
+    'Settings and Preferences side-tab menus should visibly highlight hover, keyboard focus, and D-pad focus');
+  assert.match(ui, /#setTabs button,#prefTabs button\{[\s\S]+background:var\(--btn\);border:0;/,
+    'Settings and Preferences side-tab menus should be borderless');
+  assert.match(ui, /#settings \.setGrid button:not\(\.themeChoice\):hover,#prefs \.setGrid button:not\(\.themeChoice\):hover,[\s\S]+#settings \.setGrid button:not\(\.themeChoice\):focus-visible,#prefs \.setGrid button:not\(\.themeChoice\):focus-visible\{[\s\S]+background:var\(--btnHover\)!important;color:var\(--btnFocusText\)!important/,
     'Settings and Preferences content buttons should visibly fill on hover, keyboard focus, and D-pad focus');
+  assert.match(ui, /function syncSectionTabs\(tabsId, activeButton = null\) \{[\s\S]+setAttribute\('role', 'tablist'\)[\s\S]+setAttribute\('role', 'tab'\)[\s\S]+setAttribute\('aria-selected', on \? 'true' : 'false'\)[\s\S]+\}/,
+    'Settings and Preferences side tabs should initialize selected state for D-pad and accessibility');
+  assert.match(ui, /document\.querySelectorAll\('#prefTabs button'\)[\s\S]+syncSectionTabs\('prefTabs', b\)[\s\S]+syncSectionTabs\('prefTabs'\);/,
+    'Preferences tabs should share selected-tab state for click, D-pad, and initial render');
+  assert.match(ui, /document\.querySelectorAll\('#setTabs button'\)[\s\S]+syncSectionTabs\('setTabs', b\)[\s\S]+syncSectionTabs\('setTabs'\);/,
+    'Settings tabs should share selected-tab state for click, D-pad, and initial render');
+  assert.match(ui, /function bindSectionTabs\(rootId, tabsId, panelAttr\) \{[\s\S]+addEventListener\('click', run\)[\s\S]+addEventListener\('focus', run\)[\s\S]+addEventListener\('mouseenter', run\)[\s\S]+\}/,
+    'Settings and Preferences side tabs should switch sections on hover and D-pad focus, not only click');
+  assert.ok(ui.includes("bindSectionTabs('prefs', 'prefTabs', 'data-ptab')")
+    && ui.includes("bindSectionTabs('settings', 'setTabs', 'data-stab')"),
+    'both Preferences and Settings should use hover/focus section activation');
   assert.match(ui, /function syncChoiceButtons\(selector, isSelected\) \{[\s\S]+classList\.toggle\('sel', selected\)[\s\S]+setAttribute\('aria-pressed', selected \? 'true' : 'false'\)/,
     'selection-style buttons should share visual and pressed-state updates');
   ['#prefCoverSize button', '#prefContentTextSize button', '#prefAutoplay button', '#prefSubtitleMode button', '#prefSubSize button', '#prefScreensaverDelay button', '#coverSize button'].forEach((selector) => {
@@ -798,7 +901,11 @@ test('Android native player: direct source and native chrome stay out of the web
     'native ExoPlayer choice rows should scroll inside the bounded sheet instead of growing offscreen');
   assert.match(android, /private java\.util\.ArrayList<View> nativeSheetFocusableRows\(\)[\s\S]+nativeSheetRows != null \? nativeSheetRows : nativeSheet[\s\S]+private void focusNativeSheetRow\([\s\S]+scrollTo\(0, Math\.max\(0, row\.getTop\(\) - dp\(8\)\)\)/,
     'native ExoPlayer D-pad focus should keep the highlighted sheet row visible');
-  assert.match(android, /row\.setSingleLine\(true\);[\s\S]+row\.setEllipsize\(TextUtils\.TruncateAt\.END\);[\s\S]+ViewGroup\.LayoutParams\.MATCH_PARENT, dp\(38\)/,
+  assert.match(android, /private GradientDrawable nativePanelBg\(\) \{[\s\S]+new int\[\]\{0xF0181A1D, 0xF00D0F12\}[\s\S]+d\.setCornerRadius\(dp\(10\)\);[\s\S]+d\.setStroke\(dp\(1\), 0x12FFFFFF\)/,
+    'native ExoPlayer option sheets should use compact graphite panels instead of bright purple glass');
+  assert.match(android, /private GradientDrawable nativeSheetRowBg\(boolean focused, boolean selected\) \{[\s\S]+focused[\s\S]+new int\[\]\{0xFF2B3137, 0xFF252A30\}[\s\S]+selected[\s\S]+new int\[\]\{0x403A3424, 0x30312D22\}[\s\S]+d\.setStroke\(dp\(1\), focused \? 0x66B8A46A : selected \? 0x55B8A46A : 0x00000000\)/,
+    'native ExoPlayer sheet focused and selected rows should be visually distinct');
+  assert.match(android, /row\.setSingleLine\(true\);[\s\S]+row\.setEllipsize\(TextUtils\.TruncateAt\.END\);[\s\S]+ViewGroup\.LayoutParams\.MATCH_PARENT, dp\(40\)/,
     'native ExoPlayer sheet rows should keep fixed height and ellipsize long track labels');
   assert.match(android, /private String nativeStatsJson\(\)[\s\S]+nativeVideoStatsLabel[\s\S]+nativeAudioStatsLabel[\s\S]+nativeBandwidthEstimate/,
     'native stats should report video, audio, and bandwidth estimates to the web player stats panel');
@@ -824,6 +931,12 @@ test('Android native player: direct source and native chrome stay out of the web
   }
   assert.match(ui, /function nativePlaybackOrder\(p, preferredKind\) \{[\s\S]+pref === 'remux'[\s\S]+\? \['remux', 'transcode'\][\s\S]+: \(pref === 'transcode' \? \['transcode', 'remux'\] : \['direct', 'remux', 'transcode'\]\)[\s\S]+function nativeMimeForKind\(p, kind\)/,
     'ExoPlayer should honor the server-selected fast path but let remux fall through to transcode when the device rejects the remuxed codec');
+  assert.match(ui, /async function prepareNativeStartKindForAudio\(startKind\) \{[\s\S]+fetchPlayerTracks\(p, 1400\)[\s\S]+nativeDirectAudioNeedsSafeRemux\(selectedPlayerAudioTrack\(p\)\)[\s\S]+p\.forceAacRemux = true;[\s\S]+return 'remux';[\s\S]+nativeDirectAudioNameRisk\(p\)[\s\S]+return 'remux';[\s\S]+\}/,
+    'Android direct playback should quickly probe risky audio and start a safe audio remux instead of silently direct-playing');
+  assert.match(ui, /function remuxPlaybackUrl\(p, seekStart = 0\) \{[\s\S]+p\.forceAacRemux \? '&audioSafe=1' : ''[\s\S]+return `\$\{p\.remuxUrl\}&start=\$\{Math\.max\(0, Math\.floor\(seekStart \|\| 0\)\)\}&audio=\$\{audio\}\$\{safe\}`;/,
+    'safe Android remux should request AAC audio while still copying video');
+  assert.match(server, /const forceAudioSafe = ctx\.url\.searchParams\.get\('audioSafe'\) === '1';[\s\S]+const transcodeAudio = forceAudioSafe \|\| !audioCopyOk\(aud, vf\._caps\);/,
+    'server remux should honor the audioSafe flag without forcing full video transcode');
   assert.match(ui, /function resolvePlaybackResume\(it\) \{[\s\S]+if \(it\._startOver\) return \{ \.\.\.it, resume: 0 \};[\s\S]+const pos = resumePositionForItem\(it\);[\s\S]+return pos > 0 \? \{ \.\.\.it, resume: pos \} : it;/,
     'Resume should be resolved from current watch state at click time, after quality changes');
   assert.match(ui, /async function play\(it, pick\) \{[\s\S]+it = resolvePlaybackResume\(it\);/,
@@ -844,7 +957,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'player quality labels should prefer selected-source resolution attributes before guessing from filenames or tracks');
   assert.doesNotMatch(ui, /if \(h >= 400\) return '480p';\s*return '1080p';/,
     'direct/remux source labels should not invent a 1080p badge when source resolution and tracks are unknown');
-  assert.match(ui, /const nativeRequired = nativeVideoRequired\(it\);[\s\S]+const nativeStarted = \(opts\.nativeFirst \|\| nativeRequired\) && tryNativePlaybackLadder\(it\.resume \|\| 0, startKind\);[\s\S]+if \(nativeStarted\) \{[\s\S]+startNativePlayerHousekeeping\(it\);[\s\S]+\} else if \(nativeRequired\) \{[\s\S]+closePlayer\(\);[\s\S]+return;[\s\S]+\} else \{[\s\S]+revealWebPlayerShell\(it\);[\s\S]+startWebPlayerHousekeeping\(mount, it\);[\s\S]+startSource\(startKind, it\.resume \|\| 0\);[\s\S]+\}/,
+  assert.match(ui, /const nativeRequired = nativeVideoRequired\(it\);[\s\S]+if \(opts\.nativeFirst \|\| nativeRequired\) startKind = await prepareNativeStartKindForAudio\(startKind\);[\s\S]+const nativeStarted = \(opts\.nativeFirst \|\| nativeRequired\) && tryNativePlaybackLadder\(it\.resume \|\| 0, startKind\);[\s\S]+if \(nativeStarted\) \{[\s\S]+startNativePlayerHousekeeping\(it\);[\s\S]+\} else if \(nativeRequired\) \{[\s\S]+closePlayer\(\);[\s\S]+return;[\s\S]+\} else \{[\s\S]+revealWebPlayerShell\(it\);[\s\S]+startWebPlayerHousekeeping\(mount, it\);[\s\S]+startSource\(startKind, it\.resume \|\| 0\);[\s\S]+\}/,
     'Android native movie playback should never reveal the web player shell when ExoPlayer is available');
   assert.match(ui, /function startNativePlayerHousekeeping\(it\) \{[\s\S]+stopWebVideoElement\(\);[\s\S]+if \(S\.healthTimer\) clearInterval\(S\.healthTimer\);[\s\S]+S\.watchTimer = setInterval\(saveWatch, 10000\);[\s\S]+loadTracks\(\);[\s\S]+prepNextEpisode\(it\);[\s\S]+\}/,
     'native playback should silence the hidden web video while still probing duration metadata');
@@ -918,6 +1031,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native ExoPlayer errors after READY should recover the same source instead of walking the fallback ladder');
   assert.match(android, /if \(state == Player\.STATE_READY\) \{[\s\S]+if \("video"\.equals\(nativeMode\)\) \{[\s\S]+nativeVideoStarted = true;[\s\S]+window\.__tvNativeVideoReady && __tvNativeVideoReady/,
     'Android ExoPlayer STATE_READY should mark the web VOD session as post-start before later errors are handled');
+  assert.match(android, /else if \("live"\.equals\(nativeMode\)\) \{[\s\S]+nativeLiveStarted = true;[\s\S]+window\.__tvNativeLiveReady && __tvNativeLiveReady\(\)/,
+    'Android ExoPlayer STATE_READY should commit pending Live TV PiP guide tuning only after the live surface is ready');
   assert.match(ui, /const clearReadyFrame = \(\) => \{[\s\S]+pReady\.item\.type === 'live' && v\.readyState >= 2[\s\S]+\$\(\'playerLoader\'\)\.classList\.remove\('show'\);[\s\S]+v\.onloadeddata = clearReadyFrame;[\s\S]+v\.oncanplay = clearReadyFrame;/,
     'web Live TV should clear the startup loader once a decoded frame is ready, even if delayed autoplay is blocked');
   assert.ok(ui.includes("$('vlcPanel').classList.remove('show');")
@@ -959,7 +1074,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'native auto-advance should reset native fallback order for each new source');
   assert.match(ui, /autoAdvance\(\{ nativePreferred: true \}\)/,
     'native player source failures should advance to the next release instead of closing playback');
-  assert.match(ui, /if \(nativePreferred && tryNativePlaybackLadder\(at, startKind\)\) \{[\s\S]+startNativePlayerHousekeeping\(p\.item\);/,
+  assert.match(ui, /if \(nativePreferred\) startKind = await prepareNativeStartKindForAudio\(startKind\);[\s\S]+if \(nativePreferred && tryNativePlaybackLadder\(at, startKind\)\) \{[\s\S]+startNativePlayerHousekeeping\(p\.item\);/,
     'Android auto-advance should hand the next release back to ExoPlayer when native playback is active');
   assert.match(ui, /if \(nativePreferred\) \{\s*toast\('Native player could not start the next release'\);\s*closePlayer\(\);\s*return;\s*\}\s*revealWebPlayerShell\(p\.item\);/,
     'Android auto-advance must stop instead of falling back to the web player when ExoPlayer cannot start');
@@ -971,22 +1086,52 @@ test('Android native player: direct source and native chrome stay out of the web
     'native HD button should only be enabled when optimized quality choices exist');
   assert.match(ui, /const nativeBackdrop = p\.item\.backdrop \|\| p\.item\.poster \|\| '';[\s\S]+backdropUrl: nativeBackdrop \? new URL\(nativeBackdrop, location\.origin\)\.href : ''/,
     'native Android loading should receive the same movie art as the web player loader');
-  assert.match(ui, /const serverSeek = kind === 'remux' \|\| kind === 'transcode';[\s\S]+nativeUrl = `\$\{p\.remuxUrl\}&start=\$\{seekStart\}&audio=\$\{p\.audioTrack \|\| 0\}`;[\s\S]+url: new URL\(nativeUrl, location\.origin\)\.href,[\s\S]+start: serverSeek \? 0 : Math\.max\(0, atSeconds \|\| 0\),[\s\S]+startOffset: seekStart/,
+  assert.match(ui, /const serverSeek = kind === 'remux' \|\| kind === 'transcode';[\s\S]+nativeUrl = remuxPlaybackUrl\(p, seekStart\);[\s\S]+url: new URL\(nativeUrl, location\.origin\)\.href,[\s\S]+start: serverSeek \? 0 : Math\.max\(0, atSeconds \|\| 0\),[\s\S]+startOffset: seekStart/,
     'native remux/transcode playback should use server-side start URLs and pass the absolute display offset');
   assert.match(ui, /class="seekLine"[\s\S]+id="seekElapsed"[\s\S]+id="seek"[\s\S]+id="seekTotal"/,
     'web player seek bar should show elapsed time on the left and total duration on the right');
   assert.match(ui, /class="topLeft"[\s\S]+id="playerBackBtn"[\s\S]+class="playerMetaRow"[\s\S]+id="pTitle"[\s\S]+id="pEpisode"[\s\S]+id="pQuality"[\s\S]+class="osdRight"[\s\S]+class="seekLine"/,
-    'web player should keep back, title, episode, and quality together in the top-left metadata cluster');
+    'web player should keep back, title, episode, and the hidden live-only badge in the top-left metadata cluster');
   assert.match(ui, /#osd\{[\s\S]+padding:clamp\(22px,3vw,42px\) clamp\(24px,3\.6vw,52px\) clamp\(50px,6\.2vw,78px\)/,
     'web player controls should sit a bit higher above the bottom edge');
-  assert.match(ui, /function updatePlayerMeta\(\) \{[\s\S]+playerQualityLabel\(p\)[\s\S]+\$\(\'pQuality\'\)\.textContent = quality/,
-    'web player should keep the visible quality label synchronized without showing the full source filename');
+  assert.match(ui, /function updatePlayerMeta\(\) \{[\s\S]+const quality = p && p\.item && p\.item\.type === 'live' \? 'LIVE' : '';[\s\S]+\$\(\'pQuality\'\)\.textContent = quality[\s\S]+\$\(\'pQuality\'\)\.style\.visibility = quality \? 'visible' : 'hidden';/,
+    'web player should hide VOD 4K/1080p badges while keeping LIVE available for Live TV');
   assert.match(ui, /function episodePlayerMeta\(it\) \{[\s\S]+it\.type !== 'episode'[\s\S]+episodeCodeMeta\(it\)[\s\S]+subline: \[code, epName\]\.filter\(Boolean\)\.join\(' - '\)/,
     'episode playback should split show title from season/episode metadata for the player header');
   assert.match(ui, /id="playerEpisodes"[\s\S]+id="trackMenu"/,
     'episode players should have a hidden current-season thumbnail strip below the controls');
-  assert.match(ui, /#playerEpisodes\{display:flex;max-height:0[\s\S]+transition:max-height[\s\S]+#playerEpisodes\.open\{max-height:196px[\s\S]+\.playerEpCard\{[\s\S]+clamp\(220px,20vw,310px\)[\s\S]+border:0;border-radius:16px[\s\S]+background:transparent[\s\S]+box-shadow:none[\s\S]+\.playerEpCard \.peStill\{[\s\S]+aspect-ratio:16\/9;border-radius:16px[\s\S]+\.playerEpCard \.peMeta\{display:flex;flex-direction:column/,
-    'web episode strip should animate open and show borderless rounded 16:9 stills with metadata below the image');
+  assert.match(ui, /#playerEpisodes\{display:flex;max-height:0[\s\S]+transition:max-height[\s\S]+#playerEpisodes\.open\{max-height:196px;padding:5px 8px 20px[\s\S]+\.playerEpCard\{[\s\S]+clamp\(172px,16vw,244px\)[\s\S]+height:172px;border:0;border-radius:10px[\s\S]+background:transparent[\s\S]+box-shadow:none[\s\S]+\.playerEpCard\.focusable::before,\.playerEpCard\.focusable:focus-visible::before\{display:none\}[\s\S]+\.playerEpCard \.peStill\{[\s\S]+aspect-ratio:16\/9;border-radius:10px[\s\S]+box-shadow:none[\s\S]+\.playerEpCard \.peMeta\{display:flex;flex-direction:column[\s\S]+min-height:38px/,
+    'web episode strip should fit compact rounded 16:9 stills, contained focus frame, and metadata inside the player frame');
+  assert.match(ui, /\.playerEpCard\.focus \.peStill,\.playerEpCard:focus-visible \.peStill\{box-shadow:inset 0 0 0 1\.5px var\(--artFocusLine\)\}/,
+    'player episode thumbnails should keep the hollow theme frame inside the still image');
+  assert.match(ui, /function smoothFocusScrollOk\(\) \{[\s\S]+prefers-reduced-motion: reduce[\s\S]+return !document\.body\.classList\.contains\('tv'\);[\s\S]+\}[\s\S]+function focusScrollBehavior\(\) \{[\s\S]+smoothFocusScrollOk\(\) \? 'smooth' : 'auto'[\s\S]+\}/,
+    'focus-driven scrolling should stay smooth in browsers but use non-stacking movement on Android TV');
+  assert.match(ui, /\.pcard,\.card,\.seasonCard,\.epCard,\.castCard,\.chCard,\.playerEpCard\{[\s\S]+transition:transform \.18s cubic-bezier\(\.22,1,\.36,1\),filter \.18s ease,box-shadow \.18s ease[\s\S]+\.pcard \.art,\.seasonCard \.art,\.epCard \.still,\.castCard \.ph,\.chCard \.chLogo,\.playerEpCard \.peStill\{[\s\S]+contain:paint[\s\S]+\.pcard:hover,\.pcard\.focusable\.focus,\.seasonCard:hover,\.seasonCard\.focusable\.focus,\.epCard:hover,\.epCard\.focusable\.focus,\.castCard:hover,\.castCard\.focusable\.focus\{transform:translate3d\(0,-3px,0\)/,
+    'poster, episode, cast, and channel cards should animate focus with compositor-friendly transitions');
+  assert.match(ui, /\.pcard:hover \.art,\.pcard\.focus \.art,\.seasonCard:hover \.art,\.seasonCard\.focus \.art\{[\s\S]+box-shadow:0 0 0 1\.5px var\(--artFocusLine\),0 0 24px var\(--artFocusGlow\)!important\}/,
+    'poster and thumbnail focus should use theme-aware thin hollow glow instead of a thick solid line');
+  assert.match(ui, /\.card:hover,\.card\.focusable\.focus\{transform:translate3d\(0,-3px,0\);box-shadow:0 0 0 1\.5px var\(--artFocusLine\),0 0 24px var\(--artFocusGlow\)\}/,
+    '16:9 row cards should use the same mouse hover lift and highlight as D-pad focus');
+  assert.match(ui, /\.epCard:hover,\.epCard\.focus\{box-shadow:0 0 0 1\.5px var\(--artFocusLine\),0 0 24px var\(--artFocusGlow\)\}[\s\S]+\.castCard:hover \.ph,\.castCard\.focusable\.focus \.ph\{box-shadow:0 0 0 1\.5px var\(--artFocusLine\),0 0 24px var\(--artFocusGlow\)\}/,
+    'detail episode and cast cards should match mouse hover highlight to D-pad focus');
+  assert.match(ui, /\.seasonCard \.art\{[^}]+border:0/,
+    'season artwork should not show a static border when it is not focused');
+  assert.match(ui, /\.dPoster\{[^}]+border:0/,
+    'detail poster artwork should not show a static border');
+  assert.match(ui, /\.castCard \.ph\{[^}]+border:0/,
+    'cast photos should not show a static border when they are not focused');
+  assert.match(ui, /\.personHead \.pPhoto\{[^}]+border:0/,
+    'person photos should not show a static border');
+  assert.match(ui, /\.chCard \.chLogo\{[^}]+border:0/,
+    'channel logos should not show a static border when they are not focused');
+  assert.match(ui, /\.mCover\{[^}]+box-shadow:none/,
+    'music covers should not show a static inset line when they are not focused');
+  assert.match(ui, /triboonCoral: \{[\s\S]+artFocusLine: 'rgba\(198,179,122,\.30\)'[\s\S]+studio: \{[\s\S]+artFocusLine: 'rgba\(174,185,195,\.30\)'[\s\S]+teal: \{[\s\S]+artFocusLine: 'rgba\(166,194,189,\.30\)'/,
+    'artwork focus glow colors should change with each professional theme palette');
+  assert.doesNotMatch(ui, /\.pcard:hover \.art,[^}]+box-shadow:0 0 0 3px var\(--coral\)|\.mCard:hover \.mCover,[^}]+box-shadow:0 0 0 3px var\(--coral\)|\.musicRow:hover \.mThumb,[^}]+box-shadow:0 0 0 3px var\(--coral\)/,
+    'artwork focus should not regress to thick solid coral rings');
+  assert.match(ui, /grid\.style\.maxHeight = pitch > 50 \? `\$\{n \* pitch - 4\}px` : `calc\(var\(--rowH\) \* \$\{n\} - \$\{n \* 2\}px\)`;/,
+    'browse row windows should keep focused poster captions inside the viewport without showing half rows');
   assert.match(ui, /b\.innerHTML = `<div class="peStill"><\/div><div class="peMeta">[\s\S]+<span class="peName">/,
     'web episode cards should render the episode name below the thumbnail, not overlaid on the still');
   assert.match(ui, /async function getPlayerEpisodeContext\(it\) \{[\s\S]+episodeKeyParts\(it\)[\s\S]+api\(`\/api\/tmdb\/tv\/\$\{parts\.tmdbId\}\?append_to_response=external_ids`\)[\s\S]+api\(`\/api\/tmdb\/tv\/\$\{parts\.tmdbId\}\/season\/\$\{parts\.season\}`\)/,
@@ -997,10 +1142,14 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Android player handoff should receive the same episode subline as the web player');
   assert.match(ui, /episodeChoices: nativeEpisodeChoices\(\),/,
     'native Android player handoff should include the current-season episode choices');
+  assert.match(ui, /function nativeEpisodeFocusIndex\(\) \{[\s\S]+const current = st\.items\.findIndex\(\(ep\) => ep\.item && ep\.item\.key === st\.currentKey\);[\s\S]+return current >= 0 \? current : Math\.max\(0, Math\.min\(st\.items\.length - 1, st\.idx \|\| 0\)\);[\s\S]+window\.TriboonTV\.updateEpisodeChoices\(JSON\.stringify\(\{ episodes: nativeEpisodeChoices\(\), focusIndex: nativeEpisodeFocusIndex\(\) \}\)\);/,
+    'native Android episode refreshes should send an explicit current-episode focus index');
   assert.match(ui, /window\.__tvNativeEpisodeSelect = \(index, pos, dur\) => \{[\s\S]+S\.playerSeasonStrip\.idx = idx;[\s\S]+activatePlayerEpisode\(\);[\s\S]+\};/,
     'native episode-row selection should return through the normal web episode play path');
-  assert.match(android, /private String nativePlaybackSubline = "";[\s\S]+String episodeLabel = j\.optString\("episodeLabel", ""\);[\s\S]+nativePlaybackSubline = episodeLabel == null \? "" : episodeLabel;[\s\S]+nativePlayerTitle\.setText\(title\);[\s\S]+nativePlayerTitle\.setVisibility\(View\.VISIBLE\);[\s\S]+String subline = isLiveMode \? "" : nativePlaybackSubline;[\s\S]+nativePlayerSubline\.setText\(subline\);[\s\S]+nativePlayerSubline\.setVisibility\(subline\.isEmpty\(\) \? View\.GONE : View\.VISIBLE\);[\s\S]+nativePlayerBadge\.setText\(chromeQuality\);[\s\S]+nativePlayerBadge\.setVisibility\(View\.VISIBLE\);/,
-    'native Android player should show title, episode metadata, and quality in the top-left metadata cluster');
+  assert.match(android, /private String nativePlaybackSubline = "";[\s\S]+String episodeLabel = j\.optString\("episodeLabel", ""\);[\s\S]+nativePlaybackSubline = episodeLabel == null \? "" : episodeLabel;[\s\S]+nativePlayerTitle\.setText\(title\);[\s\S]+nativePlayerTitle\.setVisibility\(View\.VISIBLE\);[\s\S]+String subline = isLiveMode \? "" : nativePlaybackSubline;[\s\S]+nativePlayerSubline\.setText\(subline\);[\s\S]+nativePlayerSubline\.setVisibility\(subline\.isEmpty\(\) \? View\.GONE : View\.VISIBLE\);/,
+    'native Android player should show title and episode metadata while hiding VOD 4K/1080p badges');
+  assert.match(android, /String chromeQuality = isLiveMode \? "LIVE" : "";[\s\S]+nativePlayerBadge\.setText\(chromeQuality\);[\s\S]+nativePlayerBadge\.setVisibility\(chromeQuality\.isEmpty\(\) \? View\.GONE : View\.VISIBLE\);/,
+    'native Android player badge should be live-only instead of showing VOD resolution');
   assert.match(android, /nativeChromeSubline\.setText\(""\);[\s\S]+nativeChromeSubline\.setVisibility\(View\.GONE\);/,
     'native Android should clear the unused bottom metadata subline');
   assert.match(android, /private HorizontalScrollView nativeEpisodeStrip;[\s\S]+private final java\.util\.ArrayList<NativeEpisode> nativeEpisodes = new java\.util\.ArrayList<>\(\);/,
@@ -1009,16 +1158,20 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Android episode strip should have enough height for larger thumbnails and labels below them');
   assert.match(android, /private void animateNativeEpisodeStripIn\(\) \{[\s\S]+setAlpha\(0f\)[\s\S]+setTranslationY\(dp\(24\)\)[\s\S]+setDuration\(190\)[\s\S]+private void animateNativeEpisodeStripOut\(\) \{[\s\S]+setDuration\(120\)/,
     'native Android episode strip should slide/fade in and out instead of popping on screen');
+  assert.match(android, /private void scrollNativeEpisodeIntoView\(View child\) \{[\s\S]+nativeEpisodeStrip\.scrollTo\(target, 0\);[\s\S]+nativeEpisodeStrip\.smoothScrollTo\(target, 0\);[\s\S]+nativeEpisodeScrollAtMs = now;[\s\S]+\}/,
+    'native Android episode focus should use one throttled scroll path instead of stacking repeated smooth-scroll calls');
+  assert.match(android, /card\.setOnFocusChangeListener\(\(v, hasFocus\) -> \{[\s\S]+v\.animate\(\)\.cancel\(\);[\s\S]+v\.animate\(\)\.translationY\(-dp\(3\)\)\.setDuration\(120\)\.start\(\);[\s\S]+scrollNativeEpisodeIntoView\(v\);[\s\S]+v\.animate\(\)\.translationY\(0f\)\.setDuration\(100\)\.start\(\);[\s\S]+\}\);/,
+    'native Android episode cards should animate their focus lift without resizing the strip');
   assert.match(android, /ViewGroup\.LayoutParams\.MATCH_PARENT, dp\(126\)[\s\S]+label\.setText\(\(ep\.watched \? "WATCHED  " : ""\) \+ ep\.tag\);[\s\S]+TextView name = new TextView\(this\);[\s\S]+name\.setMaxLines\(2\);[\s\S]+new LinearLayout\.LayoutParams\(dp\(236\), dp\(182\)\)/,
     'native Android episode cards should show a larger still with the episode name below the image');
-  assert.match(android, /private GradientDrawable nativeEpisodeCardBg\(boolean focused, boolean current\) \{[\s\S]+current[\s\S]+new int\[\]\{0x00000000, 0x00000000\}[\s\S]+d\.setCornerRadius\(dp\(16\)\);[\s\S]+return d;/,
+  assert.match(android, /private GradientDrawable nativeEpisodeCardBg\(boolean focused, boolean current\) \{[\s\S]+new int\[\]\{0x00000000, 0x00000000\}[\s\S]+d\.setCornerRadius\(dp\(16\)\);[\s\S]+return d;[\s\S]+private GradientDrawable nativeEpisodeStillFrame\(boolean focused, boolean current\) \{[\s\S]+if \(focused \|\| current\) d\.setStroke\(dp\(1\), focused \? 0x88C6B37A : 0x66C6B37A\);[\s\S]+return d;/,
     'native Android episode cards should use rounded borderless card backgrounds');
-  assert.match(android, /GradientDrawable stillBg = new GradientDrawable\(\);[\s\S]+stillBg\.setCornerRadius\(dp\(16\)\);[\s\S]+still\.setBackground\(stillBg\);[\s\S]+still\.setClipToOutline\(true\);/,
-    'native Android episode thumbnails should clip the image into rounded corners');
+  assert.match(android, /still\.setTag\("nativeEpisodeStill"\);[\s\S]+GradientDrawable stillBg = new GradientDrawable\(\);[\s\S]+stillBg\.setCornerRadius\(dp\(12\)\);[\s\S]+still\.setBackground\(stillBg\);[\s\S]+still\.setForeground\(nativeEpisodeStillFrame\(i == nativeEpisodeIndex && nativeEpisodeStripOpen, ep\.current\)\);[\s\S]+still\.setClipToOutline\(true\);/,
+    'native Android episode thumbnails should clip and own the same contained hollow frame as the web player');
   assert.match(android, /public void updateEpisodeChoices\(String json\) \{[\s\S]+updateNativeEpisodeChoices\(json\)/,
     'web should be able to refresh native episode choices after TMDB season metadata loads');
-  assert.match(android, /private void updateNativeEpisodeChoices\(String json\) \{[\s\S]+optJSONArray\("episodes"\)[\s\S]+renderNativeEpisodeStrip\(false\);/,
-    'native Android player should parse the shared episode-choice payload');
+  assert.match(android, /private void updateNativeEpisodeChoices\(String json\) \{[\s\S]+int focusIndex = -1;[\s\S]+focusIndex = obj\.optInt\("focusIndex", -1\);[\s\S]+if \(focusIndex >= 0 && focusIndex < nativeEpisodes\.size\(\)\) nativeEpisodeIndex = focusIndex;[\s\S]+renderNativeEpisodeStrip\(false\);/,
+    'native Android player should parse the shared episode-choice payload and focus the requested current episode');
   assert.match(android, /private boolean handleNativeEpisodeStripKey\(KeyEvent e\) \{[\s\S]+KEYCODE_DPAD_LEFT[\s\S]+focusNativeEpisode\(nativeEpisodeIndex - 1\)[\s\S]+chooseNativeEpisode\(nativeEpisodeIndex\);/,
     'native Android episode strip should handle Left/Right/OK itself');
   assert.match(android, /if \(code == KeyEvent\.KEYCODE_DPAD_DOWN && isNativeControl\(getCurrentFocus\(\)\) && openNativeEpisodeStrip\(\)\) return true;/,
@@ -1033,10 +1186,18 @@ test('Android native player: direct source and native chrome stay out of the web
     'web player control row should visually pin Guide left, playback center, and secondary controls right');
   assert.match(ui, /class="ctlGroup ctlLeft"[\s\S]+id="chGuide"[\s\S]+class="ctlGroup ctlCenter"[\s\S]+id="back10"[\s\S]+id="playPause"[\s\S]+id="fwd30"[\s\S]+id="nextEpBtn"[\s\S]+class="ctlGroup ctlRight"[\s\S]+id="ccBtn"[\s\S]+id="audBtn"[\s\S]+id="srndBtn"[\s\S]+id="qualBtn"[\s\S]+id="muteBtn"[\s\S]+id="fsBtn"[\s\S]+id="statsBtn"/,
     'web player should mirror native Guide-left, playback-center, secondary-right button grouping with info last');
-  assert.match(ui, /#trackMenu\{display:none;position:absolute;bottom:118px;right:44px;width:min\(390px,calc\(100vw - 88px\)\);min-width:260px;max-height:min\(420px,calc\(100vh - 220px\)\);[\s\S]+backdrop-filter:blur\(18px\)/,
-    'web player CC/audio/quality popup should open near the right-side control buttons with polished glass styling');
+  assert.match(ui, /#trackMenu\{display:none;position:absolute;bottom:118px;right:44px;width:min\(390px,calc\(100vw - 88px\)\);min-width:260px;max-height:min\(420px,calc\(100vh - 220px\)\);[\s\S]+rgba\(24,26,29,\.96\)[\s\S]+border-radius:10px[\s\S]+backdrop-filter:blur\(14px\)/,
+    'web player CC/audio/quality popup should open near the right-side controls with compact graphite styling');
   assert.match(ui, /#trackMenu button\{display:flex;width:100%;min-height:44px;/,
     'track menu rows should meet the 44px touch target floor');
+  assert.match(ui, /#trackMenu button\.focus\{background:rgba\(255,255,255,\.10\);color:var\(--text\);box-shadow:inset 2px 0 0 var\(--focus\)\}[\s\S]+#trackMenu button\.sel\{color:var\(--text\);background:rgba\(184,164,106,\.18\)/,
+    'web player popup focused and selected rows should be distinct professional states');
+  assert.match(ui, /#playerStats\{display:none;position:absolute;right:44px;bottom:176px[\s\S]+rgba\(24,26,29,\.96\)[\s\S]+border-radius:10px[\s\S]+backdrop-filter:blur\(14px\)/,
+    'web player stats popup should match the compact graphite player sheet styling');
+  assert.match(ui, /#upNext\{position:absolute;right:34px;bottom:120px[\s\S]+rgba\(24,26,29,\.96\)[\s\S]+border-radius:10px[\s\S]+#upNext \.un-play\{background:var\(--btnPrimary\);color:var\(--onAccent\)\}/,
+    'web up-next popup should use the same neutral panel and button palette');
+  assert.match(ui, /\.epMenu\{position:absolute;right:10px;top:44px[\s\S]+rgba\(24,26,29,\.97\)[\s\S]+border-radius:10px[\s\S]+\.epMenu button\.focus\{background:rgba\(255,255,255,\.10\);color:var\(--text\)[\s\S]+box-shadow:inset 2px 0 0 var\(--focus\)\}/,
+    'episode action popup should use the same compact neutral player menu styling');
   assert.match(ui, /function playerSurfaceClick\(e\) \{[\s\S]+closest\('#osd \.top,\.playerMetaRow,\.seekLine,\.ctl,#playerEpisodes,#trackMenu,#playerStats,#pGuide,#vlcPanel,#upNext,#playerLoader,button,a,input,select,textarea'\)[\s\S]+return true;[\s\S]+function playerSingleClick\(e\) \{[\s\S]+setTimeout\(\(\) => \{[\s\S]+togglePlay\(\);[\s\S]+\}, 320\);[\s\S]+function playerDoubleClick\(e\) \{[\s\S]+clearTimeout\(_playerSurfaceClickT\);[\s\S]+toggleFullscreen\(\);/,
     'web player screen clicks should toggle play, while double-click fullscreen cancels the pending pause');
   assert.match(ui, /\$\('player'\)\.addEventListener\('click', playerSingleClick\);[\s\S]+\$\('player'\)\.addEventListener\('dblclick', playerDoubleClick\);/,
@@ -1045,10 +1206,20 @@ test('Android native player: direct source and native chrome stay out of the web
     'web player Back should be able to hide visible controls without closing playback');
   assert.match(ui, /if \(k === 'Escape' \|\| k === 'Backspace'\) \{[\s\S]+if \(hidePlayerOsdForBack\(\)\) return;[\s\S]+return closePlayer\(\);[\s\S]+window\.__tvBack = \(\) => \{[\s\S]+\$\(\'pGuide\'\)[\s\S]+closePlayerGuide\(\);[\s\S]+\$\(\'playerStats\'\)[\s\S]+closePlayerStats\(\);[\s\S]+showOsd\(\);[\s\S]+if \(hidePlayerOsdForBack\(\)\) return 'ok';[\s\S]+const overlay = document\.querySelector/,
     'Escape/Backspace and Android TV Back should close PiP guide/controls before closing the player');
-  assert.match(ui, /#appClock\{position:fixed;top:calc\(18px \+ var\(--safeT\) \+ var\(--overscan\)\);right:calc\(22px \+ var\(--safeR\) \+ var\(--overscan\)\);z-index:21;min-width:108px;height:38px;padding:0 18px[\s\S]+font:800 14px "JetBrains Mono",monospace;letter-spacing:0;[\s\S]+backdrop-filter:blur\(18px\);-webkit-backdrop-filter:blur\(18px\)\}/,
-    'main app clock should render as a slightly larger text-only glass badge');
+  assert.match(ui, /#appClock\{position:fixed;top:calc\(18px \+ var\(--safeT\) \+ var\(--overscan\)\);right:calc\(22px \+ var\(--safeR\) \+ var\(--overscan\)\);z-index:21;min-width:112px;height:38px;padding:0 4px[\s\S]+align-items:baseline;justify-content:center;gap:3px[\s\S]+font:650 16px "JetBrains Mono",monospace;letter-spacing:\.01em;[\s\S]+text-shadow:0 2px 6px rgba\(0,0,0,\.58\)\}/,
+    'main app clock should render as larger text-only status with restrained weight and shadow');
+  assert.match(ui, /#appClock \.ampm\{font-size:\.72em;letter-spacing:\.02em\}/,
+    'main app clock should keep AM/PM close to the time without a full monospace space');
+  assert.doesNotMatch(ui, /#appClock\{[^}]*background:/,
+    'main app clock should not draw a background chip');
+  assert.doesNotMatch(ui, /#appClock\{[^}]*border:/,
+    'main app clock should not draw a border');
+  assert.doesNotMatch(ui, /#appClock\{[^}]*backdrop-filter:blur/,
+    'main app clock should not return to the heavy glass blur treatment');
   assert.doesNotMatch(ui, /#appClock::before/,
     'main app clock should not draw an icon before the time');
+  assert.match(ui, /function appClockHtml\(d\) \{[\s\S]+return `<span>\$\{h\}:\$\{m\}<\/span><span class="ampm">\$\{ap\}<\/span>`;[\s\S]+function updateClocks\(\) \{[\s\S]+\$\('appClock'\)\.innerHTML = appClockHtml\(now\);/,
+    'top app clock should render tight time and AM/PM spans while other clocks keep plain text');
   assert.match(ui, /#screensaver\{position:fixed;inset:0;z-index:55[\s\S]+#ssTime\{font:900 clamp\(54px,8\.5vw,132px\)\/\.9 "Sora";letter-spacing:0\}[\s\S]+#ssDeck\{position:absolute;right:clamp\(22px,5vw,86px\)/,
     'app screensaver should own a polished fullscreen visual layer with large time and art deck');
   assert.match(ui, /<div id="screensaver" aria-hidden="true">[\s\S]+<div class="ssBg" id="ssBg"><\/div>[\s\S]+<div class="ssDeck" id="ssDeck"><\/div>[\s\S]+<div id="ssTime"><\/div>/,
@@ -1129,7 +1300,15 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.match(ui, /subtitleLabel: sub\.rel \? nativeSubtitleLabel\(sub\.rel\) : ''/,
     'native player should receive a user-facing subtitle label');
   assert.match(ui, /subtitleRel: sub\.rel \|\| ''[\s\S]+subtitleChoices: nativeSubtitleChoices\(\)/,
-    'native player should receive selectable online subtitle choices');
+    'native player should receive selectable subtitle choices');
+  assert.match(ui, /visibleEmbeddedSubChoices\(\)\.slice\(0, 8\)\.forEach\(\(sub\) => \{[\s\S]+addChoice\(\{ rel, label: embeddedSubLabel\(sub\) \}\);[\s\S]+\}\);/,
+    'native player should receive preferred-language built-in text subtitle choices when tracks are detected');
+  assert.match(ui, /window\.__tvNativeSubtitleShowAll = \(pos, dur\) => \{[\s\S]+setShowAllLocalSubtitles\(true\);[\s\S]+refreshNativeSubtitleChoices\(\);[\s\S]+\};/,
+    'native player should be able to reveal all hidden local subtitle languages');
+  assert.match(android, /"local_all"\.equals\(choice\.subtitleAction\)[\s\S]+requestNativeSubtitleShowAll\(\);/,
+    'Android native subtitle menu should route the show-all local languages action back to the web player state');
+  assert.match(server, /TRIBOON_EMBEDDED_SUB_TIMEOUT_MS[\s\S]+embedded subtitle extraction timed out after/,
+    'embedded subtitle extraction should fail cleanly instead of hanging indefinitely on streamed mounts');
   assert.match(server, /function episodeSubtitleQuery\(query, season, ep\)[\s\S]+S\$\{String\(s\)\.padStart\(2, '0'\)\}E\$\{String\(e\)\.padStart\(2, '0'\)\}/,
     'server subtitle lookup should be able to add episode identity even when source filenames are opaque');
   assert.match(server, /vf\._q = body\.q;[\s\S]+vf\._subQuery = episodeSubtitleQuery\(body\.q, body\.season, body\.ep\);/,
@@ -1138,12 +1317,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'online subtitle lookup should rank and download using the selected source release name');
   assert.match(server, /function localMountFor\(ctx, libId, idx, caps = \{\}, playCtx = \{\}\)[\s\S]+const q = String\(playCtx\.q \|\| found\.item\.q \|\| found\.item\.title \|\| name\)[\s\S]+const season = playCtx\.season \?\? found\.item\.s[\s\S]+const ep = playCtx\.ep \?\? playCtx\.episode \?\? found\.item\.e[\s\S]+vf\._subQuery = episodeSubtitleQuery\(vf\._q, season, ep\)/,
     'local library mounts should preserve episode-aware subtitle queries for Wyzie');
-  assert.match(ui, /function startupSubtitleRelFor\(p, saved = loadSubChoice\(\)\) \{[\s\S]+Manual mode is truly manual at startup[\s\S]+if \(prefSubtitleMode\(\) !== 'always'\) return '';[\s\S]+if \(subtitleRelPlayable\(p, saved\)\) return saved;[\s\S]+return autoSubtitleRelFor\(p\);[\s\S]+\}/,
-    'startup subtitles should stay off in manual mode and only auto-start for profile always-subtitle mode');
+  assert.match(ui, /function startupSubtitleRelFor\(p, saved = loadSubChoice\(\)\) \{[\s\S]+Manual mode is truly manual at startup[\s\S]+if \(prefSubtitleMode\(\) !== 'always'\) return '';[\s\S]+if \(subtitleRelPlayable\(p, saved\)\) return saved;[\s\S]+if \(bestReleaseSubtitleRel\(\)\) return 'release:auto';[\s\S]+return autoSubtitleRelFor\(p\);[\s\S]+\}/,
+    'startup subtitles should stay off in manual mode and prefer same-release subtitles for profile always-subtitle mode');
   assert.match(ui, /function nativeVideoSubtitleRel\(p\) \{\s+return \{ blocked: false, rel: concreteSubtitleRel\(startupSubtitleRelFor\(p\)\) \};\s+\}/,
     'native playback should use the shared startup subtitle contract');
-  assert.match(ui, /function applyStartupSubtitlePref\(\) \{[\s\S]+const rel = concreteSubtitleRel\(startupSubtitleRelFor\(p\)\);[\s\S]+Promise\.resolve\(setSubtitle\(rel\)\)\.finally/,
-    'web playback should auto-start the profile subtitle language before track probing when subtitle mode is always');
+  assert.match(ui, /function applyStartupSubtitlePref\(\) \{[\s\S]+const rel = concreteSubtitleRel\(startupSubtitleRelFor\(p\)\);[\s\S]+Promise\.resolve\(setSubtitle\(rel, \{ startup: true \}\)\)\.finally/,
+    'web playback should auto-start the profile subtitle choice when subtitle mode is always');
   assert.match(ui, /window\.__tvNativeSubtitleSelect = \(rel, pos, dur\) => \{[\s\S]+saveSubChoice\(rel, subtitleDisplayName\(rel\)\)[\s\S]+p\.usingNative = true;[\s\S]+\};/,
     'native subtitle row selection should persist the choice without restarting ExoPlayer');
   assert.doesNotMatch(ui, /window\.__tvNativeSubtitleSelect = \(rel, pos, dur\) => \{[\s\S]+tryNativeVideoPlayer\(kind, at\)/,
@@ -1248,19 +1427,21 @@ test('Android native player: direct source and native chrome stay out of the web
     'native guide should consume pending live state without losing the Live TV return target');
   assert.doesNotMatch(ui, /__tvNativeLiveGuide[\s\S]+await playChannelWeb\(it\)/,
     'native Live TV guide should not hand off to the old web player');
-  assert.match(ui, /function openNativeLiveGuideShell\(it\) \{[\s\S]+wakeScreensaverForPlayerSurface\(\);[\s\S]+stopWebVideoElement\(\);[\s\S]+document\.body\.classList\.add\('nativeGuideMode'\);[\s\S]+S\.nativeGuideMode = true;[\s\S]+\$\(\'player\'\)\.classList\.add\('open', 'guideMode'\);[\s\S]+\$\(\'player\'\)\.classList\.remove\('live'\);[\s\S]+\$\(\'osd\'\)\.classList\.add\('hide'\);/,
+  assert.match(ui, /function openNativeLiveGuideShell\(it, opts = \{\}\) \{[\s\S]+wakeScreensaverForPlayerSurface\(\);[\s\S]+stopWebVideoElement\(\);[\s\S]+document\.body\.classList\.add\('nativeGuideMode'\);[\s\S]+S\.nativeGuideMode = true;[\s\S]+\$\(\'player\'\)\.classList\.add\('open', 'guideMode'\);[\s\S]+\$\(\'player\'\)\.classList\.remove\('live'\);[\s\S]+\$\(\'osd\'\)\.classList\.add\('hide'\);/,
     'native Live TV guide should wake screensaver state and enter guide mode before the player container can reveal the web player');
   assert.match(ui, /function tryNativeLivePlayer\(it, guide = false\) \{[\s\S]+try \{[\s\S]+wakeScreensaverForPlayerSurface\(\);[\s\S]+window\.TriboonTV\.playLive/,
     'native Live TV playback should wake screensaver state before ExoPlayer owns the screen');
-  assert.doesNotMatch(ui, /function openNativeLiveGuideShell\(it\) \{[\s\S]+\$\(\'player\'\)\.classList\.add\('open', 'live'\)/,
+  assert.doesNotMatch(ui, /function openNativeLiveGuideShell\(it, opts = \{\}\) \{[\s\S]+\$\(\'player\'\)\.classList\.add\('open', 'live'\)/,
     'native Live TV guide must not open the old web live-player shell first');
+  assert.match(ui, /function setPlayerGuideLiveTuningPending\(it\) \{[\s\S]+S\.playerGuideLivePending = it \|\| null;[\s\S]+\$\(\'pGuide'\)\.classList\.toggle\('liveTuning', !!it\);[\s\S]+function setNativeLiveTuningPending\(it\) \{[\s\S]+S\.nativeLivePendingCommit = it \|\| null;[\s\S]+setPlayerGuideLiveTuningPending\(it\);[\s\S]+function commitNativeLivePlayback\(it\) \{[\s\S]+setNativeLiveTuningPending\(null\);[\s\S]+setNativeLivePlaybackState\(it\);[\s\S]+window\.__tvNativeLiveReady = \(\) => \{[\s\S]+S\.nativeLivePendingCommit \|\| S\.nativeLivePending \|\| currentNativeLiveGuideItem\(\)[\s\S]+commitNativeLivePlayback\(it\);/,
+    'PiP guide channel tuning should show a pending state and commit Live TV only after ExoPlayer reports ready');
   assert.match(ui, /function closePlayerGuide\(opts = \{\}\) \{[\s\S]+window\.TriboonTV\.closeGuide\(\)/,
     'closing the shared guide from web focus should restore native fullscreen playback');
   assert.match(ui, /async function togglePlayerGuide\(\) \{[\s\S]+S\.playing && S\.playing\.usingNative[\s\S]+typeof window\.TriboonTV\.openGuide === 'function'[\s\S]+window\.TriboonTV\.openGuide\(\); return;/,
     'web guide button should ask Android to enter native PiP guide mode while ExoPlayer is already playing');
   assert.match(ui, /window\.__tvNativeGuideClosed = \(epoch\) => \{[\s\S]+n !== S\.nativeGuideEpoch\) return;[\s\S]+closePlayerGuide\(\{ fromNative: true \}\)/,
     'native guide close callback should ignore stale close events from an older PiP guide');
-  assert.match(ui, /window\.__tvNativeGuideEpoch = \(epoch\) => \{[\s\S]+S\.nativeGuideEpoch = n;[\s\S]+focusPlayerGuideRow\(S\._pgFocusChannel \?\? S\.liveCur, \{ preventScroll: true \}\)/,
+  assert.match(ui, /window\.__tvNativeGuideEpoch = \(epoch\) => \{[\s\S]+S\.nativeGuideEpoch = n;[\s\S]+schedulePlayerGuideFocusRestore\(S\._pgFocusChannel \?\? S\.liveCur\)/,
     'native guide channel retunes should keep the web guide epoch in sync and restore row focus');
   assert.match(ui, /if \(!it\) \{[\s\S]+S\.playing\.item\.type !== 'live' && S\.view === 'player'[\s\S]+S\.returnVod = \{ item: S\.playing\.item, resume: currentTime\(\) \};[\s\S]+revealNativeGuideShell\(\);[\s\S]+return togglePlayerGuide\(\);/,
     'native movie/episode guide button should open the same PiP guide and preserve a Back to movie target');
@@ -1314,6 +1495,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'PiP guide stale category mode should recover category focus before generic row movement can run');
   assert.match(ui, /function focusPlayerGuideRow\(channel, opts = \{\}\) \{[\s\S]+data-guide-channel="\$\{channel\}"[\s\S]+focus\(\{ preventScroll: !!opts\.preventScroll \}\)/,
     'PiP guide should be able to restore the active channel row after native retunes');
+  assert.match(ui, /function schedulePlayerGuideFocusRestore\(channel, opts = \{\}\) \{[\s\S]+S\._pgFocusChannel = target;[\s\S]+requestAnimationFrame\(\(\) => \{[\s\S]+setTimeout\(restore, 80\)/,
+    'PiP guide should retry focus after ExoPlayer retunes because native surface recreation can steal focus briefly');
   assert.match(ui, /const moveRowFrom = \(delta\) => \{[\s\S]+rows\.findIndex\(\(r\) => r\.classList\.contains\('cur'\)\)[\s\S]+S\._pgFocusChannel[\s\S]+i \+ delta/,
     'PiP guide Up/Down should move relative to the current row even when DOM focus was reset');
   assert.match(ui, /main\.className = 'pgGuideMain pgTimeline liveGuidePane guideTimeline'/,
@@ -1380,8 +1563,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'Watchlist empty-state rendering must not steal D-pad focus from the open rail');
   assert.match(ui, /const focusCalendarStart = \(\) => requestAnimationFrame\(\(\) => S\.view === 'calendar' && S\.zone !== 'rail' && focusContent\(\)\)/,
     'Calendar async rendering must not steal D-pad focus from the open rail preview');
-  assert.match(ui, /if \(keepGuidePip && S\.nativeGuideMode && tryNativeLivePlayer\(it, true\)\) \{[\s\S]+markGuideCur\(\);[\s\S]+return;[\s\S]+\}/,
+  assert.match(ui, /if \(keepGuidePip && S\.nativeGuideMode && tryNativeLivePlayer\(it, true\)\) \{[\s\S]+markGuideCur\(\);[\s\S]+schedulePlayerGuideFocusRestore\(it\._channel\);[\s\S]+return;[\s\S]+\}/,
     'channel tuning from the native PiP guide should retune ExoPlayer without starting web playback');
+  assert.match(ui, /row\.addEventListener\('click', async \(\) => \{[\s\S]+S\._pgFocusChannel = ch\._channel;[\s\S]+await playChannel\(ch, selectedList\);[\s\S]+schedulePlayerGuideFocusRestore\(ch\._channel\);[\s\S]+\}\);/,
+    'selecting a PiP guide channel should restore the chosen row after the async native retune completes');
   assert.match(ui, /async function ensurePlayerGuideChannels\(\) \{[\s\S]+loadLiveChannelsCombined\(\)[\s\S]+fillLiveState\(fav\)[\s\S]+return list;[\s\S]+\}/,
     'native and web player guide openings should share the same channel-list loader');
   assert.match(ui, /window\.__tvNativeLiveGuide = async \(epoch\) => \{[\s\S]+const list = await ensurePlayerGuideChannels\(\);[\s\S]+openNativeLiveGuideShell\(active\);[\s\S]+return renderPlayerGuideTimeline\(\$\(\'pGuide\'\), list\.length \? list : \[active\]\);[\s\S]+\};/,
@@ -1406,6 +1591,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'only Live TV direct playback should take the web MediaSource path');
   assert.match(ui, /async function playChannelWeb\(it\) \{[\s\S]+const preserveGuide = !!\(\$\(\'pGuide\'\) && \$\(\'pGuide\'\)\.classList\.contains\(\'open\'\)\);[\s\S]+stopActivePlaybackForReplacement\(\{ preserveGuide \}\);[\s\S]+openPlayer\(\{ title: it\.title, key: it\.key, type: 'live'/,
     'web Live TV channel changes should close the previous MSE fetch/player connection before opening the new channel');
+  assert.match(ui, /async function playChannelWeb\(it\) \{[\s\S]+if \(preserveGuide\) setPlayerGuideLiveTuningPending\(it\);[\s\S]+await openPlayer\(\{ title: it\.title, key: it\.key, type: 'live'[\s\S]+\}, \{ preserveGuide \}\);[\s\S]+if \(preserveGuide && \$\(\'pGuide\'\) && \$\(\'pGuide\'\)\.classList\.contains\('open'\)\) \{[\s\S]+\$\(\'player\'\)\.classList\.add\('guideMode'\);[\s\S]+schedulePlayerGuideFocusRestore\(it\._channel\);/,
+    'web PiP guide Live TV tuning should preserve the video slot instead of dropping to a black guide panel');
+  assert.match(ui, /const keepGuideMode = !!\(opts\.preserveGuide && \$\(\'pGuide\'\) && \$\(\'pGuide\'\)\.classList\.contains\('open'\)\);[\s\S]+\$\(\'player\'\)\.classList\.remove\('open'\);[\s\S]+\$\(\'player\'\)\.classList\.toggle\('guideMode', keepGuideMode\);/,
+    'openPlayer should not clear browser PiP guide layout when a guide channel is selected');
+  assert.match(ui, /const clearReadyFrame = \(\) => \{[\s\S]+setPlayerGuideLiveTuningPending\(null\);[\s\S]+if \(\$\(\'pGuide\'\) && \$\(\'pGuide\'\)\.classList\.contains\('open'\)\) \{[\s\S]+\$\(\'player\'\)\.classList\.add\('guideMode'\);[\s\S]+schedulePlayerGuideFocusRestore\(S\._pgFocusChannel \?\? S\.liveCur\);/,
+    'web PiP guide tuning should clear only after Live TV has a decoded browser frame');
   assert.match(server, /let clientClosed = false;[\s\S]+const stopForClientClose = \(\) => \{[\s\S]+clientClosed = true;[\s\S]+ff\.kill\('SIGKILL'\);[\s\S]+ctx\.req\.off\('close', stopForClientClose\);[\s\S]+ctx\.res\.off\('close', stopForClientClose\);[\s\S]+if \(clientClosed\) return;[\s\S]+ctx\.req\.once\('close', stopForClientClose\);[\s\S]+ctx\.res\.once\('close', stopForClientClose\);/,
     'server Live TV remux should kill ffmpeg exactly once when the browser closes the stream');
   assert.ok(server.includes('function iptvRemuxTargets(ch = {})')
@@ -1426,6 +1617,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Live TV guide/card/search items should preserve native fallback stream metadata');
   assert.doesNotMatch(ui, /Native player failed[^`'"]*using web player|using web playback/,
     'Android native playback should not advertise or trigger the old web player fallback');
+  assert.match(ui, /window\.__tvNativeLiveError = \(msg\) => \{[\s\S]+document\.body\.classList\.remove\('nativeGuideMode'\);[\s\S]+\$\('player'\)\.classList\.remove\('guideMode'\);[\s\S]+closePlayerGuide\(\{ fromNative: true \}\);[\s\S]+showLiveProviderError\(reason\);[\s\S]+toast\(`Live TV unavailable: \$\{reason\}`\);/,
+    'Android native Live TV failures should unwind guide state and show a Live TV error without leaving D-pad focus trapped');
   assert.doesNotMatch(ui, /__tvNativeVideoSwitchToWeb|__tvNativeLiveSwitchToWeb/,
     'native Android controls should not keep a switch-to-web-player bridge');
   assert.doesNotMatch(ui, /nativeVideoSubtitleRel[\s\S]+blocked:\s*true[\s\S]+tryNativeVideoPlayer/,
@@ -1628,8 +1821,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native ExoPlayer should place title and episode subline in the top-left metadata cluster');
   assert.match(android, /if \(nativeMetaBar != null\) nativeMetaBar\.setVisibility\(View\.GONE\);[\s\S]+nativeChrome\.setVisibility\(View\.VISIBLE\);[\s\S]+nativeTop\.setVisibility\(View\.VISIBLE\);/,
     'native ExoPlayer should not show the old bottom metadata bar when chrome is visible');
-  assert.match(android, /String chromeQuality = isLiveMode \? "LIVE" : nativeQualityLabel;[\s\S]+nativePlayerBadge\.setText\(chromeQuality\)/,
-    'native video quality should show a friendly resolution label, not direct/remux/transcode internals');
+  assert.match(android, /String chromeQuality = isLiveMode \? "LIVE" : "";[\s\S]+nativePlayerBadge\.setText\(chromeQuality\);[\s\S]+nativePlayerBadge\.setVisibility\(chromeQuality\.isEmpty\(\) \? View\.GONE : View\.VISIBLE\);/,
+    'native player should hide VOD 4K/1080p badges while keeping LIVE available for Live TV');
   assert.match(android, /private FrameLayout nativeLoading;[\s\S]+private ImageView nativeLoadingBackdrop;[\s\S]+private TextView nativeLoadingTitle;[\s\S]+private TextView nativeLoadingStage;[\s\S]+private TextView nativeLoadingDetail;/,
     'native ExoPlayer should own a branded loading overlay instead of borrowing the web player shell');
   assert.match(ui, /<link rel="icon" href="T-Logo\.svg"><link rel="alternate icon" href="T-Logo\.png">/,
@@ -1638,24 +1831,24 @@ test('Android native player: direct source and native chrome stay out of the web
     'web rail logo should use the T logo assets');
   assert.match(ui, /<div class="ssBrand"><img src="triboon\.png" alt="Triboon"><\/div>/,
     'web screensaver should use the updated transparent Triboon wordmark asset');
-  assert.match(android, /nativeLoading = new FrameLayout\(this\);[\s\S]+FrameLayout loadingMark = new FrameLayout\(this\);[\s\S]+ProgressBar loadingRing = new ProgressBar\(this\);[\s\S]+loadingLogo\.setImageResource\(R\.drawable\.ic_loading_logo\);[\s\S]+loadingCenter\.addView\(loadingMark, new LinearLayout\.LayoutParams\(dp\(136\), dp\(136\)\)\);/,
-    'native loading overlay should wrap the T logo with a modern progress ring');
+  assert.match(ui, /#playerLoader \.loadMark\{display:grid;place-items:center\}[\s\S]+#playerLoader \.loadMark img\{[^}]*width:min\(210px,50vw\)[\s\S]+#playerLoader \.loadSteps\{[^}]*width:min\(420px,100%\)[^}]*height:5px[\s\S]+#playerLoader \.loadStep\{[^}]*width:58%[\s\S]+<img src="triboon\.png" alt="Triboon">[\s\S]+<div class="loadSteps" aria-hidden="true"><span class="loadStep"><\/span><\/div>/,
+    'web player loading overlay should use the full wordmark and one calm progress lane instead of a logo tile or three moving bars');
+  assert.match(android, /nativeLoading = new FrameLayout\(this\);[\s\S]+TextView loadingMark = new TextView\(this\);[\s\S]+loadingMark\.setText\("Triboon"\);[\s\S]+loadingCenter\.addView\(loadingMark, new LinearLayout\.LayoutParams\([\s\S]+View loadingLane = new View\(this\);[\s\S]+loadingLane\.setBackground\(nativeLoadingLaneBg\(\)\);/,
+    'native loading overlay should use a simple full-name wordmark and one progress lane without a logo background tile');
   assert.match(android, /nativeLoadingTitle\.setTextSize\(24\);[\s\S]+nativeLoadingTitle\.setMaxLines\(2\);[\s\S]+nativeLoadingTitle\.setEllipsize\(TextUtils\.TruncateAt\.END\);/,
     'native loading title should stay prominent without overflowing on TV');
   assert.match(android, /nativeLoadingStage\.setText\("Finding best source"\);[\s\S]+nativeLoadingDetail\.setText\("Preparing native playback"\);/,
     'native loading overlay should show concise playback status and detail text');
-  assert.match(android, /loadingRing\.setIndeterminateDrawable\(nativeLoadingRingDrawable\(\)\);[\s\S]+R\.drawable\.native_loading_ring/,
-    'native ExoPlayer loading overlay should use the thin Triboon ring instead of the stock chunky ProgressBar spinner');
-  assert.match(loadingRing, /android:shape="ring"[\s\S]+android:thickness="2dp"[\s\S]+android:shape="ring"[\s\S]+android:thickness="3dp"[\s\S]+android:type="sweep"/,
-    'native loading ring should stay browser-like: a thin track plus thin rotating sweep arc');
-  assert.match(android, /private String nativeLoadingStageFor\(String mode, String kind\)[\s\S]+Tuning channel[\s\S]+Opening direct play[\s\S]+private String nativeLoadingDetailFor\(String mode, String kind, String qualityLabel, String sourceLabel, long startOffsetMs\)[\s\S]+"Direct Play"\);[\s\S]+String detail = method \+ " - " \+ quality;[\s\S]+sourceLabel\.trim\(\)[\s\S]+Resume %d:%02d/,
-    'native loading copy should adapt for Live TV, direct play, quality, source, and resume state');
+  assert.match(android, /loadingSteps\.addView\(nativeLoadingStep\("Source"\)\);[\s\S]+loadingSteps\.addView\(nativeLoadingStep\("Health"\)\);[\s\S]+loadingSteps\.addView\(nativeLoadingStep\("Buffer"\)\);[\s\S]+private TextView nativeLoadingStep\(String label\)/,
+    'native ExoPlayer loading overlay should show source, health, and buffer as static steps');
+  assert.doesNotMatch(android, /ProgressBar loadingRing|nativeLoadingRingDrawable|R\.drawable\.native_loading_ring|nativeLoadingLogoBg|ic_loading_logo/,
+    'native ExoPlayer loading overlay should not show a circular ring or logo-background tile');
+  assert.match(android, /private String nativeLoadingStageFor\(String mode, String kind\)[\s\S]+Tuning channel[\s\S]+Opening direct play[\s\S]+private String nativeLoadingDetailFor\(String mode, String kind, String qualityLabel, String sourceLabel, long startOffsetMs\)[\s\S]+"Direct Play"\);[\s\S]+String detail = method;[\s\S]+sourceLabel\.trim\(\)[\s\S]+Resume %d:%02d/,
+    'native loading copy should adapt for Live TV, method, source, and resume state without showing VOD resolution badges');
   assert.doesNotMatch(android, /loadingBrand\.setText\("TRIBOON"\)|TextView loadingBrand/,
-    'native ExoPlayer loader should not show a separate Triboon wordmark under the logo');
+    'native ExoPlayer loader should not add a second brand line below the wordmark');
   assert.doesNotMatch(android, /loadingLogo\.setImageResource\(R\.drawable\.ic_launcher\)/,
     'native loading overlay should not reuse the non-transparent launcher icon');
-  assert.ok(fs.existsSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'drawable', 'ic_loading_logo.png')),
-    'native loading overlay should have a dedicated transparent logo asset');
   for (const rel of [
     'logo/T-Logo.png',
     'logo/triboon.png',
@@ -1663,7 +1856,6 @@ test('Android native player: direct source and native chrome stay out of the web
     'web/triboon.png',
     'web/triboon-screensaver.png',
     'android/app/src/main/res/drawable/ic_launcher.png',
-    'android/app/src/main/res/drawable/ic_loading_logo.png',
     'android/app/src/main/res/drawable/banner.png',
   ]) {
     assert.ok(pngHasTransparentPixels(path.join(__dirname, '..', rel)),
@@ -1986,6 +2178,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Back should hide visible controls on key-down and consume key-up so duplicate Android callbacks cannot close playback');
   assert.match(android, /if \(nativeGuideMode\) \{[\s\S]+if \(code == KeyEvent\.KEYCODE_BACK\) \{[\s\S]+return handleNativeBackKey\(e\);[\s\S]+if \(code == KeyEvent\.KEYCODE_BACK\) \{[\s\S]+return handleNativeBackKey\(e\);/,
     'native Back key events should use the shared guarded Back helper in guide and normal player modes');
+  assert.match(android, /String guideDomKey = domKeyFor\(code\);[\s\S]+boolean guideDpad = code == KeyEvent\.KEYCODE_DPAD_UP[\s\S]+KeyEvent\.KEYCODE_ENTER;[\s\S]+if \(guideDomKey != null && \(!pageInputFocused \|\| guideDpad\)\)/,
+    'native PiP guide should keep routing D-pad and OK through the web guide even if input focus state is stale');
   assert.match(android, /if \(nativeSheetOpen\(\)\) hideNativeSheet\(\);[\s\S]+else if \(nativeEpisodeStripOpen\) closeNativeEpisodeStrip\(\);[\s\S]+else if \(!dismissNativeChromeForBack\(\)\) closeNativePlayback\(true\);/,
     'Back should close sheets, then episode rows, then visible controls before leaving playback');
   assert.match(android, /boolean waitForLiveClose = notifyClosed && "live"\.equals\(nativeMode\);[\s\S]+web\.postDelayed\(this::showWebAfterNativePlayback, 80\);/,
@@ -2006,10 +2200,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'ExoPlayer content should stay centered and fitted inside the PiP frame');
   assert.match(nativePlayerLayout, /app:surface_type="surface_view"/,
     'native fullscreen playback should use SurfaceView for first-frame speed, power, and HDR-capable direct play');
-  assert.match(android, /nativeGuidePipRevealScrim = new View\(this\);[\s\S]+nativePlayerLayer\.addView\(nativeGuidePipRevealScrim/,
-    'native guide PiP should use a sibling reveal layer instead of fading the SurfaceView itself');
-  assert.match(android, /private void revealNativeGuidePip\(FrameLayout\.LayoutParams pipLp\) \{[\s\S]+nativeGuidePipRevealScrim\.animate\(\)[\s\S]+\.alpha\(0f\)/,
-    'native guide PiP should keep the smooth reveal animation on the sibling scrim');
+  assert.match(android, /nativeGuidePipRevealScrim = new TextView\(this\);[\s\S]+nativeGuidePipRevealScrim\.setText\("Tuning channel\.\.\."\)[\s\S]+nativePlayerLayer\.addView\(nativeGuidePipRevealScrim/,
+    'native guide PiP should use a labeled sibling reveal layer instead of fading the SurfaceView itself');
+  assert.match(android, /private void revealNativeGuidePip\(FrameLayout\.LayoutParams pipLp, boolean holdUntilReady\) \{[\s\S]+nativeGuidePipRevealScrim\.setText\("Tuning channel\.\.\."\)[\s\S]+if \(holdUntilReady\) return;[\s\S]+\.alpha\(0f\)/,
+    'native guide PiP should keep the smooth reveal animation and support holding the tuning label during retunes');
+  assert.match(android, /else if \("live"\.equals\(nativeMode\)\) \{[\s\S]+revealNativeGuidePip\(\(FrameLayout\.LayoutParams\) nativePlayerView\.getLayoutParams\(\), true\);/,
+    'native guide-mode channel retunes should keep a visible tuning overlay instead of exposing a black PiP surface');
   assert.doesNotMatch(android, /nativePlayerView\.animate\(\)\.alpha/,
     'SurfaceView-backed PlayerView must not be alpha-animated for guide PiP');
   assert.doesNotMatch(android, /nativePlayerView\.setAlpha\(0f\)/,
@@ -2022,6 +2218,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native retunes should not flash a full black shutter over the guide');
   assert.match(android, /private void enterNativeGuideMode\(\) \{[\s\S]+boolean alreadyGuideMode[\s\S]+if \(!alreadyGuideMode\) \{[\s\S]+nativePlayerView\.setLayoutParams\(pipLp\);[\s\S]+\}[\s\S]+web\.setVisibility\(View\.VISIBLE\);[\s\S]+if \(!alreadyGuideMode\) web\.requestFocus\(\);[\s\S]+nativePlayerLayer\.bringToFront\(\);/,
     'native guide mode should keep ExoPlayer alive as a PiP without resetting focus/layout during retunes');
+  assert.match(android, /else web\.postDelayed\(\(\) -> \{[\s\S]+nativeGuideMode && web != null[\s\S]+web\.requestFocus\(\);[\s\S]+\}, 40\);/,
+    'native guide retunes should restore WebView focus shortly after ExoPlayer recreates its surface');
   assert.match(android, /releaseNativePlayer\(false, guide\);[\s\S]+nativeMode = mode;/,
     'native Live TV retunes from PiP should preserve guide mode while swapping ExoPlayer instances');
   assert.match(android, /if \(!guide && isLiveMode\) \{[\s\S]+enterNativeFullscreenMode\(\);[\s\S]+\}[\s\S]+if \(!guide && "video"\.equals\(mode\) && !quietSeek\)/,
@@ -2096,10 +2294,14 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'long subtitle/audio/quality menus should keep the focused row inside the panel');
   assert.match(ui, /#hero h1\{[^}]*height:2\.08em;[\s\S]+#hero \.meta\{[^}]*height:28px;[\s\S]+#hero p\{[^}]*height:4\.5em/,
     'desktop Home hero title, metadata, and overview should reserve stable height while focus changes');
-  assert.match(ui, /#discoverRows\{flex:1!important;margin-top:0;max-height:none\}/,
-    'Discover rows should fill from the visible page title instead of bottom-anchoring like Home/Browse');
-  assert.match(ui, /function sizeRowsWindow\(root\) \{[\s\S]+if \(root\.id === 'discoverRows'\) \{ root\.style\.maxHeight = ''; return; \}/,
-    'Discover rows should not receive the inline Home row-window max-height');
+  assert.match(ui, /#discoverRows\{flex:none!important;margin-top:auto;max-height:calc\(var\(--rowH\) \+ 6px\)\}/,
+    'Discover should start from a conservative single bottom row before measured desktop fitting runs');
+  assert.match(ui, /function rowWindowCountFor\(kind, rowH, h = innerHeight, phoneLayout, tvLayout\) \{[\s\S]+if \(tvLayout\) return 1;[\s\S]+if \(phoneLayout\) return 1;[\s\S]+kind === 'discover' \? 132 : 118[\s\S]+return 3[\s\S]+return 2[\s\S]+return 1;/,
+    'row windows should scale up on tall desktop/tablet screens while keeping phone and TV one-row safe');
+  assert.match(ui, /function adaptRowWindows\(\) \{[\s\S]+document\.documentElement\.style\.setProperty\('--winRows', rowWindowCountFor\('home'[\s\S]+scheduleRowsWindowFit\(\);[\s\S]+function scheduleRowsWindowFit\(\) \{[\s\S]+requestAnimationFrame\(\(\) => \{[\s\S]+sizeRowsWindow\(\$\('rows'\)\);[\s\S]+sizeRowsWindow\(\$\('discoverRows'\)\);/,
+    'viewport/page changes should remeasure visible row windows after layout settles');
+  assert.match(ui, /function sizeRowsWindow\(root\) \{[\s\S]+const isDiscover = root\.id === 'discoverRows';[\s\S]+const compactDiscover = isDiscover[\s\S]+if \(compactDiscover\) \{ root\.style\.maxHeight = ''; return; \}[\s\S]+const rowH = \(parseFloat\(getComputedStyle\(document\.documentElement\)\.getPropertyValue\('--poster'\)\) \|\| 190\) \* 1\.5 \+ 106;[\s\S]+const n = rowWindowCountFor\(isDiscover \? 'discover' : 'home', rowH, innerHeight\);/,
+    'Home and Discover should use measured responsive row counts while mobile stays compact');
   assert.match(ui, /#browseTitle\{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect\(0 0 0 0\);white-space:nowrap\}/,
     'Browse title may stay visually hidden while Discover title remains visible');
   assert.doesNotMatch(ui, /#browseTitle,#discoverTitle\{position:absolute;width:1px;height:1px;/,
@@ -2118,14 +2320,24 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'Android mobile shell Home title should use the same stable two-line height');
   assert.match(ui, /function sizeRowsWindow\(root\) \{[\s\S]+const compactHome = root\.id === 'rows'[\s\S]+window\.innerWidth <= 600[\s\S]+document\.body\.classList\.contains\('mobileShell'\)[\s\S]+if \(compactHome\) \{ root\.style\.maxHeight = ''; return; \}/,
     'mobile Home should not receive an inline desktop/TV row-window max-height');
-  assert.match(ui, /function resetSearchPage\(opts = \{\}\) \{[\s\S]+if \(opts\.landing !== false && S\.view === 'search'\) renderSearchLanding\(\);/,
-    'Search should land on useful results instead of a blank grid');
-  assert.match(ui, /prevView === 'search' && v !== 'search'[\s\S]+resetSearchPage\(\{ landing: false \}\);/,
+  assert.match(ui, /let searchTimer = null, searchSeq = 0;[\s\S]+function clearSearchResults\(opts = \{\}\) \{[\s\S]+if \(opts\.invalidate\) searchSeq\+\+;[\s\S]+grid\.innerHTML = '';/,
+    'Search should start blank and invalidate stale async results when cleared');
+  assert.match(ui, /prevView === 'search' && v !== 'search'[\s\S]+resetSearchPage\(\);/,
     'leaving Search should clear state without starting a background landing fetch');
-  assert.match(ui, /async function renderSearchLanding\(\) \{[\s\S]+\/api\/tmdb\/trending\/all\/week[\s\S]+renderSearchSections\(sections\)/,
-    'Search landing should reuse TMDB discovery rows');
-  assert.match(ui, /if \(!q\) \{ renderSearchLanding\(\); return; \}/,
-    'empty Search queries should keep the landing state visible');
+  assert.doesNotMatch(ui, /renderSearchLanding|S\.searchLanding/,
+    'Search should not auto-populate movies or TV shows before the user types');
+  assert.match(ui, /if \(!q\) \{ clearSearchResults\(\{ invalidate: true \}\); return; \}[\s\S]+const seq = \+\+searchSeq;[\s\S]+const current = \(\) => seq === searchSeq[\s\S]+if \(!current\(\)\) return;/,
+    'Search should ignore late async responses after the query or page changes');
+  assert.match(ui, /function searchAndFocusResults\(\) \{[\s\S]+doSearch\(\)\.then\(\(\) => focusSearchResultsSoon\(\)\)[\s\S]+\$\(\'searchInput\'\)\.addEventListener\('keydown'[\s\S]+e\.key === 'ArrowDown' \|\| e\.key === 'Enter'/,
+    'Android TV Search typing should submit and then wait for result focus');
+  assert.match(ui, /if \(inInput && S\.view === 'search' && ae === \$\('searchInput'\)\) \{[\s\S]+k === 'ArrowDown' \|\| k === 'Enter'[\s\S]+searchAndFocusResults\(\);[\s\S]+return;/,
+    'document-level D-pad handling should not strand focus in the Search text input');
+  assert.match(ui, /function renderSearchSections\(sections\) \{[\s\S]+makeCard\(it, searchResultUsesPoster\(it\), \(\) => focusGrid\(i\)\)[\s\S]+function searchResultUsesPoster\(it\) \{[\s\S]+return it\.type !== 'tv';/,
+    'Search TV results should use thumbnail/backdrop cards while movie results keep posters');
+  assert.match(ui, /function renderGrid\(items, root = \$\('grid'\)\) \{[\s\S]+makeCard\(it, true, \(\) => focusGrid\(i\)\)/,
+    'normal poster grids should still render poster cards');
+  assert.match(ui, /if \(S\.view !== 'search' && it && \(isContinueWatchingItem\(it\) \|\| \(it\.tmdbId && \['movie', 'tv'\]\.includes\(it\.type\)\)\)\) \{[\s\S]+openItemMenu\(it, el\);/,
+    'Search result OK should open immediately instead of waiting for the long-press menu timer');
   assert.match(ui, /renderGrid\(cards\);[\s\S]+if \(!cards\.length\) grid\.innerHTML = '<div class="gridMore">No matches\.<\/div>';/,
     'fallback source search should show an empty state instead of a silent blank page');
   assert.doesNotMatch(ui, /id="musicBar"|musicBarBtns|S\.zone === 'musicBar'|\$\('mb/,

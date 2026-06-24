@@ -761,6 +761,79 @@ http://127.0.0.1:${upstream.address().port}/live/protected.ts
   }
 });
 
+test('iptv: native proxy retries an alternate player identity on provider bot-protection', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-iptv-bot-ua-retry-'));
+  const liveUas = [];
+  const upstream = http.createServer((req, res) => {
+    if (req.url === '/list.m3u') {
+      res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' });
+      return res.end(`#EXTM3U
+#EXTINF:-1 group-title="Test",Protected News
+http://127.0.0.1:${upstream.address().port}/live/protected.ts
+`);
+    }
+    if (req.url === '/live/protected.ts') {
+      const ua = req.headers['user-agent'] || '';
+      liveUas.push(ua);
+      if (!/VLC/i.test(ua)) {
+        res.writeHead(403, { 'content-type': 'text/plain' });
+        return res.end('provider bot-protection');
+      }
+      res.writeHead(200, { 'content-type': 'video/mp2t' });
+      res.write(Buffer.alloc(188, 0x47));
+      return setTimeout(() => res.end(Buffer.alloc(188, 0x47)), 20);
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${upstream.address().port}`;
+  const readNative = (port, p) => new Promise((resolve, reject) => {
+    let done = false;
+    const req = http.get({
+      host: '127.0.0.1',
+      port,
+      path: p,
+      headers: { 'user-agent': 'TriboonTV-test' },
+    }, (res) => {
+      const chunks = [];
+      const finish = () => {
+        if (done) return;
+        done = true;
+        resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString('utf8') });
+      };
+      res.on('data', (c) => {
+        chunks.push(c);
+        if ((res.statusCode || 0) < 400) {
+          try { res.destroy(); } catch {}
+          try { req.destroy(); } catch {}
+          finish();
+        }
+      });
+      res.on('end', finish);
+      res.on('error', () => finish());
+    });
+    req.on('error', (e) => { if (!done) reject(e); });
+  });
+
+  let srv;
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/settings',
+      { iptvMode: 'm3u', iptvUrl: `${base}/list.m3u`, epgUrl: null }, admin);
+    const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    const played = await readNative(srv.port, ch.json.channels[0].nativeUrl);
+    assert.strictEqual(played.status, 200);
+    assert.strictEqual(liveUas.length, 2, 'bot-protection should retry the same URL with one alternate player identity');
+    assert.match(liveUas[0], /TriboonTV/);
+    assert.match(liveUas[1], /VLC/);
+  } finally {
+    if (srv) await srv.shutdown();
+    upstream.close();
+  }
+});
+
 test('iptv: Xtream channels serve persisted cache immediately after restart and refresh in background', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-channel-cache-'));
   let streamHits = 0;
@@ -856,6 +929,50 @@ test('iptv: Xtream stream list still loads when optional categories are rejected
     assert.strictEqual(ch.json.channels[0].group, 'Other', 'category 403 should fall back to a generic group');
     assert.strictEqual(ch.json.sourceErrors.length, 0, 'optional category failures should not mark the source failed');
     assert.strictEqual(streamsHit, 1, 'stream list should still be fetched');
+  } finally {
+    if (srv) await srv.shutdown();
+    upstream.close();
+  }
+});
+
+test('iptv: Xtream channel refresh retries alternate player identity on provider bot-protection', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-panel-ua-retry-'));
+  const streamUas = [];
+  const upstream = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    const action = u.searchParams.get('action');
+    if (action === 'get_live_categories') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify([{ category_id: '1', category_name: 'News' }]));
+    }
+    if (action === 'get_live_streams') {
+      streamUas.push(req.headers['user-agent'] || '');
+      if (!/VLC/i.test(req.headers['user-agent'] || '')) {
+        res.writeHead(403, { 'content-type': 'text/plain' });
+        return res.end('provider bot-protection');
+      }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify([{ stream_id: 777, name: 'Recovered News', category_id: '1' }]));
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ epg_listings: [] }));
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const host = `http://127.0.0.1:${upstream.address().port}`;
+
+  let srv;
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/iptv/sources',
+      { name: 'Retry Panel', iptvMode: 'xtream', xtHost: host, xtUser: 'xtuser', xtPass: 'xtpass', epgUrl: null }, admin);
+    const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    assert.strictEqual(ch.status, 200);
+    assert.strictEqual(ch.json.channels.length, 1);
+    assert.strictEqual(ch.json.channels[0].name, 'Recovered News');
+    assert.strictEqual(streamUas.length, 2, 'panel fetch should retry once with an alternate player identity');
+    assert.match(streamUas[0], /TriboonTV/);
+    assert.match(streamUas[1], /VLC/);
   } finally {
     if (srv) await srv.shutdown();
     upstream.close();

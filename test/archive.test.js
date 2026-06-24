@@ -291,6 +291,25 @@ test('e2e: zip mount streams byte-exact and picks the video among inner files', 
   });
 });
 
+test('e2e: release sidecar subtitles are discovered without changing the picked video', async () => {
+  const sub = Buffer.from('1\r\n00:00:01,000 --> 00:00:02,000\r\nRelease line\r\n');
+  const zip = writeZipStore([
+    { name: 'Movie.2026.en.srt', data: sub },
+    { name: 'Movie.2026.mkv', data: PAYLOAD },
+  ]);
+  await withMockMount([{ name: 'release.zip', data: zip }], async (vf) => {
+    assert.strictEqual(vf.name, 'Movie.2026.mkv');
+    assert.ok(Array.isArray(vf.releaseSubs));
+    assert.strictEqual(vf.releaseSubs.length, 1);
+    assert.strictEqual(vf.releaseSubs[0].name, 'Movie.2026.en.srt');
+    assert.strictEqual(vf.releaseSubs[0].lang, 'eng');
+    const got = await readAll(vf, 2000, 9000);
+    assert.ok(got.equals(PAYLOAD.subarray(2000, 9000)), 'video bytes still stream from the selected inner file');
+    const subBytes = await vf.readReleaseSub(vf.releaseSubs[0].id);
+    assert.strictEqual(subBytes.toString('utf8'), sub.toString('utf8'));
+  });
+});
+
 test('e2e: compressed, encrypted, and 7z mounts are honest about not streaming (yet)', async () => {
   const cases = [
     { vols: [{ name: 'c.rar', data: loadFix('comp5.rar') }], tags: ['compressed', '🐢'] },
