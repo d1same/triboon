@@ -5502,17 +5502,25 @@ Object.assign(H, {
     const track = parseInt(ctx.m[2], 10) || 0;
     try {
       const mode = String(ctx.url.searchParams.get('mode') || '').toLowerCase();
-      if (mode !== 'prewarm') extendSubtitleResponseTimeout(ctx, embeddedSubtitleTimeoutMs(mode) + 15000);
+      if (mode !== 'prewarm') {
+        const waitMs = mode === 'startup' ? embeddedSubtitleStartupWaitMs() : embeddedSubtitleTimeoutMs(mode);
+        extendSubtitleResponseTimeout(ctx, waitMs + 15000);
+      }
       if (mode === 'prewarm') {
         ensureSubtitleVtt(vf, track, ctx.claims.uid, { mode }).catch((e) => {
           console.error(`[subtitle ${vf.id}:${track}] prewarm failed: ${String(e && e.message || e).slice(0, 200)}`);
         });
         return send(ctx.res, 202, { ok: true, status: 'prewarming' });
       }
-      const vtt = await ensureSubtitleVtt(vf, track, ctx.claims.uid, { mode });
+      const job = ensureSubtitleVtt(vf, track, ctx.claims.uid, { mode });
+      const vtt = mode === 'startup' ? await waitForSubtitleStartup(job, embeddedSubtitleStartupWaitMs()) : await job;
       if (!ctx.res.writableEnded) send(ctx.res, 200, vtt, { 'content-type': 'text/vtt; charset=utf-8' });
     } catch (e) {
-      if (!ctx.res.writableEnded) send(ctx.res, 502, { error: 'subtitle extraction failed', detail: String(e.message).slice(0, 200) });
+      if (e && e.code === 'SUBTITLE_PREPARING') {
+        if (!ctx.res.writableEnded) send(ctx.res, 504, { error: 'subtitle still preparing', detail: 'built-in subtitles are still preparing' });
+      } else if (!ctx.res.writableEnded) {
+        send(ctx.res, 502, { error: 'subtitle extraction failed', detail: String(e.message).slice(0, 200) });
+      }
     }
   },
 
@@ -5848,7 +5856,12 @@ function cleanupYtCookieFiles() {
 function embeddedSubtitleTimeoutMs(mode = '') {
   const configured = parseInt(process.env.TRIBOON_EMBEDDED_SUB_TIMEOUT_MS || '', 10);
   if (Number.isFinite(configured) && configured > 0) return Math.max(15000, Math.min(120000, configured));
-  return mode === 'manual' || mode === 'prewarm' ? 120000 : 45000;
+  return 120000;
+}
+function embeddedSubtitleStartupWaitMs() {
+  const configured = parseInt(process.env.TRIBOON_EMBEDDED_SUB_STARTUP_WAIT_MS || '', 10);
+  if (Number.isFinite(configured) && configured > 0) return Math.max(2000, Math.min(30000, configured));
+  return 8000;
 }
 function extendSubtitleResponseTimeout(ctx, ms) {
   const timeoutMs = Math.max(30000, Math.min(180000, parseInt(ms, 10) || 30000));
@@ -5864,9 +5877,43 @@ function extendSubtitleResponseTimeout(ctx, ms) {
   try { if (socket && typeof socket.setTimeout === 'function') socket.setTimeout(timeoutMs); } catch {}
   try { ctx.res.once('finish', restore); ctx.res.once('close', restore); } catch {}
 }
+function subtitleVttHasCues(vtt) {
+  return /(?:^|\n)\s*(?:\d{1,2}:)?\d{2}:\d{2}\.\d{3}\s+-->\s+(?:\d{1,2}:)?\d{2}:\d{2}\.\d{3}/.test(String(vtt || ''));
+}
+const SUBTITLE_FAILURE_TTL_MS = 10 * 60000;
+function recentSubtitleFailure(vf, track) {
+  const hit = vf && vf._subFailures && vf._subFailures.get(track);
+  if (!hit) return null;
+  if (Date.now() - (hit.at || 0) > SUBTITLE_FAILURE_TTL_MS) {
+    try { vf._subFailures.delete(track); } catch {}
+    return null;
+  }
+  return hit;
+}
+function waitForSubtitleStartup(job, ms) {
+  return new Promise((resolve, reject) => {
+    let done = false;
+    const finish = (fn, value) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      fn(value);
+    };
+    const timer = setTimeout(() => {
+      const e = new Error('embedded subtitle still preparing');
+      e.code = 'SUBTITLE_PREPARING';
+      finish(reject, e);
+    }, ms);
+    job.then((v) => finish(resolve, v), (e) => finish(reject, e));
+  });
+}
 function ensureSubtitleVtt(vf, track, uid, opts = {}) {
   vf._subCache = vf._subCache || new Map();
   if (vf._subCache.has(track)) return Promise.resolve(vf._subCache.get(track));
+  vf._subFailures = vf._subFailures || new Map();
+  if (opts.mode === 'manual') vf._subFailures.delete(track);
+  const recentFailure = opts.mode === 'startup' ? recentSubtitleFailure(vf, track) : null;
+  if (recentFailure) return Promise.reject(new Error(recentFailure.message || 'embedded subtitle extraction recently failed'));
   vf._subJobs = vf._subJobs || new Map();
   if (vf._subJobs.has(track)) return vf._subJobs.get(track);
   const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(uid, vf.id)}&priority=background`;
@@ -5879,18 +5926,25 @@ function ensureSubtitleVtt(vf, track, uid, opts = {}) {
       clearTimeout(killer);
       fn(value);
     };
-    try { ff = spawnSubtitleExtract(selfUrl, track); } catch (e) { return reject(e); }
+    const fail = (value) => {
+      const e = value instanceof Error ? value : new Error(String(value || 'embedded subtitle extraction failed'));
+      vf._subFailures.set(track, { at: Date.now(), message: String(e.message || e).slice(0, 200) });
+      finish(reject, e);
+    };
+    try { ff = spawnSubtitleExtract(selfUrl, track); } catch (e) { return fail(e); }
     const chunks = []; let err = '';
     const killer = setTimeout(() => {
       try { ff.kill('SIGKILL'); } catch {}
-      finish(reject, new Error(`embedded subtitle extraction timed out after ${Math.round(timeoutMs / 1000)}s`));
+      fail(new Error(`embedded subtitle extraction timed out after ${Math.round(timeoutMs / 1000)}s`));
     }, timeoutMs);
-    ff.on('error', (e) => finish(reject, e));
+    ff.on('error', (e) => fail(e));
     ff.stdout.on('data', (d) => chunks.push(d));
     ff.stderr.on('data', (d) => { err += d; });
     ff.on('close', (codeNum) => {
       const vtt = Buffer.concat(chunks).toString('utf8');
-      if (codeNum || !vtt.startsWith('WEBVTT')) return finish(reject, new Error(err.slice(0, 200) || `ffmpeg exit ${codeNum}`));
+      if (codeNum || !vtt.startsWith('WEBVTT')) return fail(new Error(err.slice(0, 200) || `ffmpeg exit ${codeNum}`));
+      if (!subtitleVttHasCues(vtt)) return fail(new Error('embedded subtitle extraction returned no text cues'));
+      vf._subFailures.delete(track);
       if (vf._subCache.size < 8) vf._subCache.set(track, vtt);
       finish(resolve, vtt);
     });

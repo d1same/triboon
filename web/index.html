@@ -1216,6 +1216,31 @@ body.mobileShell #person .personHead .pPhoto{flex:0 0 auto;width:min(42vw,150px)
 body.mobileShell #person .personHead .pInfo{width:100%;text-align:center}
 body.mobileShell #person .personHead h1{font-size:clamp(24px,7.8vw,34px);margin-bottom:8px}
 body.mobileShell #person .personHead #pBio{max-width:100%;font-size:14px;line-height:1.5;-webkit-line-clamp:5}
+body.mobileShell #osd{padding:14px 12px calc(14px + env(safe-area-inset-bottom));gap:10px}
+body.mobileShell #osd .top{gap:10px}
+body.mobileShell #osd .topLeft{gap:8px;max-width:100%;min-width:0}
+body.mobileShell .playerBackBtn{width:40px;height:40px;flex:0 0 40px}
+body.mobileShell .playerEpisode{font-size:11px;margin-top:3px}
+body.mobileShell .playerMetaQuality{font-size:11px;padding:4px 8px}
+body.mobileShell .osdRight{display:none}
+body.mobileShell .seekLine{grid-template-columns:46px minmax(0,1fr) 54px;gap:8px}
+body.mobileShell .seekTime{font-size:11px}
+body.mobileShell #seek{height:8px}
+body.mobileShell #seek .knob{width:18px;height:18px}
+body.mobileShell #osd .ctl{display:flex;grid-template-columns:none;gap:8px;overflow-x:auto;overflow-y:visible;
+  justify-content:flex-start;align-items:center;padding:3px 4px 8px;margin:0 -4px;scroll-padding:0 12px;
+  scrollbar-width:none;-webkit-overflow-scrolling:touch;touch-action:pan-x}
+body.mobileShell #osd .ctl::-webkit-scrollbar{display:none}
+body.mobileShell #osd .ctlGroup{flex:0 0 auto;gap:8px}
+body.mobileShell #osd .ctlLeft,body.mobileShell #osd .ctlCenter,body.mobileShell #osd .ctlRight{justify-content:flex-start}
+body.mobileShell #osd .ctlRight{flex-wrap:nowrap}
+body.mobileShell #player:not(.live) #chGuide{display:none}
+body.mobileShell .cbtn{width:44px;height:44px;flex:0 0 44px}
+body.mobileShell .cbtn.big{width:52px;height:52px;flex-basis:52px}
+body.mobileShell .volWrap{flex:0 0 auto}
+body.mobileShell #volSlider{display:none}
+body.mobileShell #trackMenu{left:12px;right:12px;bottom:84px;width:auto;min-width:0;max-height:calc(100vh - 144px);border-radius:12px}
+body.mobileShell #playerStats{left:12px;right:12px;bottom:84px;width:auto;max-height:calc(100vh - 144px);overflow:auto;border-radius:12px}
 
 /* Phones: tighter guide + overlay panels, smaller channel tiles. (#guide prefix keeps these
    winning over the base rules that appear later in the sheet.) */
@@ -1250,18 +1275,33 @@ body.mobileShell #person .personHead #pBio{max-width:100%;font-size:14px;line-he
   .pgRow .pgName{font-size:12.5px}
   .pgRow .pgGroup,.pgRow .pgNext{font-size:9.5px}
   .pgRow .pgNow{font-size:12px;padding-right:32px}
-  #osd .top{gap:12px}
-  #osd .topLeft{gap:10px;max-width:66vw}
+  #osd{padding:14px 12px calc(14px + env(safe-area-inset-bottom));gap:10px}
+  #osd .top{gap:10px}
+  #osd .topLeft{gap:8px;max-width:100%;min-width:0}
   #osd .title{max-width:100%}
+  .playerBackBtn{width:40px;height:40px;flex:0 0 40px}
   .playerMetaRow{gap:8px}
+  .playerEpisode{font-size:11px;margin-top:3px}
   .playerMetaQuality{font-size:11px;padding:4px 8px}
+  .osdRight{display:none}
   .seekLine{grid-template-columns:46px minmax(0,1fr) 54px;gap:8px}
   .seekTime{font-size:11px}
-  #osd .ctl{grid-template-columns:minmax(40px,1fr) auto minmax(40px,1fr);gap:8px}
-  #osd .ctlGroup{gap:6px}
-  #osd .ctlRight{flex-wrap:wrap}
-  .cbtn{width:40px;height:40px}
-  .cbtn.big{width:50px;height:50px}
+  #seek{height:8px}
+  #seek .knob{width:18px;height:18px}
+  #osd .ctl{display:flex;grid-template-columns:none;gap:8px;overflow-x:auto;overflow-y:visible;
+    justify-content:flex-start;align-items:center;padding:3px 4px 8px;margin:0 -4px;scroll-padding:0 12px;
+    scrollbar-width:none;-webkit-overflow-scrolling:touch;touch-action:pan-x}
+  #osd .ctl::-webkit-scrollbar{display:none}
+  #osd .ctlGroup{flex:0 0 auto;gap:8px}
+  #osd .ctlLeft,#osd .ctlCenter,#osd .ctlRight{justify-content:flex-start}
+  #osd .ctlRight{flex-wrap:nowrap}
+  #player:not(.live) #chGuide{display:none}
+  .cbtn{width:44px;height:44px;flex:0 0 44px}
+  .cbtn.big{width:52px;height:52px;flex-basis:52px}
+  .volWrap{flex:0 0 auto}
+  #volSlider{display:none}
+  #trackMenu{left:12px;right:12px;bottom:84px;width:auto;min-width:0;max-height:calc(100vh - 144px);border-radius:12px}
+  #playerStats{left:12px;right:12px;bottom:84px;width:auto;max-height:calc(100vh - 144px);overflow:auto;border-radius:12px}
   #chBody .chGrid{grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px}
   #grid #chBar{gap:8px}
   #chBar #chSearch{width:100%}
@@ -6590,10 +6630,11 @@ function startWebPlayerHousekeeping(mount, it) {
       if (!p || p.mountId !== mount.id) return;
       await fetchPlayerTracks(p, 1400).catch(() => null);
       if (!S.playing || S.playing !== p || p.subTrack) return;
-      if (bestReleaseSubtitleRel() && prefSubtitleMode() === 'always') {
+      if (bestBuiltInSubtitleRel() && prefSubtitleMode() === 'always') {
         applyStartupSubtitlePref();
         return;
       }
+      if (prefSubtitleMode() === 'always' && applyStartupSubtitlePref()) return;
       const wantLang = prefSubtitleMode() === 'always' ? preferredAutoSubtitleLang() : prefLang('slang');
       if (wantLang && wantLang !== 'off' && it.type !== 'live' && S.serverInfo && S.serverInfo.opensubs && mount.id && subtitleCatalogAvailable(it)) {
         const code2 = osLang(wantLang);
@@ -6683,6 +6724,8 @@ async function openPlayer(it, mount, opts = {}) {
         schedulePlayerGuideFocusRestore(S._pgFocusChannel ?? S.liveCur);
       }
       if (v.paused) showLivePlayPrompt();
+    } else if (pReady && pReady.item && pReady.item.type !== 'live' && !pReady.started && v.readyState >= 2 && v.paused) {
+      showVodPlayPrompt();
     }
   };
   v.onplaying = () => { markVodPlaybackStarted(S.playing); clearReadyFrame(); clearTimeout(S._waitT); $('playerLoader').classList.remove('show'); hideSeekHoldFrame(); };
@@ -6769,7 +6812,7 @@ async function loadTracks() {
       } catch {}
       updatePlayerMeta();
       updateClocks();
-      refreshNativeSubtitleChoices();
+      if (!(await applyNativeStartupSubtitleAfterTrackProbe(p))) refreshNativeSubtitleChoices();
       return;
     }
     updatePlayerMeta();
@@ -6808,7 +6851,7 @@ function startSource(kind, atSeconds, opts = {}) {
   }
   applySubtitleTrack(); // re-attach CC after the src swap
   applyVolume();
-  v.play().then(() => { if (!serverSeek && atSeconds) v.currentTime = atSeconds; }).catch(() => {});
+  requestVideoPlay(v).then(() => { if (!serverSeek && atSeconds) v.currentTime = atSeconds; }).catch(() => showVodPlayPrompt());
   return true;
 }
 // The full ladder, in policy order: direct play → remux (container swap) → transcode
@@ -6829,6 +6872,49 @@ function nativeVideoRequired(it) {
 }
 function nativeVideoSubtitleRel(p) {
   return { blocked: false, rel: concreteSubtitleRel(startupSubtitleRelFor(p)) };
+}
+function nativeSubtitlePayload(p, rel, mode = 'startup') {
+  const chosen = rel || '';
+  return {
+    rel: chosen,
+    url: chosen ? new URL(subtitleUrlForRel(p, chosen, { mode }), location.origin).href : '',
+    lang: chosen ? subtitleLangForRel(chosen) : '',
+    label: chosen ? nativeSubtitleLabel(chosen) : '',
+    shift: chosen ? (loadSubShift(chosen) || 0) : 0,
+  };
+}
+async function nativeStartupSubtitleRelAfterPreflight(p, rel) {
+  if (!(typeof rel === 'string' && rel.startsWith('em:'))) return rel || '';
+  const payload = nativeSubtitlePayload(p, rel, 'startup');
+  if (!payload.url) return '';
+  try {
+    const r = await fetch(payload.url);
+    if (r.ok) return rel;
+  } catch {}
+  return canAutoSubtitle(p) ? onlineFallbackRelForBuiltIn(rel) : '';
+}
+async function applyNativeStartupSubtitleAfterTrackProbe(p) {
+  if (!p || !p.usingNative || !canUseNativeVideoPlayer()) return false;
+  if (p.subTrack !== null && p.subTrack !== undefined) return false;
+  const sub = nativeVideoSubtitleRel(p);
+  const rel = await nativeStartupSubtitleRelAfterPreflight(p, sub && sub.rel ? sub.rel : '');
+  if (!rel || !(window.TriboonTV && window.TriboonTV.updateActiveSubtitle)) return false;
+  const payload = nativeSubtitlePayload(p, rel, 'startup');
+  if (!payload.url) return false;
+  try {
+    window.TriboonTV.updateActiveSubtitle(JSON.stringify({
+      subtitleRel: payload.rel,
+      subtitleUrl: payload.url,
+      subtitleLang: payload.lang,
+      subtitleLabel: payload.label,
+      subtitleShift: payload.shift,
+    }));
+    p.subTrack = rel;
+    p._subShift = loadSubShift(rel);
+    p._subtitleDisabledThisSession = false;
+    refreshNativeSubtitleChoices();
+    return true;
+  } catch { return false; }
 }
 function resolutionLabel(res) {
   const v = String(res || '').toLowerCase();
@@ -7215,6 +7301,7 @@ function tryNativeVideoPlayer(kind, atSeconds, opts = {}) {
   }
   const sub = nativeVideoSubtitleRel(p);
   if (sub.blocked) return false;
+  const subPayload = nativeSubtitlePayload(p, sub.rel || '', 'startup');
   p.usingNative = true;
   p.usingRemux = kind === 'remux';
   p.usingTranscode = kind === 'transcode';
@@ -7239,11 +7326,11 @@ function tryNativeVideoPlayer(kind, atSeconds, opts = {}) {
     duration: Math.max(0, p.duration || p.nativeDuration || 0),
     qualityChoices: !!p.transcodeUrl,
     hasNext: p.item.type === 'episode',
-    subtitleRel: sub.rel || '',
-    subtitleUrl: sub.rel ? new URL(subtitleUrlForRel(p, sub.rel, { mode: 'startup' }), location.origin).href : '',
-    subtitleLang: sub.rel ? subtitleLangForRel(sub.rel) : '',
-    subtitleLabel: sub.rel ? nativeSubtitleLabel(sub.rel) : '',
-    subtitleShift: sub.rel ? (loadSubShift(sub.rel) || 0) : 0,
+    subtitleRel: subPayload.rel,
+    subtitleUrl: subPayload.url,
+    subtitleLang: subPayload.lang,
+    subtitleLabel: subPayload.label,
+    subtitleShift: subPayload.shift,
     subtitleChoices: nativeSubtitleChoices(),
     episodeChoices: nativeEpisodeChoices(),
     quietSeek: !!opts.quietSeek,
@@ -7404,7 +7491,7 @@ window.__tvNativeSubtitleSelect = (rel, pos, dur) => {
     p.subTrack = null;
     p._subShift = 0;
     p._subtitleDisabledThisSession = true;
-    if (prefSubtitleMode() === 'always') saveSubChoice('');
+    if (prefSubtitleMode() === 'always') saveSubChoice(null);
     else {
       savePrefLang('slang', 'off');
       saveSubChoice(null);
@@ -8123,11 +8210,15 @@ function startHealthPoll(id) {
     } catch {}
   }, 20000);
 }
-function showLivePlayPrompt() {
+function showPlayerPlayPrompt(opts = {}) {
   const p = S.playing;
-  if (!p || !p.item || p.item.type !== 'live' || !$('video').paused) return;
+  const v = $('video');
+  if (!p || !p.item || !v.paused) return;
+  if (opts.requireReady !== false && v.readyState < 2) return;
   clearTimeout(S._liveVlcT);
+  clearTimeout(S._waitT);
   $('vlcPanel').classList.remove('show');
+  $('playerLoader').classList.remove('show');
   showOsd();
   const play = $('playPause');
   const btns = ctlButtons();
@@ -8135,13 +8226,25 @@ function showLivePlayPrompt() {
   if (idx >= 0) { S.zone = 'playerCtl'; S.ctlIdx = idx; applyFocus(play); }
   clearTimeout(S.osdTimer);
 }
+function showLivePlayPrompt() {
+  const p = S.playing;
+  if (!p || !p.item || p.item.type !== 'live') return;
+  showPlayerPlayPrompt({ requireReady: false });
+}
+function showVodPlayPrompt() {
+  const p = S.playing;
+  if (!p || !p.item || p.item.type === 'live') return;
+  showPlayerPlayPrompt();
+}
 function requestVideoPlay(v, opts = {}) {
   const r = v.play();
   if (!r || typeof r.then !== 'function') return Promise.resolve();
   return r.then(() => {
+    $('playerLoader').classList.remove('show');
     if (opts.livePrompt) showOsd();
   }).catch((e) => {
     if (opts.livePrompt) showLivePlayPrompt();
+    else showVodPlayPrompt();
     throw e;
   });
 }
@@ -8446,7 +8549,7 @@ function scheduleEmbeddedSubtitlePrewarm(p = S.playing) {
     fetch(embeddedSubUrl(p, rel, { mode: 'prewarm' })).catch(() => {
       if (S.playing === p) p._embeddedSubPrewarmed = '';
     });
-  }, 2200);
+  }, 1200);
 }
 function bestEmbeddedSubtitleRel() {
   const subs = visibleEmbeddedSubChoices();
@@ -8463,6 +8566,9 @@ function bestEmbeddedSubtitleRel() {
     return (langScoreB + sdhB) - (langScoreA + sdhA);
   });
   return sorted[0] ? embeddedSubRel(sorted[0].rel) : '';
+}
+function bestBuiltInSubtitleRel() {
+  return bestReleaseSubtitleRel() || bestEmbeddedSubtitleRel();
 }
 function subtitleImdbId(it) {
   const id = String((it && (it.imdbId || it.imdbid)) || '').trim();
@@ -8496,6 +8602,7 @@ function bestReleaseSubtitleRel() {
 }
 function autoSubtitleRelFor(p) {
   if (prefSubtitleMode() !== 'always' || !canAutoSubtitle(p)) return '';
+  if (p && p.tracksUrl && !p.tracks) return '';
   return osTrackRel(preferredAutoSubtitleLang());
 }
 function subtitleRelPlayable(p, rel) {
@@ -8514,10 +8621,12 @@ function concreteSubtitleRel(rel) {
 function startupSubtitleRelFor(p, saved = loadSubChoice()) {
   if (!p || p._subtitleDisabledThisSession) return '';
   // Manual mode is truly manual at startup; Always mode can reuse a saved online
-  // or local choice, otherwise it picks release sidecars before online subtitles.
+  // or local choice, otherwise it picks built-in subtitles before online subtitles.
   if (prefSubtitleMode() !== 'always') return '';
+  if (saved === 'off') return '';
   if (subtitleRelPlayable(p, saved)) return saved;
-  if (bestReleaseSubtitleRel()) return 'release:auto';
+  const builtIn = bestBuiltInSubtitleRel();
+  if (builtIn) return builtIn;
   return autoSubtitleRelFor(p);
 }
 function subtitleRequestParams(it, lang, streamToken) {
@@ -8906,12 +9015,13 @@ function setQuality(q) {
 }
 async function setSubtitle(rel, opts = {}) {
   const p = S.playing; if (!p) return;
+  const manualChoice = !opts.startup && !opts.builtInRetry && !opts.autoFallback;
   if (rel === null) {
     p.subTrack = rel; p._subShift = 0;
     p._subtitleDisabledThisSession = true;
     $('ccBtn').classList.remove('on');
     if (prefSubtitleMode() === 'always') {
-      saveSubChoice('');
+      saveSubChoice(null);
     } else {
       savePrefLang('slang', 'off');
       saveSubChoice(null);
@@ -8937,8 +9047,9 @@ async function setSubtitle(rel, opts = {}) {
   // Fetch FIRST so failures surface as a message, not a silent nothing.
   if (typeof rel === 'string' && (rel.startsWith('os:') || rel.startsWith('rs:') || rel.startsWith('em:'))) {
     try {
-      const url = subtitleUrlForRel(p, rel, { mode: opts.startup ? 'startup' : 'manual' });
-      const r = await fetch(url);
+      const extractionMode = opts.startup ? 'startup' : 'manual';
+      let url = subtitleUrlForRel(p, rel, { mode: extractionMode });
+      let r = await fetch(url);
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
         const info = rel.startsWith('os:') ? osTrackInfo(rel) : null;
@@ -8946,13 +9057,13 @@ async function setSubtitle(rel, opts = {}) {
         if (noResults && rel.startsWith('os:')) rememberSubtitleMiss(info.lang, noResults);
         if (rel.startsWith('em:') && canAutoSubtitle(p)) {
           const detail = String(j.detail || j.error || '');
-          toast(/timed out|too long/i.test(detail) ? 'Built-in subtitles took too long - using online subtitles' : 'Built-in subtitles failed - using online subtitles');
+          toast(r.status === 504 || /preparing|timed out|too long/i.test(detail) ? 'Built-in subtitles are still preparing - using online subtitles' : 'Built-in subtitles failed - using online subtitles');
           p.subTrack = null; $('ccBtn').classList.remove('on');
           applySubtitleTrack();
           refreshNativeSubtitleChoices();
-          return setSubtitle(onlineFallbackRelForBuiltIn(rel));
+          return setSubtitle(onlineFallbackRelForBuiltIn(rel), { autoFallback: true });
         }
-        toast(noResults || j.detail || j.error || (rel.startsWith('em:') ? 'Built-in subtitles failed to load' : 'Subtitles failed to load'));
+        toast(noResults || j.detail || j.error || (rel.startsWith('em:') ? 'Built-in subtitles are still preparing - try again in a moment' : 'Subtitles failed to load'));
         p.subTrack = null; $('ccBtn').classList.remove('on');
         applySubtitleTrack();
         refreshNativeSubtitleChoices();
@@ -8966,7 +9077,7 @@ async function setSubtitle(rel, opts = {}) {
         p.subTrack = null; $('ccBtn').classList.remove('on');
         applySubtitleTrack();
         refreshNativeSubtitleChoices();
-        return setSubtitle(onlineFallbackRelForBuiltIn(rel));
+        return setSubtitle(onlineFallbackRelForBuiltIn(rel), { autoFallback: true });
       }
       toast(rel.startsWith('em:') ? 'Built-in subtitles failed - try another built-in track or choose online subtitles' : 'Subtitles failed - check the server connection');
       p.subTrack = null; $('ccBtn').classList.remove('on'); applySubtitleTrack(); refreshNativeSubtitleChoices(); return;
@@ -8978,19 +9089,19 @@ async function setSubtitle(rel, opts = {}) {
     clearTimeout(_subPrepT);
     _subPrepT = setTimeout(() => toast('Preparing subtitles — first load can take a moment on a big file…'), 650);
   }
-  if (typeof rel === 'string' && rel.startsWith('os:')) {
+  if (manualChoice && typeof rel === 'string' && rel.startsWith('os:')) {
     const lang2 = osTrackInfo(rel).lang;
     const saved = LANG_2TO3[lang2] || lang2;
     savePrefLang('slang', saved);
     if ($('prefSLang')) $('prefSLang').value = saved;
-  } else if (typeof rel === 'string' && rel.startsWith('rs:')) {
+  } else if (manualChoice && typeof rel === 'string' && rel.startsWith('rs:')) {
     const sub = releaseSubForRel(rel);
     if (sub && sub.lang) {
       const saved = langCode(sub.lang);
       savePrefLang('slang', saved);
       if ($('prefSLang')) $('prefSLang').value = saved;
     }
-  } else if (typeof rel === 'string' && rel.startsWith('em:')) {
+  } else if (manualChoice && typeof rel === 'string' && rel.startsWith('em:')) {
     const sub = embeddedSubForRel(rel);
     if (sub && sub.lang) {
       const saved = langCode(sub.lang);
@@ -8998,7 +9109,7 @@ async function setSubtitle(rel, opts = {}) {
       if ($('prefSLang')) $('prefSLang').value = saved;
     }
   }
-  saveSubChoice(rel, subtitleDisplayName(rel));
+  if (manualChoice) saveSubChoice(rel, subtitleDisplayName(rel));
   applySubtitleTrack();
 }
 let _subPrepT = 0;
@@ -9387,6 +9498,7 @@ function canShowScreensaver() {
   if (!S.user || S._booting || document.visibilityState !== 'visible') return false;
   if (S.nativeLivePending) return false;
   if (S.view === 'player' || $('player').classList.contains('open')) return false;
+  if (document.querySelector('#detail.open,#person.open,#settings.open,#prefs.open,#music.open')) return false;
   if (document.querySelector('.gate.open,#drawer.open,#trailer.open,#libModal.open,#matchModal.open,#catModal.open,#filterMenu.open,#cwMenu.open,#trackMenu.open,#musicNow.open')) return false;
   return true;
 }

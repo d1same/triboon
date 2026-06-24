@@ -1115,6 +1115,12 @@ public class MainActivity extends Activity {
             }
 
             @android.webkit.JavascriptInterface
+            public void updateActiveSubtitle(String json) {
+                if (!trustedBridgeOrigin()) return;
+                runOnUiThread(() -> updateNativeActiveSubtitle(json));
+            }
+
+            @android.webkit.JavascriptInterface
             public void updateVideoDuration(String seconds) {
                 if (!trustedBridgeOrigin()) return;
                 runOnUiThread(() -> updateNativeVideoDuration(seconds));
@@ -4688,6 +4694,36 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             nativeOpenSubtitleMenuAfterRefresh = false;
             Toast.makeText(this, "Could not load subtitle versions", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void updateNativeActiveSubtitle(String json) {
+        if (nativePlayer == null || !"video".equals(nativeMode)) return;
+        try {
+            org.json.JSONObject j = new org.json.JSONObject(json == null ? "{}" : json);
+            org.json.JSONArray choices = j.optJSONArray("subtitleChoices");
+            if (choices != null) applyNativeSubtitleChoices(choices);
+            String rel = j.optString("subtitleRel", "");
+            String subtitleUrl = j.optString("subtitleUrl", "");
+            if (rel.isEmpty() || subtitleUrl.isEmpty()) return;
+            nativeSubtitleShift = (float) j.optDouble("subtitleShift", nativeShiftFromUrl(subtitleUrl));
+            String cleanSubtitleUrl = stripNativeQueryParam(subtitleUrl, "shift");
+            ValidatedNativeUrl subtitlePin = cleanSubtitleUrl.isEmpty() ? null : validateNativePlaybackUrl(cleanSubtitleUrl);
+            if (subtitlePin == null) return;
+            nativeSubtitleRel = rel;
+            nativeSubtitleUrl = subtitlePin.connectUrl;
+            nativeSubtitleHostHeader = subtitlePin.hostHeader;
+            nativeSubtitleLang = j.optString("subtitleLang", nativeLangFromSubtitleRel(rel));
+            nativeSubtitleLabel = j.optString("subtitleLabel", "");
+            if (nativeSubtitleLabel.isEmpty()) {
+                nativeSubtitleLabel = !nativeSubtitleLang.isEmpty() ? nativeLangName(nativeSubtitleLang) : "Subtitles";
+            }
+            nativeHasWyzieSubtitle = true;
+            disableNativeTextTracks();
+            loadNativeSubtitleOverlay(nativeSubtitleUrl);
+            updateNativeChrome();
+        } catch (Exception e) {
+            Log.w(TAG, "Subtitles could not load: " + redactNativeLogMessage(e.getMessage()));
         }
     }
 
