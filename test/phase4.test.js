@@ -663,8 +663,10 @@ test('subtitle startup preference contract: always mode prefers release captions
     'shared subtitle URL builder should pass extraction mode through for built-in subtitles');
   assert.match(ui, /function scheduleEmbeddedSubtitlePrewarm\(p = S\.playing\) \{[\s\S]+setTimeout\(\(\) => \{[\s\S]+fetch\(embeddedSubUrl\(p, rel, \{ mode: 'prewarm' \}\)\)/,
     'built-in subtitle extraction should prewarm in the background after track probing');
-  assert.match(ui, /rel\.startsWith\('em:'\) && opts\.startup && canAutoSubtitle\(p\)[\s\S]+Built-in subtitles took too long - trying online subtitles[\s\S]+return setSubtitle\(osTrackRel\(preferredAutoSubtitleLang\(\)\)\)/,
-    'built-in subtitle extraction failures should only fall back to online subtitles during startup auto-mode');
+  assert.match(ui, /function onlineFallbackRelForBuiltIn\(rel\) \{[\s\S]+const sub = embeddedSubForRel\(rel\);[\s\S]+const lang = sub && sub\.lang \? osLang\(sub\.lang\) : osLang\(preferredAutoSubtitleLang\(\)\);[\s\S]+return osTrackRel\(lang \|\| 'en'\);[\s\S]+\}/,
+    'slow built-in subtitle tracks should fall back to online subtitles in the same language when possible');
+  assert.match(ui, /rel\.startsWith\('em:'\) && canAutoSubtitle\(p\)[\s\S]+Built-in subtitles took too long - using online subtitles[\s\S]+return setSubtitle\(onlineFallbackRelForBuiltIn\(rel\)\)/,
+    'built-in subtitle extraction failures should automatically fall back to online subtitles when configured');
   assert.match(ui, /p\._subVttText = await r\.text\(\);[\s\S]+p\._subVttRel = rel;/,
     'subtitle selection should keep the verified VTT body for the player attach path');
   assert.match(ui, /p\.subTrack\.startsWith\('os:'\) \|\| p\.subTrack\.startsWith\('rs:'\) \|\| p\.subTrack\.startsWith\('em:'\)/,
@@ -680,6 +682,10 @@ test('subtitle startup preference contract: always mode prefers release captions
   const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
   assert.match(server, /return mode === 'manual' \|\| mode === 'prewarm' \? 120000 : 45000;/,
     'manual and prewarm embedded subtitle extraction should wait longer than startup auto-selection');
+  assert.match(server, /if \(mode !== 'prewarm'\) extendSubtitleResponseTimeout\(ctx, embeddedSubtitleTimeoutMs\(mode\) \+ 15000\);[\s\S]+const vtt = await ensureSubtitleVtt\(vf, track, ctx\.claims\.uid, \{ mode \}\);/,
+    'slow built-in subtitle extraction should extend the route timeout before awaiting ffmpeg');
+  assert.match(server, /function extendSubtitleResponseTimeout\(ctx, ms\) \{[\s\S]+ctx\.req\.setTimeout\(timeoutMs\)[\s\S]+ctx\.res\.setTimeout\(timeoutMs\)[\s\S]+socket\.setTimeout\(timeoutMs\)[\s\S]+ctx\.res\.once\('finish', restore\);[\s\S]+ctx\.res\.once\('close', restore\);/,
+    'subtitle route timeout extension should restore the normal socket timeout after the response closes');
   assert.match(server, /priority=background/,
     'embedded subtitle extraction should read through the background stream lane');
   assert.match(playerMap, /Profile always-show subtitles must auto-enable the preferred online subtitle at startup/,
@@ -1982,6 +1988,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native subtitle overlay URLs should be validated inside the fetch helper and preserve pinned personal-IPTV Host headers');
   assert.match(android, /private void loadNativeSubtitleOverlay\(String url\) \{[\s\S]+validateNativeSubtitleOverlayUrl\(cleanUrl, nativeSubtitleHostHeader\);[\s\S]+final String fetchUrl = subtitleUrl\.connectUrl;[\s\S]+new URL\(fetchUrl\)\.openConnection\(\)[\s\S]+c\.setRequestProperty\("Host", hostHeader\);[\s\S]+int status = c\.getResponseCode\(\);[\s\S]+readNativeSubtitleResponse\(c, status >= 400\)[\s\S]+parseNativeVtt\(body\)[\s\S]+nativeSubtitleHandler\.postDelayed\(nativeSubtitleTick, 250\)/,
     'native online subtitles should be fetched once and rendered by a live Exo overlay');
+  assert.match(android, /c\.setReadTimeout\(nativeSubtitleReadTimeoutMs\(cleanUrl\)\);[\s\S]+private int nativeSubtitleReadTimeoutMs\(String url\) \{[\s\S]+raw\.contains\("\/api\/subtitle\/"\) \? 135000 : 20000;[\s\S]+\}/,
+    'native built-in subtitle overlay fetches should outlive slow server-side extraction while online VTT stays quick');
   assert.match(android, /throw new java\.io\.IOException\("subtitle HTTP " \+ status \+ ": " \+ subtitleErrorSnippet\(body\)\)/,
     'native online subtitle failures should log the real HTTP status from the server route');
   assert.match(android, /private String redactNativeLogMessage\(String msg\)[\s\S]+token\|apikey\|api_key\|password\|pass/,

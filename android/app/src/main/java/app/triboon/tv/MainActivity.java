@@ -4438,7 +4438,7 @@ public class MainActivity extends Activity {
             try {
                 HttpURLConnection c = (HttpURLConnection) new URL(fetchUrl).openConnection();
                 c.setConnectTimeout(7000);
-                c.setReadTimeout(12000);
+                c.setReadTimeout(nativeSubtitleReadTimeoutMs(cleanUrl));
                 c.setRequestProperty("Accept", "text/vtt,text/plain,*/*");
                 if (hostHeaderSafe(hostHeader)) {
                     c.setRequestProperty("Host", hostHeader);
@@ -4471,6 +4471,11 @@ public class MainActivity extends Activity {
                 });
             }
         }, "triboon-subtitles").start();
+    }
+
+    private int nativeSubtitleReadTimeoutMs(String url) {
+        String raw = url == null ? "" : url;
+        return raw.contains("/api/subtitle/") ? 135000 : 20000;
     }
 
     private String readNativeSubtitleResponse(HttpURLConnection c, boolean errorStream) throws java.io.IOException {

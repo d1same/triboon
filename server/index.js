@@ -5502,6 +5502,7 @@ Object.assign(H, {
     const track = parseInt(ctx.m[2], 10) || 0;
     try {
       const mode = String(ctx.url.searchParams.get('mode') || '').toLowerCase();
+      if (mode !== 'prewarm') extendSubtitleResponseTimeout(ctx, embeddedSubtitleTimeoutMs(mode) + 15000);
       if (mode === 'prewarm') {
         ensureSubtitleVtt(vf, track, ctx.claims.uid, { mode }).catch((e) => {
           console.error(`[subtitle ${vf.id}:${track}] prewarm failed: ${String(e && e.message || e).slice(0, 200)}`);
@@ -5848,6 +5849,20 @@ function embeddedSubtitleTimeoutMs(mode = '') {
   const configured = parseInt(process.env.TRIBOON_EMBEDDED_SUB_TIMEOUT_MS || '', 10);
   if (Number.isFinite(configured) && configured > 0) return Math.max(15000, Math.min(120000, configured));
   return mode === 'manual' || mode === 'prewarm' ? 120000 : 45000;
+}
+function extendSubtitleResponseTimeout(ctx, ms) {
+  const timeoutMs = Math.max(30000, Math.min(180000, parseInt(ms, 10) || 30000));
+  const socket = ctx.req && ctx.req.socket;
+  let restored = false;
+  const restore = () => {
+    if (restored) return;
+    restored = true;
+    try { if (socket && !socket.destroyed) socket.setTimeout(30000); } catch {}
+  };
+  try { if (ctx.req && typeof ctx.req.setTimeout === 'function') ctx.req.setTimeout(timeoutMs); } catch {}
+  try { if (ctx.res && typeof ctx.res.setTimeout === 'function') ctx.res.setTimeout(timeoutMs); } catch {}
+  try { if (socket && typeof socket.setTimeout === 'function') socket.setTimeout(timeoutMs); } catch {}
+  try { ctx.res.once('finish', restore); ctx.res.once('close', restore); } catch {}
 }
 function ensureSubtitleVtt(vf, track, uid, opts = {}) {
   vf._subCache = vf._subCache || new Map();

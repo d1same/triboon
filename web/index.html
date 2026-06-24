@@ -8475,6 +8475,11 @@ function canAutoSubtitle(p) {
   return !!(p && p.item && p.item.type !== 'live'
     && S.serverInfo && S.serverInfo.opensubs && p.mountId && subtitleCatalogAvailable(p.item));
 }
+function onlineFallbackRelForBuiltIn(rel) {
+  const sub = embeddedSubForRel(rel);
+  const lang = sub && sub.lang ? osLang(sub.lang) : osLang(preferredAutoSubtitleLang());
+  return osTrackRel(lang || 'en');
+}
 function bestReleaseSubtitleRel() {
   const subs = visibleReleaseSubChoices();
   if (!subs.length) return '';
@@ -8939,12 +8944,13 @@ async function setSubtitle(rel, opts = {}) {
         const info = rel.startsWith('os:') ? osTrackInfo(rel) : null;
         const noResults = info ? subtitleResponseNoResults(info.lang, r.status, j) : '';
         if (noResults && rel.startsWith('os:')) rememberSubtitleMiss(info.lang, noResults);
-        if (rel.startsWith('em:') && opts.startup && canAutoSubtitle(p)) {
-          toast('Built-in subtitles took too long - trying online subtitles');
+        if (rel.startsWith('em:') && canAutoSubtitle(p)) {
+          const detail = String(j.detail || j.error || '');
+          toast(/timed out|too long/i.test(detail) ? 'Built-in subtitles took too long - using online subtitles' : 'Built-in subtitles failed - using online subtitles');
           p.subTrack = null; $('ccBtn').classList.remove('on');
           applySubtitleTrack();
           refreshNativeSubtitleChoices();
-          return setSubtitle(osTrackRel(preferredAutoSubtitleLang()));
+          return setSubtitle(onlineFallbackRelForBuiltIn(rel));
         }
         toast(noResults || j.detail || j.error || (rel.startsWith('em:') ? 'Built-in subtitles failed to load' : 'Subtitles failed to load'));
         p.subTrack = null; $('ccBtn').classList.remove('on');
@@ -8955,12 +8961,12 @@ async function setSubtitle(rel, opts = {}) {
       p._subVttText = await r.text();
       p._subVttRel = rel;
     } catch {
-      if (rel.startsWith('em:') && opts.startup && canAutoSubtitle(p)) {
-        toast('Built-in subtitles failed - trying online subtitles');
+      if (rel.startsWith('em:') && canAutoSubtitle(p)) {
+        toast('Built-in subtitles failed - using online subtitles');
         p.subTrack = null; $('ccBtn').classList.remove('on');
         applySubtitleTrack();
         refreshNativeSubtitleChoices();
-        return setSubtitle(osTrackRel(preferredAutoSubtitleLang()));
+        return setSubtitle(onlineFallbackRelForBuiltIn(rel));
       }
       toast(rel.startsWith('em:') ? 'Built-in subtitles failed - try another built-in track or choose online subtitles' : 'Subtitles failed - check the server connection');
       p.subTrack = null; $('ccBtn').classList.remove('on'); applySubtitleTrack(); refreshNativeSubtitleChoices(); return;
