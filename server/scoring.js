@@ -201,6 +201,14 @@ function scoreRelease(candidate, policy = {}) {
     if (a.features.includes('truehd') || a.features.includes('dts-hd')) add('device-heavy-audio', -140);
     if (a.features.includes('dovi') && policy.dolbyVision === false) add('unsupported-dolby-vision', -220);
   }
+  if (policy.lowPowerDevice && a.resolutionRank <= 3) {
+    // Budget Android TV boxes and older Chromecast-class devices often report HEVC/AV1
+    // support but still start, seek, or recover more reliably on AVC for 1080p playback.
+    // Keep newer codecs as fallbacks/manual picks, but make the default safer and faster.
+    if (a.codec === 'avc') add('device-safe-avc', 45);
+    if (a.codec === 'hevc') add('device-heavy-hevc-hd', -110);
+    if (a.codec === 'av1') add('device-heavy-av1-hd', -120);
+  }
   // Soundtracks / bonus discs / bare music rips are never what "press play on a movie" means.
   const ntm = notTheMovie(candidate.name);
   if (ntm) add(`not-the-movie:${ntm}`, -100000);

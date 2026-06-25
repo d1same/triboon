@@ -24,7 +24,7 @@ canonical reference.
 - Security: deny-by-default route table in `server/index.js`; every endpoint must
   declare `public`, `user`, `admin`, or `stream` auth and be covered by tests.
 - Current verification baseline after the playback startup/read-ahead pass: full
-  `npm.cmd test` covers 231 tests; focused IPTV, security, Android native
+  `npm.cmd test` covers 233 tests; focused IPTV, security, Android native
   player, Music, subtitle, source-warmup, and NNTP priority tests cover the
   current source model, route table, device bridge, process queue, startup
   preparation, and capacity scheduling.
@@ -136,7 +136,9 @@ Rules that must not drift:
   the active HDMI/ARC/eARC audio output encodings. TrueHD/Atmos/DTS-HD releases
   are preferred and direct-played only when the current native device reports
   matching passthrough support; budget devices and browsers keep the safer
-  WEB-sized/remux-to-AAC path.
+  WEB-sized/remux-to-AAC path. Low-power Android TV and older Chromecast-class
+  devices also prefer AVC/H.264 for 1080p auto-picks when an AVC source is
+  available, while HEVC/AV1 remain available as fallback/manual sources.
 - After ExoPlayer reaches READY, normal buffering must not remount or restart
   a movie from the beginning.
 - Continue Watching follows `docs-continue-watching.md`: one canonical Home card
@@ -373,7 +375,9 @@ When changing persistence, update:
 - Sends native capability claims to the web UI/server before source selection,
   including HDMI/ARC/eARC audio-output passthrough flags for AC3, E-AC3, E-AC3
   JOC, DTS, DTS-HD, and TrueHD. Conservative/budget device detection is allowed
-  to suppress HD-audio passthrough even when a codec appears in MediaCodec.
+  to suppress HD-audio passthrough even when a codec appears in MediaCodec, and
+  low-power devices prefer 1080p AVC/H.264 over HEVC/AV1 for automatic playback
+  to keep startup, seeking, and recovery stable on older Chromecast-class boxes.
 - Sends native playback stats back to the web UI during ExoPlayer playback and
   exposes the stable GitHub APK aliases through a guarded update-link bridge.
 - Shows a native setup/compatibility screen before loading the WebView, refuses

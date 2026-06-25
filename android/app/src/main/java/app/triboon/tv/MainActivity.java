@@ -4279,15 +4279,15 @@ public class MainActivity extends Activity {
         boolean conservative = nativeConservativePlaybackDevice();
         boolean video = "video".equals(mode);
         boolean heavyVod = video && nativeLikelyHeavyVod();
-        int minMs = video ? (conservative ? (heavyVod ? 18000 : 8000) : (heavyVod ? 22000 : 5000)) : (conservative ? 8000 : 4000);
-        int maxMs = video ? (conservative ? (heavyVod ? 90000 : 45000) : (heavyVod ? 120000 : 45000)) : 60000;
-        int startMs = video ? (conservative ? (heavyVod ? 5000 : 2500) : (heavyVod ? 3500 : 900)) : (conservative ? 1800 : 700);
-        int rebufferMs = video ? (conservative ? (heavyVod ? 9000 : 5000) : (heavyVod ? 8000 : 1800)) : (conservative ? 3500 : 1800);
+        int minMs = video ? (conservative ? (heavyVod ? 14000 : 5000) : (heavyVod ? 22000 : 5000)) : (conservative ? 8000 : 4000);
+        int maxMs = video ? (conservative ? (heavyVod ? 75000 : 30000) : (heavyVod ? 120000 : 45000)) : 60000;
+        int startMs = video ? (conservative ? (heavyVod ? 3500 : 1200) : (heavyVod ? 3500 : 900)) : (conservative ? 1800 : 700);
+        int rebufferMs = video ? (conservative ? (heavyVod ? 7000 : 3000) : (heavyVod ? 8000 : 1800)) : (conservative ? 3500 : 1800);
         int targetMb = video
-                ? (conservative ? (heavyVod ? 80 : 32) : (heavyVod ? 160 : 48))
+                ? (conservative ? (heavyVod ? 72 : 24) : (heavyVod ? 160 : 48))
                 : (conservative ? 24 : 48);
         int targetBytes = targetMb * 1024 * 1024;
-        int backBufferMs = video ? (conservative ? (heavyVod ? 8000 : 5000) : (heavyVod ? 12000 : 8000)) : 3000;
+        int backBufferMs = video ? (conservative ? (heavyVod ? 6000 : 3000) : (heavyVod ? 12000 : 8000)) : 3000;
         if (video) {
             Log.i(TAG, "Native VOD buffer profile quality=" + nativeQualityLabel
                     + " sizeMB=" + nativePlaybackSizeBytes / (1024 * 1024)

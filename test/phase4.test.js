@@ -2267,7 +2267,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Live TV should recover faster before the first frame while allowing later provider hiccups');
   assert.match(android, /private DefaultLoadControl nativeLoadControlForMode\(String mode\) \{[\s\S]+nativeConservativePlaybackDevice\(\)[\s\S]+setBufferDurationsMs\(minMs, maxMs, startMs, rebufferMs\)/,
     'native ExoPlayer should use a conservative buffer profile on Onn-class devices without slowing Shield');
-  assert.match(android, /boolean heavyVod = video && nativeLikelyHeavyVod\(\)[\s\S]+int targetMb = video[\s\S]+conservative \? \(heavyVod \? 80 : 32\) : \(heavyVod \? 160 : 48\)[\s\S]+int backBufferMs = video \? \(conservative \? \(heavyVod \? 8000 : 5000\) : \(heavyVod \? 12000 : 8000\)\)/,
+  assert.match(android, /boolean heavyVod = video && nativeLikelyHeavyVod\(\)[\s\S]+int targetMb = video[\s\S]+conservative \? \(heavyVod \? 72 : 24\) : \(heavyVod \? 160 : 48\)[\s\S]+int backBufferMs = video \? \(conservative \? \(heavyVod \? 6000 : 3000\) : \(heavyVod \? 12000 : 8000\)\)/,
     'native ExoPlayer should keep heavy VOD buffers bounded so Android TV devices are not killed by memory pressure');
   assert.match(android, /new ExoPlayer\.Builder\(this, nativeRenderersFactory\(\)\)[\s\S]+setBandwidthMeter\(nativeBandwidthMeterForMode\(mode\)\)[\s\S]+setSeekParameters\(SeekParameters\.CLOSEST_SYNC\)/,
     'native ExoPlayer should use decoder fallback plumbing, seeded bandwidth, and closest-sync seeking');

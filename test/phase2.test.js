@@ -254,6 +254,22 @@ test('scoring: Onn-class Android TV prefers lighter 4K WEB sources over huge rem
   assert.ok(ranked.find((r) => r.name.includes('REMUX')), 'heavy remux remains available in ranked sources');
 });
 
+test('scoring: budget Android TV defaults to safer 1080p AVC when available', () => {
+  const ranked = rankReleases([
+    { name: 'Movie.2024.1080p.BluRay.HEVC-LEGi0N', sizeBytes: 5e9 },
+    { name: 'Movie.2024.1080p.WEB-DL.H.264-NTb', sizeBytes: 7e9 },
+    { name: 'Movie.2024.1080p.WEB-DL.AV1-GRP', sizeBytes: 4e9 },
+  ], {
+    maxResolutionRank: 3,
+    preferResolutionRank: 3,
+    lowPowerDevice: true,
+  });
+  assert.ok(ranked[0].name.includes('H.264-NTb'), 'low-power Android should auto-pick the AVC source first');
+  assert.ok(ranked.find((r) => r.name.includes('HEVC-LEGi0N')).score > -5000, 'HEVC remains available as a fallback/manual source');
+  assert.ok(ranked[0].reasons.some((r) => r.includes('device-safe-avc')),
+    'the compatibility preference is visible in scoring reasons');
+});
+
 test('scoring: streamability and health verdicts shape the order (Triboon edge)', () => {
   const ranked = rankReleases([
     { name: 'Movie.2024.1080p.BluRay.x264-FGT', sizeBytes: 9e9, streamClass: 'compressed' },
