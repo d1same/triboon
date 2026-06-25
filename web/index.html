@@ -2940,6 +2940,16 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
   </div>
 
   <div class="setGrid" data-stab="security" hidden>
+  <div class="panel"><h2>Admin password</h2>
+    <p>Change the owner password. This signs out old sessions immediately.</p>
+    <div class="field">
+      <input id="secPwCurrent" type="password" autocomplete="current-password" placeholder="current password">
+      <input id="secPwNew" type="password" autocomplete="new-password" placeholder="new password">
+      <input id="secPwConfirm" type="password" autocomplete="new-password" placeholder="confirm new password">
+    </div>
+    <div class="settingsActions"><button class="btn primary focusable" id="secPwSave">Change password</button></div>
+    <div class="hint" id="secPwMsg"></div>
+  </div>
   <div class="panel"><h2>Admin two-factor sign-in</h2>
     <p>Protect the owner account with an authenticator app. Existing users are unchanged.</p>
     <div id="sec2faStatus" class="kv"><span>Status</span><span>Checking...</span></div>
@@ -15399,6 +15409,24 @@ wireSectionRailDpad('settings', 'setTabs', 'data-stab');
 $('activityRefresh').addEventListener('click', refreshActivity);
 $('apkTvUpdate').addEventListener('click', () => openApkUpdate('tv'));
 $('apkMobileUpdate').addEventListener('click', () => openApkUpdate('mobile'));
+$('secPwSave').addEventListener('click', async () => {
+  const oldPassword = $('secPwCurrent').value;
+  const newPassword = $('secPwNew').value;
+  const confirmPassword = $('secPwConfirm').value;
+  if (!oldPassword || !newPassword || !confirmPassword) { $('secPwMsg').textContent = 'Enter current password and the new password twice.'; return; }
+  if (newPassword.length < 4) { $('secPwMsg').textContent = 'New password must be at least 4 characters.'; return; }
+  if (newPassword !== confirmPassword) { $('secPwMsg').textContent = 'New passwords do not match.'; return; }
+  try {
+    await api('/api/me/password', { method: 'POST', body: { oldPassword, newPassword } });
+    $('secPwCurrent').value = ''; $('secPwNew').value = ''; $('secPwConfirm').value = '';
+    $('secPwMsg').textContent = 'Password changed. Sign back in with the new password.';
+    $('liErr').textContent = 'Password changed. Sign in with the new password.';
+    tokenStore.set(null);
+    S.user = null;
+    showGate('login');
+    toast('Password changed');
+  } catch (e) { $('secPwMsg').textContent = e.message; }
+});
 $('sec2faSetup').addEventListener('click', async () => {
   const password = $('sec2faPassword').value;
   if (!password) { $('sec2faMsg').textContent = 'Enter the current admin password.'; return; }

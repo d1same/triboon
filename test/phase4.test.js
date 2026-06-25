@@ -574,6 +574,16 @@ test('preferences profile manager has TV-friendly profile icons and add action',
     'profile UI should not reintroduce emoji maturity badges');
 });
 
+test('admin security panel exposes own-password change separately from user resets', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /<button data-tab="security"[\s\S]+<span>Security<\/span><\/button>/,
+    'Server Settings should expose a Security tab for owner account controls');
+  assert.match(ui, /<div class="panel"><h2>Admin password<\/h2>[\s\S]+id="secPwCurrent"[\s\S]+id="secPwNew"[\s\S]+id="secPwConfirm"[\s\S]+id="secPwSave"/,
+    'Security should include a current/new/confirm owner password form');
+  assert.match(ui, /\$\(\'secPwSave\'\)\.addEventListener\('click', async \(\) => \{[\s\S]+newPassword !== confirmPassword[\s\S]+await api\('\/api\/me\/password', \{ method: 'POST', body: \{ oldPassword, newPassword \} \}\)[\s\S]+tokenStore\.set\(null\)[\s\S]+showGate\('login'\)/,
+    'owner password form should validate confirmation, call the own-account password endpoint, and force a clean re-login');
+});
+
 test('music playback stops when leaving the Music section', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   assert.match(ui, /function stopMusicWhenLeavingMusic\(nextView\) \{[\s\S]+if \(nextView === 'music'\) return;[\s\S]+if \(S\.musicCur\) closeMusicPlayer\(\);[\s\S]+S\._musicWasPlaying = false;[\s\S]+\}/,
