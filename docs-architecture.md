@@ -80,7 +80,7 @@ flowchart LR
 
 | Area | Owner files | Notes |
 | --- | --- | --- |
-| Auth and encrypted settings | `server/auth.js`, `server/index.js` | Users, invites, Quick Connect, HKDF-separated HMAC session/stream tokens, session epochs, AES-256-GCM settings. |
+| Auth and encrypted settings | `server/auth.js`, `server/index.js` | Users, invites, Quick Connect, admin TOTP 2FA, HKDF-separated HMAC session/stream tokens, session epochs, AES-256-GCM settings. |
 | Persistence | `server/store.js`, `server/library-db.js` | JSON remains the app state store. `library.sqlite` indexes scanned local-media items only, so 80k+ attached files can page and look up without loading every item into the UI. |
 | Metadata | `server/tmdb.js`, `server/trakt.js`, `server/index.js` | TMDB proxy/cache, encrypted Trakt link tokens, Trakt sync/outbox, profile watch state. |
 | Search and source ranking | `server/newznab.js`, `server/scoring.js`, `server/pipeline.js` | Title-safe matching, quality caps at source selection, health-aware ranking. |
@@ -326,7 +326,7 @@ definitions stay in JSON.
 | --- | --- | --- |
 | `secret` | `server/auth.js` | Generated app secret when `TRIBOON_SECRET` is not supplied. |
 | `settings` | `SecureSettings` | Encrypted admin settings: providers, indexers, TMDB, subtitles, Trakt app and linked Trakt OAuth tokens, Live TV sources, streaming performance profile. |
-| `users`, `invites` | `server/auth.js`, `server/index.js` | Accounts, roles, profile policy, session epoch, invites. |
+| `users`, `invites` | `server/auth.js`, `server/index.js` | Accounts, roles, profile policy, session epoch, invites, encrypted admin TOTP secret, hashed recovery codes. |
 | `watch`, `watchlist` | `server/index.js`, `server/trakt.js` | Per-profile progress, watched state, watchlist, Trakt-imported fallback rows. |
 | `trakt`, `traktOutbox` | `server/trakt.js` | Legacy migration/sync marker bucket and queued scrobble/export operations. OAuth tokens must live encrypted inside `settings.traktTokens`, not plaintext `trakt.json`. |
 | `libraries` | `server/index.js` | Attached local folders, owner visibility, kind, path, and display metadata. |
@@ -398,6 +398,12 @@ When changing persistence, update:
   session tokens are accepted only during normal expiry; stream URLs must use
   the HKDF-scoped key. Password changes bump the user's session epoch so
   already-issued sessions and stream links stop working.
+- Admin two-factor sign-in is optional and additive. When enabled, password
+  login returns only a short-lived TOTP challenge until a valid authenticator
+  code or single-use recovery code is provided. The TOTP secret is encrypted
+  with a key derived separately from the server secret, recovery codes are
+  stored only as scrypt hashes, and enabling/disabling 2FA bumps the session
+  epoch to revoke older sessions.
 - Session-token access to mount helpers is limited to the mount owner; scoped
   stream tokens remain valid only for their bound mount/resource.
 - Restricted local-library stream, art, thumbnail, and play endpoints must use

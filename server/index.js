@@ -3225,6 +3225,17 @@ const H = {
     catch { send(ctx.res, 401, { error: 'invalid credentials' }); }
   },
 
+  login2fa: async (ctx) => {
+    const { challenge, code } = await readJson(ctx.req);
+    const key = `login2fa:${clientIp(ctx)}:${String(challenge || '').slice(-24)}`;
+    if (throttled(ctx, key, { max: 10, windowMs: 15 * 60000, lockMs: 15 * 60000 })) return;
+    try {
+      const r = auth.completeTotpLogin(challenge, code);
+      limiter.clear(key);
+      send(ctx.res, 200, r);
+    } catch (e) { send(ctx.res, 401, { error: e.message }); }
+  },
+
   me: async (ctx) => {
     const s = settings.get();
     const sources = iptvSourcesFromSettings(s);
@@ -3232,10 +3243,46 @@ const H = {
     send(ctx.res, 200, { ...auth.publicUser(ctx.user), iptvAllowed });
   },
 
+  meSecurity: async (ctx) => {
+    send(ctx.res, 200, { twoFactor: auth.twoFactorStatus(ctx.user.id) });
+  },
+
   password: async (ctx) => {
     const { oldPassword, newPassword } = await readJson(ctx.req);
     try { auth.changePassword(ctx.user.id, oldPassword, newPassword); send(ctx.res, 200, { ok: true }); }
     catch (e) { send(ctx.res, 400, { error: e.message }); }
+  },
+
+  totpSetup: async (ctx) => {
+    const b = await readJson(ctx.req);
+    const key = `totp:${ctx.user.id}`;
+    if (throttled(ctx, key, { max: 6, windowMs: 60000, lockMs: 60000 })) return;
+    try { const r = auth.startTotpSetup(ctx.user.id, b.password); limiter.clear(key); send(ctx.res, 200, r); }
+    catch (e) { send(ctx.res, e.message === 'admin only' ? 403 : 400, { error: e.message }); }
+  },
+
+  totpEnable: async (ctx) => {
+    const b = await readJson(ctx.req);
+    const key = `totp:${ctx.user.id}`;
+    if (throttled(ctx, key, { max: 6, windowMs: 60000, lockMs: 60000 })) return;
+    try { const r = auth.enableTotp(ctx.user.id, b.password, b.code); limiter.clear(key); send(ctx.res, 200, r); }
+    catch (e) { send(ctx.res, e.message === 'admin only' ? 403 : 400, { error: e.message }); }
+  },
+
+  totpDisable: async (ctx) => {
+    const b = await readJson(ctx.req);
+    const key = `totp:${ctx.user.id}`;
+    if (throttled(ctx, key, { max: 6, windowMs: 60000, lockMs: 60000 })) return;
+    try { const r = auth.disableTotp(ctx.user.id, b.password, b.code); limiter.clear(key); send(ctx.res, 200, r); }
+    catch (e) { send(ctx.res, e.message === 'admin only' ? 403 : 400, { error: e.message }); }
+  },
+
+  totpRecovery: async (ctx) => {
+    const b = await readJson(ctx.req);
+    const key = `totp:${ctx.user.id}`;
+    if (throttled(ctx, key, { max: 6, windowMs: 60000, lockMs: 60000 })) return;
+    try { const r = auth.regenerateTotpRecovery(ctx.user.id, b.password, b.code); limiter.clear(key); send(ctx.res, 200, r); }
+    catch (e) { send(ctx.res, e.message === 'admin only' ? 403 : 400, { error: e.message }); }
   },
 
   profileAdd: async (ctx) => {
@@ -6011,12 +6058,18 @@ const ROUTES = [
   { m: 'GET', re: /^\/api\/auth-art$/, auth: 'public', h: H.authArt },
   { m: 'POST', re: /^\/api\/setup$/, auth: 'public', h: H.setup },
   { m: 'POST', re: /^\/api\/login$/, auth: 'public', h: H.login },
+  { m: 'POST', re: /^\/api\/login\/2fa$/, auth: 'public', h: H.login2fa },
   { m: 'POST', re: /^\/api\/invite\/accept$/, auth: 'public', h: H.inviteAccept },
   { m: 'POST', re: /^\/api\/quickconnect$/, auth: 'public', h: H.qcCreate },
   { m: 'GET', re: /^\/api\/quickconnect\/(\d{6})$/, auth: 'public', h: H.qcPoll },
   { m: 'POST', re: /^\/api\/quickconnect\/(\d{6})\/approve$/, auth: 'user', h: H.qcApprove },
   { m: 'GET', re: /^\/api\/me$/, auth: 'user', h: H.me },
+  { m: 'GET', re: /^\/api\/me\/security$/, auth: 'user', h: H.meSecurity },
   { m: 'POST', re: /^\/api\/me\/password$/, auth: 'user', h: H.password },
+  { m: 'POST', re: /^\/api\/me\/totp\/setup$/, auth: 'admin', h: H.totpSetup },
+  { m: 'POST', re: /^\/api\/me\/totp\/enable$/, auth: 'admin', h: H.totpEnable },
+  { m: 'POST', re: /^\/api\/me\/totp\/disable$/, auth: 'admin', h: H.totpDisable },
+  { m: 'POST', re: /^\/api\/me\/totp\/recovery$/, auth: 'admin', h: H.totpRecovery },
   { m: 'POST', re: /^\/api\/me\/profiles$/, auth: 'user', h: H.profileAdd },
   { m: 'PATCH', re: /^\/api\/me\/profiles\/(\w+)$/, auth: 'user', h: H.profileEdit },
   { m: 'POST', re: /^\/api\/me\/profiles\/(\w+)\/delete$/, auth: 'user', h: H.profileDelete },

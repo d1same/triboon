@@ -1991,6 +1991,11 @@ body:not(.tv) #settings .setGrid[data-stab="display"]{grid-template-columns:repe
 #settings .setGrid button:not(.themeChoice):focus svg,#prefs .setGrid button:not(.themeChoice):focus svg,
 #settings .setGrid button:not(.themeChoice):focus-visible svg,#prefs .setGrid button:not(.themeChoice):focus-visible svg{
   color:currentColor}
+.sec2faBox{margin-top:14px;padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(11,8,18,.46)}
+.sec2faLabel{margin-top:10px;color:var(--muted);font:800 11px "JetBrains Mono";text-transform:uppercase;letter-spacing:.06em}
+.sec2faMono{margin-top:6px;overflow:auto;word-break:break-all;color:var(--text);font:700 12px "JetBrains Mono";line-height:1.45}
+.sec2faCodes{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.sec2faCodes span{border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:7px 9px;background:rgba(255,255,255,.04);font:800 12px "JetBrains Mono";color:var(--text)}
 .ytmConnect{display:grid;grid-template-columns:auto minmax(0,1fr);gap:14px;align-items:start;padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(22,16,32,.56)}
 .ytmConnectIcon{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;background:var(--btnPrimary);color:var(--onAccent);border:0}
 .ytmConnectIcon svg{width:24px;height:24px}
@@ -2336,6 +2341,11 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
     <div class="sub">Sign in to your server.</div>
     <label>Name</label><input id="liName" autocomplete="username">
     <label>Password</label><input id="liPass" type="password" autocomplete="current-password">
+    <div id="li2fa" hidden>
+      <label>Authenticator code</label><input id="liCode" inputmode="numeric" autocomplete="one-time-code" maxlength="12">
+      <div class="sub">Enter the 6-digit code or a recovery code.</div>
+      <div class="alt"><button id="liBack">Use a different account</button></div>
+    </div>
     <button class="btn primary" id="liGo">Sign in</button>
     <div class="err" id="liErr"></div>
     <div class="alt">On a TV? <button id="qcStart">Use Quick Connect</button></div>
@@ -2859,6 +2869,7 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
   <div id="setTabs">
     <button data-tab="server" class="on focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8M8 13h5"/></svg><span>Status</span></button>
     <button data-tab="activity" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h4l2-5 4 10 2-5h4"/><circle cx="19" cy="6" r="2"/></svg><span>Now Watching</span></button>
+    <button data-tab="security" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3 19 6v5c0 4.4-2.8 7.7-7 9.4-4.2-1.7-7-5-7-9.4V6l7-3Z"/><path d="m9 12 2 2 4-4"/></svg><span>Security</span></button>
     <button data-tab="sources" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h10"/><circle cx="18" cy="17" r="2"/></svg><span>Providers</span></button>
     <button data-tab="catalog" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="4" width="14" height="16" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/></svg><span>Catalog</span></button>
     <button data-tab="livetv" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="6" width="16" height="12" rx="2"/><path d="M9 3l3 3 3-3"/></svg><span>Live TV</span></button>
@@ -2925,6 +2936,32 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
     <div id="activityList" class="activityRows"><div class="hint">No one is watching right now.</div></div>
     <div class="settingsActions"><button class="btn primary focusable" id="activityRefresh">Refresh</button></div>
     <div class="hint" id="activityStatus"></div>
+  </div>
+  </div>
+
+  <div class="setGrid" data-stab="security" hidden>
+  <div class="panel"><h2>Admin two-factor sign-in</h2>
+    <p>Protect the owner account with an authenticator app. Existing users are unchanged.</p>
+    <div id="sec2faStatus" class="kv"><span>Status</span><span>Checking...</span></div>
+    <div class="field">
+      <input id="sec2faPassword" type="password" autocomplete="current-password" placeholder="current admin password">
+      <input id="sec2faCode" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code or recovery code">
+    </div>
+    <div class="settingsActions">
+      <button class="btn primary focusable" id="sec2faSetup">Start setup</button>
+      <button class="btn primary focusable" id="sec2faEnable">Verify and enable</button>
+      <button class="btn ghost focusable" id="sec2faRecovery">New recovery codes</button>
+      <button class="btn ghost focusable" id="sec2faDisable">Disable 2FA</button>
+    </div>
+    <div id="sec2faSetupBox" class="sec2faBox" hidden>
+      <div class="hint">Add this manual key to your authenticator app, then enter the 6-digit code above.</div>
+      <div class="sec2faLabel">Manual key</div>
+      <div class="sec2faMono" id="sec2faSecret"></div>
+      <div class="sec2faLabel">Authenticator URL</div>
+      <div class="sec2faMono" id="sec2faUrl"></div>
+    </div>
+    <div id="sec2faCodes" class="sec2faBox" hidden></div>
+    <div class="hint" id="sec2faMsg"></div>
   </div>
   </div>
 
@@ -3330,6 +3367,7 @@ const S = {
   view: 'home', zone: 'rows', rowIdx: 0, colIdx: {}, heroIdx: 0, railIdx: 0, drawerIdx: 0, drawerSortIdx: 0, ctlIdx: 1,
   playing: null,      // { sessionId, streamUrl, remuxUrl, item, name, usingRemux, remuxBase, startOffset, duration }
   osdTimer: null, healthTimer: null, watchTimer: null, activityTimer: null, qcTimer: null, sourceSort: 'best',
+  loginChallenge: null,
   streamingRuntime: null, playbackRuntime: null, runtimeStatsAt: 0, runtimeStatsPending: false,
 };
 const perf0 = performance.now();
@@ -3560,6 +3598,7 @@ function adaptRowWindows() {
 window.addEventListener('resize', () => { clearTimeout(adaptRowWindows._t); adaptRowWindows._t = setTimeout(applyCoverSize, 80); });
 function showGate(which) {
   if (which) $('appLoader').classList.add('hide'); // gate screens: drop the boot loader (app path hides it after content loads)
+  if (which === 'login') setLogin2faMode(null);
   document.body.classList.toggle('authOpen', !!which);
   if (which) ensureGateArt(); else stopGateArtCycle();
   for (const g of ['gateSetup', 'gateLogin', 'gateQc', 'gateInvite', 'gateProfiles', 'gatePin']) $(g).classList.remove('open');
@@ -3710,6 +3749,17 @@ async function addProfileFlow() {
     selectProfile(pr);
   } catch (e) { toast(e.message); }
 }
+function setLogin2faMode(challenge) {
+  S.loginChallenge = challenge || null;
+  const on = !!S.loginChallenge;
+  $('li2fa').hidden = !on;
+  $('liName').disabled = on;
+  $('liPass').disabled = on;
+  $('liGo').textContent = on ? 'Verify code' : 'Sign in';
+  if (!on) $('liCode').value = '';
+  $('liErr').textContent = '';
+  if (on) setTimeout(() => $('liCode').focus(), 30);
+}
 $('suGo').addEventListener('click', async () => {
   try {
     const r = await api('/api/setup', { method: 'POST', body: { name: $('suName').value.trim(), password: $('suPass').value } });
@@ -3720,12 +3770,25 @@ $('suGo').addEventListener('click', async () => {
 });
 $('liGo').addEventListener('click', doLogin);
 $('liPass').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+$('liCode').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+$('liBack').addEventListener('click', () => setLogin2faMode(null));
 async function doLogin() {
   try {
+    if (S.loginChallenge) {
+      const r = await api('/api/login/2fa', { method: 'POST', body: { challenge: S.loginChallenge, code: $('liCode').value.trim() } });
+      tokenStore.set(r.token); S.user = r.user;
+      setLogin2faMode(null);
+      await enterApp();
+      return;
+    }
     const r = await api('/api/login', { method: 'POST', body: { name: $('liName').value.trim(), password: $('liPass').value } });
+    if (r.twoFactorRequired) {
+      setLogin2faMode(r.challenge);
+      return;
+    }
     tokenStore.set(r.token); S.user = r.user;
     await enterApp();
-  } catch (e) { $('liErr').textContent = 'Invalid name or password'; }
+  } catch (e) { $('liErr').textContent = S.loginChallenge ? 'Invalid authenticator or recovery code' : 'Invalid name or password'; }
 }
 $('ivGo').addEventListener('click', async () => {
   const inviteToken = new URLSearchParams(location.search).get('invite');
@@ -14782,6 +14845,32 @@ async function refreshActivity() {
     $('activityStatus').textContent = '';
   }
 }
+function renderSecurity(sec = {}) {
+  const t = sec.twoFactor || {};
+  $('sec2faStatus').innerHTML = `<span>Status</span><span>${t.enabled ? `Enabled - ${t.recoveryCodesRemaining || 0} recovery code${t.recoveryCodesRemaining === 1 ? '' : 's'} left` : 'Off'}</span>`;
+  $('sec2faSetup').disabled = !!t.enabled;
+  $('sec2faEnable').disabled = !!t.enabled || !S.twoFactorSetup;
+  $('sec2faDisable').disabled = !t.enabled;
+  $('sec2faRecovery').disabled = !t.enabled;
+  if (t.enabled) {
+    $('sec2faSetupBox').hidden = true;
+    S.twoFactorSetup = null;
+  }
+}
+async function refreshSecurity() {
+  try {
+    renderSecurity(await api('/api/me/security'));
+  } catch (e) {
+    $('sec2faStatus').innerHTML = `<span>Status</span><span>${esc(e.message)}</span>`;
+  }
+}
+function showTwoFactorCodes(codes) {
+  const box = $('sec2faCodes');
+  if (!codes || !codes.length) { box.hidden = true; box.innerHTML = ''; return; }
+  box.hidden = false;
+  box.innerHTML = `<div class="hint">Save these recovery codes now. Each code works once.</div>
+    <div class="sec2faCodes">${codes.map((c) => `<span>${esc(c)}</span>`).join('')}</div>`;
+}
 async function refreshSettings() {
   try {
     const st = await api('/api/status');
@@ -14799,6 +14888,7 @@ async function refreshSettings() {
       <div class="kv"><span>yt-dlp (music)</span><span>${st.ytdlp ? esc(st.ytdlp) + ' — Music enabled' : 'not found — Music tab hidden'}</span></div>
       <div class="kv"><span>Active mounts</span><span>${st.mounts}</span></div>`;
     refreshActivity();
+    refreshSecurity();
     const s = await api('/api/settings');
     setPerfForm(s.streamingPerformance || {});
     S.perfRecommendation = null;
@@ -15309,6 +15399,60 @@ wireSectionRailDpad('settings', 'setTabs', 'data-stab');
 $('activityRefresh').addEventListener('click', refreshActivity);
 $('apkTvUpdate').addEventListener('click', () => openApkUpdate('tv'));
 $('apkMobileUpdate').addEventListener('click', () => openApkUpdate('mobile'));
+$('sec2faSetup').addEventListener('click', async () => {
+  const password = $('sec2faPassword').value;
+  if (!password) { $('sec2faMsg').textContent = 'Enter the current admin password.'; return; }
+  try {
+    const r = await api('/api/me/totp/setup', { method: 'POST', body: { password } });
+    S.twoFactorSetup = r;
+    $('sec2faSecret').textContent = r.secret;
+    $('sec2faUrl').textContent = r.otpauthUrl;
+    $('sec2faSetupBox').hidden = false;
+    showTwoFactorCodes(null);
+    $('sec2faMsg').textContent = 'Enter the authenticator code to enable.';
+    renderSecurity({ twoFactor: { enabled: false, pending: true, recoveryCodesRemaining: 0 } });
+    $('sec2faCode').focus();
+  } catch (e) { $('sec2faMsg').textContent = e.message; }
+});
+$('sec2faEnable').addEventListener('click', async () => {
+  const password = $('sec2faPassword').value;
+  const code = $('sec2faCode').value.trim();
+  if (!password || !code) { $('sec2faMsg').textContent = 'Enter password and code.'; return; }
+  try {
+    const r = await api('/api/me/totp/enable', { method: 'POST', body: { password, code } });
+    tokenStore.set(r.token); S.user = r.user; S.twoFactorSetup = null;
+    $('sec2faPassword').value = ''; $('sec2faCode').value = ''; $('sec2faSetupBox').hidden = true;
+    showTwoFactorCodes(r.recoveryCodes || []);
+    $('sec2faMsg').textContent = 'Two-factor sign-in enabled.';
+    await refreshSecurity();
+  } catch (e) { $('sec2faMsg').textContent = e.message; }
+});
+$('sec2faRecovery').addEventListener('click', async () => {
+  const password = $('sec2faPassword').value;
+  const code = $('sec2faCode').value.trim();
+  if (!password || !code) { $('sec2faMsg').textContent = 'Enter password and code.'; return; }
+  try {
+    const r = await api('/api/me/totp/recovery', { method: 'POST', body: { password, code } });
+    $('sec2faCode').value = '';
+    showTwoFactorCodes(r.recoveryCodes || []);
+    $('sec2faMsg').textContent = 'Recovery codes replaced.';
+    await refreshSecurity();
+  } catch (e) { $('sec2faMsg').textContent = e.message; }
+});
+$('sec2faDisable').addEventListener('click', async () => {
+  const password = $('sec2faPassword').value;
+  const code = $('sec2faCode').value.trim();
+  if (!password || !code) { $('sec2faMsg').textContent = 'Enter password and code.'; return; }
+  if (!confirm('Disable two-factor sign-in for the admin account?')) return;
+  try {
+    const r = await api('/api/me/totp/disable', { method: 'POST', body: { password, code } });
+    tokenStore.set(r.token); S.user = r.user; S.twoFactorSetup = null;
+    $('sec2faPassword').value = ''; $('sec2faCode').value = ''; $('sec2faSetupBox').hidden = true;
+    showTwoFactorCodes(null);
+    $('sec2faMsg').textContent = 'Two-factor sign-in disabled.';
+    await refreshSecurity();
+  } catch (e) { $('sec2faMsg').textContent = e.message; }
+});
 $('invGo').addEventListener('click', async () => {
   const r = await api('/api/invites', { method: 'POST', body: { policy: { maxResolutionRank: parseInt($('invCap').value, 10) } } });
   const link = `${location.origin}/?invite=${r.token}`;

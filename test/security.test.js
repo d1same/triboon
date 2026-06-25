@@ -11,6 +11,7 @@ const http = require('http');
 const crypto = require('crypto');
 const zlib = require('zlib');
 const { httpJson, httpRaw, bootServer, setupAdmin } = require('./helpers');
+const { totpCode } = require('../server/auth');
 const { createMockNntp } = require('./mock-nntp');
 const { encodePart } = require('../server/yenc');
 const { seededPayload, writeRar4Store } = require('./archive-fixtures');
@@ -34,6 +35,10 @@ function legacySignedToken(auth, claims, ttlMs = 60000) {
   const payload = Buffer.from(JSON.stringify({ ...claims, exp: Date.now() + ttlMs })).toString('base64url');
   const sig = crypto.createHmac('sha256', auth.secret).update(payload).digest('base64url');
   return `${payload}.${sig}`;
+}
+
+function normalizeTestRecovery(code) {
+  return String(code || '').toUpperCase().replace(/[^A-Z2-7]/g, '');
 }
 
 function nzbFor(volumes, partSize, prefix) {
@@ -145,7 +150,8 @@ test('security: deny-by-default — every route declares auth; unknown routes 40
 
   // 3. Every non-public route rejects anonymous and garbage-token requests.
   const probes = [
-    ['GET', '/api/me'], ['GET', '/api/status'], ['GET', '/api/search?q=x'],
+    ['GET', '/api/me'], ['GET', '/api/me/security'], ['POST', '/api/me/totp/setup'], ['POST', '/api/me/totp/enable'],
+    ['POST', '/api/me/totp/disable'], ['POST', '/api/me/totp/recovery'], ['GET', '/api/status'], ['GET', '/api/search?q=x'],
     ['POST', '/api/play'], ['POST', '/api/advance/abc'], ['GET', '/api/tmdb/trending/all/week'],
     ['GET', '/api/watch'], ['GET', '/api/watch/next'], ['POST', '/api/watch'], ['GET', '/api/activity'], ['POST', '/api/activity'], ['GET', '/api/mounts'],
     ['GET', '/api/health/abc'], ['POST', '/api/mount'], ['GET', '/api/settings'],
@@ -180,7 +186,8 @@ test('security: role separation — user tokens cannot reach admin routes', asyn
   for (const [m, p] of [['GET', '/api/settings'], ['POST', '/api/settings'], ['POST', '/api/invites'],
     ['GET', '/api/invites'], ['GET', '/api/users'], ['POST', '/api/mount'],
     ['POST', '/api/libraries'], ['DELETE', '/api/libraries/abc'], ['POST', '/api/streaming/recommend'],
-    ['GET', '/api/iptv/status'], ['POST', '/api/iptv/refresh']]) {
+    ['GET', '/api/iptv/status'], ['POST', '/api/iptv/refresh'],
+    ['POST', '/api/me/totp/setup'], ['POST', '/api/me/totp/enable'], ['POST', '/api/me/totp/disable'], ['POST', '/api/me/totp/recovery']]) {
     assert.strictEqual((await httpJson(srv.port, m, p, {}, user)).status, 403, `user → ${m} ${p}`);
   }
   // …but user routes work.
@@ -2594,6 +2601,91 @@ test('trakt: device link, scrobble forward, watchlist push + import', async () =
   }
   delete process.env.TRAKT_BASE;
   mock.close();
+});
+
+test('admin 2FA: encrypted TOTP setup, challenge login, recovery codes, and disable flow', async () => {
+  const initial = await httpJson(srv.port, 'GET', '/api/me/security', null, admin);
+  assert.strictEqual(initial.status, 200);
+  assert.strictEqual(initial.json.twoFactor.enabled, false);
+
+  const badSetup = await httpJson(srv.port, 'POST', '/api/me/totp/setup', { password: 'wrong' }, admin);
+  assert.strictEqual(badSetup.status, 400);
+
+  const setup = await httpJson(srv.port, 'POST', '/api/me/totp/setup', { password: 'hunter22' }, admin);
+  assert.strictEqual(setup.status, 200);
+  assert.match(setup.json.secret, /^[A-Z2-7]{32}$/);
+  assert.ok(setup.json.otpauthUrl.startsWith('otpauth://totp/'), 'authenticator URL returned');
+  srv.store.flush();
+  let rawUsers = fs.readFileSync(path.join(srv.store.dir, 'users.json'), 'utf8');
+  assert.ok(!rawUsers.includes(setup.json.secret), 'pending TOTP secret is encrypted at rest');
+
+  const badEnable = await httpJson(srv.port, 'POST', '/api/me/totp/enable',
+    { password: 'hunter22', code: '000000' }, admin);
+  assert.strictEqual(badEnable.status, 400);
+
+  const oldAdmin = admin;
+  const enable = await httpJson(srv.port, 'POST', '/api/me/totp/enable',
+    { password: 'hunter22', code: totpCode(setup.json.secret) }, admin);
+  assert.strictEqual(enable.status, 200);
+  assert.strictEqual(enable.json.user.twoFactorEnabled, true);
+  assert.strictEqual(enable.json.recoveryCodes.length, 8);
+  admin = enable.json.token;
+  assert.strictEqual((await httpJson(srv.port, 'GET', '/api/me', null, oldAdmin)).status, 401,
+    'enabling 2FA revokes older sessions');
+
+  const passwordOnly = await httpJson(srv.port, 'POST', '/api/login', { name: 'owner', password: 'hunter22' });
+  assert.strictEqual(passwordOnly.status, 200);
+  assert.strictEqual(passwordOnly.json.twoFactorRequired, true);
+  assert.ok(passwordOnly.json.challenge);
+  assert.ok(!passwordOnly.json.token, 'password-only login does not issue a session when 2FA is enabled');
+
+  const bad2fa = await httpJson(srv.port, 'POST', '/api/login/2fa',
+    { challenge: passwordOnly.json.challenge, code: '000000' });
+  assert.strictEqual(bad2fa.status, 401);
+
+  const good2fa = await httpJson(srv.port, 'POST', '/api/login/2fa',
+    { challenge: passwordOnly.json.challenge, code: totpCode(setup.json.secret) });
+  assert.strictEqual(good2fa.status, 200);
+  assert.strictEqual((await httpJson(srv.port, 'GET', '/api/me', null, good2fa.json.token)).json.twoFactorEnabled, true);
+
+  const recoveryCode = enable.json.recoveryCodes[0];
+  const recoveryChallenge = await httpJson(srv.port, 'POST', '/api/login', { name: 'owner', password: 'hunter22' });
+  const recoveryLogin = await httpJson(srv.port, 'POST', '/api/login/2fa',
+    { challenge: recoveryChallenge.json.challenge, code: recoveryCode });
+  assert.strictEqual(recoveryLogin.status, 200);
+  assert.strictEqual(recoveryLogin.json.recoveryUsed, true);
+
+  const replayChallenge = await httpJson(srv.port, 'POST', '/api/login', { name: 'owner', password: 'hunter22' });
+  const replay = await httpJson(srv.port, 'POST', '/api/login/2fa',
+    { challenge: replayChallenge.json.challenge, code: recoveryCode });
+  assert.strictEqual(replay.status, 401, 'recovery codes are single-use');
+  const afterRecovery = await httpJson(srv.port, 'GET', '/api/me/security', null, admin);
+  assert.strictEqual(afterRecovery.json.twoFactor.recoveryCodesRemaining, 7);
+
+  srv.store.flush();
+  rawUsers = fs.readFileSync(path.join(srv.store.dir, 'users.json'), 'utf8');
+  assert.ok(!rawUsers.includes(setup.json.secret), 'enabled TOTP secret is encrypted at rest');
+  assert.ok(!rawUsers.includes(normalizeTestRecovery(recoveryCode)), 'recovery codes are hashed at rest');
+
+  const regen = await httpJson(srv.port, 'POST', '/api/me/totp/recovery',
+    { password: 'hunter22', code: totpCode(setup.json.secret) }, admin);
+  assert.strictEqual(regen.status, 200);
+  assert.strictEqual(regen.json.recoveryCodes.length, 8);
+
+  const disableBad = await httpJson(srv.port, 'POST', '/api/me/totp/disable',
+    { password: 'hunter22', code: '000000' }, admin);
+  assert.strictEqual(disableBad.status, 400);
+  const disable = await httpJson(srv.port, 'POST', '/api/me/totp/disable',
+    { password: 'hunter22', code: totpCode(setup.json.secret) }, admin);
+  assert.strictEqual(disable.status, 200);
+  assert.strictEqual(disable.json.user.twoFactorEnabled, false);
+  admin = disable.json.token;
+
+  const openLogin = await httpJson(srv.port, 'POST', '/api/login', { name: 'owner', password: 'hunter22' });
+  assert.strictEqual(openLogin.status, 200);
+  assert.ok(openLogin.json.token);
+  assert.ok(!openLogin.json.twoFactorRequired);
+  admin = openLogin.json.token;
 });
 
 test('password change: requires the current password, old one stops working', async () => {

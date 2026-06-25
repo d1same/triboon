@@ -13,6 +13,11 @@ const STREAM_TTL_MS = 6 * 3600 * 1000;        // stream link: 6 hours (covers an
 const STABLE_STREAM_BUCKET_MS = 60 * 60 * 1000; // cache-stable URLs, still max 6h validity
 const INVITE_TTL_MS = 48 * 3600 * 1000;
 const QC_TTL_MS = 60 * 1000;
+const TOTP_CHALLENGE_TTL_MS = 5 * 60 * 1000;
+const TOTP_PERIOD_SEC = 30;
+const TOTP_DIGITS = 6;
+const TOTP_ISSUER = 'Triboon';
+const BASE32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
 function deriveKey(secret, label) {
   return Buffer.from(crypto.hkdfSync(
@@ -53,6 +58,69 @@ function verifyPassword(password, salt, hash) {
   return got.length === want.length && crypto.timingSafeEqual(got, want);
 }
 
+function base32Encode(buf) {
+  let bits = 0, value = 0, out = '';
+  for (const b of buf) {
+    value = (value << 8) | b;
+    bits += 8;
+    while (bits >= 5) {
+      out += BASE32[(value >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) out += BASE32[(value << (5 - bits)) & 31];
+  return out;
+}
+
+function base32Decode(input) {
+  const clean = String(input || '').toUpperCase().replace(/=+$/g, '').replace(/[^A-Z2-7]/g, '');
+  let bits = 0, value = 0;
+  const out = [];
+  for (const ch of clean) {
+    const idx = BASE32.indexOf(ch);
+    if (idx < 0) continue;
+    value = (value << 5) | idx;
+    bits += 5;
+    if (bits >= 8) {
+      out.push((value >>> (bits - 8)) & 255);
+      bits -= 8;
+    }
+  }
+  return Buffer.from(out);
+}
+
+function totpCode(secret, at = Date.now(), offset = 0) {
+  const key = base32Decode(secret);
+  const counter = Math.floor(at / 1000 / TOTP_PERIOD_SEC) + offset;
+  const msg = Buffer.alloc(8);
+  msg.writeBigUInt64BE(BigInt(Math.max(0, counter)));
+  const h = crypto.createHmac('sha1', key).update(msg).digest();
+  const o = h[h.length - 1] & 0x0f;
+  const n = ((h[o] & 0x7f) << 24) | (h[o + 1] << 16) | (h[o + 2] << 8) | h[o + 3];
+  return String(n % (10 ** TOTP_DIGITS)).padStart(TOTP_DIGITS, '0');
+}
+
+function verifyTotpCode(secret, code, at = Date.now()) {
+  const got = String(code || '').trim();
+  if (!/^\d{6}$/.test(got)) return false;
+  for (const offset of [-1, 0, 1]) {
+    const want = totpCode(secret, at, offset);
+    const a = Buffer.from(got);
+    const b = Buffer.from(want);
+    if (a.length === b.length && crypto.timingSafeEqual(a, b)) return true;
+  }
+  return false;
+}
+
+function normalizeRecoveryCode(code) {
+  return String(code || '').toUpperCase().replace(/[^A-Z2-7]/g, '');
+}
+
+function generateRecoveryCode() {
+  const raw = base32Encode(crypto.randomBytes(6)).slice(0, 10);
+  return `${raw.slice(0, 5)}-${raw.slice(5)}`;
+}
+
 class Auth {
   constructor(store, secret) {
     this.store = store;
@@ -64,6 +132,7 @@ class Auth {
       this.secret = sec.value;
     }
     this.tokenKey = deriveKey(this.secret, 'auth-token-hmac-v1');
+    this.totpKey = deriveKey(this.secret, 'admin-totp-aes-gcm-v1');
     this.quickConnect = new Map(); // code -> { createdAt, deviceName, token? }
   }
 
@@ -92,6 +161,7 @@ class Auth {
 
   publicUser(u) {
     return { id: u.id, name: u.name, role: u.role, policy: u.policy,
+      twoFactorEnabled: !!(u.totp && u.totp.enabled),
       profiles: (u.profiles || []).map((p) => this.publicProfile(p)) };
   }
 
@@ -207,10 +277,144 @@ class Auth {
     return true;
   }
 
+  sessionForUser(u) {
+    return this.signToken({ uid: u.id, role: u.role, scope: 'session', epoch: u.sessionEpoch || 0 }, TOKEN_TTL_MS);
+  }
+
+  _encryptTotpSecret(secret) {
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv('aes-256-gcm', this.totpKey, iv);
+    const ct = Buffer.concat([cipher.update(String(secret), 'utf8'), cipher.final()]);
+    return { v: 1, iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), data: ct.toString('base64') };
+  }
+
+  _decryptTotpSecret(blob) {
+    if (!blob || !blob.iv || !blob.tag || !blob.data) throw new Error('2FA secret is missing');
+    const decipher = crypto.createDecipheriv('aes-256-gcm', this.totpKey, Buffer.from(blob.iv, 'base64'));
+    decipher.setAuthTag(Buffer.from(blob.tag, 'base64'));
+    return Buffer.concat([decipher.update(Buffer.from(blob.data, 'base64')), decipher.final()]).toString('utf8');
+  }
+
+  _assertAdminWithPassword(u, accountPassword) {
+    if (!u || u.role !== 'admin') throw new Error('admin only');
+    if (!verifyPassword(String(accountPassword || ''), u.salt, u.hash)) throw new Error('current password incorrect');
+  }
+
+  _verifyTotpOrRecovery(u, code) {
+    if (!u || !u.totp || !u.totp.enabled) throw new Error('2FA is not enabled');
+    const secret = this._decryptTotpSecret(u.totp.secret);
+    if (verifyTotpCode(secret, code)) return { ok: true, recoveryUsed: false };
+    const normalized = normalizeRecoveryCode(code);
+    if (normalized.length >= 8) {
+      const recovery = Array.isArray(u.totp.recovery) ? u.totp.recovery : [];
+      for (let i = 0; i < recovery.length; i++) {
+        const h = recovery[i];
+        if (h && verifyPassword(normalized, h.salt, h.hash)) {
+          recovery.splice(i, 1);
+          u.totp.recovery = recovery;
+          return { ok: true, recoveryUsed: true };
+        }
+      }
+    }
+    return { ok: false, recoveryUsed: false };
+  }
+
+  twoFactorStatus(uid) {
+    const u = this.getUser(uid);
+    const t = u && u.totp;
+    return {
+      enabled: !!(t && t.enabled),
+      pending: !!(t && t.pending),
+      recoveryCodesRemaining: t && Array.isArray(t.recovery) ? t.recovery.length : 0,
+    };
+  }
+
+  startTotpSetup(uid, accountPassword) {
+    const users = this._users();
+    const u = users.list.find((x) => x.id === uid);
+    this._assertAdminWithPassword(u, accountPassword);
+    const secret = base32Encode(crypto.randomBytes(20));
+    const label = `${TOTP_ISSUER}:${u.name}`;
+    const otpauthUrl = `otpauth://totp/${encodeURIComponent(label)}?secret=${secret}&issuer=${encodeURIComponent(TOTP_ISSUER)}&period=${TOTP_PERIOD_SEC}&digits=${TOTP_DIGITS}`;
+    u.totp = {
+      ...(u.totp || {}),
+      pending: this._encryptTotpSecret(secret),
+      pendingAt: new Date().toISOString(),
+    };
+    this._saveUsers(users);
+    return { secret, otpauthUrl, issuer: TOTP_ISSUER, account: u.name, period: TOTP_PERIOD_SEC, digits: TOTP_DIGITS };
+  }
+
+  enableTotp(uid, accountPassword, code) {
+    const users = this._users();
+    const u = users.list.find((x) => x.id === uid);
+    this._assertAdminWithPassword(u, accountPassword);
+    if (!u.totp || !u.totp.pending) throw new Error('start 2FA setup first');
+    const secret = this._decryptTotpSecret(u.totp.pending);
+    if (!verifyTotpCode(secret, code)) throw new Error('invalid 2FA code');
+    const recoveryCodes = Array.from({ length: 8 }, () => generateRecoveryCode());
+    u.totp = {
+      enabled: true,
+      secret: this._encryptTotpSecret(secret),
+      recovery: recoveryCodes.map((c) => hashPassword(normalizeRecoveryCode(c))),
+      enabledAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    u.sessionEpoch = (u.sessionEpoch || 0) + 1;
+    this._saveUsers(users);
+    return { ok: true, user: this.publicUser(u), token: this.sessionForUser(u), recoveryCodes };
+  }
+
+  disableTotp(uid, accountPassword, code) {
+    const users = this._users();
+    const u = users.list.find((x) => x.id === uid);
+    this._assertAdminWithPassword(u, accountPassword);
+    if (u.totp && u.totp.enabled) {
+      const verdict = this._verifyTotpOrRecovery(u, code);
+      if (!verdict.ok) throw new Error('invalid 2FA code');
+    }
+    delete u.totp;
+    u.sessionEpoch = (u.sessionEpoch || 0) + 1;
+    this._saveUsers(users);
+    return { ok: true, user: this.publicUser(u), token: this.sessionForUser(u) };
+  }
+
+  regenerateTotpRecovery(uid, accountPassword, code) {
+    const users = this._users();
+    const u = users.list.find((x) => x.id === uid);
+    this._assertAdminWithPassword(u, accountPassword);
+    const verdict = this._verifyTotpOrRecovery(u, code);
+    if (!verdict.ok) throw new Error('invalid 2FA code');
+    const recoveryCodes = Array.from({ length: 8 }, () => generateRecoveryCode());
+    u.totp.recovery = recoveryCodes.map((c) => hashPassword(normalizeRecoveryCode(c)));
+    u.totp.updatedAt = new Date().toISOString();
+    this._saveUsers(users);
+    return { ok: true, recoveryCodes, recoveryCodesRemaining: u.totp.recovery.length };
+  }
+
   login(name, password) {
     const u = this._users().list.find((x) => x.name.toLowerCase() === String(name).toLowerCase());
     if (!u || !verifyPassword(String(password), u.salt, u.hash)) throw new Error('invalid credentials');
-    return { token: this.signToken({ uid: u.id, role: u.role, scope: 'session', epoch: u.sessionEpoch || 0 }, TOKEN_TTL_MS), user: this.publicUser(u) };
+    if (u.role === 'admin' && u.totp && u.totp.enabled) {
+      return {
+        twoFactorRequired: true,
+        challenge: this.signToken({ uid: u.id, role: u.role, scope: 'totp', epoch: u.sessionEpoch || 0 }, TOTP_CHALLENGE_TTL_MS),
+        user: this.publicUser(u),
+      };
+    }
+    return { token: this.sessionForUser(u), user: this.publicUser(u) };
+  }
+
+  completeTotpLogin(challenge, code) {
+    const claims = this.verifyToken(challenge, 'totp');
+    if (!claims) throw new Error('2FA challenge expired');
+    const users = this._users();
+    const u = users.list.find((x) => x.id === claims.uid);
+    if (!u || !this.claimsValidForUser(claims, u)) throw new Error('2FA challenge expired');
+    const verdict = this._verifyTotpOrRecovery(u, code);
+    if (!verdict.ok) throw new Error('invalid 2FA code');
+    if (verdict.recoveryUsed) this._saveUsers(users);
+    return { token: this.sessionForUser(u), user: this.publicUser(u), recoveryUsed: verdict.recoveryUsed };
   }
 
   getUser(uid) {
@@ -384,4 +588,4 @@ class SecureSettings {
   update(mutator) { return this.set(mutator(this.get())); }
 }
 
-module.exports = { Auth, SecureSettings, RateLimiter, hashPassword, verifyPassword, deriveKey };
+module.exports = { Auth, SecureSettings, RateLimiter, hashPassword, verifyPassword, deriveKey, totpCode };
