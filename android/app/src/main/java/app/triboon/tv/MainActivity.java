@@ -171,7 +171,7 @@ public class MainActivity extends Activity {
     private ObjectAnimator nativeLoadingLaneAnimator;
     private int nativeLoadingToken;
     private int nativeLoadingStatusIndex;
-    private final String[] nativeLoadingStatuses = new String[]{"Preparing", "Mounting", "Checking health..."};
+    private final String[] nativeLoadingStatuses = new String[]{"Preparing", "Finding source", "Mounting", "Checking health...", "Starting stream"};
     private final Runnable nativeLoadingStatusTick = new Runnable() {
         @Override public void run() {
             if (nativeLoading == null || nativeLoading.getVisibility() != View.VISIBLE || nativeLoadingStatus == null) return;

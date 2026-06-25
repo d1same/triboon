@@ -5330,13 +5330,13 @@ async function play(it, pick) {
     const tried = (e.detail && e.detail.attempts || []).length;
     toast(`No playable source — ${e.message}${tried ? ` (${tried} tried)` : ''}`);
   } finally {
-    if (S.view !== 'player') { clearTimeout(S._stageT1); clearTimeout(S._stageT2); }
+    if (S.view !== 'player') clearPlayerLoadingStages();
     btns.forEach((b) => { b.disabled = false; });
     if (S.view === 'home' && S.focusedItem) setHero(S.focusedItem);
   }
 }
 // Full-screen loading: cover + film reel + a living stage line (no toast chatter).
-const PLAYER_LOADING_STAGES = ['Preparing', 'Mounting', 'Checking health...'];
+const PLAYER_LOADING_STAGES = ['Preparing', 'Finding source', 'Mounting', 'Checking health...', 'Starting stream'];
 function rememberPlayerReturn() {
   if (S.view === 'player') return;
   S.playerReturn = {
@@ -5351,11 +5351,15 @@ function setPlayerLoadingStage(idx) {
   if (!el) return;
   el.textContent = PLAYER_LOADING_STAGES[Math.max(0, Math.min(PLAYER_LOADING_STAGES.length - 1, idx || 0))];
 }
+function clearPlayerLoadingStages() {
+  if (Array.isArray(S._stageTimers)) S._stageTimers.forEach((t) => clearTimeout(t));
+  S._stageTimers = [];
+}
 function startPlayerLoadingStages() {
-  clearTimeout(S._stageT1); clearTimeout(S._stageT2);
+  clearPlayerLoadingStages();
   setPlayerLoadingStage(0);
-  S._stageT1 = setTimeout(() => setPlayerLoadingStage(1), 850);
-  S._stageT2 = setTimeout(() => setPlayerLoadingStage(2), 1900);
+  S._stageTimers = [650, 1400, 2200, 3000]
+    .map((delay, i) => setTimeout(() => setPlayerLoadingStage(i + 1), delay));
 }
 function showPlayLoading(it) {
   rememberPlayerReturn();
@@ -5383,7 +5387,7 @@ function showNativePlayLoading(it) {
       backdropUrl: it.backdrop || it.poster ? new URL(it.backdrop || it.poster, location.origin).href : '',
     }));
   } catch {}
-  clearTimeout(S._stageT1); clearTimeout(S._stageT2);
+  clearPlayerLoadingStages();
 }
 
 const RES_RANK = { '2160p': 4, '1080p': 3, '720p': 2, '576p': 1, '480p': 0 };
@@ -5695,7 +5699,10 @@ async function openDetail(it, push = true) {
     applyExternalIds(it, d);
     if (it.imdbId || it.tvdbId) {
       checkAvailability(it);
-      if (detailPlayTarget) prefetchSources(detailPlayTarget, 0);
+      if (detailPlayTarget) {
+        prefetchSources(detailPlayTarget, 0);
+        preparePlaybackSource(detailPlayTarget, 0);
+      }
     }
     bootReady(); // a hash-restored detail page is a boot landing
     if (!it.title) { // route-restored page (refresh/back) — fill from TMDB
@@ -6220,7 +6227,7 @@ function updateDetailPlayLabel({ label, target }) {
   detailPlayTarget = target;
   $('dPlayLabel').textContent = label;
   prefetchSources(target, 0);
-  preparePlaybackSource(target, 250);
+  preparePlaybackSource(target, 0);
 }
 function localEpisodesForShow(show) {
   if (!show || !show.tmdbId || !S.localMap) return [];
@@ -6302,7 +6309,7 @@ $('qToggle').addEventListener('click', (e) => {
   if (target && S.detailItem && qualityTitleKey(target) !== qualityTitleKey(S.detailItem)) saveQualityPref(S.detailItem, S.qualityPref);
   paintQualityToggle(S.qualityPref);
   prefetchSources(target, 0);
-  preparePlaybackSource(target, 250);
+  preparePlaybackSource(target, 0);
 });
 $('dWatchlist').addEventListener('click', async () => {
   const it = S.detailItem; if (!it) return;

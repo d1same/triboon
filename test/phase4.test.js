@@ -182,8 +182,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Sources, play warmup, and availability should share one query builder while allowing unfiltered quality discovery');
   assert.match(ui, /function prefetchSources\(it, delay = 700\) \{[\s\S]+const qRank = qualityRankForItem\(it\);[\s\S]+localTitleHasPlayback\(it\) && localPlaybackFitsQuality\(it, qRank\)[\s\S]+api\('\/api\/search\?' \+ sourceSearchQuery\(it\)\)/,
     'source warmup should skip matching local files but still warm online 4K when local playback is lower quality');
-  assert.match(ui, /function updateDetailPlayLabel\(\{ label, target \}\) \{[\s\S]+detailPlayTarget = target;[\s\S]+prefetchSources\(target, 0\);[\s\S]+preparePlaybackSource\(target, 250\);[\s\S]+\}/,
-    'movie/show details should warm and prepare the exact current Play target, including TV episodes');
+  assert.match(ui, /function updateDetailPlayLabel\(\{ label, target \}\) \{[\s\S]+detailPlayTarget = target;[\s\S]+prefetchSources\(target, 0\);[\s\S]+preparePlaybackSource\(target, 0\);[\s\S]+\}/,
+    'movie/show details should warm and immediately prepare the exact current Play target, including TV episodes');
+  assert.match(ui, /applyExternalIds\(it, d\);[\s\S]+if \(it\.imdbId \|\| it\.tvdbId\) \{[\s\S]+checkAvailability\(it\);[\s\S]+prefetchSources\(detailPlayTarget, 0\);[\s\S]+preparePlaybackSource\(detailPlayTarget, 0\);[\s\S]+\}/,
+    'movie/show details should refresh prepare when exact IMDb/TVDB identity arrives');
   assert.match(ui, /pickKey: picked && picked\.pickKey/,
     'manual source playback should send the opaque server pick key, not only a release name');
   assert.match(ui, /play\(it, \{ name: c\.name, pickKey: c\.pickKey, resolutionRank: rk\(c\) \}\)/,
@@ -286,7 +288,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Up Next primary action should clearly say Play next episode');
   assert.doesNotMatch(ui, /opts\.ended \? 6 : 10/,
     'the ended fallback path should not shorten the Up Next countdown');
-  assert.match(ui, /saveQualityPref\(target,\s*S\.qualityPref\)[\s\S]+paintQualityToggle\(S\.qualityPref\);[\s\S]+prefetchSources\(target, 0\);[\s\S]+preparePlaybackSource\(target, 250\);/,
+  assert.match(ui, /saveQualityPref\(target,\s*S\.qualityPref\)[\s\S]+paintQualityToggle\(S\.qualityPref\);[\s\S]+prefetchSources\(target, 0\);[\s\S]+preparePlaybackSource\(target, 0\);/,
     'changing the detail quality toggle should persist and immediately warm and prepare the selected source class');
   assert.match(ui, /qualityTitleKey\(S\.detailItem\) === qualityTitleKey\(it\)/,
     'episode resumes should inherit the show-level quality preference');
@@ -1978,16 +1980,16 @@ test('Android native player: direct source and native chrome stay out of the web
     'web screensaver should use the updated transparent Triboon wordmark asset');
   assert.match(ui, /#playerLoader \.loadMark\{display:grid;place-items:center\}[\s\S]+#playerLoader \.loadMark img\{[^}]*width:min\(210px,50vw\)[\s\S]+#playerLoader \.loadSteps\{[^}]*width:min\(340px,72vw\)[^}]*height:4px[\s\S]+#playerLoader \.loadStep\{[^}]*width:58%[\s\S]+#playerLoader \.loadStatus\{[\s\S]+<img src="triboon\.png" alt="Triboon">[\s\S]+<div class="loadSteps" aria-hidden="true"><span class="loadStep"><\/span><\/div>[\s\S]+<div class="loadStatus" id="plStage">Preparing<\/div>/,
     'web player loading overlay should use the full wordmark, one calm progress lane, and one simple startup status line');
-  assert.match(ui, /PLAYER_LOADING_STAGES = \['Preparing', 'Mounting', 'Checking health\.\.\.'\][\s\S]+S\._stageT1 = setTimeout\(\(\) => setPlayerLoadingStage\(1\), 850\);[\s\S]+S\._stageT2 = setTimeout\(\(\) => setPlayerLoadingStage\(2\), 1900\);/,
-    'web player loading status should advance through preparing, mounting, and checking health');
+  assert.match(ui, /PLAYER_LOADING_STAGES = \['Preparing', 'Finding source', 'Mounting', 'Checking health\.\.\.', 'Starting stream'\][\s\S]+function clearPlayerLoadingStages\(\)[\s\S]+S\._stageTimers = \[650, 1400, 2200, 3000\][\s\S]+setPlayerLoadingStage\(i \+ 1\)/,
+    'web player loading status should advance through finding source, mounting, a brief health check, and stream start');
   assert.match(android, /nativeLoading = new FrameLayout\(this\);[\s\S]+ImageView loadingMark = new ImageView\(this\);[\s\S]+loadingMark\.setImageResource\(R\.drawable\.native_loading_wordmark\);[\s\S]+loadingCenter\.addView\(loadingMark, markLp\);[\s\S]+FrameLayout loadingLane = new FrameLayout\(this\);[\s\S]+nativeLoadingLaneGlow = new View\(this\);[\s\S]+nativeLoadingStatus = new TextView\(this\);[\s\S]+nativeLoadingStatus\.setText\("Preparing"\);[\s\S]+startNativeLoadingLane\(\);/,
     'native loading overlay should use the real wordmark, a moving progress lane, and one simple startup status line');
   assert.match(android, /private ObjectAnimator nativeLoadingLaneAnimator;[\s\S]+if \(nativeLoadingLaneAnimator != null\) \{[\s\S]+nativeLoadingLaneAnimator\.cancel\(\);[\s\S]+nativeLoadingLaneAnimator = null;[\s\S]+nativeLoadingLaneAnimator = ObjectAnimator\.ofFloat\(nativeLoadingLaneGlow, "translationX", -dp\(92\), dp\(320\)\);[\s\S]+nativeLoadingLaneAnimator\.setRepeatCount\(ValueAnimator\.INFINITE\);[\s\S]+nativeLoadingLaneAnimator\.start\(\);/,
     'native loading progress lane should use one owned animation that can be stopped cleanly');
   assert.match(android, /nativeLoadingTitle\.setTextSize\(24\);[\s\S]+nativeLoadingTitle\.setMaxLines\(2\);[\s\S]+nativeLoadingTitle\.setEllipsize\(TextUtils\.TruncateAt\.END\);/,
     'native loading title should stay prominent without overflowing on TV');
-  assert.match(android, /nativeLoadingStatuses = new String\[\]\{"Preparing", "Mounting", "Checking health\.\.\."\}[\s\S]+startNativeLoadingStatus\(\)[\s\S]+nativeLoadingStatusTick[\s\S]+stopNativeLoadingStatus\(\)/,
-    'native loading status should show the same preparing/mounting/health steps as the web loader and stop cleanly');
+  assert.match(android, /nativeLoadingStatuses = new String\[\]\{"Preparing", "Finding source", "Mounting", "Checking health\.\.\.", "Starting stream"\}[\s\S]+startNativeLoadingStatus\(\)[\s\S]+nativeLoadingStatusTick[\s\S]+stopNativeLoadingStatus\(\)/,
+    'native loading status should show the same brief startup steps as the web loader and stop cleanly');
   assert.doesNotMatch(ui, /id="plMsg"|class="loadLabels"|Finding the best source|Mounting the release|Checking health & buffering|<span>Source<\/span>|<span>Health<\/span>|<span>Buffer<\/span>/,
     'web player loading overlay should stay minimal and avoid source/health/buffer status copy');
   assert.doesNotMatch(android, /TextView loadingMark|loadingMark\.setText\("Triboon"\)|private TextView nativeLoadingStage|private TextView nativeLoadingDetail|nativeLoadingStage =|nativeLoadingDetail =|nativeLoadingStage\.|nativeLoadingDetail\.|nativeLoadingStageFor|nativeLoadingDetailFor|showNativeLoading\(title, backdropUrl,|private TextView nativeLoadingStep|loadingSteps|nativeLoadingStep\("Source"\)|nativeLoadingStep\("Health"\)|nativeLoadingStep\("Buffer"\)|Preparing native playback/,
