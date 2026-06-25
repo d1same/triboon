@@ -46,6 +46,13 @@ Android will treat the APK as a different signing lineage and the normal update
 will fail. Do not publish replacement stable APK aliases until the certificate
 match and higher `versionCode` are confirmed.
 
+Current public APK continuity note: the v1.7.20 stable APKs are signed with the
+Android debug certificate SHA-256 digest
+`51d2f7b7075dcca63a2b99dc5b2c4918283f5b03eef8eaa1e91338dd78113d8f`. Keep
+published APKs on this certificate until a planned release-signing migration is
+ready, because Android will not install a different certificate over the current
+public package id.
+
 For every public release, bump these together:
 
 - `package.json` version.
