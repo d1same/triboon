@@ -30,6 +30,10 @@ function addAbortListener(signal, fn) {
   return () => signal.removeEventListener('abort', fn);
 }
 
+function priorityRank(priority) {
+  return ({ startup: 0, seek: 0, playback: 1, health: 2, readAhead: 3, background: 4 })[priority] ?? 1;
+}
+
 class NzbFileStream {
   constructor(pool, fileEntry, { readAhead = 4, cacheSegments = 24, cacheBytes = DEFAULT_CACHE_BYTES } = {}) {
     this.pool = pool;
@@ -158,18 +162,29 @@ class NzbFileStream {
     if (this.cache.has(i)) return Promise.resolve(this.cache.get(i));
     const signal = opts.signal || null;
     if (signalAborted(signal)) return Promise.reject(abortError());
+    const decodeAndCache = (raw) => {
+      const dec = decode(raw);
+      if (!dec.crcOk) throw new Error(`segment ${i} CRC mismatch`);
+      if (dec.size !== null) this.size = dec.size;
+      if (dec.part && i === 0) this.partSize = dec.part.end - dec.part.begin;
+      this._cachePut(i, dec.data);
+      return dec.data;
+    };
     let rec = this.inflight.get(i);
+    if (rec && priorityRank(priority) < priorityRank(rec.priority) && priorityRank(priority) <= priorityRank('playback')) {
+      return this.pool.body(this.segments[i].msgId, priority, { signal })
+        .then(decodeAndCache)
+        .catch((e) => {
+          if (signalAborted(signal) || e.code === 'ABORT_ERR') throw e;
+          return rec.promise;
+        });
+    }
     if (!rec) {
       const controller = new AbortController();
-      rec = { consumers: 0, controller, promise: null };
+      rec = { consumers: 0, controller, priority, promise: null };
       rec.promise = this.pool.body(this.segments[i].msgId, priority, { signal: controller.signal }).then((raw) => {
-        const dec = decode(raw);
-        if (!dec.crcOk) throw new Error(`segment ${i} CRC mismatch`);
-        if (dec.size !== null) this.size = dec.size;
-        if (dec.part && i === 0) this.partSize = dec.part.end - dec.part.begin;
         this.inflight.delete(i);
-        this._cachePut(i, dec.data);
-        return dec.data;
+        return decodeAndCache(raw);
       }).catch((e) => { this.inflight.delete(i); throw e; });
       this.inflight.set(i, rec);
     }

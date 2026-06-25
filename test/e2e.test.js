@@ -158,6 +158,45 @@ test('vfs: caller priority reaches article reads and aborted reads do not fetch'
   assert.strictEqual(bodyAborted, true, 'aborting the last reader should abort the in-flight article BODY');
 });
 
+test('vfs: playback upgrades a segment already queued by read-ahead', async () => {
+  const { articles, nzb } = makeRelease('Priority.Upgrade.Test.mkv', 160000, 40000);
+  const calls = [];
+  let releaseReadAhead;
+  const readAheadStarted = new Promise((resolve) => { releaseReadAhead = resolve; });
+  let finishReadAhead;
+  const holdReadAhead = new Promise((resolve) => { finishReadAhead = resolve; });
+  const pool = {
+    body: async (msgId, priority = 'playback') => {
+      calls.push({ msgId, priority });
+      if (priority === 'readAhead') {
+        releaseReadAhead();
+        await holdReadAhead;
+      }
+      return articles.get(msgId);
+    },
+    stat: async () => true,
+  };
+  const vf = new VirtualFile(pool, nzb, { readAhead: 0 });
+  await vf.mount();
+  calls.length = 0;
+  vf.cache.clear();
+  vf.cacheOrder = [];
+  vf.inflight.clear();
+
+  const low = vf._fetchSegment(1, 'readAhead');
+  await readAheadStarted;
+  const upgraded = await vf._fetchSegment(1, 'playback');
+  finishReadAhead();
+  await low;
+
+  assert.ok(upgraded.length > 0, 'urgent playback fetch should return the article bytes');
+  assert.deepStrictEqual(
+    calls.filter((c) => c.msgId === 'seg2@triboon.test').map((c) => c.priority),
+    ['readAhead', 'playback'],
+    'playback must not wait behind an already-queued low-priority read-ahead fetch',
+  );
+});
+
 test('vfs: decoded segment cache is capped by bytes, not only segment count', async () => {
   const { articles, nzb } = makeRelease('Cache.Bytes.Test.mkv', 180000, 45000);
   const pool = {

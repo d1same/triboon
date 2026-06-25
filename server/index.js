@@ -3414,6 +3414,35 @@ const H = {
     }
   },
 
+  prepare: async (ctx) => {
+    const body = await readJson(ctx.req);
+    if (!body.q) return send(ctx.res, 400, { error: 'q required' });
+    if (throttleUserRoute(ctx, 'prepare', { max: 20, windowMs: 60000, lockMs: 60000 })) return;
+    const t0 = Date.now();
+    const policy = playbackPolicyFor(ctx.user, body);
+    try {
+      const { vf, candidate, attempts, prepared } = await pipeline.prepare(
+        { q: body.q, imdbid: body.imdbid, tvdbid: body.tvdbid, season: body.season, ep: body.ep, pick: body.pick, pickKey: body.pickKey },
+        policy
+      );
+      if (vf) {
+        vf._q = body.q;
+        vf._subQuery = episodeSubtitleQuery(body.q, body.season, body.ep);
+        vf._caps = parseCaps(body.caps);
+        rememberMountOwner(vf, ctx.user.id);
+        trimUserMounts(ctx.user.id, vf.id);
+      }
+      send(ctx.res, 200, {
+        prepared: !!prepared,
+        mountMs: Date.now() - t0,
+        candidate: candidate ? { name: candidate.name, pickKey: candidate.pickKey, score: candidate.score, indexer: candidate.indexer } : null,
+        attempts,
+      });
+    } catch (e) {
+      send(ctx.res, 502, { error: e.message, attempts: e.attempts || [] });
+    }
+  },
+
   advance: async (ctx) => {
     if (throttleUserRoute(ctx, 'advance', { max: 30, windowMs: 60000, lockMs: 60000 })) return;
     const t0 = Date.now();
@@ -5217,6 +5246,11 @@ Object.assign(H, {
     if (!vf.streamable) return send(ctx.res, 409, { error: 'mount is not streamable', tags: vf.tags });
     vf._touched = Date.now();
     pipeline.rebalancePlaybackWindows();
+    try {
+      ctx.req.setTimeout(120000);
+      ctx.res.setTimeout(120000);
+      if (ctx.req.socket) ctx.req.socket.setTimeout(120000);
+    } catch {}
     const total = vf.size;
     let start = 0, end = total;
     let code = 200;
@@ -5239,17 +5273,24 @@ Object.assign(H, {
     if (ctx.req.method === 'HEAD') return ctx.res.end();
     const readController = new AbortController();
     const readSignal = readController.signal;
-    const stopRead = () => {
+    let completedRead = false;
+    const abortRead = () => {
       if (!readSignal.aborted) readController.abort();
       if (vf && typeof vf.cancelReadAhead === 'function') vf.cancelReadAhead();
+    };
+    const stopReqRead = () => {
+      if (!ctx.req.complete) abortRead();
+    };
+    const stopResRead = () => {
+      if (!completedRead && !ctx.res.writableEnded) abortRead();
     };
     const requestedPriority = String(ctx.url.searchParams.get('priority') || '').toLowerCase();
     const explicitPriority = requestedPriority === 'read-ahead' ? 'readAhead' : requestedPriority;
     const readPriority = ['background', 'readAhead', 'health'].includes(explicitPriority)
       ? explicitPriority
       : (start === 0 ? 'startup' : 'seek');
-    ctx.req.once('close', stopRead);
-    ctx.res.once('close', stopRead);
+    ctx.req.once('close', stopReqRead);
+    ctx.res.once('close', stopResRead);
     try {
       for await (const chunk of vf.read(start, end, { priority: readPriority, signal: readSignal })) {
         if (readSignal.aborted || ctx.res.destroyed) break;
@@ -5264,11 +5305,16 @@ Object.assign(H, {
         });
         if (readSignal.aborted || ctx.res.destroyed) break;
       }
+      completedRead = !readSignal.aborted && !ctx.res.destroyed;
     } catch (e) {
       if (!readSignal.aborted) console.error(`[stream ${vf.id}]`, e.message);
     } finally {
-      ctx.req.off('close', stopRead);
-      ctx.res.off('close', stopRead);
+      ctx.req.off('close', stopReqRead);
+      ctx.res.off('close', stopResRead);
+    }
+    if (readSignal.aborted) {
+      try { if (!ctx.res.destroyed) ctx.res.destroy(); } catch {}
+      return;
     }
     if (!ctx.res.destroyed && !ctx.res.writableEnded) ctx.res.end();
   },
@@ -5984,6 +6030,7 @@ const ROUTES = [
   { m: 'GET', re: /^\/api\/status$/, auth: 'user', h: H.status },
   { m: 'GET', re: /^\/api\/search$/, auth: 'user', h: H.search },
   { m: 'POST', re: /^\/api\/play$/, auth: 'user', h: H.play },
+  { m: 'POST', re: /^\/api\/prepare$/, auth: 'user', h: H.prepare },
   { m: 'POST', re: /^\/api\/advance\/(\w+)$/, auth: 'user', h: H.advance },
   { m: 'GET', re: /^\/api\/tmdb\/(.+)$/, auth: 'user', h: H.tmdbProxy },
   { m: 'GET', re: /^\/api\/libraries$/, auth: 'user', h: H.librariesList },

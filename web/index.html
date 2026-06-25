@@ -4911,6 +4911,32 @@ function prefetchSources(it, delay = 700) {
     api('/api/search?' + sourceSearchQuery(it)).catch(() => {});
   }, delay);
 }
+let prepareTimer = null;
+function playbackRequestBody(it, picked = null, qRank = qualityRankForItem(it)) {
+  const ids = sourceIdentityFor(it);
+  const body = { q: queryFor(it), pick: picked && picked.name, pickKey: picked && picked.pickKey, caps: clientCaps() };
+  if (ids.imdbid) body.imdbid = ids.imdbid;
+  if (ids.tvdbid) body.tvdbid = ids.tvdbid;
+  if (ids.season != null) body.season = ids.season;
+  if (ids.ep != null) body.ep = ids.ep;
+  if (it && it.originalLanguage) body.originalLanguage = String(it.originalLanguage);
+  const preferredAudio = prefLang('alang');
+  if (preferredAudio) body.preferredAudioLanguage = preferredAudio;
+  if (qRank !== null) {
+    body.maxResolutionRank = qRank;
+    body.preferResolutionRank = qRank;
+  }
+  return body;
+}
+function preparePlaybackSource(it, delay = 900) {
+  if (!it || it.type === 'live') return;
+  const qRank = qualityRankForItem(it);
+  if (localTitleHasPlayback(it) && localPlaybackFitsQuality(it, qRank)) return;
+  clearTimeout(prepareTimer);
+  prepareTimer = setTimeout(() => {
+    api('/api/prepare', { method: 'POST', body: playbackRequestBody(it, null, qRank) }).catch(() => {});
+  }, delay);
+}
 // "Directed by … · Starring …" under the focused title — the detail page's voice on every
 // page. Debounced TMDB fetch (the server proxy caches, so settled focus costs one hit).
 function creditsLine(d) {
@@ -5214,18 +5240,8 @@ async function play(it, pick) {
   if (nativeFirst) showNativePlayLoading(it);
   else showPlayLoading(it);
   try {
-    const ids = sourceIdentityFor(it);
-    const body = { q: queryFor(it), pick: picked && picked.name, pickKey: picked && picked.pickKey, caps: clientCaps() };
-    if (ids.imdbid) body.imdbid = ids.imdbid;
-    if (ids.tvdbid) body.tvdbid = ids.tvdbid;
-    if (ids.season != null) body.season = ids.season;
-    if (ids.ep != null) body.ep = ids.ep;
-    if (it.originalLanguage) body.originalLanguage = String(it.originalLanguage);
-    const preferredAudio = prefLang('alang');
-    if (preferredAudio) body.preferredAudioLanguage = preferredAudio;
+    const body = playbackRequestBody(it, picked, qRank);
     if (qRank !== null) {
-      body.maxResolutionRank = qRank;     // HD/UHD toggle is a source-selection request, not a transcode request.
-      body.preferResolutionRank = qRank;  // 1080p prefers 1080p; 4K prefers 2160p, still within the user's cap.
       it.qualityRank = qRank;
     }
     const r = await api('/api/play', { method: 'POST', body });
@@ -6131,6 +6147,7 @@ function updateDetailPlayLabel({ label, target }) {
   detailPlayTarget = target;
   $('dPlayLabel').textContent = label;
   prefetchSources(target, 0);
+  preparePlaybackSource(target, 250);
 }
 function localEpisodesForShow(show) {
   if (!show || !show.tmdbId || !S.localMap) return [];
@@ -6212,6 +6229,7 @@ $('qToggle').addEventListener('click', (e) => {
   if (target && S.detailItem && qualityTitleKey(target) !== qualityTitleKey(S.detailItem)) saveQualityPref(S.detailItem, S.qualityPref);
   paintQualityToggle(S.qualityPref);
   prefetchSources(target, 0);
+  preparePlaybackSource(target, 250);
 });
 $('dWatchlist').addEventListener('click', async () => {
   const it = S.detailItem; if (!it) return;

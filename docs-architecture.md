@@ -23,10 +23,11 @@ canonical reference.
 - Playback order: source-fit, direct play, remux, transcode.
 - Security: deny-by-default route table in `server/index.js`; every endpoint must
   declare `public`, `user`, `admin`, or `stream` auth and be covered by tests.
-- Current verification baseline after the Live TV and subtitle release pass: full
-  `npm.cmd test` covers 226 tests; focused IPTV, security, Android native
-  player, Music, and NNTP priority tests cover the current source model, route
-  table, device bridge, process queue, and capacity scheduling.
+- Current verification baseline after the playback startup/read-ahead pass: full
+  `npm.cmd test` covers 231 tests; focused IPTV, security, Android native
+  player, Music, subtitle, source-warmup, and NNTP priority tests cover the
+  current source model, route table, device bridge, process queue, startup
+  preparation, and capacity scheduling.
 
 ## System Map
 
@@ -85,7 +86,7 @@ flowchart LR
 | Search and source ranking | `server/newznab.js`, `server/scoring.js`, `server/pipeline.js` | Title-safe matching, quality caps at source selection, health-aware ranking. |
 | Streaming engine | `server/nzb.js`, `server/nntp.js`, `server/vfs.js`, `server/rar.js`, `server/zip.js`, `server/archive.js`, `docs-streaming-performance.md` | Clean-room NZB mount, article reads, RAR/ZIP extent maps, Range streaming, provider capacity, priority lanes, adaptive read-ahead. |
 | Playback decision | `server/transcode.js`, `server/index.js`, `web/index.html`, `android/.../MainActivity.java` | Source-fit, direct, remux, transcode; Android native caps feed server policy. |
-| Subtitles | `server/opensubs.js`, `server/index.js`, `web/index.html`, `MainActivity.java` | Wyzie search/download, release/file hints, WebVTT, web/native display timelines. |
+| Subtitles | `server/opensubs.js`, `server/index.js`, `web/index.html`, `MainActivity.java` | Wyzie search/download, release/file hints, WebVTT, web/native display timelines; built-in extraction is opt-in. |
 | Local libraries | `server/index.js`, `server/library-db.js`, `web/index.html` | Folder scan, SQLite-backed bounded pages/lookups, local playback, local artwork. |
 | Live TV | `server/index.js`, `web/index.html`, `MainActivity.java` | Source-scoped shared M3U/Xtream/XMLTV, web remux path, Android native Exo path, and Android device-local personal IPTV. |
 | Music Home | `server/ytmusic.js`, `server/index.js`, `web/index.html` | YouTube Music search/home/charts via optional `ytmusicapi` catalog helper, Google device-code account linking with encrypted per-user tokens, bounded `yt-dlp` playback resolver, tokenized audio proxy, web mini-player, and no ExoPlayer handoff for audio yet. |
@@ -98,16 +99,20 @@ flowchart LR
 sequenceDiagram
   participant UI as Web/Android UI
   participant API as /api/play
+  participant Prep as /api/search + /api/prepare
   participant Search as Pipeline search
   participant Rank as Scoring
   participant Mount as NZB mount/VFS
   participant Player as Web player or ExoPlayer
 
+  UI->>Prep: detail focus warms source search
+  Prep->>Search: cached or fresh indexer fan-out
+  Prep->>Mount: prepare first viable ranked source in background
   UI->>API: title, profile, caps, optional resume
-  API->>Search: cached or fresh indexer fan-out
+  API->>Search: reuse cached search/prepared mount when present
   Search->>Rank: title-verified release rows
   Rank->>API: best source under user/device cap
-  API->>Mount: fetch NZB, parse, build segment map
+  API->>Mount: fetch NZB, parse, build segment map if not prepared
   API->>API: bounded health gate
   API-->>UI: direct/remux/transcode/native ladder
   UI->>Player: start at resume position
@@ -120,9 +125,12 @@ Rules that must not drift:
 - The Sources drawer and the Play button share the same title verification and
   ranking path; manual source selection must mount the chosen release.
 - Detail-page source warmup is a startup-speed feature. Title-only warmup
-  results can feed the later exact-id Play request, and Play joins an in-flight
-  NZB prefetch for the selected release instead of downloading the same NZB
-  twice.
+  results can feed the later exact-id Play request. When the Play target is
+  stable, `/api/prepare` may mount the first viable source from a small capped
+  slice of the ranked list in the background without creating a play session or
+  stream URL. Play must reuse or join that prepared/in-flight mount and
+  in-flight NZB prefetch instead of repeating source finding, first-article
+  probe, mount, or health-gate work.
 - Android capability claims come from the native bridge, not WebView guesses.
   Video caps are decoder-based, but HD-audio passthrough caps must come from
   the active HDMI/ARC/eARC audio output encodings. TrueHD/Atmos/DTS-HD releases
@@ -154,6 +162,27 @@ The heartbeat carries both the client path and the stream treatment:
 This distinction matters because remux is still original-quality playback, while
 transcoding means Triboon is actively converting the stream for device support
 or a requested quality cap.
+
+## Subtitle Model
+
+Online subtitles are the default production path. The server uses the saved
+Wyzie key to search by TMDB/IMDb id plus the exact selected release/file hints,
+downloads WebVTT/SRT, ranks alternates, caches per mount/language, and serves
+the result through signed stream-scope URLs.
+
+Built-in subtitles are an admin-controlled opt-in because embedded text
+extraction may require ffmpeg to scan much of the media file. When built-ins
+are off, the web and Android players hide embedded/sidecar rows, skip built-in
+prewarm/extraction, and go directly to online captions when the catalog id and
+Wyzie key are available. When built-ins are on, release sidecars and embedded
+text tracks can be tried before online fallback, but bitmap-only subtitle tracks
+are not useful as WebVTT captions.
+
+Android native playback displays server-provided VTT through Triboon's native
+overlay so subtitle version changes and sync changes do not rebuild ExoPlayer.
+The current native path is intentionally online-first for stability; deeper
+embedded-track handoff would need a separate Media3 subtitle contract and
+device matrix.
 
 ## Streaming Performance / Multi-User Capacity
 

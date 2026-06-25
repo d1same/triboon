@@ -168,8 +168,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Sources searches should carry original-language and preferred-audio hints into scoring');
   assert.match(ui, /function sourceSearchQuery\(it, opts = \{\}\) \{[\s\S]+params\.set\('caps', JSON\.stringify\(clientCaps\(\)\)\)/,
     'Sources searches should carry native device caps so source ranking matches Exo playback');
-  assert.match(ui, /async function play\(it, pick\) \{[\s\S]+body\.originalLanguage[\s\S]+body\.preferredAudioLanguage/,
-    'Play requests should carry original-language and preferred-audio hints into source selection');
+  assert.match(ui, /function playbackRequestBody\(it, picked = null, qRank = qualityRankForItem\(it\)\) \{[\s\S]+body\.originalLanguage[\s\S]+body\.preferredAudioLanguage/,
+    'Play and prepare requests should carry original-language and preferred-audio hints into source selection');
   const serverForPolicy = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
   assert.ok(serverForPolicy.includes('function parseCapsQuery(raw) {')
     && serverForPolicy.includes("caps: parseCapsQuery(ctx.url.searchParams.get('caps'))"),
@@ -182,19 +182,21 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Sources, play warmup, and availability should share one query builder while allowing unfiltered quality discovery');
   assert.match(ui, /function prefetchSources\(it, delay = 700\) \{[\s\S]+const qRank = qualityRankForItem\(it\);[\s\S]+localTitleHasPlayback\(it\) && localPlaybackFitsQuality\(it, qRank\)[\s\S]+api\('\/api\/search\?' \+ sourceSearchQuery\(it\)\)/,
     'source warmup should skip matching local files but still warm online 4K when local playback is lower quality');
-  assert.match(ui, /function updateDetailPlayLabel\(\{ label, target \}\) \{[\s\S]+detailPlayTarget = target;[\s\S]+prefetchSources\(target, 0\);[\s\S]+\}/,
-    'movie/show details should warm the exact current Play target immediately, including TV episodes');
+  assert.match(ui, /function updateDetailPlayLabel\(\{ label, target \}\) \{[\s\S]+detailPlayTarget = target;[\s\S]+prefetchSources\(target, 0\);[\s\S]+preparePlaybackSource\(target, 250\);[\s\S]+\}/,
+    'movie/show details should warm and prepare the exact current Play target, including TV episodes');
   assert.match(ui, /pickKey: picked && picked\.pickKey/,
     'manual source playback should send the opaque server pick key, not only a release name');
   assert.match(ui, /play\(it, \{ name: c\.name, pickKey: c\.pickKey, resolutionRank: rk\(c\) \}\)/,
     'clicking a Sources row should carry its exact release key and quality class into Play');
-  assert.match(ui, /async function play\(it, pick\) \{[\s\S]+it = resolvePlaybackResume\(it\);[\s\S]+const picked = pick && typeof pick === 'object' \? pick : \(pick \? \{ name: pick \} : null\);[\s\S]+const body = \{ q: queryFor\(it\), pick: picked && picked\.name, pickKey: picked && picked\.pickKey, caps: clientCaps\(\) \};/,
+  assert.match(ui, /async function play\(it, pick\) \{[\s\S]+it = resolvePlaybackResume\(it\);[\s\S]+const picked = pick && typeof pick === 'object' \? pick : \(pick \? \{ name: pick \} : null\);[\s\S]+const body = playbackRequestBody\(it, picked, qRank\);/,
     'manual source selection should re-resolve the latest resume point before mounting the exact picked release');
   assert.match(ui, /function stopActivePlaybackForReplacement\(opts = \{\}\) \{[\s\S]+saveWatch\(true\);[\s\S]+window\.TriboonTV\.closeVideo\(\);[\s\S]+stopWebVideoElement\(\);[\s\S]+if \(!opts\.preserveGuide\) closePlayerGuide\(\{ fromNative: true \}\);[\s\S]+S\.playing = null;[\s\S]+\}/,
     'source replacement should stop the active native/web player before the new mount can start');
   assert.match(ui, /async function play\(it, pick\) \{[\s\S]+const localExact = !picked && localPlaybackForItem\(it\) \? \{ \.\.\.it, _local: localPlaybackForItem\(it\) \} : null;[\s\S]+if \(localExact && localPlaybackFitsQuality\(localExact, qRank\)\) return playLocal\(localExact\);[\s\S]+stopActivePlaybackForReplacement\(\);[\s\S]+const nativeFirst = nativeVideoRequired\(it\);/,
     'manual source selection and quality mismatches should tear down the old source before showing the new loading/player state');
-  assert.match(ui, /const pickRank = picked \? normalizeResolutionRank\(picked\.resolutionRank\) : null;[\s\S]+const qRank = pickRank !== null \? pickRank : qualityRankForItem\(it\);[\s\S]+body\.maxResolutionRank = qRank;[\s\S]+body\.preferResolutionRank = qRank;/,
+  assert.match(ui, /const pickRank = picked \? normalizeResolutionRank\(picked\.resolutionRank\) : null;[\s\S]+const qRank = pickRank !== null \? pickRank : qualityRankForItem\(it\);[\s\S]+const body = playbackRequestBody\(it, picked, qRank\);/,
+    'manual source selection should pass the picked source quality into the shared request builder');
+  assert.match(ui, /function playbackRequestBody\(it, picked = null, qRank = qualityRankForItem\(it\)\) \{[\s\S]+if \(qRank !== null\) \{[\s\S]+body\.maxResolutionRank = qRank;[\s\S]+body\.preferResolutionRank = qRank;/,
     'manual source selection should prefer the picked source quality while normal Play uses the current 1080p/4K toggle');
   assert.match(ui, /function qualityRankForItem\(it\) \{[\s\S]+if \(it\._local && !it\.tmdbId\) return null;/,
     'matched local movies and episodes should still inherit saved 1080p/4K preferences');
@@ -284,8 +286,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Up Next primary action should clearly say Play next episode');
   assert.doesNotMatch(ui, /opts\.ended \? 6 : 10/,
     'the ended fallback path should not shorten the Up Next countdown');
-  assert.match(ui, /saveQualityPref\(target,\s*S\.qualityPref\)[\s\S]+paintQualityToggle\(S\.qualityPref\);[\s\S]+prefetchSources\(target, 0\);/,
-    'changing the detail quality toggle should persist and immediately warm the selected source class');
+  assert.match(ui, /saveQualityPref\(target,\s*S\.qualityPref\)[\s\S]+paintQualityToggle\(S\.qualityPref\);[\s\S]+prefetchSources\(target, 0\);[\s\S]+preparePlaybackSource\(target, 250\);/,
+    'changing the detail quality toggle should persist and immediately warm and prepare the selected source class');
   assert.match(ui, /qualityTitleKey\(S\.detailItem\) === qualityTitleKey\(it\)/,
     'episode resumes should inherit the show-level quality preference');
   assert.match(ui, /<div class="qToggle" id="qToggle"[\s\S]+id="dSources"[\s\S]+id="dWatchlist"/,
@@ -2265,7 +2267,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Live TV should recover faster before the first frame while allowing later provider hiccups');
   assert.match(android, /private DefaultLoadControl nativeLoadControlForMode\(String mode\) \{[\s\S]+nativeConservativePlaybackDevice\(\)[\s\S]+setBufferDurationsMs\(minMs, maxMs, startMs, rebufferMs\)/,
     'native ExoPlayer should use a conservative buffer profile on Onn-class devices without slowing Shield');
-  assert.match(android, /boolean heavyVod = video && nativeLikelyHeavyVod\(\)[\s\S]+int targetMb = video[\s\S]+conservative \? \(heavyVod \? 48 : 32\) : \(heavyVod \? 128 : 48\)[\s\S]+int backBufferMs = video \? \(conservative \? \(heavyVod \? 8000 : 5000\) : \(heavyVod \? 12000 : 8000\)\)/,
+  assert.match(android, /boolean heavyVod = video && nativeLikelyHeavyVod\(\)[\s\S]+int targetMb = video[\s\S]+conservative \? \(heavyVod \? 80 : 32\) : \(heavyVod \? 160 : 48\)[\s\S]+int backBufferMs = video \? \(conservative \? \(heavyVod \? 8000 : 5000\) : \(heavyVod \? 12000 : 8000\)\)/,
     'native ExoPlayer should keep heavy VOD buffers bounded so Android TV devices are not killed by memory pressure');
   assert.match(android, /new ExoPlayer\.Builder\(this, nativeRenderersFactory\(\)\)[\s\S]+setBandwidthMeter\(nativeBandwidthMeterForMode\(mode\)\)[\s\S]+setSeekParameters\(SeekParameters\.CLOSEST_SYNC\)/,
     'native ExoPlayer should use decoder fallback plumbing, seeded bandwidth, and closest-sync seeking');
@@ -2281,7 +2283,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'native ExoPlayer should bound memory while keeping short VOD rewinds fast');
   assert.match(android, /setReadTimeoutMs\("live"\.equals\(nativeMode\)[\s\S]+NATIVE_LIVE_READ_TIMEOUT_MS[\s\S]+nativeLikelyHeavyVod\(\) \? 45000 : 18000\)/,
     'native Live TV should use a longer provider read timeout, and huge VOD should tolerate slower usenet reads');
-  assert.match(android, /heavyVod \? 16000 : 5000[\s\S]+heavyVod \? 90000 : 45000[\s\S]+heavyVod \? 128 : 48/,
+  assert.match(android, /heavyVod \? 22000 : 5000[\s\S]+heavyVod \? 120000 : 45000[\s\S]+heavyVod \? 160 : 48/,
     'high-end Android devices should still get a deeper 4K VOD profile without reserving hundreds of megabytes');
   assert.match(android, /private void updateNativeLiveWatchdog\(\) \{[\s\S]+boolean waitingForLiveData = state == Player\.STATE_BUFFERING[\s\S]+nativePlayer\.isLoading\(\)[\s\S]+boolean unhealthy = state == Player\.STATE_IDLE \|\| state == Player\.STATE_ENDED \|\| waitingForLiveData[\s\S]+long threshold = nativeLiveStarted \? NATIVE_LIVE_STALL_RECOVERY_MS : NATIVE_LIVE_STARTUP_STALL_RECOVERY_MS;[\s\S]+now - nativeLiveUnhealthySinceMs >= threshold[\s\S]+recoverNativeLivePlayback\(state == Player\.STATE_IDLE \? "idle"/,
     'native Live TV should recover only after sustained idle, ended, or real data-wait stalls');
@@ -2289,7 +2291,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Live TV should restart instead of staying frozen when a live stream ends quietly');
   assert.match(android, /private void recoverNativeLivePlayback\(String reason\) \{[\s\S]+if \(tryNativeLiveFallback\(\)\) return;[\s\S]+nativePlayer\.setMediaItem\(buildNativeMediaItem\(\)\);[\s\S]+nativePlayer\.prepare\(\);[\s\S]+nativePlayer\.play\(\);/,
     'native Live TV recovery should stay inside ExoPlayer and restart the active native stream');
-  assert.match(android, /private boolean nativeVideoStarted;[\s\S]+NATIVE_VIDEO_REBUFFER_TRIM_MS = 15000L[\s\S]+NATIVE_VIDEO_REBUFFER_RECOVERY_MS = 45000L[\s\S]+private void updateNativeVideoWatchdog\(\) \{[\s\S]+if \(state == Player\.STATE_READY\) \{[\s\S]+nativeVideoStarted = true;[\s\S]+nativeVideoUnhealthySinceMs = 0L;[\s\S]+nativeVideoMemoryTrimmedDuringBuffer = false;[\s\S]+if \(nativeVideoStarted\) \{[\s\S]+boolean waitingForData = state == Player\.STATE_BUFFERING[\s\S]+elapsed >= NATIVE_VIDEO_REBUFFER_TRIM_MS[\s\S]+trimAndroidMemoryCaches\(false\)[\s\S]+elapsed >= NATIVE_VIDEO_REBUFFER_RECOVERY_MS[\s\S]+notifyNativeVideoError\(state == Player\.STATE_IDLE \? "native player idle" : "native rebuffer stalled"/,
+  assert.match(android, /private boolean nativeVideoStarted;[\s\S]+NATIVE_VIDEO_HEAVY_STARTUP_STALL_MS = 12000L[\s\S]+NATIVE_VIDEO_REBUFFER_TRIM_MS = 15000L[\s\S]+NATIVE_VIDEO_REBUFFER_RECOVERY_MS = 45000L[\s\S]+private void updateNativeVideoWatchdog\(\) \{[\s\S]+if \(state == Player\.STATE_READY\) \{[\s\S]+nativeVideoStarted = true;[\s\S]+nativeVideoUnhealthySinceMs = 0L;[\s\S]+nativeVideoMemoryTrimmedDuringBuffer = false;[\s\S]+if \(nativeVideoStarted\) \{[\s\S]+boolean waitingForData = state == Player\.STATE_BUFFERING[\s\S]+elapsed >= NATIVE_VIDEO_REBUFFER_TRIM_MS[\s\S]+trimAndroidMemoryCaches\(false\)[\s\S]+elapsed >= NATIVE_VIDEO_REBUFFER_RECOVERY_MS[\s\S]+notifyNativeVideoError\(state == Player\.STATE_IDLE \? "native player idle" : "native rebuffer stalled"[\s\S]+long startupThreshold = nativeLikelyHeavyVod\(\)[\s\S]+NATIVE_VIDEO_HEAVY_STARTUP_STALL_MS/,
     'native movie and episode startup should fail over quickly, while sustained mid-play stalls trim memory and retry the same source');
   assert.match(android, /private boolean nativeVideoErrorNotified;[\s\S]+private void notifyNativeVideoError\(String msg, long pos, long dur\) \{[\s\S]+if \(nativeVideoErrorNotified\) return;[\s\S]+nativeVideoErrorNotified = true;[\s\S]+releaseNativePlayer\(false\);/,
     'native movie and episode error reporting should be one-shot per playback attempt');

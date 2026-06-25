@@ -2441,13 +2441,15 @@ test('iptv: live-remux preserves HTTPS hostnames for provider TLS SNI', () => {
     'Live TV remux should use the SNI-safe URL helper while keeping a sanitized Host header');
 });
 
-test('streaming: HTTP range reads use startup/seek lanes and cancel stale read-ahead on close', () => {
+test('streaming: HTTP range reads use startup/seek lanes and keep completed range read-ahead warm', () => {
   const serverCode = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
   const vfsCode = fs.readFileSync(path.join(__dirname, '..', 'server', 'vfs.js'), 'utf8');
-  assert.match(serverCode, /vf\._touched = Date\.now\(\);[\s\S]+pipeline\.rebalancePlaybackWindows\(\);[\s\S]+const requestedPriority = String\(ctx\.url\.searchParams\.get\('priority'\)[\s\S]+const explicitPriority = requestedPriority === 'read-ahead' \? 'readAhead' : requestedPriority;[\s\S]+const readPriority = \['background', 'readAhead', 'health'\]\.includes\(explicitPriority\)[\s\S]+: \(start === 0 \? 'startup' : 'seek'\);[\s\S]+ctx\.req\.once\('close', stopRead\);[\s\S]+vf\.read\(start, end, \{ priority: readPriority, signal: readSignal \}\)/,
+  assert.match(serverCode, /vf\._touched = Date\.now\(\);[\s\S]+pipeline\.rebalancePlaybackWindows\(\);[\s\S]+ctx\.req\.setTimeout\(120000\);[\s\S]+ctx\.res\.setTimeout\(120000\);[\s\S]+const requestedPriority = String\(ctx\.url\.searchParams\.get\('priority'\)[\s\S]+const explicitPriority = requestedPriority === 'read-ahead' \? 'readAhead' : requestedPriority;[\s\S]+const readPriority = \['background', 'readAhead', 'health'\]\.includes\(explicitPriority\)[\s\S]+: \(start === 0 \? 'startup' : 'seek'\);[\s\S]+ctx\.req\.once\('close', stopReqRead\);[\s\S]+ctx\.res\.once\('close', stopResRead\);[\s\S]+vf\.read\(start, end, \{ priority: readPriority, signal: readSignal \}\)/,
     'the stream route should mark normal initial reads as startup, non-zero ranges as seek, and allow explicit background readers for subtitle extraction');
-  assert.match(serverCode, /const readController = new AbortController\(\);[\s\S]+const readSignal = readController\.signal;[\s\S]+const stopRead = \(\) => \{[\s\S]+readController\.abort\(\);[\s\S]+vf\.cancelReadAhead\(\);[\s\S]+\}/,
-    'client disconnects should stop future read-ahead scheduling');
+  assert.match(serverCode, /let completedRead = false;[\s\S]+const abortRead = \(\) => \{[\s\S]+readController\.abort\(\);[\s\S]+vf\.cancelReadAhead\(\);[\s\S]+const stopReqRead = \(\) => \{[\s\S]+if \(!ctx\.req\.complete\) abortRead\(\);[\s\S]+const stopResRead = \(\) => \{[\s\S]+if \(!completedRead && !ctx\.res\.writableEnded\) abortRead\(\);[\s\S]+completedRead = !readSignal\.aborted && !ctx\.res\.destroyed/,
+    'client disconnects should stop stale read-ahead, but completed ExoPlayer ranges should keep their warm buffer');
+  assert.match(serverCode, /if \(readSignal\.aborted\) \{[\s\S]+ctx\.res\.destroy\(\);[\s\S]+return;[\s\S]+\}/,
+    'aborted VOD reads should not end a short body under the original content-length');
   assert.match(vfsCode, /cancelReadAhead\(\) \{[\s\S]+this\.readAheadEpoch\+\+;[\s\S]+\}/,
     'virtual files should expose a safe read-ahead cancel hook');
   assert.match(vfsCode, /async mount\(priority = 'startup'\)[\s\S]+this\._fetchSegment\(0, priority \|\| 'startup'\)/,

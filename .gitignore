@@ -36,6 +36,7 @@ android/app/build/
 
 # Test/debug scratch output (server logs can echo release names and channel lists).
 dist/
+tmp/
 *.log
 bench/shots/
 bench/stress-results/

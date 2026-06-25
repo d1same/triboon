@@ -141,8 +141,10 @@ reserve = ceil(usable * startupReservePct)
 perStreamBudget = floor((usable - reserve) / activeMounts)
 targetReadAhead = min(configured per-stream cap, perStreamBudget)
 targetCache = max(targetReadAhead * 3, 36 or 48 segments)
-targetCacheBytes = 48-96 MB for 1080p-class, 96-192 MB for 4K-class,
-  divided down as active mounts increase
+targetCacheBytes = the owner buffer target converted to a bounded byte budget,
+  then divided down as active mounts increase
+targetCacheSegments = high enough to retain targetCacheBytes for the mounted
+  article size, not just readAhead * 3
 ```
 
 Large files use the 4K window; smaller files use the 1080p window.
@@ -155,10 +157,44 @@ This keeps hot streams buffered while preserving connection room for another
 user's first frame or seek. A future disk-backed multi-minute buffer is allowed,
 but it must preserve the same reserve and priority rules.
 
+Normal completed HTTP ranges keep their warm read-ahead alive. This matters for
+Android ExoPlayer and browsers that request sequential ranges: treating every
+completed range like a disconnect throws away the next hot articles and can make
+4K playback rebuffer even when the provider is fast enough. True interrupted
+requests still abort their queued/running read-ahead so a seek or closed player
+does not keep pulling stale bytes.
+
+If a VOD range is interrupted, the server destroys the response instead of
+ending a shorter body under the original `Content-Length`. That lets the player
+treat it as a retryable transport interruption rather than accepting a corrupt
+partial range. VOD stream sockets also get a longer per-route timeout than the
+general API timeout so a provider hiccup becomes buffering/retry behavior, not
+an immediate truncated response.
+
 Playback windows are applied when a mount is selected and rebalanced again when
 stream routes are touched or housekeeping removes mounts. That lets existing
 streams shrink their read-ahead/cache budget as additional users become active,
 instead of keeping the larger window they received at mount time.
+
+After a source mounts successfully, Triboon starts a bounded low-priority
+playback warmup over the first chunk of the file. This is not allowed to block
+Play, and it must stay on the read-ahead lane so player startup and seeks still
+win. Its job is to surface slow early BODY articles while the player is opening
+and to put the first 4K bytes into the VFS cache before ExoPlayer reaches them.
+If playback later needs a segment that is already queued as read-ahead, the VFS
+must upgrade that segment by issuing an urgent playback fetch rather than
+waiting behind its own low-priority warmup.
+
+The title detail page has one extra startup optimization: once the current Play
+target is stable, the client asks `/api/prepare` to prepare the first viable
+ranked source in the background. Prepare reuses the same search/NZB warming
+path, walks only a small capped source slice to skip a bad top pick, mounts the
+first winner, and records it in `mountByUrl` without creating a play session or
+exposing a stream URL. A later Play still performs normal auth, policy, and
+token creation, but the pipeline can reuse or join the live prepared/in-flight
+mount instead of repeating source finding, first-article probe, mount, and
+health gate. Fast home/card focus still uses cheap `/api/search` warming only;
+it does not mount every title the user scrolls past.
 
 Each active file also tracks coarse playback read pressure: segment waits,
 maximum segment wait, cache hits, bytes served, and temporary adaptive

@@ -99,6 +99,8 @@ const MOUNT_DEADLINE_MS = 30000;     // hard cap — a stalled mount advances in
 const FIRST_ARTICLE_PROBE_MS = 800;   // cheap STAT probe catches stale NZBs before BODY fetches
 const MAX_ATTEMPTS = 18;      // source walk: stale indexer rows are common; keep going past one bad release family
 const MAX_ADVANCE_MS = 45000; // hard UX budget for one play/advance source walk
+const PREPARE_MAX_ATTEMPTS = 3; // background detail prep: skip one bad top pick without silently walking the whole list
+const PREPARE_MAX_MS = 12000;
 
 function candidateKey(candidate) {
   return crypto.createHash('sha1').update([
@@ -195,6 +197,7 @@ class Pipeline {
     this.searchInflight = new Map(); // queryKey -> Promise(hit), so Play can join an active prefetch
     this.nzbCache = new Map();    // nzbUrl -> xml (small LRU; replays remount instantly)
     this.nzbInflight = new Map(); // nzbUrl -> Promise(xml), so Play joins detail-page prefetch
+    this.prepareInflight = new Map(); // nzbUrl -> Promise({vf|fail}), so Play joins detail-page prepare
     this.mountByUrl = new Map();  // nzbUrl -> mount id (live mounts are reused — replay ≈ instant)
     this.metrics = {
       searchCacheHits: 0,
@@ -286,12 +289,20 @@ class Pipeline {
   }
 
   _searchCacheKey(params, opts = {}) {
+    const clean = (v) => {
+      const s = String(v ?? '').trim();
+      return s || undefined;
+    };
+    const episodePart = (v) => {
+      const n = Number(v);
+      return Number.isInteger(n) && n > 0 ? String(n) : clean(v);
+    };
     return JSON.stringify([
-      params.q,
-      opts.ignoreCatalogIds ? undefined : params.imdbid,
-      opts.ignoreCatalogIds ? undefined : params.tvdbid,
-      params.season,
-      params.ep,
+      clean(params.q),
+      opts.ignoreCatalogIds ? undefined : clean(params.imdbid),
+      opts.ignoreCatalogIds ? undefined : clean(params.tvdbid),
+      episodePart(params.season),
+      episodePart(params.ep),
     ]);
   }
 
@@ -343,13 +354,35 @@ class Pipeline {
       ? Math.max(readAhead, Math.floor((usable - Math.max(1, reserve - borrowedReserve)) / activeCount))
       : readAhead;
     const maxReadAhead = Math.max(readAhead, Math.min(configuredWindow, adaptiveBudget, readAhead + 4));
+    const bufferSec = Number(big ? perf.buffer4kSec : perf.buffer1080Sec);
+    const hasBufferTarget = Number.isFinite(bufferSec) && bufferSec > 0;
+    const fallbackCacheMb = big
+      ? Math.max(96, Math.floor(192 / activeCount))
+      : Math.max(48, Math.floor(96 / activeCount));
+    let cacheMaxBytes = fallbackCacheMb * 1024 * 1024;
+    let cacheMax = Math.max(readAhead * 3, big ? 48 : 36);
+    if (hasBufferTarget) {
+      // The owner setting is in seconds, but the VFS retains decoded article segments.
+      // Convert to a bounded byte target, then raise the segment cap so small articles
+      // can actually hold that buffer instead of being limited by readAhead * 3.
+      const targetMbps = big ? 24 : 10;
+      const targetMb = Math.ceil((bufferSec * targetMbps) / 8);
+      const maxMb = big ? 384 : 256;
+      const minMb = big ? 96 : 48;
+      const totalMb = Math.max(minMb, Math.min(maxMb, targetMb));
+      const perActiveMb = Math.max(big ? 64 : 32, Math.floor(totalMb / activeCount));
+      cacheMaxBytes = perActiveMb * 1024 * 1024;
+      const segmentBytes = Number(vf.partSize)
+        || (Array.isArray(vf.segments) && vf.segments.length ? Math.ceil((vf.size || 0) / vf.segments.length) : 0);
+      if (Number.isFinite(segmentBytes) && segmentBytes > 0) {
+        cacheMax = Math.max(cacheMax, Math.ceil(cacheMaxBytes / segmentBytes));
+      }
+    }
     return {
       readAhead,
       maxReadAhead,
-      cacheMax: Math.max(readAhead * 3, big ? 48 : 36),
-      cacheMaxBytes: (big
-        ? Math.max(96, Math.floor(192 / activeCount))
-        : Math.max(48, Math.floor(96 / activeCount))) * 1024 * 1024,
+      cacheMax,
+      cacheMaxBytes,
     };
   }
 
@@ -367,6 +400,23 @@ class Pipeline {
       }
     }
     return win;
+  }
+
+  _startPlaybackWarmup(vf, win) {
+    if (!vf || !vf.streamable || vf._playbackWarmupStarted || typeof vf.read !== 'function') return;
+    const size = Number(vf.size) || 0;
+    if (size <= 0) return;
+    const big = size > 4e9;
+    const capBytes = Number(win && win.cacheMaxBytes) || 0;
+    const warmBytes = Math.min(size, capBytes || Infinity, (big ? 96 : 32) * 1024 * 1024);
+    if (!Number.isFinite(warmBytes) || warmBytes <= 0) return;
+    vf._playbackWarmupStarted = true;
+    const timer = setTimeout(() => (async () => {
+      for await (const _chunk of vf.read(0, warmBytes, { priority: 'readAhead' })) {
+        // Drain intentionally: this warms the VFS cache without blocking Play.
+      }
+    })().catch(() => {}), 150);
+    if (timer && typeof timer.unref === 'function') timer.unref();
   }
 
   rebalancePlaybackWindows(now = Date.now()) {
@@ -515,6 +565,18 @@ class Pipeline {
       }
       this.mountByUrl.delete(candidate.nzbUrl);
     }
+    const pending = this.prepareInflight.get(candidate.nzbUrl);
+    if (pending) return pending;
+    const run = this._tryCandidateFresh(candidate, mountOpts);
+    this.prepareInflight.set(candidate.nzbUrl, run);
+    try {
+      return await run;
+    } finally {
+      if (this.prepareInflight.get(candidate.nzbUrl) === run) this.prepareInflight.delete(candidate.nzbUrl);
+    }
+  }
+
+  async _tryCandidateFresh(candidate, mountOpts) {
     let xml = this.nzbCache.get(candidate.nzbUrl);
     if (xml) this.metrics.nzbCacheHits++;
     else {
@@ -608,7 +670,7 @@ class Pipeline {
     // never flood the pool.
     const perf = this.performance() || {};
     const activeMounts = [...this.mounts.values()].filter((m) => Date.now() - (m._touched || 0) < 120000).length + 1;
-    this._applyPlaybackWindow(vf, activeMounts, perf);
+    const win = this._applyPlaybackWindow(vf, activeMounts, perf);
 
     // Bounded gate: verdict within 500ms or we play anyway and keep checking in background.
     // (Provider quirk, see bench/RESULTS.md: healthy STATs answer in ~60-250ms; only MISSES
@@ -636,6 +698,7 @@ class Pipeline {
     } else {
       this.metrics.healthGateResults++;
     }
+    this._startPlaybackWarmup(vf, win);
     return { vf };
   }
 
@@ -645,16 +708,43 @@ class Pipeline {
   // ranked list behind that explicit choice.
   async play(params, policy = {}, mountOpts = {}) {
     const { candidates } = await this.search(params, policy);
+    const playable = this._playableCandidates(candidates, params);
+    if (!playable.length) throw new Error('no playable releases found');
+    const session = new PlaySession(params, playable);
+    this.sessions.set(session.id, session);
+    return this._advance(session, mountOpts);
+  }
+
+  _playableCandidates(candidates, params = {}) {
     let playable = candidates.filter((c) => c.score > -5000);
     if (params.pickKey || params.pick) {
       const picked = candidates.find((c) => params.pickKey && c.pickKey === params.pickKey)
         || candidates.find((c) => params.pick && c.name === params.pick);
       if (picked && picked.score > -5000) playable = [picked, ...playable.filter((c) => c.pickKey !== picked.pickKey)];
     }
+    return playable;
+  }
+
+  async prepare(params, policy = {}, mountOpts = {}) {
+    const { candidates } = await this.search(params, policy);
+    const playable = this._playableCandidates(candidates, params);
     if (!playable.length) throw new Error('no playable releases found');
-    const session = new PlaySession(params, playable);
-    this.sessions.set(session.id, session);
-    return this._advance(session, mountOpts);
+    const attempts = [];
+    const started = Date.now();
+    for (const candidate of playable.slice(0, PREPARE_MAX_ATTEMPTS)) {
+      if (Date.now() - started >= PREPARE_MAX_MS) break;
+      const res = await this._tryCandidate(candidate, mountOpts);
+      if (res.vf && !res.fail) {
+        res.vf._touched = Date.now();
+        if (candidate.name) res.vf._releaseName = candidate.name;
+        this.mounts.set(res.vf.id, res.vf);
+        this.mountByUrl.set(candidate.nzbUrl, res.vf.id);
+        this.rebalancePlaybackWindows();
+        return { vf: res.vf, candidate, attempts, prepared: true };
+      }
+      attempts.push({ name: candidate.name, fail: res.fail || 'prepare failed' });
+    }
+    return { candidate: playable[0], attempts, prepared: false };
   }
 
   // Mount the next viable candidate in the session (used by play and by auto-advance).

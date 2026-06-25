@@ -37,6 +37,10 @@ That means Triboon tries to choose the right source first, direct-play whenever
 the device can handle it, and only remux or transcode when the client needs
 help.
 
+Detail pages warm search results and can prepare the first viable ranked source
+in the background, so pressing Play can reuse the prepared mount instead of
+repeating source finding, health probing, and mount work.
+
 ## Highlights
 
 - Movies and TV shows with TMDB metadata, detail pages, seasons, episodes,

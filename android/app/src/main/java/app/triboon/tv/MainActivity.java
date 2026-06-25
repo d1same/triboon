@@ -270,6 +270,7 @@ public class MainActivity extends Activity {
     private long nativeLastAutoResumeSeekMs;
     private long nativeLastStatsMs;
     private static final long NATIVE_VIDEO_STARTUP_STALL_MS = 7000L;
+    private static final long NATIVE_VIDEO_HEAVY_STARTUP_STALL_MS = 12000L;
     private static final long NATIVE_VIDEO_REBUFFER_TRIM_MS = 15000L;
     private static final long NATIVE_VIDEO_REBUFFER_RECOVERY_MS = 45000L;
     private static final long NATIVE_LIVE_STALL_RECOVERY_MS = 45000L;
@@ -4278,12 +4279,12 @@ public class MainActivity extends Activity {
         boolean conservative = nativeConservativePlaybackDevice();
         boolean video = "video".equals(mode);
         boolean heavyVod = video && nativeLikelyHeavyVod();
-        int minMs = video ? (conservative ? (heavyVod ? 14000 : 8000) : (heavyVod ? 16000 : 5000)) : (conservative ? 8000 : 4000);
-        int maxMs = video ? (conservative ? (heavyVod ? 60000 : 45000) : (heavyVod ? 90000 : 45000)) : 60000;
-        int startMs = video ? (conservative ? (heavyVod ? 3500 : 2500) : (heavyVod ? 2500 : 900)) : (conservative ? 1800 : 700);
-        int rebufferMs = video ? (conservative ? (heavyVod ? 7000 : 5000) : (heavyVod ? 6000 : 1800)) : (conservative ? 3500 : 1800);
+        int minMs = video ? (conservative ? (heavyVod ? 18000 : 8000) : (heavyVod ? 22000 : 5000)) : (conservative ? 8000 : 4000);
+        int maxMs = video ? (conservative ? (heavyVod ? 90000 : 45000) : (heavyVod ? 120000 : 45000)) : 60000;
+        int startMs = video ? (conservative ? (heavyVod ? 5000 : 2500) : (heavyVod ? 3500 : 900)) : (conservative ? 1800 : 700);
+        int rebufferMs = video ? (conservative ? (heavyVod ? 9000 : 5000) : (heavyVod ? 8000 : 1800)) : (conservative ? 3500 : 1800);
         int targetMb = video
-                ? (conservative ? (heavyVod ? 48 : 32) : (heavyVod ? 128 : 48))
+                ? (conservative ? (heavyVod ? 80 : 32) : (heavyVod ? 160 : 48))
                 : (conservative ? 24 : 48);
         int targetBytes = targetMb * 1024 * 1024;
         int backBufferMs = video ? (conservative ? (heavyVod ? 8000 : 5000) : (heavyVod ? 12000 : 8000)) : 3000;
@@ -5747,7 +5748,10 @@ public class MainActivity extends Activity {
             nativeVideoUnhealthySinceMs = now;
             return;
         }
-        if (now - nativeVideoUnhealthySinceMs >= NATIVE_VIDEO_STARTUP_STALL_MS) {
+        long startupThreshold = nativeLikelyHeavyVod()
+                ? NATIVE_VIDEO_HEAVY_STARTUP_STALL_MS
+                : NATIVE_VIDEO_STARTUP_STALL_MS;
+        if (now - nativeVideoUnhealthySinceMs >= startupThreshold) {
             notifyNativeVideoError(state == Player.STATE_IDLE ? "native player idle" : "native startup stalled",
                     nativePosSeconds(), nativeDurSeconds());
         }

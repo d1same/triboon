@@ -4,7 +4,7 @@ This is the A-to-Z checklist for keeping web and Android TV working as separate 
 
 ## Open Production Issue Tracker
 
-Last audit pass: 2026-06-23. This is the active issue list gathered from the
+Last audit pass: 2026-06-24. This is the active issue list gathered from the
 owner reports, the v1.5.10 production-readiness review, Settings/Preferences
 review, graph map, and direct code checks. Treat this section as the release
 triage board: every fix should update the status, the connected contract, and
@@ -46,6 +46,9 @@ Severity key:
 | A25 | P1 | Fixed; browser smoke passed | Movies/TV poster grids mounted every card appended by infinite scroll, so DOM, image observers, and D-pad offset scans grew with every loaded page. | `web/index.html` browse grid, watchlist grid, poster lazy-loader, D-pad grid navigation, backdrop animation, player OSD focus. | High-volume poster pages now keep a logical item list but mount only a bounded card window with spacers; D-pad uses logical `data-grid` indexes and cached uniform-grid math; removed virtual cards are unobserved by the lazy-loader. The same pass removes backdrop width/height animation, permanent page `will-change`, and weak OSD focus. Covered by `test/phase4.test.js` static regressions plus browser smoke that kept the Movies grid bounded after fast scrolling. |
 | A26 | P1 | Fixed; browser/TV smoke recommended | Follow-up audit found 720p rail clipping, stale virtual grid geometry after resize/cover-size changes, transient focus loss during virtual scroll, and IPTV pinned-DNS cache sticking to one failed address for the full safety cache window. | `web/index.html` rail shell, virtual grid geometry/focus, `server/index.js` IPTV pin cache, `server/newznab.js` fetch helper. | Rail content now has a scrollable main section plus pinned Add library / Preferences / Settings / profile footer; the profile button participates in D-pad rail traversal. Cover-size/resize paths invalidate virtual grid columns/pitch, redraw the bounded window, and restore the focus ring. IPTV pinning still validates all resolved addresses first, but rotates the safe address set and briefly sidelines failed pinned addresses. Covered by `test/phase4.test.js` and `test/security.test.js`; keep a 720p/Android TV visual smoke in release QA. |
 | A27 | P1 | Fixed; v1.7.4 verified | Full A-Z stress pass found delayed live-remux socket cleanup, slow bad-channel startup, browser IPTV fetching full playback URLs for every channel, a 1080p release with `UHD` in the name being ranked as 4K, and heavy 4K ExoPlayer buffers that were too shallow on capable Android TV devices. | `server/index.js` IPTV channel/play/remux/native proxy, `server/scoring.js`, `web/index.html`, `MainActivity.java`, `server/library-db.js`, security/IPTV/phase4 tests, browser/Android release QA. | Live TV browse now loads lean channel metadata and hydrates playback URLs only on play; browser remux prefers HLS but uses one startup deadline, no in-request Xtream playlist refresh on provider rejection, explicit no-keepalive socket cleanup, and direct native first-byte timeouts. Scoring honors explicit `1080p` over `UHD` source markers. Heavy VOD on capable Android devices gets deeper ExoPlayer buffering while conservative devices stay lighter. SQLite local-library checkpoints run after library mutations. Verified by focused real IPTV web/native first-byte smoke, route/browser smoke, and `node --test` full suite 208/208. |
+| A28 | P1 | Fixed locally; owner smoke pending | VOD startup drifted away from the 1-2 second feel. Detail-page warmup could miss TV episode Play cache hits when season/episode types differed, and Play still had to repeat probe/mount/health work unless the mount was already live. The 4K buffer target also did not retain enough decoded bytes for small article posts, and read-ahead could briefly sit ahead of the player's first needed segment. | `server/pipeline.js`, `server/index.js`, `server/vfs.js`, `web/index.html`, `MainActivity.java`, `docs-streaming-performance.md`, P14 tests. | Search cache keys now normalize season/episode values; detail pages call `/api/prepare` for the stable Play target sooner; prepare walks only a small capped ranked-source slice so one bad top pick does not leave Play cold, exposes no stream URL/session, and Play reuses or joins the prepared/in-flight mount plus NZB prefetch. 4K cache retention now maps buffer seconds to byte and segment budgets; completed HTTP ranges keep warm read-ahead; active playback can upgrade a read-ahead segment; Android heavy VOD buffers are deeper. Local timing after the fallback prepare/race fix: Angel Has Fallen prepared Play reused a 10ms mount with 13ms first byte; House of the Dragon S03E01 4K prepared Play reused a 9ms mount with 13ms first byte. Verified focused P14 tests and live localhost timing. |
+| A29 | P1 | Audited locally; device smoke pending | Repeated small UI/player changes were risking regressions across subtitles, IPTV, PiP guide state, and VOD startup speed. | `docs-architecture.md`, `docs-player-regression-map.md`, `docs-streaming-performance.md`, `server/index.js`, `server/pipeline.js`, `server/vfs.js`, `web/index.html`, `MainActivity.java`, P9/P11/P14 tests, graph map. | Graphify was refreshed for the current tree. The contract now explicitly records online subtitles as the default stable path, built-in extraction as admin opt-in, Android native subtitle overlay behavior, same-request pinned-IP IPTV retry, prepared VOD mount reuse, and the tests that must run before shipping player changes. Focused verification passed `node --test test/iptv-cache.test.js` 33/33, `node --test test/phase4.test.js --test-name-pattern "subtitle|Subtitles|caption|CC|Wyzie|built-in|Live TV|IPTV|PiP|guide|native"` 25/25, and `node --test test/security.test.js --test-name-pattern "subtitle|subtitles|Wyzie|built-in|iptv|IPTV|Live TV"` 78/78. |
+| A30 | P0 | Version bumped; signed APK blocked locally | v1.7.21 release packaging must keep server/container and Android versions aligned while avoiding debug-signed public APKs. | `package.json`, `android/app/build.gradle`, Docker image, GitHub tag/release assets, `docs-app-updates.md`. | Bumped package version to `1.7.21` and Android `versionCode`/`versionName` to `85`/`1.7.21`. Verified `npm.cmd test` 232/232, local Docker image build `triboon:1.7.21`, and Android debug APK metadata. `assembleRelease` correctly refused to produce a release APK because `TRIBOON_RELEASE_*` signing values were not present; do not tag or publish stable APK aliases until the signed release APKs can be built and certificate-checked. |
 
 Closed, stale, or partly-covered audit items:
 
@@ -65,6 +68,13 @@ Closed, stale, or partly-covered audit items:
 - Graph refresh follow-up: closed by adding embedded-IPv4 IPTV URL rejection,
   durable Continue Watching local artwork, Music priority/caching/autoskip
   behavior, guide channel-id binding, and Android low-memory cache trimming.
+- VOD prepared-start follow-up: closed locally by `/api/prepare`, normalized TV
+  episode warmup keys, prepared-mount joining, 4K decoded-byte retention, and
+  active playback priority upgrades. Keep this in the owner smoke loop because
+  real-provider latency varies.
+- Subtitles/IPTV stability follow-up: current contracts are P9, P11, and P14.
+  Any future player, settings, PiP guide, subtitle, or Live TV touch should run
+  the focused IPTV/subtitle/security slices before full release verification.
 
 ## Product Surface
 
@@ -130,7 +140,8 @@ Closed, stale, or partly-covered audit items:
 
 ## Performance Targets
 
-- Pressing Play should show loading immediately and reuse warmed search/mount data when available.
+- Pressing Play should show loading immediately and reuse warmed search,
+  prepared mount, and in-flight NZB data when available.
 - Availability/source prefetch should run for online titles but skip owned local-library titles.
 - Bounded health gate stays fast and background triage advances without blocking playback.
 - Multi-user VOD capacity follows `docs-streaming-performance.md`: provider
