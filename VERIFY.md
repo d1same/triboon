@@ -65,6 +65,25 @@ and describe the risk.
 
 ### Latest Evidence
 
+2026-06-26, v1.7.32 Captions (language + hash-exact) and warm resume:
+
+- `npm.cmd test` 242/242 on Windows. New coverage: Wyzie key redaction in the
+  `[subs]` diagnostic log, ISO 639-2 B/T -> 639-1 normalization, OpenSubtitles
+  search->login->download->VTT (mock server), and the resume focus-prefetch wiring.
+- Android `gradlew assembleDebug` BUILD SUCCESSFUL at versionName 1.7.32 /
+  versionCode 96 (this release's code changes are web/server only — the WebView
+  shell loads the web UI from the server, so the language fix ships without an APK
+  rebuild; the bump keeps versions in lockstep per the release rule).
+- CC fixes verified by unit/mock tests; NOT exercised end-to-end on a live
+  provider here (this box has no Wyzie/usenet/OpenSubtitles creds — deliberately
+  not persisted). Verify on the real server: reproduce a caption and watch the
+  `[subs]` log line show `lang=ces->cs` etc.; OpenSubtitles is gated OFF until
+  `TRIBOON_OS_API_KEY/USER/PASS` are set, so the Wyzie path is unchanged by default.
+- Risk: OpenSubtitles response shape coded to the published REST contract but not
+  hit against the live API here; it is fully gated, so an unconfigured server is
+  byte-for-byte the prior Wyzie behavior (the existing Wyzie integration test
+  still passes).
+
 2026-06-26, v1.7.31 Multiview picker D-pad fix:
 
 - Root cause: the Multiview channel/Continue-Watching picker drove all D-pad
