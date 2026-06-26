@@ -608,6 +608,12 @@ test('music search supports voice and TV result focus without side-note clutter'
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   assert.ok(ui.includes('id="musicMicBtn" class="focusable" title="Voice search" aria-label="Voice search"'),
     'Music search should expose the same voice affordance as main Search');
+  assert.match(ui, /<section id="music">[\s\S]+<div class="wrap">\s*<button id="musicMicBtn"[\s\S]+<input id="musicSearch"/,
+    'Music search should mirror global Search with the microphone on the left of the field');
+  assert.doesNotMatch(ui, /<section id="music">\s*<div class="musicHead">\s*<h1>Music<\/h1>/,
+    'Music should not render a redundant title above the search strip');
+  assert.match(ui, /\.musicHead \.wrap\.hasMic #musicSearch\{padding-left:58px\}[\s\S]+#musicMicBtn\{position:absolute;left:10px;/,
+    'Music mic and input spacing should use the same left-mic layout as global Search');
   assert.doesNotMatch(ui, /Liked Music and your YouTube Music playlists stay first|Weekly picks only, kept short so Music opens quickly/,
     'Music shelf headers should not render right-aligned helper text');
   assert.match(ui, /const addShelf = \(title, cls = ''\) => \{[\s\S]+<div class="musicShelfTop"><h2>\$\{esc\(title\)\}<\/h2><\/div>[\s\S]+musicTiles[\s\S]+musicRail/,
@@ -620,12 +626,18 @@ test('music search supports voice and TV result focus without side-note clutter'
     'Android native voice callback should route to Music when the Music mic launched it');
   assert.match(ui, /function setupMusicVoiceSearch\(\) \{[\s\S]+TriboonTV\.startVoice[\s\S]+setTvVoiceTarget\('music'\)[\s\S]+new SR\(\)/,
     'Music voice search should support both Android native recognition and browser SpeechRecognition');
+  assert.match(ui, /function musicMicVisible\(\) \{[\s\S]+\$\(\'musicMicBtn\'\)\.style\.display !== 'none'[\s\S]+function focusMusicSearch\(\) \{[\s\S]+return musicMicVisible\(\) \? \$\(\'musicMicBtn\'\)\.focus\(\) : \$\(\'musicSearch\'\)\.focus\(\)/,
+    'Music should land on the mic instead of defaulting TV D-pad focus into the text input');
   assert.match(ui, /if \(inInput && ae === \$\('musicSearch'\)\) \{[\s\S]+k === 'ArrowDown' \|\| k === 'Enter'[\s\S]+moveMusicSearchDown\(\)/,
     'document-level D-pad handling should submit or move from Music search consistently');
-  assert.match(ui, /k === 'ArrowRight'[\s\S]+\$\(\'musicMicBtn\'\)\.style\.display !== 'none'[\s\S]+clearFocus\(\);[\s\S]+S\.zone = 'musicSearch';[\s\S]+\$\(\'musicMicBtn\'\)\.focus\(\)/,
-    'Music search should clear stale row focus before handing D-pad focus to the mic');
-  assert.match(ui, /if \(ae === \$\('musicMicBtn'\)\) \{[\s\S]+\$\(\'musicMicBtn\'\)\.click\(\)[\s\S]+moveMusicSearchDown\(\)/,
-    'Music mic should be a real Android TV focus stop');
+  assert.match(ui, /\$\(\'musicSearch\'\)\.addEventListener\('keydown', \(e\) => \{[\s\S]+e\.key === 'ArrowLeft' && \$\(\'musicSearch\'\)\.selectionStart === 0 && musicMicVisible\(\)[\s\S]+focusMusicSearch\(\)/,
+    'Music search input should let left-at-start step back to the mic in browser and Android TV');
+  assert.match(ui, /ae\.selectionStart === 0[\s\S]+return musicMicVisible\(\) \? focusMusicSearch\(\) : enterRail\(\)/,
+    'left from the Music search field should step back to the mic before the rail');
+  assert.match(ui, /if \(ae === \$\('musicMicBtn'\)\) \{[\s\S]+\$\(\'musicMicBtn\'\)\.click\(\)[\s\S]+if \(k === 'ArrowRight'\) \{ \$\(\'musicMicBtn\'\)\.blur\(\); return focusMusicInput\(\); \}[\s\S]+moveMusicSearchDown\(\)[\s\S]+enterRail\(\)/,
+    'Music mic should be a real Android TV focus stop with right-to-type and left-to-menu navigation');
+  assert.match(ui, /if \(S\.view === 'music'\) \{[\s\S]+if \(k === 'Escape' \|\| k === 'Backspace'\) return enterRail\(\);[\s\S]+if \(S\.zone === 'musicChips'\)/,
+    'Back/Escape from Music browse should open the rail so other sections stay reachable');
 });
 
 test('subtitle startup preference contract: admin can toggle built-in captions', () => {
@@ -2302,11 +2314,12 @@ test('Android native player: direct source and native chrome stay out of the web
       && ui.includes('id="pgMultiBtn" class="mvIconBtn focusable" type="button" title="Open multiview" aria-label="Open multiview"')
       && ui.includes('<span>Multiview</span>'),
     'Live TV should expose favorite in the player and icon-led Multiview launchers from guide surfaces');
-  assert.ok(ui.includes("isTriboonAndroidShell() ? '' : '<button id=\"chMultiBtn\"")
+  assert.ok(!ui.includes("isTriboonAndroidShell() ? '' : '<button id=\"chMultiBtn\"")
       && ui.includes("if (isTriboonAndroidShell()) {")
+      && ui.includes('Android Multiview needs native ExoPlayer support')
       && ui.includes("$('pgMultiBtn').hidden = true;")
       && ui.includes("$('pgMultiBtn').disabled = true;"),
-    'Android TV should not expose browser Multiview launchers until native multi-surface ExoPlayer support exists');
+    'Android TV should expose the Live TV page Multiview entry as a D-pad stop while fail-closing the browser split path until native multi-surface ExoPlayer support exists');
   assert.match(ui, /function liveToolbarButtons\(\) \{[\s\S]+\['chMultiBtn', 'chGuideBtn'\][\s\S]+function focusLiveToolbar\(id = 'chMultiBtn'\) \{[\s\S]+applyFocus\(btn, false\);[\s\S]+btn\.focus\(\{ preventScroll: true \}\)[\s\S]+function focusLiveFilter\(\) \{[\s\S]+document\.body\.classList\.contains\('tv'\) && focusLiveToolbar\('chMultiBtn'\)[\s\S]+return focusLiveSearchInput\(\);/,
     'Live TV D-pad should land on the toolbar buttons on TV instead of parking focus in the search input');
   assert.match(ui, /const liveToolbarId = S\.view === 'livetv' \? focusedLiveToolbarButton\(\) : '';[\s\S]+if \(liveToolbarId === 'chMultiBtn'\) \{[\s\S]+if \(k === 'ArrowLeft'\) return document\.body\.classList\.contains\('tv'\) \? enterRail\(\) : focusLiveSearchInput\(\);[\s\S]+if \(k === 'ArrowRight' && \$\('chGuideBtn'\)\) return focusLiveToolbar\('chGuideBtn'\);[\s\S]+if \(liveToolbarId === 'chGuideBtn'\) \{[\s\S]+if \(k === 'ArrowLeft'\) return \$\('chMultiBtn'\) \? focusLiveToolbar\('chMultiBtn'\) : enterRail\(\);/,

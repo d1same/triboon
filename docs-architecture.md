@@ -293,10 +293,10 @@ Playback contract:
   the highlighted pane. Two panes are side-by-side, three panes use a featured
   primary pane plus two smaller panes, and four panes use a 2x2 grid. Guide
   launchers and close controls stay icon-led so the surface matches the rest of
-  the player chrome and remains D-pad scannable. On Android TV, unsupported
-  browser Multiview launchers stay hidden; Live TV D-pad entry targets
-  supported toolbar buttons before the text filter, avoiding a remote trap in
-  the search input.
+  the player chrome and remains D-pad scannable. On Android TV, the Live TV
+  page entry remains a D-pad-reachable discovery point, but the action
+  fail-closes with a native ExoPlayer requirement notice instead of starting
+  browser Multiview; unsupported in-player guide launchers stay hidden.
 - Pane hover/focus changes the audible pane. OK on a filled pane opens a compact
   pane action row; Live TV panes expose fullscreen/return, swap screen, change
   channel/title, and close screen, while movie/show companion panes also expose
@@ -327,7 +327,8 @@ Playback contract:
   path for devices or providers that cannot hold the native stream directly.
 - Android TV/mobile must not use browser Multiview over the WebView. Native
   Multiview requires a dedicated Media3/ExoPlayer multi-surface design plus
-  memory, decoder, and provider-connection testing.
+  memory, decoder, and provider-connection testing. Until then, Android shell
+  entries must fail closed before any browser pane is mounted.
 - Android TV can also hold personal IPTV sources in the native app. Those
   sources are loaded by `MainActivity.java` from the Android device network,
   merged into `web/index.html` Live TV rows, and played directly by ExoPlayer.
