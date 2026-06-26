@@ -133,8 +133,12 @@ IPTV fix checklist:
 - Android normal Live TV remains native ExoPlayer-only, but Multiview is a
   deliberate separate surface. Android TV exposes the Live TV and PiP guide
   Multiview buttons in D-pad order, then enters the browser/server fMP4
-  Multiview path only when that Android WebView reports MediaSource support. If
-  MediaSource is unavailable, Multiview fails closed before mounting any pane.
+  Multiview path only when that Android WebView reports MediaSource support.
+  When Multiview is opened from active native playback, Android must first hide
+  the ExoPlayer layer, restore WebView focus, and fire
+  `__tvNativePlaybackSurfaceReady`; the web launcher waits for that callback
+  before mounting panes. If MediaSource is unavailable, Multiview fails closed
+  before mounting any pane.
 
 #### Companion Screen Direction
 

@@ -2321,9 +2321,14 @@ test('Android native player: direct source and native chrome stay out of the web
       && ui.includes("$('pgMultiBtn').addEventListener('click', () => openMultiViewFromGuide());")
       && ui.includes('function multiViewCanUseWeb() {')
       && ui.includes('return !!liveMseType();')
+      && ui.includes('function waitNativePlaybackSurfaceReady(timeout = 1200)')
+      && ui.includes('async function stopActivePlaybackForWebSurface(opts = {})')
+      && ui.includes('window.__tvNativePlaybackSurfaceReady = () =>')
       && ui.includes('reportTvInputState();')
       && ui.includes('function reportTvInputState()'),
     'Android TV should expose the Live TV and PiP guide Multiview launchers while normal single-channel Live TV remains native');
+  assert.ok(android.includes('window.__tvNativePlaybackSurfaceReady && window.__tvNativePlaybackSurfaceReady()'),
+    'Android should notify the web app after closing the native player surface so Multiview can wait for WebView focus');
   assert.match(ui, /function liveToolbarButtons\(\) \{[\s\S]+\['chMultiBtn', 'chGuideBtn'\][\s\S]+function focusLiveToolbar\(id = 'chMultiBtn'\) \{[\s\S]+applyFocus\(btn, false\);[\s\S]+btn\.focus\(\{ preventScroll: true \}\)[\s\S]+function focusLiveFilter\(\) \{[\s\S]+document\.body\.classList\.contains\('tv'\) && focusLiveToolbar\('chMultiBtn'\)[\s\S]+return focusLiveSearchInput\(\);/,
     'Live TV D-pad should land on the toolbar buttons on TV instead of parking focus in the search input');
   assert.match(ui, /const liveToolbarId = S\.view === 'livetv' \? focusedLiveToolbarButton\(\) : '';[\s\S]+if \(liveToolbarId === 'chMultiBtn'\) \{[\s\S]+if \(k === 'ArrowLeft'\) return document\.body\.classList\.contains\('tv'\) \? enterRail\(\) : focusLiveSearchInput\(\);[\s\S]+if \(k === 'ArrowRight' && \$\('chGuideBtn'\)\) return focusLiveToolbar\('chGuideBtn'\);[\s\S]+if \(liveToolbarId === 'chGuideBtn'\) \{[\s\S]+if \(k === 'ArrowLeft'\) return \$\('chMultiBtn'\) \? focusLiveToolbar\('chMultiBtn'\) : enterRail\(\);/,
@@ -2420,13 +2425,15 @@ test('Android native player: direct source and native chrome stay out of the web
     'Multiview change action should return to the grid and replace the selected pane');
   assert.match(ui, /function closeMultiViewPane\(slot = multiViewActiveSlot\(\)\) \{[\s\S]+cleanupMultiViewSlot\(i, true\);[\s\S]+if \(S\.multiView\.fullSlot === i\) S\.multiView\.fullSlot = null;[\s\S]+setMultiViewActiveSlot\(Math\.min\(i, multiViewCount\(\) - 1\)\);/,
     'Multiview close action should release only that pane and leave the surface open');
+  assert.match(ui, /function closeMultiView\(opts = \{\}\) \{[\s\S]+const targetView = returnView === 'player' \? 'livetv' : returnView;[\s\S]+if \(targetView === 'livetv' \|\| targetView === 'home'\) \{[\s\S]+switchView\(targetView, false\);/,
+    'closing Multiview should re-enter Home or Live TV through the normal view renderer instead of leaving stale shared grid DOM');
   assert.match(ui, /function multiViewCategoryGroups\(\) \{[\s\S]+const cwName = 'Continue Watching';[\s\S]+const cwItems = buildCwItems\(cachedWatchRowsForHome\(\)\)\.slice\(0, 80\);[\s\S]+const names = \[\.\.\.\(cwItems\.length \? \[cwName\] : \[\]\)/,
     'Multiview picker should include Continue Watching as a companion source');
   assert.match(ui, /async function playMultiViewVodItem\(it, slotIndex = multiViewActiveSlot\(\)\) \{[\s\S]+if \(multiViewVodCount\(i\) >= 1\) \{[\s\S]+One movie\/show companion at a time for now[\s\S]+api\('\/api\/play', \{ method: 'POST', body: playbackRequestBody\(item, null, qRank\) \}\)[\s\S]+startMultiViewVodSlot\(i, slot, media\);/,
     'Multiview should play one Continue Watching movie/show companion through the normal source-selection path');
-  assert.match(ui, /function playMultiViewExistingVodFromPlayer\(i = 0\) \{[\s\S]+const item = \{ \.\.\.p\.item, resume: currentTime\(\) \};[\s\S]+const url = currentPlaybackUrl\(p, at\);[\s\S]+stopActivePlaybackForReplacement\(\{ preserveGuide: true \}\);[\s\S]+return startMultiViewVodSlot\(i, slot, media\);/,
+  assert.match(ui, /async function playMultiViewExistingVodFromPlayer\(i = 0\) \{[\s\S]+const item = \{ \.\.\.p\.item, resume: currentTime\(\) \};[\s\S]+const url = currentPlaybackUrl\(p, at\);[\s\S]+await stopActivePlaybackForWebSurface\(\{ preserveGuide: true \}\);[\s\S]+return startMultiViewVodSlot\(i, slot, media\);/,
     'opening Multiview from an active movie or episode should carry that playback into the first pane');
-  assert.match(ui, /async function openMultiViewFromGuide\(seed = null\) \{[\s\S]+if \(!multiViewCanUseWeb\(\)\) return toast\('Multiview needs browser Live TV MediaSource support'\);[\s\S]+const playingVod = S\.playing && S\.playing\.item && S\.playing\.item\.type !== 'live';[\s\S]+if \(playingVod\) playMultiViewExistingVodFromPlayer\(0\);[\s\S]+else if \(current\) await playMultiViewChannel\(current, 0\);[\s\S]+openMultiViewPicker\(1\);/,
+  assert.match(ui, /async function openMultiViewFromGuide\(seed = null\) \{[\s\S]+if \(!multiViewCanUseWeb\(\)\) return toast\('Multiview needs browser Live TV MediaSource support'\);[\s\S]+const playingVod = S\.playing && S\.playing\.item && S\.playing\.item\.type !== 'live';[\s\S]+if \(S\.playing && !playingVod\) await stopActivePlaybackForWebSurface\(\);[\s\S]+if \(playingVod\) await playMultiViewExistingVodFromPlayer\(0\);[\s\S]+else if \(current\) await playMultiViewChannel\(current, 0\);[\s\S]+openMultiViewPicker\(1\);/,
     'Multiview should launch from guide contexts, preserve active VOD when present, and use the browser/server fMP4 surface only when MediaSource is available');
   assert.match(ui, /const multiEl = \$\('pgMultiBtn'\);[\s\S]+const focusGuideMulti = \(\) => \{[\s\S]+clearPlayerGuideVisualFocus\(\);[\s\S]+if \(active === multi\) \{[\s\S]+if \(k === 'Enter' && !e\.repeat\) return multi\.click\(\);[\s\S]+if \(k === 'ArrowUp'\) return i <= 0 \? \(back \? moveTo\(back\) : \(focusGuideMulti\(\) \|\| moveRowFrom\(-1\)\)\) : moveRowFrom\(-1\);/,
     'PiP guide D-pad should be able to move onto the Multiview button and open it with OK');

@@ -269,6 +269,46 @@ $report.sections['liveStart'] = $liveStart
 if (!$liveStart.ok) { Add-Failure "Live TV did not start: $($liveStart.error)" }
 Start-Sleep -Seconds 6
 
+$multiNativeHandoff = Invoke-CdpJson @"
+(async () => {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const it = (S.liveList || [])[0] || ((S.liveChannels || []).map(liveItemForPlayerGuide).filter(Boolean))[0];
+  if (!(S.playing && S.playing.item && S.playing.item.type === 'live' && S.playing.usingNative) && it) {
+    await playChannel(it, S.liveList || [it]);
+    await wait(2200);
+  }
+  const wasNative = !!(S.playing && S.playing.item && S.playing.item.type === 'live' && S.playing.usingNative);
+  const before = S._nativePlaybackSurfaceReadyAt || 0;
+  const opened = await openMultiViewFromGuide();
+  for (let n = 0; n < 30; n++) {
+    if (S.view === 'multiview' && S.multiView && S.multiView.open) break;
+    await wait(120);
+  }
+  const after = S._nativePlaybackSurfaceReadyAt || 0;
+  const slot = S.multiView && S.multiView.slots ? S.multiView.slots[0] : null;
+  const result = {
+    ok: !!(wasNative && opened && S.view === 'multiview' && S.multiView && S.multiView.open && after > before),
+    wasNative,
+    opened: !!opened,
+    surfaceReady: after > before,
+    before,
+    after,
+    view: S.view,
+    multiOpen: !!(S.multiView && S.multiView.open),
+    slot0: slot ? { title: slot.item && slot.item.title, status: slot.status || '', error: slot.error || '' } : null
+  };
+  if (S.multiView && S.multiView.open) closeMultiView();
+  await wait(700);
+  if (it) await playChannel(it, S.liveList || [it]);
+  return result;
+})()
+"@ -AwaitPromise
+$report.sections['multiNativeHandoff'] = $multiNativeHandoff
+if (!$multiNativeHandoff.wasNative) { Add-Failure "Android native Live TV was not active before Multiview handoff" }
+if (!$multiNativeHandoff.surfaceReady) { Add-Failure "Android native playback did not report WebView surface ready before Multiview" }
+if (!$multiNativeHandoff.ok) { Add-Failure "Active native Live TV did not hand off cleanly to Multiview" }
+Start-Sleep -Seconds 6
+
 $multiLivePrep = Invoke-CdpJson @"
 (async () => {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -504,9 +544,12 @@ if (!$subs.ok -and !$subs.skipped) { Add-Failure "Subtitle request returned HTTP
 $log = Invoke-Adb logcat -d -t 1600 | Select-String -Pattern "AndroidRuntime|FATAL|app\.triboon|ExoPlayer|Playback error|provider bot-protection|HTTP 403|HTTP 404|Renderer|crash|SIG"
 $logText = ($log | ForEach-Object { [string]$_ }) -join "`n"
 $fatalLog = [regex]::IsMatch($logText, "FATAL EXCEPTION|AndroidRuntime:\s+FATAL|AndroidRuntime.*(Exception|Error)|SIGSEGV|SIGABRT|Renderer.*crash", [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+$providerLogText = ($log | ForEach-Object { [string]$_ } | Where-Object {
+  $_ -notmatch "Subtitles could not load: subtitle HTTP 404" -and $_ -notmatch "no_subtitles" -and $_ -notmatch "No subtitles found for this title"
+}) -join "`n"
 $report.sections['logScan'] = [ordered]@{
   fatal = $fatalLog
-  providerProtection = [bool]($logText -match "provider bot-protection|HTTP 403|HTTP 404")
+  providerProtection = [bool]($providerLogText -match "provider bot-protection|HTTP 403|HTTP 404")
   lines = @($log | Select-Object -First 120 | ForEach-Object { [string]$_ })
 }
 if ($report.sections['logScan'].fatal) { Add-Failure "Android log contains fatal/crash markers" }

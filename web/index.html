@@ -7257,6 +7257,40 @@ const MULTIVIEW_MAX_SLOTS = 4;
 function multiViewCanUseWeb() {
   return !!liveMseType();
 }
+function resolveNativePlaybackSurfaceReady(ready = true) {
+  const pending = S._nativePlaybackSurfaceWait;
+  S._nativePlaybackSurfaceReadyAt = Date.now();
+  reportTvInputState();
+  if (!pending) return;
+  clearTimeout(pending.timer);
+  S._nativePlaybackSurfaceWait = null;
+  pending.resolve(!!ready);
+}
+function waitNativePlaybackSurfaceReady(timeout = 1200) {
+  if (!isTriboonAndroidShell()) return Promise.resolve(true);
+  const previous = S._nativePlaybackSurfaceWait;
+  if (previous) {
+    clearTimeout(previous.timer);
+    previous.resolve(false);
+  }
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      if (S._nativePlaybackSurfaceWait && S._nativePlaybackSurfaceWait.resolve === resolve) {
+        S._nativePlaybackSurfaceWait = null;
+      }
+      resolve(false);
+    }, timeout);
+    S._nativePlaybackSurfaceWait = { resolve, timer };
+  });
+}
+async function stopActivePlaybackForWebSurface(opts = {}) {
+  const waitForNative = !!(S.playing && S.playing.usingNative && isTriboonAndroidShell()
+    && canUseNativeVideoPlayer() && window.TriboonTV && window.TriboonTV.closeVideo);
+  const surfaceReady = waitForNative ? waitNativePlaybackSurfaceReady() : null;
+  stopActivePlaybackForReplacement(opts);
+  if (surfaceReady) await surfaceReady;
+  reportTvInputState();
+}
 function multiViewSlots() {
   if (!S.multiView) return [];
   if (!Array.isArray(S.multiView.slots)) S.multiView.slots = [];
@@ -7945,7 +7979,7 @@ async function playMultiViewVodItem(it, slotIndex = multiViewActiveSlot()) {
     return false;
   }
 }
-function playMultiViewExistingVodFromPlayer(i = 0) {
+async function playMultiViewExistingVodFromPlayer(i = 0) {
   const p = S.playing;
   if (!p || !p.item || p.item.type === 'live') return false;
   const item = { ...p.item, resume: currentTime() };
@@ -7970,7 +8004,7 @@ function playMultiViewExistingVodFromPlayer(i = 0) {
     lastSaved: Math.max(0, Math.floor(at || 0)),
   };
   const media = { kind, url, startOffset: slot.startOffset, directSeek: kind === 'direct' ? at : 0 };
-  stopActivePlaybackForReplacement({ preserveGuide: true });
+  await stopActivePlaybackForWebSurface({ preserveGuide: true });
   return startMultiViewVodSlot(i, slot, media);
 }
 async function openMultiViewFromGuide(seed = null) {
@@ -7981,13 +8015,13 @@ async function openMultiViewFromGuide(seed = null) {
   const playingVod = S.playing && S.playing.item && S.playing.item.type !== 'live';
   const current = seed || currentLiveChannelItem(0) || list.find((x) => String(x._channel) === String(S.liveCur)) || list[0];
   const returnView = S.view || 'livetv';
-  if (S.playing && !playingVod) stopActivePlaybackForReplacement();
+  if (S.playing && !playingVod) await stopActivePlaybackForWebSurface();
   closePlayerGuide({ fromNative: true });
   S.multiView = { open: true, count: 2, active: 0, pickSlot: null, actionSlot: null, swapSlot: null, fullSlot: null, order: [0, 1, 2, 3], cat: S.liveCat || '', returnView, slots: [null, null, null, null] };
   S.view = 'multiview';
   document.body.classList.add('videoOpen');
   renderMultiView();
-  if (playingVod) playMultiViewExistingVodFromPlayer(0);
+  if (playingVod) await playMultiViewExistingVodFromPlayer(0);
   else if (current) await playMultiViewChannel(current, 0);
   if (multiViewCount() > 1) openMultiViewPicker(1);
   return true;
@@ -7995,6 +8029,7 @@ async function openMultiViewFromGuide(seed = null) {
 function closeMultiView(opts = {}) {
   if (!S.multiView) return;
   const returnView = S.multiView.returnView || 'livetv';
+  const targetView = returnView === 'player' ? 'livetv' : returnView;
   cleanupMultiViewAll();
   S.multiView.open = false;
   closeMultiViewPicker();
@@ -8004,7 +8039,14 @@ function closeMultiView(opts = {}) {
   document.body.classList.remove('videoOpen');
   S.multiView = null;
   if (opts.silent) return;
-  S.view = returnView === 'player' ? 'livetv' : returnView;
+  if (targetView === 'livetv' || targetView === 'home') {
+    switchView(targetView, false);
+    requestAnimationFrame(() => {
+      if (S.view === targetView) focusContent();
+    });
+    return;
+  }
+  S.view = targetView;
   requestAnimationFrame(() => {
     if (S.view === 'livetv') focusContent();
     else if (S.view === 'home') focusContent();
@@ -8919,6 +8961,9 @@ function applyNativeVideoProgress(pos, dur, opts = {}) {
 }
 window.__tvNativeVideoProgress = (pos, dur) => {
   applyNativeVideoProgress(pos, dur);
+};
+window.__tvNativePlaybackSurfaceReady = () => {
+  resolveNativePlaybackSurfaceReady(true);
 };
 window.__tvNativeVideoReady = (pos, dur) => {
   const p = S.playing; if (!p || !p.usingNative) return;

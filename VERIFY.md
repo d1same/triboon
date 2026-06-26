@@ -65,6 +65,29 @@ and describe the risk.
 
 ### Latest Evidence
 
+2026-06-26, v1.7.30 Android TV Multiview native-surface fix:
+
+- `npm.cmd run verify:full` passed with `TRIBOON_ADB_DEVICE=emulator-5554`
+  after installing the rebuilt APK over v1.7.29. Android reported
+  `versionName=1.7.30`, `versionCode=94`.
+- Android TV stress output:
+  `bench/stress-results/android-tv-stress-20260626-155422.json`.
+- Android Multiview proof on `emulator-5554`: `multiNativeHandoff.ok`,
+  `multiNativeHandoff.wasNative`, and `multiNativeHandoff.surfaceReady` were
+  true, proving active native Live TV closed its ExoPlayer surface and restored
+  WebView focus before Multiview mounted panes. `livePrep.ok`, `liveOpen.ok`,
+  `pipFocus.ok`, and `pipOpen.ok` were also true.
+- Android ExoPlayer proof in the same run: 20 Live TV zaps, two PiP guide
+  loops, 10 VOD seeks, `logScan.fatal = false`, and
+  `logScan.providerProtection = false`.
+- CC route proof in the same run used a local Wyzie-compatible no-results mock
+  (`TRIBOON_WYZIE_KEY` + `WYZIE_BASE`) so no real subtitle secret was exposed;
+  the Android stress subtitle check returned HTTP 404 with `code =
+  no_subtitles`, which is the expected clean title-level miss.
+- Post-install focused APK proof:
+  `bench/stress-results/android-tv-stress-20260626-154349.json` passed after
+  `adb install -r android/app/build/outputs/apk/debug/app-debug.apk`.
+
 2026-06-26, v1.7.29 Multiview Android correction:
 
 - `npm.cmd run verify:full` passed with `TRIBOON_ADB_DEVICE=emulator-5554`.

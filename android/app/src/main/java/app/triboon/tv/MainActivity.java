@@ -5878,6 +5878,10 @@ public class MainActivity extends Activity {
         if (web == null) return;
         web.setVisibility(View.VISIBLE);
         web.requestFocus();
+        web.postDelayed(() -> {
+            if (web == null) return;
+            web.evaluateJavascript("window.__tvNativePlaybackSurfaceReady && window.__tvNativePlaybackSurfaceReady()", null);
+        }, 40);
     }
 
     // ---------- first-run / connection-error screen ----------
