@@ -249,6 +249,9 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Continue Watching should dedupe next-up and in-progress cards by canonical identity');
   assert.match(ui, /function nextEpisodeBumps\(cw, cwItems\) \{[\s\S]+continueWatchingIdentity\(it\) === `tv:\$\{id\}`/,
     'local next-episode bumps should not add a second card for a show already in Continue Watching');
+  // Resume should feel local: settling focus on a resumable card warms the source search.
+  assert.match(ui, /function focusCard\([\s\S]+if \(it && it\.type !== 'live' && \(it\._cw \|\| it\._nextEp \|\| \(\+it\.resume \|\| 0\) > 0\)\) prefetchSources\(it\);/,
+    'focusing a resumable Continue Watching / next-episode card should warm the source search so resume skips the cold indexer fan-out');
   assert.match(ui, /if \(!opts\.catalogOnly && !opts\.watchReady && !hasFreshWatch && !opts\.preserveFocus\) \{/,
     'Continue Watching row actions should not publish an empty placeholder row while preserving focus');
   assert.match(ui, /async function cwOp\(it, body, msg, opts = \{\}\) \{[\s\S]+if \(body\.remove \|\| body\.hidden\) removeWatchCacheKey\(it\.key\);[\s\S]+loadRows\(\{ preserveFocus: !!snap, focusSnapshot: snap, watchReady: true \}\);[\s\S]+loadWatchState\(true\)/,
@@ -684,6 +687,12 @@ test('subtitle startup preference contract: admin can toggle built-in captions',
     'web player should try to enable always-mode subtitles before entering online warmup');
   assert.ok(webHousekeeping.includes('fetch(`/api/ossubs/${mount.id}?${subtitleRequestParams(it, code2, mount.streamToken).toString()}`).catch(() => {});'),
     'web player should try to enable always-mode subtitles before falling back to online warmup prefetch');
+  // 639-2 Bibliographic codes ffprobe emits (cze/ger/fre/gre/per/chi) must map to the right
+  // 639-1 code instead of being truncated to a wrong language; otherwise non-English CC misses.
+  const langMap = (ui.match(/const LANG_3TO2 = \{[\s\S]*?\};/) || [''])[0];
+  for (const pair of ['cze: \'cs\'', 'ces: \'cs\'', 'ger: \'de\'', 'fre: \'fr\'', 'gre: \'el\'', 'ell: \'el\'', 'per: \'fa\'', 'chi: \'zh\'']) {
+    assert.ok(langMap.includes(pair), `LANG_3TO2 must map ${pair} so the right subtitle language reaches Wyzie`);
+  }
   assert.match(ui, /function applyStartupSubtitlePref\(\) \{[\s\S]+const rel = concreteSubtitleRel\(startupSubtitleRelFor\(p\)\);[\s\S]+Promise\.resolve\(setSubtitle\(rel, \{ startup: true \}\)\)\.finally/,
     'always-mode subtitles should be applied without waiting for the track probe to finish');
   assert.match(webHousekeeping, /await fetchPlayerTracks\(p, 1400\)[\s\S]+if \(bestBuiltInSubtitleRel\(\) && prefSubtitleMode\(\) === 'always'\) \{[\s\S]+applyStartupSubtitlePref\(\);[\s\S]+return;[\s\S]+\}[\s\S]+if \(prefSubtitleMode\(\) === 'always' && applyStartupSubtitlePref\(\)\) return;[\s\S]+\/api\/ossubs/,

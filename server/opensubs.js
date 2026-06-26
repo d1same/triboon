@@ -23,6 +23,21 @@ function noSubtitles(message) {
   e.noSubtitles = true;
   return e;
 }
+// Diagnostic: one concise line per Wyzie search so CC misses are debuggable in the server
+// log without ever leaking the API key. Always strips key= before anything is printed.
+function redactSubUrl(url) {
+  const raw = String(url || '');
+  try {
+    const u = new URL(raw);
+    if (u.searchParams.has('key')) u.searchParams.set('key', '***');
+    return u.href;
+  } catch {
+    return raw.replace(/([?&]key=)[^&]+/gi, '$1***');
+  }
+}
+function logSubs(msg) {
+  try { console.log(`[subs] ${msg}`); } catch {}
+}
 function isNoSubtitleError(e) {
   return !!(e && e.noSubtitles);
 }
@@ -277,12 +292,44 @@ function wyzieCatalogId({ tmdbId, imdbId } = {}) {
   return tmdb || '';
 }
 
+// Wyzie (and the OpenSubtitles REST API) expect ISO 639-1 two-letter language codes, but
+// ffprobe / Matroska tracks emit three-letter ISO 639-2 codes — frequently the Bibliographic
+// (B) variant derived from the English name (ger/fre/cze/gre/per/chi) which does NOT resemble
+// the 639-1 code. Mapping the wrong/truncated code (e.g. ces -> "ce") makes Wyzie search a
+// bogus language and return nothing — a top cause of "no subtitles" on non-English titles.
+// This table covers every B/T dual-code pair plus the common single-code languages a media
+// library realistically carries. Keep in sync with LANG_3TO2 in web/index.html.
+const ISO6392_TO_1 = {
+  eng: 'en', spa: 'es', fra: 'fr', fre: 'fr', deu: 'de', ger: 'de', ita: 'it', por: 'pt',
+  rus: 'ru', ara: 'ar', hin: 'hi', ben: 'bn', urd: 'ur', fas: 'fa', per: 'fa', tur: 'tr',
+  nld: 'nl', dut: 'nl', pol: 'pl', swe: 'sv', dan: 'da', nor: 'no', nob: 'nb', nno: 'nn',
+  fin: 'fi', jpn: 'ja', kor: 'ko', zho: 'zh', chi: 'zh', tha: 'th', vie: 'vi', ind: 'id',
+  msa: 'ms', may: 'ms', zsm: 'ms', heb: 'he', ell: 'el', gre: 'el', ces: 'cs', cze: 'cs',
+  slk: 'sk', slo: 'sk', hun: 'hu', ron: 'ro', rum: 'ro', bul: 'bg', ukr: 'uk', hrv: 'hr',
+  srp: 'sr', slv: 'sl', lit: 'lt', lav: 'lv', est: 'et', cat: 'ca', glg: 'gl', eus: 'eu',
+  baq: 'eu', isl: 'is', ice: 'is', gle: 'ga', cym: 'cy', wel: 'cy', sqi: 'sq', alb: 'sq',
+  hye: 'hy', arm: 'hy', kat: 'ka', geo: 'ka', mkd: 'mk', mac: 'mk', mya: 'my', bur: 'my',
+  afr: 'af', swa: 'sw', tgl: 'tl', fil: 'tl', tam: 'ta', tel: 'te', mal: 'ml', kan: 'kn',
+  mar: 'mr', guj: 'gu', pan: 'pa', sin: 'si', amh: 'am', aze: 'az', kaz: 'kk', uzb: 'uz',
+  bel: 'be', bos: 'bs', srp_latn: 'sr',
+};
+// Normalize any language token (BCP 47 tag, 639-1, or 639-2 B/T) to the ISO 639-1 code Wyzie
+// wants. Returns '' for unknown 3-letter codes so the caller can fall back deliberately.
+function toIso6391(code) {
+  const raw = String(code || '').trim().toLowerCase();
+  if (!raw) return '';
+  const primary = raw.split(/[-_]/)[0]; // 'pt-BR' -> 'pt', 'zh-hans' -> 'zh'
+  if (primary.length === 2) return primary;        // already 639-1
+  if (primary.length === 3) return ISO6392_TO_1[primary] || '';
+  return '';
+}
+
 function wyzieSearchUrl({ base = DEFAULT_BASE, key, tmdbId, imdbId, query, lang = 'en', releaseName = '', refresh = false, releaseHints = true } = {}) {
   const w = parseQuery(query || '');
   const u = new URL(`${base}/search`);
   u.searchParams.set('id', wyzieCatalogId({ tmdbId, imdbId }));
   if (w.season != null) { u.searchParams.set('season', w.season); u.searchParams.set('episode', w.ep); }
-  u.searchParams.set('language', lang);
+  u.searchParams.set('language', toIso6391(lang) || String(lang || '').slice(0, 2) || 'en');
   u.searchParams.set('format', 'srt,vtt');
   u.searchParams.set('source', 'all');
   if (releaseName && releaseHints) {
@@ -337,9 +384,26 @@ async function wyzieSearchResults({ key, tmdbId, imdbId, query, lang = 'en', rel
     }
   };
 
-  let data = releaseName ? await run(true) : null;
-  if (!Array.isArray(data) || !data.length) data = await run(false);
-  return data;
+  const catId = wyzieCatalogId({ tmdbId, imdbId });
+  const idKind = /^tt/.test(catId) ? 'imdb' : (catId ? 'tmdb' : 'none');
+  const w = parseQuery(query || '');
+  const ep = w.season != null ? ` s${w.season}e${w.ep}` : '';
+  const wlang = toIso6391(lang) || String(lang || '').slice(0, 2) || 'en';
+  const langLabel = wlang === lang ? wlang : `${lang}->${wlang}`;
+  try {
+    let data = releaseName ? await run(true) : null;
+    let path = Array.isArray(data) && data.length ? 'release-matched' : '';
+    if (!Array.isArray(data) || !data.length) {
+      data = await run(false);
+      path = (Array.isArray(data) && data.length) ? (releaseName ? 'broad-after-release-miss' : 'broad') : 'empty';
+    }
+    const count = Array.isArray(data) ? data.length : 0;
+    logSubs(`search id=${catId || '-'}(${idKind}) lang=${langLabel}${ep} release=${releaseName ? 'y' : 'n'} path=${path} -> ${count} result(s)`);
+    return data;
+  } catch (e) {
+    logSubs(`search id=${catId || '-'}(${idKind}) lang=${langLabel}${ep} release=${releaseName ? 'y' : 'n'} FAILED: ${String(e && e.message || e).slice(0, 140)}`);
+    throw e;
+  }
 }
 
 function rankSubs(data, releaseName = '', { durationSeconds = 0 } = {}) {
@@ -585,4 +649,6 @@ module.exports = {
   _subtitleDownloadNeedsAuth: subtitleDownloadNeedsAuth,
   _subtitleDownloadUrl: subtitleDownloadUrl,
   _subtitleDownloadCanFallback: subtitleDownloadCanFallback,
+  _redactSubUrl: redactSubUrl,
+  _toIso6391: toIso6391,
 };

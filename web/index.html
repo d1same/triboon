@@ -10169,9 +10169,23 @@ const LANG_NAMES = { eng: 'English', ger: 'German', fre: 'French', spa: 'Spanish
   hin: 'Hindi', per: 'Persian', tur: 'Turkish', pol: 'Polish' };
 function langCode(c) { c = String(c || '').toLowerCase(); return LANG_ALIAS[c] || c; }
 // Online subtitle APIs speak ISO 639-1 (2-letter); ffprobe/track prefs speak 639-2 (3-letter).
-const LANG_3TO2 = { eng: 'en', spa: 'es', fre: 'fr', ger: 'de', ita: 'it', por: 'pt', rus: 'ru',
-  ara: 'ar', per: 'fa', hin: 'hi', tur: 'tr', dut: 'nl', pol: 'pl', swe: 'sv', jpn: 'ja',
-  kor: 'ko', chi: 'zh', dan: 'da', nor: 'no', fin: 'fi' };
+// ffprobe/Matroska emit 3-letter ISO 639-2 codes (often the Bibliographic B variant:
+// ger/fre/cze/gre/per/chi) but Wyzie wants 2-letter ISO 639-1. Truncating an unmapped code
+// to its first 2 letters (ces->"ce") searches the wrong language and finds nothing, so this
+// map covers every B/T dual-code pair plus common languages. Keep in sync with ISO6392_TO_1
+// in server/opensubs.js.
+const LANG_3TO2 = { eng: 'en', spa: 'es', fra: 'fr', fre: 'fr', deu: 'de', ger: 'de', ita: 'it',
+  por: 'pt', rus: 'ru', ara: 'ar', hin: 'hi', ben: 'bn', urd: 'ur', fas: 'fa', per: 'fa',
+  tur: 'tr', nld: 'nl', dut: 'nl', pol: 'pl', swe: 'sv', dan: 'da', nor: 'no', nob: 'nb',
+  nno: 'nn', fin: 'fi', jpn: 'ja', kor: 'ko', zho: 'zh', chi: 'zh', tha: 'th', vie: 'vi',
+  ind: 'id', msa: 'ms', may: 'ms', zsm: 'ms', heb: 'he', ell: 'el', gre: 'el', ces: 'cs',
+  cze: 'cs', slk: 'sk', slo: 'sk', hun: 'hu', ron: 'ro', rum: 'ro', bul: 'bg', ukr: 'uk',
+  hrv: 'hr', srp: 'sr', slv: 'sl', lit: 'lt', lav: 'lv', est: 'et', cat: 'ca', glg: 'gl',
+  eus: 'eu', baq: 'eu', isl: 'is', ice: 'is', gle: 'ga', cym: 'cy', wel: 'cy', sqi: 'sq',
+  alb: 'sq', hye: 'hy', arm: 'hy', kat: 'ka', geo: 'ka', mkd: 'mk', mac: 'mk', mya: 'my',
+  bur: 'my', afr: 'af', swa: 'sw', tgl: 'tl', fil: 'tl', tam: 'ta', tel: 'te', mal: 'ml',
+  kan: 'kn', mar: 'mr', guj: 'gu', pan: 'pa', sin: 'si', amh: 'am', aze: 'az', kaz: 'kk',
+  uzb: 'uz', bel: 'be', bos: 'bs' };
 const LANG_2TO3 = Object.fromEntries(Object.entries(LANG_3TO2).map(([k, v]) => [v, k]));
 const OS_LANG_NAMES = { en: 'English', es: 'Spanish', fr: 'French', de: 'German', it: 'Italian',
   pt: 'Portuguese', ru: 'Russian', ar: 'Arabic', fa: 'Persian', hi: 'Hindi', tr: 'Turkish',
@@ -17684,6 +17698,11 @@ function focusCard(ri, ci, opts = {}) {
   }
   const it = view.data[ri] && view.data[ri].items[ci];
   if (it) { if (view.hasHero) setHero(it); else { S.focusedItem = it; setBackdrop(it.backdrop); setBdInfo(it); } }
+  // Resume should feel like a local file: when a resumable card (Continue Watching / next
+  // episode / has a saved position) settles under focus, warm the source search so pressing
+  // OK — or resuming straight from the card menu — skips the cold indexer fan-out. Debounced
+  // inside prefetchSources, server-cached 60s, and skipped when a local copy already fits.
+  if (it && it.type !== 'live' && (it._cw || it._nextEp || (+it.resume || 0) > 0)) prefetchSources(it);
   maybeLoadMoreHomeRow(view.root, ri);
 }
 function gridEls() { return [...(S.gridRoot || $('grid')).querySelectorAll('.pcard, .card, .chCard, .chGroupHead, .gRow.focusable, .lcat, .gridMore.focusable')]; }

@@ -1451,6 +1451,35 @@ test('settings: edit provider/indexer in place — blank secret keeps the saved 
   await httpJson(srv.port, 'POST', '/api/settings', { removeProvider: idx }, admin); // leave others untouched
 });
 
+test('subtitles: diagnostic URL redaction never leaks the Wyzie API key', () => {
+  const opensubs = require('../server/opensubs');
+  const redact = opensubs._redactSubUrl;
+  const out = redact('https://sub.wyzie.io/search?id=tt1234567&key=SUPERSECRETKEY&language=en');
+  assert.ok(!/SUPERSECRETKEY/.test(out), 'redacted URL must not contain the API key');
+  assert.match(out, /key=\*\*\*/, 'key param should be masked');
+  assert.match(out, /id=tt1234567/, 'non-secret params should remain for debugging');
+  // Malformed/relative inputs must still be scrubbed by the regex fallback.
+  const messy = redact('search?id=5&key=ANOTHERSECRET&x=1');
+  assert.ok(!/ANOTHERSECRET/.test(messy), 'fallback path must also mask the key');
+});
+
+test('subtitles: ISO 639-2 B/T codes normalize to the 639-1 code Wyzie expects', () => {
+  const opensubs = require('../server/opensubs');
+  const to1 = opensubs._toIso6391;
+  // The dual-code pairs ffprobe emits as the Bibliographic (B) variant must not be truncated.
+  const pairs = { cze: 'cs', ces: 'cs', ger: 'de', deu: 'de', fre: 'fr', fra: 'fr',
+    gre: 'el', ell: 'el', per: 'fa', fas: 'fa', chi: 'zh', zho: 'zh', dut: 'nl', nld: 'nl' };
+  for (const [code, want] of Object.entries(pairs)) {
+    assert.strictEqual(to1(code), want, `${code} must map to ${want}, not a truncated/own code`);
+  }
+  assert.strictEqual(to1('eng'), 'en', 'common single 639-2 code maps to 639-1');
+  assert.strictEqual(to1('en'), 'en', 'existing 639-1 codes pass through');
+  assert.strictEqual(to1('pt-BR'), 'pt', 'BCP 47 tags reduce to the primary subtag');
+  assert.strictEqual(to1('zh-Hans'), 'zh', 'script-tagged codes reduce to the primary subtag');
+  assert.strictEqual(to1('zzz'), '', 'unknown 3-letter codes return empty so callers fall back deliberately');
+  assert.strictEqual(to1(''), '', 'blank is empty');
+});
+
 test('subtitles: Wyzie search→file→VTT served per mount (and 503 without a key)', async () => {
   const http2 = require('http');
   let osPort;
