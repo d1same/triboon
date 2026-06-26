@@ -2314,12 +2314,13 @@ test('Android native player: direct source and native chrome stay out of the web
       && ui.includes('id="pgMultiBtn" class="mvIconBtn focusable" type="button" title="Open multiview" aria-label="Open multiview"')
       && ui.includes('<span>Multiview</span>'),
     'Live TV should expose favorite in the player and icon-led Multiview launchers from guide surfaces');
-  assert.ok(!ui.includes("isTriboonAndroidShell() ? '' : '<button id=\"chMultiBtn\"")
+  assert.ok(ui.includes("isTriboonAndroidShell() ? '' : '<button id=\"chMultiBtn\"")
       && ui.includes("if (isTriboonAndroidShell()) {")
       && ui.includes('Android Multiview needs native ExoPlayer support')
+      && ui.includes('const btn = btns.find((el) => el.id === id) || btns[0];')
       && ui.includes("$('pgMultiBtn').hidden = true;")
       && ui.includes("$('pgMultiBtn').disabled = true;"),
-    'Android TV should expose the Live TV page Multiview entry as a D-pad stop while fail-closing the browser split path until native multi-surface ExoPlayer support exists');
+    'Android TV should hide unsupported browser Multiview launchers, fall D-pad focus through to Guide, and fail-close direct calls until native multi-surface ExoPlayer support exists');
   assert.match(ui, /function liveToolbarButtons\(\) \{[\s\S]+\['chMultiBtn', 'chGuideBtn'\][\s\S]+function focusLiveToolbar\(id = 'chMultiBtn'\) \{[\s\S]+applyFocus\(btn, false\);[\s\S]+btn\.focus\(\{ preventScroll: true \}\)[\s\S]+function focusLiveFilter\(\) \{[\s\S]+document\.body\.classList\.contains\('tv'\) && focusLiveToolbar\('chMultiBtn'\)[\s\S]+return focusLiveSearchInput\(\);/,
     'Live TV D-pad should land on the toolbar buttons on TV instead of parking focus in the search input');
   assert.match(ui, /const liveToolbarId = S\.view === 'livetv' \? focusedLiveToolbarButton\(\) : '';[\s\S]+if \(liveToolbarId === 'chMultiBtn'\) \{[\s\S]+if \(k === 'ArrowLeft'\) return document\.body\.classList\.contains\('tv'\) \? enterRail\(\) : focusLiveSearchInput\(\);[\s\S]+if \(k === 'ArrowRight' && \$\('chGuideBtn'\)\) return focusLiveToolbar\('chGuideBtn'\);[\s\S]+if \(liveToolbarId === 'chGuideBtn'\) \{[\s\S]+if \(k === 'ArrowLeft'\) return \$\('chMultiBtn'\) \? focusLiveToolbar\('chMultiBtn'\) : enterRail\(\);/,

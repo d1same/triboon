@@ -90,10 +90,10 @@ IPTV fix checklist:
   Multiview action that opens a separate viewing surface seeded with the current
   channel and an immediate picker for the next pane. Those launchers should stay
   icon-led and styled like the rest of the app chrome, while Multiview close
-  controls use recognizable icon buttons instead of text-only pills. On Android
-  TV, the Live TV page still exposes the Multiview action as a D-pad focus stop
-  for discoverability, but it fail-closes with the native ExoPlayer requirement
-  notice; unsupported in-player guide launchers stay hidden.
+  controls use recognizable icon buttons instead of text-only pills. Android TV
+  shells hide browser Multiview launchers entirely until a native Media3
+  multi-surface implementation exists; direct calls still fail closed with the
+  native ExoPlayer requirement before any browser pane is mounted.
 - Browser Multiview uses the existing server fMP4 remux path with isolated
   MediaSource state per pane. It supports two, three, or four screens:
   two screens are side-by-side, three screens use one featured pane plus two
@@ -131,9 +131,10 @@ IPTV fix checklist:
   `/api/iptv/fav`, while Android device-local personal channels use local
   encrypted-device identity plus local favorites.
 - Android native Live TV must not mount browser Multiview panes. Until native
-  Media3/ExoPlayer owns a tested multi-surface design, Android shells fail
-  closed before entering Multiview playback and keep the existing ExoPlayer
-  single-surface plus guide/PiP contract.
+  Media3/ExoPlayer owns a tested multi-surface design, Android shells keep
+  unsupported Multiview buttons out of D-pad order, fail closed before entering
+  Multiview playback, and preserve the existing ExoPlayer single-surface plus
+  guide/PiP contract.
 
 #### Companion Screen Direction
 
