@@ -610,10 +610,14 @@ test('music search supports voice and TV result focus without side-note clutter'
     'Music search should expose the same voice affordance as main Search');
   assert.match(ui, /<section id="music">[\s\S]+<div class="wrap">\s*<button id="musicMicBtn"[\s\S]+<input id="musicSearch"/,
     'Music search should mirror global Search with the microphone on the left of the field');
+  assert.match(ui, /<input id="musicSearch"[\s\S]+<button id="musicClearBtn" class="focusable" title="Clear search" aria-label="Clear search" hidden>/,
+    'Music search should expose a D-pad reachable clear button beside the input');
   assert.doesNotMatch(ui, /<section id="music">\s*<div class="musicHead">\s*<h1>Music<\/h1>/,
     'Music should not render a redundant title above the search strip');
   assert.match(ui, /\.musicHead \.wrap\.hasMic #musicSearch\{padding-left:58px\}[\s\S]+#musicMicBtn\{position:absolute;left:10px;/,
     'Music mic and input spacing should use the same left-mic layout as global Search');
+  assert.match(ui, /\.musicHead \.wrap\.hasClear #musicSearch\{padding-right:58px\}[\s\S]+#musicClearBtn\{position:absolute;right:8px;/,
+    'Music clear button should reserve right-side input space without covering typed text');
   assert.doesNotMatch(ui, /Liked Music and your YouTube Music playlists stay first|Weekly picks only, kept short so Music opens quickly/,
     'Music shelf headers should not render right-aligned helper text');
   assert.match(ui, /const addShelf = \(title, cls = ''\) => \{[\s\S]+<div class="musicShelfTop"><h2>\$\{esc\(title\)\}<\/h2><\/div>[\s\S]+musicTiles[\s\S]+musicRail/,
@@ -626,18 +630,32 @@ test('music search supports voice and TV result focus without side-note clutter'
     'Android native voice callback should route to Music when the Music mic launched it');
   assert.match(ui, /function setupMusicVoiceSearch\(\) \{[\s\S]+TriboonTV\.startVoice[\s\S]+setTvVoiceTarget\('music'\)[\s\S]+new SR\(\)/,
     'Music voice search should support both Android native recognition and browser SpeechRecognition');
+  assert.match(ui, /function syncMusicClear\(\) \{[\s\S]+\$\(\'musicClearBtn\'\)\.hidden = !hasText;[\s\S]+classList\.toggle\('hasClear', hasText\)/,
+    'Music clear button visibility should track whether the search field has text');
+  assert.match(ui, /function clearMusicSearch\(opts = \{\}\) \{[\s\S]+clearTimeout\(_musicSearchT\);[\s\S]+\$\(\'musicSearch\'\)\.value = '';[\s\S]+showMusicHome\(\);[\s\S]+focusContent\(\)/,
+    'Clearing Music search should return to the Music browse surface');
+  assert.match(ui, /\$\(\'musicClearBtn\'\)\.addEventListener\('click', \(\) => clearMusicSearch\(\)\)/,
+    'Music clear button should also clear through the normal button click path');
   assert.match(ui, /function musicMicVisible\(\) \{[\s\S]+\$\(\'musicMicBtn\'\)\.style\.display !== 'none'[\s\S]+function focusMusicSearch\(\) \{[\s\S]+return musicMicVisible\(\) \? \$\(\'musicMicBtn\'\)\.focus\(\) : \$\(\'musicSearch\'\)\.focus\(\)/,
     'Music should land on the mic instead of defaulting TV D-pad focus into the text input');
   assert.match(ui, /if \(inInput && ae === \$\('musicSearch'\)\) \{[\s\S]+k === 'ArrowDown' \|\| k === 'Enter'[\s\S]+moveMusicSearchDown\(\)/,
     'document-level D-pad handling should submit or move from Music search consistently');
+  assert.match(ui, /k === 'ArrowRight' && ae\.selectionStart >= ae\.value\.length && musicClearVisible\(\)[\s\S]+return focusMusicClear\(\)/,
+    'right from the end of Music search should focus the clear button when it is visible');
   assert.match(ui, /\$\(\'musicSearch\'\)\.addEventListener\('keydown', \(e\) => \{[\s\S]+e\.key === 'ArrowLeft' && \$\(\'musicSearch\'\)\.selectionStart === 0 && musicMicVisible\(\)[\s\S]+focusMusicSearch\(\)/,
     'Music search input should let left-at-start step back to the mic in browser and Android TV');
   assert.match(ui, /ae\.selectionStart === 0[\s\S]+return musicMicVisible\(\) \? focusMusicSearch\(\) : enterRail\(\)/,
     'left from the Music search field should step back to the mic before the rail');
+  assert.match(ui, /if \(ae === \$\('musicClearBtn'\)\) \{[\s\S]+clearMusicSearch\(\)[\s\S]+focusMusicInput\(\)[\s\S]+moveMusicSearchDown\(\)/,
+    'Music clear button should be a first-class D-pad stop between the input and results');
   assert.match(ui, /if \(ae === \$\('musicMicBtn'\)\) \{[\s\S]+\$\(\'musicMicBtn\'\)\.click\(\)[\s\S]+if \(k === 'ArrowRight'\) \{ \$\(\'musicMicBtn\'\)\.blur\(\); return focusMusicInput\(\); \}[\s\S]+moveMusicSearchDown\(\)[\s\S]+enterRail\(\)/,
     'Music mic should be a real Android TV focus stop with right-to-type and left-to-menu navigation');
   assert.match(ui, /if \(S\.view === 'music'\) \{[\s\S]+if \(k === 'Escape' \|\| k === 'Backspace'\) return enterRail\(\);[\s\S]+if \(S\.zone === 'musicChips'\)/,
     'Back/Escape from Music browse should open the rail so other sections stay reachable');
+  assert.match(ui, /const rank = opts\.search \? `<div class="mRank">[\s\S]+const playGlyph = opts\.search \? '<div class="mPlayGlyph">[\s\S]+playMusic\(results, i, opts\.search \? \{ showQueue: true \} : \{\}\)/,
+    'TV search result rows should be richer and open the queue so the next songs are visible');
+  assert.match(ui, /body\.tv \.mSearchSongs\{grid-template-columns:repeat\(2,minmax\(330px,1fr\)\)[\s\S]+body\.tv \.mSearchSongs \.musicRow\.focus[\s\S]+body\.tv \.mSearchSongs \.musicRow \.mRank,body\.tv \.mSearchSongs \.musicRow \.mPlayGlyph\{display:grid\}/,
+    'TV Music search results should render as larger two-column song cards with clear focus');
 });
 
 test('subtitle startup preference contract: admin can toggle built-in captions', () => {
@@ -2445,6 +2463,16 @@ test('Android native player: direct source and native chrome stay out of the web
     'Back should return from a zoomed Multiview pane before closing Multiview');
   assert.match(ui, /function handleMultiViewKey\(k, e\) \{[\s\S]+S\.zone === 'multiTop'[\s\S]+setMultiViewTopFocus\(i - 1\)[\s\S]+setMultiViewTopFocus\(i \+ 1\)[\s\S]+if \(k === 'ArrowUp'\) \{[\s\S]+multiViewSlotOnTopRow\(multiViewActiveSlot\(\)\)[\s\S]+if \(\['2', '3', '4'\]\.includes\(k\)\) \{ setMultiViewCount\(\+k\);[\s\S]+if \(k === 'Enter' && !e\.repeat\) \{[\s\S]+openMultiViewActions\(multiViewActiveSlot\(\)\)/,
     'D-pad should move panes, reach layout controls, switch layouts, and open pane actions with OK');
+  // Regression: the picker must track focus by group + index in state, never document.activeElement.
+  // On Android TV the shell forwards synthetic key events while real DOM focus stays on <body>,
+  // so an activeElement-driven picker dead-ended (up/down stuck on the first two channels, no
+  // Left to categories, OK did nothing) — only Back escaped.
+  assert.match(ui, /function setMultiViewPickerFocus\(group, idx = 0\) \{[\s\S]+S\.mvPickGroup = g;[\s\S]+S\.mvPickIdx = Math\.max\(0, Math\.min\(els\.length - 1[\s\S]+el\.focus\(\{ preventScroll: true \}\)/,
+    'Multiview picker focus should be index-based and place real DOM focus, not rely on document.activeElement');
+  assert.match(ui, /if \(\$\('mvPicker'\)\.classList\.contains\('open'\)\) \{[\s\S]+const cats = multiViewPickerGroupEls\('cats'\);[\s\S]+const rows = multiViewPickerGroupEls\('rows'\);[\s\S]+let group = S\.mvPickGroup === 'cats' \? 'cats' : 'rows';[\s\S]+if \(k === 'Enter' && !e\.repeat\) \{ if \(els\[i\]\) els\[i\]\.click\(\); return true; \}[\s\S]+if \(k === 'ArrowRight' && group === 'cats'\) return setMultiViewPickerFocus\('rows', 0\);[\s\S]+if \(k === 'ArrowLeft' && group === 'rows'\)[\s\S]+if \(k === 'ArrowDown'\) return setMultiViewPickerFocus\(group, i \+ 1\);[\s\S]+if \(k === 'ArrowUp'\) return setMultiViewPickerFocus\(group, i - 1\);/,
+    'Multiview picker D-pad should walk categories/channels by index and select with OK without reading document.activeElement');
+  assert.ok(!/\$\('mvPicker'\)\.classList\.contains\('open'\)\) \{[\s\S]{0,400}document\.activeElement/.test(ui),
+    'Multiview picker key handling must not depend on document.activeElement (breaks on the Android TV synthetic-key shell)');
   assert.match(ui, /function ctlButtons\(\) \{[\s\S]+'ccBtn', 'audBtn', 'srndBtn', 'qualBtn'/,
     'movie and show controls should remain in the shared VOD control order');
   assert.match(android, /new DefaultHttpDataSource\.Factory\(\)[\s\S]+setAllowCrossProtocolRedirects\(false\)[\s\S]+setUserAgent\("TriboonTV\/" \+ BuildConfig\.VERSION_NAME\)/,

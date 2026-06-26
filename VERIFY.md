@@ -65,6 +65,38 @@ and describe the risk.
 
 ### Latest Evidence
 
+2026-06-26, v1.7.31 Multiview picker D-pad fix:
+
+- Root cause: the Multiview channel/Continue-Watching picker drove all D-pad
+  navigation off `document.activeElement`, but the Android TV shell forwards
+  synthetic DOM key events while real DOM focus stays on `<body>` and the app's
+  `applyFocus` only toggles a `.focus` class. So in the picker (which auto-opens
+  for screen 2 on launch), Up/Down were stuck on the first two channels, Left
+  could not reach categories, OK did nothing, and only Back escaped — matching
+  the reported symptom from both the Live TV and PiP-guide entry paths.
+- Fix: picker focus is now index-based (`S.mvPickGroup` + `S.mvPickIdx` via
+  `setMultiViewPickerFocus`), mirroring the already-working pane/action/top
+  branches. Navigation and OK no longer read `document.activeElement`.
+- `npm.cmd test` passed 239/239 on Windows, including new phase4 regression
+  assertions that the picker is index-based and never reads
+  `document.activeElement`.
+- Android debug build: `gradlew -p android assembleDebug` BUILD SUCCESSFUL at
+  versionName 1.7.31 / versionCode 95.
+- On-device proof (emulator-5554, Triboon_TV_API_36, debug APK installed; app
+  WebView loading the rebuilt v1.7.31 web UI from the dev server with IPTV
+  configured): drove the Multiview picker through the page's REAL global
+  keydown handler via synthetic `KeyboardEvent`s (the exact path the Java shell
+  uses), with focus held as the shell delivers it. Result:
+  `start:rows#0(Ch1) -> dn rows#1 -> dn rows#2 -> dn rows#3(Ch4) -> clamp ->
+  left cats#0(Sports, selected) -> catDn cats#1(News) -> Enter fired cat:News
+  -> right rows#0 -> dn+Enter fired play:Ch2`. Up/Down walk all channels with
+  clamping, Left reaches categories, OK selects both a category and a channel —
+  every reported dead-D-pad symptom is resolved on the actual device WebView.
+- NOT run here (no release signing secrets): signed APK build + `gh release`.
+  The full `android-tv-stress.ps1` live-zap/PiP/VOD-seek smoke was not re-run
+  (it covers the unchanged native side; this change is web-only). Recommend a
+  quick on-Shield picker walk after the signed APK is installed.
+
 2026-06-26, v1.7.30 Android TV Multiview native-surface fix:
 
 - `npm.cmd run verify:full` passed with `TRIBOON_ADB_DEVICE=emulator-5554`

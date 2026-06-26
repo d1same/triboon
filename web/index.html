@@ -2152,10 +2152,15 @@ body:not(.tv) #settings .setGrid[data-stab="display"]{grid-template-columns:repe
   padding:13px 16px;color:var(--text);font:500 15px "Albert Sans";outline:none}
 #musicSearch:focus{border-color:var(--magenta)}
 .musicHead .wrap.hasMic #musicSearch{padding-left:58px}
+.musicHead .wrap.hasClear #musicSearch{padding-right:58px}
 #musicMicBtn{position:absolute;left:10px;top:50%;transform:translateY(-50%);width:38px;height:38px;border-radius:50%;
   display:grid;place-items:center;color:var(--muted);background:rgba(34,25,52,.7)}
 #musicMicBtn.listening{background:var(--btnPrimary);color:var(--onAccent);animation:micPulse 1s ease-in-out infinite}
 #musicMicBtn:focus{transform:translateY(-50%)}
+#musicClearBtn{position:absolute;right:8px;top:50%;transform:translateY(-50%);width:36px;height:36px;border-radius:50%;
+  display:grid;place-items:center;color:var(--muted);background:rgba(34,25,52,.74)}
+#musicClearBtn[hidden]{display:none!important}
+#musicClearBtn:focus{transform:translateY(-50%)}
 /* Plex-inspired Music home: clean hubs with wide artwork cards that fit YTM thumbnails. */
 #musicBrowse{flex:1;overflow-y:auto;padding:0 0 96px;display:flex;flex-direction:column;gap:32px}
 #musicBrowse.hide{display:none}
@@ -2215,6 +2220,9 @@ body:not(.tv) #settings .setGrid[data-stab="display"]{grid-template-columns:repe
 .musicRow .mT{font:600 15px "Albert Sans";overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .musicRow .mA{font:500 12.5px "Albert Sans";color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .musicRow .mD{font:500 12px "JetBrains Mono";color:var(--muted);flex:none}
+.musicRow .mRank{display:none;flex:none;width:34px;text-align:center;font:800 12px "JetBrains Mono";letter-spacing:.08em;color:rgba(243,239,247,.42)}
+.musicRow .mPlayGlyph{display:none;flex:none;width:34px;height:34px;border-radius:50%;place-items:center;color:var(--onAccent);background:var(--btnPrimary)}
+.musicRow .mPlayGlyph svg{width:18px;height:18px;margin-left:1px}
 #musicList .mNote{color:var(--muted);font-size:14px;padding:24px 6px;max-width:60ch}
 .mSearchHead{display:flex;align-items:center;justify-content:space-between;gap:14px;margin:6px 2px 0;color:var(--muted);font:800 11px "JetBrains Mono";letter-spacing:.16em;text-transform:uppercase}
 .mSearchHead span:last-child{font:700 12px "Albert Sans";letter-spacing:0;text-transform:none}
@@ -2232,15 +2240,21 @@ body:not(.tv) #settings .setGrid[data-stab="display"]{grid-template-columns:repe
 .mSearchSongs{display:grid;grid-template-columns:repeat(2,minmax(260px,1fr));gap:8px 12px}
 .mSearchSongs .musicRow{background:rgba(22,16,32,.42);border:1px solid rgba(255,255,255,.055);min-height:74px;padding:10px 12px}
 .mSearchSongs .musicRow:hover,.mSearchSongs .musicRow:focus,.mSearchSongs .musicRow.focus{background:rgba(22,16,32,.42);border-color:rgba(255,255,255,.055);box-shadow:none}
-.mSearchSongs .musicRow .mThumb{width:56px;height:56px}
+.mSearchSongs .musicRow .mThumb{width:56px;height:56px;background-size:cover}
 .mSearchSongs .musicRow .mT{font-size:15.5px}
 .mSearchSongs .musicRow .mA{font-size:13px}
 body.tv .mArtistHit{min-height:112px;padding:13px 14px}
 body.tv .mArtistArt{width:86px;height:86px}
 body.tv .mArtistName{font-size:clamp(24px,2.45vw,34px)}
 body.tv .mArtistPlay{width:42px;height:42px}
-body.tv .mSearchSongs .musicRow{min-height:66px}
-body.tv .mSearchSongs .musicRow .mThumb{width:48px;height:48px}
+body.tv #musicList.searchResults{gap:16px;padding-bottom:72px}
+body.tv .mSearchSongs{grid-template-columns:repeat(2,minmax(330px,1fr));gap:12px 14px}
+body.tv .mSearchSongs .musicRow{min-height:92px;padding:14px;border-radius:8px;background:rgba(22,16,32,.62);border-color:rgba(255,255,255,.08)}
+body.tv .mSearchSongs .musicRow.focus{background:rgba(243,239,247,.075);border-color:var(--artFocusTileBorder);box-shadow:inset 0 0 0 1px var(--artFocusTileLine),0 14px 30px rgba(0,0,0,.28)}
+body.tv .mSearchSongs .musicRow .mThumb{width:68px;height:68px}
+body.tv .mSearchSongs .musicRow .mRank,body.tv .mSearchSongs .musicRow .mPlayGlyph{display:grid}
+body.tv .mSearchSongs .musicRow .mT{font-size:17px;font-weight:750}
+body.tv .mSearchSongs .musicRow .mA{font-size:13.5px}
 
 /* Music audio lives globally; controls are in the full-screen now-playing page. */
 #musicAudio{display:none}
@@ -2684,6 +2698,8 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
       <button id="musicMicBtn" class="focusable" title="Voice search" aria-label="Voice search" style="display:none">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
       <input id="musicSearch" placeholder="Search songs, artists, albums…" autocomplete="off" maxlength="120">
+      <button id="musicClearBtn" class="focusable" title="Clear search" aria-label="Clear search" hidden>
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
     </div>
   </div>
   <div id="musicBrowse"></div>
@@ -7671,6 +7687,35 @@ function multiViewCategoryGroups() {
   const names = [...(cwItems.length ? [cwName] : []), ...(favs.length ? [favName] : []), ...groups.keys()];
   return { all, cwName, cwItems, favName, favs, groups, names };
 }
+function multiViewPickerGroupEls(group) {
+  return group === 'cats'
+    ? [...$('mvCats').querySelectorAll('button')]
+    : [...$('mvChannels').querySelectorAll('button')];
+}
+// The picker must NOT key off document.activeElement: on Android TV the shell forwards
+// synthetic DOM key events while real DOM focus stays on <body>, so applyFocus (which only
+// toggles a .focus class) leaves activeElement === body. Track the focused group + index in
+// state like every other multiview zone, then drive navigation off that.
+function setMultiViewPickerFocus(group, idx = 0) {
+  let g = group === 'cats' ? 'cats' : 'rows';
+  let els = multiViewPickerGroupEls(g);
+  if (!els.length) { g = g === 'cats' ? 'rows' : 'cats'; els = multiViewPickerGroupEls(g); }
+  if (!els.length) {
+    S.mvPickGroup = 'close'; S.mvPickIdx = 0;
+    applyFocus($('mvPickerClose'));
+    return true;
+  }
+  S.mvPickGroup = g;
+  S.mvPickIdx = Math.max(0, Math.min(els.length - 1, Number.isFinite(+idx) ? +idx : 0));
+  const el = els[S.mvPickIdx];
+  try { el.focus({ preventScroll: true }); } catch { try { el.focus(); } catch {} }
+  applyFocus(el);
+  return true;
+}
+function restoreMultiViewPickerFocus() {
+  if (!$('mvPicker').classList.contains('open')) return;
+  setMultiViewPickerFocus(S.mvPickGroup || 'rows', S.mvPickIdx || 0);
+}
 function renderMultiViewPicker() {
   if (!S.multiView || !S.multiView.open) return;
   const { cwName, cwItems, favName, favs, groups, names } = multiViewCategoryGroups();
@@ -7686,7 +7731,13 @@ function renderMultiViewPicker() {
     const btn = document.createElement('button');
     btn.className = 'mvCat focusable' + (name === S.multiView.cat ? ' sel' : '');
     btn.innerHTML = `<span>${esc(name)}</span><span>${countFor(name)}</span>`;
-    btn.addEventListener('click', () => { S.multiView.cat = name; renderMultiViewPicker(); });
+    btn.addEventListener('click', () => {
+      S.multiView.cat = name;
+      renderMultiViewPicker();
+      const cats = multiViewPickerGroupEls('cats');
+      const selIdx = Math.max(0, cats.findIndex((b) => b.classList.contains('sel')));
+      setMultiViewPickerFocus('cats', selIdx);
+    });
     $('mvCats').appendChild(btn);
   });
   const isContinue = S.multiView.cat === cwName;
@@ -7720,15 +7771,21 @@ function openMultiViewPicker(slot = multiViewActiveSlot()) {
   setMultiViewActiveSlot(S.multiView.pickSlot);
   $('mvPickerTitle').textContent = `Choose content for screen ${S.multiView.pickSlot + 1}`;
   $('mvPicker').classList.add('open');
+  S.mvPickGroup = 'rows';
+  S.mvPickIdx = 0;
   renderMultiViewPicker();
+  setMultiViewPickerFocus('rows', 0);
   loadWatchState().then(() => {
-    if (S.multiView && S.multiView.open && $('mvPicker').classList.contains('open')) renderMultiViewPicker();
+    if (S.multiView && S.multiView.open && $('mvPicker').classList.contains('open')) {
+      renderMultiViewPicker();
+      restoreMultiViewPickerFocus();
+    }
   }).catch(() => {});
-  const first = $('mvChannels').querySelector('button') || $('mvCats').querySelector('button') || $('mvPickerClose');
-  if (first) applyFocus(first);
 }
 function closeMultiViewPicker() {
   $('mvPicker').classList.remove('open');
+  S.mvPickGroup = 'rows';
+  S.mvPickIdx = 0;
   if (S.multiView) S.multiView.pickSlot = null;
 }
 async function playMultiViewChannel(it, slotIndex = multiViewActiveSlot()) {
@@ -8073,18 +8130,20 @@ function handleMultiViewKey(k, e) {
   if (!S.multiView || !S.multiView.open) return false;
   if ($('mvPicker').classList.contains('open')) {
     if (k === 'Escape' || k === 'Backspace') { closeMultiViewPicker(); setMultiViewActiveSlot(multiViewActiveSlot()); return true; }
-    if (k === 'Enter' && !e.repeat && document.activeElement && document.activeElement.click) { document.activeElement.click(); return true; }
-    const cats = [...$('mvCats').querySelectorAll('button')];
-    const rows = [...$('mvChannels').querySelectorAll('button')];
-    const group = cats.includes(document.activeElement) ? cats : rows;
-    let i = group.indexOf(document.activeElement);
-    if (k === 'ArrowRight' && cats.includes(document.activeElement)) { applyFocus(rows[0] || $('mvPickerClose')); return true; }
-    if (k === 'ArrowLeft' && rows.includes(document.activeElement)) { applyFocus(cats.find((b) => b.classList.contains('sel')) || cats[0] || $('mvPickerClose')); return true; }
-    if ((k === 'ArrowDown' || k === 'ArrowUp') && group.length) {
-      i = i < 0 ? 0 : i;
-      applyFocus(group[Math.max(0, Math.min(group.length - 1, i + (k === 'ArrowDown' ? 1 : -1)))]);
-      return true;
+    const cats = multiViewPickerGroupEls('cats');
+    const rows = multiViewPickerGroupEls('rows');
+    let group = S.mvPickGroup === 'cats' ? 'cats' : 'rows';
+    let els = group === 'cats' ? cats : rows;
+    if (!els.length) { group = group === 'cats' ? 'rows' : 'cats'; els = group === 'cats' ? cats : rows; }
+    const i = Math.max(0, Math.min(els.length - 1, Number.isFinite(+S.mvPickIdx) ? +S.mvPickIdx : 0));
+    if (k === 'Enter' && !e.repeat) { if (els[i]) els[i].click(); return true; }
+    if (k === 'ArrowRight' && group === 'cats') return setMultiViewPickerFocus('rows', 0);
+    if (k === 'ArrowLeft' && group === 'rows') {
+      const selIdx = Math.max(0, cats.findIndex((b) => b.classList.contains('sel')));
+      return setMultiViewPickerFocus('cats', selIdx);
     }
+    if (k === 'ArrowDown') return setMultiViewPickerFocus(group, i + 1);
+    if (k === 'ArrowUp') return setMultiViewPickerFocus(group, i - 1);
     return true;
   }
   if (S.multiView.swapSlot !== null && S.multiView.swapSlot !== undefined && Number.isFinite(+S.multiView.swapSlot)) {
@@ -14376,6 +14435,7 @@ function showMusicHome() {
   $('musicBrowse').classList.remove('hide');
   $('musicList').classList.remove('searchResults');
   $('musicList').innerHTML = '';
+  syncMusicClear();
 }
 function openMusicPlaylist(id, title, meta = {}) {
   return startMusicPlaylist(id, title, meta);
@@ -14413,6 +14473,7 @@ async function loadMusicPlaylistPage(reset = false) {
 let _musicSearchT = 0;
 async function doMusicSearch() {
   const q = $('musicSearch').value.trim();
+  syncMusicClear();
   if (!q) { showMusicHome(); return; }
   S.musicPage = 'search';
   S.musicPlaylist = null;
@@ -14441,6 +14502,7 @@ function focusMusicResultsSoon(tries = 18) {
 function musicSearchAndFocusResults() {
   clearTimeout(_musicSearchT);
   const q = $('musicSearch').value.trim();
+  syncMusicClear();
   if (!q) { showMusicHome(); focusMusicSearch(); return; }
   doMusicSearch().then(() => focusMusicResultsSoon()).catch(() => focusMusicResultsSoon());
 }
@@ -14459,8 +14521,33 @@ function submitMusicVoiceSearch(text) {
   const q = String(text || '').trim();
   if (!q) return;
   $('musicSearch').value = q;
+  syncMusicClear();
   musicSearchAndFocusResults();
 }
+function syncMusicClear() {
+  const hasText = !!$('musicSearch').value.trim();
+  $('musicClearBtn').hidden = !hasText;
+  $('musicSearch').closest('.wrap').classList.toggle('hasClear', hasText);
+}
+function musicClearVisible() {
+  return !$('musicClearBtn').hidden;
+}
+function focusMusicClear() {
+  clearFocus();
+  S.zone = 'musicSearch';
+  return $('musicClearBtn').focus();
+}
+function clearMusicSearch(opts = {}) {
+  clearTimeout(_musicSearchT);
+  $('musicSearch').value = '';
+  syncMusicClear();
+  showMusicHome();
+  const focus = opts.focus || 'content';
+  if (focus === 'input') return focusMusicInput();
+  if (focus === 'mic') return focusMusicSearch();
+  requestAnimationFrame(() => { if (S.view === 'music') focusContent(); });
+}
+$('musicClearBtn').addEventListener('click', () => clearMusicSearch());
 function normMusicText(s) {
   return String(s || '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').trim();
 }
@@ -14531,7 +14618,7 @@ function renderMusicRows(results, opts = {}) {
   if (opts.search) {
     const head = document.createElement('div');
     head.className = 'mSearchHead';
-    head.innerHTML = `<span>Songs</span><span>${results.length} result${results.length === 1 ? '' : 's'}</span>`;
+    head.innerHTML = `<span>${esc(opts.query || 'Songs')}</span><span>${results.length} result${results.length === 1 ? '' : 's'}</span>`;
     list.appendChild(head);
   }
   const songWrap = opts.search ? document.createElement('div') : list;
@@ -14539,10 +14626,12 @@ function renderMusicRows(results, opts = {}) {
   results.forEach((t, i) => {
     const row = document.createElement('button');
     row.className = 'musicRow focusable'; row.dataset.mrow = i;
-    row.innerHTML = `<div class="mThumb" style="background-image:url('${safeUrl(t.thumb)}')"><div class="mEq"><i></i><i></i><i></i></div></div>
+    const rank = opts.search ? `<div class="mRank">${String(i + 1).padStart(2, '0')}</div>` : '';
+    const playGlyph = opts.search ? '<div class="mPlayGlyph"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></div>' : '';
+    row.innerHTML = `${rank}<div class="mThumb" style="background-image:url('${safeUrl(t.thumb)}')"><div class="mEq"><i></i><i></i><i></i></div></div>
       <div class="mBody"><div class="mT">${esc(t.title)}</div><div class="mA">${esc(t.artist || '')}</div></div>
-      <div class="mD">${t.duration ? mmss(t.duration) : ''}</div>`;
-    row.addEventListener('click', () => playMusic(results, i));
+      <div class="mD">${t.duration ? mmss(t.duration) : ''}</div>${playGlyph}`;
+    row.addEventListener('click', () => playMusic(results, i, opts.search ? { showQueue: true } : {}));
     row.addEventListener('mouseenter', () => pointerHover() && focusMusic(musicRows().indexOf(row)));
     songWrap.appendChild(row);
   });
@@ -14679,6 +14768,7 @@ function setPlayIcon(playing) {
 }
 $('musicSearch').addEventListener('input', () => {
   clearTimeout(_musicSearchT);
+  syncMusicClear();
   if (!$('musicSearch').value.trim()) { showMusicHome(); return; }
   _musicSearchT = setTimeout(doMusicSearch, 450);
 });
@@ -14693,6 +14783,11 @@ $('musicSearch').addEventListener('keydown', (e) => {
     e.stopPropagation();
     $('musicSearch').blur();
     focusMusicSearch();
+  } else if (e.key === 'ArrowRight' && $('musicSearch').selectionStart >= $('musicSearch').value.length && musicClearVisible()) {
+    e.preventDefault();
+    e.stopPropagation();
+    $('musicSearch').blur();
+    focusMusicClear();
   }
 });
 // Hardware media keys (and some remotes) → transport.
@@ -14745,6 +14840,7 @@ function musicIcon(name) {
 }
 function musicRunQuery(q) {
   $('musicSearch').value = q;
+  syncMusicClear();
   doMusicSearch();
 }
 async function startMusicFeed(item) {
@@ -18268,6 +18364,10 @@ document.addEventListener('keydown', (e) => {
       e.preventDefault();
       return k === 'Enter' ? musicSearchAndFocusResults() : moveMusicSearchDown();
     }
+    if (k === 'ArrowRight' && ae.selectionStart >= ae.value.length && musicClearVisible()) {
+      e.preventDefault(); ae.blur();
+      return focusMusicClear();
+    }
     if (document.body.classList.contains('tv') && (k === 'Escape' || k === 'Backspace' || (k === 'ArrowLeft' && ae.selectionStart === 0))) {
       e.preventDefault(); ae.blur();
       return musicMicVisible() ? focusMusicSearch() : enterRail();
@@ -18763,8 +18863,19 @@ document.addEventListener('keydown', (e) => {
       if (k === 'ArrowUp') return focusMusicSearch();
       return;
     }
+    if (ae === $('musicClearBtn')) {
+      if (k === 'Enter') { if (!e.repeat) clearMusicSearch(); return; }
+      if (k === 'ArrowLeft' || k === 'ArrowUp') { $('musicClearBtn').blur(); return focusMusicInput(); }
+      if (k === 'ArrowDown') { $('musicClearBtn').blur(); return moveMusicSearchDown(); }
+      if (k === 'Escape' || k === 'Backspace') { clearMusicSearch({ focus: 'mic' }); return; }
+      return;
+    }
     if (ae === $('musicSearch')) {
       if (k === 'ArrowDown' || k === 'Enter') return k === 'Enter' ? musicSearchAndFocusResults() : moveMusicSearchDown();
+      if (k === 'ArrowRight' && $('musicSearch').selectionStart >= $('musicSearch').value.length && musicClearVisible()) {
+        $('musicSearch').blur();
+        return focusMusicClear();
+      }
       if ((k === 'ArrowLeft' && $('musicSearch').selectionStart === 0) || k === 'Escape' || k === 'Backspace') {
         ae.blur();
         return musicMicVisible() ? focusMusicSearch() : enterRail();

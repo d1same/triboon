@@ -188,7 +188,25 @@ function playlistItemsRange(offset = 0, limit = 200) {
 
 const num = (n) => (typeof n === 'number' && isFinite(n) ? n : null);
 // id → deterministic YouTube thumbnail (no extra resolve). hqdefault always exists.
-const thumbFor = (id) => (id ? `https://i.ytimg.com/vi/${id}/hqdefault.jpg` : null);
+function upgradeThumbUrl(url, { size = 640 } = {}) {
+  const raw = String(url || '').trim();
+  if (!raw) return null;
+  let u;
+  try { u = new URL(raw); } catch { return raw; }
+  const host = u.hostname.toLowerCase();
+  if (host.endsWith('googleusercontent.com')) {
+    const target = Math.max(320, Math.min(1024, parseInt(size, 10) || 640));
+    const keep = raw.match(/=w\d+-h\d+((?:-[a-z0-9]+)*)$/i);
+    if (keep) return raw.replace(/=w\d+-h\d+((?:-[a-z0-9]+)*)$/i, `=w${target}-h${target}${keep[1] || ''}`);
+    if (/=s\d+((?:-[a-z0-9]+)+)?$/i.test(raw)) return raw.replace(/=s\d+((?:-[a-z0-9]+)+)?$/i, `=w${target}-h${target}$1`);
+    if (!/[?=]$/.test(raw)) return `${raw}=w${target}-h${target}-l90-rj`;
+  }
+  if (host.endsWith('ytimg.com')) {
+    return raw.replace(/\/(?:default|mqdefault)\.(jpg|webp)(\?.*)?$/i, '/hqdefault.$1$2');
+  }
+  return raw;
+}
+const thumbFor = (id) => (id ? upgradeThumbUrl(`https://i.ytimg.com/vi/${id}/hqdefault.jpg`) : null);
 // Trim the noise scene-uploaders bake into titles so "Artist — Title" reads cleanly.
 function cleanTitle(t) {
   return String(t || '').replace(/\s*[([](official\s*)?(music\s*)?(video|audio|lyrics?|visualizer|hd|4k)[)\]].*$/i, '')
@@ -465,7 +483,7 @@ function bestThumb(thumbnails, fallbackId) {
   const best = rows
     .filter((t) => t && typeof t.url === 'string')
     .sort((a, b) => ((b.width || 0) * (b.height || 0)) - ((a.width || 0) * (a.height || 0)))[0];
-  return (best && best.url) || thumbFor(fallbackId);
+  return upgradeThumbUrl((best && best.url) || thumbFor(fallbackId));
 }
 function artistNames(item) {
   if (Array.isArray(item && item.artists)) {
@@ -666,7 +684,7 @@ module.exports = {
   detectYtdlp, detectYtMusicApi,
   search, resolveStream, listPlaylists, playlistTracks, watchQueue,
   beginOAuth, completeOAuth, refreshOAuthToken,
-  thumbFor, cleanTitle,
+  thumbFor, cleanTitle, _upgradeThumbUrl: upgradeThumbUrl,
   _resetDetection, _resetYtMusicApiDetection, _setYtMusicApiRunnerForTest,
   _setOAuthPostForTest,
   _peekCached, _queueStats, _ytmApiQueueStats,

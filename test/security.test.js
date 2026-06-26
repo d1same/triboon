@@ -2048,6 +2048,29 @@ test('music: optional ytmusicapi catalog search is fast-path normalized and boun
   }
 });
 
+test('music: artwork URLs prefer TV-sized covers over tiny YTM thumbnails', () => {
+  const ytmusic = require('../server/ytmusic');
+  const track = ytmusic._normalizeYtMusicApiTrack({
+    videoId: 'AAAAAAAAAAA',
+    title: 'Digital Love',
+    artists: [{ name: 'Daft Punk' }],
+    thumbnails: [
+      { url: 'https://lh3.googleusercontent.com/album-art=w60-h60-l90-rj', width: 60, height: 60 },
+      { url: 'https://lh3.googleusercontent.com/album-art=w120-h120-l90-rj', width: 120, height: 120 },
+    ],
+  });
+  assert.strictEqual(track.thumb, 'https://lh3.googleusercontent.com/album-art=w640-h640-l90-rj');
+  assert.strictEqual(
+    ytmusic._upgradeThumbUrl('https://i.ytimg.com/vi/AAAAAAAAAAA/default.jpg'),
+    'https://i.ytimg.com/vi/AAAAAAAAAAA/hqdefault.jpg',
+    'flat yt-dlp thumbnail fallbacks should avoid the smallest YouTube still'
+  );
+  assert.strictEqual(
+    ytmusic._upgradeThumbUrl('https://lh3.googleusercontent.com/plain=w120-h120'),
+    'https://lh3.googleusercontent.com/plain=w640-h640'
+  );
+});
+
 test('music: search cleanup dedupes flat yt-dlp rows and pushes obvious non-songs down', () => {
   const ytmusic = require('../server/ytmusic');
   const rows = ytmusic._cleanSearchRows([
