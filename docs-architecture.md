@@ -149,8 +149,12 @@ Rules that must not drift:
 
 Players send a lightweight `/api/activity` heartbeat while playback is active.
 Regular users can only write their own heartbeat; only admins can read the
-Settings -> Now Watching list. The row is intentionally in-memory and short TTL
-so stale sessions disappear if a browser, TV, or network connection dies.
+Settings -> Activity dashboard. The live row is intentionally in-memory and
+short TTL so stale sessions disappear if a browser, TV, or network connection
+dies. The same endpoint also keeps the previous 10 movie/TV activity rows from
+the last three days so the owner can see recent VOD playback without accumulating
+a long-term log. Live TV/IPTV is current-activity only and is not retained in
+history.
 
 The heartbeat carries both the client path and the stream treatment:
 
@@ -160,6 +164,8 @@ The heartbeat carries both the client path and the stream treatment:
 - `streamKind` / `streamLabel`: the owner-facing quality status. Movies and
   episodes show `Original`, `Original (remux)`, or `Transcoding`; Live TV shows
   `Live`.
+- `clientVersion`: the web or Android app version when the client can report it,
+  so the owner can spot TVs/phones that need an update.
 
 This distinction matters because remux is still original-quality playback, while
 transcoding means Triboon is actively converting the stream for device support
@@ -168,9 +174,10 @@ or a requested quality cap.
 ## Subtitle Model
 
 Online subtitles are the default production path. The server uses the saved
-Wyzie key to search by TMDB/IMDb id plus the exact selected release/file hints,
-downloads WebVTT/SRT, ranks alternates, caches per mount/language, and serves
-the result through signed stream-scope URLs.
+Wyzie key, or `TRIBOON_WYZIE_KEY` when the dashboard key is empty, to search by
+TMDB/IMDb id plus the exact selected release/file hints, downloads WebVTT/SRT,
+ranks alternates, caches per mount/language, and serves the result through
+signed stream-scope URLs.
 
 Built-in subtitles are an admin-controlled opt-in because embedded text
 extraction may require ffmpeg to scan much of the media file. When built-ins
@@ -242,7 +249,7 @@ flowchart TD
   Aggregate --> LiveUI["/api/iptv/channels\nLive TV page"]
   Aggregate --> Playback["/api/iptv/native/:idx\n/api/iptv/stream/:idx"]
   DiskCaches --> Guide["/api/iptv/guide\n/api/iptv/epg/:idx"]
-  Guide --> PiP["Live TV guide\nplayer PiP guide"]
+  Guide --> PiP["Live TV guide\nplayer PiP guide\nbrowser Multiview"]
   Playback --> Android["Android ExoPlayer\nprovider TS/HLS then server remux"]
   Playback --> Web["Browser MSE\nserver fMP4 remux"]
   AndroidPrefs["Android Preferences\npersonal IPTV on this TV"] --> AndroidStore["Android Keystore-backed\nprivate storage"]
@@ -277,6 +284,40 @@ Playback contract:
 
 - Browser Live TV uses the server fMP4 remux path and must close the previous
   fetch/reader/remux before opening the next channel.
+- Browser Live TV owns the live-only player chrome. It hides VOD subtitle,
+  audio, surround, and quality controls, shows favorite, and keeps movie/show
+  playback controls unchanged.
+- Browser Multiview is a separate Live TV surface launched from guide contexts.
+  It uses isolated MediaSource state per pane against the same server fMP4
+  remux path, supports two, three, or four panes, and routes audio only through
+  the highlighted pane. Two panes are side-by-side, three panes use a featured
+  primary pane plus two smaller panes, and four panes use a 2x2 grid. Guide
+  launchers and close controls stay icon-led so the surface matches the rest of
+  the player chrome and remains D-pad scannable. On Android TV, unsupported
+  browser Multiview launchers stay hidden; Live TV D-pad entry targets
+  supported toolbar buttons before the text filter, avoiding a remote trap in
+  the search input.
+- Pane hover/focus changes the audible pane. OK on a filled pane opens a compact
+  pane action row; Live TV panes expose fullscreen/return, swap screen, change
+  channel/title, and close screen, while movie/show companion panes also expose
+  Back 10s, Play/Pause, and Forward 30s. Empty panes still open the picker
+  directly. Browser fullscreen is an internal zoomed-pane state inside
+  Multiview so Back/Escape returns to the grid without remounting streams. Swap
+  changes visual order only, letting a 3-up secondary pane become the featured
+  pane while its MediaSource/video element stays mounted.
+- Multiview is capped at four panes because each active pane can consume a
+  provider stream and server remux work. Pane failures stay local to that pane
+  instead of closing the whole player. Provider `429`/rate-limit responses are
+  surfaced as likely IPTV account stream limits so users know why only one
+  active channel may work on a single-line provider plan.
+- The picker includes Continue Watching as a companion source. Browser
+  Multiview can carry an active movie/episode into the first pane or start one
+  Continue Watching movie/show through the normal `/api/play` source-selection
+  path. VOD companion playback is limited to one pane until explicit capacity
+  accounting exists for multiple NZB mounts, health gates, read-ahead windows,
+  remuxes, and transcodes. VOD pane seeking follows the main player policy:
+  direct playback seeks the element, while remux/transcode panes restart that
+  pane at the requested timestamp.
 - Account personal IPTV uses the same server playback, guide, source cache, and
   delete cleanup path as shared playlists. Stream URLs bind both the channel
   position and source-scoped channel id so a stale channel cache cannot drift to
@@ -284,6 +325,9 @@ Playback contract:
 - Android TV/mobile tries native provider-compatible HLS/MPEG-TS URLs first.
   Xtream prefers TS, with HLS as fallback, then the server stereo-AAC fMP4 remux
   path for devices or providers that cannot hold the native stream directly.
+- Android TV/mobile must not use browser Multiview over the WebView. Native
+  Multiview requires a dedicated Media3/ExoPlayer multi-surface design plus
+  memory, decoder, and provider-connection testing.
 - Android TV can also hold personal IPTV sources in the native app. Those
   sources are loaded by `MainActivity.java` from the Android device network,
   merged into `web/index.html` Live TV rows, and played directly by ExoPlayer.
@@ -328,6 +372,7 @@ definitions stay in JSON.
 | `settings` | `SecureSettings` | Encrypted admin settings: providers, indexers, TMDB, subtitles, Trakt app and linked Trakt OAuth tokens, Live TV sources, streaming performance profile. |
 | `users`, `invites` | `server/auth.js`, `server/index.js` | Accounts, roles, profile policy, session epoch, invites, encrypted admin TOTP secret, hashed recovery codes. |
 | `watch`, `watchlist` | `server/index.js`, `server/trakt.js` | Per-profile progress, watched state, watchlist, Trakt-imported fallback rows. |
+| `activityHistory` | `server/index.js` | Admin-only previous 10 movie/TV playback rows from the last three days; Live TV/IPTV rows are pruned and not retained. |
 | `trakt`, `traktOutbox` | `server/trakt.js` | Legacy migration/sync marker bucket and queued scrobble/export operations. OAuth tokens must live encrypted inside `settings.traktTokens`, not plaintext `trakt.json`. |
 | `libraries` | `server/index.js` | Attached local folders, owner visibility, kind, path, and display metadata. |
 | `library.sqlite` | `server/library-db.js` | Scanned local media catalog: item payloads, TMDB ids, episode keys, genres, sort/page indexes, and local lookup support. |
@@ -458,7 +503,12 @@ Still open / future hardening:
 
 ## Verification Checklist For Architecture Changes
 
-Run the narrow test for the area touched, then the broader suite before a release:
+`VERIFY.md` is the authoritative pre-update gate. Run
+`npm.cmd run verify:full` before pushing or calling an architecture-affecting
+change done. The list below is only the architecture-specific routing reference
+for deciding which area was touched.
+
+Run the narrow test for the area touched, then the full gate before a release:
 
 - Engine or source selection: `npm.cmd test` on Windows, or `npm test` where
   shell policy allows it.

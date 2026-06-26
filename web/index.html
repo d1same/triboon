@@ -585,13 +585,30 @@ body.tv #filterMenu{backdrop-filter:none}
 #player{position:fixed;inset:0;z-index:30;background:#000;display:none}
 #player.open{display:block}
 #player video{width:100%;height:100%;object-fit:contain;background:#000}
+#liveSplitVideo{display:none}
+#liveSplitHud{display:none}
+#player.live.splitMode.open{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:clamp(8px,1.1vw,16px);padding:clamp(8px,1.1vw,16px);box-sizing:border-box;background:#030205}
+#player.live.splitMode #video,#player.live.splitMode #liveSplitVideo{position:relative;width:100%;height:100%;min-width:0;min-height:0;border-radius:12px;object-fit:contain;background:#000;box-shadow:0 0 0 1px rgba(255,255,255,.08),0 22px 70px rgba(0,0,0,.52)}
+#player.live.splitMode #liveSplitVideo{display:block}
+#player.live.splitMode #seekHold{display:none!important}
+#player.live.splitMode #liveSplitHud{position:absolute;inset:clamp(8px,1.1vw,16px);z-index:8;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:clamp(8px,1.1vw,16px);pointer-events:none}
+.liveSplitPane{position:relative;border-radius:12px;border:2px solid transparent;box-shadow:inset 0 0 0 1px rgba(255,255,255,.06);transition:border-color .15s ease,box-shadow .15s ease}
+.liveSplitPane.active{border-color:rgba(251,139,60,.96);box-shadow:inset 0 0 0 1px rgba(255,255,255,.18),0 0 26px rgba(193,59,214,.42)}
+.liveSplitPane span{position:absolute;left:12px;top:12px;max-width:calc(100% - 24px);padding:6px 9px;border-radius:8px;background:rgba(5,3,9,.68);border:1px solid rgba(255,255,255,.10);font:800 10px "JetBrains Mono";letter-spacing:.08em;text-transform:uppercase;color:rgba(243,239,247,.78);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.liveSplitPick{position:absolute;left:50%;top:50%;width:72px;height:72px;transform:translate(-50%,-50%);display:none;place-items:center;border-radius:50%;background:rgba(5,3,9,.62);color:var(--text);border:1px solid rgba(255,255,255,.16);box-shadow:0 20px 70px rgba(0,0,0,.42),0 0 0 1px rgba(251,139,60,.28);pointer-events:auto}
+.liveSplitPick svg{width:30px;height:30px}
+.liveSplitPick:hover,.liveSplitPick:focus{outline:none;box-shadow:0 0 0 3px rgba(251,139,60,.88),0 20px 70px rgba(0,0,0,.42);background:rgba(5,3,9,.78)}
+#player.live.splitMode.splitNeedsChannel .liveSplitPane[data-live-pane="1"] .liveSplitPick{display:grid}
+#player.live.splitMode.splitPane1 .liveSplitPane[data-live-pane="1"],#player.live.splitMode.splitPane0 .liveSplitPane[data-live-pane="0"]{border-color:rgba(251,139,60,.96);box-shadow:inset 0 0 0 1px rgba(255,255,255,.18),0 0 26px rgba(193,59,214,.42)}
+#player.live.splitMode.guideMode{display:block;padding:0}
+#player.live.splitMode.guideMode #liveSplitVideo,#player.live.splitMode.guideMode #liveSplitHud{display:none}
 #seekHold{position:absolute;z-index:1;display:none;pointer-events:none;background:#000;object-fit:contain}
 #seekHold.show{display:block}
 #player.guideMode{--pipW:clamp(260px,27vw,430px);--pipTop:clamp(14px,2.4vh,30px);--pipLeft:clamp(16px,2.6vw,38px)}
-#player.guideMode video{position:absolute;left:var(--pipLeft);top:var(--pipTop);
+#player.guideMode #video{position:absolute;left:var(--pipLeft);top:var(--pipTop);
   width:var(--pipW);height:auto;aspect-ratio:16/9;z-index:9;border-radius:10px;
   box-shadow:0 20px 60px rgba(0,0,0,.58),0 0 0 1px rgba(255,255,255,.08);object-fit:cover}
-body.nativeGuideMode #player.guideMode video{display:none}
+body.nativeGuideMode #player.guideMode #video{display:none}
 #player.guideMode #osd{opacity:0;pointer-events:none}
 #player.guideMode #subOverlay{display:none}
 /* Self-rendered subtitles (WebView never painted native cues). Sized by the caption pref;
@@ -641,6 +658,80 @@ body.nativeGuideMode #player.guideMode video{display:none}
 .cbtn.big{width:58px;height:58px;background:rgba(5,3,9,.4);color:var(--text)}
 .cbtn svg{width:20px;height:20px}
 .cbtn.on{background:rgba(5,3,9,.4);color:var(--text)}
+#favBtn,#splitBtn{display:none}
+#player.live #favBtn{display:grid}
+#player.live #ccBtn,#player.live #audBtn,#player.live #srndBtn,#player.live #qualBtn{display:none!important}
+#favBtn.on,#splitBtn.on{color:var(--amber);box-shadow:0 0 0 2px rgba(255,198,92,.35),0 10px 28px rgba(0,0,0,.18)}
+
+/* ---------- Live TV multiview ---------- */
+#multiView{position:fixed;inset:0;z-index:34;display:none;background:#030205;color:var(--text);overflow:hidden}
+#multiView.open{display:flex;flex-direction:column}
+.mvTop{height:56px;display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:10px;padding:8px clamp(16px,2.4vw,36px);box-sizing:border-box;background:linear-gradient(180deg,rgba(5,3,9,.94),rgba(5,3,9,.62));border-bottom:1px solid rgba(243,239,247,.08)}
+.mvTitle{min-width:0;display:flex;align-items:center}
+.mvName{font:800 15px/1.1 "Albert Sans";letter-spacing:0;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mvLayout{display:flex;align-items:center;gap:8px}
+.mvLayout button,.mvIconBtn{height:40px;min-width:40px;border-radius:12px;border:1px solid rgba(243,239,247,.075);background:rgba(44,50,56,.62);color:var(--text);font:800 11px "JetBrains Mono";letter-spacing:.04em;text-transform:uppercase;display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:0 13px;box-shadow:0 8px 22px rgba(0,0,0,.12);transition:background .14s ease,border-color .14s ease,box-shadow .14s ease,transform .14s ease}
+.mvIconBtn svg{width:17px;height:17px;flex:none}
+.mvIconOnly{width:40px;padding:0;border-radius:50%}
+.mvLayout button.on,.mvLayout button:hover,.mvIconBtn:hover,.mvIconBtn:focus,.mvIconBtn.focus{background:rgba(58,66,74,.82);border-color:rgba(255,198,92,.22);outline:none;box-shadow:0 0 0 2px rgba(255,198,92,.20),0 10px 26px rgba(0,0,0,.22);transform:translateY(-1px)}
+.mvLayout button.on{background:rgba(184,164,106,.18);border-color:rgba(184,164,106,.28);color:rgba(255,235,169,.96)}
+.mvBody{position:relative;flex:1;min-height:0;padding:clamp(8px,1.1vw,16px);box-sizing:border-box}
+.mvGrid{height:100%;display:grid;gap:clamp(8px,1.1vw,16px)}
+.mvGrid.count2{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+.mvGrid.count3{grid-template-columns:minmax(0,2fr) minmax(0,1fr);grid-template-rows:minmax(0,1fr) minmax(0,1fr)}
+.mvGrid.count3 .mvSlot.mvMain{grid-row:1 / span 2}
+.mvGrid.count4{grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-rows:minmax(0,1fr) minmax(0,1fr)}
+.mvSlot{position:relative;display:none;min-width:0;min-height:0;border-radius:10px;background:#000;overflow:hidden;border:1px solid rgba(243,239,247,.07);box-shadow:0 18px 58px rgba(0,0,0,.44)}
+.mvSlot.visible{display:block}
+.mvSlot.active{border-color:rgba(255,198,92,.42);box-shadow:0 0 0 1px rgba(255,198,92,.14),0 18px 58px rgba(0,0,0,.46)}
+.mvSlot.swapSource{border-color:rgba(255,198,92,.56);box-shadow:0 0 0 1px rgba(255,198,92,.16),0 18px 58px rgba(0,0,0,.46)}
+.mvSlot.swapTarget{border-style:dashed}
+.mvSlot.swapTarget.active{border-color:rgba(255,198,92,.62);box-shadow:0 0 0 1px rgba(255,198,92,.18),0 18px 58px rgba(0,0,0,.46)}
+.mvSlot video{width:100%;height:100%;object-fit:contain;background:#000}
+.mvShade{position:absolute;inset:0;pointer-events:none;background:linear-gradient(180deg,rgba(0,0,0,.55),transparent 28%,transparent 62%,rgba(0,0,0,.62))}
+.mvLabel{position:absolute;left:12px;right:12px;top:12px;display:flex;align-items:center;gap:8px;min-width:0}
+.mvAudio{flex:0 0 auto;width:22px;height:22px;border-radius:50%;display:grid;place-items:center;background:rgba(184,164,106,.92);color:#170b05;font:900 11px "JetBrains Mono";opacity:0}
+.mvSlot.active .mvAudio{opacity:1}
+.mvText{min-width:0;padding:6px 9px;border-radius:8px;background:rgba(5,3,9,.68);border:1px solid rgba(255,255,255,.1);font:800 10px "JetBrains Mono";letter-spacing:.08em;text-transform:uppercase;color:rgba(243,239,247,.8);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mvActions{position:absolute;right:12px;top:12px;display:flex;align-items:center;justify-content:flex-end;gap:6px;max-width:calc(100% - 24px);padding:5px;border-radius:999px;background:rgba(11,8,18,.56);border:1px solid var(--line);box-shadow:0 18px 46px rgba(0,0,0,.36);backdrop-filter:blur(14px);opacity:0;pointer-events:none;transform:translateY(-4px);transition:opacity .14s ease,transform .14s ease}
+.mvSlot.active.filled .mvActions,.mvSlot.filled:hover .mvActions,.mvSlot.actionsOpen .mvActions{opacity:1;pointer-events:auto;transform:translateY(0)}
+.mvAction{width:42px;height:42px;border-radius:50%;border:1px solid rgba(243,239,247,.075);display:grid;place-items:center;background:rgba(44,50,56,.62);color:var(--text);box-shadow:0 8px 22px rgba(0,0,0,.16);transition:background .14s ease,border-color .14s ease,box-shadow .14s ease,transform .14s ease}
+.mvAction:hover,.mvAction:focus,.mvAction.focus{outline:none;background:rgba(58,66,74,.82);border-color:rgba(255,198,92,.24);box-shadow:0 0 0 2px rgba(255,198,92,.22),0 12px 30px rgba(0,0,0,.28);transform:translateY(-1px)}
+.mvAction svg{width:18px;height:18px}
+.mvVodOnly{display:none}
+.mvSlot.vod .mvVodOnly{display:grid}
+.mvSlot.vod .mvActions{flex-wrap:wrap;border-radius:22px}
+.mvGrid.count4 .mvSlot.vod .mvAction,.mvGrid.count3 .mvSlot.vod:not(.mvMain) .mvAction{width:36px;height:36px}
+.mvGrid.count4 .mvSlot.vod .mvActions,.mvGrid.count3 .mvSlot.vod:not(.mvMain) .mvActions{gap:5px;padding:4px}
+.mvAdd{position:absolute;left:50%;top:50%;width:76px;height:76px;transform:translate(-50%,-50%);display:grid;place-items:center;border-radius:50%;border:1px solid rgba(255,255,255,.12);background:rgba(5,3,9,.64);color:var(--text);font:900 32px "Albert Sans";box-shadow:0 20px 70px rgba(0,0,0,.42),0 0 0 1px rgba(255,198,92,.16)}
+.mvSlot.filled .mvAdd{display:none}
+.mvStatus{position:absolute;left:12px;bottom:12px;max-width:calc(100% - 24px);min-height:22px;padding:6px 9px;border-radius:8px;background:rgba(5,3,9,.62);border:1px solid rgba(243,239,247,.08);font:800 10px/1.25 "JetBrains Mono";letter-spacing:.08em;text-transform:uppercase;color:rgba(243,239,247,.76);white-space:normal;overflow:hidden;text-overflow:ellipsis;text-shadow:0 2px 14px rgba(0,0,0,.8)}
+.mvStatus.warn{color:rgba(255,198,92,.95);border-color:rgba(255,198,92,.22);background:rgba(30,18,8,.72);font:750 12px/1.25 "Albert Sans";letter-spacing:0;text-transform:none}
+#multiView.paneFull .mvTop{display:none}
+#multiView.paneFull .mvBody{padding:0}
+.mvGrid.fullscreen{display:block;position:relative}
+.mvGrid.fullscreen .mvSlot.visible{position:absolute;inset:0;width:100%;height:100%;border:0;border-radius:0;box-shadow:none}
+.mvGrid.fullscreen .mvSlot:not(.mvFull){display:none}
+.mvSlot.mvFull .mvActions{opacity:1;pointer-events:auto;transform:translateY(0)}
+.mvPicker{position:absolute;right:clamp(10px,1.4vw,22px);top:clamp(10px,1.4vw,22px);bottom:clamp(10px,1.4vw,22px);width:min(520px,calc(100vw - 30px));display:none;grid-template-rows:auto minmax(0,1fr);background:rgba(9,6,15,.96);border:1px solid rgba(243,239,247,.1);border-radius:14px;box-shadow:0 30px 90px rgba(0,0,0,.58);backdrop-filter:blur(16px);overflow:hidden}
+.mvPicker.open{display:grid}
+.mvPickerHead{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px;border-bottom:1px solid rgba(243,239,247,.08)}
+.mvPickerTitle{font:800 13px "Sora";white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mvPickerBody{display:grid;grid-template-columns:minmax(130px,170px) minmax(0,1fr);min-height:0}
+.mvCats,.mvChannels{overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:7px}
+.mvCat,.mvChannel{width:100%;min-height:42px;border-radius:10px;border:1px solid rgba(243,239,247,.08);background:rgba(243,239,247,.045);color:var(--text);text-align:left;padding:8px 10px;font:800 11px "Albert Sans";display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}
+.mvCat.sel,.mvCat:hover,.mvChannel:hover,.mvCat:focus,.mvChannel:focus{outline:none;background:rgba(184,164,106,.14);border-color:rgba(255,198,92,.20)}
+.mvChannel span:first-child,.mvCat span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (max-width:700px){
+  .mvTop{grid-template-columns:minmax(0,1fr) auto;height:auto;align-items:center}
+  .mvLayout{grid-column:1 / -1;overflow-x:auto}
+  .mvGrid.count2,.mvGrid.count3,.mvGrid.count4{grid-template-columns:1fr;grid-template-rows:repeat(var(--mv-count,2),minmax(0,1fr))}
+  .mvGrid.count3 .mvSlot.mvMain{grid-row:auto}
+  .mvPicker{left:10px;width:auto}
+  .mvPickerBody{grid-template-columns:1fr}
+  .mvCats{max-height:130px;flex-direction:row;overflow-x:auto}
+  .mvCat{min-width:140px}
+}
 .cbtn:disabled,.cbtn.disabled,.cbtn:disabled:hover,.cbtn.disabled:hover,.cbtn.focusable.disabled.focus{
   background:rgba(5,3,9,.22)!important;color:rgba(243,239,247,.42)!important;box-shadow:none!important;cursor:default;opacity:.58;pointer-events:none}
 .volWrap{display:flex;align-items:center;gap:8px}
@@ -798,19 +889,38 @@ body.screensaverOn{cursor:none}
 .syncDot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--success);margin-right:8px;box-shadow:0 0 16px rgba(110,231,160,.45)}
 .syncSource.warn .syncDot{background:var(--amber);box-shadow:0 0 16px rgba(255,198,92,.4)}
 .syncSource.bad .syncDot{background:var(--danger);box-shadow:0 0 16px rgba(255,141,141,.4)}
-.activityRows{display:grid;gap:10px}
-.activityRow{display:grid;grid-template-columns:minmax(160px,1.1fr) minmax(0,1.7fr) minmax(110px,.45fr);gap:12px;align-items:center;
-  border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--field)}
+.activityPanel{display:grid;gap:10px}
+.activityTop{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.activityTop h2{margin:0}
+.activitySummary{display:flex;flex-wrap:wrap;gap:8px;align-items:center;min-height:32px}
+.activityKpi{display:inline-flex;align-items:center;gap:8px;min-height:30px;border:1px solid var(--line);border-radius:8px;background:var(--field);padding:0 10px}
+.activityKpi span{display:block;color:var(--muted);font:800 9px "JetBrains Mono";letter-spacing:.08em;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.activityKpi b{display:block;color:var(--text);font:800 13px "Sora";white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.activitySectionHead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:4px;color:var(--text);font:800 12px "Sora"}
+.activitySectionHead small{color:var(--muted);font:700 10px "JetBrains Mono";white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.activityRows{display:grid;gap:6px}
+.activityRow{display:grid;grid-template-columns:minmax(120px,.75fr) minmax(0,1.7fr) minmax(120px,.75fr) minmax(96px,.55fr);gap:10px;align-items:center;
+  min-height:50px;border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--field)}
+.activityRow.isActive{background:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.025))}
 .activityRow b{font:800 13px "Sora";display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.activityRow small,.activityRow .arMeta{display:block;color:var(--muted);font:600 11px "JetBrains Mono";overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.activityStream{display:inline-flex;align-items:center;min-height:24px;max-width:100%;margin-top:8px;padding:0 10px;border-radius:999px;border:1px solid rgba(255,255,255,.14);
-  background:rgba(255,255,255,.06);color:var(--muted);font:800 11px "Sora";white-space:nowrap}
+.activityRow small,.activityRow .arMeta{display:block;color:var(--muted);font:600 10.5px "JetBrains Mono";overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.activityWho{display:grid;grid-template-columns:10px minmax(0,1fr);gap:9px;align-items:center;min-width:0}
+.activityDot{width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,.24);box-shadow:none}
+.activityRow.isActive .activityDot{background:var(--success);box-shadow:0 0 18px rgba(134,205,163,.42)}
+.activityWhat,.activityClient{min-width:0}
+.activityClient span{display:block;color:var(--muted);font:800 8.5px "JetBrains Mono";letter-spacing:.08em;text-transform:uppercase;margin-bottom:2px}
+.activityStream{display:inline-flex;align-items:center;min-height:20px;max-width:100%;margin-top:4px;padding:0 8px;border-radius:999px;border:1px solid rgba(255,255,255,.14);
+  background:rgba(255,255,255,.06);color:var(--muted);font:800 10px "Sora";white-space:nowrap}
 .activityStream.original{color:#ffe2a3;background:rgba(255,198,92,.12);border-color:rgba(255,198,92,.28)}
 .activityStream.remux{color:#c5ffe0;background:rgba(94,233,160,.11);border-color:rgba(94,233,160,.24)}
 .activityStream.transcode{color:#ffb4b4;background:rgba(255,120,120,.11);border-color:rgba(255,120,120,.25)}
 .activityStream.live{color:#b9ddff;background:rgba(110,178,255,.12);border-color:rgba(110,178,255,.25)}
-.activityBar{height:6px;border-radius:999px;background:rgba(243,239,247,.16);overflow:hidden;margin-top:7px}
+.activityBar{height:3px;border-radius:999px;background:rgba(243,239,247,.16);overflow:hidden;margin-top:5px}
 .activityBar span{display:block;height:100%;background:var(--grad);width:var(--pct,0%)}
+.activityRow.isHistory .activityDot{background:rgba(255,255,255,.16)}
+.activityRow.isHistory .activityWhat small{display:none}
+.activityRow.isHistory .activityClient span{display:none}
+.activityRow.isHistory .activityStream,.activityRow.isHistory .activityBar{display:none}
 #playerStats{display:none;position:absolute;right:44px;bottom:176px;width:min(440px,calc(100vw - 88px));z-index:7;
   background:linear-gradient(180deg,rgba(24,26,29,.96),rgba(13,15,18,.96));border:1px solid rgba(255,255,255,.07);border-radius:10px;padding:14px;
   box-shadow:0 18px 54px rgba(0,0,0,.44);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
@@ -820,12 +930,19 @@ body.screensaverOn{cursor:none}
 #playerStats .statGrid span{min-height:30px;display:flex;align-items:center;border-bottom:1px solid rgba(243,239,247,.06)}
 #playerStats .statGrid span:nth-child(odd){color:rgba(243,239,247,.62);text-transform:uppercase;font-size:9.5px;letter-spacing:.06em}
 #playerStats .statGrid span:nth-child(even){color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-@media (max-width:1100px){.syncGrid{grid-template-columns:repeat(2,minmax(0,1fr))}.syncSource{grid-template-columns:1fr}}
+@media (max-width:1100px){
+  .syncSource{grid-template-columns:1fr}
+  .activityRow{grid-template-columns:minmax(150px,1fr) minmax(0,1.4fr);align-items:start}
+  .activityMeta{grid-column:2}
+}
 .panel .btn{padding:11px 18px;font-size:14px}
 @media (max-width:900px){
   #settings.open,#prefs.open{display:block}
   #setTabs,#prefTabs{position:static;flex-direction:row;overflow-x:auto;scroll-padding:0 16px;margin-bottom:20px}
   #setTabs button,#prefTabs button{width:auto;min-width:150px;grid-template-columns:24px minmax(0,1fr)}
+  .activityTop{align-items:flex-start;flex-direction:column}
+  .activityRow{grid-template-columns:1fr;gap:9px}
+  .activityMeta{grid-column:auto}
   #settings>.setGrid,#prefs>.setGrid{grid-column:auto;grid-row:auto}
 }
 @media (max-width:700px){
@@ -1254,13 +1371,15 @@ body.mobileShell #playerStats{left:12px;right:12px;bottom:84px;width:auto;max-he
   #guide .gCh{width:128px;padding:6px 8px}
   #guide .gCh img{width:24px;height:24px}
   #player.guideMode{--pipW:160px;--pipTop:14px;--pipLeft:14px}
-  #player.guideMode video{width:160px;left:14px;top:14px;border-radius:8px}
+  #player.guideMode #video{width:160px;left:14px;top:14px;border-radius:8px}
   #player #pGuide{inset:0;width:auto;height:auto;border-radius:0;padding:14px}
   #pgTop{grid-template-columns:160px minmax(0,1fr);gap:14px;min-height:90px;margin-bottom:10px}
   #pgInfo .t{font-size:19px}
   #pgInfo .m,#pgInfo .n{font-size:11px;margin-top:5px}
   #pGuide .pgHead{padding:0 0 8px;margin-left:0;font-size:17px;min-height:0;align-items:flex-start}
   #pGuide .pgHint{display:none}
+  #player.live.splitMode.open{grid-template-columns:1fr;grid-template-rows:minmax(0,1fr) minmax(0,1fr)}
+  #player.live.splitMode #liveSplitHud{grid-template-columns:1fr;grid-template-rows:minmax(0,1fr) minmax(0,1fr)}
   #pgList{padding:0 0 46px}
   .pgGuideShell{grid-template-columns:minmax(108px,34vw) minmax(0,1fr);gap:0;background:rgba(10,13,20,.48)}
   .pgCatPane{max-height:none;padding:0;background:rgba(18,28,40,.58)}
@@ -1633,7 +1752,7 @@ body.tv #heroCredits{height:16px;margin-bottom:6px;overflow:hidden}
   color:var(--text);font:600 13px "Sora";padding:12px 18px;transition:all .15s}
 #chCatsBtn:hover,#chCatsBtn.focus{background:var(--btnHover);border-color:transparent}
 #chSearch:focus{border-color:var(--magenta)}
-#chGuideBtn:focus,#chCatsBtn:focus{outline:none;box-shadow:inset 3px 0 0 var(--focus)}
+#chGuideBtn:focus,#chMultiBtn:focus,#chCatsBtn:focus{outline:none;box-shadow:0 0 0 3px rgba(251,139,60,.48),0 12px 30px rgba(0,0,0,.24)}
 #catModal{position:fixed;inset:0;z-index:48;display:none;place-items:center;background:rgba(5,3,9,.8);backdrop-filter:blur(6px)}
 #catModal.open{display:grid}
 #catModal .box{width:min(480px,92vw);max-height:84vh;display:flex;flex-direction:column;background:rgba(22,16,32,.97);
@@ -1662,9 +1781,10 @@ body.tv #heroCredits{height:16px;margin-bottom:6px;overflow:hidden}
 .iptvAddForm{display:grid;gap:10px;margin-top:12px}
 .iptvAddActions{display:flex;gap:10px;flex-wrap:wrap}
 .iptvAddForm[hidden]{display:none!important}
-#chGuideBtn{flex:none;background:var(--btn);border:1px solid rgba(255,255,255,.045);border-radius:12px;
-  color:var(--text);font:600 13px "Sora";padding:12px 18px;transition:all .15s}
-#chGuideBtn:hover,#chGuideBtn.focus{background:var(--btnHover);border-color:transparent}
+#chGuideBtn,#chMultiBtn{flex:none;min-height:42px;background:var(--btn);border:1px solid rgba(255,255,255,.06);border-radius:13px;
+  color:var(--text);font:800 12px "Sora";padding:10px 15px;transition:all .15s;display:inline-flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 10px 28px rgba(0,0,0,.14)}
+#chGuideBtn svg,#chMultiBtn svg{width:17px;height:17px;flex:none}
+#chGuideBtn:hover,#chGuideBtn.focus,#chMultiBtn:hover,#chMultiBtn.focus{background:var(--btnHover);border-color:rgba(251,139,60,.32);box-shadow:0 0 0 3px rgba(251,139,60,.44),0 12px 30px rgba(0,0,0,.24)}
 #chGuideBtn.on{background:var(--btnSelected);color:var(--text);border-color:transparent}
 #grid.liveGuideGrid{overflow:hidden;padding-bottom:0}
 #guide,.guideTimeline{border:0;border-radius:16px;overflow-y:auto;overflow-x:hidden;
@@ -2931,10 +3051,16 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
   </div>
 
   <div class="setGrid" data-stab="activity" hidden>
-  <div class="panel"><h2>Users connected</h2>
-    <p>Live playback heartbeats from web and Android players. Sessions disappear automatically when playback closes or stops reporting.</p>
+  <div class="panel activityPanel">
+    <div class="activityTop">
+      <h2>Activity</h2>
+      <button class="btn primary focusable" id="activityRefresh">Refresh</button>
+    </div>
+    <div id="activitySummary" class="activitySummary"></div>
+    <div class="activitySectionHead"><span>Now watching</span><small id="activityLiveStatus"></small></div>
     <div id="activityList" class="activityRows"><div class="hint">No one is watching right now.</div></div>
-    <div class="settingsActions"><button class="btn primary focusable" id="activityRefresh">Refresh</button></div>
+    <div class="activitySectionHead"><span>Previous 10</span><small id="activityHistoryStatus"></small></div>
+    <div id="activityHistory" class="activityRows"><div class="hint">No recent playback.</div></div>
     <div class="hint" id="activityStatus"></div>
   </div>
   </div>
@@ -3210,6 +3336,15 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
   <!-- transparent poster: Android WebView otherwise paints its DEFAULT gray play-button
        bitmap whenever the element has no frame — a giant icon flashing on every seek -->
   <video id="video" playsinline poster="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"></video>
+  <video id="liveSplitVideo" playsinline muted aria-hidden="true" poster="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"></video>
+  <div id="liveSplitHud">
+    <div class="liveSplitPane" data-live-pane="0"><span id="liveSplitPrimaryLabel">Main channel</span></div>
+    <div class="liveSplitPane" data-live-pane="1"><span id="liveSplitSecondaryLabel">Second channel</span>
+      <button id="liveSplitPickBtn" class="liveSplitPick focusable" type="button" title="Choose second channel" aria-label="Choose second channel">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+    </div>
+  </div>
   <canvas id="seekHold" aria-hidden="true"></canvas>
   <div id="playerLoader"><div class="cover" id="plCover"></div>
     <div class="lc"><div class="loadMark">
@@ -3288,6 +3423,8 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
           <button class="cbtn focusable" id="nextEpBtn" title="Next episode" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" x2="19" y1="5" y2="19"/></svg></button>
         </div>
         <div class="ctlGroup ctlRight">
+          <button class="cbtn focusable" id="favBtn" title="Favorite channel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 2.7 5.5 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.8 1-6.1-4.4-4.3 6.1-.9L12 3z"/></svg></button>
+          <button class="cbtn focusable" id="splitBtn" title="Split view (uses one extra Live TV stream)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="8" height="14" rx="2"/><rect x="13" y="5" width="8" height="14" rx="2"/></svg></button>
           <button class="cbtn focusable" id="ccBtn" title="Subtitles"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M7 15h4M15 15h2M7 11h2M13 11h4"/></svg></button>
           <button class="cbtn focusable" id="audBtn" title="Audio language"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 10v3"/><path d="M6 6v11"/><path d="M10 3v18"/><path d="M14 8v7"/><path d="M18 5v13"/><path d="M22 10v3"/></svg></button>
           <button class="cbtn focusable" id="srndBtn" title="Surround sound" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 10v4h4l5 4V6l-5 4H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg></button>
@@ -3308,7 +3445,7 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
   </div>
   <div id="pGuide">
     <div id="pgTop"><div class="pgVideoSlot"></div><div id="pgInfo"></div></div>
-    <div class="pgHead">Live TV guide <span class="pgHint">Up / Down · OK tunes · Back closes</span></div>
+    <div class="pgHead"><span>Live TV guide</span><span class="pgHint">Up / Down · OK tunes · Back closes</span><button id="pgMultiBtn" class="mvIconBtn focusable" type="button" title="Open multiview" aria-label="Open multiview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="8" height="7" rx="1.8"/><rect x="13" y="4" width="8" height="7" rx="1.8"/><rect x="3" y="13" width="8" height="7" rx="1.8"/><rect x="13" y="13" width="8" height="7" rx="1.8"/></svg><span>Multiview</span></button></div>
     <div id="pgList"></div>
   </div>
   <div id="vlcPanel"><div class="gateCard">
@@ -3318,6 +3455,90 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
     <button class="btn primary" id="vlcCopy" style="justify-content:center;width:100%">Copy stream URL</button>
     <div class="alt"><button id="vlcClose">Close player</button></div>
   </div></div>
+</div>
+
+<div id="multiView" aria-hidden="true">
+  <div class="mvTop">
+    <div class="mvTitle">
+      <div class="mvName" id="mvTitle">Pick channels</div>
+    </div>
+    <div class="mvLayout" aria-label="Multiview layout">
+      <button id="mvCount2" class="focusable" type="button">2</button>
+      <button id="mvCount3" class="focusable" type="button">3</button>
+      <button id="mvCount4" class="focusable" type="button">4</button>
+    </div>
+    <button id="mvClose" class="mvIconBtn mvIconOnly focusable" type="button" title="Close multiview" aria-label="Close multiview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+  </div>
+  <div class="mvBody">
+    <div id="mvGrid" class="mvGrid count2">
+      <div class="mvSlot focusable" data-mv-slot="0" tabindex="0">
+        <video id="mvVideo0" playsinline muted></video>
+        <div class="mvShade"></div><div class="mvLabel"><span class="mvAudio">A</span><span class="mvText"></span></div>
+        <div class="mvActions" aria-label="Screen actions">
+          <button class="mvAction mvVodOnly mvBackBtn focusable" type="button" title="Back 10s" aria-label="Back 10 seconds"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v6h6"/><path d="M21 12A9 9 0 0 0 6 5.3L3 8"/></svg></button>
+          <button class="mvAction mvVodOnly mvPlayBtn focusable" type="button" title="Pause" aria-label="Pause"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg></button>
+          <button class="mvAction mvVodOnly mvFwdBtn focusable" type="button" title="Forward 30s" aria-label="Forward 30 seconds"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/></svg></button>
+          <button class="mvAction mvFullBtn focusable" type="button" title="Fullscreen" aria-label="Fullscreen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9V4h5"/><path d="M20 9V4h-5"/><path d="M4 15v5h5"/><path d="M20 15v5h-5"/></svg></button>
+          <button class="mvAction mvSwapBtn focusable" type="button" title="Swap screen" aria-label="Swap screen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="7" height="7" rx="1.5"/><rect x="14" y="13" width="7" height="7" rx="1.5"/><path d="M14 5h3a3 3 0 0 1 3 3v2"/><path d="m17 7 3 3 3-3"/><path d="M10 19H7a3 3 0 0 1-3-3v-2"/><path d="m7 17-3-3-3 3"/></svg></button>
+          <button class="mvAction mvChangeBtn focusable" type="button" title="Change" aria-label="Change channel or title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m17 1 4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="m7 23-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></button>
+          <button class="mvAction mvCloseBtn focusable" type="button" title="Close screen" aria-label="Close screen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+        </div>
+        <button class="mvAdd focusable" type="button" title="Add channel">+</button><div class="mvStatus"></div>
+      </div>
+      <div class="mvSlot focusable" data-mv-slot="1" tabindex="0">
+        <video id="mvVideo1" playsinline muted></video>
+        <div class="mvShade"></div><div class="mvLabel"><span class="mvAudio">A</span><span class="mvText"></span></div>
+        <div class="mvActions" aria-label="Screen actions">
+          <button class="mvAction mvVodOnly mvBackBtn focusable" type="button" title="Back 10s" aria-label="Back 10 seconds"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v6h6"/><path d="M21 12A9 9 0 0 0 6 5.3L3 8"/></svg></button>
+          <button class="mvAction mvVodOnly mvPlayBtn focusable" type="button" title="Pause" aria-label="Pause"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg></button>
+          <button class="mvAction mvVodOnly mvFwdBtn focusable" type="button" title="Forward 30s" aria-label="Forward 30 seconds"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/></svg></button>
+          <button class="mvAction mvFullBtn focusable" type="button" title="Fullscreen" aria-label="Fullscreen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9V4h5"/><path d="M20 9V4h-5"/><path d="M4 15v5h5"/><path d="M20 15v5h-5"/></svg></button>
+          <button class="mvAction mvSwapBtn focusable" type="button" title="Swap screen" aria-label="Swap screen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="7" height="7" rx="1.5"/><rect x="14" y="13" width="7" height="7" rx="1.5"/><path d="M14 5h3a3 3 0 0 1 3 3v2"/><path d="m17 7 3 3 3-3"/><path d="M10 19H7a3 3 0 0 1-3-3v-2"/><path d="m7 17-3-3-3 3"/></svg></button>
+          <button class="mvAction mvChangeBtn focusable" type="button" title="Change" aria-label="Change channel or title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m17 1 4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="m7 23-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></button>
+          <button class="mvAction mvCloseBtn focusable" type="button" title="Close screen" aria-label="Close screen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+        </div>
+        <button class="mvAdd focusable" type="button" title="Add channel">+</button><div class="mvStatus"></div>
+      </div>
+      <div class="mvSlot focusable" data-mv-slot="2" tabindex="0">
+        <video id="mvVideo2" playsinline muted></video>
+        <div class="mvShade"></div><div class="mvLabel"><span class="mvAudio">A</span><span class="mvText"></span></div>
+        <div class="mvActions" aria-label="Screen actions">
+          <button class="mvAction mvVodOnly mvBackBtn focusable" type="button" title="Back 10s" aria-label="Back 10 seconds"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v6h6"/><path d="M21 12A9 9 0 0 0 6 5.3L3 8"/></svg></button>
+          <button class="mvAction mvVodOnly mvPlayBtn focusable" type="button" title="Pause" aria-label="Pause"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg></button>
+          <button class="mvAction mvVodOnly mvFwdBtn focusable" type="button" title="Forward 30s" aria-label="Forward 30 seconds"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/></svg></button>
+          <button class="mvAction mvFullBtn focusable" type="button" title="Fullscreen" aria-label="Fullscreen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9V4h5"/><path d="M20 9V4h-5"/><path d="M4 15v5h5"/><path d="M20 15v5h-5"/></svg></button>
+          <button class="mvAction mvSwapBtn focusable" type="button" title="Swap screen" aria-label="Swap screen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="7" height="7" rx="1.5"/><rect x="14" y="13" width="7" height="7" rx="1.5"/><path d="M14 5h3a3 3 0 0 1 3 3v2"/><path d="m17 7 3 3 3-3"/><path d="M10 19H7a3 3 0 0 1-3-3v-2"/><path d="m7 17-3-3-3 3"/></svg></button>
+          <button class="mvAction mvChangeBtn focusable" type="button" title="Change" aria-label="Change channel or title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m17 1 4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="m7 23-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></button>
+          <button class="mvAction mvCloseBtn focusable" type="button" title="Close screen" aria-label="Close screen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+        </div>
+        <button class="mvAdd focusable" type="button" title="Add channel">+</button><div class="mvStatus"></div>
+      </div>
+      <div class="mvSlot focusable" data-mv-slot="3" tabindex="0">
+        <video id="mvVideo3" playsinline muted></video>
+        <div class="mvShade"></div><div class="mvLabel"><span class="mvAudio">A</span><span class="mvText"></span></div>
+        <div class="mvActions" aria-label="Screen actions">
+          <button class="mvAction mvVodOnly mvBackBtn focusable" type="button" title="Back 10s" aria-label="Back 10 seconds"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v6h6"/><path d="M21 12A9 9 0 0 0 6 5.3L3 8"/></svg></button>
+          <button class="mvAction mvVodOnly mvPlayBtn focusable" type="button" title="Pause" aria-label="Pause"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg></button>
+          <button class="mvAction mvVodOnly mvFwdBtn focusable" type="button" title="Forward 30s" aria-label="Forward 30 seconds"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/></svg></button>
+          <button class="mvAction mvFullBtn focusable" type="button" title="Fullscreen" aria-label="Fullscreen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9V4h5"/><path d="M20 9V4h-5"/><path d="M4 15v5h5"/><path d="M20 15v5h-5"/></svg></button>
+          <button class="mvAction mvSwapBtn focusable" type="button" title="Swap screen" aria-label="Swap screen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="7" height="7" rx="1.5"/><rect x="14" y="13" width="7" height="7" rx="1.5"/><path d="M14 5h3a3 3 0 0 1 3 3v2"/><path d="m17 7 3 3 3-3"/><path d="M10 19H7a3 3 0 0 1-3-3v-2"/><path d="m7 17-3-3-3 3"/></svg></button>
+          <button class="mvAction mvChangeBtn focusable" type="button" title="Change" aria-label="Change channel or title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m17 1 4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="m7 23-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></button>
+          <button class="mvAction mvCloseBtn focusable" type="button" title="Close screen" aria-label="Close screen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+        </div>
+        <button class="mvAdd focusable" type="button" title="Add channel">+</button><div class="mvStatus"></div>
+      </div>
+    </div>
+    <div id="mvPicker" class="mvPicker">
+      <div class="mvPickerHead">
+        <div class="mvPickerTitle" id="mvPickerTitle">Choose channel</div>
+        <button id="mvPickerClose" class="mvIconBtn mvIconOnly focusable" type="button" title="Close picker" aria-label="Close picker"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+      </div>
+      <div class="mvPickerBody">
+        <div id="mvCats" class="mvCats"></div>
+        <div id="mvChannels" class="mvChannels"></div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <div id="appClock" role="timer" aria-live="off" aria-label="Current time"></div>
@@ -6557,10 +6778,12 @@ function showSeekHoldFrame() {
   }
 }
 function stopWebVideoElement() {
+  cancelPauseWarmAhead();
   hideSeekHoldFrame();
+  stopLiveSplitMode();
   cleanupLiveMse();
   const v = $('video');
-  v.onerror = null; v.onplaying = null; v.onwaiting = null; v.onloadeddata = null; v.oncanplay = null; v.ontimeupdate = null; v.onended = null;
+  v.onerror = null; v.onplaying = null; v.onpause = null; v.onwaiting = null; v.onloadeddata = null; v.oncanplay = null; v.ontimeupdate = null; v.onended = null;
   try { v.pause(); } catch {}
   v.removeAttribute('src');
   try { v.load(); } catch {}
@@ -6580,33 +6803,72 @@ function liveMseType() {
     try { return MediaSource.isTypeSupported(t); } catch { return false; }
   }) || '';
 }
-function cleanupLiveMse() {
-  const st = S.liveMse;
+function liveMseKey(slot = 'main') {
+  const s = String(slot || 'main');
+  if (s.startsWith('multi')) return `live${s[0].toUpperCase()}${s.slice(1)}Mse`;
+  return s === 'split' ? 'liveSplitMse' : 'liveMse';
+}
+function cleanupLiveMse(slot = 'main') {
+  const key = liveMseKey(slot);
+  const st = S[key];
   if (!st) return;
-  S.liveMse = null;
+  S[key] = null;
   try { st.abort && st.abort.abort(); } catch {}
   try { st.reader && st.reader.cancel(); } catch {}
   if (st.objectUrl) {
     setTimeout(() => { try { URL.revokeObjectURL(st.objectUrl); } catch {} }, 0);
   }
 }
-function startLiveMseSource(url) {
+function requestLiveMsePlay(v, opts = {}) {
+  if (!opts.split && !opts.multi) return requestVideoPlay(v, { livePrompt: true });
+  const r = v.play();
+  return r && typeof r.then === 'function' ? r : Promise.resolve();
+}
+function startLiveMseSource(url, opts = {}) {
+  const slot = opts.slot || 'main';
+  const split = slot === 'split';
+  const multi = String(slot).startsWith('multi');
   const type = liveMseType();
   if (!type || !url) return false;
-  const v = $('video');
-  const p = S.playing;
+  const v = opts.video || (split ? $('liveSplitVideo') : $('video'));
+  const p = opts.playing || S.playing;
   if (!p || !p.item || p.item.type !== 'live') return false;
-  cleanupLiveMse();
+  cleanupLiveMse(slot);
   const abort = new AbortController();
   const ms = new MediaSource();
   const objectUrl = URL.createObjectURL(ms);
   const token = Date.now() + ':' + Math.random().toString(16).slice(2);
-  const active = () => S.playing === p && S.liveMse && S.liveMse.token === token;
-  S.liveMse = { abort, objectUrl, token, reader: null };
+  const active = () => {
+    const st = S[liveMseKey(slot)];
+    if (!st || st.token !== token) return false;
+    if (split) return !!(S.liveSplit && S.liveSplit.enabled && S.liveSplit.panes && S.liveSplit.panes[1] === p);
+    if (multi) return !!(S.multiView && S.multiView.open && S.multiView.slots && S.multiView.slots[opts.multiSlot] === p);
+    return S.playing === p;
+  };
+  const failLiveMse = (e = new Error('stream failed')) => {
+    cleanupLiveMse(slot);
+    if (split) {
+      const handled = p && typeof p.onLiveMseError === 'function' && p.onLiveMseError(e);
+      if (!handled) {
+        toast('Split channel unavailable: ' + (e.liveProviderReason || e.message || 'stream failed'));
+        clearLiveSplitPane(1);
+      }
+      return;
+    }
+    if (multi) {
+      p.error = e.liveProviderReason || e.message || 'stream failed';
+      renderMultiView();
+      return;
+    }
+    if (e.liveProviderReason) showLiveProviderError(e.liveProviderReason);
+    else failover();
+  };
+  S[liveMseKey(slot)] = { abort, objectUrl, token, reader: null };
   p.usingLiveMse = true;
   v.src = objectUrl;
-  const requestLivePlay = () => requestVideoPlay(v, { livePrompt: true }).catch(() => {
-    if (active()) {
+  if (split || multi) v.muted = true;
+  const requestLivePlay = () => requestLiveMsePlay(v, { split, multi }).catch(() => {
+    if (active() && !split && !multi) {
       clearTimeout(S._waitT);
       $('playerLoader').classList.remove('show');
       showLivePlayPrompt();
@@ -6616,7 +6878,7 @@ function startLiveMseSource(url) {
     if (!active()) return;
     let sb;
     try { sb = ms.addSourceBuffer(type); sb.mode = 'segments'; }
-    catch { if (active()) { cleanupLiveMse(); failover(); } return; }
+    catch (e) { if (active()) failLiveMse(e); return; }
     const q = [];
     let appending = false, appended = 0, started = false, streamDone = false, lastTrim = 0;
     const pump = () => {
@@ -6641,7 +6903,7 @@ function startLiveMseSource(url) {
         appended += chunk.byteLength;
       } catch (e) {
         appending = false;
-        if (active()) { cleanupLiveMse(); failover(); }
+        if (active()) failLiveMse(e);
       }
     };
     sb.addEventListener('updateend', () => {
@@ -6652,7 +6914,7 @@ function startLiveMseSource(url) {
       }
       pump();
     });
-    sb.addEventListener('error', () => { if (active()) { cleanupLiveMse(); failover(); } });
+    sb.addEventListener('error', () => { if (active()) failLiveMse(new Error('stream failed')); });
     try {
       const r = await fetch(url, { signal: abort.signal });
       if (!r.ok || !r.body) {
@@ -6663,7 +6925,7 @@ function startLiveMseSource(url) {
         throw e;
       }
       const reader = r.body.getReader();
-      if (active()) S.liveMse.reader = reader;
+      if (active()) S[liveMseKey(slot)].reader = reader;
       while (active()) {
         const { done, value } = await reader.read();
         if (done) { streamDone = true; pump(); break; }
@@ -6673,14 +6935,1178 @@ function startLiveMseSource(url) {
       }
     } catch (e) {
       if (active() && e.name !== 'AbortError') {
-        cleanupLiveMse();
-        if (e.liveProviderReason) showLiveProviderError(e.liveProviderReason);
-        else failover();
+        failLiveMse(e);
       }
     }
   }, { once: true });
   applyVolume();
+  if (split) syncLiveSplitAudio();
+  if (multi) syncMultiViewAudio();
   requestLivePlay();
+  return true;
+}
+function liveSplitEnabled() {
+  return !!(S.liveSplit && S.liveSplit.enabled);
+}
+function liveSplitActivePane() {
+  return liveSplitEnabled() && S.liveSplit.active === 1 ? 1 : 0;
+}
+function liveItemPayload(it = {}) {
+  const idx = it._channel ?? it.idx;
+  return {
+    title: it.title || it.name || 'Live TV',
+    key: it.key || `live:${idx ?? 'current'}`,
+    type: 'live',
+    backdrop: it.backdrop || procBackdrop(210, 320, (Math.abs(parseInt(idx, 10) || 0) % 12) + 9),
+    overview: '',
+    _channel: idx,
+    _chid: it._chid || it.id || '',
+    _personal: !!(it._personal || it.personal),
+    _sourceName: it._sourceName || it.sourceName || '',
+    genre: it.genre || it.group || '',
+    fav: !!it.fav,
+  };
+}
+function currentLiveChannelItem(pane = liveSplitActivePane()) {
+  const item = pane === 1
+    ? (S.liveSplit && S.liveSplit.panes && S.liveSplit.panes[1] && S.liveSplit.panes[1].item)
+    : (S.playing && S.playing.item);
+  if (!item || item.type !== 'live') return null;
+  const idx = item._channel ?? (String(item.key || '').startsWith('live:') ? +String(item.key).slice(5) : undefined);
+  const full = liveChannelByIdx(idx);
+  return full ? liveItemForPlayerGuide(full) : item;
+}
+function activeLiveChannelIdx() {
+  const it = currentLiveChannelItem();
+  return it ? it._channel : S.liveCur;
+}
+function liveSplitNeedsSecondChannel() {
+  return liveSplitEnabled() && !currentLiveChannelItem(1);
+}
+function showPlayerGuideLoadingShell(title = 'Loading channels...', note = 'Pick a channel for the second screen') {
+  const pg = $('pGuide');
+  const lp = $('pgList');
+  if (!pg || !lp) return;
+  $('pgInfo').innerHTML = `<div class="ey">Second screen</div>
+    <div class="t">${esc(title)}</div>
+    <div class="m">${esc(note)}</div>
+    <div class="n">Back returns to the player.</div>`;
+  lp.className = 'pgGuideBody';
+  lp.innerHTML = '<div class="gridMore">Loading Live TV channels...</div>';
+  $('player').classList.add('guideMode');
+  pg.classList.remove('ready');
+  pg.classList.add('open');
+  scheduleNativeGuidePipSync();
+  requestAnimationFrame(() => {
+    if (pg.classList.contains('open')) pg.classList.add('ready');
+  });
+}
+function updateLiveSplitHud() {
+  const enabled = liveSplitEnabled();
+  const player = $('player');
+  player.classList.toggle('splitMode', enabled);
+  player.classList.toggle('splitPane0', enabled && liveSplitActivePane() === 0);
+  player.classList.toggle('splitPane1', enabled && liveSplitActivePane() === 1);
+  player.classList.toggle('splitNeedsChannel', enabled && !currentLiveChannelItem(1));
+  $('splitBtn').classList.toggle('on', enabled);
+  const primary = currentLiveChannelItem(0);
+  const secondary = currentLiveChannelItem(1);
+  $('liveSplitPrimaryLabel').textContent = primary ? primary.title || primary.name || 'Main channel' : 'Main channel';
+  $('liveSplitSecondaryLabel').textContent = secondary ? secondary.title || secondary.name || 'Second channel' : 'Pick second channel';
+  document.querySelectorAll('.liveSplitPane').forEach((el) => {
+    el.classList.toggle('active', enabled && +el.dataset.livePane === liveSplitActivePane());
+  });
+  updateLiveFavoriteButton();
+}
+async function openLiveSplitChannelPicker() {
+  if (!liveSplitEnabled()) return false;
+  S.liveSplitPickPane = 1;
+  setLiveSplitPaneFocus(1);
+  const pg = $('pGuide');
+  if (pg && pg.classList.contains('open')) return true;
+  showPlayerGuideLoadingShell('Choose second channel', 'Loading channels for the right pane');
+  const list = await ensurePlayerGuideChannels();
+  if (!list.length) {
+    await renderPlayerGuideTimeline(pg, []);
+    toast(S.serverInfo && S.serverInfo.iptv ? 'No Live TV channels available' : 'Live TV is not set up');
+    return false;
+  }
+  S.liveList = list;
+  await renderPlayerGuideTimeline(pg, list);
+  setLiveSplitPaneFocus(1);
+  return true;
+}
+function updateActiveLiveSourceLine() {
+  if (!(S.playing && S.playing.item && S.playing.item.type === 'live')) return;
+  const ch = currentLiveChannelItem();
+  if (!ch) return;
+  $('pSrc').textContent = ch.genre || ch.group || '';
+  if (!S.liveEpg || ch._channel === undefined || ch._channel === null) return;
+  const pane = liveSplitActivePane();
+  const channel = ch._channel;
+  fetchEpg(channel).then((nn) => {
+    if (!(S.playing && S.playing.item && S.playing.item.type === 'live')) return;
+    if (liveSplitActivePane() !== pane) return;
+    const active = currentLiveChannelItem();
+    if (!active || String(active._channel) !== String(channel) || !nn || !nn.now || !nn.now.title) return;
+    $('pSrc').textContent = `Now - ${nn.now.title}${nn.now.stop ? ` (until ${fmtT(nn.now.stop)})` : ''}${nn.next && nn.next.title ? `  -  Next - ${nn.next.title}` : ''}`;
+  }).catch(() => {});
+}
+function syncLiveSplitAudio(state = storedVolumeState()) {
+  const main = $('video');
+  const second = $('liveSplitVideo');
+  const volume = Math.max(0, Math.min(1, state.volume));
+  main.volume = volume;
+  second.volume = volume;
+  if (!liveSplitEnabled()) {
+    second.muted = true;
+    return;
+  }
+  const muted = !!state.muted;
+  const pane = liveSplitActivePane();
+  main.muted = muted || pane !== 0;
+  second.muted = muted || pane !== 1;
+}
+function setLiveSplitPaneFocus(pane) {
+  if (!liveSplitEnabled()) return false;
+  S.liveSplit.active = pane === 1 ? 1 : 0;
+  S.zone = 'liveSplit';
+  const ch = currentLiveChannelItem();
+  if (ch && ch._channel !== undefined && ch._channel !== null) S._pgFocusChannel = ch._channel;
+  clearFocus();
+  updateLiveSplitHud();
+  updatePlayerMeta();
+  updateActiveLiveSourceLine();
+  syncLiveSplitAudio();
+  showOsd();
+  return true;
+}
+function clearLiveSplitPane(pane = 1) {
+  if (pane !== 1) return;
+  cleanupLiveMse('split');
+  const v = $('liveSplitVideo');
+  v.onerror = null; v.onplaying = null; v.onwaiting = null; v.onloadeddata = null; v.oncanplay = null; v.ontimeupdate = null; v.onended = null;
+  try { v.pause(); } catch {}
+  v.removeAttribute('src');
+  try { v.load(); } catch {}
+  if (S.liveSplit && S.liveSplit.panes) S.liveSplit.panes[1] = null;
+  updateLiveSplitHud();
+  syncLiveSplitAudio();
+}
+function stopLiveSplitMode() {
+  if (!liveSplitEnabled()) {
+    cleanupLiveMse('split');
+    return;
+  }
+  S.liveSplitPickPane = null;
+  clearLiveSplitPane(1);
+  S.liveSplit = null;
+  $('player').classList.remove('splitMode', 'splitPane0', 'splitPane1', 'splitNeedsChannel');
+  $('splitBtn').classList.remove('on');
+  updateLiveSplitHud();
+  applyVolume();
+}
+async function playLiveSplitChannel(it, list, pane = liveSplitActivePane(), opts = {}) {
+  if (!liveSplitEnabled()) return playChannel(it, list);
+  S.liveSplit.active = pane === 1 ? 1 : 0;
+  let hydrated = it;
+  try { hydrated = await hydrateLivePlaybackUrls(it); }
+  catch (e) { toast('Live stream unavailable: ' + e.message); return false; }
+  if (!hydrated || !hydrated._streamUrl) { toast('Live stream unavailable'); return false; }
+  if (pane === 1) {
+    const splitPane = {
+      item: liveItemPayload(hydrated),
+      streamUrl: hydrated._streamUrl,
+      name: hydrated.title || 'Live TV',
+      usingLiveMse: false,
+      onLiveMseError: opts.onError || null,
+    };
+    S.liveSplit.panes[1] = splitPane;
+    if (!startLiveMseSource(hydrated._streamUrl, { slot: 'split', video: $('liveSplitVideo'), playing: splitPane })) {
+      clearLiveSplitPane(1);
+      toast('Split view is not supported by this browser');
+      return false;
+    }
+    updateLiveSplitHud();
+    updatePlayerMeta();
+    updateActiveLiveSourceLine();
+    syncLiveSplitAudio();
+    return true;
+  }
+  const p = S.playing;
+  if (!p || !p.item || p.item.type !== 'live') return false;
+  S.liveCur = hydrated._channel;
+  p.item = liveItemPayload(hydrated);
+  p.name = hydrated.title || 'Live TV';
+  p.fileName = p.name;
+  p.streamUrl = hydrated._streamUrl;
+  p.startOffset = 0;
+  p.usingRemux = false;
+  p.usingTranscode = false;
+  p.usingLiveMse = false;
+  $('pHealth').innerHTML = '<span class="liveBadge">LIVE</span>';
+  $('pSrc').textContent = hydrated.genre || '';
+  updatePlayerMeta();
+  updateActiveLiveSourceLine();
+  updatePlayerControlAvailability();
+  startSource('direct', 0);
+  if (S.liveEpg) {
+    const nn = await fetchEpg(hydrated._channel);
+    if (nn && nn.now && nn.now.title && S.liveCur === hydrated._channel) {
+      $('pSrc').textContent = `Now - ${nn.now.title}${nn.now.stop ? ` (until ${fmtT(nn.now.stop)})` : ''}${nn.next && nn.next.title ? `  -  Next - ${nn.next.title}` : ''}`;
+    }
+  }
+  return true;
+}
+function liveSplitCandidateKey(it) {
+  return String(it && (it._chid || it.id || it._channel || it.key || it.title || ''));
+}
+function nextLiveSplitChannel(list, current, skip = new Set()) {
+  const pool = (list && list.length ? list : S.liveList || []).filter((x) => x && x._channel !== undefined);
+  if (pool.length < 2) return null;
+  const cur = current && current._channel;
+  const i = pool.findIndex((x) => String(x._channel) === String(cur));
+  for (let n = 1; n <= pool.length; n++) {
+    const hit = pool[((i < 0 ? 0 : i) + n) % pool.length];
+    if (hit && String(hit._channel) !== String(cur) && !skip.has(liveSplitCandidateKey(hit))) return hit;
+  }
+  return null;
+}
+async function playLiveSplitSecondWithFallback(list, current, tried = new Set()) {
+  const pool = (list && list.length ? list : S.liveList || []).filter((x) => x && x._channel !== undefined);
+  const limit = Math.min(Math.max(1, pool.length - 1), 6);
+  while (tried.size < limit) {
+    const next = nextLiveSplitChannel(pool, current, tried);
+    if (!next) break;
+    tried.add(liveSplitCandidateKey(next));
+    const started = await playLiveSplitChannel(next, pool, 1, {
+      onError: (e) => {
+        if (!liveSplitEnabled()) return false;
+        setTimeout(() => {
+          if (!liveSplitEnabled()) return;
+          playLiveSplitSecondWithFallback(pool, currentLiveChannelItem(0) || current, tried).then((ok) => {
+            if (!ok && liveSplitEnabled()) {
+              toast('Split channel unavailable: ' + (e.liveProviderReason || e.message || 'stream failed'));
+              clearLiveSplitPane(1);
+            }
+          }).catch(() => {});
+        }, 0);
+        return true;
+      }
+    });
+    if (started) return true;
+  }
+  return false;
+}
+async function toggleLiveSplitMode() {
+  const p = S.playing;
+  if (!p || !p.item || p.item.type !== 'live') return toast('Split view is for Live TV');
+  if (liveSplitEnabled()) { stopLiveSplitMode(); return; }
+  if (p.usingNative || nativeLiveRequired()) return toast('Split view is available in the web Live TV player');
+  if (!liveMseType()) return toast('Split view is not supported by this browser');
+  const list = await ensurePlayerGuideChannels();
+  if (list.length) S.liveList = list;
+  const current = currentLiveChannelItem(0) || list.find((x) => String(x._channel) === String(S.liveCur));
+  const second = nextLiveSplitChannel(list, current);
+  if (!second) return toast('No second channel in this list');
+  S.liveSplit = { enabled: true, active: 0, panes: [{ item: liveItemPayload(current || p.item) }, null] };
+  updateLiveSplitHud();
+  syncLiveSplitAudio();
+  const started = await playLiveSplitSecondWithFallback(list, current, new Set());
+  if (!started && liveSplitEnabled()) {
+    clearLiveSplitPane(1);
+    setLiveSplitPaneFocus(1);
+    return toast('Pick a second channel from the guide');
+  }
+  setLiveSplitPaneFocus(0);
+}
+function liveChannelForFavorite() {
+  const it = currentLiveChannelItem();
+  if (!it) return null;
+  const full = liveChannelByIdx(it._channel);
+  const ch = full || {
+    id: it._chid || it.id || '',
+    idx: it._channel,
+    name: it.title || it.name || 'Live TV',
+    personal: !!it._personal,
+    _personal: !!it._personal,
+    fav: !!it.fav,
+  };
+  if (!ch.id && !isPersonalChannel(ch)) return null;
+  return ch;
+}
+function updateLiveFavoriteButton() {
+  const b = $('favBtn');
+  if (!b) return;
+  const ch = liveChannelForFavorite();
+  const on = !!(ch && ch.fav);
+  b.classList.toggle('on', on);
+  b.title = on ? 'Remove favorite channel' : 'Favorite channel';
+  setPlayerControlEnabled('favBtn', !!ch);
+}
+async function toggleLiveFavorite() {
+  const ch = liveChannelForFavorite();
+  if (!ch) return toast('Favorite is not available for this channel');
+  await toggleFav(ch);
+  const idx = ch.idx ?? ch._channel;
+  [S.playing && S.playing.item, S.liveSplit && S.liveSplit.panes && S.liveSplit.panes[1] && S.liveSplit.panes[1].item]
+    .filter(Boolean)
+    .forEach((it) => {
+      if (String(it._channel) === String(idx)) it.fav = !!ch.fav;
+  });
+  updateLiveSplitHud();
+}
+
+const MULTIVIEW_MAX_SLOTS = 4;
+function multiViewCanUseWeb() {
+  return !nativeLiveRequired() && !!liveMseType();
+}
+function multiViewSlots() {
+  if (!S.multiView) return [];
+  if (!Array.isArray(S.multiView.slots)) S.multiView.slots = [];
+  while (S.multiView.slots.length < MULTIVIEW_MAX_SLOTS) S.multiView.slots.push(null);
+  return S.multiView.slots;
+}
+function multiViewCount() {
+  const n = S.multiView && Number.isFinite(+S.multiView.count) ? +S.multiView.count : 2;
+  return Math.max(2, Math.min(MULTIVIEW_MAX_SLOTS, n));
+}
+function multiViewActiveSlot() {
+  if (!S.multiView) return 0;
+  return Math.max(0, Math.min(multiViewCount() - 1, Number.isFinite(+S.multiView.active) ? +S.multiView.active : 0));
+}
+function multiViewSlotVideo(i) {
+  return $('mvVideo' + i);
+}
+function multiViewSlotIsVod(slot) {
+  return !!(slot && slot.item && slot.item.type && slot.item.type !== 'live');
+}
+function multiViewVodCount(exceptSlot = -1) {
+  return multiViewSlots().filter((slot, i) => i !== exceptSlot && multiViewSlotIsVod(slot)).length;
+}
+function multiViewSlotPosition(slot, i) {
+  const v = multiViewSlotVideo(i);
+  if (!slot || !v) return 0;
+  return Math.max(0, Math.floor((slot.startOffset || 0) + (v.currentTime || 0)));
+}
+function saveMultiViewVodProgress(i, final = false) {
+  if (!S.multiView || !S.multiView.slots) return;
+  const slot = S.multiView.slots[i];
+  if (!multiViewSlotIsVod(slot) || !slot.item || !slot.item.key) return;
+  const pos = multiViewSlotPosition(slot, i);
+  if (!final && Math.abs(pos - (slot.lastSaved || 0)) < 10) return;
+  const v = multiViewSlotVideo(i);
+  const duration = Math.floor(slot.duration || (v && isFinite(v.duration) ? v.duration + (slot.startOffset || 0) : 0) || 0);
+  const watched = duration ? pos / duration > 0.92 : false;
+  slot.lastSaved = pos;
+  const payload = {
+    key: slot.item.key,
+    position: pos,
+    duration,
+    watched,
+    profile: S.profile ? S.profile.id : undefined,
+    meta: wlMeta(slot.item),
+  };
+  upsertWatchCache({
+    key: payload.key,
+    position: payload.position,
+    duration: payload.duration,
+    watched: payload.watched,
+    meta: payload.meta,
+    updatedAt: Date.now(),
+  });
+  api('/api/watch', { method: 'POST', body: payload }).catch(() => {});
+}
+function cleanupMultiViewSlot(i, clearItem = false) {
+  saveMultiViewVodProgress(i, true);
+  cleanupLiveMse('multi' + i);
+  const v = multiViewSlotVideo(i);
+  if (v) {
+    v.onerror = null; v.onplaying = null; v.onwaiting = null; v.onloadedmetadata = null; v.onloadeddata = null; v.oncanplay = null; v.ontimeupdate = null; v.onpause = null; v.onended = null;
+    try { v.pause(); } catch {}
+    v.removeAttribute('src');
+    v.src = '';
+    try { v.load(); } catch {}
+    v.muted = true;
+  }
+  if (clearItem && S.multiView && S.multiView.slots) S.multiView.slots[i] = null;
+}
+function cleanupMultiViewAll() {
+  for (let i = 0; i < MULTIVIEW_MAX_SLOTS; i++) cleanupMultiViewSlot(i, true);
+}
+function multiViewTopControls() {
+  return [$('mvCount2'), $('mvCount3'), $('mvCount4'), $('mvClose')].filter(Boolean);
+}
+function setMultiViewTopFocus(idx = 0) {
+  const controls = multiViewTopControls();
+  if (!controls.length) return false;
+  S.zone = 'multiTop';
+  S.multiViewTopIdx = Math.max(0, Math.min(controls.length - 1, +idx || 0));
+  try { controls[S.multiViewTopIdx].focus({ preventScroll: true }); } catch { try { controls[S.multiViewTopIdx].focus(); } catch {} }
+  applyFocus(controls[S.multiViewTopIdx]);
+  return true;
+}
+function multiViewVisualOrder() {
+  if (!S.multiView) return [0, 1, 2, 3];
+  const raw = Array.isArray(S.multiView.order) ? S.multiView.order : [0, 1, 2, 3];
+  const order = [];
+  raw.forEach((n) => {
+    const v = +n;
+    if (Number.isInteger(v) && v >= 0 && v < MULTIVIEW_MAX_SLOTS && !order.includes(v)) order.push(v);
+  });
+  for (let i = 0; i < MULTIVIEW_MAX_SLOTS; i++) if (!order.includes(i)) order.push(i);
+  S.multiView.order = order;
+  return order;
+}
+function multiViewVisibleOrder() {
+  const count = multiViewCount();
+  const visible = multiViewVisualOrder().filter((i) => i < count);
+  for (let i = 0; i < count; i++) if (!visible.includes(i)) visible.push(i);
+  return visible;
+}
+function multiViewVisualPosition(slot = multiViewActiveSlot()) {
+  const pos = multiViewVisibleOrder().indexOf(slot);
+  return pos >= 0 ? pos : Math.max(0, Math.min(multiViewCount() - 1, +slot || 0));
+}
+function multiViewSlotForVisualPosition(pos = 0) {
+  const visible = multiViewVisibleOrder();
+  return visible[Math.max(0, Math.min(visible.length - 1, +pos || 0))] ?? 0;
+}
+function multiViewActionButtons(slot = multiViewActiveSlot()) {
+  const root = document.querySelector(`.mvSlot[data-mv-slot="${slot}"]`);
+  if (!root) return [];
+  const isVod = root.classList.contains('vod');
+  return [...root.querySelectorAll('.mvAction')].filter((btn) => isVod || !btn.classList.contains('mvVodOnly'));
+}
+function setMultiViewActionFocus(idx = 0) {
+  if (!S.multiView || !S.multiView.open) return false;
+  const hasActionSlot = S.multiView.actionSlot !== null && S.multiView.actionSlot !== undefined;
+  const slot = Math.max(0, Math.min(multiViewCount() - 1, hasActionSlot ? +S.multiView.actionSlot : multiViewActiveSlot()));
+  const buttons = multiViewActionButtons(slot);
+  if (!buttons.length) return false;
+  S.zone = 'multiActions';
+  S.multiViewActionIdx = Math.max(0, Math.min(buttons.length - 1, +idx || 0));
+  try { buttons[S.multiViewActionIdx].focus({ preventScroll: true }); } catch { try { buttons[S.multiViewActionIdx].focus(); } catch {} }
+  applyFocus(buttons[S.multiViewActionIdx]);
+  return true;
+}
+function closeMultiViewActions() {
+  if (!S.multiView) return;
+  S.multiView.actionSlot = null;
+  S.multiViewActionIdx = 0;
+  renderMultiView();
+}
+function openMultiViewActions(slot = multiViewActiveSlot()) {
+  if (!S.multiView || !S.multiView.open) return false;
+  const i = Math.max(0, Math.min(multiViewCount() - 1, +slot || 0));
+  const pane = multiViewSlots()[i];
+  if (!pane || !pane.item) {
+    openMultiViewPicker(i);
+    return true;
+  }
+  S.multiView.actionSlot = i;
+  S.multiViewActionIdx = multiViewSlotIsVod(pane) ? 1 : 0;
+  setMultiViewActiveSlot(i, { keepActions: true });
+  return setMultiViewActionFocus(S.multiViewActionIdx);
+}
+function multiViewFullscreenSlot() {
+  if (!S.multiView || S.multiView.fullSlot === null || S.multiView.fullSlot === undefined || !Number.isFinite(+S.multiView.fullSlot)) return -1;
+  const i = Math.max(0, Math.min(multiViewCount() - 1, +S.multiView.fullSlot));
+  const slot = multiViewSlots()[i];
+  return slot && slot.item ? i : -1;
+}
+function exitMultiViewFullscreen() {
+  if (!S.multiView) return false;
+  if (multiViewFullscreenSlot() < 0) return false;
+  const i = multiViewFullscreenSlot();
+  S.multiView.fullSlot = null;
+  S.multiView.actionSlot = null;
+  renderMultiView();
+  setMultiViewActiveSlot(i);
+  return true;
+}
+function toggleMultiViewFullscreen(slot = multiViewActiveSlot()) {
+  if (!S.multiView || !S.multiView.open) return false;
+  const i = Math.max(0, Math.min(multiViewCount() - 1, +slot || 0));
+  const pane = multiViewSlots()[i];
+  if (!pane || !pane.item) return openMultiViewPicker(i);
+  if (multiViewFullscreenSlot() === i) return exitMultiViewFullscreen();
+  S.multiView.fullSlot = i;
+  S.multiView.actionSlot = null;
+  setMultiViewActiveSlot(i);
+  return true;
+}
+function changeMultiViewPane(slot = multiViewActiveSlot()) {
+  if (!S.multiView || !S.multiView.open) return false;
+  const i = Math.max(0, Math.min(multiViewCount() - 1, +slot || 0));
+  S.multiView.fullSlot = null;
+  S.multiView.actionSlot = null;
+  renderMultiView();
+  openMultiViewPicker(i);
+  return true;
+}
+function closeMultiViewPane(slot = multiViewActiveSlot()) {
+  if (!S.multiView || !S.multiView.open) return false;
+  const i = Math.max(0, Math.min(multiViewCount() - 1, +slot || 0));
+  cleanupMultiViewSlot(i, true);
+  if (S.multiView.fullSlot === i) S.multiView.fullSlot = null;
+  if (S.multiView.actionSlot === i) S.multiView.actionSlot = null;
+  if (S.multiView.swapSlot === i) S.multiView.swapSlot = null;
+  renderMultiView();
+  setMultiViewActiveSlot(Math.min(i, multiViewCount() - 1));
+  return true;
+}
+function cancelMultiViewSwap() {
+  if (!S.multiView) return false;
+  if (S.multiView.swapSlot === null || S.multiView.swapSlot === undefined) return false;
+  const i = Math.max(0, Math.min(multiViewCount() - 1, +S.multiView.swapSlot || 0));
+  S.multiView.swapSlot = null;
+  renderMultiView();
+  setMultiViewActiveSlot(i);
+  return true;
+}
+function completeMultiViewSwap(target = multiViewActiveSlot()) {
+  if (!S.multiView || !S.multiView.open || S.multiView.swapSlot === null || S.multiView.swapSlot === undefined) return false;
+  const count = multiViewCount();
+  const from = Math.max(0, Math.min(count - 1, +S.multiView.swapSlot || 0));
+  const to = Math.max(0, Math.min(count - 1, +target || 0));
+  if (from === to) return cancelMultiViewSwap();
+  const order = multiViewVisualOrder();
+  const fromPos = order.indexOf(from);
+  const toPos = order.indexOf(to);
+  if (fromPos >= 0 && toPos >= 0) {
+    [order[fromPos], order[toPos]] = [order[toPos], order[fromPos]];
+    S.multiView.order = order;
+  }
+  S.multiView.swapSlot = null;
+  S.multiView.actionSlot = null;
+  S.multiView.fullSlot = null;
+  renderMultiView();
+  setMultiViewActiveSlot(from);
+  return true;
+}
+function beginMultiViewSwap(slot = multiViewActiveSlot()) {
+  if (!S.multiView || !S.multiView.open) return false;
+  const i = Math.max(0, Math.min(multiViewCount() - 1, +slot || 0));
+  const pane = multiViewSlots()[i];
+  if (!pane || !pane.item) return openMultiViewPicker(i);
+  S.multiView.swapSlot = i;
+  S.multiView.actionSlot = null;
+  S.multiView.fullSlot = null;
+  closeMultiViewPicker();
+  renderMultiView();
+  setMultiViewActiveSlot(i);
+  return true;
+}
+function multiViewSlotOnTopRow(i) {
+  const count = multiViewCount();
+  const pos = multiViewVisualPosition(i);
+  if (count === 2) return true;
+  if (count === 3) return pos === 0 || pos === 1;
+  return pos === 0 || pos === 1;
+}
+function syncMultiViewAudio() {
+  if (!S.multiView || !S.multiView.open) return;
+  const active = multiViewActiveSlot();
+  const state = storedVolumeState();
+  for (let i = 0; i < MULTIVIEW_MAX_SLOTS; i++) {
+    const v = multiViewSlotVideo(i);
+    if (!v) continue;
+    v.volume = Math.max(0, Math.min(1, state.volume));
+    v.muted = !!state.muted || i !== active;
+  }
+}
+function multiViewVodPlayIcon(paused) {
+  return paused ? '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>'
+    : '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>';
+}
+function renderMultiViewVodPlayButton(el, i, slot) {
+  const btn = el && el.querySelector ? el.querySelector('.mvPlayBtn') : null;
+  if (!btn || !multiViewSlotIsVod(slot)) return;
+  const v = multiViewSlotVideo(i);
+  const paused = !v || v.paused;
+  btn.innerHTML = multiViewVodPlayIcon(paused);
+  btn.title = paused ? 'Play' : 'Pause';
+  btn.setAttribute('aria-label', paused ? 'Play' : 'Pause');
+}
+function friendlyLiveProviderReason(reason) {
+  const raw = String(reason || '').trim();
+  const low = raw.toLowerCase();
+  if (low.includes('rate limit')) return 'Provider limited extra stream - your IPTV account may allow one active channel';
+  if (low.includes('bot-protection') || low.includes('bot protection')) return 'Provider protection blocked this stream - wait a moment or try another channel';
+  if (low.includes('rejected')) return 'Provider rejected this channel - try another channel';
+  if (low.includes('offline')) return 'Channel is offline';
+  return raw || 'Live stream unavailable';
+}
+function renderMultiView() {
+  const mv = $('multiView');
+  if (!S.multiView || !S.multiView.open) {
+    mv.classList.remove('open');
+    mv.classList.remove('paneFull');
+    mv.setAttribute('aria-hidden', 'true');
+    return;
+  }
+  const count = multiViewCount();
+  const active = multiViewActiveSlot();
+  const fullSlot = multiViewFullscreenSlot();
+  const slots = multiViewSlots();
+  const visibleOrder = multiViewVisibleOrder();
+  const swapSlot = S.multiView.swapSlot !== null && S.multiView.swapSlot !== undefined && Number.isFinite(+S.multiView.swapSlot)
+    ? Math.max(0, Math.min(count - 1, +S.multiView.swapSlot))
+    : -1;
+  mv.classList.add('open');
+  mv.classList.toggle('paneFull', fullSlot >= 0);
+  mv.setAttribute('aria-hidden', 'false');
+  const grid = $('mvGrid');
+  grid.className = `mvGrid count${count}${fullSlot >= 0 ? ' fullscreen' : ''}`;
+  grid.style.setProperty('--mv-count', String(count));
+  $('mvTitle').textContent = fullSlot >= 0
+    ? (slots[fullSlot] && slots[fullSlot].name ? slots[fullSlot].name : `Screen ${fullSlot + 1}`)
+    : (swapSlot >= 0 ? `Pick a screen to swap with screen ${swapSlot + 1}` : 'Multiviewer');
+  [2, 3, 4].forEach((n) => $('mvCount' + n).classList.toggle('on', count === n));
+  document.querySelectorAll('.mvSlot').forEach((el) => {
+    const i = +el.dataset.mvSlot;
+    const slot = slots[i];
+    const visible = i < count && (fullSlot < 0 || i === fullSlot);
+    const pos = Math.max(0, visibleOrder.indexOf(i));
+    el.style.order = String(pos);
+    el.classList.toggle('visible', visible);
+    el.classList.toggle('active', visible && i === active);
+    el.classList.toggle('filled', visible && !!(slot && slot.item));
+    el.classList.toggle('vod', visible && multiViewSlotIsVod(slot));
+    el.classList.toggle('actionsOpen', visible && S.multiView.actionSlot === i);
+    el.classList.toggle('mvFull', visible && fullSlot === i);
+    el.classList.toggle('mvMain', visible && count === 3 && pos === 0);
+    el.classList.toggle('swapSource', visible && swapSlot === i);
+    el.classList.toggle('swapTarget', visible && swapSlot >= 0 && swapSlot !== i);
+    el.querySelector('.mvText').textContent = slot && slot.item ? (slot.item.title || slot.item.name || 'Live TV') : `Add channel ${i + 1}`;
+    const swapStatus = swapSlot >= 0
+      ? (swapSlot === i ? 'Pick another screen' : `OK swaps with screen ${swapSlot + 1}`)
+      : '';
+    const filledStatus = swapStatus || (slot && slot.item
+      ? (slot.status || (multiViewSlotIsVod(slot) ? 'Movie/show' : 'Live TV'))
+      : 'Add screen');
+    const statusEl = el.querySelector('.mvStatus');
+    const hasError = !!(slot && slot.error);
+    statusEl.classList.toggle('warn', hasError);
+    statusEl.textContent = hasError ? friendlyLiveProviderReason(slot.error) : filledStatus;
+    renderMultiViewVodPlayButton(el, i, slot);
+  });
+  syncMultiViewAudio();
+}
+function setMultiViewActiveSlot(i, opts = {}) {
+  if (!S.multiView || !S.multiView.open) return false;
+  S.multiView.active = Math.max(0, Math.min(multiViewCount() - 1, +i || 0));
+  if (!opts.keepActions && S.multiView.actionSlot !== S.multiView.active) S.multiView.actionSlot = null;
+  S.zone = 'multiview';
+  renderMultiView();
+  if (opts.focus === false) return true;
+  const el = document.querySelector(`.mvSlot[data-mv-slot="${S.multiView.active}"]`);
+  if (el) {
+    try { el.focus({ preventScroll: true }); } catch { try { el.focus(); } catch {} }
+    applyFocus(el);
+  }
+  return true;
+}
+function setMultiViewCount(n) {
+  if (!S.multiView || !S.multiView.open) return;
+  const count = Math.max(2, Math.min(MULTIVIEW_MAX_SLOTS, +n || 2));
+  const old = multiViewCount();
+  S.multiView.count = count;
+  if (count < old) {
+    for (let i = count; i < MULTIVIEW_MAX_SLOTS; i++) cleanupMultiViewSlot(i, true);
+  }
+  if (count > old && count >= 3) toast(`${count} screens can use ${count} provider streams`);
+  if (multiViewActiveSlot() >= count) S.multiView.active = count - 1;
+  if (S.multiView.fullSlot !== null && S.multiView.fullSlot !== undefined && Number.isFinite(+S.multiView.fullSlot) && +S.multiView.fullSlot >= count) S.multiView.fullSlot = null;
+  if (S.multiView.actionSlot !== null && S.multiView.actionSlot !== undefined && Number.isFinite(+S.multiView.actionSlot) && +S.multiView.actionSlot >= count) S.multiView.actionSlot = null;
+  if (S.multiView.swapSlot !== null && S.multiView.swapSlot !== undefined && Number.isFinite(+S.multiView.swapSlot) && +S.multiView.swapSlot >= count) S.multiView.swapSlot = null;
+  multiViewVisualOrder();
+  closeMultiViewPicker();
+  renderMultiView();
+}
+function multiViewCategoryGroups() {
+  const all = (S.liveChannels || []).map(liveItemForPlayerGuide).filter((x) => x && x._channel !== undefined);
+  const favName = '★ Favorites';
+  const cwName = 'Continue Watching';
+  const cwItems = buildCwItems(cachedWatchRowsForHome()).slice(0, 80);
+  const favs = all.filter((c) => c.fav);
+  const groups = new Map();
+  all.forEach((c) => {
+    const g = c.genre || c.group || 'Other';
+    if (S.liveHidden && S.liveHidden.has(g) && !c.fav) return;
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(c);
+  });
+  const names = [...(cwItems.length ? [cwName] : []), ...(favs.length ? [favName] : []), ...groups.keys()];
+  return { all, cwName, cwItems, favName, favs, groups, names };
+}
+function renderMultiViewPicker() {
+  if (!S.multiView || !S.multiView.open) return;
+  const { cwName, cwItems, favName, favs, groups, names } = multiViewCategoryGroups();
+  if (!names.length) {
+    $('mvCats').innerHTML = '';
+    $('mvChannels').innerHTML = '<div class="gridMore">No Live TV or Continue Watching items available.</div>';
+    return;
+  }
+  if (!names.includes(S.multiView.cat)) S.multiView.cat = names[0];
+  const countFor = (name) => name === cwName ? cwItems.length : (name === favName ? favs.length : ((groups.get(name) || []).length));
+  $('mvCats').innerHTML = '';
+  names.forEach((name) => {
+    const btn = document.createElement('button');
+    btn.className = 'mvCat focusable' + (name === S.multiView.cat ? ' sel' : '');
+    btn.innerHTML = `<span>${esc(name)}</span><span>${countFor(name)}</span>`;
+    btn.addEventListener('click', () => { S.multiView.cat = name; renderMultiViewPicker(); });
+    $('mvCats').appendChild(btn);
+  });
+  const isContinue = S.multiView.cat === cwName;
+  const list = isContinue ? cwItems : (S.multiView.cat === favName ? favs : (groups.get(S.multiView.cat) || []));
+  $('mvChannels').innerHTML = '';
+  list.slice(0, isContinue ? 80 : 240).forEach((ch) => {
+    const btn = document.createElement('button');
+    btn.className = 'mvChannel focusable';
+    btn.innerHTML = isContinue
+      ? `<span>${esc(ch.title || 'Continue Watching')}</span><span>${esc(ch.genre || ch.year || ch.type || '')}</span>`
+      : `<span>${esc(ch.title || ch.name || 'Live TV')}</span><span>${esc(ch.genre || ch.group || '')}</span>`;
+    btn.addEventListener('click', () => {
+      const slot = S.multiView.pickSlot ?? multiViewActiveSlot();
+      return isContinue ? playMultiViewVodItem(ch, slot) : playMultiViewChannel(ch, slot);
+    });
+    $('mvChannels').appendChild(btn);
+  });
+  const limit = isContinue ? 80 : 240;
+  if (list.length > limit) {
+    const more = document.createElement('div');
+    more.className = 'gridMore';
+    more.textContent = `${list.length - limit} more ${isContinue ? 'titles' : 'channels'} - narrow with categories first.`;
+    $('mvChannels').appendChild(more);
+  }
+}
+function openMultiViewPicker(slot = multiViewActiveSlot()) {
+  if (!S.multiView || !S.multiView.open) return;
+  S.multiView.pickSlot = Math.max(0, Math.min(multiViewCount() - 1, +slot || 0));
+  S.multiView.actionSlot = null;
+  S.multiView.swapSlot = null;
+  setMultiViewActiveSlot(S.multiView.pickSlot);
+  $('mvPickerTitle').textContent = `Choose content for screen ${S.multiView.pickSlot + 1}`;
+  $('mvPicker').classList.add('open');
+  renderMultiViewPicker();
+  loadWatchState().then(() => {
+    if (S.multiView && S.multiView.open && $('mvPicker').classList.contains('open')) renderMultiViewPicker();
+  }).catch(() => {});
+  const first = $('mvChannels').querySelector('button') || $('mvCats').querySelector('button') || $('mvPickerClose');
+  if (first) applyFocus(first);
+}
+function closeMultiViewPicker() {
+  $('mvPicker').classList.remove('open');
+  if (S.multiView) S.multiView.pickSlot = null;
+}
+async function playMultiViewChannel(it, slotIndex = multiViewActiveSlot()) {
+  if (!S.multiView || !S.multiView.open) return false;
+  const i = Math.max(0, Math.min(multiViewCount() - 1, +slotIndex || 0));
+  let hydrated = it;
+  try { hydrated = await hydrateLivePlaybackUrls(it); }
+  catch (e) { toast('Live stream unavailable: ' + e.message); return false; }
+  if (!hydrated || !hydrated._streamUrl) { toast('Live stream unavailable'); return false; }
+  const slot = {
+    item: liveItemPayload(hydrated),
+    streamUrl: hydrated._streamUrl,
+    name: hydrated.title || hydrated.name || 'Live TV',
+    error: '',
+  };
+  cleanupMultiViewSlot(i, true);
+  S.multiView.slots[i] = slot;
+  renderMultiView();
+  if (!startLiveMseSource(hydrated._streamUrl, { slot: 'multi' + i, multiSlot: i, video: multiViewSlotVideo(i), playing: slot })) {
+    slot.error = 'unsupported browser';
+    renderMultiView();
+    return false;
+  }
+  closeMultiViewPicker();
+  setMultiViewActiveSlot(i);
+  return true;
+}
+function multiViewVodUrl(mount, item, startAt = 0) {
+  const kind = playbackStartKind(mount);
+  const p = {
+    streamUrl: mount.streamUrl,
+    remuxUrl: mount.remuxUrl,
+    transcodeUrl: mount.transcodeUrl,
+    streamToken: mount.streamToken,
+    audioTrack: 0,
+    quality: 1080,
+    forceAacRemux: false,
+  };
+  const start = Math.max(0, Math.floor(startAt || 0));
+  const media = {
+    kind,
+    streamUrl: mount.streamUrl,
+    remuxUrl: mount.remuxUrl,
+    transcodeUrl: mount.transcodeUrl,
+    streamToken: mount.streamToken,
+    audioTrack: 0,
+    quality: 1080,
+    forceAacRemux: false,
+  };
+  if (kind === 'transcode' && mount.transcodeUrl) return { ...media, url: `${mount.transcodeUrl}&start=${start}&audio=0&height=1080`, startOffset: start, directSeek: 0 };
+  if (kind === 'remux' && mount.remuxUrl) return { ...media, url: remuxPlaybackUrl(p, start), startOffset: start, directSeek: 0 };
+  return { ...media, kind: 'direct', url: mount.streamUrl, startOffset: 0, directSeek: start };
+}
+function multiViewVodUrlFromSlot(slot, startAt = multiViewSlotPosition(slot, multiViewActiveSlot())) {
+  if (!multiViewSlotIsVod(slot)) return null;
+  const start = Math.max(0, Math.floor(startAt || 0));
+  const p = {
+    streamUrl: slot.streamUrl,
+    remuxUrl: slot.remuxUrl,
+    transcodeUrl: slot.transcodeUrl,
+    streamToken: slot.streamToken,
+    audioTrack: slot.audioTrack || 0,
+    quality: slot.quality || 1080,
+    forceAacRemux: !!slot.forceAacRemux,
+  };
+  if (slot.kind === 'transcode' && p.transcodeUrl) return { ...p, kind: 'transcode', url: `${p.transcodeUrl}&start=${start}&audio=${p.audioTrack}&height=${p.quality}`, startOffset: start, directSeek: 0 };
+  if (slot.kind === 'remux' && p.remuxUrl) return { ...p, kind: 'remux', url: remuxPlaybackUrl(p, start), startOffset: start, directSeek: 0 };
+  return { ...p, kind: 'direct', url: p.streamUrl, startOffset: 0, directSeek: start };
+}
+function multiViewVodDuration(i, slot) {
+  const v = multiViewSlotVideo(i);
+  const fromSlot = slot && Number.isFinite(+slot.duration) ? +slot.duration : 0;
+  const fromVideo = v && isFinite(v.duration) && v.duration > 0 ? (slot.startOffset || 0) + v.duration : 0;
+  return Math.max(0, fromSlot || fromVideo || 0);
+}
+function setMultiViewVodStatus(i, status) {
+  const slot = S.multiView && S.multiView.slots ? S.multiView.slots[i] : null;
+  if (!multiViewSlotIsVod(slot)) return false;
+  slot.status = status;
+  slot.error = '';
+  renderMultiView();
+  return true;
+}
+function multiViewVodTogglePlay(slotIndex = multiViewActiveSlot()) {
+  if (!S.multiView || !S.multiView.open) return false;
+  const i = Math.max(0, Math.min(multiViewCount() - 1, +slotIndex || 0));
+  const slot = multiViewSlots()[i];
+  const v = multiViewSlotVideo(i);
+  if (!multiViewSlotIsVod(slot) || !v || !v.src) return false;
+  setMultiViewActiveSlot(i, { keepActions: true, focus: false });
+  if (v.paused) {
+    slot.status = 'Starting';
+    v.play().then(() => setMultiViewVodStatus(i, 'Playing')).catch(() => setMultiViewVodStatus(i, 'Press OK to start'));
+  } else {
+    v.pause();
+    slot.status = 'Paused';
+    saveMultiViewVodProgress(i);
+  }
+  renderMultiView();
+  return true;
+}
+function multiViewVodSeek(slotIndex = multiViewActiveSlot(), delta = 0) {
+  if (!S.multiView || !S.multiView.open) return false;
+  const i = Math.max(0, Math.min(multiViewCount() - 1, +slotIndex || 0));
+  const slot = multiViewSlots()[i];
+  const v = multiViewSlotVideo(i);
+  if (!multiViewSlotIsVod(slot) || !v || !v.src) return false;
+  const duration = multiViewVodDuration(i, slot);
+  const current = multiViewSlotPosition(slot, i);
+  const target = Math.max(0, duration ? Math.min(duration - 1, current + delta) : current + delta);
+  setMultiViewActiveSlot(i, { keepActions: true, focus: false });
+  slot.status = delta < 0 ? 'Rewinding' : 'Skipping';
+  slot.error = '';
+  saveMultiViewVodProgress(i);
+  if (slot.kind === 'remux' || slot.kind === 'transcode') {
+    const media = multiViewVodUrlFromSlot(slot, target);
+    if (!media || !media.url) {
+      slot.error = 'seek unavailable';
+      renderMultiView();
+      return false;
+    }
+    slot.kind = media.kind;
+    slot.startOffset = media.startOffset || 0;
+    slot.currentUrl = media.url;
+    v.src = media.url;
+    v.play().then(() => setMultiViewVodStatus(i, 'Playing')).catch(() => setMultiViewVodStatus(i, 'Press OK to start'));
+  } else {
+    try { v.currentTime = target; }
+    catch {
+      slot.error = 'seek unavailable';
+      renderMultiView();
+      return false;
+    }
+    slot.status = v.paused ? 'Paused' : 'Playing';
+  }
+  renderMultiView();
+  return true;
+}
+function startMultiViewVodSlot(i, slot, media) {
+  const v = multiViewSlotVideo(i);
+  if (!v || !media || !media.url) return false;
+  cleanupMultiViewSlot(i, true);
+  S.multiView.slots[i] = slot;
+  slot.status = 'Starting';
+  slot.error = '';
+  slot.kind = media.kind || 'direct';
+  slot.streamUrl = media.streamUrl || slot.streamUrl || '';
+  slot.remuxUrl = media.remuxUrl || slot.remuxUrl || '';
+  slot.transcodeUrl = media.transcodeUrl || slot.transcodeUrl || '';
+  slot.streamToken = media.streamToken || slot.streamToken || '';
+  slot.audioTrack = media.audioTrack || slot.audioTrack || 0;
+  slot.quality = media.quality || slot.quality || 1080;
+  slot.forceAacRemux = !!(media.forceAacRemux || slot.forceAacRemux);
+  slot.startOffset = media.startOffset || 0;
+  slot.currentUrl = media.url;
+  renderMultiView();
+  v.muted = true;
+  v.src = media.url;
+  v.onloadedmetadata = () => {
+    if (media.directSeek > 0) {
+      try { v.currentTime = media.directSeek; } catch {}
+    }
+    if (isFinite(v.duration) && v.duration > 0) slot.duration = (slot.startOffset || 0) + v.duration;
+  };
+  v.onplaying = () => {
+    slot.status = 'Playing';
+    slot.error = '';
+    renderMultiView();
+  };
+  v.onwaiting = () => {
+    slot.status = 'Buffering';
+    renderMultiView();
+  };
+  v.onpause = () => {
+    if (!multiViewSlotIsVod(slot)) return;
+    slot.status = 'Paused';
+    saveMultiViewVodProgress(i);
+    renderMultiView();
+  };
+  v.ontimeupdate = () => {
+    if (isFinite(v.duration) && v.duration > 0) slot.duration = (slot.startOffset || 0) + v.duration;
+    saveMultiViewVodProgress(i);
+  };
+  v.onended = () => {
+    slot.status = 'Finished';
+    saveMultiViewVodProgress(i, true);
+    renderMultiView();
+  };
+  v.onerror = () => {
+    slot.error = 'playback failed';
+    renderMultiView();
+  };
+  v.play().then(() => {
+    syncMultiViewAudio();
+  }).catch(() => {
+    slot.status = 'Press OK to start';
+    renderMultiView();
+  });
+  closeMultiViewPicker();
+  setMultiViewActiveSlot(i);
+  return true;
+}
+async function playMultiViewVodItem(it, slotIndex = multiViewActiveSlot()) {
+  if (!S.multiView || !S.multiView.open || !it) return false;
+  const i = Math.max(0, Math.min(multiViewCount() - 1, +slotIndex || 0));
+  if (multiViewVodCount(i) >= 1) {
+    toast('One movie/show companion at a time for now');
+    return false;
+  }
+  const item = resolvePlaybackResume(it);
+  if (!levelAllows(item.cert)) return toast(`"${item.title}" is not allowed on this profile`);
+  const slot = {
+    item,
+    name: item.title || 'Continue Watching',
+    status: 'Finding source',
+    error: '',
+    lastSaved: 0,
+  };
+  cleanupMultiViewSlot(i, true);
+  S.multiView.slots[i] = slot;
+  renderMultiView();
+  try {
+    const qRank = qualityRankForItem(item);
+    let mount;
+    const local = localPlaybackForItem(item);
+    if (local && localPlaybackFitsQuality({ ...item, _local: local }, qRank)) {
+      if (local.playUrl) {
+        const ids = sourceIdentityFor(item);
+        const body = { caps: clientCaps(), q: queryFor(item) };
+        if (ids.season != null) body.season = ids.season;
+        if (ids.ep != null) body.ep = ids.ep;
+        mount = await api(local.playUrl, { method: 'POST', body });
+      } else {
+        mount = { streamUrl: local.streamUrl, name: local.name, container: 'local', method: null, playback: { method: 'direct' } };
+      }
+    } else {
+      mount = await api('/api/play', { method: 'POST', body: playbackRequestBody(item, null, qRank) });
+    }
+    const media = multiViewVodUrl(mount, item, item.resume || 0);
+    if (!media.url) throw new Error('No playable browser URL');
+    slot.name = mount.name || slot.name;
+    slot.status = 'Starting';
+    return startMultiViewVodSlot(i, slot, media);
+  } catch (e) {
+    slot.error = e.message || 'source failed';
+    renderMultiView();
+    toast('Movie companion failed: ' + slot.error);
+    return false;
+  }
+}
+function playMultiViewExistingVodFromPlayer(i = 0) {
+  const p = S.playing;
+  if (!p || !p.item || p.item.type === 'live') return false;
+  const item = { ...p.item, resume: currentTime() };
+  const at = currentTime();
+  const kind = currentPlayerKind(p);
+  const url = currentPlaybackUrl(p, at);
+  if (!url) return false;
+  const slot = {
+    item,
+    name: p.name || item.title || 'Continue Watching',
+    status: 'Playing',
+    error: '',
+    kind,
+    streamUrl: p.streamUrl || '',
+    remuxUrl: p.remuxUrl || '',
+    transcodeUrl: p.transcodeUrl || '',
+    streamToken: p.streamToken || '',
+    audioTrack: p.audioTrack || 0,
+    quality: p.quality || 1080,
+    forceAacRemux: !!p.forceAacRemux,
+    startOffset: kind === 'direct' ? 0 : Math.max(0, Math.floor(at || 0)),
+    lastSaved: Math.max(0, Math.floor(at || 0)),
+  };
+  const media = { kind, url, startOffset: slot.startOffset, directSeek: kind === 'direct' ? at : 0 };
+  stopActivePlaybackForReplacement({ preserveGuide: true });
+  return startMultiViewVodSlot(i, slot, media);
+}
+async function openMultiViewFromGuide(seed = null) {
+  if (isTriboonAndroidShell()) {
+    toast('Android Multiview needs native ExoPlayer support; web split is disabled on TV.');
+    return false;
+  }
+  if (!multiViewCanUseWeb()) return toast('Multiview needs browser Live TV MediaSource support');
+  const list = await ensurePlayerGuideChannels();
+  if (!list.length) return toast(S.serverInfo && S.serverInfo.iptv ? 'No Live TV channels available' : 'Live TV is not set up');
+  S.liveList = list;
+  const playingVod = S.playing && S.playing.item && S.playing.item.type !== 'live';
+  const current = seed || currentLiveChannelItem(0) || list.find((x) => String(x._channel) === String(S.liveCur)) || list[0];
+  const returnView = S.view || 'livetv';
+  if (S.playing && !playingVod) stopActivePlaybackForReplacement();
+  closePlayerGuide({ fromNative: true });
+  S.multiView = { open: true, count: 2, active: 0, pickSlot: null, actionSlot: null, swapSlot: null, fullSlot: null, order: [0, 1, 2, 3], cat: S.liveCat || '', returnView, slots: [null, null, null, null] };
+  S.view = 'multiview';
+  document.body.classList.add('videoOpen');
+  renderMultiView();
+  if (playingVod) playMultiViewExistingVodFromPlayer(0);
+  else if (current) await playMultiViewChannel(current, 0);
+  if (multiViewCount() > 1) openMultiViewPicker(1);
+  return true;
+}
+function closeMultiView(opts = {}) {
+  if (!S.multiView) return;
+  const returnView = S.multiView.returnView || 'livetv';
+  cleanupMultiViewAll();
+  S.multiView.open = false;
+  closeMultiViewPicker();
+  $('multiView').classList.remove('open');
+  $('multiView').classList.remove('paneFull');
+  $('multiView').setAttribute('aria-hidden', 'true');
+  document.body.classList.remove('videoOpen');
+  S.multiView = null;
+  if (opts.silent) return;
+  S.view = returnView === 'player' ? 'livetv' : returnView;
+  requestAnimationFrame(() => {
+    if (S.view === 'livetv') focusContent();
+    else if (S.view === 'home') focusContent();
+  });
+}
+function moveMultiViewFocus(dx, dy) {
+  const count = multiViewCount();
+  const active = multiViewActiveSlot();
+  const pos = multiViewVisualPosition(active);
+  if (count === 2) return setMultiViewActiveSlot(multiViewSlotForVisualPosition(Math.max(0, Math.min(1, pos + dx))));
+  if (count === 3) {
+    if (pos === 0 && dx > 0) return setMultiViewActiveSlot(multiViewSlotForVisualPosition(dy > 0 ? 2 : 1));
+    if (pos > 0 && dx < 0) return setMultiViewActiveSlot(multiViewSlotForVisualPosition(0));
+    if (pos === 1 && dy > 0) return setMultiViewActiveSlot(multiViewSlotForVisualPosition(2));
+    if (pos === 2 && dy < 0) return setMultiViewActiveSlot(multiViewSlotForVisualPosition(1));
+    return;
+  }
+  const col = pos % 2, row = Math.floor(pos / 2);
+  const nextCol = Math.max(0, Math.min(1, col + dx));
+  const nextRow = Math.max(0, Math.min(1, row + dy));
+  return setMultiViewActiveSlot(multiViewSlotForVisualPosition(nextRow * 2 + nextCol));
+}
+function handleMultiViewKey(k, e) {
+  if (!S.multiView || !S.multiView.open) return false;
+  if ($('mvPicker').classList.contains('open')) {
+    if (k === 'Escape' || k === 'Backspace') { closeMultiViewPicker(); setMultiViewActiveSlot(multiViewActiveSlot()); return true; }
+    if (k === 'Enter' && !e.repeat && document.activeElement && document.activeElement.click) { document.activeElement.click(); return true; }
+    const cats = [...$('mvCats').querySelectorAll('button')];
+    const rows = [...$('mvChannels').querySelectorAll('button')];
+    const group = cats.includes(document.activeElement) ? cats : rows;
+    let i = group.indexOf(document.activeElement);
+    if (k === 'ArrowRight' && cats.includes(document.activeElement)) { applyFocus(rows[0] || $('mvPickerClose')); return true; }
+    if (k === 'ArrowLeft' && rows.includes(document.activeElement)) { applyFocus(cats.find((b) => b.classList.contains('sel')) || cats[0] || $('mvPickerClose')); return true; }
+    if ((k === 'ArrowDown' || k === 'ArrowUp') && group.length) {
+      i = i < 0 ? 0 : i;
+      applyFocus(group[Math.max(0, Math.min(group.length - 1, i + (k === 'ArrowDown' ? 1 : -1)))]);
+      return true;
+    }
+    return true;
+  }
+  if (S.multiView.swapSlot !== null && S.multiView.swapSlot !== undefined && Number.isFinite(+S.multiView.swapSlot)) {
+    if (k === 'Escape' || k === 'Backspace') { cancelMultiViewSwap(); return true; }
+    if (k === 'ArrowLeft') { moveMultiViewFocus(-1, 0); return true; }
+    if (k === 'ArrowRight') { moveMultiViewFocus(1, 0); return true; }
+    if (k === 'ArrowUp') { moveMultiViewFocus(0, -1); return true; }
+    if (k === 'ArrowDown') { moveMultiViewFocus(0, 1); return true; }
+    if (k === 'Enter' && !e.repeat) { completeMultiViewSwap(multiViewActiveSlot()); return true; }
+    return true;
+  }
+  if (S.multiView.actionSlot !== null && S.multiView.actionSlot !== undefined && Number.isFinite(+S.multiView.actionSlot)) {
+    const actionSlot = Math.max(0, Math.min(multiViewCount() - 1, +S.multiView.actionSlot));
+    const buttons = multiViewActionButtons(actionSlot);
+    let i = buttons.indexOf(document.activeElement);
+    if (i < 0) i = Number.isFinite(+S.multiViewActionIdx) ? +S.multiViewActionIdx : 0;
+    if (k === 'Escape' || k === 'Backspace') { closeMultiViewActions(); setMultiViewActiveSlot(actionSlot); return true; }
+    if (k === 'ArrowLeft') return setMultiViewActionFocus(i - 1);
+    if (k === 'ArrowRight') return setMultiViewActionFocus(i + 1);
+    if (k === 'ArrowUp') return true;
+    if (k === 'ArrowDown') { closeMultiViewActions(); setMultiViewActiveSlot(actionSlot); return true; }
+    if (k === 'Enter' && !e.repeat) { buttons[i] && buttons[i].click(); return true; }
+    return true;
+  }
+  if (S.zone === 'multiTop' || multiViewTopControls().includes(document.activeElement)) {
+    const controls = multiViewTopControls();
+    let i = controls.indexOf(document.activeElement);
+    if (i < 0) i = Number.isFinite(S.multiViewTopIdx) ? S.multiViewTopIdx : 0;
+    if (k === 'ArrowLeft') { setMultiViewTopFocus(i - 1); return true; }
+    if (k === 'ArrowRight') { setMultiViewTopFocus(i + 1); return true; }
+    if (k === 'ArrowDown') { setMultiViewActiveSlot(multiViewActiveSlot()); return true; }
+    if (k === 'ArrowUp') return true;
+    if (k === 'Enter' && !e.repeat) { controls[i] && controls[i].click(); return true; }
+  }
+  if (k === 'Escape' || k === 'Backspace') {
+    if (exitMultiViewFullscreen()) return true;
+    closeMultiView();
+    return true;
+  }
+  if (multiViewFullscreenSlot() >= 0) {
+    if (k === 'Enter' && !e.repeat) return openMultiViewActions(multiViewFullscreenSlot());
+    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(k)) return true;
+  }
+  if (k === 'ArrowLeft') { moveMultiViewFocus(-1, 0); return true; }
+  if (k === 'ArrowRight') { moveMultiViewFocus(1, 0); return true; }
+  if (k === 'ArrowUp') {
+    if (multiViewSlotOnTopRow(multiViewActiveSlot())) return setMultiViewTopFocus(0);
+    moveMultiViewFocus(0, -1);
+    return true;
+  }
+  if (k === 'ArrowDown') { moveMultiViewFocus(0, 1); return true; }
+  if (['2', '3', '4'].includes(k)) { setMultiViewCount(+k); return true; }
+  if (k === 'Enter' && !e.repeat) {
+    openMultiViewActions(multiViewActiveSlot());
+    return true;
+  }
   return true;
 }
 function clearPlaybackTimers() {
@@ -6767,7 +8193,10 @@ function playerQualityLabel(p) {
 }
 function updatePlayerMeta() {
   const p = S.playing;
-  const meta = episodePlayerMeta(p && p.item);
+  const displayItem = liveSplitEnabled() && p && p.item && p.item.type === 'live'
+    ? (currentLiveChannelItem() || p.item)
+    : (p && p.item);
+  const meta = episodePlayerMeta(displayItem);
   $('pTitle').textContent = meta.title || '';
   $('pEpisode').textContent = meta.subline || '';
   $('pEpisode').style.display = meta.subline ? '' : 'none';
@@ -6833,7 +8262,8 @@ async function openPlayer(it, mount, opts = {}) {
       showVodPlayPrompt();
     }
   };
-  v.onplaying = () => { markVodPlaybackStarted(S.playing); clearReadyFrame(); clearTimeout(S._waitT); $('playerLoader').classList.remove('show'); hideSeekHoldFrame(); };
+  v.onplaying = () => { cancelPauseWarmAhead(); markVodPlaybackStarted(S.playing); clearReadyFrame(); clearTimeout(S._waitT); $('playerLoader').classList.remove('show'); hideSeekHoldFrame(); };
+  v.onpause = () => { schedulePauseWarmAhead(S.playing); updPP(); };
   v.onloadeddata = clearReadyFrame;
   v.oncanplay = clearReadyFrame;
   v.onwaiting = () => {
@@ -6929,6 +8359,7 @@ async function loadTracks() {
 function startSource(kind, atSeconds, opts = {}) {
   const v = $('video'); const p = S.playing;
   if (p && p.usingNative && canUseNativeVideoPlayer()) return false;
+  cancelPauseWarmAhead();
   if (p) p.usingNative = false;
   if (opts.quietSeek && p) {
     p.suppressSeekLoaderUntil = appMs() + 4500;
@@ -6962,7 +8393,7 @@ function startSource(kind, atSeconds, opts = {}) {
   }
   applySubtitleTrack(); // re-attach CC after the src swap
   applyVolume();
-  requestVideoPlay(v).then(() => { if (!serverSeek && atSeconds) v.currentTime = atSeconds; }).catch(() => showVodPlayPrompt());
+  requestVideoPlay(v).then(() => { cancelPauseWarmAhead(); if (!serverSeek && atSeconds) v.currentTime = atSeconds; }).catch(() => showVodPlayPrompt());
   return true;
 }
 // The full ladder, in policy order: direct play → remux (container swap) → transcode
@@ -7503,6 +8934,16 @@ window.__tvNativeVideoReady = (pos, dur) => {
   p.nativeReady = true;
   markVodPlaybackStarted(p);
 };
+window.__tvNativeVideoPlaying = (pos, dur) => {
+  const p = S.playing; if (!p || !p.usingNative) return;
+  applyNativeVideoProgress(pos, dur);
+  cancelPauseWarmAhead();
+};
+window.__tvNativeVideoPaused = (pos, dur) => {
+  const p = S.playing; if (!p || !p.usingNative) return;
+  applyNativeVideoProgress(pos, dur);
+  schedulePauseWarmAhead(p);
+};
 window.__tvNativeVideoStats = (raw) => {
   const p = S.playing; if (!p || !p.usingNative) return;
   try { p.nativeStats = typeof raw === 'string' ? JSON.parse(raw) : (raw || {}); }
@@ -7783,7 +9224,7 @@ function showLiveProviderError(reason) {
   $('playerLoader').classList.remove('show');
   if ($('vlcTitle')) $('vlcTitle').textContent = 'Live stream unavailable';
   if (msg) {
-    const label = reason || 'provider rejected this channel';
+    const label = friendlyLiveProviderReason(reason || 'provider rejected this channel');
     msg.textContent = `${label}. Try another channel, or wait a moment before retrying.`;
   }
   $('vlcUrl').textContent = '';
@@ -8038,6 +9479,67 @@ $('vlcClose').addEventListener('click', closePlayer);
 $('playerBackBtn').addEventListener('click', closePlayer);
 window.addEventListener('pagehide', () => { if (S.playing) stopActivityHeartbeat(); });
 
+function cancelPauseWarmAhead() {
+  const warm = S.pauseWarmAhead;
+  S.pauseWarmAhead = null;
+  try { warm && warm.abort && warm.abort.abort(); } catch {}
+}
+async function drainPauseWarmResponse(res, signal) {
+  if (!res || !res.ok) return;
+  if (res.body && typeof res.body.getReader === 'function') {
+    const reader = res.body.getReader();
+    try {
+      for (;;) {
+        if (signal && signal.aborted) return;
+        const { done } = await reader.read();
+        if (done) return;
+      }
+    } finally {
+      try { reader.releaseLock(); } catch {}
+    }
+    return;
+  }
+  await res.arrayBuffer();
+}
+function schedulePauseWarmAhead(p = S.playing) {
+  if (!p || !p.item || p.item.type === 'live' || !p.streamUrl || !p.size) return;
+  const dur = totalDuration();
+  if (!dur || !Number.isFinite(dur) || dur <= 0) return;
+  const now = appMs();
+  if (p._pauseWarmAt && now - p._pauseWarmAt < 12000) return;
+  const v = $('video');
+  let bufferedEnd = 0;
+  if (!p.usingNative && v.buffered && v.buffered.length) {
+    try { bufferedEnd = (p.startOffset || 0) + v.buffered.end(v.buffered.length - 1); } catch {}
+  }
+  const targetSeconds = Math.min(dur - 1, Math.max(currentTime() + 6, bufferedEnd + 2));
+  const start = Math.max(0, Math.floor((targetSeconds / dur) * p.size));
+  if (!Number.isFinite(start) || start >= p.size - 1024 * 1024) return;
+  if (p._pauseWarmByte && Math.abs(p._pauseWarmByte - start) < 1024 * 1024) return;
+  const bytes = Math.min(p.size - start, (p.size > 4e9 ? 64 : 24) * 1024 * 1024);
+  if (bytes < 1024 * 1024) return;
+  let url;
+  try {
+    url = new URL(p.streamUrl, location.origin);
+    url.searchParams.set('priority', 'read-ahead');
+  } catch { return; }
+  cancelPauseWarmAhead();
+  p._pauseWarmAt = now;
+  p._pauseWarmByte = start;
+  const abort = new AbortController();
+  const token = `${now}:${start}`;
+  S.pauseWarmAhead = { abort, token };
+  fetch(url.href, {
+    cache: 'no-store',
+    signal: abort.signal,
+    headers: { Range: `bytes=${start}-${start + bytes - 1}` },
+  })
+    .then((res) => drainPauseWarmResponse(res, abort.signal))
+    .catch(() => {})
+    .finally(() => {
+      if (S.pauseWarmAhead && S.pauseWarmAhead.token === token) S.pauseWarmAhead = null;
+    });
+}
 function currentTime() {
   const v = $('video'); const p = S.playing;
   if (p && p.usingNative) return p.nativePos || 0;
@@ -8109,6 +9611,15 @@ function playerStreamLabel(p = S.playing) {
   if (kind === 'live') return 'Live';
   return '';
 }
+function clientVersionLabel() {
+  try {
+    if (window.TriboonTV && TriboonTV.appVersion) {
+      const app = JSON.parse(TriboonTV.appVersion() || '{}');
+      if (app.versionName) return `${app.tv ? 'Android TV' : 'Android app'} ${app.versionName}${app.versionCode ? ` (${app.versionCode})` : ''}`;
+    }
+  } catch {}
+  return (S.serverInfo && S.serverInfo.version) ? `Web ${S.serverInfo.version}` : 'Web app';
+}
 function activityPayload(state = 'watching') {
   const p = S.playing; if (!p || !p.item) return null;
   const meta = episodePlayerMeta(p.item);
@@ -8124,6 +9635,7 @@ function activityPayload(state = 'watching') {
     mode: playerModeLabel(p),
     streamKind: playerStreamKind(p),
     streamLabel: playerStreamLabel(p),
+    clientVersion: clientVersionLabel(),
     source: p.name || '',
     fileName: p.fileName || '',
     size: p.size || 0,
@@ -8340,9 +9852,11 @@ function showVodPlayPrompt() {
   showPlayerPlayPrompt();
 }
 function requestVideoPlay(v, opts = {}) {
+  cancelPauseWarmAhead();
   const r = v.play();
   if (!r || typeof r.then !== 'function') return Promise.resolve();
   return r.then(() => {
+    cancelPauseWarmAhead();
     $('playerLoader').classList.remove('show');
     if (opts.livePrompt) showOsd();
   }).catch((e) => {
@@ -8351,14 +9865,22 @@ function requestVideoPlay(v, opts = {}) {
     throw e;
   });
 }
+function activePlayerVideo() {
+  return liveSplitEnabled() && liveSplitActivePane() === 1 ? $('liveSplitVideo') : $('video');
+}
 function togglePlay() {
-  const v = $('video');
+  const v = activePlayerVideo();
   if (!v.src) return;
-  if (v.paused) requestVideoPlay(v, { livePrompt: S.playing && S.playing.item && S.playing.item.type === 'live' }).catch(() => {});
+  const live = !!(S.playing && S.playing.item && S.playing.item.type === 'live');
+  if (v.paused) {
+    (live && v === $('liveSplitVideo')
+      ? requestLiveMsePlay(v, { split: true })
+      : requestVideoPlay(v, { livePrompt: live })).catch(() => {});
+  }
   else v.pause();
   updPP();
 }
-function updPP() { $('ppIcon').innerHTML = $('video').paused ? '<path d="M8 5v14l11-7z"/>' : '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>'; }
+function updPP() { $('ppIcon').innerHTML = activePlayerVideo().paused ? '<path d="M8 5v14l11-7z"/>' : '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>'; }
 let _playerSurfaceClickT = null;
 function playerSurfaceClick(e) {
   if (e.button !== 0 || S.view !== 'player') return false;
@@ -8368,6 +9890,14 @@ function playerSurfaceClick(e) {
 function playerSingleClick(e) {
   showOsd();
   if (!playerSurfaceClick(e)) return;
+  if (liveSplitEnabled()) {
+    const pane = e.target === $('liveSplitVideo') ? 1 : 0;
+    setLiveSplitPaneFocus(pane);
+    if (pane === 1 && liveSplitNeedsSecondChannel()) {
+      openLiveSplitChannelPicker().catch(() => {});
+      return;
+    }
+  }
   clearTimeout(_playerSurfaceClickT);
   _playerSurfaceClickT = setTimeout(() => {
     _playerSurfaceClickT = null;
@@ -8485,6 +10015,7 @@ function nudgeSeek(delta) {
   _nudgeT = setTimeout(() => { const t = target; _nudgeSum = 0; _nudgeBase = null; seekTo(t); }, 320);
 }
 function seekTo(seconds) {
+  cancelPauseWarmAhead();
   const v = $('video'); const p = S.playing; if (!p) return;
   seconds = Math.max(0, seconds);
   p.suppressSeekLoaderUntil = appMs() + 4500;
@@ -8998,12 +10529,18 @@ function playerQualityHasOptions() {
 }
 function updatePlayerControlAvailability() {
   const p = S.playing;
-  ['ccBtn', 'audBtn', 'qualBtn'].forEach((id) => { const b = $(id); if (b) b.style.display = ''; });
+  const isLive = !!(p && p.item && p.item.type === 'live');
+  ['ccBtn', 'audBtn', 'qualBtn'].forEach((id) => { const b = $(id); if (b) b.style.display = isLive ? 'none' : ''; });
+  const fav = $('favBtn'); if (fav) fav.style.display = isLive ? '' : 'none';
+  const split = $('splitBtn'); if (split) split.style.display = 'none';
   setPlayerControlEnabled('ccBtn', playerCcCanOpen());
   setPlayerControlEnabled('audBtn', playerAudioHasOptions());
   setPlayerControlEnabled('qualBtn', playerQualityHasOptions());
+  setPlayerControlEnabled('favBtn', isLive && !!liveChannelForFavorite());
+  setPlayerControlEnabled('splitBtn', false);
   setPlayerControlEnabled('nextEpBtn', !!(S.nextEp && S.view === 'player'));
-  if (!p) ['ccBtn', 'audBtn', 'qualBtn', 'nextEpBtn'].forEach((id) => setPlayerControlEnabled(id, false));
+  updateLiveFavoriteButton();
+  if (!p) ['ccBtn', 'audBtn', 'qualBtn', 'favBtn', 'splitBtn', 'nextEpBtn'].forEach((id) => setPlayerControlEnabled(id, false));
 }
 function closeTrackMenu() { $('trackMenu').classList.remove('open'); }
 function closePlayerStats() { $('playerStats').classList.remove('open'); }
@@ -9435,15 +10972,86 @@ $('ccBtn').addEventListener('click', () => tmToggle('cc'));
 $('audBtn').addEventListener('click', () => tmToggle('audio'));
 $('srndBtn').addEventListener('click', () => tmToggle('surround'));
 $('qualBtn').addEventListener('click', () => tmToggle('quality'));
+$('favBtn').addEventListener('click', () => { toggleLiveFavorite(); showOsd(); });
+$('splitBtn').addEventListener('click', () => { toggleLiveSplitMode(); showOsd(); });
+function handleLiveSplitPick(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  openLiveSplitChannelPicker().catch(() => {});
+}
+$('liveSplitPickBtn').addEventListener('pointerdown', handleLiveSplitPick);
+$('liveSplitPickBtn').addEventListener('click', handleLiveSplitPick);
+if (isTriboonAndroidShell()) {
+  $('pgMultiBtn').hidden = true;
+  $('pgMultiBtn').disabled = true;
+  $('pgMultiBtn').setAttribute('aria-hidden', 'true');
+} else {
+  $('pgMultiBtn').addEventListener('click', () => openMultiViewFromGuide());
+}
+$('mvClose').addEventListener('click', closeMultiView);
+$('mvPickerClose').addEventListener('click', () => { closeMultiViewPicker(); setMultiViewActiveSlot(multiViewActiveSlot()); });
+[2, 3, 4].forEach((n) => $('mvCount' + n).addEventListener('click', () => setMultiViewCount(n)));
+document.querySelectorAll('.mvSlot').forEach((el) => {
+  const slot = () => +el.dataset.mvSlot || 0;
+  el.addEventListener('pointerenter', () => {
+    if (S.multiView && S.multiView.open && !$('mvPicker').classList.contains('open')) {
+      setMultiViewActiveSlot(slot(), { focus: false, keepActions: true });
+    }
+  });
+  el.addEventListener('click', (e) => {
+    if (e.target && e.target.closest('.mvAdd,.mvAction')) return;
+    const i = slot();
+    if (S.multiView && S.multiView.swapSlot !== null && S.multiView.swapSlot !== undefined) {
+      completeMultiViewSwap(i);
+      return;
+    }
+    const pane = S.multiView && S.multiView.slots ? S.multiView.slots[i] : null;
+    if (pane && pane.item) openMultiViewActions(i);
+    else openMultiViewPicker(i);
+  });
+  el.addEventListener('focus', () => {
+    if (S.multiView && S.multiView.open) setMultiViewActiveSlot(slot(), { focus: false, keepActions: true });
+  });
+  el.querySelector('.mvAdd').addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openMultiViewPicker(slot());
+  });
+  const full = el.querySelector('.mvFullBtn');
+  const swap = el.querySelector('.mvSwapBtn');
+  const back = el.querySelector('.mvBackBtn');
+  const play = el.querySelector('.mvPlayBtn');
+  const fwd = el.querySelector('.mvFwdBtn');
+  const change = el.querySelector('.mvChangeBtn');
+  const close = el.querySelector('.mvCloseBtn');
+  if (back) back.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); multiViewVodSeek(slot(), -10); });
+  if (play) play.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); multiViewVodTogglePlay(slot()); });
+  if (fwd) fwd.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); multiViewVodSeek(slot(), 30); });
+  if (full) full.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleMultiViewFullscreen(slot()); });
+  if (swap) swap.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); beginMultiViewSwap(slot()); });
+  if (change) change.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); changeMultiViewPane(slot()); });
+  if (close) close.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); closeMultiViewPane(slot()); });
+});
 
 /* ---- volume ---- */
+function storedVolumeState() {
+  let rawVol = '100', rawMuted = false;
+  try {
+    rawVol = localStorage.getItem('triboon.vol') || '100';
+    rawMuted = localStorage.getItem('triboon.muted') === '1';
+  } catch {}
+  const vol = Math.max(0, Math.min(100, parseInt(rawVol, 10)));
+  const muted = rawMuted;
+  return { volume: vol / 100, muted, pct: vol };
+}
 function applyVolume() {
   const v = $('video');
-  const vol = Math.max(0, Math.min(100, parseInt(localStorage.getItem('triboon.vol') || '100', 10)));
-  const muted = localStorage.getItem('triboon.muted') === '1';
-  v.volume = vol / 100; v.muted = muted;
-  $('volSlider').value = vol;
-  $('volIcon').innerHTML = muted || vol === 0
+  const state = storedVolumeState();
+  v.volume = state.volume;
+  if (liveSplitEnabled()) syncLiveSplitAudio(state);
+  else v.muted = state.muted;
+  $('volSlider').value = state.pct;
+  $('volIcon').innerHTML = state.muted || state.pct === 0
     ? '<path d="M4 10v4h4l5 4V6l-5 4H4z"/><path d="m16 9 5 6M21 9l-5 6"/>'
     : '<path d="M4 10v4h4l5 4V6l-5 4H4z"/><path d="M16.5 9a4 4 0 0 1 0 6"/>';
 }
@@ -9455,7 +11063,7 @@ $('volSlider').addEventListener('input', () => {
   applyVolume(); showOsd();
 });
 $('muteBtn').addEventListener('click', () => {
-  try { localStorage.setItem('triboon.muted', $('video').muted ? '0' : '1'); } catch {}
+  try { localStorage.setItem('triboon.muted', localStorage.getItem('triboon.muted') === '1' ? '0' : '1'); } catch {}
   applyVolume(); showOsd();
 });
 
@@ -11484,6 +13092,7 @@ function scaffoldLiveTv(grid) {
   try {
     // Category management lives in Preferences → Live TV now — no ☷ button on the page.
     grid.innerHTML = '<div id="chBar"><input id="chSearch" maxlength="60" autocomplete="off">'
+      + (isTriboonAndroidShell() ? '' : '<button id="chMultiBtn" class="focusable" title="Open multiview" aria-label="Open multiview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="8" height="7" rx="1.8"/><rect x="13" y="4" width="8" height="7" rx="1.8"/><rect x="3" y="13" width="8" height="7" rx="1.8"/><rect x="13" y="13" width="8" height="7" rx="1.8"/></svg><span>Multiview</span></button>')
       + (S.liveEpg ? '<button id="chGuideBtn" class="focusable"></button>' : '')
       + `</div>${liveSourceWarningHtml(S.liveSourceErrors || [])}<div id="chBody"></div>`;
     S.gridRoot = grid;
@@ -11498,14 +13107,15 @@ function scaffoldLiveTv(grid) {
     // D-pad exits from the filter: ↓ back to the grid, → (caret at end) to the Guide toggle.
     input.addEventListener('keydown', (e) => {
       if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); input.blur(); focusLiveCategory() || focusFirstLiveContent(); }
-      else if (e.key === 'ArrowRight' && $('chGuideBtn') && input.selectionStart >= input.value.length) {
-        e.preventDefault(); e.stopPropagation(); input.blur(); $('chGuideBtn').focus();
+      else if (e.key === 'ArrowRight' && $('chMultiBtn') && input.selectionStart >= input.value.length) {
+        e.preventDefault(); e.stopPropagation(); input.blur(); focusLiveToolbar('chMultiBtn');
       }
     });
     if ($('chGuideBtn')) $('chGuideBtn').addEventListener('click', () => {
       S.liveGuide = !S.liveGuide;
       renderLiveTvBody();
     });
+    if ($('chMultiBtn')) $('chMultiBtn').addEventListener('click', () => openMultiViewFromGuide());
     renderLiveTvBody();
     requestAnimationFrame(() => { if (S.view === 'livetv' && S.zone !== 'rail') focusGrid(0); });
   } catch (e) { grid.innerHTML = `<div class="gridMore focusable">Live TV failed: ${esc(e.message)}</div>`; focusLiveGridMessage(); }
@@ -11516,8 +13126,11 @@ function renderLiveTvBody() {
   body.classList.remove('liveGuideShell');
   body.innerHTML = ''; S.gridItems = [];
   if ($('chGuideBtn')) {
-    $('chGuideBtn').textContent = S.liveGuide ? '☰ Channels' : '▤ Guide';
+    $('chGuideBtn').innerHTML = S.liveGuide
+      ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/></svg><span>Channels</span>'
+      : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M8 5v14"/><path d="M3 10h18"/><path d="M3 15h18"/></svg><span>Guide</span>';
     $('chGuideBtn').classList.toggle('on', !!S.liveGuide);
+    $('chGuideBtn').setAttribute('aria-label', S.liveGuide ? 'Show channels' : 'Show guide');
   }
   const q = (S.liveFilter || '').toLowerCase().trim();
   if (q) {
@@ -11911,7 +13524,7 @@ function setNativeLivePlaybackState(it) {
   $('pSrc').textContent = it.genre || it.group || '';
   $('pHealth').innerHTML = '<span class="liveBadge">LIVE</span>';
   S.playing = {
-    item: { title: it.title || 'Live TV', key: it.key || ('live:' + it._channel), type: 'live', backdrop: it.backdrop, overview: '' },
+    item: liveItemPayload(it),
     name: it.title || 'Live TV',
     usingNative: true,
     nativePos: 0,
@@ -11933,6 +13546,7 @@ function commitNativeLivePlayback(it) {
   setNativeLiveTuningPending(null);
   S.nativeLivePending = null;
   setNativeLivePlaybackState(it);
+  startActivityHeartbeat();
   updatePlayerMeta();
   markGuideCur();
   schedulePlayerGuideFocusRestore(it._channel);
@@ -12124,6 +13738,10 @@ window.__tvNativeLiveError = (msg) => {
 };
 async function playChannel(it, list) {
   if (promotePlayerGuideChannelToFullscreen(it)) return;
+  if (liveSplitEnabled() && S.view === 'player' && S.playing && S.playing.item && S.playing.item.type === 'live') {
+    const pane = S.liveSplitPickPane === 1 ? 1 : liveSplitActivePane();
+    return playLiveSplitChannel(it, list, pane);
+  }
   // Coming FROM a movie/show? Remember it so the guide can offer "← Back to <title>".
   rememberVodReturn();
   // Remember the surrounding channel list so the player can zap (PgUp/PgDn, ⏮⏭, guide).
@@ -12176,7 +13794,7 @@ async function playChannelWeb(it) {
   const preserveGuide = !!($('pGuide') && $('pGuide').classList.contains('open'));
   if (preserveGuide) setPlayerGuideLiveTuningPending(it);
   stopActivePlaybackForReplacement({ preserveGuide });
-  await openPlayer({ title: it.title, key: it.key, type: 'live', backdrop: it.backdrop, overview: '' }, {
+  await openPlayer(liveItemPayload(it), {
     streamUrl: it._streamUrl,
     name: it.title, container: 'live', method: 'remux', id: null, sessionId: null,
     remuxUrl: null, transcodeUrl: null, tracksUrl: null, playback: { method: 'direct' },
@@ -12199,8 +13817,13 @@ async function playChannelWeb(it) {
 function zapChannel(dir) {
   const list = S.liveList || [];
   if (list.length < 2) return toast('No other channels in this list');
-  const i = list.findIndex((x) => x._channel === S.liveCur);
+  const cur = liveSplitEnabled() ? activeLiveChannelIdx() : S.liveCur;
+  const i = list.findIndex((x) => String(x._channel) === String(cur));
   const next = list[(i + dir + list.length) % list.length];
+  if (liveSplitEnabled()) {
+    playLiveSplitChannel(next, list, liveSplitActivePane()).then(markGuideCur);
+    return;
+  }
   playChannel(next, list); // the guide (if open) stays up — just re-mark the row
   markGuideCur();
 }
@@ -12280,14 +13903,15 @@ function focusPlayerGuideCategory(idx, select = false, opts = {}) {
   return true;
 }
 function markGuideCur() {
+  const activeCh = activeLiveChannelIdx();
   document.querySelectorAll('.pgRow').forEach((r) => {
-    const cur = r._ch !== undefined && r._ch === S.liveCur;
+    const cur = r._ch !== undefined && String(r._ch) === String(activeCh);
     r.classList.toggle('cur', cur);
     if (cur) r.setAttribute('aria-current', 'true');
     else r.removeAttribute('aria-current');
   });
   if ($('pGuide').classList.contains('open') && !S.pgCatDpadMode) {
-    setPlayerGuideVisualFocus(S._pgFocusChannel ?? S.liveCur);
+    setPlayerGuideVisualFocus(S._pgFocusChannel ?? activeCh);
   }
 }
 function promotePlayerGuideChannelToFullscreen(it) {
@@ -12295,7 +13919,7 @@ function promotePlayerGuideChannelToFullscreen(it) {
   if (!$('pGuide') || !$('pGuide').classList.contains('open')) return false;
   if (S.playerGuideLivePending || S.nativeLivePendingCommit) return false;
   if (!(S.view === 'player' && S.playing && S.playing.item && S.playing.item.type === 'live')) return false;
-  if (String(S.liveCur) !== String(it._channel)) return false;
+  if (String(activeLiveChannelIdx()) !== String(it._channel)) return false;
   setPlayerGuideVisualFocus(it._channel);
   closePlayerGuide();
   $('player').classList.add('open');
@@ -12306,6 +13930,7 @@ function promotePlayerGuideChannelToFullscreen(it) {
 function closePlayerGuide(opts = {}) {
   S._playerGuideRenderToken = (S._playerGuideRenderToken || 0) + 1;
   S.pgCatDpadMode = false;
+  S.liveSplitPickPane = null;
   setPlayerGuideLiveTuningPending(null);
   $('pGuide').classList.remove('ready', 'open');
   $('pgList').innerHTML = '';
@@ -12400,7 +14025,8 @@ async function renderPlayerGuideTimeline(pg, list) {
     groups.get(g).push(c);
   });
   const catNames = [...(favs.length ? [favName] : []), ...[...groups.keys()]];
-  const currentCh = allChannels.find((x) => x._channel === S.liveCur) || list.find((x) => x._channel === S.liveCur);
+  const guideCur = activeLiveChannelIdx();
+  const currentCh = allChannels.find((x) => String(x._channel) === String(guideCur)) || list.find((x) => String(x._channel) === String(guideCur));
   if (!catNames.length) {
     $('pgInfo').innerHTML = `<div class="ey">Live TV</div>
       <div class="t">No channels available</div>
@@ -12495,7 +14121,7 @@ async function renderPlayerGuideTimeline(pg, list) {
   main.innerHTML = `<div class="pgRow gRow gHead pgTimeHead"><div class="gCh"></div><div class="gTl">${ticks}</div></div>`;
 
   const guideList = selectedList.slice(0, LIVE_GUIDE_BATCH);
-  if (currentCh && !guideList.some((x) => x._channel === currentCh._channel) && (currentCh.genre || 'Other') === S.pgLiveCat) guideList.unshift(currentCh);
+  if (currentCh && !guideList.some((x) => String(x._channel) === String(currentCh._channel)) && (currentCh.genre || 'Other') === S.pgLiveCat) guideList.unshift(currentCh);
   let progsByIdx = {};
   const blocksFor = (ch, loading = false) => {
     if (loading) return '<div class="gProg empty" style="left:0;width:100%"><span class="gpT">Loading guide...</span></div>';
@@ -12519,11 +14145,11 @@ async function renderPlayerGuideTimeline(pg, list) {
   };
   guideList.forEach((ch) => {
     const row = document.createElement('button');
-    row.className = 'pgRow gRow focusable' + (ch._channel === S.liveCur ? ' cur' : '');
+    row.className = 'pgRow gRow focusable' + (String(ch._channel) === String(guideCur) ? ' cur' : '');
     row.dataset.pg = '1';
     row.dataset.pgRow = '1';
     row.dataset.guideChannel = ch._channel;
-    if (ch._channel === S.liveCur) row.setAttribute('aria-current', 'true');
+    if (String(ch._channel) === String(guideCur)) row.setAttribute('aria-current', 'true');
     fillPlayerGuideRow(row, ch, S.liveEpg);
     row._ch = ch._channel; row._chObj = ch;
     row._pgList = selectedList;
@@ -12618,6 +14244,9 @@ const MUSIC_HOME_FALLBACK_FEEDS = [
     { title: 'Top playlists this week', sub: 'Fresh shared mixes', query: 'top playlists this week music', coverFeed: 'top playlists this week music', icon: 'chart', grad: 'mGrad2' },
     { title: 'New Music Mix', sub: 'Fresh songs to sample first', query: 'new music mix', coverFeed: 'new music mix', icon: 'spark', grad: 'mGrad1' },
     { title: 'Viral hits', sub: 'Songs moving fast right now', query: 'viral hits music this week', coverFeed: 'viral hits music this week', icon: 'spark', grad: 'mGrad3' },
+    { title: 'Fresh releases', sub: 'New songs and album cuts', query: 'new songs this week', coverFeed: 'new songs this week', icon: 'music', grad: 'mGrad4' },
+    { title: 'Chill radio', sub: 'Low-friction background queue', query: 'chill music mix', coverFeed: 'chill music mix', icon: 'smile', grad: 'mGrad2' },
+    { title: 'Throwback hits', sub: 'Familiar picks that start quickly', query: 'throwback hits music', coverFeed: 'throwback hits music', icon: 'chart', grad: 'mGrad3' },
   ] },
 ];
 async function loadMusicHomeFallback() {
@@ -12643,6 +14272,38 @@ async function loadMusicHomeFallback() {
     ],
   };
 }
+function musicHomeHasTrackShelf(home = S.musicHome) {
+  return !!(home && Array.isArray(home.shelves) && home.shelves.some((s) => s && s.kind === 'tracks' && s.results && s.results.length));
+}
+function mergeMusicChartShelves(charts = []) {
+  if (!S.musicHome || !Array.isArray(S.musicHome.shelves)) return false;
+  const chartShelves = charts.filter((s) => s && s.results && s.results.length).map((s) => ({
+    ...s,
+    id: s.id === 'weekly' ? 'top-songs-week' : s.id,
+    title: s.id === 'weekly' ? 'Top songs this week' : s.title,
+  }));
+  if (!chartShelves.length) return false;
+  const withoutCharts = S.musicHome.shelves.filter((s) => !chartShelves.some((c) => c.id === s.id));
+  S.musicHome = {
+    ...S.musicHome,
+    chartsPending: false,
+    shelves: [...withoutCharts, ...chartShelves],
+  };
+  return true;
+}
+function refreshMusicChartsAfterFirstPaint() {
+  if (S._musicChartsRefresh || musicHomeHasTrackShelf()) return;
+  S._musicChartsRefresh = true;
+  setTimeout(async () => {
+    try {
+      const r = await api('/api/music/charts');
+      S._musicChartsRefresh = false;
+      if (mergeMusicChartShelves(r.charts || []) && S.view === 'music' && !$('musicBrowse').classList.contains('hide')) renderMusicBrowse();
+    } catch {
+      S._musicChartsRefresh = false;
+    }
+  }, 300);
+}
 function loadMusic() {
   bootReady();
   if (!$('musicBrowse').children.length) renderMusicBrowse();
@@ -12651,12 +14312,14 @@ function loadMusic() {
     api('/api/music/home').then((r) => {
       S.musicHome = r && Array.isArray(r.shelves) ? r : { shelves: [] };
       renderMusicBrowse();
+      refreshMusicChartsAfterFirstPaint();
       requestAnimationFrame(() => {
         if (S.view === 'music' && S.zone !== 'rail' && !$('musicSearch').value.trim()) focusContent();
       });
     }).catch(async () => {
       S.musicHome = await loadMusicHomeFallback().catch(() => false);
       renderMusicBrowse();
+      refreshMusicChartsAfterFirstPaint();
     });
   }
   // Personal playlists load lazily; tracks wait until a playlist is opened.
@@ -12867,6 +14530,7 @@ function playMusic(queue, idx, opts = {}) {
   S.musicCur = t;
   S.musicLoadFailed = false;
   mAudio.src = t.streamUrl;
+  updateMusicMediaSession();
   if (opts.autoplay !== false) safeMusicPlay({ notify: opts.notify !== false });
   document.body.classList.add('musicOn');
   document.body.classList.toggle('musicPaused', opts.autoplay === false);
@@ -12937,6 +14601,7 @@ function closeMusicPlayer() {
   mAudio.pause(); mAudio.removeAttribute('src'); mAudio.load();
   S.musicCur = null;
   S._musicWasPlaying = false;
+  clearMusicMediaSession();
   $('musicNow').classList.remove('open', 'queueOpen');
   document.body.classList.remove('musicOn', 'musicPaused');
   markMusicCur();
@@ -13002,6 +14667,26 @@ if ('mediaSession' in navigator) {
     navigator.mediaSession.setActionHandler('nexttrack', () => musicTransport('next'));
     navigator.mediaSession.setActionHandler('previoustrack', () => musicTransport('prev'));
   } catch {}
+}
+function updateMusicMediaSession() {
+  const t = S.musicCur;
+  if (!t || !('mediaSession' in navigator) || typeof MediaMetadata === 'undefined') return;
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: t.title || 'Music',
+      artist: t.artist || '',
+      album: t.album || '',
+      artwork: t.thumb ? [
+        { src: t.thumb, sizes: '96x96', type: 'image/jpeg' },
+        { src: t.thumb, sizes: '192x192', type: 'image/jpeg' },
+        { src: t.thumb, sizes: '512x512', type: 'image/jpeg' },
+      ] : [],
+    });
+  } catch {}
+}
+function clearMusicMediaSession() {
+  if (!('mediaSession' in navigator)) return;
+  try { navigator.mediaSession.metadata = null; } catch {}
 }
 window.__tvMusicTransport = (action) => musicTransport(action);
 function musicRows() { return [...document.querySelectorAll('#musicList .mArtistHit, #musicList .musicRow[data-mrow]')]; }
@@ -14829,36 +16514,87 @@ function activityStreamLabel(s = {}) {
   if (kind === 'live') return 'Live';
   return s.mode || '';
 }
-function renderActivity(sessions = []) {
+function activityTypeLabel(s = {}) {
+  if (activityStreamKind(s) === 'live' || s.type === 'live') return 'Live TV';
+  if (s.type === 'episode') return 'Episode';
+  if (s.type === 'movie') return 'Movie';
+  if (s.type === 'local') return 'Local file';
+  return s.type ? String(s.type) : 'Playback';
+}
+function activityTitle(s = {}) {
+  return (activityStreamKind(s) === 'live' || s.type === 'live') ? 'Live TV' : (s.title || 'Playing');
+}
+function activityDetail(s = {}) {
+  if (activityStreamKind(s) === 'live' || s.type === 'live') return 'Live stream';
+  return [s.subline, s.fileName || s.source || s.mode || activityStreamLabel(s) || ''].filter(Boolean).join(' - ');
+}
+function activityClient(s = {}) {
+  if (s.clientVersion) return s.clientVersion;
+  const ua = String(s.device || '');
+  const m = /\b(TriboonTV|TriboonAndroid)\/([^\s]+)/i.exec(ua);
+  if (m) return `${m[1] === 'TriboonTV' ? 'Android TV' : 'Android app'} ${m[2]}`;
+  return 'Web app';
+}
+function activityTimeLabel(s = {}, active = false) {
+  if (active) return agoStr(s.updatedAt || Date.now());
+  const ts = s.updatedAt || s.startedAt || Date.now();
+  return new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+function renderActivitySummary(sessions = [], history = []) {
+  const box = $('activitySummary'); if (!box) return;
+  const live = sessions.filter((s) => activityStreamKind(s) === 'live' || s.type === 'live').length;
+  const apps = new Set([...sessions, ...history].map(activityClient).filter(Boolean));
+  const rows = [
+    ['Active now', sessions.length],
+    ['Live TV', live],
+    ['Apps seen', apps.size || 0],
+  ];
+  box.innerHTML = rows.map(([k, v]) => `<div class="activityKpi"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('');
+}
+function activityRowHtml(s = {}, active = false) {
+  const pct = Math.max(0, Math.min(100, +s.percent || 0));
+  const pos = s.duration ? `${fmt(s.position || 0)} / ${fmt(s.duration || 0)}` : (s.position ? fmt(s.position) : 'Live');
+  const streamKind = activityStreamKind(s);
+  const streamLabel = activityStreamLabel(s);
+  const streamBadge = streamLabel ? `<span class="activityStream ${esc(streamKind)}">${esc(streamLabel)}</span>` : '';
+  const profile = s.profile || activityTypeLabel(s);
+  return `<div class="activityRow${active ? ' isActive' : ' isHistory'}">
+    <div class="activityWho"><span class="activityDot"></span><div><b>${esc(s.userName || 'User')}</b><small>${esc(profile)}</small></div></div>
+    <div class="activityWhat"><b>${esc(activityTitle(s))}</b><small>${esc(activityDetail(s))}</small>
+      <div class="activityBar" style="--pct:${pct}%"><span></span></div>${streamBadge}</div>
+    <div class="activityClient"><span>Client</span><b>${esc(activityClient(s))}</b><small>${esc(s.player || s.mode || '')}</small></div>
+    <div class="arMeta activityMeta">${esc(active ? pos : activityTypeLabel(s))}<br>${esc(activityTimeLabel(s, active))}</div>
+  </div>`;
+}
+function renderActivity(payload = {}) {
+  const sessions = Array.isArray(payload) ? payload : (payload.sessions || []);
+  const history = Array.isArray(payload.history) ? payload.history : [];
+  const retentionDays = Number(payload.retentionDays || 3) || 3;
+  S.activityPayload = Array.isArray(payload) ? { sessions, history, retentionDays } : payload;
   const list = $('activityList'); if (!list) return;
+  const hist = $('activityHistory');
+  renderActivitySummary(sessions, history);
   if (!sessions.length) {
     list.innerHTML = '<div class="hint">No one is watching right now.</div>';
-    $('activityStatus').textContent = 'Last checked ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-    return;
+    $('activityLiveStatus').textContent = 'Clear';
+  } else {
+    list.innerHTML = sessions.map((s) => activityRowHtml(s, true)).join('');
+    $('activityLiveStatus').textContent = `${sessions.length} active`;
   }
-  list.innerHTML = sessions.map((s) => {
-    const pct = Math.max(0, Math.min(100, +s.percent || 0));
-    const pos = s.duration ? `${fmt(s.position || 0)} / ${fmt(s.duration || 0)}` : (s.position ? fmt(s.position) : 'Live');
-    const file = s.fileName || s.source || '';
-    const streamKind = activityStreamKind(s);
-    const streamLabel = activityStreamLabel(s);
-    const streamBadge = streamLabel ? `<span class="activityStream ${esc(streamKind)}">${esc(streamLabel)}</span>` : '';
-    return `<div class="activityRow">
-      <div><b>${esc(s.userName || 'User')}</b><small>${esc(s.profile || s.player || '')}</small>${streamBadge}</div>
-      <div><b>${esc(s.title || 'Playing')}</b><small>${esc((s.subline ? s.subline + ' - ' : '') + (file || s.mode || streamLabel || ''))}</small>
-        <div class="activityBar" style="--pct:${pct}%"><span></span></div></div>
-      <div class="arMeta">${esc(pos)}<br>${esc(agoStr(s.updatedAt || Date.now()))}</div>
-    </div>`;
-  }).join('');
-  $('activityStatus').textContent = `${sessions.length} active session${sessions.length === 1 ? '' : 's'}`;
+  if (hist) hist.innerHTML = history.length
+    ? history.map((s) => activityRowHtml(s, false)).join('')
+    : '<div class="hint">No recent playback.</div>';
+  $('activityHistoryStatus').textContent = history.length ? `${history.length} shown` : `${retentionDays}-day VOD window`;
+  $('activityStatus').textContent = `Last checked ${new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
 }
 async function refreshActivity() {
   const box = $('activityList'); if (!box) return;
   try {
     const r = await api('/api/activity');
-    renderActivity(r.sessions || []);
+    renderActivity(r);
   } catch (e) {
     box.innerHTML = `<div class="hint">Activity unavailable: ${esc(e.message)}</div>`;
+    if ($('activityHistory')) $('activityHistory').innerHTML = '<div class="hint">Recent playback unavailable.</div>';
     $('activityStatus').textContent = '';
   }
 }
@@ -15510,6 +17246,7 @@ function switchView(v, push = true, opts = {}) {
   const prevView = S.view;
   hideScreensaver();
   resetScreensaverIdle();
+  if (prevView === 'multiview' && v !== 'multiview' && S.multiView) closeMultiView({ silent: true });
   if (prevView === 'search' && v !== 'search' && !opts.preserveSearch) resetSearchPage();
   if (v !== 'livetv') $('grid').classList.remove('liveGuideGrid');
   stopMusicWhenLeavingMusic(v);
@@ -15860,7 +17597,29 @@ function focusLiveCategory(idx, select = false) {
   }
   return true;
 }
-function focusLiveFilter() {
+function liveToolbarButtons() {
+  return ['chMultiBtn', 'chGuideBtn'].map((id) => $(id))
+    .filter((el) => el && el.offsetParent !== null && !el.disabled);
+}
+function focusedLiveToolbarButton() {
+  const active = document.activeElement;
+  if (active && active.closest && active.closest('#chBar') && ['chMultiBtn', 'chGuideBtn'].includes(active.id)) return active.id;
+  const focused = document.querySelector('#chBar .focus');
+  return focused && ['chMultiBtn', 'chGuideBtn'].includes(focused.id) ? focused.id : '';
+}
+function focusLiveToolbar(id = 'chMultiBtn') {
+  const btns = liveToolbarButtons();
+  if (!btns.length) return false;
+  const btn = btns.find((el) => el.id === id) || btns[0];
+  leaveRail();
+  S.zone = 'liveToolbar';
+  S.liveCatDpadMode = false;
+  applyFocus(btn, false);
+  try { btn.focus({ preventScroll: true }); } catch { btn.focus(); }
+  btn.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: focusScrollBehavior() });
+  return true;
+}
+function focusLiveSearchInput() {
   const input = $('chSearch');
   if (!input) return false;
   clearFocus();
@@ -15870,6 +17629,10 @@ function focusLiveFilter() {
   input.focus();
   input.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: focusScrollBehavior() });
   return true;
+}
+function focusLiveFilter() {
+  if (document.body.classList.contains('tv') && focusLiveToolbar('chMultiBtn')) return true;
+  return focusLiveSearchInput();
 }
 function liveContentEls() {
   const root = $('chBody');
@@ -16310,7 +18073,7 @@ function focusDrawer(i) {
   applyFocus(rows[S.drawerIdx]);
 }
 function ctlButtons() {
-  return ['chGuide', 'back10', 'playPause', 'fwd30', 'nextEpBtn', 'ccBtn', 'audBtn', 'srndBtn', 'qualBtn', 'muteBtn', 'fsBtn', 'statsBtn']
+  return ['chGuide', 'back10', 'playPause', 'fwd30', 'nextEpBtn', 'favBtn', 'splitBtn', 'ccBtn', 'audBtn', 'srndBtn', 'qualBtn', 'muteBtn', 'fsBtn', 'statsBtn']
     .map((id) => $(id)).filter((b) => b && !b.disabled && !b.classList.contains('disabled') && b.style.display !== 'none' && b.offsetParent !== null);
 }
 function focusSeek() {
@@ -16322,6 +18085,9 @@ function focusCtl(i) {
   const btns = ctlButtons();
   S.zone = 'playerCtl'; S.ctlIdx = Math.max(0, Math.min(btns.length - 1, i));
   applyFocus(btns[S.ctlIdx]);
+}
+function playerControlButtonFocused() {
+  return !!document.querySelector('#osd .ctl .focus');
 }
 
 // D-pad traversal for form-style surfaces (settings, modals): arrows walk the visible
@@ -16473,9 +18239,9 @@ document.addEventListener('keydown', (e) => {
       e.preventDefault(); ae.blur();
       return focusLiveCategory() || focusFirstLiveContent();
     }
-    if (k === 'ArrowRight' && $('chGuideBtn') && ae.selectionStart >= ae.value.length) {
+    if (k === 'ArrowRight' && $('chMultiBtn') && ae.selectionStart >= ae.value.length) {
       e.preventDefault(); ae.blur();
-      return $('chGuideBtn').focus();
+      return focusLiveToolbar('chMultiBtn');
     }
     if (document.body.classList.contains('tv') && (k === 'Escape' || k === 'Backspace' || (k === 'ArrowLeft' && ae.selectionStart === 0))) {
       e.preventDefault(); ae.blur();
@@ -16510,7 +18276,7 @@ document.addEventListener('keydown', (e) => {
             : /Previous/.test(k) ? 'prev' : 'toggle');
   }
   if (inInput && k !== 'Escape') return;
-  if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape', 'Backspace', ' ', 'f', 'F', 'PageUp', 'PageDown',
+  if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape', 'Backspace', ' ', 'f', 'F', '2', '3', '4', 'PageUp', 'PageDown',
     'MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaStop', 'MediaTrackNext', 'MediaTrackPrevious', 'MediaNextTrack', 'MediaPreviousTrack'].includes(k)) return;
   if ((k === 'f' || k === 'F') && S.view !== 'player') return; // F = fullscreen, player only
   if ($('gateProfiles').classList.contains('open')) {
@@ -16651,6 +18417,9 @@ document.addEventListener('keydown', (e) => {
     return dpadBrowseFilter(k);
   }
 
+  if (S.view === 'multiview') {
+    if (handleMultiViewKey(k, e)) return;
+  }
   if (S.view === 'player') {
     showOsd();
     // Up-next popup outranks everything: ←/→ choose Play now / Dismiss, OK confirms,
@@ -16780,10 +18549,12 @@ document.addEventListener('keydown', (e) => {
     if (k === 'f' || k === 'F') return toggleFullscreen();
     if (k === ' ') return togglePlay();
     if (k === 'ArrowLeft') {
+      if (liveSplitEnabled() && !playerControlButtonFocused()) return setLiveSplitPaneFocus(0);
       if (S.zone === 'playerCtl') return focusCtl(S.ctlIdx - 1);
       return $('player').classList.contains('live') ? focusCtl(0) : nudgeSeek(-10);
     }
     if (k === 'ArrowRight') {
+      if (liveSplitEnabled() && !playerControlButtonFocused()) return setLiveSplitPaneFocus(1);
       if (S.zone === 'playerCtl') return focusCtl(S.ctlIdx + 1);
       return $('player').classList.contains('live') ? focusCtl(0) : nudgeSeek(30);
     }
@@ -16800,6 +18571,10 @@ document.addEventListener('keydown', (e) => {
       return focusCtl(S.zone === 'playerCtl' ? S.ctlIdx : 1);
     }
     if (k === 'Enter' && !e.repeat) {
+      if (liveSplitEnabled() && S.zone === 'liveSplit') {
+        if (liveSplitActivePane() === 1 && liveSplitNeedsSecondChannel()) return openLiveSplitChannelPicker();
+        return togglePlay();
+      }
       if (S.zone === 'seek') return togglePlay();
       const b = ctlButtons()[S.ctlIdx]; if (b) b.click();
     }
@@ -16985,12 +18760,22 @@ document.addEventListener('keydown', (e) => {
       if (k === 'ArrowLeft') { $('micBtn').blur(); return enterRail(); }
       return;
     }
-    // Live TV: the Guide toggle beside the filter is a native-focus stop too.
-    if (S.view === 'livetv' && (document.activeElement || {}).id === 'chGuideBtn') {
-      const ae = document.activeElement;
+    // Live TV: the Multiview and Guide buttons beside the filter are TV focus stops too.
+    const liveToolbarId = S.view === 'livetv' ? focusedLiveToolbarButton() : '';
+    if (liveToolbarId === 'chMultiBtn') {
+      const ae = $('chMultiBtn');
       if (k === 'Enter') { if (!e.repeat) ae.click(); return; }
-      if (k === 'ArrowLeft') return $('chSearch').focus();
-      if (k === 'ArrowUp') return focusLiveFilter();
+      if (k === 'ArrowLeft') return document.body.classList.contains('tv') ? enterRail() : focusLiveSearchInput();
+      if (k === 'ArrowRight' && $('chGuideBtn')) return focusLiveToolbar('chGuideBtn');
+      if (k === 'ArrowUp') return focusLiveToolbar('chMultiBtn');
+      if (k === 'ArrowDown') { ae.blur(); return focusLiveCategory() || focusFirstLiveContent(); }
+      return;
+    }
+    if (liveToolbarId === 'chGuideBtn') {
+      const ae = $('chGuideBtn');
+      if (k === 'Enter') { if (!e.repeat) ae.click(); return; }
+      if (k === 'ArrowLeft') return $('chMultiBtn') ? focusLiveToolbar('chMultiBtn') : enterRail();
+      if (k === 'ArrowUp' || k === 'ArrowRight') return focusLiveToolbar('chGuideBtn');
       if (k === 'ArrowDown') { ae.blur(); return focusLiveCategory() || focusFirstLiveContent(); }
       return;
     }

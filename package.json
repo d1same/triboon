@@ -1,11 +1,12 @@
 {
   "name": "triboon",
-  "version": "1.7.25",
+  "version": "1.7.26",
   "description": "Press play on anything. Triboon mounts the best healthy NZB from your usenet provider and streams it instantly.",
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
-    "test": "node --test test/e2e.test.js test/archive.test.js test/phase2.test.js test/security.test.js test/phase4.test.js test/iptv-cache.test.js test/library-db.test.js"
+    "test": "node --test test/e2e.test.js test/archive.test.js test/phase2.test.js test/security.test.js test/phase4.test.js test/iptv-cache.test.js test/library-db.test.js",
+    "verify:full": "powershell -NoProfile -ExecutionPolicy Bypass -File bench/verify-before-update.ps1"
   },
   "engines": { "node": ">=24" },
   "license": "MIT"

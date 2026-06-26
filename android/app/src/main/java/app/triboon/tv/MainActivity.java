@@ -3379,6 +3379,15 @@ public class MainActivity extends Activity {
                         nativeVideoStarted = true;
                         nativeVideoUnhealthySinceMs = 0L;
                         rememberNativeVideoPosition();
+                        web.evaluateJavascript("window.__tvNativeVideoPlaying && __tvNativeVideoPlaying("
+                                + nativePosSeconds() + "," + nativeDurSeconds() + ")", null);
+                    } else if ("video".equals(nativeMode) && nativeVideoStarted
+                            && nativePlayer != null
+                            && nativePlayer.getPlaybackState() == Player.STATE_READY
+                            && !nativePlayer.getPlayWhenReady()) {
+                        rememberNativeVideoPosition();
+                        web.evaluateJavascript("window.__tvNativeVideoPaused && __tvNativeVideoPaused("
+                                + nativePosSeconds() + "," + nativeDurSeconds() + ")", null);
                     }
                     scheduleNativeChromeHide();
                 }

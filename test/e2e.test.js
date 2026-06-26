@@ -197,6 +197,49 @@ test('vfs: playback upgrades a segment already queued by read-ahead', async () =
   );
 });
 
+test('vfs: background warmup does not cancel active player read-ahead', async () => {
+  const { data, articles, nzb } = makeRelease('Pause.Warm.Test.mkv', 150000, 30000);
+  const calls = [];
+  const pool = {
+    body: async (msgId, priority = 'playback') => {
+      calls.push({ msgId, priority });
+      return articles.get(msgId);
+    },
+    stat: async () => true,
+  };
+  const vf = new VirtualFile(pool, nzb, { readAhead: 1, cacheSegments: 20, cacheBytes: 1024 * 1024 });
+  await vf.mount();
+  calls.length = 0;
+  vf.cache.clear();
+  vf.cacheOrder = [];
+  vf.cacheBytes = 0;
+  vf.inflight.clear();
+
+  const active = vf.read(0, data.length, { priority: 'startup' })[Symbol.asyncIterator]();
+  const first = await active.next();
+  assert.strictEqual(first.done, false, 'active player should receive the first segment');
+
+  const warmup = (async () => {
+    for await (const _chunk of vf.read(0, 30000, { priority: 'readAhead' })) {
+      // Drain like playback warmup does.
+    }
+  })();
+
+  const activeChunks = [first.value];
+  for (;;) {
+    const next = await active.next();
+    if (next.done) break;
+    activeChunks.push(next.value);
+  }
+  await warmup;
+
+  assert.ok(Buffer.concat(activeChunks).equals(data), 'active playback remains byte-exact while warmup overlaps');
+  assert.ok(
+    calls.some((c) => c.msgId === 'seg3@triboon.test' && c.priority === 'readAhead'),
+    'active playback should keep kicking later read-ahead after background warmup starts',
+  );
+});
+
 test('vfs: decoded segment cache is capped by bytes, not only segment count', async () => {
   const { articles, nzb } = makeRelease('Cache.Bytes.Test.mkv', 180000, 45000);
   const pool = {

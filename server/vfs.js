@@ -214,7 +214,12 @@ class NzbFileStream {
     const priority = opts.priority || 'playback';
     let activePriority = priority;
     const signal = opts.signal || null;
-    const readAheadEpoch = ++this.readAheadEpoch;
+    // Multiple readers may legitimately touch the same mount at once: the active
+    // player, playback warmup, probes, subtitle extraction, or sequential HTTP
+    // ranges. Starting one read must not silently disable another reader's
+    // future read-ahead; only a true interrupted request/seek calls
+    // cancelReadAhead() and advances this epoch.
+    const readAheadEpoch = this.readAheadEpoch;
     const aborted = () => !!(signal && signal.aborted);
     if (this.partSize === null) await this.mount(priority);
     end = Math.min(end, this.size);

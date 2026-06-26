@@ -779,6 +779,25 @@ test('Live TV startup warm is delayed so app login and first playback stay respo
     'startup warm must not use the short source-change delay or heavy guide parse');
 });
 
+test('VOD pause resume: paused players warm ahead without stealing startup or seek priority', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
+  assert.match(ui, /function cancelPauseWarmAhead\(\) \{[\s\S]+S\.pauseWarmAhead = null;[\s\S]+warm && warm\.abort && warm\.abort\.abort\(\);[\s\S]+\}/,
+    'pause warm-ahead should be abortable when playback resumes, seeks, or closes');
+  assert.match(ui, /function schedulePauseWarmAhead\(p = S\.playing\) \{[\s\S]+p\.item\.type === 'live'[\s\S]+p\.streamUrl[\s\S]+p\.size[\s\S]+const dur = totalDuration\(\);[\s\S]+if \(p\._pauseWarmAt && now - p\._pauseWarmAt < 12000\) return;[\s\S]+const targetSeconds = Math\.min\(dur - 1, Math\.max\(currentTime\(\) \+ 6, bufferedEnd \+ 2\)\);[\s\S]+url\.searchParams\.set\('priority', 'read-ahead'\);[\s\S]+headers: \{ Range: `bytes=\$\{start\}-\$\{start \+ bytes - 1\}` \}/,
+    'pause warm-ahead should issue one bounded low-priority range ahead of the paused VOD position');
+  assert.match(ui, /v\.onplaying = \(\) => \{ cancelPauseWarmAhead\(\);[\s\S]+v\.onpause = \(\) => \{ schedulePauseWarmAhead\(S\.playing\); updPP\(\); \};/,
+    'web video should warm on pause and cancel the warm request immediately when playing again');
+  assert.match(ui, /function requestVideoPlay\(v, opts = \{\}\) \{[\s\S]+cancelPauseWarmAhead\(\);[\s\S]+const r = v\.play\(\);[\s\S]+return r\.then\(\(\) => \{[\s\S]+cancelPauseWarmAhead\(\)/,
+    'user-initiated resume should cancel pause warm-ahead before and after play starts');
+  assert.match(ui, /function seekTo\(seconds\) \{[\s\S]+cancelPauseWarmAhead\(\);[\s\S]+if \(!p\) return;/,
+    'manual seeks should cancel old pause warm-ahead ranges before changing position');
+  assert.match(ui, /window\.__tvNativeVideoPlaying = \(pos, dur\) => \{[\s\S]+applyNativeVideoProgress\(pos, dur\);[\s\S]+cancelPauseWarmAhead\(\);[\s\S]+\};[\s\S]+window\.__tvNativeVideoPaused = \(pos, dur\) => \{[\s\S]+applyNativeVideoProgress\(pos, dur\);[\s\S]+schedulePauseWarmAhead\(p\);[\s\S]+\};/,
+    'native ExoPlayer should share the same pause/resume warm-ahead contract as the web player');
+  assert.match(android, /if \("video"\.equals\(nativeMode\) && isPlaying\) \{[\s\S]+__tvNativeVideoPlaying[\s\S]+\} else if \("video"\.equals\(nativeMode\) && nativeVideoStarted[\s\S]+nativePlayer\.getPlaybackState\(\) == Player\.STATE_READY[\s\S]+!nativePlayer\.getPlayWhenReady\(\)[\s\S]+__tvNativeVideoPaused/,
+    'Android should report real user pauses without treating normal buffering as paused playback');
+});
+
 test('Android native player: direct source and native chrome stay out of the web player', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
@@ -872,7 +891,7 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.ok(ui.includes('function showVodPlayPrompt()')
     && ui.includes("pReady && pReady.item && pReady.item.type !== 'live' && !pReady.started && v.readyState >= 2 && v.paused")
     && ui.includes("$('playerLoader').classList.remove('show');")
-    && ui.includes("requestVideoPlay(v).then(() => { if (!serverSeek && atSeconds) v.currentTime = atSeconds; }).catch(() => showVodPlayPrompt());"),
+    && ui.includes("requestVideoPlay(v).then(() => { cancelPauseWarmAhead(); if (!serverSeek && atSeconds) v.currentTime = atSeconds; }).catch(() => showVodPlayPrompt());"),
     'mobile browser VOD should reveal a tappable play control when autoplay is blocked after buffering');
   assert.ok(ui.includes('#person .personHead{flex-direction:column;align-items:center;gap:16px')
     && ui.includes('#person .personHead .pInfo{width:100%;text-align:center}')
@@ -885,19 +904,25 @@ test('Android native player: direct source and native chrome stay out of the web
     'person known-for pages should lazy-render all filtered credits in batches instead of slicing to a fixed cap');
   assert.match(ui, /\$\('person'\)\.addEventListener\('scroll', maybeLoadMorePersonWorks, \{ passive: true \}\);[\s\S]+if \(S\.view === 'person' && S\.gridIdx >= \(S\.gridItems \|\| \[\]\)\.length - Math\.max\(2, gridCols\(\) \* 2\)\) \{[\s\S]+loadMorePersonWorks\(false\);/,
     'person known-for lazy loading should work for both scrolling and D-pad focus near the loaded edge');
-  assert.ok(ui.includes('id="statsBtn"') && ui.includes("return ['chGuide', 'back10', 'playPause', 'fwd30', 'nextEpBtn', 'ccBtn', 'audBtn', 'srndBtn', 'qualBtn', 'muteBtn', 'fsBtn', 'statsBtn']")
+  assert.ok(ui.includes('id="statsBtn"') && ui.includes("return ['chGuide', 'back10', 'playPause', 'fwd30', 'nextEpBtn', 'favBtn', 'splitBtn', 'ccBtn', 'audBtn', 'srndBtn', 'qualBtn', 'muteBtn', 'fsBtn', 'statsBtn']")
     && ui.includes('function collectPlayerStats()') && ui.includes('window.__tvNativeVideoStats'),
     'web player stats must be the last D-pad reachable control and accept native ExoPlayer stats');
   assert.ok(ui.includes('Server target') && ui.includes('Server read-ahead')
     && ui.includes("const label = k === 'Buffered' ? 'Player buffer' : k")
     && ui.includes('function refreshPlayerRuntimeStats('),
     'Playback stats should separate visible player buffer from Triboon server read-ahead');
-  assert.ok(ui.includes('data-stab="activity"') && ui.includes("api('/api/activity')") && ui.includes('id="activityRefresh"'),
-    'admin Settings should expose a focusable Now Watching panel backed by the activity API');
+  assert.ok(ui.includes('data-stab="activity"') && ui.includes("api('/api/activity')") && ui.includes('id="activityRefresh"')
+    && ui.includes('id="activityHistory"') && ui.includes('id="activitySummary"')
+    && ui.includes('Previous 10') && !ui.includes('id="activityPager"'),
+    'admin Settings should expose a compact focusable Activity panel backed by the activity API');
   assert.ok(ui.includes('function playerStreamKind(') && ui.includes('streamKind: playerStreamKind(p)')
-    && ui.includes('streamLabel: playerStreamLabel(p)') && ui.includes('function activityStreamLabel(')
-    && ui.includes('activityStream'),
-    'Now Watching should show whether each session is original, remuxed, live, or transcoding');
+    && ui.includes('streamLabel: playerStreamLabel(p)') && ui.includes('clientVersion: clientVersionLabel()')
+    && ui.includes('function activityStreamLabel(') && ui.includes('function activityRowHtml(')
+    && ui.includes('activityStream') && !ui.includes('ACTIVITY_HISTORY_PAGE_SIZE')
+    && !ui.includes('activityPrev') && !ui.includes('activityNext'),
+    'Activity should show stream treatment, app version, active sessions, and a simple previous-10 history');
+  assert.match(ui, /function commitNativeLivePlayback\(it\) \{[\s\S]+setNativeLivePlaybackState\(it\);[\s\S]+startActivityHeartbeat\(\);/,
+    'native Live TV should report activity once ExoPlayer is ready');
   assert.match(ui, /<div class="settingsForm">[\s\S]+<span>Expected users<\/span><input id="perfUsers"[\s\S]+<span>Start\/seek reserve<\/span><input id="perfReserve"[\s\S]+<div class="settingsActions">[\s\S]+id="perfTest"[\s\S]+id="perfApply"[\s\S]+id="perfSave"/,
     'Streaming performance settings should keep labeled rows and one professional action group');
   assert.match(ui, /\.settingsRow\{display:grid;grid-template-columns:repeat\(3,minmax\(0,1fr\)\)[\s\S]+\.settingsActions\{display:flex;align-items:center;gap:10px;flex-wrap:wrap/,
@@ -1142,7 +1167,10 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.ok(ui.includes("$('vlcPanel').classList.remove('show');")
       && ui.includes('if (v.paused) showLivePlayPrompt();'),
     'a decoded web Live TV frame should clear any earlier external-player fallback panel');
-  assert.ok(ui.includes('const requestLivePlay = () => requestVideoPlay(v, { livePrompt: true }).catch(() => {')
+  assert.ok(ui.includes('function requestLiveMsePlay(v, opts = {}) {')
+      && ui.includes("if (!opts.split && !opts.multi) return requestVideoPlay(v, { livePrompt: true });")
+      && ui.includes('const requestLivePlay = () => requestLiveMsePlay(v, { split, multi }).catch(() => {')
+      && ui.includes('if (active() && !split && !multi) {')
       && ui.includes('showLivePlayPrompt();')
       && ui.includes('requestLivePlay();'),
     'web Live TV MSE playback should reveal the ready frame when autoplay is blocked after buffering');
@@ -1154,7 +1182,8 @@ test('Android native player: direct source and native chrome stay out of the web
       && ui.includes('applyFocus(play);')
       && ui.includes('clearTimeout(S.osdTimer);')
       && ui.includes('function requestVideoPlay(v, opts = {}) {')
-      && ui.includes("if (v.paused) requestVideoPlay(v, { livePrompt: S.playing && S.playing.item && S.playing.item.type === 'live' }).catch(() => {});"),
+      && ui.includes("const live = !!(S.playing && S.playing.item && S.playing.item.type === 'live');")
+      && ui.includes("requestVideoPlay(v, { livePrompt: live })).catch(() => {});"),
     'blocked browser Live TV autoplay should keep the Play control available instead of throwing an unhandled play rejection');
   assert.ok(ui.includes('function liveMseHasReadyFrame(p = S.playing) {')
       && ui.includes("const src = v && (v.currentSrc || v.src || '');")
@@ -1183,6 +1212,7 @@ test('Android native player: direct source and native chrome stay out of the web
       && ui.includes('e.liveProviderReason = reason;')
       && ui.includes('if (e.liveProviderReason) showLiveProviderError(e.liveProviderReason);')
       && ui.includes('function showLiveProviderError(reason) {')
+      && ui.includes('friendlyLiveProviderReason(reason')
       && ui.includes('Live stream unavailable')
       && ui.includes("Try another channel, or wait a moment before retrying."),
     'web Live TV should surface provider 403/429 failures instead of showing a misleading external-player prompt');
@@ -1609,7 +1639,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'native PiP should reveal with a sibling scrim and keep that scrim aligned after the guide rectangle is applied');
   assert.match(ui, /function scheduleNativeGuidePipSync\(\) \{[\s\S]+requestAnimationFrame[\s\S]+setTimeout\(syncNativeGuidePipRect, 90\)/,
     'native PiP rect sync should retry after layout settles');
-  assert.match(ui, /body\.nativeGuideMode #player\.guideMode video\{display:none\}/,
+  assert.match(ui, /body\.nativeGuideMode #player\.guideMode #video\{display:none\}/,
     'native PiP guide mode should hide the old web video element under ExoPlayer');
   assert.match(ui, /scheduleNativeGuidePipSync\(\)/,
     'PiP rect should sync after the guide layout has been painted');
@@ -1703,7 +1733,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'Calendar async rendering must not steal D-pad focus from the open rail preview');
   assert.match(ui, /async function playChannel\(it, list\) \{[\s\S]+if \(promotePlayerGuideChannelToFullscreen\(it\)\) return;[\s\S]+rememberVodReturn\(\);/,
     'selecting Live TV from a movie or episode PiP guide should preserve the Back to title target before replacing playback');
-  assert.match(ui, /function promotePlayerGuideChannelToFullscreen\(it\) \{[\s\S]+\$\(\'pGuide\'\)\.classList\.contains\('open'\)[\s\S]+S\.playing\.item\.type === 'live'[\s\S]+String\(S\.liveCur\) !== String\(it\._channel\)[\s\S]+closePlayerGuide\(\);[\s\S]+\$\(\'player\'\)\.classList\.add\('open'\);[\s\S]+\$\(\'player\'\)\.classList\.add\('live'\);/,
+  assert.match(ui, /function promotePlayerGuideChannelToFullscreen\(it\) \{[\s\S]+\$\(\'pGuide\'\)\.classList\.contains\('open'\)[\s\S]+S\.playing\.item\.type === 'live'[\s\S]+String\(activeLiveChannelIdx\(\)\) !== String\(it\._channel\)[\s\S]+closePlayerGuide\(\);[\s\S]+\$\(\'player\'\)\.classList\.add\('open'\);[\s\S]+\$\(\'player\'\)\.classList\.add\('live'\);/,
     'selecting the already-current PiP guide channel should close the guide into full-screen Live TV instead of reloading it');
   assert.match(ui, /if \(keepGuidePip && S\.nativeGuideMode && tryNativeLivePlayer\(it, true\)\) \{[\s\S]+markGuideCur\(\);[\s\S]+schedulePlayerGuideFocusRestore\(it\._channel\);[\s\S]+return;[\s\S]+\}/,
     'channel tuning from the native PiP guide should retune ExoPlayer without starting web playback');
@@ -1732,9 +1762,9 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.ok(startSourceBlock.includes("if (p.item && p.item.type === 'live') {")
       && startSourceBlock.includes("kind === 'direct' && startLiveMseSource(p.streamUrl)"),
     'only Live TV direct playback should take the web MediaSource path');
-  assert.match(ui, /async function playChannelWeb\(it\) \{[\s\S]+const preserveGuide = !!\(\$\(\'pGuide\'\) && \$\(\'pGuide\'\)\.classList\.contains\(\'open\'\)\);[\s\S]+stopActivePlaybackForReplacement\(\{ preserveGuide \}\);[\s\S]+openPlayer\(\{ title: it\.title, key: it\.key, type: 'live'/,
+  assert.match(ui, /async function playChannelWeb\(it\) \{[\s\S]+const preserveGuide = !!\(\$\(\'pGuide\'\) && \$\(\'pGuide\'\)\.classList\.contains\(\'open\'\)\);[\s\S]+stopActivePlaybackForReplacement\(\{ preserveGuide \}\);[\s\S]+openPlayer\(liveItemPayload\(it\),/,
     'web Live TV channel changes should close the previous MSE fetch/player connection before opening the new channel');
-  assert.match(ui, /async function playChannelWeb\(it\) \{[\s\S]+if \(preserveGuide\) setPlayerGuideLiveTuningPending\(it\);[\s\S]+await openPlayer\(\{ title: it\.title, key: it\.key, type: 'live'[\s\S]+\}, \{ preserveGuide \}\);[\s\S]+if \(preserveGuide && \$\(\'pGuide\'\) && \$\(\'pGuide\'\)\.classList\.contains\('open'\)\) \{[\s\S]+\$\(\'player\'\)\.classList\.add\('guideMode'\);[\s\S]+schedulePlayerGuideFocusRestore\(it\._channel\);/,
+  assert.match(ui, /async function playChannelWeb\(it\) \{[\s\S]+if \(preserveGuide\) setPlayerGuideLiveTuningPending\(it\);[\s\S]+await openPlayer\(liveItemPayload\(it\),[\s\S]+\}, \{ preserveGuide \}\);[\s\S]+if \(preserveGuide && \$\(\'pGuide\'\) && \$\(\'pGuide\'\)\.classList\.contains\('open'\)\) \{[\s\S]+\$\(\'player\'\)\.classList\.add\('guideMode'\);[\s\S]+schedulePlayerGuideFocusRestore\(it\._channel\);/,
     'web PiP guide Live TV tuning should preserve the video slot instead of dropping to a black guide panel');
   assert.match(ui, /const keepGuideMode = !!\(opts\.preserveGuide && \$\(\'pGuide\'\) && \$\(\'pGuide\'\)\.classList\.contains\('open'\)\);[\s\S]+\$\(\'player\'\)\.classList\.remove\('open'\);[\s\S]+\$\(\'player\'\)\.classList\.toggle\('guideMode', keepGuideMode\);/,
     'openPlayer should not clear browser PiP guide layout when a guide channel is selected');
@@ -1898,6 +1928,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Live TV timeline guide requests should bind channel indexes to stable channel ids');
   assert.match(ui, /api\('\/api\/music\/home'\)[\s\S]+S\.musicHome = r && Array\.isArray\(r\.shelves\) \? r : \{ shelves: \[\] \}/,
     'Music page should load the server-side Music Home shelf contract');
+  assert.match(ui, /function refreshMusicChartsAfterFirstPaint\(\) \{[\s\S]+api\('\/api\/music\/charts'\)[\s\S]+mergeMusicChartShelves\(r\.charts \|\| \[\]\)[\s\S]+renderMusicBrowse\(\)/,
+    'Music Home should backfill chart shelves after the fast first paint instead of staying sparse on cold cache');
   assert.match(ui, /async function loadMusicHomeFallback\(\) \{[\s\S]+\/api\/music\/search\?q=' \+ encodeURIComponent\(def\.query\) \+ '&limit=12'[\s\S]+S\.musicHome = await loadMusicHomeFallback\(\)/,
     'Music page should fall back to regular music search if the home endpoint is not active yet');
   assert.match(ui, /const yours = addShelf\('Your playlists'[\s\S]+if \(Array\.isArray\(S\.ytmPlaylists\)\)[\s\S]+Connect YouTube Music[\s\S]+S\.musicHome/,
@@ -1908,6 +1940,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'Music playback should give a visible prompt when autoplay is blocked instead of silently failing');
   assert.match(ui, /mAudio\.addEventListener\('error'[\s\S]+Track unavailable\. Skipping[\s\S]+setTimeout\(\(\) => \{ if \(S\.musicLoadFailed\) musicNext\(true\); \}/,
     'Music should skip unavailable tracks instead of stalling the queue on a dead stream');
+  assert.match(ui, /function updateMusicMediaSession\(\) \{[\s\S]+new MediaMetadata\(\{[\s\S]+title: t\.title \|\| 'Music'[\s\S]+artwork: t\.thumb \?/,
+    'Music playback should publish title/artwork metadata to OS and remote media surfaces');
+  assert.match(ui, /function playMusic\(queue, idx, opts = \{\}\) \{[\s\S]+mAudio\.src = t\.streamUrl;[\s\S]+updateMusicMediaSession\(\);/,
+    'Music should refresh media-session metadata whenever the active track changes');
   assert.match(ui, /function openMusicConnect\(\) \{[\s\S]+tries < 30[\s\S]+requestAnimationFrame\(focusConnect\)/,
     'Music connect focus should wait for Preferences rendering instead of using a fixed timer race');
   assert.match(ui, /id="mnQueueToggle" title="Hide queue" aria-label="Hide queue"[\s\S]+function updateMusicQueueToggle\(\) \{[\s\S]+btn\.title = hidden \? 'Show queue' : 'Hide queue'[\s\S]+btn\.setAttribute\('aria-label', btn\.title\)/,
@@ -2175,8 +2211,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Live TV Up should go to the next channel and Down should go to the previous channel');
   assert.match(ui, /window\.__tvNativeLiveZap = \(dir\) => \{[\s\S]+S\.playing\.item\.type === 'live'[\s\S]+zapChannel\(dir >= 0 \? 1 : -1\);[\s\S]+\};/,
     'native Live TV D-pad zapping should reuse the web channel list order');
-  assert.match(ui, /function setNativeLivePlaybackState\(it\) \{[\s\S]+type: 'live'[\s\S]+usingNative: true[\s\S]+\}[\s\S]+if \(!guide\) setNativeLivePlaybackState\(it\);/,
-    'fullscreen native Live TV should update web player state before D-pad Up/Down can zap channels');
+  assert.match(ui, /function setNativeLivePlaybackState\(it\) \{[\s\S]+item: liveItemPayload\(it\),[\s\S]+usingNative: true[\s\S]+\}[\s\S]+function commitNativeLivePlayback\(it\) \{[\s\S]+setNativeLivePlaybackState\(it\);[\s\S]+startActivityHeartbeat\(\);/,
+    'fullscreen native Live TV should update web player state and activity before D-pad Up/Down can zap channels');
   assert.match(android, /public int personalIptvVersion\(\)[\s\S]+public String personalIptvSources\(\)[\s\S]+public String personalIptvSave\(String json\)[\s\S]+public void personalIptvLoad\(String token\)/,
     'Android TV should expose a device-local IPTV bridge without replacing server-side playlists');
   assert.match(android, /public void personalIptvGuide\(String token, String json\) \{[\s\S]+loadPersonalIptvGuide\(token, json\)/,
@@ -2261,6 +2297,130 @@ test('Android native player: direct source and native chrome stay out of the web
     'CSS must not hide the Personal IPTV panel after JavaScript enables the Preferences tab');
   assert.match(ui, /function toggleFav\(ch, star\) \{[\s\S]+isPersonalChannel\(ch\)[\s\S]+PERSONAL_IPTV_FAV_KEY[\s\S]+api\('\/api\/iptv\/fav'/,
     'personal IPTV favorites should stay local while server IPTV favorites still use the server API');
+  assert.ok(ui.includes('id="favBtn" title="Favorite channel"')
+      && ui.includes('id="chMultiBtn" class="focusable" title="Open multiview" aria-label="Open multiview"')
+      && ui.includes('id="pgMultiBtn" class="mvIconBtn focusable" type="button" title="Open multiview" aria-label="Open multiview"')
+      && ui.includes('<span>Multiview</span>'),
+    'Live TV should expose favorite in the player and icon-led Multiview launchers from guide surfaces');
+  assert.ok(ui.includes("isTriboonAndroidShell() ? '' : '<button id=\"chMultiBtn\"")
+      && ui.includes("if (isTriboonAndroidShell()) {")
+      && ui.includes("$('pgMultiBtn').hidden = true;")
+      && ui.includes("$('pgMultiBtn').disabled = true;"),
+    'Android TV should not expose browser Multiview launchers until native multi-surface ExoPlayer support exists');
+  assert.match(ui, /function liveToolbarButtons\(\) \{[\s\S]+\['chMultiBtn', 'chGuideBtn'\][\s\S]+function focusLiveToolbar\(id = 'chMultiBtn'\) \{[\s\S]+applyFocus\(btn, false\);[\s\S]+btn\.focus\(\{ preventScroll: true \}\)[\s\S]+function focusLiveFilter\(\) \{[\s\S]+document\.body\.classList\.contains\('tv'\) && focusLiveToolbar\('chMultiBtn'\)[\s\S]+return focusLiveSearchInput\(\);/,
+    'Live TV D-pad should land on the toolbar buttons on TV instead of parking focus in the search input');
+  assert.match(ui, /const liveToolbarId = S\.view === 'livetv' \? focusedLiveToolbarButton\(\) : '';[\s\S]+if \(liveToolbarId === 'chMultiBtn'\) \{[\s\S]+if \(k === 'ArrowLeft'\) return document\.body\.classList\.contains\('tv'\) \? enterRail\(\) : focusLiveSearchInput\(\);[\s\S]+if \(k === 'ArrowRight' && \$\('chGuideBtn'\)\) return focusLiveToolbar\('chGuideBtn'\);[\s\S]+if \(liveToolbarId === 'chGuideBtn'\) \{[\s\S]+if \(k === 'ArrowLeft'\) return \$\('chMultiBtn'\) \? focusLiveToolbar\('chMultiBtn'\) : enterRail\(\);/,
+    'Live TV toolbar buttons should have explicit D-pad movement between Multiview, Guide, content, and rail');
+  assert.ok(ui.includes('id="multiView" aria-hidden="true"')
+      && ui.includes('id="mvVideo0"')
+      && ui.includes('id="mvVideo1"')
+      && ui.includes('id="mvVideo2"')
+      && ui.includes('id="mvVideo3"'),
+    'Multiview should own a separate four-slot viewing surface instead of borrowing the movie/show player');
+  assert.ok(ui.includes('.mvGrid.count2{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}')
+      && ui.includes('.mvGrid.count3{grid-template-columns:minmax(0,2fr) minmax(0,1fr);grid-template-rows:minmax(0,1fr) minmax(0,1fr)}')
+      && ui.includes('.mvGrid.count3 .mvSlot.mvMain{grid-row:1 / span 2}')
+      && ui.includes('.mvGrid.count4{grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-rows:minmax(0,1fr) minmax(0,1fr)}'),
+    'Multiview should have distinct 2, 3, and 4 screen layouts');
+  assert.ok(ui.includes('class="mvAction mvVodOnly mvBackBtn focusable"')
+      && ui.includes('class="mvAction mvVodOnly mvPlayBtn focusable"')
+      && ui.includes('class="mvAction mvVodOnly mvFwdBtn focusable"')
+      && ui.includes('class="mvAction mvFullBtn focusable"')
+      && ui.includes('class="mvAction mvSwapBtn focusable"')
+      && ui.includes('class="mvAction mvChangeBtn focusable"')
+      && ui.includes('class="mvAction mvCloseBtn focusable"')
+      && ui.includes('id="mvClose" class="mvIconBtn mvIconOnly focusable"')
+      && ui.includes('id="mvPickerClose" class="mvIconBtn mvIconOnly focusable"')
+      && ui.includes('.mvIconBtn svg{width:17px;height:17px;flex:none}')
+      && ui.includes('.mvIconOnly{width:40px;padding:0;border-radius:50%}')
+      && ui.includes('.mvSlot.vod .mvVodOnly{display:grid}')
+      && ui.includes('#multiView.paneFull .mvTop{display:none}')
+      && ui.includes('.mvGrid.fullscreen{display:block;position:relative}'),
+    'Multiview panes should expose polished VOD transport, fullscreen, swap, change, and icon close actions with an internal zoomed-pane mode');
+  assert.ok(ui.includes('.mvSlot{position:relative;display:none;min-width:0;min-height:0;border-radius:10px;background:#000;overflow:hidden;border:1px solid rgba(243,239,247,.07);')
+      && ui.includes('.mvSlot.active{border-color:rgba(255,198,92,.42);')
+      && ui.includes('.mvLayout button.on,.mvLayout button:hover,.mvIconBtn:hover,.mvIconBtn:focus,.mvIconBtn.focus{background:rgba(58,66,74,.82);border-color:rgba(255,198,92,.22);outline:none;box-shadow:0 0 0 2px rgba(255,198,92,.20)')
+      && ui.includes('.mvAction:hover,.mvAction:focus,.mvAction.focus{outline:none;background:rgba(58,66,74,.82);border-color:rgba(255,198,92,.24);box-shadow:0 0 0 2px rgba(255,198,92,.22)'),
+    'Multiview borders and button focus rings should stay thin, neutral, and amber-toned instead of thick coral');
+  assert.doesNotMatch(ui, /\.mvSlot\{[^}]*border:2px solid transparent|\.mvSlot\.active\{border-color:rgba\(251,139,60,\.98\)|\.mvAction:hover,[^}]+rgba\(251,139,60,\.62\)/,
+    'Multiview chrome should not regress to thick red/coral outlines');
+  assert.ok(ui.includes('#player.live #ccBtn,#player.live #audBtn,#player.live #srndBtn,#player.live #qualBtn{display:none!important}'),
+    'Live TV should hide VOD subtitle/audio/surround/quality controls instead of disabling the movie/show player controls globally');
+  assert.doesNotMatch(ui, /#player\.live #favBtn,#player\.live #splitBtn\{display:grid\}/,
+    'the old split control should not be exposed in the Live TV player chrome');
+  assert.match(ui, /function updatePlayerControlAvailability\(\) \{[\s\S]+const isLive = !!\(p && p\.item && p\.item\.type === 'live'\);[\s\S]+\['ccBtn', 'audBtn', 'qualBtn'\][\s\S]+style\.display = isLive \? 'none' : '';[\s\S]+const fav = \$\('favBtn'\); if \(fav\) fav\.style\.display = isLive \? '' : 'none';[\s\S]+const split = \$\('splitBtn'\); if \(split\) split\.style\.display = 'none';[\s\S]+setPlayerControlEnabled\('favBtn', isLive && !!liveChannelForFavorite\(\)\);[\s\S]+setPlayerControlEnabled\('splitBtn', false\);/,
+    'player controls should show favorite for Live TV while keeping split out of the player');
+  assert.match(ui, /function liveMseKey\(slot = 'main'\)[\s\S]+s\.startsWith\('multi'\)[\s\S]+return `live\$\{s\[0\]\.toUpperCase\(\)\}\$\{s\.slice\(1\)\}Mse`[\s\S]+return s === 'split' \? 'liveSplitMse' : 'liveMse';/,
+    'Live TV MediaSource state should stay isolated for main, legacy split, and Multiview panes');
+  assert.match(ui, /function startLiveMseSource\(url, opts = \{\}\) \{[\s\S]+const multi = String\(slot\)\.startsWith\('multi'\)[\s\S]+S\.multiView && S\.multiView\.open && S\.multiView\.slots && S\.multiView\.slots\[opts\.multiSlot\] === p[\s\S]+if \(multi\) \{[\s\S]+p\.error = e\.liveProviderReason \|\| e\.message \|\| 'stream failed';[\s\S]+renderMultiView\(\);/,
+    'Multiview stream failures should stay local to the affected pane');
+  assert.match(ui, /function syncMultiViewAudio\(\) \{[\s\S]+const active = multiViewActiveSlot\(\);[\s\S]+v\.muted = !!state\.muted \|\| i !== active;/,
+    'Multiview should route audio only through the highlighted screen');
+  assert.ok(ui.includes('function friendlyLiveProviderReason(reason) {')
+      && ui.includes('Provider limited extra stream - your IPTV account may allow one active channel')
+      && ui.includes('.mvStatus.warn{')
+      && ui.includes("statusEl.classList.toggle('warn', hasError);")
+      && ui.includes('friendlyLiveProviderReason(slot.error)'),
+    'Multiview should explain provider rate limits as likely account stream limits with a readable warning badge');
+  assert.match(ui, /el\.addEventListener\('pointerenter', \(\) => \{[\s\S]+setMultiViewActiveSlot\(slot\(\), \{ focus: false, keepActions: true \}\);[\s\S]+\}\);/,
+    'Multiview hover should move active audio without stealing keyboard focus');
+  assert.match(ui, /const back = el\.querySelector\('\.mvBackBtn'\);[\s\S]+const play = el\.querySelector\('\.mvPlayBtn'\);[\s\S]+const fwd = el\.querySelector\('\.mvFwdBtn'\);[\s\S]+multiViewVodSeek\(slot\(\), -10\)[\s\S]+multiViewVodTogglePlay\(slot\(\)\)[\s\S]+multiViewVodSeek\(slot\(\), 30\)/,
+    'VOD Multiview transport buttons should be clickable as pane actions');
+  assert.match(ui, /function saveMultiViewVodProgress\(i, final = false\) \{[\s\S]+api\('\/api\/watch', \{ method: 'POST', body: payload \}\)\.catch\(\(\) => \{\}\);[\s\S]+function cleanupMultiViewSlot\(i, clearItem = false\) \{[\s\S]+saveMultiViewVodProgress\(i, true\);[\s\S]+cleanupLiveMse\('multi' \+ i\);[\s\S]+v\.removeAttribute\('src'\);[\s\S]+v\.src = '';[\s\S]+if \(clearItem && S\.multiView && S\.multiView\.slots\) S\.multiView\.slots\[i\] = null;/,
+    'Multiview cleanup should save VOD progress, stop each pane, clear the media element, and release the pane item');
+  assert.match(ui, /function multiViewActionButtons\(slot = multiViewActiveSlot\(\)\) \{[\s\S]+const isVod = root\.classList\.contains\('vod'\);[\s\S]+filter\(\(btn\) => isVod \|\| !btn\.classList\.contains\('mvVodOnly'\)\);/,
+    'Multiview action focus should skip hidden VOD transport buttons on Live TV panes');
+  assert.match(ui, /function openMultiViewActions\(slot = multiViewActiveSlot\(\)\) \{[\s\S]+S\.multiViewActionIdx = multiViewSlotIsVod\(pane\) \? 1 : 0;[\s\S]+return setMultiViewActionFocus\(S\.multiViewActionIdx\);/,
+    'VOD Multiview panes should focus Play/Pause first while Live panes focus the first Live action');
+  assert.match(ui, /function multiViewVodTogglePlay\(slotIndex = multiViewActiveSlot\(\)\) \{[\s\S]+if \(v\.paused\) \{[\s\S]+v\.play\(\)\.then\(\(\) => setMultiViewVodStatus\(i, 'Playing'\)\)[\s\S]+\} else \{[\s\S]+v\.pause\(\);[\s\S]+saveMultiViewVodProgress\(i\);/,
+    'VOD Multiview panes should have a local play/pause transport action');
+  assert.match(ui, /function multiViewVodSeek\(slotIndex = multiViewActiveSlot\(\), delta = 0\) \{[\s\S]+slot\.status = delta < 0 \? 'Rewinding' : 'Skipping';[\s\S]+if \(slot\.kind === 'remux' \|\| slot\.kind === 'transcode'\) \{[\s\S]+const media = multiViewVodUrlFromSlot\(slot, target\);[\s\S]+v\.src = media\.url;[\s\S]+\} else \{[\s\S]+v\.currentTime = target;/,
+    'VOD Multiview seek should restart remux/transcode panes at the target timestamp and seek direct panes in-place');
+  assert.match(ui, /function startMultiViewVodSlot\(i, slot, media\) \{[\s\S]+slot\.streamUrl = media\.streamUrl[\s\S]+slot\.remuxUrl = media\.remuxUrl[\s\S]+slot\.transcodeUrl = media\.transcodeUrl[\s\S]+v\.onpause = \(\) => \{[\s\S]+saveMultiViewVodProgress\(i\);/,
+    'VOD Multiview panes should keep source URLs for transport controls and save progress on pause');
+  assert.match(ui, /function setMultiViewCount\(n\) \{[\s\S]+Math\.max\(2, Math\.min\(MULTIVIEW_MAX_SLOTS[\s\S]+for \(let i = count; i < MULTIVIEW_MAX_SLOTS; i\+\+\) cleanupMultiViewSlot\(i, true\);[\s\S]+toast\(`\$\{count\} screens can use \$\{count\} provider streams`\)/,
+    'changing Multiview layouts should cap at four and clean up panes removed from the layout');
+  assert.ok(ui.includes(": (swapSlot >= 0 ? `Pick a screen to swap with screen ${swapSlot + 1}` : 'Multiviewer');")
+      && !ui.includes("${count} screens - one audio source"),
+    'Multiview should use a simple Multiviewer header instead of restating screen count and audio rules');
+  assert.ok(!ui.includes('class="mvEy"')
+      && ui.includes('.mvTop{height:56px;')
+      && ui.includes('.mvName{font:800 15px/1.1 "Albert Sans";'),
+    'Multiview header should stay compact instead of rendering a page-style eyebrow and hero title');
+  assert.match(ui, /function multiViewVisualOrder\(\) \{[\s\S]+S\.multiView\.order = order;[\s\S]+function multiViewVisibleOrder\(\) \{[\s\S]+return visible;/,
+    'Multiview should keep a visual order separate from stream slot ownership');
+  assert.match(ui, /function completeMultiViewSwap\(target = multiViewActiveSlot\(\)\) \{[\s\S]+const order = multiViewVisualOrder\(\);[\s\S]+\[order\[fromPos\], order\[toPos\]\] = \[order\[toPos\], order\[fromPos\]\];[\s\S]+S\.multiView\.order = order;[\s\S]+S\.multiView\.swapSlot = null;[\s\S]+setMultiViewActiveSlot\(from\);/,
+    'Multiview swap should move visual positions without remounting streams while keeping audio on the promoted screen');
+  assert.match(ui, /function beginMultiViewSwap\(slot = multiViewActiveSlot\(\)\) \{[\s\S]+S\.multiView\.swapSlot = i;[\s\S]+S\.multiView\.fullSlot = null;[\s\S]+closeMultiViewPicker\(\);/,
+    'Multiview swap action should enter a pane-pick mode from the selected screen');
+  assert.match(ui, /el\.classList\.toggle\('vod', visible && multiViewSlotIsVod\(slot\)\);[\s\S]+el\.classList\.toggle\('mvMain', visible && count === 3 && pos === 0\);[\s\S]+el\.classList\.toggle\('swapSource'[\s\S]+el\.classList\.toggle\('swapTarget'/,
+    'Multiview render should mark VOD panes, current visual main pane, and swap source/targets');
+  assert.match(ui, /function openMultiViewActions\(slot = multiViewActiveSlot\(\)\) \{[\s\S]+if \(!pane \|\| !pane\.item\) \{[\s\S]+openMultiViewPicker\(i\);[\s\S]+S\.multiView\.actionSlot = i;[\s\S]+return setMultiViewActionFocus\(S\.multiViewActionIdx\);/,
+    'OK on a filled Multiview pane should open pane actions while empty panes still open the picker');
+  assert.match(ui, /function toggleMultiViewFullscreen\(slot = multiViewActiveSlot\(\)\) \{[\s\S]+if \(multiViewFullscreenSlot\(\) === i\) return exitMultiViewFullscreen\(\);[\s\S]+S\.multiView\.fullSlot = i;[\s\S]+setMultiViewActiveSlot\(i\);/,
+    'Multiview fullscreen should be an internal zoomed pane that can toggle back to the grid');
+  assert.match(ui, /function changeMultiViewPane\(slot = multiViewActiveSlot\(\)\) \{[\s\S]+S\.multiView\.fullSlot = null;[\s\S]+S\.multiView\.actionSlot = null;[\s\S]+openMultiViewPicker\(i\);/,
+    'Multiview change action should return to the grid and replace the selected pane');
+  assert.match(ui, /function closeMultiViewPane\(slot = multiViewActiveSlot\(\)\) \{[\s\S]+cleanupMultiViewSlot\(i, true\);[\s\S]+if \(S\.multiView\.fullSlot === i\) S\.multiView\.fullSlot = null;[\s\S]+setMultiViewActiveSlot\(Math\.min\(i, multiViewCount\(\) - 1\)\);/,
+    'Multiview close action should release only that pane and leave the surface open');
+  assert.match(ui, /function multiViewCategoryGroups\(\) \{[\s\S]+const cwName = 'Continue Watching';[\s\S]+const cwItems = buildCwItems\(cachedWatchRowsForHome\(\)\)\.slice\(0, 80\);[\s\S]+const names = \[\.\.\.\(cwItems\.length \? \[cwName\] : \[\]\)/,
+    'Multiview picker should include Continue Watching as a companion source');
+  assert.match(ui, /async function playMultiViewVodItem\(it, slotIndex = multiViewActiveSlot\(\)\) \{[\s\S]+if \(multiViewVodCount\(i\) >= 1\) \{[\s\S]+One movie\/show companion at a time for now[\s\S]+api\('\/api\/play', \{ method: 'POST', body: playbackRequestBody\(item, null, qRank\) \}\)[\s\S]+startMultiViewVodSlot\(i, slot, media\);/,
+    'Multiview should play one Continue Watching movie/show companion through the normal source-selection path');
+  assert.match(ui, /function playMultiViewExistingVodFromPlayer\(i = 0\) \{[\s\S]+const item = \{ \.\.\.p\.item, resume: currentTime\(\) \};[\s\S]+const url = currentPlaybackUrl\(p, at\);[\s\S]+stopActivePlaybackForReplacement\(\{ preserveGuide: true \}\);[\s\S]+return startMultiViewVodSlot\(i, slot, media\);/,
+    'opening Multiview from an active movie or episode should carry that playback into the first pane');
+  assert.match(ui, /async function openMultiViewFromGuide\(seed = null\) \{[\s\S]+if \(isTriboonAndroidShell\(\)\) \{[\s\S]+Android Multiview needs native ExoPlayer support[\s\S]+const playingVod = S\.playing && S\.playing\.item && S\.playing\.item\.type !== 'live';[\s\S]+if \(playingVod\) playMultiViewExistingVodFromPlayer\(0\);[\s\S]+else if \(current\) await playMultiViewChannel\(current, 0\);[\s\S]+openMultiViewPicker\(1\);/,
+    'Multiview should launch from guide contexts, preserve active VOD when present, and fail closed on Android until native ExoPlayer support exists');
+  assert.match(ui, /function handleMultiViewKey\(k, e\) \{[\s\S]+S\.multiView\.actionSlot !== null[\s\S]+if \(k === 'ArrowLeft'\) return setMultiViewActionFocus\(i - 1\);[\s\S]+if \(k === 'ArrowRight'\) return setMultiViewActionFocus\(i \+ 1\);[\s\S]+buttons\[i\] && buttons\[i\]\.click\(\);/,
+    'D-pad should let the pane action row own left/right and OK');
+  assert.match(ui, /function handleMultiViewKey\(k, e\) \{[\s\S]+S\.multiView\.swapSlot !== null[\s\S]+moveMultiViewFocus\(-1, 0\)[\s\S]+moveMultiViewFocus\(1, 0\)[\s\S]+completeMultiViewSwap\(multiViewActiveSlot\(\)\);/,
+    'D-pad should let swap mode pick the target pane with arrows and OK');
+  assert.match(ui, /function handleMultiViewKey\(k, e\) \{[\s\S]+if \(k === 'Escape' \|\| k === 'Backspace'\) \{[\s\S]+if \(exitMultiViewFullscreen\(\)\) return true;[\s\S]+closeMultiView\(\);/,
+    'Back should return from a zoomed Multiview pane before closing Multiview');
+  assert.match(ui, /function handleMultiViewKey\(k, e\) \{[\s\S]+S\.zone === 'multiTop'[\s\S]+setMultiViewTopFocus\(i - 1\)[\s\S]+setMultiViewTopFocus\(i \+ 1\)[\s\S]+if \(k === 'ArrowUp'\) \{[\s\S]+multiViewSlotOnTopRow\(multiViewActiveSlot\(\)\)[\s\S]+if \(\['2', '3', '4'\]\.includes\(k\)\) \{ setMultiViewCount\(\+k\);[\s\S]+if \(k === 'Enter' && !e\.repeat\) \{[\s\S]+openMultiViewActions\(multiViewActiveSlot\(\)\)/,
+    'D-pad should move panes, reach layout controls, switch layouts, and open pane actions with OK');
+  assert.match(ui, /function ctlButtons\(\) \{[\s\S]+'ccBtn', 'audBtn', 'srndBtn', 'qualBtn'/,
+    'movie and show controls should remain in the shared VOD control order');
   assert.match(android, /new DefaultHttpDataSource\.Factory\(\)[\s\S]+setAllowCrossProtocolRedirects\(false\)[\s\S]+setUserAgent\("TriboonTV\/" \+ BuildConfig\.VERSION_NAME\)/,
     'native ExoPlayer should block cross-protocol provider redirects after URL validation');
   assert.match(android, /private String nativePlaybackErrorMessage\(PlaybackException error\) \{[\s\S]+HttpDataSource\.InvalidResponseCodeException[\s\S]+nativeHeader\(http\.headerFields, "x-triboon-iptv-error"\)[\s\S]+return reason \+ " \(HTTP " \+ http\.responseCode \+ "\)";/,

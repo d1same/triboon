@@ -210,6 +210,7 @@ test('activity: users heartbeat playback and only admins see now-watching rows',
     mode: 'ExoPlayer',
     streamKind: 'transcode',
     streamLabel: 'Transcoding',
+    clientVersion: 'Android TV 1.7.26 (126)',
     position: 600,
     duration: 6000,
     size: 42_000_000_000,
@@ -226,12 +227,59 @@ test('activity: users heartbeat playback and only admins see now-watching rows',
   assert.strictEqual(row.title, 'The Test Movie');
   assert.strictEqual(row.streamKind, 'transcode');
   assert.strictEqual(row.streamLabel, 'Transcoding');
+  assert.strictEqual(row.clientVersion, 'Android TV 1.7.26 (126)');
   assert.strictEqual(row.percent, 10);
+  assert.ok(visible.json.history.some((s) => s.title === 'The Test Movie' && s.userName === 'fam' && s.clientVersion === 'Android TV 1.7.26 (126)'),
+    'activity history keeps a compact recent watch row');
 
   const stopped = await httpJson(srv.port, 'POST', '/api/activity', { sessionId, state: 'stopped' }, user);
   assert.strictEqual(stopped.status, 200);
   const after = await httpJson(srv.port, 'GET', '/api/activity', null, admin);
   assert.ok(!after.json.sessions.some((s) => s.sessionId === sessionId), 'stop heartbeat removes the row');
+
+  const liveId = 'test-live-activity';
+  const live = await httpJson(srv.port, 'POST', '/api/activity', {
+    sessionId: liveId,
+    state: 'watching',
+    title: 'Secret Channel Name',
+    type: 'live',
+    player: 'exo',
+    mode: 'ExoPlayer',
+    streamKind: 'live',
+    streamLabel: 'Live',
+    clientVersion: 'Android TV 1.7.26 (126)',
+  }, user);
+  assert.strictEqual(live.status, 200);
+  const liveVisible = await httpJson(srv.port, 'GET', '/api/activity', null, admin);
+  const liveRow = liveVisible.json.sessions.find((s) => s.sessionId === liveId);
+  assert.ok(liveRow, 'admin sees that Live TV is active');
+  assert.strictEqual(liveRow.title, 'Live TV');
+  assert.strictEqual(liveRow.subline, 'Live stream');
+  assert.ok(!liveVisible.json.history.some((s) => s.type === 'live' || s.streamKind === 'live'),
+    'Live TV is current-activity only and is not retained in history');
+  assert.ok(!JSON.stringify(liveVisible.json.history).includes('Secret Channel Name'),
+    'retained activity does not store Live TV channel names');
+
+  const now = Date.now();
+  srv.store.write('activityHistory', { rows: [
+    { id: 'old', userName: 'old', title: 'Expired', type: 'movie', updatedAt: now - 4 * 24 * 60 * 60 * 1000 },
+    { id: 'live-old', userName: 'fam', title: 'Live TV', type: 'live', streamKind: 'live', updatedAt: now },
+    ...Array.from({ length: 12 }, (_, i) => ({
+      id: `movie-${i}`,
+      userName: 'fam',
+      title: `Movie ${i}`,
+      type: 'movie',
+      updatedAt: now - i,
+    })),
+  ] });
+  const pruned = await httpJson(srv.port, 'GET', '/api/activity', null, admin);
+  assert.strictEqual(pruned.json.retentionDays, 3);
+  assert.ok(pruned.json.history.length <= 10, 'activity history is capped to the previous 10 VOD rows');
+  assert.ok(!pruned.json.history.some((s) => s.title === 'Expired'), 'activity history is pruned to the last 3 days');
+  assert.ok(!pruned.json.history.some((s) => s.type === 'live'), 'activity history prunes retained IPTV/Live TV rows');
+  assert.ok(pruned.json.history.some((s) => s.title === 'Movie 0'), 'newest VOD rows remain in history');
+  assert.ok(!pruned.json.history.some((s) => s.title === 'Movie 11'), 'older rows beyond the previous 10 are omitted');
+  await httpJson(srv.port, 'POST', '/api/activity', { sessionId: liveId, state: 'stopped' }, user);
 });
 
 test('watchlist: per-user toggle add/remove, isolation', async () => {
@@ -1507,9 +1555,9 @@ test('subtitles: Wyzie search→file→VTT served per mount (and 503 without a k
   assert.strictEqual(no.status, 503);
 
   process.env.WYZIE_BASE = `http://127.0.0.1:${osPort}`;
-  await httpJson(srv.port, 'POST', '/api/settings', { openSubsKey: 'test-key' }, admin);
+  process.env.TRIBOON_WYZIE_KEY = 'test-key';
   assert.strictEqual((await httpJson(srv.port, 'GET', '/api/server')).json.opensubs, true,
-    'Wyzie subtitles are enabled by the key alone');
+    'Wyzie subtitles are enabled by the server-side key fallback');
   // No TMDB id (non-catalog play) → clear 502, not a hang.
   const noId = await httpRaw(srv.port, `/api/ossubs/${play.id}?lang=en&t=${play.streamToken}`);
   assert.strictEqual(noId.status, 502, 'no TMDB id fails with guidance');
@@ -1565,6 +1613,7 @@ test('subtitles: Wyzie search→file→VTT served per mount (and 503 without a k
 
   } finally {
     delete process.env.WYZIE_BASE;
+    delete process.env.TRIBOON_WYZIE_KEY;
     await httpJson(srv.port, 'POST', '/api/settings', { openSubsKey: null }, admin).catch(() => {});
     await new Promise((r) => osMock.close(r));
   }
@@ -1999,6 +2048,23 @@ test('music: optional ytmusicapi catalog search is fast-path normalized and boun
   }
 });
 
+test('music: search cleanup dedupes flat yt-dlp rows and pushes obvious non-songs down', () => {
+  const ytmusic = require('../server/ytmusic');
+  const rows = ytmusic._cleanSearchRows([
+    { id: 'AAAAAAAAAAA', title: 'One More Time (Radio Edit)', artist: '', thumb: 'a.jpg' },
+    { id: 'BBBBBBBBBBB', title: 'Harder, Better, Faster, Stronger', artist: '', thumb: 'b.jpg' },
+    { id: 'CCCCCCCCCCC', title: 'Technologic', artist: '', thumb: 'c.jpg' },
+    { id: 'DDDDDDDDDDD', title: 'Technologic (Official Audio)', artist: '', thumb: 'd.jpg' },
+    { id: 'EEEEEEEEEEE', title: 'Daft Punk - Veridis Quo', artist: '', thumb: 'e.jpg' },
+    { id: 'FFFFFFFFFFF', title: 'How I Played on Thriller and Daft Punk Biggest Hit', artist: '', thumb: 'f.jpg' },
+  ], 'Daft Punk', 10);
+  assert.deepStrictEqual(rows.map((r) => r.id), ['AAAAAAAAAAA', 'BBBBBBBBBBB', 'CCCCCCCCCCC', 'EEEEEEEEEEE']);
+  assert.strictEqual(rows.find((r) => r.id === 'EEEEEEEEEEE').title, 'Veridis Quo');
+  assert.strictEqual(rows.find((r) => r.id === 'EEEEEEEEEEE').artist, 'Daft Punk');
+  assert.strictEqual(rows[0].artist, 'Daft Punk', 'artist-looking searches fill missing flat yt-dlp artist metadata');
+  assert.ok(!rows.some((r) => r.id === 'FFFFFFFFFFF'), 'obvious non-song rows are dropped once enough song-like results exist');
+});
+
 test('music: optional ytmusicapi watch queue returns tokenized radio tracks', async () => {
   const ytmusic = require('../server/ytmusic');
   const oldDetect = ytmusic.detectYtdlp;
@@ -2319,6 +2385,8 @@ test('music: home shelves and charts are cached and tokenized', async () => {
 
     const home = await httpJson(srv.port, 'GET', '/api/music/home', null, admin);
     assert.strictEqual(home.status, 200, home.raw);
+    assert.strictEqual(home.json.version, 2);
+    assert.strictEqual(home.json.mode, home.json.catalog ? 'catalog' : 'basic');
     assert.strictEqual(home.json.shelves[0].id, 'personal', 'personal playlists are the first Music Home shelf');
     assert.ok(home.json.shelves.find((s) => s.id === 'weekly-playlists' && s.kind === 'feeds'),
       'Music Home exposes weekly playlist-style discovery');
@@ -2451,9 +2519,9 @@ test('iptv: live-remux preserves HTTPS hostnames for provider TLS SNI', () => {
 test('streaming: HTTP range reads use startup/seek lanes and keep completed range read-ahead warm', () => {
   const serverCode = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
   const vfsCode = fs.readFileSync(path.join(__dirname, '..', 'server', 'vfs.js'), 'utf8');
-  assert.match(serverCode, /vf\._touched = Date\.now\(\);[\s\S]+pipeline\.rebalancePlaybackWindows\(\);[\s\S]+ctx\.req\.setTimeout\(120000\);[\s\S]+ctx\.res\.setTimeout\(120000\);[\s\S]+const requestedPriority = String\(ctx\.url\.searchParams\.get\('priority'\)[\s\S]+const explicitPriority = requestedPriority === 'read-ahead' \? 'readAhead' : requestedPriority;[\s\S]+const readPriority = \['background', 'readAhead', 'health'\]\.includes\(explicitPriority\)[\s\S]+: \(start === 0 \? 'startup' : 'seek'\);[\s\S]+ctx\.req\.once\('close', stopReqRead\);[\s\S]+ctx\.res\.once\('close', stopResRead\);[\s\S]+vf\.read\(start, end, \{ priority: readPriority, signal: readSignal \}\)/,
-    'the stream route should mark normal initial reads as startup, non-zero ranges as seek, and allow explicit background readers for subtitle extraction');
-  assert.match(serverCode, /let completedRead = false;[\s\S]+const abortRead = \(\) => \{[\s\S]+readController\.abort\(\);[\s\S]+vf\.cancelReadAhead\(\);[\s\S]+const stopReqRead = \(\) => \{[\s\S]+if \(!ctx\.req\.complete\) abortRead\(\);[\s\S]+const stopResRead = \(\) => \{[\s\S]+if \(!completedRead && !ctx\.res\.writableEnded\) abortRead\(\);[\s\S]+completedRead = !readSignal\.aborted && !ctx\.res\.destroyed/,
+  assert.match(serverCode, /vf\._touched = Date\.now\(\);[\s\S]+pipeline\.rebalancePlaybackWindows\(\);[\s\S]+ctx\.req\.setTimeout\(120000\);[\s\S]+ctx\.res\.setTimeout\(120000\);[\s\S]+const requestedPriority = String\(ctx\.url\.searchParams\.get\('priority'\)[\s\S]+const explicitPriority = requestedPriority === 'read-ahead' \? 'readAhead' : requestedPriority;[\s\S]+const highWaterEnd = Number\(vf\._streamHighWaterEnd \|\| 0\);[\s\S]+const sequentialRange = start > 0[\s\S]+highWaterEnd > 0[\s\S]+start <= highWaterEnd \+ sequentialSlack;[\s\S]+const readPriority = \['background', 'readAhead', 'health'\]\.includes\(explicitPriority\)[\s\S]+: \(start === 0 \? 'startup' : \(sequentialRange \? 'playback' : 'seek'\)\);[\s\S]+ctx\.req\.once\('close', stopReqRead\);[\s\S]+ctx\.res\.once\('close', stopResRead\);[\s\S]+vf\.read\(start, end, \{ priority: readPriority, signal: readSignal \}\)/,
+    'the stream route should mark initial reads as startup, real jumps as seek, normal sequential ranges as playback, and allow explicit background readers for subtitle extraction');
+  assert.match(serverCode, /let completedRead = false;[\s\S]+const abortRead = \(\) => \{[\s\S]+readController\.abort\(\);[\s\S]+vf\.cancelReadAhead\(\);[\s\S]+const stopReqRead = \(\) => \{[\s\S]+if \(!ctx\.req\.complete\) abortRead\(\);[\s\S]+const stopResRead = \(\) => \{[\s\S]+if \(!completedRead && !ctx\.res\.writableEnded\) abortRead\(\);[\s\S]+completedRead = !readSignal\.aborted && !ctx\.res\.destroyed;[\s\S]+vf\._streamHighWaterEnd = Math\.max\(Number\(vf\._streamHighWaterEnd \|\| 0\), end\)/,
     'client disconnects should stop stale read-ahead, but completed ExoPlayer ranges should keep their warm buffer');
   assert.match(serverCode, /if \(readSignal\.aborted\) \{[\s\S]+ctx\.res\.destroy\(\);[\s\S]+return;[\s\S]+\}/,
     'aborted VOD reads should not end a short body under the original content-length');

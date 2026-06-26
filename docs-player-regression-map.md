@@ -79,6 +79,71 @@ IPTV fix checklist:
 
 ## Contracts
 
+### Live TV Player Controls And Multiview
+
+- Web Live TV has its own player control personality. It hides VOD-only
+  subtitle, audio-language, surround, and quality controls, then shows channel
+  favorite in the player. Movie and episode playback must keep the full VOD
+  control row unchanged.
+- Multiview is launched from Live TV guide surfaces, not from the movie/show
+  player chrome. The Live TV grid and the in-player Live TV guide expose a
+  Multiview action that opens a separate viewing surface seeded with the current
+  channel and an immediate picker for the next pane. Those launchers should stay
+  icon-led and styled like the rest of the app chrome, while Multiview close
+  controls use recognizable icon buttons instead of text-only pills. On Android
+  TV, unsupported browser Multiview launchers stay hidden; Live TV D-pad focus
+  lands on supported toolbar buttons before the text filter so the remote
+  cannot be trapped in the search input.
+- Browser Multiview uses the existing server fMP4 remux path with isolated
+  MediaSource state per pane. It supports two, three, or four screens:
+  two screens are side-by-side, three screens use one featured pane plus two
+  smaller panes, and four screens use a 2x2 grid.
+- Audio remains single-focus. D-pad left/right/up/down moves the highlighted
+  pane according to the active layout, hover/focus also moves the active audio
+  pane, and only that pane is audible. OK on an empty pane opens the picker. OK
+  on a filled pane opens pane actions: Live TV panes show fullscreen/return,
+  swap screen, change channel/title, and close screen; movie/show companion
+  panes add Back 10s, Play/Pause, and Forward 30s before those actions. The
+  change action opens the picker for that pane, so channel replacement is
+  remote-first instead of add-only. The swap action enters a target-pick mode;
+  choosing another visible screen swaps visual positions only, so a 3-screen
+  secondary pane can become the featured pane without remounting either stream.
+- Browser Multiview fullscreen is an internal zoomed-pane state, not the shared
+  movie/show player or native fullscreen. The selected pane fills the Multiview
+  surface without remounting streams; Back/Escape or the fullscreen action
+  returns to the 2/3/4 grid.
+- Multiview is capped at four screens. Each active pane can consume a provider
+  stream, so higher layouts must be treated as a deliberate extra-stream choice.
+  If one pane fails because a provider, source, or browser refuses the stream,
+  that pane shows the failure while the other panes keep playing. Provider
+  `429`/rate-limit failures must be explained as likely IPTV account stream
+  limits, not as Triboon blocking the extra pane.
+- The picker includes Continue Watching as a companion source. Browser
+  Multiview may carry the currently playing movie/episode into the first pane or
+  mount one Continue Watching movie/show into another pane through the normal
+  source-selection path. Limit VOD companion playback to one pane until the
+  capacity model accounts for extra NZB mounts, health gates, read-ahead,
+  remux, and transcode work. VOD pane transport controls save progress like
+  cleanup does; direct panes seek inside the video element, while remux and
+  transcode panes rebuild that pane's playback URL at the requested timestamp
+  instead of trying to seek inside the fMP4 segment.
+- Favorites still follow the source-scoped P9 model: server/account channels use
+  `/api/iptv/fav`, while Android device-local personal channels use local
+  encrypted-device identity plus local favorites.
+- Android native Live TV must not inherit the browser Multiview UI. Until native
+  Media3/ExoPlayer owns a tested multi-surface design, Android shells fail
+  closed for Multiview and keep the existing ExoPlayer single-surface plus
+  guide/PiP contract.
+
+#### Companion Screen Direction
+
+- The long-term model can become a fuller universal companion screen after
+  capacity accounting exists for multiple non-live panes. Live TV panes are
+  bounded by provider streams and remux work; each VOD pane can create another
+  NZB mount, health gate, read-ahead window, remux, or transcode.
+- Android support should arrive as native Media3 surfaces with memory and
+  decoder tests, not as layered WebView video.
+
 | ID | Contract | Code paths | Verification |
 | --- | --- | --- | --- |
 | P1 | VOD D-pad uses full player controls: Up arms seek-bar mode, Down returns to buttons, Left/Right move between visible buttons when the button row is active, and Left/Right scrub only from the seek bar/seek mode or the hidden video surface. Mobile web seeking must also be first-class: the seek bar has a 44px touch target, supports tap-and-drag pointer preview, and commits one quiet seek on release. The info/stats control is the last player button in both web and native order so CC/audio/quality/fullscreen stay grouped before diagnostics. When native ExoPlayer chrome auto-hides, logical focus parks back on the seek bar so the next hidden Down press reveals the button row with Play/Pause focused instead of opening episode rows or inheriting stale focus. Back follows TV-player convention: sheets close first, episode strip closes next, visible native controls hide next, and only a later Back leaves playback for the movie/show details page. Native remux/transcode seek must request a server-side remount even when ExoPlayer reports the current segment as non-seekable, and the native seek bar must stay focusable whenever `nativeCanSeekVod()` is true, including after auto-playing the next episode. User seek/skip is visually quiet: the full preparing loader is startup/failover-only, web remux/transcode source swaps hold the last rendered frame, and Android native remux/transcode seeks reuse the active ExoPlayer surface instead of releasing/recreating it. Live TV stays separate: Up/Down changes channels, and the visible chrome is for pause/guide/settings controls, not VOD seeking. Web and native players must expose a D-pad reachable stats button that shows basic support data without blocking playback: player path, quality, file/source label, movie/episode file size, position/buffer, video/audio format, dropped frames when available, and bandwidth/bitrate estimates in Mbps, not kbps. | `android/app/src/main/java/app/triboon/tv/MainActivity.java` native chrome, `dispatchKeyEvent`, `onKeyDown`, `onKeyUp`, `nativeHideChrome`, `dismissNativeChromeForBack`, `parkNativeHiddenFocusOnSeek`, `moveNativeVerticalFocus`, `moveNativeControlFocus`, `handleNativeSeekBarKey`, `nativeCanSeekVod`, `nativeSeekBy`, `requestNativeVideoSeek`, `zapNativeLiveChannel`, `showNativeStatsSheet`, `nativeStatsJson`; `web/index.html` `seekTo`, `beginSeekPointer`, `moveSeekPointer`, `endSeekPointer`, `showSeekHoldFrame`, `hideSeekHoldFrame`, `startSource`, `__tvNativeVideoSeek`, `__tvNativeVideoStats`, `collectPlayerStats`, `togglePlayerStats`, `tryNativeVideoPlayer`; `bench/android-tv-smoke.ps1` | `test/phase4.test.js`, Android D-pad smoke |

@@ -194,6 +194,83 @@ function cleanTitle(t) {
   return String(t || '').replace(/\s*[([](official\s*)?(music\s*)?(video|audio|lyrics?|visualizer|hd|4k)[)\]].*$/i, '')
     .replace(/\s*\|\s*official.*$/i, '').trim();
 }
+function normSearchText(s) {
+  return String(s || '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').trim();
+}
+function titleCaseQuery(s) {
+  return String(s || '').trim().replace(/\s+/g, ' ').split(' ')
+    .map((p) => p ? p[0].toUpperCase() + p.slice(1) : p).join(' ');
+}
+function looksLikeArtistSearchQuery(query) {
+  const q = normSearchText(query);
+  const generic = /\b(music|song|songs|album|albums|playlist|playlists|hits|top|new|release|releases|chart|charts|viral|fresh|chill|radio|mix|live|cover|karaoke|instrumental|genre|genres|workout)\b/;
+  const words = q.split(/\s+/).filter(Boolean);
+  return q.length >= 5 && words.length >= 2 && words.length <= 4 && !generic.test(q);
+}
+function inferArtistFromTitle(title) {
+  const raw = cleanTitle(title);
+  const m = /^(.{2,80}?)\s+[-–—]\s+(.{2,180})$/.exec(raw);
+  if (!m) return null;
+  const artist = m[1].replace(/\s*\b(topic|official)\b\s*$/i, '').trim();
+  const track = cleanTitle(m[2]);
+  if (!artist || !track) return null;
+  if (artist.includes(':')) return null;
+  if (/\b(official|audio|video|lyrics?|remaster|album|playlist|mix)\b/i.test(artist)) return null;
+  return { artist, title: track };
+}
+function noisySearchPenalty(row, query) {
+  const q = normSearchText(query);
+  const title = normSearchText(row && row.title);
+  const haystack = `${title} ${normSearchText(row && row.artist)}`.trim();
+  if (!haystack) return 200;
+  let penalty = 0;
+  const wants = (word) => new RegExp(`\\b${word}\\b`, 'i').test(q);
+  if (!wants('cover') && /\b(cover|karaoke|instrumental)\b/.test(haystack)) penalty += 28;
+  if (!wants('live') && /\b(live|concert|performance)\b/.test(haystack)) penalty += 10;
+  if (/\b(reaction|review|interview|tutorial|how to|explained|podcast|game|challenge|shorts?)\b/.test(haystack)) penalty += 55;
+  if (/\b(connect the songs|i played on|what makes this song|does it hold up|behind the song)\b/.test(haystack)) penalty += 65;
+  return penalty;
+}
+function searchDedupeKey(row) {
+  const title = normSearchText(row && row.title)
+    .replace(/\b(radio edit|single version|album version|remaster(ed)?|official|audio|video|lyrics?)\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const artist = normSearchText(row && row.artist);
+  return `${title}|${artist}`;
+}
+function cleanSearchRows(rows, query, limit) {
+  const prepared = (Array.isArray(rows) ? rows : [])
+    .map((row, idx) => {
+      if (!row || !/^[\w-]{11}$/.test(String(row.id || ''))) return null;
+      const split = row.artist ? null : inferArtistFromTitle(row.title);
+      const title = cleanTitle(split ? split.title : row.title) || row.title || 'Unknown';
+      const inferredQueryArtist = looksLikeArtistSearchQuery(query) ? titleCaseQuery(query) : '';
+      const artist = String(row.artist || (split && split.artist) || inferredQueryArtist || '').trim();
+      return {
+        ...row,
+        title,
+        artist,
+        _idx: idx,
+        _penalty: noisySearchPenalty({ ...row, title, artist }, query),
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a._penalty - b._penalty || a._idx - b._idx);
+  const lowPenalty = prepared.filter((row) => row._penalty < 55);
+  const candidates = lowPenalty.length >= Math.min(5, limit) ? lowPenalty : prepared;
+  const seen = new Set();
+  const out = [];
+  for (const row of candidates) {
+    const key = searchDedupeKey(row);
+    if (key && seen.has(key)) continue;
+    seen.add(key);
+    const { _idx, _penalty, ...clean } = row;
+    out.push(clean);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
 
 function parseJsonObject(out, message) {
   let data;
@@ -451,18 +528,19 @@ async function search(query, { limit = 20, cookiesPath, priority = 0 } = {}) {
   if (!cookiesPath && detectYtMusicApi()) {
     try {
       const fast = await searchWithYtMusicApi(q, n, { priority });
-      if (fast.length) return fast;
+      if (fast.length) return cleanSearchRows(fast, q, n);
     } catch { /* fall back to yt-dlp */ }
   }
   const out = await runJson(['--flat-playlist', '--playlist-items', `1:${n}`, '--dump-single-json', searchUrl(q)], { cookiesPath, priority });
   let data; try { data = JSON.parse(out); } catch { return []; }
-  return (data.entries || [])
+  const rows = (data.entries || [])
     .filter((e) => e && e.id && e.id.length === 11 && /^https:\/\/music\.youtube\.com\/watch\?v=/.test(String(e.url || '')))
     .map((e) => ({
       id: e.id, title: cleanTitle(e.title) || e.title || 'Unknown',
       artist: e.uploader || e.channel || e.uploader_id || '',
       duration: num(e.duration), thumb: thumbFor(e.id),
     }));
+  return cleanSearchRows(rows, q, n);
 }
 
 // Resolve the best audio stream URL for a track. Cached: the googlevideo URL is valid for a
@@ -594,6 +672,7 @@ module.exports = {
   _peekCached, _queueStats, _ytmApiQueueStats,
   _withYtdlpSlot: withYtdlpSlot,
   _friendlyYtdlpError: friendlyYtdlpError,
+  _cleanSearchRows: cleanSearchRows,
   _ytArgs: ytArgs,
   _optsNoPlaylist: optsNoPlaylist,
   _searchUrl: searchUrl,

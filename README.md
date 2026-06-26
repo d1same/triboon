@@ -135,6 +135,8 @@ Recommended environment:
 - `PUID` and `PGID` for your Unraid user/group
 - `UMASK`
 - `TRIBOON_SECRET` so sessions and encrypted settings survive rebuilds
+- `TRIBOON_WYZIE_KEY` optionally supplies the server-side Wyzie Subs key without
+  storing it in the dashboard settings
 
 The Unraid template lives in `unraid/triboon.xml`.
 
@@ -167,11 +169,15 @@ Run the app locally:
 npm start
 ```
 
-Run the verification suite:
+Run the full pre-update gate before pushing or calling a fix done:
 
 ```bash
-npm test
+npm.cmd run verify:full
 ```
+
+Use `npm test` for the Node test suite by itself. `VERIFY.md` is the single
+source of truth for the full gate, including IPTV, fast VOD startup, CC, Web
+Player, and Android ExoPlayer smokes.
 
 Build the Android debug APK:
 
@@ -205,6 +211,7 @@ If a current external Gradle is not installed, use the pinned wrapper from the
 - `docs-architecture.md` - deeper architecture and data-flow notes.
 - `docs-player-regression-map.md` - player behavior contracts and regression
   checklist.
+- `VERIFY.md` - required pre-update verification gate.
 - `docs-release-audit.md` - release verification history.
 
 ## Legal

@@ -15,6 +15,10 @@ Always follow the owner's method:
 - Interview + capture when requirements are ambiguous. Ask short rounds of
   questions, keep a running brief, and play it back before building.
 - Verify before trusting. Never call work done without running it.
+- Before pushing or saying a fix is done, complete
+  `VERIFY.md` and run `npm.cmd run verify:full`; IPTV, fast VOD startup, CC,
+  Web Player, and Android ExoPlayer are hard gates when playback can be
+  affected.
 - Run `npm.cmd test` after engine or broad behavior changes on Windows.
 - Add tests for new behavior before marking complete.
 - For UI work, start `node server/index.js`, open `http://localhost:7777`, and

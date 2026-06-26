@@ -24,4 +24,5 @@
   <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="File group for /data (100 = users)." Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
   <Config Name="UMASK" Target="UMASK" Default="022" Mode="" Description="File-creation mask." Type="Variable" Display="advanced" Required="false" Mask="false">022</Config>
   <Config Name="TRIBOON_SECRET" Target="TRIBOON_SECRET" Default="" Mode="" Description="Optional: pins the token-signing / settings-encryption key across container rebuilds (64 hex chars, e.g. from `openssl rand -hex 32`). Leave empty to auto-generate into /data on first run." Type="Variable" Display="advanced" Required="false" Mask="true"/>
+  <Config Name="TRIBOON_WYZIE_KEY" Target="TRIBOON_WYZIE_KEY" Default="" Mode="" Description="Optional: server-side Wyzie Subs API key. The dashboard key still wins when set; this is useful for secret injection in container environments." Type="Variable" Display="advanced" Required="false" Mask="true"/>
 </Container>

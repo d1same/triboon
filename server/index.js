@@ -38,10 +38,20 @@ const verdicts = new VerdictCache(store);
 const mounts = new Map(); // id -> virtual file
 const scanStates = new Map(); // library id -> { running, startedAt, progress, ...summary }
 const thumbJobs = new Map(); // thumb path -> in-flight generation promise (no double-spawn)
-const activitySessions = new Map(); // heartbeat-only "now watching"; never persisted
+const activitySessions = new Map(); // heartbeat-only "now watching"; short TTL, not the retained history
 const DATA_DIR = process.env.TRIBOON_DATA || path.join(__dirname, '..', 'data');
 const libraryDb = new LibraryDb(DATA_DIR);
 const MAX_PROVIDER_CONNECTIONS = 150;
+const ACTIVITY_TTL_MS = 45000;
+const ACTIVITY_HISTORY_DAYS = 3;
+const ACTIVITY_HISTORY_RETENTION_MS = ACTIVITY_HISTORY_DAYS * 24 * 60 * 60 * 1000;
+const ACTIVITY_HISTORY_MAX_ROWS = 10;
+
+function effectiveOpenSubsKey(s = settings.get()) {
+  const configured = String((s && s.openSubsKey) || '').trim();
+  if (configured) return configured;
+  return String(process.env.TRIBOON_WYZIE_KEY || '').trim() || null;
+}
 
 function clampInt(value, fallback, min, max) {
   const n = parseInt(value, 10);
@@ -2838,11 +2848,109 @@ function activityUserName(uid) {
 function scrubActivityText(v, max = 160) {
   return String(v || '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, max);
 }
+function activityLooksLive(row = {}) {
+  const text = `${row.type || ''} ${row.streamKind || ''} ${row.streamLabel || ''} ${row.mode || ''}`.toLowerCase();
+  return text.includes('live') || String(row.key || '').startsWith('live:');
+}
+function activityHistoryEligible(row = {}) {
+  if (activityLooksLive(row)) return false;
+  const type = String(row.type || '').toLowerCase();
+  if (['movie', 'tv', 'episode', 'local', 'local-tv', 'local-movie'].includes(type)) return true;
+  const key = String(row.key || '').toLowerCase();
+  return key.startsWith('tmdb:movie:') || key.startsWith('tmdb:tv:');
+}
+function activityClientVersion(b = {}, req = {}) {
+  const direct = scrubActivityText(b.clientVersion || b.appVersion || b.version || '', 80);
+  if (direct) return direct;
+  const ua = scrubActivityText(req.headers && req.headers['user-agent'], 140);
+  const app = /\b(TriboonTV|TriboonAndroid)\/([^\s]+)/i.exec(ua);
+  if (app) return `${app[1] === 'TriboonTV' ? 'Android TV' : 'Android app'} ${app[2]}`;
+  return `Web ${APP_VERSION}`;
+}
+function normalizeActivityRow(ctx, b = {}, id, existing = {}) {
+  const duration = Math.max(0, Number(b.duration || 0) || 0);
+  const position = Math.max(0, Number(b.position || 0) || 0);
+  const percent = duration ? Math.max(0, Math.min(100, Math.round((position / duration) * 100))) : 0;
+  const live = activityLooksLive({ ...b, key: b.key || existing.key });
+  const title = live ? 'Live TV' : scrubActivityText(b.title || (b.meta && b.meta.title) || 'Playing', 180);
+  return {
+    id,
+    sessionId: id,
+    userId: ctx.user.id,
+    userName: activityUserName(ctx.user.id),
+    profile: scrubActivityText(b.profile || existing.profile || '', 40),
+    title,
+    subline: live ? 'Live stream' : scrubActivityText(b.subline || '', 120),
+    key: live ? 'live' : scrubActivityText(b.key || '', 140),
+    type: live ? 'live' : scrubActivityText(b.type || '', 30),
+    player: scrubActivityText(b.player || '', 30),
+    mode: scrubActivityText(b.mode || '', 30),
+    streamKind: live ? 'live' : scrubActivityText(b.streamKind || '', 30),
+    streamLabel: live ? 'Live' : scrubActivityText(b.streamLabel || '', 60),
+    clientVersion: activityClientVersion(b, ctx.req),
+    device: scrubActivityText(b.device || ctx.req.headers['user-agent'] || '', 90),
+    source: live ? '' : scrubActivityText(b.source || '', 220),
+    fileName: live ? '' : scrubActivityText(b.fileName || '', 220),
+    size: Math.max(0, Number(b.size || 0) || 0),
+    position,
+    duration,
+    percent,
+    startedAt: existing.startedAt || Date.now(),
+    updatedAt: Date.now(),
+  };
+}
+function pruneActivityHistoryRows(rows, now = Date.now()) {
+  return (Array.isArray(rows) ? rows : [])
+    .filter((row) => row && row.updatedAt && now - row.updatedAt <= ACTIVITY_HISTORY_RETENTION_MS && activityHistoryEligible(row))
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+    .slice(0, ACTIVITY_HISTORY_MAX_ROWS);
+}
+function recordActivityHistory(row) {
+  if (!row || !row.userId) return;
+  if (!activityHistoryEligible(row)) return;
+  const now = Date.now();
+  const histId = 'h' + idHash(`${row.userId}|${row.profile || ''}|${row.sessionId || ''}|${row.key || ''}|${row.startedAt || ''}`);
+  store.update('activityHistory', { rows: [] }, (doc) => {
+    if (!doc || typeof doc !== 'object' || Array.isArray(doc)) doc = { rows: [] };
+    const rows = pruneActivityHistoryRows(doc.rows, now);
+    const saved = {
+      id: histId,
+      userId: row.userId,
+      userName: row.userName,
+      profile: row.profile,
+      title: row.title,
+      subline: row.subline,
+      key: row.key,
+      type: row.type,
+      player: row.player,
+      mode: row.mode,
+      streamKind: row.streamKind,
+      streamLabel: row.streamLabel,
+      clientVersion: row.clientVersion,
+      device: row.device,
+      position: row.position,
+      duration: row.duration,
+      percent: row.percent,
+      startedAt: row.startedAt,
+      updatedAt: row.updatedAt,
+    };
+    const ix = rows.findIndex((x) => x.id === histId);
+    if (ix >= 0) rows[ix] = { ...rows[ix], ...saved, startedAt: rows[ix].startedAt || saved.startedAt };
+    else rows.unshift(saved);
+    doc.rows = pruneActivityHistoryRows(rows, now);
+    return doc;
+  });
+}
+function activityHistoryRows() {
+  const doc = store.read('activityHistory', { rows: [] });
+  const rows = pruneActivityHistoryRows(doc && doc.rows);
+  if (!doc || !Array.isArray(doc.rows) || rows.length !== doc.rows.length) store.write('activityHistory', { rows });
+  return rows;
+}
 function activeActivityRows() {
   const now = Date.now();
-  const ttl = 45000;
   for (const [id, row] of activitySessions) {
-    if (!row || now - (row.updatedAt || 0) > ttl) activitySessions.delete(id);
+    if (!row || now - (row.updatedAt || 0) > ACTIVITY_TTL_MS) activitySessions.delete(id);
   }
   return [...activitySessions.values()].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 }
@@ -3027,6 +3135,9 @@ const MUSIC_HOME_WEEKLY_FEEDS = [
   { id: 'top-playlists-week', title: 'Top playlists this week', sub: 'Fresh shared mixes and creator queues', query: 'top playlists this week music', coverFeed: 'top playlists this week music', icon: 'chart', grad: 'mGrad2' },
   { id: 'new-music-mix', title: 'New Music Mix', sub: 'Fresh songs to sample first', query: 'new music mix', coverFeed: 'new music mix', icon: 'spark', grad: 'mGrad1' },
   { id: 'viral-hits', title: 'Viral hits', sub: 'Songs moving fast right now', query: 'viral hits music this week', coverFeed: 'viral hits music this week', icon: 'spark', grad: 'mGrad3' },
+  { id: 'fresh-releases', title: 'Fresh releases', sub: 'New songs and album cuts', query: 'new songs this week', coverFeed: 'new songs this week', icon: 'music', grad: 'mGrad4' },
+  { id: 'chill-radio', title: 'Chill radio', sub: 'Low-friction background queue', query: 'chill music mix', coverFeed: 'chill music mix', icon: 'smile', grad: 'mGrad2' },
+  { id: 'throwback-hits', title: 'Throwback hits', sub: 'Familiar picks that start quickly', query: 'throwback hits music', coverFeed: 'throwback hits music', icon: 'chart', grad: 'mGrad3' },
 ];
 function musicHomeFeedShelves() {
   return [
@@ -3187,7 +3298,7 @@ const H = {
     app: 'triboon', version: APP_VERSION, phase: 4, needsSetup: !auth.hasUsers(),
     tmdb: !!settings.get().tmdbKey, ffmpeg: !!detectFfmpeg(),
     // Wyzie only needs the server-side API key; no account login is required.
-    opensubs: !!settings.get().openSubsKey,
+    opensubs: !!effectiveOpenSubsKey(),
     builtInSubtitlesEnabled: settings.get().builtInSubtitlesEnabled === true,
     iptv: iptvConfigured(settings.get()),
     music: !!ytmusic.detectYtdlp(), // Music tab shows only when yt-dlp is present
@@ -4866,7 +4977,13 @@ Object.assign(H, {
   },
 
   activityList: async (ctx) => {
-    send(ctx.res, 200, { sessions: activeActivityRows() });
+    const sessions = activeActivityRows();
+    send(ctx.res, 200, {
+      sessions,
+      history: activityHistoryRows(),
+      activeCount: sessions.length,
+      retentionDays: ACTIVITY_HISTORY_DAYS,
+    });
   },
 
   activitySet: async (ctx) => {
@@ -4874,37 +4991,18 @@ Object.assign(H, {
     const id = scrubActivityText(b.sessionId || b.id || '', 80);
     if (!id) return send(ctx.res, 400, { error: 'sessionId required' });
     if (b.state === 'stopped' || b.stop || b.remove) {
+      const existing = activitySessions.get(id);
+      if (existing) {
+        existing.updatedAt = Date.now();
+        recordActivityHistory(existing);
+      }
       activitySessions.delete(id);
       return send(ctx.res, 200, { ok: true });
     }
-    const duration = Math.max(0, Number(b.duration || 0) || 0);
-    const position = Math.max(0, Number(b.position || 0) || 0);
-    const percent = duration ? Math.max(0, Math.min(100, Math.round((position / duration) * 100))) : 0;
     const existing = activitySessions.get(id) || {};
-    activitySessions.set(id, {
-      id,
-      sessionId: id,
-      userId: ctx.user.id,
-      userName: activityUserName(ctx.user.id),
-      profile: scrubActivityText(b.profile || '', 40),
-      title: scrubActivityText(b.title || (b.meta && b.meta.title) || 'Playing', 180),
-      subline: scrubActivityText(b.subline || '', 120),
-      key: scrubActivityText(b.key || '', 140),
-      type: scrubActivityText(b.type || '', 30),
-      player: scrubActivityText(b.player || '', 30),
-      mode: scrubActivityText(b.mode || '', 30),
-      streamKind: scrubActivityText(b.streamKind || '', 30),
-      streamLabel: scrubActivityText(b.streamLabel || '', 60),
-      device: scrubActivityText(b.device || ctx.req.headers['user-agent'] || '', 90),
-      source: scrubActivityText(b.source || '', 220),
-      fileName: scrubActivityText(b.fileName || '', 220),
-      size: Math.max(0, Number(b.size || 0) || 0),
-      position,
-      duration,
-      percent,
-      startedAt: existing.startedAt || Date.now(),
-      updatedAt: Date.now(),
-    });
+    const row = normalizeActivityRow(ctx, b, id, existing);
+    activitySessions.set(id, row);
+    recordActivityHistory(row);
     send(ctx.res, 200, { ok: true });
   },
 
@@ -4987,7 +5085,7 @@ Object.assign(H, {
         usage: ixUsageToday().byIndexer[i.name] || { api: 0, grabs: 0 },
       })),
       tmdbKey: s.tmdbKey ? '•••' : null,
-      openSubsKey: s.openSubsKey ? '•••' : null,
+      openSubsKey: effectiveOpenSubsKey(s) ? '•••' : null,
       builtInSubtitlesEnabled: s.builtInSubtitlesEnabled === true,
       openSubsUser: s.openSubsUser || null, // username isn't a secret; the password is
       openSubsPass: s.openSubsPass ? '•••' : null,
@@ -5333,9 +5431,16 @@ Object.assign(H, {
     };
     const requestedPriority = String(ctx.url.searchParams.get('priority') || '').toLowerCase();
     const explicitPriority = requestedPriority === 'read-ahead' ? 'readAhead' : requestedPriority;
+    const highWaterEnd = Number(vf._streamHighWaterEnd || 0);
+    const partSlack = Number(vf.partSize || 0) * Math.max(2, Math.min(8, Number(vf.readAhead || 4)));
+    const sequentialSlack = Math.max(2 * 1024 * 1024, partSlack || 0);
+    const sequentialRange = start > 0
+      && highWaterEnd > 0
+      && start >= Math.max(0, highWaterEnd - sequentialSlack)
+      && start <= highWaterEnd + sequentialSlack;
     const readPriority = ['background', 'readAhead', 'health'].includes(explicitPriority)
       ? explicitPriority
-      : (start === 0 ? 'startup' : 'seek');
+      : (start === 0 ? 'startup' : (sequentialRange ? 'playback' : 'seek'));
     ctx.req.once('close', stopReqRead);
     ctx.res.once('close', stopResRead);
     try {
@@ -5353,6 +5458,7 @@ Object.assign(H, {
         if (readSignal.aborted || ctx.res.destroyed) break;
       }
       completedRead = !readSignal.aborted && !ctx.res.destroyed;
+      if (completedRead) vf._streamHighWaterEnd = Math.max(Number(vf._streamHighWaterEnd || 0), end);
     } catch (e) {
       if (!readSignal.aborted) console.error(`[stream ${vf.id}]`, e.message);
     } finally {
@@ -5489,7 +5595,7 @@ Object.assign(H, {
     const vf = mounts.get(ctx.m[1]);
     if (!vf) return send(ctx.res, 404, { error: 'mount not found' });
     if (!mountAccessOk(ctx, vf)) return send(ctx.res, 404, { error: 'mount not found' });
-    const key = settings.get().openSubsKey; // storage key kept across the Wyzie switch
+    const key = effectiveOpenSubsKey();
     if (!key) return send(ctx.res, 503, { error: 'Wyzie Subs is not configured (Settings -> Catalog)' });
     vf._touched = Date.now();
     const lang = String(ctx.url.searchParams.get('lang') || 'en').slice(0, 5).replace(/[^a-z-]/gi, '');
@@ -5625,6 +5731,7 @@ Object.assign(H, {
   // ---- Music (YouTube Music via yt-dlp) ----
   musicHome: async (ctx) => {
     if (!ytmusic.detectYtdlp()) return send(ctx.res, 503, { error: 'yt-dlp is not installed on the server' });
+    const catalog = !!ytmusic.detectYtMusicApi();
     const chartShelves = await loadMusicChartResponses(ctx.user.id, { wait: false });
     const chartHomeShelves = chartShelves.map((s) => ({
       ...s,
@@ -5636,8 +5743,11 @@ Object.assign(H, {
       ...chartHomeShelves,
     ];
     send(ctx.res, 200, {
-      version: 1,
+      version: 2,
       generatedAt: new Date().toISOString(),
+      catalog,
+      mode: catalog ? 'catalog' : 'basic',
+      chartsPending: chartHomeShelves.length < MUSIC_CHARTS.length,
       order: shelves.map((s) => s.id),
       shelves,
     });
