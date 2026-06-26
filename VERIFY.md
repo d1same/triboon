@@ -63,6 +63,26 @@ changes, complete these live checks before saying the update is done:
 If a live smoke cannot run, the final report must say `not run`, explain why,
 and describe the risk.
 
+### Latest Evidence
+
+2026-06-26, v1.7.29 Multiview Android correction:
+
+- `npm.cmd run verify:full` passed with `TRIBOON_ADB_DEVICE=emulator-5554`.
+- Android TV stress output:
+  `bench/stress-results/android-tv-stress-20260626-144908.json`.
+- Android Live TV Multiview launcher proof on `emulator-5554`: `livePrep.ok`,
+  `liveOpen.ok`, `pipFocus.ok`, and `pipOpen.ok` were all true. The Live TV
+  toolbar button focused as `chMultiBtn`; D-pad OK entered `S.view =
+  multiview`; PiP guide D-pad Up focused `pgMultiBtn`; D-pad OK entered
+  Multiview from the PiP guide.
+- Android ExoPlayer stress proof in the same run: 20 Live TV zaps, two PiP
+  loops, 10 VOD seeks, subtitle request HTTP 200, and `logScan.fatal = false`.
+- In-app browser DOM proof on `http://localhost:7777/#/livetv`: the visible
+  Live TV page exposed `button aria-label="Open multiview"` / `Multiview`.
+  Browser-control click automation timed out in the control layer, so this run
+  does not claim an additional manual Web Player click smoke beyond the
+  automated web/inline-script and Android WebView Multiview checks.
+
 ## Critical Contracts
 
 Before editing playback-adjacent areas, read the matching contract:

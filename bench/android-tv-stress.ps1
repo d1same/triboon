@@ -121,6 +121,9 @@ function App-State {
   focus: document.activeElement && (document.activeElement.id || document.activeElement.className || document.activeElement.tagName),
   playerOpen: !!document.querySelector('#player.open'),
   guideOpen: !!document.querySelector('#pGuide.open'),
+  multiOpen: !!document.querySelector('#multiView.open'),
+  chMultiVisible: !!(document.getElementById('chMultiBtn') && document.getElementById('chMultiBtn').offsetParent !== null),
+  pgMultiVisible: !!(document.getElementById('pgMultiBtn') && document.getElementById('pgMultiBtn').offsetParent !== null && !document.getElementById('pgMultiBtn').disabled),
   trackMenuOpen: !!document.querySelector('#trackMenu.open'),
   loader: !!document.querySelector('#playerLoader.show,.nativeLoader.show'),
   nativeGuideMode: typeof S !== 'undefined' ? !!S.nativeGuideMode : false,
@@ -266,6 +269,143 @@ $report.sections['liveStart'] = $liveStart
 if (!$liveStart.ok) { Add-Failure "Live TV did not start: $($liveStart.error)" }
 Start-Sleep -Seconds 6
 
+$multiLivePrep = Invoke-CdpJson @"
+(async () => {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  if (typeof S === 'undefined') return { ok: false, error: 'missing app state' };
+  if (document.getElementById('player').classList.contains('open') || (S.playing && S.playing.usingNative)) {
+    await closePlayer();
+    for (let n = 0; n < 20; n++) {
+      if (!document.getElementById('player').classList.contains('open') && !(S.playing && S.playing.usingNative)) break;
+      await wait(120);
+    }
+  }
+  await wait(1000);
+  switchView('livetv', false);
+  for (let n = 0; n < 35; n++) {
+    if (document.getElementById('chMultiBtn')) break;
+    await wait(180);
+  }
+  const btn = document.getElementById('chMultiBtn');
+  const visible = !!(btn && btn.offsetParent !== null);
+  if (visible) focusLiveToolbar('chMultiBtn');
+  return {
+    ok: visible,
+    view: S.view,
+    focus: document.activeElement && (document.activeElement.id || document.activeElement.className || document.activeElement.tagName),
+    mse: !!liveMseType(),
+    playerOpen: document.getElementById('player').classList.contains('open'),
+    playing: S.playing && S.playing.item && S.playing.item.type,
+    channels: (S.liveList && S.liveList.length) || (S.liveChannels && S.liveChannels.length) || 0
+  };
+})()
+"@ -AwaitPromise
+if (!$multiLivePrep.ok) { Add-Failure "Live TV Multiview button was missing or not visible on Android" }
+if (!$multiLivePrep.mse) { Add-Failure "Android WebView did not report MediaSource support for Multiview" }
+Send-Key "DPAD_CENTER"
+Start-Sleep -Seconds 3
+$multiLiveOpen = Invoke-CdpJson @"
+(() => {
+  const slot = S.multiView && S.multiView.slots ? S.multiView.slots[0] : null;
+  return {
+    ok: S.view === 'multiview' && !!(S.multiView && S.multiView.open) && !!document.querySelector('#multiView.open'),
+    view: S.view,
+    multiOpen: !!(S.multiView && S.multiView.open),
+    pickerOpen: !!document.querySelector('#mvPicker.open'),
+    count: S.multiView ? S.multiView.count : 0,
+    active: S.multiView ? S.multiView.active : null,
+    slot0: slot ? { title: slot.item && slot.item.title, status: slot.status || '', error: slot.error || '' } : null
+  };
+})()
+"@
+if (!$multiLiveOpen.ok) { Add-Failure "Live TV Multiview did not open from Android D-pad OK" }
+$multiLiveCleanup = Invoke-CdpJson @"
+(async () => {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  if (S.multiView && S.multiView.open) closeMultiView();
+  await wait(500);
+  switchView('livetv', false);
+  await wait(500);
+  const it = (S.liveList || [])[0] || ((S.liveChannels || []).map(liveItemForPlayerGuide).filter(Boolean))[0];
+  if (it) await playChannel(it, S.liveList || [it]);
+  return { ok: !!it, view: S.view, playing: S.playing && S.playing.item && S.playing.item.type };
+})()
+"@ -AwaitPromise
+if (!$multiLiveCleanup.ok) { Add-Failure "Live TV did not restart after Multiview launcher smoke" }
+Start-Sleep -Seconds 6
+
+$multiPipPrep = Invoke-CdpJson @"
+(async () => {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  if (!(S.playing && S.playing.item && S.playing.item.type === 'live')) {
+    const it = (S.liveList || [])[0] || ((S.liveChannels || []).map(liveItemForPlayerGuide).filter(Boolean))[0];
+    if (it) await playChannel(it, S.liveList || [it]);
+    await wait(1800);
+  }
+  if (!document.getElementById('pGuide').classList.contains('open')) await togglePlayerGuide();
+  for (let n = 0; n < 40; n++) {
+    if (document.getElementById('pGuide').classList.contains('open') && document.querySelector('.pgGuideMain .pgRow[data-pg]')) break;
+    await wait(160);
+  }
+  const pg = document.getElementById('pGuide');
+  const btn = document.getElementById('pgMultiBtn');
+  const first = document.querySelector('.pgGuideMain .pgRow[data-pg]');
+  if (first) {
+    try { first.focus({ preventScroll: true }); } catch { first.focus(); }
+    setPlayerGuideVisualFocus(first._ch || first.dataset.guideChannel);
+  }
+  return {
+    ok: !!(pg.classList.contains('open') && btn && btn.offsetParent !== null && !btn.disabled && first),
+    guideOpen: pg.classList.contains('open'),
+    pgMultiVisible: !!(btn && btn.offsetParent !== null && !btn.disabled),
+    focus: document.activeElement && (document.activeElement.id || document.activeElement.className || document.activeElement.tagName)
+  };
+})()
+"@ -AwaitPromise
+if (!$multiPipPrep.ok) { Add-Failure "PiP guide Multiview button was not reachable before D-pad test" }
+Send-Key "DPAD_UP"
+Start-Sleep -Seconds 1
+$multiPipFocus = Invoke-CdpJson @"
+(() => ({
+  ok: document.activeElement && document.activeElement.id === 'pgMultiBtn',
+  focus: document.activeElement && (document.activeElement.id || document.activeElement.className || document.activeElement.tagName),
+  guideOpen: document.getElementById('pGuide').classList.contains('open')
+}))()
+"@
+if (!$multiPipFocus.ok) { Add-Failure "PiP guide D-pad Up did not focus Multiview button" }
+Send-Key "DPAD_CENTER"
+Start-Sleep -Seconds 3
+$multiPipOpen = Invoke-CdpJson @"
+(() => ({
+  ok: S.view === 'multiview' && !!(S.multiView && S.multiView.open) && !!document.querySelector('#multiView.open'),
+  view: S.view,
+  multiOpen: !!(S.multiView && S.multiView.open),
+  guideOpen: document.getElementById('pGuide').classList.contains('open')
+}))()
+"@
+if (!$multiPipOpen.ok) { Add-Failure "PiP guide Multiview did not open from D-pad OK" }
+$multiPipCleanup = Invoke-CdpJson @"
+(async () => {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  if (S.multiView && S.multiView.open) closeMultiView();
+  await wait(500);
+  const it = (S.liveList || [])[0] || ((S.liveChannels || []).map(liveItemForPlayerGuide).filter(Boolean))[0];
+  if (it) await playChannel(it, S.liveList || [it]);
+  return { ok: !!it, view: S.view, playing: S.playing && S.playing.item && S.playing.item.type };
+})()
+"@ -AwaitPromise
+if (!$multiPipCleanup.ok) { Add-Failure "Live TV did not restart after PiP Multiview D-pad smoke" }
+Start-Sleep -Seconds 6
+$report.sections['multiview'] = [ordered]@{
+  livePrep = $multiLivePrep
+  liveOpen = $multiLiveOpen
+  liveCleanup = $multiLiveCleanup
+  pipPrep = $multiPipPrep
+  pipFocus = $multiPipFocus
+  pipOpen = $multiPipOpen
+  pipCleanup = $multiPipCleanup
+}
+
 $zapSamples = New-Object System.Collections.Generic.List[object]
 for ($i = 0; $i -lt $LiveZaps; $i++) {
   $key = if ($i % 2 -eq 0) { "DPAD_UP" } else { "DPAD_DOWN" }
@@ -363,7 +503,7 @@ if (!$subs.ok -and !$subs.skipped) { Add-Failure "Subtitle request returned HTTP
 
 $log = Invoke-Adb logcat -d -t 1600 | Select-String -Pattern "AndroidRuntime|FATAL|app\.triboon|ExoPlayer|Playback error|provider bot-protection|HTTP 403|HTTP 404|Renderer|crash|SIG"
 $logText = ($log | ForEach-Object { [string]$_ }) -join "`n"
-$fatalLog = [regex]::IsMatch($logText, "AndroidRuntime|FATAL EXCEPTION|SIGSEGV|SIGABRT|Renderer.*crash", [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+$fatalLog = [regex]::IsMatch($logText, "FATAL EXCEPTION|AndroidRuntime:\s+FATAL|AndroidRuntime.*(Exception|Error)|SIGSEGV|SIGABRT|Renderer.*crash", [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
 $report.sections['logScan'] = [ordered]@{
   fatal = $fatalLog
   providerProtection = [bool]($logText -match "provider bot-protection|HTTP 403|HTTP 404")

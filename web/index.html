@@ -7255,7 +7255,7 @@ async function toggleLiveFavorite() {
 
 const MULTIVIEW_MAX_SLOTS = 4;
 function multiViewCanUseWeb() {
-  return !nativeLiveRequired() && !!liveMseType();
+  return !!liveMseType();
 }
 function multiViewSlots() {
   if (!S.multiView) return [];
@@ -7974,10 +7974,6 @@ function playMultiViewExistingVodFromPlayer(i = 0) {
   return startMultiViewVodSlot(i, slot, media);
 }
 async function openMultiViewFromGuide(seed = null) {
-  if (isTriboonAndroidShell()) {
-    toast('Android Multiview needs native ExoPlayer support; web split is disabled on TV.');
-    return false;
-  }
   if (!multiViewCanUseWeb()) return toast('Multiview needs browser Live TV MediaSource support');
   const list = await ensurePlayerGuideChannels();
   if (!list.length) return toast(S.serverInfo && S.serverInfo.iptv ? 'No Live TV channels available' : 'Live TV is not set up');
@@ -10977,13 +10973,7 @@ function handleLiveSplitPick(e) {
 }
 $('liveSplitPickBtn').addEventListener('pointerdown', handleLiveSplitPick);
 $('liveSplitPickBtn').addEventListener('click', handleLiveSplitPick);
-if (isTriboonAndroidShell()) {
-  $('pgMultiBtn').hidden = true;
-  $('pgMultiBtn').disabled = true;
-  $('pgMultiBtn').setAttribute('aria-hidden', 'true');
-} else {
-  $('pgMultiBtn').addEventListener('click', () => openMultiViewFromGuide());
-}
+$('pgMultiBtn').addEventListener('click', () => openMultiViewFromGuide());
 $('mvClose').addEventListener('click', closeMultiView);
 $('mvPickerClose').addEventListener('click', () => { closeMultiViewPicker(); setMultiViewActiveSlot(multiViewActiveSlot()); });
 [2, 3, 4].forEach((n) => $('mvCount' + n).addEventListener('click', () => setMultiViewCount(n)));
@@ -13088,7 +13078,7 @@ function scaffoldLiveTv(grid) {
   try {
     // Category management lives in Preferences → Live TV now — no ☷ button on the page.
     grid.innerHTML = '<div id="chBar"><input id="chSearch" maxlength="60" autocomplete="off">'
-      + (isTriboonAndroidShell() ? '' : '<button id="chMultiBtn" class="focusable" title="Open multiview" aria-label="Open multiview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="8" height="7" rx="1.8"/><rect x="13" y="4" width="8" height="7" rx="1.8"/><rect x="3" y="13" width="8" height="7" rx="1.8"/><rect x="13" y="13" width="8" height="7" rx="1.8"/></svg><span>Multiview</span></button>')
+      + '<button id="chMultiBtn" class="focusable" title="Open multiview" aria-label="Open multiview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="8" height="7" rx="1.8"/><rect x="13" y="4" width="8" height="7" rx="1.8"/><rect x="3" y="13" width="8" height="7" rx="1.8"/><rect x="13" y="13" width="8" height="7" rx="1.8"/></svg><span>Multiview</span></button>'
       + (S.liveEpg ? '<button id="chGuideBtn" class="focusable"></button>' : '')
       + `</div>${liveSourceWarningHtml(S.liveSourceErrors || [])}<div id="chBody"></div>`;
     S.gridRoot = grid;
@@ -17625,6 +17615,7 @@ function focusLiveToolbar(id = 'chMultiBtn') {
   S.liveCatDpadMode = false;
   applyFocus(btn, false);
   try { btn.focus({ preventScroll: true }); } catch { btn.focus(); }
+  reportTvInputState();
   btn.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: focusScrollBehavior() });
   return true;
 }
@@ -18441,6 +18432,8 @@ document.addEventListener('keydown', (e) => {
       const back = document.querySelector('.pgBackTop[data-pg]');
       const cats = [...document.querySelectorAll('.pgCat[data-pg]')];
       const rows = [...document.querySelectorAll('.pgGuideMain .pgRow[data-pg]')];
+      const multiEl = $('pgMultiBtn');
+      const multi = multiEl && !multiEl.hidden && !multiEl.disabled && multiEl.offsetParent !== null ? multiEl : null;
       const moveTo = (el) => {
         if (!el) return;
         if (el.classList && el.classList.contains('pgCat')) {
@@ -18470,17 +18463,34 @@ document.addEventListener('keydown', (e) => {
           : (Number.isFinite(S.pgCatNavIdx) ? S.pgCatNavIdx : cats.findIndex((c) => c.classList.contains('sel')));
         return Math.max(0, Math.min(cats.length - 1, idx < 0 ? 0 : idx));
       };
+      const focusGuideMulti = () => {
+        if (!multi) return false;
+        S.pgCatDpadMode = false;
+        clearPlayerGuideVisualFocus();
+        applyFocus(multi, false);
+        try { multi.focus({ preventScroll: true }); } catch { try { multi.focus(); } catch {} }
+        multi.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'auto' });
+        return true;
+      };
       if (k === 'Escape' || k === 'Backspace') return closePlayerGuide();
+      if (active === multi) {
+        if (k === 'Enter' && !e.repeat) return multi.click();
+        if (k === 'ArrowDown') return moveTo(rows.find((r) => r.classList.contains('cur')) || rows[0] || cats[0] || back);
+        if (k === 'ArrowLeft') return cats.length ? focusPlayerGuideCategory(catIndex()) : (back ? moveTo(back) : undefined);
+        if (k === 'ArrowRight' || k === 'ArrowUp') return focusGuideMulti();
+        return;
+      }
       if (active === back) {
         if (k === 'Enter' && !e.repeat) return back.click();
         if (k === 'ArrowDown') return cats.length ? focusPlayerGuideCategory(catIndex()) : moveTo(rows[0]);
-        if (k === 'ArrowRight') return moveTo(rows.find((r) => r.classList.contains('cur')) || rows[0]);
+        if (k === 'ArrowRight') return focusGuideMulti() || moveTo(rows.find((r) => r.classList.contains('cur')) || rows[0]);
+        if (k === 'ArrowUp') return focusGuideMulti();
         return;
       }
       if (cats.includes(active) || (S.pgCatDpadMode && (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowRight' || k === 'Enter'))) {
         let i = catIndex();
         if (k === 'ArrowDown') return focusPlayerGuideCategory(i + 1, true);
-        if (k === 'ArrowUp') return i <= 0 && back ? moveTo(back) : focusPlayerGuideCategory(i - 1, true);
+        if (k === 'ArrowUp') return i <= 0 ? (back ? moveTo(back) : (focusGuideMulti() || focusPlayerGuideCategory(i, true))) : focusPlayerGuideCategory(i - 1, true);
         if (k === 'ArrowRight') return moveTo(rows.find((r) => r.classList.contains('cur')) || rows[0]);
         if (k === 'Enter' && !e.repeat) return cats[i] && cats[i].click();
         return;
@@ -18488,7 +18498,7 @@ document.addEventListener('keydown', (e) => {
       if (rows.includes(active)) {
         let i = rows.indexOf(active);
         if (k === 'ArrowDown') return moveRowFrom(1);
-        if (k === 'ArrowUp') return i <= 0 && back ? moveTo(back) : moveRowFrom(-1);
+        if (k === 'ArrowUp') return i <= 0 ? (back ? moveTo(back) : (focusGuideMulti() || moveRowFrom(-1))) : moveRowFrom(-1);
         if (k === 'ArrowLeft') return focusPlayerGuideCategory(cats.findIndex((c) => c.classList.contains('sel')));
         if (k === 'Enter' && !e.repeat) {
           S._lpEl = active;
@@ -18502,7 +18512,7 @@ document.addEventListener('keydown', (e) => {
       }
       if (S.pgCatDpadMode && cats.length) return focusPlayerGuideCategory(catIndex());
       if (k === 'ArrowDown') return moveRowFrom(1);
-      if (k === 'ArrowUp') return moveRowFrom(-1);
+      if (k === 'ArrowUp') return focusGuideMulti() || moveRowFrom(-1);
       if (k === 'ArrowRight') return moveTo(rows.find((r) => r.classList.contains('cur')) || cats.find((c) => c.classList.contains('sel')) || rows[0] || cats[0]);
       if (k === 'Enter' && back) return back.click();
       return;
@@ -19024,7 +19034,7 @@ window.__tvBack = () => {
 // Android TV shell hook #2: the shell owns ALL D-pad keys (so the WebView's built-in spatial
 // nav can never fight our focus model) — EXCEPT while a text field / dropdown has real focus,
 // where native handling must run (caret, IME, select pickers). Report that state up.
-const __tvInputState = () => {
+function reportTvInputState() {
   try {
     if (window.TriboonTV && TriboonTV.inputFocus) {
       const ae = document.activeElement;
@@ -19034,7 +19044,8 @@ const __tvInputState = () => {
         && !(ae.tagName === 'INPUT' && /^(checkbox|radio)$/.test(ae.type)));
     }
   } catch {}
-};
+}
+const __tvInputState = reportTvInputState;
 document.addEventListener('focusin', (e) => {
   const textEntry = e.target && /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)
     && !(e.target.tagName === 'INPUT' && /^(checkbox|radio)$/.test(e.target.type));

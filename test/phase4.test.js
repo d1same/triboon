@@ -2314,13 +2314,16 @@ test('Android native player: direct source and native chrome stay out of the web
       && ui.includes('id="pgMultiBtn" class="mvIconBtn focusable" type="button" title="Open multiview" aria-label="Open multiview"')
       && ui.includes('<span>Multiview</span>'),
     'Live TV should expose favorite in the player and icon-led Multiview launchers from guide surfaces');
-  assert.ok(ui.includes("isTriboonAndroidShell() ? '' : '<button id=\"chMultiBtn\"")
-      && ui.includes("if (isTriboonAndroidShell()) {")
-      && ui.includes('Android Multiview needs native ExoPlayer support')
-      && ui.includes('const btn = btns.find((el) => el.id === id) || btns[0];')
-      && ui.includes("$('pgMultiBtn').hidden = true;")
-      && ui.includes("$('pgMultiBtn').disabled = true;"),
-    'Android TV should hide unsupported browser Multiview launchers, fall D-pad focus through to Guide, and fail-close direct calls until native multi-surface ExoPlayer support exists');
+  assert.ok(!ui.includes("isTriboonAndroidShell() ? '' : '<button id=\"chMultiBtn\"")
+      && !ui.includes('Android Multiview needs native ExoPlayer support')
+      && !ui.includes("$('pgMultiBtn').hidden = true;")
+      && !ui.includes("$('pgMultiBtn').disabled = true;")
+      && ui.includes("$('pgMultiBtn').addEventListener('click', () => openMultiViewFromGuide());")
+      && ui.includes('function multiViewCanUseWeb() {')
+      && ui.includes('return !!liveMseType();')
+      && ui.includes('reportTvInputState();')
+      && ui.includes('function reportTvInputState()'),
+    'Android TV should expose the Live TV and PiP guide Multiview launchers while normal single-channel Live TV remains native');
   assert.match(ui, /function liveToolbarButtons\(\) \{[\s\S]+\['chMultiBtn', 'chGuideBtn'\][\s\S]+function focusLiveToolbar\(id = 'chMultiBtn'\) \{[\s\S]+applyFocus\(btn, false\);[\s\S]+btn\.focus\(\{ preventScroll: true \}\)[\s\S]+function focusLiveFilter\(\) \{[\s\S]+document\.body\.classList\.contains\('tv'\) && focusLiveToolbar\('chMultiBtn'\)[\s\S]+return focusLiveSearchInput\(\);/,
     'Live TV D-pad should land on the toolbar buttons on TV instead of parking focus in the search input');
   assert.match(ui, /const liveToolbarId = S\.view === 'livetv' \? focusedLiveToolbarButton\(\) : '';[\s\S]+if \(liveToolbarId === 'chMultiBtn'\) \{[\s\S]+if \(k === 'ArrowLeft'\) return document\.body\.classList\.contains\('tv'\) \? enterRail\(\) : focusLiveSearchInput\(\);[\s\S]+if \(k === 'ArrowRight' && \$\('chGuideBtn'\)\) return focusLiveToolbar\('chGuideBtn'\);[\s\S]+if \(liveToolbarId === 'chGuideBtn'\) \{[\s\S]+if \(k === 'ArrowLeft'\) return \$\('chMultiBtn'\) \? focusLiveToolbar\('chMultiBtn'\) : enterRail\(\);/,
@@ -2423,8 +2426,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'Multiview should play one Continue Watching movie/show companion through the normal source-selection path');
   assert.match(ui, /function playMultiViewExistingVodFromPlayer\(i = 0\) \{[\s\S]+const item = \{ \.\.\.p\.item, resume: currentTime\(\) \};[\s\S]+const url = currentPlaybackUrl\(p, at\);[\s\S]+stopActivePlaybackForReplacement\(\{ preserveGuide: true \}\);[\s\S]+return startMultiViewVodSlot\(i, slot, media\);/,
     'opening Multiview from an active movie or episode should carry that playback into the first pane');
-  assert.match(ui, /async function openMultiViewFromGuide\(seed = null\) \{[\s\S]+if \(isTriboonAndroidShell\(\)\) \{[\s\S]+Android Multiview needs native ExoPlayer support[\s\S]+const playingVod = S\.playing && S\.playing\.item && S\.playing\.item\.type !== 'live';[\s\S]+if \(playingVod\) playMultiViewExistingVodFromPlayer\(0\);[\s\S]+else if \(current\) await playMultiViewChannel\(current, 0\);[\s\S]+openMultiViewPicker\(1\);/,
-    'Multiview should launch from guide contexts, preserve active VOD when present, and fail closed on Android until native ExoPlayer support exists');
+  assert.match(ui, /async function openMultiViewFromGuide\(seed = null\) \{[\s\S]+if \(!multiViewCanUseWeb\(\)\) return toast\('Multiview needs browser Live TV MediaSource support'\);[\s\S]+const playingVod = S\.playing && S\.playing\.item && S\.playing\.item\.type !== 'live';[\s\S]+if \(playingVod\) playMultiViewExistingVodFromPlayer\(0\);[\s\S]+else if \(current\) await playMultiViewChannel\(current, 0\);[\s\S]+openMultiViewPicker\(1\);/,
+    'Multiview should launch from guide contexts, preserve active VOD when present, and use the browser/server fMP4 surface only when MediaSource is available');
+  assert.match(ui, /const multiEl = \$\('pgMultiBtn'\);[\s\S]+const focusGuideMulti = \(\) => \{[\s\S]+clearPlayerGuideVisualFocus\(\);[\s\S]+if \(active === multi\) \{[\s\S]+if \(k === 'Enter' && !e\.repeat\) return multi\.click\(\);[\s\S]+if \(k === 'ArrowUp'\) return i <= 0 \? \(back \? moveTo\(back\) : \(focusGuideMulti\(\) \|\| moveRowFrom\(-1\)\)\) : moveRowFrom\(-1\);/,
+    'PiP guide D-pad should be able to move onto the Multiview button and open it with OK');
   assert.match(ui, /function handleMultiViewKey\(k, e\) \{[\s\S]+S\.multiView\.actionSlot !== null[\s\S]+if \(k === 'ArrowLeft'\) return setMultiViewActionFocus\(i - 1\);[\s\S]+if \(k === 'ArrowRight'\) return setMultiViewActionFocus\(i \+ 1\);[\s\S]+buttons\[i\] && buttons\[i\]\.click\(\);/,
     'D-pad should let the pane action row own left/right and OK');
   assert.match(ui, /function handleMultiViewKey\(k, e\) \{[\s\S]+S\.multiView\.swapSlot !== null[\s\S]+moveMultiViewFocus\(-1, 0\)[\s\S]+moveMultiViewFocus\(1, 0\)[\s\S]+completeMultiViewSwap\(multiViewActiveSlot\(\)\);/,

@@ -293,10 +293,9 @@ Playback contract:
   the highlighted pane. Two panes are side-by-side, three panes use a featured
   primary pane plus two smaller panes, and four panes use a 2x2 grid. Guide
   launchers and close controls stay icon-led so the surface matches the rest of
-  the player chrome and remains D-pad scannable. Android TV hides browser
-  Multiview launchers until a native Media3 multi-surface implementation exists;
-  direct calls still fail closed with a native ExoPlayer requirement notice
-  before any browser Multiview pane is mounted.
+  the player chrome and remains D-pad scannable. Android TV exposes the same
+  Live TV and PiP guide launchers, but only this explicit Multiview surface may
+  use the WebView/server fMP4 path, and only after a MediaSource support check.
 - Pane hover/focus changes the audible pane. OK on a filled pane opens a compact
   pane action row; Live TV panes expose fullscreen/return, swap screen, change
   channel/title, and close screen, while movie/show companion panes also expose
@@ -325,11 +324,13 @@ Playback contract:
 - Android TV/mobile tries native provider-compatible HLS/MPEG-TS URLs first.
   Xtream prefers TS, with HLS as fallback, then the server stereo-AAC fMP4 remux
   path for devices or providers that cannot hold the native stream directly.
-- Android TV/mobile must not use browser Multiview over the WebView. Native
-  Multiview requires a dedicated Media3/ExoPlayer multi-surface design plus
-  memory, decoder, and provider-connection testing. Until then, Android shell
-  UI hides unsupported launchers and direct calls fail closed before any browser
-  pane is mounted.
+- Android TV/mobile normal single-channel playback must not use browser Live TV
+  over the WebView. The explicit Multiview feature is the exception: it is
+  launched from D-pad reachable Live TV/PiP guide buttons and uses the
+  browser/server fMP4 surface only when the Android WebView supports
+  MediaSource. A future native Multiview can replace this with a dedicated
+  Media3/ExoPlayer multi-surface design plus memory, decoder, and
+  provider-connection testing.
 - Android TV can also hold personal IPTV sources in the native app. Those
   sources are loaded by `MainActivity.java` from the Android device network,
   merged into `web/index.html` Live TV rows, and played directly by ExoPlayer.
