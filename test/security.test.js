@@ -1480,6 +1480,56 @@ test('subtitles: ISO 639-2 B/T codes normalize to the 639-1 code Wyzie expects',
   assert.strictEqual(to1(''), '', 'blank is empty');
 });
 
+test('subtitles: OpenSubtitles moviehash search → login → download → VTT (mock)', async () => {
+  const http2 = require('http');
+  const opensubs = require('../server/opensubs');
+  const reqs = [];
+  const srv = http2.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    reqs.push({ path: u.pathname, apiKey: req.headers['api-key'], auth: req.headers.authorization || '' });
+    if (u.pathname === '/subtitles') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ data: [
+        { id: 'A', attributes: { language: 'en', hearing_impaired: false, download_count: 900, from_trusted: true,
+          moviehash_match: u.searchParams.get('moviehash') === 'deadbeefdeadbeef', release: 'Movie.2024.1080p.WEB-DL',
+          files: [{ file_id: 555, file_name: 'Movie.2024.1080p.WEB-DL.srt' }] } },
+      ] }));
+    }
+    if (u.pathname === '/login') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ token: 'JWT123', base_url: '' }));
+    }
+    if (u.pathname === '/download') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ link: `http://127.0.0.1:${srv.address().port}/file.srt`, file_name: 'x.srt', remaining: 17 }));
+    }
+    if (u.pathname === '/file.srt') {
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      return res.end('1\r\n00:00:01,000 --> 00:00:02,000\r\nHello\r\n');
+    }
+    res.writeHead(404); res.end();
+  });
+  await new Promise((r) => srv.listen(0, r));
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  try {
+    const data = await opensubs.osSearch({ apiKey: 'K', base, moviehash: 'deadbeefdeadbeef', imdbId: 'tt123', lang: 'eng' });
+    assert.strictEqual(data.length, 1, 'search returns the result array');
+    const norm = opensubs.osNormalize(data[0]);
+    assert.strictEqual(norm.moviehashMatch, true, 'moviehash_match is surfaced for hash-exact ranking');
+    assert.strictEqual(norm._osFileId, 555, 'file id is captured for download');
+    assert.strictEqual(norm._provider, 'opensubtitles');
+    const login = await opensubs.osLogin({ apiKey: 'K', username: 'u', password: 'p', base });
+    assert.strictEqual(login.token, 'JWT123', 'login yields a bearer token');
+    const dl = await opensubs.osDownloadVtt(norm._osFileId, { apiKey: 'K', token: login.token, base });
+    assert.match(dl.vtt, /^WEBVTT/, 'download converts SRT to VTT');
+    assert.strictEqual(dl.remaining, 17, 'download reports remaining quota');
+    // The search sent languages as 639-1 (eng -> en) and the download carried the bearer token.
+    assert.ok(reqs.some((r) => r.path === '/download' && r.auth === 'Bearer JWT123'), 'download authorizes with the JWT');
+  } finally {
+    await new Promise((r) => srv.close(r));
+  }
+});
+
 test('subtitles: Wyzie search→file→VTT served per mount (and 503 without a key)', async () => {
   const http2 = require('http');
   let osPort;

@@ -426,6 +426,9 @@ function rankSubs(data, releaseName = '', { durationSeconds = 0 } = {}) {
     const relEpisode = episodeKey(rel);
     let s = 0;
     if (!/^(srt|vtt|)$/i.test(String(d.format || ''))) s -= 500;
+    // Hash-exact (OpenSubtitles moviehash) is the strongest in-sync signal there is — it must
+    // outrank even a perfect release-name match, per the OpenSubtitles ranking model.
+    if (d.moviehashMatch) s += 1000;
     if (myReleaseKey && relKey && relKey.includes(myReleaseKey)) s += 650;
     else if (myReleaseKey && relKey && myReleaseKey.includes(relKey) && relKey.length > 20) s += 220;
     if (myEpisode && relEpisode === myEpisode) s += 260;
@@ -641,8 +644,125 @@ async function searchOnlineSubsV2({ key, tmdbId, imdbId, query, lang = 'en', rel
   return data;
 }
 
+// ---------------------------------------------------------------------------
+// OpenSubtitles REST provider (api.opensubtitles.com/api/v1) — OPTIONAL second
+// provider, added for HASH-EXACT matching that Wyzie cannot do. Entirely gated on
+// an admin-configured Api-Key (+ username/password for the download quota); when
+// unconfigured none of this runs and the Wyzie path is unchanged.
+// ---------------------------------------------------------------------------
+const OS_REST_BASE = 'https://api.opensubtitles.com/api/v1';
+const OS_MASK = (1n << 64n) - 1n;
+
+// OpenSubtitles "moviehash" (OSHash): 64-bit = filesize + sum of little-endian uint64
+// words across the first 64KB and last 64KB, with unsigned 64-bit wraparound. Only 128KB
+// of I/O is needed regardless of file size — cheap to compute on a mounted NZB via two reads.
+// Returns null when the file is too small (<128KB) for the algorithm to be defined.
+function moviehashFromChunks(headBuf, tailBuf, sizeBytes) {
+  const size = Number(sizeBytes) || 0;
+  if (size < 131072 || !Buffer.isBuffer(headBuf) || !Buffer.isBuffer(tailBuf)) return null;
+  let hash = BigInt(size) & OS_MASK;
+  const addChunk = (buf) => {
+    const n = Math.floor(buf.length / 8) * 8;
+    for (let i = 0; i < n; i += 8) hash = (hash + buf.readBigUInt64LE(i)) & OS_MASK;
+  };
+  addChunk(headBuf);
+  addChunk(tailBuf);
+  return hash.toString(16).padStart(16, '0');
+}
+
+function osHeaders(apiKey, bearer) {
+  return { apiKey, bearer };
+}
+
+// GET /subtitles — combine moviehash + external id + episode. Returns the raw `data` array.
+async function osSearch({ apiKey, base = OS_REST_BASE, moviehash = '', imdbId = '', tmdbId = '',
+  query = '', lang = 'en', attempts = 2, retryDelayMs = 700 } = {}) {
+  if (!apiKey) throw permanent('OpenSubtitles is not configured (no API key)');
+  const w = parseQuery(query || '');
+  const u = new URL(`${base}/subtitles`);
+  const wlang = toIso6391(lang) || String(lang || '').slice(0, 2) || 'en';
+  u.searchParams.set('languages', wlang);
+  if (moviehash) u.searchParams.set('moviehash', String(moviehash).toLowerCase());
+  const imdbNum = String(imdbId || '').replace(/^tt/i, '').replace(/\D/g, '');
+  const tmdbNum = String(tmdbId || '').replace(/\D/g, '');
+  if (imdbNum) u.searchParams.set('imdb_id', imdbNum);
+  else if (tmdbNum) u.searchParams.set('tmdb_id', tmdbNum);
+  if (w.season != null) { u.searchParams.set('season_number', w.season); u.searchParams.set('episode_number', w.ep); }
+  if (!moviehash && !imdbNum && !tmdbNum) throw permanent('OpenSubtitles needs a moviehash or catalog id');
+  const r = await retryTransient('OpenSubtitles search', async () => {
+    const res = await request('GET', u.href, { key: apiKey, timeoutMs: 15000, deadlineMs: 25000 });
+    if (res.status === 401 || res.status === 403) throw permanent('OpenSubtitles API key invalid');
+    if (res.status !== 200) {
+      const e = new Error(`opensubtitles search HTTP ${res.status}`);
+      if (![408, 429].includes(res.status) && res.status < 500) e.permanent = true;
+      throw e;
+    }
+    return res;
+  }, { attempts, delayMs: retryDelayMs });
+  let body;
+  try { body = JSON.parse(r.body); } catch { throw new Error('opensubtitles returned non-JSON'); }
+  return Array.isArray(body && body.data) ? body.data : [];
+}
+
+// Map an OpenSubtitles `data[]` entry into the same shape pickSub/rankSubs already consume,
+// so both providers rank in one list. moviehash_match becomes a strong release-key signal.
+function osNormalize(entry) {
+  const a = (entry && entry.attributes) || {};
+  const file = (Array.isArray(a.files) && a.files[0]) || {};
+  const rel = a.release || file.file_name || (a.feature_details && a.feature_details.movie_name) || '';
+  return {
+    id: `os:${file.file_id || entry.id || ''}`,
+    _osFileId: file.file_id || null,
+    url: file.file_id ? `opensubtitles:${file.file_id}` : '', // resolved at download time via /download
+    format: 'srt',
+    language: a.language || '',
+    display: rel,
+    media: rel,
+    release: rel,
+    isHearingImpaired: !!a.hearing_impaired,
+    downloadCount: a.download_count || 0,
+    rating: a.ratings || 0,
+    fromTrusted: !!a.from_trusted,
+    moviehashMatch: !!a.moviehash_match,
+    _provider: 'opensubtitles',
+  };
+}
+
+// POST /login → bearer token (+ possibly a dedicated base_url). Tokens are cached by the caller.
+async function osLogin({ apiKey, username, password, base = OS_REST_BASE } = {}) {
+  if (!apiKey || !username || !password) throw permanent('OpenSubtitles download needs API key + username + password');
+  const res = await request('POST', `${base}/login`, { key: apiKey, body: { username, password }, timeoutMs: 15000, deadlineMs: 25000 });
+  if (res.status !== 200) {
+    const e = new Error(`opensubtitles login HTTP ${res.status}`);
+    if (![408, 429].includes(res.status) && res.status < 500) e.permanent = true;
+    throw e;
+  }
+  let body; try { body = JSON.parse(res.body); } catch { throw new Error('opensubtitles login non-JSON'); }
+  if (!body || !body.token) throw permanent('opensubtitles login returned no token');
+  return { token: body.token, baseUrl: body.base_url ? `https://${body.base_url}/api/v1` : base };
+}
+
+// POST /download {file_id} → temporary link, then GET the link → VTT. `quota` reports remaining.
+async function osDownloadVtt(fileId, { apiKey, token, base = OS_REST_BASE } = {}) {
+  if (!apiKey || !token) throw permanent('OpenSubtitles download needs a login token');
+  if (!fileId) throw permanent('OpenSubtitles result had no file id');
+  const res = await request('POST', `${base}/download`, { key: apiKey, bearer: token, body: { file_id: Number(fileId) }, timeoutMs: 15000, deadlineMs: 25000 });
+  if (res.status === 406 || res.status === 429) { const e = new Error('OpenSubtitles download quota reached'); e.quota = true; throw e; }
+  if (res.status !== 200) {
+    const e = new Error(`opensubtitles download HTTP ${res.status}`);
+    if (![408, 429].includes(res.status) && res.status < 500) e.permanent = true;
+    throw e;
+  }
+  let body; try { body = JSON.parse(res.body); } catch { throw new Error('opensubtitles download non-JSON'); }
+  if (!body || !body.link) throw new Error('opensubtitles download returned no link');
+  const file = await request('GET', body.link, { timeoutMs: 15000, deadlineMs: 25000 });
+  if (file.status !== 200) throw new Error(`opensubtitles file HTTP ${file.status}`);
+  return { vtt: srtToVtt(file.body), remaining: Number(body.remaining), fileName: body.file_name || '' };
+}
+
 module.exports = {
   fetchOnlineSub: fetchOnlineSubV2, searchOnlineSubs: searchOnlineSubsV2,
+  osSearch, osNormalize, osLogin, osDownloadVtt, moviehashFromChunks,
   downloadSubtitle, downloadBestSubtitle, rankSubs, srtToVtt, shiftVtt, parseQuery, pickSub,
   _request: request, _isTransientError: isTransientError, _isNoSubtitleError: isNoSubtitleError,
   _wyzieCatalogId: wyzieCatalogId,

@@ -53,6 +53,60 @@ function effectiveOpenSubsKey(s = settings.get()) {
   return String(process.env.TRIBOON_WYZIE_KEY || '').trim() || null;
 }
 
+// OPTIONAL OpenSubtitles provider (hash-exact matching Wyzie can't do). Fully gated: returns
+// null unless an API key + login are configured (settings first, env fallback for headless
+// testing). When null, the Wyzie path runs exactly as before — zero behavior change.
+function effectiveOpenSubtitles(s = settings.get()) {
+  const apiKey = String((s && s.openSubtitlesApiKey) || process.env.TRIBOON_OS_API_KEY || '').trim();
+  const username = String((s && s.openSubtitlesUser) || process.env.TRIBOON_OS_USER || '').trim();
+  const password = String((s && s.openSubtitlesPass) || process.env.TRIBOON_OS_PASS || '').trim();
+  if (!apiKey || !username || !password) return null;
+  return { apiKey, username, password, base: process.env.OPENSUBTITLES_BASE || undefined };
+}
+// OpenSubtitles download needs a short-lived JWT (≈24h). Cache it across requests so we don't
+// burn the login rate limit; re-login on expiry or auth failure.
+let _osTokenCache = null; // { token, baseUrl, at }
+async function osBearer(cfg, { force = false } = {}) {
+  if (!force && _osTokenCache && Date.now() - _osTokenCache.at < 20 * 3600000) return _osTokenCache;
+  const login = await osLogin({ apiKey: cfg.apiKey, username: cfg.username, password: cfg.password, base: cfg.base });
+  _osTokenCache = { token: login.token, baseUrl: login.baseUrl, at: Date.now() };
+  return _osTokenCache;
+}
+async function collectStream(gen) {
+  const chunks = [];
+  for await (const c of gen) chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c));
+  return Buffer.concat(chunks);
+}
+// Compute the OpenSubtitles moviehash on the mounted file (first+last 64KB + size), cached on
+// the mount. Uses the lowest NNTP lane so it never competes with playback. Null on any failure.
+async function moviehashForMount(vf) {
+  if (vf._moviehash !== undefined) return vf._moviehash;
+  vf._moviehash = null;
+  try {
+    const size = Number(vf.size) || 0;
+    if (size >= 131072 && typeof vf.read === 'function') {
+      const head = await collectStream(vf.read(0, 65536, { priority: 'background' }));
+      const tail = await collectStream(vf.read(size - 65536, size, { priority: 'background' }));
+      vf._moviehash = moviehashFromChunks(head, tail, size) || null;
+    }
+  } catch { vf._moviehash = null; }
+  return vf._moviehash;
+}
+// Normalized OpenSubtitles variants for a mount. Never throws — any failure yields [] so the
+// Wyzie results stand alone. Hash search runs first (best signal), id search as the fallback.
+async function openSubtitlesVariantsForMount(vf, { imdbId, tmdbId, lang }) {
+  const cfg = effectiveOpenSubtitles();
+  if (!cfg) return [];
+  try {
+    const moviehash = await moviehashForMount(vf).catch(() => null);
+    const data = await osSearch({
+      apiKey: cfg.apiKey, base: cfg.base, moviehash: moviehash || '',
+      imdbId, tmdbId, query: vf._subQuery || vf._q || '', lang,
+    });
+    return (Array.isArray(data) ? data : []).map(osNormalize).filter((v) => v && v._osFileId);
+  } catch { return []; }
+}
+
 function clampInt(value, fallback, min, max) {
   const n = parseInt(value, 10);
   if (!Number.isFinite(n)) return fallback;
@@ -275,6 +329,7 @@ const pipeline = new Pipeline({
 const { fetchUrl: fetchUrlExt, searchIndexer } = require('./newznab');
 const {
   fetchOnlineSub, searchOnlineSubs, downloadBestSubtitle, rankSubs, srtToVtt, shiftVtt,
+  osSearch, osNormalize, osLogin, osDownloadVtt, moviehashFromChunks,
   _isTransientError: isTransientSubError,
   _isNoSubtitleError: isNoSubtitleError,
 } = require('./opensubs');
@@ -5632,13 +5687,21 @@ Object.assign(H, {
     const getVariants = async () => {
       if (!vf._osSearchCache.has(searchKey)) {
         if (!vf._osSearchInflight.has(searchKey)) {
-          const work = searchOnlineSubs(subOpts)
-            .then((data) => {
-              const variants = rankSubs(data, releaseName, { durationSeconds: vf._tracks && vf._tracks.duration }).slice(0, 12);
-              vf._osSearchCache.set(searchKey, variants);
-              return variants;
-            })
-            .finally(() => vf._osSearchInflight.delete(searchKey));
+          // Query Wyzie and OpenSubtitles in parallel, then rank the COMBINED set in one pass
+          // (rankSubs gives moviehash-matched OpenSubtitles hits a decisive boost). OpenSubtitles
+          // is gated/best-effort, so when it is unconfigured `os` is [] and this is identical to
+          // the prior Wyzie-only behavior — including throwing Wyzie's no-subtitles error.
+          const work = (async () => {
+            let wyData = [];
+            let wyErr = null;
+            try { wyData = await searchOnlineSubs(subOpts); } catch (e) { wyErr = e; }
+            const osData = await openSubtitlesVariantsForMount(vf, { imdbId, tmdbId, lang });
+            const combined = [...(Array.isArray(wyData) ? wyData : []), ...osData];
+            if (!combined.length) throw (wyErr || new Error('online subtitles failed'));
+            const variants = rankSubs(combined, releaseName, { durationSeconds: vf._tracks && vf._tracks.duration }).slice(0, 12);
+            vf._osSearchCache.set(searchKey, variants);
+            return variants;
+          })().finally(() => vf._osSearchInflight.delete(searchKey));
           vf._osSearchInflight.set(searchKey, work);
         }
         await vf._osSearchInflight.get(searchKey);
@@ -5665,11 +5728,41 @@ Object.assign(H, {
     if (!vf._osCache.has(cacheKey)) {
       if (!vf._osInflight.has(cacheKey)) {
         const work = (async () => {
-          if (!variant) return fetchOnlineSub(subOpts);
+          const osCfg = effectiveOpenSubtitles();
+          // Download a chosen OpenSubtitles variant via its /download flow (JWT + quota). One
+          // re-login retry covers an expired token.
+          const downloadOpenSubtitles = async (fileId) => {
+            const tok = await osBearer(osCfg);
+            try {
+              const r = await osDownloadVtt(fileId, { apiKey: osCfg.apiKey, token: tok.token, base: tok.baseUrl });
+              return r.vtt;
+            } catch (e) {
+              if (/HTTP 401|HTTP 403/.test(String(e && e.message))) {
+                const fresh = await osBearer(osCfg, { force: true });
+                const r = await osDownloadVtt(fileId, { apiKey: osCfg.apiKey, token: fresh.token, base: fresh.baseUrl });
+                return r.vtt;
+              }
+              throw e;
+            }
+          };
+          if (!variant) {
+            // Auto-pick: when OpenSubtitles is on, take the top of the COMBINED ranked list (a
+            // moviehash-exact hit wins); otherwise keep the original Wyzie auto path untouched.
+            if (!osCfg) return fetchOnlineSub(subOpts);
+            const variants = await getVariants();
+            const top = variants[0];
+            if (!top || !top.raw) throw new Error('online subtitles failed');
+            if (top.raw._provider === 'opensubtitles') return downloadOpenSubtitles(top.raw._osFileId);
+            return downloadBestSubtitle(variants.map((v) => v.raw).filter((d) => d && !d._provider), {
+              key, releaseName, durationSeconds: vf._tracks && vf._tracks.duration,
+              preferredId: top.id, ...(base ? { base } : {}), attempts: 3, retryDelayMs: 900,
+            });
+          }
           const variants = await getVariants();
           const hit = variants.find((v) => v.id === variant);
           if (!hit || !hit.raw) throw new Error('that subtitle version is no longer available');
-          return downloadBestSubtitle(variants.map((v) => v.raw).filter(Boolean), {
+          if (hit.raw._provider === 'opensubtitles') return downloadOpenSubtitles(hit.raw._osFileId);
+          return downloadBestSubtitle(variants.map((v) => v.raw).filter((d) => d && !d._provider), {
             key,
             releaseName,
             durationSeconds: vf._tracks && vf._tracks.duration,

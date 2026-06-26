@@ -124,18 +124,29 @@ on non-English titles. Fixed authoritatively server-side: `toIso6391()` in
 (and reduces BCP 47 tags like `pt-BR`→`pt`) before the Wyzie call; the client
 `LANG_3TO2` in [web/index.html](web/index.html) mirrors it. **Keep the two maps in sync.**
 
-### Research-backed accuracy wins that need an owner decision
-The deep-research pass (sources: OpenSubtitles oshash spec, Wyzie docs, ffsubsync,
-ISO 639-2 registry) confirmed two larger wins that are intentionally NOT done yet
-because they cross a Locked Decision:
-1. **Hash-exact sync via OpenSubtitles `moviehash`** (filesize + uint64-LE sum of the
-   first & last 64 KB — only 128 KB I/O, computable on a mounted NZB via two `readAt`
-   reads). Wyzie has **no** hash param, so this means adding OpenSubtitles as a second
-   subtitle provider. Biggest single win for *correct-sync* matches.
-2. **Content-based auto-sync (ffsubsync)** to fix constant-offset and 23.976↔25 fps
-   desync. Requires a new external binary — `docs-architecture.md` locks approved
-   binaries to ffmpeg + yt-dlp, so this needs explicit owner sign-off.
-Wyzie's imdb-first `id` is already optimal (TMDB is slower — Wyzie resolves imdb from
-it internally), so `wyzieCatalogId` needs no change. Remaining minor cleanups: the
-`S##E##` parser caps season at 2 digits / episode at 3, and dead legacy V1 functions
-(`opensubs.js` ~436/482) are shadowed by the V2 exports and should be deleted.
+### OpenSubtitles hash-exact provider (implemented, optional/gated)
+A second subtitle provider for **moviehash** matching — the strongest in-sync signal,
+which Wyzie cannot do. Entirely gated by `effectiveOpenSubtitles()`: when unconfigured
+the `/api/ossubs` handler runs the Wyzie path exactly as before. When configured, the
+handler queries **Wyzie + OpenSubtitles in parallel**, computes the moviehash on the
+mounted file (`moviehashForMount` → `moviehashFromChunks`: filesize + uint64-LE sum of
+the first & last 64 KB, ~2 segment reads on the lowest NNTP lane, cached on the mount),
+and ranks the **combined** set with `rankSubs` where a `moviehash_match` gets a decisive
+`+1000` boost so a hash-exact hit beats any release-name match. Downloads route by
+provider (`_provider === 'opensubtitles'` → `osDownloadVtt` via a cached JWT with one
+re-login retry; quota surfaces as a 504). All OpenSubtitles client functions are in
+[opensubs.js](server/opensubs.js) and mock-tested.
+
+Configure (env-var path; settings-UI fields are a follow-up):
+`TRIBOON_OS_API_KEY`, `TRIBOON_OS_USER`, `TRIBOON_OS_PASS` (all three required;
+`OPENSUBTITLES_BASE` overrides the host for tests). Wyzie's imdb-first `id` stays
+optimal (TMDB is slower — Wyzie resolves imdb from it internally).
+
+### Still owner-gated / TODO
+- **Content-based auto-sync (ffsubsync)** for constant-offset and 23.976↔25 fps desync —
+  needs a 3rd external binary (`docs-architecture.md` locks binaries to ffmpeg + yt-dlp).
+  Owner-approved; pending implementation + binary approval note. Note: syncing against the
+  streamed audio pulls the whole audio track, which fights the stream-while-unpacking model
+  — prefer syncing against an embedded reference subtitle when present.
+- Minor cleanups: `S##E##` parser caps season at 2 digits / episode at 3; dead legacy V1
+  functions (`opensubs.js` ~436/482) are shadowed by the V2 exports and should be deleted.
