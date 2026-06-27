@@ -1076,6 +1076,13 @@ test('Android native player: direct source and native chrome stay out of the web
     'Settings/Preferences inputs and dropdowns should use arrows for D-pad navigation instead of trapping focus');
   assert.match(android, /public String appVersion\(\)[\s\S]+BuildConfig\.VERSION_NAME[\s\S]+public void openAppUpdate\(String url\)[\s\S]+openExternalUrl\(url\)/,
     'Android bridge should expose app version and a guarded app-update opener');
+  // In-app self-update: download the signed APK and launch the system installer (no browser).
+  assert.match(android, /public void installAppUpdate\(String url\)[\s\S]+downloadAndInstallUpdate\(url\)/,
+    'Android bridge should expose installAppUpdate (in-app download + install)');
+  assert.match(android, /private void downloadAndInstallUpdate\(String rawUrl\) \{[\s\S]+allowedAppUpdateUrl\(uri\)[\s\S]+canRequestPackageInstalls\(\)[\s\S]+FileProvider\.getUriForFile[\s\S]+vnd\.android\.package-archive/,
+    'in-app update must validate the URL, ensure install permission, and hand the APK to the system installer via FileProvider, falling back to the browser');
+  assert.match(ui, /typeof TriboonTV\.installAppUpdate === 'function'[\s\S]+TriboonTV\.installAppUpdate\(url\)/,
+    'web update button should use the in-app installer when the shell supports it');
   assert.match(android, /boolean dpadArrow = code == KeyEvent\.KEYCODE_DPAD_UP \|\| code == KeyEvent\.KEYCODE_DPAD_DOWN[\s\S]+KEYCODE_DPAD_LEFT[\s\S]+KEYCODE_DPAD_RIGHT;[\s\S]+if \(domKey != null && \(!pageInputFocused \|\| dpadArrow\) && setup\.getVisibility\(\) != View\.VISIBLE\) \{[\s\S]+jsKey\("keydown", domKey, e\.getRepeatCount\(\) > 0\)/,
     'Android TV should still forward D-pad arrows to the web focus model while Settings/Preferences fields are focused');
   assert.match(android, /allowedAppUpdateUrl\(Uri uri\)[\s\S]+triboon-tv\.apk[\s\S]+triboon-mobile\.apk[\s\S]+openExternalUrl\(String rawUrl\)/,

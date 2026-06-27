@@ -638,6 +638,69 @@ public class MainActivity extends Activity {
         }
     }
 
+    private volatile boolean updateInProgress = false;
+
+    // Download the signed release APK (same allowlisted GitHub URL the browser path uses) and hand
+    // it straight to the system package installer — no browser/downloader detour. Any failure
+    // falls back to openExternalUrl so the user can still get the update.
+    private void downloadAndInstallUpdate(String rawUrl) {
+        final String url = rawUrl == null ? "" : rawUrl.trim();
+        Uri uri = Uri.parse(url);
+        if (!allowedAppUpdateUrl(uri)) { Toast.makeText(this, "Update link was blocked", Toast.LENGTH_SHORT).show(); return; }
+        if (updateInProgress) { Toast.makeText(this, "Update is already downloading…", Toast.LENGTH_SHORT).show(); return; }
+        // Android 8+: the app needs the one-time "install unknown apps" grant. Send the user there.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !getPackageManager().canRequestPackageInstalls()) {
+            Toast.makeText(this, "Allow Triboon to install apps, then press Update again", Toast.LENGTH_LONG).show();
+            try {
+                Intent perm = new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:" + getPackageName()));
+                perm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(perm);
+            } catch (Exception e) { openExternalUrl(url); }
+            return;
+        }
+        updateInProgress = true;
+        Toast.makeText(this, "Downloading update…", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            java.io.File out = new java.io.File(getCacheDir(), "triboon-update.apk");
+            try {
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+                conn.setInstanceFollowRedirects(true);
+                conn.setConnectTimeout(15000);
+                conn.setReadTimeout(60000);
+                conn.setRequestProperty("User-Agent", "TriboonTV/" + BuildConfig.VERSION_NAME);
+                int code = conn.getResponseCode();
+                if (code != 200) throw new java.io.IOException("HTTP " + code);
+                try (java.io.InputStream in = conn.getInputStream();
+                     java.io.FileOutputStream fos = new java.io.FileOutputStream(out)) {
+                    byte[] buf = new byte[65536]; int n;
+                    while ((n = in.read(buf)) != -1) fos.write(buf, 0, n);
+                }
+                conn.disconnect();
+                if (out.length() < 100000) throw new java.io.IOException("downloaded file too small");
+                runOnUiThread(() -> { updateInProgress = false; launchApkInstall(out); });
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    updateInProgress = false;
+                    Toast.makeText(this, "In-app update failed; opening the download instead", Toast.LENGTH_SHORT).show();
+                    openExternalUrl(url);
+                });
+            }
+        }, "triboon-update-dl").start();
+    }
+
+    private void launchApkInstall(java.io.File apk) {
+        try {
+            Uri apkUri = androidx.core.content.FileProvider.getUriForFile(this, getPackageName() + ".updateprovider", apk);
+            Intent intent = new Intent(Intent.ACTION_VIEW);
+            intent.setDataAndType(apkUri, "application/vnd.android.package-archive");
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+        } catch (Exception e) {
+            Toast.makeText(this, "Could not start the installer", Toast.LENGTH_SHORT).show();
+        }
+    }
+
     private boolean isBlockedPersonalIptvAddress(InetAddress addr) {
         if (addr == null) return true;
         if (addr.isAnyLocalAddress() || addr.isLoopbackAddress() || addr.isLinkLocalAddress()
@@ -1035,7 +1098,7 @@ public class MainActivity extends Activity {
             @android.webkit.JavascriptInterface
             public int nativeChromeVersion() {
                 if (!trustedBridgeOrigin()) return 0;
-                return 2; // v2: native Up Next card (upNext/upNextHide)
+                return 3; // v3: in-app self-update (installAppUpdate); v2: native Up Next card
             }
 
             @android.webkit.JavascriptInterface
@@ -1074,6 +1137,14 @@ public class MainActivity extends Activity {
             public void openAppUpdate(String url) {
                 if (!trustedBridgeOrigin()) return;
                 runOnUiThread(() -> openExternalUrl(url));
+            }
+
+            // In-app self-update: download the signed APK and launch the system installer directly,
+            // instead of bouncing to a browser/downloader. Falls back to openExternalUrl on failure.
+            @android.webkit.JavascriptInterface
+            public void installAppUpdate(String url) {
+                if (!trustedBridgeOrigin()) return;
+                runOnUiThread(() -> downloadAndInstallUpdate(url));
             }
 
             @android.webkit.JavascriptInterface

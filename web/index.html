@@ -15656,6 +15656,13 @@ async function renderAppUpdateBox() {
 function openApkUpdate(kind) {
   const url = APK_LINKS[kind] || APK_LINKS.tv;
   try {
+    // Preferred: download + install inside the app (no browser/downloader detour).
+    if (window.TriboonTV && typeof TriboonTV.installAppUpdate === 'function') {
+      TriboonTV.installAppUpdate(url);
+      toast('Downloading update…');
+      return;
+    }
+    // Older shells: hand the APK link to the system browser/downloader.
     if (window.TriboonTV && TriboonTV.openAppUpdate) {
       TriboonTV.openAppUpdate(url);
       toast('Opening APK update link');
