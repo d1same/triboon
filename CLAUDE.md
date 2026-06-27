@@ -29,7 +29,12 @@ Always follow the owner's method:
 
 - Native clean-room rebuild of nzbdav + UsenetStreamer concepts.
 - Server stack: Node 24 LTS, zero runtime npm dependencies in `server/`.
-- Approved external binaries: ffmpeg for remux/transcode and yt-dlp for Music.
+- Approved external binaries: ffmpeg for remux/transcode, yt-dlp for Music, and
+  ffsubsync (optional sidecar) for on-demand subtitle "Fix sync". ffsubsync is
+  detected at runtime and the feature is gated on its presence — absent on a box,
+  the CC path is unchanged. NOTE: it is NOT yet in the Docker image (numpy/scipy/
+  webrtcvad need care on Alpine/musl — use apk py3-numpy/py3-scipy + build-base and
+  build-test before shipping the image change).
 - Playback policy: source-fit, direct play, remux, transcode, in that order.
 - Per-user quality caps are enforced at source selection first, transcoder
   second.

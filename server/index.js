@@ -15,7 +15,7 @@ const { Auth, SecureSettings, RateLimiter } = require('./auth');
 const { Pipeline } = require('./pipeline');
 const { TmdbProxy } = require('./tmdb');
 const { Trakt } = require('./trakt');
-const { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnTranscode, spawnLiveRemux, spawnSubtitleExtract, makeThumb, LADDER, audioCopyOk } = require('./transcode');
+const { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnTranscode, spawnLiveRemux, spawnSubtitleExtract, detectFfsubsync, spawnSubSync, makeThumb, LADDER, audioCopyOk } = require('./transcode');
 const ytmusic = require('./ytmusic');
 const https = require('https');
 const dns = require('dns').promises;
@@ -105,6 +105,43 @@ async function openSubtitlesVariantsForMount(vf, { imdbId, tmdbId, lang }) {
     });
     return (Array.isArray(data) ? data : []).map(osNormalize).filter((v) => v && v._osFileId);
   } catch { return []; }
+}
+
+// WebVTT -> SRT for ffsubsync input (it parses SRT most reliably). Inverse of srtToVtt: drop the
+// WEBVTT header, turn the millisecond dot back into a comma. pysubs2 (inside ffsubsync) tolerates
+// missing cue indices, so we don't renumber.
+function vttToSrt(vtt) {
+  return String(vtt || '').replace(/^﻿/, '').replace(/\r/g, '')
+    .replace(/^WEBVTT[^\n]*\n+/, '')
+    .replace(/(\d{2}:\d{2}:\d{2})\.(\d{3})/g, '$1,$2');
+}
+// On-demand "Fix sync": align an already-fetched VTT to the mount's audio with ffsubsync, against
+// the same localhost tokened stream URL ffmpeg already uses for embedded subs. Heavy (reads the
+// audio), so it ONLY runs when the user explicitly asks. Returns the corrected VTT; throws on
+// failure so the caller can fall back to the unsynced cue track.
+async function onDemandSubSync(vf, vtt, uid) {
+  const os2 = require('os');
+  const fsp = fs.promises;
+  const dir = await fsp.mkdtemp(path.join(os2.tmpdir(), 'triboon-subsync-'));
+  const inSrt = path.join(dir, 'in.srt');
+  const outSrt = path.join(dir, 'out.srt');
+  try {
+    await fsp.writeFile(inSrt, vttToSrt(vtt), 'utf8');
+    const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(uid, vf.id)}`;
+    await new Promise((resolve, reject) => {
+      const p = spawnSubSync(selfUrl, inSrt, outSrt);
+      let err = '';
+      const killer = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} reject(new Error('ffsubsync timed out')); }, 300000);
+      p.stderr.on('data', (d) => { if (err.length < 4000) err += d.toString(); });
+      p.on('error', (e) => { clearTimeout(killer); reject(e); });
+      p.on('close', (code) => { clearTimeout(killer); code === 0 ? resolve() : reject(new Error(`ffsubsync exited ${code}: ${err.slice(-200)}`)); });
+    });
+    const out = await fsp.readFile(outSrt, 'utf8');
+    if (!out || !/\d{2}:\d{2}:\d{2}/.test(out)) throw new Error('ffsubsync produced no cues');
+    return srtToVtt(out);
+  } finally {
+    fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 function clampInt(value, fallback, min, max) {
@@ -3354,6 +3391,8 @@ const H = {
     tmdb: !!settings.get().tmdbKey, ffmpeg: !!detectFfmpeg(),
     // Wyzie only needs the server-side API key; no account login is required.
     opensubs: !!effectiveOpenSubsKey(),
+    // ffsubsync sidecar present → the player may offer an on-demand "Fix sync" action.
+    subSync: !!detectFfsubsync(),
     builtInSubtitlesEnabled: settings.get().builtInSubtitlesEnabled === true,
     iptv: iptvConfigured(settings.get()),
     music: !!ytmusic.detectYtdlp(), // Music tab shows only when yt-dlp is present
@@ -5783,6 +5822,26 @@ Object.assign(H, {
       }
     }
     const vtt = vf._osCache.get(cacheKey);
+    // On-demand "Fix sync" (?sync=1): re-align this cue track to the audio with ffsubsync. Gated
+    // on the binary being installed; on any failure we fall back to the unsynced track rather than
+    // erroring, so the button can never leave the user worse off. When sync is not requested this
+    // whole branch is skipped and behavior is unchanged.
+    if (ctx.url.searchParams.get('sync') === '1' && detectFfsubsync() && vtt) {
+      const syncKey = `${cacheKey}:synced`;
+      if (!vf._osCache.has(syncKey)) {
+        if (!vf._osInflight.has(syncKey)) {
+          const work = onDemandSubSync(vf, vtt, ctx.claims.uid)
+            .then((synced) => { vf._osCache.set(syncKey, synced); return synced; })
+            .finally(() => vf._osInflight.delete(syncKey));
+          vf._osInflight.set(syncKey, work);
+        }
+        try { await vf._osInflight.get(syncKey); } catch (e) {
+          console.error(`[subsync ${vf.id}] ${String(e && e.message || e).slice(0, 160)}`);
+        }
+      }
+      const synced = vf._osCache.get(syncKey);
+      if (synced) return send(ctx.res, 200, shift ? shiftVtt(synced, shift) : synced, { 'content-type': 'text/vtt; charset=utf-8' });
+    }
     send(ctx.res, 200, shift ? shiftVtt(vtt, shift) : vtt, { 'content-type': 'text/vtt; charset=utf-8' });
   },
 

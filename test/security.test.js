@@ -1480,6 +1480,16 @@ test('subtitles: ISO 639-2 B/T codes normalize to the 639-1 code Wyzie expects',
   assert.strictEqual(to1(''), '', 'blank is empty');
 });
 
+test('subtitles: ffsubsync "Fix sync" is gated — absent binary stays inert', () => {
+  const transcode = require('../server/transcode');
+  // On CI/dev boxes ffsubsync is not installed, so detection must be null (feature hidden) and
+  // spawnSubSync must refuse rather than spawn a missing binary — the on-demand branch can never
+  // run unless the sidecar is actually present.
+  assert.strictEqual(transcode.detectFfsubsync(), null, 'no ffsubsync binary → detection null');
+  assert.throws(() => transcode.spawnSubSync('http://x/stream', '/tmp/in.srt', '/tmp/out.srt'),
+    /ffsubsync not available/, 'spawnSubSync refuses when the binary is absent');
+});
+
 test('subtitles: OpenSubtitles moviehash search → login → download → VTT (mock)', async () => {
   const http2 = require('http');
   const opensubs = require('../server/opensubs');

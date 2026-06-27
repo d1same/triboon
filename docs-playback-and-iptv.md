@@ -142,11 +142,23 @@ Configure (env-var path; settings-UI fields are a follow-up):
 `OPENSUBTITLES_BASE` overrides the host for tests). Wyzie's imdb-first `id` stays
 optimal (TMDB is slower — Wyzie resolves imdb from it internally).
 
-### Still owner-gated / TODO
-- **Content-based auto-sync (ffsubsync)** for constant-offset and 23.976↔25 fps desync —
-  needs a 3rd external binary (`docs-architecture.md` locks binaries to ffmpeg + yt-dlp).
-  Owner-approved; pending implementation + binary approval note. Note: syncing against the
-  streamed audio pulls the whole audio track, which fights the stream-while-unpacking model
-  — prefer syncing against an embedded reference subtitle when present.
+### On-demand "Fix sync" (ffsubsync) — server side done, gated; UI + image pending
+Owner-approved as an **on-demand** action (not automatic — aligning against the streamed audio
+pulls the whole audio track, which fights stream-while-unpacking, so it runs only when the user
+asks). Server side is implemented and fully gated on `detectFfsubsync()`:
+- `transcode.js`: `detectFfsubsync()` (sidecar, like ffmpeg/yt-dlp) + `spawnSubSync(refUrl, in, out)`
+  which runs `ffsubsync <stream> -i in.srt -o out.srt --gss` (`--gss` also fixes 23.976↔25 fps).
+- `/api/ossubs/:mount?sync=1`: re-aligns the already-fetched VTT to the mount's audio via the same
+  localhost tokened stream URL ffmpeg uses for embedded subs; caches the result; **on any failure
+  falls back to the unsynced track** so the action can never leave the user worse off.
+- `/api/server` reports `subSync` so the player can show the button only when the binary exists.
+When ffsubsync is absent, `detectFfsubsync()` is null, `subSync` is false, and none of this runs.
+
+**Still TODO (do where they can be build-tested):**
+1. **Docker image install** — ffsubsync's numpy/scipy/webrtcvad have no musl wheels; install via
+   `apk add py3-numpy py3-scipy build-base` + `pip install ffsubsync`, and actually build the image
+   before shipping (don't risk the unraid build blindly).
+2. **Client "Fix sync" button** in the player CC/track menu → re-request the active sub with
+   `&sync=1` and reapply. Verify with the binary actually installed.
 - Minor cleanups: `S##E##` parser caps season at 2 digits / episode at 3; dead legacy V1
   functions (`opensubs.js` ~436/482) are shadowed by the V2 exports and should be deleted.

@@ -350,4 +350,34 @@ function spawnSubtitleExtract(streamUrl, subTrack) {
   ], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
 }
 
-module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnTranscode, spawnLiveRemux, spawnSubtitleExtract, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, supportsFfmpegHttpOption };
+// OPTIONAL: ffsubsync for on-demand "Fix sync". A sidecar binary like ffmpeg/yt-dlp — absent on
+// most boxes, so every caller must gate on detection and degrade honestly when it is missing.
+let _ffsubsync; // cached: { path } | null
+function detectFfsubsync() {
+  if (_ffsubsync !== undefined) return _ffsubsync;
+  for (const cand of [process.env.FFSUBSYNC_PATH, 'ffsubsync', 'ffs'].filter(Boolean)) {
+    try {
+      const r = spawnSync(cand, ['--help'], { timeout: 5000, windowsHide: true });
+      // --help exits 0 on ffsubsync; treat any clean spawn whose output mentions the tool as present.
+      if (r.status === 0 || /ffsubsync|reference|srtin/i.test(String(r.stdout) + String(r.stderr))) {
+        _ffsubsync = { path: cand };
+        return _ffsubsync;
+      }
+    } catch { /* try next */ }
+  }
+  _ffsubsync = null;
+  return null;
+}
+// Align `inPath` (an unsynced .srt) to the audio of `refUrl` (the playback stream) and write
+// `outPath`. `--gss` also corrects framerate-ratio desync (23.976↔25). Reference audio must be
+// read in full, so callers run this ON DEMAND only — never on the hot playback path.
+function spawnSubSync(refUrl, inPath, outPath) {
+  const fs2 = detectFfsubsync();
+  if (!fs2) throw new Error('ffsubsync not available');
+  const ff = detectFfmpeg();
+  const env = ff ? { ...process.env, FFMPEG_PATH: ff.path } : process.env;
+  return spawn(fs2.path, [refUrl, '-i', inPath, '-o', outPath, '--gss'],
+    { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env });
+}
+
+module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnTranscode, spawnLiveRemux, spawnSubtitleExtract, detectFfsubsync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, supportsFfmpegHttpOption };
