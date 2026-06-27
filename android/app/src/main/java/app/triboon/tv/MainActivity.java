@@ -200,7 +200,7 @@ public class MainActivity extends Activity {
     private ImageButton nativeStatsBtn;
     private ImageButton nativeNextBtn;
     private ImageButton nativeFavBtn;
-    private ImageButton nativeLiveBtn;       // live: jump back to the live edge after a pause/rewind
+    private TextView nativeLiveBtn;          // live: red "LIVE" pill — jump back to the live edge
     private LinearLayout nativeEpgStrip;     // live: channel schedule strip above the seek bar
     private org.json.JSONArray nativeEpgData; // programmes the web pushes via setLiveEpg()
     private boolean nativeLiveFav = false;
@@ -2913,11 +2913,27 @@ public class MainActivity extends Activity {
         });
         centerControls.addView(nativePlayBtn);
 
-        // Live only: jump back to the live edge (ExoPlayer's default position for a live window)
-        // after the user has paused or fallen behind, and resume.
-        nativeLiveBtn = nativeButton(R.drawable.ic_player_golive, "Go to live", false);
+        // Live only: a red "LIVE" pill (matches the web overlay) — tap to jump back to the live edge
+        // (ExoPlayer's default position for a live window) after a pause/rewind, and resume.
+        nativeLiveBtn = new TextView(this);
+        nativeLiveBtn.setText("● LIVE");
+        nativeLiveBtn.setTextColor(0xFFF3EFF7);
+        nativeLiveBtn.setTextSize(11);
+        nativeLiveBtn.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        nativeLiveBtn.setGravity(android.view.Gravity.CENTER);
+        nativeLiveBtn.setPadding(dp(15), dp(8), dp(15), dp(9));
+        nativeLiveBtn.setContentDescription("Go to live");
+        nativeLiveBtn.setBackground(nativePillBg(0x40FF5A5A, 0xCCFF5A5A, dp(18)));
+        nativeLiveBtn.setFocusable(true);
+        nativeLiveBtn.setClickable(true);
+        nativeLiveBtn.setOnFocusChangeListener((v, has) ->
+                v.setBackground(nativePillBg(has ? 0x99FF5A5A : 0x40FF5A5A, 0xFFFF5A5A, dp(18))));
         nativeLiveBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) goNativeLive(); });
-        centerControls.addView(nativeLiveBtn);
+        nativeLiveBtn.setOnKeyListener((v, code, e) -> handleNativeSurfaceKey(e));
+        LinearLayout.LayoutParams liveLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        liveLp.setMargins(dp(10), 0, dp(10), 0);
+        centerControls.addView(nativeLiveBtn, liveLp);
 
         nativeFwdBtn = nativeButton(R.drawable.ic_player_forward, "Forward 30 seconds", false);
         nativeFwdBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) nativeSeekBy(30000); });
@@ -4211,8 +4227,8 @@ public class MainActivity extends Activity {
         updateNativeChrome();
     }
 
-    private ImageButton[] nativeControlButtons() {
-        return new ImageButton[]{
+    private View[] nativeControlButtons() {
+        return new View[]{
                 nativeGuideBtn, nativeRewBtn, nativePlayBtn, nativeLiveBtn, nativeFwdBtn,
                 nativeNextBtn, nativeFavBtn, nativeCcBtn, nativeAudioBtn, nativeQualityBtn, nativeStatsBtn
         };
@@ -4221,11 +4237,11 @@ public class MainActivity extends Activity {
     private boolean moveNativeControlFocus(int dir) {
         if (nativeChrome == null || nativeChrome.getVisibility() != View.VISIBLE) return false;
         nativeSeekDpadMode = false;
-        ImageButton[] buttons = nativeControlButtons();
+        View[] buttons = nativeControlButtons();
         View current = getCurrentFocus();
         int first = -1, last = -1, cur = -1;
         for (int i = 0; i < buttons.length; i++) {
-            ImageButton b = buttons[i];
+            View b = buttons[i];
             if (b == null || b.getVisibility() != View.VISIBLE || !b.isEnabled()) continue;
             if (first < 0) first = i;
             last = i;
@@ -4233,7 +4249,7 @@ public class MainActivity extends Activity {
         }
         if (first < 0) return false;
         if (cur < 0 && nativeControlIndex >= first && nativeControlIndex <= last) {
-            ImageButton remembered = buttons[nativeControlIndex];
+            View remembered = buttons[nativeControlIndex];
             if (remembered != null && remembered.getVisibility() == View.VISIBLE && remembered.isEnabled()) {
                 cur = nativeControlIndex;
             }
@@ -4243,7 +4259,7 @@ public class MainActivity extends Activity {
                     && nativePlayBtn.isEnabled() ? java.util.Arrays.asList(buttons).indexOf(nativePlayBtn) : first)
                 : Math.max(first, Math.min(last, cur + dir));
         while (target >= first && target <= last) {
-            ImageButton b = buttons[target];
+            View b = buttons[target];
             if (b != null && b.getVisibility() == View.VISIBLE && b.isEnabled()) {
                 nativeControlIndex = target;
                 b.requestFocus();
@@ -4258,9 +4274,9 @@ public class MainActivity extends Activity {
     private boolean clickNativeControlFocus() {
         if (nativeChrome == null || nativeChrome.getVisibility() != View.VISIBLE) return false;
         View current = getCurrentFocus();
-        ImageButton[] buttons = nativeControlButtons();
+        View[] buttons = nativeControlButtons();
         for (int i = 0; i < buttons.length; i++) {
-            ImageButton b = buttons[i];
+            View b = buttons[i];
             if (b != null && b.getVisibility() == View.VISIBLE && b.isEnabled() && current == b) {
                 nativeControlIndex = i;
                 armNativeControlClick(b);
@@ -4269,7 +4285,7 @@ public class MainActivity extends Activity {
             }
         }
         if (nativeControlIndex >= 0 && nativeControlIndex < buttons.length) {
-            ImageButton b = buttons[nativeControlIndex];
+            View b = buttons[nativeControlIndex];
             if (b != null && b.getVisibility() == View.VISIBLE && b.isEnabled()) {
                 armNativeControlClick(b);
                 b.performClick();
@@ -4294,7 +4310,7 @@ public class MainActivity extends Activity {
 
     private boolean isNativeControl(View current) {
         if (current == null) return false;
-        for (ImageButton b : nativeControlButtons()) {
+        for (View b : nativeControlButtons()) {
             if (b != null && b.getVisibility() == View.VISIBLE && b.isEnabled() && current == b) return true;
         }
         return false;
@@ -4302,10 +4318,10 @@ public class MainActivity extends Activity {
 
     private boolean focusNativeDefaultControl() {
         nativeSeekDpadMode = false;
-        ImageButton[] buttons = nativeControlButtons();
-        ImageButton target = nativePlayBtn != null && nativePlayBtn.getVisibility() == View.VISIBLE && nativePlayBtn.isEnabled() ? nativePlayBtn : null;
+        View[] buttons = nativeControlButtons();
+        View target = nativePlayBtn != null && nativePlayBtn.getVisibility() == View.VISIBLE && nativePlayBtn.isEnabled() ? nativePlayBtn : null;
         if (target == null) {
-            for (ImageButton b : buttons) {
+            for (View b : buttons) {
                 if (b != null && b.getVisibility() == View.VISIBLE && b.isEnabled()) { target = b; break; }
             }
         }

@@ -1945,9 +1945,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'native player controls should keep playback centered with secondary controls on the right');
   assert.match(android, /leftControls\.addView\(nativeGuideBtn\);[\s\S]+centerControls\.addView\(nativeRewBtn\);[\s\S]+centerControls\.addView\(nativePlayBtn\);[\s\S]+centerControls\.addView\(nativeFwdBtn\);[\s\S]+centerControls\.addView\(nativeNextBtn\);[\s\S]+rightControls\.addView\(nativeCcBtn\);[\s\S]+rightControls\.addView\(nativeAudioBtn\);[\s\S]+rightControls\.addView\(nativeQualityBtn\);[\s\S]+rightControls\.addView\(nativeStatsBtn\);/,
     'native player should keep Guide left, playback centered, and CC/audio/HD before the final stats/info button');
-  assert.match(android, /return new ImageButton\[\]\{\s+nativeGuideBtn, nativeRewBtn, nativePlayBtn, nativeLiveBtn, nativeFwdBtn,\s+nativeNextBtn, nativeFavBtn, nativeCcBtn, nativeAudioBtn, nativeQualityBtn, nativeStatsBtn\s+\};/,
-    'native player D-pad traversal must include nativeFavBtn and the live Go-live button so both are reachable on live');
-  // Native live: a Go-live button (ExoPlayer live-edge seek) shown only for live, like the web overlay.
+  assert.match(android, /return new View\[\]\{\s+nativeGuideBtn, nativeRewBtn, nativePlayBtn, nativeLiveBtn, nativeFwdBtn,\s+nativeNextBtn, nativeFavBtn, nativeCcBtn, nativeAudioBtn, nativeQualityBtn, nativeStatsBtn\s+\};/,
+    'native player D-pad traversal (View[] — the Go-live LIVE pill is a TextView) must include nativeFavBtn and nativeLiveBtn');
+  // Native live: a red "LIVE" text pill (matching the web overlay) — NOT a skip icon — that seeks to
+  // the live edge. It is a TextView, which is why nativeControlButtons() is View[] not ImageButton[].
+  assert.match(android, /nativeLiveBtn = new TextView\(this\);\s*nativeLiveBtn\.setText\("● LIVE"\)/,
+    'the native Go-live control should be a red "● LIVE" text pill, not the >>| skip icon');
   assert.match(android, /private void goNativeLive\(\) \{[\s\S]+"live"\.equals\(nativeMode\)[\s\S]+nativePlayer\.seekToDefaultPosition\(\)[\s\S]+nativePlayer\.play\(\)/,
     'goNativeLive should seek to the live edge and resume');
   assert.match(android, /if \(nativeLiveBtn != null\) nativeLiveBtn\.setVisibility\(isLive \? View\.VISIBLE : View\.GONE\)/,
