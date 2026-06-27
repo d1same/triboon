@@ -285,7 +285,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Up Next should start only at the 10-second choice window and work for native progress without relying on the web video paused state');
   assert.doesNotMatch(ui, /\(d - t\) > 45/,
     'Up Next must not start a 10-second autoplay countdown with 45 seconds still left in the episode');
-  assert.match(ui, /const UP_NEXT_COUNTDOWN_SECONDS = 10;[\s\S]+function showUpNext\(\) \{[\s\S]+let n = UP_NEXT_COUNTDOWN_SECONDS; \$\('unCount'\)\.textContent = n;[\s\S]+if \(n <= 0\) playNextEpisode\(\);/,
+  assert.match(ui, /const UP_NEXT_COUNTDOWN_SECONDS = 10;[\s\S]+function showUpNext\(\) \{[\s\S]+let n = UP_NEXT_COUNTDOWN_SECONDS;[\s\S]+\$\('unCount'\)\.textContent = n;[\s\S]+if \(n <= 0\) playNextEpisode\(\);/,
     'Up Next autoplay should always give the user a 10-second choice window before starting the next episode');
   assert.match(ui, /id="unPlay">Play next episode<\/button>/,
     'Up Next primary action should clearly say Play next episode');

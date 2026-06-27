@@ -199,6 +199,13 @@ public class MainActivity extends Activity {
     private ImageButton nativeQualityBtn;
     private ImageButton nativeStatsBtn;
     private ImageButton nativeNextBtn;
+    private View nativeUpNextCard;
+    private TextView nativeUpNextKicker;
+    private TextView nativeUpNextTitle;
+    private TextView nativeUpNextSub;
+    private Button nativeUpNextPlay;
+    private Button nativeUpNextDismiss;
+    private boolean nativeUpNextVisible = false;
     private LinearLayout nativeSheet;
     private ScrollView nativeSheetScroll;
     private LinearLayout nativeSheetRows;
@@ -1026,7 +1033,19 @@ public class MainActivity extends Activity {
             @android.webkit.JavascriptInterface
             public int nativeChromeVersion() {
                 if (!trustedBridgeOrigin()) return 0;
-                return 1;
+                return 2; // v2: native Up Next card (upNext/upNextHide)
+            }
+
+            @android.webkit.JavascriptInterface
+            public void upNext(String json) {
+                if (!trustedBridgeOrigin()) return;
+                runOnUiThread(() -> showNativeUpNext(json));
+            }
+
+            @android.webkit.JavascriptInterface
+            public void upNextHide() {
+                if (!trustedBridgeOrigin()) return;
+                runOnUiThread(() -> dismissNativeUpNext(false));
             }
 
             @android.webkit.JavascriptInterface
@@ -2864,6 +2883,13 @@ public class MainActivity extends Activity {
         sheetLp.setMargins(sheetSide, 0, sheetSide, nativeSheetBottomMarginPx());
         nativePlayerLayer.addView(nativeSheet, sheetLp);
 
+        nativeUpNextCard = buildNativeUpNextCard();
+        FrameLayout.LayoutParams upNextLp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                android.view.Gravity.END | android.view.Gravity.BOTTOM);
+        upNextLp.setMargins(0, 0, dp(40), dp(58));
+        nativePlayerLayer.addView(nativeUpNextCard, upNextLp);
+
         nativeLoading = new FrameLayout(this);
         nativeLoading.setBackgroundColor(0xFF050309);
         nativeLoading.setVisibility(View.GONE);
@@ -3095,6 +3121,138 @@ public class MainActivity extends Activity {
         d.setCornerRadius(dp(10));
         d.setStroke(dp(1), 0x12FFFFFF);
         return d;
+    }
+
+    // Up Next card — the native twin of the web #upNext overlay. The countdown + "what plays
+    // next" logic lives in the web layer (single source of truth, and it keeps running while the
+    // WebView is hidden behind the ExoPlayer surface); this card just renders what web pushes via
+    // TriboonTV.upNext(...) and forwards Play/Dismiss back to web.
+    private View buildNativeUpNextCard() {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(16), dp(13), dp(16), dp(14));
+        card.setBackground(nativePanelBg());
+        card.setVisibility(View.GONE);
+        card.setClipChildren(false);
+        card.setClipToPadding(false);
+        card.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) card.setElevation(dp(10));
+
+        nativeUpNextKicker = new TextView(this);
+        nativeUpNextKicker.setText("UP NEXT");
+        nativeUpNextKicker.setTextColor(0xFFF2B441);
+        nativeUpNextKicker.setTextSize(11);
+        nativeUpNextKicker.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        card.addView(nativeUpNextKicker);
+
+        nativeUpNextTitle = new TextView(this);
+        nativeUpNextTitle.setTextColor(Color.WHITE);
+        nativeUpNextTitle.setTextSize(17);
+        nativeUpNextTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        nativeUpNextTitle.setSingleLine(true);
+        nativeUpNextTitle.setEllipsize(TextUtils.TruncateAt.END);
+        nativeUpNextTitle.setPadding(0, dp(5), 0, 0);
+        card.addView(nativeUpNextTitle, new LinearLayout.LayoutParams(dp(300), ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        nativeUpNextSub = new TextView(this);
+        nativeUpNextSub.setTextColor(0xB8F3EFF7);
+        nativeUpNextSub.setTextSize(12);
+        nativeUpNextSub.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        nativeUpNextSub.setPadding(0, dp(2), 0, 0);
+        card.addView(nativeUpNextSub);
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setPadding(0, dp(12), 0, 0);
+        nativeUpNextPlay = nativeUpNextButton("Play Next", true);
+        nativeUpNextPlay.setOnClickListener(v -> triggerNativeUpNextPlay());
+        row.addView(nativeUpNextPlay);
+        nativeUpNextDismiss = nativeUpNextButton("Dismiss", false);
+        nativeUpNextDismiss.setOnClickListener(v -> dismissNativeUpNext(true));
+        row.addView(nativeUpNextDismiss);
+        card.addView(row, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        return card;
+    }
+
+    private Button nativeUpNextButton(String label, boolean primary) {
+        Button b = new Button(this);
+        b.setAllCaps(false);
+        b.setText(label);
+        b.setTextColor(primary ? 0xFF0B0A0F : Color.WHITE);
+        b.setTextSize(14);
+        b.setTypeface(Typeface.DEFAULT_BOLD);
+        b.setFocusable(true);
+        b.setFocusableInTouchMode(false);
+        b.setClickable(true);
+        b.setMinWidth(0);
+        b.setMinHeight(0);
+        b.setMinimumWidth(0);
+        b.setMinimumHeight(0);
+        b.setPadding(dp(18), dp(9), dp(18), dp(9));
+        b.setBackground(nativeUpNextButtonBg(false, primary));
+        b.setOnFocusChangeListener((v, hasFocus) -> v.setBackground(nativeUpNextButtonBg(hasFocus, primary)));
+        b.setOnKeyListener((v, code, e) -> handleNativeUpNextKey(e));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.rightMargin = dp(8);
+        b.setLayoutParams(lp);
+        return b;
+    }
+
+    private GradientDrawable nativeUpNextButtonBg(boolean focused, boolean primary) {
+        int fill = primary ? (focused ? 0xFFFFFFFF : 0xFFF3EFF7) : (focused ? 0x33FFFFFF : 0x14FFFFFF);
+        int stroke = focused ? 0xFFF2B441 : 0x22FFFFFF;
+        return nativePillBg(fill, stroke, dp(8));
+    }
+
+    private void showNativeUpNext(String json) {
+        if (nativeUpNextCard == null || !"video".equals(nativeMode) || !nativePlayerOpen()) return;
+        String title = "";
+        String sub = "";
+        int seconds = -1;
+        boolean autoplay = false;
+        try {
+            org.json.JSONObject j = new org.json.JSONObject(json == null ? "{}" : json);
+            title = j.optString("title", "");
+            sub = j.optString("sub", "");
+            seconds = j.optInt("seconds", -1);
+            autoplay = j.optBoolean("autoplay", false);
+        } catch (Exception e) { return; }
+        nativeUpNextTitle.setText(title.isEmpty() ? "Next episode" : title);
+        nativeUpNextSub.setText(sub);
+        nativeUpNextSub.setVisibility(sub.isEmpty() ? View.GONE : View.VISIBLE);
+        nativeUpNextPlay.setText(autoplay && seconds >= 0 ? ("Play Next · " + seconds) : "Play Next");
+        boolean wasVisible = nativeUpNextVisible;
+        nativeUpNextCard.setVisibility(View.VISIBLE);
+        nativeUpNextVisible = true;
+        if (!wasVisible) nativeUpNextPlay.requestFocus();
+    }
+
+    private void dismissNativeUpNext(boolean notifyWeb) {
+        boolean was = nativeUpNextVisible;
+        nativeUpNextVisible = false;
+        if (nativeUpNextCard != null) nativeUpNextCard.setVisibility(View.GONE);
+        if (was && nativePlayerLayer != null) nativePlayerLayer.requestFocus();
+        if (notifyWeb && web != null) {
+            web.evaluateJavascript("window.__upNextDismissNative && __upNextDismissNative()", null);
+        }
+    }
+
+    private void triggerNativeUpNextPlay() {
+        nativeUpNextVisible = false;
+        if (nativeUpNextCard != null) nativeUpNextCard.setVisibility(View.GONE);
+        if (web != null) web.evaluateJavascript("window.__upNextPlayNative && __upNextPlayNative()", null);
+    }
+
+    private boolean handleNativeUpNextKey(KeyEvent e) {
+        if (e == null || e.getAction() != KeyEvent.ACTION_DOWN) return false;
+        int code = e.getKeyCode();
+        if (code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_ESCAPE) {
+            dismissNativeUpNext(true);
+            return true;
+        }
+        return false;
     }
 
     private ImageButton nativeButton(int iconRes, String label, boolean primary) {
@@ -5781,6 +5939,8 @@ public class MainActivity extends Activity {
             nativeSheet.removeAllViews();
         }
         clearNativeEpisodes();
+        nativeUpNextVisible = false;
+        if (nativeUpNextCard != null) nativeUpNextCard.setVisibility(View.GONE);
         if (nativeControlShade != null) nativeControlShade.setVisibility(View.GONE);
         if (nativeMetaBar != null) nativeMetaBar.setVisibility(View.GONE);
         nativeSheetReturnFocus = null;
@@ -6185,6 +6345,7 @@ public class MainActivity extends Activity {
 
         if (nativePlayerOpen()) {
             if (nativeGuideMode) closeNativeGuideMode();
+            else if (nativeUpNextVisible) dismissNativeUpNext(true);
             else if (nativeSheetOpen()) hideNativeSheet();
             else if (nativeEpisodeStripOpen) closeNativeEpisodeStrip();
             else if (!dismissNativeChromeForBack()) closeNativePlayback(true);

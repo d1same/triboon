@@ -1360,6 +1360,114 @@ test('pipeline: auto-advance mounts the next candidate when the current source d
   pool.close(); await mock.close(); ix.server.close(); store.close();
 });
 
+test('pipeline: resume re-checks health and auto-advances when the saved source died while away', async () => {
+  // Continue Watching gap: a source that mounted and streamed fine can ROT on the provider
+  // before the user resumes (retention expiry / DMCA takedown). On resume the player re-checks
+  // health (the /api/health route runs vf.triage); a now-blocked verdict must hand off to a
+  // healthy source so the user resumes from their timestamp instead of staring at a dead stream.
+  const pay1 = seededPayload(300 * 1024, 71);
+  const pay2 = seededPayload(300 * 1024, 72);
+  const r1 = nzbFor([{ name: 'Resume.A.mkv', data: pay1 }], 30000, 'res1');
+  const r2 = nzbFor([{ name: 'Resume.B.mkv', data: pay2 }], 30000, 'res2');
+  const mock = createMockNntp({ articles: new Map([...r1.articles, ...r2.articles]) });
+  const nntpPort = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 6);
+  const ix = makeMockIndexer([
+    { name: 'Resume.Movie.2024.1080p.WEB-DL.H.264-FLUX', size: 7e9, nzb: r1.nzb },
+    { name: 'Resume.Movie.2024.1080p.WEB-DL.H.264-NTb', size: 7e9, nzb: r2.nzb },
+  ]);
+  const ixPort = await ix.listen();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const pipeline = new Pipeline({
+    pool: () => pool, verdicts: new VerdictCache(store), mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+
+  try {
+    // Initial watch: source 1 mounts and is healthy.
+    const first = await pipeline.play({ q: 'Resume Movie 2024' }, {});
+    assert.strictEqual(first.candidate.name, 'Resume.Movie.2024.1080p.WEB-DL.H.264-FLUX');
+    assert.strictEqual((await first.vf.triage(100)).verdict, 'verified', 'source is healthy at first watch');
+
+    // ...time passes; every article of source 1 is taken down on the provider.
+    for (const id of r1.articles.keys()) mock.markMissing(id);
+
+    // Resume re-checks health on the SAME live mount: it must now report blocked, never silently
+    // serve dead bytes. (A cached "verified" from the first watch would defeat the whole point.)
+    const recheck = await first.vf.triage(100);
+    assert.strictEqual(recheck.verdict, 'blocked', 'resume health re-check catches the rotted source live');
+
+    // The player hands off to the next ranked source, byte-exact and seekable to the resume point.
+    const resumed = await pipeline.advance(first.session.id);
+    assert.strictEqual(resumed.candidate.name, 'Resume.Movie.2024.1080p.WEB-DL.H.264-NTb');
+    assert.notStrictEqual(resumed.vf.id, first.vf.id, 'resume mounts a fresh healthy source, not the dead one');
+    const chunks = [];
+    for await (const c of resumed.vf.read(0, resumed.vf.size)) chunks.push(c);
+    assert.ok(Buffer.concat(chunks).equals(pay2), 'resumed healthy source streams byte-exact');
+    // A deep cold seek to the resume timestamp must also be exact on the recovered source.
+    const seekStart = Math.floor(resumed.vf.size * 0.6);
+    const seek = [];
+    for await (const c of resumed.vf.read(seekStart, resumed.vf.size, { priority: 'seek' })) seek.push(c);
+    assert.ok(Buffer.concat(seek).equals(pay2.subarray(seekStart)), 'resume-point seek on the recovered source is byte-exact');
+  } finally {
+    pool.close(); await mock.close(); ix.server.close(); store.close();
+  }
+});
+
+test('pipeline: multi-user concurrent VOD streams stay byte-exact and never exceed the connection cap', async () => {
+  // Real-world gap (docs-architecture / CLAUDE.md "still open"): several 1080p/4K starts and
+  // seeks at once must ALL stream correctly while sharing one provider's bounded connection
+  // pool — no stream starves, every byte stays exact, and the pool never opens more sockets than
+  // its cap (a connection leak under load would exhaust the provider and "stick buffering").
+  const { VirtualFile } = require('../server/vfs');
+  const STREAMS = 4;
+  const POOL = 12;
+  const releases = Array.from({ length: STREAMS }, (_, i) => {
+    const data = seededPayload(512 * 1024 + i * 4096, 0xd00 + i); // distinct sizes + seeds
+    return { ...nzbFor([{ name: `Concurrent${i}.mkv`, data }], 48 * 1024, `cc${i}`), data };
+  });
+  const articles = new Map();
+  for (const r of releases) for (const [k, v] of r.articles) articles.set(k, v);
+  const mock = createMockNntp({ articles, latencyMs: 12 }); // simulate provider RTT under load
+  const port = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false }, POOL);
+
+  try {
+    const vfs = [];
+    for (const r of releases) {
+      const vf = new VirtualFile(pool, r.nzb, { readAhead: 4 });
+      await vf.mount();
+      vfs.push(vf);
+    }
+
+    const t0 = Date.now();
+    // Each "user" does a full sequential read AND a deep cold seek — all four concurrently,
+    // contending for the same 12 connections.
+    const results = await Promise.all(vfs.map(async (vf, i) => {
+      const data = releases[i].data;
+      const full = [];
+      for await (const c of vf.read(0, vf.size, { priority: 'startup' })) full.push(c);
+      const seekStart = Math.floor(vf.size * 0.7);
+      const seek = [];
+      for await (const c of vf.read(seekStart, vf.size, { priority: 'seek' })) seek.push(c);
+      return { full: Buffer.concat(full), seek: Buffer.concat(seek), data, seekStart };
+    }));
+    const elapsed = Date.now() - t0;
+
+    for (let i = 0; i < STREAMS; i++) {
+      assert.ok(results[i].full.equals(results[i].data), `stream ${i} full read byte-exact under contention`);
+      assert.ok(results[i].seek.equals(results[i].data.subarray(results[i].seekStart)),
+        `stream ${i} cold seek byte-exact under contention`);
+    }
+    assert.ok(mock.connCount() <= POOL,
+      `pool stayed within its ${POOL}-connection cap (opened ${mock.connCount()}) — no leaked connections under load`);
+    assert.ok(elapsed < 15000, `four concurrent streams finished within budget (${elapsed}ms)`);
+  } finally {
+    pool.close(); await mock.close();
+  }
+});
+
 test('pipeline: explicit pickKey mounts the chosen source before auto-pick', async () => {
   const autoPayload = seededPayload(90 * 1024, 51);
   const pickedPayload = seededPayload(90 * 1024, 52);

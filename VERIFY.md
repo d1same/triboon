@@ -63,7 +63,77 @@ changes, complete these live checks before saying the update is done:
 If a live smoke cannot run, the final report must say `not run`, explain why,
 and describe the risk.
 
+### Guided live self-test (real provider, measured)
+
+The dev box has no usenet creds by design, so the automated suite proves engine
+logic on mock NNTP only. To measure the real press→frame→seek→resume path on a
+configured box (the owner's server or unraid), run the guided self-test against
+a running server:
+
+```powershell
+$env:TRIBOON_USER="owner"; $env:TRIBOON_PASS="..."
+npm.cmd run verify:live -- --base http://localhost:7777 `
+  --title "Movie Name 2024|tt1234567" --title "Show S01E01|tt7654321|1|1"
+```
+
+It logs in, then for each title measures: **ready** (press→playable via
+`/api/play`), **1stByte** (stream Range bytes=0-, the time-to-first-frame
+proxy), **seek** (cold Range ~70% in), **resume** (second Play reuses the live
+mount), and reports the **playback method** (direct / +aacSafe / remux /
+transcode) and a live **health** verdict. Exit code is non-zero if any title
+fails to produce a playable stream. Budgets default to feels-local targets
+(ready≤3s, 1stByte≤1.5s) and flag `SLOW` rather than hard-failing on timing.
+
 ### Latest Evidence
+
+2026-06-27, TV "next episode" — prefetch + Up Next parity (web + ExoPlayer):
+
+- Review finding: next-episode prefetch only warmed `/api/search` on START (the pipeline's search
+  cache lives ~60s, so it was stale long before a 40-min episode ended), and the web `#upNext`
+  card couldn't render on Android because the WebView is hidden behind the ExoPlayer surface
+  (`web.setVisibility(View.GONE)`) — so on exo the popup only appeared AFTER the episode ended.
+- Fix A: new `maybePrepareNextEpisode(t,d)` fires `/api/prepare` ~90s before the end (from both the
+  web tick and the 1Hz native progress callback), leaving a live mount that `play()` reuses
+  instantly; one-shot, reset on teardown, skipped for local-library episodes.
+- Fix B: native ExoPlayer Up Next card (`TriboonTV.upNext`/`upNextHide`, `nativeChromeVersion`→2).
+  Countdown stays in the web layer (single source of truth, runs while the WebView is hidden) and
+  drives the native card; Play/Dismiss forward back to web; Back dismisses the card first.
+- Verified on emulator (Triboon_TV_API_36, app reaching dev server via `adb reverse`):
+  - App launches, MainActivity resumed, no crash; `nativeChromeVersion()`=2; `TriboonTV.upNext`/
+    `upNextHide` present; web `nativeUpNextBridge`/`maybePrepareNextEpisode`/`hideUpNextUi`/
+    `__upNextPlayNative` all defined.
+  - Played a local-library movie natively (ExoPlayer, dur 4756s) → `buildNativePlayerLayer` built
+    the card with no crash. Forced `TriboonTV.upNext(...)` → card rendered OVER the video ("UP NEXT"
+    kicker, title, S01E02, **Play Next · 8** focused + Dismiss). `upNextHide()` cleared it cleanly.
+    Hardware BACK dismissed the card and notified web (`upNextShown:false`) WITHOUT closing playback
+    (`view:player`, `usingNative:true`). Screenshots captured.
+- `npm.cmd test` 247/247 (updated one phase4 regex to track the countdown refactor — same 10s-window
+  + `playNextEpisode()`-at-0 guarantee, not weakened). Android `assembleDebug` → 5.3 MB APK. Inline
+  web JS parses with 0 errors.
+- Not verifiable on the dev box (no usenet creds): the near-end `/api/prepare` actually mounting a
+  TMDB episode for instant handoff. Wiring is in place and the call fires; the mount/instant-resume
+  needs a usenet-configured box (owner) or `verify:live`.
+
+2026-06-27, bulletproofing — closed two of the documented-open test gaps + shipped a live self-test:
+
+- New `test/phase2.test.js` coverage (247/247 pass):
+  - `pipeline: multi-user concurrent VOD streams stay byte-exact and never exceed the connection
+    cap` — 4 simultaneous streams (full read + cold seek each) share one 12-connection NntpPool
+    with simulated RTT; asserts every byte exact under contention AND the pool never opens more
+    than its cap (no connection leak under load). This was a CLAUDE.md "still open" item.
+  - `pipeline: resume re-checks health and auto-advances when the saved source died while away` —
+    a source that streamed fine has every article taken down on the provider; the resume health
+    re-check (`vf.triage`, what `/api/health` runs) now returns `blocked` live, and `advance`
+    hands off to a healthy source byte-exact, including a resume-point cold seek.
+- New `bench/verify-live.js` (`npm run verify:live`): zero-dep guided self-test that measures the
+  real provider path (ready / first-byte / seek / resume / method / health) on a configured box.
+  Smoke-tested on the dev server (no creds): logs in, reads `/api/server`, drives `/api/play`,
+  and honestly reports `no indexers configured` with exit 1 — proving the wire path. Real timing
+  numbers must be captured on the owner's configured server/unraid box.
+- Still unverified here (no creds on dev box): actual press→frame wall-clock, audio on real usenet
+  content, and resume on a genuinely dead real NZB. `verify:live` is the tool to capture these.
+
+
 
 2026-06-26, v1.7.35 Multiview VOD audio — complete fix + on-emulator verification:
 

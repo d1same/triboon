@@ -8255,10 +8255,11 @@ function stopActivePlaybackForReplacement(opts = {}) {
   closeTrackMenu();
   $('playerStats').classList.remove('open');
   if (!opts.preserveGuide) closePlayerGuide({ fromNative: true });
-  $('upNext').classList.remove('show');
+  hideUpNextUi();
   closePlayerEpisodes();
   S.playerSeasonStrip = null;
   S.nextEp = null;
+  S.nextEpPrepared = false;
   S.playing = null;
   updateNextEpisodeButton();
   updatePlayerControlAvailability();
@@ -9050,6 +9051,7 @@ function applyNativeVideoProgress(pos, dur, opts = {}) {
   const keepPrev = opts.preserveOnZero && incoming <= 1 && prev > 30;
   p.nativePos = keepPrev ? prev : incoming;
   if (+dur > 0) { p.nativeDuration = +dur; p.duration = +dur; }
+  maybePrepareNextEpisode(p.nativePos, totalDuration());
   maybeShowUpNext(p.nativePos, totalDuration(), { native: true });
   return p.nativePos;
 }
@@ -9095,6 +9097,10 @@ window.__tvNativeVideoClosed = (pos, dur, ended) => {
   applyNativeVideoProgress(pos, dur, { preserveOnZero: !ended });
   if (ended && S.nextEp) {
     saveWatch(true);
+    // The ExoPlayer surface (and its native Up Next card) is torn down at end-of-episode, so
+    // hand the Up Next card to the now-visible web layer for the final choice/countdown.
+    p.usingNative = false;
+    S.upNextShown = false;
     showUpNext();
     return;
   }
@@ -9548,7 +9554,7 @@ function activatePlayerEpisode() {
   play(ep.item);
 }
 async function prepNextEpisode(it) {
-  S.nextEp = null; S.upNextShown = false;
+  S.nextEp = null; S.upNextShown = false; S.nextEpPrepared = false;
   updateNextEpisodeButton();
   if (!it || it.type !== 'episode' || !it.key) return;
   const parts = episodeKeyParts(it); if (!parts) return;
@@ -9569,25 +9575,68 @@ async function prepNextEpisode(it) {
     const item = inheritedQuality ? { ...base, qualityRank: inheritedQuality } : base;
     S.nextEp = { item, still: img(ep.still_path, 'w300') || ctx.show.backdrop, epName: ep.name || '', tag: `S${pad2(ns)}E${pad2(ne)}` };
     updateNextEpisodeButton();
-    api('/api/search?' + sourceSearchQuery(item)).catch(() => {}); // warm next episode's sources
+    // The actual mount is warmed near the END of the episode (maybePrepareNextEpisode), not here:
+    // the server search/verdict cache lives ~60s, so warming a 40-minute episode's sources on
+    // start is stale long before Up Next. A near-end /api/prepare leaves a LIVE mount that
+    // play() reuses instantly when the user (or autoplay) advances.
   } catch {}
 }
+// Lead time before the episode end to mount the next episode so the handoff feels local. Kept
+// short so the next episode's mount does not tie up provider connections for the whole episode.
+const NEXT_EP_PREP_LEAD_SECONDS = 90;
+function maybePrepareNextEpisode(t, d) {
+  if (!d || !S.nextEp || S.nextEpPrepared || (d - t) > NEXT_EP_PREP_LEAD_SECONDS || (d - t) <= 0) return;
+  const item = S.nextEp.item; if (!item) return;
+  S.nextEpPrepared = true; // one shot; play()/autoplay reuses the live mount via the server's mountByUrl
+  if (localTitleHasPlayback(item)) return; // local libraries are already instant — no mount to warm
+  const qRank = qualityRankForItem(item);
+  api('/api/prepare', { method: 'POST', body: playbackRequestBody(item, null, qRank) }).catch(() => {});
+}
 const UP_NEXT_COUNTDOWN_SECONDS = 10;
+// Native ExoPlayer hides the WebView, so the web #upNext overlay can't draw over the video.
+// When a v2+ shell exposes the native Up Next card, drive THAT instead — the countdown still
+// lives here (this JS keeps running while the WebView is hidden), we just render via the bridge.
+function nativeUpNextBridge() {
+  return (S.playing && S.playing.usingNative && window.TriboonTV
+    && typeof window.TriboonTV.upNext === 'function') ? window.TriboonTV : null;
+}
+function pushNativeUpNext(ne, seconds, autoplay) {
+  const tv = nativeUpNextBridge(); if (!tv) return;
+  try { tv.upNext(JSON.stringify({ title: ne.epName || ne.tag, sub: ne.tag, seconds, autoplay: !!autoplay })); } catch {}
+}
+function hideUpNextUi() {
+  $('upNext').classList.remove('show');
+  if (S.upNextTimer) { clearInterval(S.upNextTimer); S.upNextTimer = null; }
+  if (window.TriboonTV && typeof window.TriboonTV.upNextHide === 'function') { try { TriboonTV.upNextHide(); } catch {} }
+}
 function showUpNext() {
   const ne = S.nextEp; if (!ne) return;
   S.upNextShown = true;
-  $('unStill').style.backgroundImage = `url('${ne.still}')`;
-  $('unTitle').textContent = ne.epName || ne.tag;
-  $('unSub').textContent = ne.tag;
-  $('upNext').classList.add('show');
-  applyFocus($('unPlay')); // remote: OK plays immediately, → reaches Dismiss
-  if (S.upNextTimer) clearInterval(S.upNextTimer);
+  const native = nativeUpNextBridge();
+  const autoplay = prefAutoplay();
+  if (!native) {
+    $('unStill').style.backgroundImage = `url('${ne.still}')`;
+    $('unTitle').textContent = ne.epName || ne.tag;
+    $('unSub').textContent = ne.tag;
+    $('upNext').classList.add('show');
+    applyFocus($('unPlay')); // remote: OK plays immediately, → reaches Dismiss
+  }
+  if (S.upNextTimer) { clearInterval(S.upNextTimer); S.upNextTimer = null; }
   // Preference (Stremio parity): auto-play OFF keeps the Up Next card as a manual choice —
   // no countdown, nothing plays unless the user picks it.
-  if (!prefAutoplay()) { $('unCdWrap').style.display = 'none'; return; }
-  $('unCdWrap').style.display = '';
-  let n = UP_NEXT_COUNTDOWN_SECONDS; $('unCount').textContent = n;
-  S.upNextTimer = setInterval(() => { n--; $('unCount').textContent = n; if (n <= 0) playNextEpisode(); }, 1000);
+  if (!autoplay) {
+    if (native) pushNativeUpNext(ne, -1, false);
+    else $('unCdWrap').style.display = 'none';
+    return;
+  }
+  if (!native) $('unCdWrap').style.display = '';
+  let n = UP_NEXT_COUNTDOWN_SECONDS;
+  if (native) pushNativeUpNext(ne, n, true); else $('unCount').textContent = n;
+  S.upNextTimer = setInterval(() => {
+    n--;
+    if (native) pushNativeUpNext(ne, n, true); else $('unCount').textContent = n;
+    if (n <= 0) playNextEpisode();
+  }, 1000);
 }
 function maybeShowUpNext(t, d, opts = {}) {
   // The countdown begins when the popup appears, so do not surface it earlier than
@@ -9599,11 +9648,14 @@ function maybeShowUpNext(t, d, opts = {}) {
 }
 function playNextEpisode() {
   const ne = S.nextEp;
-  $('upNext').classList.remove('show'); if (S.upNextTimer) clearInterval(S.upNextTimer);
+  hideUpNextUi();
   if (ne) play(ne.item);
 }
 $('unPlay').addEventListener('click', playNextEpisode);
-$('unCancel').addEventListener('click', () => { $('upNext').classList.remove('show'); if (S.upNextTimer) clearInterval(S.upNextTimer); });
+$('unCancel').addEventListener('click', hideUpNextUi);
+// Native Up Next card → web (the bridge forwards Play/Dismiss here so the countdown owner decides).
+window.__upNextPlayNative = () => playNextEpisode();
+window.__upNextDismissNative = () => hideUpNextUi();
 $('vlcCopy').addEventListener('click', () => {
   navigator.clipboard.writeText($('vlcUrl').textContent).then(() => toast('Stream URL copied — paste into VLC'));
 });
@@ -10056,7 +10108,8 @@ function tick() {
   if (S.view !== 'player') return;
   if (_nudgeBase !== null) { updPP(); return requestAnimationFrame(() => setTimeout(tick, 250)); } // don't fight the seek preview
   const t = currentTime(), d = totalDuration();
-  // Near the end of an episode → surface the Up-next card with a 10s countdown.
+  // Near the end of an episode → mount the next episode, then surface the Up-next card.
+  maybePrepareNextEpisode(t, d);
   maybeShowUpNext(t, d);
   const pct = d ? Math.min(100, (t / d) * 100) : 0;
   $('fill').style.width = pct + '%'; $('knob').style.left = pct + '%';
