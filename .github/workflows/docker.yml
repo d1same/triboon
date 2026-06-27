@@ -80,7 +80,11 @@ jobs:
           java-version: '17'
       - uses: android-actions/setup-android@v3
       - name: Decode release keystore
-        run: echo "${{ secrets.TRIBOON_RELEASE_KEYSTORE_B64 }}" | base64 -d > "${{ runner.temp }}/triboon-release.jks"
+        # tr strips any CR/LF/spaces the secret may carry (e.g. from a CRLF host) so base64 -d
+        # never sees invalid input; then sanity-check it's a real keystore (PK zip magic).
+        run: |
+          echo "${{ secrets.TRIBOON_RELEASE_KEYSTORE_B64 }}" | tr -d '[:space:]' | base64 -d > "${{ runner.temp }}/triboon-release.jks"
+          test -s "${{ runner.temp }}/triboon-release.jks" || { echo "keystore decode produced an empty file"; exit 1; }
       - name: Build signed release APK
         env:
           TRIBOON_RELEASE_STORE_FILE: ${{ runner.temp }}/triboon-release.jks
