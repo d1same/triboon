@@ -86,6 +86,35 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-06-27, startup + pause/resume + nav + guide (v1.7.41/v1.7.42):
+
+- Startup win #1 (v1.7.41): first-article STAT probe runs CONCURRENTLY with the mount instead of
+  gating it. Measured via bench/startup-latency.js on the mock provider — play()→mounted dropped
+  203→142ms @60ms RTT and 626→418ms @200ms RTT (~one RTT off every cold play). Dead-source skip +
+  slow-probe semantics preserved; phase2 timing assertion moved after the now-async probe settle.
+- Pause/resume stall fixed: abortRead no longer cancels the shared read-ahead epoch for
+  read-ahead/warm-ahead/background lanes (a closing warm-ahead connection was stranding the live
+  player's prefetch on resume — "stuck unless I rewind"). Source assertion added.
+- Universal two-step Back (verified on emulator): movies grid idx6 → Back → idx0 → Back → rail;
+  music deep idx5 → Back → idx0 → Back → rail.
+- Music results D-pad is true 2D (verified): from a song, Right → next column, Down → next row
+  (was: Down acted like Right through the 2-col grid).
+- Continue Watching removal sticks: profile-scoped local hidden set (cwHideNext/cwHiddenNextSet)
+  survives the post-remove loadWatchState reload (server strips hidden from /api/watch) + restarts.
+- Native live favorite star now D-pad reachable (added to nativeControlButtons); web-guide-PiP path
+  no longer falls to the web player with VOD controls (takes over natively).
+- Crash resilience: android:largeHeap=true; multiview MSE buffer retention scales DOWN with pane
+  count (4 panes ~15s each, trim sooner) to cut renderer OOM ("Web Page crashed").
+- PiP guide (v1.7.42): both the PiP guide and main Live TV guide already default to the timeline
+  view with logos (S.liveGuide defaults true when EPG exists; both use ch.logo). Fixed the PiP
+  guide's scroll JUMP — it was the only place using scrollIntoView block:'center' on focus restore
+  (recentering on every category switch / channel play); now 'nearest', matching the main guide.
+  Verified on emulator: PiP guide shows channel logos + EPG timeline + Now/Next; category switch
+  (United States→Kids) keeps the guide stable.
+- npm test 249/249 (--test-force-exit avoids the node:test post-run fake-hang); Android
+  assembleDebug OK; inline web JS parses.
+
+
 2026-06-27, guide/multiview polish (v1.7.40) — owner-reported nav bugs + multiview picker redesign:
 
 - Multiview picker redesign: dropped the repeated group label ("United States" on every row — the

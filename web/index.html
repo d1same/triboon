@@ -14560,7 +14560,9 @@ async function renderPlayerGuideTimeline(pg, list) {
     || lp.querySelector('[data-pg]');
   if (cur) {
     try { cur.focus({ preventScroll: true }); } catch { cur.focus(); }
-    cur.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' });
+    // 'nearest' (not 'center') so re-rendering after a category switch / channel play doesn't
+    // recenter and visibly JUMP the guide — matches the main Live TV guide, which scrolls smoothly.
+    cur.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'auto' });
     if (cur.classList && cur.classList.contains('pgRow')) setPlayerGuideVisualFocus(cur._ch ?? cur.dataset.guideChannel);
     else clearPlayerGuideVisualFocus();
   }
