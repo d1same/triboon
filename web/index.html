@@ -15107,10 +15107,26 @@ function clearMusicMediaSession() {
 }
 window.__tvMusicTransport = (action) => musicTransport(action);
 function musicRows() { return [...document.querySelectorAll('#musicList .mArtistHit, #musicList .musicRow[data-mrow]')]; }
+function scrollMusicRowIntoView(el) {
+  const ml = $('musicList');
+  if (!el || !ml) return;
+  // WebView-safe scroll: scrollIntoView({block:'nearest'}) is unreliable inside this nested
+  // overflow:auto flex container on Android TV (same reason focusCard scrolls the poster grid by
+  // hand) — the focus ring moved down search results but the list never scrolled, so the lower
+  // items stayed off-screen. Set scrollTop directly from measured rects instead.
+  const er = el.getBoundingClientRect(), cr = ml.getBoundingClientRect();
+  const pad = 16;
+  let top = ml.scrollTop;
+  if (er.top < cr.top + pad) top = ml.scrollTop - (cr.top + pad - er.top);
+  else if (er.bottom > cr.bottom - pad) top = ml.scrollTop + (er.bottom - (cr.bottom - pad));
+  if (Math.abs(top - ml.scrollTop) > 1) ml.scrollTo({ top: Math.max(0, top), behavior: focusScrollBehavior() });
+}
 function focusMusic(i) {
   const rows = musicRows(); if (!rows.length) return;
   S.musicRowIdx = Math.max(0, Math.min(rows.length - 1, i));
-  applyFocus(rows[S.musicRowIdx], !S.pointer);
+  const tv = document.body.classList.contains('tv');
+  applyFocus(rows[S.musicRowIdx], !tv && !S.pointer); // TV scrolls manually below (WebView scrollIntoView is unreliable)
+  if (tv) scrollMusicRowIntoView(rows[S.musicRowIdx]);
   S.zone = 'music';
 }
 function musicIcon(name) {

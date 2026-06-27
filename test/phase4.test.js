@@ -650,6 +650,12 @@ test('music search supports voice and TV result focus without side-note clutter'
     'Music Enter/voice search should submit immediately and wait for result focus');
   assert.match(ui, /function moveMusicSearchDown\(\) \{[\s\S]+if \(q\) \{ musicSearchAndFocusResults\(\); return; \}[\s\S]+chipEls\(\)\.length[\s\S]+musicRows\(\)\.length/,
     'Music ArrowDown should not strand focus in the input while search results load');
+  // TV: scrollIntoView is unreliable inside the #musicList overflow container (the focus ring moved
+  // down search results but the list never scrolled). focusMusic must scroll #musicList by hand on TV.
+  assert.match(ui, /function scrollMusicRowIntoView\(el\) \{[\s\S]+getBoundingClientRect\(\)[\s\S]+ml\.scrollTo\(\{ top: Math\.max\(0, top\)/,
+    'music results must scroll by measured rects (scrollIntoView is unreliable in the TV WebView)');
+  assert.match(ui, /function focusMusic\(i\) \{[\s\S]+const tv = document\.body\.classList\.contains\('tv'\);[\s\S]+applyFocus\(rows\[S\.musicRowIdx\], !tv && !S\.pointer\);[\s\S]+if \(tv\) scrollMusicRowIntoView\(rows\[S\.musicRowIdx\]\)/,
+    'focusMusic should scroll the list manually on TV so lower search results are not stranded off-screen');
   assert.match(ui, /window\.__tvVoice = \(text\) => \{[\s\S]+tvVoiceTarget === 'music' && S\.view === 'music'[\s\S]+submitMusicVoiceSearch\(text\)/,
     'Android native voice callback should route to Music when the Music mic launched it');
   assert.match(ui, /function setupMusicVoiceSearch\(\) \{[\s\S]+TriboonTV\.startVoice[\s\S]+setTvVoiceTarget\('music'\)[\s\S]+new SR\(\)/,
