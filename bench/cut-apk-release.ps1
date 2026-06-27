@@ -75,8 +75,13 @@ Write-Host "Staged in dist/: $($names -join ', ')" -ForegroundColor Green
 if ($NoPublish) { Write-Host "Skipping publish (-NoPublish). Upload dist/* to the $tag release manually." -ForegroundColor Yellow; return }
 
 # --- publish to the GitHub release for this tag (create if missing, else clobber-upload) ---
-& gh release view $tag *> $null
-if ($LASTEXITCODE -eq 0) {
+# Probe with ErrorActionPreference relaxed: a "release not found" on stderr must not abort the
+# script under -ErrorActionPreference Stop (it's the expected "create it" signal).
+$prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+& gh release view $tag 2>$null 1>$null
+$hasRelease = ($LASTEXITCODE -eq 0)
+$ErrorActionPreference = $prevEAP
+if ($hasRelease) {
   Write-Host "Updating existing release $tag..." -ForegroundColor Cyan
   & gh release upload $tag @files --clobber
 } else {
