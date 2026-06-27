@@ -18251,7 +18251,9 @@ function focusLiveSearchInput() {
   return true;
 }
 function focusLiveFilter() {
-  if (document.body.classList.contains('tv') && focusLiveToolbar('chMultiBtn')) return true;
+  // Up from the categories/channels lands on the channel SEARCH bar (the primary top control) — on TV
+  // this used to jump to the Multiview button instead, leaving #chSearch unreachable by D-pad. Right
+  // from the search steps onto the Multiview/Guide buttons; Left reaches the rail.
   return focusLiveSearchInput();
 }
 function liveContentEls() {
@@ -19441,7 +19443,7 @@ document.addEventListener('keydown', (e) => {
     if (liveToolbarId === 'chMultiBtn') {
       const ae = $('chMultiBtn');
       if (k === 'Enter') { if (!e.repeat) ae.click(); return; }
-      if (k === 'ArrowLeft') return document.body.classList.contains('tv') ? enterRail() : focusLiveSearchInput();
+      if (k === 'ArrowLeft') return focusLiveSearchInput();
       if (k === 'ArrowRight' && $('chGuideBtn')) return focusLiveToolbar('chGuideBtn');
       if (k === 'ArrowUp') return focusLiveToolbar('chMultiBtn');
       if (k === 'ArrowDown') { ae.blur(); return focusLiveCategory() || focusFirstLiveContent(); }

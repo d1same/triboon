@@ -2429,10 +2429,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android TV should expose the Live TV and PiP guide Multiview launchers while normal single-channel Live TV remains native');
   assert.ok(android.includes('window.__tvNativePlaybackSurfaceReady && window.__tvNativePlaybackSurfaceReady()'),
     'Android should notify the web app after closing the native player surface so Multiview can wait for WebView focus');
-  assert.match(ui, /function liveToolbarButtons\(\) \{[\s\S]+\['chMultiBtn', 'chGuideBtn'\][\s\S]+function focusLiveToolbar\(id = 'chMultiBtn'\) \{[\s\S]+applyFocus\(btn, false\);[\s\S]+btn\.focus\(\{ preventScroll: true \}\)[\s\S]+function focusLiveFilter\(\) \{[\s\S]+document\.body\.classList\.contains\('tv'\) && focusLiveToolbar\('chMultiBtn'\)[\s\S]+return focusLiveSearchInput\(\);/,
-    'Live TV D-pad should land on the toolbar buttons on TV instead of parking focus in the search input');
-  assert.match(ui, /const liveToolbarId = S\.view === 'livetv' \? focusedLiveToolbarButton\(\) : '';[\s\S]+if \(liveToolbarId === 'chMultiBtn'\) \{[\s\S]+if \(k === 'ArrowLeft'\) return document\.body\.classList\.contains\('tv'\) \? enterRail\(\) : focusLiveSearchInput\(\);[\s\S]+if \(k === 'ArrowRight' && \$\('chGuideBtn'\)\) return focusLiveToolbar\('chGuideBtn'\);[\s\S]+if \(liveToolbarId === 'chGuideBtn'\) \{[\s\S]+if \(k === 'ArrowLeft'\) return \$\('chMultiBtn'\) \? focusLiveToolbar\('chMultiBtn'\) : enterRail\(\);/,
-    'Live TV toolbar buttons should have explicit D-pad movement between Multiview, Guide, content, and rail');
+  // Up from categories/channels must reach the channel SEARCH input (it was unreachable by D-pad on
+  // TV — focusLiveFilter jumped to the Multiview button). Right from search steps to the toolbar.
+  assert.match(ui, /function focusLiveFilter\(\) \{[\s\S]*?return focusLiveSearchInput\(\);\s*\}/,
+    'Up from categories/channels must focus the channel search input so the D-pad can reach it on TV');
+  assert.match(ui, /const liveToolbarId = S\.view === 'livetv' \? focusedLiveToolbarButton\(\) : '';[\s\S]+if \(liveToolbarId === 'chMultiBtn'\) \{[\s\S]+if \(k === 'ArrowLeft'\) return focusLiveSearchInput\(\);[\s\S]+if \(k === 'ArrowRight' && \$\('chGuideBtn'\)\) return focusLiveToolbar\('chGuideBtn'\);/,
+    'Left from the Multiview button should step back to the search input (so search ↔ Multiview ↔ Guide), not the rail');
   assert.ok(ui.includes('id="multiView" aria-hidden="true"')
       && ui.includes('id="mvVideo0"')
       && ui.includes('id="mvVideo1"')
