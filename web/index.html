@@ -7843,8 +7843,11 @@ function multiViewVodUrl(mount, item, startAt = 0) {
     quality: 1080,
     forceAacRemux: true,
   };
+  // Transcode covers audio+video. Otherwise PREFER remux+AAC over direct even when the server
+  // picked 'direct': the multiview pane has no audio-fallback loop, and this WebView can't decode
+  // AC3/EAC3/DTS — a direct play of such a source is silent. remux+audioSafe guarantees AAC.
   if (kind === 'transcode' && mount.transcodeUrl) return { ...media, url: `${mount.transcodeUrl}&start=${start}&audio=0&height=1080`, startOffset: start, directSeek: 0 };
-  if (kind === 'remux' && mount.remuxUrl) return { ...media, url: remuxPlaybackUrl(p, start), startOffset: start, directSeek: 0 };
+  if (mount.remuxUrl) return { ...media, kind: 'remux', url: remuxPlaybackUrl(p, start), startOffset: start, directSeek: 0 };
   return { ...media, kind: 'direct', url: mount.streamUrl, startOffset: 0, directSeek: start };
 }
 function multiViewVodUrlFromSlot(slot, startAt = multiViewSlotPosition(slot, multiViewActiveSlot())) {
@@ -7857,10 +7860,10 @@ function multiViewVodUrlFromSlot(slot, startAt = multiViewSlotPosition(slot, mul
     streamToken: slot.streamToken,
     audioTrack: slot.audioTrack || 0,
     quality: slot.quality || 1080,
-    forceAacRemux: !!slot.forceAacRemux,
+    forceAacRemux: true, // multiview always wants browser-decodable (AAC) audio on the remux path
   };
   if (slot.kind === 'transcode' && p.transcodeUrl) return { ...p, kind: 'transcode', url: `${p.transcodeUrl}&start=${start}&audio=${p.audioTrack}&height=${p.quality}`, startOffset: start, directSeek: 0 };
-  if (slot.kind === 'remux' && p.remuxUrl) return { ...p, kind: 'remux', url: remuxPlaybackUrl(p, start), startOffset: start, directSeek: 0 };
+  if (p.remuxUrl) return { ...p, kind: 'remux', url: remuxPlaybackUrl(p, start), startOffset: start, directSeek: 0 };
   return { ...p, kind: 'direct', url: p.streamUrl, startOffset: 0, directSeek: start };
 }
 function multiViewVodDuration(i, slot) {

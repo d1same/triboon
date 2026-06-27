@@ -2448,10 +2448,13 @@ test('Android native player: direct source and native chrome stay out of the web
   // previous one's upstream stream (the "previous pane shows network error" bug).
   assert.match(ui, /const surface = multi \? `mv\$\{opts\.multiSlot \|\| 0\}` : \(split \? 'split' : 'main'\);[\s\S]+url = url \+ \(url\.includes\('\?'\) \? '&' : '\?'\) \+ 'surface=' \+ encodeURIComponent\(surface\)/,
     'live MSE panes should tag the stream with a per-surface id so concurrent panes keep separate server slots');
-  // Multiview VOD panes have no track-probe loop, so they must force AAC remux or AC3/DTS sources
-  // play with no sound.
-  assert.match(ui, /function multiViewVodUrl\(mount, item, startAt = 0\) \{[\s\S]+forceAacRemux: true,[\s\S]+forceAacRemux: true,/,
-    'multiview VOD should force AAC remux so non-AAC audio still plays in the pane');
+  // Multiview VOD panes have no track-probe loop and the WebView can't decode AC3/EAC3/DTS, so
+  // they must force AAC remux AND prefer remux over direct (even when the server picks 'direct'),
+  // or such sources play with no sound.
+  assert.match(ui, /function multiViewVodUrl\(mount, item, startAt = 0\) \{[\s\S]+forceAacRemux: true,[\s\S]+forceAacRemux: true,[\s\S]+if \(mount\.remuxUrl\) return \{ \.\.\.media, kind: 'remux', url: remuxPlaybackUrl\(p, start\)/,
+    'multiview VOD should prefer remux+AAC over direct so non-AAC audio still plays in the pane');
+  assert.match(ui, /function multiViewVodUrlFromSlot\([\s\S]+forceAacRemux: true,[\s\S]+if \(p\.remuxUrl\) return \{ \.\.\.p, kind: 'remux'/,
+    'multiview VOD seek-rebuild should also prefer remux+AAC');
   // Leaving multiview must tear down the underlying player surface or it shows a black #video.
   assert.match(ui, /function closeMultiView\(opts = \{\}\) \{[\s\S]+const mainVideo = \$\('video'\);[\s\S]+\$\('player'\)\.classList\.remove\('open', 'guideMode', 'live'\);[\s\S]+document\.body\.classList\.remove\('videoOpen', 'nativeGuideMode'\)/,
     'closing multiview should tear down the main player/video surface so the target view is not a black screen');

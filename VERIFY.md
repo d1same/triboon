@@ -65,6 +65,22 @@ and describe the risk.
 
 ### Latest Evidence
 
+2026-06-26, v1.7.35 Multiview VOD audio — complete fix + on-emulator verification:
+
+- Root cause confirmed on the emulator: clientCaps reported ac3:false, eac3:false, dts:false,
+  aac:true — the WebView only decodes AAC. v1.7.34's forceAacRemux only applied on the remux path,
+  but multiview VOD often played 'direct' (server pick), so AC3/EAC3/DTS sources were silent.
+- Fix: multiViewVodUrl + multiViewVodUrlFromSlot now PREFER remux+audioSafe (AAC) over direct
+  whenever a remux endpoint exists (transcode still used when the server requires it).
+- Verified on emulator-5554 against a working provider (HiveCast Xtream) + a local library:
+  - multiViewVodUrl now returns kind:'remux' with audioSafe=1 even when the server picks 'direct'.
+  - Played a local movie companion in a pane: kind='remux', status 'Playing', currentTime
+    advancing, muted=false when active, src = remux URL with audioSafe=1. End-to-end audio path
+    confirmed.
+  - Bug 1 (eviction) re-confirmed: 3 concurrent panes (ESPN/AMC/TNT) all played, none evicted;
+    audio followed the active pane. Bug 3 (black screen) re-confirmed: clean close to Live TV.
+- `npm.cmd test` 245/245.
+
 2026-06-26, v1.7.34 Multiview fixes (3 user-reported bugs):
 
 - Adding a 2nd channel killed the 1st ("network error"): the live slot key was hash(uid|ip|ua),
