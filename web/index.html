@@ -737,6 +737,12 @@ body.nativeGuideMode #player.guideMode #video{display:none}
 .mvCat,.mvChannel{width:100%;min-height:42px;border-radius:10px;border:1px solid rgba(243,239,247,.08);background:rgba(243,239,247,.045);color:var(--text);text-align:left;padding:8px 10px;font:800 11px "Albert Sans";display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}
 .mvCat.sel,.mvCat:hover,.mvChannel:hover,.mvCat:focus,.mvChannel:focus{outline:none;background:rgba(184,164,106,.14);border-color:rgba(255,198,92,.20)}
 .mvChannel span:first-child,.mvCat span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Professional channel rows: logo + name, no repeated group label. */
+.mvChannelLive{justify-content:flex-start;gap:11px;padding:7px 11px;min-height:48px}
+.mvChLogo{width:42px;height:30px;flex:0 0 42px;object-fit:contain;border-radius:5px;background:rgba(243,239,247,.07)}
+.mvChLogo.mvChLogoOff{display:none} /* collapse a missing/failed logo so the name sits flush-left (no empty gap) */
+.mvChName{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:800 12.5px "Albert Sans"}
+.mvChMeta{flex:0 0 auto;color:var(--muted);font-weight:700;font-size:10px;white-space:nowrap}
 @media (max-width:700px){
   .mvTop{grid-template-columns:minmax(0,1fr) auto;height:auto;align-items:center}
   .mvLayout{grid-column:1 / -1;overflow-x:auto}
@@ -5593,11 +5599,18 @@ async function play(it, pick) {
 const PLAYER_LOADING_STAGES = ['Preparing', 'Finding source', 'Mounting', 'Checking health...', 'Starting stream'];
 function rememberPlayerReturn() {
   if (S.view === 'player') return;
+  const livePane = document.querySelector('.liveChannelPane') || document.querySelector('#guide');
   S.playerReturn = {
     view: S.view,
     libId: S.currentLib && S.currentLib.id,
     localShow: S.localShow,
     gridIdx: S.gridIdx || 0,
+    // Live TV keeps its category + channel focus + scroll so returning from a channel lands
+    // exactly where you left, instead of snapping back to the top of the first category.
+    live: S.view === 'livetv' ? {
+      liveCat: S.liveCat, catIdx: S.liveCatNavIdx, guide: S.liveGuide,
+      gridIdx: S.gridIdx || 0, scrollTop: livePane ? livePane.scrollTop : 0,
+    } : null,
   };
 }
 function setPlayerLoadingStage(idx) {
@@ -7779,10 +7792,17 @@ function renderMultiViewPicker() {
   $('mvChannels').innerHTML = '';
   list.slice(0, isContinue ? 80 : 240).forEach((ch) => {
     const btn = document.createElement('button');
-    btn.className = 'mvChannel focusable';
-    btn.innerHTML = isContinue
-      ? `<span>${esc(ch.title || 'Continue Watching')}</span><span>${esc(ch.genre || ch.year || ch.type || '')}</span>`
-      : `<span>${esc(ch.title || ch.name || 'Live TV')}</span><span>${esc(ch.genre || ch.group || '')}</span>`;
+    btn.className = 'mvChannel focusable' + (isContinue ? '' : ' mvChannelLive');
+    if (isContinue) {
+      btn.innerHTML = `<span class="mvChName">${esc(ch.title || 'Continue Watching')}</span><span class="mvChMeta">${esc(ch.genre || ch.year || ch.type || '')}</span>`;
+    } else {
+      // Logo + name only. The group ("United States") is implied by the category — repeating it on
+      // every row was noise; a channel logo reads far more professionally.
+      const logo = ch.logo
+        ? `<img class="mvChLogo" src="${esc(ch.logo)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.classList.add('mvChLogoOff')">`
+        : '<span class="mvChLogo mvChLogoOff"></span>';
+      btn.innerHTML = `${logo}<span class="mvChName">${esc(ch.title || ch.name || 'Live TV')}</span>`;
+    }
     btn.addEventListener('click', () => {
       const slot = S.multiView.pickSlot ?? multiViewActiveSlot();
       return isContinue ? playMultiViewVodItem(ch, slot) : playMultiViewChannel(ch, slot);
@@ -10007,9 +10027,16 @@ async function closePlayer(opts = {}) {
       if (lib) S.currentLib = lib;
       S.localShow = ret.localShow;
     }
+    if (ret.view === 'livetv' && ret.live) {
+      S.liveCat = ret.live.liveCat;
+      S.liveCatNavIdx = ret.live.catIdx;
+      S.liveGuide = ret.live.guide;
+      S._liveScaffoldRestore = ret.live; // scaffoldLiveTv restores focus + scroll instead of focusGrid(0)
+    }
     switchView(ret.view && ret.view !== 'player' ? ret.view : 'home', false);
     S.gridIdx = ret.gridIdx || 0;
-    setTimeout(() => focusContent(), 80);
+    // For Live TV the scaffold's restore owns focus; calling focusContent too would fight it.
+    if (!(ret.view === 'livetv' && ret.live)) setTimeout(() => focusContent(), 80);
   }
 }
 function startHealthPoll(id) {
@@ -13393,7 +13420,18 @@ function scaffoldLiveTv(grid) {
     });
     if ($('chMultiBtn')) $('chMultiBtn').addEventListener('click', () => openMultiViewFromGuide());
     renderLiveTvBody();
-    requestAnimationFrame(() => { if (S.view === 'livetv' && S.zone !== 'rail') focusGrid(0); });
+    requestAnimationFrame(() => {
+      if (S.view !== 'livetv' || S.zone === 'rail') return;
+      const r = S._liveScaffoldRestore; S._liveScaffoldRestore = null;
+      if (r) { // returning from the player: restore the channel focus + scroll, don't snap to top
+        const pane = document.querySelector('.liveChannelPane') || document.querySelector('#guide');
+        const count = gridLogicalCount();
+        focusGrid(Math.max(0, Math.min(count - 1, r.gridIdx || 0)));
+        if (pane && r.scrollTop) pane.scrollTop = r.scrollTop;
+      } else {
+        focusGrid(0);
+      }
+    });
   } catch (e) { grid.innerHTML = `<div class="gridMore focusable">Live TV failed: ${esc(e.message)}</div>`; focusLiveGridMessage(); }
 }
 function renderLiveTvBody() {
@@ -13748,6 +13786,18 @@ async function showNow(idx, card) {
   const nn = await fetchEpg(idx);
   if (el && nn && nn.now && nn.now.title) el.textContent = `NOW · ${nn.now.title}`;
 }
+// Favoriting from the Favorites view shrinks the list — rebuild but KEEP focus near where the
+// user was (re-focus the same clamped index) instead of snapping to the top (the "screen jump").
+function renderLiveFavListKeepingFocus() {
+  if (S.view !== 'livetv') return;
+  const savedIdx = S.gridIdx || 0;
+  renderLiveTvBody();
+  requestAnimationFrame(() => {
+    if (S.view !== 'livetv') return;
+    const count = gridLogicalCount();
+    if (count > 0) focusGrid(Math.max(0, Math.min(count - 1, savedIdx)));
+  });
+}
 async function toggleFav(ch, star) {
   if (isPersonalChannel(ch)) {
     const favs = personalFavSet();
@@ -13764,7 +13814,7 @@ async function toggleFav(ch, star) {
     });
     if (star) { star.textContent = on ? '★' : '☆'; star.classList.toggle('on', on); }
     toast(on ? `★ ${ch.name} added to favorites` : `${ch.name} removed from favorites`);
-    if (S.view === 'livetv' && S.liveCat === '★ Favorites') setTimeout(renderLiveTvBody, 120);
+    if (S.view === 'livetv' && S.liveCat === '★ Favorites') setTimeout(renderLiveFavListKeepingFocus, 120);
     return;
   }
   try {
@@ -13778,7 +13828,7 @@ async function toggleFav(ch, star) {
     });
     if (star) { star.textContent = r.on ? '★' : '☆'; star.classList.toggle('on', r.on); }
     toast(r.on ? `★ ${ch.name} added to favorites` : `${ch.name} removed from favorites`);
-    if (S.view === 'livetv' && S.liveCat === '★ Favorites') setTimeout(renderLiveTvBody, 120);
+    if (S.view === 'livetv' && S.liveCat === '★ Favorites') setTimeout(renderLiveFavListKeepingFocus, 120);
   } catch (e) { toast('Favorite failed: ' + e.message); }
 }
 function canUseNativeLivePlayer() {
@@ -18822,7 +18872,9 @@ document.addEventListener('keydown', (e) => {
     return dpadBrowseFilter(k);
   }
 
-  if (S.view === 'multiview') {
+  // Gate on the surface being OPEN, not on S.view — if S.view drifts while the picker is up, the
+  // multiview key loop must still own input (otherwise the D-pad gets stuck and Back goes home).
+  if (S.multiView && S.multiView.open) {
     if (handleMultiViewKey(k, e)) return;
   }
   if (S.view === 'player') {
@@ -19436,7 +19488,7 @@ window.__tvBack = () => {
   // closes first, and only a top-level Back closes the whole surface. Route hardware Back through
   // the same handler the browser's Escape uses, so Back while ADDING a channel just closes the
   // picker instead of tearing down the entire multiview.
-  if (S.view === 'multiview' && S.multiView && S.multiView.open) {
+  if (S.multiView && S.multiView.open) {
     handleMultiViewKey('Escape', { preventDefault() {}, stopPropagation() {}, repeat: false });
     return 'ok';
   }
@@ -19446,6 +19498,13 @@ window.__tvBack = () => {
   if (overlay) {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
     return 'ok';
+  }
+  // Live TV: Back from deep in the guide (a channel/guide row, or any non-first category) returns
+  // to the FIRST category (usually Favorites) before it exits the section — one Back shouldn't
+  // jump straight to home from the bottom of the channel list.
+  if (S.view === 'livetv' && document.querySelector('#chBody.liveGuideShell')) {
+    const onContent = !!document.querySelector('.liveChannelPane .chCard.focus, #guide .gRow.focusable.focus');
+    if (onContent || (S.liveCatNavIdx || 0) > 0) { focusLiveCategory(0, true); return 'ok'; }
   }
   if (backToBrowseSectionMenu()) return 'ok';
   if (S.view !== 'home') {

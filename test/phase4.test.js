@@ -2483,11 +2483,29 @@ test('Android native player: direct source and native chrome stay out of the web
     'active multiview pane should drop the amber highlight (icons indicate selection)');
   // Android hardware Back in multiview must use the layered handler (close the picker first),
   // not fall through to switchView('home') which tears down the whole surface.
-  assert.match(ui, /window\.__tvBack = \(\) => \{[\s\S]+if \(S\.view === 'multiview' && S\.multiView && S\.multiView\.open\) \{[\s\S]+handleMultiViewKey\('Escape'[\s\S]+return 'ok';[\s\S]+\}[\s\S]+if \(S\.view !== 'home'\)/,
-    'hardware Back in multiview should route through handleMultiViewKey (close picker) before the generic home fallthrough');
+  assert.match(ui, /window\.__tvBack = \(\) => \{[\s\S]+if \(S\.multiView && S\.multiView\.open\) \{[\s\S]+handleMultiViewKey\('Escape'[\s\S]+return 'ok';[\s\S]+\}[\s\S]+if \(S\.view !== 'home'\)/,
+    'hardware Back in multiview routes through handleMultiViewKey (close picker) whenever the surface is open — gated on S.multiView.open, not S.view, so a drifted view never sends Back to home');
   // Leaving multiview must tear down the underlying player surface or it shows a black #video.
   assert.match(ui, /function closeMultiView\(opts = \{\}\) \{[\s\S]+const mainVideo = \$\('video'\);[\s\S]+\$\('player'\)\.classList\.remove\('open', 'guideMode', 'live'\);[\s\S]+document\.body\.classList\.remove\('videoOpen', 'nativeGuideMode'\)/,
     'closing multiview should tear down the main player/video surface so the target view is not a black screen');
+  // The multiview key loop and Back must own input whenever the surface is OPEN, not gated on
+  // S.view (which can drift while the channel picker is up — the "stuck D-pad / Back to home" bug).
+  assert.match(ui, /if \(S\.multiView && S\.multiView\.open\) \{\s+if \(handleMultiViewKey\(k, e\)\) return;/,
+    'D-pad dispatch should route to handleMultiViewKey whenever the multiview surface is open');
+  // Live TV: Back from deep in the guide returns to the first category (Favorites), not home.
+  assert.match(ui, /S\.view === 'livetv' && document\.querySelector\('#chBody\.liveGuideShell'\)[\s\S]+focusLiveCategory\(0, true\); return 'ok';/,
+    'hardware Back from a channel/non-first category should return to the first category before exiting Live TV');
+  // Returning from a played channel restores the guide category focus + scroll (no screen jump).
+  assert.match(ui, /function rememberPlayerReturn\(\) \{[\s\S]+live: S\.view === 'livetv' \? \{[\s\S]+liveCat: S\.liveCat[\s\S]+scrollTop: livePane/,
+    'leaving for the player should save the Live TV category + scroll so returning lands in place');
+  assert.match(ui, /const r = S\._liveScaffoldRestore; S\._liveScaffoldRestore = null;[\s\S]+focusGrid\(Math\.max\(0, Math\.min\(count - 1, r\.gridIdx[\s\S]+else \{\s+focusGrid\(0\);/,
+    'Live TV scaffold should restore the saved channel focus on return instead of always snapping to index 0');
+  // Favoriting from the Favorites view keeps focus near where you were (no jump to top).
+  assert.match(ui, /function renderLiveFavListKeepingFocus\(\) \{[\s\S]+focusGrid\(Math\.max\(0, Math\.min\(count - 1, savedIdx\)\)\)/,
+    'favorite toggle in the Favorites view should preserve focus instead of resetting to the top');
+  // Multiview picker rows: logo + name, no repeated group label (the unprofessional "United States").
+  assert.match(ui, /'mvChannel focusable' \+ \(isContinue \? '' : ' mvChannelLive'\)[\s\S]+mvChLogo[\s\S]+<span class="mvChName">\$\{esc\(ch\.title \|\| ch\.name/,
+    'multiview live channel rows should show a logo + name, not a repeated group label');
   assert.match(ui, /function openMultiViewActions\(slot = multiViewActiveSlot\(\)\) \{[\s\S]+if \(!pane \|\| !pane\.item\) \{[\s\S]+openMultiViewPicker\(i\);[\s\S]+S\.multiView\.actionSlot = i;[\s\S]+return setMultiViewActionFocus\(S\.multiViewActionIdx\);/,
     'OK on a filled Multiview pane should open pane actions while empty panes still open the picker');
   assert.match(ui, /function toggleMultiViewFullscreen\(slot = multiViewActiveSlot\(\)\) \{[\s\S]+if \(multiViewFullscreenSlot\(\) === i\) return exitMultiViewFullscreen\(\);[\s\S]+S\.multiView\.fullSlot = i;[\s\S]+setMultiViewActiveSlot\(i\);/,

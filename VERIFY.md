@@ -86,6 +86,33 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-06-27, guide/multiview polish (v1.7.40) — owner-reported nav bugs + multiview picker redesign:
+
+- Multiview picker redesign: dropped the repeated group label ("United States" on every row — the
+  unprofessional noise) in favor of channel logo + name with a clear selection highlight. Verified
+  on emulator (clean rows, amber selection). Logos load from the same URLs the main guide uses
+  (img-src allows external); they don't render on the emulator's sandboxed network but collapse
+  cleanly to name-only when a logo is missing/fails.
+- Bug: multiview channel picker D-pad stuck + Back→home. Root cause: key dispatch + __tvBack gated
+  on S.view==='multiview', which drifts while the picker is open. Now gated on S.multiView.open.
+  Verified: picker D-pad moves focus (rows[0]→rows[1]); hardware Back closes the picker
+  (view=multiview, mvOpen stays true), not home.
+- Bug: Back from deep in the Live TV guide jumped to home. Now Back from a channel/non-first
+  category returns to the FIRST category (Favorites) first. Verified: from category idx 2, Back →
+  catIdx 0, still in livetv (not home).
+- Bug: returning from a played channel reset the guide to the top / changed category. Now
+  rememberPlayerReturn saves liveCat + category index + channel focus + scroll, and the Live TV
+  scaffold restores them instead of focusGrid(0). (Code + phase4 assertions; round-trip feel to be
+  confirmed on a real device.)
+- Bug: favoriting from the Favorites view jumped the screen. The full rebuild now preserves focus
+  (renderLiveFavListKeepingFocus re-focuses the clamped index) instead of snapping to the top.
+- npm test 249/249; inline web JS parses; new behavior covered by phase4 assertions (multiview Back
+  guard regex updated to track the stronger S.multiView.open gating — not weakened).
+- NOTE: startup-speed pass done as ANALYSIS (see chat) — 2 concrete wins identified (overlap the
+  pre-mount STAT probe; start warmup before the health gate). NOT implemented this pass: they touch
+  the hot playback path / P14 contract and want real wall-clock measurement (verify:live on a
+  usenet-configured box) before changing.
+
 2026-06-27, audit follow-through (v1.7.39) — recommended-next fixes + owner-approved settings:
 
 - Music: stream URL cache now scoped by cookie identity (no cross-user variant bleed); next-track
