@@ -2460,6 +2460,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'multiview buttons should be icons-only (transparent resting background)');
   assert.match(ui, /#multiView \.mvSlot\.active\{border-color:rgba\(243,239,247,\.07\);box-shadow:0 18px 58px rgba\(0,0,0,\.44\)\}/,
     'active multiview pane should drop the amber highlight (icons indicate selection)');
+  // Android hardware Back in multiview must use the layered handler (close the picker first),
+  // not fall through to switchView('home') which tears down the whole surface.
+  assert.match(ui, /window\.__tvBack = \(\) => \{[\s\S]+if \(S\.view === 'multiview' && S\.multiView && S\.multiView\.open\) \{[\s\S]+handleMultiViewKey\('Escape'[\s\S]+return 'ok';[\s\S]+\}[\s\S]+if \(S\.view !== 'home'\)/,
+    'hardware Back in multiview should route through handleMultiViewKey (close picker) before the generic home fallthrough');
   // Leaving multiview must tear down the underlying player surface or it shows a black #video.
   assert.match(ui, /function closeMultiView\(opts = \{\}\) \{[\s\S]+const mainVideo = \$\('video'\);[\s\S]+\$\('player'\)\.classList\.remove\('open', 'guideMode', 'live'\);[\s\S]+document\.body\.classList\.remove\('videoOpen', 'nativeGuideMode'\)/,
     'closing multiview should tear down the main player/video surface so the target view is not a black screen');

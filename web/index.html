@@ -19275,6 +19275,14 @@ window.__tvBack = () => {
     return 'ok';
   }
   if (hidePlayerOsdForBack()) return 'ok';
+  // Multiview owns its own layered Back: an open channel picker / swap / actions / fullscreen
+  // closes first, and only a top-level Back closes the whole surface. Route hardware Back through
+  // the same handler the browser's Escape uses, so Back while ADDING a channel just closes the
+  // picker instead of tearing down the entire multiview.
+  if (S.view === 'multiview' && S.multiView && S.multiView.open) {
+    handleMultiViewKey('Escape', { preventDefault() {}, stopPropagation() {}, repeat: false });
+    return 'ok';
+  }
   const overlay = document.querySelector(
     '.gate.open, #detail.open, #person.open, #player.open, #drawer.open, #trailer.open, ' +
     '#libModal.open, #matchModal.open, #catModal.open, #filterMenu.open, #cwMenu.open, #trackMenu.open, #musicNow.open');
