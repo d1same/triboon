@@ -1181,7 +1181,13 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
       try {
         if (old) {
           old.removeAllListeners('error');
-          old.destroy(new Error('live stream retrying pinned address'));
+          // Destroying an aborted ClientRequest emits 'error' ASYNCHRONOUSLY (next tick), outside
+          // this try/catch. With the real handler removed and no replacement, that becomes an
+          // unhandled 'error' event and crashes the whole process — taking every stream down for a
+          // single channel's startup timeout. Swallow the abort error: we are intentionally
+          // discarding this request and the new attempt below owns error handling.
+          old.on('error', () => {});
+          old.destroy();
         }
       } catch {}
       console.error(`[iptv native] ${label} pinned upstream failed (${reason}); retrying next address`);
@@ -6585,6 +6591,12 @@ const sweepTimer = setInterval(() => { try { sweep(); } catch (e) { console.erro
 sweepTimer.unref();
 
 if (require.main === module) {
+  // Last-resort blast-radius guard (production only — tests import the module and must still surface
+  // real errors). A single stray stream/socket 'error' event or rejected probe must NEVER crash the
+  // whole process and 502 every other user's playback. Real fixes live at the source; this keeps the
+  // box serving and logs the full stack so genuine bugs stay visible.
+  process.on('uncaughtException', (e) => { console.error('[uncaught]', (e && e.stack) || e); });
+  process.on('unhandledRejection', (e) => { console.error('[unhandledRejection]', (e && e.stack) || e); });
   server.listen(PORT, () => {
     console.log(`Triboon → http://localhost:${PORT}`);
     try { getPool(); } catch { /* no provider configured yet — fine */ }

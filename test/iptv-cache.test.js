@@ -1388,6 +1388,22 @@ test('iptv: live remux bad-channel probes stay bounded', () => {
     'aborted web-player remuxes should close the server response instead of leaving CloseWait sockets');
 });
 
+test('iptv: a live-stream retry/timeout never crashes the whole server', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  // The crash: retryPinnedAddress stripped the old request's 'error' listener and then destroyed it
+  // WITH an error — Node emits that 'error' async with no listener → unhandled → the whole process
+  // dies and every channel 502s. The aborted request must be destroyed WITHOUT forcing an error,
+  // with a no-op 'error' handler to swallow the async abort error.
+  assert.match(src, /old\.removeAllListeners\('error'\);[\s\S]*?old\.on\('error', \(\) => \{\}\);[\s\S]*?old\.destroy\(\);/,
+    'retryPinnedAddress must swallow the aborted request error (no-op handler) and destroy() without an error');
+  assert.doesNotMatch(src, /old\.removeAllListeners\('error'\);\s*old\.destroy\(new Error/,
+    'the old crash pattern (remove error listener then destroy WITH an error) must not return');
+  // Blast-radius net: a stray stream/socket error must not take down every user. Production-only
+  // (inside require.main) so tests still surface real errors.
+  assert.match(src, /if \(require\.main === module\) \{[\s\S]{0,600}?process\.on\('uncaughtException',[\s\S]{0,200}?process\.on\('unhandledRejection',/,
+    'the running server must install uncaughtException/unhandledRejection nets so one stream error cannot 502 everyone');
+});
+
 test('iptv: stale Xtream stream ids refresh and retry native playback', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-stale-stream-id-'));
   let liveStreams = [{ stream_id: 100, name: '|US| NEWS PLUS HD', category_id: '1', epg_channel_id: 'news.plus' }];
