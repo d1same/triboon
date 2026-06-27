@@ -3250,6 +3250,12 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
     <p>Online subtitles for releases that only carry image-based (BluRay PGS) subs. Paste your
        Wyzie Subs API key here; Triboon keeps it server-side and caches results per title.</p>
     <div class="field"><input id="osKey" placeholder="Wyzie Subs API key"></div>
+    <p style="margin-top:-4px">Optional opensubtitles.com login — only needed if you use it as a download
+       fallback (Triboon is Wyzie-first). Stored encrypted server-side.</p>
+    <div class="settingsRow two">
+      <label class="settingsControl"><span>OpenSubtitles user</span><input id="osUser" placeholder="opensubtitles.com username"></label>
+      <label class="settingsControl"><span>OpenSubtitles pass</span><input id="osPass" type="password" placeholder="opensubtitles.com password"></label>
+    </div>
     <div class="field">
       <select id="builtInSubsMode" style="max-width:360px">
         <option value="off">Online only</option>
@@ -7268,10 +7274,15 @@ function liveChannelForFavorite() {
   return ch;
 }
 function updateLiveFavoriteButton() {
-  const b = $('favBtn');
-  if (!b) return;
   const ch = liveChannelForFavorite();
   const on = !!(ch && ch.fav);
+  // Native ExoPlayer live uses the native chrome (not this web overlay), so mirror the favorite
+  // state onto the native star — the web layer owns the favorites store either way.
+  if (window.TriboonTV && typeof window.TriboonTV.setLiveFav === 'function') {
+    try { window.TriboonTV.setLiveFav(on); } catch {}
+  }
+  const b = $('favBtn');
+  if (!b) return;
   b.classList.toggle('on', on);
   b.title = on ? 'Remove favorite channel' : 'Favorite channel';
   setPlayerControlEnabled('favBtn', !!ch);
@@ -7287,7 +7298,10 @@ async function toggleLiveFavorite() {
       if (String(it._channel) === String(idx)) it.fav = !!ch.fav;
   });
   updateLiveSplitHud();
+  updateLiveFavoriteButton(); // refresh web button + push the new state to the native star
 }
+// Native live chrome's favorite star → web (web owns the favorites store).
+window.__tvLiveFavToggle = () => { toggleLiveFavorite(); };
 
 const MULTIVIEW_MAX_SLOTS = 4;
 function multiViewCanUseWeb() {
@@ -10274,7 +10288,7 @@ const LANG_3TO2 = { eng: 'en', spa: 'es', fra: 'fr', fre: 'fr', deu: 'de', ger: 
   alb: 'sq', hye: 'hy', arm: 'hy', kat: 'ka', geo: 'ka', mkd: 'mk', mac: 'mk', mya: 'my',
   bur: 'my', afr: 'af', swa: 'sw', tgl: 'tl', fil: 'tl', tam: 'ta', tel: 'te', mal: 'ml',
   kan: 'kn', mar: 'mr', guj: 'gu', pan: 'pa', sin: 'si', amh: 'am', aze: 'az', kaz: 'kk',
-  uzb: 'uz', bel: 'be', bos: 'bs' };
+  uzb: 'uz', bel: 'be', bos: 'bs', srp_latn: 'sr' };
 const LANG_2TO3 = Object.fromEntries(Object.entries(LANG_3TO2).map(([k, v]) => [v, k]));
 const OS_LANG_NAMES = { en: 'English', es: 'Spanish', fr: 'French', de: 'German', it: 'Italian',
   pt: 'Portuguese', ru: 'Russian', ar: 'Arabic', fa: 'Persian', hi: 'Hindi', tr: 'Turkish',
@@ -10322,7 +10336,10 @@ function preferredAutoSubtitleLang() {
 }
 function osLang(c) {
   const code = langCode(c);
-  return LANG_3TO2[code] || String(code || 'en').slice(0, 2) || 'en';
+  if (LANG_3TO2[code]) return LANG_3TO2[code];
+  // A 2-letter code passes through; an UNMAPPED 3-letter code must NOT be truncated to a bogus
+  // 2 letters (e.g. 'ces' -> 'ce') — that sends garbage to Wyzie. Fall back to English instead.
+  return (typeof code === 'string' && code.length === 2) ? code : 'en';
 }
 function osTrackInfo(rel) {
   const parts = String(rel || '').split(':');
@@ -10730,6 +10747,9 @@ function updatePlayerControlAvailability() {
   const p = S.playing;
   const isLive = !!(p && p.item && p.item.type === 'live');
   ['ccBtn', 'audBtn', 'qualBtn'].forEach((id) => { const b = $(id); if (b) b.style.display = isLive ? 'none' : ''; });
+  // Live has no CC/audio/surround/quality choices — hide the Sound (surround) button too, in JS,
+  // so it can never reappear via applyTrackPrefs (the CSS !important rule alone was fragile).
+  if (isLive) { const s = $('srndBtn'); if (s) s.style.display = 'none'; }
   const fav = $('favBtn'); if (fav) fav.style.display = isLive ? '' : 'none';
   const split = $('splitBtn'); if (split) split.style.display = 'none';
   setPlayerControlEnabled('ccBtn', playerCcCanOpen());
@@ -10967,7 +10987,12 @@ function autoSyncNative(p, rel) {
     try {
       const payload = nativeSubtitlePayload(p, rel, 'manual');
       if (!payload.url) return;
-      const base = new URL(payload.url, location.origin).href;
+      // Strip any manual &shift: alass corrects the sub to the video, so the server must NOT also
+      // apply the old manual offset to the corrected output, and native must NOT re-apply it
+      // client-side (it reads subtitleShift). Either would double the offset on the synced sub.
+      const baseUrl = new URL(payload.url, location.origin);
+      baseUrl.searchParams.delete('shift');
+      const base = baseUrl.href;
       const head = await fetch(base); // cached from the native load; just read the sync verdict
       if (!head.ok || head.headers.get('x-triboon-subsync') !== 'pending') return;
       const syncUrl = base + (base.includes('?') ? '&' : '?') + 'sync=1';
@@ -10976,7 +11001,7 @@ function autoSyncNative(p, rel) {
       if (!S.playing || S.playing !== p || p.subTrack !== rel) return;
       window.TriboonTV.updateActiveSubtitle(JSON.stringify({
         subtitleRel: rel, subtitleUrl: syncUrl,
-        subtitleLang: payload.lang, subtitleLabel: payload.label, subtitleShift: payload.shift,
+        subtitleLang: payload.lang, subtitleLabel: payload.label, subtitleShift: 0,
       }));
       toast('Subtitles synced to this video');
     } catch {}
@@ -11536,7 +11561,11 @@ function renderScreensaver() {
 function canShowScreensaver() {
   if (!S.user || S._booting || document.visibilityState !== 'visible') return false;
   if (S.nativeLivePending) return false;
-  if (S.view === 'player' || $('player').classList.contains('open')) return false;
+  // Never over active playback — defense-in-depth: S.playing covers web AND native ExoPlayer
+  // (where the WebView stays visible behind the surface) and paused-but-active playback, so the
+  // guard never rests on the single S.view string. videoOpen mirrors it on the body class.
+  if (S.view === 'player' || S.playing || document.body.classList.contains('videoOpen')
+      || $('player').classList.contains('open')) return false;
   if (document.querySelector('#detail.open,#person.open,#settings.open,#prefs.open,#music.open')) return false;
   if (document.querySelector('.gate.open,#drawer.open,#trailer.open,#libModal.open,#matchModal.open,#catModal.open,#filterMenu.open,#cwMenu.open,#trackMenu.open,#musicNow.open')) return false;
   return true;
@@ -13854,7 +13883,7 @@ function tryNativeLivePlayer(it, guide = false) {
       fallbacks: liveFallbacks,
       guide,
     }));
-    if (!guide) setNativeLivePlaybackState(it);
+    if (!guide) { setNativeLivePlaybackState(it); updateLiveFavoriteButton(); } // seed the native favorite star
     return true;
   } catch (e) {
     S.nativeLivePending = null;
@@ -14814,6 +14843,22 @@ function playMusic(queue, idx, opts = {}) {
   if (opts.autoplay === false) setPlayIcon(false);
   markMusicCur();
   openMusicNow({ showQueue: !!opts.showQueue });
+  prefetchNextMusicStream();
+}
+// Warm the NEXT track's googlevideo URL server-side (a tiny Range hit triggers yt-dlp resolve +
+// cache) so advancing feels instant instead of paying the 1-3s resolve at track change. Shuffle's
+// next pick is random, so only the sequential/repeat-all path is predictable enough to prefetch.
+function prefetchNextMusicStream() {
+  try {
+    const q = S.musicQueue; if (!q || q.length < 2 || S.musicShuffle) return;
+    let next = S.musicIdx + 1;
+    if (next >= q.length) { if (S.musicRepeat === 'all') next = 0; else return; }
+    const t = q[next]; if (!t || !t.streamUrl || t._prefetched) return;
+    t._prefetched = true;
+    fetch(t.streamUrl, { headers: { Range: 'bytes=0-1' } })
+      .then((r) => { try { r.body && r.body.cancel && r.body.cancel(); } catch {} })
+      .catch(() => {});
+  } catch {}
 }
 function safeMusicPlay(opts = {}) {
   const p = mAudio.play();
@@ -14907,14 +14952,20 @@ mAudio.addEventListener('timeupdate', () => {
   if (d && !S.musicCur?.duration) $('mnDur').textContent = mmss(d);
 });
 mAudio.addEventListener('ended', () => musicNext(true));
-mAudio.addEventListener('play', () => { document.body.classList.remove('musicPaused'); setPlayIcon(true); });
+mAudio.addEventListener('play', () => { document.body.classList.remove('musicPaused'); setPlayIcon(true); S.musicFailStreak = 0; });
 mAudio.addEventListener('pause', () => { document.body.classList.add('musicPaused'); setPlayIcon(false); });
 mAudio.addEventListener('error', () => {
   if (!S.musicCur || S.musicLoadFailed) return;
   S.musicLoadFailed = true;
   try { mAudio.pause(); } catch {}
-  const canSkip = (S.musicQueue || []).length > 1 && (S.musicIdx < S.musicQueue.length - 1 || S.musicRepeat === 'all' || S.musicShuffle);
-  toast(canSkip ? 'Track unavailable. Skipping...' : 'Could not play that track.');
+  // Bound the auto-skip: with shuffle/repeat-all on, musicNext never reports "end of queue", so a
+  // wholly-unplayable queue (all expired/region-blocked/rate-limited) would loop forever, spawning
+  // yt-dlp every ~350ms. Stop after one full lap of consecutive failures; reset on any real play.
+  S.musicFailStreak = (S.musicFailStreak || 0) + 1;
+  const exhausted = S.musicFailStreak >= (S.musicQueue || []).length;
+  const canSkip = !exhausted && (S.musicQueue || []).length > 1
+    && (S.musicIdx < S.musicQueue.length - 1 || S.musicRepeat === 'all' || S.musicShuffle);
+  toast(exhausted ? "Couldn't play this queue." : (canSkip ? 'Track unavailable. Skipping...' : 'Could not play that track.'));
   document.body.classList.add('musicPaused');
   setPlayIcon(false);
   if (canSkip) setTimeout(() => { if (S.musicLoadFailed) musicNext(true); }, 350);
@@ -17035,6 +17086,8 @@ async function refreshSettings() {
     $('tmdbStatus').textContent = s.tmdbKey ? 'key saved ✓ — encrypted at rest' : 'no key yet';
     $('tmdbKey').placeholder = s.tmdbKey ? 'key saved ✓ — paste a new one to replace' : 'TMDB API key (v3)';
     $('osKey').placeholder = s.openSubsKey ? 'key saved ✓ — paste a new one to replace' : 'Wyzie Subs API key';
+    if ($('osUser')) $('osUser').value = s.openSubsUser || ''; // username is not a secret; round-trips
+    if ($('osPass')) $('osPass').placeholder = s.openSubsPass ? 'password saved ✓ — type to replace' : 'opensubtitles.com password';
     $('builtInSubsMode').value = s.builtInSubtitlesEnabled ? 'on' : 'off';
     $('osStatus').textContent = s.openSubsKey
       ? `key saved ✓ — ${s.builtInSubtitlesEnabled ? 'built-in first, online fallback' : 'online-only testing'}`
@@ -17093,6 +17146,7 @@ async function refreshSettings() {
          ${[['4', '4K allowed'], ['3', '1080p cap'], ['2', '720p cap']].map(([v, l]) =>
            `<option value="${v}" ${String(u.policy.maxResolutionRank) === v ? 'selected' : ''}>${l}</option>`).join('')}
          </select>${u.role === 'admin' ? '' :
+         `<label class="catRow" style="margin:0;gap:5px" title="Allow this user to use server transcoding (off = direct/remux only)"><input type="checkbox" data-utr="${esc(u.id)}" ${u.policy.allowTranscode === false ? '' : 'checked'}><span class="cgN" style="font-size:11px">Transcode</span></label>`}${u.role === 'admin' ? '' :
          `<button class="iconBtn" data-upw="${esc(u.id)}" data-uname="${esc(u.name)}" title="Reset password">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></button>
           <button class="iconBtn" data-udel="${esc(u.id)}" data-uname="${esc(u.name)}" title="Delete user">
@@ -17103,6 +17157,12 @@ async function refreshSettings() {
         await api(`/api/users/${sel.dataset.ucap}`, { method: 'PATCH', body: { policy: { maxResolutionRank: parseInt(sel.value, 10) } } });
         toast('Quality cap updated');
       } catch (e) { toast('Update failed: ' + e.message); }
+    }));
+    document.querySelectorAll('[data-utr]').forEach((cb) => cb.addEventListener('change', async () => {
+      try {
+        await api(`/api/users/${cb.dataset.utr}`, { method: 'PATCH', body: { policy: { allowTranscode: cb.checked } } });
+        toast(cb.checked ? 'Transcoding allowed' : 'Transcoding disabled — direct/remux only');
+      } catch (e) { cb.checked = !cb.checked; toast('Update failed: ' + e.message); }
     }));
     document.querySelectorAll('[data-upw]').forEach((b) => b.addEventListener('click', async () => {
       const pw = prompt(`New password for ${b.dataset.uname} (min 4 characters):`);
@@ -17176,11 +17236,35 @@ $('perfApply').addEventListener('click', async () => {
   refreshSettings();
 });
 $('perfSave').addEventListener('click', async () => {
-  await api('/api/settings', { method: 'POST', body: { streamingPerformance: { ...perfFormValues(), profile: 'custom' } } });
+  await api('/api/settings', { method: 'POST', body: { streamingPerformance: { ...perfFormValues(), profile: $('perfProfile').value || 'custom' } } });
   S.perfRecommendation = null;
   perfSetApplyEnabled(false);
   toast('Streaming performance saved');
   refreshSettings();
+});
+// Profile presets fill the buffer/connection fields with sensible bundles (still hand-tunable).
+// Fast start = quick TTFF (small buffer, big startup reserve); Large = deep buffer for flaky links.
+const PERF_PRESETS = {
+  fast: { buffer1080Sec: 45, buffer4kSec: 30, maxConnPerStream1080: 8, maxConnPerStream4k: 12, startupReservePct: 40 },
+  balanced: { buffer1080Sec: 120, buffer4kSec: 75, maxConnPerStream1080: 12, maxConnPerStream4k: 18, startupReservePct: 25 },
+  large: { buffer1080Sec: 300, buffer4kSec: 180, maxConnPerStream1080: 16, maxConnPerStream4k: 24, startupReservePct: 15 },
+};
+$('perfProfile').addEventListener('change', () => {
+  const preset = PERF_PRESETS[$('perfProfile').value];
+  if (!preset) return; // auto/custom leave the fields as-is (Calculate recommendation handles auto)
+  $('perfBuf1080').value = preset.buffer1080Sec;
+  $('perfBuf4k').value = preset.buffer4kSec;
+  $('perfConn1080').value = preset.maxConnPerStream1080;
+  $('perfConn4k').value = preset.maxConnPerStream4k;
+  $('perfReserve').value = preset.startupReservePct;
+});
+// Hand-editing any field means it's no longer a named preset.
+['perfBuf1080', 'perfBuf4k', 'perfConn1080', 'perfConn4k', 'perfReserve'].forEach((id) => {
+  const el = $(id);
+  if (el) el.addEventListener('input', () => {
+    const v = $('perfProfile').value;
+    if (v !== 'auto' && v !== 'custom') $('perfProfile').value = 'custom';
+  });
 });
 $('npPreset').addEventListener('change', () => {
   const v = $('npPreset').value;
@@ -17272,12 +17356,17 @@ $('osSave').addEventListener('click', async () => {
   const key = $('osKey').value.trim();
   const body = { builtInSubtitlesEnabled: $('builtInSubsMode').value === 'on' };
   if (key) body.openSubsKey = key;
+  // Username round-trips in plaintext (empty clears it); password only sent when (re)typed so a
+  // blank field never wipes the saved one.
+  body.openSubsUser = ($('osUser') && $('osUser').value.trim()) || '';
+  if ($('osPass') && $('osPass').value) body.openSubsPass = $('osPass').value;
   await api('/api/settings', { method: 'POST', body });
   const srvNow = await api('/api/server');
   S.serverInfo.opensubs = srvNow.opensubs;
   S.serverInfo.builtInSubtitlesEnabled = srvNow.builtInSubtitlesEnabled;
   toast(body.builtInSubtitlesEnabled ? 'Built-in subtitles enabled' : 'Online-only subtitles enabled');
   $('osKey').value = '';
+  if ($('osPass')) $('osPass').value = '';
   refreshSettings();
 });
 $('traktUri').addEventListener('click', () => {
@@ -17889,16 +17978,30 @@ function focusLiveCategory(idx, select = false) {
   }
   S.focusedItem = S.gridItems[S.gridIdx] || null;
   if (select && name && name !== S.liveCat) {
-    clearTimeout(S._liveCatApplyT);
-    S.liveCat = name;
+    // Debounce the heavy channel-pane rebuild (up to ~400 cards). Holding the D-pad to scan
+    // categories must not rebuild the grid on every keystroke (the old per-keystroke render was
+    // the guide lag). The category highlight (applyFocus above) is already instant; the channel
+    // list catches up when the user settles (~150ms) or immediately on entering it (flush below).
+    S.liveCat = name;                 // state correct now so RIGHT/Enter read the right category
     S.liveGuideCap = LIVE_GUIDE_BATCH;
-    renderLiveTvBody();
-    requestAnimationFrame(() => {
-      if (S.view === 'livetv') focusLiveCategory(i);
-    });
+    S._liveCatPendingIdx = i;
+    clearTimeout(S._liveCatApplyT);
+    S._liveCatApplyT = setTimeout(applyLiveCatRender, 150);
   }
   return true;
 }
+function applyLiveCatRender() {
+  clearTimeout(S._liveCatApplyT); S._liveCatApplyT = null;
+  if (S.view !== 'livetv') return;
+  renderLiveTvBody();
+  const i = S._liveCatPendingIdx;
+  requestAnimationFrame(() => {
+    // Only re-assert category focus if the user is still scanning categories — if they've pressed
+    // into the channels (liveCatDpadMode=false), do not yank focus back to the category column.
+    if (S.view === 'livetv' && S.liveCatDpadMode && Number.isFinite(i)) focusLiveCategory(i);
+  });
+}
+function flushLiveCatApply() { if (S._liveCatApplyT) applyLiveCatRender(); }
 function liveToolbarButtons() {
   return ['chMultiBtn', 'chGuideBtn'].map((id) => $(id))
     .filter((el) => el && el.offsetParent !== null && !el.disabled);
@@ -17942,6 +18045,7 @@ function liveContentEls() {
   return root ? [...root.querySelectorAll('#guide .gRow.focusable,.liveChannelPane .chCard.focusable')] : [];
 }
 function focusFirstLiveContent() {
+  flushLiveCatApply(); // entering channels: render the pending category now so we focus real cards
   const el = liveContentEls()[0];
   if (!el) return false;
   S.liveCatDpadMode = false;

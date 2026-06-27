@@ -708,7 +708,16 @@ class Pipeline {
   // ranked list behind that explicit choice.
   async play(params, policy = {}, mountOpts = {}) {
     const { candidates } = await this.search(params, policy);
-    const playable = this._playableCandidates(candidates, params);
+    let playable = this._playableCandidates(candidates, params);
+    // 4K toggle with no 4K source: exactResolutionRank disqualifies every non-4K release, which
+    // would fail the play entirely ("I toggled 4K and nothing plays"). Fall back to the best
+    // available resolution instead — keep the 4K preference so UHD still wins when it exists.
+    if (!playable.length && policy.exactResolutionRank != null) {
+      const relaxed = { ...policy };
+      delete relaxed.exactResolutionRank;
+      const retry = await this.search(params, relaxed);
+      playable = this._playableCandidates(retry.candidates, params);
+    }
     if (!playable.length) throw new Error('no playable releases found');
     const session = new PlaySession(params, playable);
     this.sessions.set(session.id, session);

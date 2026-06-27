@@ -135,6 +135,19 @@ test('playback decision: mp4/webm direct; mkv direct only with container AND aud
   assert.strictEqual(decidePlayback('Movie.mkv', { mkv: true, ac3: true, eac3: true }).method, 'direct');
 });
 
+test('playback decision: DTS-core MKV on a non-DTS device remuxes instead of playing silent', () => {
+  // The MKV-direct gate checks AC3/EAC3 decode but not DTS, so a device with ac3/eac3 but
+  // dts:false would direct-play a DTS MKV with no audio. It must remux (when ffmpeg is present).
+  const noDts = decidePlayback('Movie.2024.1080p.BluRay.DTS.x264-GRP.mkv', { mkv: true, ac3: true, eac3: true, dts: false });
+  if (HAS_FFMPEG) assert.strictEqual(noDts.method, 'remux', 'DTS MKV on a non-DTS device must not direct-play');
+  else assert.ok(noDts.warning, 'honest degrade when no ffmpeg');
+  // A DTS-capable device still direct-plays; a plain AC3/EAC3 MKV is unaffected (no over-remux).
+  assert.strictEqual(decidePlayback('Movie.2024.1080p.BluRay.DTS.x264-GRP.mkv', { mkv: true, ac3: true, eac3: true, dts: true }).method, 'direct',
+    'a DTS-capable device still direct-plays a DTS MKV');
+  assert.strictEqual(decidePlayback('Movie.2024.1080p.WEB-DL.DDP5.1.H.264-NTb.mkv', { mkv: true, ac3: true, eac3: true, dts: false }).method, 'direct',
+    'a non-DTS MKV is unaffected on a non-DTS device');
+});
+
 test('playback decision: mkv without client support → remux if ffmpeg, else direct+warning', () => {
   const d = decidePlayback('Movie.mkv', { mkv: false });
   if (HAS_FFMPEG) assert.strictEqual(d.method, 'remux');
@@ -178,6 +191,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Server playback policy should preserve language/device hints for the scorer');
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8'), /if \(preferRank === 4\) policy\.exactResolutionRank = 4;/,
     '4K selection should be exact so fallback stays in the 4K source class');
+  assert.match(serverForPolicy, /transcode: async \(ctx\) => \{[\s\S]+ctx\.user\.policy\.allowTranscode === false[\s\S]+transcoding is disabled for this account/,
+    'per-user allowTranscode=false must be enforced at the transcode endpoint (cap contract, transcoder half)');
+  assert.match(ui, /data-utr="\$\{esc\(u\.id\)\}"[\s\S]+policy: \{ allowTranscode: cb\.checked \}/,
+    'admin user list should expose an Allow-transcoding toggle wired to the user policy');
   assert.match(ui, /function sourceSearchQuery\(it, opts = \{\}\) \{[\s\S]+const qRank = opts\.includeQuality === false \? null : qualityRankForItem\(it\);[\s\S]+maxResolutionRank[\s\S]+preferResolutionRank/,
     'Sources, play warmup, and availability should share one query builder while allowing unfiltered quality discovery');
   assert.match(ui, /function prefetchSources\(it, delay = 700\) \{[\s\S]+const qRank = qualityRankForItem\(it\);[\s\S]+localTitleHasPlayback\(it\) && localPlaybackFitsQuality\(it, qRank\)[\s\S]+api\('\/api\/search\?' \+ sourceSearchQuery\(it\)\)/,
@@ -1423,8 +1440,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'screensaver brand should use the updated cropped Triboon wordmark');
   assert.match(ui, /<div class="ssBrand"><img src="triboon\.png" alt="Triboon"><\/div>/,
     'screensaver should use the updated transparent Triboon wordmark asset');
-  assert.match(ui, /const SCREENSAVER_IDLE_DEFAULT_SECONDS = 60;[\s\S]+const SCREENSAVER_IDLE_OPTIONS = \[0, 60, 120, 300, 600\];[\s\S]+function normalizeScreensaverDelaySeconds\(value\) \{[\s\S]+if \(n > 0 && n < 60\) return normalizeScreensaverDelaySeconds\(n \* 60\);[\s\S]+function prefScreensaverDelaySeconds\(\) \{[\s\S]+localStorage\.getItem\(profilePrefKey\('screensaverDelay'\)\)[\s\S]+localStorage\.getItem\('triboon\.screensaverDelay'\)[\s\S]+return normalizeScreensaverDelaySeconds\(raw\);[\s\S]+function savePrefScreensaverDelay\(seconds\) \{[\s\S]+const n = normalizeScreensaverDelaySeconds\(seconds\);[\s\S]+function prefScreensaverDelayMs\(\) \{[\s\S]+return seconds > 0 \? seconds \* 1000 : 0;[\s\S]+function canShowScreensaver\(\) \{[\s\S]+S\.nativeLivePending[\s\S]+S\.view === 'player' \|\| \$\('player'\)\.classList\.contains\('open'\)[\s\S]+\.gate\.open,#drawer\.open,#trailer\.open,#libModal\.open,#matchModal\.open,#catModal\.open,#filterMenu\.open,#cwMenu\.open,#trackMenu\.open,#musicNow\.open[\s\S]+function resetScreensaverIdle\(\) \{[\s\S]+const idleMs = prefScreensaverDelayMs\(\);[\s\S]+if \(!idleMs\) return;[\s\S]+setTimeout\(showScreensaver, idleMs\);/,
-    'app screensaver should default to one minute, allow profile timing, and stay out of native Live TV, playback, gates, and active modal surfaces');
+  assert.match(ui, /const SCREENSAVER_IDLE_DEFAULT_SECONDS = 60;[\s\S]+const SCREENSAVER_IDLE_OPTIONS = \[0, 60, 120, 300, 600\];[\s\S]+function normalizeScreensaverDelaySeconds\(value\) \{[\s\S]+if \(n > 0 && n < 60\) return normalizeScreensaverDelaySeconds\(n \* 60\);[\s\S]+function prefScreensaverDelaySeconds\(\) \{[\s\S]+localStorage\.getItem\(profilePrefKey\('screensaverDelay'\)\)[\s\S]+localStorage\.getItem\('triboon\.screensaverDelay'\)[\s\S]+return normalizeScreensaverDelaySeconds\(raw\);[\s\S]+function savePrefScreensaverDelay\(seconds\) \{[\s\S]+const n = normalizeScreensaverDelaySeconds\(seconds\);[\s\S]+function prefScreensaverDelayMs\(\) \{[\s\S]+return seconds > 0 \? seconds \* 1000 : 0;[\s\S]+function canShowScreensaver\(\) \{[\s\S]+S\.nativeLivePending[\s\S]+S\.view === 'player' \|\| S\.playing \|\| document\.body\.classList\.contains\('videoOpen'\)[\s\S]+\$\('player'\)\.classList\.contains\('open'\)[\s\S]+\.gate\.open,#drawer\.open,#trailer\.open,#libModal\.open,#matchModal\.open,#catModal\.open,#filterMenu\.open,#cwMenu\.open,#trackMenu\.open,#musicNow\.open[\s\S]+function resetScreensaverIdle\(\) \{[\s\S]+const idleMs = prefScreensaverDelayMs\(\);[\s\S]+if \(!idleMs\) return;[\s\S]+setTimeout\(showScreensaver, idleMs\);/,
+    'app screensaver should default to one minute, stay out of native Live TV, playback (S.playing/videoOpen, covering native ExoPlayer), gates, and active modal surfaces');
   assert.match(ui, /function wakeScreensaverForPlayerSurface\(\) \{[\s\S]+if \(S\.screensaverOn\) hideScreensaver\(true\);[\s\S]+resetScreensaverIdle\(\);[\s\S]+\}/,
     'player and PiP guide surfaces should explicitly wake the screensaver before revealing video UI');
   assert.match(ui, /const SCREENSAVER_TRENDING_TTL = 24 \* 60 \* 60 \* 1000;[\s\S]+const SCREENSAVER_TRENDING_STORE = 'triboon\.screensaver\.trending';/,
@@ -1746,8 +1763,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Live TV in-page empty states should stay remote-focusable after search/category changes');
   assert.match(ui, /const selectedCatIdx = Math\.max\(0, names\.indexOf\(S\.liveCat\)\);[\s\S]+S\.liveCatNavIdx = S\.liveCatDpadMode && Number\.isFinite\(S\.liveCatNavIdx\)[\s\S]+: selectedCatIdx;/,
     'Live TV rerenders should preserve the D-pad category focus index instead of snapping to the selected category');
-  assert.match(ui, /function focusLiveCategory\(idx, select = false\) \{[\s\S]+applyFocus\(cats\[i\], false\);[\s\S]+if \(select && name && name !== S\.liveCat\) \{[\s\S]+clearTimeout\(S\._liveCatApplyT\);[\s\S]+S\.liveCat = name;[\s\S]+renderLiveTvBody\(\);[\s\S]+requestAnimationFrame\(\(\) => \{[\s\S]+focusLiveCategory\(i\);[\s\S]+\}\);/,
-    'Live TV category D-pad movement should apply the category immediately and restore rail focus after rerender');
+  assert.match(ui, /function focusLiveCategory\(idx, select = false\) \{[\s\S]+applyFocus\(cats\[i\], false\);[\s\S]+if \(select && name && name !== S\.liveCat\) \{[\s\S]+S\.liveCat = name;[\s\S]+S\._liveCatApplyT = setTimeout\(applyLiveCatRender, 150\);[\s\S]+function applyLiveCatRender\(\) \{[\s\S]+renderLiveTvBody\(\);[\s\S]+requestAnimationFrame\(\(\) => \{[\s\S]+focusLiveCategory\(i\);[\s\S]+\}\);/,
+    'Live TV category D-pad movement should apply the category immediately but debounce the heavy channel-pane rerender (then restore category focus)');
   assert.doesNotMatch(ui, /S\._liveCatApplyT = setTimeout\(\(\) => \{[\s\S]+S\.liveCat = name;[\s\S]+\}, 140\);/,
     'Live TV category D-pad movement should not delay selected-category changes during fast repeat');
   assert.match(ui, /hit && Date\.now\(\) - hit\.at < \(hit\.syntheticOnly \? 5000 : 60000\)/,
@@ -1913,8 +1930,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'native player icons should turn dark when the focused button switches to light mode');
   assert.match(android, /focused[\s\S]+\? new int\[\]\{0xFFEDE8F5, 0xFFD9CBE7\}[\s\S]+: new int\[\]\{0x18F3EFF7, 0x18F3EFF7\}/,
     'native player buttons should use a very transparent fill normally and full light fill while focused');
-  assert.match(android, /setNativeButtonEnabled\(nativeCcBtn, nativeSubtitleHasOptions\(\)\);[\s\S]+setNativeButtonEnabled\(nativeAudioBtn, nativeAudioHasOptions\(\)\);[\s\S]+setNativeButtonEnabled\(nativeQualityBtn, "video"\.equals\(nativeMode\) && nativeHasQualityChoices\);/,
+  assert.match(android, /setNativeButtonEnabled\(nativeCcBtn, nativeSubtitleHasOptions\(\)\);[\s\S]+setNativeButtonEnabled\(nativeAudioBtn, nativeAudioHasOptions\(\)\);[\s\S]+setNativeButtonEnabled\(nativeQualityBtn, isVideo && nativeHasQualityChoices\);/,
     'native CC/audio/HD buttons should be disabled when no real options exist');
+  assert.match(android, /if \(nativeCcBtn != null\) nativeCcBtn\.setVisibility\(isLive \? View\.GONE : View\.VISIBLE\);[\s\S]+if \(nativeFavBtn != null\) nativeFavBtn\.setVisibility\(isLive \? View\.VISIBLE : View\.GONE\);/,
+    'live IPTV native chrome should hide CC/audio/quality/next and show only the favorite toggle');
+  assert.match(ui, /window\.__tvLiveFavToggle = \(\) => \{ toggleLiveFavorite\(\); \};/,
+    'native live favorite taps should route into the web favorites store');
   assert.match(android, /b == null \|\| b\.getVisibility\(\) != View\.VISIBLE \|\| !b\.isEnabled\(\)/,
     'native D-pad focus should skip disabled controls');
   assert.match(ui, /id="chGuide"[\s\S]+M12 12H3[\s\S]+m16 12 5 3-5 3v-6Z/,

@@ -1563,6 +1563,38 @@ test('pipeline: quality policy streams the matching 1080p or 4K source bytes', a
   }
 });
 
+test('pipeline: 4K toggle with no 4K source falls back to the best available instead of failing', async () => {
+  // "I tapped 4K and nothing plays": exactResolutionRank=4 disqualifies every non-4K release, so a
+  // title with only a 1080p source would throw. The fallback re-ranks without the exact lock.
+  const hdPayload = seededPayload(90 * 1024, 63);
+  const hd = nzbFor(writeRar4Store([{ name: 'Only.1080p.mkv', data: hdPayload }], { base: 'only-hd' }), 30000, 'only-hd');
+  const mock = createMockNntp({ articles: new Map([...hd.articles]) });
+  const nntpPort = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 4);
+  const ix = makeMockIndexer([
+    { name: 'No4K.Movie.2024.1080p.WEB-DL.H.264-NTb', size: 6e9, nzb: hd.nzb },
+  ]);
+  const ixPort = await ix.listen();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const pipeline = new Pipeline({
+    pool: () => pool, verdicts: new VerdictCache(store), mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+  try {
+    const r = await pipeline.play({ q: 'No4K Movie 2024' },
+      { maxResolutionRank: 4, preferResolutionRank: 4, exactResolutionRank: 4 });
+    assert.strictEqual(r.candidate.name, 'No4K.Movie.2024.1080p.WEB-DL.H.264-NTb',
+      'falls back to the best available 1080p instead of throwing "no playable releases"');
+    assert.strictEqual(r.candidate.attributes.resolution, '1080p');
+    const chunks = [];
+    for await (const c of r.vf.read(0, r.vf.size)) chunks.push(c);
+    assert.ok(Buffer.concat(chunks).equals(hdPayload), 'fallback source streams byte-exact');
+  } finally {
+    pool.close(); await mock.close(); ix.server.close(); store.close();
+  }
+});
+
 test('pipeline: a picked SAMPLE file fails the candidate and auto-advance finds the feature', async () => {
   // Real incident: a sample-only post ("From.S01E01.GERMAN.DL.2160p" — 68MB) mounted its
   // sample.mkv and auto-played as the episode. The indexer DECLARED a big size, so scoring

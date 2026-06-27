@@ -199,6 +199,8 @@ public class MainActivity extends Activity {
     private ImageButton nativeQualityBtn;
     private ImageButton nativeStatsBtn;
     private ImageButton nativeNextBtn;
+    private ImageButton nativeFavBtn;
+    private boolean nativeLiveFav = false;
     private View nativeUpNextCard;
     private TextView nativeUpNextKicker;
     private TextView nativeUpNextTitle;
@@ -1046,6 +1048,12 @@ public class MainActivity extends Activity {
             public void upNextHide() {
                 if (!trustedBridgeOrigin()) return;
                 runOnUiThread(() -> dismissNativeUpNext(false));
+            }
+
+            @android.webkit.JavascriptInterface
+            public void setLiveFav(boolean on) {
+                if (!trustedBridgeOrigin()) return;
+                runOnUiThread(() -> { nativeLiveFav = on; applyNativeFavIcon(); });
             }
 
             @android.webkit.JavascriptInterface
@@ -2818,6 +2826,13 @@ public class MainActivity extends Activity {
         nativeNextBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) playNativeNextEpisode(); });
         centerControls.addView(nativeNextBtn);
 
+        // Favorite toggle — only shown for live IPTV (the owner's "IPTV player should show
+        // add/remove favorite"). The web layer owns the favorites store; this forwards the tap and
+        // renders the on/off star from the state the web pushes back via setLiveFav().
+        nativeFavBtn = nativeButton(R.drawable.ic_player_fav, "Favorite", false);
+        nativeFavBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) toggleNativeLiveFavorite(); });
+        rightControls.addView(nativeFavBtn);
+
         nativeCcBtn = nativeButton(R.drawable.ic_player_cc, "Subtitles", false);
         nativeCcBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) showNativeTrackMenu(C.TRACK_TYPE_TEXT); });
         rightControls.addView(nativeCcBtn);
@@ -3307,6 +3322,20 @@ public class MainActivity extends Activity {
         Object tag = b.getTag();
         if (tag instanceof Integer) setNativeButtonIcon(b, (Integer) tag, primary, b.hasFocus() && enabled);
         if (!enabled && getCurrentFocus() == b) focusNativeDefaultControl();
+    }
+
+    // Live IPTV favorite: forward the tap to the web layer (which owns the favorites store); the
+    // web pushes the resulting on/off state back via setLiveFav() so the star reflects reality.
+    private void toggleNativeLiveFavorite() {
+        if (web != null) web.evaluateJavascript("window.__tvLiveFavToggle && __tvLiveFavToggle()", null);
+    }
+
+    private void applyNativeFavIcon() {
+        if (nativeFavBtn == null) return;
+        int icon = nativeLiveFav ? R.drawable.ic_player_fav_on : R.drawable.ic_player_fav;
+        nativeFavBtn.setTag(icon);
+        nativeFavBtn.setContentDescription(nativeLiveFav ? "Remove from favorites" : "Add to favorites");
+        setNativeButtonIcon(nativeFavBtn, icon, false, nativeFavBtn.hasFocus());
     }
 
     private GradientDrawable nativeButtonBg(boolean focused, boolean primary) {
@@ -4329,14 +4358,23 @@ public class MainActivity extends Activity {
             nativeSeek.setVisibility(isLive ? View.GONE : View.VISIBLE);
             nativeSeek.setProgress(!isLive && dur > 0 ? (int) Math.min(1000, Math.max(0, (pos * 1000) / dur)) : 0);
         }
+        boolean isVideo = "video".equals(nativeMode);
         if (nativeGuideBtn != null) nativeGuideBtn.setVisibility(View.VISIBLE);
         if (nativeRewBtn != null) nativeRewBtn.setVisibility(isLive ? View.GONE : View.VISIBLE);
         if (nativeFwdBtn != null) nativeFwdBtn.setVisibility(isLive ? View.GONE : View.VISIBLE);
+        // Live IPTV has no CC/audio/quality/next-episode choices — hide them entirely (the owner's
+        // "no need to show sound/HD on the IPTV player"); they return for movies/episodes.
+        if (nativeCcBtn != null) nativeCcBtn.setVisibility(isLive ? View.GONE : View.VISIBLE);
+        if (nativeAudioBtn != null) nativeAudioBtn.setVisibility(isLive ? View.GONE : View.VISIBLE);
+        if (nativeQualityBtn != null) nativeQualityBtn.setVisibility(isLive ? View.GONE : View.VISIBLE);
+        if (nativeNextBtn != null) nativeNextBtn.setVisibility(isLive ? View.GONE : View.VISIBLE);
+        if (nativeFavBtn != null) nativeFavBtn.setVisibility(isLive ? View.VISIBLE : View.GONE);
         setNativeButtonEnabled(nativeStatsBtn, nativePlayer != null);
         setNativeButtonEnabled(nativeCcBtn, nativeSubtitleHasOptions());
         setNativeButtonEnabled(nativeAudioBtn, nativeAudioHasOptions());
-        setNativeButtonEnabled(nativeQualityBtn, "video".equals(nativeMode) && nativeHasQualityChoices);
-        setNativeButtonEnabled(nativeNextBtn, "video".equals(nativeMode) && nativeHasNext);
+        setNativeButtonEnabled(nativeQualityBtn, isVideo && nativeHasQualityChoices);
+        setNativeButtonEnabled(nativeNextBtn, isVideo && nativeHasNext);
+        if (isLive && nativeFavBtn != null) { setNativeButtonEnabled(nativeFavBtn, true); applyNativeFavIcon(); }
         if (nativeElapsed != null) {
             nativeElapsed.setText(isLive ? "" : fmtNative(pos));
             nativeElapsed.setVisibility(isLive ? View.GONE : View.VISIBLE);

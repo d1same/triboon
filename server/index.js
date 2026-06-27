@@ -5611,6 +5611,11 @@ Object.assign(H, {
     const vf = mounts.get(ctx.m[1]);
     if (!vf) return send(ctx.res, 404, { error: 'mount not found' });
     if (!mountAccessOk(ctx, vf)) return send(ctx.res, 404, { error: 'mount not found' });
+    // Per-user cap, transcoder half (CLAUDE.md: caps enforced at source first, transcoder second).
+    // Default policy allows transcoding; only an explicit admin opt-out blocks it.
+    if (ctx.user && ctx.user.policy && ctx.user.policy.allowTranscode === false) {
+      return send(ctx.res, 403, { error: 'transcoding is disabled for this account' });
+    }
     if (!vf.streamable) return send(ctx.res, 409, { error: 'mount is not streamable', tags: vf.tags });
     if (!detectEncoder()) return send(ctx.res, 503, { error: 'no H.264 encoder available on this server' });
     vf._touched = Date.now();

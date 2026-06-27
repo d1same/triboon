@@ -59,15 +59,19 @@ function releaseAudioProfile(name) {
   return {
     truehd: /\b(true[ ._-]?hd|mlp)\b/i.test(s),
     dtsHd: /\b(dts[ ._-]?hd|dts[ ._-]?x|dtsma|dts[ ._-]?ma)\b/i.test(s),
+    dts: /\bdts\b/i.test(s),
   };
 }
 
 function releaseLosslessAudioDirectOk(name, caps = {}) {
   const a = releaseAudioProfile(name);
-  if (!a.truehd && !a.dtsHd) return true;
   const passthrough = !!(caps.native && caps.passthrough);
   if (a.truehd && !(passthrough && caps.truehd)) return false;
   if (a.dtsHd && !(passthrough && caps.dtsHd)) return false;
+  // Plain DTS core: the MKV-direct gate checks AC3/EAC3 decode but not DTS, so a DTS MKV on a
+  // device that can't decode DTS (and can't passthrough) plays silent on direct. Remux it. Only
+  // act on an EXPLICIT caps.dts === false so older clients that don't report DTS aren't over-remuxed.
+  if (a.dts && !a.dtsHd && caps.dts === false && !passthrough) return false;
   return true;
 }
 

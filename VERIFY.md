@@ -86,6 +86,53 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-06-27, audit follow-through (v1.7.39) — recommended-next fixes + owner-approved settings:
+
+- Music: stream URL cache now scoped by cookie identity (no cross-user variant bleed); next-track
+  prefetch warms the following track's resolve for gapless sequential play; bounded auto-skip loop
+  (prior entry). MediaSession action handlers were already present (audit false positive, verified).
+- CC: native auto-sync no longer double-applies a manual subtitle offset (strips shift from the base
+  URL and passes subtitleShift:0, since alass already corrects to the video).
+- Playback: DTS-core MKV on a device that can't decode DTS now remuxes instead of playing silent
+  (decidePlayback gate extended; only triggers on explicit caps.dts===false, never over-remuxing).
+  New phase4 test.
+- Settings (owner-approved): per-user allowTranscode is now ENFORCED at /api/transcode (403) with an
+  admin toggle in the user list; streaming-performance Profile presets (Fast/Balanced/Large) now
+  fill the buffer/connection fields (verified: Fast → buf1080=45, conn1080=8, reserve=40);
+  opensubtitles.com username/password inputs added to the Subtitles panel (server already stored
+  them encrypted; password never round-trips, blank never wipes).
+- npm test 249/249; Android assembleDebug → APK; inline web JS parses. New web pieces verified live
+  on emulator (prefetchNextMusicStream, PERF_PRESETS, osUser/osPass inputs, __tvLiveFavToggle).
+
+2026-06-27, full audit pass (6 subsystems) — high-confidence fixes, verified on emulator:
+
+- Screensaver (owner: never during playback): canShowScreensaver now also gates on S.playing +
+  body.videoOpen, covering native ExoPlayer (WebView visible behind the surface) and paused-active
+  playback — no longer resting on the single S.view string. Verified live (guard references S.playing).
+- IPTV player controls (owner: show favorite, hide sound/HD): the Android NATIVE live chrome now
+  hides CC/audio/quality/next/rew/fwd and shows a FAVORITE star (new ic_player_fav/_on). Web layer
+  owns the favorites store; native tap → __tvLiveFavToggle → toggleLiveFavorite → POST → setLiveFav
+  pushes the star state back. Verified on emulator: played ABC live, chrome showed play + star +
+  info only; toggling filled the star and flipped the channel's fav=true in the store, then back.
+  Web player also hardened (srndBtn hidden for live in JS, not just CSS !important).
+- Guide lag (owner: smooth category D-pad): category switching debounces the ≤400-card channel-pane
+  rebuild (was a full rebuild per keystroke). S.liveCat applies immediately (RIGHT/Enter stay
+  correct); render defers ~150ms or flushes on entering channels. Verified: rapid focusLiveCategory
+  keeps state immediate, render pending coalesced, flush renders once.
+- 4K toggle with no 4K source now falls back to the best available (was: play fails outright).
+  New pipeline test added.
+- Music: bounded the auto-skip loop (shuffle/repeat-all on a wholly-unplayable queue looped forever
+  spawning yt-dlp); now stops after one full lap, resets on a real play.
+- CC: osLang no longer truncates an unmapped 3-letter code to a bogus 2 letters (ces→cs verified,
+  not ce); srp_latn added for server parity.
+- npm test 248/248 (added 4K-fallback + IPTV-favorite + screensaver-guard assertions; updated
+  screensaver/live-category/quality regexes to track the improvements, none weakened). Android
+  assembleDebug → APK. Inline web JS parses (0 errors).
+- Audited and found CORRECT (no change): quality cap-at-source (1080p user never gets 4K), audio
+  AAC-safe path on browsers, passthrough when device can decode, IPTV slot eviction (no leak),
+  favorites source-scoped delete cleanup, Back layering, LEFT-always-reaches-menu, streaming-perf
+  numerics flow into the pipeline, secrets encrypted/redacted, music process hygiene (no leaks).
+
 2026-06-27, TV "next episode" — prefetch + Up Next parity (web + ExoPlayer):
 
 - Review finding: next-episode prefetch only warmed `/api/search` on START (the pipeline's search

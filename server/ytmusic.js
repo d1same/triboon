@@ -564,19 +564,29 @@ async function search(query, { limit = 20, cookiesPath, priority = 0 } = {}) {
 // Resolve the best audio stream URL for a track. Cached: the googlevideo URL is valid for a
 // few hours, and re-running yt-dlp per play (≈1–3s) would gut the press-play feel. m4a is
 // preferred for the broadest <audio> support, opus/webm as the fallback.
-const _streamCache = new Map(); // id -> { url, at, expiresAt, title, artist, thumb, duration }
+const _streamCache = new Map(); // cacheKey -> { url, at, expiresAt, title, artist, thumb, duration }
 const STREAM_TTL_MS = 3 * 3600 * 1000;
-function setStreamCache(id, rec) {
+// Scope the cache by the cookies in play. A track resolved with one user's cookies (a premium /
+// age-gated / region-specific variant, or one their account can play and another can't) must NOT
+// be served to another user from cache. No cookies → shared 'public' scope.
+function streamCacheKey(id, cookiesPath) {
+  const scope = cookiesPath
+    ? require('crypto').createHash('sha1').update(String(cookiesPath)).digest('hex').slice(0, 12)
+    : 'public';
+  return id + '|' + scope;
+}
+function setStreamCache(key, rec) {
   while (_streamCache.size >= 200) {
     const oldest = _streamCache.keys().next().value;
     if (oldest === undefined) break;
     _streamCache.delete(oldest);
   }
-  _streamCache.set(id, rec);
+  _streamCache.set(key, rec);
 }
 async function resolveStream(id, { cookiesPath, force = false } = {}) {
   if (!/^[\w-]{11}$/.test(String(id || ''))) throw new Error('bad track id');
-  const hit = _streamCache.get(id);
+  const cacheKey = streamCacheKey(id, cookiesPath);
+  const hit = _streamCache.get(cacheKey);
   if (!force && hit && Date.now() < hit.expiresAt) return hit;
   // -J gives the picked format URL + metadata in one shot (title/artist/duration for the bar).
   const load = async (cookieFile) => {
@@ -600,10 +610,10 @@ async function resolveStream(id, { cookiesPath, force = false } = {}) {
     title: cleanTitle(j.title) || j.title || 'Unknown', artist: j.artist || j.uploader || j.channel || '',
     duration: num(j.duration), thumb: thumbFor(id),
   };
-  setStreamCache(id, rec);
+  setStreamCache(cacheKey, rec);
   return rec;
 }
-function _peekCached(id) { return _streamCache.get(id) || null; }
+function _peekCached(id, cookiesPath) { return _streamCache.get(streamCacheKey(id, cookiesPath)) || null; }
 
 // The user's OWN playlists (needs cookies). yt-dlp's youtube:tab extractor resolves the YTM
 // library page when authenticated; entries are playlist links (ids often prefixed 'VL').
