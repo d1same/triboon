@@ -2339,7 +2339,8 @@ body.musicPaused .mEq i{animation-play-state:paused}
 .mnTitle{font:800 clamp(26px,3vw,42px)/1.06 "Sora";letter-spacing:0;margin-bottom:9px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .mnArtist{font:600 clamp(14px,1.35vw,19px) "Albert Sans";color:var(--amber);margin-bottom:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mnProg{display:flex;align-items:center;gap:14px;margin-bottom:18px}
-.mnProg .mbBar{height:6px}
+.mnProg .mbBar{height:6px;touch-action:none}
+.mnProg .mbBar::before{content:"";position:absolute;left:0;right:0;top:-14px;bottom:-14px}
 .mnProg .mbFill{box-shadow:0 0 10px rgba(193,59,214,.5)}
 .mnCtl{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .mnCtl .mbBtn{width:46px;height:46px}.mnCtl .mbBtn svg{width:22px;height:22px}
@@ -2371,7 +2372,7 @@ body.tv #musicNow .mnCtl .mbPlay{width:58px;height:58px}
 body.tv #musicNow .mnQueue{width:min(780px,calc(100vw - 310px));margin-top:30px;margin-bottom:28px;padding-top:14px}
 body.tv #musicNow.queueHidden .mnMain{width:min(980px,calc(100vw - 140px));padding-bottom:52px}
 body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
-@media (max-width:900px){.mnMain{flex-direction:column;gap:22px;padding:80px 16px 26px}.mnCover{width:min(230px,55vw)}.mnQueue{width:min(420px,calc(100vw - 48px));margin:22px auto 28px;max-height:38vh}#musicNow.queueHidden .mnMain{width:100%;padding-bottom:52px}#musicNow.queueHidden .mnCover{width:min(260px,58vw)}}
+@media (max-width:900px){.mnMain{flex-direction:column;gap:22px;padding:80px 16px 26px}.mnCover{width:min(230px,55vw)}.mnInfo{min-width:0;width:100%;max-width:calc(100vw - 32px)}.mnQueue{width:min(420px,calc(100vw - 48px));margin:22px auto 28px;max-height:38vh}#musicNow.queueHidden .mnMain{width:100%;padding-bottom:52px}#musicNow.queueHidden .mnCover{width:min(260px,58vw)}}
 
 @media (max-width:900px){.musicTiles{grid-template-columns:repeat(2,minmax(0,1fr))}.musicRail{grid-auto-columns:minmax(150px,42vw)}.mSearchSongs{grid-template-columns:1fr}.mArtistName{font-size:28px}.mArtistArt{width:82px;height:82px}}
 @media (max-width:600px){#music{left:0!important}.mbProg .mbT{display:none}.musicTiles{grid-template-columns:1fr}}
@@ -15555,7 +15556,24 @@ $('mnPrev').addEventListener('click', musicPrev);
 $('mnShuffle').addEventListener('click', toggleShuffle);
 $('mnRepeat').addEventListener('click', cycleRepeat);
 $('mnQueueToggle').addEventListener('click', toggleMusicQueue);
-$('mnSeek').addEventListener('click', (e) => { const r = $('mnSeek').getBoundingClientRect(); const d = mAudio.duration || (S.musicCur && S.musicCur.duration) || 0; if (d) mAudio.currentTime = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * d; });
+// Music seek: pointer events so a touch TAP *or* DRAG scrubs the timeline (the old click-only
+// handler couldn't drag on the phone). setPointerCapture keeps the drag tracking off the thin bar.
+let _mnSeekDrag = false;
+function mnSeekToPointer(e) {
+  const r = $('mnSeek').getBoundingClientRect();
+  const d = mAudio.duration || (S.musicCur && S.musicCur.duration) || 0;
+  const x = Number.isFinite(e.clientX) ? e.clientX : NaN;
+  if (!d || !r.width || !Number.isFinite(x)) return;
+  mAudio.currentTime = Math.max(0, Math.min(1, (x - r.left) / r.width)) * d;
+}
+$('mnSeek').addEventListener('pointerdown', (e) => {
+  _mnSeekDrag = true;
+  try { $('mnSeek').setPointerCapture(e.pointerId); } catch {}
+  mnSeekToPointer(e); e.preventDefault();
+});
+$('mnSeek').addEventListener('pointermove', (e) => { if (_mnSeekDrag) mnSeekToPointer(e); });
+$('mnSeek').addEventListener('pointerup', () => { _mnSeekDrag = false; });
+$('mnSeek').addEventListener('pointercancel', () => { _mnSeekDrag = false; });
 
 /* ============ preferences: cover size + menu hide/reorder (per device) ============ */
 const MENU_DEFAULT = ['search', 'home', 'watchlist', 'discover', 'calendar', 'movies', 'tv', 'livetv', 'music'];

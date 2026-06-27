@@ -648,6 +648,14 @@ test('music search supports voice and TV result focus without side-note clutter'
     'Music shelf headers should render only the shelf title above the cards');
   assert.match(ui, /function musicSearchAndFocusResults\(\) \{[\s\S]+clearTimeout\(_musicSearchT\);[\s\S]+doMusicSearch\(\)\.then\(\(\) => focusMusicResultsSoon\(\)\)/,
     'Music Enter/voice search should submit immediately and wait for result focus');
+  // Phone music: the now-playing seekbar must scrub by touch tap AND drag (was click-only), with a
+  // bigger touch target and no scroll-hijack; and a long artist name must not overflow/shift the page.
+  assert.match(ui, /\$\('mnSeek'\)\.addEventListener\('pointerdown'[\s\S]+setPointerCapture\(e\.pointerId\)[\s\S]+mnSeekToPointer\(e\)/,
+    'the music seekbar should scrub via pointer (touch tap + drag), not click only');
+  assert.match(ui, /\.mnProg \.mbBar\{height:6px;touch-action:none\}\s*\.mnProg \.mbBar::before\{content:""[^}]*top:-14px/,
+    'the music seekbar needs touch-action:none and an enlarged ::before hit area for touch');
+  assert.match(ui, /\.mnInfo\{min-width:0;width:100%;max-width:calc\(100vw - 32px\)\}/,
+    'on phones the now-playing info must be viewport-capped so a long artist truncates instead of shifting the layout');
   assert.match(ui, /function moveMusicSearchDown\(\) \{[\s\S]+if \(q\) \{ musicSearchAndFocusResults\(\); return; \}[\s\S]+chipEls\(\)\.length[\s\S]+musicRows\(\)\.length/,
     'Music ArrowDown should not strand focus in the input while search results load');
   // TV: scrollIntoView is unreliable inside the #musicList overflow container (the focus ring moved
