@@ -705,6 +705,21 @@ body.nativeGuideMode #player.guideMode #video{display:none}
 .mvGrid.count4 .mvSlot.vod .mvActions,.mvGrid.count3 .mvSlot.vod:not(.mvMain) .mvActions{gap:5px;padding:4px}
 .mvAdd{position:absolute;left:50%;top:50%;width:76px;height:76px;transform:translate(-50%,-50%);display:grid;place-items:center;border-radius:50%;border:1px solid rgba(255,255,255,.12);background:rgba(5,3,9,.64);color:var(--text);font:900 32px "Albert Sans";box-shadow:0 20px 70px rgba(0,0,0,.42),0 0 0 1px rgba(255,198,92,.16)}
 .mvSlot.filled .mvAdd{display:none}
+/* Owner request: multiview is icons-only. No resting button backgrounds/borders/shadows and no
+   amber active-pane highlight — the on-pane action icons already show which pane is selected.
+   Flat focus indication only (no glows), per the TV UX preferences. Scoped to #multiView so the
+   shared .mvIconBtn used by the PiP-guide launcher is untouched. */
+#multiView .mvLayout button,#multiView .mvIconBtn,#multiView .mvAction{
+  background:transparent;border-color:transparent;box-shadow:none}
+#multiView .mvLayout button.on{background:transparent;border-color:transparent;color:rgba(255,235,169,.96)}
+#multiView .mvLayout button:hover,#multiView .mvLayout button:focus,#multiView .mvLayout button.focus,
+#multiView .mvIconBtn:hover,#multiView .mvIconBtn:focus,#multiView .mvIconBtn.focus,
+#multiView .mvAction:hover,#multiView .mvAction:focus,#multiView .mvAction.focus{
+  background:rgba(243,239,247,.14);border-color:transparent;box-shadow:none;transform:none}
+#multiView .mvActions{background:none;border:0;box-shadow:none;backdrop-filter:none;padding:0}
+#multiView .mvAction svg,#multiView .mvIconBtn svg{filter:drop-shadow(0 1px 2px rgba(0,0,0,.72))}
+#multiView .mvSlot.active{border-color:rgba(243,239,247,.07);box-shadow:0 18px 58px rgba(0,0,0,.44)}
+#multiView .mvAdd{background:transparent;box-shadow:none;border-color:rgba(255,255,255,.2)}
 .mvStatus{position:absolute;left:12px;bottom:12px;max-width:calc(100% - 24px);min-height:22px;padding:6px 9px;border-radius:8px;background:rgba(5,3,9,.62);border:1px solid rgba(243,239,247,.08);font:800 10px/1.25 "JetBrains Mono";letter-spacing:.08em;text-transform:uppercase;color:rgba(243,239,247,.76);white-space:normal;overflow:hidden;text-overflow:ellipsis;text-shadow:0 2px 14px rgba(0,0,0,.8)}
 .mvStatus.warn{color:rgba(255,198,92,.95);border-color:rgba(255,198,92,.22);background:rgba(30,18,8,.72);font:750 12px/1.25 "Albert Sans";letter-spacing:0;text-transform:none}
 #multiView.paneFull .mvTop{display:none}

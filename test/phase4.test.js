@@ -2455,6 +2455,11 @@ test('Android native player: direct source and native chrome stay out of the web
     'multiview VOD should prefer remux+AAC over direct so non-AAC audio still plays in the pane');
   assert.match(ui, /function multiViewVodUrlFromSlot\([\s\S]+forceAacRemux: true,[\s\S]+if \(p\.remuxUrl\) return \{ \.\.\.p, kind: 'remux'/,
     'multiview VOD seek-rebuild should also prefer remux+AAC');
+  // Multiview is icons-only: no resting button backgrounds and no amber active-pane highlight.
+  assert.match(ui, /#multiView \.mvLayout button,#multiView \.mvIconBtn,#multiView \.mvAction\{[^}]*background:transparent;border-color:transparent;box-shadow:none\}/,
+    'multiview buttons should be icons-only (transparent resting background)');
+  assert.match(ui, /#multiView \.mvSlot\.active\{border-color:rgba\(243,239,247,\.07\);box-shadow:0 18px 58px rgba\(0,0,0,\.44\)\}/,
+    'active multiview pane should drop the amber highlight (icons indicate selection)');
   // Leaving multiview must tear down the underlying player surface or it shows a black #video.
   assert.match(ui, /function closeMultiView\(opts = \{\}\) \{[\s\S]+const mainVideo = \$\('video'\);[\s\S]+\$\('player'\)\.classList\.remove\('open', 'guideMode', 'live'\);[\s\S]+document\.body\.classList\.remove\('videoOpen', 'nativeGuideMode'\)/,
     'closing multiview should tear down the main player/video surface so the target view is not a black screen');
