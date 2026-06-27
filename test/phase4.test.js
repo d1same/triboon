@@ -1952,6 +1952,17 @@ test('Android native player: direct source and native chrome stay out of the web
     'goNativeLive should seek to the live edge and resume');
   assert.match(android, /if \(nativeLiveBtn != null\) nativeLiveBtn\.setVisibility\(isLive \? View\.VISIBLE : View\.GONE\)/,
     'the native Go-live button must be visible only for live playback');
+  // Native live EPG strip: the channel schedule, ABOVE the seek bar, fed from the web via setLiveEpg.
+  assert.match(android, /nativeChrome\.addView\(nativeEpgStrip, epgLp\);[\s\S]+LinearLayout seekRow = new LinearLayout/,
+    'the native EPG strip must be added to the chrome directly above the seek row');
+  assert.match(android, /public void setLiveEpg\(String json\) \{[\s\S]+new org\.json\.JSONArray\(json\)[\s\S]+renderNativeEpgStrip\(\)/,
+    'the setLiveEpg bridge should parse the pushed programmes and render the native strip');
+  assert.match(android, /private void renderNativeEpgStrip\(\) \{[\s\S]+horizon = now \+ 2L \* 3600000L[\s\S]+isNow \? "NOW" : fmtNativeClock\(start\)/,
+    'native EPG strip should cover ~2h and mark the current programme');
+  assert.match(android, /return 4; \/\/ v4: native live EPG strip/,
+    'nativeChromeVersion must advertise v4 so the web pushes EPG to native');
+  assert.match(ui, /function pushLiveEpgToNative\(\) \{[\s\S]+typeof TriboonTV\.setLiveEpg === 'function'[\s\S]+TriboonTV\.setLiveEpg\(JSON\.stringify/,
+    'the web should push the live EPG to the native chrome when the shell supports it');
   assert.match(ui, /\.cbtn\.big\{width:58px;height:58px;background:rgba\(5,3,9,\.4\);color:var\(--text\)\}/,
     'web play button should be neutral until focused or hovered');
   assert.doesNotMatch(ui, /\.cbtn\.on\{background:var\(--amber\)|\.btn\.primary,\.cbtn\.big/,
@@ -2464,10 +2475,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'live player should fetch the channel schedule and paint a top EPG strip');
   assert.match(ui, /function paintLiveEpgStrip\(\) \{[\s\S]+horizon = now \+ 2 \* 3600000[\s\S]+epgCell\$\{isNow \? ' now' : ''\}/,
     'the EPG strip should cover ~2 hours and mark the current programme');
-  // The EPG strip must be grouped WITH the top bar (osdTopGroup) so #osd's space-between pins it to
-  // the TOP — as a bare middle child it floated to the vertical center of the screen.
-  assert.match(ui, /<div class="osdTopGroup">\s*<div class="top">[\s\S]+<div id="liveEpgStrip"[\s\S]+<\/div>\s*<\/div>\s*<div>\s*<div class="src"/,
-    'the EPG strip must sit inside osdTopGroup with the top bar so it pins to the top, not mid-screen');
+  // The EPG strip sits just ABOVE the seekbar (first child of the bottom OSD block, before #pSrc /
+  // the seek line) — not the top of the screen and not floating mid-screen.
+  assert.match(ui, /<div id="liveEpgStrip" class="liveOnly"[^>]*><\/div>\s*<div class="src" id="pSrc"><\/div>\s*<div class="seekLine">/,
+    'the EPG strip must render directly above the seek/timeshift bar in the bottom chrome');
   assert.match(ui, /function goLive\(\) \{[\s\S]+liveBufferedEdge\(v\)[\s\S]+v\.currentTime = Math\.max\(0, end - 0\.4\)[\s\S]+v\.play\(\)/,
     'Go-live should seek to the live edge and resume');
   assert.match(ui, /function updateLiveChrome\(\) \{[\s\S]+const atLive = behind < 3 && !v\.paused;[\s\S]+toggle\('atLive', atLive\)[\s\S]+toggle\('behind', !atLive\)/,

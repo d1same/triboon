@@ -201,6 +201,8 @@ public class MainActivity extends Activity {
     private ImageButton nativeNextBtn;
     private ImageButton nativeFavBtn;
     private ImageButton nativeLiveBtn;       // live: jump back to the live edge after a pause/rewind
+    private LinearLayout nativeEpgStrip;     // live: channel schedule strip above the seek bar
+    private org.json.JSONArray nativeEpgData; // programmes the web pushes via setLiveEpg()
     private boolean nativeLiveFav = false;
     private View nativeUpNextCard;
     private TextView nativeUpNextKicker;
@@ -1099,7 +1101,17 @@ public class MainActivity extends Activity {
             @android.webkit.JavascriptInterface
             public int nativeChromeVersion() {
                 if (!trustedBridgeOrigin()) return 0;
-                return 3; // v3: in-app self-update (installAppUpdate); v2: native Up Next card
+                return 4; // v4: native live EPG strip + Go-live; v3: in-app self-update; v2: Up Next card
+            }
+
+            @android.webkit.JavascriptInterface
+            public void setLiveEpg(String json) {
+                if (!trustedBridgeOrigin()) return;
+                runOnUiThread(() -> {
+                    try { nativeEpgData = (json == null || json.isEmpty()) ? null : new org.json.JSONArray(json); }
+                    catch (Exception e) { nativeEpgData = null; }
+                    renderNativeEpgStrip();
+                });
             }
 
             @android.webkit.JavascriptInterface
@@ -2798,6 +2810,17 @@ public class MainActivity extends Activity {
         metaLp.setMargins(0, 0, 0, dp(150));
         nativePlayerLayer.addView(nativeMetaBar, metaLp);
 
+        // Live EPG strip — the channel's "what's on" for ~2h, sitting directly ABOVE the seek bar
+        // (matches the web overlay). Populated from the programmes the web pushes via setLiveEpg().
+        nativeEpgStrip = new LinearLayout(this);
+        nativeEpgStrip.setOrientation(LinearLayout.HORIZONTAL);
+        nativeEpgStrip.setClipChildren(false);
+        nativeEpgStrip.setVisibility(View.GONE);
+        LinearLayout.LayoutParams epgLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        epgLp.setMargins(0, 0, 0, dp(10));
+        nativeChrome.addView(nativeEpgStrip, epgLp);
+
         LinearLayout seekRow = new LinearLayout(this);
         seekRow.setOrientation(LinearLayout.HORIZONTAL);
         seekRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
@@ -4132,6 +4155,53 @@ public class MainActivity extends Activity {
         showNativeChrome(true);
     }
 
+    private void renderNativeEpgStrip() {
+        if (nativeEpgStrip == null) return;
+        nativeEpgStrip.removeAllViews();
+        org.json.JSONArray data = nativeEpgData;
+        if (!"live".equals(nativeMode) || data == null || data.length() == 0) {
+            nativeEpgStrip.setVisibility(View.GONE);
+            return;
+        }
+        long now = System.currentTimeMillis();
+        long horizon = now + 2L * 3600000L;
+        int shown = 0;
+        for (int i = 0; i < data.length() && shown < 4; i++) {
+            org.json.JSONObject p = data.optJSONObject(i);
+            if (p == null) continue;
+            long start = p.optLong("start", 0), stop = p.optLong("stop", 0);
+            if (stop <= now || start >= horizon) continue;
+            boolean isNow = start <= now && stop > now;
+            LinearLayout cell = new LinearLayout(this);
+            cell.setOrientation(LinearLayout.VERTICAL);
+            cell.setPadding(dp(10), dp(6), dp(10), dp(7));
+            cell.setBackground(nativePillBg(isNow ? 0x33C13BD6 : 0x14F3EFF7,
+                    isNow ? 0x66C13BD6 : 0x18F3EFF7, dp(8)));
+            TextView when = new TextView(this);
+            when.setTextColor(0xCCBFB0D0);
+            when.setTextSize(9);
+            when.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+            when.setText(isNow ? "NOW" : fmtNativeClock(start));
+            cell.addView(when, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            TextView title = new TextView(this);
+            title.setTextColor(0xFFF3EFF7);
+            title.setTextSize(12.5f);
+            title.setTypeface(Typeface.DEFAULT_BOLD);
+            title.setSingleLine(true);
+            title.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            title.setText(p.optString("title", ""));
+            cell.addView(title, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, isNow ? 2.4f : 1f);
+            if (shown > 0) lp.setMargins(dp(5), 0, 0, 0);
+            nativeEpgStrip.addView(cell, lp);
+            shown++;
+        }
+        nativeEpgStrip.setVisibility(shown > 0 ? View.VISIBLE : View.GONE);
+    }
+
     private void goNativeLive() {
         if (nativePlayer == null || !"live".equals(nativeMode)) return;
         try {
@@ -4457,6 +4527,7 @@ public class MainActivity extends Activity {
         if (nativeNextBtn != null) nativeNextBtn.setVisibility(isLive ? View.GONE : View.VISIBLE);
         if (nativeFavBtn != null) nativeFavBtn.setVisibility(isLive ? View.VISIBLE : View.GONE);
         if (nativeLiveBtn != null) nativeLiveBtn.setVisibility(isLive ? View.VISIBLE : View.GONE);
+        renderNativeEpgStrip(); // refresh the live EPG strip (now/next advances) — hides itself for video
         setNativeButtonEnabled(nativeStatsBtn, nativePlayer != null);
         setNativeButtonEnabled(nativeCcBtn, nativeSubtitleHasOptions());
         setNativeButtonEnabled(nativeAudioBtn, nativeAudioHasOptions());

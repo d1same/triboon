@@ -3453,7 +3453,6 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
        unreliable — cues go active with nothing on screen. -->
   <div id="subOverlay" aria-live="off"></div>
   <div id="osd">
-    <div class="osdTopGroup">
     <div class="top">
       <div class="topLeft">
         <button class="cbtn focusable playerBackBtn" id="playerBackBtn" title="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button>
@@ -3470,9 +3469,8 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
         <div class="health" id="pHealth"></div>
       </div>
     </div>
-    <div id="liveEpgStrip" class="liveOnly" aria-hidden="true"></div>
-    </div>
     <div>
+      <div id="liveEpgStrip" class="liveOnly" aria-hidden="true"></div>
       <div class="src" id="pSrc"></div>
       <div class="seekLine">
         <span class="seekTime" id="seekElapsed">0:00</span>
@@ -10243,6 +10241,17 @@ async function renderLiveEpgStrip(idx) {
     if (_liveEpgIdx !== idx) return; // channel changed mid-fetch
     _liveEpgProgs = (byIdx[ch.idx ?? ch._channel] || byIdx[idx] || []).filter((p) => p && p.start && p.stop);
     paintLiveEpgStrip();
+    pushLiveEpgToNative();
+  } catch {}
+}
+// Android TV plays live through native ExoPlayer, so push the same programmes to the native chrome
+// (it renders its own EPG strip above the seek bar). No-op in the browser / older shells.
+function pushLiveEpgToNative() {
+  try {
+    if (window.TriboonTV && typeof TriboonTV.setLiveEpg === 'function') {
+      TriboonTV.setLiveEpg(JSON.stringify((_liveEpgProgs || [])
+        .map((p) => ({ start: p.start, stop: p.stop, title: p.title || '' }))));
+    }
   } catch {}
 }
 function paintLiveEpgStrip() {
