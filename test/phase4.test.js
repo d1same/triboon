@@ -1733,6 +1733,15 @@ test('Android native player: direct source and native chrome stay out of the web
     'PiP guide D-pad category movement should select the highlighted category and scroll the category pane directly');
   assert.match(ui, /if \(k === 'ArrowDown'\) return focusPlayerGuideCategory\(i \+ 1, true\)/,
     'PiP guide category down should update the right-side channel guide');
+  // Guide position: opening/returning to the PiP guide (when NOT mid-browse) lands on the category
+  // of the channel you're watching — "where you left off" after a tune+fullscreen+back. And the
+  // category-focus double-scroll (manual scrollTo THEN scrollIntoView) was removed.
+  assert.match(ui, /const currentCat = currentCh && currentCh\.genre && catNames\.includes\(currentCh\.genre\)[\s\S]+if \(!S\.pgCatDpadMode && currentCat\) \{[\s\S]+S\.pgLiveCat = currentCat;/,
+    'PiP guide should open on the playing channel category (not a stale one) unless actively browsing');
+  assert.match(ui, /no scrollIntoView here — the manual pane scrollTo above already positions the chip/,
+    'PiP category focus must not double-scroll (the redundant scrollIntoView was removed)');
+  assert.match(ui, /if \(!started && appended > 700000\) \{[\s\S]+started = true;[\s\S]+requestLivePlay\(\)/,
+    'live MSE should start playback after ~0.7s buffered (faster channel change), not ~1.5s');
   assert.match(ui, /if \(k === 'ArrowRight'\) return moveTo\(rows\.find\(\(r\) => r\.classList\.contains\('cur'\)\) \|\| rows\[0\]\)/,
     'PiP guide should enter channel rows only when the user presses Right from categories');
   assert.match(ui, /if \(S\.pgCatDpadMode && cats\.length\) return focusPlayerGuideCategory\(catIndex\(\)\);[\s\S]+if \(k === 'ArrowDown'\) return moveRowFrom\(1\)/,
@@ -2899,6 +2908,8 @@ test('live tv browser remux keeps AAC surround instead of forcing stereo', () =>
   const transcode = fs.readFileSync(path.join(__dirname, '..', 'server', 'transcode.js'), 'utf8');
   assert.match(transcode, /function spawnLiveRemux\(url, \{ hlsFriendly = true, headers = null \} = \{\}\)[\s\S]+'-c:a', 'aac', '-b:a', '384k'[\s\S]+'-fflags', '\+genpts'/,
     'Live TV browser remux should encode browser-safe AAC without a hard stereo downmix');
+  assert.ok(transcode.includes("'-analyzeduration', '500000', '-probesize', '1000000'"),
+    'live remux uses a trimmed analyze budget for a faster channel-change first byte');
   assert.doesNotMatch(transcode, /function spawnLiveRemux[\s\S]+'-ac', '2'[\s\S]+\]\, \{ stdio/,
     'Live TV browser remux should not force every channel to stereo');
 });

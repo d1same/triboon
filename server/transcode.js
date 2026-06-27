@@ -319,7 +319,11 @@ function spawnLiveRemux(url, { hlsFriendly = true, headers = null } = {}) {
     '-user_agent', 'Mozilla/5.0 (SMART-TV; Linux) AppleWebKit/537.36 TriboonTV/1.0',
     '-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '4',
     ...(supportsFfmpegHttpOption('max_redirects') ? ['-max_redirects', '0'] : []),
-    '-analyzeduration', '1000000', '-probesize', '1000000',
+    // Zap speed: 0.5s analyze budget (was 1s) lets ffmpeg commit to a standard live TS/HLS stream
+    // (H.264 + AAC/AC3) sooner → faster first byte on a channel change. probesize stays 1MB so it
+    // still reads enough bytes to find every track. NOTE: re-bench on a real provider before pushing
+    // lower — exotic streams with late PMT/multi-audio may need more (see the bench-first rule).
+    '-analyzeduration', '500000', '-probesize', '1000000',
     ...(headerLines ? ['-headers', headerLines] : []),
     ...(hlsFriendly ? ['-extension_picky', '0', '-allowed_extensions', 'ALL'] : []),
     '-protocol_whitelist', 'file,http,https,tcp,tls,crypto,udp,rtp,httpproxy',

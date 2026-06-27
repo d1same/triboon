@@ -6991,7 +6991,11 @@ function startLiveMseSource(url, opts = {}) {
     };
     sb.addEventListener('updateend', () => {
       appending = false;
-      if (!started && appended > 1500000) {
+      // Zap speed: start playback as soon as ~0.7s of stream is buffered instead of ~1.5s. The
+      // fetch keeps filling behind playback and the trim/backpressure loop below absorbs jitter, so
+      // the smaller head-start just makes channel changes feel closer to real TV. (multiview keeps
+      // its own smaller retain window; this only gates the FIRST frame.)
+      if (!started && appended > 700000) {
         started = true;
         requestLivePlay();
       }
@@ -14259,7 +14263,8 @@ function focusPlayerGuideCategory(idx, select = false, opts = {}) {
     if (top < viewTop) pane.scrollTo({ top: Math.max(0, top - pad), behavior: 'auto' });
     else if (bottom > viewBottom) pane.scrollTo({ top: bottom - pane.clientHeight + pad, behavior: 'auto' });
   }
-  if (!opts.preventScroll) cat.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'auto' });
+  // NB: no scrollIntoView here — the manual pane scrollTo above already positions the chip. A second
+  // scrollIntoView re-scrolled every ancestor (the guide jumped) — the WebView-unreliable path.
   return true;
 }
 function markGuideCur() {
@@ -14402,8 +14407,14 @@ async function renderPlayerGuideTimeline(pg, list) {
     });
     return;
   }
-  if (!catNames.includes(S.pgLiveCat)) {
-    const currentCat = currentCh && currentCh.genre && catNames.includes(currentCh.genre) ? currentCh.genre : null;
+  const currentCat = currentCh && currentCh.genre && catNames.includes(currentCh.genre) ? currentCh.genre : null;
+  if (!S.pgCatDpadMode && currentCat) {
+    // Opening/returning to the guide while NOT mid-browse: land on the category of the channel you're
+    // watching. The channel you just tuned is exactly "where you left off", so its category is the
+    // right spot — fixes the guide reopening on a stale/different category after a channel goes
+    // fullscreen and back. While actively scanning categories (pgCatDpadMode) we keep the browsed one.
+    S.pgLiveCat = currentCat;
+  } else if (!catNames.includes(S.pgLiveCat)) {
     S.pgLiveCat = currentCat || (catNames.includes(S.liveCat) ? S.liveCat : catNames[0]);
   }
   const selectedCatIdx = Math.max(0, catNames.indexOf(S.pgLiveCat));
