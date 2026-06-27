@@ -5,9 +5,10 @@
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
-    "test": "node --test test/e2e.test.js test/archive.test.js test/phase2.test.js test/security.test.js test/phase4.test.js test/iptv-cache.test.js test/library-db.test.js",
+    "test": "node --test --test-force-exit test/e2e.test.js test/archive.test.js test/phase2.test.js test/security.test.js test/phase4.test.js test/iptv-cache.test.js test/library-db.test.js",
     "verify:full": "powershell -NoProfile -ExecutionPolicy Bypass -File bench/verify-before-update.ps1",
-    "verify:live": "node bench/verify-live.js"
+    "verify:live": "node bench/verify-live.js",
+    "release:apk": "powershell -NoProfile -ExecutionPolicy Bypass -File bench/cut-apk-release.ps1"
   },
   "engines": { "node": ">=24" },
   "license": "MIT"
