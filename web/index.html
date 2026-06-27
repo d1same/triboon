@@ -661,6 +661,13 @@ body.nativeGuideMode #player.guideMode #video{display:none}
 #favBtn,#splitBtn{display:none}
 #player.live #favBtn{display:grid}
 #player.live #ccBtn,#player.live #audBtn,#player.live #srndBtn,#player.live #qualBtn{display:none!important}
+/* Live = real-TV chrome: a top guide bar (channel | now/next program | clock) and no scrubber or
+   bottom now/next line. The LIVE badge is dropped — the top bar already signals it's live. */
+.liveNowBar{display:none}
+#player.live .liveNowBar{display:block;flex:1;min-width:0;align-self:center;text-align:center;
+  font:600 14px "Albert Sans";color:rgba(243,239,247,.86);overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;padding:0 22px}
+#player.live #pSrc,#player.live .seekLine,#player.live #pHealth{display:none!important}
 #favBtn.on,#splitBtn.on{color:var(--amber);box-shadow:0 0 0 2px rgba(255,198,92,.35),0 10px 28px rgba(0,0,0,.18)}
 
 /* ---------- Live TV multiview ---------- */
@@ -3439,6 +3446,7 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
           <div class="playerMetaQuality" id="pQuality"></div>
         </div>
       </div>
+      <div class="liveNowBar" id="liveNowBar"></div>
       <div class="osdRight">
         <div class="osdClock"><span id="clockNow"></span><span id="endsAt"></span></div>
         <div class="health" id="pHealth"></div>
@@ -15669,6 +15677,14 @@ async function renderAppUpdateBox() {
   } catch {}
   status.textContent = `${current ? 'Current: ' + current + '.' : 'Current version unknown.'}${latest} Stable APK links always point to the newest release.`;
 }
+// Live top guide bar mirrors the now/next line the live-play paths already write to #pSrc, so the
+// bar stays in sync without touching the seven EPG write sites. Shown only for live (CSS).
+(function mirrorLiveNowBar() {
+  const src = $('pSrc'), bar = $('liveNowBar');
+  if (!src || !bar || !('MutationObserver' in window)) return;
+  new MutationObserver(() => { bar.textContent = src.textContent; })
+    .observe(src, { childList: true, characterData: true, subtree: true });
+})();
 function openApkUpdate(kind) {
   const url = APK_LINKS[kind] || APK_LINKS.tv;
   try {
@@ -18929,6 +18945,7 @@ document.addEventListener('keydown', (e) => {
     if (handleMultiViewKey(k, e)) return;
   }
   if (S.view === 'player') {
+    const osdWasHidden = $('osd').classList.contains('hide');
     showOsd();
     // Up-next popup outranks everything: ←/→ choose Play now / Dismiss, OK confirms,
     // Back dismisses — without this the popup is mouse-only and a remote is stuck.
@@ -19103,6 +19120,9 @@ document.addEventListener('keydown', (e) => {
         return togglePlay();
       }
       if (S.zone === 'seek') return togglePlay();
+      // Live (real-TV feel): a press that only woke the hidden chrome must not also fire a control
+      // (e.g. pause). Show controls first; the next OK acts on the focused button.
+      if (osdWasHidden && $('player').classList.contains('live')) return;
       const b = ctlButtons()[S.ctlIdx]; if (b) b.click();
     }
     return;

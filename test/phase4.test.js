@@ -2442,6 +2442,16 @@ test('Android native player: direct source and native chrome stay out of the web
     'Live TV should hide VOD subtitle/audio/surround/quality controls instead of disabling the movie/show player controls globally');
   assert.doesNotMatch(ui, /#player\.live #favBtn,#player\.live #splitBtn\{display:grid\}/,
     'the old split control should not be exposed in the Live TV player chrome');
+  // Live = real-TV chrome: a top guide bar (channel | now/next | clock) mirroring #pSrc, no scrubber
+  // or bottom now/next line, no LIVE badge, and OK reveals the chrome instead of pausing.
+  assert.ok(ui.includes('#player.live #pSrc,#player.live .seekLine,#player.live #pHealth{display:none!important}'),
+    'Live chrome should drop the scrubber, the bottom now/next line, and the LIVE badge');
+  assert.match(ui, /#player\.live \.liveNowBar\{display:block[\s\S]+text-align:center/,
+    'Live should show a centered top guide bar');
+  assert.match(ui, /function mirrorLiveNowBar\(\) \{[\s\S]+new MutationObserver\(\(\) => \{ bar\.textContent = src\.textContent; \}\)[\s\S]+\.observe\(src, \{ childList: true, characterData: true, subtree: true \}\)/,
+    'the live top bar should mirror the now/next text the EPG paths write to #pSrc');
+  assert.match(ui, /if \(osdWasHidden && \$\('player'\)\.classList\.contains\('live'\)\) return;\s+const b = ctlButtons\(\)\[S\.ctlIdx\]/,
+    'on live, an OK press that only woke the hidden chrome must not also fire a control (no pause)');
   assert.match(ui, /function updatePlayerControlAvailability\(\) \{[\s\S]+const isLive = !!\(p && p\.item && p\.item\.type === 'live'\);[\s\S]+\['ccBtn', 'audBtn', 'qualBtn'\][\s\S]+style\.display = isLive \? 'none' : '';[\s\S]+const fav = \$\('favBtn'\); if \(fav\) fav\.style\.display = isLive \? '' : 'none';[\s\S]+const split = \$\('splitBtn'\); if \(split\) split\.style\.display = 'none';[\s\S]+setPlayerControlEnabled\('favBtn', isLive && !!liveChannelForFavorite\(\)\);[\s\S]+setPlayerControlEnabled\('splitBtn', false\);/,
     'player controls should show favorite for Live TV while keeping split out of the player');
   assert.match(ui, /function liveMseKey\(slot = 'main'\)[\s\S]+s\.startsWith\('multi'\)[\s\S]+return `live\$\{s\[0\]\.toUpperCase\(\)\}\$\{s\.slice\(1\)\}Mse`[\s\S]+return s === 'split' \? 'liveSplitMse' : 'liveMse';/,
