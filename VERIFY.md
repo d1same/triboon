@@ -65,6 +65,25 @@ and describe the risk.
 
 ### Latest Evidence
 
+2026-06-26, v1.7.33 Automatic subtitle sync (alass) + OpenSubtitles validated:
+
+- Decision: keep Wyzie (unlimited, free) as the subtitle source and auto-correct sync with alass;
+  skip OpenSubtitles as a default (daily download cap not worth it for a no-pay user). OpenSubtitles
+  search/normalize/ranking were validated against the LIVE API with the owner's key (movie + episode
+  + `ger`->`de` language normalization all returned correct results) and remain available, gated.
+- alass engine: `apk add gcompat` + the v2.0.0 static binary. **Docker build-verified**: built the
+  real image, `alass --help` runs and `detectSubSync()` returns `{path:'alass'}` inside the
+  container, so `subSync` will be true once deployed. Auto-sync is gated — absent alass, the CC path
+  is unchanged.
+- Skip-when-synced: `subtitleLooksSynced` (moviehash/provider-release/release-key match) means alass
+  (which reads audio) only runs for non-matched subs; failures fall back to the unsynced track, so
+  auto-sync can never regress playback.
+- `npm.cmd test` 244/244 on Windows (added alass gating + subtitleLooksSynced + OpenSubtitles mock
+  + language tests). Android `gradlew assembleDebug` BUILD SUCCESSFUL at 1.7.33 / code 97.
+- NOT verified here (no device + no alass at runtime + no usenet creds): the alass alignment QUALITY
+  on a real NZB stream, and the native ExoPlayer hot-swap end-to-end. Both are background + fallback,
+  so worst case is the unsynced sub (today's behavior). Recommend an on-device pass after deploy.
+
 2026-06-26, v1.7.32 Captions (language + hash-exact) and warm resume:
 
 - `npm.cmd test` 242/242 on Windows. New coverage: Wyzie key redaction in the

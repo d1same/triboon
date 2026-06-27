@@ -202,6 +202,20 @@ function releaseKey(s) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '');
 }
+// "Is this subtitle already in sync with our file?" — the cheap, metadata-only signal that lets
+// the server SKIP content-based sync (which would pull the audio). True when it's a moviehash-
+// exact match, when the provider flagged a release/filename match, or when the subtitle's release
+// key matches our file's release key. Used to avoid running alass on subs that are already synced.
+function subtitleLooksSynced(d, releaseName = '') {
+  if (!d) return false;
+  if (d.moviehashMatch) return true;
+  if (d.matchedRelease || d.matchedFilter) return true;
+  const mine = releaseKey(releaseName);
+  if (!mine || mine.length < 12) return false; // too little to trust a fuzzy match
+  const theirs = releaseKey(subtitleMatchText(d));
+  if (!theirs) return false;
+  return theirs.includes(mine) || mine.includes(theirs);
+}
 function pickSub(data, releaseName = '', { durationSeconds = 0 } = {}) {
   const mine = String(releaseName).toLowerCase();
   const myReleaseKey = releaseKey(releaseName);
@@ -771,4 +785,5 @@ module.exports = {
   _subtitleDownloadCanFallback: subtitleDownloadCanFallback,
   _redactSubUrl: redactSubUrl,
   _toIso6391: toIso6391,
+  subtitleLooksSynced,
 };

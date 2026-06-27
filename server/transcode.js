@@ -350,34 +350,41 @@ function spawnSubtitleExtract(streamUrl, subTrack) {
   ], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
 }
 
-// OPTIONAL: ffsubsync for on-demand "Fix sync". A sidecar binary like ffmpeg/yt-dlp — absent on
-// most boxes, so every caller must gate on detection and degrade honestly when it is missing.
-let _ffsubsync; // cached: { path } | null
-function detectFfsubsync() {
-  if (_ffsubsync !== undefined) return _ffsubsync;
-  for (const cand of [process.env.FFSUBSYNC_PATH, 'ffsubsync', 'ffs'].filter(Boolean)) {
+// OPTIONAL: alass ("Automatic Language-Agnostic Subtitle Synchronization") for subtitle sync.
+// A sidecar binary like ffmpeg/yt-dlp — absent on most boxes, so every caller gates on detection
+// and degrades honestly when missing. Chosen over ffsubsync because it's a single static binary
+// (no Python/numpy), runs on the Alpine image via gcompat, and its split-penalty algorithm fixes
+// constant offset AND framerate drift (23.976<->25) without flags. It uses ffmpeg to read the
+// reference audio, so callers must run it OFF the hot path.
+let _alass; // cached: { path } | null
+function detectSubSync() {
+  if (_alass !== undefined) return _alass;
+  for (const cand of [process.env.ALASS_PATH, 'alass', 'alass-cli'].filter(Boolean)) {
     try {
       const r = spawnSync(cand, ['--help'], { timeout: 5000, windowsHide: true });
-      // --help exits 0 on ffsubsync; treat any clean spawn whose output mentions the tool as present.
-      if (r.status === 0 || /ffsubsync|reference|srtin/i.test(String(r.stdout) + String(r.stderr))) {
-        _ffsubsync = { path: cand };
-        return _ffsubsync;
+      if (r.status === 0 || /alass|Language-Agnostic|reference-file/i.test(String(r.stdout) + String(r.stderr))) {
+        _alass = { path: cand };
+        return _alass;
       }
     } catch { /* try next */ }
   }
-  _ffsubsync = null;
+  _alass = null;
   return null;
 }
-// Align `inPath` (an unsynced .srt) to the audio of `refUrl` (the playback stream) and write
-// `outPath`. `--gss` also corrects framerate-ratio desync (23.976↔25). Reference audio must be
-// read in full, so callers run this ON DEMAND only — never on the hot playback path.
-function spawnSubSync(refUrl, inPath, outPath) {
-  const fs2 = detectFfsubsync();
-  if (!fs2) throw new Error('ffsubsync not available');
+// Align `inPath` (an unsynced .srt) to `refPath` and write `outPath`. The reference may be the
+// playback stream URL (alass extracts audio via ffmpeg) or another subtitle file. alass auto-
+// corrects both offset and framerate ratio, so no extra flags are needed.
+function spawnSubSync(refPath, inPath, outPath) {
+  const al = detectSubSync();
+  if (!al) throw new Error('alass not available');
   const ff = detectFfmpeg();
-  const env = ff ? { ...process.env, FFMPEG_PATH: ff.path } : process.env;
-  return spawn(fs2.path, [refUrl, '-i', inPath, '-o', outPath, '--gss'],
+  // alass reads ffmpeg/ffprobe from PATH or the ALASS_FFMPEG_PATH/ALASS_FFPROBE_PATH env vars.
+  const env = { ...process.env };
+  if (ff) env.ALASS_FFMPEG_PATH = ff.path;
+  const fp = detectFfprobe();
+  if (fp) env.ALASS_FFPROBE_PATH = fp.path;
+  return spawn(al.path, [refPath, inPath, outPath],
     { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env });
 }
 
-module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnTranscode, spawnLiveRemux, spawnSubtitleExtract, detectFfsubsync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, supportsFfmpegHttpOption };
+module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnTranscode, spawnLiveRemux, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, supportsFfmpegHttpOption };

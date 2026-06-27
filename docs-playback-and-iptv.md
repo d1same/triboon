@@ -142,23 +142,30 @@ Configure (env-var path; settings-UI fields are a follow-up):
 `OPENSUBTITLES_BASE` overrides the host for tests). Wyzie's imdb-first `id` stays
 optimal (TMDB is slower — Wyzie resolves imdb from it internally).
 
-### On-demand "Fix sync" (ffsubsync) — server side done, gated; UI + image pending
-Owner-approved as an **on-demand** action (not automatic — aligning against the streamed audio
-pulls the whole audio track, which fights stream-while-unpacking, so it runs only when the user
-asks). Server side is implemented and fully gated on `detectFfsubsync()`:
-- `transcode.js`: `detectFfsubsync()` (sidecar, like ffmpeg/yt-dlp) + `spawnSubSync(refUrl, in, out)`
-  which runs `ffsubsync <stream> -i in.srt -o out.srt --gss` (`--gss` also fixes 23.976↔25 fps).
-- `/api/ossubs/:mount?sync=1`: re-aligns the already-fetched VTT to the mount's audio via the same
-  localhost tokened stream URL ffmpeg uses for embedded subs; caches the result; **on any failure
-  falls back to the unsynced track** so the action can never leave the user worse off.
-- `/api/server` reports `subSync` so the player can show the button only when the binary exists.
-When ffsubsync is absent, `detectFfsubsync()` is null, `subSync` is false, and none of this runs.
+### Automatic subtitle sync (alass) — implemented, gated
+Triboon's no-pay/no-limit sync story: **Wyzie (unlimited) picks the subtitle; alass auto-corrects
+it only when it isn't already in sync.** Chosen over ffsubsync because it's one small static binary
+(no Python/numpy) that runs on Alpine via `gcompat` (build-verified) and fixes offset AND framerate
+drift. Engine: `transcode.js` `detectSubSync()` + `spawnSubSync(ref, in, out)` → `alass <stream> in.srt out.srt`
+(alass reads audio via ffmpeg; `ALASS_FFMPEG_PATH`/`ALASS_FFPROBE_PATH` point it at our binaries).
 
-**Still TODO (do where they can be build-tested):**
-1. **Docker image install** — ffsubsync's numpy/scipy/webrtcvad have no musl wheels; install via
-   `apk add py3-numpy py3-scipy build-base` + `pip install ffsubsync`, and actually build the image
-   before shipping (don't risk the unraid build blindly).
-2. **Client "Fix sync" button** in the player CC/track menu → re-request the active sub with
-   `&sync=1` and reapply. Verify with the binary actually installed.
-- Minor cleanups: `S##E##` parser caps season at 2 digits / episode at 3; dead legacy V1
-  functions (`opensubs.js` ~436/482) are shadowed by the V2 exports and should be deleted.
+Flow (`/api/ossubs/:mount`):
+- The chosen subtitle's metadata sets `subtitleLooksSynced` (moviehash match, provider release/
+  filename match, or matching release key). The response carries `x-triboon-subsync`:
+  `synced` (skip — already in sync), `pending` (not matched + alass available), or `unavailable`.
+- On `pending`, the player (web `autoSyncSubtitle`, native `autoSyncNative`) re-requests `?sync=1`
+  in the background; the server runs alass against the localhost tokened stream URL, caches the
+  corrected VTT, and the player hot-swaps it in. The unsynced track plays meanwhile.
+- **Skip rule (the "don't pull audio when you don't need to"):** `?sync=1` returns the sub as-is
+  without running alass when `subtitleLooksSynced` is true. alass (which reads audio) only runs for
+  non-matched subs. Any failure falls back to the unsynced track — auto-sync can never regress.
+- `/api/server` reports `subSync`. When alass is absent, `subSync` is false and none of this runs.
+
+Docker: `apk add gcompat` + the alass v2.0.0 static binary (build-tested; alass runs and Triboon
+detects it inside the image). Owner decision recorded: OpenSubtitles' daily cap makes it not worth
+it for a no-pay user — **Wyzie + alass auto-sync replaces hash-exact** and also fixes the fps drift
+Stremio's manual-only sync can't.
+
+**TODO / notes:** the alignment quality on a real NZB stream needs on-device verification (it's
+background + fallback, so safe). Minor cleanups: `S##E##` parser caps season at 2 digits / episode
+at 3; dead legacy V1 functions (`opensubs.js` ~436/482) shadowed by the V2 exports should be deleted.

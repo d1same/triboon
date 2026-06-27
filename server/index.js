@@ -15,7 +15,7 @@ const { Auth, SecureSettings, RateLimiter } = require('./auth');
 const { Pipeline } = require('./pipeline');
 const { TmdbProxy } = require('./tmdb');
 const { Trakt } = require('./trakt');
-const { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnTranscode, spawnLiveRemux, spawnSubtitleExtract, detectFfsubsync, spawnSubSync, makeThumb, LADDER, audioCopyOk } = require('./transcode');
+const { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnTranscode, spawnLiveRemux, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioCopyOk } = require('./transcode');
 const ytmusic = require('./ytmusic');
 const https = require('https');
 const dns = require('dns').promises;
@@ -107,18 +107,17 @@ async function openSubtitlesVariantsForMount(vf, { imdbId, tmdbId, lang }) {
   } catch { return []; }
 }
 
-// WebVTT -> SRT for ffsubsync input (it parses SRT most reliably). Inverse of srtToVtt: drop the
-// WEBVTT header, turn the millisecond dot back into a comma. pysubs2 (inside ffsubsync) tolerates
-// missing cue indices, so we don't renumber.
+// WebVTT -> SRT for the sync engine's input (alass parses SRT reliably). Inverse of srtToVtt:
+// drop the WEBVTT header, turn the millisecond dot back into a comma. Cue indices are optional.
 function vttToSrt(vtt) {
   return String(vtt || '').replace(/^﻿/, '').replace(/\r/g, '')
     .replace(/^WEBVTT[^\n]*\n+/, '')
     .replace(/(\d{2}:\d{2}:\d{2})\.(\d{3})/g, '$1,$2');
 }
-// On-demand "Fix sync": align an already-fetched VTT to the mount's audio with ffsubsync, against
-// the same localhost tokened stream URL ffmpeg already uses for embedded subs. Heavy (reads the
-// audio), so it ONLY runs when the user explicitly asks. Returns the corrected VTT; throws on
-// failure so the caller can fall back to the unsynced cue track.
+// Align an already-fetched VTT to the mount's audio with alass, against the same localhost
+// tokened stream URL ffmpeg already uses for embedded subs. Heavy (alass reads the audio via
+// ffmpeg), so callers only invoke it for subs that aren't already in sync. Returns the corrected
+// VTT; throws on failure so the caller falls back to the unsynced cue track.
 async function onDemandSubSync(vf, vtt, uid) {
   const os2 = require('os');
   const fsp = fs.promises;
@@ -131,13 +130,13 @@ async function onDemandSubSync(vf, vtt, uid) {
     await new Promise((resolve, reject) => {
       const p = spawnSubSync(selfUrl, inSrt, outSrt);
       let err = '';
-      const killer = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} reject(new Error('ffsubsync timed out')); }, 300000);
+      const killer = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} reject(new Error('subtitle sync timed out')); }, 300000);
       p.stderr.on('data', (d) => { if (err.length < 4000) err += d.toString(); });
       p.on('error', (e) => { clearTimeout(killer); reject(e); });
-      p.on('close', (code) => { clearTimeout(killer); code === 0 ? resolve() : reject(new Error(`ffsubsync exited ${code}: ${err.slice(-200)}`)); });
+      p.on('close', (code) => { clearTimeout(killer); code === 0 ? resolve() : reject(new Error(`alass exited ${code}: ${err.slice(-200)}`)); });
     });
     const out = await fsp.readFile(outSrt, 'utf8');
-    if (!out || !/\d{2}:\d{2}:\d{2}/.test(out)) throw new Error('ffsubsync produced no cues');
+    if (!out || !/\d{2}:\d{2}:\d{2}/.test(out)) throw new Error('alass produced no cues');
     return srtToVtt(out);
   } finally {
     fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
@@ -366,7 +365,7 @@ const pipeline = new Pipeline({
 const { fetchUrl: fetchUrlExt, searchIndexer } = require('./newznab');
 const {
   fetchOnlineSub, searchOnlineSubs, downloadBestSubtitle, rankSubs, srtToVtt, shiftVtt,
-  osSearch, osNormalize, osLogin, osDownloadVtt, moviehashFromChunks,
+  osSearch, osNormalize, osLogin, osDownloadVtt, moviehashFromChunks, subtitleLooksSynced,
   _isTransientError: isTransientSubError,
   _isNoSubtitleError: isNoSubtitleError,
 } = require('./opensubs');
@@ -3391,8 +3390,8 @@ const H = {
     tmdb: !!settings.get().tmdbKey, ffmpeg: !!detectFfmpeg(),
     // Wyzie only needs the server-side API key; no account login is required.
     opensubs: !!effectiveOpenSubsKey(),
-    // ffsubsync sidecar present → the player may offer an on-demand "Fix sync" action.
-    subSync: !!detectFfsubsync(),
+    // alass sidecar present → the player auto-syncs non-matched subtitles in the background.
+    subSync: !!detectSubSync(),
     builtInSubtitlesEnabled: settings.get().builtInSubtitlesEnabled === true,
     iptv: iptvConfigured(settings.get()),
     music: !!ytmusic.detectYtdlp(), // Music tab shows only when yt-dlp is present
@@ -5711,6 +5710,7 @@ Object.assign(H, {
     vf._osInflight = vf._osInflight || new Map();
     vf._osSearchCache = vf._osSearchCache || new Map();
     vf._osSearchInflight = vf._osSearchInflight || new Map();
+    vf._subSyncState = vf._subSyncState || new Map(); // cacheKey -> looksSynced (skip alass when true)
     const catalogId = imdbId || tmdbId;
     const searchKey = `${lang}:${catalogId}`;
     const subtitleFailure = (e) => {
@@ -5784,28 +5784,19 @@ Object.assign(H, {
               throw e;
             }
           };
-          if (!variant) {
-            // Auto-pick: when OpenSubtitles is on, take the top of the COMBINED ranked list (a
-            // moviehash-exact hit wins); otherwise keep the original Wyzie auto path untouched.
-            if (!osCfg) return fetchOnlineSub(subOpts);
-            const variants = await getVariants();
-            const top = variants[0];
-            if (!top || !top.raw) throw new Error('online subtitles failed');
-            if (top.raw._provider === 'opensubtitles') return downloadOpenSubtitles(top.raw._osFileId);
-            return downloadBestSubtitle(variants.map((v) => v.raw).filter((d) => d && !d._provider), {
-              key, releaseName, durationSeconds: vf._tracks && vf._tracks.duration,
-              preferredId: top.id, ...(base ? { base } : {}), attempts: 3, retryDelayMs: 900,
-            });
-          }
+          // Both auto-pick and explicit-variant go through the ranked list so we always know the
+          // chosen subtitle's metadata — that's what tells us whether it's ALREADY in sync
+          // (release/hash match) and lets the auto-sync step skip alass when no sync is needed.
           const variants = await getVariants();
-          const hit = variants.find((v) => v.id === variant);
-          if (!hit || !hit.raw) throw new Error('that subtitle version is no longer available');
-          if (hit.raw._provider === 'opensubtitles') return downloadOpenSubtitles(hit.raw._osFileId);
+          const chosen = variant ? variants.find((v) => v.id === variant) : variants[0];
+          if (!chosen || !chosen.raw) throw new Error(variant ? 'that subtitle version is no longer available' : 'online subtitles failed');
+          vf._subSyncState.set(cacheKey, subtitleLooksSynced(chosen.raw, releaseName));
+          if (chosen.raw._provider === 'opensubtitles') return downloadOpenSubtitles(chosen.raw._osFileId);
           return downloadBestSubtitle(variants.map((v) => v.raw).filter((d) => d && !d._provider), {
             key,
             releaseName,
             durationSeconds: vf._tracks && vf._tracks.duration,
-            preferredId: variant,
+            preferredId: chosen.id,
             ...(base ? { base } : {}),
             attempts: 3,
             retryDelayMs: 900,
@@ -5822,11 +5813,20 @@ Object.assign(H, {
       }
     }
     const vtt = vf._osCache.get(cacheKey);
-    // On-demand "Fix sync" (?sync=1): re-align this cue track to the audio with ffsubsync. Gated
-    // on the binary being installed; on any failure we fall back to the unsynced track rather than
-    // erroring, so the button can never leave the user worse off. When sync is not requested this
-    // whole branch is skipped and behavior is unchanged.
-    if (ctx.url.searchParams.get('sync') === '1' && detectFfsubsync() && vtt) {
+    const looksSynced = vf._subSyncState.get(cacheKey) === true;
+    // Sync correction (alass). Two entry points share this:
+    //   - automatic: the player re-requests with ?sync=1 in the background when the header below
+    //     says 'pending', then hot-swaps the corrected track in.
+    //   - manual: the "Fix sync" action also hits ?sync=1.
+    // We SKIP alass entirely when the subtitle already looks in sync (release/hash match) — that's
+    // the "don't pull the audio when you don't need to" rule. alass reads the audio, so it only
+    // runs for subs that aren't already matched, and any failure falls back to the unsynced track.
+    if (ctx.url.searchParams.get('sync') === '1' && vtt) {
+      if (looksSynced || !detectSubSync()) {
+        // Already in sync (or no engine): serve as-is; nothing to correct.
+        return send(ctx.res, 200, shift ? shiftVtt(vtt, shift) : vtt,
+          { 'content-type': 'text/vtt; charset=utf-8', 'x-triboon-subsync': looksSynced ? 'synced' : 'unavailable' });
+      }
       const syncKey = `${cacheKey}:synced`;
       if (!vf._osCache.has(syncKey)) {
         if (!vf._osInflight.has(syncKey)) {
@@ -5840,9 +5840,14 @@ Object.assign(H, {
         }
       }
       const synced = vf._osCache.get(syncKey);
-      if (synced) return send(ctx.res, 200, shift ? shiftVtt(synced, shift) : synced, { 'content-type': 'text/vtt; charset=utf-8' });
+      if (synced) return send(ctx.res, 200, shift ? shiftVtt(synced, shift) : synced,
+        { 'content-type': 'text/vtt; charset=utf-8', 'x-triboon-subsync': 'corrected' });
     }
-    send(ctx.res, 200, shift ? shiftVtt(vtt, shift) : vtt, { 'content-type': 'text/vtt; charset=utf-8' });
+    // Tell the player whether an automatic background sync is worth requesting: 'pending' = not a
+    // confident match and alass is available; 'synced' = already matched (skip); else 'unavailable'.
+    const syncHdr = looksSynced ? 'synced' : (detectSubSync() && vf._subSyncState.has(cacheKey) ? 'pending' : 'unavailable');
+    send(ctx.res, 200, shift ? shiftVtt(vtt, shift) : vtt,
+      { 'content-type': 'text/vtt; charset=utf-8', 'x-triboon-subsync': syncHdr });
   },
 
   // Embedded subtitle track → WebVTT. ffmpeg must read the whole stream (subs are interleaved),

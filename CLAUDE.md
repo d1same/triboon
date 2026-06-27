@@ -30,11 +30,13 @@ Always follow the owner's method:
 - Native clean-room rebuild of nzbdav + UsenetStreamer concepts.
 - Server stack: Node 24 LTS, zero runtime npm dependencies in `server/`.
 - Approved external binaries: ffmpeg for remux/transcode, yt-dlp for Music, and
-  ffsubsync (optional sidecar) for on-demand subtitle "Fix sync". ffsubsync is
-  detected at runtime and the feature is gated on its presence — absent on a box,
-  the CC path is unchanged. NOTE: it is NOT yet in the Docker image (numpy/scipy/
-  webrtcvad need care on Alpine/musl — use apk py3-numpy/py3-scipy + build-base and
-  build-test before shipping the image change).
+  alass for automatic subtitle sync. alass is a single static binary (in the Docker
+  image via gcompat + the v2.0.0 release) detected at runtime; the auto-sync feature
+  is gated on its presence — absent on a box, the CC path is unchanged. It corrects
+  offset + framerate drift using ffmpeg for audio. Triboon prefers Wyzie (unlimited,
+  free) for the subtitle and auto-syncs only non-matched subs (release/hash matches
+  are skipped) to avoid pulling audio unnecessarily. (ffsubsync was evaluated and
+  rejected: Python+numpy/scipy/webrtcvad are painful on Alpine/musl.)
 - Playback policy: source-fit, direct play, remux, transcode, in that order.
 - Per-user quality caps are enforced at source selection first, transcoder
   second.

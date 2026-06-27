@@ -8548,6 +8548,7 @@ async function applyNativeStartupSubtitleAfterTrackProbe(p) {
     p._subShift = loadSubShift(rel);
     p._subtitleDisabledThisSession = false;
     refreshNativeSubtitleChoices();
+    autoSyncNative(p, rel);
     return true;
   } catch { return false; }
 }
@@ -9151,6 +9152,7 @@ window.__tvNativeSubtitleSelect = (rel, pos, dur) => {
     const lang = subtitleLangForRel(rel);
     if (lang) savePrefLang('slang', lang);
     saveSubChoice(rel, subtitleDisplayName(rel));
+    autoSyncNative(p, rel);
   }
   p.usingNative = true;
 };
@@ -10844,6 +10846,55 @@ function setQuality(q) {
     startSource('transcode', at);
   }
 }
+// Background subtitle sync: re-request the same online sub with &sync=1 (the server runs alass
+// against the audio), then hot-swap the corrected cues if the user is still on that track. The
+// unsynced track plays meanwhile, so this never blocks the subtitle from appearing.
+function autoSyncSubtitle(p, rel, baseUrl) {
+  if (!(S.serverInfo && S.serverInfo.subSync) || !p || !baseUrl) return;
+  clearTimeout(p._autoSyncT);
+  p._autoSyncT = setTimeout(async () => {
+    if (!S.playing || S.playing !== p || p.subTrack !== rel) return;
+    try {
+      const syncUrl = baseUrl + (baseUrl.includes('?') ? '&' : '?') + 'sync=1';
+      const r = await fetch(syncUrl);
+      if (!r.ok || r.headers.get('x-triboon-subsync') !== 'corrected') return;
+      const synced = await r.text();
+      if (!S.playing || S.playing !== p || p.subTrack !== rel || !synced || synced === p._subVttText) return;
+      p._subVttText = synced; p._subVttRel = rel;
+      applySubtitleTrack();
+      toast('Subtitles synced to this video');
+    } catch {}
+  }, 400);
+}
+// Native (ExoPlayer) equivalent of autoSyncSubtitle: the native side loaded the subtitle URL we
+// gave it; if the server flags it 'pending', warm the alass-corrected version and re-hand the
+// ?sync=1 URL to ExoPlayer so it reloads the in-sync cues. Safe: any failure leaves the unsynced
+// track in place. Only for online (os:) subs; release/embedded subs are already in sync.
+function autoSyncNative(p, rel) {
+  if (!(S.serverInfo && S.serverInfo.subSync) || !p || !p.usingNative) return;
+  if (!(typeof rel === 'string' && rel.startsWith('os:'))) return;
+  if (!(window.TriboonTV && window.TriboonTV.updateActiveSubtitle)) return;
+  clearTimeout(p._autoSyncNT);
+  p._autoSyncNT = setTimeout(async () => {
+    if (!S.playing || S.playing !== p || p.subTrack !== rel) return;
+    try {
+      const payload = nativeSubtitlePayload(p, rel, 'manual');
+      if (!payload.url) return;
+      const base = new URL(payload.url, location.origin).href;
+      const head = await fetch(base); // cached from the native load; just read the sync verdict
+      if (!head.ok || head.headers.get('x-triboon-subsync') !== 'pending') return;
+      const syncUrl = base + (base.includes('?') ? '&' : '?') + 'sync=1';
+      const r = await fetch(syncUrl); // triggers/awaits the alass correction, then caches it
+      if (!r.ok || r.headers.get('x-triboon-subsync') !== 'corrected') return;
+      if (!S.playing || S.playing !== p || p.subTrack !== rel) return;
+      window.TriboonTV.updateActiveSubtitle(JSON.stringify({
+        subtitleRel: rel, subtitleUrl: syncUrl,
+        subtitleLang: payload.lang, subtitleLabel: payload.label, subtitleShift: payload.shift,
+      }));
+      toast('Subtitles synced to this video');
+    } catch {}
+  }, 400);
+}
 async function setSubtitle(rel, opts = {}) {
   const p = S.playing; if (!p) return;
   const manualChoice = !opts.startup && !opts.builtInRetry && !opts.autoFallback;
@@ -10902,6 +10953,11 @@ async function setSubtitle(rel, opts = {}) {
       }
       p._subVttText = await r.text();
       p._subVttRel = rel;
+      // Automatic sync: if the server flags this online sub as not-already-in-sync and alass is
+      // available, correct it in the background and hot-swap the cues in — the user sees the sub
+      // immediately, then it snaps into sync a few seconds later. Release/hash matches return
+      // 'synced' and are skipped (no audio pull).
+      if (rel.startsWith('os:') && r.headers.get('x-triboon-subsync') === 'pending') autoSyncSubtitle(p, rel, url);
     } catch {
       if (rel.startsWith('em:') && canAutoSubtitle(p)) {
         toast('Built-in subtitles failed - using online subtitles');

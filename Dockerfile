@@ -5,11 +5,16 @@ WORKDIR /app
 # yt-dlp for Music playback + ytmusicapi for faster YouTube Music catalog/search metadata.
 # yt-dlp is the official zipapp (needs python3); pulling it at build time keeps it current,
 # and a rebuild refreshes it when YouTube changes things.
-RUN apk add --no-cache ffmpeg su-exec python3 py3-pip \
+# gcompat lets the prebuilt (glibc) alass binary run on Alpine/musl — verified it executes.
+# alass ("Automatic Language-Agnostic Subtitle Synchronization") is one small static binary that
+# corrects subtitle offset AND framerate drift, using ffmpeg for the audio (no Python/numpy).
+RUN apk add --no-cache ffmpeg su-exec python3 py3-pip gcompat \
  && python3 -m pip install --no-cache-dir --break-system-packages ytmusicapi==1.12.1 \
  && wget -qO /usr/local/bin/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
  && chmod +x /usr/local/bin/yt-dlp \
- && /usr/local/bin/yt-dlp --version
+ && /usr/local/bin/yt-dlp --version \
+ && wget -qO /usr/local/bin/alass https://github.com/kaegi/alass/releases/download/v2.0.0/alass-linux64 \
+ && chmod +x /usr/local/bin/alass
 
 COPY package.json ./
 COPY server ./server

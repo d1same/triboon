@@ -1480,14 +1480,27 @@ test('subtitles: ISO 639-2 B/T codes normalize to the 639-1 code Wyzie expects',
   assert.strictEqual(to1(''), '', 'blank is empty');
 });
 
-test('subtitles: ffsubsync "Fix sync" is gated — absent binary stays inert', () => {
+test('subtitles: alass auto-sync is gated — absent binary stays inert', () => {
   const transcode = require('../server/transcode');
-  // On CI/dev boxes ffsubsync is not installed, so detection must be null (feature hidden) and
-  // spawnSubSync must refuse rather than spawn a missing binary — the on-demand branch can never
+  // On CI/dev boxes alass is not installed, so detection must be null (feature off) and
+  // spawnSubSync must refuse rather than spawn a missing binary — the auto-sync path can never
   // run unless the sidecar is actually present.
-  assert.strictEqual(transcode.detectFfsubsync(), null, 'no ffsubsync binary → detection null');
+  assert.strictEqual(transcode.detectSubSync(), null, 'no alass binary → detection null');
   assert.throws(() => transcode.spawnSubSync('http://x/stream', '/tmp/in.srt', '/tmp/out.srt'),
-    /ffsubsync not available/, 'spawnSubSync refuses when the binary is absent');
+    /alass not available/, 'spawnSubSync refuses when the binary is absent');
+});
+
+test('subtitles: subtitleLooksSynced skips sync for release/hash matches, runs it otherwise', () => {
+  const opensubs = require('../server/opensubs');
+  const looks = opensubs.subtitleLooksSynced;
+  const rel = 'The.Movie.2024.1080p.BluRay.x264-GROUP';
+  assert.strictEqual(looks({ moviehashMatch: true }, rel), true, 'hash-exact is in sync');
+  assert.strictEqual(looks({ matchedRelease: 'whatever' }, rel), true, 'provider release match is in sync');
+  assert.strictEqual(looks({ display: 'The.Movie.2024.1080p.BluRay.x264-GROUP.srt' }, rel), true,
+    'matching release key is in sync');
+  assert.strictEqual(looks({ display: 'Totally.Different.Release.720p.WEB-Damn' }, rel), false,
+    'a non-matching release needs sync correction');
+  assert.strictEqual(looks({}, ''), false, 'no signal → not assumed synced');
 });
 
 test('subtitles: OpenSubtitles moviehash search → login → download → VTT (mock)', async () => {
