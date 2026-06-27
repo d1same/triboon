@@ -6845,6 +6845,11 @@ function startLiveMseSource(url, opts = {}) {
   const v = opts.video || (split ? $('liveSplitVideo') : $('video'));
   const p = opts.playing || S.playing;
   if (!p || !p.item || p.item.type !== 'live') return false;
+  // Tag the upstream stream with a per-surface id so the server keeps a SEPARATE live slot per
+  // multiview pane / split pane / main player. Without this, every pane shares one slot key and
+  // opening a new channel evicts ("retunes") the previously playing pane → "network error".
+  const surface = multi ? `mv${opts.multiSlot || 0}` : (split ? 'split' : 'main');
+  url = url + (url.includes('?') ? '&' : '?') + 'surface=' + encodeURIComponent(surface);
   cleanupLiveMse(slot);
   const abort = new AbortController();
   const ms = new MediaSource();
@@ -7815,6 +7820,9 @@ async function playMultiViewChannel(it, slotIndex = multiViewActiveSlot()) {
 }
 function multiViewVodUrl(mount, item, startAt = 0) {
   const kind = playbackStartKind(mount);
+  // The multiview pane has no track-probe/audio-fallback loop like the main player, so force the
+  // remux to AAC audio (audioSafe=1). Otherwise a release with AC3/EAC3/DTS audio remuxes with the
+  // original codec the browser can't decode → the pane plays with NO SOUND.
   const p = {
     streamUrl: mount.streamUrl,
     remuxUrl: mount.remuxUrl,
@@ -7822,7 +7830,7 @@ function multiViewVodUrl(mount, item, startAt = 0) {
     streamToken: mount.streamToken,
     audioTrack: 0,
     quality: 1080,
-    forceAacRemux: false,
+    forceAacRemux: true,
   };
   const start = Math.max(0, Math.floor(startAt || 0));
   const media = {
@@ -7833,7 +7841,7 @@ function multiViewVodUrl(mount, item, startAt = 0) {
     streamToken: mount.streamToken,
     audioTrack: 0,
     quality: 1080,
-    forceAacRemux: false,
+    forceAacRemux: true,
   };
   if (kind === 'transcode' && mount.transcodeUrl) return { ...media, url: `${mount.transcodeUrl}&start=${start}&audio=0&height=1080`, startOffset: start, directSeek: 0 };
   if (kind === 'remux' && mount.remuxUrl) return { ...media, url: remuxPlaybackUrl(p, start), startOffset: start, directSeek: 0 };
@@ -8093,7 +8101,15 @@ function closeMultiView(opts = {}) {
   $('multiView').classList.remove('open');
   $('multiView').classList.remove('paneFull');
   $('multiView').setAttribute('aria-hidden', 'true');
-  document.body.classList.remove('videoOpen');
+  // Multiview was opened on top of the main player surface (which we left .open behind it). If we
+  // only hid #multiView, that surface — now a paused/black #video — would be revealed: the
+  // "black screen after leaving multiview" bug. Tear it down so the target view renders cleanly.
+  const mainVideo = $('video');
+  if (mainVideo) { try { mainVideo.pause(); } catch {} mainVideo.removeAttribute('src'); mainVideo.src = ''; try { mainVideo.load(); } catch {} }
+  cleanupLiveMse('main'); cleanupLiveMse('split');
+  $('player').classList.remove('open', 'guideMode', 'live');
+  closePlayerGuide({ fromNative: true });
+  document.body.classList.remove('videoOpen', 'nativeGuideMode');
   S.multiView = null;
   if (opts.silent) return;
   if (targetView === 'livetv' || targetView === 'home') {

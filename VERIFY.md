@@ -65,6 +65,24 @@ and describe the risk.
 
 ### Latest Evidence
 
+2026-06-26, v1.7.34 Multiview fixes (3 user-reported bugs):
+
+- Adding a 2nd channel killed the 1st ("network error"): the live slot key was hash(uid|ip|ua),
+  identical for every pane, so each new pane evicted the previous via prev.close('retuned'). Fixed
+  with a per-surface id (main/split/mv0..3) the client appends and the server folds into the slot
+  key. New iptv-cache integration test proves two panes stream concurrently and retuning one pane
+  doesn't drop the other.
+- Movie/TV panes had no sound: the VOD URL builders hardcoded forceAacRemux:false, so the remux URL
+  omitted audioSafe=1 and AC3/EAC3/DTS audio was copied (browser can't decode). Now force AAC remux
+  for multiview VOD.
+- Black screen after leaving multiview: closeMultiView removed videoOpen but left the underlying
+  #player/#video surface .open behind the multiview; on exit that paused/black video was revealed.
+  closeMultiView now tears down the player surface (pause/clear #video, drop #player .open, clear
+  nativeGuideMode) before switching views.
+- `npm.cmd test` 245/245 on Windows. NOT exercised live on a device here (no real IPTV streams in
+  this env); root causes are deterministic and covered by the new tests — confirm on the device
+  after deploy.
+
 2026-06-26, v1.7.33 Automatic subtitle sync (alass) + OpenSubtitles validated:
 
 - Decision: keep Wyzie (unlimited, free) as the subtitle source and auto-correct sync with alass;

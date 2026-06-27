@@ -2444,6 +2444,17 @@ test('Android native player: direct source and native chrome stay out of the web
     'Multiview swap action should enter a pane-pick mode from the selected screen');
   assert.match(ui, /el\.classList\.toggle\('vod', visible && multiViewSlotIsVod\(slot\)\);[\s\S]+el\.classList\.toggle\('mvMain', visible && count === 3 && pos === 0\);[\s\S]+el\.classList\.toggle\('swapSource'[\s\S]+el\.classList\.toggle\('swapTarget'/,
     'Multiview render should mark VOD panes, current visual main pane, and swap source/targets');
+  // Multiview live panes must each carry a per-surface id so a new pane doesn't evict (retune) the
+  // previous one's upstream stream (the "previous pane shows network error" bug).
+  assert.match(ui, /const surface = multi \? `mv\$\{opts\.multiSlot \|\| 0\}` : \(split \? 'split' : 'main'\);[\s\S]+url = url \+ \(url\.includes\('\?'\) \? '&' : '\?'\) \+ 'surface=' \+ encodeURIComponent\(surface\)/,
+    'live MSE panes should tag the stream with a per-surface id so concurrent panes keep separate server slots');
+  // Multiview VOD panes have no track-probe loop, so they must force AAC remux or AC3/DTS sources
+  // play with no sound.
+  assert.match(ui, /function multiViewVodUrl\(mount, item, startAt = 0\) \{[\s\S]+forceAacRemux: true,[\s\S]+forceAacRemux: true,/,
+    'multiview VOD should force AAC remux so non-AAC audio still plays in the pane');
+  // Leaving multiview must tear down the underlying player surface or it shows a black #video.
+  assert.match(ui, /function closeMultiView\(opts = \{\}\) \{[\s\S]+const mainVideo = \$\('video'\);[\s\S]+\$\('player'\)\.classList\.remove\('open', 'guideMode', 'live'\);[\s\S]+document\.body\.classList\.remove\('videoOpen', 'nativeGuideMode'\)/,
+    'closing multiview should tear down the main player/video surface so the target view is not a black screen');
   assert.match(ui, /function openMultiViewActions\(slot = multiViewActiveSlot\(\)\) \{[\s\S]+if \(!pane \|\| !pane\.item\) \{[\s\S]+openMultiViewPicker\(i\);[\s\S]+S\.multiView\.actionSlot = i;[\s\S]+return setMultiViewActionFocus\(S\.multiViewActionIdx\);/,
     'OK on a filled Multiview pane should open pane actions while empty panes still open the picker');
   assert.match(ui, /function toggleMultiViewFullscreen\(slot = multiViewActiveSlot\(\)\) \{[\s\S]+if \(multiViewFullscreenSlot\(\) === i\) return exitMultiViewFullscreen\(\);[\s\S]+S\.multiView\.fullSlot = i;[\s\S]+setMultiViewActiveSlot\(i\);/,

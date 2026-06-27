@@ -925,7 +925,11 @@ function iptvLiveSlotKey(ctx) {
   const uid = ctx && ctx.claims && ctx.claims.uid ? ctx.claims.uid : 'unknown';
   const ip = ctx && ctx.req && ctx.req.socket ? (ctx.req.socket.remoteAddress || '') : '';
   const ua = ctx && ctx.req && ctx.req.headers ? String(ctx.req.headers['user-agent'] || '').slice(0, 80) : '';
-  return idHash(`${uid}|${ip}|${ua}`);
+  // The client sends a per-surface id (main / split / mv0..3) so concurrent multiview panes each
+  // get their own live slot instead of evicting one another. Retuning the SAME surface still
+  // reuses its key and closes the old upstream stream, as intended.
+  const surface = ctx && ctx.url && ctx.url.searchParams ? String(ctx.url.searchParams.get('surface') || '').slice(0, 16) : '';
+  return idHash(`${uid}|${ip}|${ua}|${surface}`);
 }
 function markIptvPlaybackHot() {
   iptvPlaybackHotUntil = Math.max(iptvPlaybackHotUntil, Date.now() + IPTV_PLAYBACK_API_QUIET_MS);
