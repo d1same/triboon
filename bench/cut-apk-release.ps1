@@ -16,7 +16,11 @@
 #   -SkipTests   skip the local test gate (CI already ran it on the tag)
 #   -NoPublish   build + stage the APKs only; don't touch the GitHub release
 
-param([switch]$SkipTests, [switch]$NoPublish)
+# Default signing is the Android DEBUG key (~/.android/debug.keystore) — that is what every Triboon
+# release so far used, and it matches the key already installed on the devices, so the in-app
+# "Update Android TV" updates in place. Pass -Release to build a proper signed release instead
+# (requires the TRIBOON_RELEASE_* keystore env vars; switching keys forces a one-time reinstall).
+param([switch]$SkipTests, [switch]$NoPublish, [switch]$Release)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
@@ -30,11 +34,15 @@ if ($gradle -notmatch "versionName\s*=\s*`"$([regex]::Escape($ver))`"") {
 }
 Write-Host "== Triboon release $tag ==" -ForegroundColor Cyan
 
-# --- signing env ---
-$need = 'TRIBOON_RELEASE_STORE_FILE','TRIBOON_RELEASE_STORE_PASSWORD','TRIBOON_RELEASE_KEY_ALIAS','TRIBOON_RELEASE_KEY_PASSWORD'
-$missing = $need | Where-Object { -not [Environment]::GetEnvironmentVariable($_) }
-if ($missing) { throw "Missing signing env: $($missing -join ', '). Set your keystore values (outside git) and re-run." }
-if (-not (Test-Path $env:TRIBOON_RELEASE_STORE_FILE)) { throw "Keystore not found: $env:TRIBOON_RELEASE_STORE_FILE" }
+# --- signing env (only the proper-release path needs a keystore) ---
+if ($Release) {
+  $need = 'TRIBOON_RELEASE_STORE_FILE','TRIBOON_RELEASE_STORE_PASSWORD','TRIBOON_RELEASE_KEY_ALIAS','TRIBOON_RELEASE_KEY_PASSWORD'
+  $missing = $need | Where-Object { -not [Environment]::GetEnvironmentVariable($_) }
+  if ($missing) { throw "Missing signing env: $($missing -join ', '). Set your keystore values (outside git) and re-run, or drop -Release to use debug signing." }
+  if (-not (Test-Path $env:TRIBOON_RELEASE_STORE_FILE)) { throw "Keystore not found: $env:TRIBOON_RELEASE_STORE_FILE" }
+} else {
+  Write-Host "Signing with the Android debug key (matches prior releases + installed devices). Use -Release for a keystore-signed build." -ForegroundColor Yellow
+}
 
 # --- test gate (force-exit avoids the node:test post-run hang) ---
 if (-not $SkipTests) {
@@ -46,13 +54,14 @@ if (-not $SkipTests) {
 # --- build signed release ---
 if (-not $env:JAVA_HOME) { $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr" }
 if (-not $env:ANDROID_HOME) { $env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk" }
-Write-Host "Building signed release APK (assembleRelease)..." -ForegroundColor Cyan
+$task = if ($Release) { 'assembleRelease' } else { 'assembleDebug' }
+Write-Host "Building APK ($task)..." -ForegroundColor Cyan
 Push-Location android
-try { & .\gradlew.bat assembleRelease --console=plain; $code = $LASTEXITCODE } finally { Pop-Location }
-if ($code -ne 0) { throw "assembleRelease failed (code $code)." }
+try { & .\gradlew.bat $task --console=plain; $code = $LASTEXITCODE } finally { Pop-Location }
+if ($code -ne 0) { throw "$task failed (code $code)." }
 
-$apk = "android/app/build/outputs/apk/release/app-release.apk"
-if (-not (Test-Path $apk)) { throw "Release APK not found at $apk" }
+$apk = if ($Release) { "android/app/build/outputs/apk/release/app-release.apk" } else { "android/app/build/outputs/apk/debug/app-debug.apk" }
+if (-not (Test-Path $apk)) { throw "APK not found at $apk" }
 $sizeMb = [math]::Round((Get-Item $apk).Length / 1MB, 1)
 Write-Host "Built $apk ($sizeMb MB)" -ForegroundColor Green
 
