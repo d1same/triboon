@@ -10257,7 +10257,9 @@ function pushLiveEpgToNative() {
 function paintLiveEpgStrip() {
   const strip = $('liveEpgStrip'); if (!strip) return;
   const now = Date.now(), horizon = now + 2 * 3600000;
-  const progs = (_liveEpgProgs || []).filter((p) => p.stop > now && p.start < horizon).slice(0, 4);
+  // Fewer cells on a narrow phone — 4 across a 375px screen truncates every title to nothing.
+  const maxCells = window.innerWidth < 560 ? 2 : 4;
+  const progs = (_liveEpgProgs || []).filter((p) => p.stop > now && p.start < horizon).slice(0, maxCells);
   if (!progs.length) { if (strip.innerHTML) strip.innerHTML = ''; return; }
   strip.innerHTML = progs.map((p) => {
     const isNow = p.start <= now && p.stop > now;

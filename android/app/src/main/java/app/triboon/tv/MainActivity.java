@@ -4181,8 +4181,12 @@ public class MainActivity extends Activity {
         }
         long now = System.currentTimeMillis();
         long horizon = now + 2L * 3600000L;
+        // Fewer cells on a narrow phone (4 across a phone width truncates every title to nothing).
+        int dpWidth = (int) (getResources().getDisplayMetrics().widthPixels
+                / getResources().getDisplayMetrics().density);
+        int maxCells = dpWidth < 600 ? 2 : 4;
         int shown = 0;
-        for (int i = 0; i < data.length() && shown < 4; i++) {
+        for (int i = 0; i < data.length() && shown < maxCells; i++) {
             org.json.JSONObject p = data.optJSONObject(i);
             if (p == null) continue;
             long start = p.optLong("start", 0), stop = p.optLong("stop", 0);

@@ -1962,6 +1962,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'the setLiveEpg bridge should parse the pushed programmes and render the native strip');
   assert.match(android, /private void renderNativeEpgStrip\(\) \{[\s\S]+horizon = now \+ 2L \* 3600000L[\s\S]+isNow \? "NOW" : fmtNativeClock\(start\)/,
     'native EPG strip should cover ~2h and mark the current programme');
+  assert.match(android, /int maxCells = dpWidth < 600 \? 2 : 4;[\s\S]+shown < maxCells/,
+    'native EPG strip should drop to 2 cells on a narrow phone (4 truncates every title)');
   assert.match(android, /return 4; \/\/ v4: native live EPG strip/,
     'nativeChromeVersion must advertise v4 so the web pushes EPG to native');
   assert.match(ui, /function pushLiveEpgToNative\(\) \{[\s\S]+typeof TriboonTV\.setLiveEpg === 'function'[\s\S]+TriboonTV\.setLiveEpg\(JSON\.stringify/,
@@ -2480,6 +2482,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'live player should fetch the channel schedule and paint a top EPG strip');
   assert.match(ui, /function paintLiveEpgStrip\(\) \{[\s\S]+horizon = now \+ 2 \* 3600000[\s\S]+epgCell\$\{isNow \? ' now' : ''\}/,
     'the EPG strip should cover ~2 hours and mark the current programme');
+  assert.match(ui, /const maxCells = window\.innerWidth < 560 \? 2 : 4;/,
+    'the web EPG strip should drop to 2 cells on a narrow phone viewport');
   // The EPG strip sits just ABOVE the seekbar (first child of the bottom OSD block, before #pSrc /
   // the seek line) — not the top of the screen and not floating mid-screen.
   assert.match(ui, /<div id="liveEpgStrip" class="liveOnly"[^>]*><\/div>\s*<div class="src" id="pSrc"><\/div>\s*<div class="seekLine">/,
