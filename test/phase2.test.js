@@ -1028,14 +1028,17 @@ test('pipeline: timed-out health gate does not duplicate background triage', asy
 
   await pipeline.play({ q: 'Movie 2024' });
 
+  // The health gate is synchronous within play(): the timeout must NOT spawn a second triage batch.
+  assert.strictEqual(healthStats, 4, 'health gate timeout should keep the original triage instead of starting a second batch');
+  assert.ok(pipeline.metricsSnapshot().healthGate.timeouts >= 1, 'metrics should record the bounded health-gate timeout');
+
+  // The first-article probe now runs CONCURRENTLY with the mount (startup win #1) — it no longer
+  // gates play, so its STAT is aborted on the 800ms probe timeout shortly AFTER play() returns.
+  // Assert the probe lifecycle after a settle rather than synchronously on the critical path.
+  await new Promise((r) => setTimeout(r, 950));
   assert.strictEqual(startupStats, 1, 'first-article probe should start once');
   assert.strictEqual(startupAborts, 1, 'timed-out first-article probe should abort its STAT');
-  assert.strictEqual(healthStats, 4, 'health gate timeout should keep the original triage instead of starting a second batch');
-  const metrics = pipeline.metricsSnapshot();
-  assert.ok(metrics.firstProbe.timeout >= 1, 'metrics should record the probe timeout');
-  assert.ok(metrics.healthGate.timeouts >= 1, 'metrics should record the bounded health-gate timeout');
-
-  await new Promise((r) => setTimeout(r, 950));
+  assert.ok(pipeline.metricsSnapshot().firstProbe.timeout >= 1, 'metrics should record the probe timeout');
   server.close(); store.close();
 });
 

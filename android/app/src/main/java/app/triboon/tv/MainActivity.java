@@ -4057,7 +4057,7 @@ public class MainActivity extends Activity {
     private ImageButton[] nativeControlButtons() {
         return new ImageButton[]{
                 nativeGuideBtn, nativeRewBtn, nativePlayBtn, nativeFwdBtn,
-                nativeNextBtn, nativeCcBtn, nativeAudioBtn, nativeQualityBtn, nativeStatsBtn
+                nativeNextBtn, nativeFavBtn, nativeCcBtn, nativeAudioBtn, nativeQualityBtn, nativeStatsBtn
         };
     }
 

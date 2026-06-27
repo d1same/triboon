@@ -193,6 +193,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     '4K selection should be exact so fallback stays in the 4K source class');
   assert.match(serverForPolicy, /transcode: async \(ctx\) => \{[\s\S]+ctx\.user\.policy\.allowTranscode === false[\s\S]+transcoding is disabled for this account/,
     'per-user allowTranscode=false must be enforced at the transcode endpoint (cap contract, transcoder half)');
+  assert.match(serverForPolicy, /const abortRead = \(\) => \{[\s\S]+!\['readAhead', 'background', 'health'\]\.includes\(readPriority\)[\s\S]+vf\.cancelReadAhead\(\)/,
+    'a closing read-ahead/warm-ahead/background connection must NOT cancel the live player read-ahead (pause→resume stall fix)');
   assert.match(ui, /data-utr="\$\{esc\(u\.id\)\}"[\s\S]+policy: \{ allowTranscode: cb\.checked \}/,
     'admin user list should expose an Allow-transcoding toggle wired to the user policy');
   assert.match(ui, /function sourceSearchQuery\(it, opts = \{\}\) \{[\s\S]+const qRank = opts\.includeQuality === false \? null : qualityRankForItem\(it\);[\s\S]+maxResolutionRank[\s\S]+preferResolutionRank/,
@@ -271,8 +273,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'focusing a resumable Continue Watching / next-episode card should warm the source search so resume skips the cold indexer fan-out');
   assert.match(ui, /if \(!opts\.catalogOnly && !opts\.watchReady && !hasFreshWatch && !opts\.preserveFocus\) \{/,
     'Continue Watching row actions should not publish an empty placeholder row while preserving focus');
-  assert.match(ui, /async function cwOp\(it, body, msg, opts = \{\}\) \{[\s\S]+if \(body\.remove \|\| body\.hidden\) removeWatchCacheKey\(it\.key\);[\s\S]+loadRows\(\{ preserveFocus: !!snap, focusSnapshot: snap, watchReady: true \}\);[\s\S]+loadWatchState\(true\)/,
-    'Continue Watching remove/mark actions should update local cache, keep focus, then refresh quietly');
+  assert.match(ui, /async function cwOp\(it, body, msg, opts = \{\}\) \{[\s\S]+if \(body\.hidden\) \{[\s\S]+cwHideNext\(it\.key\);[\s\S]+removeWatchCacheKey\(it\.key\);[\s\S]+\} else if \(body\.remove\) removeWatchCacheKey\(it\.key\);[\s\S]+loadRows\(\{ preserveFocus: !!snap, focusSnapshot: snap, watchReady: true \}\);[\s\S]+loadWatchState\(true\)/,
+    'Continue Watching remove/mark actions should durably dismiss next-up (cwHideNext) + update cache, keep focus, then refresh quietly');
+  assert.match(ui, /function nextEpisodeBumps\(cw, cwItems\) \{[\s\S]+const hiddenNext = cwHiddenNextSet\(\);[\s\S]+if \(hiddenNext\.has\(nextKey\)\) continue;/,
+    'dismissed next-up suggestions must stay dismissed across reloads (nextEpisodeBumps honors the local hidden set)');
   assert.match(ui, /function epItemOf\(show, season, ep\) \{[\s\S]+qualityRank: qualityRankForItem\(show\)[\s\S]+function epTarget\(show, sNum, eNum, resume\) \{[\s\S]+qualityRank: qualityRankForItem\(show\)/,
     'episode targets created from details should inherit the current show quality preference');
   assert.match(ui, /async function prepPlayerSeasonEpisodes\(it\) \{[\s\S]+const inheritedQuality = qualityRankForItem\(it\);[\s\S]+const item = inheritedQuality \? \{ \.\.\.base, qualityRank: inheritedQuality \} : base;[\s\S]+async function prepNextEpisode\(it\) \{[\s\S]+const inheritedQuality = qualityRankForItem\(it\);[\s\S]+const item = inheritedQuality \? \{ \.\.\.base, qualityRank: inheritedQuality \} : base;/,
@@ -1801,8 +1805,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android guide handoff should load real guide rows before rendering the native PiP guide shell');
   assert.match(ui, /if \(!catNames\.length\) \{[\s\S]+No channels available[\s\S]+pg\.classList\.add\('open'\);[\s\S]+return;[\s\S]+\}/,
     'player guide should show a nonblank empty state instead of leaving a black guide screen');
-  assert.match(ui, /if \(!keepGuidePip && tryNativeLivePlayer\(it\)\) return;/,
-    'normal Live TV tuning should still launch native fullscreen playback');
+  assert.match(ui, /if \(\(!keepGuidePip \|\| !S\.nativeGuideMode\) && tryNativeLivePlayer\(it\)\) return;/,
+    'normal Live TV tuning (and a web-rendered guide PiP) should launch native fullscreen playback, not fall to the web player with VOD controls');
   assert.match(ui, /function isTriboonAndroidShell\(\) \{[\s\S]+\/TriboonTV\|TriboonAndroid\/\.test\(navigator\.userAgent \|\| ''\)[\s\S]+\}[\s\S]+function nativeLiveRequired\(\) \{[\s\S]+installed APK is too old to expose playLive[\s\S]+return isTriboonAndroidShell\(\);[\s\S]+\}/,
     'Android TV and mobile Live TV should require ExoPlayer based on the Android shell, not on whether the bridge is currently usable');
   assert.match(ui, /function tryNativeLivePlayer\(it, guide = false\) \{[\s\S]+if \(!guide\) \{[\s\S]+S\.nativeGuideMode = false;[\s\S]+closePlayerGuide\(\{ fromNative: true \}\);[\s\S]+\$\(\'player\'\)\.classList\.remove\('guideMode'\);[\s\S]+\}[\s\S]+window\.TriboonTV\.playLive/,
@@ -1912,8 +1916,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native player controls should keep playback centered with secondary controls on the right');
   assert.match(android, /leftControls\.addView\(nativeGuideBtn\);[\s\S]+centerControls\.addView\(nativeRewBtn\);[\s\S]+centerControls\.addView\(nativePlayBtn\);[\s\S]+centerControls\.addView\(nativeFwdBtn\);[\s\S]+centerControls\.addView\(nativeNextBtn\);[\s\S]+rightControls\.addView\(nativeCcBtn\);[\s\S]+rightControls\.addView\(nativeAudioBtn\);[\s\S]+rightControls\.addView\(nativeQualityBtn\);[\s\S]+rightControls\.addView\(nativeStatsBtn\);/,
     'native player should keep Guide left, playback centered, and CC/audio/HD before the final stats/info button');
-  assert.match(android, /return new ImageButton\[\]\{\s+nativeGuideBtn, nativeRewBtn, nativePlayBtn, nativeFwdBtn,\s+nativeNextBtn, nativeCcBtn, nativeAudioBtn, nativeQualityBtn, nativeStatsBtn\s+\};/,
-    'native player D-pad order should match the visible control grouping');
+  assert.match(android, /return new ImageButton\[\]\{\s+nativeGuideBtn, nativeRewBtn, nativePlayBtn, nativeFwdBtn,\s+nativeNextBtn, nativeFavBtn, nativeCcBtn, nativeAudioBtn, nativeQualityBtn, nativeStatsBtn\s+\};/,
+    'native player D-pad traversal must include nativeFavBtn (the live favorite star) so it is reachable on live');
   assert.match(ui, /\.cbtn\.big\{width:58px;height:58px;background:rgba\(5,3,9,\.4\);color:var\(--text\)\}/,
     'web play button should be neutral until focused or hovered');
   assert.doesNotMatch(ui, /\.cbtn\.on\{background:var\(--amber\)|\.btn\.primary,\.cbtn\.big/,

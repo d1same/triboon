@@ -604,38 +604,47 @@ class Pipeline {
       }
     }
 
+    // First-article STAT probe and the mount now run CONCURRENTLY (startup win #1). The probe used
+    // to be AWAITED before the mount, adding one provider round-trip to every cold play. Now the
+    // mount starts immediately; the cheap STAT only short-circuits a genuinely MISSING source, so
+    // stale NZBs are still skipped fast without paying a full BODY mount on the healthy path.
+    let probePromise = null;
+    const probeT0 = Date.now();
     try {
-      const probe = firstProbeMsgId(xml);
-      if (probe) {
-        const probeT0 = Date.now();
-        const probeVerdict = await probeFirstArticle(this.pool(), probe);
-        const probeMs = Date.now() - probeT0;
-        this.metrics.firstProbeMs += probeMs;
-        this.metrics.firstProbeMaxMs = Math.max(this.metrics.firstProbeMaxMs, probeMs);
-        if (probeVerdict === 'missing') {
-          this.metrics.firstProbeMissing++;
-          this._recordVerdict(candidate, 'missing', { stage: 'first-article' });
-          return { fail: 'missing: first article unavailable' };
-        }
-        // Timeout here is only "not enough evidence yet", especially over VPNs or slower
-        // providers. Do not kill a candidate before the real mount/BODY path can prove it.
-        if (probeVerdict === 'timeout') {
-          this.metrics.firstProbeTimeout++;
-          candidate._probeTimeout = true;
-        } else {
-          this.metrics.firstProbePresent++;
-        }
+      const probeMsg = firstProbeMsgId(xml);
+      if (probeMsg) {
+        probePromise = probeFirstArticle(this.pool(), probeMsg).then((verdict) => {
+          const probeMs = Date.now() - probeT0;
+          this.metrics.firstProbeMs += probeMs;
+          this.metrics.firstProbeMaxMs = Math.max(this.metrics.firstProbeMaxMs, probeMs);
+          if (verdict === 'missing') this.metrics.firstProbeMissing++;
+          else if (verdict === 'timeout') { this.metrics.firstProbeTimeout++; candidate._probeTimeout = true; }
+          else this.metrics.firstProbePresent++;
+          return verdict;
+        }, () => { this.metrics.firstProbeError++; return 'error'; });
       }
-    } catch {
-      this.metrics.firstProbeError++;
-      // A malformed NZB should still fail through the normal mount path for a precise reason.
-    }
+    } catch { this.metrics.firstProbeError++; }
 
     let vf;
     const mountT0 = Date.now();
     this.metrics.mountAttempts++;
+    const mountPromise = withDeadline(mountNzb(this.pool(), xml, mountOpts), MOUNT_DEADLINE_MS, 'mount timeout');
+    mountPromise.catch(() => {}); // a probe-missing short-circuit must not leave an unhandled rejection
+
+    // Fail fast if the cheap probe proves the first article missing before the mount lands —
+    // the dead-source skip the probe exists for, now without gating the healthy path.
+    if (probePromise) {
+      const winner = await Promise.race([
+        probePromise.then((v) => ({ kind: 'probe', v })),
+        mountPromise.then(() => ({ kind: 'mount' }), () => ({ kind: 'mount' })),
+      ]);
+      if (winner.kind === 'probe' && winner.v === 'missing') {
+        this._recordVerdict(candidate, 'missing', { stage: 'first-article' });
+        return { fail: 'missing: first article unavailable' };
+      }
+    }
     try {
-      vf = await withDeadline(mountNzb(this.pool(), xml, mountOpts), MOUNT_DEADLINE_MS, 'mount timeout');
+      vf = await mountPromise;
       const mountMs = Date.now() - mountT0;
       this.metrics.mountSuccesses++;
       this.metrics.mountMs += mountMs;
@@ -645,6 +654,15 @@ class Pipeline {
       this.metrics.mountFailures++;
       this.metrics.mountMs += mountMs;
       this.metrics.mountMaxMs = Math.max(this.metrics.mountMaxMs, mountMs);
+      // If the mount failed AND the concurrent probe says the first article is missing, report a
+      // missing source (stable fast-skip verdict) rather than a generic mount error.
+      if (probePromise) {
+        const pv = await probePromise.catch(() => 'error');
+        if (pv === 'missing') {
+          this._recordVerdict(candidate, 'missing', { stage: 'first-article' });
+          return { fail: 'missing: first article unavailable' };
+        }
+      }
       this._recordVerdict(candidate, mountVerdictForError(e));
       return { fail: `mount: ${e.message}` };
     }

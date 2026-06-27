@@ -4294,7 +4294,18 @@ function dedupeContinueWatchingItems(items) {
 // "New episode" bump: you FINISHED S02E04 and S02E05 now exists in a local library → the
 // show comes back to Continue Watching with a NEW/NEXT EPISODE tag (Plex On Deck). This is
 // how people learn a new episode landed without checking the library.
+// Next-episode suggestions the user dismissed. The server persists `hidden` but strips hidden
+// rows from /api/watch (so S.watchMap loses the marker the moment loadWatchState reloads) — this
+// profile-scoped local set keeps a dismissed next-up card from regenerating across reloads/restarts.
+function cwHiddenNextSet() {
+  try { return new Set(JSON.parse(localStorage.getItem(profilePrefKey('cwHiddenNext')) || '[]')); } catch { return new Set(); }
+}
+function cwHideNext(key) {
+  if (!key) return;
+  try { const s = cwHiddenNextSet(); s.add(key); localStorage.setItem(profilePrefKey('cwHiddenNext'), JSON.stringify([...s].slice(-300))); } catch {}
+}
 function nextEpisodeBumps(cw, cwItems) {
+  const hiddenNext = cwHiddenNextSet();
   const byShow = {};
   for (const w of cw) {
     const m = /^tmdb:tv:(\d+):s(\d+)e(\d+)$/.exec(w.key);
@@ -4309,8 +4320,9 @@ function nextEpisodeBumps(cw, cwItems) {
     const nextKey = [`tmdb:tv:${id}:s${top.s}e${top.e + 1}`, `tmdb:tv:${id}:s${top.s + 1}e1`]
       .find((k) => (S.localMap || {})[k]);
     if (!nextKey) continue;
+    if (hiddenNext.has(nextKey)) continue; // user dismissed this next-up suggestion
     const wn = (S.watchMap || {})[nextKey];
-    if (wn && (wn.watched || wn.position > 30)) continue; // seen it / already in progress
+    if (wn && (wn.hidden || wn.watched || wn.position > 30)) continue; // hidden / seen / already in progress
     const loc = S.localMap[nextKey], meta = top.w.meta || {};
     out.push({
       key: nextKey, title: String(meta.title || loc.name).replace(/\s*—\s*S\d+E\d+.*$/i, ''),
@@ -4724,7 +4736,12 @@ async function cwOp(it, body, msg, opts = {}) {
   const snap = opts.focusSnapshot || (S.view === 'home' ? homeFocusSnapshot() : null);
   try {
     await api('/api/watch', { method: 'POST', body: { key: it.key, profile: S.profile ? S.profile.id : undefined, meta: wlMeta(it), ...body } });
-    if (body.remove || body.hidden) removeWatchCacheKey(it.key);
+    if (body.hidden) {
+      // Durably remember the dismissal (survives the loadWatchState reload below + app restarts),
+      // so the next-episode generator never regenerates this card.
+      cwHideNext(it.key);
+      removeWatchCacheKey(it.key);
+    } else if (body.remove) removeWatchCacheKey(it.key);
     else upsertWatchCache({
       ...(S.watchMap && S.watchMap[it.key] || {}),
       key: it.key,
@@ -6884,6 +6901,13 @@ function startLiveMseSource(url, opts = {}) {
   // opening a new channel evicts ("retunes") the previously playing pane → "network error".
   const surface = multi ? `mv${opts.multiSlot || 0}` : (split ? 'split' : 'main');
   url = url + (url.includes('?') ? '&' : '?') + 'surface=' + encodeURIComponent(surface);
+  // Buffer-retention scales DOWN with multiview pane count: 2-4 simultaneous MSE decoders in one
+  // WebView renderer is the OOM that surfaces as "Web Page crashed" on low-RAM TV boxes. A single
+  // full-screen stream keeps the generous 45s window; 4 panes retain ~15s each and trim sooner.
+  const panes = multi ? Math.max(1, multiViewCount()) : 1;
+  const retainSec = multi ? Math.max(15, Math.round(45 / panes)) : 45;
+  const trimEverySec = multi ? 6 : 10;
+  const trimAfterSec = multi ? 40 : 90;
   cleanupLiveMse(slot);
   const abort = new AbortController();
   const ms = new MediaSource();
@@ -6935,11 +6959,11 @@ function startLiveMseSource(url, opts = {}) {
     const pump = () => {
       if (!active() || appending || sb.updating) return;
       const now = Date.now();
-      if (v.currentTime > 90 && now - lastTrim > 10000 && sb.buffered.length) {
+      if (v.currentTime > trimAfterSec && now - lastTrim > trimEverySec * 1000 && sb.buffered.length) {
         lastTrim = now;
         try {
           appending = true;
-          sb.remove(0, Math.max(0, v.currentTime - 45));
+          sb.remove(0, Math.max(0, v.currentTime - retainSec));
           return;
         } catch { appending = false; }
       }
@@ -14085,7 +14109,9 @@ async function playChannel(it, list) {
     schedulePlayerGuideFocusRestore(it._channel);
     return;
   }
-  if (!keepGuidePip && tryNativeLivePlayer(it)) return;
+  // Native takeover for every non-(native-guide-PiP) case — including a WEB-rendered guide PiP,
+  // which previously fell through to the web player and showed VOD controls (sound/CC/HD) on live.
+  if ((!keepGuidePip || !S.nativeGuideMode) && tryNativeLivePlayer(it)) return;
   if (nativeLiveRequired()) {
     toast(canUseNativeLivePlayer()
       ? 'Native player could not start this channel'
@@ -19217,14 +19243,36 @@ document.addEventListener('keydown', (e) => {
       if (k === 'ArrowUp') return focusMusicSearch();
       return;
     }
+    // True 2D grid movement: music search results lay out in a 2-column grid, so Down must move a
+    // ROW (not the next DOM item, which is the cell to the RIGHT). Measured from live geometry so it
+    // works for the 1-vs-2 column responsive switch, the full-width artist hero, and Load-more.
     let i = S.musicRowIdx || 0;
-    if (k === 'ArrowUp') return i === 0 ? (chipEls().length ? focusChip(S.chipIdx || 0) : focusMusicSearch()) : focusMusic(i - 1);
-    if (k === 'ArrowDown') {
-      if (i < rows.length - 1) return focusMusic(i + 1);
-      if (S.musicCur) return focusMusicBar();
-      return;
+    const cur = rows[i];
+    const sameRow = (a, b) => a && b && Math.abs(a.offsetTop - b.offsetTop) < 4;
+    const nearestInRow = (rowEls, x) => {
+      let best = -1, bd = Infinity;
+      rowEls.forEach((el) => { const d = Math.abs(el.getBoundingClientRect().left - x); if (d < bd) { bd = d; best = rows.indexOf(el); } });
+      return best;
+    };
+    if (k === 'ArrowLeft') {
+      if (i === 0 || !sameRow(rows[i - 1], cur)) return enterRail(); // first column of its row → menu
+      return focusMusic(i - 1);
     }
-    if (k === 'ArrowLeft') return enterRail();
+    if (k === 'ArrowRight') {
+      if (i < rows.length - 1 && sameRow(rows[i + 1], cur)) return focusMusic(i + 1);
+      return; // last column of the row: no-op
+    }
+    if (k === 'ArrowUp' || k === 'ArrowDown') {
+      const cx = cur ? cur.getBoundingClientRect().left : 0;
+      let j = i;
+      if (k === 'ArrowDown') { while (j < rows.length && sameRow(rows[j], cur)) j++; }
+      else { while (j >= 0 && sameRow(rows[j], cur)) j--; }
+      if (k === 'ArrowDown' && j >= rows.length) { if (S.musicCur) return focusMusicBar(); return; }
+      if (k === 'ArrowUp' && j < 0) return chipEls().length ? focusChip(S.chipIdx || 0) : focusMusicSearch();
+      const targetRow = rows.filter((el) => sameRow(el, rows[j]));
+      const next = nearestInRow(targetRow, cx);
+      return focusMusic(next >= 0 ? next : j);
+    }
     if (k === 'Enter') { rows[i].click(); return; }
     return;
   }
@@ -19505,6 +19553,18 @@ window.__tvBack = () => {
   if (S.view === 'livetv' && document.querySelector('#chBody.liveGuideShell')) {
     const onContent = !!document.querySelector('.liveChannelPane .chCard.focus, #guide .gRow.focusable.focus');
     if (onContent || (S.liveCatNavIdx || 0) > 0) { focusLiveCategory(0, true); return 'ok'; }
+  }
+  // Two-step Back in deep content views: a non-first grid/music item returns to the FIRST item
+  // before leaving the section (one Back shouldn't jump from the bottom of a long result list
+  // straight out). Only when focus is in the content, not on the rail.
+  if (S.zone !== 'rail') {
+    if (['movies', 'tv', 'search', 'library', 'watchlist', 'person'].includes(S.view) && (S.gridIdx || 0) > 0) {
+      focusGrid(0); return 'ok';
+    }
+    if (S.view === 'music' && !($('musicNow') && $('musicNow').classList.contains('open'))) {
+      if ((S.musicRowIdx || 0) > 0 && musicRows().length) { focusMusic(0); return 'ok'; }
+      enterRail(); return 'ok'; // already at the first result → Back goes to the menu (rail), not home
+    }
   }
   if (backToBrowseSectionMenu()) return 'ok';
   if (S.view !== 'home') {

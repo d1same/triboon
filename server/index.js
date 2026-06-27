@@ -5516,16 +5516,6 @@ Object.assign(H, {
     const readController = new AbortController();
     const readSignal = readController.signal;
     let completedRead = false;
-    const abortRead = () => {
-      if (!readSignal.aborted) readController.abort();
-      if (vf && typeof vf.cancelReadAhead === 'function') vf.cancelReadAhead();
-    };
-    const stopReqRead = () => {
-      if (!ctx.req.complete) abortRead();
-    };
-    const stopResRead = () => {
-      if (!completedRead && !ctx.res.writableEnded) abortRead();
-    };
     const requestedPriority = String(ctx.url.searchParams.get('priority') || '').toLowerCase();
     const explicitPriority = requestedPriority === 'read-ahead' ? 'readAhead' : requestedPriority;
     const highWaterEnd = Number(vf._streamHighWaterEnd || 0);
@@ -5538,6 +5528,24 @@ Object.assign(H, {
     const readPriority = ['background', 'readAhead', 'health'].includes(explicitPriority)
       ? explicitPriority
       : (start === 0 ? 'startup' : (sequentialRange ? 'playback' : 'seek'));
+    const abortRead = () => {
+      if (!readSignal.aborted) readController.abort();
+      // Only a real player seek/interrupt should cancel the shared mount's read-ahead. A closing
+      // read-ahead / warm-ahead / background / health connection must NOT bump the shared
+      // readAheadEpoch — that strands a paused→resumed player (whose live read captured the old
+      // epoch) with no prefetch until it seeks. This was the "pause a few seconds → stuck on
+      // resume unless I rewind" bug.
+      if (!['readAhead', 'background', 'health'].includes(readPriority)
+          && vf && typeof vf.cancelReadAhead === 'function') {
+        vf.cancelReadAhead();
+      }
+    };
+    const stopReqRead = () => {
+      if (!ctx.req.complete) abortRead();
+    };
+    const stopResRead = () => {
+      if (!completedRead && !ctx.res.writableEnded) abortRead();
+    };
     ctx.req.once('close', stopReqRead);
     ctx.res.once('close', stopResRead);
     try {
