@@ -2451,14 +2451,20 @@ test('Android native player: direct source and native chrome stay out of the web
     'Live TV should hide VOD subtitle/audio/surround/quality controls instead of disabling the movie/show player controls globally');
   assert.doesNotMatch(ui, /#player\.live #favBtn,#player\.live #splitBtn\{display:grid\}/,
     'the old split control should not be exposed in the Live TV player chrome');
-  // Live = real-TV chrome: a top guide bar (channel | now/next | clock) mirroring #pSrc, no scrubber
-  // or bottom now/next line, no LIVE badge, and OK reveals the chrome instead of pausing.
-  assert.ok(ui.includes('#player.live #pSrc,#player.live .seekLine,#player.live #pHealth{display:none!important}'),
-    'Live chrome should drop the scrubber, the bottom now/next line, and the LIVE badge');
-  assert.match(ui, /#player\.live \.liveNowBar\{display:block[\s\S]+text-align:center/,
-    'Live should show a centered top guide bar');
-  assert.match(ui, /function mirrorLiveNowBar\(\) \{[\s\S]+new MutationObserver\(\(\) => \{ bar\.textContent = src\.textContent; \}\)[\s\S]+\.observe\(src, \{ childList: true, characterData: true, subtree: true \}\)/,
-    'the live top bar should mirror the now/next text the EPG paths write to #pSrc');
+  // Live = real-TV chrome: a top EPG strip (now + next ~2h) and a bottom timeshift bar with a
+  // Go-live button. VOD now/next text and seek bar are hidden; OK reveals the chrome (no pause).
+  assert.ok(ui.includes('#player.live #pSrc,#player.live .seekLine,#player.live #back10,#player.live #fwd30{display:none!important}'),
+    'Live chrome should hide the VOD now/next line, seek bar, and ±10/30s skips');
+  assert.match(ui, /async function renderLiveEpgStrip\(idx\) \{[\s\S]+fetchGuideBatch\(\[ch\]\)[\s\S]+paintLiveEpgStrip\(\)/,
+    'live player should fetch the channel schedule and paint a top EPG strip');
+  assert.match(ui, /function paintLiveEpgStrip\(\) \{[\s\S]+horizon = now \+ 2 \* 3600000[\s\S]+epgCell\$\{isNow \? ' now' : ''\}/,
+    'the EPG strip should cover ~2 hours and mark the current programme');
+  assert.match(ui, /function goLive\(\) \{[\s\S]+liveBufferedEdge\(v\)[\s\S]+v\.currentTime = Math\.max\(0, end - 0\.4\)[\s\S]+v\.play\(\)/,
+    'Go-live should seek to the live edge and resume');
+  assert.match(ui, /function updateLiveChrome\(\) \{[\s\S]+const atLive = behind < 3 && !v\.paused;[\s\S]+toggle\('atLive', atLive\)[\s\S]+toggle\('behind', !atLive\)/,
+    'live chrome should flip the Go-live button between at-live and behind states');
+  assert.match(ui, /if \(\$\('player'\)\.classList\.contains\('live'\)\) \{ updateLiveChrome\(\); return requestAnimationFrame/,
+    'the player tick loop should drive the live chrome each frame for live playback');
   assert.match(ui, /if \(osdWasHidden && \$\('player'\)\.classList\.contains\('live'\)\) return;\s+const b = ctlButtons\(\)\[S\.ctlIdx\]/,
     'on live, an OK press that only woke the hidden chrome must not also fire a control (no pause)');
   assert.match(ui, /function updatePlayerControlAvailability\(\) \{[\s\S]+const isLive = !!\(p && p\.item && p\.item\.type === 'live'\);[\s\S]+\['ccBtn', 'audBtn', 'qualBtn'\][\s\S]+style\.display = isLive \? 'none' : '';[\s\S]+const fav = \$\('favBtn'\); if \(fav\) fav\.style\.display = isLive \? '' : 'none';[\s\S]+const split = \$\('splitBtn'\); if \(split\) split\.style\.display = 'none';[\s\S]+setPlayerControlEnabled\('favBtn', isLive && !!liveChannelForFavorite\(\)\);[\s\S]+setPlayerControlEnabled\('splitBtn', false\);/,

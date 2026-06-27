@@ -661,13 +661,31 @@ body.nativeGuideMode #player.guideMode #video{display:none}
 #favBtn,#splitBtn{display:none}
 #player.live #favBtn{display:grid}
 #player.live #ccBtn,#player.live #audBtn,#player.live #srndBtn,#player.live #qualBtn{display:none!important}
-/* Live = real-TV chrome: a top guide bar (channel | now/next program | clock) and no scrubber or
-   bottom now/next line. The LIVE badge is dropped — the top bar already signals it's live. */
-.liveNowBar{display:none}
-#player.live .liveNowBar{display:block;flex:1;min-width:0;align-self:center;text-align:center;
-  font:600 14px "Albert Sans";color:rgba(243,239,247,.86);overflow:hidden;text-overflow:ellipsis;
-  white-space:nowrap;padding:0 22px}
-#player.live #pSrc,#player.live .seekLine,#player.live #pHealth{display:none!important}
+/* Live = real-TV chrome: a top EPG strip (now + next ~2h for this channel) and a bottom timeshift
+   bar with a Go-live button. The VOD now/next text and seek bar are hidden; the LIVE pill stays. */
+#player.live #pSrc,#player.live .seekLine,#player.live #back10,#player.live #fwd30{display:none!important}
+#liveEpgStrip,#liveBar,#liveBtn{display:none}
+#player.live #liveEpgStrip{display:flex;gap:5px;padding:2px clamp(16px,2.4vw,36px) 6px;min-width:0}
+.epgCell{flex:1 1 0;min-width:0;background:rgba(243,239,247,.05);border:1px solid rgba(243,239,247,.08);
+  border-radius:8px;padding:6px 10px;overflow:hidden;position:relative}
+.epgCell.now{flex:2.4 1 0;background:rgba(193,59,214,.16);border-color:rgba(193,59,214,.42)}
+.epgCell .epgProg{position:absolute;left:0;top:0;bottom:0;background:rgba(251,139,60,.22);pointer-events:none}
+.epgCell .epgRel{position:relative}
+.epgCell .epgT{font:500 12.5px "Albert Sans";white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.epgCell .epgWhen{font:600 9.5px "JetBrains Mono";letter-spacing:.06em;color:var(--muted);margin-bottom:1px}
+#player.live #liveBar{display:flex;align-items:center;gap:10px;padding:2px clamp(16px,2.4vw,36px) 0;margin-bottom:4px}
+#liveBar .liveBehind{font:600 11px "JetBrains Mono";color:var(--muted);min-width:42px}
+#liveBar .liveTrack{position:relative;flex:1;height:4px;background:rgba(243,239,247,.18);border-radius:2px}
+#liveBar .liveTrackFill{position:absolute;left:0;top:0;bottom:0;width:100%;background:var(--coral);border-radius:2px}
+#liveBar .liveEdge{position:absolute;right:0;top:50%;width:7px;height:7px;margin-top:-3.5px;background:#ff5a5a;border-radius:50%}
+#liveBar .liveTag{font:600 11px "JetBrains Mono";color:#ff5a5a}
+#player.live #liveBtn{display:inline-flex;align-items:center;gap:6px;width:auto;padding:0 12px;border-radius:999px}
+#liveBtn .liveBtnDot{width:7px;height:7px;border-radius:50%;background:#ff5a5a;flex:none}
+#liveBtn .liveBtnTxt{font:700 11px "JetBrains Mono";letter-spacing:.08em}
+#player.live #liveBtn.behind{background:rgba(255,90,90,.16);box-shadow:inset 0 0 0 1px #ff5a5a}
+#player.live #liveBtn.atLive{opacity:.7}
+#player.live #liveBtn.atLive .liveBtnDot{animation:livePulse 2s infinite}
+@keyframes livePulse{0%,100%{opacity:1}50%{opacity:.35}}
 #favBtn.on,#splitBtn.on{color:var(--amber);box-shadow:0 0 0 2px rgba(255,198,92,.35),0 10px 28px rgba(0,0,0,.18)}
 
 /* ---------- Live TV multiview ---------- */
@@ -3446,18 +3464,23 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
           <div class="playerMetaQuality" id="pQuality"></div>
         </div>
       </div>
-      <div class="liveNowBar" id="liveNowBar"></div>
       <div class="osdRight">
         <div class="osdClock"><span id="clockNow"></span><span id="endsAt"></span></div>
         <div class="health" id="pHealth"></div>
       </div>
     </div>
+    <div id="liveEpgStrip" class="liveOnly" aria-hidden="true"></div>
     <div>
       <div class="src" id="pSrc"></div>
       <div class="seekLine">
         <span class="seekTime" id="seekElapsed">0:00</span>
         <div id="seek"><div class="buf" id="buf"></div><div class="fill" id="fill"></div><div class="knob" id="knob"></div></div>
         <span class="seekTime" id="seekTotal">0:00</span>
+      </div>
+      <div id="liveBar" class="liveOnly" aria-hidden="true">
+        <span class="liveBehind" id="liveBehind">LIVE</span>
+        <div class="liveTrack"><div class="liveTrackFill" id="liveTrackFill"></div><span class="liveEdge"></span></div>
+        <span class="liveTag" id="liveTag">LIVE</span>
       </div>
       <div class="ctl">
         <div class="ctlGroup ctlLeft">
@@ -3466,6 +3489,7 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
         <div class="ctlGroup ctlCenter">
           <button class="cbtn focusable" id="back10" title="Back 10s"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v6h6"/><path d="M21 12A9 9 0 0 0 6 5.3L3 8"/></svg></button>
           <button class="cbtn big focusable" id="playPause"><svg id="ppIcon" viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg></button>
+          <button class="cbtn focusable liveOnly" id="liveBtn" title="Go to live"><span class="liveBtnDot"></span><span class="liveBtnTxt">LIVE</span></button>
           <button class="cbtn focusable" id="fwd30" title="Forward 30s"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/></svg></button>
           <button class="cbtn focusable" id="nextEpBtn" title="Next episode" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" x2="19" y1="5" y2="19"/></svg></button>
         </div>
@@ -7232,6 +7256,7 @@ async function playLiveSplitChannel(it, list, pane = liveSplitActivePane(), opts
   p.usingTranscode = false;
   p.usingLiveMse = false;
   $('pHealth').innerHTML = '<span class="liveBadge">LIVE</span>';
+  renderLiveEpgStrip(S.liveCur);
   $('pSrc').textContent = hydrated.genre || '';
   updatePlayerMeta();
   updateActiveLiveSourceLine();
@@ -10183,6 +10208,7 @@ function setPlayerTimes(pos, dur) {
 }
 function tick() {
   if (S.view !== 'player') return;
+  if ($('player').classList.contains('live')) { updateLiveChrome(); return requestAnimationFrame(() => setTimeout(tick, 250)); }
   if (_nudgeBase !== null) { updPP(); return requestAnimationFrame(() => setTimeout(tick, 250)); } // don't fight the seek preview
   const t = currentTime(), d = totalDuration();
   // Near the end of an episode → mount the next episode, then surface the Up-next card.
@@ -10202,6 +10228,61 @@ $('back10').addEventListener('click', () => nudgeSeek(-10));
 $('fwd30').addEventListener('click', () => nudgeSeek(30));
 $('nextEpBtn').addEventListener('click', playNextEpisode);
 $('statsBtn').addEventListener('click', togglePlayerStats);
+
+// ----- Live IPTV player chrome: top EPG strip (now + next ~2h) + bottom timeshift / Go-live -----
+let _liveEpgIdx = null, _liveEpgProgs = null;
+async function renderLiveEpgStrip(idx) {
+  const strip = $('liveEpgStrip'); if (!strip) return;
+  _liveEpgIdx = idx; _liveEpgProgs = null; strip.innerHTML = '';
+  if (!S.liveEpg) return;
+  const ch = liveChannelByIdx(idx); if (!ch) return;
+  try {
+    const byIdx = await fetchGuideBatch([ch]);
+    if (_liveEpgIdx !== idx) return; // channel changed mid-fetch
+    _liveEpgProgs = (byIdx[ch.idx ?? ch._channel] || byIdx[idx] || []).filter((p) => p && p.start && p.stop);
+    paintLiveEpgStrip();
+  } catch {}
+}
+function paintLiveEpgStrip() {
+  const strip = $('liveEpgStrip'); if (!strip) return;
+  const now = Date.now(), horizon = now + 2 * 3600000;
+  const progs = (_liveEpgProgs || []).filter((p) => p.stop > now && p.start < horizon).slice(0, 4);
+  if (!progs.length) { if (strip.innerHTML) strip.innerHTML = ''; return; }
+  strip.innerHTML = progs.map((p) => {
+    const isNow = p.start <= now && p.stop > now;
+    const pct = isNow ? Math.max(0, Math.min(100, ((now - p.start) / Math.max(1, p.stop - p.start)) * 100)) : 0;
+    return `<div class="epgCell${isNow ? ' now' : ''}">${isNow ? `<div class="epgProg" style="width:${pct.toFixed(1)}%"></div>` : ''}`
+      + `<div class="epgRel"><div class="epgWhen">${isNow ? 'NOW' : esc(fmtT(p.start))}</div>`
+      + `<div class="epgT">${esc(p.title || '')}</div></div></div>`;
+  }).join('');
+}
+function liveBufferedEdge(v) {
+  return v && v.buffered && v.buffered.length ? v.buffered.end(v.buffered.length - 1) : 0;
+}
+function updateLiveChrome() {
+  paintLiveEpgStrip(); // progress on the "now" cell advances each tick
+  const v = $('video'), btn = $('liveBtn');
+  if (!v || !v.buffered || !v.buffered.length) return;
+  const start = v.buffered.start(0), end = v.buffered.end(v.buffered.length - 1);
+  const behind = Math.max(0, end - v.currentTime);
+  const atLive = behind < 3 && !v.paused;
+  if (btn) {
+    btn.classList.toggle('atLive', atLive);
+    btn.classList.toggle('behind', !atLive);
+    const txt = btn.querySelector('.liveBtnTxt'); if (txt) txt.textContent = atLive ? 'LIVE' : 'GO LIVE';
+  }
+  const win = Math.max(1, end - start);
+  const fill = $('liveTrackFill'); if (fill) fill.style.width = Math.max(0, Math.min(100, ((v.currentTime - start) / win) * 100)).toFixed(1) + '%';
+  const bh = $('liveBehind'); if (bh) bh.textContent = behind < 3 ? 'LIVE' : '-' + fmt(behind);
+}
+function goLive() {
+  const v = $('video'); if (!v) return;
+  const end = liveBufferedEdge(v);
+  if (end > 0) { try { v.currentTime = Math.max(0, end - 0.4); } catch {} }
+  if (v.paused) v.play().catch(() => {});
+  showOsd();
+}
+$('liveBtn').addEventListener('click', () => { goLive(); });
 let _seekDrag = null, _seekClickSuppressUntil = 0;
 function seekSecondsFromPointer(e) {
   const el = $('seek');
@@ -13885,6 +13966,7 @@ function nativeLiveRequired() {
 function setNativeLivePlaybackState(it) {
   $('pSrc').textContent = it.genre || it.group || '';
   $('pHealth').innerHTML = '<span class="liveBadge">LIVE</span>';
+  renderLiveEpgStrip(S.liveCur);
   S.playing = {
     item: liveItemPayload(it),
     name: it.title || 'Live TV',
@@ -14170,6 +14252,7 @@ async function playChannelWeb(it) {
   }
   $('player').classList.add('live');
   $('pHealth').innerHTML = '<span class="liveBadge">LIVE</span>';
+  renderLiveEpgStrip(S.liveCur);
   $('pSrc').textContent = it.genre || '';
   if (S.liveEpg) {
     const nn = await fetchEpg(it._channel);
@@ -15688,14 +15771,6 @@ async function renderAppUpdateBox() {
   } catch {}
   status.textContent = `${current ? 'Current: ' + current + '.' : 'Current version unknown.'}${latest} Stable APK links always point to the newest release.`;
 }
-// Live top guide bar mirrors the now/next line the live-play paths already write to #pSrc, so the
-// bar stays in sync without touching the seven EPG write sites. Shown only for live (CSS).
-(function mirrorLiveNowBar() {
-  const src = $('pSrc'), bar = $('liveNowBar');
-  if (!src || !bar || !('MutationObserver' in window)) return;
-  new MutationObserver(() => { bar.textContent = src.textContent; })
-    .observe(src, { childList: true, characterData: true, subtree: true });
-})();
 function openApkUpdate(kind) {
   const url = APK_LINKS[kind] || APK_LINKS.tv;
   try {
