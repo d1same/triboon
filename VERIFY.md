@@ -86,6 +86,26 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-06-27, distribution signing (v1.7.43):
+
+- Switched APK signing from the per-machine Android DEBUG key to a dedicated RELEASE keystore the
+  owner controls + backs up (debug-signed builds were verified identical to the v1.7.30 asset, i.e.
+  every prior release was debug-signed — machine-tied + unrecoverable if lost, unsafe for a
+  distributed app). The keystore + passwords live OUTSIDE git; keep an encrypted backup — losing
+  them strands all future updates.
+- v1.7.43 published release-signed (CN=Triboon) as the Latest GitHub release with the four assets
+  (triboon-tv-vX.Y.Z / triboon-mobile-vX.Y.Z + stable triboon-tv / triboon-mobile aliases);
+  /releases/latest/download/triboon-tv.apk resolves to it (HTTP 200, release-signed verified).
+- ONE-TIME: switching keys changes the signature, so devices on an older debug-signed build must
+  uninstall + reinstall once; future updates install in place.
+- Release build verified: R8/minify + the new key produce a working APK (launches to the native
+  setup screen, ExoPlayerImpl + HlsMediaSource present in the dex, no crashes).
+- Automation: npm run release:apk (defaults to debug signing; -Release for the keystore build) and
+  a CI release-apk job (TRIBOON_RELEASE_* repo secrets) that auto-builds + publishes the signed APK
+  on every vX.Y.Z tag (and via workflow_dispatch). CI signing pipeline verified end-to-end against
+  v1.7.43.
+
+
 2026-06-27, startup + pause/resume + nav + guide (v1.7.41/v1.7.42):
 
 - Startup win #1 (v1.7.41): first-article STAT probe runs CONCURRENTLY with the mount instead of
