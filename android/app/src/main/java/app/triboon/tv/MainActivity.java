@@ -200,6 +200,7 @@ public class MainActivity extends Activity {
     private ImageButton nativeStatsBtn;
     private ImageButton nativeNextBtn;
     private ImageButton nativeFavBtn;
+    private ImageButton nativeLiveBtn;       // live: jump back to the live edge after a pause/rewind
     private boolean nativeLiveFav = false;
     private View nativeUpNextCard;
     private TextView nativeUpNextKicker;
@@ -2889,6 +2890,12 @@ public class MainActivity extends Activity {
         });
         centerControls.addView(nativePlayBtn);
 
+        // Live only: jump back to the live edge (ExoPlayer's default position for a live window)
+        // after the user has paused or fallen behind, and resume.
+        nativeLiveBtn = nativeButton(R.drawable.ic_player_golive, "Go to live", false);
+        nativeLiveBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) goNativeLive(); });
+        centerControls.addView(nativeLiveBtn);
+
         nativeFwdBtn = nativeButton(R.drawable.ic_player_forward, "Forward 30 seconds", false);
         nativeFwdBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) nativeSeekBy(30000); });
         centerControls.addView(nativeFwdBtn);
@@ -4125,9 +4132,18 @@ public class MainActivity extends Activity {
         showNativeChrome(true);
     }
 
+    private void goNativeLive() {
+        if (nativePlayer == null || !"live".equals(nativeMode)) return;
+        try {
+            nativePlayer.seekToDefaultPosition(); // a live window's default position IS the live edge
+            nativePlayer.play();
+        } catch (Exception ignored) {}
+        updateNativeChrome();
+    }
+
     private ImageButton[] nativeControlButtons() {
         return new ImageButton[]{
-                nativeGuideBtn, nativeRewBtn, nativePlayBtn, nativeFwdBtn,
+                nativeGuideBtn, nativeRewBtn, nativePlayBtn, nativeLiveBtn, nativeFwdBtn,
                 nativeNextBtn, nativeFavBtn, nativeCcBtn, nativeAudioBtn, nativeQualityBtn, nativeStatsBtn
         };
     }
@@ -4440,6 +4456,7 @@ public class MainActivity extends Activity {
         if (nativeQualityBtn != null) nativeQualityBtn.setVisibility(isLive ? View.GONE : View.VISIBLE);
         if (nativeNextBtn != null) nativeNextBtn.setVisibility(isLive ? View.GONE : View.VISIBLE);
         if (nativeFavBtn != null) nativeFavBtn.setVisibility(isLive ? View.VISIBLE : View.GONE);
+        if (nativeLiveBtn != null) nativeLiveBtn.setVisibility(isLive ? View.VISIBLE : View.GONE);
         setNativeButtonEnabled(nativeStatsBtn, nativePlayer != null);
         setNativeButtonEnabled(nativeCcBtn, nativeSubtitleHasOptions());
         setNativeButtonEnabled(nativeAudioBtn, nativeAudioHasOptions());

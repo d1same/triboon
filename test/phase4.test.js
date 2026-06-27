@@ -1945,8 +1945,13 @@ test('Android native player: direct source and native chrome stay out of the web
     'native player controls should keep playback centered with secondary controls on the right');
   assert.match(android, /leftControls\.addView\(nativeGuideBtn\);[\s\S]+centerControls\.addView\(nativeRewBtn\);[\s\S]+centerControls\.addView\(nativePlayBtn\);[\s\S]+centerControls\.addView\(nativeFwdBtn\);[\s\S]+centerControls\.addView\(nativeNextBtn\);[\s\S]+rightControls\.addView\(nativeCcBtn\);[\s\S]+rightControls\.addView\(nativeAudioBtn\);[\s\S]+rightControls\.addView\(nativeQualityBtn\);[\s\S]+rightControls\.addView\(nativeStatsBtn\);/,
     'native player should keep Guide left, playback centered, and CC/audio/HD before the final stats/info button');
-  assert.match(android, /return new ImageButton\[\]\{\s+nativeGuideBtn, nativeRewBtn, nativePlayBtn, nativeFwdBtn,\s+nativeNextBtn, nativeFavBtn, nativeCcBtn, nativeAudioBtn, nativeQualityBtn, nativeStatsBtn\s+\};/,
-    'native player D-pad traversal must include nativeFavBtn (the live favorite star) so it is reachable on live');
+  assert.match(android, /return new ImageButton\[\]\{\s+nativeGuideBtn, nativeRewBtn, nativePlayBtn, nativeLiveBtn, nativeFwdBtn,\s+nativeNextBtn, nativeFavBtn, nativeCcBtn, nativeAudioBtn, nativeQualityBtn, nativeStatsBtn\s+\};/,
+    'native player D-pad traversal must include nativeFavBtn and the live Go-live button so both are reachable on live');
+  // Native live: a Go-live button (ExoPlayer live-edge seek) shown only for live, like the web overlay.
+  assert.match(android, /private void goNativeLive\(\) \{[\s\S]+"live"\.equals\(nativeMode\)[\s\S]+nativePlayer\.seekToDefaultPosition\(\)[\s\S]+nativePlayer\.play\(\)/,
+    'goNativeLive should seek to the live edge and resume');
+  assert.match(android, /if \(nativeLiveBtn != null\) nativeLiveBtn\.setVisibility\(isLive \? View\.VISIBLE : View\.GONE\)/,
+    'the native Go-live button must be visible only for live playback');
   assert.match(ui, /\.cbtn\.big\{width:58px;height:58px;background:rgba\(5,3,9,\.4\);color:var\(--text\)\}/,
     'web play button should be neutral until focused or hovered');
   assert.doesNotMatch(ui, /\.cbtn\.on\{background:var\(--amber\)|\.btn\.primary,\.cbtn\.big/,
