@@ -57,7 +57,11 @@ Always follow the owner's method:
 
 ## Commands
 
-- `npm.cmd test` - full Node test suite. Current baseline: 186/186 tests.
+- `npm.cmd test` - full Node test suite (uses `--test-force-exit`; node:test otherwise hangs after
+  the run completes). Current baseline: 249/249 tests.
+- `npm run release:apk` - build + publish the Android APK to the GitHub release for the current tag.
+  Defaults to debug signing; **`npm run release:apk -- -Release`** builds the proper keystore-signed
+  release. (See the Hard Rules on signing.)
 - `node server/index.js` - starts the app at `http://localhost:7777`.
 - `docker compose up --build` - containerized app with ffmpeg and `/data`.
 - Android build:
@@ -65,9 +69,10 @@ Always follow the owner's method:
   - `ANDROID_HOME=%LOCALAPPDATA%\Android\Sdk`
   - Prefer current external Gradle 9.5.1+ with `gradle -p android assembleDebug`.
   - Use `android\gradlew.bat assembleDebug` as version-safe fallback.
-  - Release builds require local signing values outside git:
-    `TRIBOON_RELEASE_STORE_FILE`, `TRIBOON_RELEASE_STORE_PASSWORD`,
-    `TRIBOON_RELEASE_KEY_ALIAS`, and `TRIBOON_RELEASE_KEY_PASSWORD`.
+  - Release builds are SIGNED with the project's dedicated release keystore via signing values
+    kept outside git: `TRIBOON_RELEASE_STORE_FILE`, `TRIBOON_RELEASE_STORE_PASSWORD`,
+    `TRIBOON_RELEASE_KEY_ALIAS`, `TRIBOON_RELEASE_KEY_PASSWORD` (in the owner's password manager +
+    GitHub Actions secrets, incl. `TRIBOON_RELEASE_KEYSTORE_B64` for CI). See the signing Hard Rule.
   - Do not use `C:\Users\opencode\tools\gradle-8.10.2`.
 
 Everything is configured in the web dashboard after first-run setup and is
@@ -168,6 +173,13 @@ Still open:
   the latest GitHub release so `/releases/latest/download/triboon-tv.apk` and
   `/releases/latest/download/triboon-mobile.apk` always resolve to the newest
   build.
+- App signing (CRITICAL): there is ONE dedicated Android release keystore. ALWAYS sign release
+  APKs with it — via CI (the `release-apk` job auto-builds + publishes on every `vX.Y.Z` tag using
+  the `TRIBOON_RELEASE_*` repo secrets) or locally with `npm run release:apk -- -Release`. NEVER
+  generate a new keystore or switch signing keys without explicit owner sign-off: a changed
+  signature forces EVERY installed device to uninstall + reinstall. The keystore file + its
+  passwords are the owner's secret (password manager + GitHub secrets) and must never be committed,
+  logged, or written into docs. Do NOT ship debug-signed builds as releases.
 - Security: deny-by-default routing; every new endpoint must declare auth and
   be covered by route-coverage tests.
 - Credentials are encrypted at rest and must never be committed, logged, or
