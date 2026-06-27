@@ -2464,6 +2464,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'live player should fetch the channel schedule and paint a top EPG strip');
   assert.match(ui, /function paintLiveEpgStrip\(\) \{[\s\S]+horizon = now \+ 2 \* 3600000[\s\S]+epgCell\$\{isNow \? ' now' : ''\}/,
     'the EPG strip should cover ~2 hours and mark the current programme');
+  // The EPG strip must be grouped WITH the top bar (osdTopGroup) so #osd's space-between pins it to
+  // the TOP — as a bare middle child it floated to the vertical center of the screen.
+  assert.match(ui, /<div class="osdTopGroup">\s*<div class="top">[\s\S]+<div id="liveEpgStrip"[\s\S]+<\/div>\s*<\/div>\s*<div>\s*<div class="src"/,
+    'the EPG strip must sit inside osdTopGroup with the top bar so it pins to the top, not mid-screen');
   assert.match(ui, /function goLive\(\) \{[\s\S]+liveBufferedEdge\(v\)[\s\S]+v\.currentTime = Math\.max\(0, end - 0\.4\)[\s\S]+v\.play\(\)/,
     'Go-live should seek to the live edge and resume');
   assert.match(ui, /function updateLiveChrome\(\) \{[\s\S]+const atLive = behind < 3 && !v\.paused;[\s\S]+toggle\('atLive', atLive\)[\s\S]+toggle\('behind', !atLive\)/,
