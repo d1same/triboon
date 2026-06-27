@@ -5601,7 +5601,7 @@ Object.assign(H, {
       vf._probing = true;
       probeTracks(selfUrl).then((t) => { vf._tracks = { available: true, ...t }; }).catch(() => {}).finally(() => { vf._probing = false; });
     }
-    const ff = spawnRemux(selfUrl, { startSeconds, audioTrack, transcodeAudio });
+    const ff = spawnRemux(selfUrl, { startSeconds, audioTrack, transcodeAudio, safeStereo: forceAudioSafe });
     ctx.res.writeHead(200, { 'content-type': 'video/mp4', 'cache-control': 'no-store' });
     // A spawn-level error ('error' event) is FATAL to the process if unhandled — never omit this.
     ff.on('error', (e) => { console.error('[remux spawn]', e.message); try { ctx.res.destroy(); } catch {} });

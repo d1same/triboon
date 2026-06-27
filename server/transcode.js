@@ -264,7 +264,12 @@ function audioCopyOk(codec, caps = {}) {
 //    would stall startup. Short fragments also more than HALVED time-to-first-byte.
 const REMUX_SYNC_FLAGS = ['-avoid_negative_ts', 'make_zero', '-frag_duration', '500000'];
 const REMUX_MOVFLAGS = 'frag_keyframe+empty_moov+default_base_moof+delay_moov';
-function spawnRemux(streamUrl, { startSeconds = 0, audioTrack = 0, transcodeAudio = false } = {}) {
+// safeStereo: the "audio-safe" path (multiview panes, any plain <video>/MSE surface that has no
+// audio-fallback loop) must downmix to STEREO AAC-LC. 5.1 AAC is the least-compatible AAC variant
+// for browser/WebView MediaCodec decoders — it commonly plays as video-with-NO-audio, which is the
+// whole bug audioSafe exists to prevent. The main Android player uses native ExoPlayer (handles
+// 5.1 fine), so 5.1 stays the default for the normal transcodeAudio path.
+function spawnRemux(streamUrl, { startSeconds = 0, audioTrack = 0, transcodeAudio = false, safeStereo = false } = {}) {
   const ff = detectFfmpeg();
   if (!ff) throw new Error('ffmpeg not available');
   const args = [
@@ -273,7 +278,9 @@ function spawnRemux(streamUrl, { startSeconds = 0, audioTrack = 0, transcodeAudi
     '-i', streamUrl,
     '-map', '0:v:0', '-map', `0:a:${audioTrack}?`,
     '-c:v', 'copy',                     // remux: video NEVER re-encoded here
-    ...(transcodeAudio ? ['-c:a', 'aac', '-b:a', '384k', '-ac', '6'] : ['-c:a', 'copy']),
+    ...(transcodeAudio
+      ? ['-c:a', 'aac', '-b:a', safeStereo ? '192k' : '384k', '-ac', safeStereo ? '2' : '6']
+      : ['-c:a', 'copy']),
     ...REMUX_SYNC_FLAGS,
     '-movflags', REMUX_MOVFLAGS,
     '-f', 'mp4', 'pipe:1',

@@ -1133,6 +1133,13 @@ test('Android native player: direct source and native chrome stay out of the web
     'safe Android remux should request AAC audio while still copying video');
   assert.match(server, /const forceAudioSafe = ctx\.url\.searchParams\.get\('audioSafe'\) === '1';[\s\S]+const transcodeAudio = forceAudioSafe \|\| !audioCopyOk\(aud, vf\._caps\);/,
     'server remux should honor the audioSafe flag without forcing full video transcode');
+  // audioSafe (multiview / any plain <video> MSE surface) must downmix to STEREO AAC — 5.1 AAC is
+  // the least browser/WebView-decodable variant and plays as video-with-no-sound. The handler must
+  // forward forceAudioSafe as safeStereo, and spawnRemux must pick 2 channels for it (6 otherwise).
+  assert.match(server, /spawnRemux\(selfUrl, \{ startSeconds, audioTrack, transcodeAudio, safeStereo: forceAudioSafe \}\)/,
+    'remux handler must forward the audio-safe flag so multiview audio is downmixed to stereo');
+  assert.match(transcode, /function spawnRemux\(streamUrl, \{ startSeconds = 0, audioTrack = 0, transcodeAudio = false, safeStereo = false \} = \{\}\)[\s\S]+transcodeAudio[\s\S]+'-ac', safeStereo \? '2' : '6'/,
+    'spawnRemux must downmix the audio-safe path to stereo AAC (2ch) and keep 5.1 (6ch) for the normal transcode path');
   assert.match(ui, /function resolvePlaybackResume\(it\) \{[\s\S]+if \(it\._startOver\) return \{ \.\.\.it, resume: 0 \};[\s\S]+const pos = resumePositionForItem\(it\);[\s\S]+return pos > 0 \? \{ \.\.\.it, resume: pos \} : it;/,
     'Resume should be resolved from current watch state at click time, after quality changes');
   assert.match(ui, /async function play\(it, pick\) \{[\s\S]+it = resolvePlaybackResume\(it\);/,
@@ -2927,6 +2934,31 @@ test('remux: AC3 source with transcodeAudio → AAC audio, video still copied', 
     const t = await probeTracks(outFile);
     assert.strictEqual(t.video[0].codec, 'h264', 'video stream-copied, never re-encoded');
     assert.strictEqual(t.audio[0].codec, 'aac', 'AC3 audio became browser-safe AAC');
+  } finally { server.close(); }
+});
+
+test('remux: audioSafe downmixes 5.1 → stereo AAC (multiview/WebView), default keeps 5.1', { skip: !HAS_FFMPEG || !HAS_FFPROBE }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-safe-'));
+  const src = path.join(dir, 'ac3-51.mkv');
+  const gen = spawnSync(detectFfmpeg().path, [
+    '-y', '-hide_banner', '-loglevel', 'error',
+    '-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=12:duration=3',
+    '-f', 'lavfi', '-i', 'sine=frequency=440:duration=3',
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'ac3', '-ac', '6', src,
+  ], { timeout: 120000, windowsHide: true });
+  if (gen.status !== 0) return; // no ac3 encoder in this build → covered in Docker
+  const { server, url } = await serveFile(src);
+  try {
+    const safeFile = path.join(dir, 'safe.mp4');
+    fs.writeFileSync(safeFile, await collect(spawnRemux(url, { transcodeAudio: true, safeStereo: true })));
+    const safe = await probeTracks(safeFile);
+    assert.strictEqual(safe.audio[0].codec, 'aac', 'audio-safe path is AAC');
+    assert.strictEqual(safe.audio[0].channels, 2, 'audio-safe path downmixes to stereo so WebView/MSE can decode it');
+
+    const surrFile = path.join(dir, 'surr.mp4');
+    fs.writeFileSync(surrFile, await collect(spawnRemux(url, { transcodeAudio: true })));
+    const surr = await probeTracks(surrFile);
+    assert.strictEqual(surr.audio[0].channels, 6, 'normal transcodeAudio path (native players) keeps 5.1');
   } finally { server.close(); }
 });
 
