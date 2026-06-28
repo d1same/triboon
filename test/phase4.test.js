@@ -1074,10 +1074,12 @@ test('Android native player: direct source and native chrome stay out of the web
   });
   assert.match(ui, /b\.setAttribute\('aria-pressed', name === cur \? 'true' : 'false'\)[\s\S]+syncChoiceButtons\('#themePick \.themeChoice,#themePickSet \.themeChoice'/,
     'theme cards should expose and update pressed state with the same selected-button sync');
-  assert.ok(ui.includes('id="apkTvUpdate"') && ui.includes('id="apkMobileUpdate"')
-    && ui.includes('releases/latest/download/triboon-tv.apk')
-    && ui.includes('releases/latest/download/triboon-mobile.apk'),
-    'Preferences should expose stable Android TV and mobile update links');
+  // One universal APK runs on TV and phone, so there's a single "Update app" button (not separate
+  // TV/phone buttons), pointing at the stable release link.
+  assert.ok(ui.includes('id="apkUpdate"') && ui.includes('>Update app<')
+    && !ui.includes('id="apkTvUpdate"') && !ui.includes('id="apkMobileUpdate"')
+    && ui.includes('releases/latest/download/triboon-tv.apk'),
+    'Preferences should expose a single Update app button (universal APK) with the stable release link');
   assert.match(ui, /function sectionFormConfig\(\) \{[\s\S]+S\.view === 'prefs'[\s\S]+root: \$\('prefs'\)[\s\S]+tabs: \$\('prefTabs'\)[\s\S]+panelAttr: 'data-ptab'[\s\S]+S\.view === 'settings'[\s\S]+root: \$\('settings'\)[\s\S]+tabs: \$\('setTabs'\)[\s\S]+panelAttr: 'data-stab'/,
     'Settings and Preferences should share the section-form D-pad model with separate tab/panel roots');
   assert.match(ui, /function focusContent\(retried\) \{[\s\S]+if \(S\.view === 'settings' \|\| S\.view === 'prefs'\) \{[\s\S]+formCtls\(\$\(S\.view === 'prefs' \? 'prefs' : 'settings'\)\)[\s\S]+els\[0\]\.focus\(\{ preventScroll: false \}\)/,

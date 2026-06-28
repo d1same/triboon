@@ -2958,10 +2958,9 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
       <div id="traktBox"><div class="hint">checking…</div></div>
     </div>
     <div class="panel"><h2>App updates</h2>
-      <p>Install the latest Android TV or phone APK from the stable GitHub release links.</p>
+      <p>Install the latest Triboon app — one build runs on both Android TV and phone.</p>
       <div class="field">
-        <button class="btn primary focusable" id="apkTvUpdate">Update Android TV</button>
-        <button class="btn ghost focusable" id="apkMobileUpdate">Update Android phone</button>
+        <button class="btn primary focusable" id="apkUpdate">Update app</button>
       </div>
       <div class="hint" id="apkUpdateStatus">Current app: checking...</div>
     </div>
@@ -17770,8 +17769,7 @@ function wireSectionRailDpad(rootId, tabsId, panelAttr) {
 wireSectionRailDpad('prefs', 'prefTabs', 'data-ptab');
 wireSectionRailDpad('settings', 'setTabs', 'data-stab');
 $('activityRefresh').addEventListener('click', refreshActivity);
-$('apkTvUpdate').addEventListener('click', () => openApkUpdate('tv'));
-$('apkMobileUpdate').addEventListener('click', () => openApkUpdate('mobile'));
+$('apkUpdate').addEventListener('click', () => openApkUpdate('tv')); // one universal APK — kind is cosmetic
 $('secPwSave').addEventListener('click', async () => {
   const oldPassword = $('secPwCurrent').value;
   const newPassword = $('secPwNew').value;
