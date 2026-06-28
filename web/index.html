@@ -749,6 +749,12 @@ body.nativeGuideMode #player.guideMode #video{display:none}
 .mvStatus.warn{color:rgba(255,198,92,.95);border-color:rgba(255,198,92,.22);background:rgba(30,18,8,.72);font:750 12px/1.25 "Albert Sans";letter-spacing:0;text-transform:none}
 #multiView.paneFull .mvTop{display:none}
 #multiView.paneFull .mvBody{padding:0}
+/* Idle: after ~5s with no input, fade out ALL multiview chrome for a clean wall of video; any
+   D-pad press (or tap) brings it back. */
+#multiView .mvTop,#multiView .mvShade,#multiView .mvLabel,#multiView .mvStatus,#multiView .mvAdd{transition:opacity .35s ease}
+#multiView.mvIdle .mvTop,#multiView.mvIdle .mvShade,#multiView.mvIdle .mvLabel,#multiView.mvIdle .mvStatus,#multiView.mvIdle .mvAdd{opacity:0;pointer-events:none}
+#multiView.mvIdle .mvActions{opacity:0!important;pointer-events:none!important}
+#multiView.mvIdle .mvSlot.active,#multiView.mvIdle .mvSlot.active.filled{border-color:transparent;box-shadow:none}
 .mvGrid.fullscreen{display:block;position:relative}
 .mvGrid.fullscreen .mvSlot.visible{position:absolute;inset:0;width:100%;height:100%;border:0;border-radius:0;box-shadow:none}
 .mvGrid.fullscreen .mvSlot:not(.mvFull){display:none}
@@ -8202,6 +8208,7 @@ async function openMultiViewFromGuide(seed = null) {
   if (playingVod) await playMultiViewExistingVodFromPlayer(0);
   else if (current) await playMultiViewChannel(current, 0);
   if (multiViewCount() > 1) openMultiViewPicker(1);
+  bumpMultiViewChrome(); // start the 5s idle-fade clock
   return true;
 }
 function closeMultiView(opts = {}) {
@@ -8210,9 +8217,11 @@ function closeMultiView(opts = {}) {
   const targetView = returnView === 'player' ? 'livetv' : returnView;
   cleanupMultiViewAll();
   S.multiView.open = false;
+  clearTimeout(_mvIdleT);
   closeMultiViewPicker();
   $('multiView').classList.remove('open');
   $('multiView').classList.remove('paneFull');
+  $('multiView').classList.remove('mvIdle');
   $('multiView').setAttribute('aria-hidden', 'true');
   // Multiview was opened on top of the main player surface (which we left .open behind it). If we
   // only hid #multiView, that surface — now a paused/black #video — would be revealed: the
@@ -8255,8 +8264,22 @@ function moveMultiViewFocus(dx, dy) {
   const nextRow = Math.max(0, Math.min(1, row + dy));
   return setMultiViewActiveSlot(multiViewSlotForVisualPosition(nextRow * 2 + nextCol));
 }
+let _mvIdleT = 0;
+function bumpMultiViewChrome() {
+  const mv = $('multiView'); if (!mv) return;
+  mv.classList.remove('mvIdle');
+  clearTimeout(_mvIdleT);
+  if (S.multiView && S.multiView.open) {
+    _mvIdleT = setTimeout(() => { if (S.multiView && S.multiView.open && !$('mvPicker').classList.contains('open')) mv.classList.add('mvIdle'); }, 5000);
+  }
+}
 function handleMultiViewKey(k, e) {
   if (!S.multiView || !S.multiView.open) return false;
+  // Any key wakes the chrome + restarts the 5s idle fade. When the chrome was hidden, the first
+  // press ONLY reveals it (so you see what you're navigating) — except Back, which still closes.
+  const wasIdle = $('multiView').classList.contains('mvIdle');
+  bumpMultiViewChrome();
+  if (wasIdle && k !== 'Escape' && k !== 'Backspace') { if (e && e.preventDefault) e.preventDefault(); return true; }
   if ($('mvPicker').classList.contains('open')) {
     if (k === 'Escape' || k === 'Backspace') { closeMultiViewPicker(); setMultiViewActiveSlot(multiViewActiveSlot()); return true; }
     const cats = multiViewPickerGroupEls('cats');
@@ -11418,6 +11441,7 @@ $('liveSplitPickBtn').addEventListener('pointerdown', handleLiveSplitPick);
 $('liveSplitPickBtn').addEventListener('click', handleLiveSplitPick);
 $('pgMultiBtn').addEventListener('click', () => openMultiViewFromGuide());
 $('mvClose').addEventListener('click', closeMultiView);
+$('multiView').addEventListener('pointerdown', () => { if (S.multiView && S.multiView.open) bumpMultiViewChrome(); }); // tap wakes the chrome on phone/mouse
 $('mvPickerClose').addEventListener('click', () => { closeMultiViewPicker(); setMultiViewActiveSlot(multiViewActiveSlot()); });
 [2, 3, 4].forEach((n) => $('mvCount' + n).addEventListener('click', () => setMultiViewCount(n)));
 document.querySelectorAll('.mvSlot').forEach((el) => {

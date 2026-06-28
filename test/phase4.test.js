@@ -2482,6 +2482,15 @@ test('Android native player: direct source and native chrome stay out of the web
       && ui.includes('#multiView.paneFull .mvTop{display:none}')
       && ui.includes('.mvGrid.fullscreen{display:block;position:relative}'),
     'Multiview panes should expose polished VOD transport, fullscreen, swap, change, and icon close actions with an internal zoomed-pane mode');
+  // After ~5s idle the multiview chrome fades to a clean wall of video; any D-pad press / tap brings
+  // it back, and the first press while hidden only reveals (doesn't also navigate).
+  assert.ok(ui.includes('#multiView.mvIdle .mvTop,#multiView.mvIdle .mvShade,#multiView.mvIdle .mvLabel,#multiView.mvIdle .mvStatus,#multiView.mvIdle .mvAdd{opacity:0;pointer-events:none}')
+      && ui.includes('#multiView.mvIdle .mvActions{opacity:0!important;pointer-events:none!important}'),
+    'idle multiview should fade out all chrome (top bar, labels, shade, status, add, actions)');
+  assert.match(ui, /function bumpMultiViewChrome\(\) \{[\s\S]+mv\.classList\.remove\('mvIdle'\);[\s\S]+clearTimeout\(_mvIdleT\);[\s\S]+_mvIdleT = setTimeout\(\(\) => \{[\s\S]+mv\.classList\.add\('mvIdle'\);[\s\S]+\}, 5000\);/,
+    'bumpMultiViewChrome should clear+restart a 5s timer that re-adds the mvIdle class');
+  assert.match(ui, /function handleMultiViewKey\(k, e\) \{[\s\S]+const wasIdle = \$\('multiView'\)\.classList\.contains\('mvIdle'\);[\s\S]+bumpMultiViewChrome\(\);[\s\S]+if \(wasIdle && k !== 'Escape' && k !== 'Backspace'\) \{[\s\S]+return true;/,
+    'the first multiview key while idle should only reveal chrome (Back still closes)');
   assert.ok(ui.includes('.mvSlot{position:relative;display:none;min-width:0;min-height:0;border-radius:10px;background:#000;overflow:hidden;border:1px solid rgba(243,239,247,.07);')
       && ui.includes('.mvSlot.active{border-color:rgba(255,198,92,.42);')
       && ui.includes('.mvLayout button.on,.mvLayout button:hover,.mvIconBtn:hover,.mvIconBtn:focus,.mvIconBtn.focus{background:rgba(58,66,74,.82);border-color:rgba(255,198,92,.22);outline:none;box-shadow:0 0 0 2px rgba(255,198,92,.20)')
