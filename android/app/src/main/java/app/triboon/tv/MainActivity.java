@@ -627,7 +627,9 @@ public class MainActivity extends Activity {
         // rename would strand the in-app updater on every existing device. Still strictly locked to
         // https + github.com + the Triboon asset filenames + the /releases/latest/download/ path, and
         // the URL itself only ever comes from the trusted server-served UI — so a rename just works.
-        return path.matches("/[^/]+/[^/]+/releases/latest/download/triboon-(tv|mobile)\\.apk");
+        // Accept the canonical single asset (triboon.apk) AND the legacy tv/mobile aliases, so this
+        // build can update from either during the one-APK migration.
+        return path.matches("/[^/]+/[^/]+/releases/latest/download/triboon(-(tv|mobile))?\\.apk");
     }
 
     private void openExternalUrl(String rawUrl) {

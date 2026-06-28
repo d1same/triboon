@@ -5201,6 +5201,38 @@ Object.assign(H, {
     send(ctx.res, 200, { ok: true, count: items.length });
   },
 
+  // Per-profile UI/playback preferences (auto-CC, screensaver delay, languages, quality default, …)
+  // synced to the account so they survive a reinstall / new device and follow the user across
+  // devices. Stored per (user, profile); the client mirrors them into its local storage cache.
+  prefsGet: async (ctx) => {
+    const profile = String(ctx.url.searchParams.get('profile') || 'default').slice(0, 64);
+    const all = store.read('prefs', {}) || {};
+    send(ctx.res, 200, { prefs: all[`${ctx.user.id}:${profile}`] || {} });
+  },
+  prefsSet: async (ctx) => {
+    const b = await readJson(ctx.req);
+    const profile = String(b.profile || 'default').slice(0, 64);
+    const incoming = (b.prefs && typeof b.prefs === 'object' && !Array.isArray(b.prefs)) ? b.prefs : {};
+    // Bound what a client can store: cap key count + key/value lengths so prefs can't bloat ./data.
+    const clean = {};
+    let n = 0;
+    for (const [k, v] of Object.entries(incoming)) {
+      if (n++ >= 120 || typeof k !== 'string' || !k || k.length > 64) continue;
+      if (v === null) { clean[k] = null; continue; }
+      const s = String(v);
+      if (s.length > 8192) continue;
+      clean[k] = s;
+    }
+    store.update('prefs', {}, (all) => {
+      const key = `${ctx.user.id}:${profile}`;
+      const cur = all[key] || {};
+      for (const [k, v] of Object.entries(clean)) { if (v === null) delete cur[k]; else cur[k] = v; }
+      all[key] = cur;
+      return all;
+    });
+    send(ctx.res, 200, { ok: true });
+  },
+
   settingsGet: async (ctx) => {
     const s = settings.get();
     const iptvSources = iptvSourcesFromSettings(s);
@@ -6422,6 +6454,8 @@ const ROUTES = [
   { m: 'PATCH', re: /^\/api\/me\/iptv\/sources\/([\w-]+)$/, auth: 'user', h: H.myIptvSourceUpdate },
   { m: 'DELETE', re: /^\/api\/me\/iptv\/sources\/([\w-]+)$/, auth: 'user', h: H.myIptvSourceDelete },
   { m: 'POST', re: /^\/api\/watch\/bulk$/, auth: 'user', h: H.watchBulk },
+  { m: 'GET', re: /^\/api\/me\/prefs$/, auth: 'user', h: H.prefsGet },
+  { m: 'POST', re: /^\/api\/me\/prefs$/, auth: 'user', h: H.prefsSet },
   { m: 'GET', re: /^\/api\/status$/, auth: 'user', h: H.status },
   { m: 'GET', re: /^\/api\/search$/, auth: 'user', h: H.search },
   { m: 'POST', re: /^\/api\/play$/, auth: 'user', h: H.play },

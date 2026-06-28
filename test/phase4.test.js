@@ -1117,10 +1117,19 @@ test('Android native player: direct source and native chrome stay out of the web
   // The updater allowlist is locked to https + github.com + the stable Triboon release asset, but
   // accepts ANY owner/repo so a future GitHub rename doesn't strand the in-app updater on installed
   // devices (the allowlist is baked into the APK). It must NOT be pinned to a single repo path.
-  assert.match(android, /allowedAppUpdateUrl\(Uri uri\)[\s\S]+"github\.com"\.equals\(host\)[\s\S]+path\.matches\("\/\[\^\/\]\+\/\[\^\/\]\+\/releases\/latest\/download\/triboon-\(tv\|mobile\)\\\\\.apk"\)/,
-    'updater allowlist should accept the Triboon asset under any github.com owner/repo (rename-safe), not a single hardcoded repo');
+  assert.match(android, /allowedAppUpdateUrl\(Uri uri\)[\s\S]+"github\.com"\.equals\(host\)[\s\S]+path\.matches\("\/\[\^\/\]\+\/\[\^\/\]\+\/releases\/latest\/download\/triboon\(-\(tv\|mobile\)\)\?\\\\\.apk"\)/,
+    'updater allowlist should accept the canonical triboon.apk AND the legacy tv/mobile aliases under any github.com owner/repo (rename-safe), not a single hardcoded repo');
   assert.doesNotMatch(android, /"\/d1same\/triboon\/releases\/latest\/download\/triboon-tv\.apk"\.equals\(path\)/,
     'the native allowlist must not be hardcoded to the d1same/triboon repo path');
+  // Per-profile prefs sync: prefs mirror to the account so they survive reinstall + follow devices.
+  assert.match(ui, /async function loadProfilePrefs\(\) \{[\s\S]+api\(`\/api\/me\/prefs\?profile=\$\{encodeURIComponent\(S\.profile\.id\)\}`\)[\s\S]+applyServerProfilePrefs\(r\.prefs\)[\s\S]+\} else \{\s*\n\s*syncProfilePrefsUp\(\);/,
+    'profile entry should pull account-synced prefs (server wins) and migrate local prefs up on first use');
+  assert.match(ui, /applyMenuPrefs\(\); \/\/ search-first[\s\S]+loadProfilePrefs\(\);/,
+    'entering the app shell should load the profile\'s account-synced prefs');
+  assert.match(ui, /function savePrefSubtitleMode\(value\) \{[\s\S]+syncProfilePrefsUp\(\);/,
+    'changing auto-CC should sync the preference to the account');
+  assert.match(ui, /function savePrefScreensaverDelay\(seconds\) \{[\s\S]+syncProfilePrefsUp\(\);/,
+    'changing the screensaver delay should sync the preference to the account');
   assert.match(android, /nativeQualityBtn = nativeButton\(R\.drawable\.ic_player_quality, "Quality", false\)[\s\S]+rightControls\.addView\(nativeQualityBtn\);[\s\S]+nativeStatsBtn = nativeButton\(R\.drawable\.ic_player_info, "Playback stats", false\)[\s\S]+showNativeStatsSheet\(\)[\s\S]+rightControls\.addView\(nativeStatsBtn\);/,
     'native stats button should be the last ExoPlayer right-side control after CC/audio/quality');
   assert.match(android, /private ScrollView nativeSheetScroll;[\s\S]+private LinearLayout nativeSheetRows;/,

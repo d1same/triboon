@@ -5556,7 +5556,7 @@ function globalQualityKey() {
   return 'triboon.quality.' + encodeURIComponent(String(profile)) + '.__default';
 }
 function globalQualityPref() { try { return normalizeQualityRank(localStorage.getItem(globalQualityKey())); } catch { return null; } }
-function saveGlobalQualityPref(rank) { const q = normalizeQualityRank(rank); if (q) { try { localStorage.setItem(globalQualityKey(), String(q)); } catch {} } }
+function saveGlobalQualityPref(rank) { const q = normalizeQualityRank(rank); if (q) { try { localStorage.setItem(globalQualityKey(), String(q)); } catch {} syncProfilePrefsUp(); } }
 function qualityRankForItem(it) {
   if (!it || it.type === 'live') return null;
   if (it._local && !it.tmdbId) return null;
@@ -10517,6 +10517,56 @@ function prefLangKey(kind) {
 function profilePrefKey(name) {
   return S.profile && S.profile.id ? `triboon.profile.${S.profile.id}.${name}` : `triboon.${name}`;
 }
+// ---- per-profile preference sync ----
+// Prefs (auto-CC, screensaver delay, languages, default quality, …) live in per-device localStorage
+// under triboon.profile.<id>.*. We ALSO mirror them to the account (server) so they survive a
+// reinstall / clear-data / new device and follow the profile across devices. localStorage stays the
+// fast read path; the server is the durable source merged in on profile entry.
+function profilePrefSnapshot() {
+  const id = S.profile && S.profile.id; if (!id) return null;
+  const prefix = `triboon.profile.${id}.`;
+  const out = {};
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(prefix)) out[k.slice(prefix.length)] = localStorage.getItem(k);
+    }
+    const q = localStorage.getItem(`triboon.quality.${id}.__default`); // quality default uses a separate prefix
+    if (q !== null) out.__qualityDefault = q;
+  } catch {}
+  return out;
+}
+function applyServerProfilePrefs(prefs) {
+  const id = S.profile && S.profile.id; if (!id || !prefs) return;
+  try {
+    for (const [k, v] of Object.entries(prefs)) {
+      if (v == null) continue;
+      if (k === '__qualityDefault') { localStorage.setItem(`triboon.quality.${id}.__default`, String(v)); continue; }
+      localStorage.setItem(`triboon.profile.${id}.${k}`, String(v));
+    }
+  } catch {}
+}
+let _prefPushTimer = null;
+function syncProfilePrefsUp() {
+  if (!S.user || !(S.profile && S.profile.id)) return;
+  clearTimeout(_prefPushTimer);
+  _prefPushTimer = setTimeout(() => {
+    const prefs = profilePrefSnapshot(); if (!prefs) return;
+    api('/api/me/prefs', { method: 'POST', body: { profile: S.profile.id, prefs } }).catch(() => {});
+  }, 900);
+}
+async function loadProfilePrefs() {
+  if (!S.user || !(S.profile && S.profile.id)) return;
+  try {
+    const r = await api(`/api/me/prefs?profile=${encodeURIComponent(S.profile.id)}`);
+    if (r && r.prefs && Object.keys(r.prefs).length) {
+      applyServerProfilePrefs(r.prefs);              // server wins: durable prefs follow the profile
+      try { resetScreensaverIdle(); } catch {}        // re-apply the loaded screensaver delay now
+    } else {
+      syncProfilePrefsUp();                           // first time on this account → migrate this device's prefs up
+    }
+  } catch {}
+}
 function prefLang(kind) {
   try {
     const scoped = localStorage.getItem(prefLangKey(kind));
@@ -10526,6 +10576,7 @@ function prefLang(kind) {
 }
 function savePrefLang(kind, value) {
   try { localStorage.setItem(prefLangKey(kind), value || (kind === 'slang' ? 'off' : '')); } catch {}
+  syncProfilePrefsUp();
 }
 function prefSubtitleMode() {
   try {
@@ -10537,6 +10588,7 @@ function prefSubtitleMode() {
 }
 function savePrefSubtitleMode(value) {
   try { localStorage.setItem(profilePrefKey('subtitleMode'), value === 'always' ? 'always' : 'manual'); } catch {}
+  syncProfilePrefsUp();
 }
 function preferredAutoSubtitleLang() {
   const sub = prefLang('slang');
@@ -11609,6 +11661,7 @@ function prefScreensaverDelaySeconds() {
 function savePrefScreensaverDelay(seconds) {
   const n = normalizeScreensaverDelaySeconds(seconds);
   try { localStorage.setItem(profilePrefKey('screensaverDelay'), String(n)); } catch {}
+  syncProfilePrefsUp();
 }
 function prefScreensaverDelayMs() {
   const seconds = prefScreensaverDelaySeconds();
@@ -19952,6 +20005,7 @@ async function enterAppShell() {
   S.watchlistMap = S.watchlistMap || {};
   S.libraries = S.libraries || [];
   applyMenuPrefs(); // search-first default order + user's hide/reorder choices
+  loadProfilePrefs(); // pull account-synced prefs (auto-CC, screensaver, languages, …) for this profile
   // Live TV is LAZY now (owner: don't load everything at startup). The 19k-channel parse is
   // warmed the moment the user shows intent — hovering or focusing the Live TV rail item —
   // not at boot. The server's stale-while-revalidate cache still makes the first open fast.

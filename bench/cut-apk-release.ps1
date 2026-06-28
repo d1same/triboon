@@ -68,7 +68,7 @@ Write-Host "Built $apk ($sizeMb MB)" -ForegroundColor Green
 # --- stage the four published names (same universal APK) ---
 $dist = Join-Path $root 'dist'
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
-$names = @("triboon-tv-$tag.apk", "triboon-mobile-$tag.apk", "triboon-tv.apk", "triboon-mobile.apk")
+$names = @("triboon-$tag.apk", "triboon.apk", "triboon-tv-$tag.apk", "triboon-mobile-$tag.apk", "triboon-tv.apk", "triboon-mobile.apk")
 $files = foreach ($n in $names) { $p = Join-Path $dist $n; Copy-Item $apk $p -Force; $p }
 Write-Host "Staged in dist/: $($names -join ', ')" -ForegroundColor Green
 
