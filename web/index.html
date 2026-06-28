@@ -15886,10 +15886,9 @@ function renderProfileSessionActions() {
   $('prefSwitchProfile').innerHTML = `${profileIcon('switch')}<span>Switch profile</span>`;
   $('prefSignOut').innerHTML = `${profileIcon('logout')}<span>Sign out</span>`;
 }
-const APK_LINKS = {
-  tv: 'https://github.com/d1same/triboon/releases/latest/download/triboon-tv.apk',
-  mobile: 'https://github.com/d1same/triboon/releases/latest/download/triboon-mobile.apk',
-};
+// One universal APK for TV + phone (the tv/mobile names were retired once all devices ran a build
+// whose updater accepts triboon.apk — see the v1.7.67 migration).
+const APK_URL = 'https://github.com/d1same/triboon/releases/latest/download/triboon.apk';
 function compareSemver(a, b) { // returns -1 if a<b, 0 if equal, 1 if a>b (patch-level X.Y.Z)
   const pa = String(a || '').replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
   const pb = String(b || '').replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
@@ -15920,8 +15919,8 @@ async function renderAppUpdateBox() {
   status.textContent = (updateAvailable ? `⬆ Update available: ${latestVer}. ` : '')
     + `${current ? 'Current: ' + current + '.' : 'Current version unknown.'}${latest} Stable APK links always point to the newest release.`;
 }
-function openApkUpdate(kind) {
-  const url = APK_LINKS[kind] || APK_LINKS.tv;
+function openApkUpdate() {
+  const url = APK_URL;
   try {
     // Preferred: download + install inside the app (no browser/downloader detour).
     if (window.TriboonTV && typeof TriboonTV.installAppUpdate === 'function') {
@@ -17890,7 +17889,7 @@ function wireSectionRailDpad(rootId, tabsId, panelAttr) {
 wireSectionRailDpad('prefs', 'prefTabs', 'data-ptab');
 wireSectionRailDpad('settings', 'setTabs', 'data-stab');
 $('activityRefresh').addEventListener('click', refreshActivity);
-$('apkUpdate').addEventListener('click', () => openApkUpdate('tv')); // one universal APK — kind is cosmetic
+$('apkUpdate').addEventListener('click', () => openApkUpdate()); // one universal APK (triboon.apk)
 $('secPwSave').addEventListener('click', async () => {
   const oldPassword = $('secPwCurrent').value;
   const newPassword = $('secPwNew').value;

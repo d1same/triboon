@@ -1,9 +1,8 @@
 # Build the SIGNED release APK and publish it to the GitHub release for the current tag.
 #
-# Triboon ships one universal APK (it adapts to TV vs phone at runtime), published under the
-# TV + mobile names plus the stable "latest" aliases so
-#   /releases/latest/download/triboon-tv.apk  and  /triboon-mobile.apk
-# always resolve to the newest build (CLAUDE.md release rule).
+# Triboon ships ONE universal APK (it adapts to TV vs phone at runtime), published as triboon.apk
+# (+ versioned triboon-vX.Y.Z.apk) so /releases/latest/download/triboon.apk always resolves to the
+# newest build (CLAUDE.md release rule). The legacy triboon-tv/mobile names were retired post-v1.7.67.
 #
 # REQUIRES (keystore values, kept OUTSIDE git):
 #   $env:TRIBOON_RELEASE_STORE_FILE       full path to your .keystore/.jks
@@ -68,7 +67,7 @@ Write-Host "Built $apk ($sizeMb MB)" -ForegroundColor Green
 # --- stage the four published names (same universal APK) ---
 $dist = Join-Path $root 'dist'
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
-$names = @("triboon-$tag.apk", "triboon.apk", "triboon-tv-$tag.apk", "triboon-mobile-$tag.apk", "triboon-tv.apk", "triboon-mobile.apk")
+$names = @("triboon-$tag.apk", "triboon.apk")
 $files = foreach ($n in $names) { $p = Join-Path $dist $n; Copy-Item $apk $p -Force; $p }
 Write-Host "Staged in dist/: $($names -join ', ')" -ForegroundColor Green
 
@@ -89,4 +88,4 @@ if ($hasRelease) {
   & gh release create $tag @files --title "Triboon $tag" --notes "Triboon $tag. See the commit log / VERIFY.md for changes. Universal APK (TV + mobile)." --latest
 }
 if ($LASTEXITCODE -ne 0) { throw "gh release publish failed." }
-Write-Host "Published ${tag}: TV + mobile APKs + stable aliases. /releases/latest/download/triboon-tv.apk now resolves to $tag." -ForegroundColor Green
+Write-Host "Published ${tag}: triboon.apk (+ triboon-$tag.apk). /releases/latest/download/triboon.apk now resolves to $tag." -ForegroundColor Green

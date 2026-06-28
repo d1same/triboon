@@ -167,12 +167,13 @@ Still open:
 - Never weaken or delete a failing test to make it pass. Fix the code or raise
   it with the owner.
 - Releases always bump `package.json` and Android versionCode/versionName
-  together; the tag is `vX.Y.Z`; the GitHub release carries versioned APKs
-  (`triboon-tv-vX.Y.Z.apk`, `triboon-mobile-vX.Y.Z.apk`) plus stable aliases
-  (`triboon-tv.apk`, `triboon-mobile.apk`). Stable aliases must be attached to
-  the latest GitHub release so `/releases/latest/download/triboon-tv.apk` and
-  `/releases/latest/download/triboon-mobile.apk` always resolve to the newest
-  build.
+  together; the tag is `vX.Y.Z`; the GitHub release carries ONE universal APK —
+  versioned `triboon-vX.Y.Z.apk` plus the stable alias `triboon.apk` (TV + phone
+  are the same binary, adapting at runtime). The stable alias must be attached to
+  the latest GitHub release so `/releases/latest/download/triboon.apk` always
+  resolves to the newest build. (The legacy `triboon-tv/mobile.apk` names were
+  retired after v1.7.67 once every device ran a build whose in-app updater accepts
+  `triboon.apk`.)
 - App signing (CRITICAL): there is ONE dedicated Android release keystore. ALWAYS sign release
   APKs with it — via CI (the `release-apk` job auto-builds + publishes on every `vX.Y.Z` tag using
   the `TRIBOON_RELEASE_*` repo secrets) or locally with `npm run release:apk -- -Release`. NEVER

@@ -102,15 +102,10 @@ jobs:
         run: |
           apk=android/app/build/outputs/apk/release/app-release.apk
           mkdir -p dist
-          # Canonical single universal APK (TV + phone are the same binary). The triboon-tv/mobile
-          # names stay as compat aliases so already-installed apps can still self-update; a later
-          # release retires them once devices run a build whose updater accepts triboon.apk.
+          # One universal APK for TV + phone. The legacy triboon-tv/mobile names were retired in the
+          # v1.7.67→.68 migration once every device ran a build whose updater accepts triboon.apk.
           cp "$apk" "dist/triboon-${TAG}.apk"
           cp "$apk" dist/triboon.apk
-          cp "$apk" "dist/triboon-tv-${TAG}.apk"
-          cp "$apk" "dist/triboon-mobile-${TAG}.apk"
-          cp "$apk" dist/triboon-tv.apk
-          cp "$apk" dist/triboon-mobile.apk
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/*.apk --clobber
           else
