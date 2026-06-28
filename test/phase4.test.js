@@ -2611,9 +2611,11 @@ test('Android native player: direct source and native chrome stay out of the web
   // S.view (which can drift while the channel picker is up — the "stuck D-pad / Back to home" bug).
   assert.match(ui, /if \(S\.multiView && S\.multiView\.open\) \{\s+if \(handleMultiViewKey\(k, e\)\) return;/,
     'D-pad dispatch should route to handleMultiViewKey whenever the multiview surface is open');
-  // Live TV: Back from deep in the guide returns to the first category (Favorites), not home.
-  assert.match(ui, /S\.view === 'livetv' && document\.querySelector\('#chBody\.liveGuideShell'\)[\s\S]+focusLiveCategory\(0, true\); return 'ok';/,
-    'hardware Back from a channel/non-first category should return to the first category before exiting Live TV');
+  // Live TV hardware Back steps out one level: from a channel/guide row it returns to the CURRENT
+  // category (focusLiveCategory() with NO args → preserves focus + scroll, like ArrowLeft), NOT the
+  // first category. Only a Back while ON a non-first category steps to the first category, then exits.
+  assert.match(ui, /S\.view === 'livetv' && document\.querySelector\('#chBody\.liveGuideShell'\)\) \{\s*\n\s*const onContent = [^\n]+\n\s*if \(onContent\) \{ focusLiveCategory\(\); return 'ok'; \}\s*\n\s*if \(\(S\.liveCatNavIdx \|\| 0\) > 0\) \{ focusLiveCategory\(0, true\); return 'ok'; \}/,
+    'hardware Back from a channel/guide row must return to the CURRENT category (preserve position), not jump to the first category');
   // Returning from a played channel restores the guide category focus + scroll (no screen jump).
   assert.match(ui, /function rememberPlayerReturn\(\) \{[\s\S]+live: S\.view === 'livetv' \? \{[\s\S]+liveCat: S\.liveCat[\s\S]+scrollTop: livePane/,
     'leaving for the player should save the Live TV category + scroll so returning lands in place');

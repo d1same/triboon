@@ -19753,12 +19753,15 @@ window.__tvBack = () => {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
     return 'ok';
   }
-  // Live TV: Back from deep in the guide (a channel/guide row, or any non-first category) returns
-  // to the FIRST category (usually Favorites) before it exits the section — one Back shouldn't
-  // jump straight to home from the bottom of the channel list.
+  // Live TV: Back from deep in the guide steps out one level without leaving the section.
+  // From a channel / guide row → return to the CURRENT category (preserve focus + scroll), exactly
+  // like ArrowLeft — it must NOT jump to the first category (the "category position changed on Back"
+  // bug). Only a Back while already ON a non-first category steps to the first category, so the next
+  // Back exits the section instead of jumping straight home from the bottom of the list.
   if (S.view === 'livetv' && document.querySelector('#chBody.liveGuideShell')) {
     const onContent = !!document.querySelector('.liveChannelPane .chCard.focus, #guide .gRow.focusable.focus');
-    if (onContent || (S.liveCatNavIdx || 0) > 0) { focusLiveCategory(0, true); return 'ok'; }
+    if (onContent) { focusLiveCategory(); return 'ok'; }
+    if ((S.liveCatNavIdx || 0) > 0) { focusLiveCategory(0, true); return 'ok'; }
   }
   // Two-step Back in deep content views: a non-first grid/music item returns to the FIRST item
   // before leaving the section (one Back shouldn't jump from the bottom of a long result list
