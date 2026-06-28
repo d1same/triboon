@@ -1827,6 +1827,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'PiP guide should retry focus after ExoPlayer retunes because native surface recreation can steal focus briefly');
   assert.match(ui, /const moveRowFrom = \(delta\) => \{[\s\S]+rows\.findIndex\(\(r\) => r\.classList\.contains\('cur'\)\)[\s\S]+S\._pgFocusChannel[\s\S]+i \+ delta/,
     'PiP guide Up/Down should move relative to the current row even when DOM focus was reset');
+  assert.match(ui, /moveTo\(rows\[\(\(i \+ delta\) % rows\.length \+ rows\.length\) % rows\.length\]\);/,
+    'channel guide list wraps around (Down past the last channel → first), like the left menu');
   assert.match(ui, /const moveTo = \(el\) => \{[\s\S]+el\.classList && el\.classList\.contains\('pgRow'\)[\s\S]+setPlayerGuideVisualFocus\(el\._ch \?\? el\.dataset\.guideChannel\);/,
     'PiP guide D-pad row moves should refresh the visible selected row, not only browser focus');
   assert.match(ui, /main\.className = 'pgGuideMain pgTimeline liveGuidePane guideTimeline'/,

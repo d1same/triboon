@@ -19457,7 +19457,10 @@ document.addEventListener('keydown', (e) => {
           i = rows.findIndex((r) => r._ch === S._pgFocusChannel);
         }
         if (i < 0) i = 0;
-        moveTo(rows[Math.max(0, Math.min(rows.length - 1, i + delta))]);
+        // Wrap around: stepping down past the last channel lands on the first (and vice-versa),
+        // like the left menu. Up-from-the-first-row is handled separately (routes to the header),
+        // so in practice this gives the requested "end of the list → back to the top".
+        moveTo(rows[((i + delta) % rows.length + rows.length) % rows.length]);
       };
       const catIndex = () => {
         const activeCat = cats.includes(document.activeElement) ? document.activeElement : null;
