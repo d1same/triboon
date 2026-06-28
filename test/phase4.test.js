@@ -1937,8 +1937,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Live TV guide/card/search items should preserve native fallback stream metadata');
   assert.doesNotMatch(ui, /Native player failed[^`'"]*using web player|using web playback/,
     'Android native playback should not advertise or trigger the old web player fallback');
-  assert.match(ui, /window\.__tvNativeLiveError = \(msg\) => \{[\s\S]+document\.body\.classList\.remove\('nativeGuideMode'\);[\s\S]+\$\('player'\)\.classList\.remove\('guideMode'\);[\s\S]+closePlayerGuide\(\{ fromNative: true \}\);[\s\S]+showLiveProviderError\(reason\);[\s\S]+toast\(`Live TV unavailable: \$\{reason\}`\);/,
-    'Android native Live TV failures should unwind guide state and show a Live TV error without leaving D-pad focus trapped');
+  assert.match(ui, /window\.__tvNativeLiveError = \(msg\) => \{[\s\S]+closePlayerGuide\(\{ fromNative: true \}\);[\s\S]+if \(nativeLiveRequired\(\)\) \{[\s\S]+if \(wasLiveShell\) closePlayer\(\);[\s\S]+toast\(`Live TV unavailable: \$\{friendlyLiveProviderReason\(reason\)\}`\);[\s\S]+return;[\s\S]+\}[\s\S]+if \(wasLiveShell\) \{[\s\S]+showLiveProviderError\(reason\);/,
+    'on Android a native Live TV crash must stay native (close back to the guide + toast), NOT reveal the web player error panel; showLiveProviderError is reserved for the non-native web build');
   assert.doesNotMatch(ui, /__tvNativeVideoSwitchToWeb|__tvNativeLiveSwitchToWeb/,
     'native Android controls should not keep a switch-to-web-player bridge');
   assert.doesNotMatch(ui, /nativeVideoSubtitleRel[\s\S]+blocked:\s*true[\s\S]+tryNativeVideoPlayer/,
@@ -2974,6 +2974,20 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'the update modal is D-pad navigable and closes (Later) on hardware Back/Esc');
   assert.match(ui, /hydrateAppShellData\(\);[\s\S]+maybePromptAppUpdate\(\)\.catch\(\(\) => \{\}\);/,
     'enterAppShell triggers the update check once the home has settled');
+  // Online presence: every open app pings /api/presence so Activity shows ALL connected devices,
+  // not only active streams.
+  assert.ok(ui.includes('id="activityOnline"') && ui.includes('id="activityOnlineStatus"'),
+    'Activity screen has an "Online now" list section');
+  assert.match(ui, /function sendPresence\(state, opts = \{\}\)[\s\S]+fetch\('\/api\/presence'/,
+    'client sends an online-presence heartbeat to /api/presence');
+  assert.match(ui, /function startPresence\(\) \{[\s\S]+setInterval\(\(\) => sendPresence\(\), 25000\)/,
+    'presence heartbeat runs on a ~25s interval while the app is open');
+  assert.match(ui, /function presencePayload\(state\) \{[\s\S]+state: state \|\| \(playing \? 'watching' : 'browsing'\)/,
+    'presence reports watching vs just browsing');
+  assert.match(ui, /hydrateAppShellData\(\);\s*\n\s*startPresence\(\);/,
+    'enterAppShell starts presence so browsing (not only watching) marks the device connected');
+  assert.match(ui, /renderActivitySummary\(sessions, history, online\)[\s\S]+\$\('activityOnline'\)[\s\S]+onlineRowHtml\(o\)/,
+    'renderActivity renders the connected-devices online list');
   assert.match(ui, /function applyMenuPrefs\(\) \{[\s\S]+const railMain = \$\('railMain'\) \|\| \$\('rail'\);[\s\S]+railMain\.querySelector\(`\.railBtn\[data-nav="\$\{nav\}"\]`\)[\s\S]+railMain\.insertBefore\(btn, firstMainNav\(\)\);/,
     'menu preference reordering should only move buttons inside the scrollable rail body, never pinned footer buttons');
   assert.doesNotMatch(ui, /rail\.insertBefore\(btn/,

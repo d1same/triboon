@@ -282,6 +282,38 @@ test('activity: users heartbeat playback and only admins see now-watching rows',
   await httpJson(srv.port, 'POST', '/api/activity', { sessionId: liveId, state: 'stopped' }, user);
 });
 
+test('presence: connected devices (browsing or watching) appear in the online list; admin-only', async () => {
+  const login = await httpJson(srv.port, 'POST', '/api/login', { name: 'fam', password: 'fam-pass' });
+  const user = login.json.token;
+  // deviceId is required.
+  assert.strictEqual((await httpJson(srv.port, 'POST', '/api/presence', { state: 'browsing' }, user)).status, 400,
+    'presence requires a deviceId');
+  // A user just BROWSING (not playing) is connected and should show online.
+  const browse = await httpJson(srv.port, 'POST', '/api/presence', { deviceId: 'dev-tv', state: 'browsing', view: 'home', profile: 'Kids' }, user);
+  assert.strictEqual(browse.status, 200);
+  // The same account on a second device, watching something.
+  await httpJson(srv.port, 'POST', '/api/presence', { deviceId: 'dev-phone', state: 'watching', title: 'The Test Movie', profile: 'Adults' }, user);
+
+  assert.strictEqual((await httpJson(srv.port, 'GET', '/api/activity', null, user)).status, 403,
+    'plain users cannot see who is connected');
+  const view = await httpJson(srv.port, 'GET', '/api/activity', null, admin);
+  assert.strictEqual(view.status, 200);
+  const online = view.json.online || [];
+  assert.strictEqual(view.json.onlineCount, online.length, 'onlineCount matches the online rows');
+  const tv = online.find((o) => o.id === `${login.json.user ? login.json.user.id : ''}:dev-tv`) || online.find((o) => o.state === 'browsing' && o.view === 'home');
+  assert.ok(tv, 'a browsing (not-playing) device shows as connected');
+  assert.strictEqual(tv.userName, 'fam');
+  assert.ok(online.some((o) => o.state === 'watching' && o.title === 'The Test Movie'),
+    'a second device of the same account shows separately as watching');
+  assert.strictEqual(online.filter((o) => o.userName === 'fam').length, 2, 'two devices = two connected rows (not deduped to one user)');
+
+  // Going offline drops the device.
+  await httpJson(srv.port, 'POST', '/api/presence', { deviceId: 'dev-tv', state: 'offline' }, user);
+  const after = await httpJson(srv.port, 'GET', '/api/activity', null, admin);
+  assert.ok(!(after.json.online || []).some((o) => o.state === 'browsing' && o.view === 'home'),
+    'an offline beacon removes the connected device');
+});
+
 test('watchlist: per-user toggle add/remove, isolation', async () => {
   const add = await httpJson(srv.port, 'POST', '/api/watchlist', { key: 'tmdb:tv:1399', meta: { title: 'GoT' } }, admin);
   assert.strictEqual(add.status, 200); assert.strictEqual(add.json.on, true);

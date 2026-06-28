@@ -39,6 +39,7 @@ const mounts = new Map(); // id -> virtual file
 const scanStates = new Map(); // library id -> { running, startedAt, progress, ...summary }
 const thumbJobs = new Map(); // thumb path -> in-flight generation promise (no double-spawn)
 const activitySessions = new Map(); // heartbeat-only "now watching"; short TTL, not the retained history
+const presenceSessions = new Map(); // online presence (browsing OR watching), keyed `${uid}:${deviceId}`, short TTL
 const DATA_DIR = process.env.TRIBOON_DATA || path.join(__dirname, '..', 'data');
 const libraryDb = new LibraryDb(DATA_DIR);
 const MAX_PROVIDER_CONNECTIONS = 150;
@@ -46,6 +47,7 @@ const ACTIVITY_TTL_MS = 45000;
 const ACTIVITY_HISTORY_DAYS = 3;
 const ACTIVITY_HISTORY_RETENTION_MS = ACTIVITY_HISTORY_DAYS * 24 * 60 * 60 * 1000;
 const ACTIVITY_HISTORY_MAX_ROWS = 10;
+const PRESENCE_TTL_MS = 70000; // ~3 missed 25s presence heartbeats before a device is dropped as offline
 
 function effectiveOpenSubsKey(s = settings.get()) {
   const configured = String((s && s.openSubsKey) || '').trim();
@@ -3082,6 +3084,16 @@ function activeActivityRows() {
   }
   return [...activitySessions.values()].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 }
+// Online presence: every connected device (browsing OR watching), not just active playback. Pruned
+// by TTL on read, newest first. This is what "currently connected users" means — a superset of the
+// "now watching" rows above.
+function activeOnlineRows() {
+  const now = Date.now();
+  for (const [key, row] of presenceSessions) {
+    if (!row || now - (row.lastSeen || 0) > PRESENCE_TTL_MS) presenceSessions.delete(key);
+  }
+  return [...presenceSessions.values()].sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0));
+}
 function localLibraryItemFor(ctx, libId, idx) {
   const lib = store.read('libraries', { list: [] }).list.find((l) => l.id === libId);
   if (!lib || !lib.path) return { status: 404, error: 'library not found' };
@@ -5108,12 +5120,40 @@ Object.assign(H, {
 
   activityList: async (ctx) => {
     const sessions = activeActivityRows();
+    const online = activeOnlineRows();
     send(ctx.res, 200, {
       sessions,
+      online,
       history: activityHistoryRows(),
       activeCount: sessions.length,
+      onlineCount: online.length,
       retentionDays: ACTIVITY_HISTORY_DAYS,
     });
+  },
+
+  // Online-presence heartbeat: every open app pings this (browsing or watching) so the admin
+  // Activity screen can show ALL connected devices, not only those actively playing. Keyed per
+  // user+device so one person on TV + phone shows as two connected devices.
+  presenceSet: async (ctx) => {
+    const b = await readJson(ctx.req).catch(() => ({}));
+    const device = scrubActivityText(b.deviceId || '', 80);
+    if (!device) return send(ctx.res, 400, { error: 'deviceId required' });
+    const key = `${ctx.user.id}:${device}`;
+    if (b.state === 'offline' || b.stop) { presenceSessions.delete(key); return send(ctx.res, 200, { ok: true }); }
+    const watching = b.state === 'watching';
+    presenceSessions.set(key, {
+      id: key,
+      uid: ctx.user.id,
+      userName: activityUserName(ctx.user.id),
+      profile: scrubActivityText(b.profile || '', 40),
+      state: watching ? 'watching' : 'browsing',
+      title: watching ? scrubActivityText(b.title || '', 180) : '',
+      view: scrubActivityText(b.view || '', 40),
+      clientVersion: activityClientVersion(b, ctx.req),
+      device: scrubActivityText(b.device || ctx.req.headers['user-agent'] || '', 90),
+      lastSeen: Date.now(),
+    });
+    send(ctx.res, 200, { ok: true });
   },
 
   activitySet: async (ctx) => {
@@ -6511,6 +6551,7 @@ const ROUTES = [
   { m: 'POST', re: /^\/api\/watch$/, auth: 'user', h: H.watchSet },
   { m: 'GET', re: /^\/api\/activity$/, auth: 'admin', h: H.activityList },
   { m: 'POST', re: /^\/api\/activity$/, auth: 'user', h: H.activitySet },
+  { m: 'POST', re: /^\/api\/presence$/, auth: 'user', h: H.presenceSet },
   { m: 'GET', re: /^\/api\/trakt\/status$/, auth: 'user', h: H.traktStatus },
   { m: 'POST', re: /^\/api\/trakt\/link$/, auth: 'user', h: H.traktLink },
   { m: 'POST', re: /^\/api\/trakt\/poll$/, auth: 'user', h: H.traktPoll },

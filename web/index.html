@@ -985,6 +985,7 @@ body.screensaverOn{cursor:none}
 .activityBar{height:3px;border-radius:999px;background:rgba(243,239,247,.16);overflow:hidden;margin-top:5px}
 .activityBar span{display:block;height:100%;background:var(--grad);width:var(--pct,0%)}
 .activityRow.isHistory .activityDot{background:rgba(255,255,255,.16)}
+.activityRow.isActive .activityDot.idle{background:rgba(255,255,255,.34);box-shadow:none}
 .activityRow.isHistory .activityWhat small{display:none}
 .activityRow.isHistory .activityClient span{display:none}
 .activityRow.isHistory .activityStream,.activityRow.isHistory .activityBar{display:none}
@@ -3149,6 +3150,8 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
       <button class="btn primary focusable" id="activityRefresh">Refresh</button>
     </div>
     <div id="activitySummary" class="activitySummary"></div>
+    <div class="activitySectionHead"><span>Online now</span><small id="activityOnlineStatus"></small></div>
+    <div id="activityOnline" class="activityRows"><div class="hint">No one is connected right now.</div></div>
     <div class="activitySectionHead"><span>Now watching</span><small id="activityLiveStatus"></small></div>
     <div id="activityList" class="activityRows"><div class="hint">No one is watching right now.</div></div>
     <div class="activitySectionHead"><span>Previous 10</span><small id="activityHistoryStatus"></small></div>
@@ -3980,6 +3983,7 @@ function profileLevelAvatar(level) {
 }
 function profileInitial(name) { return (name || '?').trim()[0].toUpperCase(); }
 function signOutAccount() {
+  try { stopPresence({ keepalive: true }); } catch {}
   tokenStore.set(null);
   try { localStorage.removeItem('triboon.profile'); } catch {}
   location.reload();
@@ -9871,7 +9875,7 @@ $('vlcCopy').addEventListener('click', () => {
 });
 $('vlcClose').addEventListener('click', closePlayer);
 $('playerBackBtn').addEventListener('click', closePlayer);
-window.addEventListener('pagehide', () => { if (S.playing) stopActivityHeartbeat(); });
+window.addEventListener('pagehide', () => { if (S.playing) stopActivityHeartbeat(); stopPresence({ keepalive: true }); });
 
 function cancelPauseWarmAhead() {
   const warm = S.pauseWarmAhead;
@@ -10059,6 +10063,50 @@ function startActivityHeartbeat() {
 function stopActivityHeartbeat() {
   if (S.activityTimer) { clearInterval(S.activityTimer); S.activityTimer = null; }
   return sendActivity('stopped', { keepalive: true });
+}
+// Online presence: a light heartbeat that runs whenever the app is open — browsing OR watching — so
+// the admin Activity screen shows ALL connected devices, not only active streams. Keyed per device.
+function triboonDeviceId() {
+  try {
+    let id = localStorage.getItem('triboon.deviceId');
+    if (!id) {
+      id = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+      localStorage.setItem('triboon.deviceId', id);
+    }
+    return id;
+  } catch { return 'd-unknown'; }
+}
+function presencePayload(state) {
+  const playing = S.playing && S.playing.item;
+  const watching = !!playing && (!state || state === 'watching');
+  const meta = playing ? episodePlayerMeta(playing) : null;
+  return {
+    deviceId: triboonDeviceId(),
+    state: state || (playing ? 'watching' : 'browsing'),
+    title: watching ? ((meta && meta.title) || playing.title || '') : '',
+    view: S.view || '',
+    profile: S.profile ? (S.profile.name || S.profile.id) : '',
+    clientVersion: clientVersionLabel(),
+    device: navigator.userAgent || '',
+  };
+}
+function sendPresence(state, opts = {}) {
+  const tok = tokenStore.get(); if (!tok) return Promise.resolve();
+  return fetch('/api/presence', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: 'Bearer ' + tok },
+    body: JSON.stringify(presencePayload(state)),
+    keepalive: !!opts.keepalive,
+  }).catch(() => {});
+}
+function startPresence() {
+  if (S.presenceTimer) clearInterval(S.presenceTimer);
+  sendPresence();
+  S.presenceTimer = setInterval(() => sendPresence(), 25000);
+}
+function stopPresence(opts = {}) {
+  if (S.presenceTimer) { clearInterval(S.presenceTimer); S.presenceTimer = null; }
+  return sendPresence('offline', opts);
 }
 function collectPlayerStats() {
   const p = S.playing, v = $('video');
@@ -14352,6 +14400,7 @@ window.__tvNativeGuideEpoch = (epoch) => {
 };
 window.__tvNativeLiveError = (msg) => {
   const wasLiveShell = S.view === 'player' && S.playing && S.playing.item && S.playing.item.type === 'live';
+  const returnView = S.nativeLiveReturnView || (wasLiveShell ? 'livetv' : null);
   S.nativeLivePending = null;
   setNativeLiveTuningPending(null);
   S.nativeLiveReturnView = null;
@@ -14360,6 +14409,19 @@ window.__tvNativeLiveError = (msg) => {
   $('player').classList.remove('guideMode');
   closePlayerGuide({ fromNative: true });
   const reason = msg || 'provider rejected this channel';
+  // Android NEVER falls back to the web/MSE live player (same rule as playChannel + nativeLiveRequired).
+  // On a native runtime crash, tear down the native session and return to Live TV with a toast — do
+  // NOT reveal the browser player's error panel (that was the "ExoPlayer crashed -> web player" leak).
+  if (nativeLiveRequired()) {
+    if (S.playing) S.playing.usingNative = false;
+    if (wasLiveShell) closePlayer();
+    toast(`Live TV unavailable: ${friendlyLiveProviderReason(reason)}`);
+    if (returnView === 'livetv') {
+      if (S.view !== 'livetv') switchView('livetv', false);
+      setTimeout(() => { if (S.view === 'livetv') focusContent(); }, 80);
+    }
+    return;
+  }
   if (wasLiveShell) {
     S.playing.usingNative = false;
     showLiveProviderError(reason);
@@ -17341,16 +17403,28 @@ function activityTimeLabel(s = {}, active = false) {
   const ts = s.updatedAt || s.startedAt || Date.now();
   return new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
-function renderActivitySummary(sessions = [], history = []) {
+function renderActivitySummary(sessions = [], history = [], online = []) {
   const box = $('activitySummary'); if (!box) return;
   const live = sessions.filter((s) => activityStreamKind(s) === 'live' || s.type === 'live').length;
-  const apps = new Set([...sessions, ...history].map(activityClient).filter(Boolean));
+  const apps = new Set([...online, ...sessions, ...history].map(activityClient).filter(Boolean));
   const rows = [
-    ['Active now', sessions.length],
+    ['Online now', online.length],
+    ['Watching', sessions.length],
     ['Live TV', live],
     ['Apps seen', apps.size || 0],
   ];
   box.innerHTML = rows.map(([k, v]) => `<div class="activityKpi"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('');
+}
+function onlineRowHtml(o = {}) {
+  const watching = o.state === 'watching';
+  const view = o.view ? o.view[0].toUpperCase() + o.view.slice(1) : '';
+  const what = watching ? `Watching${o.title ? ' · ' + o.title : ''}` : `Browsing${view ? ' · ' + view : ''}`;
+  return `<div class="activityRow isActive">
+    <div class="activityWho"><span class="activityDot${watching ? '' : ' idle'}"></span><div><b>${esc(o.userName || 'User')}</b><small>${esc(o.profile || '')}</small></div></div>
+    <div class="activityWhat"><b>${esc(what)}</b></div>
+    <div class="activityClient"><span>Client</span><b>${esc(activityClient(o))}</b></div>
+    <div class="arMeta activityMeta">${esc(watching ? 'Watching' : 'Online')}<br>${esc(activityTimeLabel({ updatedAt: o.lastSeen }, true))}</div>
+  </div>`;
 }
 function activityRowHtml(s = {}, active = false) {
   const pct = Math.max(0, Math.min(100, +s.percent || 0));
@@ -17369,12 +17443,20 @@ function activityRowHtml(s = {}, active = false) {
 }
 function renderActivity(payload = {}) {
   const sessions = Array.isArray(payload) ? payload : (payload.sessions || []);
+  const online = Array.isArray(payload.online) ? payload.online : [];
   const history = Array.isArray(payload.history) ? payload.history : [];
   const retentionDays = Number(payload.retentionDays || 3) || 3;
   S.activityPayload = Array.isArray(payload) ? { sessions, history, retentionDays } : payload;
   const list = $('activityList'); if (!list) return;
   const hist = $('activityHistory');
-  renderActivitySummary(sessions, history);
+  renderActivitySummary(sessions, history, online);
+  const onlineBox = $('activityOnline');
+  if (onlineBox) {
+    onlineBox.innerHTML = online.length
+      ? online.map((o) => onlineRowHtml(o)).join('')
+      : '<div class="hint">No one is connected right now.</div>';
+    if ($('activityOnlineStatus')) $('activityOnlineStatus').textContent = online.length ? `${online.length} connected` : 'None';
+  }
   if (!sessions.length) {
     list.innerHTML = '<div class="hint">No one is watching right now.</div>';
     $('activityLiveStatus').textContent = 'Clear';
@@ -20145,6 +20227,7 @@ async function enterAppShell() {
   await restoreInitialRoute();
   perfMark('shell-route-applied', { view: S.view });
   hydrateAppShellData();
+  startPresence(); // mark this device "connected" (browsing or watching) for the admin Activity screen
   // Once the home has settled, check for a newer app version and prompt (Android shell only).
   setTimeout(() => { maybePromptAppUpdate().catch(() => {}); }, 2500);
 }
