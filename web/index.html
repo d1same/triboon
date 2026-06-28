@@ -157,9 +157,13 @@ body.shortBrowseBd:not(.tv) #bdInfo .bdiO{font-size:14.5px;line-height:1.45;-web
      content slide UNDER the still-wide rail on collapse. */
   transition:width .26s cubic-bezier(.22,1,.36,1),background .26s ease}
 #rail.show{display:flex}
-#railMain{min-height:0;flex:1 1 auto;display:flex;flex-direction:column;align-items:stretch;gap:6px;overflow-x:hidden;overflow-y:auto;padding-bottom:4px;scrollbar-width:none}
+#railMain{min-height:0;flex:1 1 auto;display:flex;flex-direction:column;align-items:stretch;gap:6px;overflow-x:hidden;overflow-y:auto;padding-bottom:4px;scroll-padding-bottom:10px;scrollbar-width:none}
 #railMain::-webkit-scrollbar{width:0;height:0}
 #railFooter{flex:none;display:flex;flex-direction:column;align-items:stretch;gap:6px;padding-top:10px;border-top:0}
+/* Expanded menu (the state during D-pad nav): a divider marks where the scrolling list ends and the
+   pinned Preferences/Profile footer begins — so a long menu reads as "scroll to here", not items
+   sliding behind Preferences. */
+#rail:hover #railFooter,#rail.expanded #railFooter,body.railOpen #railFooter{border-top:1px solid var(--line);padding-top:12px;margin-top:4px}
 /* Expanded = a real overlay (collapsed is 72px; var(--rail) ALSO became 72px in a restyle,
    which silently turned expansion into a no-op — labels faded in but stayed clipped).
    Translucent + blurred so the content stays present behind it (Plex-style). */
@@ -255,6 +259,12 @@ body.tv:not(.railOpen) #rail:not(.expanded) .railBtn .del{opacity:0!important}
 /* No dark halo behind focused covers — the gradient ring + lift IS the focus cue. */
 .focusable.focus{transform:translateZ(0) scale(1.03)}
 .card,.btn,.srcRow,.railBtn,.field input{transition:transform .18s ease}
+/* Android TV D-pad: the focus ring + lift must SNAP. With the .15s ring fade + .18s lift, the item
+   you just left keeps glowing/lifted while the next lights up, so two rows look selected at once —
+   confusing in dense lists (left menu, Live TV guide). Instant on TV; desktop/touch keep the fade. */
+body.tv .focusable::before{transition:none}
+body.tv .card,body.tv .btn,body.tv .srcRow,body.tv .railBtn,body.tv .lcat,body.tv .gRow{transition:none}
+#apkUpdateStatus.updateAvail{color:var(--amber);font-weight:600}
 
 /* ---------- auth screens ---------- */
 #gateBackdrop{position:fixed;inset:0;z-index:44;display:none;overflow:hidden;background:var(--ink)}
@@ -15827,23 +15837,35 @@ const APK_LINKS = {
   tv: 'https://github.com/d1same/triboon/releases/latest/download/triboon-tv.apk',
   mobile: 'https://github.com/d1same/triboon/releases/latest/download/triboon-mobile.apk',
 };
+function compareSemver(a, b) { // returns -1 if a<b, 0 if equal, 1 if a>b (patch-level X.Y.Z)
+  const pa = String(a || '').replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = String(b || '').replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i++) { if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) < (pb[i] || 0) ? -1 : 1; }
+  return 0;
+}
 async function renderAppUpdateBox() {
   const status = $('apkUpdateStatus');
   if (!status) return;
   let current = (S.serverInfo && S.serverInfo.version) || '';
+  let curVer = current; // raw X.Y.Z used for the comparison
   try {
     if (window.TriboonTV && TriboonTV.appVersion) {
       const app = JSON.parse(TriboonTV.appVersion() || '{}');
-      if (app.versionName) current = `Android app ${app.versionName} (${app.versionCode || '?'})`;
+      if (app.versionName) { current = `Android app ${app.versionName} (${app.versionCode || '?'})`; curVer = app.versionName; }
     }
   } catch {}
-  let latest = '';
+  let latest = '', latestVer = '';
   try {
     const r = await fetch('https://api.github.com/repos/d1same/triboon/releases/latest', { cache: 'no-store' });
     const j = await r.json();
-    latest = j && j.tag_name ? ` Latest release: ${j.tag_name}.` : '';
+    if (j && j.tag_name) { latestVer = j.tag_name; latest = ` Latest release: ${j.tag_name}.`; }
   } catch {}
-  status.textContent = `${current ? 'Current: ' + current + '.' : 'Current version unknown.'}${latest} Stable APK links always point to the newest release.`;
+  const updateAvailable = !!(curVer && latestVer && compareSemver(curVer, latestVer) < 0);
+  status.classList.toggle('updateAvail', updateAvailable);
+  const btn = $('apkUpdate');
+  if (btn) btn.textContent = updateAvailable ? `Update to ${String(latestVer).replace(/^v/i, 'v')}` : 'Update app';
+  status.textContent = (updateAvailable ? `⬆ Update available: ${latestVer}. ` : '')
+    + `${current ? 'Current: ' + current + '.' : 'Current version unknown.'}${latest} Stable APK links always point to the newest release.`;
 }
 function openApkUpdate(kind) {
   const url = APK_LINKS[kind] || APK_LINKS.tv;
@@ -16896,7 +16918,9 @@ function renderSearchSections(sections) {
 }
 function searchResultUsesPoster(it) {
   if (!it || it._channel !== undefined) return false;
-  return it.type !== 'tv';
+  // Everything in the results grid uses a 2:3 poster card. TV shows used to render as wide 16:9
+  // cards, which overflowed the poster-width grid columns and visually overlapped each other.
+  return true;
 }
 // Live TV channels matching the query. Reuse the current Live TV list briefly; the server owns
 // playlist freshness and answers from its warm cache.
@@ -19083,10 +19107,16 @@ document.addEventListener('keydown', (e) => {
   // Per-view copies drifted: calendar never got one, so entering the menu there dead-ended
   // (no up/down, no way back). ArrowRight re-enters the content the way each view expects.
   if (S.zone === 'rail' && S.view !== 'player') {
-    if (k === 'ArrowUp') return focusRail(S.railIdx - 1);
+    const btns = visibleRailButtons();
+    // Wrap-around: Up from the top jumps straight to the bottom (where Preferences / Profile live),
+    // so they're reachable in one press instead of scrolling the whole menu; Down past the end wraps
+    // back to the top. With a long menu (many libraries) this is what makes Preferences feel reachable.
+    if (k === 'ArrowUp') return focusRail(S.railIdx <= 0 ? btns.length - 1 : S.railIdx - 1);
     if (k === 'ArrowDown') {
-      const btns = visibleRailButtons();
-      if (S.railIdx >= btns.length - 1 && focusMusicBar()) return;
+      if (S.railIdx >= btns.length - 1) {
+        if (focusMusicBar()) return;
+        return focusRail(0); // wrap to the top
+      }
       return focusRail(S.railIdx + 1);
     }
     if (k === 'Enter') { if (!e.repeat) focusRailEnter(); return; }
@@ -19769,6 +19799,12 @@ window.__tvBack = () => {
   if (S.zone !== 'rail') {
     if (['movies', 'tv', 'search', 'library', 'watchlist', 'person'].includes(S.view) && (S.gridIdx || 0) > 0) {
       focusGrid(0); return 'ok';
+    }
+    // Row-based views (Home, Discover) use rows, not a flat grid: Back from anywhere that isn't the
+    // very first item (deep in a row OR on a lower row, e.g. scrolled across Continue Watching)
+    // returns to the first item before the next Back leaves the section — matching the grid views.
+    if (S.zone === 'rows' && S.rowsView && ((S.rowIdx || 0) > 0 || (S.colIdx && (S.colIdx[S.rowIdx] || 0) > 0))) {
+      focusCard(0, 0); return 'ok';
     }
     if (S.view === 'music' && !($('musicNow') && $('musicNow').classList.contains('open'))) {
       if ((S.musicRowIdx || 0) > 0 && musicRows().length) { focusMusic(0); return 'ok'; }

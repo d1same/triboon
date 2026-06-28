@@ -2892,8 +2892,10 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'Android TV Search typing should submit and then wait for result focus');
   assert.match(ui, /if \(inInput && S\.view === 'search' && ae === \$\('searchInput'\)\) \{[\s\S]+k === 'ArrowDown' \|\| k === 'Enter'[\s\S]+searchAndFocusResults\(\);[\s\S]+return;/,
     'document-level D-pad handling should not strand focus in the Search text input');
-  assert.match(ui, /function renderSearchSections\(sections\) \{[\s\S]+makeCard\(it, searchResultUsesPoster\(it\), \(\) => focusGrid\(i\)\)[\s\S]+function searchResultUsesPoster\(it\) \{[\s\S]+return it\.type !== 'tv';/,
-    'Search TV results should use thumbnail/backdrop cards while movie results keep posters');
+  // TV shows now render as 2:3 posters in search like movies — wide 16:9 cards overflowed the
+  // poster-width grid columns and visually overlapped each other.
+  assert.match(ui, /function renderSearchSections\(sections\) \{[\s\S]+makeCard\(it, searchResultUsesPoster\(it\), \(\) => focusGrid\(i\)\)[\s\S]+function searchResultUsesPoster\(it\) \{\s*\n\s*if \(!it \|\| it\._channel !== undefined\) return false;[\s\S]+return true;/,
+    'Search results should all use uniform poster cards (TV shows no longer overflow/overlap as wide cards)');
   assert.match(ui, /function renderGrid\(items, root = \$\('grid'\)\) \{[\s\S]+makeCard\(it, true, \(\) => focusGrid\(i\)\)/,
     'normal poster grids should still render poster cards');
   assert.match(ui, /if \(S\.view !== 'search' && it && \(isContinueWatchingItem\(it\) \|\| \(it\.tmdbId && \['movie', 'tv'\]\.includes\(it\.type\)\)\)\) \{[\s\S]+openItemMenu\(it, el\);/,
@@ -2916,6 +2918,21 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'library rows should scroll separately from a pinned utility rail footer');
   assert.match(ui, /#railMain\{[\s\S]*overflow-y:auto[\s\S]*#railFooter\{[\s\S]*flex:none[\s\S]*border-top:/,
     'rail footer should stay fixed while library/menu items scroll');
+  // Left menu: wrap-around (Up from the top jumps to the bottom where Preferences/Profile live) so a
+  // long menu reaches Preferences in one press, and a divider marks where the scrolling list ends.
+  assert.match(ui, /if \(k === 'ArrowUp'\) return focusRail\(S\.railIdx <= 0 \? btns\.length - 1 : S\.railIdx - 1\);[\s\S]+if \(S\.railIdx >= btns\.length - 1\) \{[\s\S]+if \(focusMusicBar\(\)\) return;[\s\S]+return focusRail\(0\);/,
+    'rail D-pad should wrap around (Up from top → bottom footer, Down past end → top)');
+  assert.match(ui, /#rail:hover #railFooter,#rail\.expanded #railFooter,body\.railOpen #railFooter\{border-top:1px solid var\(--line\)/,
+    'an expanded menu should show a divider above the pinned Preferences/Profile footer');
+  // Android TV: focus must SNAP (no .15s ring fade) so two list rows never look highlighted at once.
+  assert.match(ui, /body\.tv \.focusable::before\{transition:none\}/,
+    'TV focus ring should be instant so the previous item does not keep glowing during a D-pad move');
+  // Back from anywhere deep in a Home row (e.g. Continue Watching) returns to the first item first.
+  assert.match(ui, /if \(S\.zone === 'rows' && S\.rowsView && \(\(S\.rowIdx \|\| 0\) > 0 \|\| \(S\.colIdx && \(S\.colIdx\[S\.rowIdx\] \|\| 0\) > 0\)\)\) \{\s*\n\s*focusCard\(0, 0\); return 'ok';/,
+    'hardware Back from a non-first item in Home rows should return to the first item before leaving');
+  // Preferences shows when an app update is available (semver compare of current vs latest release).
+  assert.match(ui, /function compareSemver\(a, b\) \{[\s\S]+const updateAvailable = !!\(curVer && latestVer && compareSemver\(curVer, latestVer\) < 0\);[\s\S]+status\.classList\.toggle\('updateAvail', updateAvailable\)/,
+    'the app-update box should detect and flag when a newer release is available');
   assert.match(ui, /function applyMenuPrefs\(\) \{[\s\S]+const railMain = \$\('railMain'\) \|\| \$\('rail'\);[\s\S]+railMain\.querySelector\(`\.railBtn\[data-nav="\$\{nav\}"\]`\)[\s\S]+railMain\.insertBefore\(btn, firstMainNav\(\)\);/,
     'menu preference reordering should only move buttons inside the scrollable rail body, never pinned footer buttons');
   assert.doesNotMatch(ui, /rail\.insertBefore\(btn/,
