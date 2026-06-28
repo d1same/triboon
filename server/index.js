@@ -2627,6 +2627,30 @@ function videoMime(name) {
   if (/\.wav$/i.test(name)) return 'audio/wav';
   return 'application/octet-stream';
 }
+// Optional VOD startup profiler — OFF unless TRIBOON_STARTUP_TRACE=1. Logs one line per phase of a
+// fresh play so a slow 4K start can be pinned to a cause: NZB/RAR mount, the health gate, the ffmpeg
+// remux probe (incl. a lossless-audio re-encode), or a moov-at-tail seek (a served byte deep in a
+// huge file → the player fetched the trailing moov before any frame). Reads the breadcrumb stamped
+// on vf._su by pipeline.play(). Pure logging — no effect on playback behaviour.
+const STARTUP_TRACE = process.env.TRIBOON_STARTUP_TRACE === '1';
+function logStartupTrace(vf, where, extra = {}) {
+  const su = (vf && vf._su) || {};
+  const gb = ((Number(su.size) || 0) / 1e9).toFixed(1);
+  let pos = '';
+  if (typeof extra.offset === 'number') {
+    const size = Number(su.size) || 0;
+    pos = size && extra.offset > size * 0.5
+      ? ` TAIL@${(extra.offset / 1e9).toFixed(1)}GB(moov?)`
+      : ` head@${extra.offset}`;
+  }
+  const parts = [
+    `[startup-trace] ${where} "${su.name || (vf && vf.id) || '?'}" ${gb}GB ${su.container || '?'}/${su.method || '?'}`,
+    `mount=${su.mountMs ?? '?'}ms gate=${su.gateMs ?? '?'}ms`,
+  ];
+  if (typeof extra.remuxProbeMs === 'number') parts.push(`remuxProbe=${extra.remuxProbeMs}ms audio=${extra.audio}`);
+  if (typeof extra.ttfbMs === 'number') parts.push(`ttfb=${extra.ttfbMs}ms${pos}`);
+  console.log(parts.join(' | '));
+}
 function bearer(req, url) {
   const h = req.headers.authorization;
   if (h && h.startsWith('Bearer ')) return h.slice(7);
@@ -5554,8 +5578,18 @@ Object.assign(H, {
     };
     ctx.req.once('close', stopReqRead);
     ctx.res.once('close', stopResRead);
+    const suReadT0 = STARTUP_TRACE ? Date.now() : 0;
+    let suFirstChunk = STARTUP_TRACE;
     try {
       for await (const chunk of vf.read(start, end, { priority: readPriority, signal: readSignal })) {
+        if (suFirstChunk) {
+          suFirstChunk = false;
+          if (vf._su && (readPriority === 'startup' || readPriority === 'seek')) {
+            const tail = start > (Number(vf._su.size) || 0) * 0.5;
+            const key = tail ? '_suTailLogged' : '_suHeadLogged';
+            if (!vf._su[key]) { vf._su[key] = true; logStartupTrace(vf, 'stream', { ttfbMs: Date.now() - suReadT0, offset: start }); }
+          }
+        }
         if (readSignal.aborted || ctx.res.destroyed) break;
         if (!ctx.res.write(chunk)) await new Promise((resolve) => {
           const done = () => {
@@ -5608,6 +5642,15 @@ Object.assign(H, {
       probeTracks(selfUrl).then((t) => { vf._tracks = { available: true, ...t }; }).catch(() => {}).finally(() => { vf._probing = false; });
     }
     const ff = spawnRemux(selfUrl, { startSeconds, audioTrack, transcodeAudio, safeStereo: forceAudioSafe });
+    if (STARTUP_TRACE && vf._su && !vf._su._suRemuxLogged && startSeconds === 0) {
+      const suSpawnT0 = Date.now();
+      ff.stdout.once('data', () => {
+        if (vf._su && !vf._su._suRemuxLogged) {
+          vf._su._suRemuxLogged = true;
+          logStartupTrace(vf, 'remux', { remuxProbeMs: Date.now() - suSpawnT0, audio: transcodeAudio ? 'reencode' : 'copy' });
+        }
+      });
+    }
     ctx.res.writeHead(200, { 'content-type': 'video/mp4', 'cache-control': 'no-store' });
     // A spawn-level error ('error' event) is FATAL to the process if unhandled — never omit this.
     ff.on('error', (e) => { console.error('[remux spawn]', e.message); try { ctx.res.destroy(); } catch {} });

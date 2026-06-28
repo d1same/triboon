@@ -717,6 +717,19 @@ class Pipeline {
       this.metrics.healthGateResults++;
     }
     this._startPlaybackWarmup(vf, win);
+    // Startup timing breadcrumb, read by the optional TRIBOON_STARTUP_TRACE logging in index.js.
+    // Separates NZB/RAR mount cost from the bounded health gate so a slow VOD start can be pinned to
+    // mount vs gate vs downstream (ffmpeg remux probe / moov tail-seek), which the index.js handlers
+    // append when serving. Pure diagnostic data — no effect on playback behaviour.
+    vf._su = {
+      t0: mountT0,
+      mountMs: gateT0 - mountT0,
+      gateMs,
+      name: vf.name,
+      size: Number(vf.size) || 0,
+      container: vf.container,
+      method: vf.method,
+    };
     return { vf };
   }
 
