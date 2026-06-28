@@ -2647,6 +2647,7 @@ function logStartupTrace(vf, where, extra = {}) {
     `[startup-trace] ${where} "${su.name || (vf && vf.id) || '?'}" ${gb}GB ${su.container || '?'}/${su.method || '?'}`,
     `mount=${su.mountMs ?? '?'}ms gate=${su.gateMs ?? '?'}ms`,
   ];
+  if (typeof extra.seekSec === 'number') parts.push(`seek@${Math.round(extra.seekSec)}s`);
   if (typeof extra.remuxProbeMs === 'number') parts.push(`remuxProbe=${extra.remuxProbeMs}ms audio=${extra.audio}`);
   if (typeof extra.ttfbMs === 'number') parts.push(`ttfb=${extra.ttfbMs}ms${pos}`);
   console.log(parts.join(' | '));
@@ -5642,12 +5643,20 @@ Object.assign(H, {
       probeTracks(selfUrl).then((t) => { vf._tracks = { available: true, ...t }; }).catch(() => {}).finally(() => { vf._probing = false; });
     }
     const ff = spawnRemux(selfUrl, { startSeconds, audioTrack, transcodeAudio, safeStereo: forceAudioSafe });
-    if (STARTUP_TRACE && vf._su && !vf._su._suRemuxLogged && startSeconds === 0) {
+    if (STARTUP_TRACE) {
+      // Measure the ffmpeg restart cost for BOTH the initial play (startSeconds 0, once) and every
+      // seek/resume (startSeconds > 0 re-spawns ffmpeg at -ss): spawn → first output byte, which
+      // includes fetching the seek-target region from usenet. This is what makes skipping/resuming
+      // in 4K slow, the same way the mount made the first start slow.
       const suSpawnT0 = Date.now();
+      const isSeek = startSeconds > 0;
+      const audio = transcodeAudio ? 'reencode' : 'copy';
       ff.stdout.once('data', () => {
-        if (vf._su && !vf._su._suRemuxLogged) {
+        const probeMs = Date.now() - suSpawnT0;
+        if (isSeek) logStartupTrace(vf, 'seek', { remuxProbeMs: probeMs, audio, seekSec: startSeconds });
+        else if (vf._su && !vf._su._suRemuxLogged) {
           vf._su._suRemuxLogged = true;
-          logStartupTrace(vf, 'remux', { remuxProbeMs: Date.now() - suSpawnT0, audio: transcodeAudio ? 'reencode' : 'copy' });
+          logStartupTrace(vf, 'remux', { remuxProbeMs: probeMs, audio });
         }
       });
     }
