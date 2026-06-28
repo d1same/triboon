@@ -9412,7 +9412,11 @@ function recoverSamePlaybackSource(reason = '') {
   const key = `${p.mountId || p.sessionId || p.streamUrl || ''}:${kind}`;
   const now = appMs();
   if (p._sameSourceRecoveryKey === key && now - (p._sameSourceRecoveryAt || 0) < 60000) {
-    showPlaybackInterrupted(reason);
+    // Same-source resume already failed → the mount is gone (server restarted / swept from memory).
+    // Re-mount the SAME title and resume from the current position instead of giving up. Failure-path
+    // only: if the re-mount can't succeed it falls back to the interrupted notice — healthy playback
+    // is never touched. This is what lets a quick server update heal itself instead of erroring out.
+    if (!p._reMounting) reMountAndResume(reason);
     return true;
   }
   p._sameSourceRecoveryKey = key;
@@ -9421,6 +9425,40 @@ function recoverSamePlaybackSource(reason = '') {
   if (p.usingNative && canUseNativeVideoPlayer() && tryNativeVideoPlayer(kind, at, { quietSeek: true })) return true;
   p.usingNative = false;
   return startSource(kind, at, { quietSeek: true }) || (showPlaybackInterrupted(reason), true);
+}
+// Re-mount the SAME title on a fresh server mount and resume at the current position. Used when the
+// in-memory mount is gone (server restarted/updated, or swept after inactivity) so the existing
+// stream URL 404s. Retries with backoff to ride out a quick restart, then falls back to the
+// interrupted notice. Only ever runs from the recovery (failure) path — never during healthy play.
+async function reMountAndResume(reason = '', attempt = 0) {
+  const p = S.playing;
+  if (!vodPlaybackStarted(p) || !p.item) { showPlaybackInterrupted(reason); return; }
+  p._reMounting = true;
+  const at = currentTime();
+  const kind = currentPlayerKind(p);
+  const MAX_ATTEMPTS = 4; // ~13s total backoff — comfortably covers a fast server restart
+  if (attempt === 0) toast('Reconnecting…');
+  try {
+    const r = await api('/api/play', { method: 'POST', body: playbackRequestBody(p.item, p.name ? { name: p.name } : null) });
+    if (S.playing !== p) { p._reMounting = false; return; } // user moved on / replaced playback
+    // Adopt the new mount (same field set autoAdvance maps), then resume the current source kind.
+    p.sessionId = r.sessionId; p.streamUrl = r.streamUrl; p.remuxUrl = r.remuxUrl; p.transcodeUrl = r.transcodeUrl;
+    p.encoder = r.encoder; p.tracksUrl = r.tracksUrl; p.subtitleBase = r.subtitleBase; p.streamToken = r.streamToken;
+    p.mountId = r.id; p.fileName = r.name; p.size = r.size || p.size;
+    p.triedRemux = false; p.triedTranscode = false; p.nativeTried = {};
+    p._sameSourceRecoveryKey = null; p._sameSourceRecoveryAt = 0; p._reMounting = false; // fresh mount → reset guards
+    if (p.usingNative && canUseNativeVideoPlayer() && tryNativeVideoPlayer(kind, at, { quietSeek: true })) return;
+    p.usingNative = false;
+    if (!startSource(kind, at, { quietSeek: true })) showPlaybackInterrupted(reason);
+  } catch (e) {
+    // Server likely still restarting / unreachable — back off and retry, then give up gracefully.
+    if (attempt + 1 < MAX_ATTEMPTS && S.playing === p) {
+      setTimeout(() => { if (S.playing === p) reMountAndResume(reason, attempt + 1); }, 1500 + attempt * 1500);
+    } else {
+      p._reMounting = false;
+      showPlaybackInterrupted(reason);
+    }
+  }
 }
 function failover() {
   const p = S.playing; if (!p) return;

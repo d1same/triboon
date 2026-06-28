@@ -1273,6 +1273,13 @@ test('Android native player: direct source and native chrome stay out of the web
     'VOD playback should record the post-start boundary and recover the same source/kind after a mid-stream interruption');
   assert.match(ui, /function failover\(\) \{[\s\S]+if \(vodPlaybackStarted\(p\)\) \{[\s\S]+recoverSamePlaybackSource\('playback interrupted'\);[\s\S]+return;[\s\S]+if \(!p\.usingRemux && !p\.usingTranscode/,
     'web media errors after a real VOD frame must not silently switch to remux/transcode or another release');
+  // When same-source resume fails because the mount is gone (server restarted/updated/swept), re-mount
+  // the SAME title on a fresh mount and resume at the current position, with backoff to ride out the
+  // restart — instead of giving up. Failure-path only, so healthy playback is untouched.
+  assert.match(ui, /if \(!p\._reMounting\) reMountAndResume\(reason\);/,
+    'a gone mount should escalate to a re-mount instead of immediately showing interrupted');
+  assert.match(ui, /async function reMountAndResume\(reason = '', attempt = 0\) \{[\s\S]+api\('\/api\/play', \{ method: 'POST', body: playbackRequestBody\(p\.item, p\.name \? \{ name: p\.name \} : null\) \}\)[\s\S]+p\.mountId = r\.id;[\s\S]+startSource\(kind, at, \{ quietSeek: true \}\)[\s\S]+setTimeout\(\(\) => \{ if \(S\.playing === p\) reMountAndResume\(reason, attempt \+ 1\); \}, 1500 \+ attempt \* 1500\)/,
+    'reMountAndResume should re-play the same title, adopt the new mount, resume at position, and retry with backoff then fall back');
   assert.match(ui, /async function autoAdvance\(opts = \{\}\) \{[\s\S]+if \(vodPlaybackStarted\(p\) && !opts\.allowMidstreamAdvance\) \{[\s\S]+recoverSamePlaybackSource\('source failed'\);[\s\S]+return;[\s\S]+const at = currentTime\(\);/,
     'auto-advance should remain a startup/source-failure path, not a mid-movie release switch');
   assert.match(ui, /window\.__tvNativeVideoReady = \(pos, dur\) => \{[\s\S]+p\.nativeReady = true;[\s\S]+markVodPlaybackStarted\(p\);[\s\S]+window\.__tvNativeVideoError = \(msg, pos, dur\) => \{[\s\S]+if \(vodPlaybackStarted\(p\)\) \{[\s\S]+recoverSamePlaybackSource\(msg \|\| 'native playback interrupted'\);[\s\S]+return;/,
