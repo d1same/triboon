@@ -524,6 +524,11 @@ body.tv #filterMenu{backdrop-filter:none}
 #libModal label{display:block;font:700 11px "JetBrains Mono";letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:14px 0 6px}
 #libModal input,#matchModal input{background:var(--field);border:1px solid var(--line);border-radius:12px;padding:12px 13px;color:var(--text);font:500 14px "Albert Sans";outline:none}
 #matchModal .box{width:min(520px,94vw)}
+#updateModal{position:fixed;inset:0;z-index:48;display:none;place-items:center;background:rgba(5,3,9,.8);backdrop-filter:blur(6px)}
+#updateModal.open{display:grid}
+#updateModal .box{width:min(420px,92vw);background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:28px}
+#updateModal h2{font:800 22px "Sora";margin-bottom:4px}
+#updateModal .sub{color:var(--muted);font-size:13px;margin-bottom:18px}
 #matchResults{max-height:300px;overflow-y:auto;margin-top:12px;display:flex;flex-direction:column;gap:4px}
 #libModal input,#libModal select{width:100%}
 #libModal input:focus{border-color:var(--magenta)}
@@ -2727,6 +2732,19 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
       <button class="btn ghost focusable" id="matchNone" style="flex:1;justify-content:center">📁 Use folder/NFO info instead</button>
       <button class="btn ghost focusable" id="matchAuto" style="display:none">↻ Automatic</button>
       <button class="btn ghost focusable" id="matchCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Proactive "new version available" prompt for the Android app shell. Shown once per launch on
+     the home screen (never during playback). Update installs in-app; Later just dismisses it. -->
+<div id="updateModal">
+  <div class="box">
+    <h2>Update available</h2>
+    <div class="sub" id="updateModalSub">A new version of Triboon is ready to install.</div>
+    <div class="modalBtns">
+      <button class="btn primary focusable" id="updateModalGo" style="flex:1;justify-content:center">Update now</button>
+      <button class="btn ghost focusable" id="updateModalLater">Later</button>
     </div>
   </div>
 </div>
@@ -11881,7 +11899,7 @@ function canShowScreensaver() {
   if (S.view === 'player' || S.playing || document.body.classList.contains('videoOpen')
       || $('player').classList.contains('open')) return false;
   if (document.querySelector('#detail.open,#person.open,#settings.open,#prefs.open,#music.open')) return false;
-  if (document.querySelector('.gate.open,#drawer.open,#trailer.open,#libModal.open,#matchModal.open,#catModal.open,#filterMenu.open,#cwMenu.open,#trackMenu.open,#musicNow.open')) return false;
+  if (document.querySelector('.gate.open,#drawer.open,#trailer.open,#libModal.open,#matchModal.open,#updateModal.open,#catModal.open,#filterMenu.open,#cwMenu.open,#trackMenu.open,#musicNow.open')) return false;
   return true;
 }
 function showScreensaver() {
@@ -15987,6 +16005,38 @@ function openApkUpdate() {
   } catch {}
   window.open(url, '_blank', 'noopener');
 }
+// Proactive update prompt for the Android shell: once per launch, on the home screen (never mid-
+// playback), check the latest GitHub release and — if the installed APK is older — pop a modal
+// asking whether to update. Plain web has nothing to self-install (the server updates itself), so
+// this is gated to the TriboonTV shell. "Later" just closes it; it returns next launch if still behind.
+let _updatePromptDone = false;
+async function maybePromptAppUpdate() {
+  if (_updatePromptDone) return;
+  if (!(window.TriboonTV && typeof TriboonTV.appVersion === 'function')) return; // Android shell only
+  let curVer = '';
+  try { curVer = (JSON.parse(TriboonTV.appVersion() || '{}') || {}).versionName || ''; } catch {}
+  if (!curVer) return;
+  let latestVer = '';
+  try {
+    const r = await fetch('https://api.github.com/repos/d1same/triboon/releases/latest', { cache: 'no-store' });
+    const j = await r.json();
+    latestVer = (j && j.tag_name) || '';
+  } catch { return; } // offline / rate-limited: stay quiet
+  if (!latestVer || compareSemver(curVer, latestVer) >= 0) return; // up to date or unknown
+  _updatePromptDone = true; // prompt at most once per launch, whatever the user chooses
+  if (S.playing || S.view === 'player') return; // never interrupt playback
+  const v = (x) => String(x).replace(/^v?/i, 'v');
+  const sub = $('updateModalSub');
+  if (sub) sub.textContent = `Triboon ${v(latestVer)} is ready to install. You're on ${v(curVer)}.`;
+  const go = $('updateModalGo');
+  if (go) go.textContent = `Update to ${v(latestVer)}`;
+  $('updateModal').classList.add('open');
+  const focusGo = () => { try { go.focus({ preventScroll: true }); } catch {} applyFocus(go, false); };
+  requestAnimationFrame(focusGo); setTimeout(focusGo, 80);
+}
+function closeUpdateModal() { $('updateModal').classList.remove('open'); }
+$('updateModalGo').addEventListener('click', () => { closeUpdateModal(); openApkUpdate(); });
+$('updateModalLater').addEventListener('click', closeUpdateModal);
 function syncChoiceButtons(selector, isSelected) {
   document.querySelectorAll(selector).forEach((b) => {
     const selected = !!isSelected(b);
@@ -19145,6 +19195,11 @@ document.addEventListener('keydown', (e) => {
     else dpadCycle($('matchModal'), k);
     return;
   }
+  if ($('updateModal').classList.contains('open')) {
+    if (k === 'Escape' || k === 'Backspace') closeUpdateModal(); // hardware Back / Esc = Later
+    else dpadCycle($('updateModal'), k);
+    return;
+  }
   // Full-screen now-playing page: its own focus loop (collapse + transport row → queue list).
   if ($('musicNow').classList.contains('open')) {
     if (k === 'Escape' || k === 'Backspace') return closeMusicNow();
@@ -19880,7 +19935,7 @@ window.__tvBack = () => {
   }
   const overlay = document.querySelector(
     '.gate.open, #detail.open, #person.open, #player.open, #drawer.open, #trailer.open, ' +
-    '#libModal.open, #matchModal.open, #catModal.open, #filterMenu.open, #cwMenu.open, #trackMenu.open, #musicNow.open');
+    '#libModal.open, #matchModal.open, #updateModal.open, #catModal.open, #filterMenu.open, #cwMenu.open, #trackMenu.open, #musicNow.open');
   if (overlay) {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
     return 'ok';
@@ -20090,6 +20145,8 @@ async function enterAppShell() {
   await restoreInitialRoute();
   perfMark('shell-route-applied', { view: S.view });
   hydrateAppShellData();
+  // Once the home has settled, check for a newer app version and prompt (Android shell only).
+  setTimeout(() => { maybePromptAppUpdate().catch(() => {}); }, 2500);
 }
 async function restoreSavedSession() {
   try {
