@@ -1961,6 +1961,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'the native Go-live control should be a red "● LIVE" text pill, not the >>| skip icon');
   assert.match(android, /private void goNativeLive\(\) \{[\s\S]+"live"\.equals\(nativeMode\)[\s\S]+nativePlayer\.seekToDefaultPosition\(\)[\s\S]+nativePlayer\.play\(\)/,
     'goNativeLive should seek to the live edge and resume');
+  // Phone/tablet: native player buttons must respond to a touch tap. consumeNativeControlClick gated
+  // every click on a prior D-pad "arm", so taps (never armed) did nothing — no pause on a phone.
+  assert.match(android, /private boolean consumeNativeControlClick\(View v\) \{[\s\S]*?if \(v\.isInTouchMode\(\)\) \{[^}]*return true; \}/,
+    'native player controls must accept a direct touch tap (not only D-pad-armed clicks)');
   assert.match(android, /if \(nativeLiveBtn != null\) nativeLiveBtn\.setVisibility\(isLive \? View\.VISIBLE : View\.GONE\)/,
     'the native Go-live button must be visible only for live playback');
   // Native live EPG strip: the channel schedule, ABOVE the seek bar, fed from the web via setLiveEpg.

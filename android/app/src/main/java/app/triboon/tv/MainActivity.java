@@ -4305,8 +4305,13 @@ public class MainActivity extends Activity {
     }
 
     private boolean consumeNativeControlClick(View v) {
+        if (v == null) return false;
+        // Touch (phones/tablets): a real tap IS a genuine click — accept it directly. The arm/consume
+        // dance below only exists to gate D-pad OK on TV; without this, touch taps were never armed,
+        // so NO player button worked on a phone (couldn't even pause).
+        if (v.isInTouchMode()) { nativeClickArmedView = null; nativeClickArmedAtMs = 0L; return true; }
         long now = SystemClock.elapsedRealtime();
-        boolean ok = v != null && v == nativeClickArmedView && now - nativeClickArmedAtMs < 800L;
+        boolean ok = v == nativeClickArmedView && now - nativeClickArmedAtMs < 800L;
         nativeClickArmedView = null;
         nativeClickArmedAtMs = 0L;
         return ok;
