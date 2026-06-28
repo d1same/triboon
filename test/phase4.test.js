@@ -1101,8 +1101,13 @@ test('Android native player: direct source and native chrome stay out of the web
     'web update button should use the in-app installer when the shell supports it');
   assert.match(android, /boolean dpadArrow = code == KeyEvent\.KEYCODE_DPAD_UP \|\| code == KeyEvent\.KEYCODE_DPAD_DOWN[\s\S]+KEYCODE_DPAD_LEFT[\s\S]+KEYCODE_DPAD_RIGHT;[\s\S]+if \(domKey != null && \(!pageInputFocused \|\| dpadArrow\) && setup\.getVisibility\(\) != View\.VISIBLE\) \{[\s\S]+jsKey\("keydown", domKey, e\.getRepeatCount\(\) > 0\)/,
     'Android TV should still forward D-pad arrows to the web focus model while Settings/Preferences fields are focused');
-  assert.match(android, /allowedAppUpdateUrl\(Uri uri\)[\s\S]+triboon-tv\.apk[\s\S]+triboon-mobile\.apk[\s\S]+openExternalUrl\(String rawUrl\)/,
-    'Android app-update bridge should only open the stable Triboon GitHub APK aliases');
+  // The updater allowlist is locked to https + github.com + the stable Triboon release asset, but
+  // accepts ANY owner/repo so a future GitHub rename doesn't strand the in-app updater on installed
+  // devices (the allowlist is baked into the APK). It must NOT be pinned to a single repo path.
+  assert.match(android, /allowedAppUpdateUrl\(Uri uri\)[\s\S]+"github\.com"\.equals\(host\)[\s\S]+path\.matches\("\/\[\^\/\]\+\/\[\^\/\]\+\/releases\/latest\/download\/triboon-\(tv\|mobile\)\\\\\.apk"\)/,
+    'updater allowlist should accept the Triboon asset under any github.com owner/repo (rename-safe), not a single hardcoded repo');
+  assert.doesNotMatch(android, /"\/d1same\/triboon\/releases\/latest\/download\/triboon-tv\.apk"\.equals\(path\)/,
+    'the native allowlist must not be hardcoded to the d1same/triboon repo path');
   assert.match(android, /nativeQualityBtn = nativeButton\(R\.drawable\.ic_player_quality, "Quality", false\)[\s\S]+rightControls\.addView\(nativeQualityBtn\);[\s\S]+nativeStatsBtn = nativeButton\(R\.drawable\.ic_player_info, "Playback stats", false\)[\s\S]+showNativeStatsSheet\(\)[\s\S]+rightControls\.addView\(nativeStatsBtn\);/,
     'native stats button should be the last ExoPlayer right-side control after CC/audio/quality');
   assert.match(android, /private ScrollView nativeSheetScroll;[\s\S]+private LinearLayout nativeSheetRows;/,

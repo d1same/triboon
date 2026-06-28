@@ -622,8 +622,12 @@ public class MainActivity extends Activity {
         String host = uri.getHost() == null ? "" : uri.getHost().toLowerCase(Locale.US);
         String path = uri.getPath() == null ? "" : uri.getPath();
         if (!"https".equals(scheme) || !"github.com".equals(host)) return false;
-        return "/d1same/triboon/releases/latest/download/triboon-tv.apk".equals(path)
-                || "/d1same/triboon/releases/latest/download/triboon-mobile.apk".equals(path);
+        // Accept the stable Triboon release asset under ANY owner/repo on github.com. This allowlist
+        // is baked into the installed APK, so pinning it to a single repo name meant a future GitHub
+        // rename would strand the in-app updater on every existing device. Still strictly locked to
+        // https + github.com + the Triboon asset filenames + the /releases/latest/download/ path, and
+        // the URL itself only ever comes from the trusted server-served UI — so a rename just works.
+        return path.matches("/[^/]+/[^/]+/releases/latest/download/triboon-(tv|mobile)\\.apk");
     }
 
     private void openExternalUrl(String rawUrl) {
