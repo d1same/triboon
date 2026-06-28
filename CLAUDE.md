@@ -58,7 +58,7 @@ Always follow the owner's method:
 ## Commands
 
 - `npm.cmd test` - full Node test suite (uses `--test-force-exit`; node:test otherwise hangs after
-  the run completes). Current baseline: 249/249 tests.
+  the run completes). Current baseline: 258/258 tests.
 - `npm run release:apk` - build + publish the Android APK to the GitHub release for the current tag.
   Defaults to debug signing; **`npm run release:apk -- -Release`** builds the proper keystore-signed
   release. (See the Hard Rules on signing.)
@@ -110,7 +110,7 @@ secret into `./data`.
 ## Roadmap And Current State
 
 Current: Phases 0-5 core are implemented in the current Node/Web/Android stack,
-with 186/186 tests passing on the latest verification pass.
+with 258/258 tests passing on the latest verification pass.
 
 - Phase 1 done: store-RAR4/RAR5 and ZIP streaming with seeking, multi-volume
   support, multi-provider failover, compressed/encrypted/7z detected and tagged.

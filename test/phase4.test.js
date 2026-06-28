@@ -741,6 +741,21 @@ test('subtitle startup preference contract: admin can toggle built-in captions',
   for (const pair of ['cze: \'cs\'', 'ces: \'cs\'', 'ger: \'de\'', 'fre: \'fr\'', 'gre: \'el\'', 'ell: \'el\'', 'per: \'fa\'', 'chi: \'zh\'']) {
     assert.ok(langMap.includes(pair), `LANG_3TO2 must map ${pair} so the right subtitle language reaches Wyzie`);
   }
+  // The client LANG_3TO2 and the server ISO6392_TO_1 are two hand-maintained copies that MUST stay
+  // identical (a drift on the long tail silently breaks non-English CC). Assert full equality so they
+  // can't diverge unnoticed — the old "includes a few pairs" check missed everything else.
+  const parseLangMap = (src, decl) => {
+    const body = (src.match(new RegExp(decl + '\\s*=\\s*\\{([\\s\\S]*?)\\};')) || [, ''])[1];
+    const out = {};
+    for (const m of body.matchAll(/([a-z_]+)\s*:\s*'([a-z]{2})'/g)) out[m[1]] = m[2];
+    return out;
+  };
+  const serverSubs = fs.readFileSync(path.join(__dirname, '..', 'server', 'opensubs.js'), 'utf8');
+  const webLang = parseLangMap(ui, 'const LANG_3TO2');
+  const srvLang = parseLangMap(serverSubs, 'const ISO6392_TO_1');
+  assert.ok(Object.keys(srvLang).length > 50, 'server ISO6392_TO_1 parsed a full map');
+  assert.deepStrictEqual(webLang, srvLang,
+    'LANG_3TO2 (web/index.html) and ISO6392_TO_1 (server/opensubs.js) must stay identical — they are kept in sync by hand');
   assert.match(ui, /function applyStartupSubtitlePref\(\) \{[\s\S]+const rel = concreteSubtitleRel\(startupSubtitleRelFor\(p\)\);[\s\S]+Promise\.resolve\(setSubtitle\(rel, \{ startup: true \}\)\)\.finally/,
     'always-mode subtitles should be applied without waiting for the track probe to finish');
   assert.match(webHousekeeping, /await fetchPlayerTracks\(p, 1400\)[\s\S]+if \(bestBuiltInSubtitleRel\(\) && prefSubtitleMode\(\) === 'always'\) \{[\s\S]+applyStartupSubtitlePref\(\);[\s\S]+return;[\s\S]+\}[\s\S]+if \(prefSubtitleMode\(\) === 'always' && applyStartupSubtitlePref\(\)\) return;[\s\S]+\/api\/ossubs/,

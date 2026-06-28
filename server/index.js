@@ -3094,6 +3094,12 @@ function activeOnlineRows() {
   }
   return [...presenceSessions.values()].sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0));
 }
+// Bound a per-mount result cache to its newest N entries (Maps keep insertion order, so the first
+// key is the oldest). Mirrors the _subCache cap so a marathon session that toggles many subtitle
+// languages/variants on one long-lived mount can't grow these maps without limit.
+function capMap(map, max) {
+  while (map && map.size > max) { const k = map.keys().next().value; if (k === undefined) break; map.delete(k); }
+}
 function localLibraryItemFor(ctx, libId, idx) {
   const lib = store.read('libraries', { list: [] }).list.find((l) => l.id === libId);
   if (!lib || !lib.path) return { status: 404, error: 'library not found' };
@@ -5890,7 +5896,7 @@ Object.assign(H, {
             // Trim wrong-episode / non-text rows so the menu only advertises subtitles that can
             // actually play for this file (the "House shows many options but most don't work" fix).
             const variants = usableVariants(ranked, { releaseName }).slice(0, 12);
-            vf._osSearchCache.set(searchKey, variants);
+            vf._osSearchCache.set(searchKey, variants); capMap(vf._osSearchCache, 8);
             return variants;
           })().finally(() => vf._osSearchInflight.delete(searchKey));
           vf._osSearchInflight.set(searchKey, work);
@@ -5952,7 +5958,7 @@ Object.assign(H, {
           }
           const chosen = variant ? variants.find((v) => v.id === variant) : variants[0];
           if (!chosen || !chosen.raw) throw new Error(variant ? 'that subtitle version is no longer available' : 'online subtitles failed');
-          vf._subSyncState.set(cacheKey, subtitleLooksSynced(chosen.raw, releaseName));
+          vf._subSyncState.set(cacheKey, subtitleLooksSynced(chosen.raw, releaseName)); capMap(vf._subSyncState, 24);
           if (chosen.raw._provider === 'opensubtitles') return downloadOpenSubtitles(chosen.raw._osFileId);
           return downloadBestSubtitle(variants.map((v) => v.raw).filter((d) => d && !d._provider), {
             key,
@@ -5964,7 +5970,7 @@ Object.assign(H, {
             retryDelayMs: 900,
           });
         })().then((vtt) => {
-          vf._osCache.set(cacheKey, vtt);
+          vf._osCache.set(cacheKey, vtt); capMap(vf._osCache, 12);
           return vtt;
         }).finally(() => vf._osInflight.delete(cacheKey));
         vf._osInflight.set(cacheKey, work);
@@ -5993,7 +5999,7 @@ Object.assign(H, {
       if (!vf._osCache.has(syncKey)) {
         if (!vf._osInflight.has(syncKey)) {
           const work = onDemandSubSync(vf, vtt, ctx.claims.uid)
-            .then((synced) => { vf._osCache.set(syncKey, synced); return synced; })
+            .then((synced) => { vf._osCache.set(syncKey, synced); capMap(vf._osCache, 12); return synced; })
             .finally(() => vf._osInflight.delete(syncKey));
           vf._osInflight.set(syncKey, work);
         }
@@ -6723,6 +6729,10 @@ function sweep(now = Date.now()) {
   }
   for (const [url, id] of pipeline.mountByUrl) if (!mounts.has(id)) pipeline.mountByUrl.delete(url);
   for (const [id, s] of pipeline.sessions) if (now - (s.createdAt || 0) > SESSION_TTL_MS) pipeline.sessions.delete(id);
+  // Activity/presence are otherwise pruned only when an admin polls /api/activity — collect stale
+  // rows here too so the maps can't accumulate on a server whose admin never opens the screen.
+  for (const [id, row] of activitySessions) if (now - ((row && row.updatedAt) || 0) > ACTIVITY_TTL_MS) activitySessions.delete(id);
+  for (const [key, row] of presenceSessions) if (now - ((row && row.lastSeen) || 0) > PRESENCE_TTL_MS) presenceSessions.delete(key);
   if (evicted.length) pipeline.rebalancePlaybackWindows(now);
   auth.sweepQuickConnect();
   if (evicted.length) console.log(`[sweep] evicted ${evicted.length} idle mount(s), ${mounts.size} live`);

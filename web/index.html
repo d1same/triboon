@@ -878,6 +878,7 @@ body.screensaverOn{cursor:none}
 #vlcPanel{position:absolute;inset:0;display:none;place-items:center;background:rgba(0,0,0,.82);padding:24px;box-sizing:border-box}
 #vlcPanel.show{display:grid}
 #vlcPanel .gateCard{text-align:center;margin-left:0;width:min(520px,calc(100vw - 48px))}
+body.tv #vlcCopy{display:none}
 #vlcUrl{font:500 12px "JetBrains Mono";word-break:break-all;background:rgba(11,8,18,.7);border:1px solid var(--line);border-radius:10px;padding:12px;margin:14px 0;user-select:all}
 
 /* ---------- toast ---------- */
@@ -3524,25 +3525,25 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
           <button class="cbtn focusable" id="chGuide" title="TV guide"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12H3"/><path d="M16 6H3"/><path d="M12 18H3"/><path d="m16 12 5 3-5 3v-6Z"/></svg></button>
         </div>
         <div class="ctlGroup ctlCenter">
-          <button class="cbtn focusable" id="back10" title="Back 10s"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v6h6"/><path d="M21 12A9 9 0 0 0 6 5.3L3 8"/></svg></button>
-          <button class="cbtn big focusable" id="playPause"><svg id="ppIcon" viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg></button>
+          <button class="cbtn focusable" id="back10" title="Back 10s" aria-label="Back 10 seconds"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v6h6"/><path d="M21 12A9 9 0 0 0 6 5.3L3 8"/></svg></button>
+          <button class="cbtn big focusable" id="playPause" aria-label="Play / pause"><svg id="ppIcon" viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg></button>
           <button class="cbtn focusable liveOnly" id="liveBtn" title="Go to live"><span class="liveBtnDot"></span><span class="liveBtnTxt">LIVE</span></button>
-          <button class="cbtn focusable" id="fwd30" title="Forward 30s"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/></svg></button>
+          <button class="cbtn focusable" id="fwd30" title="Forward 30s" aria-label="Forward 30 seconds"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/></svg></button>
           <button class="cbtn focusable" id="nextEpBtn" title="Next episode" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" x2="19" y1="5" y2="19"/></svg></button>
         </div>
         <div class="ctlGroup ctlRight">
           <button class="cbtn focusable" id="favBtn" title="Favorite channel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 2.7 5.5 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.8 1-6.1-4.4-4.3 6.1-.9L12 3z"/></svg></button>
           <button class="cbtn focusable" id="splitBtn" title="Split view (uses one extra Live TV stream)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="8" height="14" rx="2"/><rect x="13" y="5" width="8" height="14" rx="2"/></svg></button>
-          <button class="cbtn focusable" id="ccBtn" title="Subtitles"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M7 15h4M15 15h2M7 11h2M13 11h4"/></svg></button>
-          <button class="cbtn focusable" id="audBtn" title="Audio language"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 10v3"/><path d="M6 6v11"/><path d="M10 3v18"/><path d="M14 8v7"/><path d="M18 5v13"/><path d="M22 10v3"/></svg></button>
+          <button class="cbtn focusable" id="ccBtn" title="Subtitles" aria-label="Subtitles"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M7 15h4M15 15h2M7 11h2M13 11h4"/></svg></button>
+          <button class="cbtn focusable" id="audBtn" title="Audio language" aria-label="Audio language"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 10v3"/><path d="M6 6v11"/><path d="M10 3v18"/><path d="M14 8v7"/><path d="M18 5v13"/><path d="M22 10v3"/></svg></button>
           <button class="cbtn focusable" id="srndBtn" title="Surround sound" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 10v4h4l5 4V6l-5 4H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg></button>
-          <button class="cbtn focusable" id="qualBtn" title="Quality"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 12H6"/><path d="M10 15V9"/><path d="M14 14.5a.5.5 0 0 0 .5.5h1a2.5 2.5 0 0 0 2.5-2.5v-1A2.5 2.5 0 0 0 15.5 9h-1a.5.5 0 0 0-.5.5z"/><path d="M6 15V9"/><rect x="2" y="5" width="20" height="14" rx="2"/></svg></button>
+          <button class="cbtn focusable" id="qualBtn" title="Quality" aria-label="Quality"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 12H6"/><path d="M10 15V9"/><path d="M14 14.5a.5.5 0 0 0 .5.5h1a2.5 2.5 0 0 0 2.5-2.5v-1A2.5 2.5 0 0 0 15.5 9h-1a.5.5 0 0 0-.5.5z"/><path d="M6 15V9"/><rect x="2" y="5" width="20" height="14" rx="2"/></svg></button>
           <div class="volWrap">
             <button class="cbtn focusable" id="muteBtn" title="Mute"><svg id="volIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 10v4h4l5 4V6l-5 4H4z"/><path d="M16.5 9a4 4 0 0 1 0 6"/></svg></button>
             <input type="range" id="volSlider" min="0" max="100" value="100" title="Volume">
           </div>
-          <button class="cbtn focusable" id="fsBtn" title="Fullscreen (F)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
-          <button class="cbtn focusable" id="statsBtn" title="Playback stats"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01"/><path d="M11 12h1v5h1"/></svg></button>
+          <button class="cbtn focusable" id="fsBtn" title="Fullscreen (F)" aria-label="Fullscreen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+          <button class="cbtn focusable" id="statsBtn" title="Playback stats" aria-label="Playback stats"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01"/><path d="M11 12h1v5h1"/></svg></button>
         </div>
         <div class="time" id="pTime">0:00</div>
       </div>
@@ -3560,8 +3561,8 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
     <h1 id="vlcTitle">Open in a video player</h1>
     <div class="sub">This browser can't decode the file. Paste the stream URL into VLC (Media → Open Network Stream) — seeking works.</div>
     <div id="vlcUrl"></div>
-    <button class="btn primary" id="vlcCopy" style="justify-content:center;width:100%">Copy stream URL</button>
-    <div class="alt"><button id="vlcClose">Close player</button></div>
+    <button class="btn primary focusable" id="vlcCopy" style="justify-content:center;width:100%">Copy stream URL</button>
+    <div class="alt"><button class="focusable" id="vlcClose">Close player</button></div>
   </div></div>
 </div>
 
@@ -3661,7 +3662,7 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
     <div id="ssTitle"></div>
   </div>
 </div>
-<div id="toast"><div class="dot"></div><span id="toastMsg"></span></div>
+<div id="toast" role="status" aria-live="polite"><div class="dot"></div><span id="toastMsg"></span></div>
 
 <script>
 'use strict';
@@ -9449,7 +9450,7 @@ function recoverSamePlaybackSource(reason = '') {
   }
   p._sameSourceRecoveryKey = key;
   p._sameSourceRecoveryAt = now;
-  toast('Stream hiccup - resuming the same source...');
+  toast('Stream hiccup — resuming the same source…');
   if (p.usingNative && canUseNativeVideoPlayer() && tryNativeVideoPlayer(kind, at, { quietSeek: true })) return true;
   p.usingNative = false;
   return startSource(kind, at, { quietSeek: true }) || (showPlaybackInterrupted(reason), true);
@@ -9564,9 +9565,17 @@ async function autoAdvance(opts = {}) {
 function resetVlcPanel() {
   const msg = document.querySelector('#vlcPanel .sub');
   if ($('vlcTitle')) $('vlcTitle').textContent = 'Open in a video player';
-  if (msg) msg.textContent = "This browser can't decode the file. Paste the stream URL into VLC (Media -> Open Network Stream) - seeking works.";
+  if (msg) msg.textContent = "This browser can't decode the file. Paste the stream URL into VLC (Media → Open Network Stream) — seeking works.";
   $('vlcUrl').style.display = '';
   $('vlcCopy').style.display = '';
+}
+// Land D-pad focus on the panel's primary action the moment it opens (Close first — the safe action,
+// and the only visible button on TV where Copy is hidden) so a remote isn't stuck on a dead chrome.
+function focusVlcPanel() {
+  const b = [$('vlcClose'), $('vlcCopy')].find((x) => x && x.offsetParent !== null && !x.disabled);
+  if (!b) return;
+  const run = () => { try { b.focus({ preventScroll: true }); } catch {} applyFocus(b, false); };
+  requestAnimationFrame(run); setTimeout(run, 60);
 }
 function showLiveProviderError(reason) {
   const msg = document.querySelector('#vlcPanel .sub');
@@ -9583,6 +9592,7 @@ function showLiveProviderError(reason) {
   $('vlcUrl').style.display = 'none';
   $('vlcCopy').style.display = 'none';
   $('vlcPanel').classList.add('show');
+  focusVlcPanel();
 }
 function showVlcPanel() {
   const p = S.playing; if (!p) return;
@@ -9599,6 +9609,7 @@ function showVlcPanel() {
   }
   $('vlcUrl').textContent = location.origin + p.streamUrl;
   $('vlcPanel').classList.add('show');
+  focusVlcPanel();
 }
 
 /* ---- next episode: prefetch + up-next countdown ---- */
@@ -19385,6 +19396,19 @@ document.addEventListener('keydown', (e) => {
       if (k === 'Escape' || k === 'Backspace') return $('unCancel').click();
       if (k === 'ArrowLeft' || k === 'ArrowRight') return applyFocus(un[k === 'ArrowLeft' ? 0 : 1]);
       if (k === 'Enter' && !e.repeat) return un[i].click();
+      return;
+    }
+    // VLC / playback-error fallback panel: its own focus loop so a remote can reach Copy/Close. It
+    // overlays the (now-hidden) control bar, which would otherwise swallow the D-pad and trap focus.
+    // On TV the Copy-URL button is hidden (no clipboard/VLC), leaving Close as the action.
+    if ($('vlcPanel').classList.contains('show')) {
+      if (k === 'Escape' || k === 'Backspace') return $('vlcClose').click();
+      const btns = [$('vlcCopy'), $('vlcClose')].filter((b) => b && b.offsetParent !== null && !b.disabled);
+      if (!btns.length) return;
+      let i = btns.findIndex((b) => b.classList.contains('focus')); if (i === -1) i = 0;
+      if (k === 'ArrowLeft' || k === 'ArrowUp') return applyFocus(btns[Math.max(0, i - 1)]);
+      if (k === 'ArrowRight' || k === 'ArrowDown') return applyFocus(btns[Math.min(btns.length - 1, i + 1)]);
+      if (k === 'Enter' && !e.repeat) return btns[i].click();
       return;
     }
     // Channel guide overlay: its own focus loop while open.

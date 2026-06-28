@@ -24,7 +24,7 @@ canonical reference.
 - Security: deny-by-default route table in `server/index.js`; every endpoint must
   declare `public`, `user`, `admin`, or `stream` auth and be covered by tests.
 - Current verification baseline after the playback startup/read-ahead pass: full
-  `npm.cmd test` covers 233 tests; focused IPTV, security, Android native
+  `npm.cmd test` covers 258 tests; focused IPTV, security, Android native
   player, Music, subtitle, source-warmup, and NNTP priority tests cover the
   current source model, route table, device bridge, process queue, startup
   preparation, and capacity scheduling.
