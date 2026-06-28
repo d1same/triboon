@@ -5532,13 +5532,31 @@ function saveQualityPref(it, rank) {
     if (key) localStorage.setItem(key, String(q));
   } catch {}
 }
+function userMaxRank() {
+  const r = normalizeResolutionRank(S.user && S.user.policy && S.user.policy.maxResolutionRank);
+  return r == null ? 4 : r;
+}
+function userCanPlay4k() { return userMaxRank() >= 4; }
+// Remembered quality choice, per profile. The per-title pref (qualityPrefStoreKey) wins; this is the
+// fallback so a user who generally watches 4K gets 4K PRE-MOUNTED on detail open (warm by the time
+// they press Play) instead of only starting the mount when they toggle 4K seconds before playing —
+// the 4K cold-start. Capped users can never store/resolve 4K (the toggle isn't shown to them).
+function globalQualityKey() {
+  const profile = S.profile && S.profile.id ? S.profile.id : 'default';
+  return 'triboon.quality.' + encodeURIComponent(String(profile)) + '.__default';
+}
+function globalQualityPref() { try { return normalizeQualityRank(localStorage.getItem(globalQualityKey())); } catch { return null; } }
+function saveGlobalQualityPref(rank) { const q = normalizeQualityRank(rank); if (q) { try { localStorage.setItem(globalQualityKey(), String(q)); } catch {} } }
 function qualityRankForItem(it) {
   if (!it || it.type === 'live') return null;
   if (it._local && !it.tmdbId) return null;
   const detailMatches = S.detailItem && qualityTitleKey(S.detailItem) === qualityTitleKey(it);
-  return normalizeQualityRank(detailMatches ? S.qualityPref : null)
+  let q = normalizeQualityRank(detailMatches ? S.qualityPref : null)
     || normalizeQualityRank(it.qualityRank)
-    || savedQualityPref(it);
+    || savedQualityPref(it)
+    || globalQualityPref();
+  if (q === 4 && !userCanPlay4k()) q = 3; // capped users never resolve to 4K (server caps too)
+  return q || null;
 }
 function sourceSearchQuery(it, opts = {}) {
   const params = new URLSearchParams({ q: queryFor(it) });
@@ -6588,16 +6606,17 @@ async function checkAvailability(it) {
     const has4k = res.has('2160p');
     const hasLower = [...res].some((x) => x !== '2160p'); // 1080p/720p/SD/unknown
     const localRank = localPlaybackRankForItem(it);
-    const offer = !!(r.candidates && r.candidates.length && has4k && (hasLower || (hasLocal && localRank !== 4)));
+    // A user capped below 4K must never see the 4K toggle — they can't play it (the server caps too).
+    const offer = !!(r.candidates && r.candidates.length && has4k && userCanPlay4k() && (hasLower || (hasLocal && localRank !== 4)));
     if (hasLocal) {
       $('dSources').style.display = offer ? '' : 'none';
       $('qToggle').style.display = offer ? '' : 'none';
-      S.qualityPref = offer ? (normalizeQualityRank(it.qualityRank) || savedQualityPref(it) || 3) : null;
+      S.qualityPref = offer ? (normalizeQualityRank(it.qualityRank) || savedQualityPref(it) || globalQualityPref() || 3) : null;
       if (offer) paintQualityToggle(S.qualityPref);
       return;
     }
     $('qToggle').style.display = offer ? '' : 'none';
-    S.qualityPref = offer ? (normalizeQualityRank(it.qualityRank) || savedQualityPref(it) || 3) : null;
+    S.qualityPref = offer ? (normalizeQualityRank(it.qualityRank) || savedQualityPref(it) || globalQualityPref() || 3) : null;
     if (offer) paintQualityToggle(S.qualityPref);
     if (!r.candidates || !r.candidates.length) {
       // For TV, episodes may exist even when the bare show search is empty — only hard-mark
@@ -6626,6 +6645,7 @@ $('dTrailer').addEventListener('click', () => S.detailTrailer && openTrailer(S.d
 $('qToggle').addEventListener('click', (e) => {
   const b = e.target.closest('button[data-q]'); if (!b) return;
   S.qualityPref = +b.dataset.q;
+  saveGlobalQualityPref(S.qualityPref); // remember globally → next title pre-mounts this quality
   const target = detailPlayTarget || S.detailItem;
   saveQualityPref(target, S.qualityPref);
   if (target && S.detailItem && qualityTitleKey(target) !== qualityTitleKey(S.detailItem)) saveQualityPref(S.detailItem, S.qualityPref);

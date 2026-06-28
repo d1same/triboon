@@ -221,6 +221,19 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'manual source selection should prefer the picked source quality while normal Play uses the current 1080p/4K toggle');
   assert.match(ui, /function qualityRankForItem\(it\) \{[\s\S]+if \(it\._local && !it\.tmdbId\) return null;/,
     'matched local movies and episodes should still inherit saved 1080p/4K preferences');
+  // 4K startup fix: a user's quality choice is remembered per-profile so the NEXT title pre-mounts
+  // that quality on detail open (warm by Play) instead of starting the 4K mount only on toggle.
+  assert.match(ui, /function qualityRankForItem\(it\) \{[\s\S]+savedQualityPref\(it\)[\s\S]+\|\| globalQualityPref\(\);[\s\S]+if \(q === 4 && !userCanPlay4k\(\)\) q = 3;[\s\S]+return q \|\| null;/,
+    'qualityRankForItem should fall back to the remembered global quality and clamp 4K for capped users, but stay null when nothing is set (single-version titles unaffected)');
+  assert.match(ui, /function saveGlobalQualityPref\(rank\) \{ const q = normalizeQualityRank\(rank\);/,
+    'a profile-scoped global quality preference should be persistable');
+  assert.match(ui, /S\.qualityPref = \+b\.dataset\.q;\s*\n\s*saveGlobalQualityPref\(S\.qualityPref\);/,
+    'toggling quality should remember the choice globally so the next title pre-warms it');
+  // Part 2: a user capped below 4K must never see the 4K toggle.
+  assert.match(ui, /function userCanPlay4k\(\) \{ return userMaxRank\(\) >= 4; \}/,
+    'should expose whether the user is allowed to play 4K');
+  assert.match(ui, /const offer = !!\(r\.candidates && r\.candidates\.length && has4k && userCanPlay4k\(\) &&/,
+    'the 4K quality toggle must be gated on the user being allowed to play 4K');
   assert.match(ui, /function releaseResolutionRankFromName\(name\) \{[\s\S]+2160p\|4k\|uhd[\s\S]+return 4;[\s\S]+function localPlaybackFitsQuality\(it, qRank\) \{[\s\S]+if \(qRank === 4\) return rank === 4;[\s\S]+if \(qRank === 3\) return rank !== 4;/,
     'local playback should be allowed only when it matches the requested source class');
   assert.match(ui, /const picked = pick && typeof pick === 'object'[\s\S]+const qRank = pickRank !== null \? pickRank : qualityRankForItem\(it\);[\s\S]+const localExact = !picked && localPlaybackForItem\(it\) \? \{ \.\.\.it, _local: localPlaybackForItem\(it\) \} : null;[\s\S]+if \(localExact && localPlaybackFitsQuality\(localExact, qRank\)\) return playLocal/,
@@ -524,7 +537,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Play should carry the same external identity as the Sources drawer');
   assert.match(ui, /if \(it\._lib && it\._lib\.path\) \{[\s\S]+const r = it\._kind === 'show'[\s\S]+await loadAllLocalShowEpisodes\(it\._lib, it\._idx\)[\s\S]+mergeLocalItems\(it\._lib, r\.items \|\| \[\]\);[\s\S]+\}[\s\S]+checkAvailability\(it\);/,
     'TV details opened from an added library should hydrate all local episode ownership before availability/play targets are calculated');
-  assert.match(ui, /async function checkAvailability\(it\) \{[\s\S]+const hasLocal = localTitleHasPlayback\(it\);[\s\S]+if \(hasLocal && localPlaybackRankForItem\(it\) === 4\) \{[\s\S]+\$\(\'qToggle\'\)\.style\.display = 'none';[\s\S]+api\('\/api\/search\?' \+ sourceSearchQuery\(it, \{ includeQuality: false \}\)\)[\s\S]+has4k && \(hasLower \|\| \(hasLocal && localRank !== 4\)\)[\s\S]+if \(hasLocal\) \{[\s\S]+\$\(\'dSources\'\)\.style\.display = offer \? '' : 'none';[\s\S]+return;/,
+  assert.match(ui, /async function checkAvailability\(it\) \{[\s\S]+const hasLocal = localTitleHasPlayback\(it\);[\s\S]+if \(hasLocal && localPlaybackRankForItem\(it\) === 4\) \{[\s\S]+\$\(\'qToggle\'\)\.style\.display = 'none';[\s\S]+api\('\/api\/search\?' \+ sourceSearchQuery\(it, \{ includeQuality: false \}\)\)[\s\S]+has4k && userCanPlay4k\(\) && \(hasLower \|\| \(hasLocal && localRank !== 4\)\)[\s\S]+if \(hasLocal\) \{[\s\S]+\$\(\'dSources\'\)\.style\.display = offer \? '' : 'none';[\s\S]+return;/,
     'local-owned detail pages should still discover online 4K when the local file is lower quality, without showing unavailable');
   assert.match(ui, /if \(it\._showOpen !== undefined\)[\s\S]+openLocalShowDetail\(\{ \.\.\.it, _lib: lib \}\)/,
     'unmatched local TV shows should open a details page instead of a flat episode grid');
