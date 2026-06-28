@@ -3003,6 +3003,14 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'enterAppShell starts presence so browsing (not only watching) marks the device connected');
   assert.match(ui, /renderActivitySummary\(sessions, history, online\)[\s\S]+\$\('activityOnline'\)[\s\S]+onlineRowHtml\(o\)/,
     'renderActivity renders the connected-devices online list');
+  // Native players hide the WebView, so the setInterval heartbeats can be throttled. The native
+  // progress/stats ticks (pushed from native) must keep activity + presence alive for TV viewers.
+  assert.match(ui, /function nativePlaybackHeartbeat\(\) \{[\s\S]+if \(!p \|\| !p\.usingNative\) return;[\s\S]+now - _nativeHbAt < 9000\) return;[\s\S]+sendActivity\('watching'\);[\s\S]+sendPresence\('watching'\);/,
+    'a throttled native heartbeat re-reports watching activity + presence while the WebView is hidden');
+  assert.match(ui, /window\.__tvNativeVideoProgress = \(pos, dur\) => \{[\s\S]+nativePlaybackHeartbeat\(\);/,
+    'the native VOD progress tick drives the heartbeat');
+  assert.match(ui, /window\.__tvNativeVideoStats = \(raw\) => \{[\s\S]+nativePlaybackHeartbeat\(\);/,
+    'the native stats tick (fires for Live TV too) drives the heartbeat');
   assert.match(ui, /function applyMenuPrefs\(\) \{[\s\S]+const railMain = \$\('railMain'\) \|\| \$\('rail'\);[\s\S]+railMain\.querySelector\(`\.railBtn\[data-nav="\$\{nav\}"\]`\)[\s\S]+railMain\.insertBefore\(btn, firstMainNav\(\)\);/,
     'menu preference reordering should only move buttons inside the scrollable rail body, never pinned footer buttons');
   assert.doesNotMatch(ui, /rail\.insertBefore\(btn/,

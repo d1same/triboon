@@ -9232,8 +9232,24 @@ function applyNativeVideoProgress(pos, dur, opts = {}) {
   maybeShowUpNext(p.nativePos, totalDuration(), { native: true });
   return p.nativePos;
 }
+// Native players hide the WebView (View.GONE), so Android can throttle its setInterval activity/
+// presence heartbeats — a native viewer then falls off Activity ("Now watching" / "Online now")
+// after the TTL, so the admin sees only the foreground/web devices. The native progress + stats
+// ticks are pushed FROM native every 1–2s (evaluateJavascript runs regardless of timer throttling),
+// so drive a throttled heartbeat from them to keep every native viewer (VOD or Live TV) reported.
+let _nativeHbAt = 0;
+function nativePlaybackHeartbeat() {
+  const p = S.playing;
+  if (!p || !p.usingNative) return;
+  const now = Date.now();
+  if (now - _nativeHbAt < 9000) return;
+  _nativeHbAt = now;
+  sendActivity('watching');
+  sendPresence('watching');
+}
 window.__tvNativeVideoProgress = (pos, dur) => {
   applyNativeVideoProgress(pos, dur);
+  nativePlaybackHeartbeat();
 };
 window.__tvNativePlaybackSurfaceReady = () => {
   resolveNativePlaybackSurfaceReady(true);
@@ -9259,6 +9275,7 @@ window.__tvNativeVideoStats = (raw) => {
   try { p.nativeStats = typeof raw === 'string' ? JSON.parse(raw) : (raw || {}); }
   catch { p.nativeStats = {}; }
   if ($('playerStats').classList.contains('open')) renderPlayerStats();
+  nativePlaybackHeartbeat(); // stats ticks fire for native Live TV too — keeps live viewers reported
 };
 window.__tvNativeVideoSeek = (pos, dur) => {
   const p = S.playing; if (!p || !p.usingNative || !p.item || p.item.type === 'live') return;
