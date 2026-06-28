@@ -206,6 +206,18 @@ function releaseKey(s) {
 // the server SKIP content-based sync (which would pull the audio). True when it's a moviehash-
 // exact match, when the provider flagged a release/filename match, or when the subtitle's release
 // key matches our file's release key. Used to avoid running alass on subs that are already synced.
+// Sanity-check an alass alignment before trusting it. alass only RE-TIMES the cues it is given —
+// it must never add or drop them — so a materially different cue count (or empty/garbage output)
+// means the alignment is corrupt. The caller rejects it and keeps the unsynced track rather than
+// show broken captions. A tiny tolerance absorbs trailing-blank / format quirks.
+function subSyncResultOk(inputText, outputText) {
+  const arrows = (s) => (String(s || '').match(/-->/g) || []).length;
+  const outN = arrows(outputText);
+  if (!outN || !/\d{2}:\d{2}:\d{2}/.test(String(outputText || ''))) return false; // empty / not timed
+  const inN = arrows(inputText);
+  if (!inN) return true;
+  return Math.abs(outN - inN) <= Math.max(1, Math.floor(inN * 0.02));
+}
 function subtitleLooksSynced(d, releaseName = '') {
   if (!d) return false;
   if (d.moviehashMatch) return true;
@@ -215,6 +227,27 @@ function subtitleLooksSynced(d, releaseName = '') {
   const theirs = releaseKey(subtitleMatchText(d));
   if (!theirs) return false;
   return theirs.includes(mine) || mine.includes(theirs);
+}
+// Popularity / trust tie-breakers (the OpenSubtitles ranking model): these only ever nudge
+// BETWEEN otherwise-equal candidates. Capped well below the release/episode/hash signals so a
+// popular-but-wrong-cut or wrong-episode sub can never out-rank the correct one. Both providers
+// expose these under slightly different keys, so read all the common spellings.
+function popularityBonus(d) {
+  const downloads = Number(d && (d.downloadCount || d.downloads || d.download_count)) || 0;
+  const rating = Number(d && (d.rating || d.ratings)) || 0;
+  let s = Math.min(60, Math.log10(1 + Math.max(0, downloads)) * 18); // ~0..60 over 0..1e3+ downloads
+  if (rating > 0) s += Math.min(12, rating * 1.2);
+  if (d && (d.fromTrusted || d.from_trusted)) s += 40;
+  return s;
+}
+// A readable, distinct label base from a release/file string: drop the path + extension and turn
+// dot/underscore separators into spaces. Used so rows fall back to the actual release name rather
+// than a generic "Subtitle version" (the "every option looks the same" gripe).
+function cleanReleaseDisplay(s) {
+  let x = String(s || '').split(/[\\/]/).pop().replace(/\.(srt|vtt|sub|idx|ass|ssa)$/i, '').trim();
+  if (!x) return '';
+  x = x.replace(/[._]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return x.length > 48 ? x.slice(0, 47).trim() + '…' : x;
 }
 function pickSub(data, releaseName = '', { durationSeconds = 0 } = {}) {
   const mine = String(releaseName).toLowerCase();
@@ -234,6 +267,7 @@ function pickSub(data, releaseName = '', { durationSeconds = 0 } = {}) {
     const relEpisode = episodeKey(rel);
     let s = 0;
     if (!/^(srt|vtt|)$/i.test(String(d.format || ''))) s -= 500; // sub/idx etc. can't become VTT
+    if (d.moviehashMatch) s += 1000; // hash-exact wins outright (OpenSubtitles), same as rankSubs
     if (myReleaseKey && relKey && relKey.includes(myReleaseKey)) s += 650; // Stremio-style exact file/release hint
     else if (myReleaseKey && relKey && myReleaseKey.includes(relKey) && relKey.length > 20) s += 220;
     if (myEpisode && relEpisode === myEpisode) s += 260;
@@ -249,6 +283,7 @@ function pickSub(data, releaseName = '', { durationSeconds = 0 } = {}) {
     if (myWeb && /web|amzn|nf[. ]|hulu|atvp|dsnp/.test(rel)) s += 100;
     if (myBlu && /blu|bd|remux/.test(rel)) s += 100;
     if ((myWeb && /blu|bd|remux/.test(rel)) || (myBlu && /web/.test(rel))) s -= 80; // wrong cut
+    s += popularityBonus(d); // tie-breaker only — capped below release/episode signals
     if (d.isHearingImpaired) s -= 10;
     return s;
   };
@@ -296,7 +331,10 @@ function subtitleVariantLabel(d) {
   const group = subtitleGroupLabel(d);
   if (group) parts.push(group);
   if (d && d.isHearingImpaired) parts.push('SDH');
-  return parts.join(' - ') || String((d && (d.display || d.media || d.language)) || 'Subtitle version');
+  if (parts.length) return parts.join(' - ');
+  // No structured signal — fall back to the actual release/file name so rows stay distinct and
+  // recognizable, not a wall of identical "Subtitle version" entries.
+  return cleanReleaseDisplay(d && (d.display || d.media)) || String((d && d.language) || '') || 'Subtitle version';
 }
 
 function wyzieCatalogId({ tmdbId, imdbId } = {}) {
@@ -405,12 +443,14 @@ async function wyzieSearchResults({ key, tmdbId, imdbId, query, lang = 'en', rel
   const wlang = toIso6391(lang) || String(lang || '').slice(0, 2) || 'en';
   const langLabel = wlang === lang ? wlang : `${lang}->${wlang}`;
   try {
-    let data = releaseName ? await run(true) : null;
-    let path = Array.isArray(data) && data.length ? 'release-matched' : '';
-    if (!Array.isArray(data) || !data.length) {
-      data = await run(false);
-      path = (Array.isArray(data) && data.length) ? (releaseName ? 'broad-after-release-miss' : 'broad') : 'empty';
-    }
+    // Go straight to the broad search — we deliberately do NOT send Wyzie the release/file hints.
+    // Measured on a live key: the hinted lookup is ~2x slower (~10s) AND almost always returns
+    // 400 "no matching release", so it only ever delayed the broad fallback that actually has
+    // results (~10s of dead time on every cold subtitle load). Release/episode/edition matching is
+    // done LOCALLY in rankSubs/pickSub — that's what picks the in-sync sub — and subtitleLooksSynced
+    // still detects release matches by key, so we lose nothing but the latency.
+    let data = await run(false);
+    let path = (Array.isArray(data) && data.length) ? 'broad' : 'empty';
     const count = Array.isArray(data) ? data.length : 0;
     logSubs(`search id=${catId || '-'}(${idKind}) lang=${langLabel}${ep} release=${releaseName ? 'y' : 'n'} path=${path} -> ${count} result(s)`);
     return data;
@@ -458,6 +498,7 @@ function rankSubs(data, releaseName = '', { durationSeconds = 0 } = {}) {
     if (myWeb && /web|amzn|nf[. ]|hulu|atvp|dsnp/.test(rel)) s += 100;
     if (myBlu && /blu|bd|remux/.test(rel)) s += 100;
     if ((myWeb && /blu|bd|remux/.test(rel)) || (myBlu && /web/.test(rel))) s -= 80;
+    s += popularityBonus(d); // tie-breaker only — capped below release/episode/hash signals
     if (d.isHearingImpaired) s -= 10;
     return s;
   };
@@ -478,7 +519,94 @@ function rankSubs(data, releaseName = '', { durationSeconds = 0 } = {}) {
     };
   }).filter(Boolean).sort((a, b) => b.score - a.score || String(a.display).localeCompare(String(b.display)));
   if (ranked.length && !ranked.some((v) => v.selected)) ranked[0].selected = true;
+  dedupeVariantLabels(ranked);
   return ranked;
+}
+
+// Guarantee no two menu rows read identically (the "many options look the same" gripe). When
+// labels collide, append a distinguisher — release group, then source tag, then language — and
+// fall back to a numeric suffix so uniqueness is always reached.
+function dedupeVariantLabels(ranked) {
+  const counts = new Map();
+  for (const v of ranked) counts.set(v.label, (counts.get(v.label) || 0) + 1);
+  const nth = new Map();
+  for (const v of ranked) {
+    if ((counts.get(v.label) || 0) <= 1) continue;
+    const n = (nth.get(v.label) || 0) + 1; nth.set(v.label, n);
+    if (n === 1) continue; // first occurrence keeps the clean label
+    const rel = subtitleMatchText(v.raw || v);
+    const extra = subtitleGroupLabel(v.raw || v) || subtitleSourceLabel(rel) || String(v.language || '').toUpperCase();
+    v.label = extra && !v.label.toLowerCase().includes(extra.toLowerCase()) ? `${v.label} - ${extra} (${n})` : `${v.label} (${n})`;
+  }
+}
+
+// The user-facing variant LIST must not advertise subtitles that cannot actually play for THIS
+// file. Two confident "this option will not work" cases get trimmed before display:
+//   - non-text formats (sub/idx/PGS bitmap can never become WebVTT), and
+//   - for a TV target, files that are explicitly a DIFFERENT episode (wrong dialogue — the
+//     classic "House has a dozen options but most don't work").
+// rankSubs keeps those (heavily down-ranked) so auto-pick/fallback can still reason over the
+// full set; this is purely the display trim. Generic / no-episode-key rows are KEPT — they are
+// frequently the only correctly-synced option for a given release. If filtering would empty the
+// list (e.g. the provider only returned wrong-episode hits) we return the ranked list unchanged
+// so we degrade to best-effort rather than to a bare "no subtitles".
+function usableVariants(ranked, { releaseName = '' } = {}) {
+  const list = Array.isArray(ranked) ? ranked.filter(Boolean) : [];
+  const myEpisode = episodeKey(releaseName);
+  const playable = list.filter((v) => {
+    if (!/^(srt|vtt|)$/i.test(String(v.format || ''))) return false; // bitmap can't render as text
+    if (myEpisode) {
+      const relEp = episodeKey(subtitleMatchText(v.raw || v));
+      if (relEp && relEp !== myEpisode) return false;               // confirmed wrong episode
+    }
+    return true;
+  });
+  const out = playable.length ? playable : list;
+  if (out.length && !out.some((v) => v.selected)) out[0].selected = true;
+  return out;
+}
+
+// Collapse the ranked list into the DISTINCT choices worth showing a human. Wyzie routinely
+// returns dozens of interchangeable English SRTs mirrored across source sites; a 12-row wall of
+// "English (2)…(8)" is the real "many options but I can't tell them apart" gripe. We keep one
+// representative (best-scored) per meaningful bucket — episode + release source (WEB-DL/HDTV/
+// BluRay…) + hearing-impaired + language — and record how many duplicates it stood in for. The
+// FULL ranked set is still used server-side for download fallback, so collapsing only trims the
+// DISPLAY, never the candidates we can actually fetch.
+function distinctVariants(variants, { max = 8 } = {}) {
+  const list = Array.isArray(variants) ? variants.filter(Boolean) : [];
+  const buckets = new Map();
+  const out = [];
+  for (const v of list) {
+    const text = subtitleMatchText(v.raw || v);
+    // Edition is part of the bucket: an Extended cut and a Theatrical cut are genuinely different
+    // choices (they sync differently), so they must never collapse into each other.
+    const edition = [...editionTags(text)].sort().join(',');
+    const key = `${episodeKey(text)}|${subtitleSourceLabel(text)}|${edition}|${v.hearingImpaired ? 'sdh' : ''}|${v.language || ''}`;
+    if (buckets.has(key)) { buckets.get(key).dupes = (buckets.get(key).dupes || 0) + 1; continue; }
+    v.dupes = 0; buckets.set(key, v); out.push(v);
+    if (out.length >= max) break;
+  }
+  if (out.length && !out.some((v) => v.selected)) out[0].selected = true;
+  return out;
+}
+
+// Auto-select safety: is there a variant we can confidently auto-serve for THIS file? A text sub
+// that is the right episode (or has no episode at all, e.g. a season pack / generically-named
+// file) qualifies; a confirmed DIFFERENT episode does not. When this is false for a TV target we
+// would rather report "no subtitles" than silently feed the viewer the wrong episode's dialogue
+// (which reads as "CC is broken"). Explicit user picks bypass this — only the automatic path uses it.
+function hasConfidentAutoPick(variants, { releaseName = '' } = {}) {
+  const list = Array.isArray(variants) ? variants.filter(Boolean) : [];
+  if (!list.length) return false;
+  const isText = (v) => /^(srt|vtt|)$/i.test(String(v.format || ''));
+  const myEpisode = episodeKey(releaseName);
+  if (!myEpisode) return list.some(isText);
+  return list.some((v) => {
+    if (!isText(v)) return false;
+    const relEp = episodeKey(subtitleMatchText(v.raw || v));
+    return !relEp || relEp === myEpisode; // right episode or generic/no-episode
+  });
 }
 
 function subtitleDownloadCanFallback(e) {
@@ -777,7 +905,8 @@ async function osDownloadVtt(fileId, { apiKey, token, base = OS_REST_BASE } = {}
 module.exports = {
   fetchOnlineSub: fetchOnlineSubV2, searchOnlineSubs: searchOnlineSubsV2,
   osSearch, osNormalize, osLogin, osDownloadVtt, moviehashFromChunks,
-  downloadSubtitle, downloadBestSubtitle, rankSubs, srtToVtt, shiftVtt, parseQuery, pickSub,
+  downloadSubtitle, downloadBestSubtitle, rankSubs, usableVariants, distinctVariants, hasConfidentAutoPick,
+  srtToVtt, shiftVtt, parseQuery, pickSub,
   _request: request, _isTransientError: isTransientError, _isNoSubtitleError: isNoSubtitleError,
   _wyzieCatalogId: wyzieCatalogId,
   _subtitleDownloadNeedsAuth: subtitleDownloadNeedsAuth,
@@ -785,5 +914,5 @@ module.exports = {
   _subtitleDownloadCanFallback: subtitleDownloadCanFallback,
   _redactSubUrl: redactSubUrl,
   _toIso6391: toIso6391,
-  subtitleLooksSynced,
+  subtitleLooksSynced, subSyncResultOk,
 };

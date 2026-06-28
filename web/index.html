@@ -8446,6 +8446,12 @@ function startWebPlayerHousekeeping(mount, it) {
       if (wantLang && wantLang !== 'off' && it.type !== 'live' && S.serverInfo && S.serverInfo.opensubs && mount.id && subtitleCatalogAvailable(it)) {
         const code2 = osLang(wantLang);
         fetch(`/api/ossubs/${mount.id}?${subtitleRequestParams(it, code2, mount.streamToken).toString()}`).catch(() => {});
+      } else if (it.type !== 'live' && S.serverInfo && S.serverInfo.opensubs && mount.id && subtitleCatalogAvailable(it)) {
+        // Manual mode, no preferred language: warm the subtitle MENU (list only, no download) in the
+        // background so opening CC later is instant instead of eating the first-time ~10s Wyzie
+        // scrape. Fire-and-forget — never blocks playback, failures ignored.
+        const q = subtitleRequestParams(it, 'en', mount.streamToken); q.set('list', '1');
+        fetch(`/api/ossubs/${mount.id}?${q.toString()}`).catch(() => {});
       }
     })();
   }
@@ -11262,12 +11268,18 @@ function autoSyncSubtitle(p, rel, baseUrl) {
   p._autoSyncT = setTimeout(async () => {
     if (!S.playing || S.playing !== p || p.subTrack !== rel) return;
     try {
-      const syncUrl = baseUrl + (baseUrl.includes('?') ? '&' : '?') + 'sync=1';
-      const r = await fetch(syncUrl);
+      // Strip any manual &shift before asking for the alass-corrected sub: alass aligns the RAW sub
+      // to the audio, so re-applying the user's hand-offset on top would double-shift it. Mirrors
+      // autoSyncNative. After the corrected cues swap in, the manual offset is obsolete → reset it.
+      const u = new URL(baseUrl, location.origin);
+      u.searchParams.delete('shift');
+      u.searchParams.set('sync', '1');
+      const r = await fetch(u.href);
       if (!r.ok || r.headers.get('x-triboon-subsync') !== 'corrected') return;
       const synced = await r.text();
       if (!S.playing || S.playing !== p || p.subTrack !== rel || !synced || synced === p._subVttText) return;
       p._subVttText = synced; p._subVttRel = rel;
+      p._subShift = 0; saveSubShift(rel, 0);
       applySubtitleTrack();
       toast('Subtitles synced to this video');
     } catch {}

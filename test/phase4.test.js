@@ -1599,6 +1599,18 @@ test('Android native player: direct source and native chrome stay out of the web
     'online subtitle lookup should use the episode-aware query captured during play');
   assert.match(server, /function subtitleReleaseName\(vf\) \{[\s\S]+vf\._releaseName[\s\S]+const releaseName = subtitleReleaseName\(vf\) \|\| vf\.name;[\s\S]+query: vf\._subQuery \|\| vf\._q \|\| releaseName \|\| vf\.name[\s\S]+rankSubs\(combined, releaseName[\s\S]+downloadBestSubtitle\([\s\S]+releaseName,/,
     'online subtitle lookup should rank and download using the selected source release name (Wyzie + OpenSubtitles merged)');
+  assert.match(server, /const ranked = rankSubs\(combined, releaseName[\s\S]+const variants = usableVariants\(ranked, \{ releaseName \}\)\.slice\(0, 12\);/,
+    'the displayed subtitle variant list must be trimmed by usableVariants (hide wrong-episode / non-text rows)');
+  assert.match(server, /if \(!variant && !hasConfidentAutoPick\(variants, \{ releaseName \}\)\) \{[\s\S]+e\.noSubtitles = true;[\s\S]+throw e;/,
+    'the automatic subtitle pick must refuse to serve a confirmed wrong-episode sub (report no-subtitles instead)');
+  assert.match(server, /if \(wantsList\) \{[\s\S]+const menu = distinctVariants\(variants\);[\s\S]+variants: menu\.map\(/,
+    'the subtitle menu list must collapse mirror-duplicate rows via distinctVariants (full set kept for download fallback)');
+  assert.match(ui, /Manual mode, no preferred language: warm the subtitle MENU[\s\S]+q\.set\('list', '1'\);[\s\S]+fetch\(`\/api\/ossubs\/\$\{mount\.id\}\?\$\{q\.toString\(\)\}`\)\.catch/,
+    'manual mode should background-prewarm the subtitle menu (list only) so opening CC is instant');
+  assert.match(ui, /function autoSyncSubtitle\(p, rel, baseUrl\)[\s\S]+u\.searchParams\.delete\('shift'\);[\s\S]+u\.searchParams\.set\('sync', '1'\);[\s\S]+p\._subShift = 0; saveSubShift\(rel, 0\);/,
+    'web auto-sync must strip the manual shift (no double-offset) and reset it once alass-corrected cues swap in, like the native path');
+  assert.match(server, /if \(!subSyncResultOk\(vtt, out\)\) throw new Error\('alass output failed the cue-count sanity check'\);/,
+    'alass output must pass the cue-count sanity guard before it is trusted/cached');
   assert.match(server, /function localMountFor\(ctx, libId, idx, caps = \{\}, playCtx = \{\}\)[\s\S]+const q = String\(playCtx\.q \|\| found\.item\.q \|\| found\.item\.title \|\| name\)[\s\S]+const season = playCtx\.season \?\? found\.item\.s[\s\S]+const ep = playCtx\.ep \?\? playCtx\.episode \?\? found\.item\.e[\s\S]+vf\._subQuery = episodeSubtitleQuery\(vf\._q, season, ep\)/,
     'local library mounts should preserve episode-aware subtitle queries for Wyzie');
   assert.match(ui, /function startupSubtitleRelFor\(p, saved = loadSubChoice\(\)\) \{[\s\S]+Manual mode is truly manual at startup[\s\S]+if \(prefSubtitleMode\(\) !== 'always'\) return '';[\s\S]+if \(saved === 'off'\) return '';[\s\S]+if \(subtitleRelPlayable\(p, saved\)\) return saved;[\s\S]+const builtIn = bestBuiltInSubtitleRel\(\);[\s\S]+if \(builtIn\) return builtIn;[\s\S]+return autoSubtitleRelFor\(p\);[\s\S]+\}/,

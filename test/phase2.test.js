@@ -498,7 +498,150 @@ test('subs: pickSub matches the sub to OUR release cut (sync depends on it)', ()
   assert.ok(pickSub([{ id: 9, format: 'srt' }], '') === undefined, 'url-less results are skipped entirely');
 });
 
-test('subs: Wyzie search receives exact release and filename hints', async () => {
+test('subs: usableVariants trims the wrong-episode / unplayable rows from the menu', () => {
+  const { rankSubs, usableVariants } = require('../server/opensubs');
+  // A long-running show (House-style) where the provider returns lots of cross-episode noise +
+  // a bitmap. The user is watching S02E05; the menu must NOT advertise the wrong episodes or the
+  // bitmap, both of which "don't work" when picked.
+  const house = [
+    { id: 'right', url: 'http://x/right.srt', format: 'srt', display: 'House.S02E05.1080p.WEB-DL-GRP' },
+    { id: 'wrong1', url: 'http://x/w1.srt', format: 'srt', display: 'House.S02E04.1080p.WEB-DL-GRP' },
+    { id: 'wrong2', url: 'http://x/w2.srt', format: 'srt', display: 'House.S03E12.720p.HDTV-GRP' },
+    { id: 'generic', url: 'http://x/g.srt', format: 'srt', display: 'House.Complete.Series.Pack' },
+    { id: 'bitmap', url: 'http://x/b.sub', format: 'sub', display: 'House.S02E05.VOBSUB' },
+  ];
+  const release = 'House.S02E05.1080p.WEB-DL.DDP5.1.H.264-GRP.mkv';
+  const ranked = rankSubs(house, release);
+  assert.ok(ranked.some((v) => v.id === 'wrong1'), 'rankSubs still keeps wrong-episode rows for auto-pick/fallback reasoning');
+  const menu = usableVariants(ranked, { releaseName: release });
+  const ids = menu.map((v) => v.id);
+  assert.deepStrictEqual(ids.sort(), ['generic', 'right'], 'menu keeps only the right episode + the generic/no-episode fallback');
+  assert.ok(!ids.includes('wrong1') && !ids.includes('wrong2'), 'explicit wrong-episode subs are hidden');
+  assert.ok(!ids.includes('bitmap'), 'bitmap (non-text) subs are hidden — they can never render');
+  assert.ok(menu.find((v) => v.id === 'right').selected, 'the right episode stays selected after the trim');
+
+  // Movie target (no episode): only the bitmap is unplayable, everything else stays.
+  const movie = [
+    { id: 'srt', url: 'http://x/m.srt', format: 'srt', display: 'Some.Movie.2024.1080p.WEB-DL-GRP' },
+    { id: 'pgs', url: 'http://x/m.sup', format: 'sup', display: 'Some.Movie.2024.PGS' },
+  ];
+  const mMenu = usableVariants(rankSubs(movie, 'Some.Movie.2024.1080p.WEB-DL-GRP.mkv'), { releaseName: 'Some.Movie.2024.1080p.WEB-DL-GRP.mkv' });
+  assert.deepStrictEqual(mMenu.map((v) => v.id), ['srt'], 'movies drop only the unplayable bitmap row');
+
+  // Degrade gracefully: if EVERY result is a wrong episode, do not return an empty menu.
+  const allWrong = [
+    { id: 'a', url: 'http://x/a.srt', format: 'srt', display: 'House.S01E01.WEB-DL-GRP' },
+    { id: 'b', url: 'http://x/b.srt', format: 'srt', display: 'House.S01E02.WEB-DL-GRP' },
+  ];
+  const fallback = usableVariants(rankSubs(allWrong, release), { releaseName: release });
+  assert.strictEqual(fallback.length, 2, 'when nothing matches the episode we keep best-effort rows rather than show nothing');
+  assert.ok(fallback.some((v) => v.selected), 'a best-effort row is still marked selected');
+});
+
+test('subs: hasConfidentAutoPick guards the automatic pick against wrong-episode-only results', () => {
+  const { rankSubs, hasConfidentAutoPick } = require('../server/opensubs');
+  const release = 'House.S02E05.1080p.WEB-DL-GRP.mkv';
+  const right = rankSubs([
+    { id: 'r', url: 'http://x/r.srt', format: 'srt', display: 'House.S02E05.WEB-DL-GRP' },
+    { id: 'w', url: 'http://x/w.srt', format: 'srt', display: 'House.S02E04.WEB-DL-GRP' },
+  ], release);
+  assert.ok(hasConfidentAutoPick(right, { releaseName: release }), 'a right-episode match is a confident auto-pick');
+  const generic = rankSubs([{ id: 'g', url: 'http://x/g.srt', format: 'srt', display: 'House.Complete.Pack' }], release);
+  assert.ok(hasConfidentAutoPick(generic, { releaseName: release }), 'a generic/no-episode row is acceptable to auto-serve');
+  const allWrong = rankSubs([
+    { id: 'a', url: 'http://x/a.srt', format: 'srt', display: 'House.S01E01.WEB-DL-GRP' },
+    { id: 'b', url: 'http://x/b.srt', format: 'srt', display: 'House.S03E09.WEB-DL-GRP' },
+  ], release);
+  assert.ok(!hasConfidentAutoPick(allWrong, { releaseName: release }),
+    'when EVERY result is a confirmed different episode there is no confident auto-pick (report no-subs, do not feed wrong dialogue)');
+  const movie = rankSubs([{ id: 'm', url: 'http://x/m.srt', format: 'srt', display: 'Some.Movie.2024.WEB-DL' }], 'Some.Movie.2024.WEB-DL.mkv');
+  assert.ok(hasConfidentAutoPick(movie, { releaseName: 'Some.Movie.2024.WEB-DL.mkv' }), 'movies (no episode) auto-pick any text sub');
+});
+
+test('subs: popularity/trust break ties without overriding release or episode matches', () => {
+  const { rankSubs, pickSub } = require('../server/opensubs');
+  // Two equally-generic English subs for the same movie: the far more downloaded one should win.
+  const tie = [
+    { id: 'rare', url: 'http://x/rare.srt', format: 'srt', display: 'Some.Movie.2024.1080p.WEB-DL', downloadCount: 3 },
+    { id: 'popular', url: 'http://x/pop.srt', format: 'srt', display: 'Some.Movie.2024.1080p.WEB-DL', downloadCount: 5000, fromTrusted: true },
+  ];
+  assert.strictEqual(pickSub(tie, 'Some.Movie.2024.1080p.WEB-DL-GRP.mkv').id, 'popular',
+    'among equal-quality matches the popular/trusted sub is the default pick');
+  // But popularity must NOT beat a real release-name match, and must NEVER beat the right episode.
+  const release = [
+    { id: 'exactBlu', url: 'http://x/blu.srt', format: 'srt', display: 'Some.Movie.2024.1080p.BluRay.x264-GRP', downloadCount: 1 },
+    { id: 'popularWeb', url: 'http://x/web.srt', format: 'srt', display: 'Some.Movie.2024.1080p.WEB-DL-OTHER', downloadCount: 999999 },
+  ];
+  assert.strictEqual(pickSub(release, 'Some.Movie.2024.1080p.BluRay.x264-GRP.mkv').id, 'exactBlu',
+    'a popular wrong-cut sub never beats the matching release cut');
+  const ep = [
+    { id: 'rightEp', url: 'http://x/e.srt', format: 'srt', display: 'House.S02E05.WEB-DL-GRP', downloadCount: 2 },
+    { id: 'popularWrongEp', url: 'http://x/we.srt', format: 'srt', display: 'House.S02E04.WEB-DL-GRP', downloadCount: 999999 },
+  ];
+  assert.strictEqual(rankSubs(ep, 'House.S02E05.1080p.WEB-DL-GRP.mkv')[0].id, 'rightEp',
+    'a hugely popular wrong-episode sub never out-ranks the correct episode');
+});
+
+test('subs: variant labels are distinct and fall back to the release name, not "Subtitle version"', () => {
+  const { rankSubs } = require('../server/opensubs');
+  // Results with no episode/source/group structure must not all collapse to one label.
+  const blank = [
+    { id: 'a', url: 'http://x/a.srt', format: 'srt', display: 'House.MD.Season.2.Complete' },
+    { id: 'b', url: 'http://x/b.srt', format: 'srt', display: 'House.M.D.S02.PROPER' },
+  ];
+  const ranked = rankSubs(blank, '');
+  const labels = ranked.map((v) => v.label);
+  assert.ok(!labels.some((l) => /^Subtitle version$/i.test(l)), 'rows fall back to the readable release name');
+  assert.strictEqual(new Set(labels).size, labels.length, 'no two rows share an identical label');
+  // Genuinely identical display strings still get disambiguated with a numeric suffix.
+  const dupe = rankSubs([
+    { id: '1', url: 'http://x/1.srt', format: 'srt', display: 'House' },
+    { id: '2', url: 'http://x/2.srt', format: 'srt', display: 'House' },
+  ], '');
+  assert.strictEqual(new Set(dupe.map((v) => v.label)).size, 2, 'duplicate display strings are still made unique');
+});
+
+test('subs: subSyncResultOk rejects corrupt alass alignments (cue count must be preserved)', () => {
+  const { subSyncResultOk } = require('../server/opensubs');
+  const cue = (a, b, t) => `00:00:0${a},000 --> 00:00:0${b},000\n${t}\n`;
+  const input = [cue(1, 2, 'one'), cue(3, 4, 'two'), cue(5, 6, 'three')].join('\n');
+  const reTimed = [cue(2, 3, 'one'), cue(4, 5, 'two'), cue(6, 7, 'three')].join('\n'); // same 3 cues, shifted
+  assert.ok(subSyncResultOk(input, reTimed), 'a correctly re-timed sub with the same cue count is accepted');
+  assert.ok(!subSyncResultOk(input, ''), 'empty alass output is rejected');
+  assert.ok(!subSyncResultOk(input, 'WEBVTT\n\nno timestamps here'), 'output without timestamps is rejected');
+  assert.ok(!subSyncResultOk(input, [cue(1, 2, 'only one')].join('\n')), 'dropping most cues is rejected as corrupt');
+  // Tiny tolerance: one extra/blank cue on a large sub is still accepted.
+  const big = Array.from({ length: 100 }, (_, i) => cue(1, 2, 'line' + i)).join('\n');
+  const bigPlus1 = big + '\n' + cue(9, 9, 'trailing');
+  assert.ok(subSyncResultOk(big, bigPlus1), 'a single trailing cue within tolerance is accepted');
+  const bigDropped = Array.from({ length: 80 }, (_, i) => cue(1, 2, 'line' + i)).join('\n');
+  assert.ok(!subSyncResultOk(big, bigDropped), 'dropping 20% of cues exceeds tolerance and is rejected');
+});
+
+test('subs: distinctVariants collapses Wyzie mirror-duplicate rows into a few meaningful choices', () => {
+  const { rankSubs, usableVariants, distinctVariants } = require('../server/opensubs.js');
+  // Mirrors what live Wyzie returns for an episode: one BluRay + one HDTV + one SDH, plus a pile of
+  // interchangeable generic English SRTs (no source info) re-uploaded across sites.
+  const release = 'House.S02E05.1080p.BluRay.x264-DON.mkv';
+  const data = [
+    { id: 'blu', url: 'http://x/blu.srt', format: 'srt', display: 'House.S02E05.1080p.BluRay-DON', language: 'en' },
+    { id: 'hdtv', url: 'http://x/hdtv.srt', format: 'srt', display: 'House.S02E05.720p.HDTV-LOL', language: 'en' },
+    { id: 'sdh', url: 'http://x/sdh.srt', format: 'srt', display: 'House.S02E05.WEB-DL', language: 'en', isHearingImpaired: true },
+  ];
+  for (let i = 0; i < 8; i++) data.push({ id: 'gen' + i, url: `http://x/g${i}.srt`, format: 'srt', display: 'House.S02E05', language: 'en', downloadCount: i });
+  const trimmed = usableVariants(rankSubs(data, release), { releaseName: release }).slice(0, 12);
+  const menu = distinctVariants(trimmed);
+  assert.ok(menu.length <= 5, `12 near-identical rows collapse to a handful of distinct choices (got ${menu.length})`);
+  // The 8 generic English SRTs collapse to ONE row that records how many it stood in for.
+  const generic = menu.find((v) => !/blu|hdtv|web/i.test(String(v.raw.display)) || /House\.S02E05$/.test(v.raw.display));
+  assert.ok(menu.some((v) => v.dupes >= 6), 'the interchangeable generic mirrors collapse into one row with a dupes count');
+  assert.ok(menu.some((v) => /BluRay/i.test(v.label)), 'the distinct BluRay source is preserved as its own choice');
+  assert.ok(menu.some((v) => v.hearingImpaired), 'the SDH variant survives as a distinct choice');
+  assert.ok(menu.some((v) => v.selected), 'a row stays selected after collapse');
+  assert.strictEqual(menu.find((v) => v.selected).id, 'blu', 'the release-matched BluRay sub is the auto-pick');
+});
+
+test('subs: Wyzie search sends catalog id + episode but NO slow release/file hints', async () => {
   const { searchOnlineSubs } = require('../server/opensubs');
   let seen;
   const srv = http.createServer((req, res) => {
@@ -517,10 +660,13 @@ test('subs: Wyzie search receives exact release and filename hints', async () =>
     assert.strictEqual(seen.searchParams.get('source'), 'all');
     assert.strictEqual(seen.searchParams.get('season'), '1');
     assert.strictEqual(seen.searchParams.get('episode'), '1');
-    assert.strictEqual(seen.searchParams.get('release'), release);
-    assert.strictEqual(seen.searchParams.get('origin'), release);
-    assert.strictEqual(seen.searchParams.get('fileName'), release);
-    assert.strictEqual(seen.searchParams.get('file'), release);
+    // Release/file hints are deliberately NOT sent: measured on a live key, that hinted lookup is
+    // ~2x slower (~10s) AND almost always 400s "no matching release". We rank by release/episode/
+    // edition LOCALLY in rankSubs, so the hint added latency for nothing.
+    assert.strictEqual(seen.searchParams.has('release'), false, 'no slow release hint sent to Wyzie');
+    assert.strictEqual(seen.searchParams.has('origin'), false);
+    assert.strictEqual(seen.searchParams.has('fileName'), false);
+    assert.strictEqual(seen.searchParams.has('file'), false);
   } finally {
     await new Promise((r) => srv.close(r));
   }
@@ -552,12 +698,13 @@ test('subs: Wyzie search prefers IMDb id when available for paid provider covera
 
 // A response that TRICKLES (a byte under every idle window) defeats socket timeouts — only a
 // hard total deadline stops it. Same lesson as the NNTP stall bug: timeouts on every wire.
-test('subs: Wyzie release-filter miss falls back to ID-only search', async () => {
+test('subs: Wyzie search is a single ID-only call (no wasted release-filter round-trip)', async () => {
   const { searchOnlineSubs } = require('../server/opensubs');
   const seen = [];
   const srv = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://127.0.0.1');
     seen.push(u);
+    // A real Wyzie 400s a release-hinted query — if we ever sent one again this mock would surface it.
     if (u.searchParams.has('release')) {
       res.writeHead(400, { 'content-type': 'application/json' });
       return res.end(JSON.stringify({ message: 'No matching release found' }));
@@ -572,12 +719,11 @@ test('subs: Wyzie release-filter miss falls back to ID-only search', async () =>
       base: `http://127.0.0.1:${srv.address().port}`,
     });
     assert.strictEqual(rows[0].id, 'fallback');
-    assert.strictEqual(seen.length, 2);
-    assert.strictEqual(seen[0].searchParams.get('release'), 'Show.S01E01.Unknown.Release-GRP.mkv');
-    assert.strictEqual(seen[1].searchParams.has('release'), false, 'fallback query drops strict release filters');
-    assert.strictEqual(seen[1].searchParams.get('id'), '123');
-    assert.strictEqual(seen[1].searchParams.get('season'), '1');
-    assert.strictEqual(seen[1].searchParams.get('episode'), '1');
+    assert.strictEqual(seen.length, 1, 'exactly one Wyzie call — the slow release-hinted round-trip was removed');
+    assert.strictEqual(seen[0].searchParams.has('release'), false, 'release filters are never sent');
+    assert.strictEqual(seen[0].searchParams.get('id'), '123');
+    assert.strictEqual(seen[0].searchParams.get('season'), '1');
+    assert.strictEqual(seen[0].searchParams.get('episode'), '1');
   } finally {
     await new Promise((r) => srv.close(r));
   }

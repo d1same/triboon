@@ -1671,11 +1671,14 @@ test('subtitles: Wyzie search→file→VTT served per mount (and 503 without a k
   assert.ok(vtt.startsWith('WEBVTT'), 'served as WebVTT');
   assert.match(vtt, /00:00:01\.000 --> 00:00:02\.500/, 'SRT timestamps converted');
   assert.match(vtt, /Hello usenet/);
-  assert.ok(subtitleSearches.some((s) => s.release === pickedRelease && s.origin === pickedRelease
-    && s.fileName === pickedRelease && s.file === pickedRelease),
-  'subtitle release hints should use the exact selected source, not the mounted inner filename');
+  // We intentionally send Wyzie NO release/file hints: measured on a live key, the hinted lookup is
+  // ~2x slower (~10s) and almost always 400s "no matching release", so it only delayed the broad
+  // search. Release/episode/edition matching is done LOCALLY in rankSubs, so no search should carry
+  // a release hint — and the opaque mounted filename must certainly never leak.
+  assert.ok(subtitleSearches.length && subtitleSearches.every((s) => !s.release && !s.origin && !s.fileName && !s.file),
+    'Wyzie searches send no release/file hints (the slow hinted path was removed; matching is local)');
   assert.ok(!subtitleSearches.some((s) => s.release === 'Feature.mkv'),
-    'generic mounted filenames should not drive Wyzie release matching');
+    'generic mounted filenames never leak to Wyzie');
   assert.ok(subtitleDownloads.some((d) => d.path === '/file.srt' && (d.headerKey === 'test-key' || d.queryKey === 'test-key')),
     'subtitle file download carries the Wyzie key, not just the search request');
   const beforeShift = searchCalls;

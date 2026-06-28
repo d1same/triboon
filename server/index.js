@@ -136,7 +136,9 @@ async function onDemandSubSync(vf, vtt, uid) {
       p.on('close', (code) => { clearTimeout(killer); code === 0 ? resolve() : reject(new Error(`alass exited ${code}: ${err.slice(-200)}`)); });
     });
     const out = await fsp.readFile(outSrt, 'utf8');
-    if (!out || !/\d{2}:\d{2}:\d{2}/.test(out)) throw new Error('alass produced no cues');
+    // alass only re-times existing cues; a changed cue count (or empty output) means a corrupt
+    // alignment — reject it so the caller falls back to the unsynced track instead of garbage.
+    if (!subSyncResultOk(vtt, out)) throw new Error('alass output failed the cue-count sanity check');
     return srtToVtt(out);
   } finally {
     fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
@@ -364,8 +366,8 @@ const pipeline = new Pipeline({
 });
 const { fetchUrl: fetchUrlExt, searchIndexer } = require('./newznab');
 const {
-  fetchOnlineSub, searchOnlineSubs, downloadBestSubtitle, rankSubs, srtToVtt, shiftVtt,
-  osSearch, osNormalize, osLogin, osDownloadVtt, moviehashFromChunks, subtitleLooksSynced,
+  fetchOnlineSub, searchOnlineSubs, downloadBestSubtitle, rankSubs, usableVariants, distinctVariants, hasConfidentAutoPick, srtToVtt, shiftVtt,
+  osSearch, osNormalize, osLogin, osDownloadVtt, moviehashFromChunks, subtitleLooksSynced, subSyncResultOk,
   _isTransientError: isTransientSubError,
   _isNoSubtitleError: isNoSubtitleError,
 } = require('./opensubs');
@@ -5844,7 +5846,10 @@ Object.assign(H, {
             const osData = await openSubtitlesVariantsForMount(vf, { imdbId, tmdbId, lang });
             const combined = [...(Array.isArray(wyData) ? wyData : []), ...osData];
             if (!combined.length) throw (wyErr || new Error('online subtitles failed'));
-            const variants = rankSubs(combined, releaseName, { durationSeconds: vf._tracks && vf._tracks.duration }).slice(0, 12);
+            const ranked = rankSubs(combined, releaseName, { durationSeconds: vf._tracks && vf._tracks.duration });
+            // Trim wrong-episode / non-text rows so the menu only advertises subtitles that can
+            // actually play for this file (the "House shows many options but most don't work" fix).
+            const variants = usableVariants(ranked, { releaseName }).slice(0, 12);
             vf._osSearchCache.set(searchKey, variants);
             return variants;
           })().finally(() => vf._osSearchInflight.delete(searchKey));
@@ -5857,10 +5862,13 @@ Object.assign(H, {
     if (wantsList) {
       try {
         const variants = await getVariants();
+        // Collapse interchangeable duplicates for DISPLAY (Wyzie mirrors return dozens of identical
+        // English SRTs). The full `variants` set is still cached for download fallback below.
+        const menu = distinctVariants(variants);
         return send(ctx.res, 200, {
           lang,
-          selectedId: (variants.find((v) => v.selected) || variants[0] || {}).id || null,
-          variants: variants.map((v) => ({
+          selectedId: (menu.find((v) => v.selected) || menu[0] || {}).id || null,
+          variants: menu.map((v) => ({
             id: v.id, label: v.label, display: v.display, language: v.language,
             format: v.format, hearingImpaired: v.hearingImpaired, score: v.score, selected: !!v.selected,
           })),
@@ -5895,6 +5903,13 @@ Object.assign(H, {
           // chosen subtitle's metadata — that's what tells us whether it's ALREADY in sync
           // (release/hash match) and lets the auto-sync step skip alass when no sync is needed.
           const variants = await getVariants();
+          // Auto-select safety: never silently serve a confirmed wrong-episode sub. If the user
+          // did NOT pick a specific version and nothing in the list is a confident match for this
+          // file (right episode or generic), treat it as a clean no-subtitles miss instead of
+          // feeding the wrong episode's dialogue. Explicit picks bypass this.
+          if (!variant && !hasConfidentAutoPick(variants, { releaseName })) {
+            const e = new Error('No subtitles found for this title'); e.noSubtitles = true; e.permanent = true; throw e;
+          }
           const chosen = variant ? variants.find((v) => v.id === variant) : variants[0];
           if (!chosen || !chosen.raw) throw new Error(variant ? 'that subtitle version is no longer available' : 'online subtitles failed');
           vf._subSyncState.set(cacheKey, subtitleLooksSynced(chosen.raw, releaseName));
