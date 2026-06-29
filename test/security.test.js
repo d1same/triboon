@@ -150,7 +150,7 @@ test('security: deny-by-default — every route declares auth; unknown routes 40
 
   // 3. Every non-public route rejects anonymous and garbage-token requests.
   const probes = [
-    ['GET', '/api/me'], ['GET', '/api/me/security'], ['POST', '/api/me/totp/setup'], ['POST', '/api/me/totp/enable'],
+    ['GET', '/api/me'], ['GET', '/api/me/security'], ['GET', '/api/app/latest'], ['POST', '/api/me/totp/setup'], ['POST', '/api/me/totp/enable'],
     ['POST', '/api/me/totp/disable'], ['POST', '/api/me/totp/recovery'], ['GET', '/api/status'], ['GET', '/api/search?q=x'],
     ['POST', '/api/play'], ['POST', '/api/advance/abc'], ['GET', '/api/tmdb/trending/all/week'],
     ['GET', '/api/watch'], ['GET', '/api/watch/next'], ['POST', '/api/watch'], ['GET', '/api/activity'], ['POST', '/api/activity'], ['GET', '/api/mounts'],

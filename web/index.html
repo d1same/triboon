@@ -16069,11 +16069,8 @@ async function renderAppUpdateBox() {
     }
   } catch {}
   let latest = '', latestVer = '';
-  try {
-    const r = await fetch('https://api.github.com/repos/d1same/triboon/releases/latest', { cache: 'no-store' });
-    const j = await r.json();
-    if (j && j.tag_name) { latestVer = j.tag_name; latest = ` Latest release: ${j.tag_name}.`; }
-  } catch {}
+  latestVer = await fetchLatestAppVersion(); // server-cached (falls back to GitHub) — no per-device rate limit
+  if (latestVer) latest = ` Latest release: ${latestVer}.`;
   const updateAvailable = !!(curVer && latestVer && compareSemver(curVer, latestVer) < 0);
   status.classList.toggle('updateAvail', updateAvailable);
   const btn = $('apkUpdate');
@@ -16104,18 +16101,23 @@ function openApkUpdate() {
 // asking whether to update. Plain web has nothing to self-install (the server updates itself), so
 // this is gated to the TriboonTV shell. "Later" just closes it; it returns next launch if still behind.
 let _updatePromptDone = false;
+let _lastUpdateCheck = 0;
+// Ask OUR server (it fetches GitHub once and caches) so every device doesn't burn GitHub's 60/hr
+// unauthenticated API — the silent rate-limiting was why the prompt often never appeared. Falls back
+// to a direct GitHub fetch for older servers without the endpoint.
+async function fetchLatestAppVersion() {
+  try { const j = await api('/api/app/latest'); if (j && j.latest) return j.latest; } catch {}
+  try { const r = await fetch('https://api.github.com/repos/d1same/triboon/releases/latest', { cache: 'no-store' }); return ((await r.json()) || {}).tag_name || ''; } catch {}
+  return '';
+}
 async function maybePromptAppUpdate() {
   if (_updatePromptDone) return;
   if (!(window.TriboonTV && typeof TriboonTV.appVersion === 'function')) return; // Android shell only
+  _lastUpdateCheck = Date.now();
   let curVer = '';
   try { curVer = (JSON.parse(TriboonTV.appVersion() || '{}') || {}).versionName || ''; } catch {}
   if (!curVer) return;
-  let latestVer = '';
-  try {
-    const r = await fetch('https://api.github.com/repos/d1same/triboon/releases/latest', { cache: 'no-store' });
-    const j = await r.json();
-    latestVer = (j && j.tag_name) || '';
-  } catch { return; } // offline / rate-limited: stay quiet
+  const latestVer = await fetchLatestAppVersion();
   if (!latestVer || compareSemver(curVer, latestVer) >= 0) return; // up to date or unknown
   _updatePromptDone = true; // prompt at most once per launch, whatever the user chooses
   if (S.playing || S.view === 'player') return; // never interrupt playback
@@ -16131,6 +16133,13 @@ async function maybePromptAppUpdate() {
 function closeUpdateModal() { $('updateModal').classList.remove('open'); }
 $('updateModalGo').addEventListener('click', () => { closeUpdateModal(); openApkUpdate(); });
 $('updateModalLater').addEventListener('click', closeUpdateModal);
+// TVs are rarely relaunched, so a once-at-boot check would miss new releases for days. Re-check on
+// resume, throttled to every 3h, so a long-running app still surfaces updates without a restart.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || Date.now() - _lastUpdateCheck < 3 * 3600000) return;
+  _updatePromptDone = false;
+  maybePromptAppUpdate().catch(() => {});
+});
 function syncChoiceButtons(selector, isSelected) {
   document.querySelectorAll(selector).forEach((b) => {
     const selected = !!isSelected(b);

@@ -3591,6 +3591,35 @@ async function loadMusicChartResponses(uid, { wait = true } = {}) {
   }))).filter((c) => c && c.results.length);
 }
 
+// In-app update check: the SERVER fetches GitHub releases/latest once and caches it, so every device
+// asks its own server instead of each hammering GitHub's 60/hr unauthenticated API — which silently
+// rate-limited the update prompt (the device's check just returned nothing, so no popup appeared).
+const GH_LATEST_URL = 'https://api.github.com/repos/d1same/triboon/releases/latest';
+let _appLatestCache = { at: 0, data: null };
+function fetchLatestRelease() {
+  return new Promise((resolve, reject) => {
+    const req = https.get(GH_LATEST_URL, { headers: { 'user-agent': 'triboon-server', accept: 'application/vnd.github+json' }, timeout: 8000 }, (res) => {
+      if (res.statusCode !== 200) { res.resume(); return reject(new Error(`github ${res.statusCode}`)); }
+      let buf = ''; res.on('data', (d) => (buf += d)); res.on('end', () => { try { resolve(JSON.parse(buf)); } catch (e) { reject(e); } });
+    });
+    req.on('error', reject);
+    req.on('timeout', () => req.destroy(new Error('github timeout')));
+  });
+}
+async function appLatestVersion() {
+  const now = Date.now();
+  if (_appLatestCache.data && now - _appLatestCache.at < 30 * 60000) return _appLatestCache.data; // 30-min cache
+  const j = await fetchLatestRelease();
+  const apk = (j.assets || []).find((a) => a && a.name === 'triboon.apk');
+  const data = {
+    latest: j.tag_name || '',
+    apkUrl: apk ? apk.browser_download_url : 'https://github.com/d1same/triboon/releases/latest/download/triboon.apk',
+    publishedAt: j.published_at || null,
+  };
+  _appLatestCache = { at: now, data };
+  return data;
+}
+
 // ---------- handlers ----------
 const H = {
   server: async (ctx) => send(ctx.res, 200, {
@@ -3657,6 +3686,13 @@ const H = {
 
   meSecurity: async (ctx) => {
     send(ctx.res, 200, { twoFactor: auth.twoFactorStatus(ctx.user.id) });
+  },
+
+  // Latest published app version (cached server-side) — the client compares against its installed
+  // build to decide whether to show the update prompt, without each device hitting GitHub directly.
+  appLatest: async (ctx) => {
+    try { send(ctx.res, 200, await appLatestVersion()); }
+    catch { send(ctx.res, 200, { latest: '', error: 'version check unavailable' }); }
   },
 
   password: async (ctx) => {
@@ -6691,6 +6727,7 @@ const ROUTES = [
   { m: 'POST', re: /^\/api\/quickconnect\/(\d{6})\/approve$/, auth: 'user', h: H.qcApprove },
   { m: 'GET', re: /^\/api\/me$/, auth: 'user', h: H.me },
   { m: 'GET', re: /^\/api\/me\/security$/, auth: 'user', h: H.meSecurity },
+  { m: 'GET', re: /^\/api\/app\/latest$/, auth: 'user', h: H.appLatest },
   { m: 'POST', re: /^\/api\/me\/password$/, auth: 'user', h: H.password },
   { m: 'POST', re: /^\/api\/me\/totp\/setup$/, auth: 'admin', h: H.totpSetup },
   { m: 'POST', re: /^\/api\/me\/totp\/enable$/, auth: 'admin', h: H.totpEnable },
