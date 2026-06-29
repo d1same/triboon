@@ -187,7 +187,8 @@ function providerList() {
 }
 
 function normalizeStreamingPerformance(raw = {}) {
-  const profile = ['auto', 'fast', 'balanced', 'large', 'custom'].includes(raw.profile) ? raw.profile : 'auto';
+  // Legacy cosmetic profiles (fast/balanced/large) fold into 'auto'; intent presets are capacity-relative.
+  const profile = ['auto', 'quality', 'concurrency', 'custom'].includes(raw.profile) ? raw.profile : 'auto';
   const mix = ['1080p', '4k', 'mixed'].includes(raw.streamMix) ? raw.streamMix : 'mixed';
   return {
     profile,
@@ -237,8 +238,15 @@ function recommendStreamingPerformance(input = {}, s = settings.get()) {
   const usableConnections = Math.max(0, Math.floor(totalConnections * 0.85));
   const reservePct = totalConnections >= 80 ? 20 : 25;
   const reserveConnections = usableConnections ? Math.max(2, Math.ceil(usableConnections * reservePct / 100)) : 0;
+  // Intent presets scale with the server's REAL capacity (never hardcoded numbers): "quality" plans
+  // for fewer concurrent streams (each gets a bigger share + deeper buffer), "concurrency" plans for
+  // more. Everything still derives from total connections, so 40 and 300 both get sane numbers.
+  const planUsers = current.profile === 'quality' ? Math.max(1, Math.ceil(current.expectedUsers / 2))
+    : current.profile === 'concurrency' ? Math.max(1, Math.ceil(current.expectedUsers * 1.5))
+    : current.expectedUsers;
+  const bufferScale = current.profile === 'quality' ? 1.25 : current.profile === 'concurrency' ? 0.85 : 1;
   const activeBudget = Math.max(0, usableConnections - reserveConnections);
-  const perUser = current.expectedUsers ? Math.max(1, Math.floor(activeBudget / current.expectedUsers)) : activeBudget;
+  const perUser = planUsers ? Math.max(1, Math.floor(activeBudget / planUsers)) : activeBudget;
 
   const mixMbps = current.streamMix === '4k' ? 55 : current.streamMix === '1080p' ? 12 : 28;
   const usableDown = current.serverDownloadMbps ? current.serverDownloadMbps * 0.8 : 0;
@@ -248,8 +256,8 @@ function recommendStreamingPerformance(input = {}, s = settings.get()) {
 
   const rec1080 = Math.max(4, Math.min(24, perUser >= 16 ? 14 : perUser >= 10 ? 12 : perUser >= 6 ? 8 : 6));
   const rec4k = Math.max(6, Math.min(36, perUser >= 24 ? 24 : perUser >= 16 ? 18 : perUser >= 10 ? 14 : 10));
-  const buffer1080Sec = tightDownload ? 90 : generousDownload ? 240 : 180;
-  const buffer4kSec = tightDownload ? 60 : generousDownload ? 120 : 90;
+  const buffer1080Sec = clampInt(Math.round((tightDownload ? 90 : generousDownload ? 240 : 180) * bufferScale), 180, 30, 600);
+  const buffer4kSec = clampInt(Math.round((tightDownload ? 60 : generousDownload ? 120 : 90) * bufferScale), 90, 30, 360);
   const remotePerStreamMbps = current.remoteUsers && current.serverUploadMbps
     ? Math.max(1, Math.floor((current.serverUploadMbps * 0.8) / current.remoteUsers))
     : 0;
@@ -272,12 +280,18 @@ function recommendStreamingPerformance(input = {}, s = settings.get()) {
   // latency dip on a connection or two can't drop fill below the playback rate. 4K gets a higher
   // floor — running a high-bitrate stream on a handful of connections is what let the buffer drain
   // to zero mid-movie even with hundreds of connections idle.
-  const perStream1080 = measuredPerConn > 0 ? Math.max(6, Math.min(24, Math.ceil((br1080 * 1.6) / measuredPerConn))) : rec1080;
-  const perStream4k = measuredPerConn > 0 ? Math.max(12, Math.min(40, Math.ceil((br4k * 2.5) / measuredPerConn))) : rec4k;
   // A measured connection cap is a hard ceiling — usable capacity can't exceed what the account accepts.
   const effTotal = measuredCap > 0 ? Math.min(totalConnections || measuredCap, measuredCap) : totalConnections;
   const effUsable = Math.max(0, Math.floor(effTotal * 0.85));
   const effActive = Math.max(0, effUsable - (effUsable ? Math.max(2, Math.ceil(effUsable * reservePct / 100)) : 0));
+  // Per-stream connections = your fair SHARE of the active budget for the number of streams the chosen
+  // intent plans for, but never below what sustains the PEAK bitrate. This is what makes the preset
+  // scale with capacity: fewer planned streams → bigger share → richer streams; more → more viewers fit.
+  const share = planUsers ? Math.floor(effActive / planUsers) : effActive;
+  const floor1080 = measuredPerConn > 0 ? Math.ceil((br1080 * 1.6) / measuredPerConn) : rec1080;
+  const floor4k = measuredPerConn > 0 ? Math.ceil((br4k * 2.5) / measuredPerConn) : rec4k;
+  const perStream1080 = Math.max(6, Math.min(24, Math.max(floor1080, share)));
+  const perStream4k = Math.max(12, Math.min(40, Math.max(floor4k, share)));
   // Simultaneous viewers are limited by the SMALLER of two ceilings:
   //   (1) connections — each stream needs perStream connections out of the active budget; and
   //   (2) throughput — total deliverable Mbps ÷ the per-stream bitrate. Deliverable is the min of
@@ -300,7 +314,7 @@ function recommendStreamingPerformance(input = {}, s = settings.get()) {
 
   const recommendation = normalizeStreamingPerformance({
     ...current,
-    profile: 'auto',
+    profile: ['quality', 'concurrency'].includes(current.profile) ? current.profile : 'auto',
     startupReservePct: reservePct,
     buffer1080Sec,
     buffer4kSec,

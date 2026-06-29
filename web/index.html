@@ -3120,10 +3120,9 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
         <label class="settingsControl"><span>Download Mbps</span><input id="perfDown" type="number" min="0" max="100000" inputmode="numeric" placeholder="server download" title="server download speed"></label>
         <label class="settingsControl"><span>Upload Mbps</span><input id="perfUp" type="number" min="0" max="100000" inputmode="numeric" placeholder="server upload" title="server upload speed for remote users"></label>
         <label class="settingsControl"><span>Profile</span><select id="perfProfile">
-          <option value="auto">Auto</option>
-          <option value="fast">Fast start</option>
-          <option value="balanced">Balanced</option>
-          <option value="large">Large buffer</option>
+          <option value="auto">Auto (balanced)</option>
+          <option value="quality">Maximize quality</option>
+          <option value="concurrency">Maximize viewers</option>
           <option value="custom">Custom</option>
         </select></label>
       </div>
@@ -17298,7 +17297,7 @@ function perfSetApplyEnabled(on) {
   b.setAttribute('aria-disabled', on ? 'false' : 'true');
 }
 function perfProfileLabel(v) {
-  return ({ auto: 'Auto', fast: 'Fast start', balanced: 'Balanced', large: 'Large buffer', custom: 'Custom' })[v] || 'Auto';
+  return ({ auto: 'Auto (balanced)', quality: 'Maximize quality', concurrency: 'Maximize viewers', custom: 'Custom' })[v] || 'Auto (balanced)';
 }
 function perfNum(v, suffix = '') {
   const n = Number(v) || 0;
@@ -17863,21 +17862,12 @@ $('perfSave').addEventListener('click', async () => {
   toast('Streaming performance saved');
   refreshSettings();
 });
-// Profile presets fill the buffer/connection fields with sensible bundles (still hand-tunable).
-// Fast start = quick TTFF (small buffer, big startup reserve); Large = deep buffer for flaky links.
-const PERF_PRESETS = {
-  fast: { buffer1080Sec: 45, buffer4kSec: 30, maxConnPerStream1080: 8, maxConnPerStream4k: 12, startupReservePct: 40 },
-  balanced: { buffer1080Sec: 120, buffer4kSec: 75, maxConnPerStream1080: 12, maxConnPerStream4k: 18, startupReservePct: 25 },
-  large: { buffer1080Sec: 300, buffer4kSec: 180, maxConnPerStream1080: 16, maxConnPerStream4k: 24, startupReservePct: 15 },
-};
+// Profile presets are CAPACITY-RELATIVE: changing the intent re-runs the server recommendation, which
+// sizes every field from this box's REAL total connections + measured speed (so 40 and 300 connections
+// both get sane numbers — never hardcoded). "Custom" leaves the fields for hand-tuning.
 $('perfProfile').addEventListener('change', () => {
-  const preset = PERF_PRESETS[$('perfProfile').value];
-  if (!preset) return; // auto/custom leave the fields as-is (Calculate recommendation handles auto)
-  $('perfBuf1080').value = preset.buffer1080Sec;
-  $('perfBuf4k').value = preset.buffer4kSec;
-  $('perfConn1080').value = preset.maxConnPerStream1080;
-  $('perfConn4k').value = preset.maxConnPerStream4k;
-  $('perfReserve').value = preset.startupReservePct;
+  if ($('perfProfile').value === 'custom') return; // hand-tune mode — leave fields as-is
+  calcRecommendation().catch(() => {}); // auto / quality / concurrency → server computes scaled values
 });
 // Hand-editing any field means it's no longer a named preset.
 ['perfBuf1080', 'perfBuf4k', 'perfConn1080', 'perfConn4k', 'perfReserve'].forEach((id) => {

@@ -419,6 +419,30 @@ test('settings: streaming performance handles high-connection providers and reco
   }, admin);
 });
 
+test('settings: quality vs concurrency presets scale per-stream from REAL total connections (not hardcoded)', async () => {
+  // Add a high-connection provider so the share-based sizing has room to differentiate (4K per-stream
+  // floors at 12, which would mask the intent on a tiny connection budget).
+  await httpJson(srv.port, 'POST', '/api/settings', { addProvider: { host: 'news.scale.com', port: 563, user: 'u', pass: 'p', connections: 130 } }, admin);
+  const s = await httpJson(srv.port, 'GET', '/api/settings', null, admin);
+  const addedIdx = s.json.providers.length - 1;
+  try {
+    const base = { expectedUsers: 4, streamMix: 'mixed', serverDownloadMbps: 1000, measuredMbpsPerConn: 30 };
+    const q = (await httpJson(srv.port, 'POST', '/api/streaming/recommend', { ...base, profile: 'quality' }, admin)).json;
+    const c = (await httpJson(srv.port, 'POST', '/api/streaming/recommend', { ...base, profile: 'concurrency' }, admin)).json;
+    // Same connections + users, opposite intent → quality = fewer/richer streams (bigger per-stream +
+    // deeper buffer); concurrency = more simultaneous viewers. ALL derived from the connection count.
+    assert.ok(q.recommendation.maxConnPerStream4k > c.recommendation.maxConnPerStream4k,
+      `quality per-stream (${q.recommendation.maxConnPerStream4k}) must exceed concurrency (${c.recommendation.maxConnPerStream4k})`);
+    assert.ok(q.recommendation.buffer4kSec > c.recommendation.buffer4kSec,
+      `quality buffer (${q.recommendation.buffer4kSec}s) must be deeper than concurrency (${c.recommendation.buffer4kSec}s)`);
+    assert.ok(c.capacity.maxSimultaneous4k >= q.capacity.maxSimultaneous4k,
+      'concurrency fits at least as many simultaneous 4K viewers as quality');
+    assert.strictEqual(q.recommendation.profile, 'quality', 'recommendation echoes the chosen intent');
+  } finally {
+    await httpJson(srv.port, 'POST', '/api/settings', { removeProvider: addedIdx }, admin);
+  }
+});
+
 test('settings: built-in subtitle mode round-trips to player server info', async () => {
   await httpJson(srv.port, 'POST', '/api/settings', { builtInSubtitlesEnabled: true }, admin);
   let s = await httpJson(srv.port, 'GET', '/api/settings', null, admin);
