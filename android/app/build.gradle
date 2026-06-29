@@ -27,8 +27,8 @@ android {
         applicationId = "app.triboon.tv"
         minSdk = 23          // Media3 1.10.x requires API 23+; Shield/onn/Chromecast TV targets clear this
         targetSdk = 36
-        versionCode = 151
-        versionName = "1.7.87"
+        versionCode = 152
+        versionName = "1.7.88"
     }
 
     signingConfigs {

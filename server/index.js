@@ -345,6 +345,7 @@ function recommendStreamingPerformance(input = {}, s = settings.get()) {
 const SPEEDTEST_GROUPS = ['alt.binaries.boneless', 'alt.binaries.teevee', 'alt.binaries.moovee', 'alt.binaries.hdtv', 'alt.binaries.misc'];
 const SPEEDTEST_MAX_CONNS = 120;     // safety ceiling — a mis-typed huge count can't open thousands
 const SPEEDTEST_SAMPLE_CONNS = 12;   // connections used for the throughput sample (representative, not all)
+const speedTestInFlight = new Set(); // provider indices being speed-tested — one at a time per provider
 function isTooManyConnections(e) { return /too many connection|\b502\b/i.test(String((e && e.message) || e)); }
 async function speedTestProvider(p, { targetConns, sampleMs = 3500 } = {}) {
   const configured = providerConnections(p.connections);
@@ -5488,6 +5489,11 @@ Object.assign(H, {
     const b = await readJson(ctx.req).catch(() => ({}));
     const p = providerList()[b.index];
     if (!p) return send(ctx.res, 400, { error: 'no provider at that index' });
+    // One speed test per provider at a time — two concurrent tests (e.g. two browser tabs) wouldn't
+    // see each other's connections and could together overshoot the cap. Serialize them per provider.
+    if (speedTestInFlight.has(b.index)) {
+      return send(ctx.res, 200, { ok: false, host: p.host, error: 'a speed test is already running for this provider — wait for it to finish' });
+    }
     const configured = providerConnections(p.connections);
     // The speed test opens its OWN connections, separate from the live playback pool. To honor the
     // configured cap, the test may only use the FREE headroom (configured − connections playback is
@@ -5501,6 +5507,7 @@ Object.assign(H, {
       return send(ctx.res, 200, { ok: false, host: p.host, reservedByPlayback: liveOpen,
         error: `all ${configured} connections are currently in use by active playback — stop a stream and retry` });
     }
+    speedTestInFlight.add(b.index);
     const origSize = livePp ? livePp.size : null;
     if (livePp) livePp.size = liveOpen; // freeze: pool won't open new connections during the test
     try {
@@ -5509,6 +5516,7 @@ Object.assign(H, {
     } catch (e) {
       send(ctx.res, 200, { ok: false, host: p.host, error: e.message });
     } finally {
+      speedTestInFlight.delete(b.index);
       if (livePp) { livePp.size = origSize; livePp._pump(); }
     }
   },
