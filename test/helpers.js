@@ -51,6 +51,11 @@ async function bootServer(env = {}) {
   if (!Object.prototype.hasOwnProperty.call(restEnv, 'TRIBOON_ALLOW_PRIVATE_IPTV')) {
     process.env.TRIBOON_ALLOW_PRIVATE_IPTV = '1';
   }
+  // KB-scale mount fixtures are not real features — disable the post-mount feature-size guard for
+  // the in-process server unless a test explicitly opts in (the guard's logic is unit-tested directly).
+  if (!Object.prototype.hasOwnProperty.call(restEnv, 'TRIBOON_FEATURE_SIZE_GUARD')) {
+    process.env.TRIBOON_FEATURE_SIZE_GUARD = '0';
+  }
   for (const [k, v] of Object.entries(restEnv)) {
     if (v === null) delete process.env[k]; else process.env[k] = String(v);
   }

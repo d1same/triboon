@@ -11,7 +11,7 @@ const os = require('os');
 const { parseRelease, scoreRelease, rankReleases } = require('../server/scoring');
 const { parseNewznabRss, dedupe, fanout, searchIndexer } = require('../server/newznab');
 const { Store, VerdictCache } = require('../server/store');
-const { Pipeline, GATE_MS, nzbVerdictKey } = require('../server/pipeline');
+const { Pipeline, GATE_MS, nzbVerdictKey, summarizeAttempts, stubFeatureReason } = require('../server/pipeline');
 const { NntpPool } = require('../server/nntp');
 const { createMockNntp } = require('./mock-nntp');
 const { encodePart } = require('../server/yenc');
@@ -1782,6 +1782,43 @@ test('pipeline: a picked SAMPLE file fails the candidate and auto-advance finds 
     // test runner's event loop alive forever, which reads as a "hung" suite.
     pool.close(); await mock.close(); ix.server.close(); store.close();
   }
+});
+
+test('pipeline: stubFeatureReason rejects a tiny file masquerading as a real feature (the 220MB-as-4K bug)', () => {
+  // The Mortal Kombat II incident: a ~220MB file auto-played as a "2160p movie" because the indexer's
+  // DECLARED size lied past scoring; only a check on the ACTUAL mounted bytes can catch it.
+  assert.ok(/stub|incomplete/i.test(stubFeatureReason(220 * 1e6, 'Mortal.Kombat.II.2026.2160p.WEB-DL.DV.HDR-Grp')),
+    '220MB is rejected for a 2160p release');
+  assert.match(stubFeatureReason(220 * 1e6, 'Movie.2024.2160p-Grp'), /2160p/);
+  assert.ok(stubFeatureReason(50 * 1e6, 'Whatever.no.res.tag'), '50MB rejected even with no resolution tag (<80MB floor)');
+  assert.ok(stubFeatureReason(150 * 1e6, 'Show.S01E01.1080p.WEB-Grp'), '150MB rejected for a 1080p claim (<300MB)');
+  // Real features pass — and an unknown size is never guessed at.
+  assert.strictEqual(stubFeatureReason(8 * 1e9, 'Movie.2024.2160p.WEB-DL-Grp'), '', '8GB 2160p is a real feature');
+  assert.strictEqual(stubFeatureReason(600 * 1e6, 'Movie.2024.no.res'), '', '600MB no-res file passes the 80MB floor');
+  assert.strictEqual(stubFeatureReason(0, 'Movie.2024.2160p'), '', 'unknown size (0) is not flagged');
+});
+
+test('pipeline: summarizeAttempts turns raw fail reasons into one actionable sentence', () => {
+  // Dead-source title (the real Mortal Kombat II 2026 case): removed + encrypted + stub.
+  const dead = summarizeAttempts([
+    { fail: 'mount: BODY abc: 430 No Such Article' },
+    { fail: 'unstreamable: encrypted,headers-encrypted' },
+    { fail: 'stub/incomplete: only 220MB for a 2160p release' },
+    { fail: 'mount: BODY def: 430 No Such Article' },
+  ]);
+  assert.match(dead, /No healthy source/i);
+  assert.match(dead, /2 removed\/missing/);
+  assert.match(dead, /1 password-protected/);
+  assert.match(dead, /1 incomplete\/sample/);
+  assert.match(dead, /add more indexers/i);
+
+  // Slow-connection title: mostly timeouts => a DIFFERENT, connection-focused headline.
+  const slow = summarizeAttempts([
+    { fail: 'mount: mount timeout' }, { fail: 'mount: mount timeout' }, { fail: 'health: blocked' },
+  ]);
+  assert.match(slow, /timing out/i);
+
+  assert.match(summarizeAttempts([]), /No sources were available/i);
 });
 
 test('scoring: sample-size stubs and foreign-language dubs sink; duals stay honest fallbacks', () => {

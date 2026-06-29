@@ -471,6 +471,10 @@ const ixByName = (name) => (settings.get().indexers || []).find((i) => i.name ==
 const pipeline = new Pipeline({
   pool: getPool, verdicts, mounts,
   performance: streamingRuntimeProfile,
+  // real playback: a sub-300MB "2160p" mount is junk, never auto-play it. (Tests disable via env —
+  // their mount fixtures are intentionally KB-scale; the guard's logic is unit-tested directly.)
+  enforceFeatureSize: process.env.TRIBOON_FEATURE_SIZE_GUARD !== '0',
+
   // API-exhausted indexers drop out of the fan-out for the rest of the day. If EVERY indexer
   // is exhausted, say so honestly instead of the generic "no indexers configured".
   indexers: () => {
@@ -3847,7 +3851,7 @@ const H = {
         attempts,
       }));
     } catch (e) {
-      send(ctx.res, 502, { error: e.message, attempts: e.attempts || [] });
+      send(ctx.res, 502, { error: e.message, summary: e.summary, attempts: e.attempts || [] });
     }
   },
 
@@ -3876,7 +3880,7 @@ const H = {
         attempts,
       });
     } catch (e) {
-      send(ctx.res, 502, { error: e.message, attempts: e.attempts || [] });
+      send(ctx.res, 502, { error: e.message, summary: e.summary, attempts: e.attempts || [] });
     }
   },
 
@@ -3900,7 +3904,7 @@ const H = {
         attempts,
       }));
     } catch (e) {
-      send(ctx.res, e.message.includes('unknown') ? 404 : 502, { error: e.message, attempts: e.attempts || [] });
+      send(ctx.res, e.message.includes('unknown') ? 404 : 502, { error: e.message, summary: e.summary, attempts: e.attempts || [] });
     }
   },
 

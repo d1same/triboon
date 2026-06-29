@@ -5696,7 +5696,10 @@ async function play(it, pick) {
       return playLocal(localExact);
     }
     const tried = (e.detail && e.detail.attempts || []).length;
-    toast(`No playable source — ${e.message}${tried ? ` (${tried} tried)` : ''}`);
+    // The server now returns a human summary of WHY (sources removed / encrypted / incomplete /
+    // timed out) — show that instead of the bare "all candidates failed" when present.
+    const why = (e.detail && e.detail.summary) || `${e.message}${tried ? ` (${tried} tried)` : ''}`;
+    toast(`Can't play this — ${why}`);
   } finally {
     if (S.view !== 'player') clearPlayerLoadingStages();
     btns.forEach((b) => { b.disabled = false; });

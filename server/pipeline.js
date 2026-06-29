@@ -88,8 +88,60 @@ function releaseMatches(name, wanted) {
   }
   return true;
 }
-const { rankReleases } = require('./scoring');
+const { rankReleases, parseRelease } = require('./scoring');
 const { mountNzb, orderVolumes } = require('./archive');
+
+// Turn the raw per-candidate fail reasons into one honest, actionable sentence for the user, so
+// "all candidates failed" stops being a dead end. Most real failures are SOURCE health (removed
+// posts, password-protected RARs, incomplete/fake files) — those mean "try later / add indexers",
+// which is very different from a slow connection (timeouts) the user can act on differently.
+function summarizeAttempts(attempts = []) {
+  if (!attempts.length) return 'No sources were available to try for this title.';
+  const cats = { missing: 0, encrypted: 0, stub: 0, unsupported: 0, timeout: 0, blocked: 0, other: 0 };
+  for (const a of attempts) {
+    const f = String((a && a.fail) || '').toLowerCase();
+    if (/\b430\b|no such article|missing|fetch-failed/.test(f)) cats.missing++;
+    else if (/encrypt/.test(f)) cats.encrypted++;
+    else if (/stub|incomplete|\bsample\b/.test(f)) cats.stub++;
+    else if (/unstreamable|compressed|unsupported|unmappable|7z/.test(f)) cats.unsupported++;
+    else if (/timeout/.test(f)) cats.timeout++;
+    else if (/blocked|health/.test(f)) cats.blocked++;
+    else cats.other++;
+  }
+  const n = attempts.length;
+  const parts = [];
+  if (cats.missing) parts.push(`${cats.missing} removed/missing`);
+  if (cats.encrypted) parts.push(`${cats.encrypted} password-protected`);
+  if (cats.stub) parts.push(`${cats.stub} incomplete/sample`);
+  if (cats.unsupported) parts.push(`${cats.unsupported} unsupported format`);
+  if (cats.timeout) parts.push(`${cats.timeout} timed out`);
+  if (cats.blocked) parts.push(`${cats.blocked} failed health`);
+  if (cats.other) parts.push(`${cats.other} other`);
+  const deadSource = cats.missing + cats.encrypted + cats.stub + cats.unsupported;
+  let head;
+  if (cats.timeout >= Math.ceil(n / 2)) {
+    head = 'Sources kept timing out — the connection or provider is too slow right now';
+  } else if (deadSource >= Math.ceil(n / 2)) {
+    head = 'No healthy source for this title yet — every release is removed, password-protected, or incomplete';
+  } else {
+    head = `Couldn't start any of the ${n} available sources`;
+  }
+  return `${head} (${parts.join(', ')}). Try again later, pick another release in Sources, or add more indexers.`;
+}
+
+// Is this mounted file too small to be the real feature it claims? Pure + exported so it can be unit-
+// tested without a multi-MB fixture. Mirrors scoring.js's DECLARED-size floors on the ACTUAL mounted
+// bytes: nothing real is <80MB; nothing claiming 1080p/2160p is <300MB. Returns a fail reason or ''.
+function stubFeatureReason(sizeBytes, name) {
+  const gb = (Number(sizeBytes) || 0) / 1e9;
+  if (gb <= 0) return ''; // unknown size — don't guess
+  const rank = parseRelease(name || '').resolutionRank; // 2160p=4, 1080p=3, unknown=2
+  if (gb < 0.08 || (gb < 0.3 && rank >= 3)) {
+    const forRes = rank >= 4 ? ' for a 2160p release' : rank >= 3 ? ' for a 1080p release' : '';
+    return `stub/incomplete: only ${(gb * 1000).toFixed(0)}MB${forRes}`;
+  }
+  return '';
+}
 const { parseNzb, pickPrimaryFile, fileNameFromSubject } = require('./nzb');
 const crypto = require('crypto');
 
@@ -183,11 +235,15 @@ class PlaySession {
 }
 
 class Pipeline {
-  constructor({ pool, verdicts, mounts, indexers = () => [], usage = {}, performance = () => null }) {
+  constructor({ pool, verdicts, mounts, indexers = () => [], usage = {}, performance = () => null, enforceFeatureSize = false }) {
     this.pool = pool;             // () => NntpPool (lazy, settings-driven)
     this.verdicts = verdicts;     // VerdictCache
     this.mounts = mounts;         // shared Map(id -> vf) owned by the HTTP server
     this.indexers = indexers;     // () => [{name,url,apikey}]
+    // Post-mount feature-size floor (reject a 220MB file masquerading as a 2160p movie). OFF by
+    // default so the KB-scale mount/seek test fixtures aren't all flagged as stubs; the HTTP server
+    // turns it ON for real playback, where releases are GB-scale and a tiny mount IS junk.
+    this.enforceFeatureSize = !!enforceFeatureSize;
     // Indexer usage accounting (daily API/grab limits live in the HTTP layer's store):
     // onSearch fires per indexer per actual fan-out (cache hits are free); canGrab/onGrab
     // gate and count NZB downloads (cached NZBs and live-mount reuse never count).
@@ -696,6 +752,16 @@ class Pipeline {
       return { fail: `sample file picked (${vf.name})`, vf };
     }
 
+    // Size sanity on the ACTUAL mounted bytes. The pre-mount scoring floor (scoring.js) only sees
+    // the indexer's DECLARED size, which can be missing or a lie — an incomplete/fake post mounts
+    // far smaller than billed (a 220 MB file that auto-played as a 2160p movie). Fail it so the
+    // walk advances to a genuine source — or reports "no healthy source" honestly, not silent junk.
+    const stub = this.enforceFeatureSize && stubFeatureReason(Number(vf.size) || 0, vf.name || candidate.name || '');
+    if (stub) {
+      this._recordVerdict(candidate, 'unstreamable', { streamClass: 'stub', sizeGb: +((Number(vf.size) || 0) / 1e9).toFixed(3) });
+      return { fail: stub, vf };
+    }
+
     // Playback read-ahead: keep work ahead of the player, but bound retained decoded bytes.
     // so the buffer outruns the bitrate — 4K-class releases (>4 GB) get the biggest window.
     // Segment sizes vary by release; the mount default stays small so triage/header peeks
@@ -825,6 +891,7 @@ class Pipeline {
     }
     const err = new Error('all candidates failed');
     err.attempts = attempts;
+    err.summary = summarizeAttempts(attempts);
     throw err;
   }
 
@@ -836,4 +903,4 @@ class Pipeline {
   }
 }
 
-module.exports = { Pipeline, GATE_MS, parseWantedTitle, releaseMatches, candidateKey, nzbVerdictKey };
+module.exports = { Pipeline, GATE_MS, parseWantedTitle, releaseMatches, candidateKey, nzbVerdictKey, summarizeAttempts, stubFeatureReason };
