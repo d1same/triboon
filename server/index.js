@@ -349,19 +349,22 @@ async function speedTestProvider(p, { targetConns, sampleMs = 3500 } = {}) {
   const want = clampInt(targetConns, configured, 1, SPEEDTEST_MAX_CONNS);
   const conns = [];
   let capHit = false;
+  const openOne = async () => {
+    const c = new NntpConnection({ ...p, connectTimeoutMs: 8000, commandTimeoutMs: 12000 });
+    try { await c.connect(); conns.push(c); return c; }
+    catch (e) { try { c.close(); } catch {} if (isTooManyConnections(e)) { capHit = true; return null; } if (!conns.length) throw e; return null; }
+  };
   try {
-    // Phase A — open up to the configured count (connect-only) to confirm the plan / find the real cap.
-    for (let i = 0; i < want; i++) {
-      const c = new NntpConnection({ ...p, connectTimeoutMs: 8000, commandTimeoutMs: 12000 });
-      try { await c.connect(); conns.push(c); }
-      catch (e) { try { c.close(); } catch {} if (isTooManyConnections(e)) { capHit = true; break; } if (!conns.length) throw e; break; }
-    }
+    // Phase A — open a SMALL sample first and measure throughput on these FRESH connections, BEFORE
+    // the (possibly long) full cap-open below can let early connections idle out. Sampling on
+    // stale first-opened connections is what made a 100-connection provider read 0 Mbps.
+    const sampleTarget = Math.min(want, SPEEDTEST_SAMPLE_CONNS);
+    for (let i = 0; i < sampleTarget; i++) { if (!(await openOne())) break; }
     if (!conns.length) throw new Error('could not open any connection');
+    const sampledConns = conns.length;
     const rtt0 = Date.now();
     try { await conns[0].stat('triboon-speedtest@invalid'); } catch {}
     const rttMs = Date.now() - rtt0;
-    // Phase B — throughput on a SUBSET of the open connections; extrapolate per-connection.
-    const sample = conns.slice(0, Math.min(conns.length, SPEEDTEST_SAMPLE_CONNS));
     let group = null;
     for (const g of SPEEDTEST_GROUPS) {
       try {
@@ -374,6 +377,7 @@ async function speedTestProvider(p, { targetConns, sampleMs = 3500 } = {}) {
     }
     let mbsPerConn = 0, articles = 0;
     if (group) {
+      const sample = conns.slice(0, sampledConns);
       const t0 = Date.now(); let bytes = 0;
       await Promise.all(sample.map(async (c) => {
         try { await c._cmd(`GROUP ${group.name}`); } catch { return; }
@@ -389,13 +393,15 @@ async function speedTestProvider(p, { targetConns, sampleMs = 3500 } = {}) {
       const secs = Math.max(0.1, (Date.now() - t0) / 1000);
       mbsPerConn = sample.length ? (bytes / 1e6 / secs) / sample.length : 0;
     }
+    // Phase B — now open the REST up to the configured count (connect-only) to confirm the real cap.
+    for (let i = conns.length; i < want; i++) { if (!(await openOne())) break; }
     return {
       ok: true, host: p.host,
       configured,
       connections: conns.length,             // how many actually opened = real usable for this provider
       connCap: capHit ? conns.length : null,  // set only when the provider refused below the configured count
       capHit,                                 // true = configured count exceeds the plan's real limit
-      sampledConns: sample.length,
+      sampledConns,
       rttMs,
       mbpsPerConn: +(mbsPerConn * 8).toFixed(1),
       mbpsTotal: +(mbsPerConn * 8 * conns.length).toFixed(1), // projected across all opened connections
