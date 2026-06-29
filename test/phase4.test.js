@@ -281,9 +281,11 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Continue Watching should dedupe next-up and in-progress cards by canonical identity');
   assert.match(ui, /function nextEpisodeBumps\(cw, cwItems\) \{[\s\S]+continueWatchingIdentity\(it\) === `tv:\$\{id\}`/,
     'local next-episode bumps should not add a second card for a show already in Continue Watching');
-  // Resume should feel local: settling focus on a resumable card warms the source search.
-  assert.match(ui, /function focusCard\([\s\S]+if \(it && it\.type !== 'live' && \(it\._cw \|\| it\._nextEp \|\| \(\+it\.resume \|\| 0\) > 0\)\) prefetchSources\(it\);/,
-    'focusing a resumable Continue Watching / next-episode card should warm the source search so resume skips the cold indexer fan-out');
+  // Resume should feel local: settling focus on a resumable card warms the best source all the way
+  // to a MOUNTED state (not just the search) — multi-volume RAR mounts cost seconds, so search-only
+  // warming still left a long press-play gap (see bench/resume-latency.js).
+  assert.match(ui, /function focusCard\([\s\S]+if \(it && it\.type !== 'live' && \(it\._cw \|\| it\._nextEp \|\| \(\+it\.resume \|\| 0\) > 0\)\) preparePlaybackSource\(it\);/,
+    'focusing a resumable Continue Watching / next-episode card should mount-warm the best source (preparePlaybackSource) so resume reuses a live mount instantly');
   assert.match(ui, /if \(!opts\.catalogOnly && !opts\.watchReady && !hasFreshWatch && !opts\.preserveFocus\) \{/,
     'Continue Watching row actions should not publish an empty placeholder row while preserving focus');
   assert.match(ui, /async function cwOp\(it, body, msg, opts = \{\}\) \{[\s\S]+if \(body\.hidden\) \{[\s\S]+cwHideNext\(it\.key\);[\s\S]+removeWatchCacheKey\(it\.key\);[\s\S]+\} else if \(body\.remove\) removeWatchCacheKey\(it\.key\);[\s\S]+loadRows\(\{ preserveFocus: !!snap, focusSnapshot: snap, watchReady: true \}\);[\s\S]+loadWatchState\(true\)/,

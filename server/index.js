@@ -3889,7 +3889,7 @@ const H = {
     // Explicit resolution pick (4K toggle): boost matching releases — but only within the cap,
     // so a capped user can't smuggle UHD past their ceiling via the preference.
     try {
-      const { session, vf, candidate, attempts } = await pipeline.play(
+      const { session, vf, candidate, attempts, relaxedResolution } = await pipeline.play(
         { q: body.q, imdbid: body.imdbid, tvdbid: body.tvdbid, season: body.season, ep: body.ep, pick: body.pick, pickKey: body.pickKey },
         policy
       );
@@ -3903,6 +3903,7 @@ const H = {
         sessionId: session.id, mountMs: Date.now() - t0,
         candidate: { name: candidate.name, pickKey: candidate.pickKey, score: candidate.score, indexer: candidate.indexer, reasons: candidate.reasons, attributes: candidate.attributes },
         attempts,
+        relaxedResolution: relaxedResolution || undefined,
       }));
     } catch (e) {
       send(ctx.res, 502, { error: e.message, summary: e.summary, attempts: e.attempts || [] });

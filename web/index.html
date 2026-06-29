@@ -5723,6 +5723,10 @@ async function play(it, pick) {
     if (picked && picked.pickKey && r && r.candidate && r.candidate.pickKey && r.candidate.pickKey !== picked.pickKey) {
       const alt = (r.candidate.name || 'another source').replace(/\.(mkv|mp4|avi)$/i, '');
       toast(`Your pick couldn't be streamed — playing ${alt.length > 40 ? alt.slice(0, 39) + '…' : alt}. Open Sources to choose another.`);
+    } else if (!picked && r && r.relaxedResolution) {
+      // 4K was preferred but every UHD release was unavailable (rotted/removed). The server fell
+      // back to the best healthy lower-resolution release — say so rather than swapping silently.
+      toast('4K wasn’t available right now — playing the best available quality. Open Sources to choose another.');
     }
     await openPlayer(it, r, { nativeFirst });
   } catch (e) {
@@ -18658,10 +18662,15 @@ function focusCard(ri, ci, opts = {}) {
   const it = view.data[ri] && view.data[ri].items[ci];
   if (it) { if (view.hasHero) setHero(it); else { S.focusedItem = it; setBackdrop(it.backdrop); setBdInfo(it); } }
   // Resume should feel like a local file: when a resumable card (Continue Watching / next
-  // episode / has a saved position) settles under focus, warm the source search so pressing
-  // OK — or resuming straight from the card menu — skips the cold indexer fan-out. Debounced
-  // inside prefetchSources, server-cached 60s, and skipped when a local copy already fits.
-  if (it && it.type !== 'live' && (it._cw || it._nextEp || (+it.resume || 0) > 0)) prefetchSources(it);
+  // episode / has a saved position) settles under focus, warm the best source all the way to a
+  // MOUNTED state — not just the search. Scene TV releases are almost always multi-volume RARs,
+  // and parseRarVolumes walks every volume's header before the mount returns (measured multiple
+  // seconds at real provider RTT; see bench/resume-latency.js), so search-only warming still left
+  // a long press-play→start gap. preparePlaybackSource searches AND mounts the top candidate;
+  // pressing OK (or resuming from the card menu) then reuses that live mount instantly. Debounced
+  // to the settled card (single shared prepareTimer → only one mount in flight), and play() joins
+  // an in-flight prepare rather than duplicating it. Skipped when a local copy already fits.
+  if (it && it.type !== 'live' && (it._cw || it._nextEp || (+it.resume || 0) > 0)) preparePlaybackSource(it);
   maybeLoadMoreHomeRow(view.root, ri);
 }
 function gridEls() { return [...(S.gridRoot || $('grid')).querySelectorAll('.pcard, .card, .chCard, .chGroupHead, .gRow.focusable, .lcat, .gridMore.focusable')]; }

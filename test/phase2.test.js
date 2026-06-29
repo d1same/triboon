@@ -1372,6 +1372,42 @@ test('pipeline e2e: ranks, skips dead + unstreamable candidates, plays the good 
   pool.close(); await mock.close(); ix.server.close(); store.close();
 });
 
+test('pipeline: 4K preferred — when every UHD source is dead, fall back to the best healthy lower-res instead of failing', async () => {
+  // Owner rule: keep trying the preferred (4K) tier until one works; only when ZERO healthy 4K
+  // remain, fall back to 1080p. The 4K toggle sets exactResolutionRank, which scores every non-4K
+  // below the playable cut — so the 1080p must NOT be reachable until the UHD tier is exhausted.
+  const payload = seededPayload(120 * 1024, 0x4ca);
+  const good1080 = nzbFor([{ name: 'HotD.S03E01.1080p.WEB-DL.mkv', data: payload }], 30000, 'h1080');
+  const dead4kA = nzbFor([{ name: 'HotD.S03E01.2160p.A.mkv', data: seededPayload(60 * 1024, 7) }], 30000, 'd4ka');
+  const dead4kB = nzbFor([{ name: 'HotD.S03E01.2160p.B.mkv', data: seededPayload(60 * 1024, 8) }], 30000, 'd4kb');
+
+  // Mock NNTP holds ONLY the 1080p articles — every 2160p article 430s (provider source rot).
+  const mock = createMockNntp({ articles: new Map([...good1080.articles]) });
+  const nntpPort = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 6);
+
+  const ix = makeMockIndexer([
+    { name: 'House.of.the.Dragon.S03E01.2160p.HMAX.WEB-DL.DDP5.1.H.265-NTb', size: 8e9, nzb: dead4kA.nzb },
+    { name: 'House.of.the.Dragon.S03E01.2160p.AMZN.WEB-DL.DDP5.1.H.265-FLUX', size: 8e9, nzb: dead4kB.nzb },
+    { name: 'House.of.the.Dragon.S03E01.1080p.WEB-DL.DDP5.1.H.264-NTb', size: 4e9, nzb: good1080.nzb },
+  ]);
+  const ixPort = await ix.listen();
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const pipeline = new Pipeline({
+    pool: () => pool, verdicts: new VerdictCache(store), mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+
+  const r = await pipeline.play({ q: 'House of the Dragon' }, { maxResolutionRank: 4, preferResolutionRank: 4, exactResolutionRank: 4 });
+  assert.match(r.candidate.name, /1080p/, 'fell back to the healthy 1080p after both 2160p sources 430d');
+  assert.strictEqual(r.relaxedResolution, 4, 'signals the UI that the preferred 4K was relaxed to a lower res');
+  assert.strictEqual(r.vf.streamable, true, 'the fallback release actually mounts + streams');
+
+  pool.close(); await mock.close(); ix.server.close(); store.close();
+});
+
 test('pipeline: active mount rebalance shrinks read-ahead when another stream starts', async () => {
   const now = Date.now();
   const mounts = new Map();

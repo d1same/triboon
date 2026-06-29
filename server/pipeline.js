@@ -868,7 +868,32 @@ class Pipeline {
     this.sessions.set(session.id, session);
     // Cold start races the top candidates; a single explicit Sources pick stays a direct mount.
     const width = (params.pickKey || params.pick) ? 1 : PLAY_RACE_WIDTH;
-    return this._advance(session, mountOpts, { width });
+    try {
+      return await this._advance(session, mountOpts, { width });
+    } catch (e) {
+      // Owner rule: keep trying the preferred resolution until one works; ONLY when EVERY healthy
+      // 4K source is exhausted (all rotted/removed/incomplete) fall back to the best lower-res
+      // release instead of failing. The 4K toggle sets exactResolutionRank, which scores every
+      // non-4K below the playable cut — so the lower-res tier was never in the first walk. Relax
+      // that lock (NOT the maxResolutionRank hard cap) and walk only the releases we hadn't been
+      // allowed to try yet. Re-search is a cache hit (raw results re-scored under the relaxed
+      // policy), so this costs no network. Explicit Sources picks keep their own fallback chain.
+      if (policy.exactResolutionRank != null && !params.pickKey && !params.pick) {
+        const relaxed = { ...policy };
+        delete relaxed.exactResolutionRank;
+        const retry = await this.search(params, relaxed);
+        const tried = new Set(playable.map((c) => c.pickKey));
+        const fallback = this._playableCandidates(retry.candidates, params).filter((c) => !tried.has(c.pickKey));
+        if (fallback.length) {
+          const s2 = new PlaySession(params, fallback);
+          this.sessions.set(s2.id, s2);
+          const r = await this._advance(s2, mountOpts, { width });
+          r.relaxedResolution = policy.exactResolutionRank; // signal the UI a lower res was substituted
+          return r;
+        }
+      }
+      throw e;
+    }
   }
 
   _playableCandidates(candidates, params = {}) {
@@ -897,20 +922,36 @@ class Pipeline {
     if (!playable.length) throw new Error('no playable releases found');
     const attempts = [];
     const started = Date.now();
-    for (const candidate of playable.slice(0, PREPARE_MAX_ATTEMPTS)) {
-      if (Date.now() - started >= PREPARE_MAX_MS) break;
-      const res = await this._tryCandidate(candidate, mountOpts);
-      if (res.vf && !res.fail) {
-        res.vf._touched = Date.now();
-        if (candidate.name) res.vf._releaseName = candidate.name;
-        this.mounts.set(res.vf.id, res.vf);
-        this.mountByUrl.set(candidate.nzbUrl, res.vf.id);
-        this.rebalancePlaybackWindows();
-        this._startPlaybackWarmup(res.vf, res.vf._playWin);
-        return { vf: res.vf, candidate, attempts, prepared: true };
+    const tryList = async (list) => {
+      for (const candidate of list.slice(0, PREPARE_MAX_ATTEMPTS)) {
+        if (Date.now() - started >= PREPARE_MAX_MS) break;
+        const res = await this._tryCandidate(candidate, mountOpts);
+        if (res.vf && !res.fail) {
+          res.vf._touched = Date.now();
+          if (candidate.name) res.vf._releaseName = candidate.name;
+          this.mounts.set(res.vf.id, res.vf);
+          this.mountByUrl.set(candidate.nzbUrl, res.vf.id);
+          this.rebalancePlaybackWindows();
+          this._startPlaybackWarmup(res.vf, res.vf._playWin);
+          return { vf: res.vf, candidate };
+        }
+        attempts.push({ name: candidate.name, fail: res.fail || 'prepare failed' });
       }
-      attempts.push({ name: candidate.name, fail: res.fail || 'prepare failed' });
+      return null;
+    };
+    let done = await tryList(playable);
+    // Mirror play()'s relax-on-exhaustion: when every preferred-res (4K) source is dead, pre-warm
+    // the fallback resolution too — so a focus pre-warm keeps resume instant even on UHD source rot,
+    // not just when 4K is healthy. Cache-hit re-search re-scores the lower-res tier into playability.
+    if (!done && policy.exactResolutionRank != null && !params.pickKey && !params.pick && Date.now() - started < PREPARE_MAX_MS) {
+      const relaxed = { ...policy };
+      delete relaxed.exactResolutionRank;
+      const retry = await this.search(params, relaxed);
+      const tried = new Set(playable.map((c) => c.pickKey));
+      const fallback = this._playableCandidates(retry.candidates, params).filter((c) => !tried.has(c.pickKey));
+      if (fallback.length) done = await tryList(fallback);
     }
+    if (done) return { ...done, attempts, prepared: true };
     return { candidate: playable[0], attempts, prepared: false };
   }
 
