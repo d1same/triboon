@@ -377,6 +377,21 @@ test('settings: streaming performance handles high-connection providers and reco
   assert.ok(rec.json.recommendation.maxConnPerStream1080 >= 4, 'recommendation includes per-stream budget');
   assert.ok(rec.json.recommendation.buffer1080Sec >= 30, 'recommendation includes buffer target');
 
+  // Phase 2: measured provider speed + connection cap + Max release size feed the recommendation.
+  await httpJson(srv.port, 'POST', '/api/settings', { sizeCapMode: 'manual', sizeCap4kGb: 40, sizeCap1080Gb: 20 }, admin);
+  const rec2 = await httpJson(srv.port, 'POST', '/api/streaming/recommend', {
+    expectedUsers: 5, streamMix: 'mixed', measuredMbpsPerConn: 28, measuredConnCap: 20,
+  }, admin);
+  assert.strictEqual(rec2.status, 200);
+  assert.strictEqual(rec2.json.capacity.measuredMbpsPerConn, 28, 'echoes the measured per-connection speed');
+  assert.strictEqual(rec2.json.capacity.measuredConnCap, 20, 'echoes the measured connection cap');
+  assert.ok(rec2.json.capacity.streamBitrate4k > 0 && rec2.json.capacity.streamBitrate4k < 120, 'derives a 4K bitrate from the 40 GB size cap');
+  assert.ok(rec2.json.capacity.maxSimultaneous4k >= 1, 'reports how many simultaneous 4K viewers fit');
+  assert.ok(rec2.json.capacity.maxSimultaneous1080 >= rec2.json.capacity.maxSimultaneous4k, '1080p fits at least as many viewers as 4K');
+  assert.ok((rec2.json.warnings || []).some((w) => /configured|too many connections/i.test(w)),
+    '100 configured connections vs a measured cap of 20 raises an over-subscription warning');
+  await httpJson(srv.port, 'POST', '/api/settings', { sizeCapMode: 'auto' }, admin); // restore for later tests
+
   const status = await httpJson(srv.port, 'GET', '/api/status', null, admin);
   assert.ok(status.json.streaming.usableConnections > 0, 'status exposes the active streaming capacity profile');
   assert.ok(status.json.pipeline.search, 'status exposes aggregate source-search telemetry');

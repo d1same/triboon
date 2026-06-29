@@ -219,6 +219,13 @@ function streamingRuntimeProfile() {
   return { ...perf, totalConnections, usableConnections, reserveConnections };
 }
 
+// Approximate per-stream bitrate (Mbps) implied by a GB release-size cap over a typical feature
+// runtime. 1 GB ≈ 8192 Mbit; assume ~2h. e.g. a 40 GB 4K cap ≈ 45 Mbps, a 20 GB 1080p cap ≈ 23 Mbps.
+function bitrateFromSizeGb(gb, runtimeSec = 7200) {
+  const n = Number(gb) || 0;
+  if (n <= 0 || runtimeSec <= 0) return 0;
+  return (n * 8192) / runtimeSec;
+}
 function recommendStreamingPerformance(input = {}, s = settings.get()) {
   const current = normalizeStreamingPerformance({ ...(s.streamingPerformance || {}), ...input });
   const providers = normalizeProviders(s.providers || []);
@@ -255,14 +262,34 @@ function recommendStreamingPerformance(input = {}, s = settings.get()) {
   if (totalConnections && perUser < 6) warnings.push('Connection budget per user is tight; add provider connections or lower expected simultaneous users.');
   if (remotePerStreamMbps && remotePerStreamMbps < 20 && current.streamMix !== '1080p') warnings.push('Remote upload budget is low for 4K; use per-user quality caps for remote users.');
 
+  // Phase 2 — feed the Max release size caps + measured provider speed/cap into the recommendation.
+  const manualCaps = s.sizeCapMode === 'manual';
+  const br4k = manualCaps && Number(s.sizeCap4kGb) > 0 ? Math.max(20, Math.min(120, Math.round(bitrateFromSizeGb(s.sizeCap4kGb)))) : 55;
+  const br1080 = manualCaps && Number(s.sizeCap1080Gb) > 0 ? Math.max(8, Math.min(60, Math.round(bitrateFromSizeGb(s.sizeCap1080Gb)))) : 18;
+  const measuredPerConn = Number(input.measuredMbpsPerConn) > 0 ? Number(input.measuredMbpsPerConn) : 0;
+  const measuredCap = clampInt(input.measuredConnCap, 0, 0, 1000);
+  // With a measured per-connection speed, size per-stream connections straight from the bitrate
+  // (×1.6 headroom for read-ahead + jitter); otherwise keep the connection-budget heuristic above.
+  const perStream1080 = measuredPerConn > 0 ? Math.max(4, Math.min(24, Math.ceil((br1080 * 1.6) / measuredPerConn))) : rec1080;
+  const perStream4k = measuredPerConn > 0 ? Math.max(6, Math.min(36, Math.ceil((br4k * 1.6) / measuredPerConn))) : rec4k;
+  // A measured connection cap is a hard ceiling — usable capacity can't exceed what the account accepts.
+  const effTotal = measuredCap > 0 ? Math.min(totalConnections || measuredCap, measuredCap) : totalConnections;
+  const effUsable = Math.max(0, Math.floor(effTotal * 0.85));
+  const effActive = Math.max(0, effUsable - (effUsable ? Math.max(2, Math.ceil(effUsable * reservePct / 100)) : 0));
+  const maxSimultaneous1080 = perStream1080 ? Math.floor(effActive / perStream1080) : 0;
+  const maxSimultaneous4k = perStream4k ? Math.floor(effActive / perStream4k) : 0;
+  if (measuredCap > 0 && totalConnections > measuredCap) {
+    warnings.push(`Providers accept about ${measuredCap} connections but ${totalConnections} are configured — lower per-account connection counts to <= ${measuredCap} to avoid "too many connections" stalls.`);
+  }
+
   const recommendation = normalizeStreamingPerformance({
     ...current,
     profile: 'auto',
     startupReservePct: reservePct,
     buffer1080Sec,
     buffer4kSec,
-    maxConnPerStream1080: rec1080,
-    maxConnPerStream4k: rec4k,
+    maxConnPerStream1080: perStream1080,
+    maxConnPerStream4k: perStream4k,
     healthProbeLimit: perUser < 6 ? 4 : 6,
   });
 
@@ -279,6 +306,12 @@ function recommendStreamingPerformance(input = {}, s = settings.get()) {
       projectedDownloadMbps: projectedDown,
       usableDownloadMbps: usableDown ? Math.floor(usableDown) : 0,
       remotePerStreamMbps,
+      maxSimultaneous1080,
+      maxSimultaneous4k,
+      streamBitrate1080: br1080,
+      streamBitrate4k: br4k,
+      measuredMbpsPerConn: measuredPerConn || 0,
+      measuredConnCap: measuredCap || 0,
     },
     warnings,
   };

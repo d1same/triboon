@@ -17327,10 +17327,15 @@ function renderPerfResult(r, saved) {
     <div class="perfCard"><div class="k">Live pressure</div><div class="v">${esc(pressure)}</div><small>${esc(wait)}${live.adaptiveBoosts ? ` - ${esc(live.adaptiveBoosts)} boosts` : ''}</small></div>`;
   const headline = saved ? 'Active now' : 'Recommendation preview';
   const warn = (r.warnings || []).map((w) => `<span>${esc(w)}</span>`).join('');
+  const viewers = (c.maxSimultaneous4k || c.maxSimultaneous1080)
+    ? `<div class="perfStatusLine">Supports about <strong>${esc(c.maxSimultaneous1080 || 0)}</strong> simultaneous 1080p or <strong>${esc(c.maxSimultaneous4k || 0)}</strong> 4K viewers` +
+      (c.measuredMbpsPerConn ? ` · measured ${esc(c.measuredMbpsPerConn)} Mbps/connection${c.measuredConnCap ? `, cap ${esc(c.measuredConnCap)} connections` : ''}` : '') + '.</div>'
+    : '';
   $('perfStatus').innerHTML =
     `<div class="perfStatusLine">${headline}: ${esc(perfProfileLabel(rec.profile))} - ` +
     `${esc(perfNum(rec.buffer1080Sec, 's'))} 1080p read-ahead goal, ${esc(perfNum(rec.buffer4kSec, 's'))} 4K read-ahead goal, ` +
     `${esc(perfNum(rec.maxConnPerStream1080, 'x'))}/stream 1080p, ${esc(perfNum(rec.maxConnPerStream4k, 'x'))}/stream 4K.</div>` +
+    viewers +
     (warn ? `<div class="perfWarnings">${warn}</div>` : '');
 }
 function syncTime(ts) {
@@ -17771,24 +17776,29 @@ document.querySelectorAll('#coverSize button').forEach((b) => b.addEventListener
   syncChoiceButtons('#coverSize button', (x) => x === b);
   applyCoverSize();
 }));
-$('perfTest').addEventListener('click', async () => {
+async function calcRecommendation() {
   $('perfTest').disabled = true;
   perfSetApplyEnabled(false);
   $('perfStatus').textContent = 'calculating recommendation...';
   try {
-    const r = await api('/api/streaming/recommend', { method: 'POST', body: perfFormValues() });
+    // S.perfMeasured (per-connection speed + connection cap from the speed test) refines the calc.
+    const r = await api('/api/streaming/recommend', { method: 'POST', body: { ...perfFormValues(), ...(S.perfMeasured || {}) } });
     S.perfRecommendation = r.recommendation;
     setPerfForm(r.recommendation || {});
     renderPerfResult(r);
     perfSetApplyEnabled(!!S.perfRecommendation);
-    toast('Streaming recommendation ready');
   } catch (e) {
     S.perfRecommendation = null;
     perfSetApplyEnabled(false);
     $('perfStatus').textContent = 'recommendation failed: ' + e.message;
-    toast('Recommendation failed: ' + e.message);
+    throw e;
+  } finally {
+    $('perfTest').disabled = false;
   }
-  $('perfTest').disabled = false;
+}
+$('perfTest').addEventListener('click', async () => {
+  try { await calcRecommendation(); toast('Streaming recommendation ready'); }
+  catch (e) { toast('Recommendation failed: ' + e.message); }
 });
 // Measure REAL per-connection speed + the provider's connection cap (opens connections until the
 // provider says "too many"). Loops every saved provider (stops on the first index with none).
@@ -17799,6 +17809,7 @@ $('perfSpeed').addEventListener('click', async () => {
   out.innerHTML = '<div class="perfStatusLine">Measuring provider speed &amp; connection cap… (a few seconds — best run when nobody is watching)</div>';
   const conn4k = parseInt($('perfConn4k').value, 10) || 0;
   const rows = [];
+  let totalCap = 0, bestPerConn = 0, anyCap = false, tested = 0;
   try {
     for (let i = 0; i < 12; i++) {
       let r;
@@ -17806,13 +17817,22 @@ $('perfSpeed').addEventListener('click', async () => {
       catch (e) { if (e.status === 400) break; throw e; }
       if (!r) break;
       if (r.ok === false) { rows.push(`<div class="perfStatusLine">${esc(r.host || ('Provider ' + (i + 1)))}: test failed — ${esc(r.error || 'error')}</div>`); continue; }
+      tested++;
+      totalCap += (r.capHit ? r.connCap : r.connections) || 0;
+      if (r.capHit) anyCap = true;
+      bestPerConn = Math.max(bestPerConn, r.mbpsPerConn || 0);
       const capTxt = r.capHit ? `cap ≈ ${esc(r.connCap)} connections` : `≥ ${esc(r.connections)} connections (no limit hit)`;
       const warn = (r.capHit && conn4k && r.connCap < conn4k) ? ` ⚠ below your ${conn4k}/stream 4K setting — lower it` : '';
       rows.push(`<div class="perfStatusLine">${esc(r.host)}: <strong>${esc(r.mbpsPerConn)} Mbps/conn</strong> · ~${esc(r.mbpsTotal)} Mbps at ${esc(r.connections)} conns · ${capTxt}${warn}</div>`);
     }
     out.innerHTML = rows.length
-      ? rows.join('') + '<div class="perfStatusLine" style="opacity:.7">Tip: set each provider\'s connection count at or below its measured cap. Roughly, total usable connections ÷ 5 ≈ simultaneous 4K viewers (÷ 3 for 1080p).</div>'
+      ? rows.join('') + `<div class="perfStatusLine" style="opacity:.7">${tested ? 'Folding measured speed' + (anyCap ? ' + connection cap' : '') + ' into the recommendation below…' : ''}</div>`
       : '<div class="perfStatusLine">No providers configured to test.</div>';
+    if (tested) {
+      // Hand the measured per-connection speed + total connection cap to the recommendation calc.
+      S.perfMeasured = { measuredMbpsPerConn: bestPerConn || 0, measuredConnCap: anyCap ? totalCap : 0 };
+      try { await calcRecommendation(); } catch {}
+    }
   } catch (e) {
     out.innerHTML = '<div class="perfStatusLine">Speed test failed: ' + esc(e.message) + '</div>';
   }

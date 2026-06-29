@@ -3010,6 +3010,13 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'Streaming Performance has a Test provider speed button + result area');
   assert.match(ui, /\$\('perfSpeed'\)\.addEventListener\('click'[\s\S]+\/api\/test\/provider-speed[\s\S]+r\.mbpsPerConn/,
     'the speed button probes each provider and shows per-connection speed');
+  // Phase 2: measured speed/cap feed the recommendation, which reports max simultaneous viewers.
+  assert.match(ui, /async function calcRecommendation\(\)[\s\S]+\.\.\.\(S\.perfMeasured \|\| \{\}\)/,
+    'the recommendation call folds in the measured provider speed + connection cap');
+  assert.match(ui, /\$\('perfSpeed'\)\.addEventListener[\s\S]+S\.perfMeasured = \{ measuredMbpsPerConn:[\s\S]+await calcRecommendation\(\)/,
+    'running the speed test stores the measurement and recalculates the recommendation');
+  assert.match(ui, /Supports about <strong>\$\{esc\(c\.maxSimultaneous1080[\s\S]+maxSimultaneous4k/,
+    'the recommendation result shows how many simultaneous viewers are supported');
   // Settings labels are no longer CSS-uppercased (the "MBPS" megabits/megabytes confusion fix).
   assert.match(ui, /\.settingsControl>span\{[^}]*text-transform:none/,
     'settings labels render sentence-case (not forced ALL CAPS)');
