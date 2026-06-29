@@ -360,11 +360,24 @@ class NntpPool {
 
   // True if ANY provider has the article.
   async stat(msgId, priority = 'health', opts = {}) {
+    let reachedAny = false; // did at least one provider actually ANSWER (vs. all connections failing)?
     for (const p of this._ordered()) {
-      try { if (await p.stat(msgId, priority, opts)) return true; } catch (e) {
+      try {
+        const ok = await p.stat(msgId, priority, opts);
+        reachedAny = true;            // a real answer (present, or a 430 not-found) came back
+        if (ok) return true;
+      } catch (e) {
         if (isAbortError(e)) throw e;
         /* provider down -> try next */
       }
+    }
+    // Distinguish "no provider HAS it" (genuine missing) from "no provider was REACHABLE" (a
+    // connection / auth / VPN / port problem). Without this, both collapse to `false` and the caller
+    // mislabels an unreachable server as a removed article ("18 removed/missing — add indexers").
+    if (!reachedAny && opts.throwIfUnreachable) {
+      const e = new Error('no usenet provider reachable');
+      e.code = 'NO_PROVIDER';
+      throw e;
     }
     return false;
   }

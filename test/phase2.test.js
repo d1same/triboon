@@ -1818,7 +1818,33 @@ test('pipeline: summarizeAttempts turns raw fail reasons into one actionable sen
   ]);
   assert.match(slow, /timing out/i);
 
+  // Unreachable providers (VPN/port/creds) must read as a CONNECTION problem, NOT "removed/missing"
+  // — the exact mislabel that sent the owner chasing source rot when nothing could connect.
+  const down = summarizeAttempts([
+    { fail: 'provider unreachable: no usenet provider could be reached (connection/VPN/port/credentials)' },
+    { fail: 'mount: connect ETIMEDOUT 1.2.3.4:563' },
+    { fail: 'nzb: fetch-failed' },
+  ]);
+  assert.match(down, /connection problem/i);
+  assert.doesNotMatch(down, /removed\/missing/);
+  assert.match(down, /Settings . Providers|VPN/i);
+
   assert.match(summarizeAttempts([]), /No sources were available/i);
+});
+
+test('nntp: combined stat throws NO_PROVIDER when unreachable (so a down link is not mislabeled "missing")', async () => {
+  // 127.0.0.1:1 refuses instantly — stands in for "no provider reachable" (VPN/port/firewall).
+  const pool = new NntpPool({ host: '127.0.0.1', port: 1, tls: false }, 2);
+  try {
+    // Opt-in: callers that need to tell "down" from "article gone" get a throw, not a silent false.
+    await assert.rejects(
+      () => pool.stat('x@y.test', 'health', { throwIfUnreachable: true }),
+      (e) => e.code === 'NO_PROVIDER',
+      'unreachable providers reject with NO_PROVIDER',
+    );
+    // Legacy contract unchanged: without the opt, an unreachable stat still resolves false.
+    assert.strictEqual(await pool.stat('x@y.test', 'health'), false, 'default stat stays false (back-compat)');
+  } finally { pool.close(); }
 });
 
 test('scoring: sample-size stubs and foreign-language dubs sink; duals stay honest fallbacks', () => {

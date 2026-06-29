@@ -97,10 +97,12 @@ const { mountNzb, orderVolumes } = require('./archive');
 // which is very different from a slow connection (timeouts) the user can act on differently.
 function summarizeAttempts(attempts = []) {
   if (!attempts.length) return 'No sources were available to try for this title.';
-  const cats = { missing: 0, encrypted: 0, stub: 0, unsupported: 0, timeout: 0, blocked: 0, other: 0 };
+  const cats = { connection: 0, missing: 0, encrypted: 0, stub: 0, unsupported: 0, timeout: 0, blocked: 0, other: 0 };
   for (const a of attempts) {
     const f = String((a && a.fail) || '').toLowerCase();
-    if (/\b430\b|no such article|missing|fetch-failed/.test(f)) cats.missing++;
+    // Connection FIRST — an unreachable provider must never be mislabeled as a removed article.
+    if (/unreachable|econnrefused|econnreset|etimedout|ehostunreach|enotfound|getaddrinfo|socket hang|\bauthinfo\b|too many connection|\b502\b|fetch-failed/.test(f)) cats.connection++;
+    else if (/\b430\b|no such article|missing/.test(f)) cats.missing++;
     else if (/encrypt/.test(f)) cats.encrypted++;
     else if (/stub|incomplete|\bsample\b/.test(f)) cats.stub++;
     else if (/unstreamable|compressed|unsupported|unmappable|7z/.test(f)) cats.unsupported++;
@@ -110,6 +112,7 @@ function summarizeAttempts(attempts = []) {
   }
   const n = attempts.length;
   const parts = [];
+  if (cats.connection) parts.push(`${cats.connection} couldn't reach a provider`);
   if (cats.missing) parts.push(`${cats.missing} removed/missing`);
   if (cats.encrypted) parts.push(`${cats.encrypted} password-protected`);
   if (cats.stub) parts.push(`${cats.stub} incomplete/sample`);
@@ -118,15 +121,19 @@ function summarizeAttempts(attempts = []) {
   if (cats.blocked) parts.push(`${cats.blocked} failed health`);
   if (cats.other) parts.push(`${cats.other} other`);
   const deadSource = cats.missing + cats.encrypted + cats.stub + cats.unsupported;
-  let head;
-  if (cats.timeout >= Math.ceil(n / 2)) {
+  const half = Math.ceil(n / 2);
+  let head, tail = ' Try again later, pick another release in Sources, or add more indexers.';
+  if (cats.connection >= half) {
+    head = "Couldn't reach your usenet provider(s) — this is a connection problem, not a missing release";
+    tail = ' Check that the server can reach your providers (VPN on? ports/credentials right in Settings → Providers), then retry.';
+  } else if (cats.timeout >= half) {
     head = 'Sources kept timing out — the connection or provider is too slow right now';
-  } else if (deadSource >= Math.ceil(n / 2)) {
+  } else if (deadSource >= half) {
     head = 'No healthy source for this title yet — every release is removed, password-protected, or incomplete';
   } else {
     head = `Couldn't start any of the ${n} available sources`;
   }
-  return `${head} (${parts.join(', ')}). Try again later, pick another release in Sources, or add more indexers.`;
+  return `${head} (${parts.join(', ')}).${tail}`;
 }
 
 // Is this mounted file too small to be the real feature it claims? Pure + exported so it can be unit-
@@ -198,9 +205,13 @@ async function probeFirstArticle(pool, msgId) {
   let timer;
   try {
     return await Promise.race([
-      pool.stat(msgId, 'startup', { signal: ac.signal })
+      pool.stat(msgId, 'startup', { signal: ac.signal, throwIfUnreachable: true })
         .then((ok) => ok ? 'present' : 'missing')
-        .catch((e) => (e && e.code === 'ABORT_ERR') ? 'timeout' : 'missing'),
+        .catch((e) => {
+          if (e && e.code === 'ABORT_ERR') return 'timeout';
+          if (e && e.code === 'NO_PROVIDER') return 'unreachable'; // can't reach a provider != article gone
+          return 'missing';
+        }),
       new Promise((resolve) => {
         timer = setTimeout(() => {
           ac.abort();
@@ -689,6 +700,7 @@ class Pipeline {
           this.metrics.firstProbeMaxMs = Math.max(this.metrics.firstProbeMaxMs, probeMs);
           if (verdict === 'missing') this.metrics.firstProbeMissing++;
           else if (verdict === 'timeout') { this.metrics.firstProbeTimeout++; candidate._probeTimeout = true; }
+          else if (verdict === 'unreachable') this.metrics.firstProbeError++;
           else this.metrics.firstProbePresent++;
           return verdict;
         }, () => { this.metrics.firstProbeError++; return 'error'; });
@@ -711,6 +723,11 @@ class Pipeline {
       if (winner.kind === 'probe' && winner.v === 'missing') {
         this._recordVerdict(candidate, 'missing', { stage: 'first-article' });
         return { fail: 'missing: first article unavailable' };
+      }
+      // No provider answered at all — a connection/VPN/port/credentials problem, NOT a dead source.
+      // Fail with an honest reason (no verdict cached — the source is fine once connectivity returns).
+      if (winner.kind === 'probe' && winner.v === 'unreachable') {
+        return { fail: 'provider unreachable: no usenet provider could be reached (connection/VPN/port/credentials)' };
       }
     }
     try {
