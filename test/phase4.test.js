@@ -3005,6 +3005,14 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'enterAppShell starts presence so browsing (not only watching) marks the device connected');
   assert.match(ui, /renderActivitySummary\(sessions, history, online\)[\s\S]+\$\('activityOnline'\)[\s\S]+onlineRowHtml\(o\)/,
     'renderActivity renders the connected-devices online list');
+  // Streaming Performance: "Test provider speed" button measures per-connection speed + the cap.
+  assert.ok(ui.includes('id="perfSpeed"') && ui.includes('id="perfSpeedResult"'),
+    'Streaming Performance has a Test provider speed button + result area');
+  assert.match(ui, /\$\('perfSpeed'\)\.addEventListener\('click'[\s\S]+\/api\/test\/provider-speed[\s\S]+r\.mbpsPerConn/,
+    'the speed button probes each provider and shows per-connection speed');
+  // Settings labels are no longer CSS-uppercased (the "MBPS" megabits/megabytes confusion fix).
+  assert.match(ui, /\.settingsControl>span\{[^}]*text-transform:none/,
+    'settings labels render sentence-case (not forced ALL CAPS)');
   // Native players hide the WebView, so the setInterval heartbeats can be throttled. The native
   // progress/stats ticks (pushed from native) must keep activity + presence alive for TV viewers.
   assert.match(ui, /function nativePlaybackHeartbeat\(\) \{[\s\S]+if \(!p \|\| !p\.usingNative\) return;[\s\S]+now - _nativeHbAt < 9000\) return;[\s\S]+sendActivity\('watching'\);[\s\S]+sendPresence\('watching'\);/,

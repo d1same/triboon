@@ -3139,10 +3139,12 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
     </div>
     <div class="settingsActions">
       <button class="btn primary" id="perfTest">Calculate recommendation</button>
+      <button class="btn ghost" id="perfSpeed" title="Measures real per-connection speed and your provider's connection cap. Best run when nobody is watching.">Test provider speed</button>
       <button class="btn ghost" id="perfApply" disabled>Apply recommendation</button>
       <button class="btn ghost" id="perfSave">Save custom</button>
     </div>
     <div class="hint settingsStatus" id="perfStatus"></div>
+    <div class="hint settingsStatus" id="perfSpeedResult"></div>
   </div>
   </div>
 
@@ -17787,6 +17789,34 @@ $('perfTest').addEventListener('click', async () => {
     toast('Recommendation failed: ' + e.message);
   }
   $('perfTest').disabled = false;
+});
+// Measure REAL per-connection speed + the provider's connection cap (opens connections until the
+// provider says "too many"). Loops every saved provider (stops on the first index with none).
+$('perfSpeed').addEventListener('click', async () => {
+  const btn = $('perfSpeed');
+  btn.disabled = true;
+  const out = $('perfSpeedResult');
+  out.innerHTML = '<div class="perfStatusLine">Measuring provider speed &amp; connection cap… (a few seconds — best run when nobody is watching)</div>';
+  const conn4k = parseInt($('perfConn4k').value, 10) || 0;
+  const rows = [];
+  try {
+    for (let i = 0; i < 12; i++) {
+      let r;
+      try { r = await api('/api/test/provider-speed', { method: 'POST', body: { index: i } }); }
+      catch (e) { if (e.status === 400) break; throw e; }
+      if (!r) break;
+      if (r.ok === false) { rows.push(`<div class="perfStatusLine">${esc(r.host || ('Provider ' + (i + 1)))}: test failed — ${esc(r.error || 'error')}</div>`); continue; }
+      const capTxt = r.capHit ? `cap ≈ ${esc(r.connCap)} connections` : `≥ ${esc(r.connections)} connections (no limit hit)`;
+      const warn = (r.capHit && conn4k && r.connCap < conn4k) ? ` ⚠ below your ${conn4k}/stream 4K setting — lower it` : '';
+      rows.push(`<div class="perfStatusLine">${esc(r.host)}: <strong>${esc(r.mbpsPerConn)} Mbps/conn</strong> · ~${esc(r.mbpsTotal)} Mbps at ${esc(r.connections)} conns · ${capTxt}${warn}</div>`);
+    }
+    out.innerHTML = rows.length
+      ? rows.join('') + '<div class="perfStatusLine" style="opacity:.7">Tip: set each provider\'s connection count at or below its measured cap. Roughly, total usable connections ÷ 5 ≈ simultaneous 4K viewers (÷ 3 for 1080p).</div>'
+      : '<div class="perfStatusLine">No providers configured to test.</div>';
+  } catch (e) {
+    out.innerHTML = '<div class="perfStatusLine">Speed test failed: ' + esc(e.message) + '</div>';
+  }
+  btn.disabled = false;
 });
 $('perfApply').addEventListener('click', async () => {
   const rec = S.perfRecommendation;

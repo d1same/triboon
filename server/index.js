@@ -284,6 +284,71 @@ function recommendStreamingPerformance(input = {}, s = settings.get()) {
   };
 }
 
+// Live provider speed + connection-cap probe (powers the "Test speed" button). Opens its OWN
+// short-lived connections (separate from the playback pool) up to maxConns, stopping early if the
+// provider answers "502 too many connections" — that count IS the account's real connection cap,
+// the number that should bound the configured connection counts. Then it BODY-fetches random recent
+// articles for a few seconds to measure real throughput (per-connection + total). Everything is
+// closed in finally; bounded in count and time so it can't run away or hammer the provider.
+const SPEEDTEST_GROUPS = ['alt.binaries.boneless', 'alt.binaries.teevee', 'alt.binaries.moovee', 'alt.binaries.hdtv', 'alt.binaries.misc'];
+function isTooManyConnections(e) { return /too many connection|\b502\b/i.test(String((e && e.message) || e)); }
+async function speedTestProvider(p, { maxConns = 24, sampleMs = 3500 } = {}) {
+  const conns = [];
+  let capHit = false;
+  try {
+    for (let i = 0; i < maxConns; i++) {
+      const c = new NntpConnection({ ...p, connectTimeoutMs: 8000, commandTimeoutMs: 12000 });
+      try { await c.connect(); conns.push(c); }
+      catch (e) { try { c.close(); } catch {} if (isTooManyConnections(e)) { capHit = true; break; } if (!conns.length) throw e; break; }
+    }
+    if (!conns.length) throw new Error('could not open any connection');
+    const rtt0 = Date.now();
+    try { await conns[0].stat('triboon-speedtest@invalid'); } catch {}
+    const rttMs = Date.now() - rtt0;
+    let group = null;
+    for (const g of SPEEDTEST_GROUPS) {
+      try {
+        const r = await conns[0]._cmd(`GROUP ${g}`);
+        if (r.status.startsWith('211')) {
+          const [, count, first, last] = r.status.trim().split(/\s+/).map(Number);
+          if (count > 1000) { group = { name: g, first, last }; break; }
+        }
+      } catch {}
+    }
+    let mbsTotal = 0, articles = 0;
+    if (group) {
+      const t0 = Date.now(); let bytes = 0;
+      await Promise.all(conns.map(async (c) => {
+        try { await c._cmd(`GROUP ${group.name}`); } catch { return; }
+        while (Date.now() - t0 < sampleMs) {
+          try {
+            const win = Math.min(group.last - group.first, 500000);
+            const art = group.last - Math.floor(Math.random() * win);
+            const r = await c._cmd(`BODY ${art}`, true);
+            if (r.status.startsWith('222')) { bytes += r.body.length; articles++; }
+          } catch { if (!c.alive) return; }
+        }
+      }));
+      const secs = Math.max(0.1, (Date.now() - t0) / 1000);
+      mbsTotal = bytes / 1e6 / secs;
+    }
+    const mbsPerConn = conns.length ? mbsTotal / conns.length : 0;
+    return {
+      ok: true, host: p.host,
+      connections: conns.length,
+      connCap: capHit ? conns.length : null, // null = no 502 within maxConns (cap is at least this)
+      capHit,
+      rttMs,
+      mbpsPerConn: +(mbsPerConn * 8).toFixed(1),
+      mbpsTotal: +(mbsTotal * 8).toFixed(1),
+      articles,
+      group: group ? group.name : null,
+    };
+  } finally {
+    for (const c of conns) { try { c.close(); } catch {} }
+  }
+}
+
 let pool = null, poolKey = '';
 function getPool() {
   const list = providerList();
@@ -5344,6 +5409,19 @@ Object.assign(H, {
     } finally { c.close(); }
   },
 
+  // Live speed + connection-cap probe for one saved provider (creds stay server-side). A failure is
+  // a 200 {ok:false} result, not an HTTP error — same contract as testProvider.
+  testProviderSpeed: async (ctx) => {
+    const b = await readJson(ctx.req).catch(() => ({}));
+    const p = providerList()[b.index];
+    if (!p) return send(ctx.res, 400, { error: 'no provider at that index' });
+    try {
+      send(ctx.res, 200, await speedTestProvider(p, { maxConns: clampInt(b.maxConns, 24, 4, 40) }));
+    } catch (e) {
+      send(ctx.res, 200, { ok: false, host: p.host, error: e.message });
+    }
+  },
+
   testIndexer: async (ctx) => {
     const b = await readJson(ctx.req);
     const ix = (settings.get().indexers || [])[b.index];
@@ -6584,6 +6662,7 @@ const ROUTES = [
   { m: 'POST', re: /^\/api\/settings$/, auth: 'admin', h: H.settingsSet },
   { m: 'POST', re: /^\/api\/streaming\/recommend$/, auth: 'admin', h: H.streamingRecommend },
   { m: 'POST', re: /^\/api\/test\/provider$/, auth: 'admin', h: H.testProvider },
+  { m: 'POST', re: /^\/api\/test\/provider-speed$/, auth: 'admin', h: H.testProviderSpeed },
   { m: 'POST', re: /^\/api\/test\/indexer$/, auth: 'admin', h: H.testIndexer },
   { m: 'POST', re: /^\/api\/invites$/, auth: 'admin', h: H.inviteCreate },
   { m: 'GET', re: /^\/api\/invites$/, auth: 'admin', h: H.invitesList },

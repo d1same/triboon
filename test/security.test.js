@@ -1424,6 +1424,14 @@ test('admin: connection tests for saved providers/indexers; daily API limit gate
   assert.ok(Number.isInteger(okP.ms) && okP.ms >= 0, 'reports connect+auth latency');
   assert.strictEqual((await httpJson(srv.port, 'POST', '/api/test/provider', { index: 9 }, admin)).status, 400);
 
+  // Speed + connection-cap probe: connects, opens connections, returns a measurement shape.
+  const speed = (await httpJson(srv.port, 'POST', '/api/test/provider-speed', { index: 0, maxConns: 6 }, admin)).json;
+  assert.strictEqual(speed.ok, true, JSON.stringify(speed));
+  assert.ok(speed.connections >= 1 && speed.connections <= 6, 'opened a bounded number of probe connections');
+  assert.ok('connCap' in speed && 'mbpsPerConn' in speed && 'mbpsTotal' in speed, 'returns cap + throughput fields');
+  assert.strictEqual((await httpJson(srv.port, 'POST', '/api/test/provider-speed', { index: 9 }, admin)).status, 400,
+    'out-of-range provider index 400s');
+
   if (ixServer) ixServer.close(); // teardown only closes the LAST one — don't leak the first
   const ixPort = await startIndexer();
   await httpJson(srv.port, 'POST', '/api/settings', {
