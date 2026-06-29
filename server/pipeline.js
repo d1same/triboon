@@ -5,6 +5,7 @@
 // Auto-advance: the player calls /api/advance with the session id; we mount the next
 // candidate and the client resumes at its last timestamp.
 
+const os = require('os');
 const { fanout, fetchUrl, normTitle } = require('./newznab');
 
 // ---- title verification ----
@@ -362,13 +363,23 @@ class Pipeline {
     let cacheMaxBytes = fallbackCacheMb * 1024 * 1024;
     let cacheMax = Math.max(readAhead * 3, big ? 48 : 36);
     if (hasBufferTarget) {
-      // The owner setting is in seconds, but the VFS retains decoded article segments.
-      // Convert to a bounded byte target, then raise the segment cap so small articles
-      // can actually hold that buffer instead of being limited by readAhead * 3.
-      const targetMbps = big ? 24 : 10;
-      const targetMb = Math.ceil((bufferSec * targetMbps) / 8);
-      const maxMb = big ? 384 : 256;
+      // The owner setting is in SECONDS, but the VFS retains decoded article bytes — so convert
+      // seconds → a byte target using the file's REAL average bitrate (size ÷ probed duration), not
+      // a fixed guess. The old fixed 24 Mbps assumption + 384 MB cap badly under-sized high-bitrate
+      // 4K (Dolby Vision / HDR10+ ~60-90 Mbps): it held only ~38s regardless of the configured goal,
+      // so a brief upstream latency spike drained the buffer and stalled playback every few minutes.
+      const durationSec = vf && vf._tracks && Number(vf._tracks.duration) > 0 ? Number(vf._tracks.duration) : 0;
+      const measuredMbps = durationSec && vf.size ? ((vf.size * 8) / durationSec) / 1e6 : 0;
+      // Before the probe lands, fall back to a realistic default (50 Mbps 4K / 14 Mbps 1080p); clamp
+      // so a bad probe can't zero out or balloon the buffer.
+      const streamMbps = Math.max(big ? 24 : 8, Math.min(big ? 120 : 45, measuredMbps || (big ? 50 : 14)));
+      const targetMb = Math.ceil((bufferSec * streamMbps) / 8);
+      // 4K cap raised 384 → 1024 so a ~80 Mbps stream can actually hold ~100s. Bounded by ~20% of
+      // system RAM (this totalMb is the TOTAL across active streams via the /activeCount split below),
+      // so smaller self-hosted boxes stay safe — they just get a proportionally shallower buffer.
+      const ramCapMb = Math.floor((os.totalmem() / (1024 * 1024)) * 0.2);
       const minMb = big ? 96 : 48;
+      const maxMb = Math.max(minMb, Math.min(big ? 1024 : 384, ramCapMb));
       const totalMb = Math.max(minMb, Math.min(maxMb, targetMb));
       const perActiveMb = Math.max(big ? 64 : 32, Math.floor(totalMb / activeCount));
       cacheMaxBytes = perActiveMb * 1024 * 1024;

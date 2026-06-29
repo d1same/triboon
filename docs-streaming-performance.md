@@ -141,11 +141,21 @@ reserve = ceil(usable * startupReservePct)
 perStreamBudget = floor((usable - reserve) / activeMounts)
 targetReadAhead = min(configured per-stream cap, perStreamBudget)
 targetCache = max(targetReadAhead * 3, 36 or 48 segments)
-targetCacheBytes = the owner buffer target converted to a bounded byte budget,
+targetCacheBytes = the owner buffer target (seconds) x the file's REAL average
+  bitrate (size / probed duration; a sane per-class default before the probe lands),
   then divided down as active mounts increase
 targetCacheSegments = high enough to retain targetCacheBytes for the mounted
   article size, not just readAhead * 3
 ```
+
+The byte budget is sized from the file's actual bitrate, NOT a fixed assumption.
+A high-bitrate 4K stream (Dolby Vision / HDR10+, ~60-90 Mbps) therefore gets a much
+deeper buffer than a light WEB-DL, so the configured seconds-goal actually holds and
+brief upstream latency spikes do not drain it (the old fixed 24 Mbps / 384 MB sizing
+held only ~38s on an ~80 Mbps file and stalled every few minutes on a jittery line).
+The 4K byte cap is ~1 GB but bounded to ~20% of system RAM so smaller self-hosted
+boxes stay safe (they get a proportionally shallower buffer). Do not revert to a
+fixed-bitrate byte budget without re-checking this latency behavior + the P14 contract.
 
 Large files use the 4K window; smaller files use the 1080p window.
 The segment window decides how many decoded articles can stay hot; the byte

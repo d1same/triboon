@@ -1432,13 +1432,17 @@ test('pipeline: 4K buffer seconds raise decoded segment retention for small arti
     segments: Array.from({ length: 10486 }, (_, i) => ({ msgId: `seg${i}` })),
     streamable: true,
     _touched: now,
+    _tracks: { duration: 700 }, // 7 GB / 700 s ≈ 86 Mbps — a high-bitrate 4K (DV/HDR) stream
     trimCache() {},
   };
   mounts.set(vf.id, vf);
 
   assert.strictEqual(pipeline.rebalancePlaybackWindows(now), 1);
   assert.strictEqual(vf.readAhead, 18, '4K stream still respects the configured connection window');
-  assert.strictEqual(vf.cacheMaxBytes, 360 * 1024 * 1024, '120s 4K goal maps to a bounded decoded-byte budget');
+  // The byte budget is now sized from the file's REAL ~86 Mbps bitrate, not a fixed 24 Mbps — so it
+  // is far deeper than the old 360 MB (~38s) that froze on latency spikes. (Bounded by ~20% RAM.)
+  assert.ok(vf.cacheMaxBytes > 360 * 1024 * 1024,
+    '120s goal on a high-bitrate 4K file maps to a much deeper decoded-byte budget than the old fixed sizing');
   assert.ok(vf.cacheMax >= Math.ceil(vf.cacheMaxBytes / vf.partSize),
     'segment cap should be high enough to retain the decoded-byte budget for small articles');
 });
