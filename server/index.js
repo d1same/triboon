@@ -268,10 +268,12 @@ function recommendStreamingPerformance(input = {}, s = settings.get()) {
   const br1080 = manualCaps && Number(s.sizeCap1080Gb) > 0 ? Math.max(8, Math.min(60, Math.round(bitrateFromSizeGb(s.sizeCap1080Gb)))) : 18;
   const measuredPerConn = Number(input.measuredMbpsPerConn) > 0 ? Number(input.measuredMbpsPerConn) : 0;
   const measuredCap = clampInt(input.measuredConnCap, 0, 0, 1000);
-  // With a measured per-connection speed, size per-stream connections straight from the bitrate
-  // (×1.6 headroom for read-ahead + jitter); otherwise keep the connection-budget heuristic above.
-  const perStream1080 = measuredPerConn > 0 ? Math.max(4, Math.min(24, Math.ceil((br1080 * 1.6) / measuredPerConn))) : rec1080;
-  const perStream4k = measuredPerConn > 0 ? Math.max(6, Math.min(36, Math.ceil((br4k * 1.6) / measuredPerConn))) : rec4k;
+  // Size per-stream connections for the PEAK bitrate (VBR 4K spikes well above its average), so a
+  // latency dip on a connection or two can't drop fill below the playback rate. 4K gets a higher
+  // floor — running a high-bitrate stream on a handful of connections is what let the buffer drain
+  // to zero mid-movie even with hundreds of connections idle.
+  const perStream1080 = measuredPerConn > 0 ? Math.max(6, Math.min(24, Math.ceil((br1080 * 1.6) / measuredPerConn))) : rec1080;
+  const perStream4k = measuredPerConn > 0 ? Math.max(12, Math.min(40, Math.ceil((br4k * 2.5) / measuredPerConn))) : rec4k;
   // A measured connection cap is a hard ceiling — usable capacity can't exceed what the account accepts.
   const effTotal = measuredCap > 0 ? Math.min(totalConnections || measuredCap, measuredCap) : totalConnections;
   const effUsable = Math.max(0, Math.floor(effTotal * 0.85));

@@ -370,9 +370,12 @@ class Pipeline {
       // so a brief upstream latency spike drained the buffer and stalled playback every few minutes.
       const durationSec = vf && vf._tracks && Number(vf._tracks.duration) > 0 ? Number(vf._tracks.duration) : 0;
       const measuredMbps = durationSec && vf.size ? ((vf.size * 8) / durationSec) / 1e6 : 0;
-      // Before the probe lands, fall back to a realistic default (50 Mbps 4K / 14 Mbps 1080p); clamp
-      // so a bad probe can't zero out or balloon the buffer.
-      const streamMbps = Math.max(big ? 24 : 8, Math.min(big ? 120 : 45, measuredMbps || (big ? 50 : 14)));
+      // VBR 4K PEAKS well above its size/duration average (action scenes can be 2-3x the average),
+      // so size the buffer for the PEAK — otherwise a high-bitrate sequence drains a buffer that
+      // looked deep "on average" (a 35 GB / 3.5 h film averages ~24 Mbps but spikes to ~80). Before
+      // the probe lands, use a realistic default; clamp so a bad probe can't zero out or balloon it.
+      const avgMbps = measuredMbps || (big ? 45 : 12);
+      const streamMbps = Math.max(big ? 45 : 12, Math.min(big ? 120 : 50, avgMbps * (big ? 2.2 : 1.4)));
       const targetMb = Math.ceil((bufferSec * streamMbps) / 8);
       // 4K cap raised 384 → 1024 so a ~80 Mbps stream can actually hold ~100s. Bounded by ~20% of
       // system RAM (this totalMb is the TOTAL across active streams via the /activeCount split below),
