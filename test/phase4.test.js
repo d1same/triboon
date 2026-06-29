@@ -1055,14 +1055,13 @@ test('Android native player: direct source and native chrome stay out of the web
     'theme scrims should not regress to the old opaque vertical wash');
   assert.match(ui, /const THEME_ALIASES = \{[\s\S]+graphite: 'studio'[\s\S]+triboon: 'triboonCoral'[\s\S]+trioon: 'triboonCoral'[\s\S]+arctic: 'teal'[\s\S]+forest: 'evergreen'/,
     'legacy stored theme names should map to the nearest new professional palette');
-  assert.ok(ui.includes("label: 'Executive Graphite'") && ui.includes("tone: 'graphite + champagne'")
+  assert.ok(ui.includes("label: 'Graphite'") && ui.includes("tone: 'neutral charcoal'")
     && ui.includes("ink: '#121416'") && ui.includes("c: '#8D9AA4'")
     && ui.includes("a: '#B8A46A'"),
-    'default theme should use a restrained graphite and champagne business palette');
-  assert.ok(ui.includes("label: 'Carbon Brass'") && ui.includes("label: 'Boardroom Slate'")
-    && ui.includes("label: 'Walnut Smoke'") && ui.includes("label: 'Harbor Steel'")
-    && ui.includes("label: 'Olive Boardroom'"),
-    'alternate themes should be grown-up neutral palettes, not playful mood colors');
+    'default theme should keep its restrained graphite + champagne business palette');
+  assert.ok(ui.includes("const VISIBLE_THEMES = ['triboonCoral', 'studio', 'velvet']")
+    && ui.includes("label: 'Slate'") && ui.includes("label: 'Walnut'"),
+    'the picker should offer three curated neutral palettes (Graphite / Slate / Walnut)');
   assert.ok(ui.includes("localStorage.getItem('triboon.theme') || 'triboonCoral'")
     && ui.includes('THEMES[name] || THEMES.triboonCoral'),
     'Executive Graphite should be the default and fallback theme');

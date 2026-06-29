@@ -292,7 +292,7 @@ body.authOpen #gateBackdrop{display:block}
 .gateCard input{width:100%;min-height:54px;background:rgba(255,255,255,.08);border:0;border-radius:16px;padding:15px 16px;color:var(--text);font:700 17px "Albert Sans";outline:none;box-shadow:inset 0 0 0 1px rgba(243,239,247,.08)}
 .gateCard input:focus{box-shadow:0 0 0 3px rgba(251,139,60,.42),inset 0 0 0 1px rgba(251,139,60,.72)}
 .gateCard .btn{width:100%;min-height:56px;justify-content:center;margin-top:24px;font-size:16px;border-radius:17px;box-shadow:0 16px 32px rgba(193,59,214,.23)}
-.gateCard .btn.primary{background:var(--btnPrimary)!important;color:var(--onAccent)!important}
+.gateCard .btn.primary{background:var(--btn)!important;color:var(--text)!important}
 .gateCard .err{color:#ffadad;font-weight:700;font-size:13px;min-height:18px;margin-top:12px}
 .gateCard .alt{margin-top:18px;text-align:center;font-size:14px;color:rgba(243,239,247,.7)}
 .gateCard .alt button{color:#ffd08b;font-weight:850}
@@ -377,8 +377,10 @@ body.androidApp #gateArtCaption{display:none}
 #heroBtns{display:flex;gap:12px;min-height:46px;align-items:center}
 .btn{display:flex;align-items:center;gap:10px;padding:14px 26px;border-radius:var(--r);font:600 15.5px "Albert Sans",system-ui,sans-serif;letter-spacing:.01em;border:1px solid transparent;background:var(--btn);color:var(--text)}
 .btn:hover{background:var(--btnHover)}
-.btn.primary{background:var(--btnPrimary);color:var(--onAccent);border-color:transparent}
-.btn.primary:hover{background:var(--btnPrimaryHover)}
+/* Uniform buttons: the "primary" action is the SAME colour as every other button (no separate accent
+   fill) — prominence comes from position, and the focus/rollover BRIGHTENS it. */
+.btn.primary{background:var(--btn);color:var(--text);border:1px solid rgba(255,255,255,.05)}
+.btn.primary:hover{background:var(--btnHover)}
 .btn.ghost{background:var(--btn);border-color:rgba(255,255,255,.045)}
 .btn svg{width:18px;height:18px}
 /* ---------- focus highlight: lighter = selected, darker = not. No ring, no accent colour. ----------
@@ -15908,7 +15910,7 @@ const THEME_TOKEN_MAP = {
 };
 const THEMES = {
   triboonCoral: {
-    label: 'Executive Graphite', tone: 'graphite + champagne',
+    label: 'Graphite', tone: 'neutral charcoal',
     ink: '#121416', surface: '#1A1E22', raise: '#252B31',
     m: '#68737D', c: '#8D9AA4', a: '#B8A46A',
     text: '#F4F1EA', muted: '#A9B0B6', line: 'rgba(255,255,255,.07)',
@@ -15932,7 +15934,7 @@ const THEMES = {
     scrim: 'linear-gradient(90deg,rgba(20,20,20,.84) 0%,rgba(20,20,20,.54) 28%,rgba(20,20,20,.18) 58%,rgba(20,20,20,.05) 100%),linear-gradient(0deg,rgba(20,20,20,.74) 0%,rgba(20,20,20,.24) 26%,rgba(20,20,20,.04) 60%,rgba(20,20,20,.10) 100%)',
   },
   studio: {
-    label: 'Boardroom Slate', tone: 'slate + pewter',
+    label: 'Slate', tone: 'cool blue-grey',
     ink: '#151A1F', surface: '#1D242B', raise: '#29323B',
     m: '#627080', c: '#8C9AAA', a: '#AAB5BF',
     text: '#F1F4F6', muted: '#A5AFB8', line: 'rgba(255,255,255,.065)',
@@ -15944,7 +15946,7 @@ const THEMES = {
     scrim: 'linear-gradient(90deg,rgba(21,26,31,.84) 0%,rgba(21,26,31,.54) 28%,rgba(21,26,31,.18) 58%,rgba(21,26,31,.05) 100%),linear-gradient(0deg,rgba(21,26,31,.74) 0%,rgba(21,26,31,.24) 26%,rgba(21,26,31,.04) 60%,rgba(21,26,31,.10) 100%)',
   },
   velvet: {
-    label: 'Walnut Smoke', tone: 'walnut + linen',
+    label: 'Walnut', tone: 'warm taupe',
     ink: '#1D1B18', surface: '#26231F', raise: '#34302A',
     m: '#716B61', c: '#A49A87', a: '#BBAA86',
     text: '#F4F0EA', muted: '#B2AAA0', line: 'rgba(255,255,255,.06)',
@@ -16010,12 +16012,15 @@ function applyTheme() {
   if (document.body) document.body.dataset.theme = name;
   return name;
 }
+// Three curated themes in the picker (neutral / cool / warm). Others stay valid for saved prefs.
+const VISIBLE_THEMES = ['triboonCoral', 'studio', 'velvet'];
 // One theme picker, two homes: user Preferences and admin Settings Display.
 function renderThemePicker(elId) {
   const tp = $(elId); if (!tp) return;
   const cur = applyTheme();
   tp.innerHTML = '';
-  Object.entries(THEMES).forEach(([name, t]) => {
+  VISIBLE_THEMES.forEach((name) => {
+    const t = THEMES[name]; if (!t) return;
     const b = document.createElement('button');
     b.className = 'themeChoice focusable' + (name === cur ? ' sel' : '');
     b.dataset.theme = name;
