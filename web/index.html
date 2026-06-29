@@ -547,6 +547,8 @@ body.tv #filterMenu{backdrop-filter:none}
 #libModal .libEditActionBtns{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
 #libModal .libEditActionBtns .btn{min-height:40px}
 #libModal .modalBtns{display:flex;gap:10px;margin-top:22px}
+#updateModal .modalBtns{display:flex;gap:12px;margin-top:24px;align-items:stretch}
+#updateModal .modalBtns .btn{min-height:48px}
 #seasonChips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
 .seasonChip{padding:10px 16px;border-radius:12px;background:rgba(34,25,52,.6);border:1px solid var(--line);
   font:600 13px "Sora";border-radius:var(--r)}
@@ -2756,8 +2758,8 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
     <h2>Update available</h2>
     <div class="sub" id="updateModalSub">A new version of Triboon is ready to install.</div>
     <div class="modalBtns">
+      <button class="btn ghost focusable" id="updateModalLater" style="min-width:108px;justify-content:center">Later</button>
       <button class="btn primary focusable" id="updateModalGo" style="flex:1;justify-content:center">Update now</button>
-      <button class="btn ghost focusable" id="updateModalLater">Later</button>
     </div>
   </div>
 </div>

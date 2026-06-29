@@ -159,8 +159,10 @@ const MOUNT_DEADLINE_MS = 30000;     // hard cap — a stalled mount advances in
 const FIRST_ARTICLE_PROBE_MS = 800;   // cheap STAT probe catches stale NZBs before BODY fetches
 const MAX_ATTEMPTS = 18;      // source walk: stale indexer rows are common; keep going past one bad release family
 const MAX_ADVANCE_MS = 45000; // hard UX budget for one play/advance source walk
-const PREPARE_MAX_ATTEMPTS = 3; // background detail prep: skip one bad top pick without silently walking the whole list
-const PREPARE_MAX_MS = 12000;
+const PREPARE_MAX_ATTEMPTS = 6; // background detail prep: walk past several dead/encrypted top picks so the
+                                // prefetch actually PRE-MOUNTS a working source (new releases often have
+                                // 2-3 missing/unmappable variants ranked first). Bounded by PREPARE_MAX_MS.
+const PREPARE_MAX_MS = 15000;
 
 function candidateKey(candidate) {
   return crypto.createHash('sha1').update([
