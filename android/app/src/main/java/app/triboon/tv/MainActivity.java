@@ -2936,26 +2936,32 @@ public class MainActivity extends Activity {
         });
         centerControls.addView(nativePlayBtn);
 
-        // Live only: a red "LIVE" pill (matches the web overlay) — tap to jump back to the live edge
-        // (ExoPlayer's default position for a live window) after a pause/rewind, and resume.
+        // Live only: a neutral "LIVE" pill styled like the other transport controls (not a big red
+        // block) — just a small red dot signals live. Tap to jump back to the live edge after a
+        // pause/rewind and resume.
         nativeLiveBtn = new TextView(this);
-        nativeLiveBtn.setText("● LIVE");
+        android.text.SpannableString liveLabel = new android.text.SpannableString("● LIVE");
+        liveLabel.setSpan(new android.text.style.ForegroundColorSpan(0xFFFF5A5A), 0, 1, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        nativeLiveBtn.setText(liveLabel);
         nativeLiveBtn.setTextColor(0xFFF3EFF7);
-        nativeLiveBtn.setTextSize(11);
+        nativeLiveBtn.setTextSize(10);
         nativeLiveBtn.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
         nativeLiveBtn.setGravity(android.view.Gravity.CENTER);
-        nativeLiveBtn.setPadding(dp(15), dp(8), dp(15), dp(9));
+        nativeLiveBtn.setPadding(dp(12), 0, dp(12), 0);
         nativeLiveBtn.setContentDescription("Go to live");
-        nativeLiveBtn.setBackground(nativePillBg(0x40FF5A5A, 0xCCFF5A5A, dp(18)));
+        nativeLiveBtn.setBackground(nativeButtonBg(false, false));
         nativeLiveBtn.setFocusable(true);
         nativeLiveBtn.setClickable(true);
-        nativeLiveBtn.setOnFocusChangeListener((v, has) ->
-                v.setBackground(nativePillBg(has ? 0x99FF5A5A : 0x40FF5A5A, 0xFFFF5A5A, dp(18))));
+        nativeLiveBtn.setOnFocusChangeListener((v, has) -> {
+            v.setBackground(nativeButtonBg(has, false));
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) v.setElevation(has ? dp(4) : 0);
+            if (has) showNativeChrome(false);
+        });
         nativeLiveBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) goNativeLive(); });
         nativeLiveBtn.setOnKeyListener((v, code, e) -> handleNativeSurfaceKey(e));
         LinearLayout.LayoutParams liveLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        liveLp.setMargins(dp(10), 0, dp(10), 0);
+                ViewGroup.LayoutParams.WRAP_CONTENT, dp(36));
+        liveLp.setMargins(dp(8), 0, dp(8), 0);
         centerControls.addView(nativeLiveBtn, liveLp);
 
         nativeFwdBtn = nativeButton(R.drawable.ic_player_forward, "Forward 30 seconds", false);
@@ -4218,10 +4224,10 @@ public class MainActivity extends Activity {
             LinearLayout cell = new LinearLayout(this);
             cell.setOrientation(LinearLayout.VERTICAL);
             cell.setPadding(dp(10), dp(6), dp(10), dp(7));
-            cell.setBackground(nativePillBg(isNow ? 0x33C13BD6 : 0x14F3EFF7,
-                    isNow ? 0x66C13BD6 : 0x18F3EFF7, dp(8)));
+            cell.setBackground(nativePillBg(isNow ? 0x30F3EFF7 : 0x14F3EFF7,
+                    isNow ? 0x66F3EFF7 : 0x18F3EFF7, 0));
             TextView when = new TextView(this);
-            when.setTextColor(0xCCBFB0D0);
+            when.setTextColor(0xCCBFBFBF);
             when.setTextSize(9);
             when.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
             when.setText(isNow ? "NOW" : fmtNativeClock(start));

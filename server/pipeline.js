@@ -163,6 +163,18 @@ const PREPARE_MAX_ATTEMPTS = 6; // background detail prep: walk past several dea
                                 // prefetch actually PRE-MOUNTS a working source (new releases often have
                                 // 2-3 missing/unmappable variants ranked first). Bounded by PREPARE_MAX_MS.
 const PREPARE_MAX_MS = 15000;
+// Cold press-play races the top N candidates' fetch+mount+health concurrently and takes the first
+// HEALTHY one (startup win #2). Measured: a cold start is dominated by walking PAST dead/incomplete
+// top picks one-at-a-time — racing collapses that serial tail to the fastest healthy of the top N.
+// Kept small so startup never floods the provider pool (the startup reserve covers a few parallel
+// mounts). Auto-advance stays serial (width 1) — the active source already died, no tail to race.
+const PLAY_RACE_WIDTH = 5;
+// Hedge delay before speculatively mounting the next candidate in parallel. A healthy/fast top
+// pick (usually prefetched → NZB cached → mounts in well under this) commits before the hedge
+// fires, so the common case costs ZERO extra indexer grabs; only a STALLING top pick gets a
+// parallel understudy started. A fast dead pick fails before the hedge too and the next launches
+// immediately on that failure — the hedge only matters for slow-failing/slow-mounting picks.
+const RACE_HEDGE_MS = 800;
 
 function candidateKey(candidate) {
   return crypto.createHash('sha1').update([
@@ -815,7 +827,10 @@ class Pipeline {
     } else {
       this.metrics.healthGateResults++;
     }
-    this._startPlaybackWarmup(vf, win);
+    // Read-ahead warmup is started by the CALLER for the winning mount only — racing several
+    // candidates (parallel walk) must not have losers draining the pool. Stash the window so the
+    // caller can warm the winner with the same budget _applyPlaybackWindow just computed.
+    vf._playWin = win;
     // Startup timing breadcrumb, read by the optional TRIBOON_STARTUP_TRACE logging in index.js.
     // Separates NZB/RAR mount cost from the bounded health gate so a slow VOD start can be pinned to
     // mount vs gate vs downstream (ffmpeg remux probe / moov tail-seek), which the index.js handlers
@@ -851,17 +866,29 @@ class Pipeline {
     if (!playable.length) throw new Error('no playable releases found');
     const session = new PlaySession(params, playable);
     this.sessions.set(session.id, session);
-    return this._advance(session, mountOpts);
+    // Cold start races the top candidates; a single explicit Sources pick stays a direct mount.
+    const width = (params.pickKey || params.pick) ? 1 : PLAY_RACE_WIDTH;
+    return this._advance(session, mountOpts, { width });
   }
 
   _playableCandidates(candidates, params = {}) {
-    let playable = candidates.filter((c) => c.score > -5000);
-    if (params.pickKey || params.pick) {
-      const picked = candidates.find((c) => params.pickKey && c.pickKey === params.pickKey)
-        || candidates.find((c) => params.pick && c.name === params.pick);
-      if (picked && picked.score > -5000) playable = [picked, ...playable.filter((c) => c.pickKey !== picked.pickKey)];
-    }
-    return playable;
+    const autoPlayable = candidates.filter((c) => c.score > -5000);
+    if (!params.pickKey && !params.pick) return autoPlayable;
+    const picked = candidates.find((c) => params.pickKey && c.pickKey === params.pickKey)
+      || candidates.find((c) => params.pick && c.name === params.pick);
+    if (!picked) return autoPlayable;
+    // A manual Sources pick is an explicit OVERRIDE — honored FIRST even when the auto-scorer would
+    // reject it (the drawer deliberately lists releases past the auto-pick size cap; without this a
+    // picked 38GB UHD remux was silently dropped). The system can't know WHY it was picked, so the
+    // fallback never walks blindly by size: if the pick can't stream, try just the SINGLE next-
+    // smaller release (a close alternative to what they chose), then fall back to the best auto-
+    // ranked streamable release.
+    const pickedSize = Number(picked.sizeBytes) || 0;
+    const oneBelow = candidates
+      .filter((c) => c.pickKey !== picked.pickKey && (Number(c.sizeBytes) || 0) > 0 && (Number(c.sizeBytes) || 0) < pickedSize)
+      .sort((a, b) => (Number(b.sizeBytes) || 0) - (Number(a.sizeBytes) || 0))[0];
+    const seen = new Set([picked.pickKey, oneBelow && oneBelow.pickKey].filter(Boolean));
+    return [picked, ...(oneBelow ? [oneBelow] : []), ...autoPlayable.filter((c) => !seen.has(c.pickKey))];
   }
 
   async prepare(params, policy = {}, mountOpts = {}) {
@@ -879,6 +906,7 @@ class Pipeline {
         this.mounts.set(res.vf.id, res.vf);
         this.mountByUrl.set(candidate.nzbUrl, res.vf.id);
         this.rebalancePlaybackWindows();
+        this._startPlaybackWarmup(res.vf, res.vf._playWin);
         return { vf: res.vf, candidate, attempts, prepared: true };
       }
       attempts.push({ name: candidate.name, fail: res.fail || 'prepare failed' });
@@ -886,27 +914,80 @@ class Pipeline {
     return { candidate: playable[0], attempts, prepared: false };
   }
 
-  // Mount the next viable candidate in the session (used by play and by auto-advance).
-  async _advance(session, mountOpts = {}) {
+  // Commit a winning mount to the session and warm its read-ahead. Shared by both walk modes.
+  _commitMount(session, candidate, vf, attempts) {
+    vf._touched = Date.now();
+    if (candidate.name) vf._releaseName = candidate.name;
+    this.mounts.set(vf.id, vf);
+    this.mountByUrl.set(candidate.nzbUrl, vf.id);
+    session.currentMountId = vf.id;
+    this.rebalancePlaybackWindows();
+    this._startPlaybackWarmup(vf, vf._playWin);
+    session.history.push({ name: candidate.name, outcome: 'playing' });
+    return { session, vf, candidate, attempts };
+  }
+
+  // Mount the next viable candidate in the session. width > 1 races the top N candidates'
+  // fetch+mount+health concurrently and commits the first HEALTHY one (cold-start win); width 1
+  // is the original one-at-a-time walk (auto-advance, and explicit Sources picks).
+  async _advance(session, mountOpts = {}, { width = 1 } = {}) {
     const attempts = [];
     const started = Date.now();
-    while (session.cursor < session.candidates.length
-      && attempts.length < MAX_ATTEMPTS
-      && Date.now() - started < MAX_ADVANCE_MS) {
-      const candidate = session.candidates[session.cursor++];
-      const res = await this._tryCandidate(candidate, mountOpts);
-      if (res.vf && !res.fail) {
-        res.vf._touched = Date.now();
-        if (candidate.name) res.vf._releaseName = candidate.name;
-        this.mounts.set(res.vf.id, res.vf);
-        this.mountByUrl.set(candidate.nzbUrl, res.vf.id);
-        session.currentMountId = res.vf.id;
-        this.rebalancePlaybackWindows();
-        session.history.push({ name: candidate.name, outcome: 'playing' });
-        return { session, vf: res.vf, candidate, attempts };
+    const budgetLeft = () => Date.now() - started < MAX_ADVANCE_MS;
+    if (width <= 1) {
+      while (session.cursor < session.candidates.length && attempts.length < MAX_ATTEMPTS && budgetLeft()) {
+        const candidate = session.candidates[session.cursor++];
+        const res = await this._tryCandidate(candidate, mountOpts);
+        if (res.vf && !res.fail) return this._commitMount(session, candidate, res.vf, attempts);
+        session.history.push({ name: candidate.name, outcome: res.fail });
+        attempts.push({ name: candidate.name, fail: res.fail });
       }
-      session.history.push({ name: candidate.name, outcome: res.fail });
-      attempts.push({ name: candidate.name, fail: res.fail });
+    } else {
+      // Hedged parallel walk: speculatively mount up to `width` candidates concurrently, but COMMIT
+      // IN RANK ORDER — the winner is the best (lowest-index) HEALTHY release, never a lower-ranked
+      // one that merely finished first. A failed front-runner pulls the next candidate in at once; a
+      // stalling front-runner gets a parallel understudy after RACE_HEDGE_MS. Losers stay unregistered
+      // and start no read-ahead (see _tryCandidateFresh), so they fall out of the pool cheaply.
+      const results = [];          // launch order k -> { candidate, state:'pending'|'ok'|'fail', vf?, fail? }
+      const inflight = new Map();  // k -> promise(resolving to k)
+      let committed = 0;           // next rank index still to decide
+      const launchOne = () => {
+        if (session.cursor >= session.candidates.length || results.length >= MAX_ATTEMPTS) return false;
+        const candidate = session.candidates[session.cursor++];
+        const k = results.length;
+        results.push({ candidate, state: 'pending' });
+        inflight.set(k, this._tryCandidate(candidate, mountOpts).then(
+          (res) => { results[k] = (res.vf && !res.fail) ? { candidate, state: 'ok', vf: res.vf } : { candidate, state: 'fail', fail: res.fail }; return k; },
+          (e) => { results[k] = { candidate, state: 'fail', fail: `error: ${e.message}` }; return k; },
+        ));
+        return true;
+      };
+      const fill = () => { while (inflight.size < width && launchOne()) { /* keep window full */ } };
+      let walking = false; // flips true on the first dead pick — past that we KNOW we're walking
+      launchOne();
+      while (budgetLeft()) {
+        // Commit the longest decided prefix, in rank order.
+        while (committed < results.length && results[committed].state !== 'pending') {
+          const r = results[committed];
+          if (r.state === 'ok') return this._commitMount(session, r.candidate, r.vf, attempts);
+          session.history.push({ name: r.candidate.name, outcome: r.fail });
+          attempts.push({ name: r.candidate.name, fail: r.fail });
+          committed++;
+          // A dead pick proves this is a real walk (common for 4K: top UHD BluRay remuxes are
+          // unstreamable) — race the whole window now instead of ramping one understudy at a time.
+          walking = true;
+          fill();
+        }
+        if (!inflight.size) break; // nothing decided-OK and nothing left running → all failed
+        // Before the first failure (happy path) only a STALLING top pick gets one hedged understudy,
+        // so a healthy/cached top pick costs zero extra grabs. Once walking, the window is kept full.
+        const canHedge = !walking && inflight.size < width && session.cursor < session.candidates.length && results.length < MAX_ATTEMPTS;
+        const racers = [...inflight.values()];
+        if (canHedge) racers.push(new Promise((r) => { const t = setTimeout(() => r('hedge'), RACE_HEDGE_MS); if (t.unref) t.unref(); }));
+        const w = await Promise.race(racers);
+        if (w === 'hedge') { launchOne(); continue; } // front-runner is stalling — widen the race
+        inflight.delete(w);
+      }
     }
     const err = new Error('all candidates failed');
     err.attempts = attempts;

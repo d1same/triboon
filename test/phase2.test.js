@@ -1475,6 +1475,25 @@ test('pipeline: playback warmup is bounded and stays below active playback prior
   }, '4K warmup should fill a bounded first chunk on the low-priority lane');
 });
 
+test('pipeline: a manual Sources pick is honored first, then the next-smaller release, then the best auto-pick', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const pipeline = new Pipeline({ pool: () => null, verdicts: new VerdictCache(store), mounts: new Map(), indexers: () => [] });
+  const cands = [
+    { pickKey: 'e', sizeBytes: 40e9, score: -6000 }, // bigger than the pick → never a fallback
+    { pickKey: 'p', sizeBytes: 38e9, score: -6000 }, // over-cap manual pick (auto-scorer would reject it)
+    { pickKey: 'b', sizeBytes: 30e9, score: -6000 }, // the single next-smaller release → tried 2nd
+    { pickKey: 'c', sizeBytes: 15e9, score: 200 },    // best auto-ranked (within cap)
+    { pickKey: 'd', sizeBytes: 12e9, score: 100 },
+  ];
+  const order = pipeline._playableCandidates(cands, { pickKey: 'p' }).map((c) => c.pickKey);
+  assert.deepStrictEqual(order, ['p', 'b', 'c', 'd'],
+    'manual pick honored first (even over-cap), then ONE next-smaller by size, then best auto-ranked; a bigger-than-pick release is never a fallback');
+  const auto = pipeline._playableCandidates(cands, {}).map((c) => c.pickKey);
+  assert.deepStrictEqual(auto, ['c', 'd'], 'with no manual pick, only within-cap auto-ranked releases are playable');
+  store.close();
+});
+
 test('pipeline: auto-advance mounts the next candidate when the current source dies', async () => {
   const pay1 = seededPayload(90 * 1024, 11);
   const pay2 = seededPayload(90 * 1024, 22);

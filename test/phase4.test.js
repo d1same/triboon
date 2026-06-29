@@ -2045,8 +2045,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native player D-pad traversal (View[] — the Go-live LIVE pill is a TextView) must include nativeFavBtn and nativeLiveBtn');
   // Native live: a red "LIVE" text pill (matching the web overlay) — NOT a skip icon — that seeks to
   // the live edge. It is a TextView, which is why nativeControlButtons() is View[] not ImageButton[].
-  assert.match(android, /nativeLiveBtn = new TextView\(this\);\s*nativeLiveBtn\.setText\("● LIVE"\)/,
-    'the native Go-live control should be a red "● LIVE" text pill, not the >>| skip icon');
+  assert.match(android, /nativeLiveBtn = new TextView\(this\);[\s\S]*?SpannableString liveLabel = new android\.text\.SpannableString\("● LIVE"\)[\s\S]*?ForegroundColorSpan\(0xFFFF5A5A\)[\s\S]*?nativeLiveBtn\.setText\(liveLabel\)[\s\S]*?nativeLiveBtn\.setBackground\(nativeButtonBg\(false, false\)\)/,
+    'the native Go-live control is a NEUTRAL "● LIVE" text pill (only a small red dot) styled like the transport buttons — not a big red-filled pill');
   assert.match(android, /private void goNativeLive\(\) \{[\s\S]+"live"\.equals\(nativeMode\)[\s\S]+nativePlayer\.seekToDefaultPosition\(\)[\s\S]+nativePlayer\.play\(\)/,
     'goNativeLive should seek to the live edge and resume');
   // Phone/tablet: native player buttons must respond to a touch tap. consumeNativeControlClick gated

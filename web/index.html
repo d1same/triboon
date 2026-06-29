@@ -5718,6 +5718,12 @@ async function play(it, pick) {
     const r = await api('/api/play', { method: 'POST', body });
     if (S._playTicket !== playTicket) return;
     if (S.view !== 'player') return; // user backed out of the loading screen
+    // Manual Sources pick: never silently swap. If the chosen release couldn't be streamed and the
+    // pipeline fell back to another, say so (the old behaviour looked like "it ignored my pick").
+    if (picked && picked.pickKey && r && r.candidate && r.candidate.pickKey && r.candidate.pickKey !== picked.pickKey) {
+      const alt = (r.candidate.name || 'another source').replace(/\.(mkv|mp4|avi)$/i, '');
+      toast(`Your pick couldn't be streamed — playing ${alt.length > 40 ? alt.slice(0, 39) + '…' : alt}. Open Sources to choose another.`);
+    }
     await openPlayer(it, r, { nativeFirst });
   } catch (e) {
     closePlayer();
