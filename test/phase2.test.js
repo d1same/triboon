@@ -12,7 +12,7 @@ const { parseRelease, scoreRelease, rankReleases } = require('../server/scoring'
 const { parseNewznabRss, dedupe, fanout, searchIndexer } = require('../server/newznab');
 const { Store, VerdictCache } = require('../server/store');
 const { Pipeline, GATE_MS, nzbVerdictKey, summarizeAttempts, stubFeatureReason } = require('../server/pipeline');
-const { NntpPool } = require('../server/nntp');
+const { NntpPool, ProviderPool } = require('../server/nntp');
 const { createMockNntp } = require('./mock-nntp');
 const { encodePart } = require('../server/yenc');
 const { seededPayload, writeRar4Store } = require('./archive-fixtures');
@@ -1830,6 +1830,28 @@ test('pipeline: summarizeAttempts turns raw fail reasons into one actionable sen
   assert.match(down, /Settings . Providers|VPN/i);
 
   assert.match(summarizeAttempts([]), /No sources were available/i);
+});
+
+test('nntp: ProviderPool never opens more than its configured size, even under heavy concurrent load', async () => {
+  // The owner's guarantee: "if I set 100 on Newshosting, the app must never open more than 100."
+  // Fire far more concurrent fetches than the cap and prove simultaneous connections stay <= size.
+  const payload = seededPayload(40 * 1024, 0x31);
+  const r = nzbFor(writeRar4Store([{ name: 'cap.mkv', data: payload }], { base: 'cap' }), 30000, 'cap');
+  const mock = createMockNntp({ articles: r.articles });
+  const port = await mock.listen();
+  const SIZE = 3;
+  const pool = new ProviderPool({ host: '127.0.0.1', port, tls: false }, SIZE);
+  const msgIds = [...r.articles.keys()];
+  try {
+    let peak = 0;
+    const sampler = setInterval(() => { peak = Math.max(peak, pool.conns.length + pool.connecting); }, 2);
+    const tasks = [];
+    for (let i = 0; i < 30; i++) tasks.push(pool.body(msgIds[i % msgIds.length]).catch(() => null)); // 30 ≫ 3
+    await Promise.all(tasks);
+    clearInterval(sampler);
+    peak = Math.max(peak, pool.conns.length + pool.connecting);
+    assert.ok(peak <= SIZE, `pool peaked at ${peak} simultaneous connections for size=${SIZE} — must never exceed the cap`);
+  } finally { pool.close(); await mock.close(); }
 });
 
 test('nntp: combined stat throws NO_PROVIDER when unreachable (so a down link is not mislabeled "missing")', async () => {

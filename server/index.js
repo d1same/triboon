@@ -348,7 +348,10 @@ const SPEEDTEST_SAMPLE_CONNS = 12;   // connections used for the throughput samp
 function isTooManyConnections(e) { return /too many connection|\b502\b/i.test(String((e && e.message) || e)); }
 async function speedTestProvider(p, { targetConns, sampleMs = 3500 } = {}) {
   const configured = providerConnections(p.connections);
-  const want = clampInt(targetConns, configured, 1, SPEEDTEST_MAX_CONNS);
+  // Never open MORE than the provider's configured cap — testing past it would violate the very
+  // limit the admin set (and trip the provider's "too many connections"). The ceiling is the
+  // configured count, not SPEEDTEST_MAX_CONNS.
+  const want = clampInt(targetConns, configured, 1, Math.min(configured, SPEEDTEST_MAX_CONNS));
   const conns = [];
   let capHit = false;
   const openOne = async () => {
@@ -5485,10 +5488,28 @@ Object.assign(H, {
     const b = await readJson(ctx.req).catch(() => ({}));
     const p = providerList()[b.index];
     if (!p) return send(ctx.res, 400, { error: 'no provider at that index' });
+    const configured = providerConnections(p.connections);
+    // The speed test opens its OWN connections, separate from the live playback pool. To honor the
+    // configured cap, the test may only use the FREE headroom (configured − connections playback is
+    // already holding), and we FREEZE the live pool at its current size for the test's duration so it
+    // can't grow into that headroom. Net guarantee: (live playback + test) ≤ configured, always.
+    const livePp = pool && pool.providers && pool.providers[b.index];
+    const liveOpen = livePp ? livePp.conns.length + livePp.connecting : 0;
+    const headroom = Math.max(0, configured - liveOpen);
+    const want = Math.min(clampInt(b.maxConns, configured, 1, Math.min(configured, SPEEDTEST_MAX_CONNS)), headroom);
+    if (want < 1) {
+      return send(ctx.res, 200, { ok: false, host: p.host, reservedByPlayback: liveOpen,
+        error: `all ${configured} connections are currently in use by active playback — stop a stream and retry` });
+    }
+    const origSize = livePp ? livePp.size : null;
+    if (livePp) livePp.size = liveOpen; // freeze: pool won't open new connections during the test
     try {
-      send(ctx.res, 200, await speedTestProvider(p, { targetConns: b.maxConns }));
+      const r = await speedTestProvider(p, { targetConns: want });
+      send(ctx.res, 200, { ...r, reservedByPlayback: liveOpen });
     } catch (e) {
       send(ctx.res, 200, { ok: false, host: p.host, error: e.message });
+    } finally {
+      if (livePp) { livePp.size = origSize; livePp._pump(); }
     }
   },
 
