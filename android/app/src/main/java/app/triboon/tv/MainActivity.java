@@ -371,6 +371,13 @@ public class MainActivity extends Activity {
             web.resumeTimers();
         }
         scheduleTvFocusRecovery("resume");
+        // Returned from granting "install unknown apps"? Continue the update the user already started,
+        // so they never have to press Update a second time.
+        if (pendingUpdateUrl != null
+                && (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || getPackageManager().canRequestPackageInstalls())) {
+            String u = pendingUpdateUrl; pendingUpdateUrl = null;
+            downloadAndInstallUpdate(u);
+        }
     }
 
     @Override
@@ -648,6 +655,8 @@ public class MainActivity extends Activity {
     }
 
     private volatile boolean updateInProgress = false;
+    private String pendingUpdateUrl = null;       // set when we bounce the user to grant "install unknown apps"
+    private java.io.File cachedUpdateApk = null;   // last APK downloaded this session — a re-press installs it instantly
 
     // Download the signed release APK (same allowlisted GitHub URL the browser path uses) and hand
     // it straight to the system package installer — no browser/downloader detour. Any failure
@@ -657,15 +666,23 @@ public class MainActivity extends Activity {
         Uri uri = Uri.parse(url);
         if (!allowedAppUpdateUrl(uri)) { Toast.makeText(this, "Update link was blocked", Toast.LENGTH_SHORT).show(); return; }
         if (updateInProgress) { Toast.makeText(this, "Update is already downloading…", Toast.LENGTH_SHORT).show(); return; }
-        // Android 8+: the app needs the one-time "install unknown apps" grant. Send the user there.
+        // Android 8+: the app needs the one-time "install unknown apps" grant. Send the user there and
+        // REMEMBER the URL so onResume continues automatically once it's granted — no second press.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !getPackageManager().canRequestPackageInstalls()) {
-            Toast.makeText(this, "Allow Triboon to install apps, then press Update again", Toast.LENGTH_LONG).show();
+            pendingUpdateUrl = url;
+            Toast.makeText(this, "Allow Triboon to install apps — the update continues automatically", Toast.LENGTH_LONG).show();
             try {
                 Intent perm = new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
                         Uri.parse("package:" + getPackageName()));
                 perm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 startActivity(perm);
-            } catch (Exception e) { openExternalUrl(url); }
+            } catch (Exception e) { pendingUpdateUrl = null; openExternalUrl(url); }
+            return;
+        }
+        // Already downloaded this session? Go straight to the installer — if the install prompt didn't
+        // surface the first time, a re-press installs instantly instead of downloading all over again.
+        if (cachedUpdateApk != null && cachedUpdateApk.isFile() && cachedUpdateApk.length() > 100000) {
+            launchApkInstall(cachedUpdateApk);
             return;
         }
         updateInProgress = true;
@@ -687,7 +704,7 @@ public class MainActivity extends Activity {
                 }
                 conn.disconnect();
                 if (out.length() < 100000) throw new java.io.IOException("downloaded file too small");
-                runOnUiThread(() -> { updateInProgress = false; launchApkInstall(out); });
+                runOnUiThread(() -> { updateInProgress = false; cachedUpdateApk = out; launchApkInstall(out); });
             } catch (Exception e) {
                 runOnUiThread(() -> {
                     updateInProgress = false;
