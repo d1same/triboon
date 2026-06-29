@@ -3017,6 +3017,11 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'running the speed test stores the measurement and recalculates the recommendation');
   assert.match(ui, /Supports about <strong>\$\{esc\(c\.maxSimultaneous1080[\s\S]+maxSimultaneous4k/,
     'the recommendation result shows how many simultaneous viewers are supported');
+  // Phase 3: Max release size controls live inside the Streaming Performance panel now (one capacity panel).
+  assert.match(ui, /Streaming performance<\/h2>[\s\S]+id="perfSpeedResult"[\s\S]+>Max release size<\/h3>[\s\S]+id="szMode"[\s\S]+id="szSave"/,
+    'Max release size controls are folded into the Streaming Performance panel');
+  assert.doesNotMatch(ui, /<div class="panel"><h2>Max release size<\/h2>/,
+    'the standalone Max release size panel was removed (no duplicate sz* controls)');
   // Settings labels are no longer CSS-uppercased (the "MBPS" megabits/megabytes confusion fix).
   assert.match(ui, /\.settingsControl>span\{[^}]*text-transform:none/,
     'settings labels render sentence-case (not forced ALL CAPS)');

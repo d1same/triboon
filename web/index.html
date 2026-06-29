@@ -3145,6 +3145,22 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
     </div>
     <div class="hint settingsStatus" id="perfStatus"></div>
     <div class="hint settingsStatus" id="perfSpeedResult"></div>
+    <h3 style="font:800 15px 'Sora';margin:22px 0 2px;color:var(--text)">Max release size</h3>
+    <p><b>Auto</b> sets no hard limit — ranking simply prefers sizes that start fast, while every
+       release stays in Sources. <b>Manual</b> hides releases above your GB caps from Sources and
+       auto-play entirely. Smaller caps mean lower bitrate per stream, so more simultaneous viewers fit.</p>
+    <div class="field">
+      <select id="szMode" style="max-width:280px">
+        <option value="auto">Auto — rank smaller first, hide nothing</option>
+        <option value="manual">Manual — hide releases above a GB cap</option>
+      </select>
+    </div>
+    <div class="field" id="szManual" style="display:none">
+      <input id="sz4k" placeholder="4K max GB (e.g. 30)" style="max-width:175px">
+      <input id="sz1080" placeholder="1080p max GB (e.g. 12)" style="max-width:175px">
+    </div>
+    <button class="btn primary" id="szSave">Save size limit</button>
+    <div class="hint" id="szStatus"></div>
   </div>
   </div>
 
@@ -3259,24 +3275,6 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
   </div>
 
   <div class="setGrid" data-stab="rules" hidden>
-  <div class="panel"><h2>Max release size</h2>
-    <p><b>Auto</b> sets no hard limit — ranking simply prefers sizes that start fast, while
-       every release stays in Sources. <b>Manual</b> HIDES releases above your GB caps from
-       Sources and auto-play entirely.</p>
-    <div class="field">
-      <select id="szMode" style="max-width:280px">
-        <option value="auto">Auto — rank smaller first, hide nothing</option>
-        <option value="manual">Manual — hide releases above a GB cap</option>
-      </select>
-    </div>
-    <div class="field" id="szManual" style="display:none">
-      <input id="sz4k" placeholder="4K max GB (e.g. 30)" style="max-width:175px">
-      <input id="sz1080" placeholder="1080p max GB (e.g. 12)" style="max-width:175px">
-    </div>
-    <button class="btn primary" id="szSave">Save size limit</button>
-    <div class="hint" id="szStatus"></div>
-  </div>
-
   <div class="panel"><h2>Local libraries</h2>
     <p>Library folders are re-checked automatically for new movies and episodes. Known items
        keep their cached TMDB match, so a no-change pass costs one quick disk walk and zero
