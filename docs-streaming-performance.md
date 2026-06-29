@@ -170,6 +170,17 @@ The 4K byte cap is ~1 GB but bounded to ~20% of system RAM so smaller self-hoste
 boxes stay safe (they get a proportionally shallower buffer). Do not revert to a
 fixed-bitrate byte budget without re-checking this latency behavior + the P14 contract.
 
+**Head + tail warmup.** On mount commit (and on focus pre-mount), `_startPlaybackWarmup`
+warms the cache at the low-priority read-ahead lane from BOTH ends: the head (96 MB for 4K
+/ 32 MB for 1080p) and the tail (48 MB / 24 MB). The tail warm is essential, not optional:
+the browser fMP4 remux (ffmpeg, fed over HTTP so it can Range-seek) and Android ExoPlayer
+both parse the container index — mkv Cues / mp4 moov, which WEB-DL muxers place at the END
+of the file — before they can stream. A cold tail turns each parse-seek into a multi-second
+uncached fetch, so the remux trickles below the play bitrate for ~30 s and the player's
+startup buffer drains ("plays fine, then buffers after a minute"). Measured live: warming
+head+tail cut a 36 s / 21 Mbps cold remux start to <4 s / 240 Mbps. Covered by
+`test/phase2.test.js` ("playback warmup pre-fetches BOTH the head and the tail").
+
 Large files use the 4K window; smaller files use the 1080p window.
 The segment window decides how many decoded articles can stay hot; the byte
 window is the hard memory guard. Do not tune one without the other: NNTP article

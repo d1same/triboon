@@ -506,12 +506,27 @@ class Pipeline {
     const warmBytes = Math.min(size, capBytes || Infinity, (big ? 96 : 32) * 1024 * 1024);
     if (!Number.isFinite(warmBytes) || warmBytes <= 0) return;
     vf._playbackWarmupStarted = true;
-    const timer = setTimeout(() => (async () => {
-      for await (const _chunk of vf.read(0, warmBytes, { priority: 'readAhead' })) {
-        // Drain intentionally: this warms the VFS cache without blocking Play.
-      }
-    })().catch(() => {}), 150);
-    if (timer && typeof timer.unref === 'function') timer.unref();
+    const warm = (from, to) => {
+      if (!(to > from)) return;
+      const timer = setTimeout(() => (async () => {
+        for await (const _chunk of vf.read(from, to, { priority: 'readAhead' })) {
+          // Drain intentionally: this warms the VFS cache without blocking Play.
+        }
+      })().catch(() => {}), 150);
+      if (timer && typeof timer.unref === 'function') timer.unref();
+    };
+    warm(0, warmBytes);
+    // TAIL warm — the decisive fix for "plays fine, then buffers after a minute". The browser fMP4
+    // remux (ffmpeg) AND Android ExoPlayer both parse the container INDEX before they can stream:
+    // mkv Cues / mp4 moov, which for WEB-DL releases usually sits at the END of the file. ffmpeg
+    // seeks there on its first reads via HTTP Range; a COLD tail turns each parse-seek into a
+    // multi-second uncached fetch, so the remux trickles at 4-12 Mbps for ~30s (below the play
+    // bitrate → the player's startup buffer drains → buffering) before it finally streams. Measured
+    // live: warming head+tail cut a 36s / 21 Mbps cold remux start to <4s / 240 Mbps. Fired
+    // concurrently with the head warm (own timer), bounded by the cache cap, and skipped when it
+    // would overlap the head warm (small files).
+    const tailBytes = Math.min(size, capBytes || Infinity, (big ? 48 : 24) * 1024 * 1024);
+    if (tailBytes > 0 && size - tailBytes > warmBytes) warm(size - tailBytes, size);
   }
 
   rebalancePlaybackWindows(now = Date.now()) {

@@ -1408,6 +1408,27 @@ test('pipeline: 4K preferred — when every UHD source is dead, fall back to the
   pool.close(); await mock.close(); ix.server.close(); store.close();
 });
 
+test('pipeline: playback warmup pre-fetches BOTH the head and the tail (container index) so remux/ExoPlayer parse hits warm cache', async () => {
+  // Regression for "plays fine, then buffers after a minute": the remux/ExoPlayer parse the
+  // container index (mkv Cues / mp4 moov, usually at the END for WEB-DL) before streaming. A cold
+  // tail made those seeks multi-second uncached reads → the remux trickled below the play bitrate
+  // for ~30s and the startup buffer drained. The warmup must warm the tail too, not just the head.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const pipeline = new Pipeline({ pool: () => null, verdicts: new VerdictCache(store), mounts: new Map(), indexers: () => [] });
+  const reads = [];
+  const size = 8e9; // a "big" (4K) mount
+  const fakeVf = {
+    streamable: true, size,
+    read(from, to) { reads.push([from, to]); return (async function* () {})(); },
+  };
+  pipeline._startPlaybackWarmup(fakeVf, { cacheMaxBytes: 1024 * 1024 * 1024 });
+  await new Promise((r) => setTimeout(r, 300)); // warmup fires on a 150ms timer
+  assert.ok(reads.some(([f]) => f === 0), 'warms the head from offset 0');
+  assert.ok(reads.some(([, t]) => t === size), 'warms the TAIL up to EOF (mkv Cues / mp4 moov)');
+  store.close();
+});
+
 test('pipeline: active mount rebalance shrinks read-ahead when another stream starts', async () => {
   const now = Date.now();
   const mounts = new Map();
@@ -1503,12 +1524,19 @@ test('pipeline: playback warmup is bounded and stays below active playback prior
   pipeline._startPlaybackWarmup(vf, { cacheMaxBytes: 360 * 1024 * 1024 });
   await new Promise((resolve) => setTimeout(resolve, 220));
 
-  assert.strictEqual(calls.length, 1, 'warmup starts once per mounted source');
+  // Once per mounted source (the 2nd call is deduped), and ONE warmup now warms the head AND the
+  // tail (container index) — so two reads, not four. Both stay on the low-priority read-ahead lane.
+  assert.strictEqual(calls.length, 2, 'warmup starts once per mounted source (head + tail), even if called twice');
   assert.deepStrictEqual(calls[0], {
     start: 0,
     end: 96 * 1024 * 1024,
     priority: 'readAhead',
-  }, '4K warmup should fill a bounded first chunk on the low-priority lane');
+  }, '4K warmup should fill a bounded HEAD chunk on the low-priority lane');
+  assert.deepStrictEqual(calls[1], {
+    start: vf.size - 48 * 1024 * 1024,
+    end: vf.size,
+    priority: 'readAhead',
+  }, '4K warmup should also warm the TAIL (mkv Cues / mp4 moov) on the low-priority lane');
 });
 
 test('pipeline: a manual Sources pick is honored first, then the next-smaller release, then the best auto-pick', () => {
