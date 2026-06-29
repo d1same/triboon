@@ -296,6 +296,7 @@ body.authOpen #gateBackdrop{display:block}
 .gateCard .err{color:#ffadad;font-weight:700;font-size:13px;min-height:18px;margin-top:12px}
 .gateCard .alt{margin-top:18px;text-align:center;font-size:14px;color:rgba(243,239,247,.7)}
 .gateCard .alt button{color:#ffd08b;font-weight:850}
+.gateCard .alt button:focus,.gateCard .alt button.focus{outline:none;text-decoration:underline;filter:brightness(1.18)}
 .profileGatePanel{position:relative;z-index:1;padding:34px 38px;border-radius:30px;background:linear-gradient(145deg,rgba(24,17,35,.72),rgba(10,7,15,.54));box-shadow:0 28px 84px rgba(0,0,0,.42);backdrop-filter:blur(16px)}
 #qcCode{font:800 44px "JetBrains Mono";letter-spacing:.26em;text-align:center;background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent;margin:20px 0 8px}
 body.tv .gate{padding:46px 60px}
@@ -308,7 +309,7 @@ body.androidApp .gateCard .logoRow{width:min(230px,74%);height:66px;margin-botto
 body.androidApp .gateCard .sub{font-size:15px;margin:6px 0 20px}
 body.androidApp .gateCard input{min-height:54px;border-radius:16px}
 body.androidApp .gateCard .btn{min-height:56px;margin-top:20px}
-body.androidApp #gateLogin .alt{display:none}
+body.androidApp:not(.tv) #gateLogin .alt{display:none} /* phone app types the password; TV keeps Quick Connect (no on-screen typing) */
 body.androidApp #gateArtCaption{display:none}
 @media (orientation:landscape) and (max-height:760px){
   body.androidApp .gateCard{width:min(560px,calc(100vw - 48px));padding:20px 24px;border-radius:24px}
@@ -2565,7 +2566,7 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
     </div>
     <button class="btn primary" id="liGo">Sign in</button>
     <div class="err" id="liErr"></div>
-    <div class="alt">On a TV? <button id="qcStart">Use Quick Connect</button></div>
+    <div class="alt">On a TV? <button id="qcStart" class="focusable">Use Quick Connect</button></div>
   </div>
 </div>
 
@@ -4035,15 +4036,12 @@ function showProfilePicker() {
   if (!so) {
     const wrap = document.createElement('div');
     wrap.style.cssText = 'margin-top:30px;display:flex;gap:26px;justify-content:center';
-    const prefs = document.createElement('button');
-    prefs.style.cssText = 'color:var(--muted);font:600 13px Sora';
-    prefs.textContent = 'Preferences';
-    prefs.addEventListener('click', openProfilePreferences);
     so = document.createElement('button'); so.id = 'profileSignout';
-    so.style.cssText = 'color:var(--muted);font:600 13px Sora';
+    so.className = 'btn ghost focusable'; // a real focusable button so D-pad can land on + activate it
+    so.style.cssText = 'padding:9px 22px;font:600 13px Sora';
     so.textContent = 'Sign out';
     so.addEventListener('click', signOutAccount);
-    wrap.appendChild(prefs); wrap.appendChild(so);
+    wrap.appendChild(so);
     $('gateProfiles').firstElementChild.appendChild(wrap);
   }
   showGate('profiles');
