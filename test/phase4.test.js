@@ -483,8 +483,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'desktop/tablet browse pages should use compact browser poster sizing and a compact row reserve');
   assert.match(ui, /const shortBrowseBd = v === 'discover' \|\| v === 'movies' \|\| v === 'tv' \|\| v === 'watchlist' \|\| \(v === 'library' && S\.currentLib && S\.currentLib\.path\);[\s\S]+document\.body\.classList\.toggle\('shortBrowseBd', !!shortBrowseBd\);/,
     'Discover, movies, TV shows, watchlist, and attached libraries should use the shorter browse backdrop');
-  assert.match(ui, /document\.body\.classList\.toggle\('fullBd', isBrowse\);/,
-    'Discover should stay row-first instead of enabling the focused-title backdrop overlay');
+  assert.match(ui, /document\.body\.classList\.toggle\('fullBd', isBrowse \|\| v === 'discover'\);/,
+    'Discover should show the focused-title backdrop overlay (rows pinned low) like other cover pages');
   assert.match(ui, /let pendingLibraryRouteJob = null;[\s\S]+function applyLibraryRoute\(id\) \{[\s\S]+switchView\('library', false\);[\s\S]+function deferLibraryRoute\(id\) \{[\s\S]+loadLibraries\(\)[\s\S]+if \(parts\[0\] !== 'library' \|\| parts\[1\] !== id\) return;[\s\S]+if \(!applyLibraryRoute\(id\)\) switchView\('home', false\);[\s\S]+if \(view === 'library' && parts\[1\]\) \{[\s\S]+deferLibraryRoute\(parts\[1\]\);/,
     'library hash routes should wait for async library metadata instead of falling through to Home');
   assert.match(ui, /if \(v === 'search'\) \{ \$\('browseTitle'\)\.textContent = 'Search';[\s\S]+if \(!opts\.preserveSearch && !opts\.preservePage\) resetSearchPage\(\);/,
@@ -1038,7 +1038,7 @@ test('Android native player: direct source and native chrome stay out of the web
     && ui.includes('playback: st.playback || {}')
     && !ui.includes('S.perfRecommendation || perfFormValues()'),
     'Streaming performance should show active runtime capacity and keep recommendation apply separate from manual save');
-  assert.match(ui, /\.settingsControl input\{[\s\S]+background:rgba\(11,8,18,\.72\)[\s\S]+border:1px solid var\(--line\)/,
+  assert.match(ui, /\.settingsControl input\{[\s\S]+background:var\(--field\)[\s\S]+border:1px solid var\(--line\)/,
     'Settings numeric inputs should use Triboon dark field chrome instead of native white inputs');
   assert.ok(ui.includes('id="prefContentTextSize"') && ui.includes("localStorage.setItem('triboon.textsize'")
     && ui.includes('function applyContentTextSize()'),
@@ -1049,19 +1049,41 @@ test('Android native player: direct source and native chrome stay out of the web
     'theme choices should remap full design roles, not only the three accent colors');
   assert.ok(['triboonCoral', 'cinema', 'studio', 'velvet', 'teal', 'evergreen', 'contrast'].every((name) => ui.includes(`${name}: {`)),
     'theme list should include calmer cinematic professional options');
-  assert.match(ui, /scrim: 'linear-gradient\(90deg,rgba\(18,20,22,\.84\) 0%,rgba\(18,20,22,\.54\) 28%,rgba\(18,20,22,\.18\) 58%,rgba\(18,20,22,\.05\) 100%\),linear-gradient\(0deg,rgba\(18,20,22,\.74\) 0%,rgba\(18,20,22,\.24\) 26%,rgba\(18,20,22,\.04\) 60%,rgba\(18,20,22,\.10\) 100%\)'/,
-    'theme scrims should keep browser backdrop art visible instead of applying a full-screen blackout');
+  assert.match(ui, /scrim: 'linear-gradient\(90deg,rgba\([0-9, ]+,\.8[0-9]\) 0%,rgba\([0-9, ]+,\.54\) 28%,[\s\S]+?linear-gradient\(0deg,rgba\([0-9, ]+,\.7[0-9]\) 0%/,
+    'theme scrims should keep browser backdrop art visible (side + bottom fade) instead of a full-screen blackout');
   assert.ok(!ui.includes("scrim: 'linear-gradient(180deg"),
     'theme scrims should not regress to the old opaque vertical wash');
   assert.match(ui, /const THEME_ALIASES = \{[\s\S]+graphite: 'studio'[\s\S]+triboon: 'triboonCoral'[\s\S]+trioon: 'triboonCoral'[\s\S]+arctic: 'teal'[\s\S]+forest: 'evergreen'/,
     'legacy stored theme names should map to the nearest new professional palette');
-  assert.ok(ui.includes("label: 'Graphite'") && ui.includes("tone: 'neutral charcoal'")
-    && ui.includes("ink: '#121416'") && ui.includes("c: '#8D9AA4'")
-    && ui.includes("a: '#B8A46A'"),
-    'default theme should keep its restrained graphite + champagne business palette');
-  assert.ok(ui.includes("const VISIBLE_THEMES = ['triboonCoral', 'studio', 'velvet']")
-    && ui.includes("label: 'Slate'") && ui.includes("label: 'Walnut'"),
-    'the picker should offer three curated neutral palettes (Graphite / Slate / Walnut)');
+  assert.ok(ui.includes("label: 'Ocean'") && ui.includes("tone: 'deep blue'")
+    && ui.includes("ink: '#0D1420'") && ui.includes("c: '#5EA0F2'"),
+    'default theme should be the Ocean (deep blue) palette');
+  assert.ok(ui.includes("const VISIBLE_THEMES = ['triboonCoral', 'studio', 'velvet', 'midnight', 'scarlet', 'aurora', 'daylight', 'topaz']")
+    && ui.includes("label: 'Forest'") && ui.includes("label: 'Sunset'") && ui.includes("label: 'Midnight'"),
+    'the picker should offer DISTINCT accent palettes (Ocean blue / Forest green / Sunset amber / Midnight gold)');
+  assert.ok(ui.includes("label: 'Scarlet'") && ui.includes("c: '#E50914'")
+    && ui.includes("label: 'Aurora'") && ui.includes("c: '#1CE783'")
+    && ui.includes("label: 'Daylight'") && ui.includes("c: '#1F8BFF'")
+    && ui.includes("label: 'Topaz'") && ui.includes("c: '#E5A00D'"),
+    'the picker should also offer bold original palettes (Scarlet red / Aurora green / Daylight blue / Topaz gold)');
+  // Brand-name keys must NOT leak into the shipped UI — only the made-up names.
+  assert.ok(!ui.includes("label: 'Netflix'") && !ui.includes("label: 'Hulu'")
+    && !ui.includes("label: 'Apple TV'") && !ui.includes("label: 'Plex'")
+    && !/\n\s*(netflix|hulu|appletv|plex): \{/.test(ui),
+    'streaming-service brand names must not be used as theme labels or keys');
+  // Daylight is the one LIGHT theme: light surface, DARK body text, DARK rollover text, and it
+  // flips color-scheme so native controls render light.
+  assert.ok(ui.includes("label: 'Daylight', tone: 'light · cool blue', light: true")
+    && ui.includes("ink: '#EDEFF3'") && ui.includes("text: '#161A1F'") && ui.includes("btnFocusText: '#06335C'"),
+    'Daylight should be a true light theme (pale surface, dark text, dark rollover text)');
+  assert.match(ui, /color-scheme', t\.light \? 'light' : 'dark'[\s\S]+dataset\.light = t\.light \? '1' : ''/,
+    'applying a light theme should switch color-scheme and set a body light flag');
+  assert.ok(ui.includes('--fg:243,239,247;') && /body\[data-light="1"\]\{--fg:18,22,28\}/.test(ui)
+    && /body\[data-light="1"\] #player,body\[data-light="1"\] #multiView\{--fg:243,239,247\}/.test(ui)
+    && !/rgba\(243,239,247,/.test(ui),
+    'foreground tint must route through --fg (dark only on data-light="1") with the always-black player/multiview restored to light — no raw off-white literals left');
+  assert.ok(/button\.focusable:not\(\.card\):not\(\.pcard\):not\(\.railBtn\):not\(\.castCard\):not\(\.seasonCard\):not\(\.epCard\):not\(\.chCard\):not\(\.playerEpCard\)/.test(ui),
+    'media tiles (cast/season/episode/channel) must be excluded from the solid button-fill rollover so they keep their poster RING like .pcard');
   assert.ok(ui.includes("localStorage.getItem('triboon.theme') || 'triboonCoral'")
     && ui.includes('THEMES[name] || THEMES.triboonCoral'),
     'Executive Graphite should be the default and fallback theme');
@@ -1422,8 +1444,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'channel logos should not show a static border when they are not focused');
   assert.match(ui, /\.mCover\{[^}]+box-shadow:none/,
     'music covers should not show a static inset line when they are not focused');
-  assert.match(ui, /triboonCoral: \{[\s\S]+artFocusLine: 'rgba\(198,179,122,\.30\)'[\s\S]+studio: \{[\s\S]+artFocusLine: 'rgba\(174,185,195,\.30\)'[\s\S]+teal: \{[\s\S]+artFocusLine: 'rgba\(166,194,189,\.30\)'/,
-    'artwork focus glow colors should change with each professional theme palette');
+  assert.match(ui, /triboonCoral: \{[\s\S]+artFocusLine: 'rgba\(94,160,242,\.34\)'[\s\S]+studio: \{[\s\S]+artFocusLine: 'rgba\(52,179,122,\.34\)'[\s\S]+velvet: \{[\s\S]+artFocusLine: 'rgba\(230,166,72,\.34\)'/,
+    'artwork focus glow colors should change with each distinct theme palette (Ocean / Forest / Sunset)');
   assert.doesNotMatch(ui, /\.pcard:hover \.art,[^}]+box-shadow:0 0 0 3px var\(--coral\)|\.mCard:hover \.mCover,[^}]+box-shadow:0 0 0 3px var\(--coral\)|\.musicRow:hover \.mThumb,[^}]+box-shadow:0 0 0 3px var\(--coral\)/,
     'artwork focus should not regress to thick solid coral rings');
   assert.match(ui, /grid\.style\.maxHeight = pitch > 50 \? `\$\{n \* pitch - 4\}px` : `calc\(var\(--rowH\) \* \$\{n\} - \$\{n \* 2\}px\)`;/,
@@ -1490,7 +1512,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'web player popup focused and selected rows should be distinct professional states');
   assert.match(ui, /#playerStats\{display:none;position:absolute;right:44px;bottom:176px[\s\S]+rgba\(24,26,29,\.96\)[\s\S]+border-radius:10px[\s\S]+backdrop-filter:blur\(14px\)/,
     'web player stats popup should match the compact graphite player sheet styling');
-  assert.match(ui, /#upNext\{position:absolute;right:34px;bottom:120px[\s\S]+rgba\(24,26,29,\.96\)[\s\S]+border-radius:10px[\s\S]+#upNext \.un-play\{background:var\(--btnPrimary\);color:var\(--onAccent\)\}/,
+  assert.match(ui, /#upNext\{position:absolute;right:34px;bottom:120px[\s\S]+rgba\(24,26,29,\.96\)[\s\S]+border-radius:10px[\s\S]+#upNext \.un-play\{background:var\(--btn\);color:var\(--text\)\}/,
     'web up-next popup should use the same neutral panel and button palette');
   assert.match(ui, /\.epMenu\{position:absolute;right:10px;top:44px[\s\S]+rgba\(24,26,29,\.97\)[\s\S]+border-radius:10px[\s\S]+\.epMenu button\.focus\{background:rgba\(255,255,255,\.10\);color:var\(--text\)[\s\S]+box-shadow:inset 2px 0 0 var\(--focus\)\}/,
     'episode action popup should use the same compact neutral player menu styling');
@@ -2550,7 +2572,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'bumpMultiViewChrome should clear+restart a 5s timer that re-adds the mvIdle class');
   assert.match(ui, /function handleMultiViewKey\(k, e\) \{[\s\S]+const wasIdle = \$\('multiView'\)\.classList\.contains\('mvIdle'\);[\s\S]+bumpMultiViewChrome\(\);[\s\S]+if \(wasIdle && k !== 'Escape' && k !== 'Backspace'\) \{[\s\S]+return true;/,
     'the first multiview key while idle should only reveal chrome (Back still closes)');
-  assert.ok(ui.includes('.mvSlot{position:relative;display:none;min-width:0;min-height:0;border-radius:10px;background:#000;overflow:hidden;border:1px solid rgba(243,239,247,.07);')
+  assert.ok(ui.includes('.mvSlot{position:relative;display:none;min-width:0;min-height:0;border-radius:10px;background:#000;overflow:hidden;border:1px solid rgba(var(--fg),.07);')
       && ui.includes('.mvSlot.active{border-color:rgba(255,198,92,.42);')
       && ui.includes('.mvLayout button.on,.mvLayout button:hover,.mvIconBtn:hover,.mvIconBtn:focus,.mvIconBtn.focus{background:rgba(58,66,74,.82);border-color:rgba(255,198,92,.22);outline:none;box-shadow:0 0 0 2px rgba(255,198,92,.20)')
       && ui.includes('.mvAction:hover,.mvAction:focus,.mvAction.focus{outline:none;background:rgba(58,66,74,.82);border-color:rgba(255,198,92,.24);box-shadow:0 0 0 2px rgba(255,198,92,.22)'),
@@ -2644,7 +2666,7 @@ test('Android native player: direct source and native chrome stay out of the web
   // Multiview is icons-only: no resting button backgrounds and no amber active-pane highlight.
   assert.match(ui, /#multiView \.mvLayout button,#multiView \.mvIconBtn,#multiView \.mvAction\{[^}]*background:transparent;border-color:transparent;box-shadow:none\}/,
     'multiview buttons should be icons-only (transparent resting background)');
-  assert.match(ui, /#multiView \.mvSlot\.active\{border-color:rgba\(243,239,247,\.07\);box-shadow:0 18px 58px rgba\(0,0,0,\.44\)\}/,
+  assert.match(ui, /#multiView \.mvSlot\.active\{border-color:rgba\(var\(--fg\),\.07\);box-shadow:0 18px 58px rgba\(0,0,0,\.44\)\}/,
     'active multiview pane should drop the amber highlight (icons indicate selection)');
   // Android hardware Back in multiview must use the layered handler (close the picker first),
   // not fall through to switchView('home') which tears down the whole surface.
@@ -2892,8 +2914,8 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'backdrop crossfade should not animate width or height');
   assert.doesNotMatch(ui, /will-change:transform/,
     'top-level page layers should not keep permanent compositor reservations');
-  assert.match(ui, /\.cbtn:hover,\.cbtn\.focus,\.cbtn:focus\{[\s\S]+rgba\(251,139,60,\.82\)/,
-    'player OSD button focus should have a visible coral ring over video');
+  assert.match(ui, /\.cbtn:hover,\.cbtn\.focus,\.cbtn:focus\{[\s\S]+box-shadow:0 0 0 3px var\(--focus\)/,
+    'player OSD button focus should have a visible THEME-accent ring over video (not a hardcoded coral)');
   assert.match(ui, /#subOverlay\{[^}]*max-height:32vh;overflow:hidden;[\s\S]+while \(box\.scrollHeight > box\.clientHeight && box\.firstElementChild\) box\.removeChild\(box\.firstElementChild\);/,
     'self-rendered subtitle text should stay bounded inside the video frame');
   assert.match(ui, /b\.addEventListener\('focus', \(\) => \{[\s\S]+scrollIntoView\(\{ block: 'nearest', inline: 'nearest' \}\)/,
