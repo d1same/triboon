@@ -176,7 +176,7 @@ body.shortBrowseBd:not(.tv) #bdInfo .bdiO{font-size:14.5px;line-height:1.45;-web
 /* Icons sit in a FIXED-width slot so they never move horizontally on expand/collapse;
    only the label is revealed. Slot width = collapsed inner width (84 - 2*12 padding = 60). */
 #rail .logo{width:max-content;min-width:48px;height:34px;margin:0 0 22px;flex:none;padding:0;display:flex;align-items:center;gap:10px}
-#rail .logo img{width:34px;height:34px;flex:0 0 34px;margin:0 7px;object-fit:contain;filter:drop-shadow(0 4px 14px rgba(193,59,214,.45))}
+#rail .logo img{width:34px;height:34px;flex:0 0 34px;margin:0 7px;object-fit:contain;filter:none}
 .railBtn{height:48px;border-radius:13px;display:flex;align-items:center;justify-content:flex-start;color:var(--muted);position:relative;padding:0;flex:none;transition:background .15s,color .15s}
 .railBtn:hover{color:var(--text);background:rgba(43,32,63,.48)}
 .railBtn svg{width:22px;height:22px;flex:none;margin:0 13px} /* fixed 13+22+13 = 48px slot, matches collapsed width */
@@ -287,8 +287,7 @@ body.authOpen #gateBackdrop{display:block}
 .gateCard::before{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;background:linear-gradient(145deg,rgba(255,255,255,.08),transparent 42%)}
 .gateCard > *{position:relative;z-index:1}
 .gateCard .logoRow{display:block;width:min(280px,82%);height:82px;margin:0 0 12px;overflow:hidden}
-.gateCard .logoRow img{width:100%;height:auto;display:block;transform:translateY(-25%);
-  filter:drop-shadow(0 8px 22px rgba(251,82,124,.24))}
+.gateCard .logoRow img{width:100%;height:auto;display:block;transform:translateY(-25%);filter:none}
 .gateCard h1{font:850 32px "Sora";line-height:1.04;letter-spacing:0}
 .gateCard .sub{color:rgba(var(--fg),.76);font-size:15px;line-height:1.5;margin:8px 0 24px}
 .gateCard label{display:block;font:800 11px "JetBrains Mono";letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:16px 0 8px}
@@ -716,7 +715,7 @@ body.nativeGuideMode #player.guideMode #video{display:none}
 #liveEpgStrip,#liveBar,#liveBtn{display:none}
 #player.live #liveEpgStrip{display:flex;gap:5px;padding:2px clamp(16px,2.4vw,36px) 6px;min-width:0}
 .epgCell{flex:1 1 0;min-width:0;background:rgba(var(--fg),.05);border:1px solid rgba(var(--fg),.08);
-  border-radius:8px;padding:6px 10px;overflow:hidden;position:relative}
+  border-radius:0;padding:6px 10px;overflow:hidden;position:relative}
 .epgCell.now{flex:2.4 1 0;background:var(--focusSoft);border-color:var(--focus)}
 .epgCell .epgProg{position:absolute;left:0;top:0;bottom:0;background:var(--focusSoft);pointer-events:none}
 .epgCell .epgRel{position:relative}
@@ -1539,7 +1538,7 @@ body.mobileShell #playerStats{left:12px;right:12px;bottom:84px;width:auto;max-he
 #appLoader{position:fixed;inset:0;z-index:80;display:grid;place-items:center;background:var(--ink);transition:opacity .4s ease}
 #appLoader.hide{opacity:0;pointer-events:none}
 #appLoader .inner{display:flex;flex-direction:column;align-items:center;gap:26px}
-#appLoader img{width:120px;height:auto;animation:pulseLogo 1.8s ease-in-out infinite;filter:drop-shadow(0 8px 30px rgba(193,59,214,.5))}
+#appLoader img{width:120px;height:auto;animation:pulseLogo 1.8s ease-in-out infinite;filter:none}
 #playerLoader{position:absolute;inset:0;z-index:4;display:none;place-items:center;background:#000}
 #playerLoader.show{display:grid}
 #playerLoader .cover{position:absolute;inset:0;background-size:cover;background-position:center;filter:blur(10px) brightness(.42);transform:scale(1.03)}
