@@ -276,10 +276,24 @@ function recommendStreamingPerformance(input = {}, s = settings.get()) {
   const effTotal = measuredCap > 0 ? Math.min(totalConnections || measuredCap, measuredCap) : totalConnections;
   const effUsable = Math.max(0, Math.floor(effTotal * 0.85));
   const effActive = Math.max(0, effUsable - (effUsable ? Math.max(2, Math.ceil(effUsable * reservePct / 100)) : 0));
-  const maxSimultaneous1080 = perStream1080 ? Math.floor(effActive / perStream1080) : 0;
-  const maxSimultaneous4k = perStream4k ? Math.floor(effActive / perStream4k) : 0;
+  // Simultaneous viewers are limited by the SMALLER of two ceilings:
+  //   (1) connections — each stream needs perStream connections out of the active budget; and
+  //   (2) throughput — total deliverable Mbps ÷ the per-stream bitrate. Deliverable is the min of
+  //       what the connections can pull (measured per-conn × active connections) and what the
+  //       server's internet line can carry (entered download Mbps × 0.8). Whichever is the real wall.
+  const connThroughputMbps = measuredPerConn > 0 ? effActive * measuredPerConn : 0;
+  let deliverableMbps = 0;
+  if (connThroughputMbps && usableDown) deliverableMbps = Math.min(connThroughputMbps, usableDown);
+  else deliverableMbps = connThroughputMbps || usableDown || 0; // fall back to whichever is known
+  const byConns = (perStream, n) => (perStream ? Math.floor(n / perStream) : 0);
+  const byRate = (br) => (deliverableMbps ? Math.floor(deliverableMbps / br) : Infinity);
+  const maxSimultaneous1080 = Math.max(0, Math.min(byConns(perStream1080, effActive), byRate(br1080)));
+  const maxSimultaneous4k = Math.max(0, Math.min(byConns(perStream4k, effActive), byRate(br4k)));
   if (measuredCap > 0 && totalConnections > measuredCap) {
     warnings.push(`Providers accept about ${measuredCap} connections but ${totalConnections} are configured — lower per-account connection counts to <= ${measuredCap} to avoid "too many connections" stalls.`);
+  }
+  if (!current.serverDownloadMbps) {
+    warnings.push('Enter your server download speed (Mbps) — it caps how many simultaneous streams your internet line can carry, so the viewer estimate is connection-only until you add it.');
   }
 
   const recommendation = normalizeStreamingPerformance({
@@ -310,6 +324,7 @@ function recommendStreamingPerformance(input = {}, s = settings.get()) {
       maxSimultaneous4k,
       streamBitrate1080: br1080,
       streamBitrate4k: br4k,
+      deliverableMbps: Math.round(deliverableMbps) || 0,
       measuredMbpsPerConn: measuredPerConn || 0,
       measuredConnCap: measuredCap || 0,
     },
@@ -317,19 +332,26 @@ function recommendStreamingPerformance(input = {}, s = settings.get()) {
   };
 }
 
-// Live provider speed + connection-cap probe (powers the "Test speed" button). Opens its OWN
-// short-lived connections (separate from the playback pool) up to maxConns, stopping early if the
-// provider answers "502 too many connections" — that count IS the account's real connection cap,
-// the number that should bound the configured connection counts. Then it BODY-fetches random recent
-// articles for a few seconds to measure real throughput (per-connection + total). Everything is
-// closed in finally; bounded in count and time so it can't run away or hammer the provider.
+// Live provider speed + connection-cap probe (powers the "Test speed" button), using its OWN
+// short-lived connections (separate from the playback pool). It opens connections UP TO the count
+// CONFIGURED for this provider (capped at SPEEDTEST_MAX_CONNS for safety) — so it verifies a real
+// plan of ANY size (16, 40, 100, …) instead of a hardcoded ceiling. Opening is connect-only (cheap
+// TCP+TLS+AUTH, no data); if the provider answers "502 too many connections" before reaching the
+// configured count, THAT is the account's true cap. Throughput is then sampled on a small SUBSET of
+// the open connections (no point pulling data on all 100) and reported per-connection so the
+// recommendation can project total throughput honestly. Everything is closed in finally.
 const SPEEDTEST_GROUPS = ['alt.binaries.boneless', 'alt.binaries.teevee', 'alt.binaries.moovee', 'alt.binaries.hdtv', 'alt.binaries.misc'];
+const SPEEDTEST_MAX_CONNS = 120;     // safety ceiling — a mis-typed huge count can't open thousands
+const SPEEDTEST_SAMPLE_CONNS = 12;   // connections used for the throughput sample (representative, not all)
 function isTooManyConnections(e) { return /too many connection|\b502\b/i.test(String((e && e.message) || e)); }
-async function speedTestProvider(p, { maxConns = 24, sampleMs = 3500 } = {}) {
+async function speedTestProvider(p, { targetConns, sampleMs = 3500 } = {}) {
+  const configured = providerConnections(p.connections);
+  const want = clampInt(targetConns, configured, 1, SPEEDTEST_MAX_CONNS);
   const conns = [];
   let capHit = false;
   try {
-    for (let i = 0; i < maxConns; i++) {
+    // Phase A — open up to the configured count (connect-only) to confirm the plan / find the real cap.
+    for (let i = 0; i < want; i++) {
       const c = new NntpConnection({ ...p, connectTimeoutMs: 8000, commandTimeoutMs: 12000 });
       try { await c.connect(); conns.push(c); }
       catch (e) { try { c.close(); } catch {} if (isTooManyConnections(e)) { capHit = true; break; } if (!conns.length) throw e; break; }
@@ -338,6 +360,8 @@ async function speedTestProvider(p, { maxConns = 24, sampleMs = 3500 } = {}) {
     const rtt0 = Date.now();
     try { await conns[0].stat('triboon-speedtest@invalid'); } catch {}
     const rttMs = Date.now() - rtt0;
+    // Phase B — throughput on a SUBSET of the open connections; extrapolate per-connection.
+    const sample = conns.slice(0, Math.min(conns.length, SPEEDTEST_SAMPLE_CONNS));
     let group = null;
     for (const g of SPEEDTEST_GROUPS) {
       try {
@@ -348,10 +372,10 @@ async function speedTestProvider(p, { maxConns = 24, sampleMs = 3500 } = {}) {
         }
       } catch {}
     }
-    let mbsTotal = 0, articles = 0;
+    let mbsPerConn = 0, articles = 0;
     if (group) {
       const t0 = Date.now(); let bytes = 0;
-      await Promise.all(conns.map(async (c) => {
+      await Promise.all(sample.map(async (c) => {
         try { await c._cmd(`GROUP ${group.name}`); } catch { return; }
         while (Date.now() - t0 < sampleMs) {
           try {
@@ -363,17 +387,18 @@ async function speedTestProvider(p, { maxConns = 24, sampleMs = 3500 } = {}) {
         }
       }));
       const secs = Math.max(0.1, (Date.now() - t0) / 1000);
-      mbsTotal = bytes / 1e6 / secs;
+      mbsPerConn = sample.length ? (bytes / 1e6 / secs) / sample.length : 0;
     }
-    const mbsPerConn = conns.length ? mbsTotal / conns.length : 0;
     return {
       ok: true, host: p.host,
-      connections: conns.length,
-      connCap: capHit ? conns.length : null, // null = no 502 within maxConns (cap is at least this)
-      capHit,
+      configured,
+      connections: conns.length,             // how many actually opened = real usable for this provider
+      connCap: capHit ? conns.length : null,  // set only when the provider refused below the configured count
+      capHit,                                 // true = configured count exceeds the plan's real limit
+      sampledConns: sample.length,
       rttMs,
       mbpsPerConn: +(mbsPerConn * 8).toFixed(1),
-      mbpsTotal: +(mbsTotal * 8).toFixed(1),
+      mbpsTotal: +(mbsPerConn * 8 * conns.length).toFixed(1), // projected across all opened connections
       articles,
       group: group ? group.name : null,
     };
@@ -5449,7 +5474,7 @@ Object.assign(H, {
     const p = providerList()[b.index];
     if (!p) return send(ctx.res, 400, { error: 'no provider at that index' });
     try {
-      send(ctx.res, 200, await speedTestProvider(p, { maxConns: clampInt(b.maxConns, 24, 4, 40) }));
+      send(ctx.res, 200, await speedTestProvider(p, { targetConns: b.maxConns }));
     } catch (e) {
       send(ctx.res, 200, { ok: false, host: p.host, error: e.message });
     }

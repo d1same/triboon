@@ -17810,6 +17810,7 @@ $('perfSpeed').addEventListener('click', async () => {
   let totalCap = 0, bestPerConn = 0, anyCap = false, tested = 0;
   try {
     for (let i = 0; i < 12; i++) {
+      if (i > 0) await new Promise((res) => setTimeout(res, 1200)); // let the previous provider's slots release first
       let r;
       try { r = await api('/api/test/provider-speed', { method: 'POST', body: { index: i } }); }
       catch (e) { if (e.status === 400) break; throw e; }
@@ -17819,9 +17820,13 @@ $('perfSpeed').addEventListener('click', async () => {
       totalCap += (r.capHit ? r.connCap : r.connections) || 0;
       if (r.capHit) anyCap = true;
       bestPerConn = Math.max(bestPerConn, r.mbpsPerConn || 0);
-      const capTxt = r.capHit ? `cap ≈ ${esc(r.connCap)} connections` : `≥ ${esc(r.connections)} connections (no limit hit)`;
-      const warn = (r.capHit && conn4k && r.connCap < conn4k) ? ` ⚠ below your ${conn4k}/stream 4K setting — lower it` : '';
-      rows.push(`<div class="perfStatusLine">${esc(r.host)}: <strong>${esc(r.mbpsPerConn)} Mbps/conn</strong> · ~${esc(r.mbpsTotal)} Mbps at ${esc(r.connections)} conns · ${capTxt}${warn}</div>`);
+      const speedTxt = `<strong>${esc(r.mbpsPerConn)} Mbps/conn</strong> · ~${esc(r.mbpsTotal)} Mbps total`;
+      if (r.capHit) {
+        const warn = (conn4k && r.connCap < conn4k) ? `, also below your ${conn4k}/stream 4K setting` : '';
+        rows.push(`<div class="perfStatusLine">${esc(r.host)}: opened <strong>${esc(r.connections)}</strong> of ${esc(r.configured)} configured — plan cap ≈ ${esc(r.connCap)} ⚠ lower configured to ${esc(r.connCap)}${warn}. ${speedTxt}</div>`);
+      } else {
+        rows.push(`<div class="perfStatusLine">${esc(r.host)}: all ${esc(r.configured)} connections confirmed ✓ · ${speedTxt}</div>`);
+      }
     }
     out.innerHTML = rows.length
       ? rows.join('') + `<div class="perfStatusLine" style="opacity:.7">${tested ? 'Folding measured speed' + (anyCap ? ' + connection cap' : '') + ' into the recommendation below…' : ''}</div>`

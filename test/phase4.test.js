@@ -3010,6 +3010,11 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'Streaming Performance has a Test provider speed button + result area');
   assert.match(ui, /\$\('perfSpeed'\)\.addEventListener\('click'[\s\S]+\/api\/test\/provider-speed[\s\S]+r\.mbpsPerConn/,
     'the speed button probes each provider and shows per-connection speed');
+  // Phase 4: probe verifies the CONFIGURED connection count (any plan size) + cools down between providers.
+  assert.ok(ui.includes('connections confirmed') && ui.includes('lower configured to'),
+    'speed-test result shows confirmed-vs-capped connections against the configured count');
+  assert.match(ui, /\$\('perfSpeed'\)[\s\S]+if \(i > 0\) await new Promise\(\(res\) => setTimeout\(res, 1200\)\)/,
+    'speed test cools down between providers so lingering connections do not skew the next');
   // Phase 2: measured speed/cap feed the recommendation, which reports max simultaneous viewers.
   assert.match(ui, /async function calcRecommendation\(\)[\s\S]+\.\.\.\(S\.perfMeasured \|\| \{\}\)/,
     'the recommendation call folds in the measured provider speed + connection cap');

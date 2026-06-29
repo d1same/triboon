@@ -392,6 +392,21 @@ test('settings: streaming performance handles high-connection providers and reco
     '100 configured connections vs a measured cap of 20 raises an over-subscription warning');
   await httpJson(srv.port, 'POST', '/api/settings', { sizeCapMode: 'auto' }, admin); // restore for later tests
 
+  // Phase 4: the server's internet line speed caps simultaneous viewers, regardless of connections.
+  const recSlowLine = await httpJson(srv.port, 'POST', '/api/streaming/recommend', {
+    expectedUsers: 5, streamMix: '4k', measuredMbpsPerConn: 28, measuredConnCap: 100, serverDownloadMbps: 100,
+  }, admin);
+  assert.ok(recSlowLine.json.capacity.deliverableMbps > 0 && recSlowLine.json.capacity.deliverableMbps <= 90,
+    'deliverable throughput is bounded by the ~100 Mbps line (×0.8)');
+  assert.ok(recSlowLine.json.capacity.maxSimultaneous4k <= 2,
+    'a slow line caps 4K viewers even when 100 connections are available');
+  // Missing line speed → an explicit prompt to add it (it is required for an accurate estimate).
+  const recNoLine = await httpJson(srv.port, 'POST', '/api/streaming/recommend', {
+    expectedUsers: 5, measuredMbpsPerConn: 28, serverDownloadMbps: 0,
+  }, admin);
+  assert.ok((recNoLine.json.warnings || []).some((w) => /download speed/i.test(w)),
+    'a missing download speed is flagged so the viewer estimate is not silently connection-only');
+
   const status = await httpJson(srv.port, 'GET', '/api/status', null, admin);
   assert.ok(status.json.streaming.usableConnections > 0, 'status exposes the active streaming capacity profile');
   assert.ok(status.json.pipeline.search, 'status exposes aggregate source-search telemetry');
@@ -1443,7 +1458,8 @@ test('admin: connection tests for saved providers/indexers; daily API limit gate
   const speed = (await httpJson(srv.port, 'POST', '/api/test/provider-speed', { index: 0, maxConns: 6 }, admin)).json;
   assert.strictEqual(speed.ok, true, JSON.stringify(speed));
   assert.ok(speed.connections >= 1 && speed.connections <= 6, 'opened a bounded number of probe connections');
-  assert.ok('connCap' in speed && 'mbpsPerConn' in speed && 'mbpsTotal' in speed, 'returns cap + throughput fields');
+  assert.ok('connCap' in speed && 'mbpsPerConn' in speed && 'mbpsTotal' in speed && 'configured' in speed,
+    'returns configured-count + cap + throughput fields');
   assert.strictEqual((await httpJson(srv.port, 'POST', '/api/test/provider-speed', { index: 9 }, admin)).status, 400,
     'out-of-range provider index 400s');
 
