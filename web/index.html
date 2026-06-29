@@ -921,7 +921,7 @@ body.tv #vlcCopy{display:none}
 .settingsRow{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;align-items:end}
 .settingsRow.two{grid-template-columns:repeat(2,minmax(0,1fr))}
 .settingsControl{display:grid;gap:6px;min-width:0}
-.settingsControl>span{color:var(--muted);font:800 10px "JetBrains Mono";letter-spacing:.08em;text-transform:uppercase}
+.settingsControl>span{color:var(--muted);font:700 11px "JetBrains Mono";letter-spacing:.02em;text-transform:none}
 .settingsControl input,.settingsControl select{width:100%;max-width:none!important;min-width:0;box-sizing:border-box}
 .settingsControl input{
   min-height:40px;background:rgba(11,8,18,.72);border:1px solid var(--line);border-radius:12px;
@@ -930,7 +930,7 @@ body.tv #vlcCopy{display:none}
 .settingsControl input:focus{border-color:var(--magenta)}
 .perfSummary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:16px 0 2px}
 .perfCard{min-height:74px;border:1px solid rgba(243,239,247,.08);border-radius:12px;padding:12px;background:rgba(11,8,18,.42)}
-.perfCard .k{font:800 10px "JetBrains Mono";letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+.perfCard .k{font:700 11px "JetBrains Mono";letter-spacing:.02em;text-transform:none;color:var(--muted);margin-bottom:6px}
 .perfCard .v{font:800 17px "Sora";color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .perfCard small{display:block;margin-top:3px;color:var(--muted);font:700 10px "JetBrains Mono";white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .perfStatusLine{font:700 12px "Albert Sans";color:var(--text)}
@@ -3097,7 +3097,9 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
 
   <div class="panel"><h2>Streaming performance</h2>
     <p>Let Triboon size server read-ahead and connection use from your provider capacity, server network,
-       and expected simultaneous users. Auto keeps starts and seeks ahead of background read-ahead.</p>
+       and expected simultaneous users. Auto keeps starts and seeks ahead of background read-ahead.
+       Speeds are in <strong>Mbps</strong> (megabits per second — your internet line speed, not megabytes);
+       read-ahead goals are in seconds and connections are per stream.</p>
     <div class="perfSummary" id="perfSummary" aria-live="polite">
       <div class="perfCard"><div class="k">Providers</div><div class="v">--</div><small>waiting for server</small></div>
       <div class="perfCard"><div class="k">Playback pool</div><div class="v">--</div><small>available articles</small></div>
