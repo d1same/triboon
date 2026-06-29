@@ -254,6 +254,17 @@ class ProviderPool {
     });
   }
 
+  // True if any queued (non-aborted) task is active-player work — startup/seek/playback (rank
+   // ≤ playback). Such work bypasses the read-ahead connection reserve and may use the whole pool.
+  _hasActivePlayerWorkQueued() {
+    const playbackRank = this._priorityRank('playback');
+    for (const t of this.queue) {
+      if (signalAborted(t.signal)) continue;
+      if (this._priorityRank(t.priority) <= playbackRank) return true;
+    }
+    return false;
+  }
+
   _shiftTask() {
     while (this.queue.length) {
       if (this.queue.length <= 1) {
@@ -299,9 +310,27 @@ class ProviderPool {
       return;
     }
     if (this.queue.length && this.conns.length + this.connecting < this.size) this._ensure();
+    // Active-player connection reserve: read-ahead/background must NEVER occupy the last
+    // `reserve` idle connections. Otherwise read-ahead (up to maxConnPerStream) saturates the
+    // pool and the next-needed PLAYBACK segment waits for a read-ahead fetch to finish to get a
+    // connection — a multi-second head-of-line stall (the "plays fine then buffers after a couple
+    // minutes" bug: the startup/seek burst fills the buffer, then every stall drains it). The pool
+    // already prioritises the QUEUE, but priority can't preempt an in-flight fetch — only a free
+    // connection can. Startup/seek/playback bypass the reserve and may use every connection; see
+    // docs-streaming-performance.md ("read-ahead must never outrank bytes needed by the player").
+    const playbackReserve = this.opts.playbackReserve != null
+      ? this.opts.playbackReserve
+      : (this.size >= 4 ? 2 : 1);
+    const reserve = Math.max(0, Math.min(playbackReserve, this.size - 1));
     for (const c of this.conns) {
       if (!this.queue.length) break;
       if (this.busy.has(c) || !c.alive) continue;
+      // Hold the reserved connections idle for the active player unless the highest-priority
+      // queued work IS active-player work (startup/seek/playback), which may use the whole pool.
+      if (reserve > 0 && !this._hasActivePlayerWorkQueued()) {
+        const idleFree = this.conns.reduce((n, x) => n + ((x.alive && !this.busy.has(x)) ? 1 : 0), 0);
+        if (idleFree <= reserve) break;
+      }
       const task = this._shiftTask();
       if (!task) break;
       if (typeof task.cleanupAbort === 'function') task.cleanupAbort();

@@ -510,6 +510,36 @@ test('nntp: a fully stalled provider fails within the timeout budget instead of 
   await mock.close();
 });
 
+test('nntp: read-ahead never takes the last connection — the active player always gets one (no head-of-line stall)', async () => {
+  // Regression for "plays fine, then buffers every couple minutes": read-ahead (up to
+  // maxConnPerStream segments) used to be able to occupy EVERY connection, so the next-needed
+  // PLAYBACK segment had to wait for a read-ahead fetch to finish to get a socket — a multi-second
+  // head-of-line stall once the startup/seek burst buffer drained.
+  const { articles } = makeRelease('Reserve.Test.mkv', 512 * 1024, 64 * 1024); // 8 segments
+  const ids = [...articles.keys()];
+  const RTT = 400;
+  const mock = createMockNntp({ articles, latencyMs: RTT }); // each BODY answers after ~400ms
+  const port = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false }, 3); // size 3 -> reserve 1
+  pool.warm(3);
+  await new Promise((r) => setTimeout(r, RTT + 150)); // let all 3 connections establish
+
+  // Saturate with read-ahead. With the reserve, only 2 occupy connections; 1 is held free.
+  const ra = [pool.body(ids[0], 'readAhead'), pool.body(ids[1], 'readAhead'), pool.body(ids[2], 'readAhead')];
+  await new Promise((r) => setTimeout(r, 80)); // let 2 dispatch + the 3rd queue behind the reserve
+
+  // The player needs its next segment NOW. It must land on the reserved connection immediately,
+  // not queue behind an in-flight read-ahead fetch (which would take ~2× RTT).
+  const t0 = Date.now();
+  await pool.body(ids[3], 'playback');
+  const playbackMs = Date.now() - t0;
+  assert.ok(playbackMs < RTT + 200, `playback got a reserved connection (~1 RTT): ${playbackMs}ms (a head-of-line stall would be ~${2 * RTT}ms)`);
+
+  await Promise.all(ra); // read-ahead still completes — the reserve doesn't starve it
+  pool.close();
+  await mock.close();
+});
+
 test('nntp: connections dropped while idle are replaced transparently on the next read', async () => {
   const { data, articles, nzb } = makeRelease('Idle.Test.mkv', 128 * 1024, 64 * 1024);
   const mock = createMockNntp({ articles });

@@ -122,6 +122,19 @@ Rules:
 - cancelled readers must remove queued read-ahead and abort running BODY work
   when no other active reader still needs that article.
 
+**Active-player connection reserve.** Queue priority alone is insufficient:
+priority cannot preempt an in-flight BODY, so read-ahead (which can fan out up to
+`maxConnPerStream` segments) was able to occupy *every* connection, forcing the
+next-needed playback segment to wait for a read-ahead fetch to finish before it
+got a socket — a multi-second head-of-line stall that drained the buffer and
+caused "plays fine, then buffers every couple of minutes." `NntpPool._pump` now
+holds back a small reserve (`playbackReserve`, default 2 for pools ≥ 4
+connections, else 1, clamped to `size - 1`): read-ahead/background tasks may not
+take the last `reserve` idle connections, while startup/seek/playback bypass the
+reserve and may use the whole pool. This guarantees the active player a socket on
+demand. Covered by `test/e2e.test.js` ("read-ahead never takes the last
+connection").
+
 If these priorities change, add or update a focused test in `test/e2e.test.js`.
 
 ## Read-Ahead Model
