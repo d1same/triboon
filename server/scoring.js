@@ -209,6 +209,11 @@ function scoreRelease(candidate, policy = {}) {
     if (a.codec === 'hevc') add('device-heavy-hevc-hd', -110);
     if (a.codec === 'av1') add('device-heavy-av1-hd', -120);
   }
+  // A device that reported NO AV1 hardware decoder (e.g. an Nvidia Shield / Tegra X1) software-decodes
+  // AV1 — fine for SD, ruinous for 4K (it stutters, can't fill the buffer, and "falls back"). De-rank
+  // AV1 hard at ALL resolutions so a decodable HEVC/AVC source always wins; keep it above the -100000
+  // disqualify so an AV1-only title still plays (as a software-decoded last resort) rather than 404.
+  if (policy.av1Hardware === false && a.codec === 'av1') add('no-av1-hardware-decode', -260);
   // Soundtracks / bonus discs / bare music rips are never what "press play on a movie" means.
   const ntm = notTheMovie(candidate.name);
   if (ntm) add(`not-the-movie:${ntm}`, -100000);

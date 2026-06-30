@@ -111,6 +111,23 @@ test('scoring: Atmos/TrueHD remuxes are preferred only for capable passthrough d
   assert.ok(budget[0].name.includes('WEB-DL'), 'budget devices stay conservative even if a broad passthrough flag appears');
 });
 
+test('scoring: AV1 4K is de-ranked on a device without an AV1 hardware decoder (Shield), but stays a fallback', () => {
+  const releases = [
+    { name: 'Movie.2022.2160p.UHD.BluRay.AV1.Opus-dAV1nci', sizeBytes: 15e9 },
+    { name: 'Movie.2022.2160p.WEB-DL.DDP5.1.HEVC-FLUX', sizeBytes: 16e9 },
+  ];
+  // av1Hardware:false (Shield-class, no AV1 decoder) → the decodable HEVC 4K must win; AV1 would
+  // software-decode and stutter ("plays fine, then buffers / falls back" on a few titles).
+  const noAv1 = rankReleases(releases.map((r) => ({ ...r })), { maxResolutionRank: 4, av1Hardware: false });
+  assert.ok(noAv1[0].name.includes('HEVC'), 'a no-AV1-HW device prefers the decodable HEVC 4K over AV1');
+  const av1NoHw = noAv1.find((r) => /\bAV1\b/.test(r.name));
+  assert.ok(av1NoHw && av1NoHw.score > -5000, 'AV1 stays above the playable cut (last-resort manual pick), not disqualified');
+  // A device WITH AV1 hardware (or no claim) applies no such penalty.
+  const withAv1 = rankReleases(releases.map((r) => ({ ...r })), { maxResolutionRank: 4, av1Hardware: true });
+  const av1Hw = withAv1.find((r) => /\bAV1\b/.test(r.name));
+  assert.ok(av1Hw.score > av1NoHw.score, 'AV1 is only de-ranked when the device lacks an AV1 hardware decoder');
+});
+
 test('scoring: soundtracks, bonus discs and bare audio rips are disqualified outright', () => {
   // Both top names are the REAL releases that bit users: the soundtrack album auto-played
   // for a film with no video releases yet, and the bonus disc outranked the actual movie.

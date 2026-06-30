@@ -2966,6 +2966,11 @@ function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, orig
   if (caps.native) {
     policy.deviceCaps = caps;
     policy.dolbyVision = !!caps.dovi;
+    // Whether the device can HARDWARE-decode AV1 (caps.av1 = nativeDecoderAvailable("video/av01")).
+    // A Shield-class TX1 has none, so an AV1 4K source there is a software decode that stutters and
+    // "falls back" — exactly the few-titles buffering the owner hit. Scoring de-ranks AV1 hard when
+    // this is false so a decodable HEVC source wins, while AV1 stays a last-resort manual pick.
+    policy.av1Hardware = caps.av1 !== false;
     policy.audioPassthrough = !!caps.passthrough;
     policy.audioTrueHd = !!caps.truehd;
     policy.audioEac3 = !!caps.eac3;
