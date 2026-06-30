@@ -2967,8 +2967,10 @@ test('web browse grids stay windowed and D-pad uses logical grid indexes', () =>
     'cover-size and resize paths should refresh virtual grid geometry');
   assert.match(ui, /function activeGridIdx\(\) \{[\s\S]+el\.dataset && el\.dataset\.grid !== undefined[\s\S]+parseInt\(el\.dataset\.grid, 10\)/,
     'D-pad focus should recover the absolute item index from data-grid');
-  assert.match(ui, /function focusedGridAtVisualRowStart\(\) \{[\s\S]+document\.querySelector\('\.pcard\.focus, \.card\.focus[\s\S]+return Math\.abs\(pr\.top - cr\.top\) > 6;[\s\S]+\}/,
-    'D-pad Left should have a visual-row-start fallback when virtualized grid state drifts');
+  assert.match(ui, /function focusedGridAtVisualRowStart\(\) \{[\s\S]+document\.querySelector\('\.pcard\.focus, \.card\.focus[\s\S]+return Math\.abs\(prev\.offsetTop - cur\.offsetTop\) > 4;[\s\S]+\}/,
+    'D-pad Left visual-row-start fallback must use transform-immune offsetTop, NOT getBoundingClientRect().top (whose value includes the focus scale transform — that made Left jump to the menu from a non-first-column poster in scaled themes like Toomaj)');
+  assert.match(ui, /function geomGridVert\(dir\) \{[\s\S]+const t = el\.offsetTop;[\s\S]+Math\.abs\(t - curTop\) > 6/,
+    'grid UP/DOWN row bucketing must use transform-immune offsetTop so the focus scale cannot misbucket the focused card');
   assert.match(ui, /if \(k === 'ArrowLeft' && focusedGridAtVisualRowStart\(\)\) return enterRail\(\);[\s\S]+S\.gridIdx = activeGridIdx\(\);/,
     'grid D-pad handling should exit to the rail before stale logical indexes can trap focus');
   assert.match(ui, /const itemIdx = parseInt\(el\.dataset\.grid, 10\);[\s\S]+const it = Number\.isFinite\(itemIdx\) \? \(S\.gridItems \|\| \[\]\)\[itemIdx\] : null;/,

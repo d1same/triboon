@@ -19317,18 +19317,18 @@ function gridVert(dir) {
         return next ? parseInt(next.dataset.grid, 10) : -1;
       }
       const cr = cur.getBoundingClientRect();
-      const curX = cr.left + cr.width / 2;
+      const curX = cr.left + cr.width / 2; // horizontal = rect CENTER (scale-invariant)
+      const curTop = cur.offsetTop;        // vertical = transform-immune offsetTop
       let rowTop = dir > 0 ? Infinity : -Infinity;
       content.forEach((el) => {
-        const r = el.getBoundingClientRect();
-        const dt = r.top - cr.top;
-        if (dir > 0 ? dt > 6 : dt < -6) rowTop = dir > 0 ? Math.min(rowTop, r.top) : Math.max(rowTop, r.top);
+        const dt = el.offsetTop - curTop;
+        if (dir > 0 ? dt > 6 : dt < -6) rowTop = dir > 0 ? Math.min(rowTop, el.offsetTop) : Math.max(rowTop, el.offsetTop);
       });
       if (!isFinite(rowTop)) return -1;
       let best = -1, bestDx = Infinity;
       content.forEach((el) => {
+        if (Math.abs(el.offsetTop - rowTop) > 6) return;
         const r = el.getBoundingClientRect();
-        if (Math.abs(r.top - rowTop) > 6) return;
         const dx = Math.abs((r.left + r.width / 2) - curX);
         if (dx < bestDx) { bestDx = dx; best = parseInt(el.dataset.grid, 10); }
       });
@@ -19347,7 +19347,7 @@ function geomGridVert(dir) {
   const idx = Math.max(0, Math.min(els.length - 1, S.gridIdx || 0));
   const rows = []; let curTop = null;
   els.forEach((el) => {
-    const t = el.getBoundingClientRect().top;
+    const t = el.offsetTop; // transform-immune: a focused card's scale can't shift its row bucket
     if (curTop === null || Math.abs(t - curTop) > 6) { rows.push([]); curTop = t; }
     rows[rows.length - 1].push(els.indexOf(el));
   });
@@ -19369,9 +19369,12 @@ function focusedGridAtVisualRowStart() {
   if (i <= 0) return true;
   const prev = els[i - 1];
   if (!prev) return true;
-  const cr = cur.getBoundingClientRect();
-  const pr = prev.getBoundingClientRect();
-  return Math.abs(pr.top - cr.top) > 6;
+  // offsetTop is layout-relative and transform-IMMUNE; the focused card's scale/lift can't change it.
+  // A same-row neighbor therefore reads as the same row (Left moves to it) and only a true row-start
+  // (prev sits on the row above) reaches the rail. getBoundingClientRect would include the focus
+  // transform — the scale(1.05) in high-contrast themes (Toomaj) lifted the focused top >6px and made
+  // Left wrongly jump to the menu from a non-first-column poster.
+  return Math.abs(prev.offsetTop - cur.offsetTop) > 4;
 }
 function focusPersonBack() {
   applyFocus($('pBack'), false);
@@ -20361,7 +20364,7 @@ document.addEventListener('keydown', (e) => {
     const sameRow = (a, b) => a && b && Math.abs(a.offsetTop - b.offsetTop) < 4;
     const nearestInRow = (rowEls, x) => {
       let best = -1, bd = Infinity;
-      rowEls.forEach((el) => { const d = Math.abs(el.getBoundingClientRect().left - x); if (d < bd) { bd = d; best = rows.indexOf(el); } });
+      rowEls.forEach((el) => { const d = Math.abs(el.offsetLeft - x); if (d < bd) { bd = d; best = rows.indexOf(el); } });
       return best;
     };
     if (k === 'ArrowLeft') {
@@ -20373,7 +20376,7 @@ document.addEventListener('keydown', (e) => {
       return; // last column of the row: no-op
     }
     if (k === 'ArrowUp' || k === 'ArrowDown') {
-      const cx = cur ? cur.getBoundingClientRect().left : 0;
+      const cx = cur ? cur.offsetLeft : 0; // transform-immune column anchor (matches offsetLeft in nearestInRow)
       let j = i;
       if (k === 'ArrowDown') { while (j < rows.length && sameRow(rows[j], cur)) j++; }
       else { while (j >= 0 && sameRow(rows[j], cur)) j--; }
