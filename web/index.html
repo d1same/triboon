@@ -9552,10 +9552,16 @@ function recoverSamePlaybackSource(reason = '') {
   const key = `${p.mountId || p.sessionId || p.streamUrl || ''}:${kind}`;
   const now = appMs();
   if (p._sameSourceRecoveryKey === key && now - (p._sameSourceRecoveryAt || 0) < 60000) {
-    // Same-source resume already failed → the mount is gone (server restarted / swept from memory).
-    // Re-mount the SAME title and resume from the current position instead of giving up. Failure-path
-    // only: if the re-mount can't succeed it falls back to the interrupted notice — healthy playback
-    // is never touched. This is what lets a quick server update heal itself instead of erroring out.
+    // Same-source resume already failed once. On a CONSERVATIVE / low-power device a persistent
+    // failure mid-playback is more likely an UNDECODABLE source (a 4K / high-bitrate / HEVC-Main10
+    // stream the budget decoder choked on after starting, or thermal throttle) than a swept mount —
+    // so escalate the ladder (direct → remux → transcode) and land on the budget-friendly transcode
+    // instead of looping the same unplayable kind forever. High-end devices and genuine mount-loss
+    // are untouched: they fall straight through to the re-mount path below.
+    if (p.usingNative && (clientCaps() || {}).lowPower && tryNextNativeKind(kind, at, reason || 'playback failed')) return true;
+    // Otherwise the mount is gone (server restarted / swept from memory). Re-mount the SAME title and
+    // resume from the current position instead of giving up. Failure-path only: if the re-mount can't
+    // succeed it falls back to the interrupted notice — healthy playback is never touched.
     if (!p._reMounting) reMountAndResume(reason);
     return true;
   }
