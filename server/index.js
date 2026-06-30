@@ -128,7 +128,12 @@ async function onDemandSubSync(vf, vtt, uid) {
   const outSrt = path.join(dir, 'out.srt');
   try {
     await fsp.writeFile(inSrt, vttToSrt(vtt), 'utf8');
-    const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(uid, vf.id)}`;
+    // &priority=background is critical: alass pulls the mount's AUDIO through this stream URL, and
+    // without an explicit priority those reads classify as startup/seek — the TOP NNTP lane, which
+    // also bypasses the active-player connection reserve — so enabling CC mid-playback would steal
+    // connections from the live video and cause buffering. The embedded-subtitle extractor already
+    // uses this lane; the on-demand sync path must too. (Sub-sync is background work by contract.)
+    const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(uid, vf.id)}&priority=background`;
     await new Promise((resolve, reject) => {
       const p = spawnSubSync(selfUrl, inSrt, outSrt);
       let err = '';

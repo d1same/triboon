@@ -293,15 +293,43 @@ function subSyncResultOk(inputText, outputText) {
   if (!inN) return true;
   return Math.abs(outN - inN) <= Math.max(1, Math.floor(inN * 0.02));
 }
+// Trailing release-group tag ("-GROUP") and the source class (WEB vs BluRay vs HDTV/DVD). Together
+// these are the cheap signals that actually correlate with frame-exact timing for same-lineage
+// releases — a bare key-substring overlap does NOT (a different cut, recap, or PAL/NTSC framerate of
+// the "same" release still drifts a second or two), which is why a loose match must not be trusted.
+function releaseGroupTag(s) {
+  const base = String(s || '').split(/[\\/]/).pop().replace(/\.(srt|vtt|sub|idx|ass|ssa|mkv|mp4|m4v|avi|mov|ts)$/i, '');
+  const m = base.match(/-([a-z0-9]+)$/i);
+  return m ? m[1].toLowerCase() : '';
+}
+function releaseSourceTag(s) {
+  const t = String(s || '').toLowerCase();
+  if (/\b(blu[\s._-]?ray|bdrip|brrip|bd[\s._-]?remux|remux|uhd[\s._-]?bd)\b/.test(t)) return 'bluray';
+  if (/\b(web[\s._-]?dl|web[\s._-]?rip|webdl|webrip|web|amzn|nf|dsnp|hmax|atvp|hulu)\b/.test(t)) return 'web';
+  if (/\b(hdtv|pdtv|dsr)\b/.test(t)) return 'hdtv';
+  if (/\b(dvd|dvdrip|dvdscr)\b/.test(t)) return 'dvd';
+  return '';
+}
 function subtitleLooksSynced(d, releaseName = '') {
   if (!d) return false;
-  if (d.moviehashMatch) return true;
-  if (d.matchedRelease || d.matchedFilter) return true;
+  if (d.moviehashMatch) return true;                 // hash-exact: same bytes, definitely in sync
+  if (d.matchedRelease || d.matchedFilter) return true; // provider asserts the exact release/file
   const mine = releaseKey(releaseName);
   if (!mine || mine.length < 12) return false; // too little to trust a fuzzy match
-  const theirs = releaseKey(subtitleMatchText(d));
+  const theirText = subtitleMatchText(d);
+  const theirs = releaseKey(theirText);
   if (!theirs) return false;
-  return theirs.includes(mine) || mine.includes(theirs);
+  if (theirs === mine) return true; // identical release key → genuinely the same file, skip alass
+  // A NON-identical name overlap only proves "same encode lineage", not in-sync timing. Trust it as
+  // synced ONLY when the release group AND source class both agree and one key fully contains the
+  // other with enough length to be meaningful. Anything looser (a different cut/edit of the same
+  // release) now falls through to a real alass audio-alignment instead of being assumed in sync —
+  // this is what fixes Wyzie subs that sit a couple seconds off because their name merely overlapped.
+  const overlaps = (theirs.includes(mine) || mine.includes(theirs)) && Math.min(theirs.length, mine.length) >= 20;
+  if (!overlaps) return false;
+  const g1 = releaseGroupTag(releaseName), g2 = releaseGroupTag(theirText);
+  const s1 = releaseSourceTag(releaseName), s2 = releaseSourceTag(theirText);
+  return !!(g1 && g1 === g2 && s1 && s1 === s2);
 }
 // Popularity / trust tie-breakers (the OpenSubtitles ranking model): these only ever nudge
 // BETWEEN otherwise-equal candidates. Capped well below the release/episode/hash signals so a

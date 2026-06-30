@@ -225,6 +225,13 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   // that quality on detail open (warm by Play) instead of starting the 4K mount only on toggle.
   assert.match(ui, /function qualityRankForItem\(it\) \{[\s\S]+savedQualityPref\(it\)[\s\S]+\|\| globalQualityPref\(\);[\s\S]+if \(q === 4 && !userCanPlay4k\(\)\) q = 3;[\s\S]+return q \|\| null;/,
     'qualityRankForItem should fall back to the remembered global quality and clamp 4K for capped users, but stay null when nothing is set (single-version titles unaffected)');
+  // A remembered GLOBAL 4K default must not force a 4K request (→ the server no-fallback lock) onto a
+  // title that has no 4K at all: checkAvailability records _has4k, and qualityRankForItem clamps 4→3
+  // when it's known false. This is the "don't even try 4K on a 1080p-only show" fix.
+  assert.match(ui, /const known4k = \(detailMatches && S\.detailItem\) \? S\.detailItem\._has4k : it\._has4k;[\s\S]+if \(q === 4 && known4k === false\) q = 3;/,
+    'qualityRankForItem must clamp a global-default 4K down to 1080p for titles known to have no 4K');
+  assert.match(ui, /const has4k = res\.has\('2160p'\);[\s\S]+it\._has4k = has4k;/,
+    'checkAvailability must persist real 4K availability on the item so a no-4K title never requests 4K');
   assert.match(ui, /function saveGlobalQualityPref\(rank\) \{ const q = normalizeQualityRank\(rank\);/,
     'a profile-scoped global quality preference should be persistable');
   assert.match(ui, /S\.qualityPref = \+b\.dataset\.q;\s*\n\s*saveGlobalQualityPref\(S\.qualityPref\);/,
@@ -858,6 +865,10 @@ test('subtitle startup preference contract: admin can toggle built-in captions',
     'subtitle route timeout extension should restore the normal socket timeout after the response closes');
   assert.match(server, /priority=background/,
     'embedded subtitle extraction should read through the background stream lane');
+  // The on-demand alass sub-sync pulls the mount's AUDIO; it MUST read through the background lane
+  // too, or enabling CC mid-playback steals the player's connections (startup/seek lane) and buffers.
+  assert.match(server, /async function onDemandSubSync\(vf, vtt, uid\) \{[\s\S]+const selfUrl = `http:\/\/127\.0\.0\.1:\$\{server\.address\(\)\.port\}\/api\/stream\/\$\{vf\.id\}\?t=\$\{auth\.streamToken\(uid, vf\.id\)\}&priority=background`;/,
+    'on-demand subtitle sync must pull audio through the background NNTP lane so CC never starves the active player');
   assert.match(server, /function subtitleVttHasCues\(vtt\) \{[\s\S]+-->/,
     'embedded subtitle extraction should require real cue timings before treating WebVTT as valid');
   assert.match(server, /if \(!subtitleVttHasCues\(vtt\)\) return fail\(new Error\('embedded subtitle extraction returned no text cues'\)\);[\s\S]+vf\._subFailures\.delete\(track\);[\s\S]+vf\._subCache\.set\(track, vtt\)/,
@@ -1800,10 +1811,21 @@ test('Android native player: direct source and native chrome stay out of the web
     'native movie/episode guide button should wake the screensaver and hide the web video immediately while the guide data loads');
   assert.match(ui, /return renderGuideProgressive\(body, pool\)/,
     'Live TV guide should render the guide shell before waiting on provider guide data');
-  assert.match(ui, /const guideList = selectedList\.slice\(0, LIVE_GUIDE_BATCH\)/,
-    'player guide should use the same small initial batch as the Live TV page');
-  assert.match(ui, /fetchGuideBatch\(guideList\)\.then/,
-    'player guide should hydrate guide data asynchronously after opening');
+  assert.match(ui, /let consumed = Math\.min\(LIVE_GUIDE_BATCH, selectedList\.length\);[\s\S]+const firstSlice = selectedList\.slice\(0, consumed\);/,
+    'player guide should open with the same small initial batch as the Live TV page');
+  assert.match(ui, /fetchGuideBatch\(chans\)\.then/,
+    'player guide should hydrate guide data asynchronously, per rendered batch');
+  // Progressive channel loading: the in-player guide used to hard-cap at LIVE_GUIDE_BATCH with no
+  // way to reach channels beyond it. It now extends on scroll (IntersectionObserver) and on D-pad
+  // stepping off the last rendered row (S._pgExtend), mirroring the browser guide's extend().
+  assert.match(ui, /const extendPlayerGuide = \(\) => \{[\s\S]+const next = selectedList\.slice\(consumed, consumed \+ LIVE_GUIDE_BATCH\);[\s\S]+consumed \+= next\.length;[\s\S]+renderChannels\(next\)/,
+    'player guide must be able to load the next channel batch beyond the initial window');
+  assert.match(ui, /S\._pgIO = new IntersectionObserver\(\(en\) => \{[\s\S]+extendPlayerGuide\(\);[\s\S]+\}, \{ root: main, rootMargin: '260px 0px' \}\);[\s\S]+S\._pgExtend = extendPlayerGuide;/,
+    'scrolling to the bottom of the in-player guide should pull in more channels');
+  assert.match(ui, /if \(delta > 0 && i >= rows\.length - 1 && typeof S\._pgExtend === 'function' && S\._pgExtend\(\)\) \{[\s\S]+grown\.length > rows\.length/,
+    'D-pad DOWN off the last rendered guide row should load + land on the next channel, not wrap at 24');
+  assert.match(ui, /if \(k === 'Escape' \|\| k === 'Backspace'\) \{[\s\S]+if \(rows\.includes\(active\) && cats\.length\) return focusPlayerGuideCategory\(catIndex\(\)\);[\s\S]+return closePlayerGuide\(\);/,
+    'Back from a guide channel row should step to the category list, not close the whole guide');
   assert.match(ui, /if \(!list\.length && S\.liveChannels && S\.liveChannels\.length && Date\.now\(\) - \(S\._liveAt \|\| 0\) < LIVE_TTL\) \{[\s\S]+S\.liveChannels\.map\(liveItemForPlayerGuide\)\.filter\(Boolean\)/,
     'player guide should reuse a fresh in-memory Live TV catalog instead of fetching the big catalog again');
   assert.match(ui, /list = S\.liveList = \(fav\.channels \|\| \[\]\)\.map\(liveItemForPlayerGuide\)\.filter\(Boolean\)/,
@@ -2907,8 +2929,16 @@ test('Android native player: direct source and native chrome stay out of the web
 
 test('web browse grids stay windowed and D-pad uses logical grid indexes', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
-  assert.match(ui, /const VIRTUAL_GRID_VIEWS = new Set\(\['movies', 'tv', 'watchlist'\]\);/,
-    'high-volume poster pages should opt into grid virtualization');
+  assert.match(ui, /const VIRTUAL_GRID_VIEWS = new Set\(\['movies', 'tv', 'watchlist', 'library'\]\);/,
+    'high-volume poster pages — including local libraries — should opt into grid virtualization');
+  assert.match(ui, /if \(S\.view === 'library' && S\.localPageState && S\.localPageState\.showIdx !== undefined\) return false;/,
+    'a local-library SHOW (episode) view keeps its inline affordances and must not be windowed');
+  assert.match(ui, /function appendLocalGridMore\(\) \{[\s\S]+if \(shouldVirtualizeGrid\(root\)\) return;/,
+    'the in-grid "Load more" button must be suppressed when the library grid is windowed (auto-load handles paging)');
+  assert.match(ui, /function appendLocalAdminBar\(\) \{[\s\S]+clearLocalAdminBar\(\);[\s\S]+const bar = \$\('browse'\)\.querySelector\('\.filterBar'\);[\s\S]+'ghostMini focusable libAdminCtl'/,
+    'library admin controls must live in the filter-bar head (survives windowing, reachable via UP from the grid)');
+  assert.match(ui, /function browseFilterEls\(\) \{[\s\S]+\.filterBar button\.libAdminCtl[\s\S]+\[\$\('genreSel'\), \$\('sortSel'\), \.\.\.admin\]/,
+    'relocated admin buttons should join the filter-bar D-pad row');
   assert.match(ui, /function renderVirtualGridWindow\(targetIdx = S\.gridIdx \|\| 0, opts = \{\}\) \{[\s\S]+root\.dataset\.virtualized = '1';[\s\S]+gridSpacerTop[\s\S]+for \(let i = start; i < end; i\+\+\)[\s\S]+gridSpacerBottom/,
     'virtualized grids should render a bounded card window with top/bottom spacers');
   assert.match(ui, /function renderGrid\(items, root = \$\('grid'\)\) \{[\s\S]+if \(shouldVirtualizeGrid\(root\)\) \{[\s\S]+renderVirtualGridWindow\(0, \{ topRow: 0 \}\);[\s\S]+\} else \{/,

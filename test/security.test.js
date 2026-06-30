@@ -1624,6 +1624,14 @@ test('subtitles: subtitleLooksSynced skips sync for release/hash matches, runs i
   assert.strictEqual(looks({ display: 'Totally.Different.Release.720p.WEB-Damn' }, rel), false,
     'a non-matching release needs sync correction');
   assert.strictEqual(looks({}, ''), false, 'no signal → not assumed synced');
+  // A merely-overlapping name (same lineage, DIFFERENT cut/edit) must NOT be assumed in sync — that
+  // loose substring match is exactly what left Wyzie subs a couple seconds off. It must fall through
+  // to alass instead of being trusted, so subtitleLooksSynced returns false here.
+  assert.strictEqual(looks({ display: 'The.Movie.2024.1080p.BluRay.x264-GROUP.EXTENDED.CUT' }, rel), false,
+    'a different cut of the same release lineage is NOT assumed in sync (name overlap ≠ in-sync timing)');
+  // Same release key but a different SOURCE class (WEB vs BluRay) is a different encode → not synced.
+  assert.strictEqual(looks({ display: 'The.Movie.2024.1080p.WEB-DL.x264-GROUP' }, rel), false,
+    'a different source (WEB vs BluRay) of the same title is not assumed in sync');
 });
 
 test('subtitles: OpenSubtitles moviehash search → login → download → VTT (mock)', async () => {

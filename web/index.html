@@ -5661,6 +5661,14 @@ function qualityRankForItem(it) {
     || savedQualityPref(it)
     || globalQualityPref();
   if (q === 4 && !userCanPlay4k()) q = 3; // capped users never resolve to 4K (server caps too)
+  // Don't let a remembered GLOBAL 4K default request 4K (which the server turns into a no-fallback
+  // lock) on a title we KNOW has no 4K — an explicit per-title 4K tap still wins above (S.qualityPref
+  // / it.qualityRank / savedQualityPref). checkAvailability records _has4k on the detail item; an
+  // episode shares its show's quality key so we read it through detailMatches. Unknown availability
+  // (===undefined, e.g. a Continue-Watching tile that never opened detail) is left alone — the
+  // server pipeline's existing relax-fallback remains the safety net there.
+  const known4k = (detailMatches && S.detailItem) ? S.detailItem._has4k : it._has4k;
+  if (q === 4 && known4k === false) q = 3;
   return q || null;
 }
 function sourceSearchQuery(it, opts = {}) {
@@ -6725,6 +6733,9 @@ async function checkAvailability(it) {
     const has4k = res.has('2160p');
     const hasLower = [...res].some((x) => x !== '2160p'); // 1080p/720p/SD/unknown
     const localRank = localPlaybackRankForItem(it);
+    // Record real 4K availability so qualityRankForItem never lets a remembered GLOBAL 4K default
+    // force a 4K request (and the server's no-fallback lock) onto a title that simply has no 4K.
+    it._has4k = has4k;
     // A user capped below 4K must never see the 4K toggle — they can't play it (the server caps too).
     const offer = !!(r.candidates && r.candidates.length && has4k && userCanPlay4k() && (hasLower || (hasLocal && localRank !== 4)));
     if (hasLocal) {
@@ -12376,12 +12387,18 @@ $('grid').addEventListener('scroll', () => {
   else if (S.view === 'library') runLibrary(false);
 });
 
-const VIRTUAL_GRID_VIEWS = new Set(['movies', 'tv', 'watchlist']);
+const VIRTUAL_GRID_VIEWS = new Set(['movies', 'tv', 'watchlist', 'library']);
 const VIRTUAL_GRID_OVERSCAN_ROWS = 4;
 function mainGridRoot(root = S.gridRoot || $('grid')) { return root && root === $('grid'); }
 function shouldVirtualizeGrid(root = S.gridRoot || $('grid')) {
-  return mainGridRoot(root) && VIRTUAL_GRID_VIEWS.has(S.view)
-    && $('browse').classList.contains('rowsWin') && (S.gridItems || []).length > 0;
+  if (!mainGridRoot(root) || !VIRTUAL_GRID_VIEWS.has(S.view)) return false;
+  if (!$('browse').classList.contains('rowsWin') || !(S.gridItems || []).length) return false;
+  // A local-library SHOW view (episode list) keeps its inline "Fix TMDB match" affordance and is
+  // bounded to one show's episodes — don't window those. Only the potentially-huge flat library
+  // listing (and Movies/TV/Watchlist) gets the virtual window. The footer admin bar for the flat
+  // listing is relocated to the filter-bar head precisely because windowing clears #grid children.
+  if (S.view === 'library' && S.localPageState && S.localPageState.showIdx !== undefined) return false;
+  return true;
 }
 function clearGridDom(root) {
   if (bgLazy.unobserveRoot) bgLazy.unobserveRoot(root);
@@ -12567,6 +12584,10 @@ function appendLocalGridMore() {
   const root = S.gridRoot || $('grid');
   if (!root || S.view !== 'library' || !(S.currentLib && S.currentLib.path)) return;
   root.querySelectorAll('.localGridMore').forEach((el) => el.remove());
+  // When the grid is windowed, the explicit "Load N more" button is both redundant (scrolling
+  // auto-loads the next page, same as Movies/TV) and unkeepable (every window re-render clears
+  // #grid). Bail so we don't leave a stale button index inside the virtual nav.
+  if (shouldVirtualizeGrid(root)) return;
   if (S.localPageState) {
     const shown = S.localPageOffset || S.gridItems.length || 0;
     const total = S.localPageTotal || shown;
@@ -12609,27 +12630,36 @@ function loadMoreLocalGrid(focusNew = false) {
   if (focusNew && S.zone === 'grid') requestAnimationFrame(() => focusGrid(firstNew));
   return true;
 }
+function clearLocalAdminBar() {
+  // The admin controls live in the filter-bar head (see appendLocalAdminBar). Strip them whenever we
+  // leave a local library so Movies/TV/smart views never inherit a stale Scan/Refresh button.
+  $('grid').querySelectorAll('.localAdminBar').forEach((el) => el.remove()); // legacy in-grid bar
+  document.querySelectorAll('.filterBar .libAdminCtl').forEach((el) => el.remove());
+}
 function appendLocalAdminBar() {
-  const root = S.gridRoot || $('grid');
-  root.querySelectorAll('.localAdminBar').forEach((el) => el.remove());
+  // Relocated OUT of #grid: a windowed grid clears its children on every re-render, which would wipe
+  // an in-grid footer and strand the admin controls (their buttons carry no data-grid, so the
+  // index-based virtual nav can't reach them). The filter bar is already a persistent header zone
+  // reached by UP from grid row 0 → focusBrowseFilter, so the buttons join that flat horizontal row.
+  clearLocalAdminBar();
   const infoState = S.localPageState;
   if (!infoState || !infoState.admin || infoState.showIdx !== undefined) return;
-  const bar = document.createElement('div');
-  bar.className = 'localAdminBar';
-  bar.style.cssText = 'grid-column:1/-1;display:flex;gap:10px;align-items:center;flex-wrap:wrap';
+  const bar = $('browse').querySelector('.filterBar');
+  if (!bar) return;
   const mk = (label, mode) => {
     const b = document.createElement('button');
-    b.className = 'ghostMini focusable'; b.textContent = label;
+    b.className = 'ghostMini focusable libAdminCtl'; b.textContent = label;
+    b.addEventListener('mouseenter', () => pointerHover() && b.focus({ preventScroll: true }));
     b.addEventListener('click', () => scanLibrary(infoState.lib, mode));
     return b;
   };
   bar.appendChild(mk('Scan for new items', 'scan'));
   bar.appendChild(mk('Refresh all metadata', 'metadata'));
   const info = document.createElement('span');
-  info.style.cssText = 'color:var(--muted);font-size:12.5px';
+  info.className = 'libAdminCtl libAdminInfo';
+  info.style.cssText = 'color:var(--muted);font-size:12.5px;align-self:center';
   info.textContent = `${S.localPageTotal || 0} items${infoState.scannedAt ? ` - scanned ${agoStr(infoState.scannedAt)}` : ''}`;
   bar.appendChild(info);
-  root.appendChild(bar);
 }
 function renderLocalGridFooter() {
   const root = S.gridRoot || $('grid');
@@ -13322,6 +13352,10 @@ async function runLocalLibraryPaged(lib, showIdx, opts = {}) {
     const isAdmin = S.user.role === 'admin';
     const show = r.show || null;
     if (!r.items.length && !r.total) {
+      // Empty states write the grid via innerHTML, not renderGrid — make sure no stale gridItems from
+      // the previous view leave shouldVirtualizeGrid() true (which would hand the empty grid to the
+      // index-based virtual nav and strand the inline scan button).
+      S.gridItems = []; resetGridVirtual(grid);
       if (showIdx !== undefined || genre) {
         grid.innerHTML = '<div class="gridMore">No matching items.</div>';
         return;
@@ -14842,6 +14876,8 @@ function promotePlayerGuideChannelToFullscreen(it) {
 }
 function closePlayerGuide(opts = {}) {
   S._playerGuideRenderToken = (S._playerGuideRenderToken || 0) + 1;
+  if (S._pgIO) { try { S._pgIO.disconnect(); } catch {} S._pgIO = null; } // stop the progressive-load observer
+  S._pgExtend = null;
   S.pgCatDpadMode = false;
   S.liveSplitPickPane = null;
   setPlayerGuideLiveTuningPending(null);
@@ -15039,8 +15075,6 @@ async function renderPlayerGuideTimeline(pg, list) {
   for (let t = w0; t < w1; t += 1800000) ticks += `<span class="gTick" style="left:${pct(t)}%">${fmtTick(t)}</span>`;
   main.innerHTML = `<div class="pgRow gRow gHead pgTimeHead"><div class="gCh"></div><div class="gTl">${ticks}</div></div>`;
 
-  const guideList = selectedList.slice(0, LIVE_GUIDE_BATCH);
-  if (currentCh && !guideList.some((x) => String(x._channel) === String(currentCh._channel)) && (currentCh.genre || 'Other') === S.pgLiveCat) guideList.unshift(currentCh);
   let progsByIdx = {};
   const blocksFor = (ch, loading = false) => {
     if (loading) return '<div class="gProg empty" style="left:0;width:100%"><span class="gpT">Loading guide...</span></div>';
@@ -15062,7 +15096,13 @@ async function renderPlayerGuideTimeline(pg, list) {
     row.innerHTML = `<div class="gCh">${logo ? `<img src="${logo}" loading="lazy">` : `<span class="pgInit">${esc((ch.title || '?')[0])}</span>`}<span>${esc(ch.title)}</span></div>
       <div class="gTl"><div class="gNow" style="left:${pct(now)}%"></div>${blocksFor(ch, loading)}</div>`;
   };
-  guideList.forEach((ch) => {
+  // Progressive channel loading. The in-player guide used to hard-slice the category to
+  // LIVE_GUIDE_BATCH (24) with no way to load more, so D-pad/scroll could never reach channel 25+.
+  // We now render in batches and pull the next one in on scroll (IntersectionObserver) OR when the
+  // D-pad steps off the last rendered row (S._pgExtend, called from the guide nav handler). Mirrors
+  // the browser guide's extend() at renderGuideProgressive().
+  let pgSentinel = null;
+  const buildPlayerGuideRow = (ch) => {
     const row = document.createElement('button');
     row.className = 'pgRow gRow focusable' + (String(ch._channel) === String(guideCur) ? ' cur' : '');
     row.dataset.pg = '1';
@@ -15086,23 +15126,66 @@ async function renderPlayerGuideTimeline(pg, list) {
       e.preventDefault();
       openLiveChannelMenu(ch, row, selectedList);
     });
-    main.appendChild(row);
-  });
-  if (S.liveEpg) {
-    fetchGuideBatch(guideList).then((nextProgs) => {
+    if (pgSentinel && pgSentinel.parentNode === main) main.insertBefore(row, pgSentinel);
+    else main.appendChild(row);
+    return row;
+  };
+  const hydratePlayerGuide = (chans) => {
+    if (!S.liveEpg || !chans.length) return;
+    const refill = () => {
       if (renderToken !== S._playerGuideRenderToken || !pg.classList.contains('open')) return;
-      progsByIdx = nextProgs || {};
-      guideList.forEach((ch) => {
+      chans.forEach((ch) => {
         const row = main.querySelector(`[data-guide-channel="${ch._channel}"]`);
         if (row) fillPlayerGuideRow(row, ch, false);
       });
-    }).catch(() => {
+    };
+    fetchGuideBatch(chans).then((nextProgs) => {
       if (renderToken !== S._playerGuideRenderToken || !pg.classList.contains('open')) return;
-      guideList.forEach((ch) => {
-        const row = main.querySelector(`[data-guide-channel="${ch._channel}"]`);
-        if (row) fillPlayerGuideRow(row, ch, false);
-      });
-    });
+      Object.assign(progsByIdx, nextProgs || {});
+      refill();
+    }).catch(refill);
+  };
+  const seen = new Set();
+  const renderChannels = (chans) => {
+    const fresh = (chans || []).filter((ch) => ch && !seen.has(String(ch._channel)));
+    if (!fresh.length) return 0;
+    fresh.forEach((ch) => { seen.add(String(ch._channel)); buildPlayerGuideRow(ch); });
+    hydratePlayerGuide(fresh);
+    return fresh.length;
+  };
+  if (S._pgIO) { try { S._pgIO.disconnect(); } catch {} S._pgIO = null; } // drop the prior render's observer
+  S._pgExtend = null;
+  let consumed = Math.min(LIVE_GUIDE_BATCH, selectedList.length);
+  const firstSlice = selectedList.slice(0, consumed);
+  // Pin the channel you're watching to the top ONLY when it falls outside the first batch (otherwise
+  // it renders in its natural position) — same rule the old single-slice render used via unshift.
+  const curInFirst = currentCh && firstSlice.some((x) => String(x._channel) === String(currentCh._channel));
+  if (currentCh && !curInFirst && (currentCh.genre || 'Other') === S.pgLiveCat) renderChannels([currentCh]);
+  renderChannels(firstSlice);
+  const extendPlayerGuide = () => {
+    if (consumed >= selectedList.length) return 0;
+    const next = selectedList.slice(consumed, consumed + LIVE_GUIDE_BATCH);
+    consumed += next.length;
+    const added = renderChannels(next);
+    if (consumed >= selectedList.length) {
+      S._pgExtend = null;
+      if (S._pgIO) { try { S._pgIO.disconnect(); } catch {} S._pgIO = null; }
+      if (pgSentinel) { pgSentinel.remove(); pgSentinel = null; }
+    }
+    return added;
+  };
+  if (consumed < selectedList.length) {
+    pgSentinel = document.createElement('div');
+    pgSentinel.className = 'pgGuideSentinel';
+    pgSentinel.style.cssText = 'height:8px;flex:none';
+    main.appendChild(pgSentinel);
+    let busy = false;
+    S._pgIO = new IntersectionObserver((en) => {
+      if (busy || !en.some((x) => x.isIntersecting)) return;
+      busy = true; extendPlayerGuide(); busy = false;
+    }, { root: main, rootMargin: '260px 0px' });
+    S._pgIO.observe(pgSentinel);
+    S._pgExtend = extendPlayerGuide;
   }
   shell.appendChild(catPane);
   shell.appendChild(main);
@@ -18585,6 +18668,7 @@ function switchView(v, push = true, opts = {}) {
   // need the room, and the backdrop just fought the readability of a long grid.
   $('browse').classList.toggle('rowsWin', ['movies', 'tv', 'watchlist', 'library'].includes(v));
   if (!VIRTUAL_GRID_VIEWS.has(v)) resetGridVirtual($('grid'));
+  if (!(v === 'library' && S.currentLib && S.currentLib.path)) clearLocalAdminBar();
   $('settings').classList.toggle('open', v === 'settings');
   $('prefs').classList.toggle('open', v === 'prefs');
   $('music').classList.toggle('open', v === 'music');
@@ -18974,7 +19058,10 @@ function focusFirstLiveContent() {
   return true;
 }
 function browseFilterEls() {
-  return [$('genreSel'), $('sortSel')].filter((el) => el && el.offsetParent !== null && !el.disabled);
+  // genre + sort selects, then any relocated local-library admin buttons (Scan / Refresh metadata),
+  // so the whole filter-bar head is one flat left↔right D-pad row.
+  const admin = [...$('browse').querySelectorAll('.filterBar button.libAdminCtl')];
+  return [$('genreSel'), $('sortSel'), ...admin].filter((el) => el && el.offsetParent !== null && !el.disabled);
 }
 function focusBrowseFilter(i) {
   const els = browseFilterEls(); if (!els.length) return;
@@ -19038,8 +19125,8 @@ function openFilterMenu(kind) {
 }
 function dpadBrowseFilter(k) {
   const els = browseFilterEls(); if (!els.length) return;
-  const focused = document.querySelector('.filterBar select.focus');
-  const ae = browseFilterEls().includes(document.activeElement) ? document.activeElement : focused;
+  const focused = document.querySelector('.filterBar .focus'); // select OR relocated admin button
+  const ae = els.includes(document.activeElement) ? document.activeElement : focused;
   let i = Math.max(0, els.indexOf(ae));
   if (k === 'ArrowLeft') {
     if (i <= 0) { if (ae && ae.blur) ae.blur(); return enterRail(); }
@@ -19050,7 +19137,8 @@ function dpadBrowseFilter(k) {
   if (k === 'ArrowUp' || k === 'Escape' || k === 'Backspace') { if (ae && ae.blur) ae.blur(); return enterRail(); }
   if (k === 'Enter') {
     const el = els[i]; if (!el) return;
-    if (document.body.classList.contains('tv')) return openFilterMenu(el === $('sortSel') ? 'sort' : 'genre');
+    // Selects open the TV filter sheet; relocated admin buttons just fire their action.
+    if (el.tagName === 'SELECT' && document.body.classList.contains('tv')) return openFilterMenu(el === $('sortSel') ? 'sort' : 'genre');
     el.focus({ preventScroll: true });
     el.click();
   }
@@ -19802,6 +19890,14 @@ document.addEventListener('keydown', (e) => {
           i = rows.findIndex((r) => r._ch === S._pgFocusChannel);
         }
         if (i < 0) i = 0;
+        // Progressive load: stepping DOWN off the last rendered channel pulls the next batch in
+        // (the guide renders LIVE_GUIDE_BATCH at a time) and lands on the freshly-added row, so big
+        // categories are fully walkable instead of wrapping at 24. Only once everything is on screen
+        // does it wrap to the top — like the left menu.
+        if (delta > 0 && i >= rows.length - 1 && typeof S._pgExtend === 'function' && S._pgExtend()) {
+          const grown = [...document.querySelectorAll('.pgGuideMain .pgRow[data-pg]')];
+          if (grown.length > rows.length && grown[i + 1]) return moveTo(grown[i + 1]);
+        }
         // Wrap around: stepping down past the last channel lands on the first (and vice-versa),
         // like the left menu. Up-from-the-first-row is handled separately (routes to the header),
         // so in practice this gives the requested "end of the list → back to the top".
@@ -19822,7 +19918,13 @@ document.addEventListener('keydown', (e) => {
         multi.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'auto' });
         return true;
       };
-      if (k === 'Escape' || k === 'Backspace') return closePlayerGuide();
+      if (k === 'Escape' || k === 'Backspace') {
+        // Owner nav rule: Back steps channel → category (don't slam the whole guide shut from a
+        // channel row); a second Back from the category list closes the guide. Matches the browser
+        // Live TV guide's Back behaviour.
+        if (rows.includes(active) && cats.length) return focusPlayerGuideCategory(catIndex());
+        return closePlayerGuide();
+      }
       if (active === multi) {
         if (k === 'Enter' && !e.repeat) return multi.click();
         if (k === 'ArrowDown') return moveTo(rows.find((r) => r.classList.contains('cur')) || rows[0] || cats[0] || back);
