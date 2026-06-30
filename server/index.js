@@ -46,7 +46,7 @@ const MAX_PROVIDER_CONNECTIONS = 150;
 const ACTIVITY_TTL_MS = 45000;
 const ACTIVITY_HISTORY_DAYS = 3;
 const ACTIVITY_HISTORY_RETENTION_MS = ACTIVITY_HISTORY_DAYS * 24 * 60 * 60 * 1000;
-const ACTIVITY_HISTORY_MAX_ROWS = 10;
+const ACTIVITY_HISTORY_MAX_ROWS = 60; // a real ~3-day window, not just the last handful
 const PRESENCE_TTL_MS = 70000; // ~3 missed 25s presence heartbeats before a device is dropped as offline
 
 function effectiveOpenSubsKey(s = settings.get()) {
@@ -3150,6 +3150,25 @@ function activityClientVersion(b = {}, req = {}) {
   if (app) return `${app[1] === 'TriboonTV' ? 'Android TV' : 'Android app'} ${app[2]}`;
   return `Web ${APP_VERSION}`;
 }
+// Friendly hardware label ("NVIDIA SHIELD", "Chrome", "iPhone"). The client computes the precise
+// name (it can read Android Build.MODEL via the native bridge) and sends it as `deviceName`; this is
+// the server-side fallback for older/non-JS clients, derived from the user-agent.
+function activityDeviceName(b = {}, req = {}) {
+  const direct = scrubActivityText(b.deviceName || '', 60);
+  if (direct) return direct;
+  const ua = String((req.headers && req.headers['user-agent']) || '');
+  const app = /\b(TriboonTV|TriboonAndroid)\//i.exec(ua);
+  if (app) return app[1] === 'TriboonTV' ? 'Android TV' : 'Android phone';
+  if (/\bEdg\//.test(ua)) return 'Edge';
+  if (/\bOPR\/|\bOpera/.test(ua)) return 'Opera';
+  if (/\bSamsungBrowser\//.test(ua)) return 'Samsung Internet';
+  if (/\bFirefox\//.test(ua)) return 'Firefox';
+  if (/\bEdgiOS\//.test(ua)) return 'Edge';
+  if (/iPhone|iPad|iPod/.test(ua) && /Safari/.test(ua)) return ua.includes('iPad') ? 'iPad' : 'iPhone';
+  if (/\bChrome\//.test(ua)) return 'Chrome';
+  if (/\bSafari\//.test(ua) && /Apple/.test(ua)) return 'Safari';
+  return 'Web';
+}
 function normalizeActivityRow(ctx, b = {}, id, existing = {}) {
   const duration = Math.max(0, Number(b.duration || 0) || 0);
   const position = Math.max(0, Number(b.position || 0) || 0);
@@ -3172,6 +3191,7 @@ function normalizeActivityRow(ctx, b = {}, id, existing = {}) {
     streamLabel: live ? 'Live' : scrubActivityText(b.streamLabel || '', 60),
     clientVersion: activityClientVersion(b, ctx.req),
     device: scrubActivityText(b.device || ctx.req.headers['user-agent'] || '', 90),
+    deviceName: activityDeviceName(b, ctx.req),
     source: live ? '' : scrubActivityText(b.source || '', 220),
     fileName: live ? '' : scrubActivityText(b.fileName || '', 220),
     size: Math.max(0, Number(b.size || 0) || 0),
@@ -3211,6 +3231,7 @@ function recordActivityHistory(row) {
       streamLabel: row.streamLabel,
       clientVersion: row.clientVersion,
       device: row.device,
+      deviceName: row.deviceName,
       position: row.position,
       duration: row.duration,
       percent: row.percent,
@@ -3246,6 +3267,25 @@ function activeOnlineRows() {
     if (!row || now - (row.lastSeen || 0) > PRESENCE_TTL_MS) presenceSessions.delete(key);
   }
   return [...presenceSessions.values()].sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0));
+}
+// Live usenet connection usage per provider, for the admin Activity screen. Reads the already-built
+// shared pool — never forces one open (so it stays null until something has actually streamed) and
+// never exposes credentials. Labels duplicate hosts so two accounts on one provider stay distinct.
+function activityConnectionStats() {
+  if (!pool || typeof pool.stats !== 'function') return null;
+  let stats;
+  try { stats = pool.stats(); } catch { return null; }
+  if (!stats || !Array.isArray(stats.providers) || !stats.providers.length) return null;
+  const seen = new Map();
+  const providers = stats.providers.map((p, i) => {
+    const host = scrubActivityText(p.host || '', 80) || `Provider ${i + 1}`;
+    const n = (seen.get(host) || 0) + 1; seen.set(host, n);
+    return {
+      label: n > 1 ? `${host} (${n})` : host,
+      inUse: p.inUse, open: p.open, connecting: p.connecting, size: p.size, queued: p.queued, down: !!p.down,
+    };
+  });
+  return { providers, inUse: stats.inUse, open: stats.open, size: stats.size, queued: stats.queued };
 }
 // Bound a per-mount result cache to its newest N entries (Maps keep insertion order, so the first
 // key is the oldest). Mirrors the _subCache cap so a marathon session that toggles many subtitle
@@ -5324,6 +5364,7 @@ Object.assign(H, {
       activeCount: sessions.length,
       onlineCount: online.length,
       retentionDays: ACTIVITY_HISTORY_DAYS,
+      connections: activityConnectionStats(),
     });
   },
 
@@ -5347,6 +5388,7 @@ Object.assign(H, {
       view: scrubActivityText(b.view || '', 40),
       clientVersion: activityClientVersion(b, ctx.req),
       device: scrubActivityText(b.device || ctx.req.headers['user-agent'] || '', 90),
+      deviceName: activityDeviceName(b, ctx.req),
       lastSeen: Date.now(),
     });
     send(ctx.res, 200, { ok: true });

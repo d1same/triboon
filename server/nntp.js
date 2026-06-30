@@ -358,6 +358,19 @@ class ProviderPool {
     const backoffMs = this.opts.reconnectBackoffMs || 60000;
     return this.conns.length === 0 && !!this.lastConnectFailAt && Date.now() - this.lastConnectFailAt < backoffMs;
   }
+  // Instantaneous connection snapshot for the admin Activity screen. Never includes credentials —
+  // only the host and live counts. inUse = connections actively running a command right now.
+  stats() {
+    return {
+      host: String(this.opts.host || ''),
+      inUse: this.busy.size,
+      open: this.conns.length,
+      connecting: this.connecting,
+      size: this.size,
+      queued: this.queue.length,
+      down: this.down(),
+    };
+  }
   close() { this.closed = true; for (const c of this.conns) c.close(); this.conns = []; }
 }
 
@@ -425,6 +438,17 @@ class NntpPool {
       try { return await p.run(fn, priority, opts); } catch (e) { if (isAbortError(e)) throw e; lastErr = e; }
     }
     throw lastErr || new Error('no NNTP providers available');
+  }
+  // Per-provider + aggregate connection usage for the admin Activity screen.
+  stats() {
+    const providers = this.providers.map((p) => p.stats());
+    return {
+      providers,
+      inUse: providers.reduce((n, p) => n + p.inUse, 0),
+      open: providers.reduce((n, p) => n + p.open, 0),
+      size: providers.reduce((n, p) => n + p.size, 0),
+      queued: providers.reduce((n, p) => n + p.queued, 0),
+    };
   }
   close() { for (const p of this.providers) p.close(); }
 }

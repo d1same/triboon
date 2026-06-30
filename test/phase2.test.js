@@ -1969,6 +1969,31 @@ test('nntp: ProviderPool never opens more than its configured size, even under h
   } finally { pool.close(); await mock.close(); }
 });
 
+test('nntp: pool stats report per-provider connection usage (host + in-use/open/size) without credentials', async () => {
+  const payload = seededPayload(40 * 1024, 0x42);
+  const r = nzbFor(writeRar4Store([{ name: 'stat.mkv', data: payload }], { base: 'stat' }), 30000, 'stat');
+  const mock = createMockNntp({ articles: r.articles });
+  const port = await mock.listen();
+  const SIZE = 4;
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false, user: 'secret-user', pass: 'secret-pass' }, SIZE);
+  const msgIds = [...r.articles.keys()];
+  try {
+    const idle = pool.stats();
+    assert.strictEqual(idle.providers.length, 1, 'one provider in the pool');
+    assert.strictEqual(idle.providers[0].host, '127.0.0.1', 'stats expose the host label');
+    assert.strictEqual(idle.providers[0].size, SIZE, 'stats expose the configured cap');
+    assert.strictEqual(idle.inUse, 0, 'nothing in use before any fetch');
+    assert.ok(!JSON.stringify(idle).includes('secret'), 'connection stats never leak credentials');
+
+    let peakInUse = 0;
+    const sampler = setInterval(() => { peakInUse = Math.max(peakInUse, pool.stats().inUse); }, 2);
+    await Promise.all(Array.from({ length: 12 }, (_, i) => pool.body(msgIds[i % msgIds.length]).catch(() => null)));
+    clearInterval(sampler);
+    assert.ok(peakInUse > 0 && peakInUse <= SIZE, `in-use connections (${peakInUse}) tracked and bounded by the cap`);
+    assert.strictEqual(pool.stats().inUse, 0, 'in-use returns to zero once work drains');
+  } finally { pool.close(); await mock.close(); }
+});
+
 test('nntp: combined stat throws NO_PROVIDER when unreachable (so a down link is not mislabeled "missing")', async () => {
   // 127.0.0.1:1 refuses instantly — stands in for "no provider reachable" (VPN/port/firewall).
   const pool = new NntpPool({ host: '127.0.0.1', port: 1, tls: false }, 2);

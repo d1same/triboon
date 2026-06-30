@@ -435,6 +435,10 @@ body[data-light="1"] #player #pGuide{--fg:18,22,28}
 #browse.open{display:flex}
 .browseHead{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:18px;flex-wrap:wrap}
 .browseHead h1{font:800 34px "Sora"}
+/* Page-level titles are hidden everywhere: the rail/menu already shows which page you're on,
+   so the big "Discover" / "Movies" / "TV Shows" / "Preferences" / "Server settings" heading is
+   redundant chrome. Elements stay in the DOM (JS still sets browseTitle.textContent etc.). */
+#discoverTitle,#browseTitle,#prefs>h1,#settings>h1{display:none}
 .filterBar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .filterBar select{font:600 13px "Sora"} /* inherits the global dark select style */
 #filterMenu{position:fixed;inset:0;z-index:49;display:none;place-items:center;background:rgba(5,3,9,.72);backdrop-filter:blur(6px)}
@@ -990,39 +994,67 @@ body.tv #vlcCopy{display:none}
 .syncDot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--success);margin-right:8px;box-shadow:0 0 16px rgba(110,231,160,.45)}
 .syncSource.warn .syncDot{background:var(--amber);box-shadow:0 0 16px rgba(255,198,92,.4)}
 .syncSource.bad .syncDot{background:var(--danger);box-shadow:0 0 16px rgba(255,141,141,.4)}
-.activityPanel{display:grid;gap:10px}
-.activityTop{display:flex;align-items:center;justify-content:space-between;gap:12px}
-.activityTop h2{margin:0}
-.activitySummary{display:flex;flex-wrap:wrap;gap:8px;align-items:center;min-height:32px}
-.activityKpi{display:inline-flex;align-items:center;gap:8px;min-height:30px;border:1px solid var(--line);border-radius:8px;background:var(--field);padding:0 10px}
-.activityKpi span{display:block;color:var(--muted);font:800 9px "JetBrains Mono";letter-spacing:.08em;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.activityKpi b{display:block;color:var(--text);font:800 13px "Sora";white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.activitySectionHead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:4px;color:var(--text);font:800 12px "Sora"}
+.activityPanel{display:grid;gap:14px}
+.activityTop{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.activityTitle{display:grid;gap:3px;min-width:0}
+.activityTitle h2{margin:0}
+.activitySummary{margin:0;color:var(--muted);font:600 12.5px "Albert Sans";white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.activitySummary b{color:var(--text);font-weight:800}
+.activitySummary .sep{opacity:.4;margin:0 7px}
+.activitySectionHead{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-top:2px;
+  color:var(--muted);font:800 10.5px "JetBrains Mono";letter-spacing:.1em;text-transform:uppercase}
+.activitySectionHead span{color:var(--text);font:800 13px "Sora";letter-spacing:0;text-transform:none}
 .activitySectionHead small{color:var(--muted);font:700 10px "JetBrains Mono";white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.activityRows{display:grid;gap:6px}
-.activityRow{display:grid;grid-template-columns:minmax(120px,.75fr) minmax(0,1.7fr) minmax(120px,.75fr) minmax(96px,.55fr);gap:10px;align-items:center;
-  min-height:50px;border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--field)}
-.activityRow.isActive{background:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.025))}
-.activityRow b{font:800 13px "Sora";display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.activityRow small,.activityRow .arMeta{display:block;color:var(--muted);font:600 10.5px "JetBrains Mono";overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.activityWho{display:grid;grid-template-columns:10px minmax(0,1fr);gap:9px;align-items:center;min-width:0}
-.activityDot{width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,.24);box-shadow:none}
-.activityRow.isActive .activityDot{background:var(--success);box-shadow:0 0 18px rgba(134,205,163,.42)}
+.activityRows{display:grid;gap:7px}
+.activityRow{display:grid;grid-template-columns:38px minmax(0,2fr) minmax(120px,1fr) minmax(96px,.62fr);gap:13px;align-items:center;
+  min-height:58px;border:1px solid var(--line);border-radius:12px;padding:10px 14px;background:var(--field)}
+.activityRow.isActive{border-color:rgba(124,230,160,.22);background:var(--soft)}
+.activityRow b{font:800 14px "Sora";display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.activityRow small{display:block;color:var(--muted);font:600 11px "Albert Sans";overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* avatar + presence dot */
+.activityAvatar{position:relative;width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  background:var(--soft);border:1px solid var(--line);color:var(--text);font:800 15px "Sora";text-transform:uppercase}
+.activityRow.isActive .activityAvatar{background:linear-gradient(135deg,var(--magenta),var(--coral));border-color:transparent;color:#fff}
+.activityAvatar .activityDot{position:absolute;right:-1px;bottom:-1px;width:11px;height:11px;border-radius:50%;
+  background:rgba(155,143,173,.55);border:2px solid var(--panel)}
+.activityRow.isActive .activityAvatar .activityDot{background:var(--success)}
 .activityWhat,.activityClient{min-width:0}
-.activityClient span{display:block;color:var(--muted);font:800 8.5px "JetBrains Mono";letter-spacing:.08em;text-transform:uppercase;margin-bottom:2px}
-.activityStream{display:inline-flex;align-items:center;min-height:20px;max-width:100%;margin-top:4px;padding:0 8px;border-radius:999px;border:1px solid rgba(255,255,255,.14);
-  background:rgba(255,255,255,.06);color:var(--muted);font:800 10px "Sora";white-space:nowrap}
+.activityWhat .activityTitleLine{display:flex;align-items:center;gap:7px;min-width:0}
+.activityWhat .activityTitleLine b{flex:0 1 auto}
+.activityClient{display:flex;align-items:center;gap:9px;min-width:0}
+.activityClient .devIcon{flex:none;width:18px;height:18px;color:var(--muted);opacity:.85}
+.activityClient .devIcon svg{display:block;width:100%;height:100%}
+.activityClient .devText{min-width:0}
+.activityStream{display:inline-flex;align-items:center;flex:none;height:19px;padding:0 8px;border-radius:6px;border:1px solid rgba(255,255,255,.14);
+  background:rgba(255,255,255,.06);color:var(--muted);font:800 9.5px "JetBrains Mono";letter-spacing:.04em;text-transform:uppercase;white-space:nowrap}
 .activityStream.original{color:#ffe2a3;background:rgba(255,198,92,.12);border-color:rgba(255,198,92,.28)}
 .activityStream.remux{color:#c5ffe0;background:rgba(94,233,160,.11);border-color:rgba(94,233,160,.24)}
 .activityStream.transcode{color:#ffb4b4;background:rgba(255,120,120,.11);border-color:rgba(255,120,120,.25)}
 .activityStream.live{color:#b9ddff;background:rgba(110,178,255,.12);border-color:rgba(110,178,255,.25)}
-.activityBar{height:3px;border-radius:999px;background:rgba(var(--fg),.16);overflow:hidden;margin-top:5px}
+.activityBar{height:4px;border-radius:999px;background:rgba(var(--fg),.14);overflow:hidden;margin-top:7px}
 .activityBar span{display:block;height:100%;background:var(--grad);width:var(--pct,0%)}
-.activityRow.isHistory .activityDot{background:rgba(255,255,255,.16)}
-.activityRow.isActive .activityDot.idle{background:rgba(255,255,255,.34);box-shadow:none}
-.activityRow.isHistory .activityWhat small{display:none}
-.activityRow.isHistory .activityClient span{display:none}
-.activityRow.isHistory .activityStream,.activityRow.isHistory .activityBar{display:none}
+.arMeta{text-align:right;min-width:0}
+.arMeta b{font:800 12px "JetBrains Mono";color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.arMeta small{display:block;color:var(--muted);font:600 10.5px "JetBrains Mono";overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px}
+.activityRow.isHistory .activityBar{display:none}
+/* usenet connection gauges */
+.activityConn{display:grid;gap:7px}
+.connRow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 13px;align-items:center;
+  border:1px solid var(--line);border-radius:12px;padding:10px 14px;background:var(--field)}
+.connRow b{font:800 13px "Sora";color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.connRow .connNums{font:800 12px "JetBrains Mono";color:var(--text);white-space:nowrap}
+.connRow .connNums small{color:var(--muted);font-weight:600}
+.connBar{grid-column:1/-1;height:6px;border-radius:999px;background:rgba(var(--fg),.12);overflow:hidden;display:flex}
+.connBar i{display:block;height:100%}
+.connBar .inUse{background:var(--grad)}
+.connBar .open{background:rgba(var(--fg),.22)}
+.connRow.down b{color:var(--danger)}
+.connRow .connQ{color:var(--amber);font:700 10.5px "JetBrains Mono";white-space:nowrap}
+.connLegend{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font:600 10.5px "JetBrains Mono";padding:2px 2px 0}
+.connLegend span{display:inline-flex;align-items:center;gap:6px}
+.connLegend i{width:10px;height:10px;border-radius:3px;display:inline-block}
+.connLegend i.inUse{background:var(--grad)}
+.connLegend i.open{background:rgba(var(--fg),.22)}
 #playerStats{display:none;position:absolute;right:44px;bottom:176px;width:min(440px,calc(100vw - 88px));z-index:7;
   background:linear-gradient(180deg,rgba(24,26,29,.96),rgba(13,15,18,.96));border:1px solid rgba(255,255,255,.07);border-radius:10px;padding:14px;
   box-shadow:0 18px 54px rgba(0,0,0,.44);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
@@ -1034,8 +1066,9 @@ body.tv #vlcCopy{display:none}
 #playerStats .statGrid span:nth-child(even){color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media (max-width:1100px){
   .syncSource{grid-template-columns:1fr}
-  .activityRow{grid-template-columns:minmax(150px,1fr) minmax(0,1.4fr);align-items:start}
-  .activityMeta{grid-column:2}
+  .activityRow{grid-template-columns:38px minmax(0,1fr) auto;align-items:start;row-gap:8px}
+  .activityClient{grid-column:2;grid-row:2}
+  .arMeta{grid-column:3;grid-row:1;align-self:start}
 }
 .panel .btn{padding:11px 18px;font-size:14px}
 @media (max-width:900px){
@@ -1043,8 +1076,11 @@ body.tv #vlcCopy{display:none}
   #setTabs,#prefTabs{position:static;flex-direction:row;overflow-x:auto;scroll-padding:0 16px;margin-bottom:20px}
   #setTabs button,#prefTabs button{width:auto;min-width:150px;grid-template-columns:24px minmax(0,1fr)}
   .activityTop{align-items:flex-start;flex-direction:column}
-  .activityRow{grid-template-columns:1fr;gap:9px}
-  .activityMeta{grid-column:auto}
+  .activityRow{grid-template-columns:38px minmax(0,1fr);gap:8px 13px}
+  .activityClient{grid-column:2;grid-row:2}
+  .arMeta{grid-column:2;grid-row:3;text-align:left}
+  .arMeta b,.arMeta small{display:inline-block}
+  .arMeta small{margin-left:8px}
   #settings>.setGrid,#prefs>.setGrid{grid-column:auto;grid-row:auto}
 }
 @media (max-width:700px){
@@ -3200,15 +3236,14 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
   <div class="setGrid" data-stab="activity" hidden>
   <div class="panel activityPanel">
     <div class="activityTop">
-      <h2>Activity</h2>
+      <div class="activityTitle"><h2>Activity</h2><p id="activitySummary" class="activitySummary"></p></div>
       <button class="btn primary focusable" id="activityRefresh">Refresh</button>
     </div>
-    <div id="activitySummary" class="activitySummary"></div>
-    <div class="activitySectionHead"><span>Online now</span><small id="activityOnlineStatus"></small></div>
-    <div id="activityOnline" class="activityRows"><div class="hint">No one is connected right now.</div></div>
-    <div class="activitySectionHead"><span>Now watching</span><small id="activityLiveStatus"></small></div>
+    <div class="activitySectionHead" id="activityConnHead" hidden><span>Usenet connections</span><small id="activityConnStatus"></small></div>
+    <div id="activityConn" class="activityConn" hidden></div>
+    <div class="activitySectionHead"><span>Watching now</span><small id="activityLiveStatus"></small></div>
     <div id="activityList" class="activityRows"><div class="hint">No one is watching right now.</div></div>
-    <div class="activitySectionHead"><span>Previous 10</span><small id="activityHistoryStatus"></small></div>
+    <div class="activitySectionHead"><span>Last 3 days</span><small id="activityHistoryStatus"></small></div>
     <div id="activityHistory" class="activityRows"><div class="hint">No recent playback.</div></div>
     <div class="hint" id="activityStatus"></div>
   </div>
@@ -6060,6 +6095,7 @@ async function openDetail(it, push = true) {
   $('detail').style.visibility = ''; // openPerson hides the detail page UNDER it — coming
   // from a person credit, the new detail rendered invisible and the D-pad worked a ghost page
   S.view = 'detail'; S.detailItem = it; S.detailData = null; S.detailSeason = null; S.detailSeasons = null;
+  S.detailColMem = {}; // fresh page → every row's per-row column memory starts at the beginning
   S.detailEpisodeAutoFocusDone = false;
   $('detail').classList.add('open');
   $('home').classList.remove('show'); $('searchBar').classList.remove('show');
@@ -6814,7 +6850,7 @@ async function openPerson(id) {
   $('detail').style.visibility = 'hidden'; // both are translucent — the detail page would bleed through
   clearBackdrop();
   // The D-pad enters person as a fresh grid — stale browse indexes teleported the focus.
-  S.zone = 'grid'; S.gridIdx = 0; S.gridTopRow = 0; S.gridRoot = $('personGrid'); S.gridItems = [];
+  S.zone = 'grid'; S.gridIdx = 0; S.gridTopRow = 0; S.gridRoot = $('personGrid'); S.gridItems = []; S.gridColMem = {};
   $('pName').textContent = ''; $('pKnown').textContent = ''; $('pBio').textContent = '';
   $('pPhoto').style.backgroundImage = ''; $('personGrid').innerHTML = '<div class="sub" style="color:var(--muted)">loading…</div>';
   try {
@@ -10093,6 +10129,41 @@ function clientVersionLabel() {
   } catch {}
   return (S.serverInfo && S.serverInfo.version) ? `Web ${S.serverInfo.version}` : 'Web app';
 }
+function browserNameFromUA(ua) {
+  ua = ua || '';
+  if (/\bEdg(?:A|iOS)?\//.test(ua)) return 'Edge';
+  if (/\bOPR\/|\bOpera/.test(ua)) return 'Opera';
+  if (/\bSamsungBrowser\//.test(ua)) return 'Samsung Internet';
+  if (/\bFirefox\//.test(ua)) return 'Firefox';
+  if (/iPhone|iPad|iPod/.test(ua) && /Safari/.test(ua) && !/CriOS|FxiOS/.test(ua)) return /iPad/.test(ua) ? 'iPad' : 'iPhone';
+  if (/\bCriOS\//.test(ua)) return 'Chrome';
+  if (/\bChrome\//.test(ua)) return 'Chrome';
+  if (/\bSafari\//.test(ua) && /Apple/.test(ua)) return 'Safari';
+  return 'Web';
+}
+// Friendly hardware name for the admin Activity screen. Native Android exposes Build.MODEL via the
+// caps bridge, so we can show "NVIDIA SHIELD" / "onn." instead of just "Android TV"; browsers fall
+// back to the engine name. Sent to the server as `deviceName`.
+function deviceFriendlyName() {
+  const caps = nativePlaybackCaps();
+  if (caps && caps.native) {
+    const mk = String(caps.manufacturer || caps.brand || '').trim();
+    const model = String(caps.model || caps.device || '').trim();
+    const lc = (mk + ' ' + model).toLowerCase();
+    if (lc.includes('shield')) return 'NVIDIA SHIELD';
+    if (/\baft|fire\s?tv|kindle/.test(lc) || (lc.includes('amazon') && model)) return 'Amazon Fire TV';
+    if (lc.includes('chromecast')) return 'Chromecast';
+    if (lc.includes('google') && lc.includes('tv')) return 'Google TV';
+    if (lc.includes('onn')) return model || 'onn.';
+    if (lc.includes('bravia')) return 'Sony BRAVIA';
+    if (mk && model) {
+      if (model.toLowerCase().includes(mk.toLowerCase())) return model;
+      return `${mk} ${model}`;
+    }
+    return model || mk || 'Android';
+  }
+  return browserNameFromUA(navigator.userAgent);
+}
 function activityPayload(state = 'watching') {
   const p = S.playing; if (!p || !p.item) return null;
   const meta = episodePlayerMeta(p.item);
@@ -10115,6 +10186,7 @@ function activityPayload(state = 'watching') {
     position: state === 'stopped' ? 0 : Math.floor(currentTime() || 0),
     duration: Math.floor(totalDuration() || p.duration || 0),
     device: navigator.userAgent || '',
+    deviceName: deviceFriendlyName(),
   };
 }
 function sendActivity(state = 'watching', opts = {}) {
@@ -10163,6 +10235,7 @@ function presencePayload(state) {
     profile: S.profile ? (S.profile.name || S.profile.id) : '',
     clientVersion: clientVersionLabel(),
     device: navigator.userAgent || '',
+    deviceName: deviceFriendlyName(),
   };
 }
 function sendPresence(state, opts = {}) {
@@ -12409,7 +12482,7 @@ function renderGrid(items, root = $('grid')) {
   if (!S._keepLocalGridPaging && root === $('grid')) clearLocalGridPaging();
   S.gridRoot = root; clearGridDom(root); root.style.setProperty('--tf', '0px');
   S.gridItems = items || [];
-  S.gridIdx = 0; S.gridTopRow = 0; resetGridVirtual(root);
+  S.gridIdx = 0; S.gridTopRow = 0; S.gridColMem = {}; resetGridVirtual(root);
   if (!S.gridItems.length) return;
   if (shouldVirtualizeGrid(root)) adaptRowWindows();
   if (shouldVirtualizeGrid(root)) {
@@ -17161,7 +17234,7 @@ function clearSearchResults(opts = {}) {
   searchTimer = null;
   S.gridRoot = grid;
   S.gridItems = [];
-  S.gridIdx = 0;
+  S.gridIdx = 0; S.gridColMem = {};
   S.gridTopRow = 0;
   resetGridVirtual(grid);
   grid.innerHTML = '';
@@ -17301,7 +17374,7 @@ setupMusicVoiceSearch();
 function renderSearchSections(sections) {
   const grid = $('grid');
   S.gridRoot = grid; grid.innerHTML = ''; grid.style.setProperty('--tf', '0px');
-  S.gridItems = []; S.gridIdx = 0; S.gridTopRow = 0;
+  S.gridItems = []; S.gridIdx = 0; S.gridTopRow = 0; S.gridColMem = {};
   for (const { name, items } of sections) {
     if (!items.length) continue;
     const h = document.createElement('div');
@@ -17582,7 +17655,8 @@ function activityTitle(s = {}) {
 }
 function activityDetail(s = {}) {
   if (activityStreamKind(s) === 'live' || s.type === 'live') return 'Live stream';
-  return [s.subline, s.fileName || s.source || s.mode || activityStreamLabel(s) || ''].filter(Boolean).join(' - ');
+  // The stream treatment shows as its own badge, so don't duplicate it here.
+  return [s.subline, s.fileName || s.source || s.mode || ''].filter(Boolean).join(' - ');
 }
 function activityClient(s = {}) {
   if (s.clientVersion) return s.clientVersion;
@@ -17596,43 +17670,83 @@ function activityTimeLabel(s = {}, active = false) {
   const ts = s.updatedAt || s.startedAt || Date.now();
   return new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
+// Friendly hardware label for a row. Prefers the deviceName the client now reports (Android can read
+// Build.MODEL, so "NVIDIA SHIELD"); falls back to parsing the stored client string for older rows.
+function activityDeviceLabel(s = {}) {
+  if (s.deviceName) return s.deviceName;
+  const cv = String(s.clientVersion || activityClient(s) || '');
+  return cv.replace(/\s*\(\d+\)\s*$/, '').replace(/\s+\d+(?:\.\d+)+$/, '').trim() || 'Device';
+}
+const DEVICE_ICON = {
+  tv: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4.5" width="19" height="13" rx="1.5"/><path d="M8 21h8M12 17.5V21"/></svg>',
+  mobile: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6.5" y="2.5" width="11" height="19" rx="2"/><path d="M10.5 18.5h3"/></svg>',
+  desktop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="12" rx="1.5"/><path d="M8.5 20h7M12 16v4"/></svg>',
+};
+function activityDeviceKind(s = {}) {
+  const v = `${s.deviceName || ''} ${s.clientVersion || ''} ${s.device || ''}`.toLowerCase();
+  if (/android tv|shield|fire\s?tv|chromecast|google tv|bravia|onn|smart ?tv/.test(v)) return 'tv';
+  if (/android (app|phone)|iphone|ipad|mobile|\bphone\b/.test(v)) return 'mobile';
+  return 'desktop';
+}
+function activityDeviceCell(s = {}) {
+  const kind = activityDeviceKind(s);
+  const label = activityDeviceLabel(s);
+  const sub = String(s.clientVersion || '');
+  const subLine = (sub && sub !== label) ? `<small>${esc(sub)}</small>` : '';
+  return `<div class="activityClient"><span class="devIcon">${DEVICE_ICON[kind]}</span>
+      <div class="devText"><b>${esc(label)}</b>${subLine}</div></div>`;
+}
 function renderActivitySummary(sessions = [], history = [], online = []) {
   const box = $('activitySummary'); if (!box) return;
   const live = sessions.filter((s) => activityStreamKind(s) === 'live' || s.type === 'live').length;
-  const apps = new Set([...online, ...sessions, ...history].map(activityClient).filter(Boolean));
-  const rows = [
-    ['Online now', online.length],
-    ['Watching', sessions.length],
-    ['Live TV', live],
-    ['Apps seen', apps.size || 0],
-  ];
-  box.innerHTML = rows.map(([k, v]) => `<div class="activityKpi"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('');
-}
-function onlineRowHtml(o = {}) {
-  const watching = o.state === 'watching';
-  const view = o.view ? o.view[0].toUpperCase() + o.view.slice(1) : '';
-  const what = watching ? `Watching${o.title ? ' · ' + o.title : ''}` : `Browsing${view ? ' · ' + view : ''}`;
-  return `<div class="activityRow isActive">
-    <div class="activityWho"><span class="activityDot${watching ? '' : ' idle'}"></span><div><b>${esc(o.userName || 'User')}</b><small>${esc(o.profile || '')}</small></div></div>
-    <div class="activityWhat"><b>${esc(what)}</b></div>
-    <div class="activityClient"><span>Client</span><b>${esc(activityClient(o))}</b></div>
-    <div class="arMeta activityMeta">${esc(watching ? 'Watching' : 'Online')}<br>${esc(activityTimeLabel({ updatedAt: o.lastSeen }, true))}</div>
-  </div>`;
+  const parts = [`<b>${sessions.length}</b> watching now`];
+  if (live) parts.push(`<b>${live}</b> on Live TV`);
+  parts.push(`<b>${online.length}</b> online`);
+  box.innerHTML = parts.join('<span class="sep">·</span>');
 }
 function activityRowHtml(s = {}, active = false) {
   const pct = Math.max(0, Math.min(100, +s.percent || 0));
   const pos = s.duration ? `${fmt(s.position || 0)} / ${fmt(s.duration || 0)}` : (s.position ? fmt(s.position) : 'Live');
   const streamKind = activityStreamKind(s);
   const streamLabel = activityStreamLabel(s);
-  const streamBadge = streamLabel ? `<span class="activityStream ${esc(streamKind)}">${esc(streamLabel)}</span>` : '';
-  const profile = s.profile || activityTypeLabel(s);
+  const streamBadge = (active && streamLabel) ? `<span class="activityStream ${esc(streamKind)}">${esc(streamLabel)}</span>` : '';
+  const initial = esc((String(s.userName || 'U').trim()[0] || 'U'));
+  const detail = active ? activityDetail(s) : (s.subline || s.fileName || activityTypeLabel(s));
+  const bar = active ? `<div class="activityBar" style="--pct:${pct}%"><span></span></div>` : '';
+  const metaTop = active ? pos : activityTypeLabel(s);
   return `<div class="activityRow${active ? ' isActive' : ' isHistory'}">
-    <div class="activityWho"><span class="activityDot"></span><div><b>${esc(s.userName || 'User')}</b><small>${esc(profile)}</small></div></div>
-    <div class="activityWhat"><b>${esc(activityTitle(s))}</b><small>${esc(activityDetail(s))}</small>
-      <div class="activityBar" style="--pct:${pct}%"><span></span></div>${streamBadge}</div>
-    <div class="activityClient"><span>Client</span><b>${esc(activityClient(s))}</b><small>${esc(s.player || s.mode || '')}</small></div>
-    <div class="arMeta activityMeta">${esc(active ? pos : activityTypeLabel(s))}<br>${esc(activityTimeLabel(s, active))}</div>
+    <div class="activityAvatar">${initial}<span class="activityDot"></span></div>
+    <div class="activityWhat">
+      <div class="activityTitleLine"><b>${esc(activityTitle(s))}</b>${streamBadge}</div>
+      <small>${esc([s.userName, detail].filter(Boolean).join(' · '))}</small>${bar}</div>
+    ${activityDeviceCell(s)}
+    <div class="arMeta"><b>${esc(metaTop)}</b><small>${esc(activityTimeLabel(s, active))}</small></div>
   </div>`;
+}
+function connRowHtml(p = {}) {
+  const size = Math.max(0, +p.size || 0);
+  const inUse = Math.max(0, +p.inUse || 0);
+  const open = Math.max(0, +p.open || 0);
+  const inUsePct = size ? Math.min(100, (inUse / size) * 100) : 0;
+  const openPct = size ? Math.min(100 - inUsePct, (Math.max(0, open - inUse) / size) * 100) : 0;
+  const q = (+p.queued || 0) > 0 ? `<span class="connQ">${esc(p.queued)} queued</span>` : '';
+  const status = p.down ? '<span class="connQ" style="color:var(--danger)">offline</span>' : q;
+  return `<div class="connRow${p.down ? ' down' : ''}">
+    <b>${esc(p.label || 'Provider')}</b>
+    <div class="connNums">${esc(inUse)} / ${esc(size)} <small>in use · ${esc(open)} open</small> ${status}</div>
+    <div class="connBar"><i class="inUse" style="width:${inUsePct}%"></i><i class="open" style="width:${openPct}%"></i></div>
+  </div>`;
+}
+function renderActivityConnections(conns) {
+  const head = $('activityConnHead'); const box = $('activityConn'); if (!box) return;
+  const providers = (conns && Array.isArray(conns.providers)) ? conns.providers : [];
+  const show = providers.length > 0;
+  if (head) head.hidden = !show;
+  box.hidden = !show;
+  if (!show) { box.innerHTML = ''; return; }
+  const legend = `<div class="connLegend"><span><i class="inUse"></i>In use</span><span><i class="open"></i>Open idle</span></div>`;
+  box.innerHTML = providers.map(connRowHtml).join('') + legend;
+  if ($('activityConnStatus')) $('activityConnStatus').textContent = `${conns.inUse || 0} / ${conns.size || 0} in use`;
 }
 function renderActivity(payload = {}) {
   const sessions = Array.isArray(payload) ? payload : (payload.sessions || []);
@@ -17643,13 +17757,7 @@ function renderActivity(payload = {}) {
   const list = $('activityList'); if (!list) return;
   const hist = $('activityHistory');
   renderActivitySummary(sessions, history, online);
-  const onlineBox = $('activityOnline');
-  if (onlineBox) {
-    onlineBox.innerHTML = online.length
-      ? online.map((o) => onlineRowHtml(o)).join('')
-      : '<div class="hint">No one is connected right now.</div>';
-    if ($('activityOnlineStatus')) $('activityOnlineStatus').textContent = online.length ? `${online.length} connected` : 'None';
-  }
+  renderActivityConnections(payload.connections);
   if (!sessions.length) {
     list.innerHTML = '<div class="hint">No one is watching right now.</div>';
     $('activityLiveStatus').textContent = 'Clear';
@@ -17660,7 +17768,7 @@ function renderActivity(payload = {}) {
   if (hist) hist.innerHTML = history.length
     ? history.map((s) => activityRowHtml(s, false)).join('')
     : '<div class="hint">No recent playback.</div>';
-  $('activityHistoryStatus').textContent = history.length ? `${history.length} shown` : `${retentionDays}-day VOD window`;
+  $('activityHistoryStatus').textContent = history.length ? `${history.length} shown` : `${retentionDays}-day window`;
   $('activityStatus').textContent = `Last checked ${new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
 }
 async function refreshActivity() {
@@ -18955,44 +19063,32 @@ function gridVert(dir) {
       return best;
     }
   }
-  const els = gridEls(); const cur = els[S.gridIdx]; if (!cur) return -1;
-  let rowTop = dir > 0 ? Infinity : -Infinity;
-  for (const el of els) {
-    const dt = el.offsetTop - cur.offsetTop;
-    if (dir > 0 ? dt > 4 : dt < -4) rowTop = dir > 0 ? Math.min(rowTop, el.offsetTop) : Math.max(rowTop, el.offsetTop);
-  }
-  if (!isFinite(rowTop)) return -1; // no row that way
-  let best = -1, bestDx = Infinity;
-  els.forEach((el, i) => {
-    if (Math.abs(el.offsetTop - rowTop) > 4) return;
-    const dx = Math.abs(el.offsetLeft - cur.offsetLeft);
-    if (dx < bestDx) { bestDx = dx; best = i; }
-  });
-  return best;
+  return geomGridVert(dir); // DOWN→first of next row, UP→restore the row's last column (per-row memory)
 }
-function personGridVert(dir) {
+// Geometric grids (search sections, person works, non-virtualised libraries): group the rendered
+// cards into visual rows by vertical position, then DOWN → first item of the next row (beginning)
+// and UP → the column last left in the previous row (per-row memory in S.gridColMem). Same row-by-
+// row behaviour the owner asked for, applied to ragged/sectioned grids where index±cols is wrong.
+function geomGridVert(dir) {
   const els = gridEls();
+  if (!els.length) return -1;
   const idx = Math.max(0, Math.min(els.length - 1, S.gridIdx || 0));
-  const cur = els[idx]; if (!cur) return -1;
-  const curRect = cur.getBoundingClientRect();
-  const curX = curRect.left + curRect.width / 2;
-  let rowTop = dir > 0 ? Infinity : -Infinity;
-  const gap = 6;
+  const rows = []; let curTop = null;
   els.forEach((el) => {
-    const r = el.getBoundingClientRect();
-    const dt = r.top - curRect.top;
-    if (dir > 0 ? dt > gap : dt < -gap) rowTop = dir > 0 ? Math.min(rowTop, r.top) : Math.max(rowTop, r.top);
+    const t = el.getBoundingClientRect().top;
+    if (curTop === null || Math.abs(t - curTop) > 6) { rows.push([]); curTop = t; }
+    rows[rows.length - 1].push(els.indexOf(el));
   });
-  if (!isFinite(rowTop)) return -1;
-  let best = -1, bestDx = Infinity;
-  els.forEach((el, i) => {
-    const r = el.getBoundingClientRect();
-    if (Math.abs(r.top - rowTop) > gap) return;
-    const dx = Math.abs((r.left + r.width / 2) - curX);
-    if (dx < bestDx) { bestDx = dx; best = i; }
-  });
-  return best;
+  const r = rows.findIndex((rw) => rw.includes(idx));
+  if (r < 0) return -1;
+  const gcm = (S.gridColMem = S.gridColMem || {});
+  gcm[r] = rows[r].indexOf(idx); // remember the column we're leaving in this row
+  const tr = r + dir;
+  if (tr < 0 || tr >= rows.length) return -1;
+  if (dir > 0) return rows[tr][0]; // DOWN → first card of the next visual row
+  return rows[tr][Math.min(rows[tr].length - 1, gcm[tr] || 0)]; // UP → restore the row's last column
 }
+function personGridVert(dir) { return geomGridVert(dir); }
 function focusedGridAtVisualRowStart() {
   const cur = document.querySelector('.pcard.focus, .card.focus, .chCard.focus, .chGroupHead.focus, .gRow.focus, .lcat.focus, .gridMore.focus');
   if (!cur) return false;
@@ -19852,13 +19948,15 @@ document.addEventListener('keydown', (e) => {
     // so the quality toggle and cast were unreachable without 20 presses.
     const vis = (el) => el && el.offsetParent !== null;
     const zone = (sel) => [...document.querySelectorAll(sel)].filter(vis);
-    const dRows = [
+    const dRowSpecs = [
       // Actions in their REAL DOM/visual order (hand-listing them once put the trailer
       // button in the wrong slot and OK launched a trailer instead of picking 4K).
-      [...$('dPlay').parentElement.querySelectorAll('button')].filter(vis),
-      zone('.seasonTab'), zone('.seasonCard'), zone('.epCard'),
-      zone('.castCard'), zone('#relatedRow .pcard'),
-    ].filter((r) => r.length);
+      [[...$('dPlay').parentElement.querySelectorAll('button')].filter(vis), 'actions'],
+      [zone('.seasonTab'), 'seasonTab'], [zone('.seasonCard'), 'seasonCard'], [zone('.epCard'), 'epCard'],
+      [zone('.castCard'), 'castCard'], [zone('#relatedRow .pcard'), 'related'],
+    ].filter((r) => r[0].length);
+    const dRows = dRowSpecs.map((r) => r[0]);
+    const dType = (i) => dRowSpecs[i][1]; // stable row identity for per-row column memory
     if (!dRows.length) return;
     let ri = dRows.findIndex((r) => r.some((el) => el.classList.contains('focus')));
     let ci = ri >= 0 ? dRows[ri].findIndex((el) => el.classList.contains('focus')) : 0;
@@ -19867,19 +19965,13 @@ document.addEventListener('keydown', (e) => {
     else if (k === 'ArrowLeft') { if (ci === 0) return enterRail(); ci -= 1; }
     else if (k === 'ArrowDown' || k === 'ArrowUp') {
       if (k === 'ArrowDown' && ri === dRows.length - 1 && focusMusicBar()) return;
-      const cur = dRows[ri][ci];
-      ri = k === 'ArrowDown' ? Math.min(dRows.length - 1, ri + 1) : Math.max(0, ri - 1);
-      // Land on the spatially NEAREST column — carrying the raw index between rows with
-      // very different column counts teleported the focus sideways ("it jumps around").
-      if (cur) {
-        const cx = cur.getBoundingClientRect().left;
-        let best = 0, bd = Infinity;
-        dRows[ri].forEach((el, i2) => {
-          const d2 = Math.abs(el.getBoundingClientRect().left - cx);
-          if (d2 < bd) { bd = d2; best = i2; }
-        });
-        ci = best;
-      } else ci = Math.min(ci, dRows[ri].length - 1);
+      const down = k === 'ArrowDown';
+      ri = down ? Math.min(dRows.length - 1, ri + 1) : Math.max(0, ri - 1);
+      // DOWN → start the next row at the beginning (col 0); UP → restore the column last left in
+      // that row (per-row memory keyed by row type). Mirrors the home-row behaviour the owner asked
+      // for; replaces the old geometric nearest-X carry that dragged focus sideways between rows.
+      if (!S.detailColMem) S.detailColMem = {};
+      ci = down ? 0 : Math.min(dRows[ri].length - 1, S.detailColMem[dType(ri)] || 0);
     }
     else if (k === 'Enter') {
       if (e.repeat) return;
@@ -19915,6 +20007,9 @@ document.addEventListener('keydown', (e) => {
       }
       el.click(); return;
     }
+    // Remember the column for this row so a later return to it restores the spot (per-row memory).
+    if (!S.detailColMem) S.detailColMem = {};
+    S.detailColMem[dType(ri)] = ci;
     applyFocus(dRows[ri][ci]);
     // Back at the actions row → scroll the PAGE to its real top: 'nearest' scrolling only
     // makes the button visible, leaving the poster/title block stranded off-screen above.
@@ -20084,17 +20179,25 @@ document.addEventListener('keydown', (e) => {
       if (!count) return enterRail();
       const cols = Math.max(1, virtualGridCols(S.gridRoot || $('grid')));
       const cur = gridElForIndex(S.gridIdx);
-      if (k === 'ArrowLeft') return S.gridIdx <= 0 || S.gridIdx % cols === 0 ? enterRail() : focusGrid(S.gridIdx - 1);
-      if (k === 'ArrowRight') return focusGrid(Math.min(count - 1, S.gridIdx + 1));
+      // Per-row column memory (same model as the home rows): DOWN starts the next grid row at its
+      // first poster; UP restores the column you last left in the row above. gridColMem maps a grid
+      // row index → the column last focused there; saveCol records it on every horizontal move.
+      const gcm = (S.gridColMem = S.gridColMem || {});
+      const row = Math.floor(S.gridIdx / cols);
+      const saveCol = (idx) => { gcm[Math.floor(idx / cols)] = idx % cols; return idx; };
+      if (k === 'ArrowLeft') return S.gridIdx <= 0 || S.gridIdx % cols === 0 ? enterRail() : focusGrid(saveCol(S.gridIdx - 1));
+      if (k === 'ArrowRight') return focusGrid(saveCol(Math.min(count - 1, S.gridIdx + 1)));
       if (k === 'ArrowUp') {
-        const t = S.gridIdx - cols;
-        if (t >= 0) return focusGrid(t);
-        if (['movies', 'tv', 'library'].includes(S.view) && $('genreSel').offsetParent) return focusBrowseFilter(0);
-        return enterRail();
+        if (row === 0) {
+          if (['movies', 'tv', 'library'].includes(S.view) && $('genreSel').offsetParent) return focusBrowseFilter(0);
+          return enterRail();
+        }
+        const col = Math.min(cols - 1, gcm[row - 1] || 0); // restore the row-above's last column
+        return focusGrid(saveCol(Math.min(count - 1, (row - 1) * cols + col)));
       }
       if (k === 'ArrowDown') {
-        const t = S.gridIdx + cols;
-        if (t < count) return focusGrid(t);
+        const t = (row + 1) * cols; // DOWN → first poster of the next row (beginning)
+        if (t < count) return focusGrid(saveCol(t));
         return focusGrid(S.gridIdx);
       }
       if (k === 'Enter') {
@@ -20188,6 +20291,11 @@ document.addEventListener('keydown', (e) => {
   // ----- Home / Discover: hero (home only) + horizontal rows -----
   const view = S.rowsView || { data: S.rows, hasHero: true };
   const rows = view.data;
+  // Column behaviour on vertical moves: DOWN to the next row starts at the BEGINNING (col 0);
+  // UP to a previous row RESTORES the column you last left there (S.colIdx[ri], clamped to the
+  // row's current length). So browsing down a fresh row starts clean, and going back up returns
+  // you to where you were — exactly the row-by-row memory the owner asked for.
+  const rowCol = (ri) => { const r = rows[ri]; const n = (r && r.items.length) || 1; return Math.min(Math.max(0, n - 1), S.colIdx[ri] || 0); };
   if (S.zone === 'hero') {
     if (k === 'ArrowLeft') return S.heroIdx === 0 ? enterRail() : focusHero(0);
     if (k === 'ArrowRight') return focusHero(1);
@@ -20199,10 +20307,8 @@ document.addEventListener('keydown', (e) => {
     const ci = S.colIdx[S.rowIdx] || 0;
     if (k === 'ArrowLeft') return ci === 0 ? enterRail() : focusCard(S.rowIdx, ci - 1);
     if (k === 'ArrowRight') return focusCard(S.rowIdx, Math.min(row.items.length - 1, ci + 1));
-    // Vertical row changes intentionally land on the first thumbnail so D-pad
-    // browsing starts each row predictably instead of carrying a hidden column.
     if (k === 'ArrowUp') return S.rowIdx === 0 ? (view.hasHero ? focusHero(0) : enterRail())
-      : focusCard(S.rowIdx - 1, 0);
+      : focusCard(S.rowIdx - 1, rowCol(S.rowIdx - 1));
     if (k === 'ArrowDown') {
       if (S.rowIdx < rows.length - 1 && rows[S.rowIdx + 1].items.length) {
         return focusCard(S.rowIdx + 1, 0);

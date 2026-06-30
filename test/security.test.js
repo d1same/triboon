@@ -211,6 +211,7 @@ test('activity: users heartbeat playback and only admins see now-watching rows',
     streamKind: 'transcode',
     streamLabel: 'Transcoding',
     clientVersion: 'Android TV 1.7.26 (126)',
+    deviceName: 'NVIDIA SHIELD',
     position: 600,
     duration: 6000,
     size: 42_000_000_000,
@@ -221,6 +222,7 @@ test('activity: users heartbeat playback and only admins see now-watching rows',
     'plain users cannot see other users watching');
   const visible = await httpJson(srv.port, 'GET', '/api/activity', null, admin);
   assert.strictEqual(visible.status, 200);
+  assert.ok('connections' in visible.json, 'activity payload carries a usenet-connections slot (null until a pool exists)');
   const row = visible.json.sessions.find((s) => s.sessionId === sessionId);
   assert.ok(row, 'admin sees the active session');
   assert.strictEqual(row.userName, 'fam');
@@ -228,6 +230,7 @@ test('activity: users heartbeat playback and only admins see now-watching rows',
   assert.strictEqual(row.streamKind, 'transcode');
   assert.strictEqual(row.streamLabel, 'Transcoding');
   assert.strictEqual(row.clientVersion, 'Android TV 1.7.26 (126)');
+  assert.strictEqual(row.deviceName, 'NVIDIA SHIELD', 'the reported hardware device name round-trips to admins');
   assert.strictEqual(row.percent, 10);
   assert.ok(visible.json.history.some((s) => s.title === 'The Test Movie' && s.userName === 'fam' && s.clientVersion === 'Android TV 1.7.26 (126)'),
     'activity history keeps a compact recent watch row');
@@ -264,7 +267,7 @@ test('activity: users heartbeat playback and only admins see now-watching rows',
   srv.store.write('activityHistory', { rows: [
     { id: 'old', userName: 'old', title: 'Expired', type: 'movie', updatedAt: now - 4 * 24 * 60 * 60 * 1000 },
     { id: 'live-old', userName: 'fam', title: 'Live TV', type: 'live', streamKind: 'live', updatedAt: now },
-    ...Array.from({ length: 12 }, (_, i) => ({
+    ...Array.from({ length: 70 }, (_, i) => ({
       id: `movie-${i}`,
       userName: 'fam',
       title: `Movie ${i}`,
@@ -274,11 +277,11 @@ test('activity: users heartbeat playback and only admins see now-watching rows',
   ] });
   const pruned = await httpJson(srv.port, 'GET', '/api/activity', null, admin);
   assert.strictEqual(pruned.json.retentionDays, 3);
-  assert.ok(pruned.json.history.length <= 10, 'activity history is capped to the previous 10 VOD rows');
+  assert.ok(pruned.json.history.length <= 60, 'activity history is capped to a bounded 3-day window');
   assert.ok(!pruned.json.history.some((s) => s.title === 'Expired'), 'activity history is pruned to the last 3 days');
   assert.ok(!pruned.json.history.some((s) => s.type === 'live'), 'activity history prunes retained IPTV/Live TV rows');
   assert.ok(pruned.json.history.some((s) => s.title === 'Movie 0'), 'newest VOD rows remain in history');
-  assert.ok(!pruned.json.history.some((s) => s.title === 'Movie 11'), 'older rows beyond the previous 10 are omitted');
+  assert.ok(!pruned.json.history.some((s) => s.title === 'Movie 69'), 'rows beyond the bounded window are omitted');
   await httpJson(srv.port, 'POST', '/api/activity', { sessionId: liveId, state: 'stopped' }, user);
 });
 

@@ -1022,14 +1022,22 @@ test('Android native player: direct source and native chrome stay out of the web
     'Playback stats should separate visible player buffer from Triboon server read-ahead');
   assert.ok(ui.includes('data-stab="activity"') && ui.includes("api('/api/activity')") && ui.includes('id="activityRefresh"')
     && ui.includes('id="activityHistory"') && ui.includes('id="activitySummary"')
-    && ui.includes('Previous 10') && !ui.includes('id="activityPager"'),
+    && ui.includes('>Last 3 days<') && !ui.includes('id="activityPager"'),
     'admin Settings should expose a compact focusable Activity panel backed by the activity API');
   assert.ok(ui.includes('function playerStreamKind(') && ui.includes('streamKind: playerStreamKind(p)')
     && ui.includes('streamLabel: playerStreamLabel(p)') && ui.includes('clientVersion: clientVersionLabel()')
     && ui.includes('function activityStreamLabel(') && ui.includes('function activityRowHtml(')
     && ui.includes('activityStream') && !ui.includes('ACTIVITY_HISTORY_PAGE_SIZE')
     && !ui.includes('activityPrev') && !ui.includes('activityNext'),
-    'Activity should show stream treatment, app version, active sessions, and a simple previous-10 history');
+    'Activity should show stream treatment, app version, active sessions, and a 3-day history');
+  // Activity shows the actual device (SHIELD, onn, Chrome…), reported by the client and parsed on the row.
+  assert.ok(ui.includes('function deviceFriendlyName(') && ui.includes('deviceName: deviceFriendlyName()')
+    && ui.includes('function activityDeviceLabel(') && ui.includes('function activityDeviceKind('),
+    'Activity reports + renders a friendly hardware device name per session');
+  // Activity surfaces live usenet connection usage per provider (admin capacity view).
+  assert.ok(ui.includes('id="activityConn"') && ui.includes('function renderActivityConnections(')
+    && ui.includes('renderActivityConnections(payload.connections)') && ui.includes('Usenet connections'),
+    'Activity shows per-provider usenet connection usage');
   assert.match(ui, /function commitNativeLivePlayback\(it\) \{[\s\S]+setNativeLivePlaybackState\(it\);[\s\S]+startActivityHeartbeat\(\);/,
     'native Live TV should report activity once ExoPlayer is ready');
   assert.match(ui, /<div class="settingsForm">[\s\S]+<span>Expected users<\/span><input id="perfUsers"[\s\S]+<span>Start\/seek reserve<\/span><input id="perfReserve"[\s\S]+<div class="settingsActions">[\s\S]+id="perfTest"[\s\S]+id="perfApply"[\s\S]+id="perfSave"/,
@@ -1885,8 +1893,18 @@ test('Android native player: direct source and native chrome stay out of the web
     'desktop hover may expand the rail unless a click just collapsed it; Android TV still relies on explicit D-pad state');
   assert.match(ui, /function focusContent\(retried\) \{[\s\S]+leaveRail\(\);[\s\S]+clearFocus\(\);/,
     'moving focus into page content should always collapse any stale rail state first');
-  assert.match(ui, /if \(k === 'ArrowDown'\) return focusCard\(S\.rowIdx, 0\);[\s\S]+if \(k === 'ArrowUp'\) return S\.rowIdx === 0 \? \(view\.hasHero \? focusHero\(0\) : enterRail\(\)\)[\s\S]+: focusCard\(S\.rowIdx - 1, 0\);[\s\S]+return focusCard\(S\.rowIdx \+ 1, 0\);/,
-    'Home and Discover vertical row moves should start at the first thumbnail in the destination row');
+  assert.match(ui, /const rowCol = \(ri\) => [\s\S]*?S\.colIdx\[ri\] \|\| 0[\s\S]+if \(k === 'ArrowUp'\) return S\.rowIdx === 0 \? \(view\.hasHero \? focusHero\(0\) : enterRail\(\)\)[\s\S]+: focusCard\(S\.rowIdx - 1, rowCol\(S\.rowIdx - 1\)\);[\s\S]+return focusCard\(S\.rowIdx \+ 1, 0\);/,
+    'Home/Discover: DOWN starts the next row at the beginning (0); UP RESTORES the per-row remembered column (rowCol → S.colIdx[ri])');
+  assert.match(ui, /ci = down \? 0 : Math\.min\(dRows\[ri\]\.length - 1, S\.detailColMem\[dType\(ri\)\] \|\| 0\);/,
+    'Detail page: DOWN starts the next row at 0; UP restores the per-row remembered column (S.detailColMem keyed by row type)');
+  assert.match(ui, /const t = \(row \+ 1\) \* cols; \/\/ DOWN[\s\S]*?if \(t < count\) return focusGrid\(saveCol\(t\)\);/,
+    'Virtual grids (Movies/TV/Library): DOWN jumps to the first item of the next row');
+  assert.match(ui, /const col = Math\.min\(cols - 1, gcm\[row - 1\] \|\| 0\); \/\/ restore[\s\S]*?focusGrid\(saveCol\(Math\.min\(count - 1, \(row - 1\) \* cols \+ col\)\)\);/,
+    'Virtual grids: UP restores the column last left in the row above (gridColMem)');
+  assert.match(ui, /function geomGridVert\(dir\) \{[\s\S]+if \(dir > 0\) return rows\[tr\]\[0\];[\s\S]+return rows\[tr\]\[Math\.min\(rows\[tr\]\.length - 1, gcm\[tr\] \|\| 0\)\];/,
+    'Geometric grids (search/person/library) use the same row-by-row model: DOWN→first of next row, UP→restore the row column');
+  assert.match(ui, /#discoverTitle,#browseTitle,#prefs>h1,#settings>h1\{display:none\}/,
+    'Page-level titles (Discover / Movies / TV Shows / Preferences / Server settings) are hidden everywhere');
   assert.match(ui, /function applyRoute\(\) \{[\s\S]+switchView\(target, false\);[\s\S]+requestAnimationFrame\(\(\) => requestAnimationFrame\(\(\) => \{[\s\S]+focusContent\(\);[\s\S]+\}\)\);[\s\S]+\}/,
     'browser Back/Forward should land focus on the visible route instead of leaving a stale rail focus ring');
   assert.match(ui, /window\.addEventListener\('hashchange', \(\) => \{[\s\S]+if \(\$\(\'person\'\)\.classList\.contains\('open'\)\) \{[\s\S]+closePerson\(\);[\s\S]+setRoute\(`#\/title\/\$\{cur\.type\}\/\$\{cur\.tmdbId\}`\);[\s\S]+return;[\s\S]+\}[\s\S]+if \(\$\(\'detail\'\)\.classList\.contains\('open'\) && !routeIsTitle\(\)\) return closeDetail\(\);[\s\S]+applyRoute\(\);[\s\S]+\}\);/,
@@ -3019,10 +3037,11 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'the update modal is D-pad navigable and closes (Later) on hardware Back/Esc');
   assert.match(ui, /hydrateAppShellData\(\);[\s\S]+maybePromptAppUpdate\(\)\.catch\(\(\) => \{\}\);/,
     'enterAppShell triggers the update check once the home has settled');
-  // Online presence: every open app pings /api/presence so Activity shows ALL connected devices,
-  // not only active streams.
-  assert.ok(ui.includes('id="activityOnline"') && ui.includes('id="activityOnlineStatus"'),
-    'Activity screen has an "Online now" list section');
+  // Online presence: every open app pings /api/presence so the server knows who's connected. The
+  // Activity screen surfaces this as an "N online" count (watchers-only design — the browsing list
+  // was dropped), not a list of people sitting in menus.
+  assert.ok(!ui.includes('id="activityOnline"') && !ui.includes('function onlineRowHtml('),
+    'Activity no longer renders a browsing-only "Online now" list');
   assert.match(ui, /function sendPresence\(state, opts = \{\}\)[\s\S]+fetch\('\/api\/presence'/,
     'client sends an online-presence heartbeat to /api/presence');
   assert.match(ui, /function startPresence\(\) \{[\s\S]+setInterval\(\(\) => sendPresence\(\), 25000\)/,
@@ -3031,8 +3050,8 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'presence reports watching vs just browsing');
   assert.match(ui, /hydrateAppShellData\(\);\s*\n\s*startPresence\(\);/,
     'enterAppShell starts presence so browsing (not only watching) marks the device connected');
-  assert.match(ui, /renderActivitySummary\(sessions, history, online\)[\s\S]+\$\('activityOnline'\)[\s\S]+onlineRowHtml\(o\)/,
-    'renderActivity renders the connected-devices online list');
+  assert.match(ui, /function renderActivitySummary\(sessions = \[\], history = \[\], online = \[\]\)[\s\S]+\$\{online\.length\}<\/b> online/,
+    'the activity summary folds presence into an online count');
   // Streaming Performance: "Test provider speed" button measures per-connection speed + the cap.
   assert.ok(ui.includes('id="perfSpeed"') && ui.includes('id="perfSpeedResult"'),
     'Streaming Performance has a Test provider speed button + result area');
