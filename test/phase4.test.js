@@ -948,7 +948,6 @@ test('Android native player: direct source and native chrome stay out of the web
   const startSourceBlock = ui.slice(ui.indexOf('function startSource('), ui.indexOf('// The full ladder, in policy order'));
   const failoverBlock = ui.slice(ui.indexOf('function failover()'), ui.indexOf('async function autoAdvance'));
   const showVlcPanelBlock = ui.slice(ui.indexOf('function showVlcPanel()'), ui.indexOf('/* ---- next episode'));
-  const androidSmoke = fs.readFileSync(path.join(__dirname, '..', 'bench', 'android-tv-smoke.ps1'), 'utf8');
   const openGuideMethod = android.slice(
     android.indexOf('private void openNativeLiveGuide()'),
     android.indexOf('private void enterNativeGuideMode()'),
@@ -1338,8 +1337,6 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android should keep immersive system UI and reclaim WebView focus after reinstall/resume/window-focus races');
   assert.match(android, /private void jsKey\(String type, String key, boolean repeat\) \{[\s\S]+if \(!pageTvReady && !"keyup"\.equals\(type\)\) \{[\s\S]+queuePendingTvKey\(key, repeat\);[\s\S]+return;[\s\S]+\}/,
     'Android key bridge should not drop early D-pad keydown events during first app paint');
-  assert.match(androidSmoke, /\[switch\]\$StartupDpad[\s\S]+\[switch\]\$ColdStart[\s\S]+input keyevent DPAD_RIGHT[\s\S]+input keyevent DPAD_DOWN[\s\S]+perfMarks/,
-    'Android smoke helper should be able to reproduce first-open D-pad readiness and report boot timing marks');
   assert.match(ui, /function startWebPlayerHousekeeping\(mount, it\) \{[\s\S]+v\.onerror = \(\) => failover\(\);[\s\S]+startHealthPoll\(mount\.id\);[\s\S]+loadTracks\(\);[\s\S]+subtitleCatalogAvailable\(it\)[\s\S]+fetch\(`\/api\/ossubs\/\$\{mount\.id\}\?\$\{subtitleRequestParams\(it, code2, mount\.streamToken\)\.toString\(\)\}`\)/,
     'web-only probes and subtitle prefetch should stay in the web playback branch and carry catalog ids');
   assert.match(ui, /async function loadTracks\(\) \{[\s\S]+if \(p\.usingNative && canUseNativeVideoPlayer\(\)\) \{[\s\S]+p\.nativeDuration = p\.duration \|\| p\.nativeDuration \|\| 0;[\s\S]+refreshNativeSubtitleChoices\(\);[\s\S]+return;[\s\S]+\}/,

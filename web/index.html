@@ -332,6 +332,32 @@ body[data-theme="toomaj"] #prefs a:focus,
 body[data-theme="toomaj"] #prefs input:focus,
 body[data-theme="toomaj"] #prefs select:focus,
 body[data-theme="toomaj"] .mbBar.focus{box-shadow:0 0 0 3px var(--focus) !important}
+/* Settings/Preferences SELECTED tab: in Toomaj its fill is bright amber, but the base rules keep
+   light --text (unreadable on amber). Force a solid amber chip with dark text/icons. The hover/
+   focus (non-selected) states already use --btnFocusText, so only the .on states need this. */
+body[data-theme="toomaj"] #setTabs button.on,
+body[data-theme="toomaj"] #prefTabs button.on,
+body[data-theme="toomaj"] #setTabs button.on.focus,
+body[data-theme="toomaj"] #prefTabs button.on.focus,
+body[data-theme="toomaj"] #setTabs button.on:focus,
+body[data-theme="toomaj"] #prefTabs button.on:focus,
+body[data-theme="toomaj"] #setTabs button.on:focus-visible,
+body[data-theme="toomaj"] #prefTabs button.on:focus-visible{
+  background:var(--btnSelectedHover)!important;color:var(--btnFocusText)!important}
+/* Theme-picker buttons are excluded from the generic dark-on-focus rule; give their label dark
+   text when the amber fill is on, so the theme name/tone stays readable. */
+body[data-theme="toomaj"] #settings .setGrid button.themeChoice:hover,
+body[data-theme="toomaj"] #settings .setGrid button.themeChoice.focus,
+body[data-theme="toomaj"] #settings .setGrid button.themeChoice:focus-visible,
+body[data-theme="toomaj"] #prefs .setGrid button.themeChoice:hover,
+body[data-theme="toomaj"] #prefs .setGrid button.themeChoice.focus,
+body[data-theme="toomaj"] #prefs .setGrid button.themeChoice:focus-visible{color:var(--btnFocusText)}
+body[data-theme="toomaj"] .themeChoice:hover .themeName,
+body[data-theme="toomaj"] .themeChoice.focus .themeName,
+body[data-theme="toomaj"] .themeChoice:focus-visible .themeName,
+body[data-theme="toomaj"] .themeChoice:hover .themeTone,
+body[data-theme="toomaj"] .themeChoice.focus .themeTone,
+body[data-theme="toomaj"] .themeChoice:focus-visible .themeTone{color:var(--btnFocusText)}
 #apkUpdateStatus.updateAvail{color:var(--amber);font-weight:600}
 
 /* ---------- auth screens ---------- */
