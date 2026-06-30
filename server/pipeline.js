@@ -510,7 +510,10 @@ class Pipeline {
       if (!(to > from)) return;
       const timer = setTimeout(() => (async () => {
         for await (const _chunk of vf.read(from, to, { priority: 'readAhead' })) {
-          // Drain intentionally: this warms the VFS cache without blocking Play.
+          // Drain intentionally: this warms the VFS cache without blocking Play. MUST stay on the
+          // read-ahead lane — a new stream's speculative warm must never outrank another user's
+          // active playback (docs-streaming-performance.md). The player reads the head itself at
+          // startup priority, so warming it higher would only steal connections, not help.
         }
       })().catch(() => {}), 150);
       if (timer && typeof timer.unref === 'function') timer.unref();

@@ -2812,10 +2812,13 @@ function logStartupTrace(vf, where, extra = {}) {
   if (typeof extra.ttfbMs === 'number') parts.push(`ttfb=${extra.ttfbMs}ms${pos}`);
   console.log(parts.join(' | '));
 }
-function bearer(req, url) {
+function bearer(req, url, allowQuery = false) {
   const h = req.headers.authorization;
   if (h && h.startsWith('Bearer ')) return h.slice(7);
-  return url.searchParams.get('t');
+  // The ?t= query token is ONLY honored for stream-tier media routes (which scope-check it via
+  // streamScopeOk). Session tokens must arrive in the Authorization header — never the URL query,
+  // where they leak into logs/referer/history. So a user/admin route never authenticates from ?t=.
+  return allowQuery ? url.searchParams.get('t') : null;
 }
 // Brute-force throttles (login / 4-digit PIN / invites / Quick Connect codes).
 const limiter = new RateLimiter();
@@ -3703,9 +3706,14 @@ const H = {
 
   login: async (ctx) => {
     const { name, password } = await readJson(ctx.req);
-    const key = `login:${String(name || '').toLowerCase()}:${clientIp(ctx)}`;
+    const uname = String(name || '').toLowerCase();
+    const key = `login:${uname}:${clientIp(ctx)}`;
+    const acctKey = `login-acct:${uname}`;
+    // Per-(user,IP) throttle PLUS a generous per-account cap, so rotating-IP guessing against one
+    // account is still bounded across IPs. Both clear on a successful login.
     if (throttled(ctx, key, { max: 10, windowMs: 15 * 60000, lockMs: 15 * 60000 })) return;
-    try { const r = auth.login(name, password); limiter.clear(key); send(ctx.res, 200, r); }
+    if (uname && throttled(ctx, acctKey, { max: 40, windowMs: 15 * 60000, lockMs: 15 * 60000 })) return;
+    try { const r = auth.login(name, password); limiter.clear(key); limiter.clear(acctKey); send(ctx.res, 200, r); }
     catch { send(ctx.res, 401, { error: 'invalid credentials' }); }
   },
 
@@ -3840,28 +3848,37 @@ const H = {
   status: async (ctx) => {
     const provs = providerList();
     const os = require('os');
-    send(ctx.res, 200, {
+    const isAdmin = !!(ctx.user && ctx.user.role === 'admin');
+    const body = {
       app: 'triboon', phase: 4, mounts: mounts.size,
       version: require('../package.json').version,
-      nntp: provs.length ? {
-        host: provs[0].host, port: provs[0].port, tls: !!provs[0].tls,
-        connections: provs[0].connections || 16, providers: provs.length,
-        totalConnections: provs.reduce((n, p) => n + (p.connections || 16), 0),
-      } : null,
       streaming: streamingRuntimeProfile(),
       pipeline: pipeline.metricsSnapshot(),
       playback: playbackRuntimeStats(),
       indexers: (settings.get().indexers || []).length,
       tmdb: !!settings.get().tmdbKey,
-      ffmpeg: detectFfmpeg() ? detectFfmpeg().version : null,
-      ytdlp: ytmusic.detectYtdlp() ? ytmusic.detectYtdlp().version : null,
-      // Device + runtime info for the Engine panel.
-      device: {
+    };
+    // Provider host/port + host OS/CPU/Node fingerprint are admin-only operational detail (the
+    // Engine panel is admin). Regular users get counts + uptime, never the provider address or the
+    // server's OS/Node fingerprint.
+    if (isAdmin) {
+      body.nntp = provs.length ? {
+        host: provs[0].host, port: provs[0].port, tls: !!provs[0].tls,
+        connections: provs[0].connections || 16, providers: provs.length,
+        totalConnections: provs.reduce((n, p) => n + (p.connections || 16), 0),
+      } : null;
+      body.ffmpeg = detectFfmpeg() ? detectFfmpeg().version : null;
+      body.ytdlp = ytmusic.detectYtdlp() ? ytmusic.detectYtdlp().version : null;
+      body.device = {
         os: `${os.type()} ${os.release()}`, arch: process.arch,
         cpus: os.cpus().length, memGb: +(os.totalmem() / 1e9).toFixed(1),
         node: process.version, uptimeSec: Math.floor(process.uptime()),
-      },
-    });
+      };
+    } else {
+      body.nntp = provs.length ? { providers: provs.length } : null;
+      body.device = { uptimeSec: Math.floor(process.uptime()) };
+    }
+    send(ctx.res, 200, body);
   },
 
   mount: async (ctx) => {
@@ -4565,7 +4582,7 @@ const H = {
           });
         }
       });
-      ff.stderr.on('data', (d) => { err += d; });
+      ff.stderr.on('data', (d) => { if (err.length < 8000) err += d; }); // cap: ffmpeg streams stderr for the whole playback
       ff.on('error', (e) => {
         clearIdle();
         liveSlot.done('spawn error');
@@ -5410,8 +5427,14 @@ Object.assign(H, {
     const b = await readJson(ctx.req).catch(() => ({}));
     const id = scrubActivityText(b.sessionId || b.id || '', 80);
     if (!id) return send(ctx.res, 400, { error: 'sessionId required' });
+    const existing = activitySessions.get(id);
+    // Bind each now-watching row to its owner: a user may only stop/overwrite their OWN row (admins
+    // may manage any). The sessionId is client-chosen, so without this one user could stop or
+    // hijack another's row by guessing/reusing its id.
+    if (existing && existing.userId && existing.userId !== ctx.user.id && ctx.user.role !== 'admin') {
+      return send(ctx.res, 200, { ok: true }); // no cross-user mutation; silent so it leaks nothing
+    }
     if (b.state === 'stopped' || b.stop || b.remove) {
-      const existing = activitySessions.get(id);
       if (existing) {
         existing.updatedAt = Date.now();
         recordActivityHistory(existing);
@@ -5419,8 +5442,7 @@ Object.assign(H, {
       activitySessions.delete(id);
       return send(ctx.res, 200, { ok: true });
     }
-    const existing = activitySessions.get(id) || {};
-    const row = normalizeActivityRow(ctx, b, id, existing);
+    const row = normalizeActivityRow(ctx, b, id, existing || {});
     activitySessions.set(id, row);
     recordActivityHistory(row);
     send(ctx.res, 200, { ok: true });
@@ -6027,7 +6049,7 @@ Object.assign(H, {
     ff.on('error', (e) => { console.error('[remux spawn]', e.message); try { ctx.res.destroy(); } catch {} });
     ff.stdout.pipe(ctx.res);
     let err = '';
-    ff.stderr.on('data', (d) => { err += d; });
+    ff.stderr.on('data', (d) => { if (err.length < 8000) err += d; }); // cap: ffmpeg streams stderr for the whole playback
     ff.on('close', (codeNum) => { if (codeNum && !ctx.res.writableEnded) console.error('[remux]', err.slice(0, 400)); ctx.res.end(); });
     ctx.req.on('close', () => ff.kill('SIGKILL'));
   },
@@ -6057,7 +6079,7 @@ Object.assign(H, {
     ff.on('error', (e) => { console.error('[transcode spawn]', e.message); try { ctx.res.destroy(); } catch {} });
     ff.stdout.pipe(ctx.res);
     let err = '';
-    ff.stderr.on('data', (d) => { err += d; });
+    ff.stderr.on('data', (d) => { if (err.length < 8000) err += d; }); // cap: ffmpeg streams stderr for the whole playback
     ff.on('close', (codeNum) => { if (codeNum && !ctx.res.writableEnded) console.error('[transcode]', err.slice(0, 400)); ctx.res.end(); });
     ctx.req.on('close', () => ff.kill('SIGKILL'));
   },
@@ -6772,7 +6794,7 @@ function ensureSubtitleVtt(vf, track, uid, opts = {}) {
     }, timeoutMs);
     ff.on('error', (e) => fail(e));
     ff.stdout.on('data', (d) => chunks.push(d));
-    ff.stderr.on('data', (d) => { err += d; });
+    ff.stderr.on('data', (d) => { if (err.length < 8000) err += d; }); // cap: ffmpeg streams stderr for the whole playback
     ff.on('close', (codeNum) => {
       const vtt = Buffer.concat(chunks).toString('utf8');
       if (codeNum || !vtt.startsWith('WEBVTT')) return fail(new Error(err.slice(0, 200) || `ffmpeg exit ${codeNum}`));
@@ -6938,7 +6960,7 @@ const server = http.createServer(async (req, res) => {
         // Drain any inbound body and ignore its socket errors before rejecting, so a
         // request still uploading when we say 401/403 doesn't surface as ECONNRESET.
         const reject = (code, body) => { req.on('error', () => {}); req.resume(); return send(res, code, body); };
-        const token = bearer(req, url);
+        const token = bearer(req, url, route.auth === 'stream');
         const claims = auth.verifyToken(token, route.auth === 'stream' ? 'stream' : 'session')
           || (route.auth === 'stream' ? auth.verifyToken(token, 'session') : null);
         if (!claims) return reject(401, { error: 'authentication required' });

@@ -166,7 +166,12 @@ class NzbFileStream {
       const dec = decode(raw);
       if (!dec.crcOk) throw new Error(`segment ${i} CRC mismatch`);
       if (dec.size !== null) this.size = dec.size;
-      if (dec.part && i === 0) this.partSize = dec.part.end - dec.part.begin;
+      // A malformed =ypart (begin without a valid end) would yield NaN here and poison ALL
+      // offset→segment math (NaN segment indices). Only learn partSize from a sane header.
+      if (dec.part && i === 0) {
+        const ps = dec.part.end - dec.part.begin;
+        if (Number.isFinite(ps) && ps > 0) this.partSize = ps;
+      }
       this._cachePut(i, dec.data);
       return dec.data;
     };

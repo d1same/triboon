@@ -195,6 +195,29 @@ test('security: role separation — user tokens cannot reach admin routes', asyn
   assert.strictEqual((await httpJson(srv.port, 'GET', '/api/libraries', null, user)).status, 200, 'users can READ libraries');
 });
 
+test('security: ?t= session tokens are rejected on non-stream routes; /api/status fingerprint is admin-only', async () => {
+  // (1) A session token authenticates via the Authorization header but NEVER via the ?t= URL
+  // query on a user/admin route (where it would leak into logs/referer/history). ?t= is honored
+  // only for stream-tier media routes, which scope-check it.
+  assert.strictEqual((await httpJson(srv.port, 'GET', '/api/me', null, admin)).status, 200, 'header token authenticates /api/me');
+  assert.strictEqual((await httpRaw(srv.port, `/api/me?t=${admin}`)).status, 401, 'a session token in ?t= is rejected on /api/me');
+
+  // (2) Provider host/port + host OS/Node fingerprint are admin-only operational detail in /api/status.
+  const inv = await httpJson(srv.port, 'POST', '/api/invites', { policy: {} }, admin);
+  assert.strictEqual(inv.status, 200, 'admin can mint an invite');
+  const joined = await httpJson(srv.port, 'POST', '/api/invite/accept', { token: inv.json.token, name: 'sguest', password: 'sguest-pass1' });
+  assert.strictEqual(joined.status, 200, 'invite accepted by a regular user');
+  const user = joined.json.token;
+  const us = await httpJson(srv.port, 'GET', '/api/status', null, user);
+  const as = await httpJson(srv.port, 'GET', '/api/status', null, admin);
+  assert.strictEqual(us.status, 200);
+  assert.strictEqual(as.status, 200);
+  assert.ok(!us.json.device || us.json.device.os === undefined, 'regular user does not receive the host OS fingerprint');
+  assert.ok(!us.json.nntp || us.json.nntp.host === undefined, 'regular user does not receive the provider host/port');
+  assert.ok(as.json.device && typeof as.json.device.node === 'string', 'admin still receives the full device fingerprint');
+  assert.ok(as.json.nntp && typeof as.json.nntp.host === 'string', 'admin still receives the provider host');
+});
+
 test('activity: users heartbeat playback and only admins see now-watching rows', async () => {
   const login = await httpJson(srv.port, 'POST', '/api/login', { name: 'fam', password: 'fam-pass' });
   assert.strictEqual(login.status, 200);

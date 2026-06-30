@@ -426,10 +426,12 @@ class NntpPool {
 
   async body(msgId, priority = 'playback', opts = {}) {
     let lastErr;
-    for (const p of this._ordered()) {
+    const ordered = this._ordered();
+    if (!ordered.length) throw new Error('no usenet providers configured');
+    for (const p of ordered) {
       try { return await p.body(msgId, priority, opts); } catch (e) { if (isAbortError(e)) throw e; lastErr = e; }
     }
-    throw lastErr;
+    throw lastErr || new Error('no usenet provider could serve the article');
   }
 
   async run(fn, priority = 'playback', opts = {}) {

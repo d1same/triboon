@@ -34,7 +34,9 @@ class TmdbProxy {
     const sep = path.includes('?') ? '&' : '?';
     const r = await fetchUrl(`${this.baseUrl}${path}${sep}api_key=${key}`, { timeoutMs: 8000 });
     if (r.status !== 200) { const e = new Error(`tmdb upstream ${r.status}`); e.status = 502; throw e; }
-    const data = JSON.parse(r.body.toString('utf8'));
+    let data;
+    try { data = JSON.parse(r.body.toString('utf8')); }
+    catch { const e = new Error('tmdb upstream returned non-JSON'); e.status = 502; throw e; }
     this.store.update('tmdb-cache', {}, (c) => {
       c[cacheKey] = { at: Date.now(), data };
       // Light eviction: keep the cache bounded.

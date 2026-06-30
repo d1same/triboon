@@ -309,6 +309,7 @@ public class MainActivity extends Activity {
     private android.speech.SpeechRecognizer speech; // in-app voice search (created per use)
     private boolean voicePending;            // mic permission was requested BY a voice tap
     private int focusRecoveryEpoch;
+    private android.window.OnBackInvokedCallback backInvokedCallback; // stored so onDestroy can unregister it
     private long lastWebRendererGoneAt;
     private int webRendererGoneCount;
     private final java.util.ArrayList<String> pendingTvKeys = new java.util.ArrayList<>();
@@ -336,9 +337,10 @@ public class MainActivity extends Activity {
             return;
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            backInvokedCallback = this::handleSystemBack;
             getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
                     OnBackInvokedDispatcher.PRIORITY_DEFAULT,
-                    this::handleSystemBack);
+                    backInvokedCallback);
         }
 
         String server = normalizeServerUrl(prefs().getString(KEY_SERVER, ""));
@@ -6885,6 +6887,11 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        focusRecoveryEpoch++; // neutralize any pending postDelayed focus-recovery so it can't touch a dead Activity
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && backInvokedCallback != null) {
+            try { getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backInvokedCallback); } catch (Exception ignored) {}
+            backInvokedCallback = null;
+        }
         releaseNativePlayer(false);
         setPhonePlaybackOrientation(false);
         disposeWebView(web, false);
