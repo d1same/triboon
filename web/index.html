@@ -395,11 +395,11 @@ body.androidApp #gateArtCaption{display:none}
    photo/poster RING (--artFocusLine/Glow) like .card/.pcard — they must NOT get the solid
    button fill, or the whole tile (photo + name) flashes a coloured block on focus. */
 .btn.focus::before, .btn:focus-visible::before,
-button.focusable:not(.card):not(.pcard):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard).focus::before, button.focusable:not(.card):not(.pcard):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):focus-visible::before { opacity:0 !important; }
+button.focusable:not(.card):not(.pcard):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel).focus::before, button.focusable:not(.card):not(.pcard):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):focus-visible::before { opacity:0 !important; }
 .btn:hover, .btn.focus, .btn:focus-visible,
-button.focusable:not(.card):not(.pcard):not(.railBtn):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):hover,
-button.focusable:not(.card):not(.pcard):not(.railBtn):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard).focus,
-button.focusable:not(.card):not(.pcard):not(.railBtn):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):focus-visible {
+button.focusable:not(.card):not(.pcard):not(.railBtn):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):hover,
+button.focusable:not(.card):not(.pcard):not(.railBtn):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel).focus,
+button.focusable:not(.card):not(.pcard):not(.railBtn):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):focus-visible {
   background: var(--btnHover) !important;
   color: var(--btnFocusText) !important;
   filter: none;
@@ -818,7 +818,7 @@ body.nativeGuideMode #player.guideMode #video{display:none}
 .mvPickerBody{display:grid;grid-template-columns:minmax(130px,170px) minmax(0,1fr);min-height:0}
 .mvCats,.mvChannels{overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:7px}
 .mvCat,.mvChannel{width:100%;min-height:42px;border-radius:10px;border:1px solid rgba(var(--fg),.08);background:rgba(var(--fg),.045);color:var(--text);text-align:left;padding:8px 10px;font:800 11px "Albert Sans";display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}
-.mvCat.sel,.mvCat:hover,.mvChannel:hover,.mvCat:focus,.mvChannel:focus{outline:none;background:rgba(184,164,106,.14);border-color:rgba(255,198,92,.20)}
+.mvCat.sel,.mvCat:hover,.mvChannel:hover,.mvCat:focus,.mvChannel:focus,.mvCat.focus,.mvChannel.focus{outline:none;background:rgba(184,164,106,.14);border-color:rgba(255,198,92,.20)}
 .mvChannel span:first-child,.mvCat span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* Professional channel rows: logo + name, no repeated group label. */
 .mvChannelLive{justify-content:flex-start;gap:11px;padding:7px 11px;min-height:48px}
