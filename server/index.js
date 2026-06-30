@@ -545,6 +545,12 @@ const IPTV_NATIVE_FIRST_BYTE_TIMEOUT_MS = 10000;
 const IPTV_NATIVE_ERROR_TTL_MS = 30000;
 const IPTV_PROVIDER_PROTECTION_ERROR_TTL_MS = 5 * 60000;
 const IPTV_LIVE_RETUNE_GRACE_MS = 650;
+// The ffmpeg-remux path (browser) needs ~650ms for the old ffmpeg process to exit before respawning.
+// The NATIVE proxy just destroys one Node socket (synchronous, single-digit ms on the same TCP
+// path), so it only needs a small teardown cushion — 650ms there was ~530ms of dead air on every
+// Android channel switch. Eviction (prev.close → up.destroy) is synchronous and independent of this
+// grace, so shrinking it does NOT let a second upstream stack (the maxActiveStreams===1 contract).
+const IPTV_LIVE_RETUNE_GRACE_NATIVE_MS = 120;
 const IPTV_PLAYBACK_API_QUIET_MS = 7000;
 const IPTV_GROUP_SEPARATOR = ' \u00B7 ';
 const IPTV_PRIVATE_URL_CACHE_MS = 30 * 60000;
@@ -1479,7 +1485,7 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
   };
 
   if (slot.replaced && hops === 0) {
-    delayTimer = setTimeout(() => { delayTimer = null; open(target, hops); }, IPTV_LIVE_RETUNE_GRACE_MS);
+    delayTimer = setTimeout(() => { delayTimer = null; open(target, hops); }, IPTV_LIVE_RETUNE_GRACE_NATIVE_MS);
     delayTimer.unref();
   } else {
     open(target, hops);
