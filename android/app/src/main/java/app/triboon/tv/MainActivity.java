@@ -2490,7 +2490,7 @@ public class MainActivity extends Activity {
             j.put("h264", nativeDecoderAvailable("video/avc"));
             j.put("hevc", nativeDecoderAvailable("video/hevc"));
             j.put("dovi", nativeDecoderAvailable("video/dolby-vision"));
-            j.put("av1", nativeDecoderAvailable("video/av01"));
+            j.put("av1", nativeHardwareDecoderAvailable("video/av01")); // HW-only: software AV1 can't do 4K on budget boxes
             j.put("vp9", nativeDecoderAvailable("video/x-vnd.on2.vp9"));
             j.put("mpeg2", nativeDecoderAvailable("video/mpeg2"));
             j.put("aac", nativeDecoderAvailable("audio/mp4a-latm"));
@@ -2625,6 +2625,34 @@ public class MainActivity extends Activity {
             }
         } catch (Exception ignored) {}
         return false;
+    }
+
+    // HARDWARE decode only. A SOFTWARE decoder (Google's c2.android.* / OMX.google.*) "supports" the
+    // codec but can't keep up with 4K — on a budget box (Onn / Fire TV / Chromecast) software AV1 4K
+    // stutters exactly like it does on a Shield with no AV1 decoder at all. We report av1 capability
+    // through THIS so a software-only AV1 decoder reads as "no AV1" and the server picks HEVC instead.
+    private boolean nativeHardwareDecoderAvailable(String mime) {
+        if (mime == null || mime.isEmpty()) return false;
+        try {
+            for (MediaCodecInfo info : nativeDecoderInfos()) {
+                if (info == null || info.isEncoder()) continue;
+                boolean handles = false;
+                for (String type : info.getSupportedTypes()) {
+                    if (mime.equalsIgnoreCase(type)) { handles = true; break; }
+                }
+                if (handles && nativeIsHardwareDecoder(info)) return true;
+            }
+        } catch (Exception ignored) {}
+        return false;
+    }
+
+    private boolean nativeIsHardwareDecoder(MediaCodecInfo info) {
+        if (Build.VERSION.SDK_INT >= 29) {
+            try { return info.isHardwareAccelerated(); } catch (Throwable ignored) {}
+        }
+        // Pre-29 fallback: exclude the known software-decoder name prefixes.
+        String name = info.getName() == null ? "" : info.getName().toLowerCase(Locale.US);
+        return !(name.startsWith("omx.google.") || name.startsWith("c2.android.") || name.contains(".sw."));
     }
 
     private MediaCodecInfo[] nativeDecoderInfos() {
