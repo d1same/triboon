@@ -267,6 +267,71 @@ body.tv:not(.railOpen) #rail:not(.expanded) .railBtn .del{opacity:0!important}
    confusing in dense lists (left menu, Live TV guide). Instant on TV; desktop/touch keep the fade. */
 body.tv .focusable::before{transition:none}
 body.tv .card,body.tv .btn,body.tv .srcRow,body.tv .railBtn,body.tv .lcat,body.tv .gRow{transition:none}
+
+/* ===== Toomaj theme — high-visibility focus spotlight (Aurora base, amber focus) =====
+   A dedicated accessibility theme for small/older/low-contrast TVs: the focused item is
+   unmistakable. Everything here is scoped to [data-theme="toomaj"] so the other themes are
+   untouched. Pairs with the amber focus tokens in the THEMES.toomaj object (solid --btnHover
+   amber + dark --btnFocusText already light up every menu/list/tab/guide-cell on focus). */
+/* Cover/card focus ring: amber (decoupled from the green accent), thicker, bigger lift. */
+body[data-theme="toomaj"]{--grad:#FFD23F}
+body[data-theme="toomaj"] .focusable.focus::before,
+body[data-theme="toomaj"] .focusable:focus-visible::before{padding:4px;inset:-5px}
+body[data-theme="toomaj"] .focusable.focus{transform:translateZ(0) scale(1.05)}
+/* Left menu: the focused row becomes a solid amber chip with dark text + a bold bar. */
+body[data-theme="toomaj"] .railBtn.focusable.focus,
+body[data-theme="toomaj"] .railBtn:focus-visible,
+body[data-theme="toomaj"] .railBtn.active.focusable.focus,
+body[data-theme="toomaj"] .railBtn.active:focus-visible,
+body[data-theme="toomaj"] #railUser.focusable.focus,
+body[data-theme="toomaj"] #railUser:focus-visible{background:var(--focus);color:#1A1206}
+body[data-theme="toomaj"] .railBtn.focusable.focus svg,
+body[data-theme="toomaj"] .railBtn:focus-visible svg{color:#1A1206}
+body[data-theme="toomaj"] .railBtn.focusable.focus::after,
+body[data-theme="toomaj"] .railBtn:focus-visible::after{width:5px;height:30px;box-shadow:0 0 16px var(--focus)}
+/* Spotlight: fade unfocused artwork so the focused cover/card/channel clearly pops. */
+body[data-theme="toomaj"] .pcard .art,
+body[data-theme="toomaj"] .card,
+body[data-theme="toomaj"] .seasonCard,
+body[data-theme="toomaj"] .epCard,
+body[data-theme="toomaj"] .castCard,
+body[data-theme="toomaj"] .chCard .chLogo,
+body[data-theme="toomaj"] .playerEpCard .peStill{opacity:.62;transition:opacity .12s}
+body[data-theme="toomaj"] .pcard.focus .art,
+body[data-theme="toomaj"] .card.focus,
+body[data-theme="toomaj"] .seasonCard.focus,
+body[data-theme="toomaj"] .epCard.focus,
+body[data-theme="toomaj"] .castCard.focus,
+body[data-theme="toomaj"] .chCard.focus .chLogo,
+body[data-theme="toomaj"] .playerEpCard.focus .peStill,
+body[data-theme="toomaj"] .playerEpCard:focus-visible .peStill{opacity:1}
+/* In-player episode list: thick amber ring on the focused episode still (matches the rest). */
+body[data-theme="toomaj"] .playerEpCard.focus .peStill,
+body[data-theme="toomaj"] .playerEpCard:focus-visible .peStill{box-shadow:inset 0 0 0 3px var(--focus),0 0 18px var(--artFocusGlow)}
+/* Menus/overlays that hardcode a white or fixed-amber focus bg → route to the amber fill. */
+body[data-theme="toomaj"] #trackMenu button.focus,
+body[data-theme="toomaj"] .epMenu button.focus,
+body[data-theme="toomaj"] .mvCat.focus,
+body[data-theme="toomaj"] .mvChannel.focus{background:var(--focus);color:#1A1206;border-color:var(--focus)}
+body[data-theme="toomaj"] .mvIconBtn.focus,
+body[data-theme="toomaj"] .mvIconBtn:focus-visible,
+body[data-theme="toomaj"] .mvAction.focus,
+body[data-theme="toomaj"] .mvAction:focus-visible,
+body[data-theme="toomaj"] .mArtistHit.focus,
+body[data-theme="toomaj"] .mArtistHit:focus-visible{border-color:var(--focus);box-shadow:0 0 0 3px var(--focus)}
+/* Inputs/selects whose focus follows the brand accent → give them the amber focus ring. */
+body[data-theme="toomaj"] #searchBar input:focus,
+body[data-theme="toomaj"] .settingsControl input:focus,
+body[data-theme="toomaj"] select:focus{border-color:var(--focus);box-shadow:0 0 0 2.5px var(--focusSoft)}
+body[data-theme="toomaj"] #settings button:focus,
+body[data-theme="toomaj"] #settings a:focus,
+body[data-theme="toomaj"] #settings input:focus,
+body[data-theme="toomaj"] #settings select:focus,
+body[data-theme="toomaj"] #prefs button:focus,
+body[data-theme="toomaj"] #prefs a:focus,
+body[data-theme="toomaj"] #prefs input:focus,
+body[data-theme="toomaj"] #prefs select:focus,
+body[data-theme="toomaj"] .mbBar.focus{box-shadow:0 0 0 3px var(--focus) !important}
 #apkUpdateStatus.updateAvail{color:var(--amber);font-weight:600}
 
 /* ---------- auth screens ---------- */
@@ -16275,6 +16340,21 @@ const THEMES = {
     artFocusLine: 'rgba(28,231,131,.38)', artFocusGlow: 'rgba(28,231,131,.20)', artFocusTileLine: 'rgba(28,231,131,.28)', artFocusTileBorder: 'rgba(28,231,131,.22)', artFocusTileGlow: 'rgba(28,231,131,.16)',
     scrim: 'linear-gradient(90deg,rgba(6,7,8,.88) 0%,rgba(6,7,8,.56) 28%,rgba(6,7,8,.20) 58%,rgba(6,7,8,.06) 100%),linear-gradient(0deg,rgba(6,7,8,.78) 0%,rgba(6,7,8,.26) 26%,rgba(6,7,8,.05) 60%,rgba(6,7,8,.11) 100%)',
   },
+  // Toomaj — Aurora's dark base, but a HIGH-VISIBILITY amber focus: the focused item gets a
+  // solid amber fill / bold amber ring while the rest dims back (see the [data-theme="toomaj"]
+  // CSS block). Built for small/older/low-contrast TVs where the normal focus cue is too subtle.
+  toomaj: {
+    label: 'Toomaj', tone: 'Aurora base · high-vis amber focus',
+    ink: '#060708', surface: '#0E1011', raise: '#181B1C',
+    m: '#14B368', c: '#1CE783', a: '#5FF0AC',
+    text: '#F2FBF6', muted: '#9FB3A9', line: 'rgba(255,255,255,.18)',
+    field: 'rgba(6,7,8,.85)', soft: 'rgba(30,40,35,.58)', panel: 'rgba(12,15,14,.97)',
+    focus: '#FFD23F', focusSoft: 'rgba(255,210,63,.55)', onAccent: '#04130B',
+    success: '#1CE783', danger: '#FF7A7A',
+    btn: 'rgba(30,34,32,.92)', btnHover: '#FFD23F', btnSelected: 'rgba(255,210,63,.30)', btnSelectedHover: '#FFDD6B', btnPrimary: '#1CE783', btnPrimaryHover: '#3DEE97', btnFocusText: '#1A1206',
+    artFocusLine: 'rgba(255,210,63,.95)', artFocusGlow: 'rgba(255,210,63,.45)', artFocusTileLine: 'rgba(255,210,63,.9)', artFocusTileBorder: 'rgba(255,210,63,.8)', artFocusTileGlow: 'rgba(255,210,63,.42)',
+    scrim: 'linear-gradient(90deg,rgba(6,7,8,.88) 0%,rgba(6,7,8,.56) 28%,rgba(6,7,8,.20) 58%,rgba(6,7,8,.06) 100%),linear-gradient(0deg,rgba(6,7,8,.78) 0%,rgba(6,7,8,.26) 26%,rgba(6,7,8,.05) 60%,rgba(6,7,8,.11) 100%)',
+  },
   // The ONE light theme — pale surfaces with DARK text. Its rollover bg is a light tint, so
   // btnFocusText is DARK (the opposite of every dark theme) and the scrim fades to light.
   daylight: {
@@ -16361,7 +16441,7 @@ function applyTheme() {
   return name;
 }
 // Three curated themes in the picker (neutral / cool / warm). Others stay valid for saved prefs.
-const VISIBLE_THEMES = ['triboonCoral', 'studio', 'velvet', 'midnight', 'scarlet', 'aurora', 'daylight', 'topaz'];
+const VISIBLE_THEMES = ['triboonCoral', 'studio', 'velvet', 'midnight', 'scarlet', 'aurora', 'toomaj', 'daylight', 'topaz'];
 // One theme picker, two homes: user Preferences and admin Settings Display.
 function renderThemePicker(elId) {
   const tp = $(elId); if (!tp) return;

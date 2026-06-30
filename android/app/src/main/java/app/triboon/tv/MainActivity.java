@@ -441,24 +441,38 @@ public class MainActivity extends Activity {
 
     private void applySystemUiPolicy() {
         try {
+            // Immersive (bars hidden) on TV always; on a phone only while a video is fullscreen.
+            // Otherwise (phone, browsing) the status bar (top) and back/home/recents nav bar
+            // (bottom) stay visible so the app sits inside the normal system UI.
+            boolean immersive = isTvDevice() || phonePlaybackOrientationLocked;
             if (isTvDevice()) {
                 setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
             } else if (!phonePlaybackOrientationLocked) {
                 setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                WindowManager.LayoutParams lp = getWindow().getAttributes();
-                lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
-                getWindow().setAttributes(lp);
-            }
             View decor = getWindow().getDecorView();
-            decor.setSystemUiVisibility(
-                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                            | View.SYSTEM_UI_FLAG_FULLSCREEN
-                            | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                            | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                            | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                            | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+            if (immersive) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    WindowManager.LayoutParams lp = getWindow().getAttributes();
+                    lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+                    getWindow().setAttributes(lp);
+                }
+                decor.setSystemUiVisibility(
+                        View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                                | View.SYSTEM_UI_FLAG_FULLSCREEN
+                                | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                                | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                                | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+            } else {
+                // Don't draw under a notch/bars now that the bars are shown.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    WindowManager.LayoutParams lp = getWindow().getAttributes();
+                    lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT;
+                    getWindow().setAttributes(lp);
+                }
+                decor.setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
+            }
         } catch (Exception ignored) {
         }
     }
@@ -931,6 +945,9 @@ public class MainActivity extends Activity {
                 setRequestedOrientation(phoneOrientationBeforePlayback);
                 phoneOrientationBeforePlayback = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
             }
+            // The lock flag just flipped — re-apply so bars hide on entering fullscreen video
+            // and the status/nav bars come back on exit.
+            applySystemUiPolicy();
         } catch (Exception ignored) {
         }
     }
@@ -1059,6 +1076,9 @@ public class MainActivity extends Activity {
                 web.setVisibility(View.GONE);
                 root.addView(view, new FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                // Phone HTML5 fullscreen video (trailers / web player) goes immersive like native
+                // playback; hides the now-visible phone bars. No-op on TV (already immersive).
+                setPhonePlaybackOrientation(true);
             }
             @Override public void onHideCustomView() {
                 if (fullscreenVideo == null) return;
@@ -1066,6 +1086,8 @@ public class MainActivity extends Activity {
                 fullscreenVideo = null;
                 web.setVisibility(View.VISIBLE);
                 web.requestFocus();
+                // Exit fullscreen video → restore phone orientation + bring the bars back.
+                setPhonePlaybackOrientation(false);
             }
 
             @Override public boolean onJsAlert(WebView v, String url, String msg, android.webkit.JsResult r) {
