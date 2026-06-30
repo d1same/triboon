@@ -223,7 +223,7 @@ class ProviderPool {
         // If every attempt failed and nothing is live, queued work can never run — fail it.
         if (this.connecting === 0 && this.conns.length === 0 && this.queue.length) {
           const q = this.queue; this.queue = [];
-          for (const t of q) t.reject(e);
+          for (const t of q) { if (typeof t.cleanupAbort === 'function') t.cleanupAbort(); t.reject(e); }
         } else {
           this._pump();
         }
@@ -306,7 +306,7 @@ class ProviderPool {
     if (this.queue.length && this.conns.length === 0 && this.connecting === 0 && this.down()) {
       const q = this.queue; this.queue = [];
       const err = this.lastErr || new Error('provider temporarily unavailable');
-      for (const t of q) t.reject(err);
+      for (const t of q) { if (typeof t.cleanupAbort === 'function') t.cleanupAbort(); t.reject(err); }
       return;
     }
     if (this.queue.length && this.conns.length + this.connecting < this.size) this._ensure();

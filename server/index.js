@@ -521,7 +521,7 @@ const pipeline = new Pipeline({
 });
 const { fetchUrl: fetchUrlExt, searchIndexer } = require('./newznab');
 const {
-  fetchOnlineSub, searchOnlineSubs, downloadBestSubtitle, rankSubs, usableVariants, distinctVariants, hasConfidentAutoPick, srtToVtt, shiftVtt,
+  fetchOnlineSub, searchOnlineSubs, downloadBestSubtitle, rankSubs, usableVariants, distinctVariants, hasConfidentAutoPick, srtToVtt, shiftVtt, decodeSubtitleBuffer,
   osSearch, osNormalize, osLogin, osDownloadVtt, moviehashFromChunks, subtitleLooksSynced, subSyncResultOk,
   _isTransientError: isTransientSubError,
   _isNoSubtitleError: isNoSubtitleError,
@@ -915,6 +915,9 @@ function clearIptvSourceRuntime(sourceId) {
   xtreamEpgSourceCaches.delete(id);
   iptvRefreshingSources.delete(id);
   clearIptvAggregateCache();
+  // Drop the negative (4xx/5xx/backoff) cache too, or a freshly fixed/re-added source stays dark
+  // for the cached TTL (up to several minutes for provider-protection codes). It self-rebuilds.
+  iptvNativeErrorCache = new Map();
   if (epgCache.sourceId === id) epgCache = { key: null, at: 0, byChannel: new Map(), byName: new Map() };
   if (xtreamEpgCache.sourceId === id) xtreamEpgCache = { key: null, byStream: new Map() };
 }
@@ -3080,8 +3083,8 @@ function assToVtt(body) {
   if (!cues.length) throw new Error('release subtitle has no readable text cues');
   return `WEBVTT\n\n${cues.join('\n\n')}\n`;
 }
-function releaseSubtitleToVtt(buf, ext) {
-  const body = Buffer.isBuffer(buf) ? buf.toString('utf8') : String(buf || '');
+function releaseSubtitleToVtt(buf, ext, langHint = '') {
+  const body = Buffer.isBuffer(buf) ? decodeSubtitleBuffer(buf, langHint) : String(buf || '');
   const kind = String(ext || '').toLowerCase();
   if (kind === 'vtt' || body.replace(/^\uFEFF/, '').startsWith('WEBVTT')) return body.replace(/^\uFEFF/, '');
   if (kind === 'ass' || kind === 'ssa' || /^\s*\[Script Info\]/i.test(body)) return assToVtt(body);
@@ -4493,6 +4496,9 @@ const H = {
         else try { ctx.res.destroy(); } catch {}
         return;
       }
+      // The validate/DNS-pin await can take a while on slow providers; if the client gave up in
+      // that window, don't spawn ffmpeg + hold an upstream provider connection for nothing.
+      if (liveSlot.closed || ctx.res.destroyed) { liveSlot.done('client closed'); return; }
       let ff;
       try {
         ff = spawnLiveRemux(iptvRemuxInputHref(pin, target.url), {
@@ -6120,7 +6126,9 @@ Object.assign(H, {
     if (!vf) return send(ctx.res, 404, { error: 'mount not found' });
     if (!mountAccessOk(ctx, vf)) return send(ctx.res, 404, { error: 'mount not found' });
     const key = effectiveOpenSubsKey();
-    if (!key) return send(ctx.res, 503, { error: 'Wyzie Subs is not configured (Settings -> Catalog)' });
+    // OpenSubtitles (the hash-exact provider) can stand alone — don't 503 just because Wyzie is
+    // unset. getVariants tolerates an empty Wyzie set and still runs the OpenSubtitles search.
+    if (!key && !effectiveOpenSubtitles()) return send(ctx.res, 503, { error: 'No subtitle provider configured (Settings -> Catalog)' });
     vf._touched = Date.now();
     const lang = String(ctx.url.searchParams.get('lang') || 'en').slice(0, 5).replace(/[^a-z-]/gi, '');
     const tmdbId = String(ctx.url.searchParams.get('tmdb') || '').replace(/\D/g, '');
@@ -6219,14 +6227,15 @@ Object.assign(H, {
           // re-login retry covers an expired token.
           const downloadOpenSubtitles = async (fileId) => {
             const tok = await osBearer(osCfg);
+            // ASS/SSA must go through the real converter; srtToVtt would emit `Dialogue:`/`{\an8}`
+            // codes verbatim. Everything else keeps the SRT->VTT path. langHint fixes encoding.
+            const toVtt = (r) => (/^(ass|ssa)$/i.test(String(r.ext || '')) ? releaseSubtitleToVtt(r.raw, r.ext, lang) : r.vtt);
             try {
-              const r = await osDownloadVtt(fileId, { apiKey: osCfg.apiKey, token: tok.token, base: tok.baseUrl });
-              return r.vtt;
+              return toVtt(await osDownloadVtt(fileId, { apiKey: osCfg.apiKey, token: tok.token, base: tok.baseUrl, langHint: lang }));
             } catch (e) {
               if (/HTTP 401|HTTP 403/.test(String(e && e.message))) {
                 const fresh = await osBearer(osCfg, { force: true });
-                const r = await osDownloadVtt(fileId, { apiKey: osCfg.apiKey, token: fresh.token, base: fresh.baseUrl });
-                return r.vtt;
+                return toVtt(await osDownloadVtt(fileId, { apiKey: osCfg.apiKey, token: fresh.token, base: fresh.baseUrl, langHint: lang }));
               }
               throw e;
             }

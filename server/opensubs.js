@@ -69,7 +69,7 @@ async function retryTransient(label, fn, { attempts = 2, delayMs = 700 } = {}) {
 // timeoutMs = socket idle; deadlineMs = HARD total budget (a trickling response never idles,
 // and this runs inside a player request — it must not be able to hang the CC menu forever).
 // The deadline + hop budget are shared across redirects so a redirect chain can't loop/reset.
-function request(method, url, { key, bearer, body, timeoutMs = 10000, deadlineMs = 20000, _deadlineAt, _hops = 0 } = {}) {
+function request(method, url, { key, bearer, body, timeoutMs = 10000, deadlineMs = 20000, raw = false, _deadlineAt, _hops = 0 } = {}) {
   const deadlineAt = _deadlineAt || (Date.now() + deadlineMs);
   return new Promise((resolve, reject) => {
     if (_hops > 5) return reject(new Error(`subs redirect loop: ${url.split('?')[0]}`));
@@ -93,11 +93,11 @@ function request(method, url, { key, bearer, body, timeoutMs = 10000, deadlineMs
         const redirectKey = key && subtitleDownloadNeedsAuth(next.href, url) ? key : undefined;
         if (redirectKey && !next.searchParams.has('key')) next.searchParams.set('key', redirectKey);
         return request(method, next.href,
-          { key: redirectKey, bearer, timeoutMs, _deadlineAt: deadlineAt, _hops: _hops + 1 }).then(resolve, reject);
+          { key: redirectKey, bearer, timeoutMs, raw, _deadlineAt: deadlineAt, _hops: _hops + 1 }).then(resolve, reject);
       }
       const chunks = [];
       res.on('data', (c) => { if (chunks.reduce((n, x) => n + x.length, 0) < 8e6) chunks.push(c); });
-      res.on('end', () => { clearTimeout(deadline); resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString('utf8') }); });
+      res.on('end', () => { clearTimeout(deadline); const buf = Buffer.concat(chunks); resolve({ status: res.statusCode, body: raw ? buf : buf.toString('utf8') }); });
     });
     const deadline = setTimeout(() => req.destroy(new Error(`subs deadline after ${deadlineMs}ms: ${url.split('?')[0]}`)), remaining);
     req.setTimeout(timeoutMs, () => req.destroy(new Error(`subs timeout: ${url.split('?')[0]}`)));
@@ -122,6 +122,36 @@ function srtToVtt(srt) {
   const body = String(srt).replace(/^﻿/, '').replace(/\r/g, '')
     .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');
   return body.startsWith('WEBVTT') ? body : 'WEBVTT\n\n' + body;
+}
+
+// Subtitle files in the wild are frequently NOT UTF-8: Arabic/Persian/Urdu (windows-1256),
+// Russian/Bulgarian/Ukrainian/Serbian/Macedonian (windows-1251), Czech/Polish/Hungarian/
+// Croatian/Romanian (iso-8859-2), Greek (iso-8859-7), Turkish (windows-1254), Hebrew
+// (windows-1255), Thai (windows-874). Decoding those bytes as UTF-8 turns every non-Latin glyph
+// into U+FFFD — the captions render as garbage on exactly the languages the 639-1 mapping works
+// to fetch. Decode rule: honor a BOM; keep UTF-8 when it round-trips losslessly; otherwise fall
+// back to the single-byte codepage for the subtitle's language (default windows-1252 so Western
+// accents survive even when the language is unknown). TextDecoder ships with full ICU in Node.
+function codepageForLang(lang) {
+  const l = (toIso6391(lang) || String(lang || '').slice(0, 2)).toLowerCase();
+  if (l === 'ar' || l === 'fa' || l === 'ur') return 'windows-1256';
+  if (['ru', 'bg', 'uk', 'sr', 'mk', 'be'].includes(l)) return 'windows-1251';
+  if (['cs', 'pl', 'hu', 'sk', 'sl', 'hr', 'ro'].includes(l)) return 'iso-8859-2';
+  if (l === 'el') return 'iso-8859-7';
+  if (l === 'tr') return 'windows-1254';
+  if (l === 'he') return 'windows-1255';
+  if (l === 'th') return 'windows-874';
+  return 'windows-1252';
+}
+function decodeSubtitleBuffer(buf, langHint = '') {
+  if (!Buffer.isBuffer(buf)) return String(buf == null ? '' : buf);
+  if (buf.length >= 3 && buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF) return buf.slice(3).toString('utf8');
+  if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) { try { return new TextDecoder('utf-16le').decode(buf.subarray(2)); } catch { /* fall through */ } }
+  if (buf.length >= 2 && buf[0] === 0xFE && buf[1] === 0xFF) { try { return new TextDecoder('utf-16be').decode(buf.subarray(2)); } catch { /* fall through */ } }
+  const utf8 = buf.toString('utf8');
+  if (!utf8.includes('�')) return utf8; // valid UTF-8 (incl. pure ASCII) — leave untouched
+  try { return new TextDecoder(codepageForLang(langHint)).decode(buf); }
+  catch { return buf.toString('latin1'); }
 }
 
 // Pick the result that best matches OUR release — sync lives and dies on this: a WEB-DL sub
@@ -681,7 +711,7 @@ async function downloadSubtitle(hit, { key, base = DEFAULT_BASE, attempts = 2, r
   const needsAuth = !!key && subtitleDownloadNeedsAuth(hit.url, base);
   const url = subtitleDownloadUrl(hit.url, { key, base });
   const file = await retryTransient('Wyzie subtitle download', async () => {
-    const r = await request('GET', url, { key: needsAuth ? key : undefined, timeoutMs: 15000, deadlineMs: 25000 });
+    const r = await request('GET', url, { key: needsAuth ? key : undefined, timeoutMs: 15000, deadlineMs: 25000, raw: true });
     if (r.status !== 200) {
       const e = new Error(`subtitle file HTTP ${r.status}`);
       if (![408, 429].includes(r.status) && r.status < 500) e.permanent = true;
@@ -689,7 +719,7 @@ async function downloadSubtitle(hit, { key, base = DEFAULT_BASE, attempts = 2, r
     }
     return r;
   }, { attempts, delayMs: retryDelayMs });
-  return srtToVtt(file.body);
+  return srtToVtt(decodeSubtitleBuffer(file.body, (hit && hit.language) || ''));
 }
 
 async function fetchOnlineSubV2({ key, tmdbId, imdbId, query, lang = 'en', releaseName = '', durationSeconds = 0, base = DEFAULT_BASE,
@@ -780,7 +810,9 @@ function osNormalize(entry) {
     id: `os:${file.file_id || entry.id || ''}`,
     _osFileId: file.file_id || null,
     url: file.file_id ? `opensubtitles:${file.file_id}` : '', // resolved at download time via /download
-    format: 'srt',
+    // OpenSubtitles serves plenty of ASS/SSA (and bitmap sub/idx). Tagging everything 'srt' hid
+    // those from the format guard, so ASS markup got run through srtToVtt and shown verbatim.
+    format: (/\.(srt|vtt|ass|ssa|sub|idx)$/i.exec(String(file.file_name || rel || '')) || [, 'srt'])[1].toLowerCase(),
     language: a.language || '',
     display: rel,
     media: rel,
@@ -809,7 +841,7 @@ async function osLogin({ apiKey, username, password, base = OS_REST_BASE } = {})
 }
 
 // POST /download {file_id} → temporary link, then GET the link → VTT. `quota` reports remaining.
-async function osDownloadVtt(fileId, { apiKey, token, base = OS_REST_BASE } = {}) {
+async function osDownloadVtt(fileId, { apiKey, token, base = OS_REST_BASE, langHint = '' } = {}) {
   if (!apiKey || !token) throw permanent('OpenSubtitles download needs a login token');
   if (!fileId) throw permanent('OpenSubtitles result had no file id');
   const res = await request('POST', `${base}/download`, { key: apiKey, bearer: token, body: { file_id: Number(fileId) }, timeoutMs: 15000, deadlineMs: 25000 });
@@ -821,16 +853,22 @@ async function osDownloadVtt(fileId, { apiKey, token, base = OS_REST_BASE } = {}
   }
   let body; try { body = JSON.parse(res.body); } catch { throw new Error('opensubtitles download non-JSON'); }
   if (!body || !body.link) throw new Error('opensubtitles download returned no link');
-  const file = await request('GET', body.link, { timeoutMs: 15000, deadlineMs: 25000 });
+  const file = await request('GET', body.link, { timeoutMs: 15000, deadlineMs: 25000, raw: true });
   if (file.status !== 200) throw new Error(`opensubtitles file HTTP ${file.status}`);
-  return { vtt: srtToVtt(file.body), remaining: Number(body.remaining), fileName: body.file_name || '' };
+  const fileName = body.file_name || '';
+  const decoded = decodeSubtitleBuffer(file.body, langHint); // fix non-UTF-8 (1256/1251/8859) mojibake
+  const ext = (/\.(srt|vtt|ass|ssa|sub|idx)$/i.exec(fileName) || [, ''])[1].toLowerCase()
+    || (/^\s*\[script info\]/i.test(decoded) ? 'ass' : 'srt');
+  // Keep `vtt` (SRT->VTT) for back-compat; expose `raw`+`ext` so the caller can route ASS/SSA
+  // through the proper converter instead of mangling it with srtToVtt.
+  return { vtt: srtToVtt(decoded), raw: decoded, ext, remaining: Number(body.remaining), fileName };
 }
 
 module.exports = {
   fetchOnlineSub: fetchOnlineSubV2, searchOnlineSubs: searchOnlineSubsV2,
   osSearch, osNormalize, osLogin, osDownloadVtt, moviehashFromChunks,
   downloadSubtitle, downloadBestSubtitle, rankSubs, usableVariants, distinctVariants, hasConfidentAutoPick,
-  srtToVtt, shiftVtt, parseQuery, pickSub,
+  srtToVtt, shiftVtt, parseQuery, pickSub, decodeSubtitleBuffer,
   _request: request, _isTransientError: isTransientError, _isNoSubtitleError: isNoSubtitleError,
   _wyzieCatalogId: wyzieCatalogId,
   _subtitleDownloadNeedsAuth: subtitleDownloadNeedsAuth,

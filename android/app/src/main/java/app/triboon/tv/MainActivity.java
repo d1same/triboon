@@ -412,7 +412,11 @@ public class MainActivity extends Activity {
             }
             return;
         }
-        if (nativePlayerOpen()) {
+        // In native GUIDE mode the WebView owns focus (the EPG is web-rendered), so fall through to
+        // the web.requestFocus() branch below. Without this guard a lost focus in guide/PiP mode
+        // requested focus on the non-focusable player layer (a no-op) and the guide went dead to
+        // the D-pad until BACK was pressed.
+        if (nativePlayerOpen() && !nativeGuideMode) {
             View current = getCurrentFocus();
             if (current == null || !current.isShown()) {
                 if (nativePlayBtn != null && nativeChrome != null && nativeChrome.getVisibility() == View.VISIBLE) {
@@ -3409,12 +3413,34 @@ public class MainActivity extends Activity {
     }
 
     private boolean handleNativeUpNextKey(KeyEvent e) {
-        if (e == null || e.getAction() != KeyEvent.ACTION_DOWN) return false;
+        if (e == null) return false;
         int code = e.getKeyCode();
+        boolean ok = code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER
+                || code == KeyEvent.KEYCODE_NUMPAD_ENTER || code == KeyEvent.KEYCODE_BUTTON_A;
+        boolean nav = ok || code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT
+                || code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN;
+        // Swallow the matching key-up for anything we act on below so it can't double-fire or leak
+        // into the seek/chrome path once the card hides.
+        if (e.getAction() != KeyEvent.ACTION_DOWN) return nav;
         if (code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_ESCAPE) {
             dismissNativeUpNext(true);
             return true;
         }
+        if (ok) {
+            // OK activates whichever button holds focus; default to Play Next.
+            if (nativeUpNextDismiss != null && nativeUpNextDismiss.hasFocus()) dismissNativeUpNext(true);
+            else triggerNativeUpNextPlay();
+            return true;
+        }
+        if (code == KeyEvent.KEYCODE_DPAD_LEFT) {
+            if (nativeUpNextPlay != null) nativeUpNextPlay.requestFocus();
+            return true;
+        }
+        if (code == KeyEvent.KEYCODE_DPAD_RIGHT) {
+            if (nativeUpNextDismiss != null) nativeUpNextDismiss.requestFocus();
+            return true;
+        }
+        if (code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN) return true; // single-row card: trap, no-op
         return false;
     }
 
@@ -4426,6 +4452,9 @@ public class MainActivity extends Activity {
         int code = e.getKeyCode();
         if (handleNativeSheetKey(e)) return true;
         if (handleNativeEpisodeStripKey(e)) return true;
+        // The Up Next card owns the remote while it's up — otherwise OK/arrows fell through to
+        // toggle-chrome / seek and the user could never trigger Play Next (binge flow was broken).
+        if (nativeUpNextVisible) return handleNativeUpNextKey(e);
         if (nativeGuideMode) return false;
         if ("live".equals(nativeMode) && (code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN)) {
             if (e.getAction() == KeyEvent.ACTION_UP) {
@@ -4705,7 +4734,7 @@ public class MainActivity extends Activity {
         boolean heavyVod = video && nativeLikelyHeavyVod();
         int minMs = video ? (conservative ? (heavyVod ? 14000 : 5000) : (heavyVod ? 22000 : 5000)) : (conservative ? 8000 : 4000);
         int maxMs = video ? (conservative ? (heavyVod ? 75000 : 30000) : (heavyVod ? 120000 : 75000)) : 60000;
-        int startMs = video ? (conservative ? (heavyVod ? 3500 : 1200) : (heavyVod ? 3500 : 900)) : (conservative ? 1800 : 700);
+        int startMs = video ? (conservative ? (heavyVod ? 2500 : 1200) : (heavyVod ? 2500 : 900)) : (conservative ? 1800 : 700);
         int rebufferMs = video ? (conservative ? (heavyVod ? 7000 : 3000) : (heavyVod ? 8000 : 1800)) : (conservative ? 3500 : 1800);
         // Buffer the player holds is DERIVED from the owner's "read-ahead goal" (Settings →
         // Streaming performance) for THIS resolution: goalSec × the file's real bitrate, CLAMPED to
@@ -4723,11 +4752,17 @@ public class MainActivity extends Activity {
                 long goalMb = (long) (nativeBufferGoalSec * bytesPerSec / (1024.0 * 1024.0));
                 targetMb = (int) Math.max(floorMb, Math.min(ceilMb, goalMb));
             } else {
-                targetMb = Math.max(floorMb, Math.min(ceilMb, defTargetMb));
+                // Duration unknown — a first-time play (no watch row, server sends no duration) so
+                // the exact size/duration bitrate isn't available yet. Estimate the byte budget from
+                // a typical bitrate for this resolution tier so the deep buffer engages on the FIRST
+                // play, not only on re-watches. ~48 Mbps 4K / ~13 Mbps 1080p / ~5 Mbps SD-ish.
+                double estBytesPerSec = heavyVod ? 6.0 * 1024 * 1024 : (conservative ? 0.65 * 1024 * 1024 : 1.6 * 1024 * 1024);
+                long goalMb = (long) (nativeBufferGoalSec * estBytesPerSec / (1024.0 * 1024.0));
+                targetMb = (int) Math.max(floorMb, Math.min(ceilMb, Math.max(defTargetMb, goalMb)));
             }
             maxMs = (int) Math.max(30000L, Math.min(conservative ? 120000L : 300000L, nativeBufferGoalSec * 1000L));
         }
-        int targetBytes = targetMb * 1024 * 1024;
+        int targetBytes = (int) Math.min(Integer.MAX_VALUE, (long) targetMb * 1024 * 1024); // long math: no overflow if a future tier raises the ceiling past 2047MB
         int backBufferMs = video ? (conservative ? (heavyVod ? 6000 : 3000) : (heavyVod ? 12000 : 8000)) : 3000;
         if (video) {
             Log.i(TAG, "Native VOD buffer profile quality=" + nativeQualityLabel
@@ -5289,17 +5324,27 @@ public class MainActivity extends Activity {
     private void loadNativeEpisodeStill(ImageView view, String url) {
         if (url == null || url.isEmpty()) return;
         new Thread(() -> {
+            Bitmap bm = null;
+            HttpURLConnection c = null;
             try {
-                HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+                c = (HttpURLConnection) new URL(url).openConnection();
                 c.setConnectTimeout(4500);
                 c.setReadTimeout(6000);
+                c.setInstanceFollowRedirects(true);
                 c.setRequestProperty("Accept", "image/*,*/*");
-                Bitmap bm = BitmapFactory.decodeStream(c.getInputStream());
-                if (bm != null) runOnUiThread(() -> {
-                    if (nativePlayerOpen()) view.setImageBitmap(bm);
-                });
-            } catch (Exception ignored) {}
-        }).start();
+                // Downsample to RGB_565 + cap bytes (mirrors the backdrop loader). The old path
+                // decoded each still at full-res ARGB_8888 and never disconnected the socket — a
+                // season strip could spike heap by tens of MB and leak keep-alive connections.
+                bm = decodeNativeBackdrop(readLimitedBytes(c.getInputStream(), NATIVE_BACKDROP_MAX_BYTES));
+            } catch (Exception ignored) {
+            } finally {
+                if (c != null) try { c.disconnect(); } catch (Exception ignored2) {}
+            }
+            final Bitmap finalBm = bm;
+            if (finalBm != null) runOnUiThread(() -> {
+                if (nativePlayerOpen()) view.setImageBitmap(finalBm);
+            });
+        }, "TriboonNativeStill").start();
     }
 
     private void scrollNativeEpisodeIntoView(View child) {

@@ -371,6 +371,33 @@ test('subs: Wyzie file download is authenticated without leaking keys to unrelat
   }
 });
 
+test('subs: non-UTF-8 subtitle bodies are decoded by language (no mojibake)', async () => {
+  const { decodeSubtitleBuffer, downloadSubtitle } = require('../server/opensubs');
+  // Unit: windows-1256 Arabic + windows-1251 Cyrillic decode correctly; ASCII/UTF-8 pass through; BOM stripped.
+  const arBytes = Buffer.from([0xC7, 0xE1, 0xD3, 0xE1, 0xC7, 0xE5]);
+  const ar = decodeSubtitleBuffer(arBytes, 'ar');
+  assert.ok(!ar.includes('�'), 'Arabic windows-1256 decodes without replacement chars');
+  assert.strictEqual(ar, 'السلاه', 'Arabic windows-1256 maps to the right code points');
+  assert.strictEqual(decodeSubtitleBuffer(Buffer.from([0xCF, 0xF0, 0xE8]), 'ru'), 'При', 'Cyrillic windows-1251 decodes correctly');
+  assert.strictEqual(decodeSubtitleBuffer(Buffer.from('Hello', 'utf8'), 'en'), 'Hello', 'ASCII unchanged');
+  assert.strictEqual(decodeSubtitleBuffer(Buffer.from('café', 'utf8'), 'fr'), 'café', 'valid UTF-8 preserved untouched');
+  assert.strictEqual(decodeSubtitleBuffer(Buffer.concat([Buffer.from([0xEF, 0xBB, 0xBF]), Buffer.from('WEBVTT', 'utf8')]), 'en'), 'WEBVTT', 'UTF-8 BOM stripped');
+
+  // Integration: a Wyzie download of a windows-1256 SRT keeps the Arabic glyphs in the VTT.
+  const srt = Buffer.concat([Buffer.from('1\r\n00:00:01,000 --> 00:00:02,500\r\n', 'latin1'), arBytes, Buffer.from('\r\n', 'latin1')]);
+  const srv = http.createServer((req, res) => { res.writeHead(200); res.end(srt); });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  try {
+    const base = `http://127.0.0.1:${srv.address().port}`;
+    const vtt = await downloadSubtitle({ url: `${base}/x.srt`, format: 'srt', language: 'ar' }, { base });
+    assert.ok(vtt.startsWith('WEBVTT'), 'still converts to WebVTT');
+    assert.ok(!vtt.includes('�'), 'no mojibake in the served subtitle');
+    assert.ok(vtt.includes('السلاه'), 'Arabic text survives the charset decode');
+  } finally {
+    await new Promise((r) => srv.close(r));
+  }
+});
+
 test('subs: auto-match falls through stale subtitle file links', async () => {
   const { fetchOnlineSub, downloadBestSubtitle } = require('../server/opensubs');
   const downloads = [];
