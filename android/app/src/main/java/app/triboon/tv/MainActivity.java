@@ -4736,7 +4736,7 @@ public class MainActivity extends Activity {
         boolean heavyVod = video && nativeLikelyHeavyVod();
         int minMs = video ? (conservative ? (heavyVod ? 14000 : 5000) : (heavyVod ? 22000 : 5000)) : (conservative ? 8000 : 4000);
         int maxMs = video ? (conservative ? (heavyVod ? 75000 : 30000) : (heavyVod ? 120000 : 75000)) : 60000;
-        int startMs = video ? (conservative ? (heavyVod ? 2500 : 1200) : (heavyVod ? 2500 : 900)) : (conservative ? 1800 : 700);
+        int startMs = video ? (conservative ? (heavyVod ? 3500 : 1200) : (heavyVod ? 3500 : 900)) : (conservative ? 1800 : 700);
         int rebufferMs = video ? (conservative ? (heavyVod ? 7000 : 3000) : (heavyVod ? 8000 : 1800)) : (conservative ? 3500 : 1800);
         // Buffer the player holds is DERIVED from the owner's "read-ahead goal" (Settings →
         // Streaming performance) for THIS resolution: goalSec × the file's real bitrate, CLAMPED to
