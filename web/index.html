@@ -9295,6 +9295,7 @@ function nativePlaybackHeartbeat() {
 window.__tvNativeVideoProgress = (pos, dur) => {
   applyNativeVideoProgress(pos, dur);
   nativePlaybackHeartbeat();
+  runPendingNativeSync(); // throttle-proof: drive queued alass sync off the native tick, not a timer
 };
 window.__tvNativePlaybackSurfaceReady = () => {
   resolveNativePlaybackSurfaceReady(true);
@@ -9321,6 +9322,7 @@ window.__tvNativeVideoStats = (raw) => {
   catch { p.nativeStats = {}; }
   if ($('playerStats').classList.contains('open')) renderPlayerStats();
   nativePlaybackHeartbeat(); // stats ticks fire for native Live TV too — keeps live viewers reported
+  runPendingNativeSync();    // and a second throttle-proof driver for the queued alass sync (paused playback)
 };
 window.__tvNativeVideoSeek = (pos, dur) => {
   const p = S.playing; if (!p || !p.usingNative || !p.item || p.item.type === 'live') return;
@@ -10989,6 +10991,14 @@ function subtitleRequestParams(it, lang, streamToken) {
   });
   const imdb = subtitleImdbId(it);
   if (imdb) q.set('imdb', imdb);
+  // Send the episode explicitly (same source the play request uses) so the server filters Wyzie by
+  // the exact episode instead of recovering it from a remembered query string. Without this, any
+  // play path that didn't carry SxxExx searched the whole show — wrong dialogue + a wall of rows.
+  const ep = episodeKeyParts(it);
+  if (ep && ep.season > 0 && ep.episode > 0) {
+    q.set('season', String(ep.season));
+    q.set('episode', String(ep.episode));
+  }
   return q;
 }
 function osSubUrl(p, rel, list = false) {
@@ -11432,31 +11442,57 @@ function autoSyncNative(p, rel) {
   if (!(S.serverInfo && S.serverInfo.subSync) || !p || !p.usingNative) return;
   if (!(typeof rel === 'string' && rel.startsWith('os:'))) return;
   if (!(window.TriboonTV && window.TriboonTV.updateActiveSubtitle)) return;
-  clearTimeout(p._autoSyncNT);
-  p._autoSyncNT = setTimeout(async () => {
+  // The native player hides the WebView (View.GONE), so Android throttles — and often outright
+  // stalls — setTimeout/setInterval. The old timer-driven sync frequently never fired on Android
+  // TV, leaving the raw, unsynced subtitle on screen. Instead, QUEUE the request and let the native
+  // progress/stats ticks drive it: those are pushed FROM native ~1-2s regardless of timer
+  // throttling — the same mechanism the presence heartbeat rides on. See runPendingNativeSync.
+  p._pendingNativeSyncRel = rel;
+  p._nativeSyncTries = 0;
+  runPendingNativeSync();
+}
+// Run the queued native alass sync, at most once per native tick. Definitive outcomes — no sync
+// needed, alass produced or declined a correction, or the track changed — clear the queue; only a
+// true transient network failure leaves it queued to retry on the next tick, capped so a persistently
+// failing box can't hammer the (expensive) alass endpoint forever.
+async function runPendingNativeSync() {
+  const p = S.playing;
+  if (!p || !p.usingNative || p._nativeSyncRunning) return;
+  const rel = p._pendingNativeSyncRel;
+  if (!rel) return;
+  if (p.subTrack !== rel || !(S.serverInfo && S.serverInfo.subSync)
+      || !(window.TriboonTV && window.TriboonTV.updateActiveSubtitle)) { p._pendingNativeSyncRel = null; return; }
+  if ((p._nativeSyncTries = (p._nativeSyncTries || 0) + 1) > 4) { p._pendingNativeSyncRel = null; return; }
+  p._nativeSyncRunning = true;
+  try {
+    const payload = nativeSubtitlePayload(p, rel, 'manual');
+    if (!payload.url) { p._pendingNativeSyncRel = null; return; }
+    // Strip any manual &shift: alass corrects the sub to the video, so the server must NOT also
+    // apply the old manual offset to the corrected output, and native must NOT re-apply it
+    // client-side (it reads subtitleShift). Either would double the offset on the synced sub.
+    const baseUrl = new URL(payload.url, location.origin);
+    baseUrl.searchParams.delete('shift');
+    const base = baseUrl.href;
+    const head = await fetch(base); // cached from the native load; just read the sync verdict
+    if (!S.playing || S.playing !== p || p.subTrack !== rel) { p._pendingNativeSyncRel = null; return; }
+    if (!head.ok) return; // transient — leave queued for the next native tick
+    if (head.headers.get('x-triboon-subsync') !== 'pending') { p._pendingNativeSyncRel = null; return; }
+    const syncUrl = base + (base.includes('?') ? '&' : '?') + 'sync=1';
+    const r = await fetch(syncUrl); // triggers/awaits the alass correction, then caches it
+    if (!r.ok) return; // transient — leave queued
+    p._pendingNativeSyncRel = null; // a verdict came back: definitive either way, don't retry
+    if (r.headers.get('x-triboon-subsync') !== 'corrected') return;
     if (!S.playing || S.playing !== p || p.subTrack !== rel) return;
-    try {
-      const payload = nativeSubtitlePayload(p, rel, 'manual');
-      if (!payload.url) return;
-      // Strip any manual &shift: alass corrects the sub to the video, so the server must NOT also
-      // apply the old manual offset to the corrected output, and native must NOT re-apply it
-      // client-side (it reads subtitleShift). Either would double the offset on the synced sub.
-      const baseUrl = new URL(payload.url, location.origin);
-      baseUrl.searchParams.delete('shift');
-      const base = baseUrl.href;
-      const head = await fetch(base); // cached from the native load; just read the sync verdict
-      if (!head.ok || head.headers.get('x-triboon-subsync') !== 'pending') return;
-      const syncUrl = base + (base.includes('?') ? '&' : '?') + 'sync=1';
-      const r = await fetch(syncUrl); // triggers/awaits the alass correction, then caches it
-      if (!r.ok || r.headers.get('x-triboon-subsync') !== 'corrected') return;
-      if (!S.playing || S.playing !== p || p.subTrack !== rel) return;
-      window.TriboonTV.updateActiveSubtitle(JSON.stringify({
-        subtitleRel: rel, subtitleUrl: syncUrl,
-        subtitleLang: payload.lang, subtitleLabel: payload.label, subtitleShift: 0,
-      }));
-      toast('Subtitles synced to this video');
-    } catch {}
-  }, 400);
+    window.TriboonTV.updateActiveSubtitle(JSON.stringify({
+      subtitleRel: rel, subtitleUrl: syncUrl,
+      subtitleLang: payload.lang, subtitleLabel: payload.label, subtitleShift: 0,
+    }));
+    toast('Subtitles synced to this video');
+  } catch {
+    // transient — leave queued so the next native tick retries (capped above)
+  } finally {
+    p._nativeSyncRunning = false;
+  }
 }
 async function setSubtitle(rel, opts = {}) {
   const p = S.playing; if (!p) return;

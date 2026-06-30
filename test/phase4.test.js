@@ -737,6 +737,11 @@ test('subtitle startup preference contract: admin can toggle built-in captions',
     'web player should try to enable always-mode subtitles before entering online warmup');
   assert.ok(webHousekeeping.includes('fetch(`/api/ossubs/${mount.id}?${subtitleRequestParams(it, code2, mount.streamToken).toString()}`).catch(() => {});'),
     'web player should try to enable always-mode subtitles before falling back to online warmup prefetch');
+  // The online-subtitle request must carry the exact episode (same source the play request uses), so
+  // the server filters Wyzie by SxxExx instead of recovering it from a remembered query string. Without
+  // this, episode plays searched the whole show — wrong dialogue + a wall of mixed-episode rows.
+  assert.match(ui, /function subtitleRequestParams\(it, lang, streamToken\) \{[\s\S]+const ep = episodeKeyParts\(it\);[\s\S]+q\.set\('season', String\(ep\.season\)\);[\s\S]+q\.set\('episode', String\(ep\.episode\)\);/,
+    'subtitleRequestParams must send explicit season/episode so the correct episode reaches Wyzie');
   // 639-2 Bibliographic codes ffprobe emits (cze/ger/fre/gre/per/chi) must map to the right
   // 639-1 code instead of being truncated to a wrong language; otherwise non-English CC misses.
   const langMap = (ui.match(/const LANG_3TO2 = \{[\s\S]*?\};/) || [''])[0];
@@ -3061,6 +3066,18 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'the native VOD progress tick drives the heartbeat');
   assert.match(ui, /window\.__tvNativeVideoStats = \(raw\) => \{[\s\S]+nativePlaybackHeartbeat\(\);/,
     'the native stats tick (fires for Live TV too) drives the heartbeat');
+  // Same throttling reason kills the native alass auto-sync: a hidden-WebView setTimeout often never
+  // fired, leaving the raw unsynced sub. It must be QUEUED and driven off the native ticks instead.
+  assert.match(ui, /function autoSyncNative\(p, rel\) \{[\s\S]+p\._pendingNativeSyncRel = rel;[\s\S]+runPendingNativeSync\(\);[\s\S]+\}/,
+    'native auto-sync should queue a request + run it, not schedule a throttle-prone timer');
+  assert.doesNotMatch(ui, /_autoSyncNT/,
+    'native auto-sync must not rely on the old throttle-prone setTimeout (the _autoSyncNT timer is gone)');
+  assert.match(ui, /async function runPendingNativeSync\(\) \{[\s\S]+x-triboon-subsync'\) !== 'pending'[\s\S]+sync=1[\s\S]+x-triboon-subsync'\) !== 'corrected'[\s\S]+updateActiveSubtitle\(/,
+    'the queued native sync only swaps the track in once the server confirms an alass-corrected sub');
+  assert.match(ui, /window\.__tvNativeVideoProgress = \(pos, dur\) => \{[\s\S]+runPendingNativeSync\(\);/,
+    'the native VOD progress tick drives the queued alass sync');
+  assert.match(ui, /window\.__tvNativeVideoStats = \(raw\) => \{[\s\S]+runPendingNativeSync\(\);/,
+    'the native stats tick also drives the queued alass sync (covers paused playback)');
   assert.match(ui, /function applyMenuPrefs\(\) \{[\s\S]+const railMain = \$\('railMain'\) \|\| \$\('rail'\);[\s\S]+railMain\.querySelector\(`\.railBtn\[data-nav="\$\{nav\}"\]`\)[\s\S]+railMain\.insertBefore\(btn, firstMainNav\(\)\);/,
     'menu preference reordering should only move buttons inside the scrollable rail body, never pinned footer buttons');
   assert.doesNotMatch(ui, /rail\.insertBefore\(btn/,

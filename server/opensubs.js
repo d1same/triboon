@@ -376,11 +376,17 @@ function toIso6391(code) {
   return '';
 }
 
-function wyzieSearchUrl({ base = DEFAULT_BASE, key, tmdbId, imdbId, query, lang = 'en', releaseName = '', refresh = false, releaseHints = true } = {}) {
+function wyzieSearchUrl({ base = DEFAULT_BASE, key, tmdbId, imdbId, query, lang = 'en', releaseName = '', refresh = false, releaseHints = true, season = null, episode = null } = {}) {
   const w = parseQuery(query || '');
   const u = new URL(`${base}/search`);
   u.searchParams.set('id', wyzieCatalogId({ tmdbId, imdbId }));
-  if (w.season != null) { u.searchParams.set('season', w.season); u.searchParams.set('episode', w.ep); }
+  // The episode the player is actually watching is authoritative. Wyzie derives season/episode
+  // ONLY from these params, so a play route that never stamped SxxExx into the query string used
+  // to search the whole show — wrong-episode dialogue + a wall of mixed-episode rows. Explicit
+  // season/episode win; otherwise fall back to whatever parseQuery recovered from the query.
+  const s = Number.isInteger(+season) && +season > 0 ? +season : w.season;
+  const e = Number.isInteger(+episode) && +episode > 0 ? +episode : w.ep;
+  if (s != null && e != null) { u.searchParams.set('season', s); u.searchParams.set('episode', e); }
   u.searchParams.set('language', toIso6391(lang) || String(lang || '').slice(0, 2) || 'en');
   u.searchParams.set('format', 'srt,vtt');
   u.searchParams.set('source', 'all');
@@ -400,9 +406,9 @@ function parseWyzieSearchBody(body) {
 }
 
 async function wyzieSearchResults({ key, tmdbId, imdbId, query, lang = 'en', releaseName = '', base = DEFAULT_BASE,
-  attempts = 2, retryDelayMs = 700 } = {}) {
+  season = null, episode = null, attempts = 2, retryDelayMs = 700 } = {}) {
   const requestSearch = (refresh = false, releaseHints = true) => retryTransient('Wyzie subtitle search', async () => {
-    const u = wyzieSearchUrl({ base, key, tmdbId, imdbId, query, lang, releaseName, refresh, releaseHints });
+    const u = wyzieSearchUrl({ base, key, tmdbId, imdbId, query, lang, releaseName, refresh, releaseHints, season, episode });
     const r = await request('GET', u.href, { timeoutMs: 25000, deadlineMs: 35000 });
     if (r.status === 401) throw permanent('Wyzie Subs key missing or invalid');
     if (r.status !== 200) {
@@ -439,7 +445,9 @@ async function wyzieSearchResults({ key, tmdbId, imdbId, query, lang = 'en', rel
   const catId = wyzieCatalogId({ tmdbId, imdbId });
   const idKind = /^tt/.test(catId) ? 'imdb' : (catId ? 'tmdb' : 'none');
   const w = parseQuery(query || '');
-  const ep = w.season != null ? ` s${w.season}e${w.ep}` : '';
+  const effS = Number.isInteger(+season) && +season > 0 ? +season : w.season;
+  const effE = Number.isInteger(+episode) && +episode > 0 ? +episode : w.ep;
+  const ep = effS != null ? ` s${effS}e${effE}` : '';
   const wlang = toIso6391(lang) || String(lang || '').slice(0, 2) || 'en';
   const langLabel = wlang === lang ? wlang : `${lang}->${wlang}`;
   try {
@@ -685,17 +693,17 @@ async function downloadSubtitle(hit, { key, base = DEFAULT_BASE, attempts = 2, r
 }
 
 async function fetchOnlineSubV2({ key, tmdbId, imdbId, query, lang = 'en', releaseName = '', durationSeconds = 0, base = DEFAULT_BASE,
-  attempts = 2, retryDelayMs = 700 } = {}) {
+  season = null, episode = null, attempts = 2, retryDelayMs = 700 } = {}) {
   if (!wyzieCatalogId({ tmdbId, imdbId })) throw permanent('online subtitles need a catalog title (no TMDB or IMDb id for this play)');
-  const data = await wyzieSearchResults({ key, tmdbId, imdbId, query, lang, releaseName, base, attempts, retryDelayMs });
+  const data = await wyzieSearchResults({ key, tmdbId, imdbId, query, lang, releaseName, base, season, episode, attempts, retryDelayMs });
   if (!Array.isArray(data) || !data.length) throw noSubtitlesFor(lang, query);
   return downloadBestSubtitle(data, { key, releaseName, durationSeconds, base, attempts, retryDelayMs });
 }
 
 async function searchOnlineSubsV2({ key, tmdbId, imdbId, query, lang = 'en', releaseName = '', base = DEFAULT_BASE,
-  attempts = 2, retryDelayMs = 700 } = {}) {
+  season = null, episode = null, attempts = 2, retryDelayMs = 700 } = {}) {
   if (!wyzieCatalogId({ tmdbId, imdbId })) throw permanent('online subtitles need a catalog title (no TMDB or IMDb id for this play)');
-  const data = await wyzieSearchResults({ key, tmdbId, imdbId, query, lang, releaseName, base, attempts, retryDelayMs });
+  const data = await wyzieSearchResults({ key, tmdbId, imdbId, query, lang, releaseName, base, season, episode, attempts, retryDelayMs });
   if (!Array.isArray(data) || !data.length) throw noSubtitlesFor(lang, query);
   return data;
 }
@@ -732,7 +740,7 @@ function osHeaders(apiKey, bearer) {
 
 // GET /subtitles — combine moviehash + external id + episode. Returns the raw `data` array.
 async function osSearch({ apiKey, base = OS_REST_BASE, moviehash = '', imdbId = '', tmdbId = '',
-  query = '', lang = 'en', attempts = 2, retryDelayMs = 700 } = {}) {
+  query = '', lang = 'en', season = null, episode = null, attempts = 2, retryDelayMs = 700 } = {}) {
   if (!apiKey) throw permanent('OpenSubtitles is not configured (no API key)');
   const w = parseQuery(query || '');
   const u = new URL(`${base}/subtitles`);
@@ -743,7 +751,9 @@ async function osSearch({ apiKey, base = OS_REST_BASE, moviehash = '', imdbId = 
   const tmdbNum = String(tmdbId || '').replace(/\D/g, '');
   if (imdbNum) u.searchParams.set('imdb_id', imdbNum);
   else if (tmdbNum) u.searchParams.set('tmdb_id', tmdbNum);
-  if (w.season != null) { u.searchParams.set('season_number', w.season); u.searchParams.set('episode_number', w.ep); }
+  const sNum = Number.isInteger(+season) && +season > 0 ? +season : w.season;
+  const eNum = Number.isInteger(+episode) && +episode > 0 ? +episode : w.ep;
+  if (sNum != null && eNum != null) { u.searchParams.set('season_number', sNum); u.searchParams.set('episode_number', eNum); }
   if (!moviehash && !imdbNum && !tmdbNum) throw permanent('OpenSubtitles needs a moviehash or catalog id');
   const r = await retryTransient('OpenSubtitles search', async () => {
     const res = await request('GET', u.href, { key: apiKey, timeoutMs: 15000, deadlineMs: 25000 });

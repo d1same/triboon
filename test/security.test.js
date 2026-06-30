@@ -1813,6 +1813,15 @@ test('subtitles: Wyzie search→file→VTT served per mount (and 503 without a k
   assert.strictEqual(missing.json.code, 'no_subtitles',
     'Wyzie no-results should be a clean title-level miss, not a generic server failure');
 
+  // End-to-end: the PLAYER's episode is authoritative. Even when the mount's remembered query points
+  // at a DIFFERENT episode, explicit season/episode on the request reach Wyzie unchanged. (Regression:
+  // play routes that never stamped SxxExx into _subQuery searched the whole show — wrong dialogue + a
+  // wall of mixed-episode rows.) The Wyzie mock above asserts it receives season=1/episode=3, so this
+  // request overriding a deliberately-wrong _subQuery proves the handler forwards the request params.
+  mounted._subQuery = 'Sec Test 2024 S01E07';
+  const episodeOverride = await httpRaw(srv.port, `/api/ossubs/${play.id}?lang=en&tmdb=4242&season=1&episode=3&t=${play.streamToken}`);
+  assert.strictEqual(episodeOverride.status, 200, episodeOverride.body.toString());
+
   } finally {
     delete process.env.WYZIE_BASE;
     delete process.env.TRIBOON_WYZIE_KEY;

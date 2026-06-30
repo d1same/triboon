@@ -96,14 +96,14 @@ async function moviehashForMount(vf) {
 }
 // Normalized OpenSubtitles variants for a mount. Never throws — any failure yields [] so the
 // Wyzie results stand alone. Hash search runs first (best signal), id search as the fallback.
-async function openSubtitlesVariantsForMount(vf, { imdbId, tmdbId, lang }) {
+async function openSubtitlesVariantsForMount(vf, { imdbId, tmdbId, lang, season = null, episode = null }) {
   const cfg = effectiveOpenSubtitles();
   if (!cfg) return [];
   try {
     const moviehash = await moviehashForMount(vf).catch(() => null);
     const data = await osSearch({
       apiKey: cfg.apiKey, base: cfg.base, moviehash: moviehash || '',
-      imdbId, tmdbId, query: vf._subQuery || vf._q || '', lang,
+      imdbId, tmdbId, query: vf._subQuery || vf._q || '', lang, season, episode,
     });
     return (Array.isArray(data) ? data : []).map(osNormalize).filter((v) => v && v._osFileId);
   } catch { return []; }
@@ -6081,11 +6081,20 @@ Object.assign(H, {
     const wantsList = ctx.url.searchParams.get('list') === '1';
     const variant = String(ctx.url.searchParams.get('variant') || '').replace(/[^a-z0-9_.:-]/gi, '').slice(0, 80);
     const shift = Math.max(-120, Math.min(120, Number(ctx.url.searchParams.get('shift') || 0) || 0));
+    // The player tells us exactly which episode it is playing. Forwarding it makes the episode the
+    // authoritative subtitle filter instead of relying on SxxExx surviving inside the remembered
+    // query string (vf._subQuery) — a play route that dropped it used to search the whole show,
+    // which read as wrong-episode dialogue + a wall of mixed-episode rows.
+    const seasonParam = parseInt(ctx.url.searchParams.get('season'), 10);
+    const epRaw = ctx.url.searchParams.get('episode');
+    const episodeParam = parseInt(epRaw != null ? epRaw : ctx.url.searchParams.get('ep'), 10);
+    const hasEpisode = Number.isInteger(seasonParam) && seasonParam > 0 && Number.isInteger(episodeParam) && episodeParam > 0;
     const base = process.env.WYZIE_BASE || undefined;
     const releaseName = subtitleReleaseName(vf) || vf.name;
     const subOpts = {
       key, tmdbId, imdbId, query: vf._subQuery || vf._q || releaseName || vf.name, lang, releaseName,
       durationSeconds: vf._tracks && vf._tracks.duration,
+      ...(hasEpisode ? { season: seasonParam, episode: episodeParam } : {}),
       attempts: 3, retryDelayMs: 900,
       ...(base ? { base } : {}),
     };
@@ -6095,7 +6104,7 @@ Object.assign(H, {
     vf._osSearchInflight = vf._osSearchInflight || new Map();
     vf._subSyncState = vf._subSyncState || new Map(); // cacheKey -> looksSynced (skip alass when true)
     const catalogId = imdbId || tmdbId;
-    const searchKey = `${lang}:${catalogId}`;
+    const searchKey = `${lang}:${catalogId}${hasEpisode ? `:s${seasonParam}e${episodeParam}` : ''}`;
     const subtitleFailure = (e) => {
       const noSubs = isNoSubtitleError(e);
       return {
@@ -6117,7 +6126,8 @@ Object.assign(H, {
             let wyData = [];
             let wyErr = null;
             try { wyData = await searchOnlineSubs(subOpts); } catch (e) { wyErr = e; }
-            const osData = await openSubtitlesVariantsForMount(vf, { imdbId, tmdbId, lang });
+            const osData = await openSubtitlesVariantsForMount(vf, { imdbId, tmdbId, lang,
+              ...(hasEpisode ? { season: seasonParam, episode: episodeParam } : {}) });
             const combined = [...(Array.isArray(wyData) ? wyData : []), ...osData];
             if (!combined.length) throw (wyErr || new Error('online subtitles failed'));
             const ranked = rankSubs(combined, releaseName, { durationSeconds: vf._tracks && vf._tracks.duration });

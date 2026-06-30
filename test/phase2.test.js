@@ -672,6 +672,38 @@ test('subs: Wyzie search sends catalog id + episode but NO slow release/file hin
   }
 });
 
+test('subs: explicit season/episode override the query so the right episode reaches Wyzie', async () => {
+  const { searchOnlineSubs } = require('../server/opensubs');
+  let seen;
+  const srv = http.createServer((req, res) => {
+    seen = new URL(req.url, 'http://127.0.0.1');
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify([{ id: 'ok', url: 'http://x/sub.srt', format: 'srt', display: 'Show.S02E05.1080p.WEB-DL-GRP' }]));
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  try {
+    // The remembered query carries NO episode (the regression: a play route never stamped SxxExx).
+    // The player now sends season/episode explicitly, so Wyzie must still be asked for exactly S02E05
+    // rather than the whole show.
+    await searchOnlineSubs({
+      tmdbId: '123', query: 'Show', season: 2, episode: 5, lang: 'en',
+      base: `http://127.0.0.1:${srv.address().port}`,
+    });
+    assert.strictEqual(seen.searchParams.get('season'), '2', 'explicit season is sent even with an episode-less query');
+    assert.strictEqual(seen.searchParams.get('episode'), '5', 'explicit episode is sent even with an episode-less query');
+
+    // And explicit params WIN over a stale/wrong SxxExx left in the query string.
+    await searchOnlineSubs({
+      tmdbId: '123', query: 'Show S01E09', season: 2, episode: 5, lang: 'en',
+      base: `http://127.0.0.1:${srv.address().port}`,
+    });
+    assert.strictEqual(seen.searchParams.get('season'), '2', 'explicit season overrides a stale query SxxExx');
+    assert.strictEqual(seen.searchParams.get('episode'), '5', 'explicit episode overrides a stale query SxxExx');
+  } finally {
+    await new Promise((r) => srv.close(r));
+  }
+});
+
 test('subs: Wyzie search prefers IMDb id when available for paid provider coverage', async () => {
   const { searchOnlineSubs, _wyzieCatalogId } = require('../server/opensubs');
   let seen;
