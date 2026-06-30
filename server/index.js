@@ -6145,6 +6145,11 @@ Object.assign(H, {
     const epRaw = ctx.url.searchParams.get('episode');
     const episodeParam = parseInt(epRaw != null ? epRaw : ctx.url.searchParams.get('ep'), 10);
     const hasEpisode = Number.isInteger(seasonParam) && seasonParam > 0 && Number.isInteger(episodeParam) && episodeParam > 0;
+    // Caption style preference: 'avoid' (default) prefers clean dialogue-only; 'prefer' favors SDH
+    // (sound descriptions for the hard of hearing); 'either' is neutral. Only nudges the auto-pick
+    // and list order between otherwise-comparable subtitles.
+    const sdhRaw = String(ctx.url.searchParams.get('sdh') || '').toLowerCase();
+    const sdhPref = sdhRaw === 'prefer' || sdhRaw === 'avoid' || sdhRaw === 'either' ? sdhRaw : 'avoid';
     const base = process.env.WYZIE_BASE || undefined;
     const releaseName = subtitleReleaseName(vf) || vf.name;
     const subOpts = {
@@ -6186,7 +6191,7 @@ Object.assign(H, {
               ...(hasEpisode ? { season: seasonParam, episode: episodeParam } : {}) });
             const combined = [...(Array.isArray(wyData) ? wyData : []), ...osData];
             if (!combined.length) throw (wyErr || new Error('online subtitles failed'));
-            const ranked = rankSubs(combined, releaseName, { durationSeconds: vf._tracks && vf._tracks.duration });
+            const ranked = rankSubs(combined, releaseName, { durationSeconds: vf._tracks && vf._tracks.duration, sdhPref });
             // Trim wrong-episode / non-text rows so the menu only advertises subtitles that can
             // actually play for this file (the "House shows many options but most don't work" fix).
             const variants = usableVariants(ranked, { releaseName }).slice(0, 12);
@@ -6210,7 +6215,7 @@ Object.assign(H, {
           selectedId: (menu.find((v) => v.selected) || menu[0] || {}).id || null,
           variants: menu.map((v) => ({
             id: v.id, label: v.label, display: v.display, language: v.language,
-            format: v.format, hearingImpaired: v.hearingImpaired, score: v.score, selected: !!v.selected,
+            format: v.format, hearingImpaired: v.hearingImpaired, forced: !!v.forced, score: v.score, selected: !!v.selected,
           })),
         });
       } catch (e) {

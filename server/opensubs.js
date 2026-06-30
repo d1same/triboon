@@ -143,11 +143,38 @@ function codepageForLang(lang) {
   if (l === 'th') return 'windows-874';
   return 'windows-1252';
 }
-function decodeSubtitleBuffer(buf, langHint = '') {
+// Map a provider-declared charset label (Wyzie returns one per subtitle, e.g. "UTF-8", "latin-1",
+// "windows-1256") to a TextDecoder-friendly label. Returns '' for unknown so the caller falls back
+// to the heuristic. 'utf-8' is returned for the UTF-8/ASCII family so the caller can skip it.
+function normalizeCharsetLabel(label) {
+  const l = String(label || '').trim().toLowerCase().replace(/[\s_]+/g, '-');
+  if (!l) return '';
+  if (/^(utf-?8|ascii|us-ascii)$/.test(l)) return 'utf-8';
+  if (/^(latin-?1|iso-?8859-?1|cp-?1252|windows-?1252|ansi)$/.test(l)) return 'windows-1252';
+  if (/^(windows-?1256|cp-?1256)$/.test(l)) return 'windows-1256';
+  if (/^(windows-?1251|cp-?1251)$/.test(l)) return 'windows-1251';
+  if (/^(windows-?1250|cp-?1250|latin-?2|iso-?8859-?2)$/.test(l)) return l.includes('1250') ? 'windows-1250' : 'iso-8859-2';
+  if (/^(windows-?1254|cp-?1254|latin-?5|iso-?8859-?9)$/.test(l)) return 'windows-1254'; // Turkish (1254 ⊃ 8859-9)
+  if (/^(windows-?1255|cp-?1255)$/.test(l)) return 'windows-1255';
+  if (/^(windows-?874|cp-?874|tis-?620)$/.test(l)) return 'windows-874';
+  if (/^iso-?8859-?5$/.test(l)) return 'iso-8859-5';
+  if (/^iso-?8859-?7$/.test(l)) return 'iso-8859-7';
+  if (/^(gbk|gb-?2312|gb-?18030)$/.test(l)) return 'gbk';
+  if (/^big-?5$/.test(l)) return 'big5';
+  if (/^(shift-?jis|sjis)$/.test(l)) return 'shift_jis';
+  if (/^euc-?kr$/.test(l)) return 'euc-kr';
+  return l; // let TextDecoder try the raw label; it throws if unsupported and we fall back
+}
+function decodeSubtitleBuffer(buf, langHint = '', encodingHint = '') {
   if (!Buffer.isBuffer(buf)) return String(buf == null ? '' : buf);
   if (buf.length >= 3 && buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF) return buf.slice(3).toString('utf8');
   if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) { try { return new TextDecoder('utf-16le').decode(buf.subarray(2)); } catch { /* fall through */ } }
   if (buf.length >= 2 && buf[0] === 0xFE && buf[1] === 0xFF) { try { return new TextDecoder('utf-16be').decode(buf.subarray(2)); } catch { /* fall through */ } }
+  // Honor the provider's DECLARED charset when it isn't UTF-8 — more reliable than guessing.
+  const declared = normalizeCharsetLabel(encodingHint);
+  if (declared && declared !== 'utf-8') {
+    try { return new TextDecoder(declared).decode(buf); } catch { /* unknown label → heuristic below */ }
+  }
   const utf8 = buf.toString('utf8');
   if (!utf8.includes('�')) return utf8; // valid UTF-8 (incl. pure ASCII) — leave untouched
   try { return new TextDecoder(codepageForLang(langHint)).decode(buf); }
@@ -217,13 +244,31 @@ function subtitleMatchText(d) {
     d && d.display,
     d && d.media,
     d && d.release,
+    d && (Array.isArray(d.releases) ? d.releases.join(' ') : null), // Wyzie: other compatible release names
     d && d.fileName,
     d && d.filename,
     d && d.file,
-    d && d.origin,
+    d && d.origin, // Wyzie: WEB / BLURAY / DVD — a reliable source signal for in-sync matching
     d && d.matchedRelease,
     d && d.matchedFilter,
   ].filter(Boolean).join(' ');
+}
+// Forced / foreign-parts-only subtitles translate ONLY the foreign-language lines, not the full
+// dialogue. They must never be the auto-picked main CC track, but stay in the list (labeled) for
+// the rare case the user wants them. Wyzie has no forced flag, so detect it from the name; honor a
+// provider flag too in case one ever appears.
+function subtitleIsForced(d) {
+  if (!d) return false;
+  if (d.forced === true || d.isForced === true) return true;
+  return /\bforced\b|foreign[ ._-]?parts?[ ._-]?only|foreign[ ._-]?only/i.test(subtitleMatchText(d));
+}
+// SDH/hearing-impaired bias for ranking, honoring the viewer's preference. Kept below the
+// structural release/episode/group signals so it only decides between otherwise-comparable subs.
+function sdhBias(d, pref) {
+  const sdh = !!(d && d.isHearingImpaired);
+  if (pref === 'prefer') return sdh ? 120 : -120; // viewer wants sound descriptions
+  if (pref === 'either') return 0;
+  return sdh ? -120 : 0; // 'avoid' (default): clean dialogue-only wins among equal candidates
 }
 function releaseKey(s) {
   return String(s || '')
@@ -279,7 +324,7 @@ function cleanReleaseDisplay(s) {
   x = x.replace(/[._]+/g, ' ').replace(/\s+/g, ' ').trim();
   return x.length > 48 ? x.slice(0, 47).trim() + '…' : x;
 }
-function pickSub(data, releaseName = '', { durationSeconds = 0 } = {}) {
+function pickSub(data, releaseName = '', { durationSeconds = 0, sdhPref = 'avoid' } = {}) {
   const mine = String(releaseName).toLowerCase();
   const myReleaseKey = releaseKey(releaseName);
   const myWeb = /\bweb[-. ]?(dl|rip)?\b|amzn|nf(?=[. ])|hulu|atvp|dsnp/i.test(mine);
@@ -313,8 +358,9 @@ function pickSub(data, releaseName = '', { durationSeconds = 0 } = {}) {
     if (myWeb && /web|amzn|nf[. ]|hulu|atvp|dsnp/.test(rel)) s += 100;
     if (myBlu && /blu|bd|remux/.test(rel)) s += 100;
     if ((myWeb && /blu|bd|remux/.test(rel)) || (myBlu && /web/.test(rel))) s -= 80; // wrong cut
+    if (subtitleIsForced(d)) s -= 700; // forced/foreign-only is never the full-CC auto-pick
     s += popularityBonus(d); // tie-breaker only — capped below release/episode signals
-    if (d.isHearingImpaired) s -= 10;
+    s += sdhBias(d, sdhPref);
     return s;
   };
   return data.map((d) => ({ d, s: score(d) })).sort((x, y) => y.s - x.s).map((x) => x.d)
@@ -360,6 +406,7 @@ function subtitleVariantLabel(d) {
   if (source) parts.push(source);
   const group = subtitleGroupLabel(d);
   if (group) parts.push(group);
+  if (subtitleIsForced(d)) parts.push('Forced');
   if (d && d.isHearingImpaired) parts.push('SDH');
   if (parts.length) return parts.join(' - ');
   // No structured signal — fall back to the actual release/file name so rows stay distinct and
@@ -498,8 +545,8 @@ async function wyzieSearchResults({ key, tmdbId, imdbId, query, lang = 'en', rel
   }
 }
 
-function rankSubs(data, releaseName = '', { durationSeconds = 0 } = {}) {
-  const picked = pickSub(data, releaseName, { durationSeconds });
+function rankSubs(data, releaseName = '', { durationSeconds = 0, sdhPref = 'avoid' } = {}) {
+  const picked = pickSub(data, releaseName, { durationSeconds, sdhPref });
   const bestKey = picked && (picked.id != null ? String(picked.id) : String(picked.url || ''));
   const mine = String(releaseName).toLowerCase();
   const myReleaseKey = releaseKey(releaseName);
@@ -536,8 +583,9 @@ function rankSubs(data, releaseName = '', { durationSeconds = 0 } = {}) {
     if (myWeb && /web|amzn|nf[. ]|hulu|atvp|dsnp/.test(rel)) s += 100;
     if (myBlu && /blu|bd|remux/.test(rel)) s += 100;
     if ((myWeb && /blu|bd|remux/.test(rel)) || (myBlu && /web/.test(rel))) s -= 80;
+    if (subtitleIsForced(d)) s -= 700; // forced/foreign-only stays in the list but never auto-picks
     s += popularityBonus(d); // tie-breaker only — capped below release/episode/hash signals
-    if (d.isHearingImpaired) s -= 10;
+    s += sdhBias(d, sdhPref);
     return s;
   };
   const ranked = (Array.isArray(data) ? data : []).map((d, idx) => {
@@ -551,6 +599,7 @@ function rankSubs(data, releaseName = '', { durationSeconds = 0 } = {}) {
       language: d.language || '',
       format: d.format || '',
       hearingImpaired: !!d.isHearingImpaired,
+      forced: subtitleIsForced(d),
       score: s,
       selected: bestKey && key === bestKey,
       raw: d,
@@ -719,7 +768,7 @@ async function downloadSubtitle(hit, { key, base = DEFAULT_BASE, attempts = 2, r
     }
     return r;
   }, { attempts, delayMs: retryDelayMs });
-  return srtToVtt(decodeSubtitleBuffer(file.body, (hit && hit.language) || ''));
+  return srtToVtt(decodeSubtitleBuffer(file.body, (hit && hit.language) || '', (hit && hit.encoding) || ''));
 }
 
 async function fetchOnlineSubV2({ key, tmdbId, imdbId, query, lang = 'en', releaseName = '', durationSeconds = 0, base = DEFAULT_BASE,

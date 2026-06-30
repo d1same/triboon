@@ -2966,6 +2966,11 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
         <button data-submode="manual">Choose per title</button><button data-submode="always">Always show subtitles</button>
       </div>
       <div class="hint">Choose per title never starts captions automatically. Always uses the selected subtitle language, or English when no subtitle language is selected.</div>
+      <p style="margin-top:14px">Caption style.</p>
+      <div class="sizePick" id="prefCcStyle">
+        <button data-ccstyle="dialogue">Dialogue only</button><button data-ccstyle="sdh">Sound descriptions (SDH)</button>
+      </div>
+      <div class="hint">Dialogue only auto-picks clean captions. SDH prefers captions that include [music], [door creaks], and speaker labels for the hard of hearing. Both stay available in the captions menu.</div>
     </div>
     <div class="panel"><h2>Playback</h2>
       <p>Auto-play starts the next episode after a 10-second countdown — off shows the
@@ -10850,6 +10855,21 @@ function savePrefSubtitleMode(value) {
   try { localStorage.setItem(profilePrefKey('subtitleMode'), value === 'always' ? 'always' : 'manual'); } catch {}
   syncProfilePrefsUp();
 }
+// Caption style: 'dialogue' (default) auto-picks clean dialogue-only captions; 'sdh' prefers
+// captions with sound descriptions + speaker labels for the hard of hearing. Maps to the server
+// `sdh` rank preference (dialogue -> avoid, sdh -> prefer). Either way both variants stay listed.
+function prefCcStyle() {
+  try {
+    const scoped = localStorage.getItem(profilePrefKey('ccStyle'));
+    if (scoped !== null) return scoped === 'sdh' ? 'sdh' : 'dialogue';
+    return localStorage.getItem('triboon.ccStyle') === 'sdh' ? 'sdh' : 'dialogue';
+  }
+  catch { return 'dialogue'; }
+}
+function savePrefCcStyle(value) {
+  try { localStorage.setItem(profilePrefKey('ccStyle'), value === 'sdh' ? 'sdh' : 'dialogue'); } catch {}
+  syncProfilePrefsUp();
+}
 function preferredAutoSubtitleLang() {
   const sub = prefLang('slang');
   if (sub && sub !== 'off') return sub;
@@ -11063,6 +11083,7 @@ function subtitleRequestParams(it, lang, streamToken) {
     lang: osLang(lang),
     tmdb: String((it || {}).tmdbId || ''),
     t: streamToken || '',
+    sdh: prefCcStyle() === 'sdh' ? 'prefer' : 'avoid', // caption-style preference for online CC ranking
   });
   const imdb = subtitleImdbId(it);
   if (imdb) q.set('imdb', imdb);
@@ -16389,6 +16410,7 @@ function openPrefs() { // populates the Preferences PAGE (it's a view now, not a
   // Playback: auto-play + caption size pickers reflect the saved choice
   syncChoiceButtons('#prefAutoplay button', (b) => b.dataset.ap === (prefAutoplay() ? '1' : '0'));
   syncChoiceButtons('#prefSubtitleMode button', (b) => b.dataset.submode === prefSubtitleMode());
+  syncChoiceButtons('#prefCcStyle button', (b) => b.dataset.ccstyle === prefCcStyle());
   const ss = applySubSize();
   syncChoiceButtons('#prefSubSize button', (b) => b.dataset.ss === ss);
   syncChoiceButtons('#prefScreensaverDelay button', (b) => +b.dataset.ssv === prefScreensaverDelaySeconds());
@@ -16901,6 +16923,11 @@ document.querySelectorAll('#prefAutoplay button').forEach((b) => b.addEventListe
   try { localStorage.setItem('triboon.autoplay', b.dataset.ap); } catch {}
   syncChoiceButtons('#prefAutoplay button', (x) => x === b);
   toast(b.dataset.ap === '1' ? 'Next episode will auto-play' : 'Auto-play off — Up Next waits for you');
+}));
+document.querySelectorAll('#prefCcStyle button').forEach((b) => b.addEventListener('click', () => {
+  savePrefCcStyle(b.dataset.ccstyle);
+  syncChoiceButtons('#prefCcStyle button', (x) => x === b);
+  toast(b.dataset.ccstyle === 'sdh' ? 'Captions will prefer sound descriptions (SDH)' : 'Captions will prefer dialogue only');
 }));
 document.querySelectorAll('#prefSubtitleMode button').forEach((b) => b.addEventListener('click', () => {
   savePrefSubtitleMode(b.dataset.submode);

@@ -398,6 +398,31 @@ test('subs: non-UTF-8 subtitle bodies are decoded by language (no mojibake)', as
   }
 });
 
+test('subs: ranking respects forced + SDH preference; declared encoding honored', () => {
+  const { rankSubs, decodeSubtitleBuffer } = require('../server/opensubs');
+  // Forced / foreign-parts-only never auto-picks over a full sub of the same release — even with far more downloads.
+  const fdata = [
+    { id: 'full', url: 'u1', format: 'srt', display: 'Show.S01E01.1080p.WEB-DL-GRP', language: 'en', downloadCount: 5 },
+    { id: 'forced', url: 'u2', format: 'srt', display: 'Show.S01E01.1080p.WEB-DL-GRP.forced', language: 'en', downloadCount: 9000 },
+  ];
+  const fr = rankSubs(fdata, 'Show.S01E01.1080p.WEB-DL-GRP', {});
+  assert.strictEqual(fr[0].id, 'full', 'a full sub outranks a forced one even with far more downloads');
+  assert.strictEqual(fr.find((v) => v.id === 'forced').forced, true, 'forced subs are flagged for the menu');
+
+  // SDH preference: avoid -> dialogue-only wins; prefer -> SDH wins; both stay listed either way.
+  const sdata = [
+    { id: 'plain', url: 'p', format: 'srt', display: 'Movie.2020.1080p.BluRay-X', language: 'en', isHearingImpaired: false },
+    { id: 'sdh', url: 's', format: 'srt', display: 'Movie.2020.1080p.BluRay-X', language: 'en', isHearingImpaired: true, downloadCount: 5000 },
+  ];
+  assert.strictEqual(rankSubs(sdata, 'Movie.2020.1080p.BluRay-X', { sdhPref: 'avoid' })[0].id, 'plain', 'avoid prefers dialogue-only');
+  assert.strictEqual(rankSubs(sdata, 'Movie.2020.1080p.BluRay-X', { sdhPref: 'prefer' })[0].id, 'sdh', 'prefer favors SDH');
+  assert.strictEqual(rankSubs(sdata, 'Movie.2020.1080p.BluRay-X', { sdhPref: 'avoid' }).length, 2, 'both variants remain listed');
+
+  // Wyzie returns a per-subtitle `encoding`; honor the declared charset over a UTF-8 assumption.
+  assert.strictEqual(decodeSubtitleBuffer(Buffer.from([0xCF, 0xF0, 0xE8]), '', 'windows-1251'), 'При', 'declared windows-1251 decoded correctly');
+  assert.strictEqual(decodeSubtitleBuffer(Buffer.from('café', 'utf8'), '', 'UTF-8'), 'café', 'declared UTF-8 passes through');
+});
+
 test('subs: auto-match falls through stale subtitle file links', async () => {
   const { fetchOnlineSub, downloadBestSubtitle } = require('../server/opensubs');
   const downloads = [];
