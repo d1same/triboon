@@ -1225,8 +1225,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'ExoPlayer should honor the server-selected fast path but let remux fall through to transcode when the device rejects the remuxed codec');
   assert.match(ui, /async function prepareNativeStartKindForAudio\(startKind\) \{[\s\S]+fetchPlayerTracks\(p, 1400\)[\s\S]+nativeDirectAudioNeedsSafeRemux\(selectedPlayerAudioTrack\(p\)\)[\s\S]+p\.forceAacRemux = true;[\s\S]+return 'remux';[\s\S]+nativeDirectAudioNameRisk\(p\)[\s\S]+return 'remux';[\s\S]+\}/,
     'Android direct playback should quickly probe risky audio and start a safe audio remux instead of silently direct-playing');
-  assert.match(ui, /function remuxPlaybackUrl\(p, seekStart = 0\) \{[\s\S]+p\.forceAacRemux \? '&audioSafe=1' : ''[\s\S]+return `\$\{p\.remuxUrl\}&start=\$\{Math\.max\(0, Math\.floor\(seekStart \|\| 0\)\)\}&audio=\$\{audio\}\$\{safe\}`;/,
-    'safe Android remux should request AAC audio while still copying video');
+  assert.match(ui, /function remuxPlaybackUrl\(p, seekStart = 0, opts = \{\}\) \{[\s\S]+p\.forceAacRemux && !opts\.native[\s\S]+'&audioSafe=1'[\s\S]+return `\$\{p\.remuxUrl\}&start=\$\{Math\.max\(0, Math\.floor\(seekStart \|\| 0\)\)\}&audio=\$\{audio\}\$\{safe\}`;/,
+    'remux URL omits the stereo audioSafe flag for the native player (gets server-default 5.1) but keeps it for browser/MSE surfaces; video always copied');
   assert.match(server, /const forceAudioSafe = ctx\.url\.searchParams\.get\('audioSafe'\) === '1';[\s\S]+const transcodeAudio = forceAudioSafe \|\| !audioCopyOk\(aud, vf\._caps\);/,
     'server remux should honor the audioSafe flag without forcing full video transcode');
   // audioSafe (multiview / any plain <video> MSE surface) must downmix to STEREO AAC — 5.1 AAC is
@@ -1415,8 +1415,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native HD button should only be enabled when optimized quality choices exist');
   assert.match(ui, /const nativeBackdrop = p\.item\.backdrop \|\| p\.item\.poster \|\| '';[\s\S]+backdropUrl: nativeBackdrop \? new URL\(nativeBackdrop, location\.origin\)\.href : ''/,
     'native Android loading should receive the same movie art as the web player loader');
-  assert.match(ui, /const serverSeek = kind === 'remux' \|\| kind === 'transcode';[\s\S]+nativeUrl = remuxPlaybackUrl\(p, seekStart\);[\s\S]+url: new URL\(nativeUrl, location\.origin\)\.href,[\s\S]+start: serverSeek \? 0 : Math\.max\(0, atSeconds \|\| 0\),[\s\S]+startOffset: seekStart/,
-    'native remux/transcode playback should use server-side start URLs and pass the absolute display offset');
+  assert.match(ui, /const serverSeek = kind === 'remux' \|\| kind === 'transcode';[\s\S]+nativeUrl = remuxPlaybackUrl\(p, seekStart, \{ native: true \}\);[\s\S]+url: new URL\(nativeUrl, location\.origin\)\.href,[\s\S]+start: serverSeek \? 0 : Math\.max\(0, atSeconds \|\| 0\),[\s\S]+startOffset: seekStart/,
+    'native remux/transcode playback should use server-side start URLs (native:true → 5.1 audio) and pass the absolute display offset');
   assert.match(ui, /class="seekLine"[\s\S]+id="seekElapsed"[\s\S]+id="seek"[\s\S]+id="seekTotal"/,
     'web player seek bar should show elapsed time on the left and total duration on the right');
   assert.match(ui, /#seek\{[^}]*touch-action:none[^}]*\}[\s\S]+#seek::before\{[^}]*height:44px/,

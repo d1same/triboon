@@ -9111,9 +9111,13 @@ function nativeKindAvailable(p, kind) {
   if (kind === 'transcode') return !!p.transcodeUrl;
   return false;
 }
-function remuxPlaybackUrl(p, seekStart = 0) {
+function remuxPlaybackUrl(p, seekStart = 0, opts = {}) {
   const audio = p && Number.isFinite(Number(p.audioTrack)) ? Number(p.audioTrack) : 0;
-  const safe = p && p.forceAacRemux ? '&audioSafe=1' : '';
+  // audioSafe forces STEREO AAC — required for browser/MSE/<video> + multiview surfaces (5.1 AAC
+  // commonly plays SILENT through their MediaCodec). The native ExoPlayer surface decodes 5.1 fine,
+  // so it OMITS audioSafe (opts.native) and gets the server's default 5.1 re-encode → full surround
+  // instead of a needless stereo downmix on a capable TV/AVR.
+  const safe = (p && p.forceAacRemux && !opts.native) ? '&audioSafe=1' : '';
   return `${p.remuxUrl}&start=${Math.max(0, Math.floor(seekStart || 0))}&audio=${audio}${safe}`;
 }
 function selectedPlayerAudioTrack(p) {
@@ -9232,7 +9236,7 @@ function tryNativeVideoPlayer(kind, atSeconds, opts = {}) {
   if (kind === 'transcode') {
     nativeUrl = `${p.transcodeUrl}&start=${seekStart}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}`;
   } else if (kind === 'remux') {
-    nativeUrl = remuxPlaybackUrl(p, seekStart);
+    nativeUrl = remuxPlaybackUrl(p, seekStart, { native: true }); // native ExoPlayer → 5.1, not the stereo audioSafe path
   }
   const sub = nativeVideoSubtitleRel(p);
   if (sub.blocked) return false;
