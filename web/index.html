@@ -2983,6 +2983,12 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
         <button data-ss="S">Small</button><button data-ss="M">Medium</button><button data-ss="L">Large</button>
       </div>
     </div>
+    <div class="panel" id="prefWeb4kPanel"><h2>Web browser quality</h2>
+      <p>Browsers can't decode 4K (it's almost always HEVC), so 4K plays through a heavy live transcode that often stutters. Cap playback at 1080p for smooth direct play, or allow 4K if this computer is powerful. (This browser only — the TV app always plays 4K natively.)</p>
+      <div class="sizePick" id="prefWeb4k">
+        <button data-w4k="0">Up to 1080p (smoother)</button><button data-w4k="1">Allow 4K (may stutter)</button>
+      </div>
+    </div>
   </div>
 
   <div class="setGrid" data-ptab="menu" hidden>
@@ -3591,9 +3597,8 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
         <span class="seekTime" id="seekTotal">0:00</span>
       </div>
       <div id="liveBar" class="liveOnly" aria-hidden="true">
-        <span class="liveBehind" id="liveBehind">LIVE</span>
+        <span class="liveBehind" id="liveBehind"></span>
         <div class="liveTrack"><div class="liveTrackFill" id="liveTrackFill"></div><span class="liveEdge"></span></div>
-        <span class="liveTag" id="liveTag">LIVE</span>
       </div>
       <div class="ctl">
         <div class="ctlGroup ctlLeft">
@@ -5133,7 +5138,13 @@ function makeCard(it, poster, onFocus) {
   c.addEventListener('click', () => {
     onFocus && onFocus();
     if (it.trailer) return openTrailer(it.trailer, it);
-    if (it._nextEp) return it._local ? playLocal(it) : play(it); // next-up card: local if owned, otherwise normal Play
+    if (it._nextEp) {
+      // In a browser, land on the details page first so the viewer can pick 1080p/4K before
+      // resuming (browsers cap at 1080p by default), instead of auto-playing. The TV app keeps
+      // instant resume; a locally-owned next-up has one quality, so it just plays.
+      if (!it._local && isWebBrowserClient()) return openDetail(detailTargetForItem(it));
+      return it._local ? playLocal(it) : play(it); // next-up card: local if owned, otherwise normal Play
+    }
     if (it._showOpen !== undefined) {
       // From the home "Recently added" row the library view isn't open yet — enter it first.
       const lib = it._lib || S.currentLib;
@@ -5642,6 +5653,11 @@ function userMaxRank() {
   return r == null ? 4 : r;
 }
 function userCanPlay4k() { return userMaxRank() >= 4; }
+// A real browser (Chrome/Safari/Firefox) — NOT the Android app, which hands video to native
+// ExoPlayer. Browsers can't decode HEVC (most 4K is HEVC), so 4K there forces a heavy live transcode
+// that stutters; we cap browser playback at 1080p unless the viewer opts in (Preferences → Playback).
+function isWebBrowserClient() { return !nativePlaybackCaps(); }
+function allow4kInBrowser() { try { return localStorage.getItem('triboon.web4k') === '1'; } catch { return false; } }
 // Remembered quality choice, per profile. The per-title pref (qualityPrefStoreKey) wins; this is the
 // fallback so a user who generally watches 4K gets 4K PRE-MOUNTED on detail open (warm by the time
 // they press Play) instead of only starting the mount when they toggle 4K seconds before playing —
@@ -5669,6 +5685,10 @@ function qualityRankForItem(it) {
   // server pipeline's existing relax-fallback remains the safety net there.
   const known4k = (detailMatches && S.detailItem) ? S.detailItem._has4k : it._has4k;
   if (q === 4 && known4k === false) q = 3;
+  // Browser cap: a plain browser can't decode 4K HEVC, so 4K there means a CPU-bound live transcode
+  // that buffers. Default browser playback to 1080p (direct-playable H.264) unless the viewer opted
+  // into 4K-on-web. The Android app uses native ExoPlayer (real 4K decode), so it's never capped.
+  if (isWebBrowserClient() && !allow4kInBrowser()) q = Math.min(q || 3, 3);
   return q || null;
 }
 function sourceSearchQuery(it, opts = {}) {
@@ -7411,7 +7431,7 @@ async function playLiveSplitChannel(it, list, pane = liveSplitActivePane(), opts
   p.usingRemux = false;
   p.usingTranscode = false;
   p.usingLiveMse = false;
-  $('pHealth').innerHTML = '<span class="liveBadge">LIVE</span>';
+  $('pHealth').innerHTML = ''; // live status shows by the title (+ the GO LIVE control) — no duplicate badge by the clock
   renderLiveEpgStrip(S.liveCur);
   $('pSrc').textContent = hydrated.genre || '';
   updatePlayerMeta();
@@ -10625,7 +10645,7 @@ function updateLiveChrome() {
   }
   const win = Math.max(1, end - start);
   const fill = $('liveTrackFill'); if (fill) fill.style.width = Math.max(0, Math.min(100, ((v.currentTime - start) / win) * 100)).toFixed(1) + '%';
-  const bh = $('liveBehind'); if (bh) bh.textContent = behind < 3 ? 'LIVE' : '-' + fmt(behind);
+  const bh = $('liveBehind'); if (bh) bh.textContent = behind < 3 ? '' : '-' + fmt(behind); // at-live shows nothing; the title + GO LIVE button already convey "live"
 }
 function goLive() {
   const v = $('video'); if (!v) return;
@@ -14450,7 +14470,7 @@ function nativeLiveRequired() {
 }
 function setNativeLivePlaybackState(it) {
   $('pSrc').textContent = it.genre || it.group || '';
-  $('pHealth').innerHTML = '<span class="liveBadge">LIVE</span>';
+  $('pHealth').innerHTML = ''; // live status shows by the title (+ the GO LIVE control) — no duplicate badge by the clock
   renderLiveEpgStrip(S.liveCur);
   S.playing = {
     item: liveItemPayload(it),
@@ -14750,7 +14770,7 @@ async function playChannelWeb(it) {
     schedulePlayerGuideFocusRestore(it._channel);
   }
   $('player').classList.add('live');
-  $('pHealth').innerHTML = '<span class="liveBadge">LIVE</span>';
+  $('pHealth').innerHTML = ''; // live status shows by the title (+ the GO LIVE control) — no duplicate badge by the clock
   renderLiveEpgStrip(S.liveCur);
   $('pSrc').textContent = it.genre || '';
   if (S.liveEpg) {
@@ -16507,6 +16527,9 @@ function openPrefs() { // populates the Preferences PAGE (it's a view now, not a
   const ss = applySubSize();
   syncChoiceButtons('#prefSubSize button', (b) => b.dataset.ss === ss);
   syncChoiceButtons('#prefScreensaverDelay button', (b) => +b.dataset.ssv === prefScreensaverDelaySeconds());
+  // The 4K-in-browser cap only matters in a real browser; the TV app plays 4K natively, so hide it.
+  if ($('prefWeb4kPanel')) $('prefWeb4kPanel').style.display = isWebBrowserClient() ? '' : 'none';
+  syncChoiceButtons('#prefWeb4k button', (b) => b.dataset.w4k === (allow4kInBrowser() ? '1' : '0'));
   // Live TV preferences stay discoverable even before a playlist exists.
   $('prefTabLive').style.display = '';
   renderPrefPersonalIptv();
@@ -17031,6 +17054,12 @@ document.querySelectorAll('#prefSubSize button').forEach((b) => b.addEventListen
   try { localStorage.setItem('triboon.subsize', b.dataset.ss); } catch {}
   syncChoiceButtons('#prefSubSize button', (x) => x === b);
   applySubSize();
+}));
+document.querySelectorAll('#prefWeb4k button').forEach((b) => b.addEventListener('click', () => {
+  try { localStorage.setItem('triboon.web4k', b.dataset.w4k); } catch {}
+  syncChoiceButtons('#prefWeb4k button', (x) => x === b);
+  S._caps = null; // re-evaluate quality caps on the next play
+  toast(b.dataset.w4k === '1' ? '4K allowed in this browser — may stutter on heavy transcodes' : 'Browser playback capped at 1080p for smooth direct play');
 }));
 document.querySelectorAll('#prefScreensaverDelay button').forEach((b) => b.addEventListener('click', () => {
   savePrefScreensaverDelay(+b.dataset.ssv);

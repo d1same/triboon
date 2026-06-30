@@ -230,6 +230,14 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   // when it's known false. This is the "don't even try 4K on a 1080p-only show" fix.
   assert.match(ui, /const known4k = \(detailMatches && S\.detailItem\) \? S\.detailItem\._has4k : it\._has4k;[\s\S]+if \(q === 4 && known4k === false\) q = 3;/,
     'qualityRankForItem must clamp a global-default 4K down to 1080p for titles known to have no 4K');
+  // Browsers can't decode 4K HEVC → 4K forces a heavy live transcode that buffers; cap browser
+  // playback at 1080p by default (opt-in 4K in Preferences). The TV app (native ExoPlayer) is exempt.
+  assert.match(ui, /if \(isWebBrowserClient\(\) && !allow4kInBrowser\(\)\) q = Math\.min\(q \|\| 3, 3\);/,
+    'qualityRankForItem must cap browser playback at 1080p unless 4K-in-browser is opted in');
+  assert.match(ui, /function isWebBrowserClient\(\) \{ return !nativePlaybackCaps\(\); \}/,
+    'a plain browser (no native ExoPlayer bridge) is the client that gets the 1080p cap');
+  assert.match(ui, /if \(!it\._local && isWebBrowserClient\(\)\) return openDetail\(detailTargetForItem\(it\)\);/,
+    'a browser Continue-Watching next-episode card opens details (to pick quality) instead of auto-playing');
   assert.match(ui, /const has4k = res\.has\('2160p'\);[\s\S]+it\._has4k = has4k;/,
     'checkAvailability must persist real 4K availability on the item so a no-4K title never requests 4K');
   assert.match(ui, /function saveGlobalQualityPref\(rank\) \{ const q = normalizeQualityRank\(rank\);/,
