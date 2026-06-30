@@ -8613,6 +8613,7 @@ async function openPlayer(it, mount, opts = {}) {
     tracksUrl: mount.tracksUrl, subtitleBase: mount.subtitleBase, streamToken: mount.streamToken,
     item: it, name: sourceName, fileName: mount.name, sourceAttributes: mount.candidate && mount.candidate.attributes,
     size: mount.size || (mount.candidate && mount.candidate.sizeBytes) || 0,
+    bufferGoalSec: mount.bufferGoalSec || 0, // server-side read-ahead goal → native player buffer depth
     usingRemux: false, usingTranscode: false, startOffset: 0,
     duration: knownDuration, lastSaved: 0, triedRemux: false, triedTranscode: false, mountId: mount.id,
     tracks: null, _tracksJob: null, audioTrack: 0, subTrack: null, quality: 1080, nativePos: 0, nativeDuration: 0,
@@ -9253,6 +9254,7 @@ function tryNativeVideoPlayer(kind, atSeconds, opts = {}) {
     qualityLabel: nativeQualityLabel(p, kind),
     size: p.size || 0,
     duration: Math.max(0, p.duration || p.nativeDuration || 0),
+    bufferGoalSec: p.bufferGoalSec || 0, // ExoPlayer sizes its buffer from this (clamped to device RAM)
     qualityChoices: !!p.transcodeUrl,
     hasNext: p.item.type === 'episode',
     subtitleRel: subPayload.rel,

@@ -237,6 +237,8 @@ public class MainActivity extends Activity {
     private String nativePlaybackSubline = "";
     private String nativePlaybackBackdropUrl = "";
     private long nativePlaybackSizeBytes = 0L;
+    private int nativeBufferGoalSec = 0;        // server read-ahead goal (s) for this stream's resolution
+    private double nativePlaybackDurationSec = 0; // for turning the goal (s) into a byte budget
     private boolean nativeTriedFallback = false;
     private boolean nativeHasNext = false;
     private boolean nativeHasQualityChoices = false;
@@ -3556,6 +3558,8 @@ public class MainActivity extends Activity {
             boolean quietSeek = j.optBoolean("quietSeek", false);
             long knownDurationMs = Math.max(0L, Math.round(j.optDouble("duration", 0) * 1000));
             long playbackSizeBytes = Math.max(0L, j.optLong("size", 0L));
+            int bufferGoalSec = Math.max(0, j.optInt("bufferGoalSec", 0));
+            double playbackDurationSec = Math.max(0, j.optDouble("duration", 0));
             loadingStartOffsetMs = startOffsetMs;
             if (!guide) setPhonePlaybackOrientation(true);
             buildNativePlayerLayer();
@@ -3607,6 +3611,8 @@ public class MainActivity extends Activity {
             nativePlaybackSubline = episodeLabel == null ? "" : episodeLabel;
             nativePlaybackBackdropUrl = backdropUrl == null ? "" : backdropUrl;
             nativePlaybackSizeBytes = playbackSizeBytes;
+            nativeBufferGoalSec = bufferGoalSec;
+            nativePlaybackDurationSec = playbackDurationSec;
             nativeTriedFallback = false;
             nativeLiveUnhealthySinceMs = 0L;
             nativeLiveLastRecoveryMs = 0L;
@@ -4698,18 +4704,36 @@ public class MainActivity extends Activity {
         boolean video = "video".equals(mode);
         boolean heavyVod = video && nativeLikelyHeavyVod();
         int minMs = video ? (conservative ? (heavyVod ? 14000 : 5000) : (heavyVod ? 22000 : 5000)) : (conservative ? 8000 : 4000);
-        int maxMs = video ? (conservative ? (heavyVod ? 75000 : 30000) : (heavyVod ? 120000 : 45000)) : 60000;
+        int maxMs = video ? (conservative ? (heavyVod ? 75000 : 30000) : (heavyVod ? 120000 : 75000)) : 60000;
         int startMs = video ? (conservative ? (heavyVod ? 3500 : 1200) : (heavyVod ? 3500 : 900)) : (conservative ? 1800 : 700);
         int rebufferMs = video ? (conservative ? (heavyVod ? 7000 : 3000) : (heavyVod ? 8000 : 1800)) : (conservative ? 3500 : 1800);
-        int targetMb = video
-                ? (conservative ? (heavyVod ? 72 : 24) : (heavyVod ? 160 : 48))
-                : (conservative ? 24 : 48);
+        // Buffer the player holds is DERIVED from the owner's "read-ahead goal" (Settings →
+        // Streaming performance) for THIS resolution: goalSec × the file's real bitrate, CLAMPED to
+        // a safe share of THIS device's RAM. So a 300 s goal gives a deep buffer on a Shield while a
+        // cheap box stays small — it scales with the setting AND the device instead of a hard-coded
+        // constant. Falls back to a device-tier default when the goal/duration is unknown (older
+        // server, live, or not-yet-probed). maxMs follows the same goal.
+        int defTargetMb = video ? (conservative ? (heavyVod ? 72 : 24) : (heavyVod ? 384 : 96)) : (conservative ? 24 : 48);
+        int targetMb = defTargetMb;
+        if (video && nativeBufferGoalSec > 0) {
+            int ceilMb = nativeBufferCeilingMb(conservative, heavyVod);
+            int floorMb = conservative ? 24 : 48;
+            if (nativePlaybackDurationSec > 0 && nativePlaybackSizeBytes > 0) {
+                double bytesPerSec = nativePlaybackSizeBytes / nativePlaybackDurationSec;
+                long goalMb = (long) (nativeBufferGoalSec * bytesPerSec / (1024.0 * 1024.0));
+                targetMb = (int) Math.max(floorMb, Math.min(ceilMb, goalMb));
+            } else {
+                targetMb = Math.max(floorMb, Math.min(ceilMb, defTargetMb));
+            }
+            maxMs = (int) Math.max(30000L, Math.min(conservative ? 120000L : 300000L, nativeBufferGoalSec * 1000L));
+        }
         int targetBytes = targetMb * 1024 * 1024;
         int backBufferMs = video ? (conservative ? (heavyVod ? 6000 : 3000) : (heavyVod ? 12000 : 8000)) : 3000;
         if (video) {
             Log.i(TAG, "Native VOD buffer profile quality=" + nativeQualityLabel
                     + " sizeMB=" + nativePlaybackSizeBytes / (1024 * 1024)
                     + " conservative=" + conservative
+                    + " goalSec=" + nativeBufferGoalSec
                     + " targetMB=" + targetMb
                     + " maxMs=" + maxMs
                     + " backBufferMs=" + backBufferMs);
@@ -4720,6 +4744,25 @@ public class MainActivity extends Activity {
                 .setBackBuffer(backBufferMs, false)
                 .setPrioritizeTimeOverSizeThresholds(true)
                 .build();
+    }
+
+    // Safe upper bound for the on-device video buffer: ~22% of THIS device's RAM, capped per tier
+    // so a setting like 300s deepens the buffer on a roomy box (Shield) but a cheap/low-RAM device
+    // never over-commits memory. Pairs with the owner's read-ahead-goal setting in nativeLoadControl.
+    private int nativeBufferCeilingMb(boolean conservative, boolean heavyVod) {
+        long totalRamMb = 2048;
+        try {
+            android.app.ActivityManager am = (android.app.ActivityManager) getSystemService(ACTIVITY_SERVICE);
+            if (am != null) {
+                android.app.ActivityManager.MemoryInfo mi = new android.app.ActivityManager.MemoryInfo();
+                am.getMemoryInfo(mi);
+                if (mi.totalMem > 0) totalRamMb = mi.totalMem / (1024 * 1024);
+            }
+        } catch (Exception ignored) { }
+        long byRam = totalRamMb * 22 / 100;
+        int tierCap = conservative ? (heavyVod ? 96 : 48) : (heavyVod ? 768 : 256);
+        int floor = conservative ? 48 : 96;
+        return (int) Math.max(floor, Math.min(tierCap, byRam));
     }
 
     private boolean nativeLikelyHeavyVod() {

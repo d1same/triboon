@@ -3939,11 +3939,17 @@ const H = {
       vf._caps = parseCaps(body.caps); session.caps = vf._caps; // hardware claims ride the session
       rememberMountOwner(vf, ctx.user.id);
       trimUserMounts(ctx.user.id, vf.id);
+      // Owner-facing read-ahead goal for THIS stream's resolution, so the native player can size
+      // its OWN buffer from the Streaming-performance setting (clamped to device RAM) instead of a
+      // hard-coded constant. The client already has size+duration to turn seconds into bytes.
+      const __prof = streamingRuntimeProfile();
+      const bufferGoalSec = (vf.size > 4e9 ? __prof.buffer4kSec : __prof.buffer1080Sec) || 0;
       send(ctx.res, 200, mountPayload(vf, ctx.user.id, {
         sessionId: session.id, mountMs: Date.now() - t0,
         candidate: { name: candidate.name, pickKey: candidate.pickKey, score: candidate.score, indexer: candidate.indexer, reasons: candidate.reasons, attributes: candidate.attributes },
         attempts,
         relaxedResolution: relaxedResolution || undefined,
+        bufferGoalSec,
       }));
     } catch (e) {
       send(ctx.res, 502, { error: e.message, summary: e.summary, attempts: e.attempts || [] });

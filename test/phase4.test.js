@@ -2778,8 +2778,16 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Live TV should recover faster before the first frame while allowing later provider hiccups');
   assert.match(android, /private DefaultLoadControl nativeLoadControlForMode\(String mode\) \{[\s\S]+nativeConservativePlaybackDevice\(\)[\s\S]+setBufferDurationsMs\(minMs, maxMs, startMs, rebufferMs\)/,
     'native ExoPlayer should use a conservative buffer profile on Onn-class devices without slowing Shield');
-  assert.match(android, /boolean heavyVod = video && nativeLikelyHeavyVod\(\)[\s\S]+int targetMb = video[\s\S]+conservative \? \(heavyVod \? 72 : 24\) : \(heavyVod \? 160 : 48\)[\s\S]+int backBufferMs = video \? \(conservative \? \(heavyVod \? 6000 : 3000\) : \(heavyVod \? 12000 : 8000\)\)/,
-    'native ExoPlayer should keep heavy VOD buffers bounded so Android TV devices are not killed by memory pressure');
+  assert.match(android, /boolean heavyVod = video && nativeLikelyHeavyVod\(\)[\s\S]+int defTargetMb = video[\s\S]+conservative \? \(heavyVod \? 72 : 24\) : \(heavyVod \? 384 : 96\)[\s\S]+int backBufferMs = video \? \(conservative \? \(heavyVod \? 6000 : 3000\) : \(heavyVod \? 12000 : 8000\)\)/,
+    'device-tier defaults remain (capable 4K 384MB, low-power 72/24MB) as the fallback when no server goal is provided');
+  // The player buffer is DERIVED from the server-sent read-ahead goal (Streaming-performance
+  // setting) × the file bitrate, clamped to a device-RAM-safe ceiling — not a hard-coded constant.
+  assert.match(android, /if \(video && nativeBufferGoalSec > 0\) \{[\s\S]+nativeBufferCeilingMb\(conservative, heavyVod\)[\s\S]+nativePlaybackSizeBytes \/ nativePlaybackDurationSec[\s\S]+maxMs = \(int\) Math\.max\(30000L, Math\.min\(conservative \? 120000L : 300000L, nativeBufferGoalSec \* 1000L\)\)/,
+    'the on-device buffer scales with the owner read-ahead-goal setting and the file bitrate');
+  assert.match(android, /private int nativeBufferCeilingMb\(boolean conservative, boolean heavyVod\) \{[\s\S]+getMemoryInfo\(mi\)[\s\S]+totalRamMb \* 22 \/ 100[\s\S]+conservative \? \(heavyVod \? 96 : 48\) : \(heavyVod \? 768 : 256\)/,
+    'the buffer ceiling is a safe share of THIS device RAM, capped per tier so cheap boxes never over-commit');
+  assert.match(android, /int bufferGoalSec = Math\.max\(0, j\.optInt\("bufferGoalSec", 0\)\)[\s\S]+nativeBufferGoalSec = bufferGoalSec/,
+    'native player reads the server-sent bufferGoalSec for this stream');
   assert.match(android, /new ExoPlayer\.Builder\(this, nativeRenderersFactory\(\)\)[\s\S]+setBandwidthMeter\(nativeBandwidthMeterForMode\(mode\)\)[\s\S]+setSeekParameters\(SeekParameters\.CLOSEST_SYNC\)/,
     'native ExoPlayer should use decoder fallback plumbing, seeded bandwidth, and closest-sync seeking');
   assert.match(android, /private DefaultRenderersFactory nativeRenderersFactory\(\) \{[\s\S]+setEnableDecoderFallback\(true\)[\s\S]+setEnableAudioOutputPlaybackParameters\(true\)/,
@@ -2794,8 +2802,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native ExoPlayer should bound memory while keeping short VOD rewinds fast');
   assert.match(android, /setReadTimeoutMs\("live"\.equals\(nativeMode\)[\s\S]+NATIVE_LIVE_READ_TIMEOUT_MS[\s\S]+nativeLikelyHeavyVod\(\) \? 45000 : 18000\)/,
     'native Live TV should use a longer provider read timeout, and huge VOD should tolerate slower usenet reads');
-  assert.match(android, /heavyVod \? 22000 : 5000[\s\S]+heavyVod \? 120000 : 45000[\s\S]+heavyVod \? 160 : 48/,
-    'high-end Android devices should still get a deeper 4K VOD profile without reserving hundreds of megabytes');
+  assert.match(android, /heavyVod \? 22000 : 5000[\s\S]+heavyVod \? 120000 : 75000[\s\S]+heavyVod \? 384 : 96/,
+    'high-end Android devices get a deep 4K VOD buffer (384MB ≈ 75s) so transient upstream hiccups never reach the player');
   assert.match(android, /private void updateNativeLiveWatchdog\(\) \{[\s\S]+boolean waitingForLiveData = state == Player\.STATE_BUFFERING[\s\S]+nativePlayer\.isLoading\(\)[\s\S]+boolean unhealthy = state == Player\.STATE_IDLE \|\| state == Player\.STATE_ENDED \|\| waitingForLiveData[\s\S]+long threshold = nativeLiveStarted \? NATIVE_LIVE_STALL_RECOVERY_MS : NATIVE_LIVE_STARTUP_STALL_RECOVERY_MS;[\s\S]+now - nativeLiveUnhealthySinceMs >= threshold[\s\S]+recoverNativeLivePlayback\(state == Player\.STATE_IDLE \? "idle"/,
     'native Live TV should recover only after sustained idle, ended, or real data-wait stalls');
   assert.match(android, /state == Player\.STATE_ENDED && "live"\.equals\(nativeMode\)[\s\S]+recoverNativeLivePlayback\("ended"\)/,
