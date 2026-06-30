@@ -339,6 +339,29 @@ function spawnLiveRemux(url, { hlsFriendly = true, headers = null } = {}) {
   ], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
 }
 
+// Remux a single continuous MPEG-TS stream that the CALLER opens (Node already followed the
+// provider's redirects, pinned IPv4, and sent a browser UA — the robust opening the bare ffmpeg URL
+// path can't match) and pipes in on stdin. ffmpeg never opens a URL here, so there's no provider
+// redirect / Cloudflare-IPv6 / HLS-segment failure surface — it just remuxes bytes to the same fMP4
+// the browser plays. This is what closes the web↔Android Live TV reliability gap.
+function spawnLiveRemuxStdin() {
+  const ff = detectFfmpeg();
+  if (!ff) throw new Error('ffmpeg not available');
+  return spawn(ff.path, [
+    '-hide_banner', '-loglevel', 'error',
+    '-analyzeduration', '500000', '-probesize', '1000000',
+    '-f', 'mpegts', '-i', 'pipe:0',
+    '-map', '0:v:0?', '-map', '0:a:0?',
+    '-c:v', 'copy',
+    '-c:a', 'aac', '-b:a', '384k',
+    '-fflags', '+genpts',
+    '-flush_packets', '1', '-muxdelay', '0', '-muxpreload', '0',
+    '-frag_duration', '250000',
+    '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
+    '-f', 'mp4', 'pipe:1',
+  ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+}
+
 // One JPEG frame from a local file → library thumbnail. Caller caches the output on disk.
 function makeThumb(file, out, atSeconds = 120) {
   const ff = detectFfmpeg();
@@ -402,4 +425,4 @@ function spawnSubSync(refPath, inPath, outPath) {
     { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env });
 }
 
-module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnTranscode, spawnLiveRemux, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, supportsFfmpegHttpOption };
+module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnTranscode, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, supportsFfmpegHttpOption };

@@ -1163,43 +1163,49 @@ test('iptv: sync status clears stale Xtream category errors after streams load',
   }
 });
 
-test('iptv: Xtream browser remux prefers HLS while native playback keeps TS', async () => {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-remux-hls-first-'));
+test('iptv: Xtream browser remux opens the TS stream via the Node pipe (matches native) and follows provider redirects', async () => {
+  // The browser remux now prefers the single-stream TS that Node opens (following the provider's 302
+  // to its edge CDN, IPv4-pinned, browser UA) and pipes into a stdin-fed ffmpeg — the same robust
+  // source the Android native player uses. This is what closed the web "live stream unavailable" gap;
+  // the legacy ffmpeg-opens-the-URL remux remains the fallback (covered by the tests below).
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-remux-tspipe-'));
+  const tsHits = [];
   const upstream = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
     const action = u.searchParams.get('action');
-    res.writeHead(200, { 'content-type': 'application/json' });
-    if (action === 'get_live_categories') return res.end(JSON.stringify([{ category_id: '1', category_name: 'News' }]));
-    if (action === 'get_live_streams') {
-      return res.end(JSON.stringify([{ stream_id: 777, name: 'TS First News', category_id: '1' }]));
+    if (action) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      if (action === 'get_live_categories') return res.end(JSON.stringify([{ category_id: '1', category_name: 'News' }]));
+      if (action === 'get_live_streams') return res.end(JSON.stringify([{ stream_id: 777, name: 'TS Pipe News', category_id: '1' }]));
+      return res.end(JSON.stringify({ epg_listings: [] }));
     }
-    res.end(JSON.stringify({ epg_listings: [] }));
+    if (u.pathname.includes('/live/') && u.pathname.endsWith('/777.ts')) { res.writeHead(302, { location: '/edge/777.ts' }); return res.end(); }
+    if (u.pathname === '/edge/777.ts') { tsHits.push(u.pathname); res.writeHead(200, { 'content-type': 'video/mp2t' }); res.write('tsbytes'); return res.end(); }
+    res.writeHead(404); res.end();
   });
   await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
   const host = `http://127.0.0.1:${upstream.address().port}`;
   const transcode = require('../server/transcode');
   const originalDetect = transcode.detectFfmpeg;
   const originalSpawn = transcode.spawnLiveRemux;
-  const calls = [];
+  const originalStdin = transcode.spawnLiveRemuxStdin;
+  const urlCalls = [];
+  let pipeFed = '';
   transcode.detectFfmpeg = () => ({ path: 'ffmpeg' });
-  transcode.spawnLiveRemux = (url, opts = {}) => {
-    calls.push({ url, hlsFriendly: !!opts.hlsFriendly, headers: opts.headers || null });
+  transcode.spawnLiveRemux = (url) => { // legacy URL path — should NOT be used when the pipe works
+    urlCalls.push(url);
+    const c = new EventEmitter(); c.stdout = new PassThrough(); c.stderr = new PassThrough();
+    c.kill = () => c.emit('close', 1); process.nextTick(() => c.emit('close', 1)); return c;
+  };
+  transcode.spawnLiveRemuxStdin = () => {
     const child = new EventEmitter();
-    child.stdout = new PassThrough();
-    child.stderr = new PassThrough();
-    const closeOnce = () => {
-      if (child.closed) return;
-      child.closed = true;
-      child.emit('close', 0);
-    };
-    child.kill = () => {
-      closeOnce();
-    };
-    process.nextTick(() => {
-      child.stdout.write(Buffer.from('fmp4'));
-      child.stdout.end();
-      closeOnce();
-    });
+    child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+    child.stdin.on('data', (d) => { pipeFed += d.toString(); });
+    // Model real ffmpeg: emit the remuxed bytes, then exit only once the piped input ends (so the
+    // test doesn't race the upstream→stdin pipe).
+    child.stdin.on('finish', () => { if (!child.closed) { child.closed = true; child.emit('close', 0); } });
+    child.kill = () => { if (!child.closed) { child.closed = true; child.emit('close', 0); } };
+    process.nextTick(() => { child.stdout.write(Buffer.from('fmp4')); child.stdout.end(); });
     return child;
   };
 
@@ -1215,20 +1221,20 @@ test('iptv: Xtream browser remux prefers HLS while native playback keeps TS', as
     const out = await httpRaw(srv.port, ch.json.channels[0].streamUrl);
     assert.strictEqual(out.status, 200);
     assert.strictEqual(out.headers['content-type'], 'video/mp4');
-    assert.strictEqual(out.body.toString('utf8'), 'fmp4');
-    assert.strictEqual(calls.length, 1, 'successful HLS remux should not also open the TS URL');
-    assert.match(calls[0].url, /\/live\/xtuser\/xtpass\/777\.m3u8$/);
-    assert.strictEqual(calls[0].hlsFriendly, true, 'HLS remux should use the HLS demuxer flags immediately');
-    assert.strictEqual(calls[0].headers, null, 'test-local IPTV uses the private-target opt-in, so no production Host override is needed');
+    assert.strictEqual(out.body.toString('utf8'), 'fmp4', 'browser receives the stdin-remuxed fMP4');
+    assert.ok(tsHits.length >= 1, 'the TS pipe followed the provider 302 to the edge TS URL');
+    assert.strictEqual(pipeFed, 'tsbytes', 'Node piped the opened TS bytes into ffmpeg stdin');
+    assert.strictEqual(urlCalls.length, 0, 'the robust TS pipe served the channel, so the legacy URL-opening remux was never used');
   } finally {
     if (srv) await srv.shutdown();
     transcode.detectFfmpeg = originalDetect;
     transcode.spawnLiveRemux = originalSpawn;
+    transcode.spawnLiveRemuxStdin = originalStdin;
     upstream.close();
   }
 });
 
-test('iptv: browser remux retries HLS plainly before opening alternate IPTV URLs', async () => {
+test('iptv: browser remux retries the preferred HLS URL once before opening alternate IPTV URLs', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-remux-hls-retry-'));
   const upstreamHits = [];
   const upstream = http.createServer((req, res) => {
@@ -1288,16 +1294,83 @@ test('iptv: browser remux retries HLS plainly before opening alternate IPTV URLs
     await httpJson(srv.port, 'POST', '/api/settings',
       { iptvMode: 'xtream', xtHost: host, xtUser: 'xtuser', xtPass: 'xtpass', epgUrl: null }, admin);
     const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
-    const out = await httpRaw(srv.port, ch.json.channels[0].streamUrl);
+    // nopipe=1 exercises the legacy ffmpeg-opens-the-URL remux directly (the fallback path); the
+    // Node TS-pipe is covered by the dedicated test above.
+    const out = await httpRaw(srv.port, ch.json.channels[0].streamUrl + '&nopipe=1');
     assert.strictEqual(out.status, 200);
     assert.strictEqual(out.body.toString('utf8'), 'fmp4');
     assert.strictEqual(calls.length, 2, 'ffmpeg should retry the preferred HLS URL once before opening alternate IPTV URLs');
     assert.match(calls[0].url, /\/live\/xtuser\/xtpass\/777\.m3u8$/);
     assert.strictEqual(calls[0].hlsFriendly, true);
     assert.match(calls[1].url, /\/live\/xtuser\/xtpass\/777\.m3u8$/);
-    assert.strictEqual(calls[1].hlsFriendly, false, 'plain retry keeps older ffmpeg builds working without HLS-only flags');
+    // A transient I/O error must KEEP the HLS-friendly flags on the retry: dropping them on a real
+    // HLS stream just trips ffmpeg's "not in allowed_segment_extensions" check and fails the channel.
+    // The flags are only dropped when ffmpeg rejected the OPTIONS themselves (old build / non-HLS).
+    assert.strictEqual(calls[1].hlsFriendly, true, 'a network-error retry keeps the HLS demuxer flags');
     assert.ok(!upstreamHits.some((url) => /\/live\/xtuser\/xtpass\/777\.ts$/.test(url)),
       'successful HLS retry should not consume a TS provider connection');
+  } finally {
+    if (srv) await srv.shutdown();
+    transcode.detectFfmpeg = originalDetect;
+    transcode.spawnLiveRemux = originalSpawn;
+    upstream.close();
+  }
+});
+
+test('iptv: remux drops to plain ONLY when ffmpeg rejects the HLS options themselves', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-xtream-remux-optreject-'));
+  const upstream = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    const action = u.searchParams.get('action');
+    if (action) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      if (action === 'get_live_categories') return res.end(JSON.stringify([{ category_id: '1', category_name: 'News' }]));
+      if (action === 'get_live_streams') return res.end(JSON.stringify([{ stream_id: 777, name: 'Opt News', category_id: '1' }]));
+      return res.end(JSON.stringify({ epg_listings: [] }));
+    }
+    res.writeHead(200, { 'content-type': 'video/mp2t' });
+    res.end('edge stream');
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const host = `http://127.0.0.1:${upstream.address().port}`;
+  const transcode = require('../server/transcode');
+  const originalDetect = transcode.detectFfmpeg;
+  const originalSpawn = transcode.spawnLiveRemux;
+  const calls = [];
+  transcode.detectFfmpeg = () => ({ path: 'ffmpeg' });
+  transcode.spawnLiveRemux = (url, opts = {}) => {
+    calls.push({ url, hlsFriendly: !!opts.hlsFriendly });
+    const child = new EventEmitter();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => child.emit('close', 1);
+    process.nextTick(() => {
+      if (calls.length === 1) {
+        // ffmpeg too old / non-HLS input: it aborts on the HLS-private option itself.
+        child.stderr.write(Buffer.from('Option extension_picky not found'));
+        child.stderr.end();
+        child.emit('close', 1);
+        return;
+      }
+      child.stdout.write(Buffer.from('fmp4'));
+      child.stdout.end();
+      child.emit('close', 0);
+    });
+    return child;
+  };
+  let srv;
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/settings',
+      { iptvMode: 'xtream', xtHost: host, xtUser: 'xtuser', xtPass: 'xtpass', epgUrl: null }, admin);
+    const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    const out = await httpRaw(srv.port, ch.json.channels[0].streamUrl + '&nopipe=1'); // exercise the legacy URL remux path
+    assert.strictEqual(out.status, 200);
+    assert.strictEqual(out.body.toString('utf8'), 'fmp4');
+    assert.strictEqual(calls.length, 2, 'an option-rejection should retry the same URL once');
+    assert.strictEqual(calls[0].hlsFriendly, true);
+    assert.strictEqual(calls[1].hlsFriendly, false, 'when ffmpeg rejects the HLS options, the retry drops them (old build / non-HLS)');
   } finally {
     if (srv) await srv.shutdown();
     transcode.detectFfmpeg = originalDetect;

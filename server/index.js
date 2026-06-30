@@ -15,7 +15,7 @@ const { Auth, SecureSettings, RateLimiter } = require('./auth');
 const { Pipeline } = require('./pipeline');
 const { TmdbProxy } = require('./tmdb');
 const { Trakt } = require('./trakt');
-const { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnTranscode, spawnLiveRemux, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioCopyOk } = require('./transcode');
+const { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnTranscode, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioCopyOk } = require('./transcode');
 const ytmusic = require('./ytmusic');
 const https = require('https');
 const dns = require('dns').promises;
@@ -675,13 +675,22 @@ function iptvPolicyError(label, detail) {
 async function resolveIptvHost(host) {
   let timer;
   try {
-    return await Promise.race([
+    const addrs = await Promise.race([
       dns.lookup(host, { all: true, verbatim: true }),
       new Promise((_, reject) => {
         timer = setTimeout(() => reject(new Error('dns timeout')), 3000);
         if (timer.unref) timer.unref();
       }),
     ]);
+    // Prefer IPv4. Self-hosted boxes (Docker/Unraid, some Windows dev rigs) routinely have NO working
+    // IPv6 route, while Cloudflare-fronted IPTV CDNs (and the redirect targets providers hand out)
+    // publish AAAA records — pinning/probing those over IPv6 yields ENETUNREACH and the channel reads
+    // as "live stream unavailable". IPTV hosts always serve IPv4, so pin IPv4 when present and only
+    // fall back to IPv6 for the (vanishingly rare) IPv6-only host. This keeps the redirect probe and
+    // the pinned native/proxy paths off the unreachable family.
+    const list = Array.isArray(addrs) ? addrs : [];
+    const v4 = list.filter((a) => a && a.family === 4);
+    return v4.length ? v4 : list;
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -1191,6 +1200,14 @@ function iptvRemuxStatusFromFfmpeg(err) {
   const text = String(err || '');
   const m = /Server returned\s+(\d{3})/i.exec(text) || /HTTP error\s+(\d{3})/i.exec(text);
   return m ? parseInt(m[1], 10) : 0;
+}
+function ffmpegRejectedHlsOptions(err) {
+  // The hlsFriendly attempt passes HLS-demuxer-private options (-extension_picky/-allowed_extensions).
+  // ONLY a NON-HLS input or an older ffmpeg that predates those options aborts on the option itself —
+  // that is the single case where retrying WITHOUT them ("plain") can help. A network/IO/redirect
+  // failure must NOT drop the options: on a genuine HLS stream, a plain retry just guarantees the
+  // next failure ("URL ... is not in allowed_segment_extensions"). So gate the plain retry on this.
+  return /option .*not found|unrecognized option|invalid argument|error setting option|trailing option/i.test(String(err || ''));
 }
 function iptvRemuxTargets(ch = {}) {
   const out = [];
@@ -4624,8 +4641,13 @@ const H = {
           try { pin.onFailure(); } catch {}
         }
         if (codeNum && !wrote && retriesLeft > 0 && !providerRejected && !ctx.res.destroyed) {
-          console.error(`[iptv] "${ch.name}" attempt failed (${err.slice(0, 120).trim()}) — retrying plain`);
-          return attempt(target, false, retriesLeft - 1);
+          // Retry the SAME url once before burning an alternate (TS) provider connection. Keep the
+          // HLS options unless ffmpeg actually rejected THEM (old build / non-HLS input) — dropping
+          // them on a genuine HLS stream just guarantees the next failure ("URL ... is not in
+          // allowed_segment_extensions"), which is what was making channels read as unavailable.
+          const retryHls = hlsFriendly && !ffmpegRejectedHlsOptions(err);
+          console.error(`[iptv] "${ch.name}" attempt failed (${err.slice(0, 120).trim()}) — retrying ${retryHls ? 'HLS' : 'plain'}`);
+          return attempt(target, retryHls, retriesLeft - 1);
         }
         if (codeNum && !wrote && targetIndex + 1 < availableTargets.length && !ctx.res.destroyed) {
           const failedLabel = target.label || 'stream';
@@ -4664,15 +4686,123 @@ const H = {
       const likelyHls = iptvRemuxTargetLikelyHls(first);
       attempt(first, likelyHls, likelyHls ? 1 : 0);
     };
+    // PREFERRED browser path: Node opens the single-stream TS (resolving provider redirects, pinning
+    // IPv4, sending a browser UA — the robust open the bare-ffmpeg-URL path can't do) and pipes the
+    // bytes into a stdin-fed ffmpeg that only remuxes to fMP4. ffmpeg never touches the provider, so
+    // the redirect / Cloudflare-IPv6 / HLS-segment failures that made channels read "unavailable" on
+    // web are gone — this is the exact TS source the Android native player streams reliably. Any
+    // pre-first-byte failure falls back to the legacy URL-opening loop (covers HLS-only providers).
+    const tsPipeTarget = (ch.nativeUrl && iptvNativeMime(ch.nativeUrl) === 'video/mp2t') ? ch.nativeUrl : '';
+    const tsPipeRemux = async (tsTarget, onFail) => {
+      let settled = false, wrote = false, up = null, ff = null, errBuf = '', idleTimer = null;
+      const clearIdle = () => { if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; } };
+      const cleanup = () => {
+        clearIdle();
+        try { if (up) { up.removeAllListeners('error'); up.on('error', () => {}); up.destroy(); } } catch {}
+        try { if (ff) ff.kill('SIGKILL'); } catch {}
+      };
+      const detach = () => { ctx.req.off('close', onClose); ctx.res.off('close', onClose); };
+      function onClose() { if (settled) { cleanup(); return; } settled = true; cleanup(); detach(); liveSlot.done('client closed'); }
+      const giveUp = (reason) => {
+        if (settled) return; settled = true; cleanup(); detach();
+        console.error(`[iptv ts-pipe] "${ch.name}" ${reason} — falling back to URL remux`);
+        onFail();
+      };
+      const armIdle = (ms) => {
+        clearIdle();
+        const wait = wrote ? ms : Math.min(ms, Math.max(250, startupRemaining()));
+        idleTimer = setTimeout(() => { if (!wrote) giveUp('startup timeout'); else { try { if (ff) ff.kill('SIGKILL'); } catch {} } }, wait);
+        if (idleTimer.unref) idleTimer.unref();
+      };
+      ctx.req.once('close', onClose);
+      ctx.res.once('close', onClose);
+      liveSlot.setCloser(() => {
+        settled = true; cleanup(); detach();
+        try { if (ctx.req.socket && !ctx.req.socket.destroyed) ctx.req.socket.destroy(); } catch {}
+        try { if (!ctx.res.destroyed) ctx.res.destroy(); } catch {}
+      });
+      const startFfmpeg = (res) => {
+        try { ff = spawnLiveRemuxStdin(); } catch (e) { return giveUp(`spawn failed (${e.message})`); }
+        ff.on('error', (e) => giveUp(`ffmpeg error (${e.message})`));
+        ff.stdin.on('error', () => {}); // EPIPE when ffmpeg is killed mid-write — expected, swallow
+        ff.stderr.on('data', (d) => { if (errBuf.length < 8000) errBuf += d; });
+        ff.stdout.on('data', (chunk) => {
+          if (settled && !wrote) return;
+          if (!wrote) {
+            wrote = true;
+            ctx.res.writeHead(200, { 'content-type': 'video/mp4', 'cache-control': 'no-store', connection: 'close', 'x-accel-buffering': 'no' });
+            if (typeof ctx.res.flushHeaders === 'function') ctx.res.flushHeaders();
+          }
+          armIdle(LIVE_REMUX_IDLE_TIMEOUT_MS);
+          if (!ctx.res.destroyed && !ctx.res.write(chunk)) {
+            try { ff.stdout.pause(); } catch {}
+            ctx.res.once('drain', () => { try { if (!settled) ff.stdout.resume(); } catch {} });
+          }
+        });
+        ff.on('close', () => {
+          clearIdle();
+          if (settled) return;
+          if (!wrote) { settled = true; cleanup(); detach(); console.error(`[iptv ts-pipe] "${ch.name}" ffmpeg exited before output: ${sanitizeIptvFfmpegError(errBuf)}`); return onFail(); }
+          settled = true; detach();
+          try { ctx.res.end(); } catch {}
+          liveSlot.done('ended');
+        });
+        res.on('data', (c) => { if (!ff || !ff.stdin.writable) return; if (!ff.stdin.write(c)) { res.pause(); ff.stdin.once('drain', () => { try { res.resume(); } catch {} }); } });
+        res.on('end', () => { try { if (ff && ff.stdin.writable) ff.stdin.end(); } catch {} });
+        res.on('error', () => { if (!wrote) giveUp('upstream stream error'); else { try { if (ff && ff.stdin.writable) ff.stdin.end(); } catch {} } });
+      };
+      // Open the TS stream, following provider redirects per-hop with a fresh IPv4 pin + browser UA
+      // (the .ts endpoint 302s to a CDN — the native player follows it, so we must too). The bare
+      // ffmpeg URL path is the fallback for HLS-only providers.
+      const openUpstream = (rawUrl, hop) => {
+        if (settled || liveSlot.closed || ctx.res.destroyed) return;
+        if (hop > 5) return giveUp('too many redirects');
+        validateAndPinIptvUrl(rawUrl, 'Live stream URL').then((pin) => {
+          if (settled || liveSlot.closed || ctx.res.destroyed) return;
+          let u;
+          try { u = new URL(pin.href); } catch { return giveUp('invalid url'); }
+          const lib = u.protocol === 'https:' ? https : http;
+          up = lib.request(u, {
+            method: 'GET', agent: false,
+            headers: { 'user-agent': iptvPlaybackUserAgent(hop), accept: '*/*', connection: 'close' },
+            ...(pin && typeof pin.lookup === 'function' ? { lookup: pin.lookup } : {}),
+          }, (res) => {
+            if (settled) { res.resume(); return; }
+            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+              res.resume();
+              let next; try { next = new URL(res.headers.location, u).href; } catch { return giveUp('bad redirect location'); }
+              return openUpstream(next, hop + 1);
+            }
+            if (res.statusCode !== 200) { res.resume(); return giveUp(`upstream HTTP ${res.statusCode}`); }
+            startFfmpeg(res);
+          });
+          up.on('error', (e) => giveUp(`upstream connect error (${e.code || e.message})`));
+          up.setTimeout(Math.max(1500, startupRemaining()), () => giveUp('upstream timeout'));
+          up.end();
+        }).catch((e) => giveUp(`blocked upstream (${sanitizeIptvLogError(e)})`));
+      };
+      armIdle(LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS);
+      openUpstream(tsTarget, 0);
+    };
+    const begin = () => {
+      if (startDelayTimer) startDelayTimer = null;
+      if (liveSlot.closed || ctx.res.destroyed) return;
+      // Kill-switch: ?nopipe=1 (per request) or TRIBOON_IPTV_NOPIPE=1 (whole box) reverts to the
+      // legacy ffmpeg-opens-the-URL remux without a redeploy, in case a provider misbehaves.
+      if (tsPipeTarget && ctx.url.searchParams.get('nopipe') !== '1' && process.env.TRIBOON_IPTV_NOPIPE !== '1') {
+        return tsPipeRemux(tsPipeTarget, () => { if (!liveSlot.closed && !ctx.res.destroyed && !ctx.res.headersSent) startAttempt(); });
+      }
+      startAttempt();
+    };
     liveSlot.setCloser((reason) => {
       if (startDelayTimer) clearTimeout(startDelayTimer);
       try { if (!ctx.res.destroyed) ctx.res.destroy(); } catch {}
     });
     if (liveSlot.replaced) {
-      startDelayTimer = setTimeout(startAttempt, IPTV_LIVE_RETUNE_GRACE_MS);
+      startDelayTimer = setTimeout(begin, IPTV_LIVE_RETUNE_GRACE_MS);
       startDelayTimer.unref();
     } else {
-      startAttempt();
+      begin();
     }
   },
 
