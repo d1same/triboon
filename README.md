@@ -12,9 +12,7 @@
 <p align="center">
   <a href="https://github.com/d1same/triboon/releases/latest">Latest release</a>
   |
-  <a href="https://github.com/d1same/triboon/releases/latest/download/triboon-tv.apk">Android TV APK</a>
-  |
-  <a href="https://github.com/d1same/triboon/releases/latest/download/triboon-mobile.apk">Android Mobile APK</a>
+  <a href="https://github.com/d1same/triboon/releases/latest/download/triboon.apk">Android APK</a>
   |
   <a href="#quick-start">Quick start</a>
   |
@@ -90,28 +88,23 @@ ffmpeg is optional but strongly recommended. Without ffmpeg, some browser or
 device combinations may need external-player handoff instead of in-app remux or
 transcode.
 
-## Android APKs
+## Android APK
 
-Triboon keeps stable APK URLs for in-app updates and Downloader shortcuts. The
-full naming contract lives in [`docs-app-updates.md`](docs-app-updates.md).
+Triboon ships one universal APK for Android TV, phones, and tablets - the same
+binary adapts at runtime. Triboon keeps a stable APK URL for in-app updates and
+Downloader shortcuts. The full naming contract lives in
+[`docs-app-updates.md`](docs-app-updates.md).
 
-The stable Android TV download is always:
+The stable download is always:
 
 ```text
-https://github.com/d1same/triboon/releases/latest/download/triboon-tv.apk
+https://github.com/d1same/triboon/releases/latest/download/triboon.apk
 ```
 
-The stable Android phone/tablet download is always:
+Each release also keeps a versioned copy for history:
 
 ```text
-https://github.com/d1same/triboon/releases/latest/download/triboon-mobile.apk
-```
-
-Each release also keeps versioned APKs for history:
-
-```text
-triboon-tv-vX.Y.Z.apk
-triboon-mobile-vX.Y.Z.apk
+triboon-vX.Y.Z.apk
 ```
 
 The APK filename does not control Android updates. Android accepts an update
@@ -212,7 +205,6 @@ If a current external Gradle is not installed, use the pinned wrapper from the
 - `docs-player-regression-map.md` - player behavior contracts and regression
   checklist.
 - `VERIFY.md` - required pre-update verification gate.
-- `docs-release-audit.md` - release verification history.
 
 ## Legal
 

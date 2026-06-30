@@ -22,6 +22,14 @@ AGENTS.md
 android/.idea/
 android/gradle/gradle-daemon-jvm.properties
 
+# Local-only dev tooling and internal notes. Kept on disk for the maintainer's workflow but
+# not published to the public repo: dev/debug/bench scripts (some reference local LAN/device
+# addresses), the internal release-audit board (past-issue history + APK hashes), and the
+# local Android-Studio/emulator setup guide (machine-specific paths).
+bench/
+docs-release-audit.md
+docs-android-tv-testing.md
+
 # Android: machine-local SDK path, build outputs, gradle caches, built APKs, signing keys.
 android/local.properties
 android/.gradle/
@@ -38,8 +46,6 @@ android/app/build/
 dist/
 tmp/
 *.log
-bench/shots/
-bench/stress-results/
 alltests.txt
 p2fail*.txt
 graphify-out/
