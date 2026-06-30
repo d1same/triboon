@@ -1513,6 +1513,32 @@ test('pipeline: playback warmup pre-fetches BOTH the head and the tail (containe
   store.close();
 });
 
+test('pipeline: playback warmup warms the RESUME byte window so a Continue-Watching resume is not a cold seek', async () => {
+  // A resume seeks straight to a deep mid-file byte offset that the head/tail warm never primed —
+  // the 20-30s native resume lag. resumeFrac (resume seconds / duration, supplied by the client)
+  // warms THAT window on the read-ahead lane (plus only a small head, since the head isn't played on
+  // a resume). With NO resumeFrac the behaviour is unchanged (full head + tail).
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const pipeline = new Pipeline({ pool: () => null, verdicts: new VerdictCache(store), mounts: new Map(), indexers: () => [] });
+  const size = 8e9; // a "big" (4K) mount
+  const reads = [];
+  const resumeVf = { streamable: true, size, read(from, to) { reads.push([from, to]); return (async function* () {})(); } };
+  pipeline._startPlaybackWarmup(resumeVf, { cacheMaxBytes: 1024 * 1024 * 1024 }, 0.5); // resume at ~50%
+  await new Promise((r) => setTimeout(r, 300));
+  const mid = size * 0.5;
+  assert.ok(reads.some(([f, t]) => f <= mid && t >= mid), 'warms a byte window covering the ~50% resume offset');
+  assert.ok(reads.some(([f]) => f === 0), 'still warms a (small) head for the container-header parse');
+
+  const reads2 = [];
+  const freshVf = { streamable: true, size, read(from, to) { reads2.push([from, to]); return (async function* () {})(); } };
+  pipeline._startPlaybackWarmup(freshVf, { cacheMaxBytes: 1024 * 1024 * 1024 }); // no resumeFrac
+  await new Promise((r) => setTimeout(r, 300));
+  assert.ok(reads2.some(([f]) => f === 0) && reads2.some(([, t]) => t === size), 'no resumeFrac → classic head + tail warm');
+  assert.ok(!reads2.some(([f, t]) => f > size * 0.2 && t < size * 0.8), 'no resumeFrac → no mid-file resume warm');
+  store.close();
+});
+
 test('pipeline: active mount rebalance shrinks read-ahead when another stream starts', async () => {
   const now = Date.now();
   const mounts = new Map();

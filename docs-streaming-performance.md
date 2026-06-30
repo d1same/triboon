@@ -181,6 +181,19 @@ startup buffer drains ("plays fine, then buffers after a minute"). Measured live
 head+tail cut a 36 s / 21 Mbps cold remux start to <4 s / 240 Mbps. Covered by
 `test/phase2.test.js` ("playback warmup pre-fetches BOTH the head and the tail").
 
+**Resume-offset warmup.** A Continue Watching resume makes the player seek straight to a
+deep mid-file byte offset that the head/tail warm never primed — on Android (native
+ExoPlayer) that cold seek was a 20-30 s wait vs an instant fresh start, worst on big 4K
+multi-volume RARs. `_startPlaybackWarmup` now takes a `resumeFrac` (resume seconds ÷
+duration) and warms a window covering that offset on the SAME read-ahead lane + cache cap;
+on a resume it warms only a small head (the head is not played, just parsed) so the budget
+stays close to head+tail. The server cannot compute the offset itself (no track probe at
+prepare/play), so the CLIENT — which knows the duration from watch state — sends `resumeFrac`
+on `/api/play` and `/api/prepare` (so a focus pre-mount primes it before Play). It re-warms
+once if the resume position changed, and simply does nothing when duration is unknown
+(never a regression). Covered by `test/phase2.test.js` ("playback warmup warms the RESUME
+byte window"). Like head+tail it must stay on the read-ahead lane and obey the cache cap.
+
 Large files use the 4K window; smaller files use the 1080p window.
 The segment window decides how many decoded articles can stay hot; the byte
 window is the hard memory guard. Do not tune one without the other: NNTP article

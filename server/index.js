@@ -3978,7 +3978,8 @@ const H = {
     // so a capped user can't smuggle UHD past their ceiling via the preference.
     try {
       const { session, vf, candidate, attempts, relaxedResolution } = await pipeline.play(
-        { q: body.q, imdbid: body.imdbid, tvdbid: body.tvdbid, season: body.season, ep: body.ep, pick: body.pick, pickKey: body.pickKey },
+        { q: body.q, imdbid: body.imdbid, tvdbid: body.tvdbid, season: body.season, ep: body.ep, pick: body.pick, pickKey: body.pickKey,
+          resumeFrac: Math.max(0, Math.min(1, Number(body.resumeFrac) || 0)) },
         policy
       );
       session.uid = ctx.user.id;
@@ -4012,7 +4013,8 @@ const H = {
     const policy = playbackPolicyFor(ctx.user, body);
     try {
       const { vf, candidate, attempts, prepared } = await pipeline.prepare(
-        { q: body.q, imdbid: body.imdbid, tvdbid: body.tvdbid, season: body.season, ep: body.ep, pick: body.pick, pickKey: body.pickKey },
+        { q: body.q, imdbid: body.imdbid, tvdbid: body.tvdbid, season: body.season, ep: body.ep, pick: body.pick, pickKey: body.pickKey,
+          resumeFrac: Math.max(0, Math.min(1, Number(body.resumeFrac) || 0)) },
         policy
       );
       if (vf) {

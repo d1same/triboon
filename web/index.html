@@ -5430,6 +5430,16 @@ function playbackRequestBody(it, picked = null, qRank = qualityRankForItem(it)) 
     body.maxResolutionRank = qRank;
     body.preferResolutionRank = qRank;
   }
+  // Resume warm: tell the server WHERE (as a fraction of the file) the player will seek to, so it can
+  // prime that deep byte window on the read-ahead lane BEFORE the seek — otherwise the resume offset
+  // is cold and the first frame waits on it (the 20-30s native resume lag). The server can't compute
+  // this itself (no duration probe at prepare/play); only the client knows the duration (watch state).
+  const resumeSec = +it.resume || 0;
+  if (resumeSec > 0) {
+    const w = S.watchMap && it.key && S.watchMap[it.key];
+    const dur = +(w && w.duration) || +it.duration || 0;
+    if (dur > 0) body.resumeFrac = Math.max(0, Math.min(0.98, resumeSec / dur));
+  }
   return body;
 }
 function preparePlaybackSource(it, delay = 900) {

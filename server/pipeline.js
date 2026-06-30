@@ -497,15 +497,14 @@ class Pipeline {
     return win;
   }
 
-  _startPlaybackWarmup(vf, win) {
-    if (!vf || !vf.streamable || vf._playbackWarmupStarted || typeof vf.read !== 'function') return;
+  _startPlaybackWarmup(vf, win, resumeFrac = 0) {
+    if (!vf || !vf.streamable || typeof vf.read !== 'function') return;
     const size = Number(vf.size) || 0;
     if (size <= 0) return;
     const big = size > 4e9;
     const capBytes = Number(win && win.cacheMaxBytes) || 0;
     const warmBytes = Math.min(size, capBytes || Infinity, (big ? 96 : 32) * 1024 * 1024);
     if (!Number.isFinite(warmBytes) || warmBytes <= 0) return;
-    vf._playbackWarmupStarted = true;
     const warm = (from, to) => {
       if (!(to > from)) return;
       const timer = setTimeout(() => (async () => {
@@ -518,7 +517,27 @@ class Pipeline {
       })().catch(() => {}), 150);
       if (timer && typeof timer.unref === 'function') timer.unref();
     };
-    warm(0, warmBytes);
+    // RESUME WINDOW. A Continue-Watching resume makes the player seek straight to a DEEP mid-file byte
+    // offset that the head/tail warm never primed — that cold window is the 20-30s resume wait on
+    // Android (and worse for big 4K multi-volume RARs). Warm it on the SAME read-ahead lane + cap as
+    // head/tail. resumeFrac (resume seconds / duration) comes from the client, which knows the
+    // duration; the server's _tracks aren't probed yet at prepare/play, so we can't compute it here.
+    // Allowed once per distinct resume position even if the head/tail warm already ran (the position
+    // can change between focuses). Worst case (no/odd frac) it simply doesn't fire — never a regression.
+    const frac = Number(resumeFrac) || 0;
+    const resuming = frac > 0.02 && frac < 0.985;
+    if (resuming && Math.abs((vf._warmedResumeFrac == null ? -1 : vf._warmedResumeFrac) - frac) > 0.03) {
+      vf._warmedResumeFrac = frac;
+      const back = Math.floor(warmBytes * 0.3); // start well BEFORE the estimate to absorb VBR time→byte drift
+      const start = Math.max(0, Math.min(Math.max(0, size - warmBytes), Math.floor(size * frac) - back));
+      warm(start, Math.min(size, start + warmBytes));
+    }
+    if (vf._playbackWarmupStarted) return; // head/tail already warmed for this mount
+    vf._playbackWarmupStarted = true;
+    // HEAD: a fresh start plays from the head (full warm); a resume only needs the container header
+    // parsed (its body is the resume window above), so warm just a small head there to keep the cache
+    // budget close to the non-resume head+tail.
+    warm(0, resuming ? Math.min(warmBytes, (big ? 16 : 8) * 1024 * 1024) : warmBytes);
     // TAIL warm — the decisive fix for "plays fine, then buffers after a minute". The browser fMP4
     // remux (ffmpeg) AND Android ExoPlayer both parse the container INDEX before they can stream:
     // mkv Cues / mp4 moov, which for WEB-DL releases usually sits at the END of the file. ffmpeg
@@ -950,7 +969,7 @@ class Pipeline {
           this.mounts.set(res.vf.id, res.vf);
           this.mountByUrl.set(candidate.nzbUrl, res.vf.id);
           this.rebalancePlaybackWindows();
-          this._startPlaybackWarmup(res.vf, res.vf._playWin);
+          this._startPlaybackWarmup(res.vf, res.vf._playWin, params.resumeFrac);
           return { vf: res.vf, candidate };
         }
         attempts.push({ name: candidate.name, fail: res.fail || 'prepare failed' });
@@ -981,7 +1000,7 @@ class Pipeline {
     this.mountByUrl.set(candidate.nzbUrl, vf.id);
     session.currentMountId = vf.id;
     this.rebalancePlaybackWindows();
-    this._startPlaybackWarmup(vf, vf._playWin);
+    this._startPlaybackWarmup(vf, vf._playWin, session.query && session.query.resumeFrac);
     session.history.push({ name: candidate.name, outcome: 'playing' });
     return { session, vf, candidate, attempts };
   }
