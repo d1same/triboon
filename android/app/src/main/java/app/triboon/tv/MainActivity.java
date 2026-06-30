@@ -329,6 +329,25 @@ public class MainActivity extends Activity {
         root.setFocusable(true);
         root.setFocusableInTouchMode(true);
         setContentView(root);
+        // Phones show the system bars, and on modern Android (targetSdk 35+) the window is edge-to-edge
+        // — content can draw UNDER the status/nav bars. Pad the content below the status bar and above
+        // the nav bar so nothing (e.g. the top-left menu button) hides under a bar. Immersive (TV, or
+        // fullscreen video) takes zero padding so the picture stays truly edge-to-edge. root's ink
+        // background fills the bar regions, so the bars sit on the app's own color.
+        root.setOnApplyWindowInsetsListener((v, insets) -> {
+            boolean immersive = isTvDevice() || phonePlaybackOrientationLocked;
+            if (immersive) {
+                v.setPadding(0, 0, 0, 0);
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                android.graphics.Insets bars = insets.getInsets(
+                        android.view.WindowInsets.Type.systemBars() | android.view.WindowInsets.Type.displayCutout());
+                v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
+            } else {
+                v.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(),
+                        insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
+            }
+            return insets;
+        });
         applySystemUiPolicy();
 
         buildSetupScreen();
@@ -465,14 +484,22 @@ public class MainActivity extends Activity {
                                 | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
                                 | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
             } else {
-                // Don't draw under a notch/bars now that the bars are shown.
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                     WindowManager.LayoutParams lp = getWindow().getAttributes();
                     lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT;
                     getWindow().setAttributes(lp);
                 }
-                decor.setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
+                // Bars VISIBLE, but lay the content out edge-to-edge UNDER them; the root inset
+                // listener pads it back below the status bar / above the nav bar. Doing it this way
+                // (rather than relying on the framework to inset) is consistent across Android
+                // versions — API 35+ is edge-to-edge regardless of these flags.
+                decor.setSystemUiVisibility(
+                        View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                                | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
             }
+            // Re-run the inset padding for the new immersive state (e.g. entering/leaving fullscreen video).
+            if (root != null) root.requestApplyInsets();
         } catch (Exception ignored) {
         }
     }

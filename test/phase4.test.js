@@ -954,6 +954,10 @@ test('Android native player: direct source and native chrome stay out of the web
   );
   assert.doesNotMatch(manifest, /android:screenOrientation="landscape"/,
     'Android phone APK must not force the full shell into landscape');
+  // Phones show the system bars; content is padded below them via a root inset listener, while
+  // TV / fullscreen video stay edge-to-edge (zero padding) so the burger/clock are not hidden.
+  assert.match(android, /setOnApplyWindowInsetsListener\([\s\S]+isTvDevice\(\) \|\| phonePlaybackOrientationLocked[\s\S]+setPadding\(0, 0, 0, 0\)[\s\S]+Type\.systemBars\(\)/,
+    'Android phone shell pads content for the system bars (immersive/TV stays edge-to-edge)');
   assert.match(android, /boolean isTv = isTvDevice\(\);[\s\S]+TriboonTV\/[\s\S]+TriboonAndroid\//,
     'Android shell should tag TV and phone WebViews differently');
   assert.match(android, /int contentWidth = Math\.max\(dp\(260\), Math\.min\(getResources\(\)\.getDisplayMetrics\(\)\.widthPixels - \(pad \* 2\), dp\(520\)\)\);[\s\S]+setup\.addView\(addr, new LinearLayout\.LayoutParams\(contentWidth/,
