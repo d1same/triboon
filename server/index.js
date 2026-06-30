@@ -4693,9 +4693,20 @@ const H = {
     send(ctx.res, 200, { key: b.key, on });
   },
   libraryDelete: async (ctx) => {
-    store.update('libraries', { list: [] }, (s) => { s.list = s.list.filter((l) => l.id !== ctx.m[1]); return s; });
-    store.update('libitems', {}, (s) => { delete s[ctx.m[1]]; return s; });
-    libraryDb.deleteLibrary(ctx.m[1]);
+    const libId = ctx.m[1];
+    store.update('libraries', { list: [] }, (s) => { s.list = s.list.filter((l) => l.id !== libId); return s; });
+    store.update('libitems', {}, (s) => { delete s[libId]; return s; });
+    libraryDb.deleteLibrary(libId);
+    // Remove this library's cached cover thumbnails (data/thumbs/<libId>-<idx>.jpg) — otherwise
+    // deleting a big library leaks thousands of generated jpgs on disk. The '-' delimiter prevents
+    // a shorter libId from matching a longer one's files.
+    try {
+      const dir = path.join(DATA_DIR, 'thumbs');
+      const prefix = `${libId}-`;
+      for (const f of fs.readdirSync(dir)) {
+        if (f.startsWith(prefix) && f.endsWith('.jpg')) { try { fs.unlinkSync(path.join(dir, f)); } catch {} }
+      }
+    } catch {}
     send(ctx.res, 200, { ok: true });
   },
 
@@ -5189,8 +5200,6 @@ Object.assign(H, {
       return send(ctx.res, 404, { error: 'library not found' });
     }
     const libId = ctx.m[1];
-    const rec = libraryRecord(libId);
-    if (!rec) return send(ctx.res, 200, { items: [] });
     const limitRaw = ctx.url.searchParams.get('limit');
     if (limitRaw !== null) {
       const limit = Math.max(1, Math.min(500, parseInt(limitRaw, 10) || 15));
@@ -5200,8 +5209,11 @@ Object.assign(H, {
       const showIdxRaw = ctx.url.searchParams.get('showIdx');
       const showIdx = showIdxRaw === null ? null : parseInt(showIdxRaw, 10);
       if (libraryDb.available) {
+        // Paged path: query straight from SQLite (indexed). Do NOT full-load + JSON.parse every
+        // item first — on a 20K-item library that was ~150ms of wasted work on EVERY page request.
         const pageRec = libraryDb.page(libId, { offset, limit, sort, genre, showIdx });
-        if (pageRec) return send(ctx.res, 200, {
+        if (!pageRec) return send(ctx.res, 200, { items: [] }); // library never scanned
+        return send(ctx.res, 200, {
           scannedAt: pageRec.scannedAt,
           offset: pageRec.offset,
           limit: pageRec.limit,
@@ -5212,6 +5224,9 @@ Object.assign(H, {
           items: pageRec.items.map((item) => localItemPayload(ctx, libId, item)),
         });
       }
+      // No SQLite (JSON fallback only): load the stored record and page in JS.
+      const rec = libraryRecord(libId);
+      if (!rec) return send(ctx.res, 200, { items: [] });
       const top = (rec.items || []).filter((x) => x.kind !== 'episode');
       const genres = [...new Set(top.flatMap((x) => x.genres || []))].sort((a, b) => a - b);
       let items;
@@ -5239,9 +5254,12 @@ Object.assign(H, {
         items: page,
       });
     }
-    // Never expose absolute paths — items are addressed by index, with tokenized URLs.
-    // STABLE tokens: identical URLs within a short cache bucket, while the signature still
-    // expires inside the normal 6h stream-token window.
+    // No-limit (legacy full dump): callers SHOULD paginate (limit=) for big libraries; this path
+    // returns every item, so it loads the whole record. Never expose absolute paths — items are
+    // addressed by index, with tokenized URLs (STABLE tokens: identical URLs within a short cache
+    // bucket, while the signature still expires inside the normal 6h stream-token window).
+    const rec = libraryRecord(libId);
+    if (!rec) return send(ctx.res, 200, { items: [] });
     send(ctx.res, 200, {
       scannedAt: rec.scannedAt,
       items: rec.items.map((item) => localItemPayload(ctx, libId, item)),

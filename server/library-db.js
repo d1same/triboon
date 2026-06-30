@@ -8,6 +8,7 @@ class LibraryDb {
     this.file = path.join(dir, 'library.sqlite');
     this.db = null;
     this.available = false;
+    this._genreCache = new Map(); // libId -> { scannedAt, ids } — genres() is a full table scan; cache it per scan
     try {
       fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
       const { DatabaseSync } = require('node:sqlite');
@@ -143,6 +144,7 @@ class LibraryDb {
     try {
       this.db.prepare('DELETE FROM library_items WHERE lib_id = ?').run(libId);
       this.db.prepare('DELETE FROM library_meta WHERE lib_id = ?').run(libId);
+      this._genreCache.delete(libId);
       this.checkpoint();
       return true;
     } catch (e) { this.error = e; return false; }
@@ -182,6 +184,7 @@ class LibraryDb {
         libId,
         parseInt(idx, 10),
       );
+      this._genreCache.delete(libId); // a match-override can change genres without a rescan
       return true;
     } catch (e) { this.error = e; return false; }
   }
@@ -208,6 +211,16 @@ class LibraryDb {
       }
     }
     return [...ids].sort((a, b) => a - b);
+  }
+
+  // genres() full-scans every non-episode row. The set only changes on a (re)scan, so cache it per
+  // (libId, scannedAt) — a browse page on a 20K library was paying that scan on EVERY flip.
+  genresCached(libId, scannedAt) {
+    const hit = this._genreCache.get(libId);
+    if (hit && hit.scannedAt === scannedAt) return hit.ids;
+    const ids = this.genres(libId);
+    this._genreCache.set(libId, { scannedAt, ids });
+    return ids;
   }
 
   page(libId, { offset = 0, limit = 72, sort = 'added.desc', genre = 0, showIdx = null } = {}) {
@@ -250,7 +263,7 @@ class LibraryDb {
       limit,
       total: totalRow ? totalRow.n : items.length,
       hasMore: offset + items.length < ((totalRow && totalRow.n) || 0),
-      genres: showIdx === null ? this.genres(libId) : [],
+      genres: showIdx === null ? this.genresCached(libId, meta.scannedAt) : [],
       show,
       items,
     };

@@ -52,3 +52,32 @@ test('library sqlite catalog pages and looks up local media without genre false 
     db.close();
   }
 });
+
+test('library genre list is cached per scan and invalidated on rescan/update', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-library-genres-'));
+  const db = new LibraryDb(dir);
+  if (!db.available) return;
+  try {
+    db.replaceLibrary('libG', 100, [
+      { idx: 1, kind: 'movie', title: 'A', tmdbId: 1, genres: [28, 12], addedAt: 1, file: '/m/a.mkv' },
+      { idx: 2, kind: 'movie', title: 'B', tmdbId: 2, genres: [878], addedAt: 2, file: '/m/b.mkv' },
+    ]);
+    assert.deepStrictEqual(db.genresCached('libG', 100), [12, 28, 878], 'genre set computed');
+    // Cache hit: mutate the underlying row directly, then the SAME scannedAt must still return the
+    // cached set — proving genresCached does NOT full-scan on every call.
+    db.db.prepare("UPDATE library_items SET genres='|99|' WHERE lib_id='libG' AND idx=1").run();
+    assert.deepStrictEqual(db.genresCached('libG', 100), [12, 28, 878], 'same scannedAt → cached, no re-scan');
+    // Rescan (new scannedAt) refreshes the cache.
+    db.replaceLibrary('libG', 200, [
+      { idx: 1, kind: 'movie', title: 'A', tmdbId: 1, genres: [16], addedAt: 1, file: '/m/a.mkv' },
+    ]);
+    assert.deepStrictEqual(db.genresCached('libG', 200), [16], 'rescan refreshes the genre cache');
+    // updateItem invalidates too (a match-override can change genres without a rescan).
+    const it = db.item('libG', 1); it.genres = [16, 35];
+    db.updateItem('libG', 1, it);
+    assert.deepStrictEqual(db.genresCached('libG', 200), [16, 35], 'updateItem invalidates the genre cache');
+    assert.deepStrictEqual(db.page('libG', { offset: 0, limit: 10 }).genres, [16, 35], 'page() surfaces cached genres');
+  } finally {
+    db.close();
+  }
+});
