@@ -2283,6 +2283,15 @@ test('Android native player: direct source and native chrome stay out of the web
     'Music page should fall back to regular music search if the home endpoint is not active yet');
   assert.match(ui, /const yours = addShelf\('Your playlists'[\s\S]+if \(Array\.isArray\(S\.ytmPlaylists\)\)[\s\S]+Connect YouTube Music[\s\S]+S\.musicHome/,
     'Music Home should render personal playlists before weekly and chart shelves');
+  // A link/unlink (incl. the OAuth device-code poll finishing in the BACKGROUND, after the user
+  // has returned to Music) must refresh the Music page — not just the hidden Connections panel —
+  // so it never keeps showing "Connect" for an account that is actually saved/linked.
+  assert.match(ui, /function musicAccountChanged\(\) \{[\s\S]+S\.ytmPlaylists = undefined;[\s\S]+if \(S\.view === 'music'\) loadMusic\(\)/,
+    'musicAccountChanged should arm a fresh playlists refetch and re-render Music if it is on-screen');
+  assert.match(ui, /\/api\/music\/oauth\/poll'[\s\S]+status === 'linked'[\s\S]+renderYtmBox\(\);\s+return musicAccountChanged\(\)/,
+    'OAuth device-code poll success should refresh the Music page via musicAccountChanged');
+  assert.match(ui, /\/api\/music\/link'[\s\S]+renderYtmBox\(\);\s+musicAccountChanged\(\)/,
+    'manual/cookie link success should refresh the Music page via musicAccountChanged');
   // No duplication: track shelves dedupe (id + feat-stripped title) and use the ARTIST as the
   // subtitle — never the shelf note (which made every song echo "Top songs this week").
   assert.match(ui, /shelf\.kind === 'tracks'[\s\S]+seenId\.has\(String\(t\.id\)\) \|\| \(nt && seenTitle\.has\(nt\)\)[\s\S]+sub: t\.artist \|\| ''/,

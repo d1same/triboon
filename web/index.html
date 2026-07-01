@@ -1054,6 +1054,9 @@ body.tv #vlcCopy{display:none}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;max-width:680px;margin-bottom:18px}
 .panel h2{font:700 16px "Sora";margin-bottom:4px}
 .panel p{color:var(--muted);font-size:13.5px;margin-bottom:14px}
+.setupSteps{margin:0 0 14px;padding-left:20px;color:var(--muted);font-size:13px;line-height:1.6;max-width:680px}
+.setupSteps li{margin:4px 0}
+.setupSteps b{color:var(--text)}
 .field{display:flex;gap:10px;margin-bottom:10px;flex-wrap:wrap}
 .field input,.field textarea{flex:1;min-width:120px;background:var(--field);border:1px solid var(--line);border-radius:12px;padding:12px 13px;color:var(--text);font:500 13px "JetBrains Mono";outline:none}
 .field input:focus,.field textarea:focus{border-color:var(--focus)}
@@ -3569,9 +3572,17 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
   </div>
 
   <div class="panel"><h2>YouTube Music OAuth</h2>
-    <p>Optional easier account linking for YouTube Music playlists. Create a Google OAuth client
-       for <b>TVs and Limited Input devices</b>, enable the YouTube Data API, then paste its id
-       and secret here. Playback still uses yt-dlp.</p>
+    <p>Optional easier account linking for YouTube Music playlists (playback still uses yt-dlp).
+       In the <b>Google Cloud Console</b>:</p>
+    <ol class="setupSteps">
+      <li>Enable the <b>YouTube Data API v3</b> (APIs &amp; Services → Library).</li>
+      <li>Create an OAuth client — Application type must be <b>TVs and Limited Input devices</b>
+          (<b>not</b> Web application; there are no redirect URIs for this type).</li>
+      <li>On the OAuth consent screen, add each user's Google email under <b>Test users</b> — until
+          the app is verified by Google, only listed test users can sign in.</li>
+      <li>Paste the client <b>id</b> and <b>secret</b> below. Users then link their own account in
+          Preferences → Connections.</li>
+    </ol>
     <div class="field"><input id="ytOAuthId" placeholder="Google OAuth client id"></div>
     <div class="field"><input id="ytOAuthSecret" type="password" placeholder="Google OAuth client secret"></div>
     <div class="settingsActions"><button class="btn primary" id="ytOAuthSave">Save YouTube Music OAuth app</button></div>
@@ -15369,6 +15380,16 @@ function loadMusic() {
   }
   setTimeout(() => { if (S.view === 'music' && S.zone !== 'rail') focusContent(); }, 80);
 }
+// Link state just changed (connect / OAuth complete / unlink). Reflect it on the Music page
+// right away: the OAuth device-code poll finishes in the BACKGROUND — often after the user has
+// already navigated back to Music — so we must re-render if Music is on-screen, not only on the
+// next visit. undefined makes loadMusic() refetch /api/music/playlists fresh. Without this a
+// background link left the stale "Connect YouTube Music" tile even though the account was saved.
+function musicAccountChanged() {
+  S.musicPlaylistLimit = MUSIC_PLAYLIST_INITIAL;
+  S.ytmPlaylists = undefined;
+  if (S.view === 'music') loadMusic();
+}
 function showMusicHome() {
   S.musicPage = 'home';
   S.musicPlaylist = null;
@@ -16614,8 +16635,7 @@ function renderYtmConnectBox(box, st) {
     <div class="hint">Connected with ${esc(sourceLabel)}. If playlists stop loading later, run the setup again. Triboon keeps credentials encrypted and never shows them back.</div>`;
     box.querySelector('#ytmUnlink').addEventListener('click', async () => {
       await api('/api/music/unlink', { method: 'POST', body: {} });
-      S.musicPlaylistLimit = MUSIC_PLAYLIST_INITIAL;
-      S.ytmPlaylists = null; toast('YouTube Music unlinked'); renderYtmBox();
+      toast('YouTube Music unlinked'); renderYtmBox(); musicAccountChanged();
     });
     box.querySelector('#ytmRelink').addEventListener('click', () => st.oauthAvailable ? startYtmOAuth(box) : renderYtmPaste(box, { guided: true }));
     return;
@@ -16690,10 +16710,9 @@ function renderYtmImportBox(box, opts = {}) {
     if (!text.trim()) return toast('Choose the YouTube Music session file first, or use Manual paste');
     try {
       await api('/api/music/link', { method: 'POST', body: { cookies: text } });
-      S.musicPlaylistLimit = MUSIC_PLAYLIST_INITIAL;
-      S.ytmPlaylists = null;
       toast('YouTube Music connected - your playlists are on the Music page');
       renderYtmBox();
+      musicAccountChanged();
     } catch (e) { toast(e.message); }
   });
 }
@@ -16723,10 +16742,9 @@ function renderYtmOAuthPending(box, r) {
       const p = await api('/api/music/oauth/poll', { method: 'POST', body: {} });
       if (p && p.status === 'linked') {
         clearYtmOAuthPoll();
-        S.musicPlaylistLimit = MUSIC_PLAYLIST_INITIAL;
-        S.ytmPlaylists = null;
         toast('YouTube Music connected');
-        return renderYtmBox();
+        renderYtmBox();
+        return musicAccountChanged();
       }
       const msg = box.querySelector('#ytmOAuthMsg');
       if (msg) msg.textContent = 'Waiting for approval...';
