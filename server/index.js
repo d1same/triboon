@@ -1287,14 +1287,26 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
   let done = false;
   let delayTimer = null;
   let firstByteTimer = null;
+  let clientStallTimer = null;
   let refreshedForStaleChannel = false;
   const label = iptvNativeLogLabel(meta);
   const clearFirstByteTimer = () => { if (firstByteTimer) clearTimeout(firstByteTimer); firstByteTimer = null; };
+  const clearClientStall = () => { if (clientStallTimer) clearTimeout(clientStallTimer); clientStallTimer = null; };
+  // Dead-client watchdog: an Android WebView renderer crash can half-close the client socket WITHOUT
+  // firing 'close'/'aborted', so pipe backpressure would pause the upstream forever and pin a provider
+  // connection. Armed after headers and re-armed on every drained write; if the client drains nothing
+  // for the idle window it's dead — reclaim the upstream. A healthy (even slow) client keeps draining.
+  const armClientStall = () => {
+    clearClientStall();
+    clientStallTimer = setTimeout(() => stop('client stalled'), LIVE_REMUX_IDLE_TIMEOUT_MS);
+    if (clientStallTimer.unref) clientStallTimer.unref();
+  };
   const stop = (reason = 'closed', err) => {
     if (done) return;
     done = true;
     if (delayTimer) clearTimeout(delayTimer);
     clearFirstByteTimer();
+    clearClientStall();
     try { if (up) up.destroy(err || new Error(`live stream ${reason}`)); } catch {}
     if (/client closed|retuned|shutdown/i.test(String(reason || ''))) {
       try { if (ctx.req.socket && !ctx.req.socket.destroyed) ctx.req.socket.destroy(); } catch {}
@@ -1304,6 +1316,7 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
     ctx.req.off('close', onClientClose);
     ctx.req.off('aborted', onClientClose);
     ctx.res.off('close', onClientClose);
+    ctx.res.off('error', onClientClose);
   };
   const onClientClose = () => stop('client closed');
   const fail = (status, body) => {
@@ -1320,6 +1333,7 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
   ctx.req.once('close', onClientClose);
   ctx.req.once('aborted', onClientClose);
   ctx.res.once('close', onClientClose);
+  ctx.res.once('error', onClientClose); // a socket error must reclaim the upstream (pipe() alone won't)
 
   const open = (rawTarget, hop, pinRetries = 0, uaIndex = 0) => {
     if (done || slot.closed) return;
@@ -1482,7 +1496,18 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
         if (!ctx.res.destroyed && !ctx.res.writableEnded) ctx.res.end();
         stop('upstream ended');
       });
-      r.pipe(ctx.res, { end: false });
+      // Manual pump (instead of r.pipe) so the dead-client watchdog can see whether the client is
+      // actually draining: re-arm on a write that keeps up or a drain, never while backpressured.
+      armClientStall();
+      r.on('data', (chunk) => {
+        if (done) return;
+        if (ctx.res.destroyed) { stop('client closed'); return; }
+        if (ctx.res.write(chunk)) armClientStall();
+        else {
+          r.pause();
+          ctx.res.once('drain', () => { if (!done && !ctx.res.destroyed) { armClientStall(); try { r.resume(); } catch {} } });
+        }
+      });
     });
     slot.setCloser((reason) => {
       stop(reason, new Error(`live stream ${reason}`));

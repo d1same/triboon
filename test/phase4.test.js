@@ -1115,6 +1115,16 @@ test('Android native player: direct source and native chrome stay out of the web
     'the denied-mount teardown dereferences the mount so it frees immediately rather than at the sweep');
   assert.match(idxSrc, /function profileLevelFor\(user, profileId\) \{[\s\S]+return p \? \(p\.level \?\? \(p\.kid \? 0 : 3\)\) : 0;/,
     'a provided-but-unknown profileId fails closed to the strictest level (no spoofed-id bypass)');
+  // IPTV live proxy: an Android WebView renderer crash can half-close the client socket without a
+  // 'close' event, so a bare pipe() would pin the upstream provider connection forever. A manual
+  // pump + dead-client stall watchdog (re-armed only on drained writes) + a res 'error' handler
+  // reclaim the upstream.
+  assert.match(idxSrc, /const armClientStall = \(\) => \{[\s\S]+setTimeout\(\(\) => stop\('client stalled'\), LIVE_REMUX_IDLE_TIMEOUT_MS\);/,
+    'the IPTV native proxy arms a dead-client stall watchdog so a half-closed socket cannot pin a provider connection');
+  assert.match(idxSrc, /ctx\.res\.once\('error', onClientClose\);/,
+    'the IPTV native proxy handles a client socket error (pipe alone does not) so the upstream is reclaimed');
+  assert.match(idxSrc, /if \(ctx\.res\.write\(chunk\)\) armClientStall\(\);/,
+    'the stall watchdog is re-armed only when the client is actually draining, not while backpressured');
   // The native backward-jump auto-resume must require the regression to persist across 2 ticks so a
   // one-tick PTS/GOP wobble on a resumed (server-seek) stream no longer dips-and-snaps ~every 10 min.
   assert.match(android, /private void rememberNativeVideoPosition\(\) \{[\s\S]+backwardsBy > 5000L\) \{[\s\S]+\+\+nativeBackwardTicks < 2\) return;/,
