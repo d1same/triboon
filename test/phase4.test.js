@@ -3147,10 +3147,14 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'the profile avatar should open Preferences and land on the Profile & Pins tab');
   assert.match(ui, /<div id="prefTabs">\s*<button data-tab="profiles" class="on focusable">/,
     'Profile & Pins should be the first, default-selected Preferences tab');
-  assert.match(ui, /\$\('prefServerSettings'\)\.addEventListener\('click', \(\) => switchView\('settings'\)\)/,
-    'the admin Server settings launcher (in Profile & Pins) should open the Settings page');
-  assert.match(ui, /\$\('prefServerSettings'\)\.style\.display = isAdmin \? '' : 'none'/,
-    'the Server settings launcher should be admin-only');
+  // Admin Server settings is a top-level TAB in the avatar's Preferences strip (discoverable), which
+  // jumps to the full Settings page; admin-only.
+  assert.match(ui, /if \(b\.id === 'prefServerTab'\) return switchView\('settings'\)/,
+    'the admin Server settings tab should open the Settings page');
+  assert.match(ui, /<button id="prefServerTab" class="focusable" style="display:none">/,
+    'Server settings should be a dedicated tab in the Preferences strip');
+  assert.match(ui, /\$\('prefServerTab'\)\.style\.display = isAdmin \? '' : 'none'/,
+    'the Server settings tab should be admin-only');
   // Sign out lives in Profile & Pins (avatar) now — the "who's watching" profile picker no longer
   // builds its own redundant Sign out button.
   assert.ok(!ui.includes("so.id = 'profileSignout'") && !ui.includes("id=\"profileSignout\""),
