@@ -2663,6 +2663,67 @@ test('music: playlist endpoint pages tracks and stream proxy forwards yt-dlp hea
   }
 });
 
+test('music: stream proxy recovers from a stale (403) googlevideo URL by re-resolving', async () => {
+  const ytmusic = require('../server/ytmusic');
+  const oldDetect = ytmusic.detectYtdlp;
+  const oldResolve = ytmusic.resolveStream;
+  let hits = 0;
+  const resolveCalls = [];
+  const upstream = http.createServer((req, res) => {
+    hits++;
+    if (hits === 1) { res.writeHead(403); res.end('expired'); return; } // first (stale) URL is rejected
+    res.writeHead(206, { 'content-type': 'audio/mp4', 'content-range': 'bytes 0-3/8', 'content-length': '4' });
+    res.end('MUSI');
+  });
+  await new Promise((r) => upstream.listen(0, '127.0.0.1', r));
+  try {
+    ytmusic.detectYtdlp = () => ({ cmd: ['mock-ytdlp'], version: 'test' });
+    ytmusic.resolveStream = async (id, opts) => {
+      resolveCalls.push({ id, force: !!opts.force });
+      return { url: `http://127.0.0.1:${upstream.address().port}/audio`, mime: 'audio/mp4', headers: {} };
+    };
+    const uid = srv.auth._users().list[0].id;
+    const tok = srv.auth.streamToken(uid, 'music:AAAAAAAAAAA');
+    const audio = await httpRaw(srv.port, `/api/music/stream/AAAAAAAAAAA?t=${tok}`, { range: 'bytes=0-3' });
+    assert.strictEqual(audio.status, 206, 'a stale URL is transparently re-resolved rather than surfaced as an error');
+    assert.strictEqual(audio.body.toString(), 'MUSI');
+    assert.ok(hits >= 2, 'the upstream was retried after the 403');
+    assert.ok(resolveCalls.length >= 2, 'the track was re-resolved after the 403');
+    assert.strictEqual(resolveCalls[1].force, true, 'the recovery re-resolve forces a fresh URL (bypasses cache + inflight dedupe)');
+  } finally {
+    ytmusic.detectYtdlp = oldDetect;
+    ytmusic.resolveStream = oldResolve;
+    upstream.close();
+  }
+});
+
+test('music: yt-dlp-backed endpoints are rate-limited per user', async () => {
+  const ytmusic = require('../server/ytmusic');
+  const oldDetect = ytmusic.detectYtdlp;
+  // bootServer mutates the process-global TRIBOON_DATA; restore it so later tests that read the
+  // shared server's data dir (e.g. the Trakt test) aren't pointed at this throwaway dir.
+  const prevData = process.env.TRIBOON_DATA;
+  const rlSrv = await bootServer({ NNTP_HOST: null, TMDB_BASE: null });
+  try {
+    // Force the fast 503 path so allowed requests don't spawn real yt-dlp (the throttle runs first,
+    // so a capped request still 429s regardless of yt-dlp presence).
+    ytmusic.detectYtdlp = () => false;
+    const rlAdmin = await setupAdmin(rlSrv.port);
+    const statuses = [];
+    for (let i = 0; i < 45; i++) {
+      const r = await httpJson(rlSrv.port, 'GET', '/api/music/search?q=spam', null, rlAdmin);
+      statuses.push(r.status);
+      if (r.status === 429) break;
+    }
+    assert.ok(statuses.includes(429), `music search must 429 once a user exceeds the per-minute cap (saw ${statuses.join(',')})`);
+    assert.ok(statuses.length > 40, 'the cap is generous (~40/min) so a normal browsing burst is never throttled');
+  } finally {
+    ytmusic.detectYtdlp = oldDetect;
+    await rlSrv.shutdown();
+    process.env.TRIBOON_DATA = prevData;
+  }
+});
+
 test('music: home shelves and charts are cached and tokenized', async () => {
   const ytmusic = require('../server/ytmusic');
   const oldDetect = ytmusic.detectYtdlp;

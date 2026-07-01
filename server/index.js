@@ -6716,6 +6716,7 @@ Object.assign(H, {
 
   // ---- Music (YouTube Music via yt-dlp) ----
   musicHome: async (ctx) => {
+    if (throttleUserRoute(ctx, 'music-home', { max: 40, windowMs: 60000, lockMs: 15000 })) return;
     if (!ytmusic.detectYtdlp()) return send(ctx.res, 503, { error: 'yt-dlp is not installed on the server' });
     const catalog = !!ytmusic.detectYtMusicApi();
     const chartShelves = await loadMusicChartResponses(ctx.user.id, { wait: false });
@@ -6755,11 +6756,13 @@ Object.assign(H, {
     });
   },
   musicCharts: async (ctx) => {
+    if (throttleUserRoute(ctx, 'music-charts', { max: 40, windowMs: 60000, lockMs: 15000 })) return;
     if (!ytmusic.detectYtdlp()) return send(ctx.res, 503, { error: 'yt-dlp is not installed on the server' });
     const charts = await loadMusicChartResponses(ctx.user.id);
     send(ctx.res, 200, { charts });
   },
   musicSearch: async (ctx) => {
+    if (throttleUserRoute(ctx, 'music-search', { max: 40, windowMs: 60000, lockMs: 15000 })) return;
     if (!ytmusic.detectYtdlp()) return send(ctx.res, 503, { error: 'yt-dlp is not installed on the server' });
     const q = ctx.url.searchParams.get('q') || '';
     const limit = Math.max(1, Math.min(40, parseInt(ctx.url.searchParams.get('limit') || '40', 10) || 40));
@@ -6778,6 +6781,7 @@ Object.assign(H, {
     } catch (e) { send(ctx.res, 502, { error: 'music search failed', detail: String(e.message).slice(0, 160) }); }
   },
   musicRadio: async (ctx) => {
+    if (throttleUserRoute(ctx, 'music-radio', { max: 40, windowMs: 60000, lockMs: 15000 })) return;
     if (!ytmusic.detectYtdlp()) return send(ctx.res, 503, { error: 'yt-dlp is not installed on the server' });
     if (!ytmusic.detectYtMusicApi()) return send(ctx.res, 503, { error: 'ytmusicapi is not installed on the server' });
     try {
@@ -6798,10 +6802,24 @@ Object.assign(H, {
     if (ctx.claims.scope !== 'stream' || ctx.claims.sub !== `music:${id}`) return send(ctx.res, 401, { error: 'token not valid for this track' });
     if (!ytmusic.detectYtdlp()) return send(ctx.res, 503, { error: 'yt-dlp not available' });
     const range = ctx.req.headers.range || null;
-    const pipeFrom = async (force) => {
+    // googlevideo URLs are IP-locked + short-lived, so a 403/410 (or a re-resolve that itself
+    // fails) mid-play must not just drop the stream. Retry a few times with a small backoff, and
+    // on the final attempt fall back to a PUBLIC (no-cookie) re-resolve — a different cache scope
+    // that often yields a fresh, playable URL when the user-scoped one keeps staling.
+    const MAX_STREAM_ATTEMPTS = 3;
+    const retryLater = (attempt) => setTimeout(() => { if (!ctx.res.destroyed) pipeFrom(attempt + 1); }, 400 * (attempt + 1));
+    const pipeFrom = async (attempt = 0) => {
+      if (ctx.res.destroyed) return;
+      const force = attempt > 0;
+      const lastResort = attempt + 1 >= MAX_STREAM_ATTEMPTS;
+      const cookiesPath = lastResort ? null : cookiesFor(ctx.claims.uid); // public re-resolve as the last try
       let rec;
-      try { rec = await ytmusic.resolveStream(id, { cookiesPath: cookiesFor(ctx.claims.uid), force }); }
-      catch (e) { if (!ctx.res.headersSent) send(ctx.res, 502, { error: 'could not resolve track', detail: String(e.message).slice(0, 160) }); return; }
+      try { rec = await ytmusic.resolveStream(id, { cookiesPath, force }); }
+      catch (e) {
+        if (attempt + 1 < MAX_STREAM_ATTEMPTS && !ctx.res.headersSent && !ctx.res.destroyed) return void retryLater(attempt);
+        if (!ctx.res.headersSent) send(ctx.res, 502, { error: 'could not resolve track', detail: String(e.message).slice(0, 160) });
+        return;
+      }
       const u = new URL(rec.url);
       const upstreamHeaders = {};
       for (const [k, v] of Object.entries(rec.headers || {})) {
@@ -6810,8 +6828,10 @@ Object.assign(H, {
       if (range) upstreamHeaders.range = range;
       const client = u.protocol === 'http:' ? http : https;
       const upstream = client.get(u, { headers: upstreamHeaders }, (up) => {
-        // Stale/expired URL → one transparent re-resolve before giving up.
-        if ((up.statusCode === 403 || up.statusCode === 410) && !force) { up.resume(); return pipeFrom(true); }
+        // Stale/expired URL → transparent re-resolve (bounded, with backoff) before giving up.
+        if ((up.statusCode === 403 || up.statusCode === 410) && attempt + 1 < MAX_STREAM_ATTEMPTS && !ctx.res.headersSent) {
+          up.resume(); return void retryLater(attempt);
+        }
         if (up.statusCode >= 400) { up.resume(); if (!ctx.res.headersSent) send(ctx.res, 502, { error: `upstream ${up.statusCode}` }); return; }
         const h = { 'content-type': rec.mime, 'accept-ranges': 'bytes', 'cache-control': 'private, no-store' };
         for (const k of ['content-length', 'content-range']) if (up.headers[k]) h[k] = up.headers[k];
@@ -6821,7 +6841,7 @@ Object.assign(H, {
       upstream.on('error', () => { try { ctx.res.destroy(); } catch {} });
       ctx.req.on('close', () => upstream.destroy());
     };
-    pipeFrom(false);
+    pipeFrom(0);
   },
 
   // Link state only — the cookie text NEVER returns to a client. Linking is cookie-based
@@ -6875,6 +6895,7 @@ Object.assign(H, {
 
   // The user's own playlists (chips on the Music page). Honest errors — cookies can expire.
   musicPlaylists: async (ctx) => {
+    if (throttleUserRoute(ctx, 'music-playlists', { max: 40, windowMs: 60000, lockMs: 15000 })) return;
     if (!ytmusic.detectYtdlp()) return send(ctx.res, 503, { error: 'yt-dlp is not installed on the server' });
     const cookies = cookiesFor(ctx.user.id);
     if (!cookies) return send(ctx.res, 200, { linked: false, playlists: [] });
@@ -6896,6 +6917,7 @@ Object.assign(H, {
     }
   },
   musicPlaylist: async (ctx) => {
+    if (throttleUserRoute(ctx, 'music-playlist', { max: 40, windowMs: 60000, lockMs: 15000 })) return;
     if (!ytmusic.detectYtdlp()) return send(ctx.res, 503, { error: 'yt-dlp is not installed on the server' });
     try {
       const limit = Math.max(1, Math.min(100, parseInt(ctx.url.searchParams.get('limit') || '50', 10) || 50));

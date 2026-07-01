@@ -496,7 +496,11 @@ async function search(query, { limit = 20, cookiesPath, priority = 0 } = {}) {
 // few hours, and re-running yt-dlp per play (≈1–3s) would gut the press-play feel. m4a is
 // preferred for the broadest <audio> support, opus/webm as the fallback.
 const _streamCache = new Map(); // cacheKey -> { url, at, expiresAt, title, artist, thumb, duration }
+const _streamInflight = new Map(); // cacheKey -> Promise<rec>; dedupes concurrent resolves of the same track
 const STREAM_TTL_MS = 3 * 3600 * 1000;
+// Re-resolve a cache hit that's within this margin of expiry so a long session doesn't hand a
+// player a googlevideo URL that dies mid-stream — front-load the yt-dlp work before playback.
+const STREAM_REFRESH_MARGIN_MS = 30 * 60 * 1000;
 // Scope the cache by the cookies in play. A track resolved with one user's cookies (a premium /
 // age-gated / region-specific variant, or one their account can play and another can't) must NOT
 // be served to another user from cache. No cookies → shared 'public' scope.
@@ -518,7 +522,17 @@ async function resolveStream(id, { cookiesPath, force = false } = {}) {
   if (!/^[\w-]{11}$/.test(String(id || ''))) throw new Error('bad track id');
   const cacheKey = streamCacheKey(id, cookiesPath);
   const hit = _streamCache.get(cacheKey);
-  if (!force && hit && Date.now() < hit.expiresAt) return hit;
+  // Serve a cache hit only while it's comfortably fresh; re-resolve once it's within the expiry
+  // margin so we never hand a player a URL about to 403 mid-stream.
+  if (!force && hit && Date.now() < hit.expiresAt - STREAM_REFRESH_MARGIN_MS) return hit;
+  // Coalesce concurrent resolves of the same track (popular trending tracks get prefetched by
+  // several clients at once): the first spawns yt-dlp, the rest await its result instead of each
+  // spawning their own process. `force` bypasses coalescing so a 403-recovery re-resolve is real.
+  if (!force) {
+    const pending = _streamInflight.get(cacheKey);
+    if (pending) return pending;
+  }
+  const work = (async () => {
   // -J gives the picked format URL + metadata in one shot (title/artist/duration for the bar).
   const load = async (cookieFile) => {
     const out = await runJson(['-f', 'bestaudio[ext=m4a]/bestaudio/best', '-J', `https://music.youtube.com/watch?v=${id}`],
@@ -543,6 +557,18 @@ async function resolveStream(id, { cookiesPath, force = false } = {}) {
   };
   setStreamCache(cacheKey, rec);
   return rec;
+  })();
+  // Share this resolve with any concurrent callers; drop the entry once it settles. If a
+  // near-expiry re-resolve fails but the cached URL is still live, serve it rather than erroring.
+  if (!force) _streamInflight.set(cacheKey, work);
+  try {
+    return await work;
+  } catch (e) {
+    if (!force && hit && Date.now() < hit.expiresAt) return hit;
+    throw e;
+  } finally {
+    if (_streamInflight.get(cacheKey) === work) _streamInflight.delete(cacheKey);
+  }
 }
 function _peekCached(id, cookiesPath) { return _streamCache.get(streamCacheKey(id, cookiesPath)) || null; }
 

@@ -1387,6 +1387,14 @@ public class MainActivity extends Activity {
         currentWebUrl = "";
         pageInputFocused = false;
         pendingTvKeys.clear();
+        // A reloaded/recovered WebView has thrown away the <audio> element, so the music session is
+        // gone: clear the flag (else onPause would skip suspending the WebView, thinking music is
+        // live) and tear down the now-orphaned foreground service + its stale notification. A real
+        // resume re-arms both via the musicSession() JS bridge.
+        if (musicPlaying) {
+            musicPlaying = false;
+            stopMusicService();
+        }
     }
 
     private void clearPhoneInitialWebInputFocus() {

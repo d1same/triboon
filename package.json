@@ -1,6 +1,6 @@
 {
   "name": "triboon",
-  "version": "2.2.15",
+  "version": "2.2.16",
   "description": "Press play on anything. Triboon mounts the best healthy NZB from your usenet provider and streams it instantly.",
   "main": "server/index.js",
   "scripts": {

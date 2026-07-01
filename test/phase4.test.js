@@ -1088,6 +1088,22 @@ test('Android native player: direct source and native chrome stay out of the web
     'a genuine guide 409 triggers a bounded (once/10s) channel-list resync so the guide recovers instead of staying blank');
   assert.match(ui, /if \(e && e\.status === 409\) scheduleLiveChannelResync\(\);/,
     'the guide-batch fetch wires a 409 to the bounded channel resync');
+  // Music resilience batch (batch5): concurrent-resolve dedupe + proactive near-expiry re-resolve,
+  // bounded stream 403 recovery with a public last resort, per-user rate limits, and an Android
+  // music-state reset when the WebView (and its <audio>) is torn down.
+  const ytmusicSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'ytmusic.js'), 'utf8');
+  assert.match(ytmusicSrc, /const _streamInflight = new Map\(\);/,
+    'concurrent resolveStream calls for the same track are coalesced instead of each spawning yt-dlp');
+  assert.match(ytmusicSrc, /if \(!force\) \{\s*\n\s*const pending = _streamInflight\.get\(cacheKey\);\s*\n\s*if \(pending\) return pending;/,
+    'a resolve already in flight is shared with concurrent callers');
+  assert.match(ytmusicSrc, /Date\.now\(\) < hit\.expiresAt - STREAM_REFRESH_MARGIN_MS/,
+    'a cache hit near expiry is proactively re-resolved so a long session never gets a soon-dead URL');
+  assert.match(idxSrc, /const MAX_STREAM_ATTEMPTS = 3;[\s\S]+const lastResort = attempt \+ 1 >= MAX_STREAM_ATTEMPTS;[\s\S]+const cookiesPath = lastResort \? null :/,
+    'the music stream proxy retries a stale URL a few times, ending with a public (no-cookie) re-resolve');
+  assert.match(idxSrc, /if \(throttleUserRoute\(ctx, 'music-search', \{ max: 40/,
+    'yt-dlp-backed music endpoints are rate-limited per user to prevent subprocess exhaustion');
+  assert.match(android, /private void resetWebPageState\(\) \{[\s\S]+if \(musicPlaying\) \{\s*\n\s*musicPlaying = false;\s*\n\s*stopMusicService\(\);/,
+    'a torn-down/recovered WebView resets musicPlaying and stops the orphaned foreground music service');
   // The native backward-jump auto-resume must require the regression to persist across 2 ticks so a
   // one-tick PTS/GOP wobble on a resumed (server-seek) stream no longer dips-and-snaps ~every 10 min.
   assert.match(android, /private void rememberNativeVideoPosition\(\) \{[\s\S]+backwardsBy > 5000L\) \{[\s\S]+\+\+nativeBackwardTicks < 2\) return;/,
