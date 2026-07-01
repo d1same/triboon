@@ -569,6 +569,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'music search drops below the burger on the phone shell');
   assert.match(ui, /body\.mobileShell #chBar\{padding-left:48px\}/,
     'Live TV filter clears the burger horizontally on the phone shell');
+  assert.match(ui, /body\.mobileShell #browse\.searchMode\{padding-top:146px!important\}/,
+    'search results clear the lowered fixed search bar on the phone shell (no results under the bar)');
   assert.match(ui, /if \(k === 'ArrowUp'\) return; \/\/ top of the now-playing loop/,
     'music now-playing top controls no longer fall through on ArrowUp (no focus trap)');
   // Trakt-imported resume (percent only, no position/duration) still primes the server read-ahead

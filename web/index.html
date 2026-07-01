@@ -1572,6 +1572,10 @@ body.mobileShell #searchBar{left:16px;right:16px}
 body.mobileShell #searchBar{top:62px!important}
 body.mobileShell #music{padding-top:62px!important}
 body.mobileShell #chBar{padding-left:48px}
+/* Search RESULTS must clear the (now-lowered) fixed search bar, not scroll under it. Desktop uses
+   110px for the bar at top:26px; on the phone the bar drops 36px to top:62px, so results drop the
+   same 36px (146px). Higher-specificity !important beats the generic mobileShell #browse 62px. */
+body.mobileShell #browse.searchMode{padding-top:146px!important}
 body.mobileShell #home{padding:62px 16px 18px 16px!important;justify-content:flex-start}
 body.mobileShell #hero{max-width:calc(100vw - 32px);margin:0 auto 8px;padding:0;text-align:center;align-items:center}
 body.mobileShell #hero .eyebrow{margin-bottom:8px;font-size:10px;letter-spacing:.18em}
