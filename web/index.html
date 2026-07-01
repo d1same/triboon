@@ -3802,6 +3802,8 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
           <button class="cbtn focusable" id="audBtn" title="Audio language" aria-label="Audio language"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 10v3"/><path d="M6 6v11"/><path d="M10 3v18"/><path d="M14 8v7"/><path d="M18 5v13"/><path d="M22 10v3"/></svg></button>
           <button class="cbtn focusable" id="srndBtn" title="Surround sound" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 10v4h4l5 4V6l-5 4H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg></button>
           <button class="cbtn focusable" id="qualBtn" title="Quality" aria-label="Quality"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 12H6"/><path d="M10 15V9"/><path d="M14 14.5a.5.5 0 0 0 .5.5h1a2.5 2.5 0 0 0 2.5-2.5v-1A2.5 2.5 0 0 0 15.5 9h-1a.5.5 0 0 0-.5.5z"/><path d="M6 15V9"/><rect x="2" y="5" width="20" height="14" rx="2"/></svg></button>
+          <button class="cbtn focusable" id="castBtn" title="Cast to TV" aria-label="Cast to TV" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8V6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-6"/><path d="M2 12a8 8 0 0 1 8 8"/><path d="M2 16a4 4 0 0 1 4 4"/><path d="M2 20h.01"/></svg></button>
+          <button class="cbtn focusable" id="airplayBtn" title="AirPlay" aria-label="AirPlay" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-1"/><path d="m12 15 5 6H7l5-6Z"/></svg></button>
           <div class="volWrap">
             <button class="cbtn focusable" id="muteBtn" title="Mute"><svg id="volIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 10v4h4l5 4V6l-5 4H4z"/><path d="M16.5 9a4 4 0 0 1 0 6"/></svg></button>
             <input type="range" id="volSlider" min="0" max="100" value="100" title="Volume">
@@ -8922,6 +8924,8 @@ async function openPlayer(it, mount, opts = {}) {
   };
   updatePlayerMeta();
   applyVolume();
+  // Refresh cast/AirPlay availability for this title (hidden for Live TV — Phase 1 is VOD only).
+  try { updateCastButtons(); if (!castVodEligible() && $('airplayBtn')) $('airplayBtn').style.display = 'none'; } catch {}
   // Branded buffering overlay (cover + spinner) so mount/transcode latency never looks frozen.
   $('plCover').style.backgroundImage = `url('${it.backdrop || it.poster}')`;
   $('plTitle').textContent = it.title;
@@ -10368,11 +10372,15 @@ function schedulePauseWarmAhead(p = S.playing) {
 }
 function currentTime() {
   const v = $('video'); const p = S.playing;
+  // While casting, the TV plays and the local <video> is idle — read the receiver clock so the
+  // existing watch + Trakt heartbeats report the TV's real position (one reporter, no double-count).
+  if (p && p.castingActive) return p.castPos || 0;
   if (p && p.usingNative) return p.nativePos || 0;
   return (p ? p.startOffset : 0) + (v.currentTime || 0);
 }
 function totalDuration() {
   const v = $('video'); const p = S.playing;
+  if (p && p.castingActive) return p.castDuration || p.duration || 0;
   if (p && p.usingNative) return p.nativeDuration || p.duration || 0;
   if (p && (p.usingRemux || p.usingTranscode)) return p.duration || 0; // fragment streams hide duration
   return v.duration && isFinite(v.duration) ? v.duration : (p && p.duration) || 0;
@@ -10670,6 +10678,11 @@ function playbackFinishedDetailTarget(item) {
 }
 async function closePlayer(opts = {}) {
   const closingItem = S.playing && S.playing.item;
+  // Backing out of the player while casting stops the TV too (don't leave it playing an orphaned stream).
+  if (S.playing && S.playing.castingActive && !opts._fromCast) {
+    S.playing.castingActive = false;
+    try { const s = _castCtx && _castCtx.getCurrentSession(); if (s) s.endSession(true); } catch {}
+  }
   const finishedTarget = opts && opts.ended ? playbackFinishedDetailTarget(closingItem) : null;
   const finalWatch = saveWatch(true);
   const finalActivity = stopActivityHeartbeat();
@@ -10785,6 +10798,7 @@ function activePlayerVideo() {
   return liveSplitEnabled() && liveSplitActivePane() === 1 ? $('liveSplitVideo') : $('video');
 }
 function togglePlay() {
+  if (S.playing && S.playing.castingActive) { if (_castRpc) { try { _castRpc.playOrPause(); } catch {} } updPP(); return; }
   const v = activePlayerVideo();
   if (!v.src) return;
   const live = !!(S.playing && S.playing.item && S.playing.item.type === 'live');
@@ -10796,7 +10810,10 @@ function togglePlay() {
   else v.pause();
   updPP();
 }
-function updPP() { $('ppIcon').innerHTML = activePlayerVideo().paused ? '<path d="M8 5v14l11-7z"/>' : '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>'; }
+function updPP() {
+  const paused = (S.playing && S.playing.castingActive && _castRp) ? _castRp.isPaused : activePlayerVideo().paused;
+  $('ppIcon').innerHTML = paused ? '<path d="M8 5v14l11-7z"/>' : '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>';
+}
 let _playerSurfaceClickT = null;
 function playerSurfaceClick(e) {
   if (e.button !== 0 || S.view !== 'player') return false;
@@ -11004,6 +11021,10 @@ function seekTo(seconds) {
   cancelPauseWarmAhead();
   const v = $('video'); const p = S.playing; if (!p) return;
   seconds = Math.max(0, seconds);
+  if (p.castingActive) { // seek the TV, not the idle local element
+    if (_castRp && _castRpc) { try { _castRp.currentTime = seconds; _castRpc.seek(); p.castPos = seconds; } catch {} }
+    showOsd(); return;
+  }
   p.suppressSeekLoaderUntil = appMs() + 4500;
   clearTimeout(S._waitT);
   $('playerLoader').classList.remove('show');
@@ -12220,11 +12241,11 @@ $('volSlider').addEventListener('input', () => {
     localStorage.setItem('triboon.vol', $('volSlider').value);
     if ($('volSlider').value !== '0') localStorage.setItem('triboon.muted', '0');
   } catch {}
-  applyVolume(); showOsd();
+  applyVolume(); castApplyVolume(); showOsd();
 });
 $('muteBtn').addEventListener('click', () => {
   try { localStorage.setItem('triboon.muted', localStorage.getItem('triboon.muted') === '1' ? '0' : '1'); } catch {}
-  applyVolume(); showOsd();
+  applyVolume(); castApplyVolume(); showOsd();
 });
 
 /* ---- fullscreen ---- */
@@ -12234,6 +12255,162 @@ function toggleFullscreen() {
 }
 $('fsBtn').addEventListener('click', toggleFullscreen);
 document.addEventListener('fullscreenchange', () => $('fsBtn').classList.toggle('on', !!document.fullscreenElement));
+
+/* ============ Casting — Google Cast (Default Media Receiver) + AirPlay, VOD, web only ============ */
+// Receiver-pull: hand the TV an ABSOLUTE, LAN-reachable tokened stream URL and it fetches the bytes
+// itself; the phone/browser is just the remote and the local <video> is paused. While a Cast session
+// is active, currentTime()/totalDuration() read the receiver clock (above), so the existing watch +
+// Trakt heartbeats keep reporting the TV's real position — one reporter, no double-count. Suppressed
+// on the Android native-ExoPlayer path (canUseNativeVideoPlayer); that shell will cast via its own
+// SDK in a later phase. Live TV is out of scope for Phase 1 (it uses MSE, not a plain URL).
+let _castCtx = null, _castRp = null, _castRpc = null, _castSdkAsked = false;
+function castEligible() { try { return !canUseNativeVideoPlayer(); } catch { return false; } }
+function castSdkReady() { return !!(window.cast && window.cast.framework && window.chrome && window.chrome.cast); }
+function castHostReachable() { const h = location.hostname; return !(h === 'localhost' || h === '127.0.0.1' || h === '::1'); }
+function castVodEligible() { const p = S.playing; return !!(p && p.item && p.item.type !== 'live'); }
+function initCastSender() {
+  if (!castEligible() || _castSdkAsked) return;
+  _castSdkAsked = true;
+  window.__onGCastApiAvailable = (ok) => { if (ok) setupCastContext(); };
+  const s = document.createElement('script');
+  s.src = 'https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1';
+  s.async = true; s.onerror = () => {};
+  document.head.appendChild(s);
+}
+function setupCastContext() {
+  if (!castSdkReady()) return;
+  try {
+    _castCtx = cast.framework.CastContext.getInstance();
+    _castCtx.setOptions({
+      receiverApplicationId: chrome.cast.media.DEFAULT_MEDIA_RECEIVER_APP_ID, // 'CC1AD845' — no registration, no HTTPS media
+      autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED,
+    });
+    _castRp = new cast.framework.RemotePlayer();
+    _castRpc = new cast.framework.RemotePlayerController(_castRp);
+    const RPE = cast.framework.RemotePlayerEventType;
+    _castRpc.addEventListener(RPE.CURRENT_TIME_CHANGED, () => { if (S.playing && S.playing.castingActive) S.playing.castPos = _castRp.currentTime || 0; });
+    _castRpc.addEventListener(RPE.DURATION_CHANGED, () => { if (S.playing && S.playing.castingActive && _castRp.duration) S.playing.castDuration = _castRp.duration; });
+    _castRpc.addEventListener(RPE.IS_PAUSED_CHANGED, updPP);
+    _castRpc.addEventListener(RPE.PLAYER_STATE_CHANGED, onCastPlayerState);
+    _castCtx.addEventListener(cast.framework.CastContextEventType.CAST_STATE_CHANGED, updateCastButtons);
+    _castCtx.addEventListener(cast.framework.CastContextEventType.SESSION_STATE_CHANGED, (e) => {
+      const SS = cast.framework.SessionState;
+      if (e.sessionState === SS.SESSION_STARTED || e.sessionState === SS.SESSION_RESUMED) { if (_castCtx.getCurrentSession() && !(_castCtx.getCurrentSession().getMediaSession && _castCtx.getCurrentSession().getMediaSession())) castLoadCurrent(); }
+      else if (e.sessionState === SS.SESSION_ENDED) exitCastMode();
+    });
+    updateCastButtons();
+  } catch {}
+}
+function castConnected() { try { return castSdkReady() && _castCtx && _castCtx.getCastState() === cast.framework.CastState.CONNECTED; } catch { return false; } }
+function updateCastButtons() {
+  const btn = $('castBtn'); if (!btn) return;
+  let show = false;
+  try {
+    show = castEligible() && castSdkReady() && _castCtx
+      && _castCtx.getCastState() !== cast.framework.CastState.NO_DEVICES_AVAILABLE
+      && castVodEligible();
+  } catch { show = false; }
+  btn.style.display = show ? '' : 'none';
+  btn.classList.toggle('on', castConnected());
+}
+async function startCast() {
+  if (!castSdkReady() || !S.playing) return;
+  if (!castHostReachable()) { toast('Open Triboon by its LAN IP (not localhost) to cast'); return; }
+  try {
+    if (!_castCtx.getCurrentSession()) await _castCtx.requestSession(); // shows the device picker
+    if (_castCtx.getCurrentSession()) castLoadCurrent();
+  } catch { /* user dismissed the picker, or the connect failed */ }
+}
+function currentCastStreamUrl() {
+  const p = S.playing; if (!p) return null;
+  // Cast whatever variant the browser is already playing — if the browser could decode it, the
+  // receiver almost certainly can (transcode is H.264/AAC = universally safe on the Default Receiver).
+  const pos = Math.floor(currentTime() || 0);
+  let path;
+  if (p.usingTranscode) path = `${p.transcodeUrl}&start=${pos}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}`;
+  else if (p.usingRemux) path = remuxPlaybackUrl(p, pos);
+  else path = p.streamUrl;
+  try { return new URL(path, location.origin).href; } catch { return null; }
+}
+function castLoadCurrent() {
+  const p = S.playing, sess = _castCtx && _castCtx.getCurrentSession();
+  if (!p || !sess || !castVodEligible()) return;
+  const url = currentCastStreamUrl(); if (!url) return;
+  const serverSeek = !!(p.usingRemux || p.usingTranscode); // seek is baked into the URL → start the receiver at 0
+  const info = new chrome.cast.media.MediaInfo(url, 'video/mp4');
+  info.streamType = chrome.cast.media.StreamType.BUFFERED;
+  const md = new chrome.cast.media.GenericMediaMetadata();
+  md.title = p.item.title || '';
+  if (p.item.type === 'episode' && p.item.epLabel) md.subtitle = p.item.epLabel;
+  const art = p.item.backdrop || p.item.poster;
+  if (art) { try { md.images = [new chrome.cast.media.Image(new URL(art, location.origin).href)]; } catch {} }
+  info.metadata = md;
+  const req = new chrome.cast.media.LoadRequest(info);
+  req.autoplay = true;
+  req.currentTime = serverSeek ? 0 : Math.max(0, Math.floor(currentTime() || 0));
+  sess.loadMedia(req).then(enterCastMode).catch(() => toast('Cast could not load this title'));
+}
+function enterCastMode() {
+  const p = S.playing; if (!p) { updateCastButtons(); return; }
+  if (!p.castingActive) {
+    p.castingActive = true;
+    p.castPos = currentTime() || 0;
+    p.castDuration = totalDuration() || 0;
+    try { $('video').pause(); } catch {}
+  }
+  try { const s = _castCtx.getCurrentSession(); const dev = s && s.getCastDevice && s.getCastDevice(); S.castDeviceName = (dev && dev.friendlyName) || 'TV'; } catch { S.castDeviceName = 'TV'; }
+  $('pHealth').innerHTML = `<span class="chip">Casting to ${esc(S.castDeviceName)}</span>`;
+  castApplyVolume(); updateCastButtons(); updPP(); showOsd();
+}
+function exitCastMode() {
+  const p = S.playing; updateCastButtons();
+  if (!p || !p.castingActive) return;
+  const finalPos = p.castPos || currentTime() || 0;
+  const ended = p.castDuration && finalPos >= p.castDuration - 3;
+  p.castingActive = false; p.castPos = 0;
+  updateCastButtons();
+  if (ended) { closePlayer({ ended: true, _fromCast: true }); return; }
+  // Resume local playback where the TV left off (reuses the exact resume machinery).
+  if (p.usingTranscode) startSource('transcode', finalPos);
+  else if (p.usingRemux) startSource('remux', finalPos);
+  else { const v = $('video'); requestVideoPlay(v).then(() => { v.currentTime = finalPos; }).catch(() => {}); }
+  showOsd();
+}
+function onCastPlayerState() {
+  const p = S.playing; if (!p || !p.castingActive || !_castRp) return;
+  p.castPos = _castRp.currentTime || p.castPos || 0;
+  if (_castRp.duration) p.castDuration = _castRp.duration;
+  updPP();
+  try {
+    if (_castRp.playerState === chrome.cast.media.PlayerState.IDLE && _castRp.duration && p.castPos >= _castRp.duration - 3) {
+      saveWatch(true);
+      const s = _castCtx && _castCtx.getCurrentSession(); if (s) s.endSession(true);
+    }
+  } catch {}
+}
+function castApplyVolume() {
+  if (!(_castRp && _castRpc && S.playing && S.playing.castingActive)) return;
+  try {
+    const st = storedVolumeState();
+    _castRp.volumeLevel = st.muted ? 0 : st.volume;
+    _castRpc.setVolumeLevel();
+  } catch {}
+}
+/* AirPlay (Safari/iOS/macOS) — routes the local <video> element itself; the element's tokened src is
+   what the Apple TV pulls, so VOD works with no session bookkeeping (timeupdate keeps firing, so the
+   watch/scrobble heartbeats stay correct). Button appears only when a route is actually available. */
+function initAirPlay() {
+  const v = $('video'), btn = $('airplayBtn'); if (!v || !btn) return;
+  if (!('WebKitPlaybackTargetAvailabilityEvent' in window) || typeof v.webkitShowPlaybackTargetPicker !== 'function') return;
+  v.addEventListener('webkitplaybacktargetavailabilitychanged', (e) => {
+    btn.style.display = (castEligible() && castVodEligible() && e.availability === 'available') ? '' : 'none';
+  });
+  v.addEventListener('webkitcurrentplaybacktargetiswirelesschanged', () => { btn.classList.toggle('on', !!v.webkitCurrentPlaybackTargetIsWireless); });
+  btn.addEventListener('click', () => { try { v.webkitShowPlaybackTargetPicker(); } catch {} });
+}
+$('castBtn').addEventListener('click', startCast);
+initCastSender();
+initAirPlay();
 
 /* ---- clocks: time-of-day (app + player) and "Ends at" ---- */
 function clockStr(d) {
@@ -19813,7 +19990,7 @@ function focusDrawer(i) {
   applyFocus(rows[S.drawerIdx]);
 }
 function ctlButtons() {
-  return ['chGuide', 'back10', 'playPause', 'fwd30', 'nextEpBtn', 'favBtn', 'splitBtn', 'ccBtn', 'audBtn', 'srndBtn', 'qualBtn', 'muteBtn', 'fsBtn', 'statsBtn']
+  return ['chGuide', 'back10', 'playPause', 'fwd30', 'nextEpBtn', 'favBtn', 'splitBtn', 'ccBtn', 'audBtn', 'srndBtn', 'qualBtn', 'castBtn', 'airplayBtn', 'muteBtn', 'fsBtn', 'statsBtn']
     .map((id) => $(id)).filter((b) => b && !b.disabled && !b.classList.contains('disabled') && b.style.display !== 'none' && b.offsetParent !== null);
 }
 function focusSeek() {

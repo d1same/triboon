@@ -571,6 +571,27 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Live TV filter clears the burger horizontally on the phone shell');
   assert.match(ui, /body\.mobileShell #browse\.searchMode\{padding-top:146px!important\}/,
     'search results clear the lowered fixed search bar on the phone shell (no results under the bar)');
+  // Casting Phase 1 (web): Google Cast (Default Media Receiver) + AirPlay for VOD, receiver-pull.
+  assert.ok(ui.includes('id="castBtn"') && ui.includes('id="airplayBtn"'),
+    'the player has Cast and AirPlay buttons');
+  assert.match(ui, /'qualBtn', 'castBtn', 'airplayBtn', 'muteBtn'/,
+    'Cast + AirPlay buttons are in the D-pad control order');
+  assert.match(ui, /function castEligible\(\) \{ try \{ return !canUseNativeVideoPlayer\(\); \}/,
+    'web casting is suppressed on the Android native-ExoPlayer path (no double-play)');
+  assert.match(ui, /receiverApplicationId: chrome\.cast\.media\.DEFAULT_MEDIA_RECEIVER_APP_ID/,
+    'Phase 1 uses the Default Media Receiver (no registration, no HTTPS media)');
+  assert.match(ui, /if \(p && p\.castingActive\) return p\.castPos \|\| 0;/,
+    'while casting, currentTime() reads the receiver clock so watch + Trakt heartbeats keep counting (one reporter)');
+  assert.match(ui, /function castVodEligible\(\) \{ const p = S\.playing; return !!\(p && p\.item && p\.item\.type !== 'live'\); \}/,
+    'casting is VOD-only in Phase 1 (Live TV excluded — it uses MSE, not a plain URL)');
+  assert.match(ui, /function currentCastStreamUrl\(\) \{[\s\S]+p\.usingTranscode[\s\S]+p\.usingRemux[\s\S]+new URL\(path, location\.origin\)\.href/,
+    'the cast URL is the current variant made absolute (LAN-reachable), token already in the query');
+  assert.match(ui, /if \(!castHostReachable\(\)\) \{ toast\('Open Triboon by its LAN IP/,
+    'casting from localhost is blocked with guidance (the TV cannot reach localhost)');
+  assert.match(ui, /if \(S\.playing && S\.playing\.castingActive && !opts\._fromCast\) \{[\s\S]+endSession\(true\)/,
+    'backing out of the player while casting stops the TV too');
+  assert.match(ui, /btn\.addEventListener\('click', \(\) => \{ try \{ v\.webkitShowPlaybackTargetPicker\(\); \}/,
+    'AirPlay picker is wired for Safari/iOS VOD');
   assert.match(ui, /if \(k === 'ArrowUp'\) return; \/\/ top of the now-playing loop/,
     'music now-playing top controls no longer fall through on ArrowUp (no focus trap)');
   // Trakt-imported resume (percent only, no position/duration) still primes the server read-ahead
@@ -1239,7 +1260,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'person known-for pages should lazy-render all filtered credits in batches instead of slicing to a fixed cap');
   assert.match(ui, /\$\('person'\)\.addEventListener\('scroll', maybeLoadMorePersonWorks, \{ passive: true \}\);[\s\S]+if \(S\.view === 'person' && S\.gridIdx >= \(S\.gridItems \|\| \[\]\)\.length - Math\.max\(2, gridCols\(\) \* 2\)\) \{[\s\S]+loadMorePersonWorks\(false\);/,
     'person known-for lazy loading should work for both scrolling and D-pad focus near the loaded edge');
-  assert.ok(ui.includes('id="statsBtn"') && ui.includes("return ['chGuide', 'back10', 'playPause', 'fwd30', 'nextEpBtn', 'favBtn', 'splitBtn', 'ccBtn', 'audBtn', 'srndBtn', 'qualBtn', 'muteBtn', 'fsBtn', 'statsBtn']")
+  assert.ok(ui.includes('id="statsBtn"') && ui.includes("return ['chGuide', 'back10', 'playPause', 'fwd30', 'nextEpBtn', 'favBtn', 'splitBtn', 'ccBtn', 'audBtn', 'srndBtn', 'qualBtn', 'castBtn', 'airplayBtn', 'muteBtn', 'fsBtn', 'statsBtn']")
     && ui.includes('function collectPlayerStats()') && ui.includes('window.__tvNativeVideoStats'),
     'web player stats must be the last D-pad reachable control and accept native ExoPlayer stats');
   assert.ok(ui.includes('Server target') && ui.includes('Server read-ahead')
