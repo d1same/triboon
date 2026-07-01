@@ -307,6 +307,11 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Continue Watching remove/mark actions should durably dismiss next-up (cwHideNext) + update cache, keep focus, then refresh quietly');
   assert.match(ui, /function nextEpisodeBumps\(cw, cwItems\) \{[\s\S]+const hiddenNext = cwHiddenNextSet\(\);[\s\S]+if \(hiddenNext\.has\(nextKey\)\) continue;/,
     'dismissed next-up suggestions must stay dismissed across reloads (nextEpisodeBumps honors the local hidden set)');
+  // The SERVER next-up list (S._homeTvNext) is cached under a watched-episode fingerprint that does
+  // not change when you dismiss an unwatched next-up — so buildCwItems must apply the local hidden
+  // set to the cached server list too, or a just-removed next-up card reappears on the next render.
+  assert.match(ui, /if \(Array\.isArray\(S\._homeTvNext\)\) \{[\s\S]+const hiddenNext = cwHiddenNextSet\(\);[\s\S]+for \(const it of S\._homeTvNext\) if \(it && it\.key && !seen\.has\(it\.key\) && !hiddenNext\.has\(it\.key\)\)/,
+    'buildCwItems must filter the cached server next-up list through the local dismissal set so a removed next-up card does not reappear');
   assert.match(ui, /function epItemOf\(show, season, ep\) \{[\s\S]+qualityRank: qualityRankForItem\(show\)[\s\S]+function epTarget\(show, sNum, eNum, resume\) \{[\s\S]+qualityRank: qualityRankForItem\(show\)/,
     'episode targets created from details should inherit the current show quality preference');
   assert.match(ui, /async function prepPlayerSeasonEpisodes\(it\) \{[\s\S]+const inheritedQuality = qualityRankForItem\(it\);[\s\S]+const item = inheritedQuality \? \{ \.\.\.base, qualityRank: inheritedQuality \} : base;[\s\S]+async function prepNextEpisode\(it\) \{[\s\S]+const inheritedQuality = qualityRankForItem\(it\);[\s\S]+const item = inheritedQuality \? \{ \.\.\.base, qualityRank: inheritedQuality \} : base;/,
@@ -594,6 +599,15 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'TMDB season episode grids should expose exact season/episode focus targets');
   assert.match(ui, /function openLocalShowSeasonEpisodes\(show, seasonNumber, opts = \{\}\) \{[\s\S]+card\.dataset\.season = String\(seasonNumber\);[\s\S]+card\.dataset\.episode = String\(ep\.e\);[\s\S]+focusRenderedDetailEpisode\(\{ season: seasonNumber, episode: focusEpisode \}\)/,
     'local-only season episode grids should expose exact season/episode focus targets');
+  // Switching seasons from the tab strip must keep focus on the newly selected tab (the re-render
+  // destroys the old focused tab and otherwise snaps focus back to Play).
+  assert.match(ui, /async function openSeasonEpisodes\(show, seasonNumber, opts = \{\}\) \{[\s\S]+const cameFromTab = opts\.fromTab[\s\S]+#seasonTabs \.seasonTab\.focus[\s\S]+if \(cameFromTab\) \{[\s\S]+tabs\.querySelector\('\.seasonTab\.sel'\)[\s\S]+applyFocus\(selTab, false\); return;/,
+    'TMDB season-tab switches should keep focus on the selected tab, not fall back to Play');
+  assert.match(ui, /function openLocalShowSeasonEpisodes\(show, seasonNumber, opts = \{\}\) \{[\s\S]+const cameFromTab = opts\.fromTab[\s\S]+if \(cameFromTab\) \{[\s\S]+tabs\.querySelector\('\.seasonTab\.sel'\)[\s\S]+applyFocus\(selTab, false\); return;/,
+    'local season-tab switches should keep focus on the selected tab too');
+  // The "All seasons" button had no D-pad zone → unreachable by remote. It must be a detail nav row.
+  assert.match(ui, /const dRowSpecs = \[[\s\S]+\[zone\('#allSeasonsBtn'\), 'allSeasons'\],[\s\S]+\[zone\('\.seasonTab'\), 'seasonTab'\]/,
+    'the All-seasons button must be a reachable D-pad zone on the detail page');
   // Marking a single episode watched must NOT drop D-pad focus (it jumped to the rail/top). Re-render
   // with a focus target: advance to the next episode when marking watched, stay put when unmarking.
   assert.match(ui, /async function setEpisodeWatched\([\s\S]+openSeasonEpisodes\(show, seasonNumber, \{ focusEpisode: watched \? ep\.episode_number \+ 1 : ep\.episode_number \}\)/,

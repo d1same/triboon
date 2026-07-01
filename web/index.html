@@ -4679,8 +4679,12 @@ function buildCwItems(cw) {
     };
   });
   if (Array.isArray(S._homeTvNext)) {
+    // The server next-up list is cached under a fingerprint of WATCHED episodes, which doesn't
+    // change when you dismiss an as-yet-unwatched next-up card — so the stale cache would re-add a
+    // just-removed card. Honor the local dismissal set here (the server also strips it on refetch).
+    const hiddenNext = cwHiddenNextSet();
     const seen = new Set(items.map((it) => continueWatchingIdentity(it) || it.key));
-    for (const it of S._homeTvNext) if (it && it.key && !seen.has(it.key)) {
+    for (const it of S._homeTvNext) if (it && it.key && !seen.has(it.key) && !hiddenNext.has(it.key)) {
       const id = continueWatchingIdentity(it) || it.key;
       if (seen.has(id)) continue;
       items.push(stampContinueWatchingSort({ ...it, _cw: true }, cw));
@@ -6559,6 +6563,11 @@ async function markSeasonWatched(show, season, watched) {
 
 // Click a season → EPISODES view with season tabs + episode cards.
 async function openSeasonEpisodes(show, seasonNumber, opts = {}) {
+  // Switching seasons from the tab strip should keep focus on the tabs (so the next Left/Right hits
+  // the adjacent season) — capture that BEFORE the re-render wipes the focused tab.
+  const cameFromTab = opts.fromTab
+    || !!document.querySelector('#seasonTabs .seasonTab.focus')
+    || !!(document.activeElement && document.activeElement.classList && document.activeElement.classList.contains('seasonTab'));
   S.detailSeason = seasonNumber;
   $('seasonsTitle').textContent = 'Episodes';
   $('seasonGrid').style.display = 'none';
@@ -6628,7 +6637,13 @@ async function openSeasonEpisodes(show, seasonNumber, opts = {}) {
       const near = eps.filter((c) => (parseInt(c.dataset.episode, 10) || 0) <= focusEpisode).pop() || eps[eps.length - 1];
       if (near) { applyFocus(near); return; }
     }
-    // TV: OK on a season should land IN the episodes — focus stayed on the season card and
+    // Switching seasons via the tab strip: re-focus the newly selected tab (the re-render destroyed
+    // the old focused tab, which otherwise stranded focus and snapped it back to Play).
+    if (cameFromTab) {
+      const selTab = tabs.querySelector('.seasonTab.sel') || tabs.querySelector('.seasonTab');
+      if (selTab) { applyFocus(selTab, false); return; }
+    }
+    // TV: OK on a season CARD should land IN the episodes — focus stayed on the season card and
     // LEFT/RIGHT kept switching seasons instead of browsing what just opened. Only when the
     // user is actually in the seasons area (a background watched-mark re-render must not yank).
     const cur = document.querySelector('.focus');
@@ -6671,6 +6686,9 @@ function pickLocalShowPlayTarget(show, episodes) {
   updateDetailPlayLabel({ label: watchedAny ? 'Continue' : 'Play', target: next });
 }
 function openLocalShowSeasonEpisodes(show, seasonNumber, opts = {}) {
+  const cameFromTab = opts.fromTab
+    || !!document.querySelector('#seasonTabs .seasonTab.focus')
+    || !!(document.activeElement && document.activeElement.classList && document.activeElement.classList.contains('seasonTab'));
   S.detailSeason = seasonNumber;
   $('seasonsTitle').textContent = 'Episodes';
   $('seasonGrid').style.display = 'none';
@@ -6730,6 +6748,10 @@ function openLocalShowSeasonEpisodes(show, seasonNumber, opts = {}) {
   bindEdgeScroll(grid);
   const focusEpisode = parseInt(opts.focusEpisode, 10) || 0;
   if (focusEpisode > 0 && focusRenderedDetailEpisode({ season: seasonNumber, episode: focusEpisode })) return;
+  if (cameFromTab) {
+    const selTab = tabs.querySelector('.seasonTab.sel') || tabs.querySelector('.seasonTab');
+    if (selTab) { applyFocus(selTab, false); return; }
+  }
   const cur = document.querySelector('.focus');
   if (document.body.classList.contains('tv') && cur
       && (cur.classList.contains('seasonCard') || cur.classList.contains('seasonTab'))) {
@@ -20343,6 +20365,7 @@ document.addEventListener('keydown', (e) => {
       // Actions in their REAL DOM/visual order (hand-listing them once put the trailer
       // button in the wrong slot and OK launched a trailer instead of picking 4K).
       [[...$('dPlay').parentElement.querySelectorAll('button')].filter(vis), 'actions'],
+      [zone('#allSeasonsBtn'), 'allSeasons'],
       [zone('.seasonTab'), 'seasonTab'], [zone('.seasonCard'), 'seasonCard'], [zone('.epCard'), 'epCard'],
       [zone('.castCard'), 'castCard'], [zone('#relatedRow .pcard'), 'related'],
     ].filter((r) => r[0].length);
