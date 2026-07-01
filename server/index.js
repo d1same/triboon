@@ -1811,9 +1811,6 @@ async function loadIptvChannelsForSource(src) {
     throw e;
   }
 }
-async function loadIptvChannels(sources = iptvSourcesFromSettings(settings.get())) {
-  return (await loadIptvChannelState(sources)).channels;
-}
 function iptvAggregateKeyForSources(sources = []) {
   return (sources || []).filter(iptvSourceConfigured).map((src) => `${src.id}:${iptvSourceKey(src)}`).join('|');
 }
@@ -2193,7 +2190,6 @@ function xmltvListFor(epg, ch) {
   }
   return list || [];
 }
-const b64 = (s) => { try { return Buffer.from(String(s || ''), 'base64').toString('utf8'); } catch { return ''; } };
 function maybeB64(s) {
   const raw = String(s || '').trim();
   if (!raw) return '';

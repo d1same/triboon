@@ -4174,16 +4174,6 @@ function signOutAccount() {
   try { localStorage.removeItem('triboon.profile'); } catch {}
   location.reload();
 }
-function openProfilePreferences() {
-  showGate(null);
-  switchView('prefs');
-  const tab = document.querySelector('#prefTabs button[data-tab="profiles"]');
-  if (tab) tab.click();
-  setTimeout(() => {
-    const first = $('prefSwitchProfile') || $('prefPins').querySelector('button,input,select');
-    if (first) first.focus({ preventScroll: false });
-  }, 80);
-}
 function showProfilePicker() {
   const grid = $('profileGrid'); grid.innerHTML = '';
   (S.user.profiles || []).forEach((pr) => {
@@ -10982,10 +10972,6 @@ function builtInSubtitlesEnabled() {
   return !!(S.serverInfo && S.serverInfo.builtInSubtitlesEnabled === true);
 }
 function langName(c) { return LANG_NAMES[langCode(c)] || c || ''; }
-function trackLabel(t, fallback) {
-  const lang = langName(t.lang);
-  return [lang || fallback, t.title, chLabel(t.channels)].filter(Boolean).join(' · ');
-}
 function prefLangKey(kind) {
   return S.profile && S.profile.id ? `triboon.profile.${S.profile.id}.${kind}` : `triboon.${kind}`;
 }
@@ -11422,10 +11408,6 @@ function saveSubShift(track, shift) {
     else localStorage.setItem(k, String(+shift.toFixed(1)));
   } catch {}
 }
-function subShiftLabel() {
-  const p = S.playing; const n = p ? +(p._subShift || 0) : 0;
-  return n ? ` (${n > 0 ? '+' : ''}${n.toFixed(1)}s)` : '';
-}
 function subSyncHeadingLabel() {
   const p = S.playing; const n = p ? +(p._subShift || 0) : 0;
   return n ? `Subtitle sync ${n > 0 ? '+' : ''}${n.toFixed(1)}s` : 'Subtitle sync';
@@ -11484,14 +11466,6 @@ function playerAudioHasOptions() {
   const p = S.playing; if (!p || !p.tracks) return false;
   const langs = new Set((p.tracks.audio || []).map((a) => langCode(a.lang) || 'und' + a.rel));
   return langs.size > 1;
-}
-function playerCcHasOptions() {
-  const p = S.playing;
-  if (!p || !p.item || p.item.type === 'live') return false;
-  if (p.subTrack) return subtitleRelPlayable(p, p.subTrack);
-  if (releaseSubChoices().length) return true;
-  if (embeddedSubChoices().length) return true;
-  return !!(S.serverInfo && S.serverInfo.opensubs && p.mountId && subtitleCatalogAvailable(p.item));
 }
 function playerCcCanOpen() {
   const p = S.playing;
@@ -12891,20 +12865,6 @@ async function loadMoreLocalLibraryPage(focusNew = false) {
     S.localPageLoading = false;
   }
 }
-function renderLocalGridPaged(items) {
-  const all = items || [];
-  S.localGridAll = all;
-  S.localGridShown = Math.min(LOCAL_GRID_BATCH, all.length);
-  S._keepLocalGridPaging = true;
-  try {
-    renderGrid(all.slice(0, S.localGridShown));
-  } finally {
-    S._keepLocalGridPaging = false;
-  }
-  renderLocalGridFooter();
-  perfMark('local-library-render', { shown: S.localGridShown, total: all.length });
-}
-
 /* ============ trailer modal ============ */
 function trailerControls() {
   return [$('trailerBack'), $('trailerWl')]
@@ -12993,76 +12953,6 @@ function dayHeading(dateStr) {
   const d = new Date(dateStr + 'T00:00:00');
   return d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
 }
-async function loadCalendarLegacy() {
-  bootReady(); // a hash-restored Calendar is a boot landing
-  $('discoverTitle').textContent = 'Calendar';
-  $('discoverRows').style.display = 'none';
-  const list = $('calList'); list.style.display = 'flex';
-  const focusCalendarStart = () => requestAnimationFrame(() => S.view === 'calendar' && S.zone !== 'rail' && focusContent());
-  if (!S.serverInfo.tmdb) { list.innerHTML = '<div class="calEmpty focusable">Connect TMDB in Settings to use Calendar</div>'; focusCalendarStart(); return; }
-  list.innerHTML = '<div class="calDayHead">loading…</div>';
-  await loadWatchlist();
-  try { S.watchMap = Object.fromEntries((await api('/api/watch' + profileQ())).map((w) => [w.key, w])); } catch {}
-  const metas = [
-    ...(S.watchlist || []).map((w) => ({ ...w.meta, _key: w.key })),
-    ...Object.entries(S.watchMap || {}).filter(([, w]) => !w.watched && w.meta).map(([key, w]) => ({ ...w.meta, _key: key })),
-  ];
-  const uniq = new Map();
-  for (const m of metas) {
-    if (!m || !m.tmdbId || !m.type) continue;
-    const t = certTargetForMeta(m, m._key || '');
-    uniq.set(t.type + ':' + t.tmdbId, { ...m, ...t });
-  }
-  if (!uniq.size) {
-    list.innerHTML = '<div class="calEmpty focusable">Add titles to your watchlist or start watching a show — your calendar shows their upcoming air/release dates here so it stays clean.</div>';
-    focusCalendarStart();
-    return;
-  }
-  const today = todayStr();
-  const weekDates = calendarWeekDates(today);
-  const weekEnd = weekDates[weekDates.length - 1];
-  const upcoming = [];
-  await Promise.all([...uniq.values()].slice(0, 40).map(async (m) => {
-    try {
-      const d = await api(`/api/tmdb/${m.type}/${m.tmdbId}?append_to_response=${m.type === 'tv' ? 'content_ratings' : 'release_dates'}`);
-      if ((S.maxLevel ?? 3) < 3 && (d.adult || !levelAllows(certOf(d, m.type)))) return;
-      if (m.type === 'tv' && d.next_episode_to_air && d.next_episode_to_air.air_date) {
-        const ne = d.next_episode_to_air;
-        upcoming.push({ ...mapTmdb(d), tmdbId: m.tmdbId, type: 'tv', _date: ne.air_date,
-          badge: `S${pad2(ne.season_number)}E${pad2(ne.episode_number)}`,
-          sub: ne.name ? `“${ne.name}”` : `Season ${ne.season_number}` });
-      } else if (m.type === 'movie' && d.release_date && d.release_date >= today) {
-        upcoming.push({ ...mapTmdb(d), tmdbId: m.tmdbId, type: 'movie', _date: d.release_date, badge: 'Premiere', sub: 'Theatrical / digital release' });
-      }
-    } catch {}
-  }));
-  upcoming.sort((a, b) => (a._date || '').localeCompare(b._date || ''));
-  if (!upcoming.length) {
-    list.innerHTML = '<div class="calEmpty focusable">Nothing scheduled from your watchlist right now — everything is up to date. ✓</div>';
-    focusCalendarStart();
-    return;
-  }
-  // Group by date into an agenda.
-  list.innerHTML = '';
-  const byDay = {};
-  for (const u of upcoming) (byDay[u._date] = byDay[u._date] || []).push(u);
-  for (const date of Object.keys(byDay).sort()) {
-    const day = document.createElement('div'); day.className = 'calDay';
-    const rel = relativeDay(date);
-    day.innerHTML = `<div class="calDayHead">${dayHeading(date)}${rel ? ` <span class="rel">${rel}</span>` : ''}</div>`;
-    byDay[date].forEach((u) => {
-      const row = document.createElement('button'); row.className = 'calItem focusable';
-      row.innerHTML = `<div class="pp" style="background-image:url('${safeUrl(u.poster)}')"></div>
-        <div class="ci"><div class="ct">${esc(u.title)}</div><div class="cm">${esc(u.sub)}</div></div>
-        <div class="cbadge">${esc(u.badge)}</div>`;
-      row.addEventListener('click', () => openDetail(u));
-      day.appendChild(row);
-    });
-    list.appendChild(day);
-  }
-  focusCalendarStart();
-}
-
 async function loadCalendar() {
   bootReady();
   $('discoverTitle').textContent = 'Calendar';
@@ -13162,24 +13052,6 @@ function libIconSvg(lib) {
 // visit. One fetch per library per 5 minutes now (scans invalidate it), and the boot-time
 // localMap build below warms it — so the first library open is instant. Cover art is handled
 // separately: the server mints STABLE art URLs, so the browser's HTTP cache keeps the images.
-async function libItems(lib, force) {
-  const c = (S.libCache = S.libCache || {})[lib.id];
-  if (!force && c) {
-    if (c.inflight) return c.inflight; // boot: localMap + home row + grid share ONE fetch
-    // c.data check matters: performance.now() starts at 0 on page load, so a bare
-    // "now - at < TTL" treated the in-flight sentinel as a fresh hit and returned undefined.
-    if (c.data && performance.now() - c.at < 300000) return c.data;
-  }
-  const started = performance.now();
-  const inflight = api(`/api/libraries/${lib.id}/items`);
-  S.libCache[lib.id] = { at: 0, inflight, data: c && c.data };
-  try {
-    const data = await inflight;
-    S.libCache[lib.id] = { at: performance.now(), data };
-    perfMark('library-items-ready', { lib: lib.id, items: (data.items || []).length, ms: Math.round(performance.now() - started) });
-    return data;
-  } catch (e) { delete S.libCache[lib.id]; throw e; }
-}
 async function localLibraryPage(lib, opts = {}) {
   const offset = Math.max(0, opts.offset || 0);
   const limit = Math.max(1, Math.min(500, opts.limit || LOCAL_GRID_BATCH));
@@ -13262,17 +13134,6 @@ async function ensureLocalPlaybackForItem(it) {
 }
 // Map of "what we already own on disk": tmdb keys → local stream URLs. Lets the regular
 // detail pages (and auto next-episode) play your archive files instead of hitting usenet.
-async function indexLocalLibraries(libs) {
-  const map = {};
-  for (const lib of (libs || []).filter((l) => l.path)) {
-    try {
-      const r = await libItems(lib);
-      mergeLocalItemsInto(map, lib, r.items || []);
-    } catch {}
-  }
-  S.localMap = map;
-  return S.localMap;
-}
 function cachedLocalLibraryItemsAvailable() {
   return (S.libraries || []).some((lib) => lib.path && S.libCache && S.libCache[lib.id] && S.libCache[lib.id].data);
 }
@@ -13352,10 +13213,6 @@ async function runLibrary(reset) {
     if (page >= (r.total_pages || 1) || page >= 25) S.libDone = true;
   } catch (e) { if (page === 1) $('grid').innerHTML = `<div class="gridMore">Failed: ${esc(e.message)}</div>`; }
   S.libLoading = false;
-}
-function renderLocalLibraryPreview(lib) {
-  S.libraryPreviewOnly = true;
-  return runLocalLibrary(lib, undefined, { preview: true });
 }
 // Scanned local library: local poster.jpg or TMDB art, direct local playback. TV shows
 // render once at the top level — clicking one drills into its episode grid.
@@ -13489,22 +13346,7 @@ function setSortOptions(mode) {
   if (sel.dataset.mode === mode) return;
   sel.dataset.mode = mode; sel.innerHTML = mode === 'local' ? SORTS_LOCAL : SORTS_TMDB;
 }
-function localSorter(sort) {
-  if (sort === 'title.asc') return (a, b) => String(a.title).localeCompare(String(b.title));
-  if (sort === 'year.desc') return (a, b) => (+b.year || 0) - (+a.year || 0);
-  if (sort === 'rating.desc') return (a, b) => (+b.rating || 0) - (+a.rating || 0);
-  return (a, b) => (b.addedAt || 0) - (a.addedAt || 0); // default: recently added on top
-}
 // Genre dropdown filled from what the library ACTUALLY contains (ids recorded at scan time).
-async function populateLocalGenres(lib, items) {
-  const have = new Set();
-  items.forEach((x) => (x.genres || []).forEach((id) => have.add(id)));
-  const names = await genres(lib.kind === 'tv' ? 'tv' : 'movie');
-  const cur = $('genreSel').value;
-  $('genreSel').innerHTML = '<option value="">All genres</option>' +
-    names.filter((g) => have.has(g.id)).map((g) => `<option value="${parseInt(g.id, 10) || 0}">${esc(g.name)}</option>`).join('');
-  $('genreSel').value = cur; // survive re-renders (sort change, scan refresh)
-}
 async function populateLocalGenreIds(lib, ids) {
   const have = new Set((ids || []).map((id) => parseInt(id, 10) || 0).filter(Boolean));
   const names = await genres(lib.kind === 'tv' ? 'tv' : 'movie');
@@ -14320,74 +14162,6 @@ function renderLiveTvBody() {
 // Pick which provider categories this user sees (saved server-side, synced across devices).
 // Admins get a scope switch: "My view" edits their own list, "Everyone" writes the GLOBAL
 // hide list that's enforced server-side for every regular user.
-function openLiveCats() {
-  let modal = $('catModal');
-  if (!modal) {
-    modal = document.createElement('div');
-    modal.id = 'catModal';
-    modal.innerHTML = `<div class="box"><h2>Live TV categories</h2>
-      <div class="sub">Untick the categories you never watch — they disappear from your channel list and guide.</div>
-      <div id="catScopeWrap" style="display:none;margin-bottom:12px">
-        <select id="catScope" style="width:100%">
-          <option value="me">Apply to: my view only</option>
-          <option value="all">Apply to: EVERYONE (admin — users can’t re-enable)</option>
-        </select>
-      </div>
-      <div style="display:flex;gap:8px;margin-bottom:10px">
-        <button class="ghostMini focusable" id="catAll">Select all</button>
-        <button class="ghostMini focusable" id="catNone">Select none</button>
-      </div>
-      <div id="catList"></div>
-      <div class="modalBtns" style="display:flex;gap:10px;margin-top:16px">
-        <button class="btn primary focusable" id="catSave" style="flex:1;justify-content:center">Save</button>
-        <button class="btn ghost focusable" id="catCancel">Cancel</button>
-      </div></div>`;
-    document.body.appendChild(modal);
-    modal.addEventListener('click', (e) => { if (e.target.id === 'catModal') modal.classList.remove('open'); });
-    modal.querySelector('#catCancel').addEventListener('click', () => modal.classList.remove('open'));
-    modal.querySelector('#catAll').addEventListener('click', () => modal.querySelectorAll('#catList input').forEach((i) => { i.checked = true; }));
-    modal.querySelector('#catNone').addEventListener('click', () => modal.querySelectorAll('#catList input').forEach((i) => { i.checked = false; }));
-    modal.querySelector('#catScope').addEventListener('change', fillLiveCatList);
-    modal.querySelector('#catSave').addEventListener('click', async () => {
-      const hidden = [...modal.querySelectorAll('#catList input')].filter((i) => !i.checked).map((i) => i.dataset.group);
-      const global = modal.querySelector('#catScope').value === 'all';
-      try {
-        if (global) {
-          await api('/api/settings', { method: 'POST', body: { iptvHiddenGroups: hidden } });
-          S.liveGlobalHidden = new Set(hidden);
-          toast(hidden.length ? `${hidden.length} categories hidden for ALL users` : 'Global hide list cleared');
-        } else {
-          await api('/api/iptv/groups', { method: 'POST', body: { hidden } });
-          S.liveHidden = new Set(hidden);
-          toast(hidden.length ? `${hidden.length} categories hidden` : 'All categories visible');
-        }
-        modal.classList.remove('open');
-        renderLiveTvBody();
-      } catch (e) { toast('Save failed: ' + e.message); }
-    });
-  }
-  modal.querySelector('#catScopeWrap').style.display = (S.user && S.user.role === 'admin') ? '' : 'none';
-  modal.querySelector('#catScope').value = 'me';
-  fillLiveCatList();
-  modal.classList.add('open');
-}
-function fillLiveCatList() {
-  const modal = $('catModal');
-  const global = modal.querySelector('#catScope').value === 'all';
-  const hiddenSet = global ? (S.liveGlobalHidden || new Set()) : (S.liveHidden || new Set());
-  const counts = {};
-  S.liveChannels.forEach((c) => { const g = c.group || 'Other'; counts[g] = (counts[g] || 0) + 1; });
-  const list = modal.querySelector('#catList');
-  list.innerHTML = '';
-  Object.keys(counts).forEach((g) => {
-    const row = document.createElement('label');
-    row.className = 'catRow';
-    row.innerHTML = `<input type="checkbox" ${hiddenSet.has(g) ? '' : 'checked'}>
-      <span class="cgN">${esc(g)}</span><span class="cgC">${counts[g]}</span>`;
-    row.querySelector('input').dataset.group = g;
-    list.appendChild(row);
-  });
-}
 function liveTvGroup(body, title, chans, { open, key, extra = '' } = {}) {
   const head = document.createElement('button');
   head.className = 'chGroupHead focusable';
@@ -15554,9 +15328,6 @@ function showMusicHome() {
   $('musicList').innerHTML = '';
   syncMusicClear();
 }
-function openMusicPlaylist(id, title, meta = {}) {
-  return startMusicPlaylist(id, title, meta);
-}
 async function startMusicPlaylist(id, title, meta = {}) {
   S.musicPage = 'home';
   S.musicPlaylist = { id, title, count: meta.count || null, cover: meta.cover || null, tracks: [], offset: 0, hasMore: true, loading: false };
@@ -15864,9 +15635,6 @@ function stopMusicWhenLeavingMusic(nextView) {
   if (S.musicCur) closeMusicPlayer();
   S._musicWasPlaying = false;
 }
-function updateMusicBar() {
-  updateMusicNow();
-}
 function markMusicCur() {
   const curId = S.musicCur && S.musicCur.id;
   document.querySelectorAll('.musicRow').forEach((r) => {
@@ -15992,11 +15760,6 @@ function musicIcon(name) {
     music: '<path d="M9 18V6l11-2v11"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="15" r="2.5"/>',
   };
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icons[name] || icons.music}</svg>`;
-}
-function musicRunQuery(q) {
-  $('musicSearch').value = q;
-  syncMusicClear();
-  doMusicSearch();
 }
 async function startMusicFeed(item) {
   const q = String(item && (item.query || item.coverFeed || item.title) || '').trim();
@@ -16233,10 +15996,6 @@ function restoreMusicSelection() {
   }
   return focusContent();
 }
-function leaveMusicBarUp() {
-  return restoreMusicSelection();
-}
-
 /* ---- Full-screen now-playing page (big cover + queue) ---- */
 function openMusicNow(opts = {}) {
   if (!S.musicCur) return false;
