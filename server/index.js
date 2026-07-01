@@ -601,6 +601,11 @@ function normalizeIptvHttpUrl(raw) {
 function allowPrivateIptvTargets() {
   return /^(1|true|yes)$/i.test(String(process.env.TRIBOON_ALLOW_PRIVATE_IPTV || ''));
 }
+// Loud startup warning: this env var disables SSRF protection for IPTV/EPG fetches (private/loopback
+// targets become reachable). It's an intentional escape hatch, but the operator must know it's on.
+if (allowPrivateIptvTargets()) {
+  console.warn('[security] TRIBOON_ALLOW_PRIVATE_IPTV is ENABLED — IPTV/EPG requests to private/loopback addresses are NOT blocked (SSRF protection off). Only use this on a trusted LAN.');
+}
 const iptvUrlSafetyCache = new Map();
 function cleanUrlHostForPolicy(hostname) {
   return String(hostname || '').trim().replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase();

@@ -1055,6 +1055,17 @@ test('Android native player: direct source and native chrome stay out of the web
     'tearing down music stops the Android foreground service');
   assert.match(ui, /window\.__tvMusicSeek = \(sec\) =>/,
     'lock-screen scrubbing seeks the web audio element');
+  // Resilience batch: failed multi-volume mount aborts inflight fetches; store flush failures are
+  // logged; a startup warning fires when SSRF protection is disabled.
+  const archiveSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'archive.js'), 'utf8');
+  assert.match(archiveSrc, /await Promise\.all\(vols\.map\(\(v\) => v\.mount\(\)\)\);[\s\S]*?\} catch \(e\) \{[\s\S]+rec\.controller\.abort\(\)[\s\S]+throw e;/,
+    'a failed multi-volume mount aborts inflight NNTP fetches (no pool exhaustion)');
+  const storeSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'store.js'), 'utf8');
+  assert.match(storeSrc, /\[store\] flush failed for/,
+    'persistent store flush failures are surfaced to the operator, not silently swallowed');
+  const idxSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(idxSrc, /TRIBOON_ALLOW_PRIVATE_IPTV is ENABLED/,
+    'a startup warning fires when IPTV SSRF protection is disabled via env');
   // The native backward-jump auto-resume must require the regression to persist across 2 ticks so a
   // one-tick PTS/GOP wobble on a resumed (server-seek) stream no longer dips-and-snaps ~every 10 min.
   assert.match(android, /private void rememberNativeVideoPosition\(\) \{[\s\S]+backwardsBy > 5000L\) \{[\s\S]+\+\+nativeBackwardTicks < 2\) return;/,

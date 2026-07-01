@@ -74,7 +74,18 @@ class Store {
       }
     }
     this.dirty = failed;
-    if (failed.size) this._flushSoon(1000);
+    if (failed.size) {
+      // A persistent flush failure risks silent data loss (settings/watch state stay only in RAM).
+      // Surface it to the operator — log the first failure and then sparingly to avoid spam.
+      this._flushFails = (this._flushFails || 0) + 1;
+      if (this._flushFails === 1 || this._flushFails % 30 === 0) {
+        try { console.error(`[store] flush failed for [${[...failed].join(',')}] (attempt ${this._flushFails})${this.lastFlushError ? ': ' + this.lastFlushError.message : ''}`); } catch {}
+      }
+      this._flushSoon(1000);
+    } else if (this._flushFails) {
+      try { console.error(`[store] flush recovered after ${this._flushFails} failed attempt(s)`); } catch {}
+      this._flushFails = 0;
+    }
   }
 
   close() { this.flush(); }

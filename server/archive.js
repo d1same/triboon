@@ -245,7 +245,22 @@ async function mountNzb(pool, nzbXml, opts = {}) {
   if (!volumeEntries.length) return mountFlat(pool, nzb, opts);
 
   const vols = volumeEntries.map((f) => new NzbFileStream(pool, f, opts));
-  await Promise.all(vols.map((v) => v.mount()));
+  try {
+    await Promise.all(vols.map((v) => v.mount()));
+  } catch (e) {
+    // A failed multi-volume mount (one volume rotted/missing) must not leave the OTHER volumes'
+    // startup fetches queued in the NNTP pool — orphaned requests hold connections/queue slots and
+    // can starve the next press-play (pool exhaustion → stall). Abort every volume's inflight
+    // segment fetches before rethrowing. (Only on failure — normal reads are untouched.)
+    for (const v of vols) {
+      try {
+        if (v && v.inflight) for (const rec of v.inflight.values()) {
+          if (rec && rec.controller && !rec.controller.signal.aborted) rec.controller.abort();
+        }
+      } catch { /* best-effort cleanup */ }
+    }
+    throw e;
+  }
 
   const head = await vols[0].readAt(0, 8);
   // Short read = truncated/damaged first volume — fail with a clear reason instead of letting
