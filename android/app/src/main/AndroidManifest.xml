@@ -41,6 +41,11 @@
         android:networkSecurityConfig="@xml/network_security_config"
         android:theme="@style/TriboonTheme">
 
+        <!-- Google Cast: the SDK loads this OptionsProvider (receiver app id) reflectively. -->
+        <meta-data
+            android:name="com.google.android.gms.cast.framework.OPTIONS_PROVIDER_CLASS_NAME"
+            android:value="app.triboon.tv.CastOptionsProvider" />
+
         <!-- configChanges keeps the WebView alive across uiMode/size changes (no reload). -->
         <activity
             android:name=".MainActivity"

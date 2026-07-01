@@ -27,8 +27,8 @@ android {
         applicationId = "app.triboon.tv"
         minSdk = 23          // Media3 1.10.x requires API 23+; Shield/onn/Chromecast TV targets clear this
         targetSdk = 36
-        versionCode = 238
-        versionName = "2.2.22"
+        versionCode = 239
+        versionName = "2.2.23"
     }
 
     signingConfigs {
@@ -84,6 +84,12 @@ dependencies {
     // MediaSessionCompat + MediaStyle notification for the WebView-audio Music player: keeps music
     // playing in a foreground service when backgrounded and shows lock-screen/notification controls.
     implementation "androidx.media:media:1.7.0"
+    // Google Cast (sender): cast VOD FROM the app to Chromecast/Google TV. mediarouter provides the
+    // route-picker dialog (shown via a ContextThemeWrapper so the app-wide theme stays DeviceDefault);
+    // appcompat is required on the compile classpath because the picker dialog extends AppCompatDialog.
+    implementation "com.google.android.gms:play-services-cast-framework:21.5.0"
+    implementation "androidx.mediarouter:mediarouter:1.7.0"
+    implementation "androidx.appcompat:appcompat:1.7.0"
 }
 
 // The shell stays WebView-first for browsing, but every Android app video surface hands off

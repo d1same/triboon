@@ -731,6 +731,41 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'unmatched local library details should expose the same Resume and Start Over behavior');
 });
 
+test('casting Phase 3: native Android Cast sender is wired (cast from the app)', () => {
+  const androidDir = path.join(__dirname, '..', 'android', 'app');
+  const main = fs.readFileSync(path.join(androidDir, 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
+  const provider = fs.readFileSync(path.join(androidDir, 'src', 'main', 'java', 'app', 'triboon', 'tv', 'CastOptionsProvider.java'), 'utf8');
+  const gradle = fs.readFileSync(path.join(androidDir, 'build.gradle'), 'utf8');
+  const manifest = fs.readFileSync(path.join(androidDir, 'src', 'main', 'AndroidManifest.xml'), 'utf8');
+  const uiSrc = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  // Build wiring: Cast SDK deps + reflectively-loaded OptionsProvider (Default Media Receiver).
+  assert.match(gradle, /play-services-cast-framework/, 'the app depends on the Google Cast sender SDK');
+  assert.match(gradle, /androidx\.mediarouter:mediarouter/, 'mediarouter provides the Cast route picker');
+  assert.match(provider, /setReceiverApplicationId\(CastMediaControlIntent\.DEFAULT_MEDIA_RECEIVER_APPLICATION_ID\)/,
+    'Phase 3 uses the Default Media Receiver (matches Phase 1, no registration/HTTPS media)');
+  assert.match(manifest, /OPTIONS_PROVIDER_CLASS_NAME[\s\S]+app\.triboon\.tv\.CastOptionsProvider/,
+    'the manifest registers the Cast OptionsProvider');
+  // Bridge: the web player routes cast intent/controls to native; native never double-plays.
+  assert.match(main, /public void castRequest\(String json\)/, 'a castRequest bridge method exists');
+  assert.match(main, /public void castControl\(String action\)/, 'a castControl bridge method exists');
+  assert.match(main, /public void castStop\(\)/, 'a castStop bridge method exists');
+  assert.match(main, /int gp = com\.google\.android\.gms\.common\.GoogleApiAvailability[\s\S]+castUnavailable = true;/,
+    'CastContext init is guarded on Google Play Services so degoogled/Fire boxes never crash');
+  assert.match(main, /closeNativePlayback\(false\);[\s\S]+new com\.google\.android\.gms\.cast\.MediaInfo\.Builder/,
+    'loading the receiver stops the local ExoPlayer first (no double-play)');
+  assert.match(main, /window\.__tvCast && window\.__tvCast\(/, 'native pushes cast state to the web via __tvCast');
+  assert.match(main, /boolean show = castHasDevices && !castActive\(\) && "video"\.equals\(nativeMode\)/,
+    'the native Cast button shows only for VOD when a device is available and not already casting');
+  assert.match(main, /nativeAudioBtn, nativeCastBtn, nativeQualityBtn/, 'the native Cast button is in the D-pad control order');
+  assert.match(main, /detachCastMediaListeners\(\);\s*\n\s*removeCastListeners\(\);/,
+    'Cast listeners are detached on destroy (framework must not hold the Activity; session is NOT ended)');
+  // Web glue: the __tvCast hook feeds the Phase-1 cast fields; controls route to the native bridge.
+  assert.match(uiSrc, /window\.__tvCast = \(o\) => \{[\s\S]+p\.castingActive = true;[\s\S]+p\.castPos = o\.position/,
+    'the web __tvCast hook feeds the shared cast fields so the OSD + heartbeat keep working');
+  assert.match(uiSrc, /else if \(window\.TriboonTV && TriboonTV\.castControl\) \{ try \{ TriboonTV\.castControl\(S\.playing\.castPaused/,
+    'in-app play/pause routes to the native cast bridge');
+});
+
 test('preferences profile manager has TV-friendly profile icons and add action', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   assert.match(ui, /const PROFILE_ICON_PATHS = \{[\s\S]+kids:[\s\S]+family:[\s\S]+adult:/,
@@ -2383,8 +2418,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native player controls should keep playback centered with secondary controls on the right');
   assert.match(android, /leftControls\.addView\(nativeGuideBtn\);[\s\S]+centerControls\.addView\(nativeRewBtn\);[\s\S]+centerControls\.addView\(nativePlayBtn\);[\s\S]+centerControls\.addView\(nativeFwdBtn\);[\s\S]+centerControls\.addView\(nativeNextBtn\);[\s\S]+rightControls\.addView\(nativeCcBtn\);[\s\S]+rightControls\.addView\(nativeAudioBtn\);[\s\S]+rightControls\.addView\(nativeQualityBtn\);[\s\S]+rightControls\.addView\(nativeStatsBtn\);/,
     'native player should keep Guide left, playback centered, and CC/audio/HD before the final stats/info button');
-  assert.match(android, /return new View\[\]\{\s+nativeGuideBtn, nativeRewBtn, nativePlayBtn, nativeLiveBtn, nativeFwdBtn,\s+nativeNextBtn, nativeFavBtn, nativeCcBtn, nativeAudioBtn, nativeQualityBtn, nativeStatsBtn\s+\};/,
-    'native player D-pad traversal (View[] — the Go-live LIVE pill is a TextView) must include nativeFavBtn and nativeLiveBtn');
+  assert.match(android, /return new View\[\]\{\s+nativeGuideBtn, nativeRewBtn, nativePlayBtn, nativeLiveBtn, nativeFwdBtn,\s+nativeNextBtn, nativeFavBtn, nativeCcBtn, nativeAudioBtn, nativeCastBtn, nativeQualityBtn, nativeStatsBtn\s+\};/,
+    'native player D-pad traversal (View[] — the Go-live LIVE pill is a TextView) must include nativeFavBtn, nativeLiveBtn, and the Cast button');
   // Native live: a red "LIVE" text pill (matching the web overlay) — NOT a skip icon — that seeks to
   // the live edge. It is a TextView, which is why nativeControlButtons() is View[] not ImageButton[].
   assert.match(android, /nativeLiveBtn = new TextView\(this\);[\s\S]*?SpannableString liveLabel = new android\.text\.SpannableString\("● LIVE"\)[\s\S]*?ForegroundColorSpan\(0xFFFF5A5A\)[\s\S]*?nativeLiveBtn\.setText\(liveLabel\)[\s\S]*?nativeLiveBtn\.setBackground\(nativeButtonBg\(false, false\)\)/,

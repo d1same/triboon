@@ -199,6 +199,7 @@ public class MainActivity extends Activity {
     private ImageButton nativeAudioBtn;
     private ImageButton nativeQualityBtn;
     private ImageButton nativeStatsBtn;
+    private ImageButton nativeCastBtn;
     private ImageButton nativeNextBtn;
     private ImageButton nativeFavBtn;
     private TextView nativeLiveBtn;          // live: red "LIVE" pill — jump back to the live edge
@@ -300,6 +301,15 @@ public class MainActivity extends Activity {
     private static final long NATIVE_LIVE_STARTUP_STALL_RECOVERY_MS = 12000L;
     private static final long NATIVE_LIVE_RECOVERY_COOLDOWN_MS = 15000L;
     private static final int NATIVE_LIVE_READ_TIMEOUT_MS = 60000;
+    // ---- Google Cast (sender) ----
+    private com.google.android.gms.cast.framework.CastContext castContext;
+    private com.google.android.gms.cast.framework.SessionManagerListener<com.google.android.gms.cast.framework.CastSession> castSessionListener;
+    private com.google.android.gms.cast.framework.CastStateListener castStateListener;
+    private com.google.android.gms.cast.framework.media.RemoteMediaClient.ProgressListener castProgress;
+    private com.google.android.gms.cast.framework.media.RemoteMediaClient.Callback castCallback;
+    private boolean castUnavailable;   // Play Services / SDK missing → never retry, keep the button hidden
+    private boolean castHasDevices;    // a Cast route is discoverable right now (updated by castStateListener)
+    private String castPendingJson;    // stream intent held until the picked session connects
     private final Handler nativeProgress = new Handler(Looper.getMainLooper());
     private final Runnable nativeSubtitleTick = new Runnable() {
         @Override public void run() {
@@ -403,6 +413,8 @@ public class MainActivity extends Activity {
             web.onResume();
             web.resumeTimers();
         }
+        // Lazily bring up Google Cast (guarded on Play Services; a no-op on degoogled/Fire boxes).
+        try { castCtx(); } catch (Throwable ignored) {}
         scheduleTvFocusRecovery("resume");
         // Returned from granting "install unknown apps"? Continue the update the user already started,
         // so they never have to press Update a second time.
@@ -1369,6 +1381,30 @@ public class MainActivity extends Activity {
                 if (!trustedBridgeOrigin()) return;
                 musicPlaying = false;
                 runOnUiThread(MainActivity.this::stopMusicService);
+            }
+            // Google Cast (sender): the web player's Cast button routes here when running in the app.
+            // castRequest shows the route picker + loads the stream on the receiver; the web reflects
+            // cast state via window.__tvCast(...). VOD only (the web gates Live TV out).
+            @android.webkit.JavascriptInterface
+            public void castRequest(String json) {
+                if (!trustedBridgeOrigin()) return;
+                runOnUiThread(() -> handleCastRequest(json));
+            }
+            @android.webkit.JavascriptInterface
+            public void castControl(String action) { // "play" | "pause" | "seek:<seconds>"
+                if (!trustedBridgeOrigin()) return;
+                runOnUiThread(() -> handleCastControl(action));
+            }
+            @android.webkit.JavascriptInterface
+            public void castStop() {
+                if (!trustedBridgeOrigin()) return;
+                runOnUiThread(MainActivity.this::handleCastStop);
+            }
+            // Is a Cast device discoverable right now? Cached flag updated on the UI thread by the
+            // CastStateListener (this runs on the JS bridge thread, so it must not init CastContext).
+            @android.webkit.JavascriptInterface
+            public boolean castAvailable() {
+                return castHasDevices;
             }
         }, "TriboonTV");
 
@@ -3109,6 +3145,11 @@ public class MainActivity extends Activity {
         nativeAudioBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) showNativeTrackMenu(C.TRACK_TYPE_AUDIO); });
         rightControls.addView(nativeAudioBtn);
 
+        nativeCastBtn = nativeButton(R.drawable.ic_player_cast, "Cast to TV", false);
+        nativeCastBtn.setVisibility(View.GONE); // shown by updateNativeCastButton when a Cast device is available
+        nativeCastBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) castCurrentNativeVideo(); });
+        rightControls.addView(nativeCastBtn);
+
         nativeQualityBtn = nativeButton(R.drawable.ic_player_quality, "Quality", false);
         nativeQualityBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) showNativeQualityMenu(); });
         rightControls.addView(nativeQualityBtn);
@@ -4430,7 +4471,7 @@ public class MainActivity extends Activity {
     private View[] nativeControlButtons() {
         return new View[]{
                 nativeGuideBtn, nativeRewBtn, nativePlayBtn, nativeLiveBtn, nativeFwdBtn,
-                nativeNextBtn, nativeFavBtn, nativeCcBtn, nativeAudioBtn, nativeQualityBtn, nativeStatsBtn
+                nativeNextBtn, nativeFavBtn, nativeCcBtn, nativeAudioBtn, nativeCastBtn, nativeQualityBtn, nativeStatsBtn
         };
     }
 
@@ -4728,8 +4769,19 @@ public class MainActivity extends Activity {
         }
     }
 
+    // Show the native Cast button only for VOD when a Cast route is discoverable and we're not
+    // already casting (while casting, local playback is stopped and the web OSD is the remote).
+    private void updateNativeCastButton() {
+        if (nativeCastBtn == null) return;
+        runOnUiThread(() -> {
+            if (nativeCastBtn == null) return;
+            boolean show = castHasDevices && !castActive() && "video".equals(nativeMode) && nativePlayerOpen();
+            nativeCastBtn.setVisibility(show ? View.VISIBLE : View.GONE);
+        });
+    }
     private void updateNativeChrome() {
         if (nativePlayer == null || nativeSeek == null || nativeTime == null) return;
+        updateNativeCastButton();
         long pos = nativePosSeconds();
         long dur = nativeDurSeconds();
         boolean isLive = "live".equals(nativeMode);
@@ -6518,6 +6570,224 @@ public class MainActivity extends Activity {
         }, 40);
     }
 
+    /* ============ Google Cast (sender) ============ */
+    // Lazy CastContext init on the UI thread, guarded on Google Play Services so degoogled / Fire /
+    // sideloaded boxes never crash — they simply never show a Cast button. All Cast SDK callbacks
+    // (session/state/progress) fire on the main thread; we still wrap web pushes in runOnUiThread.
+    private com.google.android.gms.cast.framework.CastContext castCtx() {
+        if (castUnavailable) return null;
+        if (castContext != null) return castContext;
+        try {
+            int gp = com.google.android.gms.common.GoogleApiAvailability.getInstance()
+                    .isGooglePlayServicesAvailable(this);
+            if (gp != com.google.android.gms.common.ConnectionResult.SUCCESS) { castUnavailable = true; return null; }
+            castContext = com.google.android.gms.cast.framework.CastContext.getSharedInstance(this);
+            installCastListeners();
+            return castContext;
+        } catch (Throwable t) {
+            castUnavailable = true;
+            Log.w(TAG, "Cast unavailable: " + nativeThrowableMessage(t));
+            return null;
+        }
+    }
+    private void installCastListeners() {
+        if (castContext == null) return;
+        if (castStateListener == null) castStateListener = newState -> {
+            castHasDevices = newState != com.google.android.gms.cast.framework.CastState.NO_DEVICES_AVAILABLE;
+            updateNativeCastButton();
+        };
+        if (castSessionListener == null) castSessionListener = new CastSessionWatcher();
+        try {
+            castContext.addCastStateListener(castStateListener);
+            castHasDevices = castContext.getCastState() != com.google.android.gms.cast.framework.CastState.NO_DEVICES_AVAILABLE;
+            castContext.getSessionManager().addSessionManagerListener(
+                    castSessionListener, com.google.android.gms.cast.framework.CastSession.class);
+        } catch (Throwable ignored) {}
+        updateNativeCastButton();
+    }
+    private void removeCastListeners() {
+        if (castContext == null) return;
+        try { if (castStateListener != null) castContext.removeCastStateListener(castStateListener); } catch (Throwable ignored) {}
+        try { if (castSessionListener != null) castContext.getSessionManager().removeSessionManagerListener(
+                castSessionListener, com.google.android.gms.cast.framework.CastSession.class); } catch (Throwable ignored) {}
+    }
+    private com.google.android.gms.cast.framework.CastSession currentCastSession() {
+        try { return castContext == null ? null : castContext.getSessionManager().getCurrentCastSession(); }
+        catch (Throwable t) { return null; }
+    }
+    private boolean castActive() {
+        com.google.android.gms.cast.framework.CastSession s = currentCastSession();
+        return s != null && s.isConnected();
+    }
+    // Cast whatever the native player is currently showing (VOD only). Captures the live position so
+    // the receiver resumes where the phone left off.
+    private void castCurrentNativeVideo() {
+        if (castCtx() == null) { pushCastError("Casting is not available on this device"); return; }
+        if (nativePlayer == null || !"video".equals(nativeMode)) return;
+        String url = "";
+        try {
+            androidx.media3.common.MediaItem mi = nativePlayer.getCurrentMediaItem();
+            if (mi != null && mi.localConfiguration != null && mi.localConfiguration.uri != null) url = mi.localConfiguration.uri.toString();
+        } catch (Throwable ignored) {}
+        if (url.isEmpty()) { pushCastError("No stream to cast"); return; }
+        String title = nativeChromeTitle != null && nativeChromeTitle.getText() != null ? nativeChromeTitle.getText().toString() : "Triboon";
+        org.json.JSONObject j = new org.json.JSONObject();
+        try { j.put("url", url); j.put("title", title); j.put("position", nativePosSeconds()); j.put("contentType", "video/mp4"); } catch (Throwable ignored) {}
+        handleCastRequest(j.toString());
+    }
+    private void handleCastRequest(String json) {
+        com.google.android.gms.cast.framework.CastContext ctx = castCtx();
+        if (ctx == null) { pushCastError("Casting is not available on this device"); return; }
+        castPendingJson = (json == null ? "{}" : json);
+        com.google.android.gms.cast.framework.CastSession cur = currentCastSession();
+        if (cur != null && cur.isConnected()) { String j = castPendingJson; castPendingJson = null; loadCastMedia(cur, j); }
+        else showCastRoutePicker();
+    }
+    // Show the MediaRouter chooser through an AppCompat-themed ContextThemeWrapper so the app-wide
+    // theme stays ink-black DeviceDefault (no white flash). On route selection the Cast framework
+    // auto-starts a CastSession → CastSessionWatcher.onSessionStarted loads the pending media.
+    private void showCastRoutePicker() {
+        try {
+            android.view.ContextThemeWrapper ctw = new android.view.ContextThemeWrapper(
+                    this, androidx.appcompat.R.style.Theme_AppCompat_DayNight_Dialog);
+            androidx.mediarouter.app.MediaRouteChooserDialog dialog =
+                    new androidx.mediarouter.app.MediaRouteChooserDialog(ctw);
+            dialog.setRouteSelector(new androidx.mediarouter.media.MediaRouteSelector.Builder()
+                    .addControlCategory(com.google.android.gms.cast.CastMediaControlIntent.categoryForCast(
+                            com.google.android.gms.cast.CastMediaControlIntent.DEFAULT_MEDIA_RECEIVER_APPLICATION_ID))
+                    .build());
+            dialog.show();
+        } catch (Throwable t) {
+            Log.w(TAG, "Cast picker failed: " + nativeThrowableMessage(t));
+            pushCastError("Could not open the Cast menu");
+        }
+    }
+    private void loadCastMedia(com.google.android.gms.cast.framework.CastSession session, String json) {
+        if (session == null) return;
+        com.google.android.gms.cast.framework.media.RemoteMediaClient rmc = session.getRemoteMediaClient();
+        if (rmc == null) { pushCastError("Cast device is not ready"); return; }
+        String url, title, poster, contentType; long posMs;
+        try {
+            org.json.JSONObject j = new org.json.JSONObject(json == null ? "{}" : json);
+            url = j.optString("url", "");
+            title = j.optString("title", "Triboon");
+            poster = j.optString("poster", "");
+            contentType = j.optString("contentType", "video/mp4");
+            posMs = Math.max(0L, (long) (j.optDouble("position", 0) * 1000));
+        } catch (Throwable t) { pushCastError("Bad cast request"); return; }
+        if (url.isEmpty()) { pushCastError("No stream URL to cast"); return; }
+        // Stop local ExoPlayer so we never double-play; false = do NOT tell the web playback ended
+        // (the web keeps its player open to render the cast OSD state).
+        closeNativePlayback(false);
+        com.google.android.gms.cast.MediaMetadata md =
+                new com.google.android.gms.cast.MediaMetadata(com.google.android.gms.cast.MediaMetadata.MEDIA_TYPE_MOVIE);
+        md.putString(com.google.android.gms.cast.MediaMetadata.KEY_TITLE, title);
+        if (!poster.isEmpty()) { try { md.addImage(new com.google.android.gms.common.images.WebImage(android.net.Uri.parse(poster))); } catch (Throwable ignored) {} }
+        com.google.android.gms.cast.MediaInfo info = new com.google.android.gms.cast.MediaInfo.Builder(url)
+                .setStreamType(com.google.android.gms.cast.MediaInfo.STREAM_TYPE_BUFFERED)
+                .setContentType(contentType)
+                .setMetadata(md)
+                .build();
+        com.google.android.gms.cast.MediaLoadRequestData req =
+                new com.google.android.gms.cast.MediaLoadRequestData.Builder()
+                        .setMediaInfo(info).setAutoplay(true).setCurrentTime(posMs).build();
+        attachCastMediaListeners(rmc);
+        try { rmc.load(req); } catch (Throwable t) { pushCastError("Cast could not load this title"); return; }
+        pushCast("connected", session);
+    }
+    private void attachCastMediaListeners(com.google.android.gms.cast.framework.media.RemoteMediaClient rmc) {
+        if (rmc == null) return;
+        if (castProgress == null) castProgress = (pos, dur) -> pushCastProgress();
+        if (castCallback == null) castCallback = new com.google.android.gms.cast.framework.media.RemoteMediaClient.Callback() {
+            @Override public void onStatusUpdated() { pushCastProgress(); }
+        };
+        try { rmc.removeProgressListener(castProgress); } catch (Throwable ignored) {}
+        try { rmc.unregisterCallback(castCallback); } catch (Throwable ignored) {}
+        try { rmc.addProgressListener(castProgress, 1000); rmc.registerCallback(castCallback); } catch (Throwable ignored) {}
+    }
+    private void detachCastMediaListeners() {
+        com.google.android.gms.cast.framework.CastSession s = currentCastSession();
+        com.google.android.gms.cast.framework.media.RemoteMediaClient rmc = (s == null) ? null : s.getRemoteMediaClient();
+        if (rmc == null) return;
+        try { if (castProgress != null) rmc.removeProgressListener(castProgress); } catch (Throwable ignored) {}
+        try { if (castCallback != null) rmc.unregisterCallback(castCallback); } catch (Throwable ignored) {}
+    }
+    private void handleCastControl(String action) {
+        com.google.android.gms.cast.framework.CastSession s = currentCastSession();
+        com.google.android.gms.cast.framework.media.RemoteMediaClient rmc = (s == null) ? null : s.getRemoteMediaClient();
+        if (rmc == null || action == null) return;
+        try {
+            if ("play".equals(action)) rmc.play();
+            else if ("pause".equals(action)) rmc.pause();
+            else if (action.startsWith("seek:")) {
+                long ms = (long) (Double.parseDouble(action.substring(5)) * 1000);
+                rmc.seek(new com.google.android.gms.cast.MediaSeekOptions.Builder().setPosition(Math.max(0, ms)).build());
+            }
+        } catch (Throwable ignored) {}
+    }
+    private void handleCastStop() {
+        try { if (castContext != null) castContext.getSessionManager().endCurrentSession(true); } catch (Throwable ignored) {}
+    }
+    private String castStateName(int playerState) {
+        switch (playerState) {
+            case com.google.android.gms.cast.MediaStatus.PLAYER_STATE_PLAYING: return "playing";
+            case com.google.android.gms.cast.MediaStatus.PLAYER_STATE_PAUSED: return "paused";
+            case com.google.android.gms.cast.MediaStatus.PLAYER_STATE_BUFFERING: return "buffering";
+            case com.google.android.gms.cast.MediaStatus.PLAYER_STATE_IDLE: return "idle";
+            default: return "unknown";
+        }
+    }
+    private void pushCastProgress() {
+        com.google.android.gms.cast.framework.CastSession s = currentCastSession();
+        com.google.android.gms.cast.framework.media.RemoteMediaClient rmc = (s == null) ? null : s.getRemoteMediaClient();
+        pushCast(rmc != null ? castStateName(rmc.getPlayerState()) : "unknown", s);
+    }
+    private void pushCast(String state, com.google.android.gms.cast.framework.CastSession s) {
+        if (web == null) return;
+        com.google.android.gms.cast.framework.media.RemoteMediaClient rmc = (s != null) ? s.getRemoteMediaClient() : null;
+        long posSec = 0, durSec = 0; String device = "";
+        try {
+            if (rmc != null) { posSec = rmc.getApproximateStreamPosition() / 1000; durSec = rmc.getStreamDuration() / 1000; }
+            if (s != null && s.getCastDevice() != null) device = s.getCastDevice().getFriendlyName();
+        } catch (Throwable ignored) {}
+        org.json.JSONObject j = new org.json.JSONObject();
+        try {
+            j.put("connected", s != null && s.isConnected());
+            j.put("device", device == null ? "" : device);
+            j.put("position", posSec);
+            j.put("duration", durSec);
+            j.put("state", state == null ? "" : state);
+        } catch (Throwable ignored) {}
+        final String payload = j.toString();
+        runOnUiThread(() -> { if (web != null) web.evaluateJavascript("window.__tvCast && window.__tvCast(" + payload + ")", null); });
+    }
+    private void pushCastError(String msg) {
+        if (web == null) return;
+        final String m = msg == null ? "" : msg;
+        runOnUiThread(() -> { if (web != null) web.evaluateJavascript("window.__tvCastError && __tvCastError(" + org.json.JSONObject.quote(m) + ")", null); });
+    }
+    private final class CastSessionWatcher implements com.google.android.gms.cast.framework.SessionManagerListener<com.google.android.gms.cast.framework.CastSession> {
+        @Override public void onSessionStarted(com.google.android.gms.cast.framework.CastSession s, String id) {
+            if (castPendingJson != null) { String j = castPendingJson; castPendingJson = null; loadCastMedia(s, j); }
+            else { attachCastMediaListeners(s.getRemoteMediaClient()); pushCast("connected", s); }
+            updateNativeCastButton();
+        }
+        @Override public void onSessionResumed(com.google.android.gms.cast.framework.CastSession s, boolean wasSuspended) {
+            attachCastMediaListeners(s.getRemoteMediaClient()); pushCast("connected", s); updateNativeCastButton();
+        }
+        @Override public void onSessionEnded(com.google.android.gms.cast.framework.CastSession s, int error) {
+            detachCastMediaListeners();
+            updateNativeCastButton();
+            if (web != null) runOnUiThread(() -> { if (web != null) web.evaluateJavascript("window.__tvCast && window.__tvCast({\"connected\":false})", null); });
+        }
+        @Override public void onSessionStarting(com.google.android.gms.cast.framework.CastSession s) {}
+        @Override public void onSessionStartFailed(com.google.android.gms.cast.framework.CastSession s, int error) { pushCastError("Cast connection failed"); }
+        @Override public void onSessionResuming(com.google.android.gms.cast.framework.CastSession s, String id) {}
+        @Override public void onSessionResumeFailed(com.google.android.gms.cast.framework.CastSession s, int error) {}
+        @Override public void onSessionSuspended(com.google.android.gms.cast.framework.CastSession s, int reason) {}
+        @Override public void onSessionEnding(com.google.android.gms.cast.framework.CastSession s) {}
+    }
+
     // ---------- first-run / connection-error screen ----------
     private void buildSetupScreen() {
         setup = new LinearLayout(this);
@@ -7082,6 +7352,10 @@ public class MainActivity extends Activity {
         }
         releaseNativePlayer(false);
         setPhonePlaybackOrientation(false);
+        // Detach Cast listeners so the framework doesn't hold this Activity (do NOT end the session —
+        // the user expects the TV to keep playing after leaving the app).
+        detachCastMediaListeners();
+        removeCastListeners();
         disposeWebView(web, false);
         if (speech != null) { speech.destroy(); speech = null; }
         stopMusicService(); // tear down the media notification + foreground service with the app

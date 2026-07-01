@@ -10681,7 +10681,8 @@ async function closePlayer(opts = {}) {
   // Backing out of the player while casting stops the TV too (don't leave it playing an orphaned stream).
   if (S.playing && S.playing.castingActive && !opts._fromCast) {
     S.playing.castingActive = false;
-    try { const s = _castCtx && _castCtx.getCurrentSession(); if (s) s.endSession(true); } catch {}
+    try { const s = _castCtx && _castCtx.getCurrentSession(); if (s) s.endSession(true); } catch {} // browser Cast SDK
+    try { if (window.TriboonTV && TriboonTV.castStop) TriboonTV.castStop(); } catch {}                // native app bridge
   }
   const finishedTarget = opts && opts.ended ? playbackFinishedDetailTarget(closingItem) : null;
   const finalWatch = saveWatch(true);
@@ -10798,7 +10799,11 @@ function activePlayerVideo() {
   return liveSplitEnabled() && liveSplitActivePane() === 1 ? $('liveSplitVideo') : $('video');
 }
 function togglePlay() {
-  if (S.playing && S.playing.castingActive) { if (_castRpc) { try { _castRpc.playOrPause(); } catch {} } updPP(); return; }
+  if (S.playing && S.playing.castingActive) {
+    if (_castRpc) { try { _castRpc.playOrPause(); } catch {} }                                   // browser Cast SDK
+    else if (window.TriboonTV && TriboonTV.castControl) { try { TriboonTV.castControl(S.playing.castPaused ? 'play' : 'pause'); } catch {} } // native app bridge
+    updPP(); return;
+  }
   const v = activePlayerVideo();
   if (!v.src) return;
   const live = !!(S.playing && S.playing.item && S.playing.item.type === 'live');
@@ -10811,7 +10816,8 @@ function togglePlay() {
   updPP();
 }
 function updPP() {
-  const paused = (S.playing && S.playing.castingActive && _castRp) ? _castRp.isPaused : activePlayerVideo().paused;
+  const casting = S.playing && S.playing.castingActive;
+  const paused = casting ? (_castRp ? _castRp.isPaused : !!S.playing.castPaused) : activePlayerVideo().paused;
   $('ppIcon').innerHTML = paused ? '<path d="M8 5v14l11-7z"/>' : '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>';
 }
 let _playerSurfaceClickT = null;
@@ -11023,6 +11029,7 @@ function seekTo(seconds) {
   seconds = Math.max(0, seconds);
   if (p.castingActive) { // seek the TV, not the idle local element
     if (_castRp && _castRpc) { try { _castRp.currentTime = seconds; _castRpc.seek(); p.castPos = seconds; } catch {} }
+    else if (window.TriboonTV && TriboonTV.castControl) { try { TriboonTV.castControl('seek:' + Math.floor(seconds)); p.castPos = seconds; } catch {} }
     showOsd(); return;
   }
   p.suppressSeekLoaderUntil = appMs() + 4500;
@@ -12411,6 +12418,27 @@ function initAirPlay() {
 $('castBtn').addEventListener('click', startCast);
 initCastSender();
 initAirPlay();
+// Native app cast (Phase 3): the Android shell casts via its own Cast SDK and pushes receiver state
+// here, feeding the SAME p.cast* fields the browser path uses — so the OSD, seek bar, and the
+// watch/Trakt heartbeat all keep working. The native player is stopped shell-side (no double-play).
+window.__tvCast = (o) => {
+  const p = S.playing; if (!p) return;
+  if (!o || !o.connected) {
+    // Cast session ended: close the player. The heartbeat + this session's final save captured the
+    // receiver position, so reopening the title resumes where the TV left off. _fromCast avoids a
+    // redundant stop and keeps castingActive set while saveWatch reads the receiver clock.
+    try { closePlayer({ _fromCast: true }); } catch {}
+    return;
+  }
+  if (!p.castingActive) { p.castingActive = true; try { $('video').pause(); } catch {} }
+  if (typeof o.position === 'number') p.castPos = o.position;
+  if (o.duration) p.castDuration = o.duration;
+  p.castPaused = (o.state === 'paused' || o.state === 'idle');
+  S.castDeviceName = o.device || 'TV';
+  $('pHealth').innerHTML = `<span class="chip">Casting to ${esc(S.castDeviceName)}</span>`;
+  updPP(); showOsd();
+};
+window.__tvCastError = (m) => { try { toast('Cast: ' + m); } catch {} };
 
 /* ---- clocks: time-of-day (app + player) and "Ends at" ---- */
 function clockStr(d) {
