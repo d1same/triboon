@@ -13854,7 +13854,11 @@ async function fetchGuideBatch(chans) {
         const syntheticOnly = !channels.some((c) => (c.programmes || []).some((p) => p && !p.synthetic));
         guideMemo.set(key, { at: Date.now(), data: serverData, syntheticOnly });
         data = { ...data, ...serverData };
-      } catch {}
+      } catch (e) {
+        // Only a genuine list change reaches here now (the server self-heals drifted indices).
+        // Refresh the channel list so the guide recovers instead of staying blank.
+        if (e && e.status === 409) scheduleLiveChannelResync();
+      }
     }
   }
   if (personal.length) data = { ...data, ...(await fetchPersonalGuideBatch(personal)) };
@@ -14058,6 +14062,16 @@ window.__tvTrimMemory = () => {
     S.musicCoverFeedCache = {};
   } catch {}
 };
+// A guide fetch that 409s ("channel list changed") means our cached channel indices no longer
+// line up with the server (a source was added/removed/reordered). Drop the stale channel cache
+// and re-render Live TV once — bounded so a persistent mismatch can't spin a reload loop.
+function scheduleLiveChannelResync() {
+  const now = Date.now();
+  if (now - (S._liveResyncAt || 0) < 10000) return;
+  S._liveResyncAt = now;
+  clearLiveClientCaches({ channels: true });
+  if (S.view === 'livetv') { try { loadLiveTv(); } catch {} }
+}
 function fillLiveState(r) {
   S.liveEpg = !!r.epg;
   // Picking a category shows its channels AS A GUIDE LIST by default (owner request) —

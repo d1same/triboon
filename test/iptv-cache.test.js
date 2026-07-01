@@ -135,6 +135,55 @@ http://upstream.example/cache-news.m3u8
   }
 });
 
+test('iptv: guide self-heals a drifted channel index by resolving the stable id', async () => {
+  const pad = (n) => String(n).padStart(2, '0');
+  const stamp = (d) => `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00 +0000`;
+  const t0 = new Date(Date.now() - 10 * 60000);
+  const t1 = new Date(Date.now() + 50 * 60000);
+  const m3u = `#EXTM3U
+#EXTINF:-1 tvg-id="news.one" group-title="News",News One
+http://upstream.example/news-one.m3u8
+#EXTINF:-1 tvg-id="sports.two" group-title="Sports",Sports Two
+http://upstream.example/sports-two.m3u8
+`;
+  const xmltv = `<?xml version="1.0"?><tv>
+<programme start="${stamp(t0)}" stop="${stamp(t1)}" channel="news.one"><title>Morning News</title></programme>
+<programme start="${stamp(t0)}" stop="${stamp(t1)}" channel="sports.two"><title>Match Day</title></programme>
+</tv>`;
+  const upstream = http.createServer((req, res) => {
+    res.writeHead(200);
+    res.end(req.url.includes('guide') ? xmltv : m3u);
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${upstream.address().port}`;
+  const srv = await bootServer({ NNTP_HOST: null, TMDB_BASE: null });
+  try {
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/settings',
+      { iptvMode: 'm3u', iptvUrl: `${base}/list.m3u`, epgUrl: `${base}/guide.xml` }, admin);
+    await srv.warmIptvCaches('test');
+    const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    const chans = ch.json.channels;
+    assert.ok(chans.length >= 2, 'need two channels for the drift case');
+    // Ask for index 1 but supply channel 0's STABLE id — the classic drifted-index race after a
+    // source add/remove reorders the cache. The server must resolve by id (not 409) and echo the
+    // programmes back under the REQUESTED idx so the client can still key them to its own row.
+    const requestedIdx = chans[1].idx;
+    const drifted = await httpJson(srv.port, 'GET',
+      `/api/iptv/guide?chs=${requestedIdx}&cids=${encodeURIComponent(chans[0].id)}`, null, admin);
+    assert.strictEqual(drifted.status, 200, 'a resolvable stable id must not 409');
+    assert.strictEqual(drifted.json.channels[0].idx, requestedIdx, 'programmes echo back under the requested idx');
+    assert.strictEqual(drifted.json.channels[0].programmes[0].title, 'Morning News', 'resolved by channel 0 stable id');
+    // A cid that matches NO channel is a genuine list change and must still 409.
+    const gone = await httpJson(srv.port, 'GET',
+      `/api/iptv/guide?chs=${requestedIdx}&cids=this-channel-is-gone`, null, admin);
+    assert.strictEqual(gone.status, 409, 'an unresolvable stable id still signals reopen Live TV');
+  } finally {
+    await srv.shutdown();
+    upstream.close();
+  }
+});
+
 test('iptv: admin sync status and refresh report channel and guide cache health', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-iptv-sync-status-'));
   const pad = (n) => String(n).padStart(2, '0');
@@ -1449,8 +1498,10 @@ test('iptv: live remux bad-channel probes stay bounded', () => {
     'browser live-remux first-byte waits should fail fast enough for channel zapping');
   assert.match(src, /const IPTV_NATIVE_FIRST_BYTE_TIMEOUT_MS = 10000;/,
     'native IPTV proxy should also fail fast when a provider accepts but sends no media');
-  assert.match(src, /const startupDeadline = Date\.now\(\) \+ LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS;[\s\S]+startupTimedOut[\s\S]+finishLiveStartupTimeout/,
-    'browser remux retries should share one total startup deadline instead of chaining indefinitely');
+  assert.match(src, /const overallDeadline = Date\.now\(\) \+ LIVE_REMUX_TOTAL_STARTUP_BUDGET_MS;[\s\S]+const overallRemaining = \(\) => overallDeadline - Date\.now\(\);/,
+    'browser remux startup is bounded by one overall cap so retries cannot chain indefinitely');
+  assert.match(src, /if \(overallRemaining\(\) <= 0\) return finishLiveStartupTimeout\(target\);/,
+    'the overall startup cap (not a per-attempt budget) is what ends startup with a 504');
   assert.match(src, /req\.setTimeout\(2500, \(\) => req\.destroy\(new Error\('live remux redirect probe timeout'\)\)\)/,
     'redirect detection should not stall a dead IPTV stream for many seconds');
   assert.match(src, /!target\.redirectProbeFailed[\s\S]+target\.redirectProbeFailed = true;/,

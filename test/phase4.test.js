@@ -1066,6 +1066,28 @@ test('Android native player: direct source and native chrome stay out of the web
   const idxSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
   assert.match(idxSrc, /TRIBOON_ALLOW_PRIVATE_IPTV is ENABLED/,
     'a startup warning fires when IPTV SSRF protection is disabled via env');
+  // Live TV / IPTV resilience batch: shorter provider-protection backoff, UA-scoped negative cache
+  // that clears on success, stale guide-block expiry, delete-race tombstone, and per-attempt startup.
+  assert.match(idxSrc, /const IPTV_PROVIDER_PROTECTION_ERROR_TTL_MS = 90000;/,
+    'provider bot-protection backoff is a short 90s so recovered providers/channels come back fast');
+  assert.match(idxSrc, /Provider accepted this identity[\s\S]+iptvNativeErrorCache\.delete\(failureKey\);/,
+    'a successful IPTV native response clears the stale negative cache entry');
+  assert.match(idxSrc, /const rawBlocked = Number\(raw\.guideBlockedUntil\) \|\| 0;\s*\n\s*const guideBlockedUntil = rawBlocked > Date\.now\(\) \? rawBlocked : 0;/,
+    'a re-added/restarted Xtream source does not inherit an expired guide-protection block');
+  assert.match(idxSrc, /function persistXtreamEpgCache[\s\S]+if \(cache && cache\._deleted\) return;/,
+    'a guide fetch resolving after source deletion cannot re-persist a stale block');
+  assert.match(idxSrc, /const staleXtream = xtreamEpgSourceCaches\.get\(id\);[\s\S]+staleXtream\._deleted = true; staleXtream\.guideBlockedUntil = 0;/,
+    'deleting an IPTV source tombstones its in-flight Xtream guide cache');
+  assert.match(idxSrc, /const LIVE_REMUX_ATTEMPT_BUDGET_MS = LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS;\s*\nconst LIVE_REMUX_TOTAL_STARTUP_BUDGET_MS = 30000;/,
+    'Live TV startup uses a per-attempt first-byte budget bounded by an overall cap');
+  assert.match(idxSrc, /const beginAttemptBudget = \(\) => \{ attemptDeadline = Date\.now\(\) \+ LIVE_REMUX_ATTEMPT_BUDGET_MS; \};/,
+    'each Live TV source/retry gets its own first-byte window so a slow source cannot starve alternates');
+  assert.match(idxSrc, /if \(codeNum && !wrote && overallRemaining\(\) <= 0\) return finishLiveStartupTimeout\(target\);/,
+    'only the overall startup cap ends Live TV startup with a 504 — a spent per-attempt budget falls through to the next source');
+  assert.match(ui, /function scheduleLiveChannelResync\(\) \{[\s\S]+if \(now - \(S\._liveResyncAt \|\| 0\) < 10000\) return;[\s\S]+clearLiveClientCaches\(\{ channels: true \}\);/,
+    'a genuine guide 409 triggers a bounded (once/10s) channel-list resync so the guide recovers instead of staying blank');
+  assert.match(ui, /if \(e && e\.status === 409\) scheduleLiveChannelResync\(\);/,
+    'the guide-batch fetch wires a 409 to the bounded channel resync');
   // The native backward-jump auto-resume must require the regression to persist across 2 ticks so a
   // one-tick PTS/GOP wobble on a resumed (server-seek) stream no longer dips-and-snaps ~every 10 min.
   assert.match(android, /private void rememberNativeVideoPosition\(\) \{[\s\S]+backwardsBy > 5000L\) \{[\s\S]+\+\+nativeBackwardTicks < 2\) return;/,

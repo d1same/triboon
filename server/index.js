@@ -540,10 +540,20 @@ const IPTV_STARTUP_WARM_DELAY_MS = Math.max(5 * 60000, Math.min(30 * 60000, Numb
 const IPTV_WARM_INTERVAL_MS = 12 * 3600000;
 const IPTV_WARM_XTREAM_GUIDE_MAX = 96;
 const LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS = 12000;
+// Per-attempt first-byte budget vs the overall startup cap. Previously ONE global 12s deadline
+// was shared across every retry/alternate source, so the first (slow) source drained it and later
+// ranked sources got exponentially less time (~2s, then <500ms) — effectively no fallback. Now
+// each source/attempt gets its own budget, bounded by the overall cap so a dead multi-source
+// channel still fails in reasonable time. A single-source channel behaves exactly as before (12s).
+const LIVE_REMUX_ATTEMPT_BUDGET_MS = LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS;
+const LIVE_REMUX_TOTAL_STARTUP_BUDGET_MS = 30000;
 const LIVE_REMUX_IDLE_TIMEOUT_MS = 45000;
 const IPTV_NATIVE_FIRST_BYTE_TIMEOUT_MS = 10000;
 const IPTV_NATIVE_ERROR_TTL_MS = 30000;
-const IPTV_PROVIDER_PROTECTION_ERROR_TTL_MS = 5 * 60000;
+// Provider bot-protection / rate-limit backoff. Kept short (90s) so a provider that recovers —
+// or a channel whose URL was just refreshed — is retried quickly instead of staying dark for
+// minutes. Tunable via TRIBOON_IPTV_PROVIDER_PROTECTION_TTL_MS.
+const IPTV_PROVIDER_PROTECTION_ERROR_TTL_MS = 90000;
 const IPTV_LIVE_RETUNE_GRACE_MS = 650;
 // The ffmpeg-remux path (browser) needs ~650ms for the old ffmpeg process to exit before respawning.
 // The NATIVE proxy just destroys one Node socket (synchronous, single-digit ms on the same TCP
@@ -937,6 +947,11 @@ function clearIptvSourceRuntime(sourceId) {
   const id = cleanIptvSourceId(sourceId);
   iptvSourceCaches.delete(id);
   epgSourceCaches.delete(id);
+  // Tombstone the per-source Xtream guide cache before dropping it: an in-flight guide fetch
+  // holds this exact object and would otherwise re-persist a stale block on resolve. The
+  // _deleted flag makes persistXtreamEpgCache a no-op and neutralizes the pending block.
+  const staleXtream = xtreamEpgSourceCaches.get(id);
+  if (staleXtream) { staleXtream._deleted = true; staleXtream.guideBlockedUntil = 0; staleXtream.guideBlockedReason = ''; }
   xtreamEpgSourceCaches.delete(id);
   iptvRefreshingSources.delete(id);
   clearIptvAggregateCache();
@@ -944,7 +959,7 @@ function clearIptvSourceRuntime(sourceId) {
   // for the cached TTL (up to several minutes for provider-protection codes). It self-rebuilds.
   iptvNativeErrorCache = new Map();
   if (epgCache.sourceId === id) epgCache = { key: null, at: 0, byChannel: new Map(), byName: new Map() };
-  if (xtreamEpgCache.sourceId === id) xtreamEpgCache = { key: null, byStream: new Map() };
+  if (xtreamEpgCache.sourceId === id) { xtreamEpgCache._deleted = true; xtreamEpgCache = { key: null, byStream: new Map() }; }
 }
 function clearAllIptvRuntime() {
   iptvSourceCaches.clear();
@@ -1327,6 +1342,10 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
       console.error(`[iptv native] ${label} too many redirects`);
       return fail(502, 'too many live stream redirects');
     }
+    // Key the negative cache by endpoint (not per-UA): the attempt loop below already cycles
+    // through every playback identity before it caches, so a cached failure means the endpoint
+    // rejected ALL of them — re-trying the same identities on the next request is pointless
+    // hammering. (The cache is cleared on any successful response, and the backoff TTL is short.)
     const failureKey = idHash(`${u.protocol}//${u.host}${u.pathname}`);
     const cachedFailure = iptvNativeErrorCache.get(failureKey);
     if (cachedFailure && cachedFailure.until > Date.now()) {
@@ -1438,6 +1457,9 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
         });
         return;
       }
+      // Provider accepted this identity — drop any stale negative entry so a channel that just
+      // came back doesn't stay shadow-blocked for the remainder of the backoff TTL.
+      iptvNativeErrorCache.delete(failureKey);
       const out = {
         'content-type': r.headers['content-type'] || 'application/octet-stream',
         'cache-control': 'no-store',
@@ -2262,12 +2284,19 @@ function hydrateXtreamEpgCache(key, sourceId = IPTV_LEGACY_SOURCE_ID) {
     const at = Number(entry.at) || 0;
     if (at && Date.now() - at <= EPG_CACHE_STALE_MS) byStream.set(String(id), { at, list: entry.list });
   }
-  const guideBlockedUntil = Number(raw.guideBlockedUntil) || 0;
+  // Expire a stale provider-protection block on load: a source re-added (or the server
+  // restarted) after the block window should start fresh, not inherit a dead pause.
+  const rawBlocked = Number(raw.guideBlockedUntil) || 0;
+  const guideBlockedUntil = rawBlocked > Date.now() ? rawBlocked : 0;
   xtreamEpgCache = { key, sourceId: sid, byStream, guideBlockedUntil };
   xtreamEpgSourceCaches.set(sid, xtreamEpgCache);
   return xtreamEpgCache;
 }
 function persistXtreamEpgCache(cache = xtreamEpgCache) {
+  // A guide fetch started before the source was deleted can resolve afterward and try to
+  // re-write the disk entry we just purged — which would resurrect stale channels and, worse,
+  // a stale provider-protection block. Skip persisting a cache that was marked deleted.
+  if (cache && cache._deleted) return;
   try {
     const sourceId = cleanIptvSourceId(cache.sourceId);
     const streams = [...cache.byStream.entries()]
@@ -4544,16 +4573,31 @@ const H = {
     if (idxs.length) {
       try { await ensureIptvChannelStateForUser(ctx.user); } catch {}
     }
+    // Resolve each requested (idx, cid) to a live channel. If the index still maps to the
+    // channel the client expects, use it directly. If the cache was rebuilt (source added /
+    // removed / reordered) the index may have drifted — recover by resolving the STABLE channel
+    // id and echoing programmes back under the REQUESTED idx so the client can still key them to
+    // its rows. This self-heals the common transient-rebuild race that used to blank the guide.
+    let cidIndex = null;
     const chans = idxs.map((i, n) => {
       const ch = iptvCache.channels && iptvCache.channels[i];
-      if (!ch) return null;
-      if (cids[n] && String(ch.id) !== cids[n]) return null;
-      return ch;
+      if (ch && (!cids[n] || String(ch.id) === cids[n])) return { ch, reqIdx: i };
+      if (cids[n]) {
+        if (!cidIndex) {
+          cidIndex = new Map();
+          for (const c of iptvCache.channels || []) if (c && !cidIndex.has(String(c.id))) cidIndex.set(String(c.id), c);
+        }
+        const byId = cidIndex.get(cids[n]);
+        if (byId) return { ch: byId, reqIdx: i };
+      }
+      return null;
     }).filter(Boolean);
-    if (cids.length && chans.length !== idxs.length) return send(ctx.res, 409, { error: 'channel list changed - reopen Live TV' });
+    // Only surface a hard "reopen Live TV" when NOTHING resolved — a genuine list change. A
+    // partial resolve returns what we could find; a blank subset beats a blank whole guide.
+    if (cids.length && !chans.length) return send(ctx.res, 409, { error: 'channel list changed - reopen Live TV' });
     if (!chans.length) return send(ctx.res, 200, { channels: [] });
     const from = Date.now() - 90 * 60000, to = Date.now() + 4 * 3600000;
-    const channels = await mapLimit(chans, 8, async (ch) => {
+    const channels = await mapLimit(chans, 8, async ({ ch, reqIdx }) => {
       const src = sourceForIptvChannel(ch);
       let progs = [];
       if (src && src.iptvMode === 'xtream' && ch.xtreamId) {
@@ -4570,7 +4614,8 @@ const H = {
         const fallback = fallbackProgramme(ch, from, to);
         if (fallback) progs = [fallback];
       }
-      return { idx: ch.idx, programmes: progs.slice(0, 24) };
+      // Key by the idx the CLIENT requested so a drifted-index resolve still maps to its row.
+      return { idx: reqIdx, programmes: progs.slice(0, 24) };
     });
     send(ctx.res, 200, { from, to, channels });
   },
@@ -4634,9 +4679,14 @@ const H = {
       return sendIptvNativeError(ctx.res, cachedFailure.status, cachedFailure.reason);
     }
     const liveSlot = beginIptvLiveSlot(ctx, { idx: ch.idx, name: ch.name });
-    const startupDeadline = Date.now() + LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS;
-    const startupRemaining = () => startupDeadline - Date.now();
-    const startupTimedOut = () => startupRemaining() <= 0;
+    // Overall cap bounds the whole startup; each attempt gets its own fresh first-byte budget
+    // (reset via beginAttemptBudget) so a slow high-ranked source can't starve its alternates.
+    // startupRemaining is the tighter of the two, so timers/redirect gates respect both.
+    const overallDeadline = Date.now() + LIVE_REMUX_TOTAL_STARTUP_BUDGET_MS;
+    let attemptDeadline = Date.now() + LIVE_REMUX_ATTEMPT_BUDGET_MS;
+    const beginAttemptBudget = () => { attemptDeadline = Date.now() + LIVE_REMUX_ATTEMPT_BUDGET_MS; };
+    const overallRemaining = () => overallDeadline - Date.now();
+    const startupRemaining = () => Math.min(attemptDeadline - Date.now(), overallRemaining());
     const finishLiveStartupTimeout = (target, reason = 'live stream startup timeout') => {
       liveSlot.done('startup timeout');
       if (target && target.url) {
@@ -4656,7 +4706,8 @@ const H = {
     let targetIndex = 0;
     const attempt = async (target, hlsFriendly, retriesLeft) => {
       if (liveSlot.closed) return;
-      if (startupTimedOut()) return finishLiveStartupTimeout(target);
+      if (overallRemaining() <= 0) return finishLiveStartupTimeout(target);
+      beginAttemptBudget(); // each source/retry gets its own first-byte window, bounded by the overall cap
       let pin;
       try { pin = await validateAndPinIptvUrl(target.url, 'Live stream URL'); }
       catch (e) {
@@ -4752,7 +4803,9 @@ const H = {
         const reason = iptvNativeFailureReason(status || 502, err);
         const providerRejected = [401, 403, 429].includes(status);
         err = sanitizeIptvFfmpegError(err);
-        if (codeNum && !wrote && startupTimedOut()) return finishLiveStartupTimeout(target);
+        // Only the OVERALL cap ends startup with a 504; a spent per-attempt budget must fall
+        // through to redirect-resolve / same-url retry / the next ranked source below.
+        if (codeNum && !wrote && overallRemaining() <= 0) return finishLiveStartupTimeout(target);
         if (codeNum && !wrote && !providerRejected && !target.redirectResolved && !target.redirectProbeFailed && shouldResolveIptvRemuxRedirect(err) && !ctx.res.destroyed && startupRemaining() > 1500) {
           try {
             const redirectUrl = await resolveIptvRemuxRedirect(target.url);
@@ -4767,7 +4820,7 @@ const H = {
             console.error(`[iptv] "${ch.name}" redirect probe failed: ${sanitizeIptvLogError(e)}`);
           }
         }
-        if (codeNum && !wrote && startupTimedOut()) return finishLiveStartupTimeout(target);
+        if (codeNum && !wrote && overallRemaining() <= 0) return finishLiveStartupTimeout(target);
         if (codeNum && !wrote && !providerRejected && pin && typeof pin.onFailure === 'function') {
           try { pin.onFailure(); } catch {}
         }
@@ -4912,6 +4965,7 @@ const H = {
           up.end();
         }).catch((e) => giveUp(`blocked upstream (${sanitizeIptvLogError(e)})`));
       };
+      beginAttemptBudget(); // the TS-pipe open is its own attempt — don't let it eat the URL-remux fallback's budget
       armIdle(LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS);
       openUpstream(tsTarget, 0);
     };
