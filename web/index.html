@@ -1564,6 +1564,14 @@ body.mobileShell #home,body.mobileShell #discover,body.mobileShell #browse,body.
 body.mobileShell #person,body.mobileShell #settings,body.mobileShell #prefs,body.mobileShell #music{
   padding-left:16px!important;padding-right:16px!important}
 body.mobileShell #searchBar{left:16px;right:16px}
+/* Burger clearance for the three search bars on the phone shell. The fixed #burger sits at
+   top:14px/left:14px (42x42). 62px is the same top offset #home/#browse/#discover already use to
+   clear it; 48px is the same left inset .browseHead uses. Global + Music are position:fixed so they
+   need a TOP offset; Live TV's #chBar rides inside #browse (already 62px-clear vertically) so it
+   only needs the horizontal inset. Scoped to mobileShell → desktop/TV untouched. */
+body.mobileShell #searchBar{top:62px!important}
+body.mobileShell #music{padding-top:62px!important}
+body.mobileShell #chBar{padding-left:48px}
 body.mobileShell #home{padding:62px 16px 18px 16px!important;justify-content:flex-start}
 body.mobileShell #hero{max-width:calc(100vw - 32px);margin:0 auto 8px;padding:0;text-align:center;align-items:center}
 body.mobileShell #hero .eyebrow{margin-bottom:8px;font-size:10px;letter-spacing:.18em}
@@ -17612,25 +17620,26 @@ function syncSearchClear() {
 }
 function searchClearVisible() { return !$('searchClearBtn').hidden; }
 function focusSearchClear() { $('micBtn').blur(); $('searchInput').blur(); $('searchClearBtn').focus(); }
+// One clear action shared by the mouse click, the browser element-keydown, AND the on-device global
+// D-pad handler, so all three do exactly the same thing.
+function clearSearchQuery() { $('searchInput').value = ''; syncSearchClear(); clearSearchResults({ invalidate: true }); $('searchInput').focus(); }
 $('searchInput').addEventListener('input', () => {
   syncSearchClear();
   clearTimeout(searchTimer);
   if (!$('searchInput').value.trim()) { clearSearchResults({ invalidate: true }); return; }
   searchTimer = setTimeout(doSearch, 350);
 });
-$('searchClearBtn').addEventListener('click', () => {
-  $('searchInput').value = '';
-  syncSearchClear();
-  clearSearchResults({ invalidate: true });
-  $('searchInput').focus();
-});
-// D-pad on the clear (X): Left/Up return to the field, Down drops to results, Enter clears — mirrors Music.
+$('searchClearBtn').addEventListener('click', () => clearSearchQuery());
+// D-pad on the clear (X) in a DESKTOP BROWSER (element-targeted keydown). On Android TV the shell
+// dispatches keys to `document`, so this listener never fires there — the on-device path is the
+// `ae === searchClearBtn` case in the global keydown handler. stopPropagation keeps the browser from
+// double-handling via that same global case.
 $('searchClearBtn').addEventListener('keydown', (e) => {
   if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); $('searchClearBtn').blur(); $('searchInput').focus(); }
   else if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); $('searchClearBtn').blur(); focusSearchResultsSoon(); }
   else if (e.key === 'Enter' || e.key === 'Escape' || e.key === 'Backspace') {
     e.preventDefault(); e.stopPropagation();
-    $('searchInput').value = ''; syncSearchClear(); clearSearchResults({ invalidate: true }); $('searchInput').focus();
+    clearSearchQuery();
   }
 });
 function searchAndFocusResults() {
@@ -19939,6 +19948,12 @@ document.addEventListener('keydown', (e) => {
       searchAndFocusResults();
       return;
     }
+    // Caret at end + a query present: → steps to the clear (X). On-device this is the ONLY path that
+    // reaches it, since keys arrive on `document` and the input's own element listener never fires.
+    if (k === 'ArrowRight' && ae.selectionStart >= ae.value.length && searchClearVisible()) {
+      e.preventDefault(); ae.blur();
+      return focusSearchClear();
+    }
     if (document.body.classList.contains('tv') && (k === 'Escape' || k === 'Backspace' || (k === 'ArrowLeft' && ae.selectionStart === 0))) {
       e.preventDefault();
       ae.blur();
@@ -19965,9 +19980,12 @@ document.addEventListener('keydown', (e) => {
       e.preventDefault(); ae.blur();
       return focusLiveCategory() || focusFirstLiveContent();
     }
-    if (k === 'ArrowRight' && $('chMultiBtn') && ae.selectionStart >= ae.value.length) {
-      e.preventDefault(); ae.blur();
-      return focusLiveToolbar('chMultiBtn');
+    if (k === 'ArrowRight' && ae.selectionStart >= ae.value.length) {
+      // The X sits between the field and the Multiview button — step onto it first when a filter is
+      // typed (mirrors Music/global search), else jump straight to Multiview.
+      const clr = $('chClearBtn');
+      if (clr && !clr.hidden) { e.preventDefault(); ae.blur(); clr.focus(); return; }
+      if ($('chMultiBtn')) { e.preventDefault(); ae.blur(); return focusLiveToolbar('chMultiBtn'); }
     }
     if (document.body.classList.contains('tv') && (k === 'Escape' || k === 'Backspace' || (k === 'ArrowLeft' && ae.selectionStart === 0))) {
       e.preventDefault(); ae.blur();
@@ -20583,6 +20601,23 @@ document.addEventListener('keydown', (e) => {
       if (k === 'ArrowDown') return gridEls().length ? focusGrid(S.gridIdx || 0) : $('searchInput').focus();
       if (k === 'ArrowRight') { $('micBtn').blur(); return $('searchInput').focus(); }
       if (k === 'ArrowLeft') { $('micBtn').blur(); return enterRail(); }
+      return;
+    }
+    // Search / Live TV clear (X): on-device the shell delivers keys to `document`, so the buttons'
+    // own element listeners never fire — these cases are what make OK/arrows work on the remote.
+    if (S.view === 'search' && document.activeElement === $('searchClearBtn')) {
+      if (k === 'ArrowLeft' || k === 'ArrowUp') { $('searchClearBtn').blur(); return $('searchInput').focus(); }
+      if (k === 'ArrowDown') { $('searchClearBtn').blur(); return focusSearchResultsSoon(); }
+      if (k === 'Enter' || k === 'Escape' || k === 'Backspace') { if (!e.repeat) clearSearchQuery(); return; }
+      return;
+    }
+    if (S.view === 'livetv' && document.activeElement === $('chClearBtn')) {
+      const clr = $('chClearBtn');
+      if (k === 'Enter') { if (!e.repeat) clr.click(); return; }
+      if (k === 'ArrowLeft' || k === 'ArrowUp') { clr.blur(); return focusLiveSearchInput(); }
+      if (k === 'ArrowRight') { clr.blur(); return $('chMultiBtn') ? focusLiveToolbar('chMultiBtn') : (focusLiveCategory() || focusFirstLiveContent()); }
+      if (k === 'ArrowDown') { clr.blur(); return focusLiveCategory() || focusFirstLiveContent(); }
+      if (k === 'Escape' || k === 'Backspace') { clr.blur(); return focusLiveSearchInput(); }
       return;
     }
     // Live TV: the Multiview and Guide buttons beside the filter are TV focus stops too.

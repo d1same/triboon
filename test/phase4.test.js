@@ -535,8 +535,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'the clear (X) button styling is shared across every search field');
   assert.match(ui, /function syncSearchClear\(\) \{[\s\S]+searchClearBtn[\s\S]+toggle\('hasClear', hasText\)/,
     'global search toggles its clear button on input like Music');
-  assert.match(ui, /\$\('searchClearBtn'\)\.addEventListener\('click', \(\) => \{[\s\S]+clearSearchResults/,
-    'global search clear button empties the field and results');
+  assert.match(ui, /function clearSearchQuery\(\) \{[\s\S]+clearSearchResults\(\{ invalidate: true \}\); \$\('searchInput'\)\.focus\(\)/,
+    'a shared clearSearchQuery helper empties the field + results (browser click, element keydown, and on-device D-pad all use it)');
+  assert.match(ui, /\$\('searchClearBtn'\)\.addEventListener\('click', \(\) => clearSearchQuery\(\)\)/,
+    'global search clear button empties the field and results via the shared helper');
   assert.match(ui, /const syncChClear = \(\) => \{[\s\S]+chClearBtn[\s\S]+toggle\('hasClear', hasText\)/,
     'Live TV filter toggles its clear button on input');
   // D-pad reachability of the clear (X) on all three search fields (audit: no remote dead-ends).
@@ -548,6 +550,25 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'the global clear X returns focus to the field on Left/Up (no dead-end)');
   assert.match(ui, /if \(chClear\) chClear\.addEventListener\('keydown'[\s\S]+ArrowLeft' \|\| e\.key === 'ArrowUp'[\s\S]+input\.focus\(\)/,
     'the Live TV clear X returns focus to the filter on Left/Up');
+  // ON-DEVICE (Android TV): the shell dispatches D-pad keys to `document`, so the clear buttons' own
+  // element listeners never fire — the clear must be wired into the GLOBAL keydown handler (like
+  // Music at ae===musicClearBtn), for BOTH reaching the X and activating it. The element listeners
+  // above still serve the desktop browser; they stopPropagation so the browser never double-fires.
+  assert.match(ui, /if \(inInput && S\.view === 'search' && ae === \$\('searchInput'\)\) \{[\s\S]+k === 'ArrowRight' && ae\.selectionStart >= ae\.value\.length && searchClearVisible\(\)[\s\S]+focusSearchClear\(\)/,
+    'the GLOBAL keydown handler (not just the element listener) reaches the search clear X on-device');
+  assert.match(ui, /if \(S\.view === 'search' && document\.activeElement === \$\('searchClearBtn'\)\) \{[\s\S]+clearSearchQuery\(\)/,
+    'the GLOBAL keydown handler activates the search clear X on-device (OK clears the query)');
+  assert.match(ui, /if \(inInput && S\.view === 'livetv' && ae === \$\('chSearch'\)\) \{[\s\S]+const clr = \$\('chClearBtn'\);\s*\n\s*if \(clr && !clr\.hidden\)[\s\S]+clr\.focus\(\)/,
+    'the GLOBAL keydown handler reaches the Live TV clear X on-device before the Multiview jump');
+  assert.match(ui, /if \(S\.view === 'livetv' && document\.activeElement === \$\('chClearBtn'\)\) \{[\s\S]+if \(k === 'Enter'\) \{ if \(!e\.repeat\) clr\.click\(\)/,
+    'the GLOBAL keydown handler activates the Live TV clear X on-device (OK clears the filter)');
+  // Phone shell: the three search bars must clear the fixed burger icon (top-left overlay).
+  assert.match(ui, /body\.mobileShell #searchBar\{top:62px!important\}/,
+    'global search bar drops below the burger on the phone shell');
+  assert.match(ui, /body\.mobileShell #music\{padding-top:62px!important\}/,
+    'music search drops below the burger on the phone shell');
+  assert.match(ui, /body\.mobileShell #chBar\{padding-left:48px\}/,
+    'Live TV filter clears the burger horizontally on the phone shell');
   assert.match(ui, /if \(k === 'ArrowUp'\) return; \/\/ top of the now-playing loop/,
     'music now-playing top controls no longer fall through on ArrowUp (no focus trap)');
   // Trakt-imported resume (percent only, no position/duration) still primes the server read-ahead
