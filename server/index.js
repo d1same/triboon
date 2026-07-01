@@ -3559,9 +3559,12 @@ function musicHomeFeedShelves() {
     { id: 'weekly-playlists', title: 'Top playlists this week', kind: 'feeds', note: 'Weekly picks only, kept short so Music opens quickly.', refresh: 'weekly', items: MUSIC_HOME_WEEKLY_FEEDS },
   ];
 }
-// Turn ytmusicapi get_home rows (personalised: "Mixed for you", "Listen again", recommended mixes)
-// into Triboon shelves. Song rows → a playable `tracks` shelf; playlist rows → an openable `feeds`
-// shelf (each tile carries a playlistId). Rows too thin to be useful are dropped.
+// Turn ytmusicapi get_home rows into Triboon shelves — PLAYLIST/ALBUM rows only. get_home's
+// video/song rows ("Keep listening", "Listen again", "Your daily discover") are music videos +
+// podcast EPISODES (MUSIC_VIDEO_TYPE_PODCAST_EPISODE), which play poorly in an audio-first app, so
+// any item carrying a videoId is dropped. Podcast/show browse items (no playable list) fall away
+// too. Each kept tile opens a real list via playlistId OR audioPlaylistId (albums). "Top songs
+// this week" (search-based songs) still comes from the separate charts shelf.
 function normalizeHomeShelves(rows) {
   const out = [];
   let idx = 0;
@@ -3569,24 +3572,17 @@ function normalizeHomeShelves(rows) {
     const title = String((row && row.title) || '').trim();
     const contents = Array.isArray(row && row.contents) ? row.contents : [];
     if (!title || !contents.length) continue;
-    const tracks = contents
-      .filter((c) => c && /^[\w-]{11}$/.test(String(c.videoId || '')))
-      .map((c) => ({
-        id: String(c.videoId),
-        title: ytmusic.cleanTitle(c.title) || c.title || 'Unknown',
-        artist: Array.isArray(c.artists) ? c.artists.map((a) => a && a.name).filter(Boolean).join(', ') : (c.artist || ''),
-        thumb: ytmusic.thumbFor(String(c.videoId)),
-      }));
     const feeds = contents
-      .filter((c) => c && !c.videoId && /^[\w-]{2,80}$/.test(String((c.playlistId || '').replace(/^VL/, ''))))
+      .filter((c) => c && !c.videoId) // drop videos/podcast episodes — audio-first app
       .map((c) => {
-        const pid = String(c.playlistId).replace(/^VL/, '');
+        const pid = String(c.playlistId || c.audioPlaylistId || '').replace(/^VL/, '');
+        if (!/^[\w-]{2,80}$/.test(pid) || ['LM', 'LL', 'WL'].includes(pid)) return null; // no playable list (e.g. podcast shows)
         const thumbs = Array.isArray(c.thumbnails) ? c.thumbnails : [];
         const cover = thumbs.length ? ytmusic._upgradeThumbUrl(thumbs[thumbs.length - 1].url) : '';
-        return { title: c.title || 'Playlist', sub: c.description || '', playlistId: pid, coverUrl: cover };
-      });
-    if (tracks.length >= 3) out.push({ id: `home-${idx++}`, title, kind: 'tracks', results: tracks.slice(0, 24) });
-    else if (feeds.length >= 2) out.push({ id: `home-${idx++}`, title, kind: 'feeds', items: feeds.slice(0, 14) });
+        return { title: c.title || 'Playlist', sub: c.description || '', playlistId: pid, coverUrl: cover || '' };
+      })
+      .filter(Boolean);
+    if (feeds.length >= 2) out.push({ id: `home-${idx++}`, title, kind: 'feeds', items: feeds.slice(0, 14) });
   }
   return out;
 }

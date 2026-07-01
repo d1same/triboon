@@ -15975,9 +15975,15 @@ function renderMusicBrowse() {
     b.innerHTML = cls.includes('mTile')
       ? `<span class="mIco">${musicIcon(item.icon || 'music')}</span><span class="mLbl">${esc(item.title)}</span>`
       : `<span class="mCover ${esc(item.grad || 'mGrad1')}${coverImgClass}${item.wideCover ? ' wide' : ''}"${coverStyle}>${musicIcon(item.icon || 'music')}</span><span class="mLbl">${esc(item.title)}</span><span class="mSub">${esc(item.sub || '')}</span>`;
-    if (item.coverQuery) { b.dataset.coverQuery = item.coverQuery; b.dataset.coverKey = 'q:' + item.coverQuery; }
-    if (item.coverFeed) { b.dataset.coverFeed = item.coverFeed; b.dataset.coverIdx = item.coverIdx || 0; b.dataset.coverKey = 'f:' + item.coverFeed + ':' + b.dataset.coverIdx; }
-    if (item.coverPlaylist) { b.dataset.coverPlaylist = item.coverPlaylist; b.dataset.coverKey = 'p:' + item.coverPlaylist; }
+    // A card that already has real artwork is DONE — mark it so the lazy cover hydrator (which
+    // keys off coverFeed/coverQuery below) can't re-fetch a title-search thumbnail and clobber it.
+    // This was blanking playlist covers with non-English titles (e.g. "From the community").
+    if (item.coverUrl) b.dataset.coverDone = '1';
+    else {
+      if (item.coverQuery) { b.dataset.coverQuery = item.coverQuery; b.dataset.coverKey = 'q:' + item.coverQuery; }
+      if (item.coverFeed) { b.dataset.coverFeed = item.coverFeed; b.dataset.coverIdx = item.coverIdx || 0; b.dataset.coverKey = 'f:' + item.coverFeed + ':' + b.dataset.coverIdx; }
+      if (item.coverPlaylist) { b.dataset.coverPlaylist = item.coverPlaylist; b.dataset.coverKey = 'p:' + item.coverPlaylist; }
+    }
     b.addEventListener('click', onClick);
     b.addEventListener('mouseenter', () => pointerHover() && focusChip(chipEls().indexOf(b)));
     parent.appendChild(b);

@@ -2318,6 +2318,10 @@ test('Android native player: direct source and native chrome stay out of the web
   // not just the first 6 up front — so a long personalized home shows every thumbnail with good perf.
   assert.match(ui, /function hydrateMusicHomeCovers\(\) \{[\s\S]+\.mCard\[data-cover-key\][\s\S]+new IntersectionObserver\([\s\S]+\.observe\(c\)/,
     'Music covers should lazy-load via IntersectionObserver across all cards, not a fixed first-N slice');
+  // A card with real artwork is marked done so the lazy hydrator's title-search can't clobber it
+  // (this was blanking non-English playlist covers like "From the community").
+  assert.match(ui, /if \(item\.coverUrl\) b\.dataset\.coverDone = '1';\s*else \{[\s\S]+item\.coverFeed[\s\S]+item\.coverPlaylist/,
+    'cards with a direct coverUrl skip the lazy re-fetch so their artwork is not overwritten');
   assert.match(ui, /function pumpMusicCoverQueue\(\) \{[\s\S]+_musicCoverActive < 3[\s\S]+coverForMusicCard\(card\)/,
     'lazy cover loading should be concurrency-gated so a scroll burst cannot fan out unbounded fetches');
   // A link/unlink must refresh the Music page — re-pulling BOTH playlists and the home feed, since
