@@ -6647,7 +6647,7 @@ Object.assign(H, {
   musicSearch: async (ctx) => {
     if (!ytmusic.detectYtdlp()) return send(ctx.res, 503, { error: 'yt-dlp is not installed on the server' });
     const q = ctx.url.searchParams.get('q') || '';
-    const limit = Math.max(1, Math.min(24, parseInt(ctx.url.searchParams.get('limit') || '24', 10) || 24));
+    const limit = Math.max(1, Math.min(40, parseInt(ctx.url.searchParams.get('limit') || '40', 10) || 40));
     if (!q.trim()) return send(ctx.res, 200, { results: [] });
     try {
       const cookies = cookiesFor(ctx.user.id);

@@ -2322,6 +2322,10 @@ test('Android native player: direct source and native chrome stay out of the web
   // (this was blanking non-English playlist covers like "From the community").
   assert.match(ui, /if \(item\.coverUrl\) b\.dataset\.coverDone = '1';\s*else \{[\s\S]+item\.coverFeed[\s\S]+item\.coverPlaylist/,
     'cards with a direct coverUrl skip the lazy re-fetch so their artwork is not overwritten');
+  // yt3.googleusercontent album/playlist art rejects a full-URL referrer (covers came up blank);
+  // origin-only cross-origin referrer fixes it while keeping a referrer for YouTube trailer embeds.
+  assert.match(ui, /<meta name="referrer" content="strict-origin-when-cross-origin">/,
+    'page should send an origin-only cross-origin referrer so YT Music cover art loads');
   assert.match(ui, /function pumpMusicCoverQueue\(\) \{[\s\S]+_musicCoverActive < 3[\s\S]+coverForMusicCard\(card\)/,
     'lazy cover loading should be concurrency-gated so a scroll burst cannot fan out unbounded fetches');
   // A link/unlink must refresh the Music page — re-pulling BOTH playlists and the home feed, since

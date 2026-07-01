@@ -471,7 +471,10 @@ async function search(query, { limit = 20, cookiesPath, priority = 0 } = {}) {
   const q = String(query || '').trim().slice(0, 200);
   if (!q) return [];
   const n = Math.max(1, Math.min(40, limit));
-  if (!cookiesPath && detectYtMusicApi()) {
+  // Prefer ytmusicapi song search for EVERYONE (was gated to unlinked users) — it returns a full,
+  // clean song list up to the limit, whereas the yt-dlp search-page scrape tops out around a dozen
+  // watch?v= rows. yt-dlp stays the fallback when ytmusicapi is absent or errors.
+  if (detectYtMusicApi()) {
     try {
       const fast = await searchWithYtMusicApi(q, n, { priority });
       if (fast.length) return cleanSearchRows(fast, q, n);

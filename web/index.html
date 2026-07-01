@@ -3,6 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- yt3.googleusercontent.com album/playlist art REJECTS a full-URL referrer (covers came up blank);
+     send origin-only cross-origin so those thumbnails load, while YouTube trailer embeds still get an
+     origin referrer. Same-origin requests keep the full referrer. -->
+<meta name="referrer" content="strict-origin-when-cross-origin">
 <title>Triboon</title>
 <link rel="icon" href="T-Logo.svg"><link rel="alternate icon" href="T-Logo.png">
 <link rel="preload" href="fonts/Sora.woff2" as="font" type="font/woff2" crossorigin>

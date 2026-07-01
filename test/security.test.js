@@ -2456,6 +2456,28 @@ test('music: cookie link loads playlists + personalized home through ytmusicapi 
   }
 });
 
+test('music: search uses ytmusicapi even for linked (cookie) users, returning the full result set', async () => {
+  const ytmusic = require('../server/ytmusic');
+  try {
+    let sawAction = null;
+    ytmusic._setYtMusicApiRunnerForTest(async (action) => {
+      sawAction = action;
+      if (action === 'search') {
+        return { rows: Array.from({ length: 30 }, (_, i) => ({ videoId: 'v' + String(i).padStart(10, '0'), title: 'Song ' + i, artists: [{ name: 'Artist ' + i }] })) };
+      }
+      return { rows: [] };
+    });
+    // cookiesPath is set (linked user) — search must STILL go through ytmusicapi, not the yt-dlp
+    // scrape that topped out ~12 results.
+    const rows = await ytmusic.search('anything', { limit: 40, cookiesPath: '/tmp/whatever-cookies.txt' });
+    assert.strictEqual(sawAction, 'search', 'linked search should run through ytmusicapi');
+    assert.ok(rows.length > 12, `search should return the full result set, got ${rows.length}`);
+  } finally {
+    ytmusic._setYtMusicApiRunnerForTest(null);
+    ytmusic._resetYtMusicApiDetection();
+  }
+});
+
 test('music: yt-dlp work is globally queued so home/search reloads cannot fan out unbounded processes', async () => {
   const ytmusic = require('../server/ytmusic');
   const seen = [];
