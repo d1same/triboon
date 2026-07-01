@@ -9481,6 +9481,11 @@ function nativePlaybackHeartbeat() {
   _nativeHbAt = now;
   sendActivity('watching');
   sendPresence('watching');
+  // Persist watch progress off the native tick too. During native playback the WebView is hidden
+  // (View.GONE) so the 10s saveWatch setInterval is throttled/stalled — without this, closing,
+  // killing, or UPDATING the app mid-playback loses the recent position AND the >92% "watched"
+  // flag. saveWatch self-throttles (5s of progress) and no-ops for Live TV, so this is cheap.
+  saveWatch();
 }
 window.__tvNativeVideoProgress = (pos, dur) => {
   applyNativeVideoProgress(pos, dur);
@@ -10146,7 +10151,7 @@ $('vlcCopy').addEventListener('click', () => {
 });
 $('vlcClose').addEventListener('click', closePlayer);
 $('playerBackBtn').addEventListener('click', closePlayer);
-window.addEventListener('pagehide', () => { if (S.playing) stopActivityHeartbeat(); stopPresence({ keepalive: true }); });
+window.addEventListener('pagehide', () => { if (S.playing) { saveWatch(true); stopActivityHeartbeat(); } stopPresence({ keepalive: true }); });
 
 function cancelPauseWarmAhead() {
   const warm = S.pauseWarmAhead;
@@ -10491,7 +10496,9 @@ async function saveWatch(final) {
     key: payload.key, position: payload.position, duration: payload.duration,
     watched: payload.watched, meta: payload.meta, updatedAt: Date.now(),
   });
-  return api('/api/watch', { method: 'POST', body: payload }).catch(() => {});
+  // keepalive on final saves (player close / pagehide) so the request survives the page being torn
+  // down or the app backgrounding — a normal fetch would be cancelled and the last position lost.
+  return api('/api/watch', { method: 'POST', body: payload, keepalive: !!final }).catch(() => {});
 }
 function playbackFinishedDetailTarget(item) {
   if (!item || !item.tmdbId) return null;

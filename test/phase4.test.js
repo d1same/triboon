@@ -311,8 +311,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'episode targets created from details should inherit the current show quality preference');
   assert.match(ui, /async function prepPlayerSeasonEpisodes\(it\) \{[\s\S]+const inheritedQuality = qualityRankForItem\(it\);[\s\S]+const item = inheritedQuality \? \{ \.\.\.base, qualityRank: inheritedQuality \} : base;[\s\S]+async function prepNextEpisode\(it\) \{[\s\S]+const inheritedQuality = qualityRankForItem\(it\);[\s\S]+const item = inheritedQuality \? \{ \.\.\.base, qualityRank: inheritedQuality \} : base;/,
     'player episode strip and Up Next should continue the same 4K/1080p class');
-  assert.match(ui, /async function saveWatch\(final\) \{[\s\S]+const pos = currentTime\(\);[\s\S]+if \(!final && Math\.abs\(pos - p\.lastSaved\) < 5\) return;[\s\S]+key: p\.item\.key, position: Math\.floor\(pos\), duration: Math\.floor\(d \|\| 0\),[\s\S]+profile: S\.profile \? S\.profile\.id : undefined,[\s\S]+upsertWatchCache\(\{[\s\S]+position: payload\.position[\s\S]+api\('\/api\/watch', \{ method: 'POST', body: payload \}\)/,
-    'watch progress should save profile-scoped position immediately into the local cache and server');
+  assert.match(ui, /async function saveWatch\(final\) \{[\s\S]+const pos = currentTime\(\);[\s\S]+if \(!final && Math\.abs\(pos - p\.lastSaved\) < 5\) return;[\s\S]+key: p\.item\.key, position: Math\.floor\(pos\), duration: Math\.floor\(d \|\| 0\),[\s\S]+profile: S\.profile \? S\.profile\.id : undefined,[\s\S]+upsertWatchCache\(\{[\s\S]+position: payload\.position[\s\S]+api\('\/api\/watch', \{ method: 'POST', body: payload, keepalive: !!final \}\)/,
+    'watch progress should save profile-scoped position immediately into the local cache and server (keepalive on final saves so close/pagehide flushes survive teardown)');
+  assert.match(ui, /window\.addEventListener\('pagehide', \(\) => \{ if \(S\.playing\) \{ saveWatch\(true\);/,
+    'pagehide should flush the final watch position before the page is torn down');
   assert.match(ui, /async function closePlayer\(opts = \{\}\) \{[\s\S]+const finalWatch = saveWatch\(true\);[\s\S]+const finalActivity = stopActivityHeartbeat\(\);[\s\S]+if \(\$\(\'detail\'\)\.classList\.contains\(\'open\'\)\) \{[\s\S]+await finalWatch; await finalActivity; await loadWatchState\(true\);[\s\S]+if \(S\.detailItem\) syncDetailButtons\(S\.detailItem\);/,
     'returning from player to details should flush the final watch position and refresh the visible Resume/Start Over buttons before another source is chosen');
   assert.match(ui, /function syncDetailButtons\(it\) \{[\s\S]+const resume = resumePositionForItem\(it\);[\s\S]+\$\(\'dStartOver\'\)\.style\.display = resume \? '' : 'none';[\s\S]+updateDetailPlayLabel\(resume \? \{ label: 'Resume', target: \{ \.\.\.it, resume \} \} : \{ label: 'Play', target: it \}\);/,
@@ -3146,8 +3148,8 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'settings labels render sentence-case (not forced ALL CAPS)');
   // Native players hide the WebView, so the setInterval heartbeats can be throttled. The native
   // progress/stats ticks (pushed from native) must keep activity + presence alive for TV viewers.
-  assert.match(ui, /function nativePlaybackHeartbeat\(\) \{[\s\S]+if \(!p \|\| !p\.usingNative\) return;[\s\S]+now - _nativeHbAt < 9000\) return;[\s\S]+sendActivity\('watching'\);[\s\S]+sendPresence\('watching'\);/,
-    'a throttled native heartbeat re-reports watching activity + presence while the WebView is hidden');
+  assert.match(ui, /function nativePlaybackHeartbeat\(\) \{[\s\S]+if \(!p \|\| !p\.usingNative\) return;[\s\S]+now - _nativeHbAt < 9000\) return;[\s\S]+sendActivity\('watching'\);[\s\S]+sendPresence\('watching'\);[\s\S]+saveWatch\(\);/,
+    'a throttled native heartbeat re-reports activity + presence AND persists watch progress while the WebView is hidden (so app close/kill/update mid-native-playback keeps position + the watched flag)');
   assert.match(ui, /window\.__tvNativeVideoProgress = \(pos, dur\) => \{[\s\S]+nativePlaybackHeartbeat\(\);/,
     'the native VOD progress tick drives the heartbeat');
   assert.match(ui, /window\.__tvNativeVideoStats = \(raw\) => \{[\s\S]+nativePlaybackHeartbeat\(\);/,
