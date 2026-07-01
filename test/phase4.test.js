@@ -573,8 +573,14 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'local episode playback items should preserve query and episode numbers for subtitles');
   assert.match(ui, /function episodeKeyParts\(it\) \{[\s\S]+it\.season[\s\S]+it\.episode[\s\S]+it\.q[\s\S]+it\.genre[\s\S]+it\.title/,
     'episode helpers should understand local episode metadata, not just tmdb:tv keys');
-  assert.match(ui, /\$\(\'allSeasonsBtn\'\)\.addEventListener\('click', \(\) => \{[\s\S]+S\.detailItem\._localShow[\s\S]+renderLocalShowSeasonGrid\(S\.detailItem, S\.detailSeasons\)[\s\S]+else renderSeasonGrid\(S\.detailItem, S\.detailSeasons\)/,
-    'All seasons should return to the local season grid for local-only shows');
+  // "All seasons" renders as the LAST tab in the season-tab strip (appendAllSeasonsTab), wired to
+  // the right season grid per show type — so a D-pad DOWN into the tabs row can walk right to it.
+  assert.match(ui, /function appendAllSeasonsTab\(tabs, onClick\) \{[\s\S]+className = 'seasonTab allSeasonsTab focusable'[\s\S]+b\.id = 'allSeasonsBtn'[\s\S]+tabs\.appendChild\(b\)/,
+    'All seasons should be appended as the last season tab');
+  assert.match(ui, /appendAllSeasonsTab\(tabs, \(\) => renderSeasonGrid\(show, S\.detailSeasons \|\| \[\]\)\)/,
+    'the All-seasons tab opens the TMDB season grid');
+  assert.match(ui, /appendAllSeasonsTab\(tabs, \(\) => renderLocalShowSeasonGrid\(show, S\.detailSeasons \|\| \[\]\)\)/,
+    'the All-seasons tab opens the local season grid for local-only shows');
   assert.match(ui, /if \(it\._localShow && S\.localDetailEpisodes\) \{[\s\S]+markLocalEpisodeGroupWatched\(it, S\.localDetailEpisodes, nowWatched/,
     'the local-only show watched button should mark the show episode keys, not a container key');
   assert.match(ui, /function epItemOf\(show, season, ep\) \{[\s\S]+const loc = S\.localMap && S\.localMap\[item\.key\];[\s\S]+return loc \? \{ \.\.\.item, _local: loc \} : item;/,
@@ -605,9 +611,9 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'TMDB season-tab switches should keep focus on the selected tab, not fall back to Play');
   assert.match(ui, /function openLocalShowSeasonEpisodes\(show, seasonNumber, opts = \{\}\) \{[\s\S]+const cameFromTab = opts\.fromTab[\s\S]+if \(cameFromTab\) \{[\s\S]+tabs\.querySelector\('\.seasonTab\.sel'\)[\s\S]+applyFocus\(selTab, false\); return;/,
     'local season-tab switches should keep focus on the selected tab too');
-  // The "All seasons" button had no D-pad zone → unreachable by remote. It must be a detail nav row.
-  assert.match(ui, /const dRowSpecs = \[[\s\S]+\[zone\('#allSeasonsBtn'\), 'allSeasons'\],[\s\S]+\[zone\('\.seasonTab'\), 'seasonTab'\]/,
-    'the All-seasons button must be a reachable D-pad zone on the detail page');
+  // "All seasons" is the last .seasonTab now, so it rides the seasonTab D-pad row (no separate zone).
+  assert.doesNotMatch(ui, /\[zone\('#allSeasonsBtn'\), 'allSeasons'\]/,
+    'All seasons should no longer have its own D-pad zone (it is part of the seasonTab row)');
   // Marking a single episode watched must NOT drop D-pad focus (it jumped to the rail/top). Re-render
   // with a focus target: advance to the next episode when marking watched, stay put when unmarking.
   assert.match(ui, /async function setEpisodeWatched\([\s\S]+openSeasonEpisodes\(show, seasonNumber, \{ focusEpisode: watched \? ep\.episode_number \+ 1 : ep\.episode_number \}\)/,

@@ -3227,8 +3227,9 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
     <div id="dSeasonsWrap" style="display:none">
       <div class="secHead">
         <h2 id="seasonsTitle">Seasons</h2>
-        <button class="ghostMini focusable" id="allSeasonsBtn" style="display:none">⊞ All seasons</button>
       </div>
+      <!-- "All seasons" renders as the LAST tab in #seasonTabs (after Season 1/2/3…) so a D-pad
+           DOWN into the tabs row can walk right to it — see appendAllSeasonsTab(). -->
       <div id="seasonTabs" style="display:none"></div>
       <div id="seasonGrid"></div>
       <div id="epGrid"></div>
@@ -6262,7 +6263,7 @@ async function openDetail(it, push = true) {
   $('dSeasonsWrap').style.display = 'none'; $('dCastWrap').style.display = 'none';
   $('dTrailer').style.display = 'none'; S.detailTrailer = null;
   $('seasonGrid').innerHTML = ''; $('epGrid').innerHTML = ''; $('epGrid').style.display = 'none';
-  $('seasonTabs').style.display = 'none'; $('seasonTabs').innerHTML = ''; $('allSeasonsBtn').style.display = 'none';
+  $('seasonTabs').style.display = 'none'; $('seasonTabs').innerHTML = '';
   $('castRow').innerHTML = ''; $('relatedRow').innerHTML = ''; $('dRelatedWrap').style.display = 'none';
   S.detailCastAll = null; S.detailCastShown = 0;
   $('dCrew').innerHTML = ''; $('dCrew').style.display = 'none';
@@ -6448,8 +6449,11 @@ function renderCast(cast) {
 
 // Default TV view: season POSTER cards with episode-count badges.
 function renderSeasonGrid(show, seasons) {
+  // Reached via the "All seasons" tab? Move focus into the season cards (the tab we came from is
+  // about to be hidden). Initial detail load calls this with focus elsewhere — don't yank it.
+  const cameFromTab = !!document.querySelector('#seasonTabs .seasonTab.focus');
   $('seasonsTitle').textContent = 'Seasons';
-  $('seasonTabs').style.display = 'none'; $('allSeasonsBtn').style.display = 'none';
+  $('seasonTabs').style.display = 'none';
   $('epGrid').innerHTML = ''; $('epGrid').style.display = 'none';
   const grid = $('seasonGrid'); grid.style.display = 'flex'; grid.innerHTML = '';
   seasons.forEach((s) => {
@@ -6468,6 +6472,7 @@ function renderSeasonGrid(show, seasons) {
     grid.appendChild(c);
   });
   bindEdgeScroll(grid);
+  if (cameFromTab) { const first = grid.querySelector('.seasonCard'); if (first) applyFocus(first, false); }
 }
 function localSeasonSummaries(episodes) {
   const bySeason = new Map();
@@ -6489,8 +6494,9 @@ function isLocalSeasonWatched(season) {
   return !!keys.length && keys.every((key) => S.watchMap && S.watchMap[key] && S.watchMap[key].watched);
 }
 function renderLocalShowSeasonGrid(show, seasons) {
+  const cameFromTab = !!document.querySelector('#seasonTabs .seasonTab.focus');
   $('seasonsTitle').textContent = 'Seasons';
-  $('seasonTabs').style.display = 'none'; $('allSeasonsBtn').style.display = 'none';
+  $('seasonTabs').style.display = 'none';
   $('epGrid').innerHTML = ''; $('epGrid').style.display = 'none';
   const grid = $('seasonGrid'); grid.style.display = 'flex'; grid.innerHTML = '';
   (seasons || []).forEach((s) => {
@@ -6506,6 +6512,7 @@ function renderLocalShowSeasonGrid(show, seasons) {
     grid.appendChild(c);
   });
   bindEdgeScroll(grid);
+  if (cameFromTab) { const first = grid.querySelector('.seasonCard'); if (first) applyFocus(first, false); }
 }
 function isSeasonWatched(tmdbId, seasonNumber, epCount) {
   if (!epCount) return false;
@@ -6558,6 +6565,18 @@ async function markSeasonWatched(show, season, watched) {
   toast(`${season.name || 'Season ' + sNum} marked ${watched ? 'watched' : 'unwatched'}`);
 }
 
+// "All seasons" is the LAST tab in the season-tab strip (after Season 1/2/3…), so pressing DOWN
+// into the row and walking right reaches it — easier on a D-pad than a stray header button.
+// It carries id="allSeasonsBtn" (existing CSS/tests) + class seasonTab (joins the tab D-pad zone).
+function appendAllSeasonsTab(tabs, onClick) {
+  const b = document.createElement('button');
+  b.className = 'seasonTab allSeasonsTab focusable';
+  b.id = 'allSeasonsBtn';
+  b.innerHTML = '⊞ All seasons';
+  b.addEventListener('click', onClick);
+  tabs.appendChild(b);
+  return b;
+}
 // Click a season → EPISODES view with season tabs + episode cards.
 async function openSeasonEpisodes(show, seasonNumber, opts = {}) {
   // Switching seasons from the tab strip should keep focus on the tabs (so the next Left/Right hits
@@ -6568,7 +6587,6 @@ async function openSeasonEpisodes(show, seasonNumber, opts = {}) {
   S.detailSeason = seasonNumber;
   $('seasonsTitle').textContent = 'Episodes';
   $('seasonGrid').style.display = 'none';
-  $('allSeasonsBtn').style.display = '';
   const tabs = $('seasonTabs'); tabs.style.display = 'flex'; tabs.innerHTML = '';
   (S.detailSeasons || []).forEach((s) => {
     const t = document.createElement('button');
@@ -6577,6 +6595,7 @@ async function openSeasonEpisodes(show, seasonNumber, opts = {}) {
     t.addEventListener('click', () => openSeasonEpisodes(show, s.season_number));
     tabs.appendChild(t);
   });
+  appendAllSeasonsTab(tabs, () => renderSeasonGrid(show, S.detailSeasons || [])); // last tab
   bindEdgeScroll(tabs);
   const grid = $('epGrid'); grid.style.display = 'flex'; grid.innerHTML = '<div class="sub" style="color:var(--muted)">loading episodes…</div>';
   try {
@@ -6689,7 +6708,6 @@ function openLocalShowSeasonEpisodes(show, seasonNumber, opts = {}) {
   S.detailSeason = seasonNumber;
   $('seasonsTitle').textContent = 'Episodes';
   $('seasonGrid').style.display = 'none';
-  $('allSeasonsBtn').style.display = '';
   const tabs = $('seasonTabs'); tabs.style.display = 'flex'; tabs.innerHTML = '';
   (S.detailSeasons || []).forEach((s) => {
     const t = document.createElement('button');
@@ -6698,6 +6716,7 @@ function openLocalShowSeasonEpisodes(show, seasonNumber, opts = {}) {
     t.addEventListener('click', () => openLocalShowSeasonEpisodes(show, s.season_number));
     tabs.appendChild(t);
   });
+  appendAllSeasonsTab(tabs, () => renderLocalShowSeasonGrid(show, S.detailSeasons || [])); // last tab
   bindEdgeScroll(tabs);
   const grid = $('epGrid'); grid.style.display = 'flex'; grid.innerHTML = '';
   const eps = (S.localDetailEpisodes || []).filter((ep) => +ep.s === +seasonNumber).sort((a, b) => a.e - b.e);
@@ -6805,11 +6824,6 @@ async function setEpisodeWatched(item, ep, show, seasonNumber, watched) {
   // unmarking. Without a focus target the re-render destroys the focused card and focus jumps away.
   openSeasonEpisodes(show, seasonNumber, { focusEpisode: watched ? ep.episode_number + 1 : ep.episode_number });
 }
-$('allSeasonsBtn').addEventListener('click', () => {
-  if (!S.detailSeasons) return;
-  if (S.detailItem && S.detailItem._localShow) renderLocalShowSeasonGrid(S.detailItem, S.detailSeasons);
-  else renderSeasonGrid(S.detailItem, S.detailSeasons);
-});
 
 // Main Play button for a show: figure the next-up episode across the whole series.
 function pickNextUp(show, seasons) {
@@ -13318,7 +13332,7 @@ async function openLocalShowDetail(it) {
   $('qToggle').style.display = 'none'; S.qualityPref = null;
   $('seasonGrid').innerHTML = '<div class="sub" style="color:var(--muted)">loading seasons...</div>';
   $('epGrid').innerHTML = ''; $('epGrid').style.display = 'none';
-  $('seasonTabs').style.display = 'none'; $('seasonTabs').innerHTML = ''; $('allSeasonsBtn').style.display = 'none';
+  $('seasonTabs').style.display = 'none'; $('seasonTabs').innerHTML = '';
   $('dSeasonsWrap').style.display = '';
   $('dPlay').disabled = true; $('dPlay').classList.add('unavail'); $('dPlayLabel').textContent = 'Loading';
   $('dStartOver').style.display = 'none';
@@ -20151,7 +20165,7 @@ document.addEventListener('keydown', (e) => {
       // Actions in their REAL DOM/visual order (hand-listing them once put the trailer
       // button in the wrong slot and OK launched a trailer instead of picking 4K).
       [[...$('dPlay').parentElement.querySelectorAll('button')].filter(vis), 'actions'],
-      [zone('#allSeasonsBtn'), 'allSeasons'],
+      // "All seasons" is the last .seasonTab now (appendAllSeasonsTab) — it lives in this row, not its own zone.
       [zone('.seasonTab'), 'seasonTab'], [zone('.seasonCard'), 'seasonCard'], [zone('.epCard'), 'epCard'],
       [zone('.castCard'), 'castCard'], [zone('#relatedRow .pcard'), 'related'],
     ].filter((r) => r[0].length);
