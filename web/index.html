@@ -1120,6 +1120,10 @@ body.tv #vlcCopy{display:none}
 .activitySectionHead span{color:var(--text);font:800 13px "Sora";letter-spacing:0;text-transform:none}
 .activitySectionHead small{color:var(--muted);font:700 10px "JetBrains Mono";white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .activityRows{display:grid;gap:7px}
+.activityPager{display:flex;align-items:center;justify-content:center;gap:14px;margin-top:2px}
+.activityPager .btn{min-width:84px;justify-content:center}
+.activityPager .btn:disabled,.activityPager .btn[disabled]{opacity:.38;pointer-events:none}
+.activityPagerInfo{color:var(--muted);font:700 11px "JetBrains Mono";white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .activityRow{display:grid;grid-template-columns:38px minmax(0,2fr) minmax(120px,1fr) minmax(96px,.62fr);gap:13px;align-items:center;
   min-height:58px;border:1px solid var(--line);border-radius:12px;padding:10px 14px;background:var(--field)}
 .activityRow.isActive{border-color:rgba(124,230,160,.22);background:var(--soft)}
@@ -3407,6 +3411,11 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
     <div id="activityList" class="activityRows"><div class="hint">No one is watching right now.</div></div>
     <div class="activitySectionHead"><span>Last 3 days</span><small id="activityHistoryStatus"></small></div>
     <div id="activityHistory" class="activityRows"><div class="hint">No recent playback.</div></div>
+    <div class="activityPager" id="activityPager" hidden>
+      <button class="btn ghost focusable" id="activityPrev">Prev</button>
+      <span class="activityPagerInfo" id="activityPagerInfo"></span>
+      <button class="btn ghost focusable" id="activityNext">Next</button>
+    </div>
     <div class="hint" id="activityStatus"></div>
   </div>
   </div>
@@ -18019,11 +18028,49 @@ function renderActivity(payload = {}) {
     list.innerHTML = sessions.map((s) => activityRowHtml(s, true)).join('');
     $('activityLiveStatus').textContent = `${sessions.length} active`;
   }
-  if (hist) hist.innerHTML = history.length
-    ? history.map((s) => activityRowHtml(s, false)).join('')
-    : '<div class="hint">No recent playback.</div>';
-  $('activityHistoryStatus').textContent = history.length ? `${history.length} shown` : `${retentionDays}-day window`;
+  S.activityHistPage = 0; // fresh payload — always start at the newest page
+  renderActivityHistory();
   $('activityStatus').textContent = `Last checked ${new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+}
+// The "Last 3 days" history can be long; page it so the admin never scrolls a wall of rows.
+// Paginated client-side from the cached payload — Prev/Next re-render without a network round-trip.
+const ACTIVITY_HISTORY_PAGE = 10;
+function renderActivityHistory() {
+  const hist = $('activityHistory'); if (!hist) return;
+  const p = S.activityPayload || {};
+  const all = Array.isArray(p.history) ? p.history : [];
+  const retentionDays = Number(p.retentionDays || 3) || 3;
+  const pager = $('activityPager');
+  if (!all.length) {
+    hist.innerHTML = '<div class="hint">No recent playback.</div>';
+    if (pager) pager.hidden = true;
+    $('activityHistoryStatus').textContent = `${retentionDays}-day window`;
+    return;
+  }
+  const pages = Math.ceil(all.length / ACTIVITY_HISTORY_PAGE);
+  if (!Number.isInteger(S.activityHistPage) || S.activityHistPage < 0) S.activityHistPage = 0;
+  if (S.activityHistPage > pages - 1) S.activityHistPage = pages - 1;
+  const start = S.activityHistPage * ACTIVITY_HISTORY_PAGE;
+  const slice = all.slice(start, start + ACTIVITY_HISTORY_PAGE);
+  hist.innerHTML = slice.map((s) => activityRowHtml(s, false)).join('');
+  $('activityHistoryStatus').textContent = `${all.length} in ${retentionDays}-day window`;
+  if (!pager) return;
+  if (pages <= 1) { pager.hidden = true; return; }
+  pager.hidden = false;
+  $('activityPrev').disabled = S.activityHistPage <= 0;
+  $('activityNext').disabled = S.activityHistPage >= pages - 1;
+  $('activityPagerInfo').textContent = `Page ${S.activityHistPage + 1} of ${pages} · ${start + 1}–${start + slice.length}`;
+}
+function activityHistGoto(delta) {
+  const cur = Number.isInteger(S.activityHistPage) ? S.activityHistPage : 0;
+  S.activityHistPage = Math.max(0, cur + delta);
+  renderActivityHistory();
+  // Keep D-pad focus sensible: if the button we're on just got disabled (hit an end), hop to the
+  // other one so focus never lands on a dead control (the settings D-pad tracks activeElement and
+  // skips disabled controls — see formCtls).
+  const prev = $('activityPrev'), next = $('activityNext');
+  if (delta < 0 && prev && prev.disabled && next && !next.disabled) next.focus({ preventScroll: true });
+  else if (delta > 0 && next && next.disabled && prev && !prev.disabled) prev.focus({ preventScroll: true });
 }
 async function refreshActivity() {
   const box = $('activityList'); if (!box) return;
@@ -18663,6 +18710,8 @@ function wireSectionRailDpad(rootId, tabsId, panelAttr) {
 wireSectionRailDpad('prefs', 'prefTabs', 'data-ptab');
 wireSectionRailDpad('settings', 'setTabs', 'data-stab');
 $('activityRefresh').addEventListener('click', refreshActivity);
+$('activityPrev').addEventListener('click', () => activityHistGoto(-1));
+$('activityNext').addEventListener('click', () => activityHistGoto(1));
 $('apkUpdate').addEventListener('click', () => openApkUpdate()); // one universal APK (triboon.apk)
 $('secPwSave').addEventListener('click', async () => {
   const oldPassword = $('secPwCurrent').value;

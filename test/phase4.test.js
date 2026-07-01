@@ -1076,14 +1076,23 @@ test('Android native player: direct source and native chrome stay out of the web
     'Playback stats should separate visible player buffer from Triboon server read-ahead');
   assert.ok(ui.includes('data-stab="activity"') && ui.includes("api('/api/activity')") && ui.includes('id="activityRefresh"')
     && ui.includes('id="activityHistory"') && ui.includes('id="activitySummary"')
-    && ui.includes('>Last 3 days<') && !ui.includes('id="activityPager"'),
+    && ui.includes('>Last 3 days<') && ui.includes('id="activityPager"'),
     'admin Settings should expose a compact focusable Activity panel backed by the activity API');
   assert.ok(ui.includes('function playerStreamKind(') && ui.includes('streamKind: playerStreamKind(p)')
     && ui.includes('streamLabel: playerStreamLabel(p)') && ui.includes('clientVersion: clientVersionLabel()')
     && ui.includes('function activityStreamLabel(') && ui.includes('function activityRowHtml(')
-    && ui.includes('activityStream') && !ui.includes('ACTIVITY_HISTORY_PAGE_SIZE')
-    && !ui.includes('activityPrev') && !ui.includes('activityNext'),
+    && ui.includes('activityStream'),
     'Activity should show stream treatment, app version, active sessions, and a 3-day history');
+  // The 3-day history is paged (10/page) so the admin never scrolls a wall of rows — client-side
+  // over the cached payload, Prev/Next re-render with no network round-trip, focusable for D-pad.
+  assert.ok(ui.includes('id="activityPrev"') && ui.includes('id="activityNext"') && ui.includes('id="activityPagerInfo"')
+    && ui.includes('const ACTIVITY_HISTORY_PAGE = 10') && ui.includes('function renderActivityHistory(')
+    && ui.includes('function activityHistGoto('),
+    'Activity history should paginate (10/page) with focusable Prev/Next that re-render from the cached payload');
+  assert.match(ui, /function renderActivityHistory\(\)[\s\S]+Math\.ceil\(all\.length \/ ACTIVITY_HISTORY_PAGE\)[\s\S]+all\.slice\(start, start \+ ACTIVITY_HISTORY_PAGE\)[\s\S]+if \(pages <= 1\) \{ pager\.hidden = true;/,
+    'history pager hides itself when a single page covers everything and slices the current page from the cached history');
+  assert.match(ui, /\$\('activityPrev'\)\.addEventListener\('click', \(\) => activityHistGoto\(-1\)\);\s*\$\('activityNext'\)\.addEventListener\('click', \(\) => activityHistGoto\(1\)\)/,
+    'history Prev/Next buttons are wired to the client-side pager');
   // Activity shows the actual device (SHIELD, onn, Chrome…), reported by the client and parsed on the row.
   assert.ok(ui.includes('function deviceFriendlyName(') && ui.includes('deviceName: deviceFriendlyName()')
     && ui.includes('function activityDeviceLabel(') && ui.includes('function activityDeviceKind('),
