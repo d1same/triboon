@@ -397,7 +397,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'home should refresh with real watch rows and schedule TMDB catalog refresh after first paint');
   assert.doesNotMatch(ui, /const catalogJob = loadHomeCatalogRows|rows\.push\(\.\.\.await catalogJob\)/,
     'home first paint must not await TMDB catalog rows');
-  assert.match(ui, /function renderRowsInto\(root, rowsData, opts = \{\}\) \{[\s\S]+if \(!items\.length\) \{[\s\S]+empty\.className = 'gridMore focusable';[\s\S]+empty\.dataset\.row = ri; empty\.dataset\.col = 0;[\s\S]+switchView\('settings'\)/,
+  assert.match(ui, /function renderRowsInto\(root, rowsData, opts = \{\}\) \{[\s\S]+if \(!items\.length\) \{[\s\S]+empty\.className = 'gridMore focusable';[\s\S]+empty\.dataset\.row = ri; empty\.dataset\.col = 0;[\s\S]+openServerSettings\(\)/,
     'empty home rows should still render a focusable remote target');
   assert.match(ui, /function renderRows\(opts = \{\}\) \{[\s\S]+const snap = opts\.preserveFocus \? \(opts\.focusSnapshot \|\| homeFocusSnapshot\(\)\) : null;[\s\S]+renderRowsInto\(\$\(\'rows\'\), S\.rows, \{ resetScroll: !snap \}\);[\s\S]+if \(snap && restoreHomeFocus\(snap\)\)[\s\S]+const firstWithItems = S\.rows\.findIndex[\s\S]+else \{[\s\S]+\$\(\'rows\'\)\.querySelector\('\[data-row\]\[data-col\]'\)[\s\S]+focusCard\(parseInt\(first\.dataset\.row/,
     'home boot should focus the first fallback target when there are no playable cards yet');
@@ -1196,15 +1196,20 @@ test('Android native player: direct source and native chrome stay out of the web
     'Settings and Preferences content buttons should visibly fill on hover, keyboard focus, and D-pad focus');
   assert.match(ui, /function syncSectionTabs\(tabsId, activeButton = null\) \{[\s\S]+setAttribute\('role', 'tablist'\)[\s\S]+setAttribute\('role', 'tab'\)[\s\S]+setAttribute\('aria-selected', on \? 'true' : 'false'\)[\s\S]+\}/,
     'Settings and Preferences side tabs should initialize selected state for D-pad and accessibility');
-  assert.match(ui, /document\.querySelectorAll\('#prefTabs button'\)[\s\S]+syncSectionTabs\('prefTabs', b\)[\s\S]+syncSectionTabs\('prefTabs'\);/,
-    'Preferences tabs should share selected-tab state for click, D-pad, and initial render');
-  assert.match(ui, /document\.querySelectorAll\('#setTabs button'\)[\s\S]+syncSectionTabs\('setTabs', b\)[\s\S]+syncSectionTabs\('setTabs'\);/,
-    'Settings tabs should share selected-tab state for click, D-pad, and initial render');
-  assert.match(ui, /function bindSectionTabs\(rootId, tabsId, panelAttr\) \{[\s\S]+addEventListener\('click', run\)[\s\S]+addEventListener\('focus', run\)[\s\S]+addEventListener\('mouseenter', run\)[\s\S]+\}/,
-    'Settings and Preferences side tabs should switch sections on hover and D-pad focus, not only click');
-  assert.ok(ui.includes("bindSectionTabs('prefs', 'prefTabs', 'data-ptab')")
-    && ui.includes("bindSectionTabs('settings', 'setTabs', 'data-stab')"),
-    'both Preferences and Settings should use hover/focus section activation');
+  // Server settings are folded into the Preferences page as one menu (Preferences group · divider ·
+  // Server settings group; Appearance dropped). One handler drives both tab kinds, on click/focus/hover.
+  assert.match(ui, /function mergeServerSettingsIntoPrefs\(\) \{[\s\S]+data-tab="display"[\s\S]+data-stab="display"[\s\S]+prefTabDivider[\s\S]+b\.dataset\.srv = b\.dataset\.tab[\s\S]+prefs\.appendChild\(p\)/,
+    'Server-settings tabs + panels should be folded into the Preferences page (Appearance removed, divider added)');
+  assert.match(ui, /function activateAccountTab\(b\) \{[\s\S]+const isSrv = !!b\.dataset\.srv;[\s\S]+syncSectionTabs\('prefTabs', b\)[\s\S]+#prefs \[data-ptab\][\s\S]+#prefs \.setGrid\[data-stab\][\s\S]+refreshSettings\(\)/,
+    'the unified account-tab handler shows the right pref/server panel and lazy-loads server data');
+  assert.match(ui, /document\.querySelectorAll\('#prefTabs button'\)\.forEach\(\(b\) => \{[\s\S]+activateAccountTab\(b\)[\s\S]+addEventListener\('click', run\)[\s\S]+addEventListener\('focus', run\)[\s\S]+addEventListener\('mouseenter', run\)/,
+    'account tabs activate on click, D-pad focus, and hover');
+  assert.match(ui, /function openServerSettings\(\) \{[\s\S]+switchView\('prefs'\)[\s\S]+#prefTabs \.srvTab[\s\S]+activateAccountTab\(first\)/,
+    'admin entry points open the account page on the first Server-settings tab');
+  assert.match(ui, /if \(v === 'settings'\) return openServerSettings\(\)/,
+    'switchView(settings) should redirect to the folded-in account page');
+  assert.match(ui, /document\.querySelectorAll\('#prefTabs \.srvTab, #prefServerDivider'\)\.forEach\(\(el\) => \{ el\.style\.display = isAdmin/,
+    'the Server-settings tab group + divider should be admin-only');
   assert.match(ui, /function syncChoiceButtons\(selector, isSelected\) \{[\s\S]+classList\.toggle\('sel', selected\)[\s\S]+setAttribute\('aria-pressed', selected \? 'true' : 'false'\)/,
     'selection-style buttons should share visual and pressed-state updates');
   ['#prefCoverSize button', '#prefContentTextSize button', '#prefAutoplay button', '#prefSubtitleMode button', '#prefSubSize button', '#prefScreensaverDelay button', '#coverSize button'].forEach((selector) => {
@@ -3147,14 +3152,7 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'the profile avatar should open Preferences and land on the Profile & Pins tab');
   assert.match(ui, /<div id="prefTabs">\s*<button data-tab="profiles" class="on focusable">/,
     'Profile & Pins should be the first, default-selected Preferences tab');
-  // Admin Server settings is a top-level TAB in the avatar's Preferences strip (discoverable), which
-  // jumps to the full Settings page; admin-only.
-  assert.match(ui, /if \(b\.id === 'prefServerTab'\) return switchView\('settings'\)/,
-    'the admin Server settings tab should open the Settings page');
-  assert.match(ui, /<button id="prefServerTab" class="focusable" style="display:none">/,
-    'Server settings should be a dedicated tab in the Preferences strip');
-  assert.match(ui, /\$\('prefServerTab'\)\.style\.display = isAdmin \? '' : 'none'/,
-    'the Server settings tab should be admin-only');
+  // (The full Server-settings tab group + merge behavior is asserted above near mergeServerSettingsIntoPrefs.)
   // Sign out lives in Profile & Pins (avatar) now — the "who's watching" profile picker no longer
   // builds its own redundant Sign out button.
   assert.ok(!ui.includes("so.id = 'profileSignout'") && !ui.includes("id=\"profileSignout\""),

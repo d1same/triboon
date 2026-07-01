@@ -1038,6 +1038,9 @@ body.tv #vlcCopy{display:none}
 #setTabs button svg,#prefTabs button svg{width:20px;height:20px;color:currentColor}
 #setTabs button:hover,#prefTabs button:hover{color:var(--text);background:var(--btnHover)}
 #setTabs button.on,#prefTabs button.on{color:var(--text);background:var(--btnSelected);border-color:transparent;box-shadow:inset 3px 0 0 var(--focus)}
+/* Divider between the Preferences group and the folded-in Server settings group (column layout). */
+.prefTabDivider{margin:14px 6px 4px;padding-top:12px;border-top:1px solid var(--line);pointer-events:none}
+.prefTabDivider span{font:800 8.5px "JetBrains Mono";letter-spacing:.16em;text-transform:uppercase;color:var(--muted);padding:0 6px}
 #setTabs button.focus,#prefTabs button.focus,#setTabs button:focus,#prefTabs button:focus{outline:none;background:var(--btnHover);box-shadow:inset 3px 0 0 var(--focus),0 10px 28px rgba(0,0,0,.28)}
 .setGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(480px,100%),1fr));gap:18px;align-items:start;max-width:2200px} /* up to 4 columns on big screens, wraps down to 1 on phones */
 .testBtn{font:700 10px "JetBrains Mono";letter-spacing:.06em;text-transform:uppercase;padding:4px 11px;margin-left:10px;cursor:pointer;
@@ -1176,6 +1179,9 @@ body.tv #vlcCopy{display:none}
   #settings.open,#prefs.open{display:block}
   #setTabs,#prefTabs{position:static;flex-direction:row;overflow-x:auto;scroll-padding:0 16px;margin-bottom:20px}
   #setTabs button,#prefTabs button{width:auto;min-width:150px;grid-template-columns:24px minmax(0,1fr)}
+  /* Row layout (phones): the group divider becomes a vertical rule with side spacing. */
+  .prefTabDivider{margin:0 6px;padding:0 0 0 12px;border-top:0;border-left:1px solid var(--line);align-self:stretch;flex:none}
+  .prefTabDivider span{display:none}
   .activityTop{align-items:flex-start;flex-direction:column}
   .activityRow{grid-template-columns:38px minmax(0,1fr);gap:8px 13px}
   .activityClient{grid-column:2;grid-row:2}
@@ -3060,9 +3066,8 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
     <button data-tab="menu" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 7h14M5 12h14M5 17h14"/></svg><span>Menu</span></button>
     <button data-tab="livetv" class="focusable" id="prefTabLive"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="6" width="16" height="12" rx="2"/><path d="M9 3l3 3 3-3"/></svg><span>Live TV</span></button>
     <button data-tab="connect" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12a3 3 0 0 1 3-3h3a3 3 0 1 1 0 6h-2"/><path d="M15 12a3 3 0 0 1-3 3H9a3 3 0 1 1 0-6h2"/></svg><span>Connections</span></button>
-    <!-- Admin-only: opens the full Server settings page. Not a data-tab — the click handler jumps to
-         the Settings view. Shown only for admins (gated in enterAppShell). -->
-    <button id="prefServerTab" class="focusable" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z"/></svg><span>Server settings</span></button>
+    <!-- Admin Server-settings tabs are folded in here at boot (mergeServerSettingsIntoPrefs), after a
+         divider, so the avatar opens ONE menu: Preferences group · divider · Server settings group. -->
   </div>
 
   <div class="setGrid" data-ptab="display">
@@ -4298,7 +4303,7 @@ $('suGo').addEventListener('click', async () => {
     const r = await api('/api/setup', { method: 'POST', body: { name: $('suName').value.trim(), password: $('suPass').value } });
     tokenStore.set(r.token); S.user = r.user;
     toast('Server claimed — set up your provider & indexer in Settings');
-    await enterApp(); switchView('settings');
+    await enterApp(); openServerSettings();
   } catch (e) { $('suErr').textContent = e.message; }
 });
 $('liGo').addEventListener('click', doLogin);
@@ -5310,7 +5315,7 @@ function renderRowsInto(root, rowsData, opts = {}) {
       empty.dataset.row = ri; empty.dataset.col = 0;
       empty.textContent = row.emptyLabel || (S.user && S.user.role === 'admin' ? 'Open Settings' : 'Nothing here yet');
       empty.addEventListener('click', () => {
-        if (S.user && S.user.role === 'admin') switchView('settings');
+        if (S.user && S.user.role === 'admin') openServerSettings();
       });
       cards.appendChild(empty);
     }
@@ -16854,31 +16859,51 @@ function syncSectionTabs(tabsId, activeButton = null) {
     x.setAttribute('aria-selected', on ? 'true' : 'false');
   });
 }
-function activateSectionTab(rootId, tabsId, panelAttr, button) {
-  if (!button) return;
-  syncSectionTabs(tabsId, button);
-  const root = $(rootId); if (!root) return;
-  root.querySelectorAll(`[${panelAttr}]`).forEach((g) => { g.hidden = g.getAttribute(panelAttr) !== button.dataset.tab; });
-  if (rootId === 'prefs' && button.dataset.tab === 'livetv') renderPrefLiveCats();
-}
-function bindSectionTabs(rootId, tabsId, panelAttr) {
-  document.querySelectorAll(`#${tabsId} button`).forEach((b) => {
-    const run = () => activateSectionTab(rootId, tabsId, panelAttr, b);
-    b.addEventListener('click', run);
-    b.addEventListener('focus', run);
-    b.addEventListener('mouseenter', run);
+// ── ACCOUNT MENU: fold the admin Server-settings tabs + panels into the Preferences page so the
+// avatar opens ONE menu (Preferences group · divider · Server settings group). Appearance is
+// dropped (redundant with Preferences → Display). Server TAB BUTTONS are keyed with data-srv (their
+// panel id) — deliberately NOT data-stab, so they never collide with the server PANELS' data-stab
+// (which would make activeSectionPanel/hide logic grab a tab button instead of its panel).
+function mergeServerSettingsIntoPrefs() {
+  const prefTabs = $('prefTabs'), prefs = $('prefs'), setTabs = $('setTabs'), settings = $('settings');
+  if (!prefTabs || !setTabs || !prefs || !settings || prefTabs.querySelector('.srvTab')) return;
+  const apTab = setTabs.querySelector('button[data-tab="display"]'); if (apTab) apTab.remove();
+  const apPanel = settings.querySelector('.setGrid[data-stab="display"]'); if (apPanel) apPanel.remove();
+  const div = document.createElement('div');
+  div.id = 'prefServerDivider'; div.className = 'prefTabDivider'; div.setAttribute('aria-hidden', 'true');
+  div.innerHTML = '<span>Server settings</span>';
+  prefTabs.appendChild(div);
+  [...setTabs.querySelectorAll('button')].forEach((b) => {
+    b.dataset.srv = b.dataset.tab; delete b.dataset.tab; // tab keyed by data-srv (panel = data-stab)
+    b.classList.remove('on'); b.classList.add('srvTab');
+    prefTabs.appendChild(b);
   });
-  syncSectionTabs(tabsId);
+  [...settings.querySelectorAll('.setGrid[data-stab]')].forEach((p) => { p.hidden = true; prefs.appendChild(p); });
 }
-// Preferences tabs
-document.querySelectorAll('#prefTabs button').forEach((b) => b.addEventListener('click', () => {
-  if (b.id === 'prefServerTab') return switchView('settings'); // admin: jump to the full Server settings page
+mergeServerSettingsIntoPrefs();
+// One handler for the whole account menu: pref tabs (data-tab → [data-ptab]) and server tabs
+// (data-srv → [data-stab]). Server data loads lazily the first time a server tab is opened.
+function activateAccountTab(b) {
+  if (!b || !b.matches || !b.matches('button')) return;
+  const isSrv = !!b.dataset.srv;
+  const key = isSrv ? b.dataset.srv : b.dataset.tab;
   syncSectionTabs('prefTabs', b);
-  document.querySelectorAll('[data-ptab]').forEach((g) => { g.hidden = g.dataset.ptab !== b.dataset.tab; });
-  if (b.dataset.tab === 'livetv') renderPrefLiveCats(); // chips live on the page now — fill on entry
-}));
+  document.querySelectorAll('#prefs [data-ptab]').forEach((g) => { g.hidden = isSrv || g.dataset.ptab !== key; });
+  document.querySelectorAll('#prefs .setGrid[data-stab]').forEach((g) => { g.hidden = !isSrv || g.dataset.stab !== key; });
+  if (!isSrv && key === 'livetv') renderPrefLiveCats();
+  if (isSrv && !S._srvSettingsLoaded) { S._srvSettingsLoaded = true; refreshSettings(); }
+}
+document.querySelectorAll('#prefTabs button').forEach((b) => {
+  const run = () => activateAccountTab(b);
+  b.addEventListener('click', run); b.addEventListener('focus', run); b.addEventListener('mouseenter', run);
+});
 syncSectionTabs('prefTabs');
-bindSectionTabs('prefs', 'prefTabs', 'data-ptab');
+// Admin jumps here from setup / Trakt link — open the account page on the first Server-settings tab.
+function openServerSettings() {
+  switchView('prefs');
+  const first = document.querySelector('#prefTabs .srvTab');
+  requestAnimationFrame(() => { if (first) activateAccountTab(first); });
+}
 // Profile PIN management — account password required so kids can't lift the lock.
 function renderPinRows() {
   const wrap = $('prefPins'); wrap.innerHTML = '';
@@ -18591,12 +18616,8 @@ $('iptvRefresh').addEventListener('click', async () => {
   }
 });
 // Settings tabs.
-document.querySelectorAll('#setTabs button').forEach((b) => b.addEventListener('click', () => {
-  syncSectionTabs('setTabs', b);
-  document.querySelectorAll('#settings [data-stab]').forEach((g) => { g.hidden = g.dataset.stab !== b.dataset.tab; });
-}));
-syncSectionTabs('setTabs');
-bindSectionTabs('settings', 'setTabs', 'data-stab');
+// (#setTabs is empty — its tabs + panels were folded into the Preferences page by
+// mergeServerSettingsIntoPrefs and are driven by activateAccountTab.)
 function focusActiveSettingsPanel(rootId, panelAttr) {
   const root = $(rootId);
   const active = root && root.querySelector(`[${panelAttr}]:not([hidden])`);
@@ -18708,6 +18729,7 @@ $('qcApprove').addEventListener('click', async () => {
 
 /* ============ views + spatial nav ============ */
 function switchView(v, push = true, opts = {}) {
+  if (v === 'settings') return openServerSettings(); // Server settings folded into the account page now
   const prevView = S.view;
   hideScreensaver();
   resetScreensaverIdle();
@@ -19664,7 +19686,8 @@ function sectionTabButtons(cfg) {
   return cfg && cfg.tabs ? formCtls(cfg.tabs).filter((el) => el.tagName === 'BUTTON') : [];
 }
 function activeSectionPanel(cfg) {
-  return cfg && cfg.root ? cfg.root.querySelector(`[${cfg.panelAttr}]:not([hidden])`) : null;
+  // Preferences hosts BOTH pref panels ([data-ptab]) and the folded-in server panels ([data-stab]).
+  return cfg && cfg.root ? cfg.root.querySelector(`[${cfg.panelAttr}]:not([hidden]), [data-stab]:not([hidden])`) : null;
 }
 function focusActiveSectionTab(cfg) {
   const tabs = sectionTabButtons(cfg);
@@ -20800,7 +20823,8 @@ async function enterAppShell() {
   $('railUser').querySelector('.av').textContent = profileInitial((S.profile && S.profile.name) || S.user.name);
   $('railUser').querySelector('.rlabel').textContent = (S.profile && S.profile.name) || S.user.name;
   // Admin-only controls are hidden from regular users (server is also API-gated admin-only).
-  $('prefServerTab').style.display = isAdmin ? '' : 'none'; // admin-only Server settings tab in the avatar's Preferences
+  // Server-settings tabs (folded into the account menu) + their divider are admin-only.
+  document.querySelectorAll('#prefTabs .srvTab, #prefServerDivider').forEach((el) => { el.style.display = isAdmin ? '' : 'none'; });
   $('railAddLib').style.display = isAdmin ? '' : 'none';
   S.watchMap = S.watchMap || {};
   S.watchlist = S.watchlist || [];
