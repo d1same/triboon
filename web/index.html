@@ -4189,18 +4189,7 @@ function showProfilePicker() {
   add.innerHTML = `<div class="av">${profileIcon('plus')}</div><div class="pn">Add profile</div><div class="profileCardSub">New viewer</div>`;
   add.addEventListener('click', addProfileFlow);
   grid.appendChild(add);
-  let so = $('profileSignout');
-  if (!so) {
-    const wrap = document.createElement('div');
-    wrap.style.cssText = 'margin-top:30px;display:flex;gap:26px;justify-content:center';
-    so = document.createElement('button'); so.id = 'profileSignout';
-    so.className = 'btn ghost focusable'; // a real focusable button so D-pad can land on + activate it
-    so.style.cssText = 'padding:9px 22px;font:600 13px Sora';
-    so.textContent = 'Sign out';
-    so.addEventListener('click', signOutAccount);
-    wrap.appendChild(so);
-    $('gateProfiles').firstElementChild.appendChild(wrap);
-  }
+  // Sign out lives in Profile & Pins (avatar) now — the "who's watching" screen stays clean.
   showGate('profiles');
 }
 // Locked profiles require a PIN before entering.

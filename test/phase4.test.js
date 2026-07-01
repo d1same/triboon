@@ -3141,6 +3141,12 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'the admin Server settings launcher (in Profile & Pins) should open the Settings page');
   assert.match(ui, /\$\('prefServerSettings'\)\.style\.display = isAdmin \? '' : 'none'/,
     'the Server settings launcher should be admin-only');
+  // Sign out lives in Profile & Pins (avatar) now — the "who's watching" profile picker no longer
+  // builds its own redundant Sign out button.
+  assert.ok(!ui.includes("so.id = 'profileSignout'") && !ui.includes("id=\"profileSignout\""),
+    'the profile picker should not carry its own Sign out button');
+  assert.match(ui, /\$\('prefSignOut'\)\.addEventListener\('click', signOutAccount\)/,
+    'Sign out should remain available in the Profile & Pins panel');
   assert.match(ui, /#railMain\{[\s\S]*overflow-y:auto[\s\S]*#railFooter\{[\s\S]*flex:none[\s\S]*border-top:/,
     'rail footer should stay fixed while library/menu items scroll');
   // Left menu: wrap-around (Up from the top jumps to the bottom where Preferences/Profile live) so a
