@@ -6239,6 +6239,9 @@ async function openDetail(it, push = true) {
   if (push) setRoute(`#/title/${it.type}/${it.tmdbId}`);
   $('bdInfo').classList.remove('show'); // detail page is translucent — drop the browse info text
   captureDetailReturn(); // remember the exact card/list/search result that opened Details
+  // Opened from a cast page? Remember which one so hardware Back / Escape (which run closeDetail,
+  // NOT browser history) return to the cast page instead of restoreDetailReturn's stale home.
+  S.detailFromPerson = (S.view === 'person') ? (S.personId || null) : null;
   $('person').classList.remove('open');
   $('detail').style.visibility = ''; // openPerson hides the detail page UNDER it — coming
   // from a person credit, the new detail rendered invisible and the D-pad worked a ghost page
@@ -6911,6 +6914,11 @@ function closeDetail() {
   $('detail').classList.remove('open');
   S.detailItem = null;
   S.qualityPref = null; // visible toggle state only; per-title choices stay saved for Continue Watching.
+  // Hardware Back / Escape closing a detail that was opened from a cast page returns to that page
+  // (the browser Back button takes the history route instead — see the hashchange handler).
+  const fromPerson = S.detailFromPerson;
+  S.detailFromPerson = null;
+  if (fromPerson) { replaceRoute(`#/person/${fromPerson}`); openPerson(fromPerson, false); return; }
   restoreDetailReturn();
 }
 $('dBack').addEventListener('click', closeDetail);
@@ -7007,6 +7015,7 @@ bindEdgeScroll();
 async function openPerson(id, push = true) {
   if (!id) return;
   if (push) setRoute(`#/person/${id}`); // a real history entry, so Back returns HERE (not the detail under it)
+  S.personId = id; // so a detail opened from this cast page can return here on hardware Back / Escape
   S.view = 'person'; $('person').classList.add('open');
   $('person').scrollTop = 0;
   $('detail').style.visibility = 'hidden'; // both are translucent — the detail page would bleed through
@@ -7105,8 +7114,13 @@ function maybeLoadMorePersonWorks() {
   if (pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 900) loadMorePersonWorks(false);
 }
 function closePerson() {
-  $('person').classList.remove('open'); $('detail').style.visibility = ''; S.view = 'detail';
+  $('person').classList.remove('open');
   S.personWorksAll = null; S.personWorksShown = 0;
+  // Normally the cast page sits OVER a still-open detail (only hidden) — reveal it. But when we
+  // re-entered the cast page from a closed detail (hardware Back out of a cast-member's movie),
+  // there's nothing underneath; leave to where the detail chain started instead of a blank page.
+  if (!$('detail').classList.contains('open')) return restoreDetailReturn();
+  $('detail').style.visibility = ''; S.view = 'detail';
   if (S.detailItem && S.detailItem.backdrop) setBackdrop(S.detailItem.backdrop);
   // TV: the ring was still on a (hidden) person-page card — refocus the detail page.
   if (document.body.classList.contains('tv')) { S.zone = ''; clearFocus(); focusContent(); }

@@ -1964,6 +1964,14 @@ test('Android native player: direct source and native chrome stay out of the web
     'browser Back/Forward should land focus on the visible route instead of leaving a stale rail focus ring');
   assert.match(ui, /window\.addEventListener\('hashchange', \(\) => \{[\s\S]+const parts = routeParts\(\);[\s\S]+if \(parts\[0\] === 'person' && parts\[1\]\) return openPerson\(parts\[1\], false\);[\s\S]+if \(\$\(\'person\'\)\.classList\.contains\('open'\)\) closePerson\(\);[\s\S]+if \(\$\(\'detail\'\)\.classList\.contains\('open'\) && !routeIsTitle\(\)\) return closeDetail\(\);[\s\S]+applyRoute\(\);[\s\S]+\}\);/,
     'browser Back to a cast/person hash re-opens the cast page (person is a real history entry), leaving a person page closes it then routes, and detail-to-detail history routes instead of jumping to the original browse page');
+  // Android hardware BACK / Escape run closeDetail (NOT browser history): a detail opened from a
+  // cast page must return to that cast page, not restoreDetailReturn's stale origin.
+  assert.match(ui, /S\.detailFromPerson = \(S\.view === 'person'\) \? \(S\.personId \|\| null\) : null;/,
+    'opening a detail from a cast page should remember the cast id for the hardware-Back path');
+  assert.match(ui, /function closeDetail\(\) \{[\s\S]+const fromPerson = S\.detailFromPerson;[\s\S]+S\.detailFromPerson = null;[\s\S]+if \(fromPerson\) \{ replaceRoute\(`#\/person\/\$\{fromPerson\}`\); openPerson\(fromPerson, false\); return; \}[\s\S]+restoreDetailReturn\(\);/,
+    'hardware Back / Escape closing a cast-member detail should return to the cast page (browser Back uses history instead)');
+  assert.match(ui, /function closePerson\(\) \{[\s\S]+if \(!\$\(\'detail\'\)\.classList\.contains\('open'\)\) return restoreDetailReturn\(\);/,
+    'closing a cast page re-entered over a closed detail should fall back to the detail-return origin, not strand on a blank page');
   assert.match(ui, /function liveNoChannelsHtml\(errors = \[\]\) \{[\s\S]+gridMore liveEmpty focusable[\s\S]+function focusLiveGridMessage\(\) \{[\s\S]+S\.view === 'livetv' && S\.zone !== 'rail'[\s\S]+focusGrid\(0\);/,
     'Live TV empty channel states should be focusable and claim D-pad focus');
   assert.match(ui, /grid\.innerHTML = '<div class="gridMore focusable">loading channels[\s\S]+focusLiveGridMessage\(\);[\s\S]+if \(!r\.configured\) \{ grid\.innerHTML = '<div class="gridMore focusable">[\s\S]+focusLiveGridMessage\(\); return; \}[\s\S]+if \(!r\.channels\.length\) \{ grid\.innerHTML = liveNoChannelsHtml\(S\.liveSourceErrors\); focusLiveGridMessage\(\); return; \}[\s\S]+catch \(e\) \{ grid\.innerHTML = `<div class="gridMore focusable">Live TV failed:/,
