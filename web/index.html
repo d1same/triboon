@@ -11022,6 +11022,9 @@ async function loadProfilePrefs() {
     const r = await api(`/api/me/prefs?profile=${encodeURIComponent(S.profile.id)}`);
     if (r && r.prefs && Object.keys(r.prefs).length) {
       applyServerProfilePrefs(r.prefs);              // server wins: durable prefs follow the profile
+      if (r.prefs.theme) { try { localStorage.setItem('triboon.theme', String(r.prefs.theme)); } catch {} } // mirror to the device fallback
+      try { applyTheme(); } catch {}                  // apply the profile's synced theme (colors follow the profile)
+      try { renderThemePicker('themePick'); renderThemePicker('themePickSet'); } catch {} // reflect the applied theme in any open picker
       try { resetScreensaverIdle(); } catch {}        // re-apply the loaded screensaver delay now
     } else {
       syncProfilePrefsUp();                           // first time on this account → migrate this device's prefs up
@@ -16321,8 +16324,24 @@ const THEME_ALIASES = {
   steel: 'studio', ocean: 'teal', emerald: 'evergreen', crimson: 'velvet', violet: 'velvet',
   netflix: 'scarlet', hulu: 'aurora', appletv: 'daylight', plex: 'topaz',
 };
+// Theme follows the PROFILE (synced to the server like the other prefs), with the device-wide
+// `triboon.theme` kept as a fallback so the pre-login boot paint uses the last theme (no flash)
+// and existing single-profile installs migrate seamlessly.
+function prefTheme() {
+  try {
+    const scoped = (S.profile && S.profile.id) ? localStorage.getItem(`triboon.profile.${S.profile.id}.theme`) : null;
+    return scoped || localStorage.getItem('triboon.theme') || 'triboonCoral';
+  } catch { return 'triboonCoral'; }
+}
+function savePrefTheme(name) {
+  try {
+    localStorage.setItem(profilePrefKey('theme'), name); // per-profile, rides the /api/me/prefs sync
+    localStorage.setItem('triboon.theme', name);         // device fallback for the pre-profile boot paint
+  } catch {}
+  syncProfilePrefsUp();
+}
 function applyTheme() {
-  let name = (() => { try { return localStorage.getItem('triboon.theme') || 'triboonCoral'; } catch { return 'triboonCoral'; } })();
+  let name = prefTheme();
   if (!THEMES[name] && THEME_ALIASES[name]) name = THEME_ALIASES[name];
   const t = THEMES[name] || THEMES.triboonCoral;
   const r = document.documentElement.style;
@@ -16365,7 +16384,7 @@ function renderThemePicker(elId) {
       <span class="themeMeta"><span class="themeName">${esc(t.label)}</span><span class="themeTone">${esc(t.tone || 'theme')}</span></span>
       <span class="themePalette" aria-hidden="true"><i></i><i></i><i></i></span>`;
     b.addEventListener('click', () => {
-      try { localStorage.setItem('triboon.theme', name); } catch {}
+      savePrefTheme(name); // per-profile + synced to the server, so it survives updates/reinstalls
       applyTheme();
       syncChoiceButtons('#themePick .themeChoice,#themePickSet .themeChoice', (x) => x.dataset.theme === name);
       toast(`Theme: ${t.label}`);

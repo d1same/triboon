@@ -1162,6 +1162,14 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.ok(ui.includes("localStorage.getItem('triboon.theme') || 'triboonCoral'")
     && ui.includes('THEMES[name] || THEMES.triboonCoral'),
     'Executive Graphite should be the default and fallback theme');
+  // Theme (colors) follows the PROFILE and syncs to the server like the other prefs, so it survives
+  // updates/reinstalls — with the device-wide triboon.theme kept as the pre-login boot fallback.
+  assert.match(ui, /function savePrefTheme\(name\) \{[\s\S]+localStorage\.setItem\(profilePrefKey\('theme'\), name\);[\s\S]+localStorage\.setItem\('triboon\.theme', name\);[\s\S]+syncProfilePrefsUp\(\);/,
+    'saving a theme should write the per-profile (synced) key + device fallback and push to the server');
+  assert.match(ui, /function prefTheme\(\) \{[\s\S]+triboon\.profile\.\$\{S\.profile\.id\}\.theme[\s\S]+localStorage\.getItem\('triboon\.theme'\) \|\| 'triboonCoral'/,
+    'applyTheme should resolve the profile-scoped theme first, then the device fallback');
+  assert.match(ui, /applyServerProfilePrefs\(r\.prefs\);[\s\S]+try \{ applyTheme\(\); \} catch \{\}/,
+    'loading server prefs should apply the profile’s synced theme');
   assert.match(ui, /function applyTheme\(\) \{[\s\S]+Object\.entries\(THEME_TOKEN_MAP\)[\s\S]+setProperty\('--grad', t\.c\)[\s\S]+setProperty\('--gold', t\.a\)[\s\S]+\['btn', 'btnHover', 'btnSelected', 'btnSelectedHover', 'btnPrimary', 'btnPrimaryHover', 'btnFocusText',[\s\S]+'artFocusLine', 'artFocusGlow', 'artFocusTileLine', 'artFocusTileBorder', 'artFocusTileGlow'\][\s\S]+document\.body\.dataset\.theme = name/,
     'theme application should update role tokens plus shared button state colors');
   assert.ok(!ui.includes('--grad:linear-gradient') && !ui.includes('--gold:linear-gradient')
