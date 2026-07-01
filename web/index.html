@@ -7004,8 +7004,9 @@ function bindEdgeScroll(root = document) {
 }
 bindEdgeScroll();
 
-async function openPerson(id) {
+async function openPerson(id, push = true) {
   if (!id) return;
+  if (push) setRoute(`#/person/${id}`); // a real history entry, so Back returns HERE (not the detail under it)
   S.view = 'person'; $('person').classList.add('open');
   $('person').scrollTop = 0;
   $('detail').style.visibility = 'hidden'; // both are translucent — the detail page would bleed through
@@ -19020,6 +19021,10 @@ function applyRoute() {
     // #/title/<movie|tv>/<tmdbId> — refresh/back lands straight on the detail page.
     return openDetail({ type: parts[1], tmdbId: +parts[2], title: '', key: `tmdb:${parts[1]}:${parts[2]}` }, false);
   }
+  if (view === 'person' && parts[1]) {
+    // #/person/<id> — refresh/back lands on (or returns to) the cast/person page.
+    return openPerson(parts[1], false);
+  }
   if (view === 'library' && parts[1]) {
     if (applyLibraryRoute(parts[1])) return;
     deferLibraryRoute(parts[1]);
@@ -19053,12 +19058,14 @@ window.addEventListener('hashchange', () => {
   if (routeSquelch > 0) { routeSquelch--; return; }
   // Browser Back/Forward: close overlays first, then route inside the app.
   if (S.view === 'player') return closePlayer();
-  if ($('person').classList.contains('open')) {
-    const cur = S.detailItem;
-    closePerson();
-    if (cur && cur.tmdbId && ['movie', 'tv'].includes(cur.type)) setRoute(`#/title/${cur.type}/${cur.tmdbId}`);
-    return;
-  }
+  // The person/cast page is a real history entry now (#/person/<id>). Back landing on it restores
+  // the cast page (even from a cast-member's detail sitting on top). Handle it FIRST so the
+  // detail-close branch below can't swallow it.
+  const parts = routeParts();
+  if (parts[0] === 'person' && parts[1]) return openPerson(parts[1], false);
+  // Leaving a person page backward to a non-person hash → close it, then route the target hash
+  // (which re-opens the detail it was launched from).
+  if ($('person').classList.contains('open')) closePerson();
   if ($('detail').classList.contains('open') && !routeIsTitle()) return closeDetail();
   applyRoute();
 });
