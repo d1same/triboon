@@ -10,6 +10,13 @@ const tls = require('tls');
 const CONNECT_TIMEOUT_MS = 8000;   // TCP+TLS+greeting+AUTH must complete within this
 const COMMAND_TIMEOUT_MS = 10000;  // healthy responses are ~60-250ms (bench/RESULTS.md)
 const IDLE_RECYCLE_MS = 30000;     // idle sockets are presumed NAT-dropped — reconnect (~150ms)
+// Hedged multi-provider failover (see docs-streaming-performance.md): if an active-player BODY
+// hasn't answered within this window (queued behind other work, or a provider went slow AFTER the
+// load-sort), speculatively start the NEXT provider too and take the first success — so one slow
+// provider costs ~HEDGE_MS, not the full COMMAND_TIMEOUT_MS. Only active-player priorities hedge,
+// so background/health/read-ahead never double-fetch.
+const HEDGE_MS_DEFAULT = 3000;
+const HEDGE_PRIORITIES = new Set(['startup', 'seek', 'playback']);
 
 const MAX_NNTP_BODY_BYTES = 64 * 1024 * 1024; // one yEnc article should never be remotely this large
 
@@ -207,7 +214,17 @@ class ProviderPool {
   }
 
   _ensure(target = this.size) {
-    if (this.down()) return;
+    if (this.closed) return;
+    if (this.down()) {
+      // Half-open probe: the circuit breaker is open, but allow ONE throttled reconnect so a
+      // provider that has actually recovered rejoins in seconds instead of waiting out the full
+      // backoff. A live connection clears down(); a failed probe refreshes lastConnectFailAt and
+      // keeps it open. Throttled so we never hammer a genuinely-dead host.
+      const probeMs = this.opts.reconnectProbeMs || 8000;
+      if (this.connecting > 0 || Date.now() - (this.lastProbeAt || 0) < probeMs) return;
+      this.lastProbeAt = Date.now();
+      target = 1;
+    }
     while (!this.closed && this.conns.length + this.connecting < target) {
       this.connecting++;
       const c = new NntpConnection(this.opts);
@@ -304,6 +321,8 @@ class ProviderPool {
       return true;
     });
     if (this.queue.length && this.conns.length === 0 && this.connecting === 0 && this.down()) {
+      this._ensure(); // give the breaker a throttled half-open probe before failing work over
+      if (this.connecting > 0) return; // probing — its resolve (recovered) / reject (still down) re-pumps
       const q = this.queue; this.queue = [];
       const err = this.lastErr || new Error('provider temporarily unavailable');
       for (const t of q) { if (typeof t.cleanupAbort === 'function') t.cleanupAbort(); t.reject(err); }
@@ -425,13 +444,71 @@ class NntpPool {
   }
 
   async body(msgId, priority = 'playback', opts = {}) {
-    let lastErr;
     const ordered = this._ordered();
     if (!ordered.length) throw new Error('no usenet providers configured');
-    for (const p of ordered) {
-      try { return await p.body(msgId, priority, opts); } catch (e) { if (isAbortError(e)) throw e; lastErr = e; }
+    // Plain sequential failover for single-provider setups and non-critical work (no speculative
+    // double-fetch): a 430/connection error advances immediately to the next provider.
+    if (ordered.length === 1 || !HEDGE_PRIORITIES.has(priority)) {
+      let lastErr;
+      for (const p of ordered) {
+        try { return await p.body(msgId, priority, opts); } catch (e) { if (isAbortError(e)) throw e; lastErr = e; }
+      }
+      throw lastErr || new Error('no usenet provider could serve the article');
     }
-    throw lastErr || new Error('no usenet provider could serve the article');
+    return this._hedgedBody(ordered, msgId, priority, opts);
+  }
+
+  // Hedged failover across providers: start provider 0; if it hasn't answered within HEDGE_MS
+  // (slow / queued), ALSO start the next provider without cancelling the first, and take whichever
+  // resolves first — then abort the losers. A genuine failure (430 / connection error) advances
+  // immediately rather than waiting for the hedge timer. Bounds a slow provider's cost to ~HEDGE_MS
+  // instead of COMMAND_TIMEOUT_MS while preserving load-based ordering and per-provider retry.
+  _hedgedBody(ordered, msgId, priority, opts) {
+    const hedgeMs = Number(opts.hedgeMs) > 0 ? Number(opts.hedgeMs) : HEDGE_MS_DEFAULT;
+    const external = opts.signal || null;
+    return new Promise((resolve, reject) => {
+      if (signalAborted(external)) return reject(abortError());
+      let idx = 0, pending = 0, settled = false, lastErr = null, hedgeTimer = null;
+      const controllers = [];
+      let extCleanup = () => {};
+      const clearHedge = () => { if (hedgeTimer) { clearTimeout(hedgeTimer); hedgeTimer = null; } };
+      const settle = (fn) => {
+        if (settled) return;
+        settled = true;
+        clearHedge();
+        extCleanup();
+        for (const c of controllers) { try { c.abort(); } catch {} } // abort the losing (or unstarted-signal) attempts
+        fn();
+      };
+      const armHedge = () => {
+        clearHedge();
+        if (idx >= ordered.length) return; // no more providers to speculate onto
+        hedgeTimer = setTimeout(() => { hedgeTimer = null; startNext(); }, hedgeMs);
+        if (hedgeTimer && hedgeTimer.unref) hedgeTimer.unref();
+      };
+      const startNext = () => {
+        if (settled || idx >= ordered.length) return;
+        const p = ordered[idx++];
+        pending++;
+        const ac = new AbortController();
+        controllers.push(ac);
+        p.body(msgId, priority, { ...opts, signal: ac.signal }).then(
+          (v) => settle(() => resolve(v)),
+          (e) => {
+            pending--;
+            if (settled) return;
+            if (ac.signal.aborted && isAbortError(e)) return; // a loser we aborted on success — ignore
+            if (isAbortError(e) && signalAborted(external)) return settle(() => reject(e));
+            lastErr = e;
+            startNext(); // failure advances immediately, don't wait out the hedge window
+            if (pending === 0 && idx >= ordered.length) settle(() => reject(lastErr || new Error('no usenet provider could serve the article')));
+          },
+        );
+        armHedge();
+      };
+      extCleanup = addAbortListener(external, () => settle(() => reject(abortError())));
+      startNext();
+    });
   }
 
   async run(fn, priority = 'playback', opts = {}) {

@@ -2104,6 +2104,68 @@ test('nntp: combined stat throws NO_PROVIDER when unreachable (so a down link is
   } finally { pool.close(); }
 });
 
+test('nntp: hedged failover — a slow provider does not hold an article the next provider serves fast', async () => {
+  const payload = seededPayload(24 * 1024, 0x51);
+  const r = nzbFor(writeRar4Store([{ name: 'hedge.mkv', data: payload }], { base: 'hedge' }), 30000, 'hedge');
+  const id = [...r.articles.keys()][0];
+  const slow = createMockNntp({ articles: r.articles, latencyMs: 600 }); // provider 0: HAS it, but slow
+  const fast = createMockNntp({ articles: r.articles });                 // provider 1: HAS it, instant
+  const slowPort = await slow.listen();
+  const fastPort = await fast.listen();
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: slowPort, tls: false },
+    { host: '127.0.0.1', port: fastPort, tls: false },
+  ], 2);
+  try {
+    const t0 = Date.now();
+    const body = await pool.body(id, 'playback', { hedgeMs: 80 });
+    const ms = Date.now() - t0;
+    assert.ok(Buffer.isBuffer(body) && body.length > 0, 'article served');
+    assert.ok(fast.connCount() > 0, 'the hedge started the fast secondary provider');
+    assert.ok(ms < 500, `served in ${ms}ms via the hedge, not the slow provider's ~600ms+`);
+  } finally { pool.close(); await slow.close(); await fast.close(); }
+});
+
+test('nntp: hedged failover advances immediately on a 430 (does not wait out the hedge window)', async () => {
+  const payload = seededPayload(24 * 1024, 0x52);
+  const r = nzbFor(writeRar4Store([{ name: 'miss.mkv', data: payload }], { base: 'miss' }), 30000, 'miss');
+  const id = [...r.articles.keys()][0];
+  const p0 = createMockNntp({ articles: r.articles }); p0.markMissing(id); // 430 for this id (fast)
+  const p1 = createMockNntp({ articles: r.articles });                    // has it
+  const port0 = await p0.listen();
+  const port1 = await p1.listen();
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: port0, tls: false },
+    { host: '127.0.0.1', port: port1, tls: false },
+  ], 2);
+  try {
+    const t0 = Date.now();
+    const body = await pool.body(id, 'playback', { hedgeMs: 5000 }); // a huge hedge that must NOT be waited on
+    const ms = Date.now() - t0;
+    assert.ok(Buffer.isBuffer(body) && body.length > 0, 'served by the second provider');
+    assert.ok(ms < 2000, `a 430 advanced to the next provider immediately (${ms}ms), not after the 5s hedge`);
+  } finally { pool.close(); await p0.close(); await p1.close(); }
+});
+
+test('nntp: circuit-breaker half-open probe recovers a provider before the full backoff', async () => {
+  const payload = seededPayload(24 * 1024, 0x53);
+  const r = nzbFor(writeRar4Store([{ name: 'probe.mkv', data: payload }], { base: 'probe' }), 30000, 'probe');
+  const id = [...r.articles.keys()][0];
+  const mock = createMockNntp({ articles: r.articles });
+  const port = await mock.listen();
+  await mock.close(); // the port now REFUSES — the provider trips the breaker on first use
+  const pool = new NntpPool([{ host: '127.0.0.1', port, tls: false, reconnectBackoffMs: 60000, reconnectProbeMs: 40 }], 2);
+  try {
+    await assert.rejects(() => pool.body(id, 'playback'), 'a refused provider fails the body');
+    assert.strictEqual(pool.providers[0].down(), true, 'the provider is circuit-broken (down)');
+    // Bring the SAME port back up — recovery must not wait out the 60s backoff.
+    await new Promise((res, rej) => { mock.server.once('error', rej); mock.server.listen(port, '127.0.0.1', res); });
+    await new Promise((res) => setTimeout(res, 60)); // past the 40ms probe throttle, far under the 60s backoff
+    const body = await pool.body(id, 'playback');
+    assert.ok(Buffer.isBuffer(body) && body.length > 0, 'the half-open probe reconnected and served');
+  } finally { pool.close(); await mock.close(); }
+});
+
 test('scoring: sample-size stubs and foreign-language dubs sink; duals stay honest fallbacks', () => {
   // The 68MB "2160p" sample post is disqualified outright on its DECLARED size…
   const ranked = rankReleases([

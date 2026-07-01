@@ -1125,6 +1125,18 @@ test('Android native player: direct source and native chrome stay out of the web
     'the IPTV native proxy handles a client socket error (pipe alone does not) so the upstream is reclaimed');
   assert.match(idxSrc, /if \(ctx\.res\.write\(chunk\)\) armClientStall\(\);/,
     'the stall watchdog is re-armed only when the client is actually draining, not while backpressured');
+  // NNTP failover batch (owner-approved, touches the streaming-perf contract): circuit-breaker
+  // half-open probe + hedged multi-provider failover for active-player BODY work.
+  const nntpSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'nntp.js'), 'utf8');
+  assert.match(nntpSrc, /if \(this\.down\(\)\) \{[\s\S]+reconnectProbeMs[\s\S]+this\.lastProbeAt = Date\.now\(\);\s*\n\s*target = 1;/,
+    'a circuit-broken provider allows one throttled half-open reconnect probe instead of staying dark for the whole backoff');
+  assert.match(nntpSrc, /const HEDGE_PRIORITIES = new Set\(\['startup', 'seek', 'playback'\]\);/,
+    'only active-player priorities hedge, so background/health/read-ahead never double-fetch');
+  assert.match(nntpSrc, /_hedgedBody\(ordered, msgId, priority, opts\)[\s\S]+setTimeout\(\(\) => \{ hedgeTimer = null; startNext\(\); \}, hedgeMs\)/,
+    'a slow active-player provider is hedged onto the next provider after HEDGE_MS rather than waiting out the command timeout');
+  const streamDoc = fs.readFileSync(path.join(__dirname, '..', 'docs-streaming-performance.md'), 'utf8');
+  assert.match(streamDoc, /Hedged multi-provider failover/,
+    'the streaming-performance reference documents hedged failover + circuit-breaker recovery (contract requirement)');
   // The native backward-jump auto-resume must require the regression to persist across 2 ticks so a
   // one-tick PTS/GOP wobble on a resumed (server-seek) stream no longer dips-and-snaps ~every 10 min.
   assert.match(android, /private void rememberNativeVideoPosition\(\) \{[\s\S]+backwardsBy > 5000L\) \{[\s\S]+\+\+nativeBackwardTicks < 2\) return;/,

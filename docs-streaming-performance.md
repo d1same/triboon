@@ -105,6 +105,25 @@ forever; the circuit breaker self-heals.
 This means two accounts with 100 and 50 connections are modeled as 150 total
 connections, not one account replacing the other.
 
+**Circuit-breaker recovery (half-open probe).** A down provider does not stay
+fully dark for the whole backoff window: while circuit-broken, `ProviderPool`
+allows ONE throttled reconnect attempt (`reconnectProbeMs`, default 8s) so a
+provider that has actually recovered rejoins within seconds instead of only
+after the full `reconnectBackoffMs` (60s). A live connection clears the down
+state; a failed probe refreshes the backoff. This matters most for
+single-provider setups, where the down provider is the only option.
+
+**Hedged multi-provider failover.** Failover is not purely exception-based.
+For active-player BODY work (startup/seek/playback), if the chosen provider has
+not answered within `HEDGE_MS_DEFAULT` (3s) — because its connections are queued,
+or it went slow *after* the load sort — `NntpPool` speculatively starts the next
+ordered provider too and takes whichever answers first, then aborts the loser.
+So one slow provider costs ~3s, not the full 10s command timeout. A genuine
+430 / connection error still advances immediately (no hedge wait). Only
+active-player priorities hedge; background/health/read-ahead stay strictly
+sequential so they never double-fetch. Hedging complements (does not replace)
+load-based ordering and the per-provider single retry.
+
 ## Priority Lanes
 
 Provider work is scheduled by priority:
