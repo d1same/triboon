@@ -2311,6 +2311,9 @@ test('Android native player: direct source and native chrome stay out of the web
     'a .wide variant keeps 16/9 for video-thumbnail feeds');
   assert.match(ui, /wideCover: shelf\.id === 'weekly-playlists'/,
     'only the generic weekly-playlists shelf uses wide 16/9 covers; playlists/songs/community are square');
+  // Now-playing queue rows highlight the WHOLE row on hover / D-pad focus (not just the thumbnail).
+  assert.match(ui, /\.mnQueue \.musicRow:hover,\.mnQueue \.musicRow:focus,\.mnQueue \.musicRow\.focus\{background:rgba\(var\(--fg\),\.10\);box-shadow:inset 0 0 0 1px var\(--artFocusTileLine\)\}/,
+    'now-playing queue rows should highlight the full row on hover/focus, not only the icon');
   // Covers lazy-load ALL cards on scroll (IntersectionObserver) with a bounded concurrency gate —
   // not just the first 6 up front — so a long personalized home shows every thumbnail with good perf.
   assert.match(ui, /function hydrateMusicHomeCovers\(\) \{[\s\S]+\.mCard\[data-cover-key\][\s\S]+new IntersectionObserver\([\s\S]+\.observe\(c\)/,

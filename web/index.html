@@ -2508,6 +2508,11 @@ body:not(.tv) #settings .setGrid[data-stab="display"]{grid-template-columns:repe
 .musicRow{display:flex;align-items:center;gap:14px;width:100%;text-align:left;padding:8px 12px;border-radius:12px;min-height:60px}
 .musicRow:hover,.musicRow:focus,.musicRow.focus{background:transparent;outline:none;box-shadow:none}
 .musicRow.cur{background:rgba(193,59,214,.14)}
+/* Now-playing queue (player + playlist under it): highlight the WHOLE row on hover / D-pad focus,
+   not just the thumbnail icon. A translucent fill + subtle ring (matches the search-row focus cue)
+   so text stays readable on every theme. Scoped to .mnQueue so search rows keep their own look. */
+.mnQueue .musicRow:hover,.mnQueue .musicRow:focus,.mnQueue .musicRow.focus{background:rgba(var(--fg),.10);box-shadow:inset 0 0 0 1px var(--artFocusTileLine)}
+.mnQueue .musicRow.cur:hover,.mnQueue .musicRow.cur:focus,.mnQueue .musicRow.cur.focus{background:rgba(193,59,214,.24)}
 .musicRow .mThumb{width:46px;height:46px;border-radius:8px;background:#241934 center/178% auto no-repeat;flex:none;position:relative;overflow:hidden}
 .musicRow:hover .mThumb,.musicRow:focus .mThumb,.musicRow.focus .mThumb{box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 9px var(--artFocusGlow),0 10px 24px rgba(0,0,0,.28)}
 .musicRow .mThumb .mEq{position:absolute;inset:0;display:none;place-items:center;background:rgba(11,8,18,.5)}
