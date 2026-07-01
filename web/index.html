@@ -286,11 +286,8 @@ body[data-spotlight] .chGroupHead.focusable.focus,
 body[data-spotlight] .gRow.focusable.focus,
 body[data-spotlight] .lcat.focusable.focus,
 body[data-spotlight] .pgRow.focusable.focus{transform:none}
-/* Guide: dark label on the gold focused channel cell / category so it stays readable on the fill. */
-body[data-spotlight] .gRow.focusable.focus .gCh,
-body[data-spotlight] .lcat.focusable.focus,
-body[data-spotlight] .liveGuideShell .lcat.focusable.focus,
-body[data-spotlight] .liveGuideShell .lcat.focus{color:var(--btnFocusText)}
+/* Guide keeps the one professional steel accent even on spotlight themes (no gold fill), so the
+   focused channel/category label stays normal-coloured — no dark-on-fill override here. */
 /* Left menu: the focused row becomes a solid amber chip with dark text + a bold bar. */
 body[data-spotlight] .railBtn.focusable.focus,
 body[data-spotlight] .railBtn:focus-visible,
@@ -1916,6 +1913,37 @@ body.tv #heroCredits{height:16px;margin-bottom:6px;overflow:hidden}
   text-transform:uppercase;color:var(--amber);padding:14px 4px 0}
 
 /* Live TV channel cards. */
+/* ── One professional EPG accent, global on EVERY theme ──────────────────────────────
+   The guide used each theme's bright focus/amber (gold, coral, magenta) for categories,
+   channels, the timeline and the now-line, which read as cartoonish. Scope-override the
+   accent tokens on the guide roots so the whole EPG shares one calm steel-blue regardless
+   of theme. Change these four values to re-tone the entire guide. */
+/* CHANNELS + TIMELINE: professional steel-blue accent (focus bar, now-line, live programme,
+   focus ring), global on every theme. Focus/selected BACKGROUNDS use neutral washes that adapt
+   to light/dark (--fg flips per theme) so spotlight themes stop painting a solid bright fill. */
+#chBody, #pGuide, .pgGuideShell {
+  --focus: #5A89B8;
+  --focusSoft: rgba(90,137,184,.30);
+  --amber: #5A89B8;
+  --artFocusLine: rgba(90,137,184,.66);
+  --artFocusGlow: rgba(90,137,184,.34);
+  --btnHover: rgba(var(--fg),.14);
+  --btnSelected: rgba(var(--fg),.16);
+  --btnSelectedHover: rgba(var(--fg),.24);
+  --btnFocusText: var(--text);
+}
+/* CATEGORIES: a distinct muted-teal accent (+ teal-tinted selected) so the category rail reads
+   apart from the blue channel side. Set directly on the category panes → overrides the inherited
+   channel steel for this subtree, on every theme. */
+#chCats, .liveCatPane, .guideCats, .pgCatPane {
+  --focus: #4FA0A0;
+  --focusSoft: rgba(79,160,160,.30);
+  --amber: #4FA0A0;
+  --artFocusLine: rgba(79,160,160,.66);
+  --artFocusGlow: rgba(79,160,160,.34);
+  --btnSelected: rgba(79,160,160,.20);
+  --btnSelectedHover: rgba(79,160,160,.32);
+}
 .chCard{display:flex;flex-direction:column;gap:8px;background:none;text-align:left}
 .chCard .chLogo{aspect-ratio:16/9;border-radius:12px;background:rgba(22,16,32,.85);border:0;
   display:grid;place-items:center;padding:14px;transition:box-shadow .15s}
@@ -1959,8 +1987,10 @@ body.tv #heroCredits{height:16px;margin-bottom:6px;overflow:hidden}
 .lcat.focusable.focus{transform:none;background:var(--btnHover);box-shadow:inset 3px 0 0 var(--focus);color:var(--text)}
 .lcat.sel.focusable.focus{background:var(--btnSelectedHover);color:var(--text)}
 #chBody.liveGuideShell,.pgGuideShell.liveGuideShell{display:grid;grid-template-columns:minmax(210px,250px) minmax(0,1fr);gap:0;align-items:stretch;min-height:360px;
-  background:var(--soft);border:1px solid var(--line);border-radius:0;overflow:hidden}
-.liveCatPane{min-height:0;display:flex;flex-direction:column;background:var(--field);border:0;border-radius:0;padding:0;overflow:hidden}
+  background:var(--soft);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+/* Category rail: rounded top-left/bottom-left to match the channel side, on its own subtly
+   teal-tinted sidebar background so it reads apart from the channel/timeline pane. */
+.liveCatPane{min-height:0;display:flex;flex-direction:column;background:linear-gradient(rgba(79,160,160,.10),rgba(79,160,160,.10)),var(--field);border:0;border-radius:16px 0 0 16px;padding:0;overflow:hidden}
 .liveCatTitle{height:34px;display:flex;align-items:center;font:800 10px "JetBrains Mono";letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:0 12px}
 .liveGuideShell .guideCats{display:flex;flex-direction:column;gap:0;overflow-y:auto;overflow-x:hidden;padding:0;scroll-padding:10px 0 30px}
 .liveGuideShell .lcat{width:100%;min-height:58px;border-radius:0;padding:7px 12px;text-align:left;background:transparent;border-color:transparent;
@@ -19115,6 +19145,28 @@ function focusFirstLiveContent() {
   focusGrid(parseInt(el.dataset.grid, 10) || 0);
   return true;
 }
+// Left/right focus memory between the category rail and the channel list: remember the channel you
+// left (per category) so RIGHT back into the SAME category lands on it again, not the top row.
+function rememberLiveChannel(el) {
+  if (!el) return;
+  S.liveChanReturnIdx = parseInt(el.dataset.grid, 10);
+  S.liveChanReturnCat = S.liveCat;
+}
+function focusLiveContentRemembered() {
+  flushLiveCatApply();
+  const els = liveContentEls();
+  if (!els.length) return false;
+  S.liveCatDpadMode = false;
+  // Same category we came from → return to that exact channel; a different category is a different
+  // list, so start at the top.
+  if (S.liveChanReturnCat === S.liveCat && Number.isFinite(S.liveChanReturnIdx)
+      && els.some((e) => parseInt(e.dataset.grid, 10) === S.liveChanReturnIdx)) {
+    focusGrid(S.liveChanReturnIdx);
+    return true;
+  }
+  focusGrid(parseInt(els[0].dataset.grid, 10) || 0);
+  return true;
+}
 function browseFilterEls() {
   // genre + sort selects, then any relocated local-library admin buttons (Scan / Refresh metadata),
   // so the whole filter-bar head is one flat left↔right D-pad row.
@@ -20358,16 +20410,16 @@ document.addEventListener('keydown', (e) => {
         return focusLiveCategory(ci + 1, true);
       }
       if (focusedGuideRow) {
-        if (k === 'ArrowLeft') return focusLiveCategory();
+        if (k === 'ArrowLeft') { rememberLiveChannel(focusedGuideRow); return focusLiveCategory(); }
         if (k === 'ArrowRight') return focusGrid(parseInt(focusedGuideRow.dataset.grid, 10) || S.gridIdx || 0);
       }
       if (focusedChannel) {
-        if (k === 'ArrowLeft') return focusLiveCategory();
+        if (k === 'ArrowLeft') { rememberLiveChannel(focusedChannel); return focusLiveCategory(); }
       }
       if (focusedCat) {
         const ci = Math.max(0, cats.indexOf(focusedCat));
         if (k === 'ArrowLeft') return enterRail();
-        if (k === 'ArrowRight') return focusFirstLiveContent() || focusGrid(parseInt(focusedCat.dataset.grid, 10) || S.gridIdx || 0);
+        if (k === 'ArrowRight') return focusLiveContentRemembered() || focusGrid(parseInt(focusedCat.dataset.grid, 10) || S.gridIdx || 0);
         if (k === 'ArrowUp') return ci <= 0 ? focusLiveFilter() : focusLiveCategory(ci - 1, true);
         if (k === 'ArrowDown') return focusLiveCategory(ci + 1, true);
       }

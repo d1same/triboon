@@ -2022,6 +2022,16 @@ test('Android native player: direct source and native chrome stay out of the web
     'Live TV category D-pad focus should scroll the category pane directly, not the whole grid');
   assert.match(ui, /const inLiveCatMode = focusedCat \|\| \(S\.liveCatDpadMode && !focusedGuideRow && !focusedChannel\);[\s\S]+Number\.isFinite\(S\.liveCatNavIdx\)[\s\S]+return focusLiveCategory\(ci \+ 1, true\);/,
     'Live TV category fast-repeat should keep moving from the remembered category index during rerenders without stealing row focus');
+  // Guide left/right focus memory: LEFT off a channel remembers it (per category); RIGHT back into
+  // the SAME category returns to that channel, a different category starts at the first row.
+  assert.match(ui, /function rememberLiveChannel\(el\) \{[\s\S]+S\.liveChanReturnIdx = parseInt\(el\.dataset\.grid, 10\);[\s\S]+S\.liveChanReturnCat = S\.liveCat;/,
+    'leaving a channel to the category rail should remember which channel + category');
+  assert.match(ui, /function focusLiveContentRemembered\(\) \{[\s\S]+S\.liveChanReturnCat === S\.liveCat && Number\.isFinite\(S\.liveChanReturnIdx\)[\s\S]+focusGrid\(S\.liveChanReturnIdx\);[\s\S]+focusGrid\(parseInt\(els\[0\]\.dataset\.grid, 10\) \|\| 0\)/,
+    'returning right into the same category should restore the remembered channel, else the first row');
+  assert.match(ui, /if \(focusedGuideRow\) \{[\s\S]+rememberLiveChannel\(focusedGuideRow\); return focusLiveCategory\(\);/,
+    'ArrowLeft off a guide row should remember the channel before returning to categories');
+  assert.match(ui, /if \(k === 'ArrowRight'\) return focusLiveContentRemembered\(\) \|\| focusGrid\(parseInt\(focusedCat\.dataset\.grid/,
+    'ArrowRight from a category should restore the remembered channel');
   assert.match(ui, /if \(S\.view === 'livetv'\) \{[\s\S]+el\.classList\.contains\('lcat'\)[\s\S]+S\.liveCatDpadMode = true;[\s\S]+el\.classList\.contains\('gRow'\) \|\| el\.classList\.contains\('chCard'\)[\s\S]+S\.liveCatDpadMode = false;/,
     'Live TV focus state should distinguish category mode from channel-row mode');
   assert.match(ui, /function focusRail\(i, opts = \{\}\) \{[\s\S]+preview && !opts\.suppressPreview[\s\S]+preview\.run\(\)/,
