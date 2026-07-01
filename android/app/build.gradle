@@ -27,8 +27,8 @@ android {
         applicationId = "app.triboon.tv"
         minSdk = 23          // Media3 1.10.x requires API 23+; Shield/onn/Chromecast TV targets clear this
         targetSdk = 36
-        versionCode = 224
-        versionName = "2.2.8"
+        versionCode = 225
+        versionName = "2.2.9"
     }
 
     signingConfigs {
@@ -81,6 +81,9 @@ dependencies {
     implementation "androidx.media3:media3-exoplayer:$media3Version"
     implementation "androidx.media3:media3-exoplayer-hls:$media3Version"
     implementation "androidx.media3:media3-ui:$media3Version"
+    // MediaSessionCompat + MediaStyle notification for the WebView-audio Music player: keeps music
+    // playing in a foreground service when backgrounded and shows lock-screen/notification controls.
+    implementation "androidx.media:media:1.7.0"
 }
 
 // The shell stays WebView-first for browsing, but every Android app video surface hands off

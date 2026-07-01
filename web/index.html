@@ -15843,8 +15843,9 @@ function updateMusicMediaSession() {
   nativeMusicSession(!mAudio.paused); // refresh the shell's now-playing/keep-alive state on track change
 }
 function clearMusicMediaSession() {
-  if (!('mediaSession' in navigator)) return;
-  try { navigator.mediaSession.metadata = null; } catch {}
+  if ('mediaSession' in navigator) { try { navigator.mediaSession.metadata = null; } catch {} }
+  // Tear down the Android foreground media service + its notification when music fully stops.
+  try { if (window.TriboonTV && TriboonTV.musicStop) TriboonTV.musicStop(); } catch {}
 }
 // Tell the Android shell whether music is actively playing. The shell keeps the WebView (and its
 // <audio>) alive in the background ONLY while music plays, so locking the screen / switching apps
@@ -15866,6 +15867,8 @@ function nativeMusicSession(playing) {
   } catch {}
 }
 window.__tvMusicTransport = (action) => musicTransport(action);
+// Lock-screen scrubber → seek the <audio> (seconds). No-op if nothing is playing.
+window.__tvMusicSeek = (sec) => { try { if (S.musicCur && mAudio) mAudio.currentTime = Math.max(0, +sec || 0); } catch {} };
 function musicRows() { return [...document.querySelectorAll('#musicList .mArtistHit, #musicList .musicRow[data-mrow]')]; }
 function scrollMusicRowIntoView(el) {
   const ml = $('musicList');

@@ -9,6 +9,12 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
+    <!-- Music: a foreground media service keeps WebView audio playing when backgrounded / screen
+         locked, with a MediaSession lock-screen/notification controls. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- Android 11+ package visibility: without these, isRecognitionAvailable() can't see
          the platform speech service and voice search silently reports "unavailable". -->
     <queries>
@@ -49,6 +55,21 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Foreground media service for Music (WebView <audio>) — background playback + lock-screen
+             controls via MediaSessionCompat. -->
+        <service
+            android:name=".MusicService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+        <!-- Routes hardware/BT/lock-screen media buttons to the MediaSession. -->
+        <receiver
+            android:name="androidx.media.session.MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
 
         <!-- Exposes the downloaded update APK (in cacheDir) to the system package installer. -->
         <provider

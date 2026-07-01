@@ -1002,6 +1002,30 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android phone shell pads content for the system bars (immersive/TV stays edge-to-edge)');
   assert.match(android, /boolean isTv = isTvDevice\(\);[\s\S]+TriboonTV\/[\s\S]+TriboonAndroid\//,
     'Android shell should tag TV and phone WebViews differently');
+  // Background music + lock-screen controls: a foreground MediaSession service (MusicService)
+  // mirrors the WebView <audio> player and routes lock-screen transport back to it.
+  const musicService = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MusicService.java'), 'utf8');
+  assert.ok(/class MusicService extends Service/.test(musicService) && musicService.includes('MediaSessionCompat')
+    && musicService.includes('new MediaStyle()') && musicService.includes('startForeground(NOTIF_ID'),
+    'MusicService is a foreground service with a MediaSession + MediaStyle notification');
+  assert.ok(musicService.includes('MainActivity.dispatchMusicTransport("play")')
+    && musicService.includes('MainActivity.dispatchMusicTransport("pause")')
+    && musicService.includes('MainActivity.dispatchMusicTransport("next")'),
+    'lock-screen transport buttons forward back to the web player');
+  assert.match(manifest, /android:name="\.MusicService"[\s\S]+android:foregroundServiceType="mediaPlayback"/,
+    'MusicService declared with the mediaPlayback foreground type');
+  assert.ok(manifest.includes('android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK') && manifest.includes('android.permission.POST_NOTIFICATIONS'),
+    'media-playback foreground + notification permissions declared');
+  assert.match(androidGradle, /androidx\.media:media:/,
+    'androidx.media (MediaSessionCompat) dependency present');
+  assert.match(android, /public void musicSession\(String json\)[\s\S]+updateMusicService\(j, playing\)/,
+    'musicSession bridge drives the foreground MusicService');
+  assert.match(android, /if \(!musicServiceUp && playing\) \{[\s\S]+startForegroundService\(i\);[\s\S]+else if \(musicServiceUp\) \{[\s\S]+startService\(i\)/,
+    'first play starts the FGS from the foreground; later updates use startService (no background-FGS-start)');
+  assert.match(ui, /function clearMusicMediaSession\(\)[\s\S]+TriboonTV\.musicStop/,
+    'tearing down music stops the Android foreground service');
+  assert.match(ui, /window\.__tvMusicSeek = \(sec\) =>/,
+    'lock-screen scrubbing seeks the web audio element');
   // The native backward-jump auto-resume must require the regression to persist across 2 ticks so a
   // one-tick PTS/GOP wobble on a resumed (server-seek) stream no longer dips-and-snaps ~every 10 min.
   assert.match(android, /private void rememberNativeVideoPosition\(\) \{[\s\S]+backwardsBy > 5000L\) \{[\s\S]+\+\+nativeBackwardTicks < 2\) return;/,

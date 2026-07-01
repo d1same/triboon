@@ -135,6 +135,7 @@ public class MainActivity extends Activity {
     private static final int PERSONAL_IPTV_READ_TIMEOUT_MS = 20000;
     private static final int REQ_VOICE = 31;
     private static final int REQ_MIC = 32;
+    private static final int REQ_NOTIF = 33; // POST_NOTIFICATIONS for the music media notification (API 33+)
     private static final long WEB_RENDERER_CRASH_WINDOW_MS = 15000L;
     private static final int WEB_RENDERER_CRASH_LIMIT = 2;
     private static final int MIN_WEBVIEW_MAJOR = 88;
@@ -271,6 +272,9 @@ public class MainActivity extends Activity {
     // WebView, so music keeps playing with the screen off / app backgrounded. volatile: written on the
     // JS binder thread, read on the UI thread.
     private volatile boolean musicPlaying;
+    private boolean musicServiceUp; // whether the foreground MusicService is currently running
+    // Weak-ish static handle so the MusicService can forward lock-screen transport to the WebView.
+    static MainActivity active;
     private View nativeClickArmedView;
     private long nativeClickArmedAtMs;
     private boolean nativeOpenSubtitleMenuAfterRefresh;
@@ -327,6 +331,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        active = this; // MusicService forwards lock-screen transport back to this Activity
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         root = new FrameLayout(this);
@@ -1347,13 +1352,23 @@ public class MainActivity extends Activity {
                 runOnUiThread(() -> applyNativeGuidePipRect(json));
             }
 
-            // Web music player reports whether audio is actively playing so the shell can keep the
-            // WebView (and its <audio>) alive in the background instead of pausing it in onPause().
+            // Web music player pushes now-playing state (title/artist/artwork/duration/position +
+            // playing). The shell keeps the WebView alive (onPause guard) AND mirrors it into the
+            // foreground MusicService for background playback + lock-screen/notification controls.
             @android.webkit.JavascriptInterface
             public void musicSession(String json) {
                 if (!trustedBridgeOrigin()) return;
-                try { musicPlaying = new org.json.JSONObject(json).optBoolean("playing", false); }
-                catch (Throwable ignored) { musicPlaying = false; }
+                org.json.JSONObject j;
+                try { j = new org.json.JSONObject(json); } catch (Throwable ignored) { return; }
+                final boolean playing = j.optBoolean("playing", false);
+                musicPlaying = playing;
+                runOnUiThread(() -> updateMusicService(j, playing));
+            }
+            @android.webkit.JavascriptInterface
+            public void musicStop() {
+                if (!trustedBridgeOrigin()) return;
+                musicPlaying = false;
+                runOnUiThread(MainActivity.this::stopMusicService);
             }
         }, "TriboonTV");
 
@@ -6775,8 +6790,61 @@ public class MainActivity extends Activity {
     }
 
     private void jsMusicTransport(String action) {
+        if (web == null) return;
         web.evaluateJavascript("window.__tvMusicTransport && window.__tvMusicTransport('"
                 + action + "')", null);
+    }
+
+    // ---- MusicService bridge: background playback + lock-screen controls ----
+    // The service (a different component) forwards lock-screen/BT transport back to the web player.
+    static void dispatchMusicTransport(String action) {
+        MainActivity a = active;
+        if (a != null) a.runOnUiThread(() -> a.jsMusicTransport(action));
+    }
+    static void dispatchMusicSeek(long positionMs) {
+        MainActivity a = active;
+        if (a != null) a.runOnUiThread(() -> {
+            if (a.web != null) a.web.evaluateJavascript(
+                "window.__tvMusicSeek && window.__tvMusicSeek(" + (positionMs / 1000) + ")", null);
+        });
+    }
+    private void updateMusicService(org.json.JSONObject j, boolean playing) {
+        try {
+            ensureNotificationPermission();
+            Intent i = new Intent(this, MusicService.class).setAction(MusicService.ACTION_UPDATE)
+                .putExtra("playing", playing)
+                .putExtra("title", j.optString("title", "Music"))
+                .putExtra("artist", j.optString("artist", ""))
+                .putExtra("album", j.optString("album", ""))
+                .putExtra("artwork", j.optString("artwork", ""))
+                .putExtra("duration", j.optLong("duration", 0))
+                .putExtra("position", j.optLong("position", 0));
+            if (!musicServiceUp && playing) {
+                // First start happens while the user is in the app (they pressed play), so a
+                // foreground-service start is permitted. Subsequent updates use startService — the
+                // service is already running, avoiding the Android-12+ background-FGS-start block.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(i);
+                else startService(i);
+                musicServiceUp = true;
+            } else if (musicServiceUp) {
+                startService(i);
+            }
+        } catch (Throwable t) { Log.w(TAG, "music service update failed", t); }
+    }
+    private void stopMusicService() {
+        if (!musicServiceUp) return;
+        musicServiceUp = false;
+        try { startService(new Intent(this, MusicService.class).setAction(MusicService.ACTION_STOP)); }
+        catch (Throwable ignored) {}
+    }
+    private void ensureNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return;
+        try {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{ android.Manifest.permission.POST_NOTIFICATIONS }, REQ_NOTIF);
+            }
+        } catch (Throwable ignored) {}
     }
 
     // BACK walks up through the web app (player → detail → home). The page's __tvBack()
@@ -7008,6 +7076,8 @@ public class MainActivity extends Activity {
         setPhonePlaybackOrientation(false);
         disposeWebView(web, false);
         if (speech != null) { speech.destroy(); speech = null; }
+        stopMusicService(); // tear down the media notification + foreground service with the app
+        if (active == this) active = null;
         super.onDestroy();
     }
 }
