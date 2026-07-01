@@ -18003,11 +18003,13 @@ function activityRowHtml(s = {}, active = false) {
   const detail = active ? activityDetail(s) : (s.subline || s.fileName || activityTypeLabel(s));
   const bar = active ? `<div class="activityBar" style="--pct:${pct}%"><span></span></div>` : '';
   const metaTop = active ? pos : activityTypeLabel(s);
+  const who = esc([s.userName, detail].filter(Boolean).join(' · '));
+  const loc = s.location ? ` <span class="activityLoc">· 📍 ${esc(s.location)}</span>` : '';
   return `<div class="activityRow${active ? ' isActive' : ' isHistory'}">
     <div class="activityAvatar">${initial}<span class="activityDot"></span></div>
     <div class="activityWhat">
       <div class="activityTitleLine"><b>${esc(activityTitle(s))}</b>${streamBadge}</div>
-      <small>${esc([s.userName, detail].filter(Boolean).join(' · '))}</small>${bar}</div>
+      <small>${who}${loc}</small>${bar}</div>
     ${activityDeviceCell(s)}
     <div class="arMeta"><b>${esc(metaTop)}</b><small>${esc(activityTimeLabel(s, active))}</small></div>
   </div>`;

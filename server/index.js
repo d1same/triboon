@@ -3208,13 +3208,48 @@ function activityDeviceName(b = {}, req = {}) {
   if (/\bSafari\//.test(ua) && /Apple/.test(ua)) return 'Safari';
   return 'Web';
 }
+// Best-effort CITY-LEVEL geolocation for the admin "now watching" panel. Cached per IP (private/LAN
+// addresses resolve to "Local network" with no lookup). The viewer's public IP leaves the server
+// ONLY for this lookup (to a free, no-key service) and is NEVER stored on the row or returned to the
+// client — only the resulting "City, Country" label is.
+const geoCache = new Map(); // ip -> { label, at }
+const GEO_TTL_MS = 7 * 24 * 3600 * 1000;
+function normalizeIp(ip) { return String(ip || '').replace(/^::ffff:/, '').trim(); }
+function isPrivateIp(ip) {
+  return !ip || ip === '::1' || /^127\./.test(ip) || /^10\./.test(ip) || /^192\.168\./.test(ip)
+    || /^172\.(1[6-9]|2\d|3[01])\./.test(ip) || /^169\.254\./.test(ip)
+    || /^f[cd][0-9a-f]{2}:/i.test(ip) || /^fe80:/i.test(ip);
+}
+function clientIpForGeo(ctx) {
+  const xff = ctx && ctx.req && ctx.req.headers['x-forwarded-for'];
+  if (xff) return String(xff).split(',')[0].trim(); // behind a reverse proxy → first hop is the real client
+  return ctx && ctx.req && ctx.req.socket ? (ctx.req.socket.remoteAddress || '') : '';
+}
+async function geoLocate(rawIp) {
+  const ip = normalizeIp(rawIp);
+  if (isPrivateIp(ip)) return 'Local network';
+  const hit = geoCache.get(ip);
+  if (hit && Date.now() - hit.at < GEO_TTL_MS) return hit.label;
+  let label = '';
+  try {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 4000);
+    const r = await fetch(`https://ipwho.is/${encodeURIComponent(ip)}?fields=success,city,country`, { signal: ac.signal });
+    clearTimeout(timer);
+    const j = await r.json();
+    if (j && j.success) label = [j.city, j.country].filter(Boolean).join(', ');
+  } catch { /* offline / rate-limited / bad ip → leave unknown */ }
+  geoCache.set(ip, { label, at: Date.now() });
+  return label;
+}
 function normalizeActivityRow(ctx, b = {}, id, existing = {}) {
   const duration = Math.max(0, Number(b.duration || 0) || 0);
   const position = Math.max(0, Number(b.position || 0) || 0);
   const percent = duration ? Math.max(0, Math.min(100, Math.round((position / duration) * 100))) : 0;
   const live = activityLooksLive({ ...b, key: b.key || existing.key });
   const title = live ? 'Live TV' : scrubActivityText(b.title || (b.meta && b.meta.title) || 'Playing', 180);
-  return {
+  const ip = clientIpForGeo(ctx);
+  const row = {
     id,
     sessionId: id,
     userId: ctx.user.id,
@@ -3237,9 +3272,14 @@ function normalizeActivityRow(ctx, b = {}, id, existing = {}) {
     position,
     duration,
     percent,
+    location: scrubActivityText(existing.location || '', 60),
     startedAt: existing.startedAt || Date.now(),
     updatedAt: Date.now(),
   };
+  // Resolve city-level location async so the heartbeat never blocks; the raw IP is only used here
+  // (closure) and is never stored on the row or sent to the client — only the resulting label.
+  if (!row.location && ip) geoLocate(ip).then((loc) => { if (loc) row.location = loc; }).catch(() => {});
+  return row;
 }
 function pruneActivityHistoryRows(rows, now = Date.now()) {
   return (Array.isArray(rows) ? rows : [])
