@@ -18620,7 +18620,8 @@ $('iptvRefresh').addEventListener('click', async () => {
 // mergeServerSettingsIntoPrefs and are driven by activateAccountTab.)
 function focusActiveSettingsPanel(rootId, panelAttr) {
   const root = $(rootId);
-  const active = root && root.querySelector(`[${panelAttr}]:not([hidden])`);
+  // #prefs hosts pref panels ([data-ptab]) AND the folded-in server panels (.setGrid[data-stab]).
+  const active = root && root.querySelector(`[${panelAttr}]:not([hidden]), .setGrid[data-stab]:not([hidden])`);
   const first = active && formCtls(active)[0];
   if (first) first.focus({ preventScroll: false });
 }

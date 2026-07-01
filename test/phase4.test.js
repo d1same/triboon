@@ -1208,6 +1208,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'admin entry points open the account page on the first Server-settings tab');
   assert.match(ui, /if \(v === 'settings'\) return openServerSettings\(\)/,
     'switchView(settings) should redirect to the folded-in account page');
+  // The #prefTabs ArrowRight handler (focusActiveSettingsPanel) must enter the folded-in SERVER
+  // panels too, not just pref panels — else D-pad Right from a server tab does nothing on device.
+  assert.match(ui, /function focusActiveSettingsPanel\(rootId, panelAttr\) \{[\s\S]+querySelector\(`\[\$\{panelAttr\}\]:not\(\[hidden\]\), \.setGrid\[data-stab\]:not\(\[hidden\]\)`\)/,
+    'ArrowRight from an account tab should enter both pref and server panels');
   assert.match(ui, /document\.querySelectorAll\('#prefTabs \.srvTab, #prefServerDivider'\)\.forEach\(\(el\) => \{ el\.style\.display = isAdmin/,
     'the Server-settings tab group + divider should be admin-only');
   assert.match(ui, /function syncChoiceButtons\(selector, isSelected\) \{[\s\S]+classList\.toggle\('sel', selected\)[\s\S]+setAttribute\('aria-pressed', selected \? 'true' : 'false'\)/,
