@@ -82,6 +82,17 @@ const tmdbMock = http.createServer((req, res) => {
       { episode_number: 3, name: 'Future Next', air_date: '2099-01-01', overview: 'Not yet.' },
     ] }));
   }
+  // Age-gate fixtures: an R-rated movie (blocked below Adult) and a G-rated movie (kids OK).
+  if (u.pathname === '/3/movie/990001') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ id: 990001, title: 'Restricted Movie', adult: false,
+      release_dates: { results: [{ iso_3166_1: 'US', release_dates: [{ certification: 'R' }] }] } }));
+  }
+  if (u.pathname === '/3/movie/990002') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ id: 990002, title: 'Kid Movie', adult: false,
+      release_dates: { results: [{ iso_3166_1: 'US', release_dates: [{ certification: 'G' }] }] } }));
+  }
   res.writeHead(200, { 'content-type': 'application/json' });
   res.end(JSON.stringify({
     path: req.url,
@@ -2476,6 +2487,25 @@ test('music: search uses ytmusicapi even for linked (cookie) users, returning th
     ytmusic._setYtMusicApiRunnerForTest(null);
     ytmusic._resetYtMusicApiDetection();
   }
+});
+
+test('play/prepare: age gate blocks a restricted profile from over-level titles (server-side)', async () => {
+  await httpJson(srv.port, 'POST', '/api/settings', { tmdbKey: 'gate-test-key' }, admin);
+  const kid = await httpJson(srv.port, 'POST', '/api/me/profiles', { name: 'GateKid', level: 0 }, admin);
+  const kidId = kid.json.id;
+  assert.ok(kidId, 'kid profile created');
+  // R-rated (mock movie 990001) for a Kids profile → 403, refused BEFORE any pipeline/source work.
+  for (const path of ['/api/play', '/api/prepare']) {
+    const blocked = await httpJson(srv.port, 'POST', path, { q: 'Restricted Movie', tmdbId: 990001, mediaType: 'movie', profileId: kidId }, admin);
+    assert.strictEqual(blocked.status, 403, `${path} should block R for kids: ${blocked.raw}`);
+    assert.strictEqual(blocked.json.restricted, true, `${path} flags the block as a maturity restriction`);
+  }
+  // G-rated (mock movie 990002) for the same Kids profile → the gate does NOT block it.
+  const okKid = await httpJson(srv.port, 'POST', '/api/prepare', { q: 'Kid Movie', tmdbId: 990002, mediaType: 'movie', profileId: kidId }, admin);
+  assert.notStrictEqual(okKid.status, 403, 'G-rated is allowed for a kids profile');
+  // R-rated with NO profile context (account/adult) → unrestricted.
+  const adultOk = await httpJson(srv.port, 'POST', '/api/prepare', { q: 'Restricted Movie', tmdbId: 990001, mediaType: 'movie' }, admin);
+  assert.notStrictEqual(adultOk.status, 403, 'no profile context = unrestricted (adult/account)');
 });
 
 test('music: yt-dlp work is globally queued so home/search reloads cannot fan out unbounded processes', async () => {

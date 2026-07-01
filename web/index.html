@@ -4416,7 +4416,10 @@ function certParams() {
   if (lvl >= 3) return '';
   // Kids allow up to PG (same bar as the play gate) — G-only starves the catalog.
   const cert = lvl === 0 ? 'PG' : lvl === 1 ? 'PG-13' : 'R';
-  return `&include_adult=false&certification_country=US&certification.lte=${encodeURIComponent(cert)}`;
+  // NOTE: no include_adult here — CATALOG_Q already carries it, and TMDB's discover endpoint
+  // returns HTTP 400 if include_adult appears twice (this was the "tmdb upstream 400" on kid/teen/
+  // family profiles). The one caller that uses certParams() WITHOUT CATALOG_Q adds CATALOG_Q too.
+  return `&certification_country=US&certification.lte=${encodeURIComponent(cert)}`;
 }
 // TMDB's popularity-sorted lists are polluted with softcore "erotic dramas" that are NOT
 // flagged adult (TMDB's adult flag means hardcore only — these carry mainstream genre tags).
@@ -5578,6 +5581,14 @@ function playbackRequestBody(it, picked = null, qRank = qualityRankForItem(it)) 
   if (ids.season != null) body.season = ids.season;
   if (ids.ep != null) body.ep = ids.ep;
   if (it && it.originalLanguage) body.originalLanguage = String(it.originalLanguage);
+  // Age gate: the server enforces the active profile's maturity level against the title's TMDB
+  // certification. Send the active profile id (server reads the STORED level from it) plus the
+  // title's tmdb id + media type so the server can look up its rating.
+  if (S.profile && S.profile.id) body.profileId = S.profile.id;
+  if (it && it.tmdbId) {
+    body.tmdbId = it.tmdbId;
+    body.mediaType = (it.type === 'tv' || it.type === 'episode' || it.season != null || /^tmdb:tv:/i.test(String(it.key || ''))) ? 'tv' : 'movie';
+  }
   const preferredAudio = prefLang('alang');
   if (preferredAudio) body.preferredAudioLanguage = preferredAudio;
   if (qRank !== null) {
@@ -5963,6 +5974,11 @@ async function play(it, pick) {
     await openPlayer(it, r, { nativeFirst });
   } catch (e) {
     closePlayer();
+    // Server age gate (403): a restricted profile tried a title above its maturity level.
+    if (e && e.detail && e.detail.restricted) {
+      toast(e.detail.error || `“${it.title}” is restricted for this profile`);
+      return;
+    }
     if (localExact && !picked && /no playable|no .*candidate|all candidates failed/i.test(String(e && e.message || ''))) {
       toast('No matching online source - playing your library file');
       return playLocal(localExact);
@@ -13274,7 +13290,7 @@ async function runLibrary(reset) {
   if (S.libLoading || S.libDone) return;
   S.libLoading = true;
   const page = (S.libPage || 0) + 1;
-  let path = `/api/tmdb/discover/${lib.mediaType}?sort_by=${lib.sort}&vote_count.gte=20&page=${page}` + certParams();
+  let path = `/api/tmdb/discover/${lib.mediaType}?sort_by=${lib.sort}&vote_count.gte=20&page=${page}` + CATALOG_Q + certParams();
   if (lib.genreId) path += `&with_genres=${lib.genreId}`;
   try {
     const r = await api(path);

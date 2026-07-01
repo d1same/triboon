@@ -2666,6 +2666,53 @@ function scheduleNextIptvWarm() {
 }
 const tmdb = new TmdbProxy(store, () => settings.get().tmdbKey, process.env.TMDB_BASE || undefined);
 const trakt = new Trakt(store, () => settings.get(), (mutator) => settings.update(mutator));
+
+// ---- Maturity gate: server-authoritative age restriction enforced at PLAY time ----
+// The client filters the catalog and blocks play by cert, but that is bypassable (missing-cert
+// items, crafted requests, tampered clients). This enforces it on the server too. Mirrors the
+// client's CERT_RANK/levelAllows so the play bar matches the catalog bar exactly.
+const MATURITY_CERT_RANK = { G: 0, 'TV-Y': 0, 'TV-G': 0, 'TV-Y7': 1, PG: 1, 'TV-PG': 1, 'PG-13': 2, 'TV-14': 2, R: 3, 'TV-MA': 3, 'NC-17': 3, NR: 3 };
+function usCertFromTmdb(d, type) {
+  try {
+    if (type === 'tv') {
+      const us = (d.content_ratings.results || []).find((r) => r.iso_3166_1 === 'US');
+      return us && us.rating ? us.rating : '';
+    }
+    const us = (d.release_dates.results || []).find((r) => r.iso_3166_1 === 'US');
+    return (us && (us.release_dates || []).map((x) => x.certification).find(Boolean)) || '';
+  } catch { return ''; }
+}
+// The active profile's maturity level (0 Kids · 1 Teen · 2 Family · 3 Adult), read from the STORED
+// profile (server-authoritative) by the id the client sends. No profile id (older clients /
+// account-level access) → 3 (unrestricted), so nothing is falsely blocked.
+function profileLevelFor(user, profileId) {
+  if (!profileId) return 3;
+  const p = ((user && user.profiles) || []).find((x) => x.id === profileId);
+  return p ? (p.level ?? (p.kid ? 0 : 3)) : 3;
+}
+// May a profile at `level` play this title? Adult (3) always passes with no lookup (keeps the
+// common/owner case zero-latency). Otherwise fetch the title's US certification + TMDB adult flag
+// (cached by the proxy) and apply the catalog bar: Kids ≤PG, Teen/Family ≤PG-13/TV-14. The hard
+// `adult` flag always blocks below Adult. Unknown/unfetchable maturity fails OPEN — the catalog +
+// client already gate discovery, so this is defense-in-depth and must not false-block on a TMDB
+// hiccup or a title with no rating data.
+async function maturityAllowsPlay(level, tmdbId, mediaType) {
+  if (level >= 3) return true;
+  const id = parseInt(tmdbId, 10);
+  if (!id || !settings.get().tmdbKey) return true;
+  const type = mediaType === 'tv' ? 'tv' : 'movie';
+  let d;
+  try { d = await tmdb.get(`/${type}/${id}?append_to_response=${type === 'tv' ? 'content_ratings' : 'release_dates'}`); }
+  catch { return true; }
+  if (d && d.adult) return false;
+  const cert = usCertFromTmdb(d, type);
+  if (!cert) return true;
+  const rank = MATURITY_CERT_RANK[cert] ?? 3;
+  return rank <= (level === 0 ? 1 : 2); // matches client levelAllows()
+}
+function maturityBlockedResponse(ctx) {
+  return send(ctx.res, 403, { error: 'This title is restricted for this profile.', restricted: true });
+}
 const AUTH_ART_TTL_MS = 6 * 3600 * 1000;
 let authArtCache = { expiresAt: 0, items: [] };
 
@@ -4032,6 +4079,11 @@ const H = {
     const body = await readJson(ctx.req);
     if (!body.q) return send(ctx.res, 400, { error: 'q required' });
     if (throttleUserRoute(ctx, 'play', { max: 20, windowMs: 60000, lockMs: 60000 })) return;
+    // Age restriction: a restricted profile cannot play a title above its maturity level, enforced
+    // server-side (unbypassable) using the profile's stored level + the title's TMDB certification.
+    if (!(await maturityAllowsPlay(profileLevelFor(ctx.user, body.profileId), body.tmdbId, body.mediaType))) {
+      return maturityBlockedResponse(ctx);
+    }
     const t0 = Date.now();
     // HD/UHD toggle: a per-play resolution preference may tighten the cap DOWNWARD, never
     // above the admin-set cap (Plex semantics — user picks within their ceiling).
@@ -4071,6 +4123,10 @@ const H = {
     const body = await readJson(ctx.req);
     if (!body.q) return send(ctx.res, 400, { error: 'q required' });
     if (throttleUserRoute(ctx, 'prepare', { max: 20, windowMs: 60000, lockMs: 60000 })) return;
+    // Same age gate as play() — don't even prewarm a mount for a restricted profile.
+    if (!(await maturityAllowsPlay(profileLevelFor(ctx.user, body.profileId), body.tmdbId, body.mediaType))) {
+      return maturityBlockedResponse(ctx);
+    }
     const t0 = Date.now();
     const policy = playbackPolicyFor(ctx.user, body);
     try {

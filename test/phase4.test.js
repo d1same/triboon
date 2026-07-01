@@ -411,6 +411,20 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'watchlist and calendar certification should normalize episode records to the parent TV show before calling TMDB');
   assert.match(ui, /const ok = await Promise\.all\(entries\.map\(\(w\) => \{[\s\S]+const t = certTargetForMeta\(w\.meta, w\.key\);[\s\S]+return certAllowed\(t\.type, t\.tmdbId\);[\s\S]+\}\)\);/,
     'restricted watchlist filtering should not call /api/tmdb/episode for episode records');
+  // certParams() must NOT emit include_adult — CATALOG_Q already carries it, and TMDB discover
+  // returns 400 on a duplicate include_adult (the "tmdb upstream 400" when adding a kid/teen profile).
+  assert.ok(!ui.includes('return `&include_adult=false&certification_country=US'),
+    'certParams must not duplicate include_adult (TMDB 400 on kid/teen/family catalog)');
+  assert.match(ui, /return `&certification_country=US&certification\.lte=\$\{encodeURIComponent\(cert\)\}`/,
+    'certParams returns only the certification filter (include_adult comes from CATALOG_Q)');
+  assert.match(ui, /discover\/\$\{lib\.mediaType\}[^`]+` \+ CATALOG_Q \+ certParams\(\)/,
+    'the smart-library browse (only certParams caller without CATALOG_Q) now includes CATALOG_Q so adult exclusion is kept');
+  // Age gate: the play request carries the active profile id + the title id/type so the SERVER can
+  // enforce maturity; a server 403 shows a clear "restricted for this profile" message.
+  assert.match(ui, /if \(S\.profile && S\.profile\.id\) body\.profileId = S\.profile\.id;[\s\S]+body\.tmdbId = it\.tmdbId;[\s\S]+body\.mediaType =/,
+    'playbackRequestBody sends profileId + tmdbId + mediaType for the server age gate');
+  assert.match(ui, /if \(e && e\.detail && e\.detail\.restricted\) \{[\s\S]+restricted for this profile/,
+    'a 403 age-gate response surfaces a clear restriction message to the user');
   assert.match(ui, /\.\.\.\(S\.watchlist \|\| \[\]\)\.map\(\(w\) => \(\{ \.\.\.w\.meta, _key: w\.key \}\)\)[\s\S]+Object\.entries\(S\.watchMap \|\| \{\}\)[\s\S]+const t = certTargetForMeta\(m, m\._key \|\| ''\);[\s\S]+uniq\.set\(t\.type \+ ':' \+ t\.tmdbId, \{ \.\.\.m, \.\.\.t \}\);/,
     'calendar should normalize in-progress episode metas to their TV show before fetching upcoming dates');
   assert.match(ui, /function calendarWeekDates\(start = todayStr\(\)\) \{[\s\S]+Array\.from\(\{ length: 7 \}/,
