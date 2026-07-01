@@ -14166,12 +14166,22 @@ function scaffoldLiveTv(grid) {
       renderLiveTvBody();
       input.focus();
     });
-    // D-pad exits from the filter: ↓ back to the grid, → (caret at end) to the Guide toggle.
+    // D-pad exits from the filter: ↓ back to the grid, → (caret at end) to the clear (X) if a filter
+    // is typed, else to the Multiview toolbar button.
     input.addEventListener('keydown', (e) => {
       if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); input.blur(); focusLiveCategory() || focusFirstLiveContent(); }
-      else if (e.key === 'ArrowRight' && $('chMultiBtn') && input.selectionStart >= input.value.length) {
-        e.preventDefault(); e.stopPropagation(); input.blur(); focusLiveToolbar('chMultiBtn');
+      else if (e.key === 'ArrowRight' && input.selectionStart >= input.value.length) {
+        e.preventDefault(); e.stopPropagation(); input.blur();
+        if (chClear && !chClear.hidden) chClear.focus();
+        else if ($('chMultiBtn')) focusLiveToolbar('chMultiBtn');
       }
+    });
+    // D-pad on the Live TV clear (X): Left/Up → field, Right → Multiview, Down → content, Enter → clear.
+    if (chClear) chClear.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); chClear.blur(); input.focus(); }
+      else if (e.key === 'ArrowRight' && $('chMultiBtn')) { e.preventDefault(); e.stopPropagation(); chClear.blur(); focusLiveToolbar('chMultiBtn'); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); chClear.blur(); focusLiveCategory() || focusFirstLiveContent(); }
+      else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); chClear.click(); }
     });
     if ($('chGuideBtn')) $('chGuideBtn').addEventListener('click', () => {
       S.liveGuide = !S.liveGuide;
@@ -17579,6 +17589,8 @@ function syncSearchClear() {
   const wrap = el.closest('.wrap');
   if (wrap) wrap.classList.toggle('hasClear', hasText);
 }
+function searchClearVisible() { return !$('searchClearBtn').hidden; }
+function focusSearchClear() { $('micBtn').blur(); $('searchInput').blur(); $('searchClearBtn').focus(); }
 $('searchInput').addEventListener('input', () => {
   syncSearchClear();
   clearTimeout(searchTimer);
@@ -17591,6 +17603,15 @@ $('searchClearBtn').addEventListener('click', () => {
   clearSearchResults({ invalidate: true });
   $('searchInput').focus();
 });
+// D-pad on the clear (X): Left/Up return to the field, Down drops to results, Enter clears — mirrors Music.
+$('searchClearBtn').addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); $('searchClearBtn').blur(); $('searchInput').focus(); }
+  else if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); $('searchClearBtn').blur(); focusSearchResultsSoon(); }
+  else if (e.key === 'Enter' || e.key === 'Escape' || e.key === 'Backspace') {
+    e.preventDefault(); e.stopPropagation();
+    $('searchInput').value = ''; syncSearchClear(); clearSearchResults({ invalidate: true }); $('searchInput').focus();
+  }
+});
 function searchAndFocusResults() {
   clearTimeout(searchTimer);
   syncSearchClear();
@@ -17600,6 +17621,10 @@ function searchAndFocusResults() {
 }
 $('searchInput').addEventListener('keydown', (e) => {
   if (e.key === 'ArrowDown' || e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); searchAndFocusResults(); }
+  // Caret at end + a query present: → steps to the clear (X), matching Music/Live TV.
+  else if (e.key === 'ArrowRight' && $('searchInput').selectionStart >= $('searchInput').value.length && searchClearVisible()) {
+    e.preventDefault(); e.stopPropagation(); focusSearchClear();
+  }
   // Caret at the very start: ← steps back out to the mic (it sits left of the field now).
   else if (e.key === 'ArrowLeft' && $('searchInput').selectionStart === 0 && $('micBtn').style.display !== 'none') {
     e.preventDefault(); e.stopPropagation(); $('searchInput').blur(); $('micBtn').focus();
@@ -20035,6 +20060,7 @@ document.addEventListener('keydown', (e) => {
     let ci = top.indexOf(document.querySelector('#musicNow .focus')); if (ci < 0) ci = 3;
     if (k === 'ArrowLeft') return ci > 0 ? focusMusicNowControl(top[ci - 1]) : undefined;
     if (k === 'ArrowRight') return focusMusicNowControl(top[Math.min(top.length - 1, ci + 1)]);
+    if (k === 'ArrowUp') return; // top of the now-playing loop — stay put (don't fall through to the grid handler)
     if (k === 'ArrowDown') {
       const rows = queueRows();
       if (!$('musicNow').classList.contains('queueHidden') && rows.length) return focusQueue(Math.max(0, Math.min(rows.length - 1, S.musicIdx || 0)));

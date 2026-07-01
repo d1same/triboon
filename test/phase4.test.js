@@ -539,6 +539,17 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'global search clear button empties the field and results');
   assert.match(ui, /const syncChClear = \(\) => \{[\s\S]+chClearBtn[\s\S]+toggle\('hasClear', hasText\)/,
     'Live TV filter toggles its clear button on input');
+  // D-pad reachability of the clear (X) on all three search fields (audit: no remote dead-ends).
+  assert.match(ui, /function focusSearchClear\(\) \{[\s\S]+searchClearBtn'\)\.focus\(\)/,
+    'global search has a focusSearchClear helper for D-pad');
+  assert.match(ui, /ArrowRight' && \$\('searchInput'\)\.selectionStart >= \$\('searchInput'\)\.value\.length && searchClearVisible\(\)[\s\S]+focusSearchClear\(\)/,
+    'global search ArrowRight (caret at end) reaches the clear X');
+  assert.match(ui, /\$\('searchClearBtn'\)\.addEventListener\('keydown'[\s\S]+ArrowLeft' \|\| e\.key === 'ArrowUp'[\s\S]+searchInput'\)\.focus\(\)/,
+    'the global clear X returns focus to the field on Left/Up (no dead-end)');
+  assert.match(ui, /if \(chClear\) chClear\.addEventListener\('keydown'[\s\S]+ArrowLeft' \|\| e\.key === 'ArrowUp'[\s\S]+input\.focus\(\)/,
+    'the Live TV clear X returns focus to the filter on Left/Up');
+  assert.match(ui, /if \(k === 'ArrowUp'\) return; \/\/ top of the now-playing loop/,
+    'music now-playing top controls no longer fall through on ArrowUp (no focus trap)');
   assert.match(ui, /id="chBar"><div class="chWrap"><input id="chSearch"[\s\S]+id="chClearBtn"/,
     'Live TV filter is wrapped so it can host a clear (X) button');
   assert.match(ui, /function tmdbSearchRank\(x, q\) \{[\s\S]+searchSeqIndex\(noLeadArticle, queryWords\)[\s\S]+score \+= 10000[\s\S]+score -= 1800[\s\S]+sort\(bySearchRank\)\.map\(mapTmdb\)/,
