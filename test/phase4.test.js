@@ -2303,6 +2303,14 @@ test('Android native player: direct source and native chrome stay out of the web
     'Your playlists should be a single-row rail, not a wrapping topTiles grid');
   assert.match(ui, /\.musicRail\{display:grid;grid-auto-flow:column;grid-auto-columns:minmax\(150px,168px\)/,
     'music rail cards should be compact (~150–168px), not oversized');
+  // Music covers are square (playlist/album art is native square); only the generic weekly
+  // video-thumbnail feeds keep 16/9 via .wide.
+  assert.match(ui, /\.mCover\{width:100%;aspect-ratio:1\/1;/,
+    'music covers should default to square');
+  assert.match(ui, /\.mCover\.wide\{aspect-ratio:16\/9\}/,
+    'a .wide variant keeps 16/9 for video-thumbnail feeds');
+  assert.match(ui, /wideCover: shelf\.id === 'weekly-playlists'/,
+    'only the generic weekly-playlists shelf uses wide 16/9 covers; playlists/songs/community are square');
   // Covers lazy-load ALL cards on scroll (IntersectionObserver) with a bounded concurrency gate —
   // not just the first 6 up front — so a long personalized home shows every thumbnail with good perf.
   assert.match(ui, /function hydrateMusicHomeCovers\(\) \{[\s\S]+\.mCard\[data-cover-key\][\s\S]+new IntersectionObserver\([\s\S]+\.observe\(c\)/,

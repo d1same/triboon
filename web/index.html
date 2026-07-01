@@ -2475,8 +2475,11 @@ body:not(.tv) #settings .setGrid[data-stab="display"]{grid-template-columns:repe
 .mCard:hover,.mCard.focus{box-shadow:none}
 .mCard.focusable.focus,.musicRow.focusable.focus,.mArtistHit.focusable.focus{transform:none}
 .mCard.focusable::before,.musicRow.focusable::before,.mArtistHit.focusable::before{display:none}
-.mCover{width:100%;aspect-ratio:16/9;border-radius:8px;background:#241934 center/cover;display:grid;place-items:center;
+/* Square by default — playlist + song/album art is natively square, so 16/9 cropped it. The one
+   generic "Top playlists this week" shelf (video-thumbnail feeds) opts back into 16/9 via .wide. */
+.mCover{width:100%;aspect-ratio:1/1;border-radius:8px;background:#241934 center/cover;display:grid;place-items:center;
   box-shadow:none;overflow:hidden;position:relative;transition:box-shadow .16s ease,filter .16s ease}
+.mCover.wide{aspect-ratio:16/9}
 .mCard:hover .mCover,.mCard:focus .mCover,.mCard.focus .mCover{box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 9px var(--artFocusGlow),0 14px 36px rgba(0,0,0,.34);filter:saturate(1.04)}
 .mCover::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(255,255,255,.03),rgba(0,0,0,.22));pointer-events:none}
 .mCover svg{width:28%;height:42%;opacity:.9;z-index:1}
@@ -15966,7 +15969,7 @@ function renderMusicBrowse() {
     const coverImgClass = item.coverUrl ? ' hasImg' : '';
     b.innerHTML = cls.includes('mTile')
       ? `<span class="mIco">${musicIcon(item.icon || 'music')}</span><span class="mLbl">${esc(item.title)}</span>`
-      : `<span class="mCover ${esc(item.grad || 'mGrad1')}${coverImgClass}"${coverStyle}>${musicIcon(item.icon || 'music')}</span><span class="mLbl">${esc(item.title)}</span><span class="mSub">${esc(item.sub || '')}</span>`;
+      : `<span class="mCover ${esc(item.grad || 'mGrad1')}${coverImgClass}${item.wideCover ? ' wide' : ''}"${coverStyle}>${musicIcon(item.icon || 'music')}</span><span class="mLbl">${esc(item.title)}</span><span class="mSub">${esc(item.sub || '')}</span>`;
     if (item.coverQuery) { b.dataset.coverQuery = item.coverQuery; b.dataset.coverKey = 'q:' + item.coverQuery; }
     if (item.coverFeed) { b.dataset.coverFeed = item.coverFeed; b.dataset.coverIdx = item.coverIdx || 0; b.dataset.coverKey = 'f:' + item.coverFeed + ':' + b.dataset.coverIdx; }
     if (item.coverPlaylist) { b.dataset.coverPlaylist = item.coverPlaylist; b.dataset.coverKey = 'p:' + item.coverPlaylist; }
@@ -16022,6 +16025,9 @@ function renderMusicBrowse() {
             grad: item.grad || `mGrad${(i % 4) + 1}`,
             icon: item.icon || 'music',
             coverFeed: item.coverFeed || item.query || item.title,
+            // Generic weekly picks are video-thumbnail feeds → keep 16/9; playlist/community art
+            // (get_home feeds) is square like the rest of the page.
+            wideCover: shelf.id === 'weekly-playlists',
           }, 'mCard mFeed', () => startMusicFeed(item)));
       } else if (shelf.kind === 'tracks') {
         // Dedupe by id AND by normalized title (feat.-stripped) so the same song can't appear twice
