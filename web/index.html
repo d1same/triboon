@@ -224,7 +224,6 @@ body.railClickCollapsed #rail:hover .railBtn .del{opacity:0}
 #railUser.focusable.focus,#railUser:focus-visible{transform:none;color:var(--text);
   background:var(--soft);box-shadow:none}
 #railUser .av{width:24px;height:24px;border-radius:50%;background:var(--focus);display:grid;place-items:center;font:700 12px "Sora";color:var(--onAccent);flex:none;margin:0 12px}
-#navSettings{margin-top:2px}
 /* Android TV WebView can leave CSS :hover latched after remote navigation. On TV, the rail
    expands only from our explicit D-pad state, never from hover. Desktop keeps hover expand. */
 body.tv:not(.railOpen) #rail:not(.expanded){
@@ -2797,11 +2796,9 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
   <div id="railFooter">
   <button class="railBtn focusable" id="railAddLib" title="Add library" style="display:none">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg><span class="rlabel">Add library</span></button>
-  <button class="railBtn focusable" id="navPrefs" data-nav="prefs" title="Preferences">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2.4"/><circle cx="8" cy="17" r="2.4"/></svg><span class="rlabel">Preferences</span></button>
-  <button class="railBtn focusable" data-nav="settings" title="Settings" id="navSettings" style="display:none">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z"/></svg><span class="rlabel">Settings</span></button>
-  <button id="railUser" class="railBtn focusable" title="Switch profile"><span class="av"></span><span class="rlabel">Switch profile</span></button>
+  <!-- Preferences + admin Settings now live behind the profile avatar (one entry point) — the
+       avatar opens Preferences on the Profile & Pins tab; admins get a Server settings launcher there. -->
+  <button id="railUser" class="railBtn focusable" title="Profile &amp; settings"><span class="av"></span><span class="rlabel">Profile &amp; settings</span></button>
   </div>
 </nav>
 
@@ -3027,11 +3024,11 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
   <div class="sub">Your personal setup — display, menu, Live TV and profiles. Saved per device or per account where it makes sense.</div>
 
   <div id="prefTabs">
-    <button data-tab="display" class="on focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="12" rx="2"/><path d="M8 21h8M12 17v4"/></svg><span>Display</span></button>
+    <button data-tab="profiles" class="on focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="9" r="3"/><path d="M4 20c.8-3 2.5-5 5-5s4.2 2 5 5"/><path d="M17 10v4M15 12h4"/></svg><span>Profile &amp; Pins</span></button>
+    <button data-tab="display" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="12" rx="2"/><path d="M8 21h8M12 17v4"/></svg><span>Display</span></button>
     <button data-tab="playback" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M10 8l6 4-6 4V8Z" fill="currentColor" stroke="none"/></svg><span>Playback</span></button>
     <button data-tab="menu" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 7h14M5 12h14M5 17h14"/></svg><span>Menu</span></button>
     <button data-tab="livetv" class="focusable" id="prefTabLive"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="6" width="16" height="12" rx="2"/><path d="M9 3l3 3 3-3"/></svg><span>Live TV</span></button>
-    <button data-tab="profiles" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="9" r="3"/><path d="M4 20c.8-3 2.5-5 5-5s4.2 2 5 5"/><path d="M17 10v4M15 12h4"/></svg><span>Profiles &amp; PINs</span></button>
     <button data-tab="connect" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12a3 3 0 0 1 3-3h3a3 3 0 1 1 0 6h-2"/><path d="M15 12a3 3 0 0 1-3 3H9a3 3 0 1 1 0-6h2"/></svg><span>Connections</span></button>
   </div>
 
@@ -3159,6 +3156,7 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
         </div>
         <div class="profileActions">
           <button class="profileAction focusable" id="prefSwitchProfile">Switch profile</button>
+          <button class="profileAction focusable" id="prefServerSettings" style="display:none">Server settings</button>
           <button class="profileAction danger focusable" id="prefSignOut">Sign out</button>
         </div>
       </div>
@@ -4325,9 +4323,18 @@ $('qcStart').addEventListener('click', async () => {
 });
 $('qcCancel').addEventListener('click', () => { if (S.qcTimer) clearInterval(S.qcTimer); showGate('login'); });
 // Profile / account button → "who's watching" switcher (with Sign out inside).
-$('railUser').addEventListener('click', () => { collapseRailAfterClick(); showProfilePicker(); });
+// The avatar is the single entry to Preferences (replacing the old Preferences/Settings rail
+// buttons): it opens on the Profile & Pins tab, where Switch profile / Sign out (and, for admins,
+// Server settings) live. The tab strip carries the rest of the user preferences.
+$('railUser').addEventListener('click', () => {
+  collapseRailAfterClick();
+  switchView('prefs');
+  const t = document.querySelector('#prefTabs button[data-tab="profiles"]');
+  if (t) t.click(); // always land on Profile & Pins first
+});
 $('prefSwitchProfile').addEventListener('click', showProfilePicker);
 $('prefSignOut').addEventListener('click', signOutAccount);
+$('prefServerSettings').addEventListener('click', () => switchView('settings')); // admin server config
 $('railLogo').addEventListener('click', () => { if (S.view === 'player') return; closeDetail(); switchView('home'); collapseRailAfterClick(); });
 
 /* ============ catalog ============ */
@@ -16412,6 +16419,7 @@ function renderProfileSessionActions() {
   lvl.innerHTML = `${profileIcon(LEVEL_ICON[level])}<span>${esc(LEVELS[level])}</span>`;
   $('prefSwitchProfile').innerHTML = `${profileIcon('switch')}<span>Switch profile</span>`;
   $('prefSignOut').innerHTML = `${profileIcon('logout')}<span>Sign out</span>`;
+  $('prefServerSettings').innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z"/></svg><span>Server settings</span>`;
 }
 // One universal APK for TV + phone (the tv/mobile names were retired once all devices ran a build
 // whose updater accepts triboon.apk — see the v1.7.67 migration).
@@ -20736,7 +20744,7 @@ async function enterAppShell() {
   $('railUser').querySelector('.av').textContent = profileInitial((S.profile && S.profile.name) || S.user.name);
   $('railUser').querySelector('.rlabel').textContent = (S.profile && S.profile.name) || S.user.name;
   // Admin-only controls are hidden from regular users (server is also API-gated admin-only).
-  $('navSettings').style.display = isAdmin ? '' : 'none';
+  $('prefServerSettings').style.display = isAdmin ? '' : 'none'; // admin-only Server settings launcher (avatar → Profile & Pins)
   $('railAddLib').style.display = isAdmin ? '' : 'none';
   S.watchMap = S.watchMap || {};
   S.watchlist = S.watchlist || [];

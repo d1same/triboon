@@ -3121,8 +3121,20 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'browse genre/sort controls should sit beside the fixed clock on desktop while dropping cleanly on phone shells');
   assert.match(ui, /function clearPlaybackTimers\(\) \{[\s\S]+S\.healthTimer[\s\S]+S\.watchTimer[\s\S]+\}/,
     'health/watch timers should clear through one shared player cleanup path');
-  assert.match(ui, /<div id="railMain">[\s\S]+<div id="railLibs"><\/div>[\s\S]+<\/div>\s+<div id="railFooter">[\s\S]+id="railAddLib"[\s\S]+id="navPrefs"[\s\S]+id="navSettings"[\s\S]+id="railUser" class="railBtn focusable"/,
+  assert.match(ui, /<div id="railMain">[\s\S]+<div id="railLibs"><\/div>[\s\S]+<\/div>\s+<div id="railFooter">[\s\S]+id="railAddLib"[\s\S]+id="railUser" class="railBtn focusable"/,
     'library rows should scroll separately from a pinned utility rail footer');
+  // Preferences + admin Settings are folded behind the profile avatar (the standalone nav buttons
+  // were removed to free rail space): the avatar opens Preferences on the Profile & Pins tab.
+  assert.ok(!ui.includes('id="navPrefs"') && !ui.includes('id="navSettings"'),
+    'the standalone Preferences/Settings rail buttons should be gone (folded into the avatar)');
+  assert.match(ui, /\$\('railUser'\)\.addEventListener\('click', \(\) => \{[\s\S]+switchView\('prefs'\);[\s\S]+button\[data-tab="profiles"\][\s\S]+t\.click\(\)/,
+    'the profile avatar should open Preferences and land on the Profile & Pins tab');
+  assert.match(ui, /<div id="prefTabs">\s*<button data-tab="profiles" class="on focusable">/,
+    'Profile & Pins should be the first, default-selected Preferences tab');
+  assert.match(ui, /\$\('prefServerSettings'\)\.addEventListener\('click', \(\) => switchView\('settings'\)\)/,
+    'the admin Server settings launcher (in Profile & Pins) should open the Settings page');
+  assert.match(ui, /\$\('prefServerSettings'\)\.style\.display = isAdmin \? '' : 'none'/,
+    'the Server settings launcher should be admin-only');
   assert.match(ui, /#railMain\{[\s\S]*overflow-y:auto[\s\S]*#railFooter\{[\s\S]*flex:none[\s\S]*border-top:/,
     'rail footer should stay fixed while library/menu items scroll');
   // Left menu: wrap-around (Up from the top jumps to the bottom where Preferences/Profile live) so a
