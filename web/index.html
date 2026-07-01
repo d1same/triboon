@@ -11700,7 +11700,10 @@ async function runPendingNativeSync() {
   if (!rel) return;
   if (p.subTrack !== rel || !(S.serverInfo && S.serverInfo.subSync)
       || !(window.TriboonTV && window.TriboonTV.updateActiveSubtitle)) { p._pendingNativeSyncRel = null; return; }
-  if ((p._nativeSyncTries = (p._nativeSyncTries || 0) + 1) > 4) { p._pendingNativeSyncRel = null; return; }
+  // alass reads the mount's AUDIO, which is still cold at startup — its first attempts can fail
+  // transiently until the audio warms. Give it a generous budget of native ticks (~1-2s each) so a
+  // later attempt on warm audio succeeds, instead of giving up after a few and leaving the raw sub.
+  if ((p._nativeSyncTries = (p._nativeSyncTries || 0) + 1) > 12) { p._pendingNativeSyncRel = null; return; }
   p._nativeSyncRunning = true;
   try {
     const payload = nativeSubtitlePayload(p, rel, 'manual');
@@ -11718,8 +11721,10 @@ async function runPendingNativeSync() {
     const syncUrl = base + (base.includes('?') ? '&' : '?') + 'sync=1';
     const r = await fetch(syncUrl); // triggers/awaits the alass correction, then caches it
     if (!r.ok) return; // transient — leave queued
-    p._pendingNativeSyncRel = null; // a verdict came back: definitive either way, don't retry
+    // alass didn't correct it yet (cold audio / transient failure): leave queued so a later native
+    // tick retries once the audio has warmed, instead of permanently abandoning the sync.
     if (r.headers.get('x-triboon-subsync') !== 'corrected') return;
+    p._pendingNativeSyncRel = null; // corrected — apply once and stop retrying
     if (!S.playing || S.playing !== p || p.subTrack !== rel) return;
     window.TriboonTV.updateActiveSubtitle(JSON.stringify({
       subtitleRel: rel, subtitleUrl: syncUrl,
@@ -18090,6 +18095,7 @@ async function refreshSettings() {
       <div class="kv"><span>TMDB</span><span>${st.tmdb ? 'connected (server-side key)' : 'not configured'}</span></div>
       <div class="kv"><span>ffmpeg (remux)</span><span>${st.ffmpeg ? st.ffmpeg.replace('ffmpeg version ', '').slice(0, 28) : 'not found — direct play & VLC only'}</span></div>
       <div class="kv"><span>yt-dlp (music)</span><span>${st.ytdlp ? esc(st.ytdlp) + ' — Music enabled' : 'not found — Music tab hidden'}</span></div>
+      <div class="kv"><span>Subtitle sync</span><span>${(S.serverInfo && S.serverInfo.subSync) ? 'alass active — non-matched subtitles auto-sync' : 'alass not found — subtitles served unsynced (no auto-sync)'}</span></div>
       <div class="kv"><span>Active mounts</span><span>${st.mounts}</span></div>`;
     refreshActivity();
     refreshSecurity();
