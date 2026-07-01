@@ -1481,11 +1481,11 @@ test('Android native player: direct source and native chrome stay out of the web
     'focus-driven scrolling should stay smooth in browsers but use non-stacking movement on Android TV');
   assert.match(ui, /\.pcard,\.card,\.seasonCard,\.epCard,\.castCard,\.chCard,\.playerEpCard\{[\s\S]+transition:transform \.18s cubic-bezier\(\.22,1,\.36,1\),filter \.18s ease,box-shadow \.18s ease[\s\S]+\.pcard \.art,\.seasonCard \.art,\.epCard \.still,\.castCard \.ph,\.chCard \.chLogo,\.playerEpCard \.peStill\{[\s\S]+contain:paint[\s\S]+\.pcard:hover,\.pcard\.focusable\.focus,\.seasonCard:hover,\.seasonCard\.focusable\.focus,\.epCard:hover,\.epCard\.focusable\.focus,\.castCard:hover,\.castCard\.focusable\.focus\{transform:translate3d\(0,-3px,0\)/,
     'poster, episode, cast, and channel cards should animate focus with compositor-friendly transitions');
-  assert.match(ui, /\.pcard:hover \.art,\.pcard\.focus \.art,\.seasonCard:hover \.art,\.seasonCard\.focus \.art\{[\s\S]+box-shadow:0 0 0 1\.5px var\(--artFocusLine\),0 0 24px var\(--artFocusGlow\)!important\}/,
+  assert.match(ui, /\.pcard:hover \.art,\.pcard\.focus \.art,\.seasonCard:hover \.art,\.seasonCard\.focus \.art\{[\s\S]+box-shadow:0 0 0 1\.5px var\(--artFocusLine\),0 0 9px var\(--artFocusGlow\)!important\}/,
     'poster and thumbnail focus should use theme-aware thin hollow glow instead of a thick solid line');
-  assert.match(ui, /\.card:hover,\.card\.focusable\.focus\{transform:translate3d\(0,-3px,0\);box-shadow:0 0 0 1\.5px var\(--artFocusLine\),0 0 24px var\(--artFocusGlow\)\}/,
+  assert.match(ui, /\.card:hover,\.card\.focusable\.focus\{transform:translate3d\(0,-3px,0\);box-shadow:0 0 0 1\.5px var\(--artFocusLine\),0 0 9px var\(--artFocusGlow\)\}/,
     '16:9 row cards should use the same mouse hover lift and highlight as D-pad focus');
-  assert.match(ui, /\.epCard:hover,\.epCard\.focus\{box-shadow:0 0 0 1\.5px var\(--artFocusLine\),0 0 24px var\(--artFocusGlow\)\}[\s\S]+\.castCard:hover \.ph,\.castCard\.focusable\.focus \.ph\{box-shadow:0 0 0 1\.5px var\(--artFocusLine\),0 0 24px var\(--artFocusGlow\)\}/,
+  assert.match(ui, /\.epCard:hover,\.epCard\.focus\{box-shadow:0 0 0 1\.5px var\(--artFocusLine\),0 0 9px var\(--artFocusGlow\)\}[\s\S]+\.castCard:hover \.ph,\.castCard\.focusable\.focus \.ph\{box-shadow:0 0 0 1\.5px var\(--artFocusLine\),0 0 9px var\(--artFocusGlow\)\}/,
     'detail episode and cast cards should match mouse hover highlight to D-pad focus');
   assert.match(ui, /\.seasonCard \.art\{[^}]+border:0/,
     'season artwork should not show a static border when it is not focused');

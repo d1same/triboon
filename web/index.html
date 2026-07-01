@@ -255,7 +255,7 @@ body.tv:not(.railOpen) #rail:not(.expanded) .railBtn .del{opacity:0!important}
    our spatial nav owns every visible focus cue). */
 #grid:focus,#rows:focus,#discoverRows:focus,#chBody:focus,.detailScroll:focus,#personGrid:focus{outline:none}
 .focusable{outline:none;position:relative}
-.focusable::before{content:"";position:absolute;inset:-4px;border-radius:calc(var(--r) + 5px);padding:2.5px;
+.focusable::before{content:"";position:absolute;inset:-3px;border-radius:calc(var(--r) + 4px);padding:2px;
   background:var(--grad);opacity:0;transition:opacity .15s;
   -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude}
 .focusable.focus::before,.focusable:focus-visible::before{opacity:1}
@@ -277,7 +277,7 @@ body.tv .card,body.tv .btn,body.tv .srcRow,body.tv .railBtn,body.tv .lcat,body.t
 /* Cover/card focus ring: the focus colour (decoupled from the brand accent), thicker, bigger lift. */
 body[data-spotlight]{--grad:var(--focus)}
 body[data-spotlight] .focusable.focus::before,
-body[data-spotlight] .focusable:focus-visible::before{padding:4px;inset:-5px}
+body[data-spotlight] .focusable:focus-visible::before{padding:2.5px;inset:-3px}
 body[data-spotlight] .focusable.focus{transform:translateZ(0) scale(1.05)}
 /* Left menu: the focused row becomes a solid amber chip with dark text + a bold bar. */
 body[data-spotlight] .railBtn.focusable.focus,
@@ -1204,7 +1204,7 @@ body.tv #vlcCopy{display:none}
 .pcard .art{border-radius:10px;transition:transform .16s ease,box-shadow .16s ease}
 .pcard.focusable::before{display:none}
 .pcard.focusable.focus{transform:none;box-shadow:none}
-.pcard:hover .art,.pcard.focus .art{transform:scale(1.045);box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 24px var(--artFocusGlow)}
+.pcard:hover .art,.pcard.focus .art{transform:scale(1.045);box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 9px var(--artFocusGlow)}
 .cards{gap:18px;padding:10px 4px}
 #grid,#personGrid{grid-template-columns:repeat(auto-fill,minmax(var(--poster),1fr));gap:26px 18px}
 .filterBar select{cursor:pointer}
@@ -1263,7 +1263,7 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 .seasonCard{flex:0 0 168px;text-align:left;background:none;display:flex;flex-direction:column;gap:8px}
 .seasonCard .art{aspect-ratio:2/3;border-radius:12px;background-size:cover;background-position:center;background-color:var(--raise);
   border:0;position:relative;transition:transform .16s,box-shadow .16s}
-.seasonCard:hover .art,.seasonCard.focus .art{transform:scale(1.04);box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 24px var(--artFocusGlow)}
+.seasonCard:hover .art,.seasonCard.focus .art{transform:scale(1.04);box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 9px var(--artFocusGlow)}
 .seasonCard .epbadge{position:absolute;top:8px;right:8px;background:rgba(11,8,18,.85);color:var(--amber);font:700 12px "JetBrains Mono";padding:4px 9px;border-radius:20px}
 .seasonCard .seasonYear{position:absolute;left:8px;bottom:8px;background:rgba(11,8,18,.82);border:1px solid rgba(255,255,255,.18);color:#fff;font:800 12px "JetBrains Mono";padding:5px 10px;border-radius:20px;box-shadow:0 8px 18px rgba(0,0,0,.28)}
 .seasonCard .st{font:700 14px "Sora"}
@@ -1298,7 +1298,7 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 .epCard .pbtn svg{width:14px;height:14px}
 .epCard .wdot{position:absolute;right:14px;top:16px;color:#7CE6A0;font:700 11px "JetBrains Mono"}
 .epCard.focusable::before{display:none}
-.epCard.focus{box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 24px var(--artFocusGlow)}
+.epCard.focus{box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 9px var(--artFocusGlow)}
 
 /* =========================================================================
    Round 7 — UX polish: consistent gutters, generous breathing room, and
@@ -1340,8 +1340,8 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 /* Card focus ring: a touch tighter + always above siblings so it can't hide under them. */
 .pcard.focus,.card.focus,.seasonCard.focus,.epCard.focus,.castCard.focus{z-index:3}
 .pcard,.card,.seasonCard,.epCard,.castCard{position:relative}
-.epCard:hover,.epCard.focus{box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 24px var(--artFocusGlow)}
-.castCard:hover .ph,.castCard.focusable.focus .ph{box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 24px var(--artFocusGlow)}
+.epCard:hover,.epCard.focus{box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 9px var(--artFocusGlow)}
+.castCard:hover .ph,.castCard.focusable.focus .ph{box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 9px var(--artFocusGlow)}
 /* Ring the PHOTO only — the card-wide gradient ring + drop shadow "highlighted" the name
    text too, which read as a glitch. */
 .castCard.focusable.focus{transform:none;box-shadow:none}
@@ -1385,13 +1385,13 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
   transition:transform .18s cubic-bezier(.22,1,.36,1),filter .18s ease,box-shadow .18s ease}
 .pcard .art,.seasonCard .art,.epCard .still,.castCard .ph,.chCard .chLogo,.playerEpCard .peStill{
   transition:box-shadow .18s ease,filter .18s ease,opacity .18s ease;backface-visibility:hidden;contain:paint}
-.pcard:hover .art,.pcard.focus .art,.seasonCard:hover .art,.seasonCard.focus .art{transform:none!important;box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 24px var(--artFocusGlow)!important}
+.pcard:hover .art,.pcard.focus .art,.seasonCard:hover .art,.seasonCard.focus .art{transform:none!important;box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 9px var(--artFocusGlow)!important}
 .pcard:hover,.pcard.focusable.focus,.seasonCard:hover,.seasonCard.focusable.focus,.epCard:hover,.epCard.focusable.focus,.castCard:hover,.castCard.focusable.focus{transform:translate3d(0,-3px,0)}
 /* 16:9 .card (Continue Watching, Live TV, trailers) — overflow:hidden CLIPS the ::before
    gradient ring, so these never showed a focus cue. Same coral ring as every other cover:
    box-shadow paints outside the clip. */
 .card.focusable::before{display:none}
-.card:hover,.card.focusable.focus{transform:translate3d(0,-3px,0);box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 24px var(--artFocusGlow)}
+.card:hover,.card.focusable.focus{transform:translate3d(0,-3px,0);box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 9px var(--artFocusGlow)}
 .cards{gap:18px;padding:14px 10px;margin:0}
 #grid,#personGrid{padding:16px 10px 48px;margin:0}
 #seasonGrid,#epGrid{padding:12px 8px;margin:0}
@@ -1700,7 +1700,7 @@ body.mobileShell #playerStats{left:12px;right:12px;bottom:84px;width:auto;max-he
 .calItem.focusable::before{display:none}
 .calEmpty{display:flex;align-items:center;min-height:56px;width:min(460px,100%);padding:0 2px;color:rgba(var(--fg),.42);font:650 13px "Albert Sans";text-align:left}
 .calItem .pp{width:100%;aspect-ratio:2/3;border-radius:10px;background-size:cover;background-position:center;background-color:var(--raise);box-shadow:none;transition:box-shadow .18s ease,filter .18s ease}
-.calItem:hover .pp,.calItem.focus .pp{box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 24px var(--artFocusGlow);filter:saturate(1.04)}
+.calItem:hover .pp,.calItem.focus .pp{box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 9px var(--artFocusGlow);filter:saturate(1.04)}
 .calItem .ci{min-width:0}
 .calItem .ct{font:750 13.5px/1.18 "Albert Sans";margin-bottom:3px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .calItem .cm{font:650 10.5px/1.2 "JetBrains Mono";color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -1913,7 +1913,7 @@ body.tv #heroCredits{height:16px;margin-bottom:6px;overflow:hidden}
    the ring is the same OUTER coral ring as every other cover/thumbnail. */
 .chCard.focusable.focus,.chGroupHead.focusable.focus,.gRow.focusable.focus{transform:none;box-shadow:none}
 .chCard.focusable::before{display:none}
-.chCard:hover .chLogo,.chCard.focus .chLogo{box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 24px var(--artFocusGlow)}
+.chCard:hover .chLogo,.chCard.focus .chLogo{box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 9px var(--artFocusGlow)}
 .chGroupHead.focusable.focus{box-shadow:inset 3px 0 0 var(--focus)}
 .gRow.focusable::before{display:none}
 /* Focus rings ONLY the channel cell (same language as thumbnails) — the inset frame around
@@ -2414,7 +2414,7 @@ body:not(.tv) #settings .setGrid[data-stab="display"]{grid-template-columns:repe
 .mCard.focusable::before,.musicRow.focusable::before,.mArtistHit.focusable::before{display:none}
 .mCover{width:100%;aspect-ratio:16/9;border-radius:8px;background:#241934 center/cover;display:grid;place-items:center;
   box-shadow:none;overflow:hidden;position:relative;transition:box-shadow .16s ease,filter .16s ease}
-.mCard:hover .mCover,.mCard:focus .mCover,.mCard.focus .mCover{box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 24px var(--artFocusGlow),0 14px 36px rgba(0,0,0,.34);filter:saturate(1.04)}
+.mCard:hover .mCover,.mCard:focus .mCover,.mCard.focus .mCover{box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 9px var(--artFocusGlow),0 14px 36px rgba(0,0,0,.34);filter:saturate(1.04)}
 .mCover::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(255,255,255,.03),rgba(0,0,0,.22));pointer-events:none}
 .mCover svg{width:28%;height:42%;opacity:.9;z-index:1}
 .mCover.hasImg svg{display:none}
@@ -2443,7 +2443,7 @@ body:not(.tv) #settings .setGrid[data-stab="display"]{grid-template-columns:repe
 .musicRow:hover,.musicRow:focus,.musicRow.focus{background:transparent;outline:none;box-shadow:none}
 .musicRow.cur{background:rgba(193,59,214,.14)}
 .musicRow .mThumb{width:46px;height:46px;border-radius:8px;background:#241934 center/178% auto no-repeat;flex:none;position:relative;overflow:hidden}
-.musicRow:hover .mThumb,.musicRow:focus .mThumb,.musicRow.focus .mThumb{box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 24px var(--artFocusGlow),0 10px 24px rgba(0,0,0,.28)}
+.musicRow:hover .mThumb,.musicRow:focus .mThumb,.musicRow.focus .mThumb{box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 9px var(--artFocusGlow),0 10px 24px rgba(0,0,0,.28)}
 .musicRow .mThumb .mEq{position:absolute;inset:0;display:none;place-items:center;background:rgba(11,8,18,.5)}
 .musicRow.cur .mThumb .mEq{display:grid}
 .musicRow .mBody{min-width:0;flex:1}
@@ -2460,7 +2460,7 @@ body:not(.tv) #settings .setGrid[data-stab="display"]{grid-template-columns:repe
 .mArtistHit::after{content:"";position:absolute;inset:0;background:radial-gradient(circle at 90% 15%,rgba(255,198,92,.22),transparent 34%);pointer-events:none}
 .mArtistHit:hover,.mArtistHit:focus,.mArtistHit.focus{background:linear-gradient(135deg,rgba(193,59,214,.20),rgba(251,139,60,.12));border-color:rgba(255,255,255,.08);box-shadow:none}
 .mArtistArt{width:104px;height:104px;border-radius:8px;background:#241934 center/178% auto no-repeat;box-shadow:0 16px 34px rgba(0,0,0,.34),inset 0 0 0 1px rgba(255,255,255,.08);flex:none;position:relative;z-index:1}
-.mArtistHit:hover .mArtistArt,.mArtistHit:focus .mArtistArt,.mArtistHit.focus .mArtistArt{box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 24px var(--artFocusGlow),0 16px 36px rgba(0,0,0,.34)}
+.mArtistHit:hover .mArtistArt,.mArtistHit:focus .mArtistArt,.mArtistHit.focus .mArtistArt{box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 9px var(--artFocusGlow),0 16px 36px rgba(0,0,0,.34)}
 .mArtistCopy{position:relative;z-index:1;min-width:0;flex:1}
 .mArtistType{font:800 11px "JetBrains Mono";letter-spacing:.18em;text-transform:uppercase;color:var(--amber);margin-bottom:8px}
 .mArtistName{font:800 clamp(26px,3vw,42px) "Sora";line-height:1.04;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
