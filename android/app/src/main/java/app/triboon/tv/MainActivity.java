@@ -4230,6 +4230,14 @@ public class MainActivity extends Activity {
         nativePlayerLayer.setBackgroundColor(Color.TRANSPARENT);
         nativePlayerLayer.setFocusable(false);
         nativePlayerLayer.setFocusableInTouchMode(false);
+        // The full-screen player layer is brought to front over the web EPG in guide mode so the PiP
+        // video renders on top — but it also carries a tap-to-toggle-chrome click listener, which
+        // makes it CLICKABLE across the whole screen and swallows taps meant for the web guide rows
+        // (a phone/touch bug; TV is fine because D-pad routes to the focused WebView, not touch).
+        // Drop click-consumption here so guide-area taps fall through to the WebView; the PiP
+        // PlayerView keeps its own listener. Restored in closeNativeGuideMode().
+        nativePlayerLayer.setOnClickListener(null);
+        nativePlayerLayer.setClickable(false);
         if (!alreadyGuideMode) {
             int screenW = getResources().getDisplayMetrics().widthPixels;
             int pipW = Math.max(dp(260), Math.min(dp(430), Math.round(screenW * 0.27f)));
@@ -4298,6 +4306,9 @@ public class MainActivity extends Activity {
         nativePlayerLayer.setBackgroundColor(Color.BLACK);
         nativePlayerLayer.setFocusable(true);
         nativePlayerLayer.setFocusableInTouchMode(true);
+        // Restore full-screen tap-to-toggle-chrome (guide mode had dropped it so guide taps could
+        // reach the web EPG). setOnClickListener re-marks the layer clickable.
+        nativePlayerLayer.setOnClickListener(v -> toggleNativeChromeByTouch());
         nativePlayerView.setVisibility(View.VISIBLE);
         nativePlayerView.animate().cancel();
         nativePlayerView.setAlpha(1f);
