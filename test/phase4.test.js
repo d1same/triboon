@@ -1147,6 +1147,11 @@ test('Android native player: direct source and native chrome stay out of the web
     'spotlight themes share one body[data-spotlight] block: focus-coloured ring/fill + dimmed unfocused artwork');
   assert.match(ui, /document\.body\.toggleAttribute\('data-spotlight', !!t\.spotlight\)/,
     'applyTheme should toggle body[data-spotlight] by attribute presence (not empty dataset, which would leak the spotlight to every theme)');
+  // The spotlight scale(1.05) must NOT re-introduce zoom on the wide 16/9 Music cover tiles — they
+  // focus with a cover ring only (transform:none in the base themes) and would otherwise overflow the
+  // frame/rails. Music tiles join the guide rows in the spotlight transform:none exclusion.
+  assert.match(ui, /body\[data-spotlight\] \.mCard\.focusable\.focus,\s*body\[data-spotlight\] \.musicRow\.focusable\.focus,\s*body\[data-spotlight\] \.mArtistHit\.focusable\.focus\{transform:none\}/,
+    'spotlight themes must not zoom the Music cover tiles (mCard/musicRow/mArtistHit) — ring cue only, no scale that overflows the frame');
   // Brand-name keys must NOT leak into the shipped UI — only the made-up names.
   assert.ok(!ui.includes("label: 'Netflix'") && !ui.includes("label: 'Hulu'")
     && !ui.includes("label: 'Apple TV'") && !ui.includes("label: 'Plex'")

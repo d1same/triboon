@@ -285,7 +285,14 @@ body[data-spotlight] .chCard.focusable.focus,
 body[data-spotlight] .chGroupHead.focusable.focus,
 body[data-spotlight] .gRow.focusable.focus,
 body[data-spotlight] .lcat.focusable.focus,
-body[data-spotlight] .pgRow.focusable.focus{transform:none}
+body[data-spotlight] .pgRow.focusable.focus,
+/* Music tiles are wide 16/9 covers in overflow rails near the top edge — they were designed to
+   focus with a cover ring/glow only (transform:none in the base themes). The spotlight scale above
+   re-introduced a zoom by specificity, pushing the top row + rail edges off the frame. Match the
+   base look: ring/fill cue, no zoom. */
+body[data-spotlight] .mCard.focusable.focus,
+body[data-spotlight] .musicRow.focusable.focus,
+body[data-spotlight] .mArtistHit.focusable.focus{transform:none}
 /* Guide keeps the one professional steel accent even on spotlight themes (no gold fill), so the
    focused channel/category label stays normal-coloured — no dark-on-fill override here. */
 /* Left menu: the focused row becomes a solid amber chip with dark text + a bold bar. */
