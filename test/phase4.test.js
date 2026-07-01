@@ -1104,6 +1104,17 @@ test('Android native player: direct source and native chrome stay out of the web
     'yt-dlp-backed music endpoints are rate-limited per user to prevent subprocess exhaustion');
   assert.match(android, /private void resetWebPageState\(\) \{[\s\S]+if \(musicPlaying\) \{\s*\n\s*musicPlaying = false;\s*\n\s*stopMusicService\(\);/,
     'a torn-down/recovered WebView resets musicPlaying and stops the orphaned foreground music service');
+  // Age-gate latency: play() runs the maturity cert lookup CONCURRENTLY with search+mount (awaited
+  // before any playable payload is sent, denial discards the speculative mount) so a restricted
+  // profile's TMDB round-trip overlaps the pipeline instead of serializing in front of it.
+  assert.match(idxSrc, /const maturityAllowed = maturityAllowsPlay\(profileLevelFor\(ctx\.user, body\.profileId\), body\.tmdbId, body\.mediaType\)\s*\n\s*\.catch\(\(\) => true\);/,
+    'play() fires the age check in parallel with the pipeline (fail-open, non-rejecting)');
+  assert.match(idxSrc, /if \(!\(await maturityAllowed\)\) \{ discardDeniedMount\(session, vf\); return maturityBlockedResponse\(ctx\); \}/,
+    'a denied parallel age check discards the speculative mount and returns 403 before any payload');
+  assert.match(idxSrc, /function discardDeniedMount\(session, vf\) \{[\s\S]+mounts\.delete\(vf\.id\)/,
+    'the denied-mount teardown dereferences the mount so it frees immediately rather than at the sweep');
+  assert.match(idxSrc, /function profileLevelFor\(user, profileId\) \{[\s\S]+return p \? \(p\.level \?\? \(p\.kid \? 0 : 3\)\) : 0;/,
+    'a provided-but-unknown profileId fails closed to the strictest level (no spoofed-id bypass)');
   // The native backward-jump auto-resume must require the regression to persist across 2 ticks so a
   // one-tick PTS/GOP wobble on a resumed (server-seek) stream no longer dips-and-snaps ~every 10 min.
   assert.match(android, /private void rememberNativeVideoPosition\(\) \{[\s\S]+backwardsBy > 5000L\) \{[\s\S]+\+\+nativeBackwardTicks < 2\) return;/,

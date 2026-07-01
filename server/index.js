@@ -2720,9 +2720,12 @@ function usCertFromTmdb(d, type) {
 // profile (server-authoritative) by the id the client sends. No profile id (older clients /
 // account-level access) → 3 (unrestricted), so nothing is falsely blocked.
 function profileLevelFor(user, profileId) {
+  // No profile context = the account/adult owner (unrestricted). But a profileId that's PROVIDED
+  // yet matches none of the user's profiles is anomalous (stale client state or tampering) — fail
+  // CLOSED to the strictest level so a spoofed/bogus id can't slip over-level content past the gate.
   if (!profileId) return 3;
   const p = ((user && user.profiles) || []).find((x) => x.id === profileId);
-  return p ? (p.level ?? (p.kid ? 0 : 3)) : 3;
+  return p ? (p.level ?? (p.kid ? 0 : 3)) : 0;
 }
 // May a profile at `level` play this title? Adult (3) always passes with no lookup (keeps the
 // common/owner case zero-latency). Otherwise fetch the title's US certification + TMDB adult flag
@@ -2746,6 +2749,17 @@ async function maturityAllowsPlay(level, tmdbId, mediaType) {
 }
 function maturityBlockedResponse(ctx) {
   return send(ctx.res, 403, { error: 'This title is restricted for this profile.', restricted: true });
+}
+// Release a mount+session we built speculatively but must not hand to a restricted profile: play()
+// runs the age check IN PARALLEL with search+mount, so the mount can already exist when the check
+// comes back denied. Nothing playable ever left the server (the stream token + random vf.id are
+// only in the withheld 200), so this is resource hygiene, not the security boundary — that's the
+// 403 we return instead. Dereference now so the mount frees immediately rather than at the sweep.
+function discardDeniedMount(session, vf) {
+  try { if (vf && typeof vf.cancelReadAhead === 'function') vf.cancelReadAhead(); } catch {}
+  try { if (vf) mounts.delete(vf.id); } catch {}
+  try { if (vf) for (const [url, id] of pipeline.mountByUrl) if (id === vf.id) pipeline.mountByUrl.delete(url); } catch {}
+  try { if (session && session.id) pipeline.sessions.delete(session.id); } catch {}
 }
 const AUTH_ART_TTL_MS = 6 * 3600 * 1000;
 let authArtCache = { expiresAt: 0, items: [] };
@@ -4115,9 +4129,14 @@ const H = {
     if (throttleUserRoute(ctx, 'play', { max: 20, windowMs: 60000, lockMs: 60000 })) return;
     // Age restriction: a restricted profile cannot play a title above its maturity level, enforced
     // server-side (unbypassable) using the profile's stored level + the title's TMDB certification.
-    if (!(await maturityAllowsPlay(profileLevelFor(ctx.user, body.profileId), body.tmdbId, body.mediaType))) {
-      return maturityBlockedResponse(ctx);
-    }
+    // Run the cert lookup CONCURRENTLY with search+mount so its 300-600ms (on a TMDB cache miss)
+    // overlaps the pipeline instead of serializing in front of it — the check is awaited before any
+    // playable payload is sent, so the security guarantee is unchanged, and a denial discards the
+    // speculative mount. Adult profiles resolve instantly (no lookup), so they pay nothing here.
+    // .catch→true keeps it fail-open AND non-rejecting, so it can't become an unhandled rejection
+    // if pipeline.play() throws first (the 502 path below never awaits it).
+    const maturityAllowed = maturityAllowsPlay(profileLevelFor(ctx.user, body.profileId), body.tmdbId, body.mediaType)
+      .catch(() => true);
     const t0 = Date.now();
     // HD/UHD toggle: a per-play resolution preference may tighten the cap DOWNWARD, never
     // above the admin-set cap (Plex semantics — user picks within their ceiling).
@@ -4130,6 +4149,7 @@ const H = {
           resumeFrac: Math.max(0, Math.min(1, Number(body.resumeFrac) || 0)) },
         policy
       );
+      if (!(await maturityAllowed)) { discardDeniedMount(session, vf); return maturityBlockedResponse(ctx); }
       session.uid = ctx.user.id;
       vf._q = body.q; // remembered for online subtitle search (release names match poorly)
       vf._subQuery = episodeSubtitleQuery(body.q, body.season, body.ep);
@@ -4149,6 +4169,9 @@ const H = {
         bufferGoalSec,
       }));
     } catch (e) {
+      // A maturity denial outranks a pipeline failure: a restricted profile must see "restricted",
+      // not a generic playback error, whichever settled first (and it never leaks a source either way).
+      if (!(await maturityAllowed)) return maturityBlockedResponse(ctx);
       send(ctx.res, 502, { error: e.message, summary: e.summary, attempts: e.attempts || [] });
     }
   },

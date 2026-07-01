@@ -2494,7 +2494,9 @@ test('play/prepare: age gate blocks a restricted profile from over-level titles 
   const kid = await httpJson(srv.port, 'POST', '/api/me/profiles', { name: 'GateKid', level: 0 }, admin);
   const kidId = kid.json.id;
   assert.ok(kidId, 'kid profile created');
-  // R-rated (mock movie 990001) for a Kids profile → 403, refused BEFORE any pipeline/source work.
+  // R-rated (mock movie 990001) for a Kids profile → 403. prepare refuses BEFORE any pipeline work;
+  // play runs the cert lookup IN PARALLEL with search+mount but the denial still wins (and never
+  // sends a playable payload), whether the pipeline succeeds or fails first.
   for (const path of ['/api/play', '/api/prepare']) {
     const blocked = await httpJson(srv.port, 'POST', path, { q: 'Restricted Movie', tmdbId: 990001, mediaType: 'movie', profileId: kidId }, admin);
     assert.strictEqual(blocked.status, 403, `${path} should block R for kids: ${blocked.raw}`);
@@ -2506,6 +2508,11 @@ test('play/prepare: age gate blocks a restricted profile from over-level titles 
   // R-rated with NO profile context (account/adult) → unrestricted.
   const adultOk = await httpJson(srv.port, 'POST', '/api/prepare', { q: 'Restricted Movie', tmdbId: 990001, mediaType: 'movie' }, admin);
   assert.notStrictEqual(adultOk.status, 403, 'no profile context = unrestricted (adult/account)');
+  // A PROVIDED but bogus/spoofed profileId must fail CLOSED (strictest), not silently default to
+  // adult — otherwise a tampered client could bypass the gate by sending an id that matches nothing.
+  const spoofed = await httpJson(srv.port, 'POST', '/api/prepare', { q: 'Restricted Movie', tmdbId: 990001, mediaType: 'movie', profileId: 'no-such-profile-id' }, admin);
+  assert.strictEqual(spoofed.status, 403, 'an unknown profileId fails closed to the strictest level');
+  assert.strictEqual(spoofed.json.restricted, true, 'the spoofed-profile block is a maturity restriction');
 });
 
 test('music: yt-dlp work is globally queued so home/search reloads cannot fan out unbounded processes', async () => {
