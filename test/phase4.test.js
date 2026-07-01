@@ -968,6 +968,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android phone shell pads content for the system bars (immersive/TV stays edge-to-edge)');
   assert.match(android, /boolean isTv = isTvDevice\(\);[\s\S]+TriboonTV\/[\s\S]+TriboonAndroid\//,
     'Android shell should tag TV and phone WebViews differently');
+  // The native backward-jump auto-resume must require the regression to persist across 2 ticks so a
+  // one-tick PTS/GOP wobble on a resumed (server-seek) stream no longer dips-and-snaps ~every 10 min.
+  assert.match(android, /private void rememberNativeVideoPosition\(\) \{[\s\S]+backwardsBy > 5000L\) \{[\s\S]+\+\+nativeBackwardTicks < 2\) return;/,
+    'native segment-jumpback auto-resume must confirm the regression over 2 consecutive ticks before re-mounting');
   assert.match(android, /int contentWidth = Math\.max\(dp\(260\), Math\.min\(getResources\(\)\.getDisplayMetrics\(\)\.widthPixels - \(pad \* 2\), dp\(520\)\)\);[\s\S]+setup\.addView\(addr, new LinearLayout\.LayoutParams\(contentWidth/,
     'Android first-run server setup screen should fit phone portrait widths');
   assert.doesNotMatch(android, /addr\.setMinWidth/,

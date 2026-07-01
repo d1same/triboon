@@ -282,6 +282,7 @@ public class MainActivity extends Activity {
     private boolean nativeVideoErrorNotified;
     private long nativeLastVideoDisplayMs;
     private long nativeLastAutoResumeSeekMs;
+    private int nativeBackwardTicks;
     private long nativeLastStatsMs;
     private static final long NATIVE_VIDEO_STARTUP_STALL_MS = 7000L;
     private static final long NATIVE_VIDEO_HEAVY_STARTUP_STALL_MS = 12000L;
@@ -4060,15 +4061,23 @@ public class MainActivity extends Activity {
         if (nativeServerSeekMode() && nativeVideoStarted && nativeLastVideoDisplayMs > 0L) {
             long backwardsBy = nativeLastVideoDisplayMs - pos;
             if (backwardsBy > 5000L) {
+                // A benign PTS/GOP wobble in a server-seek (remux/transcode) stream dips the reported
+                // position for a SINGLE ~1s tick then recovers; a genuine segment restart stays
+                // backward. Require the regression to persist across 2 consecutive ticks before
+                // re-mounting, so a one-tick wobble no longer causes the visible dip-then-snap that
+                // the owner saw ~every 10 min on resumed movies. A real restart still recovers (~2s).
+                if (++nativeBackwardTicks < 2) return; // unconfirmed — keep last-good, wait one more tick
                 long now = SystemClock.elapsedRealtime();
                 if (nativeLastAutoResumeSeekMs <= 0L || now - nativeLastAutoResumeSeekMs >= 1500L) {
                     nativeLastAutoResumeSeekMs = now;
+                    nativeBackwardTicks = 0;
                     Log.w(TAG, "Native VOD segment jumped back by " + backwardsBy
                             + "ms; resuming same source at " + nativeLastVideoDisplayMs + "ms");
                     requestNativeVideoSeek(nativeLastVideoDisplayMs);
                 }
                 return;
             }
+            nativeBackwardTicks = 0; // forward / normal reading — reset the confirmation counter
         }
         if (pos > 0L) nativeLastVideoDisplayMs = pos;
     }
