@@ -15418,6 +15418,28 @@ function refreshMusicHomeIfPersonalPending() {
     } catch { S._musicHomeRefetch = false; }
   }, 1800);
 }
+// Load the user's playlists, resiliently. A just-updated/restarted server can transiently fail the
+// first call while it warms up (cold ytmusicapi / freshly re-materialized cookie file). Retry a
+// couple times and check link status before EVER reverting a linked account to the "Connect" tile —
+// that silent revert is what made a re-link seem necessary after every update. 'stale' = linked but
+// the load is currently failing (transient, or a genuinely expired cookie).
+async function loadYtmPlaylists(attempt = 0) {
+  try {
+    const r = await api('/api/music/playlists');
+    S.musicPlaylistLimit = MUSIC_PLAYLIST_INITIAL;
+    S.ytmPlaylists = r.linked ? (r.playlists || []) : false; // false = genuinely not linked
+    renderMusicBrowse();
+    requestAnimationFrame(() => {
+      if (S.view === 'music' && S.zone !== 'rail' && !$('musicSearch').value.trim()) focusContent();
+    });
+  } catch (e) {
+    let linked = true;
+    try { linked = !!(await api('/api/music/status')).linked; } catch {}
+    if (linked && attempt < 2) { setTimeout(() => loadYtmPlaylists(attempt + 1), attempt === 0 ? 900 : 2400); return; }
+    S.ytmPlaylists = linked ? 'stale' : false; // keep the account linked; don't force a re-link on a blip
+    renderMusicBrowse();
+  }
+}
 function loadMusic() {
   bootReady();
   if (!$('musicBrowse').children.length) renderMusicBrowse();
@@ -15440,14 +15462,7 @@ function loadMusic() {
   // Personal playlists load lazily; tracks wait until a playlist is opened.
   if (S.ytmPlaylists === undefined) {
     S.ytmPlaylists = null; // in flight
-    api('/api/music/playlists').then((r) => {
-      S.musicPlaylistLimit = MUSIC_PLAYLIST_INITIAL;
-      S.ytmPlaylists = r.linked ? (r.playlists || []) : false; // false = not linked
-      renderMusicBrowse();
-      requestAnimationFrame(() => {
-        if (S.view === 'music' && S.zone !== 'rail' && !$('musicSearch').value.trim()) focusContent();
-      });
-    }).catch(() => { S.ytmPlaylists = false; renderMusicBrowse(); });
+    loadYtmPlaylists();
   } else if (S.ytmPlaylists === null) {
     S.ytmPlaylists = undefined; // a re-entry after link/unlink cleared it mid-flight — refetch
     return loadMusic();
@@ -16077,6 +16092,11 @@ function renderMusicBrowse() {
     }
   } else if (S.ytmPlaylists === null) {
     yours.innerHTML = '<div class="mEmpty">Loading your YouTube Music library...</div>';
+  } else if (S.ytmPlaylists === 'stale') {
+    // Linked, but the playlist load failed (server still warming after an update, or the cookie
+    // expired). Offer a retry — don't drop to "Connect" (which forced needless re-linking).
+    addTile(yours, { title: 'Couldn’t load your playlists', sub: 'Tap to retry — reconnect in Preferences → Connections if it keeps failing', grad: 'mGrad1', icon: 'music' }, 'mCard mConnect',
+      () => { S.ytmPlaylists = undefined; loadMusic(); });
   } else {
     addTile(yours, { title: 'Connect YouTube Music', sub: 'Add your account to show Liked Music and playlists here.', grad: 'mGrad1', icon: 'music', coverFeed: 'liked music playlist' }, 'mCard mConnect',
       openMusicConnect);

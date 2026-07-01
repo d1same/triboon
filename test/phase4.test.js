@@ -2399,6 +2399,12 @@ test('Android native player: direct source and native chrome stay out of the web
   // never keeps showing "Connect" for an account that is actually saved/linked.
   assert.match(ui, /function musicAccountChanged\(\) \{[\s\S]+S\.ytmPlaylists = undefined;[\s\S]+S\.musicHome = undefined;[\s\S]+if \(S\.view === 'music'\) loadMusic\(\)/,
     'musicAccountChanged should arm a fresh playlists + home refetch and re-render Music if it is on-screen');
+  // A transient playlist-load failure (server warming after an update, or an expired cookie) must
+  // NOT silently revert a linked account to the "Connect" tile — retry + a 'stale' retry state.
+  assert.match(ui, /async function loadYtmPlaylists\(attempt = 0\) \{[\s\S]+\/api\/music\/status[\s\S]+if \(linked && attempt < 2\)[\s\S]+S\.ytmPlaylists = linked \? 'stale' : false/,
+    'playlist load should retry and keep a linked account linked ("stale") instead of forcing a re-link');
+  assert.match(ui, /S\.ytmPlaylists === 'stale'[\s\S]+Couldn.t load your playlists[\s\S]+S\.ytmPlaylists = undefined; loadMusic\(\)/,
+    'the stale state shows a retry tile, not the Connect tile');
   assert.match(ui, /\/api\/music\/link'[\s\S]+renderYtmBox\(\);\s+musicAccountChanged\(\)/,
     'cookie link success should refresh the Music page via musicAccountChanged');
   // OAuth linking was removed (Google blocks library reads for that token type) — no device-code
