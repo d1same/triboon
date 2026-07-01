@@ -527,6 +527,20 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'library hash routes should wait for async library metadata instead of falling through to Home');
   assert.match(ui, /if \(v === 'search'\) \{ \$\('browseTitle'\)\.textContent = 'Search';[\s\S]+if \(!opts\.preserveSearch && !opts\.preservePage\) resetSearchPage\(\);/,
     'restoring Search from Details should not clear the existing result grid');
+  // Unified search fields: global, Music, and Live TV all get a clear (X) button + the same rounded
+  // field look, and clearing behaves the same across all three.
+  assert.ok(ui.includes('id="searchClearBtn"') && ui.includes('id="musicClearBtn"') && ui.includes('id="chClearBtn"'),
+    'all three search fields (global, music, Live TV) have a clear (X) button');
+  assert.match(ui, /#musicClearBtn,#searchClearBtn,#chClearBtn\{position:absolute;right:8px/,
+    'the clear (X) button styling is shared across every search field');
+  assert.match(ui, /function syncSearchClear\(\) \{[\s\S]+searchClearBtn[\s\S]+toggle\('hasClear', hasText\)/,
+    'global search toggles its clear button on input like Music');
+  assert.match(ui, /\$\('searchClearBtn'\)\.addEventListener\('click', \(\) => \{[\s\S]+clearSearchResults/,
+    'global search clear button empties the field and results');
+  assert.match(ui, /const syncChClear = \(\) => \{[\s\S]+chClearBtn[\s\S]+toggle\('hasClear', hasText\)/,
+    'Live TV filter toggles its clear button on input');
+  assert.match(ui, /id="chBar"><div class="chWrap"><input id="chSearch"[\s\S]+id="chClearBtn"/,
+    'Live TV filter is wrapped so it can host a clear (X) button');
   assert.match(ui, /function tmdbSearchRank\(x, q\) \{[\s\S]+searchSeqIndex\(noLeadArticle, queryWords\)[\s\S]+score \+= 10000[\s\S]+score -= 1800[\s\S]+sort\(bySearchRank\)\.map\(mapTmdb\)/,
     'TMDB search should rank exact franchise/title-prefix matches above incidental phrase matches');
   assert.match(ui, /if \(S\._homeRowsSig === sig && \$\('rows'\)\.children\.length\) \{[\s\S]+if \(S\.view === 'home'\) \{[\s\S]+setRowsView\(\$\('rows'\), S\.rows, true\);[\s\S]+\}[\s\S]+S\.view === 'home' && S\.zone !== 'rail' && !document\.querySelector\('#home \.focus'\)[\s\S]+focusContent\(\);[\s\S]+return false;/,
@@ -712,7 +726,7 @@ test('music search supports voice and TV result focus without side-note clutter'
     'Music should not render a redundant title above the search strip');
   assert.match(ui, /\.musicHead \.wrap\.hasMic #musicSearch\{padding-left:58px\}[\s\S]+#musicMicBtn\{position:absolute;left:10px;/,
     'Music mic and input spacing should use the same left-mic layout as global Search');
-  assert.match(ui, /\.musicHead \.wrap\.hasClear #musicSearch\{padding-right:58px\}[\s\S]+#musicClearBtn\{position:absolute;right:8px;/,
+  assert.match(ui, /\.musicHead \.wrap\.hasClear #musicSearch\{padding-right:58px\}[\s\S]+#musicClearBtn,#searchClearBtn,#chClearBtn\{position:absolute;right:8px;/,
     'Music clear button should reserve right-side input space without covering typed text');
   assert.doesNotMatch(ui, /Liked Music and your YouTube Music playlists stay first|Weekly picks only, kept short so Music opens quickly/,
     'Music shelf headers should not render right-aligned helper text');

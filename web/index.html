@@ -708,7 +708,7 @@ body.tv #filterMenu{backdrop-filter:none}
 /* ---------- search ---------- */
 #searchBar{display:none;position:fixed;z-index:9;top:26px;left:116px;right:60px}
 #searchBar.show{display:block}
-#searchBar input{width:min(680px,100%);background:var(--field);border:1px solid var(--line);border-radius:16px;padding:16px 20px;color:var(--text);font:500 17px "Albert Sans";outline:none}
+#searchBar input{width:min(680px,100%);background:var(--field);border:1px solid var(--line);border-radius:14px;padding:16px 20px;color:var(--text);font:500 17px "Albert Sans";outline:none}
 #searchBar input:focus{border-color:var(--magenta)}
 
 /* ---------- sources drawer ---------- */
@@ -2032,7 +2032,7 @@ body.tv #heroCredits{height:16px;margin-bottom:6px;overflow:hidden}
 .liveGuideShell .lcat.favCat.focusable.focus,.liveGuideShell .lcat.favCat:focus{background:var(--btnHover);color:var(--text)}
 .liveGuideShell .lcat.favCat.sel.focusable.focus,.liveGuideShell .lcat.favCat.sel:focus{background:var(--btnSelectedHover);color:var(--text)}
 .liveGuidePane{min-width:0;min-height:0}
-#chSearch{width:min(440px,100%);background:var(--field);border:1px solid var(--line);border-radius:12px;
+#chSearch{width:min(440px,100%);background:var(--field);border:1px solid var(--line);border-radius:14px;
   padding:12px 15px;color:var(--text);font:500 14px "Albert Sans";outline:none}
 #chSearch:focus{border-color:var(--magenta)}
 .chGroupHead{display:flex;align-items:center;gap:12px;width:100%;text-align:left;padding:13px 16px;margin:6px 0;
@@ -2453,10 +2453,17 @@ body:not(.tv) #settings .setGrid[data-stab="display"]{grid-template-columns:repe
   display:grid;place-items:center;color:var(--muted);background:var(--soft)}
 #musicMicBtn.listening{background:var(--btnPrimary);color:var(--onAccent);animation:micPulse 1s ease-in-out infinite}
 #musicMicBtn:focus{transform:translateY(-50%)}
-#musicClearBtn{position:absolute;right:8px;top:50%;transform:translateY(-50%);width:36px;height:36px;border-radius:50%;
+/* One clear (X) button style shared by every search field: Music, global search, Live TV filter. */
+#musicClearBtn,#searchClearBtn,#chClearBtn{position:absolute;right:8px;top:50%;transform:translateY(-50%);width:36px;height:36px;border-radius:50%;
   display:grid;place-items:center;color:var(--muted);background:var(--soft)}
-#musicClearBtn[hidden]{display:none!important}
-#musicClearBtn:focus{transform:translateY(-50%)}
+#musicClearBtn[hidden],#searchClearBtn[hidden],#chClearBtn[hidden]{display:none!important}
+#musicClearBtn:focus,#searchClearBtn:focus,#chClearBtn:focus{transform:translateY(-50%)}
+/* Global search: reserve room for the clear (X), same as Music. */
+#searchBar .wrap.hasClear input{padding-right:58px}
+/* Live TV filter: a relative wrap so it can host a clear (X) while keeping its toolbar-row width. */
+#chBar .chWrap{position:relative;width:min(440px,100%)}
+#chBar .chWrap #chSearch{width:100%}
+#chBar .chWrap.hasClear #chSearch{padding-right:52px}
 /* Plex-inspired Music home: clean hubs with wide artwork cards that fit YTM thumbnails. */
 #musicBrowse{flex:1;overflow-y:auto;padding:0 0 96px;display:flex;flex-direction:column;gap:32px}
 #musicBrowse.hide{display:none}
@@ -2872,6 +2879,8 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
   <button id="micBtn" title="Voice search" style="display:none">
     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
   <input id="searchInput" placeholder="Search movies & shows…" autocomplete="off" maxlength="100">
+  <button id="searchClearBtn" class="focusable" title="Clear search" aria-label="Clear search" hidden>
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
 </div></div>
 
 <main id="home">
@@ -14128,7 +14137,8 @@ function scaffoldLiveTv(grid) {
   bootReady(); // a hash-restored Live TV page is a boot landing
   try {
     // Category management lives in Preferences → Live TV now — no ☷ button on the page.
-    grid.innerHTML = '<div id="chBar"><input id="chSearch" maxlength="60" autocomplete="off">'
+    grid.innerHTML = '<div id="chBar"><div class="chWrap"><input id="chSearch" maxlength="60" autocomplete="off">'
+      + '<button id="chClearBtn" class="focusable" title="Clear filter" aria-label="Clear filter" hidden><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>'
       + '<button id="chMultiBtn" class="focusable" title="Open multiview" aria-label="Open multiview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="8" height="7" rx="1.8"/><rect x="13" y="4" width="8" height="7" rx="1.8"/><rect x="3" y="13" width="8" height="7" rx="1.8"/><rect x="13" y="13" width="8" height="7" rx="1.8"/></svg><span>Multiview</span></button>'
       + (S.liveEpg ? '<button id="chGuideBtn" class="focusable"></button>' : '')
       + `</div>${liveSourceWarningHtml(S.liveSourceErrors || [])}<div id="chBody"></div>`;
@@ -14136,10 +14146,25 @@ function scaffoldLiveTv(grid) {
     const input = $('chSearch');
     input.placeholder = `Filter ${S.liveChannels.length} channels…`;
     input.value = S.liveFilter || '';
+    const syncChClear = () => {
+      const btn = $('chClearBtn'); if (!btn) return;
+      const hasText = !!input.value.trim();
+      btn.hidden = !hasText;
+      const wrap = input.closest('.chWrap'); if (wrap) wrap.classList.toggle('hasClear', hasText);
+    };
+    syncChClear();
     input.addEventListener('input', () => {
       S.liveFilter = input.value;
+      syncChClear();
       S.liveGuideCap = LIVE_GUIDE_BATCH; // new filter, fresh guide window
       clearTimeout(S._chFilterT); S._chFilterT = setTimeout(renderLiveTvBody, 180);
+    });
+    const chClear = $('chClearBtn');
+    if (chClear) chClear.addEventListener('click', () => {
+      input.value = ''; S.liveFilter = ''; syncChClear();
+      S.liveGuideCap = LIVE_GUIDE_BATCH;
+      renderLiveTvBody();
+      input.focus();
     });
     // D-pad exits from the filter: ↓ back to the grid, → (caret at end) to the Guide toggle.
     input.addEventListener('keydown', (e) => {
@@ -17523,14 +17548,32 @@ function resetSearchPage(opts = {}) {
   $('searchInput').value = '';
   $('micBtn').classList.remove('listening');
   clearSearchResults({ invalidate: true });
+  syncSearchClear();
+}
+// Show/hide the clear (X) — same pattern as Music + Live TV so all search fields behave alike.
+function syncSearchClear() {
+  const el = $('searchInput'); const btn = $('searchClearBtn');
+  if (!el || !btn) return;
+  const hasText = !!el.value.trim();
+  btn.hidden = !hasText;
+  const wrap = el.closest('.wrap');
+  if (wrap) wrap.classList.toggle('hasClear', hasText);
 }
 $('searchInput').addEventListener('input', () => {
+  syncSearchClear();
   clearTimeout(searchTimer);
   if (!$('searchInput').value.trim()) { clearSearchResults({ invalidate: true }); return; }
   searchTimer = setTimeout(doSearch, 350);
 });
+$('searchClearBtn').addEventListener('click', () => {
+  $('searchInput').value = '';
+  syncSearchClear();
+  clearSearchResults({ invalidate: true });
+  $('searchInput').focus();
+});
 function searchAndFocusResults() {
   clearTimeout(searchTimer);
+  syncSearchClear();
   const q = $('searchInput').value.trim();
   if (!q) { clearSearchResults({ invalidate: true }); $('searchInput').focus(); return; }
   doSearch().then(() => focusSearchResultsSoon()).catch(() => focusSearchResultsSoon());
