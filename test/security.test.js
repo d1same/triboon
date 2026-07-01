@@ -379,6 +379,27 @@ test('settings ops: add/remove multiple providers and indexers, secrets never ro
   await httpJson(srv.port, 'POST', '/api/settings', { providers: [{ host: '127.0.0.1', port: nntpPort, tls: false, user: 'u', pass: 'super-secret-pass', connections: 4 }] }, admin);
 });
 
+test('settings save preserves per-user YouTube Music cookies (admin save must not wipe them)', async () => {
+  // Link a cookie for the admin user (stored encrypted in settings.ytCookies[uid]).
+  const cookieText = '# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t9999999999\tSID\tregression-cookie-value\n';
+  const link = await httpJson(srv.port, 'POST', '/api/music/link', { cookies: cookieText }, admin);
+  assert.strictEqual(link.status, 200);
+  assert.strictEqual(link.json.linked, true);
+  assert.strictEqual((await httpJson(srv.port, 'GET', '/api/music/status', null, admin)).json.linkSource, 'account',
+    'cookie link should report as an account link');
+  // An unrelated admin settings save (this endpoint rebuilds the whole settings object) must NOT
+  // drop the per-user cookie — regression for "the YouTube Music cookie is lost after an update".
+  await httpJson(srv.port, 'POST', '/api/settings', { scoringGroupsTrusted: ['REGGRP'] }, admin);
+  const after = await httpJson(srv.port, 'GET', '/api/music/status', null, admin);
+  assert.strictEqual(after.json.linkSource, 'account', 'YouTube Music cookie must survive an admin settings save');
+  assert.strictEqual(after.json.linked, true);
+  // the cookie is still encrypted at rest (never stored in plaintext)
+  const raw = fs.readFileSync(path.join(process.env.TRIBOON_DATA, 'settings.json'), 'utf8');
+  assert.ok(!raw.includes('regression-cookie-value'), 'cookie encrypted at rest');
+  // clean up so later tests start from a known state
+  await httpJson(srv.port, 'POST', '/api/music/unlink', null, admin);
+});
+
 test('settings: streaming performance handles high-connection providers and recommendations', async () => {
   await httpJson(srv.port, 'POST', '/api/settings', {
     providers: [{ host: 'news.big.example', port: 563, tls: true, user: 'u', pass: 'pw', connections: 100 }],

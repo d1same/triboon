@@ -5890,6 +5890,11 @@ Object.assign(H, {
     // Wholesale replacement (providers:/indexers:) still works for tests/automation.
     settings.update((s) => {
       const next = {
+        // Preserve every existing field FIRST — this endpoint rebuilds settings from an explicit
+        // allowlist, and anything not re-listed below (per-user YouTube Music cookies/OAuth tokens,
+        // and any future key) was being silently dropped on every admin save. The explicit fields
+        // below still override, so admin behavior is unchanged; only the unlisted state survives.
+        ...s,
         providers: b.providers !== undefined ? normalizeProviders(b.providers) : normalizeProviders(s.providers || []),
         indexers: b.indexers !== undefined ? b.indexers : [...(s.indexers || [])],
         tmdbKey: b.tmdbKey !== undefined ? b.tmdbKey : s.tmdbKey,
