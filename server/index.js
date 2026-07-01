@@ -3550,7 +3550,7 @@ const MUSIC_CHARTS = [
   { id: 'weekly', title: 'Weekly chart', note: 'Top songs this week', query: 'top songs this week', limit: 12 },
 ];
 const MUSIC_HOME_WEEKLY_FEEDS = [
-  { id: 'top-playlists-week', title: 'Top playlists this week', sub: 'Fresh shared mixes and creator queues', query: 'top playlists this week music', coverFeed: 'top playlists this week music', icon: 'chart', grad: 'mGrad2' },
+  { id: 'top-playlists-week', title: 'Editor’s mixes', sub: 'Fresh shared mixes and creator queues', query: 'top playlists this week music', coverFeed: 'top playlists this week music', icon: 'chart', grad: 'mGrad2' },
   { id: 'new-music-mix', title: 'New Music Mix', sub: 'Fresh songs to sample first', query: 'new music mix', coverFeed: 'new music mix', icon: 'spark', grad: 'mGrad1' },
   { id: 'viral-hits', title: 'Viral hits', sub: 'Songs moving fast right now', query: 'viral hits music this week', coverFeed: 'viral hits music this week', icon: 'spark', grad: 'mGrad3' },
   { id: 'fresh-releases', title: 'Fresh releases', sub: 'New songs and album cuts', query: 'new songs this week', coverFeed: 'new songs this week', icon: 'music', grad: 'mGrad4' },

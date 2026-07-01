@@ -2228,6 +2228,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'Music page should fall back to regular music search if the home endpoint is not active yet');
   assert.match(ui, /const yours = addShelf\('Your playlists'[\s\S]+if \(Array\.isArray\(S\.ytmPlaylists\)\)[\s\S]+Connect YouTube Music[\s\S]+S\.musicHome/,
     'Music Home should render personal playlists before weekly and chart shelves');
+  // No duplication: track shelves dedupe (id + feat-stripped title) and use the ARTIST as the
+  // subtitle — never the shelf note (which made every song echo "Top songs this week").
+  assert.match(ui, /shelf\.kind === 'tracks'[\s\S]+seenId\.has\(String\(t\.id\)\) \|\| \(nt && seenTitle\.has\(nt\)\)[\s\S]+sub: t\.artist \|\| ''/,
+    'music track shelves dedupe by id + normalized title and never echo the shelf name as the subtitle');
+  assert.match(ui, /item\.title\.trim\(\)\.toLowerCase\(\) !== shelfTitleNorm[\s\S]+sub: item\.sub \|\| ''/,
+    'music feed cards skip titles that repeat the shelf heading and never fall the subtitle back to the note');
   // The playlist list is a ~2s cold fetch — warm the server caches on rail intent so Music opens fast.
   assert.match(ui, /function prefetchMusic\(\) \{[\s\S]+S\._musicPrefetched = true;[\s\S]+api\('\/api\/music\/playlists'\)\.catch[\s\S]+api\('\/api\/music\/home'\)\.catch/,
     'prefetchMusic should warm the playlists + home server caches once');

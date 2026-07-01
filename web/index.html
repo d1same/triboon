@@ -16098,22 +16098,39 @@ function renderMusicBrowse() {
   } else {
     const shelves = ((S.musicHome && S.musicHome.shelves) || []).filter((s) => s && s.kind !== 'personal');
     shelves.forEach((shelf) => {
+      const shelfTitleNorm = String(shelf.title || '').trim().toLowerCase();
       if (shelf.kind === 'feeds') {
         const rail = addShelf(shelf.title || 'Mixes');
-        (shelf.items || []).slice(0, 14).forEach((item, i) => addTile(rail, {
-          ...item,
-          sub: item.sub || shelf.note || '',
-          grad: item.grad || `mGrad${(i % 4) + 1}`,
-          icon: item.icon || 'music',
-          coverFeed: item.coverFeed || item.query || item.title,
-        }, 'mCard mFeed', () => startMusicFeed(item)));
+        // Skip a card whose title just repeats the shelf heading (e.g. a "Top playlists this week"
+        // card under the "Top playlists this week" shelf). Don't fall back the subtitle to the
+        // shelf note — that made every card echo the section name.
+        (shelf.items || [])
+          .filter((item) => item && item.title && item.title.trim().toLowerCase() !== shelfTitleNorm)
+          .slice(0, 14).forEach((item, i) => addTile(rail, {
+            ...item,
+            sub: item.sub || '',
+            grad: item.grad || `mGrad${(i % 4) + 1}`,
+            icon: item.icon || 'music',
+            coverFeed: item.coverFeed || item.query || item.title,
+          }, 'mCard mFeed', () => startMusicFeed(item)));
       } else if (shelf.kind === 'tracks') {
-        const tracks = (shelf.results || []).filter((t) => t && t.id);
+        // Dedupe by id AND by normalized title (feat.-stripped) so the same song can't appear twice
+        // (the chart returned "Starboy" and "Starboy (feat. Daft Punk)" as separate rows).
+        const seenId = new Set(), seenTitle = new Set();
+        const tracks = (shelf.results || []).filter((t) => {
+          if (!t || !t.id) return false;
+          const nt = String(t.title || '').trim().toLowerCase().replace(/\s*\(feat\.[^)]*\)/g, '').trim();
+          if (seenId.has(String(t.id)) || (nt && seenTitle.has(nt))) return false;
+          seenId.add(String(t.id)); if (nt) seenTitle.add(nt);
+          return true;
+        });
         if (!tracks.length) return;
         const rail = addShelf(shelf.title || 'Trending now');
+        // Subtitle is the ARTIST only — never the shelf name (that repeated "Top songs this week"
+        // under every song). No artist → no subtitle, which reads far cleaner than an echo.
         tracks.slice(0, 14).forEach((t, i) => addTile(rail, {
           title: t.title,
-          sub: t.artist || shelf.note || '',
+          sub: t.artist || '',
           grad: `mGrad${((i + 1) % 4) + 1}`,
           icon: 'chart',
           coverUrl: t.thumb,
