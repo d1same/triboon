@@ -267,6 +267,10 @@ public class MainActivity extends Activity {
     private boolean nativeBackConsumedChromeDown;
     private boolean nativeGuideMode;
     private int nativeGuideEpoch;
+    // Set from the web music player (TriboonTV.musicSession). When true, onPause() must NOT pause the
+    // WebView, so music keeps playing with the screen off / app backgrounded. volatile: written on the
+    // JS binder thread, read on the UI thread.
+    private volatile boolean musicPlaying;
     private View nativeClickArmedView;
     private long nativeClickArmedAtMs;
     private boolean nativeOpenSubtitleMenuAfterRefresh;
@@ -1341,6 +1345,15 @@ public class MainActivity extends Activity {
             public void setGuidePipRect(String json) {
                 if (!trustedBridgeOrigin()) return;
                 runOnUiThread(() -> applyNativeGuidePipRect(json));
+            }
+
+            // Web music player reports whether audio is actively playing so the shell can keep the
+            // WebView (and its <audio>) alive in the background instead of pausing it in onPause().
+            @android.webkit.JavascriptInterface
+            public void musicSession(String json) {
+                if (!trustedBridgeOrigin()) return;
+                try { musicPlaying = new org.json.JSONObject(json).optBoolean("playing", false); }
+                catch (Throwable ignored) { musicPlaying = false; }
             }
         }, "TriboonTV");
 
@@ -6928,7 +6941,9 @@ public class MainActivity extends Activity {
         if (nativePlayer != null && !inPip) nativePlayer.pause();
         if (web != null) {
             web.evaluateJavascript("document.querySelectorAll('video').forEach(v=>v.pause())", null);
-            if (!inPip) {
+            // Keep the WebView + its timers alive while music is playing (or during PiP) so audio
+            // continues in the background; only <video> was paused above. Otherwise suspend as usual.
+            if (!inPip && !musicPlaying) {
                 web.onPause();
                 web.pauseTimers();
             }

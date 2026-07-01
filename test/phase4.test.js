@@ -1389,8 +1389,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android native playback should not allow provider redirects to switch protocols after URL validation');
   assert.match(android, /setAudioAttributes\(new AudioAttributes\.Builder\(\)[\s\S]+setUsage\(C\.USAGE_MEDIA\)[\s\S]+setHandleAudioBecomingNoisy\(true\)/,
     'Android ExoPlayer should request media audio focus and pause on noisy-device changes');
-  assert.match(android, /protected void onPause\(\) \{[\s\S]+boolean inPip = Build\.VERSION\.SDK_INT >= Build\.VERSION_CODES\.N && isInPictureInPictureMode\(\);[\s\S]+if \(nativePlayer != null && !inPip\) nativePlayer\.pause\(\);[\s\S]+document\.querySelectorAll\('video'\)\.forEach\(v=>v\.pause\(\)\)[\s\S]+if \(!inPip\) \{[\s\S]+web\.onPause\(\);[\s\S]+web\.pauseTimers\(\);/,
-    'Android backgrounding should pause playback and WebView timers, while keeping system PiP playback alive');
+  assert.match(android, /protected void onPause\(\) \{[\s\S]+boolean inPip = Build\.VERSION\.SDK_INT >= Build\.VERSION_CODES\.N && isInPictureInPictureMode\(\);[\s\S]+if \(nativePlayer != null && !inPip\) nativePlayer\.pause\(\);[\s\S]+document\.querySelectorAll\('video'\)\.forEach\(v=>v\.pause\(\)\)[\s\S]+if \(!inPip && !musicPlaying\) \{[\s\S]+web\.onPause\(\);[\s\S]+web\.pauseTimers\(\);/,
+    'Android backgrounding should pause playback and WebView timers, while keeping system PiP playback AND background music alive');
   assert.doesNotMatch(android, /protected void onPause\(\) \{[\s\S]{0,240}closeNativePlayback\(true\);/,
     'Android onPause must not close native playback; that caused resume/PiP churn');
   assert.match(android, /protected void onUserLeaveHint\(\) \{[\s\S]+super\.onUserLeaveHint\(\);[\s\S]+enterNativePictureInPictureIfUseful\(\);[\s\S]+onPictureInPictureModeChanged\(boolean isInPictureInPictureMode, Configuration newConfig\)[\s\S]+PictureInPictureParams\.Builder\(\)[\s\S]+new Rational\(16, 9\)/,
@@ -2326,6 +2326,20 @@ test('Android native player: direct source and native chrome stay out of the web
   // origin-only cross-origin referrer fixes it while keeping a referrer for YouTube trailer embeds.
   assert.match(ui, /<meta name="referrer" content="strict-origin-when-cross-origin">/,
     'page should send an origin-only cross-origin referrer so YT Music cover art loads');
+  // Background music: the web player reports play state to the Android shell so it can keep the
+  // WebView (and its <audio>) alive when backgrounded / screen-locked instead of pausing it.
+  assert.match(ui, /function nativeMusicSession\(playing\) \{[\s\S]+TriboonTV\.musicSession[\s\S]+playing: !!playing/,
+    'web music player should bridge play state to the Android shell for background playback');
+  assert.match(ui, /addEventListener\('play', \(\) => \{[\s\S]+nativeMusicSession\(true\)/,
+    'music play event should tell the shell audio is active');
+  assert.match(ui, /addEventListener\('pause', \(\) => \{[\s\S]+nativeMusicSession\(false\)/,
+    'music pause event should tell the shell audio stopped');
+  assert.match(android, /private volatile boolean musicPlaying;/,
+    'shell tracks whether web music is playing');
+  assert.match(android, /public void musicSession\(String json\) \{[\s\S]+optBoolean\("playing"/,
+    'shell exposes a musicSession bridge that reads the playing flag');
+  assert.match(android, /if \(!inPip && !musicPlaying\) \{\s*web\.onPause\(\);\s*web\.pauseTimers\(\);/,
+    'onPause keeps the WebView alive while music is playing so background audio continues');
   assert.match(ui, /function pumpMusicCoverQueue\(\) \{[\s\S]+_musicCoverActive < 3[\s\S]+coverForMusicCard\(card\)/,
     'lazy cover loading should be concurrency-gated so a scroll burst cannot fan out unbounded fetches');
   // A link/unlink must refresh the Music page — re-pulling BOTH playlists and the home feed, since
