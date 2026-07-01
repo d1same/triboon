@@ -2460,8 +2460,9 @@ body:not(.tv) #settings .setGrid[data-stab="display"]{grid-template-columns:repe
 .musicShelf h2{font:800 24px "Sora";line-height:1.1}
 .musicShelfTop{display:flex;align-items:end;justify-content:space-between;gap:18px}
 .musicShelfTop .mNote{color:var(--muted);font:600 13px "Albert Sans";max-width:46ch}
-.musicTiles{display:grid;grid-template-columns:repeat(4,minmax(190px,1fr));gap:14px}
-.musicRail{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(254px,304px);gap:18px;overflow-x:auto;padding:0 2px 10px;scroll-snap-type:x proximity}
+.musicTiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px}
+/* Compact artwork cards in a single horizontal row per shelf (was 254–304px — too big). */
+.musicRail{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(150px,168px);gap:14px;overflow-x:auto;padding:0 2px 10px;scroll-snap-type:x proximity}
 .mChip{position:relative;display:flex;text-align:left;border:1px solid rgba(255,255,255,.08);background:rgba(29,24,39,.72);color:var(--text);overflow:visible;transition:transform .16s ease,background .16s ease,border-color .16s ease}
 .mChip:hover,.mChip:focus,.mChip.focus{outline:none}
 .mChip:hover,.mChip.focus{transform:translateY(-1px)}
@@ -2620,7 +2621,7 @@ body.tv #musicNow.queueHidden .mnMain{width:min(980px,calc(100vw - 140px));paddi
 body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
 @media (max-width:900px){.mnMain{flex-direction:column;gap:22px;padding:80px 16px 26px}.mnCover{width:min(230px,55vw)}.mnInfo{min-width:0;width:100%;max-width:calc(100vw - 32px)}.mnQueue{width:min(420px,calc(100vw - 48px));margin:22px auto 28px;max-height:38vh}#musicNow.queueHidden .mnMain{width:100%;padding-bottom:52px}#musicNow.queueHidden .mnCover{width:min(260px,58vw)}}
 
-@media (max-width:900px){.musicTiles{grid-template-columns:repeat(2,minmax(0,1fr))}.musicRail{grid-auto-columns:minmax(150px,42vw)}.mSearchSongs{grid-template-columns:1fr}.mArtistName{font-size:28px}.mArtistArt{width:82px;height:82px}}
+@media (max-width:900px){.musicTiles{grid-template-columns:repeat(auto-fill,minmax(128px,1fr))}.musicRail{grid-auto-columns:minmax(128px,34vw)}.mSearchSongs{grid-template-columns:1fr}.mArtistName{font-size:28px}.mArtistArt{width:82px;height:82px}}
 @media (max-width:600px){#music{left:0!important}.mbProg .mbT{display:none}.musicTiles{grid-template-columns:1fr}}
 
 /* Content text-size preference: scoped to media/content surfaces only.
@@ -15879,23 +15880,39 @@ function openMusicConnect() {
   };
   requestAnimationFrame(focusConnect);
 }
-async function hydrateMusicHomeCovers() {
+// Lazy-load EVERY cover (not just the first 6): an IntersectionObserver fetches each card's
+// thumbnail as it scrolls near view, so a long Music home shows all its artwork without fetching
+// everything up front. A small concurrency gate keeps the fetch burst bounded when many cards
+// enter view at once (fast horizontal rail scroll). Cards that already have a coverUrl carry no
+// data-cover-key, so they render instantly and are never observed.
+let _musicCoverIO = null;
+let _musicCoverActive = 0;
+const _musicCoverQueue = [];
+function pumpMusicCoverQueue() {
+  while (_musicCoverActive < 3 && _musicCoverQueue.length) {
+    const card = _musicCoverQueue.shift();
+    if (!card || card.dataset.coverDone) continue;
+    const key = card.dataset.coverKey; if (!key) continue;
+    const cached = S.musicCoverCache[key];
+    if (cached) { setMusicCardCover(card, cached); continue; }
+    _musicCoverActive++;
+    coverForMusicCard(card).then((thumb) => {
+      if (thumb) { S.musicCoverCache[key] = thumb; setMusicCardCover(card, thumb); }
+    }).catch(() => {}).finally(() => { _musicCoverActive--; pumpMusicCoverQueue(); });
+  }
+}
+function hydrateMusicHomeCovers() {
   S.musicCoverCache = S.musicCoverCache || {};
-  const cards = [...document.querySelectorAll('#musicBrowse .mCard[data-cover-key]')].slice(0, 6);
-  let active = 0, idx = 0;
-  const run = () => {
-    while (active < 2 && idx < cards.length) {
-      const card = cards[idx++], key = card.dataset.coverKey;
-      if (!key || card.dataset.coverDone) continue;
-      const cached = S.musicCoverCache[key];
-      if (cached) { setMusicCardCover(card, cached); continue; }
-      active++;
-      coverForMusicCard(card).then((thumb) => {
-        if (thumb) { S.musicCoverCache[key] = thumb; setMusicCardCover(card, thumb); }
-      }).catch(() => {}).finally(() => { active--; run(); });
-    }
-  };
-  run();
+  if (_musicCoverIO) { _musicCoverIO.disconnect(); _musicCoverIO = null; }
+  _musicCoverQueue.length = 0;
+  const cards = [...document.querySelectorAll('#musicBrowse .mCard[data-cover-key]')].filter((c) => !c.dataset.coverDone);
+  if (!cards.length) return;
+  const enqueue = (card) => { _musicCoverQueue.push(card); pumpMusicCoverQueue(); };
+  if (!('IntersectionObserver' in window)) { cards.forEach(enqueue); return; }
+  _musicCoverIO = new IntersectionObserver((entries, obs) => {
+    entries.forEach((e) => { if (e.isIntersecting) { obs.unobserve(e.target); enqueue(e.target); } });
+  }, { root: $('musicBrowse'), rootMargin: '400px 300px' });
+  cards.forEach((c) => _musicCoverIO.observe(c));
 }
 async function coverForMusicCard(card) {
   if (card.dataset.coverPlaylist) {
@@ -15957,7 +15974,7 @@ function renderMusicBrowse() {
     b.addEventListener('mouseenter', () => pointerHover() && focusChip(chipEls().indexOf(b)));
     parent.appendChild(b);
   };
-  const yours = addShelf('Your playlists', 'topTiles');
+  const yours = addShelf('Your playlists'); // single horizontal row like every other shelf (was a wrapping grid)
   if (Array.isArray(S.ytmPlaylists)) {
     if (!Number.isFinite(S.musicPlaylistLimit)) S.musicPlaylistLimit = MUSIC_PLAYLIST_INITIAL;
     addTile(yours, { title: 'Liked Music', sub: 'Your YouTube Music favorites', grad: 'mGrad1', icon: 'heart' }, 'mCard mPl',

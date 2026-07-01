@@ -2297,6 +2297,18 @@ test('Android native player: direct source and native chrome stay out of the web
     'Music page should fall back to regular music search if the home endpoint is not active yet');
   assert.match(ui, /const yours = addShelf\('Your playlists'[\s\S]+if \(Array\.isArray\(S\.ytmPlaylists\)\)[\s\S]+Connect YouTube Music[\s\S]+S\.musicHome/,
     'Music Home should render personal playlists before weekly and chart shelves');
+  // Every Music shelf is a single horizontal row (rail) — "Your playlists" no longer opens as a
+  // wrapping grid (topTiles), and the rail cards are compact (not 254–304px).
+  assert.ok(!/addShelf\('Your playlists', 'topTiles'\)/.test(ui),
+    'Your playlists should be a single-row rail, not a wrapping topTiles grid');
+  assert.match(ui, /\.musicRail\{display:grid;grid-auto-flow:column;grid-auto-columns:minmax\(150px,168px\)/,
+    'music rail cards should be compact (~150–168px), not oversized');
+  // Covers lazy-load ALL cards on scroll (IntersectionObserver) with a bounded concurrency gate —
+  // not just the first 6 up front — so a long personalized home shows every thumbnail with good perf.
+  assert.match(ui, /function hydrateMusicHomeCovers\(\) \{[\s\S]+\.mCard\[data-cover-key\][\s\S]+new IntersectionObserver\([\s\S]+\.observe\(c\)/,
+    'Music covers should lazy-load via IntersectionObserver across all cards, not a fixed first-N slice');
+  assert.match(ui, /function pumpMusicCoverQueue\(\) \{[\s\S]+_musicCoverActive < 3[\s\S]+coverForMusicCard\(card\)/,
+    'lazy cover loading should be concurrency-gated so a scroll burst cannot fan out unbounded fetches');
   // A link/unlink must refresh the Music page — re-pulling BOTH playlists and the home feed, since
   // linking unlocks the personalized "For you" rows (get_home) and unlinking must drop them — so it
   // never keeps showing "Connect" for an account that is actually saved/linked.
