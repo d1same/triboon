@@ -160,7 +160,6 @@ test('security: deny-by-default — every route declares auth; unknown routes 40
     ['GET', '/api/users'], ['GET', '/api/libraries/local-lookup?key=tmdb:movie:1'], ['GET', '/api/stream/abc'], ['GET', '/api/remux/abc'],
     ['GET', '/api/iptv/status'], ['POST', '/api/iptv/refresh'], ['GET', '/api/iptv/sources'], ['POST', '/api/iptv/sources'], ['PATCH', '/api/iptv/sources/abc'], ['DELETE', '/api/iptv/sources/abc'],
     ['POST', '/api/quickconnect/123456/approve'], ['GET', '/api/music/home'], ['GET', '/api/music/charts'], ['GET', '/api/music/search?q=x'], ['GET', '/api/music/radio/AAAAAAAAAAA'],
-    ['POST', '/api/music/oauth/start'], ['POST', '/api/music/oauth/poll'],
   ];
   for (const [m, p] of probes) {
     assert.strictEqual((await httpJson(srv.port, m, p)).status, 401, `anon ${m} ${p}`);
@@ -2383,49 +2382,32 @@ test('music: optional ytmusicapi watch queue returns tokenized radio tracks', as
   }
 });
 
-test('music: Google device OAuth links a user and loads playlists through ytmusicapi', async () => {
+test('music: cookie link loads playlists + personalized home through ytmusicapi browser auth', async () => {
   const ytmusic = require('../server/ytmusic');
   const oldDetect = ytmusic.detectYtdlp;
   const calls = [];
-  let tokenPolls = 0;
+  // An exported music.youtube.com session (Netscape cookies.txt) carrying the __Secure-3PAPISID
+  // cookie ytmusicapi signs requests with.
+  const cookieText = [
+    '# Netscape HTTP Cookie File',
+    ['.youtube.com', 'TRUE', '/', 'TRUE', '9999999999', '__Secure-3PAPISID', 'sapisid-value'].join('\t'),
+    ['.youtube.com', 'TRUE', '/', 'TRUE', '9999999999', 'SAPISID', 'sapisid-value'].join('\t'),
+  ].join('\n') + '\n';
   try {
     ytmusic.detectYtdlp = () => ({ cmd: ['mock-ytdlp'], version: 'test' });
-    ytmusic._setOAuthPostForTest(async (url, data) => {
-      if (/device\/code/.test(url)) {
-        assert.strictEqual(data.client_id, 'yt-client');
-        assert.match(data.scope, /youtube/);
-        return {
-          device_code: 'device-123',
-          user_code: 'ABC-DEF',
-          verification_url: 'https://www.google.com/device',
-          expires_in: 600,
-          interval: 1,
-        };
-      }
-      if (/oauth2\.googleapis\.com\/token/.test(url) && data.code === 'device-123') {
-        tokenPolls++;
-        if (tokenPolls === 1) {
-          const pending = new Error('authorization_pending');
-          pending.code = 'authorization_pending';
-          throw pending;
-        }
-        return {
-          access_token: 'yt-access-secret',
-          refresh_token: 'yt-refresh-secret',
-          scope: 'https://www.googleapis.com/auth/youtube',
-          token_type: 'Bearer',
-          expires_in: 3600,
-        };
-      }
-      throw new Error(`unexpected OAuth call ${url}`);
-    });
     ytmusic._setYtMusicApiRunnerForTest(async (action, body) => {
       calls.push({ action, body });
-      assert.strictEqual(body.clientId, 'yt-client');
-      assert.strictEqual(body.clientSecret, 'yt-secret');
-      assert.strictEqual(body.oauthToken.access_token, 'yt-access-secret');
-      if (action === 'library_playlists') {
-        return { rows: [{ playlistId: 'PLROAD123', title: 'Road Mix', count: 12 }] };
+      // The library/home calls must be BROWSER-authed from the user's cookies (no OAuth) — the
+      // headers must carry the signing cookie so ytmusicapi can read the private library.
+      assert.ok(body.browserAuth && /__Secure-3PAPISID=sapisid-value/.test(body.browserAuth.cookie),
+        `${action} must pass browser-auth cookies`);
+      if (action === 'library_playlists') return { rows: [{ playlistId: 'PLROAD123', title: 'Road Mix', count: 12 }] };
+      if (action === 'home') {
+        return { rows: [{ title: 'Mixed for you', contents: [
+          { videoId: 'EEEEEEEEEEE', title: 'Mine A', artists: [{ name: 'X' }] },
+          { videoId: 'FFFFFFFFFFF', title: 'Mine B', artists: [{ name: 'Y' }] },
+          { videoId: 'GGGGGGGGGGG', title: 'Mine C', artists: [{ name: 'Z' }] },
+        ] }] };
       }
       if (action === 'playlist') {
         assert.strictEqual(body.id, 'PLROAD123');
@@ -2441,34 +2423,18 @@ test('music: Google device OAuth links a user and loads playlists through ytmusi
       throw new Error(`unexpected ytmusicapi action ${action}`);
     });
 
-    const saved = await httpJson(srv.port, 'POST', '/api/settings', { ytOAuthClientId: 'yt-client', ytOAuthClientSecret: 'yt-secret' }, admin);
-    assert.strictEqual(saved.status, 200);
-    const settingsView = await httpJson(srv.port, 'GET', '/api/settings', null, admin);
-    assert.strictEqual(settingsView.json.ytOAuthClientId, 'yt-client');
-    assert.strictEqual(settingsView.json.ytOAuthClientSecret, '•••');
-    const rawSettings = fs.readFileSync(path.join(process.env.TRIBOON_DATA, 'settings.json'), 'utf8');
-    assert.ok(!rawSettings.includes('yt-secret'), 'OAuth client secret is encrypted at rest');
-
-    const started = await httpJson(srv.port, 'POST', '/api/music/oauth/start', {}, admin);
-    assert.strictEqual(started.status, 200, started.raw);
-    assert.strictEqual(started.json.userCode, 'ABC-DEF');
-    assert.match(started.json.verificationUrlComplete, /ABC-DEF/);
-
-    const pending = await httpJson(srv.port, 'POST', '/api/music/oauth/poll', {}, admin);
-    assert.strictEqual(pending.status, 200);
-    assert.strictEqual(pending.json.status, 'pending');
-
-    const linked = await httpJson(srv.port, 'POST', '/api/music/oauth/poll', {}, admin);
+    const linked = await httpJson(srv.port, 'POST', '/api/music/link', { cookies: cookieText }, admin);
     assert.strictEqual(linked.status, 200, linked.raw);
-    assert.strictEqual(linked.json.linked, true);
     const status = await httpJson(srv.port, 'GET', '/api/music/status', null, admin);
-    assert.strictEqual(status.json.linkSource, 'oauth');
-    assert.strictEqual(JSON.stringify(status.json).includes('yt-access-secret'), false, 'OAuth tokens never return to the client');
+    assert.strictEqual(status.json.linkSource, 'account');
+    assert.strictEqual(status.json.linked, true);
+    // The cookie credential must never round-trip back to a client.
+    assert.strictEqual(JSON.stringify(status.json).includes('sapisid-value'), false, 'cookies never return to the client');
 
     const playlists = await httpJson(srv.port, 'GET', '/api/music/playlists', null, admin);
     assert.strictEqual(playlists.status, 200, playlists.raw);
-    assert.strictEqual(playlists.json.linkSource, 'oauth');
-    assert.deepStrictEqual(playlists.json.playlists, [{ id: 'PLROAD123', title: 'Road Mix', count: 12, cover: null, source: 'ytmusicapi' }]);
+    assert.strictEqual(playlists.json.linkSource, 'account');
+    assert.deepStrictEqual(playlists.json.playlists.map((p) => ({ id: p.id, title: p.title })), [{ id: 'PLROAD123', title: 'Road Mix' }]);
     const playlistsAgain = await httpJson(srv.port, 'GET', '/api/music/playlists', null, admin);
     assert.strictEqual(playlistsAgain.status, 200, playlistsAgain.raw);
     assert.strictEqual(calls.filter((c) => c.action === 'library_playlists').length, 1,
@@ -2485,7 +2451,6 @@ test('music: Google device OAuth links a user and loads playlists through ytmusi
     await httpJson(srv.port, 'POST', '/api/music/unlink', {}, admin);
   } finally {
     ytmusic.detectYtdlp = oldDetect;
-    ytmusic._setOAuthPostForTest(null);
     ytmusic._setYtMusicApiRunnerForTest(null);
     ytmusic._resetYtMusicApiDetection();
   }

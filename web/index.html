@@ -3586,24 +3586,6 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
     <div class="settingsActions"><button class="btn primary" id="traktSave">Save Trakt app</button></div>
     <div class="hint" id="traktStatus"></div>
   </div>
-
-  <div class="panel"><h2>YouTube Music OAuth</h2>
-    <p>Optional easier account linking for YouTube Music playlists (playback still uses yt-dlp).
-       In the <b>Google Cloud Console</b>:</p>
-    <ol class="setupSteps">
-      <li>Enable the <b>YouTube Data API v3</b> (APIs &amp; Services → Library).</li>
-      <li>Create an OAuth client — Application type must be <b>TVs and Limited Input devices</b>
-          (<b>not</b> Web application; there are no redirect URIs for this type).</li>
-      <li>On the OAuth consent screen, add each user's Google email under <b>Test users</b> — until
-          the app is verified by Google, only listed test users can sign in.</li>
-      <li>Paste the client <b>id</b> and <b>secret</b> below. Users then link their own account in
-          Preferences → Connections.</li>
-    </ol>
-    <div class="field"><input id="ytOAuthId" placeholder="Google OAuth client id"></div>
-    <div class="field"><input id="ytOAuthSecret" type="password" placeholder="Google OAuth client secret"></div>
-    <div class="settingsActions"><button class="btn primary" id="ytOAuthSave">Save YouTube Music OAuth app</button></div>
-    <div class="hint" id="ytOAuthStatus"></div>
-  </div>
   </div>
 
   <div class="setGrid" data-stab="livetv" hidden>
@@ -15361,6 +15343,27 @@ function refreshMusicChartsAfterFirstPaint() {
     }
   }, 300);
 }
+// Personalized "For you" rows come from the user's YouTube Music home (get_home) and are warmed in
+// the background on a cold cache — the first /api/music/home returns personalPending:true with no
+// personal rows. Re-fetch a few times until they arrive, then re-render. Bounded so an unlinkable
+// account (rows never come) can't poll forever.
+function refreshMusicHomeIfPersonalPending() {
+  if (!S.musicHome || !S.musicHome.personalPending || S._musicHomeRefetch) return;
+  if ((S._musicHomeTries || 0) >= 3) return;
+  S._musicHomeRefetch = true;
+  setTimeout(async () => {
+    S._musicHomeTries = (S._musicHomeTries || 0) + 1;
+    try {
+      const r = await api('/api/music/home');
+      S._musicHomeRefetch = false;
+      if (r && Array.isArray(r.shelves)) {
+        S.musicHome = r;
+        if (S.view === 'music' && !$('musicBrowse').classList.contains('hide')) renderMusicBrowse();
+        if (r.personalPending) refreshMusicHomeIfPersonalPending();
+      }
+    } catch { S._musicHomeRefetch = false; }
+  }, 1800);
+}
 function loadMusic() {
   bootReady();
   if (!$('musicBrowse').children.length) renderMusicBrowse();
@@ -15370,6 +15373,7 @@ function loadMusic() {
       S.musicHome = r && Array.isArray(r.shelves) ? r : { shelves: [] };
       renderMusicBrowse();
       refreshMusicChartsAfterFirstPaint();
+      refreshMusicHomeIfPersonalPending();
       requestAnimationFrame(() => {
         if (S.view === 'music' && S.zone !== 'rail' && !$('musicSearch').value.trim()) focusContent();
       });
@@ -15396,14 +15400,14 @@ function loadMusic() {
   }
   setTimeout(() => { if (S.view === 'music' && S.zone !== 'rail') focusContent(); }, 80);
 }
-// Link state just changed (connect / OAuth complete / unlink). Reflect it on the Music page
-// right away: the OAuth device-code poll finishes in the BACKGROUND — often after the user has
-// already navigated back to Music — so we must re-render if Music is on-screen, not only on the
-// next visit. undefined makes loadMusic() refetch /api/music/playlists fresh. Without this a
-// background link left the stale "Connect YouTube Music" tile even though the account was saved.
+// Link state just changed (connect / unlink). Reflect it on the Music page right away and re-fetch
+// both the playlists AND the home feed, since linking unlocks the personalized "For you" rows
+// (get_home) and unlinking must drop them. undefined markers make loadMusic() refetch fresh.
 function musicAccountChanged() {
   S.musicPlaylistLimit = MUSIC_PLAYLIST_INITIAL;
   S.ytmPlaylists = undefined;
+  S.musicHome = undefined; // re-pull home so personalized rows load (or clear) for the new state
+  S._musicHomeTries = 0;
   if (S.view === 'music') loadMusic();
 }
 function showMusicHome() {
@@ -15848,6 +15852,9 @@ function musicIcon(name) {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icons[name] || icons.music}</svg>`;
 }
 async function startMusicFeed(item) {
+  // Personalized home tiles carry a real playlistId — open that list directly instead of guessing
+  // via search (reuses the playlist plumbing + pagination).
+  if (item && item.playlistId) return startMusicPlaylist(item.playlistId, item.title || 'Playlist');
   const q = String(item && (item.query || item.coverFeed || item.title) || '').trim();
   if (!q) return;
   toast(`Loading ${item.title || 'mix'}...`);
@@ -16639,39 +16646,31 @@ function openPrefs() { // populates the Preferences PAGE (it's a view now, not a
 // The text is sent ONCE, stored encrypted server-side, and never comes back to the UI.
 function renderYtmConnectBox(box, st) {
   if (st.linked) {
-    const sourceLabel = st.linkSource === 'oauth' ? 'Google sign-in' : 'browser session';
     box.innerHTML = `<div class="ytmConnect">
       <div class="ytmConnectIcon">${musicIcon('music')}</div>
-      <div><h3>YouTube Music connected</h3><p>Your Liked Music and playlists appear first on the Music page.</p></div>
+      <div><h3>YouTube Music connected</h3><p>Your Liked Music, playlists, and personalized picks appear on the Music page.</p></div>
     </div>
     <div class="ytmConnectActions">
       <button class="btn ghost focusable" id="ytmRelink">Replace connection</button>
       <button class="btn ghost focusable" id="ytmUnlink">Unlink</button>
     </div>
-    <div class="hint">Connected with ${esc(sourceLabel)}. If playlists stop loading later, run the setup again. Triboon keeps credentials encrypted and never shows them back.</div>`;
+    <div class="hint">Connected with a browser session. If playlists stop loading later, run the setup again. Triboon keeps credentials encrypted and never shows them back.</div>`;
     box.querySelector('#ytmUnlink').addEventListener('click', async () => {
       await api('/api/music/unlink', { method: 'POST', body: {} });
       toast('YouTube Music unlinked'); renderYtmBox(); musicAccountChanged();
     });
-    box.querySelector('#ytmRelink').addEventListener('click', () => st.oauthAvailable ? startYtmOAuth(box) : renderYtmPaste(box, { guided: true }));
+    box.querySelector('#ytmRelink').addEventListener('click', () => renderYtmPaste(box, { guided: true }));
     return;
   }
-  const canOAuth = !!st.oauthAvailable;
-  const oauthHint = canOAuth
-    ? 'Sign in on Google with a TV-style code. No cookie files needed.'
-    : (st.oauthConfigured ? 'Google sign-in needs ytmusicapi on the server.' : 'Ask the admin to save a YouTube Music OAuth app in Settings.');
   box.innerHTML = `<div class="ytmConnect">
     <div class="ytmConnectIcon">${musicIcon('music')}</div>
-    <div><h3>Connect YouTube Music</h3><p>Bring in Liked Music and your playlists. Public search and weekly picks work even before you connect.</p>
-      <div class="hint" style="margin:8px 0">${esc(oauthHint)}</div>
+    <div><h3>Connect YouTube Music</h3><p>Bring in your Liked Music, playlists, and personalized picks tuned to your taste. Public search and weekly picks work even before you connect.</p>
       <div class="ytmConnectActions">
-        <button class="btn primary focusable" id="ytmStartLink">${canOAuth ? 'Connect with Google' : 'Set up account'}</button>
-        <button class="btn ghost focusable" id="ytmAdvancedLink">Manual paste</button>
+        <button class="btn primary focusable" id="ytmStartLink">Connect account</button>
       </div>
     </div>
   </div>`;
-  box.querySelector('#ytmStartLink').addEventListener('click', () => canOAuth ? startYtmOAuth(box) : renderYtmPaste(box, { guided: true }));
-  box.querySelector('#ytmAdvancedLink').addEventListener('click', () => renderYtmPaste(box, { showPaste: true }));
+  box.querySelector('#ytmStartLink').addEventListener('click', () => renderYtmPaste(box, { guided: true }));
 }
 function renderYtmImportBox(box, opts = {}) {
   box.innerHTML = `
@@ -16732,66 +16731,8 @@ function renderYtmImportBox(box, opts = {}) {
     } catch (e) { toast(e.message); }
   });
 }
-function clearYtmOAuthPoll() {
-  if (S.ytmOAuthPoll) { clearInterval(S.ytmOAuthPoll); S.ytmOAuthPoll = 0; }
-}
-function renderYtmOAuthPending(box, r) {
-  clearYtmOAuthPoll();
-  box.innerHTML = `<div class="ytmConnect">
-    <div class="ytmConnectIcon">${musicIcon('music')}</div>
-    <div><h3>Finish on Google</h3><p>Enter this code on the Google device page, then return here. Triboon will finish automatically.</p>
-      <div class="ytmStepCards">
-        <div class="ytmStepCard"><strong>Code</strong><span style="font:800 24px JetBrains Mono;color:var(--text);letter-spacing:.08em">${esc(r.userCode || '')}</span></div>
-        <div class="ytmStepCard"><strong>Page</strong><span>${esc(r.verificationUrl || 'google.com/device')}</span></div>
-      </div>
-      <div class="ytmConnectActions">
-        <button class="btn primary focusable" id="ytmOpenOAuth">Open Google</button>
-        <button class="btn ghost focusable" id="ytmOAuthCancel">Cancel</button>
-      </div>
-      <div class="hint" id="ytmOAuthMsg">Waiting for approval...</div>
-    </div>
-  </div>`;
-  box.querySelector('#ytmOpenOAuth').addEventListener('click', () => window.open(r.verificationUrlComplete || r.verificationUrl, '_blank', 'noopener'));
-  box.querySelector('#ytmOAuthCancel').addEventListener('click', () => { clearYtmOAuthPoll(); renderYtmBox(); });
-  const poll = async () => {
-    try {
-      const p = await api('/api/music/oauth/poll', { method: 'POST', body: {} });
-      if (p && p.status === 'linked') {
-        clearYtmOAuthPoll();
-        toast('YouTube Music connected');
-        renderYtmBox();
-        return musicAccountChanged();
-      }
-      const msg = box.querySelector('#ytmOAuthMsg');
-      if (msg) msg.textContent = 'Waiting for approval...';
-    } catch (e) {
-      clearYtmOAuthPoll();
-      const msg = box.querySelector('#ytmOAuthMsg');
-      if (msg) msg.textContent = e.message;
-      toast(e.message);
-    }
-  };
-  S.ytmOAuthPoll = setInterval(poll, Math.max(3000, r.intervalMs || 5000));
-}
-async function startYtmOAuth(box) {
-  clearYtmOAuthPoll();
-  box.innerHTML = '<div class="hint">Starting Google sign-in...</div>';
-  try {
-    const r = await api('/api/music/oauth/start', { method: 'POST', body: {} });
-    renderYtmOAuthPending(box, r);
-  } catch (e) {
-    box.innerHTML = `<div class="hint">${esc(e.message)}</div>
-      <div class="ytmConnectActions" style="margin-top:10px">
-        <button class="btn ghost focusable" id="ytmManualAfterOAuth">Manual paste</button>
-        <button class="btn ghost focusable" id="ytmBackAfterOAuth">Back</button>
-      </div>`;
-    box.querySelector('#ytmManualAfterOAuth').addEventListener('click', () => renderYtmPaste(box, { showPaste: true }));
-    box.querySelector('#ytmBackAfterOAuth').addEventListener('click', renderYtmBox);
-  }
-}
 async function renderYtmBox() {
   const box = $('ytmBox');
-  clearYtmOAuthPoll();
   let st;
   try { st = await api('/api/music/status'); } catch { box.innerHTML = '<div class="hint">server unreachable</div>'; return; }
   if (!st.ytdlp) {
@@ -18235,11 +18176,6 @@ async function refreshSettings() {
       : 'not configured yet';
     $('traktId').placeholder = s.traktClientId ? 'client id saved ✓ — paste to replace' : 'Trakt client id';
     $('traktSecret').placeholder = s.traktClientSecret ? 'client secret saved ✓ — paste to replace' : 'Trakt client secret';
-    $('ytOAuthStatus').textContent = s.ytOAuthClientId
-      ? `app saved ✓ (${s.ytOAuthClientSecret ? 'secret saved' : 'secret missing'}) — users link in Preferences → Connections`
-      : 'not configured yet';
-    $('ytOAuthId').placeholder = s.ytOAuthClientId ? 'client id saved ✓ — paste to replace' : 'Google OAuth client id';
-    $('ytOAuthSecret').placeholder = s.ytOAuthClientSecret ? 'client secret saved ✓ — paste to replace' : 'Google OAuth client secret';
     const iptvSources = s.iptvSources || [];
     S.adminIptvSources = iptvSources;
     $('iptvSourceList').innerHTML = iptvSources.length ? iptvSources.map((src) => {
@@ -18558,16 +18494,6 @@ $('traktSave').addEventListener('click', async () => {
   await api('/api/settings', { method: 'POST', body });
   $('traktId').value = ''; $('traktSecret').value = '';
   toast('Trakt app saved — users can now link in Preferences → Connections');
-  refreshSettings();
-});
-$('ytOAuthSave').addEventListener('click', async () => {
-  const body = {};
-  if ($('ytOAuthId').value.trim()) body.ytOAuthClientId = $('ytOAuthId').value.trim();
-  if ($('ytOAuthSecret').value) body.ytOAuthClientSecret = $('ytOAuthSecret').value;
-  if (!Object.keys(body).length) return toast('Enter the YouTube Music OAuth id/secret');
-  await api('/api/settings', { method: 'POST', body });
-  $('ytOAuthId').value = ''; $('ytOAuthSecret').value = '';
-  toast('YouTube Music OAuth app saved - users can link in Preferences');
   refreshSettings();
 });
 function updateIptvAddFormState() {

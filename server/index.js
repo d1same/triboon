@@ -3559,6 +3559,61 @@ function musicHomeFeedShelves() {
     { id: 'weekly-playlists', title: 'Top playlists this week', kind: 'feeds', note: 'Weekly picks only, kept short so Music opens quickly.', refresh: 'weekly', items: MUSIC_HOME_WEEKLY_FEEDS },
   ];
 }
+// Turn ytmusicapi get_home rows (personalised: "Mixed for you", "Listen again", recommended mixes)
+// into Triboon shelves. Song rows → a playable `tracks` shelf; playlist rows → an openable `feeds`
+// shelf (each tile carries a playlistId). Rows too thin to be useful are dropped.
+function normalizeHomeShelves(rows) {
+  const out = [];
+  let idx = 0;
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const title = String((row && row.title) || '').trim();
+    const contents = Array.isArray(row && row.contents) ? row.contents : [];
+    if (!title || !contents.length) continue;
+    const tracks = contents
+      .filter((c) => c && /^[\w-]{11}$/.test(String(c.videoId || '')))
+      .map((c) => ({
+        id: String(c.videoId),
+        title: ytmusic.cleanTitle(c.title) || c.title || 'Unknown',
+        artist: Array.isArray(c.artists) ? c.artists.map((a) => a && a.name).filter(Boolean).join(', ') : (c.artist || ''),
+        thumb: ytmusic.thumbFor(String(c.videoId)),
+      }));
+    const feeds = contents
+      .filter((c) => c && !c.videoId && /^[\w-]{2,80}$/.test(String((c.playlistId || '').replace(/^VL/, ''))))
+      .map((c) => {
+        const pid = String(c.playlistId).replace(/^VL/, '');
+        const thumbs = Array.isArray(c.thumbnails) ? c.thumbnails : [];
+        const cover = thumbs.length ? ytmusic._upgradeThumbUrl(thumbs[thumbs.length - 1].url) : '';
+        return { title: c.title || 'Playlist', sub: c.description || '', playlistId: pid, coverUrl: cover };
+      });
+    if (tracks.length >= 3) out.push({ id: `home-${idx++}`, title, kind: 'tracks', results: tracks.slice(0, 24) });
+    else if (feeds.length >= 2) out.push({ id: `home-${idx++}`, title, kind: 'feeds', items: feeds.slice(0, 14) });
+  }
+  return out;
+}
+const musicHomeShelfCache = new Map(); // uid -> { shelves, expiresAt, inflight }
+function clearMusicHomeShelfCache(uid) { musicHomeShelfCache.delete(uid); }
+// Personalised home shelves, cached per user (they change slowly) with inflight-dedupe so the
+// Music page never blocks on a cold fetch twice. Returns [] on any failure — the generic charts
+// home still renders, so linking problems degrade gracefully instead of emptying the page.
+async function loadPersonalHomeShelves(uid, cookiesPath, { wait = true } = {}) {
+  const now = Date.now();
+  const hit = musicHomeShelfCache.get(uid);
+  if (hit && hit.shelves && now < hit.expiresAt) return hit.shelves;
+  if (hit && hit.inflight) return wait ? hit.inflight : (hit.shelves || null);
+  const inflight = ytmusic.homeRows({ cookiesPath, limit: 8 })
+    .then((rows) => {
+      const shelves = normalizeHomeShelves(rows);
+      musicHomeShelfCache.set(uid, { shelves, expiresAt: Date.now() + 15 * 60 * 1000 });
+      return shelves;
+    })
+    .catch((e) => {
+      musicHomeShelfCache.set(uid, { shelves: (hit && hit.shelves) || [], expiresAt: Date.now() + 60 * 1000 });
+      if (hit && hit.shelves) return hit.shelves;
+      throw e;
+    });
+  musicHomeShelfCache.set(uid, { ...(hit || {}), inflight });
+  return wait ? inflight.catch(() => []) : (hit && hit.shelves) || null;
+}
 const musicChartCache = new Map(); // id -> { rows, expiresAt, inflight }
 const musicSearchCache = new Map(); // key -> { rows, expiresAt, inflight }
 const musicPlaylistListCache = new Map(); // user/source -> { playlists, expiresAt, inflight }
@@ -3616,41 +3671,10 @@ async function loadMusicChart(def) {
 function tokenizedMusicTrack(uid, r) {
   return { ...r, streamUrl: `/api/music/stream/${r.id}?t=${auth.streamToken(uid, `music:${r.id}`)}` };
 }
-const ytOauthPending = new Map(); // uid -> pending device-code auth
-function ytOauthClient(s = settings.get()) {
-  const clientId = String(s.ytOAuthClientId || '').trim();
-  const clientSecret = String(s.ytOAuthClientSecret || '').trim();
-  return clientId && clientSecret ? { clientId, clientSecret } : null;
-}
-function ytOauthToken(uid, s = settings.get()) {
-  const all = s.ytOAuthTokens || {};
-  const token = all[uid];
-  return token && token.access_token && token.refresh_token ? token : null;
-}
-async function ytmusicOauthFor(uid) {
-  const s = settings.get();
-  const client = ytOauthClient(s);
-  const token = ytOauthToken(uid, s);
-  if (!client || !token) return null;
-  const expiresAt = parseInt(token.expires_at, 10) || 0;
-  if (expiresAt > Math.floor(Date.now() / 1000) + 120) return { token, client };
-  const fresh = await ytmusic.refreshOAuthToken(token, client);
-  settings.update((cur) => {
-    const issues = { ...(cur.ytOAuthIssues || {}) }; delete issues[uid];
-    return { ...cur, ytOAuthTokens: { ...(cur.ytOAuthTokens || {}), [uid]: fresh }, ytOAuthIssues: issues };
-  });
-  return { token: fresh, client };
-}
-function clearYtmIssue(uid, kind) {
+function clearYtmIssue(uid) {
   settings.update((s) => {
-    const next = { ...s };
-    if (kind === 'oauth' || kind === 'all') {
-      const issues = { ...(next.ytOAuthIssues || {}) }; delete issues[uid]; next.ytOAuthIssues = issues;
-    }
-    if (kind === 'cookie' || kind === 'all') {
-      const issues = { ...(next.ytCookieIssues || {}) }; delete issues[uid]; next.ytCookieIssues = issues;
-    }
-    return next;
+    const issues = { ...(s.ytCookieIssues || {}) }; delete issues[uid];
+    return { ...s, ytCookieIssues: issues };
   });
 }
 function musicPlaylistListCacheKey(uid, source) {
@@ -3660,6 +3684,7 @@ function clearMusicPlaylistCaches(uid) {
   for (const key of [...musicPlaylistListCache.keys()]) {
     if (key.startsWith(`${uid}:`)) musicPlaylistListCache.delete(key);
   }
+  clearMusicHomeShelfCache(uid); // personalised home follows the same link → re-fetch on next open
 }
 async function loadUserMusicPlaylists(uid, source, loader) {
   const key = musicPlaylistListCacheKey(uid, source);
@@ -5773,8 +5798,6 @@ Object.assign(H, {
       epgUrl: primaryIptv.epgUrl ? iptvUrlHost(primaryIptv.epgUrl) : null,
       traktClientId: s.traktClientId || null, // public identifier — safe to show
       traktClientSecret: s.traktClientSecret ? '•••' : null,
-      ytOAuthClientId: s.ytOAuthClientId || null, // public identifier — safe to show
-      ytOAuthClientSecret: s.ytOAuthClientSecret ? '•••' : null,
       iptvUsers: primaryIptv.users || [], // user ids, not secrets
       sizeCapMode: s.sizeCapMode || 'auto',
       sizeCap4kGb: s.sizeCap4kGb || null,
@@ -5891,8 +5914,8 @@ Object.assign(H, {
     settings.update((s) => {
       const next = {
         // Preserve every existing field FIRST — this endpoint rebuilds settings from an explicit
-        // allowlist, and anything not re-listed below (per-user YouTube Music cookies/OAuth tokens,
-        // and any future key) was being silently dropped on every admin save. The explicit fields
+        // allowlist, and anything not re-listed below (per-user YouTube Music cookies, and any
+        // future key) was being silently dropped on every admin save. The explicit fields
         // below still override, so admin behavior is unchanged; only the unlisted state survives.
         ...s,
         providers: b.providers !== undefined ? normalizeProviders(b.providers) : normalizeProviders(s.providers || []),
@@ -5918,8 +5941,6 @@ Object.assign(H, {
           : (s.iptvHiddenGroups || []),
         traktClientId: b.traktClientId !== undefined ? (b.traktClientId || null) : s.traktClientId,
         traktClientSecret: b.traktClientSecret !== undefined ? (b.traktClientSecret || null) : s.traktClientSecret,
-        ytOAuthClientId: b.ytOAuthClientId !== undefined ? (b.ytOAuthClientId || null) : s.ytOAuthClientId,
-        ytOAuthClientSecret: b.ytOAuthClientSecret !== undefined ? (b.ytOAuthClientSecret || null) : s.ytOAuthClientSecret,
         // Live TV user allowlist (empty = everyone) — same model as library sharing.
         iptvUsers: b.iptvUsers !== undefined
           ? (Array.isArray(b.iptvUsers) ? b.iptvUsers.map(String).slice(0, 100) : [])
@@ -6592,9 +6613,24 @@ Object.assign(H, {
       id: 'top-songs-week',
       title: 'Top songs this week',
     }));
+    // Personalised "For you" rows from the user's own YouTube Music home — only when linked and
+    // ytmusicapi is present. Non-blocking after the first warm-up: cold loads return [] now and
+    // the client backfills via personalPending. Degrades to generic charts if it ever fails.
+    const cookies = catalog ? cookiesFor(ctx.user.id) : null;
+    let personalShelves = [];
+    let personalPending = false;
+    if (cookies) {
+      personalShelves = await loadPersonalHomeShelves(ctx.user.id, cookies, { wait: false }) || [];
+      personalPending = !personalShelves.length; // cold cache → warming in the background
+    }
+    const feed = musicHomeFeedShelves();
+    const personalSlot = feed.filter((s) => s.kind === 'personal');
+    const genericFeed = feed.filter((s) => s.kind !== 'personal');
     const shelves = [
-      ...musicHomeFeedShelves(),
-      ...chartHomeShelves,
+      ...personalSlot,      // "Your playlists" (liked + playlists) always first
+      ...personalShelves,   // taste-based rows from get_home
+      ...genericFeed,       // weekly picks
+      ...chartHomeShelves,  // top songs this week
     ];
     send(ctx.res, 200, {
       version: 2,
@@ -6602,6 +6638,7 @@ Object.assign(H, {
       catalog,
       mode: catalog ? 'catalog' : 'basic',
       chartsPending: chartHomeShelves.length < MUSIC_CHARTS.length,
+      personalPending,
       order: shelves.map((s) => s.id),
       shelves,
     });
@@ -6676,91 +6713,26 @@ Object.assign(H, {
     pipeFrom(false);
   },
 
-  // Link state only — the cookie text NEVER returns to a client.
+  // Link state only — the cookie text NEVER returns to a client. Linking is cookie-based
+  // (an exported music.youtube.com session); the old OAuth device-flow was removed because
+  // Google blocks library reads for that token type.
   musicStatus: async (ctx) => {
     const s = settings.get();
-    const oauthLinked = !!ytOauthToken(ctx.user.id, s);
     const accountLinked = !!((s.ytCookies || {})[ctx.user.id]);
-    const serverLinked = !oauthLinked && !accountLinked && !!cookiesFor(null);
-    const oauthIssue = (s.ytOAuthIssues || {})[ctx.user.id] || null;
-    const cookieIssue = (s.ytCookieIssues || {})[ctx.user.id] || null;
-    const issue = oauthLinked ? oauthIssue : cookieIssue;
+    const serverLinked = !accountLinked && !!cookiesFor(null);
+    const issue = (s.ytCookieIssues || {})[ctx.user.id] || null;
     const ytdlp = ytmusic.detectYtdlp();
     const catalog = ytmusic.detectYtMusicApi();
-    const oauthClient = ytOauthClient(s);
     send(ctx.res, 200, {
       ytdlp: !!ytdlp,
       ytdlpVersion: ytdlp ? ytdlp.version || null : null,
       catalog: !!catalog,
       catalogVersion: catalog ? catalog.version || null : null,
-      oauthConfigured: !!oauthClient,
-      oauthAvailable: !!(oauthClient && catalog),
-      linked: oauthLinked || accountLinked || serverLinked,
-      linkSource: oauthLinked ? 'oauth' : (accountLinked ? 'account' : (serverLinked ? 'server' : 'none')),
-      needsRelink: !!((oauthLinked || accountLinked) && issue),
-      linkIssue: (oauthLinked || accountLinked) && issue ? { at: issue.at || 0, message: String(issue.message || '').slice(0, 160) } : null,
+      linked: accountLinked || serverLinked,
+      linkSource: accountLinked ? 'account' : (serverLinked ? 'server' : 'none'),
+      needsRelink: !!(accountLinked && issue),
+      linkIssue: accountLinked && issue ? { at: issue.at || 0, message: String(issue.message || '').slice(0, 160) } : null,
     });
-  },
-  musicOAuthStart: async (ctx) => {
-    if (!ytmusic.detectYtMusicApi()) return send(ctx.res, 503, { error: 'ytmusicapi is not installed on the server' });
-    const client = ytOauthClient();
-    if (!client) return send(ctx.res, 400, { error: 'YouTube Music OAuth app is not configured yet' });
-    try {
-      const r = await ytmusic.beginOAuth(client);
-      if (!r.deviceCode || !r.userCode) return send(ctx.res, 502, { error: 'YouTube Music OAuth returned no device code' });
-      ytOauthPending.set(ctx.user.id, {
-        deviceCode: r.deviceCode,
-        expiresAt: Date.now() + r.expiresIn * 1000,
-        intervalMs: r.interval * 1000,
-      });
-      send(ctx.res, 200, {
-        status: 'pending',
-        userCode: r.userCode,
-        verificationUrl: r.verificationUrl,
-        verificationUrlComplete: r.verificationUrlComplete,
-        expiresIn: r.expiresIn,
-        intervalMs: r.interval * 1000,
-      });
-    } catch (e) { send(ctx.res, 502, { error: 'YouTube Music OAuth failed to start', detail: String(e.message).slice(0, 160) }); }
-  },
-  musicOAuthPoll: async (ctx) => {
-    if (!ytmusic.detectYtMusicApi()) return send(ctx.res, 503, { error: 'ytmusicapi is not installed on the server' });
-    const pending = ytOauthPending.get(ctx.user.id);
-    if (!pending) return send(ctx.res, 404, { error: 'No YouTube Music sign-in is waiting' });
-    if (Date.now() > pending.expiresAt) {
-      ytOauthPending.delete(ctx.user.id);
-      return send(ctx.res, 410, { error: 'YouTube Music sign-in code expired' });
-    }
-    const client = ytOauthClient();
-    if (!client) return send(ctx.res, 400, { error: 'YouTube Music OAuth app is not configured yet' });
-    try {
-      const token = await ytmusic.completeOAuth({ ...client, deviceCode: pending.deviceCode });
-      ytOauthPending.delete(ctx.user.id);
-      settings.update((s) => {
-        const cookies = { ...(s.ytCookies || {}) }; delete cookies[ctx.user.id];
-        const cIssues = { ...(s.ytCookieIssues || {}) }; delete cIssues[ctx.user.id];
-        const oIssues = { ...(s.ytOAuthIssues || {}) }; delete oIssues[ctx.user.id];
-        return {
-          ...s,
-          ytCookies: cookies,
-          ytCookieIssues: cIssues,
-          ytOAuthTokens: { ...(s.ytOAuthTokens || {}), [ctx.user.id]: token },
-          ytOAuthIssues: oIssues,
-        };
-      });
-      clearMusicPlaylistCaches(ctx.user.id);
-      dropCookieFile(ctx.user.id);
-      send(ctx.res, 200, { status: 'linked', linked: true });
-    } catch (e) {
-      if (e.code === 'authorization_pending') return send(ctx.res, 200, { status: 'pending', intervalMs: pending.intervalMs });
-      if (e.code === 'slow_down') {
-        pending.intervalMs = Math.min(15000, pending.intervalMs + 5000);
-        return send(ctx.res, 200, { status: 'pending', intervalMs: pending.intervalMs });
-      }
-      if (e.code === 'expired_token' || e.code === 'access_denied') ytOauthPending.delete(ctx.user.id);
-      const status = e.code === 'expired_token' ? 410 : (e.code === 'access_denied' ? 403 : 502);
-      send(ctx.res, status, { error: 'YouTube Music sign-in failed', detail: String(e.message).slice(0, 160) });
-    }
   },
 
   // Paste an exported cookies.txt (Netscape format, from music.youtube.com while signed in).
@@ -6773,9 +6745,7 @@ Object.assign(H, {
     }
     settings.update((s) => {
       const issues = { ...(s.ytCookieIssues || {}) }; delete issues[ctx.user.id];
-      const oauth = { ...(s.ytOAuthTokens || {}) }; delete oauth[ctx.user.id];
-      const oauthIssues = { ...(s.ytOAuthIssues || {}) }; delete oauthIssues[ctx.user.id];
-      return { ...s, ytCookies: { ...(s.ytCookies || {}), [ctx.user.id]: text }, ytCookieIssues: issues, ytOAuthTokens: oauth, ytOAuthIssues: oauthIssues };
+      return { ...s, ytCookies: { ...(s.ytCookies || {}), [ctx.user.id]: text }, ytCookieIssues: issues };
     });
     clearMusicPlaylistCaches(ctx.user.id);
     dropCookieFile(ctx.user.id); // re-materialize with the fresh text on next use
@@ -6785,11 +6755,8 @@ Object.assign(H, {
     settings.update((s) => {
       const all = { ...(s.ytCookies || {}) }; delete all[ctx.user.id];
       const issues = { ...(s.ytCookieIssues || {}) }; delete issues[ctx.user.id];
-      const oauth = { ...(s.ytOAuthTokens || {}) }; delete oauth[ctx.user.id];
-      const oauthIssues = { ...(s.ytOAuthIssues || {}) }; delete oauthIssues[ctx.user.id];
-      return { ...s, ytCookies: all, ytCookieIssues: issues, ytOAuthTokens: oauth, ytOAuthIssues: oauthIssues };
+      return { ...s, ytCookies: all, ytCookieIssues: issues };
     });
-    ytOauthPending.delete(ctx.user.id);
     clearMusicPlaylistCaches(ctx.user.id);
     dropCookieFile(ctx.user.id);
     send(ctx.res, 200, { linked: false });
@@ -6798,33 +6765,17 @@ Object.assign(H, {
   // The user's own playlists (chips on the Music page). Honest errors — cookies can expire.
   musicPlaylists: async (ctx) => {
     if (!ytmusic.detectYtdlp()) return send(ctx.res, 503, { error: 'yt-dlp is not installed on the server' });
-    let oauth = null;
-    try { oauth = await ytmusicOauthFor(ctx.user.id); } catch (e) {
-      settings.update((s) => ({
-        ...s,
-        ytOAuthIssues: { ...(s.ytOAuthIssues || {}), [ctx.user.id]: { at: Date.now(), message: String(e.message || e).slice(0, 160) } },
-      }));
-    }
-    const cookies = oauth ? null : cookiesFor(ctx.user.id);
-    if (!oauth && !cookies) return send(ctx.res, 200, { linked: false, playlists: [] });
+    const cookies = cookiesFor(ctx.user.id);
+    if (!cookies) return send(ctx.res, 200, { linked: false, playlists: [] });
     try {
-      const source = oauth ? 'oauth' : 'account';
-      const playlists = await loadUserMusicPlaylists(ctx.user.id, source, () => ytmusic.listPlaylists({
+      const playlists = await loadUserMusicPlaylists(ctx.user.id, 'account', () => ytmusic.listPlaylists({
         cookiesPath: cookies,
-        oauthToken: oauth && oauth.token,
-        oauthClientId: oauth && oauth.client.clientId,
-        oauthClientSecret: oauth && oauth.client.clientSecret,
         limit: MUSIC_PLAYLIST_LIST_LIMIT,
       }));
-      clearYtmIssue(ctx.user.id, oauth ? 'oauth' : 'cookie');
-      send(ctx.res, 200, { linked: true, linkSource: source, playlists });
+      clearYtmIssue(ctx.user.id);
+      send(ctx.res, 200, { linked: true, linkSource: 'account', playlists });
     } catch (e) {
-      if (oauth) {
-        settings.update((s) => ({
-          ...s,
-          ytOAuthIssues: { ...(s.ytOAuthIssues || {}), [ctx.user.id]: { at: Date.now(), message: String(e.message || e).slice(0, 160) } },
-        }));
-      } else if ((settings.get().ytCookies || {})[ctx.user.id]) {
+      if ((settings.get().ytCookies || {})[ctx.user.id]) {
         settings.update((s) => ({
           ...s,
           ytCookieIssues: { ...(s.ytCookieIssues || {}), [ctx.user.id]: { at: Date.now(), message: String(e.message || e).slice(0, 160) } },
@@ -6838,13 +6789,8 @@ Object.assign(H, {
     try {
       const limit = Math.max(1, Math.min(100, parseInt(ctx.url.searchParams.get('limit') || '50', 10) || 50));
       const offset = Math.max(0, parseInt(ctx.url.searchParams.get('offset') || '0', 10) || 0);
-      let oauth = null;
-      try { oauth = await ytmusicOauthFor(ctx.user.id); } catch { oauth = null; }
       const r = await ytmusic.playlistTracks(ctx.m[1], {
-        cookiesPath: oauth ? null : cookiesFor(ctx.user.id),
-        oauthToken: oauth && oauth.token,
-        oauthClientId: oauth && oauth.client.clientId,
-        oauthClientSecret: oauth && oauth.client.clientSecret,
+        cookiesPath: cookiesFor(ctx.user.id),
         limit: limit + 1,
         offset,
       });
@@ -7101,8 +7047,6 @@ const ROUTES = [
   { m: 'GET', re: /^\/api\/music\/radio\/([\w-]{11})$/, auth: 'user', h: H.musicRadio },
   { m: 'GET', re: /^\/api\/music\/stream\/([\w-]{11})$/, auth: 'stream', h: H.musicStream },
   { m: 'GET', re: /^\/api\/music\/status$/, auth: 'user', h: H.musicStatus },
-  { m: 'POST', re: /^\/api\/music\/oauth\/start$/, auth: 'user', h: H.musicOAuthStart },
-  { m: 'POST', re: /^\/api\/music\/oauth\/poll$/, auth: 'user', h: H.musicOAuthPoll },
   { m: 'POST', re: /^\/api\/music\/link$/, auth: 'user', h: H.musicLink },
   { m: 'POST', re: /^\/api\/music\/unlink$/, auth: 'user', h: H.musicUnlink },
   { m: 'GET', re: /^\/api\/music\/playlists$/, auth: 'user', h: H.musicPlaylists },

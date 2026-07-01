@@ -14,18 +14,13 @@ const https = require('https');
 const YTDLP_CONCURRENCY = Math.max(1, Math.min(4, parseInt(process.env.TRIBOON_YTDLP_CONCURRENCY || '2', 10) || 2));
 const YTMUSICAPI_CONCURRENCY = Math.max(1, Math.min(3, parseInt(process.env.TRIBOON_YTMUSICAPI_CONCURRENCY || '2', 10) || 2));
 const PLAYLIST_LIST_LIMIT = Math.max(12, Math.min(60, parseInt(process.env.TRIBOON_MUSIC_PLAYLIST_LIST_LIMIT || '36', 10) || 36));
-const YTMUSIC_OAUTH_SCOPE = 'https://www.googleapis.com/auth/youtube';
-const YTMUSIC_OAUTH_CODE_URL = 'https://www.youtube.com/o/oauth2/device/code';
-const YTMUSIC_OAUTH_TOKEN_URL = 'https://oauth2.googleapis.com/token';
-const YTMUSIC_OAUTH_GRANT = 'http://oauth.net/grant_type/device/1.0';
-const YTMUSIC_OAUTH_UA = 'Mozilla/5.0 Triboon/1.0 Cobalt/Version';
+const YTMUSIC_BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 let ytdlpActive = 0;
 const ytdlpQueue = [];
 let ytdlpSeq = 0;
 let ytmApiActive = 0;
 const ytmApiQueue = [];
 let ytmApiSeq = 0;
-let _oauthPostForTest = null;
 
 function pumpYtdlpQueue() {
   while (ytdlpActive < YTDLP_CONCURRENCY && ytdlpQueue.length) {
@@ -300,17 +295,19 @@ function parseJsonObject(out, message) {
 const YTMUSICAPI_SCRIPT = String.raw`
 import json
 import sys
-from ytmusicapi import YTMusic, OAuthCredentials
+from ytmusicapi import YTMusic
 
 payload = json.loads(sys.stdin.read() or "{}")
 action = payload.get("action")
 
 def make_client():
-    token = payload.get("oauthToken")
-    client_id = payload.get("clientId")
-    client_secret = payload.get("clientSecret")
-    if token and client_id and client_secret:
-        return YTMusic(token, oauth_credentials=OAuthCredentials(client_id=client_id, client_secret=client_secret))
+    # Browser (cookie) auth: ytmusicapi recognises BROWSER auth when an "authorization" header
+    # containing SAPISIDHASH plus a "cookie" (with __Secure-3PAPISID) is supplied, then recomputes
+    # the real per-request SAPISIDHASH itself. This is the path that reads a user's OWN library +
+    # personalised home. (Google broke the OAuth path for library reads, so it was removed.)
+    auth = payload.get("browserAuth")
+    if auth:
+        return YTMusic(auth)
     return YTMusic()
 
 yt = make_client()
@@ -323,6 +320,12 @@ elif action == "watch":
     limit = max(1, min(50, int(payload.get("limit") or 25)))
     data = yt.get_watch_playlist(videoId=video_id, limit=limit)
     print(json.dumps({"rows": data.get("tracks") or [], "playlistId": data.get("playlistId")}))
+elif action == "home":
+    # Personalised home rows ("Mixed for you", "Listen again", recommended mixes) when authed;
+    # generic home when not. Each row = {title, contents:[song|playlist|album ...]}.
+    limit = max(1, min(20, int(payload.get("limit") or 8)))
+    rows = yt.get_home(limit=limit)
+    print(json.dumps({"rows": rows}))
 elif action == "library_playlists":
     limit = max(1, min(100, int(payload.get("limit") or 50)))
     rows = yt.get_library_playlists(limit=limit)
@@ -340,109 +343,34 @@ else:
     raise SystemExit("unknown ytmusicapi action")
 `;
 
-function oauthPost(url, data, { timeoutMs = 15000 } = {}) {
-  if (_oauthPostForTest) return Promise.resolve(_oauthPostForTest(url, data));
-  return new Promise((resolve, reject) => {
-    const body = new URLSearchParams(data).toString();
-    const u = new URL(url);
-    const req = https.request(u, {
-      method: 'POST',
-      timeout: timeoutMs,
-      headers: {
-        'content-type': 'application/x-www-form-urlencoded',
-        'content-length': Buffer.byteLength(body),
-        'user-agent': YTMUSIC_OAUTH_UA,
-      },
-    }, (res) => {
-      const chunks = [];
-      res.on('data', (d) => { if (chunks.reduce((n, c) => n + c.length, 0) < 2e6) chunks.push(d); });
-      res.on('end', () => {
-        let parsed;
-        const raw = Buffer.concat(chunks).toString('utf8');
-        try { parsed = JSON.parse(raw || '{}'); } catch { parsed = { error: raw || `HTTP ${res.statusCode}` }; }
-        if (parsed && parsed.error) {
-          const e = new Error(parsed.error_description || parsed.error);
-          e.code = parsed.error;
-          e.status = res.statusCode;
-          e.payload = parsed;
-          return reject(e);
-        }
-        if (res.statusCode >= 400) {
-          const e = new Error(parsed.error_description || parsed.error || `OAuth HTTP ${res.statusCode}`);
-          e.status = res.statusCode;
-          e.payload = parsed;
-          return reject(e);
-        }
-        resolve(parsed);
-      });
-    });
-    req.on('timeout', () => req.destroy(new Error('YouTube Music OAuth timed out')));
-    req.on('error', reject);
-    req.end(body);
-  });
-}
-
-function normalizeOAuthClient(clientId, clientSecret) {
-  const id = String(clientId || '').trim();
-  const secret = String(clientSecret || '').trim();
-  if (!id || !secret) throw new Error('YouTube Music OAuth app is not configured');
-  return { clientId: id, clientSecret: secret };
-}
-
-async function beginOAuth({ clientId, clientSecret }) {
-  const c = normalizeOAuthClient(clientId, clientSecret);
-  const r = await oauthPost(YTMUSIC_OAUTH_CODE_URL, { client_id: c.clientId, scope: YTMUSIC_OAUTH_SCOPE });
-  const verificationUrl = r.verification_url || r.verification_uri || 'https://www.google.com/device';
+// Build ytmusicapi BROWSER-auth headers from a Netscape cookies.txt (the same file yt-dlp uses).
+// ytmusicapi recognises browser auth when it sees a `cookie` (carrying __Secure-3PAPISID) plus an
+// `authorization` header containing "SAPISIDHASH"; it then recomputes the real per-request hash
+// from the cookie itself (ytmusic.py). Returns null when the file has no usable YouTube session.
+function browserAuthFromCookies(cookiesPath) {
+  if (!cookiesPath) return null;
+  let text;
+  try { text = require('fs').readFileSync(cookiesPath, 'utf8'); } catch { return null; }
+  const jar = [];
+  let hasApiSid = false;
+  for (const line of text.split(/\r?\n/)) {
+    if (!line || line.startsWith('#')) continue;
+    const parts = line.split('\t');
+    if (parts.length < 7) continue;
+    const name = parts[5];
+    const value = parts[6];
+    if (!name) continue;
+    jar.push(`${name}=${value}`);
+    if (name === '__Secure-3PAPISID') hasApiSid = true;
+  }
+  if (!hasApiSid || !jar.length) return null; // ytmusicapi needs __Secure-3PAPISID to sign requests
   return {
-    deviceCode: String(r.device_code || ''),
-    userCode: String(r.user_code || ''),
-    verificationUrl,
-    verificationUrlComplete: r.verification_url_complete || (r.user_code ? `${verificationUrl}?user_code=${encodeURIComponent(r.user_code)}` : verificationUrl),
-    expiresIn: Math.max(1, parseInt(r.expires_in, 10) || 1800),
-    interval: Math.max(3, parseInt(r.interval, 10) || 5),
+    cookie: jar.join('; '),
+    authorization: 'SAPISIDHASH init', // marker → BROWSER auth; ytmusicapi recomputes the live hash
+    origin: 'https://music.youtube.com',
+    'x-goog-authuser': '0',
+    'user-agent': YTMUSIC_BROWSER_UA,
   };
-}
-
-function normalizeOAuthToken(raw, previous = null) {
-  if (!raw || typeof raw !== 'object') throw new Error('YouTube Music OAuth returned no token');
-  const expiresIn = Math.max(1, parseInt(raw.expires_in, 10) || 3600);
-  const token = {
-    access_token: String(raw.access_token || ''),
-    refresh_token: String(raw.refresh_token || (previous && previous.refresh_token) || ''),
-    scope: String(raw.scope || (previous && previous.scope) || YTMUSIC_OAUTH_SCOPE),
-    token_type: String(raw.token_type || (previous && previous.token_type) || 'Bearer'),
-    expires_in: expiresIn,
-    expires_at: Math.floor(Date.now() / 1000) + expiresIn,
-  };
-  if (raw.refresh_token_expires_in !== undefined) token.refresh_token_expires_in = parseInt(raw.refresh_token_expires_in, 10) || 0;
-  if (!token.access_token || !token.refresh_token) throw new Error('YouTube Music OAuth returned an incomplete token');
-  return token;
-}
-
-async function completeOAuth({ clientId, clientSecret, deviceCode }) {
-  const c = normalizeOAuthClient(clientId, clientSecret);
-  const code = String(deviceCode || '').trim();
-  if (!code) throw new Error('missing device code');
-  const raw = await oauthPost(YTMUSIC_OAUTH_TOKEN_URL, {
-    client_id: c.clientId,
-    client_secret: c.clientSecret,
-    grant_type: YTMUSIC_OAUTH_GRANT,
-    code,
-  });
-  return normalizeOAuthToken(raw);
-}
-
-async function refreshOAuthToken(token, { clientId, clientSecret }) {
-  const c = normalizeOAuthClient(clientId, clientSecret);
-  const refreshToken = token && token.refresh_token;
-  if (!refreshToken) throw new Error('YouTube Music OAuth token cannot refresh');
-  const raw = await oauthPost(YTMUSIC_OAUTH_TOKEN_URL, {
-    client_id: c.clientId,
-    client_secret: c.clientSecret,
-    grant_type: 'refresh_token',
-    refresh_token: refreshToken,
-  });
-  return normalizeOAuthToken(raw, token);
 }
 
 function runYtMusicApiRaw(action, body, { timeoutMs = 12000, priority = 0 } = {}) {
@@ -615,17 +543,19 @@ async function resolveStream(id, { cookiesPath, force = false } = {}) {
 }
 function _peekCached(id, cookiesPath) { return _streamCache.get(streamCacheKey(id, cookiesPath)) || null; }
 
-// The user's OWN playlists (needs cookies). yt-dlp's youtube:tab extractor resolves the YTM
-// library page when authenticated; entries are playlist links (ids often prefixed 'VL').
-async function listPlaylists({ cookiesPath, oauthToken, oauthClientId, oauthClientSecret, limit = PLAYLIST_LIST_LIMIT }) {
+// The user's OWN playlists (needs cookies). Prefers ytmusicapi BROWSER auth (clean structured
+// data + covers); falls back to yt-dlp's youtube:tab extractor on the YTM library page (entries
+// are playlist links, ids often prefixed 'VL') when ytmusicapi is absent or errors.
+async function listPlaylists({ cookiesPath, limit = PLAYLIST_LIST_LIMIT }) {
   const n = Math.max(1, Math.min(PLAYLIST_LIST_LIMIT, parseInt(limit, 10) || PLAYLIST_LIST_LIMIT));
-  if (oauthToken && oauthClientId && oauthClientSecret) {
-    const data = await runYtMusicApiRaw('library_playlists', {
-      oauthToken, clientId: oauthClientId, clientSecret: oauthClientSecret, limit: n,
-    }, { timeoutMs: 12000 });
-    return (Array.isArray(data.rows) ? data.rows : []).map(normalizeYtMusicApiPlaylist).filter(Boolean).slice(0, n);
-  }
   if (!cookiesPath) throw new Error('YouTube Music is not linked');
+  const browserAuth = detectYtMusicApi() ? browserAuthFromCookies(cookiesPath) : null;
+  if (browserAuth) {
+    try {
+      const data = await runYtMusicApiRaw('library_playlists', { browserAuth, limit: n }, { timeoutMs: 14000 });
+      return (Array.isArray(data.rows) ? data.rows : []).map(normalizeYtMusicApiPlaylist).filter(Boolean).slice(0, n);
+    } catch { /* ytmusicapi failed → fall back to the yt-dlp library scrape below */ }
+  }
   const sources = [
     'https://music.youtube.com/library/playlists',
     // yt-dlp's YTM library extractor sometimes returns `null` even when the cookies still
@@ -659,20 +589,40 @@ function parseListPlaylists(out) {
 }
 
 // Tracks of one playlist ('LM' = the user's Liked Songs; public lists work without cookies).
-async function playlistTracks(id, { cookiesPath, oauthToken, oauthClientId, oauthClientSecret, limit = 200, offset = 0 } = {}) {
+// Liked Music is private, so it needs ytmusicapi BROWSER auth; regular playlists prefer it when
+// linked (clean metadata) but fall back to yt-dlp (which resolves public lists with no auth).
+async function playlistTracks(id, { cookiesPath, limit = 200, offset = 0 } = {}) {
   if (!/^[\w-]{2,64}$/.test(String(id || ''))) throw new Error('bad playlist id');
-  if (oauthToken && oauthClientId && oauthClientSecret) {
-    const n = Math.max(1, Math.min(100, parseInt(limit, 10) || 50));
+  const browserAuth = detectYtMusicApi() ? browserAuthFromCookies(cookiesPath) : null;
+  if (id === 'LM' || browserAuth) {
+    if (!browserAuth) throw new Error('YouTube Music is not linked');
+    const n = Math.max(1, Math.min(500, parseInt(limit, 10) || 100));
     const off = Math.max(0, parseInt(offset, 10) || 0);
-    const data = await runYtMusicApiRaw('playlist', {
-      oauthToken, clientId: oauthClientId, clientSecret: oauthClientSecret, id, limit: off + n,
-    }, { timeoutMs: 20000 });
-    const rows = (Array.isArray(data.rows) ? data.rows : []).map(normalizeYtMusicApiTrack).filter(Boolean);
-    return { title: data.title || (id === 'LM' ? 'Liked Music' : 'Playlist'), tracks: rows.slice(off, off + n) };
+    try {
+      const data = await runYtMusicApiRaw('playlist', { browserAuth, id, limit: off + n }, { timeoutMs: 24000 });
+      const rows = (Array.isArray(data.rows) ? data.rows : []).map(normalizeYtMusicApiTrack).filter(Boolean);
+      return { title: data.title || (id === 'LM' ? 'Liked Music' : 'Playlist'), tracks: rows.slice(off, off + n) };
+    } catch (e) {
+      if (id === 'LM') throw e; // no yt-dlp fallback for the private Liked list
+      // public playlist → fall through to the yt-dlp path below
+    }
   }
   const out = await runJson(['--flat-playlist', '--dump-single-json', '--playlist-items', playlistItemsRange(offset, limit),
     `https://music.youtube.com/playlist?list=${id}`], { cookiesPath, timeoutMs: 45000 });
   return parsePlaylistTracks(out);
+}
+
+// Personalised home rows via ytmusicapi BROWSER auth: "Mixed for you", "Listen again",
+// recommended mixes — tuned to the user's own listening. Returns ytmusicapi's raw home rows
+// ([{ title, contents:[...] }]); the caller normalises them into Triboon shelves. Needs cookies +
+// ytmusicapi; throws otherwise so the caller can fall back to the generic (charts) home.
+async function homeRows({ cookiesPath, limit = 8 } = {}) {
+  if (!detectYtMusicApi()) throw new Error('ytmusicapi is not installed');
+  const browserAuth = browserAuthFromCookies(cookiesPath);
+  if (!browserAuth) throw new Error('YouTube Music is not linked');
+  const n = Math.max(1, Math.min(20, parseInt(limit, 10) || 8));
+  const data = await runYtMusicApiRaw('home', { browserAuth, limit: n }, { timeoutMs: 16000 });
+  return Array.isArray(data.rows) ? data.rows : [];
 }
 function parsePlaylistTracks(out) {
   const data = parseJsonObject(out, 'playlist returned no data — re-export cookies in Preferences');
@@ -688,15 +638,13 @@ function parsePlaylistTracks(out) {
 
 function _queueStats() { return { active: ytdlpActive, queued: ytdlpQueue.length, concurrency: YTDLP_CONCURRENCY }; }
 function _ytmApiQueueStats() { return { active: ytmApiActive, queued: ytmApiQueue.length, concurrency: YTMUSICAPI_CONCURRENCY }; }
-function _setOAuthPostForTest(fn) { _oauthPostForTest = typeof fn === 'function' ? fn : null; }
 
 module.exports = {
   detectYtdlp, detectYtMusicApi,
-  search, resolveStream, listPlaylists, playlistTracks, watchQueue,
-  beginOAuth, completeOAuth, refreshOAuthToken,
+  search, resolveStream, listPlaylists, playlistTracks, watchQueue, homeRows,
+  browserAuthFromCookies,
   thumbFor, cleanTitle, _upgradeThumbUrl: upgradeThumbUrl,
   _resetDetection, _resetYtMusicApiDetection, _setYtMusicApiRunnerForTest,
-  _setOAuthPostForTest,
   _peekCached, _queueStats, _ytmApiQueueStats,
   _withYtdlpSlot: withYtdlpSlot,
   _friendlyYtdlpError: friendlyYtdlpError,
@@ -709,5 +657,4 @@ module.exports = {
   _parsePlaylistTracks: parsePlaylistTracks,
   _normalizeYtMusicApiTrack: normalizeYtMusicApiTrack,
   _normalizeYtMusicApiPlaylist: normalizeYtMusicApiPlaylist,
-  _normalizeOAuthToken: normalizeOAuthToken,
 };
