@@ -14126,6 +14126,15 @@ function prefetchLiveTv() {
     if (r.configured && r.channels.length) fillLiveState(r);
   }).catch(() => {}).finally(() => { S._livePrefetching = false; });
 }
+// Same idea for Music: the playlist list is a ~2s cold fetch (cached after), so warm the SERVER-side
+// caches the moment the user shows intent (hover/focus the Music rail item) — opening Music is then
+// instant. Results are discarded; loadMusic() re-fetches into the now-hot cache.
+function prefetchMusic() {
+  if (S._musicPrefetched) return;
+  S._musicPrefetched = true;
+  api('/api/music/playlists').catch(() => {});
+  api('/api/music/home').catch(() => {});
+}
 async function loadLiveTv() {
   $('browseTitle').textContent = 'Live TV';
   const grid = $('grid');
@@ -20901,6 +20910,9 @@ async function enterAppShell() {
   // not at boot. The server's stale-while-revalidate cache still makes the first open fast.
   const nav = $('navLiveTv');
   if (nav) { nav.addEventListener('mouseenter', prefetchLiveTv); nav.addEventListener('focus', prefetchLiveTv, true); }
+  // Music playlists load lazily too — warm them on rail intent so the Music tab opens instantly.
+  const navMx = $('navMusic');
+  if (navMx) { navMx.addEventListener('mouseenter', prefetchMusic); navMx.addEventListener('focus', prefetchMusic, true); }
   // Sidebar PUSHES content: hovering the rail shifts the content area right (not overlay).
   $('rail').addEventListener('mouseenter', () => {
     if (!document.body.classList.contains('tv') && !document.body.classList.contains('railClickCollapsed')) {

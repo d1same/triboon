@@ -2228,6 +2228,11 @@ test('Android native player: direct source and native chrome stay out of the web
     'Music page should fall back to regular music search if the home endpoint is not active yet');
   assert.match(ui, /const yours = addShelf\('Your playlists'[\s\S]+if \(Array\.isArray\(S\.ytmPlaylists\)\)[\s\S]+Connect YouTube Music[\s\S]+S\.musicHome/,
     'Music Home should render personal playlists before weekly and chart shelves');
+  // The playlist list is a ~2s cold fetch — warm the server caches on rail intent so Music opens fast.
+  assert.match(ui, /function prefetchMusic\(\) \{[\s\S]+S\._musicPrefetched = true;[\s\S]+api\('\/api\/music\/playlists'\)\.catch[\s\S]+api\('\/api\/music\/home'\)\.catch/,
+    'prefetchMusic should warm the playlists + home server caches once');
+  assert.match(ui, /const navMx = \$\('navMusic'\);[\s\S]+navMx\.addEventListener\('mouseenter', prefetchMusic\);[\s\S]+navMx\.addEventListener\('focus', prefetchMusic, true\)/,
+    'the Music rail button should warm the caches on hover/focus (like Live TV)');
   assert.match(ui, /function startMusicFeed\(item\) \{[\s\S]+\/api\/music\/search\?q=' \+ encodeURIComponent\(q\) \+ '&limit=24'[\s\S]+playMusic\(rows, 0, \{ showQueue: true \}\)/,
     'Music feed cards should start generated queues instead of only opening raw search');
   assert.match(ui, /function safeMusicPlay\(opts = \{\}\) \{[\s\S]+mAudio\.play\(\)[\s\S]+toast\('Press play to start music\.'\)/,
