@@ -592,6 +592,12 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'TMDB season episode grids should expose exact season/episode focus targets');
   assert.match(ui, /function openLocalShowSeasonEpisodes\(show, seasonNumber, opts = \{\}\) \{[\s\S]+card\.dataset\.season = String\(seasonNumber\);[\s\S]+card\.dataset\.episode = String\(ep\.e\);[\s\S]+focusRenderedDetailEpisode\(\{ season: seasonNumber, episode: focusEpisode \}\)/,
     'local-only season episode grids should expose exact season/episode focus targets');
+  // Marking a single episode watched must NOT drop D-pad focus (it jumped to the rail/top). Re-render
+  // with a focus target: advance to the next episode when marking watched, stay put when unmarking.
+  assert.match(ui, /async function setEpisodeWatched\([\s\S]+openSeasonEpisodes\(show, seasonNumber, \{ focusEpisode: watched \? ep\.episode_number \+ 1 : ep\.episode_number \}\)/,
+    'marking an episode watched should keep focus on the episode list (advance to next / stay on unmark), not let it jump');
+  assert.match(ui, /if \(focusEpisode > 0\) \{[\s\S]+focusRenderedDetailEpisode\(\{ season: seasonNumber, episode: focusEpisode \}\)\) return;[\s\S]+eps\.filter\(\(c\) => \(parseInt\(c\.dataset\.episode, 10\) \|\| 0\) <= focusEpisode\)\.pop\(\)/,
+    'episode focus should fall back to the nearest lower episode when the requested one is not rendered (e.g. the next after a finale)');
   assert.match(ui, /renderSeasonGrid\(it, seasons\);[\s\S]+pickNextUp\(it, seasons\);[\s\S]+queueDetailPlayEpisodeFocus\(it, reqId\);/,
     'TMDB show details should focus the computed current episode after the Play target is known');
   assert.match(ui, /renderLocalShowSeasonGrid\(show, S\.detailSeasons\);[\s\S]+pickLocalShowPlayTarget\(show, episodes\);[\s\S]+queueDetailPlayEpisodeFocus\(show, reqId\);/,

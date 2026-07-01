@@ -6604,7 +6604,14 @@ async function openSeasonEpisodes(show, seasonNumber, opts = {}) {
     });
     bindEdgeScroll(grid);
     const focusEpisode = parseInt(opts.focusEpisode, 10) || 0;
-    if (focusEpisode > 0 && focusRenderedDetailEpisode({ season: seasonNumber, episode: focusEpisode })) return;
+    if (focusEpisode > 0) {
+      if (focusRenderedDetailEpisode({ season: seasonNumber, episode: focusEpisode })) return;
+      // Requested episode isn't rendered (e.g. the "next" after a season finale) — keep focus on the
+      // nearest lower episode (the one just marked) rather than letting it jump away.
+      const eps = [...grid.querySelectorAll('.epCard')];
+      const near = eps.filter((c) => (parseInt(c.dataset.episode, 10) || 0) <= focusEpisode).pop() || eps[eps.length - 1];
+      if (near) { applyFocus(near); return; }
+    }
     // TV: OK on a season should land IN the episodes — focus stayed on the season card and
     // LEFT/RIGHT kept switching seasons instead of browsing what just opened. Only when the
     // user is actually in the seasons area (a background watched-mark re-render must not yank).
@@ -6758,7 +6765,10 @@ async function setEpisodeWatched(item, ep, show, seasonNumber, watched) {
     await api('/api/watch', { method: 'POST', body: { key: item.key, watched, unwatch: !watched || undefined, position: 0, duration: ep.runtime ? ep.runtime * 60 : 0, profile: S.profile ? S.profile.id : undefined, meta: { title: show.title, type: 'episode', tmdbId: show.tmdbId } } });
     invalidateWatchCache();
   } catch {}
-  openSeasonEpisodes(show, seasonNumber); // re-render marks
+  // Re-render to update the watched badge, then keep D-pad focus PUT: advance to the next episode
+  // after marking watched (natural when working through a season), or stay on the same one when
+  // unmarking. Without a focus target the re-render destroys the focused card and focus jumps away.
+  openSeasonEpisodes(show, seasonNumber, { focusEpisode: watched ? ep.episode_number + 1 : ep.episode_number });
 }
 $('allSeasonsBtn').addEventListener('click', () => {
   if (!S.detailSeasons) return;
