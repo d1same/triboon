@@ -5614,6 +5614,13 @@ function playbackRequestBody(it, picked = null, qRank = qualityRankForItem(it)) 
     const dur = +(w && w.duration) || +it.duration || 0;
     if (dur > 0) body.resumeFrac = Math.max(0, Math.min(0.98, resumeSec / dur));
   }
+  // Trakt-imported progress carries only a PERCENT (no absolute position/duration), so the block
+  // above can't compute resumeFrac and the deep resume window stayed cold → 20-30s resume lag. The
+  // player seeks to _traktPct% on start (see play-time seek), so send that fraction directly to warm
+  // the same window server-side.
+  if (body.resumeFrac === undefined && +it._traktPct > 2) {
+    body.resumeFrac = Math.max(0, Math.min(0.96, (+it._traktPct) / 100));
+  }
   return body;
 }
 function preparePlaybackSource(it, delay = 900) {

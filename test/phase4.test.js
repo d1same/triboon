@@ -550,6 +550,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'the Live TV clear X returns focus to the filter on Left/Up');
   assert.match(ui, /if \(k === 'ArrowUp'\) return; \/\/ top of the now-playing loop/,
     'music now-playing top controls no longer fall through on ArrowUp (no focus trap)');
+  // Trakt-imported resume (percent only, no position/duration) still primes the server read-ahead
+  // window via resumeFrac so it doesn't cold-seek (the 20-30s resume lag).
+  assert.match(ui, /if \(body\.resumeFrac === undefined && \+it\._traktPct > 2\) \{[\s\S]+body\.resumeFrac = Math\.max\(0, Math\.min\(0\.96, \(\+it\._traktPct\) \/ 100\)\)/,
+    'Trakt percent-only progress sends resumeFrac to warm the resume byte window');
   assert.match(ui, /id="chBar"><div class="chWrap"><input id="chSearch"[\s\S]+id="chClearBtn"/,
     'Live TV filter is wrapped so it can host a clear (X) button');
   assert.match(ui, /function tmdbSearchRank\(x, q\) \{[\s\S]+searchSeqIndex\(noLeadArticle, queryWords\)[\s\S]+score \+= 10000[\s\S]+score -= 1800[\s\S]+sort\(bySearchRank\)\.map\(mapTmdb\)/,
