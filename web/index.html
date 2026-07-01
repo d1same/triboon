@@ -279,6 +279,19 @@ body[data-spotlight]{--grad:var(--focus)}
 body[data-spotlight] .focusable.focus::before,
 body[data-spotlight] .focusable:focus-visible::before{padding:2.5px;inset:-3px}
 body[data-spotlight] .focusable.focus{transform:translateZ(0) scale(1.05)}
+/* ...but NOT dense IPTV-guide rows / channel cards: scaling a row full of logo images + text just
+   blurs and misaligns them (the base themes already disable it — the spotlight scale above was
+   re-introducing the zoom by specificity). Keep the ring/fill cue, drop the zoom. */
+body[data-spotlight] .chCard.focusable.focus,
+body[data-spotlight] .chGroupHead.focusable.focus,
+body[data-spotlight] .gRow.focusable.focus,
+body[data-spotlight] .lcat.focusable.focus,
+body[data-spotlight] .pgRow.focusable.focus{transform:none}
+/* Guide: dark label on the gold focused channel cell / category so it stays readable on the fill. */
+body[data-spotlight] .gRow.focusable.focus .gCh,
+body[data-spotlight] .lcat.focusable.focus,
+body[data-spotlight] .liveGuideShell .lcat.focusable.focus,
+body[data-spotlight] .liveGuideShell .lcat.focus{color:var(--btnFocusText)}
 /* Left menu: the focused row becomes a solid amber chip with dark text + a bold bar. */
 body[data-spotlight] .railBtn.focusable.focus,
 body[data-spotlight] .railBtn:focus-visible,
@@ -16412,10 +16425,10 @@ const THEMES = {
     m: '#A8791C', c: '#D4AF37', a: '#F0D089',
     text: '#F4F1E8', muted: '#A8A49B', line: 'rgba(255,255,255,.16)',
     field: 'rgba(5,5,6,.86)', soft: 'rgba(42,38,26,.55)', panel: 'rgba(11,11,13,.97)',
-    focus: '#E5B93C', focusSoft: 'rgba(229,185,60,.55)', onAccent: '#1A1405',
+    focus: '#D8B25A', focusSoft: 'rgba(216,178,90,.42)', onAccent: '#1A1405',
     success: '#7FD7A6', danger: '#FF7A7A',
-    btn: 'rgba(28,28,30,.92)', btnHover: '#E5B93C', btnSelected: 'rgba(229,185,60,.30)', btnSelectedHover: '#EFC658', btnPrimary: '#D4AF37', btnPrimaryHover: '#E0BE4E', btnFocusText: '#1A1405',
-    artFocusLine: 'rgba(229,185,60,.95)', artFocusGlow: 'rgba(229,185,60,.45)', artFocusTileLine: 'rgba(229,185,60,.9)', artFocusTileBorder: 'rgba(229,185,60,.8)', artFocusTileGlow: 'rgba(229,185,60,.42)',
+    btn: 'rgba(28,28,30,.92)', btnHover: '#D8B25A', btnSelected: 'rgba(216,178,90,.26)', btnSelectedHover: '#E6C574', btnPrimary: '#D4AF37', btnPrimaryHover: '#E0BE4E', btnFocusText: '#1A1405',
+    artFocusLine: 'rgba(216,178,90,.9)', artFocusGlow: 'rgba(216,178,90,.38)', artFocusTileLine: 'rgba(216,178,90,.85)', artFocusTileBorder: 'rgba(216,178,90,.75)', artFocusTileGlow: 'rgba(216,178,90,.38)',
     scrim: 'linear-gradient(90deg,rgba(5,5,6,.88) 0%,rgba(5,5,6,.56) 28%,rgba(5,5,6,.20) 58%,rgba(5,5,6,.06) 100%),linear-gradient(0deg,rgba(5,5,6,.78) 0%,rgba(5,5,6,.26) 26%,rgba(5,5,6,.05) 60%,rgba(5,5,6,.11) 100%)',
   },
   // The ONE light theme — pale surfaces with DARK text. Its rollover bg is a light tint, so

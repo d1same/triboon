@@ -1117,7 +1117,7 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.ok(ui.includes("label: 'Toomaj'") && ui.includes("focus: '#FFD23F'") && ui.includes("btnFocusText: '#1A1206'"),
     'Toomaj theme should use a high-visibility amber focus with dark on-focus text');
   assert.ok(ui.includes("label: 'Triboon', tone: 'near-black + gold', spotlight: true")
-    && ui.includes("focus: '#E5B93C'") && ui.includes("ink: '#050506'"),
+    && ui.includes("focus: '#D8B25A'") && ui.includes("ink: '#050506'"),
     'Triboon theme should be a near-black base with a gold high-visibility focus');
   assert.match(ui, /body\[data-spotlight\]\{--grad:var\(--focus\)\}[\s\S]+\.railBtn[\s\S]+background:var\(--focus\)[\s\S]+\.pcard \.art[\s\S]+opacity:\.62/,
     'spotlight themes share one body[data-spotlight] block: focus-coloured ring/fill + dimmed unfocused artwork');
