@@ -268,96 +268,97 @@ body.tv:not(.railOpen) #rail:not(.expanded) .railBtn .del{opacity:0!important}
 body.tv .focusable::before{transition:none}
 body.tv .card,body.tv .btn,body.tv .srcRow,body.tv .railBtn,body.tv .lcat,body.tv .gRow{transition:none}
 
-/* ===== Toomaj theme — high-visibility focus spotlight (Aurora base, amber focus) =====
-   A dedicated accessibility theme for small/older/low-contrast TVs: the focused item is
-   unmistakable. Everything here is scoped to [data-theme="toomaj"] so the other themes are
-   untouched. Pairs with the amber focus tokens in the THEMES.toomaj object (solid --btnHover
-   amber + dark --btnFocusText already light up every menu/list/tab/guide-cell on focus). */
-/* Cover/card focus ring: amber (decoupled from the green accent), thicker, bigger lift. */
-body[data-theme="toomaj"]{--grad:#FFD23F}
-body[data-theme="toomaj"] .focusable.focus::before,
-body[data-theme="toomaj"] .focusable:focus-visible::before{padding:4px;inset:-5px}
-body[data-theme="toomaj"] .focusable.focus{transform:translateZ(0) scale(1.05)}
+/* ===== High-visibility focus SPOTLIGHT (shared by "spotlight" themes: Toomaj, Triboon) =====
+   For small/older/low-contrast TVs the focused item must be unmistakable. Scoped to
+   body[data-spotlight] (applyTheme sets it from a theme's `spotlight:true`) and driven ENTIRELY by
+   that theme's tokens (--focus / --btnFocusText / --focusSoft / --artFocusGlow) so each spotlight
+   theme picks its own colour — Toomaj = amber, Triboon = gold. The theme's solid --btnHover + dark
+   --btnFocusText already light up every menu/list/tab/guide-cell on focus. */
+/* Cover/card focus ring: the focus colour (decoupled from the brand accent), thicker, bigger lift. */
+body[data-spotlight]{--grad:var(--focus)}
+body[data-spotlight] .focusable.focus::before,
+body[data-spotlight] .focusable:focus-visible::before{padding:4px;inset:-5px}
+body[data-spotlight] .focusable.focus{transform:translateZ(0) scale(1.05)}
 /* Left menu: the focused row becomes a solid amber chip with dark text + a bold bar. */
-body[data-theme="toomaj"] .railBtn.focusable.focus,
-body[data-theme="toomaj"] .railBtn:focus-visible,
-body[data-theme="toomaj"] .railBtn.active.focusable.focus,
-body[data-theme="toomaj"] .railBtn.active:focus-visible,
-body[data-theme="toomaj"] #railUser.focusable.focus,
-body[data-theme="toomaj"] #railUser:focus-visible{background:var(--focus);color:#1A1206}
-body[data-theme="toomaj"] .railBtn.focusable.focus svg,
-body[data-theme="toomaj"] .railBtn:focus-visible svg{color:#1A1206}
-body[data-theme="toomaj"] .railBtn.focusable.focus::after,
-body[data-theme="toomaj"] .railBtn:focus-visible::after{width:5px;height:30px;box-shadow:0 0 16px var(--focus)}
+body[data-spotlight] .railBtn.focusable.focus,
+body[data-spotlight] .railBtn:focus-visible,
+body[data-spotlight] .railBtn.active.focusable.focus,
+body[data-spotlight] .railBtn.active:focus-visible,
+body[data-spotlight] #railUser.focusable.focus,
+body[data-spotlight] #railUser:focus-visible{background:var(--focus);color:var(--btnFocusText)}
+body[data-spotlight] .railBtn.focusable.focus svg,
+body[data-spotlight] .railBtn:focus-visible svg{color:var(--btnFocusText)}
+body[data-spotlight] .railBtn.focusable.focus::after,
+body[data-spotlight] .railBtn:focus-visible::after{width:5px;height:30px;box-shadow:0 0 16px var(--focus)}
 /* Spotlight: fade unfocused artwork so the focused cover/card/channel clearly pops. */
-body[data-theme="toomaj"] .pcard .art,
-body[data-theme="toomaj"] .card,
-body[data-theme="toomaj"] .seasonCard,
-body[data-theme="toomaj"] .epCard,
-body[data-theme="toomaj"] .castCard,
-body[data-theme="toomaj"] .chCard .chLogo,
-body[data-theme="toomaj"] .playerEpCard .peStill{opacity:.62;transition:opacity .12s}
-body[data-theme="toomaj"] .pcard.focus .art,
-body[data-theme="toomaj"] .card.focus,
-body[data-theme="toomaj"] .seasonCard.focus,
-body[data-theme="toomaj"] .epCard.focus,
-body[data-theme="toomaj"] .castCard.focus,
-body[data-theme="toomaj"] .chCard.focus .chLogo,
-body[data-theme="toomaj"] .playerEpCard.focus .peStill,
-body[data-theme="toomaj"] .playerEpCard:focus-visible .peStill{opacity:1}
+body[data-spotlight] .pcard .art,
+body[data-spotlight] .card,
+body[data-spotlight] .seasonCard,
+body[data-spotlight] .epCard,
+body[data-spotlight] .castCard,
+body[data-spotlight] .chCard .chLogo,
+body[data-spotlight] .playerEpCard .peStill{opacity:.62;transition:opacity .12s}
+body[data-spotlight] .pcard.focus .art,
+body[data-spotlight] .card.focus,
+body[data-spotlight] .seasonCard.focus,
+body[data-spotlight] .epCard.focus,
+body[data-spotlight] .castCard.focus,
+body[data-spotlight] .chCard.focus .chLogo,
+body[data-spotlight] .playerEpCard.focus .peStill,
+body[data-spotlight] .playerEpCard:focus-visible .peStill{opacity:1}
 /* In-player episode list: thick amber ring on the focused episode still (matches the rest). */
-body[data-theme="toomaj"] .playerEpCard.focus .peStill,
-body[data-theme="toomaj"] .playerEpCard:focus-visible .peStill{box-shadow:inset 0 0 0 3px var(--focus),0 0 18px var(--artFocusGlow)}
+body[data-spotlight] .playerEpCard.focus .peStill,
+body[data-spotlight] .playerEpCard:focus-visible .peStill{box-shadow:inset 0 0 0 3px var(--focus),0 0 18px var(--artFocusGlow)}
 /* Menus/overlays that hardcode a white or fixed-amber focus bg → route to the amber fill. */
-body[data-theme="toomaj"] #trackMenu button.focus,
-body[data-theme="toomaj"] .epMenu button.focus,
-body[data-theme="toomaj"] .mvCat.focus,
-body[data-theme="toomaj"] .mvChannel.focus{background:var(--focus);color:#1A1206;border-color:var(--focus)}
-body[data-theme="toomaj"] .mvIconBtn.focus,
-body[data-theme="toomaj"] .mvIconBtn:focus-visible,
-body[data-theme="toomaj"] .mvAction.focus,
-body[data-theme="toomaj"] .mvAction:focus-visible,
-body[data-theme="toomaj"] .mArtistHit.focus,
-body[data-theme="toomaj"] .mArtistHit:focus-visible{border-color:var(--focus);box-shadow:0 0 0 3px var(--focus)}
+body[data-spotlight] #trackMenu button.focus,
+body[data-spotlight] .epMenu button.focus,
+body[data-spotlight] .mvCat.focus,
+body[data-spotlight] .mvChannel.focus{background:var(--focus);color:var(--btnFocusText);border-color:var(--focus)}
+body[data-spotlight] .mvIconBtn.focus,
+body[data-spotlight] .mvIconBtn:focus-visible,
+body[data-spotlight] .mvAction.focus,
+body[data-spotlight] .mvAction:focus-visible,
+body[data-spotlight] .mArtistHit.focus,
+body[data-spotlight] .mArtistHit:focus-visible{border-color:var(--focus);box-shadow:0 0 0 3px var(--focus)}
 /* Inputs/selects whose focus follows the brand accent → give them the amber focus ring. */
-body[data-theme="toomaj"] #searchBar input:focus,
-body[data-theme="toomaj"] .settingsControl input:focus,
-body[data-theme="toomaj"] select:focus{border-color:var(--focus);box-shadow:0 0 0 2.5px var(--focusSoft)}
-body[data-theme="toomaj"] #settings button:focus,
-body[data-theme="toomaj"] #settings a:focus,
-body[data-theme="toomaj"] #settings input:focus,
-body[data-theme="toomaj"] #settings select:focus,
-body[data-theme="toomaj"] #prefs button:focus,
-body[data-theme="toomaj"] #prefs a:focus,
-body[data-theme="toomaj"] #prefs input:focus,
-body[data-theme="toomaj"] #prefs select:focus,
-body[data-theme="toomaj"] .mbBar.focus{box-shadow:0 0 0 3px var(--focus) !important}
+body[data-spotlight] #searchBar input:focus,
+body[data-spotlight] .settingsControl input:focus,
+body[data-spotlight] select:focus{border-color:var(--focus);box-shadow:0 0 0 2.5px var(--focusSoft)}
+body[data-spotlight] #settings button:focus,
+body[data-spotlight] #settings a:focus,
+body[data-spotlight] #settings input:focus,
+body[data-spotlight] #settings select:focus,
+body[data-spotlight] #prefs button:focus,
+body[data-spotlight] #prefs a:focus,
+body[data-spotlight] #prefs input:focus,
+body[data-spotlight] #prefs select:focus,
+body[data-spotlight] .mbBar.focus{box-shadow:0 0 0 3px var(--focus) !important}
 /* Settings/Preferences SELECTED tab: in Toomaj its fill is bright amber, but the base rules keep
    light --text (unreadable on amber). Force a solid amber chip with dark text/icons. The hover/
    focus (non-selected) states already use --btnFocusText, so only the .on states need this. */
-body[data-theme="toomaj"] #setTabs button.on,
-body[data-theme="toomaj"] #prefTabs button.on,
-body[data-theme="toomaj"] #setTabs button.on.focus,
-body[data-theme="toomaj"] #prefTabs button.on.focus,
-body[data-theme="toomaj"] #setTabs button.on:focus,
-body[data-theme="toomaj"] #prefTabs button.on:focus,
-body[data-theme="toomaj"] #setTabs button.on:focus-visible,
-body[data-theme="toomaj"] #prefTabs button.on:focus-visible{
+body[data-spotlight] #setTabs button.on,
+body[data-spotlight] #prefTabs button.on,
+body[data-spotlight] #setTabs button.on.focus,
+body[data-spotlight] #prefTabs button.on.focus,
+body[data-spotlight] #setTabs button.on:focus,
+body[data-spotlight] #prefTabs button.on:focus,
+body[data-spotlight] #setTabs button.on:focus-visible,
+body[data-spotlight] #prefTabs button.on:focus-visible{
   background:var(--btnSelectedHover)!important;color:var(--btnFocusText)!important}
 /* Theme-picker buttons are excluded from the generic dark-on-focus rule; give their label dark
    text when the amber fill is on, so the theme name/tone stays readable. */
-body[data-theme="toomaj"] #settings .setGrid button.themeChoice:hover,
-body[data-theme="toomaj"] #settings .setGrid button.themeChoice.focus,
-body[data-theme="toomaj"] #settings .setGrid button.themeChoice:focus-visible,
-body[data-theme="toomaj"] #prefs .setGrid button.themeChoice:hover,
-body[data-theme="toomaj"] #prefs .setGrid button.themeChoice.focus,
-body[data-theme="toomaj"] #prefs .setGrid button.themeChoice:focus-visible{color:var(--btnFocusText)}
-body[data-theme="toomaj"] .themeChoice:hover .themeName,
-body[data-theme="toomaj"] .themeChoice.focus .themeName,
-body[data-theme="toomaj"] .themeChoice:focus-visible .themeName,
-body[data-theme="toomaj"] .themeChoice:hover .themeTone,
-body[data-theme="toomaj"] .themeChoice.focus .themeTone,
-body[data-theme="toomaj"] .themeChoice:focus-visible .themeTone{color:var(--btnFocusText)}
+body[data-spotlight] #settings .setGrid button.themeChoice:hover,
+body[data-spotlight] #settings .setGrid button.themeChoice.focus,
+body[data-spotlight] #settings .setGrid button.themeChoice:focus-visible,
+body[data-spotlight] #prefs .setGrid button.themeChoice:hover,
+body[data-spotlight] #prefs .setGrid button.themeChoice.focus,
+body[data-spotlight] #prefs .setGrid button.themeChoice:focus-visible{color:var(--btnFocusText)}
+body[data-spotlight] .themeChoice:hover .themeName,
+body[data-spotlight] .themeChoice.focus .themeName,
+body[data-spotlight] .themeChoice:focus-visible .themeName,
+body[data-spotlight] .themeChoice:hover .themeTone,
+body[data-spotlight] .themeChoice.focus .themeTone,
+body[data-spotlight] .themeChoice:focus-visible .themeTone{color:var(--btnFocusText)}
 #apkUpdateStatus.updateAvail{color:var(--amber);font-weight:600}
 
 /* ---------- auth screens ---------- */
@@ -16375,7 +16376,7 @@ const THEMES = {
   // solid amber fill / bold amber ring while the rest dims back (see the [data-theme="toomaj"]
   // CSS block). Built for small/older/low-contrast TVs where the normal focus cue is too subtle.
   toomaj: {
-    label: 'Toomaj', tone: 'Aurora base · high-vis amber focus',
+    label: 'Toomaj', tone: 'Aurora base · high-vis amber focus', spotlight: true,
     ink: '#060708', surface: '#0E1011', raise: '#181B1C',
     m: '#14B368', c: '#1CE783', a: '#5FF0AC',
     text: '#F2FBF6', muted: '#9FB3A9', line: 'rgba(255,255,255,.18)',
@@ -16385,6 +16386,20 @@ const THEMES = {
     btn: 'rgba(30,34,32,.92)', btnHover: '#FFD23F', btnSelected: 'rgba(255,210,63,.30)', btnSelectedHover: '#FFDD6B', btnPrimary: '#1CE783', btnPrimaryHover: '#3DEE97', btnFocusText: '#1A1206',
     artFocusLine: 'rgba(255,210,63,.95)', artFocusGlow: 'rgba(255,210,63,.45)', artFocusTileLine: 'rgba(255,210,63,.9)', artFocusTileBorder: 'rgba(255,210,63,.8)', artFocusTileGlow: 'rgba(255,210,63,.42)',
     scrim: 'linear-gradient(90deg,rgba(6,7,8,.88) 0%,rgba(6,7,8,.56) 28%,rgba(6,7,8,.20) 58%,rgba(6,7,8,.06) 100%),linear-gradient(0deg,rgba(6,7,8,.78) 0%,rgba(6,7,8,.26) 26%,rgba(6,7,8,.05) 60%,rgba(6,7,8,.11) 100%)',
+  },
+  // Triboon — near-black base + GOLD high-visibility focus. Same spotlight system as Toomaj
+  // (spotlight:true), just a darker, more neutral base and a warm gold focus colour.
+  triboonGold: {
+    label: 'Triboon', tone: 'near-black + gold', spotlight: true,
+    ink: '#050506', surface: '#0D0D0E', raise: '#17171A',
+    m: '#A8791C', c: '#D4AF37', a: '#F0D089',
+    text: '#F4F1E8', muted: '#A8A49B', line: 'rgba(255,255,255,.16)',
+    field: 'rgba(5,5,6,.86)', soft: 'rgba(42,38,26,.55)', panel: 'rgba(11,11,13,.97)',
+    focus: '#E5B93C', focusSoft: 'rgba(229,185,60,.55)', onAccent: '#1A1405',
+    success: '#7FD7A6', danger: '#FF7A7A',
+    btn: 'rgba(28,28,30,.92)', btnHover: '#E5B93C', btnSelected: 'rgba(229,185,60,.30)', btnSelectedHover: '#EFC658', btnPrimary: '#D4AF37', btnPrimaryHover: '#E0BE4E', btnFocusText: '#1A1405',
+    artFocusLine: 'rgba(229,185,60,.95)', artFocusGlow: 'rgba(229,185,60,.45)', artFocusTileLine: 'rgba(229,185,60,.9)', artFocusTileBorder: 'rgba(229,185,60,.8)', artFocusTileGlow: 'rgba(229,185,60,.42)',
+    scrim: 'linear-gradient(90deg,rgba(5,5,6,.88) 0%,rgba(5,5,6,.56) 28%,rgba(5,5,6,.20) 58%,rgba(5,5,6,.06) 100%),linear-gradient(0deg,rgba(5,5,6,.78) 0%,rgba(5,5,6,.26) 26%,rgba(5,5,6,.05) 60%,rgba(5,5,6,.11) 100%)',
   },
   // The ONE light theme — pale surfaces with DARK text. Its rollover bg is a light tint, so
   // btnFocusText is DARK (the opposite of every dark theme) and the scrim fades to light.
@@ -16468,11 +16483,13 @@ function applyTheme() {
   // Light themes flip native UI (scrollbars, date pickers, autofill) to light, and let CSS key
   // off body[data-light] for the few overlays that hard-code a dark wash.
   r.setProperty('color-scheme', t.light ? 'light' : 'dark');
-  if (document.body) { document.body.dataset.theme = name; document.body.dataset.light = t.light ? '1' : ''; }
+  // toggleAttribute (not dataset='') so a non-spotlight theme has NO data-spotlight attribute —
+  // the shared body[data-spotlight] block matches attribute PRESENCE, and dataset='' would still match.
+  if (document.body) { document.body.dataset.theme = name; document.body.dataset.light = t.light ? '1' : ''; document.body.toggleAttribute('data-spotlight', !!t.spotlight); }
   return name;
 }
 // Three curated themes in the picker (neutral / cool / warm). Others stay valid for saved prefs.
-const VISIBLE_THEMES = ['triboonCoral', 'studio', 'velvet', 'midnight', 'scarlet', 'aurora', 'toomaj', 'daylight', 'topaz'];
+const VISIBLE_THEMES = ['triboonCoral', 'studio', 'velvet', 'midnight', 'scarlet', 'aurora', 'toomaj', 'triboonGold', 'daylight', 'topaz'];
 // One theme picker, two homes: user Preferences and admin Settings Display.
 function renderThemePicker(elId) {
   const tp = $(elId); if (!tp) return;

@@ -1095,7 +1095,7 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.ok(ui.includes("label: 'Ocean'") && ui.includes("tone: 'deep blue'")
     && ui.includes("ink: '#0D1420'") && ui.includes("c: '#5EA0F2'"),
     'default theme should be the Ocean (deep blue) palette');
-  assert.ok(ui.includes("const VISIBLE_THEMES = ['triboonCoral', 'studio', 'velvet', 'midnight', 'scarlet', 'aurora', 'toomaj', 'daylight', 'topaz']")
+  assert.ok(ui.includes("const VISIBLE_THEMES = ['triboonCoral', 'studio', 'velvet', 'midnight', 'scarlet', 'aurora', 'toomaj', 'triboonGold', 'daylight', 'topaz']")
     && ui.includes("label: 'Forest'") && ui.includes("label: 'Sunset'") && ui.includes("label: 'Midnight'"),
     'the picker should offer DISTINCT accent palettes (Ocean blue / Forest green / Sunset amber / Midnight gold)');
   assert.ok(ui.includes("label: 'Scarlet'") && ui.includes("c: '#E50914'")
@@ -1103,13 +1103,18 @@ test('Android native player: direct source and native chrome stay out of the web
     && ui.includes("label: 'Daylight'") && ui.includes("c: '#1F8BFF'")
     && ui.includes("label: 'Topaz'") && ui.includes("c: '#E5A00D'"),
     'the picker should also offer bold original palettes (Scarlet red / Aurora green / Daylight blue / Topaz gold)');
-  // Toomaj: a dedicated HIGH-CONTRAST focus theme (Aurora's dark base, high-vis amber focus) for
-  // small/older/low-contrast TVs — the focused item gets a solid amber fill while the rest dims back.
-  assert.ok(ui.includes("label: 'Toomaj'") && ui.includes("focus: '#FFD23F'")
-    && ui.includes("btnHover: '#FFD23F'") && ui.includes("btnFocusText: '#1A1206'"),
+  // Toomaj + Triboon are "spotlight" themes (spotlight:true): a solid focus fill + dimmed unfocused
+  // artwork so the focused item is unmistakable on small/older/low-contrast TVs. They SHARE one
+  // body[data-spotlight] CSS block driven by each theme's own tokens (Toomaj amber, Triboon gold).
+  assert.ok(ui.includes("label: 'Toomaj'") && ui.includes("focus: '#FFD23F'") && ui.includes("btnFocusText: '#1A1206'"),
     'Toomaj theme should use a high-visibility amber focus with dark on-focus text');
-  assert.match(ui, /body\[data-theme="toomaj"\][\s\S]+\.railBtn[\s\S]+background:var\(--focus\)[\s\S]+\.pcard \.art[\s\S]+opacity:\.62/,
-    'Toomaj should add a theme-scoped spotlight: solid amber left-menu fill + dimmed unfocused artwork');
+  assert.ok(ui.includes("label: 'Triboon', tone: 'near-black + gold', spotlight: true")
+    && ui.includes("focus: '#E5B93C'") && ui.includes("ink: '#050506'"),
+    'Triboon theme should be a near-black base with a gold high-visibility focus');
+  assert.match(ui, /body\[data-spotlight\]\{--grad:var\(--focus\)\}[\s\S]+\.railBtn[\s\S]+background:var\(--focus\)[\s\S]+\.pcard \.art[\s\S]+opacity:\.62/,
+    'spotlight themes share one body[data-spotlight] block: focus-coloured ring/fill + dimmed unfocused artwork');
+  assert.match(ui, /document\.body\.toggleAttribute\('data-spotlight', !!t\.spotlight\)/,
+    'applyTheme should toggle body[data-spotlight] by attribute presence (not empty dataset, which would leak the spotlight to every theme)');
   // Brand-name keys must NOT leak into the shipped UI — only the made-up names.
   assert.ok(!ui.includes("label: 'Netflix'") && !ui.includes("label: 'Hulu'")
     && !ui.includes("label: 'Apple TV'") && !ui.includes("label: 'Plex'")
