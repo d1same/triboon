@@ -8963,10 +8963,12 @@ async function openPlayer(it, mount, opts = {}) {
     duration: knownDuration, lastSaved: 0, triedRemux: false, triedTranscode: false, mountId: mount.id,
     tracks: null, _tracksJob: null, audioTrack: 0, subTrack: null, quality: 1080, nativePos: 0, nativeDuration: 0,
     nativeStartKind: playbackStartKind(mount), nativeTried: {},
-    // iOS Safari <video> can't decode AC3/EAC3/DTS (and lies about it via canPlayType) → force the
-    // remux to browser-safe stereo AAC from the FIRST attempt so nearly-every-file no longer codec-errors
-    // then limps to a full transcode. See iosWebkitVideo(). Non-iOS clients keep the caps-driven path.
-    forceAacRemux: iosWebkitVideo(),
+    // Any plain browser <video> surface (iOS Safari AND desktop Chrome/Firefox/Edge) gets browser-safe
+    // STEREO AAC: iOS can't decode AC3/EAC3 at all, and EVERY browser commonly plays 5.1 AAC as
+    // video-with-NO-audio (the MediaCodec 5.1 footgun — the silent-DDP5.1 bug). The native Android
+    // ExoPlayer path is unaffected: it builds its URL with {native:true}, which strips audioSafe, so
+    // ExoPlayer still receives full 5.1 surround. Multiview panes already force this explicitly.
+    forceAacRemux: iosWebkitVideo() || !canUseNativeVideoPlayer(),
   };
   updatePlayerMeta();
   applyVolume();
@@ -9122,7 +9124,10 @@ function startSource(kind, atSeconds, opts = {}) {
       : 'Live TV playback is not supported by this browser');
     return true;
   } else if (kind === 'transcode') {
-    v.src = `${p.transcodeUrl}&start=${seekStart}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}`;
+    // startSource is browser-only (it bails for the native player above), so forceAacRemux is true here
+    // for every real browser → request stereo AAC on the full-transcode fallback too (an HEVC/10-bit
+    // source that skips remux would otherwise hit the same silent-5.1-AAC bug).
+    v.src = `${p.transcodeUrl}&start=${seekStart}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}${p.forceAacRemux ? '&audioSafe=1' : ''}`;
   } else if (kind === 'remux') {
     // iOS Safari can't consume the 200-streamed remux pipe (no byte-range) → deliver the SAME copy-remux
     // as native HLS instead, which Safari plays. Every other browser keeps the direct fMP4 remux. Seeks

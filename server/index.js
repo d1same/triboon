@@ -6589,10 +6589,13 @@ Object.assign(H, {
     vf._touched = Date.now();
     const startSeconds = parseFloat(ctx.url.searchParams.get('start') || '0') || 0;
     const audioTrack = parseInt(ctx.url.searchParams.get('audio') || '0', 10) || 0;
+    // Same as /api/remux: a plain browser <video> sends audioSafe=1 → downmix to stereo AAC so a 5.1
+    // source isn't played silent. Native ExoPlayer omits it and keeps 5.1.
+    const forceAudioSafe = ctx.url.searchParams.get('audioSafe') === '1';
     const height = parseInt(ctx.url.searchParams.get('height') || '1080', 10);
     const hdr = (vf._tracks && vf._tracks.video && vf._tracks.video[0] && vf._tracks.video[0].hdr) || false;
     const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.claims.uid, vf.id)}`;
-    const ff = spawnTranscode(selfUrl, { startSeconds, audioTrack, height: LADDER[height] ? height : 1080, hdr });
+    const ff = spawnTranscode(selfUrl, { startSeconds, audioTrack, height: LADDER[height] ? height : 1080, hdr, safeStereo: forceAudioSafe });
     ctx.res.writeHead(200, { 'content-type': 'video/mp4', 'cache-control': 'no-store' });
     ff.on('error', (e) => { console.error('[transcode spawn]', e.message); try { ctx.res.destroy(); } catch {} });
     ff.stdout.pipe(ctx.res);

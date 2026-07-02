@@ -1581,6 +1581,14 @@ test('Android native player: direct source and native chrome stay out of the web
     'remux handler must forward the audio-safe flag so multiview audio is downmixed to stereo');
   assert.match(transcode, /function spawnRemux\(streamUrl, \{ startSeconds = 0, audioTrack = 0, transcodeAudio = false, safeStereo = false \} = \{\}\)[\s\S]+transcodeAudio[\s\S]+'-ac', safeStereo \? '2' : '6'/,
     'spawnRemux must downmix the audio-safe path to stereo AAC (2ch) and keep 5.1 (6ch) for the normal transcode path');
+  // The SAME 5.1-AAC-silent footgun hits the full transcode fallback: a browser must get stereo there too,
+  // while the native ExoPlayer path (never sends audioSafe) keeps 5.1 surround.
+  assert.match(transcode, /function spawnTranscode\(streamUrl, \{ startSeconds = 0, audioTrack = 0, height = 1080, hdr = false, safeStereo = false \} = \{\}\)[\s\S]+'-c:a', 'aac', '-b:a', safeStereo \? '192k' : '256k', '-ac', safeStereo \? '2' : '6'/,
+    'spawnTranscode downmixes the audio-safe path to stereo AAC (2ch) and keeps 5.1 (6ch) otherwise');
+  assert.match(server, /transcode: async \(ctx\)[\s\S]+const forceAudioSafe = ctx\.url\.searchParams\.get\('audioSafe'\) === '1';[\s\S]+spawnTranscode\(selfUrl, \{ startSeconds, audioTrack, height: LADDER\[height\] \? height : 1080, hdr, safeStereo: forceAudioSafe \}\)/,
+    'the /api/transcode handler honors audioSafe=1 (stereo) while the native path stays 5.1');
+  assert.match(ui, /kind === 'transcode'\) \{[\s\S]+v\.src = `\$\{p\.transcodeUrl\}&start=\$\{seekStart\}&audio=\$\{p\.audioTrack \|\| 0\}&height=\$\{p\.quality \|\| 1080\}\$\{p\.forceAacRemux \? '&audioSafe=1' : ''\}`/,
+    'the browser transcode fallback also requests stereo audio so an HEVC/10-bit source is not played silent');
   assert.match(ui, /function resolvePlaybackResume\(it\) \{[\s\S]+if \(it\._startOver\) return \{ \.\.\.it, resume: 0 \};[\s\S]+const pos = resumePositionForItem\(it\);[\s\S]+return pos > 0 \? \{ \.\.\.it, resume: pos \} : it;/,
     'Resume should be resolved from current watch state at click time, after quality changes');
   assert.match(ui, /async function play\(it, pick\) \{[\s\S]+it = resolvePlaybackResume\(it\);/,
@@ -1618,8 +1626,8 @@ test('Android native player: direct source and native chrome stay out of the web
   // + iPadOS-as-Macintosh (touch) are detected; the flag rides forceAacRemux → audioSafe on the remux URL.
   assert.match(ui, /function iosWebkitVideo\(\) \{[\s\S]+\/iPhone\|iPad\|iPod\/\.test\(ua\)[\s\S]+\/Macintosh\/\.test\(ua\) && \(navigator\.maxTouchPoints \|\| 0\) > 1/,
     'iOS/iPadOS WebKit <video> surface is detected (Safari + Chrome/Firefox on iOS + iPadOS-as-Mac)');
-  assert.match(ui, /forceAacRemux: iosWebkitVideo\(\),/,
-    'iOS Safari playback forces the remux to browser-safe stereo AAC from the first attempt (no AC3/EAC3 copy → no codec error)');
+  assert.match(ui, /forceAacRemux: iosWebkitVideo\(\) \|\| !canUseNativeVideoPlayer\(\),/,
+    'EVERY plain browser <video> (iOS + desktop) forces stereo-AAC remux (fixes AC3/EAC3 codec-error on iOS AND the silent 5.1-AAC bug on desktop); the native ExoPlayer path strips audioSafe and keeps 5.1');
   assert.match(ui, /v\.onerror = \(\) => \{[\s\S]+const err = v\.error, pl = S\.playing;[\s\S]+console\.warn\('\[vod\] <video> error code=' \+ err\.code[\s\S]+failover\(\);/,
     'the web-player error path records the MediaError code (3=decode vs 4=src-not-supported) before failing over — pinpoints audio vs container/video walls on iOS');
   assert.match(server, /function parseCaps\(raw\) \{[\s\S]+\['mkv', 'mp4', 'h264', 'hevc', 'dovi', 'av1', 'vp9', 'mpeg2', 'aac', 'ac3', 'eac3', 'eac3Joc', 'dts', 'dtsHd', 'truehd', 'passthrough', 'native', 'lowPower'\][\s\S]+caps\.audioOutput = String\(raw\.audioOutput\)\.slice\(0, 64\)/,

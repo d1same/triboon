@@ -179,7 +179,7 @@ const LADDER = { 1080: { h: 1080, vb: '8M', maxb: '12M' }, 720: { h: 720, vb: '4
 // Full transcode: H.264 + AAC fMP4 for clients that can't decode the source codec (the HEVC
 // wall). HDR sources get tone-mapped to SDR. Channels preserved up to 5.1 (browsers play
 // multichannel AAC fine).
-function spawnTranscode(streamUrl, { startSeconds = 0, audioTrack = 0, height = 1080, hdr = false } = {}) {
+function spawnTranscode(streamUrl, { startSeconds = 0, audioTrack = 0, height = 1080, hdr = false, safeStereo = false } = {}) {
   const ff = detectFfmpeg();
   const enc = detectEncoder();
   if (!ff || !enc) throw new Error('no H.264 encoder available');
@@ -197,7 +197,10 @@ function spawnTranscode(streamUrl, { startSeconds = 0, audioTrack = 0, height = 
     '-map', '0:v:0', '-map', `0:a:${audioTrack}?`,
     '-vf', filters.join(','),
     ...encArgs,
-    '-c:a', 'aac', '-b:a', '256k', '-ac', '6',
+    // safeStereo: a plain browser <video>/MSE surface commonly plays 5.1 AAC as VIDEO-WITH-NO-AUDIO
+    // (the MediaCodec PCE-layout footgun) — same reason spawnRemux downmixes. Stereo AAC-LC is reliable.
+    // The native ExoPlayer path never sets safeStereo, so it keeps full 5.1 surround.
+    '-c:a', 'aac', '-b:a', safeStereo ? '192k' : '256k', '-ac', safeStereo ? '2' : '6',
     ...REMUX_SYNC_FLAGS,                                  // delay_moov compensates the H.264 encoder's own B-frame delay
     '-movflags', REMUX_MOVFLAGS,
     '-f', 'mp4', 'pipe:1',
