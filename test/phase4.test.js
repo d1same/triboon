@@ -513,12 +513,18 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'desktop-browser backdrop stays capped + viewport-aware (min(vw,px), not a percentage takeover) and is deliberately smaller than TV so posters lead');
   assert.match(ui, /--scrim:\s*linear-gradient\(90deg,rgba\(11,8,18,\.86\) 0%,rgba\(11,8,18,\.56\) 28%,rgba\(11,8,18,\.20\) 58%,rgba\(11,8,18,\.06\) 100%\),\s*linear-gradient\(0deg,rgba\(11,8,18,\.76\) 0%,rgba\(11,8,18,\.24\) 26%,rgba\(11,8,18,\.04\) 60%,rgba\(11,8,18,\.10\) 100%\)/,
     'browser backdrop scrim should protect text without blacking out the artwork');
-  assert.match(ui, /body\.tv\{--bdW:min\(48vw,820px\);--bdH:min\(50vh,460px\);--overscan:2\.5vmin\}[\s\S]+body\.shortBrowseBd\{--bdH:min\(46vh,430px\)\}[\s\S]+body\.tv\.shortBrowseBd\{--bdH:min\(38vh,360px\)\}[\s\S]+@media \(max-height:760px\)\{[\s\S]+--bdH:min\(34vh,260px\)[\s\S]+@media \(max-width:980px\)\{[\s\S]+--bdW:min\(44vw,420px\)/,
-    'TV, short browser, narrow browser, and poster browse viewports should tighten backdrop size');
+  assert.match(ui, /body\.tv\{--bdW:min\(48vw,820px\);--bdH:min\(50vh,460px\);--overscan:2\.5vmin\}[\s\S]+body\.shortBrowseBd\{--bdH:min\(46vh,430px\)\}[\s\S]+body\.tv\.shortBrowseBd\{--bdH:min\(38vh,360px\)\}[\s\S]+@media \(max-height:760px\)\{[\s\S]+--bdH:min\(34vh,260px\)[\s\S]+@media \(max-width:980px\)\{[\s\S]+--bdW:min\(40vw,400px\);--bdH:min\(36vh,300px\)\}[\s\S]+body\.shortBrowseBd:not\(\.tv\)\{--bdH:min\(33vh,280px\)\}/,
+    'TV, short browser, narrow browser, and poster browse viewports should tighten backdrop size; on narrow browser windows the browse (shortBrowseBd) pages must also shrink height (:not(.tv)) so movies/TV pages do not keep a ~46vh backdrop and dominate a small window');
   assert.match(ui, /body\.shortBrowseBd:not\(\.tv\) #bdInfo[\s\S]+-webkit-line-clamp:1[\s\S]+@media \(max-height:820px\)[\s\S]+body\.shortBrowseBd:not\(\.tv\) #bdInfo \.bdiC,[\s\S]+display:none/,
     'browser poster browse pages should compact the focused-title band without touching TV');
   assert.match(ui, /function browserBrowseCoverPx\(size\) \{[\s\S]+document\.body\.classList\.contains\('tv'\)[\s\S]+window\.innerHeight <= 820[\s\S]+return size === 'L' \? '190px'[\s\S]+const px = window\.innerWidth <= 600 \? '140px' : \(browserBrowseCoverPx\(s\) \|\| table\[s\] \|\| table\.M\);[\s\S]+const shortBrowserBrowse = document\.body\.classList\.contains\('shortBrowseBd'\) && !document\.body\.classList\.contains\('tv'\);[\s\S]+shortBrowserBrowse \? \(h <= 820 \? 128/,
     'desktop/tablet browse pages should use compact browser poster sizing and a compact row reserve');
+  assert.match(ui, /function browserBrowseCoverPx[\s\S]+window\.innerWidth <= 980\) return window\.innerHeight <= 820 \? '118px' : '138px'/,
+    'narrow browser windows (<=980, TV/phone excluded above) use compact browse covers so >=4 columns and a full second row fit under the smaller backdrop — kills the dark band that stranded posters at the bottom');
+  assert.match(ui, /S\.browseLoading = false;\s*maybeFillBrowseWindow\(\);/,
+    'runBrowse must trigger the fill-the-window check after every page load');
+  assert.match(ui, /function maybeFillBrowseWindow\(\)[\s\S]+document\.body\.classList\.contains\('tv'\)\) return;[\s\S]+g\.scrollHeight > g\.clientHeight \+ 8\) return;[\s\S]+S\.browsePage \|\| 0\) >= 8\) return;[\s\S]+runBrowse\(false\)/,
+    'browse pages keep auto-loading pages until the grid overflows its row window, so a 2K/4K/tall window fills instead of stranding ~1 row low with a dark band; TV-excluded and page-capped');
   assert.match(ui, /const shortBrowseBd = v === 'discover' \|\| v === 'movies' \|\| v === 'tv' \|\| v === 'watchlist' \|\| \(v === 'library' && S\.currentLib && S\.currentLib\.path\);[\s\S]+document\.body\.classList\.toggle\('shortBrowseBd', !!shortBrowseBd\);/,
     'Discover, movies, TV shows, watchlist, and attached libraries should use the shorter browse backdrop');
   assert.match(ui, /document\.body\.classList\.toggle\('fullBd', isBrowse \|\| v === 'discover'\);/,

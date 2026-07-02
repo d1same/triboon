@@ -105,7 +105,13 @@ body.tv.shortBrowseBd{--bdH:min(38vh,360px)}
   body.tv.shortBrowseBd{--bdH:min(36vh,360px)}
 }
 @media (max-width:980px){
-  :root{--bdW:min(44vw,420px);--bdH:min(36vh,300px)}
+  /* Narrow browser windows: keep the corner art a clear accent on EVERY page. The shortBrowseBd
+     height override (defined above, outside the media queries) is not width-scoped, so without the
+     :not(.tv) line the movies/TV/discover pages kept a ~46vh backdrop and dominated a small window.
+     Scoped :not(.tv) + width-gated, so Android TV (always >=1280w) and phones (backdrop hidden) are
+     untouched. */
+  :root{--bdW:min(40vw,400px);--bdH:min(36vh,300px)}
+  body.shortBrowseBd:not(.tv){--bdH:min(33vh,280px)}
 }
 /* Focused-title info over the backdrop on browse/discover pages — like the home hero, but
    informational only (no buttons; clicking the cover opens it). */
@@ -4171,6 +4177,11 @@ function isPosterBrowseView() {
 }
 function browserBrowseCoverPx(size) {
   if (document.body.classList.contains('tv') || window.innerWidth <= 600 || !isPosterBrowseView()) return null;
+  // Narrow desktop windows: the grid stretches its few columns very wide (minmax(--poster,1fr)),
+  // making one tall row that strands a dark band under the smaller backdrop. Use a compact cover so
+  // >=4 columns and a full second row fit under the backdrop. Width-gated + TV/phone excluded above,
+  // so Android is untouched (TV returns null; phones use the <=600 compact path).
+  if (window.innerWidth <= 980) return window.innerHeight <= 820 ? '118px' : '138px';
   if (window.innerHeight <= 820) return size === 'L' ? '150px' : (size === 'S' ? '128px' : '136px');
   if (window.innerHeight <= 899) return size === 'L' ? '170px' : (size === 'S' ? '136px' : '150px');
   return size === 'L' ? '190px' : (size === 'S' ? '144px' : '168px');
@@ -12947,6 +12958,27 @@ async function runBrowse(reset) {
     if (page >= (r.total_pages || 1) || page >= 25) S.browseDone = true;
   } catch (e) { if (page === 1) $('grid').innerHTML = `<div class="gridMore">Failed: ${esc(e.message)}</div>`; }
   S.browseLoading = false;
+  maybeFillBrowseWindow();
+}
+// One TMDB page (~20 items) is < 2 rows on a wide/high-res window (e.g. 2K/4K, 12-19 columns), and the
+// grid only pages-in on SCROLL — so a short grid never scrolls and gets stranded low with a dark band
+// above it. Keep pulling pages until the grid actually overflows its row window (i.e. fills the screen),
+// bounded by browseDone + a page cap. No layout/virtualization change; TV's 1-row window fills on page 1
+// so this no-ops there.
+function maybeFillBrowseWindow() {
+  if (S.browseDone || S.browseLoading) return;
+  if (!['movies', 'tv'].includes(S.view)) return;
+  // TV is explicitly excluded: its 1-row window already overflows on page 1, and we never want to
+  // change TV loading behavior. This is a browser-only "fill the tall/high-res window" helper.
+  if (document.body.classList.contains('tv')) return;
+  requestAnimationFrame(() => {
+    if (S.browseLoading || S.browseDone || document.body.classList.contains('tv') || !['movies', 'tv'].includes(S.view)) return;
+    const g = $('grid');
+    if (!g || !$('browse').classList.contains('rowsWin')) return;
+    if (g.scrollHeight > g.clientHeight + 8) return;   // already overflows the window → filled
+    if ((S.browsePage || 0) >= 8) return;              // safety cap (~160 items)
+    runBrowse(false);
+  });
 }
 $('genreSel').addEventListener('change', () => {
   S.browseGenre = $('genreSel').value;
