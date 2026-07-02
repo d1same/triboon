@@ -4140,16 +4140,20 @@ public class MainActivity extends Activity {
             if (backwardsBy > 5000L) {
                 // A benign PTS/GOP wobble in a server-seek (remux/transcode) stream dips the reported
                 // position for a SINGLE ~1s tick then recovers; a genuine segment restart stays
-                // backward. Require the regression to persist across 2 consecutive ticks before
-                // re-mounting, so a one-tick wobble no longer causes the visible dip-then-snap that
-                // the owner saw ~every 10 min on resumed movies. A real restart still recovers (~2s).
-                if (++nativeBackwardTicks < 2) return; // unconfirmed — keep last-good, wait one more tick
+                // backward. Require a SMALL regression to persist across 2 consecutive ticks before
+                // re-mounting, so a one-tick wobble no longer causes a visible dip-then-snap. But a
+                // LARGE jump (>60s) is unambiguously a stream restart — ExoPlayer reconnected the
+                // non-resumable piped stream and the server replayed from the start — so recover it on
+                // the first tick, with no dwell in the previous section.
+                boolean bigRestart = backwardsBy > 60000L;
+                if (!bigRestart && ++nativeBackwardTicks < 2) return; // small regression — wait one more tick
                 long now = SystemClock.elapsedRealtime();
                 if (nativeLastAutoResumeSeekMs <= 0L || now - nativeLastAutoResumeSeekMs >= 1500L) {
                     nativeLastAutoResumeSeekMs = now;
                     nativeBackwardTicks = 0;
-                    Log.w(TAG, "Native VOD segment jumped back by " + backwardsBy
-                            + "ms; resuming same source at " + nativeLastVideoDisplayMs + "ms");
+                    Log.w(TAG, "Native VOD segment jumped back by " + backwardsBy + "ms"
+                            + (bigRestart ? " (stream restart)" : "") + "; resuming same source at "
+                            + nativeLastVideoDisplayMs + "ms");
                     requestNativeVideoSeek(nativeLastVideoDisplayMs);
                 }
                 return;
@@ -4900,9 +4904,15 @@ public class MainActivity extends Activity {
                 .setAllowCrossProtocolRedirects(false)
                 .setUserAgent("TriboonTV/" + BuildConfig.VERSION_NAME)
                 .setConnectTimeoutMs(12000)
+                // A piped remux/transcode stream is NON-resumable: if the socket read times out,
+                // ExoPlayer reconnects and the server replays from the stream's start, so the position
+                // jumps backward (then the guard in rememberNativeVideoPosition re-seeks to "now" — the
+                // ~10-min dip the owner reported). A self-hosted usenet-mounted source can briefly stall
+                // on provider-connection contention; a generous read timeout rides that out (playing
+                // from the deep buffer meanwhile) instead of triggering a replay-from-start.
                 .setReadTimeoutMs("live".equals(nativeMode)
                         ? NATIVE_LIVE_READ_TIMEOUT_MS
-                        : (nativeLikelyHeavyVod() ? 45000 : 18000));
+                        : (nativeLikelyHeavyVod() ? 45000 : 30000));
         nativeHttpDataSourceFactory = http;
         applyNativeHttpHostHeader();
         return new DefaultMediaSourceFactory(http);
