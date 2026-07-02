@@ -3648,8 +3648,12 @@ test('hls variant: spawnHls copies video, emits fMP4 HLS, and refuses without an
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   assert.match(ui, /function hlsPlaybackUrl\(p, seekStart = 0\) \{[\s\S]+`\$\{p\.hlsUrl\}&start=\$\{Math\.max\(0, Math\.floor\(seekStart \|\| 0\)\)\}&audio=\$\{audio\}&audioSafe=1`/,
     'hlsPlaybackUrl builds a tokened HLS URL with a server-seek start and forced stereo AAC');
-  assert.match(ui, /kind === 'remux'\) \{[\s\S]+v\.src = \(iosWebkitVideo\(\) && p\.hlsUrl\) \? hlsPlaybackUrl\(p, seekStart\) : remuxPlaybackUrl\(p, seekStart\);/,
-    'on iOS the remux kind is delivered as native HLS; every other browser keeps the direct fMP4 remux');
+  assert.match(ui, /kind === 'remux'\) \{[\s\S]+v\.src = \(\(iosWebkitVideo\(\) \|\| macSafariVideo\(\)\) && p\.hlsUrl\) \? hlsPlaybackUrl\(p, seekStart\) : remuxPlaybackUrl\(p, seekStart\);/,
+    'iOS AND Mac desktop Safari get the remux as native HLS; every other browser (incl. Chrome/FF on Mac) keeps the direct fMP4 remux');
+  // Mac-Safari detection must be TIGHT: require the Apple vendor string and exclude every Chromium/Gecko UA,
+  // so a non-Safari Mac browser (which can't play native HLS) is never routed to the m3u8.
+  assert.match(ui, /function macSafariVideo\(\) \{[\s\S]+navigator\.vendor === 'Apple Computer, Inc\.'[\s\S]+!\/\\b\(CriOS\|FxiOS\|Chrome\|Chromium\|Edg\|EdgA\|OPR\|Opera\|Android\)\\b\/i\.test\(ua\)/,
+    'Mac Safari is detected via the Apple vendor string with all Chromium/Gecko UAs excluded (no false positive → no broken Chrome-on-Mac)');
 });
 
 test('hls variant: ffmpeg process lifecycle works and cleans up its temp dir', { skip: !HAS_FFMPEG }, async () => {

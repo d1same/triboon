@@ -5838,6 +5838,19 @@ function iosWebkitVideo() {
   const ua = navigator.userAgent || '';
   return /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && (navigator.maxTouchPoints || 0) > 1);
 }
+// Mac DESKTOP Safari. Like iOS Safari, its <video> can't consume Triboon's non-rangeable 200-streamed
+// remux pipe (same WebKit/AVFoundation byte-range requirement), so an MKV → remux plays nothing — it must
+// go through HLS too (Safari's native format). Kept DELIBERATELY tight so a NON-Safari Mac browser
+// (Chrome/Edge/Firefox — which DO play the pipe and do NOT play native HLS via <video src>) is never
+// routed here: require the Apple vendor string AND rule out every Chromium/Gecko UA. iPadOS-as-Mac is
+// already covered by iosWebkitVideo(); a false positive here would BREAK Chrome-on-Mac, so err strict.
+function macSafariVideo() {
+  const ua = navigator.userAgent || '';
+  return /Macintosh|Mac OS X/.test(ua)
+    && navigator.vendor === 'Apple Computer, Inc.'                     // real Safari (Chrome=Google Inc., Firefox='')
+    && !/\b(CriOS|FxiOS|Chrome|Chromium|Edg|EdgA|OPR|Opera|Android)\b/i.test(ua)
+    && !((navigator.maxTouchPoints || 0) > 1);                        // exclude iPadOS-as-Mac (iosWebkitVideo handles it)
+}
 
 // Parental playback gate: kid/teen profiles can't play titles rated above their level.
 const CERT_RANK = { G: 0, 'TV-Y': 0, 'TV-G': 0, 'TV-Y7': 1, PG: 1, 'TV-PG': 1, 'PG-13': 2, 'TV-14': 2, R: 3, 'TV-MA': 3, 'NC-17': 3, NR: 3 };
@@ -9129,10 +9142,11 @@ function startSource(kind, atSeconds, opts = {}) {
     // source that skips remux would otherwise hit the same silent-5.1-AAC bug).
     v.src = `${p.transcodeUrl}&start=${seekStart}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}${p.forceAacRemux ? '&audioSafe=1' : ''}`;
   } else if (kind === 'remux') {
-    // iOS Safari can't consume the 200-streamed remux pipe (no byte-range) → deliver the SAME copy-remux
-    // as native HLS instead, which Safari plays. Every other browser keeps the direct fMP4 remux. Seeks
-    // re-enter here (usingRemux stays true) so they re-spawn the HLS window at the new offset.
-    v.src = (iosWebkitVideo() && p.hlsUrl) ? hlsPlaybackUrl(p, seekStart) : remuxPlaybackUrl(p, seekStart);
+    // Apple Safari (iOS AND Mac desktop) can't consume the 200-streamed remux pipe (no byte-range) →
+    // deliver the SAME copy-remux as native HLS instead, which Safari plays. Every OTHER browser
+    // (Chrome/Edge/Firefox, incl. on Mac) keeps the direct fMP4 remux — they play the pipe and do NOT play
+    // native HLS. Seeks re-enter here (usingRemux stays true) so they re-spawn the HLS window at the offset.
+    v.src = ((iosWebkitVideo() || macSafariVideo()) && p.hlsUrl) ? hlsPlaybackUrl(p, seekStart) : remuxPlaybackUrl(p, seekStart);
   } else {
     v.src = p.streamUrl;
   }
