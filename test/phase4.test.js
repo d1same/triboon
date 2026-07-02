@@ -1613,6 +1613,15 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android should report Exo/MediaCodec plus HDMI/eARC audio-output capabilities and conservative device class instead of relying only on WebView canPlayType');
   assert.match(ui, /function nativePlaybackCaps\(\) \{[\s\S]+TriboonTV\.nativePlaybackCaps[\s\S]+JSON\.parse\(TriboonTV\.nativePlaybackCaps\(\)[\s\S]+function clientCaps\(\) \{[\s\S]+const nativeCaps = nativePlaybackCaps\(\);[\s\S]+S\._caps = nativeCaps \? \{ \.\.\.webCaps, \.\.\.nativeCaps, web: webCaps \} : webCaps;/,
     'web play requests should merge native Exo capabilities into the caps sent to the server');
+  // iOS Safari <video> decodes only AAC/MP3 but its canPlayType over-reports AC-3/E-AC-3 → the remux must
+  // be forced to browser-safe AAC on iOS or nearly every AC3/EAC3 release codec-errors. iPhone/iPad/iPod
+  // + iPadOS-as-Macintosh (touch) are detected; the flag rides forceAacRemux → audioSafe on the remux URL.
+  assert.match(ui, /function iosWebkitVideo\(\) \{[\s\S]+\/iPhone\|iPad\|iPod\/\.test\(ua\)[\s\S]+\/Macintosh\/\.test\(ua\) && \(navigator\.maxTouchPoints \|\| 0\) > 1/,
+    'iOS/iPadOS WebKit <video> surface is detected (Safari + Chrome/Firefox on iOS + iPadOS-as-Mac)');
+  assert.match(ui, /forceAacRemux: iosWebkitVideo\(\),/,
+    'iOS Safari playback forces the remux to browser-safe stereo AAC from the first attempt (no AC3/EAC3 copy → no codec error)');
+  assert.match(ui, /v\.onerror = \(\) => \{[\s\S]+const err = v\.error, pl = S\.playing;[\s\S]+console\.warn\('\[vod\] <video> error code=' \+ err\.code[\s\S]+failover\(\);/,
+    'the web-player error path records the MediaError code (3=decode vs 4=src-not-supported) before failing over — pinpoints audio vs container/video walls on iOS');
   assert.match(server, /function parseCaps\(raw\) \{[\s\S]+\['mkv', 'mp4', 'h264', 'hevc', 'dovi', 'av1', 'vp9', 'mpeg2', 'aac', 'ac3', 'eac3', 'eac3Joc', 'dts', 'dtsHd', 'truehd', 'passthrough', 'native', 'lowPower'\][\s\S]+caps\.audioOutput = String\(raw\.audioOutput\)\.slice\(0, 64\)/,
     'server should accept sanitized native playback capability fields');
   assert.match(server, /const imdbRaw = String\(ctx\.url\.searchParams\.get\('imdb'\) \|\| ctx\.url\.searchParams\.get\('imdbid'\) \|\| ''\)\.trim\(\);[\s\S]+const imdbId = \/\^tt\\d\{5,10\}\$\/i\.test\(imdbRaw\) \? imdbRaw\.toLowerCase\(\) : '';[\s\S]+const releaseName = subtitleReleaseName\(vf\) \|\| vf\.name;[\s\S]+key, tmdbId, imdbId, query: vf\._subQuery \|\| vf\._q \|\| releaseName \|\| vf\.name[\s\S]+const catalogId = imdbId \|\| tmdbId;/,
@@ -1657,8 +1666,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android should keep immersive system UI and reclaim WebView focus after reinstall/resume/window-focus races');
   assert.match(android, /private void jsKey\(String type, String key, boolean repeat\) \{[\s\S]+if \(!pageTvReady && !"keyup"\.equals\(type\)\) \{[\s\S]+queuePendingTvKey\(key, repeat\);[\s\S]+return;[\s\S]+\}/,
     'Android key bridge should not drop early D-pad keydown events during first app paint');
-  assert.match(ui, /function startWebPlayerHousekeeping\(mount, it\) \{[\s\S]+v\.onerror = \(\) => failover\(\);[\s\S]+startHealthPoll\(mount\.id\);[\s\S]+loadTracks\(\);[\s\S]+subtitleCatalogAvailable\(it\)[\s\S]+fetch\(`\/api\/ossubs\/\$\{mount\.id\}\?\$\{subtitleRequestParams\(it, code2, mount\.streamToken\)\.toString\(\)\}`\)/,
-    'web-only probes and subtitle prefetch should stay in the web playback branch and carry catalog ids');
+  assert.match(ui, /function startWebPlayerHousekeeping\(mount, it\) \{[\s\S]+v\.onerror = \(\) => \{[\s\S]+failover\(\);[\s\S]+\};[\s\S]+startHealthPoll\(mount\.id\);[\s\S]+loadTracks\(\);[\s\S]+subtitleCatalogAvailable\(it\)[\s\S]+fetch\(`\/api\/ossubs\/\$\{mount\.id\}\?\$\{subtitleRequestParams\(it, code2, mount\.streamToken\)\.toString\(\)\}`\)/,
+    'web-only probes and subtitle prefetch should stay in the web playback branch and carry catalog ids; the video error handler still fails over');
   assert.match(ui, /async function loadTracks\(\) \{[\s\S]+if \(p\.usingNative && canUseNativeVideoPlayer\(\)\) \{[\s\S]+p\.nativeDuration = p\.duration \|\| p\.nativeDuration \|\| 0;[\s\S]+refreshNativeSubtitleChoices\(\);[\s\S]+return;[\s\S]+\}/,
     'track probing should feed native duration and subtitle choices without starting web playback');
   assert.match(ui, /function startSource\(kind, atSeconds, opts = \{\}\) \{[\s\S]+if \(p && p\.usingNative && canUseNativeVideoPlayer\(\)\) return false;/,

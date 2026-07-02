@@ -5811,6 +5811,19 @@ function clientCaps() {
   S._caps = nativeCaps ? { ...webCaps, ...nativeCaps, web: webCaps } : webCaps;
   return S._caps;
 }
+// iOS/iPadOS WebKit <video> surface. Safari's <video> element decodes ONLY AAC/MP3 audio, yet its
+// canPlayType() over-reports AC-3/E-AC-3 as playable ("maybe" — the device advertises Dolby for HLS/
+// AirPlay/passthrough, NOT for local <video> decode). Trusting that (server audioCopyOk) stream-COPIES
+// undecodable AC-3/E-AC-3 into the fMP4 → the "codec error" the owner sees on nearly every usenet
+// release (they're overwhelmingly AC3/EAC3). So treat iOS like the multiview panes: force the remux to
+// a browser-safe STEREO AAC track (audioSafe) regardless of what canPlayType claims — immune to Safari's
+// lie AND to the ffprobe-timing race. Matches Safari + Chrome/Firefox on iOS (all WebKit under the hood)
+// and iPadOS-13+ (reports as Macintosh but is a touch device). Desktop Safari (macOS decodes AC-3 in
+// <video>) is intentionally left on the normal caps path so it keeps 5.1 where it genuinely works.
+function iosWebkitVideo() {
+  const ua = navigator.userAgent || '';
+  return /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && (navigator.maxTouchPoints || 0) > 1);
+}
 
 // Parental playback gate: kid/teen profiles can't play titles rated above their level.
 const CERT_RANK = { G: 0, 'TV-Y': 0, 'TV-G': 0, 'TV-Y7': 1, PG: 1, 'TV-PG': 1, 'PG-13': 2, 'TV-14': 2, R: 3, 'TV-MA': 3, 'NC-17': 3, NR: 3 };
@@ -8836,7 +8849,17 @@ function startNativePlayerHousekeeping(it) {
 }
 function startWebPlayerHousekeeping(mount, it) {
   const v = $('video');
-  v.onerror = () => failover();
+  v.onerror = () => {
+    // Record what the <video> element actually rejected before failing over. MEDIA_ERR_DECODE(3) =
+    // codec (audio/video) the decoder choked on; MEDIA_ERR_SRC_NOT_SUPPORTED(4) = container/stream it
+    // wouldn't even open. On iOS this pinpoints audio (fixed by forceAacRemux) vs a video/container wall.
+    try {
+      const err = v.error, pl = S.playing;
+      if (err) console.warn('[vod] <video> error code=' + err.code + ' kind=' + currentPlayerKind(pl)
+        + ' aacRemux=' + !!(pl && pl.forceAacRemux) + (err.message ? ' msg=' + err.message : ''));
+    } catch {}
+    failover();
+  };
   startHealthPoll(mount.id);
   if (S.watchTimer) clearInterval(S.watchTimer);
   S.watchTimer = setInterval(saveWatch, 10000);
@@ -8926,7 +8949,10 @@ async function openPlayer(it, mount, opts = {}) {
     duration: knownDuration, lastSaved: 0, triedRemux: false, triedTranscode: false, mountId: mount.id,
     tracks: null, _tracksJob: null, audioTrack: 0, subTrack: null, quality: 1080, nativePos: 0, nativeDuration: 0,
     nativeStartKind: playbackStartKind(mount), nativeTried: {},
-    forceAacRemux: false,
+    // iOS Safari <video> can't decode AC3/EAC3/DTS (and lies about it via canPlayType) → force the
+    // remux to browser-safe stereo AAC from the FIRST attempt so nearly-every-file no longer codec-errors
+    // then limps to a full transcode. See iosWebkitVideo(). Non-iOS clients keep the caps-driven path.
+    forceAacRemux: iosWebkitVideo(),
   };
   updatePlayerMeta();
   applyVolume();
