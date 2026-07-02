@@ -1554,7 +1554,13 @@ body.mobileShell #scrim{background:var(--scrim)}
 body.mobileShell #colorGlow{opacity:.72}
 body.mobileShell #burger{display:grid}
 body.mobileShell nav#rail{transform:translateX(-110%);transition:transform .28s cubic-bezier(.22,1,.36,1);
-  width:248px!important;z-index:40;box-shadow:18px 0 50px rgba(0,0,0,.5)}
+  width:248px!important;z-index:40;box-shadow:18px 0 50px rgba(0,0,0,.5);
+  /* Full-height drawer on the phone: the panel spans the whole viewport edge-to-edge (no
+     safe-area/overscan inset on the panel itself, unlike the TV rail). The notch/home-indicator
+     clearance moves into internal padding so the logo + nav list stay clear of the status bar
+     and home indicator while the panel background still reaches the top and bottom edges. */
+  top:0!important;bottom:0!important;
+  padding-top:calc(24px + var(--safeT))!important;padding-bottom:calc(18px + var(--safeB))!important}
 body.mobileShell.mobileNav nav#rail{transform:translateX(0);background:var(--panel);backdrop-filter:blur(8px)}
 body.mobileShell.mobileNav nav#rail .rlabel,
 body.mobileShell.mobileNav nav#rail .wordmark{max-width:150px;opacity:1}
