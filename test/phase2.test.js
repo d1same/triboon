@@ -257,6 +257,31 @@ test('scoring: a season pack requested for one episode escapes the size cap, but
     'a verbose single episode is not treated as a pack for the cap exemption');
 });
 
+test('pipeline: title verification holds for year-titled movies and detached episode markers (never the wrong item)', () => {
+  const { parseWantedTitle, releaseMatches } = require('../server/pipeline');
+  // FP-1/FN-1: a movie whose TITLE is a bare year must ANCHOR on that number, not swallow it as the year.
+  const y1917 = parseWantedTitle('1917 2019');
+  assert.ok(releaseMatches('1917.2019.1080p.BluRay.x264-SPARKS', y1917), '1917 finds its own release');
+  for (const wrong of ['Joker.2019.1080p.BluRay.x264-SPARKS', 'Parasite.2019.1080p.BluRay-GRP',
+    'Cats.2019.1080p.WEB-DL-GRP', 'Random.Movie.2020.1080p-GRP']) {
+    assert.ok(!releaseMatches(wrong, y1917), `1917 rejects a different same-year film: ${wrong}`);
+  }
+  const y2012 = parseWantedTitle('2012 2009');
+  assert.ok(releaseMatches('2012.2009.1080p.BluRay.x264-GRP', y2012));
+  assert.ok(!releaseMatches('Avatar.2009.1080p.BluRay-GRP', y2012), '2012 rejects a different 2009 film');
+  assert.ok(releaseMatches('2001.A.Space.Odyssey.1968.1080p.BluRay.x264-AMIABLE',
+    parseWantedTitle('2001 a space odyssey 1968')), 'a year-first title still finds its own release');
+
+  // FP-2/FN-4: a DETACHED or VERBOSE episode marker matches ONLY when it names the WANTED episode.
+  const boys = parseWantedTitle('the boys s02e05');
+  assert.ok(releaseMatches('The.Boys.S02.720p.E05.WEB-DL-GRP', boys), 'detached E05 (the wanted episode) matches');
+  assert.ok(releaseMatches('The.Boys.S02.Episode.5.1080p.WEB-DL-GRP', boys), 'verbose "Episode 5" (wanted) matches');
+  for (const wrong of ['The.Boys.S02.720p.E07.WEB-DL-GRP', 'The.Boys.S02.720p.WEB-DL.E11',
+    'The.Boys.Season.2.720p.x264-GRP.E11']) {
+    assert.ok(!releaseMatches(wrong, boys), `rejects a detached WRONG episode: ${wrong}`);
+  }
+});
+
 test('scoring: admin custom formats — group tiers override built-ins, keywords add their score', () => {
   const releases = [
     { name: 'Movie.2024.1080p.WEB-DL.DDP5.1.H.264-FLUX', sizeBytes: 6e9 },

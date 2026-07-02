@@ -16,15 +16,27 @@ const { fanout, fetchUrl, normTitle } = require('./newznab');
 // Split a search query into title words + structured parts (year, SxxEyy).
 function parseWantedTitle(q) {
   const out = { words: [], year: null, s: null, e: null };
-  for (const t of String(q || '').toLowerCase().split(/\s+/)) {
-    let m = /^s(\d{1,2})e(\d{1,3})$/.exec(t);
+  const toks = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
+  // The movie query is "title … year", so ONLY the TRAILING year-shaped token is the release year; a
+  // year-shaped token earlier in the string is part of the TITLE ("1917", "2012", "2001 A Space Odyssey",
+  // "Blade Runner 2049"). Without this, a bare-year title was swallowed as the year → ZERO title words →
+  // the anchor + structural-boundary checks were skipped and ANY film within ±1 year matched (a wrong
+  // movie would play), while the film's own release was rejected.
+  let lastYearIdx = -1;
+  for (let i = toks.length - 1; i >= 0; i--) { if (/^(19|20)\d{2}$/.test(toks[i])) { lastYearIdx = i; break; } }
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i];
+    const m = /^s(\d{1,2})e(\d{1,3})$/.exec(t);
     if (m) { out.s = +m[1]; out.e = +m[2]; continue; }
-    if (/^(19|20)\d{2}$/.test(t)) { out.year = +t; continue; }
-    // Apostrophes vanish in scene names ("Dont") but every OTHER separator becomes a word
-    // break — fusing "spider-noir" into "spidernoir" could never match "Spider.Noir.S01E01"
-    // (release names normalize all punctuation to spaces), so the title was unfindable.
+    if (i === lastYearIdx) { out.year = +t; continue; }
+    // Apostrophes vanish in scene names ("Dont") but every OTHER separator becomes a word break —
+    // fusing "spider-noir" into "spidernoir" could never match "Spider.Noir.S01E01" (release names
+    // normalize all punctuation to spaces), so the title was unfindable.
     for (const w of (t.replace(/['’`]/g, '').match(/[a-z0-9]+/g) || [])) out.words.push(w);
   }
+  // A query that is ONLY a year (a bare-year title with no separate release year) must still ANCHOR on
+  // that number rather than degrade to "any film ±1 year" — keep it as a title word, drop the year filter.
+  if (!out.words.length && out.year !== null && out.s === null) { out.words.push(String(out.year)); out.year = null; }
   return out;
 }
 // The requested episode from a play/prepare request (season+ep), or null for a movie. Threaded into
@@ -102,11 +114,15 @@ function releaseMatches(name, wanted) {
       const range = /\bs0?(\d{1,2})e0?(\d{1,3})\s*e0?(\d{1,3})\b/.exec(norm);
       const inRange = !!(range && +range[1] === s && +range[2] <= e && e <= +range[3]);
       const seasonToken = new RegExp(`\\b(s0?${s}|season\\s?0?${s})\\b`).test(norm);
-      // Any SINGLE-episode marker disqualifies the "pack" reading — including VERBOSE forms
-      // ("S02 Episode 7", "EP07") that name a specific episode, so a different single episode is never
-      // mistaken for a whole-season pack and mounted. (Keep in sync with scoring.js isSeasonPack.)
-      const anyEpToken = /\b(s\d{1,2}\s?e\d{1,3}|\d{1,2}x\d{1,3}|(?:episode|ep)\s?\d{1,3})\b/.test(norm);
-      if (!inRange && !(seasonToken && !anyEpToken)) return false;
+      // DETACHED episode: season and episode split by other tokens ("S02 720p E05", "S02 Episode 5").
+      // Accept ONLY when the standalone episode number is the WANTED one — a DIFFERENT detached episode
+      // ("S02 720p E07") must NOT slip through the pack reading below and auto-play the wrong episode.
+      const detachedExact = seasonToken && new RegExp(`\\b(e0?${e}|(?:ep|episode)\\s?0?${e})\\b`).test(norm);
+      // Any single-episode marker — glued, spaced, verbose ("Episode 7"/"EP07"), OR a standalone "E##" —
+      // disqualifies the whole-season-PACK reading, so a different single episode is never mistaken for a
+      // pack. (Keep the ep-marker forms in sync with scoring.js isSeasonPack.)
+      const anyEpToken = /\b(s\d{1,2}\s?e\d{1,3}|\d{1,2}x\d{1,3}|(?:episode|ep)\s?\d{1,3}|e\d{1,3})\b/.test(norm);
+      if (!inRange && !detachedExact && !(seasonToken && !anyEpToken)) return false;
     }
   }
   if (wanted.year) {
