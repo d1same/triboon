@@ -303,7 +303,8 @@ async function mountNzb(pool, nzbXml, opts = {}) {
 }
 
 function mountFlat(pool, nzb, opts) {
-  const primary = pickPrimaryFile(nzb);
+  // opts.wantedEpisode threads through so a loose-file season pack mounts the REQUESTED episode file.
+  const primary = pickPrimaryFile(nzb, opts);
   const vf = new NzbFileStream(pool, primary, opts);
   vf.container = 'flat';
   vf.method = null;

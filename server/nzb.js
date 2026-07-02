@@ -45,13 +45,26 @@ function parseNzb(xml) {
 
 // Heuristics: pick the file most likely to be the playable payload.
 const VIDEO_EXT = /\.(mkv|mp4|avi|m4v|ts|webm|mov)("|\s|$)/i;
-function pickPrimaryFile(nzb) {
+// Does a raw file subject/name name a specific SxxEyy (tolerant of scene separators)? The \b after
+// the episode number stops S05 from matching S050, and e0? absorbs a zero-padded "E05".
+function episodeInName(name, s, e) {
+  if (!Number.isInteger(+s) || !Number.isInteger(+e)) return false;
+  try { return new RegExp(`\\b(s0?${+s}[ ._-]?e0?${+e}|${+s}x0?${+e})\\b`, 'i').test(String(name || '')); }
+  catch { return false; }
+}
+// opts.wantedEpisode {s,e}: for a TV episode play against a loose-file SEASON PACK, pick the video file
+// that matches the requested SxxEyy instead of merely the largest — so "play S02E05" mounts E05, not
+// E01/the biggest file. A no-op for a single-file movie NZB (no wantedEpisode / nothing matches) and
+// for a single RAR-set pack (episodes live inside the archive → handled by pickInner, a follow-up).
+function pickPrimaryFile(nzb, opts = {}) {
+  const we = opts.wantedEpisode;
   const scored = nzb.files.map((f) => {
     const size = f.segments.reduce((s, x) => s + x.bytes, 0);
     let score = size;
     if (VIDEO_EXT.test(f.subject)) score *= 10;
     if (/\.par2/i.test(f.subject)) score = -1;
     if (/\.(nfo|sfv|srr|jpg|png)/i.test(f.subject)) score = -1;
+    if (we && VIDEO_EXT.test(f.subject) && episodeInName(f.subject, we.s, we.e)) score += 1e15;
     return { f, size, score };
   }).sort((a, b) => b.score - a.score);
   return scored[0].f;

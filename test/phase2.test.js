@@ -206,6 +206,57 @@ test('title verification: short titles match only releases that ARE that title',
   }
 });
 
+test('pipeline: a wanted episode matches a season PACK or covering RANGE (season exact), and the mount picks that episode', () => {
+  const { parseWantedTitle, releaseMatches } = require('../server/pipeline');
+  const { parseNzb, pickPrimaryFile } = require('../server/nzb');
+  const w = parseWantedTitle('the boys s02e05');
+  for (const good of [
+    'The.Boys.S02E05.1080p.AMZN.WEB-DL.DDP5.1.H.264-FLUX',        // exact episode
+    'The.Boys.S02.1080p.AMZN.WEB-DL.DDP5.1.H.264-FLUX',           // whole-season pack (S02, no ep token)
+    'The.Boys.Season.2.COMPLETE.1080p.AMZN.WEB-DL.DDP5.1-FLUX',   // "Season 2" pack
+    'The.Boys.S02E01-E08.1080p.AMZN.WEB-DL.DDP5.1.H.264-FLUX',    // range covering E05
+  ]) assert.ok(releaseMatches(good, w), `accepts ${good}`);
+  for (const bad of [
+    'The.Boys.S03.1080p.AMZN.WEB-DL.DDP5.1.H.264-FLUX',           // wrong season (pack) — season stays exact
+    'The.Boys.S02E07.1080p.AMZN.WEB-DL.DDP5.1.H.264-FLUX',        // a DIFFERENT single episode
+    'The.Boys.S02E01-E04.1080p.AMZN.WEB-DL.H.264-FLUX',           // range NOT covering E05
+    'The.Boys.S02.Episode.7.1080p.WEB-DL.H.264-FLUX',            // VERBOSE single episode must not read as a pack
+    'The.Boys.S02.EP07.1080p.WEB-DL.H.264-FLUX',                 // "EP07" single episode
+    'The.Boys.Season.2.Episode.7.1080p.WEB-DL-FLUX',            // "Season 2 Episode 7" single episode
+  ]) assert.ok(!releaseMatches(bad, w), `rejects ${bad}`);
+  // advance() (auto-advance on source rot) must re-thread the wanted episode, or a season pack advances to E01.
+  const pipelineSrc = require('fs').readFileSync(require('path').join(__dirname, '..', 'server', 'pipeline.js'), 'utf8');
+  assert.match(pipelineSrc, /async advance\(sessionId[\s\S]+wantedEpisodeOf\(session\.query\)[\s\S]+wantedEpisode: _we[\s\S]+_advance\(session, mountOpts\)/,
+    'advance() re-threads the wanted episode into mountOpts so a pack keeps mounting the requested episode');
+
+  // Loose-file season-pack NZB: mount the WANTED episode file, not the largest. (E01 is bigger here.)
+  const q = (name, bytes) => `<file subject="a &quot;${name}&quot; yEnc (1/1)"><segments><segment bytes="${bytes}" number="1">${name}@x</segment></segments></file>`;
+  const parsed = parseNzb('<?xml version="1.0"?><nzb>'
+    + q('The.Boys.S02E01.1080p.WEB-DL.mkv', 900000000)
+    + q('The.Boys.S02E05.1080p.WEB-DL.mkv', 500000000) + '</nzb>');
+  assert.match(pickPrimaryFile(parsed, { wantedEpisode: { s: 2, e: 5 } }).subject, /S02E05/i, 'mounts the requested episode even though E01 is larger');
+  assert.match(pickPrimaryFile(parsed).subject, /S02E01/i, 'no wanted episode → largest file (movie behavior unchanged)');
+});
+
+test('scoring: a season pack requested for one episode escapes the size cap, but a movie does not', () => {
+  const pack = { name: 'The.Boys.S02.COMPLETE.1080p.WEB-DL.H.264-FLUX', sizeBytes: 40e9 };
+  const movie = { name: 'Big.Movie.2024.1080p.WEB-DL.H.264-FLUX', sizeBytes: 40e9 };
+  const capPolicy = { maxResolutionRank: 4, maxSizeGb1080: 20 };
+  assert.ok(scoreRelease(movie, capPolicy).score < -5000, 'a 40GB movie is size-cap disqualified');
+  assert.ok(scoreRelease(pack, { ...capPolicy, wantedEpisode: { s: 2, e: 5 } }).score > -5000,
+    'a season pack is NOT disqualified when one episode is requested (only that episode streams)');
+  assert.ok(scoreRelease(pack, capPolicy).score < -5000,
+    'the same pack IS capped when not requested as an episode (movies/non-episode requests unaffected)');
+  // A covering RANGE is exempt too (consistent with what releaseMatches accepts).
+  const range = { name: 'The.Boys.S02E01-E08.1080p.WEB-DL.H.264-FLUX', sizeBytes: 40e9 };
+  assert.ok(scoreRelease(range, { ...capPolicy, wantedEpisode: { s: 2, e: 5 } }).score > -5000,
+    'a covering episode range escapes the size cap for the requested episode');
+  // A VERBOSE single episode is NOT a pack → stays capped even with an episode requested.
+  const verboseEp = { name: 'The.Boys.S02.Episode.7.1080p.WEB-DL.H.264-FLUX', sizeBytes: 40e9 };
+  assert.ok(scoreRelease(verboseEp, { ...capPolicy, wantedEpisode: { s: 2, e: 5 } }).score < -5000,
+    'a verbose single episode is not treated as a pack for the cap exemption');
+});
+
 test('scoring: admin custom formats — group tiers override built-ins, keywords add their score', () => {
   const releases = [
     { name: 'Movie.2024.1080p.WEB-DL.DDP5.1.H.264-FLUX', sizeBytes: 6e9 },

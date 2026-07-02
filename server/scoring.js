@@ -293,7 +293,24 @@ function scoreRelease(candidate, policy = {}) {
     // Sources drawer nor auto-played. 4K has its own cap; everything else (incl. unknown res,
     // which COULD be a mislabeled monster) falls under the 1080p cap.
     const hardCap = a.resolutionRank >= 4 && a.resolution !== 'unknown' ? policy.maxSizeGb4k : policy.maxSizeGb1080;
-    if (hardCap && gb > hardCap) add(`over-size-cap ${gb.toFixed(1)}GB>${hardCap}GB`, -100000);
+    // A whole-season PACK requested for one episode isn't judged by its full-season size — only that one
+    // episode streams. Exempt it from the HARD cap (it's still size-SHAPED below, so it stays a low-ranked
+    // fallback beneath single-episode releases). Scoped to episode requests + a pack-shaped name (exact
+    // wanted-season token, no single-episode token), so movies / non-episode requests are unaffected.
+    const we = policy.wantedEpisode;
+    let capExempt = false;
+    if (we && Number.isInteger(+we.s) && Number.isInteger(+we.e)) {
+      const ws = +we.s, wep = +we.e;
+      // A whole-season PACK (season token + NO single-episode token, incl. verbose "Episode 7"/"EP07"),
+      // OR a covering multi-episode RANGE (S02E01-E08 with start<=wanted<=end) — both stream ONE episode,
+      // so the full-season size mustn't disqualify them. Matches what releaseMatches accepts; keep in sync.
+      const pack = new RegExp(`\\b(s0?${ws}|season[ ._-]?0?${ws})\\b`, 'i').test(candidate.name)
+        && !/\b(s\d{1,2}[ ._-]?e\d{1,3}|\d{1,2}x\d{1,3}|(?:episode|ep)[ ._-]?\d{1,3})\b/i.test(candidate.name);
+      const rm = new RegExp(`\\bs0?${ws}[ ._-]?e0?(\\d{1,3})[ ._-]*e0?(\\d{1,3})\\b`, 'i').exec(candidate.name);
+      const inRange = !!(rm && +rm[1] <= wep && wep <= +rm[2]);
+      capExempt = pack || inRange;
+    }
+    if (hardCap && gb > hardCap && !capExempt) add(`over-size-cap ${gb.toFixed(1)}GB>${hardCap}GB`, -100000);
     // Targets sized for instant start (NZB fetch+parse time scales with release size):
     // 4K ≈ 15GB (good HDR WEB-DL territory), 1080p ≈ 8GB, 720p ≈ 3.5GB. Penalty past 1.6×,
     // CLAMPED at -400: enough to keep a 50GB remux from ever auto-playing, but unclamped it

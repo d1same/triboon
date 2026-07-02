@@ -27,6 +27,13 @@ function parseWantedTitle(q) {
   }
   return out;
 }
+// The requested episode from a play/prepare request (season+ep), or null for a movie. Threaded into
+// mountOpts so a season pack mounts the RIGHT episode file, and into the scoring policy so a pack is
+// not size-cap-disqualified for streaming one episode of it.
+function wantedEpisodeOf(params) {
+  const s = Number(params && params.season), e = Number(params && params.ep);
+  return (Number.isInteger(s) && Number.isInteger(e) && s > 0 && e > 0) ? { s, e } : null;
+}
 // What may legally follow the title in a scene name: year, SxxEyy/NxMM, resolution, source/
 // codec, edition/region words. A PLAIN word right after the matched title means the release's
 // real title is LONGER than the wanted one — a different film/show.
@@ -83,8 +90,24 @@ function releaseMatches(name, wanted) {
     if (after !== undefined && !STRUCTURAL_AFTER_TITLE.test(after)) return false;
   }
   if (wanted.s !== null) {
-    const sxe = new RegExp(`\\b(s0?${wanted.s}\\s?e0?${wanted.e}|${wanted.s}x0?${wanted.e})\\b`);
-    if (!sxe.test(norm)) return false;
+    const s = wanted.s, e = wanted.e;
+    const exact = new RegExp(`\\b(s0?${s}\\s?e0?${e}|${s}x0?${e})\\b`);
+    if (!exact.test(norm)) {
+      // Not the exact episode — but ACCEPT a source that CONTAINS it, so a show only posted as a whole
+      // season still plays (the mount then selects the episode file). Two forms, both keeping the season
+      // EXACT (s0?2 never matches s03) and still rejecting a DIFFERENT single episode:
+      //  - a multi-episode RANGE covering it: S02E01-E08 → norm "s02e01 e08" (the 'e' prefix on the
+      //    second number is what distinguishes a real range from a trailing "1080p"); and
+      //  - a whole-season PACK: the exact season token with NO single-episode token anywhere.
+      const range = /\bs0?(\d{1,2})e0?(\d{1,3})\s*e0?(\d{1,3})\b/.exec(norm);
+      const inRange = !!(range && +range[1] === s && +range[2] <= e && e <= +range[3]);
+      const seasonToken = new RegExp(`\\b(s0?${s}|season\\s?0?${s})\\b`).test(norm);
+      // Any SINGLE-episode marker disqualifies the "pack" reading — including VERBOSE forms
+      // ("S02 Episode 7", "EP07") that name a specific episode, so a different single episode is never
+      // mistaken for a whole-season pack and mounted. (Keep in sync with scoring.js isSeasonPack.)
+      const anyEpToken = /\b(s\d{1,2}\s?e\d{1,3}|\d{1,2}x\d{1,3}|(?:episode|ep)\s?\d{1,3})\b/.test(norm);
+      if (!inRange && !(seasonToken && !anyEpToken)) return false;
+    }
   }
   if (wanted.year) {
     const years = [...norm.matchAll(/\b(19|20)\d{2}\b/g)].map((m) => +m[0]);
@@ -621,6 +644,10 @@ class Pipeline {
       params.q = `${params.q} S${String(season).padStart(2, '0')}E${String(ep).padStart(2, '0')}`.trim();
     }
     const wanted = parseWantedTitle(params.q);
+    // TV episode context for scoring: a whole-season PACK must not be size-cap-disqualified — only ONE
+    // episode streams from it (it's still size-SHAPED, so it stays a low-ranked fallback below singles).
+    // Scoped to episode requests; movies/season-less searches never get wantedEpisode → unaffected.
+    { const _we = wantedEpisodeOf(params); if (_we) policy = { ...policy, wantedEpisode: _we }; }
     const key = this._searchCacheKey(params);
     const titleKey = this._searchCacheKey(params, { ignoreCatalogIds: true });
     let hit = this._getFreshSearchHit(key);
@@ -898,6 +925,8 @@ class Pipeline {
   // release-name pick stays as a fallback for older clients. Auto-advance still walks the
   // ranked list behind that explicit choice.
   async play(params, policy = {}, mountOpts = {}) {
+    const _we = wantedEpisodeOf(params);
+    if (_we) mountOpts = { ...mountOpts, wantedEpisode: _we }; // so a season pack mounts the wanted episode
     const { candidates } = await this.search(params, policy);
     let playable = this._playableCandidates(candidates, params);
     // 4K toggle with no 4K source: exactResolutionRank disqualifies every non-4K release, which
@@ -963,6 +992,8 @@ class Pipeline {
   }
 
   async prepare(params, policy = {}, mountOpts = {}) {
+    const _we = wantedEpisodeOf(params);
+    if (_we) mountOpts = { ...mountOpts, wantedEpisode: _we }; // prewarm the SAME episode file play() will mount
     const { candidates } = await this.search(params, policy);
     const playable = this._playableCandidates(candidates, params);
     if (!playable.length) throw new Error('no playable releases found');
@@ -1086,6 +1117,11 @@ class Pipeline {
   async advance(sessionId, mountOpts = {}) {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error('unknown play session');
+    // Thread the wanted episode back in so an auto-advance of a season PACK still mounts the REQUESTED
+    // episode (session.query carries season/ep). Without this, advance() dropped it and a pack advanced
+    // to the largest file (E01). Movies/single-ep are unaffected — their largest video IS the content.
+    const _we = wantedEpisodeOf(session.query);
+    if (_we) mountOpts = { ...mountOpts, wantedEpisode: _we };
     return this._advance(session, mountOpts);
   }
 }
