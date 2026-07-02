@@ -29,9 +29,9 @@ function httpJson(port, method, p, body, token) {
   });
 }
 
-function httpRaw(port, p, { range, method = 'GET', token } = {}) {
+function httpRaw(port, p, { range, method = 'GET', token, headers: extra } = {}) {
   return new Promise((resolve, reject) => {
-    const headers = {};
+    const headers = { ...(extra || {}) };
     if (range) headers.Range = range;
     if (token) headers.authorization = `Bearer ${token}`;
     const req = http.request({ host: '127.0.0.1', port, path: p, method, headers }, (res) => {

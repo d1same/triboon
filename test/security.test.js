@@ -2924,10 +2924,19 @@ test('iptv: live-remux preserves HTTPS hostnames for provider TLS SNI', () => {
 test('streaming: HTTP range reads use startup/seek lanes and keep completed range read-ahead warm', () => {
   const serverCode = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
   const vfsCode = fs.readFileSync(path.join(__dirname, '..', 'server', 'vfs.js'), 'utf8');
-  assert.match(serverCode, /vf\._touched = Date\.now\(\);[\s\S]+pipeline\.rebalancePlaybackWindows\(\);[\s\S]+ctx\.req\.setTimeout\(120000\);[\s\S]+ctx\.res\.setTimeout\(120000\);[\s\S]+const requestedPriority = String\(ctx\.url\.searchParams\.get\('priority'\)[\s\S]+const explicitPriority = requestedPriority === 'read-ahead' \? 'readAhead' : requestedPriority;[\s\S]+const highWaterEnd = Number\(vf\._streamHighWaterEnd \|\| 0\);[\s\S]+const sequentialRange = start > 0[\s\S]+highWaterEnd > 0[\s\S]+start <= highWaterEnd \+ sequentialSlack;[\s\S]+const readPriority = \['background', 'readAhead', 'health'\]\.includes\(explicitPriority\)[\s\S]+: \(start === 0 \? 'startup' : \(sequentialRange \? 'playback' : 'seek'\)\);[\s\S]+ctx\.req\.once\('close', stopReqRead\);[\s\S]+ctx\.res\.once\('close', stopResRead\);[\s\S]+vf\.read\(start, end, \{ priority: readPriority, signal: readSignal \}\)/,
+  assert.match(serverCode, /vf\._touched = _now;[\s\S]+_now - _lastStreamRebalance > 1000[\s\S]+pipeline\.rebalancePlaybackWindows\(_now\);[\s\S]+ctx\.req\.setTimeout\(120000\);[\s\S]+ctx\.res\.setTimeout\(120000\);[\s\S]+const requestedPriority = String\(ctx\.url\.searchParams\.get\('priority'\)[\s\S]+const explicitPriority = requestedPriority === 'read-ahead' \? 'readAhead' : requestedPriority;[\s\S]+const highWaterEnd = Number\(vf\._streamHighWaterEnd \|\| 0\);[\s\S]+const sequentialRange = start > 0[\s\S]+highWaterEnd > 0[\s\S]+start <= highWaterEnd \+ sequentialSlack;[\s\S]+const readPriority = \['background', 'readAhead', 'health'\]\.includes\(explicitPriority\)[\s\S]+: \(start === 0 \? 'startup' : \(sequentialRange \? 'playback' : 'seek'\)\);[\s\S]+ctx\.req\.once\('close', stopReqRead\);[\s\S]+ctx\.res\.once\('close', stopResRead\);[\s\S]+vf\.read\(start, end, \{ priority: readPriority, signal: readSignal \}\)/,
     'the stream route should mark initial reads as startup, real jumps as seek, normal sequential ranges as playback, and allow explicit background readers for subtitle extraction');
   assert.match(serverCode, /let completedRead = false;[\s\S]+const abortRead = \(\) => \{[\s\S]+readController\.abort\(\);[\s\S]+vf\.cancelReadAhead\(\);[\s\S]+const stopReqRead = \(\) => \{[\s\S]+if \(!ctx\.req\.complete\) abortRead\(\);[\s\S]+const stopResRead = \(\) => \{[\s\S]+if \(!completedRead && !ctx\.res\.writableEnded\) abortRead\(\);[\s\S]+completedRead = !readSignal\.aborted && !ctx\.res\.destroyed;[\s\S]+vf\._streamHighWaterEnd = Math\.max\(Number\(vf\._streamHighWaterEnd \|\| 0\), end\)/,
     'client disconnects should stop stale read-ahead, but completed ExoPlayer ranges should keep their warm buffer');
+  // v2.3.0 quick wins: the static UI is gzipped + ETag/304-revalidated, and the per-Range rebalance is
+  // throttled with a cached os.totalmem (see the functional test below + pipeline.js).
+  assert.match(serverCode, /_now - _lastStreamRebalance > 1000[\s\S]+pipeline\.rebalancePlaybackWindows\(_now\);/,
+    'the per-Range playback-window rebalance is throttled to <=1/sec (was firing on every byte-range request)');
+  const pipelineCode2 = fs.readFileSync(path.join(__dirname, '..', 'server', 'pipeline.js'), 'utf8');
+  assert.match(pipelineCode2, /const TOTAL_MEM_MB = Math\.floor\(os\.totalmem\(\) \/ \(1024 \* 1024\)\);/,
+    'os.totalmem() is read once at load, not per read-ahead window sizing');
+  assert.match(pipelineCode2, /_getFreshSearchHit\(key\) \{[\s\S]+this\.searchCache\.delete\(key\); this\.searchCache\.set\(key, hit\);/,
+    'the search cache is LRU (touch-on-hit) so a hot replayed title survives unrelated browses');
   assert.match(serverCode, /if \(readSignal\.aborted\) \{[\s\S]+ctx\.res\.destroy\(\);[\s\S]+return;[\s\S]+\}/,
     'aborted VOD reads should not end a short body under the original content-length');
   assert.match(vfsCode, /cancelReadAhead\(\) \{[\s\S]+this\.readAheadEpoch\+\+;[\s\S]+\}/,
@@ -2938,6 +2947,25 @@ test('streaming: HTTP range reads use startup/seek lanes and keep completed rang
     'header/random access reads used during mount should also stay on the startup lane');
   assert.match(vfsCode, /async \*read\(start, end, opts = \{\}\) \{[\s\S]+const priority = opts\.priority \|\| 'playback';[\s\S]+let activePriority = priority;[\s\S]+priority !== 'background' && priority !== 'health' && readAheadEpoch === this\.readAheadEpoch[\s\S]+this\._fetchSegment\(segIdx, activePriority, \{ signal \}\)[\s\S]+activePriority = 'playback'/,
     'virtual file reads should pass caller priority into the first real article fetch, return to playback, and keep background readers from scheduling read-ahead');
+});
+
+test('static UI: gzip + ETag/304 revalidation keeps the ~1.2MB shell fast to load', async () => {
+  const gz = await httpRaw(srv.port, '/', { headers: { 'accept-encoding': 'gzip' } });
+  assert.strictEqual(gz.status, 200);
+  assert.strictEqual(gz.headers['content-encoding'], 'gzip', 'the UI is gzip-compressed when the client accepts it');
+  assert.match(String(gz.headers.vary || ''), /accept-encoding/i, 'the gzip response varies on Accept-Encoding');
+  assert.ok(gz.headers.etag, 'the UI carries an ETag validator');
+  assert.ok(gz.body.length >= 2 && gz.body[0] === 0x1f && gz.body[1] === 0x8b, 'the body is a real gzip stream (magic bytes)');
+  // Revalidation with the ETag → 304 with no body — the point of the win: unchanged loads cost ~0 bytes.
+  const notMod = await httpRaw(srv.port, '/', { headers: { 'if-none-match': gz.headers.etag } });
+  assert.strictEqual(notMod.status, 304, 'an unchanged UI revalidates to 304 Not Modified');
+  assert.strictEqual(notMod.body.length, 0, 'a 304 carries no body');
+  // No Accept-Encoding → uncompressed HTML, still ETagged (same validator as the gzip response).
+  const plain = await httpRaw(srv.port, '/');
+  assert.strictEqual(plain.status, 200);
+  assert.ok(!plain.headers['content-encoding'], 'no gzip when the client does not accept it');
+  assert.ok(plain.headers.etag, 'the uncompressed response is still ETagged');
+  assert.match(plain.body.toString('utf8').slice(0, 200), /<!doctype html>/i, 'the uncompressed path serves the real HTML');
 });
 
 test('trakt: device link, scrobble forward, watchlist push + import', async () => {

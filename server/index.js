@@ -247,6 +247,16 @@ function streamingRuntimeProfile() {
   return { ...perf, totalConnections, usableConnections, reserveConnections };
 }
 
+// Throttle the per-Range rebalance: the stream handler fired pipeline.rebalancePlaybackWindows() on
+// EVERY byte-range request (ffmpeg's demuxer + browser players issue many), each snapshotting all
+// mounts. Read-ahead windows are advisory sizing already applied at commit + on mount lifecycle, so
+// 1s staleness is harmless — this removes redundant work from the hottest streaming path. (P14: this
+// changes only WHEN windows recompute on the stream path, never the capacity math.)
+let _lastStreamRebalance = 0;
+// Gzip buffers for compressible static assets, keyed by full path; entry invalidated on size/mtime
+// change so an edit/redeploy re-compresses. The ~1.2MB UI gzips ~3.9x smaller.
+const _staticGzipCache = new Map();
+
 // Approximate per-stream bitrate (Mbps) implied by a GB release-size cap over a typical feature
 // runtime. 1 GB ≈ 8192 Mbit; assume ~2h. e.g. a 40 GB 4K cap ≈ 45 Mbps, a 20 GB 1080p cap ≈ 23 Mbps.
 function bitrateFromSizeGb(gb, runtimeSec = 7200) {
@@ -6408,8 +6418,9 @@ Object.assign(H, {
     if (!vf) return send(ctx.res, 404, { error: 'mount not found' });
     if (!mountAccessOk(ctx, vf)) return send(ctx.res, 404, { error: 'mount not found' });
     if (!vf.streamable) return send(ctx.res, 409, { error: 'mount is not streamable', tags: vf.tags });
-    vf._touched = Date.now();
-    pipeline.rebalancePlaybackWindows();
+    const _now = Date.now();
+    vf._touched = _now;
+    if (_now - _lastStreamRebalance > 1000) { _lastStreamRebalance = _now; pipeline.rebalancePlaybackWindows(_now); }
     try {
       ctx.req.setTimeout(120000);
       ctx.res.setTimeout(120000);
@@ -7566,9 +7577,12 @@ const server = http.createServer(async (req, res) => {
     let file = p === '/' ? '/index.html' : p;
     const full = path.join(WEB_DIR, path.normalize(file).replace(/^([.][.][/\\])+/, ''));
     if (!full.startsWith(WEB_DIR)) return send(res, 403, 'forbidden');
-    if (fs.existsSync(full) && fs.statSync(full).isFile()) {
+    let sst = null;
+    try { const s = fs.statSync(full); if (s.isFile()) sst = s; } catch {}
+    if (sst) {
+      const etag = `W/"${sst.size}-${Math.round(sst.mtimeMs)}"`;
       const headers = { 'content-type': MIME[path.extname(full)] || 'application/octet-stream',
-        'x-content-type-options': 'nosniff' };
+        'x-content-type-options': 'nosniff', etag };
       // Without an explicit policy, Chrome/WebView HEURISTICALLY caches index.html — the TV
       // app then runs a stale UI for days after a deploy. Revalidate on every load (cheap on
       // LAN; the page is one file) so every client always runs the UI the server ships.
@@ -7584,7 +7598,28 @@ const server = http.createServer(async (req, res) => {
         // NOT no-referrer: YouTube refuses to authorize many embeds without an origin referrer.
         headers['referrer-policy'] = 'strict-origin-when-cross-origin';
       }
+      // Revalidation: an unchanged asset (same size+mtime) → 304 with no body, so the ~1.2MB UI costs
+      // ~0 bytes on every reload after the first (on top of gzip). no-cache keeps it always-fresh.
+      if (req.headers['if-none-match'] === etag) { res.writeHead(304, headers); return res.end(); }
+      // Gzip compressible text (html/css/js/svg/json): the 1.2MB UI is ~3.9x smaller — a real win for
+      // remote/TV clients whose download competes with NNTP. Cache the gzip buffer per file (keyed by
+      // size+mtime → auto-refresh on edit/redeploy). Binary assets (fonts/images) stream uncompressed.
+      if (res._acceptsGzip && /\.(html?|css|m?js|svg|json|xml|txt|map)$/i.test(full)) {
+        let entry = _staticGzipCache.get(full);
+        if (!entry || entry.size !== sst.size || entry.mtimeMs !== sst.mtimeMs) {
+          try { entry = { gz: zlib.gzipSync(fs.readFileSync(full)), size: sst.size, mtimeMs: sst.mtimeMs }; _staticGzipCache.set(full, entry); }
+          catch { entry = null; }
+        }
+        if (entry) {
+          headers['content-encoding'] = 'gzip';
+          headers.vary = headers.vary ? `${headers.vary}, Accept-Encoding` : 'Accept-Encoding';
+          headers['content-length'] = String(entry.gz.length);
+          res.writeHead(200, headers);
+          return res.end(req.method === 'HEAD' ? undefined : entry.gz);
+        }
+      }
       res.writeHead(200, headers);
+      if (req.method === 'HEAD') return res.end();
       const rs = fs.createReadStream(full);
       rs.on('error', () => { try { res.destroy(); } catch {} }); // file vanished mid-read → don't crash
       return rs.pipe(res);

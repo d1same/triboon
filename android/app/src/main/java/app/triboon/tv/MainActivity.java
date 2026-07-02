@@ -3862,6 +3862,11 @@ public class MainActivity extends Activity {
                         .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
                         .build(), true);
                 nativePlayer.setHandleAudioBecomingNoisy(true);
+                // Hold a network (+ partial CPU) wake lock during playback so Wi-Fi power-save on
+                // onn/Fire-class boxes can't idle the radio mid-stream — that stall is indistinguishable
+                // from usenet source rot and is a real cause of the "buffering" the owner has chased.
+                // Media3 acquires it only while playing and releases on stop/release. Needs WAKE_LOCK.
+                nativePlayer.setWakeMode(C.WAKE_MODE_NETWORK);
                 nativePlayer.addListener(new Player.Listener() {
                 @Override public void onPlayerError(PlaybackException error) {
                     String msg = nativePlaybackErrorMessage(error);

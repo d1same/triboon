@@ -4035,17 +4035,31 @@ function toast(msg) {
   toastTimer = setTimeout(() => $('toast').classList.remove('show'), 3600);
 }
 let bdFlip = false, bdCurrent = '';
+let _bdPendingUrl = null, _bdTimer = null;
 function setBackdrop(url) {
   if (!url || url === bdCurrent) return;
-  bdCurrent = url;
-  const showEl = bdFlip ? $('bdA') : $('bdB'), hideEl = bdFlip ? $('bdB') : $('bdA');
-  bdFlip = !bdFlip;
-  showEl.style.backgroundImage = `url("${url}")`;
-  requestAnimationFrame(() => { showEl.classList.add('show'); hideEl.classList.remove('show'); });
+  // Debounce ~150ms: fast D-pad/scroll fires setBackdrop on EVERY focused card, and each distinct url
+  // kicks off a w1280 TMDB image fetch that competes with NNTP bandwidth on a TV. Coalesce to the card
+  // focus settles on — the .7s crossfade makes the small delay invisible. (Credits/prefetch/prepare
+  // on focus are already debounced; the backdrop was the odd one out.)
+  _bdPendingUrl = url;
+  if (_bdTimer) return;
+  _bdTimer = setTimeout(() => {
+    _bdTimer = null;
+    const u = _bdPendingUrl; _bdPendingUrl = null;
+    if (!u || u === bdCurrent) return;
+    bdCurrent = u;
+    const showEl = bdFlip ? $('bdA') : $('bdB'), hideEl = bdFlip ? $('bdB') : $('bdA');
+    bdFlip = !bdFlip;
+    showEl.style.backgroundImage = `url("${u}")`;
+    requestAnimationFrame(() => { showEl.classList.add('show'); hideEl.classList.remove('show'); });
+  }, 150);
 }
 // Fade the backdrop out entirely — page switches must not keep the previous page's art
 // (settings/prefs stay clean ink; content pages fade their own art in as focus lands).
 function clearBackdrop() {
+  if (_bdTimer) { clearTimeout(_bdTimer); _bdTimer = null; } // a pending backdrop must not paint onto a just-cleared page
+  _bdPendingUrl = null;
   bdCurrent = null;
   $('bdA').classList.remove('show'); $('bdB').classList.remove('show');
   $('bdInfo').classList.remove('show'); // the title/overview band rides the backdrop

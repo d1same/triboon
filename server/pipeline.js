@@ -6,6 +6,10 @@
 // candidate and the client resumes at its last timestamp.
 
 const os = require('os');
+// System RAM is fixed for the process lifetime — read it ONCE at load, not per Range request. The
+// read-ahead window sizing below (_playbackWindowFor) runs on the hot streaming path, and
+// os.totalmem() was being re-read on every rebalance. ~20% is the cross-stream buffer budget.
+const TOTAL_MEM_MB = Math.floor(os.totalmem() / (1024 * 1024));
 const { fanout, fetchUrl, normTitle } = require('./newznab');
 
 // ---- title verification ----
@@ -390,7 +394,11 @@ class Pipeline {
 
   _getFreshSearchHit(key) {
     const hit = this.searchCache.get(key);
-    return hit && Date.now() - hit.at <= 60000 ? hit : null;
+    if (!(hit && Date.now() - hit.at <= 60000)) return null;
+    // LRU touch: re-insert so the eviction (delete oldest key) drops the genuinely least-recently-USED
+    // entry, not the oldest-inserted. A hot replayed title survives a burst of unrelated browses.
+    this.searchCache.delete(key); this.searchCache.set(key, hit);
+    return hit;
   }
 
   _rememberSearchHit(key, hit) {
@@ -461,7 +469,7 @@ class Pipeline {
       // 4K cap raised 384 → 1024 so a ~80 Mbps stream can actually hold ~100s. Bounded by ~20% of
       // system RAM (this totalMb is the TOTAL across active streams via the /activeCount split below),
       // so smaller self-hosted boxes stay safe — they just get a proportionally shallower buffer.
-      const ramCapMb = Math.floor((os.totalmem() / (1024 * 1024)) * 0.2);
+      const ramCapMb = Math.floor(TOTAL_MEM_MB * 0.2);
       const minMb = big ? 96 : 48;
       const maxMb = Math.max(minMb, Math.min(big ? 1024 : 384, ramCapMb));
       const totalMb = Math.max(minMb, Math.min(maxMb, targetMb));
@@ -710,7 +718,8 @@ class Pipeline {
 
   async _tryCandidateFresh(candidate, mountOpts) {
     let xml = this.nzbCache.get(candidate.nzbUrl);
-    if (xml) this.metrics.nzbCacheHits++;
+    // LRU touch: a hot NZB (fast replay / multi-user same title) survives eviction by unrelated grabs.
+    if (xml) { this.nzbCache.delete(candidate.nzbUrl); this.nzbCache.set(candidate.nzbUrl, xml); this.metrics.nzbCacheHits++; }
     else {
       const pendingNzb = this.nzbInflight.get(candidate.nzbUrl);
       if (pendingNzb) {
