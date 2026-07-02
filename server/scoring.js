@@ -16,6 +16,12 @@ const RES = [
   { key: '2160p', score: 0, rank: 4, re: /\b(4k|uhd)\b/i },
   { key: '480p', score: 0, rank: 0, re: /\bsd\b/i },
 ];
+// Resolution ladder by rank (480/576/720/1080/2160). 2160 sits a clear step (70) above 1080 — well
+// clear of a group-tier bump (≤25) or a source/codec delta — so a full resolution step is never
+// flipped by a trusted release group (the "1080p-FLUX beat a 2160p-unknown" case). It stays BELOW the
+// size-shaping clamp (−400) and the over-cap disqualifier (−100000), so a heavy 4K still loses to a
+// lean 1080p by default (press-play speed), and an explicit 1080p cap still wins — see phase2 tests.
+const RES_LADDER = [0, 30, 60, 90, 160];
 
 // Source tiers — Remux is top quality but huge; WEB-DL is the press-play sweet spot.
 const SOURCE = [
@@ -40,7 +46,9 @@ const CODEC = [
 const FEATURE = [
   { key: 'dovi', score: 18, re: /\b(dv|dolby[ .]?vision|dovi)\b/i },
   { key: 'hdr10plus', score: 14, re: /\b(hdr10\+|hdr10plus)\b/i },
-  { key: 'hdr', score: 10, re: /\b(hdr|pq|bt2020)\b/i },
+  // Plain HDR / HDR10 (the SDR-vs-HDR baseline). HDR10+ and Dolby Vision are their own richer entries
+  // above, so the (?!\+|plus) guard keeps "HDR10+" from ALSO scoring here (no double-count).
+  { key: 'hdr', score: 10, re: /\bhdr(?:10(?!\+|plus))?\b|\b(pq|bt2020)\b/i },
   { key: 'atmos', score: 14, re: /\b(atmos)\b/i },
   { key: 'truehd', score: 10, re: /\b(truehd)\b/i },
   { key: 'dts-hd', score: 9, re: /\b(dts-?hd|dts-?x|dtsma)\b/i },
@@ -52,13 +60,20 @@ const FEATURE = [
 ];
 
 // Release-group tiers (small representative list; admin-extensible in Phase 4 settings).
+// Group bonuses are a TIEBREAKER, deliberately capped BELOW a resolution step (70) and even a
+// same-res source step — a trusted group refines the pick among comparable releases but must never
+// let a 1080p-from-a-good-group outrank a 2160p (the bug this trim fixes). Admins extend/override via
+// customScoring; the re-encoder avoid-list stays strong (those genuinely signal low bitrate).
 const GROUP_TIER = [
-  { score: 50, groups: ['FLUX', 'NTb', 'TEPES', 'CtrlHD', 'EbP', 'FraMeSToR', 'HiDt', 'SMURF', 'D-Z0N3'] },
-  { score: 25, groups: ['RARBG', 'FGT', 'LEGION', 'LEGi0N', 'SPARKS', 'AMIABLE', 'GECKOS'] },
+  { score: 25, groups: ['FLUX', 'NTb', 'TEPES', 'CtrlHD', 'EbP', 'FraMeSToR', 'HiDt', 'SMURF', 'D-Z0N3'] },
+  { score: 12, groups: ['RARBG', 'FGT', 'LEGION', 'LEGi0N', 'SPARKS', 'AMIABLE', 'GECKOS'] },
   { score: -50, groups: ['YTS', 'YIFY', 'GALAXYRG', 'RMTEAM', 'MEGUSTA', 'TGX', 'AOC', 'PSA'] }, // re-encoders
 ];
 const BAD_FLAGS = [
-  { key: 'hardcoded-subs', score: -200, re: /\b(hc|korsub|hardsub)\b/i },
+  // "HC" only means hardcoded subs when it sits next to a low source token (HC.HDRip / HC.HDTC) —
+  // a bare "HC" (group fragment, unrelated token) must NOT eat a −200. korsub/hardsub/hardcoded are
+  // unambiguous on their own.
+  { key: 'hardcoded-subs', score: -200, re: /\bhc[ ._-](?:hdrip|hdtc|hdcam|hdts|cam|ts|web|webrip|bdrip|dvdrip)\b|\b(?:korsub|hardsub|hardcoded)\b/i },
   { key: 'upscaled', score: -150, re: /\b(upscal|fake4k)\b/i },
   { key: 'sample', score: -1000, re: /\bsample\b/i },
 ];
@@ -168,7 +183,7 @@ function scoreRelease(candidate, policy = {}) {
   const cap = Number.isInteger(policy.maxResolutionRank) ? policy.maxResolutionRank : 4;
   if (a.resolution === 'unknown') add('res unknown', 0);
   else if (a.resolutionRank > cap) add(`over-cap ${a.resolution}`, -100000);
-  else add(`res ${a.resolution}`, a.resolutionRank * 30); // higher allowed res preferred
+  else add(`res ${a.resolution}`, RES_LADDER[a.resolutionRank] ?? a.resolutionRank * 30); // higher allowed res preferred
   if (Number.isInteger(policy.exactResolutionRank) && a.resolutionRank !== policy.exactResolutionRank) {
     add(`not-requested-resolution ${a.resolution}`, -100000);
   }
@@ -181,7 +196,10 @@ function scoreRelease(candidate, policy = {}) {
 
   const src = matchOne(candidate.name, SOURCE); if (src) add(`source ${src.key}`, src.score);
   const cod = matchOne(candidate.name, CODEC); if (cod) add(`codec ${cod.key}`, cod.score);
-  for (const f of FEATURE) if (f.re.test(candidate.name)) add(f.key, f.score);
+  // atmos/truehd/dts-hd are scored by the device-aware passthrough block below (a +passthrough OR a
+  // −unsupported verdict). Crediting them HERE too double-counted — it diluted the unsupported penalty
+  // and inflated the passthrough bonus. Skip them in the flat loop; the passthrough block is authority.
+  for (const f of FEATURE) { if (f.key === 'atmos' || f.key === 'truehd' || f.key === 'dts-hd') continue; if (f.re.test(candidate.name)) add(f.key, f.score); }
   for (const b of BAD_FLAGS) if (b.re.test(candidate.name)) add(b.key, b.score);
   const hasTrueHd = a.features.includes('truehd');
   const hasDtsHd = a.features.includes('dts-hd');

@@ -258,6 +258,42 @@ test('scoring: press-play size shaping — sane-size 4K beats a 60GB remux even 
   assert.ok(ranked[1].score > -5000, 'remux remains pickable');
 });
 
+test('scoring: a full resolution step outranks a trusted release group (comparable size, uncapped)', () => {
+  // v2.3.1: the resolution ladder (2160 sits 70 above 1080) + the trimmed group tier (<=25) mean a
+  // 2160p from an unknown group beats a 1080p from a top group when sizes are comparable — the
+  // "picked the lower-quality file" bug. (The heavy-4K size default is a SEPARATE case, above.)
+  const ranked = rankReleases([
+    { name: 'Movie.2024.1080p.WEB-DL.DDP5.1.H.264-FLUX', sizeBytes: 8e9 },      // trusted group
+    { name: 'Movie.2024.2160p.WEB-DL.DDP5.1.HEVC-NoOneKnows', sizeBytes: 12e9 }, // unknown group, still lean
+  ], { maxResolutionRank: 4 });
+  assert.ok(ranked[0].name.includes('2160p'), 'a comparably-lean 2160p beats a 1080p from a trusted group');
+  // A trusted group can never, on its own, flip a full resolution step.
+  const score1080Trusted = scoreRelease({ name: 'Movie.2024.1080p.WEB-DL.HEVC-FLUX', sizeBytes: 8e9 }, { maxResolutionRank: 4 }).score;
+  const score2160Unknown = scoreRelease({ name: 'Movie.2024.2160p.WEB-DL.HEVC-NoOneKnows', sizeBytes: 12e9 }, { maxResolutionRank: 4 }).score;
+  assert.ok(score2160Unknown > score1080Trusted, '2160p-unknown outscores 1080p-trusted head to head');
+});
+
+test('scoring: "HC" only flags hardcoded subs next to a source token, and HDR10 gets HDR credit without double-counting HDR10+', () => {
+  const hcRip = scoreRelease({ name: 'Movie.2023.HC.HDRip.x264-JUNK' }, {}).reasons.join(' ');
+  assert.match(hcRip, /hardcoded-subs -200/, 'HC.HDRip is flagged as hardcoded subs');
+  const bareHc = scoreRelease({ name: 'Movie.2023.1080p.WEB-DL.HEVC-HC' }, {}).reasons.join(' ');
+  assert.doesNotMatch(bareHc, /hardcoded-subs/, 'a bare "HC" (group fragment) is NOT penalized');
+  const hdr10 = scoreRelease({ name: 'Movie.2024.2160p.HDR10.WEB-DL.HEVC-x', sizeBytes: 12e9 }, { maxResolutionRank: 4 }).reasons.join(' ');
+  assert.match(hdr10, /\bhdr \+10\b/, 'plain HDR10 earns the HDR credit (was missed by the old \\bhdr\\b)');
+  const hdr10plus = scoreRelease({ name: 'Movie.2024.2160p.HDR10Plus.WEB-DL.HEVC-x', sizeBytes: 12e9 }, { maxResolutionRank: 4 }).reasons.join(' ');
+  assert.match(hdr10plus, /hdr10plus/, 'HDR10+ earns the hdr10plus credit');
+  assert.doesNotMatch(hdr10plus, /\bhdr \+10\b/, 'HDR10+ does NOT also earn the plain-HDR credit (no double-count)');
+});
+
+test('scoring: unsupported lossless audio is penalized cleanly (no dilution from a flat FEATURE credit)', () => {
+  // v2.3.1: atmos/truehd/dts-hd used to be credited by the flat FEATURE loop AND re-scored by the
+  // device-aware passthrough block — diluting the unsupported penalty. The passthrough block is now
+  // the sole authority, so on a non-passthrough device the atmos reason is the full negative.
+  const r = scoreRelease({ name: 'Movie.2024.2160p.WEB-DL.DDP5.1.Atmos.HEVC-FLUX', sizeBytes: 14e9 }, { maxResolutionRank: 4 }).reasons.join(' ');
+  assert.match(r, /unsupported-atmos -45/, 'atmos on a non-passthrough device is the full -45, not diluted');
+  assert.doesNotMatch(r, /\batmos \+14\b/, 'the flat FEATURE atmos credit no longer double-counts');
+});
+
 test('scoring: Onn-class Android TV prefers lighter 4K WEB sources over huge remuxes', () => {
   const ranked = rankReleases([
     { name: 'Movie.2024.2160p.UHD.BluRay.REMUX.TrueHD.Atmos-FraMeSToR', sizeBytes: 62e9 },
