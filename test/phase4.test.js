@@ -509,8 +509,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'real section switches should clear rail mode so the destination page can own focus');
   assert.match(ui, /else if \(S\.libraryPreviewOnly\) \{[\s\S]+S\.libraryPreviewOnly = false;[\s\S]+\}[\s\S]+setTimeout\(\(\) => \{ if \(S\.view === 'library'\) focusContent\(\); \}, 80\);/,
     'pressing OK on an auto-previewed attached-library rail item should enter content without reloading the page');
-  assert.match(ui, /--bdW:min\(50vw,980px\);[\s\S]+--bdH:min\(56vh,620px\);[\s\S]+#backdrop \.layer\{[\s\S]+width:var\(--bdW\);height:var\(--bdH\)/,
-    'browser backdrop should use capped viewport-aware dimensions instead of percentage takeover');
+  assert.match(ui, /--bdW:min\(40vw,720px\);[\s\S]+--bdH:min\(46vh,480px\);[\s\S]+#backdrop \.layer\{[\s\S]+width:var\(--bdW\);height:var\(--bdH\)/,
+    'desktop-browser backdrop stays capped + viewport-aware (min(vw,px), not a percentage takeover) and is deliberately smaller than TV so posters lead');
   assert.match(ui, /--scrim:\s*linear-gradient\(90deg,rgba\(11,8,18,\.86\) 0%,rgba\(11,8,18,\.56\) 28%,rgba\(11,8,18,\.20\) 58%,rgba\(11,8,18,\.06\) 100%\),\s*linear-gradient\(0deg,rgba\(11,8,18,\.76\) 0%,rgba\(11,8,18,\.24\) 26%,rgba\(11,8,18,\.04\) 60%,rgba\(11,8,18,\.10\) 100%\)/,
     'browser backdrop scrim should protect text without blacking out the artwork');
   assert.match(ui, /body\.tv\{--bdW:min\(48vw,820px\);--bdH:min\(50vh,460px\);--overscan:2\.5vmin\}[\s\S]+body\.shortBrowseBd\{--bdH:min\(46vh,430px\)\}[\s\S]+body\.tv\.shortBrowseBd\{--bdH:min\(38vh,360px\)\}[\s\S]+@media \(max-height:760px\)\{[\s\S]+--bdH:min\(34vh,260px\)[\s\S]+@media \(max-width:980px\)\{[\s\S]+--bdW:min\(44vw,420px\)/,

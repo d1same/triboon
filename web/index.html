@@ -41,8 +41,10 @@
   --heroLeft:clamp(4px,5vw,190px); /* resolution-adaptive title indent (home hero, page heads, backdrop info) */
   --poster:168px;    /* standardized poster cover width everywhere */
   --gut:28px;        /* content gutter — tight to the rail (owner: no dead strip by the menu) */
-  --bdW:min(50vw,980px);
-  --bdH:min(56vh,620px);
+  /* Desktop BROWSER backdrop: kept smaller than TV so posters/icons lead and the art is an accent, not
+     the focus (owner: "more of the icons than backdrops"). TV (body.tv) + mobile set their own below. */
+  --bdW:min(40vw,720px);
+  --bdH:min(46vh,480px);
   --safeT:max(env(safe-area-inset-top),0px);
   --safeR:max(env(safe-area-inset-right),0px);
   --safeB:max(env(safe-area-inset-bottom),0px);
@@ -98,7 +100,7 @@ body.tv.shortBrowseBd{--bdH:min(38vh,360px)}
   body.tv.shortBrowseBd{--bdH:min(34vh,260px)}
 }
 @media (min-width:1700px) and (min-height:900px){
-  :root{--bdW:min(48vw,1040px);--bdH:min(54vh,660px)}
+  :root{--bdW:min(40vw,820px);--bdH:min(46vh,540px)}
   body.shortBrowseBd{--bdH:min(42vh,420px)}
   body.tv.shortBrowseBd{--bdH:min(36vh,360px)}
 }
