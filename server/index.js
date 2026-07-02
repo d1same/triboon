@@ -15,7 +15,7 @@ const { Auth, SecureSettings, RateLimiter } = require('./auth');
 const { Pipeline } = require('./pipeline');
 const { TmdbProxy } = require('./tmdb');
 const { Trakt } = require('./trakt');
-const { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnTranscode, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioCopyOk } = require('./transcode');
+const { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioCopyOk } = require('./transcode');
 const ytmusic = require('./ytmusic');
 const https = require('https');
 const dns = require('dns').promises;
@@ -53,6 +53,28 @@ function effectiveOpenSubsKey(s = settings.get()) {
   const configured = String((s && s.openSubsKey) || '').trim();
   if (configured) return configured;
   return String(process.env.TRIBOON_WYZIE_KEY || '').trim() || null;
+}
+
+// Google Cast receiver application id. Default = Google's Default Media Receiver (CC1AD845): no
+// registration, no HTTPS media, plays a plain tokened MP4/fMP4 URL — this is what Phase 1/3 ship,
+// so the default MUST keep everything working. The owner registers a Custom Web Receiver in the
+// Google Cast SDK Developer Console (pointed at https://<host>/cast/receiver) and drops the issued
+// app-id into Settings (or TRIBOON_CAST_APP_ID) to switch on branding/subtitle-sidecar/adaptive.
+// Both the web sender (setupCastContext) and the Android sender (CastOptionsProvider) read this id.
+const DEFAULT_CAST_RECEIVER_APP_ID = 'CC1AD845';
+function effectiveCastReceiverAppId(s = settings.get()) {
+  const configured = String((s && s.castReceiverAppId) || process.env.TRIBOON_CAST_APP_ID || '').trim().toUpperCase();
+  // Cast app-ids are 8 hex chars (custom) or the known default; ignore anything malformed and fall
+  // back to the safe default so a bad setting can never brick casting.
+  return /^[0-9A-F]{8}$/.test(configured) ? configured : DEFAULT_CAST_RECEIVER_APP_ID;
+}
+
+// HLS output variant (Cast Phase 2). Feature-flagged OFF by default so the locked
+// direct→remux→transcode ladder is unchanged unless the owner opts in (custom Cast receiver or
+// AirPlay-to-m3u8 use cases). Enable with TRIBOON_HLS=1 or settings.hlsEnabled.
+function hlsEnabled(s = settings.get()) {
+  if (String(process.env.TRIBOON_HLS || '').trim() === '1') return true;
+  return !!(s && s.hlsEnabled);
 }
 
 // OPTIONAL OpenSubtitles provider (hash-exact matching Wyzie can't do). Fully gated: returns
@@ -2964,6 +2986,51 @@ function bearer(req, url, allowQuery = false) {
   // where they leak into logs/referer/history. So a user/admin route never authenticates from ?t=.
   return allowQuery ? url.searchParams.get('t') : null;
 }
+
+// ---------- media CORS (Cast custom receiver) ----------
+// A Custom Web Receiver runs on a DIFFERENT origin (https://<host>/cast/receiver, or Google's
+// hosted receiver domain) and its Shaka/MPL player fetches adaptive/subtitle media via XHR/fetch,
+// which is a cross-origin request subject to CORS. The Default Media Receiver (CC1AD845) uses the
+// device's NATIVE loader and does NOT need this — so these headers are additive and change nothing
+// for Phase 1/3. We REFLECT the request Origin rather than send '*': the token lives in the URL
+// (?t=), there is no cookie/credential on stream routes, so a reflected origin is both correct for
+// the receiver and does not widen exposure of any credentialed surface. Applied to media routes ONLY.
+// Media routes that a Cast receiver may fetch cross-origin: the mount stream, the ffmpeg
+// remux/transcode/HLS variants, and the WebVTT subtitle endpoints (side-loaded caption tracks are
+// fetched by the receiver too and REQUIRE CORS per Google's docs). Never the API/control surface.
+const MEDIA_CORS_ROUTES = [
+  /^\/api\/stream\/\w+$/,
+  /^\/api\/remux\/\w+$/,
+  /^\/api\/transcode\/\w+$/,
+  /^\/api\/hls\/\w+(?:\/[\w.-]+)?$/,
+  /^\/api\/subtitle\/\w+\/\d+$/,
+  /^\/api\/releasesub\/\w+\/[a-z0-9_-]+$/,
+  /^\/api\/ossubs\/\w+$/,
+];
+function isMediaCorsPath(p) { return MEDIA_CORS_ROUTES.some((re) => re.test(p)); }
+// Reflect a syntactically valid Origin header only; never echo junk into a header.
+function safeOrigin(req) {
+  const o = String(req.headers.origin || '').trim();
+  if (!o || o.length > 512) return null;
+  return /^https?:\/\/[^\s/]+$/i.test(o) ? o : null;
+}
+function mediaCorsHeaders(req) {
+  const origin = safeOrigin(req);
+  const h = {
+    'access-control-allow-origin': origin || '*',
+    'access-control-allow-methods': 'GET, HEAD, OPTIONS',
+    'access-control-allow-headers': 'Range, Content-Type, Accept-Encoding',
+    'access-control-expose-headers': 'Content-Range, Content-Length, Accept-Ranges',
+    'access-control-max-age': '86400',
+  };
+  // When we echo a specific Origin the response varies by it — keep caches/CDNs honest.
+  if (origin) h.vary = 'Origin';
+  return h;
+}
+// Merge the CORS headers into a media response's header object in place (lowercased keys match
+// the rest of this file's header maps). Returns the same object for chaining.
+function withMediaCors(req, headers = {}) { return Object.assign(headers, mediaCorsHeaders(req)); }
+
 // Brute-force throttles (login / 4-digit PIN / invites / Quick Connect codes).
 const limiter = new RateLimiter();
 const clientIp = (ctx) => ctx.req.socket.remoteAddress || '?';
@@ -2988,6 +3055,18 @@ function mountAccessOk(ctx, vf) {
   if (ctx.user && ctx.user.role === 'admin') return true;
   if (ctx.claims && ctx.claims.scope === 'stream') return true;
   return !vf._ownerUid || (ctx.user && vf._ownerUid === ctx.user.id);
+}
+// Tear down one HLS session (kill its ffmpeg + delete its temp segment dir). Safe to call twice.
+function closeHlsSession(sess) {
+  if (!sess) return;
+  try { if (sess.ff) sess.ff.kill('SIGKILL'); } catch {}
+  try { if (sess.dir) fs.promises.rm(sess.dir, { recursive: true, force: true }).catch(() => {}); } catch {}
+}
+// Tear down every HLS session on a mount (called on mount eviction so temp segments don't leak).
+function closeMountHls(vf) {
+  if (!vf || !vf._hls) return;
+  for (const sess of vf._hls.values()) closeHlsSession(sess);
+  vf._hls.clear();
 }
 const USER_MOUNT_CAP = 8;
 const SESSION_TTL_MS = 12 * 3600000;
@@ -3889,7 +3968,35 @@ const H = {
     iptv: iptvConfigured(settings.get()),
     music: !!ytmusic.detectYtdlp(), // Music tab shows only when yt-dlp is present
     musicCatalog: !!ytmusic.detectYtMusicApi(),
+    // Cast receiver app-id (Default Media Receiver unless the owner registered a custom one). The
+    // web + Android senders read this to launch the right receiver; the default keeps Phase 1/3 as-is.
+    castReceiverAppId: effectiveCastReceiverAppId(),
   }),
+
+  // Custom Web Receiver page (Cast Phase 2). PUBLIC by design: the Cast DEVICE (not a signed-in
+  // browser) fetches this HTML when the sender launches the registered app-id, so it cannot carry
+  // a session token. It contains no secrets — the media token arrives in the LOAD message from the
+  // sender, not here. Served with a RELAXED CSP (the main index.html CSP forbids the gstatic CAF
+  // SDK and the Cast control channel); it stays dependency-free (one gstatic script, no npm).
+  castReceiver: async (ctx) => {
+    const file = path.join(WEB_DIR, 'cast-receiver.html');
+    let html;
+    try { html = fs.readFileSync(file, 'utf8'); }
+    catch { return send(ctx.res, 404, { error: 'cast receiver not built' }); }
+    send(ctx.res, 200, html, {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'no-cache',
+      // The CAF Receiver SDK loads from gstatic and opens a cast control channel; allow exactly that
+      // and nothing else. Media is fetched from our own origin (connect/media 'self') plus the
+      // plain-HTTP LAN media the receiver may pull, so keep media-src permissive for http/https.
+      'content-security-policy': "default-src 'self'; " +
+        "script-src 'self' 'unsafe-inline' https://www.gstatic.com; " +
+        "style-src 'self' 'unsafe-inline'; img-src 'self' https: http: data:; " +
+        "media-src 'self' https: http: blob:; connect-src 'self' https: http: wss: ws:; " +
+        "object-src 'none'; base-uri 'self'",
+      'x-content-type-options': 'nosniff',
+    });
+  },
 
   authArt: async (ctx) => {
     if (!settings.get().tmdbKey) {
@@ -5968,6 +6075,10 @@ Object.assign(H, {
       scoringGroupsTrusted: s.scoringGroupsTrusted || [],
       scoringGroupsAvoid: s.scoringGroupsAvoid || [],
       scoringKeywords: s.scoringKeywords || [],
+      // Cast receiver app-id is a PUBLIC identifier (it ships to every sender), not a secret — show
+      // the raw value so the owner can confirm/change it. Empty string = using the built-in default.
+      castReceiverAppId: (s.castReceiverAppId || '').trim() || '',
+      castReceiverAppIdEffective: effectiveCastReceiverAppId(s),
     });
   },
 
@@ -6100,6 +6211,11 @@ Object.assign(H, {
           : (s.iptvHiddenGroups || []),
         traktClientId: b.traktClientId !== undefined ? (b.traktClientId || null) : s.traktClientId,
         traktClientSecret: b.traktClientSecret !== undefined ? (b.traktClientSecret || null) : s.traktClientSecret,
+        // Cast custom-receiver app-id (8 hex chars). Empty/invalid clears it → the app falls back to
+        // the Default Media Receiver. Not a secret; validated to hex so a typo can't brick casting.
+        castReceiverAppId: b.castReceiverAppId !== undefined
+          ? (/^[0-9A-Fa-f]{8}$/.test(String(b.castReceiverAppId || '').trim()) ? String(b.castReceiverAppId).trim().toUpperCase() : '')
+          : (s.castReceiverAppId || ''),
         // Live TV user allowlist (empty = everyone) — same model as library sharing.
         iptvUsers: b.iptvUsers !== undefined
           ? (Array.isArray(b.iptvUsers) ? b.iptvUsers.map(String).slice(0, 100) : [])
@@ -6469,6 +6585,103 @@ Object.assign(H, {
     ff.stderr.on('data', (d) => { if (err.length < 8000) err += d; }); // cap: ffmpeg streams stderr for the whole playback
     ff.on('close', (codeNum) => { if (codeNum && !ctx.res.writableEnded) console.error('[transcode]', err.slice(0, 400)); ctx.res.end(); });
     ctx.req.on('close', () => ff.kill('SIGKILL'));
+  },
+
+  // HLS output variant (Cast Phase 2, feature-flagged). AirPlay prefers m3u8 and a Custom Web
+  // Receiver's Shaka/MPL player can pull it adaptively. Same source-fit copy-remux as /api/remux,
+  // but packaged as a VOD HLS playlist (fMP4 segments) written to a temp dir and served over HTTP:
+  //   GET /api/hls/<mount>            → the media playlist (segment URIs rewritten to tokened routes)
+  //   GET /api/hls/<mount>/<file>     → an init.mp4 / seg*.m4s segment from that session's dir
+  // Gated behind hlsEnabled(); when off it 404s so the default ladder is untouched. Stream-tier auth
+  // + scope + CORS are identical to the other media routes.
+  hls: async (ctx) => {
+    if (!hlsEnabled()) return send(ctx.res, 404, { error: 'HLS output is not enabled' });
+    if (!streamScopeOk(ctx, ctx.m[1])) return send(ctx.res, 401, { error: 'token not valid for this stream' });
+    const vf = mounts.get(ctx.m[1]);
+    if (!vf) return send(ctx.res, 404, { error: 'mount not found' });
+    if (!mountAccessOk(ctx, vf)) return send(ctx.res, 404, { error: 'mount not found' });
+    if (!vf.streamable) return send(ctx.res, 409, { error: 'mount is not streamable', tags: vf.tags });
+    if (!detectFfmpeg()) return send(ctx.res, 503, { error: 'ffmpeg not available on this server' });
+    vf._touched = Date.now();
+    const fsp = fs.promises;
+    const os2 = require('os');
+    const startSeconds = parseFloat(ctx.url.searchParams.get('start') || '0') || 0;
+    const audioTrack = parseInt(ctx.url.searchParams.get('audio') || '0', 10) || 0;
+    const fileReq = ctx.m[2] ? String(ctx.m[2]) : '';
+
+    // Per-mount HLS sessions, keyed by (start,audio) so a seek spins up its own window.
+    vf._hls = vf._hls || new Map();
+    const key = `${Math.floor(startSeconds)}:${audioTrack}`;
+
+    // --- segment / init request: serve the file from the session dir with Range + CORS.
+    if (fileReq) {
+      // Only ever serve the playlist/init/segment filenames this route produces — never traverse.
+      if (!/^(init\.mp4|seg\d{1,6}\.m4s|index\.m3u8)$/.test(fileReq)) {
+        return send(ctx.res, 404, { error: 'not found' });
+      }
+      const sess = vf._hls.get(key);
+      if (!sess) return send(ctx.res, 404, { error: 'no active HLS session' });
+      const full = path.join(sess.dir, fileReq);
+      if (!full.startsWith(sess.dir)) return send(ctx.res, 403, { error: 'forbidden' });
+      let stat;
+      try { stat = await fsp.stat(full); } catch { return send(ctx.res, 404, { error: 'segment not found' }); }
+      const type = fileReq.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl'
+        : (fileReq.endsWith('.mp4') ? 'video/mp4' : 'video/iso.segment');
+      const total = stat.size;
+      let start = 0, end = total, code = 200;
+      const headers = { 'content-type': type, 'accept-ranges': 'bytes', 'cache-control': 'no-store' };
+      const range = ctx.req.headers.range && /bytes=(\d*)-(\d*)/.exec(ctx.req.headers.range);
+      if (range) {
+        if (range[1] !== '') { start = parseInt(range[1], 10); if (range[2] !== '') end = parseInt(range[2], 10) + 1; }
+        else if (range[2] !== '') { start = Math.max(0, total - parseInt(range[2], 10)); }
+        if (start >= total || start >= end) return send(ctx.res, 416, '', { 'content-range': `bytes */${total}` });
+        end = Math.min(end, total); code = 206;
+        headers['content-range'] = `bytes ${start}-${end - 1}/${total}`;
+      }
+      headers['content-length'] = String(end - start);
+      ctx.res.writeHead(code, headers);
+      if (ctx.req.method === 'HEAD') return ctx.res.end();
+      const rs = fs.createReadStream(full, { start, end: end - 1 });
+      rs.on('error', () => { try { ctx.res.destroy(); } catch {} });
+      return rs.pipe(ctx.res);
+    }
+
+    // --- playlist request: (re)start ffmpeg for this window, wait for the playlist, serve it.
+    let sess = vf._hls.get(key);
+    if (!sess) {
+      const dir = await fsp.mkdtemp(path.join(os2.tmpdir(), 'triboon-hls-'));
+      const aud = vf._tracks && vf._tracks.audio && vf._tracks.audio[audioTrack];
+      const transcodeAudio = !audioCopyOk(aud, vf._caps);
+      const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.claims.uid, vf.id)}`;
+      let ff;
+      try { ff = spawnHls(selfUrl, { startSeconds, audioTrack, transcodeAudio, safeStereo: true, outDir: dir }); }
+      catch (e) { fsp.rm(dir, { recursive: true, force: true }).catch(() => {}); return send(ctx.res, 503, { error: e.message }); }
+      sess = { dir, ff, createdAt: Date.now() };
+      let err = '';
+      ff.stderr.on('data', (d) => { if (err.length < 8000) err += d; });
+      ff.on('error', (e) => { console.error('[hls spawn]', e.message); });
+      ff.on('close', (codeNum) => { if (codeNum) console.error('[hls]', err.slice(0, 400)); });
+      vf._hls.set(key, sess);
+      // Cap concurrent HLS windows per mount; kill + clean the oldest beyond the cap.
+      if (vf._hls.size > 4) {
+        const oldest = [...vf._hls.entries()].sort((a, b) => a[1].createdAt - b[1].createdAt)[0];
+        if (oldest && oldest[0] !== key) { closeHlsSession(oldest[1]); vf._hls.delete(oldest[0]); }
+      }
+    }
+    const playlistPath = path.join(sess.dir, 'index.m3u8');
+    // Wait (bounded) for ffmpeg to emit the first playlist + init segment.
+    let raw = null;
+    for (let i = 0; i < 100; i++) {
+      try { raw = await fsp.readFile(playlistPath, 'utf8'); if (/\.m4s|EXT-X-ENDLIST|#EXTINF/.test(raw)) break; } catch {}
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    if (!raw) return send(ctx.res, 504, { error: 'HLS playlist not ready' });
+    // Rewrite bare segment/init filenames to tokened, same-scope route URLs the receiver can pull.
+    const token = ctx.url.searchParams.get('t') || auth.streamToken(ctx.claims.uid, vf.id);
+    const q = `?t=${encodeURIComponent(token)}&start=${Math.floor(startSeconds)}&audio=${audioTrack}`;
+    const rewritten = raw.replace(/^(init\.mp4|seg\d+\.m4s)$/gm, (m) => `/api/hls/${vf.id}/${m}${q}`)
+      .replace(/URI="(init\.mp4)"/g, (m, f) => `URI="/api/hls/${vf.id}/${f}${q}"`);
+    send(ctx.res, 200, rewritten, { 'content-type': 'application/vnd.apple.mpegurl', 'cache-control': 'no-store' });
   },
 
   // Track listing (audio + subtitles + duration) via ffprobe — powers CC/audio menus and
@@ -7146,6 +7359,10 @@ function ensureSubtitleVtt(vf, track, uid, opts = {}) {
 // ---------- route table (deny by default; every route DECLARES auth) ----------
 const ROUTES = [
   { m: 'GET', re: /^\/api\/server$/, auth: 'public', h: H.server },
+  // Cast custom Web Receiver page — PUBLIC (the Cast device fetches it, no token). Lives outside the
+  // /api/ namespace because it's the URL the owner registers in the Cast Developer Console; the
+  // dispatcher consults ROUTES for it explicitly, and the security suite still checks its auth level.
+  { m: 'GET', re: /^\/cast\/receiver$/, auth: 'public', h: H.castReceiver },
   { m: 'GET', re: /^\/api\/auth-art$/, auth: 'public', h: H.authArt },
   { m: 'POST', re: /^\/api\/setup$/, auth: 'public', h: H.setup },
   { m: 'POST', re: /^\/api\/login$/, auth: 'public', h: H.login },
@@ -7249,6 +7466,9 @@ const ROUTES = [
   { m: 'GET', re: /^\/api\/stream\/(\w+)$/, auth: 'stream', h: H.stream },
   { m: 'GET', re: /^\/api\/remux\/(\w+)$/, auth: 'stream', h: H.remux },
   { m: 'GET', re: /^\/api\/transcode\/(\w+)$/, auth: 'stream', h: H.transcode },
+  // HLS output variant (Cast Phase 2, feature-flagged). Group 1 = mount id; group 2 = optional
+  // playlist/init/segment filename. Stream-tier auth + scope, same as remux/transcode.
+  { m: 'GET', re: /^\/api\/hls\/(\w+)(?:\/([\w.-]+))?$/, auth: 'stream', h: H.hls },
   { m: 'GET', re: /^\/api\/tracks\/(\w+)$/, auth: 'user', h: H.tracks },
   { m: 'GET', re: /^\/api\/subtitle\/(\w+)\/(\d+)$/, auth: 'stream', h: H.subtitle },
   { m: 'GET', re: /^\/api\/releasesub\/(\w+)\/([a-z0-9_-]+)$/, auth: 'stream', h: H.releasesub },
@@ -7282,10 +7502,33 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'x'}`);
   const p = url.pathname;
   try {
+    // The receiver page is a public, non-/api route the owner registers in the Cast console; route
+    // it through the same deny-by-default table (it declares auth:'public') instead of the static
+    // handler, so it gets the relaxed CSP the CAF SDK needs.
+    if (p === '/cast/receiver') {
+      const route = ROUTES.find((r) => r.m === (req.method === 'HEAD' ? 'GET' : req.method) && r.re.test(p));
+      if (route) return await route.h({ req, res, url, m: route.re.exec(p) });
+      return send(res, 404, { error: 'not found' });
+    }
     if (p.startsWith('/api/')) {
+      // CORS preflight (OPTIONS) for the media routes ONLY. A Custom Web Receiver on a different
+      // origin sends this before a Range/adaptive fetch. Answer 204 with the media CORS headers and
+      // do not touch auth (a preflight carries no token). Non-media OPTIONS falls through to 404.
+      if (req.method === 'OPTIONS' && isMediaCorsPath(p)) {
+        return send(res, 204, '', mediaCorsHeaders(req));
+      }
       const method = req.method === 'HEAD' ? 'GET' : req.method;
       const route = ROUTES.find((r) => r.m === method && r.re.test(p));
       if (!route) return send(res, 404, { error: 'not found' }); // deny by default
+      // Reflect CORS onto media responses. The handlers below call res.writeHead(code, {...}) with
+      // their own header map; setHeader here pre-seeds the CORS keys, and Node merges them (the
+      // handler's writeHead map wins on any key collision — none of the media handlers set CORS
+      // keys, so this is purely additive). Applied by PATH, so it also covers 401/404/416 media
+      // errors, which a receiver still needs to read cross-origin.
+      if (isMediaCorsPath(p)) {
+        const cors = mediaCorsHeaders(req);
+        for (const [k, v] of Object.entries(cors)) { try { res.setHeader(k, v); } catch {} }
+      }
       const ctx = { req, res, url, m: route.re.exec(p) };
 
       if (route.auth !== 'public') {
@@ -7370,7 +7613,7 @@ function sweep(now = Date.now()) {
   const protectedIds = sessionProtectedMountIds(now);
   const idle = [...mounts.values()].filter((vf) =>
     !protectedIds.has(vf.id) && now - (vf._touched || vf.mountedAt || 0) > MOUNT_IDLE_MS);
-  for (const vf of idle) { mounts.delete(vf.id); evicted.push(vf.id); }
+  for (const vf of idle) { closeMountHls(vf); mounts.delete(vf.id); evicted.push(vf.id); }
   if (mounts.size > MOUNT_CAP) {
     const removable = [...mounts.values()]
       .filter((vf) => !protectedIds.has(vf.id))
@@ -7378,6 +7621,7 @@ function sweep(now = Date.now()) {
     let overflow = mounts.size - MOUNT_CAP;
     for (const vf of removable) {
       if (overflow <= 0) break;
+      closeMountHls(vf);
       mounts.delete(vf.id);
       evicted.push(vf.id);
       overflow--;
@@ -7428,6 +7672,7 @@ function shutdown() {
   iptvWarmNextAt = 0;
   closeAllIptvLiveStreams('shutdown');
   cleanupYtCookieFiles();
+  for (const vf of mounts.values()) closeMountHls(vf); // kill HLS ffmpeg + delete temp segment dirs
   if (pool) { pool.close(); pool = null; }
   libraryDb.close();
   store.close();

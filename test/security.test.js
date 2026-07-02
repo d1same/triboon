@@ -31,6 +31,24 @@ async function runScan(libId) {
   throw new Error('scan never finished');
 }
 
+// Raw request that lets a test set an Origin header and choose any method (incl. OPTIONS) —
+// used to assert the media-route CORS contract for a Cast custom receiver.
+function httpWithHeaders(port, method, p, { origin, token, range } = {}) {
+  return new Promise((resolve, reject) => {
+    const headers = {};
+    if (origin) headers.origin = origin;
+    if (token) headers.authorization = `Bearer ${token}`;
+    if (range) headers.range = range;
+    const req = http.request({ host: '127.0.0.1', port, path: p, method, headers }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
 function legacySignedToken(auth, claims, ttlMs = 60000) {
   const payload = Buffer.from(JSON.stringify({ ...claims, exp: Date.now() + ttlMs })).toString('base64url');
   const sig = crypto.createHmac('sha256', auth.secret).update(payload).digest('base64url');
@@ -169,6 +187,7 @@ test('security: deny-by-default — every route declares auth; unknown routes 40
     ['GET', '/api/me/iptv/sources'], ['POST', '/api/me/iptv/sources'], ['PATCH', '/api/me/iptv/sources/abc'], ['DELETE', '/api/me/iptv/sources/abc'],
     ['POST', '/api/settings'], ['POST', '/api/streaming/recommend'], ['POST', '/api/invites'], ['GET', '/api/invites'],
     ['GET', '/api/users'], ['GET', '/api/libraries/local-lookup?key=tmdb:movie:1'], ['GET', '/api/stream/abc'], ['GET', '/api/remux/abc'],
+    ['GET', '/api/transcode/abc'], ['GET', '/api/hls/abc'], ['GET', '/api/hls/abc/seg00001.m4s'],
     ['GET', '/api/iptv/status'], ['POST', '/api/iptv/refresh'], ['GET', '/api/iptv/sources'], ['POST', '/api/iptv/sources'], ['PATCH', '/api/iptv/sources/abc'], ['DELETE', '/api/iptv/sources/abc'],
     ['POST', '/api/quickconnect/123456/approve'], ['GET', '/api/music/home'], ['GET', '/api/music/charts'], ['GET', '/api/music/search?q=x'], ['GET', '/api/music/radio/AAAAAAAAAAA'],
   ];
@@ -679,6 +698,14 @@ test('e2e: HTTP play pipeline — search, play, stream with token, advance 404 w
   const mid = await httpRaw(srv.port, play.json.streamUrl, { range: 'bytes=50000-59999' });
   assert.strictEqual(mid.status, 206);
   assert.ok(mid.body.equals(PAYLOAD.subarray(50000, 60000)));
+
+  // HLS output variant is FEATURE-FLAGGED off by default: an authorized request still 404s so the
+  // locked direct/remux/transcode ladder is untouched until the owner opts in (TRIBOON_HLS / setting).
+  const hlsOff = await httpRaw(srv.port, `/api/hls/${play.json.id}`, { token: admin });
+  assert.strictEqual(hlsOff.status, 404, 'HLS route is gated off by default');
+  // Media CORS still applies to the HLS route path (a Cast receiver fetches it cross-origin).
+  const hlsCors = await httpWithHeaders(srv.port, 'GET', `/api/hls/${play.json.id}`, { origin: 'https://cast.example.com', token: admin });
+  assert.strictEqual(hlsCors.headers['access-control-allow-origin'], 'https://cast.example.com', 'HLS route carries media CORS');
 
   // Stripping the token kills it; a session token does work for streams (browser case).
   const bare = play.json.streamUrl.split('?')[0];
@@ -3161,6 +3188,92 @@ test('quick connect: TV code approved from an authed phone yields a working toke
   assert.strictEqual(me.json.name, 'owner', 'TV is now the approving user');
 
   assert.strictEqual((await httpJson(srv.port, 'GET', '/api/quickconnect/000000')).json.status, 'expired');
+});
+
+test('cast CORS: media routes reflect the request Origin and expose Range headers', async () => {
+  // Phase 2 casting: a Custom Web Receiver on a different origin fetches media cross-origin, so the
+  // stream/remux/transcode/HLS/subtitle routes MUST carry CORS. The headers are applied by PATH
+  // before auth, so even a 401 (garbage token, no real mount) still carries them — that is what we
+  // assert here (we don't need a live mount to prove the CORS contract).
+  const RECEIVER = 'https://cast.example.com';
+  const mediaPaths = [
+    '/api/stream/deadbeef', '/api/remux/deadbeef', '/api/transcode/deadbeef',
+    '/api/hls/deadbeef', '/api/hls/deadbeef/index.m3u8',
+    '/api/subtitle/deadbeef/0', '/api/releasesub/deadbeef/track-1', '/api/ossubs/deadbeef',
+  ];
+  for (const p of mediaPaths) {
+    const r = await httpWithHeaders(srv.port, 'GET', p, { origin: RECEIVER });
+    assert.strictEqual(r.headers['access-control-allow-origin'], RECEIVER,
+      `media route ${p} must reflect the request Origin`);
+    assert.match(String(r.headers['access-control-expose-headers'] || ''), /Content-Range/i,
+      `media route ${p} must expose Content-Range so the receiver can seek`);
+    assert.match(String(r.headers['vary'] || ''), /Origin/i,
+      `media route ${p} must Vary on Origin when it reflects one`);
+  }
+});
+
+test('cast CORS: OPTIONS preflight is answered 204 on media routes, 404 elsewhere', async () => {
+  const RECEIVER = 'https://cast.example.com';
+  const pre = await httpWithHeaders(srv.port, 'OPTIONS', '/api/stream/deadbeef', { origin: RECEIVER });
+  assert.strictEqual(pre.status, 204, 'media OPTIONS preflight must be answered');
+  assert.strictEqual(pre.headers['access-control-allow-origin'], RECEIVER);
+  assert.match(String(pre.headers['access-control-allow-headers'] || ''), /Range/i,
+    'preflight must allow the Range request header');
+  assert.match(String(pre.headers['access-control-allow-methods'] || ''), /GET/i);
+
+  // A non-media route must NOT become CORS-enabled or answer OPTIONS (deny-by-default is intact).
+  const nonMedia = await httpWithHeaders(srv.port, 'OPTIONS', '/api/me', { origin: RECEIVER });
+  assert.strictEqual(nonMedia.status, 404, 'OPTIONS on a non-media route is not routed');
+});
+
+test('cast CORS: non-media API routes do not emit Access-Control-Allow-Origin', async () => {
+  const RECEIVER = 'https://cast.example.com';
+  // /api/server is public; /api/me needs auth. Neither is a media route → no CORS leak.
+  for (const p of ['/api/server', '/api/me', '/api/status']) {
+    const r = await httpWithHeaders(srv.port, 'GET', p, { origin: RECEIVER });
+    assert.strictEqual(r.headers['access-control-allow-origin'], undefined,
+      `non-media route ${p} must not emit CORS headers`);
+  }
+});
+
+test('cast: /cast/receiver serves a dependency-free custom Web Receiver page (public)', async () => {
+  const r = await httpJson(srv.port, 'GET', '/cast/receiver');
+  assert.strictEqual(r.status, 200, 'receiver page must be publicly reachable (no token — Cast device fetches it)');
+  assert.match(String(r.headers['content-type'] || ''), /text\/html/i);
+  // It must load the CAF Web Receiver SDK and register a LOAD interceptor, and stay dependency-free
+  // (served static asset — the SDK is the only external, from gstatic, which CSP/deny rules allow).
+  assert.match(r.raw, /caf_receiver\/v3\/cast_receiver_framework\.js/, 'receiver must load the CAF Web Receiver SDK from gstatic');
+  assert.match(r.raw, /setMessageInterceptor/, 'receiver must intercept LOAD to resolve the stream URL');
+  assert.match(r.raw, /getDeviceCapabilities|canDisplayType/, 'receiver must probe device codec caps');
+});
+
+test('cast: server config exposes the receiver app-id, defaulting to the Default Media Receiver', async () => {
+  const r = await httpJson(srv.port, 'GET', '/api/server');
+  assert.strictEqual(r.status, 200);
+  // Nothing registered yet → the safe default is Google's Default Media Receiver so Phase 1/3
+  // keep working unchanged. The owner overrides this once they register a custom app-id.
+  assert.strictEqual(r.json.castReceiverAppId, 'CC1AD845',
+    'default cast receiver app-id must be the Default Media Receiver (CC1AD845)');
+});
+
+test('cast: a valid custom receiver app-id round-trips; junk is rejected back to the default', async () => {
+  // Set a valid 8-hex custom id (as issued by the Cast Developer Console).
+  let s = await httpJson(srv.port, 'POST', '/api/settings', { castReceiverAppId: 'a1b2c3d4' }, admin);
+  assert.strictEqual(s.status, 200);
+  let srv1 = await httpJson(srv.port, 'GET', '/api/server');
+  assert.strictEqual(srv1.json.castReceiverAppId, 'A1B2C3D4', 'a valid custom app-id is served (upper-cased) to senders');
+  let get1 = await httpJson(srv.port, 'GET', '/api/settings', null, admin);
+  assert.strictEqual(get1.json.castReceiverAppId, 'A1B2C3D4', 'settings echoes the raw custom app-id (public identifier, not a secret)');
+
+  // A malformed value must be ignored and fall back to the Default Media Receiver — never brick casting.
+  await httpJson(srv.port, 'POST', '/api/settings', { castReceiverAppId: 'not-hex!!' }, admin);
+  let srv2 = await httpJson(srv.port, 'GET', '/api/server');
+  assert.strictEqual(srv2.json.castReceiverAppId, 'CC1AD845', 'a malformed app-id resets senders to the Default Media Receiver');
+
+  // Clearing it (empty string) also returns to the default.
+  await httpJson(srv.port, 'POST', '/api/settings', { castReceiverAppId: '' }, admin);
+  let srv3 = await httpJson(srv.port, 'GET', '/api/server');
+  assert.strictEqual(srv3.json.castReceiverAppId, 'CC1AD845', 'clearing the app-id returns to the Default Media Receiver');
 });
 
 test('teardown', async () => {

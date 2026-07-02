@@ -288,6 +288,43 @@ function spawnRemux(streamUrl, { startSeconds = 0, audioTrack = 0, transcodeAudi
   return spawn(ff.path, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
 }
 
+// HLS OUTPUT VARIANT (Cast Phase 2). Same source-fit philosophy as spawnRemux — video is
+// STREAM-COPIED (0 CPU) and audio is decided the same way (bit-exact copy when the client proved it
+// can decode the codec, else a cheap AAC pass). The difference is the container: a VOD HLS playlist
+// (fMP4 segments) written into `outDir`, which AirPlay prefers (m3u8 is its first-class format) and
+// which a Custom Web Receiver's Shaka/MPL player can pull adaptively. This is a SEPARATE, feature-
+// flagged path (TRIBOON_HLS); the default direct/remux/transcode ladder is untouched.
+//
+// Why files instead of a pipe: HLS is inherently multi-file (playlist + segments), so ffmpeg writes
+// to a temp dir and the /api/hls route serves the playlist + segments over HTTP Range. hls_flags
+// delete_segments keeps the on-disk footprint bounded (a rolling window) even for a long movie; the
+// route re-spawns from a seek offset when the player seeks past the retained window.
+function spawnHls(streamUrl, { startSeconds = 0, audioTrack = 0, transcodeAudio = false, safeStereo = false, outDir, playlistName = 'index.m3u8', segmentTime = 4 } = {}) {
+  const ff = detectFfmpeg();
+  if (!ff) throw new Error('ffmpeg not available');
+  if (!outDir) throw new Error('spawnHls requires an output directory');
+  const args = [
+    '-hide_banner', '-loglevel', 'error',
+    ...(startSeconds > 0 ? ['-noaccurate_seek', '-ss', String(startSeconds)] : []),
+    '-i', streamUrl,
+    '-map', '0:v:0', '-map', `0:a:${audioTrack}?`,
+    '-c:v', 'copy',                     // HLS variant: video NEVER re-encoded here (same as remux)
+    ...(transcodeAudio
+      ? ['-c:a', 'aac', '-b:a', safeStereo ? '192k' : '384k', '-ac', safeStereo ? '2' : '6']
+      : ['-c:a', 'copy']),
+    '-f', 'hls',
+    '-hls_time', String(segmentTime),
+    '-hls_list_size', '10',                                 // rolling window; bounds disk use
+    '-hls_flags', 'delete_segments+independent_segments+temp_file',
+    '-hls_segment_type', 'fmp4',                            // fMP4 segments (AirPlay + CAF friendly)
+    '-hls_fmp4_init_filename', 'init.mp4',
+    '-hls_segment_filename', `${outDir.replace(/\\/g, '/')}/seg%05d.m4s`,
+    '-start_number', '0',
+    `${outDir.replace(/\\/g, '/')}/${playlistName}`,
+  ];
+  return spawn(ff.path, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+}
+
 // Live IPTV ingest (HLS / raw MPEG-TS over HTTP) → fragmented MP4 the browser can play.
 // Differs from file remux on three points learned from real providers:
 //  - a browser-like User-Agent (providers block ffmpeg's default "Lavf"),
@@ -425,4 +462,4 @@ function spawnSubSync(refPath, inPath, outPath) {
     { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env });
 }
 
-module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnTranscode, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, supportsFfmpegHttpOption };
+module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, supportsFfmpegHttpOption };

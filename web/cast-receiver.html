@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Triboon Cast Receiver</title>
+<!--
+  Triboon Custom Web Receiver (Cast Phase 2).
+
+  This is a DEPENDENCY-FREE static page (one external script, Google's CAF Web Receiver SDK from
+  gstatic — allowed; no npm, no bundler). Triboon serves it at GET /cast/receiver. It only runs
+  when the owner has registered a Custom Web Receiver in the Google Cast SDK Developer Console and
+  pointed the app-id at https://<host>/cast/receiver, then set that app-id in Settings (or
+  TRIBOON_CAST_APP_ID). Until then the app ships the Default Media Receiver (CC1AD845) and this page
+  is never launched — Phase 1/3 are unaffected.
+
+  Design notes:
+  - Receiver PULLS media. The sender sends a compact LOAD { contentId | itemId, token, ... }; we
+    build the real stream URL here and hand it to the CAF PlayerManager, which uses Shaka/MPL to
+    fetch it (Range for seek). Because the fetch is cross-origin, Triboon emits CORS on its media
+    routes (server/index.js mediaCorsHeaders) — that is the companion server change to this file.
+  - Device codec caps: canDisplayType()/getDeviceCapabilities() let the sender pick a direct-play
+    variant; we also surface a hint the sender can read back.
+  - Long sessions: a movie can outlive a stream token's TTL. On a media fetch that returns 401 we
+    ask the sender (via a custom namespace message) for a fresh token and retry.
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #0b0b10; color: #f4f4f8;
+    font-family: 'Albert Sans', system-ui, -apple-system, Segoe UI, Roboto, sans-serif; overflow: hidden; }
+  #splash { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: 18px; transition: opacity .4s ease; }
+  #splash.hidden { opacity: 0; pointer-events: none; }
+  .mark { font-family: 'Sora', system-ui, sans-serif; font-weight: 700; font-size: 44px; letter-spacing: .04em;
+    background: linear-gradient(90deg, #ff3d9a, #ff7a4d); -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent; }
+  .sub { color: #9a9aad; font-size: 15px; }
+  cast-media-player { --splash-image: none; }
+</style>
+</head>
+<body>
+  <!-- CAF renders playback into this element. -->
+  <cast-media-player></cast-media-player>
+
+  <div id="splash">
+    <div class="mark">TRIBOON</div>
+    <div class="sub" id="splashMsg">Ready to cast</div>
+  </div>
+
+  <!-- CAF Web Receiver SDK (protocol-relative gstatic, per Google's docs). Dependency-free. -->
+  <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+  <script>
+  (function () {
+    'use strict';
+    // Custom message namespace the sender + receiver use to negotiate fresh tokens on long plays.
+    var NS = 'urn:x-cast:app.triboon.cast';
+
+    if (!window.cast || !cast.framework) {
+      // SDK failed to load (offline dev, blocked gstatic). Nothing to do — the sender will time out.
+      return;
+    }
+
+    var context = cast.framework.CastReceiverContext.getInstance();
+    var playerManager = context.getPlayerManager();
+    var splash = document.getElementById('splash');
+    var splashMsg = document.getElementById('splashMsg');
+    function hideSplash() { if (splash) splash.classList.add('hidden'); }
+    function setSplash(t) { if (splashMsg) splashMsg.textContent = t; }
+
+    // --- last-known sender request, so a 401 mid-movie can ask for a fresh token & rebuild the URL.
+    var lastRequest = null;
+
+    // Build the absolute media URL Triboon should stream. The sender may send either a fully-formed
+    // contentUrl/contentId (simplest — Phase 1 style), or a compact { itemId, token, kind } that we
+    // expand against this receiver page's own origin (which IS the Triboon host, since the owner
+    // registered https://<host>/cast/receiver). We never invent hosts — device-reachability is the
+    // sender's responsibility.
+    function resolveContentUrl(media, custom) {
+      custom = custom || {};
+      // 1) Explicit URL wins (Default-Receiver-compatible senders already send this).
+      var explicit = media && (media.contentUrl || media.contentId);
+      if (explicit && /^https?:\/\//i.test(explicit)) return applyToken(explicit, custom.token);
+      // 2) Compact form: build /api/<kind>/<itemId>?t=<token> against our origin.
+      var itemId = custom.itemId || (media && media.entity) || explicit;
+      if (!itemId) return null;
+      var kind = (custom.kind || 'stream').replace(/[^a-z]/gi, '') || 'stream';
+      var base = location.origin + '/api/' + kind + '/' + encodeURIComponent(itemId);
+      var extra = [];
+      if (custom.token) extra.push('t=' + encodeURIComponent(custom.token));
+      if (custom.start) extra.push('start=' + encodeURIComponent(custom.start));
+      if (custom.audio != null) extra.push('audio=' + encodeURIComponent(custom.audio));
+      if (custom.height) extra.push('height=' + encodeURIComponent(custom.height));
+      return base + (extra.length ? ('?' + extra.join('&')) : '');
+    }
+
+    function applyToken(url, token) {
+      if (!token) return url;
+      try {
+        var u = new URL(url);
+        if (!u.searchParams.get('t')) u.searchParams.set('t', token);
+        return u.toString();
+      } catch (e) { return url; }
+    }
+
+    // Device codec capability probe → the sender can serve the highest direct-play variant.
+    function deviceCaps() {
+      var caps = {};
+      try {
+        var dc = context.getDeviceCapabilities() || {};
+        caps.hdr = !!dc[cast.framework.system.DeviceCapabilities.IS_HDR_SUPPORTED];
+        caps.dolbyVision = !!dc[cast.framework.system.DeviceCapabilities.IS_DV_SUPPORTED];
+      } catch (e) {}
+      try {
+        caps.h264_1080 = context.canDisplayType('video/mp4', 'avc1.640028');
+        caps.hevc_4k = context.canDisplayType('video/mp4', 'hev1.1.6.L153.B0', 3840, 2160, 60);
+        caps.vp9_4k = context.canDisplayType('video/webm', 'vp09.00.51.08', 3840, 2160, 60);
+        caps.hls = true; // CAF plays HLS natively via MPL/Shaka
+      } catch (e) {}
+      return caps;
+    }
+
+    // Attach any subtitle tracks the sender declared (side-loaded VTT — CORS-enabled on the server).
+    // The sender is expected to include tracks[] in the LOAD MediaInformation the standard way; we
+    // only ensure the token rides along on each track URL when the sender passed a shared token.
+    function tokenizeTracks(media, token) {
+      if (!media || !Array.isArray(media.tracks) || !token) return;
+      media.tracks.forEach(function (tr) {
+        if (tr && tr.trackContentId) tr.trackContentId = applyToken(tr.trackContentId, token);
+      });
+    }
+
+    // The core Phase-2 hook: rewrite the incoming LOAD so contentUrl points at the resolved,
+    // tokenized Triboon stream, keep captions, and remember it for token refresh.
+    playerManager.setMessageInterceptor(
+      cast.framework.messages.MessageType.LOAD,
+      function (request) {
+        try {
+          var media = request.media || {};
+          var custom = request.customData || media.customData || {};
+          var url = resolveContentUrl(media, custom);
+          if (url) {
+            media.contentUrl = url;
+            if (!media.contentType) media.contentType = /\.m3u8(\?|$)/i.test(url) ? 'application/vnd.apple.mpegurl' : 'video/mp4';
+            media.streamType = media.streamType || cast.framework.messages.StreamType.BUFFERED;
+          }
+          tokenizeTracks(media, custom.token);
+          request.media = media;
+          lastRequest = { custom: custom, media: media };
+          hideSplash();
+        } catch (e) {
+          setSplash('Could not start this title');
+        }
+        return request;
+      }
+    );
+
+    // Long-session token refresh: if a media segment fetch 401s (token expired mid-movie), ask the
+    // sender for a fresh token over our custom namespace, then reload from the current position.
+    context.addCustomMessageListener(NS, function (event) {
+      var data = (event && event.data) || {};
+      if (data.type === 'token' && data.token && lastRequest) {
+        lastRequest.custom.token = data.token;
+        var pos = 0;
+        try { pos = playerManager.getCurrentTimeSec() || 0; } catch (e) {}
+        var url = resolveContentUrl(lastRequest.media, lastRequest.custom);
+        if (url) {
+          var media = Object.assign({}, lastRequest.media, { contentUrl: url });
+          var lr = new cast.framework.messages.LoadRequestData();
+          lr.media = media;
+          lr.currentTime = pos;
+          lr.autoplay = true;
+          playerManager.load(lr).catch(function () {});
+        }
+      }
+    });
+
+    // Surface device caps to any sender that pings us (best effort; ignored by simple senders).
+    context.addCustomMessageListener(NS, function (event) {
+      var data = (event && event.data) || {};
+      if (data.type === 'caps?') {
+        try {
+          var sess = context.getSenders && context.getSenders()[0];
+          context.sendCustomMessage(NS, sess && sess.id, { type: 'caps', caps: deviceCaps() });
+        } catch (e) {}
+      }
+    });
+
+    // Detect a media 401 → prompt the sender to refresh the token (single retry per stall).
+    playerManager.addEventListener(cast.framework.events.EventType.ERROR, function (e) {
+      var detail = e && e.detailedErrorCode;
+      // NETWORK/LOAD errors cover an HTTP 401 from an expired stream token.
+      var netCodes = [cast.framework.events.DetailedErrorCode.LOAD_FAILED,
+        cast.framework.events.DetailedErrorCode.NETWORK_UNKNOWN,
+        cast.framework.events.DetailedErrorCode.SEGMENT_NETWORK,
+        cast.framework.events.DetailedErrorCode.MANIFEST_UNKNOWN];
+      if (netCodes.indexOf(detail) >= 0 && lastRequest) {
+        try { context.sendCustomMessage(NS, undefined, { type: 'token?', itemId: lastRequest.custom.itemId }); } catch (err) {}
+        setSplash('Reconnecting…');
+      }
+    });
+
+    // Start the receiver. maxInactivity keeps the session alive across pauses on a long movie.
+    var options = new cast.framework.CastReceiverOptions();
+    options.customNamespaces = {};
+    options.customNamespaces[NS] = cast.framework.system.MessageType.JSON;
+    options.maxInactivity = 6 * 60 * 60; // 6h — a movie/binge must not idle-close the session
+    context.start(options);
+  })();
+  </script>
+</body>
+</html>

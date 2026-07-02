@@ -1206,6 +1206,24 @@ public class MainActivity extends Activity {
                 return 4; // v4: native live EPG strip + Go-live; v3: in-app self-update; v2: Up Next card
             }
 
+            // Cast Phase 2: the web UI relays the server's configured custom-receiver app-id here so
+            // the native Cast sender (CastOptionsProvider) launches the right receiver. Persisted to
+            // SharedPreferences; validated to 8 hex chars (empty clears it -> Default Media Receiver).
+            // The Cast SDK reads the app-id once at process start, so a change takes effect on next
+            // launch — until then the previous/default receiver is used, which is always safe.
+            @android.webkit.JavascriptInterface
+            public void setCastReceiverAppId(String id) {
+                if (!trustedBridgeOrigin()) return;
+                String v = (id == null) ? "" : id.trim().toUpperCase();
+                if (!v.matches("[0-9A-F]{8}")) v = ""; // empty = fall back to Default Media Receiver
+                try {
+                    SharedPreferences p = prefs();
+                    if (!v.equals(p.getString("castReceiverAppId", ""))) {
+                        p.edit().putString("castReceiverAppId", v).apply();
+                    }
+                } catch (Exception ignored) {}
+            }
+
             @android.webkit.JavascriptInterface
             public void setLiveEpg(String json) {
                 if (!trustedBridgeOrigin()) return;

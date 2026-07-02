@@ -12,7 +12,7 @@ const path = require('path');
 const http = require('http');
 const zlib = require('zlib');
 const { spawnSync } = require('child_process');
-const { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnLiveRemux, spawnTranscode, spawnSubtitleExtract, supportsFfmpegHttpOption } = require('../server/transcode');
+const { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnHls, spawnLiveRemux, spawnTranscode, spawnSubtitleExtract, supportsFfmpegHttpOption } = require('../server/transcode');
 
 const HAS_FFMPEG = !!detectFfmpeg();
 const HAS_FFPROBE = !!detectFfprobe();
@@ -578,8 +578,12 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Cast + AirPlay buttons are in the D-pad control order');
   assert.match(ui, /function castEligible\(\) \{ try \{ return !canUseNativeVideoPlayer\(\); \}/,
     'web casting is suppressed on the Android native-ExoPlayer path (no double-play)');
-  assert.match(ui, /receiverApplicationId: chrome\.cast\.media\.DEFAULT_MEDIA_RECEIVER_APP_ID/,
-    'Phase 1 uses the Default Media Receiver (no registration, no HTTPS media)');
+  // Phase 2: the receiver app-id is CONFIGURABLE but still DEFAULTS to the Default Media Receiver so
+  // Phase 1 behavior is unchanged until the owner registers a custom receiver.
+  assert.match(ui, /receiverApplicationId: castReceiverAppId\(\)/,
+    'the web sender launches the configured receiver app-id');
+  assert.match(ui, /function castReceiverAppId\(\) \{[\s\S]+S\.serverInfo && S\.serverInfo\.castReceiverAppId[\s\S]+DEFAULT_MEDIA_RECEIVER_APP_ID\) \|\| 'CC1AD845'[\s\S]+\/\^\[0-9A-F\]\{8\}\$\/\.test\(id\) \? id : dflt/,
+    'the receiver app-id defaults to the Default Media Receiver (CC1AD845) when none is configured');
   assert.match(ui, /if \(p && p\.castingActive\) return p\.castPos \|\| 0;/,
     'while casting, currentTime() reads the receiver clock so watch + Trakt heartbeats keep counting (one reporter)');
   assert.match(ui, /function castVodEligible\(\) \{ const p = S\.playing; return !!\(p && p\.item && p\.item\.type !== 'live'\); \}/,
@@ -741,8 +745,14 @@ test('casting Phase 3: native Android Cast sender is wired (cast from the app)',
   // Build wiring: Cast SDK deps + reflectively-loaded OptionsProvider (Default Media Receiver).
   assert.match(gradle, /play-services-cast-framework/, 'the app depends on the Google Cast sender SDK');
   assert.match(gradle, /androidx\.mediarouter:mediarouter/, 'mediarouter provides the Cast route picker');
-  assert.match(provider, /setReceiverApplicationId\(CastMediaControlIntent\.DEFAULT_MEDIA_RECEIVER_APPLICATION_ID\)/,
-    'Phase 3 uses the Default Media Receiver (matches Phase 1, no registration/HTTPS media)');
+  // Phase 2: the Android sender reads a configurable app-id from SharedPreferences but FALLS BACK to
+  // the Default Media Receiver (matches Phase 1/3, no registration/HTTPS media) when none is set.
+  assert.match(provider, /setReceiverApplicationId\(receiverAppId\(context\)\)/,
+    'the Android sender launches the configured receiver app-id');
+  assert.match(provider, /private static String receiverAppId\(Context context\) \{[\s\S]+getSharedPreferences\(PREFS[\s\S]+matches\("\[0-9A-F\]\{8\}"\)[\s\S]+return CastMediaControlIntent\.DEFAULT_MEDIA_RECEIVER_APPLICATION_ID/,
+    'the Android receiver app-id defaults to the Default Media Receiver when no valid custom id is stored');
+  assert.match(main, /public void setCastReceiverAppId\(String id\)/,
+    'a bridge method lets the web UI persist the configured cast receiver app-id for the native sender');
   assert.match(manifest, /OPTIONS_PROVIDER_CLASS_NAME[\s\S]+app\.triboon\.tv\.CastOptionsProvider/,
     'the manifest registers the Cast OptionsProvider');
   // Bridge: the web player routes cast intent/controls to native; native never double-plays.
@@ -3578,6 +3588,34 @@ test('remux: ffmpeg copies streams from our HTTP stream into fragmented MP4', { 
   const code = await new Promise((r) => ff.on('close', r));
   // We only assert the binary launches and exits — full mux is exercised in the Docker run.
   assert.ok(code !== null || errored, 'ffmpeg process lifecycle works');
+});
+
+test('hls variant: spawnHls copies video, emits fMP4 HLS, and refuses without an output dir', () => {
+  // Static contract (no ffmpeg needed): the HLS variant reuses the source-fit copy-remux — video is
+  // stream-copied (0 CPU) — and produces a VOD fMP4 HLS playlist. It must never guess an output dir.
+  const transcode = fs.readFileSync(path.join(__dirname, '..', 'server', 'transcode.js'), 'utf8');
+  assert.match(transcode, /function spawnHls\(streamUrl, \{[^}]*outDir[^}]*\} = \{\}\) \{[\s\S]+'-c:v', 'copy'[\s\S]+'-f', 'hls'[\s\S]+'-hls_segment_type', 'fmp4'/,
+    'spawnHls must copy video and emit fMP4 HLS segments (AirPlay/CAF friendly)');
+  assert.match(transcode, /spawnHls[\s\S]+if \(!outDir\) throw new Error\('spawnHls requires an output directory'\)/,
+    'spawnHls must refuse to run without an explicit output directory (no path guessing)');
+  // The server route must be feature-flagged so the default direct/remux/transcode ladder is intact.
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(server, /function hlsEnabled\(s = settings\.get\(\)\) \{[\s\S]+TRIBOON_HLS[\s\S]+s\.hlsEnabled/,
+    'HLS output must be gated behind an opt-in flag (env or setting)');
+  assert.match(server, /hls: async \(ctx\) => \{[\s\S]+if \(!hlsEnabled\(\)\) return send\(ctx\.res, 404/,
+    'the HLS route must 404 when the feature flag is off');
+  assert.ok(server.includes("re: /^\\/api\\/hls\\/(\\w+)(?:\\/([\\w.-]+))?$/, auth: 'stream'"),
+    'the HLS route must be declared in ROUTES at stream-tier auth');
+});
+
+test('hls variant: ffmpeg process lifecycle works and cleans up its temp dir', { skip: !HAS_FFMPEG }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-hls-test-'));
+  const ff = spawnHls('anullsrc', { startSeconds: 0, outDir: dir }); // invalid input → ffmpeg errors fast
+  let errored = false;
+  ff.on('error', () => { errored = true; });
+  const code = await new Promise((r) => ff.on('close', r));
+  assert.ok(code !== null || errored, 'HLS ffmpeg process lifecycle works');
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('remux audio decision: DDP/AC3/DTS re-encode, browser-safe codecs copy, unknown is safe', () => {
