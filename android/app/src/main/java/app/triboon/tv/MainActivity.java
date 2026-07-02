@@ -310,6 +310,9 @@ public class MainActivity extends Activity {
     private boolean castUnavailable;   // Play Services / SDK missing → never retry, keep the button hidden
     private boolean castHasDevices;    // a Cast route is discoverable right now (updated by castStateListener)
     private String castPendingJson;    // stream intent held until the picked session connects
+    private androidx.mediarouter.media.MediaRouter mediaRouter;
+    private androidx.mediarouter.media.MediaRouter.Callback castRouteCallback;
+    private boolean castDiscovering;   // a foreground MediaRouter discovery scan is active
     private final Handler nativeProgress = new Handler(Looper.getMainLooper());
     private final Runnable nativeSubtitleTick = new Runnable() {
         @Override public void run() {
@@ -413,8 +416,9 @@ public class MainActivity extends Activity {
             web.onResume();
             web.resumeTimers();
         }
-        // Lazily bring up Google Cast (guarded on Play Services; a no-op on degoogled/Fire boxes).
-        try { castCtx(); } catch (Throwable ignored) {}
+        // Lazily bring up Google Cast (guarded on Play Services; a no-op on degoogled/Fire boxes),
+        // then start foreground device discovery so the cast button reflects real device availability.
+        try { castCtx(); startCastDiscovery(); } catch (Throwable ignored) {}
         scheduleTvFocusRecovery("resume");
         // Returned from granting "install unknown apps"? Continue the update the user already started,
         // so they never have to press Update a second time.
@@ -6639,6 +6643,36 @@ public class MainActivity extends Activity {
         try { if (castSessionListener != null) castContext.getSessionManager().removeSessionManagerListener(
                 castSessionListener, com.google.android.gms.cast.framework.CastSession.class); } catch (Throwable ignored) {}
     }
+    // The route selector, taken from CastContext's MERGED selector so it always matches the id
+    // CastOptionsProvider actually registered — including a custom receiver id — instead of the
+    // hardcoded Default Media Receiver (which would filter out a custom receiver's routes).
+    private androidx.mediarouter.media.MediaRouteSelector castRouteSelector() {
+        try { if (castContext != null) { androidx.mediarouter.media.MediaRouteSelector s = castContext.getMergedSelector(); if (s != null) return s; } } catch (Throwable ignored) {}
+        return new androidx.mediarouter.media.MediaRouteSelector.Builder()
+                .addControlCategory(com.google.android.gms.cast.CastMediaControlIntent.categoryForCast(
+                        com.google.android.gms.cast.CastMediaControlIntent.DEFAULT_MEDIA_RECEIVER_APPLICATION_ID))
+                .build();
+    }
+    // Passive foreground discovery. CAF does NOT keep an active scan running, so getCastState()/the
+    // CastStateListener sit at NO_DEVICES_AVAILABLE — and the cast button stays hidden — unless a
+    // MediaRouter discovery callback is registered (there is no MediaRouteButton to do it for us).
+    // REQUEST_DISCOVERY (not the battery-heavy PERFORM_ACTIVE_SCAN — the chooser dialog does the
+    // active scan itself on tap). Main-thread only; paired with stopCastDiscovery on pause/destroy.
+    private void startCastDiscovery() {
+        if (castContext == null || castDiscovering) return;
+        try {
+            if (mediaRouter == null) mediaRouter = androidx.mediarouter.media.MediaRouter.getInstance(this);
+            if (castRouteCallback == null) castRouteCallback = new androidx.mediarouter.media.MediaRouter.Callback() {};
+            mediaRouter.addCallback(castRouteSelector(), castRouteCallback,
+                    androidx.mediarouter.media.MediaRouter.CALLBACK_FLAG_REQUEST_DISCOVERY);
+            castDiscovering = true;
+        } catch (Throwable t) { Log.w(TAG, "Cast discovery start failed: " + nativeThrowableMessage(t)); }
+    }
+    private void stopCastDiscovery() {
+        if (!castDiscovering || mediaRouter == null || castRouteCallback == null) return;
+        try { mediaRouter.removeCallback(castRouteCallback); } catch (Throwable ignored) {}
+        castDiscovering = false;
+    }
     private com.google.android.gms.cast.framework.CastSession currentCastSession() {
         try { return castContext == null ? null : castContext.getSessionManager().getCurrentCastSession(); }
         catch (Throwable t) { return null; }
@@ -6680,10 +6714,7 @@ public class MainActivity extends Activity {
                     this, androidx.appcompat.R.style.Theme_AppCompat_DayNight_Dialog);
             androidx.mediarouter.app.MediaRouteChooserDialog dialog =
                     new androidx.mediarouter.app.MediaRouteChooserDialog(ctw);
-            dialog.setRouteSelector(new androidx.mediarouter.media.MediaRouteSelector.Builder()
-                    .addControlCategory(com.google.android.gms.cast.CastMediaControlIntent.categoryForCast(
-                            com.google.android.gms.cast.CastMediaControlIntent.DEFAULT_MEDIA_RECEIVER_APPLICATION_ID))
-                    .build());
+            dialog.setRouteSelector(castRouteSelector());
             dialog.show();
         } catch (Throwable t) {
             Log.w(TAG, "Cast picker failed: " + nativeThrowableMessage(t));
@@ -7311,6 +7342,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
+        stopCastDiscovery(); // foreground-only scan; a live cast SESSION is intentionally left running
         boolean inPip = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInPictureInPictureMode();
         if (nativePlayer != null && !inPip) nativePlayer.pause();
         if (web != null) {
@@ -7382,6 +7414,7 @@ public class MainActivity extends Activity {
         setPhonePlaybackOrientation(false);
         // Detach Cast listeners so the framework doesn't hold this Activity (do NOT end the session —
         // the user expects the TV to keep playing after leaving the app).
+        stopCastDiscovery();
         detachCastMediaListeners();
         removeCastListeners();
         disposeWebView(web, false);

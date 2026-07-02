@@ -766,6 +766,14 @@ test('casting Phase 3: native Android Cast sender is wired (cast from the app)',
   assert.match(main, /window\.__tvCast && window\.__tvCast\(/, 'native pushes cast state to the web via __tvCast');
   assert.match(main, /boolean show = castHasDevices && !castActive\(\) && "video"\.equals\(nativeMode\)/,
     'the native Cast button shows only for VOD when a device is available and not already casting');
+  // castHasDevices is only accurate while a MediaRouter discovery scan runs — CAF does not keep one
+  // alive on its own and there is no MediaRouteButton, so without this the button never appears.
+  assert.match(main, /mediaRouter\.addCallback\(castRouteSelector\(\), castRouteCallback,\s*\n?\s*androidx\.mediarouter\.media\.MediaRouter\.CALLBACK_FLAG_REQUEST_DISCOVERY\)/,
+    'foreground MediaRouter discovery is started so castHasDevices reflects real device availability');
+  assert.match(main, /try \{ castCtx\(\); startCastDiscovery\(\); \}/, 'discovery starts on resume');
+  assert.match(main, /stopCastDiscovery\(\); \/\/ foreground-only scan/, 'discovery stops on pause (foreground-only, session left running)');
+  assert.match(main, /castContext\.getMergedSelector\(\)/,
+    'the route selector uses CastContext.getMergedSelector so it matches the configured (possibly custom) receiver id');
   assert.match(main, /nativeAudioBtn, nativeCastBtn, nativeQualityBtn/, 'the native Cast button is in the D-pad control order');
   assert.match(main, /detachCastMediaListeners\(\);\s*\n\s*removeCastListeners\(\);/,
     'Cast listeners are detached on destroy (framework must not hold the Activity; session is NOT ended)');
