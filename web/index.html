@@ -8940,7 +8940,7 @@ async function openPlayer(it, mount, opts = {}) {
   const knownDuration = Math.max(0, Number(it.duration || (watchRow && watchRow.duration) || 0) || 0);
   S.playing = {
     sessionId: mount.sessionId, streamUrl: mount.streamUrl, remuxUrl: mount.remuxUrl,
-    transcodeUrl: mount.transcodeUrl, encoder: mount.encoder,
+    transcodeUrl: mount.transcodeUrl, hlsUrl: mount.hlsUrl, encoder: mount.encoder,
     tracksUrl: mount.tracksUrl, subtitleBase: mount.subtitleBase, streamToken: mount.streamToken,
     item: it, name: sourceName, fileName: mount.name, sourceAttributes: mount.candidate && mount.candidate.attributes,
     size: mount.size || (mount.candidate && mount.candidate.sizeBytes) || 0,
@@ -9110,7 +9110,10 @@ function startSource(kind, atSeconds, opts = {}) {
   } else if (kind === 'transcode') {
     v.src = `${p.transcodeUrl}&start=${seekStart}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}`;
   } else if (kind === 'remux') {
-    v.src = remuxPlaybackUrl(p, seekStart);
+    // iOS Safari can't consume the 200-streamed remux pipe (no byte-range) → deliver the SAME copy-remux
+    // as native HLS instead, which Safari plays. Every other browser keeps the direct fMP4 remux. Seeks
+    // re-enter here (usingRemux stays true) so they re-spawn the HLS window at the new offset.
+    v.src = (iosWebkitVideo() && p.hlsUrl) ? hlsPlaybackUrl(p, seekStart) : remuxPlaybackUrl(p, seekStart);
   } else {
     v.src = p.streamUrl;
   }
@@ -9450,6 +9453,14 @@ function remuxPlaybackUrl(p, seekStart = 0, opts = {}) {
   // instead of a needless stereo downmix on a capable TV/AVR.
   const safe = (p && p.forceAacRemux && !opts.native) ? '&audioSafe=1' : '';
   return `${p.remuxUrl}&start=${Math.max(0, Math.floor(seekStart || 0))}&audio=${audio}${safe}`;
+}
+// iOS Safari <video> plays HLS natively (application/vnd.apple.mpegurl); each fMP4 segment is a rangeable
+// file, which is what Safari demands and what the 200-streamed remux/transcode pipe can't provide. Always
+// audioSafe=1 (stereo AAC — Safari can't decode AC3/EAC3 in a local <video>, even inside HLS). start=
+// re-spawns the segment window at the seek offset, so the player's normal server-seek path works here too.
+function hlsPlaybackUrl(p, seekStart = 0) {
+  const audio = p && Number.isFinite(Number(p.audioTrack)) ? Number(p.audioTrack) : 0;
+  return `${p.hlsUrl}&start=${Math.max(0, Math.floor(seekStart || 0))}&audio=${audio}&audioSafe=1`;
 }
 function selectedPlayerAudioTrack(p) {
   const audio = p && p.tracks && Array.isArray(p.tracks.audio) ? p.tracks.audio : [];

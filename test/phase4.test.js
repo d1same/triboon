@@ -3621,14 +3621,27 @@ test('hls variant: spawnHls copies video, emits fMP4 HLS, and refuses without an
     'spawnHls must copy video and emit fMP4 HLS segments (AirPlay/CAF friendly)');
   assert.match(transcode, /spawnHls[\s\S]+if \(!outDir\) throw new Error\('spawnHls requires an output directory'\)/,
     'spawnHls must refuse to run without an explicit output directory (no path guessing)');
-  // The server route must be feature-flagged so the default direct/remux/transcode ladder is intact.
   const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
-  assert.match(server, /function hlsEnabled\(s = settings\.get\(\)\) \{[\s\S]+TRIBOON_HLS[\s\S]+s\.hlsEnabled/,
-    'HLS output must be gated behind an opt-in flag (env or setting)');
-  assert.match(server, /hls: async \(ctx\) => \{[\s\S]+if \(!hlsEnabled\(\)\) return send\(ctx\.res, 404/,
-    'the HLS route must 404 when the feature flag is off');
+  // HLS is now a FIRST-CLASS stream-authed output (the iOS Safari playback path) — no longer gated behind
+  // the opt-in flag. It stays stream-tier authed + capped + temp-cleaned; the default ladder is untouched
+  // for non-iOS because only iosWebkitVideo() clients ever request hlsUrl.
+  assert.doesNotMatch(server, /hls: async \(ctx\) => \{\s*\n\s*if \(!hlsEnabled\(\)\) return send\(ctx\.res, 404/,
+    'the HLS route must NOT be gated off by the feature flag — iOS Safari depends on it');
+  assert.match(server, /hls: async \(ctx\) => \{[\s\S]+if \(!streamScopeOk\(ctx, ctx\.m\[1\]\)\) return send\(ctx\.res, 401/,
+    'the HLS route stays stream-tier authed (deny-by-default preserved)');
+  assert.match(server, /hls: async \(ctx\)[\s\S]+const forceAudioSafe = ctx\.url\.searchParams\.get\('audioSafe'\) === '1';[\s\S]+const transcodeAudio = forceAudioSafe \|\| !audioCopyOk\(aud, vf\._caps\);/,
+    'the HLS route honors audioSafe=1 to force stereo AAC (iOS Safari can\'t decode AC3/EAC3 in a local <video>, even in HLS)');
   assert.ok(server.includes("re: /^\\/api\\/hls\\/(\\w+)(?:\\/([\\w.-]+))?$/, auth: 'stream'"),
     'the HLS route must be declared in ROUTES at stream-tier auth');
+  // The mount payload advertises the HLS URL so the iOS web player can request it.
+  assert.match(server, /hlsUrl: detectFfmpeg\(\) \? `\/api\/hls\/\$\{vf\.id\}\?t=\$\{st\}` : null,/,
+    'the mount payload exposes hlsUrl for the iOS Safari player');
+  // Client: iOS routes the remux kind to native HLS (Safari can\'t play the non-rangeable remux pipe).
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /function hlsPlaybackUrl\(p, seekStart = 0\) \{[\s\S]+`\$\{p\.hlsUrl\}&start=\$\{Math\.max\(0, Math\.floor\(seekStart \|\| 0\)\)\}&audio=\$\{audio\}&audioSafe=1`/,
+    'hlsPlaybackUrl builds a tokened HLS URL with a server-seek start and forced stereo AAC');
+  assert.match(ui, /kind === 'remux'\) \{[\s\S]+v\.src = \(iosWebkitVideo\(\) && p\.hlsUrl\) \? hlsPlaybackUrl\(p, seekStart\) : remuxPlaybackUrl\(p, seekStart\);/,
+    'on iOS the remux kind is delivered as native HLS; every other browser keeps the direct fMP4 remux');
 });
 
 test('hls variant: ffmpeg process lifecycle works and cleans up its temp dir', { skip: !HAS_FFMPEG }, async () => {

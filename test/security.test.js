@@ -699,11 +699,15 @@ test('e2e: HTTP play pipeline — search, play, stream with token, advance 404 w
   assert.strictEqual(mid.status, 206);
   assert.ok(mid.body.equals(PAYLOAD.subarray(50000, 60000)));
 
-  // HLS output variant is FEATURE-FLAGGED off by default: an authorized request still 404s so the
-  // locked direct/remux/transcode ladder is untouched until the owner opts in (TRIBOON_HLS / setting).
-  const hlsOff = await httpRaw(srv.port, `/api/hls/${play.json.id}`, { token: admin });
-  assert.strictEqual(hlsOff.status, 404, 'HLS route is gated off by default');
-  // Media CORS still applies to the HLS route path (a Cast receiver fetches it cross-origin).
+  // HLS is now a FIRST-CLASS stream-authed output (iOS Safari can't consume the non-rangeable 200
+  // remux/transcode pipe, so it plays HLS instead). An authorized request is NO LONGER 404-gated — it
+  // proceeds past the old feature flag (then 503 without ffmpeg / 504 until the playlist is ready / 200).
+  const hlsOn = await httpRaw(srv.port, `/api/hls/${play.json.id}`, { token: admin });
+  assert.notStrictEqual(hlsOn.status, 404, 'HLS is a first-class stream output now, not feature-gated off');
+  assert.notStrictEqual(hlsOn.status, 401, 'a valid stream token is accepted on the HLS route');
+  // But it stays stream-tier authed: no token → 401 (deny-by-default preserved).
+  assert.strictEqual((await httpRaw(srv.port, `/api/hls/${play.json.id}`)).status, 401, 'HLS route rejects an unauthed request');
+  // Media CORS still applies to the HLS route path (a Cast receiver / iOS fetches it cross-origin).
   const hlsCors = await httpWithHeaders(srv.port, 'GET', `/api/hls/${play.json.id}`, { origin: 'https://cast.example.com', token: admin });
   assert.strictEqual(hlsCors.headers['access-control-allow-origin'], 'https://cast.example.com', 'HLS route carries media CORS');
 

@@ -3206,6 +3206,10 @@ function mountPayload(vf, uid, extra = {}) {
     container: vf.container, method: vf.method, streamable: vf.streamable, tags: vf.tags,
     streamUrl: `/api/stream/${vf.id}?t=${st}`,
     remuxUrl: detectFfmpeg() ? `/api/remux/${vf.id}?t=${st}` : null,
+    // HLS is the iOS-Safari playback path: Safari's <video> refuses the non-rangeable 200 remux/transcode
+    // pipe, but plays HLS natively (each fMP4 segment is a rangeable file). The web player uses this only
+    // for iOS (iosWebkitVideo()); every other client sticks to direct/remux/transcode.
+    hlsUrl: detectFfmpeg() ? `/api/hls/${vf.id}?t=${st}` : null,
     transcodeUrl: detectEncoder() ? `/api/transcode/${vf.id}?t=${st}` : null,
     encoder: detectEncoder() ? detectEncoder().kind : null,
     tracksUrl: `/api/tracks/${vf.id}`,
@@ -6595,7 +6599,12 @@ Object.assign(H, {
   // Gated behind hlsEnabled(); when off it 404s so the default ladder is untouched. Stream-tier auth
   // + scope + CORS are identical to the other media routes.
   hls: async (ctx) => {
-    if (!hlsEnabled()) return send(ctx.res, 404, { error: 'HLS output is not enabled' });
+    // HLS is now a first-class, stream-tier-authed output (not just the opt-in Cast/AirPlay experiment):
+    // it is the ONLY way iOS Safari can play a server-processed source, since Safari's <video> refuses the
+    // non-rangeable 200 remux/transcode pipe. Only iOS clients request it (via hlsUrl), it needs a valid
+    // per-mount stream token, is capped at 4 concurrent windows/mount, and its temp dir is cleaned — so
+    // serving it on demand is safe and the locked direct→remux→transcode ladder stays untouched for
+    // everyone else. (hlsEnabled() remains the admin/Cast toggle but no longer gates this playback path.)
     if (!streamScopeOk(ctx, ctx.m[1])) return send(ctx.res, 401, { error: 'token not valid for this stream' });
     const vf = mounts.get(ctx.m[1]);
     if (!vf) return send(ctx.res, 404, { error: 'mount not found' });
@@ -6651,10 +6660,15 @@ Object.assign(H, {
     if (!sess) {
       const dir = await fsp.mkdtemp(path.join(os2.tmpdir(), 'triboon-hls-'));
       const aud = vf._tracks && vf._tracks.audio && vf._tracks.audio[audioTrack];
-      const transcodeAudio = !audioCopyOk(aud, vf._caps);
+      // Same as /api/remux: iOS sends audioSafe=1 to FORCE stereo-AAC (Safari can't decode AC3/EAC3 in a
+      // local <video>, even inside HLS — its canPlayType over-reports Dolby for AirPlay/passthrough only).
+      const forceAudioSafe = ctx.url.searchParams.get('audioSafe') === '1';
+      const transcodeAudio = forceAudioSafe || !audioCopyOk(aud, vf._caps);
       const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.claims.uid, vf.id)}`;
       let ff;
-      try { ff = spawnHls(selfUrl, { startSeconds, audioTrack, transcodeAudio, safeStereo: true, outDir: dir }); }
+      // 2 s segments keep time-to-first-frame down (Safari can start after the first segment) — the whole
+      // point on iOS is fast startup, the #1 value; the rolling window bounds disk either way.
+      try { ff = spawnHls(selfUrl, { startSeconds, audioTrack, transcodeAudio, safeStereo: true, outDir: dir, segmentTime: 2 }); }
       catch (e) { fsp.rm(dir, { recursive: true, force: true }).catch(() => {}); return send(ctx.res, 503, { error: e.message }); }
       sess = { dir, ff, createdAt: Date.now() };
       let err = '';
