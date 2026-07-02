@@ -3884,6 +3884,7 @@ public class MainActivity extends Activity {
                     if (state == Player.STATE_READY) {
                         if ("video".equals(nativeMode)) {
                             nativeVideoStarted = true;
+                            widenNativeReadTimeoutAfterFirstFrame();
                             rememberNativeVideoPosition();
                             web.evaluateJavascript("window.__tvNativeVideoReady && __tvNativeVideoReady("
                                     + nativePosSeconds() + "," + nativeDurSeconds() + ")", null);
@@ -3921,6 +3922,7 @@ public class MainActivity extends Activity {
                     if ("live".equals(nativeMode) && isPlaying) nativeLiveStarted = true;
                     if ("video".equals(nativeMode) && isPlaying) {
                         nativeVideoStarted = true;
+                        widenNativeReadTimeoutAfterFirstFrame();
                         nativeVideoUnhealthySinceMs = 0L;
                         rememberNativeVideoPosition();
                         web.evaluateJavascript("window.__tvNativeVideoPlaying && __tvNativeVideoPlaying("
@@ -4926,15 +4928,17 @@ public class MainActivity extends Activity {
                 .setAllowCrossProtocolRedirects(false)
                 .setUserAgent("TriboonTV/" + BuildConfig.VERSION_NAME)
                 .setConnectTimeoutMs(12000)
-                // A piped remux/transcode stream is NON-resumable: if the socket read times out,
-                // ExoPlayer reconnects and the server replays from the stream's start, so the position
-                // jumps backward (then the guard in rememberNativeVideoPosition re-seeks to "now" — the
-                // ~10-min dip the owner reported). A self-hosted usenet-mounted source can briefly stall
-                // on provider-connection contention; a generous read timeout rides that out (playing
-                // from the deep buffer meanwhile) instead of triggering a replay-from-start.
+                // VOD read timeout is SPLIT across the playback lifecycle (see nativeVodReadTimeoutMs):
+                // this is the STARTUP value; widenNativeReadTimeoutAfterFirstFrame() widens it once the
+                // first frame renders. A piped remux/transcode stream is NON-resumable — if a MID-STREAM
+                // socket read times out, ExoPlayer reconnects and the server replays from the start, so
+                // the position jumps backward (the ~10-min dip v2.2.24 fixed). The wide post-first-frame
+                // timeout rides that out on provider-connection contention. But the startup window can't
+                // show that jump (playback hasn't begun), so it stays tight for a snappy failover on a
+                // stalled initial connect instead of hanging the full resilience window.
                 .setReadTimeoutMs("live".equals(nativeMode)
                         ? NATIVE_LIVE_READ_TIMEOUT_MS
-                        : (nativeLikelyHeavyVod() ? 45000 : 30000));
+                        : nativeVodReadTimeoutMs(false));
         nativeHttpDataSourceFactory = http;
         applyNativeHttpHostHeader();
         return new DefaultMediaSourceFactory(http);
@@ -4945,6 +4949,29 @@ public class MainActivity extends Activity {
         java.util.HashMap<String, String> headers = new java.util.HashMap<>();
         if (hostHeaderSafe(nativeHostHeader)) headers.put("Host", nativeHostHeader);
         nativeHttpDataSourceFactory.setDefaultRequestProperties(headers);
+    }
+
+    // VOD socket read timeout, split across the playback lifecycle. Heavy 4K can legitimately be slow
+    // to deliver its first meaningful read (moov-at-tail, lossless-audio remux), so it stays generous
+    // throughout. Standard VOD keeps the proven tighter STARTUP timeout so a stalled initial connect
+    // fails over fast (a snappy start — the pre-v2.2.24 behaviour), then widens after the first frame:
+    // there a mid-stream read stall must ride out provider-connection contention rather than reconnect
+    // + replay-from-start (the ~10-min backward jump v2.2.24 fixed). Startup can't show that jump —
+    // playback hasn't begun — so a short startup timeout is safe and only makes a bad start recover
+    // sooner instead of hanging the full 30s.
+    private int nativeVodReadTimeoutMs(boolean established) {
+        if (nativeLikelyHeavyVod()) return 45000;
+        return established ? 30000 : 18000;
+    }
+
+    // Once the first frame renders, widen the live HTTP data-source read timeout so a mid-stream stall
+    // is ridden out (playing from the deep buffer) instead of triggering the reconnect/replay-from-start
+    // backward jump. New DataSource instances (reconnects, later segments) pick up the widened value;
+    // idempotent, so calling it from every "first frame" signal is fine.
+    private void widenNativeReadTimeoutAfterFirstFrame() {
+        if (nativeHttpDataSourceFactory != null && "video".equals(nativeMode)) {
+            nativeHttpDataSourceFactory.setReadTimeoutMs(nativeVodReadTimeoutMs(true));
+        }
     }
 
     private DefaultLoadControl nativeLoadControlForMode(String mode) {
@@ -6430,6 +6457,7 @@ public class MainActivity extends Activity {
         int state = nativePlayer.getPlaybackState();
         if (state == Player.STATE_READY) {
             nativeVideoStarted = true;
+            widenNativeReadTimeoutAfterFirstFrame();
             rememberNativeVideoPosition();
             nativeVideoUnhealthySinceMs = 0L;
             nativeVideoMemoryTrimmedDuringBuffer = false;

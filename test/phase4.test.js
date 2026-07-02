@@ -1238,8 +1238,8 @@ test('Android native player: direct source and native chrome stay out of the web
   // one-tick PTS/GOP wobble on a resumed (server-seek) stream no longer dips-and-snaps ~every 10 min.
   assert.match(android, /private void rememberNativeVideoPosition\(\) \{[\s\S]+backwardsBy > 5000L\) \{[\s\S]+boolean bigRestart = backwardsBy > 60000L;[\s\S]+if \(!bigRestart && \+\+nativeBackwardTicks < 2\) return;/,
     'native segment-jumpback auto-resume confirms a SMALL regression over 2 ticks (wobble guard) but recovers a large (>60s) stream restart on the first tick');
-  assert.match(android, /\(nativeLikelyHeavyVod\(\) \? 45000 : 30000\)\);/,
-    'non-heavy VOD read timeout is generous (30s) so a transient usenet stall does not trigger a reconnect/replay-from-start');
+  assert.match(android, /return established \? 30000 : 18000;/,
+    'the established (post-first-frame) VOD read timeout stays generous (30s normal / 45s heavy) so a MID-STREAM stall does not trigger a reconnect/replay-from-start — the backward-jump fix stays intact');
   assert.match(android, /int contentWidth = Math\.max\(dp\(260\), Math\.min\(getResources\(\)\.getDisplayMetrics\(\)\.widthPixels - \(pad \* 2\), dp\(520\)\)\);[\s\S]+setup\.addView\(addr, new LinearLayout\.LayoutParams\(contentWidth/,
     'Android first-run server setup screen should fit phone portrait widths');
   assert.doesNotMatch(android, /addr\.setMinWidth/,
@@ -3249,8 +3249,14 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Live TV media items should carry target-offset and catch-up speed hints');
   assert.match(android, /setTargetBufferBytes\(targetBytes\)[\s\S]+setBackBuffer\(backBufferMs, false\)/,
     'native ExoPlayer should bound memory while keeping short VOD rewinds fast');
-  assert.match(android, /setReadTimeoutMs\("live"\.equals\(nativeMode\)[\s\S]+NATIVE_LIVE_READ_TIMEOUT_MS[\s\S]+nativeLikelyHeavyVod\(\) \? 45000 : 30000\)/,
-    'native Live TV uses a longer provider read timeout; VOD tolerates slower usenet reads (30s normal / 45s heavy) so a transient stall does not trigger a reconnect/replay-from-start');
+  assert.match(android, /setReadTimeoutMs\("live"\.equals\(nativeMode\)[\s\S]+NATIVE_LIVE_READ_TIMEOUT_MS[\s\S]+nativeVodReadTimeoutMs\(false\)\)/,
+    'native Live TV uses a longer provider read timeout; VOD uses the SPLIT startup read timeout');
+  assert.match(android, /private int nativeVodReadTimeoutMs\(boolean established\) \{[\s\S]+if \(nativeLikelyHeavyVod\(\)\) return 45000;[\s\S]+return established \? 30000 : 18000;[\s\S]+\}/,
+    'VOD read timeout is split: heavy 4K stays 45s; standard VOD is a tight 18s at STARTUP and widens to 30s after the first frame');
+  assert.match(android, /private void widenNativeReadTimeoutAfterFirstFrame\(\) \{[\s\S]+nativeHttpDataSourceFactory != null && "video"\.equals\(nativeMode\)[\s\S]+setReadTimeoutMs\(nativeVodReadTimeoutMs\(true\)\)/,
+    'once the first frame renders the read timeout widens so a MID-STREAM stall rides out contention instead of reconnecting + replaying-from-start (the backward-jump fix stays intact)');
+  assert.match(android, /nativeVideoStarted = true;\s*\n\s*widenNativeReadTimeoutAfterFirstFrame\(\);/,
+    'the read timeout widens exactly where playback becomes established (nativeVideoStarted flips true)');
   assert.match(android, /heavyVod \? 22000 : 5000[\s\S]+heavyVod \? 120000 : 75000[\s\S]+heavyVod \? 384 : 96/,
     'high-end Android devices get a deep 4K VOD buffer (384MB ≈ 75s) so transient upstream hiccups never reach the player');
   assert.match(android, /private void updateNativeLiveWatchdog\(\) \{[\s\S]+boolean waitingForLiveData = state == Player\.STATE_BUFFERING[\s\S]+nativePlayer\.isLoading\(\)[\s\S]+boolean unhealthy = state == Player\.STATE_IDLE \|\| state == Player\.STATE_ENDED \|\| waitingForLiveData[\s\S]+long threshold = nativeLiveStarted \? NATIVE_LIVE_STALL_RECOVERY_MS : NATIVE_LIVE_STARTUP_STALL_RECOVERY_MS;[\s\S]+now - nativeLiveUnhealthySinceMs >= threshold[\s\S]+recoverNativeLivePlayback\(state == Player\.STATE_IDLE \? "idle"/,
