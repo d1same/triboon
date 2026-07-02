@@ -1,0 +1,51 @@
+<service>
+  <!-- WinSW v2 service definition for Triboon. This file MUST sit next to the wrapper exe
+       (triboon-service.exe) and share its base name. %BASE% is the folder that contains the
+       wrapper exe (i.e. the install dir), resolved by WinSW at runtime. -->
+  <id>Triboon</id>
+  <name>Triboon Server</name>
+  <description>Triboon self-hosted streaming server. Configure it in your browser at http://localhost:7777.</description>
+
+  <!-- Run the bundled Node runtime against the server entry point. -->
+  <executable>%BASE%\node.exe</executable>
+  <arguments>"%BASE%\server\index.js"</arguments>
+  <!-- No <workingdirectory>: WinSW defaults it to %BASE% (the exe's folder), and the server uses
+       only __dirname / env / os.tmpdir() paths, never the cwd. Omitting it avoids a documented
+       %BASE%-expansion quirk in older WinSW v2 <workingdirectory> handling. -->
+
+  <!-- Persistent state (encrypted settings, watch state, library DB, thumbs) lives under
+       ProgramData so it survives BOTH upgrades and an uninstall (the installer marks that
+       folder keep-on-uninstall). It must never live under Program Files, which is wiped. -->
+  <env name="NODE_ENV" value="production" />
+  <env name="PORT" value="7777" />
+  <env name="TRIBOON_DATA" value="%ProgramData%\Triboon\data" />
+
+  <!-- Bundled media sidecars. The server checks each of these env vars before falling back to
+       PATH (transcode.js / ytmusic.js). Keep the names in sync with those detectors. -->
+  <env name="FFMPEG_PATH" value="%BASE%\bin\ffmpeg.exe" />
+  <env name="FFPROBE_PATH" value="%BASE%\bin\ffprobe.exe" />
+  <env name="YTDLP_PATH" value="%BASE%\bin\yt-dlp.exe" />
+  <env name="ALASS_PATH" value="%BASE%\bin\alass.exe" />
+  <!-- alass shells out to ffmpeg/ffprobe itself; point it at the same bundled binaries. -->
+  <env name="ALASS_FFMPEG_PATH" value="%BASE%\bin\ffmpeg.exe" />
+  <env name="ALASS_FFPROBE_PATH" value="%BASE%\bin\ffprobe.exe" />
+  <!-- Belt-and-suspenders: make node.exe and the sidecars resolvable by bare name too. -->
+  <env name="PATH" value="%BASE%;%BASE%\bin;%PATH%" />
+
+  <!-- Start automatically at boot, a little after other services so the network is up. -->
+  <startmode>Automatic</startmode>
+  <delayedAutoStart/>
+
+  <!-- Restart on crash. Windows SCM caps recovery at three distinct actions. -->
+  <onfailure action="restart" delay="10 sec" />
+  <onfailure action="restart" delay="30 sec" />
+  <onfailure action="restart" delay="60 sec" />
+
+  <!-- Roll the captured stdout/stderr so the log never grows unbounded. %BASE%\logs is written
+       by the LocalSystem service account and removed with the app on uninstall. -->
+  <log mode="roll-by-size">
+    <logpath>%BASE%\logs</logpath>
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+</service>
