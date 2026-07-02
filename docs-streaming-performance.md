@@ -323,6 +323,77 @@ must be clearly separate because it can create provider load and noisy results.
 | 4K per-stream cap | 6-80 connections, default 20 |
 | Health probe limit | 2-12 probes, default 6 |
 
+## Casting (Chromecast / AirPlay) — Phase 2
+
+Casting is receiver-pull: the Cast device / Apple TV fetches Triboon's media URL
+itself and plays it. The phone/browser is only the remote. Everything below is
+built on the existing tokened stream/remux/transcode URLs — casting does not add
+a second byte path or a runtime npm dependency.
+
+TLS posture (owner decision): **plain-HTTP media on the LAN + an HTTPS receiver
+page**. The media the Cast device pulls stays on plain `http://<box>:7777/...`
+(self-signed certs are confirmed broken on Cast devices, and the Default Media
+Receiver plays plain-HTTP LAN media fine). Only the Custom Web Receiver *page*
+needs HTTPS, and it is Google-hosted / owner-fronted, not the media.
+
+Phases:
+
+- **Phase 1/3 (shipped):** web Cast + AirPlay senders and the native Android
+  Cast sender, all targeting Google's **Default Media Receiver** (`CC1AD845`) —
+  no Google registration, no HTTPS media, plays the current tokened MP4/fMP4
+  variant. This is the default and must never regress.
+- **Phase 2 (this change):** the polished custom-receiver groundwork, scoped so
+  the default is unchanged until the owner registers a custom receiver:
+  - **CORS on media routes only** (`/api/stream`, `/api/remux`, `/api/transcode`,
+    `/api/hls`, `/api/subtitle`, `/api/releasesub`, `/api/ossubs`). A Custom Web
+    Receiver runs on a different origin, so its Shaka/MPL player's adaptive and
+    side-loaded-subtitle fetches are cross-origin and require CORS. The server
+    **reflects the request Origin** (not `*`), exposes `Content-Range` /
+    `Content-Length` / `Accept-Ranges`, allows `Range` / `Content-Type` /
+    `Accept-Encoding`, and answers `OPTIONS` preflight with 204. Deny-by-default
+    routing is intact — non-media routes emit no CORS. The Default Media Receiver
+    uses the device's native loader and does not need CORS, so this is additive.
+  - **Custom Web Receiver page** served at `GET /cast/receiver` (public — the
+    Cast device fetches it, no token). Dependency-free static asset that loads
+    the CAF Web Receiver SDK from gstatic, uses `setMessageInterceptor(LOAD)` to
+    accept a compact `{ itemId/contentId, token }` and build `contentUrl`,
+    attaches caption tracks, probes device codec caps via
+    `getDeviceCapabilities()` / `canDisplayType()`, and re-requests a fresh token
+    on a media 401 for long sessions. Served with a relaxed CSP (the main app CSP
+    forbids the gstatic SDK).
+  - **Configurable receiver app-id**, default = Default Media Receiver
+    (`CC1AD845`). Set via Settings (`castReceiverAppId`) or `TRIBOON_CAST_APP_ID`;
+    validated to 8 hex chars, malformed/empty falls back to the default so a bad
+    value can never brick casting. Exposed on `GET /api/server` as
+    `castReceiverAppId`. The web sender (`setupCastContext`) and the Android
+    sender (`CastOptionsProvider`, via a SharedPreferences value the web UI
+    relays through the `setCastReceiverAppId` bridge) both read it.
+  - **HLS output variant** at `GET /api/hls/<mount>[/<file>]`,
+    **feature-flagged** (`TRIBOON_HLS=1` or `settings.hlsEnabled`, default off).
+    Same source-fit copy-remux as `/api/remux` (video stream-copied, audio copied
+    or cheaply AAC-encoded) but packaged as a VOD fMP4 HLS playlist ffmpeg writes
+    to a temp dir; the route serves the playlist (segment URIs rewritten to
+    tokened same-scope route URLs) plus init/segment files over HTTP Range. HLS
+    is what AirPlay prefers (m3u8) and what a Custom Web Receiver can pull
+    adaptively. It is a SEPARATE path — the locked direct→remux→transcode ladder
+    is untouched when the flag is off. Sessions are keyed per (start, audio),
+    capped per mount, and their temp dirs are killed on mount eviction/shutdown.
+
+Owner action items to actually enable a custom receiver (Triboon cannot do
+these — they need a Google account Triboon has no access to):
+
+1. Register a Cast developer account and a **Custom Web Receiver** in the Google
+   Cast SDK Developer Console, pointing its application URL at
+   `https://<host>/cast/receiver` (published receivers must be HTTPS).
+2. Register each test Cast device's serial in the Console during development.
+3. Put the issued 8-hex app-id in Settings (or `TRIBOON_CAST_APP_ID`). Until
+   then everything keeps using the Default Media Receiver.
+
+Casting still obeys the streaming contract: the media URL must be reachable from
+the Cast device (a LAN IP, not `localhost`), and the `?t=` stream token must
+outlive a full playback (the receiver pulls with Range for hours). Long-session
+token refresh is handled receiver-side via the custom Cast namespace.
+
 ## When Changing This Area
 
 Before changing performance behavior, check:

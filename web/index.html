@@ -12284,12 +12284,31 @@ function initCastSender() {
   s.async = true; s.onerror = () => {};
   document.head.appendChild(s);
 }
+// Receiver app-id: the Default Media Receiver (CC1AD845) unless the owner registered a custom
+// Web Receiver and set its id in Settings (server exposes it as serverInfo.castReceiverAppId).
+// A bad/absent value falls back to the default so casting never breaks. (Phase 2.)
+function castReceiverAppId() {
+  const id = String((S.serverInfo && S.serverInfo.castReceiverAppId) || '').trim().toUpperCase();
+  const dflt = (window.chrome && chrome.cast && chrome.cast.media && chrome.cast.media.DEFAULT_MEDIA_RECEIVER_APP_ID) || 'CC1AD845';
+  return /^[0-9A-F]{8}$/.test(id) ? id : dflt;
+}
+// Relay the configured app-id to the Android shell so its native Cast sender launches the same
+// receiver. The shell reads the app-id once at process start, so this persists for the next launch;
+// the default receiver stays in effect until then (always safe). Only the custom id is relayed —
+// an empty string clears any previously-set custom id back to the Default Media Receiver. (Phase 2.)
+function relayCastReceiverAppId() {
+  try {
+    if (!(window.TriboonTV && TriboonTV.setCastReceiverAppId)) return;
+    const raw = String((S.serverInfo && S.serverInfo.castReceiverAppId) || '').trim().toUpperCase();
+    TriboonTV.setCastReceiverAppId(/^[0-9A-F]{8}$/.test(raw) ? raw : '');
+  } catch {}
+}
 function setupCastContext() {
   if (!castSdkReady()) return;
   try {
     _castCtx = cast.framework.CastContext.getInstance();
     _castCtx.setOptions({
-      receiverApplicationId: chrome.cast.media.DEFAULT_MEDIA_RECEIVER_APP_ID, // 'CC1AD845' — no registration, no HTTPS media
+      receiverApplicationId: castReceiverAppId(), // Default Media Receiver until a custom id is registered (Phase 2)
       autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED,
     });
     _castRp = new cast.framework.RemotePlayer();
@@ -21347,6 +21366,7 @@ async function restoreSavedSession() {
   let info;
   try { info = await api('/api/server'); } catch { document.body.innerHTML = '<p style="padding:40px">Triboon server unreachable.</p>'; return; }
   S.serverInfo = info;
+  relayCastReceiverAppId();
   if (invite) return showGate('invite');
   if (info.needsSetup) return showGate('setup');
   if (tokenStore.get()) {

@@ -454,6 +454,13 @@ When changing persistence, update:
   epoch to revoke older sessions.
 - Session-token access to mount helpers is limited to the mount owner; scoped
   stream tokens remain valid only for their bound mount/resource.
+- Cast (Phase 2): CORS is emitted on media routes ONLY (stream/remux/transcode/
+  hls/subtitle/releasesub/ossubs) so a Custom Web Receiver on another origin can
+  fetch adaptive/subtitle media. The server reflects the request Origin (not
+  `*`; the token is in the URL, no cookie), exposes Range headers, and answers
+  OPTIONS preflight. Non-media routes emit no CORS. `GET /cast/receiver` is a
+  public, secret-free static page (the Cast device fetches it, not a signed-in
+  browser). The casting model is documented in `docs-streaming-performance.md`.
 - Restricted local-library stream, art, thumbnail, and play endpoints must use
   the same library `users[]` ACL as item listing.
 - Credentials live in encrypted settings and must not appear in caches, logs,
