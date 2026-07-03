@@ -56,6 +56,13 @@ function hashPassword(password) {
 // id. 'custom' (an uploaded picture) is set exclusively by the upload route, never accepted
 // from a bare profile edit — so a profile can't claim a custom image that was never uploaded.
 function validAvatarId(a) { return /^av(0[1-9]|1\d|20)$/.test(String(a || '')); }
+// Every profile gets a face: profiles created before avatars existed (or after a "remove")
+// derive a STABLE builtin from their id hash — no migration write, no bare letter tiles, and
+// the same face on every device/session. An explicit pick or upload always overrides.
+function derivedAvatarId(id) {
+  const n = parseInt(String(id || '0').slice(0, 8), 16) || 0;
+  return `av${String((n % 20) + 1).padStart(2, '0')}`;
+}
 function verifyPassword(password, salt, hash) {
   const got = crypto.scryptSync(password, salt, SCRYPT.keylen, SCRYPT);
   const want = Buffer.from(hash, 'hex');
@@ -209,7 +216,7 @@ class Auth {
   publicProfile(p) {
     const level = p.level ?? (p.kid ? 0 : 3); // back-fill older profiles created before levels
     return { id: p.id, name: p.name, level, kid: level === 0, locked: !!p.pinHash,
-      avatar: p.avatar || null };
+      avatar: p.avatar || derivedAvatarId(p.id) }; // everyone gets a face (stable id-derived default)
   }
 
   // Set, change, or remove a profile's PIN. The ACCOUNT PASSWORD is required so a kid using

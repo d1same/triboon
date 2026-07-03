@@ -830,6 +830,14 @@ test('profiles: avatars — builtin pick validated, uploads sanitized, serving t
   assert.strictEqual(add.json.avatar, 'av01');
   const pid = add.json.id;
 
+  // EVERY profile has a face: one created with no avatar (and any pre-avatar-era profile) gets a
+  // stable id-derived builtin — no bare letter tiles anywhere, same face on every device.
+  const plain = await httpJson(srv.port, 'POST', '/api/me/profiles', { name: 'OldTimer', level: 3 }, admin);
+  assert.match(plain.json.avatar, /^av(0[1-9]|1\d|20)$/, 'avatar-less profiles derive a stable builtin face');
+  const again = (await httpJson(srv.port, 'GET', '/api/me', null, admin)).json.profiles.find((p) => p.id === plain.json.id);
+  assert.strictEqual(again.avatar, plain.json.avatar, 'the derived face is stable across reads');
+  await httpJson(srv.port, 'POST', `/api/me/profiles/${plain.json.id}/delete`, { password: 'hunter22' }, admin);
+
   // Builtin pick: valid ids swap, junk is rejected, and 'custom' can NOT be claimed without an
   // upload (otherwise a profile could point at an image that was never stored/sanitized).
   const picked = await httpJson(srv.port, 'POST', `/api/me/profiles/${pid}/avatar`, { avatar: 'av13' }, admin);

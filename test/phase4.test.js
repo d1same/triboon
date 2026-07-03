@@ -1411,14 +1411,20 @@ test('Android native player: direct source and native chrome stay out of the web
     'theme scrims should keep browser backdrop art visible (side + bottom fade) instead of a full-screen blackout');
   assert.ok(!ui.includes("scrim: 'linear-gradient(180deg"),
     'theme scrims should not regress to the old opaque vertical wash');
-  assert.match(ui, /const THEME_ALIASES = \{[\s\S]+graphite: 'studio'[\s\S]+triboon: 'triboonCoral'[\s\S]+trioon: 'triboonCoral'[\s\S]+arctic: 'teal'[\s\S]+forest: 'evergreen'/,
-    'legacy stored theme names should map to the nearest new professional palette');
-  assert.ok(ui.includes("label: 'Ocean'") && ui.includes("tone: 'deep blue'")
-    && ui.includes("ink: '#0D1420'") && ui.includes("c: '#5EA0F2'"),
-    'default theme should be the Ocean (deep blue) palette');
-  assert.ok(ui.includes("const VISIBLE_THEMES = ['triboonCoral', 'studio', 'velvet', 'midnight', 'scarlet', 'aurora', 'toomaj', 'triboonGold', 'daylight', 'topaz']")
-    && ui.includes("label: 'Forest'") && ui.includes("label: 'Sunset'") && ui.includes("label: 'Midnight'"),
-    'the picker should offer DISTINCT accent palettes (Ocean blue / Forest green / Sunset amber / Midnight gold)');
+  assert.match(ui, /const THEME_ALIASES = \{[\s\S]+trioon: 'triboon'[\s\S]+arctic: 'teal'[\s\S]+forest: 'evergreen'[\s\S]+steel: 'graphite'/,
+    'ancient stored theme names should still resolve to an existing palette');
+  // Owner decision (v2.3.13): exactly THREE curated themes + Custom. Triboon (the brand ink +
+  // magenta→coral signature) is the default; Ocean (deep navy/sky) and Graphite (carbon/platinum)
+  // complete the set. Legacy theme OBJECTS stay resolvable so saved prefs keep their look.
+  assert.ok(ui.includes("const VISIBLE_THEMES = ['triboon', 'ocean', 'graphite']"),
+    'the picker offers exactly the three curated themes (+ the Custom tile appended by the renderer)');
+  assert.ok(ui.includes("label: 'Triboon'") && ui.includes("m: '#C13BD6', c: '#FB8B3C', a: '#FFC65C'")
+    && ui.includes("ink: '#0B0812'"),
+    'the Triboon theme is the brand: signature ink + magenta→coral gradient + amber');
+  assert.ok(ui.includes("label: 'Graphite'") && ui.includes("tone: 'carbon · platinum'"),
+    'the third curated theme is the understated carbon/platinum Graphite');
+  assert.ok(ui.includes("label: 'Ocean'") && ui.includes("ink: '#0D1420'") && ui.includes("c: '#5EA0F2'"),
+    'the Ocean theme keeps the proven deep-navy/sky palette');
   assert.ok(ui.includes("label: 'Scarlet'") && ui.includes("c: '#E50914'")
     && ui.includes("label: 'Aurora'") && ui.includes("c: '#1CE783'")
     && ui.includes("label: 'Daylight'") && ui.includes("c: '#1F8BFF'")
@@ -1459,14 +1465,14 @@ test('Android native player: direct source and native chrome stay out of the web
     'foreground tint must route through --fg (dark only on data-light="1") with the always-black player/multiview restored to light — no raw off-white literals left');
   assert.ok(/button\.focusable:not\(\.card\):not\(\.pcard\):not\(\.railBtn\):not\(\.castCard\):not\(\.seasonCard\):not\(\.epCard\):not\(\.chCard\):not\(\.playerEpCard\)/.test(ui),
     'media tiles (cast/season/episode/channel) must be excluded from the solid button-fill rollover so they keep their poster RING like .pcard');
-  assert.ok(ui.includes("localStorage.getItem('triboon.theme') || 'triboonCoral'")
-    && ui.includes('THEMES[name] || THEMES.triboonCoral'),
-    'Executive Graphite should be the default and fallback theme');
+  assert.ok(ui.includes("localStorage.getItem('triboon.theme') || 'triboon'")
+    && ui.includes('THEMES[name] || THEMES.triboon'),
+    'the Triboon brand theme is the default and fallback');
   // Theme (colors) follows the PROFILE and syncs to the server like the other prefs, so it survives
   // updates/reinstalls — with the device-wide triboon.theme kept as the pre-login boot fallback.
   assert.match(ui, /function savePrefTheme\(name\) \{[\s\S]+localStorage\.setItem\(profilePrefKey\('theme'\), name\);[\s\S]+localStorage\.setItem\('triboon\.theme', name\);[\s\S]+syncProfilePrefsUp\(\);/,
     'saving a theme should write the per-profile (synced) key + device fallback and push to the server');
-  assert.match(ui, /function prefTheme\(\) \{[\s\S]+triboon\.profile\.\$\{S\.profile\.id\}\.theme[\s\S]+localStorage\.getItem\('triboon\.theme'\) \|\| 'triboonCoral'/,
+  assert.match(ui, /function prefTheme\(\) \{[\s\S]+triboon\.profile\.\$\{S\.profile\.id\}\.theme[\s\S]+localStorage\.getItem\('triboon\.theme'\) \|\| 'triboon'/,
     'applyTheme should resolve the profile-scoped theme first, then the device fallback');
   assert.match(ui, /applyServerProfilePrefs\(r\.prefs\);[\s\S]+try \{ applyTheme\(\); \} catch \{\}/,
     'loading server prefs should apply the profile’s synced theme');
@@ -1475,10 +1481,12 @@ test('Android native player: direct source and native chrome stay out of the web
   // Custom theme = ACCENTS ONLY over a fixed neutral-dark foundation: the user picks the trio,
   // everything readable (focus ring, on-accent text by luminance, glows) derives from it — a
   // custom theme can never produce an unreadable UI.
-  assert.match(ui, /const t = name === 'custom' \? \(customTheme\(prefThemeCustomColors\(\)\) \|\| THEMES\.triboonCoral\)/,
+  assert.match(ui, /const t = name === 'custom' \? \(customTheme\(prefThemeCustomColors\(\)\) \|\| THEMES\.triboon\)/,
     'applyTheme should resolve the custom theme from the stored accent colors with a safe fallback');
-  assert.match(ui, /function customTheme\(colors\) \{[\s\S]+if \(!_hexRgb\(c\)\) return null;[\s\S]+const onAccent = _lumaOf\(c\) > 0\.55 \? '#141414' : '#F7F5EF';[\s\S]+focus: c, focusSoft: _rgbaOf\(c, \.26\), onAccent,[\s\S]+btnPrimary: c, btnPrimaryHover: _lightenHex\(c, \.14\)/,
-    'the custom theme builder must derive focus/on-accent/button tokens from the picked accent (luminance-aware)');
+  assert.match(ui, /function customTheme\(colors\) \{[\s\S]+if \(!_hexRgb\(c\)\) return null;[\s\S]+const f = _hexRgb\(colors && colors\.f\) \? colors\.f : c;[\s\S]+const onAccent = _lumaOf\(c\) > 0\.55 \? '#141414' : '#F7F5EF';[\s\S]+focus: f, focusSoft: _rgbaOf\(f, \.26\), onAccent,[\s\S]+btnPrimary: c, btnPrimaryHover: _lightenHex\(c, \.14\)/,
+    'the custom theme builder derives on-accent/button tokens from the accent (luminance-aware) and the focus family from the independently-pickable focus color (falling back to the accent)');
+  assert.match(ui, /<label>Focus ring <input type="color" data-ct="f" value="\$\{cc\.f \|\| cc\.c\}"><\/label>/,
+    'the custom editor exposes a Focus ring color well, prefilled with the accent when never customized');
   assert.match(ui, /function savePrefThemeCustom\(colors\) \{[\s\S]+localStorage\.setItem\(profilePrefKey\('themeCustom'\), raw\);[\s\S]+syncProfilePrefsUp\(\);/,
     'custom colors must ride the per-profile prefs sync like the theme name itself');
   assert.match(ui, /const CUSTOM_THEME_PRESETS = \[[\s\S]+function toggleCustomThemeEditor\(tp, afterEl[\s\S]+\.ctSwatch[\s\S]+input\[type="color"\]/,

@@ -17001,6 +17001,50 @@ const THEME_TOKEN_MAP = {
   success: '--success', danger: '--danger', scrim: '--scrim',
 };
 const THEMES = {
+  // ---- THE THREE CURATED THEMES (the picker shows only these + Custom) ----
+  // Triboon — the brand itself: deep ink with the magenta→coral signature gradient and amber
+  // accents, exactly the design language the app boots with (:root defaults), tuned as a theme.
+  triboon: {
+    label: 'Triboon', tone: 'signature ink · coral',
+    ink: '#0B0812', surface: '#161020', raise: '#221934',
+    m: '#C13BD6', c: '#FB8B3C', a: '#FFC65C',
+    text: '#F3EFF7', muted: '#9B8FAD', line: 'rgba(255,255,255,.07)',
+    field: 'rgba(11,8,18,.76)', soft: 'rgba(34,25,52,.62)', panel: 'rgba(20,14,30,.96)',
+    focus: '#FB8B3C', focusSoft: 'rgba(251,139,60,.30)', onAccent: '#1D0E04',
+    success: '#7CE6A0', danger: '#FF8D8D',
+    btn: 'rgba(45,38,62,.75)', btnHover: 'rgba(59,50,80,.88)', btnSelected: 'rgba(76,63,100,.92)', btnSelectedHover: 'rgba(89,75,116,.96)', btnPrimary: '#FB8B3C', btnPrimaryHover: '#FC9E5B', btnFocusText: '#F7F3FA',
+    artFocusLine: 'rgba(251,139,60,.36)', artFocusGlow: 'rgba(251,139,60,.20)', artFocusTileLine: 'rgba(251,139,60,.28)', artFocusTileBorder: 'rgba(251,139,60,.22)', artFocusTileGlow: 'rgba(251,139,60,.16)',
+    scrim: 'linear-gradient(90deg,rgba(11,8,18,.86) 0%,rgba(11,8,18,.56) 28%,rgba(11,8,18,.20) 58%,rgba(11,8,18,.06) 100%),linear-gradient(0deg,rgba(11,8,18,.76) 0%,rgba(11,8,18,.24) 26%,rgba(11,8,18,.04) 60%,rgba(11,8,18,.10) 100%)',
+  },
+  // Ocean — deep navy with a clear sky-blue accent; calm, cinema-dark, high readability.
+  ocean: {
+    label: 'Ocean', tone: 'deep navy · sky blue',
+    ink: '#0D1420', surface: '#151E2E', raise: '#1F2B3E',
+    m: '#2E6FD0', c: '#5EA0F2', a: '#8FC2FF',
+    text: '#EAF1FB', muted: '#9FB1C9', line: 'rgba(255,255,255,.07)',
+    field: 'rgba(13,20,32,.82)', soft: 'rgba(40,55,80,.55)', panel: 'rgba(18,26,42,.96)',
+    focus: '#5EA0F2', focusSoft: 'rgba(94,160,242,.28)', onAccent: '#07172B',
+    success: '#7FD7A6', danger: '#E89292',
+    btn: 'rgba(40,52,72,.88)', btnHover: 'rgba(54,70,96,.92)', btnSelected: 'rgba(60,80,112,.92)', btnSelectedHover: 'rgba(72,94,128,.96)', btnPrimary: '#5EA0F2', btnPrimaryHover: '#79B2F6', btnFocusText: '#EAF1FB',
+    artFocusLine: 'rgba(94,160,242,.34)', artFocusGlow: 'rgba(94,160,242,.20)', artFocusTileLine: 'rgba(94,160,242,.26)', artFocusTileBorder: 'rgba(94,160,242,.20)', artFocusTileGlow: 'rgba(94,160,242,.16)',
+    scrim: 'linear-gradient(90deg,rgba(13,20,32,.86) 0%,rgba(13,20,32,.54) 28%,rgba(13,20,32,.18) 58%,rgba(13,20,32,.05) 100%),linear-gradient(0deg,rgba(13,20,32,.76) 0%,rgba(13,20,32,.24) 26%,rgba(13,20,32,.04) 60%,rgba(13,20,32,.10) 100%)',
+  },
+  // Graphite — carbon neutrals with a platinum-steel accent: the most understated of the three
+  // (no color cast at all), tuned for living-room TVs — subdued, zero glow, quietly premium.
+  graphite: {
+    label: 'Graphite', tone: 'carbon · platinum',
+    ink: '#0F1012', surface: '#17191C', raise: '#22252A',
+    m: '#78848F', c: '#A8B4C0', a: '#D6DDE4',
+    text: '#EEF1F4', muted: '#9AA2AB', line: 'rgba(255,255,255,.07)',
+    field: 'rgba(15,16,18,.82)', soft: 'rgba(36,40,45,.62)', panel: 'rgba(20,22,25,.96)',
+    focus: '#A8B4C0', focusSoft: 'rgba(168,180,192,.26)', onAccent: '#14181D',
+    success: '#85CDA0', danger: '#E39494',
+    btn: 'rgba(39,43,48,.78)', btnHover: 'rgba(51,56,62,.90)', btnSelected: 'rgba(65,71,79,.92)', btnSelectedHover: 'rgba(77,84,93,.96)', btnPrimary: '#A8B4C0', btnPrimaryHover: '#BAC5CF', btnFocusText: '#F2F4F7',
+    artFocusLine: 'rgba(168,180,192,.32)', artFocusGlow: 'rgba(168,180,192,.18)', artFocusTileLine: 'rgba(168,180,192,.25)', artFocusTileBorder: 'rgba(168,180,192,.19)', artFocusTileGlow: 'rgba(168,180,192,.15)',
+    scrim: 'linear-gradient(90deg,rgba(15,16,18,.86) 0%,rgba(15,16,18,.54) 28%,rgba(15,16,18,.18) 58%,rgba(15,16,18,.05) 100%),linear-gradient(0deg,rgba(15,16,18,.76) 0%,rgba(15,16,18,.24) 26%,rgba(15,16,18,.04) 60%,rgba(15,16,18,.10) 100%)',
+  },
+  // ---- LEGACY THEMES (hidden from the picker; kept resolvable so devices/profiles that saved
+  // one keep their look until they re-pick — deleting these would silently restyle them) ----
   triboonCoral: {
     label: 'Ocean', tone: 'deep blue',
     ink: '#0D1420', surface: '#151E2E', raise: '#1F2B3E',
@@ -17179,8 +17223,9 @@ const THEMES = {
   },
 };
 const THEME_ALIASES = {
-  graphite: 'studio', triboon: 'triboonCoral', trioon: 'triboonCoral', arctic: 'teal', forest: 'evergreen', ember: 'velvet',
-  steel: 'studio', ocean: 'teal', emerald: 'evergreen', crimson: 'velvet', violet: 'velvet',
+  // Ancient saved names whose theme OBJECTS no longer exist → nearest legacy/current look.
+  trioon: 'triboon', arctic: 'teal', forest: 'evergreen', ember: 'velvet',
+  steel: 'graphite', emerald: 'evergreen', crimson: 'velvet', violet: 'velvet',
   netflix: 'scarlet', hulu: 'aurora', appletv: 'daylight', plex: 'topaz',
 };
 // Theme follows the PROFILE (synced to the server like the other prefs), with the device-wide
@@ -17189,8 +17234,8 @@ const THEME_ALIASES = {
 function prefTheme() {
   try {
     const scoped = (S.profile && S.profile.id) ? localStorage.getItem(`triboon.profile.${S.profile.id}.theme`) : null;
-    return scoped || localStorage.getItem('triboon.theme') || 'triboonCoral';
-  } catch { return 'triboonCoral'; }
+    return scoped || localStorage.getItem('triboon.theme') || 'triboon';
+  } catch { return 'triboon'; }
 }
 // ---- custom theme (user-picked ACCENT colors over a fixed neutral-dark foundation) ----
 // Deliberately accents-only: free-form background/text theming produces unreadable combos and
@@ -17217,9 +17262,11 @@ function prefThemeCustomColors() {
     const raw = localStorage.getItem(profilePrefKey('themeCustom')) || localStorage.getItem('triboon.themeCustom');
     const j = raw ? JSON.parse(raw) : null;
     const ok = (h) => !!_hexRgb(h);
-    if (j && ok(j.m) && ok(j.c) && ok(j.a)) return { m: j.m, c: j.c, a: j.a };
+    // f (focus ring) is OPTIONAL — older saved customs have only the trio; focus falls back to
+    // the accent, which is exactly what those users were seeing anyway.
+    if (j && ok(j.m) && ok(j.c) && ok(j.a)) return { m: j.m, c: j.c, a: j.a, f: ok(j.f) ? j.f : null };
   } catch {}
-  return { ...CUSTOM_THEME_DEFAULTS };
+  return { ...CUSTOM_THEME_DEFAULTS, f: null };
 }
 function savePrefThemeCustom(colors) {
   const raw = JSON.stringify(colors);
@@ -17232,6 +17279,9 @@ function savePrefThemeCustom(colors) {
 function customTheme(colors) {
   const { m, c, a } = colors || prefThemeCustomColors();
   if (!_hexRgb(c)) return null;
+  // Focus ring/button color is independently pickable; unset falls back to the accent (the
+  // pre-f behavior, so older saved customs look identical).
+  const f = _hexRgb(colors && colors.f) ? colors.f : c;
   // Text ON the accent (primary buttons, focused chips): dark on a light accent, light on a dark one.
   const onAccent = _lumaOf(c) > 0.55 ? '#141414' : '#F7F5EF';
   return {
@@ -17241,12 +17291,12 @@ function customTheme(colors) {
     m, c, a,
     text: '#F2F0EA', muted: '#ABA69E', line: 'rgba(255,255,255,.065)',
     field: 'rgba(20,20,20,.80)', soft: 'rgba(45,46,45,.64)', panel: 'rgba(22,22,22,.96)',
-    focus: c, focusSoft: _rgbaOf(c, .26), onAccent,
+    focus: f, focusSoft: _rgbaOf(f, .26), onAccent,
     success: '#8ACB9C', danger: '#E89292',
     btn: 'rgba(45,46,45,.72)', btnHover: 'rgba(59,60,58,.86)', btnSelected: 'rgba(82,81,75,.90)', btnSelectedHover: 'rgba(94,93,86,.96)',
     btnPrimary: c, btnPrimaryHover: _lightenHex(c, .14), btnFocusText: '#F7F5EF',
-    artFocusLine: _rgbaOf(c, .34), artFocusGlow: _rgbaOf(c, .20), artFocusTileLine: _rgbaOf(c, .26),
-    artFocusTileBorder: _rgbaOf(c, .20), artFocusTileGlow: _rgbaOf(c, .16),
+    artFocusLine: _rgbaOf(f, .34), artFocusGlow: _rgbaOf(f, .20), artFocusTileLine: _rgbaOf(f, .26),
+    artFocusTileBorder: _rgbaOf(f, .20), artFocusTileGlow: _rgbaOf(f, .16),
     scrim: 'linear-gradient(90deg,rgba(20,20,20,.84) 0%,rgba(20,20,20,.54) 28%,rgba(20,20,20,.18) 58%,rgba(20,20,20,.05) 100%),linear-gradient(0deg,rgba(20,20,20,.74) 0%,rgba(20,20,20,.24) 26%,rgba(20,20,20,.04) 60%,rgba(20,20,20,.10) 100%)',
   };
 }
@@ -17260,8 +17310,8 @@ function savePrefTheme(name) {
 function applyTheme() {
   let name = prefTheme();
   if (name !== 'custom' && !THEMES[name] && THEME_ALIASES[name]) name = THEME_ALIASES[name];
-  const t = name === 'custom' ? (customTheme(prefThemeCustomColors()) || THEMES.triboonCoral)
-    : (THEMES[name] || THEMES.triboonCoral);
+  const t = name === 'custom' ? (customTheme(prefThemeCustomColors()) || THEMES.triboon)
+    : (THEMES[name] || THEMES.triboon);
   const r = document.documentElement.style;
   Object.entries(THEME_TOKEN_MAP).forEach(([key, cssVar]) => r.setProperty(cssVar, t[key]));
   r.setProperty('--grad', t.c);
@@ -17277,8 +17327,9 @@ function applyTheme() {
   if (document.body) { document.body.dataset.theme = name; document.body.dataset.light = t.light ? '1' : ''; document.body.toggleAttribute('data-spotlight', !!t.spotlight); }
   return name;
 }
-// Three curated themes in the picker (neutral / cool / warm). Others stay valid for saved prefs.
-const VISIBLE_THEMES = ['triboonCoral', 'studio', 'velvet', 'midnight', 'scarlet', 'aurora', 'toomaj', 'triboonGold', 'daylight', 'topaz'];
+// Exactly three curated themes in the picker (brand / cool / neutral) + the Custom tile.
+// Legacy theme objects stay valid for saved prefs but are never offered again.
+const VISIBLE_THEMES = ['triboon', 'ocean', 'graphite'];
 // One theme picker, two homes: user Preferences and admin Settings Display.
 function renderThemePicker(elId) {
   const tp = $(elId); if (!tp) return;
@@ -17365,23 +17416,24 @@ function toggleCustomThemeEditor(tp, afterEl, forceOpen = false) {
       <label>Accent <input type="color" data-ct="c" value="${cc.c}"></label>
       <label>Gradient pair <input type="color" data-ct="m" value="${cc.m}"></label>
       <label>Highlight <input type="color" data-ct="a" value="${cc.a}"></label>
+      <label>Focus ring <input type="color" data-ct="f" value="${cc.f || cc.c}"></label>
     </div>`;
   const commit = (colors) => {
     savePrefThemeCustom(colors);
     savePrefTheme('custom');
     applyTheme();
     // Refresh the Custom tile's preview swatch so it always mirrors the live colors.
-    if (afterEl) { afterEl.style.setProperty('--preview-accent', colors.c); afterEl.style.setProperty('--preview-focus', colors.c); }
+    if (afterEl) { afterEl.style.setProperty('--preview-accent', colors.c); afterEl.style.setProperty('--preview-focus', colors.f || colors.c); }
   };
   ed.querySelectorAll('.ctSwatch').forEach((b) => b.addEventListener('click', () => {
     const p = CUSTOM_THEME_PRESETS[+b.dataset.ctp];
-    ed.querySelectorAll('input[type="color"]').forEach((i) => { i.value = p[i.dataset.ct]; });
-    commit({ m: p.m, c: p.c, a: p.a });
+    ed.querySelectorAll('input[type="color"]').forEach((i) => { i.value = p[i.dataset.ct] || p.c; }); // presets: focus follows the accent
+    commit({ m: p.m, c: p.c, a: p.a, f: null });
     toast(`Custom theme: ${p.name}`);
   }));
   ed.querySelectorAll('input[type="color"]').forEach((i) => i.addEventListener('input', () => {
     const read = (k) => (ed.querySelector(`input[data-ct="${k}"]`) || {}).value;
-    commit({ m: read('m'), c: read('c'), a: read('a') });
+    commit({ m: read('m'), c: read('c'), a: read('a'), f: read('f') });
   }));
   afterEl.insertAdjacentElement('afterend', ed);
 }
@@ -17832,7 +17884,7 @@ function renderPinRows() {
         `<button class="avatarOpt focusable${pr.avatar === id ? ' sel' : ''}" data-av="${id}" aria-label="Avatar ${id.slice(2)}"><img src="avatars/${id}.svg" alt="" loading="lazy"></button>`).join('')}</div>
         <div class="avatarCustomRow">
           ${isTv ? '' : `<button class="profileAction focusable" data-avact="upload">${profileIcon('plus')}<span>Upload photo…</span></button>`}
-          ${pr.avatar ? `<button class="profileAction danger focusable" data-avact="clear">${profileIcon('trash')}<span>Remove avatar</span></button>` : ''}
+          ${pr.avatar === 'custom' ? `<button class="profileAction danger focusable" data-avact="clear">${profileIcon('trash')}<span>Remove photo</span></button>` : ''}
           <input type="file" accept="image/jpeg,image/png,image/webp,image/*" hidden>
         </div>`;
       const pick = async (avatar) => {
