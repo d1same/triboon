@@ -326,6 +326,16 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'detail button sync should recompute movie Resume/Play from the latest watch map');
   assert.match(ui, /function playbackFinishedDetailTarget\(item\) \{[\s\S]+item\.type === 'movie'[\s\S]+item\.type === 'episode'[\s\S]+key: `tmdb:tv:\$\{item\.tmdbId\}`[\s\S]+type: 'tv'/,
     'finished playback should resolve movies to movie details and final episodes to the show details page');
+  // Continue Watching plays straight from home with no detail page beneath the player. Backing
+  // out (not just finishing) must land on the title's details page, not dump the user on the
+  // homepage. Scoped to home-launched playback so library/Live TV returns keep their restores.
+  assert.match(ui, /const cwDetailTarget = \(!ret\.view \|\| ret\.view === 'home'\) \? playbackFinishedDetailTarget\(closingItem\) : null;[\s\S]+if \(cwDetailTarget\) \{[\s\S]+await openDetail\(cwDetailTarget\);[\s\S]+return;/,
+    'closing playback launched from Continue Watching (home) should open the title details page instead of returning to the homepage');
+  // The in-player episode rail spans the current season PLUS the next two, so deep-diving the
+  // strip can cross a season boundary without leaving the player; a stale-token re-check after
+  // the extra season fetches keeps a newer playback from being clobbered by the slow one.
+  assert.match(ui, /const nextSeasonNums = \(ctx\.seasons \|\| \)?[\s\S]*?\.filter\(\(n\) => Number\.isFinite\(\+n\) && \+n > ctx\.parts\.season\)[\s\S]+\.slice\(0, 2\);[\s\S]+const extraSeasons = \(await Promise\.all\(nextSeasonNums\.map[\s\S]+if \(token !== S\._playerSeasonStripToken \|\| !S\.playing \|\| !S\.playing\.item \|\| S\.playing\.item\.key !== it\.key\) return;[\s\S]+for \(const season of \[ctx\.season, \.\.\.extraSeasons\]\) \{/,
+    'the player episode strip should append episodes from the next two seasons (with a post-fetch staleness re-check)');
   assert.match(ui, /window\.__tvNativeVideoClosed = \(pos, dur, ended\) => \{[\s\S]+if \(ended && S\.nextEp\) \{\s+saveWatch\(true, \{ watched: true \}\);[\s\S]+closePlayer\(\{ ended: !!ended \}\);/,
     'native finished playback should mark the just-finished episode watched before Up Next, then close through the finished-title return path');
   // The web (HTMLVideo) end-of-episode path hands off to Up Next and returns WITHOUT going through
@@ -344,8 +354,17 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'native progress bridge should forward ExoPlayer progress into the Up Next timer path');
   assert.match(ui, /window\.__tvNativeVideoError = \(msg, pos, dur\) => \{\s+const p = S\.playing; if \(!p \|\| !p\.usingNative\) return;\s+applyNativeVideoProgress\(pos, dur, \{ preserveOnZero: true \}\);\s+const at = currentTime\(\);/,
     'native player errors should preserve the last good movie position when Exo reports a bogus zero before fallback');
-  assert.match(ui, /function maybeShowUpNext\(t, d, opts = \{\}\) \{[\s\S]+\(d - t\) > UP_NEXT_COUNTDOWN_SECONDS[\s\S]+if \(!opts\.native && \$\('video'\)\.paused\) return;[\s\S]+showUpNext\(\);/,
-    'Up Next should start only at the 10-second choice window and work for native progress without relying on the web video paused state');
+  // Two-phase Up Next: the card surfaces at credits-start (runtime-heuristic window, manual
+  // choice), and the 10s autoplay countdown arms SEPARATELY only inside the true final seconds —
+  // so the card is useful early without autoplay ever skipping the end of the episode.
+  assert.match(ui, /function maybeShowUpNext\(t, d, opts = \{\}\) \{[\s\S]+if \(!opts\.native && \$\('video'\)\.paused\) return;[\s\S]+if \(remaining > upNextEarlyWindow\(d\)\) return;[\s\S]+showUpNext\(\);[\s\S]+if \(remaining <= UP_NEXT_COUNTDOWN_SECONDS \+ 1\) armUpNextCountdown\(\);/,
+    'Up Next should surface at the credits-start window (manual) and arm the autoplay countdown only in the final seconds, working for native progress without relying on the web video paused state');
+  assert.match(ui, /function upNextEarlyWindow\(d\) \{ return Math\.max\(30, Math\.min\(90, Math\.round\(d \* 0\.035\)\)\); \}/,
+    'the credits-start heuristic is ~3.5% of runtime clamped to 30-90s');
+  assert.match(ui, /function armUpNextCountdown\(\) \{[\s\S]+if \(!ne \|\| !S\.upNextShown \|\| S\.upNextTimer \|\| S\.upNextDismissed \|\| !prefAutoplay\(\)\) return;[\s\S]+if \(n <= 0\) playNextEpisode\(\);/,
+    'the autoplay countdown must be idempotent and blocked by an explicit dismiss or the auto-play preference');
+  assert.match(ui, /function dismissUpNext\(\) \{ S\.upNextDismissed = true; hideUpNextUi\(\); \}[\s\S]+\$\('unCancel'\)\.addEventListener\('click', dismissUpNext\);[\s\S]+window\.__upNextDismissNative = \(\) => dismissUpNext\(\);/,
+    'dismissing the Up Next card (web or native) must stick — autoplay never re-arms for that episode');
   assert.doesNotMatch(ui, /\(d - t\) > 45/,
     'Up Next must not start a 10-second autoplay countdown with 45 seconds still left in the episode');
   assert.match(ui, /const UP_NEXT_COUNTDOWN_SECONDS = 10;[\s\S]+function showUpNext\(\) \{[\s\S]+let n = UP_NEXT_COUNTDOWN_SECONDS;[\s\S]+\$\('unCount'\)\.textContent = n;[\s\S]+if \(n <= 0\) playNextEpisode\(\);/,
@@ -1842,8 +1861,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'web episode cards should render the episode name below the thumbnail, not overlaid on the still');
   assert.match(ui, /async function getPlayerEpisodeContext\(it\) \{[\s\S]+episodeKeyParts\(it\)[\s\S]+api\(`\/api\/tmdb\/tv\/\$\{parts\.tmdbId\}\?append_to_response=external_ids`\)[\s\S]+api\(`\/api\/tmdb\/tv\/\$\{parts\.tmdbId\}\/season\/\$\{parts\.season\}`\)/,
     'player episode strip should load the current TMDB season and external IDs without depending on the detail page being open');
-  assert.match(ui, /async function prepPlayerSeasonEpisodes\(it\) \{[\s\S]+epItemOf\(ctx\.show, ctx\.season, ep\)[\s\S]+S\.playerSeasonStrip = \{ currentKey: it\.key, items, idx:[\s\S]+updateNativeEpisodeChoices\(\);/,
-    'player episode strip should reuse normal episode items and push the same choices to native playback');
+  assert.match(ui, /async function prepPlayerSeasonEpisodes\(it\) \{[\s\S]+epItemOf\(ctx\.show, \{ \.\.\.season, season_number: sNum \}, ep\)[\s\S]+S\.playerSeasonStrip = \{ currentKey: it\.key, items, idx:[\s\S]+updateNativeEpisodeChoices\(\);/,
+    'player episode strip should reuse normal episode items (per-season numbering intact) and push the same choices to native playback');
   assert.match(ui, /const playerMeta = episodePlayerMeta\(p\.item\);[\s\S]+title: playerMeta\.title \|\| p\.item\.title \|\| 'Triboon',[\s\S]+episodeLabel: playerMeta\.subline \|\| '',/,
     'native Android player handoff should receive the same episode subline as the web player');
   assert.match(ui, /episodeChoices: nativeEpisodeChoices\(\),/,

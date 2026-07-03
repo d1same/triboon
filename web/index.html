@@ -9069,6 +9069,7 @@ async function openPlayer(it, mount, opts = {}) {
       // auto-advance path, so only a lucky periodic tick past 92% would have recorded it.
       saveWatch(true, { watched: true });
       if (!S.upNextShown) showUpNext();
+      else armUpNextCountdown(); // card was up from the credits window — the end arms autoplay (no-op if dismissed)
       return; // countdown/manual Play Next owns the handoff
     }
     closePlayer({ ended: true });
@@ -10267,20 +10268,36 @@ async function prepPlayerSeasonEpisodes(it) {
   try {
     const ctx = await getPlayerEpisodeContext(it);
     if (!ctx || token !== S._playerSeasonStripToken || !S.playing || !S.playing.item || S.playing.item.key !== it.key) return;
-    const eps = (ctx.season.episodes || []).filter((ep) => ep && ep.episode_number > 0);
+    // The strip spans the CURRENT season plus the next two, so deep-diving the episode rail can
+    // keep going past a season boundary without leaving the player (owner request). Extra-season
+    // fetches tolerate individual failures — the strip degrades to whatever seasons loaded.
+    const nextSeasonNums = (ctx.seasons || [])
+      .map((x) => x && x.season_number)
+      .filter((n) => Number.isFinite(+n) && +n > ctx.parts.season)
+      .sort((a, b) => a - b)
+      .slice(0, 2);
+    const extraSeasons = (await Promise.all(nextSeasonNums.map((n) =>
+      api(`/api/tmdb/tv/${ctx.parts.tmdbId}/season/${n}`).catch(() => null)
+    ))).filter(Boolean);
+    // Re-check staleness after the extra awaits — a newer playback's strip must win.
+    if (token !== S._playerSeasonStripToken || !S.playing || !S.playing.item || S.playing.item.key !== it.key) return;
     const inheritedQuality = qualityRankForItem(it);
-    const items = eps.map((ep) => {
-      const base = epItemOf(ctx.show, ctx.season, ep);
-      const item = inheritedQuality ? { ...base, qualityRank: inheritedQuality } : base;
-      const w = S.watchMap && S.watchMap[item.key];
-      return {
-        item,
-        tag: `S${pad2(ctx.parts.season)}E${pad2(ep.episode_number)}`,
-        name: ep.name || '',
-        still: img(ep.still_path, 'w300') || ctx.show.backdrop,
-        watched: !!(w && w.watched),
-      };
-    });
+    const items = [];
+    for (const season of [ctx.season, ...extraSeasons]) {
+      const sNum = Number.isFinite(+(season && season.season_number)) ? +season.season_number : ctx.parts.season;
+      for (const ep of (season.episodes || []).filter((e) => e && e.episode_number > 0)) {
+        const base = epItemOf(ctx.show, { ...season, season_number: sNum }, ep);
+        const item = inheritedQuality ? { ...base, qualityRank: inheritedQuality } : base;
+        const w = S.watchMap && S.watchMap[item.key];
+        items.push({
+          item,
+          tag: `S${pad2(sNum)}E${pad2(ep.episode_number)}`,
+          name: ep.name || '',
+          still: img(ep.still_path, 'w300') || ctx.show.backdrop,
+          watched: !!(w && w.watched),
+        });
+      }
+    }
     const idx = Math.max(0, items.findIndex((ep) => ep.item.key === it.key));
     S.playerSeasonStrip = { currentKey: it.key, items, idx: idx < 0 ? 0 : idx };
     renderPlayerEpisodes();
@@ -10331,7 +10348,7 @@ function activatePlayerEpisode() {
   play(ep.item);
 }
 async function prepNextEpisode(it) {
-  S.nextEp = null; S.upNextShown = false; S.nextEpPrepared = false;
+  S.nextEp = null; S.upNextShown = false; S.upNextDismissed = false; S.nextEpPrepared = false;
   updateNextEpisodeButton();
   if (!it || it.type !== 'episode' || !it.key) return;
   const parts = episodeKeyParts(it); if (!parts) return;
@@ -10370,6 +10387,12 @@ function maybePrepareNextEpisode(t, d) {
   api('/api/prepare', { method: 'POST', body: playbackRequestBody(item, null, qRank) }).catch(() => {});
 }
 const UP_NEXT_COUNTDOWN_SECONDS = 10;
+// Streamed releases carry no credits-start chapter marker, so the Up Next card uses a runtime
+// heuristic instead of appearing only in the last seconds: ~3.5% of the runtime, clamped to
+// 30-90s (42-min episode → ~88s, 22-min → ~46s — about where credits typically roll). The card
+// in this early window is a MANUAL choice; the autoplay countdown arms separately, only inside
+// the true final seconds (see armUpNextCountdown), so autoplay can never eat the ending.
+function upNextEarlyWindow(d) { return Math.max(30, Math.min(90, Math.round(d * 0.035))); }
 // Native ExoPlayer hides the WebView, so the web #upNext overlay can't draw over the video.
 // When a v2+ shell exposes the native Up Next card, drive THAT instead — the countdown still
 // lives here (this JS keeps running while the WebView is hidden), we just render via the bridge.
@@ -10399,13 +10422,26 @@ function showUpNext() {
     applyFocus($('unPlay')); // remote: OK plays immediately, → reaches Dismiss
   }
   if (S.upNextTimer) { clearInterval(S.upNextTimer); S.upNextTimer = null; }
-  // Preference (Stremio parity): auto-play OFF keeps the Up Next card as a manual choice —
+  // The countdown arms ONLY inside the true final seconds (or when the file already ended and
+  // duration is unknown), and never after an explicit dismiss. In the earlier credits window —
+  // and with the auto-play preference OFF (Stremio parity) — the card is a manual choice:
   // no countdown, nothing plays unless the user picks it.
-  if (!autoplay) {
+  const d = totalDuration();
+  const remaining = d ? d - currentTime() : 0;
+  if (!autoplay || S.upNextDismissed || (d && remaining > UP_NEXT_COUNTDOWN_SECONDS + 1)) {
     if (native) pushNativeUpNext(ne, -1, false);
     else $('unCdWrap').style.display = 'none';
     return;
   }
+  armUpNextCountdown();
+}
+// Start (or restart) the 10s autoplay countdown on an already-visible card. No-ops when the
+// card is not up, a countdown is already running, the user dismissed the card, or auto-play is
+// off — so the ticks and ended-paths can call it unconditionally.
+function armUpNextCountdown() {
+  const ne = S.nextEp;
+  if (!ne || !S.upNextShown || S.upNextTimer || S.upNextDismissed || !prefAutoplay()) return;
+  const native = nativeUpNextBridge();
   if (!native) $('unCdWrap').style.display = '';
   let n = UP_NEXT_COUNTDOWN_SECONDS;
   if (native) pushNativeUpNext(ne, n, true); else $('unCount').textContent = n;
@@ -10416,12 +10452,18 @@ function showUpNext() {
   }, 1000);
 }
 function maybeShowUpNext(t, d, opts = {}) {
-  // The countdown begins when the popup appears, so do not surface it earlier than
-  // the actual choice window or autoplay can skip the last part of the episode.
-  if (!d || !S.nextEp || S.upNextShown || (d - t) > UP_NEXT_COUNTDOWN_SECONDS || (d - t) <= 0) return;
+  if (!d || !S.nextEp || (d - t) <= 0) return;
   if (!opts.native && $('video').paused) return;
-  S.upNextShown = true;
-  showUpNext();
+  const remaining = d - t;
+  if (!S.upNextShown) {
+    // Surface the card at credits-start (heuristic window) as a manual choice — showUpNext
+    // itself arms the countdown when we are already inside the final seconds (seek near end).
+    if (remaining > upNextEarlyWindow(d)) return;
+    showUpNext();
+    return;
+  }
+  // Card already up from the credits window: arm autoplay only in the true final seconds.
+  if (remaining <= UP_NEXT_COUNTDOWN_SECONDS + 1) armUpNextCountdown();
 }
 function playNextEpisode() {
   const ne = S.nextEp;
@@ -10429,10 +10471,14 @@ function playNextEpisode() {
   if (ne) play(ne.item);
 }
 $('unPlay').addEventListener('click', playNextEpisode);
-$('unCancel').addEventListener('click', hideUpNextUi);
+// An explicit dismiss is sticky for THIS episode: the card hides and autoplay must never arm
+// later (at the true end the card may reappear as a manual last-chance choice, but nothing
+// plays on its own). Covers mouse/remote Dismiss, web Back, and the native card's Dismiss.
+function dismissUpNext() { S.upNextDismissed = true; hideUpNextUi(); }
+$('unCancel').addEventListener('click', dismissUpNext);
 // Native Up Next card → web (the bridge forwards Play/Dismiss here so the countdown owner decides).
 window.__upNextPlayNative = () => playNextEpisode();
-window.__upNextDismissNative = () => hideUpNextUi();
+window.__upNextDismissNative = () => dismissUpNext();
 $('vlcCopy').addEventListener('click', () => {
   navigator.clipboard.writeText($('vlcUrl').textContent).then(() => toast('Stream URL copied — paste into VLC'));
 });
@@ -10868,6 +10914,19 @@ async function closePlayer(opts = {}) {
     await openDetail(finishedTarget);
   } else {
     const ret = S.playerReturn || { view: 'home' };
+    // Continue Watching (and next-episode) cards play straight from home with no detail page
+    // beneath the player — backing out used to dump the user on the homepage. Land on the
+    // title's details page instead (episodes resolve to their SHOW's page), exactly like
+    // play-from-detail does. Scoped to home-launched playback so library and Live TV returns
+    // keep their own restore logic; falls through to the old behavior when the item has no
+    // resolvable detail target.
+    const cwDetailTarget = (!ret.view || ret.view === 'home') ? playbackFinishedDetailTarget(closingItem) : null;
+    if (cwDetailTarget) {
+      S.playerReturn = null;
+      try { await finalWatch; await finalActivity; await loadWatchState(true); } catch {}
+      await openDetail(cwDetailTarget);
+      return;
+    }
     S.playerReturn = null;
     if (ret.view === 'library' && ret.libId) {
       const lib = (S.libraries || []).find((l) => l.id === ret.libId);
