@@ -9335,6 +9335,7 @@ async function applyNativeStartupSubtitleAfterTrackProbe(p) {
       subtitleLang: payload.lang,
       subtitleLabel: payload.label,
       subtitleShift: payload.shift,
+      subtitleStartup: true, // native side: fail silently + retry — never toast at play start
     }));
     p.subTrack = rel;
     p._subShift = loadSubShift(rel);
@@ -11878,6 +11879,25 @@ function applyStartupSubtitlePref() {
   });
   return true;
 }
+// Startup auto-CC must never nag. At play start the mount and the subtitle search are still
+// warming, so the FIRST attempt frequently hits a transient 5xx/timeout — that used to surface
+// as a "subtitles failed to load" toast seconds into playback (owner report) and auto-CC gave
+// up for good. The startup path now fails SILENTLY and retries at 4s/9s/16s; it stops on
+// success, a definitive per-title miss, the user touching subtitles, or playback changing.
+// Manual picks keep their loud immediate errors — the user is watching for those.
+function scheduleStartupSubtitleRetry(p) {
+  if (!p || S.playing !== p) return;
+  p._subStartupTries = (p._subStartupTries || 0) + 1;
+  if (p._subStartupTries > 3) return;
+  const delay = [4000, 9000, 16000][p._subStartupTries - 1] || 16000;
+  clearTimeout(p._subStartupRetryT);
+  p._subStartupRetryT = setTimeout(() => {
+    if (S.playing !== p || p._subtitleDisabledThisSession) return;
+    if (p.subTrack !== null && p.subTrack !== undefined) return; // something is on already
+    p._subtitleStartupLoading = false;
+    applyStartupSubtitlePref();
+  }, delay);
+}
 // Preferred-language subtitle startup can run before probing; audio/surround wait for tracks.
 function applyTrackPrefs() {
   const p = S.playing; if (!p) return;
@@ -12258,7 +12278,15 @@ async function setSubtitle(rel, opts = {}) {
     rel = await resolveOnlineSubtitleRel(rel);
   } catch (e) {
     const info = typeof rel === 'string' && rel.startsWith('os:') ? osTrackInfo(rel) : null;
+    const definitiveMiss = !!(e && (e.noSubtitles || e.status === 404));
     if (info && e && e.noSubtitles) rememberSubtitleMiss(info.lang, e.message);
+    if (opts.startup) {
+      // Silent on startup: a warming search/mount is normal seconds into playback — retry
+      // quietly instead of toasting; a definitive miss just stops (rememberSubtitleMiss noted it).
+      if (!definitiveMiss) scheduleStartupSubtitleRetry(p);
+      refreshNativeSubtitleChoices();
+      return;
+    }
     toast((e && e.message) || 'No subtitles found for this title');
     refreshNativeSubtitleChoices();
     return;
@@ -12286,6 +12314,15 @@ async function setSubtitle(rel, opts = {}) {
           refreshNativeSubtitleChoices();
           return setSubtitle(onlineFallbackRelForBuiltIn(rel), { autoFallback: true });
         }
+        if (opts.startup) {
+          // Startup auto-CC: no toast. Retry transient failures (5xx/504/429 — the mount and
+          // search are still warming this early); a definitive per-title miss stops quietly.
+          p.subTrack = null; $('ccBtn').classList.remove('on');
+          applySubtitleTrack();
+          refreshNativeSubtitleChoices();
+          if (!noResults && (r.status >= 500 || r.status === 429)) scheduleStartupSubtitleRetry(p);
+          return;
+        }
         toast(noResults || j.detail || j.error || (rel.startsWith('em:') ? 'Built-in subtitles are still preparing - try again in a moment' : 'Subtitles failed to load'));
         p.subTrack = null; $('ccBtn').classList.remove('on');
         applySubtitleTrack();
@@ -12306,6 +12343,12 @@ async function setSubtitle(rel, opts = {}) {
         applySubtitleTrack();
         refreshNativeSubtitleChoices();
         return setSubtitle(onlineFallbackRelForBuiltIn(rel), { autoFallback: true });
+      }
+      if (opts.startup) {
+        // Network hiccup on the startup path — silent retry, never a toast at play start.
+        p.subTrack = null; $('ccBtn').classList.remove('on'); applySubtitleTrack(); refreshNativeSubtitleChoices();
+        scheduleStartupSubtitleRetry(p);
+        return;
       }
       toast(rel.startsWith('em:') ? 'Built-in subtitles failed - try another built-in track or choose online subtitles' : 'Subtitles failed - check the server connection');
       p.subTrack = null; $('ccBtn').classList.remove('on'); applySubtitleTrack(); refreshNativeSubtitleChoices(); return;

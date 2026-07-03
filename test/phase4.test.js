@@ -2911,8 +2911,22 @@ test('Android native player: direct source and native chrome stay out of the web
     'native online subtitles should be fetched once and rendered by a live Exo overlay');
   assert.match(android, /c\.setReadTimeout\(nativeSubtitleReadTimeoutMs\(cleanUrl\)\);[\s\S]+private int nativeSubtitleReadTimeoutMs\(String url\) \{[\s\S]+raw\.contains\("\/api\/subtitle\/"\) \? 135000 : 20000;[\s\S]+\}/,
     'native built-in subtitle overlay fetches should outlive slow server-side extraction while online VTT stays quick');
-  assert.match(android, /throw new java\.io\.IOException\("subtitle HTTP " \+ status \+ ": " \+ subtitleErrorSnippet\(body\)\)/,
+  assert.match(android, /new java\.io\.IOException\("subtitle HTTP " \+ status \+ ": " \+ subtitleErrorSnippet\(body\)\)/,
     'native online subtitle failures should log the real HTTP status from the server route');
+  // Startup auto-CC on the native player must fail SILENTLY and retry (the server's subtitle
+  // search is still warming at play start — the one-shot toast was the owner's "subtitle could
+  // not be loaded at the beginning" report); a 404 is a definitive miss that stops retrying,
+  // and only MANUAL picks may toast, after retries are exhausted.
+  assert.match(android, /private void loadNativeSubtitleOverlay\(String url, boolean silent\)/,
+    'the native subtitle loader distinguishes silent startup loads from loud manual picks');
+  assert.match(android, /if \(status == 404\) throw new NativeSubtitleDefinitiveMiss\(fail\.getMessage\(\)\);[\s\S]+if \(!definitive && attempt < 2\) \{[\s\S]+attempt == 0 \? 4000 : 9000\);[\s\S]+if \(!silent\) Toast\.makeText\(this, "Subtitles could not load", Toast\.LENGTH_SHORT\)\.show\(\);/,
+    'native subtitle loads retry transient failures (4s/9s), stop on a definitive 404, and only toast when not silent');
+  assert.match(android, /loadNativeSubtitleOverlay\(nativeSubtitleUrl, j\.optBoolean\("subtitleStartup", false\)\);/,
+    'the bridge payload flag routes startup loads into the silent path');
+  assert.match(ui, /subtitleStartup: true, \/\/ native side: fail silently \+ retry/,
+    'the web layer flags its native startup subtitle application as silent');
+  assert.match(ui, /function scheduleStartupSubtitleRetry\(p\) \{[\s\S]+p\._subStartupTries > 3\) return;[\s\S]+\[4000, 9000, 16000\]\[p\._subStartupTries - 1\][\s\S]+applyStartupSubtitlePref\(\);/,
+    'the web startup auto-CC path retries silently instead of toasting at play start');
   assert.match(android, /private String redactNativeLogMessage\(String msg\)[\s\S]+token\|apikey\|api_key\|password\|pass/,
     'native subtitle failure logs should redact stream tokens and API-style secrets');
   assert.match(android, /window\.__tvNativeSubtitleShift && window\.__tvNativeSubtitleShift/,

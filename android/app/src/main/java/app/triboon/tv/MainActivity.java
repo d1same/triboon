@@ -5169,6 +5169,14 @@ public class MainActivity extends Activity {
     }
 
     private void loadNativeSubtitleOverlay(String url) {
+        loadNativeSubtitleOverlay(url, false);
+    }
+
+    // silent = startup auto-CC: at play start the server's subtitle search is still warming, so
+    // the FIRST fetch frequently 504s — that used to toast "Subtitles could not load" seconds
+    // into every auto-CC playback and give up. Startup loads now retry quietly (4s/9s) and only
+    // MANUAL picks toast, and only after the retries are exhausted.
+    private void loadNativeSubtitleOverlay(String url, boolean silent) {
         final String cleanUrl = stripNativeQueryParam(url, "shift");
         final int token = ++nativeSubtitleLoadToken;
         nativeSubtitleCues.clear();
@@ -5183,9 +5191,14 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             Log.w(TAG, "Subtitles could not load: " + redactNativeLogMessage(e.getMessage()));
             clearNativeSubtitleOverlay();
-            Toast.makeText(this, "Subtitles could not load", Toast.LENGTH_SHORT).show();
+            if (!silent) Toast.makeText(this, "Subtitles could not load", Toast.LENGTH_SHORT).show();
             return;
         }
+        loadNativeSubtitleOverlayAttempt(subtitleUrl, cleanUrl, token, silent, 0);
+    }
+
+    private void loadNativeSubtitleOverlayAttempt(ValidatedNativeUrl subtitleUrl, String cleanUrl,
+                                                  int token, boolean silent, int attempt) {
         final String fetchUrl = subtitleUrl.connectUrl;
         final String hostHeader = hostHeaderSafe(subtitleUrl.hostHeader) ? subtitleUrl.hostHeader : "";
         new Thread(() -> {
@@ -5202,7 +5215,10 @@ public class MainActivity extends Activity {
                 try {
                     body = readNativeSubtitleResponse(c, status >= 400);
                     if (status >= 400) {
-                        throw new java.io.IOException("subtitle HTTP " + status + ": " + subtitleErrorSnippet(body));
+                        java.io.IOException fail = new java.io.IOException("subtitle HTTP " + status + ": " + subtitleErrorSnippet(body));
+                        // 404 = a definitive per-title miss — retrying can't help; 5xx/429 = warming.
+                        if (status == 404) throw new NativeSubtitleDefinitiveMiss(fail.getMessage());
+                        throw fail;
                     }
                 } finally {
                     try { c.disconnect(); } catch (Exception ignored) {}
@@ -5218,13 +5234,25 @@ public class MainActivity extends Activity {
                 });
             } catch (Exception e) {
                 Log.w(TAG, "Subtitles could not load: " + redactNativeLogMessage(e.getMessage()));
+                final boolean definitive = e instanceof NativeSubtitleDefinitiveMiss;
                 runOnUiThread(() -> {
                     if (token != nativeSubtitleLoadToken) return;
+                    if (!definitive && attempt < 2) { // 3 attempts total, 4s then 9s apart
+                        nativeSubtitleHandler.postDelayed(() -> {
+                            if (token != nativeSubtitleLoadToken) return;
+                            loadNativeSubtitleOverlayAttempt(subtitleUrl, cleanUrl, token, silent, attempt + 1);
+                        }, attempt == 0 ? 4000 : 9000);
+                        return;
+                    }
                     clearNativeSubtitleOverlay();
-                    Toast.makeText(this, "Subtitles could not load", Toast.LENGTH_SHORT).show();
+                    if (!silent) Toast.makeText(this, "Subtitles could not load", Toast.LENGTH_SHORT).show();
                 });
             }
         }, "triboon-subtitles").start();
+    }
+
+    private static final class NativeSubtitleDefinitiveMiss extends java.io.IOException {
+        NativeSubtitleDefinitiveMiss(String m) { super(m); }
     }
 
     private int nativeSubtitleReadTimeoutMs(String url) {
@@ -5468,7 +5496,8 @@ public class MainActivity extends Activity {
             }
             nativeHasWyzieSubtitle = true;
             disableNativeTextTracks();
-            loadNativeSubtitleOverlay(nativeSubtitleUrl);
+            // Startup auto-CC loads fail silently + retry (the web layer flags them); manual picks stay loud.
+            loadNativeSubtitleOverlay(nativeSubtitleUrl, j.optBoolean("subtitleStartup", false));
             updateNativeChrome();
         } catch (Exception e) {
             Log.w(TAG, "Subtitles could not load: " + redactNativeLogMessage(e.getMessage()));
