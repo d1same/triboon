@@ -52,6 +52,10 @@ function hashPassword(password) {
   const hash = crypto.scryptSync(password, salt, SCRYPT.keylen, SCRYPT).toString('hex');
   return { salt, hash };
 }
+// Built-in profile avatars ship as web/avatars/av01.svg..av20.svg; the profile stores only the
+// id. 'custom' (an uploaded picture) is set exclusively by the upload route, never accepted
+// from a bare profile edit — so a profile can't claim a custom image that was never uploaded.
+function validAvatarId(a) { return /^av(0[1-9]|1\d|20)$/.test(String(a || '')); }
 function verifyPassword(password, salt, hash) {
   const got = crypto.scryptSync(password, salt, SCRYPT.keylen, SCRYPT);
   const want = Buffer.from(hash, 'hex');
@@ -167,7 +171,7 @@ class Auth {
 
   // Maturity levels: 0 Kids · 1 Teen · 2 Family · 3 Adult. The catalog is filtered to the
   // profile's level (kids never see mature/adult titles). Optional 4-digit PIN = parental lock.
-  addProfile(uid, { name, level = 3, pin }) {
+  addProfile(uid, { name, level = 3, pin, avatar }) {
     const users = this._users();
     const u = users.list.find((x) => x.id === uid);
     if (!u) throw new Error('unknown user');
@@ -178,6 +182,7 @@ class Auth {
       id: crypto.randomBytes(4).toString('hex'), name: String(name).trim().slice(0, 24),
       level: lvl, kid: lvl === 0,
     };
+    if (validAvatarId(avatar)) profile.avatar = String(avatar);
     if (pin && /^\d{4}$/.test(String(pin))) profile.pinHash = hashPassword(String(pin));
     u.profiles = u.profiles || [];
     u.profiles.push(profile);
@@ -185,9 +190,26 @@ class Auth {
     return this.publicProfile(profile);
   }
 
+  // Avatar is cosmetic — unlike name/level it needs NO account password (a kid picking a fox
+  // face is fine; the trust model only guards maturity/identity changes). 'custom' is set by
+  // the upload route after it has stored a sanitized image; null clears back to the initial.
+  setProfileAvatar(uid, profileId, avatar) {
+    const users = this._users();
+    const u = users.list.find((x) => x.id === uid);
+    if (!u) throw new Error('unknown user');
+    const p = (u.profiles || []).find((x) => x.id === profileId);
+    if (!p) throw new Error('unknown profile');
+    if (avatar === null || avatar === '') delete p.avatar;
+    else if (validAvatarId(avatar) || avatar === 'custom') p.avatar = String(avatar);
+    else throw new Error('unknown avatar');
+    this._saveUsers(users);
+    return this.publicProfile(p);
+  }
+
   publicProfile(p) {
     const level = p.level ?? (p.kid ? 0 : 3); // back-fill older profiles created before levels
-    return { id: p.id, name: p.name, level, kid: level === 0, locked: !!p.pinHash };
+    return { id: p.id, name: p.name, level, kid: level === 0, locked: !!p.pinHash,
+      avatar: p.avatar || null };
   }
 
   // Set, change, or remove a profile's PIN. The ACCOUNT PASSWORD is required so a kid using

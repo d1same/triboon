@@ -1884,6 +1884,19 @@ body.tv #heroCredits{height:16px;margin-bottom:6px;overflow:hidden}
 .themePalette i:nth-child(1){background:linear-gradient(90deg,var(--preview-ink),var(--preview-surface))}
 .themePalette i:nth-child(2){background:var(--preview-accent)}
 .themePalette i:nth-child(3){background:var(--preview-focus)}
+/* Custom-theme inline editor: preset trios (one-click, D-pad friendly) + free color wells */
+.customThemeEd{grid-column:1/-1;width:100%;display:flex;flex-direction:column;gap:12px;padding:12px;
+  border-radius:12px;border:1px solid var(--line);background:var(--soft)}
+.ctSwatches{display:flex;flex-wrap:wrap;gap:8px}
+.ctSwatch{display:flex;gap:0;padding:0;border-radius:999px;overflow:hidden;border:2px solid transparent;cursor:pointer;background:transparent}
+.ctSwatch i{width:22px;height:26px;display:block}
+.ctSwatch:hover,.ctSwatch.focus,.ctSwatch:focus-visible{border-color:var(--focus)}
+.ctWells{display:flex;flex-wrap:wrap;gap:14px}
+.ctWells label{display:flex;align-items:center;gap:8px;font:600 12.5px "Albert Sans";color:var(--muted)}
+.ctWells input[type="color"]{width:40px;height:28px;padding:0;border:1px solid var(--line);border-radius:8px;background:var(--field);cursor:pointer}
+/* TV: the free color wells would open a native color dialog a remote can't drive — the preset
+   trios are the TV path; fine-grained wells stay desktop/phone. */
+body.tv .ctWells{display:none}
 /* Profile PIN rows */
 #prefPins{display:flex;flex-direction:column;gap:10px}
 .profileSvg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;flex:none}
@@ -1917,6 +1930,19 @@ body.tv #heroCredits{height:16px;margin-bottom:6px;overflow:hidden}
   border-radius:14px;background:var(--field)}
 .profileSessionCard .profileActions{justify-content:flex-start}
 .pinForm{width:100%;grid-column:1/-1;display:flex;gap:8px;margin-top:2px;flex-wrap:wrap}
+/* Picked avatar image fills its tile (picker card, prefs row, rail chip) and clips to the
+   tile's own radius — the level-glyph styling stays for profiles that never picked a face. */
+.hasAvatar{padding:0;overflow:hidden}
+.hasAvatar img{width:100%;height:100%;object-fit:cover;display:block}
+/* Avatar chooser grid inside the profile row */
+.avatarPickForm{align-items:center}
+.avatarGrid{display:flex;flex-wrap:wrap;gap:10px;width:100%}
+.avatarOpt{width:56px;height:56px;border-radius:50%;padding:0;overflow:hidden;cursor:pointer;
+  background:transparent;border:2px solid transparent;transition:transform .12s ease,border-color .12s ease}
+.avatarOpt img{width:100%;height:100%;display:block;border-radius:50%}
+.avatarOpt:hover,.avatarOpt.focus,.avatarOpt:focus-visible{border-color:var(--focus);transform:scale(1.08)}
+.avatarOpt.sel{border-color:var(--focus);box-shadow:0 0 0 2px var(--focusSoft)}
+.avatarCustomRow{display:flex;gap:8px;align-items:center;width:100%;margin-top:2px}
 .pinForm input,.pinForm select{flex:1;min-width:130px;background:var(--field);border:1px solid var(--line);border-radius:10px;
   padding:10px 12px;color:var(--text);font:650 12.5px "JetBrains Mono";outline:none}
 .pinForm input:focus,.pinForm select:focus{border-color:var(--focus)}
@@ -4267,6 +4293,7 @@ const PROFILE_ICON_PATHS = {
   plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
   switch: '<path d="M16 3h5v5"/><path d="M4 20 21 3"/><path d="M21 16v5h-5"/><path d="m15 15 6 6"/><path d="M4 4l5 5"/>',
   logout: '<path d="M10 17l5-5-5-5"/><path d="M15 12H3"/><path d="M21 4v16"/>',
+  face: '<circle cx="12" cy="12" r="9"/><path d="M8.5 14.2c.9 1.2 2.1 1.8 3.5 1.8s2.6-.6 3.5-1.8"/><path d="M9 9.6h.01"/><path d="M15 9.6h.01"/>',
 };
 function profileIcon(name, extraClass = '') {
   const cls = extraClass ? ` ${extraClass}` : '';
@@ -4285,6 +4312,61 @@ function profileLevelAvatar(level) {
   return `<div class="profileLevelIcon lvl${idx}">${profileIcon(LEVEL_ICON[idx])}</div>`;
 }
 function profileInitial(name) { return (name || '?').trim()[0].toUpperCase(); }
+// 20 built-in cartoon avatars ship as static files (web/avatars/av01-20.svg); a profile stores
+// only the id. 'custom' means the profile has an uploaded picture, served via the tokenized
+// avatarUrl the server decorates onto /api/me (an <img> can't send the Authorization header).
+const AVATAR_IDS = Array.from({ length: 20 }, (_, i) => `av${String(i + 1).padStart(2, '0')}`);
+function profileAvatarSrc(pr) {
+  if (!pr) return '';
+  if (pr.avatar === 'custom' && pr.avatarUrl) return pr.avatarUrl;
+  if (/^av(0[1-9]|1\d|20)$/.test(pr.avatar || '')) return `avatars/${pr.avatar}.svg`;
+  return '';
+}
+// Circle avatar for any profile row/tile: the picked image when there is one, else the same
+// maturity-level glyph as before (so existing profiles look unchanged until they pick a face).
+function profileAvatarHtml(pr, level, cls = 'av') {
+  const src = profileAvatarSrc(pr);
+  if (src) return `<div class="${cls} hasAvatar"><img src="${esc(src)}" alt="" loading="lazy"></div>`;
+  return `<div class="${cls} lvl${level}">${profileIcon(LEVEL_ICON[level])}</div>`;
+}
+// Sync one updated profile everywhere it is displayed/consulted.
+function applyProfileUpdate(updated) {
+  const list = S.user && S.user.profiles || [];
+  const idx = list.findIndex((x) => x.id === updated.id);
+  if (idx >= 0) list[idx] = updated;
+  if (S.profile && S.profile.id === updated.id) { S.profile = updated; refreshRailUserChip(); }
+}
+function refreshRailUserChip() {
+  const chip = $('railUser') && $('railUser').querySelector('.av');
+  if (!chip) return;
+  const src = profileAvatarSrc(S.profile);
+  if (src) { chip.classList.add('hasAvatar'); chip.innerHTML = `<img src="${esc(src)}" alt="">`; }
+  else { chip.classList.remove('hasAvatar'); chip.textContent = profileInitial((S.profile && S.profile.name) || (S.user && S.user.name)); }
+}
+// Client-side re-encode before upload: center-crop square → 256px JPEG. Keeps uploads tiny and
+// strips whatever the original container was; the server still sniffs bytes and caps size.
+async function uploadProfileAvatar(pr, file) {
+  const url = URL.createObjectURL(file);
+  let img;
+  try {
+    img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('could not read that image')); i.src = url; });
+  } finally { setTimeout(() => URL.revokeObjectURL(url), 0); }
+  const size = 256;
+  const c = document.createElement('canvas'); c.width = c.height = size;
+  const g = c.getContext('2d');
+  const s = Math.min(img.naturalWidth, img.naturalHeight);
+  if (!s) throw new Error('could not read that image');
+  g.drawImage(img, (img.naturalWidth - s) / 2, (img.naturalHeight - s) / 2, s, s, 0, 0, size, size);
+  const blob = await new Promise((res) => c.toBlob(res, 'image/jpeg', 0.85));
+  if (!blob) throw new Error('could not convert that image');
+  const r = await fetch(`/api/me/profiles/${pr.id}/avatar-image`, {
+    method: 'POST', body: blob,
+    headers: { authorization: 'Bearer ' + tokenStore.get(), 'content-type': 'image/jpeg' },
+  });
+  const json = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(json.error || 'upload failed');
+  return json;
+}
 function signOutAccount() {
   try { stopPresence({ keepalive: true }); } catch {}
   tokenStore.set(null);
@@ -4297,7 +4379,7 @@ function showProfilePicker() {
     const level = profileLevelIndex(pr.level);
     const c = document.createElement('button');
     c.className = 'profCard focusable';
-    c.innerHTML = `<div class="av lvl${level}">${profileIcon(LEVEL_ICON[level])}</div>${pr.locked ? `<span class="lock">${profileIcon('lock')}</span>` : ''}` +
+    c.innerHTML = `${profileAvatarHtml(pr, level)}${pr.locked ? `<span class="lock">${profileIcon('lock')}</span>` : ''}` +
       `<div class="pn">${esc(pr.name)}</div>${profileLevelChip(level)}`;
     c.addEventListener('click', () => attemptProfile(pr));
     grid.appendChild(c);
@@ -4363,7 +4445,10 @@ async function addProfileFlow() {
     const p = prompt('Choose a 4-digit PIN'); if (p && /^\d{4}$/.test(p)) pin = p; else toast('PIN must be 4 digits — skipped');
   }
   try {
-    const pr = await api('/api/me/profiles', { method: 'POST', body: { name: name.trim(), level, pin } });
+    // New profiles start with a random built-in face — a fresh tile never looks bare, and the
+    // owner can swap it any time in Preferences → Profiles.
+    const avatar = AVATAR_IDS[Math.floor(Math.random() * AVATAR_IDS.length)];
+    const pr = await api('/api/me/profiles', { method: 'POST', body: { name: name.trim(), level, pin, avatar } });
     S.user.profiles.push(pr);
     selectProfile(pr);
   } catch (e) { toast(e.message); }
@@ -11364,6 +11449,7 @@ async function loadProfilePrefs() {
     if (r && r.prefs && Object.keys(r.prefs).length) {
       applyServerProfilePrefs(r.prefs);              // server wins: durable prefs follow the profile
       if (r.prefs.theme) { try { localStorage.setItem('triboon.theme', String(r.prefs.theme)); } catch {} } // mirror to the device fallback
+      if (r.prefs.themeCustom) { try { localStorage.setItem('triboon.themeCustom', String(r.prefs.themeCustom)); } catch {} } // custom colors need the same pre-profile boot fallback
       try { applyTheme(); } catch {}                  // apply the profile's synced theme (colors follow the profile)
       try { renderThemePicker('themePick'); renderThemePicker('themePickSet'); } catch {} // reflect the applied theme in any open picker
       try { resetScreensaverIdle(); } catch {}        // re-apply the loaded screensaver delay now
@@ -17106,6 +17192,64 @@ function prefTheme() {
     return scoped || localStorage.getItem('triboon.theme') || 'triboonCoral';
   } catch { return 'triboonCoral'; }
 }
+// ---- custom theme (user-picked ACCENT colors over a fixed neutral-dark foundation) ----
+// Deliberately accents-only: free-form background/text theming produces unreadable combos and
+// breaks every hand-tuned surface. The user picks the gradient pair + highlight; everything
+// else (focus ring, glows, on-accent text, primary buttons) derives from those three, so a
+// custom theme can never make the UI illegible.
+const CUSTOM_THEME_DEFAULTS = { m: '#C13BD6', c: '#FB8B3C', a: '#FFC65C' }; // the OG Triboon trio
+function _hexRgb(hex) {
+  const h = String(hex || '').replace('#', '');
+  const x = h.length === 3 ? h.split('').map((ch) => ch + ch).join('') : h;
+  const n = parseInt(x, 16);
+  if (!/^[0-9a-f]{6}$/i.test(x) || Number.isNaN(n)) return null;
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function _rgbaOf(hex, a) { const c = _hexRgb(hex) || [251, 139, 60]; return `rgba(${c[0]},${c[1]},${c[2]},${a})`; }
+function _lightenHex(hex, f) {
+  const c = _hexRgb(hex) || [251, 139, 60];
+  const up = (v) => Math.max(0, Math.min(255, Math.round(v + (255 - v) * f)));
+  return `#${up(c[0]).toString(16).padStart(2, '0')}${up(c[1]).toString(16).padStart(2, '0')}${up(c[2]).toString(16).padStart(2, '0')}`;
+}
+function _lumaOf(hex) { const c = _hexRgb(hex) || [0, 0, 0]; return (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) / 255; }
+function prefThemeCustomColors() {
+  try {
+    const raw = localStorage.getItem(profilePrefKey('themeCustom')) || localStorage.getItem('triboon.themeCustom');
+    const j = raw ? JSON.parse(raw) : null;
+    const ok = (h) => !!_hexRgb(h);
+    if (j && ok(j.m) && ok(j.c) && ok(j.a)) return { m: j.m, c: j.c, a: j.a };
+  } catch {}
+  return { ...CUSTOM_THEME_DEFAULTS };
+}
+function savePrefThemeCustom(colors) {
+  const raw = JSON.stringify(colors);
+  try {
+    localStorage.setItem(profilePrefKey('themeCustom'), raw); // rides the /api/me/prefs sync
+    localStorage.setItem('triboon.themeCustom', raw);          // device fallback for pre-profile boot
+  } catch {}
+  syncProfilePrefsUp();
+}
+function customTheme(colors) {
+  const { m, c, a } = colors || prefThemeCustomColors();
+  if (!_hexRgb(c)) return null;
+  // Text ON the accent (primary buttons, focused chips): dark on a light accent, light on a dark one.
+  const onAccent = _lumaOf(c) > 0.55 ? '#141414' : '#F7F5EF';
+  return {
+    label: 'Custom', tone: 'your colors',
+    // Neutral carbon foundation (same family as Carbon Brass) — a canvas any accent works on.
+    ink: '#141414', surface: '#1D1E1E', raise: '#292B2B',
+    m, c, a,
+    text: '#F2F0EA', muted: '#ABA69E', line: 'rgba(255,255,255,.065)',
+    field: 'rgba(20,20,20,.80)', soft: 'rgba(45,46,45,.64)', panel: 'rgba(22,22,22,.96)',
+    focus: c, focusSoft: _rgbaOf(c, .26), onAccent,
+    success: '#8ACB9C', danger: '#E89292',
+    btn: 'rgba(45,46,45,.72)', btnHover: 'rgba(59,60,58,.86)', btnSelected: 'rgba(82,81,75,.90)', btnSelectedHover: 'rgba(94,93,86,.96)',
+    btnPrimary: c, btnPrimaryHover: _lightenHex(c, .14), btnFocusText: '#F7F5EF',
+    artFocusLine: _rgbaOf(c, .34), artFocusGlow: _rgbaOf(c, .20), artFocusTileLine: _rgbaOf(c, .26),
+    artFocusTileBorder: _rgbaOf(c, .20), artFocusTileGlow: _rgbaOf(c, .16),
+    scrim: 'linear-gradient(90deg,rgba(20,20,20,.84) 0%,rgba(20,20,20,.54) 28%,rgba(20,20,20,.18) 58%,rgba(20,20,20,.05) 100%),linear-gradient(0deg,rgba(20,20,20,.74) 0%,rgba(20,20,20,.24) 26%,rgba(20,20,20,.04) 60%,rgba(20,20,20,.10) 100%)',
+  };
+}
 function savePrefTheme(name) {
   try {
     localStorage.setItem(profilePrefKey('theme'), name); // per-profile, rides the /api/me/prefs sync
@@ -17115,8 +17259,9 @@ function savePrefTheme(name) {
 }
 function applyTheme() {
   let name = prefTheme();
-  if (!THEMES[name] && THEME_ALIASES[name]) name = THEME_ALIASES[name];
-  const t = THEMES[name] || THEMES.triboonCoral;
+  if (name !== 'custom' && !THEMES[name] && THEME_ALIASES[name]) name = THEME_ALIASES[name];
+  const t = name === 'custom' ? (customTheme(prefThemeCustomColors()) || THEMES.triboonCoral)
+    : (THEMES[name] || THEMES.triboonCoral);
   const r = document.documentElement.style;
   Object.entries(THEME_TOKEN_MAP).forEach(([key, cssVar]) => r.setProperty(cssVar, t[key]));
   r.setProperty('--grad', t.c);
@@ -17160,10 +17305,85 @@ function renderThemePicker(elId) {
       savePrefTheme(name); // per-profile + synced to the server, so it survives updates/reinstalls
       applyTheme();
       syncChoiceButtons('#themePick .themeChoice,#themePickSet .themeChoice', (x) => x.dataset.theme === name);
+      const ed = tp.querySelector('.customThemeEd'); if (ed) ed.remove(); // picking a stock theme closes the color editor
       toast(`Theme: ${t.label}`);
     });
     tp.appendChild(b);
   });
+  // "Custom" — user-picked accent colors (gradient pair + highlight) over the neutral-dark
+  // foundation. Selecting it opens an inline editor: preset accent trios (one-click, D-pad
+  // friendly on TV) plus three fine-grained color wells for desktop/phone.
+  const cc = prefThemeCustomColors();
+  const cb = document.createElement('button');
+  cb.className = 'themeChoice focusable' + (cur === 'custom' ? ' sel' : '');
+  cb.dataset.theme = 'custom';
+  cb.title = 'Custom theme — pick your own accent colors';
+  cb.setAttribute('aria-label', 'Custom theme');
+  cb.setAttribute('aria-pressed', cur === 'custom' ? 'true' : 'false');
+  cb.style.setProperty('--preview-ink', '#141414');
+  cb.style.setProperty('--preview-surface', '#1D1E1E');
+  cb.style.setProperty('--preview-accent', cc.c);
+  cb.style.setProperty('--preview-focus', cc.c);
+  cb.style.setProperty('--preview-text', '#F2F0EA');
+  cb.style.setProperty('--preview-muted', '#ABA69E');
+  cb.innerHTML = `
+    <span class="themeMeta"><span class="themeName">Custom</span><span class="themeTone">your colors</span></span>
+    <span class="themePalette" aria-hidden="true"><i></i><i></i><i></i></span>`;
+  cb.addEventListener('click', () => {
+    savePrefTheme('custom');
+    applyTheme();
+    syncChoiceButtons('#themePick .themeChoice,#themePickSet .themeChoice', (x) => x.dataset.theme === 'custom');
+    toggleCustomThemeEditor(tp, cb);
+  });
+  tp.appendChild(cb);
+  if (cur === 'custom') toggleCustomThemeEditor(tp, cb, true);
+}
+// Curated accent trios — one D-pad click sets all three colors (a TV remote can't drive a
+// color well); the wells underneath allow full freedom on desktop/phone.
+const CUSTOM_THEME_PRESETS = [
+  { name: 'Triboon', m: '#C13BD6', c: '#FB8B3C', a: '#FFC65C' },
+  { name: 'Sky', m: '#2E6FD0', c: '#5EA0F2', a: '#8FC2FF' },
+  { name: 'Mint', m: '#1F8A5E', c: '#34B37A', a: '#7CD9AE' },
+  { name: 'Gold', m: '#B8902E', c: '#E0B450', a: '#F2D384' },
+  { name: 'Cherry', m: '#C22F3F', c: '#E85566', a: '#FF9AA5' },
+  { name: 'Violet', m: '#6C4BD8', c: '#8E6FF0', a: '#B9A5FF' },
+  { name: 'Teal', m: '#1F8A85', c: '#3FB8AF', a: '#7CDCD6' },
+  { name: 'Blush', m: '#D8409A', c: '#F06CB8', a: '#FFA8D9' },
+];
+function toggleCustomThemeEditor(tp, afterEl, forceOpen = false) {
+  const existing = tp.querySelector('.customThemeEd');
+  if (existing) { if (forceOpen) return; existing.remove(); return; }
+  const cc = prefThemeCustomColors();
+  const ed = document.createElement('div');
+  ed.className = 'customThemeEd';
+  ed.innerHTML = `
+    <div class="ctSwatches">${CUSTOM_THEME_PRESETS.map((p, i) =>
+    `<button class="ctSwatch focusable" data-ctp="${i}" title="${p.name}" aria-label="${p.name} colors">
+       <i style="background:${p.m}"></i><i style="background:${p.c}"></i><i style="background:${p.a}"></i></button>`).join('')}
+    </div>
+    <div class="ctWells">
+      <label>Accent <input type="color" data-ct="c" value="${cc.c}"></label>
+      <label>Gradient pair <input type="color" data-ct="m" value="${cc.m}"></label>
+      <label>Highlight <input type="color" data-ct="a" value="${cc.a}"></label>
+    </div>`;
+  const commit = (colors) => {
+    savePrefThemeCustom(colors);
+    savePrefTheme('custom');
+    applyTheme();
+    // Refresh the Custom tile's preview swatch so it always mirrors the live colors.
+    if (afterEl) { afterEl.style.setProperty('--preview-accent', colors.c); afterEl.style.setProperty('--preview-focus', colors.c); }
+  };
+  ed.querySelectorAll('.ctSwatch').forEach((b) => b.addEventListener('click', () => {
+    const p = CUSTOM_THEME_PRESETS[+b.dataset.ctp];
+    ed.querySelectorAll('input[type="color"]').forEach((i) => { i.value = p[i.dataset.ct]; });
+    commit({ m: p.m, c: p.c, a: p.a });
+    toast(`Custom theme: ${p.name}`);
+  }));
+  ed.querySelectorAll('input[type="color"]').forEach((i) => i.addEventListener('input', () => {
+    const read = (k) => (ed.querySelector(`input[data-ct="${k}"]`) || {}).value;
+    commit({ m: read('m'), c: read('c'), a: read('a') });
+  }));
+  afterEl.insertAdjacentElement('afterend', ed);
 }
 applyTheme(); // boot: restore the saved accent before first paint settles
 function applyContentTextSize() {
@@ -17590,16 +17810,57 @@ function renderPinRows() {
     const level = profileLevelIndex(pr.level);
     const row = document.createElement('div');
     row.className = 'pinRow';
-    row.innerHTML = `${profileLevelAvatar(level)}
+    row.innerHTML = `${profileAvatarHtml(pr, level, 'profileLevelIcon')}
       <div class="profileIdentity">
         <div class="profileName">${esc(pr.name)}</div>
         <div class="profileMeta">${profileLevelChip(level)}${pr.locked ? `<span class="lockTag">${profileIcon('lock')}<span>PIN set</span></span>` : ''}</div>
       </div>
       <div class="profileActions">
+        <button class="profileAction focusable" data-act="face">${profileIcon('face')}<span>Avatar</span></button>
         <button class="profileAction focusable" data-act="edit">${profileIcon('edit')}<span>Edit</span></button>
         <button class="profileAction danger focusable" data-act="del">${profileIcon('trash')}<span>Delete</span></button>
         <button class="profileAction focusable" data-act="pin">${profileIcon('key')}<span>${pr.locked ? 'Change PIN' : 'Set PIN'}</span></button>
       </div>`;
+    // Avatar chooser: 20 built-in faces + upload-your-own (phone/desktop; a TV remote can't
+    // drive a file dialog, so the upload button hides on the TV shell) + remove back to initial.
+    row.querySelector('[data-act="face"]').addEventListener('click', () => {
+      if (row.querySelector('.pinForm')) { row.querySelector('.pinForm').remove(); return; }
+      const f = document.createElement('div');
+      f.className = 'pinForm avatarPickForm';
+      const isTv = document.body.classList.contains('tv');
+      f.innerHTML = `<div class="avatarGrid">${AVATAR_IDS.map((id) =>
+        `<button class="avatarOpt focusable${pr.avatar === id ? ' sel' : ''}" data-av="${id}" aria-label="Avatar ${id.slice(2)}"><img src="avatars/${id}.svg" alt="" loading="lazy"></button>`).join('')}</div>
+        <div class="avatarCustomRow">
+          ${isTv ? '' : `<button class="profileAction focusable" data-avact="upload">${profileIcon('plus')}<span>Upload photo…</span></button>`}
+          ${pr.avatar ? `<button class="profileAction danger focusable" data-avact="clear">${profileIcon('trash')}<span>Remove avatar</span></button>` : ''}
+          <input type="file" accept="image/jpeg,image/png,image/webp,image/*" hidden>
+        </div>`;
+      const pick = async (avatar) => {
+        try {
+          const updated = await api(`/api/me/profiles/${pr.id}/avatar`, { method: 'POST', body: { avatar } });
+          applyProfileUpdate(updated);
+          toast(avatar ? `Avatar updated for ${updated.name}` : `Avatar removed from ${updated.name}`);
+          renderPinRows();
+        } catch (e) { toast(e.message); }
+      };
+      f.querySelectorAll('.avatarOpt').forEach((b) => b.addEventListener('click', () => pick(b.dataset.av)));
+      const clearBtn = f.querySelector('[data-avact="clear"]');
+      if (clearBtn) clearBtn.addEventListener('click', () => pick(null));
+      const upBtn = f.querySelector('[data-avact="upload"]');
+      const fileI = f.querySelector('input[type="file"]');
+      if (upBtn) upBtn.addEventListener('click', () => fileI.click());
+      fileI.addEventListener('change', async () => {
+        const file = fileI.files && fileI.files[0];
+        if (!file) return;
+        try {
+          const updated = await uploadProfileAvatar(pr, file);
+          applyProfileUpdate(updated);
+          toast(`Photo set for ${updated.name}`);
+          renderPinRows();
+        } catch (e) { toast(e.message); }
+      });
+      row.appendChild(f);
+    });
     // Edit (rename + maturity level) — like PINs, gated on the ACCOUNT password.
     row.querySelector('[data-act="edit"]').addEventListener('click', () => {
       if (row.querySelector('.pinForm')) { row.querySelector('.pinForm').remove(); return; }
@@ -17685,7 +17946,8 @@ function renderPinRows() {
     const name = addForm.querySelector('input').value.trim();
     if (!name) return toast('Enter a profile name');
     try {
-      const pr = await api('/api/me/profiles', { method: 'POST', body: { name, level: +addForm.querySelector('select').value } });
+      const avatar = AVATAR_IDS[Math.floor(Math.random() * AVATAR_IDS.length)]; // never a bare tile
+      const pr = await api('/api/me/profiles', { method: 'POST', body: { name, level: +addForm.querySelector('select').value, avatar } });
       (S.user.profiles = S.user.profiles || []).push(pr);
       toast(`Profile “${pr.name}” added — set a PIN below to lock it`);
       renderPinRows();
@@ -21586,7 +21848,7 @@ async function enterAppShell() {
   S.maxLevel = (S.profile && (S.profile.level ?? 3)) ?? 3;
   $('rail').classList.add('show');
   const isAdmin = S.user.role === 'admin';
-  $('railUser').querySelector('.av').textContent = profileInitial((S.profile && S.profile.name) || S.user.name);
+  refreshRailUserChip();
   $('railUser').querySelector('.rlabel').textContent = (S.profile && S.profile.name) || S.user.name;
   // Admin-only controls are hidden from regular users (server is also API-gated admin-only).
   // Server-settings tabs (folded into the account menu) + their divider are admin-only.

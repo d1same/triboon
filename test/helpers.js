@@ -44,6 +44,26 @@ function httpRaw(port, p, { range, method = 'GET', token, headers: extra } = {})
   });
 }
 
+// Binary-body request (avatar uploads etc.) — like httpJson but the body is raw bytes.
+function httpBinary(port, method, p, buf, token, contentType = 'application/octet-stream') {
+  return new Promise((resolve, reject) => {
+    const headers = { 'content-type': contentType, 'content-length': buf ? buf.length : 0 };
+    if (token) headers.authorization = `Bearer ${token}`;
+    const req = http.request({ host: '127.0.0.1', port, path: p, method, headers }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => {
+        const raw = Buffer.concat(chunks).toString('utf8');
+        let json = null;
+        try { json = JSON.parse(raw); } catch { /* non-json */ }
+        resolve({ status: res.statusCode, json, raw, headers: res.headers });
+      });
+    });
+    req.on('error', reject);
+    req.end(buf);
+  });
+}
+
 // Boot a fresh server module with an isolated data dir. Returns { server, shutdown, port, ... }.
 async function bootServer(env = {}) {
   const { TRIBOON_DATA, ...restEnv } = env;
@@ -72,4 +92,4 @@ async function setupAdmin(port, name = 'owner', password = 'hunter22') {
   return r.json.token;
 }
 
-module.exports = { httpJson, httpRaw, bootServer, setupAdmin };
+module.exports = { httpJson, httpRaw, httpBinary, bootServer, setupAdmin };

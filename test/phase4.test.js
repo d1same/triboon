@@ -820,8 +820,8 @@ test('preferences profile manager has TV-friendly profile icons and add action',
     'profile maturity levels should use professional inline icons');
   assert.match(ui, /function profileLevelChip\(level\) \{[\s\S]+profileIcon\(LEVEL_ICON\[idx\]\)[\s\S]+LEVELS\[idx\]/,
     'profile maturity chips should be generated from labels and icons, not emoji');
-  assert.match(ui, /row\.innerHTML = `\$\{profileLevelAvatar\(level\)\}[\s\S]+class="profileActions"[\s\S]+data-act="pin"/,
-    'profile settings rows should render identity, actions, and PIN as explicit D-pad targets');
+  assert.match(ui, /row\.innerHTML = `\$\{profileAvatarHtml\(pr, level, 'profileLevelIcon'\)\}[\s\S]+class="profileActions"[\s\S]+data-act="face"[\s\S]+data-act="pin"/,
+    'profile settings rows should render identity (avatar-aware), actions, avatar chooser, and PIN as explicit D-pad targets');
   assert.match(ui, /addForm\.className = 'pinForm addProfileForm'[\s\S]+class="profileAddBtn focusable"/,
     'the add-profile control should use the styled TV-friendly primary button');
   assert.doesNotMatch(ui, /LEVEL_BADGE/,
@@ -1472,6 +1472,26 @@ test('Android native player: direct source and native chrome stay out of the web
     'loading server prefs should apply the profile’s synced theme');
   assert.match(ui, /function applyTheme\(\) \{[\s\S]+Object\.entries\(THEME_TOKEN_MAP\)[\s\S]+setProperty\('--grad', t\.c\)[\s\S]+setProperty\('--gold', t\.a\)[\s\S]+\['btn', 'btnHover', 'btnSelected', 'btnSelectedHover', 'btnPrimary', 'btnPrimaryHover', 'btnFocusText',[\s\S]+'artFocusLine', 'artFocusGlow', 'artFocusTileLine', 'artFocusTileBorder', 'artFocusTileGlow'\][\s\S]+document\.body\.dataset\.theme = name/,
     'theme application should update role tokens plus shared button state colors');
+  // Custom theme = ACCENTS ONLY over a fixed neutral-dark foundation: the user picks the trio,
+  // everything readable (focus ring, on-accent text by luminance, glows) derives from it — a
+  // custom theme can never produce an unreadable UI.
+  assert.match(ui, /const t = name === 'custom' \? \(customTheme\(prefThemeCustomColors\(\)\) \|\| THEMES\.triboonCoral\)/,
+    'applyTheme should resolve the custom theme from the stored accent colors with a safe fallback');
+  assert.match(ui, /function customTheme\(colors\) \{[\s\S]+if \(!_hexRgb\(c\)\) return null;[\s\S]+const onAccent = _lumaOf\(c\) > 0\.55 \? '#141414' : '#F7F5EF';[\s\S]+focus: c, focusSoft: _rgbaOf\(c, \.26\), onAccent,[\s\S]+btnPrimary: c, btnPrimaryHover: _lightenHex\(c, \.14\)/,
+    'the custom theme builder must derive focus/on-accent/button tokens from the picked accent (luminance-aware)');
+  assert.match(ui, /function savePrefThemeCustom\(colors\) \{[\s\S]+localStorage\.setItem\(profilePrefKey\('themeCustom'\), raw\);[\s\S]+syncProfilePrefsUp\(\);/,
+    'custom colors must ride the per-profile prefs sync like the theme name itself');
+  assert.match(ui, /const CUSTOM_THEME_PRESETS = \[[\s\S]+function toggleCustomThemeEditor\(tp, afterEl[\s\S]+\.ctSwatch[\s\S]+input\[type="color"\]/,
+    'the custom editor offers one-click preset trios (TV/D-pad) plus free color wells (desktop/phone)');
+  // Profile avatars: builtin faces + uploaded photo, everywhere a profile shows.
+  assert.match(ui, /function profileAvatarSrc\(pr\) \{[\s\S]+pr\.avatar === 'custom' && pr\.avatarUrl[\s\S]+avatars\/\$\{pr\.avatar\}\.svg/,
+    'profile avatars resolve to the builtin SVG or the tokenized custom URL');
+  assert.match(ui, /function profileAvatarHtml\(pr, level, cls = 'av'\) \{[\s\S]+hasAvatar[\s\S]+lvl\$\{level\}/,
+    'profiles without a picked face keep the maturity-level glyph (no bare/broken tiles)');
+  assert.match(ui, /async function uploadProfileAvatar\(pr, file\) \{[\s\S]+c\.width = c\.height = size;[\s\S]+toBlob\(res, 'image\/jpeg', 0\.85\)[\s\S]+\/api\/me\/profiles\/\$\{pr\.id\}\/avatar-image/,
+    'custom photos are center-cropped + re-encoded to a small JPEG client-side before upload');
+  assert.match(ui, /data-act="face"[\s\S]+avatarPickForm[\s\S]+AVATAR_IDS\.map[\s\S]+isTv \? '' : `<button class="profileAction focusable" data-avact="upload"/,
+    'the avatar chooser lists the 20 builtin faces and hides the upload button on the TV shell (a remote cannot drive a file dialog)');
   assert.ok(!ui.includes('--grad:linear-gradient') && !ui.includes('--gold:linear-gradient')
     && !ui.includes('.musicAction.primary{background:linear-gradient')
     && !ui.match(/\.ytmConnectIcon[^{]*\{[^}]*linear-gradient/),

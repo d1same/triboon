@@ -3088,6 +3088,28 @@ function streamScopeOk(ctx, resource) {
   if (ctx.claims.scope !== 'stream') return true;
   return ctx.claims.sub === resource;
 }
+// ---- profile avatar storage (custom uploads live under data/avatars, never the web root) ----
+const AVATARS_DIR = path.join(DATA_DIR, 'avatars');
+function avatarFilePath(uid, pid) {
+  // uid/pid are server-minted hex ids, and the routes constrain them to \w+ — belt & braces.
+  return path.join(AVATARS_DIR, `${String(uid).replace(/\W/g, '')}-${String(pid).replace(/\W/g, '')}.img`);
+}
+// Content type comes from the BYTES, never from the client. Anything unrecognized is rejected
+// at upload and served as octet-stream if it somehow lands on disk.
+function sniffAvatarMime(buf) {
+  if (!buf || buf.length < 12) return '';
+  if (buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) return 'image/jpeg';
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) return 'image/png';
+  if (buf.toString('latin1', 0, 4) === 'RIFF' && buf.toString('latin1', 8, 12) === 'WEBP') return 'image/webp';
+  return '';
+}
+// Custom avatars render via <img>, which can't send an Authorization header — decorate the
+// profile with a tokenized URL (stable stream token bound to exactly this avatar), the same
+// pattern local library art uses.
+function profileWithAvatarUrl(uid, p) {
+  if (!p || p.avatar !== 'custom') return p;
+  return { ...p, avatarUrl: `/api/avatar/${uid}/${p.id}?t=${auth.stableStreamToken(uid, `avatar:${uid}:${p.id}`)}` };
+}
 function mountAccessOk(ctx, vf) {
   if (!vf) return false;
   if (ctx.user && ctx.user.role === 'admin') return true;
@@ -4095,7 +4117,9 @@ const H = {
     const s = settings.get();
     const sources = iptvSourcesFromSettings(s);
     const iptvAllowed = ctx.user.role === 'admin' || sources.some((src) => userCanAccessIptvSource(ctx.user, src));
-    send(ctx.res, 200, { ...auth.publicUser(ctx.user), iptvAllowed });
+    const me = { ...auth.publicUser(ctx.user), iptvAllowed };
+    me.profiles = (me.profiles || []).map((p) => profileWithAvatarUrl(ctx.user.id, p));
+    send(ctx.res, 200, me);
   },
 
   meSecurity: async (ctx) => {
@@ -4149,8 +4173,59 @@ const H = {
 
   profileAdd: async (ctx) => {
     const b = await readJson(ctx.req);
-    try { send(ctx.res, 200, auth.addProfile(ctx.user.id, { name: b.name, level: b.level, pin: b.pin })); }
+    try { send(ctx.res, 200, auth.addProfile(ctx.user.id, { name: b.name, level: b.level, pin: b.pin, avatar: b.avatar })); }
     catch (e) { send(ctx.res, 400, { error: e.message }); }
+  },
+
+  // ---- profile avatars ----
+  // Built-in avatars are static files (web/avatars/avNN.svg) picked by id. A CUSTOM avatar is an
+  // image uploaded from a phone/desktop browser: the client re-encodes to a small JPEG first, but
+  // the server trusts nothing — hard size cap + magic-byte sniff (JPEG/PNG/WebP only; user-supplied
+  // SVG served back is a script-injection vector), stored OUTSIDE the web root under data/avatars,
+  // and served by a token-authed route with a sniffed (never client-declared) content type.
+  profileAvatarPick: async (ctx) => {
+    const b = await readJson(ctx.req);
+    try {
+      // Only a built-in id or null (clear) is accepted here — 'custom' is set exclusively by the
+      // upload route, so a profile can never claim an image that was never uploaded.
+      const av = (b.avatar === null || b.avatar === '' || b.avatar === undefined) ? null : String(b.avatar);
+      if (av !== null && !/^av(0[1-9]|1\d|20)$/.test(av)) return send(ctx.res, 400, { error: 'unknown avatar' });
+      const p = auth.setProfileAvatar(ctx.user.id, ctx.m[1], av);
+      // Leaving custom (or clearing) drops the stored image so ./data never accumulates orphans.
+      fs.promises.rm(avatarFilePath(ctx.user.id, ctx.m[1]), { force: true }).catch(() => {});
+      send(ctx.res, 200, profileWithAvatarUrl(ctx.user.id, p));
+    } catch (e) { send(ctx.res, 400, { error: e.message }); }
+  },
+
+  profileAvatarUpload: async (ctx) => {
+    let buf;
+    try { buf = await readBody(ctx.req, 512 * 1024); }
+    catch (e) { return send(ctx.res, e.status || 413, { error: 'image too large (512KB max — the app resizes before upload)' }); }
+    const mime = sniffAvatarMime(buf);
+    if (!mime || buf.length < 100) return send(ctx.res, 400, { error: 'image must be a JPEG, PNG, or WebP file' });
+    const prof = (ctx.user.profiles || []).find((p) => p.id === ctx.m[1]);
+    if (!prof) return send(ctx.res, 404, { error: 'unknown profile' });
+    try {
+      await fs.promises.mkdir(AVATARS_DIR, { recursive: true });
+      await fs.promises.writeFile(avatarFilePath(ctx.user.id, ctx.m[1]), buf);
+      const p = auth.setProfileAvatar(ctx.user.id, ctx.m[1], 'custom');
+      send(ctx.res, 200, profileWithAvatarUrl(ctx.user.id, p));
+    } catch (e) { send(ctx.res, 400, { error: e.message }); }
+  },
+
+  // <img> can't send headers, so this is stream-auth with the token bound to exactly one
+  // avatar (same pattern as local library art). A full session token may only read its OWN
+  // account's avatars — profile pictures are not cross-user browsable.
+  profileAvatarServe: async (ctx) => {
+    const uid = ctx.m[1], pid = ctx.m[2];
+    if (!streamScopeOk(ctx, `avatar:${uid}:${pid}`)) return send(ctx.res, 401, { error: 'token not valid for this avatar' });
+    if (ctx.claims.scope !== 'stream' && (!ctx.user || ctx.user.id !== uid)) return send(ctx.res, 403, { error: 'not your avatar' });
+    let buf;
+    try { buf = await fs.promises.readFile(avatarFilePath(uid, pid)); } catch { return send(ctx.res, 404, { error: 'no avatar' }); }
+    const mime = sniffAvatarMime(buf) || 'application/octet-stream';
+    ctx.res.writeHead(200, { 'content-type': mime, 'content-length': buf.length,
+      'cache-control': 'private, max-age=86400', 'x-content-type-options': 'nosniff' });
+    ctx.res.end(buf);
   },
   // Set/change/remove a profile PIN — gated on the ACCOUNT password (a kid with the session
   // open can't lift the lock), and rate-limited like any password check.
@@ -4161,7 +4236,7 @@ const H = {
     try {
       const p = auth.setProfilePin(ctx.user.id, ctx.m[1], b.password, b.pin === undefined ? null : b.pin);
       limiter.clear(key);
-      send(ctx.res, 200, p);
+      send(ctx.res, 200, profileWithAvatarUrl(ctx.user.id, p));
     } catch (e) { send(ctx.res, 400, { error: e.message }); }
   },
 
@@ -4173,7 +4248,7 @@ const H = {
     try {
       const p = auth.editProfile(ctx.user.id, ctx.m[1], b.password, { name: b.name, level: b.level });
       limiter.clear(key);
-      send(ctx.res, 200, p);
+      send(ctx.res, 200, profileWithAvatarUrl(ctx.user.id, p));
     } catch (e) { send(ctx.res, 400, { error: e.message }); }
   },
 
@@ -4184,6 +4259,8 @@ const H = {
     try {
       auth.deleteProfile(ctx.user.id, ctx.m[1], b.password);
       limiter.clear(key);
+      // The custom avatar image goes with the profile (data/avatars must not accumulate orphans).
+      fs.promises.rm(avatarFilePath(ctx.user.id, ctx.m[1]), { force: true }).catch(() => {});
       // The profile's watch history goes with it — orphaned entries would resurface if a new
       // profile ever reused the id.
       const prefix = `${ctx.user.id}:${ctx.m[1]}:`;
@@ -7598,6 +7675,9 @@ const ROUTES = [
   { m: 'POST', re: /^\/api\/me\/profiles\/(\w+)\/delete$/, auth: 'user', h: H.profileDelete },
   { m: 'POST', re: /^\/api\/me\/profiles\/(\w+)\/verify$/, auth: 'user', h: H.profileVerifyPin },
   { m: 'POST', re: /^\/api\/me\/profiles\/(\w+)\/pin$/, auth: 'user', h: H.profileSetPin },
+  { m: 'POST', re: /^\/api\/me\/profiles\/(\w+)\/avatar$/, auth: 'user', h: H.profileAvatarPick },
+  { m: 'POST', re: /^\/api\/me\/profiles\/(\w+)\/avatar-image$/, auth: 'user', h: H.profileAvatarUpload },
+  { m: 'GET', re: /^\/api\/avatar\/(\w+)\/(\w+)$/, auth: 'stream', h: H.profileAvatarServe },
   { m: 'GET', re: /^\/api\/me\/iptv\/sources$/, auth: 'user', h: H.myIptvSourcesList },
   { m: 'POST', re: /^\/api\/me\/iptv\/sources$/, auth: 'user', h: H.myIptvSourceCreate },
   { m: 'PATCH', re: /^\/api\/me\/iptv\/sources\/([\w-]+)$/, auth: 'user', h: H.myIptvSourceUpdate },

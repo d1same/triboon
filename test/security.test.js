@@ -10,7 +10,7 @@ const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
 const zlib = require('zlib');
-const { httpJson, httpRaw, bootServer, setupAdmin } = require('./helpers');
+const { httpJson, httpRaw, httpBinary, bootServer, setupAdmin } = require('./helpers');
 const { totpCode } = require('../server/auth');
 const { createMockNntp } = require('./mock-nntp');
 const { encodePart } = require('../server/yenc');
@@ -821,6 +821,62 @@ test('profiles: add a profile; watch state is isolated per profile', async () =>
   const defaultList = await httpJson(srv.port, 'GET', '/api/watch', null, admin);
   assert.ok(!defaultList.json.some((w) => w.key === 'tmdb:movie:99'), 'kids progress not in default profile');
   assert.strictEqual((await httpJson(srv.port, 'POST', '/api/me/profiles', { name: '' }, admin)).status, 400);
+});
+
+test('profiles: avatars — builtin pick validated, uploads sanitized, serving tokenized + cross-user isolated', async () => {
+  // A profile born with a builtin avatar carries it in the public shape.
+  const add = await httpJson(srv.port, 'POST', '/api/me/profiles', { name: 'Foxy', level: 2, avatar: 'av01' }, admin);
+  assert.strictEqual(add.status, 200);
+  assert.strictEqual(add.json.avatar, 'av01');
+  const pid = add.json.id;
+
+  // Builtin pick: valid ids swap, junk is rejected, and 'custom' can NOT be claimed without an
+  // upload (otherwise a profile could point at an image that was never stored/sanitized).
+  const picked = await httpJson(srv.port, 'POST', `/api/me/profiles/${pid}/avatar`, { avatar: 'av13' }, admin);
+  assert.strictEqual(picked.status, 200);
+  assert.strictEqual(picked.json.avatar, 'av13');
+  assert.strictEqual((await httpJson(srv.port, 'POST', `/api/me/profiles/${pid}/avatar`, { avatar: 'av99' }, admin)).status, 400);
+  assert.strictEqual((await httpJson(srv.port, 'POST', `/api/me/profiles/${pid}/avatar`, { avatar: 'custom' }, admin)).status, 400);
+  assert.strictEqual((await httpJson(srv.port, 'POST', `/api/me/profiles/${pid}/avatar`, { avatar: '../../etc' }, admin)).status, 400);
+
+  // Upload: content type comes from the BYTES. Garbage magic is rejected; a real JPEG header lands.
+  const junk = Buffer.alloc(4096, 0x41); // 'AAAA…' — not an image
+  assert.strictEqual((await httpBinary(srv.port, 'POST', `/api/me/profiles/${pid}/avatar-image`, junk, admin, 'image/jpeg')).status, 400,
+    'declared image/jpeg with non-image bytes is rejected (magic sniff, not client content-type)');
+  const jpeg = Buffer.concat([Buffer.from([0xFF, 0xD8, 0xFF, 0xE0]), Buffer.alloc(500, 0x10)]);
+  const up = await httpBinary(srv.port, 'POST', `/api/me/profiles/${pid}/avatar-image`, jpeg, admin, 'image/jpeg');
+  assert.strictEqual(up.status, 200);
+  assert.strictEqual(up.json.avatar, 'custom');
+  assert.match(up.json.avatarUrl, /^\/api\/avatar\/\w+\/\w+\?t=/, 'custom avatar gets a tokenized serve URL');
+  // Oversize is refused before it hits disk (the app resizes to ~256px client-side; 512KB is the
+  // hard cap). readBody deliberately DESTROYS the connection on overflow rather than buffering the
+  // flood, so the client sees either an error status or a connection reset — both are a rejection.
+  const huge = Buffer.concat([Buffer.from([0xFF, 0xD8, 0xFF, 0xE0]), Buffer.alloc(600 * 1024, 0x10)]);
+  const big = await httpBinary(srv.port, 'POST', `/api/me/profiles/${pid}/avatar-image`, huge, admin, 'image/jpeg')
+    .catch((e) => ({ status: 0, reset: e && e.code === 'ECONNRESET' }));
+  assert.ok(big.status >= 400 || big.reset, `oversize upload rejected (status=${big.status} reset=${!!big.reset})`);
+
+  // Serving: the tokenized URL works with NO auth header (an <img> can't send one) and the
+  // sniffed content type comes back; the same token cannot be replayed against a different pid.
+  const got = await httpRaw(srv.port, up.json.avatarUrl);
+  assert.strictEqual(got.status, 200);
+  assert.strictEqual(got.headers['content-type'], 'image/jpeg');
+  assert.ok(got.body.equals(jpeg), 'served bytes are exactly the stored upload');
+  const tok = up.json.avatarUrl.split('?t=')[1];
+  const uid = up.json.avatarUrl.split('/')[3];
+  assert.strictEqual((await httpRaw(srv.port, `/api/avatar/${uid}/deadbeef?t=${tok}`)).status, 401,
+    'a stream token minted for one avatar is rejected on another');
+
+  // Cross-user: another account's SESSION token cannot browse this user's avatar.
+  const inv = await httpJson(srv.port, 'POST', '/api/invites', { policy: {} }, admin);
+  const other = await httpJson(srv.port, 'POST', '/api/invite/accept', { token: inv.json.token, name: 'peeper', password: 'peep-pass' });
+  assert.strictEqual(other.status, 200);
+  const denied = await httpRaw(srv.port, `/api/avatar/${uid}/${pid}?t=${other.json.token}`);
+  assert.strictEqual(denied.status, 403, 'another user cannot read my profile picture with their session token');
+
+  // Switching back to a builtin (or deleting the profile) removes the stored image.
+  await httpJson(srv.port, 'POST', `/api/me/profiles/${pid}/avatar`, { avatar: 'av05' }, admin);
+  assert.strictEqual((await httpRaw(srv.port, up.json.avatarUrl)).status, 404, 'leaving custom drops the stored image');
 });
 
 test('libraries v2: kinds, edit, folder scan, and Range-served local playback', async () => {
