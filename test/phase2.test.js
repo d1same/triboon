@@ -746,6 +746,34 @@ test('subs: usableVariants trims the wrong-episode / unplayable rows from the me
   assert.ok(fallback.some((v) => v.selected), 'a best-effort row is still marked selected');
 });
 
+test('subs: provider priority wins ties but never beats correctness signals', () => {
+  const { rankSubs } = require('../server/opensubs');
+  const release = 'Some.Show.S01E02.1080p.WEB-DL-GRP.mkv';
+  // Two comparable generic subs, one per provider (Wyzie entries carry no _provider tag).
+  const comparable = [
+    { id: 'wy', url: 'http://x/wy.srt', format: 'srt', display: 'Some.Show.S01E02.WEBRip' },
+    { id: 'os', url: 'opensubtitles:1', _osFileId: 1, format: 'srt', display: 'Some.Show.S01E02.WEBRip', _provider: 'opensubtitles' },
+  ];
+  assert.strictEqual(rankSubs(comparable, release, { preferProvider: 'opensubtitles' })[0].id, 'os',
+    'OpenSubtitles-first promotes the OS sub between comparable results');
+  assert.strictEqual(rankSubs(comparable, release, { preferProvider: 'wyzie' })[0].id, 'wy',
+    'Wyzie-first promotes the Wyzie sub between comparable results');
+  // Correctness still outranks preference: a moviehash-exact OS sub beats a preferred Wyzie one,
+  // and a right-episode Wyzie sub beats a preferred wrong-episode OS one.
+  const hash = [
+    { id: 'wy', url: 'http://x/wy.srt', format: 'srt', display: 'Some.Show.S01E02.WEBRip' },
+    { id: 'os-hash', url: 'opensubtitles:2', _osFileId: 2, format: 'srt', display: 'other-name', moviehashMatch: true, _provider: 'opensubtitles' },
+  ];
+  assert.strictEqual(rankSubs(hash, release, { preferProvider: 'wyzie' })[0].id, 'os-hash',
+    'a hash-exact match beats the preferred provider');
+  const wrongEp = [
+    { id: 'wy-right', url: 'http://x/r.srt', format: 'srt', display: 'Some.Show.S01E02.WEBRip' },
+    { id: 'os-wrong', url: 'opensubtitles:3', _osFileId: 3, format: 'srt', display: 'Some.Show.S01E05.WEBRip', _provider: 'opensubtitles' },
+  ];
+  assert.strictEqual(rankSubs(wrongEp, release, { preferProvider: 'opensubtitles' })[0].id, 'wy-right',
+    'the right episode beats the preferred provider');
+});
+
 test('subs: OpenSubtitles adds a title text-query fallback for old/obscure titles with no catalog id', () => {
   const { _osSearchUrl } = require('../server/opensubs');
   // No id at all → obscure title. The old id/hash-only search dead-ended in "no subtitles"; a

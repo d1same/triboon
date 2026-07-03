@@ -3633,15 +3633,27 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
     <div class="hint" id="tmdbStatus"></div>
   </div>
 
-  <div class="panel"><h2>Subtitles (Wyzie Subs)</h2>
-    <p>Online subtitles for releases that only carry image-based (BluRay PGS) subs. Paste your
-       Wyzie Subs API key here; Triboon keeps it server-side and caches results per title.</p>
+  <div class="panel"><h2>Subtitles</h2>
+    <p><b>Wyzie Subs</b> — unlimited free subtitle search. Paste your Wyzie key here; Triboon keeps
+       it server-side and caches results per title.</p>
     <div class="field"><input id="osKey" placeholder="Wyzie Subs API key"></div>
-    <p style="margin-top:-4px">Optional opensubtitles.com login — only needed if you use it as a download
-       fallback (Triboon is Wyzie-first). Stored encrypted server-side.</p>
+    <p style="margin-top:-4px"><b>OpenSubtitles</b> — adds hash-exact matching (perfectly-synced subs for the
+       exact file you stream). Needs all three: a free API key (opensubtitles.com → account → API consumers)
+       plus your login (downloads are quota'd per account). Stored encrypted server-side.</p>
+    <div class="field"><input id="osApiKey" placeholder="OpenSubtitles API key"></div>
     <div class="settingsRow two">
       <label class="settingsControl"><span>OpenSubtitles user</span><input id="osUser" placeholder="opensubtitles.com username"></label>
       <label class="settingsControl"><span>OpenSubtitles pass</span><input id="osPass" type="password" placeholder="opensubtitles.com password"></label>
+    </div>
+    <p style="margin-top:-4px">Which source runs, and which wins when results are comparable. Exact-match
+       signals (file hash, exact release, right episode) always beat the preference.</p>
+    <div class="field">
+      <select id="subSourceMode" style="max-width:360px">
+        <option value="wyzie-first">Wyzie first (+ OpenSubtitles for exact matches)</option>
+        <option value="opensubtitles-first">OpenSubtitles first (+ Wyzie as backup)</option>
+        <option value="wyzie-only">Wyzie only</option>
+        <option value="opensubtitles-only">OpenSubtitles only</option>
+      </select>
     </div>
     <div class="field">
       <select id="builtInSubsMode" style="max-width:360px">
@@ -6560,7 +6572,7 @@ async function openDetail(it, push = true) {
       if (d.overview) $('dOverview').textContent = d.overview;
       checkAvailability(it); // the early call ran with an empty title — redo with the real one
     }
-    const tr = ((d.videos && d.videos.results) || []).find((v) => v.site === 'YouTube' && /Trailer|Teaser/i.test(v.type));
+    const tr = pickBestTrailer(d.videos && d.videos.results);
     if (tr) { S.detailTrailer = { key: tr.key, title: it.title, item: it }; $('dTrailer').style.display = ''; }
 
     // Meta line with dot separators (Plex style).
@@ -11008,8 +11020,18 @@ async function closePlayer(opts = {}) {
     const cwDetailTarget = (!ret.view || ret.view === 'home') ? playbackFinishedDetailTarget(closingItem) : null;
     if (cwDetailTarget) {
       S.playerReturn = null;
-      try { await finalWatch; await finalActivity; await loadWatchState(true); } catch {}
-      await openDetail(cwDetailTarget);
+      // Paint the details page IMMEDIATELY — openDetail shows the panel synchronously, so the
+      // homepage never flashes through. The final watch-state flush happens in the background
+      // and then refreshes the visible Resume/Start Over buttons (and the open season's watched
+      // ticks), exactly like the return-to-open-detail branch above.
+      const detailReady = openDetail(cwDetailTarget);
+      (async () => {
+        try { await finalWatch; await finalActivity; await loadWatchState(true); await detailReady; } catch {}
+        if (S.detailItem && S.detailItem.tmdbId === cwDetailTarget.tmdbId) {
+          syncDetailButtons(S.detailItem);
+          if (S.detailItem.type === 'tv' && S.detailSeason != null) loadSeason(S.detailItem, S.detailSeason);
+        }
+      })();
       return;
     }
     S.playerReturn = null;
@@ -13115,13 +13137,42 @@ async function loadDiscover() {
     if (S.zone !== 'rail') focusCard(0, 0); // rollover preview: don't steal the menu's focus
   } catch (e) { root.innerHTML = `<div class="row"><h2>Discover failed: ${esc(e.message)}</h2></div>`; }
 }
+// Pick the ACTUAL trailer from TMDB's videos list — not a featurette, interview, or BTS reel.
+// The old first-loose-match pick meant array order decided: a teaser could beat the real
+// trailer, a fan upload could beat the official one, and a mislabeled "Cast Q&A" typed as
+// Trailer slipped straight through. Rules:
+//   - YouTube only, type EXACTLY 'Trailer' or 'Teaser' (Featurette/Clip/BTS/Bloopers excluded);
+//   - the NAME is screened too — TMDB data mislabels, so interview/featurette/making-of/red
+//     carpet/etc words disqualify even a video typed 'Trailer';
+//   - among survivors: real Trailer beats Teaser, official beats fan upload, "Official Trailer"
+//     naming and higher resolution break ties.
+// Returns null when nothing safe remains — no trailer button beats playing an interview.
+function pickBestTrailer(results) {
+  const NOT_A_TRAILER = /\b(interview|featurette|behind[ -]the[ -]scenes|making[ -]of|documentary|q\s*&\s*a|premiere|red carpet|first look|sneak peek|clip|blooper|gag reel|deleted|extended (scene|preview)|opening (scene|credits)|table read|react(s|ion)?|recap|explained|breakdown|review|press conference|featur(ing|ed)|cast (talks?|on|discuss))\b/i;
+  const scored = (Array.isArray(results) ? results : [])
+    .filter((v) => v && v.key && v.site === 'YouTube'
+      && (v.type === 'Trailer' || v.type === 'Teaser')
+      && !NOT_A_TRAILER.test(String(v.name || '')))
+    .map((v) => {
+      let s = v.type === 'Trailer' ? 100 : 40;
+      if (v.official) s += 50;
+      const name = String(v.name || '');
+      if (/official trailer/i.test(name)) s += 30;
+      else if (/trailer/i.test(name)) s += 15;
+      if (/\btrailer 1\b|\bmain trailer\b|^official trailer$/i.test(name)) s += 10;
+      s += Math.min(10, (v.size || 0) / 108); // 1080p ≈ +10, 720p ≈ +6.7 — tie-break only
+      return { v, s };
+    })
+    .sort((a, b) => b.s - a.s);
+  return scored.length ? scored[0].v : null;
+}
 async function buildTrailerRow(list) {
   // Parallel lookups — sequential fetches made the trailers row trail in seconds late.
   const found = await Promise.all(list.map(async (x) => {
     const type = x.media_type === 'tv' || x.name ? 'tv' : 'movie';
     try {
       const v = await api(`/api/tmdb/${type}/${x.id}/videos`);
-      const tr = (v.results || []).find((r) => r.site === 'YouTube' && /Trailer|Teaser/i.test(r.type));
+      const tr = pickBestTrailer(v.results);
       return tr ? { ...mapTmdb(x), trailer: { key: tr.key, title: x.title || x.name } } : null;
     } catch { return null; }
   }));
@@ -17004,16 +17055,19 @@ const THEMES = {
   // ---- THE THREE CURATED THEMES (the picker shows only these + Custom) ----
   // Triboon — the brand itself: deep ink with the magenta→coral signature gradient and amber
   // accents, exactly the design language the app boots with (:root defaults), tuned as a theme.
+  // HIGH-VIS GOLD FOCUS (owner request): uses the spotlight system — the focused rail button
+  // fills solid gold, covers get a bold gold ring + glow — a rich saturated gold (not pale) so
+  // focus reads instantly from the couch while the brand gradient stays magenta→coral.
   triboon: {
-    label: 'Triboon', tone: 'signature ink · coral',
+    label: 'Triboon', tone: 'signature ink · gold focus', spotlight: true,
     ink: '#0B0812', surface: '#161020', raise: '#221934',
     m: '#C13BD6', c: '#FB8B3C', a: '#FFC65C',
-    text: '#F3EFF7', muted: '#9B8FAD', line: 'rgba(255,255,255,.07)',
+    text: '#F3EFF7', muted: '#9B8FAD', line: 'rgba(255,255,255,.10)',
     field: 'rgba(11,8,18,.76)', soft: 'rgba(34,25,52,.62)', panel: 'rgba(20,14,30,.96)',
-    focus: '#FB8B3C', focusSoft: 'rgba(251,139,60,.30)', onAccent: '#1D0E04',
+    focus: '#E5B44E', focusSoft: 'rgba(229,180,78,.45)', onAccent: '#1D0E04',
     success: '#7CE6A0', danger: '#FF8D8D',
-    btn: 'rgba(45,38,62,.75)', btnHover: 'rgba(59,50,80,.88)', btnSelected: 'rgba(76,63,100,.92)', btnSelectedHover: 'rgba(89,75,116,.96)', btnPrimary: '#FB8B3C', btnPrimaryHover: '#FC9E5B', btnFocusText: '#F7F3FA',
-    artFocusLine: 'rgba(251,139,60,.36)', artFocusGlow: 'rgba(251,139,60,.20)', artFocusTileLine: 'rgba(251,139,60,.28)', artFocusTileBorder: 'rgba(251,139,60,.22)', artFocusTileGlow: 'rgba(251,139,60,.16)',
+    btn: 'rgba(45,38,62,.75)', btnHover: '#E5B44E', btnSelected: 'rgba(229,180,78,.28)', btnSelectedHover: '#EEC46A', btnPrimary: '#FB8B3C', btnPrimaryHover: '#FC9E5B', btnFocusText: '#1D1408',
+    artFocusLine: 'rgba(229,180,78,.90)', artFocusGlow: 'rgba(229,180,78,.38)', artFocusTileLine: 'rgba(229,180,78,.85)', artFocusTileBorder: 'rgba(229,180,78,.75)', artFocusTileGlow: 'rgba(229,180,78,.38)',
     scrim: 'linear-gradient(90deg,rgba(11,8,18,.86) 0%,rgba(11,8,18,.56) 28%,rgba(11,8,18,.20) 58%,rgba(11,8,18,.06) 100%),linear-gradient(0deg,rgba(11,8,18,.76) 0%,rgba(11,8,18,.24) 26%,rgba(11,8,18,.04) 60%,rgba(11,8,18,.10) 100%)',
   },
   // Ocean — deep navy with a clear sky-blue accent; calm, cinema-dark, high readability.
@@ -19217,11 +19271,13 @@ async function refreshSettings() {
     $('tmdbStatus').textContent = s.tmdbKey ? 'key saved ✓ — encrypted at rest' : 'no key yet';
     $('tmdbKey').placeholder = s.tmdbKey ? 'key saved ✓ — paste a new one to replace' : 'TMDB API key (v3)';
     $('osKey').placeholder = s.openSubsKey ? 'key saved ✓ — paste a new one to replace' : 'Wyzie Subs API key';
+    if ($('osApiKey')) $('osApiKey').placeholder = s.osApiKey ? 'key saved ✓ — paste a new one to replace' : 'OpenSubtitles API key';
     if ($('osUser')) $('osUser').value = s.openSubsUser || ''; // username is not a secret; round-trips
     if ($('osPass')) $('osPass').placeholder = s.openSubsPass ? 'password saved ✓ — type to replace' : 'opensubtitles.com password';
+    if ($('subSourceMode')) $('subSourceMode').value = s.subtitleSource || 'wyzie-first';
     $('builtInSubsMode').value = s.builtInSubtitlesEnabled ? 'on' : 'off';
     $('osStatus').textContent = s.openSubsKey
-      ? `key saved ✓ — ${s.builtInSubtitlesEnabled ? 'built-in first, online fallback' : 'online-only testing'}`
+      ? `Wyzie saved ✓ · OpenSubtitles ${s.openSubtitlesActive ? 'active ✓' : 'not fully configured (needs key + user + pass)'} · mode: ${s.subtitleSource || 'wyzie-first'}`
       : `${s.builtInSubtitlesEnabled ? 'built-in first' : 'online-only testing'} — add a Wyzie Subs key for online captions`;
     $('traktStatus').textContent = s.traktClientId
       ? `app saved ✓ (${s.traktClientSecret ? 'secret saved' : 'secret missing'}) — users link in Preferences → Connections`
@@ -19521,16 +19577,19 @@ $('osSave').addEventListener('click', async () => {
   const key = $('osKey').value.trim();
   const body = { builtInSubtitlesEnabled: $('builtInSubsMode').value === 'on' };
   if (key) body.openSubsKey = key;
-  // Username round-trips in plaintext (empty clears it); password only sent when (re)typed so a
-  // blank field never wipes the saved one.
+  // Secrets only sent when (re)typed so a blank field never wipes the saved one; username
+  // round-trips in plaintext (empty clears it).
+  if ($('osApiKey') && $('osApiKey').value.trim()) body.osApiKey = $('osApiKey').value.trim();
   body.openSubsUser = ($('osUser') && $('osUser').value.trim()) || '';
   if ($('osPass') && $('osPass').value) body.openSubsPass = $('osPass').value;
+  if ($('subSourceMode')) body.subtitleSource = $('subSourceMode').value;
   await api('/api/settings', { method: 'POST', body });
   const srvNow = await api('/api/server');
   S.serverInfo.opensubs = srvNow.opensubs;
   S.serverInfo.builtInSubtitlesEnabled = srvNow.builtInSubtitlesEnabled;
-  toast(body.builtInSubtitlesEnabled ? 'Built-in subtitles enabled' : 'Online-only subtitles enabled');
+  toast('Subtitle settings saved');
   $('osKey').value = '';
+  if ($('osApiKey')) $('osApiKey').value = '';
   if ($('osPass')) $('osPass').value = '';
   refreshSettings();
 });

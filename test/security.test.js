@@ -539,6 +539,30 @@ test('settings: built-in subtitle mode round-trips to player server info', async
     'player server info should reflect online-only mode');
 });
 
+test('settings: subtitle provider policy round-trips; OS API key stays a secret', async () => {
+  // Default mode with nothing saved.
+  let s = await httpJson(srv.port, 'GET', '/api/settings', null, admin);
+  assert.strictEqual(s.json.subtitleSource, 'wyzie-first', 'default subtitle policy is wyzie-first');
+  // Valid mode round-trips; junk is dropped back to the default, never persisted.
+  await httpJson(srv.port, 'POST', '/api/settings', { subtitleSource: 'opensubtitles-first' }, admin);
+  s = await httpJson(srv.port, 'GET', '/api/settings', null, admin);
+  assert.strictEqual(s.json.subtitleSource, 'opensubtitles-first');
+  await httpJson(srv.port, 'POST', '/api/settings', { subtitleSource: 'evil-mode' }, admin);
+  s = await httpJson(srv.port, 'GET', '/api/settings', null, admin);
+  assert.strictEqual(s.json.subtitleSource, 'wyzie-first', 'invalid mode falls back to the default');
+  // OpenSubtitles API key: saved encrypted, redacted on read, and openSubtitlesActive only flips
+  // true when the FULL trio (key + user + pass) is present — half-config must not activate.
+  await httpJson(srv.port, 'POST', '/api/settings', { osApiKey: 'test-os-consumer-key' }, admin);
+  s = await httpJson(srv.port, 'GET', '/api/settings', null, admin);
+  assert.strictEqual(s.json.osApiKey, '•••', 'OS API key never round-trips in plaintext');
+  assert.strictEqual(s.json.openSubtitlesActive, false, 'key alone does not activate OpenSubtitles (downloads need the login)');
+  await httpJson(srv.port, 'POST', '/api/settings', { openSubsUser: 'kermit', openSubsPass: 'thefrog' }, admin);
+  s = await httpJson(srv.port, 'GET', '/api/settings', null, admin);
+  assert.strictEqual(s.json.openSubtitlesActive, true, 'dashboard-entered key + login activates OpenSubtitles (was silently inert before)');
+  // Cleanup so later tests see the defaults.
+  await httpJson(srv.port, 'POST', '/api/settings', { subtitleSource: null, osApiKey: null, openSubsUser: '', openSubsPass: null }, admin);
+});
+
 test('libraries: admin CRUD, users read-only, validation', async () => {
   const bad = await httpJson(srv.port, 'POST', '/api/libraries', { name: 'x', mediaType: 'bogus' }, admin);
   assert.strictEqual(bad.status, 400);

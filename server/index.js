@@ -93,13 +93,29 @@ function hlsEnabled(s = settings.get()) {
   return !!(s && s.hlsEnabled);
 }
 
+// Subtitle provider policy (admin-set): which providers search and which wins ties.
+// 'wyzie-first' is the historical default (Wyzie unlimited + OpenSubtitles riding along for
+// hash-exact wins). The '-only' modes disable the other provider entirely; the '-first' modes
+// search both and give the primary a ranking edge on otherwise-comparable subtitles — the
+// correctness signals (moviehash, exact release, right episode) still outrank the preference,
+// so priority can never pick a wrong-episode/wrong-cut sub over a correct one.
+const SUBTITLE_SOURCE_MODES = ['wyzie-first', 'opensubtitles-first', 'wyzie-only', 'opensubtitles-only'];
+function subtitleSourceMode(s = settings.get()) {
+  const v = String((s && s.subtitleSource) || '').trim();
+  return SUBTITLE_SOURCE_MODES.includes(v) ? v : 'wyzie-first';
+}
 // OPTIONAL OpenSubtitles provider (hash-exact matching Wyzie can't do). Fully gated: returns
 // null unless an API key + login are configured (settings first, env fallback for headless
 // testing). When null, the Wyzie path runs exactly as before — zero behavior change.
 function effectiveOpenSubtitles(s = settings.get()) {
-  const apiKey = String((s && s.openSubtitlesApiKey) || process.env.TRIBOON_OS_API_KEY || '').trim();
-  const username = String((s && s.openSubtitlesUser) || process.env.TRIBOON_OS_USER || '').trim();
-  const password = String((s && s.openSubtitlesPass) || process.env.TRIBOON_OS_PASS || '').trim();
+  // Dashboard names FIRST (osApiKey/openSubsUser/openSubsPass are what Settings → Subtitles
+  // saves) — the old openSubtitles* names only ever existed as internal spellings and made
+  // dashboard-entered credentials silently inert (only the env vars worked). Both still read.
+  const apiKey = String((s && (s.osApiKey || s.openSubtitlesApiKey)) || process.env.TRIBOON_OS_API_KEY || '').trim();
+  const username = String((s && (s.openSubsUser || s.openSubtitlesUser)) || process.env.TRIBOON_OS_USER || '').trim();
+  const password = String((s && (s.openSubsPass || s.openSubtitlesPass)) || process.env.TRIBOON_OS_PASS || '').trim();
+  // All three required: the API key alone can SEARCH, but downloads need the user login (the
+  // daily quota is per-account) — a half-configured provider would list rows that fail to play.
   if (!apiKey || !username || !password) return null;
   return { apiKey, username, password, base: process.env.OPENSUBTITLES_BASE || undefined };
 }
@@ -6269,6 +6285,9 @@ Object.assign(H, {
       builtInSubtitlesEnabled: s.builtInSubtitlesEnabled === true,
       openSubsUser: s.openSubsUser || null, // username isn't a secret; the password is
       openSubsPass: s.openSubsPass ? '•••' : null,
+      osApiKey: s.osApiKey ? '•••' : null,
+      subtitleSource: subtitleSourceMode(s),
+      openSubtitlesActive: !!effectiveOpenSubtitles(s), // fully configured (key + login)?
       // M3U/Xtream details often embed credentials — expose only hosts/flags.
       iptvSources: iptvSources.map(redactIptvSource),
       iptvUrl: primaryIptv.iptvUrl ? iptvUrlHost(primaryIptv.iptvUrl) : null,
@@ -6424,6 +6443,13 @@ Object.assign(H, {
         // Downloads need the user's opensubtitles.com login (the API key alone only searches).
         openSubsUser: b.openSubsUser !== undefined ? (b.openSubsUser || null) : (s.openSubsUser ?? null),
         openSubsPass: b.openSubsPass !== undefined ? (b.openSubsPass || null) : (s.openSubsPass ?? null),
+        // OpenSubtitles API consumer key (required on every OS request; free from the account page).
+        osApiKey: b.osApiKey !== undefined ? (b.osApiKey || null) : (s.osApiKey ?? null),
+        // Provider policy: which subtitle sources run + which wins ties. Invalid values are
+        // dropped to the default rather than persisted.
+        subtitleSource: b.subtitleSource !== undefined
+          ? (SUBTITLE_SOURCE_MODES.includes(b.subtitleSource) ? b.subtitleSource : null)
+          : (s.subtitleSource ?? null),
         iptvUrl: b.iptvUrl !== undefined ? (b.iptvUrl || null) : s.iptvUrl,
         iptvMode: b.iptvMode !== undefined ? (b.iptvMode === 'xtream' ? 'xtream' : 'm3u') : s.iptvMode,
         xtHost: b.xtHost !== undefined ? (b.xtHost || null) : s.xtHost,
@@ -6988,9 +7014,18 @@ Object.assign(H, {
     if (!vf) return send(ctx.res, 404, { error: 'mount not found' });
     if (!mountAccessOk(ctx, vf)) return send(ctx.res, 404, { error: 'mount not found' });
     const key = effectiveOpenSubsKey();
-    // OpenSubtitles (the hash-exact provider) can stand alone — don't 503 just because Wyzie is
-    // unset. getVariants tolerates an empty Wyzie set and still runs the OpenSubtitles search.
-    if (!key && !effectiveOpenSubtitles()) return send(ctx.res, 503, { error: 'No subtitle provider configured (Settings -> Catalog)' });
+    // Provider policy: the admin picks which providers run and which wins ties. A provider is
+    // active only when the mode allows it AND it is configured — so 'opensubtitles-first'
+    // without OS credentials degrades to Wyzie instead of dead-ending.
+    const subMode = subtitleSourceMode();
+    const wyzieActive = subMode !== 'opensubtitles-only' && !!key;
+    const osActive = subMode !== 'wyzie-only' && !!effectiveOpenSubtitles();
+    if (!wyzieActive && !osActive) {
+      return send(ctx.res, 503, { error: subMode === 'opensubtitles-only'
+        ? 'OpenSubtitles is set as the only subtitle source but is not configured (Settings -> Subtitles: API key + username + password)'
+        : 'No subtitle provider configured (Settings -> Subtitles)' });
+    }
+    const preferProvider = subMode.startsWith('opensubtitles') ? 'opensubtitles' : 'wyzie';
     vf._touched = Date.now();
     const lang = String(ctx.url.searchParams.get('lang') || 'en').slice(0, 5).replace(/[^a-z-]/gi, '');
     const tmdbId = String(ctx.url.searchParams.get('tmdb') || '').replace(/\D/g, '');
@@ -7031,7 +7066,9 @@ Object.assign(H, {
     vf._subSyncState = vf._subSyncState || new Map(); // cacheKey -> looksSynced (skip alass when true)
     vf._subSyncFail = vf._subSyncFail || new Map();   // syncKey -> {tries,timedOut,at} (stop doomed re-syncs)
     const catalogId = imdbId || tmdbId;
-    const searchKey = `${lang}:${catalogId}${hasEpisode ? `:s${seasonParam}e${episodeParam}` : ''}`;
+    // subMode is part of the cache key: an admin flipping the provider policy mid-mount must not
+    // be served the previous mix from the per-mount variants cache.
+    const searchKey = `${subMode}:${lang}:${catalogId}${hasEpisode ? `:s${seasonParam}e${episodeParam}` : ''}`;
     const subtitleFailure = (e) => {
       const noSubs = isNoSubtitleError(e);
       return {
@@ -7045,24 +7082,25 @@ Object.assign(H, {
     const getVariants = async () => {
       if (!vf._osSearchCache.has(searchKey)) {
         if (!vf._osSearchInflight.has(searchKey)) {
-          // Query Wyzie and OpenSubtitles in parallel, then rank the COMBINED set in one pass
-          // (rankSubs gives moviehash-matched OpenSubtitles hits a decisive boost). OpenSubtitles
-          // is gated/best-effort, so when it is unconfigured `os` is [] and this is identical to
-          // the prior Wyzie-only behavior — including throwing Wyzie's no-subtitles error.
+          // Query the ACTIVE providers in parallel (per the admin's subtitleSource policy), then
+          // rank the COMBINED set in one pass — moviehash-matched hits still get their decisive
+          // boost regardless of which provider is primary; the primary only wins ties.
           const work = (async () => {
             // Truly concurrent (this used to await Wyzie to completion BEFORE starting the
             // OpenSubtitles search, doubling cold CC latency). Wyzie's error is captured and only
             // rethrown when the combined set is empty; openSubtitlesVariantsForMount never throws.
             const [wySettled, osData] = await Promise.all([
-              searchOnlineSubs(subOpts).then((d) => ({ d }), (e) => ({ e })),
-              openSubtitlesVariantsForMount(vf, { imdbId, tmdbId, lang,
-                ...(hasEpisode ? { season: seasonParam, episode: episodeParam } : {}) }),
+              wyzieActive ? searchOnlineSubs(subOpts).then((d) => ({ d }), (e) => ({ e })) : Promise.resolve({ d: [] }),
+              osActive ? openSubtitlesVariantsForMount(vf, { imdbId, tmdbId, lang,
+                ...(hasEpisode ? { season: seasonParam, episode: episodeParam } : {}) }) : Promise.resolve([]),
             ]);
             const wyData = Array.isArray(wySettled.d) ? wySettled.d : [];
             const wyErr = wySettled.e || null;
             const combined = [...wyData, ...osData];
-            if (!combined.length) throw (wyErr || new Error('online subtitles failed'));
-            const ranked = rankSubs(combined, releaseName, { durationSeconds: vf._tracks && vf._tracks.duration, sdhPref });
+            // With Wyzie disabled there is no wyErr to relay — an empty OpenSubtitles result is a
+            // clean title-level miss, not a provider failure.
+            if (!combined.length) throw (wyErr || Object.assign(new Error('No subtitles found for this title'), { noSubtitles: true }));
+            const ranked = rankSubs(combined, releaseName, { durationSeconds: vf._tracks && vf._tracks.duration, sdhPref, preferProvider });
             // Trim wrong-episode / non-text rows so the menu only advertises subtitles that can
             // actually play for this file (the "House shows many options but most don't work" fix).
             const variants = usableVariants(ranked, { releaseName }).slice(0, 12);

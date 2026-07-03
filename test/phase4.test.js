@@ -326,11 +326,24 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'detail button sync should recompute movie Resume/Play from the latest watch map');
   assert.match(ui, /function playbackFinishedDetailTarget\(item\) \{[\s\S]+item\.type === 'movie'[\s\S]+item\.type === 'episode'[\s\S]+key: `tmdb:tv:\$\{item\.tmdbId\}`[\s\S]+type: 'tv'/,
     'finished playback should resolve movies to movie details and final episodes to the show details page');
+  // Trailers must be ACTUAL trailers: exact TMDB type Trailer/Teaser only, the NAME screened for
+  // interview/featurette/BTS words (TMDB mislabels), official + real-Trailer preferred, and BOTH
+  // pick sites (detail page + trailers row) share the one picker. Null beats playing an interview.
+  assert.match(ui, /function pickBestTrailer\(results\) \{[\s\S]+const NOT_A_TRAILER = \/[\s\S]+?\(v\.type === 'Trailer' \|\| v\.type === 'Teaser'\)[\s\S]+!NOT_A_TRAILER\.test\(String\(v\.name \|\| ''\)\)[\s\S]+v\.type === 'Trailer' \? 100 : 40;[\s\S]+if \(v\.official\) s \+= 50;/,
+    'trailer selection scores exact-typed, name-screened YouTube videos (official Trailer > Teaser > nothing)');
+  assert.ok((ui.match(/pickBestTrailer\(/g) || []).length >= 3,
+    'both trailer pick sites (detail page + trailers row) route through the shared picker');
+  assert.ok(!ui.includes(".find((v) => v.site === 'YouTube' && /Trailer|Teaser/i.test(v.type))")
+    && !ui.includes(".find((r) => r.site === 'YouTube' && /Trailer|Teaser/i.test(r.type))"),
+    'the old first-loose-match trailer picks are gone');
   // Continue Watching plays straight from home with no detail page beneath the player. Backing
   // out (not just finishing) must land on the title's details page, not dump the user on the
   // homepage. Scoped to home-launched playback so library/Live TV returns keep their restores.
-  assert.match(ui, /const cwDetailTarget = \(!ret\.view \|\| ret\.view === 'home'\) \? playbackFinishedDetailTarget\(closingItem\) : null;[\s\S]+if \(cwDetailTarget\) \{[\s\S]+await openDetail\(cwDetailTarget\);[\s\S]+return;/,
-    'closing playback launched from Continue Watching (home) should open the title details page instead of returning to the homepage');
+  // The details page must paint BEFORE the final watch-state awaits — openDetail is synchronous
+  // to first paint, so ordering it first means the homepage never flashes through between the
+  // player teardown and the details page (owner-reported flash).
+  assert.match(ui, /const cwDetailTarget = \(!ret\.view \|\| ret\.view === 'home'\) \? playbackFinishedDetailTarget\(closingItem\) : null;[\s\S]+if \(cwDetailTarget\) \{[\s\S]+const detailReady = openDetail\(cwDetailTarget\);[\s\S]+await finalWatch; await finalActivity; await loadWatchState\(true\); await detailReady;[\s\S]+syncDetailButtons\(S\.detailItem\);[\s\S]+return;/,
+    'closing playback launched from Continue Watching opens the details page IMMEDIATELY (no homepage flash) and refreshes Resume/watched marks in the background');
   // The in-player episode rail spans the current season PLUS the next two, so deep-diving the
   // strip can cross a season boundary without leaving the player; a stale-token re-check after
   // the extra season fetches keeps a newer playback from being clobbered by the slow one.
@@ -3972,9 +3985,14 @@ test('audit contracts: Trakt/watch-state data-safety + CC pipeline fixes stay in
     'the advertised sync status reports failed so clients stop queueing background syncs');
 
   // (6) Wyzie + OpenSubtitles searches run CONCURRENTLY (they were serial despite the comment,
-  // doubling cold CC latency).
-  assert.match(server, /const \[wySettled, osData\] = await Promise\.all\(\[\s*searchOnlineSubs\(subOpts\)\.then\(\(d\) => \(\{ d \}\), \(e\) => \(\{ e \}\)\),\s*openSubtitlesVariantsForMount\(/,
-    'both subtitle providers are queried in parallel');
+  // doubling cold CC latency) — now gated per the admin's subtitleSource policy, with the
+  // primary provider passed into the combined ranking as a tie-breaking preference.
+  assert.match(server, /const \[wySettled, osData\] = await Promise\.all\(\[\s*wyzieActive \? searchOnlineSubs\(subOpts\)\.then\(\(d\) => \(\{ d \}\), \(e\) => \(\{ e \}\)\) : Promise\.resolve\(\{ d: \[\] \}\),\s*osActive \? openSubtitlesVariantsForMount\(/,
+    'both ACTIVE subtitle providers are queried in parallel (policy-gated)');
+  assert.match(server, /const ranked = rankSubs\(combined, releaseName, \{ durationSeconds: vf\._tracks && vf\._tracks\.duration, sdhPref, preferProvider \}\);/,
+    'the combined ranking receives the primary-provider preference');
+  assert.match(server, /const SUBTITLE_SOURCE_MODES = \['wyzie-first', 'opensubtitles-first', 'wyzie-only', 'opensubtitles-only'\]/,
+    'the subtitle provider policy enum is pinned');
 
   // (7) The sync-state (skip-alass-when-matched) is stamped from the sub ACTUALLY SERVED — a
   // stale top link silently falls back, and stamping from the chosen pick froze fallback subs

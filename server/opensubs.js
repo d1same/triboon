@@ -354,7 +354,15 @@ function cleanReleaseDisplay(s) {
   x = x.replace(/[._]+/g, ' ').replace(/\s+/g, ' ').trim();
   return x.length > 48 ? x.slice(0, 47).trim() + '…' : x;
 }
-function pickSub(data, releaseName = '', { durationSeconds = 0, sdhPref = 'avoid' } = {}) {
+// Provider preference bonus (admin's subtitleSource policy): +120 sits ABOVE the popularity
+// tie-breakers (≤~112) but BELOW every correctness signal — partial release containment (220),
+// episode match (260), full release (650), moviehash (1000) — so the primary provider wins
+// between otherwise-comparable subs and can never beat a better-matched one.
+function providerBonus(d, preferProvider) {
+  if (!preferProvider) return 0;
+  return ((d && d._provider) || 'wyzie') === preferProvider ? 120 : 0;
+}
+function pickSub(data, releaseName = '', { durationSeconds = 0, sdhPref = 'avoid', preferProvider = '' } = {}) {
   const mine = String(releaseName).toLowerCase();
   const myReleaseKey = releaseKey(releaseName);
   const myWeb = /\bweb[-. ]?(dl|rip)?\b|amzn|nf(?=[. ])|hulu|atvp|dsnp/i.test(mine);
@@ -391,6 +399,7 @@ function pickSub(data, releaseName = '', { durationSeconds = 0, sdhPref = 'avoid
     if (subtitleIsForced(d)) s -= 700; // forced/foreign-only is never the full-CC auto-pick
     s += popularityBonus(d); // tie-breaker only — capped below release/episode signals
     s += sdhBias(d, sdhPref);
+    s += providerBonus(d, preferProvider);
     return s;
   };
   return data.map((d) => ({ d, s: score(d) })).sort((x, y) => y.s - x.s).map((x) => x.d)
@@ -575,8 +584,8 @@ async function wyzieSearchResults({ key, tmdbId, imdbId, query, lang = 'en', rel
   }
 }
 
-function rankSubs(data, releaseName = '', { durationSeconds = 0, sdhPref = 'avoid' } = {}) {
-  const picked = pickSub(data, releaseName, { durationSeconds, sdhPref });
+function rankSubs(data, releaseName = '', { durationSeconds = 0, sdhPref = 'avoid', preferProvider = '' } = {}) {
+  const picked = pickSub(data, releaseName, { durationSeconds, sdhPref, preferProvider });
   const bestKey = picked && (picked.id != null ? String(picked.id) : String(picked.url || ''));
   const mine = String(releaseName).toLowerCase();
   const myReleaseKey = releaseKey(releaseName);
@@ -616,6 +625,7 @@ function rankSubs(data, releaseName = '', { durationSeconds = 0, sdhPref = 'avoi
     if (subtitleIsForced(d)) s -= 700; // forced/foreign-only stays in the list but never auto-picks
     s += popularityBonus(d); // tie-breaker only — capped below release/episode/hash signals
     s += sdhBias(d, sdhPref);
+    s += providerBonus(d, preferProvider);
     return s;
   };
   const ranked = (Array.isArray(data) ? data : []).map((d, idx) => {
