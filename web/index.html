@@ -1292,6 +1292,9 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 .iconBtn{width:52px;height:52px;border-radius:50%;display:grid;place-items:center;background:var(--btn);border:1px solid rgba(255,255,255,.045);color:var(--text)}
 .iconBtn svg{width:21px;height:21px}
 .iconBtn.on{background:var(--btnSelected);color:var(--text);border-color:transparent}
+/* On-watchlist state reads at a glance: the bookmark glyph fills solid (white on dark themes)
+   instead of only the button background changing. currentColor keeps it visible on light themes. */
+#dWatchlist.on svg path,#trailerWl.on svg path{fill:currentColor}
 .detailScroll .secHead{display:flex;align-items:center;gap:16px;margin:30px 0 14px}
 .detailScroll .secHead h2{margin:0}
 .ghostMini{margin-left:auto;background:var(--btn);border:1px solid rgba(255,255,255,.045);border-radius:10px;padding:8px 14px;font:600 12px "Sora";color:var(--text)}
