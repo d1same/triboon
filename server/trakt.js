@@ -106,7 +106,9 @@ class Trakt {
   }
   status(uid) {
     const t = this._tokens()[uid];
-    return { configured: this.configured(), linked: !!t, user: t ? t.username || null : null };
+    // `broken` = the token was definitively rejected (revoked app / rotated refresh token):
+    // still "linked" so the UI can say "needs re-linking" instead of showing the fresh-link flow.
+    return { configured: this.configured(), linked: !!t, broken: !!(t && t.broken), user: t ? t.username || null : null };
   }
   unlink(uid) {
     const all = { ...this._tokens() };
@@ -192,10 +194,7 @@ class Trakt {
     return { state: 'linked', user: tok.username || null };
   }
 
-  async _tokenFor(uid) {
-    const t = this._tokens()[uid];
-    if (!t) return null;
-    if (Date.now() < t.expiresAt - 600000) return t.access;
+  async _refresh(uid, t) {
     const { id, secret } = this._creds();
     const r = await request('/oauth/token', {
       body: { refresh_token: t.refresh, client_id: id, client_secret: secret,
@@ -204,16 +203,41 @@ class Trakt {
     if (r.status === 200 && r.json && r.json.access_token) {
       const tok = { ...t, access: r.json.access_token, refresh: r.json.refresh_token,
         expiresAt: Date.now() + (r.json.expires_in || 7776000) * 1000 };
+      delete tok.broken; delete tok.brokenWhy;
       this._saveToken(uid, tok);
       return tok.access;
     }
-    return null; // refresh failed — user must relink
+    // A definitive 4xx (invalid_grant — revoked app / rotated refresh token) can never succeed
+    // on retry: stamp the token broken so status()/the UI say "re-link" instead of silently
+    // no-oping sync forever while Settings claims linked. Network errors / 5xx stay unstamped.
+    if (r.status >= 400 && r.status < 500) {
+      this._saveToken(uid, { ...t, broken: Date.now(), brokenWhy: `token refresh rejected (HTTP ${r.status})` });
+    }
+    return null;
+  }
+
+  async _tokenFor(uid) {
+    const t = this._tokens()[uid];
+    if (!t) return null;
+    if (t.broken) return null; // definitively dead — relinking replaces the token and clears this
+    if (Date.now() < t.expiresAt - 600000) return t.access;
+    return this._refresh(uid, t);
   }
 
   async api(uid, path, method = 'GET', body) {
     const token = await this._tokenFor(uid);
     if (!token) return null;
-    return request(path, { method, body, token, clientId: this._creds().id });
+    const r = await request(path, { method, body, token, clientId: this._creds().id });
+    // 401 on an UNEXPIRED access token = the user revoked the app on trakt.tv (the cached token
+    // stays "valid" locally for up to ~90 days, so the refresh path above never runs). Force one
+    // real refresh — which stamps `broken` on a definitive rejection — and retry once.
+    if (r && r.status === 401) {
+      const t = this._tokens()[uid];
+      const fresh = t && !t.broken ? await this._refresh(uid, t) : null;
+      if (!fresh) return r;
+      return request(path, { method, body, token: fresh, clientId: this._creds().id });
+    }
+    return r;
   }
 
   // ---- the payload Trakt wants for one of our watch keys ----
@@ -232,6 +256,7 @@ class Trakt {
   _opKey(op) { return `${op.kind}:${op.key}`; }
 
   _requestForOp(op) {
+    if (op.kind === 'historySeason') return this._requestForSeasonOp(op);
     const item = Trakt.itemFor(op.key);
     if (!item) return null;
     if (op.kind === 'scrobble') {
@@ -249,6 +274,19 @@ class Trakt {
       return { path: op.on ? '/sync/history' : '/sync/history/remove', body };
     }
     return null;
+  }
+
+  // Season-scoped history op (bulk marks). Carries its own explicit payload — Trakt expands a
+  // bare show to EVERY season, so a bare-show op for a one-season action would (on remove) wipe
+  // the user's entire history for the show. Keyed per show+season so two queued seasons of the
+  // same show never coalesce in the outbox.
+  _requestForSeasonOp(op) {
+    const eps = (op.episodes || []).map((n) => ({ number: +n })).filter((e) => Number.isFinite(e.number));
+    if (!(+op.tmdbId) || !eps.length) return null;
+    return {
+      path: op.on ? '/sync/history' : '/sync/history/remove',
+      body: { shows: [{ ids: { tmdb: +op.tmdbId }, seasons: [{ number: +op.season, episodes: eps }] }] },
+    };
   }
 
   async _sendOp(uid, op) {
@@ -290,6 +328,10 @@ class Trakt {
     const now = Date.now();
     const all = this._outbox();
     const current = Array.isArray(all[uid]) ? all[uid] : [];
+    // Dead token: every send would fail 'not linked' — keep the queue intact (a relink drains it)
+    // instead of churning attempts/backoff every 6h against a token that can never work.
+    const tok = this._tokens()[uid];
+    if (tok && tok.broken) return { sent: 0, failed: 0, pending: current.length, broken: true };
     const due = current.filter((op) => !op.nextTryAt || op.nextTryAt <= now).slice(0, max);
     if (!due.length) return { sent: 0, failed: 0, pending: current.length };
     const sent = new Set();
@@ -346,6 +388,17 @@ class Trakt {
   history(uid, key, on) {
     if (!Trakt.itemFor(key)) return;
     this._fire(uid, { kind: 'history', key, on: !!on }, 'history');
+  }
+
+  // Season/episode-group history for bulk marks: fires ONE op per show+season carrying the exact
+  // episode numbers, never a bare show (see _requestForSeasonOp for why that matters on remove).
+  historyEpisodes(uid, tmdbId, season, episodes, on) {
+    const eps = (Array.isArray(episodes) ? episodes : []).map(Number).filter(Number.isFinite).slice(0, 500);
+    if (!(+tmdbId) || !eps.length) return;
+    this._fire(uid, {
+      kind: 'historySeason', key: `tmdb:tv:${+tmdbId}:s${+season}`,
+      tmdbId: +tmdbId, season: +season, episodes: eps, on: !!on,
+    }, 'history');
   }
 
   // Everything the user has WATCHED on Trakt → our watch keys. Movies + per-episode shows.

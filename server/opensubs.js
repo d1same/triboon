@@ -185,9 +185,11 @@ function decodeSubtitleBuffer(buf, langHint = '', encodingHint = '') {
 // on a BluRay cut (or vice versa) drifts by the studio-logo/extended-scene offsets.
 // Wyzie results are flat: { id, url, format, display, language, isHearingImpaired, media }.
 function parseVttTimestamp(ts) {
-  const m = /^(\d{2,}):(\d{2}):(\d{2})\.(\d{3})$/.exec(String(ts || '').trim());
+  // Hours are OPTIONAL in WebVTT ("01:23.456" is a valid cue time) — genuine-VTT subtitles from
+  // Wyzie use them, and requiring hours made the manual shift a silent no-op on those files.
+  const m = /^(?:(\d{2,}):)?(\d{2}):(\d{2})\.(\d{3})$/.exec(String(ts || '').trim());
   if (!m) return null;
-  return (((+m[1] * 60 + +m[2]) * 60 + +m[3]) * 1000) + +m[4];
+  return ((((+m[1] || 0) * 60 + +m[2]) * 60 + +m[3]) * 1000) + +m[4];
 }
 
 function formatVttTimestamp(ms) {
@@ -202,7 +204,7 @@ function shiftVtt(vtt, seconds = 0) {
   const delta = Math.round((Number(seconds) || 0) * 1000);
   const body = String(vtt || '');
   if (!delta) return body;
-  return body.replace(/(\d{2,}:\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2,}:\d{2}:\d{2}\.\d{3})([^\r\n]*)/g,
+  return body.replace(/((?:\d{2,}:)?\d{2}:\d{2}\.\d{3})\s*-->\s*((?:\d{2,}:)?\d{2}:\d{2}\.\d{3})([^\r\n]*)/g,
     (line, start, end, rest) => {
       const a = parseVttTimestamp(start);
       const b = parseVttTimestamp(end);
@@ -748,7 +750,11 @@ async function downloadBestSubtitle(data, { key, releaseName = '', durationSecon
   let last;
   for (const v of ordered) {
     try {
-      return await downloadSubtitle(v.raw, { key, base, attempts, retryDelayMs });
+      // Return which variant was ACTUALLY served alongside the cues: a stale top-pick link can
+      // silently fall back to a different sub, and the caller's sync-state (skip-alass-when-
+      // release-matched) must be judged from the served sub, not the chosen one.
+      const vtt = await downloadSubtitle(v.raw, { key, base, attempts, retryDelayMs });
+      return { vtt, served: v.raw };
     } catch (e) {
       last = e;
       if (!subtitleDownloadCanFallback(e)) throw e;
@@ -804,7 +810,7 @@ async function fetchOnlineSubV2({ key, tmdbId, imdbId, query, lang = 'en', relea
   if (!wyzieCatalogId({ tmdbId, imdbId })) throw permanent('online subtitles need a catalog title (no TMDB or IMDb id for this play)');
   const data = await wyzieSearchResults({ key, tmdbId, imdbId, query, lang, releaseName, base, season, episode, attempts, retryDelayMs });
   if (!Array.isArray(data) || !data.length) throw noSubtitlesFor(lang, query);
-  return downloadBestSubtitle(data, { key, releaseName, durationSeconds, base, attempts, retryDelayMs });
+  return (await downloadBestSubtitle(data, { key, releaseName, durationSeconds, base, attempts, retryDelayMs })).vtt;
 }
 
 async function searchOnlineSubsV2({ key, tmdbId, imdbId, query, lang = 'en', releaseName = '', base = DEFAULT_BASE,

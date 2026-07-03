@@ -111,6 +111,12 @@ const tmdbMock = http.createServer((req, res) => {
     return res.end(JSON.stringify({ id: 990002, title: 'Kid Movie', adult: false,
       release_dates: { results: [{ iso_3166_1: 'US', release_dates: [{ certification: 'G' }] }] } }));
   }
+  // Key-validation fixture: the settings save pings /configuration with a NEW tmdb key and only a
+  // definitive 401 rejects the save.
+  if (u.pathname === '/3/configuration' && u.searchParams.get('api_key') === 'bad-tmdb-key') {
+    res.writeHead(401, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ status_code: 7, status_message: 'Invalid API key' }));
+  }
   res.writeHead(200, { 'content-type': 'application/json' });
   res.end(JSON.stringify({
     path: req.url,
@@ -2544,6 +2550,61 @@ test('play/prepare: age gate blocks a restricted profile from over-level titles 
   const spoofed = await httpJson(srv.port, 'POST', '/api/prepare', { q: 'Restricted Movie', tmdbId: 990001, mediaType: 'movie', profileId: 'no-such-profile-id' }, admin);
   assert.strictEqual(spoofed.status, 403, 'an unknown profileId fails closed to the strictest level');
   assert.strictEqual(spoofed.json.restricted, true, 'the spoofed-profile block is a maturity restriction');
+});
+
+test('settings: a TMDB key the API rejects fails the save with an actionable error (no false "connected")', async () => {
+  // A mistyped key used to save fine and read "connected" everywhere (status checks presence only)
+  // — the new host discovered it as an inexplicably empty Home page.
+  const bad = await httpJson(srv.port, 'POST', '/api/settings', { tmdbKey: 'bad-tmdb-key' }, admin);
+  assert.strictEqual(bad.status, 400, `rejected key must fail the save: ${bad.raw}`);
+  assert.match(bad.json.error, /TMDB rejected/i, 'the error tells the admin what to fix');
+  const good = await httpJson(srv.port, 'POST', '/api/settings', { tmdbKey: 'fresh-valid-key' }, admin);
+  assert.strictEqual(good.status, 200, 'a key TMDB accepts saves normally');
+  // Restore the shared key later tests rely on.
+  await httpJson(srv.port, 'POST', '/api/settings', { tmdbKey: 'gate-test-key' }, admin);
+});
+
+test('local libraries: the age gate covers local plays too (a Kids profile cannot mount an R-rated file)', async () => {
+  // Local playback used to skip maturity entirely while usenet play/prepare enforced it — a Kids
+  // profile could play ANY file in an attached library. The gate reads the item's TMDB identity
+  // from the SERVER-side scan record (NFO uniqueid here), never from the client body.
+  await httpJson(srv.port, 'POST', '/api/settings', { tmdbKey: 'gate-test-key' }, admin);
+  const kid = await httpJson(srv.port, 'POST', '/api/me/profiles', { name: 'LocalGateKid', level: 0 }, admin);
+  const kidId = kid.json.id;
+  assert.ok(kidId, 'kid profile created');
+  const os = require('os');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-agegate-lib-'));
+  const mkMovie = (dirName, fileBase, tmdbId) => {
+    const dir = path.join(root, dirName);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${fileBase}.mp4`), 'LOCAL-MOVIE-BYTES');
+    fs.writeFileSync(path.join(dir, `${fileBase}.nfo`),
+      `<movie><uniqueid type="tmdb">${tmdbId}</uniqueid></movie>`);
+  };
+  mkMovie('Blocked Film (2026)', 'blocked', 990001); // mock TMDB: R-rated
+  mkMovie('Fine Film (2026)', 'fine', 990002);       // mock TMDB: G-rated
+  const lib = await httpJson(srv.port, 'POST', '/api/libraries', { name: 'AgeGateLib', kind: 'other', path: root }, admin);
+  try {
+    assert.strictEqual((await runScan(lib.json.id)).status, 200);
+    const items = (await httpJson(srv.port, 'GET', `/api/libraries/${lib.json.id}/items`, null, admin)).json.items;
+    const rated = (id) => items.find((i) => i.kind === 'movie' && i.tmdbId === id);
+    const blocked = rated(990001), fine = rated(990002);
+    assert.ok(blocked && blocked.playUrl && fine && fine.playUrl, 'both movies scanned with their NFO tmdb ids');
+    // Kids profile: R blocked with the same restricted shape as usenet play; G allowed.
+    const deny = await httpJson(srv.port, 'POST', blocked.playUrl, { caps: {}, profileId: kidId }, admin);
+    assert.strictEqual(deny.status, 403, `kids profile must not mount the R-rated local file: ${deny.raw}`);
+    assert.strictEqual(deny.json.restricted, true, 'flagged as a maturity restriction');
+    const allow = await httpJson(srv.port, 'POST', fine.playUrl, { caps: {}, profileId: kidId }, admin);
+    assert.strictEqual(allow.status, 200, `G-rated local file plays for kids: ${allow.raw}`);
+    assert.ok(allow.json.streamUrl, 'allowed mount returns a playable payload');
+    // No profile context (account owner) stays unrestricted; a spoofed profileId fails closed.
+    const owner = await httpJson(srv.port, 'POST', blocked.playUrl, { caps: {} }, admin);
+    assert.strictEqual(owner.status, 200, 'owner (no profile) is unrestricted for local plays');
+    const spoofedLocal = await httpJson(srv.port, 'POST', blocked.playUrl, { caps: {}, profileId: 'bogus-profile' }, admin);
+    assert.strictEqual(spoofedLocal.status, 403, 'unknown profileId fails closed on local plays too');
+  } finally {
+    await httpJson(srv.port, 'DELETE', `/api/libraries/${lib.json.id}`, null, admin);
+  }
 });
 
 test('music: yt-dlp work is globally queued so home/search reloads cannot fan out unbounded processes', async () => {

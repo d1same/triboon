@@ -112,7 +112,17 @@ async function searchIndexer(indexer, params, { timeoutMs = 2000 } = {}) {
   u.searchParams.set('limit', params.limit || 100);
   const r = await fetchUrl(u.href, { timeoutMs, deadlineMs: timeoutMs }); // hard per-indexer budget
   if (r.status !== 200) throw new Error(`${indexer.name}: HTTP ${r.status}`);
-  return parseNewznabRss(r.body.toString('utf8'), indexer.name);
+  const body = r.body.toString('utf8');
+  // Newznab reports auth/limit problems as HTTP 200 + an <error> document (code 100 = wrong API
+  // key, 101 suspended, 500/501 limits). Parsing that as "0 items" made the admin connection test
+  // show a green checkmark on a WRONG KEY — the host thought they were done and hit an unexplained
+  // wall at first play — and let a mis-keyed indexer silently contribute nothing to every fan-out.
+  if (/<error\b/i.test(body) && !/<item>/i.test(body)) {
+    const code = (/<error\b[^>]*\bcode="(\d+)"/i.exec(body) || [])[1] || '';
+    const desc = decodeEntities(((/<error\b[^>]*\bdescription="([^"]*)"/i.exec(body) || [])[1] || 'indexer returned an error'));
+    throw new Error(`${indexer.name}: ${desc}${code ? ` (code ${code})` : ''}`);
+  }
+  return parseNewznabRss(body, indexer.name);
 }
 
 function normTitle(name) {

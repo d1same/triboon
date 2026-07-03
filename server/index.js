@@ -32,6 +32,22 @@ const APP_VERSION = (() => {
 
 // ---------- state ----------
 const store = new Store();
+// Background-flush throttles for the HOT, big, or high-frequency tables — every debounced flush
+// re-serializes + rewrites the whole table on the event loop that also serves video bytes, and
+// these tables were being rewritten every ~50ms of activity (watch beacons fire every 10s per
+// viewer; tmdb-cache on every browse miss; the EPG/channel/library payloads are multi-MB). All of
+// them are rebuildable or lose at most seconds of progress on a crash; settings/users/invites/
+// trakt tokens are deliberately NOT throttled (and their writers call flush() explicitly anyway).
+store.flushIntervals = {
+  watch: 3000,             // ≤3s of playback position at risk on hard crash
+  activityHistory: 10000,  // diagnostics
+  verdicts: 10000,         // 6h-TTL health cache
+  'tmdb-cache': 15000,     // pure proxy cache
+  iptvcaches: 30000,       // channel lineups (8000+ channels), refreshed from the provider
+  epgcaches: 30000,        // XMLTV guide payloads
+  xtreamepgcaches: 30000,  // Xtream guide payloads (up to 5000 entries per fetch)
+  libitems: 5000,          // scan output (19K+ items on big libraries; SQLite is the read path)
+};
 const auth = new Auth(store, process.env.TRIBOON_SECRET);
 const settings = new SecureSettings(store, auth.secret);
 const verdicts = new VerdictCache(store);
@@ -136,7 +152,12 @@ async function openSubtitlesVariantsForMount(vf, { imdbId, tmdbId, lang, season 
 function vttToSrt(vtt) {
   return String(vtt || '').replace(/^﻿/, '').replace(/\r/g, '')
     .replace(/^WEBVTT[^\n]*\n+/, '')
-    .replace(/(\d{2}:\d{2}:\d{2})\.(\d{3})/g, '$1,$2');
+    // Hours are OPTIONAL in WebVTT cue times but REQUIRED in SRT — normalize "MM:SS.mmm" to
+    // "00:MM:SS,mmm" (alass parses SRT strictly; hourless lines made auto-sync error out on
+    // genuine-VTT subtitles while looking like "sync is broken" to the user).
+    .replace(/(?:(\d{2,}):)?(\d{2}:\d{2})\.(\d{3})/g, (m0, h, ms, frac) => `${h || '00'}:${ms},${frac}`)
+    // Drop VTT cue settings after the end time ("align:middle position:50%") — invalid in SRT.
+    .replace(/(-->\s*\d{2,}:\d{2}:\d{2},\d{3})[^\n]*/g, '$1');
 }
 // Align an already-fetched VTT to the mount's audio with alass, against the same localhost
 // tokened stream URL ffmpeg already uses for embedded subs. Heavy (alass reads the audio via
@@ -1183,6 +1204,12 @@ function beginIptvLiveSlot(ctx, meta = {}) {
     key,
     label,
     replaced,
+    // What kind of stream was evicted — the retune grace protects the PREVIOUS stream's provider-
+    // side teardown (1-connection cap), so its length depends on how the OLD upstream closes:
+    // Node-owned sockets ('ts-pipe' / 'native-proxy') are destroyed synchronously by close() above,
+    // while the legacy ffmpeg-owned connection only releases when the killed process exits.
+    replacedKind: (replaced && prev && prev.kind) || '',
+    kind: null, // set by whichever path serves this slot (ts-pipe / ffmpeg-url / native-proxy)
     closed: false,
     closer: null,
     setCloser(fn) { this.closer = typeof fn === 'function' ? fn : null; },
@@ -1315,6 +1342,7 @@ function sendIptvNativeError(res, status, reason) {
 }
 function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
   const slot = beginIptvLiveSlot(ctx, meta);
+  slot.kind = 'native-proxy'; // Node owns the upstream; eviction destroys it synchronously
   let up = null;
   let done = false;
   let delayTimer = null;
@@ -3339,7 +3367,7 @@ function episodeSubtitleQuery(query, season, ep) {
   const base = String(query || '').trim();
   const s = Number(season);
   const e = Number(ep);
-  if (!Number.isInteger(s) || !Number.isInteger(e) || s <= 0 || e <= 0) return base;
+  if (!Number.isInteger(s) || !Number.isInteger(e) || s < 0 || e <= 0) return base; // s=0: specials
   if (/\bS\d{1,2}\s*E\d{1,3}\b/i.test(base)) return base;
   return `${base} S${String(s).padStart(2, '0')}E${String(e).padStart(2, '0')}`.trim();
 }
@@ -3703,18 +3731,22 @@ async function nextWatchEpisodes(uid, profile = 'default') {
   if (!settings.get().tmdbKey) return [];
   const all = store.read('watch', {});
   const rows = watchRowsForProfileFromAll(all, uid, profile);
-  const byShow = {};
+  // A Map, NOT an object: showIds are numeric strings, and JS objects iterate integer-like keys in
+  // ASCENDING NUMERIC order regardless of insertion — the .slice(0, 20) below was silently taking
+  // the 20 LOWEST TMDB ids instead of the 20 most recently watched shows (rows arrive sorted by
+  // updatedAt DESC), so accounts with real history got next-episode cards for arbitrary old shows.
+  const byShow = new Map();
   const inProgress = new Set();
   for (const w of rows) {
     const ep = parseEpisodeKey(w.key);
     if (!ep) continue;
     if (!w.watched && ((w.position || 0) > 30 || (w.traktPct || 0) > 2)) { inProgress.add(ep.showId); continue; }
     if (!w.watched) continue;
-    const cur = byShow[ep.showId];
-    if (!cur || ep.season > cur.season || (ep.season === cur.season && ep.episode > cur.episode)) byShow[ep.showId] = { ...ep, w };
+    const cur = byShow.get(ep.showId);
+    if (!cur || ep.season > cur.season || (ep.season === cur.season && ep.episode > cur.episode)) byShow.set(ep.showId, { ...ep, w });
   }
   const out = [];
-  for (const [showId, top] of Object.entries(byShow).slice(0, 20)) {
+  for (const [showId, top] of [...byShow].slice(0, 20)) {
     if (inProgress.has(showId)) continue;
     try {
       const d = await tmdb.get(`/tv/${showId}`);
@@ -4364,7 +4396,10 @@ const H = {
       if (!existing) return send(ctx.res, 404, { error: 'unknown play session', attempts: [] });
       if (existing.uid && existing.uid !== ctx.user.id) return send(ctx.res, 404, { error: 'unknown play session', attempts: [] });
       existing.uid = ctx.user.id;
-      const { session, vf, candidate, attempts } = await pipeline.advance(ctx.m[1]);
+      // The player sends its CURRENT position as a fraction so the replacement mount warms the
+      // right byte window (see pipeline.advance). Empty body = old clients → original behavior.
+      const b = await readJson(ctx.req).catch(() => ({}));
+      const { session, vf, candidate, attempts } = await pipeline.advance(ctx.m[1], { resumeFrac: b && b.resumeFrac });
       vf._q = session.query && session.query.q;
       vf._subQuery = episodeSubtitleQuery(vf._q, session.query && session.query.season, session.query && session.query.ep);
       vf._caps = session.caps || {}; // same client, same hardware claims
@@ -5035,6 +5070,7 @@ const H = {
     const startAttempt = () => {
       if (startDelayTimer) startDelayTimer = null;
       if (liveSlot.closed || ctx.res.destroyed) return;
+      liveSlot.kind = 'ffmpeg-url'; // legacy path: ffmpeg owns the provider connection
       const first = availableTargets[targetIndex] || remuxTargets[0];
       const likelyHls = iptvRemuxTargetLikelyHls(first);
       attempt(first, likelyHls, likelyHls ? 1 : 0);
@@ -5047,6 +5083,7 @@ const H = {
     // pre-first-byte failure falls back to the legacy URL-opening loop (covers HLS-only providers).
     const tsPipeTarget = (ch.nativeUrl && iptvNativeMime(ch.nativeUrl) === 'video/mp2t') ? ch.nativeUrl : '';
     const tsPipeRemux = async (tsTarget, onFail) => {
+      liveSlot.kind = 'ts-pipe'; // Node owns the upstream socket; eviction tears it down synchronously
       let settled = false, wrote = false, up = null, ff = null, errBuf = '', idleTimer = null;
       const clearIdle = () => { if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; } };
       const cleanup = () => {
@@ -5153,7 +5190,13 @@ const H = {
       try { if (!ctx.res.destroyed) ctx.res.destroy(); } catch {}
     });
     if (liveSlot.replaced) {
-      startDelayTimer = setTimeout(begin, IPTV_LIVE_RETUNE_GRACE_MS);
+      // Grace by the PREVIOUS stream's teardown: a Node-owned upstream (ts-pipe / native proxy) is
+      // already destroyed synchronously by the eviction, so a browser→browser zap on the preferred
+      // ts-pipe path only needs the native-sized cushion — the full 650ms (which exists for a killed
+      // legacy ffmpeg to release its provider socket) was ~530ms of avoidable dead air per zap.
+      // Unknown/legacy stays conservative.
+      const prevNodeOwned = liveSlot.replacedKind === 'ts-pipe' || liveSlot.replacedKind === 'native-proxy';
+      startDelayTimer = setTimeout(begin, prevNodeOwned ? IPTV_LIVE_RETUNE_GRACE_NATIVE_MS : IPTV_LIVE_RETUNE_GRACE_MS);
       startDelayTimer.unref();
     } else {
       begin();
@@ -5323,8 +5366,15 @@ async function performScan(lib, state, mode = 'scan') {
     const genresOf = (hit) => hit.genre_ids || (hit.genres || []).map((g) => g.id);
     const parseName = (label) => {
       const clean = label.replace(/\.[a-z0-9]+$/i, '');
-      const m = /^(.+?)[. (_-]+\(?((?:19|20)\d{2})\)?/.exec(clean);
-      return { title: (m ? m[1] : clean).replace(/[._]/g, ' ').trim(), year: m ? m[2] : null };
+      // The LAST year-shaped token is the release year — "Blade Runner 2049 (2017)" and
+      // "Wonder.Woman.1984.2020.1080p" carry a year INSIDE the title, and grabbing the FIRST one
+      // yielded title "Blade Runner" year 2049 → wrong/no TMDB match (and local-first playback
+      // silently broke for those titles). Same trailing-year rule as the usenet matcher.
+      const re = /[. (_-]+\(?((?:19|20)\d{2})\)?(?=[. )_-]|$)/g;
+      let m = null;
+      for (let h; (h = re.exec(clean));) m = h;
+      const title = (m ? clean.slice(0, m.index) : clean).replace(/[._]/g, ' ').trim();
+      return title ? { title, year: m ? m[1] : null } : { title: clean.replace(/[._]/g, ' ').trim(), year: null };
     };
     const lsDir = (dir) => { try { return fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; } };
     // Display titles: NFO titles often embed the year ("High Copy (2025)") — strip it.
@@ -5356,7 +5406,14 @@ async function performScan(lib, state, mode = 'scan') {
           if (d && d.id) return d;
         }
         const q = `/search/${kind}?query=${encodeURIComponent(name.title)}${name.year ? `&year=${name.year}` : ''}`;
-        return ((await tmdb.get(q)).results || [])[0] || null;
+        let hit = ((await tmdb.get(q)).results || [])[0] || null;
+        // Year-in-title fallback: "Blade Runner 2049.mkv" (no separate release year) parses as
+        // title "Blade Runner" + year 2049 → zero results. Fold the year back into the query
+        // before giving up — misses only, so the common case costs nothing extra.
+        if (!hit && name.year) {
+          hit = (((await tmdb.get(`/search/${kind}?query=${encodeURIComponent(`${name.title} ${name.year}`)}`)).results) || [])[0] || null;
+        }
+        return hit;
       } catch { return null; }
     };
     const wantTmdb = !wantAudio && lib.kind !== 'other' && lib.kind !== 'sports';
@@ -5591,7 +5648,10 @@ function importTraktWatchlist(uid, items) {
 // Trakt stores playback progress as a PERCENT — kept as traktPct; the player seeks to it
 // once the real duration is known.
 async function traktSyncDown(uid) {
-  if (!trakt.status(uid).linked) { const e = new Error('Trakt is not linked'); e.status = 400; throw e; }
+  const st = trakt.status(uid);
+  if (!st.linked) { const e = new Error('Trakt is not linked'); e.status = 400; throw e; }
+  // A broken token would "succeed" with empty pulls + markSynced — a false "sync ✓ — 0 watched".
+  if (st.broken) { const e = new Error('Trakt needs re-linking — your authorization was revoked or expired'); e.status = 400; throw e; }
   const pushed = await trakt.flushOutbox(uid).catch((e) => ({ sent: 0, failed: 1, pending: 0, error: e.message }));
   const [watched, playback, watchlist] = await Promise.all([trakt.pullWatched(uid), trakt.pullPlayback(uid), trakt.pullWatchlist(uid)]);
   // Artwork for the continue-watching imports (they become visible cards) — best effort.
@@ -5607,9 +5667,27 @@ async function traktSyncDown(uid) {
   const prefix = `${uid}:default:`;
   let nWatched = 0, nPlayback = 0;
   store.update('watch', {}, (all) => {
+    // Any profile bucket for this uid already knowing the key = local state wins. Without this,
+    // a non-default profile's playback scrobbles up to account-level Trakt and echoes back as a
+    // default-bucket fromTrakt card visible on EVERY profile (and hidden rows would resurrect).
+    // Precomputed in ONE table pass (pullWatched returns up to 20K keys — a per-key scan would be
+    // O(keys×table) on the event loop). Key shape is fixed `${uid}:${profile}:${key}`.
+    const localWins = new Set();
+    for (const [fullKey, v] of Object.entries(all)) {
+      if (!fullKey.startsWith(`${uid}:`) || !v) continue;
+      if (!(v.watched || (v.position || 0) > 30 || v.hidden)) continue;
+      const rest = fullKey.slice(uid.length + 1);
+      const sep = rest.indexOf(':');
+      if (sep > 0) localWins.add(rest.slice(sep + 1));
+    }
+    const anyProfileKnows = (key) => localWins.has(key);
     for (const w of watched) {
       const k = prefix + w.key;
-      if (all[k] && all[k].watched) continue;
+      // Local/in-progress state wins, mirroring the playback import below: a mid-rewatch row
+      // (watched:false + live position) must not be clobbered back to watched-at-0:00, and a
+      // row the playback import created (position 0, traktPct set) must not flip either.
+      if (all[k] && (all[k].watched || (all[k].position || 0) > 30 || (all[k].traktPct || 0) > 2)) continue;
+      if (anyProfileKnows(w.key)) continue;
       const meta = (all[k] && all[k].meta) || {};
       all[k] = { position: 0, duration: 0, watched: true, fromTrakt: true,
         meta: { ...meta, title: meta.title || w.title, year: meta.year || w.year, type: meta.type || (w.type === 'movie' ? 'movie' : 'episode'), tmdbId: w.tmdbId },
@@ -5619,6 +5697,7 @@ async function traktSyncDown(uid) {
     for (const p of playback) {
       const cur = all[prefix + p.key];
       if (cur && (cur.watched || cur.position > 30)) continue; // local progress wins
+      if (anyProfileKnows(p.key)) continue;
       all[prefix + p.key] = { position: 0, duration: 0, traktPct: Math.round(p.pct * 10) / 10, watched: false, fromTrakt: true,
         meta: { ...(cur && cur.meta || {}), title: (cur && cur.meta && cur.meta.title) || p.title, year: p.year,
           type: p.type === 'movie' ? 'movie' : 'episode', tmdbId: p.tmdbId, ...(art[p.key] ? { backdrop: art[p.key] } : {}) },
@@ -5637,7 +5716,8 @@ async function traktSyncDown(uid) {
 function traktSyncTick() {
   const tokens = trakt.linkedTokens();
   for (const [uid, tok] of Object.entries(tokens)) {
-    if (!tok || (tok.syncedAt && Date.now() - tok.syncedAt < 6 * 3600000)) continue;
+    if (!tok || tok.broken) continue; // broken = user must relink; retrying churns for nothing
+    if (tok.syncedAt && Date.now() - tok.syncedAt < 6 * 3600000) continue;
     trakt.markSynced(uid); // claim before the async work
     traktSyncDown(uid)
       .then((r) => { if (r.watched || r.playback || r.watchlist || r.pushed) console.log(`[trakt] sync: +${r.watched} watched, +${r.playback} in-progress, +${r.watchlist} watchlist, ${r.pushed} pushed`); })
@@ -5761,6 +5841,25 @@ Object.assign(H, {
   // as movies and TV episodes mounted from Usenet.
   localPlay: async (ctx) => {
     const body = await readJson(ctx.req);
+    // Age gate — local libraries must enforce the SAME profile maturity bar as usenet play/prepare
+    // (this endpoint had none, so a Kids profile could play any file in an attached library). The
+    // item's TMDB identity comes from the SERVER-side scan record, never the client; unmatched
+    // items fail OPEN like unknown certifications (defense-in-depth, consistent with play()).
+    const level = profileLevelFor(ctx.user, body.profileId);
+    if (level < 3) {
+      const found = localItemFor(ctx, ctx.m[1], ctx.m[2]);
+      if (found.error) return send(ctx.res, found.status || 404, { error: found.error });
+      const item = found.item;
+      let tmdbId = item.tmdbId;
+      if (!tmdbId && item.kind === 'episode' && Number.isFinite(+item.showIdx)) {
+        // Episodes copy the show's tmdbId at scan time, which can predate the TMDB match — read
+        // the show record's current id instead of failing open on a stale null.
+        const show = localLibraryItemFor(ctx, ctx.m[1], item.showIdx);
+        if (!show.error && show.item) tmdbId = show.item.tmdbId;
+      }
+      const mediaType = item.kind === 'movie' ? 'movie' : 'tv';
+      if (!(await maturityAllowsPlay(level, tmdbId, mediaType))) return maturityBlockedResponse(ctx);
+    }
     const r = localMountFor(ctx, ctx.m[1], ctx.m[2], body.caps || {}, body || {});
     if (r.error) return send(ctx.res, r.status || 404, { error: r.error });
     send(ctx.res, 200, mountPayload(r.vf, ctx.user.id, { local: true }));
@@ -5981,6 +6080,9 @@ Object.assign(H, {
   traktUnlink: async (ctx) => { trakt.unlink(ctx.user.id); send(ctx.res, 200, { ok: true }); },
   // Import the user's Trakt watchlist into Triboon's (adds only — nothing is removed).
   traktPull: async (ctx) => {
+    // Full watchlist import against api.trakt.tv — a looping client could get the admin's Trakt
+    // app rate-banned. 6/min is far above any human button-pressing.
+    if (throttleUserRoute(ctx, 'trakt-pull', { max: 6, windowMs: 60000, lockMs: 60000 })) return;
     try {
       const items = await trakt.pullWatchlist(ctx.user.id);
       const added = importTraktWatchlist(ctx.user.id, items);
@@ -5991,8 +6093,15 @@ Object.assign(H, {
   // Pull watched history + in-progress playback FROM Trakt into local watch state.
   // Manual "Sync now"; also runs automatically right after linking and every 6h (tick below).
   traktSync: async (ctx) => {
+    // Full history+playback+watchlist sync against api.trakt.tv (up to 20K rows) — same reasoning.
+    if (throttleUserRoute(ctx, 'trakt-sync', { max: 6, windowMs: 60000, lockMs: 60000 })) return;
     try { send(ctx.res, 200, await traktSyncDown(ctx.user.id)); }
-    catch (e) { console.error('[trakt sync]', e.message); send(ctx.res, 502, { error: 'trakt unreachable' }); }
+    catch (e) {
+      console.error('[trakt sync]', e.message);
+      // Deliberate 400s (not linked / needs re-linking) carry an actionable message — surface
+      // it instead of the generic "unreachable" (which read as a false network problem).
+      send(ctx.res, e.status || 502, { error: e.status ? e.message : 'trakt unreachable' });
+    }
   },
 
   // Bulk mark — a whole show/season watched or unwatched in one call (the client supplies the
@@ -6011,10 +6120,23 @@ Object.assign(H, {
       }
       return all;
     });
-    // Trakt: a whole-show bulk syncs as ONE show-level history op (Trakt expands episodes).
+    // Trakt: send the EXACT episode keys grouped per show+season — never a bare-show op. Trakt
+    // expands a bare show to every season, so a season-level unwatch used to irreversibly delete
+    // the user's ENTIRE Trakt history for the show (and season-watch marked the whole show).
     if (trakt.status(ctx.user.id).linked) {
-      const shows = new Set(items.map((it) => ((/^tmdb:tv:(\d+):/.exec(it && it.key || '')) || [])[1]).filter(Boolean));
-      for (const id of shows) trakt.history(ctx.user.id, `tmdb:tv:${id}`, b.watched !== false);
+      const byShow = new Map(); // showId -> Map(season -> [episode numbers])
+      for (const it of items) {
+        const m = /^tmdb:tv:(\d+):s(\d+)e(\d+)$/.exec(it && it.key || '');
+        if (!m) continue;
+        const seasons = byShow.get(m[1]) || new Map();
+        const eps = seasons.get(+m[2]) || [];
+        eps.push(+m[3]);
+        seasons.set(+m[2], eps);
+        byShow.set(m[1], seasons);
+      }
+      for (const [id, seasons] of byShow) {
+        for (const [season, eps] of seasons) trakt.historyEpisodes(ctx.user.id, id, season, eps, b.watched !== false);
+      }
       for (const it of items) { // bulk movie marks (rare) go item-level
         if (/^tmdb:movie:\d+$/.test(it && it.key || '')) trakt.history(ctx.user.id, it.key, b.watched !== false);
       }
@@ -6173,6 +6295,19 @@ Object.assign(H, {
 
   settingsSet: async (ctx) => {
     const b = await readJson(ctx.req);
+    // Validate a NEW TMDB key against TMDB before saving: a wrong key used to save fine and read
+    // "connected" everywhere (status only checks presence), so a new host believed setup was done
+    // and discovered the typo as an inexplicably empty Home page. Only a definitive 401 blocks the
+    // save — TMDB being unreachable must never lock the admin out of their own settings.
+    if (b.tmdbKey !== undefined && b.tmdbKey && b.tmdbKey !== settings.get().tmdbKey) {
+      try {
+        const base = process.env.TMDB_BASE || 'https://api.themoviedb.org/3';
+        const r = await fetchUrlExt(`${base}/configuration?api_key=${encodeURIComponent(String(b.tmdbKey))}`, { timeoutMs: 8000 });
+        if (r.status === 401) {
+          return send(ctx.res, 400, { error: 'TMDB rejected that API key — copy the "API Key" (v3 auth) value from themoviedb.org → Settings → API' });
+        }
+      } catch { /* network hiccup — save anyway */ }
+    }
     const iptvSourceChanged = ['iptvUrl', 'iptvMode', 'xtHost', 'xtUser', 'xtPass', 'epgUrl']
       .some((k) => b[k] !== undefined);
     const iptvAccessChanged = b.iptvUsers !== undefined;
@@ -6794,7 +6929,10 @@ Object.assign(H, {
     const seasonParam = parseInt(ctx.url.searchParams.get('season'), 10);
     const epRaw = ctx.url.searchParams.get('episode');
     const episodeParam = parseInt(epRaw != null ? epRaw : ctx.url.searchParams.get('ep'), 10);
-    const hasEpisode = Number.isInteger(seasonParam) && seasonParam > 0 && Number.isInteger(episodeParam) && episodeParam > 0;
+    // season >= 0: Season 0 = SPECIALS (anime OVAs, holiday episodes) — requiring season > 0 turned
+    // the episode filter OFF for exactly the plays where mixed-episode results hurt most, so
+    // specials searched the whole show and dead-ended in "No subtitles found".
+    const hasEpisode = Number.isInteger(seasonParam) && seasonParam >= 0 && Number.isInteger(episodeParam) && episodeParam > 0;
     // Caption style preference: 'avoid' (default) prefers clean dialogue-only; 'prefer' favors SDH
     // (sound descriptions for the hard of hearing); 'either' is neutral. Only nudges the auto-pick
     // and list order between otherwise-comparable subtitles.
@@ -6814,6 +6952,7 @@ Object.assign(H, {
     vf._osSearchCache = vf._osSearchCache || new Map();
     vf._osSearchInflight = vf._osSearchInflight || new Map();
     vf._subSyncState = vf._subSyncState || new Map(); // cacheKey -> looksSynced (skip alass when true)
+    vf._subSyncFail = vf._subSyncFail || new Map();   // syncKey -> {tries,timedOut,at} (stop doomed re-syncs)
     const catalogId = imdbId || tmdbId;
     const searchKey = `${lang}:${catalogId}${hasEpisode ? `:s${seasonParam}e${episodeParam}` : ''}`;
     const subtitleFailure = (e) => {
@@ -6834,12 +6973,17 @@ Object.assign(H, {
           // is gated/best-effort, so when it is unconfigured `os` is [] and this is identical to
           // the prior Wyzie-only behavior — including throwing Wyzie's no-subtitles error.
           const work = (async () => {
-            let wyData = [];
-            let wyErr = null;
-            try { wyData = await searchOnlineSubs(subOpts); } catch (e) { wyErr = e; }
-            const osData = await openSubtitlesVariantsForMount(vf, { imdbId, tmdbId, lang,
-              ...(hasEpisode ? { season: seasonParam, episode: episodeParam } : {}) });
-            const combined = [...(Array.isArray(wyData) ? wyData : []), ...osData];
+            // Truly concurrent (this used to await Wyzie to completion BEFORE starting the
+            // OpenSubtitles search, doubling cold CC latency). Wyzie's error is captured and only
+            // rethrown when the combined set is empty; openSubtitlesVariantsForMount never throws.
+            const [wySettled, osData] = await Promise.all([
+              searchOnlineSubs(subOpts).then((d) => ({ d }), (e) => ({ e })),
+              openSubtitlesVariantsForMount(vf, { imdbId, tmdbId, lang,
+                ...(hasEpisode ? { season: seasonParam, episode: episodeParam } : {}) }),
+            ]);
+            const wyData = Array.isArray(wySettled.d) ? wySettled.d : [];
+            const wyErr = wySettled.e || null;
+            const combined = [...wyData, ...osData];
             if (!combined.length) throw (wyErr || new Error('online subtitles failed'));
             const ranked = rankSubs(combined, releaseName, { durationSeconds: vf._tracks && vf._tracks.duration, sdhPref });
             // Trim wrong-episode / non-text rows so the menu only advertises subtitles that can
@@ -6908,9 +7052,16 @@ Object.assign(H, {
           }
           const chosen = variant ? variants.find((v) => v.id === variant) : variants[0];
           if (!chosen || !chosen.raw) throw new Error(variant ? 'that subtitle version is no longer available' : 'online subtitles failed');
-          vf._subSyncState.set(cacheKey, subtitleLooksSynced(chosen.raw, releaseName)); capMap(vf._subSyncState, 24);
-          if (chosen.raw._provider === 'opensubtitles') return downloadOpenSubtitles(chosen.raw._osFileId);
-          return downloadBestSubtitle(variants.map((v) => v.raw).filter((d) => d && !d._provider), {
+          if (chosen.raw._provider === 'opensubtitles') {
+            // No fallback on this branch — the chosen variant is exactly what gets served.
+            vf._subSyncState.set(cacheKey, subtitleLooksSynced(chosen.raw, releaseName)); capMap(vf._subSyncState, 24);
+            return downloadOpenSubtitles(chosen.raw._osFileId);
+          }
+          // Wyzie: a stale top-pick link silently falls back to the NEXT ranked sub, so the
+          // looksSynced judgment must come from the sub actually SERVED — stamping from `chosen`
+          // before the download marked fallback subs 'synced' forever (drifting CC + a dead
+          // Fix-sync button, since ?sync=1 skips alass for 'synced' tracks).
+          const { vtt: dlVtt, served } = await downloadBestSubtitle(variants.map((v) => v.raw).filter((d) => d && !d._provider), {
             key,
             releaseName,
             durationSeconds: vf._tracks && vf._tracks.duration,
@@ -6919,6 +7070,8 @@ Object.assign(H, {
             attempts: 3,
             retryDelayMs: 900,
           });
+          vf._subSyncState.set(cacheKey, subtitleLooksSynced(served, releaseName)); capMap(vf._subSyncState, 24);
+          return dlVtt;
         })().then((vtt) => {
           vf._osCache.set(cacheKey, vtt); capMap(vf._osCache, 12);
           return vtt;
@@ -6946,24 +7099,46 @@ Object.assign(H, {
           { 'content-type': 'text/vtt; charset=utf-8', 'x-triboon-subsync': looksSynced ? 'synced' : 'unavailable' });
       }
       const syncKey = `${cacheKey}:synced`;
+      // Terminal failure = a 300s timeout (the audio provably can't be pulled in time — retrying
+      // can NEVER succeed and each attempt re-downloads GBs from the provider) or 3 strikes (the
+      // deliberate cold-audio warm-up retries fail fast; a persistent alass error doesn't heal).
+      // Without this the status stayed 'pending' forever and the native client's 12-retry loop
+      // re-ran the doomed full-audio pull on every playback.
+      const syncTerminal = () => { const f = vf._subSyncFail.get(syncKey); return !!(f && (f.timedOut || f.tries >= 3)); };
+      if (syncTerminal()) {
+        return send(ctx.res, 200, shift ? shiftVtt(vtt, shift) : vtt,
+          { 'content-type': 'text/vtt; charset=utf-8', 'x-triboon-subsync': 'failed' });
+      }
       if (!vf._osCache.has(syncKey)) {
         if (!vf._osInflight.has(syncKey)) {
           const work = onDemandSubSync(vf, vtt, ctx.claims.uid)
-            .then((synced) => { vf._osCache.set(syncKey, synced); capMap(vf._osCache, 12); return synced; })
+            .then((synced) => { vf._osCache.set(syncKey, synced); capMap(vf._osCache, 12); vf._subSyncFail.delete(syncKey); return synced; })
             .finally(() => vf._osInflight.delete(syncKey));
           vf._osInflight.set(syncKey, work);
         }
         try { await vf._osInflight.get(syncKey); } catch (e) {
-          console.error(`[subsync ${vf.id}] ${String(e && e.message || e).slice(0, 160)}`);
+          const msg = String(e && e.message || e);
+          const prev = vf._subSyncFail.get(syncKey) || { tries: 0, timedOut: false };
+          vf._subSyncFail.set(syncKey, { tries: prev.tries + 1, timedOut: prev.timedOut || /timed out/i.test(msg), at: Date.now() });
+          capMap(vf._subSyncFail, 24);
+          console.error(`[subsync ${vf.id}] ${msg.slice(0, 160)}`);
         }
       }
       const synced = vf._osCache.get(syncKey);
       if (synced) return send(ctx.res, 200, shift ? shiftVtt(synced, shift) : synced,
         { 'content-type': 'text/vtt; charset=utf-8', 'x-triboon-subsync': 'corrected' });
+      if (syncTerminal()) {
+        return send(ctx.res, 200, shift ? shiftVtt(vtt, shift) : vtt,
+          { 'content-type': 'text/vtt; charset=utf-8', 'x-triboon-subsync': 'failed' });
+      }
     }
     // Tell the player whether an automatic background sync is worth requesting: 'pending' = not a
-    // confident match and alass is available; 'synced' = already matched (skip); else 'unavailable'.
-    const syncHdr = looksSynced ? 'synced' : (detectSubSync() && vf._subSyncState.has(cacheKey) ? 'pending' : 'unavailable');
+    // confident match and alass is available; 'failed' = sync definitively failed (stop asking);
+    // 'synced' = already matched (skip); else 'unavailable'.
+    const _sf = vf._subSyncFail.get(`${cacheKey}:synced`);
+    const syncHdr = looksSynced ? 'synced'
+      : (_sf && (_sf.timedOut || _sf.tries >= 3)) ? 'failed'
+      : (detectSubSync() && vf._subSyncState.has(cacheKey) ? 'pending' : 'unavailable');
     send(ctx.res, 200, shift ? shiftVtt(vtt, shift) : vtt,
       { 'content-type': 'text/vtt; charset=utf-8', 'x-triboon-subsync': syncHdr });
   },
@@ -6982,6 +7157,9 @@ Object.assign(H, {
     try {
       const mode = String(ctx.url.searchParams.get('mode') || '').toLowerCase();
       if (mode !== 'prewarm') {
+        // No vf here on purpose: this is the per-REQUEST wait (flat ~120s floor). The extraction
+        // JOB gets the size-scaled budget (embeddedSubtitleTimeoutMs(mode, vf) in ensureSubtitleVtt)
+        // and survives disconnects, so a big file keeps extracting while clients poll.
         const waitMs = mode === 'startup' ? embeddedSubtitleStartupWaitMs() : embeddedSubtitleTimeoutMs(mode);
         extendSubtitleResponseTimeout(ctx, waitMs + 15000);
       }
@@ -7283,10 +7461,18 @@ function cleanupYtCookieFiles() {
 // so the whole-file read restarted from zero on every retry and the cache never filled
 // ("subtitles don't load until I turn them off and on"). Now the first request (or the
 // play-time prefetch) starts ONE ffmpeg run; everyone else awaits the same promise.
-function embeddedSubtitleTimeoutMs(mode = '') {
+function embeddedSubtitleTimeoutMs(mode = '', vf = null) {
   const configured = parseInt(process.env.TRIBOON_EMBEDDED_SUB_TIMEOUT_MS || '', 10);
-  if (Number.isFinite(configured) && configured > 0) return Math.max(15000, Math.min(120000, configured));
-  return 120000;
+  // The env override is a deliberate admin decision — honor it above the default cap (it used to
+  // be clamped DOWN to 120s, making it impossible to extract embedded subs from big releases).
+  // Only a sanity ceiling applies.
+  if (Number.isFinite(configured) && configured > 0) return Math.max(15000, Math.min(30 * 60000, configured));
+  // Text subs are interleaved through the WHOLE file, so ffmpeg must read the entire stream at
+  // background priority. A flat 120s tops out around ~12GB — 4K remuxes (20-60GB) deterministically
+  // timed out, wasting every byte pulled. Scale with the mount size at an assumed ~25MB/s
+  // background throughput: floor 120s, cap 20min.
+  const size = vf && Number(vf.size) || 0;
+  return Math.max(120000, Math.min(20 * 60000, Math.round(size / (25 * 1024 * 1024) * 1000)));
 }
 function embeddedSubtitleStartupWaitMs() {
   const configured = parseInt(process.env.TRIBOON_EMBEDDED_SUB_STARTUP_WAIT_MS || '', 10);
@@ -7347,7 +7533,7 @@ function ensureSubtitleVtt(vf, track, uid, opts = {}) {
   vf._subJobs = vf._subJobs || new Map();
   if (vf._subJobs.has(track)) return vf._subJobs.get(track);
   const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(uid, vf.id)}&priority=background`;
-  const timeoutMs = embeddedSubtitleTimeoutMs(opts.mode);
+  const timeoutMs = embeddedSubtitleTimeoutMs(opts.mode, vf);
   const job = new Promise((resolve, reject) => {
     let ff; let done = false;
     const finish = (fn, value) => {
@@ -7685,6 +7871,13 @@ function sweep(now = Date.now()) {
   // rows here too so the maps can't accumulate on a server whose admin never opens the screen.
   for (const [id, row] of activitySessions) if (now - ((row && row.updatedAt) || 0) > ACTIVITY_TTL_MS) activitySessions.delete(id);
   for (const [key, row] of presenceSessions) if (now - ((row && row.lastSeen) || 0) > PRESENCE_TTL_MS) presenceSessions.delete(key);
+  // geoCache checked its TTL only on READ and never evicted — roaming remote users (mobile IPs
+  // rotate) grew it without bound over weeks-long uptime. Prune expired entries + cap as a backstop.
+  for (const [ip, hit] of geoCache) if (now - ((hit && hit.at) || 0) > GEO_TTL_MS) geoCache.delete(ip);
+  if (geoCache.size > 500) {
+    const oldest = [...geoCache.entries()].sort((a, b) => ((a[1] && a[1].at) || 0) - ((b[1] && b[1].at) || 0));
+    for (const [ip] of oldest.slice(0, geoCache.size - 500)) geoCache.delete(ip);
+  }
   if (evicted.length) pipeline.rebalancePlaybackWindows(now);
   auth.sweepQuickConnect();
   if (evicted.length) console.log(`[sweep] evicted ${evicted.length} idle mount(s), ${mounts.size} live`);

@@ -8639,6 +8639,8 @@ async function playMultiViewVodItem(it, slotIndex = multiViewActiveSlot()) {
         const body = { caps: clientCaps(), q: queryFor(item) };
         if (ids.season != null) body.season = ids.season;
         if (ids.ep != null) body.ep = ids.ep;
+        // Age gate: local plays enforce the same profile maturity bar as usenet plays.
+        if (S.profile && S.profile.id) body.profileId = S.profile.id;
         mount = await api(local.playUrl, { method: 'POST', body });
       } else {
         mount = { streamUrl: local.streamUrl, name: local.name, container: 'local', method: null, playback: { method: 'direct' } };
@@ -9052,7 +9054,12 @@ async function openPlayer(it, mount, opts = {}) {
   // A finished movie closes the player itself. Episodes keep the Up Next card on screen even
   // if the final timeupdate did not fire before the ended event.
   v.onended = () => {
-    if (S.playing && S.playing.item && S.playing.item.type === 'live') return;
+    if (S.playing && S.playing.item && S.playing.item.type === 'live') {
+      // The MSE buffer played out after the upstream ended — this used to freeze the last frame
+      // silently forever. Reconnect like the native player; if the retune budget is spent, say so.
+      if (!attemptLiveAutoRetune()) showLiveProviderError('The live stream ended unexpectedly');
+      return;
+    }
     if (S.nextEp) {
       if (!S.upNextShown) showUpNext();
       return; // countdown/manual Play Next owns the handoff
@@ -10008,6 +10015,9 @@ function failover() {
     return;
   }
   if (p.item && p.item.type === 'live') {
+    // Mid-broadcast drop (network abort, MSE decode error on corrupt TS bytes): reconnect before
+    // surfacing the error panel — a fresh server remux session usually recovers, like native does.
+    if (attemptLiveAutoRetune()) return;
     showLiveProviderError('Live stream unavailable');
     return;
   }
@@ -10039,7 +10049,13 @@ async function autoAdvance(opts = {}) {
   const nativePreferred = !!opts.nativePreferred || (p.usingNative && canUseNativeVideoPlayer());
   toast('Source failed — advancing to the next release…');
   try {
-    const r = await api('/api/advance/' + p.sessionId, { method: 'POST' });
+    // Tell the server WHERE we are so the replacement mount warms the resume byte window at the
+    // live timestamp (not the file head) — the resume seek lands hot instead of stalling 20-30s.
+    const advDur = (p.duration && isFinite(p.duration) && p.duration) || 0;
+    const r = await api('/api/advance/' + p.sessionId, {
+      method: 'POST',
+      body: at > 0 && advDur > 0 ? { resumeFrac: Math.max(0, Math.min(0.98, at / advDur)) } : {},
+    });
     p.streamUrl = r.streamUrl; p.remuxUrl = r.remuxUrl; p.transcodeUrl = r.transcodeUrl;
     p.triedRemux = false; p.triedTranscode = false; p.mountId = r.id;
     p.tracksUrl = r.tracksUrl; p.subtitleBase = r.subtitleBase; p.streamToken = r.streamToken;
@@ -10086,6 +10102,25 @@ function focusVlcPanel() {
   if (!b) return;
   const run = () => { try { b.focus({ preventScroll: true }); } catch {} applyFocus(b, false); };
   requestAnimationFrame(run); setTimeout(run, 60);
+}
+// A live stream that DROPS mid-broadcast (provider hiccup, ffmpeg exit, upstream idle kill) used to
+// freeze on the last frame silently ('ended') or dead-end in the error panel — while the native
+// player recovers itself. Auto-retune the SAME channel, bounded: only after real playback (startup
+// failures keep the existing alternate/error flow — a client retry loop would hammer a dead
+// provider), at most 2 per 45s window, main player only (split/multiview panes own their errors).
+function attemptLiveAutoRetune() {
+  const p = S.playing;
+  if (!p || !p.item || p.item.type !== 'live' || !p.streamUrl) return false;
+  if (S.view !== 'player') return false;
+  if (liveSplitEnabled() || (S.multiView && S.multiView.open)) return false;
+  const v = $('video');
+  if (!v || v.currentTime < 3) return false; // never loop a channel that can't START
+  const now = appMs();
+  if (!p._liveRetuneWinAt || now - p._liveRetuneWinAt > 45000) { p._liveRetuneWinAt = now; p._liveRetunes = 0; }
+  if ((p._liveRetunes || 0) >= 2) return false;
+  p._liveRetunes = (p._liveRetunes || 0) + 1;
+  toast('Live stream dropped — reconnecting…');
+  return startSource('direct', 0) === true; // on failure it already shows the live error panel
 }
 function showLiveProviderError(reason) {
   const msg = document.querySelector('#vlcPanel .sub');
@@ -11519,7 +11554,7 @@ function subtitleRequestParams(it, lang, streamToken) {
   // the exact episode instead of recovering it from a remembered query string. Without this, any
   // play path that didn't carry SxxExx searched the whole show — wrong dialogue + a wall of rows.
   const ep = episodeKeyParts(it);
-  if (ep && ep.season > 0 && ep.episode > 0) {
+  if (ep && ep.season >= 0 && ep.episode > 0) { // season 0 = specials — they need the filter MOST
     q.set('season', String(ep.season));
     q.set('episode', String(ep.episode));
   }
@@ -11995,9 +12030,13 @@ async function runPendingNativeSync() {
     const syncUrl = base + (base.includes('?') ? '&' : '?') + 'sync=1';
     const r = await fetch(syncUrl); // triggers/awaits the alass correction, then caches it
     if (!r.ok) return; // transient — leave queued
+    const syncVerdict = r.headers.get('x-triboon-subsync');
+    // 'failed' = the server declared the sync terminally dead (300s timeout / repeated alass
+    // errors) — stop retrying NOW; each retry re-pulled the mount's full audio from usenet.
+    if (syncVerdict === 'failed') { p._pendingNativeSyncRel = null; return; }
     // alass didn't correct it yet (cold audio / transient failure): leave queued so a later native
     // tick retries once the audio has warmed, instead of permanently abandoning the sync.
-    if (r.headers.get('x-triboon-subsync') !== 'corrected') return;
+    if (syncVerdict !== 'corrected') return;
     p._pendingNativeSyncRel = null; // corrected — apply once and stop retrying
     if (!S.playing || S.playing !== p || p.subTrack !== rel) return;
     window.TriboonTV.updateActiveSubtitle(JSON.stringify({
@@ -13985,6 +14024,8 @@ async function playLocal(it) {
     const body = { caps: clientCaps(), q: queryFor(it) };
     if (ids.season != null) body.season = ids.season;
     if (ids.ep != null) body.ep = ids.ep;
+    // Age gate: local plays enforce the same profile maturity bar as usenet plays.
+    if (S.profile && S.profile.id) body.profileId = S.profile.id;
     const mount = it._local.playUrl
       ? await api(it._local.playUrl, { method: 'POST', body })
       : {
@@ -14712,7 +14753,7 @@ async function renderGuideProgressive(body, pool) {
       const w = r - l;
       const live = p.start <= now && p.stop > now;
       const fallback = !!p.synthetic;
-      blocks += `<div class="gProg p${pi++ % 5}${live ? ' live' : ''}${fallback ? ' fallback' : ''}${progFitClass(w)}" style="left:${l}%;width:${w}%" title="${esc(p.title)}${fallback ? ' (channel listing)' : ` (${fmtH(p.start)}-${fmtH(p.stop)})`}">
+      blocks += `<div class="gProg p${pi++ % 5}${live ? ' live' : ''}${fallback ? ' fallback' : ''}${progFitClass(w)}" data-s="${+p.start || 0}" data-e="${+p.stop || 0}" style="left:${l}%;width:${w}%" title="${esc(p.title)}${fallback ? ' (channel listing)' : ` (${fmtH(p.start)}-${fmtH(p.stop)})`}">
         <span class="gpT">${esc(p.title)}</span><span class="gpS">${fallback ? 'Channel listing' : fmtH(p.start)}</span></div>`;
     }
     return blocks || '<div class="gProg empty" style="left:0;width:100%"><span class="gpT">No guide data for this channel</span></div>';
@@ -14750,6 +14791,31 @@ async function renderGuideProgressive(body, pool) {
     if (before) wrap.insertBefore(row, before); else wrap.appendChild(row);
   };
   for (const ch of chans) addRow(ch, [], null, true);
+
+  // Keep the timeline ALIVE: the render used to be one-shot — the now-line, live-program highlight,
+  // and the 2.5h window froze at render time, so a TV left on the guide highlighted programmes that
+  // ended an hour ago. A light minute tick repositions .gNow and retoggles .live from the data-s/e
+  // stamps (no refetch); when the window is nearly consumed, do ONE full re-render (fresh window +
+  // programmes) — deferred while the user is actively navigating so focus never jumps underfoot.
+  if (S._guideNowTimer) clearInterval(S._guideNowTimer);
+  S._guideNowTimer = setInterval(() => {
+    if (!wrap.isConnected || S.view !== 'livetv' || S.liveGuide !== true) {
+      clearInterval(S._guideNowTimer); S._guideNowTimer = null; return;
+    }
+    const t = Date.now();
+    if (t > w1 - 30 * 60000) {
+      if (t - (S._guideNavAt || 0) < 5000) return; // mid-navigation: try again next tick
+      clearInterval(S._guideNowTimer); S._guideNowTimer = null;
+      renderLiveTvBody();
+      return;
+    }
+    const left = pct(t) + '%';
+    wrap.querySelectorAll('.gNow').forEach((el) => { el.style.left = left; });
+    wrap.querySelectorAll('.gProg[data-s]').forEach((el) => {
+      const live = +el.dataset.s <= t && +el.dataset.e > t;
+      if (el.classList.contains('live') !== live) el.classList.toggle('live', live);
+    });
+  }, 60000);
 
   const hydrateRows = (rows) => {
     fetchGuideBatch(rows).then((progsByIdx) => {
@@ -15162,6 +15228,9 @@ async function playChannel(it, list) {
   if ($('pGuide') && $('pGuide').classList.contains('open')) setPlayerGuideVisualFocus(it._channel);
   try { it = await hydrateLivePlaybackUrls(it); }
   catch (e) { toast('Live stream unavailable: ' + e.message); return; }
+  // Zap speed: warm the NEIGHBORS' stream URLs in the background (a tiny token-minting GET, no
+  // provider connection) so PgUp/PgDn ⏮⏭ zaps skip the serial /api/iptv/play round-trip entirely.
+  prefetchAdjacentChannelUrls(it, S.liveList);
   const keepGuidePip = S.view === 'player' && !!($('pGuide') && $('pGuide').classList.contains('open'));
   if (keepGuidePip && S.nativeGuideMode && tryNativeLivePlayer(it, true)) {
     markGuideCur();
@@ -15178,6 +15247,16 @@ async function playChannel(it, list) {
     return;
   }
   return playChannelWeb(it);
+}
+function prefetchAdjacentChannelUrls(cur, list) {
+  try {
+    if (!cur || !Array.isArray(list) || list.length < 2) return;
+    const i = list.findIndex((x) => String(x._channel) === String(cur._channel));
+    if (i < 0) return;
+    for (const n of [list[(i + 1) % list.length], list[(i - 1 + list.length) % list.length]]) {
+      if (n && n !== cur && !n._personal && !(n._streamUrl && n._nativeUrl)) hydrateLivePlaybackUrls(n).catch(() => {});
+    }
+  } catch { /* prefetch is best-effort */ }
 }
 async function hydrateLivePlaybackUrls(it) {
   if (!it || it._personal || (it._streamUrl && it._nativeUrl)) return it;
@@ -15552,7 +15631,7 @@ async function renderPlayerGuideTimeline(pg, list) {
       const w = r - l;
       const live = p.start <= now && p.stop > now;
       const fallback = !!p.synthetic;
-      blocks += `<div class="gProg p${pi++ % 5}${live ? ' live' : ''}${fallback ? ' fallback' : ''}${progFitClass(w)}" style="left:${l}%;width:${w}%" title="${esc(p.title)}${fallback ? ' (channel listing)' : ` (${fmtH(p.start)}-${fmtH(p.stop)})`}">
+      blocks += `<div class="gProg p${pi++ % 5}${live ? ' live' : ''}${fallback ? ' fallback' : ''}${progFitClass(w)}" data-s="${+p.start || 0}" data-e="${+p.stop || 0}" style="left:${l}%;width:${w}%" title="${esc(p.title)}${fallback ? ' (channel listing)' : ` (${fmtH(p.start)}-${fmtH(p.stop)})`}">
         <span class="gpT">${esc(p.title)}</span><span class="gpS">${fallback ? 'Channel listing' : fmtH(p.start)}</span></div>`;
     }
     return blocks || '<div class="gProg empty" style="left:0;width:100%"><span class="gpT">No guide data for this channel</span></div>';
@@ -15887,7 +15966,11 @@ async function loadMusicPlaylistPage(reset = false) {
     p.title = r.title || p.title;
     p.hasMore = !!r.hasMore;
     p.offset = r.nextOffset == null ? p.offset + rows.length : r.nextOffset;
-    p.tracks = reset ? rows : p.tracks.concat(rows);
+    // Append IN PLACE: the playing queue (S.musicQueue) is a reference to this same array, so a
+    // concat (new array) silently orphaned the queue at page 1 — playback stopped at track 24 of
+    // every real playlist. Growing the array grows the live queue.
+    if (reset) p.tracks = rows;
+    else p.tracks.push(...rows);
     if (!p.cover && rows[0] && rows[0].thumb) p.cover = rows[0].thumb;
   } catch (e) {
     toast(`Could not load ${p.title || 'playlist'}: ${e.message}`);
@@ -16088,7 +16171,11 @@ function playMusic(queue, idx, opts = {}) {
 // next pick is random, so only the sequential/repeat-all path is predictable enough to prefetch.
 function prefetchNextMusicStream() {
   try {
-    const q = S.musicQueue; if (!q || q.length < 2 || S.musicShuffle) return;
+    const q = S.musicQueue; if (!q || !q.length) return;
+    // Nearing the end of a paged playlist: pull the next page in the background so the queue has
+    // grown before playback arrives (no gap at the page boundary). Applies to shuffle too.
+    if (musicQueueCanExtend(q) && S.musicIdx >= q.length - 3) loadMusicPlaylistPage(false);
+    if (q.length < 2 || S.musicShuffle) return;
     let next = S.musicIdx + 1;
     if (next >= q.length) { if (S.musicRepeat === 'all') next = 0; else return; }
     const t = q[next]; if (!t || !t.streamUrl || t._prefetched) return;
@@ -16132,9 +16219,24 @@ function musicNext(auto) {
   } else next = S.musicIdx + 1;
   if (next >= q.length) {
     if (S.musicRepeat === 'all') next = 0;
+    else if (musicQueueCanExtend(q)) { extendMusicQueueThenNext(auto); return; }
     else return; // end of queue, no repeat
   }
   playMusic(q, next, { showQueue: $('musicNow').classList.contains('open'), notify: !auto });
+}
+// The playing queue is the current playlist's live tracks array and the playlist has more pages:
+// reaching the end means "load the next page", not "stop" — playlists used to die at track 24.
+function musicQueueCanExtend(q) {
+  const p = S.musicPlaylist;
+  return !!(p && p.hasMore && !p.loading && q === p.tracks);
+}
+async function extendMusicQueueThenNext(auto) {
+  const q = S.musicQueue;
+  const before = q.length;
+  try { await loadMusicPlaylistPage(false); } catch {}
+  // Only continue when the SAME queue actually grew — a failed/empty page must not loop.
+  if (S.musicQueue !== q || q.length <= before) return;
+  musicNext(auto);
 }
 function toggleShuffle() {
   S.musicShuffle = !S.musicShuffle;
@@ -16187,7 +16289,12 @@ mAudio.addEventListener('timeupdate', () => {
   if (d && !S.musicCur?.duration) $('mnDur').textContent = mmss(d);
 });
 mAudio.addEventListener('ended', () => musicNext(true));
-mAudio.addEventListener('play', () => { document.body.classList.remove('musicPaused'); setPlayIcon(true); S.musicFailStreak = 0; nativeMusicSession(true); });
+mAudio.addEventListener('play', () => { document.body.classList.remove('musicPaused'); setPlayIcon(true); nativeMusicSession(true); });
+// The fail-streak must reset on 'playing' (media actually rendering), NOT 'play' — 'play' fires on
+// every play() CALL including doomed ones, which zeroed the streak each attempt and defeated the
+// one-full-lap bound: a wholly-unplayable queue (expired tokens overnight) looped forever, spawning
+// yt-dlp every ~350ms.
+mAudio.addEventListener('playing', () => { S.musicFailStreak = 0; });
 mAudio.addEventListener('pause', () => { document.body.classList.add('musicPaused'); setPlayIcon(false); nativeMusicSession(false); });
 mAudio.addEventListener('error', () => {
   if (!S.musicCur || S.musicLoadFailed) return;
@@ -17253,6 +17360,23 @@ async function renderTraktBox() {
       (S.user.role === 'admin' ? ' — add the app id + secret in Settings → Catalog & Live TV.' : ' — ask your admin to enable it.') + '</div>';
     return;
   }
+  if (st.linked && st.broken) {
+    // The token was definitively rejected (app revoked on trakt.tv / rotated refresh token):
+    // sync is dead until a re-link, so say that instead of pretending everything is healthy.
+    box.innerHTML = `<div class="kv"><span>Linked as</span><span>${esc(st.user || 'Trakt account')}</span></div>
+      <div class="hint" style="color:var(--amber);margin-top:10px">Trakt needs re-linking — the authorization was revoked or expired,
+      so nothing is syncing. Re-link below (queued watches send once re-linked).</div>
+      <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">
+        <button class="btn primary focusable" id="traktLink" style="flex:1;justify-content:center">Re-link Trakt account…</button>
+        <button class="btn ghost focusable" id="traktUnlink">Unlink</button>
+      </div><div class="hint" id="traktMsg"></div>`;
+    box.querySelector('#traktUnlink').addEventListener('click', async () => {
+      await api('/api/trakt/unlink', { method: 'POST', body: {} });
+      toast('Trakt unlinked'); renderTraktBox();
+    });
+    wireTraktLinkButton(box);
+    return;
+  }
   if (st.linked) {
     box.innerHTML = `<div class="kv"><span>Linked as</span><span>${esc(st.user || 'Trakt account')}</span></div>
       <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">
@@ -17286,6 +17410,10 @@ async function renderTraktBox() {
   }
   box.innerHTML = `<button class="btn primary focusable" id="traktLink" style="justify-content:center">Link Trakt account…</button>
     <div class="hint" id="traktMsg"></div>`;
+  wireTraktLinkButton(box);
+}
+// Device-code link flow, shared by the fresh-link and the needs-re-linking (broken token) boxes.
+function wireTraktLinkButton(box) {
   box.querySelector('#traktLink').addEventListener('click', async () => {
     try {
       const r = await api('/api/trakt/link', { method: 'POST', body: {} });

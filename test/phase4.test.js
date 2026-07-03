@@ -1033,8 +1033,10 @@ test('subtitle startup preference contract: admin can toggle built-in captions',
   assert.match(android, /private void updateNativeActiveSubtitle\(String json\) \{[\s\S]+validateNativePlaybackUrl\(cleanSubtitleUrl\)[\s\S]+disableNativeTextTracks\(\);[\s\S]+loadNativeSubtitleOverlay\(nativeSubtitleUrl\);[\s\S]+updateNativeChrome\(\);[\s\S]+\}/,
     'Android late subtitle updates should validate the URL before loading the native subtitle overlay');
   const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
-  assert.match(server, /function embeddedSubtitleTimeoutMs\(mode = ''\) \{[\s\S]+return 120000;[\s\S]+\}/,
-    'embedded subtitle extraction jobs should have enough time to fill the shared cache');
+  assert.match(server, /function embeddedSubtitleTimeoutMs\(mode = '', vf = null\) \{[\s\S]+Math\.min\(30 \* 60000, configured\)[\s\S]+Math\.max\(120000, Math\.min\(20 \* 60000, Math\.round\(size \/ \(25 \* 1024 \* 1024\) \* 1000\)\)\)/,
+    'embedded subtitle extraction jobs scale their budget with the mount size (a flat 120s could never read a 20-60GB remux) and the env override is honored above 120s');
+  assert.match(server, /const timeoutMs = embeddedSubtitleTimeoutMs\(opts\.mode, vf\);/,
+    'the extraction JOB gets the size-scaled budget');
   assert.match(server, /function embeddedSubtitleStartupWaitMs\(\) \{[\s\S]+return 8000;[\s\S]+\}/,
     'startup auto-subtitle selection should have a short wait budget');
   assert.match(server, /const SUBTITLE_FAILURE_TTL_MS = 10 \* 60000;[\s\S]+function recentSubtitleFailure\(vf, track\)/,
@@ -2008,7 +2010,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'native player should be able to reveal all hidden local subtitle languages');
   assert.match(android, /"local_all"\.equals\(choice\.subtitleAction\)[\s\S]+requestNativeSubtitleShowAll\(\);/,
     'Android native subtitle menu should route the show-all local languages action back to the web player state');
-  assert.match(server, /embeddedSubtitleTimeoutMs\(mode = ''\)[\s\S]+embedded subtitle extraction timed out after/,
+  assert.match(server, /embeddedSubtitleTimeoutMs\(mode = '', vf = null\)[\s\S]+embedded subtitle extraction timed out after/,
     'embedded subtitle extraction should fail cleanly instead of hanging indefinitely on streamed mounts');
   assert.match(server, /function episodeSubtitleQuery\(query, season, ep\)[\s\S]+S\$\{String\(s\)\.padStart\(2, '0'\)\}E\$\{String\(e\)\.padStart\(2, '0'\)\}/,
     'server subtitle lookup should be able to add episode identity even when source filenames are opaque');
@@ -3602,8 +3604,8 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'native auto-sync should queue a request + run it, not schedule a throttle-prone timer');
   assert.doesNotMatch(ui, /_autoSyncNT/,
     'native auto-sync must not rely on the old throttle-prone setTimeout (the _autoSyncNT timer is gone)');
-  assert.match(ui, /async function runPendingNativeSync\(\) \{[\s\S]+x-triboon-subsync'\) !== 'pending'[\s\S]+sync=1[\s\S]+x-triboon-subsync'\) !== 'corrected'[\s\S]+updateActiveSubtitle\(/,
-    'the queued native sync only swaps the track in once the server confirms an alass-corrected sub');
+  assert.match(ui, /async function runPendingNativeSync\(\) \{[\s\S]+x-triboon-subsync'\) !== 'pending'[\s\S]+sync=1[\s\S]+if \(syncVerdict === 'failed'\) \{ p\._pendingNativeSyncRel = null; return; \}[\s\S]+syncVerdict !== 'corrected'[\s\S]+updateActiveSubtitle\(/,
+    'the queued native sync only swaps the track in once the server confirms an alass-corrected sub, and STOPS retrying when the server declares the sync terminally failed (each retry re-pulled the mount audio from usenet)');
   assert.match(ui, /window\.__tvNativeVideoProgress = \(pos, dur\) => \{[\s\S]+runPendingNativeSync\(\);/,
     'the native VOD progress tick drives the queued alass sync');
   assert.match(ui, /window\.__tvNativeVideoStats = \(raw\) => \{[\s\S]+runPendingNativeSync\(\);/,
@@ -3864,4 +3866,184 @@ test('player backend: remux with audio selection emits fMP4; subtitle extract em
     assert.ok(vtt.startsWith('WEBVTT'), 'WebVTT header');
     assert.match(vtt, /Hello Triboon/, 'cue text survived conversion');
   } finally { server.close(); }
+});
+
+// ---- v2.3.8 audit-fix contracts: Trakt/watch-state safety + CC pipeline ----
+// These pin the FIXES for the four verified Trakt bugs and four CC bugs from the v2.3.7
+// pre-production audit so a refactor can't silently reintroduce them.
+test('audit contracts: Trakt/watch-state data-safety + CC pipeline fixes stay in place', () => {
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+
+  // (1) watchBulk: season/group marks send EXACT per-season episode payloads — never a bare-show
+  // history op (Trakt expands a bare show, so a season-UNWATCH deleted the user's entire show history).
+  const watchBulk = server.slice(server.indexOf('watchBulk: async'), server.indexOf('prefsGet: async'));
+  assert.match(watchBulk, /trakt\.historyEpisodes\(ctx\.user\.id, id, season, eps, b\.watched !== false\)/,
+    'season bulk marks go through the season-scoped historyEpisodes op');
+  assert.doesNotMatch(watchBulk, /trakt\.history\(ctx\.user\.id, `tmdb:tv:\$\{id\}`/,
+    'watchBulk must never fire a bare-show trakt history op');
+
+  // (2) Trakt watched-import cannot clobber an in-progress local rewatch (position/traktPct win),
+  // mirroring the playback import's local-progress-wins guard.
+  assert.match(server, /for \(const w of watched\) \{[\s\S]{0,400}all\[k\]\.watched \|\| \(all\[k\]\.position \|\| 0\) > 30 \|\| \(all\[k\]\.traktPct \|\| 0\) > 2\)\) continue;/,
+    'the 6h Trakt watched-import must skip rows with live local progress (rewatch positions were being destroyed)');
+
+  // (4) Profile echo: imports skip keys ANY profile bucket already knows (watched/progress/hidden),
+  // via a single-pass precomputed index (pullWatched returns up to 20K keys).
+  assert.match(server, /const localWins = new Set\(\);[\s\S]{0,500}v\.watched \|\| \(v\.position \|\| 0\) > 30 \|\| v\.hidden/,
+    'traktSyncDown precomputes which keys local profiles already own');
+  assert.match(server, /if \(anyProfileKnows\(w\.key\)\) continue;[\s\S]+if \(anyProfileKnows\(p\.key\)\) continue;/,
+    'both the watched and playback imports consult the any-profile index (stops cards echoing across profiles)');
+
+  // (3) Broken Trakt tokens: surfaced, not silent. Tick skips them; manual sync 400s with a real
+  // message; the settings box renders the re-link flow.
+  assert.match(server, /if \(!tok \|\| tok\.broken\) continue;/,
+    'the 6h sync tick must skip definitively-broken tokens');
+  assert.match(server, /if \(st\.broken\) \{ const e = new Error\('Trakt needs re-linking[\s\S]{0,80}e\.status = 400; throw e; \}/,
+    'manual sync on a broken token must fail loudly instead of reporting "sync ✓ — 0 watched"');
+  assert.match(server, /send\(ctx\.res, e\.status \|\| 502, \{ error: e\.status \? e\.message : 'trakt unreachable' \}\)/,
+    'deliberate 400s keep their actionable message instead of the generic unreachable');
+  assert.match(ui, /if \(st\.linked && st\.broken\) \{[\s\S]+Trakt needs re-linking[\s\S]+Re-link Trakt account/,
+    'the settings box tells the user to re-link when the token is broken');
+  assert.match(ui, /function wireTraktLinkButton\(box\)/,
+    'the device-code link flow is shared by the fresh-link and re-link boxes');
+
+  // (5) alass negative cache: a 300s timeout or 3 strikes is TERMINAL — header goes 'failed' and
+  // no new alass spawn happens (each doomed retry re-pulled the mount audio from usenet).
+  assert.match(server, /vf\._subSyncFail = vf\._subSyncFail \|\| new Map\(\);/,
+    'per-mount sync-failure map exists');
+  assert.match(server, /const syncTerminal = \(\) => \{ const f = vf\._subSyncFail\.get\(syncKey\); return !!\(f && \(f\.timedOut \|\| f\.tries >= 3\)\); \};[\s\S]{0,400}'x-triboon-subsync': 'failed'/,
+    'a terminal sync failure short-circuits BEFORE spawning alass and reports failed');
+  assert.match(server, /vf\._subSyncFail\.set\(syncKey, \{ tries: prev\.tries \+ 1, timedOut: prev\.timedOut \|\| \/timed out\/i\.test\(msg\), at: Date\.now\(\) \}\);/,
+    'sync failures are recorded with try count + timeout flag (timeouts are immediately terminal)');
+  assert.match(server, /const syncHdr = looksSynced \? 'synced'\s*: \(_sf && \(_sf\.timedOut \|\| _sf\.tries >= 3\)\) \? 'failed'/,
+    'the advertised sync status reports failed so clients stop queueing background syncs');
+
+  // (6) Wyzie + OpenSubtitles searches run CONCURRENTLY (they were serial despite the comment,
+  // doubling cold CC latency).
+  assert.match(server, /const \[wySettled, osData\] = await Promise\.all\(\[\s*searchOnlineSubs\(subOpts\)\.then\(\(d\) => \(\{ d \}\), \(e\) => \(\{ e \}\)\),\s*openSubtitlesVariantsForMount\(/,
+    'both subtitle providers are queried in parallel');
+
+  // (7) The sync-state (skip-alass-when-matched) is stamped from the sub ACTUALLY SERVED — a
+  // stale top link silently falls back, and stamping from the chosen pick froze fallback subs
+  // as synced forever (drifting CC + dead Fix-sync).
+  assert.match(server, /const \{ vtt: dlVtt, served \} = await downloadBestSubtitle\([\s\S]{0,400}vf\._subSyncState\.set\(cacheKey, subtitleLooksSynced\(served, releaseName\)\)/,
+    'Wyzie downloads stamp sync-state from the served variant, after the download');
+});
+
+// Second audit-fix batch: local-library age gate, next-episode recency, music queue paging +
+// fail-streak, and library-scanner year parsing. ("&"-title matching is covered behaviorally in
+// phase2; the local age gate behaviorally in security.test.js — these pin the shapes.)
+test('audit contracts: local age gate, next-episode recency, music queue, scanner year rules stay in place', () => {
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+
+  // Local plays enforce the profile maturity bar: gate BEFORE the mount, identity from the
+  // server-side scan record (never the client body), episode falls back to the show's id.
+  const localPlay = server.slice(server.indexOf('localPlay: async'), server.indexOf('localThumb: async'));
+  assert.match(localPlay, /profileLevelFor\(ctx\.user, body\.profileId\)/, 'local play reads the profile level');
+  assert.match(localPlay, /maturityAllowsPlay\(level, tmdbId, mediaType\)[\s\S]{0,80}maturityBlockedResponse\(ctx\)/,
+    'local play blocks over-level titles');
+  assert.ok(localPlay.indexOf('maturityAllowsPlay') < localPlay.indexOf('localMountFor('),
+    'the gate runs before the mount is created');
+  assert.strictEqual((ui.match(/\/\/ Age gate: local plays enforce the same profile maturity bar as usenet plays\./g) || []).length, 2,
+    'both web local playUrl call sites send the active profileId');
+
+  // Next-episode row: recency-ordered Map, not an object — numeric-string keys iterate in
+  // ASCENDING NUMERIC order on objects, which silently selected the 20 lowest TMDB ids
+  // instead of the 20 most recently watched shows.
+  assert.match(server, /const byShow = new Map\(\);[\s\S]{0,800}for \(const \[showId, top\] of \[\.\.\.byShow\]\.slice\(0, 20\)\)/,
+    'nextWatchEpisodes keeps recency order via a Map');
+
+  // Music: playlist pages append IN PLACE so the live queue grows; the queue auto-extends at the
+  // end instead of stopping at track 24; nearing the end prefetches the next page; the fail-streak
+  // resets on 'playing' (media actually rendering), never 'play' (fires on doomed attempts too).
+  assert.match(ui, /else p\.tracks\.push\(\.\.\.rows\);/, 'playlist pages append in place (same array as the queue)');
+  assert.match(ui, /else if \(musicQueueCanExtend\(q\)\) \{ extendMusicQueueThenNext\(auto\); return; \}/,
+    'end of a paged playlist queue loads the next page instead of stopping');
+  assert.match(ui, /if \(S\.musicQueue !== q \|\| q\.length <= before\) return;/,
+    'a failed/empty page load must not loop the extender');
+  assert.match(ui, /if \(musicQueueCanExtend\(q\) && S\.musicIdx >= q\.length - 3\) loadMusicPlaylistPage\(false\);/,
+    'nearing the queue end prefetches the next playlist page');
+  assert.match(ui, /mAudio\.addEventListener\('playing', \(\) => \{ S\.musicFailStreak = 0; \}\);/,
+    'the fail-streak resets only when media actually renders');
+  assert.doesNotMatch(ui, /addEventListener\('play', [^\n]*musicFailStreak/,
+    'the streak must not reset on the play event (fires per attempt, defeated the one-lap bound)');
+
+  // Library scanner: the LAST year-shaped token is the year (Blade Runner 2049 / Wonder Woman
+  // 1984), and a zero-hit search retries with the year folded back into the title.
+  assert.match(server, /for \(let h; \(h = re\.exec\(clean\)\);\) m = h;/,
+    'parseName scans to the LAST year token, not the first');
+  assert.match(server, /if \(!hit && name\.year\) \{[\s\S]{0,300}\$\{name\.title\} \$\{name\.year\}/,
+    'tmdbLookup folds the year back into the query when the year-filtered search misses');
+
+  // IPTV zapping: the retune grace matches the PREVIOUS stream's teardown (Node-owned ts-pipe /
+  // native-proxy sockets die synchronously → short cushion; only a killed legacy ffmpeg needs the
+  // full 650ms) — a browser→browser zap on the preferred ts-pipe path was eating ~530ms of dead air.
+  assert.match(server, /replacedKind: \(replaced && prev && prev\.kind\) \|\| ''/,
+    'the live slot records what kind of stream was evicted');
+  assert.match(server, /liveSlot\.kind = 'ts-pipe'/, 'the ts-pipe path tags its slot');
+  assert.match(server, /liveSlot\.kind = 'ffmpeg-url'/, 'the legacy path tags its slot');
+  assert.match(server, /slot\.kind = 'native-proxy'/, 'the native proxy tags its slot');
+  assert.match(server, /const prevNodeOwned = liveSlot\.replacedKind === 'ts-pipe' \|\| liveSlot\.replacedKind === 'native-proxy';\s*startDelayTimer = setTimeout\(begin, prevNodeOwned \? IPTV_LIVE_RETUNE_GRACE_NATIVE_MS : IPTV_LIVE_RETUNE_GRACE_MS\)/,
+    'browser retunes after a Node-owned stream use the short grace');
+  // Web zap speed + resilience: neighbors prefetched (kills the serial /api/iptv/play round-trip),
+  // and a mid-broadcast drop auto-retunes (bounded) instead of freezing the last frame silently.
+  assert.match(ui, /prefetchAdjacentChannelUrls\(it, S\.liveList\);/, 'zaps prefetch the adjacent channels');
+  assert.match(ui, /function attemptLiveAutoRetune\(\)[\s\S]{0,900}v\.currentTime < 3\) return false;[\s\S]{0,400}p\._liveRetunes \|\| 0\) >= 2\) return false;/,
+    'live auto-retune only fires after real playback and is bounded per window');
+  assert.match(ui, /if \(!attemptLiveAutoRetune\(\)\) showLiveProviderError\('The live stream ended unexpectedly'\)/,
+    'a played-out live buffer reconnects instead of freezing on the last frame');
+  assert.match(ui, /if \(attemptLiveAutoRetune\(\)\) return;\s*showLiveProviderError\('Live stream unavailable'\)/,
+    'live failover tries a reconnect before the error panel');
+  // The browse-guide timeline stays alive: now-line + live-highlight tick each minute, full
+  // re-render when the window is consumed.
+  assert.match(ui, /S\._guideNowTimer = setInterval\([\s\S]{0,900}querySelectorAll\('\.gNow'\)[\s\S]{0,300}\.gProg\[data-s\]/,
+    'the guide now-line and live highlights advance without a refetch');
+
+  // Season 0 = specials: the episode filter must stay ON (season >= 0) at every hand-off — it used
+  // to switch OFF for exactly the plays where mixed-episode subtitle results hurt most.
+  assert.match(server, /const hasEpisode = Number\.isInteger\(seasonParam\) && seasonParam >= 0 &&/,
+    'the subtitle route accepts season 0');
+  assert.match(server, /s < 0 \|\| e <= 0\) return base; \/\/ s=0: specials/,
+    'episodeSubtitleQuery accepts season 0');
+  assert.match(ui, /if \(ep && ep\.season >= 0 && ep\.episode > 0\)/,
+    'the web forwards season 0 to the subtitle search');
+  // VTT→SRT for alass: hourless cue times normalize to HH:MM:SS,mmm and cue settings are stripped
+  // (alass parses SRT strictly — hourless/decorated lines made auto-sync error on genuine VTT).
+  assert.match(server, /\$\{h \|\| '00'\}:\$\{ms\},\$\{frac\}/, 'vttToSrt normalizes hourless cue times');
+  assert.match(server, /Drop VTT cue settings after the end time/, 'vttToSrt strips cue settings for SRT');
+
+  // Auto-advance warms the LIVE timestamp on the replacement mount (client sends resumeFrac,
+  // pipeline threads it into session.query which _commitMount feeds the warmup) — an advance at
+  // minute 70 used to warm the file HEAD and the resume seek sat on a cold window for 20-30s.
+  const pipelineSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'pipeline.js'), 'utf8');
+  assert.match(pipelineSrc, /async advance\(sessionId, mountOpts = \{\}\) \{[\s\S]{0,900}session\.query = \{ \.\.\.\(session\.query \|\| \{\}\), resumeFrac: frac \};/,
+    'pipeline.advance updates the session resume fraction');
+  assert.match(server, /await pipeline\.advance\(ctx\.m\[1\], \{ resumeFrac: b && b\.resumeFrac \}\)/,
+    'the advance route forwards the reported position');
+  assert.match(ui, /body: at > 0 && advDur > 0 \? \{ resumeFrac: Math\.max\(0, Math\.min\(0\.98, at \/ advDur\)\) \} : \{\}/,
+    'the player reports its current position on advance');
+
+  // Chronically slow sources get the probe-timeout demotion HEALTH_SCORE was designed with
+  // (the flag was set but never read — dead code, so slow sources re-cost a 30s walk every play).
+  assert.match(pipelineSrc, /if \(candidate\._probeTimeout && \/mount timeout\/i\.test\(String\(e && e\.message \|\| ''\)\)\) \{\s*this\._recordVerdict\(candidate, 'probe-timeout', \{ stage: 'mount' \}\);/,
+    'probe-timeout + mount-timeout records the demotion verdict');
+
+  // Outbound-API routes carry per-user throttles like their peers (a looping client could get the
+  // admin's Trakt app rate-banned).
+  assert.match(server, /throttleUserRoute\(ctx, 'trakt-sync', \{ max: 6, windowMs: 60000/,
+    'manual Trakt sync is rate-limited');
+  assert.match(server, /throttleUserRoute\(ctx, 'trakt-pull', \{ max: 6, windowMs: 60000/,
+    'Trakt watchlist import is rate-limited');
+
+  // Server-perf: the hot/big tables carry background-flush throttles (the store's debounced path
+  // was re-serializing + rewriting whole multi-MB tables on the event loop serving video bytes),
+  // and the geoCache is finally swept (it TTL-checked reads but never evicted).
+  assert.match(server, /store\.flushIntervals = \{[\s\S]{0,600}watch: 3000,[\s\S]{0,600}'tmdb-cache': 15000,[\s\S]{0,600}xtreamepgcaches: 30000,/,
+    'hot store tables keep their background-flush throttle');
+  assert.match(server, /for \(const \[ip, hit\] of geoCache\) if \(now - \(\(hit && hit\.at\) \|\| 0\) > GEO_TTL_MS\) geoCache\.delete\(ip\);/,
+    'the periodic sweep prunes expired geoCache entries');
+  assert.match(server, /if \(geoCache\.size > 500\) \{/,
+    'geoCache is size-capped as a backstop');
 });

@@ -14,6 +14,16 @@ class Store {
     this.cache = new Map();   // table -> object
     this.dirty = new Set();
     this.timer = null;
+    // Debounced-path flush throttle: table -> minimum ms between BACKGROUND flushes. High-frequency
+    // writers (watch beacons every 10s/viewer, per-browse tmdb-cache misses, multi-MB EPG/channel/
+    // library payloads) used to re-serialize + rewrite the whole table ~every 50ms of activity — on
+    // the same event loop serving Range bytes and NNTP data. Explicit flush()/close() IGNORE these
+    // (durability on demand); the loss window on crash is at most the interval, and every throttled
+    // table is either rebuildable (caches) or loses only seconds of progress (watch).
+    this.flushIntervals = {};
+    this._lastFlushAt = new Map();
+    this._flushingAsync = false;
+    this._tmpSeq = 0;
   }
 
   _file(table) { return path.join(this.dir, `${table}.json`); }
@@ -46,14 +56,82 @@ class Store {
   _flushSoon(delay = 50) {
     if (this.timer) return;
     // The timer path must NEVER throw — an EPERM here once crashed the whole server.
-    this.timer = setTimeout(() => { try { this.flush(); } catch { /* retried below */ } }, delay);
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this._flushAsync().catch(() => { /* per-table failures already handled inside */ });
+    }, delay);
     if (this.timer.unref) this.timer.unref();
   }
 
-  // Persistence must never take the server down. Renames can transiently fail on Windows
-  // (file briefly locked by AV/another reader): fall back to an in-place write (loses
-  // atomicity for that one write only), and keep the table dirty for a retry if even that
-  // fails. In-memory state stays authoritative throughout.
+  _noteFlushFailure(tables) {
+    // A persistent flush failure risks silent data loss (settings/watch state stay only in RAM).
+    // Surface it to the operator — log the first failure and then sparingly to avoid spam.
+    this._flushFails = (this._flushFails || 0) + 1;
+    if (this._flushFails === 1 || this._flushFails % 30 === 0) {
+      try { console.error(`[store] flush failed for [${[...tables].join(',')}] (attempt ${this._flushFails})${this.lastFlushError ? ': ' + this.lastFlushError.message : ''}`); } catch {}
+    }
+  }
+  _noteFlushRecovered() {
+    if (!this._flushFails) return;
+    try { console.error(`[store] flush recovered after ${this._flushFails} failed attempt(s)`); } catch {}
+    this._flushFails = 0;
+  }
+  // Each writer renames its OWN tmp file: the sync flush() and the async path can overlap on the
+  // same table (e.g. a settings save during a background watch flush), and a shared `.tmp` name
+  // would let one writer's fd keep appending into the file another writer just renamed live.
+  _tmpFile(file) { return `${file}.tmp${++this._tmpSeq}`; }
+
+  // Background (debounced) flush: async fs so multi-MB tables (19K-item libraries, 8000-channel
+  // IPTV lineups, EPG payloads) don't stall the event loop that is serving video bytes; honors
+  // flushIntervals so hot tables coalesce. JSON.stringify still runs on the loop (unavoidable
+  // without a worker), so the interval throttle is what keeps big tables OFF the hot path.
+  async _flushAsync() {
+    if (this._flushingAsync) return;
+    this._flushingAsync = true;
+    try {
+      const now = Date.now();
+      let retryIn = 0;
+      const due = [];
+      for (const table of this.dirty) {
+        const wait = (this.flushIntervals[table] || 0) - (now - (this._lastFlushAt.get(table) || 0));
+        if (wait > 0) retryIn = retryIn ? Math.min(retryIn, wait) : wait;
+        else due.push(table);
+      }
+      for (const table of due) {
+        this.dirty.delete(table); // a write() during the awaits below re-marks it
+        const json = JSON.stringify(this.cache.get(table), null, 0);
+        const file = this._file(table);
+        let ok = false;
+        try {
+          const tmp = this._tmpFile(file);
+          await fs.promises.writeFile(tmp, json, { mode: 0o600 });
+          await fs.promises.rename(tmp, file);
+          fs.promises.chmod(file, 0o600).catch(() => {});
+          ok = true;
+        } catch {
+          try {
+            await fs.promises.writeFile(file, json, { mode: 0o600 });
+            fs.promises.chmod(file, 0o600).catch(() => {});
+            ok = true;
+          } catch (e2) {
+            this.dirty.add(table);
+            this.lastFlushError = e2;
+            this._noteFlushFailure([table]);
+          }
+        }
+        if (ok) { this._lastFlushAt.set(table, Date.now()); this._noteFlushRecovered(); }
+      }
+      if (this.dirty.size) this._flushSoon(Math.max(retryIn, this._flushFails ? 1000 : 250));
+    } finally {
+      this._flushingAsync = false;
+    }
+  }
+
+  // Explicit/synchronous flush: durability on demand (settings saves, token writes, shutdown).
+  // Ignores flushIntervals and writes EVERYTHING dirty before returning. Persistence must never
+  // take the server down: renames can transiently fail on Windows (file briefly locked by AV/
+  // another reader) — fall back to an in-place write (loses atomicity for that one write only),
+  // and keep the table dirty for a retry if even that fails. In-memory state stays authoritative.
   flush() {
     if (this.timer) { clearTimeout(this.timer); this.timer = null; }
     const failed = new Set();
@@ -61,31 +139,25 @@ class Store {
       const json = JSON.stringify(this.cache.get(table), null, 0);
       const file = this._file(table);
       try {
-        const tmp = file + '.tmp';
+        const tmp = this._tmpFile(file);
         fs.writeFileSync(tmp, json, { mode: 0o600 });
         fs.renameSync(tmp, file);
         try { fs.chmodSync(file, 0o600); } catch {}
+        this._lastFlushAt.set(table, Date.now());
       } catch {
         try {
           fs.writeFileSync(file, json, { mode: 0o600 });
           try { fs.chmodSync(file, 0o600); } catch {}
+          this._lastFlushAt.set(table, Date.now());
         }
         catch (e2) { failed.add(table); this.lastFlushError = e2; }
       }
     }
     this.dirty = failed;
     if (failed.size) {
-      // A persistent flush failure risks silent data loss (settings/watch state stay only in RAM).
-      // Surface it to the operator — log the first failure and then sparingly to avoid spam.
-      this._flushFails = (this._flushFails || 0) + 1;
-      if (this._flushFails === 1 || this._flushFails % 30 === 0) {
-        try { console.error(`[store] flush failed for [${[...failed].join(',')}] (attempt ${this._flushFails})${this.lastFlushError ? ': ' + this.lastFlushError.message : ''}`); } catch {}
-      }
+      this._noteFlushFailure(failed);
       this._flushSoon(1000);
-    } else if (this._flushFails) {
-      try { console.error(`[store] flush recovered after ${this._flushFails} failed attempt(s)`); } catch {}
-      this._flushFails = 0;
-    }
+    } else this._noteFlushRecovered();
   }
 
   close() { this.flush(); }
@@ -130,7 +202,13 @@ class VerdictCache {
   }
   set(key, verdict, detail = {}) {
     this.store.update('verdicts', {}, (all) => {
-      all = this._prune(all);
+      // Prune LAZILY: a full Object.entries scan (+ sort when over cap) of a 20K-entry table on
+      // EVERY write is pure hot-path waste — one hard press-play walk records ~2 verdicts per
+      // candidate across up to 18 candidates while the user watches the spinner. get() already
+      // TTL-filters reads, so expired entries between prunes are invisible; the table can only
+      // drift ~100 entries past the cap before the next sweep.
+      this._sets = (this._sets || 0) + 1;
+      if (this._sets % 50 === 0) all = this._prune(all);
       all[key] = { verdict, detail, checkedAt: this._now() };
       return all;
     });

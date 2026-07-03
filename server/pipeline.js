@@ -16,7 +16,11 @@ const { fanout, fetchUrl, normTitle } = require('./newznab');
 // Split a search query into title words + structured parts (year, SxxEyy).
 function parseWantedTitle(q) {
   const out = { words: [], year: null, s: null, e: null };
-  const toks = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
+  // Catalog titles spell "&" but scene names spell "and" (Law & Order → Law.and.Order) — the "&"
+  // produced NO token, so `law, order` could never consecutively match `law, and, order` and whole
+  // franchises were unfindable. Convert to the word; releaseMatches treats "and" as skippable, so
+  // releases that DROP it (Law.Order.…) still match too.
+  const toks = String(q || '').toLowerCase().replace(/&/g, ' and ').split(/\s+/).filter(Boolean);
   // The movie query is "title … year", so ONLY the TRAILING year-shaped token is the release year; a
   // year-shaped token earlier in the string is part of the TITLE ("1917", "2012", "2001 A Space Odyssey",
   // "Blade Runner 2049"). Without this, a bare-year title was swallowed as the year → ZERO title words →
@@ -65,7 +69,10 @@ const TITLE_WORD_EQUIV = new Map([
   ['sorcerers', 'philosophers'],
   ['philosophers', 'sorcerers'],
 ]);
-const OPTIONAL_TITLE_ARTICLES = new Set(['the', 'a', 'an']);
+// "and" rides along: parseWantedTitle turns "&" into "and", and release names spell it either way
+// ("Law.and.Order" / "Law.Order") — skippable keeps both findable without loosening the anchored/
+// consecutive/structural-boundary rules that guard against wrong titles.
+const OPTIONAL_TITLE_ARTICLES = new Set(['the', 'a', 'an', 'and']);
 function titleWordMatches(wantedWord, releaseWord) {
   return wantedWord === releaseWord || TITLE_WORD_EQUIV.get(wantedWord) === releaseWord;
 }
@@ -853,6 +860,15 @@ class Pipeline {
           return { fail: 'missing: first article unavailable' };
         }
       }
+      // Chronically SLOW source (the cheap STAT probe timed out AND the mount then timed out):
+      // record the 'probe-timeout' demotion HEALTH_SCORE was designed with (-800 — softer than
+      // mount-failed, the release may be fine on a better provider day) so the next play demotes
+      // it up front instead of re-paying the full 30s mount walk. This flag was set but never
+      // read, leaving the intended demotion dead code.
+      if (candidate._probeTimeout && /mount timeout/i.test(String(e && e.message || ''))) {
+        this._recordVerdict(candidate, 'probe-timeout', { stage: 'mount' });
+        return { fail: `mount: ${e.message} (slow articles — demoted for later)` };
+      }
       this._recordVerdict(candidate, mountVerdictForError(e));
       return { fail: `mount: ${e.message}` };
     }
@@ -1133,12 +1149,20 @@ class Pipeline {
   async advance(sessionId, mountOpts = {}) {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error('unknown play session');
+    // Warm the replacement mount at the LIVE timestamp the player reports, not the original
+    // press-play resume point: a source dying at minute 70 used to warm the file HEAD while the
+    // player seeked deep — re-introducing the exact cold-resume stall the resume warm was built
+    // to kill. resumeFrac rides session.query, which _commitMount already feeds the warmup.
+    const { resumeFrac, ...rest } = mountOpts;
+    const frac = Number(resumeFrac);
+    if (Number.isFinite(frac) && frac > 0 && frac < 1) {
+      session.query = { ...(session.query || {}), resumeFrac: frac };
+    }
     // Thread the wanted episode back in so an auto-advance of a season PACK still mounts the REQUESTED
     // episode (session.query carries season/ep). Without this, advance() dropped it and a pack advanced
     // to the largest file (E01). Movies/single-ep are unaffected — their largest video IS the content.
     const _we = wantedEpisodeOf(session.query);
-    if (_we) mountOpts = { ...mountOpts, wantedEpisode: _we };
-    return this._advance(session, mountOpts);
+    return this._advance(session, _we ? { ...rest, wantedEpisode: _we } : rest);
   }
 }
 

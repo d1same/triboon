@@ -190,6 +190,22 @@ test('title verification: short titles match only releases that ARE that title',
   assert.ok(releaseMatches('Harry.Potter.and.the.Sorcerers.Stone.2001.UHD.BluRay.2160p.DDP.7.1.DV.HDR.x265-BHDStudio', hp));
   assert.ok(releaseMatches("Harry.Potter.and.the.Philosopher's.Stone.2001.1080p.BluRay.DTS.x264-ESiR", hp), 'one-word substitution allowed');
 
+  // "&" titles: catalogs spell "&" but scene names spell "and" (or drop it) — the "&" used to
+  // produce NO token, so `law, order` could never consecutively match `law, and, order` and whole
+  // franchises returned "no playable releases found".
+  const law = parseWantedTitle('law & order s01e01');
+  assert.deepStrictEqual(law.words, ['law', 'and', 'order'], '& becomes the word "and"');
+  assert.ok(releaseMatches('Law.and.Order.S01E01.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb', law), 'scene spelling "and" matches');
+  assert.ok(releaseMatches('Law.Order.S01E01.720p.HDTV.x264-GRP', law), 'releases that DROP the "and" still match');
+  assert.ok(!releaseMatches('Law.and.Order.Special.Victims.Unit.S01E01.1080p.WEB-DL-GRP', law),
+    'the structural boundary still rejects the longer-titled spin-off (SVU)');
+  const fast = parseWantedTitle('fast & furious 2009');
+  assert.ok(releaseMatches('Fast.and.Furious.2009.1080p.BluRay.x264-METiS', fast), '& title matches the and-spelled movie release');
+  assert.ok(!releaseMatches('Fast.and.Furious.Presents.Hobbs.and.Shaw.2019.1080p.WEB-DL-GRP', fast),
+    'spin-off with a longer title stays rejected');
+  const tj = parseWantedTitle('tom & jerry 2021');
+  assert.ok(releaseMatches('Tom.and.Jerry.2021.1080p.HMAX.WEB-DL.DD5.1.H.264-CMRG', tj));
+
   // Long franchise titles must not fuzzily slide into a sibling movie.
   const fellowship = parseWantedTitle('the lord of the rings the fellowship of the ring 2001');
   const fellowshipNoYear = parseWantedTitle('the lord of the rings the fellowship of the ring');
@@ -226,7 +242,7 @@ test('pipeline: a wanted episode matches a season PACK or covering RANGE (season
   ]) assert.ok(!releaseMatches(bad, w), `rejects ${bad}`);
   // advance() (auto-advance on source rot) must re-thread the wanted episode, or a season pack advances to E01.
   const pipelineSrc = require('fs').readFileSync(require('path').join(__dirname, '..', 'server', 'pipeline.js'), 'utf8');
-  assert.match(pipelineSrc, /async advance\(sessionId[\s\S]+wantedEpisodeOf\(session\.query\)[\s\S]+wantedEpisode: _we[\s\S]+_advance\(session, mountOpts\)/,
+  assert.match(pipelineSrc, /async advance\(sessionId[\s\S]+wantedEpisodeOf\(session\.query\)[\s\S]+_advance\(session, _we \? \{ \.\.\.rest, wantedEpisode: _we \} : rest\)/,
     'advance() re-threads the wanted episode into mountOpts so a pack keeps mounting the requested episode');
 
   // Loose-file season-pack NZB: mount the WANTED episode file, not the largest. (E01 is bigger here.)
@@ -460,6 +476,10 @@ test('opensubs: SRT→VTT conversion + search-query parsing', () => {
   assert.strictEqual(srtToVtt('WEBVTT\n\nalready vtt'), 'WEBVTT\n\nalready vtt', 'VTT passes through');
   assert.match(shiftVtt(vtt, 0.5), /00:00:01\.500 --> 00:00:03\.000/, 'positive shift moves cues later');
   assert.match(shiftVtt(vtt, -2), /00:00:00\.000 --> 00:00:00\.500/, 'negative shift clamps cue starts at zero');
+  // Hours are OPTIONAL in WebVTT ("01:23.456" is valid) — genuine-VTT subs use them, and the
+  // manual sync-adjust used to silently no-op on those files (regex demanded HH:MM:SS).
+  const hourless = 'WEBVTT\n\n01:23.456 --> 01:27.000 align:middle\nHi\n';
+  assert.match(shiftVtt(hourless, 1), /00:01:24\.456 --> 00:01:28\.000/, 'hourless cues shift and normalize to HH:MM:SS');
   assert.deepStrictEqual(parseQuery('The Boys S01E02'), { title: 'The Boys', season: 1, ep: 2, year: null });
   assert.deepStrictEqual(parseQuery('Movie Name 2024'), { title: 'Movie Name', season: null, ep: null, year: 2024 });
 });
@@ -614,8 +634,15 @@ test('subs: auto-match falls through stale subtitle file links', async () => {
       attempts: 1,
       retryDelayMs: 0,
     });
-    assert.match(preferred, /Healthy fallback/);
+    assert.match(preferred.vtt, /Healthy fallback/);
     assert.deepStrictEqual(downloads, ['/dead.srt', '/ok.srt']);
+    // The caller's sync-state (skip-alass-when-release-matched) must be judged from the sub
+    // ACTUALLY served: the release-matched 'dead' pick fell back to the unmatched 'ok' sub, so
+    // `served` reports the fallback's metadata — stamping from the chosen pick used to mark
+    // fallback subs 'synced' forever (drifting CC + a dead Fix-sync button).
+    assert.strictEqual(preferred.served.id, 'ok');
+    const { subtitleLooksSynced } = require('../server/opensubs');
+    assert.strictEqual(subtitleLooksSynced(preferred.served, 'Movie.2024.1080p.WEB-DL-GRP.mkv'), false);
   } finally {
     await new Promise((r) => srv.close(r));
   }
@@ -995,6 +1022,99 @@ test('opensubs/trakt: hard deadline kills trickling responses; redirect loops bo
   await new Promise((r) => loop.listen(0, '127.0.0.1', r));
   await assert.rejects(osReq('GET', `http://127.0.0.1:${loop.address().port}/a`, {}), /redirect loop/, 'self-redirect bounded');
   trickle.close(); loop.close();
+});
+
+// A minimal Trakt harness: mutable settings for tokens, a fake store for the outbox.
+function traktFixture(tokens, outbox = {}) {
+  const { Trakt } = require('../server/trakt');
+  let s = { traktClientId: 'cid', traktClientSecret: 'sec', traktTokens: tokens };
+  const t = new Trakt(
+    { read: (table, def) => (table === 'traktOutbox' ? outbox : (def !== undefined ? def : {})),
+      write() {}, flush() {}, update(table, def, fn) { if (table === 'traktOutbox') fn(outbox); } },
+    () => s, (fn) => { s = fn(s); },
+  );
+  return t;
+}
+
+test('trakt: season bulk history ops stay season-scoped (a bare-show remove would wipe the whole show)', () => {
+  const t = traktFixture({});
+  // The op a season-unwatch queues: explicit show+season+episodes, NEVER a bare show — Trakt
+  // expands a bare show to every season, so /sync/history/remove would delete ALL the user's
+  // plays for the show when they only unwatched one season.
+  const off = t._requestForOp({ kind: 'historySeason', key: 'tmdb:tv:1399:s2', tmdbId: 1399, season: 2, episodes: [1, 2, 10], on: false });
+  assert.strictEqual(off.path, '/sync/history/remove');
+  assert.deepStrictEqual(off.body, { shows: [{ ids: { tmdb: 1399 }, seasons: [{ number: 2, episodes: [{ number: 1 }, { number: 2 }, { number: 10 }] }] }] });
+  const on = t._requestForOp({ kind: 'historySeason', key: 'tmdb:tv:1399:s2', tmdbId: 1399, season: 2, episodes: [3], on: true });
+  assert.strictEqual(on.path, '/sync/history');
+  // Outbox keys are season-granular: two queued seasons of the same show must never coalesce
+  // (the outbox dedupes by _opKey, so a shared key would silently drop one season's op).
+  assert.notStrictEqual(
+    t._opKey({ kind: 'historySeason', key: 'tmdb:tv:1399:s1' }),
+    t._opKey({ kind: 'historySeason', key: 'tmdb:tv:1399:s2' }));
+  // Junk-safe: no episodes -> no request (never degrade to a bare-show op).
+  assert.strictEqual(t._requestForOp({ kind: 'historySeason', key: 'tmdb:tv:1399:s1', tmdbId: 1399, season: 1, episodes: [], on: false }), null);
+});
+
+test('trakt: definitively-rejected tokens stamp broken — sync stops pretending instead of silently no-oping', async () => {
+  const oldBase = process.env.TRAKT_BASE;
+  let refreshHits = 0; let apiHits = 0;
+  const srv = http.createServer((req, res) => {
+    if (req.url === '/oauth/token') { refreshHits++; res.writeHead(401, { 'content-type': 'application/json' }); return res.end('{"error":"invalid_grant"}'); }
+    apiHits++; res.writeHead(401, { 'content-type': 'application/json' }); res.end('{}');
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  process.env.TRAKT_BASE = `http://127.0.0.1:${srv.address().port}`;
+  try {
+    // (1) EXPIRED access token + refresh rejected 4xx -> broken stamped, api() -> null.
+    const outbox = { u1: [{ id: 'op1', kind: 'history', key: 'tmdb:movie:1', on: true }] };
+    const t = traktFixture({ u1: { access: 'a', refresh: 'r', expiresAt: 1 } }, outbox);
+    assert.strictEqual(await t.api('u1', '/sync/playback', 'GET'), null);
+    assert.strictEqual(t.status('u1').broken, true, 'refresh 4xx stamps the token broken');
+    assert.strictEqual(t.status('u1').linked, true, 'still linked so the UI can say re-link, not fresh-link');
+    // (2) Broken short-circuits: no further network churn from token lookups or the outbox.
+    const before = refreshHits + apiHits;
+    assert.strictEqual(await t.api('u1', '/sync/playback', 'GET'), null);
+    const flush = await t.flushOutbox('u1');
+    assert.deepStrictEqual(flush, { sent: 0, failed: 0, pending: 1, broken: true }, 'outbox kept intact for a future relink, not retried');
+    assert.strictEqual(refreshHits + apiHits, before, 'a broken token makes zero network calls');
+    // (3) The mainline revoke case: UNEXPIRED cached token gets API 401 -> one forced refresh
+    // (which 401s -> broken). Without this, a revoked app looked healthy for up to ~90 days.
+    const t2 = traktFixture({ u2: { access: 'a2', refresh: 'r2', expiresAt: Date.now() + 86400000 } });
+    const r = await t2.api('u2', '/sync/playback', 'GET');
+    assert.strictEqual(r.status, 401, 'original 401 surfaced when the forced refresh also fails');
+    assert.strictEqual(t2.status('u2').broken, true, 'API-401-with-dead-refresh stamps broken too');
+  } finally {
+    if (oldBase === undefined) delete process.env.TRAKT_BASE; else process.env.TRAKT_BASE = oldBase;
+    srv.close();
+  }
+});
+
+test('newznab: an HTTP-200 <error> document (wrong API key) fails the search instead of parsing as 0 items', async () => {
+  // Newznab reports a bad API key as HTTP 200 + <error code="100"> — parsing that as "0 items"
+  // made the admin connection test show a green checkmark on a WRONG KEY, and let a mis-keyed
+  // indexer silently contribute nothing to every fan-out.
+  const srv2 = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    res.writeHead(200, { 'content-type': 'application/xml' });
+    if (u.searchParams.get('apikey') === 'right-key') {
+      return res.end(rssFor([{ name: 'Movie.2026.1080p.WEB-DL-GRP', url: 'http://x/1', size: 1000000000 }]));
+    }
+    res.end('<?xml version="1.0" encoding="UTF-8"?>\n<error code="100" description="Incorrect user credentials"/>');
+  });
+  await new Promise((r) => srv2.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${srv2.address().port}`;
+  try {
+    await assert.rejects(
+      searchIndexer({ name: 'ix', url: base, apikey: 'wrong-key' }, { q: 'test' }, { timeoutMs: 3000 }),
+      /Incorrect user credentials \(code 100\)/,
+      'a wrong key surfaces the indexer message instead of ok/0-items');
+    const { results, errors } = await fanout(
+      [{ name: 'good', url: base, apikey: 'right-key' }, { name: 'bad', url: base, apikey: 'wrong-key' }],
+      { q: 'test' }, { timeoutMs: 3000 });
+    assert.strictEqual(results.length, 1, 'the healthy indexer still returns results');
+    assert.strictEqual(errors.length, 1, 'the mis-keyed indexer is attributed in errors');
+    assert.match(errors[0].error, /Incorrect user credentials/);
+  } finally { await new Promise((r) => srv2.close(r)); }
 });
 
 test('newznab: parses RSS, dedupes by title + size window', () => {
@@ -2324,6 +2444,59 @@ test('store: a failing flush never throws and retries once the disk recovers', (
   s.flush();
   assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(realDir, 't.json'), 'utf8')), { a: 1 });
   s.close();
+});
+
+test('store: the debounced background flush is async, atomic, and leaves no tmp litter', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const s = new Store(dir);
+  s.write('bg', { hello: 'world' });
+  // No explicit flush(): the 50ms debounce must land the write via the ASYNC path (the sync
+  // whole-table writeFileSync on the event loop was stalling Range/NNTP serving under load).
+  const file = path.join(dir, 'bg.json');
+  let ok = false;
+  for (let i = 0; i < 40 && !ok; i++) {
+    await new Promise((r) => setTimeout(r, 50));
+    try { ok = JSON.parse(fs.readFileSync(file, 'utf8')).hello === 'world'; } catch {}
+  }
+  assert.ok(ok, 'debounced write reached disk without an explicit flush');
+  assert.deepStrictEqual(fs.readdirSync(dir).filter((f) => /\.tmp/.test(f)), [], 'no tmp files left behind');
+  // Unique tmp names per write: overlapping sync+async flushes of the same table must never share
+  // a tmp file (a shared name lets one writer's fd keep writing into the just-renamed live file).
+  assert.notStrictEqual(s._tmpFile('x'), s._tmpFile('x'));
+  s.close();
+});
+
+test('store: flushIntervals throttle only the background path — explicit flush() stays durable', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const s = new Store(dir);
+  s.flushIntervals = { hot: 60000 };
+  const file = path.join(dir, 'hot.json');
+  s.write('hot', { v: 1 });
+  s.flush(); // explicit: writes immediately AND stamps the last-flush time
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { v: 1 });
+  s.write('hot', { v: 2 });
+  await new Promise((r) => setTimeout(r, 400)); // way past the 50ms debounce
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { v: 1 },
+    'background flush defers a hot table inside its interval (this is the event-loop protection)');
+  assert.ok(s.dirty.has('hot'), 'the deferred table stays dirty');
+  s.flush(); // durability on demand ignores the interval
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { v: 2 });
+  s.close();
+});
+
+test('verdict cache: pruning is lazy (every ~50 writes), not a full-table scan per write', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  store.write('verdicts', { 'nzb:expired-old': { verdict: 'missing', checkedAt: Date.now() - 60000 } });
+  const vc = new VerdictCache(store, 5000); // 5s TTL → the seeded entry is long expired
+  vc.set('nzb:fresh-1', 'verified');
+  const all = () => store.read('verdicts', {});
+  assert.ok(all()['nzb:expired-old'], 'one write does NOT trigger the full-table prune (lazy)');
+  assert.strictEqual(vc.get('nzb:expired-old'), null, 'reads still TTL-filter expired entries');
+  for (let i = 2; i <= 50; i++) vc.set(`nzb:fresh-${i}`, 'verified');
+  assert.strictEqual(all()['nzb:expired-old'], undefined, 'the 50th write sweeps expired entries');
+  assert.ok(all()['nzb:fresh-50'], 'fresh verdicts survive the sweep');
+  store.close();
 });
 
 test('store: data directory is owner-only on POSIX filesystems', () => {
