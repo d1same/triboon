@@ -316,18 +316,23 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'episode targets created from details should inherit the current show quality preference');
   assert.match(ui, /async function prepPlayerSeasonEpisodes\(it\) \{[\s\S]+const inheritedQuality = qualityRankForItem\(it\);[\s\S]+const item = inheritedQuality \? \{ \.\.\.base, qualityRank: inheritedQuality \} : base;[\s\S]+async function prepNextEpisode\(it\) \{[\s\S]+const inheritedQuality = qualityRankForItem\(it\);[\s\S]+const item = inheritedQuality \? \{ \.\.\.base, qualityRank: inheritedQuality \} : base;/,
     'player episode strip and Up Next should continue the same 4K/1080p class');
-  assert.match(ui, /async function saveWatch\(final\) \{[\s\S]+const pos = currentTime\(\);[\s\S]+if \(!final && Math\.abs\(pos - p\.lastSaved\) < 5\) return;[\s\S]+key: p\.item\.key, position: Math\.floor\(pos\), duration: Math\.floor\(d \|\| 0\),[\s\S]+profile: S\.profile \? S\.profile\.id : undefined,[\s\S]+upsertWatchCache\(\{[\s\S]+position: payload\.position[\s\S]+api\('\/api\/watch', \{ method: 'POST', body: payload, keepalive: !!final \}\)/,
-    'watch progress should save profile-scoped position immediately into the local cache and server (keepalive on final saves so close/pagehide flushes survive teardown)');
+  assert.match(ui, /async function saveWatch\(final, opts = \{\}\) \{[\s\S]+const pos = currentTime\(\);[\s\S]+if \(!final && Math\.abs\(pos - p\.lastSaved\) < 5\) return;[\s\S]+const watched = opts && opts\.watched != null \? !!opts\.watched : nearEnd;[\s\S]+key: p\.item\.key, position: Math\.floor\(pos\), duration: Math\.floor\(d \|\| 0\),[\s\S]+watched, profile: S\.profile \? S\.profile\.id : undefined,[\s\S]+upsertWatchCache\(\{[\s\S]+position: payload\.position[\s\S]+api\('\/api\/watch', \{ method: 'POST', body: payload, keepalive: !!final \}\)/,
+    'watch progress should save profile-scoped position immediately into the local cache and server (keepalive on final saves so close/pagehide flushes survive teardown), honoring a caller watched-override');
   assert.match(ui, /window\.addEventListener\('pagehide', \(\) => \{ if \(S\.playing\) \{ saveWatch\(true\);/,
     'pagehide should flush the final watch position before the page is torn down');
-  assert.match(ui, /async function closePlayer\(opts = \{\}\) \{[\s\S]+const finalWatch = saveWatch\(true\);[\s\S]+const finalActivity = stopActivityHeartbeat\(\);[\s\S]+if \(\$\(\'detail\'\)\.classList\.contains\(\'open\'\)\) \{[\s\S]+await finalWatch; await finalActivity; await loadWatchState\(true\);[\s\S]+if \(S\.detailItem\) syncDetailButtons\(S\.detailItem\);/,
-    'returning from player to details should flush the final watch position and refresh the visible Resume/Start Over buttons before another source is chosen');
+  assert.match(ui, /async function closePlayer\(opts = \{\}\) \{[\s\S]+const finalWatch = saveWatch\(true, opts && opts\.ended \? \{ watched: true \} : \{\}\);[\s\S]+const finalActivity = stopActivityHeartbeat\(\);[\s\S]+if \(\$\(\'detail\'\)\.classList\.contains\(\'open\'\)\) \{[\s\S]+await finalWatch; await finalActivity; await loadWatchState\(true\);[\s\S]+if \(S\.detailItem\) syncDetailButtons\(S\.detailItem\);/,
+    'returning from player to details should flush the final watch position (forcing watched when playback ENDED, even if the duration probe never landed) and refresh the visible Resume/Start Over buttons');
   assert.match(ui, /function syncDetailButtons\(it\) \{[\s\S]+const resume = resumePositionForItem\(it\);[\s\S]+\$\(\'dStartOver\'\)\.style\.display = resume \? '' : 'none';[\s\S]+updateDetailPlayLabel\(resume \? \{ label: 'Resume', target: \{ \.\.\.it, resume \} \} : \{ label: 'Play', target: it \}\);/,
     'detail button sync should recompute movie Resume/Play from the latest watch map');
   assert.match(ui, /function playbackFinishedDetailTarget\(item\) \{[\s\S]+item\.type === 'movie'[\s\S]+item\.type === 'episode'[\s\S]+key: `tmdb:tv:\$\{item\.tmdbId\}`[\s\S]+type: 'tv'/,
     'finished playback should resolve movies to movie details and final episodes to the show details page');
-  assert.match(ui, /window\.__tvNativeVideoClosed = \(pos, dur, ended\) => \{[\s\S]+if \(ended && S\.nextEp\)[\s\S]+closePlayer\(\{ ended: !!ended \}\);/,
-    'native finished playback should either surface Up Next or close through the finished-title return path');
+  assert.match(ui, /window\.__tvNativeVideoClosed = \(pos, dur, ended\) => \{[\s\S]+if \(ended && S\.nextEp\) \{\s+saveWatch\(true, \{ watched: true \}\);[\s\S]+closePlayer\(\{ ended: !!ended \}\);/,
+    'native finished playback should mark the just-finished episode watched before Up Next, then close through the finished-title return path');
+  // The web (HTMLVideo) end-of-episode path hands off to Up Next and returns WITHOUT going through
+  // closePlayer — so it must save watched itself, or an auto-advanced episode is never recorded
+  // watched (the "only marks watched if I watch the ENTIRE thing" bug).
+  assert.match(ui, /v\.onended = \(\) => \{[\s\S]+if \(S\.nextEp\) \{[\s\S]+saveWatch\(true, \{ watched: true \}\);[\s\S]+if \(!S\.upNextShown\) showUpNext\(\);[\s\S]+return;/,
+    'web episode end-of-file must mark the finished episode watched before the Up Next handoff (closePlayer, which saves, is skipped on this path)');
   assert.ok([
     'function applyNativeVideoProgress(pos, dur, opts = {}) {',
     'const keepPrev = opts.preserveOnZero && incoming <= 1 && prev > 30;',

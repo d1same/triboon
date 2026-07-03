@@ -9061,6 +9061,10 @@ async function openPlayer(it, mount, opts = {}) {
       return;
     }
     if (S.nextEp) {
+      // The episode PLAYED TO THE END — mark it watched before handing off to Up Next. Without
+      // this the current episode was left unwatched: closePlayer (which saves) is skipped on the
+      // auto-advance path, so only a lucky periodic tick past 92% would have recorded it.
+      saveWatch(true, { watched: true });
       if (!S.upNextShown) showUpNext();
       return; // countdown/manual Play Next owns the handoff
     }
@@ -9784,7 +9788,7 @@ window.__tvNativeVideoClosed = (pos, dur, ended) => {
   const p = S.playing; if (!p || !p.usingNative) return;
   applyNativeVideoProgress(pos, dur, { preserveOnZero: !ended });
   if (ended && S.nextEp) {
-    saveWatch(true);
+    saveWatch(true, { watched: true }); // played to the end → watched, even if dur was still 0
     // The ExoPlayer surface (and its native Up Next card) is torn down at end-of-episode, so
     // hand the Up Next card to the now-visible web layer for the final choice/countdown.
     p.usingNative = false;
@@ -10763,7 +10767,7 @@ function togglePlayerStats() {
   }
   else closePlayerStats();
 }
-async function saveWatch(final) {
+async function saveWatch(final, opts = {}) {
   const p = S.playing; if (!p || !p.item) return;
   if (p.item.type === 'live' || String(p.item.key || '').startsWith('live:')) return; // live TV never lands in Continue Watching
   const pos = currentTime();
@@ -10771,9 +10775,17 @@ async function saveWatch(final) {
   p.lastSaved = pos;
   const d = totalDuration();
   const meta = wlMeta(p.item);
+  // watched=true when: (a) the caller forces it (playback reached the end — see v.onended /
+  // native ended handoff), or (b) position crossed 92% of a known duration. The end-of-file
+  // signal is authoritative: TV auto-advance and manual "Play next" both close the current
+  // episode before a periodic tick ever lands past 92%, so without the force the episode was
+  // only ever marked watched if a 10s tick happened to fire in the last ~8% — which it usually
+  // did not. This is the fix for "only marks watched if I watch the ENTIRE thing".
+  const nearEnd = d ? pos / d > 0.92 : false;
+  const watched = opts && opts.watched != null ? !!opts.watched : nearEnd;
   const payload = {
     key: p.item.key, position: Math.floor(pos), duration: Math.floor(d || 0),
-    watched: d ? pos / d > 0.92 : false, profile: S.profile ? S.profile.id : undefined,
+    watched, profile: S.profile ? S.profile.id : undefined,
     meta, // episodes resume + reopen
   };
   upsertWatchCache({
@@ -10809,7 +10821,10 @@ async function closePlayer(opts = {}) {
     try { if (window.TriboonTV && TriboonTV.castStop) TriboonTV.castStop(); } catch {}                // native app bridge
   }
   const finishedTarget = opts && opts.ended ? playbackFinishedDetailTarget(closingItem) : null;
-  const finalWatch = saveWatch(true);
+  // opts.ended => playback reached the end of the file: record it watched even if the duration
+  // probe never landed (remux/transcode reports duration=0 until /api/tracks resolves), which
+  // otherwise left finished movies stuck at "not watched".
+  const finalWatch = saveWatch(true, opts && opts.ended ? { watched: true } : {});
   const finalActivity = stopActivityHeartbeat();
   if (canUseNativeVideoPlayer() && window.TriboonTV.closeVideo) {
     try { window.TriboonTV.closeVideo(); } catch {}

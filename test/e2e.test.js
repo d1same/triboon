@@ -494,6 +494,32 @@ test('nntp: a wedged socket times out and the command retries on a fresh connect
   await mock.close();
 });
 
+// The command timeout must be a STALL (inactivity) timeout, not a hard deadline from send: a big
+// 4K-segment BODY or a healthy-but-slow provider (remote user on a thin uplink) legitimately takes
+// longer than commandTimeoutMs to transfer in full. A hard deadline destroyed that connection
+// mid-transfer → retry churn → "plays fine then stalls" on every client. As long as bytes keep
+// arriving, the transfer must complete.
+test('nntp: a slow-but-alive BODY transfer completes instead of being killed mid-flight', async () => {
+  const { articles } = makeRelease('Slow.Transfer.mkv', 64 * 1024, 64 * 1024);
+  const mock = createMockNntp({ articles });
+  const port = await mock.listen();
+  // 120ms timeout, but the BODY dribbles in 8 pieces 60ms apart (~420ms total). Each gap (60ms) is
+  // under the timeout; the TOTAL transfer (420ms) is well over it. Old hard-deadline-from-send code
+  // killed the socket at 120ms; the stall timer re-arms on every inbound chunk, so an alive-but-slow
+  // transfer must ride through to a byte-exact success.
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false, commandTimeoutMs: 120 }, 2);
+  const msgId = [...articles.keys()][0];
+  mock.trickleNext(8, 60);
+  const t0 = Date.now();
+  const body = await pool.body(msgId, 'playback');
+  const elapsed = Date.now() - t0;
+  assert.ok(body && body.length > 0, 'the slow BODY transfer completed');
+  assert.ok(elapsed >= 300, `the transfer outlasted the timeout window (${elapsed}ms) — proves the stall timer re-armed on progress`);
+
+  pool.close();
+  await mock.close();
+});
+
 test('nntp: a fully stalled provider fails within the timeout budget instead of hanging', async () => {
   const { articles, nzb } = makeRelease('Dead.Test.mkv', 128 * 1024, 64 * 1024);
   const mock = createMockNntp({ articles });

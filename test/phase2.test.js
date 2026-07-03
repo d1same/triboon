@@ -746,6 +746,31 @@ test('subs: usableVariants trims the wrong-episode / unplayable rows from the me
   assert.ok(fallback.some((v) => v.selected), 'a best-effort row is still marked selected');
 });
 
+test('subs: OpenSubtitles adds a title text-query fallback for old/obscure titles with no catalog id', () => {
+  const { _osSearchUrl } = require('../server/opensubs');
+  // No id at all → obscure title. The old id/hash-only search dead-ended in "no subtitles"; a
+  // plain title (+year) query is the only thing that finds subs for a film TMDB never matched.
+  const obscure = _osSearchUrl({ query: 'The Forgotten Reel 1974', lang: 'en' });
+  assert.strictEqual(obscure.searchParams.get('query'), 'The Forgotten Reel', 'title text query is sent when there is no id');
+  assert.strictEqual(obscure.searchParams.get('year'), '1974', 'year narrows same-name/remake matches');
+
+  // A TV episode with no id still text-searches, and still scopes to the exact episode.
+  const tv = _osSearchUrl({ query: 'Obscure Show S03E07', lang: 'en' });
+  assert.strictEqual(tv.searchParams.get('query'), 'Obscure Show', 'episode title text-searches too');
+  assert.strictEqual(tv.searchParams.get('season_number'), '3');
+  assert.strictEqual(tv.searchParams.get('episode_number'), '7');
+
+  // When a structured id IS present, follow OpenSubtitles guidance: key on the id, NOT free text.
+  const byId = _osSearchUrl({ imdbId: 'tt0111161', query: 'The Shawshank Redemption 1994', lang: 'en' });
+  assert.strictEqual(byId.searchParams.get('imdb_id'), '0111161', 'imdb id is used when present');
+  assert.strictEqual(byId.searchParams.get('query'), null, 'text query is NOT mixed with an id search');
+
+  // moviehash alone (streamed file, no id, no title) is still a valid search and must not throw.
+  assert.doesNotThrow(() => _osSearchUrl({ moviehash: '8e245d9679d31e12', lang: 'en' }));
+  // Nothing to search on at all → explicit error rather than a bogus empty query.
+  assert.throws(() => _osSearchUrl({ lang: 'en' }), /moviehash, catalog id, or title/);
+});
+
 test('subs: hasConfidentAutoPick guards the automatic pick against wrong-episode-only results', () => {
   const { rankSubs, hasConfidentAutoPick } = require('../server/opensubs');
   const release = 'House.S02E05.1080p.WEB-DL-GRP.mkv';

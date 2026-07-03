@@ -14,7 +14,9 @@ function createMockNntp({ articles, requireAuth = false, latencyMs = 0 } = {}) {
   // articles: Map<msgId, Buffer (article body, yEnc encoded)>
   const missing = new Set();
   const sockets = new Set();
-  const state = { stallNext: 0, connCount: 0 }; // stallNext: swallow N STAT/BODY commands (no response — wedged socket)
+  // stallNext: swallow N STAT/BODY commands (no response — wedged socket).
+  // trickle: send the NEXT BODY in `pieces` chunks `gapMs` apart — a slow-but-ALIVE transfer.
+  const state = { stallNext: 0, connCount: 0, trickle: null };
   const server = net.createServer((sock) => {
     state.connCount++;
     sockets.add(sock); sock.on('close', () => sockets.delete(sock));
@@ -44,7 +46,15 @@ function createMockNntp({ articles, requireAuth = false, latencyMs = 0 } = {}) {
           const id = rest.join(' ').replace(/[<>]/g, '');
           if (articles.has(id) && !missing.has(id)) {
             const body = dotStuff(articles.get(id));
-            respond(Buffer.concat([Buffer.from(`222 0 <${id}>\r\n`), body, Buffer.from('.\r\n')]));
+            const full = Buffer.concat([Buffer.from(`222 0 <${id}>\r\n`), body, Buffer.from('.\r\n')]);
+            if (state.trickle) {
+              const { pieces, gapMs } = state.trickle; state.trickle = null;
+              const size = Math.max(1, Math.ceil(full.length / pieces));
+              for (let p = 0; p * size < full.length; p++) {
+                const chunk = full.subarray(p * size, (p + 1) * size);
+                setTimeout(() => { if (!sock.destroyed) sock.write(chunk); }, latencyMs + p * gapMs);
+              }
+            } else respond(full);
           } else respond('430 no such article\r\n');
         } else if (C === 'GROUP') respond('211 1 1 1 mock.group\r\n');
         else respond('500 unknown\r\n');
@@ -56,6 +66,7 @@ function createMockNntp({ articles, requireAuth = false, latencyMs = 0 } = {}) {
     server,
     markMissing: (id) => missing.add(id),
     stallNext: (n) => { state.stallNext = n; },          // next n STAT/BODY commands get NO response
+    trickleNext: (pieces, gapMs) => { state.trickle = { pieces, gapMs }; }, // next BODY dribbles in slowly-but-alive
     connCount: () => state.connCount,                    // total connections ever accepted
     dropConnections: () => { for (const s of sockets) s.destroy(); }, // provider idle-kill (FIN), server stays up
     listen: () => new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port))),

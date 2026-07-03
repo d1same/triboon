@@ -100,6 +100,10 @@ class NntpConnection {
 
   _onData(d) {
     this.buf = this.buf.length ? Buffer.concat([this.buf, d]) : d;
+    // Progress on the in-flight command (NNTP responses are strictly FIFO, so waiters[0] is the
+    // one being answered): reset its stall timer so a slow-but-alive BODY transfer is never killed
+    // mid-flight — only a genuinely wedged socket (no bytes at all for the window) trips it.
+    if (d && d.length && this.waiters.length) this._armWaiterTimer(this.waiters[0]);
     while (this.waiters.length) {
       const w = this.waiters[0];
       const nl = this.buf.indexOf(0x0a);
@@ -155,19 +159,32 @@ class NntpConnection {
     }
   }
 
+  // (Re)arm a waiter's stall timer. The timeout is measured from the LAST activity, not from when
+  // the command was sent: _onData re-arms it on every inbound chunk. A large BODY (a 4K segment's
+  // yEnc article) or a healthy-but-slow provider — remote users on a constrained uplink — can take
+  // well over COMMAND_TIMEOUT_MS to transfer in full; a hard deadline from send-time destroyed that
+  // connection MID-TRANSFER (rejecting everything queued behind it → retry churn), which surfaced as
+  // "plays fine, then stalls" on every client. What the timeout is really meant to catch is a WEDGED
+  // socket — one making no progress — so the window is now "no bytes for this long", which fires on a
+  // truly dead connection but never on a slow-but-progressing one. The multi-provider hedge still
+  // races a faster provider at HEDGE_MS, so a slow transfer also loses that race and is aborted.
+  _armWaiterTimer(w) {
+    if (!w) return;
+    clearTimeout(w.timer);
+    w.timer = setTimeout(
+      () => this._fail(new Error(`NNTP stall timeout: ${w.cmdName}`)),
+      this.opts.commandTimeoutMs || COMMAND_TIMEOUT_MS
+    );
+  }
+
   _cmd(line, multiline = false, opts = {}) {
     return new Promise((resolve, reject) => {
       const signal = opts.signal;
       if (signalAborted(signal)) return reject(abortError());
       if (!this.sock || this.sock.destroyed) return reject(new Error('NNTP not connected'));
-      const w = { resolve, reject, multiline };
+      const w = { resolve, reject, multiline, cmdName: line.split(' ')[0] };
       w.cleanupAbort = addAbortListener(signal, () => this._fail(abortError()));
-      // A timed-out command means a dead or wedged socket — kill the connection (rejecting
-      // anything queued behind it) rather than leaving the caller waiting forever.
-      w.timer = setTimeout(
-        () => this._fail(new Error(`NNTP timeout: ${line.split(' ')[0]}`)),
-        this.opts.commandTimeoutMs || COMMAND_TIMEOUT_MS
-      );
+      this._armWaiterTimer(w);
       this.waiters.push(w);
       this.lastUsed = Date.now();
       this.sock.write(line + '\r\n');
