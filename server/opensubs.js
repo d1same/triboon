@@ -954,6 +954,9 @@ async function osLogin({ apiKey, username, password, base = OS_REST_BASE } = {})
 
 // POST /download {file_id} → temporary link, then GET the link → VTT. `quota` reports remaining.
 async function osDownloadVtt(fileId, { apiKey, token, base = OS_REST_BASE, langHint = '' } = {}) {
+  // The user token is REQUIRED — live-tested: a key-only /download with a REAL file id is 401.
+  // (Do not be fooled by the 406 "Invalid file_id" a bogus id gets: input validation runs
+  // before the auth check, which makes key-only look authorized when it is not.)
   if (!apiKey || !token) throw permanent('OpenSubtitles download needs a login token');
   if (!fileId) throw permanent('OpenSubtitles result had no file id');
   const res = await request('POST', `${base}/download`, { key: apiKey, bearer: token, body: { file_id: Number(fileId) }, timeoutMs: 15000, deadlineMs: 25000 });

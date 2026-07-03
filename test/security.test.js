@@ -551,14 +551,15 @@ test('settings: subtitle provider policy round-trips; OS API key stays a secret'
   s = await httpJson(srv.port, 'GET', '/api/settings', null, admin);
   assert.strictEqual(s.json.subtitleSource, 'wyzie-first', 'invalid mode falls back to the default');
   // OpenSubtitles API key: saved encrypted, redacted on read, and openSubtitlesActive only flips
-  // true when the FULL trio (key + user + pass) is present — half-config must not activate.
+  // true when the FULL trio (key + user + pass) is present — LIVE-VERIFIED that /download 401s
+  // without a user token (the key alone only searches), so key-only must not list rows.
   await httpJson(srv.port, 'POST', '/api/settings', { osApiKey: 'test-os-consumer-key' }, admin);
   s = await httpJson(srv.port, 'GET', '/api/settings', null, admin);
   assert.strictEqual(s.json.osApiKey, '•••', 'OS API key never round-trips in plaintext');
-  assert.strictEqual(s.json.openSubtitlesActive, false, 'key alone does not activate OpenSubtitles (downloads need the login)');
+  assert.strictEqual(s.json.openSubtitlesActive, false, 'key alone does not activate OpenSubtitles (downloads need the login — verified live)');
   await httpJson(srv.port, 'POST', '/api/settings', { openSubsUser: 'kermit', openSubsPass: 'thefrog' }, admin);
   s = await httpJson(srv.port, 'GET', '/api/settings', null, admin);
-  assert.strictEqual(s.json.openSubtitlesActive, true, 'dashboard-entered key + login activates OpenSubtitles (was silently inert before)');
+  assert.strictEqual(s.json.openSubtitlesActive, true, 'dashboard-entered key + login activates OpenSubtitles');
   // Cleanup so later tests see the defaults.
   await httpJson(srv.port, 'POST', '/api/settings', { subtitleSource: null, osApiKey: null, openSubsUser: '', openSubsPass: null }, admin);
 });

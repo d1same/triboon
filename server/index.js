@@ -114,8 +114,11 @@ function effectiveOpenSubtitles(s = settings.get()) {
   const apiKey = String((s && (s.osApiKey || s.openSubtitlesApiKey)) || process.env.TRIBOON_OS_API_KEY || '').trim();
   const username = String((s && (s.openSubsUser || s.openSubtitlesUser)) || process.env.TRIBOON_OS_USER || '').trim();
   const password = String((s && (s.openSubsPass || s.openSubtitlesPass)) || process.env.TRIBOON_OS_PASS || '').trim();
-  // All three required: the API key alone can SEARCH, but downloads need the user login (the
-  // daily quota is per-account) — a half-configured provider would list rows that fail to play.
+  // All three required — LIVE-VERIFIED: /download returns 401 without a user token (the 406
+  // "Invalid file_id" you get first is input validation, which makes key-only LOOK authorized
+  // until a real file id is used). The key alone can only SEARCH; rows that can't download are
+  // worse than no rows, so a key-only config keeps the provider off and the settings status
+  // line says exactly what's missing.
   if (!apiKey || !username || !password) return null;
   return { apiKey, username, password, base: process.env.OPENSUBTITLES_BASE || undefined };
 }
@@ -154,7 +157,14 @@ async function openSubtitlesVariantsForMount(vf, { imdbId, tmdbId, lang, season 
   const cfg = effectiveOpenSubtitles();
   if (!cfg) return [];
   try {
-    const moviehash = await moviehashForMount(vf).catch(() => null);
+    // The moviehash needs a head+tail read of the mount — on a cold multi-volume mount that can
+    // take seconds, and it was serializing IN FRONT of the search (slow CC menu). Cap the wait:
+    // a fast hash still rides along for exact-sync ranking; a slow one resolves in the background
+    // (cached on the mount) and enriches the NEXT search instead of stalling this one.
+    const moviehash = await Promise.race([
+      moviehashForMount(vf).catch(() => null),
+      new Promise((r) => { const t = setTimeout(() => r(null), 2500); if (t.unref) t.unref(); }),
+    ]);
     const data = await osSearch({
       apiKey: cfg.apiKey, base: cfg.base, moviehash: moviehash || '',
       imdbId, tmdbId, query: vf._subQuery || vf._q || '', lang, season, episode,
@@ -7138,12 +7148,13 @@ Object.assign(H, {
         const work = (async () => {
           const osCfg = effectiveOpenSubtitles();
           // Download a chosen OpenSubtitles variant via its /download flow (JWT + quota). One
-          // re-login retry covers an expired token.
+          // re-login retry covers an expired token. (Key-only downloads were live-tested and
+          // 401 — the user login is genuinely required by the API, hence the trio activation.)
           const downloadOpenSubtitles = async (fileId) => {
-            const tok = await osBearer(osCfg);
             // ASS/SSA must go through the real converter; srtToVtt would emit `Dialogue:`/`{\an8}`
             // codes verbatim. Everything else keeps the SRT->VTT path. langHint fixes encoding.
             const toVtt = (r) => (/^(ass|ssa)$/i.test(String(r.ext || '')) ? releaseSubtitleToVtt(r.raw, r.ext, lang) : r.vtt);
+            const tok = await osBearer(osCfg);
             try {
               return toVtt(await osDownloadVtt(fileId, { apiKey: osCfg.apiKey, token: tok.token, base: tok.baseUrl, langHint: lang }));
             } catch (e) {
