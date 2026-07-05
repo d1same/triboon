@@ -339,6 +339,14 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   // Continue Watching plays straight from home with no detail page beneath the player. Backing
   // out (not just finishing) must land on the title's details page, not dump the user on the
   // homepage. Scoped to home-launched playback so library/Live TV returns keep their restores.
+  // BACK-DURING-LOADING must actually cancel: the native audio probe inside openPlayer can take
+  // seconds, and its continuation used to start ExoPlayer even after the user backed out (the
+  // "changed my mind but it started playing anyway" bug). Two guards: an S.playing identity +
+  // view re-check after the probe await, and closePlayer invalidating the in-flight play ticket.
+  assert.match(ui, /const playingRef = S\.playing; \/\/ identity of THIS playback attempt[\s\S]+await prepareNativeStartKindForAudio\(startKind\);[\s\S]+if \(S\.playing !== playingRef \|\| S\.view !== 'player'\) return;[\s\S]+tryNativePlaybackLadder\(it\.resume \|\| 0, startKind\);/,
+    'openPlayer re-checks playback identity + view after the native audio probe so a cancelled play never starts');
+  assert.match(ui, /async function closePlayer\(opts = \{\}\) \{[\s\S]{0,400}S\._playTicket = \(S\._playTicket \|\| 0\) \+ 1;/,
+    'closing the player invalidates any in-flight play attempt via the play ticket');
   // The details page must paint BEFORE the final watch-state awaits — openDetail is synchronous
   // to first paint, so ordering it first means the homepage never flashes through between the
   // player teardown and the details page (owner-reported flash).
@@ -4005,6 +4013,13 @@ test('audit contracts: Trakt/watch-state data-safety + CC pipeline fixes stay in
     'both ACTIVE subtitle providers are queried in parallel (policy-gated)');
   assert.match(server, /const ranked = rankSubs\(combined, releaseName, \{ durationSeconds: vf\._tracks && vf\._tracks\.duration, sdhPref, preferProvider \}\);/,
     'the combined ranking receives the primary-provider preference');
+  // FOUND-BUT-WON'T-LOAD: an OpenSubtitles download failure (login/quota/dead file) must fall
+  // back to the Wyzie ladder when Wyzie rows exist, and rethrow an ACTIONABLE message when they
+  // don't (opensubtitles-only) — never a bare "could not load" after a successful search.
+  assert.match(server, /if \(chosen\.raw\._provider === 'opensubtitles'\) \{\s*try \{[\s\S]+?\} catch \(e\) \{[\s\S]+const wyzieLeft = variants\.some\(\(v\) => v\.raw && !v\.raw\._provider\);[\s\S]+if \(e && e\.quota\) throw Object\.assign\(new Error\('OpenSubtitles daily download quota reached[\s\S]+if \(\/login\|HTTP 401\|HTTP 403\/i\.test\(reason\)\) throw Object\.assign\(new Error\('OpenSubtitles login failed/,
+    'an OpenSubtitles download failure falls back to Wyzie or surfaces the actionable reason (quota vs login)');
+  assert.match(server, /preferredId: chosen\.raw\._provider \? undefined : chosen\.id,/,
+    'the Wyzie fallback ladder does not demand the (OpenSubtitles) chosen id from the Wyzie subset');
   assert.match(server, /const SUBTITLE_SOURCE_MODES = \['wyzie-first', 'opensubtitles-first', 'wyzie-only', 'opensubtitles-only'\]/,
     'the subtitle provider policy enum is pinned');
 

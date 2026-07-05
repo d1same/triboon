@@ -136,6 +136,38 @@ async function collectStream(gen) {
   for await (const c of gen) chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c));
   return Buffer.concat(chunks);
 }
+// ---- persistent OpenSubtitles VTT cache (data/subcache) ----
+// OpenSubtitles downloads are QUOTA'D per day, and the per-mount cache dies with the mount — so
+// rewatching/resuming the same title kept re-downloading identical files. Subtitle files are
+// immutable per file_id: cache the converted VTT on disk forever (lang in the key because the
+// mojibake decode is language-hinted). Bounded by a lazy oldest-first prune. Failures are
+// swallowed everywhere — the cache is an accelerator, never a dependency.
+const OS_SUB_CACHE_DIR = path.join(DATA_DIR, 'subcache');
+const OS_SUB_CACHE_MAX_FILES = 600; // VTTs are ~50-200KB → worst case ~120MB
+function osSubCachePath(fileId, lang) {
+  return path.join(OS_SUB_CACHE_DIR, `os-${String(fileId).replace(/\W/g, '')}-${String(lang || 'en').replace(/\W/g, '').slice(0, 8)}.vtt`);
+}
+async function readOsSubCache(fileId, lang) {
+  try {
+    const vtt = await fs.promises.readFile(osSubCachePath(fileId, lang), 'utf8');
+    return vtt && vtt.startsWith('WEBVTT') ? vtt : null;
+  } catch { return null; }
+}
+function writeOsSubCache(fileId, lang, vtt) {
+  if (!vtt || !vtt.startsWith('WEBVTT')) return;
+  (async () => {
+    await fs.promises.mkdir(OS_SUB_CACHE_DIR, { recursive: true });
+    await fs.promises.writeFile(osSubCachePath(fileId, lang), vtt, 'utf8');
+    const names = await fs.promises.readdir(OS_SUB_CACHE_DIR);
+    if (names.length <= OS_SUB_CACHE_MAX_FILES) return;
+    const stats = await Promise.all(names.map(async (n) => {
+      try { const s = await fs.promises.stat(path.join(OS_SUB_CACHE_DIR, n)); return { n, at: s.mtimeMs }; }
+      catch { return null; }
+    }));
+    const doomed = stats.filter(Boolean).sort((a, b) => a.at - b.at).slice(0, names.length - OS_SUB_CACHE_MAX_FILES);
+    for (const d of doomed) fs.promises.rm(path.join(OS_SUB_CACHE_DIR, d.n), { force: true }).catch(() => {});
+  })().catch(() => {});
+}
 // Compute the OpenSubtitles moviehash on the mounted file (first+last 64KB + size), cached on
 // the mount. Uses the lowest NNTP lane so it never competes with playback. Null on any failure.
 async function moviehashForMount(vf) {
@@ -7150,20 +7182,27 @@ Object.assign(H, {
           // Download a chosen OpenSubtitles variant via its /download flow (JWT + quota). One
           // re-login retry covers an expired token. (Key-only downloads were live-tested and
           // 401 — the user login is genuinely required by the API, hence the trio activation.)
+          // A persistent disk cache fronts the quota: the per-mount cache dies with the mount, so
+          // every replay of the same title was re-downloading the SAME file from OpenSubtitles —
+          // needless quota burn (free tier ≈ 20/day; exhaustion reads as "found but won't load")
+          // and a needless round-trip. Subtitle files are immutable per file_id → cache forever.
           const downloadOpenSubtitles = async (fileId) => {
+            const cached = await readOsSubCache(fileId, lang);
+            if (cached) return cached;
             // ASS/SSA must go through the real converter; srtToVtt would emit `Dialogue:`/`{\an8}`
             // codes verbatim. Everything else keeps the SRT->VTT path. langHint fixes encoding.
             const toVtt = (r) => (/^(ass|ssa)$/i.test(String(r.ext || '')) ? releaseSubtitleToVtt(r.raw, r.ext, lang) : r.vtt);
             const tok = await osBearer(osCfg);
+            let vtt;
             try {
-              return toVtt(await osDownloadVtt(fileId, { apiKey: osCfg.apiKey, token: tok.token, base: tok.baseUrl, langHint: lang }));
+              vtt = toVtt(await osDownloadVtt(fileId, { apiKey: osCfg.apiKey, token: tok.token, base: tok.baseUrl, langHint: lang }));
             } catch (e) {
-              if (/HTTP 401|HTTP 403/.test(String(e && e.message))) {
-                const fresh = await osBearer(osCfg, { force: true });
-                return toVtt(await osDownloadVtt(fileId, { apiKey: osCfg.apiKey, token: fresh.token, base: fresh.baseUrl, langHint: lang }));
-              }
-              throw e;
+              if (!/HTTP 401|HTTP 403/.test(String(e && e.message))) throw e;
+              const fresh = await osBearer(osCfg, { force: true });
+              vtt = toVtt(await osDownloadVtt(fileId, { apiKey: osCfg.apiKey, token: fresh.token, base: fresh.baseUrl, langHint: lang }));
             }
+            writeOsSubCache(fileId, lang, vtt); // fire-and-forget — a cache write must never fail the pick
+            return vtt;
           };
           // Both auto-pick and explicit-variant go through the ranked list so we always know the
           // chosen subtitle's metadata — that's what tells us whether it's ALREADY in sync
@@ -7179,19 +7218,36 @@ Object.assign(H, {
           const chosen = variant ? variants.find((v) => v.id === variant) : variants[0];
           if (!chosen || !chosen.raw) throw new Error(variant ? 'that subtitle version is no longer available' : 'online subtitles failed');
           if (chosen.raw._provider === 'opensubtitles') {
-            // No fallback on this branch — the chosen variant is exactly what gets served.
-            vf._subSyncState.set(cacheKey, subtitleLooksSynced(chosen.raw, releaseName)); capMap(vf._subSyncState, 24);
-            return downloadOpenSubtitles(chosen.raw._osFileId);
+            try {
+              const vtt = await downloadOpenSubtitles(chosen.raw._osFileId);
+              vf._subSyncState.set(cacheKey, subtitleLooksSynced(chosen.raw, releaseName)); capMap(vf._subSyncState, 24);
+              return vtt;
+            } catch (e) {
+              // FOUND-BUT-WON'T-LOAD fix: an OpenSubtitles download can fail for reasons the
+              // SEARCH never surfaces (login rejected, daily quota exhausted, dead file) — this
+              // branch used to throw straight to the player ("Subtitles could not load" after a
+              // successful search). Fall back to the Wyzie ladder below when Wyzie rows exist;
+              // when they don't (opensubtitles-only), rethrow with the ACTIONABLE reason.
+              const reason = String(e && e.message || e);
+              console.error(`[subs] OpenSubtitles download failed (${reason.slice(0, 140)}) — trying Wyzie fallback`);
+              const wyzieLeft = variants.some((v) => v.raw && !v.raw._provider);
+              if (!wyzieLeft) {
+                if (e && e.quota) throw Object.assign(new Error('OpenSubtitles daily download quota reached — downloads resume tomorrow (or raise the account tier)'), { permanent: true });
+                if (/login|HTTP 401|HTTP 403/i.test(reason)) throw Object.assign(new Error('OpenSubtitles login failed — check the username/password in Settings → Subtitles'), { permanent: true });
+                throw e;
+              }
+            }
           }
-          // Wyzie: a stale top-pick link silently falls back to the NEXT ranked sub, so the
+          // Wyzie ladder: a stale top-pick link silently falls back to the NEXT ranked sub, so the
           // looksSynced judgment must come from the sub actually SERVED — stamping from `chosen`
           // before the download marked fallback subs 'synced' forever (drifting CC + a dead
-          // Fix-sync button, since ?sync=1 skips alass for 'synced' tracks).
+          // Fix-sync button, since ?sync=1 skips alass for 'synced' tracks). Also the landing spot
+          // when an OpenSubtitles download failed above (quota/login/dead file).
           const { vtt: dlVtt, served } = await downloadBestSubtitle(variants.map((v) => v.raw).filter((d) => d && !d._provider), {
             key,
             releaseName,
             durationSeconds: vf._tracks && vf._tracks.duration,
-            preferredId: chosen.id,
+            preferredId: chosen.raw._provider ? undefined : chosen.id,
             ...(base ? { base } : {}),
             attempts: 3,
             retryDelayMs: 900,

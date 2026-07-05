@@ -9180,7 +9180,13 @@ async function openPlayer(it, mount, opts = {}) {
   // Android TV stays native, but starts with the server's chosen fast path. Archive-backed
   // MKV direct can make Exo probe/seek slowly; remux is still zero-copy and often starts faster.
   const nativeRequired = nativeVideoRequired(it);
+  const playingRef = S.playing; // identity of THIS playback attempt
   if (opts.nativeFirst || nativeRequired) startKind = await prepareNativeStartKindForAudio(startKind);
+  // The audio probe above can take seconds on a fresh mount — if the user hit BACK during it,
+  // closePlayer already tore everything down and starting now would resurrect the movie they
+  // just cancelled (the "backed out but it started playing anyway" bug). A different S.playing
+  // means a NEWER play superseded this one; bail on that too.
+  if (S.playing !== playingRef || S.view !== 'player') return;
   const nativeStarted = (opts.nativeFirst || nativeRequired) && tryNativePlaybackLadder(it.resume || 0, startKind);
   if (nativeStarted) {
     startNativePlayerHousekeeping(it);
@@ -10961,6 +10967,9 @@ function playbackFinishedDetailTarget(item) {
   return null;
 }
 async function closePlayer(opts = {}) {
+  // Invalidate any IN-FLIGHT play attempt (search/mount/probe still running): its continuation
+  // checks this ticket and must not resurrect playback after the user backed out of the loader.
+  S._playTicket = (S._playTicket || 0) + 1;
   const closingItem = S.playing && S.playing.item;
   // Backing out of the player while casting stops the TV too (don't leave it playing an orphaned stream).
   if (S.playing && S.playing.castingActive && !opts._fromCast) {
