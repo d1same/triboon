@@ -792,6 +792,18 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'the detail Start Over button should use the same explicit intent as episode menus');
   assert.match(ui, /if \(act === 'start'\) play\(startOverItem\(item\)\);/,
     'episode Play from start should not resume from watch state');
+  // Upcoming/unaired episodes are non-playable so a click can't fail with a generic "no sources"
+  // error. play() gates centrally on a future air date; epItemOf carries the date; cards mark it.
+  assert.match(ui, /airDate: ep\.air_date \|\| ''/,
+    'epItemOf should carry the episode air date so play() can gate unaired episodes');
+  assert.match(ui, /if \(it\.type === 'episode' && it\.airDate && it\.airDate > todayStr\(\)\) \{[\s\S]+hasn.t aired yet[\s\S]+return;/,
+    'play() should block episodes whose air date is in the future');
+  assert.match(ui, /const upcoming = !!\(ep\.air_date && ep\.air_date > todayStr\(\)\);\s+if \(upcoming\) card\.classList\.add\('upcoming'\)/,
+    'the detail episode card should mark future episodes as upcoming');
+  assert.match(ui, /if \(upcoming\) \{ toast\(`This episode hasn.t aired yet[\s\S]+return; \}\s+play\(item\)/,
+    'clicking an upcoming episode card should notify instead of attempting playback');
+  assert.match(ui, /upcoming: !!\(ep\.air_date && ep\.air_date > todayStr\(\)\),/,
+    'the in-player episode strip should flag upcoming episodes too');
   assert.match(ui, /function durableArtUrl\(u\) \{[\s\S]+isTokenizedLocalUrl\(u\) \? '' : \(u \|\| ''\)/,
     'watch metadata should not persist tokenized local artwork URLs that will expire');
   assert.match(ui, /const art = freshLocalArtForKey\(w\.key\);[\s\S]+poster: poster \|\| procBackdrop[\s\S]+backdrop: backdrop \|\| procBackdrop/,
@@ -1934,7 +1946,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'artwork focus should not regress to thick solid coral rings');
   assert.match(ui, /grid\.style\.maxHeight = pitch > 50 \? `\$\{n \* pitch - 4\}px` : `calc\(var\(--rowH\) \* \$\{n\} - \$\{n \* 2\}px\)`;/,
     'browse row windows should keep focused poster captions inside the viewport without showing half rows');
-  assert.match(ui, /b\.innerHTML = `<div class="peStill"><\/div><div class="peMeta">[\s\S]+<span class="peName">/,
+  assert.match(ui, /b\.innerHTML = `<div class="peStill">[\s\S]*?<\/div><div class="peMeta">[\s\S]+<span class="peName">/,
     'web episode cards should render the episode name below the thumbnail, not overlaid on the still');
   assert.match(ui, /async function getPlayerEpisodeContext\(it\) \{[\s\S]+episodeKeyParts\(it\)[\s\S]+api\(`\/api\/tmdb\/tv\/\$\{parts\.tmdbId\}\?append_to_response=external_ids`\)[\s\S]+api\(`\/api\/tmdb\/tv\/\$\{parts\.tmdbId\}\/season\/\$\{parts\.season\}`\)/,
     'player episode strip should load the current TMDB season and external IDs without depending on the detail page being open');

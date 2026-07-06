@@ -1334,6 +1334,14 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 .epCard .pbtn{position:absolute;left:14px;top:14px;display:flex;align-items:center;gap:7px;background:var(--btnPrimary);color:var(--onAccent);
   border-radius:30px;padding:7px 13px;font:700 12px "Sora"}
 .epCard .pbtn svg{width:14px;height:14px}
+/* Upcoming/unaired episode: non-playable, dimmed, with an "Airs <date>" chip instead of Play. */
+.epCard.upcoming{cursor:not-allowed;opacity:.74}
+.epCard.upcoming .still{filter:grayscale(.35) brightness(.82)}
+.epCard .pbtn.upcomingTag{background:rgba(11,8,18,.74);color:var(--text);border:1px solid var(--line)}
+.playerEpCard.upcoming{cursor:not-allowed}
+.playerEpCard.upcoming .peStill{filter:grayscale(.4) brightness(.8)}
+.playerEpCard .peUpcoming{position:absolute;left:8px;top:8px;z-index:2;background:rgba(11,8,18,.78);color:var(--text);
+  border:1px solid var(--line);border-radius:20px;padding:3px 9px;font:800 9.5px "JetBrains Mono";letter-spacing:.04em}
 .epCard .wdot{position:absolute;right:14px;top:16px;color:#7CE6A0;font:700 11px "JetBrains Mono"}
 .epCard.focusable::before{display:none}
 .epCard.focus{box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 9px var(--artFocusGlow)}
@@ -6203,6 +6211,14 @@ async function play(it, pick) {
   if (!it) return;
   it = resolvePlaybackResume(it);
   if (!levelAllows(it.cert)) { toast(`“${it.title}” is rated ${it.cert} — not allowed on this profile`); return; }
+  // Upcoming/unaired episodes have no source to find — clicking one used to fail with a generic
+  // "no sources" error. Block play with a friendly notice instead. Gated centrally so every entry
+  // point (episode list, ⋯ menu, in-player strip, auto-advance) is covered. Missing air dates stay
+  // playable (old shows can lack TMDB metadata); only a FUTURE air date is blocked.
+  if (it.type === 'episode' && it.airDate && it.airDate > todayStr()) {
+    toast(`This episode hasn’t aired yet — airs ${fmtDate(it.airDate)}`);
+    return;
+  }
   const picked = pick && typeof pick === 'object' ? pick : (pick ? { name: pick } : null);
   const pickRank = picked ? normalizeResolutionRank(picked.resolutionRank) : null;
   const qRank = pickRank !== null ? pickRank : qualityRankForItem(it);
@@ -6456,7 +6472,7 @@ function epItemOf(show, season, ep) {
     overview: ep.overview || show.overview,
     backdrop: img(ep.still_path) || show.backdrop,
     qualityRank: qualityRankForItem(show),
-    tmdbId: show.tmdbId, imdbId: show.imdbId, tvdbId: show.tvdbId, originalLanguage: show.originalLanguage, type: 'episode',
+    tmdbId: show.tmdbId, imdbId: show.imdbId, tvdbId: show.tvdbId, originalLanguage: show.originalLanguage, type: 'episode', airDate: ep.air_date || '',
     resume: (S.watchMap && S.watchMap[epKeyOf(show, season.season_number, ep.episode_number)] &&
              !S.watchMap[epKeyOf(show, season.season_number, ep.episode_number)].watched)
       ? S.watchMap[epKeyOf(show, season.season_number, ep.episode_number)].position : 0,
@@ -6960,36 +6976,46 @@ async function openSeasonEpisodes(show, seasonNumber, opts = {}) {
       card.dataset.season = String(seasonNumber);
       card.dataset.episode = String(ep.episode_number);
       card.dataset.epKey = item.key;
+      // Upcoming/unaired episode: no source exists yet, so make it non-playable (a click used to
+      // fail with a generic error). Show an "Airs <date>" chip, drop the play/watch affordances.
+      const upcoming = !!(ep.air_date && ep.air_date > todayStr());
+      if (upcoming) card.classList.add('upcoming');
       const label = w && w.position > 30 && !w.watched ? 'Resume' : 'Play';
       card.innerHTML = `
         <div class="still" style="background-image:url('${safeUrl(img(ep.still_path, 'w300') || show.backdrop)}')">
-          ${label === 'Resume' ? '<span class="pbtn resume">Resume</span>' : ''}
-          ${w && w.watched ? '<span class="wbadge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span>' : ''}
-          ${progress && !w.watched ? `<div class="pb" style="width:${progress * 100}%"></div>` : ''}
+          ${upcoming ? `<span class="pbtn upcomingTag">Airs ${esc(fmtDate(ep.air_date))}</span>` : ''}
+          ${!upcoming && label === 'Resume' ? '<span class="pbtn resume">Resume</span>' : ''}
+          ${!upcoming && w && w.watched ? '<span class="wbadge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span>' : ''}
+          ${!upcoming && progress && !w.watched ? `<div class="pb" style="width:${progress * 100}%"></div>` : ''}
           <div class="label"><span class="et">${esc(ep.name || 'Episode ' + ep.episode_number)}</span>
             <span class="em">${esc(['S' + pad2(seasonNumber) + 'E' + pad2(ep.episode_number),
     ep.air_date ? fmtDate(ep.air_date) : '', ep.runtime ? ep.runtime + 'm' : ''].filter(Boolean).join(' · '))}</span></div>
-          <button class="epMenuBtn" title="Episode options">⋯</button>
+          ${upcoming ? '' : `<button class="epMenuBtn" title="Episode options">⋯</button>
           <div class="epMenu">
             ${actionMenuButton('start', 'play', 'Play from start')}
             ${w && w.watched ? actionMenuButton('unwatch', 'circle', 'Mark unwatched') : actionMenuButton('watch', 'check', 'Mark watched')}
-          </div>
+          </div>`}
         </div>`;
       const menu = card.querySelector('.epMenu');
-      card.querySelector('.epMenuBtn').addEventListener('click', (e) => {
-        e.stopPropagation();
-        document.querySelectorAll('.epMenu.open').forEach((m) => m !== menu && m.classList.remove('open'));
-        menu.classList.toggle('open');
+      if (menu) {
+        card.querySelector('.epMenuBtn').addEventListener('click', (e) => {
+          e.stopPropagation();
+          document.querySelectorAll('.epMenu.open').forEach((m) => m !== menu && m.classList.remove('open'));
+          menu.classList.toggle('open');
+        });
+        menu.addEventListener('click', (e) => {
+          const btn = e.target.closest && e.target.closest('button[data-act]');
+          if (!btn || !menu.contains(btn)) return;
+          const act = btn.dataset.act;
+          e.stopPropagation(); menu.classList.remove('open');
+          if (act === 'start') play(startOverItem(item));
+          else setEpisodeWatched(item, ep, show, seasonNumber, act === 'watch');
+        });
+      }
+      card.addEventListener('click', () => {
+        if (upcoming) { toast(`This episode hasn’t aired yet — airs ${fmtDate(ep.air_date)}`); return; }
+        play(item);
       });
-      menu.addEventListener('click', (e) => {
-        const btn = e.target.closest && e.target.closest('button[data-act]');
-        if (!btn || !menu.contains(btn)) return;
-        const act = btn.dataset.act;
-        e.stopPropagation(); menu.classList.remove('open');
-        if (act === 'start') play(startOverItem(item));
-        else setEpisodeWatched(item, ep, show, seasonNumber, act === 'watch');
-      });
-      card.addEventListener('click', () => play(item));
       grid.appendChild(card);
     });
     bindEdgeScroll(grid);
@@ -10423,12 +10449,13 @@ function renderPlayerEpisodes() {
   rail.innerHTML = '';
   st.items.forEach((ep, idx) => {
     const b = document.createElement('button');
-    b.className = 'playerEpCard focusable' + (ep.item.key === st.currentKey ? ' current' : '') + (ep.watched ? ' watched' : '');
+    b.className = 'playerEpCard focusable' + (ep.item.key === st.currentKey ? ' current' : '') + (ep.watched ? ' watched' : '') + (ep.upcoming ? ' upcoming' : '');
     b.dataset.playerEpIdx = String(idx);
     b.style.setProperty('--still', `url('${safeUrl(ep.still || '')}')`);
-    b.innerHTML = `<div class="peStill"></div><div class="peMeta"><span class="peTag">${esc(ep.tag)}</span><span class="peName">${esc(ep.name || 'Episode ' + (idx + 1))}</span></div>`;
+    b.innerHTML = `<div class="peStill">${ep.upcoming ? '<span class="peUpcoming">Upcoming</span>' : ''}</div><div class="peMeta"><span class="peTag">${esc(ep.tag)}</span><span class="peName">${esc(ep.name || 'Episode ' + (idx + 1))}</span></div>`;
     b.addEventListener('click', () => {
       if (ep.item.key === st.currentKey) return;
+      if (ep.upcoming) { toast(`This episode hasn’t aired yet — airs ${fmtDate(ep.item.airDate)}`); return; }
       closePlayerEpisodes();
       play(ep.item);
     });
@@ -10446,6 +10473,7 @@ function nativeEpisodeChoices() {
     still: ep.still || '',
     current: ep.item && ep.item.key === st.currentKey,
     watched: !!ep.watched,
+    upcoming: !!ep.upcoming,
   }));
 }
 function nativeEpisodeFocusIndex() {
@@ -10496,6 +10524,7 @@ async function prepPlayerSeasonEpisodes(it) {
           name: ep.name || '',
           still: img(ep.still_path, 'w300') || ctx.show.backdrop,
           watched: !!(w && w.watched),
+          upcoming: !!(ep.air_date && ep.air_date > todayStr()),
         });
       }
     }

@@ -20,6 +20,8 @@
   |
   <a href="#quick-start">Quick start</a>
   |
+  <a href="docs-setup.md">Setup guide</a>
+  |
   <a href="#unraid">Unraid</a>
 </p>
 
@@ -81,6 +83,10 @@ Then:
 3. Add TMDB, usenet, and a Newznab-compatible indexer.
 4. Optionally add Wyzie subtitles, Trakt, local libraries, music, or Live TV.
 5. Browse and press Play.
+
+New to this? The [Setup guide](docs-setup.md) walks through getting each API key
+(TMDB, indexers, subtitles, Trakt, Live TV) step by step, with links and which
+are free.
 
 Plain Node also works when Node 24+ is installed:
 
