@@ -1501,7 +1501,7 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 }
 /* TV: hold-OK menus replace the persistent on-art ACTION icons (✓/✕ on Continue Watching,
    ⋯ on episodes) — clutter on every thumbnail. The watched ✓ badge (info, not action) stays. */
-body.tv .cwAct,body.tv .epMenuBtn{display:none!important}
+body.tv .cwAct,body.tv .epMenuBtn,body.tv .cardMenuBtn{display:none!important}
 /* Phones: the rail goes OFF-CANVAS and the burger toggles it as an overlay drawer. */
 @media (max-width:600px){
   #backdrop .layer{display:none!important;opacity:0!important}
@@ -1784,9 +1784,17 @@ body.mobileShell #playerStats{left:12px;right:12px;bottom:84px;width:auto;max-he
 
 /* Per-episode action menu (mark watched / unwatched / play from start). */
 .epCard{position:relative}
-.epMenuBtn{position:absolute;right:10px;top:10px;width:30px;height:30px;border-radius:50%;background:rgba(11,8,18,.8);
-  display:grid;place-items:center;color:var(--text);z-index:3;opacity:0;transition:opacity .15s}
+.epMenuBtn,.cardMenuBtn{position:absolute;right:10px;top:10px;width:30px;height:30px;border-radius:50%;background:rgba(11,8,18,.8);
+  display:grid;place-items:center;color:var(--text);z-index:4;opacity:0;transition:opacity .15s,transform .12s;border:1px solid rgba(255,255,255,.10)}
 .epCard:hover .epMenuBtn,.epCard.focus .epMenuBtn{opacity:1}
+/* ⋯ options button on posters / backdrop cards / season covers — the mouse+touch path to the
+   same action menu the TV opens by long-pressing OK (hidden on TV; see body.tv rule below). */
+.cardMenuBtn svg{width:17px;height:17px;display:block}
+.cardMenuBtn:hover{background:rgba(11,8,18,.94);transform:scale(1.08)}
+.pcard .art .cardMenuBtn{right:8px;top:8px}
+.pcard:hover .cardMenuBtn,.pcard.focus .cardMenuBtn,
+.card:hover .cardMenuBtn,.card.focus .cardMenuBtn,
+.seasonCard:hover .cardMenuBtn,.seasonCard.focus .cardMenuBtn{opacity:1}
 .epMenu{position:absolute;right:10px;top:44px;z-index:5;min-width:200px;background:linear-gradient(180deg,rgba(24,26,29,.97),rgba(13,15,18,.97));border:1px solid rgba(255,255,255,.07);
   border-radius:10px;padding:6px;display:none;box-shadow:0 18px 44px rgba(0,0,0,.42)}
 .epMenu.open{display:block}
@@ -5293,6 +5301,33 @@ const ACTION_MENU_ICONS = {
 function actionMenuButton(act, icon, label) {
   return `<button class="focusable" data-act="${esc(act)}"><span class="menuIcon" aria-hidden="true">${ACTION_MENU_ICONS[icon] || ''}</span><span class="menuLabel">${esc(label)}</span></button>`;
 }
+// Vertical ⋯ used by the web 3-dot options button on covers.
+const CARD_MENU_DOTS = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>';
+// A cover only shows the ⋯ button when openItemMenu has something to offer for it — the SAME
+// eligibility as the TV long-press path (Continue Watching entries, or a TMDB movie/show), so the
+// two input methods surface identical menus and nothing else grows a dead button.
+function cardHasItemMenu(it) {
+  return !!(it && !it.trailer && it._channel === undefined
+    && (isContinueWatchingItem(it) || (it.tmdbId && ['movie', 'tv'].includes(it.type))));
+}
+// Web/touch affordance: a ⋯ button that opens the shared action menu. TV hides it (CSS) and uses
+// long-press OK instead, so this only ever adds a mouse/touch entry point to an existing menu.
+function attachCardMenuButton(card, host, it, onFocus) {
+  if (!cardHasItemMenu(it)) return;
+  const btn = document.createElement('button');
+  btn.className = 'cardMenuBtn';
+  btn.type = 'button';
+  btn.setAttribute('aria-label', 'More options');
+  btn.title = 'More options';
+  btn.innerHTML = CARD_MENU_DOTS;
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    onFocus && onFocus();
+    openItemMenu(it, card);
+  });
+  (host || card).appendChild(btn);
+}
 // Long-press OK on ANY cover (Android TV / D-pad) → a small action menu. Continue Watching
 // cards add their resume/remove entries; every title gets watched-toggle + watchlist.
 function openItemMenu(it, card) {
@@ -5326,6 +5361,54 @@ function openItemMenu(it, card) {
     else if (act === 'unwatch') markItemWatched(it, false);
     else if (act === 'wl') toggleWatchlist(it);
     else if (act === 'rm') removeContinueWatchingItem(it, snap);
+  };
+}
+// Season options menu — the ⋯ button (web) and long-press OK (TV) on a season cover open this.
+// Handles TMDB shows and local-library shows; season-level marks plus show-level watchlist so a
+// whole series can be saved/marked from any season cover (the owner's "select seasons to mark as
+// watchlist or whatever option" ask). Reuses the shared cwMenu container + D-pad handling.
+function openSeasonMenu(show, season, card) {
+  if (!show || !season) return;
+  const m = $('cwMenu');
+  S.cwReturnEl = card || null;
+  const isLocal = !!(show._localShow || season._local);
+  let seasonWatched;
+  let localEpisodes = null;
+  if (isLocal) {
+    const sNum = season.season_number;
+    localEpisodes = (S.localDetailEpisodes || []).filter((ep) => +ep.s === sNum);
+    seasonWatched = localEpisodeGroupWatched(localEpisodes);
+  } else {
+    seasonWatched = isSeasonWatched(show.tmdbId, season.season_number, season.episode_count);
+  }
+  // Watchlist targets the SHOW (episodes/seasons aren't watchlist entries); local shows have no
+  // TMDB id to watchlist, so the row is hidden for them.
+  const wlItem = detailTargetForItem(show);
+  const onWl = !isLocal && !!(show.tmdbId && S.watchlistMap && S.watchlistMap[wlItem.key]);
+  const label = season.name || 'Season ' + season.season_number;
+  m.innerHTML =
+    actionMenuButton('open', 'play', 'Open episodes') +
+    (seasonWatched ? actionMenuButton('sunwatch', 'circle', `Mark ${label} unwatched`)
+      : actionMenuButton('swatch', 'check', `Mark ${label} watched`)) +
+    (!isLocal && show.tmdbId ? actionMenuButton('showwatch', 'check', 'Mark whole show watched') : '') +
+    (!isLocal && show.tmdbId ? actionMenuButton('wl', onWl ? 'bookmarkOff' : 'bookmark', onWl ? 'Remove show from watchlist' : 'Add show to watchlist') : '');
+  const r = card ? card.getBoundingClientRect() : { left: innerWidth / 2 - 120, top: innerHeight / 2 - 120, height: 0 };
+  m.style.left = Math.max(8, Math.min(innerWidth - 280, r.left + 10)) + 'px';
+  m.style.top = Math.max(8, Math.min(innerHeight - 260, r.top + 10)) + 'px';
+  m.classList.add('open');
+  S.cwMenuIdx = 0;
+  applyFocus(m.querySelector('button'), false);
+  m.onclick = (e) => {
+    const btn = e.target.closest && e.target.closest('button[data-act]');
+    if (!btn || !m.contains(btn)) return;
+    const act = btn.dataset.act;
+    e.stopPropagation(); closeCwMenu();
+    if (act === 'open') return isLocal ? openLocalShowSeasonEpisodes(show, season.season_number) : openSeasonEpisodes(show, season.season_number);
+    if (act === 'wl') return toggleWatchlist(wlItem);
+    if (act === 'showwatch') return markShowWatched(show, true);
+    const watched = act === 'swatch';
+    if (isLocal) return markLocalEpisodeGroupWatched(show, localEpisodes, watched, `${label} marked ${watched ? 'watched' : 'unwatched'}`);
+    markSeasonWatched(show, season, watched);
   };
 }
 function liveChannelForItem(it) {
@@ -5396,12 +5479,14 @@ async function toggleWatchlist(it) {
 }
 function closeCwMenu() {
   $('cwMenu').classList.remove('open');
+  const ret = S.cwReturnEl; S.cwReturnEl = null;
   if ($('pGuide') && $('pGuide').classList.contains('open')) {
-    const el = S.cwReturnEl; S.cwReturnEl = null;
-    if (el && el.isConnected) el.focus();
+    if (ret && ret.isConnected) ret.focus();
     return;
   }
-  S.cwReturnEl = null;
+  // Detail page (season/episode/related covers): hand focus straight back to the cover the menu
+  // opened from — focusGrid/focusCard below are home/grid-nav only and would strand it.
+  if (S.view === 'detail') { if (ret && ret.isConnected) applyFocus(ret, false); return; }
   if (S.zone === 'grid') return focusGrid(S.gridIdx); // poster grids hand focus back too
   if (S.zone !== 'rail') focusCard(S.rowIdx, S.colIdx[S.rowIdx] || 0); // hand focus back to the card
 }
@@ -5449,6 +5534,9 @@ function makeCard(it, poster, onFocus) {
       c.querySelector('.cwAct.rm').addEventListener('click', (e) => { e.stopPropagation(); removeContinueWatchingItem(it, cwSnap()); });
     }
   }
+  // Web/touch ⋯ options button (posters into the .art frame, backdrop/CW cards onto the card).
+  // Hidden on TV, which uses long-press OK for the same menu.
+  attachCardMenuButton(c, c.querySelector('.art') || c, it, onFocus);
   c.addEventListener('click', () => {
     onFocus && onFocus();
     if (it.trailer) return openTrailer(it.trailer, it);
@@ -6722,6 +6810,13 @@ function renderSeasonGrid(show, seasons) {
       <div class="st">${esc(s.name || 'Season ' + s.season_number)}</div>
       <div class="sd">${esc(episodeLabel)}</div>`;
     c.addEventListener('click', () => openSeasonEpisodes(show, s.season_number));
+    const artHost = c.querySelector('.art');
+    const seasonBtn = document.createElement('button');
+    seasonBtn.className = 'cardMenuBtn'; seasonBtn.type = 'button';
+    seasonBtn.setAttribute('aria-label', 'Season options'); seasonBtn.title = 'Season options';
+    seasonBtn.innerHTML = CARD_MENU_DOTS;
+    seasonBtn.addEventListener('click', (e) => { e.stopPropagation(); e.preventDefault(); openSeasonMenu(show, s, c); });
+    artHost.appendChild(seasonBtn);
     grid.appendChild(c);
   });
   bindEdgeScroll(grid);
@@ -6762,6 +6857,13 @@ function renderLocalShowSeasonGrid(show, seasons) {
       <div class="st">${esc(s.name || 'Season ' + s.season_number)}</div>
       <div class="sd">${esc(seasonEpisodeCountLabel(s))}</div>`;
     c.addEventListener('click', () => openLocalShowSeasonEpisodes(show, s.season_number));
+    const artHost = c.querySelector('.art');
+    const seasonBtn = document.createElement('button');
+    seasonBtn.className = 'cardMenuBtn'; seasonBtn.type = 'button';
+    seasonBtn.setAttribute('aria-label', 'Season options'); seasonBtn.title = 'Season options';
+    seasonBtn.innerHTML = CARD_MENU_DOTS;
+    seasonBtn.addEventListener('click', (e) => { e.stopPropagation(); e.preventDefault(); openSeasonMenu(show, s, c); });
+    artHost.appendChild(seasonBtn);
     grid.appendChild(c);
   });
   bindEdgeScroll(grid);
@@ -21441,21 +21543,15 @@ document.addEventListener('keydown', (e) => {
         return;
       }
       if (el.classList.contains('seasonCard')) {
+        // HOLD OK → the season options menu (open episodes / mark season / mark show / watchlist),
+        // matching the web ⋯ button. A tap (keyup, no timer) still opens the episodes via click().
         S._lpEl = el;
         S._lpTimer = setTimeout(() => {
           S._lpTimer = null; S._lpEl = null;
           const seasonNumber = +el.dataset.season;
           const season = (S.detailSeasons || []).find((s) => s.season_number === seasonNumber);
           if (!season || !S.detailItem) return;
-          if (S.detailItem._localShow) {
-            const episodes = (S.localDetailEpisodes || []).filter((ep) => +ep.s === seasonNumber);
-            const watched = !localEpisodeGroupWatched(episodes);
-            markLocalEpisodeGroupWatched(S.detailItem, episodes, watched,
-              `${season.name || 'Season ' + seasonNumber} marked ${watched ? 'watched' : 'unwatched'}`);
-            return;
-          }
-          const watched = !isSeasonWatched(S.detailItem.tmdbId, seasonNumber, season.episode_count);
-          markSeasonWatched(S.detailItem, season, watched);
+          openSeasonMenu(S.detailItem, season, el);
         }, 450);
         return;
       }

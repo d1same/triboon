@@ -3480,9 +3480,12 @@ public class MainActivity extends Activity {
     // WebView is hidden behind the ExoPlayer surface); this card just renders what web pushes via
     // TriboonTV.upNext(...) and forwards Play/Dismiss back to web.
     private View buildNativeUpNextCard() {
+        // Compact, unobtrusive card in the corner (owner: "smaller and nicer, don't cover the
+        // screen much"): a small kicker + one-line title over Play Next / Dismiss. Tightened
+        // padding + type sizes + a narrower title column shrink the footprint ~25% vs before.
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(16), dp(13), dp(16), dp(14));
+        card.setPadding(dp(13), dp(10), dp(13), dp(11));
         card.setBackground(nativePanelBg());
         card.setVisibility(View.GONE);
         card.setClipChildren(false);
@@ -3493,29 +3496,30 @@ public class MainActivity extends Activity {
         nativeUpNextKicker = new TextView(this);
         nativeUpNextKicker.setText("UP NEXT");
         nativeUpNextKicker.setTextColor(0xFFF2B441);
-        nativeUpNextKicker.setTextSize(11);
+        nativeUpNextKicker.setTextSize(9.5f);
+        nativeUpNextKicker.setLetterSpacing(0.14f);
         nativeUpNextKicker.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
         card.addView(nativeUpNextKicker);
 
         nativeUpNextTitle = new TextView(this);
         nativeUpNextTitle.setTextColor(Color.WHITE);
-        nativeUpNextTitle.setTextSize(17);
+        nativeUpNextTitle.setTextSize(14.5f);
         nativeUpNextTitle.setTypeface(Typeface.DEFAULT_BOLD);
         nativeUpNextTitle.setSingleLine(true);
         nativeUpNextTitle.setEllipsize(TextUtils.TruncateAt.END);
-        nativeUpNextTitle.setPadding(0, dp(5), 0, 0);
-        card.addView(nativeUpNextTitle, new LinearLayout.LayoutParams(dp(300), ViewGroup.LayoutParams.WRAP_CONTENT));
+        nativeUpNextTitle.setPadding(0, dp(3), 0, 0);
+        card.addView(nativeUpNextTitle, new LinearLayout.LayoutParams(dp(232), ViewGroup.LayoutParams.WRAP_CONTENT));
 
         nativeUpNextSub = new TextView(this);
         nativeUpNextSub.setTextColor(0xB8F3EFF7);
-        nativeUpNextSub.setTextSize(12);
+        nativeUpNextSub.setTextSize(10.5f);
         nativeUpNextSub.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
-        nativeUpNextSub.setPadding(0, dp(2), 0, 0);
+        nativeUpNextSub.setPadding(0, dp(1), 0, 0);
         card.addView(nativeUpNextSub);
 
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setPadding(0, dp(12), 0, 0);
+        row.setPadding(0, dp(10), 0, 0);
         nativeUpNextPlay = nativeUpNextButton("Play Next", true);
         nativeUpNextPlay.setOnClickListener(v -> triggerNativeUpNextPlay());
         row.addView(nativeUpNextPlay);
@@ -3532,7 +3536,7 @@ public class MainActivity extends Activity {
         b.setAllCaps(false);
         b.setText(label);
         b.setTextColor(primary ? 0xFF0B0A0F : Color.WHITE);
-        b.setTextSize(14);
+        b.setTextSize(13);
         b.setTypeface(Typeface.DEFAULT_BOLD);
         b.setFocusable(true);
         b.setFocusableInTouchMode(false);
@@ -3541,7 +3545,7 @@ public class MainActivity extends Activity {
         b.setMinHeight(0);
         b.setMinimumWidth(0);
         b.setMinimumHeight(0);
-        b.setPadding(dp(18), dp(9), dp(18), dp(9));
+        b.setPadding(dp(15), dp(7), dp(15), dp(7));
         b.setBackground(nativeUpNextButtonBg(false, primary));
         b.setOnFocusChangeListener((v, hasFocus) -> v.setBackground(nativeUpNextButtonBg(hasFocus, primary)));
         b.setOnKeyListener((v, code, e) -> handleNativeUpNextKey(e));

@@ -735,8 +735,24 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'TV detail season cards should render the year separately from the episode count');
   assert.match(ui, /async function markSeasonWatched\(show, season, watched\) \{[\s\S]+for \(let e = 1; e <= count; e\+\+\) \{[\s\S]+`tmdb:tv:\$\{show\.tmdbId\}:s\$\{sNum\}e\$\{e\}`[\s\S]+api\('\/api\/watch\/bulk'[\s\S]+renderSeasonGrid\(show, S\.detailSeasons \|\| \[season\]\)[\s\S]+applyFocus\(focus, false\)/,
     'long-hold season actions should bulk-mark only that season and restore focus after the season grid refreshes');
-  assert.match(ui, /if \(el\.classList\.contains\('seasonCard'\)\) \{[\s\S]+S\._lpTimer = setTimeout\(\(\) => \{[\s\S]+if \(S\.detailItem\._localShow\) \{[\s\S]+markLocalEpisodeGroupWatched\(S\.detailItem, episodes, watched,[\s\S]+return;[\s\S]+const watched = !isSeasonWatched\(S\.detailItem\.tmdbId, seasonNumber, season\.episode_count\);[\s\S]+markSeasonWatched\(S\.detailItem, season, watched\);[\s\S]+\}, 450\);[\s\S]+return;/,
-    'TV detail season cards should support hold-OK watched/unwatched toggling without opening the season, including local-only shows');
+  // Season cards: HOLD-OK opens the season OPTIONS menu (open episodes / mark season / mark show /
+  // watchlist) — the same menu the web ⋯ button opens — instead of a bare watched toggle.
+  assert.match(ui, /if \(el\.classList\.contains\('seasonCard'\)\) \{[\s\S]+S\._lpTimer = setTimeout\(\(\) => \{[\s\S]+const season = \(S\.detailSeasons \|\| \[\]\)\.find\(\(s\) => s\.season_number === seasonNumber\);[\s\S]+openSeasonMenu\(S\.detailItem, season, el\);[\s\S]+\}, 450\);[\s\S]+return;/,
+    'TV detail season cards open the season options menu on hold-OK (mirrors the web ⋯ button)');
+  assert.match(ui, /function openSeasonMenu\(show, season, card\) \{[\s\S]+actionMenuButton\('open', 'play', 'Open episodes'\)[\s\S]+actionMenuButton\('showwatch', 'check', 'Mark whole show watched'\)[\s\S]+onWl \? 'Remove show from watchlist' : 'Add show to watchlist'[\s\S]+if \(act === 'wl'\) return toggleWatchlist\(wlItem\);[\s\S]+markSeasonWatched\(show, season, watched\);/,
+    'the season options menu offers open/mark-season/mark-show/watchlist and routes each action correctly');
+  // Web ⋯ options button: an added mouse/touch entry point to the SAME menus (posters/CW open
+  // openItemMenu; season covers open openSeasonMenu); hidden on TV, which keeps long-press OK.
+  assert.match(ui, /function cardHasItemMenu\(it\) \{[\s\S]+isContinueWatchingItem\(it\) \|\| \(it\.tmdbId && \['movie', 'tv'\]\.includes\(it\.type\)\)/,
+    'the ⋯ button eligibility matches the TV long-press menu eligibility');
+  assert.match(ui, /function attachCardMenuButton\(card, host, it, onFocus\) \{[\s\S]+if \(!cardHasItemMenu\(it\)\) return;[\s\S]+btn\.className = 'cardMenuBtn';[\s\S]+openItemMenu\(it, card\);/,
+    'catalog/CW covers get a ⋯ button that opens the shared item menu');
+  assert.match(ui, /seasonBtn\.className = 'cardMenuBtn';[\s\S]+openSeasonMenu\(show, s, c\)/,
+    'season covers get a ⋯ button that opens the season menu');
+  assert.match(ui, /body\.tv \.cwAct,body\.tv \.epMenuBtn,body\.tv \.cardMenuBtn\{display:none!important\}/,
+    'the web ⋯ buttons are hidden on TV (long-press OK is the TV path)');
+  assert.match(ui, /if \(S\.view === 'detail'\) \{ if \(ret && ret\.isConnected\) applyFocus\(ret, false\); return; \}/,
+    'closing the action menu on the detail page hands focus back to the cover it opened from');
   assert.match(ui, /function epTarget\(show, sNum, eNum, resume\) \{[\s\S]+const loc = S\.localMap && S\.localMap\[item\.key\];[\s\S]+return loc \? \{ \.\.\.item, _local: loc \} : item;/,
     'the main TV detail Play/Resume target should carry local playback for owned episodes');
   assert.match(ui, /function pickNextUp\(show, seasons\) \{[\s\S]+const localEpisodes = localEpisodesForShow\(show\);[\s\S]+if \(localEpisodes\.length\) \{[\s\S]+const nextLocal = localEpisodes\.find\(\(ep\) => !\(wm\[ep\.key\] && wm\[ep\.key\]\.watched\)\)[\s\S]+target: epTarget\(show, nextLocal\.s, nextLocal\.e, 0\)/,
@@ -949,6 +965,10 @@ test('subtitle startup preference contract: admin can toggle built-in captions',
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   const playerMap = fs.readFileSync(path.join(__dirname, '..', 'docs-player-regression-map.md'), 'utf8');
   const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
+  // Native Up Next card is compact/unobtrusive (owner: smaller, don't cover the screen): tight
+  // padding, a narrower title column, and reduced type sizes — still just Play Next + Dismiss.
+  assert.match(android, /private View buildNativeUpNextCard\(\) \{[\s\S]+card\.setPadding\(dp\(13\), dp\(10\), dp\(13\), dp\(11\)\);[\s\S]+nativeUpNextTitle\.setTextSize\(14\.5f\);[\s\S]+new LinearLayout\.LayoutParams\(dp\(232\), ViewGroup\.LayoutParams\.WRAP_CONTENT\)\);/,
+    'the native Up Next card uses the compact padding + narrow title column');
   const webHousekeepingStart = ui.indexOf('function startWebPlayerHousekeeping(mount, it) {');
   const webHousekeepingEnd = ui.indexOf('function playbackStartKind(mount)', webHousekeepingStart);
   assert.ok(webHousekeepingStart >= 0 && webHousekeepingEnd > webHousekeepingStart, 'web player housekeeping function should be present');
