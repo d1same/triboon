@@ -41,7 +41,10 @@ ArchitecturesInstallIn64BitMode=x64compatible
 ; Managing the SCM (service) and the firewall requires an elevated install.
 PrivilegesRequired=admin
 MinVersion=10.0
-UninstallDisplayIcon={app}\node.exe
+; Triboon logo everywhere Windows shows an icon: the setup .exe itself + the Apps & features /
+; Add-Remove-Programs entry (was pointing at node.exe, which showed the Node.js logo).
+UninstallDisplayIcon={app}\triboon.ico
+SetupIconFile=triboon.ico
 WizardStyle=modern
 
 [Languages]
@@ -49,6 +52,14 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
 Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+; Triboon logo, installed alongside the app so the uninstall entry + Start Menu shortcut can use it.
+Source: "triboon.ico"; DestDir: "{app}"; Flags: ignoreversion
+
+[Icons]
+; The server is a background service (no app window), so the branded Start Menu entry just opens the
+; dashboard in the browser. explorer.exe re-dispatches the URL as the logged-in user.
+Name: "{group}\Open Triboon"; Filename: "{win}\explorer.exe"; Parameters: "http://localhost:7777"; IconFilename: "{app}\triboon.ico"; Comment: "Open the Triboon dashboard"
+Name: "{group}\Uninstall Triboon"; Filename: "{uninstallexe}"
 
 [Dirs]
 ; User data + logs under ProgramData. uninsneveruninstall keeps the encrypted settings, watch

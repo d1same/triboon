@@ -14,6 +14,10 @@
   |
   <a href="https://github.com/d1same/triboon/releases/latest/download/triboon.apk">Android APK</a>
   |
+  <a href="https://github.com/d1same/triboon/releases/latest/download/Triboon-Windows-Server.exe">Windows server</a>
+  |
+  <a href="https://github.com/d1same/triboon/releases/latest/download/Triboon-Windows-Client.exe">Windows client</a>
+  |
   <a href="#quick-start">Quick start</a>
   |
   <a href="#unraid">Unraid</a>
@@ -84,6 +88,9 @@ Plain Node also works when Node 24+ is installed:
 node server/index.js
 ```
 
+On Windows, the one-click [Windows](#windows) installer sets this up as an
+auto-start service - no Docker or Node install required.
+
 ffmpeg is optional but strongly recommended. Without ffmpeg, some browser or
 device combinations may need external-player handoff instead of in-app remux or
 transcode.
@@ -109,6 +116,42 @@ triboon-vX.Y.Z.apk
 
 The APK filename does not control Android updates. Android accepts an update
 when the package id and signing key match and the new `versionCode` is higher.
+
+## Windows
+
+Two one-click Windows builds ship on every release. Each has a stable "latest"
+download plus a versioned copy you can pin or roll back to.
+
+### Server (host Triboon on Windows)
+
+A self-contained installer that bundles the Node 24 runtime, ffmpeg/ffprobe,
+yt-dlp, and alass, registers Triboon as an auto-start Windows service, and opens
+the LAN firewall on the private and domain profiles only. When it finishes you
+configure everything in the browser at `http://localhost:7777`, exactly like the
+Unraid setup - other devices reach it at `http://<pc-name-or-ip>:7777`.
+
+```text
+https://github.com/d1same/triboon/releases/latest/download/Triboon-Windows-Server.exe
+```
+
+### Client (native Windows app)
+
+A native window that connects to any Triboon server by address and plays through
+the built-in browser engine with GPU-accelerated decode. Point it at the same
+address you would open in a browser (for example `http://192.168.1.20:7777`).
+
+```text
+https://github.com/d1same/triboon/releases/latest/download/Triboon-Windows-Client.exe
+```
+
+Both installers are currently unsigned, so Windows SmartScreen shows a warning
+on first run - choose **More info -> Run anyway**. Each release also keeps
+versioned copies for history and rollback:
+
+```text
+Triboon-Windows-Server-vX.Y.Z.exe
+Triboon-Windows-Client-vX.Y.Z.exe
+```
 
 ## Unraid
 
@@ -200,6 +243,10 @@ If a current external Gradle is not installed, use the pinned wrapper from the
 - `web/index.html` - the single-file web UI used by browser, desktop wrapper,
   and Android WebView shell.
 - `android/` - Android TV shell with D-pad bridge and native Media3/ExoPlayer.
+- `clients/windows-px8/` - native Windows client (Tauri shell that loads the
+  server UI; GPU-accelerated playback).
+- `installer/windows/` - one-click Windows server installer (Inno Setup + service
+  wrapper); build with `installer/windows/build-installer.ps1`.
 - `unraid/` - Unraid template.
 - `docs-architecture.md` - deeper architecture and data-flow notes.
 - `docs-player-regression-map.md` - player behavior contracts and regression
