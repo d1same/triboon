@@ -244,6 +244,12 @@ public class MainActivity extends Activity {
     private boolean nativeTriedFallback = false;
     private boolean nativeHasNext = false;
     private boolean nativeHasQualityChoices = false;
+    // Latch CC/audio availability per playback: a server-seek (remux/transcode) respawns the
+    // stream and the track options momentarily CLEAR then repopulate — without the latch the
+    // CC/audio/quality buttons dimmed→undimmed on every skip ("buttons keep flashing") and a
+    // focused button could lose focusability mid-flap, bouncing focus ("jumping around").
+    private boolean nativeCcOptionsLatch = false;
+    private boolean nativeAudioOptionsLatch = false;
     private final java.util.ArrayList<NativeEpisode> nativeEpisodes = new java.util.ArrayList<>();
     private int nativeEpisodeIndex = 0;
     private boolean nativeEpisodeStripOpen = false;
@@ -3666,6 +3672,10 @@ public class MainActivity extends Activity {
 
     private void setNativeButtonEnabled(ImageButton b, boolean enabled) {
         if (b == null) return;
+        // No-op when the state is unchanged: updateNativeChrome ticks every second, and
+        // rebuilding the background drawable + icon per tick per button caused visible repaint
+        // churn on some devices (part of the "buttons keep flashing" report).
+        if (b.isEnabled() == enabled && b.isFocusable() == enabled) return;
         b.setEnabled(enabled);
         b.setClickable(enabled);
         b.setFocusable(enabled);
@@ -4838,8 +4848,13 @@ public class MainActivity extends Activity {
         if (nativeLiveBtn != null) nativeLiveBtn.setVisibility(isLive ? View.VISIBLE : View.GONE);
         renderNativeEpgStrip(); // refresh the live EPG strip (now/next advances) — hides itself for video
         setNativeButtonEnabled(nativeStatsBtn, nativePlayer != null);
-        setNativeButtonEnabled(nativeCcBtn, nativeSubtitleHasOptions());
-        setNativeButtonEnabled(nativeAudioBtn, nativeAudioHasOptions());
+        // Latched: once THIS playback has shown CC/audio options, a transient clear during a
+        // server-seek respawn must not dim the buttons (transiently-empty menus are fine; a
+        // flashing control row is not).
+        nativeCcOptionsLatch = nativeCcOptionsLatch || nativeSubtitleHasOptions();
+        nativeAudioOptionsLatch = nativeAudioOptionsLatch || nativeAudioHasOptions();
+        setNativeButtonEnabled(nativeCcBtn, nativeSubtitleHasOptions() || nativeCcOptionsLatch);
+        setNativeButtonEnabled(nativeAudioBtn, nativeAudioHasOptions() || nativeAudioOptionsLatch);
         setNativeButtonEnabled(nativeQualityBtn, isVideo && nativeHasQualityChoices);
         setNativeButtonEnabled(nativeNextBtn, isVideo && nativeHasNext);
         if (isLive && nativeFavBtn != null) { setNativeButtonEnabled(nativeFavBtn, true); applyNativeFavIcon(); }
@@ -5235,6 +5250,10 @@ public class MainActivity extends Activity {
             } catch (Exception e) {
                 Log.w(TAG, "Subtitles could not load: " + redactNativeLogMessage(e.getMessage()));
                 final boolean definitive = e instanceof NativeSubtitleDefinitiveMiss;
+                // Surface the server's ACTIONABLE reason on the TV instead of a generic toast —
+                // "OpenSubtitles login failed — check the username/password" beats "could not
+                // load" when the fix is a settings field (the server embeds it in the error body).
+                final String reason = nativeSubtitleToastText(e.getMessage());
                 runOnUiThread(() -> {
                     if (token != nativeSubtitleLoadToken) return;
                     if (!definitive && attempt < 2) { // 3 attempts total, 4s then 9s apart
@@ -5245,7 +5264,7 @@ public class MainActivity extends Activity {
                         return;
                     }
                     clearNativeSubtitleOverlay();
-                    if (!silent) Toast.makeText(this, "Subtitles could not load", Toast.LENGTH_SHORT).show();
+                    if (!silent) Toast.makeText(this, reason, Toast.LENGTH_LONG).show();
                 });
             }
         }, "triboon-subtitles").start();
@@ -5253,6 +5272,24 @@ public class MainActivity extends Activity {
 
     private static final class NativeSubtitleDefinitiveMiss extends java.io.IOException {
         NativeSubtitleDefinitiveMiss(String m) { super(m); }
+    }
+
+    // Turn a subtitle-load exception into a user-worthy toast: the server route embeds the real
+    // reason in its error body ("OpenSubtitles login failed — check the username/password…",
+    // "daily download quota reached…"), which reaches us as "subtitle HTTP <status>: <reason>".
+    private String nativeSubtitleToastText(String msg) {
+        String fallback = "Subtitles could not load";
+        if (msg == null) return fallback;
+        int i = msg.indexOf("subtitle HTTP ");
+        if (i < 0) return fallback;
+        int colon = msg.indexOf(": ", i);
+        if (colon < 0) return fallback;
+        String reason = redactNativeLogMessage(msg.substring(colon + 2)).trim();
+        // The snippet is usually the raw JSON error body — pull the "error" field's text out.
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\"error\"\\s*:\\s*\"([^\"]+)\"").matcher(reason);
+        if (m.find()) reason = m.group(1).trim();
+        if (reason.isEmpty() || reason.startsWith("{") || reason.length() < 8) return fallback;
+        return reason.length() > 120 ? reason.substring(0, 119) + "…" : reason;
     }
 
     private int nativeSubtitleReadTimeoutMs(String url) {
@@ -5601,30 +5638,72 @@ public class MainActivity extends Activity {
                 .start();
     }
 
+    // Still images load through ONE small shared pool with an LRU bitmap cache. The old path
+    // spawned a Thread PER episode the moment the strip data arrived — fine for one season
+    // (~10), but the 3-season strip (v2.3.11) meant up to ~60 simultaneous threads + HTTP
+    // connections + bitmap decodes racing the 4K video decoder: GC stalls (the reported player
+    // freeze) and OOM crashes on the Shield. Now: max 3 concurrent loads, only for cards near
+    // the focus (see loadNativeEpisodeStillsAround), and re-opens hit the cache instead of
+    // re-downloading everything.
+    private java.util.concurrent.ExecutorService nativeStillPool;
+    private android.util.LruCache<String, Bitmap> nativeStillCache;
+    private final java.util.WeakHashMap<ImageView, String> nativeStillWant = new java.util.WeakHashMap<>();
+
     private void loadNativeEpisodeStill(ImageView view, String url) {
-        if (url == null || url.isEmpty()) return;
-        new Thread(() -> {
-            Bitmap bm = null;
-            HttpURLConnection c = null;
-            try {
-                c = (HttpURLConnection) new URL(url).openConnection();
-                c.setConnectTimeout(4500);
-                c.setReadTimeout(6000);
-                c.setInstanceFollowRedirects(true);
-                c.setRequestProperty("Accept", "image/*,*/*");
-                // Downsample to RGB_565 + cap bytes (mirrors the backdrop loader). The old path
-                // decoded each still at full-res ARGB_8888 and never disconnected the socket — a
-                // season strip could spike heap by tens of MB and leak keep-alive connections.
-                bm = decodeNativeBackdrop(readLimitedBytes(c.getInputStream(), NATIVE_BACKDROP_MAX_BYTES));
-            } catch (Exception ignored) {
-            } finally {
-                if (c != null) try { c.disconnect(); } catch (Exception ignored2) {}
+        if (view == null || url == null || url.isEmpty()) return;
+        if (nativeStillCache == null) {
+            nativeStillCache = new android.util.LruCache<String, Bitmap>(12 * 1024 * 1024) {
+                @Override protected int sizeOf(String k, Bitmap b) { return b.getByteCount(); }
+            };
+        }
+        nativeStillWant.put(view, url);
+        Bitmap hit = nativeStillCache.get(url);
+        if (hit != null) { view.setImageBitmap(hit); return; }
+        if (nativeStillPool == null) nativeStillPool = java.util.concurrent.Executors.newFixedThreadPool(3, r -> {
+            Thread t = new Thread(r, "TriboonNativeStill");
+            t.setDaemon(true);
+            return t;
+        });
+        nativeStillPool.execute(() -> {
+            Bitmap cached = nativeStillCache.get(url);
+            Bitmap bm = cached;
+            if (bm == null) {
+                HttpURLConnection c = null;
+                try {
+                    c = (HttpURLConnection) new URL(url).openConnection();
+                    c.setConnectTimeout(4500);
+                    c.setReadTimeout(6000);
+                    c.setInstanceFollowRedirects(true);
+                    c.setRequestProperty("Accept", "image/*,*/*");
+                    // Downsample to RGB_565 + cap bytes (mirrors the backdrop loader).
+                    bm = decodeNativeBackdrop(readLimitedBytes(c.getInputStream(), NATIVE_BACKDROP_MAX_BYTES));
+                } catch (Exception ignored) {
+                } finally {
+                    if (c != null) try { c.disconnect(); } catch (Exception ignored2) {}
+                }
+                if (bm != null) nativeStillCache.put(url, bm);
             }
             final Bitmap finalBm = bm;
             if (finalBm != null) runOnUiThread(() -> {
-                if (nativePlayerOpen()) view.setImageBitmap(finalBm);
+                // The strip may have been rebuilt while this loaded — only paint the view that
+                // still wants THIS url (stale bitmaps on recycled cards showed the wrong episode).
+                if (nativePlayerOpen() && url.equals(nativeStillWant.get(view))) view.setImageBitmap(finalBm);
             });
-        }, "TriboonNativeStill").start();
+        });
+    }
+
+    // Load stills only around the focused card — the ones the viewer can actually see — and let
+    // D-pad movement pull the next window in. A 60-episode strip costs a handful of images, not 60.
+    private void loadNativeEpisodeStillsAround(int idx) {
+        if (nativeEpisodeList == null) return;
+        int n = Math.min(nativeEpisodeList.getChildCount(), nativeEpisodes.size());
+        int from = Math.max(0, idx - 4);
+        int to = Math.min(n - 1, idx + 8);
+        for (int i = from; i <= to; i++) {
+            View card = nativeEpisodeList.getChildAt(i);
+            ImageView still = card == null ? null : card.findViewWithTag("nativeEpisodeStill");
+            if (still != null && still.getDrawable() == null) loadNativeEpisodeStill(still, nativeEpisodes.get(i).still);
+        }
     }
 
     private void scrollNativeEpisodeIntoView(View child) {
@@ -5652,6 +5731,10 @@ public class MainActivity extends Activity {
             nativeEpisodeStrip.setAlpha(1f);
             nativeEpisodeStrip.setTranslationY(0f);
             nativeEpisodeStrip.setVisibility(View.GONE);
+            // CLOSED = build nothing. updateNativeEpisodeChoices calls this on every choices
+            // refresh during playback, and building 60 hidden cards (plus their image loads)
+            // each time was pure waste — the strip is rebuilt from nativeEpisodes on open.
+            return;
         }
         if (nativeEpisodes.isEmpty()) return;
         for (int i = 0; i < nativeEpisodes.size(); i++) {
@@ -5679,6 +5762,7 @@ public class MainActivity extends Activity {
                     v.setElevation(0);
                     v.animate().translationY(-dp(3)).setDuration(120).start();
                     scrollNativeEpisodeIntoView(v);
+                    loadNativeEpisodeStillsAround(idx); // D-pad movement pulls the next image window in
                 } else {
                     v.setBackground(nativeEpisodeCardBg(false, nativeEpisodes.get(idx).current));
                     ImageView blurredStill = v.findViewWithTag("nativeEpisodeStill");
@@ -5700,7 +5784,7 @@ public class MainActivity extends Activity {
             still.setClipToOutline(true);
             card.addView(still, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, dp(126)));
-            loadNativeEpisodeStill(still, ep.still);
+            // Stills load LAZILY around the focus (loadNativeEpisodeStillsAround) — never all at once.
 
             TextView label = new TextView(this);
             label.setText((ep.watched ? "WATCHED  " : "") + ep.tag);
@@ -5728,6 +5812,7 @@ public class MainActivity extends Activity {
         }
         if (nativeEpisodeStripOpen) {
             focusNativeEpisode(nativeEpisodeIndex);
+            loadNativeEpisodeStillsAround(nativeEpisodeIndex);
             if (!wasOpen) animateNativeEpisodeStripIn();
         }
     }
@@ -6620,6 +6705,8 @@ public class MainActivity extends Activity {
         nativeStartOffsetMs = 0L;
         nativeHasNext = false;
         nativeHasQualityChoices = false;
+        nativeCcOptionsLatch = false;
+        nativeAudioOptionsLatch = false;
         nativeSubtitleUrl = "";
         nativeSubtitleHostHeader = "";
         nativeSubtitleLang = "";

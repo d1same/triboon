@@ -1948,6 +1948,20 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Android player should parse the shared episode-choice payload and focus the requested current episode');
   assert.match(android, /private boolean handleNativeEpisodeStripKey\(KeyEvent e\) \{[\s\S]+KEYCODE_DPAD_LEFT[\s\S]+focusNativeEpisode\(nativeEpisodeIndex - 1\)[\s\S]+chooseNativeEpisode\(nativeEpisodeIndex\);/,
     'native Android episode strip should handle Left/Right/OK itself');
+  // FREEZE/OOM fix: episode stills must load through the small SHARED pool + LRU cache, only
+  // for cards AROUND the focus — never one-thread-per-episode for the whole (3-season, up to
+  // ~60-card) strip. And a CLOSED strip builds nothing: updateNativeEpisodeChoices refreshes
+  // during playback, and rebuilding 60 hidden cards each time was the crash fuel.
+  assert.match(android, /private java\.util\.concurrent\.ExecutorService nativeStillPool;[\s\S]+new android\.util\.LruCache<String, Bitmap>\(12 \* 1024 \* 1024\)[\s\S]+Executors\.newFixedThreadPool\(3,/,
+    'episode stills load through a 3-thread shared pool with an LRU bitmap cache (no thread-per-episode storm)');
+  assert.match(android, /private void loadNativeEpisodeStillsAround\(int idx\) \{[\s\S]+int from = Math\.max\(0, idx - 4\);[\s\S]+int to = Math\.min\(n - 1, idx \+ 8\);[\s\S]+if \(still != null && still\.getDrawable\(\) == null\) loadNativeEpisodeStill\(/,
+    'stills load lazily in a window around the focused card');
+  assert.match(android, /nativeEpisodeStrip\.setVisibility\(View\.GONE\);[\s\S]{0,400}return;\s*\}\s*if \(nativeEpisodes\.isEmpty\(\)\) return;/,
+    'a closed episode strip builds no cards (choices refreshes during playback must be free)');
+  assert.ok(!android.includes('loadNativeEpisodeStill(still, ep.still);'),
+    'the eager per-card still load inside the render loop is gone');
+  assert.match(android, /url\.equals\(nativeStillWant\.get\(view\)\)\) view\.setImageBitmap\(finalBm\);/,
+    'stale still loads must not paint recycled cards (view-wants-url identity check)');
   assert.match(android, /if \(code == KeyEvent\.KEYCODE_DPAD_DOWN && isNativeControl\(getCurrentFocus\(\)\) && openNativeEpisodeStrip\(\)\) return true;/,
     'native Android Down from the control row should open the episode strip when episode choices exist');
   assert.match(ui, /if \(S\.zone === 'playerCtl' && canOpenPlayerEpisodes\(\)\) return openPlayerEpisodes\(\);/,
@@ -2579,8 +2593,16 @@ test('Android native player: direct source and native chrome stay out of the web
     'native player icons should turn dark when the focused button switches to light mode');
   assert.match(android, /focused[\s\S]+\? new int\[\]\{0xFFEDE8F5, 0xFFD9CBE7\}[\s\S]+: new int\[\]\{0x18F3EFF7, 0x18F3EFF7\}/,
     'native player buttons should use a very transparent fill normally and full light fill while focused');
-  assert.match(android, /setNativeButtonEnabled\(nativeCcBtn, nativeSubtitleHasOptions\(\)\);[\s\S]+setNativeButtonEnabled\(nativeAudioBtn, nativeAudioHasOptions\(\)\);[\s\S]+setNativeButtonEnabled\(nativeQualityBtn, isVideo && nativeHasQualityChoices\);/,
-    'native CC/audio/HD buttons should be disabled when no real options exist');
+  // CC/audio enabled-state is LATCHED per playback: a server-seek (remux/transcode) respawns the
+  // stream and options momentarily clear — without the latch the buttons dimmed→undimmed on every
+  // skip ("buttons keep flashing") and a focused button could bounce focus. Fresh playbacks with
+  // genuinely no options still start disabled (latch resets with the playback).
+  assert.match(android, /nativeCcOptionsLatch = nativeCcOptionsLatch \|\| nativeSubtitleHasOptions\(\);[\s\S]+setNativeButtonEnabled\(nativeCcBtn, nativeSubtitleHasOptions\(\) \|\| nativeCcOptionsLatch\);[\s\S]+setNativeButtonEnabled\(nativeAudioBtn, nativeAudioHasOptions\(\) \|\| nativeAudioOptionsLatch\);[\s\S]+setNativeButtonEnabled\(nativeQualityBtn, isVideo && nativeHasQualityChoices\);/,
+    'native CC/audio buttons stay enabled through transient option clears (latched per playback); quality/next still gate on real options');
+  assert.match(android, /nativeCcOptionsLatch = false;\s*nativeAudioOptionsLatch = false;/,
+    'the option latches reset when playback state resets');
+  assert.match(android, /if \(b\.isEnabled\(\) == enabled && b\.isFocusable\(\) == enabled\) return;/,
+    'unchanged button state is a no-op (the 1Hz chrome tick must not rebuild backgrounds)');
   assert.match(android, /if \(nativeCcBtn != null\) nativeCcBtn\.setVisibility\(isLive \? View\.GONE : View\.VISIBLE\);[\s\S]+if \(nativeFavBtn != null\) nativeFavBtn\.setVisibility\(isLive \? View\.VISIBLE : View\.GONE\);/,
     'live IPTV native chrome should hide CC/audio/quality/next and show only the favorite toggle');
   assert.match(ui, /window\.__tvLiveFavToggle = \(\) => \{ toggleLiveFavorite\(\); \};/,
@@ -2927,8 +2949,13 @@ test('Android native player: direct source and native chrome stay out of the web
   // and only MANUAL picks may toast, after retries are exhausted.
   assert.match(android, /private void loadNativeSubtitleOverlay\(String url, boolean silent\)/,
     'the native subtitle loader distinguishes silent startup loads from loud manual picks');
-  assert.match(android, /if \(status == 404\) throw new NativeSubtitleDefinitiveMiss\(fail\.getMessage\(\)\);[\s\S]+if \(!definitive && attempt < 2\) \{[\s\S]+attempt == 0 \? 4000 : 9000\);[\s\S]+if \(!silent\) Toast\.makeText\(this, "Subtitles could not load", Toast\.LENGTH_SHORT\)\.show\(\);/,
+  assert.match(android, /if \(status == 404\) throw new NativeSubtitleDefinitiveMiss\(fail\.getMessage\(\)\);[\s\S]+if \(!definitive && attempt < 2\) \{[\s\S]+attempt == 0 \? 4000 : 9000\);[\s\S]+if \(!silent\) Toast\.makeText\(this, reason, Toast\.LENGTH_LONG\)\.show\(\);/,
     'native subtitle loads retry transient failures (4s/9s), stop on a definitive 404, and only toast when not silent');
+  // The toast must carry the SERVER's actionable reason ("OpenSubtitles login failed — check the
+  // username/password…") instead of a generic "could not load" — the fix is usually a settings
+  // field, and the TV is where the owner sees it. Extracted from the JSON error body, redacted.
+  assert.match(android, /private String nativeSubtitleToastText\(String msg\) \{[\s\S]+msg\.indexOf\("subtitle HTTP "\);[\s\S]+redactNativeLogMessage\(msg\.substring\(colon \+ 2\)\)[\s\S]+if \(m\.find\(\)\) reason = m\.group\(1\)\.trim\(\);[\s\S]+reason\.length\(\) > 120/,
+    'the native subtitle toast surfaces the server error-body reason (redacted, length-capped)');
   assert.match(android, /loadNativeSubtitleOverlay\(nativeSubtitleUrl, j\.optBoolean\("subtitleStartup", false\)\);/,
     'the bridge payload flag routes startup loads into the silent path');
   assert.match(ui, /subtitleStartup: true, \/\/ native side: fail silently \+ retry/,
