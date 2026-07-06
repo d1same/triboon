@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Triboon PX8 — Connect</title>
+<style>
+  :root{ --ink:#0B0812; --surface:#161020; --raise:#221934; --text:#F3EFF7; --muted:#9B8FAD;
+    --coral:#FB8B3C; --magenta:#C13BD6; --line:rgba(255,255,255,.10); --field:rgba(11,8,18,.72); }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{background:radial-gradient(120% 120% at 100% 0%,rgba(193,59,214,.18),transparent 60%),var(--ink);
+    color:var(--text);font:400 15px/1.5 system-ui,"Segoe UI",sans-serif;display:grid;place-items:center;height:100vh}
+  .card{width:min(420px,92vw);background:linear-gradient(180deg,rgba(34,25,52,.7),rgba(22,16,32,.94));
+    border:1px solid var(--line);border-radius:18px;padding:30px 28px;box-shadow:0 30px 80px rgba(0,0,0,.5)}
+  .brand{display:flex;align-items:center;gap:11px;margin-bottom:6px}
+  .logo{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,var(--magenta),var(--coral));
+    display:grid;place-items:center;font:800 18px "Segoe UI";color:#fff}
+  .brand h1{font:800 19px "Segoe UI";letter-spacing:-.01em}
+  .brand .px8{font:700 10px ui-monospace,monospace;color:var(--coral);border:1px solid var(--coral);
+    border-radius:6px;padding:2px 6px;letter-spacing:.12em}
+  .sub{color:var(--muted);font-size:13.5px;margin:10px 0 22px}
+  label{display:block;font:700 11px ui-monospace,monospace;letter-spacing:.1em;color:var(--muted);
+    text-transform:uppercase;margin-bottom:7px}
+  input{width:100%;background:var(--field);border:1px solid var(--line);border-radius:11px;color:var(--text);
+    padding:13px 14px;font-size:15px;outline:none;transition:border-color .15s}
+  input:focus{border-color:var(--coral)}
+  .row{margin-bottom:16px}
+  button{width:100%;border:0;border-radius:11px;padding:13px;font:700 15px "Segoe UI";cursor:pointer;
+    background:var(--coral);color:#1D0E04;transition:filter .15s}
+  button:hover{filter:brightness(1.08)}
+  button:disabled{opacity:.5;cursor:default}
+  .hint{margin-top:14px;font-size:12.5px;color:var(--muted);min-height:18px}
+  .hint.err{color:#ff8d8d}
+  .qc{margin-top:18px;padding-top:16px;border-top:1px solid var(--line);font-size:12.5px;color:var(--muted)}
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="brand"><span class="logo">T</span><h1>Triboon</h1><span class="px8">PX8</span></div>
+    <div class="sub">Native Windows player. Enter your Triboon server address to connect — the same
+      server you set up in the browser.</div>
+    <div class="row">
+      <label for="server">Server address</label>
+      <input id="server" type="text" placeholder="http://192.168.1.20:7777" autocomplete="off" spellcheck="false">
+    </div>
+    <button id="go">Connect</button>
+    <div class="hint" id="hint"></div>
+    <div class="qc">Tip: it's the same address you open in a browser. Include the port (default
+      <b>7777</b>). Quick Connect codes are entered after connecting.</div>
+  </div>
+<script>
+  // Normalize what a person is likely to type into a valid Triboon base URL:
+  //  "192.168.1.20"      → http://192.168.1.20:7777
+  //  "192.168.1.20:7777" → http://192.168.1.20:7777
+  //  "https://host/path/"→ https://host/path   (trailing slash trimmed)
+  function normalizeServer(raw) {
+    let s = String(raw || '').trim();
+    if (!s) return '';
+    // A scheme that isn't http/https (ftp://, file://, …) is not a Triboon server — reject rather
+    // than blindly prepend http:// and mangle it. Bare host/host:port gets http:// added.
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) { if (!/^https?:\/\//i.test(s)) return ''; }
+    else s = 'http://' + s;
+    let u;
+    try { u = new URL(s); } catch { return ''; }
+    if (!/^https?:$/.test(u.protocol)) return '';
+    if (!u.port && u.protocol === 'http:' && /^(\d{1,3}\.){3}\d{1,3}$/.test(u.hostname)) u.port = '7777';
+    return u.origin + (u.pathname === '/' ? '' : u.pathname.replace(/\/$/, ''));
+  }
+  const $ = (id) => document.getElementById(id);
+  const hint = $('hint'), input = $('server'), go = $('go');
+  function setErr(m) { hint.textContent = m; hint.classList.add('err'); }
+  function setMsg(m) { hint.textContent = m; hint.classList.remove('err'); }
+  // Prefill the last-used server if the native shell handed one in.
+  try { const last = window.__PX8 && window.__PX8.lastServer; if (last) input.value = last; } catch {}
+  async function connect() {
+    const server = normalizeServer(input.value);
+    if (!server) return setErr('That doesn’t look like a valid address. Example: http://192.168.1.20:7777');
+    go.disabled = true; setMsg('Connecting to ' + server + ' …');
+    try {
+      // The native shell (Tauri command) verifies /api/server, remembers the address, and loads the
+      // Triboon UI. In a plain browser (design preview) __PX8 is absent — just validate + echo.
+      if (window.__PX8 && window.__PX8.connect) {
+        await window.__PX8.connect(server);   // native takes over from here
+      } else {
+        // Preview fallback: prove reachability without the native layer.
+        const r = await fetch(server + '/api/server', { method: 'GET' }).catch(() => null);
+        if (r && r.ok) setMsg('Server reachable ✓ (native shell would load it now)');
+        else setErr('Could not reach ' + server + ' — check the address, port, and that the server is running.');
+      }
+    } catch (e) {
+      setErr((e && e.message) || 'Connection failed.');
+    } finally { go.disabled = false; }
+  }
+  go.addEventListener('click', connect);
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') connect(); });
+  input.focus();
+</script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+{
+  "name": "triboon-px8",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Triboon PX8 — native Windows GPU client (Tauri + libmpv). Phase-1 scaffold.",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2"
+  }
+}

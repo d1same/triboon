@@ -1,0 +1,28 @@
+[package]
+name = "triboon-px8"
+version = "0.1.0"
+description = "Triboon PX8 — native Windows GPU client"
+edition = "2021"
+rust-version = "1.77"
+
+# PHASE-1 SCAFFOLD — pin exact versions and run `cargo update` / `cargo check` on a toolchain
+# machine before relying on these. Nothing here has been compiled yet (see README).
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# libmpv2 wraps the system libmpv (libmpv-2.dll). GPU decode + HDR/audio passthrough live here.
+# Enabled from phase P2; kept behind a feature so P1 (window + web UI) builds without libmpv present.
+libmpv2 = { version = "4", optional = true }
+
+[features]
+default = []
+player = ["dep:libmpv2"]
+
+[profile.release]
+strip = true
+lto = true

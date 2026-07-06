@@ -1,0 +1,7 @@
+# Rust / Tauri build output
+src-tauri/target/
+# node dev deps for the Tauri CLI
+node_modules/
+# bundled native runtime shipped at package time, not committed (license + size)
+src-tauri/libmpv-2.dll
+dist/
