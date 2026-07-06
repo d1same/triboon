@@ -126,9 +126,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Build from the triggering ref: on a vX.Y.Z tag that IS the tag (tags are cut from main, so
+      # they contain clients/windows-px8); on manual dispatch it's the selected branch (main). Do NOT
+      # pin to an input tag — old tags predate clients/windows-px8 and the checkout would lack the dir.
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref_name }}
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -143,18 +144,30 @@ jobs:
       - name: Build PX8 installer (NSIS)
         working-directory: clients/windows-px8
         run: npm run tauri build
-      - name: Attach installer to the release
+      - name: Locate installer
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           # Tauri NSIS output: "Triboon PX8_<ver>_x64-setup.exe" (productName has a space) — glob it.
           setup=$(ls clients/windows-px8/src-tauri/target/release/bundle/nsis/*-setup.exe | head -1)
           test -n "$setup" || { echo "no NSIS installer produced"; exit 1; }
           mkdir -p dist
-          cp "$setup" "dist/Triboon-PX8-Setup-${TAG}.exe"
           cp "$setup" dist/Triboon-PX8-Setup.exe
+      # Always publish a downloadable build artifact — lets a manual dispatch produce a test .exe
+      # without attaching to (and misrepresenting) an existing release.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Triboon-PX8-Setup
+          path: dist/Triboon-PX8-Setup.exe
+      # On a real vX.Y.Z tag, ALSO attach to that release: versioned name + stable "latest" alias so
+      # /releases/latest/download/Triboon-PX8-Setup.exe always resolves to the newest client.
+      - name: Attach installer to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cp dist/Triboon-PX8-Setup.exe "dist/Triboon-PX8-Setup-${TAG}.exe"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/Triboon-PX8-Setup*.exe --clobber
           else
