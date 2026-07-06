@@ -1398,9 +1398,170 @@ function sendIptvNativeError(res, status, reason) {
   });
   res.end(body);
 }
+// ---- shared live upstream fan-out (native TS path) ----
+// ONE provider connection per (channel, variant), shared by every native viewer of that channel:
+// N televisions on the same game cost ONE upstream connection instead of N — the provider sees
+// exactly what a single-connection customer looks like, and re-joins/zap-backs within the linger
+// window start instantly off the ring buffer with no new provider handshake. Scope: continuous
+// byte streams only (TS). Playlist bodies (m3u8) are never shared — their segment fetches don't
+// flow through this proxy, so there is nothing to fan out. Web remux viewers keep per-viewer
+// upstreams for now (follow-up: tee this hub into the ts-pipe remux inputs).
+const IPTV_SHARE_RING_MAX_BYTES = 3 * 1024 * 1024; // ~1-3s of a typical live TS: instant joins
+const IPTV_SHARE_LINGER_MS = 12000;                // zap-away grace before the upstream closes
+const iptvSharedHubs = new Map(); // shareKey -> hub
+function iptvShareKey(meta, cid, alt) {
+  return `${Number.isInteger(meta.idx) ? meta.idx : 'x'}:${cid || ''}:${alt ? 1 : 0}`;
+}
+function createIptvLiveHub(shareKey, label) {
+  const hub = {
+    shareKey, label,
+    state: 'starting', // starting -> live -> closed
+    subs: new Set(),   // { res, slot, stallTimer, backpressured }
+    headers: null,
+    status: 200,
+    upstream: null,    // the provider response stream (owned by the hub once live)
+    upstreamReq: null, // the provider request (destroyed on close)
+    ring: [],          // recent chunks for instant join backfill
+    ringBytes: 0,
+    lingerTimer: null,
+    closed: false,
+    joinable() { return !this.closed && (this.state === 'starting' || this.state === 'live'); },
+    subscribe(ctx, slot, subLabel) {
+      const sub = { res: ctx.res, req: ctx.req, slot, stallTimer: null, label: subLabel };
+      this.subs.add(sub);
+      if (this.lingerTimer) { clearTimeout(this.lingerTimer); this.lingerTimer = null; }
+      const drop = (reason) => this.unsubscribe(sub, reason);
+      slot.setCloser((reason) => drop(reason));
+      ctx.req.once('close', () => drop('client closed'));
+      ctx.res.once('close', () => drop('client closed'));
+      ctx.res.once('error', () => drop('client error'));
+      if (this.state === 'live') {
+        try {
+          ctx.res.writeHead(this.status, this.headers);
+          for (const chunk of this.ring) ctx.res.write(chunk); // backfill → instant first frame
+          this._armStall(sub);
+        } catch { this.unsubscribe(sub, 'write failed'); }
+      }
+      return sub;
+    },
+    unsubscribe(sub, reason = 'closed') {
+      if (!this.subs.has(sub)) return;
+      this.subs.delete(sub);
+      if (sub.stallTimer) { clearTimeout(sub.stallTimer); sub.stallTimer = null; }
+      try { if (!sub.res.destroyed && !sub.res.writableEnded) sub.res.destroy(); } catch {}
+      sub.slot.done(reason);
+      // Only a LIVE hub self-manages its lifecycle here — while 'starting', the opener request
+      // owns cleanup (a queued joiner bailing must not close the hub under the opener's feet).
+      if (this.subs.size === 0 && !this.closed && this.state === 'live') {
+        // Last viewer left. A RETUNE (or shutdown) closes the upstream IMMEDIATELY — the viewer
+        // is about to open ANOTHER channel, and on a 1-connection provider the old stream must be
+        // gone before the new one opens (today's zap contract, unchanged). Anything else (socket
+        // drop, ExoPlayer reconnect, brief app hiccup) gets a short linger so the rejoin reuses
+        // this upstream with an instant ring-buffer start instead of a fresh provider handshake.
+        if (/retuned|shutdown/i.test(String(reason || ''))) return this.close(reason);
+        this.lingerTimer = setTimeout(() => this.close('idle (no viewers)'), IPTV_SHARE_LINGER_MS);
+        if (this.lingerTimer.unref) this.lingerTimer.unref();
+      }
+    },
+    // Per-subscriber dead-client watchdog (same rationale as the solo pump): a stalled client
+    // only ever drops ITSELF — the shared upstream keeps flowing for everyone else.
+    _armStall(sub) {
+      if (sub.stallTimer) clearTimeout(sub.stallTimer);
+      sub.stallTimer = setTimeout(() => this.unsubscribe(sub, 'client stalled'), LIVE_REMUX_IDLE_TIMEOUT_MS);
+      if (sub.stallTimer.unref) sub.stallTimer.unref();
+    },
+    attach(upstreamRes, upstreamReq, status, headers) {
+      if (this.closed) { try { upstreamReq.destroy(); } catch {} return; }
+      this.state = 'live';
+      this.upstream = upstreamRes;
+      this.upstreamReq = upstreamReq;
+      this.status = status;
+      this.headers = { ...headers };
+      // FINITE bodies (an HLS playlist, a ranged response) are snapshots, not streams: the subs
+      // queued during startup all get the same bytes (they arrived milliseconds apart — fine for
+      // a playlist), but LATE joins are wrong (live playlists go stale in seconds), so the hub
+      // leaves the share map immediately and each later viewer fetches fresh. Continuous TS keeps
+      // the hub joinable and drops length headers so late joiners get an unbounded stream.
+      this.finite = !!this.headers['content-length'] || status === 206
+        || /mpegurl/i.test(String(this.headers['content-type'] || ''));
+      if (this.finite) iptvSharedHubs.delete(this.shareKey);
+      else { delete this.headers['content-length']; delete this.headers['content-range']; }
+      for (const sub of [...this.subs]) {
+        try {
+          sub.res.writeHead(this.status, this.headers);
+          this._armStall(sub);
+        } catch { this.unsubscribe(sub, 'write failed'); }
+      }
+      // Headers landed but no bytes ever arrive → tear everyone down; the players re-request
+      // (this replaces the solo path's post-headers first-byte timeout).
+      const firstByte = setTimeout(() => this.close('no first byte'), IPTV_NATIVE_FIRST_BYTE_TIMEOUT_MS);
+      if (firstByte.unref) firstByte.unref();
+      upstreamRes.once('data', () => clearTimeout(firstByte));
+      upstreamRes.on('data', (chunk) => {
+        if (this.closed) return;
+        this.ring.push(chunk);
+        this.ringBytes += chunk.length;
+        while (this.ringBytes > IPTV_SHARE_RING_MAX_BYTES && this.ring.length > 1) {
+          this.ringBytes -= this.ring.shift().length;
+        }
+        for (const sub of [...this.subs]) {
+          if (sub.res.destroyed) { this.unsubscribe(sub, 'client closed'); continue; }
+          try {
+            // Never pause the shared upstream for one slow client: its socket buffers (bounded
+            // by the stall watchdog dropping it) while everyone else stays real-time.
+            if (sub.res.write(chunk)) this._armStall(sub);
+          } catch { this.unsubscribe(sub, 'write failed'); }
+        }
+      });
+      upstreamRes.on('end', () => {
+        for (const sub of [...this.subs]) { try { if (!sub.res.destroyed) sub.res.end(); } catch {} }
+        this.close('upstream ended');
+      });
+      upstreamRes.on('error', () => this.close('upstream error'));
+    },
+    failAll(respond) {
+      // Startup failed before any bytes: every queued viewer gets the SAME error response the
+      // solo path would have produced (negative cache handling already ran in the opener).
+      this.closed = true;
+      iptvSharedHubs.delete(this.shareKey);
+      for (const sub of [...this.subs]) {
+        this.subs.delete(sub);
+        if (sub.stallTimer) clearTimeout(sub.stallTimer);
+        try { respond(sub.res); } catch {}
+        sub.slot.done('startup failed');
+      }
+    },
+    close(reason = 'closed') {
+      if (this.closed) return;
+      this.closed = true;
+      if (this.lingerTimer) clearTimeout(this.lingerTimer);
+      iptvSharedHubs.delete(this.shareKey);
+      try { if (this.upstreamReq) { this.upstreamReq.removeAllListeners('error'); this.upstreamReq.on('error', () => {}); this.upstreamReq.destroy(); } } catch {}
+      for (const sub of [...this.subs]) this.unsubscribe(sub, reason);
+      if (reason !== 'idle (no viewers)') console.log(`[iptv share] ${this.label} hub closed (${reason})`);
+    },
+  };
+  return hub;
+}
+
 function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
   const slot = beginIptvLiveSlot(ctx, meta);
   slot.kind = 'native-proxy'; // Node owns the upstream; eviction destroys it synchronously
+  // Shared fan-out: if this channel is ALREADY flowing (or starting) for another viewer, join
+  // its hub — no new provider connection, ring-buffer backfill = instant start. Otherwise this
+  // request becomes the hub's opener: it runs the full hardened open flow below and hands the
+  // upstream to the hub on success, so late same-channel viewers join instead of re-opening.
+  const shareCid = ctx.url && ctx.url.searchParams ? String(ctx.url.searchParams.get('cid') || '') : '';
+  const shareKey = iptvShareKey(meta, shareCid, !!meta.alt);
+  const existingHub = iptvSharedHubs.get(shareKey);
+  if (existingHub && existingHub.joinable()) {
+    existingHub.subscribe(ctx, slot, iptvNativeLogLabel(meta));
+    console.log(`[iptv share] ${iptvNativeLogLabel(meta)} joined shared upstream (${existingHub.subs.size} viewer(s))`);
+    return;
+  }
+  const hub = createIptvLiveHub(shareKey, iptvNativeLogLabel(meta));
+  iptvSharedHubs.set(shareKey, hub);
+  let handedOff = false; // once the hub owns the upstream, the solo teardown below must not touch it
   let up = null;
   let done = false;
   let delayTimer = null;
@@ -1425,12 +1586,16 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
     if (delayTimer) clearTimeout(delayTimer);
     clearFirstByteTimer();
     clearClientStall();
+    if (handedOff) return; // the hub owns the upstream + this client now; solo teardown is over
     try { if (up) up.destroy(err || new Error(`live stream ${reason}`)); } catch {}
     if (/client closed|retuned|shutdown/i.test(String(reason || ''))) {
       try { if (ctx.req.socket && !ctx.req.socket.destroyed) ctx.req.socket.destroy(); } catch {}
       try { if (!ctx.res.destroyed && !ctx.res.writableEnded) ctx.res.destroy(); } catch {}
     }
     slot.done(reason);
+    // The opener died before the upstream went live — any viewers QUEUED on the hub would hang
+    // forever; give them a retryable error (their players re-request and one becomes the opener).
+    hub.failAll((res) => { if (!res.headersSent && !res.destroyed) sendIptvNativeError(res, 503, 'live stream restarting — retry'); });
     ctx.req.off('close', onClientClose);
     ctx.req.off('aborted', onClientClose);
     ctx.res.off('close', onClientClose);
@@ -1438,11 +1603,17 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
   };
   const onClientClose = () => stop('client closed');
   const fail = (status, body) => {
+    const respond = (res) => {
+      if (!res.headersSent && !res.destroyed) {
+        if (typeof body === 'string') send(res, status, { error: body });
+        else sendIptvNativeError(res, body.status || status || 502, body.reason || 'live stream unavailable');
+      }
+    };
+    // Queued same-channel viewers get the SAME verdict the opener got (before stop() hands them
+    // the generic retry error — a real upstream failure is more useful than "restarting").
+    hub.failAll(respond);
     stop('failed');
-    if (!ctx.res.headersSent && !ctx.res.destroyed) {
-      if (typeof body === 'string') send(ctx.res, status, { error: body });
-      else sendIptvNativeError(ctx.res, body.status || status || 502, body.reason || 'live stream unavailable');
-    }
+    respond(ctx.res);
   };
   slot.setCloser((reason) => {
     stop(reason, new Error(`live stream ${reason}`));
@@ -1602,30 +1773,23 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
       for (const h of ['content-length', 'content-range', 'accept-ranges']) {
         if (r.headers[h]) out[h] = r.headers[h];
       }
-      ctx.res.writeHead(r.statusCode || 502, out);
-      firstByteTimer = setTimeout(() => {
-        if (retryPinnedAddress('startup timeout')) return;
-        markPinFailure();
-        fail(504, { status: 504, reason: 'live stream startup timeout' });
-      }, IPTV_NATIVE_FIRST_BYTE_TIMEOUT_MS);
-      firstByteTimer.unref();
-      r.once('data', clearFirstByteTimer);
-      r.on('end', () => {
-        if (!ctx.res.destroyed && !ctx.res.writableEnded) ctx.res.end();
-        stop('upstream ended');
-      });
-      // Manual pump (instead of r.pipe) so the dead-client watchdog can see whether the client is
-      // actually draining: re-arm on a write that keeps up or a drain, never while backpressured.
-      armClientStall();
-      r.on('data', (chunk) => {
-        if (done) return;
-        if (ctx.res.destroyed) { stop('client closed'); return; }
-        if (ctx.res.write(chunk)) armClientStall();
-        else {
-          r.pause();
-          ctx.res.once('drain', () => { if (!done && !ctx.res.destroyed) { armClientStall(); try { r.resume(); } catch {} } });
-        }
-      });
+      // HANDOFF: the shared hub owns the upstream from here. This viewer becomes subscriber #1
+      // (subscribe rewires their slot closer to hub.unsubscribe), every queued/later same-channel
+      // viewer is fanned the same bytes, and the solo teardown machinery above stands down —
+      // stop() no-ops via handedOff, and the upstream lifecycle (per-subscriber stall watchdogs,
+      // first-byte watchdog, linger, last-leave close) belongs to the hub.
+      clearFirstByteTimer();
+      clearClientStall();
+      handedOff = true;
+      done = true;
+      const upstreamReq = up;
+      up = null;
+      ctx.req.off('close', onClientClose);
+      ctx.req.off('aborted', onClientClose);
+      ctx.res.off('close', onClientClose);
+      ctx.res.off('error', onClientClose);
+      hub.subscribe(ctx, slot, label);
+      hub.attach(r, upstreamReq, r.statusCode || 200, out);
     });
     slot.setCloser((reason) => {
       stop(reason, new Error(`live stream ${reason}`));

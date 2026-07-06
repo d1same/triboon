@@ -1273,8 +1273,16 @@ test('Android native player: direct source and native chrome stay out of the web
     'the IPTV native proxy arms a dead-client stall watchdog so a half-closed socket cannot pin a provider connection');
   assert.match(idxSrc, /ctx\.res\.once\('error', onClientClose\);/,
     'the IPTV native proxy handles a client socket error (pipe alone does not) so the upstream is reclaimed');
-  assert.match(idxSrc, /if \(ctx\.res\.write\(chunk\)\) armClientStall\(\);/,
-    'the stall watchdog is re-armed only when the client is actually draining, not while backpressured');
+  // The live pump moved into the SHARED hub (one upstream fanned to every same-channel viewer);
+  // the dead-client protection is per-subscriber there — a stalled client drops ITSELF, never
+  // the shared upstream. Same watchdog rationale, fan-out shape (behavior proven end-to-end by
+  // the iptv-cache fan-out test: share/late-join/survivor/last-retune-closes).
+  assert.match(idxSrc, /_armStall\(sub\) \{[\s\S]+setTimeout\(\(\) => this\.unsubscribe\(sub, 'client stalled'\), LIVE_REMUX_IDLE_TIMEOUT_MS\);/,
+    'the shared hub arms a PER-SUBSCRIBER stall watchdog so one dead client cannot pin or drop the shared upstream');
+  assert.match(idxSrc, /if \(sub\.res\.write\(chunk\)\) this\._armStall\(sub\);/,
+    'the per-subscriber watchdog is re-armed only when that client is actually draining');
+  assert.match(idxSrc, /if \(\/retuned\|shutdown\/i\.test\(String\(reason \|\| ''\)\)\) return this\.close\(reason\);/,
+    'a last-viewer RETUNE closes the shared upstream immediately (the 1-connection zap contract), only non-retune leaves linger');
   // NNTP failover batch (owner-approved, touches the streaming-perf contract): circuit-breaker
   // half-open probe + hedged multi-provider failover for active-player BODY work.
   const nntpSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'nntp.js'), 'utf8');

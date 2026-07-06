@@ -793,6 +793,104 @@ test('iptv: multiview surfaces keep separate live slots (panes do not evict each
   }
 });
 
+test('iptv: same-channel native viewers SHARE one upstream connection (fan-out); zaps still close it', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-iptv-share-'));
+  let activeStreams = 0;
+  let totalConnections = 0;
+  const timers = new Set();
+  const playlist = ['#EXTM3U'];
+  for (let i = 0; i < 2; i++) {
+    playlist.push(`#EXTINF:-1 group-title="Test",Share ${i}`);
+    playlist.push(`http://127.0.0.1:PORT/live/${i}.ts`);
+  }
+  const upstream = http.createServer((req, res) => {
+    if (req.url === '/list.m3u') {
+      res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' });
+      return res.end(playlist.join('\n').replaceAll('PORT', String(upstream.address().port)));
+    }
+    if (req.url.startsWith('/live/')) {
+      activeStreams++;
+      totalConnections++;
+      res.writeHead(200, { 'content-type': 'video/mp2t' });
+      res.write(Buffer.alloc(188, 0x47));
+      const t = setInterval(() => { if (!res.destroyed) res.write(Buffer.alloc(188, 0x47)); }, 25);
+      timers.add(t);
+      res.on('close', () => { clearInterval(t); timers.delete(t); activeStreams--; });
+      return;
+    }
+    res.writeHead(404); res.end();
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${upstream.address().port}`;
+  const openStream = (port, p) => new Promise((resolve, reject) => {
+    const req = http.get({ host: '127.0.0.1', port, path: p, headers: { 'user-agent': 'TriboonTV-test' } },
+      (res) => { res.once('data', () => resolve({ req, res })); res.on('error', () => {}); });
+    req.on('error', reject);
+  });
+  const waitFor = async (fn, ms = 4000) => {
+    const until = Date.now() + ms;
+    while (Date.now() < until) { if (fn()) return true; await new Promise((r) => setTimeout(r, 25)); }
+    return false;
+  };
+  const chunksOf = (res) => new Promise((resolve) => {
+    let n = 0;
+    const onData = () => { if (++n >= 2) { res.off('data', onData); resolve(n); } };
+    res.on('data', onData);
+  });
+  const withSurface = (u, s) => u + (u.includes('?') ? '&' : '?') + 'surface=' + s;
+  let srv;
+  const clients = [];
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/settings',
+      { iptvMode: 'm3u', iptvUrl: `${base}/list.m3u`, epgUrl: null }, admin);
+    const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    assert.strictEqual(ch.status, 200);
+
+    // (1) SHARE: two surfaces on the SAME channel = both receive bytes, ONE provider connection.
+    const a = await openStream(srv.port, withSurface(ch.json.channels[0].nativeUrl, 'mv0'));
+    clients.push(a);
+    const b = await openStream(srv.port, withSurface(ch.json.channels[0].nativeUrl, 'mv1'));
+    clients.push(b);
+    await chunksOf(b.res); // the joiner keeps receiving live bytes, not just the backfill
+    assert.strictEqual(totalConnections, 1, `same channel must share one upstream (got ${totalConnections})`);
+    assert.strictEqual(activeStreams, 1, 'exactly one provider connection is active');
+
+    // (2) One viewer leaving must not disturb the other (and must not close the upstream).
+    b.res.destroy(); b.req.destroy();
+    await chunksOf(a.res); // still flowing
+    assert.strictEqual(activeStreams, 1, 'the survivor keeps the shared upstream');
+
+    // (3) A late viewer joins the LIVE hub — still no new provider connection.
+    const c = await openStream(srv.port, withSurface(ch.json.channels[0].nativeUrl, 'mv2'));
+    clients.push(c);
+    await chunksOf(c.res);
+    assert.strictEqual(totalConnections, 1, `late join must reuse the live upstream (got ${totalConnections})`);
+
+    // (4) A retune with OTHER viewers remaining keeps the old channel's upstream alive.
+    const a2 = await openStream(srv.port, withSurface(ch.json.channels[1].nativeUrl, 'mv0'));
+    clients.push(a2);
+    assert.ok(await waitFor(() => activeStreams === 2),
+      `channel 0 (still watched by mv2) + channel 1 = two upstreams; active=${activeStreams}`);
+    assert.strictEqual(totalConnections, 2);
+
+    // (5) The LAST viewer retuning away closes the old upstream IMMEDIATELY (the 1-connection
+    // zap contract) — and joins the destination channel's live hub with no new connection.
+    const c2 = await openStream(srv.port, withSurface(ch.json.channels[1].nativeUrl, 'mv2'));
+    clients.push(c2);
+    await chunksOf(c2.res);
+    assert.ok(await waitFor(() => activeStreams === 1),
+      `channel 0's upstream must close when its last viewer retunes; active=${activeStreams}`);
+    assert.strictEqual(totalConnections, 2, 'the retuned viewer joined channel 1\'s existing upstream');
+  } finally {
+    for (const cl of clients) { try { cl.res.destroy(); } catch {} try { cl.req.destroy(); } catch {} }
+    if (srv) await srv.shutdown();
+    timers.forEach((t) => clearInterval(t));
+    upstream.close();
+  }
+});
+
 test('iptv: provider protection failures are dampened but recover after the configured window', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-iptv-bot-cache-'));
   let liveHits = 0;

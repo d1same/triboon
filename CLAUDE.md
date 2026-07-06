@@ -136,6 +136,15 @@ Important current Live TV decision:
   source-prefixed favorites/groups.
 - Browser Live TV uses server fMP4 remux; Android TV uses ExoPlayer against
   provider TS/HLS first, then server remux fallback.
+- Native live upstreams are SHARED per (channel, variant): one provider
+  connection fans out to every native viewer of that channel (ring-buffer
+  backfill for instant joins; per-subscriber stall watchdogs so a slow
+  client only drops itself; a non-retune last-leave lingers ~12s so
+  reconnects/zap-backs reuse the upstream). A RETUNE by the last viewer
+  still closes the upstream immediately — the 1-connection zap contract is
+  unchanged. Playlist (m3u8) bodies are never share-joinable. Web remux
+  viewers still open per-viewer upstreams (follow-up: tee the shared hub
+  into the ts-pipe remux inputs).
 
 Important current VOD performance decision:
 
