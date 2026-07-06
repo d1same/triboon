@@ -178,13 +178,13 @@ body.shortBrowseBd:not(.tv) #bdInfo .bdiO{font-size:14.5px;line-height:1.45;-web
 /* Expanded menu (the state during D-pad nav): a divider marks where the scrolling list ends and the
    pinned Preferences/Profile footer begins — so a long menu reads as "scroll to here", not items
    sliding behind Preferences. */
-#rail:hover #railFooter,#rail.expanded #railFooter,body.railOpen #railFooter{border-top:1px solid var(--line);padding-top:12px;margin-top:4px}
+body.tv #rail:hover #railFooter,#rail.expanded #railFooter,body.railOpen #railFooter{border-top:1px solid var(--line);padding-top:12px;margin-top:4px}
 /* Expanded = a real overlay (collapsed is 72px; var(--rail) ALSO became 72px in a restyle,
    which silently turned expansion into a no-op — labels faded in but stayed clipped).
    Translucent + blurred so the content stays present behind it (Plex-style). */
 /* Expanded: still NO background (owner: completely transparent) — the content pushes right,
    so labels sit over the page's own dark left gutter and stay readable. */
-#rail:hover,#rail.expanded,body.railOpen #rail{width:236px;background:none}
+body.tv #rail:hover,#rail.expanded,body.railOpen #rail{width:236px;background:none}
 /* Icons sit in a FIXED-width slot so they never move horizontally on expand/collapse;
    only the label is revealed. Slot width = collapsed inner width (84 - 2*12 padding = 60). */
 #rail .logo{width:max-content;min-width:48px;height:34px;margin:0 0 22px;flex:none;padding:0;display:flex;align-items:center;gap:10px}
@@ -199,19 +199,13 @@ body.shortBrowseBd:not(.tv) #bdInfo .bdiO{font-size:14.5px;line-height:1.45;-web
   background:linear-gradient(110deg,var(--magenta),var(--coral) 55%,var(--amber));
   -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
   transition:opacity .2s ease,max-width .32s cubic-bezier(.22,1,.36,1)}
-#rail:hover .logo .wordmark,#rail.expanded .logo .wordmark,body.railOpen .logo .wordmark{max-width:120px;opacity:1}
+body.tv #rail:hover .logo .wordmark,#rail.expanded .logo .wordmark,body.railOpen .logo .wordmark{max-width:120px;opacity:1}
 /* Burger (phones): the rail is off-canvas; this toggles it as an overlay. */
 #burger{position:fixed;top:14px;left:14px;z-index:60;display:none;width:42px;height:42px;border-radius:12px;
   place-items:center;background:var(--panel);border:1px solid var(--line);color:var(--text);
   pointer-events:auto;touch-action:manipulation;-webkit-user-select:none;user-select:none}
-#rail:hover .rlabel,#rail.expanded .rlabel,body.railOpen .rlabel,
-#rail:hover #railUser .rlabel,#rail.expanded #railUser .rlabel,body.railOpen #railUser .rlabel{max-width:150px;opacity:1}
-body.railClickCollapsed #rail:hover{width:72px;background:none}
-body.railClickCollapsed #rail:hover .rlabel,
-body.railClickCollapsed #rail:hover #railUser .rlabel,
-body.railClickCollapsed #rail:hover .logo .wordmark{max-width:0;opacity:0}
-body.railClickCollapsed #rail:hover .railSec{height:0;opacity:0}
-body.railClickCollapsed #rail:hover .railBtn .del{opacity:0}
+body.tv #rail:hover .rlabel,#rail.expanded .rlabel,body.railOpen .rlabel,
+body.tv #rail:hover #railUser .rlabel,#rail.expanded #railUser .rlabel,body.railOpen #railUser .rlabel{max-width:150px;opacity:1}
 .railBtn.active{color:var(--text);background:var(--soft)}
 .railBtn.active::after,.railBtn.focusable.focus::after,.railBtn:focus-visible::after{content:"";position:absolute;width:3px;height:22px;left:-12px;border-radius:4px;background:var(--focus)}
 .railBtn.focusable::before{display:none}
@@ -221,9 +215,9 @@ body.railClickCollapsed #rail:hover .railBtn .del{opacity:0}
 .railBtn.focusable.focus::after,.railBtn:focus-visible::after{height:24px;box-shadow:0 0 14px var(--focusSoft)}
 .railBtn.active.focusable.focus,.railBtn.active:focus-visible{background:var(--soft)}
 .railBtn .del{margin-left:auto;margin-right:12px;opacity:0;color:var(--muted);font-size:15px;width:18px;flex:none}
-#rail:hover .railBtn:hover .del,body.railOpen .railBtn:hover .del{opacity:.7}
+body.tv #rail:hover .railBtn:hover .del,body.railOpen .railBtn:hover .del{opacity:.7}
 .railSec{font:700 10px "JetBrains Mono";letter-spacing:.16em;color:var(--muted);text-transform:uppercase;padding:16px 14px 6px;height:0;opacity:0;overflow:hidden;transition:opacity .12s;white-space:nowrap}
-#rail:hover .railSec,#rail.expanded .railSec,body.railOpen .railSec{height:auto;opacity:.7}
+body.tv #rail:hover .railSec,#rail.expanded .railSec,body.railOpen .railSec{height:auto;opacity:.7}
 #libSec{display:none!important}
 #railLibs{display:contents}
 #railAddLib{margin-bottom:0}
@@ -20781,7 +20775,8 @@ function leaveRail() {
   if ($('railMain')) $('railMain').scrollTop = 0;
 }
 function collapseRailAfterClick() {
-  document.body.classList.add('railClickCollapsed');
+  // Picking a nav item collapses the (click-expanded) rail on desktop and clears the D-pad
+  // open state on TV. leaveRail() drops both .expanded and body.railOpen.
   leaveRail();
 }
 function blurTextEntry() {
@@ -22129,14 +22124,22 @@ async function enterAppShell() {
   const navMx = $('navMusic');
   if (navMx) { navMx.addEventListener('mouseenter', prefetchMusic); navMx.addEventListener('focus', prefetchMusic, true); }
   // Sidebar PUSHES content: hovering the rail shifts the content area right (not overlay).
-  $('rail').addEventListener('mouseenter', () => {
-    if (!document.body.classList.contains('tv') && !document.body.classList.contains('railClickCollapsed')) {
-      document.body.classList.add('railOpen');
-    }
-  });
+  // Desktop/web: the rail no longer expands or pushes content on HOVER — that caused accidental
+  // menu shifts and mis-navigations (owner report). It expands only on CLICK: clicking the logo
+  // toggles the labels open/closed; clicking a nav item navigates and collapses. Navigation was
+  // already click-only. TV is unchanged — D-pad enter/leave still drives railOpen/.expanded.
+  const railLogo = $('rail') && $('rail').querySelector('.logo');
+  if (railLogo) {
+    railLogo.style.cursor = 'pointer';
+    railLogo.addEventListener('click', () => {
+      if (document.body.classList.contains('tv')) return;
+      $('rail').classList.toggle('expanded');
+    });
+  }
   $('rail').addEventListener('mouseleave', () => {
-    document.body.classList.remove('railClickCollapsed');
-    if (document.body.classList.contains('tv') && S.zone === 'rail') return;
+    // Desktop: leaving the rail closes the click-expanded labels (standard flyout). No focus churn.
+    if (!document.body.classList.contains('tv')) { $('rail').classList.remove('expanded'); return; }
+    if (S.zone === 'rail') return;
     const wasRail = S.zone === 'rail';
     leaveRail();
     if (wasRail) {

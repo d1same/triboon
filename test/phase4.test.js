@@ -2377,14 +2377,20 @@ test('Android native player: direct source and native chrome stay out of the web
     'rail logo mark should keep the collapsed size and center slot when the rail expands');
   assert.match(ui, /body\.tv:not\(\.railOpen\) #rail:not\(\.expanded\) \.logo\{[\s\S]+width:48px!important;min-width:48px!important;padding:0!important;justify-content:flex-start/,
     'collapsed Android TV rail logo should use the same fixed centered slot as expanded rail');
-  assert.match(ui, /body\.railClickCollapsed #rail:hover\{width:72px;background:none\}/,
-    'desktop rail clicks should suppress hover expansion until the pointer leaves the menu');
+  // The left menu is CLICK-DRIVEN on web/desktop (owner: mouse rollover caused accidental menu
+  // shifts + mis-navigations). Hover no longer expands or pushes content — hover-expansion is
+  // scoped to `body.tv` (and TV has no mouse, so it's effectively D-pad/click only). Desktop
+  // expands via clicking the logo; navigation was already click-only.
+  assert.ok(!ui.includes('railClickCollapsed'),
+    'the hover-then-suppress railClickCollapsed hack is gone (hover no longer expands on desktop)');
+  assert.match(ui, /body\.tv #rail:hover,#rail\.expanded,body\.railOpen #rail\{width:236px/,
+    'rail hover-expansion is scoped to Android TV; desktop expands only via .expanded (click) or D-pad railOpen');
   assert.match(ui, /document\.querySelectorAll\('\.railBtn\[data-nav\]'\)\.forEach\(\(b\) => b\.addEventListener\('click', \(\) => \{[\s\S]+switchView\(b\.dataset\.nav\);[\s\S]+collapseRailAfterClick\(\);[\s\S]+\}\)\)/,
-    'clicking a left-menu destination should collapse the expanded rail');
-  assert.match(ui, /\$\('rail'\)\.addEventListener\('mouseleave', \(\) => \{[\s\S]+document\.body\.classList\.remove\('railClickCollapsed'\)/,
-    'rail hover expansion should reset after the pointer leaves');
-  assert.match(ui, /if \(!document\.body\.classList\.contains\('tv'\) && !document\.body\.classList\.contains\('railClickCollapsed'\)\) \{[\s\S]+document\.body\.classList\.add\('railOpen'\);[\s\S]+\}/,
-    'desktop hover may expand the rail unless a click just collapsed it; Android TV still relies on explicit D-pad state');
+    'clicking a left-menu destination navigates and collapses the rail');
+  assert.match(ui, /railLogo\.addEventListener\('click', \(\) => \{[\s\S]+if \(document\.body\.classList\.contains\('tv'\)\) return;[\s\S]+\$\('rail'\)\.classList\.toggle\('expanded'\);/,
+    'desktop expands the rail by CLICKING the logo (not by hover)');
+  assert.match(ui, /\$\('rail'\)\.addEventListener\('mouseleave', \(\) => \{[\s\S]+if \(!document\.body\.classList\.contains\('tv'\)\) \{ \$\('rail'\)\.classList\.remove\('expanded'\); return; \}/,
+    'leaving the rail closes the click-expanded labels on desktop; TV keeps its D-pad leave behavior');
   assert.match(ui, /function focusContent\(retried\) \{[\s\S]+leaveRail\(\);[\s\S]+clearFocus\(\);/,
     'moving focus into page content should always collapse any stale rail state first');
   assert.match(ui, /const rowCol = \(ri\) => [\s\S]*?S\.colIdx\[ri\] \|\| 0[\s\S]+if \(k === 'ArrowUp'\) return S\.rowIdx === 0 \? \(view\.hasHero \? focusHero\(0\) : enterRail\(\)\)[\s\S]+: focusCard\(S\.rowIdx - 1, rowCol\(S\.rowIdx - 1\)\);[\s\S]+return focusCard\(S\.rowIdx \+ 1, 0\);/,
@@ -3670,7 +3676,7 @@ test('web shell avoids known TV paint/focus regressions', () => {
   // long menu reaches Preferences in one press, and a divider marks where the scrolling list ends.
   assert.match(ui, /if \(k === 'ArrowUp'\) return focusRail\(S\.railIdx <= 0 \? btns\.length - 1 : S\.railIdx - 1\);[\s\S]+if \(S\.railIdx >= btns\.length - 1\) \{[\s\S]+if \(focusMusicBar\(\)\) return;[\s\S]+return focusRail\(0\);/,
     'rail D-pad should wrap around (Up from top → bottom footer, Down past end → top)');
-  assert.match(ui, /#rail:hover #railFooter,#rail\.expanded #railFooter,body\.railOpen #railFooter\{border-top:1px solid var\(--line\)/,
+  assert.match(ui, /body\.tv #rail:hover #railFooter,#rail\.expanded #railFooter,body\.railOpen #railFooter\{border-top:1px solid var\(--line\)/,
     'an expanded menu should show a divider above the pinned Preferences/Profile footer');
   // Android TV: focus must SNAP (no .15s ring fade) so two list rows never look highlighted at once.
   assert.match(ui, /body\.tv \.focusable::before\{transition:none\}/,

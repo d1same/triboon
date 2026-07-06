@@ -134,6 +134,12 @@ Unraid setup - other devices reach it at `http://<pc-name-or-ip>:7777`.
 https://github.com/d1same/triboon/releases/latest/download/Triboon-Windows-Server.exe
 ```
 
+Your data is safe across updates. All state (encrypted settings, users, watch
+history, library DB, thumbnails) lives in `C:\ProgramData\Triboon\data`, which
+the installer keeps on upgrade *and* uninstall - reinstalling picks up exactly
+where you left off. Updates only replace the program files under
+`Program Files\Triboon`.
+
 ### Client (native Windows app)
 
 A native window that connects to any Triboon server by address and plays through
