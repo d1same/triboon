@@ -117,7 +117,7 @@ jobs:
   # App Control (Enforce), which blocks the unsigned cargo build-script executables a Tauri build
   # generates. GitHub's windows runners have no such policy (and ship MSVC + Rust), so the build is
   # clean and reproducible here. Uploads a versioned name plus a stable alias so
-  # /releases/latest/download/Triboon-PX8-Setup.exe always resolves to the newest client.
+  # /releases/latest/download/Triboon-Windows-Client.exe always resolves to the newest client.
   release-windows-client:
     needs: test
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
@@ -151,15 +151,15 @@ jobs:
           setup=$(ls clients/windows-px8/src-tauri/target/release/bundle/nsis/*-setup.exe | head -1)
           test -n "$setup" || { echo "no NSIS installer produced"; exit 1; }
           mkdir -p dist
-          cp "$setup" dist/Triboon-PX8-Setup.exe
+          cp "$setup" dist/Triboon-Windows-Client.exe
       # Always publish a downloadable build artifact — lets a manual dispatch produce a test .exe
       # without attaching to (and misrepresenting) an existing release.
       - uses: actions/upload-artifact@v4
         with:
-          name: Triboon-PX8-Setup
-          path: dist/Triboon-PX8-Setup.exe
+          name: Triboon-Windows-Client
+          path: dist/Triboon-Windows-Client.exe
       # On a real vX.Y.Z tag, ALSO attach to that release: versioned name + stable "latest" alias so
-      # /releases/latest/download/Triboon-PX8-Setup.exe always resolves to the newest client.
+      # /releases/latest/download/Triboon-Windows-Client.exe always resolves to the newest client.
       - name: Attach installer to the release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
@@ -167,17 +167,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
-          cp dist/Triboon-PX8-Setup.exe "dist/Triboon-PX8-Setup-${TAG}.exe"
+          cp dist/Triboon-Windows-Client.exe "dist/Triboon-Windows-Client-${TAG}.exe"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/Triboon-PX8-Setup*.exe --clobber
+            gh release upload "$TAG" dist/Triboon-Windows-Client*.exe --clobber
           else
-            gh release create "$TAG" dist/Triboon-PX8-Setup*.exe --title "Triboon $TAG" --generate-notes --latest
+            gh release create "$TAG" dist/Triboon-Windows-Client*.exe --title "Triboon $TAG" --generate-notes --latest
           fi
 
   # On a vX.Y.Z tag (or manual run), build the one-click Windows SERVER installer (installer/windows/
   # build-installer.ps1: bundles Node 24 + ffmpeg + yt-dlp + alass, hash-verified, and compiles with
   # Inno Setup) and attach it to the release. Same stable-alias contract as the APK + client, so
-  # /releases/latest/download/Triboon-Setup.exe always resolves to the newest server build.
+  # /releases/latest/download/Triboon-Windows-Server.exe always resolves to the newest server build.
   release-windows-server:
     needs: test
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
@@ -201,11 +201,11 @@ jobs:
           setup=$(ls installer/windows/dist/Triboon-Setup-v*.exe | head -1)
           test -n "$setup" || { echo "no server installer produced"; exit 1; }
           mkdir -p dist
-          cp "$setup" dist/Triboon-Setup.exe
+          cp "$setup" dist/Triboon-Windows-Server.exe
       - uses: actions/upload-artifact@v4
         with:
-          name: Triboon-Setup
-          path: dist/Triboon-Setup.exe
+          name: Triboon-Windows-Server
+          path: dist/Triboon-Windows-Server.exe
       - name: Attach installer to the release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
@@ -213,9 +213,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
-          cp dist/Triboon-Setup.exe "dist/Triboon-Setup-${TAG}.exe"
+          cp dist/Triboon-Windows-Server.exe "dist/Triboon-Windows-Server-${TAG}.exe"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/Triboon-Setup*.exe --clobber
+            gh release upload "$TAG" dist/Triboon-Windows-Server*.exe --clobber
           else
-            gh release create "$TAG" dist/Triboon-Setup*.exe --title "Triboon $TAG" --generate-notes --latest
+            gh release create "$TAG" dist/Triboon-Windows-Server*.exe --title "Triboon $TAG" --generate-notes --latest
           fi
