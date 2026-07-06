@@ -111,3 +111,52 @@ jobs:
           else
             gh release create "$TAG" dist/*.apk --title "Triboon $TAG" --generate-notes --latest
           fi
+
+  # On a vX.Y.Z tag (or manual run), build the Tauri "PX8" native Windows client and attach its
+  # installer to the GitHub release. This is built in CI on purpose: the dev box runs Windows Smart
+  # App Control (Enforce), which blocks the unsigned cargo build-script executables a Tauri build
+  # generates. GitHub's windows runners have no such policy (and ship MSVC + Rust), so the build is
+  # clean and reproducible here. Uploads a versioned name plus a stable alias so
+  # /releases/latest/download/Triboon-PX8-Setup.exe always resolves to the newest client.
+  release-windows-client:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # windows-latest ships MSVC (VS 2022 C++ tools) + Rust, but pin the toolchain for determinism.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: clients/windows-px8/src-tauri
+      - name: Install Tauri CLI (prebuilt, no source compile)
+        working-directory: clients/windows-px8
+        run: npm ci
+      - name: Build PX8 installer (NSIS)
+        working-directory: clients/windows-px8
+        run: npm run tauri build
+      - name: Attach installer to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          # Tauri NSIS output: "Triboon PX8_<ver>_x64-setup.exe" (productName has a space) — glob it.
+          setup=$(ls clients/windows-px8/src-tauri/target/release/bundle/nsis/*-setup.exe | head -1)
+          test -n "$setup" || { echo "no NSIS installer produced"; exit 1; }
+          mkdir -p dist
+          cp "$setup" "dist/Triboon-PX8-Setup-${TAG}.exe"
+          cp "$setup" dist/Triboon-PX8-Setup.exe
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/Triboon-PX8-Setup*.exe --clobber
+          else
+            gh release create "$TAG" dist/Triboon-PX8-Setup*.exe --title "Triboon $TAG" --generate-notes --latest
+          fi

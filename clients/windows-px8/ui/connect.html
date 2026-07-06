@@ -67,6 +67,17 @@
     if (!u.port && u.protocol === 'http:' && /^(\d{1,3}\.){3}\d{1,3}$/.test(u.hostname)) u.port = '7777';
     return u.origin + (u.pathname === '/' ? '' : u.pathname.replace(/\/$/, ''));
   }
+  // Inside the Tauri shell, window.__TAURI__ is present (withGlobalTauri). Wire __PX8 to the Rust
+  // commands: connect(server) navigates the window to the Triboon UI; lastServer prefills the field.
+  // In a plain browser (design preview) __TAURI__ is absent → the fetch fallback below runs.
+  if (window.__TAURI__ && window.__TAURI__.core) {
+    const invoke = window.__TAURI__.core.invoke;
+    window.__PX8 = {
+      connect: (server) => invoke('connect', { server }),
+      lastServer: '',
+    };
+    invoke('last_server').then((s) => { if (s && !document.getElementById('server').value) document.getElementById('server').value = s; }).catch(() => {});
+  }
   const $ = (id) => document.getElementById(id);
   const hint = $('hint'), input = $('server'), go = $('go');
   function setErr(m) { hint.textContent = m; hint.classList.add('err'); }
