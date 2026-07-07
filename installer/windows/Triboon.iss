@@ -119,12 +119,30 @@ begin
   Result := LoadStringFromFile(tmp, s) and (Pos('RUNNING', s) > 0);
 end;
 
+// Belt-and-suspenders: before an upgrade, snapshot the small top-level state files (encrypted settings,
+// the token-signing secret, user accounts, watch history) to data-backup. The upgrade never touches the
+// data dir (it lives in ProgramData, flagged keep-on-uninstall AND is not in the [Files] payload), so
+// this is pure insurance — a last-known-good the owner can restore by hand. No /S so it skips the large,
+// regenerable thumbs / subcache / tmdb-cache subdirs — the backup stays fast and small.
+procedure BackupData();
+var rc: Integer; data, backup: String;
+begin
+  data := ExpandConstant('{commonappdata}\Triboon\data');
+  backup := ExpandConstant('{commonappdata}\Triboon\data-backup');
+  if not DirExists(data) then exit;
+  // robocopy exit codes 0..7 are success; run best-effort — a backup hiccup must never block the upgrade.
+  Exec(ExpandConstant('{sys}\robocopy.exe'),
+    '"' + data + '" "' + backup + '" /COPY:DAT /PURGE /R:1 /W:1 /NP /NFL /NDL /NJH /NJS',
+    '', SW_HIDE, ewWaitUntilTerminated, rc);
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var rc, i: Integer;
 begin
   NeedsRestart := False;
   Result := '';
   if not ServiceExists() then exit;   // fresh install: nothing to stop/remove
+  BackupData();                        // upgrade: snapshot config to data-backup before anything else
   // Upgrade/reinstall: the running service locks node.exe + the wrapper exe, so [Files] would fail
   // to overwrite them. Stop + delete BEFORE any file is copied (PrepareToInstall runs pre-copy;
   // sc.exe is always in {sys}).
