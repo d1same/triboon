@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Triboon PX8",
+  "productName": "Triboon",
   "version": "0.1.0",
   "identifier": "app.triboon.px8",
   "build": {
