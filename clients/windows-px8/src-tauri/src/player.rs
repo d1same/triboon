@@ -22,42 +22,71 @@ pub struct PlayArgs {
     pub title: String,
 }
 
+// M2: one persistent mpv instance, embedded in the app window (wid = the main window's HWND) so video
+// draws over the WebView chrome — mirroring the Android ExoPlayer handoff. Held in a static so it lives
+// across command calls (dropping it would tear down the video). Guarded by the `player` feature.
+#[cfg(all(feature = "player", target_os = "windows"))]
+static MPV: std::sync::Mutex<Option<libmpv2::Mpv>> = std::sync::Mutex::new(None);
+
 /// Begin native playback of a tokened stream URL.
 ///
-/// M1 (this pass): minimal real libmpv call so the CI build actually links libmpv-2.dll and we prove
-/// the toolchain end-to-end. It creates an mpv instance with GPU decode, loadfile's the URL, seeks to
-/// the resume point, and leaks the handle so mpv keeps its own window open (single-shot proof-of-life).
-/// M2 replaces the leak with a persistent, controllable instance embedded (wid) in the app window.
+/// M2: create (once) a persistent mpv embedded in the app window (wid = main window HWND) with GPU
+/// hardware decode, then loadfile the URL (resuming at `start`). Reused across calls so switching
+/// titles doesn't tear down the surface. Returns Err on failure so the web UI can fall back to the
+/// in-page <video>.
 #[tauri::command]
-pub fn player_play(_args: PlayArgs) -> Result<(), String> {
-    #[cfg(feature = "player")]
+pub fn player_play(app: tauri::AppHandle, args: PlayArgs) -> Result<(), String> {
+    #[cfg(all(feature = "player", target_os = "windows"))]
     {
-        use libmpv2::Mpv;
-        let mpv = Mpv::new().map_err(|e| format!("mpv init: {e}"))?;
-        let _ = mpv.set_property("hwdec", "auto");       // GPU hardware decode (HEVC/MPEG-2/AV1/HDR)
-        let _ = mpv.set_property("force-window", "yes"); // M1: mpv owns a window; M2 embeds via wid
-        mpv.command("loadfile", &[_args.url.as_str()]).map_err(|e| format!("mpv loadfile: {e}"))?;
-        if _args.start > 0.0 {
-            let _ = mpv.command("seek", &[&format!("{}", _args.start), "absolute"]);
+        use tauri::Manager;
+        let win = app.get_webview_window("main").ok_or("no main window")?;
+        let hwnd = win.hwnd().map_err(|e| e.to_string())?;
+        let wid = hwnd.0 as isize as i64; // embed mpv's video into our window
+
+        let mut guard = MPV.lock().map_err(|_| "player lock poisoned")?;
+        if guard.is_none() {
+            let mpv = libmpv2::Mpv::with_initializer(|init| {
+                init.set_property("wid", wid)?;        // draw video into the app window
+                init.set_property("hwdec", "auto")?;   // GPU decode: HEVC / MPEG-2 / AV1 / HDR
+                init.set_property("vo", "gpu")?;
+                init.set_property("keep-open", "no")?;
+                Ok(())
+            }).map_err(|e| format!("mpv init: {e}"))?;
+            *guard = Some(mpv);
         }
-        std::mem::forget(mpv); // keep the instance (and its window) alive past this call — M1 only
+        let mpv = guard.as_ref().unwrap();
+        if args.start > 0.0 {
+            mpv.command("loadfile", &[args.url.as_str(), "replace", &format!("start={}", args.start)])
+        } else {
+            mpv.command("loadfile", &[args.url.as_str()])
+        }.map_err(|e| format!("mpv loadfile: {e}"))?;
         return Ok(());
     }
-    #[cfg(not(feature = "player"))]
+    #[cfg(not(all(feature = "player", target_os = "windows")))]
     {
-        Err("player feature not built — using in-page <video> fallback".into())
+        let _ = (app, args);
+        Err("native player not built — using in-page <video> fallback".into())
     }
 }
 
 /// Transport control from the web OSD: pause | resume | toggle | stop | seek:<seconds>.
 #[tauri::command]
-pub fn player_command(_cmd: String) -> Result<(), String> {
-    #[cfg(feature = "player")]
+pub fn player_command(cmd: String) -> Result<(), String> {
+    #[cfg(all(feature = "player", target_os = "windows"))]
     {
-        return Err("libmpv player not yet implemented (P2)".into());
+        let guard = MPV.lock().map_err(|_| "player lock poisoned")?;
+        let mpv = guard.as_ref().ok_or("no active player")?;
+        let r = if cmd == "pause" { mpv.set_property("pause", true) }
+            else if cmd == "resume" { mpv.set_property("pause", false) }
+            else if cmd == "toggle" { mpv.command("cycle", &["pause"]) }
+            else if cmd == "stop" { mpv.command("stop", &[]) }
+            else if let Some(s) = cmd.strip_prefix("seek:") { mpv.command("seek", &[s, "absolute"]) }
+            else { return Err(format!("unknown command: {cmd}")); };
+        return r.map_err(|e| e.to_string());
     }
-    #[cfg(not(feature = "player"))]
+    #[cfg(not(all(feature = "player", target_os = "windows")))]
     {
+        let _ = cmd;
         Ok(())
     }
 }

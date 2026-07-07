@@ -48,6 +48,8 @@
     <div class="hint" id="hint"></div>
     <div class="qc">Tip: it's the same address you open in a browser. Include the port (default
       <b>7777</b>). Quick Connect codes are entered after connecting.</div>
+    <div class="qc" id="nativeTestWrap" style="display:none">Native GPU player check:
+      <a href="#" id="nativeTest" style="color:var(--coral)">play a test video ▶</a></div>
   </div>
 <script>
   // Normalize what a person is likely to type into a valid Triboon base URL:
@@ -77,6 +79,18 @@
       lastServer: '',
     };
     invoke('last_server').then((s) => { if (s && !document.getElementById('server').value) document.getElementById('server').value = s; }).catch(() => {});
+    // M2 native-player check: prove libmpv plays + GPU-decodes in this window. Shown only in the app.
+    const ntWrap = document.getElementById('nativeTestWrap');
+    if (ntWrap) ntWrap.style.display = '';
+    const ntBtn = document.getElementById('nativeTest');
+    if (ntBtn) ntBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const h = document.getElementById('hint');
+      h.classList.remove('err'); h.textContent = 'Starting native test video…';
+      invoke('player_play', { args: { url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4', start: 0, title: 'Native test' } })
+        .then(() => { h.textContent = 'Native player: a test video should be playing in this window.'; })
+        .catch((err) => { h.classList.add('err'); h.textContent = 'Native player error: ' + ((err && err.message) || err); });
+    });
   }
   const $ = (id) => document.getElementById(id);
   const hint = $('hint'), input = $('server'), go = $('go');
