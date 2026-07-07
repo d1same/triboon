@@ -284,8 +284,13 @@ jobs:
           # regardless of the crate's emitted search path.
           $env:LIB = "$env:MPV_SOURCE;$env:LIB"
           Write-Host "MPV_SOURCE=$env:MPV_SOURCE"
+          # Bundle libmpv-2.dll into the installer (next to the exe) so the installed app loads it at
+          # runtime. Done via a build-only --config patch so the committed tauri.conf (P1 release) is
+          # untouched. The DLL is copied next to tauri.conf so the resource path resolves.
+          Copy-Item (Join-Path $env:MPV_SOURCE 'libmpv-2.dll') 'src-tauri\libmpv-2.dll' -Force
+          '{"bundle":{"resources":["libmpv-2.dll"]}}' | Out-File -Encoding ascii player.conf.json
           npm ci
-          npm run tauri build -- --features player
+          npm run tauri build -- --features player --config player.conf.json
       - name: Stage installer + libmpv runtime DLL
         shell: bash
         run: |
