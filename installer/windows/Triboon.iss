@@ -181,34 +181,29 @@ begin
     '', SW_HIDE, ewWaitUntilTerminated, rc);
 end;
 
-// CRITICAL: the shipped service config set TRIBOON_DATA=%ProgramData%\Triboon\data, but WinSW does not
-// reliably expand %ProgramData% — so the server treated it as a LITERAL folder name and wrote its data
-// INSIDE the install dir (which every upgrade wipes), leaving the protected ProgramData dir empty. That
-// is why settings/users/admin were lost on each update. Rewrite the installed config to the RESOLVED
-// absolute path so the server always uses the kept-on-upgrade ProgramData dir. Idempotent + harmless
-// even if WinSW had expanded it (same result).
-procedure FixServiceDataPath();
-var xml: AnsiString;
+// The data-path bug (settings/users lost on every upgrade) is fixed IN THE SERVER: it now expands %VAR%
+// in TRIBOON_DATA itself, so data always lands in the kept-on-upgrade ProgramData dir regardless of
+// whether WinSW expanded the variable. This installer step RECOVERS data a previous (buggy) install
+// wrote into the app folder, moving it to the correct dir — but only when the correct dir has NO files
+// yet, so it never clobbers good data. Best-effort; if a prior uninstall already deleted the app folder
+// there is nothing to move.
+function DirHasFiles(dir: String): Boolean;
+var fr: TFindRec;
 begin
-  if not LoadStringFromFile(AppFile('triboon-service.xml'), xml) then exit;
-  StringChangeEx(xml, '%ProgramData%\Triboon\data', ExpandConstant('{commonappdata}\Triboon\data'), True);
-  SaveStringToFile(AppFile('triboon-service.xml'), xml, False);
+  Result := False;
+  if FindFirst(dir + '\*', fr) then begin
+    repeat
+      if (fr.Name <> '.') and (fr.Name <> '..') then begin Result := True; Break; end;
+    until not FindNext(fr);
+    FindClose(fr);
+  end;
 end;
 
-// Recover data a previous (buggy) install wrote into the app folder instead of ProgramData, so existing
-// users + settings survive this upgrade. Only runs when the correct dir has NO files yet — never clobbers
-// good data. (Best-effort; if a prior uninstall already deleted the app folder, there's nothing to move.)
 procedure MigrateStrayData();
-var rc: Integer; stray, target: String; fr: TFindRec;
+var rc: Integer; stray, target: String;
 begin
   target := ExpandConstant('{commonappdata}\Triboon\data');
-  if FindFirst(target + '\*', fr) then begin
-    try
-      repeat
-        if (fr.Name <> '.') and (fr.Name <> '..') then exit; // protected dir already has data — leave it
-      until not FindNext(fr);
-    finally FindClose(fr); end;
-  end;
+  if DirHasFiles(target) then exit; // correct dir already has data — leave it
   stray := ExpandConstant('{app}') + '\%ProgramData%\Triboon\data'; // literal-%ProgramData% (unexpanded) location
   if not DirExists(stray) then stray := ExpandConstant('{app}\data'); // or the bare ./data default
   if not DirExists(stray) then exit;
@@ -221,8 +216,7 @@ var rc, i: Integer;
 begin
   if CurStep <> ssPostInstall then exit;
 
-  FixServiceDataPath();   // point the service at the ABSOLUTE ProgramData dir (the real fix)
-  MigrateStrayData();     // recover any data a prior buggy install left in the app folder
+  MigrateStrayData();     // recover data a prior buggy install left in the app folder (server-side %VAR% expansion is the real path fix)
   HardenDataDir();
   OpenFirewall();
 
