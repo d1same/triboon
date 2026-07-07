@@ -251,17 +251,34 @@ jobs:
             || gh release download --repo shinchiro/mpv-winbuild-cmake --pattern 'mpv-dev-x86_64-2*.7z' --dir .
           7z x -y mpv-dev-x86_64-*.7z
           echo "==== extracted layout ===="; ls -R | head -60
-      - name: Generate mpv import lib
-        shell: cmd
+      - name: Generate mpv import lib (robust to bundle layout)
+        shell: pwsh
         run: |
-          cd libmpv
-          lib /def:mpv.def /name:libmpv-2.dll /out:mpv.lib /MACHINE:X64
+          $dll = Get-ChildItem -Path libmpv -Recurse -Filter libmpv-2.dll | Select-Object -First 1
+          if (-not $dll) { Write-Error "libmpv-2.dll not found in the bundle"; exit 1 }
+          $root = $dll.DirectoryName
+          "libmpv-2.dll at: $($dll.FullName)"
+          $def = Get-ChildItem -Path libmpv -Recurse -Filter mpv.def | Select-Object -First 1
+          if (-not $def) {
+            # Bundle shipped no .def — synthesize one from the DLL's exported mpv_* symbols.
+            "no mpv.def in bundle — synthesizing from DLL exports"
+            $lines = & dumpbin /exports $dll.FullName
+            $names = $lines | ForEach-Object { if ($_ -match '\s(mpv_[A-Za-z0-9_]+)\s*$') { $Matches[1] } } | Sort-Object -Unique
+            if (-not $names) { Write-Error "no mpv_* exports found in DLL"; exit 1 }
+            ("EXPORTS`n" + ($names -join "`n")) | Out-File -Encoding ascii "$root\mpv.def"
+            $def = Get-Item "$root\mpv.def"
+          }
+          "using def: $($def.FullName)"
+          & lib /def:$($def.FullName) /name:libmpv-2.dll /out:"$root\mpv.lib" /machine:X64
+          if ($LASTEXITCODE -ne 0) { Write-Error "lib.exe failed"; exit 1 }
+          Get-ChildItem $root | Select-Object Name,Length
+          # Expose the bundle root (has include\ + mpv.lib) to later steps for libmpv-sys.
+          "MPV_SOURCE=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
       - name: Build native client (player feature)
         working-directory: clients/windows-px8
         shell: bash
-        env:
-          MPV_SOURCE: ${{ github.workspace }}\libmpv
         run: |
+          echo "MPV_SOURCE=$MPV_SOURCE"; ls -la "$MPV_SOURCE" || true
           npm ci
           npm run tauri build -- --features player
       - name: Stage installer + libmpv runtime DLL
