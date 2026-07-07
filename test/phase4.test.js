@@ -2518,7 +2518,7 @@ test('Android native player: direct source and native chrome stay out of the web
     && server.includes('spawnLiveRemux(iptvRemuxInputHref(pin, target.url)')
     && server.includes('headers: pin.hostHeader ? { Host: pin.hostHeader } : undefined'),
     'server Live TV remux fallback should try Xtream TS before HLS and preserve HTTPS provider SNI');
-  assert.match(transcode, /function ffmpegHeaderLines\(headers = \{\}\)[\s\S]+\`\$\{k\}: \$\{v\}\\r\\n\`[\s\S]+function spawnLiveRemux\(url, \{ hlsFriendly = true, headers = null \} = \{\}\)[\s\S]+supportsFfmpegHttpOption\('max_redirects'\) \? \['-max_redirects', '0'\] : \[\][\s\S]+\.\.\.\(headerLines \? \['-headers', headerLines\] : \[\]\)[\s\S]+'-i', url/,
+  assert.match(transcode, /function ffmpegHeaderLines\(headers = \{\}\)[\s\S]+\`\$\{k\}: \$\{v\}\\r\\n\`[\s\S]+function spawnLiveRemux\(url, \{ hlsFriendly = true, headers = null, transcodeVideo = false \} = \{\}\)[\s\S]+supportsFfmpegHttpOption\('max_redirects'\) \? \['-max_redirects', '0'\] : \[\][\s\S]+\.\.\.\(headerLines \? \['-headers', headerLines\] : \[\]\)[\s\S]+'-i', url/,
     'ffmpeg Live TV remux should receive sanitized Host headers and disable ffmpeg redirect following when the installed build supports that option');
   assert.match(server, /function resolveIptvRemuxRedirect\(rawTarget, maxHops = 5\) \{[\s\S]+validateAndPinIptvUrl\(current, 'Live stream URL'\)[\s\S]+new URL\(res\.headers\.location, u\)\.href[\s\S]+throw new Error\('too many live stream redirects'\)/,
     'server Live TV remux should resolve provider redirects itself so every hop is validated before ffmpeg retries');
@@ -3883,7 +3883,7 @@ test('client caps: hardware that decodes the codec gets a bit-exact copy (true d
 
 test('live tv browser remux keeps AAC surround instead of forcing stereo', () => {
   const transcode = fs.readFileSync(path.join(__dirname, '..', 'server', 'transcode.js'), 'utf8');
-  assert.match(transcode, /function spawnLiveRemux\(url, \{ hlsFriendly = true, headers = null \} = \{\}\)[\s\S]+'-c:a', 'aac', '-b:a', '384k'[\s\S]+'-fflags', '\+genpts'/,
+  assert.match(transcode, /function spawnLiveRemux\(url, \{ hlsFriendly = true, headers = null, transcodeVideo = false \} = \{\}\)[\s\S]+'-c:a', 'aac', '-b:a', '384k'[\s\S]+'-fflags', '\+genpts'/,
     'Live TV browser remux should encode browser-safe AAC without a hard stereo downmix');
   assert.ok(transcode.includes("'-analyzeduration', '500000', '-probesize', '1000000'"),
     'live remux uses a trimmed analyze budget for a faster channel-change first byte');

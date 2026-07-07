@@ -9,6 +9,21 @@ const http = require('http');
 const { EventEmitter } = require('events');
 const { PassThrough } = require('stream');
 const { httpJson, httpRaw, bootServer, setupAdmin } = require('./helpers');
+const { liveVideoArgs } = require('../server/transcode');
+
+test('iptv web: video is stream-copied for H.264, transcoded to capped H.264 otherwise', () => {
+  // Browser Live TV: H.264 channels copy (fast, full quality); HEVC/MPEG-2 (browser can't decode)
+  // transcode to H.264 capped at 1080p with a low-latency preset. Native keeps copy (transcodeVideo=false).
+  const copy = liveVideoArgs(false);
+  assert.deepStrictEqual(copy, ['-c:v', 'copy'], 'H.264 / native path must stream-copy the video');
+
+  const tx = liveVideoArgs(true).join(' ');
+  assert.match(tx, /-c:v libx264/, 'non-H.264 browser path must transcode to H.264');
+  assert.match(tx, /-tune zerolatency/, 'live transcode must use a low-latency tune for fast start');
+  assert.match(tx, /scale=-2:'min\(1080,ih\)'/, 'browser live transcode must cap at 1080p (4K stays native on the Shield)');
+  assert.match(tx, /-pix_fmt yuv420p/, 'output must be 8-bit 4:2:0 so any browser can decode it');
+  assert.ok(!/\bcopy\b/.test(tx), 'transcode path must not also copy the video');
+});
 
 test('iptv: guide warm targets the next 12-hour boundary', async () => {
   const srv = await bootServer({ NNTP_HOST: null, TMDB_BASE: null });

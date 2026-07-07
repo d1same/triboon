@@ -15,7 +15,7 @@ const { Auth, SecureSettings, RateLimiter } = require('./auth');
 const { Pipeline } = require('./pipeline');
 const { TmdbProxy } = require('./tmdb');
 const { Trakt } = require('./trakt');
-const { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioCopyOk } = require('./transcode');
+const { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, probeLiveVideoCodec, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioCopyOk } = require('./transcode');
 const ytmusic = require('./ytmusic');
 const https = require('https');
 const dns = require('dns').promises;
@@ -1371,6 +1371,50 @@ function iptvRemuxTargets(ch = {}) {
 }
 function iptvRemuxTargetLikelyHls(target = {}) {
   return target.label === 'hls' || target.label === 'fallback' || /\.m3u8(?:[?#]|$)/i.test(target.url || '');
+}
+// Browser Live TV plays H.264 only; HEVC/MPEG-2 channels must be transcoded for the web player (native
+// ExoPlayer decodes them directly, so it keeps the copy path). We probe the channel's video codec ONCE
+// and cache it per channel (codec is stable), so only the first-ever browser play of a channel pays a
+// short, SEQUENTIAL probe (never a second concurrent provider connection) and every later zap is instant.
+const iptvVideoCodecCache = new Map(); // channel id -> { codec, at }
+const IPTV_CODEC_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const BROWSER_LIVE_VIDEO_COPY_OK = new Set(['h264', 'avc1', 'avc', '']); // '' = probe failed → default to copy
+async function iptvBrowserNeedsVideoTranscode(ch, target, ctx) {
+  if (!detectEncoder()) return false; // no encoder available → can't transcode, fall back to copy
+  const key = String(ch.id != null ? ch.id : ch.idx);
+  const cached = iptvVideoCodecCache.get(key);
+  let codec = cached && Date.now() - cached.at < IPTV_CODEC_CACHE_TTL_MS ? cached.codec : null;
+  if (codec == null) {
+    codec = '';
+    // Cancel the probe the instant the client disconnects so a mid-probe close can't leave an ffprobe
+    // holding a provider connection open (up to the 6s backstop) on a connection-limited account.
+    const ac = new AbortController();
+    const onClose = () => { try { ac.abort(); } catch {} };
+    if (ctx && ctx.req) ctx.req.once('close', onClose);
+    if (ctx && ctx.res) ctx.res.once('close', onClose);
+    try {
+      const pin = await validateAndPinIptvUrl(target.url, 'Live codec probe URL');
+      codec = await probeLiveVideoCodec(iptvRemuxInputHref(pin, target.url), {
+        headers: pin.hostHeader ? { Host: pin.hostHeader } : null,
+        userAgent: IPTV_NATIVE_PROXY_UA,
+        signal: ac.signal,
+      });
+    } catch { codec = ''; }
+    finally {
+      if (ctx && ctx.req) ctx.req.off('close', onClose);
+      if (ctx && ctx.res) ctx.res.off('close', onClose);
+    }
+    // Don't poison the cache with a '' from an aborted probe — let the next play re-probe.
+    if (!ac.signal.aborted) iptvVideoCodecCache.set(key, { codec, at: Date.now() });
+  }
+  return !BROWSER_LIVE_VIDEO_COPY_OK.has(codec);
+}
+function iptvRequestIsBrowser(ctx) {
+  // The Android app (native ExoPlayer) sends a TriboonTV UA and decodes HEVC/MPEG-2 itself, so its
+  // remux fallback keeps the cheap copy. Everything else (browsers + the WebView2 Windows client) is
+  // codec-limited and gets the transcode when the source isn't H.264.
+  const ua = String((ctx && ctx.req && ctx.req.headers && ctx.req.headers['user-agent']) || '');
+  return !/TriboonTV/i.test(ua);
 }
 function sanitizeIptvFfmpegError(err) {
   return String(err || '')
@@ -5181,6 +5225,15 @@ const H = {
     if (!availableTargets.length && cachedFailure) {
       return sendIptvNativeError(ctx.res, cachedFailure.status, cachedFailure.reason);
     }
+    // Decide copy vs transcode ONCE, up front (sequential probe, so it never opens a second concurrent
+    // upstream). Browser/WebView2 clients on a non-H.264 channel get an H.264 transcode; native + H.264
+    // keep the cheap copy. Cached per channel, so only the first-ever browser play of a channel probes.
+    let transcodeVideo = false;
+    if (iptvRequestIsBrowser(ctx) && availableTargets.length && !ctx.res.destroyed) {
+      try { transcodeVideo = await iptvBrowserNeedsVideoTranscode(ch, availableTargets[0], ctx); } catch {}
+      if (transcodeVideo) console.log(`[iptv codec] "${ch.name}" non-H.264 source → transcoding to H.264 for the web player`);
+    }
+    if (ctx.res.destroyed) return;
     const liveSlot = beginIptvLiveSlot(ctx, { idx: ch.idx, name: ch.name });
     // Overall cap bounds the whole startup; each attempt gets its own fresh first-byte budget
     // (reset via beginAttemptBudget) so a slow high-ranked source can't starve its alternates.
@@ -5228,6 +5281,7 @@ const H = {
         ff = spawnLiveRemux(iptvRemuxInputHref(pin, target.url), {
           hlsFriendly,
           headers: pin.hostHeader ? { Host: pin.hostHeader } : undefined,
+          transcodeVideo,
         });
       }
       catch (e) {
@@ -5411,7 +5465,7 @@ const H = {
         try { if (!ctx.res.destroyed) ctx.res.destroy(); } catch {}
       });
       const startFfmpeg = (res) => {
-        try { ff = spawnLiveRemuxStdin(); } catch (e) { return giveUp(`spawn failed (${e.message})`); }
+        try { ff = spawnLiveRemuxStdin({ transcodeVideo }); } catch (e) { return giveUp(`spawn failed (${e.message})`); }
         ff.on('error', (e) => giveUp(`ffmpeg error (${e.message})`));
         ff.stdin.on('error', () => {}); // EPIPE when ffmpeg is killed mid-write — expected, swallow
         ff.stderr.on('data', (d) => { if (errBuf.length < 8000) errBuf += d; });

@@ -346,7 +346,50 @@ function ffmpegHeaderLines(headers = {}) {
     .join('');
 }
 
-function spawnLiveRemux(url, { hlsFriendly = true, headers = null } = {}) {
+// Video output args for the browser live path. Browsers decode H.264 only, so H.264 channels are
+// stream-COPIED (near-zero cost, full quality). HEVC/MPEG-2/other channels — which a browser can't
+// decode — are transcoded to H.264 with a low-latency preset and capped at 1080p (4K software encode
+// can't hold real-time and the browser can't do HDR anyway; native clients keep the copy path and full
+// 4K). Caller passes transcodeVideo=true only for browser clients on a non-H.264 source.
+function liveVideoArgs(transcodeVideo) {
+  if (!transcodeVideo) return ['-c:v', 'copy'];
+  return [
+    '-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'zerolatency',
+    '-profile:v', 'high', '-pix_fmt', 'yuv420p',
+    '-vf', "scale=-2:'min(1080,ih)'",
+    '-g', '60', '-sc_threshold', '0',
+    '-maxrate', '8M', '-bufsize', '16M',
+  ];
+}
+
+// Fast, bounded probe of a live stream's PRIMARY video codec (lowercased codec_name) so the browser
+// live path can pick copy (h264) vs transcode (hevc/mpeg2video/...). Short analyze budget + a 6s hard
+// kill so it can never hang a channel open; returns '' on any failure (caller then defaults to copy).
+function probeLiveVideoCodec(url, { headers = null, userAgent = null, signal = null } = {}) {
+  return new Promise((resolve) => {
+    if (signal && signal.aborted) return resolve(''); // client already gone → never open the connection
+    const fp = detectFfprobe();
+    if (!fp) return resolve('');
+    const args = ['-v', 'error', '-analyzeduration', '2000000', '-probesize', '2000000'];
+    const hl = ffmpegHeaderLines(headers);
+    if (hl) args.push('-headers', hl);
+    if (userAgent) args.push('-user_agent', userAgent);
+    args.push('-select_streams', 'v:0', '-show_entries', 'stream=codec_name', '-of', 'default=nk=1:nw=1', url);
+    let out = '', done = false, killer = null;
+    const finish = (v) => { if (done) return; done = true; if (killer) clearTimeout(killer); resolve(v); };
+    let p;
+    // signal (AbortSignal) lets the caller kill the probe — and free the provider connection — the
+    // instant the client disconnects, instead of holding it until the 6s backstop kill.
+    try { p = spawn(fp.path, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, signal, killSignal: 'SIGKILL' }); }
+    catch { return finish(''); }
+    killer = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} }, 6000);
+    p.stdout.on('data', (d) => { out += d; });
+    p.on('error', () => finish(''));   // includes the AbortError when the signal fires
+    p.on('close', () => finish(String(out).trim().toLowerCase()));
+  });
+}
+
+function spawnLiveRemux(url, { hlsFriendly = true, headers = null, transcodeVideo = false } = {}) {
   const ff = detectFfmpeg();
   if (!ff) throw new Error('ffmpeg not available');
   const headerLines = ffmpegHeaderLines(headers);
@@ -369,7 +412,7 @@ function spawnLiveRemux(url, { hlsFriendly = true, headers = null } = {}) {
     '-protocol_whitelist', 'file,http,https,tcp,tls,crypto,udp,rtp,httpproxy',
     '-i', url,
     '-map', '0:v:0?', '-map', '0:a:0?',
-    '-c:v', 'copy',
+    ...liveVideoArgs(transcodeVideo),
     '-c:a', 'aac', '-b:a', '384k',
     '-fflags', '+genpts',
     '-flush_packets', '1', '-muxdelay', '0', '-muxpreload', '0',
@@ -384,7 +427,7 @@ function spawnLiveRemux(url, { hlsFriendly = true, headers = null } = {}) {
 // path can't match) and pipes in on stdin. ffmpeg never opens a URL here, so there's no provider
 // redirect / Cloudflare-IPv6 / HLS-segment failure surface — it just remuxes bytes to the same fMP4
 // the browser plays. This is what closes the web↔Android Live TV reliability gap.
-function spawnLiveRemuxStdin() {
+function spawnLiveRemuxStdin({ transcodeVideo = false } = {}) {
   const ff = detectFfmpeg();
   if (!ff) throw new Error('ffmpeg not available');
   return spawn(ff.path, [
@@ -392,7 +435,7 @@ function spawnLiveRemuxStdin() {
     '-analyzeduration', '500000', '-probesize', '1000000',
     '-f', 'mpegts', '-i', 'pipe:0',
     '-map', '0:v:0?', '-map', '0:a:0?',
-    '-c:v', 'copy',
+    ...liveVideoArgs(transcodeVideo),
     '-c:a', 'aac', '-b:a', '384k',
     '-fflags', '+genpts',
     '-flush_packets', '1', '-muxdelay', '0', '-muxpreload', '0',
@@ -465,4 +508,4 @@ function spawnSubSync(refPath, inPath, outPath) {
     { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env });
 }
 
-module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, supportsFfmpegHttpOption };
+module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, probeLiveVideoCodec, liveVideoArgs, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, supportsFfmpegHttpOption };
