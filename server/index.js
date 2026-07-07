@@ -1381,32 +1381,16 @@ const IPTV_CODEC_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const BROWSER_LIVE_VIDEO_COPY_OK = new Set(['h264', 'avc1', 'avc', '']); // '' = probe failed → default to copy
 async function iptvBrowserNeedsVideoTranscode(ch, target, ctx) {
   if (!detectEncoder()) return false; // no encoder available → can't transcode, fall back to copy
+  // REGRESSION FIX: an ffprobe of the channel URL opens the provider's .ts stream a moment BEFORE the
+  // play opens it again. Many panels treat two opens of the same stream within ~1s as abuse and return
+  // HTTP 429 / bot-protection — which surfaced as "provider rate limit / extra stream" on MOST channels
+  // (every first play probed), even on multi-connection accounts. So we do NOT open a separate probe
+  // connection. Transcode only when the codec is already known from a connection-free source (the play
+  // stream's own analysis — a future, connection-safe detector populates this cache). Absent that, copy
+  // (H.264 plays everywhere; native/Shield decodes HEVC/MPEG-2 directly regardless).
   const key = String(ch.id != null ? ch.id : ch.idx);
   const cached = iptvVideoCodecCache.get(key);
-  let codec = cached && Date.now() - cached.at < IPTV_CODEC_CACHE_TTL_MS ? cached.codec : null;
-  if (codec == null) {
-    codec = '';
-    // Cancel the probe the instant the client disconnects so a mid-probe close can't leave an ffprobe
-    // holding a provider connection open (up to the 6s backstop) on a connection-limited account.
-    const ac = new AbortController();
-    const onClose = () => { try { ac.abort(); } catch {} };
-    if (ctx && ctx.req) ctx.req.once('close', onClose);
-    if (ctx && ctx.res) ctx.res.once('close', onClose);
-    try {
-      const pin = await validateAndPinIptvUrl(target.url, 'Live codec probe URL');
-      codec = await probeLiveVideoCodec(iptvRemuxInputHref(pin, target.url), {
-        headers: pin.hostHeader ? { Host: pin.hostHeader } : null,
-        userAgent: IPTV_NATIVE_PROXY_UA,
-        signal: ac.signal,
-      });
-    } catch { codec = ''; }
-    finally {
-      if (ctx && ctx.req) ctx.req.off('close', onClose);
-      if (ctx && ctx.res) ctx.res.off('close', onClose);
-    }
-    // Don't poison the cache with a '' from an aborted probe — let the next play re-probe.
-    if (!ac.signal.aborted) iptvVideoCodecCache.set(key, { codec, at: Date.now() });
-  }
+  const codec = cached && Date.now() - cached.at < IPTV_CODEC_CACHE_TTL_MS ? cached.codec : '';
   return !BROWSER_LIVE_VIDEO_COPY_OK.has(codec);
 }
 function iptvRequestIsBrowser(ctx) {
