@@ -88,6 +88,8 @@ import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.SeekParameters;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter;
+import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy;
+import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy;
 import androidx.media3.ui.AspectRatioFrameLayout;
 import androidx.media3.ui.CaptionStyleCompat;
 import androidx.media3.ui.PlayerView;
@@ -223,8 +225,10 @@ public class MainActivity extends Activity {
     private ExoPlayer nativePlayer;
     private DefaultBandwidthMeter nativeBandwidthMeter;
     private DefaultHttpDataSource.Factory nativeHttpDataSourceFactory;
-    private String nativeMode = "";          // "live" or "video"
-    private String nativeKind = "direct";
+    // volatile: read on the ExoPlayer loader thread in nativeRemuxLoadErrorPolicy, written on the main
+    // thread — a stale read at a source switch could apply the remux no-retry policy to a direct stream.
+    private volatile String nativeMode = "";          // "live" or "video"
+    private volatile String nativeKind = "direct";
     private String nativeQualityLabel = "1080p";
     private String nativeUrl = "";
     private String nativeMime = "";
@@ -298,6 +302,9 @@ public class MainActivity extends Activity {
     private long nativeLastVideoDisplayMs;
     private long nativeLastAutoResumeSeekMs;
     private int nativeBackwardTicks;
+    // Bounds the remux reconnect-resume (see nativeRemuxLoadErrorPolicy) so a dead source can't loop.
+    private long nativeReconnectWindowStartMs;
+    private int nativeReconnectCount;
     private long nativeLastStatsMs;
     private static final long NATIVE_VIDEO_STARTUP_STALL_MS = 7000L;
     private static final long NATIVE_VIDEO_HEAVY_STARTUP_STALL_MS = 12000L;
@@ -3839,6 +3846,15 @@ public class MainActivity extends Activity {
             nativeVideoUnhealthySinceMs = 0L;
             nativeVideoMemoryTrimmedDuringBuffer = false;
             nativeVideoErrorNotified = false;
+            // Reset the reconnect budget only for a genuinely NEW mount. A quiet-seek reuse re-mount IS
+            // the reconnect-recovery path (requestNativeVideoSeek -> __tvNativeVideoSeek -> quietSeek),
+            // so resetting it here would zero the count every recovery and let a FLAPPING source
+            // (reaches READY, plays briefly, drops, repeats) loop forever. Preserving the rolling window
+            // across recovery re-mounts is what makes the 6/90s cap actually bound it.
+            if (!reuseQuietVideo && !reuseLivePlayer) {
+                nativeReconnectWindowStartMs = 0L;
+                nativeReconnectCount = 0;
+            }
             nativeKnownDurationMs = knownDurationMs;
             nativePendingStartMs = "video".equals(mode) ? startMs : 0L;
             nativeStartSeekIssuedAtMs = 0L;
@@ -3888,6 +3904,20 @@ public class MainActivity extends Activity {
                     long dur = nativeDurSeconds();
                     String m = nativeMode;
                     if ("video".equals(m)) {
+                        // Remux/transcode reconnect: the load-error policy suppressed the replay-retry, so
+                        // recover by re-mounting at the CURRENT position — resume forward, no 3-min rewind.
+                        // Bounded so a truly dead source still surfaces an error and auto-advances.
+                        if (nativeServerSeekMode() && nativeVideoStarted && nativeLastVideoDisplayMs > 0L
+                                && isNativeRecoverableIoError(error) && nativeAllowReconnectResume()) {
+                            Log.w(TAG, "Native VOD remux stream dropped (code " + error.errorCode + ", " + msg
+                                    + "); resuming at " + nativeLastVideoDisplayMs + "ms (no replay)");
+                            // Stamp the auto-resume debounce + clear the backward-tick counter so an
+                            // overlapping 1s progress tick can't fire a second seek via rememberNativeVideoPosition.
+                            nativeLastAutoResumeSeekMs = SystemClock.elapsedRealtime();
+                            nativeBackwardTicks = 0;
+                            requestNativeVideoSeek(nativeLastVideoDisplayMs);
+                            return;
+                        }
                         notifyNativeVideoError(msg, pos, dur);
                     } else if (tryNativeLiveFallback()) {
                         return;
@@ -4965,7 +4995,50 @@ public class MainActivity extends Activity {
                         : nativeVodReadTimeoutMs(false));
         nativeHttpDataSourceFactory = http;
         applyNativeHttpHostHeader();
-        return new DefaultMediaSourceFactory(http);
+        return new DefaultMediaSourceFactory(http).setLoadErrorHandlingPolicy(nativeRemuxLoadErrorPolicy());
+    }
+
+    // A remux/transcode VOD stream is a NON-resumable pipe. ExoPlayer's default silent retry re-requests
+    // the same URL and the server REPLAYS from the checkpoint — that is the ~3-min backward jump the owner
+    // sees. For these streams, suppress the internal retry (return C.TIME_UNSET = fatal, no retry) so the
+    // error surfaces to onPlayerError, which re-mounts at the CURRENT position instead: resume forward, no
+    // replay, no rewind. Direct/live streams keep the normal policy (a direct stream is rangeable, so a
+    // retry resumes correctly). The logged exception makes the drop cause — SocketTimeout (throughput) vs
+    // a connection close (idle) — visible on-device so the reconnect FREQUENCY can be tuned with data.
+    private LoadErrorHandlingPolicy nativeRemuxLoadErrorPolicy() {
+        return new DefaultLoadErrorHandlingPolicy() {
+            @Override public long getRetryDelayMsFor(LoadErrorHandlingPolicy.LoadErrorInfo info) {
+                if ("video".equals(nativeMode) && nativeServerSeekMode()) {
+                    Throwable e = info != null ? info.exception : null;
+                    Log.w(TAG, "Native VOD remux load error #" + (info != null ? info.errorCount : 0) + " ("
+                            + (e != null ? e.getClass().getSimpleName() + ": " + e.getMessage() : "unknown")
+                            + ") — suppressing replay-retry; resuming at current position");
+                    return C.TIME_UNSET;
+                }
+                return super.getRetryDelayMsFor(info);
+            }
+        };
+    }
+
+    // Re-mounting fixes a dropped connection, not a malformed container or a decoder fault — so only the
+    // I/O error range (2xxx) is treated as reconnect-recoverable; anything else surfaces as a real error.
+    private boolean isNativeRecoverableIoError(PlaybackException e) {
+        int c = e.errorCode;
+        return c >= PlaybackException.ERROR_CODE_IO_UNSPECIFIED
+                && c < PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED;
+    }
+
+    // Bound the reconnect-resume so a genuinely dead source cannot loop forever: at most 6 resumes per 90s,
+    // then let the error surface (auto-advance takes over). The owner's ~1 drop / 3-4 min is far under this.
+    private boolean nativeAllowReconnectResume() {
+        long now = SystemClock.elapsedRealtime();
+        if (nativeReconnectWindowStartMs <= 0L || now - nativeReconnectWindowStartMs > 90000L) {
+            nativeReconnectWindowStartMs = now;
+            nativeReconnectCount = 0;
+        }
+        if (nativeReconnectCount >= 6) return false;
+        nativeReconnectCount++;
+        return true;
     }
 
     private void applyNativeHttpHostHeader() {
