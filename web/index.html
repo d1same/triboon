@@ -4074,6 +4074,13 @@ async function api(path, opts = {}) {
   const headers = { ...(opts.headers || {}) };
   const tok = tokenStore.get();
   if (tok) headers.authorization = 'Bearer ' + tok;
+  // Restricted profiles (Kids/Teen/Family): tag TMDB proxy reads with the active profile id so the
+  // server filters over-cap titles OUT of the catalog (matches the play gate — they don't show up
+  // at all, not just "can't be clicked"). The adult/owner path is untouched: no _pf, no change.
+  if ((!opts.method || opts.method === 'GET') && path.startsWith('/api/tmdb/')
+      && (S.maxLevel ?? 3) < 3 && S.profile && S.profile.id) {
+    path += (path.includes('?') ? '&' : '?') + '_pf=' + encodeURIComponent(S.profile.id);
+  }
   if (opts.body && typeof opts.body !== 'string') { opts.body = JSON.stringify(opts.body); headers['content-type'] = 'application/json'; }
   const r = await fetch(path, { ...opts, headers });
   if (r.status === 401 && !path.startsWith('/api/login') && !path.startsWith('/api/setup')) {

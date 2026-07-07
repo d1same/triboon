@@ -3090,6 +3090,31 @@ async function maturityAllowsPlay(level, tmdbId, mediaType) {
   const rank = MATURITY_CERT_RANK[cert] ?? 3;
   return rank <= (level === 0 ? 1 : 2); // matches client levelAllows()
 }
+// Animation · Family · Kids-TV — the kid-safe genres the client's passesMaturity() requires for
+// Kids profiles. Kept in sync with the web KID_GENRES set.
+const MATURITY_LIST_KID_GENRES = new Set([16, 10751, 10762]);
+// Remove over-cap titles from a TMDB list response so a restricted profile never SEES them (the
+// catalog matches the play gate — "not shown", instead of "shown but blocked on click"). The cheap
+// signals (TMDB adult flag + the Kids genre gate) are synchronous; the US-certification check reuses
+// the proxy-cached title detail via maturityAllowsPlay (24h-cached, bounded concurrency). It fails
+// OPEN per item — a TMDB hiccup or a rating-less title must never blank the catalog, and the
+// server-authoritative play gate is the hard backstop. Only list-shaped payloads (data.results of
+// movie/tv titles) are touched; detail/video/genre/credits responses pass through untouched.
+async function maturityFilterList(level, data) {
+  if (level >= 3 || !data || !Array.isArray(data.results) || !data.results.length) return data;
+  const items = data.results;
+  const keep = await mapLimit(items, 8, async (x) => {
+    if (!x || typeof x.id === 'undefined') return true;                 // unknown shape → keep
+    const mt = x.media_type;
+    if (mt && mt !== 'movie' && mt !== 'tv') return true;               // person/collection/etc → keep
+    if (x.adult) return false;                                          // hard adult flag → always drop
+    const type = mt ? (mt === 'tv' ? 'tv' : 'movie') : (x.name && !x.title ? 'tv' : 'movie');
+    if (level === 0 && !((x.genre_ids || []).some((g) => MATURITY_LIST_KID_GENRES.has(g)))) return false;
+    return maturityAllowsPlay(level, x.id, type);
+  });
+  const kept = items.filter((_, i) => keep[i]);
+  return kept.length === items.length ? data : { ...data, results: kept };
+}
 function maturityBlockedResponse(ctx) {
   return send(ctx.res, 403, { error: 'This title is restricted for this profile.', restricted: true });
 }
@@ -4752,8 +4777,22 @@ const H = {
 
   tmdbProxy: async (ctx) => {
     try {
-      const data = await tmdb.get('/' + ctx.m[1] + (ctx.url.search || ''));
-      send(ctx.res, 200, data, { 'cache-control': 'private, max-age=600' });
+      // Restricted profiles (Kids/Teen/Family) get an authoritative catalog filter so what's shown
+      // matches the play gate. The client appends _pf=<profileId>; we resolve the STORED level
+      // (unspoofable — profileLevelFor fails closed on a bogus id) and strip _pf before the upstream
+      // call so the shared proxy cache is never fragmented per profile.
+      const pf = ctx.url.searchParams.get('_pf');
+      let search = ctx.url.search || '';
+      if (pf !== null) {
+        const p = new URLSearchParams(ctx.url.search);
+        p.delete('_pf');
+        const s = p.toString();
+        search = s ? '?' + s : '';
+      }
+      const data = await tmdb.get('/' + ctx.m[1] + search);
+      const level = pf !== null ? profileLevelFor(ctx.user, pf) : 3;
+      const out = level < 3 ? await maturityFilterList(level, data) : data;
+      send(ctx.res, 200, out, { 'cache-control': 'private, max-age=600' });
     } catch (e) { send(ctx.res, e.status || 500, { error: e.message }); }
   },
 

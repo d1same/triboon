@@ -3458,6 +3458,67 @@ test('cast: a valid custom receiver app-id round-trips; junk is rejected back to
   assert.strictEqual(srv3.json.castReceiverAppId, 'CC1AD845', 'clearing the app-id returns to the Default Media Receiver');
 });
 
+// The owner's ask: on a restricted profile, over-cap titles must not SHOW UP in the catalog at all
+// (the old behavior showed them but blocked the click). The TMDB proxy filters list responses so
+// the catalog matches the server play gate. This exercises the real request path end to end against
+// a mock TMDB, self-contained so it can't perturb the shared server.
+test('maturity: restricted profiles get over-cap titles filtered OUT of the catalog, not just blocked on play', async () => {
+  const j = (res, o) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(o)); };
+  const mock = http.createServer((req, res) => {
+    const p = new URL(req.url, 'http://x').pathname;
+    if (p.endsWith('/configuration')) return j(res, { images: {} });
+    if (p.endsWith('/discover/movie')) return j(res, { page: 1, total_pages: 1, results: [
+      { id: 700, title: 'PG13 Action', poster_path: '/a.jpg', adult: false, genre_ids: [28] },
+      { id: 701, title: 'R Thriller', poster_path: '/b.jpg', adult: false, genre_ids: [53] },
+      { id: 702, title: 'G Cartoon', poster_path: '/c.jpg', adult: false, genre_ids: [16, 10751] },
+      { id: 703, title: 'XXX', poster_path: '/d.jpg', adult: true, genre_ids: [] },
+    ] });
+    if (p.endsWith('/discover/tv')) return j(res, { page: 1, total_pages: 1, results: [
+      { id: 800, name: 'TV14 Drama', poster_path: '/e.jpg' },
+      { id: 801, name: 'TVMA Crime', poster_path: '/f.jpg' },
+    ] });
+    if (p.endsWith('/movie/700')) return j(res, { id: 700, adult: false, release_dates: { results: [{ iso_3166_1: 'US', release_dates: [{ certification: 'PG-13' }] }] } });
+    if (p.endsWith('/movie/701')) return j(res, { id: 701, adult: false, release_dates: { results: [{ iso_3166_1: 'US', release_dates: [{ certification: 'R' }] }] } });
+    if (p.endsWith('/movie/702')) return j(res, { id: 702, adult: false, release_dates: { results: [{ iso_3166_1: 'US', release_dates: [{ certification: 'G' }] }] } });
+    if (p.endsWith('/tv/800')) return j(res, { id: 800, content_ratings: { results: [{ iso_3166_1: 'US', rating: 'TV-14' }] } });
+    if (p.endsWith('/tv/801')) return j(res, { id: 801, content_ratings: { results: [{ iso_3166_1: 'US', rating: 'TV-MA' }] } });
+    j(res, { results: [] });
+  });
+  await new Promise((r) => mock.listen(0, '127.0.0.1', r));
+  let s;
+  try {
+    s = await bootServer({ NNTP_HOST: null, TMDB_BASE: `http://127.0.0.1:${mock.address().port}/3` });
+    const tok = await setupAdmin(s.port);
+    await httpJson(s.port, 'POST', '/api/settings', { tmdbKey: 'mat-filter-key' }, tok);
+    const teen = (await httpJson(s.port, 'POST', '/api/me/profiles', { name: 'Teen', level: 1 }, tok)).json.id;
+    const kids = (await httpJson(s.port, 'POST', '/api/me/profiles', { name: 'Kids', level: 0 }, tok)).json.id;
+    const ids = (r) => (r.json.results || []).map((x) => x.id).sort((a, b) => a - b);
+
+    // No profile context (adult/owner) → the catalog comes back unfiltered.
+    const adultM = await httpJson(s.port, 'GET', '/api/tmdb/discover/movie', null, tok);
+    assert.deepStrictEqual(ids(adultM), [700, 701, 702, 703], 'adult sees the full unfiltered catalog');
+
+    // Teen (≤PG-13/TV-14): the R movie and the hard-adult title are GONE from the list itself.
+    const teenM = await httpJson(s.port, 'GET', `/api/tmdb/discover/movie?_pf=${teen}`, null, tok);
+    assert.deepStrictEqual(ids(teenM), [700, 702], 'teen movie catalog drops the R + adult titles, keeps PG-13/G');
+    // TMDB's discover/tv can't filter by rating — the server filter is what removes the TV-MA show.
+    const teenT = await httpJson(s.port, 'GET', `/api/tmdb/discover/tv?_pf=${teen}`, null, tok);
+    assert.deepStrictEqual(ids(teenT), [800], 'teen TV catalog drops the TV-MA show, keeps TV-14');
+
+    // Kids (≤PG AND a kid genre): only the animated/family G title survives.
+    const kidsM = await httpJson(s.port, 'GET', `/api/tmdb/discover/movie?_pf=${kids}`, null, tok);
+    assert.deepStrictEqual(ids(kidsM), [702], 'kids catalog keeps only the kid-genre G title');
+
+    // An unknown/bogus profile id fails CLOSED to the strictest level (no spoofed-id catalog bypass).
+    const spoof = await httpJson(s.port, 'GET', '/api/tmdb/discover/movie?_pf=deadbeef', null, tok);
+    assert.deepStrictEqual(ids(spoof), [702], 'an unknown _pf id is treated as the strictest profile');
+  } finally {
+    if (s) await s.shutdown();
+    await new Promise((r) => mock.close(r));
+    delete process.env.TMDB_BASE;
+  }
+});
+
 test('teardown', async () => {
   await srv.shutdown();
   await mockNntp.close();

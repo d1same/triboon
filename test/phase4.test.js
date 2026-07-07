@@ -1297,6 +1297,21 @@ test('Android native player: direct source and native chrome stay out of the web
     'the denied-mount teardown dereferences the mount so it frees immediately rather than at the sweep');
   assert.match(idxSrc, /function profileLevelFor\(user, profileId\) \{[\s\S]+return p \? \(p\.level \?\? \(p\.kid \? 0 : 3\)\) : 0;/,
     'a provided-but-unknown profileId fails closed to the strictest level (no spoofed-id bypass)');
+  // Catalog maturity filter: a restricted profile must never SEE an over-cap title (not just be
+  // blocked on click). The TMDB proxy filters list responses so the catalog matches the play gate.
+  assert.match(idxSrc, /async function maturityFilterList\(level, data\) \{[\s\S]+if \(level >= 3 \|\| !data \|\| !Array\.isArray\(data\.results\)[\s\S]+mapLimit\(items, 8,/,
+    'maturityFilterList only touches list-shaped payloads and filters with bounded concurrency');
+  assert.match(idxSrc, /if \(x\.adult\) return false;[\s\S]+if \(level === 0 && !\(\(x\.genre_ids \|\| \[\]\)\.some\(\(g\) => MATURITY_LIST_KID_GENRES\.has\(g\)\)\)\) return false;[\s\S]+return maturityAllowsPlay\(level, x\.id, type\);/,
+    'the filter drops the adult flag, gates Kids to kid genres, and defers the cert check to the same play-gate logic');
+  assert.match(idxSrc, /const kept = items\.filter\(\(_, i\) => keep\[i\]\);\s*\n\s*return kept\.length === items\.length \? data : \{ \.\.\.data, results: kept \};/,
+    'the filter returns the original object untouched when nothing is dropped (fail-open, no needless allocation)');
+  // The proxy resolves the active profile from _pf (stored level, unspoofable), strips it before the
+  // upstream call (so the shared TMDB cache is not fragmented per profile), and filters when < Adult.
+  assert.match(idxSrc, /const pf = ctx\.url\.searchParams\.get\('_pf'\);[\s\S]+p\.delete\('_pf'\);[\s\S]+const data = await tmdb\.get\('\/' \+ ctx\.m\[1\] \+ search\);[\s\S]+const level = pf !== null \? profileLevelFor\(ctx\.user, pf\) : 3;[\s\S]+level < 3 \? await maturityFilterList\(level, data\) : data;/,
+    'tmdbProxy strips _pf before upstream and applies the maturity filter for restricted profiles only');
+  // Client: only restricted profiles tag TMDB reads (the adult/owner path is byte-for-byte unchanged).
+  assert.match(ui, /path\.startsWith\('\/api\/tmdb\/'\)\s*\n\s*&& \(S\.maxLevel \?\? 3\) < 3 && S\.profile && S\.profile\.id\) \{\s*\n\s*path \+= \(path\.includes\('\?'\) \? '&' : '\?'\) \+ '_pf=' \+ encodeURIComponent\(S\.profile\.id\);/,
+    'api() appends _pf to TMDB proxy GETs only for restricted profiles with an active profile id');
   // IPTV live proxy: an Android WebView renderer crash can half-close the client socket without a
   // 'close' event, so a bare pipe() would pin the upstream provider connection forever. A manual
   // pump + dead-client stall watchdog (re-armed only on drained writes) + a res 'error' handler
