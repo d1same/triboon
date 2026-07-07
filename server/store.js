@@ -13,6 +13,10 @@ function sleepMs(ms) {
   catch { const end = Date.now() + ms; while (Date.now() < end) { /* spin fallback */ } }
 }
 
+// Tables that hold the user's real, hard-to-recreate state. In "safe mode" (secret unreadable at
+// boot) writes to these are frozen so a temporary-key session can't overwrite the intact data on disk.
+const CRITICAL_TABLES = new Set(['secret', 'users', 'settings']);
+
 class Store {
   constructor(dir = process.env.TRIBOON_DATA || path.join(__dirname, '..', 'data')) {
     this.dir = dir;
@@ -58,6 +62,16 @@ class Store {
   }
 
   write(table, value) {
+    // Safe mode: when the secret couldn't be read at boot (data is transiently unreadable), the server
+    // runs with a temporary key. Persisting the critical tables now would OVERWRITE the real (intact)
+    // data on disk with junk encrypted under the wrong key — the exact wipe we're preventing. So drop
+    // those writes; the real data stays on disk and recovers on the next clean boot. Everything else
+    // (caches, watch) may still write harmlessly.
+    if (this.freezeCriticalWrites && CRITICAL_TABLES.has(table)) {
+      if (!this._frozeWarned) { this._frozeWarned = true; try { console.error(`[store] safe mode: not writing '${table}' (secret unavailable) — protecting existing data on disk.`); } catch {} }
+      this.cache.set(table, value); // keep the in-memory view consistent for this session only
+      return value;
+    }
     this.cache.set(table, value);
     this.dirty.add(table);
     this._flushSoon();

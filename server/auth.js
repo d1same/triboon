@@ -158,31 +158,35 @@ class Auth {
       if (sec && sec.value) {
         this.secret = sec.value;                       // normal path
       } else if (fs.existsSync(secFile)) {
-        // Exists but unreadable. Retry directly (bypassing the cached fallback) for a while — a
-        // Defender scan or an installer ACL change clears well within this window.
-        const tries = Math.max(1, parseInt(process.env.TRIBOON_SECRET_READ_RETRIES, 10) || 40);
-        const delay = Math.max(20, parseInt(process.env.TRIBOON_SECRET_READ_DELAY_MS, 10) || 500);
-        let value = null;
+        // Exists but unreadable RIGHT NOW (an AV scan or the installer's ACL change on the data dir
+        // can lock/deny the file for seconds after a Windows reinstall). Retry directly for a generous
+        // window — the lock clears and we recover the REAL secret with zero data touched.
+        const tries = Math.max(1, parseInt(process.env.TRIBOON_SECRET_READ_RETRIES, 10) || 30);
+        const delay = Math.max(20, parseInt(process.env.TRIBOON_SECRET_READ_DELAY_MS, 10) || 1000);
+        let value = null, lastErr = null;
         for (let i = 0; i < tries && !value; i++) {
-          sleepMs(delay);
-          try { const v = JSON.parse(fs.readFileSync(secFile, 'utf8')); if (v && v.value) value = v.value; } catch {}
+          try { const v = JSON.parse(fs.readFileSync(secFile, 'utf8')); if (v && v.value) value = v.value; }
+          catch (e) { lastErr = e; }
+          if (!value) sleepMs(delay);
         }
         if (value) {
           this.secret = value;
           try { store.write('secret', { value }); } catch {}   // recovered — prime the cache, no rewrite of content
           console.error('[triboon] secret.json was temporarily unreadable at boot; recovered it on retry — no data touched.');
         } else {
-          // Truly unrecoverable (corrupt, or a permission problem that outlived the retries). Do the
-          // LEAST-bad thing that still lets the server RUN (never crash-loop): preserve the old secret
-          // for manual recovery, then mint a new one. Encrypted settings may need re-entering, but the
-          // server starts and the original secret is kept.
-          try { fs.renameSync(secFile, secFile + '.unreadable-' + Date.now()); } catch {}
-          const fresh = crypto.randomBytes(32).toString('hex');
-          try { store.write('secret', { value: fresh }); store.flush(); } catch {}
-          this.secret = fresh;
-          console.error('[triboon] WARNING: secret.json existed but was unreadable after retries. Generated a '
-            + 'new secret so the server can start; saved settings may need re-entering. The old secret was kept '
-            + 'alongside it (secret.json.unreadable-*) for recovery. File: ' + secFile);
+          // Still unreadable after the whole window. CRITICAL: do NOT touch a single file — never
+          // rename, regenerate, or overwrite the secret (that IS the data-wipe). Instead run in a SAFE
+          // read-only mode: an in-memory ephemeral key just so the process stays up, and FREEZE writes
+          // to the critical tables (secret/users/settings) so the transiently-unreadable data on disk
+          // can never be clobbered. The next boot (once the file is readable) recovers everything.
+          this.secret = crypto.randomBytes(32).toString('hex'); // ephemeral, NEVER written to disk
+          this.secretUnavailable = true;
+          try { store.freezeCriticalWrites = true; } catch {}
+          console.error('[triboon] SAFE MODE: secret.json is present but unreadable after '
+            + `${tries} attempts (last error: ${lastErr && (lastErr.code || lastErr.message)}). Running read-only `
+            + 'with a temporary key so NOTHING on disk is overwritten — your data is intact. This is almost '
+            + 'always a transient AV/permission lock right after an install; simply restart the Triboon service '
+            + '(or reboot) and it will load your real secret and data. File: ' + secFile);
         }
       } else {
         const value = crypto.randomBytes(32).toString('hex');

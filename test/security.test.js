@@ -3607,19 +3607,26 @@ test('secret: existing secret is reused; an unreadable one never crashes the boo
   const a2 = new Auth(new Store(dir));
   assert.strictEqual(a2.secret, a1.secret, 'existing secret reused, never regenerated');
   assert.strictEqual(fs.readFileSync(path.join(dir, 'secret.json'), 'utf8'), onDisk, 'secret.json not rewritten on reboot');
-  // 3. An existing-but-UNREADABLE secret.json must NOT crash the boot (crashing = Error 1067, the
-  //    service won't start) and must NOT be silently discarded. After patient retries fail, the server
-  //    PRESERVES the old secret (renamed *.unreadable-*) and mints a working one so it can still start.
+  // 3. An existing-but-UNREADABLE secret.json must NOT crash the boot (crashing = Error 1067), and —
+  //    critically — must NEVER touch a single file. The server runs in SAFE MODE (temporary in-memory
+  //    key) and FREEZES writes to the critical tables, so the transiently-unreadable data on disk is
+  //    left 100% intact and recovers on the next clean boot. This is THE anti-wipe guarantee.
   process.env.TRIBOON_SECRET_READ_RETRIES = '2';
   process.env.TRIBOON_SECRET_READ_DELAY_MS = '20';
   try {
-    fs.writeFileSync(path.join(dir, 'secret.json'), '{ not valid json at all');
-    let a3;
-    assert.doesNotThrow(() => { a3 = new Auth(new Store(dir)); }, 'an unreadable secret must not crash (no Error 1067)');
-    assert.ok(a3.secret && a3.secret.length >= 32, 'server still obtains a working secret and starts');
-    const preserved = fs.readdirSync(dir).filter((f) => f.startsWith('secret.json.unreadable-'));
-    assert.strictEqual(preserved.length, 1, 'the unreadable secret is preserved for recovery');
-    assert.match(fs.readFileSync(path.join(dir, preserved[0]), 'utf8'), /not valid json/, 'preserved file keeps the old content');
+    const corrupt = '{ not valid json at all';
+    fs.writeFileSync(path.join(dir, 'secret.json'), corrupt);
+    let a3, store3;
+    assert.doesNotThrow(() => { store3 = new Store(dir); a3 = new Auth(store3); }, 'an unreadable secret must not crash (no Error 1067)');
+    assert.ok(a3.secret && a3.secret.length >= 32, 'server still obtains a working (ephemeral) key and starts');
+    assert.strictEqual(a3.secretUnavailable, true, 'flagged as running with a temporary key (safe mode)');
+    assert.strictEqual(store3.freezeCriticalWrites, true, 'store freezes critical-table writes in safe mode');
+    // NON-DESTRUCTIVE: the real secret.json is left EXACTLY as-is — never renamed, backed up, or overwritten.
+    assert.strictEqual(fs.readFileSync(path.join(dir, 'secret.json'), 'utf8'), corrupt, 'the real secret.json is untouched on disk');
+    assert.strictEqual(fs.readdirSync(dir).filter((f) => f.startsWith('secret.json.unreadable')).length, 0, 'no rename/backup churn');
+    // A critical write during safe mode must NOT hit disk (so a temp-key session can't clobber real data).
+    store3.write('users', { list: [{ id: 'x' }] });
+    assert.ok(!fs.existsSync(path.join(dir, 'users.json')), 'a critical write is dropped in safe mode — existing data protected');
   } finally {
     delete process.env.TRIBOON_SECRET_READ_RETRIES;
     delete process.env.TRIBOON_SECRET_READ_DELAY_MS;

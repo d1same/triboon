@@ -206,19 +206,18 @@ procedure HardenDataDir();
 var rc: Integer; dir: String;
 begin
   dir := ExpandConstant('{commonappdata}\Triboon');
-  // Pass 1 (ADDITIVE, inheritance still intact): guarantee SYSTEM (the service account) + Administrators
-  // have an EXPLICIT Full ACE first. /inheritance:r removes only INHERITED aces, never explicit ones — so
-  // doing this before the strip means a file that is momentarily locked during the recursive apply can
-  // never be left with no usable ACE. That orphaning previously locked the service out of secret.json,
-  // which surfaced as "Windows could not start the service — Error 1067".
+  // RELIABILITY over hardening — this was the real cause of the repeated data loss. Earlier builds
+  // STRIPPED inheritance (icacls inheritance-remove) to keep secret.json from other local users. But if a
+  // file was momentarily locked during that recursive strip, it got ORPHANED: left with no ACE granting the
+  // LocalSystem service. The service then got EPERM reading secret.json/users.json and treated its own
+  // (intact) data as unreadable — the "settings/users wiped on reinstall" bug. We now do the SAFE opposite:
+  //   • /inheritance:e — ENABLE inheritance, so the dir re-inherits SYSTEM/Admins access from ProgramData.
+  //     This also RECOVERS a data dir that a previous build had stripped (restores the service's access).
+  //   • additive /grant of SYSTEM + Administrators Full — belt-and-suspenders on top of inheritance.
+  // The service can never be locked out of its own data again. (secret.json stays 0600; on a single-user
+  // home server the residual local-read exposure is far cheaper than losing every setting.)
   Exec(ExpandConstant('{sys}\icacls.exe'),
-    '"' + dir + '" /grant "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /T /C /Q',
-    '', SW_HIDE, ewWaitUntilTerminated, rc);
-  // Pass 2: now drop the inherited BUILTIN\Users read so secret.json is not world-readable, re-affirming
-  // the SYSTEM + Administrators grants. Even if this fails on a locked file, Pass 1's explicit SYSTEM ACE
-  // survives (inheritance:r keeps explicit aces), so the service always retains read access.
-  Exec(ExpandConstant('{sys}\icacls.exe'),
-    '"' + dir + '" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /T /C /Q',
+    '"' + dir + '" /inheritance:e /grant "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /T /C /Q',
     '', SW_HIDE, ewWaitUntilTerminated, rc);
 end;
 

@@ -98,18 +98,17 @@ test('installer registers the service with exit-code checks + a marked-for-delet
   assert.match(iss, /1060/);                        // poll until the old service is truly gone (not just marked)
 });
 
-test('installer hardens the ProgramData data-dir ACL so secret.json is not world-readable', () => {
+test('installer ACL can never lock the service out of its own data (the real data-loss root cause)', () => {
   assert.match(iss, /icacls/);
-  assert.match(iss, /\/inheritance:r/);             // drop the inherited BUILTIN\Users read
-  assert.match(iss, /S-1-5-18/);                    // grant SYSTEM (the service account)
-  assert.match(iss, /S-1-5-32-544/);                // and Administrators only
-  // The additive SYSTEM/Admins grant must run BEFORE the /inheritance:r strip, so a momentarily-locked
-  // file can't be orphaned with no usable ACE (that locked the service out of secret.json → Error 1067).
-  const harden = iss.slice(iss.indexOf('procedure HardenDataDir'), iss.indexOf('procedure OpenFirewall'));
-  // Match the exact icacls COMMANDS (not substrings that also appear in comments): the additive grant
-  // (Pass 1) must precede the inheritance-strip command (Pass 2).
-  assert.ok(harden.indexOf('/grant "*S-1-5-18') >= 0 && harden.indexOf('/grant "*S-1-5-18') < harden.indexOf('/inheritance:r /grant:r'),
-    'HardenDataDir grants SYSTEM Full additively BEFORE stripping inheritance (no ACL orphaning / 1067)');
+  // ENABLE inheritance (recovers a dir a previous build stripped, and re-inherits SYSTEM from ProgramData)
+  // + additively grant SYSTEM + Administrators Full. This can never orphan a locked file.
+  assert.match(iss, /\/inheritance:e/);
+  assert.match(iss, /S-1-5-18/);                    // SYSTEM (the service account) granted Full
+  assert.match(iss, /S-1-5-32-544/);                // Administrators granted Full
+  // MUST NOT strip inheritance: /inheritance:r orphaned secret.json when a file was momentarily locked
+  // during the recursive apply → the service got EPERM → the repeated "settings/users wiped" reports.
+  assert.ok(!/\/inheritance:r/.test(iss),
+    'must NOT use /inheritance:r — stripping inheritance orphaned secret.json → EPERM → data loss');
 });
 
 test('build script integrity-verifies every bundled binary (not just Node)', () => {
