@@ -31,6 +31,14 @@ const APP_VERSION = (() => {
 })();
 
 // ---------- state ----------
+// Resolve %VAR% in TRIBOON_DATA before anything reads it. On Windows the WinSW service passes
+// "%ProgramData%\Triboon\data"; WinSW doesn't reliably expand that, so without this the server would
+// treat it as a LITERAL folder name and write data INSIDE the install dir (wiped on every upgrade),
+// losing settings/users. Node exposes the real values (process.env.ProgramData), so expand them here —
+// a no-op on Linux/Docker (paths like /data have no %VAR%).
+if (process.env.TRIBOON_DATA && process.env.TRIBOON_DATA.includes('%')) {
+  process.env.TRIBOON_DATA = process.env.TRIBOON_DATA.replace(/%([^%]+)%/g, (m, v) => process.env[v] || m);
+}
 const store = new Store();
 // Background-flush throttles for the HOT, big, or high-frequency tables — every debounced flush
 // re-serializes + rewrites the whole table on the event loop that also serves video bytes, and
@@ -8283,6 +8291,7 @@ if (require.main === module) {
   process.on('unhandledRejection', (e) => { console.error('[unhandledRejection]', (e && e.stack) || e); });
   server.listen(PORT, () => {
     console.log(`Triboon → http://localhost:${PORT}`);
+    console.log(`[triboon] data dir: ${DATA_DIR}`); // where settings/users/secret live — verify it's persistent (e.g. C:\\ProgramData\\Triboon\\data on Windows), NOT inside the install folder
     try { getPool(); } catch { /* no provider configured yet — fine */ }
     // Startup should stay responsive first. Stale Live TV caches are served instantly on demand;
     // the heavy network refresh can begin after login/playback/TV navigation have settled.

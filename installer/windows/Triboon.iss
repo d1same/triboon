@@ -181,11 +181,48 @@ begin
     '', SW_HIDE, ewWaitUntilTerminated, rc);
 end;
 
+// CRITICAL: the shipped service config set TRIBOON_DATA=%ProgramData%\Triboon\data, but WinSW does not
+// reliably expand %ProgramData% — so the server treated it as a LITERAL folder name and wrote its data
+// INSIDE the install dir (which every upgrade wipes), leaving the protected ProgramData dir empty. That
+// is why settings/users/admin were lost on each update. Rewrite the installed config to the RESOLVED
+// absolute path so the server always uses the kept-on-upgrade ProgramData dir. Idempotent + harmless
+// even if WinSW had expanded it (same result).
+procedure FixServiceDataPath();
+var xml: AnsiString;
+begin
+  if not LoadStringFromFile(AppFile('triboon-service.xml'), xml) then exit;
+  StringChangeEx(xml, '%ProgramData%\Triboon\data', ExpandConstant('{commonappdata}\Triboon\data'), True);
+  SaveStringToFile(AppFile('triboon-service.xml'), xml, False);
+end;
+
+// Recover data a previous (buggy) install wrote into the app folder instead of ProgramData, so existing
+// users + settings survive this upgrade. Only runs when the correct dir has NO files yet — never clobbers
+// good data. (Best-effort; if a prior uninstall already deleted the app folder, there's nothing to move.)
+procedure MigrateStrayData();
+var rc: Integer; stray, target: String; fr: TFindRec;
+begin
+  target := ExpandConstant('{commonappdata}\Triboon\data');
+  if FindFirst(target + '\*', fr) then begin
+    try
+      repeat
+        if (fr.Name <> '.') and (fr.Name <> '..') then exit; // protected dir already has data — leave it
+      until not FindNext(fr);
+    finally FindClose(fr); end;
+  end;
+  stray := ExpandConstant('{app}') + '\%ProgramData%\Triboon\data'; // literal-%ProgramData% (unexpanded) location
+  if not DirExists(stray) then stray := ExpandConstant('{app}\data'); // or the bare ./data default
+  if not DirExists(stray) then exit;
+  ForceDirectories(target);
+  Exec(ExpandConstant('{sys}\robocopy.exe'), '"' + stray + '" "' + target + '" /E /R:1 /W:1 /NP /NFL /NDL /NJH /NJS', '', SW_HIDE, ewWaitUntilTerminated, rc);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var rc, i: Integer;
 begin
   if CurStep <> ssPostInstall then exit;
 
+  FixServiceDataPath();   // point the service at the ABSOLUTE ProgramData dir (the real fix)
+  MigrateStrayData();     // recover any data a prior buggy install left in the app folder
   HardenDataDir();
   OpenFirewall();
 
