@@ -65,6 +65,31 @@ test('installer stops the service before replacing files, and cleans up on unins
   assert.match(iss, /^AppId=\{\{[0-9A-Fa-f-]+\}/m);
 });
 
+test('installer treats upgrade vs fresh install correctly and never touches user data', () => {
+  // Fresh install short-circuits the whole stop/clean path (no prior service). Everything below the
+  // guard is the UPGRADE path, and none of it references the ProgramData data dir.
+  assert.match(iss, /if not ServiceExists\(\) then exit;\s*\/\/ FRESH INSTALL/);
+  // Owner ask #1: on upgrade, stop the SERVICE *and* the tray before files are replaced.
+  assert.match(iss, /procedure StopTray\(\)/);
+  assert.match(iss, /triboon-tray/);                 // tray stopped by command-line match (not a blanket kill)
+  assert.match(iss, /StopTray\(\);/);                // called from PrepareToInstall (upgrade)
+  assert.match(iss, /usUninstall then StopTray/);    // and on uninstall
+  // Owner ask #1: clean the Program Files payload so stale code can't linger — but ONLY the code dirs.
+  assert.match(iss, /procedure CleanAppPayload\(\)/);
+  assert.match(iss, /DelTree\(ExpandConstant\('\{app\}\\server'\)/);
+  assert.match(iss, /DelTree\(ExpandConstant\('\{app\}\\web'\)/);
+  assert.match(iss, /DelTree\(ExpandConstant\('\{app\}\\bin'\)/);
+  assert.ok(!/DelTree\(ExpandConstant\('\{app\}\\data'/.test(iss) && !/DelTree\([^)]*commonappdata/.test(iss),
+    'the clean-install step must NEVER delete the data dir (ProgramData) or a stray {app}\\data');
+  assert.match(iss, /if not ServiceExists\(\) then begin CleanAppPayload\(\); exit; end;/,
+    'payload is cleaned only after the service is confirmed gone (node.exe unlocked)');
+  // Owner ask #2 (data loss): the installed service config gets the LITERAL ProgramData path written
+  // in, so data placement never depends on WinSW/env expanding %ProgramData%.
+  assert.match(iss, /procedure WriteServiceDataPath\(\)/);
+  assert.match(iss, /StringChangeEx\(content, '%ProgramData%\\Triboon\\data', ExpandConstant\('\{commonappdata\}\\Triboon\\data'\)/);
+  assert.match(iss, /WriteServiceDataPath\(\);/);    // called in CurStepChanged before the service registers
+});
+
 test('installer registers the service with exit-code checks + a marked-for-delete poll', () => {
   // Service register/start moved out of exit-code-blind [Run] into [Code] with real checks.
   assert.match(iss, /procedure CurStepChanged/);

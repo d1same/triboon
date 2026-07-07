@@ -111,6 +111,11 @@ const tmdbMock = http.createServer((req, res) => {
     return res.end(JSON.stringify({ id: 990002, title: 'Kid Movie', adult: false,
       release_dates: { results: [{ iso_3166_1: 'US', release_dates: [{ certification: 'G' }] }] } }));
   }
+  if (u.pathname === '/3/movie/990003') { // NC-17: above the R tier — only "No limit" may play it
+    res.writeHead(200, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ id: 990003, title: 'NC17 Movie', adult: false,
+      release_dates: { results: [{ iso_3166_1: 'US', release_dates: [{ certification: 'NC-17' }] }] } }));
+  }
   // Key-validation fixture: the settings save pings /configuration with a NEW tmdb key and only a
   // definitive 401 rejects the save.
   if (u.pathname === '/3/configuration' && u.searchParams.get('api_key') === 'bad-tmdb-key') {
@@ -2672,20 +2677,31 @@ test('local libraries: the age gate covers local plays too (a Kids profile canno
   };
   mkMovie('Blocked Film (2026)', 'blocked', 990001); // mock TMDB: R-rated
   mkMovie('Fine Film (2026)', 'fine', 990002);       // mock TMDB: G-rated
+  mkMovie('Hardcore Film (2026)', 'nc17', 990003);   // mock TMDB: NC-17 (above R)
   const lib = await httpJson(srv.port, 'POST', '/api/libraries', { name: 'AgeGateLib', kind: 'other', path: root }, admin);
   try {
     assert.strictEqual((await runScan(lib.json.id)).status, 200);
     const items = (await httpJson(srv.port, 'GET', `/api/libraries/${lib.json.id}/items`, null, admin)).json.items;
     const rated = (id) => items.find((i) => i.kind === 'movie' && i.tmdbId === id);
-    const blocked = rated(990001), fine = rated(990002);
-    assert.ok(blocked && blocked.playUrl && fine && fine.playUrl, 'both movies scanned with their NFO tmdb ids');
-    // Kids profile: R blocked with the same restricted shape as usenet play; G allowed.
+    const blocked = rated(990001), fine = rated(990002), nc17 = rated(990003);
+    assert.ok(blocked && blocked.playUrl && fine && fine.playUrl && nc17 && nc17.playUrl, 'all three movies scanned with their NFO tmdb ids');
+    // Kids (G) profile: R blocked with the same restricted shape as usenet play; G allowed.
     const deny = await httpJson(srv.port, 'POST', blocked.playUrl, { caps: {}, profileId: kidId }, admin);
     assert.strictEqual(deny.status, 403, `kids profile must not mount the R-rated local file: ${deny.raw}`);
     assert.strictEqual(deny.json.restricted, true, 'flagged as a maturity restriction');
     const allow = await httpJson(srv.port, 'POST', fine.playUrl, { caps: {}, profileId: kidId }, admin);
     assert.strictEqual(allow.status, 200, `G-rated local file plays for kids: ${allow.raw}`);
     assert.ok(allow.json.streamUrl, 'allowed mount returns a playable payload');
+    // Promote the SAME profile to R (level 3) via PATCH (avoids the 8-profile account cap) and confirm
+    // the RESTRICTED-tier local gate: R may play R, but NC-17 (above R) must still be blocked. This is
+    // the regression the `level < 4` fix closes — the old `level < 3` let a tier-3 profile skip the gate.
+    const toR = await httpJson(srv.port, 'PATCH', `/api/me/profiles/${kidId}`, { password: 'hunter22', level: 3 }, admin);
+    assert.strictEqual(toR.json.level, 3, 'profile promoted to the R tier');
+    const rPlaysR = await httpJson(srv.port, 'POST', blocked.playUrl, { caps: {}, profileId: kidId }, admin);
+    assert.strictEqual(rPlaysR.status, 200, `R profile may play an R local file: ${rPlaysR.raw}`);
+    const rDenyNc17 = await httpJson(srv.port, 'POST', nc17.playUrl, { caps: {}, profileId: kidId }, admin);
+    assert.strictEqual(rDenyNc17.status, 403, `R profile must NOT mount an NC-17 local file (localPlay gate covers restricted tiers, not just Kids): ${rDenyNc17.raw}`);
+    assert.strictEqual(rDenyNc17.json.restricted, true, 'NC-17 block flagged as a maturity restriction');
     // No profile context (account owner) stays unrestricted; a spoofed profileId fails closed.
     const owner = await httpJson(srv.port, 'POST', blocked.playUrl, { caps: {} }, admin);
     assert.strictEqual(owner.status, 200, 'owner (no profile) is unrestricted for local plays');
@@ -3472,6 +3488,7 @@ test('maturity: restricted profiles get over-cap titles filtered OUT of the cata
       { id: 701, title: 'R Thriller', poster_path: '/b.jpg', adult: false, genre_ids: [53] },
       { id: 702, title: 'G Cartoon', poster_path: '/c.jpg', adult: false, genre_ids: [16, 10751] },
       { id: 703, title: 'XXX', poster_path: '/d.jpg', adult: true, genre_ids: [] },
+      { id: 704, title: 'PG Family', poster_path: '/g.jpg', adult: false, genre_ids: [28] },
     ] });
     if (p.endsWith('/discover/tv')) return j(res, { page: 1, total_pages: 1, results: [
       { id: 800, name: 'TV14 Drama', poster_path: '/e.jpg' },
@@ -3480,6 +3497,7 @@ test('maturity: restricted profiles get over-cap titles filtered OUT of the cata
     if (p.endsWith('/movie/700')) return j(res, { id: 700, adult: false, release_dates: { results: [{ iso_3166_1: 'US', release_dates: [{ certification: 'PG-13' }] }] } });
     if (p.endsWith('/movie/701')) return j(res, { id: 701, adult: false, release_dates: { results: [{ iso_3166_1: 'US', release_dates: [{ certification: 'R' }] }] } });
     if (p.endsWith('/movie/702')) return j(res, { id: 702, adult: false, release_dates: { results: [{ iso_3166_1: 'US', release_dates: [{ certification: 'G' }] }] } });
+    if (p.endsWith('/movie/704')) return j(res, { id: 704, adult: false, release_dates: { results: [{ iso_3166_1: 'US', release_dates: [{ certification: 'PG' }] }] } });
     if (p.endsWith('/tv/800')) return j(res, { id: 800, content_ratings: { results: [{ iso_3166_1: 'US', rating: 'TV-14' }] } });
     if (p.endsWith('/tv/801')) return j(res, { id: 801, content_ratings: { results: [{ iso_3166_1: 'US', rating: 'TV-MA' }] } });
     j(res, { results: [] });
@@ -3490,31 +3508,84 @@ test('maturity: restricted profiles get over-cap titles filtered OUT of the cata
     s = await bootServer({ NNTP_HOST: null, TMDB_BASE: `http://127.0.0.1:${mock.address().port}/3` });
     const tok = await setupAdmin(s.port);
     await httpJson(s.port, 'POST', '/api/settings', { tmdbKey: 'mat-filter-key' }, tok);
-    const teen = (await httpJson(s.port, 'POST', '/api/me/profiles', { name: 'Teen', level: 1 }, tok)).json.id;
-    const kids = (await httpJson(s.port, 'POST', '/api/me/profiles', { name: 'Kids', level: 0 }, tok)).json.id;
+    // Rating tiers: 0 G · 1 PG · 2 PG-13 · 3 R · 4 No limit. Each tier drops everything above its cap.
+    const pg13 = (await httpJson(s.port, 'POST', '/api/me/profiles', { name: 'PG13', level: 2 }, tok)).json.id;
+    const pg = (await httpJson(s.port, 'POST', '/api/me/profiles', { name: 'PG', level: 1 }, tok)).json.id;
+    const g = (await httpJson(s.port, 'POST', '/api/me/profiles', { name: 'G', level: 0 }, tok)).json.id;
     const ids = (r) => (r.json.results || []).map((x) => x.id).sort((a, b) => a - b);
 
-    // No profile context (adult/owner) → the catalog comes back unfiltered.
-    const adultM = await httpJson(s.port, 'GET', '/api/tmdb/discover/movie', null, tok);
-    assert.deepStrictEqual(ids(adultM), [700, 701, 702, 703], 'adult sees the full unfiltered catalog');
+    // No profile context (owner / No limit) → the catalog comes back unfiltered.
+    const noneM = await httpJson(s.port, 'GET', '/api/tmdb/discover/movie', null, tok);
+    assert.deepStrictEqual(ids(noneM), [700, 701, 702, 703, 704], 'No limit sees the full unfiltered catalog');
 
-    // Teen (≤PG-13/TV-14): the R movie and the hard-adult title are GONE from the list itself.
-    const teenM = await httpJson(s.port, 'GET', `/api/tmdb/discover/movie?_pf=${teen}`, null, tok);
-    assert.deepStrictEqual(ids(teenM), [700, 702], 'teen movie catalog drops the R + adult titles, keeps PG-13/G');
+    // PG-13 (≤PG-13/TV-14): the R movie and the hard-adult title are GONE from the list itself.
+    const pg13M = await httpJson(s.port, 'GET', `/api/tmdb/discover/movie?_pf=${pg13}`, null, tok);
+    assert.deepStrictEqual(ids(pg13M), [700, 702, 704], 'PG-13 catalog keeps PG-13/PG/G, drops R + adult');
     // TMDB's discover/tv can't filter by rating — the server filter is what removes the TV-MA show.
-    const teenT = await httpJson(s.port, 'GET', `/api/tmdb/discover/tv?_pf=${teen}`, null, tok);
-    assert.deepStrictEqual(ids(teenT), [800], 'teen TV catalog drops the TV-MA show, keeps TV-14');
+    const pg13T = await httpJson(s.port, 'GET', `/api/tmdb/discover/tv?_pf=${pg13}`, null, tok);
+    assert.deepStrictEqual(ids(pg13T), [800], 'PG-13 TV catalog drops the TV-MA show, keeps TV-14');
 
-    // Kids (≤PG AND a kid genre): only the animated/family G title survives.
-    const kidsM = await httpJson(s.port, 'GET', `/api/tmdb/discover/movie?_pf=${kids}`, null, tok);
-    assert.deepStrictEqual(ids(kidsM), [702], 'kids catalog keeps only the kid-genre G title');
+    // PG (≤PG): the PG-13 title now drops too — proves the finer-than-4 granularity.
+    const pgM = await httpJson(s.port, 'GET', `/api/tmdb/discover/movie?_pf=${pg}`, null, tok);
+    assert.deepStrictEqual(ids(pgM), [702, 704], 'PG catalog keeps PG/G, drops PG-13 + R + adult');
 
-    // An unknown/bogus profile id fails CLOSED to the strictest level (no spoofed-id catalog bypass).
+    // G (strictest: ≤G AND a kid genre): only the animated/family G title survives — the PG family
+    // title is dropped (cert above G and not a kid genre).
+    const gM = await httpJson(s.port, 'GET', `/api/tmdb/discover/movie?_pf=${g}`, null, tok);
+    assert.deepStrictEqual(ids(gM), [702], 'G catalog keeps only the kid-genre G title');
+
+    // An unknown/bogus profile id fails CLOSED to the strictest tier (no spoofed-id catalog bypass).
     const spoof = await httpJson(s.port, 'GET', '/api/tmdb/discover/movie?_pf=deadbeef', null, tok);
-    assert.deepStrictEqual(ids(spoof), [702], 'an unknown _pf id is treated as the strictest profile');
+    assert.deepStrictEqual(ids(spoof), [702], 'an unknown _pf id is treated as the strictest tier (G)');
   } finally {
     if (s) await s.shutdown();
     await new Promise((r) => mock.close(r));
+    delete process.env.TMDB_BASE;
+  }
+});
+
+// The rating-tier redesign (v1 Kids/Teen/Family/Adult → v2 G/PG/PG-13/R/No limit) migrates stored
+// profiles ONCE at boot. The invariant that must hold: no migrated profile ever becomes MORE
+// permissive (no mature content newly appears). This seeds v1-shaped data on disk and boots against it.
+test('maturity migration: legacy tiers remap preserving the cert cap (never more permissive), idempotently', async () => {
+  const os = require('os');
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-matmig-'));
+  let s1, s2;
+  try {
+    s1 = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const tok1 = await setupAdmin(s1.port);
+    await httpJson(s1.port, 'POST', '/api/me/profiles', { name: 'WasTeen', level: 2 }, tok1);
+    await httpJson(s1.port, 'POST', '/api/me/profiles', { name: 'WasKids', level: 1 }, tok1);
+    await s1.shutdown();
+
+    // Rewrite the store to v1-scheme values + drop the schema stamp so the next boot re-migrates.
+    const usersPath = path.join(dataDir, 'users.json');
+    const store = JSON.parse(fs.readFileSync(usersPath, 'utf8'));
+    delete store.maturitySchema;
+    const profs = store.list[0].profiles;
+    profs.find((p) => p.name === 'WasTeen').level = 1;   // v1 Teen (≤PG-13)
+    profs.find((p) => p.name === 'WasKids').level = 0;   // v1 Kids (≤PG)
+    (profs.find((p) => p.level === 4) || profs[0]).level = 3; // account default → v1 Adult (all)
+    profs.push({ id: 'legacy01', name: 'NoLevelKid', kid: true }); // pre-level profile, kid flag only
+    fs.writeFileSync(usersPath, JSON.stringify(store));
+
+    s2 = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const login = () => httpJson(s2.port, 'POST', '/api/login', { name: 'owner', password: 'hunter22' });
+    const me = (await httpJson(s2.port, 'GET', '/api/me', null, (await login()).json.token)).json;
+    const lvl = (name) => (me.profiles.find((p) => p.name === name) || {}).level;
+    assert.strictEqual(lvl('WasTeen'), 2, 'v1 Teen (≤PG-13) → PG-13 (2): cap preserved');
+    assert.strictEqual(lvl('WasKids'), 0, 'v1 Kids → G (0): stays strictest, never looser');
+    assert.strictEqual(lvl('NoLevelKid'), 0, 'legacy no-level kid back-fills to G (0)');
+    assert.strictEqual(lvl('owner'), 4, 'v1 Adult (all) → No limit (4): owner still plays everything');
+
+    // Idempotent: a third boot (schema already stamped) must not shift anything further.
+    await s2.shutdown();
+    s2 = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const me3 = (await httpJson(s2.port, 'GET', '/api/me', null, (await login()).json.token)).json;
+    assert.strictEqual((me3.profiles.find((p) => p.name === 'WasTeen') || {}).level, 2, 'migration is idempotent');
+  } finally {
+    if (s1) await s1.shutdown().catch(() => {});
+    if (s2) await s2.shutdown().catch(() => {});
     delete process.env.TMDB_BASE;
   }
 });

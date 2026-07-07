@@ -136,24 +136,64 @@ begin
     '', SW_HIDE, ewWaitUntilTerminated, rc);
 end;
 
+// Stop the per-user tray helper (wscript running triboon-tray.vbs → powershell running the .ps1) so
+// nothing holds a handle on the app dir while we replace it. Targeted by command-line match — never a
+// blanket wscript/powershell kill. Best-effort: the tray is cosmetic and restarts on next login/finish.
+procedure StopTray();
+var rc: Integer;
+begin
+  Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+    '-NoProfile -NonInteractive -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like ''*triboon-tray*'' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"',
+    '', SW_HIDE, ewWaitUntilTerminated, rc);
+end;
+
+// Clean install of the PROGRAM FILES payload on upgrade: delete the fully-replaced code dirs so no
+// stale file from a previous version lingers (the owner's "make sure files actually get overwritten").
+// Runs only after the service is confirmed stopped (node.exe unlocked). It ONLY touches {app}
+// code dirs — the data dir lives in ProgramData and is never referenced here, and {app}\logs +
+// any legacy stray data ({app}\data / {app}\%ProgramData%) are left for MigrateStrayData to recover.
+procedure CleanAppPayload();
+begin
+  DelTree(ExpandConstant('{app}\server'), True, True, True);
+  DelTree(ExpandConstant('{app}\web'), True, True, True);
+  DelTree(ExpandConstant('{app}\bin'), True, True, True);
+end;
+
+// Belt-and-suspenders for the data path: rewrite the INSTALLED service config so TRIBOON_DATA is a
+// LITERAL absolute path ({commonappdata}\Triboon\data, resolved by Inno) instead of the %ProgramData%
+// token. This removes all dependence on WinSW/env expanding the variable — data lands in the
+// kept-on-upgrade ProgramData dir no matter what. (The server also expands %VAR% at runtime; this
+// makes the packaged config correct at the source too.)
+procedure WriteServiceDataPath();
+var xmlPath: String; raw: AnsiString; content: String;
+begin
+  xmlPath := AppFile('triboon-service.xml');
+  if not LoadStringFromFile(xmlPath, raw) then exit;
+  content := raw;
+  StringChangeEx(content, '%ProgramData%\Triboon\data', ExpandConstant('{commonappdata}\Triboon\data'), True);
+  SaveStringToFile(xmlPath, content, False);
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var rc, i: Integer;
 begin
   NeedsRestart := False;
   Result := '';
-  if not ServiceExists() then exit;   // fresh install: nothing to stop/remove
-  BackupData();                        // upgrade: snapshot config to data-backup before anything else
-  // Upgrade/reinstall: the running service locks node.exe + the wrapper exe, so [Files] would fail
-  // to overwrite them. Stop + delete BEFORE any file is copied (PrepareToInstall runs pre-copy;
-  // sc.exe is always in {sys}).
+  if not ServiceExists() then exit;   // FRESH INSTALL: no prior service → nothing to stop/clean; [Files] just lays down the payload and [Dirs] creates the (empty) ProgramData data dir.
+  // UPGRADE path from here down. User data lives in ProgramData and is NEVER touched by any of this.
+  BackupData();                        // snapshot config to data-backup before anything else
+  StopTray();                          // stop the per-user tray so it can't hold an app-dir handle
+  // The running service locks node.exe + the wrapper exe, so [Files] would fail to overwrite them.
+  // Stop + delete BEFORE any file is copied (PrepareToInstall runs pre-copy; sc.exe is always in {sys}).
   Exec(ExpandConstant('{sys}\sc.exe'), 'stop ' + SERVICE_NAME, '', SW_HIDE, ewWaitUntilTerminated, rc);
   Exec(ExpandConstant('{sys}\sc.exe'), 'delete ' + SERVICE_NAME, '', SW_HIDE, ewWaitUntilTerminated, rc);
   // sc delete only MARKS the service for deletion; the SCM keeps the record until every open handle
   // (services.msc, a monitoring agent) closes. Poll until it's truly gone so the re-install below
-  // can't hit ERROR_SERVICE_MARKED_FOR_DELETE (1072) and silently fail.
+  // can't hit ERROR_SERVICE_MARKED_FOR_DELETE (1072) and silently fail. Once gone, node.exe is
+  // unlocked → clean the Program Files payload for a true clean-install of the code (data untouched).
   for i := 1 to 30 do    // ~15s bounded
   begin
-    if not ServiceExists() then exit;
+    if not ServiceExists() then begin CleanAppPayload(); exit; end;
     Sleep(500);
   end;
   Result := 'Windows is still removing the previous Triboon service (a Services or Task Manager window may be holding it open). Please close those windows and run the installer again.';
@@ -216,7 +256,8 @@ var rc, i: Integer;
 begin
   if CurStep <> ssPostInstall then exit;
 
-  MigrateStrayData();     // recover data a prior buggy install left in the app folder (server-side %VAR% expansion is the real path fix)
+  MigrateStrayData();       // recover data a prior buggy install left in the app folder
+  WriteServiceDataPath();   // pin TRIBOON_DATA to the literal ProgramData path in the installed config
   HardenDataDir();
   OpenFirewall();
 
@@ -239,4 +280,12 @@ begin
     MsgBox('Triboon was installed but has not started yet. This usually means port 7777 is already in use, ' +
       'or Windows will start it shortly (it is set to start automatically).' + #13#10 + #13#10 +
       'Try http://localhost:7777 in a minute; logs are in ' + ExpandConstant('{app}\logs') + '.', mbInformation, MB_OK);
+end;
+
+// Stop the per-user tray before the uninstaller removes {app}, so it can't hold a handle (and it
+// doesn't linger pointing at a deleted service). The [UninstallRun] entries already stop/remove the
+// service + firewall rule; this covers the tray, which runs as the logged-in user.
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usUninstall then StopTray();
 end;

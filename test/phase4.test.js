@@ -659,7 +659,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'TMDB search should rank exact franchise/title-prefix matches above incidental phrase matches');
   assert.match(ui, /if \(S\._homeRowsSig === sig && \$\('rows'\)\.children\.length\) \{[\s\S]+if \(S\.view === 'home'\) \{[\s\S]+setRowsView\(\$\('rows'\), S\.rows, true\);[\s\S]+\}[\s\S]+S\.view === 'home' && S\.zone !== 'rail' && !document\.querySelector\('#home \.focus'\)[\s\S]+focusContent\(\);[\s\S]+return false;/,
     'returning Home with cached rows should repoint the row model and reclaim focus from hidden pages');
-  assert.match(ui, /if \(\(S\.maxLevel \?\? 3\) < 3\) \{[\s\S]+renderRowsInto\(root, rows\);[\s\S]+setRowsView\(root, rows, false\);[\s\S]+if \(S\.zone !== 'rail'\) focusCard\(0, 0\);/,
+  assert.match(ui, /if \(\(S\.maxLevel \?\? 4\) < 4\) \{[\s\S]+renderRowsInto\(root, rows\);[\s\S]+setRowsView\(root, rows, false\);[\s\S]+if \(S\.zone !== 'rail'\) focusCard\(0, 0\);/,
     'restricted-profile Discover rows should still focus the first visible card after rendering');
   assert.match(ui, /buildTrailerRow\(trend\.results[\s\S]+const focused = root\.querySelector\('\.focus'\);[\s\S]+const focusRow = focused \? parseInt\(focused\.dataset\.row[\s\S]+renderRowsInto\(root, rows, \{ resetScroll: false \}\);[\s\S]+setRowsView\(root, rows, false\);[\s\S]+if \(S\.view === 'discover' && S\.zone !== 'rail'\) \{[\s\S]+focusCard\(safeRow, safeCol, \{ scroll: false, align: false \}\);/,
     'Discover trailer-row hydration should preserve or restore card focus after the async rerender');
@@ -875,6 +875,10 @@ test('preferences profile manager has TV-friendly profile icons and add action',
     'the add-profile control should use the styled TV-friendly primary button');
   assert.doesNotMatch(ui, /LEVEL_BADGE/,
     'profile UI should not reintroduce emoji maturity badges');
+  // Settings section tabs switch on CLICK (+ D-pad focus); hover-to-switch is bound only on TV so a
+  // web/desktop pointer ROLLOVER never changes the section (the owner's accidental-jump complaint).
+  assert.match(ui, /document\.querySelectorAll\('#prefTabs button'\)\.forEach\(\(b\) => \{[\s\S]*?b\.addEventListener\('click', run\); b\.addEventListener\('focus', run\);[\s\S]*?if \(document\.body\.classList\.contains\('tv'\)\) b\.addEventListener\('mouseenter', run\);/,
+    'settings tabs switch on click/focus; mouseenter (rollover) is TV-only');
 });
 
 test('admin security panel exposes own-password change separately from user resets', () => {
@@ -1295,23 +1299,36 @@ test('Android native player: direct source and native chrome stay out of the web
     'a denied parallel age check discards the speculative mount and returns 403 before any payload');
   assert.match(idxSrc, /function discardDeniedMount\(session, vf\) \{[\s\S]+mounts\.delete\(vf\.id\)/,
     'the denied-mount teardown dereferences the mount so it frees immediately rather than at the sweep');
-  assert.match(idxSrc, /function profileLevelFor\(user, profileId\) \{[\s\S]+return p \? \(p\.level \?\? \(p\.kid \? 0 : 3\)\) : 0;/,
-    'a provided-but-unknown profileId fails closed to the strictest level (no spoofed-id bypass)');
+  assert.match(idxSrc, /function profileLevelFor\(user, profileId\) \{[\s\S]+if \(!profileId\) return 4;[\s\S]+return p \? \(p\.level \?\? \(p\.kid \? 0 : 4\)\) : 0;/,
+    'no profile context → No limit (4); a provided-but-unknown profileId fails closed to the strictest tier 0 (no spoofed-id bypass)');
   // Catalog maturity filter: a restricted profile must never SEE an over-cap title (not just be
   // blocked on click). The TMDB proxy filters list responses so the catalog matches the play gate.
-  assert.match(idxSrc, /async function maturityFilterList\(level, data\) \{[\s\S]+if \(level >= 3 \|\| !data \|\| !Array\.isArray\(data\.results\)[\s\S]+mapLimit\(items, 8,/,
-    'maturityFilterList only touches list-shaped payloads and filters with bounded concurrency');
+  assert.match(idxSrc, /async function maturityFilterList\(level, data\) \{[\s\S]+if \(level >= 4 \|\| !data \|\| !Array\.isArray\(data\.results\)[\s\S]+mapLimit\(items, 8,/,
+    'maturityFilterList only touches list-shaped payloads and filters with bounded concurrency (No limit = 4 bypasses)');
   assert.match(idxSrc, /if \(x\.adult\) return false;[\s\S]+if \(level === 0 && !\(\(x\.genre_ids \|\| \[\]\)\.some\(\(g\) => MATURITY_LIST_KID_GENRES\.has\(g\)\)\)\) return false;[\s\S]+return maturityAllowsPlay\(level, x\.id, type\);/,
     'the filter drops the adult flag, gates Kids to kid genres, and defers the cert check to the same play-gate logic');
   assert.match(idxSrc, /const kept = items\.filter\(\(_, i\) => keep\[i\]\);\s*\n\s*return kept\.length === items\.length \? data : \{ \.\.\.data, results: kept \};/,
     'the filter returns the original object untouched when nothing is dropped (fail-open, no needless allocation)');
   // The proxy resolves the active profile from _pf (stored level, unspoofable), strips it before the
   // upstream call (so the shared TMDB cache is not fragmented per profile), and filters when < Adult.
-  assert.match(idxSrc, /const pf = ctx\.url\.searchParams\.get\('_pf'\);[\s\S]+p\.delete\('_pf'\);[\s\S]+const data = await tmdb\.get\('\/' \+ ctx\.m\[1\] \+ search\);[\s\S]+const level = pf !== null \? profileLevelFor\(ctx\.user, pf\) : 3;[\s\S]+level < 3 \? await maturityFilterList\(level, data\) : data;/,
+  assert.match(idxSrc, /const pf = ctx\.url\.searchParams\.get\('_pf'\);[\s\S]+p\.delete\('_pf'\);[\s\S]+const data = await tmdb\.get\('\/' \+ ctx\.m\[1\] \+ search\);[\s\S]+const level = pf !== null \? profileLevelFor\(ctx\.user, pf\) : 4;[\s\S]+level < 4 \? await maturityFilterList\(level, data\) : data;/,
     'tmdbProxy strips _pf before upstream and applies the maturity filter for restricted profiles only');
-  // Client: only restricted profiles tag TMDB reads (the adult/owner path is byte-for-byte unchanged).
-  assert.match(ui, /path\.startsWith\('\/api\/tmdb\/'\)\s*\n\s*&& \(S\.maxLevel \?\? 3\) < 3 && S\.profile && S\.profile\.id\) \{\s*\n\s*path \+= \(path\.includes\('\?'\) \? '&' : '\?'\) \+ '_pf=' \+ encodeURIComponent\(S\.profile\.id\);/,
+  // Client: only restricted profiles tag TMDB reads (the No-limit/owner path is byte-for-byte unchanged).
+  assert.match(ui, /path\.startsWith\('\/api\/tmdb\/'\)\s*\n\s*&& \(S\.maxLevel \?\? 4\) < 4 && S\.profile && S\.profile\.id\) \{\s*\n\s*path \+= \(path\.includes\('\?'\) \? '&' : '\?'\) \+ '_pf=' \+ encodeURIComponent\(S\.profile\.id\);/,
     'api() appends _pf to TMDB proxy GETs only for restricted profiles with an active profile id');
+  // Rating tiers: the ordered ladder is G(0) PG(1) PG-13(2) R(3) No limit(4). levelAllows/maturityAllowsPlay
+  // allow cert rank ≤ tier; NC-17/NR rank as 4 (only No limit). The client + server ranks stay in lockstep.
+  assert.match(ui, /const LEVELS = \['G', 'PG', 'PG-13', 'R', 'No limit'\];/, 'web maturity tiers are rating-labeled (G..No limit)');
+  assert.match(ui, /const CERT_RANK = \{[^}]*'NC-17': 4, NR: 4 \};/, 'web CERT_RANK ranks NC-17/NR as the top tier (4)');
+  assert.match(ui, /function levelAllows\(cert\) \{[\s\S]+if \(lvl >= 4 \|\| !cert\) return true;[\s\S]+return rank <= lvl;/, 'levelAllows: tier N allows cert rank ≤ N; No limit/unrated → allowed');
+  assert.match(idxSrc, /const MATURITY_CERT_RANK = \{[^}]*'NC-17': 4, NR: 4 \};/, 'server MATURITY_CERT_RANK matches the web 5-rank scale');
+  assert.match(idxSrc, /async function maturityAllowsPlay\(level, tmdbId, mediaType\) \{\s*\n\s*if \(level >= 4\) return true;[\s\S]+return rank <= level;/, 'server play gate: No limit (4) fast-path; tier N allows cert rank ≤ N');
+  // One-time v1→v2 tier migration must PRESERVE each profile's cert cap (never loosen): Teen→PG-13,
+  // Family→PG-13, Adult→No limit; Kids stays 0 (now G). Guarded by a stored schema stamp (runs once).
+  const authSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'auth.js'), 'utf8');
+  assert.match(authSrc, /_migrateMaturitySchema\(\) \{[\s\S]+if \(\(users\.maturitySchema \|\| 0\) >= 2\) return;[\s\S]+const REMAP = \{ 0: 0, 1: 2, 2: 2, 3: 4 \};[\s\S]+users\.maturitySchema = 2;/,
+    'maturity migration is idempotent (schema stamp) and remaps preserving the cert cap (Adult→No limit, Teen/Family→PG-13, Kids→G)');
+  assert.match(authSrc, /this\._migrateMaturitySchema\(\);/, 'the migration runs once at Auth construction');
   // IPTV live proxy: an Android WebView renderer crash can half-close the client socket without a
   // 'close' event, so a bare pipe() would pin the upstream provider connection forever. A manual
   // pump + dead-client stall watchdog (re-armed only on drained writes) + a res 'error' handler
@@ -2079,7 +2096,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'screensaver trending artwork should use a daily browser cache');
   assert.match(ui, /function loadScreensaverTrendingCache\(\) \{[\s\S]+localStorage\.getItem\(SCREENSAVER_TRENDING_STORE\)[\s\S]+Date\.now\(\) - S\._screensaverTrendingAt < SCREENSAVER_TRENDING_TTL[\s\S]+function saveScreensaverTrendingCache\(key, items\) \{[\s\S]+localStorage\.setItem\(SCREENSAVER_TRENDING_STORE, JSON\.stringify\(payload\)\)/,
     'screensaver trending artwork should persist by profile/maturity key without requiring a fresh page load');
-  assert.match(ui, /async function fetchScreensaverTrendingItems\(\) \{[\s\S]+api\('\/api\/tmdb\/trending\/all\/day'\)[\s\S]+passesMaturity\(x\) && catalogOk\(x\)[\s\S]+lvl < 3 && raw\.length < 18[\s\S]+certParams\(\)[\s\S]+mapTmdb\(x\)[\s\S]+return out\.slice\(0, 36\);/,
+  assert.match(ui, /async function fetchScreensaverTrendingItems\(\) \{[\s\S]+api\('\/api\/tmdb\/trending\/all\/day'\)[\s\S]+passesMaturity\(x\) && catalogOk\(x\)[\s\S]+lvl < 4 && raw\.length < 18[\s\S]+certParams\(\)[\s\S]+mapTmdb\(x\)[\s\S]+return out\.slice\(0, 36\);/,
     'screensaver should prefer TMDB trending today while preserving profile-safe fallback lists');
   assert.match(ui, /function refreshScreensaverTrending\(force = false\) \{[\s\S]+screensaverTrendingFresh\(\)[\s\S]+S\._screensaverTrendingJob[\s\S]+saveScreensaverTrendingCache\(key, items\)[\s\S]+function scheduleScreensaverTrendingRefresh\(\) \{[\s\S]+window\.requestIdleCallback[\s\S]+refreshScreensaverTrending\(\);/,
     'screensaver trending refresh should be deduped and idle-scheduled instead of blocking startup');
@@ -4129,6 +4146,8 @@ test('audit contracts: local age gate, next-episode recency, music queue, scanne
   // server-side scan record (never the client body), episode falls back to the show's id.
   const localPlay = server.slice(server.indexOf('localPlay: async'), server.indexOf('localThumb: async'));
   assert.match(localPlay, /profileLevelFor\(ctx\.user, body\.profileId\)/, 'local play reads the profile level');
+  assert.match(localPlay, /const level = profileLevelFor\(ctx\.user, body\.profileId\);\s*\n\s*if \(level < 4\) \{/,
+    'local play age-gates EVERY tier below No limit (4) — not the old `< 3`, which let the new R tier (3) skip the gate');
   assert.match(localPlay, /maturityAllowsPlay\(level, tmdbId, mediaType\)[\s\S]{0,80}maturityBlockedResponse\(ctx\)/,
     'local play blocks over-level titles');
   assert.ok(localPlay.indexOf('maturityAllowsPlay') < localPlay.indexOf('localMountFor('),

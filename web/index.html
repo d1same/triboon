@@ -465,6 +465,7 @@ body.androidApp #gateArtCaption{display:none}
 .profCard .av.lvl1{color:#78C7FF;background:linear-gradient(145deg,rgba(30,55,83,.86),rgba(11,17,31,.96))}
 .profCard .av.lvl2{color:#FFC65C;background:linear-gradient(145deg,rgba(82,57,24,.82),rgba(28,18,12,.96))}
 .profCard .av.lvl3{color:#F3EFF7;background:linear-gradient(145deg,rgba(72,42,88,.86),rgba(18,11,26,.96))}
+.profCard .av.lvl4{color:#F2A196;background:linear-gradient(145deg,rgba(88,38,34,.86),rgba(28,12,11,.96))}
 .profCard.add .av{background:rgba(34,25,52,.7);border:1.5px dashed rgba(var(--fg),.2);color:var(--muted)}
 .profCard:hover .av,.profCard.focus .av{transform:scale(1.05);border-color:var(--focus);box-shadow:0 0 0 3px var(--focusSoft),0 0 26px var(--artFocusGlow),0 18px 46px rgba(0,0,0,.36)}
 .profCard .pn{font:750 15px "Sora";max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -1919,6 +1920,7 @@ body.tv .ctWells{display:none}
 .profileLevelIcon.lvl1{color:#78C7FF;background:rgba(30,55,83,.46)}
 .profileLevelIcon.lvl2{color:#FFC65C;background:rgba(82,57,24,.44)}
 .profileLevelIcon.lvl3{color:#F3EFF7;background:rgba(72,42,88,.44)}
+.profileLevelIcon.lvl4{color:#F2A196;background:rgba(88,38,34,.44)}
 .profileIdentity{min-width:0;display:flex;flex-direction:column;gap:6px}
 .profileName{font:800 14px "Sora";white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .profileMeta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -1929,6 +1931,7 @@ body.tv .ctWells{display:none}
 .profileLevelChip.lvl1{color:#78C7FF;border-color:rgba(120,199,255,.22);background:rgba(120,199,255,.08)}
 .profileLevelChip.lvl2{color:#FFC65C;border-color:rgba(255,198,92,.24);background:rgba(255,198,92,.08)}
 .profileLevelChip.lvl3{color:#F3EFF7;border-color:rgba(var(--fg),.18);background:rgba(var(--fg),.06)}
+.profileLevelChip.lvl4{color:#F2A196;border-color:rgba(242,161,150,.24);background:rgba(242,161,150,.08)}
 .lockTag{color:var(--amber);border-color:rgba(255,198,92,.22);background:rgba(255,198,92,.07)}
 .profileActions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
 .profileAction{min-height:38px;display:inline-flex;align-items:center;gap:7px;background:var(--btn);border:1px solid rgba(255,255,255,.045);
@@ -4078,7 +4081,7 @@ async function api(path, opts = {}) {
   // server filters over-cap titles OUT of the catalog (matches the play gate — they don't show up
   // at all, not just "can't be clicked"). The adult/owner path is untouched: no _pf, no change.
   if ((!opts.method || opts.method === 'GET') && path.startsWith('/api/tmdb/')
-      && (S.maxLevel ?? 3) < 3 && S.profile && S.profile.id) {
+      && (S.maxLevel ?? 4) < 4 && S.profile && S.profile.id) {
     path += (path.includes('?') ? '&' : '?') + '_pf=' + encodeURIComponent(S.profile.id);
   }
   if (opts.body && typeof opts.body !== 'string') { opts.body = JSON.stringify(opts.body); headers['content-type'] = 'application/json'; }
@@ -4309,13 +4312,18 @@ function showGate(which) {
 }
 
 /* ============ profiles (who's watching) ============ */
-const LEVELS = ['Kids', 'Teen', 'Family', 'Adult'];      // 0..3, filters the catalog
-const LEVEL_ICON = ['kids', 'teen', 'family', 'adult'];
+// Maturity tiers by rating cap: 0 G · 1 PG · 2 PG-13 · 3 R · 4 No limit. A profile sees titles
+// rated at or below its tier (TV ratings auto-mapped in CERT_RANK). Kept as an ORDERED index so
+// every numeric comparison below still holds: `< TOP` = restricted, `=== 0` = strictest, `>= TOP`
+// = unrestricted. TOP is the last index.
+const LEVELS = ['G', 'PG', 'PG-13', 'R', 'No limit']; // 0..4
+const LEVEL_ICON = ['kids', 'teen', 'family', 'adult', 'unlimited'];
 const PROFILE_ICON_PATHS = {
   kids: '<circle cx="12" cy="8.2" r="3.2"/><path d="M6.5 20c.9-3.2 2.7-4.8 5.5-4.8s4.6 1.6 5.5 4.8"/><path d="M7.2 5.8 5.5 4.1"/><path d="M16.8 5.8l1.7-1.7"/>',
   teen: '<circle cx="12" cy="8.5" r="3.4"/><path d="M5.8 20c1-3.5 3.1-5.3 6.2-5.3s5.2 1.8 6.2 5.3"/><path d="M8 4.4c1.1-1 2.4-1.4 4-1.4s2.9.5 4 1.4"/>',
   family: '<circle cx="9" cy="8.5" r="3"/><path d="M3.7 20c.8-3.2 2.6-4.8 5.3-4.8s4.5 1.6 5.3 4.8"/><circle cx="16.5" cy="10" r="2.5"/><path d="M14.3 16c2.7.3 4.4 1.6 5.2 4"/>',
   adult: '<path d="M12 3.4 19 6v5.5c0 4.2-2.7 7.4-7 9.1-4.3-1.7-7-4.9-7-9.1V6l7-2.6Z"/><path d="m9 12 2 2 4-4"/>',
+  unlimited: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.4 2.5 3.7 5.6 3.7 9s-1.3 6.5-3.7 9c-2.4-2.5-3.7-5.6-3.7-9s1.3-6.5 3.7-9Z"/>',
   lock: '<rect x="6" y="10" width="12" height="10" rx="2"/><path d="M8.5 10V7.8a3.5 3.5 0 0 1 7 0V10"/>',
   edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5Z"/>',
   trash: '<path d="M4 7h16"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/>',
@@ -4331,7 +4339,7 @@ function profileIcon(name, extraClass = '') {
 }
 function profileLevelIndex(level) {
   const n = Number(level);
-  return Number.isInteger(n) && n >= 0 && n < LEVELS.length ? n : 3;
+  return Number.isInteger(n) && n >= 0 && n < LEVELS.length ? n : LEVELS.length - 1;
 }
 function profileLevelChip(level) {
   const idx = profileLevelIndex(level);
@@ -4461,15 +4469,16 @@ document.addEventListener('keydown', (e) => {
 $('pinBack').addEventListener('click', showProfilePicker);
 function selectProfile(pr) {
   S.profile = pr;
-  S.maxLevel = pr.level ?? 3;
+  S.maxLevel = pr.level ?? 4;
   try { localStorage.setItem('triboon.profile', pr.id); } catch {}
   enterAppShell();
 }
 // Inline add-profile editor (name + maturity level + optional PIN) via a small prompt flow.
 async function addProfileFlow() {
   const name = prompt('Profile name?'); if (!name || !name.trim()) return;
-  const lvlStr = prompt('Maturity level - 0 Kids, 1 Teen, 2 Family, 3 Adult', '2');
-  const level = Math.max(0, Math.min(3, parseInt(lvlStr, 10)));
+  const lvlStr = prompt('Maturity rating cap - 0 G, 1 PG, 2 PG-13, 3 R, 4 No limit', '4');
+  const lvlN = parseInt(lvlStr, 10);
+  const level = Number.isInteger(lvlN) ? Math.max(0, Math.min(4, lvlN)) : 4;
   let pin;
   if (confirm('Lock this profile with a 4-digit PIN (parental lock)?')) {
     const p = prompt('Choose a 4-digit PIN'); if (p && /^\d{4}$/.test(p)) pin = p; else toast('PIN must be 4 digits — skipped');
@@ -4579,17 +4588,17 @@ function mapTmdb(x) {
 // Maturity filtering — a profile's level hides titles above it.
 const KID_GENRES = new Set([16, 10751, 10762]); // Animation, Family, Kids
 function passesMaturity(x) {
-  const lvl = S.maxLevel ?? 3;
-  if (lvl >= 3) return true;
+  const lvl = S.maxLevel ?? 4;
+  if (lvl >= 4) return true;
   if (x.adult) return false;
   if (lvl === 0) { const g = x.genre_ids || []; return g.some((id) => KID_GENRES.has(id)); }
-  return true; // teen/family: drop adult-flagged only
+  return true; // PG/PG-13/R: drop adult-flagged here; the cert cap is enforced by certParams + the server filter
 }
 function certParams() {
-  const lvl = S.maxLevel ?? 3;
-  if (lvl >= 3) return '';
-  // Kids allow up to PG (same bar as the play gate) — G-only starves the catalog.
-  const cert = lvl === 0 ? 'PG' : lvl === 1 ? 'PG-13' : 'R';
+  const lvl = S.maxLevel ?? 4;
+  if (lvl >= 4) return '';
+  // Tier → US movie-certification ceiling (each tier allows its own rating and everything below).
+  const cert = ['G', 'PG', 'PG-13', 'R'][lvl] || 'R';
   // NOTE: no include_adult here — CATALOG_Q already carries it, and TMDB's discover endpoint
   // returns HTTP 400 if include_adult appears twice (this was the "tmdb upstream 400" on kid/teen/
   // family profiles). The one caller that uses certParams() WITHOUT CATALOG_Q adds CATALOG_Q too.
@@ -5013,7 +5022,7 @@ function homeCatalogRow(name, path, result, kind = 'catalog') {
 async function loadHomeCatalogRows() {
   const rows = [];
   if (!S.serverInfo.tmdb) return rows;
-  if ((S.maxLevel ?? 3) === 0) {
+  if ((S.maxLevel ?? 4) === 0) {
     // Kids profiles get rows BUILT for them, instead of filtering grown-up lists down.
     const paths = [
       '/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=80&with_genres=10751' + CATALOG_Q + certParams(),
@@ -5028,7 +5037,7 @@ async function loadHomeCatalogRows() {
     rows.push(homeCatalogRow('Family movie night', paths[0], fam, 'maturity'));
     rows.push(homeCatalogRow('Animation', paths[1], anim, 'maturity'));
     rows.push(homeCatalogRow('Kids series', paths[2], kidTv, 'maturity'));
-  } else if ((S.maxLevel ?? 3) < 3) {
+  } else if ((S.maxLevel ?? 4) < 4) {
     const paths = [
       '/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=100' + CATALOG_Q + certParams(),
       '/api/tmdb/discover/movie?sort_by=vote_average.desc&vote_count.gte=400' + CATALOG_Q + certParams(),
@@ -5061,7 +5070,7 @@ async function loadHomeCatalogRows() {
 }
 const HOME_CATALOG_TTL = 30 * 60 * 1000;
 function homeCatalogKey() {
-  return [S.serverInfo && S.serverInfo.tmdb ? 'tmdb' : 'none', S.maxLevel ?? 3, S.profile ? S.profile.id : 'default'].join(':');
+  return [S.serverInfo && S.serverInfo.tmdb ? 'tmdb' : 'none', S.maxLevel ?? 4, S.profile ? S.profile.id : 'default'].join(':');
 }
 function cachedHomeCatalogRows() {
   const key = homeCatalogKey();
@@ -6064,12 +6073,12 @@ function macSafariVideo() {
 }
 
 // Parental playback gate: kid/teen profiles can't play titles rated above their level.
-const CERT_RANK = { G: 0, 'TV-Y': 0, 'TV-G': 0, 'TV-Y7': 1, PG: 1, 'TV-PG': 1, 'PG-13': 2, 'TV-14': 2, R: 3, 'TV-MA': 3, 'NC-17': 3, NR: 3 };
+const CERT_RANK = { G: 0, 'TV-Y': 0, 'TV-G': 0, 'TV-Y7': 1, PG: 1, 'TV-PG': 1, 'PG-13': 2, 'TV-14': 2, R: 3, 'TV-MA': 3, 'NC-17': 4, NR: 4 };
 function levelAllows(cert) {
-  const lvl = S.maxLevel ?? 3;
-  if (lvl >= 3 || !cert) return true;
-  const rank = CERT_RANK[cert] ?? 3;
-  return rank <= (lvl === 0 ? 1 : 2); // Kids ≤PG · Teen/Family ≤PG-13/TV-14
+  const lvl = S.maxLevel ?? 4;
+  if (lvl >= 4 || !cert) return true;     // No limit, or an unrated title → allowed (the server is the backstop)
+  const rank = CERT_RANK[cert] ?? 4;      // unknown cert → treat as top (only No limit plays it)
+  return rank <= lvl;                     // tier N allows cert rank ≤ N (G 0 · PG 1 · PG-13 2 · R 3 · NC-17/NR 4)
 }
 function normalizeQualityRank(v) {
   const n = Number(v);
@@ -6519,7 +6528,7 @@ function wlMeta(it) {
 // query-filtered like catalog rows — verify each title's real certification (the same bar as
 // the play gate) before even showing its cover. Unverifiable titles stay hidden.
 async function certAllowed(type, tmdbId) {
-  if ((S.maxLevel ?? 3) >= 3) return true;
+  if ((S.maxLevel ?? 4) >= 4) return true;
   if (!type || !tmdbId) return false;
   try {
     const d = await api(`/api/tmdb/${type}/${tmdbId}?append_to_response=${type === 'tv' ? 'content_ratings' : 'release_dates'}`);
@@ -13045,7 +13054,7 @@ function pushScreensaverItem(out, seen, it, rowName = '') {
   out.push({ title, bg: bg || tile, tile: tile || bg });
 }
 function screensaverTrendingKey() {
-  return [S.serverInfo && S.serverInfo.tmdb ? 'tmdb' : 'none', S.maxLevel ?? 3, S.profile ? S.profile.id : 'default'].join(':');
+  return [S.serverInfo && S.serverInfo.tmdb ? 'tmdb' : 'none', S.maxLevel ?? 4, S.profile ? S.profile.id : 'default'].join(':');
 }
 function compactScreensaverTrendingItem(it) {
   return {
@@ -13080,11 +13089,11 @@ function screensaverTrendingFresh() {
   return S._screensaverTrendingItems.length && Date.now() - (S._screensaverTrendingAt || 0) < SCREENSAVER_TRENDING_TTL;
 }
 async function fetchScreensaverTrendingItems() {
-  const lvl = S.maxLevel ?? 3;
+  const lvl = S.maxLevel ?? 4;
   const trend = await api('/api/tmdb/trending/all/day');
   const ok = (x) => (x.poster_path || x.backdrop_path) && passesMaturity(x) && catalogOk(x);
   const raw = (trend.results || []).filter(ok);
-  if (lvl < 3 && raw.length < 18) {
+  if (lvl < 4 && raw.length < 18) {
     const kid = lvl === 0;
     const urls = kid ? [
       '/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=80&with_genres=10751' + CATALOG_Q + certParams(),
@@ -13255,9 +13264,9 @@ async function loadDiscover() {
   root.innerHTML = '<div class="row"><h2>loading…</h2></div>';
   // Restricted profiles (Kids/Teen/Family): certified discover lists only — the editorial
   // lists (trending/now-playing) carry no rating data, and no trailer row (it's trend-fed).
-  if ((S.maxLevel ?? 3) < 3) {
+  if ((S.maxLevel ?? 4) < 4) {
     try {
-      const kid = (S.maxLevel ?? 3) === 0;
+      const kid = (S.maxLevel ?? 4) === 0;
       const g = kid ? '&with_genres=' + encodeURIComponent('10751|16') : '';
       const tvG = kid ? '&with_genres=' + encodeURIComponent('10762|16') : '';
       const [popM, topM, popT] = await Promise.all([
@@ -13876,7 +13885,7 @@ async function loadCalendar() {
   await Promise.all([...uniq.values()].slice(0, 40).map(async (m) => {
     try {
       const d = await api(`/api/tmdb/${m.type}/${m.tmdbId}?append_to_response=${m.type === 'tv' ? 'content_ratings' : 'release_dates'}`);
-      if ((S.maxLevel ?? 3) < 3 && (d.adult || !levelAllows(certOf(d, m.type)))) return;
+      if ((S.maxLevel ?? 4) < 4 && (d.adult || !levelAllows(certOf(d, m.type)))) return;
       if (m.type === 'tv' && d.next_episode_to_air && d.next_episode_to_air.air_date) {
         const ne = d.next_episode_to_air;
         if (ne.air_date >= today && ne.air_date <= weekEnd) {
@@ -14446,7 +14455,7 @@ async function loadWatchlistView() {
   await loadWatchlist();
   $('browseTitle').textContent = 'My Watchlist';
   let entries = S.watchlist || [];
-  if ((S.maxLevel ?? 3) < 3 && entries.length) {
+  if ((S.maxLevel ?? 4) < 4 && entries.length) {
     const ok = await Promise.all(entries.map((w) => {
       const t = certTargetForMeta(w.meta, w.key);
       return certAllowed(t.type, t.tmdbId);
@@ -18085,7 +18094,11 @@ function activateAccountTab(b) {
 }
 document.querySelectorAll('#prefTabs button').forEach((b) => {
   const run = () => activateAccountTab(b);
-  b.addEventListener('click', run); b.addEventListener('focus', run); b.addEventListener('mouseenter', run);
+  b.addEventListener('click', run); b.addEventListener('focus', run);
+  // TV navigates settings by D-pad (the focus handler switches sections, which feels native there),
+  // so hover-to-switch is only bound on TV. On web/desktop a pointer ROLLOVER must NOT change the
+  // section (the owner's accidental-jump complaint) — click only. Same rule as the left rail.
+  if (document.body.classList.contains('tv')) b.addEventListener('mouseenter', run);
 });
 syncSectionTabs('prefTabs');
 // Admin jumps here from setup / Trakt link — open the account page on the first Server-settings tab.
@@ -18170,7 +18183,7 @@ function renderPinRows() {
             body: { password: pwI.value, name: nameI.value.trim(), level: +f.querySelector('select').value } });
           const idx = (S.user.profiles || []).findIndex((x) => x.id === pr.id);
           if (idx >= 0) S.user.profiles[idx] = updated;
-          if (S.profile && S.profile.id === pr.id) { S.profile = updated; S.maxLevel = updated.level ?? 3; loadRows(); }
+          if (S.profile && S.profile.id === pr.id) { S.profile = updated; S.maxLevel = updated.level ?? 4; loadRows(); }
           toast(`Profile “${updated.name}” updated`);
           renderPinRows();
         } catch (e) { toast(e.message); }
@@ -18189,7 +18202,7 @@ function renderPinRows() {
         try {
           await api(`/api/me/profiles/${pr.id}/delete`, { method: 'POST', body: { password: f.querySelector('input').value } });
           S.user.profiles = (S.user.profiles || []).filter((x) => x.id !== pr.id);
-          if (S.profile && S.profile.id === pr.id) { S.profile = null; S.maxLevel = 3; try { localStorage.removeItem('triboon.profile'); } catch {} loadRows(); }
+          if (S.profile && S.profile.id === pr.id) { S.profile = null; S.maxLevel = 4; try { localStorage.removeItem('triboon.profile'); } catch {} loadRows(); }
           toast(`Profile “${pr.name}” deleted`);
           renderPinRows();
         } catch (e) { toast(e.message); }
@@ -18230,7 +18243,7 @@ function renderPinRows() {
   addForm.className = 'pinForm addProfileForm';
   addForm.innerHTML = `<input placeholder="profile name" maxlength="20" aria-label="Profile name">
     <select aria-label="Profile maturity level">
-      ${LEVELS.map((l, i) => `<option value="${i}" ${i === 3 ? 'selected' : ''}>${l}</option>`).join('')}
+      ${LEVELS.map((l, i) => `<option value="${i}" ${i === 4 ? 'selected' : ''}>${l}</option>`).join('')}
     </select>
     <button class="profileAddBtn focusable">${profileIcon('plus')}<span>Add profile</span></button>`;
   addForm.querySelector('button').addEventListener('click', async () => {
@@ -18967,7 +18980,7 @@ async function doSearch() {
   }
   // Raw usenet search has no ratings at all — restricted profiles never get the fallback.
   if (!current()) return;
-  if ((S.maxLevel ?? 3) < 3) { renderGrid([]); $('grid').innerHTML = '<div class="gridMore">No results for this profile.</div>'; return; }
+  if ((S.maxLevel ?? 4) < 4) { renderGrid([]); $('grid').innerHTML = '<div class="gridMore">No results for this profile.</div>'; return; }
   // No TMDB (or no metadata hits): search indexers directly and synthesize poster cards.
   try {
     const r = await api('/api/search?q=' + encodeURIComponent(q));
@@ -22136,7 +22149,7 @@ async function enterAppShell() {
   $('appLoader').classList.remove('hide');
   setTimeout(bootReady, 10000); // safety: never trap the user behind the loader
   applyCoverSize();
-  S.maxLevel = (S.profile && (S.profile.level ?? 3)) ?? 3;
+  S.maxLevel = (S.profile && (S.profile.level ?? 4)) ?? 4;
   $('rail').classList.add('show');
   const isAdmin = S.user.role === 'admin';
   refreshRailUserChip();

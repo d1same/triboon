@@ -145,6 +145,30 @@ class Auth {
     this.tokenKey = deriveKey(this.secret, 'auth-token-hmac-v1');
     this.totpKey = deriveKey(this.secret, 'admin-totp-aes-gcm-v1');
     this.quickConnect = new Map(); // code -> { createdAt, deviceName, token? }
+    this._migrateMaturitySchema();
+  }
+
+  // One-time maturity-tier migration (v1 → v2). v1 tiers: 0 Kids(≤PG) · 1 Teen(≤PG-13) ·
+  // 2 Family(≤PG-13) · 3 Adult(all). v2 tiers: 0 G · 1 PG · 2 PG-13 · 3 R · 4 No limit. The remap
+  // PRESERVES each profile's certification cap so NO profile ever becomes more permissive:
+  // Teen→PG-13, Family→PG-13, Adult→No limit; Kids stays 0 (now "G" — a slight tightening on cert,
+  // never a loosening). Legacy profiles with no stored level back-fill from the old `kid` flag
+  // first (kid → 0, else old-Adult 3). Idempotent + guarded by a stored schema stamp so it runs once.
+  _migrateMaturitySchema() {
+    let users;
+    try { users = this._users(); } catch { return; }
+    if ((users.maturitySchema || 0) >= 2) return;
+    const REMAP = { 0: 0, 1: 2, 2: 2, 3: 4 };
+    for (const u of users.list || []) {
+      for (const p of (u.profiles || [])) {
+        const old = p.level ?? (p.kid ? 0 : 3);   // old-scheme effective level
+        const next = REMAP[old] ?? 4;              // unknown/out-of-range → No limit (matches back-fill)
+        p.level = next;
+        p.kid = next === 0;
+      }
+    }
+    users.maturitySchema = 2;
+    this._saveUsers(users);
   }
 
   _users() { return this.store.read('users', { list: [] }); }
@@ -162,7 +186,7 @@ class Auth {
       id: crypto.randomBytes(6).toString('hex'), name, role, salt, hash,
       sessionEpoch: 0,
       policy: { maxResolutionRank: 4, allowTranscode: true, ...policy },
-      profiles: [{ id: crypto.randomBytes(4).toString('hex'), name, kid: false }],
+      profiles: [{ id: crypto.randomBytes(4).toString('hex'), name, level: 4, kid: false }],
       createdAt: new Date().toISOString(),
     };
     users.list.push(user);
@@ -176,15 +200,15 @@ class Auth {
       profiles: (u.profiles || []).map((p) => this.publicProfile(p)) };
   }
 
-  // Maturity levels: 0 Kids · 1 Teen · 2 Family · 3 Adult. The catalog is filtered to the
-  // profile's level (kids never see mature/adult titles). Optional 4-digit PIN = parental lock.
-  addProfile(uid, { name, level = 3, pin, avatar }) {
+  // Maturity tiers by rating cap: 0 G · 1 PG · 2 PG-13 · 3 R · 4 No limit. The catalog is filtered
+  // to the profile's tier (a G/PG profile never sees mature titles). Optional 4-digit PIN = parental lock.
+  addProfile(uid, { name, level = 4, pin, avatar }) {
     const users = this._users();
     const u = users.list.find((x) => x.id === uid);
     if (!u) throw new Error('unknown user');
     if (!name || !String(name).trim()) throw new Error('profile name required');
     if ((u.profiles || []).length >= 8) throw new Error('profile limit reached');
-    const lvl = Math.max(0, Math.min(3, parseInt(level, 10) || 0));
+    const lvl = Math.max(0, Math.min(4, parseInt(level, 10) || 0));
     const profile = {
       id: crypto.randomBytes(4).toString('hex'), name: String(name).trim().slice(0, 24),
       level: lvl, kid: lvl === 0,
@@ -214,7 +238,7 @@ class Auth {
   }
 
   publicProfile(p) {
-    const level = p.level ?? (p.kid ? 0 : 3); // back-fill older profiles created before levels
+    const level = p.level ?? (p.kid ? 0 : 4); // back-fill any profile still missing a tier (kid → G, else No limit)
     return { id: p.id, name: p.name, level, kid: level === 0, locked: !!p.pinHash,
       avatar: p.avatar || derivedAvatarId(p.id) }; // everyone gets a face (stable id-derived default)
   }
@@ -251,7 +275,7 @@ class Auth {
     const p = (u.profiles || []).find((x) => x.id === profileId);
     if (!p) throw new Error('unknown profile');
     if (name !== undefined && String(name).trim()) p.name = String(name).trim().slice(0, 20);
-    if (level !== undefined && [0, 1, 2, 3].includes(+level)) p.level = +level;
+    if (level !== undefined && [0, 1, 2, 3, 4].includes(+level)) { p.level = +level; p.kid = +level === 0; }
     this._saveUsers(users);
     return this.publicProfile(p);
   }

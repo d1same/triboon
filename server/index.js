@@ -3048,7 +3048,7 @@ const trakt = new Trakt(store, () => settings.get(), (mutator) => settings.updat
 // The client filters the catalog and blocks play by cert, but that is bypassable (missing-cert
 // items, crafted requests, tampered clients). This enforces it on the server too. Mirrors the
 // client's CERT_RANK/levelAllows so the play bar matches the catalog bar exactly.
-const MATURITY_CERT_RANK = { G: 0, 'TV-Y': 0, 'TV-G': 0, 'TV-Y7': 1, PG: 1, 'TV-PG': 1, 'PG-13': 2, 'TV-14': 2, R: 3, 'TV-MA': 3, 'NC-17': 3, NR: 3 };
+const MATURITY_CERT_RANK = { G: 0, 'TV-Y': 0, 'TV-G': 0, 'TV-Y7': 1, PG: 1, 'TV-PG': 1, 'PG-13': 2, 'TV-14': 2, R: 3, 'TV-MA': 3, 'NC-17': 4, NR: 4 };
 function usCertFromTmdb(d, type) {
   try {
     if (type === 'tv') {
@@ -3059,25 +3059,27 @@ function usCertFromTmdb(d, type) {
     return (us && (us.release_dates || []).map((x) => x.certification).find(Boolean)) || '';
   } catch { return ''; }
 }
-// The active profile's maturity level (0 Kids · 1 Teen · 2 Family · 3 Adult), read from the STORED
+// The active profile's maturity tier (0 G · 1 PG · 2 PG-13 · 3 R · 4 No limit), read from the STORED
 // profile (server-authoritative) by the id the client sends. No profile id (older clients /
-// account-level access) → 3 (unrestricted), so nothing is falsely blocked.
+// account-level access) → 4 (No limit / unrestricted), so nothing is falsely blocked.
 function profileLevelFor(user, profileId) {
-  // No profile context = the account/adult owner (unrestricted). But a profileId that's PROVIDED
-  // yet matches none of the user's profiles is anomalous (stale client state or tampering) — fail
-  // CLOSED to the strictest level so a spoofed/bogus id can't slip over-level content past the gate.
-  if (!profileId) return 3;
+  // No profile context = the account/owner (unrestricted). But a profileId that's PROVIDED yet
+  // matches none of the user's profiles is anomalous (stale client state or tampering) — fail
+  // CLOSED to the strictest tier (0 = G) so a spoofed/bogus id can't slip over-level content past
+  // the gate. Legacy profiles with no stored level back-fill from the old `kid` flag (kid → G,
+  // else No limit); the one-time schema migration in auth.js normalizes these on first boot.
+  if (!profileId) return 4;
   const p = ((user && user.profiles) || []).find((x) => x.id === profileId);
-  return p ? (p.level ?? (p.kid ? 0 : 3)) : 0;
+  return p ? (p.level ?? (p.kid ? 0 : 4)) : 0;
 }
-// May a profile at `level` play this title? Adult (3) always passes with no lookup (keeps the
-// common/owner case zero-latency). Otherwise fetch the title's US certification + TMDB adult flag
-// (cached by the proxy) and apply the catalog bar: Kids ≤PG, Teen/Family ≤PG-13/TV-14. The hard
-// `adult` flag always blocks below Adult. Unknown/unfetchable maturity fails OPEN — the catalog +
-// client already gate discovery, so this is defense-in-depth and must not false-block on a TMDB
-// hiccup or a title with no rating data.
+// May a profile at `level` (tier index 0..4) play this title? No limit (4) always passes with no
+// lookup (keeps the common/owner case zero-latency). Otherwise fetch the title's US certification +
+// TMDB adult flag (cached by the proxy) and apply the same bar as the catalog: tier N allows cert
+// rank ≤ N (G 0 · PG 1 · PG-13 2 · R 3 · NC-17/NR 4). The hard `adult` flag always blocks below No
+// limit. Unknown/unfetchable maturity fails OPEN — the catalog + client already gate discovery, so
+// this is defense-in-depth and must not false-block on a TMDB hiccup or a title with no rating data.
 async function maturityAllowsPlay(level, tmdbId, mediaType) {
-  if (level >= 3) return true;
+  if (level >= 4) return true;
   const id = parseInt(tmdbId, 10);
   if (!id || !settings.get().tmdbKey) return true;
   const type = mediaType === 'tv' ? 'tv' : 'movie';
@@ -3087,11 +3089,11 @@ async function maturityAllowsPlay(level, tmdbId, mediaType) {
   if (d && d.adult) return false;
   const cert = usCertFromTmdb(d, type);
   if (!cert) return true;
-  const rank = MATURITY_CERT_RANK[cert] ?? 3;
-  return rank <= (level === 0 ? 1 : 2); // matches client levelAllows()
+  const rank = MATURITY_CERT_RANK[cert] ?? 4;
+  return rank <= level; // matches client levelAllows()
 }
-// Animation · Family · Kids-TV — the kid-safe genres the client's passesMaturity() requires for
-// Kids profiles. Kept in sync with the web KID_GENRES set.
+// Animation · Family · Kids-TV — the kid-safe genres the client's passesMaturity() requires for the
+// strictest tier (0 = G). Kept in sync with the web KID_GENRES set.
 const MATURITY_LIST_KID_GENRES = new Set([16, 10751, 10762]);
 // Remove over-cap titles from a TMDB list response so a restricted profile never SEES them (the
 // catalog matches the play gate — "not shown", instead of "shown but blocked on click"). The cheap
@@ -3101,7 +3103,7 @@ const MATURITY_LIST_KID_GENRES = new Set([16, 10751, 10762]);
 // server-authoritative play gate is the hard backstop. Only list-shaped payloads (data.results of
 // movie/tv titles) are touched; detail/video/genre/credits responses pass through untouched.
 async function maturityFilterList(level, data) {
-  if (level >= 3 || !data || !Array.isArray(data.results) || !data.results.length) return data;
+  if (level >= 4 || !data || !Array.isArray(data.results) || !data.results.length) return data;
   const items = data.results;
   const keep = await mapLimit(items, 8, async (x) => {
     if (!x || typeof x.id === 'undefined') return true;                 // unknown shape → keep
@@ -4790,8 +4792,8 @@ const H = {
         search = s ? '?' + s : '';
       }
       const data = await tmdb.get('/' + ctx.m[1] + search);
-      const level = pf !== null ? profileLevelFor(ctx.user, pf) : 3;
-      const out = level < 3 ? await maturityFilterList(level, data) : data;
+      const level = pf !== null ? profileLevelFor(ctx.user, pf) : 4;
+      const out = level < 4 ? await maturityFilterList(level, data) : data;
       send(ctx.res, 200, out, { 'cache-control': 'private, max-age=600' });
     } catch (e) { send(ctx.res, e.status || 500, { error: e.message }); }
   },
@@ -6230,7 +6232,7 @@ Object.assign(H, {
     // item's TMDB identity comes from the SERVER-side scan record, never the client; unmatched
     // items fail OPEN like unknown certifications (defense-in-depth, consistent with play()).
     const level = profileLevelFor(ctx.user, body.profileId);
-    if (level < 3) {
+    if (level < 4) { // any tier below No limit (4) is age-gated; matches maturityAllowsPlay's fast path
       const found = localItemFor(ctx, ctx.m[1], ctx.m[2]);
       if (found.error) return send(ctx.res, found.status || 404, { error: found.error });
       const item = found.item;
