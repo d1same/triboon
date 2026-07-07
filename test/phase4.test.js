@@ -1329,6 +1329,10 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.match(authSrc, /_migrateMaturitySchema\(\) \{[\s\S]+if \(\(users\.maturitySchema \|\| 0\) >= 2\) return;[\s\S]+const REMAP = \{ 0: 0, 1: 2, 2: 2, 3: 4 \};[\s\S]+users\.maturitySchema = 2;/,
     'maturity migration is idempotent (schema stamp) and remaps preserving the cert cap (Adult→No limit, Teen/Family→PG-13, Kids→G)');
   assert.match(authSrc, /this\._migrateMaturitySchema\(\);/, 'the migration runs once at Auth construction');
+  // A port conflict (EADDRINUSE) must log a clear, actionable message and exit non-zero — not drain the
+  // event loop and exit silently (which the Windows service wrapper reports as the cryptic Error 1067).
+  assert.match(idxSrc, /server\.on\('error', \(e\) => \{[\s\S]*?EADDRINUSE[\s\S]*?already in use[\s\S]*?process\.exit\(1\)/,
+    'a failed listen (EADDRINUSE) logs a clear "port already in use" message and exits non-zero');
   // IPTV live proxy: an Android WebView renderer crash can half-close the client socket without a
   // 'close' event, so a bare pipe() would pin the upstream provider connection forever. A manual
   // pump + dead-client stall watchdog (re-armed only on drained writes) + a res 'error' handler

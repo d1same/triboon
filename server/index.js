@@ -8330,6 +8330,19 @@ if (require.main === module) {
   // box serving and logs the full stack so genuine bugs stay visible.
   process.on('uncaughtException', (e) => { console.error('[uncaught]', (e && e.stack) || e); });
   process.on('unhandledRejection', (e) => { console.error('[unhandledRejection]', (e && e.stack) || e); });
+  // A failed listen (almost always EADDRINUSE — another program or a second Triboon instance already
+  // on this port) otherwise bubbles up as an *uncaught* error, drains the event loop, and exits
+  // silently — which the Windows service wrapper reports as the cryptic "Error 1067: the process
+  // terminated unexpectedly". Turn it into a clear, actionable log so the cause is obvious.
+  server.on('error', (e) => {
+    if (e && e.code === 'EADDRINUSE') {
+      console.error(`[triboon] Port ${PORT} is already in use — another program (or a second Triboon `
+        + `instance) is listening on it. Stop that program, or set a different PORT, then start Triboon again.`);
+    } else {
+      console.error('[triboon] server failed to start:', (e && e.stack) || e);
+    }
+    process.exit(1); // exit non-zero so the service wrapper restarts (and retries once the port frees)
+  });
   server.listen(PORT, () => {
     console.log(`Triboon → http://localhost:${PORT}`);
     console.log(`[triboon] data dir: ${DATA_DIR}`); // where settings/users/secret live — verify it's persistent (e.g. C:\\ProgramData\\Triboon\\data on Windows), NOT inside the install folder
