@@ -203,10 +203,22 @@ end;
 // 0600 file mode, so secret.json (the token-signing key) would be readable by any local user. Break
 // inheritance and grant Full only to SYSTEM (the LocalSystem service account) + Administrators.
 procedure HardenDataDir();
-var rc: Integer;
+var rc: Integer; dir: String;
 begin
+  dir := ExpandConstant('{commonappdata}\Triboon');
+  // Pass 1 (ADDITIVE, inheritance still intact): guarantee SYSTEM (the service account) + Administrators
+  // have an EXPLICIT Full ACE first. /inheritance:r removes only INHERITED aces, never explicit ones — so
+  // doing this before the strip means a file that is momentarily locked during the recursive apply can
+  // never be left with no usable ACE. That orphaning previously locked the service out of secret.json,
+  // which surfaced as "Windows could not start the service — Error 1067".
   Exec(ExpandConstant('{sys}\icacls.exe'),
-    '"' + ExpandConstant('{commonappdata}\Triboon') + '" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /T /C /Q',
+    '"' + dir + '" /grant "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /T /C /Q',
+    '', SW_HIDE, ewWaitUntilTerminated, rc);
+  // Pass 2: now drop the inherited BUILTIN\Users read so secret.json is not world-readable, re-affirming
+  // the SYSTEM + Administrators grants. Even if this fails on a locked file, Pass 1's explicit SYSTEM ACE
+  // survives (inheritance:r keeps explicit aces), so the service always retains read access.
+  Exec(ExpandConstant('{sys}\icacls.exe'),
+    '"' + dir + '" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /T /C /Q',
     '', SW_HIDE, ewWaitUntilTerminated, rc);
 end;
 

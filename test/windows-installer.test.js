@@ -103,6 +103,13 @@ test('installer hardens the ProgramData data-dir ACL so secret.json is not world
   assert.match(iss, /\/inheritance:r/);             // drop the inherited BUILTIN\Users read
   assert.match(iss, /S-1-5-18/);                    // grant SYSTEM (the service account)
   assert.match(iss, /S-1-5-32-544/);                // and Administrators only
+  // The additive SYSTEM/Admins grant must run BEFORE the /inheritance:r strip, so a momentarily-locked
+  // file can't be orphaned with no usable ACE (that locked the service out of secret.json → Error 1067).
+  const harden = iss.slice(iss.indexOf('procedure HardenDataDir'), iss.indexOf('procedure OpenFirewall'));
+  // Match the exact icacls COMMANDS (not substrings that also appear in comments): the additive grant
+  // (Pass 1) must precede the inheritance-strip command (Pass 2).
+  assert.ok(harden.indexOf('/grant "*S-1-5-18') >= 0 && harden.indexOf('/grant "*S-1-5-18') < harden.indexOf('/inheritance:r /grant:r'),
+    'HardenDataDir grants SYSTEM Full additively BEFORE stripping inheritance (no ACL orphaning / 1067)');
 });
 
 test('build script integrity-verifies every bundled binary (not just Node)', () => {

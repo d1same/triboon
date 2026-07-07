@@ -9,6 +9,13 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
+// Synchronous short sleep for the boot-time secret retry (only ever runs when secret.json is
+// momentarily unreadable right after a Windows install; never on a normal boot).
+function sleepMs(ms) {
+  try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+  catch { const end = Date.now() + ms; while (Date.now() < end) { /* spin fallback */ } }
+}
+
 const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 64 };
 const TOKEN_TTL_MS = 30 * 24 * 3600 * 1000;   // session: 30 days
 const STREAM_TTL_MS = 6 * 3600 * 1000;        // stream link: 6 hours (covers any movie + pauses)
@@ -139,25 +146,48 @@ class Auth {
     this.store = store;
     // Server secret: env first; else generated ONCE and persisted. This secret encrypts settings and
     // signs tokens — regenerating it orphans every encrypted setting (the "settings wiped on update"
-    // bug). So we ONLY ever generate when secret.json genuinely does not exist. If it EXISTS but can't
-    // be read (a transient AV/permission lock right after a Windows reinstall), the store already
-    // retried; here we refuse to mint a new one and fail loudly instead — WinSW restarts the service
-    // and the secret loads fine once the lock clears. A truly corrupt secret is recoverable from the
-    // installer's data-backup, but must NEVER be silently replaced.
+    // bug). We ONLY generate when secret.json genuinely does not exist. If it EXISTS but can't be read
+    // yet (an AV/permission lock right after a Windows reinstall), we RETRY PATIENTLY here — the server
+    // can't function without the real secret, and the lock almost always clears within seconds. We must
+    // NEVER crash while waiting (that surfaces as Error 1067 "the service won't start"), and never
+    // regenerate unless the file is truly unrecoverable — and even then we PRESERVE the old one.
     if (secret) this.secret = secret;
     else {
       const secFile = path.join(store.dir, 'secret.json');
       const sec = store.read('secret', {});
       if (sec && sec.value) {
-        this.secret = sec.value;
+        this.secret = sec.value;                       // normal path
       } else if (fs.existsSync(secFile)) {
-        throw new Error('secret.json exists but could not be read — refusing to generate a new secret '
-          + '(that would make your saved settings undecryptable). This is usually a transient AV or '
-          + 'permission lock right after an install; the service will retry. File: ' + secFile);
+        // Exists but unreadable. Retry directly (bypassing the cached fallback) for a while — a
+        // Defender scan or an installer ACL change clears well within this window.
+        const tries = Math.max(1, parseInt(process.env.TRIBOON_SECRET_READ_RETRIES, 10) || 40);
+        const delay = Math.max(20, parseInt(process.env.TRIBOON_SECRET_READ_DELAY_MS, 10) || 500);
+        let value = null;
+        for (let i = 0; i < tries && !value; i++) {
+          sleepMs(delay);
+          try { const v = JSON.parse(fs.readFileSync(secFile, 'utf8')); if (v && v.value) value = v.value; } catch {}
+        }
+        if (value) {
+          this.secret = value;
+          try { store.write('secret', { value }); } catch {}   // recovered — prime the cache, no rewrite of content
+          console.error('[triboon] secret.json was temporarily unreadable at boot; recovered it on retry — no data touched.');
+        } else {
+          // Truly unrecoverable (corrupt, or a permission problem that outlived the retries). Do the
+          // LEAST-bad thing that still lets the server RUN (never crash-loop): preserve the old secret
+          // for manual recovery, then mint a new one. Encrypted settings may need re-entering, but the
+          // server starts and the original secret is kept.
+          try { fs.renameSync(secFile, secFile + '.unreadable-' + Date.now()); } catch {}
+          const fresh = crypto.randomBytes(32).toString('hex');
+          try { store.write('secret', { value: fresh }); store.flush(); } catch {}
+          this.secret = fresh;
+          console.error('[triboon] WARNING: secret.json existed but was unreadable after retries. Generated a '
+            + 'new secret so the server can start; saved settings may need re-entering. The old secret was kept '
+            + 'alongside it (secret.json.unreadable-*) for recovery. File: ' + secFile);
+        }
       } else {
         const value = crypto.randomBytes(32).toString('hex');
         store.write('secret', { value }); store.flush();
-        this.secret = value;
+        this.secret = value;                           // fresh install
       }
     }
     this.tokenKey = deriveKey(this.secret, 'auth-token-hmac-v1');

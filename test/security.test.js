@@ -3594,7 +3594,7 @@ test('maturity migration: legacy tiers remap preserving the cert cap (never more
 // during the fragile post-install boot (AV lock / just-changed ACL) made the server MINT A NEW
 // secret — orphaning encrypted settings — and the migration then overwrote users.json empty. The fix:
 // existing files are NEVER clobbered after a read failure. These prove it with the Auth + Store classes.
-test('secret: an existing secret.json is NEVER regenerated (no orphaned settings on reinstall)', () => {
+test('secret: existing secret is reused; an unreadable one never crashes the boot and is preserved', () => {
   const os = require('os');
   const { Store } = require('../server/store');
   const { Auth } = require('../server/auth');
@@ -3603,15 +3603,27 @@ test('secret: an existing secret.json is NEVER regenerated (no orphaned settings
   const a1 = new Auth(new Store(dir));
   const onDisk = fs.readFileSync(path.join(dir, 'secret.json'), 'utf8');
   assert.ok(a1.secret && a1.secret.length >= 32, 'first boot generates a secret');
-  // 2. Reboot, same dir → the SAME secret is reused and the file is untouched.
+  // 2. Reboot, same dir → the SAME secret is reused and the file is untouched (never regenerated).
   const a2 = new Auth(new Store(dir));
   assert.strictEqual(a2.secret, a1.secret, 'existing secret reused, never regenerated');
   assert.strictEqual(fs.readFileSync(path.join(dir, 'secret.json'), 'utf8'), onDisk, 'secret.json not rewritten on reboot');
-  // 3. An existing-but-UNREADABLE secret.json must THROW, never be silently replaced (a fresh secret
-  //    would make saved settings undecryptable — the exact reinstall data-loss bug).
-  fs.writeFileSync(path.join(dir, 'secret.json'), '{ not valid json at all');
-  assert.throws(() => new Auth(new Store(dir)), /secret\.json exists but could not be read/,
-    'a corrupt/locked existing secret is never replaced with a fresh one');
+  // 3. An existing-but-UNREADABLE secret.json must NOT crash the boot (crashing = Error 1067, the
+  //    service won't start) and must NOT be silently discarded. After patient retries fail, the server
+  //    PRESERVES the old secret (renamed *.unreadable-*) and mints a working one so it can still start.
+  process.env.TRIBOON_SECRET_READ_RETRIES = '2';
+  process.env.TRIBOON_SECRET_READ_DELAY_MS = '20';
+  try {
+    fs.writeFileSync(path.join(dir, 'secret.json'), '{ not valid json at all');
+    let a3;
+    assert.doesNotThrow(() => { a3 = new Auth(new Store(dir)); }, 'an unreadable secret must not crash (no Error 1067)');
+    assert.ok(a3.secret && a3.secret.length >= 32, 'server still obtains a working secret and starts');
+    const preserved = fs.readdirSync(dir).filter((f) => f.startsWith('secret.json.unreadable-'));
+    assert.strictEqual(preserved.length, 1, 'the unreadable secret is preserved for recovery');
+    assert.match(fs.readFileSync(path.join(dir, preserved[0]), 'utf8'), /not valid json/, 'preserved file keeps the old content');
+  } finally {
+    delete process.env.TRIBOON_SECRET_READ_RETRIES;
+    delete process.env.TRIBOON_SECRET_READ_DELAY_MS;
+  }
 });
 
 test('maturity migration never wipes an existing users.json when the read fails', () => {
