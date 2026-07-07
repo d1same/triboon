@@ -6,6 +6,13 @@
 const fs = require('fs');
 const path = require('path');
 
+// Synchronous short sleep for boot-time read retries. Only ever runs when a file is momentarily
+// locked (AV/installer); reads are cached after the first success, so this never hits the hot path.
+function sleepMs(ms) {
+  try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+  catch { const end = Date.now() + ms; while (Date.now() < end) { /* spin fallback */ } }
+}
+
 class Store {
   constructor(dir = process.env.TRIBOON_DATA || path.join(__dirname, '..', 'data')) {
     this.dir = dir;
@@ -30,13 +37,24 @@ class Store {
 
   read(table, fallback = {}) {
     if (this.cache.has(table)) return this.cache.get(table);
-    let val = fallback;
-    try {
-      const raw = fs.readFileSync(this._file(table), 'utf8');
-      val = JSON.parse(raw);
-    } catch { /* missing/corrupt → fallback */ }
-    this.cache.set(table, val);
-    return val;
+    const file = this._file(table);
+    // A genuinely MISSING file → fallback (normal). But a file that EXISTS yet can't be read/parsed
+    // right now (an AV lock or an ACL change immediately after a Windows installer runs, or a
+    // half-written file mid-flush) must NOT be treated as "absent" — callers like the secret, users,
+    // and settings loaders would then overwrite real data with defaults (the "settings/users wiped on
+    // update" bug). Retry briefly; after that, return the fallback but DON'T cache it, so a later read
+    // re-attempts the real file instead of serving empty for the whole process lifetime.
+    for (let attempt = 0; ; attempt++) {
+      let raw;
+      try { raw = fs.readFileSync(file, 'utf8'); }
+      catch (e) {
+        if (e && e.code === 'ENOENT') { this.cache.set(table, fallback); return fallback; } // truly absent
+        if (attempt < 5) { sleepMs(120); continue; }                                          // exists but locked
+        return fallback;                                                                       // give up (uncached)
+      }
+      try { const val = JSON.parse(raw); this.cache.set(table, val); return val; }
+      catch { if (attempt < 5) { sleepMs(120); continue; } return fallback; }                 // corrupt/partial (uncached)
+    }
   }
 
   write(table, value) {

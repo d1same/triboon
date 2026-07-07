@@ -6,6 +6,8 @@
 // scoped, expiring token as a query parameter (the Plex pattern).
 
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 
 const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 64 };
 const TOKEN_TTL_MS = 30 * 24 * 3600 * 1000;   // session: 30 days
@@ -135,12 +137,28 @@ function generateRecoveryCode() {
 class Auth {
   constructor(store, secret) {
     this.store = store;
-    // Server secret: env first; else generated once and persisted (chmod-equivalent N/A on win).
+    // Server secret: env first; else generated ONCE and persisted. This secret encrypts settings and
+    // signs tokens — regenerating it orphans every encrypted setting (the "settings wiped on update"
+    // bug). So we ONLY ever generate when secret.json genuinely does not exist. If it EXISTS but can't
+    // be read (a transient AV/permission lock right after a Windows reinstall), the store already
+    // retried; here we refuse to mint a new one and fail loudly instead — WinSW restarts the service
+    // and the secret loads fine once the lock clears. A truly corrupt secret is recoverable from the
+    // installer's data-backup, but must NEVER be silently replaced.
     if (secret) this.secret = secret;
     else {
+      const secFile = path.join(store.dir, 'secret.json');
       const sec = store.read('secret', {});
-      if (!sec.value) { sec.value = crypto.randomBytes(32).toString('hex'); store.write('secret', sec); store.flush(); }
-      this.secret = sec.value;
+      if (sec && sec.value) {
+        this.secret = sec.value;
+      } else if (fs.existsSync(secFile)) {
+        throw new Error('secret.json exists but could not be read — refusing to generate a new secret '
+          + '(that would make your saved settings undecryptable). This is usually a transient AV or '
+          + 'permission lock right after an install; the service will retry. File: ' + secFile);
+      } else {
+        const value = crypto.randomBytes(32).toString('hex');
+        store.write('secret', { value }); store.flush();
+        this.secret = value;
+      }
     }
     this.tokenKey = deriveKey(this.secret, 'auth-token-hmac-v1');
     this.totpKey = deriveKey(this.secret, 'admin-totp-aes-gcm-v1');
@@ -158,6 +176,10 @@ class Auth {
     let users;
     try { users = this._users(); } catch { return; }
     if ((users.maturitySchema || 0) >= 2) return;
+    // NEVER stamp+save an empty users file over real accounts: if users.json EXISTS on disk but we
+    // read an empty list, the read failed transiently (lock/corrupt) — skip and let a later boot with
+    // a clean read do the migration. Otherwise this wipes the admin ("create admin again after update").
+    if ((!users.list || !users.list.length) && fs.existsSync(path.join(this.store.dir, 'users.json'))) return;
     const REMAP = { 0: 0, 1: 2, 2: 2, 3: 4 };
     for (const u of users.list || []) {
       for (const p of (u.profiles || [])) {

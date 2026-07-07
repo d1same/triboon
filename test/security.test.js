@@ -3590,6 +3590,43 @@ test('maturity migration: legacy tiers remap preserving the cert cap (never more
   }
 });
 
+// Windows "settings/users wiped on reinstall" root cause: a transient read failure of secret.json
+// during the fragile post-install boot (AV lock / just-changed ACL) made the server MINT A NEW
+// secret — orphaning encrypted settings — and the migration then overwrote users.json empty. The fix:
+// existing files are NEVER clobbered after a read failure. These prove it with the Auth + Store classes.
+test('secret: an existing secret.json is NEVER regenerated (no orphaned settings on reinstall)', () => {
+  const os = require('os');
+  const { Store } = require('../server/store');
+  const { Auth } = require('../server/auth');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-secret-'));
+  // 1. Fresh (no secret.json) → a secret is generated + persisted.
+  const a1 = new Auth(new Store(dir));
+  const onDisk = fs.readFileSync(path.join(dir, 'secret.json'), 'utf8');
+  assert.ok(a1.secret && a1.secret.length >= 32, 'first boot generates a secret');
+  // 2. Reboot, same dir → the SAME secret is reused and the file is untouched.
+  const a2 = new Auth(new Store(dir));
+  assert.strictEqual(a2.secret, a1.secret, 'existing secret reused, never regenerated');
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'secret.json'), 'utf8'), onDisk, 'secret.json not rewritten on reboot');
+  // 3. An existing-but-UNREADABLE secret.json must THROW, never be silently replaced (a fresh secret
+  //    would make saved settings undecryptable — the exact reinstall data-loss bug).
+  fs.writeFileSync(path.join(dir, 'secret.json'), '{ not valid json at all');
+  assert.throws(() => new Auth(new Store(dir)), /secret\.json exists but could not be read/,
+    'a corrupt/locked existing secret is never replaced with a fresh one');
+});
+
+test('maturity migration never wipes an existing users.json when the read fails', () => {
+  const os = require('os');
+  const { Store } = require('../server/store');
+  const { Auth } = require('../server/auth');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-users-'));
+  fs.writeFileSync(path.join(dir, 'secret.json'), JSON.stringify({ value: 'a'.repeat(64) }));
+  const corruptUsers = '{ "list": [ {an admin record that will not parse';
+  fs.writeFileSync(path.join(dir, 'users.json'), corruptUsers);
+  new Auth(new Store(dir)); // constructs + runs the one-time migration
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'users.json'), 'utf8'), corruptUsers,
+    'an unreadable users.json is left intact, never overwritten with an empty (stamped) list');
+});
+
 test('teardown', async () => {
   await srv.shutdown();
   await mockNntp.close();
