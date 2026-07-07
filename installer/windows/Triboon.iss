@@ -54,11 +54,18 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 ; Triboon logo, installed alongside the app so the uninstall entry + Start Menu shortcut can use it.
 Source: "triboon.ico"; DestDir: "{app}"; Flags: ignoreversion
+; Tray helper (a system-tray icon so the background service is visible + reachable in one click).
+Source: "triboon-tray.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "triboon-tray.vbs"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 ; The server is a background service (no app window), so the branded Start Menu entry just opens the
 ; dashboard in the browser. explorer.exe re-dispatches the URL as the logged-in user.
 Name: "{group}\Open Triboon"; Filename: "{win}\explorer.exe"; Parameters: "http://localhost:7777"; IconFilename: "{app}\triboon.ico"; Comment: "Open the Triboon dashboard"
+; Tray icon: launched at login (Startup) + a manual Start Menu entry. wscript runs the .vbs, which
+; starts the tray PowerShell hidden (no console). Kept per-user so it isn't forced on every account.
+Name: "{userstartup}\Triboon Tray"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\triboon-tray.vbs"""; IconFilename: "{app}\triboon.ico"; Comment: "Triboon server tray icon"
+Name: "{group}\Triboon Tray Icon"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\triboon-tray.vbs"""; IconFilename: "{app}\triboon.ico"; Comment: "Show the Triboon tray icon"
 Name: "{group}\Uninstall Triboon"; Filename: "{uninstallexe}"
 
 [Dirs]
@@ -75,6 +82,9 @@ Name: "{app}\logs"
 ; firewall rule, and the data-dir ACL run in [Code] (CurStepChanged) instead, so their exit codes are
 ; actually checked - an exit-code-blind [Run] entry would report a broken install as "success".
 Filename: "{win}\explorer.exe"; Parameters: "http://localhost:7777"; Flags: postinstall nowait skipifsilent; Description: "Open Triboon in your browser"
+; Show the tray icon now (via explorer so it runs de-elevated as the logged-in user, matching the
+; Startup entry; without this the tray only appears at next login).
+Filename: "{win}\explorer.exe"; Parameters: """{app}\triboon-tray.vbs"""; Flags: postinstall nowait skipifsilent; Description: "Show the Triboon tray icon"
 
 [UninstallRun]
 ; Runs before file deletion, while the wrapper exe still exists. Each entry needs a unique RunOnceId.
