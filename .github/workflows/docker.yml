@@ -280,6 +280,9 @@ jobs:
         # MSVC's linker and breaks the Rust build-script link. pwsh keeps MSVC's link.exe (from
         # msvc-dev-cmd) on PATH — same as the working P1 job.
         run: |
+          # libmpv-sys tells the linker to use mpv.lib; add its dir to LIB so MSVC's link.exe finds it
+          # regardless of the crate's emitted search path.
+          $env:LIB = "$env:MPV_SOURCE;$env:LIB"
           Write-Host "MPV_SOURCE=$env:MPV_SOURCE"
           npm ci
           npm run tauri build -- --features player
