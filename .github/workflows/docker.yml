@@ -276,9 +276,11 @@ jobs:
           "MPV_SOURCE=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
       - name: Build native client (player feature)
         working-directory: clients/windows-px8
-        shell: bash
+        # Default (pwsh) shell on purpose: a bash shell prepends Git's usr\bin, whose link.exe SHADOWS
+        # MSVC's linker and breaks the Rust build-script link. pwsh keeps MSVC's link.exe (from
+        # msvc-dev-cmd) on PATH — same as the working P1 job.
         run: |
-          echo "MPV_SOURCE=$MPV_SOURCE"; ls -la "$MPV_SOURCE" || true
+          Write-Host "MPV_SOURCE=$env:MPV_SOURCE"
           npm ci
           npm run tauri build -- --features player
       - name: Stage installer + libmpv runtime DLL
