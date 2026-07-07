@@ -22,15 +22,26 @@ pub struct PlayArgs {
     pub title: String,
 }
 
-/// Begin native playback of a tokened stream URL. P2 wires this to libmpv; today it is a no-op
-/// stub so the bridge contract compiles and P1 can fall back to the in-page <video>.
+/// Begin native playback of a tokened stream URL.
+///
+/// M1 (this pass): minimal real libmpv call so the CI build actually links libmpv-2.dll and we prove
+/// the toolchain end-to-end. It creates an mpv instance with GPU decode, loadfile's the URL, seeks to
+/// the resume point, and leaks the handle so mpv keeps its own window open (single-shot proof-of-life).
+/// M2 replaces the leak with a persistent, controllable instance embedded (wid) in the app window.
 #[tauri::command]
 pub fn player_play(_args: PlayArgs) -> Result<(), String> {
     #[cfg(feature = "player")]
     {
-        // P2: lazily create the mpv instance, apply passthrough knobs, then `loadfile <url>` and
-        // seek to `start`. Return Err on failure so the web UI can fall back to server remux.
-        return Err("libmpv player not yet implemented (P2)".into());
+        use libmpv2::Mpv;
+        let mpv = Mpv::new().map_err(|e| format!("mpv init: {e}"))?;
+        let _ = mpv.set_property("hwdec", "auto");       // GPU hardware decode (HEVC/MPEG-2/AV1/HDR)
+        let _ = mpv.set_property("force-window", "yes"); // M1: mpv owns a window; M2 embeds via wid
+        mpv.command("loadfile", &[_args.url.as_str()]).map_err(|e| format!("mpv loadfile: {e}"))?;
+        if _args.start > 0.0 {
+            let _ = mpv.command("seek", &[&format!("{}", _args.start), "absolute"]);
+        }
+        std::mem::forget(mpv); // keep the instance (and its window) alive past this call — M1 only
+        return Ok(());
     }
     #[cfg(not(feature = "player"))]
     {

@@ -8,8 +8,12 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing vX.Y.Z tag to build + attach signed APKs to"
-        required: true
+        description: "Existing vX.Y.Z tag to build + attach the APK/Windows installers to (leave blank for a native-client experiment build)"
+        required: false
+      native_client:
+        description: "Build the experimental libmpv native Windows client (artifact only, does not touch releases)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -66,7 +70,7 @@ jobs:
   # (TRIBOON_RELEASE_*). If this job ever fails, the local fallback is: npm run release:apk -- -Release.
   release-apk:
     needs: test
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -120,7 +124,7 @@ jobs:
   # /releases/latest/download/Triboon-Windows-Client.exe always resolves to the newest client.
   release-windows-client:
     needs: test
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '')
     runs-on: windows-latest
     timeout-minutes: 40
     permissions:
@@ -180,7 +184,7 @@ jobs:
   # /releases/latest/download/Triboon-Windows-Server.exe always resolves to the newest server build.
   release-windows-server:
     needs: test
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '')
     runs-on: windows-latest
     timeout-minutes: 40
     permissions:
@@ -219,3 +223,56 @@ jobs:
           else
             gh release create "$TAG" dist/Triboon-Windows-Server*.exe --title "Triboon $TAG" --generate-notes --latest
           fi
+
+  # EXPERIMENTAL native-player (libmpv) build — dispatch-only (native_client=true), artifact only, never
+  # touches a release. De-risks the libmpv toolchain (M1): fetch the mpv dev bundle, make an MSVC import
+  # lib, build the Tauri client with the `player` feature, and bundle libmpv-2.dll for the owner to test.
+  # Once it compiles + runs on a real Windows/GPU box, this folds into release-windows-client.
+  build-windows-client-native:
+    needs: test
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.native_client == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: ilammy/msvc-dev-cmd@v1   # puts lib.exe + the MSVC toolchain env on PATH
+      - name: Fetch libmpv dev bundle (headers + libmpv-2.dll + mpv.def)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p libmpv && cd libmpv
+          # Auto-resolve the latest plain x86_64 dev bundle (avoids a stale pinned URL 404).
+          gh release download --repo zhongfly/mpv-winbuild --pattern 'mpv-dev-x86_64-2*.7z' --dir . \
+            || gh release download --repo shinchiro/mpv-winbuild-cmake --pattern 'mpv-dev-x86_64-2*.7z' --dir .
+          7z x -y mpv-dev-x86_64-*.7z
+          echo "==== extracted layout ===="; ls -R | head -60
+      - name: Generate mpv import lib
+        shell: cmd
+        run: |
+          cd libmpv
+          lib /def:mpv.def /name:libmpv-2.dll /out:mpv.lib /MACHINE:X64
+      - name: Build native client (player feature)
+        working-directory: clients/windows-px8
+        shell: bash
+        env:
+          MPV_SOURCE: ${{ github.workspace }}\libmpv
+        run: |
+          npm ci
+          npm run tauri build -- --features player
+      - name: Stage installer + libmpv runtime DLL
+        shell: bash
+        run: |
+          setup=$(ls clients/windows-px8/src-tauri/target/release/bundle/nsis/*-setup.exe | head -1)
+          test -n "$setup" || { echo "no NSIS installer produced"; exit 1; }
+          mkdir -p dist
+          cp "$setup" dist/Triboon-Windows-Client-native.exe
+          cp libmpv/libmpv-2.dll dist/ 2>/dev/null || cp libmpv/*/libmpv-2.dll dist/ 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Triboon-Windows-Client-native
+          path: dist/
