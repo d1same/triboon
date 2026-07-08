@@ -7341,9 +7341,18 @@ Object.assign(H, {
     const wyzieActive = subMode !== 'opensubtitles-only' && !!key;
     const osActive = subMode !== 'wyzie-only' && !!effectiveOpenSubtitles();
     if (!wyzieActive && !osActive) {
-      return send(ctx.res, 503, { error: subMode === 'opensubtitles-only'
-        ? 'OpenSubtitles is set as the only subtitle source but is not configured (Settings -> Subtitles: API key + username + password)'
-        : 'No subtitle provider configured (Settings -> Subtitles)' });
+      // No subtitle provider is configured. That is a normal, handled state — NOT a service
+      // outage — so mirror the handler's OWN "found nothing" contract (404 + code:no_subtitles,
+      // same as an empty provider result at getVariants) instead of a 503. A 503 broke the
+      // client's 200/404 contract: subtitleResponseNoResults() only treats 404/no_subtitles as a
+      // clean miss, so a 503 surfaced as a hard error toast instead of "no subtitles available".
+      // The admin-facing hint stays in `error` (logs); the client keys off `code`.
+      return send(ctx.res, 404, {
+        error: subMode === 'opensubtitles-only'
+          ? 'OpenSubtitles is set as the only subtitle source but is not configured (Settings -> Subtitles: API key + username + password)'
+          : 'No subtitle provider configured (Settings -> Subtitles)',
+        code: 'no_subtitles',
+      });
     }
     const preferProvider = subMode.startsWith('opensubtitles') ? 'opensubtitles' : 'wyzie';
     vf._touched = Date.now();

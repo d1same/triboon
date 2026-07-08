@@ -1846,7 +1846,7 @@ test('subtitles: OpenSubtitles moviehash search → login → download → VTT (
   }
 });
 
-test('subtitles: Wyzie search→file→VTT served per mount (and 503 without a key)', async () => {
+test('subtitles: Wyzie search→file→VTT served per mount (and a clean no_subtitles when unconfigured)', async () => {
   const http2 = require('http');
   let osPort;
   let searchCalls = 0;
@@ -1945,9 +1945,20 @@ test('subtitles: Wyzie search→file→VTT served per mount (and 503 without a k
   assert.match(relSub.body.toString('utf8'), /00:00:05\.500 --> 00:00:07\.000/);
   assert.match(relSub.body.toString('utf8'), /Release subtitle/);
 
-  // No key configured → honest 503, not a hang or a fake empty file.
+  // No provider configured is a NORMAL "no subtitles available" state, not a service outage:
+  // report the handler's OWN no_subtitles contract (404 + code:'no_subtitles') — the same graceful
+  // result the client's subtitleResponseNoResults() already turns into "no subtitles found", and
+  // the same status an empty provider search yields. It is still honest (no hang, no fake empty
+  // file). It was previously a 503, but 503 is semantically wrong for a non-transient unconfigured
+  // state and surfaced as a hard error toast in the client + failed the TV stress smoke's 200/404
+  // contract. Both the download path and the list path must return it.
   const no = await httpRaw(srv.port, `/api/ossubs/${play.id}?lang=en&tmdb=4242&t=${play.streamToken}`);
-  assert.strictEqual(no.status, 503);
+  assert.strictEqual(no.status, 404, no.body.toString());
+  assert.strictEqual(JSON.parse(no.body.toString()).code, 'no_subtitles',
+    'unconfigured provider is a clean no_subtitles miss (client-graceful), not a 503 service outage');
+  const noList = await httpRaw(srv.port, `/api/ossubs/${play.id}?lang=en&tmdb=4242&list=1&t=${play.streamToken}`);
+  assert.strictEqual(noList.status, 404, noList.body.toString());
+  assert.strictEqual(JSON.parse(noList.body.toString()).code, 'no_subtitles');
 
   process.env.WYZIE_BASE = `http://127.0.0.1:${osPort}`;
   process.env.TRIBOON_WYZIE_KEY = 'test-key';
