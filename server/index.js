@@ -15,7 +15,7 @@ const { Auth, SecureSettings, RateLimiter } = require('./auth');
 const { Pipeline } = require('./pipeline');
 const { TmdbProxy } = require('./tmdb');
 const { Trakt } = require('./trakt');
-const { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, probeLiveVideoCodec, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioCopyOk } = require('./transcode');
+const { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, probeLiveVideoCodec, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioCopyOk, ffprobeKeyframeAtOrAfter } = require('./transcode');
 const ytmusic = require('./ytmusic');
 const https = require('https');
 const dns = require('dns').promises;
@@ -7051,6 +7051,23 @@ Object.assign(H, {
     if (!ctx.res.destroyed && !ctx.res.writableEnded) ctx.res.end();
   },
 
+  // RECONNECT-resume forward-skip helper: return the next video keyframe AT-OR-AFTER `at` so the client
+  // can re-mount there — resuming slightly FORWARD instead of rewinding to the keyframe before the drop
+  // (the ~1s+ backward jump). The fragmented remux/transcode output is unseekable, so forward is the
+  // only reliable way to avoid a backward replay. Stream-tier auth, same scope as /api/remux. ONLY the
+  // reconnect path calls it, so the ~1-2s probe never touches a user seek. Fails safe: returns `at`.
+  keyframe: async (ctx) => {
+    if (!streamScopeOk(ctx, ctx.m[1])) return send(ctx.res, 401, { error: 'token not valid for this stream' });
+    const vf = mounts.get(ctx.m[1]);
+    if (!vf) return send(ctx.res, 404, { error: 'mount not found' });
+    if (!mountAccessOk(ctx, vf)) return send(ctx.res, 404, { error: 'mount not found' });
+    const at = parseFloat(ctx.url.searchParams.get('at') || '0') || 0;
+    if (!(at > 0) || !detectFfprobe()) return send(ctx.res, 200, { k: Math.max(0, at) });
+    const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.claims.uid, vf.id)}`;
+    const k = await ffprobeKeyframeAtOrAfter(selfUrl, at).catch(() => at);
+    send(ctx.res, 200, { k: Math.max(at, Number(k) || at) });
+  },
+
   remux: async (ctx) => {
     if (!streamScopeOk(ctx, ctx.m[1])) return send(ctx.res, 401, { error: 'token not valid for this stream' });
     const vf = mounts.get(ctx.m[1]);
@@ -7059,6 +7076,13 @@ Object.assign(H, {
     if (!vf.streamable) return send(ctx.res, 409, { error: 'mount is not streamable', tags: vf.tags });
     if (!detectFfmpeg()) return send(ctx.res, 503, { error: 'ffmpeg not available on this server' });
     vf._touched = Date.now();
+    // Streaming pipe: the output is client-PACED (ExoPlayer stops reading when its buffer fills, for
+    // up to the buffer duration), so ffmpeg blocks on stdout and this response socket goes idle. The
+    // default 30s socket idle timeout (server.timeout, index.js) then destroyed it mid-playback,
+    // forcing a re-mount — one driver of the periodic ~1s backward jump. Disable the idle timer here
+    // (/api/stream does the same with a 120s bump); ctx.req 'close' below still reaps ffmpeg on a
+    // real disconnect, and the mount sweep reaps a zombie.
+    try { ctx.res.setTimeout(0); if (ctx.res.socket) ctx.res.socket.setTimeout(0); } catch {}
     const startSeconds = parseFloat(ctx.url.searchParams.get('start') || '0') || 0;
     const audioTrack = parseInt(ctx.url.searchParams.get('audio') || '0', 10) || 0;
     const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.claims.uid, vf.id)}`;
@@ -7118,6 +7142,9 @@ Object.assign(H, {
     if (!vf.streamable) return send(ctx.res, 409, { error: 'mount is not streamable', tags: vf.tags });
     if (!detectEncoder()) return send(ctx.res, 503, { error: 'no H.264 encoder available on this server' });
     vf._touched = Date.now();
+    // Same idle-timeout disable as /api/remux — a client-paced transcode pipe must not inherit the
+    // default 30s socket idle timeout, which killed it mid-buffer and forced a re-mount.
+    try { ctx.res.setTimeout(0); if (ctx.res.socket) ctx.res.socket.setTimeout(0); } catch {}
     const startSeconds = parseFloat(ctx.url.searchParams.get('start') || '0') || 0;
     const audioTrack = parseInt(ctx.url.searchParams.get('audio') || '0', 10) || 0;
     // Same as /api/remux: a plain browser <video> sends audioSafe=1 → downmix to stereo AAC so a 5.1
@@ -8114,6 +8141,7 @@ const ROUTES = [
   { m: 'PATCH', re: /^\/api\/users\/(\w+)$/, auth: 'admin', h: H.userEdit },
   { m: 'DELETE', re: /^\/api\/users\/(\w+)$/, auth: 'admin', h: H.userDelete },
   { m: 'GET', re: /^\/api\/stream\/(\w+)$/, auth: 'stream', h: H.stream },
+  { m: 'GET', re: /^\/api\/keyframe\/(\w+)$/, auth: 'stream', h: H.keyframe },
   { m: 'GET', re: /^\/api\/remux\/(\w+)$/, auth: 'stream', h: H.remux },
   { m: 'GET', re: /^\/api\/transcode\/(\w+)$/, auth: 'stream', h: H.transcode },
   // HLS output variant (Cast Phase 2, feature-flagged). Group 1 = mount id; group 2 = optional

@@ -37,6 +37,37 @@ function detectFfprobe() {
   return null;
 }
 
+// The next video keyframe AT-OR-AFTER `targetSec`, for the RECONNECT-resume forward-skip. A copy-remux
+// (-noaccurate_seek -ss) can only START at a coded keyframe, and the fragmented (empty_moov) output is
+// UNSEEKABLE in ExoPlayer (verified: isCurrentMediaItemSeekable=false) — so we can't land mid-GOP.
+// Rather than rewind to the keyframe BEFORE the drop (a visible backward jump — the owner's complaint),
+// the client re-mounts at the next keyframe AT-OR-AFTER it: playback resumes slightly FORWARD (≤ one
+// GOP), never backward. GATED to reconnects (a ~1-2s probe); user seeks stay instant. Returns targetSec
+// when none is found nearby → the client skips nothing (today's behavior, no regression).
+function ffprobeKeyframeAtOrAfter(streamUrl, targetSec, { timeoutMs = 8000 } = {}) {
+  return new Promise((resolve) => {
+    const fp = detectFfprobe();
+    if (!fp || !(targetSec > 0)) return resolve(targetSec > 0 ? targetSec : 0);
+    const args = ['-v', 'error', '-read_intervals', `${targetSec}%+10`,
+      '-select_streams', 'v:0', '-skip_frame', 'nokey',
+      '-show_entries', 'frame=pts_time', '-of', 'csv=p=0', streamUrl];
+    const p = spawn(fp.path, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    let out = '', done = false;
+    const finish = (v) => { if (done) return; done = true; clearTimeout(killer); resolve(v); };
+    const killer = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} finish(targetSec); }, timeoutMs);
+    p.stdout.on('data', (d) => { out += d; });
+    p.on('error', () => finish(targetSec));
+    p.on('close', () => {
+      let best = Infinity;
+      for (const line of out.split(/\r?\n/)) {
+        const t = parseFloat(line);
+        if (Number.isFinite(t) && t >= targetSec - 0.02 && t < best) best = t; // smallest keyframe >= target
+      }
+      finish(best !== Infinity ? best : targetSec);
+    });
+  });
+}
+
 let _ffmpegHttpOptions; // cached protocol option help text
 function supportsFfmpegHttpOption(option) {
   const ff = detectFfmpeg();
@@ -508,4 +539,4 @@ function spawnSubSync(refPath, inPath, outPath) {
     { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env });
 }
 
-module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, probeLiveVideoCodec, liveVideoArgs, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, supportsFfmpegHttpOption };
+module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, probeLiveVideoCodec, liveVideoArgs, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, supportsFfmpegHttpOption, ffprobeKeyframeAtOrAfter };

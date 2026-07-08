@@ -572,6 +572,49 @@ test('subs: ranking respects forced + SDH preference; declared encoding honored'
   assert.strictEqual(decodeSubtitleBuffer(Buffer.from('café', 'utf8'), '', 'UTF-8'), 'café', 'declared UTF-8 passes through');
 });
 
+test('opensubs: osSearch falls back to a TITLE query when an id-keyed search returns nothing', async () => {
+  const { osSearch } = require('../server/opensubs');
+  const seen = [];
+  // A brand-new spin-off (e.g. "Goosebumps: The Vanishing" = tmdb 281666, imdb null) that the
+  // provider never mapped to that tmdb id: the id search dead-ends, only the plain title finds it.
+  const srv = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://127.0.0.1');
+    seen.push(u.search);
+    const hasId = u.searchParams.has('tmdb_id') || u.searchParams.has('imdb_id');
+    const hasQuery = u.searchParams.has('query');
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ data: (!hasId && hasQuery)
+      ? [{ id: '1', attributes: { release: 'The.Vanishing.S01E01.1080p', files: [{ file_id: 9 }] } }]
+      : [] }));
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  try {
+    const base = `http://127.0.0.1:${srv.address().port}/api/v1`;
+    const out = await osSearch({ apiKey: 'k', base, tmdbId: '281666', query: 'Goosebumps: The Vanishing S01E01', season: 1, episode: 1, attempts: 1 });
+    assert.equal(out.length, 1, 'the title fallback returned the subtitle the id search missed');
+    assert.equal(seen.length, 2, 'searched twice: id first, then title fallback');
+    assert.ok(seen[0].includes('tmdb_id=281666'), 'first search keyed on the tmdb id');
+    assert.ok(seen[1].includes('query=') && !seen[1].includes('tmdb_id'), 'fallback dropped the id and used the title');
+  } finally { srv.close(); }
+});
+
+test('opensubs: osSearch does NOT re-search when the id-keyed search already found subtitles', async () => {
+  const { osSearch } = require('../server/opensubs');
+  let count = 0;
+  const srv = http.createServer((req, res) => {
+    count++;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ data: [{ id: '1', attributes: { release: 'x', files: [{ file_id: 9 }] } }] }));
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  try {
+    const base = `http://127.0.0.1:${srv.address().port}/api/v1`;
+    const out = await osSearch({ apiKey: 'k', base, tmdbId: '281666', query: 'Whatever S01E01', season: 1, episode: 1, attempts: 1 });
+    assert.equal(out.length, 1);
+    assert.equal(count, 1, 'a successful id search must not trigger the title fallback');
+  } finally { srv.close(); }
+});
+
 test('subs: auto-match falls through stale subtitle file links', async () => {
   const { fetchOnlineSub, downloadBestSubtitle } = require('../server/opensubs');
   const downloads = [];

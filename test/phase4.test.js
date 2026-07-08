@@ -1727,7 +1727,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'ExoPlayer should honor the server-selected fast path but let remux fall through to transcode when the device rejects the remuxed codec');
   assert.match(ui, /async function prepareNativeStartKindForAudio\(startKind\) \{[\s\S]+fetchPlayerTracks\(p, 1400\)[\s\S]+nativeDirectAudioNeedsSafeRemux\(selectedPlayerAudioTrack\(p\)\)[\s\S]+p\.forceAacRemux = true;[\s\S]+return 'remux';[\s\S]+nativeDirectAudioNameRisk\(p\)[\s\S]+return 'remux';[\s\S]+\}/,
     'Android direct playback should quickly probe risky audio and start a safe audio remux instead of silently direct-playing');
-  assert.match(ui, /function remuxPlaybackUrl\(p, seekStart = 0, opts = \{\}\) \{[\s\S]+p\.forceAacRemux && !opts\.native[\s\S]+'&audioSafe=1'[\s\S]+return `\$\{p\.remuxUrl\}&start=\$\{Math\.max\(0, Math\.floor\(seekStart \|\| 0\)\)\}&audio=\$\{audio\}\$\{safe\}`;/,
+  assert.match(ui, /function remuxPlaybackUrl\(p, seekStart = 0, opts = \{\}\) \{[\s\S]+p\.forceAacRemux && !opts\.native[\s\S]+'&audioSafe=1'[\s\S]+return `\$\{p\.remuxUrl\}&start=\$\{Math\.max\(0, Math\.round\(\(seekStart \|\| 0\) \* 1000\) \/ 1000\)\}&audio=\$\{audio\}\$\{safe\}`;/,
     'remux URL omits the stereo audioSafe flag for the native player (gets server-default 5.1) but keeps it for browser/MSE surfaces; video always copied');
   assert.match(server, /const forceAudioSafe = ctx\.url\.searchParams\.get\('audioSafe'\) === '1';[\s\S]+const transcodeAudio = forceAudioSafe \|\| !audioCopyOk\(aud, vf\._caps\);/,
     'server remux should honor the audioSafe flag without forcing full video transcode');
@@ -2620,7 +2620,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'native rewind and forward should seek through the absolute movie-time helper');
   assert.match(android, /private boolean nativeServerSeekMode\(\) \{[\s\S]+"remux"\.equals\(nativeKind\) \|\| "transcode"\.equals\(nativeKind\)[\s\S]+private void nativeSeekToDisplayPosition\(long displayMs\) \{[\s\S]+if \(nativeServerSeekMode\(\)\) \{[\s\S]+requestNativeVideoSeek\(target\);[\s\S]+return;[\s\S]+\}[\s\S]+nativePlayer\.seekTo/,
     'native remux/transcode seeking should restart through the web handoff instead of seeking inside a restarted segment');
-  assert.match(ui, /window\.__tvNativeVideoSeek = \(pos, dur\) => \{[\s\S]+p\.nativePos = at;[\s\S]+tryNativeVideoPlayer\(currentPlayerKind\(p\), at, \{ quietSeek: true \}\);[\s\S]+\};/,
+  assert.match(ui, /window\.__tvNativeVideoSeek = async \(pos, dur, resume\) => \{[\s\S]+p\.nativePos = at;[\s\S]+tryNativeVideoPlayer\(kind, at, \{ quietSeek: true \}\);[\s\S]+\};/,
     'web should quietly remount the active native source kind when Android requests an absolute seek');
   assert.match(android, /private boolean handleNativeSeekBarKey\(KeyEvent e\) \{[\s\S]+View current = getCurrentFocus\(\);[\s\S]+current != nativeSeek && \(!nativeSeekDpadMode \|\| isNativeControl\(current\)\)[\s\S]+KEYCODE_DPAD_LEFT[\s\S]+KEYCODE_DPAD_RIGHT[\s\S]+nativeSeekBy\(code == KeyEvent\.KEYCODE_DPAD_RIGHT \? 30000 : -10000\);[\s\S]+\}/,
     'focused native seek bar should scrub video with D-pad left/right while focused buttons stay in button navigation');
@@ -3098,7 +3098,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'the web seek frame hold should disappear as soon as the replacement stream has a frame');
   assert.match(ui, /v\.onwaiting = \(\) => \{[\s\S]+pWait\.suppressSeekLoaderUntil && appMs\(\) < pWait\.suppressSeekLoaderUntil[\s\S]+return;/,
     'web rebuffer events during a user seek should keep the current frame instead of flashing the loader');
-  assert.match(ui, /window\.__tvNativeVideoSeek = \(pos, dur\) => \{[\s\S]+p\.suppressSeekLoaderUntil = appMs\(\) \+ 4500;[\s\S]+\$\(\'playerLoader\'\)\.classList\.remove\(\'show\'\);[\s\S]+tryNativeVideoPlayer\(currentPlayerKind\(p\), at, \{ quietSeek: true \}\);/,
+  assert.match(ui, /window\.__tvNativeVideoSeek = async \(pos, dur, resume\) => \{[\s\S]+p\.suppressSeekLoaderUntil = appMs\(\) \+ 4500;[\s\S]+\$\(\'playerLoader\'\)\.classList\.remove\(\'show\'\);[\s\S]+tryNativeVideoPlayer\(kind, at, \{ quietSeek: true \}\);/,
     'native remux/transcode seek restarts should be marked as quiet seeks from the web bridge');
   assert.match(ui, /quietSeek: !!opts\.quietSeek/,
     'native playback payload should carry whether this is a user seek instead of startup');

@@ -3909,13 +3909,16 @@ public class MainActivity extends Activity {
                         // Bounded so a truly dead source still surfaces an error and auto-advances.
                         if (nativeServerSeekMode() && nativeVideoStarted && nativeLastVideoDisplayMs > 0L
                                 && isNativeRecoverableIoError(error) && nativeAllowReconnectResume()) {
+                            // Resume at the FRESH live position (not the up-to-1s-stale sample) so the
+                            // reconnect lands on the true drop point, not ~1s behind it.
+                            long resumeAt = nativeResumePositionMs();
                             Log.w(TAG, "Native VOD remux stream dropped (code " + error.errorCode + ", " + msg
-                                    + "); resuming at " + nativeLastVideoDisplayMs + "ms (no replay)");
+                                    + "); resuming at " + resumeAt + "ms (no replay)");
                             // Stamp the auto-resume debounce + clear the backward-tick counter so an
                             // overlapping 1s progress tick can't fire a second seek via rememberNativeVideoPosition.
                             nativeLastAutoResumeSeekMs = SystemClock.elapsedRealtime();
                             nativeBackwardTicks = 0;
-                            requestNativeVideoSeek(nativeLastVideoDisplayMs);
+                            requestNativeVideoSeek(resumeAt, true);
                             return;
                         }
                         notifyNativeVideoError(msg, pos, dur);
@@ -4286,11 +4289,24 @@ public class MainActivity extends Activity {
         nativePlayer.seekTo(Math.max(0L, target - nativeStartOffsetMs));
     }
 
-    private void requestNativeVideoSeek(long displayMs) {
+    // Freshest resume position at a drop: the LIVE displayed position (current to the millisecond)
+    // beats the 1s-sampled nativeLastVideoDisplayMs, cutting up to ~1s of backward hop on a reconnect.
+    // Guarded by the last confirmed sample so a transient 0/dip can never resume BEHIND where we were.
+    private long nativeResumePositionMs() {
+        long live = nativeDisplayPositionMs();
+        return live > 0L ? Math.max(live, nativeLastVideoDisplayMs) : nativeLastVideoDisplayMs;
+    }
+
+    private void requestNativeVideoSeek(long displayMs) { requestNativeVideoSeek(displayMs, false); }
+    private void requestNativeVideoSeek(long displayMs, boolean resume) {
         if (web == null || !"video".equals(nativeMode)) return;
-        long pos = Math.max(0L, displayMs / 1000L);
+        // Pass FRACTIONAL seconds (ms precision): the server -ss and the &start= URL both accept a
+        // fractional start, so a resume no longer floors to the whole second (was up to ~1s backward).
+        // Transcode (accurate -ss) becomes frame-exact; `resume` (a reconnect, not a user seek) tells the
+        // web layer to keyframe-align the remux + forward-skip so the drop never shows a backward replay.
+        String pos = String.format(java.util.Locale.US, "%.3f", Math.max(0L, displayMs) / 1000.0);
         web.evaluateJavascript("window.__tvNativeVideoSeek && window.__tvNativeVideoSeek("
-                + pos + "," + nativeDurSeconds() + ")", null);
+                + pos + "," + nativeDurSeconds() + "," + (resume ? "true" : "false") + ")", null);
     }
 
     private void applyNativeStartSeekIfReady() {

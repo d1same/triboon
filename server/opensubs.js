@@ -896,20 +896,37 @@ function osSearchUrl({ base = OS_REST_BASE, moviehash = '', imdbId = '', tmdbId 
 async function osSearch({ apiKey, base = OS_REST_BASE, moviehash = '', imdbId = '', tmdbId = '',
   query = '', lang = 'en', season = null, episode = null, attempts = 2, retryDelayMs = 700 } = {}) {
   if (!apiKey) throw permanent('OpenSubtitles is not configured (no API key)');
-  const u = osSearchUrl({ base, moviehash, imdbId, tmdbId, query, lang, season, episode });
-  const r = await retryTransient('OpenSubtitles search', async () => {
-    const res = await request('GET', u.href, { key: apiKey, timeoutMs: 15000, deadlineMs: 25000 });
-    if (res.status === 401 || res.status === 403) throw permanent('OpenSubtitles API key invalid');
-    if (res.status !== 200) {
-      const e = new Error(`opensubtitles search HTTP ${res.status}`);
-      if (![408, 429].includes(res.status) && res.status < 500) e.permanent = true;
-      throw e;
-    }
-    return res;
-  }, { attempts, delayMs: retryDelayMs });
-  let body;
-  try { body = JSON.parse(r.body); } catch { throw new Error('opensubtitles returned non-JSON'); }
-  return Array.isArray(body && body.data) ? body.data : [];
+  const runSearch = async (opts) => {
+    const u = osSearchUrl(opts);
+    const r = await retryTransient('OpenSubtitles search', async () => {
+      const res = await request('GET', u.href, { key: apiKey, timeoutMs: 15000, deadlineMs: 25000 });
+      if (res.status === 401 || res.status === 403) throw permanent('OpenSubtitles API key invalid');
+      if (res.status !== 200) {
+        const e = new Error(`opensubtitles search HTTP ${res.status}`);
+        if (![408, 429].includes(res.status) && res.status < 500) e.permanent = true;
+        throw e;
+      }
+      return res;
+    }, { attempts, delayMs: retryDelayMs });
+    let body;
+    try { body = JSON.parse(r.body); } catch { throw new Error('opensubtitles returned non-JSON'); }
+    return Array.isArray(body && body.data) ? body.data : [];
+  };
+  const primary = await runSearch({ base, moviehash, imdbId, tmdbId, query, lang, season, episode });
+  if (primary.length) return primary;
+  // TITLE FALLBACK: an id-keyed search returned zero, but a catalog id can be WRONG or unlinked and
+  // still dead-end even though the subtitles exist. The common case: a new spin-off/season TMDB
+  // splits into its OWN entry with no imdb_id (e.g. "Goosebumps: The Vanishing" → tmdb 281666,
+  // imdb null), or a tmdb_id OpenSubtitles never mapped — so imdb/tmdb lookups match nothing. When
+  // we searched by an id and got nothing, retry by TITLE + season/episode with NO id so a plain text
+  // match can find them. Guarded on having HAD an id (a title-only caller already used the query
+  // path — don't double-search) and on a usable title parsed from the query.
+  const hadId = !!(String(imdbId || '').replace(/\D/g, '') || String(tmdbId || '').replace(/\D/g, ''));
+  const title = String(parseQuery(query || '').title || '').trim();
+  if (hadId && title.length >= 2) {
+    return await runSearch({ base, moviehash, imdbId: '', tmdbId: '', query, lang, season, episode });
+  }
+  return primary;
 }
 
 // Map an OpenSubtitles `data[]` entry into the same shape pickSub/rankSubs already consume,

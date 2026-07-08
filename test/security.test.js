@@ -2098,6 +2098,42 @@ test('search: hyphenated titles — query loses the hyphen, verification still m
   ix.close();
 });
 
+test('search: an "&" title finds ALL its releases, not just one', async () => {
+  // Regression: "His & Hers" surfaced only one source. search() sanitized "&" out of the query
+  // BEFORE parseWantedTitle could turn it into the skippable word "and", so the verifier wanted
+  // [his, hers] and rejected every real "His.and.Hers.*" release — only an oddly-spelled
+  // "His.Hers.*" survived. The verifier must parse from the ORIGINAL "&" query.
+  const http2 = require('http');
+  const seenQ = [];
+  const ix = http2.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    seenQ.push(u.searchParams.get('q'));
+    res.writeHead(200);
+    res.end(`<?xml version="1.0"?><rss xmlns:newznab="http://x"><channel>
+      <item><title>His.and.Hers.2025.1080p.WEB-DL.DDP5.1.H.264-GRP</title><enclosure url="http://x/1" length="4000000000"/></item>
+      <item><title>His.Hers.2025.720p.HDTV.x264-GRP</title><enclosure url="http://x/2" length="2000000000"/></item>
+      <item><title>His.and.Hers.2025.2160p.AMZN.WEB-DL-NTb</title><enclosure url="http://x/3" length="9000000000"/></item>
+      <item><title>His.Dark.Materials.2025.1080p.WEB-DL-GRP</title><enclosure url="http://x/4" length="4000000000"/></item>
+    </channel></rss>`);
+  });
+  await new Promise((r) => ix.listen(0, '127.0.0.1', r));
+  const { Pipeline } = require('../server/pipeline');
+  const p = new Pipeline({
+    pool: () => null, mounts: new Map(),
+    verdicts: { get: () => null, set: () => {} },
+    indexers: () => [{ name: 'hy', url: `http://127.0.0.1:${ix.address().port}`, apikey: 'x' }],
+  });
+  const r = await p.search({ q: 'His & Hers 2025' });
+  assert.ok(seenQ.includes('His Hers 2025'),
+    `indexer query keeps the "&" out for recall (got ${JSON.stringify(seenQ)})`);
+  assert.deepStrictEqual(r.candidates.map((c) => c.name).sort(), [
+    'His.Hers.2025.720p.HDTV.x264-GRP',
+    'His.and.Hers.2025.1080p.WEB-DL.DDP5.1.H.264-GRP',
+    'His.and.Hers.2025.2160p.AMZN.WEB-DL-NTb',
+  ].sort(), 'all three His-&-Hers spellings verify; His.Dark.Materials does not');
+  ix.close();
+});
+
 test('search: source drawer forwards TVDB season and episode identifiers to indexers', async () => {
   const http2 = require('http');
   let seen;

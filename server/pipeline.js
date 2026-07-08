@@ -660,13 +660,23 @@ class Pipeline {
     // the indexer as "Tom Clancys Jack Ryan Ghost War" or it finds nothing. Hyphens split into
     // spaces too: "Spider-Noir" found nothing while "Spider Noir" matched 30 releases.
     const sanitize = (q) => String(q || '').replace(/['’`]/g, '').replace(/[:&,!?./\\()\[\]\-_;]+/g, ' ').replace(/\s+/g, ' ').trim();
-    params = { ...params, q: sanitize(params.q) };
+    // The indexer query and the title verifier are DELIBERATELY derived from different strings.
+    // sanitize() strips "&" (scene names never carry it) for the cleanest indexer query, but the
+    // verifier needs "&" turned into the skippable word "and" (His & Hers → his/and/hers) so real
+    // releases spelled His.and.Hers still pass releaseMatches — parseWantedTitle does that on the
+    // ORIGINAL query. Parsing the SANITIZED query instead dropped the "&" before the conversion
+    // could run, so every "and"-spelled release was rejected and only one loose source survived.
+    const rawQ = String(params.q || '');
+    params = { ...params, q: sanitize(rawQ) };
     const season = Number(params.season);
     const ep = Number(params.ep);
+    let verifyQ = rawQ;
     if (Number.isInteger(season) && Number.isInteger(ep) && season > 0 && ep > 0 && !/\bS\d{1,2}\s*E\d{1,3}\b/i.test(params.q)) {
-      params.q = `${params.q} S${String(season).padStart(2, '0')}E${String(ep).padStart(2, '0')}`.trim();
+      const se = ` S${String(season).padStart(2, '0')}E${String(ep).padStart(2, '0')}`;
+      params.q = `${params.q}${se}`.trim();
+      verifyQ = `${verifyQ}${se}`.trim();
     }
-    const wanted = parseWantedTitle(params.q);
+    const wanted = parseWantedTitle(verifyQ);
     // TV episode context for scoring: a whole-season PACK must not be size-cap-disqualified — only ONE
     // episode streams from it (it's still size-SHAPED, so it stays a low-ranked fallback below singles).
     // Scoped to episode requests; movies/season-less searches never get wantedEpisode → unaffected.

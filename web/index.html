@@ -9394,7 +9394,7 @@ function startSource(kind, atSeconds, opts = {}) {
   p.usingLiveMse = false;
   updatePlayerMeta();
   const serverSeek = p.usingRemux || p.usingTranscode;
-  const seekStart = serverSeek ? Math.max(0, Math.floor(atSeconds || 0)) : 0;
+  const seekStart = serverSeek ? Math.max(0, Math.round((atSeconds || 0) * 1000) / 1000) : 0; // ms-precise, not floored: a resume/seek must not lose up to 1s
   p.startOffset = seekStart;
   cleanupLiveMse();
   if (p.item && p.item.type === 'live') {
@@ -9756,7 +9756,7 @@ function remuxPlaybackUrl(p, seekStart = 0, opts = {}) {
   // so it OMITS audioSafe (opts.native) and gets the server's default 5.1 re-encode → full surround
   // instead of a needless stereo downmix on a capable TV/AVR.
   const safe = (p && p.forceAacRemux && !opts.native) ? '&audioSafe=1' : '';
-  return `${p.remuxUrl}&start=${Math.max(0, Math.floor(seekStart || 0))}&audio=${audio}${safe}`;
+  return `${p.remuxUrl}&start=${Math.max(0, Math.round((seekStart || 0) * 1000) / 1000)}&audio=${audio}${safe}`;
 }
 // iOS Safari <video> plays HLS natively (application/vnd.apple.mpegurl); each fMP4 segment is a rangeable
 // file, which is what Safari demands and what the 200-streamed remux/transcode pipe can't provide. Always
@@ -9877,7 +9877,7 @@ function tryNativeVideoPlayer(kind, atSeconds, opts = {}) {
   const baseUrl = kind === 'remux' ? p.remuxUrl : (kind === 'transcode' ? p.transcodeUrl : p.streamUrl);
   if (!baseUrl) return false;
   const serverSeek = kind === 'remux' || kind === 'transcode';
-  const seekStart = serverSeek ? Math.max(0, Math.floor(atSeconds || 0)) : 0;
+  const seekStart = serverSeek ? Math.max(0, Math.round((atSeconds || 0) * 1000) / 1000) : 0; // ms-precise, not floored: a resume/seek must not lose up to 1s
   let nativeUrl = baseUrl;
   if (kind === 'transcode') {
     nativeUrl = `${p.transcodeUrl}&start=${seekStart}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}`;
@@ -10022,14 +10022,32 @@ window.__tvNativeVideoStats = (raw) => {
   nativePlaybackHeartbeat(); // stats ticks fire for native Live TV too — keeps live viewers reported
   runPendingNativeSync();    // and a second throttle-proof driver for the queued alass sync (paused playback)
 };
-window.__tvNativeVideoSeek = (pos, dur) => {
+window.__tvNativeVideoSeek = async (pos, dur, resume) => {
   const p = S.playing; if (!p || !p.usingNative || !p.item || p.item.type === 'live') return;
   const at = Math.max(0, +pos || 0);
   if (+dur > 0) { p.nativeDuration = +dur; p.duration = +dur; }
   p.nativePos = at;
   p.suppressSeekLoaderUntil = appMs() + 4500;
   $('playerLoader').classList.remove('show');
-  tryNativeVideoPlayer(currentPlayerKind(p), at, { quietSeek: true });
+  const kind = currentPlayerKind(p);
+  // RECONNECT-resume on remux: a copy-remux can only restart at a keyframe, and the fragmented output
+  // is unseekable, so we can't land mid-GOP. Fetch the next keyframe AT-OR-AFTER the drop and re-mount
+  // THERE — playback resumes slightly FORWARD (≤ one GOP), never a backward replay (the owner's bug).
+  // Gated to reconnects + remux; user seeks and transcode (frame-accurate) are untouched. Any hiccup
+  // falls through to mounting at the target.
+  if (resume && kind === 'remux' && p.remuxUrl) {
+    try {
+      const m = p.remuxUrl.match(/\/api\/remux\/(\w+)\?t=([^&]+)/);
+      if (m) {
+        const kf = (await (await fetch(`/api/keyframe/${m[1]}?at=${at}&t=${m[2]}`)).json()).k;
+        if (Number.isFinite(kf) && kf > at + 0.05) {
+          tryNativeVideoPlayer(kind, kf, { quietSeek: true });
+          return;
+        }
+      }
+    } catch {}
+  }
+  tryNativeVideoPlayer(kind, at, { quietSeek: true });
 };
 window.__tvNativeVideoClosed = (pos, dur, ended) => {
   const p = S.playing; if (!p || !p.usingNative) return;
@@ -10175,7 +10193,7 @@ function vodPlaybackStarted(p) {
 function currentPlaybackUrl(p, atSeconds = currentTime()) {
   if (!p) return '';
   const kind = currentPlayerKind(p);
-  const start = Math.max(0, Math.floor(atSeconds || 0));
+  const start = Math.max(0, Math.round((atSeconds || 0) * 1000) / 1000);
   if (kind === 'transcode' && p.transcodeUrl) return `${p.transcodeUrl}&start=${start}&audio=${p.audioTrack || 0}&height=${p.quality || 1080}`;
   if (kind === 'remux' && p.remuxUrl) return remuxPlaybackUrl(p, start);
   return p.streamUrl || '';
