@@ -390,8 +390,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Up Next must not start a 10-second autoplay countdown with 45 seconds still left in the episode');
   assert.match(ui, /const UP_NEXT_COUNTDOWN_SECONDS = 10;[\s\S]+function showUpNext\(\) \{[\s\S]+let n = UP_NEXT_COUNTDOWN_SECONDS;[\s\S]+\$\('unCount'\)\.textContent = n;[\s\S]+if \(n <= 0\) playNextEpisode\(\);/,
     'Up Next autoplay should always give the user a 10-second choice window before starting the next episode');
-  assert.match(ui, /id="unPlay">Play next episode<\/button>/,
-    'Up Next primary action should clearly say Play next episode');
+  assert.match(ui, /<button class="un-play focusable" id="unPlay">[\s\S]*?<span class="un-title" id="unTitle"><\/span>[\s\S]*?<span class="un-prog" id="unProg">/,
+    'Up Next primary action is a compact pill: a play button that shows the next-episode title with a countdown progress line');
+  assert.match(ui, /<button class="un-cancel focusable" id="unCancel"[\s\S]*?<\/button>\s*<\/div>/,
+    'the compact Up Next pill pairs the play button with a small dismiss (✕) control');
   assert.doesNotMatch(ui, /opts\.ended \? 6 : 10/,
     'the ended fallback path should not shorten the Up Next countdown');
   assert.match(ui, /saveQualityPref\(target,\s*S\.qualityPref\)[\s\S]+paintQualityToggle\(S\.qualityPref\);[\s\S]+prefetchSources\(target, 0\);[\s\S]+preparePlaybackSource\(target, 0\);/,
@@ -981,10 +983,15 @@ test('subtitle startup preference contract: admin can toggle built-in captions',
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   const playerMap = fs.readFileSync(path.join(__dirname, '..', 'docs-player-regression-map.md'), 'utf8');
   const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
-  // Native Up Next card is compact/unobtrusive (owner: smaller, don't cover the screen): tight
-  // padding, a narrower title column, and reduced type sizes — still just Play Next + Dismiss.
-  assert.match(android, /private View buildNativeUpNextCard\(\) \{[\s\S]+card\.setPadding\(dp\(13\), dp\(10\), dp\(13\), dp\(11\)\);[\s\S]+nativeUpNextTitle\.setTextSize\(14\.5f\);[\s\S]+new LinearLayout\.LayoutParams\(dp\(232\), ViewGroup\.LayoutParams\.WRAP_CONTENT\)\);/,
-    'the native Up Next card uses the compact padding + narrow title column');
+  // Native Up Next is now a compact translucent PILL (owner: "smaller, simpler, just a button,
+  // a bit transparent, above the seek bar"): a play pill (gradient glyph + kicker + one-line title)
+  // beside a small circular dismiss — no solid card. The countdown rides in the kicker.
+  assert.match(android, /private View buildNativeUpNextCard\(\) \{[\s\S]+pill\.setBackground\(nativeUpNextPillBg\(false\)\);[\s\S]+pill\.setOnClickListener\(v -> triggerNativeUpNextPlay\(\)\);[\s\S]+nativeUpNextPlay = pill;[\s\S]+nativeUpNextDismiss = dismiss;/,
+    'the native Up Next is a translucent play pill + a small dismiss, not a solid card');
+  assert.match(android, /private GradientDrawable nativeUpNextPillBg\(boolean focused\) \{[\s\S]+0x6B050309[\s\S]+0xFFF2B441/,
+    'the native pill is translucent near-black (like the transport buttons) with an amber focus ring');
+  assert.match(android, /nativeUpNextKicker\.setText\(autoplay && seconds >= 0 \? \("UP NEXT · " \+ seconds\) : "UP NEXT"\);/,
+    'the native countdown rides in the kicker to keep the pill a single tidy line');
   const webHousekeepingStart = ui.indexOf('function startWebPlayerHousekeeping(mount, it) {');
   const webHousekeepingEnd = ui.indexOf('function playbackStartKind(mount)', webHousekeepingStart);
   assert.ok(webHousekeepingStart >= 0 && webHousekeepingEnd > webHousekeepingStart, 'web player housekeeping function should be present');
@@ -2058,8 +2065,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'web player popup focused and selected rows should be distinct professional states');
   assert.match(ui, /#playerStats\{display:none;position:absolute;right:44px;bottom:176px[\s\S]+rgba\(24,26,29,\.96\)[\s\S]+border-radius:10px[\s\S]+backdrop-filter:blur\(14px\)/,
     'web player stats popup should match the compact graphite player sheet styling');
-  assert.match(ui, /#upNext\{position:absolute;right:34px;bottom:120px[\s\S]+rgba\(24,26,29,\.96\)[\s\S]+border-radius:10px[\s\S]+#upNext \.un-play\{background:var\(--btn\);color:var\(--text\)\}/,
-    'web up-next popup should use the same neutral panel and button palette');
+  assert.match(ui, /#upNext\{position:absolute;right:34px;bottom:178px[\s\S]+#upNext button\{border:0;cursor:pointer;color:var\(--text\);background:rgba\(5,3,9,\.42\)[\s\S]+backdrop-filter:blur\(10px\)[\s\S]+#upNext \.un-play\{position:relative;overflow:hidden;display:flex[\s\S]+border-radius:14px/,
+    'the compact Up Next pill sits bottom-right above the seek bar, translucent like the transport .cbtn buttons — not a solid card');
   assert.match(ui, /\.epMenu\{position:absolute;right:10px;top:44px[\s\S]+rgba\(24,26,29,\.97\)[\s\S]+border-radius:10px[\s\S]+\.epMenu button\.focus\{background:rgba\(255,255,255,\.10\);color:var\(--text\)[\s\S]+box-shadow:inset 2px 0 0 var\(--focus\)\}/,
     'episode action popup should use the same compact neutral player menu styling');
   assert.match(ui, /function playerSurfaceClick\(e\) \{[\s\S]+closest\('#osd \.top,\.playerMetaRow,\.seekLine,\.ctl,#playerEpisodes,#trackMenu,#playerStats,#pGuide,#vlcPanel,#upNext,#playerLoader,button,a,input,select,textarea'\)[\s\S]+return true;[\s\S]+function playerSingleClick\(e\) \{[\s\S]+setTimeout\(\(\) => \{[\s\S]+togglePlay\(\);[\s\S]+\}, 320\);[\s\S]+function playerDoubleClick\(e\) \{[\s\S]+clearTimeout\(_playerSurfaceClickT\);[\s\S]+toggleFullscreen\(\);/,

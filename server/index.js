@@ -7628,16 +7628,35 @@ Object.assign(H, {
     let searchEpisode = hasEpisode ? episodeParam : null;
     let subQuery = vf._subQuery || vf._q || releaseName || vf.name;
     if (hasEpisode && !imdbId && /^\d+$/.test(String(tmdbId || '')) && settings.get().tmdbKey) {
-      try {
-        const ext = await tmdb.get(`/tv/${tmdbId}/season/${seasonParam}/episode/${episodeParam}/external_ids`);
-        const epImdb = ext && /^tt\d{5,10}$/i.test(String(ext.imdb_id || '')) ? String(ext.imdb_id).toLowerCase() : '';
-        if (epImdb) {
-          searchImdbId = epImdb;
-          searchSeason = null;
-          searchEpisode = null;
-          subQuery = String(subQuery).replace(/\bs\d{1,2}\s?e\d{1,3}\b/i, '').replace(/\s+/g, ' ').trim();
-        }
-      } catch {}
+      // This resolution is the ONLY way a no-show-imdb TV show gets subtitles from Wyzie (which is
+      // id-only — no title search — and dead-ends on the tmdb-tv id), so it is a single point of
+      // failure. LOG the outcome: the old silent catch here made a production "no subtitles" (the
+      // owner's Unraid, latest code, still 404ing Goosebumps) impossible to diagnose — it hid whether
+      // the resolve fired, resolved empty, or threw. Prefixed `[subs]` so `docker logs triboon | grep
+      // subs` surfaces it next to the provider search line.
+      // One bounded retry: this is a single external TMDB call sitting in a hard-failure path, and
+      // the leading explanation for the owner's Unraid miss (18/21 hypotheses refuted, the survivors
+      // all agree) is a transient tmdb.get egress blip that throws and used to be swallowed. A success
+      // is cached (tmdb.js) so the retry cost is paid at most once per episode; the second attempt is
+      // fast when the first fails on a socket/DNS blip rather than a full timeout.
+      let ext = null; let resolveErr = null;
+      for (let attempt = 0; attempt < 2 && !ext; attempt++) {
+        if (attempt) await new Promise((r) => { const t = setTimeout(r, 500); if (t.unref) t.unref(); });
+        try { ext = await tmdb.get(`/tv/${tmdbId}/season/${seasonParam}/episode/${episodeParam}/external_ids`); }
+        catch (e) { resolveErr = e; }
+      }
+      const epImdb = ext && /^tt\d{5,10}$/i.test(String(ext.imdb_id || '')) ? String(ext.imdb_id).toLowerCase() : '';
+      if (epImdb) {
+        searchImdbId = epImdb;
+        searchSeason = null;
+        searchEpisode = null;
+        subQuery = String(subQuery).replace(/\bs\d{1,2}\s?e\d{1,3}\b/i, '').replace(/\s+/g, ' ').trim();
+        try { console.log(`[subs] episode-imdb resolved tmdb=${tmdbId} s${seasonParam}e${episodeParam} -> ${epImdb}`); } catch {}
+      } else if (resolveErr) {
+        try { console.log(`[subs] episode-imdb resolve FAILED tmdb=${tmdbId} s${seasonParam}e${episodeParam}: ${String((resolveErr && resolveErr.message) || resolveErr).slice(0, 160)} — a no-show-imdb title will dead-end on the tmdb-tv id`); } catch {}
+      } else {
+        try { console.log(`[subs] episode-imdb NOT resolved tmdb=${tmdbId} s${seasonParam}e${episodeParam}: TMDB returned no imdb_id for this episode — a no-show-imdb title will dead-end on the tmdb-tv id`); } catch {}
+      }
     }
     const hasSearchEpisode = Number.isInteger(searchSeason) && searchSeason >= 0 && Number.isInteger(searchEpisode) && searchEpisode > 0;
     const subOpts = {

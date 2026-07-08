@@ -1656,6 +1656,9 @@ body.mobileShell .volWrap{flex:0 0 auto}
 body.mobileShell #volSlider{display:none}
 body.mobileShell #trackMenu{left:12px;right:12px;bottom:84px;width:auto;min-width:0;max-height:calc(100vh - 144px);border-radius:12px}
 body.mobileShell #playerStats{left:12px;right:12px;bottom:84px;width:auto;max-height:calc(100vh - 144px);overflow:auto;border-radius:12px}
+body.mobileShell #upNext{right:12px;bottom:114px;gap:6px}
+body.mobileShell #upNext .un-play{max-width:calc(100vw - 80px)}
+body.mobileShell #upNext .un-cancel{width:42px;height:42px}
 
 /* Phones: tighter guide + overlay panels, smaller channel tiles. (#guide prefix keeps these
    winning over the base rules that appear later in the sheet.) */
@@ -1773,19 +1776,30 @@ body.mobileShell #playerStats{left:12px;right:12px;bottom:84px;width:auto;max-he
 .calItem .cm{font:650 10.5px/1.2 "JetBrains Mono";color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .calItem .cbadge{position:absolute;top:8px;right:8px;font:800 10px "JetBrains Mono";color:var(--onAccent);background:var(--btnPrimary);padding:5px 8px;border-radius:999px;box-shadow:0 8px 18px rgba(0,0,0,.26)}
 
-/* Up-next card (bottom-right of the player) with countdown. */
-#upNext{position:absolute;right:34px;bottom:120px;z-index:6;width:340px;background:linear-gradient(180deg,rgba(24,26,29,.96),rgba(13,15,18,.96));border:1px solid rgba(255,255,255,.07);
-  border-radius:10px;overflow:hidden;display:none;box-shadow:0 18px 54px rgba(0,0,0,.46)}
-#upNext.show{display:block}
-#upNext .un-still{aspect-ratio:16/9;background-size:cover;background-position:center;background-color:var(--raise)}
-#upNext .un-body{padding:14px 16px}
-#upNext .un-lbl{font:700 10px "JetBrains Mono";letter-spacing:.14em;color:var(--amber);text-transform:uppercase;margin-bottom:6px}
-#upNext .un-title{font:700 15px "Sora";margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#upNext .un-sub{font:500 11.5px "JetBrains Mono";color:var(--muted);margin-bottom:12px}
-#upNext .un-btns{display:flex;gap:8px}
-#upNext .un-btns button{flex:1;padding:10px;border-radius:8px;font:700 12.5px "Sora"}
-#upNext .un-play{background:var(--btn);color:var(--text)}
-#upNext .un-cancel{background:rgba(255,255,255,.07);color:var(--text)}
+/* Compact "Up next" pill (bottom-right, just above the seek bar). Translucent like the transport
+   .cbtn buttons so it never blocks the video — no frame/poster/table, just a play CTA + a dismiss
+   with a thin countdown line. */
+#upNext{position:absolute;right:34px;bottom:178px;z-index:6;display:none;align-items:center;gap:8px}
+#upNext.show{display:flex}
+#upNext button{border:0;cursor:pointer;color:var(--text);background:rgba(5,3,9,.42);box-shadow:0 10px 28px rgba(0,0,0,.3);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);transition:background .15s,box-shadow .15s}
+#upNext button:hover,#upNext button.focus,#upNext button:focus{background:rgba(5,3,9,.62);outline:none;box-shadow:0 0 0 2px var(--focus),0 12px 30px rgba(0,0,0,.42)}
+#upNext .un-play{position:relative;overflow:hidden;display:flex;align-items:center;gap:11px;max-width:322px;padding:9px 16px 9px 10px;border-radius:14px;text-align:left}
+#upNext .un-ic{flex:none;width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(120deg,var(--magenta),var(--coral) 55%,var(--amber));color:var(--onAccent)}
+#upNext .un-ic svg{width:15px;height:15px;margin-left:1px}
+#upNext .un-txt{display:flex;flex-direction:column;min-width:0;gap:1px}
+#upNext .un-lbl{font:700 9px "JetBrains Mono";letter-spacing:.14em;color:var(--amber);text-transform:uppercase}
+#upNext .un-title{font:700 13.5px "Sora";line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#upNext .un-prog{position:absolute;left:0;right:0;bottom:0;height:2px;display:none}
+#upNext.counting .un-prog{display:block}
+#upNext .un-prog i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--magenta),var(--coral) 55%,var(--amber));transition:width 1s linear}
+#upNext .un-cancel{flex:none;width:46px;height:46px;border-radius:50%;display:grid;place-items:center;color:var(--muted)}
+#upNext .un-cancel:hover,#upNext .un-cancel.focus,#upNext .un-cancel:focus{color:var(--text)}
+#upNext .un-cancel svg{width:15px;height:15px}
+/* Phones (plain browser): pull in from the edge, cap the pill width, sit above the compact controls.
+   Placed AFTER the base #upNext rule so it wins on source order (the body.mobileShell twin above
+   already wins by specificity in the Android shell). */
+@media (max-width:600px){#upNext{right:12px;bottom:114px;gap:6px}#upNext .un-play{max-width:calc(100vw - 80px)}#upNext .un-cancel{width:42px;height:42px}}
 
 /* Per-episode action menu (mark watched / unwatched / play from start). */
 .epCard{position:relative}
@@ -4072,13 +4086,17 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
     <div class="loadSteps" aria-hidden="true"><span class="loadStep"></span></div>
     <div class="loadStatus" id="plStage">Preparing</div></div></div>
   <div id="upNext">
-    <div class="un-still" id="unStill"></div>
-    <div class="un-body">
-      <div class="un-lbl">Up next<span id="unCdWrap"> · <span id="unCount">10</span>s</span></div>
-      <div class="un-title" id="unTitle"></div>
-      <div class="un-sub" id="unSub"></div>
-      <div class="un-btns"><button class="un-play" id="unPlay">Play next episode</button><button class="un-cancel" id="unCancel">Dismiss</button></div>
-    </div>
+    <button class="un-play focusable" id="unPlay">
+      <span class="un-ic"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="6 4 20 12 6 20 6 4"/></svg></span>
+      <span class="un-txt">
+        <span class="un-lbl">Up next<span id="unCdWrap"> · <span id="unCount">10</span>s</span></span>
+        <span class="un-title" id="unTitle"></span>
+      </span>
+      <span class="un-prog" id="unProg"><i></i></span>
+    </button>
+    <button class="un-cancel focusable" id="unCancel" title="Dismiss next episode">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+    </button>
   </div>
   <!-- Subtitles are painted HERE (not by the <track>): WebView's native cue rendering is
        unreliable — cues go active with nothing on screen. -->
@@ -5919,7 +5937,7 @@ function sizeRowsWindow(root) {
   const gap = parseFloat(getComputedStyle(root).rowGap || getComputedStyle(root).gap) || 22;
   root.style.maxHeight = rowsWindowHeight(root, rows, n, gap) + 'px';
 }
-window.addEventListener('resize', () => { sizeRowsWindow($('rows')); sizeRowsWindow($('discoverRows')); fitLiveGuide(); });
+window.addEventListener('resize', () => { sizeRowsWindow($('rows')); sizeRowsWindow($('discoverRows')); fitLiveGuide(); fitRailToFullIcons(); });
 function setRowsView(root, data, hasHero) { S.rowsView = { root, data, hasHero }; }
 function rowsViewForRoot(root) {
   const view = S.rowsView;
@@ -10930,8 +10948,14 @@ function pushNativeUpNext(ne, seconds, autoplay) {
 }
 function hideUpNextUi() {
   $('upNext').classList.remove('show');
+  $('upNext').classList.remove('counting');
   if (S.upNextTimer) { clearInterval(S.upNextTimer); S.upNextTimer = null; }
   if (window.TriboonTV && typeof window.TriboonTV.upNextHide === 'function') { try { TriboonTV.upNextHide(); } catch {} }
+}
+// Thin countdown progress fill under the pill: grows left→right toward autoplay.
+function setUpNextProgress(elapsed, total) {
+  const fill = $('unProg') && $('unProg').firstElementChild;
+  if (fill) fill.style.width = Math.max(0, Math.min(100, total ? (elapsed / total) * 100 : 0)) + '%';
 }
 function showUpNext() {
   const ne = S.nextEp; if (!ne) return;
@@ -10939,9 +10963,9 @@ function showUpNext() {
   const native = nativeUpNextBridge();
   const autoplay = prefAutoplay();
   if (!native) {
-    $('unStill').style.backgroundImage = `url('${ne.still}')`;
-    $('unTitle').textContent = ne.epName || ne.tag;
-    $('unSub').textContent = ne.tag;
+    $('unTitle').textContent = ne.epName || ne.tag || 'Next episode';
+    $('upNext').classList.remove('counting');
+    setUpNextProgress(0, UP_NEXT_COUNTDOWN_SECONDS);
     $('upNext').classList.add('show');
     applyFocus($('unPlay')); // remote: OK plays immediately, → reaches Dismiss
   }
@@ -10966,12 +10990,12 @@ function armUpNextCountdown() {
   const ne = S.nextEp;
   if (!ne || !S.upNextShown || S.upNextTimer || S.upNextDismissed || !prefAutoplay()) return;
   const native = nativeUpNextBridge();
-  if (!native) $('unCdWrap').style.display = '';
+  if (!native) { $('unCdWrap').style.display = ''; $('upNext').classList.add('counting'); setUpNextProgress(0, UP_NEXT_COUNTDOWN_SECONDS); }
   let n = UP_NEXT_COUNTDOWN_SECONDS;
   if (native) pushNativeUpNext(ne, n, true); else $('unCount').textContent = n;
   S.upNextTimer = setInterval(() => {
     n--;
-    if (native) pushNativeUpNext(ne, n, true); else $('unCount').textContent = n;
+    if (native) pushNativeUpNext(ne, n, true); else { $('unCount').textContent = Math.max(0, n); setUpNextProgress(UP_NEXT_COUNTDOWN_SECONDS - n, UP_NEXT_COUNTDOWN_SECONDS); }
     if (n <= 0) playNextEpisode();
   }, 1000);
 }
@@ -17516,6 +17540,29 @@ function applyMenuPrefs() {
     const btn = railLibs.querySelector(`.railBtn[data-libid="${key.slice(4)}"]`);
     if (btn) btn.style.display = p.hidden.includes(key) ? 'none' : '';
   }
+  fitRailToFullIcons(); // TV: keep the rail's visible icons WHOLE — never cut one in half at the overflow edge
+}
+// Android TV: the collapsed rail is a fixed-height scroll column (nav + libraries). When they overflow
+// it, the bottom edge used to cut ONE icon in half. Clip railMain to end right after the last FULL icon
+// so only whole icons show; anything past the fold is reached by scrolling (D-pad down scrolls it fully
+// into view via applyFocus -> scrollIntoView). TV-only; desktop/phone keep their natural flex height.
+function fitRailToFullIcons() {
+  const railMain = $('railMain');
+  if (!railMain) return;
+  if (!document.body.classList.contains('tv')) { railMain.style.maxHeight = ''; return; }
+  railMain.style.maxHeight = '';                       // measure the natural available height + layout first
+  const prevScroll = railMain.scrollTop; railMain.scrollTop = 0;
+  const avail = railMain.clientHeight;
+  if (railMain.scrollHeight <= avail + 1) { railMain.scrollTop = prevScroll; return; } // everything fits → done
+  const mainTop = railMain.getBoundingClientRect().top;
+  let lastFull = 0;
+  for (const b of railMain.querySelectorAll('.railBtn')) {
+    if (b.offsetParent === null) continue;
+    const bottom = b.getBoundingClientRect().bottom - mainTop; // bottom relative to the visible top (scrollTop 0)
+    if (bottom <= avail + 0.5) lastFull = bottom; else break;  // the first icon that would be cut → stop
+  }
+  railMain.scrollTop = prevScroll;
+  if (lastFull > 0 && lastFull < avail - 1) railMain.style.maxHeight = Math.round(lastFull) + 'px';
 }
 // Professional media themes: grown-up role palettes built around calm neutrals.
 // Executive Graphite is the default: neutral surfaces, restrained accents, and shared button state tokens.
