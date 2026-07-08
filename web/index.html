@@ -1379,7 +1379,11 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 #srcList{padding:6px 6px 10px;margin:0 -6px}
 
 /* D-pad: focused element always lands fully in view, clear of edges/headers. */
-#rows,#discoverRows,#grid,#personGrid{scroll-padding:80px 60px}
+#grid,#personGrid{scroll-padding:80px 60px}
+/* Home/Discover ROW containers: tiny top scroll-padding so the focused row lands near the top with
+   its previous row fully OFF-screen (was 80px → the previous row peeked as an ugly ~86px sliver
+   above the focused row). Just above the 6px row scroll-margin so a hair of breathing room remains. */
+#rows,#discoverRows{scroll-padding:8px 60px}
 .detailScroll{scroll-padding:120px 0}
 #seasonGrid,#epGrid,#castRow,.cards{scroll-padding-inline:60px}
 .pcard,.card,.seasonCard,.epCard,.castCard,.srcRow,.seasonTab{scroll-margin:80px 60px}
@@ -2014,6 +2018,10 @@ body.tv .ctWells{display:none}
 /* Vertical row snap: scrolling home/discover lands on full rows (previous fades via --tf). */
 #rows,#discoverRows{scroll-snap-type:y mandatory}
 #rows .row,#discoverRows .row{scroll-snap-align:start;scroll-snap-stop:always;scroll-margin-top:6px}
+/* On TV, focusCard() does a deterministic top-align scrollTo; mandatory snap then nudged the row
+   back down by the scroll-padding (re-creating the previous-row sliver). Let the JS scroll be
+   authoritative on TV so the focused row top-aligns cleanly. */
+body.tv #rows,body.tv #discoverRows{scroll-snap-type:none}
 /* Poster grids page by whole rows via focusGrid's deterministic scroll — CSS snap is NOT
    used there: mandatory snap fights programmatic smooth scrolls and strands mid-row. */
 /* Search result section headers (Movies / TV Shows / Live TV) span the whole grid. */
@@ -5280,8 +5288,13 @@ function homeCatalogItemOk(kind, x) {
 function homeCatalogItems(result, kind) {
   return ((result && result.results) || []).filter((x) => homeCatalogItemOk(kind, x)).map(mapTmdb);
 }
-function homeCatalogRow(name, path, result, kind = 'catalog') {
-  const all = homeCatalogItems(result, kind);
+function homeCatalogRow(name, path, result, kind = 'catalog', seen = null) {
+  let all = homeCatalogItems(result, kind);
+  // De-dupe ACROSS rows: drop any title already shown in an earlier row so the sections don't keep
+  // repeating the same popular movies/shows (the "give us new material" ask). Kept titles are
+  // recorded in `seen` so later rows skip them too. Keyed by type:tmdbId (a movie and a show can
+  // share a numeric id).
+  if (seen) all = all.filter((it) => { const k = `${it.type || ''}:${it.tmdbId}`; if (!it.tmdbId || seen.has(k)) return false; seen.add(k); return true; });
   const page = Math.max(1, parseInt(result && result.page, 10) || 1);
   const totalPages = Math.min(HOME_CATALOG_PAGE_LIMIT, Math.max(page, parseInt(result && result.total_pages, 10) || page));
   return {
@@ -5299,54 +5312,68 @@ function homeCatalogRow(name, path, result, kind = 'catalog') {
     },
   };
 }
-async function loadHomeCatalogRows() {
+// Rotating genre rows give the home page fresh material day-to-day (de-dupe stops them repeating the
+// popular/trending rows). Genre ids are TMDB's ('|' = OR, as in the kids branch); TV genre ids
+// differ from movie ids, so both are listed.
+const HOME_GENRE_ROWS = [
+  { name: 'Action & adventure', mg: '28|12', tg: '10759' },
+  { name: 'Comedy', mg: '35', tg: '35' },
+  { name: 'Sci-fi & fantasy', mg: '878|14', tg: '10765' },
+  { name: 'Thrillers & mystery', mg: '53|9648', tg: '9648' },
+  { name: 'Drama', mg: '18', tg: '18' },
+  { name: 'Crime', mg: '80', tg: '80' },
+  { name: 'Animation', mg: '16', tg: '16' },
+  { name: 'Documentaries', mg: '99', tg: '99' },
+];
+function homeGenrePick(offset) {
+  const day = Math.floor(Date.now() / 86400000);
+  const n = HOME_GENRE_ROWS.length;
+  return HOME_GENRE_ROWS[(((day + offset) % n) + n) % n];
+}
+// Fetch every row's first page in PARALLEL, then build rows in ORDER through ONE shared `seen` set —
+// the de-dupe is order-dependent (earlier rows win, later rows drop repeats), so it can't run inside
+// the parallel fetch. Rows that end up empty after de-dupe are dropped.
+async function buildHomeRows(defs) {
+  const seen = new Set();
+  const results = await Promise.all(defs.map((d) => api(homeCatalogPathWithPage(d.path, 1)).catch(() => null)));
   const rows = [];
-  if (!S.serverInfo.tmdb) return rows;
+  defs.forEach((d, i) => {
+    if (!results[i]) return;
+    const row = homeCatalogRow(d.name, d.path, results[i], d.kind || 'catalog', seen);
+    if (row.items.length) rows.push(row);
+  });
+  return rows;
+}
+async function loadHomeCatalogRows() {
+  if (!S.serverInfo.tmdb) return [];
   if ((S.maxLevel ?? 4) === 0) {
     // Kids profiles get rows BUILT for them, instead of filtering grown-up lists down.
-    const paths = [
-      '/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=80&with_genres=10751' + CATALOG_Q + certParams(),
-      '/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=80&with_genres=16' + CATALOG_Q + certParams(),
-      '/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=30&with_genres=10762|16' + CATALOG_Q,
-    ];
-    const [fam, anim, kidTv] = await Promise.all([
-      api(homeCatalogPathWithPage(paths[0], 1)),
-      api(homeCatalogPathWithPage(paths[1], 1)),
-      api(homeCatalogPathWithPage(paths[2], 1)),
+    return buildHomeRows([
+      { name: 'Family movie night', path: '/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=80&with_genres=10751' + CATALOG_Q + certParams(), kind: 'maturity' },
+      { name: 'Animation', path: '/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=80&with_genres=16' + CATALOG_Q + certParams(), kind: 'maturity' },
+      { name: 'Kids series', path: '/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=30&with_genres=10762|16' + CATALOG_Q, kind: 'maturity' },
     ]);
-    rows.push(homeCatalogRow('Family movie night', paths[0], fam, 'maturity'));
-    rows.push(homeCatalogRow('Animation', paths[1], anim, 'maturity'));
-    rows.push(homeCatalogRow('Kids series', paths[2], kidTv, 'maturity'));
-  } else if ((S.maxLevel ?? 4) < 4) {
-    const paths = [
-      '/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=100' + CATALOG_Q + certParams(),
-      '/api/tmdb/discover/movie?sort_by=vote_average.desc&vote_count.gte=400' + CATALOG_Q + certParams(),
-      '/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=60' + CATALOG_Q,
-    ];
-    const [mv, topM, tvs] = await Promise.all([
-      api(homeCatalogPathWithPage(paths[0], 1)),
-      api(homeCatalogPathWithPage(paths[1], 1)),
-      api(homeCatalogPathWithPage(paths[2], 1)),
-    ]);
-    rows.push(homeCatalogRow('Popular movies', paths[0], mv, 'maturity'));
-    rows.push(homeCatalogRow('Top rated movies', paths[1], topM, 'maturity'));
-    rows.push(homeCatalogRow('Popular series', paths[2], tvs, 'maturity'));
-  } else {
-    const paths = [
-      '/api/tmdb/trending/all/week',
-      `/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=200&with_original_language=en${CATALOG_Q}`,
-      `/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=100&with_original_language=en${CATALOG_Q}`,
-    ];
-    const [trend, movies, tv] = await Promise.all([
-      api(homeCatalogPathWithPage(paths[0], 1)),
-      api(homeCatalogPathWithPage(paths[1], 1)),
-      api(homeCatalogPathWithPage(paths[2], 1)),
-    ]);
-    rows.push(homeCatalogRow('Trending this week', paths[0], trend, 'catalog'));
-    rows.push(homeCatalogRow('Popular movies', paths[1], movies, 'catalog'));
-    rows.push(homeCatalogRow('Popular series', paths[2], tv, 'catalog'));
   }
-  return rows;
+  if ((S.maxLevel ?? 4) < 4) {
+    const g = homeGenrePick(0);
+    return buildHomeRows([
+      { name: 'Popular movies', path: '/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=100' + CATALOG_Q + certParams(), kind: 'maturity' },
+      { name: 'Top rated movies', path: '/api/tmdb/discover/movie?sort_by=vote_average.desc&vote_count.gte=400' + CATALOG_Q + certParams(), kind: 'maturity' },
+      { name: 'Popular series', path: '/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=60' + CATALOG_Q, kind: 'maturity' },
+      { name: g.name + ' movies', path: '/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=80&with_genres=' + g.mg + CATALOG_Q + certParams(), kind: 'maturity' },
+    ]);
+  }
+  // Unlimited: a richer, de-duped set + two daily-rotating genre rows for fresh material.
+  const g1 = homeGenrePick(0), g2 = homeGenrePick(3);
+  return buildHomeRows([
+    { name: 'Trending today', path: '/api/tmdb/trending/all/day' },
+    { name: 'Popular movies', path: `/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=200&with_original_language=en${CATALOG_Q}` },
+    { name: 'Top rated movies', path: `/api/tmdb/discover/movie?sort_by=vote_average.desc&vote_count.gte=800&with_original_language=en${CATALOG_Q}` },
+    { name: 'Popular series', path: `/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=100&with_original_language=en${CATALOG_Q}` },
+    { name: 'Top rated series', path: `/api/tmdb/discover/tv?sort_by=vote_average.desc&vote_count.gte=300&with_original_language=en${CATALOG_Q}` },
+    { name: g1.name + ' movies', path: `/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=150&with_genres=${g1.mg}${CATALOG_Q}` },
+    { name: g2.name + ' shows', path: `/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=60&with_genres=${g2.tg}${CATALOG_Q}` },
+  ]);
 }
 const HOME_CATALOG_TTL = 30 * 60 * 1000;
 function homeCatalogKey() {
@@ -6181,8 +6208,13 @@ function creditsLine(d) {
 function loadCreditsInto(el, it) {
   clearTimeout(S._credT);
   el.textContent = '';
+  // Stamp the invalidation key on EVERY focus — including non-tmdb focus targets (the "load more"
+  // sentinel, genre chips, section headers) that hit the early-return below. If it were stamped
+  // only for tmdb items, lingering on one of those left the key stale, so a PREVIOUS poster's
+  // in-flight detail fetch would resolve and paint ITS year on the wrong item (the "previous row's
+  // year" bug). Now any focus change invalidates the in-flight fetch at the guard below.
+  el.dataset.key = (it && it.key) || '';
   if (!it || !it.tmdbId || !['movie', 'tv'].includes(it.type)) return;
-  el.dataset.key = it.key; // the fetch races focus moves — only the still-current item lands
   S._credT = setTimeout(async () => {
     try {
       const append = it.type === 'tv' ? 'credits,content_ratings' : 'credits,release_dates';
@@ -6232,7 +6264,9 @@ function metaLineHtml(it, d) {
   const detailRating = d && Number.isFinite(+d.vote_average) && +d.vote_average > 0 ? (+d.vote_average).toFixed(1) : '';
   const rating = detailRating || ((it && it.rating && it.rating !== '—') ? String(it.rating).replace(/^TMDB\s+/i, '') : '');
   if (rating) parts.push(`<span class="rating">★ TMDB ${esc(rating)}</span>`);
-  const year = d ? String(d.release_date || d.first_air_date || '').slice(0, 4) : (it && it.year);
+  // Prefer the focused item's OWN year (same source as the title) so the async detail-fetch pass can
+  // never re-derive a different/late year onto the backdrop — the year now stays atomic with the title.
+  const year = (it && it.year) || (d ? String(d.release_date || d.first_air_date || '').slice(0, 4) : '');
   if (year) parts.push(esc(year));
   if (d && it && it.type === 'movie' && d.runtime) parts.push(`${Math.floor(d.runtime / 60)}h ${d.runtime % 60}m`);
   if (d && it && it.type === 'tv' && d.number_of_seasons) parts.push(`${d.number_of_seasons} season${d.number_of_seasons === 1 ? '' : 's'}`);

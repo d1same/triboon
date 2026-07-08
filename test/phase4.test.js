@@ -428,10 +428,24 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'background home refreshes should wait until TV focus and D-pad input have settled');
   assert.match(ui, /function scheduleHomeCatalogRefresh\(\) \{[\s\S]+if \(S\._homeCatalogScheduled\) return;[\s\S]+S\._homeCatalogScheduled = true;[\s\S]+refreshHomeCatalogRows\(\)\.then[\s\S]+refreshHomeWhenSettled\(\{ catalogOnly: true \}\)/,
     'home catalog rows should hydrate after first paint instead of blocking the app shell');
-  assert.match(ui, /const HOME_CATALOG_INITIAL = 16;[\s\S]+function homeCatalogRow\(name, path, result, kind = 'catalog'\)[\s\S]+items: all\.slice\(0, HOME_CATALOG_INITIAL\),[\s\S]+buffer: all\.slice\(HOME_CATALOG_INITIAL\)/,
-    'home catalog rows should keep first paint small while retaining overflow items for lazy loading');
-  assert.match(ui, /rows\.push\(homeCatalogRow\('Trending this week', paths\[0\], trend, 'catalog'\)\);[\s\S]+rows\.push\(homeCatalogRow\('Popular movies', paths\[1\], movies, 'catalog'\)\);[\s\S]+rows\.push\(homeCatalogRow\('Popular series', paths\[2\], tv, 'catalog'\)\);/,
-    'home Trending, Popular Movies, and Popular Series rows should be lazy catalog rows');
+  assert.match(ui, /const HOME_CATALOG_INITIAL = 16;[\s\S]+function homeCatalogRow\(name, path, result, kind = 'catalog', seen = null\)[\s\S]+items: all\.slice\(0, HOME_CATALOG_INITIAL\),[\s\S]+buffer: all\.slice\(HOME_CATALOG_INITIAL\)/,
+    'home catalog rows keep first paint small while retaining overflow items for lazy loading');
+  // De-dupe across rows so sections don't repeat the same titles (the "give us new material" ask).
+  assert.match(ui, /if \(seen\) all = all\.filter\([\s\S]+seen\.has\(k\)[\s\S]+seen\.add\(k\)/,
+    'homeCatalogRow de-dupes items already shown in an earlier row via the shared seen set');
+  assert.match(ui, /async function buildHomeRows\(defs\) \{[\s\S]+const seen = new Set\(\);[\s\S]+Promise\.all\(defs\.map[\s\S]+homeCatalogRow\(d\.name, d\.path, results\[i\], d\.kind \|\| 'catalog', seen\)/,
+    'buildHomeRows fetches rows in parallel then builds them in order through one shared seen set');
+  // Richer, de-duped default home: Trending today + Popular/Top-rated movies + series + rotating genres.
+  assert.match(ui, /\{ name: 'Trending today', path: '\/api\/tmdb\/trending\/all\/day' \}[\s\S]+name: 'Top rated movies'[\s\S]+name: 'Top rated series'[\s\S]+g1\.name \+ ' movies'[\s\S]+g2\.name \+ ' shows'/,
+    'the unlimited home page has more diverse sections + two daily-rotating genre rows');
+  assert.match(ui, /function homeGenrePick\(offset\) \{[\s\S]+HOME_GENRE_ROWS\[/,
+    'home genre rows rotate by day for fresh material');
+  // Movies/TV backdrop YEAR must stay atomic with the title (was overwritten by a lagging async
+  // detail fetch → the focused movie showed the previous item's year).
+  assert.match(ui, /const year = \(it && it\.year\) \|\| \(d \?/,
+    'the backdrop year comes from the focused item first, so the async detail pass cannot swap it');
+  assert.match(ui, /el\.dataset\.key = \(it && it\.key\) \|\| '';\s*if \(!it \|\| !it\.tmdbId/,
+    'loadCreditsInto stamps the invalidation key on EVERY focus so a previous poster fetch cannot paint its year on the wrong item');
   assert.match(ui, /function bindHomeRowLazy\(cards, root, ri\) \{[\s\S]+cards\.addEventListener\('scroll', \(\) => maybeLoadMoreHomeRow\(root, ri\), \{ passive: true \}\);[\s\S]+async function loadMoreHomeRow\(root, ri\) \{[\s\S]+api\(homeCatalogPathWithPage\(lazy\.path, page\)\)[\s\S]+appendHomeRowCards\(root, ri, added, firstNew\)/,
     'home catalog rows should append more cards on row scroll without repainting the whole page');
   assert.match(ui, /function focusCard\(ri, ci, opts = \{\}\) \{[\s\S]+maybeLoadMoreHomeRow\(view\.root, ri\);/,
