@@ -45,6 +45,9 @@ function parseNzb(xml) {
 
 // Heuristics: pick the file most likely to be the playable payload.
 const VIDEO_EXT = /\.(mkv|mp4|avi|m4v|ts|webm|mov)("|\s|$)/i;
+// Audiobooks (loose audio files) get a smaller boost so the mounted primary is an AUDIO file, not a
+// stray cover image / PDF / bonus file — while video still outranks audio (×10) for movies/TV.
+const AUDIO_EXT = /\.(mp3|m4a|m4b|aac|ogg|oga|opus|flac|wav)("|\s|$)/i;
 // Does a raw file subject/name name a specific SxxEyy (tolerant of scene separators)? The \b after
 // the episode number stops S05 from matching S050, and e0? absorbs a zero-padded "E05".
 function episodeInName(name, s, e) {
@@ -62,6 +65,7 @@ function pickPrimaryFile(nzb, opts = {}) {
     const size = f.segments.reduce((s, x) => s + x.bytes, 0);
     let score = size;
     if (VIDEO_EXT.test(f.subject)) score *= 10;
+    else if (AUDIO_EXT.test(f.subject)) score *= 5;
     if (/\.par2/i.test(f.subject)) score = -1;
     if (/\.(nfo|sfv|srr|jpg|png)/i.test(f.subject)) score = -1;
     if (we && VIDEO_EXT.test(f.subject) && episodeInName(f.subject, we.s, we.e)) score += 1e15;
@@ -86,4 +90,4 @@ function nzbPassword(xml) {
   return m ? decodeEntities(m[1]).trim() : null;
 }
 
-module.exports = { parseNzb, pickPrimaryFile, fileNameFromSubject, nzbPassword };
+module.exports = { parseNzb, pickPrimaryFile, fileNameFromSubject, nzbPassword, AUDIO_EXT };

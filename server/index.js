@@ -14,8 +14,10 @@ const { LibraryDb } = require('./library-db');
 const { Auth, SecureSettings, RateLimiter } = require('./auth');
 const { Pipeline } = require('./pipeline');
 const { TmdbProxy } = require('./tmdb');
+const { AudibleProxy } = require('./audible');
+const pubaudio = require('./pubaudio');
 const { Trakt } = require('./trakt');
-const { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, probeLiveVideoCodec, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioCopyOk, ffprobeKeyframeAtOrAfter } = require('./transcode');
+const { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, probeChapters, probeLiveVideoCodec, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioCopyOk, ffprobeKeyframeAtOrAfter } = require('./transcode');
 const ytmusic = require('./ytmusic');
 const https = require('https');
 const dns = require('dns').promises;
@@ -55,6 +57,12 @@ store.flushIntervals = {
   epgcaches: 30000,        // XMLTV guide payloads
   xtreamepgcaches: 30000,  // Xtream guide payloads (up to 5000 entries per fetch)
   libitems: 5000,          // scan output (19K+ items on big libraries; SQLite is the read path)
+  'audible-search': 15000, // audiobook search proxy cache
+  'audible-browse': 20000, // audiobook discovery-row cache
+  'audible-charts': 20000, // real Audible best-seller charts (scraped)
+  'audiobook-avail': 20000, // 24h usenet-availability verdicts (discovery dead-end filter)
+  'audible-book': 30000,   // audiobook detail cache (effectively immutable)
+  'audible-chapters': 30000, // audiobook chapter cache (effectively immutable)
 };
 const auth = new Auth(store, process.env.TRIBOON_SECRET);
 const settings = new SecureSettings(store, auth.secret);
@@ -1016,6 +1024,14 @@ function iptvConfigured(s = settings.get()) {
 function userCanAccessIptvSource(user, src = {}) {
   const users = Array.isArray(src.users) ? src.users : [];
   return !user || user.role === 'admin' || src.ownerUserId === user.id || !users.length || users.includes(user.id);
+}
+// Audiobooks visibility (admin-controlled): a global OFF hides it for EVERYONE (the admin re-enables
+// from Settings, which is never gated). When ON, an allowlist (empty = everyone) restricts to specific
+// users, and admins are always in the allowlist so they can manage it. Same model as Live TV sharing.
+function audiobooksAllowedFor(user, s = settings.get()) {
+  if (s.audiobooksEnabled === false) return false;
+  const list = Array.isArray(s.audiobooksUsers) ? s.audiobooksUsers : [];
+  return !user || user.role === 'admin' || !list.length || list.includes(user.id);
 }
 function iptvSourcesForUser(user, s = settings.get()) {
   return iptvSourcesFromSettings(s).filter((src) => userCanAccessIptvSource(user, src));
@@ -3042,6 +3058,10 @@ function scheduleNextIptvWarm() {
   iptvWarmTimer.unref();
 }
 const tmdb = new TmdbProxy(store, () => settings.get().tmdbKey, process.env.TMDB_BASE || undefined);
+const audible = new AudibleProxy(store, {
+  audibleBase: process.env.AUDIBLE_BASE || undefined,
+  audnexBase: process.env.AUDNEX_BASE || undefined,
+});
 const trakt = new Trakt(store, () => settings.get(), (mutator) => settings.update(mutator));
 
 // ---- Maturity gate: server-authoritative age restriction enforced at PLAY time ----
@@ -3559,6 +3579,10 @@ function mountPayload(vf, uid, extra = {}) {
     encoder: detectEncoder() ? detectEncoder().kind : null,
     tracksUrl: `/api/tracks/${vf.id}`,
     subtitleBase: `/api/subtitle/${vf.id}`, // + /<n>?t=<stream token>
+    // Multi-file audiobook: the ordered audio tracks (chapters) + the base URL to stream any track by
+    // index ( `${audioBase}/<index>?t=<streamToken>` ). Absent for single-file (M4B) mounts.
+    audioFiles: Array.isArray(vf.audioFiles) ? vf.audioFiles.map((t) => ({ index: t.index, name: t.name, size: t.size })) : undefined,
+    audioBase: Array.isArray(vf.audioFiles) ? `/api/audio/${vf.id}` : undefined,
     streamToken: st,
     playback: decidePlayback(vf.name, vf._caps || {}),
     ...extra,
@@ -4402,7 +4426,7 @@ const H = {
     const s = settings.get();
     const sources = iptvSourcesFromSettings(s);
     const iptvAllowed = ctx.user.role === 'admin' || sources.some((src) => userCanAccessIptvSource(ctx.user, src));
-    const me = { ...auth.publicUser(ctx.user), iptvAllowed };
+    const me = { ...auth.publicUser(ctx.user), iptvAllowed, audiobooksAllowed: audiobooksAllowedFor(ctx.user, s) };
     me.profiles = (me.profiles || []).map((p) => profileWithAvatarUrl(ctx.user.id, p));
     send(ctx.res, 200, me);
   },
@@ -4796,6 +4820,147 @@ const H = {
       const out = level < 4 ? await maturityFilterList(level, data) : data;
       send(ctx.res, 200, out, { 'cache-control': 'private, max-age=600' });
     } catch (e) { send(ctx.res, e.status || 500, { error: e.message }); }
+  },
+
+  // Audiobook metadata proxy (Audible catalog search + Audnexus detail/chapters). Admin configures
+  // nothing here — it's a free, keyless upstream, so these are plain user-tier proxies like tmdb.
+  audibleSearch: async (ctx) => {
+    if (!audiobooksAllowedFor(ctx.user)) return send(ctx.res, 403, { error: 'audiobooks are disabled for your account' });
+    const q = ctx.url.searchParams.get('q');
+    if (!q) return send(ctx.res, 400, { error: 'q required' });
+    if (throttleUserRoute(ctx, 'audible-search', { max: 40, windowMs: 60000, lockMs: 60000 })) return;
+    try {
+      const rows = await audible.search(q, ctx.url.searchParams.get('region') || undefined);
+      send(ctx.res, 200, { results: rows }, { 'cache-control': 'private, max-age=600' });
+    } catch (e) { send(ctx.res, e.status || 500, { error: e.message }); }
+  },
+  // Discovery rows: browse the catalog with no keyword. sort ∈ {bestsellers,new}; optional genre.
+  audibleBrowse: async (ctx) => {
+    if (!audiobooksAllowedFor(ctx.user)) return send(ctx.res, 403, { error: 'audiobooks are disabled for your account' });
+    const region = ctx.url.searchParams.get('region') || undefined;
+    const sortRaw = String(ctx.url.searchParams.get('sort') || '').toLowerCase();
+    try {
+      // "charts" = the real Audible best-seller charts (scraped + enriched); fall back to the
+      // BestSellers sort if the charts page yields nothing.
+      if (sortRaw === 'charts') {
+        let rows = await audible.charts(region);
+        if (!rows.length) rows = await audible.browse({ sort: 'BestSellers', region });
+        return send(ctx.res, 200, { results: rows }, { 'cache-control': 'private, max-age=1800' });
+      }
+      const SORTS = { bestsellers: 'BestSellers', new: '-ReleaseDate', popular: 'BestSellers' };
+      const sort = SORTS[sortRaw] || 'BestSellers';
+      const category = (ctx.url.searchParams.get('category') || '').replace(/[^0-9]/g, '') || null;
+      const rows = await audible.browse({ sort, categoryId: category, region });
+      send(ctx.res, 200, { results: rows }, { 'cache-control': 'private, max-age=1800' });
+    } catch (e) { send(ctx.res, e.status || 500, { error: e.message }); }
+  },
+  audibleBook: async (ctx) => {
+    try {
+      const book = await audible.book(ctx.m[1], ctx.url.searchParams.get('region') || undefined);
+      send(ctx.res, 200, book, { 'cache-control': 'private, max-age=3600' });
+    } catch (e) { send(ctx.res, e.status || 500, { error: e.message }); }
+  },
+  audibleChapters: async (ctx) => {
+    try {
+      const chaps = await audible.chapters(ctx.m[1], ctx.url.searchParams.get('region') || undefined);
+      if (!chaps) return send(ctx.res, 404, { error: 'no chapter data' });
+      send(ctx.res, 200, chaps, { 'cache-control': 'private, max-age=3600' });
+    } catch (e) { send(ctx.res, e.status || 500, { error: e.message }); }
+  },
+
+  // Public-domain audiobooks (LibriVox + Internet Archive) — free, legal, directly streamable.
+  pubaudioSearch: async (ctx) => {
+    if (!audiobooksAllowedFor(ctx.user)) return send(ctx.res, 403, { error: 'audiobooks are disabled for your account' });
+    const q = ctx.url.searchParams.get('q');
+    if (!q) return send(ctx.res, 400, { error: 'q required' });
+    if (throttleUserRoute(ctx, 'pubaudio-search', { max: 40, windowMs: 60000, lockMs: 60000 })) return;
+    try { send(ctx.res, 200, { results: await pubaudio.search(q) }, { 'cache-control': 'private, max-age=1800' }); }
+    catch (e) { send(ctx.res, e.status || 502, { error: e.message }); }
+  },
+  pubaudioBrowse: async (ctx) => {
+    if (!audiobooksAllowedFor(ctx.user)) return send(ctx.res, 403, { error: 'audiobooks are disabled for your account' });
+    const genre = ctx.url.searchParams.get('genre');
+    if (!genre) return send(ctx.res, 400, { error: 'genre required' });
+    try { send(ctx.res, 200, { results: await pubaudio.browseLibrivox(genre) }, { 'cache-control': 'private, max-age=3600' }); }
+    catch (e) { send(ctx.res, e.status || 502, { error: e.message }); }
+  },
+  // Cheap, 24h-cached "is this book on usenet?" probe so discovery can hide dead-end titles.
+  audiobookAvailable: async (ctx) => {
+    const title = ctx.url.searchParams.get('title');
+    if (!title) return send(ctx.res, 400, { error: 'title required' });
+    const author = ctx.url.searchParams.get('author') || '';
+    const cacheKey = (title + '|' + author).toLowerCase();
+    const cache = store.read('audiobook-avail', {});
+    const hit = cache[cacheKey];
+    if (hit && Date.now() - hit.at < 24 * 3600 * 1000) return send(ctx.res, 200, { available: hit.available, cached: true });
+    if (throttleUserRoute(ctx, 'audiobook-avail', { max: 120, windowMs: 60000, lockMs: 30000 })) return;
+    let available = false;
+    try { available = await pipeline.isAvailable({ title, author }); } catch {}
+    store.update('audiobook-avail', {}, (c) => {
+      c[cacheKey] = { at: Date.now(), available };
+      const ks = Object.keys(c);
+      if (ks.length > 4000) for (const k of ks.slice(0, ks.length - 3000)) delete c[k];
+      return c;
+    });
+    send(ctx.res, 200, { available });
+  },
+  pubaudioTracks: async (ctx) => {
+    const source = ctx.url.searchParams.get('source');
+    const id = ctx.url.searchParams.get('id');
+    if (!source || !id) return send(ctx.res, 400, { error: 'source and id required' });
+    try {
+      const tracks = await pubaudio.tracks(source, id);
+      if (!tracks.length) return send(ctx.res, 404, { error: 'no audio tracks' });
+      send(ctx.res, 200, { tracks }, { 'cache-control': 'private, max-age=3600' });
+    } catch (e) { send(ctx.res, e.status || 502, { error: e.message }); }
+  },
+
+  // Audiobook Sources drawer: search usenet for a book by title+author (Audio>Audiobook category),
+  // ranked by the audiobook scorer. Same shape as /api/search so the drawer UI is shared.
+  audiobookSearch: async (ctx) => {
+    if (!audiobooksAllowedFor(ctx.user)) return send(ctx.res, 403, { error: 'audiobooks are disabled for your account' });
+    const title = ctx.url.searchParams.get('title');
+    if (!title) return send(ctx.res, 400, { error: 'title required' });
+    if (throttleUserRoute(ctx, 'audiobook-search', { max: 40, windowMs: 60000, lockMs: 60000 })) return;
+    try {
+      const { candidates, errors } = await pipeline.searchAudiobook({
+        title, author: ctx.url.searchParams.get('author') || '',
+      });
+      send(ctx.res, 200, {
+        errors,
+        candidates: candidates.map((c) => ({
+          name: c.name, pickKey: c.pickKey, sizeBytes: c.sizeBytes, indexer: c.indexer,
+          score: c.score, reasons: c.reasons, attributes: c.attributes, health: c.health,
+        })),
+      });
+    } catch (e) { send(ctx.res, 502, { error: e.message }); }
+  },
+
+  // Press-play an audiobook: mount the best (or explicitly picked) release and return a stream URL,
+  // exactly like /api/play. Auto-advance uses the shared /api/advance/:id route.
+  audiobookPlay: async (ctx) => {
+    if (!audiobooksAllowedFor(ctx.user)) return send(ctx.res, 403, { error: 'audiobooks are disabled for your account' });
+    const body = await readJson(ctx.req);
+    if (!body.title) return send(ctx.res, 400, { error: 'title required' });
+    if (throttleUserRoute(ctx, 'audiobook-play', { max: 20, windowMs: 60000, lockMs: 60000 })) return;
+    const t0 = Date.now();
+    try {
+      const { session, vf, candidate, attempts } = await pipeline.playAudiobook({
+        title: body.title, author: body.author || '', pick: body.pick, pickKey: body.pickKey,
+        resumeFrac: Math.max(0, Math.min(1, Number(body.resumeFrac) || 0)),
+      });
+      session.uid = ctx.user.id;
+      vf._q = `${body.author || ''} ${body.title}`.trim();
+      rememberMountOwner(vf, ctx.user.id);
+      trimUserMounts(ctx.user.id, vf.id);
+      send(ctx.res, 200, mountPayload(vf, ctx.user.id, {
+        sessionId: session.id, mountMs: Date.now() - t0,
+        candidate: { name: candidate.name, pickKey: candidate.pickKey, score: candidate.score, indexer: candidate.indexer, reasons: candidate.reasons, attributes: candidate.attributes },
+        attempts,
+      }));
+    } catch (e) {
+      send(ctx.res, 502, { error: e.message, summary: e.summary, attempts: e.attempts || [] });
+    }
   },
 
   // Custom libraries = admin-curated saved discover queries shown in the rail.
@@ -6590,6 +6755,8 @@ Object.assign(H, {
       traktClientId: s.traktClientId || null, // public identifier — safe to show
       traktClientSecret: s.traktClientSecret ? '•••' : null,
       iptvUsers: primaryIptv.users || [], // user ids, not secrets
+      audiobooksEnabled: s.audiobooksEnabled !== false, // default ON
+      audiobooksUsers: Array.isArray(s.audiobooksUsers) ? s.audiobooksUsers : [],
       sizeCapMode: s.sizeCapMode || 'auto',
       sizeCap4kGb: s.sizeCap4kGb || null,
       sizeCap1080Gb: s.sizeCap1080Gb || null,
@@ -6765,6 +6932,11 @@ Object.assign(H, {
         iptvUsers: b.iptvUsers !== undefined
           ? (Array.isArray(b.iptvUsers) ? b.iptvUsers.map(String).slice(0, 100) : [])
           : (s.iptvUsers || []),
+        // Audiobooks: admin on/off (default ON) + optional user allowlist (empty = everyone).
+        audiobooksEnabled: b.audiobooksEnabled !== undefined ? b.audiobooksEnabled !== false : (s.audiobooksEnabled !== false),
+        audiobooksUsers: b.audiobooksUsers !== undefined
+          ? (Array.isArray(b.audiobooksUsers) ? b.audiobooksUsers.map(String).slice(0, 100) : [])
+          : (s.audiobooksUsers || []),
         // Max release size: auto (scaled from connections) | manual (GB caps below) | off.
         sizeCapMode: b.sizeCapMode !== undefined
           ? (['auto', 'manual', 'off'].includes(b.sizeCapMode) ? b.sizeCapMode : 'auto')
@@ -7289,6 +7461,67 @@ Object.assign(H, {
       // The TV player is Wyzie-only for subtitles. Embedded subtitle extraction can require
       // scanning the whole media stream, so probing tracks must not quietly kick that off.
     } catch (e) { send(ctx.res, 200, { available: false, audio: [], subs: [], releaseSubs, duration: null, error: e.message }); }
+  },
+
+  // Multi-file audiobook: stream one audio TRACK (by index) of a mount as a Range-able response. All
+  // tracks share the mount id + its stream token; the client plays them as one chaptered playlist.
+  audioTrack: async (ctx) => {
+    if (!streamScopeOk(ctx, ctx.m[1])) return send(ctx.res, 401, { error: 'token not valid for this stream' });
+    const vf = mounts.get(ctx.m[1]);
+    if (!vf) return send(ctx.res, 404, { error: 'mount not found' });
+    if (!mountAccessOk(ctx, vf)) return send(ctx.res, 404, { error: 'mount not found' });
+    if (typeof vf.audioStreamAt !== 'function') return send(ctx.res, 409, { error: 'mount has no audio tracks' });
+    vf._touched = Date.now();
+    let s;
+    try { s = await vf.audioStreamAt(parseInt(ctx.m[2], 10)); }
+    catch (e) { return send(ctx.res, e.status || 500, { error: e.message }); }
+    const AMIME = { mp3: 'audio/mpeg', m4a: 'audio/mp4', m4b: 'audio/mp4', aac: 'audio/aac', ogg: 'audio/ogg', oga: 'audio/ogg', opus: 'audio/ogg', flac: 'audio/flac', wav: 'audio/wav' };
+    const ext = String(s.name || '').toLowerCase().replace(/^.*\./, '');
+    const total = Number(s.size) || 0;
+    let start = 0, end = total, code = 200;
+    const headers = { 'content-type': AMIME[ext] || 'audio/mpeg', 'accept-ranges': 'bytes', 'cache-control': 'no-store' };
+    const range = ctx.req.headers.range && /bytes=(\d*)-(\d*)/.exec(ctx.req.headers.range);
+    if (range) {
+      if (range[1] !== '') { start = parseInt(range[1], 10); if (range[2] !== '') end = parseInt(range[2], 10) + 1; }
+      else if (range[2] !== '') { start = Math.max(0, total - parseInt(range[2], 10)); end = total; }
+      if (start >= total || start >= end) return send(ctx.res, 416, '', { 'content-range': `bytes */${total}` });
+      end = Math.min(end, total); code = 206;
+      headers['content-range'] = `bytes ${start}-${end - 1}/${total}`;
+    }
+    headers['content-length'] = String(end - start);
+    ctx.res.writeHead(code, headers);
+    if (ctx.req.method === 'HEAD') return ctx.res.end();
+    const ac = new AbortController();
+    ctx.req.once('close', () => { if (!ctx.req.complete) ac.abort(); });
+    ctx.res.once('close', () => { if (!ctx.res.writableEnded) ac.abort(); });
+    try {
+      for await (const chunk of s.read(start, end, { priority: start === 0 ? 'startup' : 'playback', signal: ac.signal })) {
+        if (ac.signal.aborted || ctx.res.destroyed) break;
+        if (!ctx.res.write(chunk)) await new Promise((r) => ctx.res.once('drain', r));
+      }
+    } catch {}
+    if (!ctx.res.writableEnded) ctx.res.end();
+  },
+
+  // Embedded audiobook chapters from a live mount (M4B/M4A carry them). The client prefers Audnexus
+  // chapters (richer, by ASIN) and calls this only as a fallback when the book has no Audnexus data.
+  audiobookChapters: async (ctx) => {
+    const vf = mounts.get(ctx.m[1]);
+    if (!vf) return send(ctx.res, 404, { error: 'mount not found' });
+    if (!mountAccessOk(ctx, vf)) return send(ctx.res, 404, { error: 'mount not found' });
+    if (!vf.streamable) return send(ctx.res, 409, { error: 'mount is not streamable', tags: vf.tags });
+    vf._touched = Date.now();
+    if (!detectFfprobe()) return send(ctx.res, 404, { error: 'ffprobe not available' });
+    if (vf._chapters !== undefined) {
+      return vf._chapters ? send(ctx.res, 200, vf._chapters) : send(ctx.res, 404, { error: 'no chapter data' });
+    }
+    try {
+      const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.user.id, vf.id)}`;
+      const chaps = await probeChapters(selfUrl);
+      vf._chapters = chaps; // cache (null included) so a chapterless book isn't re-probed every open
+      if (!chaps) return send(ctx.res, 404, { error: 'no chapter data' });
+      send(ctx.res, 200, chaps);
+    } catch (e) { send(ctx.res, 404, { error: e.message }); }
   },
 
   // Same-release sidecar subtitles from the NZB/archive. These are read only when selected,
@@ -8110,6 +8343,16 @@ const ROUTES = [
   { m: 'POST', re: /^\/api\/prepare$/, auth: 'user', h: H.prepare },
   { m: 'POST', re: /^\/api\/advance\/(\w+)$/, auth: 'user', h: H.advance },
   { m: 'GET', re: /^\/api\/tmdb\/(.+)$/, auth: 'user', h: H.tmdbProxy },
+  { m: 'GET', re: /^\/api\/audible\/search$/, auth: 'user', h: H.audibleSearch },
+  { m: 'GET', re: /^\/api\/audible\/browse$/, auth: 'user', h: H.audibleBrowse },
+  { m: 'GET', re: /^\/api\/audible\/book\/([A-Za-z0-9]{10})$/, auth: 'user', h: H.audibleBook },
+  { m: 'GET', re: /^\/api\/audible\/chapters\/([A-Za-z0-9]{10})$/, auth: 'user', h: H.audibleChapters },
+  { m: 'GET', re: /^\/api\/pubaudio\/search$/, auth: 'user', h: H.pubaudioSearch },
+  { m: 'GET', re: /^\/api\/pubaudio\/browse$/, auth: 'user', h: H.pubaudioBrowse },
+  { m: 'GET', re: /^\/api\/pubaudio\/tracks$/, auth: 'user', h: H.pubaudioTracks },
+  { m: 'GET', re: /^\/api\/audiobook\/available$/, auth: 'user', h: H.audiobookAvailable },
+  { m: 'GET', re: /^\/api\/audiobook\/search$/, auth: 'user', h: H.audiobookSearch },
+  { m: 'POST', re: /^\/api\/audiobook\/play$/, auth: 'user', h: H.audiobookPlay },
   { m: 'GET', re: /^\/api\/libraries$/, auth: 'user', h: H.librariesList },
   { m: 'GET', re: /^\/api\/libraries\/local-lookup$/, auth: 'user', h: H.localLookup },
   { m: 'POST', re: /^\/api\/libraries$/, auth: 'admin', h: H.libraryCreate },
@@ -8184,6 +8427,8 @@ const ROUTES = [
   // playlist/init/segment filename. Stream-tier auth + scope, same as remux/transcode.
   { m: 'GET', re: /^\/api\/hls\/(\w+)(?:\/([\w.-]+))?$/, auth: 'stream', h: H.hls },
   { m: 'GET', re: /^\/api\/tracks\/(\w+)$/, auth: 'user', h: H.tracks },
+  { m: 'GET', re: /^\/api\/audiobook\/chapters\/(\w+)$/, auth: 'user', h: H.audiobookChapters },
+  { m: 'GET', re: /^\/api\/audio\/(\w+)\/(\d+)$/, auth: 'stream', h: H.audioTrack },
   { m: 'GET', re: /^\/api\/subtitle\/(\w+)\/(\d+)$/, auth: 'stream', h: H.subtitle },
   { m: 'GET', re: /^\/api\/releasesub\/(\w+)\/([a-z0-9_-]+)$/, auth: 'stream', h: H.releasesub },
   { m: 'GET', re: /^\/api\/ossubs\/(\w+)$/, auth: 'stream', h: H.ossubs },

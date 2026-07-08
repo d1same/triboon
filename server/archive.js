@@ -135,7 +135,7 @@ function releaseSubCandidates(files, videoName = '') {
 }
 
 class ArchiveVirtualFile {
-  constructor({ vols, inner, container, method, streamable, tags, password, releaseSubs = [] }) {
+  constructor({ vols, inner, container, method, streamable, tags, password, releaseSubs = [], audioFiles = null }) {
     this.id = crypto.randomBytes(6).toString('hex');
     this.vols = vols;
     this.container = container;
@@ -148,6 +148,11 @@ class ArchiveVirtualFile {
     this.health = { verdict: 'unverified', checkedAt: null, missing: 0, sampled: 0 };
     this.segmentCount = vols.reduce((s, v) => s + v.segments.length, 0);
     this.releaseSubs = releaseSubs;
+    // Multi-file audiobook packed INSIDE the archive: the ordered inner audio tracks. One mount serves
+    // any track by index via audioStreamAt() (a lightweight ArchiveVirtualFile over that inner file's
+    // already-known extents — no re-mount). Absent for single-file archives.
+    this.audioFiles = audioFiles;
+    if (audioFiles) this._audioStreams = new Map();
 
     // Cumulative extent table for O(log n) seek: inner offset → (volume, volume offset).
     this.extents = [];
@@ -209,6 +214,23 @@ class ArchiveVirtualFile {
       checkedAt: new Date().toISOString(),
     };
     return this.health;
+  }
+
+  // Stream one inner audio TRACK (by index) — a light ArchiveVirtualFile over its extents, reused
+  // across Range requests. Same shape as the flat mount's audioStreamAt so H.audioTrack is unchanged.
+  async audioStreamAt(index) {
+    const track = (this.audioFiles || [])[index];
+    if (!track || !track._source) { const e = new Error('audio track not found'); e.status = 404; throw e; }
+    let vf = this._audioStreams.get(index);
+    if (!vf) {
+      vf = new ArchiveVirtualFile({
+        vols: this.vols, inner: track._source, container: this.container,
+        method: track._source.method || this.method, streamable: true, tags: [], password: this.password,
+      });
+      this._audioStreams.set(index, vf);
+    }
+    vf._touched = Date.now();
+    return vf;
   }
 
   async readReleaseSub(id, maxBytes = 5 * 1024 * 1024) {
@@ -296,10 +318,35 @@ async function mountNzb(pool, nzbXml, opts = {}) {
   const streamable = inner.method === 'store' && !inner.encrypted && mapped === inner.size;
   if (!streamable && !tags.length) tags.push('unmappable');
 
+  // Multi-file audiobook packed in the archive → expose every inner audio track as a playlist so the
+  // client plays from track 1, not whichever single file pickInner chose (which "started mid-book").
+  const audioInner = audioInnerCandidates(parsed.files);
   return new ArchiveVirtualFile({
     vols, inner, container, method: inner.method, streamable, tags, password,
     releaseSubs: releaseSubCandidates(parsed.files, inner.name),
+    audioFiles: audioInner.length > 1 ? audioInner : null,
   });
+}
+
+// Multi-file audiobooks are posted as N loose audio files (one per chapter/part). Natural-sort by
+// name so "Chapter 2" precedes "Chapter 10", and expose them as an ordered, index-addressable list.
+const AUDIO_TRACK_EXT = /\.(mp3|m4a|m4b|aac|ogg|oga|opus|flac|wav)$/i;
+function naturalKey(name) {
+  return String(name || '').toLowerCase().replace(/\d+/g, (n) => n.padStart(8, '0'));
+}
+function audioTrackCandidates(files) {
+  return (files || [])
+    .filter((f) => f && AUDIO_TRACK_EXT.test(f.name || ''))
+    .sort((a, b) => naturalKey(a.name).localeCompare(naturalKey(b.name)))
+    .map((f, index) => ({ index, name: f.name, size: f.bytes || 0, _source: f }));
+}
+// Same, but for the INNER files of an archive (they carry extents + method instead of raw bytes).
+// Only STORE (uncompressed, unencrypted, fully-mapped) tracks are streamable as-is.
+function audioInnerCandidates(files) {
+  return (files || [])
+    .filter((f) => f && AUDIO_TRACK_EXT.test(f.name || '') && f.method === 'store' && !f.encrypted && Array.isArray(f.extents))
+    .sort((a, b) => naturalKey(a.name).localeCompare(naturalKey(b.name)))
+    .map((f, index) => ({ index, name: f.name, size: f.size || 0, _source: f }));
 }
 
 function mountFlat(pool, nzb, opts) {
@@ -316,6 +363,21 @@ function mountFlat(pool, nzb, opts) {
     name: fileNameFromSubject(f.subject),
     bytes: f.segments.reduce((s, x) => s + x.bytes, 0),
   }));
+  // Multi-file audiobook: expose every audio track so the client can play them as one chaptered
+  // playlist. One mount serves any track by index (mirrors how release subs serve any inner file).
+  const audio = audioTrackCandidates(files);
+  if (audio.length > 1) {
+    vf.audioFiles = audio;
+    vf._audioStreams = new Map(); // index -> mounted NzbFileStream (reused across Range requests)
+    vf.audioStreamAt = async (index) => {
+      const track = vf.audioFiles[index];
+      if (!track || !track._source) { const e = new Error('audio track not found'); e.status = 404; throw e; }
+      let s = vf._audioStreams.get(index);
+      if (!s) { s = new NzbFileStream(pool, track._source, opts); await s.mount('playback'); vf._audioStreams.set(index, s); }
+      s._touched = Date.now();
+      return s;
+    };
+  }
   vf.releaseSubs = releaseSubCandidates(files, fileNameFromSubject(primary.subject));
   vf.readReleaseSub = async (id, maxBytes = 5 * 1024 * 1024) => {
     const sub = (vf.releaseSubs || []).find((s) => String(s.id) === String(id));
@@ -330,4 +392,4 @@ function mountFlat(pool, nzb, opts) {
   return vf.mount();
 }
 
-module.exports = { detectContainer, orderVolumes, mountNzb, ArchiveVirtualFile };
+module.exports = { detectContainer, orderVolumes, mountNzb, ArchiveVirtualFile, audioTrackCandidates, audioInnerCandidates };

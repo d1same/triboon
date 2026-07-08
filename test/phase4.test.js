@@ -2432,13 +2432,13 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.ok(!ui.includes('railClickCollapsed'),
     'the hover-then-suppress railClickCollapsed hack is gone (hover no longer expands on desktop)');
   assert.match(ui, /body\.tv #rail:hover,#rail\.expanded,body\.railOpen #rail\{width:236px/,
-    'rail hover-expansion is scoped to Android TV; desktop expands only via .expanded (click) or D-pad railOpen');
+    'the rail widens to 236px on TV hover, the .expanded class (desktop hover), or D-pad railOpen');
   assert.match(ui, /document\.querySelectorAll\('\.railBtn\[data-nav\]'\)\.forEach\(\(b\) => b\.addEventListener\('click', \(\) => \{[\s\S]+switchView\(b\.dataset\.nav\);[\s\S]+collapseRailAfterClick\(\);[\s\S]+\}\)\)/,
     'clicking a left-menu destination navigates and collapses the rail');
-  assert.match(ui, /railLogo\.addEventListener\('click', \(\) => \{[\s\S]+if \(document\.body\.classList\.contains\('tv'\)\) return;[\s\S]+\$\('rail'\)\.classList\.toggle\('expanded'\);/,
-    'desktop expands the rail by CLICKING the logo (not by hover)');
-  assert.match(ui, /\$\('rail'\)\.addEventListener\('mouseleave', \(\) => \{[\s\S]+if \(!document\.body\.classList\.contains\('tv'\)\) \{ \$\('rail'\)\.classList\.remove\('expanded'\); return; \}/,
-    'leaving the rail closes the click-expanded labels on desktop; TV keeps its D-pad leave behavior');
+  assert.match(ui, /\$\('rail'\)\.addEventListener\('mouseenter', \(\) => \{[\s\S]+if \(document\.body\.classList\.contains\('tv'\)\) return;[\s\S]+document\.body\.classList\.add\('railOpen'\);[\s\S]+\$\('rail'\)\.classList\.add\('expanded'\);/,
+    'desktop expands the rail on HOVER and PUSHES the page right (body.railOpen), not via a logo click');
+  assert.match(ui, /\$\('rail'\)\.addEventListener\('mouseleave', \(\) => \{[\s\S]+if \(!document\.body\.classList\.contains\('tv'\)\) \{ document\.body\.classList\.remove\('railOpen'\); \$\('rail'\)\.classList\.remove\('expanded'\); return; \}/,
+    'leaving the rail slides the page back LEFT (removes railOpen) and closes the labels on desktop; TV keeps its D-pad leave behavior');
   assert.match(ui, /function focusContent\(retried\) \{[\s\S]+leaveRail\(\);[\s\S]+clearFocus\(\);/,
     'moving focus into page content should always collapse any stale rail state first');
   assert.match(ui, /const rowCol = \(ri\) => [\s\S]*?S\.colIdx\[ri\] \|\| 0[\s\S]+if \(k === 'ArrowUp'\) return S\.rowIdx === 0 \? \(view\.hasHero \? focusHero\(0\) : enterRail\(\)\)[\s\S]+: focusCard\(S\.rowIdx - 1, rowCol\(S\.rowIdx - 1\)\);[\s\S]+return focusCard\(S\.rowIdx \+ 1, 0\);/,
@@ -2900,8 +2900,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native ExoPlayer should own a branded loading overlay instead of borrowing the web player shell');
   assert.match(ui, /<link rel="icon" href="T-Logo\.svg"><link rel="alternate icon" href="T-Logo\.png">/,
     'web favicon should use the T logo assets');
-  assert.match(ui, /id="railLogo"[\s\S]+<img src="T-Logo\.svg" alt="Triboon" onerror="this\.onerror=null;this\.src='T-Logo\.png'"/,
-    'web rail logo should use the T logo assets');
+  assert.ok(!ui.includes('id="railLogo"'),
+    'the Triboon logo was removed from the rail top (the profile avatar took its place; the favicon still uses the T logo)');
   assert.match(ui, /<div class="ssBrand"><img src="triboon\.png" alt="Triboon"><\/div>/,
     'web screensaver should use the updated transparent Triboon wordmark asset');
   assert.match(ui, /#playerLoader \.loadMark\{display:grid;place-items:center\}[\s\S]+#playerLoader \.loadMark img\{[^}]*width:min\(210px,50vw\)[\s\S]+#playerLoader \.loadSteps\{[^}]*width:min\(340px,72vw\)[^}]*height:4px[\s\S]+#playerLoader \.loadStep\{[^}]*width:58%[\s\S]+#playerLoader \.loadStatus\{[\s\S]+<img src="triboon\.png" alt="Triboon">[\s\S]+<div class="loadSteps" aria-hidden="true"><span class="loadStep"><\/span><\/div>[\s\S]+<div class="loadStatus" id="plStage">Preparing<\/div>/,
@@ -3701,8 +3701,8 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'browse genre/sort controls should sit beside the fixed clock on desktop while dropping cleanly on phone shells');
   assert.match(ui, /function clearPlaybackTimers\(\) \{[\s\S]+S\.healthTimer[\s\S]+S\.watchTimer[\s\S]+\}/,
     'health/watch timers should clear through one shared player cleanup path');
-  assert.match(ui, /<div id="railMain">[\s\S]+<div id="railLibs"><\/div>[\s\S]+<\/div>\s+<div id="railFooter">[\s\S]+id="railAddLib"[\s\S]+id="railUser" class="railBtn focusable"/,
-    'library rows should scroll separately from a pinned utility rail footer');
+  assert.match(ui, /<div id="railMain">[\s\S]*?<button id="railUser" class="railBtn focusable"[\s\S]+<div id="railLibs"><\/div>\s*<\/div>\s*<div id="railFooter">\s*<button class="railBtn focusable" id="railAddLib"[\s\S]+?<\/button>\s*<\/div>/,
+    'profile avatar pinned at the rail TOP; library rows scroll in railMain, separate from the pinned footer (which now holds only Add library)');
   // Preferences + admin Settings are folded behind the profile avatar (the standalone nav buttons
   // were removed to free rail space): the avatar opens Preferences on the Profile & Pins tab.
   assert.ok(!ui.includes('id="navPrefs"') && !ui.includes('id="navSettings"'),

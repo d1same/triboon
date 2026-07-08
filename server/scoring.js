@@ -342,4 +342,95 @@ function rankReleases(candidates, policy = {}) {
     .map(({ _i, ...c }) => c);
 }
 
-module.exports = { parseRelease, scoreRelease, rankReleases, notTheMovie, normalizeLanguageCode, releaseLanguageTag, RES, SOURCE };
+// ---- audiobook scoring ----
+// Audiobooks are a DIFFERENT beast from video: resolution/codec/HDR are meaningless, and the video
+// scorer's notTheMovie() disqualifies any audio-only release (FLAC/MP3 with no video marker) — the
+// exact releases we WANT here. So audiobooks get their own small, purpose-built scorer.
+const AUDIOBOOK_FORMAT = [
+  // M4B is the gold standard: one seekable file with embedded chapters + cover. Everything else is
+  // a step down (loose MP3s need concatenation; FLAC is lossless-but-huge overkill for speech).
+  { key: 'm4b', score: 40, re: /\bm4b\b/i },
+  { key: 'm4a', score: 25, re: /\b(m4a|aac)\b/i },
+  { key: 'opus', score: 18, re: /\b(opus|ogg)\b/i },
+  { key: 'flac', score: 15, re: /\bflac\b/i },
+  { key: 'mp3', score: 10, re: /\bmp3\b/i },
+];
+// An ebook that slipped into an audiobook search must never auto-"play" — disqualify unless the name
+// ALSO carries an audio marker (some bundles ship both).
+const EBOOK_ONLY = /\b(epub|mobi|azw3?|pdf|cbz|cbr|djvu)\b/i;
+const AUDIO_ANY = /\b(m4b|m4a|aac|mp3|flac|opus|ogg|audio ?book|unabridged|abridged|\d{2,3}\s?kbps)\b/i;
+
+function parseAudiobook(name) {
+  const fmt = matchOne(name, AUDIOBOOK_FORMAT);
+  const unabridged = /\bunabridged\b/i.test(name);
+  // "abridged" only counts when NOT part of "unabridged".
+  const abridged = /\babridged\b/i.test(name) && !unabridged;
+  const bitrate = (() => { const m = /\b(\d{2,3})\s?kbps?\b/i.exec(name) || /\b(\d{2,3})k\b/i.exec(name); return m ? +m[1] : null; })();
+  const ebookOnly = EBOOK_ONLY.test(name) && !AUDIO_ANY.test(name);
+  return { format: fmt ? fmt.key : 'unknown', formatScore: fmt ? fmt.score : 0, unabridged, abridged, bitrate, ebookOnly };
+}
+
+// Detect a foreign-LANGUAGE audiobook edition ("Becoming-2MP3CD-DE-2018", "…Hörbuch…", "…VF…").
+// Returns a 2-letter code, or '' for English / untagged (assumed the wanted language). Full-word
+// markers are high-confidence; short scene codes are matched only when clearly delimited.
+// NATIVE-language words only (they don't appear in English titles, so no "The Italian Job" false
+// positive). The English words "italian"/"french"/"german"/… are deliberately excluded; genuine
+// foreign releases are caught by those native words or the scene codes below.
+const AB_LANG_WORD = [
+  [/\b(deutsch|h[oö]rbuch|hoerbuch)\b/i, 'de'], [/\b(fran[cç]ais|vostfr|truefrench)\b/i, 'fr'],
+  [/\b(italiano)\b/i, 'it'], [/\b(espa[nñ]ol|castellano)\b/i, 'es'],
+  [/\b(nederlands|vlaams)\b/i, 'nl'], [/\b(portugu[eê]s)\b/i, 'pt'],
+  [/\b(русск|russkij)\b/i, 'ru'], [/\b(polski|lektor)\b/i, 'pl'],
+  [/\b(svenska)\b/i, 'sv'], [/\b(norsk)\b/i, 'no'], [/\b(dansk)\b/i, 'da'],
+  [/\b(suomi)\b/i, 'fi'], [/\b(t[üu]rk[cç]e)\b/i, 'tr'],
+];
+const AB_LANG_CODE = /(?:^|[-_.\s(\[])(GER|DEU|GERMAN|FRE|FRA|FRENCH|ITA|ESP|SPA|NLD|DUT|RUS|POL|POR|SWE|NOR|DAN|FIN|TUR|DE|FR|IT|ES|NL|RU|PL|PT|SE|NO|DK|TR)(?:[-_.\s)\]]|$)/;
+function audiobookLanguage(name) {
+  const s = String(name || '');
+  for (const [re, code] of AB_LANG_WORD) if (re.test(s)) return code;
+  const m = AB_LANG_CODE.exec(s); // scene codes are usually upper-cased; keep it case-SENSITIVE
+  if (m) { const c = normalizeLanguageCode(m[1]); return c === 'en' ? '' : c; }
+  return '';
+}
+
+// Score one audiobook candidate. Higher is better; below -5000 is disqualified (matches the video
+// pipeline's playability cutoff so the same walk logic applies).
+function scoreAudiobook(cand, policy = {}) {
+  const a = parseAudiobook(cand.name || '');
+  const reasons = [];
+  let score = 0;
+  const add = (label, pts) => { score += pts; if (pts) reasons.push(`${label} ${pts > 0 ? '+' : ''}${pts}`); };
+
+  if (a.ebookOnly) add('ebook-not-audiobook', -100000);
+  // Language: audiobooks default to English. A foreign-language edition is heavily demoted so an
+  // English (or untagged) edition always wins when both exist — but stays playable as a last resort.
+  const wantLang = policy.language || 'en';
+  const lang = audiobookLanguage(cand.name || '');
+  if (lang && lang !== wantLang) add(`language:${lang}`, -1000);
+  add(`format:${a.format}`, a.formatScore);
+  if (a.unabridged) add('unabridged', 30);
+  // Abridged is a genuinely different (cut-down) product — most listeners actively don't want it.
+  if (a.abridged) add('abridged', -300);
+  // Bitrate is a weak signal for speech; only flag the extremes for transparency.
+  if (a.bitrate != null) {
+    if (a.bitrate < 32) add('very-low-bitrate', -20);
+    else if (a.bitrate > 256) add('bloated-bitrate', -10);
+  }
+
+  // Size sanity on the DECLARED size: a real audiobook is at least a few MB; a KB-scale post is junk.
+  // No upper clamp — a 40h epic is legitimately large. (The mount re-checks actual bytes downstream.)
+  const gb = (Number(cand.sizeBytes) || 0) / 1e9;
+  if (gb > 0 && gb < 0.002) add('stub', -100000);
+
+  return { score: Math.round(score), attributes: a, reasons };
+}
+
+// Rank audiobook candidates (best first, stable for ties), same shape as rankReleases.
+function rankAudiobooks(candidates, policy = {}) {
+  return candidates
+    .map((c, i) => ({ ...c, ...scoreAudiobook(c, policy), _i: i }))
+    .sort((x, y) => (y.score - x.score) || (x._i - y._i))
+    .map(({ _i, ...c }) => c);
+}
+
+module.exports = { parseRelease, scoreRelease, rankReleases, notTheMovie, normalizeLanguageCode, releaseLanguageTag, RES, SOURCE, parseAudiobook, scoreAudiobook, rankAudiobooks, audiobookLanguage };

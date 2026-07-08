@@ -169,6 +169,45 @@ function probeTracks(url) {
   });
 }
 
+// Pure parse of ffprobe -show_chapters JSON → { chapters:[{title,startMs,lengthMs}], runtimeMs } in
+// the SAME shape as audible.js's Audnexus chapters (so the player treats both interchangeably).
+// Returns null when the file has no chapters. Exported so it can be unit-tested without ffprobe.
+function parseFfprobeChapters(j) {
+  const raw = Array.isArray(j && j.chapters) ? j.chapters : [];
+  if (!raw.length) return null;
+  const chapters = raw.map((c, i) => {
+    const start = parseFloat(c.start_time);
+    const end = parseFloat(c.end_time);
+    const startMs = Number.isFinite(start) ? Math.round(start * 1000) : 0;
+    const lengthMs = Number.isFinite(end) && end > start ? Math.round((end - start) * 1000) : 0;
+    return { title: (c.tags && (c.tags.title || c.tags.TITLE)) || `Chapter ${i + 1}`, startMs, lengthMs };
+  }).sort((a, b) => a.startMs - b.startMs);
+  const runtimeMs = Math.round((parseFloat((j.format || {}).duration) || 0) * 1000) || null;
+  return { chapters, runtimeMs, isAccurate: true, brandIntroMs: 0, brandOutroMs: 0 };
+}
+
+// Extract embedded chapters from an audiobook file (M4B/M4A/Ogg carry them) via ffprobe. Resolves
+// null when the file has no chapters (not an error — the caller falls back to Audnexus timestamps).
+function probeChapters(url, { timeoutMs = 30000 } = {}) {
+  return new Promise((resolve, reject) => {
+    const fp = detectFfprobe();
+    if (!fp) return reject(new Error('ffprobe not available'));
+    const p = spawn(fp.path, [
+      '-v', 'error', '-print_format', 'json', '-show_chapters', '-show_format', url,
+    ], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    let out = '', err = '';
+    p.stdout.on('data', (d) => { out += d; });
+    p.stderr.on('data', (d) => { err += d; });
+    const killer = setTimeout(() => p.kill('SIGKILL'), timeoutMs);
+    p.on('close', () => {
+      clearTimeout(killer);
+      try { resolve(parseFfprobeChapters(JSON.parse(out || '{}'))); }
+      catch (e) { reject(new Error(`ffprobe chapters parse: ${e.message} ${err.slice(0, 200)}`)); }
+    });
+    p.on('error', (e) => { clearTimeout(killer); reject(e); });
+  });
+}
+
 // ---- the transcode ladder ----
 // Detect the best available H.264 encoder: hardware first (NVENC → QSV → AMF → VideoToolbox
 // → VAAPI), software libx264 as the universal fallback.
@@ -539,4 +578,4 @@ function spawnSubSync(refPath, inPath, outPath) {
     { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env });
 }
 
-module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, probeLiveVideoCodec, liveVideoArgs, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, supportsFfmpegHttpOption, ffprobeKeyframeAtOrAfter };
+module.exports = { detectFfmpeg, detectFfprobe, detectEncoder, decidePlayback, probeTracks, probeChapters, parseFfprobeChapters, probeLiveVideoCodec, liveVideoArgs, spawnRemux, spawnTranscode, spawnHls, spawnLiveRemux, spawnLiveRemuxStdin, spawnSubtitleExtract, detectSubSync, spawnSubSync, makeThumb, LADDER, audioNeedsTranscode, audioCopyOk, supportsFfmpegHttpOption, ffprobeKeyframeAtOrAfter };

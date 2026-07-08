@@ -138,8 +138,39 @@ function releaseMatches(name, wanted) {
   }
   return true;
 }
-const { rankReleases, parseRelease } = require('./scoring');
+const { rankReleases, parseRelease, rankAudiobooks } = require('./scoring');
 const { mountNzb, orderVolumes } = require('./archive');
+
+// ---- audiobook title verification ----
+// Book releases don't follow the scene "Title.Year.Quality" convention: they're free-form
+// ("Author - Title (Year) [M4B]", "Title - Author Unabridged 64kbps"), title and author can appear
+// in either order, and there's no SxxEyy/resolution boundary to anchor on. So the video verifier
+// (releaseMatches) rejects them all. Instead: require the wanted TITLE words to appear IN ORDER (as a
+// subsequence, tolerant of gaps and dropped articles) AND the author surname to be present — the two
+// together are a strong "this is the right book" signal without the scene-name assumptions.
+const BOOK_STOP = new Set(['the', 'a', 'an', 'of', 'and', 'or', 'to', 'in']);
+function bookTokens(s) {
+  return String(s || '').toLowerCase().replace(/['’`]/g, '').split(/[^a-z0-9]+/).filter(Boolean);
+}
+function parseWantedBook(title, author) {
+  const titleWords = bookTokens(title).filter((w) => !BOOK_STOP.has(w));
+  const authorWords = bookTokens(author).filter((w) => w.length > 2 && !BOOK_STOP.has(w));
+  return { titleWords, authorWords };
+}
+function tokensInOrder(needle, hay) {
+  if (!needle.length) return false;
+  let i = 0;
+  for (const h of hay) { if (h === needle[i]) i++; if (i === needle.length) return true; }
+  return false;
+}
+function bookMatches(name, wanted) {
+  const toks = bookTokens(name);
+  if (!tokensInOrder(wanted.titleWords, toks)) return false;
+  // Author is a strong disambiguator but optional: if none was supplied, title-in-order is enough.
+  // When supplied, require ANY author word present (surname is enough — "Sanderson").
+  if (wanted.authorWords.length && !wanted.authorWords.some((w) => toks.includes(w))) return false;
+  return true;
+}
 
 // Turn the raw per-candidate fail reasons into one honest, actionable sentence for the user, so
 // "all candidates failed" stops being a dead end. Most real failures are SOURCE health (removed
@@ -199,7 +230,17 @@ function stubFeatureReason(sizeBytes, name) {
   }
   return '';
 }
-const { parseNzb, pickPrimaryFile, fileNameFromSubject } = require('./nzb');
+const { parseNzb, pickPrimaryFile, fileNameFromSubject, AUDIO_EXT } = require('./nzb');
+
+// An audiobook mount must actually be AUDIO. An ebook/text release (.mobi/.epub/.azw3/.pdf/.txt)
+// can match a book by title+author and mount cleanly, but the browser <audio> can't decode it, so
+// playback errors mid-start and the client reports "Playback source was lost". Reject any audiobook
+// mount whose primary file isn't an audio extension AND exposes no audio inner files, so the walk
+// advances to a real audiobook (or honestly reports none playable) instead of streaming an ebook.
+function isNonAudioAudiobookMount(vf) {
+  const hasAudioFiles = vf && Array.isArray(vf.audioFiles) && vf.audioFiles.length > 0;
+  return !hasAudioFiles && !AUDIO_EXT.test((vf && vf.name) || '');
+}
 const crypto = require('crypto');
 
 const GATE_MS = 500;          // bounded upfront health gate (soft timeout)
@@ -747,6 +788,99 @@ class Pipeline {
     return { candidates: rankReleases(enriched, policy).map((c) => ({ ...c, pickKey: candidateKey(c) })), errors };
   }
 
+  // Audiobook search: same indexer fan-out + verdict-cache + NZB machinery as video, but with the
+  // Audio>Audiobook newznab category, the book-aware verifier, and the audiobook scorer. params:
+  // { title, author, region, cat }. Returns { candidates, errors } shaped like search().
+  async searchAudiobook(params = {}, { timeoutMs = 2500 } = {}) {
+    const ixs = this.indexers();
+    if (!ixs.length) throw new Error('no indexers configured');
+    const title = String(params.title || '').trim();
+    if (!title) throw new Error('title required');
+    const author = String(params.author || '').trim();
+    const wanted = parseWantedBook(title, author);
+    const sanitize = (s) => String(s || '').replace(/['’`]/g, '').replace(/[:&,!?./\\()\[\]\-_;]+/g, ' ').replace(/\s+/g, ' ').trim();
+    const cat = params.cat || '3030'; // 3030 = Newznab Audio>Audiobook; admins override via params.cat.
+    const qFull = sanitize(`${author} ${title}`).trim() || sanitize(title);
+    const qTitle = sanitize(title);
+    // Real-world audiobook posts are inconsistently categorized and named, so try progressively
+    // looser strategies until one yields VERIFIED book matches (each cached independently):
+    //  1. category + "author title" (the precise case)
+    //  2. category + "title" only (author formatting varies wildly: "Lastname, First", initials…)
+    //  3. NO category + "author title" (indexers that don't tag audiobooks under 3030 at all) —
+    //     safe because bookMatches still requires the author surname, so movies/other media drop out.
+    const strategies = [{ q: qFull, cat }];
+    if (qTitle !== qFull) strategies.push({ q: qTitle, cat });
+    // Parent Audio category (3000) catches audiobooks mis-tagged under Audio-but-not-Audiobook,
+    // before the last-resort no-category sweep. Only when using the default 3030 (admin overrides skip).
+    if (cat === '3030') strategies.push({ q: qFull, cat: '3000' });
+    strategies.push({ q: qFull, cat: undefined });
+    let verified = [];
+    let lastErrors = [];
+    for (const strat of strategies) {
+      const key = JSON.stringify(['ab', strat.q, strat.cat || '']);
+      let hit = this._getFreshSearchHit(key);
+      if (hit) { this.metrics.searchCacheHits++; }
+      else {
+        this.metrics.searchCacheMisses++;
+        let pending = this.searchInflight.get(key);
+        if (pending) this.metrics.searchInflightJoins++;
+        if (!pending) {
+          const searchParams = { q: strat.q };
+          if (strat.cat) searchParams.cat = strat.cat;
+          pending = (async () => {
+            ixs.forEach((ix) => this.usage.onSearch(ix.name));
+            const { results, errors } = await this._fanoutMeasured(ixs, searchParams, { timeoutMs });
+            return { at: Date.now(), results, errors };
+          })().finally(() => this.searchInflight.delete(key));
+          this.searchInflight.set(key, pending);
+        }
+        hit = await pending;
+        this._rememberSearchHit(key, hit);
+      }
+      lastErrors = hit.errors;
+      verified = hit.results.filter((r) => bookMatches(r.name, wanted));
+      if (verified.length) break; // first strategy that finds real books wins
+    }
+    const enriched = verified.map((r) => {
+      const v = this.verdicts.get(nzbVerdictKey(r.nzbUrl)) || this.verdicts.get('t:' + normTitle(r.name));
+      return { ...r, health: v ? (v.verdict === 'ok' ? 'verified' : v.verdict) : undefined };
+    });
+    return {
+      candidates: rankAudiobooks(enriched).map((c) => ({ ...c, pickKey: candidateKey(c) })),
+      errors: lastErrors,
+    };
+  }
+
+  // Cheap availability probe: is this book on usenet at all? ONE no-category fanout (the catch-all)
+  // + the book verifier — used to filter discovery so a click never dead-ends. Reuses the 60s search
+  // cache; the HTTP layer caches the boolean far longer.
+  async isAvailable(params = {}, { timeoutMs = 3000 } = {}) {
+    const title = String(params.title || '').trim();
+    if (!title) return false;
+    const ixs = this.indexers();
+    if (!ixs.length) return false;
+    const author = String(params.author || '').trim();
+    const wanted = parseWantedBook(title, author);
+    const sanitize = (s) => String(s || '').replace(/['’`]/g, '').replace(/[:&,!?./\\()\[\]\-_;]+/g, ' ').replace(/\s+/g, ' ').trim();
+    const q = sanitize(`${author} ${title}`) || sanitize(title);
+    const key = JSON.stringify(['abavail', q]);
+    let hit = this._getFreshSearchHit(key);
+    if (!hit) {
+      let pending = this.searchInflight.get(key);
+      if (!pending) {
+        pending = (async () => {
+          ixs.forEach((ix) => this.usage.onSearch(ix.name));
+          const { results, errors } = await this._fanoutMeasured(ixs, { q }, { timeoutMs });
+          return { at: Date.now(), results, errors };
+        })().finally(() => this.searchInflight.delete(key));
+        this.searchInflight.set(key, pending);
+      }
+      hit = await pending;
+      this._rememberSearchHit(key, hit);
+    }
+    return hit.results.some((r) => bookMatches(r.name, wanted));
+  }
+
   _recordVerdict(candidate, verdict, detail = {}) {
     this.verdicts.set(nzbVerdictKey(candidate.nzbUrl), verdict, detail);
     this.verdicts.set('t:' + normTitle(candidate.name), verdict, detail);
@@ -898,11 +1032,21 @@ class Pipeline {
       return { fail: `sample file picked (${vf.name})`, vf };
     }
 
+    // Audiobook releases must resolve to an AUDIO file, never an ebook/text (.mobi/.epub/.pdf…) that
+    // merely matched the title+author. Streaming one as audio errors on start → "source lost".
+    if (mountOpts.audiobook && isNonAudioAudiobookMount(vf)) {
+      this._recordVerdict(candidate, 'unstreamable', { streamClass: 'not-audio' });
+      return { fail: `not an audiobook — non-audio file (${vf.name})`, vf };
+    }
+
     // Size sanity on the ACTUAL mounted bytes. The pre-mount scoring floor (scoring.js) only sees
     // the indexer's DECLARED size, which can be missing or a lie — an incomplete/fake post mounts
     // far smaller than billed (a 220 MB file that auto-played as a 2160p movie). Fail it so the
     // walk advances to a genuine source — or reports "no healthy source" honestly, not silent junk.
-    const stub = this.enforceFeatureSize && stubFeatureReason(Number(vf.size) || 0, vf.name || candidate.name || '');
+    // Audiobooks are legitimately small (a short unabridged title at 32-64kbps can be well under the
+    // video 80MB floor), so skip the video feature-size stub check for them — the audiobook scorer
+    // already applied its own (much lower) pre-mount junk floor.
+    const stub = this.enforceFeatureSize && !mountOpts.audiobook && stubFeatureReason(Number(vf.size) || 0, vf.name || candidate.name || '');
     if (stub) {
       this._recordVerdict(candidate, 'unstreamable', { streamClass: 'stub', sizeGb: +((Number(vf.size) || 0) / 1e9).toFixed(3) });
       return { fail: stub, vf };
@@ -1011,6 +1155,28 @@ class Pipeline {
       }
       throw e;
     }
+  }
+
+  // Press-play for an audiobook: rank via searchAudiobook, then walk candidates with the same
+  // mount/health/auto-advance machinery as video. mountOpts.audiobook skips the video stub floor.
+  async playAudiobook(params = {}, mountOpts = {}) {
+    const { candidates, errors } = await this.searchAudiobook(params);
+    const playable = this._playableCandidates(candidates, params);
+    if (!playable.length) {
+      // No candidates at all vs. candidates that all scored unplayable are different problems —
+      // say which, and surface any indexer errors so the owner can act (wrong key, no audiobook cat…).
+      const e = new Error(candidates.length
+        ? 'Found audiobook releases but none are playable right now.'
+        : `“${params.title}” isn’t posted on usenet right now — try a different edition or a more widely-available title.`);
+      e.notOnUsenet = !candidates.length;
+      e.summary = e.message;
+      if (errors && errors.length) e.attempts = errors.map((x) => ({ fail: x.error, indexer: x.indexer }));
+      throw e;
+    }
+    const session = new PlaySession(params, playable);
+    this.sessions.set(session.id, session);
+    const width = (params.pickKey || params.pick) ? 1 : PLAY_RACE_WIDTH;
+    return await this._advance(session, { ...mountOpts, audiobook: true }, { width });
   }
 
   _playableCandidates(candidates, params = {}) {
@@ -1176,4 +1342,4 @@ class Pipeline {
   }
 }
 
-module.exports = { Pipeline, GATE_MS, parseWantedTitle, releaseMatches, candidateKey, nzbVerdictKey, summarizeAttempts, stubFeatureReason };
+module.exports = { Pipeline, GATE_MS, parseWantedTitle, releaseMatches, candidateKey, nzbVerdictKey, summarizeAttempts, stubFeatureReason, parseWantedBook, bookMatches, isNonAudioAudiobookMount };

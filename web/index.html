@@ -59,7 +59,7 @@
 @media (min-width:601px){
   body.railOpen #home,body.railOpen #discover,body.railOpen #browse,body.railOpen #detail,
   body.railOpen #person,body.railOpen #settings,body.railOpen #prefs,body.railOpen #searchBar,
-  body.railOpen #music,
+  body.railOpen #music,body.railOpen #audiobooks,body.railOpen #abDetail,
   body.railOpen #bdInfo{transform:translateX(152px)} /* #bdInfo is fixed-pos OUTSIDE the pages — without it the browse backdrop title stayed put while the grid slid. #prefs too: it used to load UNDER the expanded menu. */
 }
 *{box-sizing:border-box;margin:0;padding:0}
@@ -162,7 +162,7 @@ body.shortBrowseBd:not(.tv) #bdInfo .bdiO{font-size:14.5px;line-height:1.45;-web
 /* ---------- rail (expands on hover) ---------- */
 /* Collapsed rail: NO background at all — it lives on the ink like the rest of the page.
    Width 72 = 12px padding + 48px buttons + 12px, so left/right spacing is symmetric. */
-#rail{position:fixed;z-index:22;left:calc(var(--safeL) + var(--overscan));top:calc(var(--safeT) + var(--overscan));bottom:calc(var(--safeB) + var(--overscan));width:72px;display:none;flex-direction:column;align-items:stretch;gap:8px;padding:24px 12px 18px;
+#rail{position:fixed;z-index:22;left:calc(var(--safeL) + var(--overscan));top:calc(var(--safeT) + var(--overscan));bottom:calc(var(--safeB) + var(--overscan));width:72px;display:none;flex-direction:column;align-items:stretch;gap:8px;padding:14px 12px 18px;
   background:none;overflow:hidden;
   /* Chromium makes scrollable containers keyboard-focusable: when native focus lands on the
      rail (or any scroller) the UA paints its own bright outline — "the menu shows borders".
@@ -222,10 +222,10 @@ body.tv #rail:hover .railSec,#rail.expanded .railSec,body.railOpen .railSec{heig
 #railLibs{display:contents}
 #railAddLib{margin-bottom:0}
 /* Utility footer stays visible even when libraries overflow the 720p rail. */
-#railUser{height:48px;border-radius:13px;display:flex;align-items:center;justify-content:flex-start;color:var(--muted);flex:none;padding:0;position:relative}
+#railUser{height:48px;border-radius:13px;display:flex;align-items:center;justify-content:flex-start;color:var(--muted);flex:none;padding:0;margin:0 0 10px;position:relative}
 #railUser::before{display:none}
 #railUser:hover{color:var(--text);background:rgba(43,32,63,.48)}
-#railUser.focusable::before{top:-10px;left:8px;right:8px;bottom:auto;height:1px;padding:0;border-radius:0;background:var(--line);opacity:1;
+#railUser.focusable::before{top:auto;left:8px;right:8px;bottom:-6px;height:1px;padding:0;border-radius:0;background:var(--line);opacity:1;
   -webkit-mask:none;mask:none}
 #railUser.focusable.focus,#railUser:focus-visible{transform:none;color:var(--text);
   background:var(--soft);box-shadow:none}
@@ -510,11 +510,11 @@ body.androidApp #gateArtCaption{display:none}
    photo/poster RING (--artFocusLine/Glow) like .card/.pcard — they must NOT get the solid
    button fill, or the whole tile (photo + name) flashes a coloured block on focus. */
 .btn.focus::before, .btn:focus-visible::before,
-button.focusable:not(.card):not(.pcard):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel).focus::before, button.focusable:not(.card):not(.pcard):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):focus-visible::before { opacity:0 !important; }
+button.focusable:not(.card):not(.pcard):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard).focus::before, button.focusable:not(.card):not(.pcard):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard):focus-visible::before { opacity:0 !important; }
 .btn:hover, .btn.focus, .btn:focus-visible,
-button.focusable:not(.card):not(.pcard):not(.railBtn):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):hover,
-button.focusable:not(.card):not(.pcard):not(.railBtn):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel).focus,
-button.focusable:not(.card):not(.pcard):not(.railBtn):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):focus-visible {
+button.focusable:not(.card):not(.pcard):not(.railBtn):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard):hover,
+button.focusable:not(.card):not(.pcard):not(.railBtn):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard).focus,
+button.focusable:not(.card):not(.pcard):not(.railBtn):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard):focus-visible {
   background: var(--btnHover) !important;
   color: var(--btnFocusText) !important;
   filter: none;
@@ -1519,6 +1519,7 @@ body.tv .cwAct,body.tv .epMenuBtn,body.tv .cardMenuBtn{display:none!important}
   :root{--rail:0px}
   body.railOpen{--rail:0px}
   #home,#discover,#browse,#detail,#person,#settings,#prefs,#music{padding-left:16px!important;padding-right:16px!important}
+  #audiobooks,#abDetail{padding-left:16px!important;padding-right:16px!important}
   #searchBar{left:16px;right:16px}
   #home{padding:62px 16px 18px 16px!important;justify-content:flex-start}
   #hero{max-width:calc(100vw - 32px);margin:0 auto 8px;padding:0;text-align:center;align-items:center}
@@ -1591,6 +1592,7 @@ body.mobileShell #searchBar{left:16px;right:16px}
    only needs the horizontal inset. Scoped to mobileShell → desktop/TV untouched. */
 body.mobileShell #searchBar{top:62px!important}
 body.mobileShell #music{padding-top:62px!important}
+body.mobileShell #audiobooks{padding-top:62px!important}
 body.mobileShell #chBar{padding-left:48px}
 /* Search RESULTS must clear the (now-lowered) fixed search bar, not scroll under it. Desktop uses
    110px for the bar at top:26px; on the phone the bar drops 36px to top:62px, so results drop the
@@ -2709,7 +2711,7 @@ body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
 @media (max-width:900px){.mnMain{flex-direction:column;gap:22px;padding:80px 16px 26px}.mnCover{width:min(230px,55vw)}.mnInfo{min-width:0;width:100%;max-width:calc(100vw - 32px)}.mnQueue{width:min(420px,calc(100vw - 48px));margin:22px auto 28px;max-height:38vh}#musicNow.queueHidden .mnMain{width:100%;padding-bottom:52px}#musicNow.queueHidden .mnCover{width:min(260px,58vw)}}
 
 @media (max-width:900px){.musicTiles{grid-template-columns:repeat(auto-fill,minmax(128px,1fr))}.musicRail{grid-auto-columns:minmax(128px,34vw)}.mSearchSongs{grid-template-columns:1fr}.mArtistName{font-size:28px}.mArtistArt{width:82px;height:82px}}
-@media (max-width:600px){#music{left:0!important}.mbProg .mbT{display:none}.musicTiles{grid-template-columns:1fr}}
+@media (max-width:600px){#music{left:0!important}#audiobooks,#abDetail{left:0!important}.mbProg .mbT{display:none}.musicTiles{grid-template-columns:1fr}}
 
 /* Content text-size preference: scoped to media/content surfaces only.
    The rail, Settings, Preferences, auth gates and player controls keep fixed geometry. */
@@ -2909,7 +2911,10 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
 <button id="burger" aria-label="Menu"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
 <nav id="rail">
   <div id="railMain">
-  <div class="logo" id="railLogo" role="button" title="Home" style="cursor:pointer"><img src="T-Logo.svg" alt="Triboon" onerror="this.onerror=null;this.src='T-Logo.png'"><span class="wordmark">Triboon</span></div>
+  <!-- Profile avatar sits at the TOP (was the Triboon logo): one account entry point, and it frees the
+       footer so the nav list rises into the reclaimed bottom space. Opens Preferences; admins get
+       Server settings there. Home keeps its own nav button below, so no logo-as-home is lost. -->
+  <button id="railUser" class="railBtn focusable" title="Profile &amp; settings"><span class="av"></span><span class="rlabel">Profile &amp; settings</span></button>
   <button class="railBtn focusable active" data-nav="home" title="Home">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .7-1.5l7-6a2 2 0 0 1 2.6 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="rlabel">Home</span></button>
   <button class="railBtn focusable" data-nav="watchlist" title="Watchlist">
@@ -2928,15 +2933,14 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2-5 5-5-5"/><rect width="20" height="15" x="2" y="7" rx="2"/></svg><span class="rlabel">Live TV</span></button>
   <button class="railBtn focusable" data-nav="music" title="Music" id="navMusic" style="display:none">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg><span class="rlabel">Music</span></button>
+  <button class="railBtn focusable" data-nav="audiobooks" title="Audiobooks" id="navAudiobooks">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6v7"/><path d="M16 8v3"/><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20"/><path d="M8 8v3"/></svg><span class="rlabel">Audiobooks</span></button>
   <div id="libSec" style="display:none"></div><!-- libraries flow inline with the nav — no section header -->
   <div id="railLibs"></div>
   </div>
   <div id="railFooter">
   <button class="railBtn focusable" id="railAddLib" title="Add library" style="display:none">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg><span class="rlabel">Add library</span></button>
-  <!-- Preferences + admin Settings now live behind the profile avatar (one entry point) — the
-       avatar opens Preferences on the Profile & Pins tab; admins get a Server settings launcher there. -->
-  <button id="railUser" class="railBtn focusable" title="Profile &amp; settings"><span class="av"></span><span class="rlabel">Profile &amp; settings</span></button>
   </div>
 </nav>
 
@@ -3100,6 +3104,252 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
   <div id="musicBrowse"></div>
   <div id="musicList"></div>
 </section>
+
+<!-- ============ Audiobooks ============ -->
+<style id="abStyles">
+/* Full-page section, positioned exactly like #music: offset by the rail, gutter padding, shifts
+   right when the menu expands (see the body.railOpen rule). */
+#audiobooks { position:fixed; inset:0; z-index:8; display:none; flex-direction:column;
+  left:var(--rail); padding:46px var(--gut) 0 var(--gut); overflow-y:auto;
+  transition:transform .26s cubic-bezier(.22,1,.36,1); }
+#audiobooks.open { display:flex; }
+.abHead { display:flex; align-items:center; gap:24px; margin-bottom:18px; flex:none; }
+.abHead input { width:100%; background:var(--field); border:1px solid var(--line); border-radius:14px;
+  padding:13px 16px; color:var(--text); font:500 15px "Albert Sans"; outline:none; }
+.abHead input:focus { border-color:var(--magenta); }
+.abHint { color:var(--muted); font-size:14px; margin:2px 2px 24px; flex:none; }
+.abGrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:22px 18px; }
+/* Card = cover + labels; the HIGHLIGHT lives on the COVER only (like .mCard), never wrapping the
+   text. The generic focus ::before is disabled so the whole button isn't ringed. */
+.abCard { cursor:pointer; background:transparent; border:0; padding:0; text-align:left; color:inherit; }
+.abCard.focusable::before { display:none; }
+.abCover { width:100%; aspect-ratio:1; border-radius:14px; background:var(--soft) center/cover no-repeat;
+  display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:12px;
+  position:relative; transition:box-shadow .16s ease, filter .16s ease; }
+.abCard:hover .abCover, .abCard:focus .abCover, .abCard.focus .abCover {
+  box-shadow:0 0 0 1.5px var(--artFocusLine), 0 0 9px var(--artFocusGlow), 0 14px 36px rgba(0,0,0,.34);
+  filter:saturate(1.04); }
+.abCard .abT { font:800 14px "Albert Sans"; margin:9px 2px 1px; line-height:1.2;
+  display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.abCard .abA { font:600 12.5px "Albert Sans"; color:var(--muted); margin:0 2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.abRowTitle { font:800 18px "Sora"; margin:6px 2px 14px; }
+/* Discovery: horizontal cover rows, each lazy-loaded when it scrolls into view. */
+.abRow { margin:0 0 26px; }
+.abRowScroll { display:flex; gap:16px; overflow-x:auto; scroll-behavior:smooth; padding:2px 2px 8px; }
+.abRowScroll::-webkit-scrollbar { display:none; }
+.abRowScroll .abCard { flex:0 0 150px; }
+/* Pin the cover to a fixed 150px square (cards are a fixed 150px wide). Using aspect-ratio here caused
+   a Chromium flexbox bug: inside a width-constrained grid item, the square cover ballooned vertically
+   and stretched the whole row to ~1300px (huge empty gap above the related-books row). */
+.abRowScroll .abCover { aspect-ratio:auto; height:150px; }
+.abRowSkel { display:flex; gap:16px; }
+.abRowSkel i { flex:0 0 150px; height:150px; border-radius:14px; background:var(--soft); opacity:.5;
+  display:block; animation:abPulse 1.2s ease-in-out infinite; }
+@keyframes abPulse { 0%,100%{opacity:.35} 50%{opacity:.6} }
+/* Mini "now playing" bar (return-to-player affordance). */
+#abMini { position:fixed; left:var(--rail); right:0; bottom:0; z-index:30; display:none; align-items:center;
+  gap:12px; padding:10px 16px; background:var(--panel); border-top:1px solid var(--line); cursor:pointer;
+  backdrop-filter:blur(12px); }
+#abMini.show { display:flex; }
+.abMiniCover { width:44px; height:44px; border-radius:8px; background:var(--soft) center/cover no-repeat; flex:none; }
+.abMiniInfo { flex:1; min-width:0; }
+.abMiniTitle { font:700 14px "Albert Sans"; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.abMiniAuthor { font:600 12px "Albert Sans"; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.abMiniPlay { width:40px; height:40px; border-radius:50%; background:#fff; color:#12141a; flex:none;
+  display:flex; align-items:center; justify-content:center; border:0; cursor:pointer; }
+.abMiniPlay.focusable::before { display:none; }
+.abMiniPlay:hover, .abMiniPlay:focus, .abMiniPlay.focus { outline:none; box-shadow:0 0 0 2px var(--artFocusLine); }
+/* Reserve space so the mini-bar never hides the last row / detail actions. */
+body.abMiniOpen .abGrid { padding-bottom:80px; }
+body.abMiniOpen .abDwrap { padding-bottom:100px; }
+@media (max-width:600px){ #abMini { left:0; } }
+#abContinue { margin-bottom:30px; }
+.abFreeSub { font:600 12px "Albert Sans"; color:var(--muted); }
+.abFreeBadge { position:absolute; top:6px; left:6px; z-index:1; background:var(--success,#7CE6A0); color:#0c2016;
+  font:800 9px "JetBrains Mono"; letter-spacing:.06em; padding:2px 5px; border-radius:5px; }
+.abProg { position:absolute; left:0; right:0; bottom:0; height:5px; background:rgba(0,0,0,.5); }
+.abProg i { display:block; height:100%; background:linear-gradient(90deg,#e0679a,#f0946a); }
+.abCover { position:relative; }
+.abHead .wrap { position:relative; width:min(680px,100%); }
+.abHead .wrap.hasMic input { padding-left:58px; }
+.abHead .wrap.hasClear input { padding-right:58px; }
+.abHead #abMicBtn { position:absolute; left:8px; top:50%; transform:translateY(-50%); width:34px; height:34px;
+  border-radius:50%; border:0; background:rgba(255,255,255,.08); color:#dfe3e9; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+.abHead #abMicBtn.listening { background:var(--btnPrimary,#e0679a); color:#12141a; }
+.abHead #abClearBtn { position:absolute; right:8px; top:50%; transform:translateY(-50%); width:32px; height:32px;
+  border-radius:50%; border:0; background:rgba(255,255,255,.08); color:#dfe3e9; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+.abHead #abClearBtn[hidden] { display:none; }
+.abHead #abMicBtn:focus, .abHead #abClearBtn:focus { outline:none; box-shadow:0 0 0 2px var(--focus,#e0679a); }
+/* Detail keeps the LEFT MENU visible (offset by the rail, like #detail); it shifts on menu expand.
+   The player is an immersive full-screen overlay (like the video player / music now-playing). */
+#abDetail { position:fixed; inset:0; left:var(--rail); z-index:9; background:var(--ink); overflow-y:auto;
+  display:none; transition:transform .26s cubic-bezier(.22,1,.36,1); }
+#abPlayer { position:fixed; inset:0; z-index:40; background:var(--ink); overflow-y:auto; display:none; }
+#abDetail.open, #abPlayer.open { display:block; }
+/* Blurred-cover backdrop behind the player + detail — mirrors the music now-playing page (.mnBg). */
+.abPbg, .abDbg { position:absolute; inset:0; z-index:0; background-size:cover; background-position:center;
+  filter:blur(60px) brightness(.42); transform:scale(1.2); pointer-events:none; }
+.abPbg { opacity:.75; }
+.abDbg { opacity:.5; } /* gentler on the reading-heavy detail page */
+.abPbg::after, .abDbg::after { content:''; position:absolute; inset:0;
+  background:linear-gradient(180deg,rgba(15,16,21,.45),rgba(15,16,21,.82)); }
+body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* per-frame blur is brutal on the Shield GPU */
+.abBack { position:absolute; top:20px; left:20px; z-index:2; background:var(--soft); border:0;
+  border-radius:50%; width:44px; height:44px; color:var(--text); cursor:pointer; display:flex; align-items:center; justify-content:center; }
+.abBack.focusable::before { display:none; }
+.abBack:hover, .abBack:focus, .abBack.focus { outline:none; box-shadow:0 0 0 2px var(--artFocusLine); }
+.abDwrap { position:relative; z-index:1; max-width:1120px; margin:0 auto; padding:92px 34px 76px; display:grid;
+  grid-template-columns:300px minmax(0,1fr); gap:46px; align-items:start; }
+.abDcover { width:300px; aspect-ratio:1; border-radius:18px; background:#20232b center/cover no-repeat;
+  box-shadow:0 34px 84px rgba(0,0,0,.62); }
+.abDinfo { min-width:0; padding-top:4px; }
+.abDtitle { font:800 clamp(30px,3.2vw,44px)/1.07 "Sora"; letter-spacing:-.015em; margin:0 0 8px;
+  text-shadow:0 3px 20px rgba(0,0,0,.5); }
+.abDsub { color:#c7ccd4; font-size:16px; margin:0 0 10px; }
+.abDauthor { color:#f0f2f6; font-size:17px; font-weight:600; margin:0 0 5px; }
+.abDmeta { color:#9aa0a9; font-size:13.5px; margin:2px 0; }
+.abBtnRow { display:flex; gap:12px; flex-wrap:wrap; margin:22px 0 6px; }
+.abBtn { display:inline-flex; align-items:center; gap:9px; border:0; border-radius:999px; padding:13px 30px;
+  font:700 15.5px "Albert Sans"; cursor:pointer; background:linear-gradient(120deg,#e0679a,#f0946a); color:#12141a;
+  box-shadow:0 12px 30px rgba(224,103,154,.34); transition:transform .14s ease, box-shadow .14s ease; }
+.abBtn svg { width:15px; height:15px; }
+.abBtn:hover { transform:translateY(-1px); box-shadow:0 16px 38px rgba(224,103,154,.42); }
+.abBtn.sec { background:rgba(255,255,255,.1); color:#fff; box-shadow:none; }
+.abBtn:focus, .abBtn.focus { outline:none; box-shadow:0 0 0 3px rgba(255,255,255,.85); }
+.abDdesc { color:#c6cbd3; font-size:15px; line-height:1.62; margin:20px 0 4px; max-width:70ch;
+  display:-webkit-box; -webkit-line-clamp:6; -webkit-box-orient:vertical; overflow:hidden; }
+/* Chapters + Bookmarks: full-width sections under the hero. Chapters are COLLAPSED by default (a long
+   book is a lot of scrolling) — the header is a toggle. Kept a SINGLE vertical column on purpose so
+   D-pad geometric nav (abGeoIndex) is unambiguous Up/Down (a multi-column grid left the 2nd column
+   unreachable with Left/Right on the TV remote). Collapsed rows are display:none, so they drop out of
+   the focus set (abDetailEls filters offsetParent). The blurred backdrop fills the space beside the
+   constrained column so it reads as intentional, not sparse. */
+.abChaps { grid-column:1 / -1; margin-top:30px; }
+.abChapsToggle { display:flex; align-items:center; gap:10px; width:100%; max-width:760px; background:transparent;
+  border:0; cursor:pointer; padding:8px 6px; border-radius:10px; text-align:left; }
+.abChapsToggle:hover, .abChapsToggle:focus, .abChapsToggle.focus { outline:none; background:rgba(255,255,255,.07); }
+.abChapsHead { display:inline-flex; align-items:center; gap:10px; font:800 15px "Sora"; letter-spacing:.01em; color:#eceef2; }
+.abChapsN { font:700 12px "JetBrains Mono"; color:var(--muted); background:rgba(255,255,255,.08); padding:2px 9px; border-radius:999px; }
+.abChapsChev { margin-left:auto; width:18px; height:18px; color:var(--muted); transition:transform .2s ease; flex:none; }
+.abChapsToggle.open .abChapsChev { transform:rotate(180deg); }
+.abChapList { display:flex; flex-direction:column; gap:2px; max-width:760px; margin-top:8px; }
+.abChapList.collapsed { display:none; }
+.abChap { display:flex; align-items:center; gap:12px; padding:11px 13px; border-radius:11px; cursor:pointer;
+  color:#d7dbe1; font-size:14.5px; background:transparent; border:0; width:100%; text-align:left; transition:background .12s ease; }
+.abChap::before { content:''; flex:none; width:7px; height:7px; border-radius:50%; background:rgba(255,255,255,.2);
+  transition:background .12s ease, transform .12s ease; }
+.abChap .abChapTitle { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.abChap .abChapT { color:#7f858e; font-variant-numeric:tabular-nums; font-size:13px; flex:none; }
+.abChap:hover, .abChap:focus, .abChap.focus { outline:none; background:rgba(255,255,255,.06); }
+.abChap:hover::before, .abChap:focus::before, .abChap.focus::before { background:var(--focus,#e0679a); transform:scale(1.3); }
+.abChap.focus { box-shadow:inset 0 0 0 2px var(--focus,#e0679a); }
+.abChap.playing { color:var(--focus,#e0679a); font-weight:700; }
+.abChap.playing::before { background:var(--focus,#e0679a); }
+/* Bookmarks: a jump button (reuses .abChap) + a delete button per row — both focusable, so D-pad Right
+   reaches delete. Saved from the player's Bookmark tool; jump re-mounts and resumes at the saved spot. */
+.abBmRow { display:flex; align-items:center; gap:6px; max-width:760px; }
+.abBmRow .abBm { flex:1; min-width:0; }
+.abBm::before { display:none; }
+.abBmDel { flex:none; width:34px; height:34px; border-radius:9px; border:0; background:transparent; color:#8a8f98;
+  font-size:15px; cursor:pointer; }
+.abBmDel:hover, .abBmDel:focus, .abBmDel.focus { outline:none; background:rgba(255,120,120,.16); color:#ff9d9d; }
+/* Narrow screens: stack the detail (cover over info) like the rest of the app's mobile layout. */
+@media (max-width:720px) {
+  .abDwrap { grid-template-columns:minmax(0,1fr); gap:22px; padding:66px 14px 56px; justify-items:center; text-align:center; }
+  .abDcover { width:min(64vw,240px); }
+  .abDinfo { text-align:center; }
+  .abDdesc { text-align:left; }
+  .abChaps { align-self:stretch; justify-self:stretch; text-align:left; }
+  .abChapList, .abChapsToggle, .abBmRow { max-width:none; }
+  .abBtnRow { justify-content:center; }
+}
+/* Player */
+.abPwrap { max-width:640px; margin:0 auto; padding:72px 30px 40px; text-align:center; position:relative; z-index:1; }
+.abPcover { width:min(60vw,340px); aspect-ratio:1; margin:0 auto 26px; border-radius:20px;
+  background:#20232b center/cover no-repeat; box-shadow:0 24px 70px rgba(0,0,0,.55); }
+.abPtitle { font-size:22px; font-weight:800; margin:0 0 4px; }
+.abPauthor { color:#9aa0a9; font-size:15px; margin:0 0 3px; }
+.abPchap { color:var(--focus,#e0679a); font-size:14px; font-weight:600; min-height:1.2em; margin-bottom:20px; }
+.abSeek { display:flex; align-items:center; gap:12px; margin:8px 0 22px; }
+.abSeek .abBar { flex:1; height:6px; border-radius:3px; background:rgba(255,255,255,.16); position:relative; cursor:pointer; }
+.abSeek .abBar:focus { outline:none; box-shadow:0 0 0 3px var(--focus,#e0679a); }
+.abSeek .abFill { position:absolute; left:0; top:0; bottom:0; border-radius:3px; background:linear-gradient(90deg,#e0679a,#f0946a); }
+.abSeek .abTime { font-size:12.5px; color:#9aa0a9; font-variant-numeric:tabular-nums; min-width:44px; }
+.abTransport { display:flex; align-items:center; justify-content:center; gap:22px; margin-bottom:18px; }
+.abTransport button { background:transparent; border:0; color:#fff; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+.abTransport button:focus { outline:none; box-shadow:0 0 0 3px var(--focus,#e0679a); border-radius:50%; }
+.abTransport .abPlay { width:66px; height:66px; border-radius:50%; background:#fff; color:#12141a; }
+.abSkipLbl { font-size:10px; position:absolute; }
+.abTools { display:flex; align-items:center; justify-content:center; gap:10px; flex-wrap:wrap; margin-top:8px; }
+.abTool { background:rgba(255,255,255,.08); border:0; border-radius:999px; padding:9px 15px; color:#dfe3e9;
+  font-size:13px; cursor:pointer; }
+.abTool:focus { outline:none; box-shadow:0 0 0 2px var(--focus,#e0679a); }
+.abTool.on { background:var(--focus,#e0679a); color:#12141a; font-weight:700; }
+</style>
+<section id="audiobooks">
+  <div class="abHead">
+    <div class="wrap">
+      <button id="abMicBtn" class="focusable" title="Voice search" aria-label="Voice search" style="display:none">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+      <input id="abSearch" placeholder="Search audiobooks by title or author…" autocomplete="off" maxlength="120">
+      <button id="abClearBtn" class="focusable" title="Clear search" aria-label="Clear search" hidden>
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    </div>
+  </div>
+  <div class="abHint" id="abHint">Search Audible's catalog — press play to stream from usenet.</div>
+  <div id="abContinue"></div>
+  <div id="abDiscover"></div>
+  <div class="abGrid" id="abGrid"></div>
+  <div id="abFree"></div>
+</section>
+
+<!-- Audiobook detail: cover, narrator/series, description, chapters, Play. -->
+<div id="abDetail">
+  <div class="abDbg" id="abDbg"></div>
+  <button class="abBack focusable" id="abDetailBack" title="Back">
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 6 9 12l6 6"/></svg></button>
+  <div class="abDwrap" id="abDwrap"></div>
+</div>
+
+<!-- Audiobook player: big cover, chapter-aware transport, speed, sleep timer, bookmarks. -->
+<div id="abPlayer">
+  <div class="abPbg" id="abPbg"></div>
+  <button class="abBack focusable" id="abPlayerBack" title="Back">
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 6 9 12l6 6"/></svg></button>
+  <div class="abPwrap">
+    <div class="abPcover" id="abPcover"></div>
+    <div class="abPtitle" id="abPtitle"></div>
+    <div class="abPauthor" id="abPauthor"></div>
+    <div class="abPchap" id="abPchap"></div>
+    <div class="abSeek">
+      <span class="abTime" id="abCur">0:00</span>
+      <div class="abBar focusable" id="abBar" tabindex="0"><div class="abFill" id="abFill"></div></div>
+      <span class="abTime" id="abDur">0:00</span>
+    </div>
+    <div class="abTransport">
+      <button class="focusable" id="abPrevChap" title="Previous chapter"><svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M6 6h2v12H6zM20 6v12L9 12z"/></svg></button>
+      <button class="focusable" id="abBack30" title="Back 30s"><svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5V1L7 6l5 5V7a6 6 0 1 1-6 6"/></svg></button>
+      <button class="abPlay focusable" id="abPlayPause" title="Play/Pause"><svg viewBox="0 0 24 24" width="30" height="30" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>
+      <button class="focusable" id="abFwd30" title="Forward 30s"><svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5V1l5 5-5 5V7a6 6 0 1 0 6 6"/></svg></button>
+      <button class="focusable" id="abNextChap" title="Next chapter"><svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M16 6h2v12h-2zM4 6l11 6L4 18z"/></svg></button>
+    </div>
+    <div class="abTools">
+      <button class="abTool focusable" id="abSpeed" title="Playback speed">1.0×</button>
+      <button class="abTool focusable" id="abSleep" title="Sleep timer">Sleep</button>
+      <button class="abTool focusable" id="abBookmark" title="Add bookmark">Bookmark</button>
+      <button class="abTool focusable" id="abChapList" title="Chapters">Chapters</button>
+    </div>
+  </div>
+  <audio id="abAudio" preload="metadata"></audio>
+</div>
+
+<!-- Mini "now playing" bar — shown on the Audiobooks browse/detail while a book plays and the full
+     player is closed. Tap it to return to the player; the round button toggles play/pause. -->
+<div id="abMini">
+  <div class="abMiniCover" id="abMiniCover"></div>
+  <div class="abMiniInfo"><div class="abMiniTitle" id="abMiniTitle"></div><div class="abMiniAuthor" id="abMiniAuthor"></div></div>
+  <button class="abMiniPlay focusable" id="abMiniPlay" title="Play/Pause"></button>
+</div>
 
 <!-- Full-screen now-playing page: big cover + transport + the up-next queue.
      Back returns to music browsing; the audio never stops. -->
@@ -3620,6 +3870,15 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
       <button class="btn primary" id="libScanSave">Save</button>
     </div>
     <div class="hint" id="libScanStatus"></div>
+  </div>
+
+  <div class="panel"><h2>Audiobooks</h2>
+    <p>Show the Audiobooks section. Turn it off to hide it for everyone, or share it with only specific users.</p>
+    <label class="catRow" style="margin-bottom:10px"><input type="checkbox" id="abEnabled" checked><span class="cgN">Enable Audiobooks</span></label>
+    <p style="margin:10px 0 6px">Share with <span style="color:var(--muted)">(nobody ticked = everyone)</span></p>
+    <div id="audiobooksUsers" style="max-height:130px;overflow-y:auto;margin-bottom:12px"></div>
+    <button class="btn primary focusable" id="abSaveSettings">Save</button>
+    <div class="hint" id="abSettingsStatus"></div>
   </div>
 
   <div class="panel"><h2>Scoring</h2>
@@ -4566,7 +4825,8 @@ $('railUser').addEventListener('click', () => {
 });
 $('prefSwitchProfile').addEventListener('click', showProfilePicker);
 $('prefSignOut').addEventListener('click', signOutAccount);
-$('railLogo').addEventListener('click', () => { if (S.view === 'player') return; closeDetail(); switchView('home'); collapseRailAfterClick(); });
+// (The Triboon logo/home shortcut was removed from the rail top — the profile avatar lives there now;
+// Home is reached via its dedicated nav button.)
 
 /* ============ catalog ============ */
 const img = (p, size = 'w1280') => p ? `https://image.tmdb.org/t/p/${size}${p}` : null;
@@ -4893,7 +5153,7 @@ async function prepareHomeTvNext(cw, timeoutMs = HOME_NEXT_WAIT_MS) {
 // Build the Continue Watching cards from a /api/watch payload (next-episode bumps only when
 // the local map is already known — they must never force a boot-time library fetch).
 function buildCwItems(cw) {
-  const items = cw.filter((w) => !w.watched && (w.position > 30 || w.traktPct > 2) && !String(w.key).startsWith('live:')).map((w) => {
+  const items = cw.filter((w) => !w.watched && (w.position > 30 || w.traktPct > 2) && !String(w.key).startsWith('live:') && !String(w.key).startsWith('audiobook:')).map((w) => {
     const art = freshLocalArtForKey(w.key);
     const poster = art.poster || durableArtUrl(w.meta.poster) || durableArtUrl(w.meta.backdrop);
     const backdrop = art.backdrop || durableArtUrl(w.meta.backdrop) || durableArtUrl(w.meta.poster);
@@ -16804,6 +17064,7 @@ function clearMusicMediaSession() {
 function nativeMusicSession(playing) {
   try {
     if (!(window.TriboonTV && TriboonTV.musicSession)) return;
+    window.__tvAudioOwner = 'music'; // whoever pushed last owns the lock-screen session (music vs audiobook)
     const t = S.musicCur || {};
     TriboonTV.musicSession(JSON.stringify({
       playing: !!playing,
@@ -17214,8 +17475,8 @@ $('mnSeek').addEventListener('pointerup', () => { _mnSeekDrag = false; });
 $('mnSeek').addEventListener('pointercancel', () => { _mnSeekDrag = false; });
 
 /* ============ preferences: cover size + menu hide/reorder (per device) ============ */
-const MENU_DEFAULT = ['search', 'home', 'watchlist', 'discover', 'calendar', 'movies', 'tv', 'livetv', 'music'];
-const MENU_LABELS = { search: 'Search', home: 'Home', watchlist: 'Watchlist', discover: 'Discover', calendar: 'Calendar', movies: 'Movies', tv: 'TV Shows', livetv: 'Live TV', music: 'Music' };
+const MENU_DEFAULT = ['search', 'home', 'watchlist', 'discover', 'calendar', 'movies', 'tv', 'livetv', 'music', 'audiobooks'];
+const MENU_LABELS = { search: 'Search', home: 'Home', watchlist: 'Watchlist', discover: 'Discover', calendar: 'Calendar', movies: 'Movies', tv: 'TV Shows', livetv: 'Live TV', music: 'Music', audiobooks: 'Audiobooks' };
 function menuPrefs() {
   try { const p = JSON.parse(localStorage.getItem('triboon.menu') || 'null'); if (p && Array.isArray(p.order)) return p; } catch {}
   return { order: [...MENU_DEFAULT], hidden: [] };
@@ -17238,6 +17499,9 @@ function applyMenuPrefs() {
     const hideByPref = p.hidden.includes(nav);
     if (nav === 'livetv') btn.style.display = (!hideByPref && liveTvAvailable()) ? '' : 'none';
     else if (nav === 'music') btn.style.display = (!hideByPref && S.serverInfo && S.serverInfo.music) ? '' : 'none';
+    // Audiobooks: admin can disable it globally or per-user (S.user.audiobooksAllowed); the per-device
+    // hide pref still applies on top.
+    else if (nav === 'audiobooks') btn.style.display = (!hideByPref && (!S.user || S.user.audiobooksAllowed !== false)) ? '' : 'none';
     else btn.style.display = hideByPref ? 'none' : '';
   }
   // Libraries: same per-device ordering + hiding, within their own rail section.
@@ -18807,7 +19071,7 @@ function focusSearchResultsSoon(tries = 18) {
 }
 let tvVoiceTarget = 'search';
 function setTvVoiceTarget(target) {
-  tvVoiceTarget = target === 'music' ? 'music' : 'search';
+  tvVoiceTarget = (target === 'music' || target === 'audiobooks') ? target : 'search';
 }
 function submitVoiceSearch(text) {
   $('micBtn').classList.remove('listening');
@@ -18819,6 +19083,7 @@ function submitVoiceSearch(text) {
 }
 window.__tvVoice = (text) => {
   if (tvVoiceTarget === 'music' && S.view === 'music') return submitMusicVoiceSearch(text);
+  if (tvVoiceTarget === 'audiobooks' && S.view === 'audiobooks') return submitAudiobookVoiceSearch(text);
   submitVoiceSearch(text);
 };
 // The shell bridge takes PRIORITY: the Chromium WebView still EXPOSES webkitSpeechRecognition
@@ -19537,6 +19802,13 @@ async function refreshSettings() {
       `<label class="catRow"><input type="checkbox" data-uid="${esc(u.id)}" ${iptvAllowed.has(u.id) ? 'checked' : ''}>
         <span class="cgN">${esc(u.name)}</span></label>`).join('')
       || '<div class="hint">no other users yet — Live TV is visible to everyone (you)</div>';
+    // Audiobooks admin: global on/off + per-user allowlist (same model as Live TV).
+    if ($('abEnabled')) $('abEnabled').checked = s.audiobooksEnabled !== false;
+    const abAllowed = new Set(s.audiobooksUsers || []);
+    if ($('audiobooksUsers')) $('audiobooksUsers').innerHTML = users.filter((u) => u.role !== 'admin').map((u) =>
+      `<label class="catRow"><input type="checkbox" data-uid="${esc(u.id)}" ${abAllowed.has(u.id) ? 'checked' : ''}>
+        <span class="cgN">${esc(u.name)}</span></label>`).join('')
+      || '<div class="hint">no other users yet — Audiobooks is visible to everyone</div>';
     $('userList').innerHTML = users.map((u) =>
       `<div class="kv"><span>${esc(u.name)} ${u.role === 'admin' ? '👑' : ''}</span>
        <span style="display:flex;gap:8px;align-items:center">
@@ -19809,6 +20081,19 @@ $('osSave').addEventListener('click', async () => {
   if ($('osPass')) $('osPass').value = '';
   refreshSettings();
 });
+$('abSaveSettings') && $('abSaveSettings').addEventListener('click', async () => {
+  const body = {
+    audiobooksEnabled: $('abEnabled').checked,
+    audiobooksUsers: [...document.querySelectorAll('#audiobooksUsers input:checked')].map((i) => i.dataset.uid),
+  };
+  try {
+    await api('/api/settings', { method: 'POST', body });
+    // Refresh our own access flag so the rail updates immediately.
+    try { const me = await api('/api/me'); S.user = { ...(S.user || {}), ...me }; applyMenuPrefs(); } catch {}
+    $('abSettingsStatus').textContent = 'Saved ✓';
+    toast('Audiobook settings saved');
+  } catch (e) { $('abSettingsStatus').textContent = 'Save failed: ' + e.message; }
+});
 $('traktUri').addEventListener('click', () => {
   navigator.clipboard && navigator.clipboard.writeText('urn:ietf:wg:oauth:2.0:oob')
     .then(() => toast('Redirect URI copied — paste it into the Trakt app form')).catch(() => {});
@@ -20058,6 +20343,8 @@ $('qcApprove').addEventListener('click', async () => {
 /* ============ views + spatial nav ============ */
 function switchView(v, push = true, opts = {}) {
   if (v === 'settings') return openServerSettings(); // Server settings folded into the account page now
+  // Admin disabled audiobooks for this user → never land on the section (even via a stale route/link).
+  if (v === 'audiobooks' && S.user && S.user.audiobooksAllowed === false) return switchView('home');
   const prevView = S.view;
   hideScreensaver();
   resetScreensaverIdle();
@@ -20105,6 +20392,11 @@ function switchView(v, push = true, opts = {}) {
   $('settings').classList.toggle('open', v === 'settings');
   $('prefs').classList.toggle('open', v === 'prefs');
   $('music').classList.toggle('open', v === 'music');
+  $('audiobooks').classList.toggle('open', v === 'audiobooks');
+  // Leaving the Audiobooks section STOPS playback (audiobooks live only on their own page). Position
+  // is saved first, so the book returns under "Continue Listening" and resumes where it left off.
+  if (prevView === 'audiobooks' && v !== 'audiobooks') { $('abDetail').classList.remove('open'); if (typeof stopAudiobook === 'function') stopAudiobook(); }
+  if (typeof updateAbMini === 'function') updateAbMini();
   $('searchBar').classList.toggle('show', v === 'search');
   $('detail').classList.remove('open'); $('person').classList.remove('open');
   document.querySelectorAll('.railBtn[data-nav]').forEach((b) => b.classList.toggle('active', b.dataset.nav === v));
@@ -20130,9 +20422,10 @@ function switchView(v, push = true, opts = {}) {
   if (v === 'settings' && !opts.preservePage) refreshSettings();
   if (v === 'prefs' && !opts.preservePage) openPrefs();
   if (v === 'music' && !opts.preservePage) loadMusic();
+  if (v === 'audiobooks' && !opts.preservePage) loadAudiobooks();
   // Settings is NOT a synchronous landing: refreshSettings() fills the panels async, and
   // dropping the loader early flashed an empty page — it calls bootReady() itself when done.
-  if (['prefs', 'search', 'music'].includes(v)) bootReady(); // synchronous landings
+  if (['prefs', 'search', 'music', 'audiobooks'].includes(v)) bootReady(); // synchronous landings
 }
 document.querySelectorAll('.railBtn[data-nav]').forEach((b) => b.addEventListener('click', () => {
   switchView(b.dataset.nav);
@@ -20236,7 +20529,7 @@ function applyRoute() {
     deferLibraryRoute(parts[1]);
     return;
   }
-  const KNOWN = ['home', 'movies', 'tv', 'search', 'discover', 'calendar', 'watchlist', 'livetv', 'music', 'settings', 'prefs'];
+  const KNOWN = ['home', 'movies', 'tv', 'search', 'discover', 'calendar', 'watchlist', 'livetv', 'music', 'audiobooks', 'settings', 'prefs'];
   const target = KNOWN.includes(view) ? view : 'home';
   switchView(target, false);
   requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -20299,6 +20592,7 @@ function focusContent(retried) {
     if (!it && !retried) return setTimeout(() => S.view === 'calendar' && focusContent(true), 400);
     return it ? applyFocus(it) : undefined;
   }
+  if (S.view === 'audiobooks') { return abFocusEntry(); }
   // Search lands on the MIC whenever there is no result grid to navigate. Stale text used to
   // strand focus on an empty grid after leaving/re-entering Search.
   if (S.view === 'search' && (!$('searchInput').value.trim() || !gridEls().length)) {
@@ -20322,6 +20616,19 @@ function focusContent(retried) {
 let _mouseAt = 0;
 addEventListener('mousemove', () => { _mouseAt = performance.now(); S.pointer = true; }, { passive: true, capture: true });
 addEventListener('wheel', () => { S.pointer = true; }, { passive: true, capture: true });
+// Audiobook horizontal rows (.abRowScroll) don't have a visible scrollbar, so a plain mouse wheel
+// couldn't move them left/right. Translate a vertical wheel over one of these rows into horizontal
+// scroll; at the row's start/end, fall through so the wheel scrolls the PAGE normally. Scoped to
+// .abRowScroll only, so the rest of the app keeps its wheel-stays-vertical behavior.
+addEventListener('wheel', (e) => {
+  const row = e.target.closest && e.target.closest('.abRowScroll');
+  if (!row || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+  if (row.scrollWidth <= row.clientWidth + 1) return; // nothing to scroll horizontally
+  const atStart = row.scrollLeft <= 0, atEnd = row.scrollLeft + row.clientWidth >= row.scrollWidth - 1;
+  if ((e.deltaY < 0 && atStart) || (e.deltaY > 0 && atEnd)) return; // let the page scroll past the edges
+  row.scrollLeft += e.deltaY;
+  e.preventDefault();
+}, { passive: false });
 function pointerHover() { return S.pointer && performance.now() - _mouseAt < 150; }
 function smoothFocusScrollOk() {
   try {
@@ -21069,6 +21376,9 @@ document.addEventListener('keydown', (e) => {
   // spatial nav; only text entry, dropdowns and textareas hand the keys back to the platform.
   const inInput = /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName)
     && !(ae.tagName === 'INPUT' && /^(checkbox|radio)$/.test(ae.type));
+  // Audiobooks section + its detail/player overlays own the D-pad when active (one delegated entry
+  // point). Returns true only when it consumed the key; typing in the search field falls through.
+  if (typeof abHandleKey === 'function' && abHandleKey(e, k)) return;
   if (inInput && document.body.classList.contains('tv')
       && (document.body.classList.contains('railOpen') || $('rail').classList.contains('expanded'))) {
     blurTextEntry();
@@ -22190,22 +22500,19 @@ async function enterAppShell() {
   // Music playlists load lazily too — warm them on rail intent so the Music tab opens instantly.
   const navMx = $('navMusic');
   if (navMx) { navMx.addEventListener('mouseenter', prefetchMusic); navMx.addEventListener('focus', prefetchMusic, true); }
-  // Sidebar PUSHES content: hovering the rail shifts the content area right (not overlay).
-  // Desktop/web: the rail no longer expands or pushes content on HOVER — that caused accidental
-  // menu shifts and mis-navigations (owner report). It expands only on CLICK: clicking the logo
-  // toggles the labels open/closed; clicking a nav item navigates and collapses. Navigation was
-  // already click-only. TV is unchanged — D-pad enter/leave still drives railOpen/.expanded.
-  const railLogo = $('rail') && $('rail').querySelector('.logo');
-  if (railLogo) {
-    railLogo.style.cursor = 'pointer';
-    railLogo.addEventListener('click', () => {
-      if (document.body.classList.contains('tv')) return;
-      $('rail').classList.toggle('expanded');
-    });
-  }
+  // Desktop/web: rolling over (hovering) the rail expands its labels AND PUSHES the whole page right —
+  // titles, art, covers and every view slide over via the body.railOpen transform, then slide back
+  // LEFT on mouseleave. (The Triboon logo that used to be the click-toggle is gone; the profile avatar
+  // took its place, so hover is the trigger now.) TV is unaffected — it expands+pushes from the
+  // explicit D-pad state (railOpen/.expanded), never hover (the WebView can latch :hover).
+  $('rail').addEventListener('mouseenter', () => {
+    if (document.body.classList.contains('tv')) return; // TV drives expand via D-pad, not hover
+    document.body.classList.add('railOpen'); // PUSH the content right (the Plex-style slide, all pages)
+    $('rail').classList.add('expanded');     // widen the rail so the labels show
+  });
   $('rail').addEventListener('mouseleave', () => {
-    // Desktop: leaving the rail closes the click-expanded labels (standard flyout). No focus churn.
-    if (!document.body.classList.contains('tv')) { $('rail').classList.remove('expanded'); return; }
+    // Desktop: leaving the rail slides the content back LEFT and closes the labels.
+    if (!document.body.classList.contains('tv')) { document.body.classList.remove('railOpen'); $('rail').classList.remove('expanded'); return; }
     if (S.zone === 'rail') return;
     const wasRail = S.zone === 'rail';
     leaveRail();
@@ -22281,6 +22588,808 @@ async function restoreSavedSession() {
   }
   showGate('login');
 })();
+</script>
+<script>
+/* ============ Audiobooks: search, detail, and the native-style player ============
+   Backend: /api/audible/* (Audnexus/Audible metadata) + /api/audiobook/* (usenet search/play/
+   embedded chapters). Cross-device resume rides the existing /api/watch under an audiobook:<asin>
+   key. Pure-stream: each play mounts a fresh source; the audio element streams /api/stream Range. */
+// AB.asin/book/chapters = the DETAIL view being browsed. AB.now = the currently-PLAYING book
+// (snapshotted at play time) so opening another book's detail while one plays never corrupts the
+// player or the mini-bar. AB.now = { book, author, asin, chapters, curChap, active } | null.
+const AB = { region: 'us', asin: null, book: null, chapters: [], now: null,
+  mountId: null, sessionId: null, speed: 1, sleep: 0, sleepTimer: null, saveTimer: null, loadedFrac: 0 };
+const AB_SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+const AB_SLEEPS = [0, 15, 30, 45, 60, -1]; // minutes; -1 = end of chapter
+function abFmt(s) {
+  s = Math.max(0, Math.floor(s || 0));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(sec).padStart(2, '0');
+}
+let abSearchDebounce = null;
+function loadAudiobooks() {
+  const inp = $('abSearch');
+  if (!inp._bound) {
+    inp._bound = true;
+    inp.addEventListener('input', () => {
+      syncAbClear();
+      clearTimeout(abSearchDebounce);
+      const q = inp.value.trim();
+      abSearchDebounce = setTimeout(() => abSearchRun(q), 350);
+    });
+    $('abClearBtn').addEventListener('click', () => clearAbSearch({ focus: 'input' }));
+    setupAudiobookVoiceSearch();
+  }
+  renderAbContinue();
+  if (!inp.value.trim()) showAbDiscovery(true);
+  setTimeout(() => { try { (abMicVisible() ? $('abMicBtn') : inp).focus(); } catch {} }, 60);
+}
+function syncAbClear() {
+  const hasText = !!$('abSearch').value.trim();
+  $('abClearBtn').hidden = !hasText;
+  const wrap = $('abSearch').closest('.wrap'); if (wrap) wrap.classList.toggle('hasClear', hasText);
+}
+function clearAbSearch(opts = {}) {
+  clearTimeout(abSearchDebounce);
+  $('abSearch').value = '';
+  syncAbClear();
+  $('abGrid').innerHTML = '';
+  renderAbContinue();
+  showAbDiscovery(true);
+  if (opts.focus === 'input') { try { $('abSearch').focus(); } catch {} }
+}
+function abMicVisible() { return $('abMicBtn').style.display !== 'none'; }
+
+// Shared cover-card builder (grid + discovery rows).
+function abCoverCard(it) {
+  const cover = it.cover ? `style="background-image:url('${String(it.cover).replace(/'/g, '')}')"` : '';
+  return `<button class="abCard focusable"><div class="abCover" ${cover}>${it.cover ? '' : 'No cover'}</div>
+    <div class="abT">${abEsc(it.title)}</div><div class="abA">${abEsc((it.authors || []).join(', '))}</div></button>`;
+}
+
+// Discovery rows — Audible catalog browse. LAZY: each row's data is fetched only when it scrolls near
+// the viewport (IntersectionObserver), so opening the tab makes at most a couple of requests.
+// LibriVox rows (src:'librivox') are 100% available + free — no per-title check. Audible rows
+// (src:'audible') are availability-FILTERED so browsing them never dead-ends on a title not on usenet.
+// Kept deliberately lean (owner: don't crowd the page). Charts first (the REAL Audible bestseller
+// list), then a couple of Audible genre rows, then a couple of free-classics rows. Audible rows are
+// availability-filtered; LibriVox rows are always playable.
+const AB_ROWS = [
+  { title: 'Audible Charts · Bestsellers', src: 'audible', q: 'sort=charts' },
+  { title: 'New Releases', src: 'audible', q: 'sort=new' },
+  { title: 'Science Fiction & Fantasy', src: 'audible', q: 'sort=bestsellers&category=18580606011' },
+  { title: 'Free Classics · Mystery & Detective', src: 'librivox', q: 'genre=' + encodeURIComponent('Detective Fiction') },
+  { title: 'Free Classics · Adventure', src: 'librivox', q: 'genre=' + encodeURIComponent('Action & Adventure Fiction') },
+];
+let abDiscoverObserver = null;
+function renderAbDiscovery() {
+  const box = $('abDiscover');
+  box.style.display = '';
+  if (box._built) return; // build the lazy shell once; row data persists across opens
+  box._built = true;
+  box.innerHTML = AB_ROWS.map((r, i) => `<div class="abRow" data-abrow="${i}">
+    <div class="abRowTitle">${abEsc(r.title)}</div>
+    <div class="abRowScroll"><div class="abRowSkel">${'<i></i>'.repeat(6)}</div></div></div>`).join('');
+  if (abDiscoverObserver) abDiscoverObserver.disconnect();
+  abDiscoverObserver = new IntersectionObserver((entries) => {
+    for (const e of entries) if (e.isIntersecting) { abDiscoverObserver.unobserve(e.target); loadAbRow(e.target, AB_ROWS[+e.target.dataset.abrow]); }
+  }, { rootMargin: '250px' });
+  box.querySelectorAll('.abRow').forEach((el) => abDiscoverObserver.observe(el));
+}
+async function loadAbRow(el, cfg) {
+  const scroll = el.querySelector('.abRowScroll');
+  try {
+    if (cfg.src === 'librivox') {
+      // Free public-domain classics — every one is available; play directly, no check.
+      const { results } = await api('/api/pubaudio/browse?' + cfg.q);
+      if (!results || !results.length) { el.remove(); return; }
+      scroll.innerHTML = results.map(abFreeCard).join('');
+      scroll.querySelectorAll('.abCard').forEach((c, i) => c.addEventListener('click', () => abPlayPubaudio(results[i])));
+      return;
+    }
+    const { results } = await api('/api/audible/browse?' + cfg.q);
+    if (!results || !results.length) { el.remove(); return; }
+    scroll.innerHTML = results.map(abCoverCard).join('');
+    const cards = scroll.querySelectorAll('.abCard');
+    results.forEach((it, i) => cards[i].addEventListener('click', () => openAbDetail(it.asin, it)));
+    abFilterAvailable(results, [...cards], el); // hide titles not on usenet so clicks always play
+  } catch { el.remove(); }
+}
+// Availability filter for Audible discovery rows: check each title against usenet (cheap, cached) and
+// remove dead-ends. Bounded concurrency so we never hammer the indexers; drop the row if all are gone.
+const _abAvailMemo = new Map();
+async function abIsAvailable(title, author) {
+  const k = (title + '|' + author).toLowerCase();
+  if (_abAvailMemo.has(k)) return _abAvailMemo.get(k);
+  let ok = true; // on any error, keep the card (the click has its own graceful fallback)
+  try { const r = await api(`/api/audiobook/available?title=${encodeURIComponent(title)}&author=${encodeURIComponent(author)}`); ok = !!r.available; } catch {}
+  _abAvailMemo.set(k, ok);
+  return ok;
+}
+async function abFilterAvailable(items, cards, rowEl) {
+  let idx = 0, alive = items.length;
+  const worker = async () => {
+    while (idx < items.length) {
+      const i = idx++;
+      const ok = await abIsAvailable(items[i].title, (items[i].authors || [])[0] || '');
+      if (!ok && cards[i]) { cards[i].remove(); alive--; }
+    }
+  };
+  await Promise.all([worker(), worker(), worker(), worker()]);
+  if (alive <= 0) rowEl.remove();
+}
+// Free (public-domain) cover card with a FREE badge.
+function abFreeCard(it) {
+  const cover = it.cover ? `style="background-image:url('${String(it.cover).replace(/'/g, '')}')"` : '';
+  return `<button class="abCard focusable"><div class="abCover" ${cover}><span class="abFreeBadge">FREE</span>${it.cover ? '' : 'No cover'}</div>
+    <div class="abT">${abEsc(it.title)}</div><div class="abA">${abEsc((it.authors || []).join(', '))}</div></button>`;
+}
+function showAbDiscovery(show) {
+  $('abDiscover').style.display = show ? '' : 'none';
+  $('abContinue').style.display = show ? '' : 'none';
+  if (show) { renderAbDiscovery(); $('abFree').innerHTML = ''; $('abHint').textContent = ''; }
+}
+
+// "Continue Listening" — in-progress audiobooks, on the Audiobooks page only (kept OUT of the
+// home Continue Watching rail so books and video don't mix). Sourced from the /api/watch rows.
+async function renderAbContinue() {
+  const box = $('abContinue');
+  box.innerHTML = '';
+  let rows = [];
+  try { rows = await api('/api/watch' + (S.profile ? '?profile=' + encodeURIComponent(S.profile.id) : '')); } catch { return; }
+  const books = (Array.isArray(rows) ? rows : [])
+    // Show any in-progress book. Multi-file stores overall progress on a 0..1000 scale (a few % is
+    // real progress); single-file stores seconds (30s = a real start), so threshold per type.
+    .filter((w) => String(w.key || '').startsWith('audiobook:') && !w.watched
+      && ((w.meta && w.meta.abTracks) ? w.position > 3 : w.position > 30))
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  if (!books.length) return;
+  const cards = books.map((w) => {
+    const asin = w.key.slice('audiobook:'.length);
+    const m = w.meta || {};
+    const pct = w.duration ? Math.min(100, Math.round((w.position / w.duration) * 100)) : 0;
+    const cover = m.cover ? `style="background-image:url('${String(m.cover).replace(/'/g, '')}')"` : '';
+    return `<button class="abCard focusable" data-asin="${abEsc(asin)}">
+      <div class="abCover" ${cover}>${m.cover ? '' : 'No cover'}<div class="abProg"><i style="width:${pct}%"></i></div></div>
+      <div class="abT">${abEsc(m.title || 'Audiobook')}</div><div class="abA">${abEsc(m.author || '')}</div></button>`;
+  }).join('');
+  box.innerHTML = `<div class="abRowTitle">Continue Listening</div><div class="abGrid abContRow">${cards}</div>`;
+  box.querySelectorAll('.abCard').forEach((el) => el.addEventListener('click', () => openAbDetail(el.dataset.asin)));
+}
+async function abSearchRun(q) {
+  if (!q) { $('abGrid').innerHTML = ''; $('abFree').innerHTML = ''; showAbDiscovery(true); return; }
+  showAbDiscovery(false); // hide discovery/continue while showing search results
+  $('abFree').innerHTML = '';
+  $('abHint').textContent = 'Searching…';
+  try {
+    const { results } = await api('/api/audible/search?q=' + encodeURIComponent(q));
+    $('abHint').textContent = results.length ? `${results.length} result${results.length === 1 ? '' : 's'}` : 'No audiobooks found.';
+    renderAbGrid(results);
+  } catch (e) { $('abHint').textContent = 'Search failed: ' + e.message; }
+  // Public-domain (free) results, fetched in parallel — best-effort, never blocks the main list.
+  try { const pr = await api('/api/pubaudio/search?q=' + encodeURIComponent(q)); renderAbFree(pr.results || []); } catch {}
+}
+function renderAbGrid(items) {
+  const grid = $('abGrid');
+  grid.innerHTML = items.map(abCoverCard).join('');
+  const cards = grid.querySelectorAll('.abCard');
+  items.forEach((it, i) => {
+    cards[i].addEventListener('click', () => openAbDetail(it.asin, it));
+  });
+}
+function abEsc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+async function openAbDetail(asin, fallback) {
+  AB.asin = asin;
+  $('abDetail').classList.add('open');
+  updateAbMini(); // mini "now playing" bar rides along on the detail page too
+  $('abDwrap').innerHTML = '<div style="grid-column:1/-1;color:#8a8f98">Loading…</div>';
+  let book = fallback || {};
+  try { book = await api('/api/audible/book/' + asin); } catch {}
+  AB.book = book;
+  let chapters = [];
+  try { const c = await api('/api/audible/chapters/' + asin); chapters = (c && c.chapters) || []; } catch {}
+  AB.chapters = chapters;
+  const cover = book.cover ? `style="background-image:url('${String(book.cover).replace(/'/g, '')}')"` : '';
+  const meta = [];
+  if (book.narrators && book.narrators.length) meta.push('Narrated by ' + book.narrators.join(', '));
+  if (book.series && book.series.name) meta.push(book.series.name + (book.series.position ? ' #' + book.series.position : ''));
+  if (book.runtimeMin) meta.push(Math.floor(book.runtimeMin / 60) + 'h ' + (book.runtimeMin % 60) + 'm');
+  if (book.rating) meta.push('★ ' + book.rating);
+  const coverUrl = book.cover || (fallback && fallback.cover) || '';
+  $('abDbg').style.backgroundImage = coverUrl ? `url('${String(coverUrl).replace(/'/g, '')}')` : '';
+  // Chapters start COLLAPSED — a long book is a lot of scrolling; the header is a toggle button.
+  const chev = '<svg class="abChapsChev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
+  const chapHtml = chapters.length ? `<div class="abChaps">
+      <button class="abChapsToggle focusable" id="abChapsToggle" aria-expanded="false"><span class="abChapsHead">Chapters <span class="abChapsN">${chapters.length}</span></span>${chev}</button>
+      <div class="abChapList collapsed" id="abChapListEl">${chapters.map((c, i) =>
+        `<button class="abChap focusable" data-ci="${i}"><span class="abChapTitle">${abEsc(c.title)}</span><span class="abChapT">${abFmt(c.startMs / 1000)}</span></button>`).join('')}</div>
+    </div>` : '';
+  // Bookmarks saved from the player (localStorage per ASIN). Jump resumes at the saved spot; ✕ deletes.
+  const bms = JSON.parse(localStorage.getItem('ab_bm_' + asin) || '[]');
+  const bmHtml = bms.length ? `<div class="abChaps abBms">
+      <div class="abChapsHead" style="margin-bottom:10px">Bookmarks <span class="abChapsN">${bms.length}</span></div>
+      <div class="abChapList">${bms.map((b, i) =>
+        `<div class="abBmRow"><button class="abChap abBm focusable" data-bi="${i}"><span class="abChapTitle">🔖 ${abEsc(b.label || 'Bookmark')}</span><span class="abChapT">${abFmt(b.pos)}</span></button><button class="abBmDel focusable" data-bi="${i}" title="Delete bookmark">✕</button></div>`).join('')}</div>
+    </div>` : '';
+  $('abDwrap').innerHTML = `
+    <div class="abDcover" ${cover}></div>
+    <div class="abDinfo">
+      <h1 class="abDtitle">${abEsc(book.title || (fallback && fallback.title) || 'Audiobook')}</h1>
+      ${book.subtitle ? `<div class="abDsub">${abEsc(book.subtitle)}</div>` : ''}
+      <div class="abDauthor">${abEsc((book.authors || (fallback && fallback.authors) || []).join(', '))}</div>
+      <div class="abDmeta">${meta.map(abEsc).join(' &middot; ')}</div>
+      <div class="abBtnRow">
+        <button class="abBtn focusable" id="abPlayBtn"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg> Play</button>
+      </div>
+      ${book.description ? `<div class="abDdesc">${abEsc(book.description)}</div>` : ''}
+    </div>
+    ${chapHtml}${bmHtml}`;
+  $('abPlayBtn').addEventListener('click', () => abStartPlay(book, fallback));
+  const chapTog = $('abChapsToggle');
+  if (chapTog) chapTog.addEventListener('click', () => {
+    const list = $('abChapListEl'); if (!list) return;
+    const nowCollapsed = list.classList.toggle('collapsed');
+    chapTog.classList.toggle('open', !nowCollapsed);
+    chapTog.setAttribute('aria-expanded', String(!nowCollapsed));
+  });
+  $('abDwrap').querySelectorAll('.abChap:not(.abBm)').forEach((el) =>
+    el.addEventListener('click', () => abStartPlay(book, fallback, chapters[+el.dataset.ci].startMs / 1000)));
+  $('abDwrap').querySelectorAll('.abBm').forEach((el) => el.addEventListener('click', () => {
+    const b = bms[+el.dataset.bi]; if (!b) return;
+    abStartPlay(book, fallback, b.track != null ? { track: b.track, offset: b.pos } : b.pos);
+  }));
+  $('abDwrap').querySelectorAll('.abBmDel').forEach((el) => el.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const arr = JSON.parse(localStorage.getItem('ab_bm_' + asin) || '[]');
+    arr.splice(+el.dataset.bi, 1); localStorage.setItem('ab_bm_' + asin, JSON.stringify(arr));
+    openAbDetail(asin, fallback); // re-render the detail so the bookmarks section updates
+  }));
+  abLoadRelated(book, fallback); // lazily add "Rest of the series" + "More by this author" rows
+  if (typeof abIsTv === 'function' && abIsTv()) setTimeout(() => {
+    if (!$('abDetail').classList.contains('open')) return;
+    const els = abDetailEls(); if (els.length) applyFocus(els.find((x) => x.id === 'abPlayBtn') || els[0]);
+  }, 40);
+}
+// Lazy related rows on the detail page: rest of the series (by series name) + more by the author.
+async function abLoadRelated(book, fallback) {
+  const reqAsin = book.asin || (fallback && fallback.asin);
+  const author = (book.authors || (fallback && fallback.authors) || [])[0];
+  const series = book.series && book.series.name;
+  const rows = [];
+  if (series) rows.push({ title: 'Series · ' + series, q: series });
+  if (author) rows.push({ title: 'More by ' + author, q: author });
+  for (const row of rows) {
+    let results = [];
+    try { const r = await api('/api/audible/search?q=' + encodeURIComponent(row.q)); results = (r.results || []).filter((x) => x.asin !== reqAsin); } catch { continue; }
+    if (!results.length) continue;
+    if (AB.asin !== reqAsin) return; // user navigated away — don't inject stale rows
+    const el = document.createElement('div');
+    el.style.gridColumn = '1 / -1';
+    el.style.minWidth = '0'; // let the horizontal card row scroll instead of blowing out the grid width
+    el.innerHTML = `<div class="abRowTitle" style="margin-top:24px">${abEsc(row.title)}</div>
+      <div class="abRowScroll">${results.slice(0, 14).map(abCoverCard).join('')}</div>`;
+    $('abDwrap').appendChild(el);
+    const cards = el.querySelectorAll('.abCard');
+    results.slice(0, 14).forEach((it, i) => cards[i] && cards[i].addEventListener('click', () => openAbDetail(it.asin, it)));
+  }
+}
+
+async function abStartPlay(book, fallback, seekTo) {
+  const title = book.title || (fallback && fallback.title) || '';
+  const author = (book.authors || (fallback && fallback.authors) || [])[0] || '';
+  toast('Finding a source…');
+  let payload;
+  try {
+    payload = await api('/api/audiobook/play', { method: 'POST', body: { title, author } });
+  } catch (e) {
+    // Not on usenet → try the free public-domain sources (LibriVox / Internet Archive) before failing.
+    // Great for classics surfaced in discovery; a no-op for modern/niche titles that aren't PD.
+    try {
+      const pr = await api('/api/pubaudio/search?q=' + encodeURIComponent(title));
+      const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+      const want = norm(title);
+      const match = (pr.results || []).find((x) => { const t = norm(x.title); return t === want || t.includes(want) || want.includes(t); });
+      if (match) { toast('Not on usenet — playing the free public-domain edition.'); return abPlayPubaudio(match); }
+    } catch {}
+    toast((e.detail && e.detail.summary) || e.message || 'Couldn’t start playback.');
+    return;
+  }
+  AB.mountId = payload.id; AB.sessionId = payload.sessionId;
+  const asin = AB.asin; // the detail ASIN we're playing — snapshotted into AB.now below
+  const audio = $('abAudio');
+  audio.playbackRate = AB.speed;
+  // Multi-file release: N loose audio files → one chaptered playlist (chapters = files). Single M4B →
+  // one stream with embedded/Audnexus chapters. audioFiles/audioBase come from the play payload.
+  const multi = Array.isArray(payload.audioFiles) && payload.audioFiles.length > 1;
+  const tracks = multi ? payload.audioFiles.map((f) => ({
+    index: f.index, name: f.name, url: `${payload.audioBase}/${f.index}?t=${encodeURIComponent(payload.streamToken)}`,
+  })) : [];
+  // Chapters: for single-file prefer Audnexus (detail) then embedded; for multi-file the tracks ARE
+  // the chapters (their names, cleaned).
+  let chapters = AB.chapters.slice();
+  if (!multi && !chapters.length) {
+    try { const c = await api('/api/audiobook/chapters/' + AB.mountId); chapters = (c && c.chapters) || []; } catch {}
+  }
+  AB.now = { book, author, asin, chapters, curChap: -1, active: false, tracks, trackIdx: 0, multi };
+  $('abPcover').style.backgroundImage = book.cover ? `url('${String(book.cover).replace(/'/g, '')}')` : '';
+  $('abPbg').style.backgroundImage = book.cover ? `url('${String(book.cover).replace(/'/g, '')}')` : '';
+  $('abPtitle').textContent = title;
+  $('abPauthor').textContent = author;
+  $('abDetail').classList.remove('open');
+  openAbPlayer();
+  if (multi) {
+    // Resume a multi-file book to the saved (track, offset); an explicit chapter tap overrides.
+    let idx = 0, off = 0;
+    if (seekTo && seekTo.track != null) { idx = seekTo.track; off = seekTo.offset || 0; }
+    else if (!seekTo) { try { const r = await abResumePos(asin); if (r && r.track != null) { idx = r.track; off = r.offset || 0; } } catch {} }
+    abLoadTrack(idx, off);
+  } else {
+    audio.src = payload.streamUrl;
+    let start = (seekTo && typeof seekTo === 'number') ? seekTo : 0;
+    if (!seekTo) { try { const r = await abResumePos(asin); start = (r && typeof r === 'number') ? r : 0; } catch {} }
+    audio.play().then(() => { if (start > 1) audio.currentTime = start; }).catch(() => {});
+  }
+  abStartSaveLoop();
+}
+// Load a specific track (multi-file playlist) and play it, optionally seeking within it.
+function abLoadTrack(idx, seekSec) {
+  const n = AB.now; if (!n || !n.multi) return;
+  const audio = $('abAudio');
+  n.trackIdx = Math.max(0, Math.min(n.tracks.length - 1, idx));
+  audio.src = n.tracks[n.trackIdx].url;
+  audio.playbackRate = AB.speed;
+  $('abPchap').textContent = abTrackLabel(n.trackIdx);
+  audio.play().then(() => { if (seekSec > 1) audio.currentTime = seekSec; }).catch(() => {});
+  updateAbMini();
+}
+// A clean chapter label for a multi-file track — Audnexus title if the counts line up, else the
+// file name stripped of extension/leading numbering, else "Chapter N".
+// Play a public-domain book (LibriVox / Internet Archive) — fetch its chapter MP3s and drive the
+// SAME multi-file player with the direct (external) URLs. No usenet mount, no session.
+async function abPlayPubaudio(item) {
+  toast('Loading…');
+  let tracks;
+  try {
+    const r = await api(`/api/pubaudio/tracks?source=${encodeURIComponent(item.source)}&id=${encodeURIComponent(item.id)}`);
+    tracks = (r && r.tracks) || [];
+  } catch (e) { toast('Couldn’t load: ' + e.message); return; }
+  if (!tracks.length) { toast('No audio found for this title.'); return; }
+  const asin = 'pub:' + item.source + ':' + item.id; // stable Continue-Listening key (no ASIN)
+  AB.mountId = null; AB.sessionId = null;
+  AB.now = { book: { title: item.title, cover: item.cover, authors: item.authors || [] }, author: (item.authors || [])[0] || '',
+    asin, chapters: [], curChap: -1, active: false,
+    tracks: tracks.map((t, i) => ({ index: i, name: t.name, url: t.url })), trackIdx: 0, multi: true };
+  $('abPcover').style.backgroundImage = item.cover ? `url('${String(item.cover).replace(/'/g, '')}')` : '';
+  $('abPbg').style.backgroundImage = item.cover ? `url('${String(item.cover).replace(/'/g, '')}')` : '';
+  $('abPtitle').textContent = item.title;
+  $('abPauthor').textContent = (item.authors || []).join(', ');
+  $('abDetail').classList.remove('open');
+  openAbPlayer();
+  let idx = 0, off = 0;
+  try { const r = await abResumePos(asin); if (r && r.track != null) { idx = r.track; off = r.offset || 0; } } catch {}
+  abLoadTrack(idx, off);
+  abStartSaveLoop();
+}
+// Render public-domain (free) search results as their own labelled section, each with a FREE badge.
+function renderAbFree(items) {
+  const box = $('abFree');
+  if (!items || !items.length) { box.innerHTML = ''; return; }
+  box.innerHTML = `<div class="abRowTitle" style="margin-top:8px">Free · Public Domain <span class="abFreeSub">LibriVox &amp; Internet Archive</span></div>
+    <div class="abGrid">${items.map(abFreeCard).join('')}</div>`;
+  const cards = box.querySelectorAll('.abCard');
+  items.forEach((it, i) => cards[i].addEventListener('click', () => abPlayPubaudio(it)));
+}
+function abTrackLabel(idx) {
+  const n = AB.now; if (!n) return '';
+  // Audnexus titles when they line up 1:1 with the tracks; else a clean "Part N of M" (file names
+  // like "Author - Title - 01 of 60.mp3" are too noisy to show verbatim).
+  if (n.chapters && n.chapters.length === n.tracks.length && n.chapters[idx]) return n.chapters[idx].title;
+  return 'Part ' + (idx + 1) + ' of ' + n.tracks.length;
+}
+// Open/close the full player (and keep the mini "now playing" bar in sync).
+function openAbPlayer() { $('abPlayer').classList.add('open'); updateAbMini(); if (typeof abIsTv === 'function' && abIsTv()) setTimeout(() => abPlayerFocus('transport', 2), 40); }
+function closeAbPlayer() { $('abPlayer').classList.remove('open'); updateAbMini(); }
+// Stop playback entirely — used when leaving the Audiobooks section. Saves position first so the
+// book reappears under "Continue Listening" and resumes where it left off.
+function stopAudiobook() {
+  if (!AB.now && !$('abAudio').src) return;
+  abSaveWatch();
+  const a = $('abAudio');
+  try { a.pause(); a.removeAttribute('src'); a.load(); } catch {}
+  clearInterval(AB.saveTimer);
+  clearTimeout(AB.sleepTimer); AB.sleep = 0;
+  AB.now = null; AB.sessionId = null; AB.mountId = null;
+  $('abPlayer').classList.remove('open');
+  window.__tvAudioOwner = null;
+  try { if (window.TriboonTV && TriboonTV.musicStop) TriboonTV.musicStop(); } catch {}
+  updateAbMini();
+}
+// The mini "now playing" bar: lets the user return to the player after browsing detail/search.
+// Shown whenever a book is playing, we're in the Audiobooks section, and the full player is closed.
+function updateAbMini() {
+  const mini = $('abMini');
+  const n = AB.now;
+  const show = !!(n && n.book && S.view === 'audiobooks' && !$('abPlayer').classList.contains('open'));
+  document.body.classList.toggle('abMiniOpen', show);
+  mini.classList.toggle('show', show);
+  if (!show) return;
+  $('abMiniCover').style.backgroundImage = n.book.cover ? `url('${String(n.book.cover).replace(/'/g, '')}')` : '';
+  $('abMiniTitle').textContent = n.book.title || '';
+  $('abMiniAuthor').textContent = n.author || '';
+  const playing = !$('abAudio').paused;
+  $('abMiniPlay').innerHTML = playing
+    ? '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>'
+    : '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
+}
+// Returns { track, offset } for a multi-file resume, or a seconds number for single-file, or 0.
+async function abResumePos(asin) {
+  const rows = await api('/api/watch' + (S.profile ? '?profile=' + encodeURIComponent(S.profile.id) : ''));
+  const row = (Array.isArray(rows) ? rows : []).find((r) => r.key === 'audiobook:' + asin);
+  if (!row) return 0;
+  const m = row.meta || {};
+  if (m.abTrack != null) return { track: +m.abTrack || 0, offset: +m.abOffset || 0 };
+  return row.position > 5 && (!row.duration || row.position < row.duration - 30) ? row.position : 0;
+}
+function abSaveWatch() {
+  const audio = $('abAudio');
+  const n = AB.now;
+  if (!n || !n.asin) return;
+  const b = n.book || {};
+  const base = { title: b.title, type: 'audiobook', cover: b.cover, author: n.author, asin: n.asin };
+  let body;
+  if (n.multi) {
+    const td = audio.duration || 0;
+    const frac = td ? (audio.currentTime / td) : 0;
+    const overall = (n.trackIdx + Math.min(1, frac)) / n.tracks.length; // 0..1 across the whole book
+    body = { key: 'audiobook:' + n.asin, position: Math.round(overall * 1000), duration: 1000,
+      profile: S.profile ? S.profile.id : undefined,
+      meta: { ...base, abTrack: n.trackIdx, abOffset: Math.floor(audio.currentTime || 0), abTracks: n.tracks.length } };
+  } else {
+    if (!audio.duration) return;
+    body = { key: 'audiobook:' + n.asin, position: Math.floor(audio.currentTime), duration: Math.floor(audio.duration),
+      profile: S.profile ? S.profile.id : undefined, meta: base };
+  }
+  api('/api/watch', { method: 'POST', body }).catch(() => {});
+}
+function abStartSaveLoop() { clearInterval(AB.saveTimer); AB.saveTimer = setInterval(abSaveWatch, 10000); }
+
+/* ---- player wiring ---- */
+(function abWirePlayer() {
+  const audio = $('abAudio');
+  const setPlayIcon = (playing) => { $('abPlayPause').innerHTML = playing
+    ? '<svg viewBox="0 0 24 24" width="30" height="30" fill="currentColor"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>'
+    : '<svg viewBox="0 0 24 24" width="30" height="30" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>'; };
+  audio.addEventListener('play', () => { setPlayIcon(true); if (AB.now) AB.now.active = true; abNativeSession(true); updateAbMini(); });
+  audio.addEventListener('pause', () => { setPlayIcon(false); abSaveWatch(); abNativeSession(false); updateAbMini(); });
+  let abLastSessionPush = 0;
+  audio.addEventListener('timeupdate', () => {
+    const d = audio.duration || 0, t = audio.currentTime || 0;
+    $('abFill').style.width = (d ? (t / d) * 100 : 0) + '%';
+    $('abCur').textContent = abFmt(t); $('abDur').textContent = abFmt(d);
+    // Keep the lock-screen/Bluetooth media session position fresh (throttled to ~5s).
+    if (!audio.paused && Date.now() - abLastSessionPush > 5000) { abLastSessionPush = Date.now(); abNativeSession(true); }
+    const n = AB.now; if (!n) return;
+    // Multi-file: the seek bar is the current track; the chapter label is set on track load. Only the
+    // end-of-chapter sleep timer needs handling here (= end of the current track).
+    if (n.multi) {
+      if (AB.sleep === -1 && d && t >= d - 0.4) { audio.pause(); abSetSleep(0); }
+      return;
+    }
+    // Single-file (M4B): map the file timeline onto the embedded/Audnexus chapters.
+    const chaps = n.chapters;
+    if (chaps.length) {
+      let ci = -1;
+      for (let i = 0; i < chaps.length; i++) if (t * 1000 >= chaps[i].startMs) ci = i; else break;
+      if (ci !== n.curChap) { n.curChap = ci; $('abPchap').textContent = ci >= 0 ? chaps[ci].title : ''; if (!audio.paused) abNativeSession(true); }
+      // Sleep-at-end-of-chapter.
+      if (AB.sleep === -1 && ci >= 0 && ci + 1 < chaps.length && t * 1000 >= chaps[ci + 1].startMs - 250) {
+        audio.pause(); abSetSleep(0);
+      }
+    }
+  });
+  audio.addEventListener('ended', () => {
+    abSaveWatch();
+    const n = AB.now;
+    // Multi-file: auto-advance to the next track (chapter). Otherwise the book is finished.
+    if (n && n.multi && n.trackIdx + 1 < n.tracks.length) { abLoadTrack(n.trackIdx + 1, 0); return; }
+    if (n) n.active = false;
+    try { if (window.TriboonTV && TriboonTV.musicStop) TriboonTV.musicStop(); } catch {}
+    updateAbMini();
+  });
+  // Auto-advance to a fresh source if the mount dies mid-book (source rot on a long listen). Only for
+  // single-file usenet mounts — multi-file playlists (usenet tracks or public-domain URLs) don't
+  // remount a whole session on one track hiccup.
+  audio.addEventListener('error', async () => {
+    if (!AB.sessionId || (AB.now && AB.now.multi)) return;
+    const at = audio.currentTime || 0;
+    try {
+      const frac = audio.duration ? at / audio.duration : 0;
+      const next = await api('/api/advance/' + AB.sessionId, { method: 'POST', body: { resumeFrac: frac } });
+      AB.mountId = next.id; audio.src = next.streamUrl;
+      audio.play().then(() => { if (at > 1) audio.currentTime = at; }).catch(() => {});
+    } catch { toast('Playback source was lost.'); }
+  });
+  $('abPlayPause').addEventListener('click', () => { audio.paused ? audio.play().catch(() => {}) : audio.pause(); });
+  $('abBack30').addEventListener('click', () => { audio.currentTime = Math.max(0, audio.currentTime - 30); });
+  $('abFwd30').addEventListener('click', () => { audio.currentTime = Math.min(audio.duration || 1e9, audio.currentTime + 30); });
+  $('abPrevChap').addEventListener('click', () => abJumpChapter(-1));
+  $('abNextChap').addEventListener('click', () => abJumpChapter(1));
+  const seekTo = (clientX) => { const r = $('abBar').getBoundingClientRect(); const f = Math.min(1, Math.max(0, (clientX - r.left) / r.width)); if (audio.duration) audio.currentTime = f * audio.duration; };
+  $('abBar').addEventListener('click', (e) => seekTo(e.clientX));
+  $('abBar').addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight') { audio.currentTime = Math.min(audio.duration || 1e9, audio.currentTime + 10); e.preventDefault(); }
+    else if (e.key === 'ArrowLeft') { audio.currentTime = Math.max(0, audio.currentTime - 10); e.preventDefault(); }
+  });
+  $('abSpeed').addEventListener('click', () => {
+    const i = (AB_SPEEDS.indexOf(AB.speed) + 1) % AB_SPEEDS.length;
+    AB.speed = AB_SPEEDS[i]; audio.playbackRate = AB.speed; $('abSpeed').textContent = AB.speed.toFixed(2).replace(/0$/, '') + '×';
+  });
+  $('abSleep').addEventListener('click', () => {
+    const i = (AB_SLEEPS.indexOf(AB.sleep) + 1) % AB_SLEEPS.length;
+    abSetSleep(AB_SLEEPS[i]);
+  });
+  $('abBookmark').addEventListener('click', () => {
+    const n = AB.now; if (!n || !n.asin) return;
+    const k = 'ab_bm_' + n.asin;
+    const list = JSON.parse(localStorage.getItem(k) || '[]');
+    // Label the bookmark by its chapter/part so it's meaningful in the detail-page Bookmarks list.
+    // Multi-file: store the track index + in-track offset (audio.currentTime resets per track); single
+    // M4B: store the absolute file position and the current chapter title.
+    const label = n.multi ? (typeof abTrackLabel === 'function' ? abTrackLabel(n.trackIdx) : ('Part ' + (n.trackIdx + 1)))
+      : (n.curChap >= 0 && n.chapters[n.curChap] ? n.chapters[n.curChap].title : '');
+    list.push({ pos: Math.floor(audio.currentTime), track: n.multi ? n.trackIdx : null, label, at: Date.now() });
+    localStorage.setItem(k, JSON.stringify(list));
+    toast('Bookmarked at ' + abFmt(audio.currentTime));
+    const btn = $('abBookmark'); btn.classList.add('on'); setTimeout(() => btn && btn.classList.remove('on'), 700);
+  });
+  // Chapters button opens the PLAYING book's detail (so its chapter list is what you tapped from).
+  $('abChapList').addEventListener('click', () => { closeAbPlayer(); if (AB.now && AB.now.asin) openAbDetail(AB.now.asin, AB.now.book); });
+  // Back from the player keeps the audio going (returns to browse); the mini-bar brings you back.
+  $('abPlayerBack').addEventListener('click', () => { closeAbPlayer(); });
+  $('abDetailBack').addEventListener('click', () => { $('abDetail').classList.remove('open'); updateAbMini(); });
+  // Mini "now playing" bar → tap to reopen the player; its button toggles play/pause.
+  $('abMini').addEventListener('click', () => openAbPlayer());
+  $('abMiniPlay').addEventListener('click', (e) => { e.stopPropagation(); audio.paused ? audio.play().catch(() => {}) : audio.pause(); });
+})();
+function abJumpChapter(dir) {
+  const audio = $('abAudio');
+  const n = AB.now;
+  // Multi-file: prev/next = previous/next TRACK. "Prev" past the first 3s restarts the current track.
+  if (n && n.multi) {
+    let target = n.trackIdx + dir;
+    if (dir < 0 && audio.currentTime > 3) target = n.trackIdx;
+    target = Math.max(0, Math.min(n.tracks.length - 1, target));
+    if (target !== n.trackIdx || dir < 0) abLoadTrack(target, 0);
+    return;
+  }
+  const chaps = n ? n.chapters : [];
+  if (!chaps.length) { audio.currentTime = Math.max(0, audio.currentTime + dir * 30); return; }
+  const t = audio.currentTime * 1000;
+  let ci = 0; for (let i = 0; i < chaps.length; i++) if (t >= chaps[i].startMs) ci = i; else break;
+  // "Previous" within the first 3s of a chapter goes to the prior one; otherwise restarts current.
+  let target = ci + dir;
+  if (dir < 0 && t - chaps[ci].startMs > 3000) target = ci;
+  target = Math.max(0, Math.min(chaps.length - 1, target));
+  audio.currentTime = chaps[target].startMs / 1000 + 0.05;
+}
+function abSetSleep(mins) {
+  AB.sleep = mins;
+  clearTimeout(AB.sleepTimer);
+  const btn = $('abSleep');
+  btn.classList.toggle('on', mins !== 0);
+  btn.textContent = mins === 0 ? 'Sleep' : mins === -1 ? 'End of chapter' : mins + ' min';
+  if (mins > 0) AB.sleepTimer = setTimeout(() => { $('abAudio').pause(); abSetSleep(0); }, mins * 60000);
+}
+
+/* ---- Android native integration: ride the same MusicService bridge Music uses, so audiobooks get
+   background playback + lock-screen + Bluetooth controls with no separate native player. The book's
+   <audio> IS the player (like Music); the shell keeps the WebView alive while a session says playing.
+   Transport/seek are shared with Music and routed by __tvAudioOwner so only the active source reacts. */
+function abNativeSession(playing) {
+  try {
+    if (!(window.TriboonTV && TriboonTV.musicSession)) return;
+    const n = AB.now; if (!n) return;
+    window.__tvAudioOwner = 'audiobook';
+    const b = n.book || {}, a = $('abAudio');
+    const chap = n.multi ? abTrackLabel(n.trackIdx) : ((n.curChap >= 0 && n.chapters[n.curChap]) ? n.chapters[n.curChap].title : '');
+    TriboonTV.musicSession(JSON.stringify({
+      playing: !!playing, title: b.title || 'Audiobook', artist: n.author || '',
+      album: chap, artwork: b.cover || '',
+      duration: Math.round(a.duration || 0), position: Math.round(a.currentTime || 0),
+    }));
+  } catch {}
+}
+function abNativeTransport(action) {
+  const a = $('abAudio');
+  if (action === 'play') a.play().catch(() => {});
+  else if (action === 'pause') a.pause();
+  else if (action === 'next') abJumpChapter(1);   // lock-screen "next" = next chapter (Audible-style)
+  else if (action === 'prev') abJumpChapter(-1);
+  else if (action === 'stop') a.pause();
+}
+(function abRouteNativeTransport() {
+  const prevT = window.__tvMusicTransport, prevS = window.__tvMusicSeek;
+  window.__tvMusicTransport = (action) => { if (window.__tvAudioOwner === 'audiobook') return abNativeTransport(action); if (prevT) return prevT(action); };
+  window.__tvMusicSeek = (sec) => { if (window.__tvAudioOwner === 'audiobook') { try { $('abAudio').currentTime = Math.max(0, +sec || 0); } catch {} return; } if (prevS) return prevS(sec); };
+})();
+
+/* ---- audiobook voice search (mirrors Music: Web Speech API on browsers, the TriboonTV native
+   recognizer on the Android TV shell) ---- */
+function submitAudiobookVoiceSearch(text) {
+  $('abMicBtn').classList.remove('listening');
+  const q = String(text || '').trim();
+  if (!q) return;
+  $('abSearch').value = q;
+  syncAbClear();
+  abSearchRun(q);
+}
+function setupAudiobookVoiceSearch() {
+  const btn = $('abMicBtn');
+  if (!btn || btn._bound) return;
+  btn._bound = true;
+  const show = () => { btn.style.display = ''; const w = btn.closest('.wrap'); if (w) w.classList.add('hasMic'); };
+  if (window.TriboonTV && TriboonTV.startVoice) {
+    show();
+    btn.addEventListener('click', () => {
+      setTvVoiceTarget('audiobooks');
+      btn.classList.add('listening');
+      try { TriboonTV.startVoice(); } catch { btn.classList.remove('listening'); }
+    });
+    return;
+  }
+  const SRc = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SRc) return;
+  show();
+  let rec = null;
+  btn.addEventListener('click', () => {
+    if (rec) { rec.stop(); return; }
+    setTvVoiceTarget('audiobooks');
+    rec = new SRc();
+    rec.lang = navigator.language || 'en-US';
+    rec.interimResults = true;
+    btn.classList.add('listening');
+    rec.onresult = (e) => {
+      const txt = [...e.results].map((r) => r[0].transcript).join('');
+      $('abSearch').value = txt;
+      if (e.results[e.results.length - 1].isFinal) submitAudiobookVoiceSearch(txt);
+    };
+    rec.onend = () => { btn.classList.remove('listening'); rec = null; };
+    rec.onerror = () => { btn.classList.remove('listening'); rec = null; toast('Voice search unavailable'); };
+    try { rec.start(); } catch { rec = null; btn.classList.remove('listening'); }
+  });
+}
+
+/* ============ Audiobooks D-pad / spatial navigation ============
+   The app routes ALL D-pad keys to ONE document-level keydown handler; element listeners are dead on
+   Android TV. abHandleKey() is called early from that handler and owns navigation whenever an
+   audiobook context is active (browse view or the detail/player overlays). It returns true when it
+   handled the key, false to let normal typing/handling continue. Focus is a `.focus` class applied
+   via the app's applyFocus() (which also scrolls the element into view — this is what makes the
+   horizontal discovery rows scroll on browser + TV). */
+const AB_TRANSPORT = ['abPrevChap', 'abBack30', 'abPlayPause', 'abFwd30', 'abNextChap'];
+const AB_TOOLS = ['abSpeed', 'abSleep', 'abBookmark', 'abChapList'];
+function abIsTv() { return document.body.classList.contains('tv'); }
+function abBrowseCards() {
+  return [...$('audiobooks').querySelectorAll('.abCard')].filter((el) => el.offsetParent !== null);
+}
+// Nearest element to els[cur] in a direction, by geometry (rows may wrap / horizontally scroll).
+function abGeoIndex(els, cur, dir) {
+  const c = els[cur]; if (!c) return -1;
+  const cr = c.getBoundingClientRect(), cx = cr.left + cr.width / 2, cy = cr.top + cr.height / 2;
+  let best = -1, bestScore = Infinity;
+  els.forEach((el, i) => {
+    if (i === cur) return;
+    const r = el.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2;
+    const dx = x - cx, dy = y - cy;
+    const sameRow = Math.abs(dy) < cr.height * 0.6;
+    let ok = false, primary = 0, secondary = 0;
+    if (dir === 'ArrowRight') { ok = dx > 6 && sameRow; primary = dx; secondary = Math.abs(dy); }
+    else if (dir === 'ArrowLeft') { ok = dx < -6 && sameRow; primary = -dx; secondary = Math.abs(dy); }
+    else if (dir === 'ArrowDown') { ok = dy > 6; primary = dy; secondary = Math.abs(dx); }
+    else if (dir === 'ArrowUp') { ok = dy < -6; primary = -dy; secondary = Math.abs(dx); }
+    if (ok) { const s = primary + secondary * 2.5; if (s < bestScore) { bestScore = s; best = i; } }
+  });
+  return best;
+}
+function abFocusCard(i) {
+  const cards = abBrowseCards(); if (!cards.length) return false;
+  AB.zone = 'ab'; AB.focusIdx = Math.max(0, Math.min(cards.length - 1, i));
+  applyFocus(cards[AB.focusIdx]); // applyFocus scrolls into view (horizontal row + page)
+  return true;
+}
+function abFocusSearch() {
+  clearFocus(); AB.zone = 'abSearch';
+  const el = abMicVisible() ? $('abMicBtn') : $('abSearch');
+  try { el.focus(); } catch {}
+}
+function abFocusEntry() { // called from focusContent when landing on the section
+  if (!abFocusCard(AB.focusIdx || 0)) abFocusSearch();
+}
+function restoreAbSelection() {
+  if (S.view !== 'audiobooks') { if (typeof focusContent === 'function') focusContent(); return; }
+  if (!abFocusCard(AB.focusIdx || 0)) abFocusSearch();
+}
+// Detail overlay: linear/geometric walk over its focusables; Back closes + restores.
+function abDetailEls() { return [...$('abDetail').querySelectorAll('.focusable')].filter((el) => el.offsetParent !== null); }
+function abDetailKey(k) {
+  if (['Escape', 'Backspace', 'GoBack', 'BrowserBack'].includes(k)) { $('abDetail').classList.remove('open'); updateAbMini(); restoreAbSelection(); return; }
+  const els = abDetailEls(); if (!els.length) return;
+  let i = els.findIndex((el) => el.classList.contains('focus')); if (i < 0) i = 0;
+  if (k === 'Enter') { els[i].click(); return; }
+  const n = abGeoIndex(els, i, k);
+  if (n >= 0) { clearFocus(); applyFocus(els[n]); }
+}
+// Player overlay: zones back → seek → transport → tools.
+function abPlayerFocus(zone, idx) {
+  AB.pZone = zone; AB.pIdx = idx || 0;
+  clearFocus();
+  let el;
+  if (zone === 'back') el = $('abPlayerBack');
+  else if (zone === 'seek') el = $('abBar');
+  else if (zone === 'transport') { AB.pIdx = Math.max(0, Math.min(AB_TRANSPORT.length - 1, AB.pIdx)); el = $(AB_TRANSPORT[AB.pIdx]); }
+  else { AB.pIdx = Math.max(0, Math.min(AB_TOOLS.length - 1, AB.pIdx)); el = $(AB_TOOLS[AB.pIdx]); }
+  if (el) applyFocus(el, false);
+}
+function abPlayerKey(k) {
+  if (['Escape', 'Backspace', 'GoBack', 'BrowserBack'].includes(k)) { closeAbPlayer(); restoreAbSelection(); return; }
+  const order = ['back', 'seek', 'transport', 'tools'];
+  const zi = Math.max(0, order.indexOf(AB.pZone || 'transport'));
+  if (k === 'ArrowUp') return abPlayerFocus(order[Math.max(0, zi - 1)], 0);
+  if (k === 'ArrowDown') return abPlayerFocus(order[Math.min(order.length - 1, zi + 1)], 0);
+  const a = $('abAudio');
+  if (AB.pZone === 'seek') {
+    if (k === 'ArrowLeft') { a.currentTime = Math.max(0, a.currentTime - 10); return; }
+    if (k === 'ArrowRight') { a.currentTime = Math.min(a.duration || 1e9, a.currentTime + 10); return; }
+    if (k === 'Enter') { a.paused ? a.play().catch(() => {}) : a.pause(); return; }
+    return;
+  }
+  if (AB.pZone === 'back') { if (k === 'Enter') $('abPlayerBack').click(); return; }
+  const grp = AB.pZone === 'tools' ? AB_TOOLS : AB_TRANSPORT;
+  if (k === 'ArrowLeft') { if (AB.pIdx > 0) abPlayerFocus(AB.pZone, AB.pIdx - 1); return; }
+  if (k === 'ArrowRight') { if (AB.pIdx < grp.length - 1) abPlayerFocus(AB.pZone, AB.pIdx + 1); return; }
+  if (k === 'Enter') { $(grp[AB.pIdx]).click(); return; }
+}
+// The ONE entry point the global keydown handler calls. Returns true if it handled the key.
+function abHandleKey(e, k) {
+  try {
+    const playerOpen = $('abPlayer').classList.contains('open');
+    const detailOpen = $('abDetail').classList.contains('open');
+    if (!playerOpen && !detailOpen && S.view !== 'audiobooks') return false;
+    const NAV = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Enter', 'Escape', 'Backspace', 'GoBack', 'BrowserBack'];
+    if (playerOpen) { if (!NAV.includes(k)) return false; e.preventDefault(); e.stopPropagation(); abPlayerKey(k); return true; }
+    if (detailOpen) { if (!NAV.includes(k)) return false; e.preventDefault(); e.stopPropagation(); abDetailKey(k); return true; }
+    // Browse page
+    const ae = document.activeElement;
+    const inSearch = ae === $('abSearch') || ae === $('abMicBtn') || ae === $('abClearBtn');
+    if (inSearch) {
+      if (k === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); abFocusEntry(); return true; }
+      if (k === 'Enter' && ae === $('abSearch')) { e.preventDefault(); abSearchRun($('abSearch').value.trim()); return true; }
+      if (k === 'ArrowRight' || k === 'ArrowLeft') {
+        e.preventDefault(); e.stopPropagation();
+        const chain = [abMicVisible() ? $('abMicBtn') : null, $('abSearch'), $('abClearBtn').hidden ? null : $('abClearBtn')].filter(Boolean);
+        let ci = chain.indexOf(ae);
+        ci += (k === 'ArrowRight' ? 1 : -1);
+        if (ci < 0) { enterRail(); return true; }
+        if (ci >= chain.length) return true;
+        clearFocus(); try { chain[ci].focus(); } catch {}
+        return true;
+      }
+      return false; // let normal typing pass through
+    }
+    if (!NAV.includes(k)) return false;
+    e.preventDefault(); e.stopPropagation();
+    if (AB.zone !== 'ab') { abFocusEntry(); return true; }
+    const cards = abBrowseCards();
+    if (['Escape', 'Backspace', 'GoBack', 'BrowserBack'].includes(k)) { enterRail(); return true; }
+    if (k === 'Enter') { if (cards[AB.focusIdx]) cards[AB.focusIdx].click(); return true; }
+    const n = abGeoIndex(cards, AB.focusIdx, k);
+    if (n >= 0) return !!abFocusCard(n);
+    if (k === 'ArrowLeft') { enterRail(); return true; }        // left edge → the rail menu
+    if (k === 'ArrowUp') { abFocusSearch(); return true; }       // top row → search bar
+    return true; // absorb (no move available)
+  } catch { return false; }
+}
 </script>
 </body>
 </html>
