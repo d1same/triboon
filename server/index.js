@@ -7381,10 +7381,36 @@ Object.assign(H, {
     const sdhPref = sdhRaw === 'prefer' || sdhRaw === 'avoid' || sdhRaw === 'either' ? sdhRaw : 'avoid';
     const base = process.env.WYZIE_BASE || undefined;
     const releaseName = subtitleReleaseName(vf) || vf.name;
+    // TV episode whose SHOW has no imdb id (only tmdb): resolve the EPISODE-level imdb id from TMDB.
+    // Wyzie/OpenSubtitles episode lookups key on an imdb id, and Wyzie resolves a tmdb-tv id to the
+    // SHOW imdb -- which is null for shows like "Goosebumps: The Vanishing" (tmdb 281666, imdb null),
+    // so a tmdb search 400s ("invalid id") and dead-ends in "no subtitles". The EPISODE almost always
+    // still has its OWN imdb id (S1E1 = tt31241619) that Wyzie DOES find. The episode imdb fully
+    // identifies the episode, so we search by it WITHOUT season/episode (Wyzie returns "no subtitles"
+    // if s/e ride along an episode-level imdb) and strip SxxExx from the query so wyzieSearchUrl can't
+    // re-derive them. Only fires when there is NO show imdb (the id path is unchanged for the common
+    // case); tmdb.get is cached, so it is one bounded lookup per episode.
+    let searchImdbId = imdbId;
+    let searchSeason = hasEpisode ? seasonParam : null;
+    let searchEpisode = hasEpisode ? episodeParam : null;
+    let subQuery = vf._subQuery || vf._q || releaseName || vf.name;
+    if (hasEpisode && !imdbId && /^\d+$/.test(String(tmdbId || '')) && settings.get().tmdbKey) {
+      try {
+        const ext = await tmdb.get(`/tv/${tmdbId}/season/${seasonParam}/episode/${episodeParam}/external_ids`);
+        const epImdb = ext && /^tt\d{5,10}$/i.test(String(ext.imdb_id || '')) ? String(ext.imdb_id).toLowerCase() : '';
+        if (epImdb) {
+          searchImdbId = epImdb;
+          searchSeason = null;
+          searchEpisode = null;
+          subQuery = String(subQuery).replace(/\bs\d{1,2}\s?e\d{1,3}\b/i, '').replace(/\s+/g, ' ').trim();
+        }
+      } catch {}
+    }
+    const hasSearchEpisode = Number.isInteger(searchSeason) && searchSeason >= 0 && Number.isInteger(searchEpisode) && searchEpisode > 0;
     const subOpts = {
-      key, tmdbId, imdbId, query: vf._subQuery || vf._q || releaseName || vf.name, lang, releaseName,
+      key, tmdbId, imdbId: searchImdbId, query: subQuery, lang, releaseName,
       durationSeconds: vf._tracks && vf._tracks.duration,
-      ...(hasEpisode ? { season: seasonParam, episode: episodeParam } : {}),
+      ...(hasSearchEpisode ? { season: searchSeason, episode: searchEpisode } : {}),
       attempts: 3, retryDelayMs: 900,
       ...(base ? { base } : {}),
     };
@@ -7394,10 +7420,11 @@ Object.assign(H, {
     vf._osSearchInflight = vf._osSearchInflight || new Map();
     vf._subSyncState = vf._subSyncState || new Map(); // cacheKey -> looksSynced (skip alass when true)
     vf._subSyncFail = vf._subSyncFail || new Map();   // syncKey -> {tries,timedOut,at} (stop doomed re-syncs)
-    const catalogId = imdbId || tmdbId;
+    const catalogId = searchImdbId || tmdbId;
     // subMode is part of the cache key: an admin flipping the provider policy mid-mount must not
-    // be served the previous mix from the per-mount variants cache.
-    const searchKey = `${subMode}:${lang}:${catalogId}${hasEpisode ? `:s${seasonParam}e${episodeParam}` : ''}`;
+    // be served the previous mix from the per-mount variants cache. catalogId already carries the
+    // resolved episode imdb (unique per episode), so drop the s/e suffix when we searched by it.
+    const searchKey = `${subMode}:${lang}:${catalogId}${hasSearchEpisode ? `:s${searchSeason}e${searchEpisode}` : ''}`;
     const subtitleFailure = (e) => {
       const noSubs = isNoSubtitleError(e);
       return {
@@ -7420,8 +7447,8 @@ Object.assign(H, {
             // rethrown when the combined set is empty; openSubtitlesVariantsForMount never throws.
             const [wySettled, osData] = await Promise.all([
               wyzieActive ? searchOnlineSubs(subOpts).then((d) => ({ d }), (e) => ({ e })) : Promise.resolve({ d: [] }),
-              osActive ? openSubtitlesVariantsForMount(vf, { imdbId, tmdbId, lang,
-                ...(hasEpisode ? { season: seasonParam, episode: episodeParam } : {}) }) : Promise.resolve([]),
+              osActive ? openSubtitlesVariantsForMount(vf, { imdbId: searchImdbId, tmdbId, lang,
+                ...(hasSearchEpisode ? { season: searchSeason, episode: searchEpisode } : {}) }) : Promise.resolve([]),
             ]);
             const wyData = Array.isArray(wySettled.d) ? wySettled.d : [];
             const wyErr = wySettled.e || null;

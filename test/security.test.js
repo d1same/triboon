@@ -100,6 +100,14 @@ const tmdbMock = http.createServer((req, res) => {
       { episode_number: 3, name: 'Future Next', air_date: '2099-01-01', overview: 'Not yet.' },
     ] }));
   }
+  // Episode-level external ids: a TV episode carries its OWN imdb id even when the SHOW has none
+  // (the "Goosebumps: The Vanishing" case). Show 700700 has NO show imdb, but S1E1 -> tt70070001,
+  // which is what the subtitle route must resolve and search by.
+  const epExt = u.pathname.match(/^\/3\/tv\/(\d+)\/season\/(\d+)\/episode\/(\d+)\/external_ids$/);
+  if (epExt) {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ id: 1, imdb_id: epExt[1] === '700700' ? 'tt70070001' : null }));
+  }
   // Age-gate fixtures: an R-rated movie (blocked below Adult) and a G-rated movie (kids OK).
   if (u.pathname === '/3/movie/990001') {
     res.writeHead(200, { 'content-type': 'application/json' });
@@ -1865,6 +1873,15 @@ test('subtitles: Wyzie search→file→VTT served per mount (and a clean no_subt
       });
       // Mirrors the real API: key required as a query param, id = TMDB id.
       if (u.searchParams.get('key') !== 'test-key') { res.writeHead(401); return res.end('{}'); }
+      // Episode-imdb path: a TV show with no show imdb -> the server resolves the EPISODE imdb id
+      // (tt70070001) and MUST search by it with NO season/episode (Wyzie 400s if s/e ride along an
+      // episode-level imdb). Enforce that contract, then return one sub.
+      if (u.searchParams.get('id') === 'tt70070001') {
+        assert.strictEqual(u.searchParams.get('season'), null, 'episode-imdb Wyzie search must not carry a season');
+        assert.strictEqual(u.searchParams.get('episode'), null, 'episode-imdb Wyzie search must not carry an episode');
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify([{ id: 9, url: `http://127.0.0.1:${osPort}/file.srt`, format: 'srt', display: 'Goosebumps.S01E01.WEB', language: 'en' }]));
+      }
       if (u.searchParams.get('id') !== '4242') { res.writeHead(200); return res.end('[]'); }
       assert.strictEqual(u.searchParams.get('season'), '1',
         'episode subtitle searches must preserve season even when the mounted filename is opaque');
@@ -2028,6 +2045,20 @@ test('subtitles: Wyzie search→file→VTT served per mount (and a clean no_subt
   mounted._subQuery = 'Sec Test 2024 S01E07';
   const episodeOverride = await httpRaw(srv.port, `/api/ossubs/${play.id}?lang=en&tmdb=4242&season=1&episode=3&t=${play.streamToken}`);
   assert.strictEqual(episodeOverride.status, 200, episodeOverride.body.toString());
+
+  // Episode-imdb resolution — the "Goosebumps: The Vanishing" fix. A TV show whose SHOW has no imdb
+  // id (only tmdb) dead-ends in Wyzie because Wyzie resolves a tmdb-tv id to the (null) SHOW imdb.
+  // The route must resolve the EPISODE-level imdb from TMDB (700700 S1E1 -> tt70070001) and search
+  // Wyzie by THAT, dropping season/episode (the osMock/tmdbMock above enforce both halves).
+  await httpJson(srv.port, 'POST', '/api/settings', { tmdbKey: 'test-tmdb' }, admin);
+  const epLookup = await httpJson(srv.port, 'GET', `/api/ossubs/${play.id}?lang=en&tmdb=700700&season=1&episode=1&list=1&t=${play.streamToken}`, null, admin);
+  assert.strictEqual(epLookup.status, 200, JSON.stringify(epLookup.json));
+  assert.ok((epLookup.json.variants || []).length >= 1,
+    'a tmdb-only TV show with no show imdb still finds subs via the resolved episode imdb');
+  assert.ok(subtitleSearches.some((s) => s.id === 'tt70070001'),
+    'Wyzie is searched by the resolved EPISODE imdb id, not the tmdb-tv id that dead-ends');
+  assert.ok(!subtitleSearches.some((s) => s.id === '700700'),
+    'the dead-ending tmdb-tv id is never what Wyzie is searched by once the episode imdb resolves');
 
   } finally {
     delete process.env.WYZIE_BASE;
