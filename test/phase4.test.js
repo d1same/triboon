@@ -4192,6 +4192,14 @@ test('v2.6.5: audiobook speed cache + audiobook D-pad parity with movies/TV', ()
   // Hardware BACK closes the audiobook overlays instead of jumping to Home.
   assert.match(ui, /#abDetail\.open, #abPlayer\.open[\s\S]+#drawer\.open/,
     'the TV back handler treats #abDetail/#abPlayer as closable overlays');
+  // v2.6.6: on MOBILE the detail page must not scroll the whole page sideways. The mobile .abDwrap
+  // uses justify-items:center, which sizes each grid child to its content — so the Series/related rows
+  // (gridColumn 1/-1) must be stretched to the track (else they grow to fit ALL cards and scroll the
+  // page), and #abDetail clips residual horizontal overflow so only the inner .abRowScroll scrolls.
+  assert.match(ui, /el\.style\.justifySelf = 'stretch';\s*el\.style\.width = '100%';/,
+    'audiobook detail related-rows stretch to the track so they scroll internally, not the whole page');
+  assert.match(ui, /#abDetail \{ position:fixed; inset:0; z-index:40; background:var\(--ink\); overflow-x:hidden;/,
+    'the audiobook detail clips horizontal overflow (no sideways page scroll on mobile)');
 });
 
 // Second audit-fix batch: local-library age gate, next-episode recency, music queue paging +

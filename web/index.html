@@ -3198,7 +3198,7 @@ body.abMiniOpen .abDwrap { padding-bottom:100px; }
    The player is an immersive full-screen overlay (like the video player / music now-playing). */
 /* Full-cover overlay (like #abPlayer) ABOVE the rail — no rail seam/overlap. It was left:var(--rail)
    z-index:9, so the z-index:22 rail expanded over the detail's left side. */
-#abDetail { position:fixed; inset:0; z-index:40; background:var(--ink); overflow-y:auto;
+#abDetail { position:fixed; inset:0; z-index:40; background:var(--ink); overflow-x:hidden; overflow-y:auto;
   display:none; transition:transform .26s cubic-bezier(.22,1,.36,1); }
 #abPlayer { position:fixed; inset:0; z-index:40; background:var(--ink); overflow-y:auto; display:none; }
 #abDetail.open, #abPlayer.open { display:block; }
@@ -22920,6 +22920,11 @@ async function abLoadRelated(book, fallback) {
     const el = document.createElement('div');
     el.style.gridColumn = '1 / -1';
     el.style.minWidth = '0'; // let the horizontal card row scroll instead of blowing out the grid width
+    // Mobile .abDwrap uses justify-items:center, which sizes each grid child to its CONTENT — without
+    // forcing the row to the track width, the row grows to fit ALL its cards (~2300px) and scrolls the
+    // whole PAGE sideways into empty space (the .abRowScroll's own overflow-x:auto never engages).
+    el.style.justifySelf = 'stretch';
+    el.style.width = '100%';
     el.innerHTML = `<div class="abRowTitle" style="margin-top:24px">${abEsc(row.title)}</div>
       <div class="abRowScroll">${results.slice(0, 14).map(abCoverCard).join('')}</div>`;
     $('abDwrap').appendChild(el);
