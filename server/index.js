@@ -61,6 +61,7 @@ store.flushIntervals = {
   'audible-browse': 20000, // audiobook discovery-row cache
   'audible-charts': 20000, // real Audible best-seller charts (scraped)
   'audiobook-avail': 20000, // 24h usenet-availability verdicts (discovery dead-end filter)
+  'pubaudio-cache': 20000,  // 24h LibriVox/Archive discovery + search results (speeds up audiobooks)
   'audible-book': 30000,   // audiobook detail cache (effectively immutable)
   'audible-chapters': 30000, // audiobook chapter cache (effectively immutable)
 };
@@ -201,7 +202,7 @@ async function moviehashForMount(vf) {
 }
 // Normalized OpenSubtitles variants for a mount. Never throws — any failure yields [] so the
 // Wyzie results stand alone. Hash search runs first (best signal), id search as the fallback.
-async function openSubtitlesVariantsForMount(vf, { imdbId, tmdbId, lang, season = null, episode = null }) {
+async function openSubtitlesVariantsForMount(vf, { imdbId, tmdbId, lang, season = null, episode = null, query = null }) {
   const cfg = effectiveOpenSubtitles();
   if (!cfg) return [];
   try {
@@ -215,7 +216,12 @@ async function openSubtitlesVariantsForMount(vf, { imdbId, tmdbId, lang, season 
     ]);
     const data = await osSearch({
       apiKey: cfg.apiKey, base: cfg.base, moviehash: moviehash || '',
-      imdbId, tmdbId, query: vf._subQuery || vf._q || '', lang, season, episode,
+      // Use the caller's query when provided: for a resolved EPISODE-level imdb the handler strips
+      // SxxExx, and passing the RAW vf._subQuery here let osSearch re-derive season/episode and send
+      // them ALONGSIDE the episode imdb — which OpenSubtitles treats as over-constrained and returns
+      // ZERO (proven: episode-imdb + season/episode → 0; episode-imdb alone → 2). That was the OS
+      // "not found" for no-show-imdb TV like Goosebumps: The Vanishing.
+      imdbId, tmdbId, query: query != null ? query : (vf._subQuery || vf._q || ''), lang, season, episode,
     });
     return (Array.isArray(data) ? data : []).map(osNormalize).filter((v) => v && v._osFileId);
   } catch { return []; }
@@ -1032,6 +1038,15 @@ function audiobooksAllowedFor(user, s = settings.get()) {
   if (s.audiobooksEnabled === false) return false;
   const list = Array.isArray(s.audiobooksUsers) ? s.audiobooksUsers : [];
   return !user || user.role === 'admin' || !list.length || list.includes(user.id);
+}
+// Persistent 24h cache for the slow pubaudio (LibriVox/Archive) discovery + search results.
+function pubaudioCacheSet(key, data) {
+  store.update('pubaudio-cache', {}, (c) => {
+    c[key] = { at: Date.now(), data };
+    const ks = Object.keys(c);
+    if (ks.length > 500) for (const k of ks.slice(0, ks.length - 400)) delete c[k];
+    return c;
+  });
 }
 function iptvSourcesForUser(user, s = settings.get()) {
   return iptvSourcesFromSettings(s).filter((src) => userCanAccessIptvSource(user, src));
@@ -4869,19 +4884,29 @@ const H = {
   },
 
   // Public-domain audiobooks (LibriVox + Internet Archive) — free, legal, directly streamable.
+  // pubaudio (LibriVox/Internet Archive) has NO client-independent cache and its upstreams are slow
+  // (LibriVox ~12s), so the "Free Classics" rows + free search hit them live on EVERY audiobooks
+  // open — the main "audiobooks load slowly" cause. Cache results in the store for 24h (public-domain
+  // lists are effectively static) so after the first fetch it's an instant disk hit for all users.
   pubaudioSearch: async (ctx) => {
     if (!audiobooksAllowedFor(ctx.user)) return send(ctx.res, 403, { error: 'audiobooks are disabled for your account' });
     const q = ctx.url.searchParams.get('q');
     if (!q) return send(ctx.res, 400, { error: 'q required' });
+    const cacheKey = 'search:' + q.toLowerCase();
+    const hit = store.read('pubaudio-cache', {})[cacheKey];
+    if (hit && Date.now() - hit.at < 24 * 3600 * 1000) return send(ctx.res, 200, { results: hit.data, cached: true }, { 'cache-control': 'private, max-age=1800' });
     if (throttleUserRoute(ctx, 'pubaudio-search', { max: 40, windowMs: 60000, lockMs: 60000 })) return;
-    try { send(ctx.res, 200, { results: await pubaudio.search(q) }, { 'cache-control': 'private, max-age=1800' }); }
+    try { const results = await pubaudio.search(q); pubaudioCacheSet(cacheKey, results); send(ctx.res, 200, { results }, { 'cache-control': 'private, max-age=1800' }); }
     catch (e) { send(ctx.res, e.status || 502, { error: e.message }); }
   },
   pubaudioBrowse: async (ctx) => {
     if (!audiobooksAllowedFor(ctx.user)) return send(ctx.res, 403, { error: 'audiobooks are disabled for your account' });
     const genre = ctx.url.searchParams.get('genre');
     if (!genre) return send(ctx.res, 400, { error: 'genre required' });
-    try { send(ctx.res, 200, { results: await pubaudio.browseLibrivox(genre) }, { 'cache-control': 'private, max-age=3600' }); }
+    const cacheKey = 'browse:' + genre.toLowerCase();
+    const hit = store.read('pubaudio-cache', {})[cacheKey];
+    if (hit && Date.now() - hit.at < 24 * 3600 * 1000) return send(ctx.res, 200, { results: hit.data, cached: true }, { 'cache-control': 'private, max-age=3600' });
+    try { const results = await pubaudio.browseLibrivox(genre); pubaudioCacheSet(cacheKey, results); send(ctx.res, 200, { results }, { 'cache-control': 'private, max-age=3600' }); }
     catch (e) { send(ctx.res, e.status || 502, { error: e.message }); }
   },
   // Cheap, 24h-cached "is this book on usenet?" probe so discovery can hide dead-end titles.
@@ -7699,7 +7724,7 @@ Object.assign(H, {
             // rethrown when the combined set is empty; openSubtitlesVariantsForMount never throws.
             const [wySettled, osData] = await Promise.all([
               wyzieActive ? searchOnlineSubs(subOpts).then((d) => ({ d }), (e) => ({ e })) : Promise.resolve({ d: [] }),
-              osActive ? openSubtitlesVariantsForMount(vf, { imdbId: searchImdbId, tmdbId, lang,
+              osActive ? openSubtitlesVariantsForMount(vf, { imdbId: searchImdbId, tmdbId, lang, query: subQuery,
                 ...(hasSearchEpisode ? { season: searchSeason, episode: searchEpisode } : {}) }) : Promise.resolve([]),
             ]);
             const wyData = Array.isArray(wySettled.d) ? wySettled.d : [];
@@ -7798,9 +7823,31 @@ Object.assign(H, {
               console.error(`[subs] OpenSubtitles download failed (${reason.slice(0, 140)}) — trying Wyzie fallback`);
               const wyzieLeft = variants.some((v) => v.raw && !v.raw._provider);
               if (!wyzieLeft) {
+                // The SEARCH was OpenSubtitles-only (Wyzie disabled by the provider mode, or it
+                // returned nothing for this id in the combined search) — so the cross-ROW fallback
+                // above had no Wyzie row to use. But if a Wyzie key IS configured, a free working
+                // subtitle still beats none: run a standalone Wyzie search on the SAME id/query and
+                // serve from it. This is the Goosebumps case (OpenSubtitles-only mode + a present
+                // Wyzie key) and any "found on OpenSubtitles but the download failed" title.
+                if (key) {
+                  try {
+                    const wy = await searchOnlineSubs(subOpts);
+                    if (Array.isArray(wy) && wy.length) {
+                      const wRanked = usableVariants(rankSubs(wy, releaseName, { durationSeconds: vf._tracks && vf._tracks.duration, sdhPref, preferProvider: 'wyzie' }), { releaseName });
+                      if (wRanked.length) {
+                        const { vtt: wVtt, served: wServed } = await downloadBestSubtitle(wRanked.map((v) => v.raw).filter((d) => d && !d._provider), {
+                          key, releaseName, durationSeconds: vf._tracks && vf._tracks.duration, ...(base ? { base } : {}), attempts: 3, retryDelayMs: 900,
+                        });
+                        console.log('[subs] OpenSubtitles download failed — served a free Wyzie subtitle as a last-resort fallback');
+                        vf._subSyncState.set(cacheKey, subtitleLooksSynced(wServed, releaseName)); capMap(vf._subSyncState, 24);
+                        return wVtt;
+                      }
+                    }
+                  } catch (wErr) { console.error(`[subs] Wyzie last-resort fallback failed too: ${String((wErr && wErr.message) || wErr).slice(0, 120)}`); }
+                }
                 if (e && e.quota) throw Object.assign(new Error('OpenSubtitles daily download quota reached — downloads resume tomorrow (or raise the account tier)'), { permanent: true });
                 if (/login|HTTP 401|HTTP 403/i.test(reason)) throw Object.assign(new Error('OpenSubtitles login failed — check the username/password in Settings → Subtitles'), { permanent: true });
-                throw e;
+                throw Object.assign(new Error(`Found a subtitle on OpenSubtitles but the download failed (${reason.slice(0, 80)}). Add a Wyzie key in Settings → Subtitles for a free fallback, or check your OpenSubtitles account.`), { permanent: true });
               }
             }
           }

@@ -59,7 +59,7 @@
 @media (min-width:601px){
   body.railOpen #home,body.railOpen #discover,body.railOpen #browse,body.railOpen #detail,
   body.railOpen #person,body.railOpen #settings,body.railOpen #prefs,body.railOpen #searchBar,
-  body.railOpen #music,body.railOpen #audiobooks,body.railOpen #abDetail,
+  body.railOpen #music,body.railOpen #audiobooks,
   body.railOpen #bdInfo{transform:translateX(152px)} /* #bdInfo is fixed-pos OUTSIDE the pages — without it the browse backdrop title stayed put while the grid slid. #prefs too: it used to load UNDER the expanded menu. */
 }
 *{box-sizing:border-box;margin:0;padding:0}
@@ -3196,7 +3196,9 @@ body.abMiniOpen .abDwrap { padding-bottom:100px; }
 .abHead #abMicBtn:focus, .abHead #abClearBtn:focus { outline:none; box-shadow:0 0 0 2px var(--focus,#e0679a); }
 /* Detail keeps the LEFT MENU visible (offset by the rail, like #detail); it shifts on menu expand.
    The player is an immersive full-screen overlay (like the video player / music now-playing). */
-#abDetail { position:fixed; inset:0; left:var(--rail); z-index:9; background:var(--ink); overflow-y:auto;
+/* Full-cover overlay (like #abPlayer) ABOVE the rail — no rail seam/overlap. It was left:var(--rail)
+   z-index:9, so the z-index:22 rail expanded over the detail's left side. */
+#abDetail { position:fixed; inset:0; z-index:40; background:var(--ink); overflow-y:auto;
   display:none; transition:transform .26s cubic-bezier(.22,1,.36,1); }
 #abPlayer { position:fixed; inset:0; z-index:40; background:var(--ink); overflow-y:auto; display:none; }
 #abDetail.open, #abPlayer.open { display:block; }
@@ -22362,7 +22364,7 @@ window.__tvBack = () => {
     return 'ok';
   }
   const overlay = document.querySelector(
-    '.gate.open, #detail.open, #person.open, #player.open, #drawer.open, #trailer.open, ' +
+    '.gate.open, #detail.open, #person.open, #player.open, #abDetail.open, #abPlayer.open, #drawer.open, #trailer.open, ' +
     '#libModal.open, #matchModal.open, #updateModal.open, #catModal.open, #filterMenu.open, #cwMenu.open, #trackMenu.open, #musicNow.open');
   if (overlay) {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
@@ -22831,11 +22833,15 @@ async function openAbDetail(asin, fallback) {
   $('abDetail').classList.add('open');
   updateAbMini(); // mini "now playing" bar rides along on the detail page too
   $('abDwrap').innerHTML = '<div style="grid-column:1/-1;color:#8a8f98">Loading…</div>';
-  let book = fallback || {};
-  try { book = await api('/api/audible/book/' + asin); } catch {}
+  // Fetch book details + chapters IN PARALLEL — these were two SERIAL Audnexus round-trips (8s each)
+  // behind the "Loading…" blank, the main cause of the detail page's "few seconds delay".
+  const [bookRes, chapRes] = await Promise.all([
+    api('/api/audible/book/' + asin).catch(() => null),
+    api('/api/audible/chapters/' + asin).catch(() => null),
+  ]);
+  const book = bookRes || fallback || {};
   AB.book = book;
-  let chapters = [];
-  try { const c = await api('/api/audible/chapters/' + asin); chapters = (c && c.chapters) || []; } catch {}
+  const chapters = (chapRes && chapRes.chapters) || [];
   AB.chapters = chapters;
   const cover = book.cover ? `style="background-image:url('${String(book.cover).replace(/'/g, '')}')"` : '';
   const meta = [];
@@ -23345,6 +23351,47 @@ function abFocusCard(i) {
   applyFocus(cards[AB.focusIdx]); // applyFocus scrolls into view (horizontal row + page)
   return true;
 }
+function abFocusEl(el) { // focus a specific card, keeping the flat AB.focusIdx in sync
+  const cards = abBrowseCards(); const i = cards.indexOf(el);
+  if (i < 0) return false;
+  AB.zone = 'ab'; AB.focusIdx = i; applyFocus(el);
+  return true;
+}
+// Group the visible browse cards into VISUAL rows (by their top coordinate) so up/down/left/right
+// behave exactly like the movies/TV rows: DOWN → start of the next row, UP → the remembered column
+// of the row above, LEFT at column 0 → the rail. (Replaces the old geometric walk that preserved X
+// on DOWN and landed geometrically on UP — the owner's "goes up/down in the same page" complaint.)
+function abRows() {
+  const rows = [];
+  abBrowseCards().forEach((el) => {
+    const top = Math.round(el.getBoundingClientRect().top);
+    let row = rows.find((r) => Math.abs(r.top - top) < 40);
+    if (!row) { row = { top, cards: [] }; rows.push(row); }
+    row.cards.push(el);
+  });
+  rows.sort((a, b) => a.top - b.top);
+  rows.forEach((r) => r.cards.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left));
+  return rows;
+}
+function abRowColOf(rows, el) {
+  for (let ri = 0; ri < rows.length; ri++) { const ci = rows[ri].cards.indexOf(el); if (ci >= 0) return { ri, ci }; }
+  return { ri: 0, ci: 0 };
+}
+function abRowMove(cards, k) {
+  const rows = abRows(); if (!rows.length) return true;
+  let { ri, ci } = abRowColOf(rows, cards[AB.focusIdx]);
+  AB.colMem = AB.colMem || {};
+  if (k === 'ArrowRight') { ci = Math.min(ci + 1, rows[ri].cards.length - 1); AB.colMem[ri] = ci; return !!abFocusEl(rows[ri].cards[ci]); }
+  if (k === 'ArrowLeft') { if (ci <= 0) { enterRail(); return true; } ci -= 1; AB.colMem[ri] = ci; return !!abFocusEl(rows[ri].cards[ci]); }
+  if (k === 'ArrowDown') { AB.colMem[ri] = ci; if (ri + 1 >= rows.length) return true; return !!abFocusEl(rows[ri + 1].cards[0]); } // start of next row
+  if (k === 'ArrowUp') {
+    AB.colMem[ri] = ci;
+    if (ri - 1 < 0) { abFocusSearch(); return true; } // top row → search bar
+    const p = rows[ri - 1], col = Math.min(AB.colMem[ri - 1] != null ? AB.colMem[ri - 1] : 0, p.cards.length - 1);
+    return !!abFocusEl(p.cards[col]); // remembered column of the row above
+  }
+  return true;
+}
 function abFocusSearch() {
   clearFocus(); AB.zone = 'abSearch';
   const el = abMicVisible() ? $('abMicBtn') : $('abSearch');
@@ -23365,7 +23412,10 @@ function abDetailKey(k) {
   let i = els.findIndex((el) => el.classList.contains('focus')); if (i < 0) i = 0;
   if (k === 'Enter') { els[i].click(); return; }
   const n = abGeoIndex(els, i, k);
-  if (n >= 0) { clearFocus(); applyFocus(els[n]); }
+  if (n >= 0) { clearFocus(); applyFocus(els[n]); return; }
+  // No neighbor in this direction. LEFT at the edge → back to the menu (the "LEFT always reaches
+  // the rail" rule), matching the movie detail: close the overlay first so the next key yields.
+  if (k === 'ArrowLeft') { $('abDetail').classList.remove('open'); updateAbMini(); enterRail(); }
 }
 // Player overlay: zones back → seek → transport → tools.
 function abPlayerFocus(zone, idx) {
@@ -23406,6 +23456,10 @@ function abHandleKey(e, k) {
     const NAV = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Enter', 'Escape', 'Backspace', 'GoBack', 'BrowserBack'];
     if (playerOpen) { if (!NAV.includes(k)) return false; e.preventDefault(); e.stopPropagation(); abPlayerKey(k); return true; }
     if (detailOpen) { if (!NAV.includes(k)) return false; e.preventDefault(); e.stopPropagation(); abDetailKey(k); return true; }
+    // Focus is on the left rail (entered via ArrowLeft) — YIELD so the shared, zone-aware rail
+    // handler owns it, exactly like movies/TV. Without this we kept re-grabbing keys and yanked
+    // focus back into the grid (the "LEFT never reaches the menu" bug).
+    if (S.zone === 'rail') return false;
     // Browse page
     const ae = document.activeElement;
     const inSearch = ae === $('abSearch') || ae === $('abMicBtn') || ae === $('abClearBtn');
@@ -23430,10 +23484,7 @@ function abHandleKey(e, k) {
     const cards = abBrowseCards();
     if (['Escape', 'Backspace', 'GoBack', 'BrowserBack'].includes(k)) { enterRail(); return true; }
     if (k === 'Enter') { if (cards[AB.focusIdx]) cards[AB.focusIdx].click(); return true; }
-    const n = abGeoIndex(cards, AB.focusIdx, k);
-    if (n >= 0) return !!abFocusCard(n);
-    if (k === 'ArrowLeft') { enterRail(); return true; }        // left edge → the rail menu
-    if (k === 'ArrowUp') { abFocusSearch(); return true; }       // top row → search bar
+    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(k)) return abRowMove(cards, k);
     return true; // absorb (no move available)
   } catch { return false; }
 }

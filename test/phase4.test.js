@@ -4136,6 +4136,21 @@ test('audit contracts: Trakt/watch-state data-safety + CC pipeline fixes stay in
     'an OpenSubtitles download failure falls back to Wyzie or surfaces the actionable reason (quota vs login)');
   assert.match(server, /preferredId: chosen\.raw\._provider \? undefined : chosen\.id,/,
     'the Wyzie fallback ladder does not demand the (OpenSubtitles) chosen id from the Wyzie subset');
+  // v2.6.5: OpenSubtitles-ONLY search (Wyzie disabled by mode but a Wyzie key is configured) — a
+  // failed OS download now runs a LAST-RESORT standalone Wyzie search+download before giving up
+  // (the Goosebumps case), instead of dead-ending. A working free subtitle beats none.
+  assert.match(server, /if \(!wyzieLeft\) \{[\s\S]+if \(key\) \{[\s\S]+const wy = await searchOnlineSubs\(subOpts\);[\s\S]+downloadBestSubtitle\([\s\S]+last-resort fallback/,
+    'an OS-only search whose download fails still tries a standalone free Wyzie search before giving up');
+  assert.match(server, /Found a subtitle on OpenSubtitles but the download failed[\s\S]+Add a Wyzie key/,
+    'the final give-up message is actionable (points at the free Wyzie fallback), not a bare "could not load"');
+  // v2.6.5: OpenSubtitles over-constraint — a resolved EPISODE-level imdb must NOT ride with
+  // season/episode (proven: episode-imdb + season/ep → 0 results; episode-imdb alone → 2). The
+  // handler strips SxxExx into `subQuery` and passes THAT to the OS search (was the raw vf._subQuery,
+  // which re-derived season/episode → the OpenSubtitles "not found" for Goosebumps: The Vanishing).
+  assert.match(server, /osActive \? openSubtitlesVariantsForMount\(vf, \{ imdbId: searchImdbId, tmdbId, lang, query: subQuery,/,
+    'the OS search gets the SxxExx-stripped query so an episode-imdb search is not over-constrained');
+  assert.match(server, /imdbId, tmdbId, query: query != null \? query : \(vf\._subQuery \|\| vf\._q \|\| ''\), lang, season, episode,/,
+    'openSubtitlesVariantsForMount uses the caller-provided (stripped) query when given');
   assert.match(server, /const SUBTITLE_SOURCE_MODES = \['wyzie-first', 'opensubtitles-first', 'wyzie-only', 'opensubtitles-only'\]/,
     'the subtitle provider policy enum is pinned');
 
@@ -4144,6 +4159,39 @@ test('audit contracts: Trakt/watch-state data-safety + CC pipeline fixes stay in
   // as synced forever (drifting CC + dead Fix-sync).
   assert.match(server, /const \{ vtt: dlVtt, served \} = await downloadBestSubtitle\([\s\S]{0,400}vf\._subSyncState\.set\(cacheKey, subtitleLooksSynced\(served, releaseName\)\)/,
     'Wyzie downloads stamp sync-state from the served variant, after the download');
+});
+
+test('v2.6.5: audiobook speed cache + audiobook D-pad parity with movies/TV', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  // Speed: pubaudio (LibriVox/Archive) discovery + search are the only uncached external audiobook
+  // paths and run on every tab open — now served from a 24h store cache.
+  assert.match(server, /pubaudioSearch:[\s\S]+store\.read\('pubaudio-cache', \{\}\)\[cacheKey\][\s\S]+24 \* 3600 \* 1000[\s\S]+pubaudioCacheSet\(cacheKey, results\)/,
+    'pubaudio search is served from a 24h store cache');
+  assert.match(server, /pubaudioBrowse:[\s\S]+store\.read\('pubaudio-cache', \{\}\)\[cacheKey\][\s\S]+pubaudioCacheSet\(cacheKey, results\)/,
+    'pubaudio browse is served from a 24h store cache');
+  assert.match(server, /function pubaudioCacheSet\(key, data\) \{[\s\S]+store\.update\('pubaudio-cache'/,
+    'pubaudioCacheSet persists the cache with light eviction');
+  assert.match(server, /'pubaudio-cache': 20000,/, 'the pubaudio cache table has a flush interval');
+  // Speed: the detail page fetches book + chapters in PARALLEL (was two serial Audnexus round-trips).
+  assert.match(ui, /const \[bookRes, chapRes\] = await Promise\.all\(\[\s*api\('\/api\/audible\/book\/' \+ asin\)[\s\S]+api\('\/api\/audible\/chapters\/' \+ asin\)/,
+    'the audiobook detail fetches book + chapters in parallel');
+  // D-pad: audiobooks YIELDS the rail to the shared handler so LEFT reaches AND stays on the menu.
+  assert.match(ui, /if \(detailOpen\) \{[\s\S]+if \(S\.zone === 'rail'\) return false;/,
+    'abHandleKey yields to the shared rail handler when focus is on the rail');
+  assert.match(ui, /\['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'\]\.includes\(k\)\) return abRowMove\(cards, k\)/,
+    'browse arrows route through the row/column model');
+  // D-pad: browse row up/down matches movies/TV — DOWN → start of next row, UP → remembered column.
+  assert.match(ui, /function abRowMove\(cards, k\) \{[\s\S]+if \(k === 'ArrowDown'\)[\s\S]+rows\[ri \+ 1\]\.cards\[0\][\s\S]+if \(k === 'ArrowUp'\)[\s\S]+AB\.colMem\[ri - 1\]/,
+    'audiobook browse DOWN lands at the start of the next row; UP restores the remembered column');
+  // D-pad: the detail is a full-cover overlay ABOVE the rail (no overlap) + LEFT closes to the menu.
+  assert.match(ui, /#abDetail \{ position:fixed; inset:0; z-index:40;/,
+    'the audiobook detail is a full-cover overlay above the rail (no rail seam)');
+  assert.match(ui, /if \(k === 'ArrowLeft'\) \{ \$\('abDetail'\)\.classList\.remove\('open'\); updateAbMini\(\); enterRail\(\); \}/,
+    'LEFT at the detail edge closes it and enters the rail');
+  // Hardware BACK closes the audiobook overlays instead of jumping to Home.
+  assert.match(ui, /#abDetail\.open, #abPlayer\.open[\s\S]+#drawer\.open/,
+    'the TV back handler treats #abDetail/#abPlayer as closable overlays');
 });
 
 // Second audit-fix batch: local-library age gate, next-episode recency, music queue paging +
