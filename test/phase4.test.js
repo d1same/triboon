@@ -1419,6 +1419,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android phone WebView should get the compact mobile shell even when its CSS viewport is wider than 600px');
   assert.match(ui, /function androidBurgerHit\(e\) \{[\s\S]+const burger = \$\('burger'\);[\s\S]+burger\.contains\(e\.target\)[\s\S]+return p\.clientX <= 132 && p\.clientY <= 132;/,
     'Android top-left burger hitbox should not double-toggle taps already delivered to the burger button');
+  assert.match(ui, /function androidBurgerHit\(e\) \{[\s\S]+if \(document\.body\.classList\.contains\('mobileNav'\)\) return false;[\s\S]+const burger = \$\('burger'\);/,
+    'when the phone drawer is OPEN the top-left corner hit-test yields, so a tap on the profile avatar (which sits in that corner) reaches its Settings handler instead of closing the drawer');
   assert.match(ui, /\$\('burger'\)\.addEventListener\('pointerdown'[\s\S]+\$\('burger'\)\.addEventListener\('touchend'[\s\S]+Date\.now\(\) - burgerTouchAt < 500/,
     'phone burger should have pointer and touch handling with duplicate-tap protection');
   assert.match(androidGradle, /every Android app video surface hands off[\s\S]+movies, episodes, local library files, and Live TV[\s\S]+Browser and[\s\S]+desktop builds keep the HTML video path/,
@@ -4285,14 +4287,14 @@ test('v2.6.9: Android-TV cover padding — content clears the rail (overscan) + 
   assert.match(ui, /left:calc\(var\(--rail\) \+ var\(--overscan\)\); padding:46px var\(--gut\) 0 var\(--gut\); overflow-y:auto;/,
     '#audiobooks (own left rule) shifts by --overscan too');
   // BOTTOM: body.tv-scoped trim of each section's dead band to a ~overscan title-safe margin.
-  assert.match(ui, /body\.tv #home\{padding-bottom:var\(--overscan\)!important\}/,
+  assert.match(ui, /body\.tv #home\{padding-bottom:10px!important\}/,
     'home bottom gap lives on the SECTION (not #rows, which has a JS max-height cap that would shave the last row)');
   assert.match(ui, /body\.tv #browse,body\.tv #person\{padding-bottom:0!important\}/,
-    'browse/person sections zero their bottom padding so the grid owns the title-safe gap');
-  assert.match(ui, /body\.tv #grid,body\.tv #personGrid,body\.tv #musicBrowse,body\.tv #musicList\{padding-bottom:var\(--overscan\)\}/,
-    'browse/library/person grids + BOTH music surfaces (#musicBrowse home shelves, #musicList search) trim to overscan');
-  assert.match(ui, /body\.tv:not\(\.abMiniOpen\) #audiobooks\{padding-bottom:var\(--overscan\)\}/,
-    'audiobooks cover grid trims to overscan, but not while the mini-player reserves .abGrid space');
+    'browse/person sections zero their bottom padding so the grid owns the near-edge gap');
+  assert.match(ui, /body\.tv #grid,body\.tv #personGrid,body\.tv #musicBrowse,body\.tv #musicList\{padding-bottom:10px\}/,
+    'browse/library/person grids + BOTH music surfaces (#musicBrowse home shelves, #musicList search) sit ~10px from the TV bottom edge (just clears the focus glow)');
+  assert.match(ui, /body\.tv:not\(\.abMiniOpen\) #audiobooks\{padding-bottom:10px\}/,
+    'audiobooks cover grid sits ~10px from the bottom edge, but not while the mini-player reserves .abGrid space');
   // Desktop/mobile invariance: --overscan is 0 in :root and set only on body.tv.
   assert.match(ui, /:root\{[^}]*--overscan:0px;/s,
     '--overscan is 0 by default so every calc(var(--rail) + var(--overscan)) is byte-identical off-TV');
