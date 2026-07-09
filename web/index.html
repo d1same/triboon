@@ -22865,14 +22865,19 @@ async function loadAbRow(el, cfg) {
     }
     const { results } = await api('/api/audible/browse?' + cfg.q);
     if (!results || !results.length) { el.remove(); return; }
-    scroll.innerHTML = results.map(abCoverCard).join('');
+    // Check usenet availability BEFORE rendering, keeping the loading skeleton up meanwhile, so titles
+    // never appear-then-vanish (owner: "shows many books and then they start disappearing"). We render
+    // only the available set once, in catalog order. Checks are cheap + server-cached + memoized here,
+    // so repeat rows/visits are instant.
+    const available = await abFilterAvailableList(results);
+    if (!available.length) { el.remove(); return; }
+    scroll.innerHTML = available.map(abCoverCard).join('');
     const cards = scroll.querySelectorAll('.abCard');
-    results.forEach((it, i) => cards[i].addEventListener('click', () => openAbDetail(it.asin, it)));
-    abFilterAvailable(results, [...cards], el); // hide titles not on usenet so clicks always play
+    available.forEach((it, i) => cards[i].addEventListener('click', () => openAbDetail(it.asin, it)));
   } catch { el.remove(); }
 }
 // Availability filter for Audible discovery rows: check each title against usenet (cheap, cached) and
-// remove dead-ends. Bounded concurrency so we never hammer the indexers; drop the row if all are gone.
+// drop dead-ends. Bounded concurrency so we never hammer the indexers.
 const _abAvailMemo = new Map();
 async function abIsAvailable(title, author) {
   const k = (title + '|' + author).toLowerCase();
@@ -22882,17 +22887,19 @@ async function abIsAvailable(title, author) {
   _abAvailMemo.set(k, ok);
   return ok;
 }
-async function abFilterAvailable(items, cards, rowEl) {
-  let idx = 0, alive = items.length;
+// Returns the subset of `items` that are on usenet, in the SAME order. Used to filter a discovery row
+// before it is rendered (no visible removal).
+async function abFilterAvailableList(items) {
+  const keep = new Array(items.length).fill(false);
+  let idx = 0;
   const worker = async () => {
     while (idx < items.length) {
       const i = idx++;
-      const ok = await abIsAvailable(items[i].title, (items[i].authors || [])[0] || '');
-      if (!ok && cards[i]) { cards[i].remove(); alive--; }
+      keep[i] = await abIsAvailable(items[i].title, (items[i].authors || [])[0] || '');
     }
   };
-  await Promise.all([worker(), worker(), worker(), worker()]);
-  if (alive <= 0) rowEl.remove();
+  await Promise.all(Array.from({ length: 6 }, () => worker())); // 6-way concurrency
+  return items.filter((_, i) => keep[i]);
 }
 // Free (public-domain) cover card with a FREE badge.
 function abFreeCard(it) {

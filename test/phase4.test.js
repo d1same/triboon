@@ -4349,6 +4349,13 @@ test('v2.6.13: Audiobooks D-pad — async entry, rail-steal, lazy rows, back che
     'ArrowUp on the audiobook search bar is absorbed, not passed to the global handler');
   assert.match(ui, /if \(\['Escape', 'GoBack', 'BrowserBack'\]\.includes\(k\) \|\| \(k === 'Backspace' && !onField\)\) \{\s*\n\s*e\.preventDefault\(\); e\.stopPropagation\(\); enterRail\(\); return true;/,
     'Back/Escape (and Backspace on a button) from the audiobook search bar exits to the rail instead of falling through');
+  // Audible discovery rows must filter usenet-availability BEFORE rendering (no appear-then-vanish).
+  assert.match(ui, /const available = await abFilterAvailableList\(results\);[\s\S]+scroll\.innerHTML = available\.map\(abCoverCard\)/,
+    'Audible discovery rows filter availability before rendering so titles never appear then disappear');
+  assert.match(ui, /async function abFilterAvailableList\(items\) \{[\s\S]+return items\.filter\(\(_, i\) => keep\[i\]\)/,
+    'abFilterAvailableList returns the available subset in catalog order (no visible DOM removal)');
+  assert.doesNotMatch(ui, /abFilterAvailable\(results, \[\.\.\.cards\], el\)|cards\[i\]\.remove\(\); alive--/,
+    'the old show-all-then-remove-unavailable availability filter is gone');
 });
 
 // Second audit-fix batch: local-library age gate, next-episode recency, music queue paging +
