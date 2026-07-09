@@ -2007,6 +2007,14 @@ test('Android native player: direct source and native chrome stay out of the web
     'artwork focus should not regress to thick solid coral rings');
   assert.match(ui, /grid\.style\.maxHeight = pitch > 50 \? `\$\{n \* pitch - 4\}px` : `calc\(var\(--rowH\) \* \$\{n\} - \$\{n \* 2\}px\)`;/,
     'browse row windows should keep focused poster captions inside the viewport without showing half rows');
+  // Android TV Movies/TV/Library year-caption clip: when only one row is rendered (virtual-grid first
+  // paint) the 2-row pitch is unmeasurable — derive the real row pitch from the TALLEST rendered card
+  // + the grid row-gap instead of the overshooting --rowH estimate, so the grid never shows a peek of
+  // the next row (which orphaned the row-above's year caption) and never clips the current year.
+  assert.match(ui, /const rowGap = parseFloat\(getComputedStyle\(grid\)\.rowGap\) \|\| 20;\s*\n\s*const maxCardH = \[\.\.\.cards\]\.slice\(0, tplCols\)\.reduce\(\(m, c\) => Math\.max\(m, c\.offsetHeight\), 0\);\s*\n\s*const pitch = pitch2 > 50 \? pitch2 : \(maxCardH \? maxCardH \+ rowGap : 0\);/,
+    'grid window pitch falls back to the tallest rendered card + row-gap, not the overshooting --rowH estimate');
+  assert.match(ui, /requestAnimationFrame\(\(\) => \{ if \(S\.gridRoot === root\) adaptRowWindows\(\); \}\);\s*\n\s*if \(document\.fonts && document\.fonts\.ready\) document\.fonts\.ready\.then\(\(\) => \{ if \(S\.gridRoot === root\) adaptRowWindows\(\); \}\)/,
+    'renderGrid re-measures the row window after layout + web fonts settle so a fallback-font first pass cannot leave the grid a hair too tall (next-row peek / clipped year on Android TV)');
   assert.match(ui, /b\.innerHTML = `<div class="peStill">[\s\S]*?<\/div><div class="peMeta">[\s\S]+<span class="peName">/,
     'web episode cards should render the episode name below the thumbnail, not overlaid on the still');
   assert.match(ui, /async function getPlayerEpisodeContext\(it\) \{[\s\S]+episodeKeyParts\(it\)[\s\S]+api\(`\/api\/tmdb\/tv\/\$\{parts\.tmdbId\}\?append_to_response=external_ids`\)[\s\S]+api\(`\/api\/tmdb\/tv\/\$\{parts\.tmdbId\}\/season\/\$\{parts\.season\}`\)/,
@@ -4259,6 +4267,37 @@ test('v2.6.8: audiobook Continue Listening auto-finish + card menu (remove / mar
   // Closing the menu on the audiobooks page hands focus back to the card (not the home grid).
   assert.match(ui, /if \(S\.view === 'audiobooks'\) \{ if \(ret && ret\.isConnected && typeof abFocusEl === 'function'\) abFocusEl\(ret\); return; \}/,
     'closeCwMenu returns focus to the audiobook card, not the home/grid nav');
+});
+
+// v2.6.9: Android-TV cover/thumbnail padding — leftmost cover must clear the rail (the rail is inset
+// by --overscan but content was not, so covers jammed ~13px from the icons), and each section's dead
+// bottom band trimmed to a title-safe ~overscan margin. Everything is --overscan/body.tv-scoped so
+// desktop + mobile stay byte-identical (--overscan is 0 off-TV).
+test('v2.6.9: Android-TV cover padding — content clears the rail (overscan) + title-safe bottom band', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  // LEFT: sections shift right by --overscan so the first cover clears the rail (matches desktop's gap).
+  assert.match(ui, /#home,#discover,#browse,#detail,#person,#settings,#prefs\{left:calc\(var\(--rail\) \+ var\(--overscan\)\)!important;padding-left:var\(--gut\)!important;/,
+    'shared sections offset their left by --overscan so covers clear the overscan-inset rail (0px off-TV → desktop/mobile unchanged)');
+  assert.match(ui, /#searchBar\{left:calc\(var\(--rail\) \+ var\(--overscan\) \+ var\(--gut\)\)!important/,
+    'the floating search bar tracks the overscan-shifted results grid');
+  assert.match(ui, /left:calc\(var\(--rail\) \+ var\(--overscan\)\)!important;padding:46px var\(--gut\) 0 var\(--gut\);overflow:hidden;/,
+    '#music (own left rule) shifts by --overscan too');
+  assert.match(ui, /left:calc\(var\(--rail\) \+ var\(--overscan\)\); padding:46px var\(--gut\) 0 var\(--gut\); overflow-y:auto;/,
+    '#audiobooks (own left rule) shifts by --overscan too');
+  // BOTTOM: body.tv-scoped trim of each section's dead band to a ~overscan title-safe margin.
+  assert.match(ui, /body\.tv #home\{padding-bottom:var\(--overscan\)!important\}/,
+    'home bottom gap lives on the SECTION (not #rows, which has a JS max-height cap that would shave the last row)');
+  assert.match(ui, /body\.tv #browse,body\.tv #person\{padding-bottom:0!important\}/,
+    'browse/person sections zero their bottom padding so the grid owns the title-safe gap');
+  assert.match(ui, /body\.tv #grid,body\.tv #personGrid,body\.tv #musicBrowse,body\.tv #musicList\{padding-bottom:var\(--overscan\)\}/,
+    'browse/library/person grids + BOTH music surfaces (#musicBrowse home shelves, #musicList search) trim to overscan');
+  assert.match(ui, /body\.tv:not\(\.abMiniOpen\) #audiobooks\{padding-bottom:var\(--overscan\)\}/,
+    'audiobooks cover grid trims to overscan, but not while the mini-player reserves .abGrid space');
+  // Desktop/mobile invariance: --overscan is 0 in :root and set only on body.tv.
+  assert.match(ui, /:root\{[^}]*--overscan:0px;/s,
+    '--overscan is 0 by default so every calc(var(--rail) + var(--overscan)) is byte-identical off-TV');
+  assert.match(ui, /body\.tv\{--bdW:[^}]*--overscan:2\.5vmin\}/,
+    '--overscan is only non-zero on body.tv (Android TV), keeping the padding change TV-only');
 });
 
 // Second audit-fix batch: local-library age gate, next-episode recency, music queue paging +

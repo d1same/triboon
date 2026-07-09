@@ -1220,9 +1220,9 @@ body.tv #vlcCopy{display:none}
 /* Sidebar PUSHES content via transform (left stays static — see the railOpen rule).
    #prefs was missing from BOTH this rule and the push rule — it sat at left:0 under the
    rail and stayed put when the menu expanded. */
-#home,#discover,#browse,#detail,#person,#settings,#prefs{left:var(--rail)!important;padding-left:var(--gut)!important;
+#home,#discover,#browse,#detail,#person,#settings,#prefs{left:calc(var(--rail) + var(--overscan))!important;padding-left:var(--gut)!important;
   transition:transform .26s cubic-bezier(.22,1,.36,1)}
-#searchBar{left:calc(var(--rail) + var(--gut))!important;right:var(--gut)!important;
+#searchBar{left:calc(var(--rail) + var(--overscan) + var(--gut))!important;right:var(--gut)!important;
   transition:transform .26s cubic-bezier(.22,1,.36,1)}
 
 /* Goldish section headers (Plex/Overseerr look). */
@@ -2432,6 +2432,16 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
 #castRow{margin-left:calc(0px - var(--gut));padding-left:calc(var(--gut) + 4px)}
 #epGrid,#seasonGrid{margin-left:calc(0px - var(--gut));padding-left:calc(var(--gut) + 8px)}
 
+/* ===== TV title-safe bottom: trim each section's dead padding band so the last row of covers/
+   thumbnails reaches near the screen bottom, leaving only the ~overscan (2.5vmin ≈ 27px @1080p)
+   title-safe margin — which also clears the focus glow and matches the rail's own overscan
+   bottom-inset. body.tv-scoped -> desktop + mobile keep their existing padding untouched. Owner's
+   "covers cut off at the bottom / more padding below than covers reach" complaint, all pages. */
+body.tv #home{padding-bottom:var(--overscan)!important} /* gap on the SECTION, not inside #rows — #rows has a JS max-height cap (adaptRowWindows) that would shave the bottom poster row */
+body.tv #browse,body.tv #person{padding-bottom:0!important}
+body.tv #grid,body.tv #personGrid,body.tv #musicBrowse,body.tv #musicList{padding-bottom:var(--overscan)} /* #musicBrowse = the music HOME shelves (96px band); #musicList = search/queue */
+body.tv:not(.abMiniOpen) #audiobooks{padding-bottom:var(--overscan)} /* audiobook cover grid scrolls inside #audiobooks; :not gate keeps the mini-player's .abGrid 80px clearance */
+
 /* ============ Settings & Preferences ============ */
 #settings .panel,#prefs .panel{box-shadow:0 18px 42px rgba(0,0,0,.16)}
 #settings .panel h2,#prefs .panel h2{font:800 17px "Sora";letter-spacing:0;color:var(--text);margin-bottom:6px}
@@ -2531,7 +2541,7 @@ body:not(.tv) #settings .setGrid[data-stab="display"]{grid-template-columns:repe
 
 /* ============ Music (YouTube Music) ============ */
 #music{position:fixed;inset:0;z-index:8;display:none;flex-direction:column;
-  left:var(--rail)!important;padding:46px var(--gut) 0 var(--gut);overflow:hidden;
+  left:calc(var(--rail) + var(--overscan))!important;padding:46px var(--gut) 0 var(--gut);overflow:hidden;
   transition:transform .26s cubic-bezier(.22,1,.36,1)}
 #music.open{display:flex}
 .musicHead{display:flex;align-items:center;gap:24px;margin-bottom:18px;flex:none}
@@ -3134,7 +3144,7 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
 /* Full-page section, positioned exactly like #music: offset by the rail, gutter padding, shifts
    right when the menu expands (see the body.railOpen rule). */
 #audiobooks { position:fixed; inset:0; z-index:8; display:none; flex-direction:column;
-  left:var(--rail); padding:46px var(--gut) 0 var(--gut); overflow-y:auto;
+  left:calc(var(--rail) + var(--overscan)); padding:46px var(--gut) 0 var(--gut); overflow-y:auto;
   transition:transform .26s cubic-bezier(.22,1,.36,1); }
 #audiobooks.open { display:flex; }
 .abHead { display:flex; align-items:center; gap:24px; margin-bottom:18px; flex:none; }
@@ -4582,7 +4592,18 @@ function adaptRowWindows() {
   // tall captions, overshooting by a third of a row (= the unprofessional half-row peek).
   const cards = grid.querySelectorAll('.pcard, .chCard');
   const tplCols = (getComputedStyle(grid).gridTemplateColumns || '').split(' ').length || 1;
-  const pitch = cards.length > tplCols ? cards[tplCols].offsetTop - cards[0].offsetTop : 0;
+  // Real row pitch: prefer the measured top-to-top distance between two rendered rows; when only one
+  // row exists yet (virtual-grid first paint), derive it from the TALLEST card in that row + the grid
+  // row-gap. Using the tallest card guards a row where one title wraps to two lines (a shorter card[0]
+  // would under-measure and clip that card's year). Only fall back to the --rowH estimate when NO card
+  // exists at all — that estimate overshoots the real pitch by ~a third of a row, which on Android TV
+  // let the next row peek in and orphaned/clipped the year caption of the row above. renderGrid also
+  // re-runs this after layout + web fonts settle, so a first pass measured against fallback-font
+  // metrics can't leave the grid a hair too tall.
+  const pitch2 = cards.length > tplCols ? cards[tplCols].offsetTop - cards[0].offsetTop : 0;
+  const rowGap = parseFloat(getComputedStyle(grid).rowGap) || 20;
+  const maxCardH = [...cards].slice(0, tplCols).reduce((m, c) => Math.max(m, c.offsetHeight), 0);
+  const pitch = pitch2 > 50 ? pitch2 : (maxCardH ? maxCardH + rowGap : 0);
   grid.style.maxHeight = pitch > 50 ? `${n * pitch - 4}px` : `calc(var(--rowH) * ${n} - ${n * 2}px)`;
 }
 window.addEventListener('resize', () => { clearTimeout(adaptRowWindows._t); adaptRowWindows._t = setTimeout(applyCoverSize, 80); });
@@ -13976,6 +13997,11 @@ function renderGrid(items, root = $('grid')) {
     });
   }
   adaptRowWindows(); // window height needs the REAL row pitch, measurable only after render
+  // Re-measure once the browser has finished layout AND web fonts have loaded: the first pass can run
+  // against fallback-font metrics (captions a few px shorter), leaving the grid a hair too tall so the
+  // next row peeks in and the row-above's year caption looks orphaned/clipped on Android TV.
+  requestAnimationFrame(() => { if (S.gridRoot === root) adaptRowWindows(); });
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { if (S.gridRoot === root) adaptRowWindows(); }).catch(() => {});
   if (root === $('grid') && ['movies', 'tv', 'library', 'watchlist'].includes(S.view) && S.zone !== 'rail') {
     requestAnimationFrame(() => {
       if (S.gridRoot === root && !root.querySelector('.focus')) focusGrid(0);
