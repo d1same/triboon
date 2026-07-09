@@ -20741,7 +20741,19 @@ function focusContent(retried) {
     if (!it && !retried) return setTimeout(() => S.view === 'calendar' && focusContent(true), 400);
     return it ? applyFocus(it) : undefined;
   }
-  if (S.view === 'audiobooks') { return abFocusEntry(); }
+  if (S.view === 'audiobooks') {
+    // Content (Continue Listening + discovery rows) loads async; landing before it renders would strand
+    // focus on the search bar (abFocusEntry's empty-page fallback) and it never recovered when the covers
+    // arrived. Retry until a cover exists, then land on the first — but never yank focus once the user has
+    // moved to a cover or started typing a search. Same shape as the #calendar retry just above.
+    if (document.querySelector('#audiobooks .abCard.focus')) return; // already on a cover
+    if ($('audiobooks').querySelector('.abCard')) return abFocusEntry(); // content ready → first cover
+    const abTries = typeof retried === 'number' ? retried : 0;
+    if (abTries === 0) abFocusEntry(); // nothing rendered yet → park on the search bar for now
+    const parked = (document.activeElement === $('abSearch') || document.activeElement === $('abMicBtn')) && !$('abSearch').value.trim();
+    if (abTries < 6 && (abTries === 0 || parked)) return setTimeout(() => { if (S.view === 'audiobooks') focusContent(abTries + 1); }, 250);
+    return;
+  }
   // Search lands on the MIC whenever there is no result grid to navigate. Stale text used to
   // strand focus on an empty grid after leaving/re-entering Search.
   if (S.view === 'search' && (!$('searchInput').value.trim() || !gridEls().length)) {
@@ -22777,7 +22789,15 @@ function loadAudiobooks() {
   }
   renderAbContinue();
   if (!inp.value.trim()) showAbDiscovery(true);
-  setTimeout(() => { try { (abMicVisible() ? $('abMicBtn') : inp).focus(); } catch {} }, 60);
+  // Land focus on the search bar ONLY when there's genuinely nothing else to land on, and NEVER while
+  // the rail is being rolled over (S.zone==='rail') — that stole D-pad focus off the menu mid-nav, and
+  // on a real commit it raced focusContent() and yanked focus to search instead of the first cover.
+  // focusContent() (with its retry until a cover renders) owns the landing focus on commit.
+  if (S.zone !== 'rail') setTimeout(() => {
+    if (S.view === 'audiobooks' && S.zone !== 'rail' && !$('audiobooks').querySelector('.abCard')) {
+      try { (abMicVisible() ? $('abMicBtn') : inp).focus(); } catch {}
+    }
+  }, 60);
 }
 function syncAbClear() {
   const hasText = !!$('abSearch').value.trim();
@@ -22789,6 +22809,7 @@ function clearAbSearch(opts = {}) {
   $('abSearch').value = '';
   syncAbClear();
   $('abGrid').innerHTML = '';
+  AB.focusIdx = 0; AB.colMem = {}; // content set changes back to discovery → don't carry a stale index
   renderAbContinue();
   showAbDiscovery(true);
   if (opts.focus === 'input') { try { $('abSearch').focus(); } catch {} }
@@ -22947,17 +22968,27 @@ function openAbCardMenu(asin, card) {
     else if (act === 'abrm') abRemoveContinue(asin, meta);
   };
 }
+// After a Continue-Listening card is removed/finished (and the row re-rendered), keep D-pad focus on a
+// neighbouring Continue cover instead of the stale flat index (which, once the list shrinks, resolved
+// to a Discovery card or the search bar). Continue cards are first in the flat browse list, so the
+// clamped index maps straight onto them; if none remain, fall back to the first available cover/search.
+function abRefocusContinue() {
+  if (!abIsTv()) return;
+  const cont = [...$('audiobooks').querySelectorAll('#abContinue .abCard')];
+  if (cont.length) return void abFocusEl(cont[Math.max(0, Math.min(AB.focusIdx || 0, cont.length - 1))]);
+  AB.focusIdx = 0; restoreAbSelection();
+}
 function abMarkFinished(asin, meta) {
   api('/api/watch', { method: 'POST', body: { key: 'audiobook:' + asin, watched: true, position: 0, duration: 0,
     profile: S.profile ? S.profile.id : undefined, meta } })
     .then(() => { toast(`“${(meta && meta.title) || 'Audiobook'}” marked finished`); return renderAbContinue(); })
-    .then(() => { if (abIsTv()) restoreAbSelection(); })
+    .then(() => abRefocusContinue())
     .catch((e) => toast(e.message));
 }
 function abRemoveContinue(asin, meta) {
   api('/api/watch', { method: 'POST', body: { key: 'audiobook:' + asin, remove: true, profile: S.profile ? S.profile.id : undefined } })
     .then(() => { toast(`“${(meta && meta.title) || 'Audiobook'}” removed from Continue Listening`); return renderAbContinue(); })
-    .then(() => { if (abIsTv()) restoreAbSelection(); })
+    .then(() => abRefocusContinue())
     .catch((e) => toast(e.message));
 }
 async function abSearchRun(q) {
@@ -22976,6 +23007,9 @@ async function abSearchRun(q) {
 function renderAbGrid(items) {
   const grid = $('abGrid');
   grid.innerHTML = items.map(abCoverCard).join('');
+  // New content set → reset the flat browse index/column memory so the first D-pad move lands on the
+  // first result, not a stale/clamped index carried over from the previous (differently-sized) list.
+  AB.focusIdx = 0; AB.colMem = {};
   const cards = grid.querySelectorAll('.abCard');
   items.forEach((it, i) => {
     cards[i].addEventListener('click', () => openAbDetail(it.asin, it));
@@ -23365,8 +23399,10 @@ function abStartSaveLoop() { clearInterval(AB.saveTimer); AB.saveTimer = setInte
   // Chapters button opens the PLAYING book's detail (so its chapter list is what you tapped from).
   $('abChapList').addEventListener('click', () => { closeAbPlayer(); if (AB.now && AB.now.asin) openAbDetail(AB.now.asin, AB.now.book); });
   // Back from the player keeps the audio going (returns to browse); the mini-bar brings you back.
-  $('abPlayerBack').addEventListener('click', () => { closeAbPlayer(); });
-  $('abDetailBack').addEventListener('click', () => { $('abDetail').classList.remove('open'); updateAbMini(); });
+  // On TV, restore D-pad focus to the originating cover after closing (match the Back-KEY path) — else
+  // focus is stranded on the now-hidden chevron and the next OK re-opens the book.
+  $('abPlayerBack').addEventListener('click', () => { closeAbPlayer(); if (typeof abIsTv === 'function' && abIsTv()) restoreAbSelection(); });
+  $('abDetailBack').addEventListener('click', () => { $('abDetail').classList.remove('open'); updateAbMini(); if (typeof abIsTv === 'function' && abIsTv()) restoreAbSelection(); });
   // Mini "now playing" bar → tap to reopen the player; its button toggles play/pause.
   $('abMini').addEventListener('click', () => openAbPlayer());
   $('abMiniPlay').addEventListener('click', (e) => { e.stopPropagation(); audio.paused ? audio.play().catch(() => {}) : audio.pause(); });
@@ -23549,7 +23585,26 @@ function abRowMove(cards, k) {
   AB.colMem = AB.colMem || {};
   if (k === 'ArrowRight') { ci = Math.min(ci + 1, rows[ri].cards.length - 1); AB.colMem[ri] = ci; return !!abFocusEl(rows[ri].cards[ci]); }
   if (k === 'ArrowLeft') { if (ci <= 0) { enterRail(); return true; } ci -= 1; AB.colMem[ri] = ci; return !!abFocusEl(rows[ri].cards[ci]); }
-  if (k === 'ArrowDown') { AB.colMem[ri] = ci; if (ri + 1 >= rows.length) return true; return !!abFocusEl(rows[ri + 1].cards[0]); } // start of next row
+  if (k === 'ArrowDown') {
+    AB.colMem[ri] = ci;
+    if (ri + 1 >= rows.length) {
+      // Might be more discovery rows below that haven't lazy-loaded yet — they're still skeletons
+      // (.abRowSkel) with no .abCard, so abRows() doesn't see them and DOWN would dead-end, leaving
+      // them permanently unreachable on TV (no free scroll). Scroll the page down to bring the next
+      // row into the lazy-load observer's margin, then land on it once it renders.
+      const ab = $('audiobooks');
+      if (ab && ab.querySelector('.abRow .abRowSkel')) {
+        const before = ab.scrollTop;
+        ab.scrollBy({ top: Math.round(ab.clientHeight * 0.55), behavior: 'auto' });
+        if (ab.scrollTop > before + 4) setTimeout(() => {
+          const r2 = abRows();
+          if (r2.length > rows.length && r2[rows.length] && r2[rows.length].cards[0]) abFocusEl(r2[rows.length].cards[0]);
+        }, 350);
+      }
+      return true;
+    }
+    return !!abFocusEl(rows[ri + 1].cards[0]); // start of next row
+  }
   if (k === 'ArrowUp') {
     AB.colMem[ri] = ci;
     if (ri - 1 < 0) { abFocusSearch(); return true; } // top row → search bar

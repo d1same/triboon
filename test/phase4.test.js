@@ -4318,6 +4318,31 @@ test('v2.6.12: virtual-grid focus aligns the real card (year no longer clips) + 
     'audiobook horizontal rows give the first cover left room on TV so its focus glow is not clipped ("cut off a bit to the left")');
 });
 
+// v2.6.13: Audiobooks D-pad audit fixes (empirically reproduced + adversarially audited).
+test('v2.6.13: Audiobooks D-pad — async entry, rail-steal, lazy rows, back chevron, focus resets', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  // Entry retries until a cover renders, then lands on it — and the "parked" guard includes the MIC
+  // (abFocusSearch focuses the mic on TV), else the retry stopped and stranded focus on the mic.
+  assert.match(ui, /if \(S\.view === 'audiobooks'\) \{[\s\S]+if \(document\.querySelector\('#audiobooks \.abCard\.focus'\)\) return;[\s\S]+if \(\$\('audiobooks'\)\.querySelector\('\.abCard'\)\) return abFocusEntry\(\);[\s\S]+const parked = \(document\.activeElement === \$\('abSearch'\) \|\| document\.activeElement === \$\('abMicBtn'\)\) && !\$\('abSearch'\)\.value\.trim\(\);[\s\S]+focusContent\(abTries \+ 1\)/,
+    'entering Audiobooks retries until a cover exists then lands on it (mic-aware parked guard), instead of stranding focus on the search/mic bar');
+  // loadAudiobooks must not steal D-pad focus off the rail during a rollover preview.
+  assert.match(ui, /if \(S\.zone !== 'rail'\) setTimeout\(\(\) => \{\s*if \(S\.view === 'audiobooks' && S\.zone !== 'rail' && !\$\('audiobooks'\)\.querySelector\('\.abCard'\)\) \{/,
+    'loadAudiobooks does not grab focus while the rail is being rolled over (and never overrides a rendered cover)');
+  // ArrowDown at the last rendered row scrolls to lazy-load the next discovery row (else unreachable on TV).
+  assert.match(ui, /if \(ab && ab\.querySelector\('\.abRow \.abRowSkel'\)\) \{[\s\S]+scrollBy\(\{ top: Math\.round\(ab\.clientHeight \* 0\.55\)[\s\S]+abFocusEl\(r2\[rows\.length\]\.cards\[0\]\)/,
+    'ArrowDown past the last loaded discovery row scrolls to lazy-load + focus the next row (no longer permanently unreachable on TV)');
+  // On-screen Back chevrons restore D-pad focus on TV (match the Back-key path).
+  assert.match(ui, /\$\('abPlayerBack'\)\.addEventListener\('click', \(\) => \{ closeAbPlayer\(\); if \(typeof abIsTv === 'function' && abIsTv\(\)\) restoreAbSelection\(\); \}\)/,
+    'the player Back chevron restores focus on TV (next OK no longer re-opens the book)');
+  assert.match(ui, /\$\('abDetailBack'\)\.addEventListener\('click', \(\) => \{ \$\('abDetail'\)\.classList\.remove\('open'\); updateAbMini\(\); if \(typeof abIsTv === 'function' && abIsTv\(\)\) restoreAbSelection\(\); \}\)/,
+    'the detail Back chevron restores focus on TV');
+  // Fresh content sets reset the flat browse index so the first move lands on the first item.
+  assert.match(ui, /function renderAbGrid\(items\) \{[\s\S]+AB\.focusIdx = 0; AB\.colMem = \{\};/,
+    'search results reset AB.focusIdx/colMem so the first D-pad move lands on the first result');
+  assert.match(ui, /function abRefocusContinue\(\) \{[\s\S]+#abContinue \.abCard[\s\S]+abFocusEl\(cont\[Math\.max\(0, Math\.min\(AB\.focusIdx \|\| 0, cont\.length - 1\)\)\]\)/,
+    'removing/finishing a Continue-Listening book keeps focus on a neighbouring Continue cover, not a stale index into Discovery');
+});
+
 // Second audit-fix batch: local-library age gate, next-episode recency, music queue paging +
 // fail-streak, and library-scanner year parsing. ("&"-title matching is covered behaviorally in
 // phase2; the local age gate behaviorally in security.test.js — these pin the shapes.)
