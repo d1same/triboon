@@ -4287,14 +4287,14 @@ test('v2.6.9: Android-TV cover padding — content clears the rail (overscan) + 
   assert.match(ui, /left:calc\(var\(--rail\) \+ var\(--overscan\)\); padding:46px var\(--gut\) 0 var\(--gut\); overflow-y:auto;/,
     '#audiobooks (own left rule) shifts by --overscan too');
   // BOTTOM: body.tv-scoped trim of each section's dead band to a ~overscan title-safe margin.
-  assert.match(ui, /body\.tv #home\{padding-bottom:10px!important\}/,
+  assert.match(ui, /body\.tv #home\{padding-bottom:0!important\}/,
     'home bottom gap lives on the SECTION (not #rows, which has a JS max-height cap that would shave the last row)');
   assert.match(ui, /body\.tv #browse,body\.tv #person\{padding-bottom:0!important\}/,
     'browse/person sections zero their bottom padding so the grid owns the near-edge gap');
-  assert.match(ui, /body\.tv #grid,body\.tv #personGrid,body\.tv #musicBrowse,body\.tv #musicList\{padding-bottom:10px\}/,
-    'browse/library/person grids + BOTH music surfaces (#musicBrowse home shelves, #musicList search) sit ~10px from the TV bottom edge (just clears the focus glow)');
-  assert.match(ui, /body\.tv:not\(\.abMiniOpen\) #audiobooks\{padding-bottom:10px\}/,
-    'audiobooks cover grid sits ~10px from the bottom edge, but not while the mini-player reserves .abGrid space');
+  assert.match(ui, /body\.tv #grid,body\.tv #personGrid,body\.tv #musicBrowse,body\.tv #musicList\{padding-bottom:0\}/,
+    'browse/library/person grids + BOTH music surfaces (#musicBrowse home shelves, #musicList search) sit flush to the TV bottom edge (owner: 0 padding)');
+  assert.match(ui, /body\.tv:not\(\.abMiniOpen\) #audiobooks\{padding-bottom:0\}/,
+    'audiobooks cover grid sits flush to the bottom edge, but not while the mini-player reserves .abGrid space');
   // Desktop/mobile invariance: --overscan is 0 in :root and set only on body.tv.
   assert.match(ui, /:root\{[^}]*--overscan:0px;/s,
     '--overscan is 0 by default so every calc(var(--rail) + var(--overscan)) is byte-identical off-TV');

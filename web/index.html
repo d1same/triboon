@@ -2437,10 +2437,10 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
    title-safe margin — which also clears the focus glow and matches the rail's own overscan
    bottom-inset. body.tv-scoped -> desktop + mobile keep their existing padding untouched. Owner's
    "covers cut off at the bottom / more padding below than covers reach" complaint, all pages. */
-body.tv #home{padding-bottom:10px!important} /* gap on the SECTION, not inside #rows — #rows has a JS max-height cap (adaptRowWindows) that would shave the bottom poster row */
+body.tv #home{padding-bottom:0!important} /* gap on the SECTION, not inside #rows — #rows has a JS max-height cap (adaptRowWindows) that would shave the bottom poster row */
 body.tv #browse,body.tv #person{padding-bottom:0!important}
-body.tv #grid,body.tv #personGrid,body.tv #musicBrowse,body.tv #musicList{padding-bottom:10px} /* #musicBrowse = the music HOME shelves (96px band); #musicList = search/queue. 10px ≈ just clears the focus glow so covers sit near the TV edge (owner: overscan-sized gap was still too big) */
-body.tv:not(.abMiniOpen) #audiobooks{padding-bottom:10px} /* audiobook cover grid scrolls inside #audiobooks; :not gate keeps the mini-player's .abGrid 80px clearance */
+body.tv #grid,body.tv #personGrid,body.tv #musicBrowse,body.tv #musicList{padding-bottom:0} /* #musicBrowse = the music HOME shelves (96px band); #musicList = search/queue. 0 = covers flush to the TV bottom edge (owner request; the bottom-row focus glow sits at the very edge) */
+body.tv:not(.abMiniOpen) #audiobooks{padding-bottom:0} /* audiobook cover grid scrolls inside #audiobooks; :not gate keeps the mini-player's .abGrid 80px clearance */
 
 /* ============ Settings & Preferences ============ */
 #settings .panel,#prefs .panel{box-shadow:0 18px 42px rgba(0,0,0,.16)}
