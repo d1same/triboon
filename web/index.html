@@ -3589,6 +3589,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
         </div>
         <div class="profileActions">
           <button class="profileAction focusable" id="prefSwitchProfile">Switch profile</button>
+          <button class="profileAction focusable" id="prefChangeServer" style="display:none">Change server</button>
           <button class="profileAction danger focusable" id="prefSignOut">Sign out</button>
         </div>
       </div>
@@ -4646,6 +4647,7 @@ const PROFILE_ICON_PATHS = {
   plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
   switch: '<path d="M16 3h5v5"/><path d="M4 20 21 3"/><path d="M21 16v5h-5"/><path d="m15 15 6 6"/><path d="M4 4l5 5"/>',
   logout: '<path d="M10 17l5-5-5-5"/><path d="M15 12H3"/><path d="M21 4v16"/>',
+  server: '<rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01"/><path d="M7 16.5h.01"/>',
   face: '<circle cx="12" cy="12" r="9"/><path d="M8.5 14.2c.9 1.2 2.1 1.8 3.5 1.8s2.6-.6 3.5-1.8"/><path d="M9 9.6h.01"/><path d="M15 9.6h.01"/>',
 };
 function profileIcon(name, extraClass = '') {
@@ -4881,6 +4883,9 @@ $('railUser').addEventListener('click', () => {
 });
 $('prefSwitchProfile').addEventListener('click', showProfilePicker);
 $('prefSignOut').addEventListener('click', signOutAccount);
+// "Change server" — native-shell only (the browser's server IS its origin). Re-opens the shell's
+// server-entry screen so the app can be pointed at a different Triboon server without reinstalling.
+$('prefChangeServer').addEventListener('click', () => { try { if (window.TriboonTV && typeof window.TriboonTV.changeServer === 'function') window.TriboonTV.changeServer(); } catch {} });
 // (The Triboon logo/home shortcut was removed from the rail top — the profile avatar lives there now;
 // Home is reached via its dedicated nav button.)
 
@@ -18129,6 +18134,9 @@ function renderProfileSessionActions() {
   lvl.className = `profileLevelChip lvl${level}`;
   lvl.innerHTML = `${profileIcon(LEVEL_ICON[level])}<span>${esc(LEVELS[level])}</span>`;
   $('prefSwitchProfile').innerHTML = `${profileIcon('switch')}<span>Switch profile</span>`;
+  $('prefChangeServer').innerHTML = `${profileIcon('server')}<span>Change server</span>`;
+  // Only the native shells expose a server switch (a plain browser can't repoint its own origin).
+  $('prefChangeServer').style.display = (window.TriboonTV && typeof window.TriboonTV.changeServer === 'function') ? '' : 'none';
   $('prefSignOut').innerHTML = `${profileIcon('logout')}<span>Sign out</span>`;
 }
 // One universal APK for TV + phone (the tv/mobile names were retired once all devices ran a build

@@ -1216,6 +1216,18 @@ public class MainActivity extends Activity {
                 runOnUiThread(MainActivity.this::startVoiceFlow);
             }
 
+            // "Change server" (Preferences → Profile & Pins): re-open the server-entry screen, pre-filled
+            // with the current server, so the user can point the app at a different Triboon server without
+            // reinstalling. connect() saves the new URL to prefs and loads it.
+            @android.webkit.JavascriptInterface
+            public void changeServer() {
+                if (!trustedBridgeOrigin()) return;
+                runOnUiThread(() -> {
+                    if (web != null) web.setVisibility(View.GONE);
+                    showSetup(null);
+                });
+            }
+
             @android.webkit.JavascriptInterface
             public int nativeChromeVersion() {
                 if (!trustedBridgeOrigin()) return 0;

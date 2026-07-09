@@ -4358,6 +4358,23 @@ test('v2.6.13: Audiobooks D-pad — async entry, rail-steal, lazy rows, back che
     'the old show-all-then-remove-unavailable availability filter is gone');
 });
 
+// "Change server" under Preferences → Profile & Pins (next to Sign out) — native-shell only.
+test('Change server: profile action + native bridge (repoint the app without reinstall)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
+  // The button sits between Switch profile and Sign out, hidden by default.
+  assert.match(ui, /<button class="profileAction focusable" id="prefSwitchProfile">Switch profile<\/button>\s*\n\s*<button class="profileAction focusable" id="prefChangeServer" style="display:none">Change server<\/button>\s*\n\s*<button class="profileAction danger focusable" id="prefSignOut">Sign out<\/button>/,
+    'a "Change server" action sits between Switch profile and Sign out, hidden until the native shell is detected');
+  // Click routes to the native bridge; only shown when that bridge exists (a browser can't repoint origin).
+  assert.match(ui, /\$\('prefChangeServer'\)\.addEventListener\('click', \(\) => \{ try \{ if \(window\.TriboonTV && typeof window\.TriboonTV\.changeServer === 'function'\) window\.TriboonTV\.changeServer\(\); \} catch \{\} \}\);/,
+    'the Change server button calls the native TriboonTV.changeServer bridge');
+  assert.match(ui, /\$\('prefChangeServer'\)\.style\.display = \(window\.TriboonTV && typeof window\.TriboonTV\.changeServer === 'function'\) \? '' : 'none';/,
+    'Change server is feature-gated to shells that expose the changeServer bridge');
+  // Native bridge: re-opens the server-entry screen (pre-filled with the current server).
+  assert.match(android, /public void changeServer\(\) \{\s*\n\s*if \(!trustedBridgeOrigin\(\)\) return;\s*\n\s*runOnUiThread\(\(\) -> \{\s*\n\s*if \(web != null\) web\.setVisibility\(View\.GONE\);\s*\n\s*showSetup\(null\);/,
+    'the native changeServer bridge hides the WebView and re-opens the server-entry (setup) screen');
+});
+
 // Second audit-fix batch: local-library age gate, next-episode recency, music queue paging +
 // fail-streak, and library-scanner year parsing. ("&"-title matching is covered behaviorally in
 // phase2; the local age gate behaviorally in security.test.js — these pin the shapes.)
