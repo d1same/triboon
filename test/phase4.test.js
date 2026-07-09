@@ -574,7 +574,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'desktop-browser backdrop stays capped + viewport-aware (min(vw,px), not a percentage takeover) and is deliberately smaller than TV so posters lead');
   assert.match(ui, /--scrim:\s*linear-gradient\(90deg,rgba\(11,8,18,\.86\) 0%,rgba\(11,8,18,\.56\) 28%,rgba\(11,8,18,\.20\) 58%,rgba\(11,8,18,\.06\) 100%\),\s*linear-gradient\(0deg,rgba\(11,8,18,\.76\) 0%,rgba\(11,8,18,\.24\) 26%,rgba\(11,8,18,\.04\) 60%,rgba\(11,8,18,\.10\) 100%\)/,
     'browser backdrop scrim should protect text without blacking out the artwork');
-  assert.match(ui, /body\.tv\{--bdW:min\(48vw,820px\);--bdH:min\(50vh,460px\);--overscan:2\.5vmin\}[\s\S]+body\.shortBrowseBd\{--bdH:min\(46vh,430px\)\}[\s\S]+body\.tv\.shortBrowseBd\{--bdH:min\(38vh,360px\)\}[\s\S]+@media \(max-height:760px\)\{[\s\S]+--bdH:min\(34vh,260px\)[\s\S]+@media \(max-width:980px\)\{[\s\S]+--bdW:min\(40vw,400px\);--bdH:min\(36vh,300px\)\}[\s\S]+body\.shortBrowseBd:not\(\.tv\)\{--bdH:min\(33vh,280px\)\}/,
+  assert.match(ui, /body\.tv\{--bdW:min\(48vw,820px\);--bdH:min\(50vh,460px\);--overscan:1\.5vmin\}[\s\S]+body\.shortBrowseBd\{--bdH:min\(46vh,430px\)\}[\s\S]+body\.tv\.shortBrowseBd\{--bdH:min\(38vh,360px\)\}[\s\S]+@media \(max-height:760px\)\{[\s\S]+--bdH:min\(34vh,260px\)[\s\S]+@media \(max-width:980px\)\{[\s\S]+--bdW:min\(40vw,400px\);--bdH:min\(36vh,300px\)\}[\s\S]+body\.shortBrowseBd:not\(\.tv\)\{--bdH:min\(33vh,280px\)\}/,
     'TV, short browser, narrow browser, and poster browse viewports should tighten backdrop size; on narrow browser windows the browse (shortBrowseBd) pages must also shrink height (:not(.tv)) so movies/TV pages do not keep a ~46vh backdrop and dominate a small window');
   assert.match(ui, /body\.shortBrowseBd:not\(\.tv\) #bdInfo[\s\S]+-webkit-line-clamp:1[\s\S]+@media \(max-height:820px\)[\s\S]+body\.shortBrowseBd:not\(\.tv\) #bdInfo \.bdiC,[\s\S]+display:none/,
     'browser poster browse pages should compact the focused-title band without touching TV');
@@ -3730,7 +3730,7 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'fallback source search should show an empty state instead of a silent blank page');
   assert.doesNotMatch(ui, /id="musicBar"|musicBarBtns|S\.zone === 'musicBar'|\$\('mb/,
     'dead hidden mini-player bar and its focus/control wiring should not ship');
-  assert.match(ui, /--safeT:max\(env\(safe-area-inset-top\),0px\);[\s\S]+--overscan:0px;[\s\S]+body\.tv\{--bdW:[^}]+--overscan:2\.5vmin\}/,
+  assert.match(ui, /--safeT:max\(env\(safe-area-inset-top\),0px\);[\s\S]+--overscan:0px;[\s\S]+body\.tv\{--bdW:[^}]+--overscan:1\.5vmin\}/,
     'TV and mobile chrome should reserve safe-area/overscan space');
   assert.ok(ui.includes('--appClockReserve:144px;')
     && ui.includes('.browseHead .filterBar{position:fixed;top:calc(18px + var(--safeT) + var(--overscan));right:calc(var(--appClockReserve) + var(--safeR) + var(--overscan));z-index:22')
@@ -4298,8 +4298,24 @@ test('v2.6.9: Android-TV cover padding — content clears the rail (overscan) + 
   // Desktop/mobile invariance: --overscan is 0 in :root and set only on body.tv.
   assert.match(ui, /:root\{[^}]*--overscan:0px;/s,
     '--overscan is 0 by default so every calc(var(--rail) + var(--overscan)) is byte-identical off-TV');
-  assert.match(ui, /body\.tv\{--bdW:[^}]*--overscan:2\.5vmin\}/,
+  assert.match(ui, /body\.tv\{--bdW:[^}]*--overscan:1\.5vmin\}/,
     '--overscan is only non-zero on body.tv (Android TV), keeping the padding change TV-only');
+});
+
+// v2.6.12: Android-TV Movies/TV/Library YEAR-caption clip is really a virtual-grid scroll MISALIGNMENT —
+// scrollTo(topRow*pitch) assumed uniform rows, but 1- vs 2-line titles make rows vary, so the focused
+// row landed low (previous row's year peeked above, current year clipped). Align the ACTUAL focused
+// card's measured position instead. Plus: reduce the left rail inset, and give audiobook rows glow room.
+test('v2.6.12: virtual-grid focus aligns the real card (year no longer clips) + audiobook row glow room', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  // The virtual-grid keyboard focus scroll must align the focused card's REAL position, not topRow*pitch.
+  assert.match(ui, /const target = root\.scrollTop \+ \(el\.getBoundingClientRect\(\)\.top - root\.getBoundingClientRect\(\)\.top\) - 8;\s*\n\s*root\.scrollTo\(\{ top: Math\.max\(0, Math\.round\(target\)\), behavior: focusScrollBehavior\(\) \}\);/,
+    'virtual-grid focus scrolls to the focused card’s measured offset (exact regardless of row-height variation) instead of the uniform-pitch estimate that clipped the year');
+  assert.doesNotMatch(ui, /root\.scrollTo\(\{ top: \(S\.gridTopRow \|\| 0\) \* exactPitch, behavior: focusScrollBehavior\(\) \}\);/,
+    'the old uniform-pitch scrollTo(topRow*pitch) that misaligned varying-height rows is gone');
+  // Audiobook discovery rows get left breathing room on TV so the first cover’s glow is not clipped.
+  assert.match(ui, /body\.tv \.abRowScroll \{ padding-left:14px; scroll-padding-left:14px; \}/,
+    'audiobook horizontal rows give the first cover left room on TV so its focus glow is not clipped ("cut off a bit to the left")');
 });
 
 // Second audit-fix batch: local-library age gate, next-episode recency, music queue paging +
