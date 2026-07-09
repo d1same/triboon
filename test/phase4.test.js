@@ -4341,6 +4341,14 @@ test('v2.6.13: Audiobooks D-pad — async entry, rail-steal, lazy rows, back che
     'search results reset AB.focusIdx/colMem so the first D-pad move lands on the first result');
   assert.match(ui, /function abRefocusContinue\(\) \{[\s\S]+#abContinue \.abCard[\s\S]+abFocusEl\(cont\[Math\.max\(0, Math\.min\(AB\.focusIdx \|\| 0, cont\.length - 1\)\)\]\)/,
     'removing/finishing a Continue-Listening book keeps focus on a neighbouring Continue cover, not a stale index into Discovery');
+  // OK on the audiobook search bar must be consumed for the MIC and CLEAR too — not only the text field —
+  // or it fell through to the global handler and (with a stale S.zone) clicked a hidden movie/TV card.
+  assert.match(ui, /if \(k === 'Enter'\) \{\s*\n\s*e\.preventDefault\(\); e\.stopPropagation\(\);\s*\n\s*if \(onField\) abSearchRun\(\$\('abSearch'\)\.value\.trim\(\)\); else if \(ae && ae\.click\) ae\.click\(\);\s*\n\s*return true;/,
+    'OK on the audiobook search bar activates whatever is focused (field=search, mic=voice, X=clear) and never falls through to a stale movies-grid handler');
+  assert.match(ui, /if \(k === 'ArrowUp'\) \{ e\.preventDefault\(\); e\.stopPropagation\(\); return true; \}[\s\S]*?nothing above the search bar/,
+    'ArrowUp on the audiobook search bar is absorbed, not passed to the global handler');
+  assert.match(ui, /if \(\['Escape', 'GoBack', 'BrowserBack'\]\.includes\(k\) \|\| \(k === 'Backspace' && !onField\)\) \{\s*\n\s*e\.preventDefault\(\); e\.stopPropagation\(\); enterRail\(\); return true;/,
+    'Back/Escape (and Backspace on a button) from the audiobook search bar exits to the rail instead of falling through');
 });
 
 // Second audit-fix batch: local-library age gate, next-episode recency, music queue paging +

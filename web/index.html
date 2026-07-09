@@ -23688,8 +23688,19 @@ function abHandleKey(e, k) {
     const ae = document.activeElement;
     const inSearch = ae === $('abSearch') || ae === $('abMicBtn') || ae === $('abClearBtn');
     if (inSearch) {
+      const onField = ae === $('abSearch');
       if (k === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); abFocusEntry(); return true; }
-      if (k === 'Enter' && ae === $('abSearch')) { e.preventDefault(); abSearchRun($('abSearch').value.trim()); return true; }
+      if (k === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); return true; } // nothing above the search bar
+      // OK activates whatever is focused: the field runs the search, the mic starts voice search, the
+      // clear (X) clears. OK was previously handled ONLY for the field, so OK on the mic/clear FELL
+      // THROUGH to the global keydown handler — which, with a stale S.zone left over from the previous
+      // Movies/TV grid, clicked a hidden movie/TV card and navigated away (owner: "goes to another
+      // movie or tv show"). Consume it here for every element in the search bar.
+      if (k === 'Enter') {
+        e.preventDefault(); e.stopPropagation();
+        if (onField) abSearchRun($('abSearch').value.trim()); else if (ae && ae.click) ae.click();
+        return true;
+      }
       if (k === 'ArrowRight' || k === 'ArrowLeft') {
         e.preventDefault(); e.stopPropagation();
         const chain = [abMicVisible() ? $('abMicBtn') : null, $('abSearch'), $('abClearBtn').hidden ? null : $('abClearBtn')].filter(Boolean);
@@ -23700,7 +23711,12 @@ function abHandleKey(e, k) {
         clearFocus(); try { chain[ci].focus(); } catch {}
         return true;
       }
-      return false; // let normal typing pass through
+      // Back/Escape (and Backspace on a BUTTON, where it isn't a text-delete) exits to the rail — never
+      // let these fall through to the global handler with a stale S.zone from a previous grid view.
+      if (['Escape', 'GoBack', 'BrowserBack'].includes(k) || (k === 'Backspace' && !onField)) {
+        e.preventDefault(); e.stopPropagation(); enterRail(); return true;
+      }
+      return false; // typing (letters, and Backspace in the text field) → let the input handle it
     }
     if (!NAV.includes(k)) return false;
     e.preventDefault(); e.stopPropagation();
