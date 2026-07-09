@@ -174,11 +174,6 @@ body.shortBrowseBd:not(.tv) #bdInfo .bdiO{font-size:14.5px;line-height:1.45;-web
 #rail.show{display:flex}
 #railMain{min-height:0;flex:1 1 auto;display:flex;flex-direction:column;align-items:stretch;gap:6px;overflow-x:hidden;overflow-y:auto;padding-bottom:4px;scroll-padding-bottom:10px;scrollbar-width:none}
 #railMain::-webkit-scrollbar{width:0;height:0}
-#railFooter{flex:none;display:flex;flex-direction:column;align-items:stretch;gap:6px;padding-top:10px;border-top:0}
-/* Expanded menu (the state during D-pad nav): a divider marks where the scrolling list ends and the
-   pinned Preferences/Profile footer begins — so a long menu reads as "scroll to here", not items
-   sliding behind Preferences. */
-body.tv #rail:hover #railFooter,#rail.expanded #railFooter,body.railOpen #railFooter{border-top:1px solid var(--line);padding-top:12px;margin-top:4px}
 /* Expanded = a real overlay (collapsed is 72px; var(--rail) ALSO became 72px in a restyle,
    which silently turned expansion into a no-op — labels faded in but stayed clipped).
    Translucent + blurred so the content stays present behind it (Plex-style). */
@@ -236,8 +231,7 @@ body.tv:not(.railOpen) #rail:not(.expanded){
   width:72px!important;background:transparent!important;align-items:center;
   padding-left:0!important;padding-right:0!important
 }
-body.tv:not(.railOpen) #rail:not(.expanded) #railMain,
-body.tv:not(.railOpen) #rail:not(.expanded) #railFooter{
+body.tv:not(.railOpen) #rail:not(.expanded) #railMain{
   width:48px!important;align-items:center
 }
 body.tv:not(.railOpen) #rail:not(.expanded) .railBtn,
@@ -579,7 +573,7 @@ body.tv #filterMenu{backdrop-filter:none}
 .gChip.sel{background:var(--btnSelected);color:var(--text);border-color:transparent}
 #grid{flex:1;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:20px 16px;align-content:start;padding:6px 4px 30px}
 #grid .pcard{flex:none}
-#browse.searchMode{padding-top:110px} /* clears the floating search bar incl. section headers */
+#browse.searchMode{padding-top:110px!important} /* clears the floating search bar incl. section headers; !important beats the unconditional #browse padding shorthand below, else results tuck under the bar */
 #browse.searchMode .browseHead{display:none}
 #browse.noFilter .filterBar{display:none}
 
@@ -1422,7 +1416,12 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 /* MUST match the content-push transform (.26s, same curve) — mismatched clocks made the
    returning content slide under the still-wide rail on collapse. */
 #rail{transition:width .26s cubic-bezier(.22,1,.36,1),background .26s!important}
-.railBtn .rlabel,#rail .rlabel{transition:opacity .2s ease,max-width .32s cubic-bezier(.22,1,.36,1)!important}
+/* Label reveal/hide. Opacity fades ~instantly (.06s) so on COLLAPSE the text is gone before its box
+   narrows — no more watching "Audiobooks"→"Audiobo"→"Au" chopped from the right. max-width animates
+   in .22s, INSIDE the rail's .26s width transition, so the rail's overflow:hidden never clips it a
+   second time (the old .32s > .26s caused the "finishes in stages" lag). Expand is a clean width
+   reveal. Was opacity .2s / max-width .32s — the slow fade + over-long width made the collapse ugly. */
+.railBtn .rlabel,#rail .rlabel{transition:opacity .06s ease,max-width .22s cubic-bezier(.22,1,.36,1)!important}
 /* Content push animates TRANSFORM (compositor-smooth), synced to the rail's .26s clock. */
 #home,#discover,#browse,#detail,#person,#settings,#searchBar,#detail .back{transition:transform .26s cubic-bezier(.22,1,.36,1)!important}
 /* Profile footer collapses to just the avatar when the rail is collapsed (no stray text). */
@@ -1817,6 +1816,7 @@ body.mobileShell #upNext .un-cancel{width:42px;height:42px}
 .pcard .art .cardMenuBtn{right:8px;top:8px}
 .pcard:hover .cardMenuBtn,.pcard.focus .cardMenuBtn,
 .card:hover .cardMenuBtn,.card.focus .cardMenuBtn,
+.abCard:hover .cardMenuBtn,.abCard.focus .cardMenuBtn,
 .seasonCard:hover .cardMenuBtn,.seasonCard.focus .cardMenuBtn{opacity:1}
 .epMenu{position:absolute;right:10px;top:44px;z-index:5;min-width:200px;background:linear-gradient(180deg,rgba(24,26,29,.97),rgba(13,15,18,.97));border:1px solid rgba(255,255,255,.07);
   border-radius:10px;padding:6px;display:none;box-shadow:0 18px 44px rgba(0,0,0,.42)}
@@ -2959,8 +2959,10 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6v7"/><path d="M16 8v3"/><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20"/><path d="M8 8v3"/></svg><span class="rlabel">Audiobooks</span></button>
   <div id="libSec" style="display:none"></div><!-- libraries flow inline with the nav — no section header -->
   <div id="railLibs"></div>
-  </div>
-  <div id="railFooter">
+  <!-- "+ Add library" (admin only) flows inline right after the libraries instead of a pinned footer.
+       The old footer + its divider reserved bottom space, and the divider's job — separating the nav
+       from a pinned Profile/Prefs footer — is obsolete now that Profile lives at the TOP. Dropping it
+       lets one or two more nav icons fit on the Android TV rail before the list needs to scroll. -->
   <button class="railBtn focusable" id="railAddLib" title="Add library" style="display:none">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg><span class="rlabel">Add library</span></button>
   </div>
@@ -5812,6 +5814,9 @@ function closeCwMenu() {
   // Detail page (season/episode/related covers): hand focus straight back to the cover the menu
   // opened from — focusGrid/focusCard below are home/grid-nav only and would strand it.
   if (S.view === 'detail') { if (ret && ret.isConnected) applyFocus(ret, false); return; }
+  // Audiobooks page owns its own D-pad zone (AB.*), not the home/grid nav below — hand focus back
+  // to the card the menu opened from, keeping AB.focusIdx in sync.
+  if (S.view === 'audiobooks') { if (ret && ret.isConnected && typeof abFocusEl === 'function') abFocusEl(ret); return; }
   if (S.zone === 'grid') return focusGrid(S.gridIdx); // poster grids hand focus back too
   if (S.zone !== 'rail') focusCard(S.rowIdx, S.colIdx[S.rowIdx] || 0); // hand focus back to the card
 }
@@ -13647,8 +13652,21 @@ async function loadDiscover() {
     renderRowsInto(root, rows);
     setRowsView(root, rows, false);
     bootReady();
-    // Trailers row: pull trailers for the top trending titles (best-effort, async).
-    buildTrailerRow(trend.results.filter((x) => x.poster_path && passesMaturity(x) && catalogOk(x)).slice(0, 12)).then((trItems) => {
+    // Trailers row: candidates are the FRESHEST releases first — in-theaters + on-air (their trailers
+    // are the newest drops) then trending — deduped across movie/tv. buildTrailerRow then sorts the row
+    // by actual trailer publish date, so this genuinely shows the latest trailers, not trending order.
+    const trailerSeen = new Set();
+    const trailerCand = [];
+    for (const x of [...(nowP.results || []), ...(onAir.results || []), ...(trend.results || [])]) {
+      if (!x || !x.poster_path || !passesMaturity(x) || !catalogOk(x)) continue;
+      const t = x.media_type === 'tv' || (x.name && !x.title) ? 'tv' : 'movie';
+      const k = t + ':' + x.id;
+      if (trailerSeen.has(k)) continue;
+      trailerSeen.add(k);
+      trailerCand.push(x);
+      if (trailerCand.length >= 20) break;
+    }
+    buildTrailerRow(trailerCand).then((trItems) => {
       if (!trItems.length) return;
       const focused = root.querySelector('.focus');
       const focusRow = focused ? parseInt(focused.dataset.row || '-1', 10) : -1;
@@ -13693,6 +13711,13 @@ function pickBestTrailer(results) {
       else if (/trailer/i.test(name)) s += 15;
       if (/\btrailer 1\b|\bmain trailer\b|^official trailer$/i.test(name)) s += 10;
       s += Math.min(10, (v.size || 0) / 108); // 1080p ≈ +10, 720p ≈ +6.7 — tie-break only
+      // Recency: among a title's trailers prefer the newest official one (a "Final Trailer" that
+      // dropped this week should beat the months-old first teaser). ~+22 this month, decaying ~1/mo.
+      // Weaker than official(+50)/Trailer-vs-Teaser(+60), so it nudges within a tier, never overrides it.
+      if (v.published_at) {
+        const days = (Date.now() - new Date(v.published_at).getTime()) / 86400000;
+        if (Number.isFinite(days) && days >= 0) s += Math.max(0, 22 - days / 30);
+      }
       return { v, s };
     })
     .sort((a, b) => b.s - a.s);
@@ -13701,14 +13726,18 @@ function pickBestTrailer(results) {
 async function buildTrailerRow(list) {
   // Parallel lookups — sequential fetches made the trailers row trail in seconds late.
   const found = await Promise.all(list.map(async (x) => {
-    const type = x.media_type === 'tv' || x.name ? 'tv' : 'movie';
+    const type = x.media_type === 'tv' || (x.name && !x.title) ? 'tv' : 'movie';
     try {
       const v = await api(`/api/tmdb/${type}/${x.id}/videos`);
       const tr = pickBestTrailer(v.results);
-      return tr ? { ...mapTmdb(x), trailer: { key: tr.key, title: x.title || x.name } } : null;
+      if (!tr) return null;
+      const pub = tr.published_at ? new Date(tr.published_at).getTime() : 0;
+      return { ...mapTmdb(x), trailer: { key: tr.key, title: x.title || x.name }, _trailerPub: Number.isFinite(pub) ? pub : 0 };
     } catch { return null; }
   }));
-  return found.filter(Boolean).slice(0, 12);
+  // "Latest" means newest trailer first — the old code kept trending order, so this-week's real
+  // trailer drops got buried behind months-old ones for perennially-popular titles.
+  return found.filter(Boolean).sort((a, b) => b._trailerPub - a._trailerPub).slice(0, 12);
 }
 
 /* ============ browse pages (Movies / TV): genre + sort dropdowns, infinite scroll ============ */
@@ -22226,7 +22255,7 @@ document.addEventListener('keydown', (e) => {
         if (e.repeat) return;
         const el = cur || gridElForIndex(S.gridIdx); if (!el) return;
         const it = (S.gridItems || [])[S.gridIdx];
-        if (S.view !== 'search' && it && it.tmdbId && ['movie', 'tv'].includes(it.type)) {
+        if (it && it.tmdbId && ['movie', 'tv'].includes(it.type)) {
           S._lpEl = el;
           S._lpTimer = setTimeout(() => { S._lpTimer = null; S._lpEl = null; openItemMenu(it, el); }, 450);
           return;
@@ -22300,7 +22329,7 @@ document.addEventListener('keydown', (e) => {
         S._lpTimer = setTimeout(() => { S._lpTimer = null; S._lpEl = null; openLiveChannelMenu(it, el); }, 450);
         return;
       }
-      if (S.view !== 'search' && it && (isContinueWatchingItem(it) || (it.tmdbId && ['movie', 'tv'].includes(it.type)))) {
+      if (it && (isContinueWatchingItem(it) || (it.tmdbId && ['movie', 'tv'].includes(it.type)))) {
         S._lpEl = el;
         S._lpTimer = setTimeout(() => { S._lpTimer = null; S._lpEl = null; openItemMenu(it, el); }, 450);
         return;
@@ -22827,17 +22856,66 @@ async function renderAbContinue() {
       && ((w.meta && w.meta.abTracks) ? w.position > 3 : w.position > 30))
     .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   if (!books.length) return;
+  AB.contMeta = {};
   const cards = books.map((w) => {
     const asin = w.key.slice('audiobook:'.length);
     const m = w.meta || {};
+    // Stash the meta so the card menu can mark-finished/remove without another round-trip.
+    AB.contMeta[asin] = { asin, type: 'audiobook', title: m.title || 'Audiobook', cover: m.cover || '', author: m.author || '' };
     const pct = w.duration ? Math.min(100, Math.round((w.position / w.duration) * 100)) : 0;
     const cover = m.cover ? `style="background-image:url('${String(m.cover).replace(/'/g, '')}')"` : '';
+    // ⋯ is a <span> (not a <button>): .abCard is itself a <button> and nesting buttons is invalid.
+    // Hidden on TV (body.tv .cardMenuBtn CSS); TV uses hold-OK instead.
     return `<button class="abCard focusable" data-asin="${abEsc(asin)}">
-      <div class="abCover" ${cover}>${m.cover ? '' : 'No cover'}<div class="abProg"><i style="width:${pct}%"></i></div></div>
+      <div class="abCover" ${cover}>${m.cover ? '' : 'No cover'}<div class="abProg"><i style="width:${pct}%"></i></div>
+        <span class="cardMenuBtn abContMenuBtn" role="button" aria-label="More options" title="More options">${CARD_MENU_DOTS}</span></div>
       <div class="abT">${abEsc(m.title || 'Audiobook')}</div><div class="abA">${abEsc(m.author || '')}</div></button>`;
   }).join('');
   box.innerHTML = `<div class="abRowTitle">Continue Listening</div><div class="abGrid abContRow">${cards}</div>`;
-  box.querySelectorAll('.abCard').forEach((el) => el.addEventListener('click', () => openAbDetail(el.dataset.asin)));
+  box.querySelectorAll('.abCard').forEach((el) => {
+    el.addEventListener('click', () => openAbDetail(el.dataset.asin));
+    const mb = el.querySelector('.abContMenuBtn');
+    if (mb) mb.addEventListener('click', (e) => { e.stopPropagation(); e.preventDefault(); openAbCardMenu(el.dataset.asin, el); });
+  });
+}
+// Continue Listening card menu — the web ⋯ button and Android TV long-press OK both open this.
+// Reuses the shared #cwMenu container + its global D-pad handling, exactly like movie/TV openItemMenu.
+function openAbCardMenu(asin, card) {
+  const meta = (AB.contMeta && AB.contMeta[asin]) || { asin, type: 'audiobook', title: 'Audiobook' };
+  const m = $('cwMenu');
+  S.cwReturnEl = card || null;
+  m.innerHTML =
+    actionMenuButton('abinfo', 'info', 'Details') +
+    actionMenuButton('abfin', 'check', 'Mark as finished') +
+    actionMenuButton('abrm', 'remove', 'Remove from Continue Listening');
+  const r = card ? card.getBoundingClientRect() : { left: innerWidth / 2 - 120, top: innerHeight / 2 - 90, height: 0 };
+  m.style.left = Math.max(8, Math.min(innerWidth - 260, r.left + 10)) + 'px';
+  m.style.top = Math.max(8, Math.min(innerHeight - 230, r.top + 10)) + 'px';
+  m.classList.add('open');
+  S.cwMenuIdx = 0;
+  applyFocus(m.querySelector('button'));
+  m.onclick = (e) => {
+    const btn = e.target.closest && e.target.closest('button[data-act]');
+    if (!btn || !m.contains(btn)) return;
+    const act = btn.dataset.act;
+    e.stopPropagation(); closeCwMenu();
+    if (act === 'abinfo') openAbDetail(asin);
+    else if (act === 'abfin') abMarkFinished(asin, meta);
+    else if (act === 'abrm') abRemoveContinue(asin, meta);
+  };
+}
+function abMarkFinished(asin, meta) {
+  api('/api/watch', { method: 'POST', body: { key: 'audiobook:' + asin, watched: true, position: 0, duration: 0,
+    profile: S.profile ? S.profile.id : undefined, meta } })
+    .then(() => { toast(`“${(meta && meta.title) || 'Audiobook'}” marked finished`); return renderAbContinue(); })
+    .then(() => { if (abIsTv()) restoreAbSelection(); })
+    .catch((e) => toast(e.message));
+}
+function abRemoveContinue(asin, meta) {
+  api('/api/watch', { method: 'POST', body: { key: 'audiobook:' + asin, remove: true, profile: S.profile ? S.profile.id : undefined } })
+    .then(() => { toast(`“${(meta && meta.title) || 'Audiobook'}” removed from Continue Listening`); return renderAbContinue(); })
+    .then(() => { if (abIsTv()) restoreAbSelection(); })
+    .catch((e) => toast(e.message));
 }
 async function abSearchRun(q) {
   if (!q) { $('abGrid').innerHTML = ''; $('abFree').innerHTML = ''; showAbDiscovery(true); return; }
@@ -23129,19 +23207,25 @@ function abSaveWatch() {
   if (!n || !n.asin) return;
   const b = n.book || {};
   const base = { title: b.title, type: 'audiobook', cover: b.cover, author: n.author, asin: n.asin };
-  let body;
+  let body, overall;
   if (n.multi) {
     const td = audio.duration || 0;
     const frac = td ? (audio.currentTime / td) : 0;
-    const overall = (n.trackIdx + Math.min(1, frac)) / n.tracks.length; // 0..1 across the whole book
+    overall = (n.trackIdx + Math.min(1, frac)) / n.tracks.length; // 0..1 across the whole book
     body = { key: 'audiobook:' + n.asin, position: Math.round(overall * 1000), duration: 1000,
       profile: S.profile ? S.profile.id : undefined,
       meta: { ...base, abTrack: n.trackIdx, abOffset: Math.floor(audio.currentTime || 0), abTracks: n.tracks.length } };
   } else {
     if (!audio.duration) return;
+    overall = audio.duration ? (audio.currentTime / audio.duration) : 0;
     body = { key: 'audiobook:' + n.asin, position: Math.floor(audio.currentTime), duration: Math.floor(audio.duration),
       profile: S.profile ? S.profile.id : undefined, meta: base };
   }
+  // Near the end (~92%) counts as finished — mark it watched so the book drops off "Continue
+  // Listening" (keeps the page clean) instead of lingering forever, mirroring how a movie/episode
+  // auto-finishes at end of playback. /api/watch overwrites `watched` each save, so this stays true
+  // while they're in the tail and only clears if they scrub back before 92%.
+  if (overall >= 0.92) body.watched = true;
   api('/api/watch', { method: 'POST', body }).catch(() => {});
 }
 function abStartSaveLoop() { clearInterval(AB.saveTimer); AB.saveTimer = setInterval(abSaveWatch, 10000); }
@@ -23492,6 +23576,9 @@ function abHandleKey(e, k) {
     const playerOpen = $('abPlayer').classList.contains('open');
     const detailOpen = $('abDetail').classList.contains('open');
     if (!playerOpen && !detailOpen && S.view !== 'audiobooks') return false;
+    // A Continue Listening card menu (#cwMenu) is open over the page — yield so the shared global
+    // menu D-pad handler (Up/Down/Enter/Escape) owns the keys, like movie/TV covers do.
+    if ($('cwMenu').classList.contains('open')) return false;
     const NAV = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Enter', 'Escape', 'Backspace', 'GoBack', 'BrowserBack'];
     if (playerOpen) { if (!NAV.includes(k)) return false; e.preventDefault(); e.stopPropagation(); abPlayerKey(k); return true; }
     if (detailOpen) { if (!NAV.includes(k)) return false; e.preventDefault(); e.stopPropagation(); abDetailKey(k); return true; }
@@ -23522,7 +23609,21 @@ function abHandleKey(e, k) {
     if (AB.zone !== 'ab') { abFocusEntry(); return true; }
     const cards = abBrowseCards();
     if (['Escape', 'Backspace', 'GoBack', 'BrowserBack'].includes(k)) { enterRail(); return true; }
-    if (k === 'Enter') { if (cards[AB.focusIdx]) cards[AB.focusIdx].click(); return true; }
+    if (k === 'Enter') {
+      if (e.repeat) return true;
+      const el = cards[AB.focusIdx];
+      if (!el) return true;
+      // Continue Listening cards: HOLD OK → card menu (Details / Mark finished / Remove); a quick
+      // tap → open detail. Reuses the shared long-press timer + the global keyup that fires .click().
+      if (el.dataset.asin && el.closest('#abContinue')) {
+        S._lpEl = el;
+        const asin = el.dataset.asin;
+        S._lpTimer = setTimeout(() => { S._lpTimer = null; S._lpEl = null; openAbCardMenu(asin, el); }, 450);
+        return true;
+      }
+      el.click();
+      return true;
+    }
     if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(k)) return abRowMove(cards, k);
     return true; // absorb (no move available)
   } catch { return false; }

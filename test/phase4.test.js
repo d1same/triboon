@@ -677,8 +677,12 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'returning Home with cached rows should repoint the row model and reclaim focus from hidden pages');
   assert.match(ui, /if \(\(S\.maxLevel \?\? 4\) < 4\) \{[\s\S]+renderRowsInto\(root, rows\);[\s\S]+setRowsView\(root, rows, false\);[\s\S]+if \(S\.zone !== 'rail'\) focusCard\(0, 0\);/,
     'restricted-profile Discover rows should still focus the first visible card after rendering');
-  assert.match(ui, /buildTrailerRow\(trend\.results[\s\S]+const focused = root\.querySelector\('\.focus'\);[\s\S]+const focusRow = focused \? parseInt\(focused\.dataset\.row[\s\S]+renderRowsInto\(root, rows, \{ resetScroll: false \}\);[\s\S]+setRowsView\(root, rows, false\);[\s\S]+if \(S\.view === 'discover' && S\.zone !== 'rail'\) \{[\s\S]+focusCard\(safeRow, safeCol, \{ scroll: false, align: false \}\);/,
-    'Discover trailer-row hydration should preserve or restore card focus after the async rerender');
+  assert.match(ui, /for \(const x of \[\.\.\.\(nowP\.results \|\| \[\]\), \.\.\.\(onAir\.results \|\| \[\]\), \.\.\.\(trend\.results \|\| \[\]\)\]\)[\s\S]+trailerCand\.push\(x\);[\s\S]+buildTrailerRow\(trailerCand\)\.then\(\(trItems\) => \{[\s\S]+const focused = root\.querySelector\('\.focus'\);[\s\S]+const focusRow = focused \? parseInt\(focused\.dataset\.row[\s\S]+renderRowsInto\(root, rows, \{ resetScroll: false \}\);[\s\S]+setRowsView\(root, rows, false\);[\s\S]+if \(S\.view === 'discover' && S\.zone !== 'rail'\) \{[\s\S]+focusCard\(safeRow, safeCol, \{ scroll: false, align: false \}\);/,
+    'Discover trailer row is fed by in-theaters + on-air + trending (freshest first), and its async hydration preserves/restores card focus');
+  assert.match(ui, /const pub = tr\.published_at \? new Date\(tr\.published_at\)\.getTime\(\) : 0;[\s\S]+_trailerPub[\s\S]+sort\(\(a, b\) => b\._trailerPub - a\._trailerPub\)\.slice\(0, 12\)/,
+    'the trailers row is sorted newest-trailer-first (genuinely "latest"), not by trending order');
+  assert.match(ui, /if \(v\.published_at\) \{[\s\S]+const days = \(Date\.now\(\) - new Date\(v\.published_at\)\.getTime\(\)\)[\s\S]+s \+= Math\.max\(0, 22 - days \/ 30\)/,
+    'pickBestTrailer nudges the newest official trailer up within a title via a decaying recency bonus');
   assert.match(ui, /function routeIsTitle\(\) \{[\s\S]+\^#\\\/\?title\\\/\(movie\|tv\)\\\/\\d\+[\s\S]+window\.addEventListener\('hashchange'[\s\S]+if \(\$\(\'detail\'\)\.classList\.contains\(\'open\'\) && !routeIsTitle\(\)\) return closeDetail\(\);[\s\S]+applyRoute\(\);/,
     'browser Back from one title route to another should route to the previous detail instead of jumping to the original browse page');
   assert.match(ui, /const detailResume = resumePositionForItem\(it\);[\s\S]+updateDetailPlayLabel\(detailResume \? \{ label: 'Resume', target: \{ \.\.\.it, resume: detailResume \} \}/,
@@ -3706,8 +3710,12 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'Search results should all use uniform poster cards (TV shows no longer overflow/overlap as wide cards)');
   assert.match(ui, /function renderGrid\(items, root = \$\('grid'\)\) \{[\s\S]+makeCard\(it, true, \(\) => focusGrid\(i\)\)/,
     'normal poster grids should still render poster cards');
-  assert.match(ui, /if \(S\.view !== 'search' && it && \(isContinueWatchingItem\(it\) \|\| \(it\.tmdbId && \['movie', 'tv'\]\.includes\(it\.type\)\)\)\) \{[\s\S]+openItemMenu\(it, el\);/,
-    'Search result OK should open immediately instead of waiting for the long-press menu timer');
+  assert.match(ui, /if \(it && \(isContinueWatchingItem\(it\) \|\| \(it\.tmdbId && \['movie', 'tv'\]\.includes\(it\.type\)\)\)\) \{[\s\S]+openItemMenu\(it, el\);/,
+    'held OK on any eligible title cover — including Search results — opens the action menu');
+  assert.doesNotMatch(ui, /S\.view !== 'search' && it && \(isContinueWatchingItem/,
+    'the old "Search results are excluded from the hold-OK menu" guard is gone (owner added hold/⋯ options on search results)');
+  assert.match(ui, /#browse\.searchMode\{padding-top:110px!important\}/,
+    'search results clear the fixed search bar on desktop + TV (110px must beat the unconditional #browse padding shorthand, so !important is required)');
   assert.match(ui, /renderGrid\(cards\);[\s\S]+if \(!cards\.length\) grid\.innerHTML = '<div class="gridMore">No matches\.<\/div>';/,
     'fallback source search should show an empty state instead of a silent blank page');
   assert.doesNotMatch(ui, /id="musicBar"|musicBarBtns|S\.zone === 'musicBar'|\$\('mb/,
@@ -3722,8 +3730,10 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'browse genre/sort controls should sit beside the fixed clock on desktop while dropping cleanly on phone shells');
   assert.match(ui, /function clearPlaybackTimers\(\) \{[\s\S]+S\.healthTimer[\s\S]+S\.watchTimer[\s\S]+\}/,
     'health/watch timers should clear through one shared player cleanup path');
-  assert.match(ui, /<div id="railMain">[\s\S]*?<button id="railUser" class="railBtn focusable"[\s\S]+<div id="railLibs"><\/div>\s*<\/div>\s*<div id="railFooter">\s*<button class="railBtn focusable" id="railAddLib"[\s\S]+?<\/button>\s*<\/div>/,
-    'profile avatar pinned at the rail TOP; library rows scroll in railMain, separate from the pinned footer (which now holds only Add library)');
+  assert.match(ui, /<div id="railMain">[\s\S]*?<button id="railUser" class="railBtn focusable"[\s\S]+<div id="railLibs"><\/div>[\s\S]*?<button class="railBtn focusable" id="railAddLib"[\s\S]+?<\/button>\s*<\/div>\s*<\/nav>/,
+    'profile avatar pinned at the rail TOP; Add library flows inline right after the library rows, inside railMain');
+  assert.doesNotMatch(ui, /id="railFooter"/,
+    'the pinned rail footer is removed (Add library moved inline) so more nav icons fit on the Android TV rail');
   // Preferences + admin Settings are folded behind the profile avatar (the standalone nav buttons
   // were removed to free rail space): the avatar opens Preferences on the Profile & Pins tab.
   assert.ok(!ui.includes('id="navPrefs"') && !ui.includes('id="navSettings"'),
@@ -3739,14 +3749,16 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'the profile picker should not carry its own Sign out button');
   assert.match(ui, /\$\('prefSignOut'\)\.addEventListener\('click', signOutAccount\)/,
     'Sign out should remain available in the Profile & Pins panel');
-  assert.match(ui, /#railMain\{[\s\S]*overflow-y:auto[\s\S]*#railFooter\{[\s\S]*flex:none[\s\S]*border-top:/,
-    'rail footer should stay fixed while library/menu items scroll');
+  assert.match(ui, /#railMain\{[\s\S]*?flex:1 1 auto[\s\S]*?overflow-y:auto/,
+    'the rail nav list (incl. inline Add library) scrolls inside railMain');
   // Left menu: wrap-around (Up from the top jumps to the bottom where Preferences/Profile live) so a
   // long menu reaches Preferences in one press, and a divider marks where the scrolling list ends.
   assert.match(ui, /if \(k === 'ArrowUp'\) return focusRail\(S\.railIdx <= 0 \? btns\.length - 1 : S\.railIdx - 1\);[\s\S]+if \(S\.railIdx >= btns\.length - 1\) \{[\s\S]+if \(focusMusicBar\(\)\) return;[\s\S]+return focusRail\(0\);/,
     'rail D-pad should wrap around (Up from top → bottom footer, Down past end → top)');
-  assert.match(ui, /body\.tv #rail:hover #railFooter,#rail\.expanded #railFooter,body\.railOpen #railFooter\{border-top:1px solid var\(--line\)/,
-    'an expanded menu should show a divider above the pinned Preferences/Profile footer');
+  assert.doesNotMatch(ui, /#railFooter\{border-top:1px solid var\(--line\)|body\.railOpen #railFooter/,
+    'the obsolete expanded-menu footer divider is gone (Add library flows inline; Profile lives at the top now, so no pinned footer to divide from)');
+  assert.match(ui, /\.railBtn \.rlabel,#rail \.rlabel\{transition:opacity \.06s ease,max-width \.22s cubic-bezier\(\.22,1,\.36,1\)!important\}/,
+    'rail label collapse fades opacity fast (.06s) and shrinks max-width (.22s) INSIDE the rail width .26s transition — kills the chopped-text / staged-collapse jank');
   // Android TV: focus must SNAP (no .15s ring fade) so two list rows never look highlighted at once.
   assert.match(ui, /body\.tv \.focusable::before\{transition:none\}/,
     'TV focus ring should be instant so the previous item does not keep glowing during a D-pad move');
@@ -4214,6 +4226,39 @@ test('v2.6.5: audiobook speed cache + audiobook D-pad parity with movies/TV', ()
     'audiobook detail related-rows stretch to the track so they scroll internally, not the whole page');
   assert.match(ui, /#abDetail \{ position:fixed; inset:0; z-index:40; background:var\(--ink\); overflow-x:hidden;/,
     'the audiobook detail clips horizontal overflow (no sideways page scroll on mobile)');
+});
+
+// v2.6.8: audiobook "Continue Listening" gets finished→✓→drop, a remove option, and a card menu
+// (web ⋯ + Android TV hold-OK) — reusing the shared #cwMenu + movie/TV watch machinery.
+test('v2.6.8: audiobook Continue Listening auto-finish + card menu (remove / mark finished)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  // Finish → drops off the row (keeps the page clean): near the end (~92%) marks the watch record
+  // watched, and the Continue Listening filter already excludes watched books.
+  assert.match(ui, /if \(overall >= 0\.92\) body\.watched = true;/,
+    'reaching ~92% of an audiobook marks it finished so it drops off Continue Listening');
+  assert.match(ui, /String\(w\.key \|\| ''\)\.startsWith\('audiobook:'\) && !w\.watched/,
+    'the Continue Listening list still excludes finished (watched) books');
+  // Card menu reuses the shared #cwMenu container + its global D-pad handler.
+  assert.match(ui, /function openAbCardMenu\(asin, card\) \{[\s\S]+\$\('cwMenu'\)[\s\S]+actionMenuButton\('abinfo', 'info', 'Details'\)[\s\S]+actionMenuButton\('abfin', 'check', 'Mark as finished'\)[\s\S]+actionMenuButton\('abrm', 'remove', 'Remove from Continue Listening'\)/,
+    'the audiobook card menu offers Details / Mark as finished / Remove and reuses #cwMenu');
+  assert.match(ui, /function abMarkFinished\(asin, meta\) \{[\s\S]+watched: true, position: 0, duration: 0[\s\S]+renderAbContinue\(\)/,
+    'Mark as finished marks the book watched and re-renders Continue Listening');
+  assert.match(ui, /function abRemoveContinue\(asin, meta\) \{[\s\S]+remove: true[\s\S]+renderAbContinue\(\)/,
+    'Remove deletes the watch record and re-renders Continue Listening');
+  // Web ⋯ button (hidden on TV via the existing body.tv .cardMenuBtn rule) on each Continue card.
+  assert.match(ui, /<span class="cardMenuBtn abContMenuBtn" role="button"/,
+    'each Continue Listening card carries a web ⋯ options button');
+  assert.match(ui, /\.abCard:hover \.cardMenuBtn,\.abCard\.focus \.cardMenuBtn/,
+    'the ⋯ button reveals on audiobook card hover/focus (desktop) — TV keeps it hidden');
+  // Android TV: HOLD OK on a Continue card opens the menu; a quick tap still opens detail.
+  assert.match(ui, /if \(el\.dataset\.asin && el\.closest\('#abContinue'\)\) \{[\s\S]+setTimeout\(\(\) => \{ S\._lpTimer = null; S\._lpEl = null; openAbCardMenu\(asin, el\); \}, 450\)/,
+    'holding OK on a Continue Listening card opens its menu (450ms long-press), reusing the shared timer');
+  // With the menu open over the audiobooks page, abHandleKey yields to the global #cwMenu handler.
+  assert.match(ui, /if \(\$\('cwMenu'\)\.classList\.contains\('open'\)\) return false;/,
+    'abHandleKey yields to the shared #cwMenu D-pad handler while the card menu is open');
+  // Closing the menu on the audiobooks page hands focus back to the card (not the home grid).
+  assert.match(ui, /if \(S\.view === 'audiobooks'\) \{ if \(ret && ret\.isConnected && typeof abFocusEl === 'function'\) abFocusEl\(ret\); return; \}/,
+    'closeCwMenu returns focus to the audiobook card, not the home/grid nav');
 });
 
 // Second audit-fix batch: local-library age gate, next-episode recency, music queue paging +
