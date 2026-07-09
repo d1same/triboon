@@ -3173,8 +3173,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android setup should allow LAN HTTP but reject remote/public HTTP server addresses before WebView load');
   assert.match(android, /private boolean isLocalCleartextServerHost\(String host\) \{[\s\S]+isAndroidLoopbackAlias\(h\)[\s\S]+h\.indexOf\('\.'\) < 0[\s\S]+h\.endsWith\("\.local"\)[\s\S]+hostLooksLiteral\(h\)[\s\S]+isLocalCleartextServerAddress\(InetAddress\.getByName\(h\)\)/,
     'Android cleartext server scope should include loopback, short LAN names, .local/.lan/.home.arpa, and private IP literals');
-  assert.match(android, /String serverError = serverUrlValidationError\(server\);[\s\S]+if \(!serverError\.isEmpty\(\)\) showSetup\(serverError\);[\s\S]+else web\.loadUrl\(server\);[\s\S]+String serverError = serverUrlValidationError\(url\);[\s\S]+if \(!serverError\.isEmpty\(\)\) \{[\s\S]+setupMsg\.setText\(serverError\);[\s\S]+return;[\s\S]+\}[\s\S]+prefs\(\)\.edit\(\)\.putString\(KEY_SERVER, url\)\.apply\(\);/,
-    'Android should reject unsafe HTTP before saving it or loading it into WebView');
+  assert.match(android, /String serverError = serverUrlValidationError\(server\);[\s\S]+approvedInsecure[\s\S]+if \(!serverError\.isEmpty\(\) && !approvedInsecure\) showSetup\(serverError\);[\s\S]+else web\.loadUrl\(server\);[\s\S]+String serverError = serverUrlValidationError\(url\);[\s\S]+if \(!serverError\.isEmpty\(\)\) \{[\s\S]+pendingInsecureServer = url;[\s\S]+return;[\s\S]+setupMsg\.setText\(serverError\);[\s\S]+return;[\s\S]+prefs\(\)\.edit\(\)\.putString\(KEY_SERVER, url\)\.apply\(\);/,
+    'Android should still reject unsafe HTTP before saving/loading it: startup gates unapproved insecure servers, and connect() arms a confirm (or hard-errors) before persisting KEY_SERVER');
   assert.ok(android.includes('MIN_WEBVIEW_MAJOR = 88')
       && android.includes('WebView.getCurrentWebViewPackage()')
       && android.includes('showSetup(webViewUnavailableMessage())'),
@@ -4373,6 +4373,35 @@ test('Change server: profile action + native bridge (repoint the app without rei
   // Native bridge: re-opens the server-entry screen (pre-filled with the current server).
   assert.match(android, /public void changeServer\(\) \{\s*\n\s*if \(!trustedBridgeOrigin\(\)\) return;\s*\n\s*runOnUiThread\(\(\) -> \{\s*\n\s*if \(web != null\) web\.setVisibility\(View\.GONE\);\s*\n\s*showSetup\(null\);/,
     'the native changeServer bridge hides the WebView and re-opens the server-entry (setup) screen');
+});
+
+// Remote plain-HTTP servers are reachable after an explicit one-time confirmation: a self-hoster
+// can point the app at http://host:port over the public internet, but only by deliberately tapping
+// Connect a second time, and consent is remembered per-URL so cold starts don't re-prompt.
+test('insecure server override: two-tap confirm + persisted consent (self-hosted plain HTTP)', () => {
+  const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
+
+  // The overridable case is specifically remote (non-local) plain HTTP.
+  assert.match(android, /private boolean isRemoteCleartextServer\(String url\) \{[\s\S]*?"http"\.equals\(scheme\) && !isLocalCleartextServerHost\(u\.getHost\(\)\)/,
+    'isRemoteCleartextServer isolates the one overridable failure: http scheme to a non-local host');
+
+  // First Connect tap arms the confirmation; a second tap on the SAME url is required to proceed.
+  assert.match(android, /if \(isRemoteCleartextServer\(url\)\) \{\s*\n\s*if \(!url\.equals\(pendingInsecureServer\)\) \{\s*\n\s*pendingInsecureServer = url;/,
+    'connect() arms a two-tap confirmation for remote plain-HTTP instead of hard-blocking');
+  assert.match(android, /prefs\(\)\.edit\(\)\.putString\(KEY_ALLOW_INSECURE, url\)\.apply\(\);/,
+    'confirming an insecure server persists per-URL consent');
+
+  // A secure/local address clears any stale insecure consent.
+  assert.match(android, /prefs\(\)\.edit\(\)\.remove\(KEY_ALLOW_INSECURE\)\.apply\(\);/,
+    'switching to a secure or local address revokes prior insecure consent');
+
+  // Cold start loads an already-approved insecure server instead of bouncing back to setup.
+  assert.match(android, /boolean approvedInsecure = isRemoteCleartextServer\(server\)\s*\n\s*&& server\.equals\(prefs\(\)\.getString\(KEY_ALLOW_INSECURE, ""\)\);\s*\n\s*if \(!serverError\.isEmpty\(\) && !approvedInsecure\) showSetup\(serverError\);/,
+    'startup loads a previously-approved insecure server without re-prompting');
+
+  // Re-showing setup (incl. Change server) resets the pending confirmation so it can't leak across entries.
+  assert.match(android, /private void showSetup\(String message\) \{\s*\n\s*pendingInsecureServer = null;/,
+    'showSetup clears any armed insecure confirmation');
 });
 
 // Second audit-fix batch: local-library age gate, next-episode recency, music queue paging +

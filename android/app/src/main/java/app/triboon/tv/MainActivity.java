@@ -122,6 +122,10 @@ public class MainActivity extends Activity {
     private static final String TAG = "TriboonTV";
     private static final String PREFS = "triboon";
     private static final String KEY_SERVER = "server";
+    // Exact server URL the user has explicitly approved for unencrypted (plain-HTTP) remote access.
+    // Empty unless they confirmed the insecure-connection prompt; lets a self-hoster use HTTP without
+    // re-confirming on every cold start, while a fresh/edited address still requires the deliberate tap.
+    private static final String KEY_ALLOW_INSECURE = "allowInsecureServer";
     private static final String KEY_CACHE_VERSION = "cacheVersion";
     private static final String KEY_PERSONAL_IPTV = "personalIptvSources";
     private static final String KEY_PERSONAL_IPTV_CHANNEL_CACHE = "personalIptvChannelCache";
@@ -150,6 +154,9 @@ public class MainActivity extends Activity {
     private LinearLayout setup;
     private EditText addr;
     private TextView setupMsg;
+    // Set to a remote plain-HTTP URL after the first Connect tap warns about it; a second tap on the
+    // same URL is the explicit "yes, connect unencrypted" confirmation. Cleared on any other outcome.
+    private String pendingInsecureServer = null;
     private FrameLayout root;
     private View fullscreenVideo;            // WebChromeClient custom view (HTML5 fullscreen)
     private FrameLayout nativePlayerLayer;   // Android-native player overlay
@@ -404,7 +411,9 @@ public class MainActivity extends Activity {
         if (server.isEmpty()) showSetup(null);
         else {
             String serverError = serverUrlValidationError(server);
-            if (!serverError.isEmpty()) showSetup(serverError);
+            boolean approvedInsecure = isRemoteCleartextServer(server)
+                    && server.equals(prefs().getString(KEY_ALLOW_INSECURE, ""));
+            if (!serverError.isEmpty() && !approvedInsecure) showSetup(serverError);
             else web.loadUrl(server);
         }
 
@@ -613,6 +622,18 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {
         }
         return "Use HTTPS for remote Triboon addresses. Plain HTTP is limited to local/private LAN servers.";
+    }
+
+    // True when the address is plain HTTP to a non-local (remote) host — the one validation failure a
+    // user may deliberately override by confirming they accept an unencrypted connection.
+    private boolean isRemoteCleartextServer(String url) {
+        try {
+            Uri u = Uri.parse(url == null ? "" : url.trim());
+            String scheme = u.getScheme() == null ? "" : u.getScheme().toLowerCase(Locale.US);
+            return "http".equals(scheme) && !isLocalCleartextServerHost(u.getHost());
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     private boolean isLocalCleartextServerHost(String host) {
@@ -7167,6 +7188,7 @@ public class MainActivity extends Activity {
     }
 
     private void showSetup(String message) {
+        pendingInsecureServer = null;
         setupMsg.setText(message == null ? "" : message);
         String saved = prefs().getString(KEY_SERVER, "");
         if (!saved.isEmpty()) addr.setText(saved);
@@ -7183,10 +7205,30 @@ public class MainActivity extends Activity {
         if (url.isEmpty()) return;
         String serverError = serverUrlValidationError(url);
         if (!serverError.isEmpty()) {
-            setupMsg.setText(serverError);
-            addr.requestFocus();
-            return;
+            // The only overridable failure is remote plain-HTTP: this is a self-hosted product, so if
+            // the user insists we let them through — but only after one explicit second tap on the same
+            // address, since cleartext over the public internet exposes their login and stream token.
+            if (isRemoteCleartextServer(url)) {
+                if (!url.equals(pendingInsecureServer)) {
+                    pendingInsecureServer = url;
+                    setupMsg.setText("Unencrypted connection. Your login and video aren't protected on "
+                            + "public networks. Press Connect again to continue anyway.");
+                    addr.requestFocus();
+                    return;
+                }
+                // Confirmed — remember consent for this exact URL so cold starts don't re-prompt.
+                prefs().edit().putString(KEY_ALLOW_INSECURE, url).apply();
+            } else {
+                pendingInsecureServer = null;
+                setupMsg.setText(serverError);
+                addr.requestFocus();
+                return;
+            }
+        } else {
+            // A secure/local address supersedes any prior insecure consent.
+            prefs().edit().remove(KEY_ALLOW_INSECURE).apply();
         }
+        pendingInsecureServer = null;
         prefs().edit().putString(KEY_SERVER, url).apply();
         if (!isTvDevice()) {
             hidePhoneKeyboard(addr);
