@@ -1002,14 +1002,37 @@ test('subtitle startup preference contract: admin can toggle built-in captions',
   const playerMap = fs.readFileSync(path.join(__dirname, '..', 'docs-player-regression-map.md'), 'utf8');
   const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
   // Native Up Next is now a compact translucent PILL (owner: "smaller, simpler, just a button,
-  // a bit transparent, above the seek bar"): a play pill (gradient glyph + kicker + one-line title)
-  // beside a small circular dismiss — no solid card. The countdown rides in the kicker.
+  // a bit transparent, above the seek bar"): a play pill (kicker + one-line title) beside a small
+  // circular dismiss — no solid card. The countdown rides in the kicker. Since the owner's follow-up
+  // ("make it black and white, don't make it too colorful; it sits too high") the pill is MONOCHROME
+  // (white play disc, muted-white kicker, white focus ring) and docks near the bottom edge while the
+  // transport chrome is hidden (the normal state during credits), lifting above the seek bar only
+  // when the chrome is up.
   assert.match(android, /private View buildNativeUpNextCard\(\) \{[\s\S]+pill\.setBackground\(nativeUpNextPillBg\(false\)\);[\s\S]+pill\.setOnClickListener\(v -> triggerNativeUpNextPlay\(\)\);[\s\S]+nativeUpNextPlay = pill;[\s\S]+nativeUpNextDismiss = dismiss;/,
     'the native Up Next is a translucent play pill + a small dismiss, not a solid card');
-  assert.match(android, /private GradientDrawable nativeUpNextPillBg\(boolean focused\) \{[\s\S]+0x6B050309[\s\S]+0xFFF2B441/,
-    'the native pill is translucent near-black (like the transport buttons) with an amber focus ring');
+  assert.match(android, /private GradientDrawable nativeUpNextPillBg\(boolean focused\) \{[\s\S]+0x6B050309[\s\S]+0xF0FFFFFF/,
+    'the native pill is translucent near-black (like the transport buttons) with a white (monochrome) focus ring');
+  assert.match(android, /GradientDrawable iconBg = new GradientDrawable\(\);\s*\n\s*iconBg\.setColor\(0xFFF2F2F4\);\s*\n\s*iconBg\.setShape\(GradientDrawable\.OVAL\);/,
+    'the native play disc is a solid white oval, not the brand gradient');
+  assert.match(android, /private void updateNativeUpNextPosition\(\) \{[\s\S]+nativeChrome\.getVisibility\(\) == View\.VISIBLE;[\s\S]+dp\(chromeUp \? 120 : 36\);/,
+    'the native Up Next docks low (dp36) with chrome hidden and lifts to dp120 above the seek bar with chrome up');
+  assert.match(android, /updateNativeUpNextPosition\(\);\s*\n\s*nativeUpNextCard\.setVisibility\(View\.VISIBLE\);/,
+    'showing the native Up Next positions it for the current chrome state first');
   assert.match(android, /nativeUpNextKicker\.setText\(autoplay && seconds >= 0 \? \("UP NEXT · " \+ seconds\) : "UP NEXT"\);/,
     'the native countdown rides in the kicker to keep the pill a single tidy line');
+  // Web twin of the same follow-up: monochrome + dock-low-when-controls-hidden.
+  assert.match(ui, /#player\.osdHide #upNext\{bottom:30px\}/,
+    'the web Up Next docks near the bottom edge while the OSD is hidden');
+  assert.match(ui, /#upNext \.un-ic\{[^}]*background:#f2f2f4;color:#0a0a0c\}/,
+    'the web Up Next play disc is monochrome (white disc, near-black glyph), not the brand gradient');
+  assert.match(ui, /#upNext \.un-lbl\{[^}]*color:rgba\(255,255,255,\.72\)[^}]*\}/,
+    'the web Up Next kicker is muted white, not amber');
+  assert.match(ui, /function showOsd\(\) \{\s*\n\s*\$\('osd'\)\.classList\.remove\('hide'\);\s*\n\s*\$\('player'\)\.classList\.remove\('osdHide'\);/,
+    'showing the OSD lifts the Up Next card (osdHide mirror removed)');
+  assert.match(ui, /\$\('osd'\)\.classList\.add\('hide'\);\s*\n\s*\$\('player'\)\.classList\.add\('osdHide'\);/,
+    'the OSD auto-hide docks the Up Next card (osdHide mirror added)');
+  assert.match(ui, /\$\('player'\)\.classList\.remove\('open', 'live', 'guideMode', 'osdHide'\);/,
+    'closing the player clears the osdHide mirror so the next playback starts fresh');
   const webHousekeepingStart = ui.indexOf('function startWebPlayerHousekeeping(mount, it) {');
   const webHousekeepingEnd = ui.indexOf('function playbackStartKind(mount)', webHousekeepingStart);
   assert.ok(webHousekeepingStart >= 0 && webHousekeepingEnd > webHousekeepingStart, 'web player housekeeping function should be present');
@@ -2340,7 +2363,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'native guide should consume pending live state without losing the Live TV return target');
   assert.doesNotMatch(ui, /__tvNativeLiveGuide[\s\S]+await playChannelWeb\(it\)/,
     'native Live TV guide should not hand off to the old web player');
-  assert.match(ui, /function openNativeLiveGuideShell\(it, opts = \{\}\) \{[\s\S]+wakeScreensaverForPlayerSurface\(\);[\s\S]+stopWebVideoElement\(\);[\s\S]+document\.body\.classList\.add\('nativeGuideMode'\);[\s\S]+S\.nativeGuideMode = true;[\s\S]+\$\(\'player\'\)\.classList\.add\('open', 'guideMode'\);[\s\S]+\$\(\'player\'\)\.classList\.remove\('live'\);[\s\S]+\$\(\'osd\'\)\.classList\.add\('hide'\);/,
+  assert.match(ui, /function openNativeLiveGuideShell\(it, opts = \{\}\) \{[\s\S]+wakeScreensaverForPlayerSurface\(\);[\s\S]+stopWebVideoElement\(\);[\s\S]+document\.body\.classList\.add\('nativeGuideMode'\);[\s\S]+S\.nativeGuideMode = true;[\s\S]+\$\(\'player\'\)\.classList\.add\('open', 'guideMode', 'osdHide'\);[\s\S]+\$\(\'player\'\)\.classList\.remove\('live'\);[\s\S]+\$\(\'osd\'\)\.classList\.add\('hide'\);/,
     'native Live TV guide should wake screensaver state and enter guide mode before the player container can reveal the web player');
   assert.match(ui, /function tryNativeLivePlayer\(it, guide = false\) \{[\s\S]+try \{[\s\S]+wakeScreensaverForPlayerSurface\(\);[\s\S]+window\.TriboonTV\.playLive/,
     'native Live TV playback should wake screensaver state before ExoPlayer owns the screen');
@@ -2362,7 +2385,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'closing a movie or episode mid-play should keep a return target for later Live TV browsing');
   assert.match(ui, /if \(!it\) \{[\s\S]+S\.playing\.item\.type !== 'live' && S\.view === 'player'[\s\S]+rememberVodReturn\(\);[\s\S]+revealNativeGuideShell\(\);[\s\S]+return togglePlayerGuide\(\);/,
     'native movie/episode guide button should open the same PiP guide and preserve a Back to movie target');
-  assert.match(ui, /function revealNativeGuideShell\(\) \{[\s\S]+wakeScreensaverForPlayerSurface\(\);[\s\S]+stopWebVideoElement\(\);[\s\S]+document\.body\.classList\.add\('nativeGuideMode'\);[\s\S]+S\.nativeGuideMode = true;[\s\S]+\$\(\'player\'\)\.classList\.add\('open', 'guideMode'\);[\s\S]+\$\(\'player\'\)\.classList\.remove\('live'\);[\s\S]+\$\(\'osd\'\)\.classList\.add\('hide'\);/,
+  assert.match(ui, /function revealNativeGuideShell\(\) \{[\s\S]+wakeScreensaverForPlayerSurface\(\);[\s\S]+stopWebVideoElement\(\);[\s\S]+document\.body\.classList\.add\('nativeGuideMode'\);[\s\S]+S\.nativeGuideMode = true;[\s\S]+\$\(\'player\'\)\.classList\.add\('open', 'guideMode', 'osdHide'\);[\s\S]+\$\(\'player\'\)\.classList\.remove\('live'\);[\s\S]+\$\(\'osd\'\)\.classList\.add\('hide'\);/,
     'native movie/episode guide button should wake the screensaver and hide the web video immediately while the guide data loads');
   assert.match(ui, /return renderGuideProgressive\(body, pool\)/,
     'Live TV guide should render the guide shell before waiting on provider guide data');

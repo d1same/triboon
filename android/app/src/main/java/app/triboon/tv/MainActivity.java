@@ -3278,7 +3278,10 @@ public class MainActivity extends Activity {
         FrameLayout.LayoutParams upNextLp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                 android.view.Gravity.END | android.view.Gravity.BOTTOM);
-        upNextLp.setMargins(0, 0, dp(40), dp(120)); // sit above the seek bar / transport row
+        // Default LOW (chrome is normally hidden during credits, when this card appears) — it used
+        // to sit at a fixed dp(120), which on a phone in landscape floats near mid-screen.
+        // updateNativeUpNextPosition() lifts it above the seek bar whenever the chrome is up.
+        upNextLp.setMargins(0, 0, dp(40), dp(36));
         nativePlayerLayer.addView(nativeUpNextCard, upNextLp);
 
         nativeLoading = new FrameLayout(this);
@@ -3546,12 +3549,14 @@ public class MainActivity extends Activity {
 
         TextView icon = new TextView(this);
         icon.setText("▶"); // ▶
-        icon.setTextColor(0xFF160A04);
+        icon.setTextColor(0xFF0A0A0C);
         icon.setTextSize(12.5f);
         icon.setTypeface(Typeface.DEFAULT_BOLD);
         icon.setGravity(android.view.Gravity.CENTER);
-        GradientDrawable iconBg = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{0xFFC13BD6, 0xFFFB8B3C, 0xFFF2B441});
+        // Monochrome by design (white disc, near-black glyph): an end-of-episode prompt over
+        // credits shouldn't shout in brand colors. Matches the web #upNext .un-ic.
+        GradientDrawable iconBg = new GradientDrawable();
+        iconBg.setColor(0xFFF2F2F4);
         iconBg.setShape(GradientDrawable.OVAL);
         icon.setBackground(iconBg);
         LinearLayout.LayoutParams iconLp = new LinearLayout.LayoutParams(dp(32), dp(32));
@@ -3562,7 +3567,7 @@ public class MainActivity extends Activity {
         col.setOrientation(LinearLayout.VERTICAL);
         nativeUpNextKicker = new TextView(this);
         nativeUpNextKicker.setText("UP NEXT");
-        nativeUpNextKicker.setTextColor(0xFFF2B441);
+        nativeUpNextKicker.setTextColor(0xB8FFFFFF); // muted white — monochrome card, no amber
         nativeUpNextKicker.setTextSize(9f);
         nativeUpNextKicker.setLetterSpacing(0.14f);
         nativeUpNextKicker.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
@@ -3606,17 +3611,30 @@ public class MainActivity extends Activity {
         return row;
     }
 
-    // Translucent near-black like the web .cbtn transport buttons; amber ring on focus.
+    // Translucent near-black like the web .cbtn transport buttons; white ring on focus (the card
+    // is deliberately monochrome — see buildNativeUpNextCard).
     private GradientDrawable nativeUpNextPillBg(boolean focused) {
         int fill = focused ? 0x9E050309 : 0x6B050309;
-        int stroke = focused ? 0xFFF2B441 : 0x1FFFFFFF;
+        int stroke = focused ? 0xF0FFFFFF : 0x1FFFFFFF;
         return nativePillBg(fill, stroke, dp(15));
     }
 
     private GradientDrawable nativeUpNextDismissBg(boolean focused) {
         int fill = focused ? 0x9E050309 : 0x6B050309;
-        int stroke = focused ? 0xFFF2B441 : 0x1FFFFFFF;
+        int stroke = focused ? 0xF0FFFFFF : 0x1FFFFFFF;
         return nativePillBg(fill, stroke, dp(22));
+    }
+
+    // The card docks near the bottom edge (like YouTube) while the transport chrome is hidden —
+    // the normal state during credits — and lifts above the seek bar when the chrome comes up.
+    private void updateNativeUpNextPosition() {
+        if (nativeUpNextCard == null) return;
+        boolean chromeUp = nativeChrome != null && nativeChrome.getVisibility() == View.VISIBLE;
+        ViewGroup.LayoutParams raw = nativeUpNextCard.getLayoutParams();
+        if (!(raw instanceof FrameLayout.LayoutParams)) return;
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) raw;
+        int want = dp(chromeUp ? 120 : 36);
+        if (lp.bottomMargin != want) { lp.bottomMargin = want; nativeUpNextCard.setLayoutParams(lp); }
     }
 
     private void showNativeUpNext(String json) {
@@ -3634,6 +3652,7 @@ public class MainActivity extends Activity {
         // The countdown rides in the kicker ("UP NEXT · 8"), keeping the pill to a single tidy line.
         nativeUpNextKicker.setText(autoplay && seconds >= 0 ? ("UP NEXT · " + seconds) : "UP NEXT");
         boolean wasVisible = nativeUpNextVisible;
+        updateNativeUpNextPosition();
         nativeUpNextCard.setVisibility(View.VISIBLE);
         nativeUpNextVisible = true;
         if (!wasVisible) nativeUpNextPlay.requestFocus();
@@ -4141,6 +4160,7 @@ public class MainActivity extends Activity {
         nativeChrome.setVisibility(View.VISIBLE);
         nativeTop.setVisibility(View.VISIBLE);
         setNativeSubtitleLift(true);
+        updateNativeUpNextPosition();
         if (focusPlay && nativePlayBtn != null && !nativeSheetOpen()) nativePlayBtn.requestFocus();
         scheduleNativeChromeHide();
     }
@@ -4173,6 +4193,7 @@ public class MainActivity extends Activity {
         if (nativeTop != null) nativeTop.setVisibility(View.GONE);
         parkNativeHiddenFocusOnSeek();
         setNativeSubtitleLift(false);
+        updateNativeUpNextPosition();
     }
 
     private boolean nativeChromeShowingForBack() {

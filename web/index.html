@@ -1660,6 +1660,7 @@ body.mobileShell #volSlider{display:none}
 body.mobileShell #trackMenu{left:12px;right:12px;bottom:84px;width:auto;min-width:0;max-height:calc(100vh - 144px);border-radius:12px}
 body.mobileShell #playerStats{left:12px;right:12px;bottom:84px;width:auto;max-height:calc(100vh - 144px);overflow:auto;border-radius:12px}
 body.mobileShell #upNext{right:12px;bottom:114px;gap:6px}
+body.mobileShell #player.osdHide #upNext{bottom:calc(16px + env(safe-area-inset-bottom))}
 body.mobileShell #upNext .un-play{max-width:calc(100vw - 80px)}
 body.mobileShell #upNext .un-cancel{width:42px;height:42px}
 
@@ -1782,27 +1783,33 @@ body.mobileShell #upNext .un-cancel{width:42px;height:42px}
 /* Compact "Up next" pill (bottom-right, just above the seek bar). Translucent like the transport
    .cbtn buttons so it never blocks the video — no frame/poster/table, just a play CTA + a dismiss
    with a thin countdown line. */
-#upNext{position:absolute;right:34px;bottom:178px;z-index:6;display:none;align-items:center;gap:8px}
+/* The raised base position clears the OSD transport; #player.osdHide (mirrored by showOsd/hide —
+   the usual state during credits, when this card appears) docks it near the bottom edge like
+   YouTube instead of floating mid-screen. Deliberately MONOCHROME (white/gray on translucent
+   black): an end-of-episode prompt over credits should not shout in brand colors. */
+#upNext{position:absolute;right:34px;bottom:178px;z-index:6;display:none;align-items:center;gap:8px;transition:bottom .25s ease}
+#player.osdHide #upNext{bottom:30px}
 #upNext.show{display:flex}
 #upNext button{border:0;cursor:pointer;color:var(--text);background:rgba(5,3,9,.42);box-shadow:0 10px 28px rgba(0,0,0,.3);
   backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);transition:background .15s,box-shadow .15s}
-#upNext button:hover,#upNext button.focus,#upNext button:focus{background:rgba(5,3,9,.62);outline:none;box-shadow:0 0 0 2px var(--focus),0 12px 30px rgba(0,0,0,.42)}
+#upNext button:hover,#upNext button.focus,#upNext button:focus{background:rgba(5,3,9,.62);outline:none;box-shadow:0 0 0 2px rgba(255,255,255,.92),0 12px 30px rgba(0,0,0,.42)}
 #upNext .un-play{position:relative;overflow:hidden;display:flex;align-items:center;gap:11px;max-width:322px;padding:9px 16px 9px 10px;border-radius:14px;text-align:left}
-#upNext .un-ic{flex:none;width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(120deg,var(--magenta),var(--coral) 55%,var(--amber));color:var(--onAccent)}
+#upNext .un-ic{flex:none;width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:#f2f2f4;color:#0a0a0c}
 #upNext .un-ic svg{width:15px;height:15px;margin-left:1px}
 #upNext .un-txt{display:flex;flex-direction:column;min-width:0;gap:1px}
-#upNext .un-lbl{font:700 9px "JetBrains Mono";letter-spacing:.14em;color:var(--amber);text-transform:uppercase}
+#upNext .un-lbl{font:700 9px "JetBrains Mono";letter-spacing:.14em;color:rgba(255,255,255,.72);text-transform:uppercase}
 #upNext .un-title{font:700 13.5px "Sora";line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #upNext .un-prog{position:absolute;left:0;right:0;bottom:0;height:2px;display:none}
 #upNext.counting .un-prog{display:block}
-#upNext .un-prog i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--magenta),var(--coral) 55%,var(--amber));transition:width 1s linear}
+#upNext .un-prog i{display:block;height:100%;width:0;background:rgba(255,255,255,.9);transition:width 1s linear}
 #upNext .un-cancel{flex:none;width:46px;height:46px;border-radius:50%;display:grid;place-items:center;color:var(--muted)}
 #upNext .un-cancel:hover,#upNext .un-cancel.focus,#upNext .un-cancel:focus{color:var(--text)}
 #upNext .un-cancel svg{width:15px;height:15px}
 /* Phones (plain browser): pull in from the edge, cap the pill width, sit above the compact controls.
    Placed AFTER the base #upNext rule so it wins on source order (the body.mobileShell twin above
    already wins by specificity in the Android shell). */
-@media (max-width:600px){#upNext{right:12px;bottom:114px;gap:6px}#upNext .un-play{max-width:calc(100vw - 80px)}#upNext .un-cancel{width:42px;height:42px}}
+@media (max-width:600px){#upNext{right:12px;bottom:114px;gap:6px}#upNext .un-play{max-width:calc(100vw - 80px)}#upNext .un-cancel{width:42px;height:42px}
+  #player.osdHide #upNext{bottom:calc(16px + env(safe-area-inset-bottom))}}
 
 /* Per-episode action menu (mark watched / unwatched / play from start). */
 .epCard{position:relative}
@@ -7923,7 +7930,7 @@ function revealNativeGuideShell() {
   document.body.classList.add('nativeGuideMode');
   S.nativeGuideMode = true;
   S.view = 'player';
-  $('player').classList.add('open', 'guideMode');
+  $('player').classList.add('open', 'guideMode', 'osdHide');
   $('player').classList.remove('live');
   $('osd').classList.add('hide');
   $('vlcPanel').classList.remove('show');
@@ -11510,7 +11517,7 @@ async function closePlayer(opts = {}) {
   stopWebVideoElement(); // stale media/cue state must not greet the next playback
   clearPlaybackTimers();
   S.nativeGuideMode = false;
-  $('player').classList.remove('open', 'live', 'guideMode'); $('vlcPanel').classList.remove('show'); $('playerLoader').classList.remove('show');
+  $('player').classList.remove('open', 'live', 'guideMode', 'osdHide'); $('vlcPanel').classList.remove('show'); $('playerLoader').classList.remove('show');
   document.body.classList.remove('videoOpen');
   document.body.classList.remove('nativeGuideMode');
   S._musicWasPlaying = false;
@@ -11876,6 +11883,7 @@ function seekTo(seconds) {
 }
 function showOsd() {
   $('osd').classList.remove('hide');
+  $('player').classList.remove('osdHide'); // mirrored for CSS (#upNext raises above the transport)
   updateClocks(); // fresh "Ends at" whenever the OSD appears (covers seeks too)
   if (S.osdTimer) clearTimeout(S.osdTimer);
   S.osdTimer = setTimeout(() => {
@@ -11883,6 +11891,7 @@ function showOsd() {
     // (3.5s is shorter than picking a subtitle on a remote). Check again in a beat.
     if ($('trackMenu').classList.contains('open') || $('playerStats').classList.contains('open')) return showOsd();
     $('osd').classList.add('hide');
+    $('player').classList.add('osdHide'); // controls away → #upNext docks to the bottom edge
     // Fade-out RESETS the remembered control: the next OSD wake lands on play/pause, not
     // whatever button was used minutes ago.
     const pp = ctlButtons().indexOf($('playPause'));
@@ -11901,6 +11910,7 @@ function hidePlayerOsdForBack() {
   if (osd.classList.contains('hide')) return false;
   if (S.osdTimer) clearTimeout(S.osdTimer);
   osd.classList.add('hide');
+  player.classList.add('osdHide');
   const pp = ctlButtons().indexOf($('playPause'));
   S.ctlIdx = pp >= 0 ? pp : 0;
   if (S.zone === 'seek') S.zone = 'playerCtl';
@@ -15831,7 +15841,7 @@ function openNativeLiveGuideShell(it, opts = {}) {
   document.body.classList.add('nativeGuideMode');
   S.nativeGuideMode = true;
   S.view = 'player';
-  $('player').classList.add('open', 'guideMode');
+  $('player').classList.add('open', 'guideMode', 'osdHide');
   $('player').classList.remove('live');
   $('osd').classList.add('hide');
   $('vlcPanel').classList.remove('show');
