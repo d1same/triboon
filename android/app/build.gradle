@@ -88,7 +88,7 @@ dependencies {
     // route-picker dialog (shown via a ContextThemeWrapper so the app-wide theme stays DeviceDefault);
     // appcompat is required on the compile classpath because the picker dialog extends AppCompatDialog.
     implementation "com.google.android.gms:play-services-cast-framework:21.5.0"
-    implementation "androidx.mediarouter:mediarouter:1.7.0"
+    implementation "androidx.mediarouter:mediarouter:1.8.1"
     implementation "androidx.appcompat:appcompat:1.7.0"
     testImplementation "junit:junit:4.13.2"
 }
