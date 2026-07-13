@@ -89,7 +89,7 @@ dependencies {
     // appcompat is required on the compile classpath because the picker dialog extends AppCompatDialog.
     implementation "com.google.android.gms:play-services-cast-framework:21.5.0"
     implementation "androidx.mediarouter:mediarouter:1.7.0"
-    implementation "androidx.appcompat:appcompat:1.7.0"
+    implementation "androidx.appcompat:appcompat:1.7.1"
     testImplementation "junit:junit:4.13.2"
 }
 
