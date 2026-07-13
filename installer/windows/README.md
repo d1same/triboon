@@ -29,7 +29,12 @@ all temp writes use the OS temp dir, and each sidecar honours an env-var overrid
 
 ## Building the installer (maintainer, on a Windows box)
 
-**Prereq:** [Inno Setup 6.3+](https://jrsoftware.org/isdl.php) — `winget install JRSoftware.InnoSetup`.
+**Prereq:** the exact Inno Setup compiler recorded in `dependencies.lock.json`. CI installs the
+locked compiler automatically. On a local elevated PowerShell, install the same verified build with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File installer\windows\install-inno.ps1
+```
 
 ```powershell
 # from the repo root
@@ -37,17 +42,22 @@ powershell -ExecutionPolicy Bypass -File installer\windows\build-installer.ps1
 ```
 
 The script:
-1. resolves the latest **Node v24 LTS** from `nodejs.org/dist/index.json`, downloads the win-x64 zip,
-   **verifies its SHA-256** against the official `SHASUMS256.txt`, and extracts just `node.exe`;
+1. downloads the exact locked **Node v24 LTS** win-x64 zip and extracts just `node.exe`;
 2. downloads **WinSW v2.12.0** (`WinSW-x64.exe`, self-contained — no .NET runtime needed);
-3. downloads **ffmpeg + ffprobe** (gyan.dev release-essentials) and **yt-dlp** (latest);
+3. downloads the exact locked **ffmpeg + ffprobe** (gyan.dev essentials) and **yt-dlp** releases;
 4. downloads **alass v2.0.0** (skip with `-NoAlass`);
 5. copies `server\`, `web\`, `package.json`;
 6. compiles `dist\Triboon-Setup-v<version>.exe` with Inno Setup.
 
+Every download uses the immutable URL and reviewed SHA-256 in `dependencies.lock.json`; the build
+does not call a `latest` endpoint or accept a checksum fetched during that build. To upgrade a
+dependency, review its publisher checksum, download and hash the exact artifact, update the lock,
+and run the focused installer/release contract tests before committing both together.
+
 Downloads are cached in `installer\windows\staging\downloads\` (reused on rebuild; `-Clean` wipes them).
-`staging\` and `dist\` are git-ignored — only the three source files (`Triboon.iss`,
-`triboon-service.xml`, `build-installer.ps1`) are committed.
+`staging\` and `dist\` are git-ignored. Installer source, the dependency lock, and the locked Inno
+Setup bootstrap (`Triboon.iss`, `triboon-service.xml`, `build-installer.ps1`,
+`dependencies.lock.json`, `install-inno.ps1`) are committed.
 
 Flags: `-NoAlass`, `-Clean`, `-IsccPath "<path to ISCC.exe>"`.
 
@@ -81,12 +91,16 @@ Install-time end-to-end can't be fully checked from CI — run it on a real box:
   aggregation). The bundled binary ships with its license/attribution in `licenses\ffmpeg\` and a
   source link in `licenses\THIRD-PARTY-NOTICES.txt`. To avoid redistributing GPL binaries entirely,
   a future option is to download ffmpeg at first-run instead of bundling it.
-- **Supply-chain integrity:** every bundled binary is SHA-256 verified at build time — Node, ffmpeg,
-  and yt-dlp against the provider's freshly-fetched checksum; WinSW and alass against pinned constants
-  in `build-installer.ps1`. A tampered download fails the build instead of shipping.
-- **Data-dir ACL:** the installer runs `icacls` to break inheritance on `C:\ProgramData\Triboon` and
-  grant Full Control only to `SYSTEM` + `Administrators`, so the token-signing `secret.json` isn't
-  readable by other local users (NTFS ignores the server's POSIX `0600` mode).
+- **Supply-chain integrity:** every bundled binary is SHA-256 verified against the reviewed,
+  versioned `dependencies.lock.json`. The Inno Setup release asset is also Authenticode-checked, and
+  the installed compiler's hash must match the lock. A moving release endpoint, tampered download,
+  poisoned cache, or wrong compiler fails the build.
+- **Data-dir ACL:** the installer first restores inheritable Full Control for `SYSTEM` +
+  `Administrators`, then breaks inheritance on the `C:\ProgramData\Triboon` root only. Child ACLs
+  are reset from that protected root and have inheritance re-enabled; inheritance removal is never
+  recursive. This keeps the LocalSystem service recoverable even if an older install left a bad ACL,
+  while preventing inherited `BUILTIN\Users` read access to `secret.json` (NTFS ignores the server's
+  POSIX `0600` mode). Every ACL phase is checked and the service is not registered on a partial failure.
 - **Service account:** runs as `LocalSystem` (WinSW default) so it has network access, can write
   `ProgramData`, and can spawn ffmpeg. A future hardening step is a lower-privilege virtual service
   account (`NT SERVICE\Triboon`).

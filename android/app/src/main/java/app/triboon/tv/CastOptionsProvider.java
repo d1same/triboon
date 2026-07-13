@@ -9,6 +9,7 @@ import com.google.android.gms.cast.framework.OptionsProvider;
 import com.google.android.gms.cast.framework.SessionProvider;
 
 import java.util.List;
+import java.util.Locale;
 
 // Phase 1/3 casting uses Google's Default Media Receiver (CC1AD845): no app registration, no HTTPS
 // media, plays a plain tokened MP4/fMP4 URL.
@@ -32,7 +33,7 @@ public final class CastOptionsProvider implements OptionsProvider {
             SharedPreferences p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
             String id = p.getString(KEY_CAST_APP_ID, "");
             if (id != null) {
-                id = id.trim().toUpperCase();
+                id = id.trim().toUpperCase(Locale.ROOT);
                 // Cast app-ids are 8 hex characters. Anything else -> default (never brick casting).
                 if (id.matches("[0-9A-F]{8}")) return id;
             }

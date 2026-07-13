@@ -35,7 +35,9 @@ function priorityRank(priority) {
 }
 
 class NzbFileStream {
-  constructor(pool, fileEntry, { readAhead = 4, cacheSegments = 24, cacheBytes = DEFAULT_CACHE_BYTES } = {}) {
+  constructor(pool, fileEntry, {
+    readAhead = 4, cacheSegments = 24, cacheBytes = DEFAULT_CACHE_BYTES, signal = null,
+  } = {}) {
     this.pool = pool;
     this.file = fileEntry;
     this.name = fileNameFromSubject(fileEntry.subject);
@@ -55,6 +57,10 @@ class NzbFileStream {
     this.cacheMaxBytes = Number.isFinite(cacheBytes) && cacheBytes > 0 ? cacheBytes : DEFAULT_CACHE_BYTES;
     this.cacheBytes = 0;
     this.inflight = new Map(); // segIndex -> Promise<Buffer>
+    // Scoped to fetches needed to establish this mount. A hedged source-race loser aborts it so a
+    // stalled startup BODY cannot keep an NNTP connection at startup priority until the 30s mount
+    // deadline. Normal playback reads deliberately do not inherit this signal.
+    this.mountSignal = signal;
     this.readAheadEpoch = 0;
     this.health = { verdict: 'unverified', checkedAt: null, missing: 0, sampled: 0 };
     this.playbackStats = {
@@ -119,10 +125,12 @@ class NzbFileStream {
     };
   }
 
-  async mount(priority = 'startup') {
+  async mount(priority = 'startup', opts = {}) {
     if (this.size !== null && this.partSize !== null) return this;
+    if (typeof opts !== 'object' || opts === null) opts = {};
+    const signal = opts.signal || this.mountSignal || null;
     const t0 = Date.now();
-    const first = await this._fetchSegment(0, priority || 'startup');
+    const first = await this._fetchSegment(0, priority || 'startup', { signal });
     if (this.partSize === null) this.partSize = first.length; // single-part post without =ypart
     if (this.size === null) this.size = first.length * this.segments.length; // worst-case fallback
     this.mountMs = Date.now() - t0;
@@ -278,13 +286,14 @@ class NzbFileStream {
   async readAt(start, len, opts = {}) {
     if (typeof opts === 'string') opts = { priority: opts };
     const priority = opts.priority || 'startup';
-    if (this.partSize === null) await this.mount(priority);
+    const signal = opts.signal || (priority === 'startup' ? this.mountSignal : null);
+    if (this.partSize === null) await this.mount(priority, { signal });
     const end = Math.min(start + len, this.size);
     if (start >= end) return Buffer.alloc(0);
     const first = this._segForOffset(start);
     const last = this._segForOffset(end - 1);
     const parts = await Promise.all(
-      Array.from({ length: last - first + 1 }, (_, k) => this._fetchSegment(first + k, priority))
+      Array.from({ length: last - first + 1 }, (_, k) => this._fetchSegment(first + k, priority, { signal }))
     );
     const base = first * this.partSize;
     return Buffer.concat(parts).subarray(start - base, end - base);

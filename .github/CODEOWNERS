@@ -1,0 +1,10 @@
+# Release and trust boundaries require an owner review.
+/.github/ @d1same
+/.dockerignore @d1same
+/Dockerfile @d1same
+/docker-compose.yml @d1same
+/docker/entrypoint.sh @d1same
+/android/ @d1same
+/bench/ @d1same
+/installer/windows/ @d1same
+/package.json @d1same

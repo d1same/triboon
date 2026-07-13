@@ -21,9 +21,11 @@ flowchart TD
   SourceResolver --> UserFilter["iptvSourcesForUser"]
   UserFilter --> PerSourceLoad["loadIptvChannelsForSource"]
   PerSourceLoad --> SourceCaches["iptvcaches[sourceId]\nepgcaches[sourceId]\nxtreamepgcaches[sourceId]"]
+  PerSourceLoad --> XmltvWorker["server/xmltv.js + worker\nbounded carried-channel parse"]
+  XmltvWorker --> SourceCaches
   PerSourceLoad --> Aggregate["aggregateIptvChannels\nsource-scoped idx/id"]
   Aggregate --> ChannelsApi["/api/iptv/channels"]
-  Aggregate --> GuideApi["/api/iptv/guide\n/api/iptv/epg/:idx"]
+  SourceCaches --> GuideApi["/api/iptv/guide\n/api/iptv/epg/:idx\nindex + stable cid"]
   Aggregate --> NativeApi["/api/iptv/native/:idx"]
   Aggregate --> WebApi["/api/iptv/stream/:idx"]
   NativeApi --> Android["Android ExoPlayer\nTS/HLS then remux fallback"]
@@ -34,7 +36,10 @@ flowchart TD
   SharedSourceModel --> LiveApi
   AndroidPrefs["Preferences\npersonal IPTV on this device"] --> AndroidStore["Android private prefs"]
   AndroidStore --> DeviceLoad["device-side Xtream/M3U load"]
-  DeviceLoad --> LiveMerge["web Live TV rows\nmerged client-side"]
+  PerSourceLoad --> ConcurrentLoad["server/device loads\nstart concurrently"]
+  DeviceLoad --> SingleFlight["one in-flight Android\nbridge request"]
+  SingleFlight --> ConcurrentLoad
+  ConcurrentLoad --> LiveMerge["web Live TV rows\nserver-first merge"]
   LiveMerge --> Android
 ```
 
@@ -46,7 +51,8 @@ IPTV fix checklist:
 3. Confirm delete removes runtime caches, persisted source caches, and
    source-prefixed favorites/groups.
 4. Confirm web zapping closes the previous MSE fetch/remux before opening the
-   next channel.
+   next channel. Main, split, and Multiview surfaces must also reject stale
+   hydration responses with independent monotonic tune epochs.
 5. Confirm Android native zapping releases the previous ExoPlayer stream before
    opening the next provider URL.
 6. Confirm provider errors are sanitized and do not log credential URLs.
@@ -69,13 +75,24 @@ IPTV fix checklist:
    addresses with the original `Host` header. Hostname HTTPS device-local IPTV
    belongs in the server/account source path until the Android shell has a TLS
    pinning socket stack.
-10. Confirm user and admin IPTV Settings show saved playlist status first and
+10. Confirm server/account and device-local channel loads begin concurrently,
+    merge deterministically server-first, and concurrent callers join one
+    Android bridge request rather than replacing its callback slot.
+11. Confirm now/next and timeline guide memo/request keys bind each mutable
+    channel index to its stable source-scoped id. Resolvable index drift must
+    self-heal; an identity that disappeared returns 409 and reloads the lineup.
+12. Confirm large XMLTV parsing runs in the bounded worker, retains only carried
+    channels, keeps the HTTP/player event loop responsive, and can serve a valid
+    stale cache while background refresh runs.
+13. Confirm user and admin IPTV Settings show saved playlist status first and
    keep server/username/password fields collapsed until Add playlist is chosen.
    Saved playlists must be editable from the list. Edits reuse the same source
    id, keep saved sensitive fields when edit inputs are blank, clear that
    source's channel/guide cache, and never create a duplicate playlist.
-10. Run `test/iptv-cache.test.js`; run `test/security.test.js` when routes,
-   tokens, logging, or credentials are touched.
+14. Run `test/iptv-cache.test.js`, `test/xmltv.test.js`, and the focused
+    `test/phase4.test.js` IPTV client-correctness test; run
+    `test/security.test.js` when routes, tokens, logging, or credentials are
+    touched.
 
 ## Contracts
 
@@ -167,6 +184,78 @@ IPTV fix checklist:
 | P12 | Attached local libraries must not slow first app load, rail rollover, or D-pad surfing. `/api/libraries` may load during shell hydration, but home must not fetch full `/api/libraries/:id/items` payloads; it may only reuse explicit library caches until a lean ownership endpoint exists. Rail rollover auto-loads the first bounded local-folder page through `/api/libraries/:id/items?limit=...`, and local library grids request more bounded pages through scroll/D-pad without rendering every scanned item at once. Large scan results are indexed in `library.sqlite`; movie/episode playback lookups use `/api/libraries/local-lookup` on demand and must honor library user ACLs before minting any local stream/art/play URLs. | `web/index.html` `loadLibraries`, `enrichHome`, `refreshLocalMapFromCachedLibraries`, `fetchLocalPlaybackKeys`, `ensureLocalPlaybackForItem`, `railPreviewAction`, `runLocalLibraryPaged`, `localLibraryPage`, `loadMoreLocalLibraryPage`, `mergeLocalItemsInto`, `focusGrid`; `server/index.js` `performScan`, `saveLibraryScan`, `libraryItems`, `localLookup`, `localItemPayload`, `localThumb`; `server/library-db.js` | `test/phase4.test.js`, `test/security.test.js`, `test/library-db.test.js`, Android boot smoke with perf marks, large local-library navigation smoke |
 | P13 | Android TV Back must preserve app context before leaving Triboon. The native wrapper routes `KEYCODE_BACK`, Activity `onBackPressed`, and Android 13+ `OnBackInvoked` through the same system-back handler so platform Back cannot bypass the web `__tvBack()` contract. Settings/Preferences and other non-home pages return Home inside Triboon; Movies, TV Shows, and attached-library pages first open the section/menu rail from the current scroll/focus position; only root Home answers exit with the press-back-again toast. Dialogs, details, player, drawers, and track menus still close first through the normal Escape path. | `android/app/src/main/java/app/triboon/tv/MainActivity.java` `dispatchKeyEvent`, `onBackPressed`, `handleSystemBack`, `handleBack`; `web/index.html` `backToBrowseSectionMenu`, `__tvBack`, `enterRail`, `switchView` | `test/phase4.test.js`, Android TV Settings Back smoke, Android TV Back smoke from Movies/TV/library mid-grid |
 
+### Normative Contract Additions
+
+These clauses are part of the named contract rows above and must travel with
+them when the table is reorganized:
+
+- **P5 - web rebuffer recovery.** After VOD has started, 45 seconds of
+  `waiting` without meaningful position progress retries the same source,
+  playback kind, and timestamp first. Playback/progress/seek/close cancels the
+  watchdog. Code: `web/index.html` `armWebRebufferRecovery`,
+  `clearWebRebufferRecovery`, `recoverSamePlaybackSource`. Verification:
+  `test/phase4.test.js` `web VOD rebuffer and subtitle handoff...`.
+- **P6 - exact season-pack payload.** Loose-file and RAR/ZIP packs require one
+  exact requested `SxxEyy` payload before size, and the loose-pack STAT probe
+  targets that same file; combined episode ranges count only when they cover the
+  request. For collection-shaped names such as season packs and multi-episode
+  ranges, missing, ambiguous, blocked, stub, or unstreamable selected members
+  advance only the current request and do not poison sibling episodes. A
+  selected loose-pack article or post-mount member failure is request-scoped;
+  an archive first-volume failure remains release-wide because every member
+  depends on that volume set. Exact single-episode releases still cache
+  missing/blocked verdicts release-wide so later source walks skip them fast.
+  Prepared, in-flight, and live
+  mount reuse is keyed by NZB URL, season, episode, and audiobook mode, so one
+  episode cannot reuse another payload. Season zero remains a real episode
+  context for specials; it is not collapsed into the movie/default identity.
+  Code: `server/pipeline.js` `wantedEpisodeOf`, `mountIdentity`,
+  `firstProbeMsgId`; `server/archive.js` `pickInner`; `server/nzb.js`
+  `episodeInName`, `pickPrimaryFile`. Verification: the pack-selection,
+  probe/advance, and live-mount-reuse tests in `test/phase2.test.js` and
+  `test/archive.test.js`.
+- **P9 - last-intent Live TV.** Main, split, and each Multiview pane have
+  independent tune epochs. Server/account and Android device lists load
+  concurrently, merge server-first, and concurrent callers join one device
+  bridge load. Now/next and timeline calls bind index plus stable `cid`; the
+  server self-heals drift or returns 409 when the identity is gone. Same-source
+  cold guide fanout joins one XMLTV fetch; headerless gzip is decoded under an
+  expanded-size cap before the global two-wide carried-channel worker queue.
+  Non-2xx, source edit/delete, and shutdown paths cannot publish an empty or
+  stale cache. Code: `web/index.html`
+  `beginLiveTune`, `liveTuneIsCurrent`, `loadPersonalIptvChannels`,
+  `loadLiveChannelsCombined`, `fetchEpg`, `fetchGuideBatch`; `server/index.js`
+  `iptvEpg`, `iptvGuide`, `fetchXmltv`; `server/xmltv.js`, `server/xmltv-worker.js`.
+  Verification: `test/iptv-cache.test.js`, `test/xmltv.test.js`, and the IPTV
+  client-correctness test in `test/phase4.test.js`.
+- **P11 - bounded fast captions.** With built-ins off, web playback skips the
+  optional 1.4-second track-probe wait before online subtitle warmup. The web
+  overlay respects safe areas and a bounded height. Native receives S/M/L size,
+  applies it to both Media3 embedded tracks and the online-caption overlay,
+  cleans line-break tags/entities/markup, and renders no more than the last
+  three overlapping cues. Code: `web/index.html` `startWebPlayerHousekeeping`,
+  `#subOverlay`, native subtitle payload; `MainActivity.java` native overlay;
+  `SubtitleText.java`. Verification: `test/phase4.test.js` plus
+  `SubtitleTextTest.java` through `testDebugUnitTest`.
+- **P14 - bounded cold-source hedge.** A pending top candidate gets one
+  understudy after 800ms. Once a lower-ranked source is healthy, earlier ranks
+  get 250ms final grace and no more candidates launch. Winner commit cancels
+  every losing startup consumer before warmup; shared work is aborted only when
+  no other joined play still needs it. Missing-probe and mount-deadline exits
+  also abort the underlying BODY, and a later Play cannot join an already
+  aborted prepare record. Auto-advance stays serial. Code:
+  `server/pipeline.js` `RACE_HEDGE_MS`, `RACE_COMMIT_GRACE_MS`,
+  `Pipeline._tryCandidate`, `Pipeline._advance`; `server/vfs.js`
+  `NzbFileStream._fetchSegment`. Verification: the understudy, rank-grace,
+  loser-cleanup, deadline/probe-cleanup, post-abort-join, and shared-consumer
+  tests in `test/phase2.test.js`.
+- **P14 - native media transport.** `MediaButtonReceiver` must resolve exactly
+  one service; a cold Android 8+ media-button start performs the foreground
+  handshake before dispatch and then stops when no music session exists.
+  Hardware rewind/fast-forward targets active native VOD first and falls back to
+  WebView audio. Verification: `test/phase4.test.js`, Android build/lint, and the
+  emulator VOD-seek stress pass.
+
 ## Change Rule
 
 For any future player fix:
@@ -189,5 +278,10 @@ For any future player fix:
 - Finished TV episodes play the next episode when available.
 - A final TV episode returns to show details.
 - Subtitles must not silently disappear: CC selection, version changes, sync changes, and turning subtitles off all need explicit regression coverage.
+- Rapid Live TV selection is last-intent-wins independently for the main player,
+  split panes, and Multiview panes.
+- A season-pack request must never mount or reuse a different episode.
+- Sustained web VOD stalls must retry the same source before release failover.
+- Native subtitle size and three-cue bounds must match the saved preference.
 - Attached local libraries must hydrate after the shell is usable, auto-load a bounded first page from the rail, and request additional bounded pages so Android TV D-pad movement stays responsive in large folders.
 - Movies, TV Shows, and attached-library pages must treat the first TV Back as "open this section menu," not "jump Home."

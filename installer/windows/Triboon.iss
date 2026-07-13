@@ -199,26 +199,42 @@ begin
   Result := 'Windows is still removing the previous Triboon service (a Services or Task Manager window may be holding it open). Please close those windows and run the installer again.';
 end;
 
+// Run every ACL transition as a checked install step. A partial update must not be followed by
+// registering the service as though hardening succeeded.
+procedure RunIcacls(const Args, Step: String);
+var rc: Integer;
+begin
+  if not Exec(ExpandConstant('{sys}\icacls.exe'), Args, '', SW_HIDE, ewWaitUntilTerminated, rc) then
+    RaiseException('Could not start the ProgramData ACL step: ' + Step + '.');
+  if rc <> 0 then
+    RaiseException('Could not secure Triboon ProgramData (' + Step + ', icacls code ' + IntToStr(rc) + ').' + #13#10 +
+      'Close programs using Triboon data and run the installer again. Existing data was not deleted.');
+end;
+
 // ProgramData grants BUILTIN\Users read on inherited content, and NTFS ignores the server's POSIX
-// 0600 file mode, so secret.json (the token-signing key) would be readable by any local user. Break
-// inheritance and grant Full only to SYSTEM (the LocalSystem service account) + Administrators.
+// 0600 file mode, so secret.json (the token-signing key) would be readable by any local user. The
+// transition is deliberately ordered so SYSTEM can never lose access:
+//   1. Recursively re-enable inheritance and add SYSTEM/Admin Full Control. This repairs ACLs left by
+//      older installers before anything is removed.
+//   2. Reset only the Triboon ROOT, add explicit inheritable SYSTEM/Admin grants, then remove inherited
+//      ACEs from that root. /inheritance:r is intentionally root-only and is never combined with /T.
+//   3. Reset every CHILD from the protected root and explicitly re-enable child inheritance. There is
+//      no recursive inheritance removal, so a skipped/locked child retains the recovery grants instead
+//      of becoming orphaned or locking the LocalSystem service out.
 procedure HardenDataDir();
-var rc: Integer; dir: String;
+var dir, children: String;
 begin
   dir := ExpandConstant('{commonappdata}\Triboon');
-  // RELIABILITY over hardening — this was the real cause of the repeated data loss. Earlier builds
-  // STRIPPED inheritance (icacls inheritance-remove) to keep secret.json from other local users. But if a
-  // file was momentarily locked during that recursive strip, it got ORPHANED: left with no ACE granting the
-  // LocalSystem service. The service then got EPERM reading secret.json/users.json and treated its own
-  // (intact) data as unreadable — the "settings/users wiped on reinstall" bug. We now do the SAFE opposite:
-  //   • /inheritance:e — ENABLE inheritance, so the dir re-inherits SYSTEM/Admins access from ProgramData.
-  //     This also RECOVERS a data dir that a previous build had stripped (restores the service's access).
-  //   • additive /grant of SYSTEM + Administrators Full — belt-and-suspenders on top of inheritance.
-  // The service can never be locked out of its own data again. (secret.json stays 0600; on a single-user
-  // home server the residual local-read exposure is far cheaper than losing every setting.)
-  Exec(ExpandConstant('{sys}\icacls.exe'),
-    '"' + dir + '" /inheritance:e /grant "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /T /C /Q',
-    '', SW_HIDE, ewWaitUntilTerminated, rc);
+  children := dir + '\*';
+
+  RunIcacls('"' + dir + '" /inheritance:e /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /T /C /Q',
+    'restore SYSTEM and Administrators access');
+  RunIcacls('"' + dir + '" /reset /Q', 'reset the Triboon root ACL');
+  RunIcacls('"' + dir + '" /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /Q',
+    'retain SYSTEM and Administrators on the Triboon root');
+  RunIcacls('"' + dir + '" /inheritance:r /Q', 'remove inherited local-user access from the Triboon root');
+  RunIcacls('"' + children + '" /reset /T /C /Q', 'reset child ACLs from the protected root');
+  RunIcacls('"' + children + '" /inheritance:e /T /C /Q', 're-enable child inheritance');
 end;
 
 // Allow inbound to node.exe on private + domain profiles only (never public). Delete-then-add keeps

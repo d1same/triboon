@@ -23,11 +23,11 @@ canonical reference.
 - Playback order: source-fit, direct play, remux, transcode.
 - Security: deny-by-default route table in `server/index.js`; every endpoint must
   declare `public`, `user`, `admin`, or `stream` auth and be covered by tests.
-- Current verification baseline after the playback startup/read-ahead pass: full
-  `npm.cmd test` covers 258 tests; focused IPTV, security, Android native
-  player, Music, subtitle, source-warmup, and NNTP priority tests cover the
-  current source model, route table, device bridge, process queue, startup
-  preparation, and capacity scheduling.
+- `npm.cmd test` explicitly enumerates every top-level `test/*.test.js` suite
+  and runs them sequentially because integration suites share process-wide
+  state. The release-contract test requires that list to match the checked-in
+  suites exactly and excludes fixture generators. Exact pass counts belong in
+  dated `VERIFY.md` evidence, not this long-lived architecture reference.
 
 ## System Map
 
@@ -83,12 +83,12 @@ flowchart LR
 | Auth and encrypted settings | `server/auth.js`, `server/index.js` | Users, invites, Quick Connect, admin TOTP 2FA, HKDF-separated HMAC session/stream tokens, session epochs, AES-256-GCM settings. |
 | Persistence | `server/store.js`, `server/library-db.js` | JSON remains the app state store. `library.sqlite` indexes scanned local-media items only, so 80k+ attached files can page and look up without loading every item into the UI. |
 | Metadata | `server/tmdb.js`, `server/trakt.js`, `server/index.js` | TMDB proxy/cache, encrypted Trakt link tokens, Trakt sync/outbox, profile watch state. |
-| Search and source ranking | `server/newznab.js`, `server/scoring.js`, `server/pipeline.js` | Title-safe matching, quality caps at source selection, health-aware ranking. |
-| Streaming engine | `server/nzb.js`, `server/nntp.js`, `server/vfs.js`, `server/rar.js`, `server/zip.js`, `server/archive.js`, `docs-streaming-performance.md` | Clean-room NZB mount, article reads, RAR/ZIP extent maps, Range streaming, provider capacity, priority lanes, adaptive read-ahead. |
+| Search and source ranking | `server/newznab.js`, `server/scoring.js`, `server/pipeline.js` | Title-safe matching, quality caps at source selection, health-aware ranking, bounded cold-source hedging, and episode/audiobook-scoped mount reuse. |
+| Streaming engine | `server/nzb.js`, `server/nntp.js`, `server/vfs.js`, `server/rar.js`, `server/zip.js`, `server/archive.js`, `docs-streaming-performance.md` | Clean-room NZB mount, requested-episode selection inside season-pack archives, article reads, RAR/ZIP extent maps, Range streaming, provider capacity, priority lanes, adaptive read-ahead. |
 | Playback decision | `server/transcode.js`, `server/index.js`, `web/index.html`, `android/.../MainActivity.java` | Source-fit, direct, remux, transcode; Android native caps feed server policy. |
 | Subtitles | `server/opensubs.js`, `server/index.js`, `web/index.html`, `MainActivity.java` | Wyzie search/download, release/file hints, WebVTT, web/native display timelines; built-in extraction is opt-in. |
 | Local libraries | `server/index.js`, `server/library-db.js`, `web/index.html` | Folder scan, SQLite-backed bounded pages/lookups, local playback, local artwork. |
-| Live TV | `server/index.js`, `web/index.html`, `MainActivity.java` | Source-scoped shared M3U/Xtream/XMLTV, web remux path, Android native Exo path, and Android device-local personal IPTV. |
+| Live TV | `server/index.js`, `server/xmltv.js`, `server/xmltv-worker.js`, `web/index.html`, `MainActivity.java` | Source-scoped shared M3U/Xtream/XMLTV, bounded worker-thread guide parsing, web remux path, Android native Exo path, and Android device-local personal IPTV. |
 | Music Home | `server/ytmusic.js`, `server/index.js`, `web/index.html` | YouTube Music search/home/charts via optional `ytmusicapi` catalog helper, Google device-code account linking with encrypted per-user tokens, bounded `yt-dlp` playback resolver, tokenized audio proxy, web mini-player, and no ExoPlayer handoff for audio yet. |
 | Continue Watching | `docs-continue-watching.md`, `server/index.js`, `web/index.html` | Canonical movie/show identity, resume state, quality carry-forward, next-up, and D-pad focus after row actions. |
 | Android shell | `android/app/src/main/java/app/triboon/tv/MainActivity.java` | WebView bridge, D-pad/back handling, native video/Live TV, PiP guide recovery, APK update links. |
@@ -131,6 +131,28 @@ Rules that must not drift:
   stream URL. Play must reuse or join that prepared/in-flight mount and
   in-flight NZB prefetch instead of repeating source finding, first-article
   probe, mount, or health-gate work.
+- Prepared, in-flight, and live-mount reuse is keyed by NZB URL plus season,
+  episode, and audiobook mode. Loose-file and RAR/ZIP season packs must select
+  exactly one requested `SxxEyy` payload before file size is considered, and
+  the first-article probe must target that same payload. Missing or ambiguous
+  members and post-mount member failures advance this request without poisoning
+  release-wide health; a combined range counts only when it covers the request.
+  That request-scoped verdict rule applies only to collection-shaped names such
+  as season packs and multi-episode ranges: a selected loose-pack article or
+  post-mount member failure cannot blacklist sibling episodes. An archive
+  first-volume failure stays release-wide because every member depends on that
+  volume set, and exact single-episode releases keep missing/blocked verdicts
+  cached release-wide so later source walks skip a known-bad release quickly.
+  Thus an E05 request can neither mount nor blacklist an unrelated E01 payload.
+- Cold Play starts with the top-ranked candidate. If it is still pending after
+  800ms, one lower-ranked understudy may start. Once a lower-ranked healthy
+  source is ready, pending higher ranks receive only 250ms of final grace and
+  no more candidates launch; losing startup consumers are cancelled before the
+  winner is registered and warmed. Shared startup work remains alive while any
+  other play still consumes it, but a playable first frame must not wait behind
+  or leave capacity occupied by a stuck candidate's full mount deadline. A
+  terminal missing probe or mount deadline also aborts its underlying startup
+  BODY before returning.
 - Android capability claims come from the native bridge, not WebView guesses.
   Video caps are decoder-based, but HD-audio passthrough caps must come from
   the active HDMI/ARC/eARC audio output encodings. TrueHD/Atmos/DTS-HD releases
@@ -147,14 +169,16 @@ Rules that must not drift:
 
 ## Now Watching / Activity
 
-Players send a lightweight `/api/activity` heartbeat while playback is active.
-Regular users can only write their own heartbeat; only admins can read the
-Settings -> Activity dashboard. The live row is intentionally in-memory and
-short TTL so stale sessions disappear if a browser, TV, or network connection
-dies. The same endpoint also keeps the previous 10 movie/TV activity rows from
-the last three days so the owner can see recent VOD playback without accumulating
-a long-term log. Live TV/IPTV is current-activity only and is not retained in
-history.
+Clients send a lightweight `/api/presence` heartbeat every 25 seconds while the
+app is open, whether browsing or watching. These device rows are in-memory with
+a 70-second TTL. Players also send `/api/activity` while playback is active;
+those Now Watching rows are in-memory with a 45-second TTL. Regular users may
+write only their own rows, while only admins may read Settings -> Activity.
+
+The activity store retains at most 60 movie/TV rows from the last three days so
+the owner can see recent VOD playback without accumulating a long-term log.
+Live TV/IPTV is current-activity only. Neither location labels nor raw viewer IPs
+are written to retained history.
 
 The heartbeat carries both the client path and the stream treatment:
 
@@ -189,9 +213,16 @@ are not useful as WebVTT captions.
 
 Android native playback displays server-provided VTT through Triboon's native
 overlay so subtitle version changes and sync changes do not rebuild ExoPlayer.
-The current native path is intentionally online-first for stability; deeper
-embedded-track handoff would need a separate Media3 subtitle contract and
-device matrix.
+The web overlay respects left, right, and bottom safe areas and caps its height
+above the player controls. The native overlay applies the S/M/L caption-size
+preference, converts line-break tags and safe entities, removes remaining
+markup, and displays at most the last three overlapping cue texts. The current
+native path is intentionally online-first for stability; deeper embedded-track
+handoff would need a separate Media3 subtitle contract and device matrix.
+
+When built-in subtitles are off, web playback also skips the optional 1.4-second
+track-probe wait before warming online subtitles. Optional embedded extraction
+must not delay the default online-caption path.
 
 ## Streaming Performance / Multi-User Capacity
 
@@ -218,6 +249,9 @@ Required behavior:
   seeks stay fast for other users.
 - Health checks keep the 500ms upfront gate. Background triage is lower priority
   and must never starve the segment the player is actively waiting on.
+- After web VOD has genuinely started, a waiting state with no meaningful
+  position progress for 45 seconds retries the same source, playback kind, and
+  timestamp first. Recovery must not silently advance to a different release.
 - The historical Easynews benchmark in `bench/RESULTS.md` is evidence for the
   original fast-start assumptions, not a fixed runtime rule. Do not reintroduce
   hardcoded "16 warm connections" or "8-12 read-ahead" behavior without updating
@@ -245,10 +279,12 @@ flowchart TD
   Sources --> UserSources["iptvSourcesForUser"]
   UserSources --> Channels["loadIptvChannelsForSource"]
   Channels --> DiskCaches["iptvcaches[sourceId]\nepgcaches[sourceId]\nxtreamepgcaches[sourceId]"]
+  Channels --> XmltvWorker["server/xmltv.js + worker\nbounded carried-channel parse"]
+  XmltvWorker --> DiskCaches
   Channels --> Aggregate["aggregateIptvChannels\nsource-scoped channel ids"]
   Aggregate --> LiveUI["/api/iptv/channels\nLive TV page"]
   Aggregate --> Playback["/api/iptv/native/:idx\n/api/iptv/stream/:idx"]
-  DiskCaches --> Guide["/api/iptv/guide\n/api/iptv/epg/:idx"]
+  DiskCaches --> Guide["/api/iptv/guide\n/api/iptv/epg/:idx\nindex + stable cid"]
   Guide --> PiP["Live TV guide\nplayer PiP guide\nbrowser Multiview"]
   Playback --> Android["Android ExoPlayer\nprovider TS/HLS then server remux"]
   Playback --> Web["Browser MSE\nserver fMP4 remux"]
@@ -279,11 +315,25 @@ Source contract:
   source must be removed during delete cleanup.
 - Adding, deleting, and re-adding the same playlist must fetch a fresh source
   cache and must not revive deleted channels.
+- XMLTV downloads are single-flight per source/key and capped before parsing,
+  so a cold multi-channel guide request cannot multiply a large download or
+  worker. Headerless `.xml.gz` payloads are detected by their gzip signature and
+  the expanded body is capped too. The decoded guide buffer is transferred to a
+  globally two-wide worker queue, filtered to channels the playlist actually
+  carries, and terminated cleanly on timeout or shutdown. Non-2xx responses are
+  failures, never empty-success caches. Source edit/delete invalidates the old
+  generation, and shutdown aborts and drains downloads/workers before the store
+  closes, so late work cannot resurrect a cache. A valid stale cache may be
+  served while refresh runs so guide parsing never blocks video, zaps, health
+  checks, or the HTTP event loop.
 
 Playback contract:
 
 - Browser Live TV uses the server fMP4 remux path and must close the previous
   fetch/reader/remux before opening the next channel.
+- Channel hydration is last-intent-wins. Main, split, and Multiview surfaces own
+  independent monotonic tune epochs; a slow response from an older selection
+  must not retune after a newer zap or revive a closed pane.
 - Browser Live TV owns the live-only player chrome. It hides VOD subtitle,
   audio, surround, and quality controls, shows favorite, and keeps movie/show
   playback controls unchanged.
@@ -321,6 +371,15 @@ Playback contract:
   delete cleanup path as shared playlists. Stream URLs bind both the channel
   position and source-scoped channel id so a stale channel cache cannot drift to
   another user's source.
+- Server/account channels and Android device-local channels start loading in
+  parallel and merge deterministically server-first. Concurrent callers join
+  one Android bridge load; a foreground caller may extend that same request's
+  timeout instead of creating a duplicate callback slot.
+- Now/next and timeline requests bind each mutable channel index to its stable
+  source-scoped `cid`, including their browser memo keys. The server resolves a
+  drifted index by stable id when possible and returns 409 only when that
+  channel identity no longer exists, which tells the client to reload the
+  lineup.
 - Android TV/mobile tries native provider-compatible HLS/MPEG-TS URLs first.
   Xtream prefers TS, with HLS as fallback, then the server stereo-AAC fMP4 remux
   path for devices or providers that cannot hold the native stream directly.
@@ -358,6 +417,10 @@ Related verification:
 - `test/iptv-cache.test.js` covers source-scoped channels, delete cleanup,
   clean re-add, large M3U stream parsing, XMLTV persistence, retune cleanup, and
   provider failure handling.
+- `test/xmltv.test.js` covers entity decoding, carried-channel filtering, and
+  worker parsing without monopolizing the main event loop.
+- `test/phase4.test.js` covers tune epochs, single-flight device loads,
+  concurrent server/device merging, and stable guide ids.
 - `test/security.test.js` covers route auth and IPTV credential redaction.
 - Android stress QA should include 20 Live TV zaps, PiP guide open/back loops,
   and no fatal/provider-protection log markers.
@@ -375,7 +438,7 @@ definitions stay in JSON.
 | `settings` | `SecureSettings` | Encrypted admin settings: providers, indexers, TMDB, subtitles, Trakt app and linked Trakt OAuth tokens, Live TV sources, streaming performance profile. |
 | `users`, `invites` | `server/auth.js`, `server/index.js` | Accounts, roles, profile policy, session epoch, invites, encrypted admin TOTP secret, hashed recovery codes. |
 | `watch`, `watchlist` | `server/index.js`, `server/trakt.js` | Per-profile progress, watched state, watchlist, Trakt-imported fallback rows. |
-| `activityHistory` | `server/index.js` | Admin-only previous 10 movie/TV playback rows from the last three days; Live TV/IPTV rows are pruned and not retained. |
+| `activityHistory` | `server/index.js` | Admin-only, at most 60 movie/TV playback rows from the last three days; Live TV/IPTV rows and location are not retained. |
 | `trakt`, `traktOutbox` | `server/trakt.js` | Legacy migration/sync marker bucket and queued scrobble/export operations. OAuth tokens must live encrypted inside `settings.traktTokens`, not plaintext `trakt.json`. |
 | `libraries` | `server/index.js` | Attached local folders, owner visibility, kind, path, and display metadata. |
 | `library.sqlite` | `server/library-db.js` | Scanned local media catalog: item payloads, TMDB ids, episode keys, genres, sort/page indexes, and local lookup support. |
@@ -402,9 +465,9 @@ When changing persistence, update:
 - Must lazy-load large local libraries and catalogs after first focus.
 - Uses `/api/libraries/local-lookup` to resolve playable local copies on demand
   instead of loading every attached-library item on startup.
-- Sends `/api/activity` heartbeats while a user is watching. Admin Settings
-  shows the in-memory "Now Watching" view; this is not persisted and should be
-  treated as presence, not history.
+- Sends `/api/presence` while the app is open and `/api/activity` while a user
+  is watching. Online devices and Now Watching are in-memory presence views;
+  up to 60 recent VOD rows persist for three days. Live TV and location do not.
 - The player stats panel is a basic support/debug view: player path, quality,
   source/file label, size, position, buffer, video/audio format, dropped frames
   where available, and bandwidth estimate where available.
@@ -436,6 +499,11 @@ When changing persistence, update:
   chrome need to close first.
 - Recovers WebView renderer crashes by restoring the last app route or promoting
   native playback out of PiP.
+- Applies the web S/M/L subtitle preference to the native overlay, cleans VTT
+  markup/entities, and bounds overlapping cue text to the last three entries.
+- Excludes server addresses, login state, and device-local IPTV credentials from
+  Android cloud backup and device-to-device transfer; users reconnect after a
+  restore.
 
 ## Security Rules
 
@@ -465,6 +533,13 @@ When changing persistence, update:
   the same library `users[]` ACL as item listing.
 - Credentials live in encrypted settings and must not appear in caches, logs,
   UI strings, screenshots, or Git history.
+- Viewer city/country lookup is off by default. When explicitly enabled in
+  Settings (or forced by `TRIBOON_VIEWER_GEO=1`), a public viewer IP is sent to
+  `ipwho.is`; raw IPs must never enter persistent activity history or API
+  responses. `X-Forwarded-For` is ignored unless `TRIBOON_TRUST_PROXY=1`, which
+  is safe only behind a trusted proxy that strips client-supplied forwarding
+  headers. The Settings UI must show the effective state when an environment
+  override is active.
 - Trakt OAuth tokens are credentials. Store them only through `SecureSettings`
   and migrate/clear legacy plaintext `data/trakt.json` token fields.
 - Server-side IPTV playlist, guide, and native proxy fetches validate every DNS
@@ -485,7 +560,8 @@ When changing persistence, update:
 
 ## Current Roadmap
 
-Done and verified in the current architecture:
+Implemented in the current architecture; current verification status and exact
+pass counts belong in dated `VERIFY.md` evidence:
 
 - Phase 1: NZB/RAR/ZIP streaming engine with seeking and multi-provider failover.
 - Phase 2: Newznab fan-out, scoring, verdict cache, press-play pipeline.
@@ -494,18 +570,19 @@ Done and verified in the current architecture:
 - Phase 5 core: Android TV shell, native Media3/ExoPlayer handoff, native Live TV,
   subtitles, Trakt sync, local-library performance work, screensaver, PiP guide,
   source-scoped IPTV playlists, and owner-tunable multi-user streaming capacity.
+- Release foundation: pinned GitHub Actions, Android lint/native unit gates,
+  immutable APK and Windows-server assets, content-locked container/installer
+  downloads, one final release publisher, and repository license notices.
 
 Still open / future hardening:
 
 - Broader Android hardware matrix automation for Shield, Onn, Fire TV, Chromecast,
   Google TV, and low-memory devices.
-- Tauri desktop.
+- Production-ready Windows desktop client. The current PX8/Tauri shell remains
+  a manual preview until its native playback bridge is complete.
 - par2 repair and compressed RAR streaming improvements.
 - MDBList and richer catalog rows.
 - Intro/credit skip after the playback foundation stays stable.
-- Release automation polish: version bump, APK build, GitHub release, stable
-  Android TV/mobile APK aliases, and Unraid update confirmation for every
-  public release.
 - Profile-scoped server sessions for true parental-control enforcement on raw
   `/api/search` and `/api/play`. Current catalog UI filters maturity before a
   title is shown, but arbitrary raw NZB queries do not carry reliable ratings;
@@ -525,22 +602,23 @@ Run the narrow test for the area touched, then the full gate before a release:
 - Streaming capacity/read-ahead/provider changes: `node --test test/e2e.test.js`,
   `node --test test/security.test.js`, `node --test test/phase2.test.js`, then
   `npm.cmd test`.
-- IPTV source/cache/playback: `node --test test/iptv-cache.test.js` and
+- IPTV source/cache/playback: `node --test test/iptv-cache.test.js`,
+  `node --test test/xmltv.test.js`, focused `test/phase4.test.js`, and
   `node --test test/security.test.js`.
 - Web UI behavior: start `node server/index.js`, open `http://localhost:7777`,
   and visually check the route.
-- Android TV behavior: build the APK, run the emulator/Shield smoke or
+- Android TV behavior: run `lintDebug testDebugUnitTest assembleDebug`, then the
+  emulator/Shield smoke or
   `bench/android-tv-stress.ps1`, and inspect logs for fatal/provider errors.
-- Android release packaging: attach the one universal `triboon-vX.Y.Z.apk` plus
-  the stable `triboon.apk` alias (TV + phone are the same binary, adapting at
-  runtime) to the GitHub release from the same commit/version as the server and
-  container image. The stable Downloader URL is
-  `https://github.com/d1same/triboon/releases/latest/download/triboon.apk`;
-  Android update acceptance still depends on package id, matching signing
-  certificate, and a higher versionCode. Keep this aligned with
-  `docs-app-updates.md`, and do not call a release done until GitHub Actions has
-  published the Unraid/container image and the stable APK URL downloads the
-  newest APK.
+- Release packaging: run `node --test test/release-contract.test.js` and confirm
+  the workflow publishes one complete release from the current `origin/main`
+  commit with exactly `triboon-vX.Y.Z.apk`, `triboon.apk`,
+  `Triboon-Windows-Server-vX.Y.Z.exe`, `Triboon-Windows-Server.exe`, and
+  `SHA256SUMS.txt`. The stable/versioned pairs must be byte-identical, the APK
+  must have the expected package id/signing certificate/higher versionCode, the
+  Windows dependency lock must be honored, and the matching Docker semver image
+  must be published before the release is complete. Keep the full download and
+  update contract aligned with `docs-app-updates.md`.
 - Documentation: scan for stale phase counts, old stack names, old cache
   ownership statements, and old fixed-connection/read-ahead tuning before
   calling the work done.

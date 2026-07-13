@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "resolvedAt": "2026-07-13",
+  "artifacts": {
+    "node": {
+      "version": "v24.18.0",
+      "fileName": "node-v24.18.0-win-x64.zip",
+      "url": "https://nodejs.org/dist/v24.18.0/node-v24.18.0-win-x64.zip",
+      "sha256": "0ae68406b42d7725661da979b1403ec9926da205c6770827f33aac9d8f26e821",
+      "checksumSource": "https://nodejs.org/dist/v24.18.0/SHASUMS256.txt"
+    },
+    "winsw": {
+      "version": "v2.12.0",
+      "fileName": "WinSW-v2.12.0-x64.exe",
+      "url": "https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW-x64.exe",
+      "sha256": "05b82d46ad331cc16bdc00de5c6332c1ef818df8ceefcd49c726553209b3a0da"
+    },
+    "ffmpeg": {
+      "version": "8.0.1",
+      "fileName": "ffmpeg-8.0.1-essentials_build.zip",
+      "url": "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.0.1-essentials_build.zip",
+      "sha256": "e2aaeaa0fdbc397d4794828086424d4aaa2102cef1fb6874f6ffd29c0b88b673",
+      "checksumSource": "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.0.1-essentials_build.zip.sha256"
+    },
+    "ytDlp": {
+      "version": "2026.07.04",
+      "fileName": "yt-dlp-2026.07.04.exe",
+      "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.07.04/yt-dlp.exe",
+      "sha256": "52fe3c26dcf71fbdc85b528589020bb0b8e383155cfa81b64dd447bbe35e24b8",
+      "checksumSource": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.07.04/SHA2-256SUMS"
+    },
+    "alass": {
+      "version": "v2.0.0",
+      "fileName": "alass-v2.0.0-windows64.zip",
+      "url": "https://github.com/kaegi/alass/releases/download/v2.0.0/alass-windows64.zip",
+      "sha256": "e81a72f97f592910e909a2352d6b8c0de0801c51ac1383bad4ebf3f2ecdd2fd8"
+    },
+    "innoSetup": {
+      "version": "6.7.3",
+      "releaseTag": "is-6_7_3",
+      "fileName": "innosetup-6.7.3.exe",
+      "url": "https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe",
+      "sha256": "9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732",
+      "publisherSubject": "CN=Pyrsys B.V.",
+      "compilerSha256": "0a8757031b33777e4c9cbffee40f11a5062b36d25cbe144c1db73b6102b80ad7"
+    }
+  }
+}

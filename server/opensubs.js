@@ -117,6 +117,13 @@ function parseQuery(q) {
   return out;
 }
 
+// Season 0 is valid, while null/undefined means "derive it from the query". Unary + turns null into
+// zero, so every caller must preserve that distinction or ordinary S01E02 queries become S00E02.
+function explicitSeasonNumber(value) {
+  return value !== null && value !== undefined && value !== '' && Number.isInteger(+value) && +value >= 0
+    ? +value : null;
+}
+
 // SRT → WebVTT: header + comma→dot in timestamps. Cue ids/text pass through (VTT allows ids).
 function srtToVtt(srt) {
   const body = String(srt).replace(/^﻿/, '').replace(/\r/g, '')
@@ -500,7 +507,8 @@ function wyzieSearchUrl({ base = DEFAULT_BASE, key, tmdbId, imdbId, query, lang 
   // ONLY from these params, so a play route that never stamped SxxExx into the query string used
   // to search the whole show — wrong-episode dialogue + a wall of mixed-episode rows. Explicit
   // season/episode win; otherwise fall back to whatever parseQuery recovered from the query.
-  const s = Number.isInteger(+season) && +season > 0 ? +season : w.season;
+  const explicitSeason = explicitSeasonNumber(season);
+  const s = explicitSeason !== null ? explicitSeason : w.season;
   const e = Number.isInteger(+episode) && +episode > 0 ? +episode : w.ep;
   if (s != null && e != null) { u.searchParams.set('season', s); u.searchParams.set('episode', e); }
   u.searchParams.set('language', toIso6391(lang) || String(lang || '').slice(0, 2) || 'en');
@@ -561,7 +569,8 @@ async function wyzieSearchResults({ key, tmdbId, imdbId, query, lang = 'en', rel
   const catId = wyzieCatalogId({ tmdbId, imdbId });
   const idKind = /^tt/.test(catId) ? 'imdb' : (catId ? 'tmdb' : 'none');
   const w = parseQuery(query || '');
-  const effS = Number.isInteger(+season) && +season > 0 ? +season : w.season;
+  const explicitSeason = explicitSeasonNumber(season);
+  const effS = explicitSeason !== null ? explicitSeason : w.season;
   const effE = Number.isInteger(+episode) && +episode > 0 ? +episode : w.ep;
   const ep = effS != null ? ` s${effS}e${effE}` : '';
   const wlang = toIso6391(lang) || String(lang || '').slice(0, 2) || 'en';
@@ -876,7 +885,8 @@ function osSearchUrl({ base = OS_REST_BASE, moviehash = '', imdbId = '', tmdbId 
   const tmdbNum = String(tmdbId || '').replace(/\D/g, '');
   if (imdbNum) u.searchParams.set('imdb_id', imdbNum);
   else if (tmdbNum) u.searchParams.set('tmdb_id', tmdbNum);
-  const sNum = Number.isInteger(+season) && +season > 0 ? +season : w.season;
+  const explicitSeason = explicitSeasonNumber(season);
+  const sNum = explicitSeason !== null ? explicitSeason : w.season;
   const eNum = Number.isInteger(+episode) && +episode > 0 ? +episode : w.ep;
   if (sNum != null && eNum != null) { u.searchParams.set('season_number', sNum); u.searchParams.set('episode_number', eNum); }
   // Text-title fallback: old / non-famous movies and shows frequently have NO catalog id (nothing

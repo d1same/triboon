@@ -774,10 +774,10 @@ body.nativeGuideMode #player.guideMode #video{display:none}
 #player.guideMode #subOverlay{display:none}
 /* Self-rendered subtitles (WebView never painted native cues). Sized by the caption pref;
    lifts above the control bar while the OSD is visible so text never hides behind it. */
-#subOverlay{position:absolute;left:6%;right:6%;bottom:6.5%;max-height:32vh;overflow:hidden;text-align:center;pointer-events:none;z-index:2;
+#subOverlay{position:absolute;left:max(6%,calc(var(--safeL) + 12px));right:max(6%,calc(var(--safeR) + 12px));bottom:max(6.5%,calc(var(--safeB) + 12px));max-height:32vh;overflow:hidden;text-align:center;pointer-events:none;z-index:2;
   font:600 var(--subFs,4.4vh)/1.32 "Albert Sans";color:#fff;white-space:pre-line;display:flex;flex-direction:column;justify-content:flex-end;gap:.12em;
   text-shadow:0 0 5px rgba(0,0,0,.95),0 2px 8px rgba(0,0,0,.9);transition:bottom .25s}
-#player:has(#osd:not(.hide)) #subOverlay{bottom:19%}
+#player:has(#osd:not(.hide)) #subOverlay{bottom:max(19%,calc(var(--safeB) + 12px))}
 #player:has(#osd:not(.hide)) #subOverlay{max-height:24vh}
 #subOverlay i{font-style:italic}
 #osd{position:absolute;inset:0;z-index:6;display:flex;flex-direction:column;justify-content:space-between;padding:clamp(22px,3vw,42px) clamp(24px,3.6vw,52px) clamp(50px,6.2vw,78px);transition:opacity .35s;
@@ -3842,6 +3842,19 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
     </div>
     <div id="sec2faCodes" class="sec2faBox" hidden></div>
     <div class="hint" id="sec2faMsg"></div>
+  </div>
+  <div class="panel"><h2>Viewer location privacy</h2>
+    <p>Location is off by default. If enabled, Triboon sends a remote viewer's public IP to
+       <code>ipwho.is</code> and shows only the returned city/country to the admin. The raw IP is not
+       persisted or returned; the in-memory seven-day cache is keyed by a one-way digest.</p>
+    <div class="field">
+      <select id="viewerGeoMode" style="max-width:320px">
+        <option value="off">Off - do not send public IPs</option>
+        <option value="on">On - look up city and country</option>
+      </select>
+      <button class="btn primary focusable" id="viewerGeoSave">Save privacy setting</button>
+    </div>
+    <div class="hint" id="viewerGeoStatus"></div>
   </div>
   </div>
 
@@ -7825,7 +7838,7 @@ async function openPerson(id, push = true) {
 
 function detailPlayEpisodeParts() {
   const parts = episodeKeyParts(detailPlayTarget || {});
-  return parts && parts.season > 0 && parts.episode > 0 ? parts : null;
+  return parts && parts.season >= 0 && parts.episode > 0 ? parts : null;
 }
 function detailPlayShouldFocusEpisode() {
   return /Resume|Continue/.test($('dPlayLabel').textContent || '');
@@ -7971,6 +7984,7 @@ function showSeekHoldFrame() {
 }
 function stopWebVideoElement() {
   cancelPauseWarmAhead();
+  clearWebRebufferRecovery();
   hideSeekHoldFrame();
   stopLiveSplitMode();
   cleanupLiveMse();
@@ -8291,6 +8305,7 @@ function setLiveSplitPaneFocus(pane) {
 }
 function clearLiveSplitPane(pane = 1) {
   if (pane !== 1) return;
+  cancelLiveTune('split:1');
   cleanupLiveMse('split');
   const v = $('liveSplitVideo');
   v.onerror = null; v.onplaying = null; v.onwaiting = null; v.onloadeddata = null; v.oncanplay = null; v.ontimeupdate = null; v.onended = null;
@@ -8302,6 +8317,8 @@ function clearLiveSplitPane(pane = 1) {
   syncLiveSplitAudio();
 }
 function stopLiveSplitMode() {
+  cancelLiveTune('split:0');
+  cancelLiveTune('split:1');
   if (!liveSplitEnabled()) {
     cleanupLiveMse('split');
     return;
@@ -8317,9 +8334,14 @@ function stopLiveSplitMode() {
 async function playLiveSplitChannel(it, list, pane = liveSplitActivePane(), opts = {}) {
   if (!liveSplitEnabled()) return playChannel(it, list);
   S.liveSplit.active = pane === 1 ? 1 : 0;
+  const tune = beginLiveTune(`split:${S.liveSplit.active}`);
   let hydrated = it;
   try { hydrated = await hydrateLivePlaybackUrls(it); }
-  catch (e) { toast('Live stream unavailable: ' + e.message); return false; }
+  catch (e) {
+    if (liveTuneIsCurrent(tune)) toast('Live stream unavailable: ' + e.message);
+    return false;
+  }
+  if (!liveTuneIsCurrent(tune)) return false;
   if (!hydrated || !hydrated._streamUrl) { toast('Live stream unavailable'); return false; }
   if (pane === 1) {
     const splitPane = {
@@ -8569,6 +8591,7 @@ function saveMultiViewVodProgress(i, final = false) {
   api('/api/watch', { method: 'POST', body: payload }).catch(() => {});
 }
 function cleanupMultiViewSlot(i, clearItem = false) {
+  cancelLiveTune(`multiview:${i}`);
   saveMultiViewVodProgress(i, true);
   cleanupLiveMse('multi' + i);
   const v = multiViewSlotVideo(i);
@@ -9003,9 +9026,14 @@ function closeMultiViewPicker() {
 async function playMultiViewChannel(it, slotIndex = multiViewActiveSlot()) {
   if (!S.multiView || !S.multiView.open) return false;
   const i = Math.max(0, Math.min(multiViewCount() - 1, +slotIndex || 0));
+  const tune = beginLiveTune(`multiview:${i}`);
   let hydrated = it;
   try { hydrated = await hydrateLivePlaybackUrls(it); }
-  catch (e) { toast('Live stream unavailable: ' + e.message); return false; }
+  catch (e) {
+    if (liveTuneIsCurrent(tune)) toast('Live stream unavailable: ' + e.message);
+    return false;
+  }
+  if (!liveTuneIsCurrent(tune) || !S.multiView || !S.multiView.open) return false;
   if (!hydrated || !hydrated._streamUrl) { toast('Live stream unavailable'); return false; }
   const slot = {
     item: liveItemPayload(hydrated),
@@ -9449,10 +9477,32 @@ function handleMultiViewKey(k, e) {
 }
 function clearPlaybackTimers() {
   clearTimeout(S._waitT); clearTimeout(_nudgeT); _nudgeSum = 0; _nudgeBase = null;
+  clearWebRebufferRecovery();
   if (S.upNextTimer) { clearInterval(S.upNextTimer); S.upNextTimer = null; }
   if (S.healthTimer) { clearInterval(S.healthTimer); S.healthTimer = null; }
   if (S.watchTimer) { clearInterval(S.watchTimer); S.watchTimer = null; }
   if (S.activityTimer) { clearInterval(S.activityTimer); S.activityTimer = null; }
+}
+function clearWebRebufferRecovery() {
+  if (S._webRebufferT) clearTimeout(S._webRebufferT);
+  S._webRebufferT = null;
+  S._webRebufferWatch = null;
+}
+function armWebRebufferRecovery(v, p) {
+  if (S._webRebufferT || !v || !p || !vodPlaybackStarted(p) || p.usingNative
+      || !p.item || p.item.type === 'live' || v.paused || v.seeking
+      || (p.suppressSeekLoaderUntil && appMs() < p.suppressSeekLoaderUntil)) return;
+  const watch = { playing: p, position: Math.max(0, Number(v.currentTime) || 0) };
+  S._webRebufferWatch = watch;
+  S._webRebufferT = setTimeout(() => {
+    S._webRebufferT = null;
+    S._webRebufferWatch = null;
+    if (S.view !== 'player' || S.playing !== watch.playing || p.usingNative
+        || v.paused || v.seeking || v.readyState >= 3
+        || (p.suppressSeekLoaderUntil && appMs() < p.suppressSeekLoaderUntil)
+        || Math.abs((Number(v.currentTime) || 0) - watch.position) >= 0.5) return;
+    recoverSamePlaybackSource('web rebuffer stalled');
+  }, 45000);
 }
 function stopActivePlaybackForReplacement(opts = {}) {
   if (!S.playing) return;
@@ -9508,7 +9558,9 @@ function startWebPlayerHousekeeping(mount, it) {
     (async () => {
       const p = S.playing;
       if (!p || p.mountId !== mount.id) return;
-      await fetchPlayerTracks(p, 1400).catch(() => null);
+      // Built-in probing can scan deep into a large file. When that optional path is off,
+      // warm online subtitles immediately instead of inserting a 1.4-second wait first.
+      if (builtInSubtitlesEnabled()) await fetchPlayerTracks(p, 1400).catch(() => null);
       if (!S.playing || S.playing !== p || p.subTrack) return;
       if (bestBuiltInSubtitleRel() && prefSubtitleMode() === 'always') {
         applyStartupSubtitlePref();
@@ -9625,12 +9677,13 @@ async function openPlayer(it, mount, opts = {}) {
       showVodPlayPrompt();
     }
   };
-  v.onplaying = () => { cancelPauseWarmAhead(); markVodPlaybackStarted(S.playing); clearReadyFrame(); clearTimeout(S._waitT); $('playerLoader').classList.remove('show'); hideSeekHoldFrame(); };
+  v.onplaying = () => { clearWebRebufferRecovery(); cancelPauseWarmAhead(); markVodPlaybackStarted(S.playing); clearReadyFrame(); clearTimeout(S._waitT); $('playerLoader').classList.remove('show'); hideSeekHoldFrame(); };
   v.onpause = () => { schedulePauseWarmAhead(S.playing); updPP(); };
   v.onloadeddata = clearReadyFrame;
   v.oncanplay = clearReadyFrame;
   v.onwaiting = () => {
     const pWait = S.playing;
+    if (pWait && pWait.started) armWebRebufferRecovery(v, pWait);
     if (S.view !== 'player' || (pWait && (pWait.started || (pWait.suppressSeekLoaderUntil && appMs() < pWait.suppressSeekLoaderUntil)))) return;
     clearTimeout(S._waitT);
     S._waitT = setTimeout(() => { if (S.view === 'player') $('playerLoader').classList.add('show'); }, 700);
@@ -9642,6 +9695,9 @@ async function openPlayer(it, mount, opts = {}) {
   v.ontimeupdate = () => {
     if (v.currentTime === lastTu) return;
     lastTu = v.currentTime;
+    const rebufferWatch = S._webRebufferWatch;
+    if (rebufferWatch && rebufferWatch.playing === S.playing
+        && Math.abs(v.currentTime - rebufferWatch.position) >= 0.5) clearWebRebufferRecovery();
     if (v.currentTime > 0) markVodPlaybackStarted(S.playing);
     if (S.playing && S.playing.item && S.playing.item.type === 'live' && v.readyState >= 2) clearReadyFrame();
     if ($('playerLoader').classList.contains('show')) { clearTimeout(S._waitT); $('playerLoader').classList.remove('show'); }
@@ -9739,6 +9795,7 @@ function startSource(kind, atSeconds, opts = {}) {
   const v = $('video'); const p = S.playing;
   if (p && p.usingNative && canUseNativeVideoPlayer()) return false;
   cancelPauseWarmAhead();
+  clearWebRebufferRecovery();
   if (p) p.usingNative = false;
   if (opts.quietSeek && p) {
     p.suppressSeekLoaderUntil = appMs() + 4500;
@@ -10274,6 +10331,7 @@ function tryNativeVideoPlayer(kind, atSeconds, opts = {}) {
     subtitleLang: subPayload.lang,
     subtitleLabel: subPayload.label,
     subtitleShift: subPayload.shift,
+    subtitleSize: applySubSize(),
     subtitleChoices: nativeSubtitleChoices(),
     episodeChoices: nativeEpisodeChoices(),
     quietSeek: !!opts.quietSeek,
@@ -10797,9 +10855,14 @@ function episodeKeyParts(it) {
   if (m) return { tmdbId: +m[1], season: +m[2], episode: +m[3] };
   const tmdbId = +(it && it.tmdbId || 0);
   if (!tmdbId) return null;
-  const explicitS = +(it.season ?? it.s ?? 0);
-  const explicitE = +(it.episode ?? it.ep ?? it.e ?? 0);
-  if (explicitS > 0 && explicitE > 0) return { tmdbId, season: explicitS, episode: explicitE };
+  const rawS = it.season ?? it.s;
+  const rawE = it.episode ?? it.ep ?? it.e;
+  const explicitS = +rawS;
+  const explicitE = +rawE;
+  if (rawS !== undefined && rawS !== null && rawS !== '' && Number.isInteger(explicitS)
+      && explicitS >= 0 && Number.isInteger(explicitE) && explicitE > 0) {
+    return { tmdbId, season: explicitS, episode: explicitE };
+  }
   const raw = `${it.q || ''} ${it.genre || ''} ${it.title || ''}`;
   const se = /\bS(\d{1,2})\s*E(\d{1,3})\b/i.exec(raw);
   return se ? { tmdbId, season: +se[1], episode: +se[2] } : null;
@@ -11492,6 +11555,9 @@ async function closePlayer(opts = {}) {
   // Invalidate any IN-FLIGHT play attempt (search/mount/probe still running): its continuation
   // checks this ticket and must not resurrect playback after the user backed out of the loader.
   S._playTicket = (S._playTicket || 0) + 1;
+  cancelLiveTune('main');
+  cancelLiveTune('split:0');
+  cancelLiveTune('split:1');
   const closingItem = S.playing && S.playing.item;
   // Backing out of the player while casting stops the TV too (don't leave it playing an orphaned stream).
   if (S.playing && S.playing.castingActive && !opts._fromCast) {
@@ -11866,6 +11932,7 @@ function nudgeSeek(delta) {
 }
 function seekTo(seconds) {
   cancelPauseWarmAhead();
+  clearWebRebufferRecovery();
   const v = $('video'); const p = S.playing; if (!p) return;
   seconds = Math.max(0, seconds);
   if (p.castingActive) { // seek the TV, not the idle local element
@@ -15004,11 +15071,27 @@ $('libCreate').addEventListener('click', async () => {
 });
 
 /* ============ Live TV (IPTV v2 — favorites, groups, now/next guide) ============ */
-const epgMemo = new Map(); // channel idx -> { at, data } (now/next, short UI-only freshness, bounded)
+let liveTuneEpoch = 0;
+const liveTuneEpochs = new Map();
+function beginLiveTune(slot = 'main') {
+  const ticket = { slot, epoch: ++liveTuneEpoch };
+  liveTuneEpochs.set(slot, ticket.epoch);
+  return ticket;
+}
+function liveTuneIsCurrent(ticket) {
+  return !!ticket && liveTuneEpochs.get(ticket.slot) === ticket.epoch;
+}
+function cancelLiveTune(slot) {
+  liveTuneEpochs.delete(slot);
+}
+const epgMemo = new Map(); // stable channel identity -> { at, data } (now/next, short UI-only freshness, bounded)
 const LIVE_GUIDE_BATCH = 24;
 function liveChannelByIdx(idx) {
   const key = String(idx);
   return (S.liveChannels || []).find((c) => String(c && (c.idx ?? c._channel)) === key) || null;
+}
+function liveChannelStableId(ch) {
+  return String(ch && (ch.id || ch._chid) || '');
 }
 async function fetchEpg(idx) {
   const ch = liveChannelByIdx(idx);
@@ -15027,35 +15110,45 @@ async function fetchEpg(idx) {
     return data;
   }
   if (!Number.isFinite(+idx) || +idx < 0) return {};
-  const m = epgMemo.get(idx);
+  const cid = liveChannelStableId(ch);
+  const key = `s:${idx}:${encodeURIComponent(cid)}`;
+  const m = epgMemo.get(key);
   if (m && Date.now() - m.at < 90000) return m.data;
   if (epgMemo.size > 300) epgMemo.clear(); // bounded — stale entries are refetched on demand
   try {
-    const data = await api(`/api/iptv/epg/${idx}`);
-    epgMemo.set(idx, { at: Date.now(), data });
+    const data = await api(`/api/iptv/epg/${idx}${cid ? `?cid=${encodeURIComponent(cid)}` : ''}`);
+    epgMemo.set(key, { at: Date.now(), data });
     return data;
-  } catch { return {}; }
+  } catch (e) {
+    if (e && e.status === 409) scheduleLiveChannelResync();
+    return {};
+  }
 }
 const fmtT = (ms) => ms ? new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
 const guideMemo = new Map(); // timeline batch -> { at, data }; short UI-only cache, server owns EPG freshness
 async function fetchGuideBatch(chans) {
   const personal = (chans || []).filter((c) => c && isPersonalChannel(c));
-  const ids = (chans || [])
+  const serverRows = (chans || [])
     .filter((c) => c && !isPersonalChannel(c))
-    .map((c) => c && (c.idx ?? c._channel))
-    .filter((n) => Number.isInteger(n) && n >= 0);
+    .map((c) => ({ idx: +(c.idx ?? c._channel), cid: liveChannelStableId(c) }))
+    .filter((r) => Number.isInteger(r.idx) && r.idx >= 0);
+  const ids = serverRows.map((r) => r.idx);
   if ((!ids.length && !personal.length) || !S.liveEpg) return {};
   let data = {};
   const bucket = Math.floor(Date.now() / 1800000); // guide window only shifts every half hour
   if (ids.length) {
-    const key = `s:${bucket}:${ids.join(',')}`;
+    const key = `s:${bucket}:${serverRows.map((r) => `${r.idx}:${encodeURIComponent(r.cid)}`).join(',')}`;
     const hit = guideMemo.get(key);
     if (hit && Date.now() - hit.at < (hit.syntheticOnly ? 5000 : 60000)) data = { ...data, ...hit.data };
     else {
       if (guideMemo.size > 80) guideMemo.clear();
       try {
-        const cids = (chans || []).filter((c) => c && c.idx >= 0).map((c) => encodeURIComponent(c.id || ''));
-        const cidParam = cids.length ? '&cids=' + cids.join(',') : '';
+        const cids = serverRows.map((r) => r.cid);
+        // The server binds ids positionally to indexes. Only send the vector when every row has
+        // a stable id; an empty value would otherwise shift later ids onto the wrong channels.
+        const cidParam = cids.length && cids.every(Boolean)
+          ? '&cids=' + cids.map((cid) => encodeURIComponent(cid)).join(',')
+          : '';
         const g = await api('/api/iptv/guide?chs=' + ids.join(',') + cidParam);
         const channels = g.channels || [];
         const serverData = Object.fromEntries(channels.map((c) => [c.idx, c.programmes || []]));
@@ -15203,7 +15296,22 @@ function fetchPersonalGuideBatch(chans, timeoutMs = 15000) {
     }
   });
 }
+function armPersonalIptvLoadTimeout(wait, timeoutMs) {
+  if (!wait) return;
+  const duration = Math.max(1000, +timeoutMs || 18000);
+  if ((wait.timeoutMs || 0) >= duration) return;
+  wait.timeoutMs = duration;
+  if (wait.timer) clearTimeout(wait.timer);
+  const remaining = Math.max(0, duration - (Date.now() - wait.startedAt));
+  wait.timer = setTimeout(wait.onTimeout, remaining);
+}
 function loadPersonalIptvChannels(timeoutMs = 18000) {
+  if (S._personalIptvLoadPromise) {
+    // A foreground Live TV open may join a shorter favorites prefetch. Extend that SAME bridge
+    // request to the foreground budget instead of starting a second callback slot or timing out early.
+    armPersonalIptvLoadTimeout(S._personalIptvWait, timeoutMs);
+    return S._personalIptvLoadPromise;
+  }
   const bridge = personalIptvBridge();
   if (!bridge || typeof bridge.personalIptvLoad !== 'function') {
     return Promise.resolve({ configured: false, channels: [], sourceErrors: [] });
@@ -15212,33 +15320,41 @@ function loadPersonalIptvChannels(timeoutMs = 18000) {
     return Promise.resolve({ configured: false, channels: [], sourceErrors: [] });
   }
   const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
+  const pending = new Promise((resolve) => {
+    const wait = { token, resolve, timer: null, startedAt: Date.now(), timeoutMs: 0, onTimeout: null };
+    wait.onTimeout = () => {
       if (S._personalIptvWait && S._personalIptvWait.token === token) S._personalIptvWait = null;
       resolve({ configured: true, channels: [], sourceErrors: [{ sourceName: 'This device', error: 'Personal IPTV timed out' }] });
-    }, timeoutMs);
-    S._personalIptvWait = { token, resolve, timer };
+    };
+    S._personalIptvWait = wait;
+    armPersonalIptvLoadTimeout(wait, timeoutMs);
     try { bridge.personalIptvLoad(token); }
     catch {
-      clearTimeout(timer);
-      S._personalIptvWait = null;
+      clearTimeout(wait.timer);
+      if (S._personalIptvWait && S._personalIptvWait.token === token) S._personalIptvWait = null;
       resolve({ configured: true, channels: [], sourceErrors: [{ sourceName: 'This device', error: 'Personal IPTV bridge failed' }] });
     }
   });
+  const joined = pending.finally(() => {
+    if (S._personalIptvLoadPromise === joined) S._personalIptvLoadPromise = null;
+  });
+  S._personalIptvLoadPromise = joined;
+  return joined;
 }
 async function loadLiveChannelsCombined({ fav = false } = {}) {
   const allowServer = !!(S.serverInfo && S.serverInfo.iptv && (!S.user || S.user.iptvAllowed !== false));
-  let server = { configured: false, epg: false, channels: [], hiddenGroups: [], globalHidden: [], sourceErrors: [] };
-  if (allowServer) {
+  const emptyServer = { configured: false, epg: false, channels: [], hiddenGroups: [], globalHidden: [], sourceErrors: [] };
+  const serverPromise = allowServer ? (async () => {
     try {
       const q = new URLSearchParams({ lean: '1' });
       if (fav) q.set('fav', '1');
-      server = await api('/api/iptv/channels?' + q.toString());
+      return await api('/api/iptv/channels?' + q.toString());
     } catch (e) {
-      server = { ...server, configured: true, sourceErrors: [{ sourceName: 'Server Live TV', error: e.message || 'server playlist failed' }] };
+      return { ...emptyServer, configured: true, sourceErrors: [{ sourceName: 'Server Live TV', error: e.message || 'server playlist failed' }] };
     }
-  }
-  let personal = await loadPersonalIptvChannels(fav ? 12000 : 18000);
+  })() : Promise.resolve(emptyServer);
+  const personalPromise = loadPersonalIptvChannels(fav ? 12000 : 18000);
+  let [server, personal] = await Promise.all([serverPromise, personalPromise]);
   if (fav) personal = { ...personal, channels: (personal.channels || []).filter((c) => c.fav) };
   const personalHidden = personalHiddenSet();
   const channels = [
@@ -16038,6 +16154,7 @@ async function playChannel(it, list) {
     const pane = S.liveSplitPickPane === 1 ? 1 : liveSplitActivePane();
     return playLiveSplitChannel(it, list, pane);
   }
+  const tune = beginLiveTune('main');
   // Coming FROM a movie/show? Remember it so the guide can offer "← Back to <title>".
   rememberVodReturn();
   // Remember the surrounding channel list so the player can zap (PgUp/PgDn, ⏮⏭, guide).
@@ -16048,7 +16165,11 @@ async function playChannel(it, list) {
   S.liveCur = it._channel;
   if ($('pGuide') && $('pGuide').classList.contains('open')) setPlayerGuideVisualFocus(it._channel);
   try { it = await hydrateLivePlaybackUrls(it); }
-  catch (e) { toast('Live stream unavailable: ' + e.message); return; }
+  catch (e) {
+    if (liveTuneIsCurrent(tune)) toast('Live stream unavailable: ' + e.message);
+    return;
+  }
+  if (!liveTuneIsCurrent(tune)) return;
   // Zap speed: warm the NEIGHBORS' stream URLs in the background (a tiny token-minting GET, no
   // provider connection) so PgUp/PgDn ⏮⏭ zaps skip the serial /api/iptv/play round-trip entirely.
   prefetchAdjacentChannelUrls(it, S.liveList);
@@ -19918,6 +20039,16 @@ async function refreshSettings() {
     if ($('osPass')) $('osPass').placeholder = s.openSubsPass ? 'password saved ✓ — type to replace' : 'opensubtitles.com password';
     if ($('subSourceMode')) $('subSourceMode').value = s.subtitleSource || 'wyzie-first';
     $('builtInSubsMode').value = s.builtInSubtitlesEnabled ? 'on' : 'off';
+    if ($('viewerGeoMode')) {
+      $('viewerGeoMode').value = s.viewerGeolocationEnabled ? 'on' : 'off';
+      $('viewerGeoMode').disabled = s.viewerGeolocationEnvForced === true;
+    }
+    if ($('viewerGeoSave')) $('viewerGeoSave').disabled = s.viewerGeolocationEnvForced === true;
+    if ($('viewerGeoStatus')) $('viewerGeoStatus').textContent = s.viewerGeolocationEnvForced
+      ? `enabled by TRIBOON_VIEWER_GEO; change the server environment to disable it${s.viewerGeolocationTrustProxy ? ' (trusted-proxy client IPs active)' : ''}`
+      : s.viewerGeolocationEnabled
+        ? 'enabled - remote public IPs are sent to ipwho.is for city/country lookup'
+        : 'off (recommended for privacy) - public viewer IPs are not sent externally';
     $('osStatus').textContent = s.openSubsKey
       ? `Wyzie saved ✓ · OpenSubtitles ${s.openSubtitlesActive ? 'active ✓' : 'not fully configured (needs key + user + pass)'} · mode: ${s.subtitleSource || 'wyzie-first'}`
       : `${s.builtInSubtitlesEnabled ? 'built-in first' : 'online-only testing'} — add a Wyzie Subs key for online captions`;
@@ -20483,6 +20614,22 @@ $('sec2faDisable').addEventListener('click', async () => {
     $('sec2faMsg').textContent = 'Two-factor sign-in disabled.';
     await refreshSecurity();
   } catch (e) { $('sec2faMsg').textContent = e.message; }
+});
+$('viewerGeoSave').addEventListener('click', async () => {
+  const enabled = $('viewerGeoMode').value === 'on';
+  try {
+    const result = await api('/api/settings', { method: 'POST', body: { viewerGeolocationEnabled: enabled } });
+    const effective = result.viewerGeolocationEnabled === true;
+    $('viewerGeoMode').value = effective ? 'on' : 'off';
+    $('viewerGeoMode').disabled = result.viewerGeolocationEnvForced === true;
+    $('viewerGeoSave').disabled = result.viewerGeolocationEnvForced === true;
+    $('viewerGeoStatus').textContent = result.viewerGeolocationEnvForced
+      ? 'enabled by TRIBOON_VIEWER_GEO; change the server environment to disable it'
+      : effective
+      ? 'enabled - future remote playback activity may show city/country via ipwho.is'
+      : 'off (recommended for privacy) - public viewer IPs are not sent externally';
+    toast(effective ? 'Viewer city lookup enabled' : 'Viewer city lookup disabled');
+  } catch (e) { $('viewerGeoStatus').textContent = 'Save failed: ' + e.message; }
 });
 $('invGo').addEventListener('click', async () => {
   const r = await api('/api/invites', { method: 'POST', body: { policy: { maxResolutionRank: parseInt($('invCap').value, 10) } } });
@@ -22479,6 +22626,13 @@ window.__tvBack = () => {
   if (S.screensaverOn) {
     hideScreensaver(true);
     resetScreensaverIdle();
+    return 'ok';
+  }
+  // On phones the off-canvas rail is a transient surface, just like a dialog. Hardware and
+  // predictive Back must dismiss it before navigating away from the current view (or triggering
+  // the root-level "press Back again to exit" behavior).
+  if (document.body.classList.contains('mobileNav')) {
+    document.body.classList.remove('mobileNav');
     return 'ok';
   }
   if ($('pGuide') && $('pGuide').classList.contains('open')) {

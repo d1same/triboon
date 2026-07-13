@@ -48,7 +48,41 @@ function parseWantedTitle(q) {
 // not size-cap-disqualified for streaming one episode of it.
 function wantedEpisodeOf(params) {
   const s = Number(params && params.season), e = Number(params && params.ep);
-  return (Number.isInteger(s) && Number.isInteger(e) && s > 0 && e > 0) ? { s, e } : null;
+  // TMDB uses season 0 for specials. It is still an episode selection contract: dropping it here
+  // makes a specials pack mount its largest member and lets its prepared mount alias a movie.
+  return (Number.isInteger(s) && Number.isInteger(e) && s >= 0 && e > 0) ? { s, e } : null;
+}
+
+// Only collection-shaped releases need request-scoped negative verdicts. A normal exact
+// Show.S02E05 release has no sibling payload to poison, so its missing/blocked verdict remains
+// reusable (critical for fast source skipping on the next play).
+function isEpisodeCollectionName(name, wantedEpisode) {
+  const s = Number(wantedEpisode && wantedEpisode.s);
+  const e = Number(wantedEpisode && wantedEpisode.e);
+  if (!Number.isInteger(s) || s < 0 || !Number.isInteger(e) || e <= 0) return false;
+  const norm = String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ');
+  const range = /\bs0?(\d{1,2})e0?(\d{1,3})\s*e0?(\d{1,3})\b/.exec(norm);
+  const inMultiEpisodeRange = !!(range && +range[1] === s
+    && +range[2] < +range[3] && +range[2] <= e && e <= +range[3]);
+  const seasonToken = new RegExp(`\\b(s0?${s}|season\\s?0?${s})\\b`).test(norm);
+  const anyEpisodeToken = /\b(s\d{1,2}\s?e\d{1,3}|\d{1,2}x\d{1,3}|(?:episode|ep)\s?\d{1,3}|e\d{1,3})\b/.test(norm);
+  return inMultiEpisodeRange || (seasonToken && !anyEpisodeToken);
+}
+
+// NZB XML and health verdicts are release-wide, but a mounted virtual file is not: one season-pack
+// NZB can expose many episodes, and audiobook mode can choose a different payload. Keep live mount
+// reuse and in-flight prepare joins scoped to the exact selection contract.
+function mountIdentity(candidate, mountOpts = {}) {
+  const we = mountOpts && mountOpts.wantedEpisode;
+  const s = Number(we && we.s), e = Number(we && we.e);
+  const hasEpisode = Number.isInteger(s) && s >= 0 && Number.isInteger(e) && e > 0;
+  return JSON.stringify([
+    String(candidate && candidate.nzbUrl || ''),
+    hasEpisode ? 1 : 0, // keep a movie distinct from S00E00-like/default numeric sentinels
+    hasEpisode ? s : 0,
+    hasEpisode ? e : 0,
+    mountOpts && mountOpts.audiobook ? 1 : 0,
+  ]);
 }
 // What may legally follow the title in a scene name: year, SxxEyy/NxMM, resolution, source/
 // codec, edition/region words. A PLAIN word right after the matched title means the release's
@@ -266,6 +300,10 @@ const PLAY_RACE_WIDTH = 5;
 // parallel understudy started. A fast dead pick fails before the hedge too and the next launches
 // immediately on that failure — the hedge only matters for slow-failing/slow-mounting picks.
 const RACE_HEDGE_MS = 800;
+// Once a lower-ranked hedge is healthy, give earlier ranks only a short final chance to settle.
+// This preserves quality when the top source is milliseconds behind without turning a ready player
+// into a 30-second wait behind its mount deadline.
+const RACE_COMMIT_GRACE_MS = 250;
 
 function candidateKey(candidate) {
   return crypto.createHash('sha1').update([
@@ -289,15 +327,29 @@ function nzbVerdictKey(rawUrl) {
   return 'nzb:' + crypto.createHash('sha256').update(stable).digest('hex').slice(0, 32);
 }
 
-function firstProbeMsgId(nzbXml) {
+function firstProbeTarget(nzbXml, mountOpts = {}, candidateName = '') {
   const nzb = parseNzb(nzbXml);
   const candidates = nzb.files.map((f) => ({
     ...f,
     name: fileNameFromSubject(f.subject),
     bytes: f.segments.reduce((s, x) => s + x.bytes, 0),
   }));
-  const file = orderVolumes(candidates)[0] || pickPrimaryFile(nzb);
-  return file && file.segments && file.segments[0] && file.segments[0].msgId;
+  // Archive posts must probe their first volume. Loose season packs must probe the exact file that
+  // mountNzb will select for the requested episode; probing the largest E01 and mounting E05 can
+  // otherwise reject a healthy E05 (or bless a missing one) before playback even starts.
+  const firstVolume = orderVolumes(candidates)[0] || null;
+  const file = firstVolume || pickPrimaryFile(nzb, mountOpts);
+  return {
+    msgId: file && file.segments && file.segments[0] && file.segments[0].msgId,
+    // A missing loose-pack episode says nothing about the other members in the same NZB. Archive
+    // volume failure remains release-wide because every inner episode depends on that volume set.
+    episodeScoped: !firstVolume
+      && isEpisodeCollectionName(candidateName, mountOpts && mountOpts.wantedEpisode),
+  };
+}
+
+function firstProbeMsgId(nzbXml, mountOpts = {}, candidateName = '') {
+  return firstProbeTarget(nzbXml, mountOpts, candidateName).msgId;
 }
 
 function mountVerdictForError(e) {
@@ -351,7 +403,10 @@ class PlaySession {
 }
 
 class Pipeline {
-  constructor({ pool, verdicts, mounts, indexers = () => [], usage = {}, performance = () => null, enforceFeatureSize = false }) {
+  constructor({
+    pool, verdicts, mounts, indexers = () => [], usage = {}, performance = () => null,
+    enforceFeatureSize = false, mountDeadlineMs = MOUNT_DEADLINE_MS,
+  }) {
     this.pool = pool;             // () => NntpPool (lazy, settings-driven)
     this.verdicts = verdicts;     // VerdictCache
     this.mounts = mounts;         // shared Map(id -> vf) owned by the HTTP server
@@ -365,13 +420,17 @@ class Pipeline {
     // gate and count NZB downloads (cached NZBs and live-mount reuse never count).
     this.usage = { onSearch: () => {}, canGrab: () => true, onGrab: () => {}, ...usage };
     this.performance = performance; // admin streaming profile: connection fairness + buffers
+    // Constructor override exists for deterministic timeout regression tests; production keeps the
+    // canonical bounded deadline above.
+    this.mountDeadlineMs = Number.isFinite(mountDeadlineMs) && mountDeadlineMs > 0
+      ? mountDeadlineMs : MOUNT_DEADLINE_MS;
     this.sessions = new Map();    // id -> PlaySession
     this.searchCache = new Map(); // queryKey -> { at, results, errors } (prefetch-on-browse → instant play)
     this.searchInflight = new Map(); // queryKey -> Promise(hit), so Play can join an active prefetch
     this.nzbCache = new Map();    // nzbUrl -> xml (small LRU; replays remount instantly)
     this.nzbInflight = new Map(); // nzbUrl -> Promise(xml), so Play joins detail-page prefetch
-    this.prepareInflight = new Map(); // nzbUrl -> Promise({vf|fail}), so Play joins detail-page prepare
-    this.mountByUrl = new Map();  // nzbUrl -> mount id (live mounts are reused — replay ≈ instant)
+    this.prepareInflight = new Map(); // mountIdentity -> shared cancellable mount record
+    this.mountByUrl = new Map();  // mountIdentity -> mount id (same selected payload reuses instantly)
     this.metrics = {
       searchCacheHits: 0,
       searchCacheMisses: 0,
@@ -712,7 +771,7 @@ class Pipeline {
     const season = Number(params.season);
     const ep = Number(params.ep);
     let verifyQ = rawQ;
-    if (Number.isInteger(season) && Number.isInteger(ep) && season > 0 && ep > 0 && !/\bS\d{1,2}\s*E\d{1,3}\b/i.test(params.q)) {
+    if (Number.isInteger(season) && Number.isInteger(ep) && season >= 0 && ep > 0 && !/\bS\d{1,2}\s*E\d{1,3}\b/i.test(params.q)) {
       const se = ` S${String(season).padStart(2, '0')}E${String(ep).padStart(2, '0')}`;
       params.q = `${params.q}${se}`.trim();
       verifyQ = `${verifyQ}${se}`.trim();
@@ -887,9 +946,12 @@ class Pipeline {
   }
 
   // Try one candidate: fetch NZB → mount → gate. Returns { vf } or { fail: reason }.
-  async _tryCandidate(candidate, mountOpts) {
+  async _tryCandidate(candidate, mountOpts = {}) {
+    const identity = mountIdentity(candidate, mountOpts);
+    const consumerSignal = mountOpts && mountOpts.signal;
+    if (consumerSignal && consumerSignal.aborted) return { fail: 'cancelled: source race loser' };
     // Live-mount reuse: replays and multi-user plays of the same release skip everything.
-    const liveId = this.mountByUrl.get(candidate.nzbUrl);
+    const liveId = this.mountByUrl.get(identity);
     if (liveId) {
       const live = this.mounts.get(liveId);
       if (live && live.streamable) {
@@ -897,20 +959,74 @@ class Pipeline {
         if (candidate.name) live._releaseName = candidate.name;
         return { vf: live };
       }
-      this.mountByUrl.delete(candidate.nzbUrl);
+      this.mountByUrl.delete(identity);
     }
-    const pending = this.prepareInflight.get(candidate.nzbUrl);
-    if (pending) return pending;
-    const run = this._tryCandidateFresh(candidate, mountOpts);
-    this.prepareInflight.set(candidate.nzbUrl, run);
-    try {
-      return await run;
-    } finally {
-      if (this.prepareInflight.get(candidate.nzbUrl) === run) this.prepareInflight.delete(candidate.nzbUrl);
+    let record = this.prepareInflight.get(identity);
+    // A last consumer may cancel the shared master while its non-cancellable indexer NZB fetch is
+    // still unwinding. A later Play must not join that already-doomed record; it may safely reuse
+    // the independent NZB fetch, then create a fresh mount controller of its own.
+    if (record && !record.settled && record.controller.signal.aborted) {
+      if (this.prepareInflight.get(identity) === record) this.prepareInflight.delete(identity);
+      record = null;
     }
+    if (!record) {
+      const controller = new AbortController();
+      record = { controller, consumers: 0, settled: false, promise: null };
+      const runOpts = { ...mountOpts, signal: controller.signal };
+      record.promise = Promise.resolve()
+        .then(() => this._tryCandidateFresh(candidate, runOpts))
+        .then((result) => {
+          if (result && result.vf && !result.fail) result.vf._mountIdentity = identity;
+          return result;
+        })
+        .finally(() => {
+          record.settled = true;
+          if (this.prepareInflight.get(identity) === record) this.prepareInflight.delete(identity);
+        });
+      this.prepareInflight.set(identity, record);
+    }
+
+    // Every play/prepare caller is a consumer of the shared mount. A hedged loser may detach at
+    // once; the underlying startup work is aborted only when NO other caller still needs it. This
+    // releases startup-priority NNTP work without breaking a concurrent play that joined the same
+    // prepared mount.
+    record.consumers++;
+    let released = false;
+    let removeAbort = () => {};
+    const release = () => {
+      if (released) return;
+      released = true;
+      removeAbort();
+      record.consumers = Math.max(0, record.consumers - 1);
+      if (!record.settled && record.consumers === 0 && !record.controller.signal.aborted) {
+        record.controller.abort();
+      }
+    };
+    if (!consumerSignal) {
+      try { return await record.promise; }
+      finally { release(); }
+    }
+    const cancelled = new Promise((resolve) => {
+      const onAbort = () => {
+        // Detach synchronously with the hedge decision so the shared master controller (when this is
+        // its last consumer) releases the NNTP startup request before the winner is returned.
+        release();
+        resolve({ fail: 'cancelled: source race loser' });
+      };
+      consumerSignal.addEventListener('abort', onAbort, { once: true });
+      removeAbort = () => consumerSignal.removeEventListener('abort', onAbort);
+    });
+    try { return await Promise.race([record.promise, cancelled]); }
+    finally { release(); }
   }
 
-  async _tryCandidateFresh(candidate, mountOpts) {
+  async _tryCandidateFresh(candidate, mountOpts = {}) {
+    const selectionEpisodeScoped = isEpisodeCollectionName(candidate.name, mountOpts.wantedEpisode);
+    const recordSelectionVerdict = (verdict, detail = {}) => {
+      // Post-mount judgments describe the selected pack member. They must not blacklist every
+      // episode behind the release-wide NZB/title keys; the current request still fails/advances.
+      if (!selectionEpisodeScoped) this._recordVerdict(candidate, verdict, detail);
+    };
     let xml = this.nzbCache.get(candidate.nzbUrl);
     // LRU touch: a hot NZB (fast replay / multi-user same title) survives eviction by unrelated grabs.
     if (xml) { this.nzbCache.delete(candidate.nzbUrl); this.nzbCache.set(candidate.nzbUrl, xml); this.metrics.nzbCacheHits++; }
@@ -944,9 +1060,12 @@ class Pipeline {
     // mount starts immediately; the cheap STAT only short-circuits a genuinely MISSING source, so
     // stale NZBs are still skipped fast without paying a full BODY mount on the healthy path.
     let probePromise = null;
+    let probeEpisodeScoped = false;
     const probeT0 = Date.now();
     try {
-      const probeMsg = firstProbeMsgId(xml);
+      const probeTarget = firstProbeTarget(xml, mountOpts, candidate.name);
+      const probeMsg = probeTarget.msgId;
+      probeEpisodeScoped = probeTarget.episodeScoped;
       if (probeMsg) {
         probePromise = probeFirstArticle(this.pool(), probeMsg).then((verdict) => {
           const probeMs = Date.now() - probeT0;
@@ -964,7 +1083,29 @@ class Pipeline {
     let vf;
     const mountT0 = Date.now();
     this.metrics.mountAttempts++;
-    const mountPromise = withDeadline(mountNzb(this.pool(), xml, mountOpts), MOUNT_DEADLINE_MS, 'mount timeout');
+    // Link a mount-local controller to the shared prepare signal. Terminal probe/deadline results
+    // must stop the underlying BODY work before the prepare record becomes settled; otherwise a
+    // returned failure can retain startup-priority pool capacity until the provider times out.
+    const mountController = new AbortController();
+    const parentMountSignal = mountOpts.signal || null;
+    const onParentMountAbort = () => mountController.abort();
+    if (parentMountSignal) {
+      if (parentMountSignal.aborted) mountController.abort();
+      else parentMountSignal.addEventListener('abort', onParentMountAbort, { once: true });
+    }
+    let mountParentDetached = false;
+    const finishMountStartup = (abort = false) => {
+      if (abort && !mountController.signal.aborted) mountController.abort();
+      if (!mountParentDetached && parentMountSignal) {
+        parentMountSignal.removeEventListener('abort', onParentMountAbort);
+      }
+      mountParentDetached = true;
+    };
+    const mountPromise = withDeadline(
+      mountNzb(this.pool(), xml, { ...mountOpts, signal: mountController.signal }),
+      this.mountDeadlineMs,
+      'mount timeout',
+    );
     mountPromise.catch(() => {}); // a probe-missing short-circuit must not leave an unhandled rejection
 
     // Fail fast if the cheap probe proves the first article missing before the mount lands —
@@ -975,23 +1116,32 @@ class Pipeline {
         mountPromise.then(() => ({ kind: 'mount' }), () => ({ kind: 'mount' })),
       ]);
       if (winner.kind === 'probe' && winner.v === 'missing') {
-        this._recordVerdict(candidate, 'missing', { stage: 'first-article' });
-        return { fail: 'missing: first article unavailable' };
+        finishMountStartup(true);
+        if (!probeEpisodeScoped) this._recordVerdict(candidate, 'missing', { stage: 'first-article' });
+        return { fail: `${probeEpisodeScoped ? 'episode' : 'missing'}: first article unavailable` };
       }
       // No provider answered at all — a connection/VPN/port/credentials problem, NOT a dead source.
       // Fail with an honest reason (no verdict cached — the source is fine once connectivity returns).
       if (winner.kind === 'probe' && winner.v === 'unreachable') {
+        finishMountStartup(true);
         return { fail: 'provider unreachable: no usenet provider could be reached (connection/VPN/port/credentials)' };
       }
     }
     try {
       vf = await mountPromise;
+      finishMountStartup(false);
       const mountMs = Date.now() - mountT0;
       this.metrics.mountSuccesses++;
       this.metrics.mountMs += mountMs;
       this.metrics.mountMaxMs = Math.max(this.metrics.mountMaxMs, mountMs);
     } catch (e) {
+      const cancelled = !!(parentMountSignal && parentMountSignal.aborted)
+        || !!(e && e.code === 'ABORT_ERR');
+      finishMountStartup(true);
       const mountMs = Date.now() - mountT0;
+      // Losing a hedge is scheduling, not source health or a mount failure. The caller already
+      // detached this consumer; do not demote a healthy-but-slower release or skew failure metrics.
+      if (cancelled) return { fail: 'cancelled: source race loser' };
       this.metrics.mountFailures++;
       this.metrics.mountMs += mountMs;
       this.metrics.mountMaxMs = Math.max(this.metrics.mountMaxMs, mountMs);
@@ -1000,27 +1150,35 @@ class Pipeline {
       if (probePromise) {
         const pv = await probePromise.catch(() => 'error');
         if (pv === 'missing') {
-          this._recordVerdict(candidate, 'missing', { stage: 'first-article' });
-          return { fail: 'missing: first article unavailable' };
+          if (!probeEpisodeScoped) this._recordVerdict(candidate, 'missing', { stage: 'first-article' });
+          return { fail: `${probeEpisodeScoped ? 'episode' : 'missing'}: first article unavailable` };
         }
       }
+      // Episode selection is scoped to this requested S/E, while health verdicts are release-wide.
+      // Do not poison an otherwise valid season pack for every other episode when this member is
+      // absent or ambiguous; simply advance this play to the next ranked source.
+      if (e && e.code === 'EPISODE_SELECTION') return { fail: `episode: ${e.message}` };
       // Chronically SLOW source (the cheap STAT probe timed out AND the mount then timed out):
       // record the 'probe-timeout' demotion HEALTH_SCORE was designed with (-800 — softer than
       // mount-failed, the release may be fine on a better provider day) so the next play demotes
       // it up front instead of re-paying the full 30s mount walk. This flag was set but never
       // read, leaving the intended demotion dead code.
+      if (probeEpisodeScoped && candidate._probeTimeout
+          && /mount timeout/i.test(String(e && e.message || ''))) {
+        return { fail: `mount: ${e.message} (requested episode only)` };
+      }
       if (candidate._probeTimeout && /mount timeout/i.test(String(e && e.message || ''))) {
-        this._recordVerdict(candidate, 'probe-timeout', { stage: 'mount' });
+        if (!probeEpisodeScoped) this._recordVerdict(candidate, 'probe-timeout', { stage: 'mount' });
         return { fail: `mount: ${e.message} (slow articles — demoted for later)` };
       }
-      this._recordVerdict(candidate, mountVerdictForError(e));
+      if (!probeEpisodeScoped) this._recordVerdict(candidate, mountVerdictForError(e));
       return { fail: `mount: ${e.message}` };
     }
 
     if (!vf.streamable) {
       const streamClass = vf.tags.includes('compressed') ? 'compressed'
         : vf.tags.includes('encrypted') ? 'encrypted' : 'unsupported';
-      this._recordVerdict(candidate, 'unstreamable', { streamClass, tags: vf.tags });
+      recordSelectionVerdict('unstreamable', { streamClass, tags: vf.tags });
       return { fail: `unstreamable: ${vf.tags.join(',')}`, vf };
     }
 
@@ -1028,7 +1186,7 @@ class Pipeline {
     // (68MB "2160p episode") mounted and auto-played as the real thing. Applies to archive
     // picks too — some releases keep Sample/ alongside the movie RARs.
     if (/\bsample\b/i.test(vf.name || '')) {
-      this._recordVerdict(candidate, 'unstreamable', { streamClass: 'sample' });
+      recordSelectionVerdict('unstreamable', { streamClass: 'sample' });
       return { fail: `sample file picked (${vf.name})`, vf };
     }
 
@@ -1048,7 +1206,7 @@ class Pipeline {
     // already applied its own (much lower) pre-mount junk floor.
     const stub = this.enforceFeatureSize && !mountOpts.audiobook && stubFeatureReason(Number(vf.size) || 0, vf.name || candidate.name || '');
     if (stub) {
-      this._recordVerdict(candidate, 'unstreamable', { streamClass: 'stub', sizeGb: +((Number(vf.size) || 0) / 1e9).toFixed(3) });
+      recordSelectionVerdict('unstreamable', { streamClass: 'stub', sizeGb: +((Number(vf.size) || 0) / 1e9).toFixed(3) });
       return { fail: stub, vf };
     }
 
@@ -1075,14 +1233,14 @@ class Pipeline {
     const streamClass = vf.container === 'flat' ? 'flat' : vf.method; // consistent across both paths
     if (gate === 'timeout') {
       this.metrics.healthGateTimeouts++;
-      triage.then((h) => { if (h && h.verdict) this._recordVerdict(candidate, h.verdict, { streamClass }); }).catch(() => {});
+      triage.then((h) => { if (h && h.verdict) recordSelectionVerdict(h.verdict, { streamClass }); }).catch(() => {});
     } else if (gate && gate.verdict === 'blocked') {
       this.metrics.healthGateBlocked++;
-      this._recordVerdict(candidate, 'blocked', { streamClass });
+      recordSelectionVerdict('blocked', { streamClass });
       return { fail: 'health: blocked', vf };
     } else if (gate) {
       this.metrics.healthGateResults++;
-      this._recordVerdict(candidate, gate.verdict, { streamClass });
+      recordSelectionVerdict(gate.verdict, { streamClass });
     } else {
       this.metrics.healthGateResults++;
     }
@@ -1215,7 +1373,7 @@ class Pipeline {
           res.vf._touched = Date.now();
           if (candidate.name) res.vf._releaseName = candidate.name;
           this.mounts.set(res.vf.id, res.vf);
-          this.mountByUrl.set(candidate.nzbUrl, res.vf.id);
+          this.mountByUrl.set(res.vf._mountIdentity || mountIdentity(candidate, mountOpts), res.vf.id);
           this.rebalancePlaybackWindows();
           this._startPlaybackWarmup(res.vf, res.vf._playWin, params.resumeFrac);
           return { vf: res.vf, candidate };
@@ -1241,11 +1399,11 @@ class Pipeline {
   }
 
   // Commit a winning mount to the session and warm its read-ahead. Shared by both walk modes.
-  _commitMount(session, candidate, vf, attempts) {
+  _commitMount(session, candidate, vf, attempts, mountOpts = {}) {
     vf._touched = Date.now();
     if (candidate.name) vf._releaseName = candidate.name;
     this.mounts.set(vf.id, vf);
-    this.mountByUrl.set(candidate.nzbUrl, vf.id);
+    this.mountByUrl.set(vf._mountIdentity || mountIdentity(candidate, mountOpts), vf.id);
     session.currentMountId = vf.id;
     this.rebalancePlaybackWindows();
     this._startPlaybackWarmup(vf, vf._playWin, session.query && session.query.resumeFrac);
@@ -1264,16 +1422,17 @@ class Pipeline {
       while (session.cursor < session.candidates.length && attempts.length < MAX_ATTEMPTS && budgetLeft()) {
         const candidate = session.candidates[session.cursor++];
         const res = await this._tryCandidate(candidate, mountOpts);
-        if (res.vf && !res.fail) return this._commitMount(session, candidate, res.vf, attempts);
+        if (res.vf && !res.fail) return this._commitMount(session, candidate, res.vf, attempts, mountOpts);
         session.history.push({ name: candidate.name, outcome: res.fail });
         attempts.push({ name: candidate.name, fail: res.fail });
       }
     } else {
-      // Hedged parallel walk: speculatively mount up to `width` candidates concurrently, but COMMIT
-      // IN RANK ORDER — the winner is the best (lowest-index) HEALTHY release, never a lower-ranked
-      // one that merely finished first. A failed front-runner pulls the next candidate in at once; a
-      // stalling front-runner gets a parallel understudy after RACE_HEDGE_MS. Losers stay unregistered
-      // and start no read-ahead (see _tryCandidateFresh), so they fall out of the pool cheaply.
+      // Hedged parallel walk: rank order is preferred, but it is not allowed to hold a ready player
+      // behind a stuck source's full mount deadline. A failed front-runner pulls the next candidate
+      // in at once; a stalling front-runner gets one understudy after RACE_HEDGE_MS. Once a lower
+      // rank is healthy, earlier ranks get RACE_COMMIT_GRACE_MS to settle before the ready source
+      // commits. Losers stay unregistered and start no read-ahead (see _tryCandidateFresh), so they
+      // fall out of the pool cheaply.
       const results = [];          // launch order k -> { candidate, state:'pending'|'ok'|'fail', vf?, fail? }
       const inflight = new Map();  // k -> promise(resolving to k)
       let committed = 0;           // next rank index still to decide
@@ -1281,39 +1440,136 @@ class Pipeline {
         if (session.cursor >= session.candidates.length || results.length >= MAX_ATTEMPTS) return false;
         const candidate = session.candidates[session.cursor++];
         const k = results.length;
-        results.push({ candidate, state: 'pending' });
-        inflight.set(k, this._tryCandidate(candidate, mountOpts).then(
-          (res) => { results[k] = (res.vf && !res.fail) ? { candidate, state: 'ok', vf: res.vf } : { candidate, state: 'fail', fail: res.fail }; return k; },
-          (e) => { results[k] = { candidate, state: 'fail', fail: `error: ${e.message}` }; return k; },
+        const controller = new AbortController();
+        const parentSignal = mountOpts && mountOpts.signal;
+        const onParentAbort = () => controller.abort();
+        if (parentSignal) {
+          if (parentSignal.aborted) controller.abort();
+          else parentSignal.addEventListener('abort', onParentAbort, { once: true });
+        }
+        const rec = {
+          candidate, state: 'pending', controller,
+          cleanupParent: () => parentSignal && parentSignal.removeEventListener('abort', onParentAbort),
+        };
+        results.push(rec);
+        inflight.set(k, this._tryCandidate(candidate, { ...mountOpts, signal: controller.signal }).then(
+          (res) => {
+            Object.assign(rec, (res.vf && !res.fail)
+              ? { state: 'ok', vf: res.vf }
+              : { state: 'fail', fail: res.fail });
+            rec.cleanupParent();
+            return k;
+          },
+          (e) => {
+            Object.assign(rec, { state: 'fail', fail: `error: ${e.message}` });
+            rec.cleanupParent();
+            return k;
+          },
         ));
         return true;
       };
+      const cancelLosers = (winnerIndex = -1) => {
+        for (let i = 0; i < results.length; i++) {
+          const r = results[i];
+          r.cleanupParent();
+          if (i !== winnerIndex && r.controller && !r.controller.signal.aborted) r.controller.abort();
+        }
+      };
+      const commitAt = (index) => {
+        const r = results[index];
+        // Abort every still-pending source BEFORE registering/warming the winner. This releases its
+        // startup-priority NNTP consumer immediately instead of letting a stalled hedge retain pool
+        // capacity until MOUNT_DEADLINE_MS.
+        cancelLosers(index);
+        return this._commitMount(session, r.candidate, r.vf, attempts, mountOpts);
+      };
       const fill = () => { while (inflight.size < width && launchOne()) { /* keep window full */ } };
       let walking = false; // flips true on the first dead pick — past that we KNOW we're walking
+      let initialHedgeLaunched = false;
+      let blockedHealthyIndex = -1;
+      let blockedHealthyAt = 0;
+      const firstHealthyFrom = (from) => {
+        for (let i = from; i < results.length; i++) if (results[i].state === 'ok') return i;
+        return -1;
+      };
+      const raceWithTimer = async (racers, label, delayMs) => {
+        let timer = null;
+        if (Number.isFinite(delayMs) && delayMs >= 0) {
+          racers = [...racers, new Promise((resolve) => {
+            timer = setTimeout(() => resolve(label), delayMs);
+            if (timer.unref) timer.unref();
+          })];
+        }
+        try { return await Promise.race(racers); }
+        finally { if (timer) clearTimeout(timer); }
+      };
       launchOne();
       while (budgetLeft()) {
         // Commit the longest decided prefix, in rank order.
         while (committed < results.length && results[committed].state !== 'pending') {
           const r = results[committed];
-          if (r.state === 'ok') return this._commitMount(session, r.candidate, r.vf, attempts);
+          if (r.state === 'ok') return commitAt(committed);
           session.history.push({ name: r.candidate.name, outcome: r.fail });
           attempts.push({ name: r.candidate.name, fail: r.fail });
           committed++;
           // A dead pick proves this is a real walk (common for 4K: top UHD BluRay remuxes are
           // unstreamable) — race the whole window now instead of ramping one understudy at a time.
           walking = true;
-          fill();
+          if (firstHealthyFrom(committed) < 0) fill();
         }
         if (!inflight.size) break; // nothing decided-OK and nothing left running → all failed
+
+        // A lower-ranked candidate may already be healthy while an earlier rank is stuck in a
+        // 30-second mount deadline. Give the earlier ranks one short final grace, then commit the
+        // ready source. While it is ready, launch NO more candidates — extra grabs cannot improve
+        // first-frame latency and only consume provider/indexer capacity.
+        const healthyIndex = firstHealthyFrom(committed);
+        if (healthyIndex > committed && results[committed].state === 'pending') {
+          if (blockedHealthyIndex !== healthyIndex) {
+            blockedHealthyIndex = healthyIndex;
+            blockedHealthyAt = Date.now();
+          }
+          const remaining = Math.max(0, RACE_COMMIT_GRACE_MS - (Date.now() - blockedHealthyAt));
+          const earlier = [...inflight.entries()]
+            .filter(([k]) => k < healthyIndex)
+            .map(([, promise]) => promise);
+          if (!earlier.length || remaining <= 0) {
+            for (let i = committed; i < healthyIndex; i++) {
+              if (results[i].state === 'pending') {
+                session.history.push({ name: results[i].candidate.name, outcome: 'skipped: faster healthy hedge' });
+              }
+            }
+            return commitAt(healthyIndex);
+          }
+          const settled = await raceWithTimer(earlier, 'rank-grace', remaining);
+          if (settled === 'rank-grace') {
+            for (let i = committed; i < healthyIndex; i++) {
+              if (results[i].state === 'pending') {
+                session.history.push({ name: results[i].candidate.name, outcome: 'skipped: faster healthy hedge' });
+              }
+            }
+            return commitAt(healthyIndex);
+          }
+          inflight.delete(settled);
+          continue;
+        }
+        blockedHealthyIndex = -1;
+        blockedHealthyAt = 0;
+
         // Before the first failure (happy path) only a STALLING top pick gets one hedged understudy,
         // so a healthy/cached top pick costs zero extra grabs. Once walking, the window is kept full.
-        const canHedge = !walking && inflight.size < width && session.cursor < session.candidates.length && results.length < MAX_ATTEMPTS;
+        const canHedge = !walking && !initialHedgeLaunched && inflight.size < width
+          && session.cursor < session.candidates.length && results.length < MAX_ATTEMPTS;
         const racers = [...inflight.values()];
-        if (canHedge) racers.push(new Promise((r) => { const t = setTimeout(() => r('hedge'), RACE_HEDGE_MS); if (t.unref) t.unref(); }));
-        const w = await Promise.race(racers);
-        if (w === 'hedge') { launchOne(); continue; } // front-runner is stalling — widen the race
+        const w = await raceWithTimer(racers, 'hedge', canHedge ? RACE_HEDGE_MS : NaN);
+        if (w === 'hedge') {
+          initialHedgeLaunched = true;
+          launchOne();
+          continue;
+        } // front-runner is stalling — widen the race once
         inflight.delete(w);
       }
+      cancelLosers();
     }
     const err = new Error('all candidates failed');
     err.attempts = attempts;
@@ -1342,4 +1598,8 @@ class Pipeline {
   }
 }
 
-module.exports = { Pipeline, GATE_MS, parseWantedTitle, releaseMatches, candidateKey, nzbVerdictKey, summarizeAttempts, stubFeatureReason, parseWantedBook, bookMatches, isNonAudioAudiobookMount };
+module.exports = {
+  Pipeline, GATE_MS, parseWantedTitle, releaseMatches, candidateKey, nzbVerdictKey,
+  summarizeAttempts, stubFeatureReason, parseWantedBook, bookMatches,
+  isNonAudioAudiobookMount, firstProbeMsgId,
+};

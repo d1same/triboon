@@ -5,7 +5,10 @@
 // ranking/picker can 🐢-tag or skip them.
 
 const crypto = require('crypto');
-const { parseNzb, fileNameFromSubject, pickPrimaryFile, nzbPassword } = require('./nzb');
+const {
+  parseNzb, fileNameFromSubject, pickPrimaryFile, nzbPassword,
+  episodeInName, episodeLikeName, episodeSelectionError,
+} = require('./nzb');
 const { NzbFileStream } = require('./vfs');
 const { parseRarVolumes, RAR4_SIG, RAR5_SIG } = require('./rar');
 const { parseZip } = require('./zip');
@@ -65,10 +68,35 @@ function orderVolumes(files) {
 // Pick the playable inner file: video extension wins, then size; junk never wins. Sample
 // clips are video-extension files too ("…-sample.mkv") — they only win when NOTHING else
 // is playable, and the pipeline then refuses the mount by name.
-function pickInner(files) {
+function pickInner(files, wantedEpisode = null) {
   const scored = files
-    .map((f) => ({ f, score: (JUNK_EXT.test(f.name) || /\bsample\b/i.test(f.name) ? -1 : f.size) * (VIDEO_EXT.test(f.name) ? 10 : 1) }))
+    .map((f) => {
+      const junk = JUNK_EXT.test(f.name) || /\bsample\b/i.test(f.name);
+      let score = (junk ? -1 : f.size) * (VIDEO_EXT.test(f.name) ? 10 : 1);
+      // A season pack may contain every episode inside one RAR/ZIP. Exact episode identity must
+      // outrank file size, otherwise E01/the largest member is reused for an E05 request.
+      if (!junk && wantedEpisode && VIDEO_EXT.test(f.name)
+          && episodeInName(f.name, wantedEpisode.s, wantedEpisode.e)) score += 1e15;
+      return { f, score };
+    })
     .sort((a, b) => b.score - a.score);
+  if (wantedEpisode) {
+    const nonJunk = scored.filter(({ f }) => !JUNK_EXT.test(f.name) && !/\bsample\b/i.test(f.name));
+    const namedVideos = nonJunk.filter(({ f }) => VIDEO_EXT.test(f.name));
+    const payloads = namedVideos.length ? namedVideos : nonJunk;
+    const exact = payloads.filter(({ f }) => episodeInName(f.name, wantedEpisode.s, wantedEpisode.e));
+    if (exact.length === 1) return exact[0].f;
+    if (exact.length > 1) {
+      throw episodeSelectionError(wantedEpisode, 'is ambiguous (multiple matching archive members)');
+    }
+    // A single opaque payload member is a common obfuscation pattern and remains safe: there is no
+    // competing payload to confuse it with. A named different episode or multiple opaque members
+    // are not safe guesses and must make the pipeline advance to another release.
+    if (payloads.length === 1 && !episodeLikeName(payloads[0].f.name)) return payloads[0].f;
+    if (payloads.length) {
+      throw episodeSelectionError(wantedEpisode, 'is not uniquely present in this archive');
+    }
+  }
   return scored.length ? scored[0].f : null;
 }
 
@@ -308,7 +336,7 @@ async function mountNzb(pool, nzbXml, opts = {}) {
     });
   }
 
-  const inner = pickInner(parsed.files);
+  const inner = pickInner(parsed.files, opts.wantedEpisode);
   if (!inner) throw new Error('archive contains no usable files');
 
   const tags = [];

@@ -1219,8 +1219,8 @@ test('VOD pause resume: paused players warm ahead without stealing startup or se
     'pause warm-ahead should be abortable when playback resumes, seeks, or closes');
   assert.match(ui, /function schedulePauseWarmAhead\(p = S\.playing\) \{[\s\S]+p\.item\.type === 'live'[\s\S]+p\.streamUrl[\s\S]+p\.size[\s\S]+const dur = totalDuration\(\);[\s\S]+if \(p\._pauseWarmAt && now - p\._pauseWarmAt < 12000\) return;[\s\S]+const targetSeconds = Math\.min\(dur - 1, Math\.max\(currentTime\(\) \+ 6, bufferedEnd \+ 2\)\);[\s\S]+url\.searchParams\.set\('priority', 'read-ahead'\);[\s\S]+headers: \{ Range: `bytes=\$\{start\}-\$\{start \+ bytes - 1\}` \}/,
     'pause warm-ahead should issue one bounded low-priority range ahead of the paused VOD position');
-  assert.match(ui, /v\.onplaying = \(\) => \{ cancelPauseWarmAhead\(\);[\s\S]+v\.onpause = \(\) => \{ schedulePauseWarmAhead\(S\.playing\); updPP\(\); \};/,
-    'web video should warm on pause and cancel the warm request immediately when playing again');
+  assert.match(ui, /v\.onplaying = \(\) => \{ clearWebRebufferRecovery\(\); cancelPauseWarmAhead\(\);[\s\S]+v\.onpause = \(\) => \{ schedulePauseWarmAhead\(S\.playing\); updPP\(\); \};/,
+    'web video should clear stale recovery state, warm on pause, and cancel warm-ahead immediately when playing again');
   assert.match(ui, /function requestVideoPlay\(v, opts = \{\}\) \{[\s\S]+cancelPauseWarmAhead\(\);[\s\S]+const r = v\.play\(\);[\s\S]+return r\.then\(\(\) => \{[\s\S]+cancelPauseWarmAhead\(\)/,
     'user-initiated resume should cancel pause warm-ahead before and after play starts');
   assert.match(ui, /function seekTo\(seconds\) \{[\s\S]+cancelPauseWarmAhead\(\);[\s\S]+if \(!p\) return;/,
@@ -1231,6 +1231,48 @@ test('VOD pause resume: paused players warm ahead without stealing startup or se
     'Android should report real user pauses without treating normal buffering as paused playback');
 });
 
+test('web VOD rebuffer and subtitle handoff stay bounded, fast, and mobile-safe', async () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const helperStart = ui.indexOf('function clearWebRebufferRecovery()');
+  const helperEnd = ui.indexOf('function stopActivePlaybackForReplacement', helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart, 'web rebuffer helpers should be present');
+  const helperSource = ui.slice(helperStart, helperEnd).replace('}, 45000);', '}, 5);');
+
+  const S = { view: 'player' };
+  const recovered = [];
+  const helpers = new Function('S', 'vodPlaybackStarted', 'appMs', 'recoverSamePlaybackSource',
+    `${helperSource}\nreturn { armWebRebufferRecovery, clearWebRebufferRecovery };`)(
+    S, () => true, () => 10000, (reason) => recovered.push(reason));
+  const playing = { started: true, usingNative: false, item: { type: 'movie' } };
+  const video = { paused: false, seeking: false, readyState: 2, currentTime: 42 };
+  S.playing = playing;
+  helpers.armWebRebufferRecovery(video, playing);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepStrictEqual(recovered, ['web rebuffer stalled'], 'a sustained same-position web stall retries the same source');
+
+  video.currentTime = 50;
+  helpers.armWebRebufferRecovery(video, playing);
+  video.currentTime = 51;
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.strictEqual(recovered.length, 1, 'meaningful playback progress suppresses stale recovery');
+  video.paused = true;
+  helpers.armWebRebufferRecovery(video, playing);
+  assert.strictEqual(S._webRebufferT, null, 'paused playback does not arm a rebuffer restart');
+
+  assert.match(ui, /v\.onwaiting = \(\) => \{[\s\S]+pWait && pWait\.started\) armWebRebufferRecovery\(v, pWait\)/,
+    'the watchdog arms only after VOD has rendered a real frame');
+  assert.match(ui, /v\.onplaying = \(\) => \{ clearWebRebufferRecovery\(\);[\s\S]+const rebufferWatch = S\._webRebufferWatch;[\s\S]+Math\.abs\(v\.currentTime - rebufferWatch\.position\) >= 0\.5\) clearWebRebufferRecovery\(\)/,
+    'playing and meaningful time progress cancel the watchdog');
+  assert.match(ui, /function startSource\([\s\S]+clearWebRebufferRecovery\(\);[\s\S]+function seekTo\(seconds\) \{[\s\S]+clearWebRebufferRecovery\(\);/,
+    'source swaps and user seeks invalidate an old rebuffer timer');
+  assert.match(ui, /if \(builtInSubtitlesEnabled\(\)\) await fetchPlayerTracks\(p, 1400\)/,
+    'online subtitle warming skips the built-in track-probe delay when built-ins are disabled');
+  assert.match(ui, /subtitleShift: subPayload\.shift,[\s\S]+subtitleSize: applySubSize\(\),/,
+    'native subtitle handoff carries the saved caption-size preference');
+  assert.match(ui, /#subOverlay\{[^}]+var\(--safeL\)[^}]+var\(--safeR\)[^}]+var\(--safeB\)/,
+    'web captions respect phone display cutouts and bottom safe areas');
+});
+
 test('Android native player: direct source and native chrome stay out of the web player', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
@@ -1238,6 +1280,7 @@ test('Android native player: direct source and native chrome stay out of the web
   const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
   const androidGradle = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'build.gradle'), 'utf8');
   const manifest = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'AndroidManifest.xml'), 'utf8');
+  const androidStrings = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'values', 'strings.xml'), 'utf8');
   const networkSecurity = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'xml', 'network_security_config.xml'), 'utf8');
   const proguardRules = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'proguard-rules.pro'), 'utf8');
   const playerMap = fs.readFileSync(path.join(__dirname, '..', 'docs-player-regression-map.md'), 'utf8');
@@ -1271,12 +1314,38 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.ok(/class MusicService extends Service/.test(musicService) && musicService.includes('MediaSessionCompat')
     && musicService.includes('new MediaStyle()') && musicService.includes('startForeground(NOTIF_ID'),
     'MusicService is a foreground service with a MediaSession + MediaStyle notification');
-  assert.ok(musicService.includes('MainActivity.dispatchMusicTransport("play")')
-    && musicService.includes('MainActivity.dispatchMusicTransport("pause")')
-    && musicService.includes('MainActivity.dispatchMusicTransport("next")'),
-    'lock-screen transport buttons forward back to the web player');
+  assert.ok(musicService.includes('MainActivity.dispatchMediaTransport("play")')
+    && musicService.includes('MainActivity.dispatchMediaTransport("pause")')
+    && musicService.includes('MainActivity.dispatchMediaTransport("next")')
+    && musicService.includes('onFastForward()')
+    && musicService.includes('MainActivity.dispatchMediaTransport("fast_forward")')
+    && musicService.includes('onRewind()')
+    && musicService.includes('MainActivity.dispatchMediaTransport("rewind")'),
+    'lock-screen transport includes native-capable rewind and fast-forward dispatch');
   assert.match(manifest, /android:name="\.MusicService"[\s\S]+android:foregroundServiceType="mediaPlayback"/,
     'MusicService declared with the mediaPlayback foreground type');
+  assert.match(manifest, /<service\s+[\s\S]*?android:name="\.MusicService"[\s\S]*?<intent-filter>[\s\S]*?android\.intent\.action\.MEDIA_BUTTON[\s\S]*?<\/intent-filter>[\s\S]*?<\/service>/,
+    'MediaButtonReceiver can resolve MusicService for hardware and notification media buttons');
+  assert.match(musicService, /if \(Intent\.ACTION_MEDIA_BUTTON\.equals\(action\)\) \{[\s\S]+startMediaButtonForeground\(startId\)[\s\S]+MediaButtonReceiver\.handleIntent\(session, intent\)[\s\S]+finishTransientMediaButtonStart\(startId\)/,
+    'cold media-button starts enter foreground before dispatch and stop when no music snapshot exists');
+  assert.match(musicService, /private boolean startMediaButtonForeground\(int startId\) \{[\s\S]+startForeground\(NOTIF_ID, buildNotification\(\)\)/,
+    'media-button service starts always satisfy the Android foreground-service deadline');
+  const transientButtonFinish = musicService.slice(
+    musicService.indexOf('private void finishTransientMediaButtonStart(int startId)'),
+    musicService.indexOf('private boolean handleMediaButtonEvent', musicService.indexOf('private void finishTransientMediaButtonStart(int startId)')),
+  );
+  assert.ok(transientButtonFinish.includes('mainHandler.postDelayed(() -> {')
+    && transientButtonFinish.includes('if (hasMusicSnapshot) return;')
+    && transientButtonFinish.includes('stopForeground(Service.STOP_FOREGROUND_REMOVE)')
+    && transientButtonFinish.includes('stopSelfResult(startId)')
+    && transientButtonFinish.includes('}, 750L);'),
+  'idle/native starts self-stop while a cold music update can promote the transient service');
+  assert.match(android, /static void dispatchMediaTransport\(String action\) \{[\s\S]+handleNativeMediaTransport\(action\)[\s\S]+jsMusicTransport\(action\)/,
+    'service transport prefers active native VOD and falls back to WebView audio');
+  assert.match(android, /private boolean handleNativeMediaTransport\(String action\) \{[\s\S]+"video"\.equals\(nativeMode\)[\s\S]+case "fast_forward":[\s\S]+nativeSeekBy\(30000L\)[\s\S]+case "rewind":[\s\S]+nativeSeekBy\(-10000L\)/,
+    'native VOD media-session transport uses the same forward and rewind intervals as the player UI');
+  assert.match(android, /private void applyNativeSubtitleSize\(\) \{[\s\S]+nativeSubtitleOverlay\.setTextSize\(TypedValue\.COMPLEX_UNIT_SP, sizeSp\)[\s\S]+getSubtitleView\(\)\.setFixedTextSize\(TypedValue\.COMPLEX_UNIT_SP, sizeSp\)/,
+    'Android applies the saved S/M/L size to both the Wyzie overlay and Media3 SubtitleView');
   assert.ok(manifest.includes('android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK') && manifest.includes('android.permission.POST_NOTIFICATIONS'),
     'media-playback foreground + notification permissions declared');
   assert.match(androidGradle, /androidx\.media:media:/,
@@ -1446,6 +1515,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'when the phone drawer is OPEN the top-left corner hit-test yields, so a tap on the profile avatar (which sits in that corner) reaches its Settings handler instead of closing the drawer');
   assert.match(ui, /\$\('burger'\)\.addEventListener\('pointerdown'[\s\S]+\$\('burger'\)\.addEventListener\('touchend'[\s\S]+Date\.now\(\) - burgerTouchAt < 500/,
     'phone burger should have pointer and touch handling with duplicate-tap protection');
+  assert.match(ui, /window\.__tvBack = \(\) => \{[\s\S]+document\.body\.classList\.contains\('mobileNav'\)[\s\S]+document\.body\.classList\.remove\('mobileNav'\);[\s\S]+return 'ok';/,
+    'Android hardware and predictive Back should dismiss the phone navigation drawer before navigating or exiting');
   assert.match(androidGradle, /every Android app video surface hands off[\s\S]+movies, episodes, local library files, and Live TV[\s\S]+Browser and[\s\S]+desktop builds keep the HTML video path/,
     'Android TV and mobile APK policy should be native ExoPlayer for every video surface, not phone-web-video');
   assert.ok(ui.includes('body.androidApp .gate{place-items:center;padding:18px}')
@@ -1816,8 +1887,28 @@ test('Android native player: direct source and native chrome stay out of the web
     'player quality labels should prefer selected-source resolution attributes before guessing from filenames or tracks');
   assert.doesNotMatch(ui, /if \(h >= 400\) return '480p';\s*return '1080p';/,
     'direct/remux source labels should not invent a 1080p badge when source resolution and tracks are unknown');
-  assert.match(ui, /const nativeRequired = nativeVideoRequired\(it\);[\s\S]+if \(opts\.nativeFirst \|\| nativeRequired\) startKind = await prepareNativeStartKindForAudio\(startKind\);[\s\S]+const nativeStarted = \(opts\.nativeFirst \|\| nativeRequired\) && tryNativePlaybackLadder\(it\.resume \|\| 0, startKind\);[\s\S]+if \(nativeStarted\) \{[\s\S]+startNativePlayerHousekeeping\(it\);[\s\S]+\} else if \(nativeRequired\) \{[\s\S]+closePlayer\(\);[\s\S]+return;[\s\S]+\} else \{[\s\S]+revealWebPlayerShell\(it\);[\s\S]+startWebPlayerHousekeeping\(mount, it\);[\s\S]+startSource\(startKind, it\.resume \|\| 0\);[\s\S]+\}/,
-    'Android native movie playback should never reveal the web player shell when ExoPlayer is available');
+  const nativeStartAt = ui.indexOf('const nativeRequired = nativeVideoRequired(it);');
+  const nativeStartFlow = ui.slice(nativeStartAt,
+    ui.indexOf('// Trakt-imported progress is a PERCENT', nativeStartAt));
+  const nativeStartSteps = [
+    'if (opts.nativeFirst || nativeRequired) startKind = await prepareNativeStartKindForAudio(startKind);',
+    "if (S.playing !== playingRef || S.view !== 'player') return;",
+    'const nativeStarted = (opts.nativeFirst || nativeRequired) && tryNativePlaybackLadder(it.resume || 0, startKind);',
+    'if (nativeStarted) {',
+    'startNativePlayerHousekeeping(it);',
+    '} else if (nativeRequired) {',
+    'closePlayer();',
+    'return;',
+    '} else {',
+    'revealWebPlayerShell(it);',
+    'startWebPlayerHousekeeping(mount, it);',
+    'startSource(startKind, it.resume || 0);',
+  ];
+  let nativeStartCursor = -1;
+  assert.ok(nativeStartAt >= 0 && nativeStartSteps.every((step) => {
+    nativeStartCursor = nativeStartFlow.indexOf(step, nativeStartCursor + 1);
+    return nativeStartCursor >= 0;
+  }), 'Android native movie playback should stay ordered, cancelable, and never reveal the web player shell when ExoPlayer is available');
   assert.match(ui, /function startNativePlayerHousekeeping\(it\) \{[\s\S]+stopWebVideoElement\(\);[\s\S]+if \(S\.healthTimer\) clearInterval\(S\.healthTimer\);[\s\S]+S\.watchTimer = setInterval\(saveWatch, 10000\);[\s\S]+loadTracks\(\);[\s\S]+prepNextEpisode\(it\);[\s\S]+\}/,
     'native playback should silence the hidden web video while still probing duration metadata');
   assert.match(ui, /function homeRowsFromWatch\(cw, loading = false\) \{[\s\S]+if \(!rows\.length && loading\) \{[\s\S]+name: 'Loading home'[\s\S]+emptyLabel: 'Loading\.\.\.'[\s\S]+async function loadRows\(opts = \{\}\) \{[\s\S]+!opts\.catalogOnly && !opts\.watchReady && !hasFreshWatch[\s\S]+publishHomeRows\(homeRowsFromWatch\(cachedWatchRowsForHome\(\), true\), opts\); \/\/ Internal first paint: focus target under the splash before \/api\/watch returns\./,
@@ -2070,8 +2161,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Android episode focus should use one throttled scroll path instead of stacking repeated smooth-scroll calls');
   assert.match(android, /card\.setOnFocusChangeListener\(\(v, hasFocus\) -> \{[\s\S]+v\.animate\(\)\.cancel\(\);[\s\S]+v\.animate\(\)\.translationY\(-dp\(3\)\)\.setDuration\(120\)\.start\(\);[\s\S]+scrollNativeEpisodeIntoView\(v\);[\s\S]+v\.animate\(\)\.translationY\(0f\)\.setDuration\(100\)\.start\(\);[\s\S]+\}\);/,
     'native Android episode cards should animate their focus lift without resizing the strip');
-  assert.match(android, /ViewGroup\.LayoutParams\.MATCH_PARENT, dp\(126\)[\s\S]+label\.setText\(\(ep\.watched \? "WATCHED  " : ""\) \+ ep\.tag\);[\s\S]+TextView name = new TextView\(this\);[\s\S]+name\.setMaxLines\(2\);[\s\S]+new LinearLayout\.LayoutParams\(dp\(236\), dp\(182\)\)/,
+  assert.match(android, /ViewGroup\.LayoutParams\.MATCH_PARENT, dp\(126\)[\s\S]+label\.setText\(ep\.watched \? getString\(R\.string\.watched_episode, ep\.tag\) : ep\.tag\);[\s\S]+TextView name = new TextView\(this\);[\s\S]+name\.setMaxLines\(2\);[\s\S]+new LinearLayout\.LayoutParams\(dp\(236\), dp\(182\)\)/,
     'native Android episode cards should show a larger still with the episode name below the image');
+  assert.match(androidStrings, /<string name="watched_episode">WATCHED  %1\$s<\/string>/,
+    'native Android watched labels remain localized while preserving the episode tag');
   assert.match(android, /private GradientDrawable nativeEpisodeCardBg\(boolean focused, boolean current\) \{[\s\S]+new int\[\]\{0x00000000, 0x00000000\}[\s\S]+d\.setCornerRadius\(dp\(16\)\);[\s\S]+return d;[\s\S]+private GradientDrawable nativeEpisodeStillFrame\(boolean focused, boolean current\) \{[\s\S]+if \(focused \|\| current\) d\.setStroke\(dp\(1\), focused \? 0x88C6B37A : 0x66C6B37A\);[\s\S]+return d;/,
     'native Android episode cards should use rounded borderless card backgrounds');
   assert.match(android, /still\.setTag\("nativeEpisodeStill"\);[\s\S]+GradientDrawable stillBg = new GradientDrawable\(\);[\s\S]+stillBg\.setCornerRadius\(dp\(12\)\);[\s\S]+still\.setBackground\(stillBg\);[\s\S]+still\.setForeground\(nativeEpisodeStillFrame\(i == nativeEpisodeIndex && nativeEpisodeStripOpen, ep\.current\)\);[\s\S]+still\.setClipToOutline\(true\);/,
@@ -2583,12 +2676,43 @@ test('Android native player: direct source and native chrome stay out of the web
     'normal Live TV tuning (and a web-rendered guide PiP) should launch native fullscreen playback, not fall to the web player with VOD controls');
   assert.match(ui, /function isTriboonAndroidShell\(\) \{[\s\S]+\/TriboonTV\|TriboonAndroid\/\.test\(navigator\.userAgent \|\| ''\)[\s\S]+\}[\s\S]+function nativeLiveRequired\(\) \{[\s\S]+installed APK is too old to expose playLive[\s\S]+return isTriboonAndroidShell\(\);[\s\S]+\}/,
     'Android TV and mobile Live TV should require ExoPlayer based on the Android shell, not on whether the bridge is currently usable');
-  assert.match(ui, /function tryNativeLivePlayer\(it, guide = false\) \{[\s\S]+if \(!guide\) \{[\s\S]+S\.nativeGuideMode = false;[\s\S]+closePlayerGuide\(\{ fromNative: true \}\);[\s\S]+\$\(\'player\'\)\.classList\.remove\('guideMode'\);[\s\S]+\}[\s\S]+window\.TriboonTV\.playLive/,
-    'normal Live TV tuning should clear stale native guide state before asking ExoPlayer to start');
+  const tryNativeLivePlayerBlock = ui.slice(
+    ui.indexOf('function tryNativeLivePlayer(it, guide = false) {'),
+    ui.indexOf('function nativeLiveRequired()', ui.indexOf('function tryNativeLivePlayer(it, guide = false) {')),
+  );
+  const tryNativeLivePlayerSteps = [
+    'if (!guide) {',
+    'S.nativeGuideMode = false;',
+    "closePlayerGuide({ fromNative: true });",
+    "$('player').classList.remove('guideMode');",
+    'window.TriboonTV.playLive',
+  ];
+  let tryNativeLivePlayerCursor = -1;
+  for (const step of tryNativeLivePlayerSteps) {
+    tryNativeLivePlayerCursor = tryNativeLivePlayerBlock.indexOf(step, tryNativeLivePlayerCursor + 1);
+    assert.ok(tryNativeLivePlayerCursor >= 0,
+      `normal Live TV tuning should clear stale native guide state before asking ExoPlayer to start (missing ${step})`);
+  }
   assert.match(ui, /const keepGuidePip = S\.view === 'player' && !!\(\$\(\'pGuide\'\) && \$\(\'pGuide\'\)\.classList\.contains\('open'\)\)/,
     'stale guide DOM outside the player view must not force later Live TV selections into PiP');
-  assert.match(ui, /if \(nativeLiveRequired\(\)\) \{[\s\S]+canUseNativeLivePlayer\(\)[\s\S]+Native player could not start this channel[\s\S]+Update the Android app to play Live TV[\s\S]+return;[\s\S]+\}[\s\S]+return playChannelWeb\(it\);/,
-    'Android Live TV should stop on native startup failure or stale APK bridge instead of falling back to the web player');
+  const playChannelBlock = ui.slice(
+    ui.indexOf('async function playChannel(it, list) {'),
+    ui.indexOf('function prefetchAdjacentChannelUrls(', ui.indexOf('async function playChannel(it, list) {')),
+  );
+  const nativeLiveFailureSteps = [
+    'if (nativeLiveRequired()) {',
+    'canUseNativeLivePlayer()',
+    'Native player could not start this channel',
+    'Update the Android app to play Live TV',
+    'return;',
+    'return playChannelWeb(it);',
+  ];
+  let nativeLiveFailureCursor = -1;
+  for (const step of nativeLiveFailureSteps) {
+    nativeLiveFailureCursor = playChannelBlock.indexOf(step, nativeLiveFailureCursor + 1);
+    assert.ok(nativeLiveFailureCursor >= 0,
+      `Android Live TV should stop on native startup failure or stale APK bridge instead of falling back to the web player (missing ${step})`);
+  }
   assert.match(ui, /const LIVE_MSE_TYPES = \[[\s\S]+video\/mp4; codecs="avc1\.4d4028, mp4a\.40\.2"[\s\S]+function liveMseType\(\) \{[\s\S]+MediaSource\.isTypeSupported/,
     'web Live TV should use MediaSource for the server fMP4 remux instead of a plain infinite video src');
   assert.match(ui, /function stopWebVideoElement\(\) \{[\s\S]+cleanupLiveMse\(\);[\s\S]+v\.removeAttribute\('src'\)/,
@@ -2624,8 +2748,25 @@ test('Android native player: direct source and native chrome stay out of the web
     'Live TV guide/card/search items should preserve native fallback stream metadata');
   assert.doesNotMatch(ui, /Native player failed[^`'"]*using web player|using web playback/,
     'Android native playback should not advertise or trigger the old web player fallback');
-  assert.match(ui, /window\.__tvNativeLiveError = \(msg\) => \{[\s\S]+closePlayerGuide\(\{ fromNative: true \}\);[\s\S]+if \(nativeLiveRequired\(\)\) \{[\s\S]+if \(wasLiveShell\) closePlayer\(\);[\s\S]+toast\(`Live TV unavailable: \$\{friendlyLiveProviderReason\(reason\)\}`\);[\s\S]+return;[\s\S]+\}[\s\S]+if \(wasLiveShell\) \{[\s\S]+showLiveProviderError\(reason\);/,
-    'on Android a native Live TV crash must stay native (close back to the guide + toast), NOT reveal the web player error panel; showLiveProviderError is reserved for the non-native web build');
+  const nativeLiveErrorBlock = ui.slice(
+    ui.indexOf('window.__tvNativeLiveError = (msg) => {'),
+    ui.indexOf('async function playChannel(it, list) {', ui.indexOf('window.__tvNativeLiveError = (msg) => {')),
+  );
+  const nativeLiveErrorSteps = [
+    'closePlayerGuide({ fromNative: true });',
+    'if (nativeLiveRequired()) {',
+    'if (wasLiveShell) closePlayer();',
+    'toast(`Live TV unavailable: ${friendlyLiveProviderReason(reason)}`);',
+    'return;',
+    'if (wasLiveShell) {',
+    'showLiveProviderError(reason);',
+  ];
+  let nativeLiveErrorCursor = -1;
+  for (const step of nativeLiveErrorSteps) {
+    nativeLiveErrorCursor = nativeLiveErrorBlock.indexOf(step, nativeLiveErrorCursor + 1);
+    assert.ok(nativeLiveErrorCursor >= 0,
+      `on Android a native Live TV crash must stay native while web-only playback owns the error panel (missing ${step})`);
+  }
   assert.doesNotMatch(ui, /__tvNativeVideoSwitchToWeb|__tvNativeLiveSwitchToWeb/,
     'native Android controls should not keep a switch-to-web-player bridge');
   assert.doesNotMatch(ui, /nativeVideoSubtitleRel[\s\S]+blocked:\s*true[\s\S]+tryNativeVideoPlayer/,
@@ -2676,7 +2817,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'web native handoff should pass the known duration into Android');
   assert.match(android, /private void nativeSeekBy\(long deltaMs\) \{[\s\S]+"live"\.equals\(nativeMode\) \|\| \(!nativeVodSeekable\(\) && !nativeServerSeekMode\(\)\)[\s\S]+long target = Math\.max\(0, nativeDisplayPositionMs\(\) \+ deltaMs\);[\s\S]+if \(d > 0 && d != C\.TIME_UNSET\) target = Math\.min\(d, target\);[\s\S]+nativeSeekToDisplayPosition\(target\);/,
     'native rewind and forward should seek through the absolute movie-time helper');
-  assert.match(android, /private boolean nativeServerSeekMode\(\) \{[\s\S]+"remux"\.equals\(nativeKind\) \|\| "transcode"\.equals\(nativeKind\)[\s\S]+private void nativeSeekToDisplayPosition\(long displayMs\) \{[\s\S]+if \(nativeServerSeekMode\(\)\) \{[\s\S]+requestNativeVideoSeek\(target\);[\s\S]+return;[\s\S]+\}[\s\S]+nativePlayer\.seekTo/,
+  const nativeServerSeekStart = android.indexOf('private boolean nativeServerSeekMode()');
+  const nativeServerSeekEnd = android.indexOf('private long nativeResumePositionMs()', nativeServerSeekStart);
+  assert.ok(nativeServerSeekStart >= 0 && nativeServerSeekEnd > nativeServerSeekStart,
+    'native server-seek methods should remain in one bounded implementation block');
+  const nativeServerSeekBlock = android.slice(nativeServerSeekStart, nativeServerSeekEnd);
+  assert.match(nativeServerSeekBlock, /private boolean nativeServerSeekMode\(\) \{[\s\S]*?"remux"\.equals\(nativeKind\) \|\| "transcode"\.equals\(nativeKind\)[\s\S]*?private void nativeSeekToDisplayPosition\(long displayMs\) \{[\s\S]*?if \(nativeServerSeekMode\(\)\) \{[\s\S]*?requestNativeVideoSeek\(target\);[\s\S]*?return;[\s\S]*?\}[\s\S]*?nativePlayer\.seekTo/,
     'native remux/transcode seeking should restart through the web handoff instead of seeking inside a restarted segment');
   assert.match(ui, /window\.__tvNativeVideoSeek = async \(pos, dur, resume\) => \{[\s\S]+p\.nativePos = at;[\s\S]+tryNativeVideoPlayer\(kind, at, \{ quietSeek: true \}\);[\s\S]+\};/,
     'web should quietly remount the active native source kind when Android requests an absolute seek');
@@ -2795,7 +2941,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'pressing OK in the rail should activate the rendered-visible focused item');
   assert.match(ui, /toast\(r\.result && r\.result\.skipped === 'running' \? 'Live TV refresh already running' : 'Live TV refresh complete'\)/,
     'Live TV manual refresh should not say complete when a source-added or scheduled sync is already running');
-  assert.match(ui, /const cids = \(chans \|\| \[\]\)\.filter[\s\S]+encodeURIComponent\(c\.id \|\| ''\)[\s\S]+\/api\/iptv\/guide\?chs=' \+ ids\.join\(','\) \+ cidParam/,
+  assert.match(ui, /const serverRows = \(chans \|\| \[\]\)[\s\S]+cid: liveChannelStableId\(c\)[\s\S]+const cids = serverRows\.map\(\(r\) => r\.cid\);[\s\S]+cids\.every\(Boolean\)[\s\S]+'[&]cids=' \+ cids\.map\(\(cid\) => encodeURIComponent\(cid\)\)\.join\(','\)[\s\S]+\/api\/iptv\/guide\?chs=' \+ ids\.join\(','\) \+ cidParam/,
     'Live TV timeline guide requests should bind channel indexes to stable channel ids');
   assert.match(ui, /api\('\/api\/music\/home'\)[\s\S]+S\.musicHome = r && Array\.isArray\(r\.shelves\) \? r : \{ shelves: \[\] \}/,
     'Music page should load the server-side Music Home shelf contract');
@@ -2928,14 +3074,16 @@ test('Android native player: direct source and native chrome stay out of the web
     'native title should render in the top-left player metadata cluster');
   assert.match(android, /boolean isLiveMode = "live"\.equals\(mode\);[\s\S]+String subline = isLiveMode \? "" : nativePlaybackSubline;/,
     'native Live TV chrome should not duplicate the channel/source line in the top-left');
-  assert.match(android, /nativeEndsAt\.setText\("Ends at " \+ fmtNativeClock/,
+  assert.match(android, /nativeEndsAt\.setText\(getString\(R\.string\.ends_at, fmtNativeClock/,
     'native movie/episode chrome should show when playback will finish');
   assert.match(android, /nativeTime\.setText\(!isLive \? \(dur > 0 \? fmtNative\(dur\) : "--:--"\) : ""\);/,
     'native movie/episode seek row should reserve the right-side duration label while Exo resolves duration');
   assert.match(android, /if \(nativeElapsed != null\) \{[\s\S]+nativeElapsed\.setText\(isLive \? "" : fmtNative\(pos\)\);[\s\S]+nativeElapsed\.setVisibility\(isLive \? View\.GONE : View\.VISIBLE\);[\s\S]+\}[\s\S]+nativeTime\.setText\(!isLive \? \(dur > 0 \? fmtNative\(dur\) : "--:--"\) : ""\);[\s\S]+nativeTime\.setVisibility\(isLive \? View\.GONE : View\.VISIBLE\);/,
     'native Live TV chrome should hide VOD seek timing labels instead of showing another LIVE label');
-  assert.match(android, /nativeEndsAt\.setText\("Ends at --:--"\);[\s\S]+nativeEndsAt\.setVisibility\(View\.VISIBLE\);/,
-    'native top-right finish label should stay visible with a placeholder until duration is known');
+  assert.match(android, /nativeEndsAt\.setText\(R\.string\.ends_at_unknown\);[\s\S]+nativeEndsAt\.setVisibility\(View\.VISIBLE\);/,
+    'native top-right finish label should stay visible with a localized placeholder until duration is known');
+  assert.match(androidStrings, /<string name="ends_at">Ends at %1\$s<\/string>[\s\S]+<string name="ends_at_unknown">Ends at unavailable<\/string>/,
+    'native finish-time labels remain resource-backed for localization');
   assert.doesNotMatch(android, /nativeEndsAt\.setText\("Live TV"\)/,
     'native top-right chrome should leave Live TV status to the single LIVE badge');
   assert.match(android, /nativeTime\.setMinWidth\(dp\(72\)\);[\s\S]+seekRow\.addView\(nativeTime, new LinearLayout\.LayoutParams\(dp\(76\), dp\(28\)\)\);/,
@@ -2966,7 +3114,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'web player loading overlay should use the full wordmark, one calm progress lane, and one simple startup status line');
   assert.match(ui, /PLAYER_LOADING_STAGES = \['Preparing', 'Finding source', 'Mounting', 'Checking health\.\.\.', 'Starting stream'\][\s\S]+function clearPlayerLoadingStages\(\)[\s\S]+S\._stageTimers = \[650, 1400, 2200, 3000\][\s\S]+setPlayerLoadingStage\(i \+ 1\)/,
     'web player loading status should advance through finding source, mounting, a brief health check, and stream start');
-  assert.match(android, /nativeLoading = new FrameLayout\(this\);[\s\S]+ImageView loadingMark = new ImageView\(this\);[\s\S]+loadingMark\.setImageResource\(R\.drawable\.native_loading_wordmark\);[\s\S]+loadingCenter\.addView\(loadingMark, markLp\);[\s\S]+FrameLayout loadingLane = new FrameLayout\(this\);[\s\S]+nativeLoadingLaneGlow = new View\(this\);[\s\S]+nativeLoadingStatus = new TextView\(this\);[\s\S]+nativeLoadingStatus\.setText\("Preparing"\);[\s\S]+startNativeLoadingLane\(\);/,
+  assert.match(android, /nativeLoading = new FrameLayout\(this\);[\s\S]+ImageView loadingMark = new ImageView\(this\);[\s\S]+loadingMark\.setImageResource\(R\.drawable\.native_loading_wordmark\);[\s\S]+loadingCenter\.addView\(loadingMark, markLp\);[\s\S]+FrameLayout loadingLane = new FrameLayout\(this\);[\s\S]+nativeLoadingLaneGlow = new View\(this\);[\s\S]+nativeLoadingStatus = new TextView\(this\);[\s\S]+nativeLoadingStatus\.setText\(R\.string\.preparing\);[\s\S]+startNativeLoadingLane\(\);/,
     'native loading overlay should use the real wordmark, a moving progress lane, and one simple startup status line');
   assert.match(android, /private ObjectAnimator nativeLoadingLaneAnimator;[\s\S]+if \(nativeLoadingLaneAnimator != null\) \{[\s\S]+nativeLoadingLaneAnimator\.cancel\(\);[\s\S]+nativeLoadingLaneAnimator = null;[\s\S]+nativeLoadingLaneAnimator = ObjectAnimator\.ofFloat\(nativeLoadingLaneGlow, "translationX", -dp\(92\), dp\(320\)\);[\s\S]+nativeLoadingLaneAnimator\.setRepeatCount\(ValueAnimator\.INFINITE\);[\s\S]+nativeLoadingLaneAnimator\.start\(\);/,
     'native loading progress lane should use one owned animation that can be stopped cleanly');
@@ -2990,8 +3138,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'web/T-Logo.png',
     'web/triboon.png',
     'web/triboon-screensaver.png',
-    'android/app/src/main/res/drawable/ic_launcher.png',
-    'android/app/src/main/res/drawable/banner.png',
+    'android/app/src/main/res/drawable-nodpi/ic_launcher.png',
+    'android/app/src/main/res/drawable-nodpi/banner.png',
     'android/app/src/main/res/drawable-nodpi/native_loading_wordmark.png',
   ]) {
     assert.ok(pngHasTransparentPixels(path.join(__dirname, '..', rel)),
@@ -3190,8 +3338,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android cleartext behavior should be explicit through network security config');
   assert.match(manifest, /android:supportsPictureInPicture="true"[\s\S]+android:resizeableActivity="true"|android:resizeableActivity="true"[\s\S]+android:supportsPictureInPicture="true"/,
     'Android phone/tablet playback should be eligible for system PiP');
-  assert.match(networkSecurity, /<base-config cleartextTrafficPermitted="true">[\s\S]+<certificates src="system" \/>/,
-    'network security config should keep self-hosted/IPTV HTTP intentional instead of relying on platform defaults');
+  assert.match(networkSecurity, /<network-security-config xmlns:tools="http:\/\/schemas\.android\.com\/tools">[\s\S]+<base-config[\s\S]+cleartextTrafficPermitted="true"[\s\S]+tools:ignore="InsecureBaseConfiguration"[\s\S]+<certificates src="system" \/>/,
+    'network security config should keep self-hosted/IPTV HTTP intentional, system-trusted, and narrowly lint-documented instead of relying on platform defaults');
   assert.match(android, /private String serverUrlValidationError\(String url\) \{[\s\S]+"https"\.equals\(scheme\)[\s\S]+!"http"\.equals\(scheme\)[\s\S]+isLocalCleartextServerHost\(u\.getHost\(\)\)[\s\S]+Plain HTTP is limited to local\/private LAN servers/,
     'Android setup should allow LAN HTTP but reject remote/public HTTP server addresses before WebView load');
   assert.match(android, /private boolean isLocalCleartextServerHost\(String host\) \{[\s\S]+isAndroidLoopbackAlias\(h\)[\s\S]+h\.indexOf\('\.'\) < 0[\s\S]+h\.endsWith\("\.local"\)[\s\S]+hostLooksLiteral\(h\)[\s\S]+isLocalCleartextServerAddress\(InetAddress\.getByName\(h\)\)/,
@@ -3595,9 +3743,11 @@ test('Android native player: direct source and native chrome stay out of the web
     'ExoPlayer content should stay centered and fitted inside the PiP frame');
   assert.match(nativePlayerLayout, /app:surface_type="surface_view"/,
     'native fullscreen playback should use SurfaceView for first-frame speed, power, and HDR-capable direct play');
-  assert.match(android, /nativeGuidePipRevealScrim = new TextView\(this\);[\s\S]+nativeGuidePipRevealScrim\.setText\("Tuning channel\.\.\."\)[\s\S]+nativePlayerLayer\.addView\(nativeGuidePipRevealScrim/,
+  assert.match(androidStrings, /<string name="tuning_channel">Tuning channel…<\/string>/,
+    'the native guide tuning label should be localized through Android resources');
+  assert.match(android, /nativeGuidePipRevealScrim = new TextView\(this\);[\s\S]+nativeGuidePipRevealScrim\.setText\(R\.string\.tuning_channel\)[\s\S]+nativePlayerLayer\.addView\(nativeGuidePipRevealScrim/,
     'native guide PiP should use a labeled sibling reveal layer instead of fading the SurfaceView itself');
-  assert.match(android, /private void revealNativeGuidePip\(FrameLayout\.LayoutParams pipLp, boolean holdUntilReady\) \{[\s\S]+nativeGuidePipRevealScrim\.setText\("Tuning channel\.\.\."\)[\s\S]+if \(holdUntilReady\) return;[\s\S]+\.alpha\(0f\)/,
+  assert.match(android, /private void revealNativeGuidePip\(FrameLayout\.LayoutParams pipLp, boolean holdUntilReady\) \{[\s\S]+nativeGuidePipRevealScrim\.setText\(R\.string\.tuning_channel\)[\s\S]+if \(holdUntilReady\) return;[\s\S]+\.alpha\(0f\)/,
     'native guide PiP should keep the smooth reveal animation and support holding the tuning label during retunes');
   assert.match(android, /else if \("live"\.equals\(nativeMode\)\) \{[\s\S]+revealNativeGuidePip\(\(FrameLayout\.LayoutParams\) nativePlayerView\.getLayoutParams\(\), true\);/,
     'native guide-mode channel retunes should keep a visible tuning overlay instead of exposing a black PiP surface');
@@ -3991,6 +4141,180 @@ test('live tv browser remux keeps AAC surround instead of forcing stereo', () =>
     'live remux uses a trimmed analyze budget for a faster channel-change first byte');
   assert.doesNotMatch(transcode, /function spawnLiveRemux[\s\S]+'-ac', '2'[\s\S]+\]\, \{ stdio/,
     'Live TV browser remux should not force every channel to stereo');
+});
+
+test('IPTV client correctness: stale tunes, joined device loads, and stable guide ids stay guarded', async () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  const block = (start, end) => ui.slice(ui.indexOf(start), ui.indexOf(end));
+  const ordered = (text, ...needles) => {
+    let at = -1;
+    return needles.every((needle) => {
+      at = text.indexOf(needle, at + 1);
+      return at >= 0;
+    });
+  };
+
+  const tuneHelpers = block('let liveTuneEpoch = 0;', 'const epgMemo = new Map()');
+  assert.ok(ordered(tuneHelpers,
+    'let liveTuneEpoch = 0;',
+    'epoch: ++liveTuneEpoch',
+    'liveTuneEpochs.set(slot, ticket.epoch)',
+    'liveTuneEpochs.get(ticket.slot) === ticket.epoch'),
+  'Live TV tuning should use a monotonic per-surface epoch registry');
+  const tuneHarness = new Function(`${tuneHelpers}\nreturn { beginLiveTune, liveTuneIsCurrent, cancelLiveTune };`)();
+  const firstMain = tuneHarness.beginLiveTune('main');
+  const secondMain = tuneHarness.beginLiveTune('main');
+  const splitZero = tuneHarness.beginLiveTune('split:0');
+  const splitOne = tuneHarness.beginLiveTune('split:1');
+  assert.strictEqual(tuneHarness.liveTuneIsCurrent(firstMain), false, 'a newer main tune invalidates the old main ticket');
+  assert.strictEqual(tuneHarness.liveTuneIsCurrent(secondMain), true, 'the newest main tune remains current');
+  assert.strictEqual(tuneHarness.liveTuneIsCurrent(splitZero), true, 'split pane zero owns an independent ticket');
+  assert.strictEqual(tuneHarness.liveTuneIsCurrent(splitOne), true, 'split pane one owns an independent ticket');
+  tuneHarness.cancelLiveTune('split:0');
+  assert.strictEqual(tuneHarness.liveTuneIsCurrent(splitZero), false, 'closing one surface invalidates its pending tune');
+  assert.strictEqual(tuneHarness.liveTuneIsCurrent(splitOne), true, 'closing one surface does not cancel another');
+
+  const mainTune = block('async function playChannel(it, list)', 'function prefetchAdjacentChannelUrls');
+  assert.ok(ordered(mainTune,
+    "const tune = beginLiveTune('main');",
+    'it = await hydrateLivePlaybackUrls(it);',
+    'if (!liveTuneIsCurrent(tune)) return;'),
+  'a stale main-player hydration must not retune after a newer zap');
+
+  const splitTune = block('async function playLiveSplitChannel', 'function liveSplitCandidateKey');
+  assert.ok(ordered(splitTune,
+    'const tune = beginLiveTune(`split:${S.liveSplit.active}`);',
+    'hydrated = await hydrateLivePlaybackUrls(it);',
+    'if (!liveTuneIsCurrent(tune)) return false;'),
+  'split panes should guard channel hydration independently');
+
+  const multiTune = block('async function playMultiViewChannel', 'function multiViewVodUrl');
+  assert.ok(ordered(multiTune,
+    'const tune = beginLiveTune(`multiview:${i}`);',
+    'hydrated = await hydrateLivePlaybackUrls(it);',
+    'if (!liveTuneIsCurrent(tune) || !S.multiView || !S.multiView.open) return false;'),
+  'multiview slots should guard channel hydration independently');
+
+  const personalLoad = block('function armPersonalIptvLoadTimeout', 'async function loadLiveChannelsCombined');
+  assert.ok(ordered(personalLoad,
+    'function armPersonalIptvLoadTimeout',
+    'if (S._personalIptvLoadPromise)',
+    'armPersonalIptvLoadTimeout(S._personalIptvWait, timeoutMs);',
+    'return S._personalIptvLoadPromise;',
+    'const pending = new Promise',
+    'const joined = pending.finally',
+    'S._personalIptvLoadPromise = joined;',
+    'return joined;'),
+  'concurrent personal IPTV loads should join one bridge request');
+  const personalState = {};
+  let bridgeLoads = 0;
+  const personalHarness = new Function('S', 'personalIptvBridge', 'personalIptvConfigured',
+    `${personalLoad}\nreturn loadPersonalIptvChannels;`)(personalState, () => ({
+      personalIptvLoad() { bridgeLoads++; },
+    }), () => true);
+  const personalFirst = personalHarness(1000);
+  const personalSecond = personalHarness(1500);
+  assert.strictEqual(personalFirst, personalSecond, 'concurrent callers receive the same in-flight promise');
+  assert.strictEqual(bridgeLoads, 1, 'the Android bridge is invoked once for joined callers');
+  const personalWait = personalState._personalIptvWait;
+  assert.strictEqual(personalWait.timeoutMs, 1500, 'a foreground caller can extend a shorter in-flight prefetch budget');
+  clearTimeout(personalWait.timer);
+  personalState._personalIptvWait = null;
+  personalWait.resolve({ configured: true, channels: [{ id: 'device:one' }], sourceErrors: [] });
+  const [personalA, personalB] = await Promise.all([personalFirst, personalSecond]);
+  assert.deepStrictEqual(personalA, personalB, 'joined callers resolve with the same normalized load result');
+  assert.strictEqual(personalState._personalIptvLoadPromise, null, 'the single-flight slot clears after settlement');
+
+  const combinedLoad = block('async function loadLiveChannelsCombined', 'function clearLiveClientCaches');
+  assert.ok(ordered(combinedLoad,
+    'const serverPromise =',
+    'const personalPromise = loadPersonalIptvChannels',
+    'await Promise.all([serverPromise, personalPromise])',
+    '...(Array.isArray(server.channels) ? server.channels : [])',
+    '...(personal.channels || [])'),
+  'server and device playlists should load concurrently and merge server-first deterministically');
+  let serverStarted = false;
+  let personalStarted = false;
+  let resolveServer;
+  let resolvePersonal;
+  const serverLoad = new Promise((resolve) => { resolveServer = resolve; });
+  const deviceLoad = new Promise((resolve) => { resolvePersonal = resolve; });
+  const combinedHarness = new Function('S', 'api', 'loadPersonalIptvChannels', 'personalHiddenSet',
+    `${combinedLoad}\nreturn loadLiveChannelsCombined;`)(
+    { serverInfo: { iptv: true }, user: {} },
+    () => { serverStarted = true; return serverLoad; },
+    () => { personalStarted = true; return deviceLoad; },
+    () => new Set(),
+  );
+  const combined = combinedHarness();
+  assert.ok(serverStarted && personalStarted, 'server and device loads start before either one settles');
+  resolvePersonal({ configured: true, epg: false, channels: [{ id: 'device:one' }], sourceErrors: [] });
+  resolveServer({ configured: true, epg: true, channels: [{ id: 'server:one' }], hiddenGroups: [], globalHidden: [], sourceErrors: [] });
+  const merged = await combined;
+  assert.deepStrictEqual(merged.channels.map((channel) => channel.id), ['server:one', 'device:one'],
+    'concurrent results retain deterministic server-then-device ordering');
+
+  const epg = block('async function fetchEpg(idx)', 'const fmtT =');
+  assert.ok(ordered(epg,
+    'const cid = liveChannelStableId(ch);',
+    'const key = `s:${idx}:${encodeURIComponent(cid)}`;',
+    "cid ? `?cid=${encodeURIComponent(cid)}` : ''",
+    'epgMemo.set(key',
+    'if (e && e.status === 409) scheduleLiveChannelResync();'),
+  'now/next memoization and requests should bind mutable indexes to stable ids');
+  const epgState = { liveChannels: [{ idx: 0, id: 'source:one' }] };
+  const epgCalls = [];
+  const fetchEpgHarness = new Function('S', 'epgMemo', 'isPersonalChannel', 'fetchPersonalGuideBatch', 'api', 'scheduleLiveChannelResync',
+    `${block('function liveChannelByIdx', 'const fmtT =')}\nreturn fetchEpg;`)(
+    epgState,
+    new Map(),
+    () => false,
+    async () => ({}),
+    async (requestPath) => { epgCalls.push(requestPath); return {}; },
+    () => {},
+  );
+  await fetchEpgHarness(0);
+  epgState.liveChannels = [{ idx: 0, id: 'source:two' }];
+  await fetchEpgHarness(0);
+  assert.deepStrictEqual(epgCalls, [
+    '/api/iptv/epg/0?cid=source%3Aone',
+    '/api/iptv/epg/0?cid=source%3Atwo',
+  ], 'a rebuilt lineup at the same index bypasses the prior channel EPG memo entry');
+
+  const guide = block('async function fetchGuideBatch(chans)', 'const LIVE_TTL =');
+  assert.ok(ordered(guide,
+    'cid: liveChannelStableId(c)',
+    'serverRows.map((r) => `${r.idx}:${encodeURIComponent(r.cid)}`)',
+    'cids.every(Boolean)',
+    'cids.map((cid) => encodeURIComponent(cid))'),
+  'timeline guide memoization should include stable ids and preserve positional cid binding');
+  const guideCalls = [];
+  const fetchGuideHarness = new Function('S', 'guideMemo', 'isPersonalChannel', 'liveChannelStableId', 'fetchPersonalGuideBatch', 'api', 'scheduleLiveChannelResync',
+    `${guide}\nreturn fetchGuideBatch;`)(
+    { liveEpg: true },
+    new Map(),
+    () => false,
+    (channel) => String(channel && (channel.id || channel._chid) || ''),
+    async () => ({}),
+    async (requestPath) => { guideCalls.push(requestPath); return { channels: [{ idx: 0, programmes: [] }] }; },
+    () => {},
+  );
+  await fetchGuideHarness([{ idx: 0, id: 'source:one' }]);
+  await fetchGuideHarness([{ idx: 0, id: 'source:two' }]);
+  assert.deepStrictEqual(guideCalls, [
+    '/api/iptv/guide?chs=0&cids=source%3Aone',
+    '/api/iptv/guide?chs=0&cids=source%3Atwo',
+  ], 'timeline memoization also separates rebuilt channels that reuse an index');
+
+  const serverEpg = server.slice(server.indexOf('iptvEpg: async (ctx)'), server.indexOf('// Live stream:', server.indexOf('iptvEpg: async (ctx)')));
+  assert.ok(ordered(serverEpg,
+    "ctx.url.searchParams.get('cid')",
+    'String(ch.id) !== cid',
+    'String(candidate.id) === cid',
+    "send(ctx.res, 409, { error: 'channel list changed - reopen Live TV' })",
+    'epgNowNext(ch)'),
+  'server now/next should resolve a drifted stable id and reject a missing one before reading EPG');
 });
 
 test('ffmpeg HTTP option detection is cached and safe on older builds', () => {
@@ -4507,6 +4831,15 @@ test('audit contracts: local age gate, next-episode recency, music queue, scanne
     'episodeSubtitleQuery accepts season 0');
   assert.match(ui, /if \(ep && ep\.season >= 0 && ep\.episode > 0\)/,
     'the web forwards season 0 to the subtitle search');
+  assert.match(ui, /function detailPlayEpisodeParts\(\) \{[\s\S]+parts\.season >= 0 && parts\.episode > 0/,
+    'continue-watching can focus a season-zero special');
+  assert.match(ui, /rawS !== undefined[\s\S]+Number\.isInteger\(explicitS\)[\s\S]+explicitS >= 0[\s\S]+Number\.isInteger\(explicitE\) && explicitE > 0/,
+    'explicit season-zero episode metadata remains playable even without an encoded item key');
+  const opensubs = fs.readFileSync(path.join(__dirname, '..', 'server', 'opensubs.js'), 'utf8');
+  assert.match(opensubs, /function explicitSeasonNumber\(value\) \{[\s\S]+value !== null[\s\S]+\+value >= 0/,
+    'subtitle search distinguishes an explicit season zero from an omitted season');
+  assert.ok((opensubs.match(/explicitSeasonNumber\(season\)/g) || []).length >= 3,
+    'Wyzie and OpenSubtitles paths all use the season-zero-safe parser');
   // VTT→SRT for alass: hourless cue times normalize to HH:MM:SS,mmm and cue settings are stripped
   // (alass parses SRT strictly — hourless/decorated lines made auto-sync error on genuine VTT).
   assert.match(server, /\$\{h \|\| '00'\}:\$\{ms\},\$\{frac\}/, 'vttToSrt normalizes hourless cue times');
@@ -4525,8 +4858,8 @@ test('audit contracts: local age gate, next-episode recency, music queue, scanne
 
   // Chronically slow sources get the probe-timeout demotion HEALTH_SCORE was designed with
   // (the flag was set but never read — dead code, so slow sources re-cost a 30s walk every play).
-  assert.match(pipelineSrc, /if \(candidate\._probeTimeout && \/mount timeout\/i\.test\(String\(e && e\.message \|\| ''\)\)\) \{\s*this\._recordVerdict\(candidate, 'probe-timeout', \{ stage: 'mount' \}\);/,
-    'probe-timeout + mount-timeout records the demotion verdict');
+  assert.match(pipelineSrc, /if \(candidate\._probeTimeout && \/mount timeout\/i\.test\(String\(e && e\.message \|\| ''\)\)\) \{\s*if \(!probeEpisodeScoped\) this\._recordVerdict\(candidate, 'probe-timeout', \{ stage: 'mount' \}\);/,
+    'probe-timeout + mount-timeout records a demotion unless it belongs to one member of a pack');
 
   // Outbound-API routes carry per-user throttles like their peers (a looping client could get the
   // admin's Trakt app rate-banned).
@@ -4540,7 +4873,7 @@ test('audit contracts: local age gate, next-episode recency, music queue, scanne
   // and the geoCache is finally swept (it TTL-checked reads but never evicted).
   assert.match(server, /store\.flushIntervals = \{[\s\S]{0,600}watch: 3000,[\s\S]{0,600}'tmdb-cache': 15000,[\s\S]{0,600}xtreamepgcaches: 30000,/,
     'hot store tables keep their background-flush throttle');
-  assert.match(server, /for \(const \[ip, hit\] of geoCache\) if \(now - \(\(hit && hit\.at\) \|\| 0\) > GEO_TTL_MS\) geoCache\.delete\(ip\);/,
+  assert.match(server, /for \(const \[key, hit\] of geoCache\) if \(now - \(\(hit && hit\.at\) \|\| 0\) > GEO_TTL_MS\) geoCache\.delete\(key\);/,
     'the periodic sweep prunes expired geoCache entries');
   assert.match(server, /if \(geoCache\.size > 500\) \{/,
     'geoCache is size-capped as a backstop');

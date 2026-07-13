@@ -57,11 +57,15 @@ Always follow the owner's method:
 
 ## Commands
 
-- `npm.cmd test` - full Node test suite (uses `--test-force-exit`; node:test otherwise hangs after
-  the run completes). Current baseline: 258/258 tests.
-- `npm run release:apk` - build + publish the Android APK to the GitHub release for the current tag.
-  Defaults to debug signing; **`npm run release:apk -- -Release`** builds the proper keystore-signed
-  release. (See the Hard Rules on signing.)
+- `npm.cmd test` - explicitly enumerated top-level Node suites, run sequentially
+  because integration suites share process-wide state (and with
+  `--test-force-exit`; node:test otherwise hangs after the run completes). The
+  release contract keeps the list aligned with `test/*.test.js` and excludes
+  fixture generators. Put exact pass counts only in dated `VERIFY.md` evidence.
+- `npm run release:apk` - require the dedicated release keystore, run the full
+  gate, build the signed universal APK, and stage both APK names. CI is the
+  normal publisher; optional `npm run release:apk -- -Publish` creates only a
+  new draft after clean-main/tag/CI checks and never overwrites a release.
 - `node server/index.js` - starts the app at `http://localhost:7777`.
 - `docker compose up --build` - containerized app with ffmpeg and `/data`.
 - Android build:
@@ -110,7 +114,8 @@ secret into `./data`.
 ## Roadmap And Current State
 
 Current: Phases 0-5 core are implemented in the current Node/Web/Android stack,
-with 258/258 tests passing on the latest verification pass.
+with the explicitly enumerated sequential Node suites plus focused Web/Android gates.
+Exact pass counts belong in the latest dated `VERIFY.md` evidence.
 
 - Phase 1 done: store-RAR4/RAR5 and ZIP streaming with seeking, multi-volume
   support, multi-provider failover, compressed/encrypted/7z detected and tagged.
@@ -184,8 +189,8 @@ Still open:
   retired after v1.7.67 once every device ran a build whose in-app updater accepts
   `triboon.apk`.)
 - App signing (CRITICAL): there is ONE dedicated Android release keystore. ALWAYS sign release
-  APKs with it — via CI (the `release-apk` job auto-builds + publishes on every `vX.Y.Z` tag using
-  the `TRIBOON_RELEASE_*` repo secrets) or locally with `npm run release:apk -- -Release`. NEVER
+  APKs with it — via CI (the `release-apk` job builds an immutable artifact and the final publisher
+  publishes only after every required asset passes) or locally with `npm run release:apk`. NEVER
   generate a new keystore or switch signing keys without explicit owner sign-off: a changed
   signature forces EVERY installed device to uninstall + reinstall. The keystore file + its
   passwords are the owner's secret (password manager + GitHub secrets) and must never be committed,

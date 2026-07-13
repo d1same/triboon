@@ -10,3 +10,5 @@ dist
 graphify-out
 *.apk
 *.md
+!LICENSE
+!THIRD-PARTY-NOTICES.md

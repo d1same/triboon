@@ -6,4 +6,12 @@
     <string name="setup_connect">Connect</string>
     <string name="setup_help">Enter the address shown in Triboon\'s web dashboard.\nSame Wi-Fi/LAN as the server.</string>
     <string name="press_back_again">Press BACK again to exit</string>
+    <string name="tuning_channel">Tuning channel…</string>
+    <string name="preparing">Preparing</string>
+    <string name="up_next">UP NEXT</string>
+    <string name="ends_at">Ends at %1$s</string>
+    <string name="ends_at_unknown">Ends at unavailable</string>
+    <string name="live">LIVE</string>
+    <string name="watched_episode">WATCHED  %1$s</string>
+    <string name="insecure_remote_confirmation">Unencrypted connection. Your login and video aren\'t protected on public networks. Press Connect again to continue anyway.</string>
 </resources>

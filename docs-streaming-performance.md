@@ -68,7 +68,11 @@ Source of truth in code:
 | Pool construction | `server/index.js` `getPool` |
 | Priority lanes and provider combining | `server/nntp.js` `ProviderPool`, `NntpPool` |
 | Read-ahead and health gate | `server/pipeline.js` mount/play path |
+| Cold-source hedge and rank grace | `server/pipeline.js` `RACE_HEDGE_MS`, `RACE_COMMIT_GRACE_MS`, `Pipeline.play` |
+| Episode/audiobook-scoped reuse | `server/pipeline.js` `wantedEpisodeOf`, `mountIdentity`; `server/archive.js` `pickInner` |
 | Segment fetch priority | `server/vfs.js`, `server/archive.js` |
+| Web VOD stall recovery | `web/index.html` `armWebRebufferRecovery`, `recoverSamePlaybackSource` |
+| XMLTV parsing responsiveness | `server/xmltv.js`, `server/xmltv-worker.js` |
 | Settings UI | `web/index.html` Streaming performance card |
 
 ## Live TV Startup And Retune
@@ -80,6 +84,21 @@ web playback, while Android uses `/api/iptv/native/:idx` and ExoPlayer.
 
 - Channel lists load as lean metadata first; playback URLs are minted only when
   the user presses Play.
+- Server/account and Android device-local channel lists begin concurrently,
+  merge deterministically server-first, and share one in-flight Android bridge
+  request among concurrent callers.
+- Main player, split player, and each Multiview pane own independent monotonic
+  tune epochs. A stale URL-hydration response cannot override a newer zap or
+  revive a closed pane.
+- Guide and now/next calls bind the mutable channel index to its stable
+  source-scoped `cid`. The server self-heals resolvable index drift and returns
+  409 only when the identity is gone, so the client reloads the lineup.
+- Large XMLTV downloads are single-flight per source/key; headerless gzip is
+  signature-detected with an expanded-size cap. Decoded buffers are parsed by a
+  global two-wide worker queue filtered to carried channels. Non-2xx responses
+  fail without caching; source changes and shutdown abort stale work before it
+  can publish. A stale valid cache may remain available during refresh, and
+  parsing must not block playback, zaps, or the main HTTP event loop.
 - Browser remux prefers HLS when present, keeps one total first-byte startup
   deadline, and does not refresh huge Xtream playlists inside a failing player
   request.
@@ -237,6 +256,12 @@ partial range. VOD stream sockets also get a longer per-route timeout than the
 general API timeout so a provider hiccup becomes buffering/retry behavior, not
 an immediate truncated response.
 
+After web VOD has started, a `waiting` state with no meaningful position
+progress for 45 seconds triggers same-source recovery. The first recovery keeps
+the selected release, playback kind, and current timestamp; it must not silently
+advance releases because a temporary buffer drained. Playback, position
+progress, seek, source replacement, and close all cancel the pending watchdog.
+
 Playback windows are applied when a mount is selected and rebalanced again when
 stream routes are touched or housekeeping removes mounts. That lets existing
 streams shrink their read-ahead/cache budget as additional users become active,
@@ -261,6 +286,20 @@ token creation, but the pipeline can reuse or join the live prepared/in-flight
 mount instead of repeating source finding, first-article probe, mount, and
 health gate. Fast home/card focus still uses cheap `/api/search` warming only;
 it does not mount every title the user scrolls past.
+
+Reuse is scoped to the selected payload, not only the NZB URL. Its identity is
+NZB URL plus season, episode, and audiobook mode. Loose-file and RAR/ZIP season
+packs require exactly one requested `SxxEyy` payload before file size, and the
+cheap first-article probe targets the same selected loose payload. Missing or
+ambiguous members, combined ranges that do not cover the request, and selected
+member health/streamability failures advance only this request without caching
+a release-wide bad verdict when the release name is collection-shaped (for
+example, a season pack or multi-episode range). A selected loose-pack article
+or post-mount member failure cannot blacklist sibling episodes. An archive
+first-volume failure remains release-wide because every member depends on that
+volume set. Exact single-episode releases also cache missing/blocked verdicts
+release-wide so later source walks skip a known-bad release quickly. A prepared
+E01 therefore cannot satisfy or poison an E05 Play request.
 
 Each active file also tracks coarse playback read pressure: segment waits,
 maximum segment wait, cache hits, bytes served, and temporary adaptive
@@ -291,6 +330,21 @@ background; do not start a second health-probe batch for the same candidate.
 
 Do not make health checks outrank active playback or startup. That turns
 protection into the thing causing slowness.
+
+### Cold Candidate Hedge
+
+Cold Play begins with the top-ranked candidate. If that candidate remains
+pending for 800ms before any failure, the pipeline may launch one lower-ranked
+understudy. Once a lower-ranked candidate is healthy and ready, earlier pending
+ranks receive 250ms of final grace; while a ready candidate is waiting, no more
+sources launch. Before the healthy source is registered and warmed, every
+losing hedge detaches from shared prepare state and its startup controller is
+aborted when no other play still consumes it. This releases queued/running
+startup NNTP work instead of waiting for the earlier candidate's full mount
+deadline; a concurrent play joined to that same mount remains protected. After
+an actual candidate failure the bounded walk may fill its existing race window,
+while auto-advance remains serial. Fast missing-probe and mount-deadline exits
+likewise abort their underlying startup BODY before the failure is returned.
 
 ## Recommendation Flow
 
@@ -406,7 +460,15 @@ Before changing performance behavior, check:
 6. `/api/status` and Settings show the same runtime profile.
 7. Adaptive read-ahead stays capped by the streaming profile and decays after
    the stream recovers.
-8. Docs remain aligned: this file, `docs-architecture.md`, `docs-player-regression-map.md`, `README.md`, and `bench/RESULTS.md`.
+8. Prepared/live mount reuse remains scoped to the exact episode/audiobook
+   payload; its probe targets that payload, and a ready hedge cancels unused
+   startup work without interrupting another joined consumer. Probe/deadline
+   exits leave no startup BODY behind.
+9. Web recovery retries the same source/kind before release failover.
+10. Live TV tune epochs, stable channel ids, and XMLTV worker parsing stay
+    responsive during rapid zaps.
+11. Docs remain aligned: this file, `docs-architecture.md`,
+    `docs-player-regression-map.md`, `README.md`, and `bench/RESULTS.md`.
 
 Minimum verification:
 
@@ -414,6 +476,8 @@ Minimum verification:
 node --test test/e2e.test.js
 node --test test/security.test.js
 node --test test/phase2.test.js
+node --test test/xmltv.test.js
+node --test --test-name-pattern "IPTV client correctness|web VOD rebuffer" test/phase4.test.js
 npm.cmd test
 git diff --check
 ```

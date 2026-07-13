@@ -11,7 +11,6 @@ package app.triboon.tv;
 // key events, including auto-repeat — which the web UI's long-press OK detection expects.
 
 import android.annotation.SuppressLint;
-import android.annotation.TargetApi;
 import android.animation.ObjectAnimator;
 import android.animation.ValueAnimator;
 import android.app.Activity;
@@ -27,6 +26,7 @@ import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
+import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.media.AudioDeviceInfo;
@@ -46,6 +46,7 @@ import android.text.TextUtils;
 import android.util.Rational;
 import android.util.Base64;
 import android.util.Log;
+import android.util.TypedValue;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -80,6 +81,7 @@ import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
 import androidx.media3.common.TrackSelectionOverride;
 import androidx.media3.common.Tracks;
+import androidx.media3.common.util.UnstableApi;
 import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.datasource.HttpDataSource;
 import androidx.media3.exoplayer.DefaultLoadControl;
@@ -101,6 +103,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.Collections;
 import java.util.Locale;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -117,6 +120,7 @@ import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
 
+@UnstableApi
 public class MainActivity extends Activity {
 
     private static final String TAG = "TriboonTV";
@@ -269,6 +273,7 @@ public class MainActivity extends Activity {
     private String nativeSubtitleLang = "";
     private String nativeSubtitleLabel = "";
     private String nativeSubtitleRel = "";
+    private String nativeSubtitleSize = "M";
     private final java.util.ArrayList<String> nativeSubtitleChoiceRels = new java.util.ArrayList<>();
     private final java.util.ArrayList<String> nativeSubtitleChoiceLabels = new java.util.ArrayList<>();
     private final java.util.ArrayList<String> nativeSubtitleChoiceActions = new java.util.ArrayList<>();
@@ -420,7 +425,6 @@ public class MainActivity extends Activity {
         // First launch: ask for the mic up front so voice search Just Works later. One-shot —
         // if the user declines here, we only re-ask when they actually tap the mic button.
         if (isTvDevice()
-                && Build.VERSION.SDK_INT >= 23
                 && checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
                    != android.content.pm.PackageManager.PERMISSION_GRANTED
                 && !prefs().getBoolean("askedMic", false)) {
@@ -1078,9 +1082,7 @@ public class MainActivity extends Activity {
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
         s.setAllowFileAccess(false);
         s.setAllowContentAccess(false);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            s.setOffscreenPreRaster(true);
-        }
+        s.setOffscreenPreRaster(true);
         s.setSupportZoom(false);
         // Tag the UA so the web UI can adapt. Phones stay in responsive touch mode; TVs get
         // the D-pad shell class and direct-play-first TV treatment.
@@ -1122,14 +1124,14 @@ public class MainActivity extends Activity {
             }
 
             @Override public void onReceivedError(WebView v, WebResourceRequest req, WebResourceError err) {
-                if (Build.VERSION.SDK_INT >= 23 && req.isForMainFrame()) {
+                if (req.isForMainFrame()) {
                     resetWebPageState();
                     showSetup("Couldn't reach the server — check the address and that Triboon is running.");
                 }
             }
 
             @Override
-            @TargetApi(Build.VERSION_CODES.O)
+            @androidx.annotation.RequiresApi(Build.VERSION_CODES.O)
             public boolean onRenderProcessGone(WebView v, RenderProcessGoneDetail detail) {
                 final boolean didCrash = detail != null && detail.didCrash();
                 final int priorityAtExit = detail == null ? -1 : detail.rendererPriorityAtExit();
@@ -1263,7 +1265,7 @@ public class MainActivity extends Activity {
             @android.webkit.JavascriptInterface
             public void setCastReceiverAppId(String id) {
                 if (!trustedBridgeOrigin()) return;
-                String v = (id == null) ? "" : id.trim().toUpperCase();
+                String v = (id == null) ? "" : id.trim().toUpperCase(Locale.ROOT);
                 if (!v.matches("[0-9A-F]{8}")) v = ""; // empty = fall back to Default Media Receiver
                 try {
                     SharedPreferences p = prefs();
@@ -2383,7 +2385,8 @@ public class MainActivity extends Activity {
             org.json.JSONObject row = input.optJSONObject(i);
             if (row != null) rows.add(row);
         }
-        rows.sort((a, b) -> Long.compare(a.optLong("start", 0L), b.optLong("start", 0L)));
+        // List.sort was added in API 24; Collections.sort keeps the API 23 client safe.
+        Collections.sort(rows, (a, b) -> Long.compare(a.optLong("start", 0L), b.optLong("start", 0L)));
         org.json.JSONArray out = new org.json.JSONArray();
         for (org.json.JSONObject row : rows) out.put(row);
         return out;
@@ -2737,6 +2740,7 @@ public class MainActivity extends Activity {
         return ram > 0 && ram <= 2600;
     }
 
+    @SuppressLint("InlinedApi")
     private org.json.JSONObject nativeAudioSinkCaps(boolean conservative) {
         org.json.JSONObject out = new org.json.JSONObject();
         try {
@@ -2748,7 +2752,7 @@ public class MainActivity extends Activity {
             out.put("truehd", false);
             out.put("passthrough", false);
             out.put("output", "");
-            if (conservative || Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return out;
+            if (conservative) return out;
             AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
             if (am == null) return out;
             AudioDeviceInfo[] devices = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS);
@@ -2779,6 +2783,7 @@ public class MainActivity extends Activity {
         return out;
     }
 
+    @SuppressLint("InlinedApi")
     private boolean nativePassthroughAudioDevice(AudioDeviceInfo d) {
         if (d == null) return false;
         int type = d.getType();
@@ -2793,6 +2798,7 @@ public class MainActivity extends Activity {
         return false;
     }
 
+    @SuppressLint("InlinedApi")
     private String nativeAudioDeviceLabel(AudioDeviceInfo d) {
         if (d == null) return "";
         int type = d.getType();
@@ -2873,7 +2879,6 @@ public class MainActivity extends Activity {
         nativePlayerView.setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING);
         if (nativePlayerView.getSubtitleView() != null) {
             nativePlayerView.getSubtitleView().setApplyEmbeddedStyles(false);
-            nativePlayerView.getSubtitleView().setFractionalTextSize(0.052f);
             nativePlayerView.getSubtitleView().setBottomPaddingFraction(0.08f);
             nativePlayerView.getSubtitleView().setStyle(new CaptionStyleCompat(
                     Color.WHITE, Color.TRANSPARENT, Color.TRANSPARENT,
@@ -2883,7 +2888,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         nativeGuidePipRevealScrim = new TextView(this);
-        nativeGuidePipRevealScrim.setText("Tuning channel...");
+        nativeGuidePipRevealScrim.setText(R.string.tuning_channel);
         nativeGuidePipRevealScrim.setTextColor(0xDDF3EFF7);
         nativeGuidePipRevealScrim.setTextSize(10);
         nativeGuidePipRevealScrim.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
@@ -2910,6 +2915,7 @@ public class MainActivity extends Activity {
                 android.view.Gravity.BOTTOM | android.view.Gravity.CENTER_HORIZONTAL);
         subLp.setMargins(dp(64), 0, dp(64), dp(82));
         nativePlayerLayer.addView(nativeSubtitleOverlay, subLp);
+        applyNativeSubtitleSize();
 
         nativeTop = new LinearLayout(this);
         nativeTop.setOrientation(LinearLayout.VERTICAL);
@@ -3086,11 +3092,9 @@ public class MainActivity extends Activity {
         nativeSeek.setFocusable(true);
         nativeSeek.setOnKeyListener((v, code, e) -> handleNativeSurfaceKey(e));
         nativeSeek.setPadding(dp(4), 0, dp(4), 0);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            nativeSeek.setProgressTintList(ColorStateList.valueOf(0xFFC13BD6));
-            nativeSeek.setProgressBackgroundTintList(ColorStateList.valueOf(0x55F3EFF7));
-            nativeSeek.setThumbTintList(ColorStateList.valueOf(0xFFF9F4FF));
-        }
+        nativeSeek.setProgressTintList(ColorStateList.valueOf(0xFFC13BD6));
+        nativeSeek.setProgressBackgroundTintList(ColorStateList.valueOf(0x55F3EFF7));
+        nativeSeek.setThumbTintList(ColorStateList.valueOf(0xFFF9F4FF));
         nativeSeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 if (!fromUser || nativePlayer == null) return;
@@ -3179,7 +3183,7 @@ public class MainActivity extends Activity {
         nativeLiveBtn.setClickable(true);
         nativeLiveBtn.setOnFocusChangeListener((v, has) -> {
             v.setBackground(nativeButtonBg(has, false));
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) v.setElevation(has ? dp(4) : 0);
+            v.setElevation(has ? dp(4) : 0);
             if (has) showNativeChrome(false);
         });
         nativeLiveBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) goNativeLive(); });
@@ -3266,7 +3270,7 @@ public class MainActivity extends Activity {
         nativeSheet.setClickable(true);
         nativeSheet.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);
         nativeSheet.setVisibility(View.GONE);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) nativeSheet.setElevation(dp(8));
+        nativeSheet.setElevation(dp(8));
         FrameLayout.LayoutParams sheetLp = new FrameLayout.LayoutParams(
                 nativeSheetWidthPx(), ViewGroup.LayoutParams.WRAP_CONTENT,
                 android.view.Gravity.END | android.view.Gravity.BOTTOM);
@@ -3344,7 +3348,7 @@ public class MainActivity extends Activity {
         nativeLoadingStatus.setGravity(android.view.Gravity.CENTER);
         nativeLoadingStatus.setSingleLine(true);
         nativeLoadingStatus.setEllipsize(TextUtils.TruncateAt.END);
-        nativeLoadingStatus.setText("Preparing");
+        nativeLoadingStatus.setText(R.string.preparing);
         LinearLayout.LayoutParams statusLp = new LinearLayout.LayoutParams(
                 dp(360), ViewGroup.LayoutParams.WRAP_CONTENT);
         statusLp.setMargins(0, dp(10), 0, 0);
@@ -3532,7 +3536,7 @@ public class MainActivity extends Activity {
         row.setVisibility(View.GONE);
         row.setClipChildren(false);
         row.setClipToPadding(false);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) row.setElevation(dp(10));
+        row.setElevation(dp(10));
 
         // The play pill — the whole pill is the focusable, clickable primary action.
         LinearLayout pill = new LinearLayout(this);
@@ -3566,7 +3570,7 @@ public class MainActivity extends Activity {
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
         nativeUpNextKicker = new TextView(this);
-        nativeUpNextKicker.setText("UP NEXT");
+        nativeUpNextKicker.setText(R.string.up_next);
         nativeUpNextKicker.setTextColor(0xB8FFFFFF); // muted white — monochrome card, no amber
         nativeUpNextKicker.setTextSize(9f);
         nativeUpNextKicker.setLetterSpacing(0.14f);
@@ -3725,9 +3729,7 @@ public class MainActivity extends Activity {
             v.setBackground(nativeButtonBg(hasFocus, primary));
             Object tag = v.getTag();
             if (tag instanceof Integer) setNativeButtonIcon((ImageButton) v, (Integer) tag, primary, hasFocus);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                v.setElevation(hasFocus ? dp(4) : 0);
-            }
+            v.setElevation(hasFocus ? dp(4) : 0);
             if (hasFocus) showNativeChrome(false);
         });
         return b;
@@ -3841,6 +3843,7 @@ public class MainActivity extends Activity {
             String subtitleLang = j.optString("subtitleLang", "");
             String subtitleLabel = j.optString("subtitleLabel", "");
             String subtitleRel = j.optString("subtitleRel", "");
+            String subtitleSize = j.optString("subtitleSize", "M");
             String qualityLabel = j.optString("qualityLabel", "");
             loadingQuality = qualityLabel;
             loadingSource = j.optString("source", "");
@@ -3937,6 +3940,8 @@ public class MainActivity extends Activity {
             nativeSubtitleHostHeader = subtitlePin == null ? "" : subtitlePin.hostHeader;
             nativeSubtitleLang = subtitleLang;
             nativeSubtitleRel = subtitleRel;
+            nativeSubtitleSize = subtitleSize;
+            applyNativeSubtitleSize();
             nativeSubtitleLabel = subtitleLabel.isEmpty()
                     ? (!subtitleLang.isEmpty() ? nativeLangName(subtitleLang) : "Subtitles")
                     : subtitleLabel;
@@ -4429,7 +4434,7 @@ public class MainActivity extends Activity {
         if (nativeGuidePipRevealScrim == null || pipLp == null) return;
         syncNativeGuidePipRevealScrim(pipLp);
         nativeGuidePipRevealScrim.animate().cancel();
-        nativeGuidePipRevealScrim.setText("Tuning channel...");
+        nativeGuidePipRevealScrim.setText(R.string.tuning_channel);
         nativeGuidePipRevealScrim.setAlpha(1f);
         nativeGuidePipRevealScrim.setVisibility(View.VISIBLE);
         nativeGuidePipRevealScrim.bringToFront();
@@ -4986,10 +4991,10 @@ public class MainActivity extends Activity {
         if (nativeClock != null) nativeClock.setText(fmtNativeClock(now));
         if (nativeEndsAt != null) {
             if (!isLive && dur > 0 && pos <= dur) {
-                nativeEndsAt.setText("Ends at " + fmtNativeClock(now + ((dur - pos) * 1000)));
+                nativeEndsAt.setText(getString(R.string.ends_at, fmtNativeClock(now + ((dur - pos) * 1000))));
                 nativeEndsAt.setVisibility(View.VISIBLE);
             } else if (!isLive) {
-                nativeEndsAt.setText("Ends at --:--");
+                nativeEndsAt.setText(R.string.ends_at_unknown);
                 nativeEndsAt.setVisibility(View.VISIBLE);
             } else {
                 nativeEndsAt.setText("");
@@ -5296,8 +5301,8 @@ public class MainActivity extends Activity {
         nativePlayer.stop();
         nativePlayer.clearMediaItems();
         applyNativeHttpHostHeader();
-        if (nativePlayerBadge != null) nativePlayerBadge.setText("LIVE");
-        if (nativeChromeQuality != null) nativeChromeQuality.setText("LIVE");
+        if (nativePlayerBadge != null) nativePlayerBadge.setText(R.string.live);
+        if (nativeChromeQuality != null) nativeChromeQuality.setText(R.string.live);
         nativePlayer.setMediaItem(buildNativeMediaItem());
         nativePlayer.prepare();
         nativePlayer.play();
@@ -5502,20 +5507,29 @@ public class MainActivity extends Activity {
             return;
         }
         double t = Math.max(0, nativeDisplayPositionMs() / 1000.0 - nativeSubtitleShift);
-        StringBuilder active = new StringBuilder();
+        java.util.ArrayList<String> active = new java.util.ArrayList<>();
         for (NativeCue cue : nativeSubtitleCues) {
             if (t + 0.05 < cue.start) {
-                if (active.length() > 0) break;
+                if (!active.isEmpty()) break;
                 continue;
             }
             if (t <= cue.end + 0.05) {
-                if (active.length() > 0) active.append('\n');
-                active.append(cue.text);
+                active.add(cue.text);
             }
         }
-        String text = active.toString().trim();
+        String text = SubtitleText.lastThree(active);
         nativeSubtitleOverlay.setText(text);
         nativeSubtitleOverlay.setVisibility(text.isEmpty() ? View.GONE : View.VISIBLE);
+    }
+
+    private void applyNativeSubtitleSize() {
+        float sizeSp = SubtitleText.sizeSp(nativeSubtitleSize);
+        if (nativeSubtitleOverlay != null) {
+            nativeSubtitleOverlay.setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp);
+        }
+        if (nativePlayerView != null && nativePlayerView.getSubtitleView() != null) {
+            nativePlayerView.getSubtitleView().setFixedTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp);
+        }
     }
 
     private java.util.ArrayList<NativeCue> parseNativeVtt(String vtt) {
@@ -5559,12 +5573,7 @@ public class MainActivity extends Activity {
     }
 
     private String cleanNativeCueText(String s) {
-        return s.replaceAll("<[^>]+>", "")
-                .replace("&nbsp;", " ")
-                .replace("&amp;", "&")
-                .replace("&lt;", "<")
-                .replace("&gt;", ">")
-                .trim();
+        return SubtitleText.cleanCueText(s);
     }
 
     private String stripNativeQueryParam(String url, String key) {
@@ -5948,7 +5957,7 @@ public class MainActivity extends Activity {
             // Stills load LAZILY around the focus (loadNativeEpisodeStillsAround) — never all at once.
 
             TextView label = new TextView(this);
-            label.setText((ep.watched ? "WATCHED  " : "") + ep.tag);
+            label.setText(ep.watched ? getString(R.string.watched_episode, ep.tag) : ep.tag);
             label.setSingleLine(true);
             label.setTextColor(0xEFFFCC67);
             label.setTextSize(10);
@@ -7232,8 +7241,7 @@ public class MainActivity extends Activity {
             if (isRemoteCleartextServer(url)) {
                 if (!url.equals(pendingInsecureServer)) {
                     pendingInsecureServer = url;
-                    setupMsg.setText("Unencrypted connection. Your login and video aren't protected on "
-                            + "public networks. Press Connect again to continue anyway.");
+                    setupMsg.setText(R.string.insecure_remote_confirmation);
                     addr.requestFocus();
                     return;
                 }
@@ -7269,6 +7277,7 @@ public class MainActivity extends Activity {
 
     // ---------- keys: BACK + media transport ----------
     @Override
+    @SuppressLint("GestureBackNavigation")
     public boolean dispatchKeyEvent(KeyEvent e) {
         int code = e.getKeyCode();
 
@@ -7410,6 +7419,7 @@ public class MainActivity extends Activity {
 
     @Override
     @SuppressWarnings("deprecation")
+    @SuppressLint("GestureBackNavigation")
     public void onBackPressed() {
         handleSystemBack();
     }
@@ -7463,15 +7473,56 @@ public class MainActivity extends Activity {
                 + action + "')", null);
     }
 
-    // ---- MusicService bridge: background playback + lock-screen controls ----
-    // The service (a different component) forwards lock-screen/BT transport back to the web player.
-    static void dispatchMusicTransport(String action) {
-        MainActivity a = active;
-        if (a != null) a.runOnUiThread(() -> a.jsMusicTransport(action));
-    }
-    static void dispatchMusicSeek(long positionMs) {
+    // ---- MusicService bridge: hardware/lock-screen controls ----
+    // Native VOD wins while it is open; otherwise the command falls back to WebView audio.
+    static void dispatchMediaTransport(String action) {
         MainActivity a = active;
         if (a != null) a.runOnUiThread(() -> {
+            if (a.handleNativeMediaTransport(action)) return;
+            a.jsMusicTransport(action);
+        });
+    }
+
+    private boolean handleNativeMediaTransport(String action) {
+        if (!nativePlayerOpen() || nativePlayer == null || !"video".equals(nativeMode)) return false;
+        switch (action) {
+            case "toggle":
+                if (nativePlayer.isPlaying()) nativePlayer.pause();
+                else nativePlayer.play();
+                return true;
+            case "play":
+                nativePlayer.play();
+                return true;
+            case "pause":
+                nativePlayer.pause();
+                return true;
+            case "fast_forward":
+                nativeSeekBy(30000L);
+                return true;
+            case "rewind":
+                nativeSeekBy(-10000L);
+                return true;
+            case "next":
+                if (nativeHasNext) playNativeNextEpisode();
+                return true;
+            case "prev":
+                nativeSeekToDisplayPosition(0L);
+                return true;
+            case "stop":
+                closeNativePlayback(true);
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    static void dispatchMediaSeek(long positionMs) {
+        MainActivity a = active;
+        if (a != null) a.runOnUiThread(() -> {
+            if (a.nativePlayerOpen() && a.nativePlayer != null && "video".equals(a.nativeMode)) {
+                a.nativeSeekToDisplayPosition(Math.max(0L, positionMs));
+                return;
+            }
             if (a.web != null) a.web.evaluateJavascript(
                 "window.__tvMusicSeek && window.__tvMusicSeek(" + (positionMs / 1000) + ")", null);
         });
@@ -7562,8 +7613,7 @@ public class MainActivity extends Activity {
     // transcript to us, which is exactly the "voice didn't work" symptom. The reliable path
     // is the in-app SpeechRecognizer SERVICE; it needs RECORD_AUDIO granted at runtime.
     private void startVoiceFlow() {
-        if (Build.VERSION.SDK_INT >= 23
-                && checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             voicePending = true; // so the grant callback resumes the voice session
             requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, REQ_MIC);
@@ -7712,9 +7762,17 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || isTvDevice()) return false;
         if (!nativePlayerOpen() || nativePlayer == null || nativeGuideMode) return false;
         try {
-            PictureInPictureParams params = new PictureInPictureParams.Builder()
-                    .setAspectRatio(new Rational(16, 9))
-                    .build();
+            PictureInPictureParams.Builder builder = new PictureInPictureParams.Builder()
+                    .setAspectRatio(new Rational(16, 9));
+            Rect sourceRect = new Rect();
+            if (nativePlayerView != null && nativePlayerView.getGlobalVisibleRect(sourceRect)) {
+                builder.setSourceRectHint(sourceRect);
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                builder.setAutoEnterEnabled(true);
+            }
+            PictureInPictureParams params = builder.build();
+            setPictureInPictureParams(params);
             return enterPictureInPictureMode(params);
         } catch (Exception ignored) {
             return false;

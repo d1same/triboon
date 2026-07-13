@@ -16,8 +16,6 @@
   |
   <a href="https://github.com/d1same/triboon/releases/latest/download/Triboon-Windows-Server.exe">Windows server</a>
   |
-  <a href="https://github.com/d1same/triboon/releases/latest/download/Triboon-Windows-Client.exe">Windows client</a>
-  |
   <a href="#quick-start">Quick start</a>
   |
   <a href="docs-setup.md">Setup guide</a>
@@ -125,8 +123,8 @@ when the package id and signing key match and the new `versionCode` is higher.
 
 ## Windows
 
-Two one-click Windows builds ship on every release. Each has a stable "latest"
-download plus a versioned copy you can pin or roll back to.
+One stable Windows server installer ships on every release. It has a fixed
+"latest" download plus a versioned copy you can pin or roll back to.
 
 ### Server (host Triboon on Windows)
 
@@ -146,23 +144,20 @@ the installer keeps on upgrade *and* uninstall - reinstalling picks up exactly
 where you left off. Updates only replace the program files under
 `Program Files\Triboon`.
 
-### Client (native Windows app)
+### Experimental client preview
 
-A native window that connects to any Triboon server by address and plays through
-the built-in browser engine with GPU-accelerated decode. Point it at the same
-address you would open in a browser (for example `http://192.168.1.20:7777`).
+The PX8/Tauri client is available only as a manual GitHub Actions preview
+artifact. It is not attached to stable releases and has no fixed latest URL.
+The current shell still uses web playback because its native playback bridge is
+not complete; the separate libmpv experiment is also preview-only.
 
-```text
-https://github.com/d1same/triboon/releases/latest/download/Triboon-Windows-Client.exe
-```
-
-Both installers are currently unsigned, so Windows SmartScreen shows a warning
-on first run - choose **More info -> Run anyway**. Each release also keeps
-versioned copies for history and rollback:
+The Windows server installer and preview artifacts are currently unsigned, so
+Windows SmartScreen shows a warning on first run - choose
+**More info -> Run anyway**. Each stable release keeps this versioned server
+copy for history and rollback:
 
 ```text
 Triboon-Windows-Server-vX.Y.Z.exe
-Triboon-Windows-Client-vX.Y.Z.exe
 ```
 
 ## Unraid
@@ -194,6 +189,14 @@ The Unraid template lives in `unraid/triboon.xml`.
 - API routes are deny-by-default and covered by route tests.
 - Stream URLs use signed, scoped tokens.
 - IPTV/provider URLs with credentials are redacted from logs and caches.
+- Viewer city/country lookup is off by default. Enabling it in Settings (or
+  forcing `TRIBOON_VIEWER_GEO=1`) sends a remote viewer's public IP to
+  `ipwho.is`; raw IPs are not written to persistent activity history or
+  returned to clients. `X-Forwarded-For` is ignored unless
+  `TRIBOON_TRUST_PROXY=1`, which should be enabled only behind a trusted proxy
+  that strips client-supplied forwarding headers.
+- Android cloud backup and device transfer exclude saved server/login state and
+  device-local IPTV credentials; reconnect explicitly after a restore.
 - Local runtime data, logs, old APKs, screenshots, and secrets are ignored by
   git.
 - Development-only test/demo folders are excluded from GitHub source archives.
@@ -223,16 +226,19 @@ Run the full pre-update gate before pushing or calling a fix done:
 npm.cmd run verify:full
 ```
 
-Use `npm test` for the Node test suite by itself. `VERIFY.md` is the single
+Use `npm test` for the explicitly enumerated, sequential top-level Node test
+suites by themselves. The release contract keeps that list synchronized with
+every checked-in `test/*.test.js` file and excludes fixture generators.
+`VERIFY.md` is the single
 source of truth for the full gate, including IPTV, fast VOD startup, CC, Web
 Player, and Android ExoPlayer smokes.
 
-Build the Android debug APK:
+Run Android lint, native JVM unit tests, and build the debug APK:
 
 ```powershell
 $env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'
 $env:ANDROID_HOME="$env:LOCALAPPDATA\Android\Sdk"
-gradle -p android assembleDebug
+gradle -p android lintDebug testDebugUnitTest assembleDebug
 ```
 
 The APK output is:
@@ -242,10 +248,10 @@ android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
 If a current external Gradle is not installed, use the pinned wrapper from the
-`android/` folder:
+repository root:
 
 ```powershell
-.\gradlew.bat assembleDebug
+.\android\gradlew.bat -p android lintDebug testDebugUnitTest assembleDebug
 ```
 
 ## Project Map
@@ -255,8 +261,8 @@ If a current external Gradle is not installed, use the pinned wrapper from the
 - `web/index.html` - the single-file web UI used by browser, desktop wrapper,
   and Android WebView shell.
 - `android/` - Android TV shell with D-pad bridge and native Media3/ExoPlayer.
-- `clients/windows-px8/` - native Windows client (Tauri shell that loads the
-  server UI; GPU-accelerated playback).
+- `clients/windows-px8/` - experimental Tauri/PX8 Windows preview; not a stable
+  release asset until the native playback bridge is complete.
 - `installer/windows/` - one-click Windows server installer (Inno Setup + service
   wrapper); build with `installer/windows/build-installer.ps1`.
 - `unraid/` - Unraid template.
@@ -266,6 +272,10 @@ If a current external Gradle is not installed, use the pinned wrapper from the
 - `VERIFY.md` - required pre-update verification gate.
 
 ## Legal
+
+Triboon source is available under the [MIT License](LICENSE). Bundled external
+tools retain their own licenses; see
+[Third-Party Notices](THIRD-PARTY-NOTICES.md).
 
 Triboon is for legally obtained content only. You are responsible for the
 providers, playlists, indexers, files, and accounts you configure.

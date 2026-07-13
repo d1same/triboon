@@ -21,14 +21,19 @@ demo/*
 AGENTS.md
 android/.idea/
 android/gradle/gradle-daemon-jvm.properties
+test/fixtures/work/
 
-# Local-only dev tooling and internal notes. Kept on disk for the maintainer's workflow but
-# not published to the public repo: dev/debug/bench scripts (some reference local LAN/device
-# addresses), the internal release-audit board (past-issue history + APK hashes), and the
-# local Android-Studio/emulator setup guide (machine-specific paths).
+# Local-only debug/bench material stays private, but the sanitized release gates are deliberately
+# tracked so package.json works from a clean clone.
 bench/
+!bench/
+bench/*
+!bench/verify-before-update.ps1
+!bench/verify-live.js
+!bench/cut-apk-release.ps1
+!bench/android-tv-stress.ps1
+!bench/android-tv-smoke.ps1
 docs-release-audit.md
-docs-android-tv-testing.md
 
 # Android: machine-local SDK path, build outputs, gradle caches, built APKs, signing keys.
 android/local.properties

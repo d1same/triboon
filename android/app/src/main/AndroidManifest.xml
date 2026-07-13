@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -40,8 +41,11 @@
         android:hardwareAccelerated="true"
         android:largeHeap="true"
         android:allowBackup="false"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:usesCleartextTraffic="true"
         android:networkSecurityConfig="@xml/network_security_config"
+        tools:targetApi="s"
         android:theme="@style/TriboonTheme">
 
         <!-- Google Cast: the SDK loads this OptionsProvider (receiver app id) reflectively. -->
@@ -56,6 +60,7 @@
             android:launchMode="singleTask"
             android:resizeableActivity="true"
             android:supportsPictureInPicture="true"
+            tools:targetApi="n"
             android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout|smallestScreenSize|density|uiMode">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -69,7 +74,14 @@
         <service
             android:name=".MusicService"
             android:exported="false"
-            android:foregroundServiceType="mediaPlayback" />
+            android:foregroundServiceType="mediaPlayback">
+            <!-- MediaButtonReceiver resolves exactly one service with this action, then starts it
+                 as a foreground service on Android 8+. MusicService performs the required immediate
+                 foreground handshake even when the button belongs to native VOD or no player. -->
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </service>
         <!-- Routes hardware/BT/lock-screen media buttons to the MediaSession. -->
         <receiver
             android:name="androidx.media.session.MediaButtonReceiver"

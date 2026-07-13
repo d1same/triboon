@@ -74,6 +74,61 @@ test('archive virtual files propagate read options and cancellation to volume st
   assert.strictEqual(cancelCalls, 1);
 });
 
+test('archive episode selection rejects missing/ambiguous members but keeps one opaque payload', async () => {
+  const wanted = { wantedEpisode: { s: 2, e: 5 } };
+  const cases = [
+    {
+      label: 'missing requested member',
+      files: [
+        { name: 'Show.S02E01.1080p.mkv', data: seededPayload(48 * 1024, 0x201) },
+        { name: 'Show.S02E02.1080p.mkv', data: seededPayload(44 * 1024, 0x202) },
+      ],
+      reject: true,
+    },
+    {
+      label: 'ambiguous duplicate requested member',
+      files: [
+        { name: 'Show.S02E05.Part1.mkv', data: seededPayload(48 * 1024, 0x251) },
+        { name: 'Show.S02E05.Part2.mkv', data: seededPayload(44 * 1024, 0x252) },
+      ],
+      reject: true,
+    },
+    {
+      label: 'single obfuscated payload',
+      files: [{ name: '8f3c10a9.bin', data: seededPayload(48 * 1024, 0x205) }],
+      reject: false,
+    },
+    {
+      label: 'ambiguous obfuscated payloads',
+      files: [
+        { name: '8f3c10a9.bin', data: seededPayload(48 * 1024, 0x206) },
+        { name: '91ae02c4.bin', data: seededPayload(44 * 1024, 0x207) },
+      ],
+      reject: true,
+    },
+  ];
+
+  for (const [index, c] of cases.entries()) {
+    const volumes = writeRar4Store(c.files, { base: `episode-selection-${index}` });
+    const { articles, nzb } = makeArchiveNzb(volumes, 30000, { junk: false });
+    const mock = createMockNntp({ articles });
+    const port = await mock.listen();
+    const pool = new NntpPool({ host: '127.0.0.1', port, tls: false }, 4);
+    try {
+      if (c.reject) {
+        await assert.rejects(() => mountNzb(pool, nzb, wanted),
+          (e) => e && e.code === 'EPISODE_SELECTION', c.label);
+      } else {
+        const vf = await mountNzb(pool, nzb, wanted);
+        assert.strictEqual(vf.name, '8f3c10a9.bin', c.label);
+      }
+    } finally {
+      pool.close();
+      await mock.close();
+    }
+  }
+});
+
 // Build an NZB + mock articles from archive volumes (one usenet "file" per volume), with
 // par2/nfo junk thrown in to prove the volume-set collector ignores them.
 function makeArchiveNzb(volumes, partSize, { junk = true } = {}) {

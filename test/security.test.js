@@ -552,6 +552,93 @@ test('settings: built-in subtitle mode round-trips to player server info', async
     'player server info should reflect online-only mode');
 });
 
+test('privacy: viewer geolocation is opt-in, proxy-aware, bounded, and single-flight', async () => {
+  const originalData = process.env.TRIBOON_DATA;
+  const originalTmdbBase = process.env.TMDB_BASE;
+  const originalTrustProxy = process.env.TRIBOON_TRUST_PROXY;
+  const originalViewerGeo = process.env.TRIBOON_VIEWER_GEO;
+  const geoSrv = await bootServer({ NNTP_HOST: null, TMDB_BASE: null, TRIBOON_VIEWER_GEO: null, TRIBOON_TRUST_PROXY: null });
+  const geoAdmin = await setupAdmin(geoSrv.port, 'geo-owner', 'hunter22');
+  let s = await httpJson(geoSrv.port, 'GET', '/api/settings', null, geoAdmin);
+  assert.strictEqual(s.json.viewerGeolocationEnabled, false, 'external viewer geolocation defaults off');
+  assert.strictEqual(s.json.viewerGeolocationEnvForced, false, 'settings report that no environment override is active');
+  assert.match(geoSrv.geoCacheKey('8.8.4.4'), /^[0-9a-f]{64}$/);
+  assert.notStrictEqual(geoSrv.geoCacheKey('8.8.4.4'), '8.8.4.4', 'the in-memory cache never uses a raw public IP as its key');
+
+  const originalFetch = global.fetch;
+  let lookups = 0;
+  const ctx = { req: { headers: { 'x-forwarded-for': '8.8.8.8, 10.0.0.2' }, socket: { remoteAddress: '192.168.1.20' } } };
+  try {
+    delete process.env.TRIBOON_TRUST_PROXY;
+    assert.strictEqual(geoSrv.clientIpForGeo(ctx), '192.168.1.20', 'untrusted forwarding headers are ignored');
+    process.env.TRIBOON_TRUST_PROXY = '1';
+    assert.strictEqual(geoSrv.clientIpForGeo(ctx), '8.8.8.8', 'an explicitly trusted proxy may supply the client address');
+    assert.strictEqual(geoSrv.isPrivateIp('100.64.1.2'), true, 'carrier-grade NAT never goes to an external lookup');
+    assert.strictEqual(geoSrv.isPrivateIp('2001:db8::1'), true, 'documentation IPv6 never goes to an external lookup');
+
+    global.fetch = async (url) => {
+      lookups++;
+      assert.match(String(url), /^https:\/\/ipwho\.is\/8\.8\.4\.4\?/);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return new Response(JSON.stringify({ success: true, city: 'Test City', country: 'Test Country' }), { status: 200 });
+    };
+    assert.strictEqual(await geoSrv.geoLocate('8.8.4.4'), '', 'a public address is not disclosed while the setting is off');
+    assert.strictEqual(lookups, 0, 'opt-out performs no external request');
+
+    await httpJson(geoSrv.port, 'POST', '/api/settings', { viewerGeolocationEnabled: true }, geoAdmin);
+    const [a, b] = await Promise.all([geoSrv.geoLocate('8.8.4.4'), geoSrv.geoLocate('8.8.4.4')]);
+    assert.deepStrictEqual([a, b], ['Test City, Test Country', 'Test City, Test Country']);
+    assert.strictEqual(lookups, 1, 'concurrent heartbeats join one external lookup');
+    s = await httpJson(geoSrv.port, 'GET', '/api/settings', null, geoAdmin);
+    assert.strictEqual(s.json.viewerGeolocationEnabled, true, 'the explicit admin choice round-trips');
+
+    await httpJson(geoSrv.port, 'POST', '/api/settings', { viewerGeolocationEnabled: false }, geoAdmin);
+    await httpJson(geoSrv.port, 'POST', '/api/settings', { viewerGeolocationEnabled: true }, geoAdmin);
+    assert.strictEqual(await geoSrv.geoLocate('8.8.4.4'), 'Test City, Test Country');
+    assert.strictEqual(lookups, 2, 'disabling geolocation purges its in-memory location cache');
+
+    let releaseSlowLookup;
+    global.fetch = async (url) => {
+      assert.match(String(url), /^https:\/\/ipwho\.is\/9\.9\.9\.9\?/);
+      await new Promise((resolve) => { releaseSlowLookup = resolve; });
+      return new Response(JSON.stringify({ success: true, city: 'Late City', country: 'Late Country' }), { status: 200 });
+    };
+    const late = geoSrv.geoLocate('9.9.9.9');
+    while (!releaseSlowLookup) await new Promise((resolve) => setImmediate(resolve));
+    await httpJson(geoSrv.port, 'POST', '/api/settings', { viewerGeolocationEnabled: false }, geoAdmin);
+    releaseSlowLookup();
+    assert.strictEqual(await late, '', 'an in-flight lookup cannot disclose or persist a city after opt-out');
+
+    await httpJson(geoSrv.port, 'POST', '/api/settings', { viewerGeolocationEnabled: false }, geoAdmin);
+    process.env.TRIBOON_VIEWER_GEO = '1';
+    s = await httpJson(geoSrv.port, 'GET', '/api/settings', null, geoAdmin);
+    assert.strictEqual(s.json.viewerGeolocationEnabled, true, 'the settings API reports the effective environment-forced state');
+    assert.strictEqual(s.json.viewerGeolocationSavedEnabled, false, 'the saved preference remains distinct from the environment override');
+    assert.strictEqual(s.json.viewerGeolocationEnvForced, true, 'the UI can explain why the effective setting cannot be disabled');
+    const forced = await httpJson(geoSrv.port, 'POST', '/api/settings', { viewerGeolocationEnabled: false }, geoAdmin);
+    assert.strictEqual(forced.json.viewerGeolocationEnabled, true, 'a save response cannot falsely claim an environment-forced lookup is off');
+    delete process.env.TRIBOON_VIEWER_GEO;
+  } finally {
+    global.fetch = originalFetch;
+    if (originalTrustProxy === undefined) delete process.env.TRIBOON_TRUST_PROXY;
+    else process.env.TRIBOON_TRUST_PROXY = originalTrustProxy;
+    if (originalViewerGeo === undefined) delete process.env.TRIBOON_VIEWER_GEO;
+    else process.env.TRIBOON_VIEWER_GEO = originalViewerGeo;
+    if (originalTmdbBase === undefined) delete process.env.TMDB_BASE;
+    else process.env.TMDB_BASE = originalTmdbBase;
+    await httpJson(geoSrv.port, 'POST', '/api/settings', { viewerGeolocationEnabled: false }, geoAdmin);
+    await geoSrv.shutdown();
+    if (originalData === undefined) delete process.env.TRIBOON_DATA;
+    else process.env.TRIBOON_DATA = originalData;
+  }
+
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /id="viewerGeoMode"[\s\S]+Off - do not send public IPs[\s\S]+On - look up city and country/,
+    'admin UI explains the external lookup before opt-in');
+  assert.match(ui, /viewerGeolocationEnvForced[\s\S]+TRIBOON_VIEWER_GEO/,
+    'admin UI exposes and explains an environment-forced lookup');
+});
+
 test('settings: subtitle provider policy round-trips; OS API key stays a secret', async () => {
   // Default mode with nothing saved.
   let s = await httpJson(srv.port, 'GET', '/api/settings', null, admin);
@@ -601,7 +688,7 @@ test('settings: encrypted at rest — secrets never appear in plaintext on disk'
     indexers: [{ name: 'geek', url: 'http://127.0.0.1:1/api', apikey: 'super-secret-api-key' }],
     providers: [{ host: '127.0.0.1', port: nntpPort, tls: false, user: 'u', pass: 'super-secret-pass', connections: 4 }],
   }, admin);
-  assert.strictEqual(r.status, 200);
+  assert.strictEqual(r.status, 200, JSON.stringify(r.json));
 
   const raw = fs.readFileSync(path.join(process.env.TRIBOON_DATA, 'settings.json'), 'utf8');
   for (const secret of ['super-secret-tmdb-key', 'super-secret-api-key', 'super-secret-pass']) {
@@ -3185,10 +3272,10 @@ test('streaming: HTTP range reads use startup/seek lanes and keep completed rang
     'aborted VOD reads should not end a short body under the original content-length');
   assert.match(vfsCode, /cancelReadAhead\(\) \{[\s\S]+this\.readAheadEpoch\+\+;[\s\S]+\}/,
     'virtual files should expose a safe read-ahead cancel hook');
-  assert.match(vfsCode, /async mount\(priority = 'startup'\)[\s\S]+this\._fetchSegment\(0, priority \|\| 'startup'\)/,
-    'mount should fetch the first segment through the startup lane so play start cannot queue behind read-ahead');
-  assert.match(vfsCode, /async readAt\(start, len, opts = \{\}\)[\s\S]+const priority = opts\.priority \|\| 'startup';[\s\S]+this\._fetchSegment\(first \+ k, priority\)/,
-    'header/random access reads used during mount should also stay on the startup lane');
+  assert.match(vfsCode, /async mount\(priority = 'startup', opts = \{\}\)[\s\S]+const signal = opts\.signal \|\| this\.mountSignal \|\| null;[\s\S]+this\._fetchSegment\(0, priority \|\| 'startup', \{ signal \}\)/,
+    'mount should use the startup lane and propagate cancellation so play start cannot strand BODY work');
+  assert.match(vfsCode, /async readAt\(start, len, opts = \{\}\)[\s\S]+const priority = opts\.priority \|\| 'startup';[\s\S]+this\.mount\(priority, \{ signal \}\);[\s\S]+this\._fetchSegment\(first \+ k, priority, \{ signal \}\)/,
+    'header/random access reads should stay on startup and propagate mount cancellation');
   assert.match(vfsCode, /async \*read\(start, end, opts = \{\}\) \{[\s\S]+const priority = opts\.priority \|\| 'playback';[\s\S]+let activePriority = priority;[\s\S]+priority !== 'background' && priority !== 'health' && readAheadEpoch === this\.readAheadEpoch[\s\S]+this\._fetchSegment\(segIdx, activePriority, \{ signal \}\)[\s\S]+activePriority = 'playback'/,
     'virtual file reads should pass caller priority into the first real article fetch, return to playback, and keep background readers from scheduling read-ahead');
 });

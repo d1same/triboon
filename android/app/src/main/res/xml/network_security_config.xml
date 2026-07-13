@@ -1,9 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<network-security-config>
-    <!-- Triboon is self-hosted and IPTV providers commonly remain HTTP-only.
-         The setup flow rejects public http:// server addresses; this config keeps
-         local/private server HTTP and provider HTTP intentional instead of implicit. -->
-    <base-config cleartextTrafficPermitted="true">
+<network-security-config xmlns:tools="http://schemas.android.com/tools">
+    <!-- Triboon is self-hosted and IPTV providers commonly remain HTTP-only. Android's
+         network-security schema cannot express private CIDR ranges, so the setup flow warns and
+         requires a second confirmation for public HTTP server URLs. This narrow lint exception is
+         intentional; HTTPS remains the documented requirement outside a trusted LAN. -->
+    <base-config
+        cleartextTrafficPermitted="true"
+        tools:ignore="InsecureBaseConfiguration">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>

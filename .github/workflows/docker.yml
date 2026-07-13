@@ -7,25 +7,29 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
-      tag:
-        description: "Existing vX.Y.Z tag to build + attach the APK/Windows installers to (leave blank for a native-client experiment build)"
-        required: false
       native_client:
         description: "Build the experimental libmpv native Windows client (artifact only, does not touch releases)"
         type: boolean
         default: false
 
+# A newer main push supersedes an older latest-image build. Release tags instead serialize and
+# remain retryable so one immutable version can never race itself or be cancelled halfway through.
+concurrency:
+  group: triboon-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
+
 permissions:
   contents: read
-  packages: write
 
 jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
       # ffmpeg unlocks the remux/transcode tests (they self-skip without it).
@@ -33,28 +37,102 @@ jobs:
       # Release gate: engine/archive/player/IPTV/subtitle/security/library coverage.
       - run: npm test
 
-  docker:
-    needs: test
-    if: github.event_name == 'push'
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+      - name: Install exact Android 36.1 SDK inputs
+        run: |
+          sdkmanager "platforms;android-36.1" "build-tools;36.1.0"
+          test -d "$ANDROID_HOME/platforms/android-36.1" \
+            || { echo "Android 36.1 platform was not installed"; exit 1; }
+          test -x "$ANDROID_HOME/build-tools/36.1.0/aapt" \
+            || { echo "Android build-tools 36.1.0 were not installed"; exit 1; }
+      - name: Android lint, native tests, and universal debug APK
+        run: |
+          chmod +x android/gradlew
+          android/gradlew -p android lintDebug testDebugUnitTest assembleDebug --console=plain
+
+  release-preflight:
+    needs: [test, android]
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Verify exact version tag and main-branch provenance
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          test "$TAG" = "v$version" || { echo "tag $TAG does not match package v$version"; exit 1; }
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" \
+            || { echo "release tag must point at the current origin/main commit"; exit 1; }
+          test "$(git rev-parse "$TAG^{commit}")" = "$GITHUB_SHA" \
+            || { echo "release tag does not resolve to the workflow commit"; exit 1; }
+          node --test test/release-contract.test.js
+
+  docker-check:
+    needs: [test, android]
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  docker-main:
+    needs: [test, android]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Revalidate current main before publishing the latest image
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse origin/main)" = "$GITHUB_SHA" \
+            || { echo "main advanced while tests ran; refusing to replace latest with a stale image"; exit 1; }
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=semver,pattern={{version}}
+            type=raw,value=latest
             type=sha
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -64,30 +142,27 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # On a vX.Y.Z tag (or manual run), build the SIGNED release APK and attach it to the
-  # GitHub release under the TV + mobile names + the stable "latest" aliases, so the in-app
-  # "Update Android TV" always resolves to the newest build. Signing comes from repo secrets
-  # (TRIBOON_RELEASE_*). If this job ever fails, the local fallback is: npm run release:apk -- -Release.
+  # Tags build immutable artifacts only. One final publisher assembles every required asset into a
+  # draft and publishes once, so parallel jobs can never expose a partial release.
   release-apk:
-    needs: test
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '')
+    needs: [test, android, release-preflight]
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    environment: release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref_name }}
-      - uses: actions/setup-java@v4
+          persist-credentials: false
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
       - name: Decode release keystore
-        # tr strips any CR/LF/spaces the secret may carry (e.g. from a CRLF host) so base64 -d
-        # never sees invalid input; then sanity-check it's a real keystore (PK zip magic).
+        env:
+          KEYSTORE_B64: ${{ secrets.TRIBOON_RELEASE_KEYSTORE_B64 }}
         run: |
-          echo "${{ secrets.TRIBOON_RELEASE_KEYSTORE_B64 }}" | tr -d '[:space:]' | base64 -d > "${{ runner.temp }}/triboon-release.jks"
+          printf '%s' "$KEYSTORE_B64" | tr -d '[:space:]' | base64 -d > "${{ runner.temp }}/triboon-release.jks"
           test -s "${{ runner.temp }}/triboon-release.jks" || { echo "keystore decode produced an empty file"; exit 1; }
       - name: Build signed release APK
         env:
@@ -99,47 +174,54 @@ jobs:
           cd android
           chmod +x gradlew
           ./gradlew assembleRelease --console=plain
-      - name: Attach APKs to the release
+      - name: Verify APK signature and embedded version
         env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          TAG: ${{ github.ref_name }}
+          EXPECTED_CERT_SHA256: c0b1e2d90b443b07fe4ec4001496539aeb810d2bb9bba9a5f1d8781aa7e28d42
+        run: |
+          apk=android/app/build/outputs/apk/release/app-release.apk
+          apksigner=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)
+          aapt=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)
+          test -x "$apksigner" || { echo "apksigner not found"; exit 1; }
+          test -x "$aapt" || { echo "aapt not found"; exit 1; }
+          certs=$("$apksigner" verify --verbose --print-certs "$apk")
+          printf '%s\n' "$certs"
+          printf '%s\n' "$certs" | grep -Fi "certificate SHA-256 digest: $EXPECTED_CERT_SHA256"
+          version=${TAG#v}
+          "$aapt" dump badging "$apk" | grep -F "versionName='$version'"
+      - name: Stage universal APK assets
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
           apk=android/app/build/outputs/apk/release/app-release.apk
           mkdir -p dist
-          # One universal APK for TV + phone. The legacy triboon-tv/mobile names were retired in the
-          # v1.7.67→.68 migration once every device ran a build whose updater accepts triboon.apk.
           cp "$apk" "dist/triboon-${TAG}.apk"
           cp "$apk" dist/triboon.apk
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/*.apk --clobber
-          else
-            gh release create "$TAG" dist/*.apk --title "Triboon $TAG" --generate-notes --latest
-          fi
+          cmp -s "dist/triboon-${TAG}.apk" dist/triboon.apk
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-apk
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 2
 
-  # On a vX.Y.Z tag (or manual run), build the Tauri "PX8" native Windows client and attach its
-  # installer to the GitHub release. This is built in CI on purpose: the dev box runs Windows Smart
-  # App Control (Enforce), which blocks the unsigned cargo build-script executables a Tauri build
-  # generates. GitHub's windows runners have no such policy (and ship MSVC + Rust), so the build is
-  # clean and reproducible here. Uploads a versioned name plus a stable alias so
-  # /releases/latest/download/Triboon-Windows-Client.exe always resolves to the newest client.
-  release-windows-client:
+  # The PX8 shell is still a preview (web playback; its native bridge is not complete). A manual
+  # dispatch may build an artifact for QA, but release tags never advertise it as a stable client.
+  windows-client-preview:
     needs: test
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '')
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.native_client != 'true'
     runs-on: windows-latest
     timeout-minutes: 40
-    permissions:
-      contents: write
     steps:
-      # Build from the triggering ref: on a vX.Y.Z tag that IS the tag (tags are cut from main, so
-      # they contain clients/windows-px8); on manual dispatch it's the selected branch (main). Do NOT
-      # pin to an input tag — old tags predate clients/windows-px8 and the checkout would lack the dir.
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
       # windows-latest ships MSVC (VS 2022 C++ tools) + Rust, but pin the toolchain for determinism.
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           workspaces: clients/windows-px8/src-tauri
       - name: Install Tauri CLI (prebuilt, no source compile)
@@ -158,71 +240,143 @@ jobs:
           cp "$setup" dist/Triboon-Windows-Client.exe
       # Always publish a downloadable build artifact — lets a manual dispatch produce a test .exe
       # without attaching to (and misrepresenting) an existing release.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: Triboon-Windows-Client
+          name: Triboon-Windows-Client-preview
           path: dist/Triboon-Windows-Client.exe
-      # On a real vX.Y.Z tag, ALSO attach to that release: versioned name + stable "latest" alias so
-      # /releases/latest/download/Triboon-Windows-Client.exe always resolves to the newest client.
-      - name: Attach installer to the release
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          cp dist/Triboon-Windows-Client.exe "dist/Triboon-Windows-Client-${TAG}.exe"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/Triboon-Windows-Client*.exe --clobber
-          else
-            gh release create "$TAG" dist/Triboon-Windows-Client*.exe --title "Triboon $TAG" --generate-notes --latest
-          fi
 
-  # On a vX.Y.Z tag (or manual run), build the one-click Windows SERVER installer (installer/windows/
-  # build-installer.ps1: bundles Node 24 + ffmpeg + yt-dlp + alass, hash-verified, and compiles with
-  # Inno Setup) and attach it to the release. Same stable-alias contract as the APK + client, so
-  # /releases/latest/download/Triboon-Windows-Server.exe always resolves to the newest server build.
+  # Build the one-click Windows server installer as an immutable workflow artifact. Publishing is
+  # owned by publish-release below after every required job succeeds.
   release-windows-server:
-    needs: test
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '')
+    needs: [test, android, release-preflight]
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
     timeout-minutes: 40
-    permissions:
-      contents: write
     steps:
-      - uses: actions/checkout@v4
-      # Inno Setup provides ISCC.exe (the script auto-detects it under Program Files). Chocolatey is
-      # preinstalled on the runner; install is idempotent if the image already ships it.
-      - name: Ensure Inno Setup
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      # Install the exact compiler recorded in dependencies.lock.json. The helper verifies the
+      # immutable release asset, its Authenticode signer, and installed compiler hash.
+      - name: Install locked Inno Setup
         shell: pwsh
-        run: choco install innosetup -y --no-progress
+        run: powershell -ExecutionPolicy Bypass -File installer/windows/install-inno.ps1
       - name: Build server installer
         shell: pwsh
         run: powershell -ExecutionPolicy Bypass -File installer/windows/build-installer.ps1
       - name: Locate installer
         shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
           setup=$(ls installer/windows/dist/Triboon-Setup-v*.exe | head -1)
           test -n "$setup" || { echo "no server installer produced"; exit 1; }
           mkdir -p dist
           cp "$setup" dist/Triboon-Windows-Server.exe
-      - uses: actions/upload-artifact@v4
+          cp "$setup" "dist/Triboon-Windows-Server-${TAG}.exe"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: Triboon-Windows-Server
-          path: dist/Triboon-Windows-Server.exe
-      - name: Attach installer to the release
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: bash
+          name: release-windows-server
+          path: dist/Triboon-Windows-Server*.exe
+          if-no-files-found: error
+          retention-days: 2
+
+  docker-release:
+    needs: [release-preflight, release-apk, release-windows-server]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Revalidate current main before publishing the immutable image
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse origin/main)" = "$GITHUB_SHA" \
+            || { echo "main advanced after release preflight; refusing to publish a stale semver image"; exit 1; }
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: type=semver,pattern={{version}}
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  publish-release:
+    needs: [release-preflight, release-apk, release-windows-server, docker-release]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+      - name: Validate the complete immutable asset set
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          test "$TAG" = "v$version"
+          test -s "release-assets/triboon-${TAG}.apk"
+          test -s release-assets/triboon.apk
+          test -s "release-assets/Triboon-Windows-Server-${TAG}.exe"
+          test -s release-assets/Triboon-Windows-Server.exe
+          cmp -s "release-assets/triboon-${TAG}.apk" release-assets/triboon.apk
+          cmp -s "release-assets/Triboon-Windows-Server-${TAG}.exe" release-assets/Triboon-Windows-Server.exe
+          mapfile -t actual < <(find release-assets -maxdepth 1 -type f -printf '%f\n' | sort)
+          expected=("Triboon-Windows-Server-${TAG}.exe" "Triboon-Windows-Server.exe" "triboon-${TAG}.apk" "triboon.apk")
+          mapfile -t expected < <(printf '%s\n' "${expected[@]}" | sort)
+          diff -u <(printf '%s\n' "${expected[@]}") <(printf '%s\n' "${actual[@]}")
+          (cd release-assets && sha256sum "Triboon-Windows-Server-${TAG}.exe" Triboon-Windows-Server.exe "triboon-${TAG}.apk" triboon.apk > SHA256SUMS.txt)
+      - name: Publish once, only after every required artifact passed
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
-          cp dist/Triboon-Windows-Server.exe "dist/Triboon-Windows-Server-${TAG}.exe"
+          git fetch --force --no-tags origin "refs/tags/$TAG:refs/tags/$TAG"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse "$TAG^{commit}")" = "$GITHUB_SHA" \
+            || { echo "remote release tag moved after preflight; refusing to publish stale artifacts"; exit 1; }
+          test "$(git rev-parse origin/main)" = "$GITHUB_SHA" \
+            || { echo "main advanced after artifacts were built; refusing to publish a stale release"; exit 1; }
+          marker="<!-- triboon-release:${TAG}:${GITHUB_SHA}:${GITHUB_RUN_ID} -->"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/Triboon-Windows-Server*.exe --clobber
-          else
-            gh release create "$TAG" dist/Triboon-Windows-Server*.exe --title "Triboon $TAG" --generate-notes --latest
+            is_draft=$(gh release view "$TAG" --json isDraft --jq .isDraft)
+            body=$(gh release view "$TAG" --json body --jq .body)
+            if [ "$is_draft" = true ] && printf '%s' "$body" | grep -Fq "$marker"; then
+              echo "Removing the incomplete CI-owned draft for this exact tag/commit before retry."
+              gh release delete "$TAG" --yes
+            else
+              echo "Release $TAG already exists and is not this workflow's recoverable draft; refusing to overwrite it."
+              exit 1
+            fi
           fi
+          gh release create "$TAG" release-assets/* --verify-tag --title "Triboon $TAG" --generate-notes --notes "$marker" --draft
+          gh release edit "$TAG" --draft=false --latest
 
   # EXPERIMENTAL native-player (libmpv) build — dispatch-only (native_client=true), artifact only, never
   # touches a release. De-risks the libmpv toolchain (M1): fetch the mpv dev bundle, make an MSVC import
@@ -234,23 +388,31 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: ilammy/msvc-dev-cmd@v1   # puts lib.exe + the MSVC toolchain env on PATH
-      - name: Fetch libmpv dev bundle (headers + libmpv-2.dll + mpv.def)
-        shell: bash
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1; puts lib.exe + MSVC on PATH
+      - name: Fetch locked libmpv dev bundle (headers + libmpv-2.dll + mpv.def)
+        shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
+          MPV_BUNDLE_FILE: mpv-dev-lgpl-x86_64-20260713-git-e5486b96d7.7z
+          MPV_BUNDLE_URL: https://github.com/zhongfly/mpv-winbuild/releases/download/2026-07-13-e5486b96d7/mpv-dev-lgpl-x86_64-20260713-git-e5486b96d7.7z
+          MPV_BUNDLE_SHA256: 1016b6029da77f96e3a2831d2c33107eee43f798374ba90f56dce45717ed7932
         run: |
-          mkdir -p libmpv && cd libmpv
-          # Auto-resolve the latest plain x86_64 dev bundle (avoids a stale pinned URL 404).
-          gh release download --repo zhongfly/mpv-winbuild --pattern 'mpv-dev-x86_64-2*.7z' --dir . \
-            || gh release download --repo shinchiro/mpv-winbuild-cmake --pattern 'mpv-dev-x86_64-2*.7z' --dir .
-          7z x -y mpv-dev-x86_64-*.7z
-          echo "==== extracted layout ===="; ls -R | head -60
+          New-Item -ItemType Directory -Force -Path libmpv | Out-Null
+          $bundle = Join-Path (Resolve-Path libmpv) $env:MPV_BUNDLE_FILE
+          Invoke-WebRequest -Uri $env:MPV_BUNDLE_URL -OutFile $bundle
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $bundle).Hash.ToLowerInvariant()
+          if ($actual -cne $env:MPV_BUNDLE_SHA256) {
+            throw "libmpv checksum mismatch: expected $env:MPV_BUNDLE_SHA256, got $actual"
+          }
+          & 7z x -y $bundle "-o$(Resolve-Path libmpv)"
+          if ($LASTEXITCODE -ne 0) { throw "7z failed with exit code $LASTEXITCODE" }
+          Get-ChildItem libmpv -Recurse | Select-Object -First 60 FullName,Length
       - name: Generate mpv import lib (robust to bundle layout)
         shell: pwsh
         run: |
@@ -299,7 +461,7 @@ jobs:
           mkdir -p dist
           cp "$setup" dist/Triboon-Windows-Client-native.exe
           cp libmpv/libmpv-2.dll dist/ 2>/dev/null || cp libmpv/*/libmpv-2.dll dist/ 2>/dev/null || true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: Triboon-Windows-Client-native
           path: dist/

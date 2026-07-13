@@ -6,10 +6,12 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const http = require('http');
+const zlib = require('zlib');
 const { EventEmitter } = require('events');
 const { PassThrough } = require('stream');
 const { httpJson, httpRaw, bootServer, setupAdmin } = require('./helpers');
 const { liveVideoArgs } = require('../server/transcode');
+const { getXmltvWorkerState } = require('../server/xmltv');
 
 test('iptv web: video is stream-copied for H.264, transcoded to capped H.264 otherwise', () => {
   // Browser Live TV: H.264 channels copy (fast, full quality); HEVC/MPEG-2 (browser can't decode)
@@ -87,6 +89,32 @@ test('iptv: private and loopback playlist URLs are blocked unless explicitly all
       assert.strictEqual(r.status, 400, `${iptvUrl} should be blocked`);
       assert.match(r.json.error, /private|loopback|blocked/i);
     }
+
+    const localIpv6 = [
+      'fe80::1',
+      'fe80:0000:0000:0000:0000:0000:0000:0001',
+      'FEBF::1',
+      'ff02::1',
+      'FF00:0000:0000:0000:0000:0000:0000:0001',
+      'fec0::1',
+      'FEFF:FFFF:FFFF:FFFF:FFFF:FFFF:FFFF:FFFF',
+    ];
+    for (const address of localIpv6) {
+      assert.strictEqual(srv.isPrivateIp(address), true, `${address} should be classified as non-public`);
+      const r = await httpJson(srv.port, 'POST', '/api/me/iptv/sources',
+        { name: 'IPv6 local', iptvMode: 'm3u', iptvUrl: `http://[${address}]/list.m3u` }, admin);
+      assert.strictEqual(r.status, 400, `${address} should be blocked from IPTV fetches`);
+      assert.match(r.json.error, /private|loopback|blocked/i);
+    }
+
+    for (const address of [
+      '2001:4860:4860::8888',
+      '2001:4860:4860:0000:0000:0000:0000:8888',
+      '2606:4700:4700:0:0:0:0:1111',
+      '2620:FE::FE',
+    ]) {
+      assert.strictEqual(srv.isPrivateIp(address), false, `${address} is a public IPv6 control`);
+    }
   } finally {
     await srv.shutdown();
   }
@@ -150,6 +178,254 @@ http://upstream.example/cache-news.m3u8
   }
 });
 
+test('iptv: one cold guide fanout downloads and parses a source XMLTV only once', async () => {
+  const pad = (n) => String(n).padStart(2, '0');
+  const stamp = (d) => `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00 +0000`;
+  const t0 = new Date(Date.now() - 10 * 60000);
+  const t1 = new Date(Date.now() + 50 * 60000);
+  let guideHits = 0;
+  const channelRows = Array.from({ length: 8 }, (_, i) =>
+    `#EXTINF:-1 tvg-id="fan.${i}" group-title="News",Fan ${i}\nhttp://stream.example/fan-${i}.ts`).join('\n');
+  const programmeRows = Array.from({ length: 8 }, (_, i) =>
+    `<programme start="${stamp(t0)}" stop="${stamp(t1)}" channel="fan.${i}"><title>Fan Show ${i}</title></programme>`).join('');
+  const upstream = http.createServer((req, res) => {
+    res.writeHead(200);
+    if (req.url === '/guide.xml') {
+      guideHits++;
+      return setTimeout(() => res.end(`<?xml version="1.0"?><tv>${programmeRows}</tv>`), 180);
+    }
+    res.end(`#EXTM3U\n${channelRows}\n`);
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${upstream.address().port}`;
+  const srv = await bootServer({ NNTP_HOST: null, TMDB_BASE: null });
+  try {
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/settings',
+      { iptvMode: 'm3u', iptvUrl: `${base}/list.m3u`, epgUrl: `${base}/guide.xml` }, admin);
+    const channels = (await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin)).json.channels;
+    assert.strictEqual(channels.length, 8);
+    const chs = channels.map((channel) => channel.idx).join(',');
+    const cids = channels.map((channel) => encodeURIComponent(channel.id)).join(',');
+    const guide = await httpJson(srv.port, 'GET', `/api/iptv/guide?chs=${chs}&cids=${cids}`, null, admin);
+    assert.strictEqual(guide.status, 200);
+    assert.strictEqual(guide.json.channels.length, 8);
+    assert.strictEqual(guideHits, 1,
+      'same-source channel fanout must join one large XMLTV download/worker instead of multiplying it');
+  } finally {
+    await srv.shutdown();
+    upstream.close();
+  }
+});
+
+test('iptv: a headerless gzip XMLTV guide is decoded and served', async () => {
+  const pad = (n) => String(n).padStart(2, '0');
+  const stamp = (d) => `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00 +0000`;
+  const t0 = new Date(Date.now() - 10 * 60000);
+  const t1 = new Date(Date.now() + 50 * 60000);
+  let guideHits = 0;
+  const m3u = '#EXTM3U\n#EXTINF:-1 tvg-id="gzip.news",Gzip News\nhttp://stream.example/gzip.ts\n';
+  const guideBody = zlib.gzipSync(Buffer.from(`<?xml version="1.0"?><tv>
+<programme start="${stamp(t0)}" stop="${stamp(t1)}" channel="gzip.news"><title>Compressed News</title></programme>
+</tv>`));
+  const upstream = http.createServer((req, res) => {
+    if (req.url === '/guide.xml.gz') {
+      guideHits++;
+      res.writeHead(200, { 'Content-Type': 'application/xml' }); // intentionally no Content-Encoding
+      return res.end(guideBody);
+    }
+    res.writeHead(200, { 'Content-Type': 'application/x-mpegURL' });
+    res.end(m3u);
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${upstream.address().port}`;
+  const srv = await bootServer({ NNTP_HOST: null, TMDB_BASE: null });
+  try {
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/settings',
+      { iptvMode: 'm3u', iptvUrl: `${base}/list.m3u`, epgUrl: `${base}/guide.xml.gz` }, admin);
+    const channels = (await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin)).json.channels;
+    const guide = await httpJson(srv.port, 'GET', `/api/iptv/guide?chs=${channels[0].idx}&cids=${encodeURIComponent(channels[0].id)}`, null, admin);
+    assert.strictEqual(guide.status, 200);
+    assert.strictEqual(guide.json.channels[0].programmes[0].title, 'Compressed News');
+    assert.strictEqual(guideHits, 1);
+  } finally {
+    await srv.shutdown();
+    upstream.close();
+  }
+});
+
+test('iptv: a non-2xx XMLTV response fails the refresh and is never cached as an empty guide', async () => {
+  let guideHits = 0;
+  const m3u = '#EXTM3U\n#EXTINF:-1 tvg-id="auth.news",Auth News\nhttp://stream.example/auth.ts\n';
+  const upstream = http.createServer((req, res) => {
+    if (req.url === '/guide.xml') {
+      guideHits++;
+      res.writeHead(401, { 'Content-Type': 'application/xml' });
+      return res.end('<error>bad credentials</error>');
+    }
+    res.end(m3u);
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${upstream.address().port}`;
+  const srv = await bootServer({ NNTP_HOST: null, TMDB_BASE: null });
+  try {
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/settings',
+      { iptvMode: 'm3u', iptvUrl: `${base}/list.m3u`, epgUrl: `${base}/guide.xml` }, admin);
+    const result = await srv.warmIptvCaches('non-2xx-guide', { force: true });
+    assert.strictEqual(result.xmltv, false);
+    assert.strictEqual(guideHits, 1);
+    assert.ok(result.sourceErrors.some((entry) => /XMLTV guide HTTP 401/.test(entry.error)),
+      'the operator sees the upstream HTTP failure instead of a false successful empty cache');
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(srv.store.read('epgcaches', {}), 'default'), false);
+  } finally {
+    await srv.shutdown();
+    upstream.close();
+  }
+});
+
+test('iptv: deleting a source cancels its in-flight XMLTV and cannot resurrect its disk cache', async () => {
+  const pad = (n) => String(n).padStart(2, '0');
+  const stamp = (d) => `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00 +0000`;
+  const t0 = new Date(Date.now() - 10 * 60000);
+  const t1 = new Date(Date.now() + 50 * 60000);
+  const m3u = '#EXTM3U\n#EXTINF:-1 tvg-id="delete.news",Delete News\nhttp://stream.example/delete.ts\n';
+  const xml = `<tv><programme start="${stamp(t0)}" stop="${stamp(t1)}" channel="delete.news"><title>Deleted Guide</title></programme></tv>`;
+  let releaseGuide;
+  const guideGate = new Promise((resolve) => { releaseGuide = resolve; });
+  let guideStarted;
+  const started = new Promise((resolve) => { guideStarted = resolve; });
+  const upstream = http.createServer(async (req, res) => {
+    if (req.url === '/guide.xml') {
+      guideStarted();
+      await guideGate;
+      return res.end(xml);
+    }
+    res.end(m3u);
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${upstream.address().port}`;
+  const srv = await bootServer({ NNTP_HOST: null, TMDB_BASE: null });
+  try {
+    const admin = await setupAdmin(srv.port);
+    const created = await httpJson(srv.port, 'POST', '/api/iptv/sources',
+      { name: 'Delete race', iptvMode: 'm3u', iptvUrl: `${base}/list.m3u`, epgUrl: `${base}/guide.xml` }, admin);
+    const sourceId = created.json.source.id;
+    const warm = srv.warmIptvCaches('delete-race', { force: true });
+    await started;
+    const removed = await httpJson(srv.port, 'DELETE', `/api/iptv/sources/${sourceId}`, null, admin);
+    assert.strictEqual(removed.status, 200);
+    releaseGuide();
+    await warm;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(srv.store.read('epgcaches', {}), sourceId), false,
+      'a late network/worker completion cannot repopulate a deleted source cache');
+  } finally {
+    releaseGuide();
+    await srv.shutdown();
+    upstream.close();
+  }
+});
+
+test('iptv: editing a source invalidates an old in-flight XMLTV generation before cache publish', async () => {
+  const pad = (n) => String(n).padStart(2, '0');
+  const stamp = (d) => `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00 +0000`;
+  const t0 = new Date(Date.now() - 10 * 60000);
+  const t1 = new Date(Date.now() + 50 * 60000);
+  const m3u = '#EXTM3U\n#EXTINF:-1 tvg-id="edit.news",Edit News\nhttp://stream.example/edit.ts\n';
+  const oldXml = `<tv><programme start="${stamp(t0)}" stop="${stamp(t1)}" channel="edit.news"><title>Stale Guide</title></programme></tv>`;
+  const newXml = `<tv><programme start="${stamp(t0)}" stop="${stamp(t1)}" channel="edit.news"><title>Current Guide</title></programme></tv>`;
+  let releaseOldGuide;
+  const oldGuideGate = new Promise((resolve) => { releaseOldGuide = resolve; });
+  let oldGuideStarted;
+  const started = new Promise((resolve) => { oldGuideStarted = resolve; });
+  const upstream = http.createServer(async (req, res) => {
+    if (req.url === '/old-guide.xml') {
+      oldGuideStarted();
+      await oldGuideGate;
+      return res.end(oldXml);
+    }
+    if (req.url === '/new-guide.xml') return res.end(newXml);
+    res.end(m3u);
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${upstream.address().port}`;
+  const srv = await bootServer({ NNTP_HOST: null, TMDB_BASE: null });
+  try {
+    const admin = await setupAdmin(srv.port);
+    const created = await httpJson(srv.port, 'POST', '/api/iptv/sources',
+      { name: 'Edit race', iptvMode: 'm3u', iptvUrl: `${base}/list.m3u`, epgUrl: `${base}/old-guide.xml` }, admin);
+    const sourceId = created.json.source.id;
+    const staleWarm = srv.warmIptvCaches('edit-race-old', { force: true });
+    await started;
+    const edited = await httpJson(srv.port, 'PATCH', `/api/iptv/sources/${sourceId}`,
+      { epgUrl: `${base}/new-guide.xml` }, admin);
+    assert.strictEqual(edited.status, 200);
+    releaseOldGuide();
+    await staleWarm;
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(srv.store.read('epgcaches', {}), sourceId), false,
+      'the old generation cannot publish after source edit cleanup');
+
+    const currentWarm = await srv.warmIptvCaches('edit-race-current', { force: true });
+    assert.strictEqual(currentWarm.xmltv, true);
+    const cached = srv.store.read('epgcaches', {})[sourceId];
+    assert.match(JSON.stringify(cached), /Current Guide/);
+    assert.doesNotMatch(JSON.stringify(cached), /Stale Guide/);
+  } finally {
+    releaseOldGuide();
+    await srv.shutdown();
+    upstream.close();
+  }
+});
+
+test('server shutdown aborts in-flight XMLTV downloads and prevents post-shutdown workers or writes', async () => {
+  const m3u = '#EXTM3U\n#EXTINF:-1 tvg-id="shutdown.news",Shutdown News\nhttp://stream.example/shutdown.ts\n';
+  let releaseGuide;
+  const guideGate = new Promise((resolve) => { releaseGuide = resolve; });
+  let guideStarted;
+  const started = new Promise((resolve) => { guideStarted = resolve; });
+  const upstream = http.createServer(async (req, res) => {
+    if (req.url === '/guide.xml') {
+      guideStarted();
+      await guideGate;
+      return res.end('<tv></tv>');
+    }
+    res.end(m3u);
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${upstream.address().port}`;
+  let srv = await bootServer({ NNTP_HOST: null, TMDB_BASE: null });
+  try {
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/settings',
+      { iptvMode: 'm3u', iptvUrl: `${base}/list.m3u`, epgUrl: `${base}/guide.xml` }, admin);
+    const warm = srv.warmIptvCaches('shutdown-race', { force: true });
+    await started;
+    let timeout;
+    const before = Date.now();
+    try {
+      await Promise.race([
+        srv.shutdown(),
+        new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('shutdown waited on XMLTV deadline')), 2000); }),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+    assert.ok(Date.now() - before < 1800, 'shutdown aborts the guide request instead of waiting for its 90s deadline');
+    await warm;
+    releaseGuide();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(srv.store.read('epgcaches', {}), 'default'), false);
+    assert.deepStrictEqual(getXmltvWorkerState(), { active: 0, queued: 0, limit: 2, shuttingDown: false });
+    srv = null;
+  } finally {
+    releaseGuide();
+    if (srv) await srv.shutdown();
+    upstream.close();
+  }
+});
+
 test('iptv: guide self-heals a drifted channel index by resolving the stable id', async () => {
   const pad = (n) => String(n).padStart(2, '0');
   const stamp = (d) => `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00 +0000`;
@@ -189,10 +465,17 @@ http://upstream.example/sports-two.m3u8
     assert.strictEqual(drifted.status, 200, 'a resolvable stable id must not 409');
     assert.strictEqual(drifted.json.channels[0].idx, requestedIdx, 'programmes echo back under the requested idx');
     assert.strictEqual(drifted.json.channels[0].programmes[0].title, 'Morning News', 'resolved by channel 0 stable id');
+    const driftedNowNext = await httpJson(srv.port, 'GET',
+      `/api/iptv/epg/${requestedIdx}?cid=${encodeURIComponent(chans[0].id)}`, null, admin);
+    assert.strictEqual(driftedNowNext.status, 200, 'now/next must also self-heal a resolvable drifted index');
+    assert.strictEqual(driftedNowNext.json.now.title, 'Morning News', 'now/next resolves the requested stable channel id');
     // A cid that matches NO channel is a genuine list change and must still 409.
     const gone = await httpJson(srv.port, 'GET',
       `/api/iptv/guide?chs=${requestedIdx}&cids=this-channel-is-gone`, null, admin);
     assert.strictEqual(gone.status, 409, 'an unresolvable stable id still signals reopen Live TV');
+    const goneNowNext = await httpJson(srv.port, 'GET',
+      `/api/iptv/epg/${requestedIdx}?cid=this-channel-is-gone`, null, admin);
+    assert.strictEqual(goneNowNext.status, 409, 'now/next also rejects an unresolvable stable id');
   } finally {
     await srv.shutdown();
     upstream.close();

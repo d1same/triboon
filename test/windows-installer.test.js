@@ -16,6 +16,9 @@ const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
 const xml = read('installer/windows/triboon-service.xml');
 const iss = read('installer/windows/Triboon.iss');
 const ps1 = read('installer/windows/build-installer.ps1');
+const innoBootstrap = read('installer/windows/install-inno.ps1');
+const workflow = read('.github/workflows/docker.yml');
+const dependencyLock = JSON.parse(read('installer/windows/dependencies.lock.json'));
 const transcode = read('server/transcode.js');
 const ytmusic = read('server/ytmusic.js');
 
@@ -98,27 +101,82 @@ test('installer registers the service with exit-code checks + a marked-for-delet
   assert.match(iss, /1060/);                        // poll until the old service is truly gone (not just marked)
 });
 
-test('installer ACL can never lock the service out of its own data (the real data-loss root cause)', () => {
-  assert.match(iss, /icacls/);
-  // ENABLE inheritance (recovers a dir a previous build stripped, and re-inherits SYSTEM from ProgramData)
-  // + additively grant SYSTEM + Administrators Full. This can never orphan a locked file.
-  assert.match(iss, /\/inheritance:e/);
-  assert.match(iss, /S-1-5-18/);                    // SYSTEM (the service account) granted Full
-  assert.match(iss, /S-1-5-32-544/);                // Administrators granted Full
-  // MUST NOT strip inheritance: /inheritance:r orphaned secret.json when a file was momentarily locked
-  // during the recursive apply → the service got EPERM → the repeated "settings/users wiped" reports.
-  assert.ok(!/\/inheritance:r/.test(iss),
-    'must NOT use /inheritance:r — stripping inheritance orphaned secret.json → EPERM → data loss');
+test('installer ACL protects secrets without recursively orphaning the LocalSystem service', () => {
+  assert.match(iss, /procedure RunIcacls/);
+  assert.match(iss, /if rc <> 0 then\s+RaiseException/,
+    'every ACL phase is checked before the service is registered');
+
+  const recover = iss.indexOf('/inheritance:e /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /T /C /Q');
+  const rootReset = iss.indexOf(`" /reset /Q', 'reset the Triboon root ACL'`);
+  const rootGrant = iss.indexOf('" /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /Q');
+  const rootProtect = iss.indexOf(`" /inheritance:r /Q', 'remove inherited local-user access from the Triboon root'`);
+  const childReset = iss.indexOf(`" /reset /T /C /Q', 'reset child ACLs from the protected root'`);
+  const childEnable = iss.indexOf(`" /inheritance:e /T /C /Q', 're-enable child inheritance'`);
+
+  for (const [name, index] of Object.entries({ recover, rootReset, rootGrant, rootProtect, childReset, childEnable })) {
+    assert.ok(index >= 0, `ACL phase is present: ${name}`);
+  }
+  assert.ok(recover < rootReset && rootReset < rootGrant && rootGrant < rootProtect &&
+    rootProtect < childReset && childReset < childEnable,
+    'ACL recovery happens before root protection, then children inherit from the protected root');
+  assert.doesNotMatch(iss, /RunIcacls\([^\r\n]*\/inheritance:r[^\r\n]*\/T/,
+    'inheritance removal is root-only; recursive removal can orphan locked files');
+  assert.match(iss, /children := dir \+ '\\\*'/,
+    'reset and inheritance-enable operations target children, not the protected root');
 });
 
-test('build script integrity-verifies every bundled binary (not just Node)', () => {
+test('Windows build dependencies use exact HTTPS URLs and reviewed SHA-256 locks', () => {
+  assert.strictEqual(dependencyLock.schemaVersion, 1);
+  const names = ['node', 'winsw', 'ffmpeg', 'ytDlp', 'alass', 'innoSetup'];
+  for (const name of names) {
+    const artifact = dependencyLock.artifacts[name];
+    assert.ok(artifact, `${name} is present in the lock`);
+    assert.match(artifact.version, /\S+/, `${name} has an exact version`);
+    assert.match(artifact.url, /^https:\/\//, `${name} uses HTTPS`);
+    assert.doesNotMatch(artifact.url, /\/latest(?:\/|$)/i, `${name} does not use a moving latest URL`);
+    assert.match(artifact.sha256, /^[0-9a-f]{64}$/, `${name} has a SHA-256`);
+    assert.strictEqual(path.basename(artifact.fileName), artifact.fileName, `${name} cache name is a safe leaf`);
+  }
+  assert.match(dependencyLock.artifacts.node.version, /^v24\./, 'the bundled Node runtime stays on Node 24 LTS');
+  assert.match(dependencyLock.artifacts.node.url, /\/dist\/v24\.\d+\.\d+\/node-v24\.\d+\.\d+-win-x64\.zip$/);
+  assert.match(dependencyLock.artifacts.ffmpeg.url, /\/packages\/ffmpeg-\d+\.\d+(?:\.\d+)?-essentials_build\.zip$/);
+  assert.match(dependencyLock.artifacts.ytDlp.url, /\/releases\/download\/\d{4}\.\d{2}\.\d{2}\/yt-dlp\.exe$/);
+  assert.match(dependencyLock.artifacts.innoSetup.compilerSha256, /^[0-9a-f]{64}$/);
+  assert.match(dependencyLock.artifacts.innoSetup.url,
+    /github\.com\/jrsoftware\/issrc\/releases\/download\/is-6_7_3\/innosetup-6\.7\.3\.exe$/);
+});
+
+test('build script consumes only the dependency lock and verifies every bundled binary', () => {
+  assert.match(ps1, /dependencies\.lock\.json/);
   assert.match(ps1, /function Assert-Sha256/);
-  // WinSW + alass are pinned to immutable-release hashes; a changed binary must break the build.
-  assert.ok(ps1.includes('05b82d46ad331cc16bdc00de5c6332c1ef818df8ceefcd49c726553209b3a0da'), 'WinSW hash must be pinned');
-  assert.ok(ps1.includes('e81a72f97f592910e909a2352d6b8c0de0801c51ac1383bad4ebf3f2ecdd2fd8'), 'alass hash must be pinned');
-  // ffmpeg + yt-dlp verified against provider checksums fetched fresh.
-  assert.match(ps1, /\.sha256/);
-  assert.match(ps1, /SHA2-256SUMS/);
+  assert.match(ps1, /Get-LockedArtifact 'node'/);
+  assert.match(ps1, /Get-LockedArtifact 'ffmpeg'/);
+  assert.match(ps1, /Get-LockedArtifact 'ytDlp'/);
+  assert.doesNotMatch(ps1, /dist\/index\.json|releases\/latest|SHA2-256SUMS|Get-Text/,
+    'builds never resolve a version or checksum from the network');
+  assert.match(ps1, /\.partial/);
+  assert.match(ps1, /Assert-Sha256 \$partial \$expectedHash/);
+  assert.match(ps1, /Move-Item -LiteralPath \$partial -Destination \$outFile/,
+    'only verified partial downloads enter the cache');
+  assert.match(ps1, /windows-dependencies\.lock\.json/,
+    'the exact dependency provenance ships with the installer');
   // The alass archive ships alass-cli.exe (there is no alass.exe) - the glob must match it.
   assert.match(ps1, /alass-cli\.exe/);
+  assert.match(ps1, /throw 'alass-cli\.exe not found/,
+    'a requested sidecar cannot silently disappear from a release build');
+});
+
+test('release CI installs and validates the locked Inno Setup compiler without Chocolatey resolution', () => {
+  assert.match(innoBootstrap, /dependencies\.lock\.json/);
+  assert.match(innoBootstrap, /Assert-Sha256 \$partial \$inno\.sha256/);
+  assert.match(innoBootstrap, /Get-AuthenticodeSignature -LiteralPath \$installer/);
+  assert.ok(innoBootstrap.indexOf('Get-AuthenticodeSignature') < innoBootstrap.indexOf('Start-Process'),
+    'the installer signature is verified before execution');
+  assert.match(innoBootstrap, /Assert-Sha256 \$compiler \$inno\.compilerSha256/,
+    'the installed compiler is re-verified');
+  assert.match(workflow, /Install locked Inno Setup[\s\S]+installer\/windows\/install-inno\.ps1/);
+  assert.doesNotMatch(workflow, /choco install innosetup/i,
+    'release CI does not ask a package manager to resolve Inno Setup');
+  assert.match(ps1, /ISCC version mismatch/,
+    'the packager refuses a compiler version different from the lock');
 });

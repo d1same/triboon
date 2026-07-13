@@ -7,7 +7,7 @@ package app.triboon.tv;
 //
 // It does NOT play audio itself — the WebView does. The service mirrors the web player's state
 // (pushed from MainActivity.musicSession()) into a MediaSessionCompat + MediaStyle notification,
-// and forwards transport button presses back to the web player via MainActivity.
+// and forwards transport button presses to active native VOD or WebView audio via MainActivity.
 
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -26,14 +26,17 @@ import android.support.v4.media.MediaMetadataCompat;
 import android.support.v4.media.session.MediaSessionCompat;
 import android.support.v4.media.session.PlaybackStateCompat;
 import android.util.Log;
+import android.view.KeyEvent;
 
 import androidx.core.app.NotificationCompat;
 import androidx.media.app.NotificationCompat.MediaStyle;
 import androidx.media.session.MediaButtonReceiver;
+import androidx.media3.common.util.UnstableApi;
 
 import java.net.HttpURLConnection;
 import java.net.URL;
 
+@UnstableApi
 public class MusicService extends Service {
     private static final String TAG = "TriboonMusic";
     static final String CHANNEL_ID = "triboon_music";
@@ -46,7 +49,9 @@ public class MusicService extends Service {
     private Bitmap art;
     private String lastTitle = "", lastArtist = "", lastAlbum = "";
     private boolean lastPlaying = false;
+    private boolean hasMusicSnapshot = false;
     private long lastDurationMs = 0, lastPositionMs = 0;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     @Override public IBinder onBind(Intent intent) { return null; }
 
@@ -55,23 +60,45 @@ public class MusicService extends Service {
         ensureChannel();
         session = new MediaSessionCompat(this, "TriboonMusic");
         session.setCallback(new MediaSessionCompat.Callback() {
-            @Override public void onPlay() { MainActivity.dispatchMusicTransport("play"); }
-            @Override public void onPause() { MainActivity.dispatchMusicTransport("pause"); }
-            @Override public void onSkipToNext() { MainActivity.dispatchMusicTransport("next"); }
-            @Override public void onSkipToPrevious() { MainActivity.dispatchMusicTransport("prev"); }
-            @Override public void onStop() { MainActivity.dispatchMusicTransport("stop"); }
-            @Override public void onSeekTo(long pos) { MainActivity.dispatchMusicSeek(pos); }
+            @Override public void onPlay() { MainActivity.dispatchMediaTransport("play"); }
+            @Override public void onPause() { MainActivity.dispatchMediaTransport("pause"); }
+            @Override public void onSkipToNext() { MainActivity.dispatchMediaTransport("next"); }
+            @Override public void onSkipToPrevious() { MainActivity.dispatchMediaTransport("prev"); }
+            @Override public void onFastForward() { MainActivity.dispatchMediaTransport("fast_forward"); }
+            @Override public void onRewind() { MainActivity.dispatchMediaTransport("rewind"); }
+            @Override public void onStop() { MainActivity.dispatchMediaTransport("stop"); }
+            @Override public void onSeekTo(long pos) { MainActivity.dispatchMediaSeek(pos); }
+
+            // Do not let a cold/stale PlaybackState turn a headset toggle into an unconditional
+            // Play. Translate the actual key so native VOD gets true toggle/seek semantics too.
+            @Override public boolean onMediaButtonEvent(Intent mediaButtonIntent) {
+                if (handleMediaButtonEvent(mediaButtonIntent)) return true;
+                return super.onMediaButtonEvent(mediaButtonIntent);
+            }
         });
+        // A receiver can cold-start this service before the web music bridge has sent an update.
+        // Seed the actions so controller commands are still accepted in that state.
+        applyMetadata();
+        applyState();
         session.setActive(true);
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent == null) return START_NOT_STICKY;
-        // Hardware / BT / lock-screen media buttons arrive here → route to the session callback.
-        MediaButtonReceiver.handleIntent(session, intent);
+        // Hardware / BT / lock-screen media buttons arrive here and route to the session callback.
         final String action = intent.getAction();
+        if (Intent.ACTION_MEDIA_BUTTON.equals(action)) {
+            // MediaButtonReceiver uses startForegroundService() on Android 8+, including when the
+            // active target is native VOD or there is no target. Enter foreground before dispatch
+            // so the OS deadline is always satisfied, then tear down cold transient starts.
+            if (!startMediaButtonForeground(startId)) return START_NOT_STICKY;
+            MediaButtonReceiver.handleIntent(session, intent);
+            if (!hasMusicSnapshot) finishTransientMediaButtonStart(startId);
+            return START_NOT_STICKY;
+        }
         if (ACTION_STOP.equals(action)) { stopEverything(); return START_NOT_STICKY; }
         if (ACTION_UPDATE.equals(action)) {
+            hasMusicSnapshot = true;
             lastPlaying = intent.getBooleanExtra("playing", false);
             lastTitle = orEmpty(intent.getStringExtra("title"));
             lastArtist = orEmpty(intent.getStringExtra("artist"));
@@ -94,7 +121,83 @@ public class MusicService extends Service {
         return START_NOT_STICKY;
     }
 
+    private boolean startMediaButtonForeground(int startId) {
+        try {
+            startForeground(NOTIF_ID, buildNotification());
+            return true;
+        } catch (Throwable t) {
+            Log.w(TAG, "media-button foreground start failed", t);
+            stopSelfResult(startId);
+            return false;
+        }
+    }
+
+    private void finishTransientMediaButtonStart(int startId) {
+        // Give a cold WebView music session one beat to publish ACTION_UPDATE and become a real
+        // long-lived music service. Native VOD and idle button starts have no snapshot and exit.
+        mainHandler.postDelayed(() -> {
+            if (hasMusicSnapshot) return;
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    stopForeground(Service.STOP_FOREGROUND_REMOVE);
+                } else {
+                    stopForeground(true);
+                }
+            } catch (Throwable ignored) {}
+            stopSelfResult(startId);
+        }, 750L);
+    }
+
+    @SuppressWarnings("deprecation")
+    private boolean handleMediaButtonEvent(Intent mediaButtonIntent) {
+        if (mediaButtonIntent == null) return false;
+        KeyEvent event = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                ? mediaButtonIntent.getParcelableExtra(Intent.EXTRA_KEY_EVENT, KeyEvent.class)
+                : mediaButtonIntent.getParcelableExtra(Intent.EXTRA_KEY_EVENT);
+        if (event == null) return false;
+
+        String action;
+        switch (event.getKeyCode()) {
+            case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
+            case KeyEvent.KEYCODE_HEADSETHOOK:
+                action = "toggle";
+                break;
+            case KeyEvent.KEYCODE_MEDIA_PLAY:
+                action = "play";
+                break;
+            case KeyEvent.KEYCODE_MEDIA_PAUSE:
+                action = "pause";
+                break;
+            case KeyEvent.KEYCODE_MEDIA_NEXT:
+                action = "next";
+                break;
+            case KeyEvent.KEYCODE_MEDIA_PREVIOUS:
+                action = "prev";
+                break;
+            case KeyEvent.KEYCODE_MEDIA_FAST_FORWARD:
+                action = "fast_forward";
+                break;
+            case KeyEvent.KEYCODE_MEDIA_REWIND:
+                action = "rewind";
+                break;
+            case KeyEvent.KEYCODE_MEDIA_STOP:
+                action = "stop";
+                break;
+            default:
+                return false;
+        }
+
+        if (event.getAction() == KeyEvent.ACTION_DOWN
+                && (event.getRepeatCount() == 0
+                    || "fast_forward".equals(action) || "rewind".equals(action))) {
+            MainActivity.dispatchMediaTransport(action);
+        }
+        return true;
+    }
+
     private void stopEverything() {
+        hasMusicSnapshot = false;
+        mainHandler.removeCallbacksAndMessages(null);
         try { session.setActive(false); } catch (Throwable ignored) {}
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) stopForeground(Service.STOP_FOREGROUND_REMOVE);
@@ -104,6 +207,7 @@ public class MusicService extends Service {
     }
 
     @Override public void onDestroy() {
+        mainHandler.removeCallbacksAndMessages(null);
         try { if (session != null) session.release(); } catch (Throwable ignored) {}
         super.onDestroy();
     }
@@ -122,7 +226,8 @@ public class MusicService extends Service {
         long actions = PlaybackStateCompat.ACTION_PLAY | PlaybackStateCompat.ACTION_PAUSE
             | PlaybackStateCompat.ACTION_PLAY_PAUSE | PlaybackStateCompat.ACTION_SKIP_TO_NEXT
             | PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS | PlaybackStateCompat.ACTION_STOP
-            | PlaybackStateCompat.ACTION_SEEK_TO;
+            | PlaybackStateCompat.ACTION_SEEK_TO | PlaybackStateCompat.ACTION_FAST_FORWARD
+            | PlaybackStateCompat.ACTION_REWIND;
         PlaybackStateCompat state = new PlaybackStateCompat.Builder()
             .setActions(actions)
             .setState(lastPlaying ? PlaybackStateCompat.STATE_PLAYING : PlaybackStateCompat.STATE_PAUSED,
@@ -133,8 +238,7 @@ public class MusicService extends Service {
 
     private Notification buildNotification() {
         Intent open = new Intent(this, MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        int piFlags = PendingIntent.FLAG_UPDATE_CURRENT
-            | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0);
+        int piFlags = PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE;
         PendingIntent contentPi = PendingIntent.getActivity(this, 0, open, piFlags);
 
         NotificationCompat.Builder nb = new NotificationCompat.Builder(this, CHANNEL_ID)

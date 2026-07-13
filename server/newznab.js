@@ -11,7 +11,13 @@ const https = require('https');
 // The deadline and hop budget are SHARED across redirects so a redirect chain can't reset the
 // clock or loop forever — both directly protect the press-play speed guarantee.
 function fetchUrl(url, opts = {}) {
-  const { timeoutMs = 5000, deadlineMs = 30000, headers = {}, maxBytes = 64 * 1024 * 1024 } = opts;
+  const { timeoutMs = 5000, deadlineMs = 30000, headers = {}, maxBytes = 64 * 1024 * 1024, signal = null } = opts;
+  const abortError = () => signal && signal.reason instanceof Error
+    ? signal.reason
+    : Object.assign(new Error('request aborted'), { code: 'ABORT_ERR' });
+  if (signal && signal.aborted) {
+    return Promise.reject(abortError());
+  }
   const deadlineAt = opts._deadlineAt || (Date.now() + deadlineMs);
   const hops = opts._hops || 0;
   let validated = null;
@@ -19,6 +25,7 @@ function fetchUrl(url, opts = {}) {
     .then(() => (typeof opts.validateUrl === 'function' ? opts.validateUrl(url) : null))
     .then((v) => { validated = v; })
     .then(() => new Promise((resolve, reject) => {
+    if (signal && signal.aborted) return reject(abortError());
     if (hops > 5) return reject(new Error(`too many redirects: ${url.split('?')[0]}`));
     const remaining = deadlineAt - Date.now();
     if (remaining <= 0) return reject(new Error(`deadline exceeded: ${url.split('?')[0]}`));
@@ -31,28 +38,43 @@ function fetchUrl(url, opts = {}) {
       headers: { 'User-Agent': 'Triboon/1.0', ...headers },
       ...(validated && typeof validated.lookup === 'function' ? { lookup: validated.lookup } : {}),
     };
+    let onAbort = null;
+    const cleanup = () => {
+      clearTimeout(deadline);
+      if (signal && onAbort) signal.removeEventListener('abort', onAbort);
+    };
     const req = lib.get(url, requestOptions, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        res.resume(); clearTimeout(deadline);
+        res.resume(); cleanup();
         const next = new URL(res.headers.location, url).href;
-        return fetchUrl(next, { timeoutMs, headers, maxBytes, validateUrl: opts.validateUrl, _deadlineAt: deadlineAt, _hops: hops + 1 }).then(resolve, reject);
+        return fetchUrl(next, {
+          timeoutMs, deadlineMs, headers, maxBytes, signal,
+          validateUrl: opts.validateUrl, _deadlineAt: deadlineAt, _hops: hops + 1,
+        }).then(resolve, reject);
       }
       // Response-size cap: a hostile/broken upstream must not be able to balloon memory.
       const chunks = []; let len = 0;
       res.on('data', (c) => {
         len += c.length;
-        if (len > maxBytes) { clearTimeout(deadline); req.destroy(new Error(`response too large (>${maxBytes} bytes): ${url.split('?')[0]}`)); }
+        if (len > maxBytes) { cleanup(); req.destroy(new Error(`response too large (>${maxBytes} bytes): ${url.split('?')[0]}`)); }
         else chunks.push(c);
       });
-      res.on('end', () => { clearTimeout(deadline); resolve({ status: res.statusCode, body: Buffer.concat(chunks) }); });
+      res.on('end', () => { cleanup(); resolve({ status: res.statusCode, body: Buffer.concat(chunks) }); });
     });
     const deadline = setTimeout(() => req.destroy(new Error(`deadline after ${deadlineMs}ms: ${url.split('?')[0]}`)), remaining);
     req.on('error', (e) => {
-      if (validated && typeof validated.onFailure === 'function') {
+      if (!(signal && signal.aborted) && validated && typeof validated.onFailure === 'function') {
         try { validated.onFailure(e); } catch {}
       }
-      clearTimeout(deadline); reject(e);
+      cleanup(); reject(e);
     });
+    if (signal) {
+      onAbort = () => {
+        req.destroy(abortError());
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      if (signal.aborted) onAbort();
+    }
     req.setTimeout(timeoutMs, () => {
       if (validated && typeof validated.onFailure === 'function') {
         try { validated.onFailure(new Error('timeout')); } catch {}

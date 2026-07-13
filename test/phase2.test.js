@@ -224,7 +224,7 @@ test('title verification: short titles match only releases that ARE that title',
 
 test('pipeline: a wanted episode matches a season PACK or covering RANGE (season exact), and the mount picks that episode', () => {
   const { parseWantedTitle, releaseMatches } = require('../server/pipeline');
-  const { parseNzb, pickPrimaryFile } = require('../server/nzb');
+  const { parseNzb, pickPrimaryFile, episodeInName } = require('../server/nzb');
   const w = parseWantedTitle('the boys s02e05');
   for (const good of [
     'The.Boys.S02E05.1080p.AMZN.WEB-DL.DDP5.1.H.264-FLUX',        // exact episode
@@ -252,6 +252,84 @@ test('pipeline: a wanted episode matches a season PACK or covering RANGE (season
     + q('The.Boys.S02E05.1080p.WEB-DL.mkv', 500000000) + '</nzb>');
   assert.match(pickPrimaryFile(parsed, { wantedEpisode: { s: 2, e: 5 } }).subject, /S02E05/i, 'mounts the requested episode even though E01 is larger');
   assert.match(pickPrimaryFile(parsed).subject, /S02E01/i, 'no wanted episode → largest file (movie behavior unchanged)');
+  assert.strictEqual(episodeInName('The_Boys_S02E05_1080p_WEB-DL.mkv', 2, 5), true,
+    'underscore-separated scene names still identify the requested episode');
+  assert.strictEqual(episodeInName('The_Boys_2x05_1080p_WEB-DL.mkv', 2, 5), true,
+    'underscore-separated NxMM names still identify the requested episode');
+  assert.strictEqual(episodeInName('The_Boys_S02E050_1080p_WEB-DL.mkv', 2, 5), false,
+    'episode boundaries must not accept a longer episode number');
+  assert.strictEqual(episodeInName('The_Boys_S02E05-E06_1080p_WEB-DL.mkv', 2, 6), true,
+    'a combined payload covering E05-E06 must satisfy the E06 request accepted by release matching');
+  assert.strictEqual(episodeInName('The_Boys_S02E05-E06_1080p_WEB-DL.mkv', 2, 7), false,
+    'a combined payload range must not claim an episode outside its end marker');
+  const underscored = parseNzb('<?xml version="1.0"?><nzb>'
+    + q('The_Boys_S02E01_1080p_WEB-DL.mkv', 900000000)
+    + q('The_Boys_S02E05_1080p_WEB-DL.mkv', 500000000) + '</nzb>');
+  assert.match(pickPrimaryFile(underscored, { wantedEpisode: { s: 2, e: 5 } }).subject, /S02E05/i,
+    'underscore-delimited loose season packs mount the requested episode, not the largest member');
+  const combined = parseNzb('<?xml version="1.0"?><nzb>'
+    + q('The.Boys.S02E05-E06.1080p.WEB-DL.mkv', 500000000) + '</nzb>');
+  assert.match(pickPrimaryFile(combined, { wantedEpisode: { s: 2, e: 6 } }).subject, /E05-E06/i,
+    'a combined episode file remains selectable for every episode its range covers');
+});
+
+test('pipeline: loose-pack probe and mount selection require one exact requested episode', () => {
+  const { parseNzb, pickPrimaryFile } = require('../server/nzb');
+  const { firstProbeMsgId } = require('../server/pipeline');
+  const q = (name, bytes, id = name) => `<file subject="a &quot;${name}&quot; yEnc (1/1)"><segments><segment bytes="${bytes}" number="1">${id}@x</segment></segments></file>`;
+  const xml = (...files) => `<?xml version="1.0"?><nzb>${files.join('')}</nzb>`;
+  const wanted = { wantedEpisode: { s: 2, e: 5 } };
+
+  const healthyPack = xml(
+    q('Show.S02E01.1080p.mkv', 900, 'episode-one'),
+    q('Show.S02E05.1080p.mkv', 500, 'episode-five'),
+  );
+  assert.strictEqual(firstProbeMsgId(healthyPack, wanted), 'episode-five@x',
+    'the cheap STAT probe targets the same loose-pack episode mountNzb will mount');
+
+  const missing = parseNzb(xml(
+    q('Show.S02E01.1080p.mkv', 900),
+    q('Show.S02E02.1080p.mkv', 800),
+  ));
+  assert.throws(() => pickPrimaryFile(missing, wanted), (e) => e && e.code === 'EPISODE_SELECTION',
+    'a pack missing E05 rejects instead of silently mounting another episode');
+
+  const ambiguous = parseNzb(xml(
+    q('Show.S02E05.Part1.mkv', 500),
+    q('Show.S02E05.Part2.mkv', 480),
+  ));
+  assert.throws(() => pickPrimaryFile(ambiguous, wanted), (e) => e && e.code === 'EPISODE_SELECTION',
+    'multiple exact E05 payloads reject instead of guessing which file is the episode');
+
+  const opaque = parseNzb(xml(q('8f3c10a9.bin', 500)));
+  assert.match(pickPrimaryFile(opaque, wanted).subject, /8f3c10a9\.bin/i,
+    'a single obfuscated video remains a safe fallback because no competing payload exists');
+  const opaquePair = parseNzb(xml(q('8f3c10a9.bin', 500), q('91ae02c4.bin', 480)));
+  assert.throws(() => pickPrimaryFile(opaquePair, wanted), (e) => e && e.code === 'EPISODE_SELECTION',
+    'multiple opaque payloads reject because the requested episode cannot be identified safely');
+});
+
+test('pipeline: an unsafe episode pack advances without poisoning release-wide health', async () => {
+  const q = (name, bytes) => `<file subject="a &quot;${name}&quot; yEnc (1/1)"><segments><segment bytes="${bytes}" number="1">${name}@x</segment></segments></file>`;
+  const badXml = `<?xml version="1.0"?><nzb>${q('Show.S02E01.mkv', 900)}${q('Show.S02E02.mkv', 800)}</nzb>`;
+  const verdicts = [];
+  const pipeline = new Pipeline({
+    pool: () => null,
+    verdicts: { get: () => null, set: (...args) => verdicts.push(args) },
+    mounts: new Map(),
+  });
+  const bad = { name: 'Show.S02.COMPLETE', nzbUrl: 'https://indexer.test/wrong-pack.nzb' };
+  const good = { name: 'Show.S02E05', nzbUrl: 'https://indexer.test/right-episode.nzb' };
+  pipeline.nzbCache.set(bad.nzbUrl, badXml);
+  const realTry = pipeline._tryCandidate.bind(pipeline);
+  pipeline._tryCandidate = (candidate, opts) => candidate === bad
+    ? realTry(candidate, opts)
+    : Promise.resolve({ vf: { id: 'right-episode-vf', streamable: true, size: 0 } });
+  const session = { id: 'episode-advance', query: {}, cursor: 0, history: [], candidates: [bad, good] };
+  const result = await pipeline._advance(session, { wantedEpisode: { s: 2, e: 5 } });
+  assert.strictEqual(result.candidate, good, 'the source walk advances to the next release');
+  assert.match(result.attempts[0].fail, /^episode:/, 'the unsafe pack has an explicit request-scoped failure');
+  assert.deepStrictEqual(verdicts, [], 'one missing member does not poison the release for its other episodes');
 });
 
 test('scoring: a season pack requested for one episode escapes the size cap, but a movie does not', () => {
@@ -830,6 +908,10 @@ test('subs: OpenSubtitles adds a title text-query fallback for old/obscure title
   assert.strictEqual(tv.searchParams.get('query'), 'Obscure Show', 'episode title text-searches too');
   assert.strictEqual(tv.searchParams.get('season_number'), '3');
   assert.strictEqual(tv.searchParams.get('episode_number'), '7');
+
+  const special = _osSearchUrl({ query: 'Obscure Show', season: 0, episode: 4, lang: 'en' });
+  assert.strictEqual(special.searchParams.get('season_number'), '0', 'explicit season-zero specials remain scoped');
+  assert.strictEqual(special.searchParams.get('episode_number'), '4');
 
   // When a structured id IS present, follow OpenSubtitles guidance: key on the id, NOT free text.
   const byId = _osSearchUrl({ imdbId: 'tt0111161', query: 'The Shawshank Redemption 1994', lang: 'en' });
@@ -1703,6 +1785,102 @@ test('archive: obfuscated .7z.001 split volumes are detected as unsupported, nev
   await mock.close();
 });
 
+test('archive: a RAR season pack mounts the requested episode, not the largest inner file', async () => {
+  const { mountNzb } = require('../server/archive');
+  const ep1 = seededPayload(100 * 1024, 0xe201);
+  const ep5 = seededPayload(60 * 1024, 0xe205);
+  const packed = nzbFor(writeRar4Store([
+    { name: 'Show.S02E01.1080p.WEB-DL.mkv', data: ep1 },
+    { name: 'Show.S02E05.1080p.WEB-DL.mkv', data: ep5 },
+  ], { base: 'show-s02' }), 30000, 'rar-season');
+  const mock = createMockNntp({ articles: packed.articles });
+  const port = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false }, 4);
+  try {
+    const vf = await mountNzb(pool, packed.nzb, { wantedEpisode: { s: 2, e: 5 } });
+    assert.match(vf.name, /S02E05/i, 'the requested archive member wins even though E01 is larger');
+    const chunks = [];
+    for await (const chunk of vf.read(0, vf.size, { priority: 'playback' })) chunks.push(chunk);
+    assert.deepStrictEqual(Buffer.concat(chunks), ep5, 'the mounted bytes are the requested episode');
+  } finally {
+    pool.close();
+    await mock.close();
+  }
+});
+
+test('pipeline: live-mount reuse is isolated by episode for one season-pack NZB', async () => {
+  const ep1 = seededPayload(92 * 1024, 0xc201);
+  const ep5 = seededPayload(64 * 1024, 0xc205);
+  const packed = nzbFor(writeRar4Store([
+    { name: 'Show.S02E01.1080p.WEB-DL.mkv', data: ep1 },
+    { name: 'Show.S02E05.1080p.WEB-DL.mkv', data: ep5 },
+  ], { base: 'show-complete-s02' }), 30000, 'reuse-season');
+  const mock = createMockNntp({ articles: packed.articles });
+  const nntpPort = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 4);
+  const ix = makeMockIndexer([{
+    name: 'Show.S02.COMPLETE.1080p.WEB-DL.H.264-GRP', size: 8e9, nzb: packed.nzb,
+  }]);
+  const ixPort = await ix.listen();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const pipeline = new Pipeline({
+    pool: () => pool,
+    verdicts: new VerdictCache(store),
+    mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+  try {
+    const first = await pipeline.play({ q: 'Show', season: 2, ep: 1 });
+    const fifth = await pipeline.play({ q: 'Show', season: 2, ep: 5 });
+    assert.match(first.vf.name, /S02E01/i);
+    assert.match(fifth.vf.name, /S02E05/i);
+    assert.notStrictEqual(first.vf.id, fifth.vf.id, 'E05 must not reuse the E01 virtual file');
+  } finally {
+    pool.close();
+    await mock.close();
+    ix.server.close();
+    store.close();
+  }
+});
+
+test('pipeline: season-zero specials keep their episode selection and mount identity', async () => {
+  const special1 = seededPayload(92 * 1024, 0xc001);
+  const special5 = seededPayload(64 * 1024, 0xc005);
+  const packed = nzbFor(writeRar4Store([
+    { name: 'Show.S00E01.1080p.WEB-DL.mkv', data: special1 },
+    { name: 'Show.S00E05.1080p.WEB-DL.mkv', data: special5 },
+  ], { base: 'show-specials-s00' }), 30000, 'reuse-specials');
+  const mock = createMockNntp({ articles: packed.articles });
+  const nntpPort = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 4);
+  const ix = makeMockIndexer([{
+    name: 'Show.S00.COMPLETE.1080p.WEB-DL.H.264-GRP', size: 8e9, nzb: packed.nzb,
+  }]);
+  const ixPort = await ix.listen();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const pipeline = new Pipeline({
+    pool: () => pool,
+    verdicts: new VerdictCache(store),
+    mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+  try {
+    // q deliberately has no S00E token: search() must append it from the explicit catalog fields.
+    const first = await pipeline.play({ q: 'Show', season: 0, ep: 1 });
+    const fifth = await pipeline.play({ q: 'Show', season: 0, ep: 5 });
+    assert.match(first.vf.name, /S00E01/i);
+    assert.match(fifth.vf.name, /S00E05/i);
+    assert.notStrictEqual(first.vf.id, fifth.vf.id, 'one specials-pack mount cannot alias another episode');
+  } finally {
+    pool.close();
+    await mock.close();
+    ix.server.close();
+    store.close();
+  }
+});
+
 test('pipeline: indexer daily NZB limit skips the grab without poisoning the verdict cache', async () => {
   const payload = seededPayload(80 * 1024, 0xcc1);
   const good = nzbFor([{ name: 'Limited.mkv', data: payload }], 30000, 'lim');
@@ -1856,6 +2034,351 @@ test('pipeline: playback warmup pre-fetches BOTH the head and the tail (containe
   assert.ok(reads.some(([f]) => f === 0), 'warms the head from offset 0');
   assert.ok(reads.some(([, t]) => t === size), 'warms the TAIL up to EOF (mkv Cues / mp4 moov)');
   store.close();
+});
+
+test('pipeline: a fast top-ranked source wins without launching a speculative grab', async () => {
+  const pipeline = new Pipeline({
+    pool: () => null,
+    verdicts: { get: () => null, set: () => {} },
+    mounts: new Map(),
+  });
+  const calls = [];
+  pipeline._tryCandidate = async (candidate) => {
+    calls.push(candidate.name);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    return { vf: { id: 'top-vf', streamable: true, size: 0 } };
+  };
+  const session = {
+    id: 'fast-top', query: {}, cursor: 0, history: [],
+    candidates: [
+      { name: 'top', nzbUrl: 'https://indexer.test/top.nzb' },
+      { name: 'unused', nzbUrl: 'https://indexer.test/unused.nzb' },
+    ],
+  };
+  const result = await pipeline._advance(session, {}, { width: 2 });
+  assert.strictEqual(result.candidate.name, 'top');
+  assert.deepStrictEqual(calls, ['top'], 'a healthy fast top pick costs no second NZB grab');
+});
+
+test('pipeline: a ready healthy understudy escapes a stalled top source within a bounded grace', async () => {
+  const pipeline = new Pipeline({
+    pool: () => null,
+    verdicts: { get: () => null, set: () => {} },
+    mounts: new Map(),
+  });
+  const calls = [];
+  pipeline._tryCandidate = (candidate) => {
+    calls.push(candidate.name);
+    if (candidate.name === 'stalled-top') return new Promise(() => {});
+    return Promise.resolve({ vf: { id: `${candidate.name}-vf`, streamable: true, size: 0 } });
+  };
+  const session = {
+    id: 'hedged-start', query: {}, cursor: 0, history: [],
+    candidates: [
+      { name: 'stalled-top', nzbUrl: 'https://indexer.test/stalled.nzb' },
+      { name: 'healthy-second', nzbUrl: 'https://indexer.test/second.nzb' },
+      { name: 'must-not-launch', nzbUrl: 'https://indexer.test/third.nzb' },
+    ],
+  };
+  const t0 = Date.now();
+  const result = await pipeline._advance(session, {}, { width: 2 });
+  const elapsed = Date.now() - t0;
+  assert.strictEqual(result.candidate.name, 'healthy-second');
+  assert.deepStrictEqual(calls, ['stalled-top', 'healthy-second'],
+    'once a healthy fallback is ready, do not keep consuming NZB grabs behind the stalled leader');
+  assert.ok(elapsed >= 700 && elapsed < 2200,
+    `fallback should commit after the hedge plus short rank grace, not the 30s mount deadline (${elapsed}ms)`);
+});
+
+test('pipeline: committing a healthy hedge cancels the stalled loser and releases startup work', async () => {
+  const pipeline = new Pipeline({
+    pool: () => null,
+    verdicts: { get: () => null, set: () => {} },
+    mounts: new Map(),
+  });
+  let startupReleased = false;
+  pipeline._tryCandidateFresh = (candidate, mountOpts) => {
+    if (candidate.name !== 'stalled-top') {
+      return Promise.resolve({ vf: { id: 'healthy-vf', streamable: true, size: 0 } });
+    }
+    return new Promise((resolve) => {
+      mountOpts.signal.addEventListener('abort', () => {
+        startupReleased = true;
+        resolve({ fail: 'cancelled startup' });
+      }, { once: true });
+    });
+  };
+  const session = {
+    id: 'hedge-cleanup', query: {}, cursor: 0, history: [],
+    candidates: [
+      { name: 'stalled-top', nzbUrl: 'https://indexer.test/stalled-cleanup.nzb' },
+      { name: 'healthy-second', nzbUrl: 'https://indexer.test/healthy-cleanup.nzb' },
+    ],
+  };
+  const result = await pipeline._advance(session, {}, { width: 2 });
+  assert.strictEqual(result.candidate.name, 'healthy-second');
+  assert.strictEqual(startupReleased, true,
+    'winner commit aborts the losing mount rather than leaving startup-priority NNTP work alive');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.strictEqual(pipeline.prepareInflight.size, 0, 'the cancelled loser is removed from shared prepare state');
+});
+
+test('pipeline: cancelling one hedge consumer preserves another play joined to the same mount', async () => {
+  const pipeline = new Pipeline({
+    pool: () => null,
+    verdicts: { get: () => null, set: () => {} },
+    mounts: new Map(),
+  });
+  let finish;
+  let freshCalls = 0;
+  let masterAborted = false;
+  pipeline._tryCandidateFresh = (_candidate, opts) => {
+    freshCalls++;
+    opts.signal.addEventListener('abort', () => { masterAborted = true; }, { once: true });
+    return new Promise((resolve) => { finish = resolve; });
+  };
+  const candidate = { name: 'shared', nzbUrl: 'https://indexer.test/shared.nzb' };
+  const first = new AbortController();
+  const second = new AbortController();
+  const p1 = pipeline._tryCandidate(candidate, { signal: first.signal });
+  const p2 = pipeline._tryCandidate(candidate, { signal: second.signal });
+  await new Promise((resolve) => setImmediate(resolve));
+  first.abort();
+  assert.match((await p1).fail, /^cancelled:/);
+  assert.strictEqual(masterAborted, false, 'one loser cannot abort startup work still needed by another play');
+  finish({ vf: { id: 'shared-vf', streamable: true, size: 0 } });
+  assert.strictEqual((await p2).vf.id, 'shared-vf');
+  assert.strictEqual(freshCalls, 1, 'both consumers share one underlying mount');
+});
+
+test('pipeline: a fast missing probe aborts its BODY and stays scoped to the requested pack episode', async () => {
+  const verdicts = [];
+  let bodyStartedResolve;
+  let bodyAborted = false;
+  const bodyStarted = new Promise((resolve) => { bodyStartedResolve = resolve; });
+  const abortErr = () => { const e = new Error('aborted'); e.code = 'ABORT_ERR'; return e; };
+  const pool = {
+    stat: async () => false,
+    body: (_msgId, _priority, opts = {}) => new Promise((_resolve, reject) => {
+      bodyStartedResolve();
+      const abort = () => { bodyAborted = true; reject(abortErr()); };
+      if (opts.signal && opts.signal.aborted) abort();
+      else if (opts.signal) opts.signal.addEventListener('abort', abort, { once: true });
+    }),
+  };
+  const pipeline = new Pipeline({
+    pool: () => pool,
+    verdicts: { get: () => null, set: (...args) => verdicts.push(args) },
+    mounts: new Map(),
+  });
+  const q = (name, id, bytes) => `<file subject="a &quot;${name}&quot; yEnc (1/1)"><segments><segment bytes="${bytes}" number="1">${id}</segment></segments></file>`;
+  const xml = `<?xml version="1.0"?><nzb>${q('Show.S02E01.mkv', 'e01@x', 900)}${q('Show.S02E05.mkv', 'e05@x', 500)}</nzb>`;
+  const candidate = { name: 'Show.S02.COMPLETE', nzbUrl: 'https://indexer.test/episode-probe.nzb' };
+  pipeline.nzbCache.set(candidate.nzbUrl, xml);
+
+  const pending = pipeline._tryCandidate(candidate, { wantedEpisode: { s: 2, e: 5 } });
+  await bodyStarted;
+  const result = await pending;
+  assert.match(result.fail, /^episode: first article unavailable$/);
+  assert.strictEqual(bodyAborted, true,
+    'a decisive missing STAT must abort the already-running mount BODY before returning');
+  assert.deepStrictEqual(verdicts, [],
+    'a rotten E05 member must not poison the release-wide verdict for healthy E01 and other members');
+  assert.strictEqual(pipeline.prepareInflight.size, 0, 'terminal probe failure leaves no shared prepare record');
+});
+
+test('pipeline: blocked post-mount health for one pack episode never blacklists its healthy sibling', async () => {
+  const verdicts = [];
+  const payloads = new Map([
+    ['e01@x', { name: 'Show.S02E01.mkv', data: seededPayload(48 * 1024, 0xe201) }],
+    ['e05@x', { name: 'Show.S02E05.mkv', data: seededPayload(48 * 1024, 0xe205) }],
+  ]);
+  const pool = {
+    stat: async (msgId, priority) => priority === 'startup' || msgId === 'e01@x',
+    body: async (msgId) => {
+      const item = payloads.get(msgId);
+      return encodePart(item.data, {
+        name: item.name, partNum: 1, totalParts: 1,
+        begin: 1, end: item.data.length, totalSize: item.data.length,
+      });
+    },
+  };
+  const pipeline = new Pipeline({
+    pool: () => pool,
+    verdicts: { get: () => null, set: (...args) => verdicts.push(args) },
+    mounts: new Map(),
+  });
+  const q = (name, id, bytes) => `<file subject="a &quot;${name}&quot; yEnc (1/1)"><segments><segment bytes="${bytes}" number="1">${id}</segment></segments></file>`;
+  const xml = `<?xml version="1.0"?><nzb>${q('Show.S02E01.mkv', 'e01@x', 49152)}${q('Show.S02E05.mkv', 'e05@x', 49152)}</nzb>`;
+  const candidate = { name: 'Show.S02.COMPLETE', nzbUrl: 'https://indexer.test/episode-health.nzb' };
+  pipeline.nzbCache.set(candidate.nzbUrl, xml);
+
+  const fifth = await pipeline._tryCandidate(candidate, { wantedEpisode: { s: 2, e: 5 } });
+  assert.strictEqual(fifth.fail, 'health: blocked');
+  assert.deepStrictEqual(verdicts, [],
+    'selected-member health must not write release-wide blocked/degraded/verified verdicts');
+  const first = await pipeline._tryCandidate(candidate, { wantedEpisode: { s: 2, e: 1 } });
+  assert.ok(first.vf && !first.fail, 'the healthy sibling still mounts after E05 was blocked');
+  assert.match(first.vf.name, /S02E01/);
+  assert.deepStrictEqual(verdicts, [], 'the healthy sibling remains request-scoped too');
+});
+
+test('pipeline: an ordinary exact-episode release still caches its blocked verdict for fast skipping', async () => {
+  const verdicts = [];
+  const payload = seededPayload(48 * 1024, 0xe505);
+  const pool = {
+    stat: async (_msgId, priority) => priority === 'startup',
+    body: async () => encodePart(payload, {
+      name: 'Show.S02E05.mkv', partNum: 1, totalParts: 1,
+      begin: 1, end: payload.length, totalSize: payload.length,
+    }),
+  };
+  const pipeline = new Pipeline({
+    pool: () => pool,
+    verdicts: { get: () => null, set: (...args) => verdicts.push(args) },
+    mounts: new Map(),
+  });
+  const xml = '<?xml version="1.0"?><nzb><file subject="a &quot;Show.S02E05.mkv&quot; yEnc (1/1)"><segments><segment bytes="49152" number="1">e05@x</segment></segments></file></nzb>';
+  const candidate = { name: 'Show.S02E05.1080p.WEB-DL', nzbUrl: 'https://indexer.test/exact-episode-health.nzb' };
+  pipeline.nzbCache.set(candidate.nzbUrl, xml);
+
+  const result = await pipeline._tryCandidate(candidate, { wantedEpisode: { s: 2, e: 5 } });
+  assert.strictEqual(result.fail, 'health: blocked');
+  assert.ok(verdicts.some(([, verdict]) => verdict === 'blocked'),
+    'single-episode failures remain release-wide cache entries so later source walks skip them quickly');
+});
+
+test('pipeline: mount deadline aborts underlying BODY before returning the timeout', async () => {
+  const verdicts = [];
+  let bodyStartedResolve;
+  let bodyAborted = false;
+  const bodyStarted = new Promise((resolve) => { bodyStartedResolve = resolve; });
+  const pool = {
+    stat: async () => true,
+    body: (_msgId, _priority, opts = {}) => new Promise((_resolve, reject) => {
+      bodyStartedResolve();
+      const abort = () => {
+        bodyAborted = true;
+        const e = new Error('aborted'); e.code = 'ABORT_ERR'; reject(e);
+      };
+      if (opts.signal && opts.signal.aborted) abort();
+      else if (opts.signal) opts.signal.addEventListener('abort', abort, { once: true });
+    }),
+  };
+  const pipeline = new Pipeline({
+    pool: () => pool,
+    verdicts: { get: () => null, set: (...args) => verdicts.push(args) },
+    mounts: new Map(),
+    mountDeadlineMs: 20,
+  });
+  const xml = '<?xml version="1.0"?><nzb><file subject="a &quot;Movie.2026.mkv&quot; yEnc (1/1)"><segments><segment bytes="900" number="1">movie@x</segment></segments></file></nzb>';
+  const candidate = { name: 'Movie.2026', nzbUrl: 'https://indexer.test/timeout.nzb' };
+  pipeline.nzbCache.set(candidate.nzbUrl, xml);
+
+  const pending = pipeline._tryCandidate(candidate);
+  await bodyStarted;
+  const result = await pending;
+  assert.match(result.fail, /^mount: mount timeout/);
+  assert.strictEqual(bodyAborted, true,
+    'the deadline result must synchronously release its startup BODY instead of waiting on provider timeout');
+  assert.ok(verdicts.some(([, verdict]) => verdict === 'mount-failed'),
+    'a genuine mount deadline remains a source-health failure for a non-episode release');
+  assert.strictEqual(pipeline.prepareInflight.size, 0, 'terminal mount timeout leaves no shared prepare record');
+});
+
+test('pipeline: hedge cancellation aborts BODY without poisoning source health or failure metrics', async () => {
+  const verdicts = [];
+  let bodyStartedResolve;
+  let bodyAborted = false;
+  const bodyStarted = new Promise((resolve) => { bodyStartedResolve = resolve; });
+  const pool = {
+    stat: async () => true,
+    body: (_msgId, _priority, opts = {}) => new Promise((_resolve, reject) => {
+      bodyStartedResolve();
+      const abort = () => {
+        bodyAborted = true;
+        const e = new Error('aborted'); e.code = 'ABORT_ERR'; reject(e);
+      };
+      if (opts.signal && opts.signal.aborted) abort();
+      else if (opts.signal) opts.signal.addEventListener('abort', abort, { once: true });
+    }),
+  };
+  const pipeline = new Pipeline({
+    pool: () => pool,
+    verdicts: { get: () => null, set: (...args) => verdicts.push(args) },
+    mounts: new Map(),
+  });
+  const xml = '<?xml version="1.0"?><nzb><file subject="a &quot;Healthy.But.Slower.2026.mkv&quot; yEnc (1/1)"><segments><segment bytes="900" number="1">slow@x</segment></segments></file></nzb>';
+  const candidate = { name: 'Healthy.But.Slower.2026', nzbUrl: 'https://indexer.test/healthy-slower.nzb' };
+  pipeline.nzbCache.set(candidate.nzbUrl, xml);
+  const consumer = new AbortController();
+
+  const pending = pipeline._tryCandidate(candidate, { signal: consumer.signal });
+  await bodyStarted;
+  consumer.abort();
+  assert.match((await pending).fail, /^cancelled:/);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.strictEqual(bodyAborted, true, 'the losing hedge releases its active BODY');
+  assert.deepStrictEqual(verdicts, [], 'cancellation never records missing/mount-failed verdicts');
+  assert.strictEqual(pipeline.metrics.mountFailures, 0, 'cancellation is not counted as a source mount failure');
+});
+
+test('pipeline: a play arriving after master abort starts a fresh prepare record', async () => {
+  const pipeline = new Pipeline({
+    pool: () => null,
+    verdicts: { get: () => null, set: () => {} },
+    mounts: new Map(),
+  });
+  const finish = [];
+  let freshCalls = 0;
+  pipeline._tryCandidateFresh = () => {
+    freshCalls++;
+    return new Promise((resolve) => { finish.push(resolve); });
+  };
+  const candidate = { name: 'shared-after-abort', nzbUrl: 'https://indexer.test/shared-after-abort.nzb' };
+  const firstConsumer = new AbortController();
+  const first = pipeline._tryCandidate(candidate, { signal: firstConsumer.signal });
+  await new Promise((resolve) => setImmediate(resolve));
+  firstConsumer.abort();
+  assert.match((await first).fail, /^cancelled:/);
+
+  const second = pipeline._tryCandidate(candidate);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.strictEqual(freshCalls, 2,
+    'the later play must not join an aborted master still unwinding a shared NZB fetch');
+  assert.strictEqual(pipeline.prepareInflight.size, 1, 'only the replacement prepare record remains joinable');
+  finish[0]({ fail: 'old cancelled record unwound' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.strictEqual(pipeline.prepareInflight.size, 1,
+    'the old record finishing cannot delete the replacement record');
+  finish[1]({ vf: { id: 'replacement-vf', streamable: true, size: 0 } });
+  assert.strictEqual((await second).vf.id, 'replacement-vf');
+  assert.strictEqual(pipeline.prepareInflight.size, 0);
+});
+
+test('pipeline: rank grace still preserves a nearly-ready higher-ranked source', async () => {
+  const pipeline = new Pipeline({
+    pool: () => null,
+    verdicts: { get: () => null, set: () => {} },
+    mounts: new Map(),
+  });
+  const calls = [];
+  pipeline._tryCandidate = async (candidate) => {
+    calls.push(candidate.name);
+    if (candidate.name === 'top') await new Promise((resolve) => setTimeout(resolve, 920));
+    return { vf: { id: `${candidate.name}-vf`, streamable: true, size: 0 } };
+  };
+  const session = {
+    id: 'rank-grace', query: {}, cursor: 0, history: [],
+    candidates: [
+      { name: 'top', nzbUrl: 'https://indexer.test/top.nzb' },
+      { name: 'second', nzbUrl: 'https://indexer.test/second.nzb' },
+      { name: 'unused', nzbUrl: 'https://indexer.test/unused.nzb' },
+    ],
+  };
+  const result = await pipeline._advance(session, {}, { width: 2 });
+  assert.strictEqual(result.candidate.name, 'top', 'the short grace preserves rank when top is nearly ready');
+  assert.deepStrictEqual(calls, ['top', 'second']);
 });
 
 test('pipeline: playback warmup warms the RESUME byte window so a Continue-Watching resume is not a cold seek', async () => {

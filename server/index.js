@@ -14,6 +14,7 @@ const { LibraryDb } = require('./library-db');
 const { Auth, SecureSettings, RateLimiter } = require('./auth');
 const { Pipeline } = require('./pipeline');
 const { TmdbProxy } = require('./tmdb');
+const { normChName: normalizeXmltvChannelName, decodeXmltvPayload, parseXmltvInWorker, shutdownXmltvWorkers } = require('./xmltv');
 const { AudibleProxy } = require('./audible');
 const pubaudio = require('./pubaudio');
 const { Trakt } = require('./trakt');
@@ -804,10 +805,15 @@ function embeddedIpv4FromIpv6(ip) {
 }
 function isPrivateIpv6(ip) {
   const s = cleanUrlHostForPolicy(ip);
-  if (!s) return false;
-  if (s === '::' || s === '::1') return true;
-  if (s.startsWith('fe80:') || s.startsWith('fe8') || s.startsWith('fe9') || s.startsWith('fea') || s.startsWith('feb')) return true;
-  if (s.startsWith('fc') || s.startsWith('fd')) return true;
+  const words = ipv6Words(s);
+  if (!words) return false;
+  if (words.every((word) => word === 0)
+    || (words.slice(0, 7).every((word) => word === 0) && words[7] === 1)) return true;
+  const first = words[0];
+  if ((first & 0xfe00) === 0xfc00) return true; // fc00::/7 unique-local
+  if ((first & 0xffc0) === 0xfe80) return true; // fe80::/10 link-local
+  if ((first & 0xffc0) === 0xfec0) return true; // fec0::/10 deprecated site-local remains non-public
+  if ((first & 0xff00) === 0xff00) return true; // ff00::/8 multicast
   const embedded = embeddedIpv4FromIpv6(s);
   if (embedded && isPrivateIpv4(embedded)) return true;
   return false;
@@ -1095,6 +1101,7 @@ function clearIptvAggregateCache() {
 }
 function clearIptvSourceRuntime(sourceId) {
   const id = cleanIptvSourceId(sourceId);
+  cancelXmltvFetchesForSource(id, 'XMLTV guide cancelled because its source changed');
   iptvSourceCaches.delete(id);
   epgSourceCaches.delete(id);
   // Tombstone the per-source Xtream guide cache before dropping it: an in-flight guide fetch
@@ -1112,6 +1119,7 @@ function clearIptvSourceRuntime(sourceId) {
   if (xtreamEpgCache.sourceId === id) { xtreamEpgCache._deleted = true; xtreamEpgCache = { key: null, byStream: new Map() }; }
 }
 function clearAllIptvRuntime() {
+  cancelAllXmltvFetches('XMLTV guide cancelled because IPTV settings changed');
   iptvSourceCaches.clear();
   epgSourceCaches.clear();
   xtreamEpgSourceCaches.clear();
@@ -2454,25 +2462,7 @@ async function fetchIptvChannels(s, key) {
   return channels;
 }
 
-// XMLTV: fetch + parse <programme> entries for channels we actually carry (capped ~40MB).
-function parseXmltvDate(s) { // "20260611043000 +0000"
-  const m = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(?:\s*([+-]\d{4}))?/.exec(String(s || ''));
-  if (!m) return 0;
-  const off = m[7] ? (parseInt(m[7].slice(0, 3), 10) * 60 + parseInt(m[7][0] + m[7].slice(3), 10)) * 60000 : 0;
-  return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) - off;
-}
-function xmlAttr(attrs, name) {
-  const m = new RegExp(`\\b${name}="([^"]*)"`, 'i').exec(String(attrs || ''));
-  return m ? m[1] : '';
-}
-// Channel names normalized for guide matching: "UK: BBC One [1080p] HD" ≈ "BBC One".
-function normChName(s) {
-  return String(s || '').toLowerCase()
-    .replace(/^[a-z]{2,3}\s*[:|-]\s*/, '')                        // country prefix "UK: "
-    .replace(/\[[^\]]*\]|\([^)]*\)/g, ' ')                         // [1080p] (Events)
-    .replace(/\b(uhd|fhd|hd|sd|4k|8k|1080p?|720p?|h26[45]|hevc|raw|vip|plus|backup)\b/g, ' ')
-    .replace(/[^a-z0-9]/g, '');
-}
+// XMLTV: fetch and parse only the programmes for channels we actually carry.
 function hydrateXmltvCache(raw, key) {
   if (!raw || raw.key !== key || !Array.isArray(raw.byChannel) || !Array.isArray(raw.byName)) return null;
   const at = Number(raw.at) || 0;
@@ -2494,11 +2484,62 @@ function persistXmltvCache(cache) {
     if (sourceId === IPTV_LEGACY_SOURCE_ID) store.write('epgcache', body);
   } catch {}
 }
+// A single cold guide request fans out across several channels from the same source. Without a
+// shared promise every callback can download the same 50-120 MB XMLTV file and start its own worker.
+// Scope the join by source + credential-safe guide key so settings changes never join stale input.
+const epgFetchInflight = new Map(); // source + guide key -> { promise, controller, generation, sourceId }
+const xmltvSourceGenerations = new Map();
+let xmltvShuttingDown = false;
+function xmltvCancellationError(message = 'XMLTV guide cancelled') {
+  const err = new Error(message);
+  err.code = 'XMLTV_CANCELLED';
+  return err;
+}
+function isXmltvCancellationError(err) {
+  return !!(err && (err.code === 'XMLTV_CANCELLED' || err.code === 'ABORT_ERR'));
+}
+function xmltvSourceGeneration(sourceId) {
+  return xmltvSourceGenerations.get(cleanIptvSourceId(sourceId)) || 0;
+}
+function cancelXmltvFetchesForSource(sourceId, reason = 'XMLTV guide cancelled') {
+  const id = cleanIptvSourceId(sourceId);
+  const records = [...epgFetchInflight.values()].filter((record) => record.sourceId === id);
+  if (!records.length) {
+    // No stale job can publish, so no generation tombstone is needed. This keeps repeated
+    // create/delete churn from growing a permanent map of random source ids.
+    xmltvSourceGenerations.delete(id);
+    return;
+  }
+  xmltvSourceGenerations.set(id, xmltvSourceGeneration(id) + 1);
+  for (const record of records) {
+    if (record.controller.signal.aborted) continue;
+    record.controller.abort(xmltvCancellationError(reason));
+  }
+}
+function cancelAllXmltvFetches(reason = 'XMLTV guide cancelled') {
+  const sourceIds = new Set([...epgFetchInflight.values()].map((record) => record.sourceId));
+  for (const sourceId of sourceIds) cancelXmltvFetchesForSource(sourceId, reason);
+}
+function assertXmltvFetchCurrent(s, key, generation, signal) {
+  const sourceId = cleanIptvSourceId(s.id);
+  if (xmltvShuttingDown || (signal && signal.aborted)) {
+    throw (signal && signal.reason instanceof Error) ? signal.reason : xmltvCancellationError('XMLTV guide cancelled during shutdown');
+  }
+  if (xmltvSourceGeneration(sourceId) !== generation) {
+    throw xmltvCancellationError('XMLTV guide cancelled because its source changed');
+  }
+  const current = iptvSourcesFromSettings(settings.get()).find((src) => cleanIptvSourceId(src.id) === sourceId);
+  if (!current || epgSourceKey(current) !== key) {
+    throw xmltvCancellationError('XMLTV guide cancelled because its source is no longer current');
+  }
+}
 function refreshXmltvInBackground(s, key, sourceChannels) {
   const sourceId = cleanIptvSourceId(s.id);
   if (epgRefreshingSources.has(sourceId)) return;
   epgRefreshingSources.add(sourceId);
-  fetchXmltv(s, key, sourceChannels).catch((e) => console.error('[xmltv refresh]', e.message))
+  fetchXmltv(s, key, sourceChannels).catch((e) => {
+    if (!isXmltvCancellationError(e)) console.error('[xmltv refresh]', e.message);
+  })
     .finally(() => { epgRefreshingSources.delete(sourceId); });
 }
 async function ensureXmltv(s = iptvSourcesFromSettings(settings.get())[0], sourceChannels = null) {
@@ -2527,66 +2568,73 @@ async function ensureXmltv(s = iptvSourcesFromSettings(settings.get())[0], sourc
 let epgRefreshing = false;
 let epgRefreshingSources = new Set();
 async function fetchXmltv(s, key = epgSourceKey(s), sourceChannels = null) {
+  if (xmltvShuttingDown) throw xmltvCancellationError('XMLTV guide cancelled during shutdown');
+  const sourceId = cleanIptvSourceId(s.id);
+  const inflightKey = `${sourceId}:${key}`;
+  const generation = xmltvSourceGeneration(sourceId);
+  const pending = epgFetchInflight.get(inflightKey);
+  if (pending && pending.generation === generation) return pending.promise;
+  const controller = new AbortController();
+  const promise = fetchXmltvFresh(s, key, sourceChannels, { generation, signal: controller.signal });
+  const record = { promise, controller, generation, sourceId };
+  epgFetchInflight.set(inflightKey, record);
+  try { return await promise; }
+  finally {
+    if (epgFetchInflight.get(inflightKey) === record) epgFetchInflight.delete(inflightKey);
+    const stillInflight = [...epgFetchInflight.values()].some((entry) => entry.sourceId === sourceId);
+    const stillConfigured = iptvSourcesFromSettings(settings.get()).some((src) => cleanIptvSourceId(src.id) === sourceId);
+    if (!stillInflight && !stillConfigured) xmltvSourceGenerations.delete(sourceId);
+  }
+}
+async function fetchXmltvFresh(s, key = epgSourceKey(s), sourceChannels = null, { generation = xmltvSourceGeneration(s.id), signal = null } = {}) {
   const xmltvUrl = xmltvGuideUrl(s);
   if (!xmltvUrl) return null;
-  const r = await fetchUrlExt(xmltvUrl, iptvFetchOptions({ timeoutMs: 20000, deadlineMs: 90000, maxBytes: 128 * 1024 * 1024 }));
-  let xml = r.body;
+  assertXmltvFetchCurrent(s, key, generation, signal);
+  const r = await fetchUrlExt(xmltvUrl, iptvFetchOptions({
+    timeoutMs: 20000, deadlineMs: 90000, maxBytes: 128 * 1024 * 1024, signal,
+  }));
+  assertXmltvFetchCurrent(s, key, generation, signal);
+  if (!r || r.status < 200 || r.status >= 300) {
+    throw new Error(`XMLTV guide HTTP ${r && Number.isInteger(r.status) ? r.status : 'unknown'}`);
+  }
+  let xml = await decodeXmltvPayload(r.body);
+  assertXmltvFetchCurrent(s, key, generation, signal);
   if (xml.length > 120 * 1024 * 1024) xml = xml.subarray(0, 120 * 1024 * 1024); // parse cap
-  const text = xml.toString('utf8');
-  const keepFrom = Date.now() - 12 * 3600000;
-  const keepTo = Date.now() + 48 * 3600000;
-  // Pass 1 — <channel> display-names: many playlists have no/poor tvg-ids, so the guide is
-  // ALSO matched by normalized channel name.
-  const byName = new Map();
-  const chRe = /<channel[^>]*id="([^"]+)"[^>]*>([\s\S]*?)<\/channel>/g;
-  let m, n = 0;
-  while ((m = chRe.exec(text)) && n < 100000) {
-    n++;
-    const dnRe = /<display-name[^>]*>([\s\S]*?)<\/display-name>/g;
-    let d;
-    while ((d = dnRe.exec(m[2]))) {
-      const k = normChName(d[1].replace(/<!\[CDATA\[|\]\]>/g, ''));
-      if (k && !byName.has(k)) byName.set(k, m[1]);
-    }
-  }
-  // Which guide ids do we actually carry? (tvg-id direct + name-resolved)
-  const wanted = new Set();
+  // Parsing a provider's 50-120 MB guide with global regexes can monopolize Node's only HTTP/
+  // streaming event loop. Transfer the capped buffer to a bounded worker and keep serving video,
+  // zaps, health checks, and API requests while the schedule is indexed.
   const carried = sourceChannels || (iptvSourceCaches.get(cleanIptvSourceId(s.id)) || {}).channels || [];
-  for (const c of carried) {
-    if (c.tvgId) wanted.add(c.tvgId);
-    const viaName = byName.get(normChName(c.name));
-    if (viaName) wanted.add(viaName);
-  }
-  // Pass 2 — programmes for carried channels only.
-  const byChannel = new Map();
-  const re = /<programme\b([^>]*)>([\s\S]*?)<\/programme>/g;
-  n = 0;
-  while ((m = re.exec(text)) && n < 200000) {
-    n++;
-    const attrs = m[1] || '';
-    const channelId = xmlAttr(attrs, 'channel');
-    if (!channelId) continue;
-    if (wanted.size && !wanted.has(channelId)) continue;
-    const title = ((/<title[^>]*>([\s\S]*?)<\/title>/.exec(m[2]) || [])[1] || '').replace(/<!\[CDATA\[|\]\]>/g, '').trim();
-    if (!title) continue;
-    const start = parseXmltvDate(xmlAttr(attrs, 'start'));
-    const stop = parseXmltvDate(xmlAttr(attrs, 'stop'));
-    if (!start || !stop || stop < keepFrom || start > keepTo) continue;
-    if (!byChannel.has(channelId)) byChannel.set(channelId, []);
-    byChannel.get(channelId).push({ start, stop, title });
-  }
-  for (const list of byChannel.values()) list.sort((a, b) => a.start - b.start);
+  const parsed = await parseXmltvInWorker(xml, carried, { signal });
+  // Source deletion/edit and shutdown can race the network fetch, gzip decode, or worker. Only a
+  // still-current generation may publish its result to memory or the persistent cache.
+  assertXmltvFetchCurrent(s, key, generation, signal);
+  const byChannel = new Map(Array.isArray(parsed && parsed.byChannel) ? parsed.byChannel : []);
+  const byName = new Map(Array.isArray(parsed && parsed.byName) ? parsed.byName : []);
   epgCache = { key, sourceId: cleanIptvSourceId(s.id), at: Date.now(), byChannel, byName };
   epgSourceCaches.set(epgCache.sourceId, epgCache);
   persistXmltvCache(epgCache);
   return epgCache;
+}
+async function shutdownXmltvGuideJobs() {
+  xmltvShuttingDown = true;
+  const pending = [...epgFetchInflight.values()];
+  for (const record of pending) {
+    if (!record.controller.signal.aborted) {
+      record.controller.abort(xmltvCancellationError('XMLTV guide cancelled during shutdown'));
+    }
+  }
+  // Stop queued/active parser work before awaiting the fetch promises. Downloads are aborted by the
+  // controllers above; active parses are terminated here, so no job can hold shutdown for 45-90s.
+  await shutdownXmltvWorkers();
+  await Promise.allSettled(pending.map((record) => record.promise));
+  epgFetchInflight.clear();
 }
 // Programme list for one channel: tvg-id first, normalized display-name second.
 function xmltvListFor(epg, ch) {
   if (!epg) return [];
   let list = ch.tvgId ? epg.byChannel.get(ch.tvgId) : null;
   if (!list) {
-    const id = epg.byName.get(normChName(ch.name));
+    const id = epg.byName.get(normalizeXmltvChannelName(ch.name));
     if (id) list = epg.byChannel.get(id);
   }
   return list || [];
@@ -3791,39 +3839,76 @@ function activityDeviceName(b = {}, req = {}) {
   if (/\bSafari\//.test(ua) && /Apple/.test(ua)) return 'Safari';
   return 'Web';
 }
-// Best-effort CITY-LEVEL geolocation for the admin "now watching" panel. Cached per IP (private/LAN
-// addresses resolve to "Local network" with no lookup). The viewer's public IP leaves the server
-// ONLY for this lookup (to a free, no-key service) and is NEVER stored on the row or returned to the
-// client — only the resulting "City, Country" label is.
-const geoCache = new Map(); // ip -> { label, at }
+// Optional CITY-LEVEL geolocation for the admin "now watching" panel. Private/LAN addresses resolve
+// locally. When explicitly enabled, the public IP exists only for the bounded ipwho.is request; rows,
+// responses, and cache keys never retain it. The short in-memory cache uses a one-way digest.
+const geoCache = new Map(); // sha256(ip) -> { label, at }
+const geoInflight = new Map(); // sha256(ip) -> Promise<label>; join heartbeat bursts for one viewer
 const GEO_TTL_MS = 7 * 24 * 3600 * 1000;
 function normalizeIp(ip) { return String(ip || '').replace(/^::ffff:/, '').trim(); }
 function isPrivateIp(ip) {
-  return !ip || ip === '::1' || /^127\./.test(ip) || /^10\./.test(ip) || /^192\.168\./.test(ip)
-    || /^172\.(1[6-9]|2\d|3[01])\./.test(ip) || /^169\.254\./.test(ip)
-    || /^f[cd][0-9a-f]{2}:/i.test(ip) || /^fe80:/i.test(ip);
+  const s = String(ip || '').trim();
+  if (!s) return true;
+  const words = ipv6Words(s);
+  if (words) {
+    return isPrivateIpv6(s) || (words[0] === 0x2001 && words[1] === 0x0db8);
+  }
+  return /^0\./.test(s) || /^127\./.test(s) || /^10\./.test(s) || /^192\.168\./.test(s)
+    || /^172\.(1[6-9]|2\d|3[01])\./.test(s) || /^169\.254\./.test(s)
+    || /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(s)
+    || /^192\.0\.(0|2)\./.test(s) || /^198\.(1[89]|51\.100)\./.test(s)
+    || /^203\.0\.113\./.test(s) || /^(22[4-9]|23\d|24\d|25[0-5])\./.test(s);
+}
+function envFlag(name) {
+  return /^(1|true|yes|on)$/i.test(String(process.env[name] || '').trim());
+}
+function viewerGeolocationEnabled() {
+  return envFlag('TRIBOON_VIEWER_GEO') || settings.get().viewerGeolocationEnabled === true;
+}
+function geoCacheKey(ip) {
+  return require('crypto').createHash('sha256').update(String(ip)).digest('hex');
 }
 function clientIpForGeo(ctx) {
   const xff = ctx && ctx.req && ctx.req.headers['x-forwarded-for'];
+  if (!envFlag('TRIBOON_TRUST_PROXY')) {
+    return ctx && ctx.req && ctx.req.socket ? (ctx.req.socket.remoteAddress || '') : '';
+  }
   if (xff) return String(xff).split(',')[0].trim(); // behind a reverse proxy → first hop is the real client
   return ctx && ctx.req && ctx.req.socket ? (ctx.req.socket.remoteAddress || '') : '';
 }
 async function geoLocate(rawIp) {
   const ip = normalizeIp(rawIp);
+  if (!net.isIP(ip)) return '';
   if (isPrivateIp(ip)) return 'Local network';
-  const hit = geoCache.get(ip);
+  if (!viewerGeolocationEnabled()) return '';
+  const cacheKey = geoCacheKey(ip);
+  const hit = geoCache.get(cacheKey);
   if (hit && Date.now() - hit.at < GEO_TTL_MS) return hit.label;
-  let label = '';
-  try {
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), 4000);
-    const r = await fetch(`https://ipwho.is/${encodeURIComponent(ip)}?fields=success,city,country`, { signal: ac.signal });
-    clearTimeout(timer);
-    const j = await r.json();
-    if (j && j.success) label = [j.city, j.country].filter(Boolean).join(', ');
-  } catch { /* offline / rate-limited / bad ip → leave unknown */ }
-  geoCache.set(ip, { label, at: Date.now() });
-  return label;
+  if (geoInflight.has(cacheKey)) return geoInflight.get(cacheKey);
+  const job = (async () => {
+    let label = '';
+    let timer = null;
+    try {
+      const ac = new AbortController();
+      timer = setTimeout(() => ac.abort(), 4000);
+      const r = await fetch(`https://ipwho.is/${encodeURIComponent(ip)}?fields=success,city,country`, { signal: ac.signal });
+      if (!r.ok) throw new Error(`geolocation HTTP ${r.status}`);
+      const body = await r.text();
+      if (Buffer.byteLength(body) > 16384) throw new Error('geolocation response too large');
+      const j = JSON.parse(body);
+      if (j && j.success) label = [j.city, j.country].filter(Boolean).join(', ').slice(0, 60);
+    } catch { /* offline / rate-limited / bad ip → leave unknown */ }
+    finally { if (timer) clearTimeout(timer); }
+    // An admin may disable the feature while a request is in flight. Do not repopulate its cache or
+    // return the late label to the activity row: opt-out takes effect at save time, not after this
+    // third-party request happens to finish.
+    if (!viewerGeolocationEnabled()) return '';
+    geoCache.set(cacheKey, { label, at: Date.now() });
+    return label;
+  })();
+  geoInflight.set(cacheKey, job);
+  try { return await job; }
+  finally { if (geoInflight.get(cacheKey) === job) geoInflight.delete(cacheKey); }
 }
 function normalizeActivityRow(ctx, b = {}, id, existing = {}) {
   const duration = Math.max(0, Number(b.duration || 0) || 0);
@@ -3859,8 +3944,8 @@ function normalizeActivityRow(ctx, b = {}, id, existing = {}) {
     startedAt: existing.startedAt || Date.now(),
     updatedAt: Date.now(),
   };
-  // Resolve city-level location async so the heartbeat never blocks; the raw IP is only used here
-  // (closure) and is never stored on the row or sent to the client — only the resulting label.
+  // Resolve city-level location async so the heartbeat never blocks. The raw IP is never stored on
+  // the row, returned to the client, or retained as a cache key — only the resulting label is used.
   if (!row.location && ip) geoLocate(ip).then((loc) => { if (loc) row.location = loc; }).catch(() => {});
   return row;
 }
@@ -5394,7 +5479,13 @@ const H = {
   iptvEpg: async (ctx) => {
     if (throttleUserRoute(ctx, 'iptv-epg', { max: 90, windowMs: 60000, lockMs: 60000 })) return;
     try { await ensureIptvChannelStateForUser(ctx.user); } catch {}
-    const ch = iptvCache.channels && iptvCache.channels[parseInt(ctx.m[1], 10)];
+    const idx = parseInt(ctx.m[1], 10);
+    const cid = String(ctx.url.searchParams.get('cid') || '').trim().slice(0, 512);
+    let ch = iptvCache.channels && iptvCache.channels[idx];
+    if (cid && (!ch || String(ch.id) !== cid)) {
+      ch = (iptvCache.channels || []).find((candidate) => candidate && String(candidate.id) === cid) || null;
+      if (!ch) return send(ctx.res, 409, { error: 'channel list changed - reopen Live TV' });
+    }
     if (!ch) return send(ctx.res, 404, { error: 'channel not found' });
     try {
       const nn = await epgNowNext(ch);
@@ -6766,6 +6857,10 @@ Object.assign(H, {
       tmdbKey: s.tmdbKey ? '•••' : null,
       openSubsKey: effectiveOpenSubsKey(s) ? '•••' : null,
       builtInSubtitlesEnabled: s.builtInSubtitlesEnabled === true,
+      viewerGeolocationEnabled: viewerGeolocationEnabled(),
+      viewerGeolocationSavedEnabled: s.viewerGeolocationEnabled === true,
+      viewerGeolocationEnvForced: envFlag('TRIBOON_VIEWER_GEO'),
+      viewerGeolocationTrustProxy: envFlag('TRIBOON_TRUST_PROXY'),
       openSubsUser: s.openSubsUser || null, // username isn't a secret; the password is
       openSubsPass: s.openSubsPass ? '•••' : null,
       osApiKey: s.osApiKey ? '•••' : null,
@@ -6925,6 +7020,9 @@ Object.assign(H, {
         builtInSubtitlesEnabled: b.builtInSubtitlesEnabled !== undefined
           ? b.builtInSubtitlesEnabled === true
           : s.builtInSubtitlesEnabled === true,
+        viewerGeolocationEnabled: b.viewerGeolocationEnabled !== undefined
+          ? b.viewerGeolocationEnabled === true
+          : s.viewerGeolocationEnabled === true,
         // Downloads need the user's opensubtitles.com login (the API key alone only searches).
         openSubsUser: b.openSubsUser !== undefined ? (b.openSubsUser || null) : (s.openSubsUser ?? null),
         openSubsPass: b.openSubsPass !== undefined ? (b.openSubsPass || null) : (s.openSubsPass ?? null),
@@ -7062,7 +7160,15 @@ Object.assign(H, {
     // Indexer/provider changes invalidate cached searches — otherwise a freshly added
     // indexer is invisible (and tests of a replaced one read stale results) for 60s.
     pipeline.searchCache.clear();
-    send(ctx.res, 200, { ok: true });
+    if (!viewerGeolocationEnabled()) {
+      geoCache.clear();
+      geoInflight.clear();
+    }
+    send(ctx.res, 200, {
+      ok: true,
+      viewerGeolocationEnabled: viewerGeolocationEnabled(),
+      viewerGeolocationEnvForced: envFlag('TRIBOON_VIEWER_GEO'),
+    });
     if (iptvSourceChanged || iptvAccessChanged) {
       clearAllIptvRuntime();
       scheduleIptvWarmSoon('settings');
@@ -8682,12 +8788,11 @@ function sweep(now = Date.now()) {
   // rows here too so the maps can't accumulate on a server whose admin never opens the screen.
   for (const [id, row] of activitySessions) if (now - ((row && row.updatedAt) || 0) > ACTIVITY_TTL_MS) activitySessions.delete(id);
   for (const [key, row] of presenceSessions) if (now - ((row && row.lastSeen) || 0) > PRESENCE_TTL_MS) presenceSessions.delete(key);
-  // geoCache checked its TTL only on READ and never evicted — roaming remote users (mobile IPs
-  // rotate) grew it without bound over weeks-long uptime. Prune expired entries + cap as a backstop.
-  for (const [ip, hit] of geoCache) if (now - ((hit && hit.at) || 0) > GEO_TTL_MS) geoCache.delete(ip);
+  // Prune expired digest-keyed location labels and cap the in-memory cache as a backstop.
+  for (const [key, hit] of geoCache) if (now - ((hit && hit.at) || 0) > GEO_TTL_MS) geoCache.delete(key);
   if (geoCache.size > 500) {
     const oldest = [...geoCache.entries()].sort((a, b) => ((a[1] && a[1].at) || 0) - ((b[1] && b[1].at) || 0));
-    for (const [ip] of oldest.slice(0, geoCache.size - 500)) geoCache.delete(ip);
+    for (const [key] of oldest.slice(0, geoCache.size - 500)) geoCache.delete(key);
   }
   if (evicted.length) pipeline.rebalancePlaybackWindows(now);
   auth.sweepQuickConnect();
@@ -8734,13 +8839,14 @@ if (require.main === module) {
   }
 }
 
-function shutdown() {
+async function shutdown() {
   clearInterval(sweepTimer);
   clearPendingIptvWarmSoon();
   if (iptvWarmTimer) clearTimeout(iptvWarmTimer);
   iptvWarmTimer = null;
   iptvWarmNextAt = 0;
   closeAllIptvLiveStreams('shutdown');
+  await shutdownXmltvGuideJobs();
   cleanupYtCookieFiles();
   for (const vf of mounts.values()) closeMountHls(vf); // kill HLS ffmpeg + delete temp segment dirs
   if (pool) { pool.close(); pool = null; }
@@ -8749,4 +8855,8 @@ function shutdown() {
   return new Promise((r) => server.close(r));
 }
 
-module.exports = { server, mounts, pipeline, getPool, shutdown, sweep, ROUTES, auth, settings, store, warmIptvCaches, msUntilNextIptvWarm };
+module.exports = {
+  server, mounts, pipeline, getPool, shutdown, sweep, ROUTES, auth, settings, store,
+  warmIptvCaches, msUntilNextIptvWarm,
+  normalizeIp, isPrivateIp, clientIpForGeo, geoLocate, geoCacheKey, viewerGeolocationEnabled,
+};

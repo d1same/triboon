@@ -38,7 +38,7 @@ That command runs:
 - focused subtitles/CC/P11 tests;
 - full `npm.cmd test`;
 - isolated `/api/server` runtime smoke;
-- Android debug build;
+- Android lint, native JVM unit tests, and debug build;
 - Android TV stress smoke when an ADB device is available or supplied.
 
 The Android stress step is part of the full gate. If no Android device is
@@ -85,6 +85,57 @@ fails to produce a playable stream. Budgets default to feels-local targets
 (ready≤3s, 1stByte≤1.5s) and flag `SLOW` rather than hard-failing on timing.
 
 ### Latest Evidence
+
+2026-07-13, v2.6.19 pre-release verification:
+
+- Version contract aligned: `package.json` 2.6.19; Android `versionName`
+  2.6.19 / `versionCode` 301; isolated `/api/server` returned 2.6.19.
+- `npm.cmd test` passed 401/401. The complete security suite passed 111/111
+  and the release contract passed 6/6.
+- The final `npm.cmd run verify:full -- -AndroidDevice emulator-5554` passed
+  in 298.5 seconds, including P9/P11/P14, web script parsing, another complete
+  401-test run, isolated runtime smoke, Android `lintDebug`,
+  `testDebugUnitTest`, `assembleDebug`, APK install, and Android TV stress.
+- Android TV API 36 stress report
+  `bench/stress-results/android-tv-stress-20260713-144522.json` finished
+  `ok: true` with zero helper failures/warnings: 32 fixture channels, native
+  Live TV, 20 zaps, two PiP loops, native Multiview handoff, native VOD start
+  with 10 seek actions, and subtitle HTTP 200. The scanner found no app fatal
+  or provider-protection loop. Raw emulator logs still contain platform
+  AppOps/media-button warnings and are not described as silent. One earlier
+  attempt lost its WebView target after a transient PiP precondition miss
+  backed the app to the launcher; logs showed no crash, and both the clean
+  standalone rerun and this final full gate passed.
+- Android phone API 36: installed the 2.6.19 APK and visually checked portrait
+  Home, off-canvas menu, and Preferences at 1080x2400 (412x839 CSS viewport).
+  Physical touch opened the menu/settings, there was no horizontal overflow,
+  system Back returned Preferences to Home, and hardware/predictive Back now
+  dismisses the mobile drawer before navigation or exit. A real fixture movie
+  opened in native ExoPlayer, rotated to 2400x1080 landscape, rendered frames
+  and fitted touch controls, and a direct seek-bar tap advanced the display
+  position from 2841s to 4674s. First Back hid native controls while playback
+  and landscape remained active; second Back closed playback, restored portrait
+  Home, and kept the page within the viewport. The focused log gate found no
+  Triboon fatal, ANR, Chromium error, or Exo playback error. Phone CC was not
+  repeated live; the TV stress subtitle pass and mobile caption/overflow
+  contracts in `test/phase4.test.js` cover that remaining surface.
+- Docker gate passed with an isolated v2.6.19 image and healthy loopback-only
+  container. `/api/server` returned HTTP 200/version 2.6.19 and detected
+  ffmpeg, subtitle sync, Music, and Music catalog; all test containers,
+  networks, volumes, and images were removed without touching other services.
+- Windows package gate passed 16/16. The locked build produced
+  `Triboon-Setup-v2.6.19.exe` (101,886,506 bytes; SHA-256
+  `CFB7FE997AEF66D3A0F15FB0F6CE23BFB64DE5E26B5F0255152E23226C134C17`).
+  Its isolated staged server returned version 2.6.19 with ffmpeg/subtitle sync
+  detected and no stderr. The elevated service/firewall/install-upgrade-
+  uninstall cycle was not run because it would alter the host; the installer
+  remains unsigned as documented.
+
+#### Historical evidence (superseded release mechanics)
+
+The dated entries below are retained for audit history only. Their APK names,
+signing defaults, test counts, and publishing workflow do not define the
+current release; `docs-app-updates.md` governs current publishing.
 
 2026-06-27, distribution signing (v1.7.43):
 
@@ -423,8 +474,9 @@ reproduced quickly.
 
 ```powershell
 node --test test/iptv-cache.test.js
-node --test test/security.test.js --test-name-pattern "iptv|IPTV|Live TV|native proxy|native"
-node --test test/phase4.test.js --test-name-pattern "IPTV|Live TV|native Live|playChannel|guide|PiP"
+node --test test/xmltv.test.js
+node --test --test-name-pattern "iptv|IPTV|Live TV|native proxy|native" test/security.test.js
+node --test --test-name-pattern "IPTV|Live TV|native Live|playChannel|guide|PiP|client correctness" test/phase4.test.js
 ```
 
 Manual checks:
@@ -436,14 +488,28 @@ Manual checks:
 - Android TV uses ExoPlayer and never falls back to browser Live TV.
 - Native zapping releases/replaces the old stream and survives 20 Up/Down
   changes without fatal logs or stale channel ids.
+- Main, split, and Multiview rapid selections are last-intent-wins; stale URL
+  hydration cannot reopen an older channel or a closed pane.
+- Server/account and Android device-local channel lists start concurrently,
+  merge server-first, and concurrent callers join one bridge request.
+- Now/next and timeline guide requests bind index plus stable channel id,
+  self-heal resolvable drift, and reload the lineup on a genuine 409.
+- A cold same-source guide fanout performs one XMLTV fetch; headerless
+  `.xml.gz` guides decode correctly, and their expanded size is bounded.
+- Non-2xx guides stay visible as refresh failures. Editing/deleting a source or
+  shutting down aborts old guide work without a late cache write.
+- Distinct-source XMLTV parses use the global two-worker queue; shutdown drains
+  both active and queued jobs.
+- Large XMLTV parsing stays in the worker and does not stall `/api/server` or an
+  active player request.
 
 ### Fast VOD Startup / P14
 
 ```powershell
 node --test test/e2e.test.js
-node --test test/phase2.test.js --test-name-pattern "warmup|prepare|startup|read-ahead|priority|buffer|4K"
-node --test test/phase4.test.js --test-name-pattern "prepare|startup|VOD pause resume|native player|ExoPlayer|seek"
-node --test test/security.test.js --test-name-pattern "streaming|prepare|play|route"
+node --test --test-name-pattern "warmup|prepare|startup|read-ahead|priority|buffer|4K|loose-pack|season pack|episode pack|pack episode|exact-episode|season-zero|live-mount reuse|top-ranked|understudy|hedge|rank grace|mount deadline|master abort" test/phase2.test.js
+node --test --test-name-pattern "prepare|startup|VOD pause resume|native player|ExoPlayer|seek|web VOD rebuffer" test/phase4.test.js
+node --test --test-name-pattern "streaming|prepare|play|route" test/security.test.js
 ```
 
 Manual checks:
@@ -455,13 +521,19 @@ Manual checks:
 - Startup/seek bytes outrank health, read-ahead, and background work.
 - Paused warm-ahead stays low-priority and cancels on resume, seek, or close.
 - 4K buffering cannot starve another user's startup or seek.
+- A season-pack RAR/ZIP mounts and reuses only the requested episode.
+- A stalled top candidate gets one 800ms hedge; a ready understudy waits at
+  most 250ms for higher ranks and prevents additional source launches.
+- A sustained web stall retries the same source/kind/timestamp before release
+  failover.
 
 ### Subtitles / CC / P11
 
 ```powershell
-node --test test/phase2.test.js --test-name-pattern "subs|subtitle|Wyzie|caption"
-node --test test/phase4.test.js --test-name-pattern "subtitle|Subtitles|caption|CC|Wyzie|built-in|sync"
-node --test test/security.test.js --test-name-pattern "subtitle|subtitles|Wyzie|built-in"
+node --test --test-name-pattern "subs|subtitle|Wyzie|caption" test/phase2.test.js
+node --test --test-name-pattern "subtitle|Subtitles|caption|CC|Wyzie|built-in|sync" test/phase4.test.js
+node --test --test-name-pattern "subtitle|subtitles|Wyzie|built-in" test/security.test.js
+.\android\gradlew.bat -p android testDebugUnitTest
 ```
 
 Manual checks:
@@ -478,6 +550,23 @@ Manual checks:
   choices.
 - Native ExoPlayer subtitle overlay switches versions and sync offsets without
   rebuilding video or resetting captions to time zero.
+- Native S/M/L size follows the saved preference, `<br>`/entities are cleaned,
+  and no more than the last three overlapping cue texts render.
+- Web captions respect mobile/TV safe areas and bounded height; with built-ins
+  off, online warmup does not wait on the optional track probe.
+
+### Release Reproducibility / Privacy
+
+```powershell
+node --test test/release-contract.test.js
+node --test --test-name-pattern "privacy|geolocation|proxy" test/security.test.js
+```
+
+Confirm tag/package/Android versions agree, release assets are immutable and
+whitelisted, APK aliases are identical and release-signed, Windows dependencies
+are locked, and the final publisher cannot expose a partial release. Confirm
+viewer geolocation is off by default, trusted-proxy handling is explicit, and
+the Settings status reflects any environment-forced state.
 
 ## Full Done Report
 
@@ -489,9 +578,16 @@ Every final update report and PR description must include:
 - focused test pass counts when a focused gate was debugged separately;
 - full `npm.cmd test` result;
 - Android build result;
+- Android lint and native JVM unit-test results;
+- release-contract and privacy-focused results when packaging/privacy changed;
 - Web Player smoke result with title/channel and what was checked;
 - Android ExoPlayer smoke result with device/emulator, title/channel, zap/seek
   count, and log health;
+- Android phone/mobile smoke result with AVD/device, portrait UI, touch/Back,
+  caption-safe-area coverage, and log health;
+- Docker image build and isolated container `/api/server` smoke result;
+- locked Windows installer build/runtime result and any elevated install,
+  service, firewall, upgrade, or uninstall smoke not run, with reason;
 - anything not run, with reason and risk.
 
 If any required line says `not run`, do not phrase the work as fully done.
