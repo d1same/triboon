@@ -2311,11 +2311,15 @@ test('iptv: stale Xtream guide refresh failures do not crash the process', async
     const ch = await httpJson(first.port, 'GET', '/api/iptv/channels', null, admin);
     const guide = await httpJson(first.port, 'GET', `/api/iptv/guide?chs=${ch.json.channels[0].idx}`, null, admin);
     assert.strictEqual(guide.json.channels[0].programmes[0].title, 'Stale But Usable');
-    const cached = first.store.read('xtreamepgcache', null);
+    // Source-scoped caches are canonical; the singular key is only the legacy compatibility mirror.
+    // Age both copies so the restart genuinely hydrates stale data and exercises background refresh.
+    const scopedCaches = first.store.read('xtreamepgcaches', {});
+    const cached = scopedCaches && scopedCaches.default;
     assert.ok(cached && cached.streams && cached.streams.length, 'Xtream guide cache persisted');
     const staleAt = Date.now() - (2 * 24 * 3600000);
     cached.at = staleAt;
     cached.streams = cached.streams.map(([id, e]) => [id, { ...e, at: staleAt }]);
+    first.store.write('xtreamepgcaches', { ...scopedCaches, default: cached });
     first.store.write('xtreamepgcache', cached);
     first.store.flush();
     await first.shutdown();

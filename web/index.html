@@ -4336,18 +4336,53 @@ if (/TriboonAndroid/.test(navigator.userAgent) && !/TriboonTV/.test(navigator.us
 // XSS guards: ALL remote strings (TMDB fields, indexer release names, M3U/Xtream channel
 // data, scanned-library titles, user/profile names) must pass esc() before innerHTML, and
 // remote URLs must pass safeUrl() before src/url() (blocks javascript:/data: schemes).
+// Missing art uses a tightly-shaped CSS gradient below; it never turns remote text into CSS.
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const safeUrl = (u) => (/^https?:\/\//i.test(u) || /^\/(?!\/)/.test(u)) ? esc(u) : '';
+const safeRawUrl = (u) => {
+  const raw = String(u || '');
+  // Literal controls/backslashes are ambiguous in CSS strings and URL parsers. Legitimate URLs
+  // encode them, so reject them here instead of trying to repair a third-party artwork value.
+  if (/[\\\u0000-\u001f\u007f]/.test(raw)) return '';
+  return (/^https?:\/\//i.test(raw) || /^\/(?!\/)/.test(raw)) ? raw : '';
+};
+const safeUrl = (u) => esc(safeRawUrl(u));
+const SAFE_ART_GRADIENT = /^linear-gradient\((12\d|1[34]\d|150)deg,hsl\((?:[0-9]|[1-9]\d|[12]\d\d|3[0-5]\d) 55% 14%\),hsl\((?:[0-9]|[1-9]\d|[12]\d\d|3[0-5]\d) 62% 28%\)\)$/;
+function safeArtUrl(url) {
+  const raw = String(url || '');
+  return SAFE_ART_GRADIENT.test(raw) ? raw : safeRawUrl(raw);
+}
+// Multiple CSS backgrounds give every remote cover a zero-delay fallback: if the first request
+// fails (especially in Android WebView), the next trusted layer is already painted underneath it.
+function artBackground(...urls) {
+  const seen = new Set();
+  const trusted = urls.map(safeArtUrl).filter((u) => u && !seen.has(u) && seen.add(u));
+  // CSS paints the first background on top. Procedural gradients are opaque placeholders, so
+  // always keep every real image above them even when a model field already contains a generated
+  // fallback (for example: no show backdrop, but a valid poster still exists).
+  const ordered = [
+    ...trusted.filter((u) => !SAFE_ART_GRADIENT.test(u)),
+    ...trusted.filter((u) => SAFE_ART_GRADIENT.test(u)),
+  ];
+  return ordered.map((u) => SAFE_ART_GRADIENT.test(u) ? u : `url("${u.replace(/"/g, '%22')}")`).join(',');
+}
+function artBackgroundHtml(...urls) {
+  return esc(artBackground(...urls));
+}
+function absoluteArtworkUrl(...urls) {
+  const raw = urls.map(safeRawUrl).find(Boolean);
+  if (!raw) return ''; // CSS-only placeholders are for the WebView, never native URL payloads
+  try { return new URL(raw, location.origin).href; } catch { return ''; }
+}
 const bgLazy = (() => {
   let io = null;
   const load = (el) => {
     const u = el && el.dataset ? el.dataset.bg : '';
     if (!u) return;
-    el.style.backgroundImage = `url("${u}")`;
+    el.style.backgroundImage = u;
     delete el.dataset.bg;
   };
-  const api = (el, url) => {
-    const safe = safeUrl(url || '');
+  const api = (el, ...urls) => {
+    const safe = artBackground(...urls);
     if (!el || !safe) return;
     el.dataset.bg = safe;
     if (!('IntersectionObserver' in window)) return load(el);
@@ -4432,12 +4467,13 @@ function toast(msg) {
 let bdFlip = false, bdCurrent = '';
 let _bdPendingUrl = null, _bdTimer = null;
 function setBackdrop(url) {
-  if (!url || url === bdCurrent) return;
+  const safe = safeArtUrl(url);
+  if (!safe || safe === bdCurrent) return;
   // Debounce ~150ms: fast D-pad/scroll fires setBackdrop on EVERY focused card, and each distinct url
   // kicks off a w1280 TMDB image fetch that competes with NNTP bandwidth on a TV. Coalesce to the card
   // focus settles on — the .7s crossfade makes the small delay invisible. (Credits/prefetch/prepare
   // on focus are already debounced; the backdrop was the odd one out.)
-  _bdPendingUrl = url;
+  _bdPendingUrl = safe;
   if (_bdTimer) return;
   _bdTimer = setTimeout(() => {
     _bdTimer = null;
@@ -4446,7 +4482,7 @@ function setBackdrop(url) {
     bdCurrent = u;
     const showEl = bdFlip ? $('bdA') : $('bdB'), hideEl = bdFlip ? $('bdB') : $('bdA');
     bdFlip = !bdFlip;
-    showEl.style.backgroundImage = `url("${u}")`;
+    showEl.style.backgroundImage = artBackground(u, artFallback('backdrop:' + u, 70));
     requestAnimationFrame(() => { showEl.classList.add('show'); hideEl.classList.remove('show'); });
   }, 150);
 }
@@ -4459,22 +4495,20 @@ function clearBackdrop() {
   $('bdA').classList.remove('show'); $('bdB').classList.remove('show');
   $('bdInfo').classList.remove('show'); // the title/overview band rides the backdrop
 }
-const procMemo = new Map(); // canvas+JPEG encode is ~7ms a call — hundreds of cards must share
+// A CSS-only procedural placeholder is effectively free to create. The prior canvas/JPEG path cost
+// about 7ms per unique card and could freeze a large Discover render for nearly a second on WebView.
 function procBackdrop(hue, hue2, grain) {
-  const memoKey = `${hue}:${hue2}:${grain}`;
-  const hit = procMemo.get(memoKey);
-  if (hit) return hit;
-  const c = document.createElement('canvas'); c.width = 640; c.height = 360;
-  const x = c.getContext('2d');
-  const g = x.createLinearGradient(0, 0, 640, 360);
-  g.addColorStop(0, `hsl(${hue} 55% 14%)`); g.addColorStop(1, `hsl(${hue2} 62% 28%)`);
-  x.fillStyle = g; x.fillRect(0, 0, 640, 360);
-  let s = grain || 7919;
-  for (let i = 0; i < 1500; i++) { s = (s * 48271) % 2147483647; x.fillStyle = `rgba(255,255,255,${(s % 60) / 1500})`; x.fillRect(s % 640, (s >> 4) % 360, 1.4, 1.4); }
-  const url = c.toDataURL('image/jpeg', .8);
-  if (procMemo.size > 64) procMemo.clear();
-  procMemo.set(memoKey, url);
-  return url;
+  const normHue = (value) => ((Math.round(Number(value) || 0) % 360) + 360) % 360;
+  const seed = Math.abs(Math.trunc(Number(grain) || 0));
+  const angle = 120 + (seed % 31);
+  return `linear-gradient(${angle}deg,hsl(${normHue(hue)} 55% 14%),hsl(${normHue(hue2)} 62% 28%))`;
+}
+function artFallback(key, offset = 0) {
+  const s = String(key || 'Triboon');
+  let seed = 2166136261;
+  for (let i = 0; i < s.length; i++) seed = Math.imul(seed ^ s.charCodeAt(i), 16777619) >>> 0;
+  seed = (seed + offset * 7919) >>> 0;
+  return procBackdrop((seed % 300) + 20, ((seed >>> 9) % 300) + 20, (seed % 2147483000) + 1);
 }
 
 const gateArtState = { loaded: false, loading: false, items: [], idx: 0, flip: false, timer: null };
@@ -4486,7 +4520,7 @@ function gateFallbackArt() {
     { title: 'Series Queue', kind: 'tv', backdrop: procBackdrop(20, 288, 9401), poster: procBackdrop(20, 288, 9402) },
   ];
 }
-function cssBg(url) { return `url("${String(url || '').replace(/"/g, '%22')}")`; }
+function cssBg(url, fallback) { return artBackground(url, fallback); }
 function renderGatePosterStrip() {
   const strip = $('gatePosterStrip');
   if (!strip) return;
@@ -4495,7 +4529,7 @@ function renderGatePosterStrip() {
   items.slice(0, 8).forEach((item) => {
     const card = document.createElement('div');
     card.className = 'gatePoster';
-    card.style.backgroundImage = cssBg(item.poster || item.backdrop);
+    card.style.backgroundImage = cssBg(item.poster || item.backdrop, artFallback(item.title, 1));
     strip.appendChild(card);
   });
 }
@@ -4504,7 +4538,7 @@ function setGateArtwork(item, immediate = false) {
   const showEl = gateArtState.flip ? $('gateBdA') : $('gateBdB');
   const hideEl = gateArtState.flip ? $('gateBdB') : $('gateBdA');
   gateArtState.flip = !gateArtState.flip;
-  showEl.style.backgroundImage = cssBg(item.backdrop);
+  showEl.style.backgroundImage = cssBg(item.backdrop, artFallback(item.title, 2));
   const caption = $('gateArtCaption');
   if (caption) caption.textContent = item.title ? `${item.kind === 'tv' ? 'Series' : 'Movie'} - ${item.title}` : '';
   const swap = () => { showEl.classList.add('show'); hideEl.classList.remove('show'); };
@@ -5881,11 +5915,11 @@ function makeCard(it, poster, onFocus) {
       `${it.rating && it.rating !== '—' ? `<span class="badge">★ ${esc(it.rating)}</span>` : ''}` +
       `${isWatched(it) ? '<span class="wbadge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span>' : ''}</div>` +
       `<div class="cap">${esc(it.title)}</div><div class="sub">${esc(it.year || it.genre || '')}</div>`;
-    bgLazy(c.querySelector('.art'), it.poster);
+    bgLazy(c.querySelector('.art'), it.poster, it.backdrop, artFallback(it.key || it.title, 11));
   } else if (it.trailer) {
     c.className = 'card trailerCard focusable';
     c.innerHTML = `<div class="play"><div><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></div></div><div class="label">${esc(it.title)}</div>`;
-    bgLazy(c, it.backdrop);
+    bgLazy(c, it.backdrop, artFallback(it.key || it.title, 12));
   } else if (it._channel !== undefined) {
     // Live-channel card: logo tile + LIVE tag + "now playing" line (filled lazily from EPG).
     c.className = 'card liveCard focusable';
@@ -5901,7 +5935,7 @@ function makeCard(it, poster, onFocus) {
     c.className = 'card focusable';
     c.innerHTML = (it._nextEp ? `<span class="cardTag">${it._newEp ? 'NEW EPISODE' : 'NEXT EPISODE'}</span>` : '') +
       `<div class="label">${esc(it.title)}</div>` + (it.progress ? `<div class="pb" style="width:${it.progress * 100}%"></div>` : '');
-    bgLazy(c, it.backdrop);
+    bgLazy(c, it.backdrop, it.poster, artFallback(it.key || it.title, 13));
     // Continue Watching cards manage themselves: ✓ / ✕ on the thumbnail (Plex-style).
     if (isContinueWatchingItem(it)) {
       c.insertAdjacentHTML('beforeend',
@@ -6708,7 +6742,7 @@ function showPlayLoading(it) {
   $('player').classList.remove('live');
   $('pTitle').textContent = it.title || '';
   $('pSrc').textContent = '';
-  $('plCover').style.backgroundImage = `url('${safeUrl(it.backdrop || it.poster || '')}')`;
+  $('plCover').style.backgroundImage = artBackground(it.backdrop, it.poster, artFallback(it.key || it.title, 20));
   $('plTitle').textContent = it.title || '';
   $('playerLoader').classList.add('show');
   startPlayerLoadingStages();
@@ -6724,7 +6758,7 @@ function showNativePlayLoading(it) {
   try {
     window.TriboonTV.showVideoLoading(JSON.stringify({
       title: it.title || 'Triboon',
-      backdropUrl: it.backdrop || it.poster ? new URL(it.backdrop || it.poster, location.origin).href : '',
+      backdropUrl: absoluteArtworkUrl(it.backdrop, it.poster),
     }));
   } catch {}
   clearPlayerLoadingStages();
@@ -6733,14 +6767,26 @@ function showNativePlayLoading(it) {
 const RES_RANK = { '2160p': 4, '1080p': 3, '720p': 2, '576p': 1, '480p': 0 };
 async function openSources(it) {
   if (!it) return;
+  const reqId = (S.drawerReq = (S.drawerReq || 0) + 1);
+  const current = () => reqId === S.drawerReq && $('drawer').classList.contains('open');
+  const opener = [...document.querySelectorAll('.focus')].find((el) => el.offsetParent !== null)
+    || (document.activeElement && document.activeElement.offsetParent !== null ? document.activeElement : null);
+  S.drawerReturn = null;
+  if (opener && !opener.closest('#drawer')) S.drawerReturn = { el: opener, zone: S.zone, view: S.view, epoch: reqId };
   $('drawerSub').textContent = `${it.title} — auto-pick plays the top release. Choose to override.`;
   const list = $('srcList'); list.innerHTML = '<div class="sub">searching indexers…</div>';
   $('srcSort').style.display = 'none';
   $('drawer').classList.add('open'); $('drawerScrim').classList.add('open');
+  requestAnimationFrame(() => { if (current()) applyFocus($('drawerClose'), false); });
   try {
     const r = await api('/api/search?' + sourceSearchQuery(it));
+    if (!current()) return;
     list.innerHTML = '';
-    if (!r.candidates.length) { list.innerHTML = '<div class="sub">No releases found.</div>'; return; }
+    if (!r.candidates.length) {
+      list.innerHTML = '<div class="sub">No releases found.</div>';
+      applyFocus($('drawerClose'), false);
+      return;
+    }
     // The 1080p/4K toggle filters the drawer too: 4K selected → ONLY 4K releases; 1080p
     // selected → everything up to 1080p (an older show with only a 720p version still shows
     // and plays it). Titles with a single quality class always list everything.
@@ -6793,6 +6839,7 @@ async function openSources(it) {
       document.querySelectorAll('#srcSort button').forEach((b) => b.classList.toggle('sel', b.dataset.srcSort === S.sourceSort));
     };
     const renderSourceRows = (opts = {}) => {
+      if (!current()) return;
       list.innerHTML = '';
       sortedSources().forEach((c) => {
         const isAuto = c.pickKey === autoKey;
@@ -6818,7 +6865,20 @@ async function openSources(it) {
         row.title = c.name || '';
         // Release names are PUBLISHED BY STRANGERS on usenet — the #1 XSS vector in this app.
         row.innerHTML = `<div class="srcTop"><div class="srcTitle"><div class="name">${esc(displayReleaseName(c.name))}</div><div class="srcMeta">${esc(meta || 'Source details unavailable')}</div></div><div class="srcBadges">${chips}</div></div>`;
-        row.addEventListener('click', () => { closeDrawer(); play(it, { name: c.name, pickKey: c.pickKey, resolutionRank: rk(c) }); });
+        row.addEventListener('click', () => {
+          const returnFocus = S.drawerReturn;
+          const closedEpoch = closeDrawer({ restoreFocus: false });
+          void Promise.resolve(play(it, { name: c.name, pickKey: c.pickKey, resolutionRank: rk(c) })).finally(() => {
+            // A rejected preflight never opens the player; leave a usable visible target behind.
+            if (S.view === 'player' || $('drawer').classList.contains('open') || S.drawerReq !== closedEpoch
+                || (returnFocus && returnFocus.epoch + 1 !== closedEpoch)) return;
+            if (returnFocus && returnFocus.el && returnFocus.el.isConnected
+                && returnFocus.el.offsetParent !== null && S.view === returnFocus.view) {
+              S.zone = returnFocus.zone || S.zone;
+              applyFocus(returnFocus.el, false);
+            } else if (S.view === 'detail') applyFocus($('dPlay'), false);
+          });
+        });
         list.appendChild(row);
       });
       if (opts.focusSort) focusDrawerSort(opts.sortIdx);
@@ -6829,20 +6889,50 @@ async function openSources(it) {
     syncSortButtons();
     sortWrap.querySelectorAll('button').forEach((b, sortIdx) => {
       b.onclick = () => {
+        if (!current()) return;
         S.sourceSort = b.dataset.srcSort || 'best';
         syncSortButtons();
         renderSourceRows({ focusSort: true, sortIdx });
       };
     });
     renderSourceRows();
-  } catch (e) { list.innerHTML = `<div class="sub">Search failed: ${esc(e.message)}</div>`; }
+  } catch (e) {
+    if (!current()) return;
+    list.innerHTML = `<div class="sub">Search failed: ${esc(e.message)}</div>`;
+    applyFocus($('drawerClose'), false);
+  }
 }
-function closeDrawer() {
+function closeDrawer(opts = {}) {
+  const closedEpoch = S.drawerReq = (S.drawerReq || 0) + 1;
   $('drawer').classList.remove('open'); $('drawerScrim').classList.remove('open');
-  if (S.view !== 'detail' && S.view !== 'person') focusCard(S.rowIdx, S.colIdx[S.rowIdx] || 0);
+  const ret = S.drawerReturn; S.drawerReturn = null;
+  if (opts.restoreFocus === false) return closedEpoch;
+  const restore = (fn) => requestAnimationFrame(() => {
+    if (S.drawerReq === closedEpoch && !$('drawer').classList.contains('open')) fn();
+  });
+  if (ret && ret.el) {
+    restore(() => {
+      if (ret.epoch + 1 !== closedEpoch || !ret.el.isConnected
+          || ret.el.offsetParent === null || S.view !== ret.view) return;
+      S.zone = ret.zone || S.zone;
+      applyFocus(ret.el, false);
+    });
+  } else {
+    const returnView = S.view;
+    restore(() => {
+      if (S.view !== returnView) return;
+      if (returnView === 'detail') {
+        const target = $('dSources').offsetParent !== null ? $('dSources') : $('dPlay');
+        if (target && target.offsetParent !== null) applyFocus(target, false);
+      }
+      else if (returnView === 'person') focusPersonBack();
+      else focusCard(S.rowIdx, S.colIdx[S.rowIdx] || 0);
+    });
+  }
+  return closedEpoch;
 }
-$('drawerScrim').addEventListener('click', closeDrawer);   // click away closes
-$('drawerClose').addEventListener('click', closeDrawer);
+$('drawerScrim').addEventListener('click', () => closeDrawer());   // click away closes
+$('drawerClose').addEventListener('click', () => closeDrawer());
 $('btnSources').addEventListener('click', () => openSources(S.focusedItem));
 $('btnPlay').addEventListener('click', () => play(S.focusedItem));
 
@@ -6857,6 +6947,7 @@ function epItemOf(show, season, ep) {
     year: show.year, genre: `S${pad2(season.season_number)}E${pad2(ep.episode_number)}`, rating: ep.vote_average ? ep.vote_average.toFixed(1) : show.rating,
     overview: ep.overview || show.overview,
     backdrop: img(ep.still_path) || show.backdrop,
+    poster: show.poster,
     qualityRank: qualityRankForItem(show),
     tmdbId: show.tmdbId, imdbId: show.imdbId, tvdbId: show.tvdbId, originalLanguage: show.originalLanguage, type: 'episode', airDate: ep.air_date || '',
     resume: (S.watchMap && S.watchMap[epKeyOf(show, season.season_number, ep.episode_number)] &&
@@ -6980,6 +7071,7 @@ async function openDetail(it, push = true) {
   captureDetailReturn(); // remember the exact card/list/search result that opened Details
   // Opened from a cast page? Remember which one so hardware Back / Escape (which run closeDetail,
   // NOT browser history) return to the cast page instead of restoreDetailReturn's stale home.
+  if (S.view === 'person') capturePersonReturnForDetail();
   S.detailFromPerson = (S.view === 'person') ? (S.personId || null) : null;
   $('person').classList.remove('open');
   $('detail').style.visibility = ''; // openPerson hides the detail page UNDER it — coming
@@ -6992,7 +7084,7 @@ async function openDetail(it, push = true) {
   $('browse').classList.remove('open'); $('discover').classList.remove('open');
   $('settings').classList.remove('open'); $('prefs').classList.remove('open'); $('music').classList.remove('open');
   setBackdrop(it.backdrop);
-  $('dPoster').style.backgroundImage = `url('${it.poster || it.backdrop}')`;
+  $('dPoster').style.backgroundImage = artBackground(it.poster, it.backdrop, artFallback(it.key || it.title, 30));
   $('dKind').textContent = it.type === 'tv' ? 'Show' : 'Movie';
   $('dTitle').textContent = it.title;
   $('dOverview').textContent = it.overview || '';
@@ -7053,7 +7145,11 @@ async function openDetail(it, push = true) {
       it.title = d.title || d.name || '';
       $('dTitle').textContent = it.title;
       if (d.backdrop_path) { it.backdrop = img(d.backdrop_path); setBackdrop(it.backdrop); }
-      if (d.poster_path) { it.poster = img(d.poster_path, 'w342'); const p = $('dPoster'); if (p) p.style.backgroundImage = `url('${safeUrl(it.poster)}')`; }
+      if (d.poster_path) {
+        it.poster = img(d.poster_path, 'w342');
+        const p = $('dPoster');
+        if (p) p.style.backgroundImage = artBackground(it.poster, it.backdrop, artFallback(it.key || it.title, 30));
+      }
       if (d.overview) $('dOverview').textContent = d.overview;
       checkAvailability(it); // the early call ran with an empty title — redo with the real one
     }
@@ -7124,7 +7220,16 @@ async function openDetail(it, push = true) {
       related.forEach((rit) => row.appendChild(makeCard(rit, true, () => {})));
       bindEdgeScroll(row);
     }
-  } catch (e) { toast('Details failed to load: ' + e.message); }
+  } catch (e) {
+    if (reqId !== S.detailReq || S.view !== 'detail') return;
+    bootReady();
+    if (!$('dOverview').textContent) $('dOverview').textContent = 'Details could not be loaded. Try again, or go back.';
+    toast('Details failed to load: ' + e.message);
+    requestAnimationFrame(() => {
+      if (reqId !== S.detailReq || S.view !== 'detail') return;
+      S.zone = ''; applyFocus($('dBack'), false);
+    });
+  }
 }
 
 function certOf(d, type) {
@@ -7145,7 +7250,7 @@ const PERSON_WORKS_BATCH = 24;
 function castCard(c) {
   const b = document.createElement('button');
   b.className = 'castCard focusable';
-  b.innerHTML = `<div class="ph" style="background-image:url('${safeUrl(img(c.profile_path, 'w185') || '')}')"></div>` +
+  b.innerHTML = `<div class="ph" style="background-image:${artBackgroundHtml(img(c.profile_path, 'w185'), artFallback('cast:' + c.id, 31))}"></div>` +
     `<div class="nm">${esc(c.name)}</div><div class="ch">${esc(c.character || '')}</div>`;
   b.addEventListener('click', () => openPerson(c.id));
   b.addEventListener('focus', () => maybeLoadMoreCast());
@@ -7199,7 +7304,7 @@ function renderSeasonGrid(show, seasons) {
     const seasonWatched = isSeasonWatched(show.tmdbId, s.season_number, s.episode_count);
     const yearLabel = seasonYearLabel(s);
     const episodeLabel = seasonEpisodeCountLabel(s);
-    c.innerHTML = `<div class="art" style="background-image:url('${safeUrl(img(s.poster_path, 'w342') || show.poster)}')">
+    c.innerHTML = `<div class="art" style="background-image:${artBackgroundHtml(img(s.poster_path, 'w342'), show.poster, show.backdrop, artFallback((show.key || show.title) + ':season:' + s.season_number, 32))}">
         <span class="epbadge">${parseInt(s.episode_count, 10) || 0}</span>
         <span class="seasonYear">${esc(yearLabel)}</span>
         ${seasonWatched ? '<span class="wbadge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span>' : ''}</div>
@@ -7247,7 +7352,7 @@ function renderLocalShowSeasonGrid(show, seasons) {
     const c = document.createElement('button');
     c.className = 'seasonCard focusable'; c.dataset.season = s.season_number; c.dataset.localSeason = '1';
     const seasonWatched = isLocalSeasonWatched(s);
-    c.innerHTML = `<div class="art" style="background-image:url('${safeUrl(show.poster || show.backdrop)}')">
+    c.innerHTML = `<div class="art" style="background-image:${artBackgroundHtml(show.poster, show.backdrop, artFallback((show.key || show.title) + ':season:' + s.season_number, 33))}">
         <span class="epbadge">${parseInt(s.episode_count, 10) || 0}</span>
         ${seasonWatched ? '<span class="wbadge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span>' : ''}</div>
       <div class="st">${esc(s.name || 'Season ' + s.season_number)}</div>
@@ -7330,6 +7435,11 @@ function appendAllSeasonsTab(tabs, onClick) {
 }
 // Click a season → EPISODES view with season tabs + episode cards.
 async function openSeasonEpisodes(show, seasonNumber, opts = {}) {
+  const reqId = (S.seasonReq = (S.seasonReq || 0) + 1);
+  const detailReq = S.detailReq;
+  const current = () => reqId === S.seasonReq && S.view === 'detail'
+    && S.detailSeason === seasonNumber && detailReq === S.detailReq
+    && (!opts.reqId || opts.reqId === S.detailReq);
   // Switching seasons from the tab strip should keep focus on the tabs (so the next Left/Right hits
   // the adjacent season) — capture that BEFORE the re-render wipes the focused tab.
   const cameFromTab = opts.fromTab
@@ -7346,12 +7456,15 @@ async function openSeasonEpisodes(show, seasonNumber, opts = {}) {
     t.addEventListener('click', () => openSeasonEpisodes(show, s.season_number));
     tabs.appendChild(t);
   });
-  appendAllSeasonsTab(tabs, () => renderSeasonGrid(show, S.detailSeasons || [])); // last tab
+  appendAllSeasonsTab(tabs, () => {
+    S.seasonReq = (S.seasonReq || 0) + 1; // invalidate a season response still in flight
+    renderSeasonGrid(show, S.detailSeasons || []);
+  }); // last tab
   bindEdgeScroll(tabs);
   const grid = $('epGrid'); grid.style.display = 'flex'; grid.innerHTML = '<div class="sub" style="color:var(--muted)">loading episodes…</div>';
   try {
     const season = await api(`/api/tmdb/tv/${show.tmdbId}/season/${seasonNumber}`);
-    if (S.detailSeason !== seasonNumber || (opts.reqId && opts.reqId !== S.detailReq)) return; // user already clicked another season tab
+    if (!current()) return; // user already clicked another season tab or opened another title
     grid.innerHTML = '';
     (season.episodes || []).forEach((ep) => {
       const item = epItemOf(show, season, ep);
@@ -7368,7 +7481,7 @@ async function openSeasonEpisodes(show, seasonNumber, opts = {}) {
       if (upcoming) card.classList.add('upcoming');
       const label = w && w.position > 30 && !w.watched ? 'Resume' : 'Play';
       card.innerHTML = `
-        <div class="still" style="background-image:url('${safeUrl(img(ep.still_path, 'w300') || show.backdrop)}')">
+        <div class="still" style="background-image:${artBackgroundHtml(img(ep.still_path, 'w300'), show.backdrop, show.poster, artFallback((show.key || show.title) + ':s' + seasonNumber + 'e' + ep.episode_number, 34))}">
           ${upcoming ? `<span class="pbtn upcomingTag">Airs ${esc(fmtDate(ep.air_date))}</span>` : ''}
           ${!upcoming && label === 'Resume' ? '<span class="pbtn resume">Resume</span>' : ''}
           ${!upcoming && w && w.watched ? '<span class="wbadge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span>' : ''}
@@ -7429,7 +7542,10 @@ async function openSeasonEpisodes(show, seasonNumber, opts = {}) {
       const firstEp = grid.querySelector('.epCard');
       if (firstEp) applyFocus(firstEp);
     }
-  } catch (e) { grid.innerHTML = `<div class="sub" style="color:var(--muted)">Episodes failed: ${esc(e.message)}</div>`; }
+  } catch (e) {
+    if (!current()) return;
+    grid.innerHTML = `<div class="sub" style="color:var(--muted)">Episodes failed: ${esc(e.message)}</div>`;
+  }
 }
 document.addEventListener('click', () => document.querySelectorAll('.epMenu.open').forEach((m) => m.classList.remove('open')));
 function localEpisodeDisplayName(ep) {
@@ -7493,7 +7609,7 @@ function openLocalShowSeasonEpisodes(show, seasonNumber, opts = {}) {
     const label = w && w.position > 30 && !w.watched ? 'Resume' : 'Play';
     const code = `S${pad2(ep.s)}E${pad2(ep.e)}`;
     card.innerHTML = `
-      <div class="still" style="background-image:url('${safeUrl(item.backdrop || show.backdrop)}')">
+      <div class="still" style="background-image:${artBackgroundHtml(item.backdrop, show.backdrop, show.poster, artFallback(item.key, 35))}">
         ${label === 'Resume' ? '<span class="pbtn resume">Resume</span>' : ''}
         ${w && w.watched ? '<span class="wbadge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span>' : ''}
         ${progress && !w.watched ? `<div class="pb" style="width:${progress * 100}%"></div>` : ''}
@@ -7705,6 +7821,11 @@ async function checkAvailability(it) {
 }
 
 function closeDetail() {
+  // Closing is also a last-intent boundary. Success paths use these epochs, so invalidate them
+  // before exposing another page; otherwise a late TMDB/local/availability response can repaint
+  // hidden detail DOM or close the next surface based on the title that is no longer open.
+  S.detailReq = (S.detailReq || 0) + 1;
+  S.seasonReq = (S.seasonReq || 0) + 1;
   $('detail').classList.remove('open');
   S.detailItem = null;
   S.qualityPref = null; // visible toggle state only; per-title choices stay saved for Continue Watching.
@@ -7712,7 +7833,7 @@ function closeDetail() {
   // (the browser Back button takes the history route instead — see the hashchange handler).
   const fromPerson = S.detailFromPerson;
   S.detailFromPerson = null;
-  if (fromPerson) { replaceRoute(`#/person/${fromPerson}`); openPerson(fromPerson, false); return; }
+  if (fromPerson) { replaceRoute(`#/person/${fromPerson}`); restorePersonFromDetail(fromPerson); return; }
   restoreDetailReturn();
 }
 $('dBack').addEventListener('click', closeDetail);
@@ -7806,11 +7927,86 @@ function bindEdgeScroll(root = document) {
 }
 bindEdgeScroll();
 
+function capturePersonOriginDetail() {
+  if (S.view !== 'detail' || !$('detail').classList.contains('open') || !S.detailItem) return;
+  const cards = [...$('castRow').querySelectorAll('.castCard')];
+  const focused = $('castRow').querySelector('.castCard.focus')
+    || (document.activeElement && document.activeElement.closest && document.activeElement.closest('#castRow .castCard'));
+  const scroller = $('detail').querySelector('.detailScroll');
+  S.personOriginDetail = {
+    item: S.detailItem,
+    detailReq: S.detailReq,
+    castIdx: Math.max(0, cards.indexOf(focused)),
+    castScrollLeft: $('castRow').scrollLeft || 0,
+    detailScrollTop: scroller ? scroller.scrollTop || 0 : 0,
+    zone: S.zone,
+    colMem: { ...(S.detailColMem || {}) },
+  };
+}
+function capturePersonReturnForDetail() {
+  S.personReturn = {
+    id: S.personId,
+    gridIdx: activeGridIdx(),
+    gridTopRow: S.gridTopRow || 0,
+    scrollTop: $('person').scrollTop || 0,
+    zone: S.zone,
+    works: S.personWorksAll || [],
+    shown: S.personWorksShown || 0,
+  };
+}
+function restorePersonFromDetail(id) {
+  const ret = S.personReturn;
+  S.personReturn = null;
+  if (!ret || String(ret.id) !== String(id) || !$('personGrid').querySelector('.pcard')) {
+    openPerson(id, false);
+    return;
+  }
+  S.view = 'person'; S.personId = id;
+  S.personWorksAll = ret.works; S.personWorksShown = ret.shown;
+  S.gridRoot = $('personGrid'); S.gridItems = ret.works.slice(0, ret.shown);
+  S.gridIdx = Math.max(0, Math.min(S.gridItems.length - 1, ret.gridIdx || 0));
+  S.gridTopRow = ret.gridTopRow || 0; S.zone = ret.zone || 'grid';
+  $('detail').style.visibility = 'hidden';
+  $('person').classList.add('open');
+  requestAnimationFrame(() => {
+    if (S.view !== 'person' || String(S.personId) !== String(id)) return;
+    $('person').scrollTop = ret.scrollTop || 0;
+    focusGrid(S.gridIdx);
+    requestAnimationFrame(() => {
+      if (S.view === 'person' && String(S.personId) === String(id)) $('person').scrollTop = ret.scrollTop || 0;
+    });
+  });
+}
+function sameDetailIdentity(a, b) {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (a.tmdbId && b.tmdbId) return String(a.tmdbId) === String(b.tmdbId) && String(a.type) === String(b.type);
+  return !!(a.key && b.key && String(a.key) === String(b.key));
+}
+function restorePersonOriginDetailFocus(origin, expectedReq = origin && origin.detailReq) {
+  if (!origin || S.view !== 'detail' || !$('detail').classList.contains('open')
+      || !sameDetailIdentity(S.detailItem, origin.item)
+      || (expectedReq !== undefined && expectedReq !== S.detailReq)) return false;
+  S.detailColMem = { ...(origin.colMem || {}) };
+  const cards = [...$('castRow').querySelectorAll('.castCard')];
+  const target = cards[Math.max(0, Math.min(cards.length - 1, origin.castIdx || 0))];
+  S.zone = origin.zone || '';
+  if (target) applyFocus(target, false); else focusContent();
+  $('castRow').scrollLeft = origin.castScrollLeft || 0;
+  const scroller = $('detail').querySelector('.detailScroll');
+  if (scroller) scroller.scrollTop = origin.detailScrollTop || 0;
+  return true;
+}
+
 async function openPerson(id, push = true) {
   if (!id) return;
+  if (push) capturePersonOriginDetail();
+  const reqId = (S.personReq = (S.personReq || 0) + 1);
   if (push) setRoute(`#/person/${id}`); // a real history entry, so Back returns HERE (not the detail under it)
   S.personId = id; // so a detail opened from this cast page can return here on hardware Back / Escape
   S.view = 'person'; $('person').classList.add('open');
+  const current = () => reqId === S.personReq && S.view === 'person'
+    && String(S.personId) === String(id);
   $('person').scrollTop = 0;
   $('detail').style.visibility = 'hidden'; // both are translucent — the detail page would bleed through
   clearBackdrop();
@@ -7820,10 +8016,11 @@ async function openPerson(id, push = true) {
   $('pPhoto').style.backgroundImage = ''; $('personGrid').innerHTML = '<div class="sub" style="color:var(--muted)">loading…</div>';
   try {
     const p = await api(`/api/tmdb/person/${id}?append_to_response=combined_credits`);
+    if (!current()) return;
     $('pName').textContent = p.name;
     $('pKnown').textContent = p.known_for_department || '';
     $('pBio').textContent = p.biography || '';
-    $('pPhoto').style.backgroundImage = `url('${img(p.profile_path, 'w342') || ''}')`;
+    $('pPhoto').style.backgroundImage = artBackground(img(p.profile_path, 'w342'), artFallback('person:' + id, 40));
     // Their works: dedupe, keep movie/tv with art, sort by popularity.
     const seen = new Set();
     const credits = ((p.combined_credits && p.combined_credits.cast) || [])
@@ -7832,8 +8029,15 @@ async function openPerson(id, push = true) {
       .sort((a, b) => (b.popularity || 0) - (a.popularity || 0))
       .map(mapTmdb);
     renderPersonWorks(credits);
-    requestAnimationFrame(() => { if (S.view === 'person') focusGrid(0); });
-  } catch (e) { $('personGrid').innerHTML = `<div class="sub" style="color:var(--muted)">Failed: ${esc(e.message)}</div>`; }
+    requestAnimationFrame(() => { if (current()) focusGrid(0); });
+  } catch (e) {
+    if (!current()) return;
+    bootReady();
+    $('personGrid').innerHTML = `<div class="sub" style="color:var(--muted)">Failed: ${esc(e.message)}</div>`;
+    requestAnimationFrame(() => {
+      if (current()) focusPersonBack();
+    });
+  }
 }
 
 function detailPlayEpisodeParts() {
@@ -7910,14 +8114,32 @@ function maybeLoadMorePersonWorks() {
 function closePerson() {
   $('person').classList.remove('open');
   S.personWorksAll = null; S.personWorksShown = 0;
-  // Normally the cast page sits OVER a still-open detail (only hidden) — reveal it. But when we
-  // re-entered the cast page from a closed detail (hardware Back out of a cast-member's movie),
-  // there's nothing underneath; leave to where the detail chain started instead of a blank page.
-  if (!$('detail').classList.contains('open')) return restoreDetailReturn();
+  const origin = S.personOriginDetail;
+  S.personOriginDetail = null;
+  // Normally the cast page sits OVER its still-open origin detail. After browser Back from a cast
+  // member's work, however, the still-open DOM belongs to that work, not the origin. Rebuild the
+  // origin in either case instead of revealing a wrong title under the origin's route.
+  const originDetailAlive = $('detail').classList.contains('open')
+    && (!origin || !origin.item || sameDetailIdentity(S.detailItem, origin.item));
+  if (!originDetailAlive) {
+    if (origin && origin.item) {
+      $('detail').style.visibility = ''; S.view = 'detail'; S.detailFromPerson = null;
+      replaceRoute(`#/title/${origin.item.type}/${origin.item.tmdbId}`);
+      const detailJob = openDetail(origin.item, false);
+      const restoreReq = S.detailReq;
+      void Promise.resolve(detailJob).then(() => {
+        requestAnimationFrame(() => restorePersonOriginDetailFocus(origin, restoreReq));
+      });
+      return;
+    }
+    return restoreDetailReturn();
+  }
   $('detail').style.visibility = ''; S.view = 'detail';
   if (S.detailItem && S.detailItem.backdrop) setBackdrop(S.detailItem.backdrop);
-  // TV: the ring was still on a (hidden) person-page card — refocus the detail page.
-  if (document.body.classList.contains('tv')) { S.zone = ''; clearFocus(); focusContent(); }
+  if (origin && origin.item) replaceRoute(`#/title/${origin.item.type}/${origin.item.tmdbId}`);
+  // Restore the exact cast card and scroll position that launched the person page.
+  clearFocus();
+  if (!restorePersonOriginDetailFocus(origin)) focusContent();
 }
 $('pBack').addEventListener('click', closePerson);
 $('person').addEventListener('scroll', maybeLoadMorePersonWorks, { passive: true });
@@ -9513,7 +9735,7 @@ function stopActivePlaybackForReplacement(opts = {}) {
   }
   stopWebVideoElement();
   clearPlaybackTimers();
-  closeTrackMenu();
+  closeTrackMenu({ restoreFocus: false });
   $('playerStats').classList.remove('open');
   if (!opts.preserveGuide) closePlayerGuide({ fromNative: true });
   hideUpNextUi();
@@ -9651,7 +9873,7 @@ async function openPlayer(it, mount, opts = {}) {
   // Refresh cast/AirPlay availability for this title (hidden for Live TV — Phase 1 is VOD only).
   try { updateCastButtons(); if (!castVodEligible() && $('airplayBtn')) $('airplayBtn').style.display = 'none'; } catch {}
   // Branded buffering overlay (cover + spinner) so mount/transcode latency never looks frozen.
-  $('plCover').style.backgroundImage = `url('${it.backdrop || it.poster}')`;
+  $('plCover').style.backgroundImage = artBackground(it.backdrop, it.poster, artFallback(it.key || it.title, 41));
   $('plTitle').textContent = it.title;
   $('playerLoader').classList.remove('show');
   $('upNext').classList.remove('show'); if (S.upNextTimer) clearInterval(S.upNextTimer);
@@ -10308,14 +10530,15 @@ function tryNativeVideoPlayer(kind, atSeconds, opts = {}) {
   p.startOffset = seekStart;
   p.nativePos = Math.max(0, atSeconds || 0);
   p.nativeDuration = p.duration || 0;
-  const nativeBackdrop = p.item.backdrop || p.item.poster || '';
   const playerMeta = episodePlayerMeta(p.item);
   const payload = {
     title: playerMeta.title || p.item.title || 'Triboon',
     episodeLabel: playerMeta.subline || '',
     source: p.name || p.item.q || kind,
     url: new URL(nativeUrl, location.origin).href,
-    backdropUrl: nativeBackdrop ? new URL(nativeBackdrop, location.origin).href : '',
+    // Keep the full candidate chain until after CSS-only placeholders are filtered. Collapsing
+    // with `||` first lets an opaque procedural backdrop discard a perfectly valid poster URL.
+    backdropUrl: absoluteArtworkUrl(p.item.backdrop, p.item.poster),
     start: serverSeek ? 0 : Math.max(0, atSeconds || 0),
     startOffset: seekStart,
     kind,
@@ -10905,7 +11128,7 @@ function renderPlayerEpisodes() {
     const b = document.createElement('button');
     b.className = 'playerEpCard focusable' + (ep.item.key === st.currentKey ? ' current' : '') + (ep.watched ? ' watched' : '') + (ep.upcoming ? ' upcoming' : '');
     b.dataset.playerEpIdx = String(idx);
-    b.style.setProperty('--still', `url('${safeUrl(ep.still || '')}')`);
+    b.style.setProperty('--still', artBackground(ep.still, ep.backdrop, ep.poster, artFallback(ep.item && ep.item.key, 42)));
     b.innerHTML = `<div class="peStill">${ep.upcoming ? '<span class="peUpcoming">Upcoming</span>' : ''}</div><div class="peMeta"><span class="peTag">${esc(ep.tag)}</span><span class="peName">${esc(ep.name || 'Episode ' + (idx + 1))}</span></div>`;
     b.addEventListener('click', () => {
       if (ep.item.key === st.currentKey) return;
@@ -10924,7 +11147,9 @@ function nativeEpisodeChoices() {
     index: idx,
     tag: ep.tag,
     name: ep.name || '',
-    still: ep.still || '',
+    // Android's loader accepts URLs, not WebView CSS. Relative server artwork is made absolute;
+    // generated gradients are skipped while later real backdrop/poster candidates remain usable.
+    still: absoluteArtworkUrl(ep.still, ep.backdrop, ep.poster),
     current: ep.item && ep.item.key === st.currentKey,
     watched: !!ep.watched,
     upcoming: !!ep.upcoming,
@@ -10976,7 +11201,9 @@ async function prepPlayerSeasonEpisodes(it) {
           item,
           tag: `S${pad2(sNum)}E${pad2(ep.episode_number)}`,
           name: ep.name || '',
-          still: img(ep.still_path, 'w300') || ctx.show.backdrop,
+          still: img(ep.still_path, 'w300'),
+          backdrop: ctx.show.backdrop,
+          poster: ctx.show.poster,
           watched: !!(w && w.watched),
           upcoming: !!(ep.air_date && ep.air_date > todayStr()),
         });
@@ -11498,7 +11725,7 @@ function togglePlayerStats() {
   const box = $('playerStats'); if (!box) return;
   const open = !box.classList.contains('open');
   if (open) {
-    closeTrackMenu();
+    closeTrackMenu({ restoreFocus: false });
     refreshPlayerRuntimeStats(true).then(() => {
       if ($('playerStats').classList.contains('open')) renderPlayerStats();
     }).catch(() => {});
@@ -11590,7 +11817,7 @@ async function closePlayer(opts = {}) {
   closePlayerGuide();
   closePlayerEpisodes();
   $('upNext').classList.remove('show');
-  closeTrackMenu();
+  closeTrackMenu({ restoreFocus: false });
   closePlayerStats();
   S.playerSeasonStrip = null;
   S.nextEp = null; updateNextEpisodeButton();
@@ -11603,7 +11830,12 @@ async function closePlayer(opts = {}) {
     try { await finalWatch; await finalActivity; await loadWatchState(true); } catch {}
     if (S.detailItem) syncDetailButtons(S.detailItem);
     if (S.detailItem && S.detailItem.type === 'tv' && S.detailSeason != null) loadSeason(S.detailItem, S.detailSeason);
-    if (S.zone === 'detail') requestAnimationFrame(() => applyFocus($('dPlay')));
+    // The player owns S.zone while open, so testing for a fictional "detail" zone stranded the
+    // focus ring on the now-hidden player. Always return to a visible primary detail action.
+    S.zone = '';
+    requestAnimationFrame(() => {
+      if (S.view === 'detail' && $('detail').classList.contains('open')) applyFocus($('dPlay'));
+    });
   } else if (finishedTarget) {
     S.playerReturn = null;
     try { await finalWatch; await finalActivity; await loadWatchState(true); } catch {}
@@ -12570,7 +12802,12 @@ function updatePlayerControlAvailability() {
   updateLiveFavoriteButton();
   if (!p) ['ccBtn', 'audBtn', 'qualBtn', 'favBtn', 'splitBtn', 'nextEpBtn'].forEach((id) => setPlayerControlEnabled(id, false));
 }
-function closeTrackMenu() { $('trackMenu').classList.remove('open'); }
+function closeTrackMenu(opts = {}) {
+  $('trackMenu').classList.remove('open');
+  const ret = S.trackMenuReturnEl; S.trackMenuReturnEl = null;
+  if (opts.restoreFocus === false || !ret || !ret.isConnected || S.view !== 'player') return;
+  requestAnimationFrame(() => applyFocus(ret, false));
+}
 function closePlayerStats() { $('playerStats').classList.remove('open'); }
 function restoreTrackMenuPosition(opts = {}) {
   const m = $('trackMenu');
@@ -12579,7 +12816,7 @@ function restoreTrackMenuPosition(opts = {}) {
     if (Number.isFinite(opts.scrollTop)) m.scrollTop = opts.scrollTop;
     const target = opts.focusKey
       ? m.querySelector(`[data-focus-key="${opts.focusKey}"]`) || m.querySelector('[data-focus-key="subs-later"]')
-      : null;
+      : m.querySelector('button.sel:not(:disabled)') || m.querySelector('button:not(:disabled)');
     if (!target) return;
     try { target.focus({ preventScroll: true }); } catch { target.focus(); }
     applyFocus(target, false);
@@ -12590,6 +12827,11 @@ function restoreTrackMenuPosition(opts = {}) {
 }
 function openTrackMenu(kind, restore = {}) {
   const p = S.playing; if (!p) return;
+  const m = $('trackMenu');
+  if (!m.classList.contains('open')) {
+    const opener = document.querySelector('#osd .focus') || document.activeElement;
+    if (opener && !opener.closest('#trackMenu')) S.trackMenuReturnEl = opener;
+  }
   if (kind === 'cc' && !playerCcCanOpen()) return;
   if (kind === 'audio' && !playerAudioHasOptions()) return;
   if (kind === 'quality' && !playerQualityHasOptions()) return;
@@ -12603,7 +12845,7 @@ function openTrackMenu(kind, restore = {}) {
       }
     }).catch(() => {});
   }
-  const m = $('trackMenu'); m.innerHTML = '';
+  m.innerHTML = '';
   S.trackMenuKind = kind;
   const head = document.createElement('div'); head.className = 'tmHead';
   head.textContent = { cc: 'Subtitles', audio: 'Audio language', surround: 'Sound', quality: 'Quality' }[kind] || 'Tracks';
@@ -13475,13 +13717,11 @@ function prefScreensaverDelayMs() {
   return seconds > 0 ? seconds * 1000 : 0;
 }
 function screensaverSafeBg(url) {
-  const raw = String(url || '');
-  if (/^data:image\//i.test(raw)) return raw;
-  return safeUrl(raw);
+  return safeArtUrl(url);
 }
 function setScreensaverBg(el, url) {
   const safe = screensaverSafeBg(url);
-  if (el) el.style.backgroundImage = safe ? `url("${safe}")` : '';
+  if (el) el.style.backgroundImage = safe ? artBackground(safe, artFallback('screensaver', 48)) : '';
 }
 function screensaverDateStr(d) {
   try { return new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' }).format(d); }
@@ -13709,9 +13949,12 @@ function installScreensaverIdle() {
 
 /* ============ discover (Overseerr-style rows) ============ */
 async function loadDiscover() {
+  const reqId = (S.discoverReq = (S.discoverReq || 0) + 1);
+  const current = () => reqId === S.discoverReq && S.view === 'discover';
+  if (!current()) return;
   $('calList').style.display = 'none'; $('discoverRows').style.display = '';
   const root = $('discoverRows');
-  if (!S.serverInfo.tmdb) { root.innerHTML = '<div class="row"><h2>Connect TMDB in Settings to use Discover</h2></div>'; return; }
+  if (!S.serverInfo.tmdb) { root.innerHTML = '<div class="row"><h2>Connect TMDB in Settings to use Discover</h2></div>'; bootReady(); return; }
   root.innerHTML = '<div class="row"><h2>loading…</h2></div>';
   // Restricted profiles (Kids/Teen/Family): certified discover lists only — the editorial
   // lists (trending/now-playing) carry no rating data, and no trailer row (it's trend-fed).
@@ -13725,6 +13968,7 @@ async function loadDiscover() {
         api(`/api/tmdb/discover/movie?sort_by=vote_average.desc&vote_count.gte=400${g}` + CATALOG_Q + certParams()),
         api(`/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=60${tvG}` + CATALOG_Q),
       ]);
+      if (!current()) return;
       const map20r = (r) => (r.results || []).filter((x) => x.poster_path && passesMaturity(x)).slice(0, 20).map(mapTmdb);
       const rows = dedupeRows([
         { name: 'Popular movies', poster: true, items: map20r(popM) },
@@ -13734,8 +13978,12 @@ async function loadDiscover() {
       S.discoverData = rows;
       renderRowsInto(root, rows);
       setRowsView(root, rows, false);
-      if (S.zone !== 'rail') focusCard(0, 0);
-    } catch (e) { root.innerHTML = `<div class="row"><h2>Discover failed: ${esc(e.message)}</h2></div>`; }
+      if (current() && S.zone !== 'rail') focusCard(0, 0);
+    } catch (e) {
+      if (!current()) return;
+      root.innerHTML = `<div class="row"><h2>Discover failed: ${esc(e.message)}</h2></div>`;
+    }
+    finally { if (current()) bootReady(); }
     return;
   }
   try {
@@ -13746,6 +13994,7 @@ async function loadDiscover() {
       api('/api/tmdb/movie/top_rated'), api('/api/tmdb/tv/top_rated'),
       api('/api/tmdb/movie/now_playing'), api('/api/tmdb/tv/on_the_air'),
     ]);
+    if (!current()) return;
     const map20 = (r) => (r.results || []).filter((x) => x.poster_path && passesMaturity(x) && catalogOk(x)).slice(0, 20).map(mapTmdb);
     const rows = dedupeRows([
       { name: '🔥 Trending this week', poster: true, items: map20(trend) },
@@ -13775,7 +14024,7 @@ async function loadDiscover() {
       if (trailerCand.length >= 20) break;
     }
     buildTrailerRow(trailerCand).then((trItems) => {
-      if (!trItems.length) return;
+      if (!current() || !trItems.length) return;
       const focused = root.querySelector('.focus');
       const focusRow = focused ? parseInt(focused.dataset.row || '-1', 10) : -1;
       const focusCol = focused ? parseInt(focused.dataset.col || '0', 10) : 0;
@@ -13784,7 +14033,7 @@ async function loadDiscover() {
       renderRowsInto(root, rows, { resetScroll: false });
       setRowsView(root, rows, false);
       S.discoverData = rows;
-      if (S.view === 'discover' && S.zone !== 'rail') {
+      if (current() && S.zone !== 'rail') {
         const wantedRow = focusRow >= 0 ? focusRow + (focusRow >= 1 ? 1 : 0) : 0;
         const safeRow = rows[wantedRow] && rows[wantedRow].items && rows[wantedRow].items.length ? wantedRow : 0;
         const maxCol = rows[safeRow] && rows[safeRow].items ? rows[safeRow].items.length - 1 : 0;
@@ -13792,8 +14041,12 @@ async function loadDiscover() {
         focusCard(safeRow, safeCol, { scroll: false, align: false });
       }
     });
-    if (S.zone !== 'rail') focusCard(0, 0); // rollover preview: don't steal the menu's focus
-  } catch (e) { root.innerHTML = `<div class="row"><h2>Discover failed: ${esc(e.message)}</h2></div>`; }
+    if (current() && S.zone !== 'rail') focusCard(0, 0); // rollover preview: don't steal the menu's focus
+  } catch (e) {
+    if (!current()) return;
+    root.innerHTML = `<div class="row"><h2>Discover failed: ${esc(e.message)}</h2></div>`;
+    bootReady();
+  }
 }
 // Pick the ACTUAL trailer from TMDB's videos list — not a featurette, interview, or BTS reel.
 // The old first-loose-match pick meant array order decided: a teaser could beat the real
@@ -13849,38 +14102,76 @@ async function buildTrailerRow(list) {
 }
 
 /* ============ browse pages (Movies / TV): genre + sort dropdowns, infinite scroll ============ */
+function focusAsyncGridState(view, stillCurrent) {
+  requestAnimationFrame(() => {
+    if (S.view !== view || (stillCurrent && !stillCurrent())) return;
+    if (S.zone && S.zone !== 'grid') return; // never steal focus from the rail or a filter control
+    const root = S.gridRoot || $('grid');
+    if (root && !root.querySelector('.focus') && gridEls().length) focusGrid(S.gridIdx || 0);
+  });
+}
 async function openBrowse(type) {
+  const view = type === 'movie' ? 'movies' : 'tv';
+  const reqId = (S.browseReq = (S.browseReq || 0) + 1);
   S.browseType = type; S.browseGenre = '';
   $('browseTitle').textContent = type === 'movie' ? 'Movies' : 'TV Shows';
   setSortOptions('tmdb'); // a local library may have swapped in its own sort options
   const gs = await genres(type);
+  if (reqId !== S.browseReq || S.view !== view || S.browseType !== type) return;
   $('genreSel').innerHTML = '<option value="">All genres</option>' + gs.map((g) => `<option value="${parseInt(g.id, 10) || 0}">${esc(g.name)}</option>`).join('');
-  runBrowse(true);
+  runBrowse(true, reqId);
 }
 function browseSortParam() {
   const sort = $('sortSel').value;
   return S.browseType === 'tv' && sort.startsWith('primary_release_date') ? 'first_air_date.desc' : sort;
 }
-async function runBrowse(reset) {
+async function runBrowse(reset, requestId) {
+  const type = S.browseType;
+  const view = type === 'movie' ? 'movies' : 'tv';
+  if (S.view !== view) return;
+  let reqId = requestId;
+  if (reset && !Number.isFinite(reqId)) reqId = (S.browseReq = (S.browseReq || 0) + 1);
+  if (!Number.isFinite(reqId)) reqId = S.browseReq || (S.browseReq = 1);
+  if (reqId !== S.browseReq) return;
   if (reset) { S.browsePage = 0; S.browseDone = false; renderGrid([]); $('grid').innerHTML = '<div class="gridMore">loading…</div>'; }
-  if (S.browseLoading || S.browseDone) return;
-  S.browseLoading = true;
+  if (S.browseLoadingReq === reqId || S.browseDone) return;
+  S.browseLoadingReq = reqId; S.browseLoading = true;
   const page = (S.browsePage || 0) + 1;
-  let path = `/api/tmdb/discover/${S.browseType}?sort_by=${browseSortParam()}&vote_count.gte=40&page=${page}` + CATALOG_Q + certParams();
+  const genre = S.browseGenre || '';
+  const sort = browseSortParam();
+  const current = () => reqId === S.browseReq && S.view === view && S.browseType === type
+    && (S.browseGenre || '') === genre && browseSortParam() === sort;
+  let path = `/api/tmdb/discover/${type}?sort_by=${sort}&vote_count.gte=40&page=${page}` + CATALOG_Q + certParams();
   // Date sorts must stop at TODAY — TMDB otherwise leads with unreleased future entries.
-  if (browseSortParam().includes('date')) {
-    path += `&${S.browseType === 'tv' ? 'first_air_date' : 'primary_release_date'}.lte=${todayStr()}`;
+  if (sort.includes('date')) {
+    path += `&${type === 'tv' ? 'first_air_date' : 'primary_release_date'}.lte=${todayStr()}`;
   }
-  if (S.browseGenre) path += `&with_genres=${S.browseGenre}`;
+  if (genre) path += `&with_genres=${genre}`;
+  let loaded = false;
   try {
     const r = await api(path);
+    if (!current()) return;
     const items = (r.results || []).filter((x) => x.poster_path && passesMaturity(x) && catalogOk(x)).map(mapTmdb);
     if (page === 1) renderGrid(items); else appendGrid(items);
     S.browsePage = page;
     if (page >= (r.total_pages || 1) || page >= 25) S.browseDone = true;
-  } catch (e) { if (page === 1) $('grid').innerHTML = `<div class="gridMore">Failed: ${esc(e.message)}</div>`; }
-  S.browseLoading = false;
-  maybeFillBrowseWindow();
+    loaded = true;
+  } catch (e) {
+    if (current() && page === 1) {
+      $('grid').innerHTML = `<div class="gridMore focusable">Failed: ${esc(e.message)}</div>`;
+      focusAsyncGridState(view, current);
+    }
+  } finally {
+    if (S.browseLoadingReq === reqId) {
+      S.browseLoadingReq = null;
+      if (current() && loaded) {
+        S.browseLoading = false;
+        maybeFillBrowseWindow();
+      } else {
+        S.browseLoading = false;
+      }
+    }
+  }
 }
 // One TMDB page (~20 items) is < 2 rows on a wide/high-res window (e.g. 2K/4K, 12-19 columns), and the
 // grid only pages-in on SCROLL — so a short grid never scrolls and gets stranded low with a dark band
@@ -14067,6 +14358,7 @@ function scheduleVirtualGridGeometryRefresh() {
   });
 }
 function renderGrid(items, root = $('grid')) {
+  const renderedView = S.view;
   bootReady(); // hash-restored grid views are a boot landing too
   if (!S._keepLocalGridPaging && root === $('grid')) clearLocalGridPaging();
   S.gridRoot = root; clearGridDom(root); root.style.setProperty('--tf', '0px');
@@ -14091,7 +14383,7 @@ function renderGrid(items, root = $('grid')) {
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { if (S.gridRoot === root) adaptRowWindows(); }).catch(() => {});
   if (root === $('grid') && ['movies', 'tv', 'library', 'watchlist'].includes(S.view) && S.zone !== 'rail') {
     requestAnimationFrame(() => {
-      if (S.gridRoot === root && !root.querySelector('.focus')) focusGrid(0);
+      if (S.view === renderedView && S.gridRoot === root && (!S.zone || S.zone === 'grid') && !root.querySelector('.focus')) focusGrid(0);
     });
   }
 }
@@ -14395,7 +14687,7 @@ async function loadCalendar() {
     const items = document.createElement('div'); items.className = 'calItems';
     byDay[date].forEach((u) => {
       const row = document.createElement('button'); row.className = 'calItem focusable';
-      row.innerHTML = `<div class="pp" style="background-image:url('${safeUrl(u.poster)}')"></div>
+      row.innerHTML = `<div class="pp" style="background-image:${artBackgroundHtml(u.poster, u.backdrop, artFallback(u.key || u.title, 43))}"></div>
         <div class="ci"><div class="ct">${esc(u.title)}</div><div class="cm">${esc(u.sub)}</div></div>
         <div class="cbadge">${esc(u.badge)}</div>`;
       row.addEventListener('click', () => openDetail(u));
@@ -14575,20 +14867,36 @@ async function runLibrary(reset) {
   $('browseTitle').textContent = lib.name;
   // LOCAL library (has a folder): show the scanned items; smart view otherwise.
   if (lib.path) return reset === false ? undefined : runLocalLibrary(lib);
+  const libId = lib.id;
+  let reqId;
+  if (reset) reqId = (S.libReq = (S.libReq || 0) + 1);
+  else reqId = S.libReq || (S.libReq = 1);
+  const current = () => reqId === S.libReq && S.view === 'library' && S.currentLib
+    && S.currentLib.id === libId && !S.currentLib.path;
+  if (!current()) return;
   if (reset) { S.libPage = 0; S.libDone = false; renderGrid([]); $('grid').innerHTML = '<div class="gridMore">loading…</div>'; }
-  if (S.libLoading || S.libDone) return;
-  S.libLoading = true;
+  if (S.libLoadingReq === reqId || S.libDone) return;
+  S.libLoadingReq = reqId; S.libLoading = true;
   const page = (S.libPage || 0) + 1;
   let path = `/api/tmdb/discover/${lib.mediaType}?sort_by=${lib.sort}&vote_count.gte=20&page=${page}` + CATALOG_Q + certParams();
   if (lib.genreId) path += `&with_genres=${lib.genreId}`;
   try {
     const r = await api(path);
+    if (!current()) return;
     const items = (r.results || []).filter((x) => x.poster_path && passesMaturity(x)).map(mapTmdb);
     if (page === 1) renderGrid(items); else appendGrid(items);
     S.libPage = page;
     if (page >= (r.total_pages || 1) || page >= 25) S.libDone = true;
-  } catch (e) { if (page === 1) $('grid').innerHTML = `<div class="gridMore">Failed: ${esc(e.message)}</div>`; }
-  S.libLoading = false;
+  } catch (e) {
+    if (current() && page === 1) {
+      $('grid').innerHTML = `<div class="gridMore focusable">Failed: ${esc(e.message)}</div>`;
+      focusAsyncGridState('library', current);
+    }
+  } finally {
+    if (S.libLoadingReq === reqId) {
+      S.libLoadingReq = null; S.libLoading = false;
+    }
+  }
 }
 // Scanned local library: local poster.jpg or TMDB art, direct local playback. TV shows
 // render once at the top level — clicking one drills into its episode grid.
@@ -14624,7 +14932,7 @@ function openLocalDetail(it) {
   $('browse').classList.remove('open'); $('discover').classList.remove('open');
   $('dTitle').textContent = it.title;
   $('dOverview').textContent = it.overview || 'No description — add a .nfo file next to the video to fill this in.';
-  const p = $('dPoster'); if (p) p.style.backgroundImage = `url('${safeUrl(it.poster)}')`;
+  const p = $('dPoster'); if (p) p.style.backgroundImage = artBackground(it.poster, it.backdrop, artFallback(it.key || it.title, 44));
   setBackdrop(it.backdrop);
   const parts = [];
   if (it.rating && it.rating !== '—') parts.push(`<span class="rating">★ ${esc(it.rating)}</span>`);
@@ -14642,6 +14950,8 @@ function openLocalDetail(it) {
   updateDetailPlayLabel(resume ? { label: 'Resume', target: { ...it, resume } } : { label: 'Play', target: it });
   syncFixMatchBtn(it); // unmatched items need this MOST — assign the right TMDB title
   $('detail').querySelector('.detailScroll').scrollTop = 0;
+  S.zone = '';
+  requestAnimationFrame(() => { if (S.view === 'detail') applyFocus($('dPlay'), false); });
 }
 async function loadAllLocalShowEpisodes(lib, showIdx) {
   const items = [];
@@ -14672,7 +14982,7 @@ async function openLocalShowDetail(it) {
   $('dKind').textContent = 'Show';
   $('dTitle').textContent = show.title;
   $('dOverview').textContent = show.overview || 'No description - add a tvshow.nfo file to fill this in.';
-  const p = $('dPoster'); if (p) p.style.backgroundImage = `url('${safeUrl(show.poster || show.backdrop)}')`;
+  const p = $('dPoster'); if (p) p.style.backgroundImage = artBackground(show.poster, show.backdrop, artFallback(show.key || show.title, 45));
   setBackdrop(show.backdrop);
   const parts = [];
   if (show.rating && show.rating !== '—') parts.push(`<span class="rating">★ ${esc(show.rating)}</span>`);
@@ -14837,6 +15147,7 @@ function syncFixMatchBtn(it) {
   $('dFixMatch').onclick = on ? () => openMatchModal(it) : null;
 }
 function openMatchModal(it) {
+  captureOverlayReturn('matchModal');
   S.matchItem = it;
   $('matchSub').textContent = `“${it.title}” in ${it._lib.name}`
     + (it._matchOv === 'none' ? ' · currently using folder info' : it._matchOv ? ' · manual match active' : '');
@@ -14849,26 +15160,34 @@ function openMatchModal(it) {
 async function runMatchSearch() {
   const it = S.matchItem; if (!it) return;
   const q = $('matchQ').value.trim(); if (!q) return;
+  const reqId = S.matchSearchReq = (S.matchSearchReq || 0) + 1;
+  const current = () => reqId === S.matchSearchReq && $('matchModal').classList.contains('open')
+    && S.matchItem === it && $('matchQ').value.trim() === q;
   $('matchResults').innerHTML = '<div class="hint">searching…</div>';
   try {
     const r = await api(`/api/tmdb/search/${it._lib.kind === 'tv' ? 'tv' : 'movie'}?query=${encodeURIComponent(q)}`);
+    if (!current()) return;
     const list = (r.results || []).slice(0, 12);
     if (!list.length) { $('matchResults').innerHTML = '<div class="hint">No TMDB results — try fewer words, or use the folder info below.</div>'; return; }
     $('matchResults').innerHTML = '';
     list.forEach((x) => {
       const row = document.createElement('button');
       row.className = 'calItem focusable';
-      row.innerHTML = `<div class="pp" style="background-image:url('${safeUrl(x.poster_path ? img(x.poster_path, 'w154') : '')}')"></div>
+      row.innerHTML = `<div class="pp" style="background-image:${artBackgroundHtml(x.poster_path ? img(x.poster_path, 'w154') : '', artFallback((x.id || x.name || 'calendar'), 46))}"></div>
         <div class="ci"><div class="ct">${esc(x.title || x.name || '?')}</div>
         <div class="cm">${esc((x.release_date || x.first_air_date || '—').slice(0, 4))}${x.overview ? ` · ${esc(x.overview.slice(0, 90))}…` : ''}</div></div>`;
       row.addEventListener('click', () => applyMatch(x.id));
       $('matchResults').appendChild(row);
     });
-  } catch (e) { $('matchResults').innerHTML = `<div class="hint">Search failed: ${esc(e.message)}</div>`; }
+  } catch (e) { if (current()) $('matchResults').innerHTML = `<div class="hint">Search failed: ${esc(e.message)}</div>`; }
+}
+function closeMatchModal(opts = {}) {
+  S.matchSearchReq = (S.matchSearchReq || 0) + 1;
+  closeFocusOverlay('matchModal', 'matchModal', opts);
 }
 async function applyMatch(tmdbId) {
   const it = S.matchItem; if (!it) return;
-  $('matchModal').classList.remove('open');
+  closeMatchModal();
   toast(tmdbId === null ? 'Reverting to the folder info…' : 'Re-matching…');
   try {
     await api(`/api/libraries/${it._lib.id}/match`, { method: 'POST', body: { idx: it._idx, tmdbId } });
@@ -14893,7 +15212,7 @@ $('matchGo').addEventListener('click', runMatchSearch);
 $('matchQ').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); runMatchSearch(); } });
 $('matchNone').addEventListener('click', () => applyMatch(null));
 $('matchAuto').addEventListener('click', () => applyMatch('auto'));
-$('matchCancel').addEventListener('click', () => $('matchModal').classList.remove('open'));
+$('matchCancel').addEventListener('click', () => closeMatchModal());
 
 // Local items still play straight from disk, but the app asks the server to prepare the file
 // as a normal player mount first. That gives added libraries the same track probe, subtitles,
@@ -14932,7 +15251,10 @@ async function playLocal(it) {
 
 /* ============ watchlist view ============ */
 async function loadWatchlistView() {
+  const reqId = (S.watchlistViewReq = (S.watchlistViewReq || 0) + 1);
+  const current = () => reqId === S.watchlistViewReq && S.view === 'watchlist';
   await loadWatchlist();
+  if (!current()) return;
   $('browseTitle').textContent = 'My Watchlist';
   let entries = S.watchlist || [];
   if ((S.maxLevel ?? 4) < 4 && entries.length) {
@@ -14940,6 +15262,7 @@ async function loadWatchlistView() {
       const t = certTargetForMeta(w.meta, w.key);
       return certAllowed(t.type, t.tmdbId);
     }));
+    if (!current()) return;
     entries = entries.filter((_, i) => ok[i]);
   }
   const items = entries.map((w) => ({
@@ -14950,7 +15273,7 @@ async function loadWatchlistView() {
   renderGrid(items);
   if (!items.length) {
     $('grid').innerHTML = '<div class="gridMore focusable">Your watchlist is empty — open any title and tap the bookmark to add it.</div>';
-    requestAnimationFrame(() => S.view === 'watchlist' && S.zone !== 'rail' && focusGrid(0));
+    requestAnimationFrame(() => current() && S.view === 'watchlist' && S.zone !== 'rail' && focusGrid(0));
   }
   // Backfill incomplete metas from TMDB (titles added from contexts without art — trailers,
   // older saves): patch the visible card in place AND persist the repaired meta, so covers
@@ -14965,6 +15288,7 @@ async function loadWatchlistView() {
         const type = isEp || w.meta.type === 'tv' ? 'tv' : 'movie';
         const key = isEp ? `tmdb:tv:${w.meta.tmdbId}` : w.key;
         const d = await api(`/api/tmdb/${type}/${w.meta.tmdbId}`);
+        if (!current()) return;
         const m = { ...w.meta, type,
           title: isEp ? (d.name || d.title || w.meta.title) : w.meta.title,
           poster: img(d.poster_path, 'w342') || w.meta.poster,
@@ -14973,13 +15297,14 @@ async function loadWatchlistView() {
           rating: (w.meta.rating && w.meta.rating !== '—') ? w.meta.rating : (d.vote_average ? d.vote_average.toFixed(1) : '—') };
         api('/api/watchlist', { method: 'POST', body: { key, on: true, meta: m } }).catch(() => {});
         if (key !== w.key) api('/api/watchlist', { method: 'POST', body: { key: w.key, on: false } }).catch(() => {});
+        if (!current()) return;
         const idx = (S.gridItems || []).findIndex((x) => x.key === w.key);
         if (idx >= 0 && m.poster) {
           Object.assign(S.gridItems[idx], { key, type, title: m.title, poster: m.poster, backdrop: m.backdrop, overview: m.overview });
           const card = document.querySelector(`#grid [data-grid="${idx}"]`);
           if (card) {
             const art = card.querySelector('.art');
-            if (art) art.style.backgroundImage = `url('${safeUrl(m.poster)}')`;
+            if (art) art.style.backgroundImage = artBackground(m.poster, m.backdrop, artFallback(m.key || m.title, 47));
             const cap = card.querySelector('.cap');
             if (cap) cap.textContent = m.title;
           }
@@ -15004,6 +15329,10 @@ function updateLibEditActions(lib) {
     : '';
 }
 async function openLibModal(lib) {
+  const reqId = S.libModalReq = (S.libModalReq || 0) + 1;
+  const openingView = S.view;
+  const focusEpoch = captureOverlayReturn('libModal');
+  const current = () => reqId === S.libModalReq && S.view === openingView;
   S.editingLib = lib || null;
   $('libModalTitle').textContent = lib ? `Edit “${lib.name}”` : 'New library';
   $('libCreate').textContent = lib ? 'Save changes' : 'Create';
@@ -15014,40 +15343,52 @@ async function openLibModal(lib) {
   $('libSort').value = lib ? (lib.sort || 'popularity.desc') : 'popularity.desc';
   updateLibEditActions(lib);
   await fillLibGenres();
+  if (!current()) { discardOverlayReturn('libModal', focusEpoch); return; }
   if (lib && lib.genreId) $('libGenre').value = lib.genreId;
   // Share-with: tick specific users to restrict the library (none ticked = everyone sees it).
   try {
     const users = await api('/api/users');
+    if (!current()) { discardOverlayReturn('libModal', focusEpoch); return; }
     const allowed = new Set((lib && lib.users) || []);
     $('libUsers').innerHTML = users.filter((u) => u.role !== 'admin').map((u) =>
       `<label class="catRow"><input type="checkbox" data-uid="${esc(u.id)}" ${allowed.has(u.id) ? 'checked' : ''}>
         <span class="cgN">${esc(u.name)}</span></label>`).join('')
       || '<div class="hint">no other users yet — everyone (you) sees this library</div>';
-  } catch { $('libUsers').innerHTML = ''; }
+  } catch {
+    if (!current()) { discardOverlayReturn('libModal', focusEpoch); return; }
+    $('libUsers').innerHTML = '';
+  }
+  if (!current()) { discardOverlayReturn('libModal', focusEpoch); return; }
   $('libModal').classList.add('open');
-  setTimeout(() => $('libName').focus(), 50);
+  setTimeout(() => { if (current() && $('libModal').classList.contains('open')) $('libName').focus(); }, 50);
 }
 async function fillLibGenres() {
   const kind = $('libType').value;
+  const reqId = S.libGenreReq = (S.libGenreReq || 0) + 1;
   const smart = kind === 'movie' || kind === 'tv';
   $('libGenre').disabled = !smart; $('libGenreLabel').style.opacity = smart ? 1 : 0.4;
   if (!smart) { $('libGenre').innerHTML = '<option value="">—</option>'; return; }
   const gs = await genres(kind);
+  if (reqId !== S.libGenreReq || $('libType').value !== kind) return;
   $('libGenre').innerHTML = '<option value="">Any genre</option>' + gs.map((g) => `<option value="${parseInt(g.id, 10) || 0}">${esc(g.name)}</option>`).join('');
 }
+function closeLibModal(opts = {}) {
+  S.libModalReq = (S.libModalReq || 0) + 1;
+  closeFocusOverlay('libModal', 'libModal', opts);
+}
 $('libType').addEventListener('change', fillLibGenres);
-$('libCancel').addEventListener('click', () => $('libModal').classList.remove('open'));
-$('libModal').addEventListener('click', (e) => { if (e.target.id === 'libModal') $('libModal').classList.remove('open'); });
+$('libCancel').addEventListener('click', () => closeLibModal());
+$('libModal').addEventListener('click', (e) => { if (e.target.id === 'libModal') closeLibModal(); });
 $('libScanNow').addEventListener('click', () => {
   const lib = S.editingLib;
   if (!(lib && lib.path)) return toast('Save this library with a local path before scanning');
-  $('libModal').classList.remove('open');
+  closeLibModal();
   scanLibrary(lib, 'scan');
 });
 $('libMetaNow').addEventListener('click', () => {
   const lib = S.editingLib;
   if (!(lib && lib.path)) return toast('Save this library with a local path before refreshing metadata');
-  $('libModal').classList.remove('open');
+  closeLibModal();
   scanLibrary(lib, 'metadata');
 });
 $('libCreate').addEventListener('click', async () => {
@@ -15060,7 +15401,7 @@ $('libCreate').addEventListener('click', async () => {
   try {
     if (S.editingLib) await api('/api/libraries/' + S.editingLib.id, { method: 'PATCH', body });
     else await api('/api/libraries', { method: 'POST', body });
-    $('libModal').classList.remove('open');
+    closeLibModal();
     await loadLibraries();
     toast(S.editingLib ? 'Library updated' : `Library “${name}” created`);
     if (S.editingLib && S.currentLib && S.currentLib.id === S.editingLib.id) {
@@ -15456,6 +15797,8 @@ function prefetchMusic() {
   api('/api/music/home').catch(() => {});
 }
 async function loadLiveTv() {
+  const reqId = (S.liveViewReq = (S.liveViewReq || 0) + 1);
+  const current = () => reqId === S.liveViewReq && S.view === 'livetv';
   $('browseTitle').textContent = 'Live TV';
   const grid = $('grid');
   S.libDone = true;
@@ -15469,12 +15812,15 @@ async function loadLiveTv() {
   focusLiveGridMessage();
   try {
     const r = await loadLiveChannelsCombined();
+    if (!current()) return; // never write a downloaded playlist into a newer shared-grid view
     if (!r.configured) { grid.innerHTML = '<div class="gridMore focusable">Live TV is not set up yet. Add a server playlist in Settings, or add your own playlist in Preferences.</div>'; focusLiveGridMessage(); return; }
     fillLiveState(r);
     if (!r.channels.length) { grid.innerHTML = liveNoChannelsHtml(S.liveSourceErrors); focusLiveGridMessage(); return; }
-    if (S.view !== 'livetv') return; // user navigated away while the playlist downloaded
     scaffoldLiveTv(grid);
-  } catch (e) { grid.innerHTML = `<div class="gridMore focusable">Live TV failed: ${esc(e.message)}</div>`; focusLiveGridMessage(); }
+  } catch (e) {
+    if (!current()) return;
+    grid.innerHTML = `<div class="gridMore focusable">Live TV failed: ${esc(e.message)}</div>`; focusLiveGridMessage();
+  }
 }
 // Scaffold the persistent search bar + re-renderable body from S.liveChannels (cached or fresh).
 // Rendering 5000 cards at once froze the page — groups render on demand below the chips.
@@ -16336,6 +16682,17 @@ function focusPlayerGuideCategory(idx, select = false, opts = {}) {
   // scrollIntoView re-scrolled every ancestor (the guide jumped) — the WebView-unreliable path.
   return true;
 }
+function playerGuideBackToCategory() {
+  const rows = [...document.querySelectorAll('#pGuide .pgGuideMain .pgRow[data-pg]')];
+  const cats = [...document.querySelectorAll('#pGuide .pgCat[data-pg]')];
+  const active = document.activeElement;
+  const focusedRow = rows.includes(active) || rows.some((row) => row.classList.contains('focus'));
+  if (!focusedRow || !cats.length) return false;
+  const selected = cats.findIndex((cat) => cat.classList.contains('sel'));
+  const idx = Number.isFinite(S.pgCatNavIdx) ? S.pgCatNavIdx : Math.max(0, selected);
+  focusPlayerGuideCategory(idx);
+  return true;
+}
 function markGuideCur() {
   const activeCh = activeLiveChannelIdx();
   document.querySelectorAll('.pgRow').forEach((r) => {
@@ -16878,6 +17235,7 @@ function musicAccountChanged() {
   if (S.view === 'music') loadMusic();
 }
 function showMusicHome() {
+  S.musicSearchReq = (S.musicSearchReq || 0) + 1;
   S.musicPage = 'home';
   S.musicPlaylist = null;
   $('musicBrowse').classList.remove('hide');
@@ -16922,17 +17280,25 @@ async function loadMusicPlaylistPage(reset = false) {
 let _musicSearchT = 0;
 async function doMusicSearch() {
   const q = $('musicSearch').value.trim();
+  const reqId = (S.musicSearchReq = (S.musicSearchReq || 0) + 1);
   syncMusicClear();
-  if (!q) { showMusicHome(); return; }
+  if (!q) { showMusicHome(); return false; }
   S.musicPage = 'search';
   S.musicPlaylist = null;
+  const current = () => reqId === S.musicSearchReq && S.view === 'music'
+    && S.musicPage === 'search' && $('musicSearch').value.trim() === q;
   $('musicBrowse').classList.add('hide');
   $('musicList').innerHTML = '<div class="mNote">Searching...</div>';
   try {
     const r = await api('/api/music/search?q=' + encodeURIComponent(q));
-    if (S.view !== 'music') return;
+    if (!current()) return false;
     renderMusicRows(r.results || [], { search: true, query: q });
-  } catch (e) { $('musicList').innerHTML = `<div class="mNote">Search failed: ${esc(e.message)}</div>`; }
+    return true;
+  } catch (e) {
+    if (!current()) return false;
+    $('musicList').innerHTML = `<div class="mNote">Search failed: ${esc(e.message)}</div>`;
+    return true;
+  }
 }
 function focusMusicResultsSoon(tries = 18) {
   setTimeout(() => {
@@ -16953,7 +17319,7 @@ function musicSearchAndFocusResults() {
   const q = $('musicSearch').value.trim();
   syncMusicClear();
   if (!q) { showMusicHome(); focusMusicSearch(); return; }
-  doMusicSearch().then(() => focusMusicResultsSoon()).catch(() => focusMusicResultsSoon());
+  doMusicSearch().then((active) => { if (active) focusMusicResultsSoon(); }).catch(() => {});
 }
 function moveMusicSearchDown() {
   const q = $('musicSearch').value.trim();
@@ -17056,7 +17422,7 @@ function renderMusicRows(results, opts = {}) {
     const artistQueue = [...artistTracks, ...results.filter((t) => !artistTracks.includes(t))];
     const hero = document.createElement('button');
     hero.className = 'musicRow mArtistHit focusable';
-    hero.innerHTML = `<div class="mArtistArt" style="background-image:url('${safeUrl((artistHit.first || artistTracks[0] || {}).thumb)}')"></div>
+    hero.innerHTML = `<div class="mArtistArt" style="background-image:${artBackgroundHtml((artistHit.first || artistTracks[0] || {}).thumb, artFallback('artist:' + artistHit.artist, 50))}"></div>
       <div class="mArtistCopy"><div class="mArtistType">Artist</div><div class="mArtistName">${esc(artistHit.artist)}</div>
       <div class="mArtistSub">${artistTracks.length} song${artistTracks.length === 1 ? '' : 's'} from this search</div></div>
       <div class="mArtistPlay"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></div>`;
@@ -17077,7 +17443,7 @@ function renderMusicRows(results, opts = {}) {
     row.className = 'musicRow focusable'; row.dataset.mrow = i;
     const rank = opts.search ? `<div class="mRank">${String(i + 1).padStart(2, '0')}</div>` : '';
     const playGlyph = opts.search ? '<div class="mPlayGlyph"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></div>' : '';
-    row.innerHTML = `${rank}<div class="mThumb" style="background-image:url('${safeUrl(t.thumb)}')"><div class="mEq"><i></i><i></i><i></i></div></div>
+    row.innerHTML = `${rank}<div class="mThumb" style="background-image:${artBackgroundHtml(t.thumb, artFallback('music:' + (t.id || t.title), 51))}"><div class="mEq"><i></i><i></i><i></i></div></div>
       <div class="mBody"><div class="mT">${esc(t.title)}</div><div class="mA">${esc(t.artist || '')}</div></div>
       <div class="mD">${t.duration ? mmss(t.duration) : ''}</div>${playGlyph}`;
     row.addEventListener('click', () => playMusic(results, i, opts.search ? { showQueue: true } : {}));
@@ -17463,7 +17829,7 @@ async function coverForMusicCard(card) {
 }
 function setMusicCardCover(card, url) {
   const cover = card.querySelector('.mCover'); if (!cover || !url) return;
-  cover.style.backgroundImage = `url('${safeUrl(url)}')`;
+  cover.style.backgroundImage = artBackground(url, artFallback(card.dataset.coverKey || card.textContent, 52));
   cover.classList.add('hasImg');
   card.dataset.coverDone = '1';
 }
@@ -17480,7 +17846,7 @@ function renderMusicBrowse() {
   const addTile = (parent, item, cls, onClick) => {
     const b = document.createElement('button');
     b.className = 'mChip focusable ' + cls;
-    const coverStyle = item.coverUrl ? ` style="background-image:url('${safeUrl(item.coverUrl)}')"` : '';
+    const coverStyle = item.coverUrl ? ` style="background-image:${artBackgroundHtml(item.coverUrl, artFallback('music-tile:' + item.title, 53))}"` : '';
     const coverImgClass = item.coverUrl ? ' hasImg' : '';
     b.innerHTML = cls.includes('mTile')
       ? `<span class="mIco">${musicIcon(item.icon || 'music')}</span><span class="mLbl">${esc(item.title)}</span>`
@@ -17669,8 +18035,8 @@ function updateMusicQueueToggle() {
 function updateMusicNow() {
   if (!$('musicNow').classList.contains('open')) return;
   const t = S.musicCur; if (!t) return;
-  $('mnCover').style.backgroundImage = `url('${safeUrl(t.thumb)}')`;
-  $('mnBg').style.backgroundImage = `url('${safeUrl(t.thumb)}')`;
+  $('mnCover').style.backgroundImage = artBackground(t.thumb, artFallback('music-now:' + (t.id || t.title), 54));
+  $('mnBg').style.backgroundImage = artBackground(t.thumb, artFallback('music-now:' + (t.id || t.title), 55));
   $('mnTitle').textContent = t.title;
   $('mnArtist').textContent = t.artist || '';
   $('mnDur').textContent = t.duration ? mmss(t.duration) : mmss(mAudio.duration);
@@ -17682,7 +18048,7 @@ function renderMusicQueue() {
   q.forEach((t, i) => {
     const row = document.createElement('button');
     row.className = 'musicRow focusable' + (i === S.musicIdx ? ' cur' : ''); row.dataset.qrow = i;
-    row.innerHTML = `<div class="mThumb" style="background-image:url('${safeUrl(t.thumb)}')"><div class="mEq"><i></i><i></i><i></i></div></div>
+    row.innerHTML = `<div class="mThumb" style="background-image:${artBackgroundHtml(t.thumb, artFallback('music-queue:' + (t.id || t.title), 56))}"><div class="mEq"><i></i><i></i><i></i></div></div>
       <div class="mBody"><div class="mT">${esc(t.title)}</div><div class="mA">${esc(t.artist || '')}</div></div>
       <div class="mD">${t.duration ? mmss(t.duration) : ''}</div>`;
     row.addEventListener('click', () => playMusic(S.musicQueue, i));
@@ -18341,8 +18707,9 @@ async function maybePromptAppUpdate() {
   if (!curVer) return;
   const latestVer = await fetchLatestAppVersion();
   if (!latestVer || compareSemver(curVer, latestVer) >= 0) return; // up to date or unknown
+  if (S.playing || S.view !== 'home') return; // never interrupt playback or another page
   _updatePromptDone = true; // prompt at most once per launch, whatever the user chooses
-  if (S.playing || S.view === 'player') return; // never interrupt playback
+  captureOverlayReturn('updateModal');
   const v = (x) => String(x).replace(/^v?/i, 'v');
   const sub = $('updateModalSub');
   if (sub) sub.textContent = `Triboon ${v(latestVer)} is ready to install. You're on ${v(curVer)}.`;
@@ -18352,7 +18719,7 @@ async function maybePromptAppUpdate() {
   const focusGo = () => { try { go.focus({ preventScroll: true }); } catch {} applyFocus(go, false); };
   requestAnimationFrame(focusGo); setTimeout(focusGo, 80);
 }
-function closeUpdateModal() { $('updateModal').classList.remove('open'); }
+function closeUpdateModal(opts = {}) { closeFocusOverlay('updateModal', 'updateModal', opts); }
 $('updateModalGo').addEventListener('click', () => { closeUpdateModal(); openApkUpdate(); });
 $('updateModalLater').addEventListener('click', closeUpdateModal);
 // TVs are rarely relaunched, so a once-at-boot check would miss new releases for days. Re-check on
@@ -21602,7 +21969,18 @@ function playerControlButtonFocused() {
 // controls with NATIVE focus (so typing/selects keep working), Enter activates.
 function formActivate(el) {
   if (!el) return;
-  if (/^(BUTTON|A)$/.test(el.tagName) || (el.tagName === 'INPUT' && /^(checkbox|radio)$/.test(el.type))) el.click();
+  if (/^(BUTTON|A)$/.test(el.tagName) || (el.tagName === 'INPUT' && /^(checkbox|radio)$/.test(el.type))) {
+    el.click();
+    return;
+  }
+  if (el.tagName === 'SELECT') {
+    // showPicker must run inside the trusted OK-key turn. Android WebView does not reliably
+    // open a TV dropdown from HTMLElement.click(), so use the native picker when available.
+    try {
+      if (typeof el.showPicker === 'function') { el.showPicker(); return; }
+    } catch {}
+    el.click();
+  }
 }
 function dpadCycle(scope, k) {
   const els = [...scope.querySelectorAll('button, input, select, a')].filter((el) => el.offsetParent !== null && !el.disabled);
@@ -21613,6 +21991,59 @@ function dpadCycle(scope, k) {
   else if (k === 'ArrowUp' || k === 'ArrowLeft') i = Math.max(0, i - 1);
   else return;
   els[i] && els[i].focus({ preventScroll: false });
+}
+function isTvGateDpadKey(k, isTv = document.body.classList.contains('tv')) {
+  return !!isTv && (k === 'Enter' || /^(ArrowUp|ArrowDown|ArrowLeft|ArrowRight)$/.test(k));
+}
+function calendarDpadTarget(dayRows, focused, k) {
+  if (!Array.isArray(dayRows) || !dayRows.length) return { kind: 'empty' };
+  let ri = dayRows.findIndex((row) => row.includes(focused));
+  if (ri < 0) ri = 0;
+  let ci = Math.max(0, dayRows[ri].indexOf(focused));
+  if (k === 'ArrowLeft') {
+    if (ci === 0) return { kind: 'rail' };
+    ci--;
+  } else if (k === 'ArrowRight') {
+    ci = Math.min(dayRows[ri].length - 1, ci + 1);
+  } else if (k === 'ArrowUp') {
+    ri = Math.max(0, ri - 1);
+    ci = Math.min(ci, dayRows[ri].length - 1);
+  } else if (k === 'ArrowDown') {
+    if (ri >= dayRows.length - 1) return { kind: 'footer', el: dayRows[ri][ci] };
+    ri++;
+    ci = Math.min(ci, dayRows[ri].length - 1);
+  } else if (k === 'Enter') {
+    return { kind: 'activate', el: dayRows[ri][ci] };
+  }
+  return { kind: 'focus', el: dayRows[ri][ci], row: ri, col: ci };
+}
+function captureOverlayReturn(key) {
+  const visual = [...document.querySelectorAll('.focus')].find((el) => el.offsetParent !== null);
+  const active = document.activeElement && document.activeElement !== document.body
+    && document.activeElement.offsetParent !== null ? document.activeElement : null;
+  const epochs = S.overlayFocusEpochs || (S.overlayFocusEpochs = {});
+  const returns = S.overlayFocusReturns || (S.overlayFocusReturns = {});
+  const epoch = epochs[key] = (epochs[key] || 0) + 1;
+  returns[key] = { el: visual || active, visual: !!visual, zone: S.zone, view: S.view, epoch };
+  return epoch;
+}
+function discardOverlayReturn(key, epoch) {
+  if (!S.overlayFocusReturns) return;
+  if (epoch !== undefined && S.overlayFocusReturns[key] && S.overlayFocusReturns[key].epoch !== epoch) return;
+  delete S.overlayFocusReturns[key];
+}
+function closeFocusOverlay(id, key, opts = {}) {
+  const modal = $(id); if (modal) modal.classList.remove('open');
+  const ret = S.overlayFocusReturns && S.overlayFocusReturns[key];
+  discardOverlayReturn(key);
+  if (opts.restoreFocus === false || !ret || !ret.el) return;
+  requestAnimationFrame(() => {
+    if (!ret.el.isConnected || ret.el.offsetParent === null || (modal && modal.classList.contains('open'))) return;
+    if ((S.overlayFocusEpochs || {})[key] !== ret.epoch || S.view !== ret.view) return;
+    S.zone = ret.zone || S.zone;
+    if (ret.visual) applyFocus(ret.el, false);
+    else { clearFocus(); try { ret.el.focus({ preventScroll: true }); } catch { ret.el.focus(); } }
+  });
 }
 function formCtls(scope) {
   if (!scope) return [];
@@ -21708,6 +22139,30 @@ document.addEventListener('keydown', (e) => {
   // spatial nav; only text entry, dropdowns and textareas hand the keys back to the platform.
   const inInput = /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName)
     && !(ae.tagName === 'INPUT' && /^(checkbox|radio)$/.test(ae.type));
+  // Login/setup/Quick Connect inputs still need remote traversal. Handle navigation keys before
+  // the generic text-entry early return, while leaving ordinary characters to the IME.
+  const openGate = [...document.querySelectorAll('.gate')].find((g) => g.classList.contains('open'));
+  if (openGate && openGate !== $('gateProfiles') && isTvGateDpadKey(k)) {
+    e.preventDefault();
+    dpadCycle(openGate, k);
+    return;
+  }
+  // Native TV sends synthetic arrows even while a real modal input owns focus. Route those before
+  // the generic text-input bailout, but leave phone/web caret keys and Backspace entirely native.
+  const tvFormModal = [$('libModal'), $('matchModal'), $('updateModal')]
+    .find((m) => m && m.classList.contains('open'));
+  if (tvFormModal && document.body.classList.contains('tv')) {
+    if (k === 'Escape') {
+      e.preventDefault();
+      if (tvFormModal.id === 'libModal') closeLibModal();
+      else if (tvFormModal.id === 'matchModal') closeMatchModal();
+      else closeUpdateModal();
+      return;
+    }
+    if (isTvGateDpadKey(k, true)) {
+      e.preventDefault(); dpadCycle(tvFormModal, k); return;
+    }
+  }
   // Audiobooks section + its detail/player overlays own the D-pad when active (one delegated entry
   // point). Returns true only when it consumed the key; typing in the search field falls through.
   if (typeof abHandleKey === 'function' && abHandleKey(e, k)) return;
@@ -21807,10 +22262,6 @@ document.addEventListener('keydown', (e) => {
     else if (k === 'Enter') { if (!e.repeat) cards[i] && cards[i].click(); return; }
     applyFocus(cards[i]); return;
   }
-  // Auth gates (login / setup / Quick Connect / invite): walk their fields/buttons/links
-  // ourselves — on TV the shell owns the D-pad, so native spatial nav never runs here.
-  const openGate = [...document.querySelectorAll('.gate')].find((g) => g.classList.contains('open'));
-  if (openGate) { e.preventDefault(); dpadCycle(openGate, k); return; }
   e.preventDefault();
   if (/^Media(PlayPause|Play|Pause|Stop|TrackNext|TrackPrevious|NextTrack|PreviousTrack)$/.test(k)) {
     if ($('trailer').classList.contains('open')) {
@@ -21846,12 +22297,12 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   if ($('libModal').classList.contains('open')) {
-    if (k === 'Escape' || k === 'Backspace') $('libModal').classList.remove('open');
+    if (k === 'Escape' || k === 'Backspace') closeLibModal();
     else dpadCycle($('libModal'), k);
     return;
   }
   if ($('matchModal').classList.contains('open')) {
-    if (k === 'Escape' || k === 'Backspace') $('matchModal').classList.remove('open');
+    if (k === 'Escape' || k === 'Backspace') closeMatchModal();
     else dpadCycle($('matchModal'), k);
     return;
   }
@@ -22173,17 +22624,21 @@ document.addEventListener('keydown', (e) => {
   }
   if (S.view === 'calendar') {
     if (k === 'Escape' || k === 'Backspace') return enterRail();
-    const items = [...$('calList').querySelectorAll('.calItem,.calEmpty')];
-    if (!items.length) { if (k === 'ArrowLeft') enterRail(); return; }
-    let i = items.findIndex((el) => el.classList.contains('focus')); if (i === -1) i = 0;
-    if (k === 'ArrowDown') {
-      if (i >= items.length - 1 && focusMusicBar()) return;
-      i = Math.min(items.length - 1, i + 1);
+    const dayRows = [...$('calList').querySelectorAll('.calDay')]
+      .map((day) => [...day.querySelectorAll('.calItem')])
+      .filter((row) => row.length);
+    if (!dayRows.length) {
+      const empty = $('calList').querySelector('.calEmpty');
+      if (k === 'ArrowLeft') return enterRail();
+      if (empty) applyFocus(empty, false);
+      return;
     }
-    else if (k === 'ArrowUp') i = Math.max(0, i - 1);
-    else if (k === 'ArrowLeft') return enterRail();
-    else if (k === 'Enter') { if (!e.repeat && items[i] && items[i].classList.contains('calItem')) items[i].click(); return; }
-    applyFocus(items[i]); return;
+    const target = calendarDpadTarget(dayRows, document.querySelector('#calList .calItem.focus'), k);
+    if (target.kind === 'rail') return enterRail();
+    if (target.kind === 'footer' && focusMusicBar()) return;
+    if (target.kind === 'activate') { if (!e.repeat && target.el) target.el.click(); return; }
+    if (target.el) applyFocus(target.el);
+    return;
   }
   if (S.view === 'detail') {
     // Episode ⋯ menu outranks everything here — its Escape must close the MENU, not the page.
@@ -22636,7 +23091,8 @@ window.__tvBack = () => {
     return 'ok';
   }
   if ($('pGuide') && $('pGuide').classList.contains('open')) {
-    closePlayerGuide();
+    // Same two-step layer as browser Escape: channel row -> category, then category -> close.
+    if (!playerGuideBackToCategory()) closePlayerGuide();
     return 'ok';
   }
   if ($('playerStats') && $('playerStats').classList.contains('open')) {
@@ -22653,8 +23109,16 @@ window.__tvBack = () => {
     handleMultiViewKey('Escape', { preventDefault() {}, stopPropagation() {}, repeat: false });
     return 'ok';
   }
+  if (S.view === 'person' && $('person').classList.contains('open')) {
+    if (S.zone !== 'rail' && !$('pBack').classList.contains('focus') && (S.gridIdx || 0) > 0) {
+      focusGrid(0);
+    } else {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    }
+    return 'ok';
+  }
   const overlay = document.querySelector(
-    '.gate.open, #detail.open, #person.open, #player.open, #abDetail.open, #abPlayer.open, #drawer.open, #trailer.open, ' +
+    '.gate.open, #detail.open, #player.open, #abDetail.open, #abPlayer.open, #drawer.open, #trailer.open, ' +
     '#libModal.open, #matchModal.open, #updateModal.open, #catModal.open, #filterMenu.open, #cwMenu.open, #trackMenu.open, #musicNow.open');
   if (overlay) {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
@@ -22978,6 +23442,7 @@ function syncAbClear() {
 }
 function clearAbSearch(opts = {}) {
   clearTimeout(abSearchDebounce);
+  AB.searchReq = (AB.searchReq || 0) + 1;
   $('abSearch').value = '';
   syncAbClear();
   $('abGrid').innerHTML = '';
@@ -22990,8 +23455,8 @@ function abMicVisible() { return $('abMicBtn').style.display !== 'none'; }
 
 // Shared cover-card builder (grid + discovery rows).
 function abCoverCard(it) {
-  const cover = it.cover ? `style="background-image:url('${String(it.cover).replace(/'/g, '')}')"` : '';
-  return `<button class="abCard focusable"><div class="abCover" ${cover}>${it.cover ? '' : 'No cover'}</div>
+  const cover = `style="background-image:${artBackgroundHtml(it.cover, artFallback('audiobook:' + (it.asin || it.title), 60))}"`;
+  return `<button class="abCard focusable"><div class="abCover" ${cover}></div>
     <div class="abT">${abEsc(it.title)}</div><div class="abA">${abEsc((it.authors || []).join(', '))}</div></button>`;
 }
 
@@ -23075,8 +23540,8 @@ async function abFilterAvailableList(items) {
 }
 // Free (public-domain) cover card with a FREE badge.
 function abFreeCard(it) {
-  const cover = it.cover ? `style="background-image:url('${String(it.cover).replace(/'/g, '')}')"` : '';
-  return `<button class="abCard focusable"><div class="abCover" ${cover}><span class="abFreeBadge">FREE</span>${it.cover ? '' : 'No cover'}</div>
+  const cover = `style="background-image:${artBackgroundHtml(it.cover, artFallback('audiobook-free:' + (it.id || it.title), 61))}"`;
+  return `<button class="abCard focusable"><div class="abCover" ${cover}><span class="abFreeBadge">FREE</span></div>
     <div class="abT">${abEsc(it.title)}</div><div class="abA">${abEsc((it.authors || []).join(', '))}</div></button>`;
 }
 function showAbDiscovery(show) {
@@ -23106,11 +23571,11 @@ async function renderAbContinue() {
     // Stash the meta so the card menu can mark-finished/remove without another round-trip.
     AB.contMeta[asin] = { asin, type: 'audiobook', title: m.title || 'Audiobook', cover: m.cover || '', author: m.author || '' };
     const pct = w.duration ? Math.min(100, Math.round((w.position / w.duration) * 100)) : 0;
-    const cover = m.cover ? `style="background-image:url('${String(m.cover).replace(/'/g, '')}')"` : '';
+    const cover = `style="background-image:${artBackgroundHtml(m.cover, artFallback('audiobook:' + asin, 62))}"`;
     // ⋯ is a <span> (not a <button>): .abCard is itself a <button> and nesting buttons is invalid.
     // Hidden on TV (body.tv .cardMenuBtn CSS); TV uses hold-OK instead.
     return `<button class="abCard focusable" data-asin="${abEsc(asin)}">
-      <div class="abCover" ${cover}>${m.cover ? '' : 'No cover'}<div class="abProg"><i style="width:${pct}%"></i></div>
+      <div class="abCover" ${cover}><div class="abProg"><i style="width:${pct}%"></i></div>
         <span class="cardMenuBtn abContMenuBtn" role="button" aria-label="More options" title="More options">${CARD_MENU_DOTS}</span></div>
       <div class="abT">${abEsc(m.title || 'Audiobook')}</div><div class="abA">${abEsc(m.author || '')}</div></button>`;
   }).join('');
@@ -23171,17 +23636,31 @@ function abRemoveContinue(asin, meta) {
     .catch((e) => toast(e.message));
 }
 async function abSearchRun(q) {
-  if (!q) { $('abGrid').innerHTML = ''; $('abFree').innerHTML = ''; showAbDiscovery(true); return; }
+  q = String(q || '').trim();
+  const reqId = (AB.searchReq = (AB.searchReq || 0) + 1);
+  const current = () => reqId === AB.searchReq && S.view === 'audiobooks'
+    && $('abSearch').value.trim() === q;
+  if (!current()) return false;
+  if (!q) { $('abGrid').innerHTML = ''; $('abFree').innerHTML = ''; showAbDiscovery(true); return false; }
   showAbDiscovery(false); // hide discovery/continue while showing search results
   $('abFree').innerHTML = '';
   $('abHint').textContent = 'Searching…';
   try {
     const { results } = await api('/api/audible/search?q=' + encodeURIComponent(q));
+    if (!current()) return false;
     $('abHint').textContent = results.length ? `${results.length} result${results.length === 1 ? '' : 's'}` : 'No audiobooks found.';
     renderAbGrid(results);
-  } catch (e) { $('abHint').textContent = 'Search failed: ' + e.message; }
+  } catch (e) {
+    if (!current()) return false;
+    $('abHint').textContent = 'Search failed: ' + e.message;
+  }
   // Public-domain (free) results, fetched in parallel — best-effort, never blocks the main list.
-  try { const pr = await api('/api/pubaudio/search?q=' + encodeURIComponent(q)); renderAbFree(pr.results || []); } catch {}
+  try {
+    const pr = await api('/api/pubaudio/search?q=' + encodeURIComponent(q));
+    if (!current()) return false;
+    renderAbFree(pr.results || []);
+  } catch {}
+  return current();
 }
 function renderAbGrid(items) {
   const grid = $('abGrid');
@@ -23197,8 +23676,11 @@ function renderAbGrid(items) {
 function abEsc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
 async function openAbDetail(asin, fallback) {
+  const reqId = (AB.detailReq = (AB.detailReq || 0) + 1);
   AB.asin = asin;
   $('abDetail').classList.add('open');
+  const current = () => reqId === AB.detailReq && S.view === 'audiobooks'
+    && String(AB.asin) === String(asin) && $('abDetail').classList.contains('open');
   updateAbMini(); // mini "now playing" bar rides along on the detail page too
   $('abDwrap').innerHTML = '<div style="grid-column:1/-1;color:#8a8f98">Loading…</div>';
   // Fetch book details + chapters IN PARALLEL — these were two SERIAL Audnexus round-trips (8s each)
@@ -23207,18 +23689,19 @@ async function openAbDetail(asin, fallback) {
     api('/api/audible/book/' + asin).catch(() => null),
     api('/api/audible/chapters/' + asin).catch(() => null),
   ]);
+  if (!current()) return;
   const book = bookRes || fallback || {};
   AB.book = book;
   const chapters = (chapRes && chapRes.chapters) || [];
   AB.chapters = chapters;
-  const cover = book.cover ? `style="background-image:url('${String(book.cover).replace(/'/g, '')}')"` : '';
+  const cover = `style="background-image:${artBackgroundHtml(book.cover, fallback && fallback.cover, artFallback('audiobook:' + asin, 63))}"`;
   const meta = [];
   if (book.narrators && book.narrators.length) meta.push('Narrated by ' + book.narrators.join(', '));
   if (book.series && book.series.name) meta.push(book.series.name + (book.series.position ? ' #' + book.series.position : ''));
   if (book.runtimeMin) meta.push(Math.floor(book.runtimeMin / 60) + 'h ' + (book.runtimeMin % 60) + 'm');
   if (book.rating) meta.push('★ ' + book.rating);
   const coverUrl = book.cover || (fallback && fallback.cover) || '';
-  $('abDbg').style.backgroundImage = coverUrl ? `url('${String(coverUrl).replace(/'/g, '')}')` : '';
+  $('abDbg').style.backgroundImage = artBackground(coverUrl, artFallback('audiobook-bg:' + asin, 64));
   // Chapters start COLLAPSED — a long book is a lot of scrolling; the header is a toggle button.
   const chev = '<svg class="abChapsChev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
   const chapHtml = chapters.length ? `<div class="abChaps">
@@ -23266,25 +23749,32 @@ async function openAbDetail(asin, fallback) {
     arr.splice(+el.dataset.bi, 1); localStorage.setItem('ab_bm_' + asin, JSON.stringify(arr));
     openAbDetail(asin, fallback); // re-render the detail so the bookmarks section updates
   }));
-  abLoadRelated(book, fallback); // lazily add "Rest of the series" + "More by this author" rows
+  abLoadRelated(book, fallback, reqId, asin); // lazily add "Rest of the series" + "More by this author" rows
   if (typeof abIsTv === 'function' && abIsTv()) setTimeout(() => {
-    if (!$('abDetail').classList.contains('open')) return;
+    if (!current()) return;
     const els = abDetailEls(); if (els.length) applyFocus(els.find((x) => x.id === 'abPlayBtn') || els[0]);
   }, 40);
 }
 // Lazy related rows on the detail page: rest of the series (by series name) + more by the author.
-async function abLoadRelated(book, fallback) {
-  const reqAsin = book.asin || (fallback && fallback.asin);
+async function abLoadRelated(book, fallback, detailReq, requestedAsin) {
+  const reqAsin = book.asin || (fallback && fallback.asin) || requestedAsin;
+  const current = () => detailReq === AB.detailReq && S.view === 'audiobooks'
+    && String(AB.asin) === String(reqAsin) && $('abDetail').classList.contains('open');
   const author = (book.authors || (fallback && fallback.authors) || [])[0];
   const series = book.series && book.series.name;
   const rows = [];
   if (series) rows.push({ title: 'Series · ' + series, q: series });
   if (author) rows.push({ title: 'More by ' + author, q: author });
   for (const row of rows) {
+    if (!current()) return;
     let results = [];
-    try { const r = await api('/api/audible/search?q=' + encodeURIComponent(row.q)); results = (r.results || []).filter((x) => x.asin !== reqAsin); } catch { continue; }
+    try {
+      const r = await api('/api/audible/search?q=' + encodeURIComponent(row.q));
+      if (!current()) return;
+      results = (r.results || []).filter((x) => x.asin !== reqAsin);
+    } catch { if (!current()) return; continue; }
     if (!results.length) continue;
-    if (AB.asin !== reqAsin) return; // user navigated away — don't inject stale rows
+    if (!current()) return; // user navigated away or opened a newer detail
     const el = document.createElement('div');
     el.style.gridColumn = '1 / -1';
     el.style.minWidth = '0'; // let the horizontal card row scroll instead of blowing out the grid width
@@ -23338,8 +23828,8 @@ async function abStartPlay(book, fallback, seekTo) {
     try { const c = await api('/api/audiobook/chapters/' + AB.mountId); chapters = (c && c.chapters) || []; } catch {}
   }
   AB.now = { book, author, asin, chapters, curChap: -1, active: false, tracks, trackIdx: 0, multi };
-  $('abPcover').style.backgroundImage = book.cover ? `url('${String(book.cover).replace(/'/g, '')}')` : '';
-  $('abPbg').style.backgroundImage = book.cover ? `url('${String(book.cover).replace(/'/g, '')}')` : '';
+  $('abPcover').style.backgroundImage = artBackground(book.cover, artFallback('audiobook-player:' + asin, 65));
+  $('abPbg').style.backgroundImage = artBackground(book.cover, artFallback('audiobook-player-bg:' + asin, 66));
   $('abPtitle').textContent = title;
   $('abPauthor').textContent = author;
   $('abDetail').classList.remove('open');
@@ -23386,8 +23876,8 @@ async function abPlayPubaudio(item) {
   AB.now = { book: { title: item.title, cover: item.cover, authors: item.authors || [] }, author: (item.authors || [])[0] || '',
     asin, chapters: [], curChap: -1, active: false,
     tracks: tracks.map((t, i) => ({ index: i, name: t.name, url: t.url })), trackIdx: 0, multi: true };
-  $('abPcover').style.backgroundImage = item.cover ? `url('${String(item.cover).replace(/'/g, '')}')` : '';
-  $('abPbg').style.backgroundImage = item.cover ? `url('${String(item.cover).replace(/'/g, '')}')` : '';
+  $('abPcover').style.backgroundImage = artBackground(item.cover, artFallback('audiobook-player:' + asin, 67));
+  $('abPbg').style.backgroundImage = artBackground(item.cover, artFallback('audiobook-player-bg:' + asin, 68));
   $('abPtitle').textContent = item.title;
   $('abPauthor').textContent = (item.authors || []).join(', ');
   $('abDetail').classList.remove('open');
@@ -23440,7 +23930,7 @@ function updateAbMini() {
   document.body.classList.toggle('abMiniOpen', show);
   mini.classList.toggle('show', show);
   if (!show) return;
-  $('abMiniCover').style.backgroundImage = n.book.cover ? `url('${String(n.book.cover).replace(/'/g, '')}')` : '';
+  $('abMiniCover').style.backgroundImage = artBackground(n.book.cover, artFallback('audiobook-mini:' + (n.asin || n.book.title), 69));
   $('abMiniTitle').textContent = n.book.title || '';
   $('abMiniAuthor').textContent = n.author || '';
   const playing = !$('abAudio').paused;

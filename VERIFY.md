@@ -86,6 +86,45 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-07-13, v2.6.20 pre-release verification:
+
+- Version contract aligned: `package.json` 2.6.20; Android `versionName`
+  2.6.20 / `versionCode` 302; the isolated runtime smoke returned 2.6.20
+  from `/api/server`.
+- `npm.cmd test` passed 415/415. The late artwork/navigation regression slice
+  passed 9/9, the corrected IPTV cache fixture passed its focused and related
+  reruns, and both inline web scripts parsed.
+- `npm.cmd run verify:full -- -AndroidDevice emulator-5554` passed again on the
+  final candidate in 296 seconds. This repeated the P9/P11/P14 gates, all 415
+  Node tests, isolated
+  runtime smoke, Android `lintDebug`, `testDebugUnitTest`, `assembleDebug`, APK
+  install, and Android TV stress.
+- Android TV API 36 stress report
+  `bench/stress-results/android-tv-stress-20260713-173627.json` finished
+  `ok: true` with no failures or warnings: 32 deterministic fixture channels,
+  correct 1080p/2160p source ranking, native Live TV, 20 zaps, two PiP loops,
+  native Multiview handoff, native VOD with 10 seek actions, subtitles, and
+  repeated page/D-pad churn. Raw emulator logs still contain Android platform
+  AppOps/media-button noise and are not described as silent.
+- Desktop Chrome at 1424x805 and mobile web at 390x844 loaded Home, Movies,
+  TV, Discover, Search, Music, Audiobooks, and Preferences against the local
+  deterministic UI fixture. Watchlist, Calendar, and Live TV rendered their
+  expected empty states. A TV detail rendered all three episodes with 16:9
+  artwork, including the layered show-art fallback for a missing still. There
+  were no uncaught runtime errors or mobile horizontal overflow.
+- Android TV and phone API 36 both ran the 2.6.20/code 302 APK. The same TV
+  detail rendered all three episode covers; D-pad Left moved between episode
+  cards and the corrected Back ordering was exercised. The TV Library modal
+  opened its native dropdown from OK and changed Type to TV Shows. The
+  1080x2400 phone WebView completed the full page sweep with the episode
+  artwork visible, no horizontal overflow, and no detected page-script error.
+- The stress environment used synthetic MPEG-TS and deterministic source
+  fixtures. A real usenet-provider VOD download was not started, so no claim
+  is made about provider-specific availability in this pass. The streaming
+  engine itself was not changed; its startup, buffering, source selection,
+  native handoff, IPTV, and subtitle contracts were rerun through P9/P11/P14
+  and the emulator stress gate.
+
 2026-07-13, v2.6.19 pre-release verification:
 
 - Version contract aligned: `package.json` 2.6.19; Android `versionName`

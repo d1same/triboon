@@ -675,10 +675,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'TMDB search should rank exact franchise/title-prefix matches above incidental phrase matches');
   assert.match(ui, /if \(S\._homeRowsSig === sig && \$\('rows'\)\.children\.length\) \{[\s\S]+if \(S\.view === 'home'\) \{[\s\S]+setRowsView\(\$\('rows'\), S\.rows, true\);[\s\S]+\}[\s\S]+S\.view === 'home' && S\.zone !== 'rail' && !document\.querySelector\('#home \.focus'\)[\s\S]+focusContent\(\);[\s\S]+return false;/,
     'returning Home with cached rows should repoint the row model and reclaim focus from hidden pages');
-  assert.match(ui, /if \(\(S\.maxLevel \?\? 4\) < 4\) \{[\s\S]+renderRowsInto\(root, rows\);[\s\S]+setRowsView\(root, rows, false\);[\s\S]+if \(S\.zone !== 'rail'\) focusCard\(0, 0\);/,
-    'restricted-profile Discover rows should still focus the first visible card after rendering');
-  assert.match(ui, /for \(const x of \[\.\.\.\(nowP\.results \|\| \[\]\), \.\.\.\(onAir\.results \|\| \[\]\), \.\.\.\(trend\.results \|\| \[\]\)\]\)[\s\S]+trailerCand\.push\(x\);[\s\S]+buildTrailerRow\(trailerCand\)\.then\(\(trItems\) => \{[\s\S]+const focused = root\.querySelector\('\.focus'\);[\s\S]+const focusRow = focused \? parseInt\(focused\.dataset\.row[\s\S]+renderRowsInto\(root, rows, \{ resetScroll: false \}\);[\s\S]+setRowsView\(root, rows, false\);[\s\S]+if \(S\.view === 'discover' && S\.zone !== 'rail'\) \{[\s\S]+focusCard\(safeRow, safeCol, \{ scroll: false, align: false \}\);/,
-    'Discover trailer row is fed by in-theaters + on-air + trending (freshest first), and its async hydration preserves/restores card focus');
+  assert.match(ui, /if \(\(S\.maxLevel \?\? 4\) < 4\) \{[\s\S]+renderRowsInto\(root, rows\);[\s\S]+setRowsView\(root, rows, false\);[\s\S]+if \(current\(\) && S\.zone !== 'rail'\) focusCard\(0, 0\);/,
+    'restricted-profile Discover rows should focus the first card only while that request still owns the page');
+  assert.match(ui, /for \(const x of \[\.\.\.\(nowP\.results \|\| \[\]\), \.\.\.\(onAir\.results \|\| \[\]\), \.\.\.\(trend\.results \|\| \[\]\)\]\)[\s\S]+trailerCand\.push\(x\);[\s\S]+buildTrailerRow\(trailerCand\)\.then\(\(trItems\) => \{\s*if \(!current\(\) \|\| !trItems\.length\) return;[\s\S]+const focused = root\.querySelector\('\.focus'\);[\s\S]+const focusRow = focused \? parseInt\(focused\.dataset\.row[\s\S]+renderRowsInto\(root, rows, \{ resetScroll: false \}\);[\s\S]+setRowsView\(root, rows, false\);[\s\S]+if \(current\(\) && S\.zone !== 'rail'\) \{[\s\S]+focusCard\(safeRow, safeCol, \{ scroll: false, align: false \}\);/,
+    'Discover trailer hydration is freshest-first and may preserve/restore focus only while its request owns the page');
   assert.match(ui, /const pub = tr\.published_at \? new Date\(tr\.published_at\)\.getTime\(\) : 0;[\s\S]+_trailerPub[\s\S]+sort\(\(a, b\) => b\._trailerPub - a\._trailerPub\)\.slice\(0, 12\)/,
     'the trailers row is sorted newest-trailer-first (genuinely "latest"), not by trending order');
   assert.match(ui, /if \(v\.published_at\) \{[\s\S]+const days = \(Date\.now\(\) - new Date\(v\.published_at\)\.getTime\(\)\)[\s\S]+s \+= Math\.max\(0, 22 - days \/ 30\)/,
@@ -739,8 +739,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   // the right season grid per show type — so a D-pad DOWN into the tabs row can walk right to it.
   assert.match(ui, /function appendAllSeasonsTab\(tabs, onClick\) \{[\s\S]+className = 'seasonTab allSeasonsTab focusable'[\s\S]+b\.id = 'allSeasonsBtn'[\s\S]+tabs\.appendChild\(b\)/,
     'All seasons should be appended as the last season tab');
-  assert.match(ui, /appendAllSeasonsTab\(tabs, \(\) => renderSeasonGrid\(show, S\.detailSeasons \|\| \[\]\)\)/,
-    'the All-seasons tab opens the TMDB season grid');
+  assert.match(ui, /appendAllSeasonsTab\(tabs, \(\) => \{[\s\S]+S\.seasonReq = \(S\.seasonReq \|\| 0\) \+ 1;[\s\S]+renderSeasonGrid\(show, S\.detailSeasons \|\| \[\]\);[\s\S]+\}\)/,
+    'the All-seasons tab invalidates a pending episode request and opens the TMDB season grid');
   assert.match(ui, /appendAllSeasonsTab\(tabs, \(\) => renderLocalShowSeasonGrid\(show, S\.detailSeasons \|\| \[\]\)\)/,
     'the All-seasons tab opens the local season grid for local-only shows');
   assert.match(ui, /if \(it\._localShow && S\.localDetailEpisodes\) \{[\s\S]+markLocalEpisodeGroupWatched\(it, S\.localDetailEpisodes, nowWatched/,
@@ -947,8 +947,8 @@ test('music search supports voice and TV result focus without side-note clutter'
     'Music shelf headers should not render right-aligned helper text');
   assert.match(ui, /const addShelf = \(title, cls = ''\) => \{[\s\S]+<div class="musicShelfTop"><h2>\$\{esc\(title\)\}<\/h2><\/div>[\s\S]+musicTiles[\s\S]+musicRail/,
     'Music shelf headers should render only the shelf title above the cards');
-  assert.match(ui, /function musicSearchAndFocusResults\(\) \{[\s\S]+clearTimeout\(_musicSearchT\);[\s\S]+doMusicSearch\(\)\.then\(\(\) => focusMusicResultsSoon\(\)\)/,
-    'Music Enter/voice search should submit immediately and wait for result focus');
+  assert.match(ui, /function musicSearchAndFocusResults\(\) \{[\s\S]+clearTimeout\(_musicSearchT\);[\s\S]+doMusicSearch\(\)\.then\(\(active\) => \{ if \(active\) focusMusicResultsSoon\(\); \}\)/,
+    'Music Enter/voice search should submit immediately and focus only the still-current result set');
   // Phone music: the now-playing seekbar must scrub by touch tap AND drag (was click-only), with a
   // bigger touch target and no scroll-hijack; and a long artist name must not overflow/shift the page.
   assert.match(ui, /\$\('mnSeek'\)\.addEventListener\('pointerdown'[\s\S]+setPointerCapture\(e\.pointerId\)[\s\S]+mnSeekToPointer\(e\)/,
@@ -1229,6 +1229,148 @@ test('VOD pause resume: paused players warm ahead without stealing startup or se
     'native ExoPlayer should share the same pause/resume warm-ahead contract as the web player');
   assert.match(android, /if \("video"\.equals\(nativeMode\) && isPlaying\) \{[\s\S]+__tvNativeVideoPlaying[\s\S]+\} else if \("video"\.equals\(nativeMode\) && nativeVideoStarted[\s\S]+nativePlayer\.getPlaybackState\(\) == Player\.STATE_READY[\s\S]+!nativePlayer\.getPlayWhenReady\(\)[\s\S]+__tvNativeVideoPaused/,
     'Android should report real user pauses without treating normal buffering as paused playback');
+});
+
+test('async page loaders ignore stale shared-grid results and finish on a usable surface', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const section = (start, end) => ui.slice(ui.indexOf(start), ui.indexOf(end, ui.indexOf(start)));
+
+  const browse = section('async function openBrowse(type)', '// One TMDB page');
+  assert.match(browse, /const reqId = \(S\.browseReq = \(S\.browseReq \|\| 0\) \+ 1\)[\s\S]+if \(reqId !== S\.browseReq \|\| S\.view !== view \|\| S\.browseType !== type\) return;/,
+    'a slower Movies/TV genre request must not initialize the newer shared-grid view');
+  assert.match(browse, /S\.browseLoadingReq === reqId[\s\S]+const current = \(\) => reqId === S\.browseReq[\s\S]+const r = await api\(path\);\s*if \(!current\(\)\) return;[\s\S]+if \(S\.browseLoadingReq === reqId\)/,
+    'browse paging is keyed by request epoch and checks view/filter identity before rendering or releasing loading state');
+  assert.match(browse, /let loaded = false;[\s\S]+loaded = true;[\s\S]+if \(current\(\) && loaded\) \{\s*S\.browseLoading = false;\s*maybeFillBrowseWindow\(\);/,
+    'a failed browse request must not trigger the fill-window helper into an immediate retry loop');
+
+  const library = section('async function runLibrary(reset)', '// Scanned local library');
+  assert.match(library, /const current = \(\) => reqId === S\.libReq && S\.view === 'library'[\s\S]+S\.currentLib\.id === libId[\s\S]+const r = await api\(path\);\s*if \(!current\(\)\) return;/,
+    'a stale smart-library response cannot overwrite another library or page');
+  assert.match(library, /S\.libLoadingReq === reqId[\s\S]+if \(S\.libLoadingReq === reqId\)/,
+    'smart-library loading state is released only by the request that owns it');
+
+  const watchlist = section('async function loadWatchlistView()', 'async function deleteLibrary');
+  assert.match(watchlist, /const reqId = \(S\.watchlistViewReq[\s\S]+await loadWatchlist\(\);\s*if \(!current\(\)\) return;/,
+    'Watchlist checks its request/view after the initial load');
+  assert.match(watchlist, /const d = await api\([\s\S]+if \(!current\(\)\) return;[\s\S]+const idx = \(S\.gridItems \|\| \[\]\)\.findIndex/,
+    'late Watchlist metadata backfills cannot patch whichever page now owns #grid');
+
+  const live = section('async function loadLiveTv()', '// Scaffold the persistent search bar');
+  assert.match(live, /const reqId = \(S\.liveViewReq[\s\S]+const r = await loadLiveChannelsCombined\(\);\s*if \(!current\(\)\) return;/,
+    'Live TV checks view/request identity before every configured, empty, or successful shared-grid write');
+  assert.match(live, /catch \(e\) \{\s*if \(!current\(\)\) return;/,
+    'a failed stale Live TV request cannot replace a newer page with its error');
+
+  const discover = section('async function loadDiscover()', 'function pickBestTrailer');
+  assert.match(discover, /const reqId = \(S\.discoverReq = \(S\.discoverReq \|\| 0\) \+ 1\)[\s\S]+const current = \(\) => reqId === S\.discoverReq && S\.view === 'discover'[\s\S]+finally \{ if \(current\(\)\) bootReady\(\); \}/,
+    'restricted-profile Discover releases the boot splash only for the request that still owns the page');
+  assert.match(ui, /catch \(e\) \{\s*if \(reqId !== S\.detailReq \|\| S\.view !== 'detail'\) return;\s*bootReady\(\);[\s\S]+applyFocus\(\$\('dBack'\), false\)/,
+    'a failed deep-linked detail releases boot and focuses Back');
+  assert.match(ui, /async function openPerson[\s\S]+const current = \(\) => reqId === S\.personReq[\s\S]+catch \(e\) \{\s*if \(!current\(\)\) return;\s*bootReady\(\);[\s\S]+if \(current\(\)\) focusPersonBack\(\)/,
+    'a failed person page releases boot and focuses its usable Back action');
+  const season = section('async function openSeasonEpisodes(show, seasonNumber, opts = {})', "document.addEventListener('click'");
+  assert.match(season, /const reqId = \(S\.seasonReq = \(S\.seasonReq \|\| 0\) \+ 1\)[\s\S]+const current = \(\) => reqId === S\.seasonReq[\s\S]+const season = await api[\s\S]+if \(!current\(\)\) return;/,
+    'only the newest season request may render episode cards');
+  assert.match(season, /catch \(e\) \{\s*if \(!current\(\)\) return;[\s\S]+Episodes failed:/,
+    'a failed older season cannot replace a newer season with its error');
+  assert.match(season, /appendAllSeasonsTab[\s\S]+S\.seasonReq = \(S\.seasonReq \|\| 0\) \+ 1;[\s\S]+renderSeasonGrid/,
+    'returning to All seasons invalidates an episode request still in flight');
+  assert.match(ui, /function renderGrid\(items, root = \$\('grid'\)\) \{\s*const renderedView = S\.view;[\s\S]+S\.view === renderedView && S\.gridRoot === root && \(!S\.zone \|\| S\.zone === 'grid'\)/,
+    'cold async grid paint claims focus only if the rendered view still owns the shared grid and no filter/rail owns focus');
+});
+
+test('last-intent page, search, and detail loaders cannot paint or focus stale results', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const section = (start, end) => ui.slice(ui.indexOf(start), ui.indexOf(end, ui.indexOf(start)));
+
+  const discover = section('async function loadDiscover()', 'function pickBestTrailer');
+  assert.match(discover, /const \[trend,[\s\S]+\] = await Promise\.all\([\s\S]+if \(!current\(\)\) return;[\s\S]+buildTrailerRow\(trailerCand\)\.then\(\(trItems\) => \{\s*if \(!current\(\) \|\| !trItems\.length\) return;[\s\S]+rows\.splice/,
+    'Discover checks its request after the catalog fan-out and again before delayed trailers mutate rows');
+  assert.match(discover, /if \(current\(\) && S\.zone !== 'rail'\) \{[\s\S]+focusCard\(safeRow, safeCol/,
+    'delayed trailer completion cannot restore focus after Discover loses ownership');
+
+  const person = section('async function openPerson(id, push = true)', 'function detailPlayEpisodeParts');
+  assert.match(person, /const reqId = \(S\.personReq = \(S\.personReq \|\| 0\) \+ 1\)[\s\S]+const current = \(\) => reqId === S\.personReq[\s\S]+const p = await api[\s\S]+if \(!current\(\)\) return;[\s\S]+requestAnimationFrame\(\(\) => \{ if \(current\(\)\) focusGrid\(0\); \}\)/,
+    'a slower Person A response cannot overwrite or focus Person B');
+
+  const closeDetail = section('function closeDetail()', "$('dBack').addEventListener");
+  assert.match(closeDetail, /S\.detailReq = \(S\.detailReq \|\| 0\) \+ 1;[\s\S]+S\.seasonReq = \(S\.seasonReq \|\| 0\) \+ 1;[\s\S]+\$\('detail'\)\.classList\.remove\('open'\)/,
+    'closing Detail must invalidate late TMDB, availability, local-show, and season success paths before hiding the surface');
+
+  const music = section('function showMusicHome()', 'function moveMusicSearchDown');
+  assert.match(music, /function showMusicHome\(\) \{\s*S\.musicSearchReq = \(S\.musicSearchReq \|\| 0\) \+ 1;/,
+    'returning Music to Home immediately invalidates an in-flight query');
+  assert.match(music, /const reqId = \(S\.musicSearchReq = \(S\.musicSearchReq \|\| 0\) \+ 1\)[\s\S]+S\.musicPage === 'search' && \$\('musicSearch'\)\.value\.trim\(\) === q[\s\S]+const r = await api[\s\S]+if \(!current\(\)\) return false;[\s\S]+catch \(e\) \{\s*if \(!current\(\)\) return false;/,
+    'Music query A cannot paint success or error over query B');
+  assert.match(music, /doMusicSearch\(\)\.then\(\(active\) => \{ if \(active\) focusMusicResultsSoon\(\); \}\)/,
+    'only the active Music search may schedule result focus');
+
+  const abSearch = section('async function abSearchRun(q)', 'function renderAbGrid');
+  assert.match(ui, /function clearAbSearch[\s\S]+AB\.searchReq = \(AB\.searchReq \|\| 0\) \+ 1;[\s\S]+\$\('abSearch'\)\.value = '';/,
+    'clearing audiobook search invalidates its old request before clearing the UI');
+  assert.match(abSearch, /const current = \(\) => reqId === AB\.searchReq && S\.view === 'audiobooks'[\s\S]+\$\('abSearch'\)\.value\.trim\(\) === q[\s\S]+audible\/search[\s\S]+if \(!current\(\)\) return false;[\s\S]+pubaudio\/search[\s\S]+if \(!current\(\)\) return false;/,
+    'audiobook query A cannot paint Audible or public-domain results over clear/query B');
+  assert.match(abSearch, /catch \(e\) \{\s*if \(!current\(\)\) return false;[\s\S]+Search failed:/,
+    'a stale audiobook search failure cannot replace the current hint');
+
+  const abDetail = section('async function openAbDetail(asin, fallback)', 'async function abStartPlay');
+  assert.match(abDetail, /const reqId = \(AB\.detailReq = \(AB\.detailReq \|\| 0\) \+ 1\)[\s\S]+const current = \(\) => reqId === AB\.detailReq[\s\S]+await Promise\.all[\s\S]+if \(!current\(\)\) return;[\s\S]+abLoadRelated\(book, fallback, reqId, asin\)/,
+    'audiobook Detail A cannot paint after Detail B and its related work inherits the same epoch');
+  assert.match(abDetail, /async function abLoadRelated\(book, fallback, detailReq, requestedAsin\)[\s\S]+const current = \(\) => detailReq === AB\.detailReq[\s\S]+const r = await api[\s\S]+if \(!current\(\)\) return;[\s\S]+appendChild/,
+    'late related audiobook rows cannot inject into a newer detail');
+  assert.match(abDetail, /setTimeout\(\(\) => \{\s*if \(!current\(\)\) return;[\s\S]+applyFocus/,
+    'a stale audiobook detail cannot steal TV focus');
+});
+
+test('season episode loader behavior preserves the newest season on late success and failure', async () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf('async function openSeasonEpisodes(show, seasonNumber, opts = {})');
+  const end = ui.indexOf("document.addEventListener('click'", start);
+  assert.ok(start >= 0 && end > start, 'season episode loader should be extractable');
+
+  const S = { view: 'detail', detailReq: 7, detailSeason: null, detailSeasons: [] };
+  const nodes = {
+    seasonsTitle: { textContent: '' },
+    seasonGrid: { style: {} },
+    seasonTabs: { style: {}, innerHTML: '', appendChild() {}, querySelector() { return null; } },
+    epGrid: { style: {}, innerHTML: '', querySelectorAll() { return []; }, querySelector() { return null; }, appendChild() {} },
+  };
+  const document = {
+    activeElement: null,
+    querySelector() { return null; },
+    body: { classList: { contains() { return false; } } },
+  };
+  const pending = new Map();
+  const deferred = () => {
+    let resolve;
+    let reject;
+    const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+    return { promise, resolve, reject };
+  };
+  const api = (url) => pending.get(Number(url.split('/').pop())).promise;
+  const openSeasonEpisodes = new Function('S', '$', 'document', 'appendAllSeasonsTab', 'bindEdgeScroll',
+    'api', 'focusRenderedDetailEpisode', 'applyFocus',
+    `${ui.slice(start, end)}\nreturn openSeasonEpisodes;`)(
+      S, (id) => nodes[id], document, () => {}, () => {}, api, () => false, () => {});
+  const show = { tmdbId: 101 };
+
+  const first = deferred(); const second = deferred();
+  pending.set(1, first); pending.set(2, second);
+  const firstRun = openSeasonEpisodes(show, 1);
+  const secondRun = openSeasonEpisodes(show, 2);
+  second.resolve({ episodes: [] }); await secondRun;
+  nodes.epGrid.innerHTML = 'season 2';
+  first.resolve({ episodes: [] }); await firstRun;
+  assert.equal(nodes.epGrid.innerHTML, 'season 2', 'late season 1 success must not erase season 2');
+
+  const third = deferred(); const fourth = deferred();
+  pending.set(3, third); pending.set(4, fourth);
+  const thirdRun = openSeasonEpisodes(show, 3);
+  const fourthRun = openSeasonEpisodes(show, 4);
+  fourth.resolve({ episodes: [] }); await fourthRun;
+  nodes.epGrid.innerHTML = 'season 4';
+  third.reject(new Error('late failure')); await thirdRun;
+  assert.equal(nodes.epGrid.innerHTML, 'season 4', 'late season 3 failure must not replace season 4');
 });
 
 test('web VOD rebuffer and subtitle handoff stay bounded, fast, and mobile-safe', async () => {
@@ -2071,8 +2213,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native remux/transcode playback should tell ExoPlayer it is receiving fragmented MP4 instead of relying on sniffing');
   assert.match(ui, /qualityChoices: !!p\.transcodeUrl/,
     'native HD button should only be enabled when optimized quality choices exist');
-  assert.match(ui, /const nativeBackdrop = p\.item\.backdrop \|\| p\.item\.poster \|\| '';[\s\S]+backdropUrl: nativeBackdrop \? new URL\(nativeBackdrop, location\.origin\)\.href : ''/,
-    'native Android loading should receive the same movie art as the web player loader');
+  assert.match(ui, /backdropUrl: absoluteArtworkUrl\(p\.item\.backdrop, p\.item\.poster\)/,
+    'native Android loading should filter each artwork candidate before choosing, so a CSS backdrop cannot discard a real poster');
   assert.match(ui, /const serverSeek = kind === 'remux' \|\| kind === 'transcode';[\s\S]+nativeUrl = remuxPlaybackUrl\(p, seekStart, \{ native: true \}\);[\s\S]+url: new URL\(nativeUrl, location\.origin\)\.href,[\s\S]+start: serverSeek \? 0 : Math\.max\(0, atSeconds \|\| 0\),[\s\S]+startOffset: seekStart/,
     'native remux/transcode playback should use server-side start URLs (native:true → 5.1 audio) and pass the absolute display offset');
   assert.match(ui, /class="seekLine"[\s\S]+id="seekElapsed"[\s\S]+id="seek"[\s\S]+id="seekTotal"/,
@@ -2612,10 +2754,10 @@ test('Android native player: direct source and native chrome stay out of the web
   // cast page must return to that cast page, not restoreDetailReturn's stale origin.
   assert.match(ui, /S\.detailFromPerson = \(S\.view === 'person'\) \? \(S\.personId \|\| null\) : null;/,
     'opening a detail from a cast page should remember the cast id for the hardware-Back path');
-  assert.match(ui, /function closeDetail\(\) \{[\s\S]+const fromPerson = S\.detailFromPerson;[\s\S]+S\.detailFromPerson = null;[\s\S]+if \(fromPerson\) \{ replaceRoute\(`#\/person\/\$\{fromPerson\}`\); openPerson\(fromPerson, false\); return; \}[\s\S]+restoreDetailReturn\(\);/,
-    'hardware Back / Escape closing a cast-member detail should return to the cast page (browser Back uses history instead)');
-  assert.match(ui, /function closePerson\(\) \{[\s\S]+if \(!\$\(\'detail\'\)\.classList\.contains\('open'\)\) return restoreDetailReturn\(\);/,
-    'closing a cast page re-entered over a closed detail should fall back to the detail-return origin, not strand on a blank page');
+  assert.match(ui, /function closeDetail\(\) \{[\s\S]+const fromPerson = S\.detailFromPerson;[\s\S]+S\.detailFromPerson = null;[\s\S]+if \(fromPerson\) \{ replaceRoute\(`#\/person\/\$\{fromPerson\}`\); restorePersonFromDetail\(fromPerson\); return; \}[\s\S]+restoreDetailReturn\(\);/,
+    'hardware Back / Escape closing a cast-member detail should restore the exact cast page position (browser Back uses history instead)');
+  assert.match(ui, /function closePerson\(\) \{[\s\S]+const originDetailAlive = \$\('detail'\)\.classList\.contains\('open'\)[\s\S]+sameDetailIdentity\(S\.detailItem, origin\.item\)[\s\S]+if \(!originDetailAlive\) \{[\s\S]+if \(origin && origin\.item\)[\s\S]+openDetail\(origin\.item, false\)[\s\S]+return restoreDetailReturn\(\);/,
+    'closing a cast page should rebuild a missing or wrong underlying origin detail, then fall back to browse rather than strand blank');
   assert.match(ui, /function liveNoChannelsHtml\(errors = \[\]\) \{[\s\S]+gridMore liveEmpty focusable[\s\S]+function focusLiveGridMessage\(\) \{[\s\S]+S\.view === 'livetv' && S\.zone !== 'rail'[\s\S]+focusGrid\(0\);/,
     'Live TV empty channel states should be focusable and claim D-pad focus');
   assert.match(ui, /grid\.innerHTML = '<div class="gridMore focusable">loading channels[\s\S]+focusLiveGridMessage\(\);[\s\S]+if \(!r\.configured\) \{ grid\.innerHTML = '<div class="gridMore focusable">[\s\S]+focusLiveGridMessage\(\); return; \}[\s\S]+if \(!r\.channels\.length\) \{ grid\.innerHTML = liveNoChannelsHtml\(S\.liveSourceErrors\); focusLiveGridMessage\(\); return; \}[\s\S]+catch \(e\) \{ grid\.innerHTML = `<div class="gridMore focusable">Live TV failed:/,
@@ -3789,6 +3931,23 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Android chrome should not keep old-player escape controls');
 });
 
+test('Android native Back dismisses Up Next before player chrome', () => {
+  const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
+  const keyBack = android.slice(
+    android.indexOf('private boolean handleNativeBackKey(KeyEvent e)'),
+    android.indexOf('private void parkNativeHiddenFocusOnSeek()', android.indexOf('private boolean handleNativeBackKey(KeyEvent e)')),
+  );
+  assert.match(keyBack, /!nativeGuideMode && !nativeUpNextVisible && !nativeSheetOpen\(\) && !nativeEpisodeStripOpen[\s\S]+dismissNativeChromeForBack\(\)/,
+    'a visible Up Next card must prevent key-down from consuming Back on the player chrome');
+
+  const systemBack = android.slice(
+    android.indexOf('private void handleSystemBack()'),
+    android.indexOf('private void handleBack()', android.indexOf('private void handleSystemBack()')),
+  );
+  assert.match(systemBack, /if \(nativeGuideMode\) closeNativeGuideMode\(\);\s*\n\s*else if \(nativeUpNextVisible\) dismissNativeUpNext\(true\);\s*\n\s*else if \(nativeSheetOpen\(\)\) hideNativeSheet\(\);/,
+    'Back should dismiss Up Next before sheets, chrome, or playback once key-up reaches the layer stack');
+});
+
 test('web browse grids stay windowed and D-pad uses logical grid indexes', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   assert.match(ui, /const VIRTUAL_GRID_VIEWS = new Set\(\['movies', 'tv', 'watchlist', 'library'\]\);/,
@@ -3831,6 +3990,315 @@ test('web browse grids stay windowed and D-pad uses logical grid indexes', () =>
     'virtual grids should navigate with cached uniform-grid row math instead of full-DOM offset scans');
   assert.match(ui, /api\.unobserveRoot = \(root\) => \{[\s\S]+querySelectorAll\('\[data-bg\]'\)[\s\S]+io\.unobserve\(el\)/,
     'removed virtual cards should be unobserved by the poster lazy-loader');
+});
+
+test('D-pad regression: Android Back uses the player guide two-step path', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /if \(k === 'Escape' \|\| k === 'Backspace'\) \{[\s\S]{0,500}rows\.includes\(active\) && cats\.length[\s\S]{0,200}focusPlayerGuideCategory\(catIndex\(\)\)[\s\S]{0,200}closePlayerGuide\(\)/,
+    'browser Back from a guide channel should focus its category before a second Back closes the guide');
+
+  const tvBack = ui.slice(
+    ui.indexOf('window.__tvBack = () => {'),
+    ui.indexOf('// Android TV shell hook #2:', ui.indexOf('window.__tvBack = () => {')),
+  );
+  const guideStart = tvBack.indexOf("if ($('pGuide') && $('pGuide').classList.contains('open')) {");
+  const guideEnd = tvBack.indexOf("return 'ok';", guideStart);
+  assert.ok(guideStart >= 0 && guideEnd > guideStart, 'hardware Back should have an explicit player-guide layer');
+  const guideBack = tvBack.slice(guideStart, guideEnd);
+  if (/KeyboardEvent\('keydown', \{ key: 'Escape'/.test(guideBack)) {
+    assert.doesNotMatch(guideBack, /closePlayerGuide\(\)/,
+      'an Escape-dispatching hardware branch must not also close the guide directly');
+  } else {
+    const shared = guideBack.match(/\b([A-Za-z_$][\w$]*(?:GuideBack|BackGuide)[\w$]*)\s*\(\)/i);
+    assert.ok(shared, 'hardware Back should dispatch Escape or call a shared guide-Back helper');
+    assert.match(guideBack, new RegExp(`if \\(!${shared[1]}\\(\\)\\) closePlayerGuide\\(\\)`),
+      'hardware Back should close only when the shared helper says focus was not on a channel row');
+    const helperStart = ui.indexOf(`function ${shared[1]}()`);
+    const helperEnd = ui.indexOf('\nfunction ', helperStart + 10);
+    const helper = ui.slice(helperStart, helperEnd);
+    assert.match(helper, /pgRow[\s\S]{0,300}pgCat[\s\S]{0,500}focusedRow[\s\S]{0,300}focusPlayerGuideCategory\([\s\S]{0,100}return true/,
+      'the shared helper should recognize visual/DOM row focus, restore the category, and report that Back was consumed');
+  }
+});
+
+test('D-pad regression: auth and setup inputs route arrows before native-input fallback', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const dpadStart = ui.lastIndexOf("document.addEventListener('keydown', (e) => {", ui.indexOf('// FREEZE-FLOOD GUARD:'));
+  const keydown = ui.slice(
+    dpadStart,
+    ui.indexOf("document.addEventListener('keyup', (e) => {", dpadStart),
+  );
+  const gateIdx = keydown.indexOf("const openGate = [...document.querySelectorAll('.gate')]");
+  const inputReturnIdx = keydown.indexOf("if (inInput && k !== 'Escape') return;");
+  assert.ok(gateIdx >= 0 && inputReturnIdx >= 0 && gateIdx < inputReturnIdx,
+    'open auth/setup gates must see D-pad arrows before the generic input early-return');
+  const gateRoute = keydown.slice(gateIdx, inputReturnIdx);
+  assert.match(gateRoute, /openGate[\s\S]{0,500}e\.preventDefault\(\)[\s\S]{0,300}dpadCycle\(openGate, k\)[\s\S]{0,100}return/,
+    'auth/setup arrows should be consumed by the gate focus cycle while a field owns real focus');
+  assert.match(gateRoute, /(?:k\.startsWith\('Arrow'\)|\[[^\]]*'ArrowUp'[^\]]*'ArrowDown'[^\]]*\]\.includes\(k\)|[A-Za-z_$][\w$]*Dpad[\w$]*\(k\))/i,
+    'the early gate route should be limited to navigation keys so normal text entry still reaches the input');
+
+  const helperStart = ui.indexOf('function isTvGateDpadKey(');
+  const helperEnd = ui.indexOf('\n}', helperStart) + 2;
+  assert.ok(helperStart >= 0 && helperEnd > helperStart, 'gate D-pad routing should have a directly testable key policy');
+  const gateKey = new Function(`${ui.slice(helperStart, helperEnd)}; return isTvGateDpadKey;`)();
+  assert.strictEqual(gateKey('ArrowLeft', true), true, 'TV remotes should traverse gate controls with arrows');
+  assert.strictEqual(gateKey('Enter', true), true, 'TV remote OK should activate the focused gate control');
+  assert.strictEqual(gateKey('Backspace', true), false, 'Backspace must remain available to edit a TV text field');
+  assert.strictEqual(gateKey('Escape', true), false, 'Back/Escape belongs to overlay layering, not the form-cycle helper');
+  assert.strictEqual(gateKey('ArrowLeft', false), false, 'web and phone inputs must keep native caret-arrow behavior');
+  assert.strictEqual(gateKey('x', true), false, 'ordinary text must always reach the IME');
+});
+
+test('D-pad regression: closing playback restores visible detail focus', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const closePlayer = ui.slice(
+    ui.indexOf('async function closePlayer(opts = {}) {'),
+    ui.indexOf('function startHealthPoll(id) {'),
+  );
+  const detailStart = closePlayer.indexOf("if ($('detail').classList.contains('open')) {");
+  const detailEnd = closePlayer.indexOf('} else if (finishedTarget)', detailStart);
+  assert.ok(detailStart >= 0 && detailEnd > detailStart, 'closePlayer should retain its open-detail return branch');
+  const detailReturn = closePlayer.slice(detailStart, detailEnd);
+  assert.doesNotMatch(detailReturn, /if \(S\.zone === 'detail'\)/,
+    'detail focus restoration must not depend on the impossible legacy detail zone');
+  assert.match(detailReturn, /(?:requestAnimationFrame\([\s\S]{0,250})?(?:focusContent\(\)|applyFocus\(\$\('dPlay'\)\)|[A-Za-z_$][\w$]*Detail[\w$]*Focus[\w$]*\(\))/,
+    'after watch-state refresh, closing the player should focus visible detail content deterministically');
+});
+
+test('D-pad regression: Sources drawer restores its initiating focus and zone', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const openSources = ui.slice(
+    ui.indexOf('async function openSources(it) {'),
+    ui.indexOf('function closeDrawer('),
+  );
+  const beforeSearch = openSources.slice(0, openSources.indexOf("await api('/api/search?"));
+  assert.match(beforeSearch, /(?:S\.)?drawerReturn[\w$]*\s*=/,
+    'opening Sources should snapshot the element that launched the drawer before async search/focus changes');
+  assert.match(beforeSearch, /(?:document\.querySelectorAll\('\.focus'\)|capture[A-Za-z_$]*Focus)/,
+    'the drawer return snapshot should retain Triboon\'s visual .focus target (DOM activeElement alone is not the TV focus model)');
+  assert.match(beforeSearch, /zone\s*:\s*S\.zone, view\s*:\s*S\.view, epoch\s*:\s*reqId/,
+    'the drawer return snapshot should retain the initiating D-pad zone, view, and request epoch');
+  assert.match(openSources, /const reqId = \(S\.drawerReq[\s\S]+const current = \(\) => reqId === S\.drawerReq[\s\S]+const r = await api\([\s\S]+if \(!current\(\)\) return;/,
+    'a closed or superseded Sources request must not render or focus stale results');
+  assert.match(openSources, /const closedEpoch = closeDrawer\(\{ restoreFocus: false \}\)[\s\S]+S\.drawerReq !== closedEpoch[\s\S]+returnFocus\.el\.offsetParent !== null[\s\S]+S\.view === returnFocus\.view/,
+    'source preflight completion must restore only a still-visible opener from the same view and drawer lifecycle');
+
+  const closeDrawer = ui.slice(
+    ui.indexOf('function closeDrawer('),
+    ui.indexOf("$('drawerScrim').addEventListener", ui.indexOf('function closeDrawer(')),
+  );
+  assert.match(closeDrawer, /drawerReturn[\w$]*/,
+    'closing Sources should read the opener snapshot instead of guessing from the current view');
+  assert.match(closeDrawer, /S\.zone\s*=/,
+    'closing Sources should restore the opener zone after drawer navigation changed it');
+  assert.match(closeDrawer, /(?:applyFocus\(|focusContent\(|[A-Za-z_$][\w$]*Focus[\w$]*\()/,
+    'closing Sources should restore a visible focus target');
+  assert.match(closeDrawer, /drawerReturn[\w$]*\s*=\s*null/,
+    'closing Sources should clear the snapshot so a later drawer cannot restore stale focus');
+  assert.match(closeDrawer, /closedEpoch = S\.drawerReq[\s\S]+opts\.restoreFocus === false[\s\S]+S\.drawerReq === closedEpoch/,
+    'drawer close should invalidate pending searches and prevent an old animation frame from stealing focus after reopen');
+  assert.match(closeDrawer, /ret\.epoch \+ 1 !== closedEpoch[\s\S]+ret\.el\.offsetParent === null \|\| S\.view !== ret\.view[\s\S]+return closedEpoch/,
+    'drawer close should not focus connected-but-hidden DOM after the user changes pages');
+});
+
+test('D-pad regression: form modals route TV keys early and restore their opener', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const dpadStart = ui.lastIndexOf("document.addEventListener('keydown', (e) => {", ui.indexOf('// FREEZE-FLOOD GUARD:'));
+  const keydown = ui.slice(dpadStart, ui.indexOf("document.addEventListener('keyup', (e) => {", dpadStart));
+  const modalEarly = keydown.indexOf("const tvFormModal = [$('libModal'), $('matchModal'), $('updateModal')]");
+  const inputBail = keydown.indexOf("if (inInput && k !== 'Escape') return;");
+  assert.ok(modalEarly >= 0 && inputBail > modalEarly,
+    'TV modal arrows must be routed before the generic text-input bailout');
+  const early = keydown.slice(modalEarly, inputBail);
+  assert.match(early, /document\.body\.classList\.contains\('tv'\)[\s\S]+isTvGateDpadKey\(k, true\)[\s\S]+dpadCycle\(tvFormModal, k\)/,
+    'only TV mode should convert modal arrows/OK into control traversal');
+  assert.match(early, /k === 'Escape'[\s\S]+closeLibModal\(\)[\s\S]+closeMatchModal\(\)[\s\S]+closeUpdateModal\(\)/,
+    'TV Back should dismiss the active modal even when its input owns native focus');
+
+  const activateStart = ui.indexOf('function formActivate(');
+  const activateEnd = ui.indexOf('function dpadCycle(', activateStart);
+  const formActivate = new Function(`${ui.slice(activateStart, activateEnd)}; return formActivate;`)();
+  let pickerCalls = 0, clickCalls = 0;
+  formActivate({ tagName: 'SELECT', showPicker() { pickerCalls++; }, click() { clickCalls++; } });
+  assert.deepStrictEqual([pickerCalls, clickCalls], [1, 0],
+    'TV Library dropdowns should open through the Android WebView native picker');
+  formActivate({ tagName: 'SELECT', showPicker() { throw new Error('unsupported'); }, click() { clickCalls++; } });
+  assert.strictEqual(clickCalls, 1, 'dropdown activation should retain a click fallback for older WebViews');
+
+  const overlayHelpers = ui.slice(ui.indexOf('function captureOverlayReturn('), ui.indexOf('function formCtls(', ui.indexOf('function captureOverlayReturn(')));
+  assert.match(overlayHelpers, /querySelectorAll\('\.focus'\)[\s\S]+document\.activeElement[\s\S]+zone: S\.zone, view: S\.view/,
+    'modal open should snapshot both Triboon visual focus and native focus plus its zone/view');
+  assert.match(overlayHelpers, /function closeFocusOverlay[\s\S]+requestAnimationFrame[\s\S]+ret\.el\.isConnected[\s\S]+S\.view !== ret\.view[\s\S]+applyFocus\(ret\.el, false\)/,
+    'modal close should restore only a still-visible opener in the same page and ignore stale frames');
+
+  const lib = ui.slice(ui.indexOf('async function openLibModal('), ui.indexOf('/* ============ Live TV', ui.indexOf('async function openLibModal(')));
+  assert.match(lib, /captureOverlayReturn\('libModal'\)[\s\S]+await fillLibGenres\(\);[\s\S]+if \(!current\(\)\)[\s\S]+function closeLibModal[\s\S]+closeFocusOverlay\('libModal', 'libModal'/,
+    'Library modal should snapshot before async setup, suppress stale opens, and share the focus-restoring close path');
+  const match = ui.slice(ui.indexOf('function openMatchModal('), ui.indexOf('// Local items still play', ui.indexOf('function openMatchModal(')));
+  assert.match(match, /captureOverlayReturn\('matchModal'\)[\s\S]+const reqId = S\.matchSearchReq[\s\S]+if \(!current\(\)\) return;[\s\S]+function closeMatchModal[\s\S]+closeFocusOverlay\('matchModal', 'matchModal'/,
+    'Match modal should restore focus and ignore a slower previous search');
+  const update = ui.slice(ui.indexOf('async function maybePromptAppUpdate()'), ui.indexOf('// TVs are rarely relaunched', ui.indexOf('async function maybePromptAppUpdate()')));
+  assert.match(update, /S\.view !== 'home'[\s\S]+captureOverlayReturn\('updateModal'\)[\s\S]+function closeUpdateModal[\s\S]+closeFocusOverlay\('updateModal', 'updateModal'/,
+    'Update prompt should not interrupt another page and should restore the home opener');
+});
+
+test('D-pad regression: Person and Detail restore exact work and cast positions', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const openDetail = ui.slice(ui.indexOf('async function openDetail('), ui.indexOf('async function loadDetailLocal', ui.indexOf('async function openDetail(')));
+  assert.match(openDetail, /if \(S\.view === 'person'\) capturePersonReturnForDetail\(\);[\s\S]+S\.detailFromPerson/,
+    'opening a work from Person should snapshot its exact list state before hiding Person');
+  const closeDetail = ui.slice(ui.indexOf('function closeDetail()'), ui.indexOf("$('dBack').addEventListener", ui.indexOf('function closeDetail()')));
+  assert.match(closeDetail, /fromPerson[\s\S]+restorePersonFromDetail\(fromPerson\)/,
+    'Back from a person work detail should restore the preserved Person surface instead of refetching at item zero');
+
+  const person = ui.slice(ui.indexOf('function capturePersonOriginDetail()'), ui.indexOf("$('pBack').addEventListener", ui.indexOf('function capturePersonOriginDetail()')));
+  assert.match(person, /const scroller = \$\('detail'\)\.querySelector\('\.detailScroll'\)[\s\S]+detailReq: S\.detailReq[\s\S]+castIdx:[\s\S]+castScrollLeft:[\s\S]+detailScrollTop: scroller \? scroller\.scrollTop[\s\S]+function capturePersonReturnForDetail[\s\S]+gridIdx:[\s\S]+scrollTop:/,
+    'the round trip should remember the real nested detail scroller, its request epoch, and the selected cast/work positions');
+  assert.match(person, /function restorePersonFromDetail[\s\S]+S\.gridIdx = [\s\S]+focusGrid\(S\.gridIdx\)[\s\S]+scrollTop = ret\.scrollTop/,
+    'Person restoration should focus the same work and reinstate its scroll offset');
+  assert.match(person, /async function openPerson[\s\S]+if \(push\) capturePersonOriginDetail\(\)/,
+    'a cast click should capture its originating detail position once, without corrupting history restores');
+  assert.match(person, /function restorePersonOriginDetailFocus\(origin, expectedReq[\s\S]+sameDetailIdentity\(S\.detailItem, origin\.item\)[\s\S]+expectedReq !== S\.detailReq[\s\S]+querySelector\('\.detailScroll'\)[\s\S]+scroller\.scrollTop = origin\.detailScrollTop/,
+    'Person return should restore only the exact title/request and should write the nested detail scroller');
+  assert.match(person, /function closePerson[\s\S]+const detailJob = openDetail\(origin\.item, false\);[\s\S]+const restoreReq = S\.detailReq;[\s\S]+restorePersonOriginDetailFocus\(origin, restoreReq\)[\s\S]+restorePersonOriginDetailFocus\(origin\)/,
+    'closing Person should restore the original cast card after a rebuild only while that rebuild still owns Detail');
+  assert.match(person, /const originDetailAlive = \$\('detail'\)\.classList\.contains\('open'\)[\s\S]+sameDetailIdentity\(S\.detailItem, origin\.item\)[\s\S]+if \(!originDetailAlive\)/,
+    'a still-open cast-member work must not be mistaken for the original detail underneath Person');
+});
+
+test('D-pad regression: Calendar navigation follows its day-by-card geometry', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const dpadStart = ui.lastIndexOf("document.addEventListener('keydown', (e) => {", ui.indexOf('// FREEZE-FLOOD GUARD:'));
+  const calendarStart = ui.indexOf("if (S.view === 'calendar') {", dpadStart);
+  const calendar = ui.slice(
+    calendarStart,
+    ui.indexOf("if (S.view === 'detail') {", calendarStart),
+  );
+  assert.match(calendar, /querySelectorAll\(['"]\.calDay['"]\)/,
+    'Calendar D-pad should discover visual day rows instead of flattening every card');
+  assert.match(calendar, /(?:day|row)[\w$]*\.querySelectorAll\(['"][^'"]*\.calItem/,
+    'Calendar D-pad should discover each day row\'s horizontal cards');
+  for (const key of ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']) {
+    assert.ok(calendar.includes('calendarDpadTarget'),
+      `Calendar D-pad should delegate ${key} through the tested 2D target helper`);
+  }
+  assert.doesNotMatch(calendar, /const els = \[\.\.\.\$\('calList'\)\.querySelectorAll\('\.calItem,\.calEmpty'\)\][\s\S]{0,400}i \+ 1/,
+    'Calendar Down must not remain the old flat-list i+1 movement that behaved like Right');
+
+  const helperStart = ui.indexOf('function calendarDpadTarget(');
+  const helperEnd = ui.indexOf('function captureOverlayReturn(', helperStart);
+  const target = new Function(`${ui.slice(helperStart, helperEnd)}; return calendarDpadTarget;`)();
+  const [a, b, c, d, e, f] = Array.from({ length: 6 }, (_, id) => ({ id }));
+  const ragged = [[a, b, c], [d], [e, f]];
+  assert.strictEqual(target(ragged, b, 'ArrowDown').el, d, 'Down should clamp column 1 into a one-card next day');
+  assert.strictEqual(target(ragged, d, 'ArrowDown').el, e, 'Down should preserve the clamped column into the following day');
+  assert.strictEqual(target(ragged, f, 'ArrowUp').el, d, 'Up from a wider day should clamp into the shorter previous day');
+  assert.strictEqual(target(ragged, d, 'ArrowRight').el, d, 'Right should stay bounded at the end of a short day');
+  assert.strictEqual(target(ragged, d, 'ArrowLeft').kind, 'rail', 'Left from the first card should return to the rail');
+  assert.strictEqual(target(ragged, f, 'ArrowDown').kind, 'footer', 'Down from the last day should offer the footer/music bar');
+  assert.deepStrictEqual(target(ragged, c, 'Enter'), { kind: 'activate', el: c }, 'Enter should activate the currently focused card');
+});
+
+test('Artwork regression: CSS fallbacks stay cheap while URL guards reject injection text', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const guardsStart = ui.indexOf('const esc = (s) =>');
+  const guardsEnd = ui.indexOf('const bgLazy = (() =>', guardsStart);
+  const procStart = ui.indexOf('function procBackdrop(');
+  const procEnd = ui.indexOf('function artFallback(', procStart);
+  assert.ok(guardsStart >= 0 && guardsEnd > guardsStart && procStart >= 0 && procEnd > procStart,
+    'artwork URL guards and the procedural backdrop generator should remain directly testable');
+
+  const makeGuards = new Function('location', `${ui.slice(guardsStart, guardsEnd)}\n${ui.slice(procStart, procEnd)}\nreturn { safeRawUrl, safeUrl, safeArtUrl, artBackground, absoluteArtworkUrl, procBackdrop };`);
+  const { safeRawUrl, safeUrl, safeArtUrl, artBackground, absoluteArtworkUrl, procBackdrop } = makeGuards({ origin: 'https://triboon.test' });
+  const generated = procBackdrop(10, 220, 99);
+
+  assert.strictEqual(safeUrl('javascript:alert(1)'), '', 'safeUrl must keep blocking javascript: URLs');
+  assert.strictEqual(safeArtUrl('data:image/jpeg;base64,UNREGISTERED'), '', 'data: images remain untrusted');
+  assert.match(generated, /^linear-gradient\((12\d|1[34]\d|150)deg,hsl\(10 55% 14%\),hsl\(220 62% 28%\)\)$/,
+    'procBackdrop should return the narrow inert gradient grammar');
+  assert.strictEqual(safeArtUrl(generated), generated, 'the generated CSS placeholder should enter artwork sinks');
+  assert.strictEqual(safeArtUrl('linear-gradient(red,blue)'), '', 'arbitrary CSS must not enter artwork sinks');
+  assert.strictEqual(safeArtUrl('https://image.tmdb.org/t/p/w342/a.jpg'), 'https://image.tmdb.org/t/p/w342/a.jpg',
+    'normal HTTPS artwork should remain supported');
+  assert.strictEqual(safeRawUrl('https://images.test/a.jpg\n;color:red'), '', 'CSS control characters must reject the whole URL');
+  assert.strictEqual(safeRawUrl('https://images.test/a.jpg\\evil'), '', 'CSS escape characters must reject the whole URL');
+  assert.strictEqual(artBackground('https://images.test/a.jpg', generated), `url("https://images.test/a.jpg"),${generated}`,
+    'remote art should layer over the cheap CSS fallback');
+  assert.strictEqual(artBackground(generated, 'https://images.test/poster.jpg'), `url("https://images.test/poster.jpg"),${generated}`,
+    'an already-generated field fallback must never form an opaque layer above a later real poster');
+  assert.strictEqual(absoluteArtworkUrl(generated), '', 'CSS placeholders must not be serialized as native image URLs');
+  assert.strictEqual(absoluteArtworkUrl('/poster.jpg'), 'https://triboon.test/poster.jpg', 'relative server art should become an absolute native URL');
+  assert.strictEqual(absoluteArtworkUrl(generated, '/poster.jpg'), 'https://triboon.test/poster.jpg',
+    'native artwork selection must skip a CSS-only first candidate without discarding the next real image');
+  assert.doesNotMatch(ui.slice(procStart, procEnd), /createElement\(['"]canvas|toDataURL|fillRect/,
+    'card fallbacks must not allocate or JPEG-encode canvases on the WebView main thread');
+});
+
+test('Artwork regression: season and episode surfaces keep layered deterministic fallbacks', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const seasonGrid = ui.slice(ui.indexOf('function renderSeasonGrid('), ui.indexOf('function localSeasonSummaries('));
+  assert.match(seasonGrid, /artBackgroundHtml\(img\(s\.poster_path, 'w342'\), show\.poster, show\.backdrop, artFallback\([\s\S]{0,120}:season:/,
+    'TMDB season cards should layer season poster, show art, and a stable procedural fallback');
+
+  const tmdbEpisodes = ui.slice(ui.indexOf('async function openSeasonEpisodes('), ui.indexOf("document.addEventListener('click'", ui.indexOf('async function openSeasonEpisodes(')));
+  assert.match(tmdbEpisodes, /artBackgroundHtml\(img\(ep\.still_path, 'w300'\), show\.backdrop, show\.poster, artFallback\([\s\S]{0,140}:s[\s\S]{0,80}:?e/,
+    'TMDB episode cards should layer the still, parent-show art, and a deterministic episode fallback');
+
+  const localEpisodes = ui.slice(ui.indexOf('function openLocalShowSeasonEpisodes('), ui.indexOf('function openLocalDetail(', ui.indexOf('function openLocalShowSeasonEpisodes(')));
+  assert.match(localEpisodes, /artBackgroundHtml\(item\.backdrop, show\.backdrop, show\.poster, artFallback\(item\.key,/,
+    'local episode cards should fall through local art and parent-show art before deterministic fallback');
+
+  const playerEpisodes = ui.slice(ui.indexOf('function renderPlayerEpisodes()'), ui.indexOf('function nativeEpisodeChoices()', ui.indexOf('function renderPlayerEpisodes()')));
+  assert.match(playerEpisodes, /style\.setProperty\('--still', artBackground\(ep\.still, ep\.backdrop, ep\.poster,[\s\S]{0,120}artFallback\(ep\.item && ep\.item\.key/,
+    'the in-player episode strip should retain still, backdrop, and poster candidates plus a stable item-key fallback');
+  const nativeEpisodes = ui.slice(ui.indexOf('function nativeEpisodeChoices()'), ui.indexOf('function canOpenPlayerEpisodes()', ui.indexOf('function nativeEpisodeChoices()')));
+  assert.match(nativeEpisodes, /still: absoluteArtworkUrl\(ep\.still, ep\.backdrop, ep\.poster\)/,
+    'native episode cards should receive only an absolute real URL, never a CSS gradient or relative path');
+  assert.match(nativeEpisodes, /still: img\(ep\.still_path, 'w300'\),[\s\S]+backdrop: ctx\.show\.backdrop,[\s\S]+poster: ctx\.show\.poster/,
+    'season-strip preparation should keep later show-art candidates instead of collapsing on a procedural backdrop');
+  const epItem = ui.slice(ui.indexOf('function epItemOf('), ui.indexOf('const MONTHS', ui.indexOf('function epItemOf(')));
+  assert.match(epItem, /backdrop: img\(ep\.still_path\) \|\| show\.backdrop,[\s\S]+poster: show\.poster/,
+    'episode playback items should carry the parent poster for native loading fallback');
+  assert.doesNotMatch([seasonGrid, tmdbEpisodes, localEpisodes, playerEpisodes].join('\n'), /background-image\s*:\s*url\(['"]?\$\{/,
+    'episode and season templates must not regress to raw URL interpolation');
+});
+
+test('Artwork regression: Music and Audiobook covers use shared sanitized fallbacks', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const music = ui.slice(ui.indexOf('function renderMusicRows('), ui.indexOf('/* ============ preferences:', ui.indexOf('function renderMusicRows(')));
+  assert.match(music, /mArtistArt[\s\S]{0,160}artBackgroundHtml\([\s\S]{0,140}\.thumb, artFallback\('artist:/,
+    'Music artist results should sanitize artwork and retain a deterministic placeholder');
+  assert.match(music, /mThumb[\s\S]{0,100}artBackgroundHtml\(t\.thumb, artFallback\('music:/,
+    'Music result rows should use artBackgroundHtml instead of interpolating a thumbnail URL');
+  assert.match(music, /function setMusicCardCover\([\s\S]{0,260}style\.backgroundImage = artBackground\(url, artFallback\(/,
+    'lazy Music shelf covers should use the shared CSS sanitizer and fallback');
+  assert.match(music, /const coverStyle = item\.coverUrl \? `[\s\S]{0,100}artBackgroundHtml\(item\.coverUrl, artFallback\('music-tile:/,
+    'Music playlist and recommendation tiles should sanitize coverUrl with a fallback');
+  assert.match(music, /function updateMusicNow\(\)[\s\S]{0,420}mnCover[\s\S]{0,100}artBackground\(t\.thumb, artFallback\('music-now:[\s\S]{0,220}mnBg[\s\S]{0,100}artBackground\(t\.thumb, artFallback\('music-now:/,
+    'Music now-playing cover and blurred backdrop should share sanitized deterministic artwork');
+  assert.match(music, /function renderMusicQueue\(\)[\s\S]{0,500}artBackgroundHtml\(t\.thumb, artFallback\('music-queue:/,
+    'Music queue thumbnails should use the shared HTML-safe artwork helper');
+  assert.doesNotMatch(music, /background-image\s*:\s*url\(['"]?\$\{safeUrl\([^}]+(?:thumb|cover)/i,
+    'Music cover templates should not bypass layered fallback with the old single safeUrl interpolation');
+
+  const audiobooks = ui.slice(ui.indexOf('function abCoverCard('), ui.indexOf('/* ============ D-pad', ui.indexOf('function abCoverCard(')));
+  assert.match(audiobooks, /function abCoverCard\([\s\S]{0,240}artBackgroundHtml\(it\.cover, artFallback\('audiobook:/,
+    'Audiobook catalog cards should sanitize remote covers with deterministic fallback art');
+  assert.match(audiobooks, /function abFreeCard\([\s\S]{0,240}artBackgroundHtml\(it\.cover, artFallback\('audiobook-free:/,
+    'public-domain audiobook cards should use the same artwork path');
+  assert.match(audiobooks, /artBackgroundHtml\(m\.cover, artFallback\('audiobook:' \+ asin/,
+    'Continue Listening covers should use the shared HTML-safe artwork helper');
+  assert.match(audiobooks, /artBackgroundHtml\(book\.cover, fallback && fallback\.cover, artFallback\('audiobook:' \+ asin/,
+    'Audiobook detail should layer fresh and fallback metadata covers before procedural art');
+  assert.match(audiobooks, /abPcover[\s\S]{0,100}artBackground\(book\.cover, artFallback\('audiobook-player:[\s\S]{0,220}abPbg[\s\S]{0,100}artBackground\(book\.cover, artFallback\('audiobook-player-bg:/,
+    'Audiobook player cover and background should use the shared sanitizer and distinct stable fallbacks');
+  assert.match(audiobooks, /abMiniCover[\s\S]{0,120}artBackground\(n\.book\.cover, artFallback\('audiobook-mini:/,
+    'the Audiobook mini-player should keep sanitized fallback art');
+  assert.doesNotMatch(audiobooks, /String\([^)]*(?:cover|thumb)[^)]*\)\.replace\(/i,
+    'Audiobook covers must never return to raw String(cover).replace(...) interpolation');
+  assert.doesNotMatch(audiobooks, /background-image\s*:\s*url\(['"]?\$\{String\(/i,
+    'Audiobook templates must not interpolate untrusted cover strings into CSS');
 });
 
 test('web shell avoids known TV paint/focus regressions', () => {
@@ -3954,8 +4422,8 @@ test('web shell avoids known TV paint/focus regressions', () => {
   // Proactive update pop-up (Android shell, once per launch, never during playback).
   assert.ok(ui.includes('id="updateModal"') && ui.includes('id="updateModalGo"') && ui.includes('id="updateModalLater"'),
     'a proactive update modal with Update/Later buttons exists');
-  assert.match(ui, /async function maybePromptAppUpdate\(\) \{[\s\S]+if \(_updatePromptDone\) return;[\s\S]+if \(!\(window\.TriboonTV && typeof TriboonTV\.appVersion === 'function'\)\) return;[\s\S]+compareSemver\(curVer, latestVer\) >= 0\) return;[\s\S]+_updatePromptDone = true;[\s\S]+if \(S\.playing \|\| S\.view === 'player'\) return;[\s\S]+\$\('updateModal'\)\.classList\.add\('open'\)/,
-    'update prompt is Android-shell only, fires at most once per launch, skips when newer is not available or during playback');
+  assert.match(ui, /async function maybePromptAppUpdate\(\) \{[\s\S]+if \(_updatePromptDone\) return;[\s\S]+if \(!\(window\.TriboonTV && typeof TriboonTV\.appVersion === 'function'\)\) return;[\s\S]+compareSemver\(curVer, latestVer\) >= 0\) return;[\s\S]+if \(S\.playing \|\| S\.view !== 'home'\) return;[\s\S]+_updatePromptDone = true;[\s\S]+captureOverlayReturn\('updateModal'\)[\s\S]+\$\('updateModal'\)\.classList\.add\('open'\)/,
+    'update prompt is Android-shell only, fires at most once per launch, and never interrupts playback or another page');
   assert.match(ui, /\$\('updateModalGo'\)\.addEventListener\('click', \(\) => \{ closeUpdateModal\(\); openApkUpdate\(\); \}\)/,
     'the pop-up Update button installs via openApkUpdate');
   assert.match(ui, /if \(\$\('updateModal'\)\.classList\.contains\('open'\)\) \{[\s\S]+closeUpdateModal\(\);[\s\S]+dpadCycle\(\$\('updateModal'\), k\)/,

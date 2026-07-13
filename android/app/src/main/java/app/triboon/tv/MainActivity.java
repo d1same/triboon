@@ -4218,7 +4218,7 @@ public class MainActivity extends Activity {
     private boolean handleNativeBackKey(KeyEvent e) {
         if (e.getAction() == KeyEvent.ACTION_DOWN) {
             if (e.getRepeatCount() == 0) nativeBackConsumedChromeDown = false;
-            if (!nativeGuideMode && !nativeSheetOpen() && !nativeEpisodeStripOpen
+            if (!nativeGuideMode && !nativeUpNextVisible && !nativeSheetOpen() && !nativeEpisodeStripOpen
                     && dismissNativeChromeForBack()) {
                 nativeBackConsumedChromeDown = true;
                 lastSystemBackAt = SystemClock.uptimeMillis();
