@@ -1640,9 +1640,9 @@ dependencies = [
 
 [[package]]
 name = "libmpv2"
-version = "4.1.0"
+version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e0c3802b4bb1a18adbf5659b078ce24cb8e16c79ff695557f4e10af2a44722a"
+checksum = "3f3d44c1c29b866d44453249d1d8b2822d891fdabd08359a5b85bb6944445e70"
 dependencies = [
  "libmpv2-sys",
 ]

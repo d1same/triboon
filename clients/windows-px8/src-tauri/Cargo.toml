@@ -17,7 +17,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # libmpv2 wraps the system libmpv (libmpv-2.dll). GPU decode + HDR/audio passthrough live here.
 # Enabled from phase P2; kept behind a feature so P1 (window + web UI) builds without libmpv present.
-libmpv2 = { version = "4", optional = true }
+libmpv2 = { version = "6", optional = true }
 
 [features]
 default = []
