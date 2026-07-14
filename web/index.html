@@ -6627,7 +6627,20 @@ function resumePositionForItem(it) {
 function startOverItem(it) {
   return it ? { ...it, resume: 0, _startOver: true } : it;
 }
-async function play(it, pick) {
+function beginPlaybackTransition(it, opts = {}) {
+  const nativeFirst = nativeVideoRequired(it);
+  const playTicket = S._playTicket = (S._playTicket || 0) + 1;
+  // Episode-to-episode playback is one player session from the viewer's perspective. When the
+  // current surface is native, let showNativePlayLoading() replace ExoPlayer in place instead of
+  // closing it first (which reveals the still-open show details WebView for a frame or longer).
+  const preserveNativeSurface = !!opts.directHandoff && nativeFirst
+    && !!(S.playing && S.playing.usingNative);
+  stopActivePlaybackForReplacement({ preserveNativeSurface });
+  if (nativeFirst) showNativePlayLoading(it, playTicket);
+  else showPlayLoading(it);
+  return { nativeFirst, playTicket };
+}
+async function play(it, pick, opts = {}) {
   if (!it) return;
   it = resolvePlaybackResume(it);
   if (!levelAllows(it.cert)) { toast(`“${it.title}” is rated ${it.cert} — not allowed on this profile`); return; }
@@ -6642,26 +6655,30 @@ async function play(it, pick) {
   const picked = pick && typeof pick === 'object' ? pick : (pick ? { name: pick } : null);
   const pickRank = picked ? normalizeResolutionRank(picked.resolutionRank) : null;
   const qRank = pickRank !== null ? pickRank : qualityRankForItem(it);
-  if (!picked && !it._local) {
-    const loc = await ensureLocalPlaybackForItem(it);
-    if (loc) it = { ...it, _local: loc };
-  }
-  const localExact = !picked && localPlaybackForItem(it) ? { ...it, _local: localPlaybackForItem(it) } : null;
   // Local-first: if this exact title/episode exists in a scanned library, play the file on
   // disk instead of searching usenet, unless the chosen quality asks for another source class.
-  if (it._local && !it.tmdbId) return playLocal(it); // NFO-only archive item: file is the only source
-  if (localExact && localPlaybackFitsQuality(localExact, qRank)) return playLocal(localExact);
-  stopActivePlaybackForReplacement();
+  if (it._local && !it.tmdbId) return playLocal(it, { directHandoff: !!opts.directHandoff }); // NFO-only archive item: file is the only source
   const btns = [$('btnPlay'), $('dPlay')];
   btns.forEach((b) => { b.disabled = true; });
   // No status toasts. Pressing Play must leave the detail page immediately; Android still
   // hands off to ExoPlayer once the source is mounted, but the wait belongs on the branded
   // loading surface instead of looking frozen on details.
-  const nativeFirst = nativeVideoRequired(it);
-  const playTicket = S._playTicket = (S._playTicket || 0) + 1;
-  if (nativeFirst) showNativePlayLoading(it);
-  else showPlayLoading(it);
+  // Begin that transition BEFORE the local-library lookup: the lookup is normally fast, but a
+  // busy disk/server must never turn into ten seconds visibly parked on the show details page.
+  const { nativeFirst, playTicket } = beginPlaybackTransition(it, opts);
+  let localExact = null;
   try {
+    if (!picked && !it._local) {
+      const loc = it._localLookupComplete
+        ? (it._local || null)
+        : await (it._localLookupPromise || ensureLocalPlaybackForItem(it));
+      if (S._playTicket !== playTicket || S.view !== 'player') return;
+      if (loc) it = { ...it, _local: loc };
+    }
+    localExact = !picked && localPlaybackForItem(it) ? { ...it, _local: localPlaybackForItem(it) } : null;
+    if (localExact && localPlaybackFitsQuality(localExact, qRank)) {
+      return await playLocal(localExact, { replacementStarted: true, nativeFirst, playTicket });
+    }
     const body = playbackRequestBody(it, picked, qRank);
     if (qRank !== null) {
       it.qualityRank = qRank;
@@ -6679,17 +6696,20 @@ async function play(it, pick) {
       // back to the best healthy lower-resolution release — say so rather than swapping silently.
       toast('4K wasn’t available right now — playing the best available quality. Open Sources to choose another.');
     }
-    await openPlayer(it, r, { nativeFirst });
+    await openPlayer(it, r, { nativeFirst, playTicket });
   } catch (e) {
+    // A superseded/cancelled request may reject after a newer title is already loading or
+    // playing. Its failure belongs to the old ticket and must not tear down the new player.
+    if (S._playTicket !== playTicket || S.view !== 'player') return;
+    if (localExact && !picked && /no playable|no .*candidate|all candidates failed/i.test(String(e && e.message || ''))) {
+      toast('No matching online source - playing your library file');
+      return playLocal(localExact, { replacementStarted: true, nativeFirst, playTicket });
+    }
     closePlayer();
     // Server age gate (403): a restricted profile tried a title above its maturity level.
     if (e && e.detail && e.detail.restricted) {
       toast(e.detail.error || `“${it.title}” is restricted for this profile`);
       return;
-    }
-    if (localExact && !picked && /no playable|no .*candidate|all candidates failed/i.test(String(e && e.message || ''))) {
-      toast('No matching online source - playing your library file');
-      return playLocal(localExact);
     }
     const tried = (e.detail && e.detail.attempts || []).length;
     // The server now returns a human summary of WHY (sources removed / encrypted / incomplete /
@@ -6737,6 +6757,7 @@ function startPlayerLoadingStages() {
 }
 function showPlayLoading(it) {
   rememberPlayerReturn();
+  S._nativeLoadingTicket = 0;
   S.view = 'player';
   $('player').classList.add('open');
   $('player').classList.remove('live');
@@ -6747,8 +6768,9 @@ function showPlayLoading(it) {
   $('playerLoader').classList.add('show');
   startPlayerLoadingStages();
 }
-function showNativePlayLoading(it) {
+function showNativePlayLoading(it, playTicket = 0) {
   rememberPlayerReturn();
+  S._nativeLoadingTicket = Number(playTicket || S._playTicket || 0);
   S.view = 'player';
   document.body.classList.add('videoOpen');
   $('player').classList.remove('open', 'live', 'guideMode');
@@ -6759,6 +6781,7 @@ function showNativePlayLoading(it) {
     window.TriboonTV.showVideoLoading(JSON.stringify({
       title: it.title || 'Triboon',
       backdropUrl: absoluteArtworkUrl(it.backdrop, it.poster),
+      playbackToken: S._nativeLoadingTicket,
     }));
   } catch {}
   clearPlayerLoadingStages();
@@ -9728,9 +9751,11 @@ function armWebRebufferRecovery(v, p) {
 }
 function stopActivePlaybackForReplacement(opts = {}) {
   if (!S.playing) return;
-  saveWatch(true);
+  saveWatch(true, S.playing._ended ? { watched: true } : {});
   stopActivityHeartbeat();
-  if (canUseNativeVideoPlayer() && window.TriboonTV && window.TriboonTV.closeVideo) {
+  // A direct episode handoff swaps the old Exo surface for the next native loading surface in
+  // showNativePlayLoading(). Closing it here first would make Android reveal the details WebView.
+  if (!opts.preserveNativeSurface && canUseNativeVideoPlayer() && window.TriboonTV && window.TriboonTV.closeVideo) {
     try { window.TriboonTV.closeVideo(); } catch {}
   }
   stopWebVideoElement();
@@ -9759,12 +9784,14 @@ function startNativePlayerHousekeeping(it) {
 }
 function startWebPlayerHousekeeping(mount, it) {
   const v = $('video');
+  const playingRef = S.playing;
   v.onerror = () => {
+    if (S.playing !== playingRef || S.view !== 'player') return;
     // Record what the <video> element actually rejected before failing over. MEDIA_ERR_DECODE(3) =
     // codec (audio/video) the decoder choked on; MEDIA_ERR_SRC_NOT_SUPPORTED(4) = container/stream it
     // wouldn't even open. On iOS this pinpoints audio (fixed by forceAacRemux) vs a video/container wall.
     try {
-      const err = v.error, pl = S.playing;
+      const err = v.error, pl = playingRef;
       if (err) console.warn('[vod] <video> error code=' + err.code + ' kind=' + currentPlayerKind(pl)
         + ' aacRemux=' + !!(pl && pl.forceAacRemux) + (err.message ? ' msg=' + err.message : ''));
     } catch {}
@@ -9778,8 +9805,8 @@ function startWebPlayerHousekeeping(mount, it) {
   loadTracks();
   if (!applyStartupSubtitlePref()) {
     (async () => {
-      const p = S.playing;
-      if (!p || p.mountId !== mount.id) return;
+      const p = playingRef;
+      if (!p || S.playing !== p || p.mountId !== mount.id) return;
       // Built-in probing can scan deep into a large file. When that optional path is off,
       // warm online subtitles immediately instead of inserting a 1.4-second wait first.
       if (builtInSubtitlesEnabled()) await fetchPlayerTracks(p, 1400).catch(() => null);
@@ -9861,6 +9888,9 @@ async function openPlayer(it, mount, opts = {}) {
     duration: knownDuration, lastSaved: 0, triedRemux: false, triedTranscode: false, mountId: mount.id,
     tracks: null, _tracksJob: null, audioTrack: 0, subTrack: null, quality: 1080, nativePos: 0, nativeDuration: 0,
     nativeStartKind: playbackStartKind(mount), nativeTried: {},
+    // Echoed by Android on terminal callbacks so a late STATE_ENDED from the previous ExoPlayer
+    // cannot mark or auto-advance a newly-opened episode.
+    playbackToken: Number(opts.playTicket || S._playTicket || 0),
     // Any plain browser <video> surface (iOS Safari AND desktop Chrome/Firefox/Edge) gets browser-safe
     // STEREO AAC: iOS can't decode AC3/EAC3 at all, and EVERY browser commonly plays 5.1 AAC as
     // video-with-NO-audio (the MediaCodec 5.1 footgun — the silent-DDP5.1 bug). The native Android
@@ -9868,6 +9898,7 @@ async function openPlayer(it, mount, opts = {}) {
     // ExoPlayer still receives full 5.1 surround. Multiview panes already force this explicitly.
     forceAacRemux: iosWebkitVideo() || !canUseNativeVideoPlayer(),
   };
+  const playingRef = S.playing; // identity of THIS playback attempt and its media callbacks
   updatePlayerMeta();
   applyVolume();
   // Refresh cast/AirPlay availability for this title (hidden for Live TV — Phase 1 is VOD only).
@@ -9882,8 +9913,9 @@ async function openPlayer(it, mount, opts = {}) {
   // frame has rendered, skips/rebuffers never bring it back — the owner prefers the live
   // frame over a flashing overlay.
   const clearReadyFrame = () => {
+    if (S.playing !== playingRef || S.view !== 'player') return;
     hideSeekHoldFrame();
-    const pReady = S.playing;
+    const pReady = playingRef;
     if (pReady && pReady.item && pReady.item.type === 'live' && v.readyState >= 2) {
       clearTimeout(S._waitT);
       $('playerLoader').classList.remove('show');
@@ -9899,50 +9931,54 @@ async function openPlayer(it, mount, opts = {}) {
       showVodPlayPrompt();
     }
   };
-  v.onplaying = () => { clearWebRebufferRecovery(); cancelPauseWarmAhead(); markVodPlaybackStarted(S.playing); clearReadyFrame(); clearTimeout(S._waitT); $('playerLoader').classList.remove('show'); hideSeekHoldFrame(); };
-  v.onpause = () => { schedulePauseWarmAhead(S.playing); updPP(); };
+  v.onplaying = () => {
+    if (S.playing !== playingRef || S.view !== 'player') return;
+    clearWebRebufferRecovery(); cancelPauseWarmAhead(); markVodPlaybackStarted(playingRef);
+    clearReadyFrame(); clearTimeout(S._waitT); $('playerLoader').classList.remove('show'); hideSeekHoldFrame();
+  };
+  v.onpause = () => {
+    if (S.playing !== playingRef || S.view !== 'player') return;
+    schedulePauseWarmAhead(playingRef); updPP();
+  };
   v.onloadeddata = clearReadyFrame;
   v.oncanplay = clearReadyFrame;
   v.onwaiting = () => {
-    const pWait = S.playing;
+    if (S.playing !== playingRef || S.view !== 'player') return;
+    const pWait = playingRef;
     if (pWait && pWait.started) armWebRebufferRecovery(v, pWait);
     if (S.view !== 'player' || (pWait && (pWait.started || (pWait.suppressSeekLoaderUntil && appMs() < pWait.suppressSeekLoaderUntil)))) return;
     clearTimeout(S._waitT);
-    S._waitT = setTimeout(() => { if (S.view === 'player') $('playerLoader').classList.add('show'); }, 700);
+    S._waitT = setTimeout(() => {
+      if (S.playing === playingRef && S.view === 'player') $('playerLoader').classList.add('show');
+    }, 700);
   };
   // Belt-and-suspenders: if media time is ADVANCING the loader must be gone — after an audio
   // track switch some streams resume without ever firing 'playing', leaving a stuck overlay
   // with sound running behind it.
   let lastTu = 0;
   v.ontimeupdate = () => {
+    if (S.playing !== playingRef || S.view !== 'player') return;
     if (v.currentTime === lastTu) return;
     lastTu = v.currentTime;
     const rebufferWatch = S._webRebufferWatch;
-    if (rebufferWatch && rebufferWatch.playing === S.playing
+    if (rebufferWatch && rebufferWatch.playing === playingRef
         && Math.abs(v.currentTime - rebufferWatch.position) >= 0.5) clearWebRebufferRecovery();
-    if (v.currentTime > 0) markVodPlaybackStarted(S.playing);
-    if (S.playing && S.playing.item && S.playing.item.type === 'live' && v.readyState >= 2) clearReadyFrame();
+    if (v.currentTime > 0) markVodPlaybackStarted(playingRef);
+    if (playingRef.item && playingRef.item.type === 'live' && v.readyState >= 2) clearReadyFrame();
     if ($('playerLoader').classList.contains('show')) { clearTimeout(S._waitT); $('playerLoader').classList.remove('show'); }
     hideSeekHoldFrame();
   };
   // A finished movie closes the player itself. Episodes keep the Up Next card on screen even
   // if the final timeupdate did not fire before the ended event.
   v.onended = () => {
-    if (S.playing && S.playing.item && S.playing.item.type === 'live') {
+    if (S.playing !== playingRef || S.view !== 'player') return;
+    if (playingRef.item && playingRef.item.type === 'live') {
       // The MSE buffer played out after the upstream ended — this used to freeze the last frame
       // silently forever. Reconnect like the native player; if the retune budget is spent, say so.
       if (!attemptLiveAutoRetune()) showLiveProviderError('The live stream ended unexpectedly');
       return;
     }
-    if (S.nextEp) {
-      // The episode PLAYED TO THE END — mark it watched before handing off to Up Next. Without
-      // this the current episode was left unwatched: closePlayer (which saves) is skipped on the
-      // auto-advance path, so only a lucky periodic tick past 92% would have recorded it.
-      saveWatch(true, { watched: true });
-      if (!S.upNextShown) showUpNext();
-      else armUpNextCountdown(); // card was up from the credits window — the end arms autoplay (no-op if dismissed)
-      return; // countdown/manual Play Next owns the handoff
-    }
+    if (finishEpisodeToNext()) return;
     closePlayer({ ended: true });
   };
   // The server's verdict applies on TV too: the WebView is Chromium, and Chromium CANNOT
@@ -9953,7 +9989,6 @@ async function openPlayer(it, mount, opts = {}) {
   // Android TV stays native, but starts with the server's chosen fast path. Archive-backed
   // MKV direct can make Exo probe/seek slowly; remux is still zero-copy and often starts faster.
   const nativeRequired = nativeVideoRequired(it);
-  const playingRef = S.playing; // identity of THIS playback attempt
   if (opts.nativeFirst || nativeRequired) startKind = await prepareNativeStartKindForAudio(startKind);
   // The audio probe above can take seconds on a fresh mount — if the user hit BACK during it,
   // closePlayer already tore everything down and starting now would resurrect the movie they
@@ -10004,7 +10039,9 @@ async function loadTracks() {
       } catch {}
       updatePlayerMeta();
       updateClocks();
-      if (!(await applyNativeStartupSubtitleAfterTrackProbe(p))) refreshNativeSubtitleChoices();
+      const appliedStartupSubtitle = await applyNativeStartupSubtitleAfterTrackProbe(p);
+      if (S.playing !== p || !p.usingNative) return;
+      if (!appliedStartupSubtitle) refreshNativeSubtitleChoices();
       return;
     }
     updatePlayerMeta();
@@ -10103,8 +10140,10 @@ async function nativeStartupSubtitleRelAfterPreflight(p, rel) {
 async function applyNativeStartupSubtitleAfterTrackProbe(p) {
   if (!p || !p.usingNative || !canUseNativeVideoPlayer()) return false;
   if (p.subTrack !== null && p.subTrack !== undefined) return false;
+  const playbackToken = Number(p.playbackToken || 0);
   const sub = nativeVideoSubtitleRel(p);
   const rel = await nativeStartupSubtitleRelAfterPreflight(p, sub && sub.rel ? sub.rel : '');
+  if (S.playing !== p || !p.usingNative || Number(p.playbackToken || 0) !== playbackToken) return false;
   if (!rel || !(window.TriboonTV && window.TriboonTV.updateActiveSubtitle)) return false;
   const payload = nativeSubtitlePayload(p, rel, 'startup');
   if (!payload.url) return false;
@@ -10547,6 +10586,7 @@ function tryNativeVideoPlayer(kind, atSeconds, opts = {}) {
     size: p.size || 0,
     duration: Math.max(0, p.duration || p.nativeDuration || 0),
     bufferGoalSec: p.bufferGoalSec || 0, // ExoPlayer sizes its buffer from this (clamped to device RAM)
+    playbackToken: p.playbackToken || 0,
     qualityChoices: !!p.transcodeUrl,
     hasNext: p.item.type === 'episode',
     subtitleRel: subPayload.rel,
@@ -10566,6 +10606,9 @@ function tryNativeVideoPlayer(kind, atSeconds, opts = {}) {
   }
   try {
     window.TriboonTV.playVideo(JSON.stringify(payload));
+    // The real ExoPlayer now owns the surface. Until this point Back targets the branded native
+    // loader and must cancel the pending play ticket through __tvNativeVideoClosed.
+    if (Number(S._nativeLoadingTicket || 0) === Number(p.playbackToken || 0)) S._nativeLoadingTicket = 0;
     p.nativeTried = p.nativeTried || {};
     p.nativeTried[kind] = true;
     if (kind === 'remux') p.triedRemux = true;
@@ -10628,7 +10671,8 @@ function nativePlaybackHeartbeat() {
   // flag. saveWatch self-throttles (5s of progress) and no-ops for Live TV, so this is cheap.
   saveWatch();
 }
-window.__tvNativeVideoProgress = (pos, dur) => {
+window.__tvNativeVideoProgress = (pos, dur, token) => {
+  const p = S.playing; if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
   applyNativeVideoProgress(pos, dur);
   nativePlaybackHeartbeat();
   runPendingNativeSync(); // throttle-proof: drive queued alass sync off the native tick, not a timer
@@ -10636,32 +10680,34 @@ window.__tvNativeVideoProgress = (pos, dur) => {
 window.__tvNativePlaybackSurfaceReady = () => {
   resolveNativePlaybackSurfaceReady(true);
 };
-window.__tvNativeVideoReady = (pos, dur) => {
-  const p = S.playing; if (!p || !p.usingNative) return;
+window.__tvNativeVideoReady = (pos, dur, token) => {
+  const p = S.playing; if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
   applyNativeVideoProgress(pos, dur);
   p.nativeReady = true;
   markVodPlaybackStarted(p);
 };
-window.__tvNativeVideoPlaying = (pos, dur) => {
-  const p = S.playing; if (!p || !p.usingNative) return;
+window.__tvNativeVideoPlaying = (pos, dur, token) => {
+  const p = S.playing; if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
   applyNativeVideoProgress(pos, dur);
   cancelPauseWarmAhead();
 };
-window.__tvNativeVideoPaused = (pos, dur) => {
-  const p = S.playing; if (!p || !p.usingNative) return;
+window.__tvNativeVideoPaused = (pos, dur, token) => {
+  const p = S.playing; if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
   applyNativeVideoProgress(pos, dur);
   schedulePauseWarmAhead(p);
 };
-window.__tvNativeVideoStats = (raw) => {
-  const p = S.playing; if (!p || !p.usingNative) return;
+window.__tvNativeVideoStats = (raw, token) => {
+  const p = S.playing; if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
   try { p.nativeStats = typeof raw === 'string' ? JSON.parse(raw) : (raw || {}); }
   catch { p.nativeStats = {}; }
   if ($('playerStats').classList.contains('open')) renderPlayerStats();
   nativePlaybackHeartbeat(); // stats ticks fire for native Live TV too — keeps live viewers reported
   runPendingNativeSync();    // and a second throttle-proof driver for the queued alass sync (paused playback)
 };
-window.__tvNativeVideoSeek = async (pos, dur, resume) => {
-  const p = S.playing; if (!p || !p.usingNative || !p.item || p.item.type === 'live') return;
+window.__tvNativeVideoSeek = async (pos, dur, resume, token) => {
+  const p = S.playing;
+  if (!p || !p.usingNative || !p.item || p.item.type === 'live' || !nativePlaybackCallbackMatches(p, token)) return;
+  const current = () => S.playing === p && S.view === 'player' && p.usingNative;
   const at = Math.max(0, +pos || 0);
   if (+dur > 0) { p.nativeDuration = +dur; p.duration = +dur; }
   p.nativePos = at;
@@ -10678,31 +10724,64 @@ window.__tvNativeVideoSeek = async (pos, dur, resume) => {
       const m = p.remuxUrl.match(/\/api\/remux\/(\w+)\?t=([^&]+)/);
       if (m) {
         const kf = (await (await fetch(`/api/keyframe/${m[1]}?at=${at}&t=${m[2]}`)).json()).k;
+        if (!current()) return;
         if (Number.isFinite(kf) && kf > at + 0.05) {
           tryNativeVideoPlayer(kind, kf, { quietSeek: true });
           return;
         }
       }
-    } catch {}
+    } catch { if (!current()) return; }
   }
+  if (!current()) return;
   tryNativeVideoPlayer(kind, at, { quietSeek: true });
 };
-window.__tvNativeVideoClosed = (pos, dur, ended) => {
-  const p = S.playing; if (!p || !p.usingNative) return;
+function nativePlaybackCallbackMatches(p, token) {
+  const incoming = Number(token || 0);
+  const active = Number(p && p.playbackToken || 0);
+  // A zero token comes from older Android shells and remains accepted for update compatibility.
+  return !incoming || !active || incoming === active;
+}
+window.__tvNativeVideoEnded = (pos, dur, token) => {
+  const p = S.playing;
+  if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
+  applyNativeVideoProgress(pos, dur);
+  if (finishEpisodeToNext()) return;
+  closePlayer({ ended: true });
+};
+window.__tvNativeVideoClosed = (pos, dur, ended, token) => {
+  const p = S.playing;
+  const pendingTicket = Number(S._nativeLoadingTicket || 0);
+  const incomingToken = Number(token || 0);
+  if (!p || !p.usingNative) {
+    // During the branded native loader there is deliberately no active S.playing yet. Back from
+    // Android still has to invalidate the request; otherwise its later lookup/mount completion
+    // resurrects playback after the viewer has already returned to details.
+    if (!ended && S.view === 'player' && pendingTicket
+        && pendingTicket === Number(S._playTicket || 0)
+        && (!incomingToken || incomingToken === pendingTicket)) {
+      S._nativeLoadingTicket = 0;
+      closePlayer();
+    }
+    return;
+  }
+  if (!nativePlaybackCallbackMatches(p, token)) return;
   applyNativeVideoProgress(pos, dur, { preserveOnZero: !ended });
   if (ended && S.nextEp) {
-    saveWatch(true, { watched: true }); // played to the end → watched, even if dur was still 0
-    // The ExoPlayer surface (and its native Up Next card) is torn down at end-of-episode, so
-    // hand the Up Next card to the now-visible web layer for the final choice/countdown.
+    // Compatibility with older APKs that closed Exo before sending the terminal callback. Do not
+    // restart a fresh 10-second timer; finishEpisodeToNext owns the same direct EOF contract. The
+    // native surface is already gone, so hand manual Up Next ownership back to the WebView too.
     p.usingNative = false;
     S.upNextShown = false;
-    showUpNext();
+    revealWebPlayerShell(p.item);
+    $('playerLoader').classList.remove('show');
+    finishEpisodeToNext();
     return;
   }
   closePlayer({ ended: !!ended });
 };
-window.__tvNativeVideoError = (msg, pos, dur) => {
-  const p = S.playing; if (!p || !p.usingNative) return;
+window.__tvNativeVideoError = (msg, pos, dur, token) => {
+  const p = S.playing;
+  if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
   applyNativeVideoProgress(pos, dur, { preserveOnZero: true });
   const at = currentTime();
   const kind = p.usingTranscode ? 'transcode' : (p.usingRemux ? 'remux' : 'direct');
@@ -10719,16 +10798,18 @@ window.__tvNativeVideoError = (msg, pos, dur) => {
   toast(msg ? `Native player failed (${msg})` : 'Native player failed');
   closePlayer();
 };
-window.__tvNativeVideoNext = (pos, dur) => {
-  const p = S.playing; if (!p || !p.usingNative) return;
-  window.__tvNativeVideoProgress(pos, dur);
+window.__tvNativeVideoNext = (pos, dur, token) => {
+  const p = S.playing;
+  if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
+  window.__tvNativeVideoProgress(pos, dur, token);
   saveWatch(true);
-  p.usingNative = false;
+  if (!S.nextEp) { toast('Next episode is still loading'); return; }
   playNextEpisode();
 };
-window.__tvNativeVideoQuality = (quality, pos, dur) => {
-  const p = S.playing; if (!p || !p.usingNative) return;
-  window.__tvNativeVideoProgress(pos, dur);
+window.__tvNativeVideoQuality = (quality, pos, dur, token) => {
+  const p = S.playing;
+  if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
+  window.__tvNativeVideoProgress(pos, dur, token);
   const at = currentTime();
   const oldQuality = p.quality;
   const oldTriedTranscode = p.triedTranscode;
@@ -10761,16 +10842,18 @@ window.__tvNativeVideoQuality = (quality, pos, dur) => {
     toast('Could not switch native quality');
   }
 };
-window.__tvNativeEpisodeSelect = (index, pos, dur) => {
-  const p = S.playing; if (!p || !p.usingNative || !S.playerSeasonStrip) return;
-  window.__tvNativeVideoProgress(pos, dur);
+window.__tvNativeEpisodeSelect = (index, pos, dur, token) => {
+  const p = S.playing;
+  if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token) || !S.playerSeasonStrip) return;
+  window.__tvNativeVideoProgress(pos, dur, token);
   const idx = Math.max(0, Math.min(S.playerSeasonStrip.items.length - 1, +index || 0));
   S.playerSeasonStrip.idx = idx;
   activatePlayerEpisode();
 };
-window.__tvNativeSubtitleSelect = (rel, pos, dur) => {
-  const p = S.playing; if (!p || !p.usingNative) return;
-  window.__tvNativeVideoProgress(pos, dur);
+window.__tvNativeSubtitleSelect = (rel, pos, dur, token) => {
+  const p = S.playing;
+  if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
+  window.__tvNativeVideoProgress(pos, dur, token);
   if (!rel) {
     p.subTrack = null;
     p._subShift = 0;
@@ -10791,26 +10874,31 @@ window.__tvNativeSubtitleSelect = (rel, pos, dur) => {
   }
   p.usingNative = true;
 };
-window.__tvNativeSubtitleShowAll = (pos, dur) => {
-  const p = S.playing; if (!p || !p.usingNative) return;
-  window.__tvNativeVideoProgress(pos, dur);
+window.__tvNativeSubtitleShowAll = (pos, dur, token) => {
+  const p = S.playing;
+  if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
+  window.__tvNativeVideoProgress(pos, dur, token);
   setShowAllLocalSubtitles(true);
   refreshNativeSubtitleChoices();
 };
-window.__tvNativeSubtitleVersions = async (lang, pos, dur) => {
-  const p = S.playing; if (!p || !p.usingNative) return;
-  window.__tvNativeVideoProgress(pos, dur);
+window.__tvNativeSubtitleVersions = async (lang, pos, dur, token) => {
+  const p = S.playing;
+  if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
+  window.__tvNativeVideoProgress(pos, dur, token);
   try {
     await loadSubtitleVersions(lang);
+    if (S.playing !== p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
     setSubtitleLangExpanded(lang, true);
     refreshNativeSubtitleChoices();
   } catch (e) {
+    if (S.playing !== p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
     toast((e && e.message) || 'Could not load subtitle versions');
     refreshNativeSubtitleChoices();
   }
 };
-window.__tvNativeSubtitleShift = (shift) => {
-  const p = S.playing; if (!p || !p.usingNative || !p.subTrack) return;
+window.__tvNativeSubtitleShift = (shift, token) => {
+  const p = S.playing;
+  if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token) || !p.subTrack) return;
   const n = +(+shift || 0).toFixed(1);
   p._subShift = n;
   saveSubShift(p.subTrack, n);
@@ -10893,7 +10981,7 @@ async function reMountAndResume(reason = '', attempt = 0) {
   if (attempt === 0) toast('Reconnecting…');
   try {
     const r = await api('/api/play', { method: 'POST', body: playbackRequestBody(p.item, p.name ? { name: p.name } : null) });
-    if (S.playing !== p) { p._reMounting = false; return; } // user moved on / replaced playback
+    if (S.playing !== p || S.view !== 'player') { p._reMounting = false; return; } // user moved on / replaced playback
     // Adopt the new mount (same field set autoAdvance maps), then resume the current source kind.
     p.sessionId = r.sessionId; p.streamUrl = r.streamUrl; p.remuxUrl = r.remuxUrl; p.transcodeUrl = r.transcodeUrl;
     p.encoder = r.encoder; p.tracksUrl = r.tracksUrl; p.subtitleBase = r.subtitleBase; p.streamToken = r.streamToken;
@@ -10905,8 +10993,9 @@ async function reMountAndResume(reason = '', attempt = 0) {
     if (!startSource(kind, at, { quietSeek: true })) showPlaybackInterrupted(reason);
   } catch (e) {
     // Server likely still restarting / unreachable — back off and retry, then give up gracefully.
-    if (attempt + 1 < MAX_ATTEMPTS && S.playing === p) {
-      setTimeout(() => { if (S.playing === p) reMountAndResume(reason, attempt + 1); }, 1500 + attempt * 1500);
+    if (S.playing !== p || S.view !== 'player') { p._reMounting = false; return; }
+    if (attempt + 1 < MAX_ATTEMPTS) {
+      setTimeout(() => { if (S.playing === p && S.view === 'player') reMountAndResume(reason, attempt + 1); }, 1500 + attempt * 1500);
     } else {
       p._reMounting = false;
       showPlaybackInterrupted(reason);
@@ -10963,6 +11052,7 @@ async function autoAdvance(opts = {}) {
       method: 'POST',
       body: at > 0 && advDur > 0 ? { resumeFrac: Math.max(0, Math.min(0.98, at / advDur)) } : {},
     });
+    if (S.playing !== p || S.view !== 'player') return;
     p.streamUrl = r.streamUrl; p.remuxUrl = r.remuxUrl; p.transcodeUrl = r.transcodeUrl;
     p.triedRemux = false; p.triedTranscode = false; p.mountId = r.id;
     p.tracksUrl = r.tracksUrl; p.subtitleBase = r.subtitleBase; p.streamToken = r.streamToken;
@@ -10973,7 +11063,10 @@ async function autoAdvance(opts = {}) {
     $('pSrc').textContent = r.candidate ? r.candidate.name : r.name;
     updatePlayerMeta();
     let startKind = playbackStartKind(r);
-    if (nativePreferred) startKind = await prepareNativeStartKindForAudio(startKind);
+    if (nativePreferred) {
+      startKind = await prepareNativeStartKindForAudio(startKind);
+      if (S.playing !== p || S.view !== 'player') return;
+    }
     if (nativePreferred && tryNativePlaybackLadder(at, startKind)) {
       startNativePlayerHousekeeping(p.item);
       return;
@@ -10987,6 +11080,7 @@ async function autoAdvance(opts = {}) {
     startWebPlayerHousekeeping(r, p.item);
     startSource(startKind, at);
   } catch (e) {
+    if (S.playing !== p || S.view !== 'player') return;
     if (nativePreferred) {
       toast('No more native-playable releases were available');
       closePlayer();
@@ -11134,7 +11228,7 @@ function renderPlayerEpisodes() {
       if (ep.item.key === st.currentKey) return;
       if (ep.upcoming) { toast(`This episode hasn’t aired yet — airs ${fmtDate(ep.item.airDate)}`); return; }
       closePlayerEpisodes();
-      play(ep.item);
+      play(ep.item, null, { directHandoff: true });
     });
     rail.appendChild(b);
   });
@@ -11256,16 +11350,19 @@ function activatePlayerEpisode() {
   if (!ep || !ep.item) return;
   if (ep.item.key === st.currentKey) return focusCtl(S.ctlIdx || 1);
   closePlayerEpisodes();
-  play(ep.item);
+  play(ep.item, null, { directHandoff: true });
 }
 async function prepNextEpisode(it) {
+  const token = (S._nextEpisodeToken = (S._nextEpisodeToken || 0) + 1);
   S.nextEp = null; S.upNextShown = false; S.upNextDismissed = false; S.nextEpPrepared = false;
   updateNextEpisodeButton();
   if (!it || it.type !== 'episode' || !it.key) return;
+  const current = () => token === S._nextEpisodeToken
+    && !!(S.playing && S.playing.item && S.playing.item.key === it.key);
   const parts = episodeKeyParts(it); if (!parts) return;
   const tmdbId = parts.tmdbId, s = parts.season, e = parts.episode;
   try {
-    const ctx = await getPlayerEpisodeContext(it); if (!ctx) return;
+    const ctx = await getPlayerEpisodeContext(it); if (!ctx || !current()) return;
     const cur = ctx.seasons.find((x) => x.season_number === s);
     let ns = s, ne = e + 1;
     if (!cur || e >= cur.episode_count) {
@@ -11274,10 +11371,22 @@ async function prepNextEpisode(it) {
       ns = nx.season_number; ne = 1;
     }
     const season = ns === s ? ctx.season : await api(`/api/tmdb/tv/${tmdbId}/season/${ns}`);
+    if (!current()) return;
     const ep = (season.episodes || []).find((x) => x.episode_number === ne); if (!ep) return;
     const base = epItemOf(ctx.show, season, ep);
     const inheritedQuality = qualityRankForItem(it);
     const item = inheritedQuality ? { ...base, qualityRank: inheritedQuality } : base;
+    // Local-library lookup is independent of source mounting and cheap enough to do while the
+    // current episode is playing. Keep the promise on this exact next-item object so Play Next can
+    // join it (or use its cached miss) instead of starting a blocking lookup after the credits.
+    item._localLookupPromise = ensureLocalPlaybackForItem(item).then((loc) => {
+      if (loc) item._local = loc;
+      item._localLookupComplete = true;
+      return loc;
+    }, () => {
+      item._localLookupComplete = true;
+      return null;
+    });
     S.nextEp = { item, still: img(ep.still_path, 'w300') || ctx.show.backdrop, epName: ep.name || '', tag: `S${pad2(ns)}E${pad2(ne)}` };
     updateNextEpisodeButton();
     // The actual mount is warmed near the END of the episode (maybePrepareNextEpisode), not here:
@@ -11382,15 +11491,33 @@ function maybeShowUpNext(t, d, opts = {}) {
   // Card already up from the credits window: arm autoplay only in the true final seconds.
   if (remaining <= UP_NEXT_COUNTDOWN_SECONDS + 1) armUpNextCountdown();
 }
+function finishEpisodeToNext() {
+  if (!S.nextEp) return false;
+  const p = S.playing;
+  if (p) p._ended = true;
+  // EOF completes the choice window that was already shown during the final ten seconds. Starting
+  // another ten-second countdown here is both redundant and, on Android, used to expose details.
+  saveWatch(true, { watched: true });
+  if (prefAutoplay() && !S.upNextDismissed) {
+    playNextEpisode();
+  } else if (!S.upNextDismissed && !S.upNextShown) {
+    showUpNext();
+  }
+  return true;
+}
 function playNextEpisode() {
   const ne = S.nextEp;
+  if (!ne) return;
+  // Consume the exact handoff synchronously. A final interval tick, manual click, and media-ended
+  // callback can already be queued together; only the first may start/mount this episode.
+  S.nextEp = null;
+  updateNextEpisodeButton();
   hideUpNextUi();
-  if (ne) play(ne.item);
+  play(ne.item, null, { directHandoff: true });
 }
 $('unPlay').addEventListener('click', playNextEpisode);
-// An explicit dismiss is sticky for THIS episode: the card hides and autoplay must never arm
-// later (at the true end the card may reappear as a manual last-chance choice, but nothing
-// plays on its own). Covers mouse/remote Dismiss, web Back, and the native card's Dismiss.
+// An explicit dismiss is sticky for THIS episode: the card stays hidden and autoplay never arms
+// later. Covers mouse/remote Dismiss, web Back, and the native card's Dismiss.
 function dismissUpNext() { S.upNextDismissed = true; hideUpNextUi(); }
 $('unCancel').addEventListener('click', dismissUpNext);
 // Native Up Next card → web (the bridge forwards Play/Dismiss here so the countdown owner decides).
@@ -11782,6 +11909,7 @@ async function closePlayer(opts = {}) {
   // Invalidate any IN-FLIGHT play attempt (search/mount/probe still running): its continuation
   // checks this ticket and must not resurrect playback after the user backed out of the loader.
   S._playTicket = (S._playTicket || 0) + 1;
+  S._nativeLoadingTicket = 0;
   cancelLiveTune('main');
   cancelLiveTune('split:0');
   cancelLiveTune('split:1');
@@ -15218,14 +15346,16 @@ $('matchCancel').addEventListener('click', () => closeMatchModal());
 // as a normal player mount first. That gives added libraries the same track probe, subtitles,
 // remux/transcode fallback, native ExoPlayer handoff, guide button, progress and next-episode
 // behavior as the main Movies/TV player.
-async function playLocal(it) {
+async function playLocal(it, opts = {}) {
   if (!it || !it._local || !it._local.streamUrl) return;
   it = resolvePlaybackResume(it);
-  stopActivePlaybackForReplacement();
-  const nativeFirst = nativeVideoRequired(it);
-  const playTicket = S._playTicket = (S._playTicket || 0) + 1;
-  if (nativeFirst) showNativePlayLoading(it);
-  else showPlayLoading(it);
+  let nativeFirst = !!opts.nativeFirst;
+  let playTicket = Number(opts.playTicket || 0);
+  if (!opts.replacementStarted) {
+    const transition = beginPlaybackTransition(it, opts);
+    nativeFirst = transition.nativeFirst;
+    playTicket = transition.playTicket;
+  }
   try {
     const ids = sourceIdentityFor(it);
     const body = { caps: clientCaps(), q: queryFor(it) };
@@ -15242,10 +15372,11 @@ async function playLocal(it) {
         };
     if (S._playTicket !== playTicket) return;
     if (S.view !== 'player') return;
-    await openPlayer(it, { ...mount, name: mount.name || it._local.name, container: mount.container || 'local', method: mount.method || null }, { nativeFirst });
+    await openPlayer(it, { ...mount, name: mount.name || it._local.name, container: mount.container || 'local', method: mount.method || null }, { nativeFirst, playTicket });
   } catch (e) {
+    if (S._playTicket !== playTicket || S.view !== 'player') return;
     toast(e.message || 'Could not open that local file');
-    if (S.view === 'player') closePlayer();
+    closePlayer();
   }
 }
 

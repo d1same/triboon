@@ -287,6 +287,23 @@ mount instead of repeating source finding, first-article probe, mount, and
 health gate. Fast home/card focus still uses cheap `/api/search` warming only;
 it does not mount every title the user scrolls past.
 
+TV playback applies the same rule late, not at episode start: once the exact
+next episode is known, its cheap local-library lookup warms in the background;
+that metadata result is bound to the active playback token so a slower request
+from an older episode cannot overwrite the current next target;
+inside the final 90 seconds the client issues one exact-season/episode
+`/api/prepare`. Manual Play Next and EOF autoplay enter the replacement player
+surface synchronously, then reuse or join those local/Usenet jobs. They must not
+close the old native surface, expose show details, restart the autoplay timer,
+or launch a second source/NZB/mount walk during the handoff.
+
+The same playback token/identity owns every terminal and control callback during
+that replacement. Browser media events, asynchronous subtitle preflights, and
+Android ready/progress/error/end, quality, episode, and subtitle callbacks from the old player must become no-ops
+once the next episode owns the surface. A zero Android token remains accepted
+for rolling-update compatibility with an older APK; the new-APK/old-web EOF
+fallback explicitly closes ExoPlayer before revealing the older web Up Next UI.
+
 Reuse is scoped to the selected payload, not only the NZB URL. Its identity is
 NZB URL plus season, episode, and audiobook mode. Loose-file and RAR/ZIP season
 packs require exactly one requested `SxxEyy` payload before file size, and the

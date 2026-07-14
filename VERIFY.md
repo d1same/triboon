@@ -54,11 +54,13 @@ changes, complete these live checks before saying the update is done:
 | --- | --- |
 | Web Player VOD | Movie starts, seeks, pauses, resumes, closes, and does not show new console errors. |
 | Web Player TV episode | Correct season/episode context, resume target, Up Next behavior when relevant. |
+| Episode handoff (web + Android) | Manual Play Next, autoplay at EOF, and player episode-strip selection keep the old frame or branded player loader topmost; the TV-show details page never appears between episodes. Autoplay uses the final pre-EOF 10-second choice window and does not start another countdown at EOF. Back during Preparing cancels the pending handoff permanently; stale success/error/native callbacks cannot reopen or close a newer player. |
 | Web Live TV | Channel starts in Triboon's web player, retunes cleanly, and shows live-specific errors instead of a generic external-player panel. |
 | Android ExoPlayer VOD | Movie or episode opens the native branded loader and ExoPlayer surface, not the web video shell; seek does not show the full startup loader. |
 | Android ExoPlayer Live TV | Native Live TV uses ExoPlayer, survives at least 20 Up/Down zaps, and logcat has no fatal/provider-loop markers. |
 | CC/subtitles | Web and native CC choices open; recommended row is sane; captions stay in-frame; sync/version changes do not restart video or reset captions to time zero. |
 | Fast startup | A warm prepared movie or episode starts through the reuse path, not a repeated search/probe/mount/health gate. Healthy warm sources should stay near the 1-2 second target. |
+| Warm next episode | At 90 seconds remaining, the exact next S/E is prepared once. Manual/autoplay next joins that work and the prewarmed local lookup; it does not repeat the indexer/NZB/mount path. Out-of-order metadata from an older episode cannot replace the current player's next target. |
 
 If a live smoke cannot run, the final report must say `not run`, explain why,
 and describe the risk.
@@ -85,6 +87,42 @@ fails to produce a playable stream. Budgets default to feels-local targets
 (ready≤3s, 1stByte≤1.5s) and flag `SLOW` rather than hard-failing on timing.
 
 ### Latest Evidence
+
+2026-07-14, v2.7.0 episode-handoff release verification:
+
+- Version contract aligned: `package.json` 2.7.0; Android `versionName` 2.7.0
+  / `versionCode` 303.
+- Manual Play Next, EOF autoplay, and episode-strip selection now enter the
+  replacement player before any local lookup/search/mount await. Web media
+  events, Android ExoPlayer listeners/actions, source recovery, and asynchronous
+  subtitle preflight work are bound to the playback identity/token, so delayed
+  work from episode A cannot close, remount, reconfigure, or subtitle episode B.
+- The focused Phase 4 player suite passed 61/61, including executable races for
+  Play Next followed by episode A's queued `ended`, late keyframe/remount/source
+  advance, native quality selection, and delayed built-in subtitle preflight.
+  A separate `npm.cmd test` pass and the final full gate each passed 419/419.
+- `npm.cmd run verify:full -- -AndroidDevice emulator-5554` passed on the final
+  tree in 313.5 seconds. It repeated P9 IPTV, P11 subtitles, P14 fast VOD,
+  inline web parsing, the isolated 2.7.0 runtime smoke, Android `lintDebug`,
+  `testDebugUnitTest`, `assembleDebug`, APK install, and Android TV stress.
+- Android TV API 36 stress report
+  `bench/stress-results/android-tv-stress-20260714-102951.json` finished
+  `ok: true` with no failures or warnings: 32 deterministic fixture channels,
+  source ranking, native Live TV, 20 zaps, two PiP loops, native Multiview,
+  native VOD with 10 seek actions, subtitles, and repeated page/D-pad churn.
+  The matching focused device pass
+  `bench/stress-results/android-tv-stress-20260714-102431.json` also completed
+  with zero failures or warnings before the full gate repeated it. The stress
+  helper now recognizes current `.pcard` Home tiles as well as legacy card
+  classes, so a valid catalog-only Home cannot be misreported as empty.
+- On the authenticated deterministic UI fixture, desktop Chrome changed
+  S01E01 to S01E02's in-player `Preparing` state in about 538 ms with no show
+  detail flash, then resumed S01E02 playback. The Android TV emulator likewise
+  exercised direct E01 -> E02 handoff plus Back/cancel and autoplay behavior;
+  the final APK/stress pass was repeated after the last stale-callback guard.
+- The environment used synthetic media and mock NNTP. No real provider title
+  was downloaded during this pass, so provider-specific availability and WAN
+  timing remain outside this local verification.
 
 2026-07-13, v2.6.20 pre-release verification:
 

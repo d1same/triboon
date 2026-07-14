@@ -143,7 +143,7 @@ function App-State {
   view: typeof S !== 'undefined' ? S.view : null,
   zone: typeof S !== 'undefined' ? S.zone : null,
   booting: typeof S !== 'undefined' ? !!S._booting : true,
-  rows: document.querySelectorAll('.card,.poster,.mediaCard,.srcRow,.chRow,.pgRow').length,
+  rows: document.querySelectorAll('.pcard,.card,.poster,.mediaCard,.srcRow,.chRow,.pgRow').length,
   focus: document.activeElement && (document.activeElement.id || document.activeElement.className || document.activeElement.tagName),
   playerOpen: !!document.querySelector('#player.open'),
   guideOpen: !!document.querySelector('#pGuide.open'),
@@ -198,7 +198,7 @@ $boot = Invoke-CdpJson @"
 (async () => {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   for (let i = 0; i < 60; i++) {
-    const cards = document.querySelectorAll('.card,.poster,.mediaCard').length;
+    const cards = document.querySelectorAll('.pcard,.card,.poster,.mediaCard').length;
     if (typeof S !== 'undefined' && !S._booting && cards > 0) {
       // An available app update pops a once-per-launch modal that traps D-pad nav (it steals focus to
       // "Update now", so Back closes the modal instead of navigating). Suppress it for the whole run:
@@ -210,7 +210,7 @@ $boot = Invoke-CdpJson @"
     }
     await wait(500);
   }
-  return { ok: false, view: typeof S !== 'undefined' ? S.view : null, cards: document.querySelectorAll('.card,.poster,.mediaCard').length };
+  return { ok: false, view: typeof S !== 'undefined' ? S.view : null, cards: document.querySelectorAll('.pcard,.card,.poster,.mediaCard').length };
 })()
 "@ -AwaitPromise
 $report.sections['boot'] = $boot
@@ -231,7 +231,7 @@ $page = Invoke-CdpJson @"
     zone: S.zone,
     railOpen: document.body.classList.contains('railOpen') || document.getElementById('rail').classList.contains('expanded'),
     focus: document.activeElement && (document.activeElement.id || document.activeElement.className || document.activeElement.tagName),
-    cards: document.querySelectorAll('.card,.poster,.mediaCard,.chRow').length
+    cards: document.querySelectorAll('.pcard,.card,.poster,.mediaCard,.chRow').length
   });
   for (let loop = 0; loop < $PageLoops; loop++) {
     for (const v of views) {

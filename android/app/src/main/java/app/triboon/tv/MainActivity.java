@@ -253,6 +253,7 @@ public class MainActivity extends Activity {
     private String nativePlaybackSubline = "";
     private String nativePlaybackBackdropUrl = "";
     private long nativePlaybackSizeBytes = 0L;
+    private long nativePlaybackToken = 0L;
     private int nativeBufferGoalSec = 0;        // server read-ahead goal (s) for this stream's resolution
     private double nativePlaybackDurationSec = 0; // for turning the goal (s) into a byte budget
     private boolean nativeTriedFallback = false;
@@ -3799,10 +3800,12 @@ public class MainActivity extends Activity {
     private void showNativeVideoLoading(String json) {
         String title = "Triboon";
         String backdropUrl = "";
+        long playbackToken = 0L;
         try {
             org.json.JSONObject j = new org.json.JSONObject(json == null ? "{}" : json);
             title = j.optString("title", title);
             backdropUrl = j.optString("backdropUrl", "");
+            playbackToken = Math.max(0L, j.optLong("playbackToken", 0L));
         } catch (Exception ignored) {
         }
         try {
@@ -3810,6 +3813,7 @@ public class MainActivity extends Activity {
             releaseNativePlayer(false);
             buildNativePlayerLayer();
             nativeMode = "video";
+            nativePlaybackToken = playbackToken;
             enterNativeFullscreenMode();
             showNativeLoading(title, backdropUrl);
         } catch (Throwable e) {
@@ -3853,14 +3857,15 @@ public class MainActivity extends Activity {
             boolean quietSeek = j.optBoolean("quietSeek", false);
             long knownDurationMs = Math.max(0L, Math.round(j.optDouble("duration", 0) * 1000));
             long playbackSizeBytes = Math.max(0L, j.optLong("size", 0L));
+            long playbackToken = Math.max(0L, j.optLong("playbackToken", 0L));
             int bufferGoalSec = Math.max(0, j.optInt("bufferGoalSec", 0));
             double playbackDurationSec = Math.max(0, j.optDouble("duration", 0));
             loadingStartOffsetMs = startOffsetMs;
             if (!guide) setPhonePlaybackOrientation(true);
             buildNativePlayerLayer();
-            boolean reuseQuietVideo = quietSeek && "video".equals(mode) && nativePlayer != null
+            boolean reuseQuietVideo = quietSeek && "video".equals(mode) && "video".equals(nativeMode) && nativePlayer != null
                     && nativePlayerView != null && nativePlayerOpen() && !guide;
-            boolean reuseLivePlayer = "live".equals(mode) && nativePlayer != null
+            boolean reuseLivePlayer = "live".equals(mode) && "live".equals(nativeMode) && nativePlayer != null
                     && nativePlayerView != null && nativePlayerOpen() && !guide;
             if (!reuseQuietVideo && !reuseLivePlayer) {
                 releaseNativePlayer(false, guide);
@@ -3906,6 +3911,7 @@ public class MainActivity extends Activity {
             nativePlaybackSubline = episodeLabel == null ? "" : episodeLabel;
             nativePlaybackBackdropUrl = backdropUrl == null ? "" : backdropUrl;
             nativePlaybackSizeBytes = playbackSizeBytes;
+            nativePlaybackToken = playbackToken;
             nativeBufferGoalSec = bufferGoalSec;
             nativePlaybackDurationSec = playbackDurationSec;
             nativeTriedFallback = false;
@@ -3968,8 +3974,15 @@ public class MainActivity extends Activity {
                 // from usenet source rot and is a real cause of the "buffering" the owner has chased.
                 // Media3 acquires it only while playing and releases on stop/release. Needs WAKE_LOCK.
                 nativePlayer.setWakeMode(C.WAKE_MODE_NETWORK);
+                // Bind callbacks to the exact ExoPlayer + web playback token that created this
+                // listener. A released player's final callback can arrive after the next episode has
+                // installed a new player/token; letting that callback read mutable globals can end or
+                // release the replacement episode as if it belonged to the old one.
+                final ExoPlayer listenerPlayer = nativePlayer;
+                final long listenerPlaybackToken = nativePlaybackToken;
                 nativePlayer.addListener(new Player.Listener() {
                 @Override public void onPlayerError(PlaybackException error) {
+                    if (listenerPlayer != nativePlayer || listenerPlaybackToken != nativePlaybackToken) return;
                     String msg = nativePlaybackErrorMessage(error);
                     long pos = nativePosSeconds();
                     long dur = nativeDurSeconds();
@@ -4003,6 +4016,7 @@ public class MainActivity extends Activity {
                 }
 
                 @Override public void onPlaybackStateChanged(int state) {
+                    if (listenerPlayer != nativePlayer || listenerPlaybackToken != nativePlaybackToken) return;
                     updateNativeChrome();
                     if (state == Player.STATE_READY) {
                         if ("video".equals(nativeMode)) {
@@ -4010,7 +4024,7 @@ public class MainActivity extends Activity {
                             widenNativeReadTimeoutAfterFirstFrame();
                             rememberNativeVideoPosition();
                             web.evaluateJavascript("window.__tvNativeVideoReady && __tvNativeVideoReady("
-                                    + nativePosSeconds() + "," + nativeDurSeconds() + ")", null);
+                                    + nativePosSeconds() + "," + nativeDurSeconds() + "," + listenerPlaybackToken + ")", null);
                         } else if ("live".equals(nativeMode)) {
                             nativeLiveStarted = true;
                             hideNativeGuidePipReveal();
@@ -4027,19 +4041,37 @@ public class MainActivity extends Activity {
                     if (state == Player.STATE_ENDED && "video".equals(nativeMode)) {
                         long dur = nativeDurSeconds();
                         long pos = dur > 0 ? dur : nativePosSeconds();
-                        closeNativePlayback(false);
-                        web.evaluateJavascript("window.__tvNativeVideoClosed && __tvNativeVideoClosed("
-                                + pos + "," + dur + ",true)", null);
+                        // Keep the final frame/native Up Next layer visible until JS either starts the
+                        // next episode or closes a truly-finished title. Closing first exposes the
+                        // show-details WebView and used to restart a second 10-second countdown there.
+                        // Mixed-version update compatibility: a freshly-updated APK can briefly run
+                        // against an older server shell that only knows __tvNativeVideoClosed.
+                        String legacyNextShell = nativeHasNext
+                                ? "var upNext=document.getElementById('upNext');"
+                                  + "if(upNext&&upNext.classList.contains('show')){"
+                                  + "var shell=document.getElementById('player');if(shell)shell.classList.add('open');"
+                                  + "var loader=document.getElementById('playerLoader');if(loader)loader.classList.remove('show');}"
+                                : "";
+                        web.evaluateJavascript("window.__tvNativeVideoEnded ? __tvNativeVideoEnded("
+                                + pos + "," + dur + "," + listenerPlaybackToken + ") : "
+                                + "(function(){"
+                                + "if(window.TriboonTV&&window.TriboonTV.closeVideo)window.TriboonTV.closeVideo();"
+                                + "var result=window.__tvNativeVideoClosed&&__tvNativeVideoClosed("
+                                + pos + "," + dur + ",true," + listenerPlaybackToken + ");"
+                                + legacyNextShell
+                                + "return result;})()", null);
                     } else if (state == Player.STATE_ENDED && "live".equals(nativeMode)) {
                         recoverNativeLivePlayback("ended");
                     }
                 }
 
                 @Override public void onTracksChanged(Tracks tracks) {
+                    if (listenerPlayer != nativePlayer || listenerPlaybackToken != nativePlaybackToken) return;
                     updateNativeChrome();
                 }
 
                 @Override public void onIsPlayingChanged(boolean isPlaying) {
+                    if (listenerPlayer != nativePlayer || listenerPlaybackToken != nativePlaybackToken) return;
                     updateNativeChrome();
                     if ("live".equals(nativeMode) && isPlaying) nativeLiveUnhealthySinceMs = 0L;
                     if ("live".equals(nativeMode) && isPlaying) nativeLiveStarted = true;
@@ -4049,14 +4081,14 @@ public class MainActivity extends Activity {
                         nativeVideoUnhealthySinceMs = 0L;
                         rememberNativeVideoPosition();
                         web.evaluateJavascript("window.__tvNativeVideoPlaying && __tvNativeVideoPlaying("
-                                + nativePosSeconds() + "," + nativeDurSeconds() + ")", null);
+                                + nativePosSeconds() + "," + nativeDurSeconds() + "," + listenerPlaybackToken + ")", null);
                     } else if ("video".equals(nativeMode) && nativeVideoStarted
                             && nativePlayer != null
                             && nativePlayer.getPlaybackState() == Player.STATE_READY
                             && !nativePlayer.getPlayWhenReady()) {
                         rememberNativeVideoPosition();
                         web.evaluateJavascript("window.__tvNativeVideoPaused && __tvNativeVideoPaused("
-                                + nativePosSeconds() + "," + nativeDurSeconds() + ")", null);
+                                + nativePosSeconds() + "," + nativeDurSeconds() + "," + listenerPlaybackToken + ")", null);
                     }
                     scheduleNativeChromeHide();
                 }
@@ -4120,6 +4152,7 @@ public class MainActivity extends Activity {
                                                   String loadingKind, String loadingQuality,
                                                   String loadingSource, long loadingStartOffsetMs) {
         String msg = nativeThrowableMessage(e);
+        long playbackToken = nativePlaybackToken;
         Log.e(TAG, "Native playback startup failed (" + mode + "): " + msg, e);
         try {
             trimAndroidMemoryCaches(true);
@@ -4137,7 +4170,7 @@ public class MainActivity extends Activity {
             }
             try {
                 web.evaluateJavascript("window.__tvNativeVideoError && __tvNativeVideoError("
-                        + org.json.JSONObject.quote(msg) + ",0,0)", null);
+                        + org.json.JSONObject.quote(msg) + ",0,0," + playbackToken + ")", null);
             } catch (Throwable ignored) {
             }
         } else {
@@ -4378,8 +4411,10 @@ public class MainActivity extends Activity {
         // Transcode (accurate -ss) becomes frame-exact; `resume` (a reconnect, not a user seek) tells the
         // web layer to keyframe-align the remux + forward-skip so the drop never shows a backward replay.
         String pos = String.format(java.util.Locale.US, "%.3f", Math.max(0L, displayMs) / 1000.0);
+        long playbackToken = nativePlaybackToken;
         web.evaluateJavascript("window.__tvNativeVideoSeek && window.__tvNativeVideoSeek("
-                + pos + "," + nativeDurSeconds() + "," + (resume ? "true" : "false") + ")", null);
+                + pos + "," + nativeDurSeconds() + "," + (resume ? "true" : "false")
+                + "," + playbackToken + ")", null);
     }
 
     private void applyNativeStartSeekIfReady() {
@@ -4411,7 +4446,7 @@ public class MainActivity extends Activity {
     private void openNativeLiveGuide() {
         if (nativePlayer != null && "video".equals(nativeMode)) {
             web.evaluateJavascript("window.__tvNativeVideoProgress && __tvNativeVideoProgress("
-                    + nativePosSeconds() + "," + nativeDurSeconds() + ")", null);
+                    + nativePosSeconds() + "," + nativeDurSeconds() + "," + nativePlaybackToken + ")", null);
         }
         enterNativeGuideMode();
         web.evaluateJavascript("window.__tvNativeLiveGuide && window.__tvNativeLiveGuide("
@@ -5332,12 +5367,13 @@ public class MainActivity extends Activity {
         String quality = nativeQualityLabel;
         long startOffsetMs = nativeStartOffsetMs;
         long safePos = safeNativeVideoPosSeconds(pos);
+        long playbackToken = nativePlaybackToken;
         releaseNativePlayer(false);
         enterNativeFullscreenMode();
         showNativeLoading(title, backdropUrl);
         web.evaluateJavascript("window.__tvNativeVideoError && __tvNativeVideoError("
                 + org.json.JSONObject.quote(msg == null || msg.isEmpty() ? "native startup stalled" : msg)
-                + "," + safePos + "," + dur + ")", null);
+                + "," + safePos + "," + dur + "," + playbackToken + ")", null);
     }
 
     private float nativeShiftFromUrl(String url) {
@@ -5616,7 +5652,7 @@ public class MainActivity extends Activity {
         if (nativePlayer == null) return;
         updateNativeSubtitleOverlay();
         web.evaluateJavascript("window.__tvNativeSubtitleShift && window.__tvNativeSubtitleShift("
-                + String.format(Locale.US, "%.1f", nativeSubtitleShift) + ")", null);
+                + String.format(Locale.US, "%.1f", nativeSubtitleShift) + "," + nativePlaybackToken + ")", null);
         showNativeTrackMenu(C.TRACK_TYPE_TEXT);
     }
 
@@ -6023,7 +6059,8 @@ public class MainActivity extends Activity {
             return;
         }
         web.evaluateJavascript("window.__tvNativeEpisodeSelect && window.__tvNativeEpisodeSelect("
-                + ep.index + "," + nativePosSeconds() + "," + nativeDurSeconds() + ")", null);
+                + ep.index + "," + nativePosSeconds() + "," + nativeDurSeconds()
+                + "," + nativePlaybackToken + ")", null);
     }
 
     private boolean handleNativeEpisodeStripKey(KeyEvent e) {
@@ -6338,7 +6375,8 @@ public class MainActivity extends Activity {
         if (web == null) return;
         web.evaluateJavascript("window.__tvNativeSubtitleSelect && window.__tvNativeSubtitleSelect("
                 + (rel == null ? "null" : org.json.JSONObject.quote(rel))
-                + "," + nativePosSeconds() + "," + nativeDurSeconds() + ")", null);
+                + "," + nativePosSeconds() + "," + nativeDurSeconds()
+                + "," + nativePlaybackToken + ")", null);
     }
 
     private void requestNativeSubtitleVersions(String lang) {
@@ -6347,7 +6385,8 @@ public class MainActivity extends Activity {
         Toast.makeText(this, "Loading subtitle versions...", Toast.LENGTH_SHORT).show();
         web.evaluateJavascript("window.__tvNativeSubtitleVersions && window.__tvNativeSubtitleVersions("
                 + org.json.JSONObject.quote(lang == null || lang.isEmpty() ? "en" : lang)
-                + "," + nativePosSeconds() + "," + nativeDurSeconds() + ")", null);
+                + "," + nativePosSeconds() + "," + nativeDurSeconds()
+                + "," + nativePlaybackToken + ")", null);
     }
 
     private void requestNativeSubtitleShowAll() {
@@ -6355,7 +6394,8 @@ public class MainActivity extends Activity {
         nativeOpenSubtitleMenuAfterRefresh = true;
         Toast.makeText(this, "Showing all subtitle languages", Toast.LENGTH_SHORT).show();
         web.evaluateJavascript("window.__tvNativeSubtitleShowAll && window.__tvNativeSubtitleShowAll("
-                + nativePosSeconds() + "," + nativeDurSeconds() + ")", null);
+                + nativePosSeconds() + "," + nativeDurSeconds()
+                + "," + nativePlaybackToken + ")", null);
     }
 
     private String nativeCodecName(String mime, String codecs) {
@@ -6403,7 +6443,8 @@ public class MainActivity extends Activity {
         if (web == null) return;
         String quality = which <= 0 ? "orig" : (which == 1 ? "1080" : (which == 2 ? "720" : "480"));
         web.evaluateJavascript("window.__tvNativeVideoQuality && window.__tvNativeVideoQuality("
-                + org.json.JSONObject.quote(quality) + "," + nativePosSeconds() + "," + nativeDurSeconds() + ")", null);
+                + org.json.JSONObject.quote(quality) + "," + nativePosSeconds() + "," + nativeDurSeconds()
+                + "," + nativePlaybackToken + ")", null);
         showNativeChrome(false);
     }
 
@@ -6688,10 +6729,12 @@ public class MainActivity extends Activity {
         String mode = nativeMode;
         long pos = nativePosSeconds();
         long dur = nativeDurSeconds();
-        closeNativePlayback(false);
+        long playbackToken = nativePlaybackToken;
         if (!"video".equals(mode)) return;
+        // JS owns the atomic player-to-player handoff. It replaces this surface with the next
+        // native loading surface; closing here first would reveal the WebView/details page.
         web.evaluateJavascript("window.__tvNativeVideoNext && __tvNativeVideoNext("
-                + pos + "," + dur + ")", null);
+                + pos + "," + dur + "," + playbackToken + ")", null);
     }
 
     private void startNativeProgress() {
@@ -6706,13 +6749,13 @@ public class MainActivity extends Activity {
                 if ("video".equals(nativeMode)) {
                     rememberNativeVideoPosition();
                     web.evaluateJavascript("window.__tvNativeVideoProgress && __tvNativeVideoProgress("
-                            + nativePosSeconds() + "," + nativeDurSeconds() + ")", null);
+                            + nativePosSeconds() + "," + nativeDurSeconds() + "," + nativePlaybackToken + ")", null);
                 }
                 long now = SystemClock.elapsedRealtime();
                 if (now - nativeLastStatsMs >= 2000L) {
                     nativeLastStatsMs = now;
                     web.evaluateJavascript("window.__tvNativeVideoStats && window.__tvNativeVideoStats("
-                            + nativeStatsJson() + ")", null);
+                            + nativeStatsJson() + "," + nativePlaybackToken + ")", null);
                 }
                 nativeProgress.postDelayed(this, 1000);
             }
@@ -6822,6 +6865,7 @@ public class MainActivity extends Activity {
         String mode = nativeMode;
         long pos = nativePosSeconds();
         long dur = nativeDurSeconds();
+        long playbackToken = nativePlaybackToken;
         boolean guideMode = nativeGuideMode;
         nativeGuideMode = preserveGuideMode && guideMode;
         ExoPlayer player = nativePlayer;
@@ -6857,6 +6901,7 @@ public class MainActivity extends Activity {
         nativePlaybackTitle = "Triboon";
         nativePlaybackSubline = "";
         nativePlaybackBackdropUrl = "";
+        nativePlaybackToken = 0L;
         nativeTriedFallback = false;
         nativeLiveUnhealthySinceMs = 0L;
         nativeLiveLastRecoveryMs = 0L;
@@ -6893,7 +6938,7 @@ public class MainActivity extends Activity {
         nativeHasWyzieSubtitle = false;
         if (notifyClosed && "video".equals(mode)) {
             web.evaluateJavascript("window.__tvNativeVideoClosed && __tvNativeVideoClosed("
-                    + pos + "," + dur + ",false)", null);
+                    + pos + "," + dur + ",false," + playbackToken + ")", null);
         } else if (notifyClosed) {
             web.evaluateJavascript("window.__tvNativeLiveClosed && __tvNativeLiveClosed()", null);
         }

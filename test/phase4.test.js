@@ -209,12 +209,12 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'manual source playback should send the opaque server pick key, not only a release name');
   assert.match(ui, /play\(it, \{ name: c\.name, pickKey: c\.pickKey, resolutionRank: rk\(c\) \}\)/,
     'clicking a Sources row should carry its exact release key and quality class into Play');
-  assert.match(ui, /async function play\(it, pick\) \{[\s\S]+it = resolvePlaybackResume\(it\);[\s\S]+const picked = pick && typeof pick === 'object' \? pick : \(pick \? \{ name: pick \} : null\);[\s\S]+const body = playbackRequestBody\(it, picked, qRank\);/,
+  assert.match(ui, /async function play\(it, pick, opts = \{\}\) \{[\s\S]+it = resolvePlaybackResume\(it\);[\s\S]+const picked = pick && typeof pick === 'object' \? pick : \(pick \? \{ name: pick \} : null\);[\s\S]+const body = playbackRequestBody\(it, picked, qRank\);/,
     'manual source selection should re-resolve the latest resume point before mounting the exact picked release');
-  assert.match(ui, /function stopActivePlaybackForReplacement\(opts = \{\}\) \{[\s\S]+saveWatch\(true\);[\s\S]+window\.TriboonTV\.closeVideo\(\);[\s\S]+stopWebVideoElement\(\);[\s\S]+if \(!opts\.preserveGuide\) closePlayerGuide\(\{ fromNative: true \}\);[\s\S]+S\.playing = null;[\s\S]+\}/,
-    'source replacement should stop the active native/web player before the new mount can start');
-  assert.match(ui, /async function play\(it, pick\) \{[\s\S]+const localExact = !picked && localPlaybackForItem\(it\) \? \{ \.\.\.it, _local: localPlaybackForItem\(it\) \} : null;[\s\S]+if \(localExact && localPlaybackFitsQuality\(localExact, qRank\)\) return playLocal\(localExact\);[\s\S]+stopActivePlaybackForReplacement\(\);[\s\S]+const nativeFirst = nativeVideoRequired\(it\);/,
-    'manual source selection and quality mismatches should tear down the old source before showing the new loading/player state');
+  assert.match(ui, /function stopActivePlaybackForReplacement\(opts = \{\}\) \{[\s\S]+saveWatch\(true, S\.playing\._ended \? \{ watched: true \} : \{\}\);[\s\S]+if \(!opts\.preserveNativeSurface[\s\S]+window\.TriboonTV\.closeVideo\(\);[\s\S]+stopWebVideoElement\(\);[\s\S]+if \(!opts\.preserveGuide\) closePlayerGuide\(\{ fromNative: true \}\);[\s\S]+S\.playing = null;[\s\S]+\}/,
+    'source replacement should stop active playback while allowing atomic native episode handoff and preserving forced-watched EOF');
+  assert.match(ui, /async function play\(it, pick, opts = \{\}\) \{[\s\S]+beginPlaybackTransition\(it, opts\);[\s\S]+await \(it\._localLookupPromise \|\| ensureLocalPlaybackForItem\(it\)\)[\s\S]+localExact = !picked && localPlaybackForItem\(it\)[\s\S]+playLocal\(localExact, \{ replacementStarted: true, nativeFirst, playTicket \}\)/,
+    'manual source selection and local quality routing should enter one loading surface before lookup and reuse that transition');
   assert.match(ui, /const pickRank = picked \? normalizeResolutionRank\(picked\.resolutionRank\) : null;[\s\S]+const qRank = pickRank !== null \? pickRank : qualityRankForItem\(it\);[\s\S]+const body = playbackRequestBody\(it, picked, qRank\);/,
     'manual source selection should pass the picked source quality into the shared request builder');
   assert.match(ui, /function playbackRequestBody\(it, picked = null, qRank = qualityRankForItem\(it\)\) \{[\s\S]+if \(qRank !== null\) \{[\s\S]+body\.maxResolutionRank = qRank;[\s\S]+body\.preferResolutionRank = qRank;/,
@@ -251,9 +251,9 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'the 4K quality toggle must be gated on the user being allowed to play 4K');
   assert.match(ui, /function releaseResolutionRankFromName\(name\) \{[\s\S]+2160p\|4k\|uhd[\s\S]+return 4;[\s\S]+function localPlaybackFitsQuality\(it, qRank\) \{[\s\S]+if \(qRank === 4\) return rank === 4;[\s\S]+if \(qRank === 3\) return rank !== 4;/,
     'local playback should be allowed only when it matches the requested source class');
-  assert.match(ui, /const picked = pick && typeof pick === 'object'[\s\S]+const qRank = pickRank !== null \? pickRank : qualityRankForItem\(it\);[\s\S]+const localExact = !picked && localPlaybackForItem\(it\) \? \{ \.\.\.it, _local: localPlaybackForItem\(it\) \} : null;[\s\S]+if \(localExact && localPlaybackFitsQuality\(localExact, qRank\)\) return playLocal/,
+  assert.match(ui, /const picked = pick && typeof pick === 'object'[\s\S]+const qRank = pickRank !== null \? pickRank : qualityRankForItem\(it\);[\s\S]+localExact = !picked && localPlaybackForItem\(it\) \? \{ \.\.\.it, _local: localPlaybackForItem\(it\) \} : null;[\s\S]+if \(localExact && localPlaybackFitsQuality\(localExact, qRank\)\)[\s\S]+playLocal\(localExact/,
     'Play should compute quality before the local shortcut so selected 4K cannot be replaced by a local 1080p file');
-  assert.match(ui, /catch \(e\) \{[\s\S]+if \(localExact && !picked && \/no playable\|no \.\*candidate\|all candidates failed\/i\.test\(String\(e && e\.message \|\| ''\)\)\) \{[\s\S]+return playLocal\(localExact\);[\s\S]+\}/,
+  assert.match(ui, /catch \(e\) \{[\s\S]+if \(S\._playTicket !== playTicket \|\| S\.view !== 'player'\) return;[\s\S]+if \(localExact && !picked && \/no playable\|no \.\*candidate\|all candidates failed\/i\.test\(String\(e && e\.message \|\| ''\)\)\) \{[\s\S]+return playLocal\(localExact, \{ replacementStarted: true, nativeFirst, playTicket \}\);[\s\S]+\}/,
     'Local library files should fall back to disk playback when online source search has no playable candidate');
   assert.ok([
     '#srcSort button{height:34px',
@@ -357,13 +357,13 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   // the extra season fetches keeps a newer playback from being clobbered by the slow one.
   assert.match(ui, /const nextSeasonNums = \(ctx\.seasons \|\| \)?[\s\S]*?\.filter\(\(n\) => Number\.isFinite\(\+n\) && \+n > ctx\.parts\.season\)[\s\S]+\.slice\(0, 2\);[\s\S]+const extraSeasons = \(await Promise\.all\(nextSeasonNums\.map[\s\S]+if \(token !== S\._playerSeasonStripToken \|\| !S\.playing \|\| !S\.playing\.item \|\| S\.playing\.item\.key !== it\.key\) return;[\s\S]+for \(const season of \[ctx\.season, \.\.\.extraSeasons\]\) \{/,
     'the player episode strip should append episodes from the next two seasons (with a post-fetch staleness re-check)');
-  assert.match(ui, /window\.__tvNativeVideoClosed = \(pos, dur, ended\) => \{[\s\S]+if \(ended && S\.nextEp\) \{\s+saveWatch\(true, \{ watched: true \}\);[\s\S]+closePlayer\(\{ ended: !!ended \}\);/,
-    'native finished playback should mark the just-finished episode watched before Up Next, then close through the finished-title return path');
+  assert.match(ui, /window\.__tvNativeVideoEnded = \(pos, dur, token\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+if \(finishEpisodeToNext\(\)\) return;[\s\S]+closePlayer\(\{ ended: true \}\);/,
+    'native EOF should reject stale player callbacks, hand episodes directly to Up Next, and close only a truly finished title');
   // The web (HTMLVideo) end-of-episode path hands off to Up Next and returns WITHOUT going through
   // closePlayer — so it must save watched itself, or an auto-advanced episode is never recorded
   // watched (the "only marks watched if I watch the ENTIRE thing" bug).
-  assert.match(ui, /v\.onended = \(\) => \{[\s\S]+if \(S\.nextEp\) \{[\s\S]+saveWatch\(true, \{ watched: true \}\);[\s\S]+if \(!S\.upNextShown\) showUpNext\(\);[\s\S]+return;/,
-    'web episode end-of-file must mark the finished episode watched before the Up Next handoff (closePlayer, which saves, is skipped on this path)');
+  assert.match(ui, /v\.onended = \(\) => \{[\s\S]+if \(finishEpisodeToNext\(\)\) return;[\s\S]+closePlayer\(\{ ended: true \}\);/,
+    'web episode EOF should use the same direct handoff contract and close only when no next episode exists');
   assert.ok([
     'function applyNativeVideoProgress(pos, dur, opts = {}) {',
     'const keepPrev = opts.preserveOnZero && incoming <= 1 && prev > 30;',
@@ -371,10 +371,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'maybeShowUpNext(p.nativePos, totalDuration(), { native: true });',
   ].every((s) => ui.includes(s)),
     'native episode playback should surface Up Next from progress before ExoPlayer reaches ended');
-  assert.match(ui, /window\.__tvNativeVideoProgress = \(pos, dur\) => \{\s+applyNativeVideoProgress\(pos, dur\);/,
-    'native progress bridge should forward ExoPlayer progress into the Up Next timer path');
-  assert.match(ui, /window\.__tvNativeVideoError = \(msg, pos, dur\) => \{\s+const p = S\.playing; if \(!p \|\| !p\.usingNative\) return;\s+applyNativeVideoProgress\(pos, dur, \{ preserveOnZero: true \}\);\s+const at = currentTime\(\);/,
-    'native player errors should preserve the last good movie position when Exo reports a bogus zero before fallback');
+  assert.match(ui, /window\.__tvNativeVideoProgress = \(pos, dur, token\) => \{\s+const p = S\.playing; if \(!p \|\| !p\.usingNative \|\| !nativePlaybackCallbackMatches\(p, token\)\) return;\s+applyNativeVideoProgress\(pos, dur\);/,
+    'native progress bridge should reject stale players before forwarding progress into Up Next');
+  assert.match(ui, /window\.__tvNativeVideoError = \(msg, pos, dur, token\) => \{\s+const p = S\.playing;\s+if \(!p \|\| !p\.usingNative \|\| !nativePlaybackCallbackMatches\(p, token\)\) return;\s+applyNativeVideoProgress\(pos, dur, \{ preserveOnZero: true \}\);\s+const at = currentTime\(\);/,
+    'native player errors should reject stale players and preserve the last good position before fallback');
   // Two-phase Up Next: the card surfaces at credits-start (runtime-heuristic window, manual
   // choice), and the 10s autoplay countdown arms SEPARATELY only inside the true final seconds —
   // so the card is useful early without autoplay ever skipping the end of the episode.
@@ -388,8 +388,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'dismissing the Up Next card (web or native) must stick — autoplay never re-arms for that episode');
   assert.doesNotMatch(ui, /\(d - t\) > 45/,
     'Up Next must not start a 10-second autoplay countdown with 45 seconds still left in the episode');
-  assert.match(ui, /const UP_NEXT_COUNTDOWN_SECONDS = 10;[\s\S]+function showUpNext\(\) \{[\s\S]+let n = UP_NEXT_COUNTDOWN_SECONDS;[\s\S]+\$\('unCount'\)\.textContent = n;[\s\S]+if \(n <= 0\) playNextEpisode\(\);/,
-    'Up Next autoplay should always give the user a 10-second choice window before starting the next episode');
+  assert.match(ui, /const UP_NEXT_COUNTDOWN_SECONDS = 10;[\s\S]+function armUpNextCountdown\(\) \{[\s\S]+let n = UP_NEXT_COUNTDOWN_SECONDS;[\s\S]+if \(n <= 0\) playNextEpisode\(\);/,
+    'Up Next autoplay should give the user its 10-second choice window before EOF');
+  assert.match(ui, /function finishEpisodeToNext\(\) \{[\s\S]+saveWatch\(true, \{ watched: true \}\);[\s\S]+if \(prefAutoplay\(\) && !S\.upNextDismissed\) \{\s+playNextEpisode\(\);[\s\S]+return true;/,
+    'EOF should mark watched and advance immediately when autoplay survived the pre-EOF choice window, never start a second countdown');
   assert.match(ui, /<button class="un-play focusable" id="unPlay">[\s\S]*?<span class="un-title" id="unTitle"><\/span>[\s\S]*?<span class="un-prog" id="unProg">/,
     'Up Next primary action is a compact pill: a play button that shows the next-episode title with a countdown progress line');
   assert.match(ui, /<button class="un-cancel focusable" id="unCancel"[\s\S]*?<\/button>\s*<\/div>/,
@@ -693,9 +695,9 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'local-first Continue Watching entries should keep the rich local player prep URL and durable local-art fields');
   assert.match(ui, /_local: x\.streamUrl \? \{ streamUrl: x\.streamUrl, playUrl: x\.playUrl, name:/,
     'added-library cards should carry the full local player prep URL');
-  assert.match(ui, /async function playLocal\(it\) \{[\s\S]+const ids = sourceIdentityFor\(it\);[\s\S]+const body = \{ caps: clientCaps\(\), q: queryFor\(it\) \};[\s\S]+if \(ids\.season != null\) body\.season = ids\.season;[\s\S]+if \(ids\.ep != null\) body\.ep = ids\.ep;[\s\S]+await api\(it\._local\.playUrl, \{ method: 'POST', body \}\)[\s\S]+openPlayer\(it, \{ \.\.\.mount/,
+  assert.match(ui, /async function playLocal\(it, opts = \{\}\) \{[\s\S]+const ids = sourceIdentityFor\(it\);[\s\S]+const body = \{ caps: clientCaps\(\), q: queryFor\(it\) \};[\s\S]+if \(ids\.season != null\) body\.season = ids\.season;[\s\S]+if \(ids\.ep != null\) body\.ep = ids\.ep;[\s\S]+await api\(it\._local\.playUrl, \{ method: 'POST', body \}\)[\s\S]+openPlayer\(it, \{ \.\.\.mount/,
     'added-library playback should use the same prepared player mount shape as Movies and TV while preserving subtitle episode context');
-  assert.match(ui, /async function playLocal\(it\) \{[\s\S]+it = resolvePlaybackResume\(it\);[\s\S]+if \(nativeFirst\) showNativePlayLoading\(it\);[\s\S]+else showPlayLoading\(it\);[\s\S]+openPlayer\(it, \{ \.\.\.mount/,
+  assert.match(ui, /async function playLocal\(it, opts = \{\}\) \{[\s\S]+it = resolvePlaybackResume\(it\);[\s\S]+if \(!opts\.replacementStarted\) \{[\s\S]+beginPlaybackTransition\(it, opts\);[\s\S]+openPlayer\(it, \{ \.\.\.mount/,
     'local library playback should resolve resume and leave details for the loading player before mount prep waits');
   assert.match(ui, /function mergeLocalItemsInto\(map, lib, items\) \{[\s\S]+playUrl: x\.playUrl[\s\S]+`tmdb:tv:\$\{x\.tmdbId\}:s\$\{x\.s\}e\$\{x\.e\}`[\s\S]+map\[key\] = rec;[\s\S]+function mergeLocalItems\(lib, items\) \{[\s\S]+S\.localMap = map/,
     'local library scans should hydrate episode keys into the local-first playback map');
@@ -832,6 +834,473 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'watch progress should persist sanitized metadata through the shared watchlist metadata helper');
   assert.match(ui, /function openLocalDetail\(it\) \{[\s\S]+const resume = resumePositionForItem\(it\);[\s\S]+\$\(\'dStartOver\'\)\.style\.display = resume \? '' : 'none';[\s\S]+updateDetailPlayLabel\(resume \? \{ label: 'Resume', target: \{ \.\.\.it, resume \} \}/,
     'unmatched local library details should expose the same Resume and Start Over behavior');
+});
+
+test('episode handoff stays player-to-player before local lookup and EOF never restarts autoplay', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
+
+  const transitionStart = ui.indexOf('function beginPlaybackTransition(it, opts = {})');
+  const playStart = ui.indexOf('async function play(it, pick, opts = {})', transitionStart);
+  const playEnd = ui.indexOf('// Full-screen loading:', playStart);
+  assert.ok(transitionStart >= 0 && playStart > transitionStart && playEnd > playStart,
+    'playback transition and play request should be extractable');
+  const transitionSource = ui.slice(transitionStart, playStart);
+  const calls = [];
+  const state = { _playTicket: 4, playing: { usingNative: true } };
+  const beginPlaybackTransition = new Function('S', 'nativeVideoRequired', 'stopActivePlaybackForReplacement',
+    'showNativePlayLoading', 'showPlayLoading', `${transitionSource}\nreturn beginPlaybackTransition;`)(
+      state, () => true, (opts) => calls.push(['stop', opts]), (it, ticket) => calls.push(['native', it.key, ticket]),
+      (it) => calls.push(['web', it.key]));
+  const transition = beginPlaybackTransition({ key: 'tmdb:tv:9:s1e2', type: 'episode' }, { directHandoff: true });
+  assert.deepStrictEqual(calls, [
+    ['stop', { preserveNativeSurface: true }],
+    ['native', 'tmdb:tv:9:s1e2', 5],
+  ], 'a direct native handoff synchronously replaces the old surface with the next loading surface');
+  assert.deepStrictEqual(transition, { nativeFirst: true, playTicket: 5 }, 'the replacement owns a fresh play token');
+
+  const playSource = ui.slice(playStart, playEnd);
+  assert.ok(playSource.indexOf('beginPlaybackTransition(it, opts)') < playSource.indexOf('await (it._localLookupPromise || ensureLocalPlaybackForItem(it))'),
+    'the player/loading surface must become visible before a deferred local-library lookup');
+  assert.match(playSource, /if \(S\._playTicket !== playTicket \|\| S\.view !== 'player'\) return;/,
+    'back/cancel during that lookup should invalidate the pending episode handoff');
+  assert.match(ui, /function stopActivePlaybackForReplacement\(opts = \{\}\) \{[\s\S]+if \(!opts\.preserveNativeSurface && canUseNativeVideoPlayer\(\)/,
+    'the old native surface should not close before the atomic replacement loader owns the screen');
+  assert.match(ui, /item\._localLookupPromise = ensureLocalPlaybackForItem\(item\)[\s\S]+item\._localLookupComplete = true;/,
+    'next-episode local lookup should warm during the current episode and be joined at handoff');
+  assert.match(ui, /function showNativePlayLoading\(it, playTicket = 0\)[\s\S]+S\._nativeLoadingTicket = Number\(playTicket[\s\S]+playbackToken: S\._nativeLoadingTicket/,
+    'the branded native loader should carry the play token so Back can cancel that exact request');
+
+  const playCatchStart = playSource.indexOf('} catch (e) {');
+  const staleGuard = playSource.indexOf("if (S._playTicket !== playTicket || S.view !== 'player') return;", playCatchStart);
+  const localFallback = playSource.indexOf('return playLocal(localExact, { replacementStarted: true, nativeFirst, playTicket });', playCatchStart);
+  const closeOnFailure = playSource.indexOf('closePlayer();', playCatchStart);
+  assert.ok(playCatchStart >= 0 && staleGuard > playCatchStart && localFallback > staleGuard && closeOnFailure > localFallback,
+    'stale request failures are ignored and a current local fallback keeps the existing loading surface');
+
+  const localPlayStart = ui.indexOf('async function playLocal(it, opts = {})');
+  const localPlayEnd = ui.indexOf('/* ============ watchlist view ============ */', localPlayStart);
+  const localPlaySource = ui.slice(localPlayStart, localPlayEnd);
+  const localCatchStart = localPlaySource.indexOf('} catch (e) {');
+  const localStaleGuard = localPlaySource.indexOf("if (S._playTicket !== playTicket || S.view !== 'player') return;", localCatchStart);
+  const localToast = localPlaySource.indexOf("toast(e.message || 'Could not open that local file');", localCatchStart);
+  assert.ok(localCatchStart >= 0 && localStaleGuard > localCatchStart && localToast > localStaleGuard,
+    'a rejected superseded local mount must not close or toast over a newer playback');
+
+  const finishStart = ui.indexOf('function finishEpisodeToNext()');
+  const finishEnd = ui.indexOf('function playNextEpisode()', finishStart);
+  assert.ok(finishStart >= 0 && finishEnd > finishStart, 'EOF handoff helper should be extractable');
+  const runFinish = (S, autoplay) => {
+    const events = [];
+    const finish = new Function('S', 'saveWatch', 'prefAutoplay', 'playNextEpisode', 'showUpNext',
+      `${ui.slice(finishStart, finishEnd)}\nreturn finishEpisodeToNext;`)(
+        S, (_final, opts) => events.push(['save', opts]), () => autoplay,
+        () => events.push(['next']), () => events.push(['show']));
+    return { result: finish(), events };
+  };
+  const autoState = { nextEp: { item: {} }, playing: {}, upNextDismissed: false, upNextShown: true };
+  const auto = runFinish(autoState, true);
+  assert.strictEqual(auto.result, true);
+  assert.deepStrictEqual(auto.events, [['save', { watched: true }], ['next']],
+    'autoplay advances immediately at EOF instead of arming a second ten-second wait');
+  assert.strictEqual(autoState.playing._ended, true, 'the completed episode remains forced-watched during teardown');
+  const manual = runFinish({ nextEp: { item: {} }, playing: {}, upNextDismissed: false, upNextShown: false }, false);
+  assert.deepStrictEqual(manual.events, [['save', { watched: true }], ['show']],
+    'autoplay-off keeps a manual Up Next choice on the player surface');
+  const dismissed = runFinish({ nextEp: { item: {} }, playing: {}, upNextDismissed: true, upNextShown: true }, true);
+  assert.deepStrictEqual(dismissed.events, [['save', { watched: true }]],
+    'an explicit Up Next dismiss remains sticky through EOF');
+
+  const endedStart = android.indexOf('if (state == Player.STATE_ENDED && "video".equals(nativeMode))');
+  const endedEnd = android.indexOf('} else if (state == Player.STATE_ENDED && "live".equals(nativeMode))', endedStart);
+  const endedSource = android.slice(endedStart, endedEnd);
+  assert.match(endedSource, /__tvNativeVideoEnded\("[\s\S]+listenerPlaybackToken/,
+    'Android EOF should notify JS with the playback token while the native surface is still visible');
+  assert.doesNotMatch(endedSource, /closeNativePlayback\(/,
+    'Android EOF must not expose the details WebView before JS decides the next action');
+  assert.match(endedSource, /window\.__tvNativeVideoEnded \? __tvNativeVideoEnded\([\s\S]+window\.__tvNativeVideoClosed\s*&&\s*__tvNativeVideoClosed\([\s\S]+true,/,
+    'a new APK should fall back to the older terminal callback while a server/web update is still rolling out');
+  assert.match(endedSource, /window\.TriboonTV&&window\.TriboonTV\.closeVideo[\s\S]+window\.TriboonTV\.closeVideo\(\)/,
+    'the new-APK/old-web fallback must tear down the native surface under the older callback contract');
+  assert.match(endedSource, /legacyNextShell = nativeHasNext[\s\S]+upNext\.classList\.contains\('show'\)[\s\S]+shell\.classList\.add\('open'\)[\s\S]+playerLoader[\s\S]+classList\.remove\('show'\)/,
+    'the mixed-version fallback should reveal the older web player only when its Up Next card is visible');
+  const nextStart = android.indexOf('private void playNativeNextEpisode()');
+  const nextEnd = android.indexOf('private void startNativeProgress()', nextStart);
+  const nextSource = android.slice(nextStart, nextEnd);
+  assert.match(nextSource, /long playbackToken = nativePlaybackToken;[\s\S]+__tvNativeVideoNext\("[\s\S]+playbackToken/,
+    'the native Next control should retain and identify the current playback during handoff');
+  assert.doesNotMatch(nextSource, /closeNativePlayback\(/,
+    'manual native Next must not reveal the WebView before the replacement loader');
+  assert.match(ui, /function nativePlaybackCallbackMatches\(p, token\)[\s\S]+incoming === active/,
+    'stale terminal callbacks from the old ExoPlayer should be rejected after episode replacement');
+  const listenerStart = android.indexOf('final ExoPlayer listenerPlayer = nativePlayer;');
+  const listenerEnd = android.indexOf('nativePlayerView.setPlayer(nativePlayer);', listenerStart);
+  const listenerSource = android.slice(listenerStart, listenerEnd);
+  assert.ok(listenerStart >= 0 && listenerEnd > listenerStart, 'the native listener ownership block should be extractable');
+  assert.match(listenerSource, /final long listenerPlaybackToken = nativePlaybackToken;/,
+    'each Exo listener should retain the token that created its player');
+  for (const callback of ['onPlayerError', 'onPlaybackStateChanged', 'onTracksChanged', 'onIsPlayingChanged']) {
+    const callbackStart = listenerSource.indexOf(callback + '(');
+    const callbackTail = listenerSource.slice(callbackStart, callbackStart + 600);
+    assert.ok(callbackStart >= 0, `${callback} should remain installed`);
+    assert.match(callbackTail, /listenerPlayer != nativePlayer \|\| listenerPlaybackToken != nativePlaybackToken\) return;/,
+      `${callback} must ignore a released player's queued callback`);
+  }
+  assert.match(android, /boolean reuseQuietVideo = quietSeek && "video"\.equals\(mode\) && "video"\.equals\(nativeMode\)/,
+    'quiet VOD remount may only reuse an existing VOD player/listener');
+  assert.match(android, /boolean reuseLivePlayer = "live"\.equals\(mode\) && "live"\.equals\(nativeMode\)/,
+    'VOD-to-guide-to-Live TV must create a live listener instead of reusing the tokened VOD listener');
+
+  const closedStart = ui.indexOf('window.__tvNativeVideoClosed =');
+  const closedEnd = ui.indexOf('window.__tvNativeVideoError =', closedStart);
+  const closedSource = ui.slice(closedStart, closedEnd);
+  const closedEvents = [];
+  const loaderState = { playing: null, view: 'player', _playTicket: 8, _nativeLoadingTicket: 8 };
+  const bridgeWindow = {};
+  const nativeClosed = new Function('window', 'S', 'nativePlaybackCallbackMatches', 'applyNativeVideoProgress',
+    'finishEpisodeToNext', 'closePlayer', 'revealWebPlayerShell', '$', `${closedSource}\nreturn window.__tvNativeVideoClosed;`)(
+      bridgeWindow, loaderState, () => true, () => {}, () => false, () => closedEvents.push('close'),
+      () => {}, () => ({ classList: { remove() {} } }));
+  nativeClosed(0, 0, false, 7);
+  assert.deepStrictEqual(closedEvents, [], 'a stale native-loader close token cannot cancel the current request');
+  nativeClosed(0, 0, false, 8);
+  assert.deepStrictEqual(closedEvents, ['close'], 'Back on the current native loader cancels its pending play request');
+  assert.strictEqual(loaderState._nativeLoadingTicket, 0, 'loader cancellation clears its pending native ticket');
+
+  const compatEvents = [];
+  const compatState = {
+    playing: { usingNative: true, playbackToken: 12 },
+    nextEp: { item: { key: 'tmdb:tv:9:s1e2' } },
+    upNextDismissed: false,
+    upNextShown: true,
+  };
+  const compatDom = { playerOpen: false, loaderShow: true };
+  const compatFinish = new Function('S', 'saveWatch', 'prefAutoplay', 'playNextEpisode', 'showUpNext',
+    `${ui.slice(finishStart, finishEnd)}\nreturn finishEpisodeToNext;`)(
+      compatState, (_final, opts) => compatEvents.push(['save', opts]), () => false,
+      () => compatEvents.push(['next']), () => compatEvents.push(['show', compatState.playing.usingNative, compatState.upNextShown]));
+  const compatWindow = {};
+  const compatClosed = new Function('window', 'S', 'nativePlaybackCallbackMatches', 'applyNativeVideoProgress',
+    'finishEpisodeToNext', 'closePlayer', 'revealWebPlayerShell', '$', `${closedSource}\nreturn window.__tvNativeVideoClosed;`)(
+      compatWindow, compatState, () => true, () => {}, compatFinish, () => compatEvents.push(['close']),
+      () => { compatDom.playerOpen = true; compatEvents.push(['reveal']); },
+      () => ({ classList: { remove(name) { if (name === 'show') compatDom.loaderShow = false; } } }));
+  compatClosed(100, 100, true, 0);
+  assert.strictEqual(compatState.playing.usingNative, false,
+    'an older APK that already closed Exo must transfer Up Next ownership to the WebView');
+  assert.deepStrictEqual(compatEvents, [
+    ['reveal'],
+    ['save', { watched: true }],
+    ['show', false, false],
+  ], 'autoplay-off on an older APK should expose a usable web Up Next card');
+  assert.deepStrictEqual(compatDom, { playerOpen: true, loaderShow: false },
+    'the older-APK manual Up Next card must sit in a visible web player with no loading cover');
+
+  const nextStartFn = ui.indexOf('function playNextEpisode()');
+  const nextEndFn = ui.indexOf("$('unPlay').addEventListener", nextStartFn);
+  const oldWebPlaying = { item: { key: 'tmdb:tv:9:s1e1', type: 'episode' } };
+  const nextState = {
+    playing: oldWebPlaying,
+    view: 'player',
+    nextEp: { item: { key: 'tmdb:tv:9:s1e2', type: 'episode' } },
+  };
+  const nextEvents = [];
+  const playNext = new Function('S', 'updateNextEpisodeButton', 'hideUpNextUi', 'play',
+    `${ui.slice(nextStartFn, nextEndFn)}\nreturn playNextEpisode;`)(
+      nextState, () => nextEvents.push('button'), () => nextEvents.push('hide'),
+      (item, _pick, opts) => {
+        nextEvents.push(['play', item.key, opts]);
+        nextState.playing = { item };
+      });
+  playNext();
+  playNext();
+  assert.deepStrictEqual(nextEvents.filter((event) => Array.isArray(event)), [
+    ['play', 'tmdb:tv:9:s1e2', { directHandoff: true }],
+  ], 'queued EOF/countdown/manual triggers must consume one next episode and mount it only once');
+
+  const openPlayerStart = ui.indexOf('async function openPlayer(');
+  const webEndedStart = ui.indexOf('  v.onended = () => {', openPlayerStart);
+  const webEndedEnd = ui.indexOf('\n  };', webEndedStart) + '\n  };'.length;
+  assert.ok(openPlayerStart >= 0 && webEndedStart > openPlayerStart && webEndedEnd > webEndedStart,
+    'the web media-ended handler should be extractable');
+  const staleEndedEvents = [];
+  const endedVideo = {};
+  const queuedOldEnded = new Function('v', 'S', 'playingRef', 'attemptLiveAutoRetune',
+    'showLiveProviderError', 'finishEpisodeToNext', 'closePlayer',
+    `${ui.slice(webEndedStart, webEndedEnd)}\nreturn v.onended;`)(
+      endedVideo, nextState, oldWebPlaying, () => false, () => staleEndedEvents.push('live-error'),
+      () => { staleEndedEvents.push('finish'); return false; }, () => staleEndedEvents.push('close'));
+  queuedOldEnded();
+  assert.deepStrictEqual(staleEndedEvents, [],
+    'a queued ended event from episode A must not close or advance after episode B owns the player');
+
+  assert.match(android, /private void showNativeVideoLoading\(String json\)[\s\S]+j\.optLong\("playbackToken", 0L\)[\s\S]+nativePlaybackToken = playbackToken;/,
+    'Android retains the branded-loader token before an ExoPlayer exists');
+  const releaseStart = android.indexOf('private void releaseNativePlayer(boolean notifyClosed, boolean preserveGuideMode)');
+  const releaseEnd = android.indexOf('private void closeNativePlayback(boolean notifyClosed)', releaseStart);
+  const releaseSource = android.slice(releaseStart, releaseEnd);
+  assert.match(releaseSource, /long playbackToken = nativePlaybackToken;[\s\S]+__tvNativeVideoClosed\("[\s\S]+false," \+ playbackToken/,
+    'Android Back echoes the loader/player token so JS can reject stale closes');
+});
+
+test('stale async recovery work cannot remount, advance, or cover a replacement episode', async () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const deferred = () => {
+    let resolve, reject;
+    const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+    return { promise, resolve, reject };
+  };
+
+  const seekStart = ui.indexOf('window.__tvNativeVideoSeek = async');
+  const seekEnd = ui.indexOf('function nativePlaybackCallbackMatches', seekStart);
+  const seekSource = ui.slice(seekStart, seekEnd);
+  const seekGate = deferred();
+  const seekCalls = [];
+  const seekOld = {
+    usingNative: true,
+    playbackToken: 31,
+    item: { key: 'episode-a', type: 'episode' },
+    remuxUrl: '/api/remux/abc123?t=old-token',
+  };
+  const seekState = { playing: seekOld, view: 'player' };
+  const seekWindow = {};
+  const callbackMatches = (p, token) => !token || !p.playbackToken || Number(token) === Number(p.playbackToken);
+  const nativeSeek = new Function('window', 'S', 'appMs', '$', 'currentPlayerKind', 'fetch', 'tryNativeVideoPlayer',
+    'nativePlaybackCallbackMatches',
+    `${seekSource}\nreturn window.__tvNativeVideoSeek;`)(
+      seekWindow, seekState, () => 1000, () => ({ classList: { remove() {} } }), () => 'remux',
+      () => seekGate.promise, (...args) => seekCalls.push(args), callbackMatches);
+  const staleSeekJob = nativeSeek(120, 2400, true, 31);
+  seekState.playing = { usingNative: true, item: { key: 'episode-b', type: 'episode' } };
+  seekGate.resolve({ json: async () => ({ k: 121 }) });
+  await staleSeekJob;
+  assert.deepStrictEqual(seekCalls, [],
+    'a late keyframe response from the old episode must not remount the replacement at the old timestamp');
+
+  const staleEntry = { usingNative: true, playbackToken: 44, item: { key: 'episode-b', type: 'episode' } };
+  seekState.playing = staleEntry;
+  await nativeSeek(180, 2400, false, 31);
+  assert.strictEqual(staleEntry.nativePos, undefined,
+    'a seek callback already queued by the old player must be rejected before touching the replacement');
+
+  const errorStart = ui.indexOf('window.__tvNativeVideoError =');
+  const errorEnd = ui.indexOf('window.__tvNativeVideoNext =', errorStart);
+  const errorWindow = {};
+  const nativeError = new Function('window', 'S', 'nativePlaybackCallbackMatches',
+    `${ui.slice(errorStart, errorEnd)}\nreturn window.__tvNativeVideoError;`)(errorWindow, seekState, callbackMatches);
+  nativeError('old player failed', 180, 2400, 31);
+  assert.strictEqual(staleEntry.usingNative, true,
+    'a stale native error must be rejected before it can recover, advance, or close the replacement');
+
+  const qualityStart = ui.indexOf('window.__tvNativeVideoQuality =');
+  const qualityEnd = ui.indexOf('window.__tvNativeEpisodeSelect =', qualityStart);
+  const qualityWindow = {};
+  const nativeQuality = new Function('window', 'S', 'nativePlaybackCallbackMatches',
+    `${ui.slice(qualityStart, qualityEnd)}\nreturn window.__tvNativeVideoQuality;`)(
+      qualityWindow, seekState, callbackMatches);
+  nativeQuality('720', 180, 2400, 31);
+  assert.strictEqual(staleEntry.quality, undefined,
+    'a queued quality action from the old player must not restart or mutate the replacement episode');
+
+  const subtitleApplyStart = ui.indexOf('async function applyNativeStartupSubtitleAfterTrackProbe(');
+  const subtitleApplyEnd = ui.indexOf('function resolutionLabel(', subtitleApplyStart);
+  const subtitleGate = deferred();
+  const subtitleEvents = [];
+  const subtitleOld = { usingNative: true, playbackToken: 71, subTrack: null };
+  const subtitleState = { playing: subtitleOld };
+  const subtitleWindow = {
+    TriboonTV: { updateActiveSubtitle: (payload) => subtitleEvents.push(['apply', payload]) },
+  };
+  const applyNativeStartupSubtitleAfterTrackProbe = new Function('window', 'S', 'canUseNativeVideoPlayer',
+    'nativeVideoSubtitleRel', 'nativeStartupSubtitleRelAfterPreflight', 'nativeSubtitlePayload',
+    'loadSubShift', 'refreshNativeSubtitleChoices', 'autoSyncNative',
+    `${ui.slice(subtitleApplyStart, subtitleApplyEnd)}\nreturn applyNativeStartupSubtitleAfterTrackProbe;`)(
+      subtitleWindow, subtitleState, () => true, () => ({ rel: 'em:1' }), () => subtitleGate.promise,
+      () => ({ rel: 'em:1', url: '/episode-a.vtt', lang: 'en', label: 'English', shift: 0 }),
+      () => 0, () => subtitleEvents.push(['refresh']), (...args) => subtitleEvents.push(['sync', ...args]));
+  const staleSubtitleJob = applyNativeStartupSubtitleAfterTrackProbe(subtitleOld);
+  subtitleState.playing = { usingNative: true, playbackToken: 72, subTrack: null };
+  subtitleGate.resolve('em:1');
+  assert.strictEqual(await staleSubtitleJob, false,
+    'a subtitle preflight owned by the replaced episode should report that it did not apply');
+  assert.deepStrictEqual(subtitleEvents, [],
+    'a late built-in subtitle preflight must not touch the replacement ExoPlayer or its subtitle UI');
+  assert.strictEqual(subtitleOld.subTrack, null,
+    'the stale subtitle preflight must not mutate the replaced playback object');
+
+  const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
+  assert.match(android, /requestNativeVideoSeek\(long displayMs, boolean resume\)[\s\S]+long playbackToken = nativePlaybackToken;[\s\S]+__tvNativeVideoSeek\("[\s\S]+playbackToken/,
+    'Android native seeks should carry their originating playback token');
+  assert.match(android, /private void notifyNativeVideoError\(String msg, long pos, long dur\)[\s\S]+long playbackToken = nativePlaybackToken;[\s\S]+__tvNativeVideoError\("[\s\S]+playbackToken/,
+    'Android native errors should retain their token across Exo release');
+  for (const callback of [
+    'chooseNativeQuality', 'chooseNativeEpisode', 'notifyNativeSubtitleSelect',
+    'requestNativeSubtitleVersions', 'requestNativeSubtitleShowAll', 'applyNativeSubtitleShift',
+  ]) {
+    const callbackStart = android.indexOf(`private void ${callback}(`);
+    const callbackEnd = android.indexOf('\n    }', callbackStart) + '\n    }'.length;
+    assert.ok(callbackStart >= 0 && callbackEnd > callbackStart, `${callback} should be extractable`);
+    assert.match(android.slice(callbackStart, callbackEnd), /nativePlaybackToken/,
+      `${callback} must identify the playback that opened its native control`);
+  }
+
+  const remountStart = ui.indexOf('async function reMountAndResume(');
+  const remountEnd = ui.indexOf('function failover()', remountStart);
+  const remountSource = ui.slice(remountStart, remountEnd);
+  const remountGate = deferred();
+  const remountEvents = [];
+  const remountOld = { item: { key: 'episode-a' }, usingNative: false };
+  const remountState = { playing: remountOld, view: 'player' };
+  const reMountAndResume = new Function('S', 'vodPlaybackStarted', 'showPlaybackInterrupted', 'currentTime',
+    'currentPlayerKind', 'toast', 'api', 'playbackRequestBody', 'canUseNativeVideoPlayer',
+    'tryNativeVideoPlayer', 'startSource', 'setTimeout', `${remountSource}\nreturn reMountAndResume;`)(
+      remountState, () => true, (reason) => remountEvents.push(['interrupted', reason]), () => 90,
+      () => 'direct', () => {}, () => remountGate.promise, () => ({}), () => false,
+      () => false, () => false, () => remountEvents.push(['retry']));
+  const staleRemountJob = reMountAndResume('old mount failed');
+  remountState.playing = { item: { key: 'episode-b' } };
+  remountGate.reject(new Error('old request failed'));
+  await staleRemountJob;
+  assert.deepStrictEqual(remountEvents, [],
+    'a failed old remount must not retry or show Playback interrupted over the replacement');
+  assert.strictEqual(remountOld._reMounting, false, 'stale remount ownership should still release its old guard');
+
+  const advanceStart = ui.indexOf('async function autoAdvance(opts = {})');
+  const advanceEnd = ui.indexOf('function resetVlcPanel()', advanceStart);
+  const advanceSource = ui.slice(advanceStart, advanceEnd);
+  const compileAdvance = (state, apiFn, prepareFn, events) => new Function('S', 'showVlcPanel',
+    'vodPlaybackStarted', 'recoverSamePlaybackSource', 'currentTime', 'canUseNativeVideoPlayer', 'toast',
+    'api', '$', 'updatePlayerMeta', 'playbackStartKind', 'prepareNativeStartKindForAudio',
+    'tryNativePlaybackLadder', 'startNativePlayerHousekeeping', 'closePlayer', 'revealWebPlayerShell',
+    'startWebPlayerHousekeeping', 'startSource', `${advanceSource}\nreturn autoAdvance;`)(
+      state, () => events.push('panel'), () => false, () => events.push('recover'), () => 42,
+      () => false, () => {}, apiFn, () => ({ textContent: '' }), () => events.push('meta'),
+      () => 'direct', prepareFn, () => (events.push('ladder'), false), () => events.push('native-housekeeping'),
+      () => events.push('close'), () => events.push('reveal'), () => events.push('web-housekeeping'),
+      () => events.push('start'));
+  const advanceReply = {
+    streamUrl: '/new', remuxUrl: '/new-remux', transcodeUrl: '/new-transcode', id: 'new-mount',
+    tracksUrl: '/tracks', subtitleBase: '/sub', streamToken: 'stream-token', name: 'new release',
+  };
+
+  const advanceGate = deferred();
+  const advanceEvents = [];
+  const advanceOld = { sessionId: 'old-session', item: { key: 'episode-a' }, duration: 100, streamUrl: '/old' };
+  const advanceState = { playing: advanceOld, view: 'player' };
+  const advance = compileAdvance(advanceState, () => advanceGate.promise, async (kind) => kind, advanceEvents);
+  const staleAdvanceJob = advance();
+  advanceState.playing = { sessionId: 'new-session', item: { key: 'episode-b' }, streamUrl: '/current' };
+  advanceGate.resolve(advanceReply);
+  await staleAdvanceJob;
+  assert.strictEqual(advanceOld.streamUrl, '/old', 'a late advance response cannot rewrite the old playback object');
+  assert.deepStrictEqual(advanceEvents, [], 'a late advance response cannot mutate the replacement player UI');
+
+  const prepareGate = deferred();
+  let prepareEntered;
+  const prepareStarted = new Promise((resolve) => { prepareEntered = resolve; });
+  const prepareEvents = [];
+  const prepareOld = { sessionId: 'prepare-session', item: { key: 'episode-a' }, duration: 100, usingNative: true };
+  const prepareState = { playing: prepareOld, view: 'player' };
+  const prepareAdvance = compileAdvance(prepareState, async () => advanceReply, () => {
+    prepareEntered();
+    return prepareGate.promise;
+  }, prepareEvents);
+  const stalePrepareJob = prepareAdvance({ nativePreferred: true });
+  await prepareStarted;
+  prepareState.playing = { sessionId: 'new-session', item: { key: 'episode-b' } };
+  prepareGate.resolve('direct');
+  await stalePrepareJob;
+  assert.deepStrictEqual(prepareEvents, ['meta'],
+    'replacement during audio preparation must stop before the native ladder or any close/start action');
+
+  const rejectGate = deferred();
+  const rejectEvents = [];
+  const rejectState = {
+    playing: { sessionId: 'reject-session', item: { key: 'episode-a' }, duration: 100, usingNative: true },
+    view: 'player',
+  };
+  const rejectAdvance = compileAdvance(rejectState, () => rejectGate.promise, async (kind) => kind, rejectEvents);
+  const staleRejectJob = rejectAdvance({ nativePreferred: true });
+  rejectState.playing = { sessionId: 'new-session', item: { key: 'episode-b' } };
+  rejectGate.reject(new Error('old advance failed'));
+  await staleRejectJob;
+  assert.deepStrictEqual(rejectEvents, [],
+    'a rejected old advance must not close the replacement or open its fallback panel');
+});
+
+test('next-episode metadata cannot overwrite a newer player when requests resolve out of order', async () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf('async function prepNextEpisode(it)');
+  const end = ui.indexOf('// Lead time before the episode end', start);
+  assert.ok(start >= 0 && end > start, 'next-episode metadata helper should be extractable');
+
+  const pending = {};
+  const deferred = (key) => {
+    let resolve;
+    pending[key] = new Promise((r) => { resolve = r; });
+    return resolve;
+  };
+  const resolveA = deferred('episode-a');
+  const resolveB = deferred('episode-b');
+  const S = { playing: { item: { key: 'episode-a' } } };
+  const updates = [];
+  const prepNextEpisode = new Function('S', 'updateNextEpisodeButton', 'episodeKeyParts',
+    'getPlayerEpisodeContext', 'api', 'epItemOf', 'qualityRankForItem', 'ensureLocalPlaybackForItem',
+    'img', 'pad2', `${ui.slice(start, end)}\nreturn prepNextEpisode;`)(
+      S,
+      () => updates.push(S.nextEp && S.nextEp.item && S.nextEp.item.key),
+      (it) => ({ tmdbId: it.key, season: 1, episode: 1 }),
+      (it) => pending[it.key],
+      () => Promise.reject(new Error('unexpected extra-season fetch')),
+      (show, _season, ep) => ({ key: `${show.id}:s1e${ep.episode_number}`, type: 'episode' }),
+      () => null,
+      () => Promise.resolve(null),
+      (value) => value || '',
+      (n) => String(n).padStart(2, '0'));
+
+  const itemA = { key: 'episode-a', type: 'episode' };
+  const itemB = { key: 'episode-b', type: 'episode' };
+  const jobA = prepNextEpisode(itemA);
+  S.playing = { item: itemB };
+  const jobB = prepNextEpisode(itemB);
+  const context = (id) => ({
+    show: { id, backdrop: `${id}-backdrop` },
+    seasons: [{ season_number: 1, episode_count: 2 }],
+    season: { season_number: 1, episodes: [{ episode_number: 2, name: `${id}-next`, still_path: `${id}-still` }] },
+  });
+  resolveB(context('show-b'));
+  await jobB;
+  assert.strictEqual(S.nextEp.item.key, 'show-b:s1e2', 'the current player publishes its next episode');
+  resolveA(context('show-a'));
+  await jobA;
+  assert.strictEqual(S.nextEp.item.key, 'show-b:s1e2', 'the older metadata response cannot overwrite the current next episode');
+  assert.ok(updates.includes('show-b:s1e2'), 'the winning next episode refreshes player controls');
+});
+
+test('near-end next-episode prepare fires once at the 90-second boundary', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf('const NEXT_EP_PREP_LEAD_SECONDS = 90;');
+  const end = ui.indexOf('const UP_NEXT_COUNTDOWN_SECONDS = 10;', start);
+  assert.ok(start >= 0 && end > start, 'near-end prepare helper should be extractable');
+  const calls = [];
+  const item = { key: 'tmdb:tv:77:s2e4', season: 2, episode: 4, qualityRank: 3 };
+  const S = { nextEp: { item }, nextEpPrepared: false };
+  const maybePrepareNextEpisode = new Function('S', 'localTitleHasPlayback', 'qualityRankForItem', 'api', 'playbackRequestBody',
+    `${ui.slice(start, end)}\nreturn maybePrepareNextEpisode;`)(
+      S, () => false, (it) => it.qualityRank,
+      (url, opts) => { calls.push({ url, opts }); return Promise.resolve({ ok: true }); },
+      (it, pick, rank) => ({ key: it.key, season: it.season, episode: it.episode, pick, rank }));
+
+  maybePrepareNextEpisode(9, 100);
+  assert.strictEqual(calls.length, 0, '91 seconds remaining is outside the warm window');
+  maybePrepareNextEpisode(10, 100);
+  maybePrepareNextEpisode(11, 100);
+  maybePrepareNextEpisode(50, 100);
+  assert.strictEqual(calls.length, 1, 'progress ticks inside the warm window must share one prepare');
+  assert.deepStrictEqual(calls[0], {
+    url: '/api/prepare',
+    opts: { method: 'POST', body: { key: item.key, season: 2, episode: 4, pick: null, rank: 3 } },
+  }, 'prepare targets the exact next episode and inherited quality');
 });
 
 test('casting Phase 3: native Android Cast sender is wired (cast from the app)', () => {
@@ -1127,7 +1596,7 @@ test('subtitle startup preference contract: admin can toggle built-in captions',
     'startup auto-selection should not overwrite manual language or subtitle choice preferences');
   assert.match(ui, /if \(prefSubtitleMode\(\) === 'always'\) \{[\s\S]+saveSubChoice\(null\);[\s\S]+\} else \{[\s\S]+savePrefLang\('slang', 'off'\);/,
     'turning subtitles off in always mode should persist only the per-title off choice, not the global subtitle language');
-  assert.match(ui, /window\.__tvNativeSubtitleSelect = \(rel, pos, dur\) => \{[\s\S]+if \(!rel\) \{[\s\S]+if \(prefSubtitleMode\(\) === 'always'\) saveSubChoice\(null\);[\s\S]+else \{[\s\S]+savePrefLang\('slang', 'off'\);/,
+  assert.match(ui, /window\.__tvNativeSubtitleSelect = \(rel, pos, dur, token\) => \{[\s\S]+if \(!rel\) \{[\s\S]+if \(prefSubtitleMode\(\) === 'always'\) saveSubChoice\(null\);[\s\S]+else \{[\s\S]+savePrefLang\('slang', 'off'\);/,
     'native subtitle off should follow the same per-title always-mode behavior as the web CC menu');
   assert.match(ui, /function scheduleEmbeddedSubtitlePrewarm\(p = S\.playing\) \{\s+if \(!builtInSubtitlesEnabled\(\)\) return;[\s\S]+setTimeout\(\(\) => \{[\s\S]+fetch\(embeddedSubUrl\(p, rel, \{ mode: 'prewarm' \}\)\)/,
     'built-in subtitle extraction should not prewarm while online-only mode is active');
@@ -1155,7 +1624,9 @@ test('subtitle startup preference contract: admin can toggle built-in captions',
     'native playback should preflight slow built-in subtitles and fall back to online before updating ExoPlayer');
   assert.match(ui, /async function applyNativeStartupSubtitleAfterTrackProbe\(p\) \{[\s\S]+const rel = await nativeStartupSubtitleRelAfterPreflight\(p,[\s\S]+window\.TriboonTV\.updateActiveSubtitle\(JSON\.stringify[\s\S]+p\.subTrack = rel;[\s\S]+refreshNativeSubtitleChoices\(\);[\s\S]+\}/,
     'native playback should auto-apply the resolved subtitle when tracks arrive just after handoff');
-  assert.match(ui, /if \(!\(await applyNativeStartupSubtitleAfterTrackProbe\(p\)\)\) refreshNativeSubtitleChoices\(\);/,
+  assert.match(ui, /const playbackToken = Number\(p\.playbackToken \|\| 0\);[\s\S]+await nativeStartupSubtitleRelAfterPreflight[\s\S]+if \(S\.playing !== p \|\| !p\.usingNative \|\| Number\(p\.playbackToken \|\| 0\) !== playbackToken\) return false;/,
+    'a late subtitle preflight must not apply the old episode subtitle to a replacement native player');
+  assert.match(ui, /const appliedStartupSubtitle = await applyNativeStartupSubtitleAfterTrackProbe\(p\);[\s\S]+if \(S\.playing !== p \|\| !p\.usingNative\) return;[\s\S]+if \(!appliedStartupSubtitle\) refreshNativeSubtitleChoices\(\);/,
     'native track probing should not stop at refreshing the CC list when always-subtitles can now choose a built-in track');
   assert.match(android, /public void updateActiveSubtitle\(String json\) \{[\s\S]+trustedBridgeOrigin\(\)[\s\S]+updateNativeActiveSubtitle\(json\)/,
     'Android bridge should expose a trusted-origin-only active subtitle update for late track probes');
@@ -1219,13 +1690,13 @@ test('VOD pause resume: paused players warm ahead without stealing startup or se
     'pause warm-ahead should be abortable when playback resumes, seeks, or closes');
   assert.match(ui, /function schedulePauseWarmAhead\(p = S\.playing\) \{[\s\S]+p\.item\.type === 'live'[\s\S]+p\.streamUrl[\s\S]+p\.size[\s\S]+const dur = totalDuration\(\);[\s\S]+if \(p\._pauseWarmAt && now - p\._pauseWarmAt < 12000\) return;[\s\S]+const targetSeconds = Math\.min\(dur - 1, Math\.max\(currentTime\(\) \+ 6, bufferedEnd \+ 2\)\);[\s\S]+url\.searchParams\.set\('priority', 'read-ahead'\);[\s\S]+headers: \{ Range: `bytes=\$\{start\}-\$\{start \+ bytes - 1\}` \}/,
     'pause warm-ahead should issue one bounded low-priority range ahead of the paused VOD position');
-  assert.match(ui, /v\.onplaying = \(\) => \{ clearWebRebufferRecovery\(\); cancelPauseWarmAhead\(\);[\s\S]+v\.onpause = \(\) => \{ schedulePauseWarmAhead\(S\.playing\); updPP\(\); \};/,
+  assert.match(ui, /v\.onplaying = \(\) => \{[\s\S]+S\.playing !== playingRef[\s\S]+clearWebRebufferRecovery\(\); cancelPauseWarmAhead\(\);[\s\S]+v\.onpause = \(\) => \{[\s\S]+S\.playing !== playingRef[\s\S]+schedulePauseWarmAhead\(playingRef\); updPP\(\);/,
     'web video should clear stale recovery state, warm on pause, and cancel warm-ahead immediately when playing again');
   assert.match(ui, /function requestVideoPlay\(v, opts = \{\}\) \{[\s\S]+cancelPauseWarmAhead\(\);[\s\S]+const r = v\.play\(\);[\s\S]+return r\.then\(\(\) => \{[\s\S]+cancelPauseWarmAhead\(\)/,
     'user-initiated resume should cancel pause warm-ahead before and after play starts');
   assert.match(ui, /function seekTo\(seconds\) \{[\s\S]+cancelPauseWarmAhead\(\);[\s\S]+if \(!p\) return;/,
     'manual seeks should cancel old pause warm-ahead ranges before changing position');
-  assert.match(ui, /window\.__tvNativeVideoPlaying = \(pos, dur\) => \{[\s\S]+applyNativeVideoProgress\(pos, dur\);[\s\S]+cancelPauseWarmAhead\(\);[\s\S]+\};[\s\S]+window\.__tvNativeVideoPaused = \(pos, dur\) => \{[\s\S]+applyNativeVideoProgress\(pos, dur\);[\s\S]+schedulePauseWarmAhead\(p\);[\s\S]+\};/,
+  assert.match(ui, /window\.__tvNativeVideoPlaying = \(pos, dur, token\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+applyNativeVideoProgress\(pos, dur\);[\s\S]+cancelPauseWarmAhead\(\);[\s\S]+\};[\s\S]+window\.__tvNativeVideoPaused = \(pos, dur, token\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+applyNativeVideoProgress\(pos, dur\);[\s\S]+schedulePauseWarmAhead\(p\);[\s\S]+\};/,
     'native ExoPlayer should share the same pause/resume warm-ahead contract as the web player');
   assert.match(android, /if \("video"\.equals\(nativeMode\) && isPlaying\) \{[\s\S]+__tvNativeVideoPlaying[\s\S]+\} else if \("video"\.equals\(nativeMode\) && nativeVideoStarted[\s\S]+nativePlayer\.getPlaybackState\(\) == Player\.STATE_READY[\s\S]+!nativePlayer\.getPlayWhenReady\(\)[\s\S]+__tvNativeVideoPaused/,
     'Android should report real user pauses without treating normal buffering as paused playback');
@@ -1403,7 +1874,7 @@ test('web VOD rebuffer and subtitle handoff stay bounded, fast, and mobile-safe'
 
   assert.match(ui, /v\.onwaiting = \(\) => \{[\s\S]+pWait && pWait\.started\) armWebRebufferRecovery\(v, pWait\)/,
     'the watchdog arms only after VOD has rendered a real frame');
-  assert.match(ui, /v\.onplaying = \(\) => \{ clearWebRebufferRecovery\(\);[\s\S]+const rebufferWatch = S\._webRebufferWatch;[\s\S]+Math\.abs\(v\.currentTime - rebufferWatch\.position\) >= 0\.5\) clearWebRebufferRecovery\(\)/,
+  assert.match(ui, /v\.onplaying = \(\) => \{[\s\S]+S\.playing !== playingRef[\s\S]+clearWebRebufferRecovery\(\);[\s\S]+const rebufferWatch = S\._webRebufferWatch;[\s\S]+rebufferWatch\.playing === playingRef[\s\S]+Math\.abs\(v\.currentTime - rebufferWatch\.position\) >= 0\.5\) clearWebRebufferRecovery\(\)/,
     'playing and meaningful time progress cancel the watchdog');
   assert.match(ui, /function startSource\([\s\S]+clearWebRebufferRecovery\(\);[\s\S]+function seekTo\(seconds\) \{[\s\S]+clearWebRebufferRecovery\(\);/,
     'source swaps and user seeks invalidate an old rebuffer timer');
@@ -2011,15 +2482,15 @@ test('Android native player: direct source and native chrome stay out of the web
     'the browser transcode fallback also requests stereo audio so an HEVC/10-bit source is not played silent');
   assert.match(ui, /function resolvePlaybackResume\(it\) \{[\s\S]+if \(it\._startOver\) return \{ \.\.\.it, resume: 0 \};[\s\S]+const pos = resumePositionForItem\(it\);[\s\S]+return pos > 0 \? \{ \.\.\.it, resume: pos \} : it;/,
     'Resume should be resolved from current watch state at click time, after quality changes');
-  assert.match(ui, /async function play\(it, pick\) \{[\s\S]+it = resolvePlaybackResume\(it\);/,
+  assert.match(ui, /async function play\(it, pick, opts = \{\}\) \{[\s\S]+it = resolvePlaybackResume\(it\);/,
     'playback should not rely on a stale detail target resume timestamp');
-  assert.match(ui, /const nativeFirst = nativeVideoRequired\(it\);[\s\S]+if \(nativeFirst\) showNativePlayLoading\(it\);[\s\S]+else showPlayLoading\(it\);/,
+  assert.match(ui, /const nativeFirst = nativeVideoRequired\(it\);[\s\S]+if \(nativeFirst\) showNativePlayLoading\(it, playTicket\);[\s\S]+else showPlayLoading\(it\);/,
     'pressing Play on Android should immediately use the native branded loading screen, not the web player shell');
   assert.match(ui, /function nativeVideoRequired\(it\) \{[\s\S]+VOD only: movies, episodes, and local-library files use the playVideo ExoPlayer bridge[\s\S]+return !!\(it && it\.type !== 'live' && canUseNativeVideoPlayer\(\)\);[\s\S]+\}/,
     'Android movies, episodes, and local library files should require the ExoPlayer VOD bridge');
-  assert.match(ui, /async function playLocal\(it\) \{[\s\S]+const nativeFirst = nativeVideoRequired\(it\);[\s\S]+openPlayer\(it, \{ \.\.\.mount,[\s\S]+\}, \{ nativeFirst \}\);/,
+  assert.match(ui, /async function playLocal\(it, opts = \{\}\) \{[\s\S]+const transition = beginPlaybackTransition\(it, opts\);[\s\S]+nativeFirst = transition\.nativeFirst;[\s\S]+openPlayer\(it, \{ \.\.\.mount,[\s\S]+\}, \{ nativeFirst, playTicket \}\);/,
     'added-library movie and episode playback should use the same ExoPlayer handoff as catalog playback');
-  assert.match(ui, /if \(S\.view !== 'player'\) return;[\s\S]+openPlayer\(it, r, \{ nativeFirst \}\)/,
+  assert.match(ui, /if \(S\.view !== 'player'\) return;[\s\S]+openPlayer\(it, r, \{ nativeFirst, playTicket \}\)/,
     'native-first playback should still honor Back/cancel while the loading screen is open');
   assert.match(ui, /const sourceName = mount\.candidate \? mount\.candidate\.name : mount\.name;[\s\S]+item: it, name: sourceName, fileName: mount\.name/,
     'native quality/source labels should use the selected release name, not only the mounted inner filename');
@@ -2068,7 +2539,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'iOS/iPadOS WebKit <video> surface is detected (Safari + Chrome/Firefox on iOS + iPadOS-as-Mac)');
   assert.match(ui, /forceAacRemux: iosWebkitVideo\(\) \|\| !canUseNativeVideoPlayer\(\),/,
     'EVERY plain browser <video> (iOS + desktop) forces stereo-AAC remux (fixes AC3/EAC3 codec-error on iOS AND the silent 5.1-AAC bug on desktop); the native ExoPlayer path strips audioSafe and keeps 5.1');
-  assert.match(ui, /v\.onerror = \(\) => \{[\s\S]+const err = v\.error, pl = S\.playing;[\s\S]+console\.warn\('\[vod\] <video> error code=' \+ err\.code[\s\S]+failover\(\);/,
+  assert.match(ui, /v\.onerror = \(\) => \{[\s\S]+S\.playing !== playingRef[\s\S]+const err = v\.error, pl = playingRef;[\s\S]+console\.warn\('\[vod\] <video> error code=' \+ err\.code[\s\S]+failover\(\);/,
     'the web-player error path records the MediaError code (3=decode vs 4=src-not-supported) before failing over — pinpoints audio vs container/video walls on iOS');
   assert.match(server, /function parseCaps\(raw\) \{[\s\S]+\['mkv', 'mp4', 'h264', 'hevc', 'dovi', 'av1', 'vp9', 'mpeg2', 'aac', 'ac3', 'eac3', 'eac3Joc', 'dts', 'dtsHd', 'truehd', 'passthrough', 'native', 'lowPower'\][\s\S]+caps\.audioOutput = String\(raw\.audioOutput\)\.slice\(0, 64\)/,
     'server should accept sanitized native playback capability fields');
@@ -2129,11 +2600,11 @@ test('Android native player: direct source and native chrome stay out of the web
   // restart — instead of giving up. Failure-path only, so healthy playback is untouched.
   assert.match(ui, /if \(!p\._reMounting\) reMountAndResume\(reason\);/,
     'a gone mount should escalate to a re-mount instead of immediately showing interrupted');
-  assert.match(ui, /async function reMountAndResume\(reason = '', attempt = 0\) \{[\s\S]+api\('\/api\/play', \{ method: 'POST', body: playbackRequestBody\(p\.item, p\.name \? \{ name: p\.name \} : null\) \}\)[\s\S]+p\.mountId = r\.id;[\s\S]+startSource\(kind, at, \{ quietSeek: true \}\)[\s\S]+setTimeout\(\(\) => \{ if \(S\.playing === p\) reMountAndResume\(reason, attempt \+ 1\); \}, 1500 \+ attempt \* 1500\)/,
-    'reMountAndResume should re-play the same title, adopt the new mount, resume at position, and retry with backoff then fall back');
+  assert.match(ui, /async function reMountAndResume\(reason = '', attempt = 0\) \{[\s\S]+api\('\/api\/play', \{ method: 'POST', body: playbackRequestBody\(p\.item, p\.name \? \{ name: p\.name \} : null\) \}\)[\s\S]+if \(S\.playing !== p \|\| S\.view !== 'player'\) \{ p\._reMounting = false; return; \}[\s\S]+p\.mountId = r\.id;[\s\S]+startSource\(kind, at, \{ quietSeek: true \}\)[\s\S]+setTimeout\(\(\) => \{ if \(S\.playing === p && S\.view === 'player'\) reMountAndResume\(reason, attempt \+ 1\); \}, 1500 \+ attempt \* 1500\)/,
+    'reMountAndResume should re-play the same title, reject stale ownership, resume at position, and retry with backoff then fall back');
   assert.match(ui, /async function autoAdvance\(opts = \{\}\) \{[\s\S]+if \(vodPlaybackStarted\(p\) && !opts\.allowMidstreamAdvance\) \{[\s\S]+recoverSamePlaybackSource\('source failed'\);[\s\S]+return;[\s\S]+const at = currentTime\(\);/,
     'auto-advance should remain a startup/source-failure path, not a mid-movie release switch');
-  assert.match(ui, /window\.__tvNativeVideoReady = \(pos, dur\) => \{[\s\S]+p\.nativeReady = true;[\s\S]+markVodPlaybackStarted\(p\);[\s\S]+window\.__tvNativeVideoError = \(msg, pos, dur\) => \{[\s\S]+if \(vodPlaybackStarted\(p\)\) \{[\s\S]+recoverSamePlaybackSource\(msg \|\| 'native playback interrupted'\);[\s\S]+return;/,
+  assert.match(ui, /window\.__tvNativeVideoReady = \(pos, dur, token\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+p\.nativeReady = true;[\s\S]+markVodPlaybackStarted\(p\);[\s\S]+window\.__tvNativeVideoError = \(msg, pos, dur, token\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+if \(vodPlaybackStarted\(p\)\) \{[\s\S]+recoverSamePlaybackSource\(msg \|\| 'native playback interrupted'\);[\s\S]+return;/,
     'native ExoPlayer errors after READY should recover the same source instead of walking the fallback ladder');
   assert.match(android, /if \(state == Player\.STATE_READY\) \{[\s\S]+if \("video"\.equals\(nativeMode\)\) \{[\s\S]+nativeVideoStarted = true;[\s\S]+window\.__tvNativeVideoReady && __tvNativeVideoReady/,
     'Android ExoPlayer STATE_READY should mark the web VOD session as post-start before later errors are handled');
@@ -2195,7 +2666,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'web Live TV should surface provider 403/429 failures instead of showing a misleading external-player prompt');
   assert.match(ui, /p\.usingTranscode = kind === 'transcode';[\s\S]+const kind = p\.usingTranscode \? 'transcode' : \(p\.usingRemux \? 'remux' : 'direct'\);/,
     'native fallback state should distinguish direct, remux, and transcode correctly');
-  assert.match(ui, /function showNativePlayLoading\(it\) \{[\s\S]+\$\(\'player\'\)\.classList\.remove\('open', 'live', 'guideMode'\);[\s\S]+window\.TriboonTV\.showVideoLoading\(JSON\.stringify/,
+  assert.match(ui, /function showNativePlayLoading\(it, playTicket = 0\) \{[\s\S]+\$\(\'player\'\)\.classList\.remove\('open', 'live', 'guideMode'\);[\s\S]+window\.TriboonTV\.showVideoLoading\(JSON\.stringify/,
     'Android movie playback should keep the web player closed while the native loader waits for the mount');
   assert.match(ui, /function tryNextNativeKind\(failedKind, atSeconds, msg\) \{[\s\S]+p\.nativeTried\[failedKind\] = true;[\s\S]+nativePlaybackOrder\(p, p\.nativeStartKind\)[\s\S]+tryNativeVideoPlayer\(next, atSeconds\)/,
     'native player failures should advance to the next native start kind, not the WebView player');
@@ -2203,8 +2674,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native auto-advance should reset native fallback order for each new source');
   assert.match(ui, /autoAdvance\(\{ nativePreferred: true \}\)/,
     'native player source failures should advance to the next release instead of closing playback');
-  assert.match(ui, /if \(nativePreferred\) startKind = await prepareNativeStartKindForAudio\(startKind\);[\s\S]+if \(nativePreferred && tryNativePlaybackLadder\(at, startKind\)\) \{[\s\S]+startNativePlayerHousekeeping\(p\.item\);/,
-    'Android auto-advance should hand the next release back to ExoPlayer when native playback is active');
+  assert.match(ui, /if \(nativePreferred\) \{[\s\S]+startKind = await prepareNativeStartKindForAudio\(startKind\);[\s\S]+if \(S\.playing !== p \|\| S\.view !== 'player'\) return;[\s\S]+if \(nativePreferred && tryNativePlaybackLadder\(at, startKind\)\) \{[\s\S]+startNativePlayerHousekeeping\(p\.item\);/,
+    'Android auto-advance should keep playback ownership and hand the next release back to ExoPlayer when native playback is active');
   assert.match(ui, /if \(nativePreferred\) \{\s*toast\('Native player could not start the next release'\);\s*closePlayer\(\);\s*return;\s*\}\s*revealWebPlayerShell\(p\.item\);/,
     'Android auto-advance must stop instead of falling back to the web player when ExoPlayer cannot start');
   assert.match(ui, /qualityLabel: nativeQualityLabel\(p, kind\)/,
@@ -2285,7 +2756,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Android player handoff should include the current-season episode choices');
   assert.match(ui, /function nativeEpisodeFocusIndex\(\) \{[\s\S]+const current = st\.items\.findIndex\(\(ep\) => ep\.item && ep\.item\.key === st\.currentKey\);[\s\S]+return current >= 0 \? current : Math\.max\(0, Math\.min\(st\.items\.length - 1, st\.idx \|\| 0\)\);[\s\S]+window\.TriboonTV\.updateEpisodeChoices\(JSON\.stringify\(\{ episodes: nativeEpisodeChoices\(\), focusIndex: nativeEpisodeFocusIndex\(\) \}\)\);/,
     'native Android episode refreshes should send an explicit current-episode focus index');
-  assert.match(ui, /window\.__tvNativeEpisodeSelect = \(index, pos, dur\) => \{[\s\S]+S\.playerSeasonStrip\.idx = idx;[\s\S]+activatePlayerEpisode\(\);[\s\S]+\};/,
+  assert.match(ui, /window\.__tvNativeEpisodeSelect = \(index, pos, dur, token\) => \{[\s\S]+S\.playerSeasonStrip\.idx = idx;[\s\S]+activatePlayerEpisode\(\);[\s\S]+\};/,
     'native episode-row selection should return through the normal web episode play path');
   assert.match(android, /private String nativePlaybackSubline = "";[\s\S]+String episodeLabel = j\.optString\("episodeLabel", ""\);[\s\S]+nativePlaybackSubline = episodeLabel == null \? "" : episodeLabel;[\s\S]+nativePlayerTitle\.setText\(title\);[\s\S]+nativePlayerTitle\.setVisibility\(View\.VISIBLE\);[\s\S]+String subline = isLiveMode \? "" : nativePlaybackSubline;[\s\S]+nativePlayerSubline\.setText\(subline\);[\s\S]+nativePlayerSubline\.setVisibility\(subline\.isEmpty\(\) \? View\.GONE : View\.VISIBLE\);/,
     'native Android player should show title and episode metadata while hiding VOD 4K/1080p badges');
@@ -2462,7 +2933,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'native player should receive selectable subtitle choices');
   assert.match(ui, /function embeddedSubChoices\(\) \{\s+if \(!builtInSubtitlesEnabled\(\)\) return \[\];[\s\S]+return subs\.filter\(\(s\) => s && s\.text === true\);[\s\S]+\}/,
     'native subtitle choices should also hide embedded built-in rows while online-only mode is active');
-  assert.match(ui, /window\.__tvNativeSubtitleShowAll = \(pos, dur\) => \{[\s\S]+setShowAllLocalSubtitles\(true\);[\s\S]+refreshNativeSubtitleChoices\(\);[\s\S]+\};/,
+  assert.match(ui, /window\.__tvNativeSubtitleShowAll = \(pos, dur, token\) => \{[\s\S]+setShowAllLocalSubtitles\(true\);[\s\S]+refreshNativeSubtitleChoices\(\);[\s\S]+\};/,
     'native player should be able to reveal all hidden local subtitle languages');
   assert.match(android, /"local_all"\.equals\(choice\.subtitleAction\)[\s\S]+requestNativeSubtitleShowAll\(\);/,
     'Android native subtitle menu should route the show-all local languages action back to the web player state');
@@ -2494,11 +2965,11 @@ test('Android native player: direct source and native chrome stay out of the web
     'native playback should use the shared startup subtitle contract');
   assert.match(ui, /function applyStartupSubtitlePref\(\) \{[\s\S]+const rel = concreteSubtitleRel\(startupSubtitleRelFor\(p\)\);[\s\S]+Promise\.resolve\(setSubtitle\(rel, \{ startup: true \}\)\)\.finally/,
     'web playback should auto-start the profile subtitle choice when subtitle mode is always');
-  assert.match(ui, /window\.__tvNativeSubtitleSelect = \(rel, pos, dur\) => \{[\s\S]+saveSubChoice\(rel, subtitleDisplayName\(rel\)\)[\s\S]+p\.usingNative = true;[\s\S]+\};/,
+  assert.match(ui, /window\.__tvNativeSubtitleSelect = \(rel, pos, dur, token\) => \{[\s\S]+saveSubChoice\(rel, subtitleDisplayName\(rel\)\)[\s\S]+p\.usingNative = true;[\s\S]+\};/,
     'native subtitle row selection should persist the choice without restarting ExoPlayer');
-  assert.doesNotMatch(ui, /window\.__tvNativeSubtitleSelect = \(rel, pos, dur\) => \{[\s\S]+tryNativeVideoPlayer\(kind, at\)/,
+  assert.doesNotMatch(ui, /window\.__tvNativeSubtitleSelect = \(rel, pos, dur, token\) => \{[\s\S]+tryNativeVideoPlayer\(kind, at\)/,
     'native subtitle changes must not reload the native player from the web callback');
-  assert.match(ui, /window\.__tvNativeVideoQuality = \(quality, pos, dur\) => \{[\s\S]+tryNativeVideoPlayer\('direct', at\)[\s\S]+tryNativeVideoPlayer\('transcode', at\)/,
+  assert.match(ui, /window\.__tvNativeVideoQuality = \(quality, pos, dur, token\) => \{[\s\S]+tryNativeVideoPlayer\('direct', at\)[\s\S]+tryNativeVideoPlayer\('transcode', at\)/,
     'native quality row selection should restart ExoPlayer in original or optimized quality');
   assert.match(ui, /const restoreNative = \(\) => \{[\s\S]+p\.usingNative = true;[\s\S]+p\.quality = oldQuality;[\s\S]+p\.triedTranscode = oldTriedTranscode;[\s\S]+\}/,
     'failed native quality switches should preserve the still-playing ExoPlayer state');
@@ -2534,7 +3005,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'web CC sync adjustments should preserve the menu scroll position and focused sync row');
   assert.match(ui, /const keepScrollTop = m\.scrollTop;[\s\S]+openTrackMenu\(kind, \{ focusKey: opts\.key, scrollTop: keepScrollTop \}\)/,
     'web keep-open track rows should rebuild the menu without jumping back to the top');
-  assert.match(ui, /window\.__tvNativeSubtitleShift = \(shift\) => \{[\s\S]+saveSubShift\(p\.subTrack, n\)/,
+  assert.match(ui, /window\.__tvNativeSubtitleShift = \(shift, token\) => \{[\s\S]+saveSubShift\(p\.subTrack, n\)/,
     'Android subtitle sync changes should persist through the web profile state');
   assert.match(ui, /function subtitleDisplayName\(rel\) \{[\s\S]+if \(!info\.variant\) return onlineSubtitleLabel\(subtitleRecommendedLabel\(name, bestSubtitleVariant\(info\.lang\)\)\);[\s\S]+const saved = savedSubtitleDetail\(name\);[\s\S]+return onlineSubtitleLabel\(\(detail \|\| saved\) \? `\$\{name\} \(\$\{detail \|\| saved\}\)` : name\);/,
     'web and native subtitle labels should include the online source plus useful release details');
@@ -2560,7 +3031,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Android CC should expose a lazy version-picker row when variants are collapsed');
   assert.match(ui, /addChoice\(\{ action: 'missing', lang: l, label: miss \}\)/,
     'native Android CC should show a clean no-subtitles row after a title-level miss');
-  assert.match(ui, /window\.__tvNativeSubtitleVersions = async \(lang, pos, dur\) => \{[\s\S]+await loadSubtitleVersions\(lang\);[\s\S]+setSubtitleLangExpanded\(lang, true\);[\s\S]+refreshNativeSubtitleChoices\(\);/,
+  assert.match(ui, /window\.__tvNativeSubtitleVersions = async \(lang, pos, dur, token\) => \{[\s\S]+await loadSubtitleVersions\(lang\);[\s\S]+setSubtitleLangExpanded\(lang, true\);[\s\S]+refreshNativeSubtitleChoices\(\);/,
     'native Android CC version rows should fetch and expand subtitle variants without selecting a subtitle');
   assert.match(ui, /window\.TriboonTV\.updateSubtitleChoices\(JSON\.stringify\(\{ choices: nativeSubtitleChoices\(\) \}\)\)/,
     'web should push refreshed subtitle choices back into the native ExoPlayer menu');
@@ -2966,7 +3437,7 @@ test('Android native player: direct source and native chrome stay out of the web
   const nativeServerSeekBlock = android.slice(nativeServerSeekStart, nativeServerSeekEnd);
   assert.match(nativeServerSeekBlock, /private boolean nativeServerSeekMode\(\) \{[\s\S]*?"remux"\.equals\(nativeKind\) \|\| "transcode"\.equals\(nativeKind\)[\s\S]*?private void nativeSeekToDisplayPosition\(long displayMs\) \{[\s\S]*?if \(nativeServerSeekMode\(\)\) \{[\s\S]*?requestNativeVideoSeek\(target\);[\s\S]*?return;[\s\S]*?\}[\s\S]*?nativePlayer\.seekTo/,
     'native remux/transcode seeking should restart through the web handoff instead of seeking inside a restarted segment');
-  assert.match(ui, /window\.__tvNativeVideoSeek = async \(pos, dur, resume\) => \{[\s\S]+p\.nativePos = at;[\s\S]+tryNativeVideoPlayer\(kind, at, \{ quietSeek: true \}\);[\s\S]+\};/,
+  assert.match(ui, /window\.__tvNativeVideoSeek = async \(pos, dur, resume, token\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+p\.nativePos = at;[\s\S]+tryNativeVideoPlayer\(kind, at, \{ quietSeek: true \}\);[\s\S]+\};/,
     'web should quietly remount the active native source kind when Android requests an absolute seek');
   assert.match(android, /private boolean handleNativeSeekBarKey\(KeyEvent e\) \{[\s\S]+View current = getCurrentFocus\(\);[\s\S]+current != nativeSeek && \(!nativeSeekDpadMode \|\| isNativeControl\(current\)\)[\s\S]+KEYCODE_DPAD_LEFT[\s\S]+KEYCODE_DPAD_RIGHT[\s\S]+nativeSeekBy\(code == KeyEvent\.KEYCODE_DPAD_RIGHT \? 30000 : -10000\);[\s\S]+\}/,
     'focused native seek bar should scrub video with D-pad left/right while focused buttons stay in button navigation');
@@ -3420,7 +3891,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'native player controls should not show success popups over playback');
   assert.match(android, /private boolean nativeVodSeekable\(\) \{[\s\S]+if \(nativePlayer == null \|\| "live"\.equals\(nativeMode\)\) return false;/,
     'live streams should not expose movie-style seeking behavior');
-  assert.match(android, /boolean reuseLivePlayer = "live"\.equals\(mode\) && nativePlayer != null[\s\S]+if \(!reuseQuietVideo && !reuseLivePlayer\) \{[\s\S]+releaseNativePlayer\(false, guide\);[\s\S]+if \(reuseLivePlayer\) \{[\s\S]+nativePlayer\.stop\(\);[\s\S]+nativePlayer\.clearMediaItems\(\);[\s\S]+applyNativeHttpHostHeader\(\);[\s\S]+nativePlayer\.setMediaItem\(buildNativeMediaItem\(\)\);/,
+  assert.match(android, /boolean reuseLivePlayer = "live"\.equals\(mode\) && "live"\.equals\(nativeMode\) && nativePlayer != null[\s\S]+if \(!reuseQuietVideo && !reuseLivePlayer\) \{[\s\S]+releaseNativePlayer\(false, guide\);[\s\S]+if \(reuseLivePlayer\) \{[\s\S]+nativePlayer\.stop\(\);[\s\S]+nativePlayer\.clearMediaItems\(\);[\s\S]+applyNativeHttpHostHeader\(\);[\s\S]+nativePlayer\.setMediaItem\(buildNativeMediaItem\(\)\);/,
     'native Live TV zaps should reuse ExoPlayer, refresh pinned Host headers, and explicitly release the old live source before replacing the media item');
   assert.ok([
     'private long nativePendingStartMs;',
@@ -3446,7 +3917,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'the web seek frame hold should disappear as soon as the replacement stream has a frame');
   assert.match(ui, /v\.onwaiting = \(\) => \{[\s\S]+pWait\.suppressSeekLoaderUntil && appMs\(\) < pWait\.suppressSeekLoaderUntil[\s\S]+return;/,
     'web rebuffer events during a user seek should keep the current frame instead of flashing the loader');
-  assert.match(ui, /window\.__tvNativeVideoSeek = async \(pos, dur, resume\) => \{[\s\S]+p\.suppressSeekLoaderUntil = appMs\(\) \+ 4500;[\s\S]+\$\(\'playerLoader\'\)\.classList\.remove\(\'show\'\);[\s\S]+tryNativeVideoPlayer\(kind, at, \{ quietSeek: true \}\);/,
+  assert.match(ui, /window\.__tvNativeVideoSeek = async \(pos, dur, resume, token\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+p\.suppressSeekLoaderUntil = appMs\(\) \+ 4500;[\s\S]+\$\(\'playerLoader\'\)\.classList\.remove\(\'show\'\);[\s\S]+tryNativeVideoPlayer\(kind, at, \{ quietSeek: true \}\);/,
     'native remux/transcode seek restarts should be marked as quiet seeks from the web bridge');
   assert.match(ui, /quietSeek: !!opts\.quietSeek/,
     'native playback payload should carry whether this is a user seek instead of startup');
@@ -3458,8 +3929,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android native chrome should repaint the seek bar, total time, and end clock when duration arrives later');
   assert.match(android, /boolean quietSeek = j\.optBoolean\("quietSeek", false\);[\s\S]+if \(!guide && "video"\.equals\(mode\) && !quietSeek\) \{[\s\S]+showNativeLoading\(title, backdropUrl\);[\s\S]+\}/,
     'Android native seek restarts should not bring the full preparing loader to the front');
-  assert.match(android, /boolean reuseQuietVideo = quietSeek && "video"\.equals\(mode\) && nativePlayer != null[\s\S]+boolean reuseLivePlayer = "live"\.equals\(mode\) && nativePlayer != null[\s\S]+if \(!reuseQuietVideo && !reuseLivePlayer\) \{[\s\S]+releaseNativePlayer\(false, guide\);[\s\S]+\} else \{[\s\S]+hideNativeLoading\(\);[\s\S]+if \(!reuseQuietVideo && !reuseLivePlayer\) \{[\s\S]+new ExoPlayer\.Builder\(this, nativeRenderersFactory\(\)\)/,
-    'Android native quiet seeks and Live TV retunes should reuse the existing ExoPlayer surface, while new players use decoder fallback');
+  assert.match(android, /boolean reuseQuietVideo = quietSeek && "video"\.equals\(mode\) && "video"\.equals\(nativeMode\) && nativePlayer != null[\s\S]+boolean reuseLivePlayer = "live"\.equals\(mode\) && "live"\.equals\(nativeMode\) && nativePlayer != null[\s\S]+if \(!reuseQuietVideo && !reuseLivePlayer\) \{[\s\S]+releaseNativePlayer\(false, guide\);[\s\S]+\} else \{[\s\S]+hideNativeLoading\(\);[\s\S]+if \(!reuseQuietVideo && !reuseLivePlayer\) \{[\s\S]+new ExoPlayer\.Builder\(this, nativeRenderersFactory\(\)\)/,
+    'Android native quiet seeks and same-mode Live TV retunes should reuse ExoPlayer, while cross-mode/new players get a fresh listener and decoder fallback');
   assert.match(android, /private void applyNativeStartSeekIfReady\(\) \{[\s\S]+nativePendingStartMs <= 0L[\s\S]+nativePlayer\.getPlaybackState\(\) != Player\.STATE_READY \|\| !nativeVodSeekable\(\)[\s\S]+current >= Math\.max\(0L, target - 3000L\)[\s\S]+nativePendingStartMs = 0L[\s\S]+now - nativeStartSeekIssuedAtMs < 1200L[\s\S]+nativeSeekToDisplayPosition\(target\)/,
     'native movie resume should retry the pending start seek until ExoPlayer reports the saved position');
   assert.match(android, /private void zapNativeLiveChannel\(int dir\) \{[\s\S]+!"live"\.equals\(nativeMode\)[\s\S]+window\.__tvNativeLiveZap && window\.__tvNativeLiveZap\(/,
@@ -3848,7 +4319,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'if (reportedMs <= 1000L && nativeLastVideoDisplayMs > 30000L) {',
     'return nativeLastVideoDisplayMs / 1000L;',
     'long safePos = safeNativeVideoPosSeconds(pos);',
-    '+ "," + safePos + "," + dur + ")", null);',
+    '+ "," + safePos + "," + dur + "," + playbackToken + ")", null);',
   ].every((s) => android.includes(s)),
     'native movie and episode fallback should preserve the last good position if Exo reports zero during an error');
   assert.match(android, /private void notifyNativeVideoError\(String msg, long pos, long dur\) \{[\s\S]+String title = nativePlaybackTitle;[\s\S]+String backdropUrl = nativePlaybackBackdropUrl;[\s\S]+releaseNativePlayer\(false\);[\s\S]+showNativeLoading\(title, backdropUrl\);[\s\S]+__tvNativeVideoError/,
@@ -4474,9 +4945,9 @@ test('web shell avoids known TV paint/focus regressions', () => {
   // progress/stats ticks (pushed from native) must keep activity + presence alive for TV viewers.
   assert.match(ui, /function nativePlaybackHeartbeat\(\) \{[\s\S]+if \(!p \|\| !p\.usingNative\) return;[\s\S]+now - _nativeHbAt < 9000\) return;[\s\S]+sendActivity\('watching'\);[\s\S]+sendPresence\('watching'\);[\s\S]+saveWatch\(\);/,
     'a throttled native heartbeat re-reports activity + presence AND persists watch progress while the WebView is hidden (so app close/kill/update mid-native-playback keeps position + the watched flag)');
-  assert.match(ui, /window\.__tvNativeVideoProgress = \(pos, dur\) => \{[\s\S]+nativePlaybackHeartbeat\(\);/,
+  assert.match(ui, /window\.__tvNativeVideoProgress = \(pos, dur, token\) => \{[\s\S]+nativePlaybackHeartbeat\(\);/,
     'the native VOD progress tick drives the heartbeat');
-  assert.match(ui, /window\.__tvNativeVideoStats = \(raw\) => \{[\s\S]+nativePlaybackHeartbeat\(\);/,
+  assert.match(ui, /window\.__tvNativeVideoStats = \(raw, token\) => \{[\s\S]+nativePlaybackHeartbeat\(\);/,
     'the native stats tick (fires for Live TV too) drives the heartbeat');
   // Same throttling reason kills the native alass auto-sync: a hidden-WebView setTimeout often never
   // fired, leaving the raw unsynced sub. It must be QUEUED and driven off the native ticks instead.
@@ -4486,9 +4957,9 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'native auto-sync must not rely on the old throttle-prone setTimeout (the _autoSyncNT timer is gone)');
   assert.match(ui, /async function runPendingNativeSync\(\) \{[\s\S]+x-triboon-subsync'\) !== 'pending'[\s\S]+sync=1[\s\S]+if \(syncVerdict === 'failed'\) \{ p\._pendingNativeSyncRel = null; return; \}[\s\S]+syncVerdict !== 'corrected'[\s\S]+updateActiveSubtitle\(/,
     'the queued native sync only swaps the track in once the server confirms an alass-corrected sub, and STOPS retrying when the server declares the sync terminally failed (each retry re-pulled the mount audio from usenet)');
-  assert.match(ui, /window\.__tvNativeVideoProgress = \(pos, dur\) => \{[\s\S]+runPendingNativeSync\(\);/,
+  assert.match(ui, /window\.__tvNativeVideoProgress = \(pos, dur, token\) => \{[\s\S]+runPendingNativeSync\(\);/,
     'the native VOD progress tick drives the queued alass sync');
-  assert.match(ui, /window\.__tvNativeVideoStats = \(raw\) => \{[\s\S]+runPendingNativeSync\(\);/,
+  assert.match(ui, /window\.__tvNativeVideoStats = \(raw, token\) => \{[\s\S]+runPendingNativeSync\(\);/,
     'the native stats tick also drives the queued alass sync (covers paused playback)');
   assert.match(ui, /function applyMenuPrefs\(\) \{[\s\S]+const railMain = \$\('railMain'\) \|\| \$\('rail'\);[\s\S]+railMain\.querySelector\(`\.railBtn\[data-nav="\$\{nav\}"\]`\)[\s\S]+railMain\.insertBefore\(btn, firstMainNav\(\)\);/,
     'menu preference reordering should only move buttons inside the scrollable rail body, never pinned footer buttons');
