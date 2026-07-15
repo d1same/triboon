@@ -65,6 +65,32 @@ test('release contract: every package verification/release entrypoint exists in 
     'the full gate installs the APK it just built before emulator stress');
 });
 
+test('release contract: Android verification fails fast on device and app preconditions', () => {
+  const verify = read('bench/verify-before-update.ps1');
+  const stress = read('bench/android-tv-stress.ps1');
+  const verifyReadyCall = verify.indexOf('$AndroidDevice = Resolve-ReadyAndroidDevice');
+  const firstRepositoryGate = verify.indexOf('Invoke-Gate "git diff whitespace"');
+  assert.ok(verifyReadyCall >= 0 && verifyReadyCall < firstRepositoryGate,
+    'verify:full checks the Android device before running expensive repository gates');
+  assert.match(verify, /sys\.boot_completed/,
+    'verify:full requires Android to finish booting');
+
+  const stressReadyCall = stress.indexOf('$Device = Resolve-ReadyAndroidDevice');
+  const apkInstall = stress.indexOf('if ($InstallApk)');
+  assert.ok(stressReadyCall >= 0 && stressReadyCall < apkInstall,
+    'standalone stress checks the exact ADB device before installing or launching');
+  assert.match(stress, /reason: 'server-unreachable'[\s\S]+reason: 'app-gate'/,
+    'stress distinguishes an unreachable server from an unfinished authentication gate');
+  assert.match(stress, /gateLogin[\s\S]+gateSetup[\s\S]+gateProfiles[\s\S]+gatePin/,
+    'stress reports actionable login, setup, profile, and PIN preconditions');
+  assert.match(stress, /const candidate = document\.getElementById\('chMultiBtn'\);[\s\S]+candidate && candidate\.offsetParent !== null/,
+    'stress waits for the Live TV Multiview launcher to become visible, not merely exist in the static shell');
+  const bootStop = stress.indexOf("if (!$boot.ok)");
+  const pageChurn = stress.indexOf('$page = Invoke-CdpJson');
+  assert.ok(bootStop >= 0 && bootStop < pageChurn,
+    'failed app preconditions stop stress before page, IPTV, and VOD checks can cascade');
+});
+
 test('release contract: local APK publishing cannot ship a debug build or overwrite assets', () => {
   const release = read('bench/cut-apk-release.ps1');
   const workflow = read('.github/workflows/docker.yml');

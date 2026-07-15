@@ -144,6 +144,12 @@ For the phone AVD, also repeat this mobile-specific pass:
 For release hardening, run the automated Android TV stress helper against the emulator or a
 connected Android TV device:
 
+Before starting, make sure the target is online and fully booted, its configured
+Triboon server is running and reachable, and the app is signed in with a profile
+selected. The helper stops at this preflight when it sees an offline device, a
+server error page, Setup, Login, profile selection, or PIN entry; those states
+do not produce misleading page, IPTV, or VOD failures.
+
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\bench\android-tv-stress.ps1 `
   -Device emulator-5554 `
@@ -166,6 +172,28 @@ The stress helper itself verifies:
 - VOD startup/seek remains responsive while other playback/background work is active; if this fails, review provider capacity, startup reserve, and NNTP priority lanes in `docs-streaming-performance.md`.
 - Online subtitle lookup returns a clean playable/miss response instead of HTTP 401.
 - Native subtitle JVM tests pass through `testDebugUnitTest` before the stress run.
+
+To exercise the specific 4K Continue Watching path on a server with a known 4K
+title, add an exact key plus an explicit saved position and duration:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\bench\android-tv-stress.ps1 `
+  -Device emulator-5554 `
+  -VodKey "tmdb:movie:YOUR_ID" `
+  -VodQualityRank 4 `
+  -VodResumeSeconds 2700 `
+  -VodDurationSeconds 7200 `
+  -VodSeeks 10 `
+  -NoScreenshot
+```
+
+This opt-in path fails if the mounted source is not labelled 2160p/4K/UHD or
+if native playback does not reach the saved timestamp. The same controls are
+available through `verify:full` as `-AndroidVodQualityRank`,
+`-AndroidVodResumeSeconds`, and `-AndroidVodDurationSeconds`; its configured
+title key is `-AndroidVodKey`. The lightweight
+`android-tv-smoke.ps1` uses `-VodQualityRank`, `-ResumeSeconds`, and
+`-VodDurationSeconds`.
 
 Keep the complementary checks explicit: attached-library navigation, Preferences/Settings Back,
 and source add/delete are manual emulator/device checks from the checklist above. P9 Node tests own

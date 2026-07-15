@@ -288,6 +288,24 @@ const PREPARE_MAX_ATTEMPTS = 6; // background detail prep: walk past several dea
                                 // prefetch actually PRE-MOUNTS a working source (new releases often have
                                 // 2-3 missing/unmappable variants ranked first). Bounded by PREPARE_MAX_MS.
 const PREPARE_MAX_MS = 15000;
+const ACTIVE_PLAYBACK_GRACE_MS = 120000;
+const PREPARED_CACHE_BYTES_1080 = 96 * 1024 * 1024;
+const PREPARED_CACHE_BYTES_4K = 192 * 1024 * 1024;
+const PREPARED_READ_AHEAD = 4;
+const PREPARED_RAM_FRACTION = 0.10;
+const PREPARED_TOTAL_MAX_BYTES = 512 * 1024 * 1024;
+const RESUME_WARM_COVERAGE_TTL_MS = 120000;
+
+// `_touched` is mount-lifecycle activity (prepare, probes, tracks, subtitles, and playback). Only
+// real player reads should consume a viewer's connection/cache share. The HTTP stream route owns
+// these two playback fields; keeping the predicate here gives window sizing and runtime telemetry
+// one definition without coupling the pipeline to HTTP request objects.
+function mountHasActivePlayback(mount, now = Date.now()) {
+  if (!mount || !mount.streamable) return false;
+  if ((Number(mount._activeStreamReads) || 0) > 0) return true;
+  const touched = Number(mount._playbackTouched) || 0;
+  return touched > 0 && now - touched < ACTIVE_PLAYBACK_GRACE_MS;
+}
 // Cold press-play races the top N candidates' fetch+mount+health concurrently and takes the first
 // HEALTHY one (startup win #2). Measured: a cold start is dominated by walking PAST dead/incomplete
 // top picks one-at-a-time — racing collapses that serial tail to the fastest healthy of the top N.
@@ -405,7 +423,7 @@ class PlaySession {
 class Pipeline {
   constructor({
     pool, verdicts, mounts, indexers = () => [], usage = {}, performance = () => null,
-    enforceFeatureSize = false, mountDeadlineMs = MOUNT_DEADLINE_MS,
+    enforceFeatureSize = false, mountDeadlineMs = MOUNT_DEADLINE_MS, totalMemMb = TOTAL_MEM_MB,
   }) {
     this.pool = pool;             // () => NntpPool (lazy, settings-driven)
     this.verdicts = verdicts;     // VerdictCache
@@ -424,6 +442,10 @@ class Pipeline {
     // canonical bounded deadline above.
     this.mountDeadlineMs = Number.isFinite(mountDeadlineMs) && mountDeadlineMs > 0
       ? mountDeadlineMs : MOUNT_DEADLINE_MS;
+    this.totalMemMb = Number.isFinite(totalMemMb) && totalMemMb > 0 ? totalMemMb : TOTAL_MEM_MB;
+    this._playbackExpiryTimer = null;
+    this._playbackExpiryAt = 0;
+    this._playbackRuntimeDisposed = false;
     this.sessions = new Map();    // id -> PlaySession
     this.searchCache = new Map(); // queryKey -> { at, results, errors } (prefetch-on-browse → instant play)
     this.searchInflight = new Map(); // queryKey -> Promise(hit), so Play can join an active prefetch
@@ -637,7 +659,12 @@ class Pipeline {
 
   _applyPlaybackWindow(vf, activeMounts, perf = this.performance() || {}) {
     if (!vf) return null;
+    const previousCacheMaxBytes = Math.max(1, Number(vf._playWin && vf._playWin.cacheMaxBytes) || Infinity);
     const win = this._playbackWindowFor(vf, activeMounts, perf);
+    if (win.cacheMaxBytes < previousCacheMaxBytes) {
+      vf._warmedResumeFrac = null;
+      vf._warmedResumeRange = null;
+    }
     for (const v of (vf.vols || [vf])) {
       if (typeof v.applyPlaybackWindow === 'function') v.applyPlaybackWindow(win);
       else {
@@ -648,7 +675,54 @@ class Pipeline {
         if (typeof v.trimCache === 'function') v.trimCache();
       }
     }
+    vf._activePlayWin = win;
+    vf._playWin = win;
     return win;
+  }
+
+  _preparedCacheTotalBytes() {
+    const ramDerived = Math.floor(this.totalMemMb * PREPARED_RAM_FRACTION * 1024 * 1024);
+    return Math.min(PREPARED_TOTAL_MAX_BYTES, Math.max(PREPARED_CACHE_BYTES_1080, ramDerived));
+  }
+
+  _applyPreparedWindow(vf, win = {}, aggregateShare = Infinity) {
+    if (!vf) return null;
+    const activeWin = vf._activePlayWin || win;
+    const cap = (Number(vf.size) || 0) > 4e9 ? PREPARED_CACHE_BYTES_4K : PREPARED_CACHE_BYTES_1080;
+    const previousCacheMaxBytes = Math.max(1, Number(vf._playWin && vf._playWin.cacheMaxBytes) || Infinity);
+    const prepared = {
+      ...activeWin,
+      readAhead: Math.min(PREPARED_READ_AHEAD, Math.max(0, Number(activeWin.readAhead) || 0)),
+      maxReadAhead: Math.min(PREPARED_READ_AHEAD, Math.max(0, Number(activeWin.maxReadAhead) || 0)),
+      cacheMaxBytes: Math.min(cap, Math.max(1, Number(activeWin.cacheMaxBytes) || cap), aggregateShare),
+    };
+    // A REAL cap shrink can evict the warmed resume interval. Identical prepared reapplication is
+    // common during another viewer's Range rebalance and must preserve the short coverage TTL.
+    if (prepared.cacheMaxBytes < previousCacheMaxBytes) {
+      vf._warmedResumeFrac = null;
+      vf._warmedResumeRange = null;
+    }
+    for (const v of (vf.vols || [vf])) {
+      if (typeof v.applyPlaybackWindow === 'function') v.applyPlaybackWindow(prepared);
+      else {
+        v.readAhead = prepared.readAhead;
+        v.maxReadAhead = prepared.maxReadAhead;
+        v.cacheMax = prepared.cacheMax;
+        v.cacheMaxBytes = prepared.cacheMaxBytes;
+        if (typeof v.trimCache === 'function') v.trimCache();
+      }
+    }
+    vf._playWin = prepared;
+    return prepared;
+  }
+
+  rebalancePreparedWindows(now = Date.now()) {
+    const prepared = [...this.mounts.values()]
+      .filter((vf) => vf && vf.streamable && vf._preparedOnly && !mountHasActivePlayback(vf, now));
+    if (!prepared.length) return 0;
+    const share = Math.max(1, Math.floor(this._preparedCacheTotalBytes() / prepared.length));
+    for (const vf of prepared) this._applyPreparedWindow(vf, vf._activePlayWin || vf._playWin || {}, share);
+    return prepared.length;
   }
 
   _startPlaybackWarmup(vf, win, resumeFrac = 0) {
@@ -659,17 +733,33 @@ class Pipeline {
     const capBytes = Number(win && win.cacheMaxBytes) || 0;
     const warmBytes = Math.min(size, capBytes || Infinity, (big ? 96 : 32) * 1024 * 1024);
     if (!Number.isFinite(warmBytes) || warmBytes <= 0) return;
-    const warm = (from, to) => {
+    const warm = (key, from, to) => {
       if (!(to > from)) return;
-      const timer = setTimeout(() => (async () => {
-        for await (const _chunk of vf.read(from, to, { priority: 'readAhead' })) {
-          // Drain intentionally: this warms the VFS cache without blocking Play. MUST stay on the
-          // read-ahead lane — a new stream's speculative warm must never outrank another user's
-          // active playback (docs-streaming-performance.md). The player reads the head itself at
-          // startup priority, so warming it higher would only steal connections, not help.
-        }
-      })().catch(() => {}), 150);
-      if (timer && typeof timer.unref === 'function') timer.unref();
+      this._cancelPlaybackWarmup(vf, key);
+      if (!(vf._playbackWarmupJobs instanceof Map)) vf._playbackWarmupJobs = new Map();
+      const controller = new AbortController();
+      const job = { controller, timer: null, promise: null };
+      job.timer = setTimeout(() => {
+        job.timer = null;
+        job.promise = (async () => {
+          for await (const _chunk of vf.read(from, to, { priority: 'readAhead', signal: controller.signal })) {
+            // Drain intentionally: this warms the VFS cache without blocking Play. MUST stay on the
+            // read-ahead lane — a new stream's speculative warm must never outrank another user's
+            // active playback (docs-streaming-performance.md). The player reads the head itself at
+            // startup priority, so warming it higher would only steal connections, not help.
+          }
+        })().catch(() => {}).finally(() => {
+          // VFS read-ahead is fire-and-forget. Ending the explicit generator does not mean its
+          // trailing article fetches ended, so close this warm job's signal on normal completion too.
+          // Shared fetches remain alive when an active player is still a consumer.
+          if (!controller.signal.aborted) controller.abort();
+          if (vf._playbackWarmupJobs && vf._playbackWarmupJobs.get(key) === job) {
+            vf._playbackWarmupJobs.delete(key);
+          }
+        });
+      }, 150);
+      vf._playbackWarmupJobs.set(key, job);
+      if (job.timer && typeof job.timer.unref === 'function') job.timer.unref();
     };
     // RESUME WINDOW. A Continue-Watching resume makes the player seek straight to a DEEP mid-file byte
     // offset that the head/tail warm never primed — that cold window is the 20-30s resume wait on
@@ -680,18 +770,32 @@ class Pipeline {
     // can change between focuses). Worst case (no/odd frac) it simply doesn't fire — never a regression.
     const frac = Number(resumeFrac) || 0;
     const resuming = frac > 0.02 && frac < 0.985;
-    if (resuming && Math.abs((vf._warmedResumeFrac == null ? -1 : vf._warmedResumeFrac) - frac) > 0.03) {
-      vf._warmedResumeFrac = frac;
-      const back = Math.floor(warmBytes * 0.3); // start well BEFORE the estimate to absorb VBR time→byte drift
-      const start = Math.max(0, Math.min(Math.max(0, size - warmBytes), Math.floor(size * frac) - back));
-      warm(start, Math.min(size, start + warmBytes));
+    if (!resuming) {
+      this._cancelPlaybackWarmup(vf, 'resume');
+      vf._warmedResumeFrac = null;
+      vf._warmedResumeRange = null;
+    }
+    if (resuming) {
+      const target = Math.max(0, Math.min(size - 1, Math.floor(size * frac)));
+      const previous = vf._warmedResumeRange;
+      const safety = Math.max(1, Math.floor(warmBytes * 0.1));
+      const covered = previous && Date.now() - (Number(previous.at) || 0) < RESUME_WARM_COVERAGE_TTL_MS
+        && target >= previous.start + safety && target < previous.end - safety;
+      if (!covered) {
+        vf._warmedResumeFrac = frac;
+        const back = Math.floor(warmBytes * 0.3); // start well BEFORE the estimate to absorb VBR time→byte drift
+        const start = Math.max(0, Math.min(Math.max(0, size - warmBytes), target - back));
+        const end = Math.min(size, start + warmBytes);
+        vf._warmedResumeRange = { start, end, at: Date.now() };
+        warm('resume', start, end);
+      }
     }
     if (vf._playbackWarmupStarted) return; // head/tail already warmed for this mount
     vf._playbackWarmupStarted = true;
     // HEAD: a fresh start plays from the head (full warm); a resume only needs the container header
     // parsed (its body is the resume window above), so warm just a small head there to keep the cache
     // budget close to the non-resume head+tail.
-    warm(0, resuming ? Math.min(warmBytes, (big ? 16 : 8) * 1024 * 1024) : warmBytes);
+    warm('head', 0, resuming ? Math.min(warmBytes, (big ? 16 : 8) * 1024 * 1024) : warmBytes);
     // TAIL warm — the decisive fix for "plays fine, then buffers after a minute". The browser fMP4
     // remux (ffmpeg) AND Android ExoPlayer both parse the container INDEX before they can stream:
     // mkv Cues / mp4 moov, which for WEB-DL releases usually sits at the END of the file. ffmpeg
@@ -702,15 +806,83 @@ class Pipeline {
     // concurrently with the head warm (own timer), bounded by the cache cap, and skipped when it
     // would overlap the head warm (small files).
     const tailBytes = Math.min(size, capBytes || Infinity, (big ? 48 : 24) * 1024 * 1024);
-    if (tailBytes > 0 && size - tailBytes > warmBytes) warm(size - tailBytes, size);
+    if (tailBytes > 0 && size - tailBytes > warmBytes) warm('tail', size - tailBytes, size);
+  }
+
+  _cancelPlaybackWarmup(vf, key) {
+    const jobs = vf && vf._playbackWarmupJobs;
+    if (!(jobs instanceof Map)) return false;
+    const job = jobs.get(key);
+    if (!job) return false;
+    jobs.delete(key);
+    if (job.timer) clearTimeout(job.timer);
+    if (job.controller && !job.controller.signal.aborted) job.controller.abort();
+    return true;
+  }
+
+  cancelPlaybackWarmups(vf) {
+    const jobs = vf && vf._playbackWarmupJobs;
+    if (!(jobs instanceof Map)) return 0;
+    let cancelled = 0;
+    for (const key of [...jobs.keys()]) if (this._cancelPlaybackWarmup(vf, key)) cancelled++;
+    return cancelled;
+  }
+
+  schedulePlaybackExpiryRebalance(now = Date.now()) {
+    if (this._playbackRuntimeDisposed) return null;
+    let next = Infinity;
+    for (const vf of this.mounts.values()) {
+      if (!vf || !vf.streamable || vf._preparedOnly || (Number(vf._activeStreamReads) || 0) > 0) continue;
+      const touched = Number(vf._playbackTouched) || 0;
+      const expires = touched + ACTIVE_PLAYBACK_GRACE_MS;
+      if (touched > 0 && expires > now) next = Math.min(next, expires);
+    }
+    if (!Number.isFinite(next)) {
+      this.clearPlaybackExpiryRebalance();
+      return null;
+    }
+    const due = next + 5; // cross the strict grace boundary even if the timer fires a few ms early
+    if (this._playbackExpiryTimer && this._playbackExpiryAt === due) return due;
+    this.clearPlaybackExpiryRebalance();
+    this._playbackExpiryAt = due;
+    this._playbackExpiryTimer = setTimeout(() => {
+      this._playbackExpiryTimer = null;
+      this._playbackExpiryAt = 0;
+      const firedAt = Date.now();
+      this.rebalancePlaybackWindows(firedAt);
+      this.schedulePlaybackExpiryRebalance(firedAt);
+    }, Math.max(1, due - now));
+    if (this._playbackExpiryTimer && typeof this._playbackExpiryTimer.unref === 'function') {
+      this._playbackExpiryTimer.unref();
+    }
+    return due;
+  }
+
+  clearPlaybackExpiryRebalance() {
+    if (this._playbackExpiryTimer) clearTimeout(this._playbackExpiryTimer);
+    this._playbackExpiryTimer = null;
+    this._playbackExpiryAt = 0;
+  }
+
+  disposePlaybackRuntime() {
+    this._playbackRuntimeDisposed = true;
+    this.clearPlaybackExpiryRebalance();
   }
 
   rebalancePlaybackWindows(now = Date.now()) {
     const perf = this.performance() || {};
+    for (const vf of this.mounts.values()) {
+      const touched = Number(vf && vf._playbackTouched) || 0;
+      if (vf && vf.streamable && !vf._preparedOnly && (Number(vf._activeStreamReads) || 0) <= 0
+          && touched > 0 && now - touched >= ACTIVE_PLAYBACK_GRACE_MS) {
+        vf._preparedOnly = true;
+      }
+    }
     const active = [...this.mounts.values()]
-      .filter((m) => m && m.streamable && now - (m._touched || 0) < 120000);
+      .filter((m) => mountHasActivePlayback(m, now));
     const activeCount = Math.max(1, active.length);
     for (const vf of active) this._applyPlaybackWindow(vf, activeCount, perf);
+    this.rebalancePreparedWindows(now);
     this.metrics.windowRebalances++;
     return active.length;
   }
@@ -1215,7 +1387,11 @@ class Pipeline {
     // Segment sizes vary by release; the mount default stays small so triage/header peeks
     // never flood the pool.
     const perf = this.performance() || {};
-    const activeMounts = [...this.mounts.values()].filter((m) => Date.now() - (m._touched || 0) < 120000).length + 1;
+    // Size this candidate as one bounded speculative/future viewer, but never count existing
+    // prepare-only mounts. Details-page focus may prepare several titles; those mounts retain their
+    // own capped warm window without shrinking the share of a playing 4K stream.
+    const now = Date.now();
+    const activeMounts = [...this.mounts.values()].filter((m) => mountHasActivePlayback(m, now)).length + 1;
     const win = this._applyPlaybackWindow(vf, activeMounts, perf);
 
     // Bounded gate: verdict within 500ms or we play anyway and keep checking in background.
@@ -1371,6 +1547,9 @@ class Pipeline {
         const res = await this._tryCandidate(candidate, mountOpts);
         if (res.vf && !res.fail) {
           res.vf._touched = Date.now();
+          if (!mountHasActivePlayback(res.vf)) {
+            res.vf._preparedOnly = true;
+          }
           if (candidate.name) res.vf._releaseName = candidate.name;
           this.mounts.set(res.vf.id, res.vf);
           this.mountByUrl.set(res.vf._mountIdentity || mountIdentity(candidate, mountOpts), res.vf.id);
@@ -1601,5 +1780,5 @@ class Pipeline {
 module.exports = {
   Pipeline, GATE_MS, parseWantedTitle, releaseMatches, candidateKey, nzbVerdictKey,
   summarizeAttempts, stubFeatureReason, parseWantedBook, bookMatches,
-  isNonAudioAudiobookMount, firstProbeMsgId,
+  isNonAudioAudiobookMount, firstProbeMsgId, mountHasActivePlayback, ACTIVE_PLAYBACK_GRACE_MS,
 };

@@ -10,8 +10,8 @@
 //
 //   1. press -> ready ......... POST /api/play returns a streamUrl (search + score + NZB +
 //                               mount + bounded health gate). This is "press Play to playable".
-//   2. play -> first byte ..... GET the streamUrl Range bytes=0- (time to first decoded bytes,
-//                               the proxy for time-to-first-frame).
+//   2. play -> first byte ..... GET the streamUrl at the requested resume offset (or byte 0 for a
+//                               fresh play): the proxy for time-to-first-frame.
 //   3. seek -> first byte ..... GET a Range deep in the file (cold-seek responsiveness).
 //   4. audio path ............. the server's playback decision (direct / remux / transcode) and
 //                               whether an AAC-safe transcode is needed for this client's caps.
@@ -23,6 +23,8 @@
 //     --title "Sintel 2010|tt1727587" --title "The Bear S01E01|tt14452776|1|1"
 //
 //   node bench/verify-live.js --base http://10.1.20.11:7777 --title "Dune Part Two 2024"
+//   node bench/verify-live.js --base http://10.1.20.11:7777 --quality 4k --resume-frac 0.45 `
+//     --title "Dune Part Two 2024"
 //
 // A title is "query|imdbid|season|episode" — only the query is required. Pass --title repeatedly.
 // With no --title flags, DEFAULT_TITLES below is used (edit it for your own library).
@@ -43,12 +45,25 @@ const DEFAULT_TITLES = [
 const BUDGET = { ready: 3000, firstByte: 1500, seekByte: 2000, resume: 800 };
 
 function parseArgs(argv) {
-  const out = { base: process.env.TRIBOON_BASE || 'http://localhost:7777', titles: [], token: process.env.TRIBOON_TOKEN || null };
+  const out = {
+    base: process.env.TRIBOON_BASE || 'http://localhost:7777', titles: [],
+    token: process.env.TRIBOON_TOKEN || null, qualityRank: null, resumeFrac: null,
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--base') out.base = argv[++i];
     else if (a === '--title') out.titles.push(argv[++i]);
     else if (a === '--token') out.token = argv[++i];
+    else if (a === '--4k') out.qualityRank = 4;
+    else if (a === '--quality') {
+      const value = String(argv[++i] || '').toLowerCase();
+      out.qualityRank = value === '4k' || value === '2160p' || value === 'uhd' ? 4
+        : value === '1080p' || value === '1080' ? 3 : Number(value);
+      if (![1, 2, 3, 4].includes(out.qualityRank)) throw new Error('--quality must be 4k, 1080p, or rank 1-4');
+    } else if (a === '--resume-frac') {
+      out.resumeFrac = Number(argv[++i]);
+      if (!(out.resumeFrac > 0.02 && out.resumeFrac < 0.985)) throw new Error('--resume-frac must be between 0.02 and 0.985');
+    }
   }
   if (!out.titles.length) out.titles = DEFAULT_TITLES.slice();
   return out;
@@ -141,6 +156,11 @@ async function main() {
 
   for (const spec of args.titles) {
     const t = parseTitle(spec);
+    if (args.qualityRank) {
+      t.maxResolutionRank = args.qualityRank;
+      t.preferResolutionRank = args.qualityRank;
+    }
+    if (args.resumeFrac) t.resumeFrac = args.resumeFrac;
     const row = { title: t.q, ready: null, firstByte: null, seekByte: null, resume: null, method: '?', health: '?', source: '', note: '' };
     try {
       // 1. press -> ready
@@ -154,19 +174,26 @@ async function main() {
       }
       const m = play.json;
       row.source = (m.candidate && m.candidate.name) || m.name || '';
+      if (args.qualityRank === 4 && !/(?:2160p|4k|uhd)/i.test(row.source)) {
+        row.note += ' requested 4K but mounted source is not labelled 2160p/4K/UHD';
+        hardFail++;
+      }
       row.method = (m.playback && m.playback.method) || m.method || (m.streamable ? 'direct' : 'unstreamable');
       const needsAac = !!(m.playback && (m.playback.audioSafe || m.playback.transcodeAudio));
       if (needsAac && /direct/.test(row.method)) row.method += '+aacSafe';
 
       // 2. play -> first byte (real decoded bytes off the front of the file)
       const sUrl = `${base}${m.streamUrl}`;
-      const fb = await request('GET', sUrl, { rangeBytes: 64 * 1024 });
+      const firstStart = args.resumeFrac && m.size > 200000 ? Math.floor(m.size * args.resumeFrac) : 0;
+      const fbHeaders = firstStart > 0 ? { Range: `bytes=${firstStart}-${firstStart + 65535}` } : {};
+      const fb = await request('GET', sUrl, { headers: fbHeaders, rangeBytes: 64 * 1024 });
       row.firstByte = fb.firstByteMs;
       if (fb.status >= 400) { row.note = `stream HTTP ${fb.status}`; hardFail++; }
 
       // 3. seek -> first byte (cold range ~70% in)
       if (m.size > 200000) {
-        const seekStart = Math.floor(m.size * 0.7);
+        const seekFrac = args.resumeFrac && Math.abs(args.resumeFrac - 0.7) < 0.08 ? 0.35 : 0.7;
+        const seekStart = Math.floor(m.size * seekFrac);
         const sk = await request('GET', sUrl, { headers: { Range: `bytes=${seekStart}-${seekStart + 65535}` }, rangeBytes: 64 * 1024 });
         row.seekByte = sk.firstByteMs;
         if (sk.status !== 206 && sk.status !== 200) row.note += ` seek HTTP ${sk.status}`;

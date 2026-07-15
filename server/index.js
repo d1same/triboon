@@ -12,7 +12,7 @@ const { mountNzb } = require('./archive');
 const { Store, VerdictCache } = require('./store');
 const { LibraryDb } = require('./library-db');
 const { Auth, SecureSettings, RateLimiter } = require('./auth');
-const { Pipeline } = require('./pipeline');
+const { Pipeline, mountHasActivePlayback } = require('./pipeline');
 const { TmdbProxy } = require('./tmdb');
 const { normChName: normalizeXmltvChannelName, decodeXmltvPayload, parseXmltvInWorker, shutdownXmltvWorkers } = require('./xmltv');
 const { AudibleProxy } = require('./audible');
@@ -3209,10 +3209,11 @@ function maturityBlockedResponse(ctx) {
 // only in the withheld 200), so this is resource hygiene, not the security boundary — that's the
 // 403 we return instead. Dereference now so the mount frees immediately rather than at the sweep.
 function discardDeniedMount(session, vf) {
-  try { if (vf && typeof vf.cancelReadAhead === 'function') vf.cancelReadAhead(); } catch {}
+  try { releaseMountResources(vf); } catch {}
   try { if (vf) mounts.delete(vf.id); } catch {}
   try { if (vf) for (const [url, id] of pipeline.mountByUrl) if (id === vf.id) pipeline.mountByUrl.delete(url); } catch {}
   try { if (session && session.id) pipeline.sessions.delete(session.id); } catch {}
+  try { pipeline.rebalancePreparedWindows(); } catch {}
 }
 const AUTH_ART_TTL_MS = 6 * 3600 * 1000;
 let authArtCache = { expiresAt: 0, items: [] };
@@ -3496,6 +3497,34 @@ function closeMountHls(vf) {
   for (const sess of vf._hls.values()) closeHlsSession(sess);
   vf._hls.clear();
 }
+// Cancel only this mount's speculative warm jobs; their AbortSignals are independent consumers, so
+// eviction/supersession never aborts an active player sharing the same VFS article fetch.
+function releaseMountResources(vf) {
+  if (!vf) return;
+  try { pipeline.cancelPlaybackWarmups(vf); } catch {}
+  closeMountHls(vf);
+}
+function beginMountPlayerRead(vf, now = Date.now()) {
+  if (!vf) return false;
+  const wasActive = mountHasActivePlayback(vf, now);
+  vf._touched = now;
+  vf._preparedOnly = false;
+  vf._playbackTouched = now;
+  vf._activeStreamReads = (Number(vf._activeStreamReads) || 0) + 1;
+  // Every inactive→active transition must join fair-share accounting immediately. The 1s throttle
+  // applies only to additional ranges from a mount already represented in the active set.
+  if (!wasActive || now - _lastStreamRebalance > 1000) {
+    _lastStreamRebalance = now;
+    pipeline.rebalancePlaybackWindows(now);
+  }
+  return true;
+}
+function endMountPlayerRead(vf, now = Date.now()) {
+  if (!vf) return;
+  vf._playbackTouched = now;
+  vf._activeStreamReads = Math.max(0, (Number(vf._activeStreamReads) || 1) - 1);
+  pipeline.schedulePlaybackExpiryRebalance(now);
+}
 const USER_MOUNT_CAP = 8;
 const SESSION_TTL_MS = 12 * 3600000;
 function rememberMountOwner(vf, uid) {
@@ -3514,20 +3543,25 @@ function sessionProtectedMountIds(now = Date.now()) {
 }
 function trimUserMounts(uid, keepId = null, limit = USER_MOUNT_CAP) {
   if (!uid) return [];
-  const protectedIds = sessionProtectedMountIds();
+  const now = Date.now();
+  const protectedIds = sessionProtectedMountIds(now);
   const owned = [...mounts.values()]
-    .filter((vf) => vf && vf._ownerUid === uid && vf.id !== keepId)
-    .sort((a, b) => (Number(protectedIds.has(a.id)) - Number(protectedIds.has(b.id)))
-      || ((a._touched || a.mountedAt || 0) - (b._touched || b.mountedAt || 0)));
+    .filter((vf) => vf && vf._ownerUid === uid && vf.id !== keepId);
+  const removable = owned
+    .filter((vf) => !protectedIds.has(vf.id) && !mountHasActivePlayback(vf, now))
+    .sort((a, b) => ((a._touched || a.mountedAt || 0) - (b._touched || b.mountedAt || 0)));
   const evicted = [];
-  while (owned.length >= limit) {
-    const vf = owned.shift();
+  let existing = owned.length;
+  while (existing >= limit) {
+    const vf = removable.shift();
     if (!vf) break;
-    if (protectedIds.has(vf.id)) continue;
+    releaseMountResources(vf);
     mounts.delete(vf.id);
     evicted.push(vf.id);
+    existing--;
   }
   for (const [url, id] of pipeline.mountByUrl) if (evicted.includes(id)) pipeline.mountByUrl.delete(url);
+  if (evicted.length) pipeline.rebalancePreparedWindows();
   return evicted;
 }
 // Client capability claims (canPlayType results sent with the play request). Hardware that
@@ -3652,7 +3686,7 @@ function mountPayload(vf, uid, extra = {}) {
   };
 }
 function playbackRuntimeStats(now = Date.now()) {
-  const active = [...mounts.values()].filter((m) => m && m.streamable && now - (m._touched || 0) < 120000);
+  const active = [...mounts.values()].filter((m) => mountHasActivePlayback(m, now));
   const out = {
     activeMounts: active.length,
     files: 0,
@@ -7254,7 +7288,6 @@ Object.assign(H, {
     if (!vf.streamable) return send(ctx.res, 409, { error: 'mount is not streamable', tags: vf.tags });
     const _now = Date.now();
     vf._touched = _now;
-    if (_now - _lastStreamRebalance > 1000) { _lastStreamRebalance = _now; pipeline.rebalancePlaybackWindows(_now); }
     try {
       ctx.req.setTimeout(120000);
       ctx.res.setTimeout(120000);
@@ -7295,6 +7328,8 @@ Object.assign(H, {
     const readPriority = ['background', 'readAhead', 'health'].includes(explicitPriority)
       ? explicitPriority
       : (start === 0 ? 'startup' : (sequentialRange ? 'playback' : 'seek'));
+    const playerRead = !['background', 'readAhead', 'health'].includes(readPriority);
+    if (playerRead) beginMountPlayerRead(vf, _now);
     const abortRead = () => {
       if (!readSignal.aborted) readController.abort();
       // Only a real player seek/interrupt should cancel the shared mount's read-ahead. A closing
@@ -7346,6 +7381,7 @@ Object.assign(H, {
     } finally {
       ctx.req.off('close', stopReqRead);
       ctx.res.off('close', stopResRead);
+      if (playerRead) endMountPlayerRead(vf);
     }
     if (readSignal.aborted) {
       try { if (!ctx.res.destroyed) ctx.res.destroy(); } catch {}
@@ -7585,7 +7621,7 @@ Object.assign(H, {
     if (!detectFfprobe()) return send(ctx.res, 200, { available: false, audio: [], subs: [], releaseSubs, duration: null });
     if (vf._tracks) return send(ctx.res, 200, vf._tracks);
     try {
-      const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.user.id, vf.id)}`;
+      const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.user.id, vf.id)}&priority=background`;
       const t = await probeTracks(selfUrl);
       vf._tracks = { available: true, ...t, releaseSubs };
       send(ctx.res, 200, vf._tracks);
@@ -7622,6 +7658,7 @@ Object.assign(H, {
     headers['content-length'] = String(end - start);
     ctx.res.writeHead(code, headers);
     if (ctx.req.method === 'HEAD') return ctx.res.end();
+    beginMountPlayerRead(vf);
     const ac = new AbortController();
     ctx.req.once('close', () => { if (!ctx.req.complete) ac.abort(); });
     ctx.res.once('close', () => { if (!ctx.res.writableEnded) ac.abort(); });
@@ -7630,7 +7667,7 @@ Object.assign(H, {
         if (ac.signal.aborted || ctx.res.destroyed) break;
         if (!ctx.res.write(chunk)) await new Promise((r) => ctx.res.once('drain', r));
       }
-    } catch {}
+    } catch {} finally { endMountPlayerRead(vf); }
     if (!ctx.res.writableEnded) ctx.res.end();
   },
 
@@ -7647,7 +7684,7 @@ Object.assign(H, {
       return vf._chapters ? send(ctx.res, 200, vf._chapters) : send(ctx.res, 404, { error: 'no chapter data' });
     }
     try {
-      const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.user.id, vf.id)}`;
+      const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.user.id, vf.id)}&priority=background`;
       const chaps = await probeChapters(selfUrl);
       vf._chapters = chaps; // cache (null included) so a chapterless book isn't re-probed every open
       if (!chaps) return send(ctx.res, 404, { error: 'no chapter data' });
@@ -8767,16 +8804,17 @@ function sweep(now = Date.now()) {
   const evicted = [];
   const protectedIds = sessionProtectedMountIds(now);
   const idle = [...mounts.values()].filter((vf) =>
-    !protectedIds.has(vf.id) && now - (vf._touched || vf.mountedAt || 0) > MOUNT_IDLE_MS);
-  for (const vf of idle) { closeMountHls(vf); mounts.delete(vf.id); evicted.push(vf.id); }
+    !protectedIds.has(vf.id) && !mountHasActivePlayback(vf, now)
+      && now - (vf._touched || vf.mountedAt || 0) > MOUNT_IDLE_MS);
+  for (const vf of idle) { releaseMountResources(vf); mounts.delete(vf.id); evicted.push(vf.id); }
   if (mounts.size > MOUNT_CAP) {
     const removable = [...mounts.values()]
-      .filter((vf) => !protectedIds.has(vf.id))
+      .filter((vf) => !protectedIds.has(vf.id) && !mountHasActivePlayback(vf, now))
       .sort((a, b) => ((a._touched || a.mountedAt || 0) - (b._touched || b.mountedAt || 0)));
     let overflow = mounts.size - MOUNT_CAP;
     for (const vf of removable) {
       if (overflow <= 0) break;
-      closeMountHls(vf);
+      releaseMountResources(vf);
       mounts.delete(vf.id);
       evicted.push(vf.id);
       overflow--;
@@ -8794,7 +8832,9 @@ function sweep(now = Date.now()) {
     const oldest = [...geoCache.entries()].sort((a, b) => ((a[1] && a[1].at) || 0) - ((b[1] && b[1].at) || 0));
     for (const [key] of oldest.slice(0, geoCache.size - 500)) geoCache.delete(key);
   }
-  if (evicted.length) pipeline.rebalancePlaybackWindows(now);
+  if (evicted.length) {
+    pipeline.rebalancePlaybackWindows(now);
+  }
   auth.sweepQuickConnect();
   if (evicted.length) console.log(`[sweep] evicted ${evicted.length} idle mount(s), ${mounts.size} live`);
   return evicted;
@@ -8841,6 +8881,7 @@ if (require.main === module) {
 
 async function shutdown() {
   clearInterval(sweepTimer);
+  pipeline.disposePlaybackRuntime();
   clearPendingIptvWarmSoon();
   if (iptvWarmTimer) clearTimeout(iptvWarmTimer);
   iptvWarmTimer = null;
@@ -8848,7 +8889,7 @@ async function shutdown() {
   closeAllIptvLiveStreams('shutdown');
   await shutdownXmltvGuideJobs();
   cleanupYtCookieFiles();
-  for (const vf of mounts.values()) closeMountHls(vf); // kill HLS ffmpeg + delete temp segment dirs
+  for (const vf of mounts.values()) releaseMountResources(vf); // cancel warm jobs + HLS ffmpeg/temp dirs
   if (pool) { pool.close(); pool = null; }
   libraryDb.close();
   store.close();

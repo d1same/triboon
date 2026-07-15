@@ -11,6 +11,12 @@ param(
   [int]$SeekDelayMs = 1800,
   [int]$VodSettleSeconds = 28,
   [string]$VodKey = "tmdb:movie:1226863",
+  [ValidateRange(1, 4)]
+  [int]$VodQualityRank = 3,
+  [ValidateRange(0, 86400)]
+  [int]$VodResumeSeconds = 0,
+  [ValidateRange(0, 172800)]
+  [int]$VodDurationSeconds = 0,
   [string]$ApkPath = "android\app\build\outputs\apk\debug\app-debug.apk",
   [switch]$InstallApk,
   [switch]$NoScreenshot
@@ -21,12 +27,6 @@ $ErrorActionPreference = "Stop"
 $repo = Resolve-Path (Join-Path $PSScriptRoot "..")
 $adb = Join-Path $env:LOCALAPPDATA "Android\Sdk\platform-tools\adb.exe"
 if (!(Test-Path $adb)) { throw "adb not found at $adb" }
-
-if ([string]::IsNullOrWhiteSpace($Device)) {
-  $connected = & $adb devices | Select-String -Pattern "^\S+\s+device$" | ForEach-Object { ($_ -split "\s+")[0] }
-  if (@($connected).Count -eq 1) { $Device = @($connected)[0] }
-  else { throw "Set -Device or TRIBOON_ADB_DEVICE to the target Android TV ADB id." }
-}
 
 $failures = New-Object System.Collections.Generic.List[string]
 function Add-Failure([string]$Message) {
@@ -43,6 +43,52 @@ function Invoke-Adb {
   if ($LASTEXITCODE -ne 0) { throw "adb failed: $($Args -join ' ')" }
   return $out
 }
+function Get-AdbDeviceInventory {
+  $output = @(& $adb devices 2>&1)
+  $exitCode = $LASTEXITCODE
+  if ($exitCode -ne 0) {
+    throw "Android stress preflight: adb devices failed with exit code $exitCode."
+  }
+  $inventory = New-Object System.Collections.Generic.List[object]
+  foreach ($line in $output) {
+    $parts = ([string]$line).Trim() -split "\s+"
+    if ($parts.Count -ge 2 -and $parts[0] -ne "List") {
+      $inventory.Add([pscustomobject]@{ serial = $parts[0]; state = $parts[1] }) | Out-Null
+    }
+  }
+  return $inventory.ToArray()
+}
+function Resolve-ReadyAndroidDevice([string]$RequestedDevice) {
+  $inventory = @(Get-AdbDeviceInventory)
+  if ([string]::IsNullOrWhiteSpace($RequestedDevice)) {
+    $ready = @($inventory | Where-Object { $_.state -eq "device" })
+    if ($ready.Count -ne 1) {
+      $summary = if ($inventory.Count) {
+        ($inventory | ForEach-Object { "$($_.serial)=$($_.state)" }) -join ", "
+      } else { "none" }
+      throw "Android stress preflight: expected exactly one ready ADB device, found $($ready.Count) (connected: $summary). Set -Device or TRIBOON_ADB_DEVICE."
+    }
+    $RequestedDevice = $ready[0].serial
+  }
+  $entry = $inventory | Where-Object { $_.serial -eq $RequestedDevice } | Select-Object -First 1
+  if (!$entry) {
+    throw "Android stress preflight: device '$RequestedDevice' is not listed by adb. Start or reconnect it, then rerun."
+  }
+  if ($entry.state -ne "device") {
+    throw "Android stress preflight: device '$RequestedDevice' is '$($entry.state)', not ready. Reconnect or restart it, then rerun."
+  }
+  $bootOutput = @(& $adb -s $RequestedDevice shell getprop sys.boot_completed 2>&1)
+  $bootExit = $LASTEXITCODE
+  $bootState = (($bootOutput | ForEach-Object { [string]$_ }) -join "").Trim()
+  if ($bootExit -ne 0) {
+    throw "Android stress preflight: device '$RequestedDevice' stopped responding while checking boot state."
+  }
+  if ($bootState -ne "1") {
+    throw "Android stress preflight: device '$RequestedDevice' is connected but has not finished booting (sys.boot_completed='$bootState')."
+  }
+  return $RequestedDevice
+}
+$Device = Resolve-ReadyAndroidDevice $Device
 function Send-Key([string]$Key) {
   Invoke-Adb shell input keyevent $Key | Out-Null
 }
@@ -178,6 +224,9 @@ $report = [ordered]@{
   liveZaps = $LiveZaps
   pipLoops = $PipLoops
   vodSeeks = $VodSeeks
+  vodQualityRank = $VodQualityRank
+  vodResumeSeconds = $VodResumeSeconds
+  vodDurationSeconds = $VodDurationSeconds
   sections = [ordered]@{}
   failures = $failures
 }
@@ -198,6 +247,16 @@ $boot = Invoke-CdpJson @"
 (async () => {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   for (let i = 0; i < 60; i++) {
+    const href = location.href;
+    if (href.startsWith('chrome-error://')) {
+      return { ok: false, reason: 'server-unreachable', href, cards: 0 };
+    }
+    const gate = document.querySelector('#gateSetup.open,#gateLogin.open,#gateQc.open,#gateInvite.open,#gateProfiles.open,#gatePin.open');
+    if (gate) {
+      let hasToken = false;
+      try { hasToken = !!(localStorage.getItem('triboon.token') || sessionStorage.getItem('triboon.token')); } catch {}
+      return { ok: false, reason: 'app-gate', gate: gate.id, href, hasToken, cards: 0 };
+    }
     const cards = document.querySelectorAll('.pcard,.card,.poster,.mediaCard').length;
     if (typeof S !== 'undefined' && !S._booting && cards > 0) {
       // An available app update pops a once-per-launch modal that traps D-pad nav (it steals focus to
@@ -210,11 +269,32 @@ $boot = Invoke-CdpJson @"
     }
     await wait(500);
   }
-  return { ok: false, view: typeof S !== 'undefined' ? S.view : null, cards: document.querySelectorAll('.pcard,.card,.poster,.mediaCard').length };
+  return {
+    ok: false, reason: 'home-not-ready', href: location.href,
+    view: typeof S !== 'undefined' ? S.view : null,
+    cards: document.querySelectorAll('.pcard,.card,.poster,.mediaCard').length
+  };
 })()
 "@ -AwaitPromise
 $report.sections['boot'] = $boot
-if (!$boot.ok) { Add-Failure "Boot did not reach a focusable home state" }
+if (!$boot.ok) {
+  if ($boot.reason -eq 'server-unreachable') {
+    throw "Android stress preflight: the app could not reach its configured Triboon server ($($boot.href)). Start the configured server and verify the device route, then rerun."
+  }
+  if ($boot.reason -eq 'app-gate') {
+    $hint = switch ($boot.gate) {
+      'gateLogin' { 'sign in on the Android device' }
+      'gateSetup' { 'finish server setup' }
+      'gateProfiles' { 'select a profile' }
+      'gatePin' { 'unlock the selected profile' }
+      'gateQc' { 'finish or cancel Quick Connect' }
+      'gateInvite' { 'finish or cancel the invite flow' }
+      default { 'finish the open app gate' }
+    }
+    throw "Android stress preflight: Triboon is not at an authenticated home screen ($($boot.gate)); $hint, then rerun."
+  }
+  throw "Android stress preflight: boot did not reach a configured, authenticated, focusable home state (view=$($boot.view), cards=$($boot.cards), href=$($boot.href))."
+}
 
 $page = Invoke-CdpJson @"
 (async () => {
@@ -369,7 +449,11 @@ $multiLivePrep = Invoke-CdpJson @"
   await wait(1000);
   switchView('livetv', false);
   for (let n = 0; n < 35; n++) {
-    if (document.getElementById('chMultiBtn')) break;
+    const candidate = document.getElementById('chMultiBtn');
+    // The launcher is always present in the shell, but remains hidden until the Live TV
+    // surface finishes loading. Waiting only for DOM existence races the async channel render
+    // and sends DPAD_CENTER to the previous focus target.
+    if (candidate && candidate.offsetParent !== null) break;
     await wait(180);
   }
   const btn = document.getElementById('chMultiBtn');
@@ -575,16 +659,47 @@ $vodStart = Invoke-CdpJson @"
   if (!S.rows || !S.rows.length) await loadRows();
   await wait(500);
   let item = (S.rows || []).flatMap((r) => r.items || []).find((x) => x && x.key === '$VodKey');
+  if (!item && ($VodQualityRank === 4 || $VodResumeSeconds > 0)) {
+    return { ok: false, error: 'exact -VodKey is required for 4K/Continue Watching verification', key: '$VodKey' };
+  }
   if (!item) item = (S.rows || []).flatMap((r) => r.items || []).find((x) => x && x.type !== 'live' && x.tmdbId);
   if (!item) return { ok: false, error: 'no VOD item found', rows: S.rows ? S.rows.length : 0 };
-  item = { ...item, qualityRank: 3 };
+  const requestedResume = $VodResumeSeconds;
+  const existingWatch = S.watchMap && item.key ? S.watchMap[item.key] : null;
+  const duration = $VodDurationSeconds || +(existingWatch && existingWatch.duration) || +item.duration || 0;
+  if (requestedResume > 0 && duration <= requestedResume) {
+    return { ok: false, error: '4K Continue Watching resume requires -VodDurationSeconds greater than -VodResumeSeconds', duration, requestedResume };
+  }
+  item = { ...item, qualityRank: $VodQualityRank };
+  if (requestedResume > 0) {
+    S.watchMap = S.watchMap || {};
+    S.watchMap[item.key] = { ...(existingWatch || {}), key: item.key, position: requestedResume, duration, watched: false, meta: item };
+    item = { ...item, resume: requestedResume, duration };
+  }
   await play(item);
-  return { ok: true, key: item.key, title: item.title, type: item.type, originalLanguage: item.originalLanguage || '' };
+  return {
+    ok: true, key: item.key, title: item.title, type: item.type,
+    originalLanguage: item.originalLanguage || '', requestedQualityRank: $VodQualityRank,
+    requestedResume, duration, resumeFrac: requestedResume > 0 ? requestedResume / duration : 0
+  };
 })()
 "@ -AwaitPromise
 $report.sections['vodStart'] = $vodStart
 if (!$vodStart.ok) { Add-Failure "VOD did not start: $($vodStart.error)" }
 Start-Sleep -Seconds $VodSettleSeconds
+$vodSettled = App-State
+$report.sections['vodContinueWatching'] = [ordered]@{ launch = $vodStart; settled = $vodSettled }
+if ($VodQualityRank -eq 4 -and $vodSettled.playing -and $vodSettled.playing.name -notmatch '(?i)(2160p|4k|uhd)') {
+  Add-Failure "Requested 4K VOD but mounted source was not labelled 2160p/4K/UHD: $($vodSettled.playing.name)"
+}
+if ($VodResumeSeconds -gt 0) {
+  $observedResume = if ($vodSettled.playing) {
+    [Math]::Max([double]$vodSettled.playing.nativePos, [double]$vodSettled.playing.startOffset)
+  } else { 0 }
+  if (!$vodStart.resumeFrac -or $observedResume -lt [Math]::Max(0, $VodResumeSeconds - 15)) {
+    Add-Failure "Continue Watching did not reach the requested resume timestamp ($VodResumeSeconds s; observed $observedResume s)"
+  }
+}
 
 $seekSamples = New-Object System.Collections.Generic.List[object]
 for ($i = 0; $i -lt $VodSeeks; $i++) {

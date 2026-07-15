@@ -9,7 +9,7 @@ const http = require('http');
 const { encodePart, decode, crc32 } = require('../server/yenc');
 const { parseNzb, pickPrimaryFile } = require('../server/nzb');
 const { NntpPool, ProviderPool } = require('../server/nntp');
-const { VirtualFile } = require('../server/vfs');
+const { VirtualFile, SharedCacheBudget } = require('../server/vfs');
 const { createMockNntp } = require('./mock-nntp');
 
 // ---------- helpers ----------
@@ -253,6 +253,33 @@ test('vfs: decoded segment cache is capped by bytes, not only segment count', as
   assert.strictEqual(Buffer.concat(chunks).length, 180000);
   assert.ok(vf.cacheBytes <= vf.cacheMaxBytes, `cache kept ${vf.cacheBytes} bytes over ${vf.cacheMaxBytes}`);
   assert.ok(vf.cache.size <= 2, 'byte cap should evict older decoded segments even when segment cap is high');
+});
+
+test('vfs: multi-volume decoded caches share one aggregate byte budget', async () => {
+  const { data, articles, nzb } = makeRelease('Shared.Archive.Cache.Test.mkv', 180000, 45000);
+  const pool = {
+    body: async (msgId) => articles.get(msgId),
+    stat: async () => true,
+  };
+  const shared = new SharedCacheBudget(90000);
+  const firstVolume = new VirtualFile(pool, nzb, { readAhead: 0, cacheSegments: 24, cacheBytes: 90000 });
+  const secondVolume = new VirtualFile(pool, nzb, { readAhead: 0, cacheSegments: 24, cacheBytes: 90000 });
+  firstVolume.setSharedCacheBudget(shared);
+  secondVolume.setSharedCacheBudget(shared);
+  await Promise.all([firstVolume.mount(), secondVolume.mount()]);
+
+  const first = [];
+  for await (const chunk of firstVolume.read(0, data.length)) first.push(chunk);
+  const second = [];
+  for await (const chunk of secondVolume.read(0, data.length)) second.push(chunk);
+
+  assert.ok(Buffer.concat(first).equals(data) && Buffer.concat(second).equals(data),
+    'cross-volume eviction never changes bytes returned to the current reader');
+  const aggregate = firstVolume.cacheBytes + secondVolume.cacheBytes;
+  assert.ok(aggregate <= shared.maxBytes, `aggregate cache kept ${aggregate} bytes over ${shared.maxBytes}`);
+  assert.strictEqual(shared.bytes, aggregate, 'the coordinator mirrors the sum retained by every participating volume');
+  assert.ok(firstVolume.cacheBytes < firstVolume.cacheMaxBytes,
+    'later volume reads evict older decoded articles from earlier volumes instead of multiplying the cap');
 });
 
 test('vfs: playback waits temporarily widen read-ahead within the stream cap', async () => {

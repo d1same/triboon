@@ -9,7 +9,7 @@ const {
   parseNzb, fileNameFromSubject, pickPrimaryFile, nzbPassword,
   episodeInName, episodeLikeName, episodeSelectionError,
 } = require('./nzb');
-const { NzbFileStream } = require('./vfs');
+const { NzbFileStream, SharedCacheBudget } = require('./vfs');
 const { parseRarVolumes, RAR4_SIG, RAR5_SIG } = require('./rar');
 const { parseZip } = require('./zip');
 
@@ -294,7 +294,12 @@ async function mountNzb(pool, nzbXml, opts = {}) {
   const volumeEntries = orderVolumes(candidates);
   if (!volumeEntries.length) return mountFlat(pool, nzb, opts);
 
-  const vols = volumeEntries.map((f) => new NzbFileStream(pool, f, opts));
+  const sharedCacheBudget = new SharedCacheBudget(opts.cacheBytes);
+  const vols = volumeEntries.map((f) => {
+    const v = new NzbFileStream(pool, f, opts);
+    v.setSharedCacheBudget(sharedCacheBudget);
+    return v;
+  });
   try {
     await Promise.all(vols.map((v) => v.mount()));
   } catch (e) {

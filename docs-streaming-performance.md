@@ -186,7 +186,8 @@ does not blindly download several minutes into a separate disk cache. Instead,
 it converts capacity into a bounded article read-ahead window:
 
 ```text
-activeMounts = mounts touched in the last 120 seconds + current mount
+activeMounts = mounts with a real non-background /api/stream read active now,
+  or whose last real player range ended in the last 120 seconds, + current candidate
 usable = floor(totalProviderConnections * 0.85)
 reserve = ceil(usable * startupReservePct)
 perStreamBudget = floor((usable - reserve) / activeMounts)
@@ -208,6 +209,28 @@ The 4K byte cap is ~1 GB but bounded to ~20% of system RAM so smaller self-hoste
 boxes stay safe (they get a proportionally shallower buffer). Do not revert to a
 fixed-bitrate byte budget without re-checking this latency behavior + the P14 contract.
 
+Lifecycle `_touched` activity is not a viewer: focus prepare, track/subtitle probes,
+health work, and explicit `background`/`readAhead` stream reads must not divide an active
+player's share. A prepared-only mount keeps a deliberately small speculative window
+(read-ahead 4; decoded cache at most 96 MB for 1080p or 192 MB for 4K). Its first real
+player read (including a direct multi-file audiobook track) promotes the parent mount
+immediately into normal fair-share sizing. All prepared mounts also divide one separate
+speculative pool: 10% of host RAM with a 96 MB low-memory floor and a 512 MB ceiling.
+This lets several Continue Watching/detail cards prepare without collapsing the buffer of a movie already
+playing or retaining several gigabytes across focused cards. When the last player range
+ends, one deduplicated unref timer starts the 120-second grace; expiry demotes that mount
+to the speculative pool and automatically restores larger windows to any long-lived
+survivors. Shutdown disposes the timer so late stream-finally cleanup cannot recreate it.
+Owner-cap trimming and the 45-minute idle/overflow sweep also exclude mounts with a live
+player reader, even if their last lifecycle touch is old; an in-progress long Range can
+never lose its mount and turn the player's next seek into a 404.
+
+For a multi-volume RAR/ZIP, `cacheMaxBytes` is one mount-wide decoded-byte budget shared
+by every volume, not a full allowance for each `.rar`/`.r00`/`.partN` VFS. The shared FIFO
+may evict an older article from another volume while the current read retains the newest
+article it needs. This preserves byte-exact playback while preventing archive-part count
+from multiplying memory retention.
+
 **Head + tail warmup.** On mount commit (and on focus pre-mount), `_startPlaybackWarmup`
 warms the cache at the low-priority read-ahead lane from BOTH ends: the head (96 MB for 4K
 / 32 MB for 1080p) and the tail (48 MB / 24 MB). The tail warm is essential, not optional:
@@ -218,6 +241,10 @@ uncached fetch, so the remux trickles below the play bitrate for ~30 s and the p
 startup buffer drains ("plays fine, then buffers after a minute"). Measured live: warming
 head+tail cut a 36 s / 21 Mbps cold remux start to <4 s / 240 Mbps. Covered by
 `test/phase2.test.js` ("playback warmup pre-fetches BOTH the head and the tail").
+Head, tail, and resume warm reads are individually tracked and carry their own abort
+signals. A newer resume position cancels the obsolete resume warm, and mount eviction,
+owner-cap trimming, denied-play cleanup, and shutdown cancel all remaining speculative
+jobs without cancelling an active player that shares an article fetch.
 
 **Resume-offset warmup.** A Continue Watching resume makes the player seek straight to a
 deep mid-file byte offset that the head/tail warm never primed — on Android (native
@@ -228,8 +255,13 @@ on a resume it warms only a small head (the head is not played, just parsed) so 
 stays close to head+tail. The server cannot compute the offset itself (no track probe at
 prepare/play), so the CLIENT — which knows the duration from watch state — sends `resumeFrac`
 on `/api/play` and `/api/prepare` (so a focus pre-mount primes it before Play). It re-warms
-once if the resume position changed, and simply does nothing when duration is unknown
-(never a regression). Covered by `test/phase2.test.js` ("playback warmup warms the RESUME
+when the estimated target byte falls outside the safely covered prior interval; the old
+fixed percentage comparison was unsafe because 1% of an 80 GB file is far larger than a
+96 MB warm window. Coverage lasts only 120 seconds and is invalidated by a real cache-cap
+shrink, because FIFO playback may have evicted those bytes. Start Over cancels any live
+resume warm and clears the completed-position marker so that position can be warmed again
+later. It simply does nothing when duration is unknown (never a regression). Covered by
+`test/phase2.test.js` ("playback warmup warms the RESUME
 byte window"). Like head+tail it must stay on the read-ahead lane and obey the cache cap.
 
 Large files use the 4K window; smaller files use the 1080p window.

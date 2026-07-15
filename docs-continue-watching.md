@@ -28,6 +28,12 @@ flowchart LR
 - `web/index.html`
   - `saveWatch()` writes resume position, duration, metadata, and
     `qualityRank`.
+  - Final checkpoints run immediately on pause, Back/Stop, EOF/Up Next,
+    Cast pause, page hide, mobile visibility loss, and Android backgrounding.
+    Identical lifecycle beacons are coalesced and final requests use
+    `keepalive`; Multiview VOD slots follow the same contract.
+  - `preferredQualityRankForItem()` owns the durable title/show preference;
+    `qualityRankForItem()` applies only the current device's effective cap.
   - `loadWatchState()`, `buildCwItems()`, `continueWatchingIdentity()`,
     and `dedupeContinueWatchingItems()` build the Home row.
   - `cwOp()`, `homeFocusSnapshot()`, and `restoreHomeFocus()` keep row focus
@@ -62,6 +68,9 @@ flowchart LR
 ## Quality Rules
 
 - The selected source class is saved as `qualityRank` in watch metadata.
+- Device-only safety caps are not durable preferences. A browser may request
+  1080p when web 4K is disabled, but that effective cap must not overwrite the
+  saved 4K rank that Android uses later.
 - `qualityRank` is title/show scoped through `qualityTitleKey()`, so a TV show
   selection applies to remaining episodes.
 - Continue Watching cards, `/api/watch/next` next-up cards, the Up Next popup,
@@ -69,6 +78,18 @@ flowchart LR
 - A 4K preference should request 4K sources first and must not silently fall
   back to a local 1080p file unless the user changes the quality choice or no
   quality preference exists.
+
+## Trakt Resume Rules
+
+- Trakt imports may contain only a watched percentage, with no position or
+  duration. The client sends that bounded fraction to `/api/prepare` and
+  `/api/play` so the server warms the matching byte window.
+- Web playback converts the fraction after metadata supplies duration.
+- Android sends `startFraction` through the native bridge. Direct playback
+  seeks once ExoPlayer knows duration; remux/transcode performs one
+  token-guarded server-seek remount at the computed absolute timestamp.
+- Native progress, READY state, and the loading surface must not report a false
+  zero position before that resume handoff completes.
 
 ## Focus Rules
 
@@ -94,4 +115,11 @@ When changing Continue Watching, verify:
    Resume plays the exact episode.
 6. Trakt-imported progress still appears for every active profile without
    overwriting stronger local progress.
-7. `npm.cmd test` passes after behavior changes.
+7. Percent-only Trakt progress resumes on Android for both direct and
+   remux/transcode paths without briefly publishing position zero.
+8. A browser's automatic 1080p cap does not replace a durable 4K preference;
+   the next Android Continue Watching request still asks for 4K.
+9. Pause or stop web, native direct/remux/transcode, Cast, and Multiview VOD;
+   the latest position is immediately visible in Continue Watching, including
+   after backgrounding or closing the app.
+10. `npm.cmd test` passes after behavior changes.

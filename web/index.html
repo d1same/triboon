@@ -6233,6 +6233,11 @@ function prefetchSources(it, delay = 700) {
   }, delay);
 }
 let prepareTimer = null;
+function traktResumeFractionForItem(it) {
+  if (!it || it.type === 'live' || it._startOver) return 0;
+  const pct = +it._traktPct || 0;
+  return pct > 2 ? Math.max(0, Math.min(0.96, pct / 100)) : 0;
+}
 function playbackRequestBody(it, picked = null, qRank = qualityRankForItem(it)) {
   const ids = sourceIdentityFor(it);
   const body = { q: queryFor(it), pick: picked && picked.name, pickKey: picked && picked.pickKey, caps: clientCaps() };
@@ -6269,9 +6274,8 @@ function playbackRequestBody(it, picked = null, qRank = qualityRankForItem(it)) 
   // above can't compute resumeFrac and the deep resume window stayed cold → 20-30s resume lag. The
   // player seeks to _traktPct% on start (see play-time seek), so send that fraction directly to warm
   // the same window server-side.
-  if (body.resumeFrac === undefined && +it._traktPct > 2) {
-    body.resumeFrac = Math.max(0, Math.min(0.96, (+it._traktPct) / 100));
-  }
+  const traktResumeFrac = traktResumeFractionForItem(it);
+  if (body.resumeFrac === undefined && traktResumeFrac > 0) body.resumeFrac = traktResumeFrac;
   return body;
 }
 function preparePlaybackSource(it, delay = 900) {
@@ -6543,7 +6547,10 @@ function globalQualityKey() {
 }
 function globalQualityPref() { try { return normalizeQualityRank(localStorage.getItem(globalQualityKey())); } catch { return null; } }
 function saveGlobalQualityPref(rank) { const q = normalizeQualityRank(rank); if (q) { try { localStorage.setItem(globalQualityKey(), String(q)); } catch {} syncProfilePrefsUp(); } }
-function qualityRankForItem(it) {
+// The title/profile preference is durable across devices. Device decode limits are applied only
+// by qualityRankForItem() when building an actual request; otherwise a browser's 1080p safety cap
+// would overwrite a saved 4K choice and make Continue Watching request 1080p on Android later.
+function preferredQualityRankForItem(it) {
   if (!it || it.type === 'live') return null;
   if (it._local && !it.tmdbId) return null;
   const detailMatches = S.detailItem && qualityTitleKey(S.detailItem) === qualityTitleKey(it);
@@ -6560,6 +6567,10 @@ function qualityRankForItem(it) {
   // server pipeline's existing relax-fallback remains the safety net there.
   const known4k = (detailMatches && S.detailItem) ? S.detailItem._has4k : it._has4k;
   if (q === 4 && known4k === false) q = 3;
+  return q || null;
+}
+function qualityRankForItem(it) {
+  let q = preferredQualityRankForItem(it);
   // Browser cap: a plain browser can't decode 4K HEVC, so 4K there means a CPU-bound live transcode
   // that buffers. Default browser playback to 1080p (direct-playable H.264) unless the viewer opted
   // into 4K-on-web. The Android app uses native ExoPlayer (real 4K decode), so it's never capped.
@@ -6654,6 +6665,7 @@ async function play(it, pick, opts = {}) {
   }
   const picked = pick && typeof pick === 'object' ? pick : (pick ? { name: pick } : null);
   const pickRank = picked ? normalizeResolutionRank(picked.resolutionRank) : null;
+  const preferredRank = pickRank !== null ? pickRank : preferredQualityRankForItem(it);
   const qRank = pickRank !== null ? pickRank : qualityRankForItem(it);
   // Local-first: if this exact title/episode exists in a scanned library, play the file on
   // disk instead of searching usenet, unless the chosen quality asks for another source class.
@@ -6680,9 +6692,7 @@ async function play(it, pick, opts = {}) {
       return await playLocal(localExact, { replacementStarted: true, nativeFirst, playTicket });
     }
     const body = playbackRequestBody(it, picked, qRank);
-    if (qRank !== null) {
-      it.qualityRank = qRank;
-    }
+    if (preferredRank !== null) it.qualityRank = preferredRank;
     const r = await api('/api/play', { method: 'POST', body });
     if (S._playTicket !== playTicket) return;
     if (S.view !== 'player') return; // user backed out of the loading screen
@@ -6971,7 +6981,7 @@ function epItemOf(show, season, ep) {
     overview: ep.overview || show.overview,
     backdrop: img(ep.still_path) || show.backdrop,
     poster: show.poster,
-    qualityRank: qualityRankForItem(show),
+    qualityRank: preferredQualityRankForItem(show),
     tmdbId: show.tmdbId, imdbId: show.imdbId, tvdbId: show.tvdbId, originalLanguage: show.originalLanguage, type: 'episode', airDate: ep.air_date || '',
     resume: (S.watchMap && S.watchMap[epKeyOf(show, season.season_number, ep.episode_number)] &&
              !S.watchMap[epKeyOf(show, season.season_number, ep.episode_number)].watched)
@@ -6997,7 +7007,7 @@ function epTarget(show, sNum, eNum, resume) {
     title: `${show.title} — S${pad2(sNum)}E${pad2(eNum)}`, type: 'episode',
     tmdbId: show.tmdbId, imdbId: show.imdbId, tvdbId: show.tvdbId, originalLanguage: show.originalLanguage,
     year: show.year, genre: `S${pad2(sNum)}E${pad2(eNum)}`, rating: show.rating, overview: show.overview,
-    backdrop: show.backdrop, poster: show.poster, qualityRank: qualityRankForItem(show), resume: resume || 0,
+    backdrop: show.backdrop, poster: show.poster, qualityRank: preferredQualityRankForItem(show), resume: resume || 0,
   };
   const loc = S.localMap && S.localMap[item.key];
   return loc ? { ...item, _local: loc } : item;
@@ -7006,7 +7016,7 @@ function wlMeta(it) {
   return { title: it.title, year: it.year, genre: it.genre, rating: it.rating, type: it.type,
     tmdbId: it.tmdbId, imdbId: it.imdbId, tvdbId: it.tvdbId,
     poster: durableArtUrl(it.poster), backdrop: durableArtUrl(it.backdrop), overview: it.overview, q: it.q, cert: it.cert,
-    originalLanguage: it.originalLanguage, qualityRank: qualityRankForItem(it) };
+    originalLanguage: it.originalLanguage, qualityRank: preferredQualityRankForItem(it) };
 }
 // Restricted profiles: the watchlist/calendar are ACCOUNT-level lists (a parent's adds), not
 // query-filtered like catalog rows — verify each title's real certification (the same bar as
@@ -7584,7 +7594,7 @@ function localEpisodeItemOf(show, ep) {
   const item = mapLocal(show._lib, ep, title);
   return { ...item, type: 'episode', q: `${show.title} ${code}`, season: ep.s, episode: ep.e,
     genre: code, backdrop: item.backdrop || show.backdrop, poster: item.poster || show.poster,
-    qualityRank: qualityRankForItem(show) };
+    qualityRank: preferredQualityRankForItem(show) };
 }
 function pickLocalShowPlayTarget(show, episodes) {
   const items = (episodes || []).slice().sort((a, b) => a.s - b.s || a.e - b.e).map((ep) => localEpisodeItemOf(show, ep));
@@ -8825,6 +8835,10 @@ function saveMultiViewVodProgress(i, final = false) {
     profile: S.profile ? S.profile.id : undefined,
     meta: wlMeta(slot.item),
   };
+  const finalKey = final ? `${payload.position}:${payload.duration}:${payload.watched ? 1 : 0}` : '';
+  if (final && slot._finalWatchKey === finalKey && Date.now() - (slot._finalWatchAt || 0) < 2000) {
+    return slot._finalWatchJob;
+  }
   upsertWatchCache({
     key: payload.key,
     position: payload.position,
@@ -8833,7 +8847,16 @@ function saveMultiViewVodProgress(i, final = false) {
     meta: payload.meta,
     updatedAt: Date.now(),
   });
-  api('/api/watch', { method: 'POST', body: payload }).catch(() => {});
+  // A final Multiview checkpoint is commonly followed immediately by Back, app background, or
+  // page teardown. Keep it alive just like the main player's final save so Continue Watching does
+  // not fall back to the previous ten-second interval tick.
+  const job = api('/api/watch', { method: 'POST', body: payload, keepalive: !!final }).catch(() => {});
+  if (final) {
+    slot._finalWatchKey = finalKey;
+    slot._finalWatchAt = Date.now();
+    slot._finalWatchJob = job;
+  }
+  return job;
 }
 function cleanupMultiViewSlot(i, clearItem = false) {
   cancelLiveTune(`multiview:${i}`);
@@ -9938,6 +9961,10 @@ async function openPlayer(it, mount, opts = {}) {
   };
   v.onpause = () => {
     if (S.playing !== playingRef || S.view !== 'player') return;
+    // Pause is a durable user checkpoint, not just a UI state. Persist immediately for browser,
+    // AirPlay, and Android-WebView playback; waiting for the 10s timer loses the last few seconds
+    // when the app is backgrounded or killed right after pausing.
+    saveWatch(true);
     schedulePauseWarmAhead(playingRef); updPP();
   };
   v.onloadeddata = clearReadyFrame;
@@ -10009,8 +10036,9 @@ async function openPlayer(it, mount, opts = {}) {
   }
   // Trakt-imported progress is a PERCENT (Trakt never stores seconds) — resume once a real
   // duration is known: native metadata for direct play, the /api/tracks probe for remux.
-  if (!nativeStarted && !it.resume && it._traktPct > 1 && it.type !== 'live') {
-    const pct = Math.min(96, it._traktPct);
+  const traktResumeFrac = traktResumeFractionForItem(it);
+  if (!nativeStarted && !it.resume && traktResumeFrac > 0) {
+    const pct = traktResumeFrac * 100;
     const seekPct = () => {
       const p2 = S.playing; if (!p2 || p2.item !== it || p2._pctDone) return;
       const dur = (p2.duration && isFinite(p2.duration) && p2.duration) || (isFinite(v.duration) && v.duration) || 0;
@@ -10585,6 +10613,9 @@ function tryNativeVideoPlayer(kind, atSeconds, opts = {}) {
     qualityLabel: nativeQualityLabel(p, kind),
     size: p.size || 0,
     duration: Math.max(0, p.duration || p.nativeDuration || 0),
+    // Trakt imports carry percentage only. Android resolves this once duration is known; direct
+    // play seeks in ExoPlayer, while remux/transcode requests one token-guarded server remount.
+    startFraction: atSeconds > 0 ? 0 : traktResumeFractionForItem(p.item),
     bufferGoalSec: p.bufferGoalSec || 0, // ExoPlayer sizes its buffer from this (clamped to device RAM)
     playbackToken: p.playbackToken || 0,
     qualityChoices: !!p.transcodeUrl,
@@ -10598,6 +10629,7 @@ function tryNativeVideoPlayer(kind, atSeconds, opts = {}) {
     subtitleChoices: nativeSubtitleChoices(),
     episodeChoices: nativeEpisodeChoices(),
     quietSeek: !!opts.quietSeek,
+    percentResume: !!opts.percentResume,
   };
   if (sub.rel) {
     p.subTrack = sub.rel;
@@ -10694,6 +10726,9 @@ window.__tvNativeVideoPlaying = (pos, dur, token) => {
 window.__tvNativeVideoPaused = (pos, dur, token) => {
   const p = S.playing; if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
   applyNativeVideoProgress(pos, dur);
+  // ExoPlayer reports the exact stop point here. Flush it before Android can suspend the hidden
+  // WebView so Back, media-stop, Home/app background, and process death all resume accurately.
+  saveWatch(true);
   schedulePauseWarmAhead(p);
 };
 window.__tvNativeVideoStats = (raw, token) => {
@@ -10704,13 +10739,15 @@ window.__tvNativeVideoStats = (raw, token) => {
   nativePlaybackHeartbeat(); // stats ticks fire for native Live TV too — keeps live viewers reported
   runPendingNativeSync();    // and a second throttle-proof driver for the queued alass sync (paused playback)
 };
-window.__tvNativeVideoSeek = async (pos, dur, resume, token) => {
+window.__tvNativeVideoSeek = async (pos, dur, resume, token, percentResume) => {
   const p = S.playing;
   if (!p || !p.usingNative || !p.item || p.item.type === 'live' || !nativePlaybackCallbackMatches(p, token)) return;
   const current = () => S.playing === p && S.view === 'player' && p.usingNative;
   const at = Math.max(0, +pos || 0);
   if (+dur > 0) { p.nativeDuration = +dur; p.duration = +dur; }
-  p.nativePos = at;
+  // A percent-only startup has not resumed until the replacement stream is mounted. Do not publish
+  // the computed target as observed progress before that token-guarded remount actually starts.
+  if (!percentResume) p.nativePos = at;
   p.suppressSeekLoaderUntil = appMs() + 4500;
   $('playerLoader').classList.remove('show');
   const kind = currentPlayerKind(p);
@@ -10726,14 +10763,14 @@ window.__tvNativeVideoSeek = async (pos, dur, resume, token) => {
         const kf = (await (await fetch(`/api/keyframe/${m[1]}?at=${at}&t=${m[2]}`)).json()).k;
         if (!current()) return;
         if (Number.isFinite(kf) && kf > at + 0.05) {
-          tryNativeVideoPlayer(kind, kf, { quietSeek: true });
+          tryNativeVideoPlayer(kind, kf, { quietSeek: true, percentResume: !!percentResume });
           return;
         }
       }
     } catch { if (!current()) return; }
   }
   if (!current()) return;
-  tryNativeVideoPlayer(kind, at, { quietSeek: true });
+  tryNativeVideoPlayer(kind, at, { quietSeek: true, percentResume: !!percentResume });
 };
 function nativePlaybackCallbackMatches(p, token) {
   const incoming = Number(token || 0);
@@ -11283,7 +11320,7 @@ async function prepPlayerSeasonEpisodes(it) {
     ))).filter(Boolean);
     // Re-check staleness after the extra awaits — a newer playback's strip must win.
     if (token !== S._playerSeasonStripToken || !S.playing || !S.playing.item || S.playing.item.key !== it.key) return;
-    const inheritedQuality = qualityRankForItem(it);
+    const inheritedQuality = preferredQualityRankForItem(it);
     const items = [];
     for (const season of [ctx.season, ...extraSeasons]) {
       const sNum = Number.isFinite(+(season && season.season_number)) ? +season.season_number : ctx.parts.season;
@@ -11374,7 +11411,7 @@ async function prepNextEpisode(it) {
     if (!current()) return;
     const ep = (season.episodes || []).find((x) => x.episode_number === ne); if (!ep) return;
     const base = epItemOf(ctx.show, season, ep);
-    const inheritedQuality = qualityRankForItem(it);
+    const inheritedQuality = preferredQualityRankForItem(it);
     const item = inheritedQuality ? { ...base, qualityRank: inheritedQuality } : base;
     // Local-library lookup is independent of source mounting and cheap enough to do while the
     // current episode is playing. Keep the promise on this exact next-item object so Play Next can
@@ -11528,7 +11565,25 @@ $('vlcCopy').addEventListener('click', () => {
 });
 $('vlcClose').addEventListener('click', closePlayer);
 $('playerBackBtn').addEventListener('click', closePlayer);
-window.addEventListener('pagehide', () => { if (S.playing) { saveWatch(true); stopActivityHeartbeat(); } stopPresence({ keepalive: true }); });
+function flushPlaybackCheckpoints() {
+  if (S.playing) saveWatch(true);
+  if (S.multiView && S.multiView.slots) {
+    for (let i = 0; i < S.multiView.slots.length; i++) saveMultiViewVodProgress(i, true);
+  }
+}
+// Android calls this before suspending its WebView. It is also intentionally usable by future
+// native shells so every playback surface shares one final-checkpoint contract.
+window.__tvPlaybackBackgrounded = flushPlaybackCheckpoints;
+window.addEventListener('pagehide', () => {
+  flushPlaybackCheckpoints();
+  if (S.playing) stopActivityHeartbeat();
+  stopPresence({ keepalive: true });
+});
+// Mobile browsers do not always emit pagehide before freezing a background tab. A keepalive write
+// at visibility loss closes that gap without stopping playback or presence if background play stays active.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushPlaybackCheckpoints();
+});
 
 function cancelPauseWarmAhead() {
   const warm = S.pauseWarmAhead;
@@ -11881,13 +11936,26 @@ async function saveWatch(final, opts = {}) {
     watched, profile: S.profile ? S.profile.id : undefined,
     meta, // episodes resume + reopen
   };
+  // Pause, visibility loss, pagehide, and the Android lifecycle bridge can arrive together.
+  // Coalesce the same final point so one durable checkpoint does not fan out into duplicate
+  // server writes or Trakt scrobbles. A watched override is part of the key, so EOF still wins.
+  const finalKey = final ? `${payload.position}:${payload.duration}:${payload.watched ? 1 : 0}` : '';
+  if (final && p._finalWatchKey === finalKey && Date.now() - (p._finalWatchAt || 0) < 2000) {
+    return p._finalWatchJob;
+  }
   upsertWatchCache({
     key: payload.key, position: payload.position, duration: payload.duration,
     watched: payload.watched, meta: payload.meta, updatedAt: Date.now(),
   });
   // keepalive on final saves (player close / pagehide) so the request survives the page being torn
   // down or the app backgrounding — a normal fetch would be cancelled and the last position lost.
-  return api('/api/watch', { method: 'POST', body: payload, keepalive: !!final }).catch(() => {});
+  const job = api('/api/watch', { method: 'POST', body: payload, keepalive: !!final }).catch(() => {});
+  if (final) {
+    p._finalWatchKey = finalKey;
+    p._finalWatchAt = Date.now();
+    p._finalWatchJob = job;
+  }
+  return job;
 }
 function playbackFinishedDetailTarget(item) {
   if (!item || !item.tmdbId) return null;
@@ -13644,7 +13712,10 @@ function setupCastContext() {
     const RPE = cast.framework.RemotePlayerEventType;
     _castRpc.addEventListener(RPE.CURRENT_TIME_CHANGED, () => { if (S.playing && S.playing.castingActive) S.playing.castPos = _castRp.currentTime || 0; });
     _castRpc.addEventListener(RPE.DURATION_CHANGED, () => { if (S.playing && S.playing.castingActive && _castRp.duration) S.playing.castDuration = _castRp.duration; });
-    _castRpc.addEventListener(RPE.IS_PAUSED_CHANGED, updPP);
+    _castRpc.addEventListener(RPE.IS_PAUSED_CHANGED, () => {
+      updPP();
+      if (_castRp && _castRp.isPaused) saveWatch(true);
+    });
     _castRpc.addEventListener(RPE.PLAYER_STATE_CHANGED, onCastPlayerState);
     _castCtx.addEventListener(cast.framework.CastContextEventType.CAST_STATE_CHANGED, updateCastButtons);
     _castCtx.addEventListener(cast.framework.CastContextEventType.SESSION_STATE_CHANGED, (e) => {
@@ -13780,7 +13851,10 @@ window.__tvCast = (o) => {
   if (!p.castingActive) { p.castingActive = true; try { $('video').pause(); } catch {} }
   if (typeof o.position === 'number') p.castPos = o.position;
   if (o.duration) p.castDuration = o.duration;
+  const wasPaused = !!p.castPaused;
   p.castPaused = (o.state === 'paused' || o.state === 'idle');
+  // Native Cast state is sampled repeatedly. Save on the transition, not on every paused sample.
+  if (p.castPaused && !wasPaused) saveWatch(true);
   S.castDeviceName = o.device || 'TV';
   $('pHealth').innerHTML = `<span class="chip">Casting to ${esc(S.castDeviceName)}</span>`;
   updPP(); showOsd();

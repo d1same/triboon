@@ -2,13 +2,76 @@ param(
   [string]$AndroidDevice = $env:TRIBOON_ADB_DEVICE,
   [switch]$SkipAndroidStress,
   [switch]$SkipServerSmoke,
-  [int]$ServerPort = 7787
+  [int]$ServerPort = 7787,
+  [ValidateRange(1, 4)]
+  [int]$AndroidVodQualityRank = 3,
+  [ValidateRange(0, 86400)]
+  [int]$AndroidVodResumeSeconds = 0,
+  [ValidateRange(0, 172800)]
+  [int]$AndroidVodDurationSeconds = 0,
+  [string]$AndroidVodKey = "tmdb:movie:1226863"
 )
 
 $ErrorActionPreference = "Stop"
 
 $repo = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $repo
+
+function Get-AdbDeviceInventory([string]$Adb) {
+  $output = @(& $Adb devices 2>&1)
+  $exitCode = $LASTEXITCODE
+  if ($exitCode -ne 0) {
+    throw "Android verification preflight: adb devices failed with exit code $exitCode."
+  }
+  $inventory = New-Object System.Collections.Generic.List[object]
+  foreach ($line in $output) {
+    $parts = ([string]$line).Trim() -split "\s+"
+    if ($parts.Count -ge 2 -and $parts[0] -ne "List") {
+      $inventory.Add([pscustomobject]@{ serial = $parts[0]; state = $parts[1] }) | Out-Null
+    }
+  }
+  return $inventory.ToArray()
+}
+
+function Resolve-ReadyAndroidDevice([string]$Adb, [string]$RequestedDevice) {
+  $inventory = @(Get-AdbDeviceInventory $Adb)
+  if ([string]::IsNullOrWhiteSpace($RequestedDevice)) {
+    $ready = @($inventory | Where-Object { $_.state -eq "device" })
+    if ($ready.Count -ne 1) {
+      $summary = if ($inventory.Count) {
+        ($inventory | ForEach-Object { "$($_.serial)=$($_.state)" }) -join ", "
+      } else { "none" }
+      throw "Android verification preflight: expected exactly one ready ADB device, found $($ready.Count) (connected: $summary). Set -AndroidDevice or TRIBOON_ADB_DEVICE."
+    }
+    $RequestedDevice = $ready[0].serial
+  }
+  $entry = $inventory | Where-Object { $_.serial -eq $RequestedDevice } | Select-Object -First 1
+  if (!$entry) {
+    throw "Android verification preflight: device '$RequestedDevice' is not listed by adb. Start or reconnect it, then rerun."
+  }
+  if ($entry.state -ne "device") {
+    throw "Android verification preflight: device '$RequestedDevice' is '$($entry.state)', not ready. Reconnect or restart it, then rerun."
+  }
+  $bootOutput = @(& $Adb -s $RequestedDevice shell getprop sys.boot_completed 2>&1)
+  $bootExit = $LASTEXITCODE
+  $bootState = (($bootOutput | ForEach-Object { [string]$_ }) -join "").Trim()
+  if ($bootExit -ne 0) {
+    throw "Android verification preflight: device '$RequestedDevice' stopped responding while checking boot state."
+  }
+  if ($bootState -ne "1") {
+    throw "Android verification preflight: device '$RequestedDevice' is connected but has not finished booting (sys.boot_completed='$bootState')."
+  }
+  return $RequestedDevice
+}
+
+# Android playback is a hard gate. Validate the external device before spending minutes on the
+# repository gates; the stress helper repeats this check in case the device disconnects later.
+if (!$SkipAndroidStress) {
+  $androidAdb = Join-Path $env:LOCALAPPDATA "Android\Sdk\platform-tools\adb.exe"
+  if (!(Test-Path $androidAdb)) { throw "Android verification preflight: adb not found at $androidAdb" }
+  $AndroidDevice = Resolve-ReadyAndroidDevice $androidAdb $AndroidDevice
+  Write-Host "Android preflight ready: $AndroidDevice"
+}
 
 $failures = New-Object System.Collections.Generic.List[string]
 
@@ -72,10 +135,14 @@ Invoke-Gate "IPTV / Live TV / P9 focused tests" {
 Invoke-Gate "Fast VOD startup / P14 focused tests" {
   & node --test --test-force-exit test/e2e.test.js
   Assert-ExitCode "test/e2e.test.js"
-  & node --test --test-force-exit --test-name-pattern "warmup|prepare|startup|read-ahead|priority|buffer|4K|season pack|season-zero|live-mount reuse|understudy|rank grace" test/phase2.test.js
+  & node --test --test-force-exit --test-name-pattern "warmup|prepare|startup|read-ahead|priority|buffer|4K|multi-user|concurrent VOD|season pack|season-zero|live-mount reuse|understudy|rank grace" test/phase2.test.js
   Assert-ExitCode "phase2 startup pattern"
   & node --test --test-force-exit --test-name-pattern "prepare|startup|VOD pause resume|native player|ExoPlayer|seek|rebuffer" test/phase4.test.js
   Assert-ExitCode "phase4 startup/native pattern"
+  # security.test.js intentionally boots one shared server in its first test. Include that bootstrap
+  # in filtered runs or every later route test sees an undefined server and reports false failures.
+  & node --test --test-force-exit --test-name-pattern "boot: fresh server|streaming|prepare|play|route|teardown" test/security.test.js
+  Assert-ExitCode "security play/prepare/streaming pattern"
 }
 
 Invoke-Gate "Subtitles / CC / P11 focused tests" {
@@ -166,6 +233,10 @@ Invoke-Gate "Android ExoPlayer stress smoke" {
     -LiveZaps 20 `
     -PipLoops 2 `
     -VodSeeks 10 `
+    -VodKey $AndroidVodKey `
+    -VodQualityRank $AndroidVodQualityRank `
+    -VodResumeSeconds $AndroidVodResumeSeconds `
+    -VodDurationSeconds $AndroidVodDurationSeconds `
     -NoScreenshot
   Assert-ExitCode "Android TV stress smoke"
 }

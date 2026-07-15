@@ -303,6 +303,8 @@ public class MainActivity extends Activity {
     private boolean nativeOpenSubtitleMenuAfterRefresh;
     private long nativeKnownDurationMs;
     private long nativePendingStartMs;
+    private double nativePendingStartFraction;
+    private boolean nativePercentResumePending;
     private long nativeStartSeekIssuedAtMs;
     private long nativeStartOffsetMs;
     private long nativeLiveUnhealthySinceMs;
@@ -356,6 +358,9 @@ public class MainActivity extends Activity {
     private android.speech.SpeechRecognizer speech; // in-app voice search (created per use)
     private boolean voicePending;            // mic permission was requested BY a voice tap
     private int focusRecoveryEpoch;
+    // Invalidates a delayed WebView suspension if the Activity resumes before the final playback
+    // checkpoint callback returns (for example, a very fast app switch).
+    private int webPauseEpoch;
     private android.window.OnBackInvokedCallback backInvokedCallback; // stored so onDestroy can unregister it
     private long lastWebRendererGoneAt;
     private int webRendererGoneCount;
@@ -437,6 +442,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        webPauseEpoch++;
         applySystemUiPolicy();
         if (web != null) {
             web.onResume();
@@ -3842,6 +3848,9 @@ public class MainActivity extends Activity {
             backdropUrl = j.optString("backdropUrl", "");
             long startMs = Math.max(0, Math.round(j.optDouble("start", 0) * 1000));
             long startOffsetMs = Math.max(0, Math.round(j.optDouble("startOffset", 0) * 1000));
+            double rawStartFraction = j.optDouble("startFraction", 0);
+            double startFraction = Double.isFinite(rawStartFraction)
+                    ? Math.max(0.0, Math.min(0.96, rawStartFraction)) : 0.0;
             String episodeLabel = j.optString("episodeLabel", "");
             String subtitleUrl = j.optString("subtitleUrl", "");
             String subtitleLang = j.optString("subtitleLang", "");
@@ -3855,6 +3864,7 @@ public class MainActivity extends Activity {
             boolean hasQualityChoices = j.optBoolean("qualityChoices", false);
             boolean guide = j.optBoolean("guide", false);
             boolean quietSeek = j.optBoolean("quietSeek", false);
+            boolean percentResume = j.optBoolean("percentResume", false);
             long knownDurationMs = Math.max(0L, Math.round(j.optDouble("duration", 0) * 1000));
             long playbackSizeBytes = Math.max(0L, j.optLong("size", 0L));
             long playbackToken = Math.max(0L, j.optLong("playbackToken", 0L));
@@ -3871,7 +3881,7 @@ public class MainActivity extends Activity {
                 releaseNativePlayer(false, guide);
             } else {
                 nativeProgress.removeCallbacks(nativeHideChrome);
-                hideNativeLoading();
+                if (!percentResume) hideNativeLoading();
                 if (nativeSheet != null) {
                     nativeSheet.setVisibility(View.GONE);
                     nativeSheet.removeAllViews();
@@ -3932,6 +3942,10 @@ public class MainActivity extends Activity {
             }
             nativeKnownDurationMs = knownDurationMs;
             nativePendingStartMs = "video".equals(mode) ? startMs : 0L;
+            nativePendingStartFraction = "video".equals(mode) && startMs <= 0L && startOffsetMs <= 0L
+                    ? startFraction : 0.0;
+            nativePercentResumePending = "video".equals(mode)
+                    && ((nativePendingStartFraction > 0.0) || (percentResume && startOffsetMs > 0L));
             nativeStartSeekIssuedAtMs = 0L;
             nativeStartOffsetMs = "video".equals(mode) ? startOffsetMs : 0L;
             nativeVideoStarted = false;
@@ -4022,23 +4036,26 @@ public class MainActivity extends Activity {
                         if ("video".equals(nativeMode)) {
                             nativeVideoStarted = true;
                             widenNativeReadTimeoutAfterFirstFrame();
-                            rememberNativeVideoPosition();
-                            web.evaluateJavascript("window.__tvNativeVideoReady && __tvNativeVideoReady("
-                                    + nativePosSeconds() + "," + nativeDurSeconds() + "," + listenerPlaybackToken + ")", null);
+                            applyNativeStartSeekIfReady();
+                            if (!nativePercentResumePending) {
+                                rememberNativeVideoPosition();
+                                web.evaluateJavascript("window.__tvNativeVideoReady && __tvNativeVideoReady("
+                                        + nativePosSeconds() + "," + nativeDurSeconds() + "," + listenerPlaybackToken + ")", null);
+                            }
                         } else if ("live".equals(nativeMode)) {
                             nativeLiveStarted = true;
                             hideNativeGuidePipReveal();
                             web.evaluateJavascript("window.__tvNativeLiveReady && __tvNativeLiveReady()", null);
                         }
-                        applyNativeStartSeekIfReady();
                     }
                     if (state == Player.STATE_READY && nativeLoading != null
-                            && nativeLoading.getVisibility() == View.VISIBLE) {
+                            && nativeLoading.getVisibility() == View.VISIBLE && !nativePercentResumePending) {
                         nativeVideoUnhealthySinceMs = 0L;
                         hideNativeLoading();
                         if (!nativeGuideMode) showNativeChrome(true);
                     }
                     if (state == Player.STATE_ENDED && "video".equals(nativeMode)) {
+                        if (nativePercentResumePending) return;
                         long dur = nativeDurSeconds();
                         long pos = dur > 0 ? dur : nativePosSeconds();
                         // Keep the final frame/native Up Next layer visible until JS either starts the
@@ -4079,13 +4096,15 @@ public class MainActivity extends Activity {
                         nativeVideoStarted = true;
                         widenNativeReadTimeoutAfterFirstFrame();
                         nativeVideoUnhealthySinceMs = 0L;
-                        rememberNativeVideoPosition();
-                        web.evaluateJavascript("window.__tvNativeVideoPlaying && __tvNativeVideoPlaying("
-                                + nativePosSeconds() + "," + nativeDurSeconds() + "," + listenerPlaybackToken + ")", null);
+                        if (!nativePercentResumePending) {
+                            rememberNativeVideoPosition();
+                            web.evaluateJavascript("window.__tvNativeVideoPlaying && __tvNativeVideoPlaying("
+                                    + nativePosSeconds() + "," + nativeDurSeconds() + "," + listenerPlaybackToken + ")", null);
+                        }
                     } else if ("video".equals(nativeMode) && nativeVideoStarted
                             && nativePlayer != null
                             && nativePlayer.getPlaybackState() == Player.STATE_READY
-                            && !nativePlayer.getPlayWhenReady()) {
+                            && !nativePlayer.getPlayWhenReady() && !nativePercentResumePending) {
                         rememberNativeVideoPosition();
                         web.evaluateJavascript("window.__tvNativeVideoPaused && __tvNativeVideoPaused("
                                 + nativePosSeconds() + "," + nativeDurSeconds() + "," + listenerPlaybackToken + ")", null);
@@ -4129,7 +4148,10 @@ public class MainActivity extends Activity {
             nativePlayer.setMediaItem(buildNativeMediaItem());
             nativePlayer.prepare();
             if (startMs > 0) nativePlayer.seekTo(startMs);
-            nativePlayer.play();
+            // Percent-only Trakt resume must not audibly play from 0 while duration is being
+            // resolved. Direct play begins after its seek; server-seek modes begin after remount.
+            if (nativePercentResumePending) nativePlayer.setPlayWhenReady(false);
+            else nativePlayer.play();
             if ("video".equals(mode) && nativeHasWyzieSubtitle && !nativeSubtitleUrl.isEmpty()) {
                 loadNativeSubtitleOverlay(nativeSubtitleUrl);
             } else {
@@ -4403,8 +4425,9 @@ public class MainActivity extends Activity {
         return live > 0L ? Math.max(live, nativeLastVideoDisplayMs) : nativeLastVideoDisplayMs;
     }
 
-    private void requestNativeVideoSeek(long displayMs) { requestNativeVideoSeek(displayMs, false); }
-    private void requestNativeVideoSeek(long displayMs, boolean resume) {
+    private void requestNativeVideoSeek(long displayMs) { requestNativeVideoSeek(displayMs, false, false); }
+    private void requestNativeVideoSeek(long displayMs, boolean resume) { requestNativeVideoSeek(displayMs, resume, false); }
+    private void requestNativeVideoSeek(long displayMs, boolean resume, boolean percentResume) {
         if (web == null || !"video".equals(nativeMode)) return;
         // Pass FRACTIONAL seconds (ms precision): the server -ss and the &start= URL both accept a
         // fractional start, so a resume no longer floors to the whole second (was up to ~1s backward).
@@ -4414,11 +4437,43 @@ public class MainActivity extends Activity {
         long playbackToken = nativePlaybackToken;
         web.evaluateJavascript("window.__tvNativeVideoSeek && window.__tvNativeVideoSeek("
                 + pos + "," + nativeDurSeconds() + "," + (resume ? "true" : "false")
-                + "," + playbackToken + ")", null);
+                + "," + playbackToken + "," + (percentResume ? "true" : "false") + ")", null);
+    }
+
+    private void resolveNativePercentStartIfKnown() {
+        if (nativePendingStartFraction <= 0.0 || nativePendingStartMs > 0L
+                || nativePlayer == null || !"video".equals(nativeMode)) return;
+        long d = nativeDurationMs();
+        if (d <= 0L || d == C.TIME_UNSET) return;
+        long target = Math.max(0L, Math.round(d * nativePendingStartFraction));
+        if (target <= 0L) return;
+        nativePendingStartFraction = 0.0;
+        nativePendingStartMs = target;
+    }
+
+    private void completeNativePercentResume() {
+        if (!nativePercentResumePending) return;
+        nativePercentResumePending = false;
+        if (nativePlayer != null && !nativePlayer.getPlayWhenReady()) nativePlayer.play();
+        if (nativeLoading != null && nativeLoading.getVisibility() == View.VISIBLE) {
+            nativeVideoUnhealthySinceMs = 0L;
+            hideNativeLoading();
+            if (!nativeGuideMode) showNativeChrome(true);
+        }
     }
 
     private void applyNativeStartSeekIfReady() {
-        if (nativePlayer == null || nativePendingStartMs <= 0L || !"video".equals(nativeMode)) return;
+        if (nativePlayer == null || !"video".equals(nativeMode)) return;
+        resolveNativePercentStartIfKnown();
+        if (nativePendingStartMs <= 0L) {
+            // A percent-resume remux/transcode has already been replaced with a server-seek URL.
+            // Keep startup progress hidden until that replacement itself reaches READY.
+            if (nativePercentResumePending && nativePendingStartFraction <= 0.0
+                    && nativeStartOffsetMs > 0L && nativePlayer.getPlaybackState() == Player.STATE_READY) {
+                completeNativePercentResume();
+            }
+            return;
+        }
         if (nativePlayer.getPlaybackState() != Player.STATE_READY || !nativeVodSeekable()) return;
         long target = nativePendingStartMs;
         long d = nativeDurationMs();
@@ -4427,12 +4482,21 @@ public class MainActivity extends Activity {
         if (current >= Math.max(0L, target - 3000L)) {
             nativePendingStartMs = 0L;
             nativeStartSeekIssuedAtMs = 0L;
+            completeNativePercentResume();
             return;
         }
         long now = SystemClock.elapsedRealtime();
         if (nativeStartSeekIssuedAtMs > 0L && now - nativeStartSeekIssuedAtMs < 1200L) return;
         nativeStartSeekIssuedAtMs = now;
+        if (nativeServerSeekMode() && nativePercentResumePending) {
+            // Piped remux/transcode media cannot seek inside the current stream. Consume the
+            // percentage exactly once, then ask the token-guarded web bridge to remount at seconds.
+            nativePendingStartMs = 0L;
+            requestNativeVideoSeek(target, false, true);
+            return;
+        }
         nativeSeekToDisplayPosition(target);
+        if (nativePercentResumePending && nativePlayer != null && !nativePlayer.getPlayWhenReady()) nativePlayer.play();
         updateNativeChrome();
     }
 
@@ -4444,7 +4508,7 @@ public class MainActivity extends Activity {
     }
 
     private void openNativeLiveGuide() {
-        if (nativePlayer != null && "video".equals(nativeMode)) {
+        if (nativePlayer != null && "video".equals(nativeMode) && !nativePercentResumePending) {
             web.evaluateJavascript("window.__tvNativeVideoProgress && __tvNativeVideoProgress("
                     + nativePosSeconds() + "," + nativeDurSeconds() + "," + nativePlaybackToken + ")", null);
         }
@@ -4965,6 +5029,7 @@ public class MainActivity extends Activity {
             double s = Double.parseDouble(seconds == null ? "0" : seconds);
             if (s <= 0 || Double.isNaN(s) || Double.isInfinite(s)) return;
             nativeKnownDurationMs = Math.max(nativeKnownDurationMs, Math.round(s * 1000));
+            applyNativeStartSeekIfReady();
             updateNativeChrome();
         } catch (Exception ignored) {
         }
@@ -6747,12 +6812,14 @@ public class MainActivity extends Activity {
                 updateNativeLiveWatchdog();
                 updateNativeVideoWatchdog();
                 if ("video".equals(nativeMode)) {
-                    rememberNativeVideoPosition();
-                    web.evaluateJavascript("window.__tvNativeVideoProgress && __tvNativeVideoProgress("
-                            + nativePosSeconds() + "," + nativeDurSeconds() + "," + nativePlaybackToken + ")", null);
+                    if (!nativePercentResumePending) {
+                        rememberNativeVideoPosition();
+                        web.evaluateJavascript("window.__tvNativeVideoProgress && __tvNativeVideoProgress("
+                                + nativePosSeconds() + "," + nativeDurSeconds() + "," + nativePlaybackToken + ")", null);
+                    }
                 }
                 long now = SystemClock.elapsedRealtime();
-                if (now - nativeLastStatsMs >= 2000L) {
+                if (!nativePercentResumePending && now - nativeLastStatsMs >= 2000L) {
                     nativeLastStatsMs = now;
                     web.evaluateJavascript("window.__tvNativeVideoStats && window.__tvNativeVideoStats("
                             + nativeStatsJson() + "," + nativePlaybackToken + ")", null);
@@ -6916,6 +6983,8 @@ public class MainActivity extends Activity {
         nativeOpenSubtitleMenuAfterRefresh = false;
         nativeKnownDurationMs = 0L;
         nativePendingStartMs = 0L;
+        nativePendingStartFraction = 0.0;
+        nativePercentResumePending = false;
         nativeStartSeekIssuedAtMs = 0L;
         nativeStartOffsetMs = 0L;
         nativeHasNext = false;
@@ -7772,12 +7841,35 @@ public class MainActivity extends Activity {
         boolean inPip = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInPictureInPictureMode();
         if (nativePlayer != null && !inPip) nativePlayer.pause();
         if (web != null) {
-            web.evaluateJavascript("document.querySelectorAll('video').forEach(v=>v.pause())", null);
+            // Update the hidden WebView with ExoPlayer's exact position, then issue keepalive watch
+            // checkpoints for the main player and Multiview before WebView timers are suspended.
+            String checkpoint = "";
+            if (nativePlayer != null && "video".equals(nativeMode) && !nativePercentResumePending) {
+                rememberNativeVideoPosition();
+                checkpoint = "window.__tvNativeVideoProgress&&__tvNativeVideoProgress("
+                        + nativePosSeconds() + "," + nativeDurSeconds() + "," + nativePlaybackToken + ");";
+            }
+            checkpoint += "window.__tvPlaybackBackgrounded&&window.__tvPlaybackBackgrounded();"
+                    + "document.querySelectorAll('video').forEach(v=>v.pause())";
             // Keep the WebView + its timers alive while music is playing (or during PiP) so audio
             // continues in the background; only <video> was paused above. Otherwise suspend as usual.
             if (!inPip && !musicPlaying) {
-                web.onPause();
-                web.pauseTimers();
+                final int pauseEpoch = ++webPauseEpoch;
+                Runnable suspendWeb = new Runnable() {
+                    private boolean done;
+                    @Override public void run() {
+                        if (done || pauseEpoch != webPauseEpoch || web == null) return;
+                        done = true;
+                        web.onPause();
+                        web.pauseTimers();
+                    }
+                };
+                // Suspend after the checkpoint script has at least started its keepalive fetches.
+                // The short fallback prevents a wedged renderer callback from keeping WebView awake.
+                web.evaluateJavascript(checkpoint, ignored -> suspendWeb.run());
+                web.postDelayed(suspendWeb, 250L);
+            } else {
+                web.evaluateJavascript(checkpoint, null);
             }
         }
     }

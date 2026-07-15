@@ -11,7 +11,10 @@ const os = require('os');
 const { parseRelease, scoreRelease, rankReleases } = require('../server/scoring');
 const { parseNewznabRss, dedupe, fanout, searchIndexer } = require('../server/newznab');
 const { Store, VerdictCache } = require('../server/store');
-const { Pipeline, GATE_MS, nzbVerdictKey, summarizeAttempts, stubFeatureReason } = require('../server/pipeline');
+const {
+  Pipeline, GATE_MS, nzbVerdictKey, summarizeAttempts, stubFeatureReason, mountHasActivePlayback,
+  ACTIVE_PLAYBACK_GRACE_MS,
+} = require('../server/pipeline');
 const { NntpPool, ProviderPool } = require('../server/nntp');
 const { createMockNntp } = require('./mock-nntp');
 const { encodePart } = require('../server/yenc');
@@ -1808,6 +1811,34 @@ test('archive: a RAR season pack mounts the requested episode, not the largest i
   }
 });
 
+test('archive: multi-volume RAR mount enforces one aggregate decoded cache budget', async () => {
+  const { mountNzb } = require('../server/archive');
+  const payload = seededPayload(260 * 1024, 0xca4e);
+  const packed = nzbFor(writeRar4Store([
+    { name: 'Shared.Cache.2160p.mkv', data: payload },
+  ], { base: 'shared-cache', volSize: 55 * 1024 }), 30000, 'shared-cache');
+  const mock = createMockNntp({ articles: packed.articles });
+  const port = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false }, 6);
+  try {
+    const cap = 90000;
+    const vf = await mountNzb(pool, packed.nzb, { readAhead: 0, cacheSegments: 100, cacheBytes: cap });
+    assert.ok(vf.vols.length > 1, 'fixture must exercise multiple archive volumes');
+    const shared = vf.vols[0].sharedCacheBudget;
+    assert.ok(shared && vf.vols.every((vol) => vol.sharedCacheBudget === shared),
+      'mountNzb attaches one coordinator to every archive volume before reads begin');
+    const chunks = [];
+    for await (const chunk of vf.read(0, vf.size, { priority: 'playback' })) chunks.push(chunk);
+    assert.deepStrictEqual(Buffer.concat(chunks), payload, 'aggregate eviction preserves byte-exact archive playback');
+    const aggregate = vf.vols.reduce((bytes, vol) => bytes + vol.cacheBytes, 0);
+    assert.ok(aggregate <= cap, `archive retained ${aggregate} decoded bytes over its ${cap}-byte mount cap`);
+    assert.strictEqual(shared.bytes, aggregate);
+  } finally {
+    pool.close();
+    await mock.close();
+  }
+});
+
 test('pipeline: live-mount reuse is isolated by episode for one season-pack NZB', async () => {
   const ep1 = seededPayload(92 * 1024, 0xc201);
   const ep5 = seededPayload(64 * 1024, 0xc205);
@@ -2422,7 +2453,7 @@ test('pipeline: active mount rebalance shrinks read-ahead when another stream st
     }),
   });
   const mk = (id) => ({
-    id, size: 2e9, streamable: true, _touched: now, trimCalls: 0,
+    id, size: 2e9, streamable: true, _touched: now, _playbackTouched: now, trimCalls: 0,
     trimCache() { this.trimCalls++; },
   });
 
@@ -2432,6 +2463,8 @@ test('pipeline: active mount rebalance shrinks read-ahead when another stream st
   assert.strictEqual(first.readAhead, 12, 'single active stream gets the configured 1080p window');
   assert.strictEqual(first.maxReadAhead, 12, 'single stream cannot boost past the configured 1080p cap');
   assert.strictEqual(first.cacheMaxBytes, 96 * 1024 * 1024, 'single stream gets the full 1080p cache budget');
+  first._warmedResumeFrac = 0.5;
+  first._warmedResumeRange = { start: 100, end: 200, at: now };
 
   const second = mk('second');
   mounts.set(second.id, second);
@@ -2442,8 +2475,146 @@ test('pipeline: active mount rebalance shrinks read-ahead when another stream st
   assert.strictEqual(second.maxReadAhead, 9, 'new stream boost ceiling matches the fair reserve model');
   assert.strictEqual(first.cacheMaxBytes, 48 * 1024 * 1024, 'existing stream cache budget shrinks with concurrency');
   assert.strictEqual(second.cacheMaxBytes, 48 * 1024 * 1024, 'new stream cache budget matches concurrency');
+  assert.strictEqual(first._warmedResumeRange, null, 'an active fair-share cache shrink invalidates stale resume coverage');
+  first._warmedResumeRange = { start: 100, end: 200, at: now };
+  pipeline.rebalancePlaybackWindows(now);
+  assert.deepStrictEqual(first._warmedResumeRange, { start: 100, end: 200, at: now },
+    'identical active-window reapplication preserves fresh resume coverage');
   assert.ok(first.trimCalls >= 2, 'rebalance trims retained decoded bytes after shrinking');
-  assert.strictEqual(pipeline.metricsSnapshot().windowRebalances, 2, 'rebalance telemetry should track window recalculations');
+  assert.strictEqual(pipeline.metricsSnapshot().windowRebalances, 3, 'rebalance telemetry should track every window recalculation');
+});
+
+test('pipeline: prepared-only mounts keep a bounded speculative window without consuming a viewer share', () => {
+  const now = Date.now();
+  const mounts = new Map();
+  const performance = {
+    usableConnections: 20,
+    reserveConnections: 4,
+    maxConnPerStream1080: 12,
+    maxConnPerStream4k: 20,
+  };
+  const pipeline = new Pipeline({
+    pool: () => null,
+    verdicts: { get: () => null, set: () => {} },
+    mounts,
+    performance: () => performance,
+  });
+  const playing = {
+    id: 'playing', size: 2e9, streamable: true, _touched: now, _playbackTouched: now,
+    trimCache() {},
+  };
+  const prepared = {
+    id: 'prepared', size: 7e9, streamable: true, _touched: now, _preparedOnly: true,
+    trimCache() {},
+  };
+  mounts.set(playing.id, playing);
+  mounts.set(prepared.id, prepared);
+
+  prepared._warmedResumeFrac = 0.5;
+  prepared._warmedResumeRange = { start: 100, end: 200, at: now };
+  pipeline._applyPreparedWindow(prepared, {
+    readAhead: 20, maxReadAhead: 20, cacheMax: 1024, cacheMaxBytes: 1024 * 1024 * 1024,
+  });
+  assert.strictEqual(mountHasActivePlayback(prepared, now), false, 'prepare/lifecycle touches are not real playback');
+  assert.strictEqual(prepared.readAhead, 4, 'speculative prepare uses only the low read-ahead window');
+  assert.strictEqual(prepared.cacheMaxBytes, 192 * 1024 * 1024, 'prepared 4K cache is capped independently of its future active share');
+  assert.strictEqual(prepared._warmedResumeRange, null, 'prepared cache trimming invalidates stale resume-byte coverage');
+  prepared._warmedResumeFrac = 0.5;
+  prepared._warmedResumeRange = { start: 100, end: 200, at: now };
+  pipeline._applyPreparedWindow(prepared, prepared._activePlayWin || {
+    readAhead: 20, maxReadAhead: 20, cacheMax: 1024, cacheMaxBytes: 1024 * 1024 * 1024,
+  });
+  assert.deepStrictEqual(prepared._warmedResumeRange, { start: 100, end: 200, at: now },
+    'identical prepared-window reapplication preserves fresh resume coverage');
+
+  assert.strictEqual(pipeline.rebalancePlaybackWindows(now), 1, 'only the mount with a real player read consumes a viewer share');
+  assert.strictEqual(playing.readAhead, 12, 'focused/prepared cards do not shrink the live stream connection window');
+  assert.strictEqual(playing.cacheMaxBytes, 96 * 1024 * 1024, 'focused/prepared cards do not shrink the live stream cache window');
+  assert.strictEqual(prepared.cacheMaxBytes, 192 * 1024 * 1024, 'rebalance leaves the bounded speculative window intact');
+
+  prepared._preparedOnly = false;
+  prepared._playbackTouched = now;
+  assert.strictEqual(pipeline.rebalancePlaybackWindows(now), 2, 'promotion by a real player read joins fair-share accounting');
+  assert.strictEqual(playing.readAhead, 8);
+  assert.strictEqual(prepared.readAhead, 8);
+});
+
+test('pipeline: many prepared 4K mounts share one RAM-derived speculative cache pool', () => {
+  const now = Date.now();
+  const mounts = new Map();
+  const pipeline = new Pipeline({
+    pool: () => null,
+    verdicts: { get: () => null, set: () => {} },
+    mounts,
+    totalMemMb: 512,
+  });
+  const activeWin = { readAhead: 20, maxReadAhead: 20, cacheMax: 1024, cacheMaxBytes: 1024 * 1024 * 1024 };
+  const addPrepared = (id) => {
+    const vf = {
+      id, size: 8e9, streamable: true, _touched: now, _preparedOnly: true,
+      _activePlayWin: activeWin, trimCache() {},
+    };
+    mounts.set(id, vf);
+    return vf;
+  };
+  const first = addPrepared('prepared-0');
+  pipeline.rebalancePreparedWindows(now);
+  assert.strictEqual(first.cacheMaxBytes, 96 * 1024 * 1024,
+    'a low-memory host still gives the first prepare the bounded 1080-class speculative floor');
+  for (let i = 1; i < 16; i++) addPrepared(`prepared-${i}`);
+  assert.strictEqual(pipeline.rebalancePreparedWindows(now), 16);
+  const prepared = [...mounts.values()];
+  const retainedCaps = prepared.reduce((sum, vf) => sum + vf.cacheMaxBytes, 0);
+  assert.ok(retainedCaps <= pipeline._preparedCacheTotalBytes(),
+    `prepared caps ${retainedCaps} must fit aggregate pool ${pipeline._preparedCacheTotalBytes()}`);
+  assert.ok(prepared.every((vf) => vf.readAhead === 4 && vf.cacheMaxBytes < 96 * 1024 * 1024),
+    'as focus prepares accumulate, each mount shrinks instead of multiplying the per-title cap');
+});
+
+test('pipeline: grace expiry demotes stopped 4K mounts and restores a long-lived viewer share', async () => {
+  const now = Date.now();
+  const mounts = new Map();
+  const pipeline = new Pipeline({
+    pool: () => null,
+    verdicts: { get: () => null, set: () => {} },
+    mounts,
+    totalMemMb: 1024,
+    performance: () => ({
+      usableConnections: 20,
+      reserveConnections: 4,
+      maxConnPerStream4k: 20,
+    }),
+  });
+  const survivor = {
+    id: 'survivor', size: 8e9, streamable: true, _touched: now,
+    _playbackTouched: now, _activeStreamReads: 1, trimCache() {},
+  };
+  mounts.set(survivor.id, survivor);
+  const stopped = [];
+  for (let i = 0; i < 6; i++) {
+    const vf = {
+      id: `stopped-${i}`, size: 8e9, streamable: true, _touched: now,
+      _playbackTouched: now - ACTIVE_PLAYBACK_GRACE_MS + 60, trimCache() {},
+    };
+    stopped.push(vf);
+    mounts.set(vf.id, vf);
+  }
+  try {
+    assert.strictEqual(pipeline.rebalancePlaybackWindows(now), 7);
+    const crowdedReadAhead = survivor.readAhead;
+    pipeline.schedulePlaybackExpiryRebalance(now);
+    await new Promise((resolve) => setTimeout(resolve, 110));
+    assert.ok(stopped.every((vf) => vf._preparedOnly), 'expired stopped streams are demoted while still mounted for reuse');
+    assert.ok(survivor.readAhead > crowdedReadAhead, 'the remaining long-lived stream automatically regains its larger fair share');
+    const stoppedCaps = stopped.reduce((sum, vf) => sum + vf.cacheMaxBytes, 0);
+    assert.ok(stoppedCaps <= pipeline._preparedCacheTotalBytes(),
+      'sequentially stopped 4K mounts no longer retain active 1GB-class buffers until the 45-minute TTL');
+  } finally {
+    pipeline.disposePlaybackRuntime();
+    assert.strictEqual(pipeline.schedulePlaybackExpiryRebalance(Date.now()), null,
+      'shutdown/disposal prevents a late stream-finally callback from recreating the expiry timer');
+    assert.strictEqual(pipeline._playbackExpiryTimer, null);
+  }
 });
 
 test('pipeline: 4K buffer seconds raise decoded segment retention for small article posts', async () => {
@@ -2467,6 +2638,7 @@ test('pipeline: 4K buffer seconds raise decoded segment retention for small arti
     segments: Array.from({ length: 10486 }, (_, i) => ({ msgId: `seg${i}` })),
     streamable: true,
     _touched: now,
+    _playbackTouched: now,
     _tracks: { duration: 700 }, // 7 GB / 700 s ≈ 86 Mbps — a high-bitrate 4K (DV/HDR) stream
     trimCache() {},
   };
@@ -2489,10 +2661,12 @@ test('pipeline: playback warmup is bounded and stays below active playback prior
     mounts: new Map(),
   });
   const calls = [];
+  const signals = [];
   const vf = {
     streamable: true,
     size: 7 * 1024 * 1024 * 1024,
     async *read(start, end, opts = {}) {
+      signals.push(opts.signal);
       calls.push({ start, end, priority: opts.priority });
       yield Buffer.alloc(1);
     },
@@ -2515,6 +2689,90 @@ test('pipeline: playback warmup is bounded and stays below active playback prior
     end: vf.size,
     priority: 'readAhead',
   }, '4K warmup should also warm the TAIL (mkv Cues / mp4 moov) on the low-priority lane');
+  assert.ok(signals.every((signal) => signal && typeof signal.addEventListener === 'function'),
+    'every speculative warm read is independently cancellable');
+  assert.ok(signals.every((signal) => signal.aborted),
+    'normal warm completion closes its signal so trailing fire-and-forget VFS prefetch cannot linger');
+});
+
+test('pipeline: resume warmup supersession and mount cleanup abort only tracked speculative jobs', async () => {
+  const pipeline = new Pipeline({
+    pool: () => null,
+    verdicts: { get: () => null, set: () => {} },
+    mounts: new Map(),
+  });
+  const size = 8e9;
+  const calls = [];
+  const superseded = {
+    streamable: true,
+    size,
+    async *read(start, end, opts = {}) {
+      calls.push({ start, end, signal: opts.signal });
+      yield Buffer.alloc(1);
+    },
+  };
+
+  pipeline._startPlaybackWarmup(superseded, { cacheMaxBytes: 1024 * 1024 * 1024 }, 0.25);
+  const oldResume = superseded._playbackWarmupJobs.get('resume');
+  const originalHead = superseded._playbackWarmupJobs.get('head');
+  const originalTail = superseded._playbackWarmupJobs.get('tail');
+  pipeline._startPlaybackWarmup(superseded, { cacheMaxBytes: 1024 * 1024 * 1024 }, 0.75);
+  assert.strictEqual(oldResume.controller.signal.aborted, true, 'a newer Continue-Watching position aborts the obsolete resume warm');
+  assert.strictEqual(superseded._playbackWarmupJobs.get('head'), originalHead, 'resume supersession leaves the one-time head warm intact');
+  assert.strictEqual(superseded._playbackWarmupJobs.get('tail'), originalTail, 'resume supersession leaves the one-time tail warm intact');
+  await new Promise((resolve) => setTimeout(resolve, 220));
+  assert.ok(calls.some(({ start, end }) => start <= size * 0.75 && end >= size * 0.75), 'the newest resume window runs');
+  assert.ok(!calls.some(({ start, end }) => start <= size * 0.25 && end >= size * 0.25), 'the superseded resume window never consumes provider work');
+  pipeline._startPlaybackWarmup(superseded, { cacheMaxBytes: 1024 * 1024 * 1024 }, 0);
+  assert.strictEqual(superseded._warmedResumeFrac, null, 'Start Over clears the completed resume marker too');
+  pipeline._startPlaybackWarmup(superseded, { cacheMaxBytes: 1024 * 1024 * 1024 }, 0.75);
+  assert.ok(superseded._playbackWarmupJobs.has('resume'), 'the same position can be warmed again after Start Over reset it');
+  pipeline.cancelPlaybackWarmups(superseded);
+
+  const huge = {
+    streamable: true,
+    size: 80 * 1024 * 1024 * 1024,
+    async *read() { yield Buffer.alloc(1); },
+  };
+  pipeline._startPlaybackWarmup(huge, { cacheMaxBytes: 1024 * 1024 * 1024 }, 0.50);
+  const hugeOldResume = huge._playbackWarmupJobs.get('resume');
+  pipeline._startPlaybackWarmup(huge, { cacheMaxBytes: 1024 * 1024 * 1024 }, 0.51);
+  assert.strictEqual(hugeOldResume.controller.signal.aborted, true,
+    'a 1% change on an 80GB file rewarms when its byte target is far outside the prior 96MB interval');
+  assert.notStrictEqual(huge._playbackWarmupJobs.get('resume'), hugeOldResume,
+    'resume dedupe is based on byte coverage, not a fixed fraction delta');
+  const hugeCurrentResume = huge._playbackWarmupJobs.get('resume');
+  pipeline._startPlaybackWarmup(huge, { cacheMaxBytes: 1024 * 1024 * 1024 }, 0.51);
+  assert.strictEqual(huge._playbackWarmupJobs.get('resume'), hugeCurrentResume,
+    'an immediate target safely inside the fresh byte interval dedupes');
+  huge._warmedResumeRange.at -= 120001;
+  pipeline._startPlaybackWarmup(huge, { cacheMaxBytes: 1024 * 1024 * 1024 }, 0.51);
+  assert.notStrictEqual(huge._playbackWarmupJobs.get('resume'), hugeCurrentResume,
+    'expired coverage rewarms because FIFO playback may have evicted those bytes');
+  pipeline.cancelPlaybackWarmups(huge);
+
+  let started = 0;
+  let aborted = 0;
+  let bothStarted;
+  const startedPromise = new Promise((resolve) => { bothStarted = resolve; });
+  const evicted = {
+    streamable: true,
+    size,
+    async *read(_start, _end, opts = {}) {
+      started++;
+      if (started === 2) bothStarted();
+      await new Promise((resolve) => opts.signal.addEventListener('abort', () => {
+        aborted++;
+        resolve();
+      }, { once: true }));
+    },
+  };
+  pipeline._startPlaybackWarmup(evicted, { cacheMaxBytes: 1024 * 1024 * 1024 });
+  await startedPromise;
+  assert.strictEqual(pipeline.cancelPlaybackWarmups(evicted), 2, 'eviction cancels the tracked head and tail jobs');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.strictEqual(aborted, 2, 'both running speculative reads observe their own abort signals');
+  assert.strictEqual(evicted._playbackWarmupJobs.size, 0, 'cancelled jobs are removed from mount state');
 });
 
 test('pipeline: a manual Sources pick is honored first, then the next-smaller release, then the best auto-pick', () => {

@@ -14,6 +14,72 @@ const READ_AHEAD_BOOST_SEGMENTS = 2;
 const READ_AHEAD_BOOST_TTL_MS = 30000;
 const READ_AHEAD_BOOST_COOLDOWN_MS = 5000;
 
+// A multi-volume archive is one playback mount, so its decoded-article budget must also be one
+// budget. Giving every volume the full cacheMaxBytes allowance multiplies retained memory by the
+// number of RAR parts. This coordinator keeps the existing per-file caches/read API, but evicts the
+// oldest decoded article across every participating volume when the mount-wide byte cap is crossed.
+class SharedCacheBudget {
+  constructor(maxBytes = DEFAULT_CACHE_BYTES) {
+    this.maxBytes = Number.isFinite(maxBytes) && maxBytes > 0 ? Math.floor(maxBytes) : DEFAULT_CACHE_BYTES;
+    this.bytes = 0;
+    this.entries = 0;
+    this.byOwner = new Map();
+    this.order = [];
+  }
+
+  setMaxBytes(maxBytes) {
+    if (Number.isFinite(maxBytes) && maxBytes > 0) this.maxBytes = Math.floor(maxBytes);
+    this.trim();
+  }
+
+  add(owner, index, bytes) {
+    let owned = this.byOwner.get(owner);
+    if (!owned) { owned = new Map(); this.byOwner.set(owner, owned); }
+    const prior = owned.get(index);
+    if (prior) this._removeRecord(prior);
+    const rec = { owner, index, bytes: Math.max(0, Number(bytes) || 0), active: true };
+    owned.set(index, rec);
+    this.order.push(rec);
+    this.bytes += rec.bytes;
+    this.entries++;
+    this.trim();
+  }
+
+  remove(owner, index) {
+    const owned = this.byOwner.get(owner);
+    const rec = owned && owned.get(index);
+    if (rec) this._removeRecord(rec);
+  }
+
+  _removeRecord(rec) {
+    if (!rec || !rec.active) return;
+    rec.active = false;
+    this.bytes = Math.max(0, this.bytes - rec.bytes);
+    this.entries = Math.max(0, this.entries - 1);
+    const owned = this.byOwner.get(rec.owner);
+    if (owned && owned.get(rec.index) === rec) {
+      owned.delete(rec.index);
+      if (!owned.size) this.byOwner.delete(rec.owner);
+    }
+  }
+
+  trim() {
+    // Preserve the newest decoded article if a provider uses articles larger than the configured
+    // cap; the caller still needs that one Buffer to complete its current read. Otherwise the
+    // aggregate remains strictly within the mount-wide byte allowance.
+    while (this.bytes > this.maxBytes && this.entries > 1) {
+      let rec = null;
+      while (this.order.length && !(rec = this.order.shift()).active) rec = null;
+      if (!rec) break;
+      this._removeRecord(rec);
+      if (rec.owner && typeof rec.owner._cacheDrop === 'function') {
+        rec.owner._cacheDrop(rec.index, { fromSharedBudget: true });
+      }
+    }
+    if (this.order.length > this.entries * 2 + 32) this.order = this.order.filter((rec) => rec.active);
+  }
+}
+
 function abortError() {
   const e = new Error('read aborted');
   e.code = 'ABORT_ERR';
@@ -56,6 +122,7 @@ class NzbFileStream {
     this.cacheMax = cacheSegments;
     this.cacheMaxBytes = Number.isFinite(cacheBytes) && cacheBytes > 0 ? cacheBytes : DEFAULT_CACHE_BYTES;
     this.cacheBytes = 0;
+    this.sharedCacheBudget = null;
     this.inflight = new Map(); // segIndex -> Promise<Buffer>
     // Scoped to fetches needed to establish this mount. A hedged source-race loser aborts it so a
     // stalled startup BODY cannot keep an NNTP connection at startup priority until the 30s mount
@@ -90,7 +157,19 @@ class NzbFileStream {
     }
     if (Number.isFinite(win.cacheMax) && win.cacheMax > 0) this.cacheMax = Math.floor(win.cacheMax);
     if (Number.isFinite(win.cacheMaxBytes) && win.cacheMaxBytes > 0) this.cacheMaxBytes = Math.floor(win.cacheMaxBytes);
+    if (this.sharedCacheBudget) this.sharedCacheBudget.setMaxBytes(this.cacheMaxBytes);
     this.trimCache();
+  }
+
+  setSharedCacheBudget(sharedCacheBudget) {
+    if (this.sharedCacheBudget === sharedCacheBudget) return;
+    if (this.sharedCacheBudget) {
+      for (const index of this.cache.keys()) this.sharedCacheBudget.remove(this, index);
+    }
+    this.sharedCacheBudget = sharedCacheBudget || null;
+    if (this.sharedCacheBudget) {
+      for (const [index, buf] of this.cache) this.sharedCacheBudget.add(this, index, buf.length);
+    }
   }
 
   _resetExpiredAdaptiveReadAhead(now = Date.now()) {
@@ -149,20 +228,31 @@ class NzbFileStream {
     this.cache.set(i, buf);
     this.cacheBytes += buf.length;
     this.cacheOrder.push(i);
+    if (this.sharedCacheBudget) this.sharedCacheBudget.add(this, i, buf.length);
     this.trimCache();
   }
 
-  _cacheDrop(i) {
+  _cacheDrop(i, { fromSharedBudget = false } = {}) {
     const old = this.cache.get(i);
     if (!old) return;
     this.cache.delete(i);
     this.cacheBytes = Math.max(0, this.cacheBytes - old.length);
+    if (this.sharedCacheBudget && !fromSharedBudget) this.sharedCacheBudget.remove(this, i);
+    if (fromSharedBudget) {
+      const orderIndex = this.cacheOrder.indexOf(i);
+      if (orderIndex >= 0) this.cacheOrder.splice(orderIndex, 1);
+    }
+    if (this.cacheOrder.length > this.cache.size * 2 + 32) {
+      this.cacheOrder = this.cacheOrder.filter((index) => this.cache.has(index));
+    }
   }
 
   trimCache() {
-    while (this.cacheOrder.length > 1
-        && (this.cacheOrder.length > this.cacheMax || this.cacheBytes > this.cacheMaxBytes)) {
-      this._cacheDrop(this.cacheOrder.shift());
+    while (this.cache.size > 1
+        && (this.cache.size > this.cacheMax || this.cacheBytes > this.cacheMaxBytes)) {
+      const index = this.cacheOrder.shift();
+      if (index === undefined) break;
+      this._cacheDrop(index);
     }
   }
 
@@ -326,4 +416,4 @@ class VirtualFile extends NzbFileStream {
   }
 }
 
-module.exports = { VirtualFile, NzbFileStream };
+module.exports = { VirtualFile, NzbFileStream, SharedCacheBudget };

@@ -171,6 +171,122 @@ test('source-fit beats transcoding: a cap-fit direct-play release is chosen at S
   assert.ok(ranked[0].name.includes('1080p'), 'capped user gets a 1080p SOURCE, not a transcoded 4K');
 });
 
+test('browser playback cap does not overwrite a durable 4K Continue Watching preference', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const qualityStart = ui.indexOf('function preferredQualityRankForItem(it)');
+  const qualityEnd = ui.indexOf('function sourceSearchQuery(it, opts = {})', qualityStart);
+  assert.ok(qualityStart >= 0 && qualityEnd > qualityStart, 'quality preference helpers should be extractable');
+  const S = { detailItem: null, qualityPref: null };
+  const normalizeQualityRank = (value) => [3, 4].includes(+value) ? +value : null;
+  const quality = new Function('S', 'normalizeQualityRank', 'qualityTitleKey', 'savedQualityPref',
+    'globalQualityPref', 'userCanPlay4k', 'isWebBrowserClient', 'allow4kInBrowser',
+    `${ui.slice(qualityStart, qualityEnd)}\nreturn { preferredQualityRankForItem, qualityRankForItem };`)(
+      S, normalizeQualityRank, (it) => it && it.key, () => null, () => 4,
+      () => true, () => true, () => false);
+  const movie = { key: 'tmdb:movie:77', tmdbId: 77, type: 'movie' };
+  assert.strictEqual(quality.preferredQualityRankForItem(movie), 4,
+    'the cross-device preference stays 4K');
+  assert.strictEqual(quality.qualityRankForItem(movie), 3,
+    'the current browser request still receives its safe 1080p cap');
+
+  const metaStart = ui.indexOf('function wlMeta(it)');
+  const metaEnd = ui.indexOf('// Restricted profiles:', metaStart);
+  const wlMeta = new Function('durableArtUrl', 'preferredQualityRankForItem',
+    `${ui.slice(metaStart, metaEnd)}\nreturn wlMeta;`)((value) => value || '', quality.preferredQualityRankForItem);
+  assert.strictEqual(wlMeta(movie).qualityRank, 4,
+    'watch metadata persists the durable preference, not this device effective cap');
+
+  const playStart = ui.indexOf('async function play(it, pick, opts = {})');
+  const playEnd = ui.indexOf('// Full-screen loading:', playStart);
+  const playSource = ui.slice(playStart, playEnd);
+  assert.match(playSource, /const preferredRank = pickRank !== null \? pickRank : preferredQualityRankForItem\(it\);[\s\S]+if \(preferredRank !== null\) it\.qualityRank = preferredRank;/,
+    'playback must carry the durable rank into later watch saves instead of assigning qRank');
+  assert.doesNotMatch(playSource, /it\.qualityRank = qRank/,
+    'an effective browser rank must never replace the durable item preference');
+});
+
+test('final watch checkpoints coalesce duplicate lifecycle beacons without hiding EOF', async () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf('async function saveWatch(final, opts = {})');
+  const end = ui.indexOf('function playbackFinishedDetailTarget', start);
+  assert.ok(start >= 0 && end > start, 'saveWatch should be extractable');
+
+  const calls = [];
+  const player = { item: { key: 'tmdb:movie:77' }, lastSaved: 0 };
+  const S = { playing: player, profile: { id: 'living-room' } };
+  const saveWatch = new Function('S', 'currentTime', 'totalDuration', 'wlMeta', 'upsertWatchCache', 'api',
+    `${ui.slice(start, end)}\nreturn saveWatch;`)(
+      S, () => 321.9, () => 3600, () => ({ title: 'Checkpoint' }), () => {},
+      async (url, opts) => { calls.push({ url, opts }); return { ok: true }; });
+
+  const first = saveWatch(true);
+  const duplicate = saveWatch(true);
+  await Promise.all([first, duplicate]);
+  assert.strictEqual(calls.length, 1, 'pause/background/pagehide at the same point should share one final write');
+
+  await saveWatch(true, { watched: true });
+  assert.strictEqual(calls.length, 2, 'an EOF watched override must not be coalesced with a paused checkpoint');
+  assert.strictEqual(calls[1].opts.body.watched, true);
+
+  assert.match(ui, /const wasPaused = !!p\.castPaused;[\s\S]+p\.castPaused = \(o\.state === 'paused' \|\| o\.state === 'idle'\);[\s\S]+if \(p\.castPaused && !wasPaused\) saveWatch\(true\);/,
+    'native Cast should checkpoint only on the playing-to-paused transition, not on every state sample');
+});
+
+test('Trakt percent-only native resume reaches direct and server-seek Android paths once', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
+  const fracStart = ui.indexOf('function traktResumeFractionForItem(it)');
+  const fracEnd = ui.indexOf('function playbackRequestBody(', fracStart);
+  const traktResumeFractionForItem = new Function(`${ui.slice(fracStart, fracEnd)}\nreturn traktResumeFractionForItem;`)();
+  assert.strictEqual(traktResumeFractionForItem({ type: 'movie', _traktPct: 42 }), 0.42);
+  assert.strictEqual(traktResumeFractionForItem({ type: 'movie', _traktPct: 99 }), 0.96,
+    'Trakt resume remains bounded away from EOF');
+  assert.strictEqual(traktResumeFractionForItem({ type: 'movie', _traktPct: 42, _startOver: true }), 0,
+    'explicit Start Over must not reapply imported percentage progress');
+
+  const nativeStart = ui.indexOf('function tryNativeVideoPlayer(kind, atSeconds, opts = {})');
+  const nativeEnd = ui.indexOf('function tryNativePlaybackLadder(', nativeStart);
+  assert.ok(nativeStart >= 0 && nativeEnd > nativeStart, 'native payload builder should be extractable');
+  const payloads = [];
+  const state = { playing: {
+    item: { key: 'tmdb:movie:91', type: 'movie', title: 'Percent Resume', _traktPct: 42 },
+    streamUrl: '/api/stream/one', remuxUrl: '/api/remux/one?t=token', transcodeUrl: '/api/transcode/one?t=token',
+    nativeTried: {}, duration: 0, nativeDuration: 0, playbackToken: 91,
+  } };
+  const window = { TriboonTV: { playVideo: (raw) => payloads.push(JSON.parse(raw)) } };
+  const tryNativeVideoPlayer = new Function('S', 'canUseNativeVideoPlayer', 'remuxPlaybackUrl',
+    'nativeVideoSubtitleRel', 'nativeSubtitlePayload', 'updatePlayerMeta', 'episodePlayerMeta',
+    'absoluteArtworkUrl', 'nativeMimeForKind', 'nativeQualityLabel', 'applySubSize',
+    'nativeSubtitleChoices', 'nativeEpisodeChoices', 'loadSubShift', 'traktResumeFractionForItem',
+    'window', 'location', `${ui.slice(nativeStart, nativeEnd)}\nreturn tryNativeVideoPlayer;`)(
+      state, () => true, (_p, at) => `/api/remux/one?start=${at}`, () => ({ blocked: false, rel: '' }),
+      () => ({ rel: '', url: '', lang: '', label: '', shift: 0 }), () => {},
+      (it) => ({ title: it.title, subline: '' }), () => '', () => '', () => '4K', () => 'M',
+      () => [], () => [], () => 0, traktResumeFractionForItem, window, { origin: 'http://triboon.test' });
+  assert.strictEqual(tryNativeVideoPlayer('direct', 0), true);
+  assert.strictEqual(payloads[0].startFraction, 0.42,
+    'direct ExoPlayer receives the imported fraction while seconds are unknown');
+  assert.strictEqual(tryNativeVideoPlayer('remux', 0), true);
+  assert.strictEqual(payloads[1].startFraction, 0.42,
+    'remux startup also carries the fraction until the track duration resolves');
+  assert.strictEqual(tryNativeVideoPlayer('remux', 100, { quietSeek: true, percentResume: true }), true);
+  assert.strictEqual(payloads[2].startFraction, 0,
+    'the absolute remount consumes the fraction instead of scheduling it again');
+  assert.strictEqual(payloads[2].startOffset, 100);
+  assert.strictEqual(payloads[2].percentResume, true);
+
+  assert.match(android, /private void resolveNativePercentStartIfKnown\(\) \{[\s\S]+Math\.round\(d \* nativePendingStartFraction\)[\s\S]+nativePendingStartFraction = 0\.0;[\s\S]+nativePendingStartMs = target;/,
+    'Android converts the imported fraction to seconds exactly once after duration is known');
+  assert.match(android, /if \(nativeServerSeekMode\(\) && nativePercentResumePending\) \{[\s\S]+nativePendingStartMs = 0L;[\s\S]+requestNativeVideoSeek\(target, false, true\);/,
+    'remux/transcode consumes the pending target before its single server remount');
+  assert.match(android, /requestNativeVideoSeek\(long displayMs, boolean resume, boolean percentResume\)[\s\S]+playbackToken[\s\S]+percentResume \? "true" : "false"/,
+    'the percent remount carries the active playback token back to the web bridge');
+  assert.match(ui, /window\.__tvNativeVideoSeek = async \(pos, dur, resume, token, percentResume\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+if \(!percentResume\) p\.nativePos = at;[\s\S]+percentResume: !!percentResume/,
+    'the web remount rejects stale tokens and does not publish computed progress before replacement');
+  assert.match(android, /private void startNativeProgress\(\) \{[\s\S]+applyNativeStartSeekIfReady\(\);[\s\S]+if \(!nativePercentResumePending\) \{[\s\S]+__tvNativeVideoProgress/,
+    'the 1s progress driver completes a direct cached seek even without a second READY transition, while suppressing false zero progress');
+});
+
 test('quality toggle is a source-selection preference that survives Continue Watching', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   assert.match(ui, /body\.maxResolutionRank = qRank;[\s\S]+body\.preferResolutionRank = qRank;/,
@@ -219,12 +335,12 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'manual source selection should pass the picked source quality into the shared request builder');
   assert.match(ui, /function playbackRequestBody\(it, picked = null, qRank = qualityRankForItem\(it\)\) \{[\s\S]+if \(qRank !== null\) \{[\s\S]+body\.maxResolutionRank = qRank;[\s\S]+body\.preferResolutionRank = qRank;/,
     'manual source selection should prefer the picked source quality while normal Play uses the current 1080p/4K toggle');
-  assert.match(ui, /function qualityRankForItem\(it\) \{[\s\S]+if \(it\._local && !it\.tmdbId\) return null;/,
+  assert.match(ui, /function preferredQualityRankForItem\(it\) \{[\s\S]+if \(it\._local && !it\.tmdbId\) return null;/,
     'matched local movies and episodes should still inherit saved 1080p/4K preferences');
   // 4K startup fix: a user's quality choice is remembered per-profile so the NEXT title pre-mounts
   // that quality on detail open (warm by Play) instead of starting the 4K mount only on toggle.
-  assert.match(ui, /function qualityRankForItem\(it\) \{[\s\S]+savedQualityPref\(it\)[\s\S]+\|\| globalQualityPref\(\);[\s\S]+if \(q === 4 && !userCanPlay4k\(\)\) q = 3;[\s\S]+return q \|\| null;/,
-    'qualityRankForItem should fall back to the remembered global quality and clamp 4K for capped users, but stay null when nothing is set (single-version titles unaffected)');
+  assert.match(ui, /function preferredQualityRankForItem\(it\) \{[\s\S]+savedQualityPref\(it\)[\s\S]+\|\| globalQualityPref\(\);[\s\S]+if \(q === 4 && !userCanPlay4k\(\)\) q = 3;[\s\S]+return q \|\| null;/,
+    'durable quality should fall back to the remembered global quality and clamp 4K for capped users, but stay null when nothing is set (single-version titles unaffected)');
   // A remembered GLOBAL 4K default must not force a 4K request (→ the server no-fallback lock) onto a
   // title that has no 4K at all: checkAvailability records _has4k, and qualityRankForItem clamps 4→3
   // when it's known false. This is the "don't even try 4K on a 1080p-only show" fix.
@@ -312,14 +428,14 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   // set to the cached server list too, or a just-removed next-up card reappears on the next render.
   assert.match(ui, /if \(Array\.isArray\(S\._homeTvNext\)\) \{[\s\S]+const hiddenNext = cwHiddenNextSet\(\);[\s\S]+for \(const it of S\._homeTvNext\) if \(it && it\.key && !seen\.has\(it\.key\) && !hiddenNext\.has\(it\.key\)\)/,
     'buildCwItems must filter the cached server next-up list through the local dismissal set so a removed next-up card does not reappear');
-  assert.match(ui, /function epItemOf\(show, season, ep\) \{[\s\S]+qualityRank: qualityRankForItem\(show\)[\s\S]+function epTarget\(show, sNum, eNum, resume\) \{[\s\S]+qualityRank: qualityRankForItem\(show\)/,
+  assert.match(ui, /function epItemOf\(show, season, ep\) \{[\s\S]+qualityRank: preferredQualityRankForItem\(show\)[\s\S]+function epTarget\(show, sNum, eNum, resume\) \{[\s\S]+qualityRank: preferredQualityRankForItem\(show\)/,
     'episode targets created from details should inherit the current show quality preference');
-  assert.match(ui, /async function prepPlayerSeasonEpisodes\(it\) \{[\s\S]+const inheritedQuality = qualityRankForItem\(it\);[\s\S]+const item = inheritedQuality \? \{ \.\.\.base, qualityRank: inheritedQuality \} : base;[\s\S]+async function prepNextEpisode\(it\) \{[\s\S]+const inheritedQuality = qualityRankForItem\(it\);[\s\S]+const item = inheritedQuality \? \{ \.\.\.base, qualityRank: inheritedQuality \} : base;/,
+  assert.match(ui, /async function prepPlayerSeasonEpisodes\(it\) \{[\s\S]+const inheritedQuality = preferredQualityRankForItem\(it\);[\s\S]+const item = inheritedQuality \? \{ \.\.\.base, qualityRank: inheritedQuality \} : base;[\s\S]+async function prepNextEpisode\(it\) \{[\s\S]+const inheritedQuality = preferredQualityRankForItem\(it\);[\s\S]+const item = inheritedQuality \? \{ \.\.\.base, qualityRank: inheritedQuality \} : base;/,
     'player episode strip and Up Next should continue the same 4K/1080p class');
   assert.match(ui, /async function saveWatch\(final, opts = \{\}\) \{[\s\S]+const pos = currentTime\(\);[\s\S]+if \(!final && Math\.abs\(pos - p\.lastSaved\) < 5\) return;[\s\S]+const watched = opts && opts\.watched != null \? !!opts\.watched : nearEnd;[\s\S]+key: p\.item\.key, position: Math\.floor\(pos\), duration: Math\.floor\(d \|\| 0\),[\s\S]+watched, profile: S\.profile \? S\.profile\.id : undefined,[\s\S]+upsertWatchCache\(\{[\s\S]+position: payload\.position[\s\S]+api\('\/api\/watch', \{ method: 'POST', body: payload, keepalive: !!final \}\)/,
     'watch progress should save profile-scoped position immediately into the local cache and server (keepalive on final saves so close/pagehide flushes survive teardown), honoring a caller watched-override');
-  assert.match(ui, /window\.addEventListener\('pagehide', \(\) => \{ if \(S\.playing\) \{ saveWatch\(true\);/,
-    'pagehide should flush the final watch position before the page is torn down');
+  assert.match(ui, /function flushPlaybackCheckpoints\(\) \{[\s\S]+if \(S\.playing\) saveWatch\(true\);[\s\S]+saveMultiViewVodProgress\(i, true\);[\s\S]+window\.__tvPlaybackBackgrounded = flushPlaybackCheckpoints;[\s\S]+window\.addEventListener\('pagehide', \(\) => \{[\s\S]+flushPlaybackCheckpoints\(\);[\s\S]+document\.addEventListener\('visibilitychange', \(\) => \{[\s\S]+document\.visibilityState === 'hidden'[\s\S]+flushPlaybackCheckpoints\(\);/,
+    'pagehide, mobile visibility loss, and native backgrounding should flush main and Multiview watch positions before teardown');
   assert.match(ui, /async function closePlayer\(opts = \{\}\) \{[\s\S]+const finalWatch = saveWatch\(true, opts && opts\.ended \? \{ watched: true \} : \{\}\);[\s\S]+const finalActivity = stopActivityHeartbeat\(\);[\s\S]+if \(\$\(\'detail\'\)\.classList\.contains\(\'open\'\)\) \{[\s\S]+await finalWatch; await finalActivity; await loadWatchState\(true\);[\s\S]+if \(S\.detailItem\) syncDetailButtons\(S\.detailItem\);/,
     'returning from player to details should flush the final watch position (forcing watched when playback ENDED, even if the duration probe never landed) and refresh the visible Resume/Start Over buttons');
   assert.match(ui, /function syncDetailButtons\(it\) \{[\s\S]+const resume = resumePositionForItem\(it\);[\s\S]+\$\(\'dStartOver\'\)\.style\.display = resume \? '' : 'none';[\s\S]+updateDetailPlayLabel\(resume \? \{ label: 'Resume', target: \{ \.\.\.it, resume \} \} : \{ label: 'Play', target: it \}\);/,
@@ -669,7 +785,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'music now-playing top controls no longer fall through on ArrowUp (no focus trap)');
   // Trakt-imported resume (percent only, no position/duration) still primes the server read-ahead
   // window via resumeFrac so it doesn't cold-seek (the 20-30s resume lag).
-  assert.match(ui, /if \(body\.resumeFrac === undefined && \+it\._traktPct > 2\) \{[\s\S]+body\.resumeFrac = Math\.max\(0, Math\.min\(0\.96, \(\+it\._traktPct\) \/ 100\)\)/,
+  assert.match(ui, /function traktResumeFractionForItem\(it\) \{[\s\S]+pct > 2 \? Math\.max\(0, Math\.min\(0\.96, pct \/ 100\)\)[\s\S]+if \(body\.resumeFrac === undefined && traktResumeFrac > 0\) body\.resumeFrac = traktResumeFrac/,
     'Trakt percent-only progress sends resumeFrac to warm the resume byte window');
   assert.match(ui, /id="chBar"><div class="chWrap"><input id="chSearch"[\s\S]+id="chClearBtn"/,
     'Live TV filter is wrapped so it can host a clear (X) button');
@@ -1245,7 +1361,7 @@ test('next-episode metadata cannot overwrite a newer player when requests resolv
   const S = { playing: { item: { key: 'episode-a' } } };
   const updates = [];
   const prepNextEpisode = new Function('S', 'updateNextEpisodeButton', 'episodeKeyParts',
-    'getPlayerEpisodeContext', 'api', 'epItemOf', 'qualityRankForItem', 'ensureLocalPlaybackForItem',
+    'getPlayerEpisodeContext', 'api', 'epItemOf', 'preferredQualityRankForItem', 'ensureLocalPlaybackForItem',
     'img', 'pad2', `${ui.slice(start, end)}\nreturn prepNextEpisode;`)(
       S,
       () => updates.push(S.nextEp && S.nextEp.item && S.nextEp.item.key),
@@ -1692,12 +1808,14 @@ test('VOD pause resume: paused players warm ahead without stealing startup or se
     'pause warm-ahead should issue one bounded low-priority range ahead of the paused VOD position');
   assert.match(ui, /v\.onplaying = \(\) => \{[\s\S]+S\.playing !== playingRef[\s\S]+clearWebRebufferRecovery\(\); cancelPauseWarmAhead\(\);[\s\S]+v\.onpause = \(\) => \{[\s\S]+S\.playing !== playingRef[\s\S]+schedulePauseWarmAhead\(playingRef\); updPP\(\);/,
     'web video should clear stale recovery state, warm on pause, and cancel warm-ahead immediately when playing again');
+  assert.match(ui, /v\.onpause = \(\) => \{[\s\S]+S\.playing !== playingRef[\s\S]+saveWatch\(true\);[\s\S]+schedulePauseWarmAhead\(playingRef\);/,
+    'web pause should immediately persist its exact Continue Watching checkpoint');
   assert.match(ui, /function requestVideoPlay\(v, opts = \{\}\) \{[\s\S]+cancelPauseWarmAhead\(\);[\s\S]+const r = v\.play\(\);[\s\S]+return r\.then\(\(\) => \{[\s\S]+cancelPauseWarmAhead\(\)/,
     'user-initiated resume should cancel pause warm-ahead before and after play starts');
   assert.match(ui, /function seekTo\(seconds\) \{[\s\S]+cancelPauseWarmAhead\(\);[\s\S]+if \(!p\) return;/,
     'manual seeks should cancel old pause warm-ahead ranges before changing position');
-  assert.match(ui, /window\.__tvNativeVideoPlaying = \(pos, dur, token\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+applyNativeVideoProgress\(pos, dur\);[\s\S]+cancelPauseWarmAhead\(\);[\s\S]+\};[\s\S]+window\.__tvNativeVideoPaused = \(pos, dur, token\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+applyNativeVideoProgress\(pos, dur\);[\s\S]+schedulePauseWarmAhead\(p\);[\s\S]+\};/,
-    'native ExoPlayer should share the same pause/resume warm-ahead contract as the web player');
+  assert.match(ui, /window\.__tvNativeVideoPlaying = \(pos, dur, token\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+applyNativeVideoProgress\(pos, dur\);[\s\S]+cancelPauseWarmAhead\(\);[\s\S]+\};[\s\S]+window\.__tvNativeVideoPaused = \(pos, dur, token\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+applyNativeVideoProgress\(pos, dur\);[\s\S]+saveWatch\(true\);[\s\S]+schedulePauseWarmAhead\(p\);[\s\S]+\};/,
+    'native ExoPlayer should immediately persist pause progress and share the same pause/resume warm-ahead contract as the web player');
   assert.match(android, /if \("video"\.equals\(nativeMode\) && isPlaying\) \{[\s\S]+__tvNativeVideoPlaying[\s\S]+\} else if \("video"\.equals\(nativeMode\) && nativeVideoStarted[\s\S]+nativePlayer\.getPlaybackState\(\) == Player\.STATE_READY[\s\S]+!nativePlayer\.getPlayWhenReady\(\)[\s\S]+__tvNativeVideoPaused/,
     'Android should report real user pauses without treating normal buffering as paused playback');
 });
@@ -2565,8 +2683,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android native playback should not allow provider redirects to switch protocols after URL validation');
   assert.match(android, /setAudioAttributes\(new AudioAttributes\.Builder\(\)[\s\S]+setUsage\(C\.USAGE_MEDIA\)[\s\S]+setHandleAudioBecomingNoisy\(true\)/,
     'Android ExoPlayer should request media audio focus and pause on noisy-device changes');
-  assert.match(android, /protected void onPause\(\) \{[\s\S]+boolean inPip = Build\.VERSION\.SDK_INT >= Build\.VERSION_CODES\.N && isInPictureInPictureMode\(\);[\s\S]+if \(nativePlayer != null && !inPip\) nativePlayer\.pause\(\);[\s\S]+document\.querySelectorAll\('video'\)\.forEach\(v=>v\.pause\(\)\)[\s\S]+if \(!inPip && !musicPlaying\) \{[\s\S]+web\.onPause\(\);[\s\S]+web\.pauseTimers\(\);/,
-    'Android backgrounding should pause playback and WebView timers, while keeping system PiP playback AND background music alive');
+  assert.match(android, /protected void onPause\(\) \{[\s\S]+boolean inPip = Build\.VERSION\.SDK_INT >= Build\.VERSION_CODES\.N && isInPictureInPictureMode\(\);[\s\S]+if \(nativePlayer != null && !inPip\) nativePlayer\.pause\(\);[\s\S]+__tvNativeVideoProgress[\s\S]+__tvPlaybackBackgrounded[\s\S]+document\.querySelectorAll\('video'\)\.forEach\(v=>v\.pause\(\)\)[\s\S]+if \(!inPip && !musicPlaying\) \{[\s\S]+web\.evaluateJavascript\(checkpoint, ignored -> suspendWeb\.run\(\)\);[\s\S]+web\.postDelayed\(suspendWeb, 250L\);/,
+    'Android backgrounding should checkpoint exact native progress before pausing playback/WebView timers, while keeping system PiP playback and background music alive');
   assert.doesNotMatch(android, /protected void onPause\(\) \{[\s\S]{0,240}closeNativePlayback\(true\);/,
     'Android onPause must not close native playback; that caused resume/PiP churn');
   assert.match(android, /protected void onUserLeaveHint\(\) \{[\s\S]+super\.onUserLeaveHint\(\);[\s\S]+enterNativePictureInPictureIfUseful\(\);[\s\S]+onPictureInPictureModeChanged\(boolean isInPictureInPictureMode, Configuration newConfig\)[\s\S]+PictureInPictureParams\.Builder\(\)[\s\S]+new Rational\(16, 9\)/,
@@ -3437,7 +3555,7 @@ test('Android native player: direct source and native chrome stay out of the web
   const nativeServerSeekBlock = android.slice(nativeServerSeekStart, nativeServerSeekEnd);
   assert.match(nativeServerSeekBlock, /private boolean nativeServerSeekMode\(\) \{[\s\S]*?"remux"\.equals\(nativeKind\) \|\| "transcode"\.equals\(nativeKind\)[\s\S]*?private void nativeSeekToDisplayPosition\(long displayMs\) \{[\s\S]*?if \(nativeServerSeekMode\(\)\) \{[\s\S]*?requestNativeVideoSeek\(target\);[\s\S]*?return;[\s\S]*?\}[\s\S]*?nativePlayer\.seekTo/,
     'native remux/transcode seeking should restart through the web handoff instead of seeking inside a restarted segment');
-  assert.match(ui, /window\.__tvNativeVideoSeek = async \(pos, dur, resume, token\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+p\.nativePos = at;[\s\S]+tryNativeVideoPlayer\(kind, at, \{ quietSeek: true \}\);[\s\S]+\};/,
+  assert.match(ui, /window\.__tvNativeVideoSeek = async \(pos, dur, resume, token, percentResume\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+if \(!percentResume\) p\.nativePos = at;[\s\S]+tryNativeVideoPlayer\(kind, at, \{ quietSeek: true, percentResume: !!percentResume \}\);[\s\S]+\};/,
     'web should quietly remount the active native source kind when Android requests an absolute seek');
   assert.match(android, /private boolean handleNativeSeekBarKey\(KeyEvent e\) \{[\s\S]+View current = getCurrentFocus\(\);[\s\S]+current != nativeSeek && \(!nativeSeekDpadMode \|\| isNativeControl\(current\)\)[\s\S]+KEYCODE_DPAD_LEFT[\s\S]+KEYCODE_DPAD_RIGHT[\s\S]+nativeSeekBy\(code == KeyEvent\.KEYCODE_DPAD_RIGHT \? 30000 : -10000\);[\s\S]+\}/,
     'focused native seek bar should scrub video with D-pad left/right while focused buttons stay in button navigation');
@@ -3605,7 +3723,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'shell tracks whether web music is playing');
   assert.match(android, /public void musicSession\(String json\) \{[\s\S]+optBoolean\("playing"/,
     'shell exposes a musicSession bridge that reads the playing flag');
-  assert.match(android, /if \(!inPip && !musicPlaying\) \{\s*web\.onPause\(\);\s*web\.pauseTimers\(\);/,
+  assert.match(android, /if \(!inPip && !musicPlaying\) \{[\s\S]+Runnable suspendWeb = new Runnable\(\) \{[\s\S]+web\.onPause\(\);[\s\S]+web\.pauseTimers\(\);[\s\S]+\} else \{\s*web\.evaluateJavascript\(checkpoint, null\);/,
     'onPause keeps the WebView alive while music is playing so background audio continues');
   assert.match(ui, /function pumpMusicCoverQueue\(\) \{[\s\S]+_musicCoverActive < 3[\s\S]+coverForMusicCard\(card\)/,
     'lazy cover loading should be concurrency-gated so a scroll burst cannot fan out unbounded fetches');
@@ -3917,7 +4035,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'the web seek frame hold should disappear as soon as the replacement stream has a frame');
   assert.match(ui, /v\.onwaiting = \(\) => \{[\s\S]+pWait\.suppressSeekLoaderUntil && appMs\(\) < pWait\.suppressSeekLoaderUntil[\s\S]+return;/,
     'web rebuffer events during a user seek should keep the current frame instead of flashing the loader');
-  assert.match(ui, /window\.__tvNativeVideoSeek = async \(pos, dur, resume, token\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+p\.suppressSeekLoaderUntil = appMs\(\) \+ 4500;[\s\S]+\$\(\'playerLoader\'\)\.classList\.remove\(\'show\'\);[\s\S]+tryNativeVideoPlayer\(kind, at, \{ quietSeek: true \}\);/,
+  assert.match(ui, /window\.__tvNativeVideoSeek = async \(pos, dur, resume, token, percentResume\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+p\.suppressSeekLoaderUntil = appMs\(\) \+ 4500;[\s\S]+\$\(\'playerLoader\'\)\.classList\.remove\(\'show\'\);[\s\S]+tryNativeVideoPlayer\(kind, at, \{ quietSeek: true, percentResume: !!percentResume \}\);/,
     'native remux/transcode seek restarts should be marked as quiet seeks from the web bridge');
   assert.match(ui, /quietSeek: !!opts\.quietSeek/,
     'native playback payload should carry whether this is a user seek instead of startup');
@@ -4137,8 +4255,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Multiview hover should move active audio without stealing keyboard focus');
   assert.match(ui, /const back = el\.querySelector\('\.mvBackBtn'\);[\s\S]+const play = el\.querySelector\('\.mvPlayBtn'\);[\s\S]+const fwd = el\.querySelector\('\.mvFwdBtn'\);[\s\S]+multiViewVodSeek\(slot\(\), -10\)[\s\S]+multiViewVodTogglePlay\(slot\(\)\)[\s\S]+multiViewVodSeek\(slot\(\), 30\)/,
     'VOD Multiview transport buttons should be clickable as pane actions');
-  assert.match(ui, /function saveMultiViewVodProgress\(i, final = false\) \{[\s\S]+api\('\/api\/watch', \{ method: 'POST', body: payload \}\)\.catch\(\(\) => \{\}\);[\s\S]+function cleanupMultiViewSlot\(i, clearItem = false\) \{[\s\S]+saveMultiViewVodProgress\(i, true\);[\s\S]+cleanupLiveMse\('multi' \+ i\);[\s\S]+v\.removeAttribute\('src'\);[\s\S]+v\.src = '';[\s\S]+if \(clearItem && S\.multiView && S\.multiView\.slots\) S\.multiView\.slots\[i\] = null;/,
-    'Multiview cleanup should save VOD progress, stop each pane, clear the media element, and release the pane item');
+  assert.match(ui, /function saveMultiViewVodProgress\(i, final = false\) \{[\s\S]+api\('\/api\/watch', \{ method: 'POST', body: payload, keepalive: !!final \}\)\.catch\(\(\) => \{\}\);[\s\S]+function cleanupMultiViewSlot\(i, clearItem = false\) \{[\s\S]+saveMultiViewVodProgress\(i, true\);[\s\S]+cleanupLiveMse\('multi' \+ i\);[\s\S]+v\.removeAttribute\('src'\);[\s\S]+v\.src = '';[\s\S]+if \(clearItem && S\.multiView && S\.multiView\.slots\) S\.multiView\.slots\[i\] = null;/,
+    'Multiview cleanup should keep the final VOD progress write alive, stop each pane, clear the media element, and release the pane item');
   assert.match(ui, /function multiViewActionButtons\(slot = multiViewActiveSlot\(\)\) \{[\s\S]+const isVod = root\.classList\.contains\('vod'\);[\s\S]+filter\(\(btn\) => isVod \|\| !btn\.classList\.contains\('mvVodOnly'\)\);/,
     'Multiview action focus should skip hidden VOD transport buttons on Live TV panes');
   assert.match(ui, /function openMultiViewActions\(slot = multiViewActiveSlot\(\)\) \{[\s\S]+S\.multiViewActionIdx = multiViewSlotIsVod\(pane\) \? 1 : 0;[\s\S]+return setMultiViewActionFocus\(S\.multiViewActionIdx\);/,

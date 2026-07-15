@@ -44,6 +44,12 @@ That command runs:
 The Android stress step is part of the full gate. If no Android device is
 available, the gate fails. If the runner explicitly skips it, the script still
 finishes as incomplete and Android ExoPlayer must be reported as unverified.
+The required ADB device must be online and fully booted before the command
+starts; this is checked before the longer repository gates. After installing
+the APK, stress also requires the app's configured server to be reachable and
+the Android app to be signed in with a profile selected. Setup, login, profile,
+or PIN screens stop the run as environment preflight failures instead of being
+misreported as page, IPTV, buffering, or VOD regressions.
 
 ## Required Live Smokes
 
@@ -75,18 +81,50 @@ a running server:
 ```powershell
 $env:TRIBOON_USER="owner"; $env:TRIBOON_PASS="..."
 npm.cmd run verify:live -- --base http://localhost:7777 `
+  --quality 4k --resume-frac 0.45 `
   --title "Movie Name 2024|tt1234567" --title "Show S01E01|tt7654321|1|1"
 ```
 
 It logs in, then for each title measures: **ready** (press→playable via
-`/api/play`), **1stByte** (stream Range bytes=0-, the time-to-first-frame
-proxy), **seek** (cold Range ~70% in), **resume** (second Play reuses the live
+`/api/play`), **1stByte** (stream Range at the requested Continue Watching
+offset, or byte 0 for a fresh play), **seek** (a different cold Range),
+**resume** (second Play reuses the live
 mount), and reports the **playback method** (direct / +aacSafe / remux /
 transcode) and a live **health** verdict. Exit code is non-zero if any title
 fails to produce a playable stream. Budgets default to feels-local targets
 (ready≤3s, 1stByte≤1.5s) and flag `SLOW` rather than hard-failing on timing.
 
 ### Latest Evidence
+
+2026-07-15, v2.7.1 buffering / 4K resume / final-checkpoint verification:
+
+- Version contract aligned: `package.json` 2.7.1; Android `versionName` 2.7.1
+  / `versionCode` 304.
+- The focused Phase 4 suite passed 64/64 and `npm.cmd test` passed 429/429.
+  Final checkpoints cover browser/native pause, Back/Stop, EOF/Up Next, Cast,
+  Multiview, page hide, mobile visibility loss, and Android backgrounding;
+  duplicate lifecycle beacons at the same position are coalesced.
+- `npm.cmd run verify:full -- -AndroidDevice emulator-5554
+  -AndroidVodKey tmdb:movie:1226863 -AndroidVodQualityRank 4
+  -AndroidVodResumeSeconds 120 -AndroidVodDurationSeconds 7200` passed on the
+  final tree in 414.5 seconds. It repeated P9 IPTV, P11 subtitles, P14 fast VOD,
+  inline web parsing, isolated runtime smoke, Android lint/unit/build/install,
+  and Android TV stress.
+- Android TV API 36 stress report
+  `bench/stress-results/android-tv-stress-20260715-100924.json` finished
+  `ok: true` with no failures or warnings. It found 59 4K-class sources and
+  mounted a 2160p release, resumed a requested 120-second point at 135 seconds,
+  then progressed through seek samples at 175, 215, and 235 seconds. The
+  emulator's HEVC decoder rejected the 4K format, and Triboon recovered through
+  its supported remux/transcode ladder instead of freezing. Subtitle lookup
+  returned HTTP 200, and page/D-pad churn, native IPTV, Multiview, and PiP all
+  passed with no fatal log finding.
+- A real Android media-stop immediately after that run persisted position 279
+  / duration 7200 to the selected profile's `/api/watch` row before the server
+  was queried, proving the latest Continue Watching checkpoint survives Stop.
+- The device run used a disposable re-keyed QA data directory with no production
+  users, watch history, Trakt tokens, or music tokens; the directory is removed
+  after release verification.
 
 2026-07-14, v2.7.0 episode-handoff release verification:
 
@@ -584,9 +622,9 @@ Manual checks:
 
 ```powershell
 node --test test/e2e.test.js
-node --test --test-name-pattern "warmup|prepare|startup|read-ahead|priority|buffer|4K|loose-pack|season pack|episode pack|pack episode|exact-episode|season-zero|live-mount reuse|top-ranked|understudy|hedge|rank grace|mount deadline|master abort" test/phase2.test.js
+node --test --test-name-pattern "warmup|prepare|startup|read-ahead|priority|buffer|4K|multi-user|concurrent VOD|loose-pack|season pack|episode pack|pack episode|exact-episode|season-zero|live-mount reuse|top-ranked|understudy|hedge|rank grace|mount deadline|master abort" test/phase2.test.js
 node --test --test-name-pattern "prepare|startup|VOD pause resume|native player|ExoPlayer|seek|web VOD rebuffer" test/phase4.test.js
-node --test --test-name-pattern "streaming|prepare|play|route" test/security.test.js
+node --test --test-force-exit --test-name-pattern "boot: fresh server|streaming|prepare|play|route|teardown" test/security.test.js
 ```
 
 Manual checks:
@@ -598,6 +636,9 @@ Manual checks:
 - Startup/seek bytes outrank health, read-ahead, and background work.
 - Paused warm-ahead stays low-priority and cancels on resume, seek, or close.
 - 4K buffering cannot starve another user's startup or seek.
+- On a configured 4K title, the Android stress/smoke helpers can be run with
+  `-VodQualityRank 4`, a saved resume timestamp, and an explicit duration; they
+  fail if playback does not mount a 4K-labelled source or reach that timestamp.
 - A season-pack RAR/ZIP mounts and reuses only the requested episode.
 - A stalled top candidate gets one 800ms hedge; a ready understudy waits at
   most 250ms for higher ranks and prevents additional source launches.

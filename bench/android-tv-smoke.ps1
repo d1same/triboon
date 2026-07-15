@@ -6,7 +6,12 @@ param(
   [switch]$LiveZap,
   [switch]$VodSmoke,
   [string]$VodKey = "tmdb:movie:1226863",
+  [ValidateRange(0, 86400)]
   [int]$ResumeSeconds = 120,
+  [ValidateRange(0, 172800)]
+  [int]$VodDurationSeconds = 0,
+  [ValidateRange(1, 4)]
+  [int]$VodQualityRank = 3,
   [int]$VodSettleSeconds = 22,
   [switch]$VodNoSeek,
   [switch]$StartupDpad,
@@ -177,18 +182,35 @@ if ($VodSmoke) {
 (async () => {
   if (!S.rows || !S.rows.length) await loadRows();
   const key = '$VodKey';
-  const item = (S.rows || []).flatMap((r) => r.items || []).find((x) => x && x.key === key);
+  let item = (S.rows || []).flatMap((r) => r.items || []).find((x) => x && x.key === key);
   if (!item) return { ok: false, error: 'vod item not found', key, rows: S.rows ? S.rows.length : 0 };
+  const existingWatch = S.watchMap && S.watchMap[key];
+  const duration = $VodDurationSeconds || +(existingWatch && existingWatch.duration) || +item.duration || 0;
+  if ($VodQualityRank === 4 && $ResumeSeconds > 0 && duration <= $ResumeSeconds) {
+    return { ok: false, error: '4K Continue Watching verification requires -VodDurationSeconds greater than -ResumeSeconds', duration, requestedResume: $ResumeSeconds };
+  }
   S.watchMap = S.watchMap || {};
-  S.watchMap[key] = { ...(S.watchMap[key] || {}), key, position: $ResumeSeconds, duration: item.duration || 0, watched: false, meta: item };
-  item.resume = $ResumeSeconds;
+  item = { ...item, qualityRank: $VodQualityRank, resume: $ResumeSeconds, duration };
+  S.watchMap[key] = { ...(existingWatch || {}), key, position: $ResumeSeconds, duration, watched: false, meta: item };
   await play(item);
-  return { ok: true, key, requestedResume: $ResumeSeconds, title: item.title, view: S.view };
+  return { ok: true, key, requestedResume: $ResumeSeconds, requestedQualityRank: $VodQualityRank,
+    duration, resumeFrac: $ResumeSeconds > 0 && duration > 0 ? $ResumeSeconds / duration : 0, title: item.title, view: S.view };
 })()
 "@
   $started = Invoke-CdpEval $vodExpr -AwaitPromise | ConvertFrom-Json
+  if (!$started.ok) { throw "VOD smoke did not start: $($started.error)" }
   Start-Sleep -Seconds $VodSettleSeconds
   $afterStart = Invoke-CdpEval "({ playing: S.playing && { name: S.playing.name, type: S.playing.item && S.playing.item.type, nativePos: S.playing.nativePos, duration: S.playing.duration, nativeDuration: S.playing.nativeDuration, usingNative: S.playing.usingNative, nativeStartKind: S.playing.nativeStartKind, usingRemux: S.playing.usingRemux, usingTranscode: S.playing.usingTranscode, startOffset: S.playing.startOffset } })" | ConvertFrom-Json
+  if (!$afterStart.playing) { throw "VOD smoke did not keep a player session open" }
+  if ($VodQualityRank -eq 4 -and $afterStart.playing -and $afterStart.playing.name -notmatch '(?i)(2160p|4k|uhd)') {
+    throw "Requested 4K VOD but mounted source was not labelled 2160p/4K/UHD: $($afterStart.playing.name)"
+  }
+  if ($ResumeSeconds -gt 0) {
+    $observedResume = if ($afterStart.playing) { [Math]::Max([double]$afterStart.playing.nativePos, [double]$afterStart.playing.startOffset) } else { 0 }
+    if (($started.duration -gt $ResumeSeconds -and !$started.resumeFrac) -or $observedResume -lt [Math]::Max(0, $ResumeSeconds - 15)) {
+      throw "Continue Watching did not reach the requested resume timestamp ($ResumeSeconds s; observed $observedResume s)"
+    }
+  }
   $afterForward = $null
   $afterRewind = $null
   if (!$VodNoSeek) {

@@ -3155,15 +3155,19 @@ test('housekeeping sweep: idle mounts are evicted, active ones survive', async (
   const mk = (id, touched) => ({ id, _touched: touched, name: id, size: 1, streamable: true, tags: [] });
   srv.mounts.set('idle-x', mk('idle-x', now - 60 * 60000));
   srv.mounts.set('fresh-x', mk('fresh-x', now));
+  srv.mounts.set('active-range-x', { ...mk('active-range-x', now - 60 * 60000), _activeStreamReads: 1 });
   srv.mounts.set('paused-x', mk('paused-x', now - 60 * 60000));
   srv.pipeline.sessions.set('paused-session-x', { id: 'paused-session-x', createdAt: now, currentMountId: 'paused-x' });
   const evicted = srv.sweep(now);
   assert.ok(evicted.includes('idle-x'), 'idle mount evicted');
   assert.ok(!srv.mounts.has('idle-x'));
   assert.ok(srv.mounts.has('fresh-x'), 'recently-touched mount survives');
+  assert.ok(!evicted.includes('active-range-x') && srv.mounts.has('active-range-x'),
+    'an unprotected long-lived Range reader survives even when its lifecycle touch is old');
   assert.ok(!evicted.includes('paused-x'), 'paused session mount not treated as idle');
   assert.ok(srv.mounts.has('paused-x'), 'paused session mount survives for resume');
   srv.mounts.delete('fresh-x');
+  srv.mounts.delete('active-range-x');
   srv.mounts.delete('paused-x');
   srv.pipeline.sessions.delete('paused-session-x');
 });
@@ -3255,14 +3259,28 @@ test('iptv: live-remux preserves HTTPS hostnames for provider TLS SNI', () => {
 test('streaming: HTTP range reads use startup/seek lanes and keep completed range read-ahead warm', () => {
   const serverCode = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
   const vfsCode = fs.readFileSync(path.join(__dirname, '..', 'server', 'vfs.js'), 'utf8');
-  assert.match(serverCode, /vf\._touched = _now;[\s\S]+_now - _lastStreamRebalance > 1000[\s\S]+pipeline\.rebalancePlaybackWindows\(_now\);[\s\S]+ctx\.req\.setTimeout\(120000\);[\s\S]+ctx\.res\.setTimeout\(120000\);[\s\S]+const requestedPriority = String\(ctx\.url\.searchParams\.get\('priority'\)[\s\S]+const explicitPriority = requestedPriority === 'read-ahead' \? 'readAhead' : requestedPriority;[\s\S]+const highWaterEnd = Number\(vf\._streamHighWaterEnd \|\| 0\);[\s\S]+const sequentialRange = start > 0[\s\S]+highWaterEnd > 0[\s\S]+start <= highWaterEnd \+ sequentialSlack;[\s\S]+const readPriority = \['background', 'readAhead', 'health'\]\.includes\(explicitPriority\)[\s\S]+: \(start === 0 \? 'startup' : \(sequentialRange \? 'playback' : 'seek'\)\);[\s\S]+ctx\.req\.once\('close', stopReqRead\);[\s\S]+ctx\.res\.once\('close', stopResRead\);[\s\S]+vf\.read\(start, end, \{ priority: readPriority, signal: readSignal \}\)/,
+  assert.match(serverCode, /vf\._touched = _now;[\s\S]+ctx\.req\.setTimeout\(120000\);[\s\S]+ctx\.res\.setTimeout\(120000\);[\s\S]+const requestedPriority = String\(ctx\.url\.searchParams\.get\('priority'\)[\s\S]+const explicitPriority = requestedPriority === 'read-ahead' \? 'readAhead' : requestedPriority;[\s\S]+const highWaterEnd = Number\(vf\._streamHighWaterEnd \|\| 0\);[\s\S]+const sequentialRange = start > 0[\s\S]+highWaterEnd > 0[\s\S]+start <= highWaterEnd \+ sequentialSlack;[\s\S]+const readPriority = \['background', 'readAhead', 'health'\]\.includes\(explicitPriority\)[\s\S]+: \(start === 0 \? 'startup' : \(sequentialRange \? 'playback' : 'seek'\)\);[\s\S]+ctx\.req\.once\('close', stopReqRead\);[\s\S]+ctx\.res\.once\('close', stopResRead\);[\s\S]+vf\.read\(start, end, \{ priority: readPriority, signal: readSignal \}\)/,
     'the stream route should mark initial reads as startup, real jumps as seek, normal sequential ranges as playback, and allow explicit background readers for subtitle extraction');
+  assert.match(serverCode, /function beginMountPlayerRead\(vf, now = Date\.now\(\)\) \{[\s\S]+const wasActive = mountHasActivePlayback\(vf, now\);[\s\S]+vf\._preparedOnly = false;[\s\S]+vf\._playbackTouched = now;[\s\S]+vf\._activeStreamReads = \(Number\(vf\._activeStreamReads\) \|\| 0\) \+ 1;[\s\S]+!wasActive \|\| now - _lastStreamRebalance > 1000[\s\S]+pipeline\.rebalancePlaybackWindows\(now\);/,
+    'every inactive-to-active player read joins fair-share accounting immediately; only already-active extra ranges are throttled');
+  assert.match(serverCode, /function endMountPlayerRead\(vf, now = Date\.now\(\)\) \{[\s\S]+vf\._playbackTouched = now;[\s\S]+vf\._activeStreamReads = Math\.max\(0, \(Number\(vf\._activeStreamReads\) \|\| 1\) - 1\);[\s\S]+pipeline\.schedulePlaybackExpiryRebalance\(now\);/,
+    'active-read accounting is released centrally and schedules grace-expiry resizing from the range end');
+  assert.match(serverCode, /const playerRead = !\['background', 'readAhead', 'health'\]\.includes\(readPriority\);[\s\S]+if \(playerRead\) beginMountPlayerRead\(vf, _now\);[\s\S]+finally \{[\s\S]+if \(playerRead\) endMountPlayerRead\(vf\);/,
+    'the VOD stream route applies the shared lifecycle only to real player priorities');
+  assert.match(serverCode, /audioTrack: async \(ctx\) => \{[\s\S]+if \(ctx\.req\.method === 'HEAD'\) return ctx\.res\.end\(\);[\s\S]+beginMountPlayerRead\(vf\);[\s\S]+s\.read\(start, end, \{ priority: start === 0 \? 'startup' : 'playback', signal: ac\.signal \}\)[\s\S]+finally \{ endMountPlayerRead\(vf\); \}/,
+    'direct audiobook track playback accounts against the parent mount and releases through the same grace lifecycle');
+  assert.match(serverCode, /tracks: async \(ctx\) => \{[\s\S]+priority=background`[\s\S]+probeTracks\(selfUrl\)/,
+    'track metadata probes stay background work and never impersonate an active viewer');
+  assert.match(serverCode, /function trimUserMounts\([\s\S]+!mountHasActivePlayback\(vf, now\)[\s\S]+const idle = \[\.\.\.mounts\.values\(\)\]\.filter[\s\S]+!mountHasActivePlayback\(vf, now\)[\s\S]+const removable = \[\.\.\.mounts\.values\(\)\][\s\S]+!mountHasActivePlayback\(vf, now\)/,
+    'owner-cap, idle, and overflow eviction must never delete an active Range reader');
+  assert.match(serverCode, /const owned = \[\.\.\.mounts\.values\(\)\][\s\S]+vf\._ownerUid === uid && vf\.id !== keepId[\s\S]+const removable = owned[\s\S]+!mountHasActivePlayback\(vf, now\)[\s\S]+let existing = owned\.length;[\s\S]+while \(existing >= limit\)[\s\S]+const vf = removable\.shift\(\);[\s\S]+existing--;/,
+    'mixed active+idle owner caps count every existing mount but evict only enough inactive mounts to make room');
   assert.match(serverCode, /let completedRead = false;[\s\S]+const abortRead = \(\) => \{[\s\S]+readController\.abort\(\);[\s\S]+vf\.cancelReadAhead\(\);[\s\S]+const stopReqRead = \(\) => \{[\s\S]+if \(!ctx\.req\.complete\) abortRead\(\);[\s\S]+const stopResRead = \(\) => \{[\s\S]+if \(!completedRead && !ctx\.res\.writableEnded\) abortRead\(\);[\s\S]+completedRead = !readSignal\.aborted && !ctx\.res\.destroyed;[\s\S]+vf\._streamHighWaterEnd = Math\.max\(Number\(vf\._streamHighWaterEnd \|\| 0\), end\)/,
     'client disconnects should stop stale read-ahead, but completed ExoPlayer ranges should keep their warm buffer');
   // v2.3.0 quick wins: the static UI is gzipped + ETag/304-revalidated, and the per-Range rebalance is
   // throttled with a cached os.totalmem (see the functional test below + pipeline.js).
-  assert.match(serverCode, /_now - _lastStreamRebalance > 1000[\s\S]+pipeline\.rebalancePlaybackWindows\(_now\);/,
-    'the per-Range playback-window rebalance is throttled to <=1/sec (was firing on every byte-range request)');
+  assert.match(serverCode, /!wasActive \|\| now - _lastStreamRebalance > 1000[\s\S]+pipeline\.rebalancePlaybackWindows\(now\);/,
+    'ordinary already-active Range rebalances stay throttled to <=1/sec while every cold/prepared first read is immediate');
   const pipelineCode2 = fs.readFileSync(path.join(__dirname, '..', 'server', 'pipeline.js'), 'utf8');
   assert.match(pipelineCode2, /const TOTAL_MEM_MB = Math\.floor\(os\.totalmem\(\) \/ \(1024 \* 1024\)\);/,
     'os.totalmem() is read once at load, not per read-ahead window sizing');
