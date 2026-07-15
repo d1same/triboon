@@ -1,0 +1,70 @@
+name: Bug report
+description: Report a reproducible, non-sensitive Triboon problem
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Triboon. Do not paste API keys, passwords,
+        provider URLs, signed stream URLs, cookies, NZBs, private media names,
+        or an unredacted data folder/log. Report security problems through the
+        private security link instead of this public form.
+  - type: input
+    id: version
+    attributes:
+      label: Triboon version
+      description: The version shown by the app or `/api/server`.
+      placeholder: "X.Y.Z or a commit SHA"
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where does it happen?
+      options:
+        - Web browser
+        - Android TV
+        - Android phone or tablet
+        - Windows server
+        - Docker or Unraid
+        - Server/API
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Describe the visible problem and when it started.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Open ...
+        2. Select ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostics
+      description: Optional short log excerpt or device/browser details with every secret and personal value removed.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed credentials, tokens, provider URLs, cookies, NZBs, and personal media information.
+          required: true
+        - label: This report is not a security vulnerability; security reports use private vulnerability reporting.
+          required: true

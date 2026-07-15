@@ -99,9 +99,9 @@ web playback, while Android uses `/api/iptv/native/:idx` and ExoPlayer.
   fail without caching; source changes and shutdown abort stale work before it
   can publish. A stale valid cache may remain available during refresh, and
   parsing must not block playback, zaps, or the main HTTP event loop.
-- Browser remux prefers HLS when present, keeps one total first-byte startup
-  deadline, and does not refresh huge Xtream playlists inside a failing player
-  request.
+- Browser remux prefers HLS when present. Each source/attempt gets its own 12s
+  first-byte budget inside a 30s overall startup cap, and a failing player
+  request does not refresh huge Xtream playlists inline.
 - Native IPTV proxy has its own first-byte timeout and returns a clean player
   error instead of hanging forever.
 - The local HTTP server disables socket reuse for app/player requests so
@@ -517,7 +517,7 @@ Before changing performance behavior, check:
 10. Live TV tune epochs, stable channel ids, and XMLTV worker parsing stay
     responsive during rapid zaps.
 11. Docs remain aligned: this file, `docs-architecture.md`,
-    `docs-player-regression-map.md`, `README.md`, and `bench/RESULTS.md`.
+    `docs-player-regression-map.md`, and `README.md`.
 
 Minimum verification:
 

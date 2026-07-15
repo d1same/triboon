@@ -9,6 +9,26 @@ const { execFileSync } = require('node:child_process');
 const root = path.join(__dirname, '..');
 const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
 
+const publicMarkdown = [
+  'CLAUDE.md',
+  'README.md',
+  'SECURITY.md',
+  'THIRD-PARTY-NOTICES.md',
+  'VERIFY.md',
+  'clients/windows-px8/README.md',
+  'docs-android-tv-testing.md',
+  'docs-app-updates.md',
+  'docs-architecture.md',
+  'docs-continue-watching.md',
+  'docs-phase1-brief.md',
+  'docs-playback-and-iptv.md',
+  'docs-player-regression-map.md',
+  'docs-setup.md',
+  'docs-streaming-performance.md',
+  'installer/windows/README.md',
+  'test/fixtures/README.md',
+];
+
 test('release contract: package, Android, and CI tag versions agree', () => {
   const pkg = JSON.parse(read('package.json'));
   const gradle = read('android/app/build.gradle');
@@ -63,6 +83,72 @@ test('release contract: every package verification/release entrypoint exists in 
   assert.match(read('bench/verify-before-update.ps1'),
     /android-tv-stress\.ps1[\s\S]+-Device \$AndroidDevice[\s\S]+-InstallApk/,
     'the full gate installs the APK it just built before emulator stress');
+});
+
+test('release contract: public install and security docs stay current', () => {
+  const readme = read('README.md');
+  const setup = read('docs-setup.md');
+  const updates = read('docs-app-updates.md');
+  const unraid = read('unraid/triboon.xml');
+  const security = read('SECURITY.md');
+  const issueForm = read('.github/ISSUE_TEMPLATE/bug_report.yml');
+  const issueConfig = read('.github/ISSUE_TEMPLATE/config.yml');
+  const web = read('web/index.html');
+
+  assert.match(readme, /https:\/\/github\.com\/d1same\/triboon\/pkgs\/container\/triboon/,
+    'README links the human-facing public container package');
+  assert.match(readme, /docker run[^\n]+ghcr\.io\/d1same\/triboon:latest/,
+    'README quick start runs the published image without requiring a source build');
+  assert.match(readme, /trusted LAN[\s\S]+(?:VPN|HTTPS reverse proxy)/i,
+    'README warns about first-run setup and safe remote access');
+
+  assert.match(setup, /https:\/\/docs\.wyzie\.io\/subs\/usage\/api-keys/);
+  assert.match(setup, /https:\/\/store\.wyzie\.io\/redeem/);
+  assert.match(setup, /1,000 requests per (?:UTC )?day/i);
+  assert.doesNotMatch(setup, /free and unlimited|needs \*\*no\s+key/i,
+    'setup never claims the current Wyzie service works without a key or limit');
+  assert.match(setup, /https:\/\/docs\.trakt\.tv\/docs\/create-an-app/);
+  assert.doesNotMatch(setup, /https:\/\/trakt\.tv\/oauth\/applications/,
+    'setup never points at the retired Trakt app URL');
+  assert.match(web, /https:\/\/docs\.trakt\.tv\/docs\/create-an-app/);
+  assert.doesNotMatch(web, /https:\/\/trakt\.tv\/oauth\/applications/,
+    'the live Settings UI never points at the retired Trakt app URL');
+  assert.match(setup, /cookies\.txt/i);
+  assert.match(setup, /does \*\*not\*\* use Google device-code\s+linking/i,
+    'Music setup explicitly distinguishes cookie-session import from removed device-code auth');
+
+  assert.match(updates, /https:\/\/github\.com\/d1same\/triboon\/pkgs\/container\/triboon/);
+  assert.match(updates, /anonymous|unauthenticated/i);
+  assert.match(updates, /linux\/amd64/);
+  assert.match(updates, /linux\/arm64/);
+  assert.match(updates, /\/api\/server/);
+  assert.match(unraid, /<Registry>https:\/\/github\.com\/d1same\/triboon\/pkgs\/container\/triboon<\/Registry>/);
+
+  assert.match(security, /security\/advisories\/new/);
+  assert.match(security, /Do \*\*not\*\* open a public issue/);
+  assert.match(issueForm, /Do not paste API keys, passwords/);
+  assert.match(issueConfig, /blank_issues_enabled:\s*false/,
+    'public blank issues cannot bypass the private-reporting and redaction guidance');
+  assert.match(web, /current free tier includes 1,000 requests per day/);
+  assert.doesNotMatch(web, /unlimited free subtitle search/);
+});
+
+test('release contract: tracked public Markdown links resolve inside the clone', () => {
+  const links = [];
+  for (const rel of publicMarkdown) {
+    const source = read(rel);
+    for (const match of source.matchAll(/!?\[[^\]]*\]\(([^)]+)\)/g)) links.push([rel, match[1]]);
+    for (const match of source.matchAll(/<(?:a|img)\b[^>]*(?:href|src)="([^"]+)"[^>]*>/gi)) links.push([rel, match[1]]);
+  }
+
+  for (const [from, raw] of links) {
+    const target = String(raw).trim().replace(/^<|>$/g, '').split(/\s+["']/)[0];
+    if (!target || target.startsWith('#') || /^[a-z][a-z0-9+.-]*:/i.test(target)) continue;
+    const filePart = target.split('#', 1)[0].split('?', 1)[0];
+    if (!filePart) continue;
+    const resolved = path.resolve(path.dirname(path.join(root, from)), decodeURIComponent(filePart));
+    assert.ok(fs.existsSync(resolved), `${from} link resolves: ${target}`);
+  }
 });
 
 test('release contract: Android verification fails fast on device and app preconditions', () => {
@@ -136,6 +222,12 @@ test('release contract: tag artifacts publish only after provenance and native g
     'the semver image waits for every native release artifact');
   assert.match(workflow, /docker-release:[\s\S]+Revalidate current main before publishing the immutable image[\s\S]+git rev-parse origin\/main[\s\S]+GITHUB_SHA[\s\S]+type=semver/,
     'the semver image revalidates main immediately before its publish job');
+  assert.match(workflow, /verify-public-container-main:[\s\S]+needs: docker-main[\s\S]+Verify anonymous latest manifest, revision, health, and API version[\s\S]+imagetools inspect --raw[\s\S]+linux\/amd64[\s\S]+linux\/arm64[\s\S]+org\.opencontainers\.image\.revision[\s\S]+\/api\/server/,
+    'main verifies the published latest image without registry credentials');
+  assert.match(workflow, /verify-public-container-release:[\s\S]+needs: docker-release[\s\S]+Verify anonymous semver and latest manifests, revision, health, and API version[\s\S]+manifest-semver\.json[\s\S]+manifest-latest\.json[\s\S]+docker pull "\$image"[\s\S]+docker pull "\$latest"[\s\S]+latest_revision[\s\S]+\/api\/server/,
+    'release publication verifies semver end to end and rechecks anonymous latest against the tagged commit');
+  assert.match(workflow, /publish-release:[\s\S]+needs: \[[^\]]*verify-public-container-release[^\]]*\]/,
+    'native release assets cannot become public before the semver container passes its public smoke');
   assert.match(workflow, /test -x "\$apksigner" \|\|/,
     'APK verification cannot skip apksigner');
   assert.match(workflow, /EXPECTED_CERT_SHA256:\s*c0b1e2d90b443b07fe4ec4001496539aeb810d2bb9bba9a5f1d8781aa7e28d42[\s\S]+certificate SHA-256 digest: \$EXPECTED_CERT_SHA256/,
@@ -165,6 +257,7 @@ test('release contract: tag artifacts publish only after provenance and native g
 
 test('release contract: Docker downloads are pinned, verified, and carry license notices', () => {
   const dockerfile = read('Dockerfile');
+  const dockerignore = read('.dockerignore');
   assert.match(dockerfile, /^FROM node:24-alpine@sha256:[0-9a-f]{64}$/m, 'base image is pinned by digest');
   assert.match(dockerfile, /^ARG YTDLP_VERSION=\S+$/m);
   assert.match(dockerfile, /^ARG YTDLP_SHA256=[0-9a-f]{64}$/m);
@@ -173,8 +266,15 @@ test('release contract: Docker downloads are pinned, verified, and carry license
   assert.strictEqual((dockerfile.match(/sha256sum -c -/g) || []).length, 2, 'both downloaded binaries are verified');
   assert.doesNotMatch(dockerfile, /releases\/latest/, 'container build does not consume mutable release URLs');
   assert.match(dockerfile, /COPY LICENSE THIRD-PARTY-NOTICES\.md/);
-  assert.match(read('.dockerignore'), /^!THIRD-PARTY-NOTICES\.md$/m,
+  assert.match(dockerignore, /^!THIRD-PARTY-NOTICES\.md$/m,
     'third-party notice is present in the Docker build context');
+  assert.match(dockerignore, /^\*$/m,
+    'the public container uses a build-context allowlist');
+  for (const allowed of ['package.json', 'LICENSE', 'server/', 'web/', 'docker/entrypoint.sh']) {
+    assert.ok(dockerignore.split(/\r?\n/).includes(`!${allowed}`), `Docker context explicitly allows ${allowed}`);
+  }
+  assert.doesNotMatch(dockerfile, /^\s*COPY\s+\.\s/m,
+    'the public image never copies the whole workspace');
   assert.match(read('LICENSE'), /^MIT License$/m);
   assert.match(read('THIRD-PARTY-NOTICES.md'), /yt-dlp \| 2026\.07\.04/);
 

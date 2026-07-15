@@ -63,6 +63,41 @@ Main-branch pushes publish container `latest` and commit-SHA tags after Node and
 Android gates. Release tags publish the semver container only after APK and
 Windows server artifacts pass.
 
+At the instant a release is published, `latest`, the immutable semver image,
+the native assets, and the Git tag all resolve to that release commit. Later
+tested pushes to `main` intentionally advance `latest` and its SHA tag without
+moving the immutable semver image or existing APK/Windows release assets. Pin
+`X.Y.Z` when byte-for-byte release immutability matters.
+
+## Container And Unraid Publication Contract
+
+The public package is
+`https://github.com/d1same/triboon/pkgs/container/triboon`, and users pull it as
+`ghcr.io/d1same/triboon:<tag>`. Main owns `latest` plus `sha-<commit>`; a release
+tag owns immutable `X.Y.Z`.
+
+A successful Docker publishing job is necessary but is not proof that Unraid
+can install the image. Before calling a release complete:
+
+- verify `latest` and `X.Y.Z` from an anonymous registry session with no stored
+  GHCR credentials;
+- confirm both manifest indexes contain `linux/amd64` and `linux/arm64` images
+  (extra BuildKit provenance/attestation manifests are allowed);
+- run the public `X.Y.Z` image in isolation with a fresh empty data volume and a
+  loopback-only host port, wait for its health check, and confirm
+  `GET /api/server` reports `X.Y.Z`;
+- for a release cut, confirm `latest` is anonymously pullable and still
+  represents the tagged commit at publication time; after later main pushes,
+  confirm it represents the tested current main commit instead.
+
+The published image is an application artifact, never a backup. Its layers and
+metadata must not contain `data/`, `.env` files, provider credentials, imported
+Music cookies, Android signing material, local logs/databases, or CI secrets.
+Those values enter only at runtime through the mounted data folder, the
+dashboard, or explicitly configured runtime environment variables. The
+isolated public-image smoke must use disposable data and must not copy a real
+owner's state into the container.
+
 ## Android Update Rules
 
 The APK filename does not decide whether Android accepts an update. Android
@@ -90,8 +125,10 @@ The public release is not complete until all update surfaces are current:
 
 - GitHub `main` has the version bump and release fixes.
 - Git tag `vX.Y.Z` points at the same commit.
-- GitHub Actions has published the Unraid/container image for `latest` and the
-  semver tag.
+- At publication time, GitHub Actions has published the Unraid/container image
+  for `latest` and the semver tag, and both pass the anonymous multi-platform
+  checks above. Later tested main pushes may advance only `latest` as described
+  in the channel contract.
 - The GitHub release has both APK names, both Windows server names, and
   `SHA256SUMS.txt`; no Windows client preview is attached.
 
@@ -129,8 +166,11 @@ Before calling a release done:
   while excluding fixture generators.
 - Pass Android lint, native JVM unit tests, debug build, and the required
   emulator/device stress smoke before the release build.
-- Build or let GitHub Actions publish the Unraid/container image, then confirm
-  the workflow succeeded.
+- Build or let GitHub Actions publish the Unraid/container image. Its
+  credential-free verification job must confirm the applicable tag is
+  anonymously pullable, exposes both `linux/amd64` and `linux/arm64`, carries
+  the expected source revision label, reaches healthy, and reports the expected
+  version from `/api/server`.
 - Build the universal Android APK from the same version and same commit as the
   server/container release.
 - Build the Windows server installer from `dependencies.lock.json` with the
@@ -146,10 +186,17 @@ Before calling a release done:
   verify the APK version/certificate and both files against `SHA256SUMS.txt`.
 - Confirm Android accepts the update over the prior installed build when a
   device/emulator is available.
-- Confirm the semver container image published successfully before the final
-  publisher marks the release latest.
+- Require the public semver verification job to start that anonymously pulled
+  image against fresh disposable data on a loopback-only port, wait for
+  healthy, and confirm `/api/server` reports the release version before the
+  final publisher marks the release latest.
+- Confirm the public image contains no runtime data, credentials, signing
+  material, or CI secrets.
 - Keep secrets, local `data/`, logs, databases, and old scratch APKs out of git.
 
 Never tag a public release, mark a release as latest, or tell users to update
-Unraid/Android/Windows until the code, semver container image, APK pair, Windows
-server pair, checksum, and Git tag all point to the same version and commit.
+Unraid/Android/Windows until, at the publication moment, the code, anonymously
+pullable multi-platform container tags, isolated public-image smoke, APK pair,
+Windows server pair, checksum, and Git tag all point to the same version and
+commit. Subsequent tested main pushes may advance the mutable `latest` channel;
+they must never move the release's immutable semver tag or native assets.

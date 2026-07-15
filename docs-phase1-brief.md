@@ -1,27 +1,37 @@
 # Phase 1 running brief — streaming RAR with seeking
 
+> **Historical brief.** This captures the June 2026 Phase 1 design and evidence.
+> Phase 1 is now complete; use `docs-architecture.md`,
+> `docs-streaming-performance.md`, and `VERIFY.md` for the current runtime and
+> verification contracts. Counts and timing below are snapshot evidence, not the
+> current project baseline.
+
 > PERSISTENCE DECISION (updated 2026-06-21): Triboon runs on Node 24 LTS with the
 > zero-runtime-dependency server rule intact. Persistence is the stdlib JSON store
 > in `server/store.js` with atomic writes, encrypted settings through `server/auth.js`,
 > and explicit store-bucket ownership documented in `docs-architecture.md`. SQLite is
-> no longer the current architecture target unless the owner reopens that decision.
+> intentionally limited to the attached local-media catalog in `library.sqlite`; it
+> is not the general application-state store.
 
-Status: **code + tests complete (27/27), real-provider verified — AWAITING OWNER VLC DEMO**
-(2026-06-11). Owner delegated technical decisions ("I trust your judgment") and confirmed the
+Current status: **Phase 1 complete.** At the 2026-06-11 checkpoint, code and tests
+were complete (27/27) and the real-provider path was verified; the owner VLC demo
+had not yet occurred. Owner delegated technical decisions ("I trust your judgment") and confirmed the
 product direction: maximize playable sources (RAR, 7z, zip), fastest start on all platforms,
 Plex-style UI (single Play button; never a visible Stremio-style source list).
 Per CLAUDE.md, the golden test corpus was written before any implementation code.
 
-## Verification evidence (2026-06-11)
+## Historical verification evidence (2026-06-11)
 
 - `npm test`: 27/27 (7 Phase 0 + 20 Phase 1 golden corpus). Hand-rolled store fixtures
   validated byte-exact by real unrar in Docker.
-- Real provider e2e (`bench/real-rar-smoke.js`): two genuine RAR'd BluRay releases from
+- Real-provider e2e (run with a local-only benchmark helper that is not included in
+  a clean clone): two genuine RAR'd BluRay releases from
   nzbgeek streamed off Easynews — 43-volume/653MB and 99-volume/14.4GB store RARs, Matroska
   magic at byte 0, mid-file seeks ~175–200ms, triage verified 0 missing. Obfuscated inner
   filename picked correctly. A flat (non-RAR) modern release also verified (Phase 0 path).
 - Live HTTP: /api/mount → 206 Range serving with correct Content-Range; deep seek at 500MB in
-  201ms; suffix ranges; 409 for non-streamable mounts. Demo NZB saved at demo/real-rar.nzb.
+  201ms; suffix ranges; 409 for non-streamable mounts. The demo NZB was retained
+  only in the ignored local demo workspace, not in a clean clone.
 - Mount-time hunt: 7.5s → **1.7s cold** on the 43-volume release (parallel pool connect +
   readAt without read-ahead flooding + parallel volume walks).
 - Field find: old-scheme volumes roll past .r99 into .s00/.t00…; fixed + tested after a real
@@ -63,7 +73,8 @@ Owner wants a perceived **press-Play → first frame within ~1 second**. The Str
 UsenetStreamer feel comes from resolving sources *before* play (while the user looks at the
 title page). Triboon adopts the same trick: indexer search + triage prefetch when a title is
 opened/focused; pressing Play only does mount (ms) + first-segment burst (~150–250ms measured,
-see bench/RESULTS.md). Cold worst case (no prefetch possible) stays bounded < 5s.
+according to the historical local-only benchmark notes). Cold worst case (no
+prefetch possible) stays bounded < 5s.
 
 ## Devil's-advocate findings (assumptions to verify, ordered by risk)
 
@@ -85,7 +96,7 @@ see bench/RESULTS.md). Cold worst case (no prefetch possible) stays bounded < 5s
 7. **Easynews STAT-miss penalty (~555ms)** — health gate redesign: parallel STATs confirm
    healthy in ~60–250ms; 500ms soft timeout marks suspect → auto-advance. Never wait for misses.
 
-## Open questions for the owner
+## Open questions at the 2026-06-11 checkpoint
 
 1. Prefetch-on-title-open as the path to ~1s perceived start — confirmed?
 2. Passworded RARs: detect-and-deprioritize only, or also use NZB-embedded passwords when present?

@@ -1,16 +1,16 @@
 # Triboon PX8 — native Windows GPU client
 
-**Status: phase-1 foundation (scaffold + connect UI). NOT a finished app yet.**
-The real player (libmpv) integration is the multi-week work described in the Roadmap below and
-must be built on a machine with the Rust/Tauri/libmpv toolchain. Nothing in `src-tauri/` has been
-compiled on the machine that scaffolded it (no Rust toolchain there) — treat it as a reviewed
-starting point, not verified binaries.
+**Status: experimental preview, not a stable release asset.** The P1 WebView
+shell has a dispatch-only CI build path and still uses web playback. A separate
+`native_client=true` dispatch builds the libmpv feature experiment, but that is a
+build artifact rather than proof of an integrated player. The web-to-native
+bridge and end-to-end GPU/hardware behavior remain unverified.
 
 ## Why PX8 exists (and why it is NOT just "the browser")
 
-On Windows the browser already IS a capable Triboon client — Chrome/Edge hardware-decode
-H.264/HEVC/VP9/AV1 through the GPU and play everything the web player supports. PX8 earns its
-keep only by doing the things a browser cannot:
+On Windows the browser already is a capable Triboon client — Chrome/Edge hardware-decode
+H.264/HEVC/VP9/AV1 through the GPU and play everything the web player supports. PX8's native
+roadmap earns its keep only by adding things a browser cannot:
 
 - **True direct play** of the original file (no server remux) via libmpv.
 - **HDR / Dolby Vision passthrough** to an HDR display.
@@ -21,7 +21,7 @@ keep only by doing the things a browser cannot:
 If those don't matter for a given setup, the WebView2 shell (or just a browser) is the lighter
 answer. PX8 is for the home-theater tier.
 
-## Architecture — reuse everything, hand off playback (mirrors the Android app)
+## Target architecture — reuse everything, hand off playback
 
 PX8 is a **Tauri v2** desktop app. It is deliberately thin, exactly like the Android TV shell:
 
@@ -31,21 +31,21 @@ PX8 is a **Tauri v2** desktop app. It is deliberately thin, exactly like the And
 2. The Tauri **WebView2** window then loads the Triboon web UI straight from that server
    (`http://<server>/`). All browsing, search, settings, Live TV, subtitles, Continue Watching —
    the entire existing UI — is reused as-is. No UI is reimplemented.
-3. A JS **bridge** (`ui/bridge.js`, injected into the Triboon page) exposes a `TriboonPX8` object
-   that mirrors the Android `TriboonTV` contract the web UI already speaks (`playVideo`,
-   `closeVideo`, progress callbacks, track/subtitle selection). When the user presses Play, the web
-   UI calls the bridge instead of the HTML `<video>` element, and **libmpv** (native, GPU) takes
-   over the video surface — the same handoff pattern ExoPlayer uses on Android.
-4. **libmpv** plays the tokened stream URL the server already returns from `/api/play`
-   (direct-play URL preferred; falls back to the server remux/HLS URLs). Stream auth is the
-   existing `?t=` token, so no server change is required.
+3. The target JS **bridge** (`ui/bridge.js`) mirrors the Android `TriboonTV`
+   playback contract. The current bridge is intentionally disabled
+   (`nativeChromeVersion() === 0`, `playVideo() === false`), so the web UI does
+   not yet hand normal playback to libmpv.
+4. The feature-gated Rust **libmpv** module can play a tokened URL from the
+   standalone native test. Integrating that surface with normal `/api/play`,
+   transport/progress callbacks, track selection, and web player chrome remains
+   P2 work.
 
-Net: PX8 = Triboon's proven web UI + a native GPU player, connected by the bridge. The server is
-untouched.
+Target: Triboon's proven web UI plus a native GPU player, connected by a thin
+bridge and using the existing server APIs.
 
 ## Prerequisites (build machine)
 
-- **Rust** (stable) via https://rustup.rs  → `rustc`, `cargo`
+- **Rust** (stable) via [rustup](https://rustup.rs) → `rustc`, `cargo`
 - **Tauri CLI v2**: `cargo install tauri-cli --version "^2"` (or `npm i -g @tauri-apps/cli`)
 - **MSVC Build Tools** (Visual Studio Build Tools, "Desktop development with C++")
 - **WebView2 Runtime** — preinstalled on Windows 10/11; the installer can bundle the bootstrapper
@@ -56,24 +56,28 @@ untouched.
 
 ```powershell
 cd clients\windows-px8
-npm install                 # frontend dev deps (@tauri-apps/cli, @tauri-apps/api)
+npm ci                      # locked frontend dev deps (@tauri-apps/cli, @tauri-apps/api)
 npm run tauri dev           # run against a dev build
 npm run tauri build         # → src-tauri\target\release\ + an MSI/NSIS installer
 ```
 
-The output installer can be published alongside the Android APK, or folded into the existing
-Inno Setup flow used for the Windows *server* (`installer\windows\`).
+The default output is the web-playback preview. CI publishes PX8 only as a
+manual workflow artifact; do not attach it to a stable release until the native
+bridge and hardware matrix are complete. The Windows *server* installer remains
+a separate product under `installer\windows\`.
 
 ## Roadmap (phased — each phase is independently shippable)
 
-- **P0 (this scaffold)**: project skeleton, connect screen, bridge contract, libmpv module stub,
-  build docs. Reviewable; not yet built.
+- **P0 — scaffold (done)**: project skeleton, connect screen, bridge contract,
+  libmpv module boundary, and build docs.
 - **P1 — window + connect + web UI**: Tauri window loads the server's Triboon UI after the connect
-  screen; remember the server; no native player yet (falls back to the in-page `<video>`). First
-  runnable milestone.
-- **P2 — libmpv direct play**: bridge `playVideo` → libmpv plays the `/api/play` direct URL on a
-  borderless child surface behind the WebView chrome; play/pause/seek/stop + progress callbacks
-  wired back to the web UI (Continue Watching + Trakt heartbeats keep working, one reporter).
+  screen and remembers the server; no native player yet, so playback stays in the
+  page `<video>`. Implemented as a manual dispatch preview artifact.
+- **P2 — libmpv direct play (partial experiment)**: the feature build and
+  standalone native playback test exist. Normal `playVideo` handoff, the child
+  surface/chrome relationship, play/pause/seek/stop, progress callbacks, and
+  real GPU/hardware validation remain incomplete. Continue Watching and Trakt
+  must receive checkpoints from exactly one reporter.
 - **P3 — passthrough**: `hwdec=auto` GPU decode; HDR/DV passthrough; audio bitstream passthrough
   (`audio-spdif`), all admin/user-selectable.
 - **P4 — subtitles + tracks**: libmpv subtitle overlay driven by the existing Wyzie/OpenSubtitles
@@ -81,11 +85,12 @@ Inno Setup flow used for the Windows *server* (`installer\windows\`).
 - **P5 — packaging + self-update**: signed installer, version check against the GitHub release,
   in-place update.
 
-## Integration points already provided by the server (no server changes needed)
+## Server integration points available to P2
 
 - `POST /api/play` → returns `{ streamUrl, remuxUrl, transcodeUrl, hlsUrl, streamToken, ... }`.
   PX8 prefers `streamUrl` (rangeable direct file) for true direct play.
 - Stream auth: the `?t=<token>` query token (works for any client IP/UA).
 - Subtitles: `/api/subtitle/...` (embedded) and the online CC endpoints already return WebVTT.
-- Watch state / Trakt: `POST /api/watch` heartbeats — the bridge reports libmpv's clock exactly
-  as the Android bridge reports ExoPlayer's, so no double-counting.
+- Watch state / Trakt: `POST /api/watch` accepts playback checkpoints. Once P2
+  is complete, the bridge must report libmpv's clock exactly as the Android
+  bridge reports ExoPlayer's, with only one active reporter.

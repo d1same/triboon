@@ -17,12 +17,19 @@ canonical reference.
 - Server: Node 24 LTS, stdlib runtime, no runtime npm dependencies in `server/`.
 - UI: `web/index.html`, one web app with TV D-pad navigation and browser support.
 - Android TV: Java WebView shell with native Media3/ExoPlayer for video and Live TV.
-- Data: atomic JSON store in `TRIBOON_DATA`, encrypted settings through
-  `server/auth.js` `SecureSettings`, and a local-media-only SQLite catalog
-  (`library.sqlite`) for large attached folders.
+- Data: atomic JSON store in `TRIBOON_DATA`, AES-256-GCM encrypted settings
+  through `server/auth.js` `SecureSettings`, and a local-media-only SQLite
+  catalog (`library.sqlite`) for large attached folders. Users, password
+  hashes, watch state, library metadata, and caches are persistent but are not
+  application-encrypted; filesystem and backup protection remain the owner's
+  responsibility.
 - Playback order: source-fit, direct play, remux, transcode.
 - Security: deny-by-default route table in `server/index.js`; every endpoint must
   declare `public`, `user`, `admin`, or `stream` auth and be covered by tests.
+- Delivery: the public GHCR image contains the application only, targets
+  `linux/amd64` and `linux/arm64`, and receives credentials/state only at
+  runtime through persistent `/data`, the dashboard, or explicit environment
+  variables.
 - `npm.cmd test` explicitly enumerates every top-level `test/*.test.js` suite
   and runs them sequentially because integration suites share process-wide
   state. The release-contract test requires that list to match the checked-in
@@ -46,13 +53,13 @@ flowchart LR
     Pipeline["Search, scoring,\nmount, health gate"]
     Stream["NNTP/RAR/VFS stream engine"]
     Transcode["ffmpeg remux/transcode"]
-    Subs["Wyzie subtitles"]
+    Subs["Online subtitles\nWyzie + OpenSubtitles"]
     IPTV["Live TV source manager"]
   end
 
   Store["Atomic JSON store\nsettings encrypted at rest"]
   LocalDb["Local media SQLite catalog\nlibrary.sqlite"]
-  Providers["Usenet providers\nNewznab indexers\nTMDB/Trakt/Wyzie\nM3U/Xtream/XMLTV"]
+  Providers["Usenet providers\nNewznab indexers\nTMDB/Trakt/Wyzie/OpenSubtitles\nM3U/Xtream/XMLTV"]
 
   Web --> Routes
   Android --> Routes
@@ -86,10 +93,10 @@ flowchart LR
 | Search and source ranking | `server/newznab.js`, `server/scoring.js`, `server/pipeline.js` | Title-safe matching, quality caps at source selection, health-aware ranking, bounded cold-source hedging, and episode/audiobook-scoped mount reuse. |
 | Streaming engine | `server/nzb.js`, `server/nntp.js`, `server/vfs.js`, `server/rar.js`, `server/zip.js`, `server/archive.js`, `docs-streaming-performance.md` | Clean-room NZB mount, requested-episode selection inside season-pack archives, article reads, RAR/ZIP extent maps, Range streaming, provider capacity, priority lanes, adaptive read-ahead. |
 | Playback decision | `server/transcode.js`, `server/index.js`, `web/index.html`, `android/.../MainActivity.java` | Source-fit, direct, remux, transcode; Android native caps feed server policy. |
-| Subtitles | `server/opensubs.js`, `server/index.js`, `web/index.html`, `MainActivity.java` | Wyzie search/download, release/file hints, WebVTT, web/native display timelines; built-in extraction is opt-in. |
+| Subtitles | `server/opensubs.js`, `server/index.js`, `web/index.html`, `MainActivity.java` | Wyzie catalog/release search plus optional OpenSubtitles hash-exact/catalog search, combined ranking, download fallback, WebVTT caches, and web/native display timelines; built-in extraction is opt-in. |
 | Local libraries | `server/index.js`, `server/library-db.js`, `web/index.html` | Folder scan, SQLite-backed bounded pages/lookups, local playback, local artwork. |
 | Live TV | `server/index.js`, `server/xmltv.js`, `server/xmltv-worker.js`, `web/index.html`, `MainActivity.java` | Source-scoped shared M3U/Xtream/XMLTV, bounded worker-thread guide parsing, web remux path, Android native Exo path, and Android device-local personal IPTV. |
-| Music Home | `server/ytmusic.js`, `server/index.js`, `web/index.html` | YouTube Music search/home/charts via optional `ytmusicapi` catalog helper, Google device-code account linking with encrypted per-user tokens, bounded `yt-dlp` playback resolver, tokenized audio proxy, web mini-player, and no ExoPlayer handoff for audio yet. |
+| Music Home | `server/ytmusic.js`, `server/index.js`, `web/index.html` | YouTube Music search/home/charts via optional `ytmusicapi`; public search/radio without an account; encrypted per-user imported browser-cookie sessions for personal playlists; bounded `yt-dlp` playback resolver, tokenized audio proxy, web mini-player, and no ExoPlayer handoff for audio yet. |
 | Continue Watching | `docs-continue-watching.md`, `server/index.js`, `web/index.html` | Canonical movie/show identity, resume state, quality carry-forward, next-up, and D-pad focus after row actions. |
 | Android shell | `android/app/src/main/java/app/triboon/tv/MainActivity.java` | WebView bridge, D-pad/back handling, native video/Live TV, PiP guide recovery, APK update links. |
 
@@ -197,19 +204,31 @@ or a requested quality cap.
 
 ## Subtitle Model
 
-Online subtitles are the default production path. The server uses the saved
-Wyzie key, or `TRIBOON_WYZIE_KEY` when the dashboard key is empty, to search by
-TMDB/IMDb id plus the exact selected release/file hints, downloads WebVTT/SRT,
-ranks alternates, caches per mount/language, and serves the result through
-signed stream-scope URLs.
+Online subtitles are the default production path. The admin chooses
+`wyzie-first` (the default), `opensubtitles-first`, `wyzie-only`, or
+`opensubtitles-only`. Wyzie uses the dashboard key, or `TRIBOON_WYZIE_KEY` when
+the dashboard key is empty, and searches by TMDB/IMDb id plus the selected
+release/file hints. The optional direct OpenSubtitles provider is active only
+when its API key, display username, and password are all configured; the API
+key alone can search upstream, but Triboon needs the login to download a result.
+
+Allowed online providers search in parallel. For a mounted file,
+OpenSubtitles first computes its first/last-64-KiB movie hash plus file size for
+exact-file matching, then falls back to catalog-id matching. Triboon combines
+and ranks the provider rows, downloads the selected SRT/VTT, caches captions per
+mount/language, and keeps a persistent OpenSubtitles VTT cache under `/data` so
+replays do not burn daily download quota. OpenSubtitles login/JWT/download
+failures fall back to the ranked Wyzie ladder when the selected source policy
+and configured Wyzie key allow it. Captions are served through signed
+stream-scope URLs.
 
 Built-in subtitles are an admin-controlled opt-in because embedded text
 extraction may require ffmpeg to scan much of the media file. When built-ins
 are off, the web and Android players hide embedded/sidecar rows, skip built-in
 prewarm/extraction, and go directly to online captions when the catalog id and
-Wyzie key are available. When built-ins are on, release sidecars and embedded
-text tracks can be tried before online fallback, but bitmap-only subtitle tracks
-are not useful as WebVTT captions.
+at least one allowed online provider are available. When built-ins are on,
+release sidecars and embedded text tracks can be tried before online fallback,
+but bitmap-only subtitle tracks are not useful as WebVTT captions.
 
 Android native playback displays server-provided VTT through Triboon's native
 overlay so subtitle version changes and sync changes do not rebuild ExoPlayer.
@@ -252,10 +271,10 @@ Required behavior:
 - After web VOD has genuinely started, a waiting state with no meaningful
   position progress for 45 seconds retries the same source, playback kind, and
   timestamp first. Recovery must not silently advance to a different release.
-- The historical Easynews benchmark in `bench/RESULTS.md` is evidence for the
-  original fast-start assumptions, not a fixed runtime rule. Do not reintroduce
-  hardcoded "16 warm connections" or "8-12 read-ahead" behavior without updating
-  the capacity reference and tests.
+- Historical local-only Easynews benchmark evidence supports the original
+  fast-start assumptions, but it is not part of a clean clone and is not a fixed
+  runtime rule. Do not reintroduce hardcoded "16 warm connections" or "8-12
+  read-ahead" behavior without updating the capacity reference and tests.
 
 ## Live TV / IPTV Source Model
 
@@ -507,6 +526,12 @@ When changing persistence, update:
 
 ## Security Rules
 
+- `POST /api/setup` is public only while no user exists because the first caller
+  creates the owner. A fresh server must be initialized immediately from a
+  trusted LAN; never publish port 7777 before that owner exists. Triboon serves
+  HTTP directly for LAN compatibility. Remote access belongs behind a VPN or an
+  HTTPS reverse proxy, and `TRIBOON_TRUST_PROXY=1` is safe only when that proxy
+  strips client-supplied forwarding headers.
 - Every new endpoint must be added to `ROUTES` with the correct auth level.
 - Stream routes require signed stream tokens bound to one mount, file, channel,
   or local item.
@@ -531,8 +556,29 @@ When changing persistence, update:
   browser). The casting model is documented in `docs-streaming-performance.md`.
 - Restricted local-library stream, art, thumbnail, and play endpoints must use
   the same library `users[]` ACL as item listing.
-- Credentials live in encrypted settings and must not appear in caches, logs,
-  UI strings, screenshots, or Git history.
+- `TRIBOON_SECRET` is optional. Without it, the server generates a secret once
+  in persistent `TRIBOON_DATA/secret.json`; with it, the environment value is
+  authoritative. The secret derives settings-encryption and token-signing keys,
+  so losing or changing it invalidates sessions and makes existing encrypted
+  settings unreadable. It is not a whole-data-directory encryption key.
+- Provider/indexer/TMDB/subtitle/IPTV credentials, Trakt tokens, and per-user
+  imported YouTube Music cookie sessions live in encrypted `SecureSettings`.
+  User/profile names, scrypt password hashes, watch history, library metadata,
+  thumbnails, and operational caches are not encrypted by Triboon and depend on
+  restrictive data-folder permissions and protected backups.
+- Imported YouTube Music cookies are credentials. They never round-trip to the
+  UI after import. On first use, the server materializes one mode-0600 temporary
+  file per linked user and reuses it for that process lifetime; replacing or
+  unlinking the session and graceful shutdown remove the file. A crash or
+  forced kill can leave it for host temporary-directory cleanup, so that
+  directory must also have restrictive permissions. Cookie sessions can expire
+  and require a fresh export.
+- Credentials must not appear in caches, logs, UI strings, screenshots, or Git
+  history.
+- Public container layers and metadata must remain free of `data/`, `.env`
+  files, provider credentials, imported Music cookies, local databases/logs,
+  Android signing material, and CI secrets. Public-image verification uses
+  fresh disposable state, never an owner's real `/data`.
 - Viewer city/country lookup is off by default. When explicitly enabled in
   Settings (or forced by `TRIBOON_VIEWER_GEO=1`), a public viewer IP is sent to
   `ipwho.is`; raw IPs must never enter persistent activity history or API
@@ -617,8 +663,11 @@ Run the narrow test for the area touched, then the full gate before a release:
   `SHA256SUMS.txt`. The stable/versioned pairs must be byte-identical, the APK
   must have the expected package id/signing certificate/higher versionCode, the
   Windows dependency lock must be honored, and the matching Docker semver image
-  must be published before the release is complete. Keep the full download and
-  update contract aligned with `docs-app-updates.md`.
+  must be anonymously pullable before the release is complete. Verify both
+  `latest` and semver manifest indexes expose `linux/amd64` and `linux/arm64`,
+  then run the public semver image with fresh disposable data on a loopback-only
+  port and confirm `/api/server` reports the release version. Keep the full
+  download and update contract aligned with `docs-app-updates.md`.
 - Documentation: scan for stale phase counts, old stack names, old cache
   ownership statements, and old fixed-connection/read-ahead tuning before
   calling the work done.

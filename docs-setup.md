@@ -5,6 +5,11 @@ After installing (Docker, Unraid, or the Windows server installer), open
 `http://<your-server>:7777`, create the owner account, then add these in
 **Settings**.
 
+Complete that first-owner step only from a trusted LAN. Until an owner exists,
+the first successful setup request creates the owner account, so do not expose
+port `7777` through a public reverse proxy or router port-forward until setup is
+complete.
+
 **You only need three things to press Play:** a TMDB key (free), a usenet
 provider (paid), and one indexer. Everything else — subtitles, Trakt, Live TV,
 music — is optional and can be added anytime.
@@ -14,7 +19,7 @@ music — is optional and can be added anytime.
 | TMDB | **Free** | Posters, metadata, seasons/episodes (required) |
 | Usenet provider | **Paid** | The actual streaming source (required) |
 | Indexer | Free tier / paid | Finding NZBs by title (required) |
-| Wyzie subtitles | **Free** | Subtitles (on by default) |
+| Wyzie subtitles | Free tier / paid | Online subtitles (API key required) |
 | OpenSubtitles | Free tier | Better subtitle matching (optional) |
 | Trakt | **Free** | Watch-history sync + scrobbling (optional) |
 | IPTV / Live TV | Your own | Live channels (optional) |
@@ -64,10 +69,16 @@ Triboon searches **Newznab-compatible** indexers. Two approaches:
 In Triboon: **Settings → Indexers** → add (name, Newznab API URL, API key) →
 Test. Add several for better coverage.
 
-## 4. Subtitles (optional, free)
+## 4. Subtitles (optional, free tiers available)
 
-- **Wyzie** is used by default — free and unlimited, and usually needs **no
-  key**. Nothing to do to get basic subtitles working.
+- **Wyzie** is Triboon's default online subtitle provider and requires a
+  server-side API key. Read the
+  [official API-key guide](https://docs.wyzie.io/subs/usage/api-keys), then
+  [redeem a free key](https://store.wyzie.io/redeem). The free tier currently
+  includes **1,000 requests per UTC day**; paid tiers cover heavier use. In
+  Triboon, open **Settings → Subtitles**, paste the Wyzie key, and save it. A
+  key saved through the dashboard is encrypted at rest, used only by the
+  server, and never returned to playback clients.
 - **OpenSubtitles** (optional) adds hash-based exact-sync matching:
   1. Create an account: <https://www.opensubtitles.com>
   2. Get a free API key (register a consumer/app):
@@ -84,7 +95,8 @@ Test. Add several for better coverage.
 ## 5. Trakt — watch-history sync (optional, free)
 
 1. Sign in: <https://trakt.tv>
-2. Create an API app: <https://trakt.tv/oauth/applications>
+2. Follow Trakt's current **Create an App** guide:
+   <https://docs.trakt.tv/docs/create-an-app>
    - For the **Redirect URI**, use the value Triboon shows on its Trakt settings
      page (or `urn:ietf:wg:oauth:2.0:oob`).
 3. Copy the **Client ID** and **Client Secret**.
@@ -105,9 +117,14 @@ In Triboon: **Settings → Live TV** → add a source.
 
 ## 7. Music (optional)
 
-YouTube Music playback runs through `yt-dlp`. To reach your personal playlists
-and Liked songs, link a Google account from **Settings → Music** (device-code or
-cookie linking); anonymous search/radio works without linking.
+YouTube Music playback runs through `yt-dlp`; anonymous search and radio work
+without linking. To reach personal playlists and Liked songs, choose **Connect
+YouTube Music** on the Music page (or **Preferences → Connections**), sign in
+to `music.youtube.com` in your browser, export a YouTube-only Netscape-format
+`cookies.txt` session, and import that file once. Triboon validates the import
+and stores it encrypted per user. Music does **not** use Google device-code
+linking. Treat the exported session like a password, never share it, and
+re-export it if YouTube expires the session.
 
 ---
 
@@ -119,5 +136,6 @@ cookie linking); anonymous search/radio works without linking.
 4. Search a title and press **Play**.
 
 Add subtitles, Trakt, Live TV, and music whenever you like — none of them block
-playback. All credentials are encrypted at rest in your data folder and are
-never shown to non-admin users.
+playback. Credentials saved through Triboon are encrypted at rest in the data
+folder and secret values are not returned to clients. Keep API keys, provider
+passwords, playlist URLs, and exported YouTube sessions private.

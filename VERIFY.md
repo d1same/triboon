@@ -6,6 +6,11 @@ publishing, tagging, or telling the owner a fix is done.
 If this file disagrees with another `.md`, this file wins. Update this file
 first, then update the supporting doc.
 
+Dated evidence below preserves what was true when a run happened. Historical
+provider terms, local-only report paths, and old asset names are not current
+setup instructions; use `README.md`, `docs-setup.md`, and
+`docs-app-updates.md` for today's public contract.
+
 ## Hard Stop Rules
 
 - Do not push or say "fixed" while a required gate is failing.
@@ -96,6 +101,39 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-07-15, v2.7.1 public documentation, privacy, and delivery verification:
+
+- Audited every tracked public Markdown document and the live Settings copy.
+  Relative links resolve in a clean clone; the retired Trakt application URL
+  was replaced by the current official guide, and Wyzie key/quota instructions
+  now match the current service. Desktop and 390x844 mobile browser checks
+  rendered the updated Trakt panel without clipping or horizontal overflow.
+- `node --test test/release-contract.test.js` passed 9/9 and the final
+  `npm.cmd run verify:full -- -AndroidDevice emulator-5554` passed in 389.7
+  seconds on the staged tree. The gate repeated P9 Live TV, P11 subtitles, P14
+  fast VOD, all 431 Node tests, isolated `/api/server`, Android lint/unit/build,
+  APK reinstall, and Android ExoPlayer stress.
+- `bench/stress-results/android-tv-stress-20260715-122207.json` finished
+  `ok: true` with no failures or warnings: page/D-pad churn passed, 1080p and
+  2160p source selection stayed separated, 32 synthetic Live TV channels
+  loaded, native handoff/Multiview passed, VOD started and survived the seek
+  loop, and subtitle lookup returned HTTP 200.
+- A clean Docker build sent only 1.42 MB of allowlisted application files to
+  the builder. The image-boundary check found no repository `data/`, `.env`,
+  `.git`, Android material, Docker credentials, or sensitive-looking image
+  environment values. A fresh disposable container reached `healthy` and
+  `/api/server` reported 2.7.1 with setup still unclaimed.
+- The release workflow now verifies anonymous `latest` and immutable semver
+  manifests, both required architectures, source-revision labels, fresh-data
+  health, and `/api/server` before a tagged release can become public. GitHub
+  private vulnerability reporting, secret scanning, push protection, and
+  Dependabot security updates are enabled; the live audit found no open secret
+  or Dependabot alerts, and the staged secret-pattern scan found no matches.
+- Emulator work used an isolated temporary copy of configured server state plus
+  a synthetic local IPTV fixture. It was never committed, copied into the
+  container, or published, and both the fixture and temporary data directory
+  were removed immediately after verification.
+
 2026-07-15, v2.7.1 buffering / 4K resume / final-checkpoint verification:
 
 - Version contract aligned: `package.json` 2.7.1; Android `versionName` 2.7.1
@@ -122,9 +160,9 @@ fails to produce a playable stream. Budgets default to feels-local targets
 - A real Android media-stop immediately after that run persisted position 279
   / duration 7200 to the selected profile's `/api/watch` row before the server
   was queried, proving the latest Continue Watching checkpoint survives Stop.
-- The device run used a disposable re-keyed QA data directory with no production
-  users, watch history, Trakt tokens, or music tokens; the directory is removed
-  after release verification.
+- The device run used an isolated temporary copy of configured server state. It
+  never entered git, a container layer, or a release asset, and the directory
+  was removed after verification.
 
 2026-07-14, v2.7.0 episode-handoff release verification:
 
@@ -658,9 +696,10 @@ Manual checks:
 
 - Web VOD CC opens even when a release has no ready built-in captions.
 - Online CC can use either the saved dashboard Wyzie key or
-  `TRIBOON_WYZIE_KEY`; release smokes may point `WYZIE_BASE` at a local mock
-  from `node bench/mock-wyzie.js` with a dummy key to prove the server/player
-  path without exposing a real key.
+  `TRIBOON_WYZIE_KEY`; release smokes may point `WYZIE_BASE` at a deliberately
+  supplied local Wyzie-compatible mock with a dummy key to prove the
+  server/player path without exposing a real key. The public clone does not
+  include a provider-mock launcher or any real subtitle credential.
 - Recommended subtitles prefer the exact release/file or TV episode.
 - More subtitles reveals alternatives without noisy provider-brand wording.
 - Captions stay inside the video frame on desktop, TV, and mobile.

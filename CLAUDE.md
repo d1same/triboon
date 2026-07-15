@@ -33,10 +33,11 @@ Always follow the owner's method:
   alass for automatic subtitle sync. alass is a single static binary (in the Docker
   image via gcompat + the v2.0.0 release) detected at runtime; the auto-sync feature
   is gated on its presence — absent on a box, the CC path is unchanged. It corrects
-  offset + framerate drift using ffmpeg for audio. Triboon prefers Wyzie (unlimited,
-  free) for the subtitle and auto-syncs only non-matched subs (release/hash matches
-  are skipped) to avoid pulling audio unnecessarily. (ffsubsync was evaluated and
-  rejected: Python+numpy/scipy/webrtcvad are painful on Alpine/musl.)
+  offset + framerate drift using ffmpeg for audio. Triboon prefers Wyzie's
+  key-authenticated free tier for the subtitle and auto-syncs only non-matched
+  subs (release/hash matches are skipped) to avoid pulling audio unnecessarily.
+  (ffsubsync was evaluated and rejected: Python+numpy/scipy/webrtcvad are painful
+  on Alpine/musl.)
 - Playback policy: source-fit, direct play, remux, transcode, in that order.
 - Per-user quality caps are enforced at source selection first, transcoder
   second.
@@ -72,17 +73,20 @@ Always follow the owner's method:
   - `JAVA_HOME=C:\Program Files\Android\Android Studio\jbr`
   - `ANDROID_HOME=%LOCALAPPDATA%\Android\Sdk`
   - Prefer current external Gradle 9.5.1+ with `gradle -p android assembleDebug`.
-  - Use `android\gradlew.bat assembleDebug` as version-safe fallback.
+  - Use `android\gradlew.bat -p android assembleDebug` as version-safe fallback
+    from the repository root.
   - Release builds are SIGNED with the project's dedicated release keystore via signing values
     kept outside git: `TRIBOON_RELEASE_STORE_FILE`, `TRIBOON_RELEASE_STORE_PASSWORD`,
     `TRIBOON_RELEASE_KEY_ALIAS`, `TRIBOON_RELEASE_KEY_PASSWORD` (in the owner's password manager +
     GitHub Actions secrets, incl. `TRIBOON_RELEASE_KEYSTORE_B64` for CI). See the signing Hard Rule.
   - Do not use `C:\Users\opencode\tools\gradle-8.10.2`.
 
-Everything is configured in the web dashboard after first-run setup and is
-encrypted at rest in `./data`. `TRIBOON_DATA` overrides the state directory.
-`TRIBOON_SECRET` should be stable in production; otherwise the app generates a
-secret into `./data`.
+Everything is configured in the web dashboard after first-run setup and stored
+under `./data`. Credential-bearing settings are encrypted at rest; account,
+watch, library, cache, and activity metadata are not application-encrypted, so
+the data directory and its backups still require normal filesystem protection.
+`TRIBOON_DATA` overrides the state directory. `TRIBOON_SECRET` should be stable
+in production; otherwise the app generates a secret into `./data`.
 
 ## Repo Map
 
@@ -97,7 +101,8 @@ secret into `./data`.
 - `server/newznab.js`, `server/scoring.js`, `server/pipeline.js` - indexer
   fan-out, ranking, title verification, health gate, auto-advance.
 - `server/transcode.js` - ffmpeg/ffprobe probe, remux, transcode, tracks.
-- `server/opensubs.js` - Wyzie subtitle search/ranking/download.
+- `server/opensubs.js` - Wyzie and optional OpenSubtitles search, ranking,
+  download, normalization, and subtitle sync helpers.
 - `server/trakt.js` - Trakt OAuth, import/export, scrobble outbox.
 - `server/index.js` - HTTP API, deny-by-default routes, Range streaming, Live
   TV source manager, local libraries, static UI.
@@ -195,6 +200,10 @@ Still open:
   signature forces EVERY installed device to uninstall + reinstall. The keystore file + its
   passwords are the owner's secret (password manager + GitHub secrets) and must never be committed,
   logged, or written into docs. Do NOT ship debug-signed builds as releases.
+- Unraid/container delivery is not complete when the publish workflow is merely
+  green. Verify unauthenticated pulls for both `latest` and the release semver,
+  confirm the manifest contains `linux/amd64` and `linux/arm64`, and start the
+  exact public image in isolation to check `/api/server` and its version.
 - Security: deny-by-default routing; every new endpoint must declare auth and
   be covered by route-coverage tests.
 - Credentials are encrypted at rest and must never be committed, logged, or

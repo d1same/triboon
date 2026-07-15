@@ -142,6 +142,61 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  verify-public-container-main:
+    needs: docker-main
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Verify anonymous latest manifest, revision, health, and API version
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}:latest
+          EXPECTED_REVISION: ${{ github.sha }}
+        run: |
+          docker logout ghcr.io >/dev/null 2>&1 || true
+          for attempt in $(seq 1 12); do
+            docker buildx imagetools inspect --raw "$IMAGE" > manifest.json && break
+            test "$attempt" -lt 12 || { echo "public manifest did not become readable"; exit 1; }
+            sleep 5
+          done
+          node <<'NODE'
+          const fs = require('fs');
+          const manifest = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
+          const platforms = new Set((manifest.manifests || []).map((m) => `${m.platform?.os}/${m.platform?.architecture}`));
+          for (const required of ['linux/amd64', 'linux/arm64']) {
+            if (!platforms.has(required)) throw new Error(`public image is missing ${required}`);
+          }
+          NODE
+          docker pull "$IMAGE"
+          revision=$(docker image inspect "$IMAGE" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')
+          test "$revision" = "$EXPECTED_REVISION" || { echo "latest revision $revision != $EXPECTED_REVISION"; exit 1; }
+          expected_version=$(node -p "require('./package.json').version")
+          name="triboon-public-main-${GITHUB_RUN_ID}"
+          volume="triboon-public-main-data-${GITHUB_RUN_ID}"
+          cleanup() { docker rm -f "$name" >/dev/null 2>&1 || true; docker volume rm "$volume" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          docker volume create "$volume" >/dev/null
+          docker run -d --name "$name" -p 127.0.0.1:17777:7777 -v "$volume:/data" "$IMAGE" >/dev/null
+          for attempt in $(seq 1 30); do
+            health=$(docker inspect "$name" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}')
+            test "$health" = healthy && break
+            test "$attempt" -lt 30 || { docker logs "$name"; echo "public image health=$health"; exit 1; }
+            sleep 2
+          done
+          EXPECTED_VERSION="$expected_version" node <<'NODE'
+          const response = await fetch('http://127.0.0.1:17777/api/server');
+          if (!response.ok) throw new Error(`/api/server HTTP ${response.status}`);
+          const body = await response.json();
+          if (body.version !== process.env.EXPECTED_VERSION) {
+            throw new Error(`/api/server version ${body.version} != ${process.env.EXPECTED_VERSION}`);
+          }
+          NODE
+
   # Tags build immutable artifacts only. One final publisher assembles every required asset into a
   # draft and publishes once, so parallel jobs can never expose a partial release.
   release-apk:
@@ -319,8 +374,78 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  verify-public-container-release:
+    needs: docker-release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Verify anonymous semver and latest manifests, revision, health, and API version
+        env:
+          EXPECTED_REVISION: ${{ github.sha }}
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          image="ghcr.io/${GITHUB_REPOSITORY,,}:$version"
+          latest="ghcr.io/${GITHUB_REPOSITORY,,}:latest"
+          docker logout ghcr.io >/dev/null 2>&1 || true
+          fetch_manifest() {
+            ref="$1"
+            output="$2"
+            label="$3"
+            for attempt in $(seq 1 12); do
+              docker buildx imagetools inspect --raw "$ref" > "$output" && return 0
+              test "$attempt" -lt 12 || { echo "public $label manifest did not become readable"; return 1; }
+              sleep 5
+            done
+          }
+          fetch_manifest "$image" manifest-semver.json semver
+          fetch_manifest "$latest" manifest-latest.json latest
+          node <<'NODE'
+          const fs = require('fs');
+          for (const [label, file] of [['semver', 'manifest-semver.json'], ['latest', 'manifest-latest.json']]) {
+            const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+            const platforms = new Set((manifest.manifests || []).map((m) => `${m.platform?.os}/${m.platform?.architecture}`));
+            for (const required of ['linux/amd64', 'linux/arm64']) {
+              if (!platforms.has(required)) throw new Error(`public ${label} image is missing ${required}`);
+            }
+          }
+          NODE
+          docker pull "$image"
+          docker pull "$latest"
+          revision=$(docker image inspect "$image" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')
+          test "$revision" = "$EXPECTED_REVISION" || { echo "semver revision $revision != $EXPECTED_REVISION"; exit 1; }
+          latest_revision=$(docker image inspect "$latest" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')
+          test "$latest_revision" = "$EXPECTED_REVISION" || { echo "latest revision $latest_revision != $EXPECTED_REVISION"; exit 1; }
+          expected_version=$(node -p "require('./package.json').version")
+          test "$version" = "$expected_version" || { echo "tag version $version != package $expected_version"; exit 1; }
+          name="triboon-public-release-${GITHUB_RUN_ID}"
+          volume="triboon-public-release-data-${GITHUB_RUN_ID}"
+          cleanup() { docker rm -f "$name" >/dev/null 2>&1 || true; docker volume rm "$volume" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          docker volume create "$volume" >/dev/null
+          docker run -d --name "$name" -p 127.0.0.1:17777:7777 -v "$volume:/data" "$image" >/dev/null
+          for attempt in $(seq 1 30); do
+            health=$(docker inspect "$name" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}')
+            test "$health" = healthy && break
+            test "$attempt" -lt 30 || { docker logs "$name"; echo "public image health=$health"; exit 1; }
+            sleep 2
+          done
+          EXPECTED_VERSION="$expected_version" node <<'NODE'
+          const response = await fetch('http://127.0.0.1:17777/api/server');
+          if (!response.ok) throw new Error(`/api/server HTTP ${response.status}`);
+          const body = await response.json();
+          if (body.version !== process.env.EXPECTED_VERSION) {
+            throw new Error(`/api/server version ${body.version} != ${process.env.EXPECTED_VERSION}`);
+          }
+          NODE
+
   publish-release:
-    needs: [release-preflight, release-apk, release-windows-server, docker-release]
+    needs: [release-preflight, release-apk, release-windows-server, docker-release, verify-public-container-release]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     environment: release

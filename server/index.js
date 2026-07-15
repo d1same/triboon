@@ -112,9 +112,10 @@ function hlsEnabled(s = settings.get()) {
 }
 
 // Subtitle provider policy (admin-set): which providers search and which wins ties.
-// 'wyzie-first' is the historical default (Wyzie unlimited + OpenSubtitles riding along for
-// hash-exact wins). The '-only' modes disable the other provider entirely; the '-first' modes
-// search both and give the primary a ranking edge on otherwise-comparable subtitles — the
+// 'wyzie-first' is the historical default (Wyzie's key-authenticated free tier +
+// OpenSubtitles riding along for hash-exact wins). The '-only' modes disable the
+// other provider entirely; the '-first' modes search both and give the primary a
+// ranking edge on otherwise-comparable subtitles — the
 // correctness signals (moviehash, exact release, right episode) still outrank the preference,
 // so priority can never pick a wrong-episode/wrong-cut sub over a correct one.
 const SUBTITLE_SOURCE_MODES = ['wyzie-first', 'opensubtitles-first', 'wyzie-only', 'opensubtitles-only'];

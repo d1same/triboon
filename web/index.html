@@ -3968,8 +3968,8 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
   </div>
 
   <div class="panel"><h2>Subtitles</h2>
-    <p><b>Wyzie Subs</b> — unlimited free subtitle search. Paste your Wyzie key here; Triboon keeps
-       it server-side and caches results per title.</p>
+    <p><b>Wyzie Subs</b> — API key required; the current free tier includes 1,000 requests per day.
+       Paste your Wyzie key here; Triboon keeps it encrypted server-side and caches results per title.</p>
     <div class="field"><input id="osKey" placeholder="Wyzie Subs API key"></div>
     <p style="margin-top:-4px"><b>OpenSubtitles</b> — adds hash-exact matching (perfectly-synced subs for the
        exact file you stream). Needs ALL THREE: the free API key (opensubtitles.com → account → API consumers)
@@ -4002,7 +4002,8 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
 
   <div class="panel"><h2>Trakt</h2>
     <p>Lets every user link their own Trakt account (scrobbling + watchlist sync). Create a free
-       API app at trakt.tv/oauth/applications and paste its id + secret. When the form asks for a
+       API app using Trakt's <a class="focusable" href="https://docs.trakt.tv/docs/create-an-app"
+       target="_blank" rel="noopener noreferrer">Create an App guide</a>, then paste its id + secret. When the form asks for a
        <b>Redirect URI</b>, use this (click to copy):</p>
     <button class="hint focusable" id="traktUri" style="cursor:pointer;text-align:left;margin-bottom:12px;color:var(--amber)">urn:ietf:wg:oauth:2.0:oob</button>
     <div class="field"><input id="traktId" placeholder="Trakt client id"></div>

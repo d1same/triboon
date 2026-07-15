@@ -33,7 +33,7 @@ flowchart TD
   SourcesApi --> DeleteCleanup["delete cleanup\nruntime maps + source disk caches\n+ favorites/groups"]
   UserPrefs["Preferences\naccount IPTV source"] --> UserApi["/api/me/iptv/sources"]
   UserApi --> SharedSourceModel["Encrypted server source\nownerUserId + one-user visibility"]
-  SharedSourceModel --> LiveApi
+  SharedSourceModel --> ChannelsApi
   AndroidPrefs["Preferences\npersonal IPTV on this device"] --> AndroidStore["Android private prefs"]
   AndroidStore --> DeviceLoad["device-side Xtream/M3U load"]
   PerSourceLoad --> ConcurrentLoad["server/device loads\nstart concurrently"]
@@ -108,9 +108,10 @@ IPTV fix checklist:
   channel and an immediate picker for the next pane. Those launchers should stay
   icon-led and styled like the rest of the app chrome, while Multiview close
   controls use recognizable icon buttons instead of text-only pills. Android TV
-  shells hide browser Multiview launchers entirely until a native Media3
-  multi-surface implementation exists; direct calls still fail closed with the
-  native ExoPlayer requirement before any browser pane is mounted.
+  exposes the Multiview launchers in D-pad order, but enters the guarded
+  WebView/server fMP4 surface only when MediaSource is available. Unsupported or
+  direct calls fail closed before any browser pane is mounted; see the Android
+  contract below.
 - Browser Multiview uses the existing server fMP4 remux path with isolated
   MediaSource state per pane. It supports two, three, or four screens:
   two screens are side-by-side, three screens use one featured pane plus two

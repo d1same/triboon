@@ -1,10 +1,10 @@
 # Playback, IPTV & Captions — How It Actually Works
 
 Verified reference for the movies/TV (usenet VOD), Live TV (IPTV), resume, and
-closed-caption paths. Line references are accurate as of v1.7.31; treat them as
-"start reading here," not gospel — verify before quoting. Canonical perf numbers
-still live in `docs-streaming-performance.md`; this file documents the *flow* and
-the *constants* that were previously only in code.
+closed-caption paths. Code symbols and file links are "start reading here," not
+fixed line references; verify them against the current tree before quoting.
+Canonical performance contracts live in `docs-streaming-performance.md`; this
+file documents the flow and the important constants that otherwise live in code.
 
 ## 1. Press-play → first frame (usenet VOD)
 
@@ -42,14 +42,15 @@ Triage STATs 6 articles (first, last, 4 random) on the `health` NNTP lane.
 | Mount deadline | 30 s | pipeline.js |
 | Health gate (soft) | 500 ms | pipeline.js |
 | Candidate walk cap | 18 attempts / 45 s | pipeline.js |
-| Verdict cache TTL / max | 6 h / 20000 entries | store.js |
-| Prepare walk cap | 3 attempts / 12 s | pipeline.js |
+| Verdict cache TTL / max | 6 h / 10000 entries | server store policy |
+| Prepare walk cap | 6 attempts / 15 s | pipeline.js |
 
 ### Auto-advance & prepare
 - A dead source inside one `/api/play` is handled by the candidate walk itself —
   it tries the next-best source automatically and only errors if **all** fail.
-- `/api/prepare` (detail-page warm) mounts the first viable source *without* a
-  session so a later `/api/play` joins the live mount in ~0 ms.
+- `/api/prepare` (detail-page warm) walks a bounded set and mounts the first
+  viable source *without* a playback session. A later exact `/api/play` reuses
+  or joins that prepared/in-flight mount instead of repeating the cold work.
 
 ## 2. Fast startup internals
 
@@ -77,19 +78,25 @@ Triage STATs 6 articles (first, last, 4 random) on the `health` NNTP lane.
   TS/HLS first, then server remux fallback.
 
 ### Connection lifecycle (no leaks, no artificial caps)
-Every ffmpeg remux is killed on: client disconnect, channel retune
-(`beginIptvLiveSlot` closes the previous slot, **650ms** grace so the old process
-exits before the new one spawns), idle/startup timeout
-(**first-byte 12s / idle 45s**), and server shutdown (`closeAllIptvLiveStreams`).
+Every browser ffmpeg remux is killed on client disconnect, channel retune,
+idle/startup timeout, and server shutdown. `beginIptvLiveSlot` closes the
+previous slot before replacement; browser ffmpeg retunes use a **650ms** teardown
+cushion, while the native Node proxy uses **120ms**. Browser startup gives each
+source/attempt **12s to first byte** inside a **30s overall cap**, with a **45s
+idle timeout**. The native proxy has its own **10s first-byte timeout**.
 There is **no artificial cap** on simultaneous single-channel plays — the only cap
 is the intentional 4-pane multiview budget. EPG/Xtream guide refresh is **paused
 while any stream is active** (`iptvPlaybackBusy()`), resuming after a 7s cooldown.
 
 ## 4. Resume & Continue Watching
 
-- **Save** (`saveWatch`, web/index.html): debounced every 5s + on close; stored
-  server-side keyed `userId:profile:itemKey`; `watched` at >92%; `meta.qualityRank`
-  is preserved so a 4K watch resumes in 4K.
+- **Save** (`saveWatch`, web/index.html): periodic checkpoints run every **10s**;
+  non-final writes are skipped until playback has moved by at least **5s**.
+  Pause, Back/Stop/close, EOF/up-next, Cast pause, page hide/visibility loss, and
+  Android backgrounding issue immediate durable final checkpoints. Final writes
+  use `keepalive` and coalesce the same point for 2s. State is stored server-side
+  by `userId:profile:itemKey`; `watched` flips above 92%, and
+  `meta.qualityRank` is preserved so a 4K watch resumes in 4K.
 - **Continue Watching** (`buildCwItems`): not-watched + position>30s (or Trakt>2%),
   deduped by show identity; server-computed next episode (`/api/watch/next`) carries
   quality rank forward.
@@ -99,14 +106,14 @@ while any stream is active** (`iptvPlaybackBusy()`), resuming after a 7s cooldow
 - **Position handoff**: remux/transcode use a server `start=<sec>` seek; direct play
   seeks the `<video>` element; native ExoPlayer uses `startOffset`.
 
-## 5. Closed captions (overview — details pending CC research pass)
+## 5. Closed captions
 
-- Server: Wyzie client ([`opensubs.js`](server/opensubs.js)). The handler at
-  `/api/ossubs/:mount` uses the **V2** path (`searchOnlineSubs` is exported as
-  `searchOnlineSubsV2`): it accepts **both** tmdb and imdb ids
-  (`wyzieCatalogId` = imdb-first), has a **release-hint fallback** (retries without
-  exact-release filters on a mismatch), and **throws (does not cache) on empty
-  results** — so misses retry on the next request.
+- Server: Wyzie plus optional OpenSubtitles
+  ([`opensubs.js`](server/opensubs.js)). `/api/ossubs/:mount` activates only the
+  configured providers allowed by the Settings source mode, searches active
+  providers concurrently, and ranks their combined results. A true empty
+  provider combination throws before the result cache is populated, so a miss
+  can retry on the next request.
 - Bitmap subs (PGS/VobSub) cannot become text tracks; online subs are the practical
   CC path for BluRay releases. Embedded text subs are extracted via ffmpeg.
 - **Diagnostics**: every Wyzie search logs one `[subs] …` line (catalog id + kind,
@@ -126,25 +133,27 @@ on non-English titles. Fixed authoritatively server-side: `toIso6391()` in
 
 ### OpenSubtitles hash-exact provider (implemented, optional/gated)
 A second subtitle provider for **moviehash** matching — the strongest in-sync signal,
-which Wyzie cannot do. Entirely gated by `effectiveOpenSubtitles()`: when unconfigured
-the `/api/ossubs` handler runs the Wyzie path exactly as before. When configured, the
-handler queries **Wyzie + OpenSubtitles in parallel**, computes the moviehash on the
+which Wyzie cannot do. It is gated by `effectiveOpenSubtitles()` and the selected
+subtitle source mode. When OpenSubtitles is active, the handler computes the moviehash on the
 mounted file (`moviehashForMount` → `moviehashFromChunks`: filesize + uint64-LE sum of
 the first & last 64 KB, ~2 segment reads on the lowest NNTP lane, cached on the mount),
-and ranks the **combined** set with `rankSubs` where a `moviehash_match` gets a decisive
+searches the active providers concurrently, and ranks the **combined** set with
+`rankSubs`, where a `moviehash_match` gets a decisive
 `+1000` boost so a hash-exact hit beats any release-name match. Downloads route by
 provider (`_provider === 'opensubtitles'` → `osDownloadVtt` via a cached JWT with one
-re-login retry; quota surfaces as a 504). All OpenSubtitles client functions are in
-[opensubs.js](server/opensubs.js) and mock-tested.
+re-login retry). Quota and login failures return an actionable non-transient error;
+when Wyzie is configured, the download path falls back to a Wyzie result before
+surfacing that error. All OpenSubtitles client functions are in
+[`opensubs.js`](server/opensubs.js) and mock-tested.
 
-Configure (env-var path; settings-UI fields are a follow-up):
-`TRIBOON_OS_API_KEY`, `TRIBOON_OS_USER`, `TRIBOON_OS_PASS` (all three required;
-`OPENSUBTITLES_BASE` overrides the host for tests). Wyzie's imdb-first `id` stays
-optimal (TMDB is slower — Wyzie resolves imdb from it internally).
+Configure Wyzie, OpenSubtitles, and provider priority in **Settings → Subtitles**.
+For headless deployments, `TRIBOON_OS_API_KEY`, `TRIBOON_OS_USER`, and
+`TRIBOON_OS_PASS` are the OpenSubtitles fallbacks; all three are required for
+search plus download. `OPENSUBTITLES_BASE` overrides the host for tests.
 
 ### Automatic subtitle sync (alass) — implemented, gated
-Triboon's no-pay/no-limit sync story: **Wyzie (unlimited) picks the subtitle; alass auto-corrects
-it only when it isn't already in sync.** Chosen over ffsubsync because it's one small static binary
+For a subtitle that is not already release- or hash-matched, **alass can correct
+offset and framerate drift in the background**. It was chosen over ffsubsync because it is one small static binary
 (no Python/numpy) that runs on Alpine via `gcompat` (build-verified) and fixes offset AND framerate
 drift. Engine: `transcode.js` `detectSubSync()` + `spawnSubSync(ref, in, out)` → `alass <stream> in.srt out.srt`
 (alass reads audio via ffmpeg; `ALASS_FFMPEG_PATH`/`ALASS_FFPROBE_PATH` point it at our binaries).
@@ -161,11 +170,13 @@ Flow (`/api/ossubs/:mount`):
   non-matched subs. Any failure falls back to the unsynced track — auto-sync can never regress.
 - `/api/server` reports `subSync`. When alass is absent, `subSync` is false and none of this runs.
 
-Docker: `apk add gcompat` + the alass v2.0.0 static binary (build-tested; alass runs and Triboon
-detects it inside the image). Owner decision recorded: OpenSubtitles' daily cap makes it not worth
-it for a no-pay user — **Wyzie + alass auto-sync replaces hash-exact** and also fixes the fps drift
-Stremio's manual-only sync can't.
+Docker includes `gcompat` plus the alass v2.0.0 static binary; `/api/server`
+reports whether it was detected. OpenSubtitles remains an optional hash-exact
+provider, while Wyzie plus alass provides a key-authenticated release-ranked
+alternative.
+When both providers are enabled they search concurrently; alass runs only for a
+chosen non-matched subtitle and does not replace either provider.
 
-**TODO / notes:** the alignment quality on a real NZB stream needs on-device verification (it's
-background + fallback, so safe). Minor cleanups: `S##E##` parser caps season at 2 digits / episode
-at 3; dead legacy V1 functions (`opensubs.js` ~436/482) shadowed by the V2 exports should be deleted.
+**Remaining verification:** alignment quality against real NZB streams still
+needs the device/hardware pass recorded in `VERIFY.md`. The work is backgrounded
+and falls back to the original subtitle on failure.

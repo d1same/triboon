@@ -2,13 +2,13 @@
 <Container version="2">
   <Name>triboon</Name>
   <Repository>ghcr.io/d1same/triboon:latest</Repository>
-  <Registry>https://ghcr.io/d1same/triboon</Registry>
+  <Registry>https://github.com/d1same/triboon/pkgs/container/triboon</Registry>
   <Network>bridge</Network>
   <Shell>sh</Shell>
   <Privileged>false</Privileged>
   <Support>https://github.com/d1same/triboon/issues</Support>
   <Project>https://github.com/d1same/triboon</Project>
-  <Overview>Self-hosted, Plex-polished, Stremio-style usenet streaming. Press play on any movie or show and Triboon mounts the best healthy NZB from your provider and streams it while unpacking - native RAR/ZIP streaming with seeking, TRaSH-style release ranking, owner-tunable multi-user streaming capacity, multi-user profiles with invites and Quick Connect, TMDB catalogs, source-scoped Live TV/IPTV playlists, online subtitles, and an Android TV shell. Configure everything in the web dashboard after first run (providers, indexers, TMDB - encrypted at rest). For legally obtained content.</Overview>
+  <Overview>Self-hosted, Plex-polished, Stremio-style usenet streaming. Press play on any movie or show and Triboon mounts the best healthy NZB from your provider and streams it while unpacking - native RAR/ZIP streaming with seeking, TRaSH-style release ranking, owner-tunable multi-user streaming capacity, multi-user profiles with invites and Quick Connect, TMDB catalogs, source-scoped Live TV/IPTV playlists, online subtitles, and an Android TV shell. Configure providers, indexers, TMDB, and other credentials in the web dashboard; credential settings are encrypted at rest in persistent /data and are not built into the public image. Create the first owner immediately on a trusted LAN before any remote exposure. Triboon serves HTTP directly; use a VPN or HTTPS reverse proxy for remote access. For legally obtained content.</Overview>
   <Category>MediaApp:Video MediaServer:Video</Category>
   <WebUI>http://[IP]:[PORT:7777]</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/d1same/triboon/main/unraid/triboon.xml</TemplateURL>
@@ -23,6 +23,6 @@
   <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="File owner for /data (99 = nobody)." Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
   <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="File group for /data (100 = users)." Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
   <Config Name="UMASK" Target="UMASK" Default="022" Mode="" Description="File-creation mask." Type="Variable" Display="advanced" Required="false" Mask="false">022</Config>
-  <Config Name="TRIBOON_SECRET" Target="TRIBOON_SECRET" Default="" Mode="" Description="Optional: pins the token-signing / settings-encryption key across container rebuilds (64 hex chars, e.g. from `openssl rand -hex 32`). Leave empty to auto-generate into /data on first run." Type="Variable" Display="advanced" Required="false" Mask="true"/>
+  <Config Name="TRIBOON_SECRET" Target="TRIBOON_SECRET" Default="" Mode="" Description="Optional: pins the token-signing / settings-encryption key (64 hex chars, e.g. from `openssl rand -hex 32`). With persistent /data this is not required: leave empty to generate /data/secret.json once. If set, keep it stable; changing or losing it invalidates sessions and makes existing encrypted settings unreadable." Type="Variable" Display="advanced" Required="false" Mask="true"/>
   <Config Name="TRIBOON_WYZIE_KEY" Target="TRIBOON_WYZIE_KEY" Default="" Mode="" Description="Optional: server-side Wyzie Subs API key. The dashboard key still wins when set; this is useful for secret injection in container environments." Type="Variable" Display="advanced" Required="false" Mask="true"/>
 </Container>

@@ -1,14 +1,15 @@
-data
-demo
-node_modules
-.claude
-.git
-bench
-test
-android
-dist
-graphify-out
-*.apk
-*.md
+# Public images need only the files copied by Dockerfile. Keep every other
+# workspace file—including local data, credentials, logs, media, test captures,
+# release keys, and client build artifacts—out of the build context entirely.
+*
+!Dockerfile
+!.dockerignore
+!package.json
 !LICENSE
 !THIRD-PARTY-NOTICES.md
+!server/
+!server/**
+!web/
+!web/**
+!docker/
+!docker/entrypoint.sh
