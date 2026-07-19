@@ -29,8 +29,11 @@ Always follow the owner's method:
 
 - Native clean-room rebuild of nzbdav + UsenetStreamer concepts.
 - Server stack: Node 24 LTS, zero runtime npm dependencies in `server/`.
-- Approved external binaries: ffmpeg for remux/transcode, yt-dlp for Music, and
-  alass for automatic subtitle sync. alass is a single static binary (in the Docker
+- Approved external binaries: ffmpeg for remux/transcode, yt-dlp for Music,
+  alass for automatic subtitle sync, and the checksum-locked LGPL libmpv runtime
+  for the native Windows client only. libmpv is dynamically linked, ships with
+  notices and exact source/rebuild/replacement instructions, and must never be
+  added to the zero-dependency Node server runtime. alass is a single static binary (in the Docker
   image via gcompat + the v2.0.0 release) detected at runtime; the auto-sync feature
   is gated on its presence — absent on a box, the CC path is unchanged. It corrects
   offset + framerate drift using ffmpeg for audio. Triboon prefers Wyzie's
@@ -42,7 +45,10 @@ Always follow the owner's method:
 - Per-user quality caps are enforced at source selection first, transcoder
   second.
 - Clients: one web UI in `web/index.html` for browser/TV spatial navigation,
-  with Android TV as a Java WebView shell plus native Media3/ExoPlayer handoff.
+  Android TV as a Java WebView shell plus native Media3/ExoPlayer handoff, and
+  Windows as a Tauri/WebView2 shell plus native libmpv handoff. Native clients
+  mirror the same tokened playback callbacks; web state owns watch/next/source
+  decisions and exactly one native clock reports progress.
 - Product model: admin configures usenet, indexers, TMDB, subtitles, Trakt,
   Live TV, and libraries; users never see credentials.
 - Health: bounded upfront gate plus background triage and auto-advance with
@@ -80,6 +86,13 @@ Always follow the owner's method:
     `TRIBOON_RELEASE_KEY_ALIAS`, `TRIBOON_RELEASE_KEY_PASSWORD` (in the owner's password manager +
     GitHub Actions secrets, incl. `TRIBOON_RELEASE_KEYSTORE_B64` for CI). See the signing Hard Rule.
   - Do not use `C:\Users\opencode\tools\gradle-8.10.2`.
+- Windows client build:
+  - Use Rust stable `x86_64-pc-windows-msvc` from a VS 2022 C++ developer shell.
+  - Use only the immutable LGPL libmpv URL/SHA in the GitHub workflow; do not
+    resolve a mutable latest asset or substitute a GPL bundle.
+  - Run the client Rust tests with `--features player`, build the NSIS installer,
+    and verify the packaged DLL/notices plus the real GPU/live matrix in
+    `VERIFY.md`. A requested hwdec mode is not proof of GPU decode.
 
 Everything is configured in the web dashboard after first-run setup and stored
 under `./data`. Credential-bearing settings are encrypted at rest; account,
@@ -174,7 +187,7 @@ Still open:
 - Broader Android hardware QA matrix for Shield, Onn, Fire TV, Chromecast,
   Google TV, and low-memory devices.
 - Real multi-user VOD stress runs across several 1080p and 4K starts/seeks.
-- Tauri desktop.
+- Windows ARM64 and the broader physical GPU/HDR/receiver QA matrix.
 - par2 repair and compressed RAR streaming improvements.
 - MDBList and richer catalog rows.
 - Intro/credit skip.
@@ -193,6 +206,13 @@ Still open:
   resolves to the newest build. (The legacy `triboon-tv/mobile.apk` names were
   retired after v1.7.67 once every device ran a build whose in-app updater accepts
   `triboon.apk`.)
+- The same release must carry byte-identical versioned/stable Windows client
+  installers (`Triboon-Windows-Client-vX.Y.Z.exe` and
+  `Triboon-Windows-Client.exe`) built from the tag commit by the normal
+  MSVC/libmpv gate. The installer must contain `libmpv-2.dll`, notices,
+  `LIBMPV-LICENSE.LGPL`, and `LIBMPV-SOURCE.md`. Until a protected code-signing identity is configured,
+  describe the installer as unsigned and expect SmartScreen; never commit or
+  log signing secrets.
 - App signing (CRITICAL): there is ONE dedicated Android release keystore. ALWAYS sign release
   APKs with it — via CI (the `release-apk` job builds an immutable artifact and the final publisher
   publishes only after every required asset passes) or locally with `npm run release:apk`. NEVER

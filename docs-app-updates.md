@@ -6,18 +6,20 @@ update from the same URL every time.
 
 ## Stable Download Link
 
-These links must always point at the newest published Android APK and Windows
-server installer:
+These links must always point at the newest published Android APK, Windows
+server installer, and Windows desktop client:
 
 ```text
 https://github.com/d1same/triboon/releases/latest/download/triboon.apk
 https://github.com/d1same/triboon/releases/latest/download/Triboon-Windows-Server.exe
+https://github.com/d1same/triboon/releases/latest/download/Triboon-Windows-Client.exe
 ```
 
-Use the APK link in the in-app update button and Downloader shortcuts. Use the
-Windows server link in public install/support instructions. A stable Windows
-client link does not exist: the PX8/Tauri and libmpv clients are manual preview
-artifacts until their native playback bridge is complete.
+Use the APK link in the Android in-app update button and Downloader shortcuts.
+The two Windows links intentionally distinguish the self-hosted server from the
+desktop viewing client. The client installer is unsigned until the owner adds a
+protected Windows code-signing identity; an unsigned build may trigger
+SmartScreen and must not be described as signed.
 
 ## Release Asset Names
 
@@ -29,6 +31,8 @@ triboon-vX.Y.Z.apk
 triboon.apk
 Triboon-Windows-Server-vX.Y.Z.exe
 Triboon-Windows-Server.exe
+Triboon-Windows-Client-vX.Y.Z.exe
+Triboon-Windows-Client.exe
 SHA256SUMS.txt
 ```
 
@@ -53,15 +57,21 @@ when all of these conditions hold:
   signing-certificate SHA-256 digest;
 - the Windows server installer uses the content-locked dependency manifest and
   verified Inno Setup compiler;
-- the semver Docker image waits for both native release artifacts;
+- the Windows client compiles with the MSVC Rust target against the
+  checksum-locked LGPL libmpv bundle, passes its native/static contracts, and
+  packages `libmpv-2.dll`, Triboon's license, notices, the verbatim LGPL
+  license, source/rebuild instructions, and a generated inventory of the locked
+  Rust dependency licenses;
+- the semver Docker image waits for all three native release artifacts;
 - one final job downloads the immutable artifacts, checks the exact whitelist
   and byte-identical aliases, writes `SHA256SUMS.txt`, creates a draft, and
   publishes it once. Release jobs never use `--clobber` and never expose a
   partial release.
 
-Main-branch pushes publish container `latest` and commit-SHA tags after Node and
-Android gates. Release tags publish the semver container only after APK and
-Windows server artifacts pass.
+Main-branch pushes publish container `latest` and commit-SHA tags after Node,
+Android, and Windows-client compile gates. Pull requests also compile the native
+Windows client. Release tags publish the semver container only after APK,
+Windows server, and Windows client artifacts pass.
 
 At the instant a release is published, `latest`, the immutable semver image,
 the native assets, and the Git tag all resolve to that release commit. Later
@@ -129,14 +139,22 @@ The public release is not complete until all update surfaces are current:
   for `latest` and the semver tag, and both pass the anonymous multi-platform
   checks above. Later tested main pushes may advance only `latest` as described
   in the channel contract.
-- The GitHub release has both APK names, both Windows server names, and
-  `SHA256SUMS.txt`; no Windows client preview is attached.
+- The GitHub release has both APK names, both Windows server names, both Windows
+  client names, and `SHA256SUMS.txt`; no preview/native-test artifact is
+  attached.
 
 ## In-App Update Behavior
 
 The app update button should open only the stable GitHub latest-download link.
 Do not point the app at a versioned APK URL, because then every release would
 require a new in-app link or Downloader shortcode.
+
+The Android shell pins that link to the official `d1same/triboon` repository.
+Before it opens Package Installer, it parses the downloaded APK and requires
+package `app.triboon.tv`, the pinned production signing-certificate SHA-256,
+and a `versionCode` higher than the installed app. A failed download or any
+identity/signature/version mismatch is deleted and never handed to the system
+installer.
 
 Android will still show the normal install/update confirmation screen. Triboon
 must not attempt silent installs.
@@ -175,15 +193,21 @@ Before calling a release done:
   server/container release.
 - Build the Windows server installer from `dependencies.lock.json` with the
   verified Inno compiler from the same tag commit.
+- Build the Windows client with the normal MSVC/libmpv CI job from the same tag
+  commit. Run the shared `clients/windows-px8/scripts/build-package.ps1` recipe
+  and confirm its extracted-payload check finds `libmpv-2.dll`, `LICENSE`, the
+  third-party notice, `LIBMPV-LICENSE.LGPL`, `LIBMPV-SOURCE.md`, and
+  `RUST-DEPENDENCIES.md`; run the local hardware/live matrix in `VERIFY.md`.
 - Confirm the APK `versionName` matches `X.Y.Z` and `versionCode` is higher
   than the prior release.
 - Confirm the APK signing certificate matches the current stable APK signing
   certificate.
-- Confirm stable/versioned APK and Windows server pairs are byte-identical, the
-  asset whitelist has no Windows client preview, and `SHA256SUMS.txt` covers all
-  four binaries.
-- Confirm both stable URLs download the newest APK and Windows server installer;
-  verify the APK version/certificate and both files against `SHA256SUMS.txt`.
+- Confirm stable/versioned APK, Windows server, and Windows client pairs are
+  byte-identical, the asset whitelist has no preview artifact, and
+  `SHA256SUMS.txt` covers all six binaries.
+- Confirm all three stable URLs download the newest APK, Windows server, and
+  Windows client installers; verify the APK version/certificate and every file
+  against `SHA256SUMS.txt`.
 - Confirm Android accepts the update over the prior installed build when a
   device/emulator is available.
 - Require the public semver verification job to start that anonymously pulled
@@ -197,6 +221,7 @@ Before calling a release done:
 Never tag a public release, mark a release as latest, or tell users to update
 Unraid/Android/Windows until, at the publication moment, the code, anonymously
 pullable multi-platform container tags, isolated public-image smoke, APK pair,
-Windows server pair, checksum, and Git tag all point to the same version and
-commit. Subsequent tested main pushes may advance the mutable `latest` channel;
-they must never move the release's immutable semver tag or native assets.
+Windows server pair, Windows client pair, checksum, and Git tag all point to the
+same version and commit. Subsequent tested main pushes may advance the mutable
+`latest` channel; they must never move the release's immutable semver tag or
+native assets.

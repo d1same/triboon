@@ -1,11 +1,11 @@
 {
   "name": "triboon",
-  "version": "2.7.1",
+  "version": "2.8.0",
   "description": "Press play on anything. Triboon mounts the best healthy NZB from your usenet provider and streams it instantly.",
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
-    "test": "node --test --test-force-exit --test-concurrency=1 test/archive.test.js test/audiobook.test.js test/e2e.test.js test/iptv-cache.test.js test/library-db.test.js test/phase2.test.js test/phase4.test.js test/release-contract.test.js test/security.test.js test/tmdb.test.js test/windows-installer.test.js test/xmltv.test.js",
+    "test": "node --test --test-force-exit --test-concurrency=1 test/archive.test.js test/audiobook.test.js test/e2e.test.js test/iptv-cache.test.js test/library-db.test.js test/phase2.test.js test/phase4.test.js test/release-contract.test.js test/security.test.js test/tmdb.test.js test/windows-installer.test.js test/windows-px8-player.test.js test/xmltv.test.js",
     "verify:full": "powershell -NoProfile -ExecutionPolicy Bypass -File bench/verify-before-update.ps1",
     "verify:live": "node bench/verify-live.js",
     "release:apk": "powershell -NoProfile -ExecutionPolicy Bypass -File bench/cut-apk-release.ps1"

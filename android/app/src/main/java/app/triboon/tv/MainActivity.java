@@ -153,6 +153,7 @@ public class MainActivity extends Activity {
     private static final int NATIVE_BACKDROP_MAX_BYTES = 6 * 1024 * 1024;
     private static final int NATIVE_BACKDROP_MAX_WIDTH = 1280;
     private static final int NATIVE_BACKDROP_MAX_HEIGHT = 720;
+    private static final long APP_UPDATE_MAX_BYTES = 256L * 1024L * 1024L;
 
     private WebView web;
     private LinearLayout setup;
@@ -748,14 +749,9 @@ public class MainActivity extends Activity {
         String host = uri.getHost() == null ? "" : uri.getHost().toLowerCase(Locale.US);
         String path = uri.getPath() == null ? "" : uri.getPath();
         if (!"https".equals(scheme) || !"github.com".equals(host)) return false;
-        // Accept the stable Triboon release asset under ANY owner/repo on github.com. This allowlist
-        // is baked into the installed APK, so pinning it to a single repo name meant a future GitHub
-        // rename would strand the in-app updater on every existing device. Still strictly locked to
-        // https + github.com + the Triboon asset filenames + the /releases/latest/download/ path, and
-        // the URL itself only ever comes from the trusted server-served UI — so a rename just works.
-        // Accept the canonical single asset (triboon.apk) AND the legacy tv/mobile aliases, so this
-        // build can update from either during the one-APK migration.
-        return path.matches("/[^/]+/[^/]+/releases/latest/download/triboon(-(tv|mobile))?\\.apk");
+        // Pin the official repository and stable asset names. The downloaded archive is also
+        // checked for package id, production signer, and a higher versionCode before installation.
+        return UpdateVerifier.allowedGithubReleasePath(path);
     }
 
     private void openExternalUrl(String rawUrl) {
@@ -778,8 +774,8 @@ public class MainActivity extends Activity {
     private java.io.File cachedUpdateApk = null;   // last APK downloaded this session — a re-press installs it instantly
 
     // Download the signed release APK (same allowlisted GitHub URL the browser path uses) and hand
-    // it straight to the system package installer — no browser/downloader detour. Any failure
-    // falls back to openExternalUrl so the user can still get the update.
+    // it straight to the system package installer — no browser/downloader detour. A failed
+    // download or verification never reaches Package Installer.
     private void downloadAndInstallUpdate(String rawUrl) {
         final String url = rawUrl == null ? "" : rawUrl.trim();
         Uri uri = Uri.parse(url);
@@ -800,10 +796,12 @@ public class MainActivity extends Activity {
         }
         // Already downloaded this session? Go straight to the installer — if the install prompt didn't
         // surface the first time, a re-press installs instantly instead of downloading all over again.
-        if (cachedUpdateApk != null && cachedUpdateApk.isFile() && cachedUpdateApk.length() > 100000) {
+        if (cachedUpdateApk != null && cachedUpdateApk.isFile()
+                && cachedUpdateApk.length() > 100000 && verifyDownloadedUpdate(cachedUpdateApk)) {
             launchApkInstall(cachedUpdateApk);
             return;
         }
+        cachedUpdateApk = null;
         updateInProgress = true;
         Toast.makeText(this, "Downloading update…", Toast.LENGTH_SHORT).show();
         new Thread(() -> {
@@ -818,23 +816,78 @@ public class MainActivity extends Activity {
                 if (code != 200) throw new java.io.IOException("HTTP " + code);
                 try (java.io.InputStream in = conn.getInputStream();
                      java.io.FileOutputStream fos = new java.io.FileOutputStream(out)) {
-                    byte[] buf = new byte[65536]; int n;
-                    while ((n = in.read(buf)) != -1) fos.write(buf, 0, n);
+                    byte[] buf = new byte[65536]; int n; long total = 0;
+                    while ((n = in.read(buf)) != -1) {
+                        total += n;
+                        if (total > APP_UPDATE_MAX_BYTES) {
+                            throw new java.io.IOException("downloaded update is too large");
+                        }
+                        fos.write(buf, 0, n);
+                    }
                 }
                 conn.disconnect();
                 if (out.length() < 100000) throw new java.io.IOException("downloaded file too small");
+                if (!verifyDownloadedUpdate(out)) {
+                    throw new java.io.IOException("downloaded update failed verification");
+                }
                 runOnUiThread(() -> { updateInProgress = false; cachedUpdateApk = out; launchApkInstall(out); });
             } catch (Exception e) {
+                if (out.isFile()) out.delete();
                 runOnUiThread(() -> {
                     updateInProgress = false;
-                    Toast.makeText(this, "In-app update failed; opening the download instead", Toast.LENGTH_SHORT).show();
-                    openExternalUrl(url);
+                    Toast.makeText(this, "Update download or verification failed", Toast.LENGTH_LONG).show();
                 });
             }
         }, "triboon-update-dl").start();
     }
 
+    private boolean verifyDownloadedUpdate(java.io.File apk) {
+        if (apk == null || !apk.isFile() || apk.length() < 100000 || apk.length() > APP_UPDATE_MAX_BYTES) {
+            return false;
+        }
+        try {
+            android.content.pm.PackageManager pm = getPackageManager();
+            android.content.pm.PackageInfo candidate;
+            android.content.pm.Signature[] signers;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                candidate = pm.getPackageArchiveInfo(apk.getAbsolutePath(),
+                        android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES);
+                if (candidate == null || candidate.signingInfo == null) return false;
+                signers = candidate.signingInfo.getApkContentsSigners();
+            } else {
+                candidate = pm.getPackageArchiveInfo(apk.getAbsolutePath(),
+                        android.content.pm.PackageManager.GET_SIGNATURES);
+                if (candidate == null) return false;
+                signers = candidate.signatures;
+            }
+            if (signers == null || signers.length != 1) return false;
+            String signer = sha256Hex(signers[0].toByteArray());
+            android.content.pm.PackageInfo installed = pm.getPackageInfo(getPackageName(), 0);
+            long candidateCode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                    ? candidate.getLongVersionCode() : candidate.versionCode;
+            long installedCode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                    ? installed.getLongVersionCode() : installed.versionCode;
+            return UpdateVerifier.metadataAllowed(candidate.packageName, candidateCode,
+                    installedCode, signer);
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private String sha256Hex(byte[] value) throws Exception {
+        byte[] digest = MessageDigest.getInstance("SHA-256").digest(value);
+        StringBuilder out = new StringBuilder(digest.length * 2);
+        for (byte b : digest) out.append(String.format(Locale.US, "%02x", b & 0xff));
+        return out.toString();
+    }
+
     private void launchApkInstall(java.io.File apk) {
+        if (!verifyDownloadedUpdate(apk)) {
+            if (apk != null && apk.isFile()) apk.delete();
+            cachedUpdateApk = null;
+            Toast.makeText(this, "Update verification failed", Toast.LENGTH_LONG).show();
+            return;
+        }
         try {
             Uri apkUri = androidx.core.content.FileProvider.getUriForFile(this, getPackageName() + ".updateprovider", apk);
             Intent intent = new Intent(Intent.ACTION_VIEW);
@@ -1395,7 +1448,7 @@ public class MainActivity extends Activity {
             @android.webkit.JavascriptInterface
             public void closeVideo() {
                 if (!trustedBridgeOrigin()) return;
-                runOnUiThread(() -> closeNativePlayback(false));
+                runOnUiThread(MainActivity.this::closeNativePlaybackForWebSurface);
             }
 
             @android.webkit.JavascriptInterface
@@ -7023,6 +7076,42 @@ public class MainActivity extends Activity {
             return;
         }
         showWebAfterNativePlayback();
+    }
+
+    /**
+     * The web bridge uses this path when it is about to reveal a browser-owned surface (details,
+     * Multiview, and similar screens). ExoPlayer.release() can wait several seconds for a provider
+     * read to unwind on slower devices. Keeping the opaque native layer visible during that wait
+     * made a successful transition look like a black screen.
+     *
+     * Stop the load, detach the visible native surface, and let WebView draw one frame first. The
+     * same UI-thread player cleanup still follows immediately; only its placement behind the
+     * surface handoff changes. The identity check prevents the delayed task from releasing a newer
+     * player if another native playback starts during the handoff.
+     */
+    private void closeNativePlaybackForWebSurface() {
+        ExoPlayer closingPlayer = nativePlayer;
+        if (closingPlayer == null) {
+            setPhonePlaybackOrientation(false);
+            if (nativePlayerLayer != null) nativePlayerLayer.setVisibility(View.GONE);
+            showWebAfterNativePlayback();
+            return;
+        }
+        try {
+            closingPlayer.stop();
+        } catch (Throwable e) {
+            Log.w(TAG, "Native player stop before WebView handoff ignored: " + nativeThrowableMessage(e));
+        }
+        setPhonePlaybackOrientation(false);
+        if (nativePlayerLayer != null) nativePlayerLayer.setVisibility(View.GONE);
+        showWebAfterNativePlayback();
+        if (web != null) {
+            web.postDelayed(() -> {
+                if (nativePlayer == closingPlayer) releaseNativePlayer(false);
+            }, 90);
+        } else if (nativePlayer == closingPlayer) {
+            releaseNativePlayer(false);
+        }
     }
 
     private void showWebAfterNativePlayback() {

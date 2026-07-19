@@ -524,6 +524,33 @@ When changing persistence, update:
   Android cloud backup and device-to-device transfer; users reconnect after a
   restore.
 
+### Windows desktop
+
+- Uses Tauri v2/WebView2 for the shared Triboon UI and a dedicated native
+  libmpv window for VOD and Live TV. The web state machine remains authoritative
+  for source selection, playback identity, watch state, Trakt, next episode,
+  subtitles, and guide state; Rust owns the native window, mpv lifetime, input,
+  and event observation.
+- Keeps one mpv owner alive across source, quality, seek-remount, and episode
+  replacement. The player window and last frame/loading surface stay topmost
+  during asynchronous replacements so show details never flash between
+  episodes.
+- Uses D3D11 rendering and safe automatic hardware decoding with software
+  fallback. Runtime `hwdec-current`, not configuration or CI success, is the
+  proof of GPU decoding. HDR and audio passthrough remain capability-dependent;
+  passthrough is opt-in.
+- Mirrors the tokened `TriboonTV` callback contract used by Android. Native
+  progress is the single clock feeding Continue Watching, Trakt, near-end
+  preparation, Up Next, and recovery. Stale events from a replaced token cannot
+  mutate the current player.
+- Loads the remote web UI only for the validated configured server origin. The
+  remote page receives a narrow injected playback bridge, never the general
+  Tauri API. Native commands validate caller/origin, schema bounds, and
+  same-server media/subtitle URLs; support output redacts URL query strings.
+- Packages the dynamically linked LGPL `libmpv-2.dll`, third-party notices, the
+  verbatim LGPL license, and exact source/rebuild/replacement instructions.
+  Windows client and Windows server installers are separate release assets.
+
 ## Security Rules
 
 - `POST /api/setup` is public only while no user exists because the first caller
@@ -617,15 +644,17 @@ pass counts belong in dated `VERIFY.md` evidence:
   subtitles, Trakt sync, local-library performance work, screensaver, PiP guide,
   source-scoped IPTV playlists, and owner-tunable multi-user streaming capacity.
 - Release foundation: pinned GitHub Actions, Android lint/native unit gates,
-  immutable APK and Windows-server assets, content-locked container/installer
-  downloads, one final release publisher, and repository license notices.
+  normal MSVC Windows-client compile/package gates, immutable APK and both
+  Windows installer pairs, content-locked container/installer/client downloads,
+  one final release publisher, and repository license notices.
 
 Still open / future hardening:
 
 - Broader Android hardware matrix automation for Shield, Onn, Fire TV, Chromecast,
   Google TV, and low-memory devices.
-- Production-ready Windows desktop client. The current PX8/Tauri shell remains
-  a manual preview until its native playback bridge is complete.
+- Broader Windows hardware QA across NVIDIA, AMD, and Intel GPUs, HDR displays,
+  HDMI/ARC/eARC receivers, and low-power machines. CI cannot prove physical GPU
+  decode or every home-theater chain.
 - par2 repair and compressed RAR streaming improvements.
 - MDBList and richer catalog rows.
 - Intro/credit skip after the playback foundation stays stable.
@@ -659,7 +688,8 @@ Run the narrow test for the area touched, then the full gate before a release:
 - Release packaging: run `node --test test/release-contract.test.js` and confirm
   the workflow publishes one complete release from the current `origin/main`
   commit with exactly `triboon-vX.Y.Z.apk`, `triboon.apk`,
-  `Triboon-Windows-Server-vX.Y.Z.exe`, `Triboon-Windows-Server.exe`, and
+  `Triboon-Windows-Server-vX.Y.Z.exe`, `Triboon-Windows-Server.exe`,
+  `Triboon-Windows-Client-vX.Y.Z.exe`, `Triboon-Windows-Client.exe`, and
   `SHA256SUMS.txt`. The stable/versioned pairs must be byte-identical, the APK
   must have the expected package id/signing certificate/higher versionCode, the
   Windows dependency lock must be honored, and the matching Docker semver image

@@ -801,7 +801,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'the trailers row is sorted newest-trailer-first (genuinely "latest"), not by trending order');
   assert.match(ui, /if \(v\.published_at\) \{[\s\S]+const days = \(Date\.now\(\) - new Date\(v\.published_at\)\.getTime\(\)\)[\s\S]+s \+= Math\.max\(0, 22 - days \/ 30\)/,
     'pickBestTrailer nudges the newest official trailer up within a title via a decaying recency bonus');
-  assert.match(ui, /function routeIsTitle\(\) \{[\s\S]+\^#\\\/\?title\\\/\(movie\|tv\)\\\/\\d\+[\s\S]+window\.addEventListener\('hashchange'[\s\S]+if \(\$\(\'detail\'\)\.classList\.contains\(\'open\'\) && !routeIsTitle\(\)\) return closeDetail\(\);[\s\S]+applyRoute\(\);/,
+  assert.match(ui, /function routeIsTitle\(\) \{[\s\S]+\^#\\\/\?title\\\/\(movie\|tv\)\\\/\\d\+[\s\S]+function handleRouteTraversal\(\)[\s\S]+if \(\$\(\'detail\'\)\.classList\.contains\(\'open\'\) && !routeIsTitle\(\)\) return closeDetail\(\);[\s\S]+applyRoute\(\);[\s\S]+window\.addEventListener\('popstate', handleRouteTraversal\)/,
     'browser Back from one title route to another should route to the previous detail instead of jumping to the original browse page');
   assert.match(ui, /const detailResume = resumePositionForItem\(it\);[\s\S]+updateDetailPlayLabel\(detailResume \? \{ label: 'Resume', target: \{ \.\.\.it, resume: detailResume \} \}/,
     'movie details should show Resume without the timestamp while keeping the resume position in the play target');
@@ -2009,6 +2009,7 @@ test('Android native player: direct source and native chrome stay out of the web
   const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
   const transcode = fs.readFileSync(path.join(__dirname, '..', 'server', 'transcode.js'), 'utf8');
   const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
+  const updateVerifier = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'UpdateVerifier.java'), 'utf8');
   const androidGradle = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'build.gradle'), 'utf8');
   const manifest = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'AndroidManifest.xml'), 'utf8');
   const androidStrings = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'res', 'values', 'strings.xml'), 'utf8');
@@ -2516,18 +2517,19 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.match(android, /public void installAppUpdate\(String url\)[\s\S]+downloadAndInstallUpdate\(url\)/,
     'Android bridge should expose installAppUpdate (in-app download + install)');
   assert.match(android, /private void downloadAndInstallUpdate\(String rawUrl\) \{[\s\S]+allowedAppUpdateUrl\(uri\)[\s\S]+canRequestPackageInstalls\(\)[\s\S]+FileProvider\.getUriForFile[\s\S]+vnd\.android\.package-archive/,
-    'in-app update must validate the URL, ensure install permission, and hand the APK to the system installer via FileProvider, falling back to the browser');
+    'in-app update must validate the URL, ensure install permission, and hand the APK to the system installer via FileProvider');
   assert.match(ui, /typeof TriboonTV\.installAppUpdate === 'function'[\s\S]+TriboonTV\.installAppUpdate\(url\)/,
     'web update button should use the in-app installer when the shell supports it');
   assert.match(android, /boolean dpadArrow = code == KeyEvent\.KEYCODE_DPAD_UP \|\| code == KeyEvent\.KEYCODE_DPAD_DOWN[\s\S]+KEYCODE_DPAD_LEFT[\s\S]+KEYCODE_DPAD_RIGHT;[\s\S]+if \(domKey != null && \(!pageInputFocused \|\| dpadArrow\) && setup\.getVisibility\(\) != View\.VISIBLE\) \{[\s\S]+jsKey\("keydown", domKey, e\.getRepeatCount\(\) > 0\)/,
     'Android TV should still forward D-pad arrows to the web focus model while Settings/Preferences fields are focused');
-  // The updater allowlist is locked to https + github.com + the stable Triboon release asset, but
-  // accepts ANY owner/repo so a future GitHub rename doesn't strand the in-app updater on installed
-  // devices (the allowlist is baked into the APK). It must NOT be pinned to a single repo path.
-  assert.match(android, /allowedAppUpdateUrl\(Uri uri\)[\s\S]+"github\.com"\.equals\(host\)[\s\S]+path\.matches\("\/\[\^\/\]\+\/\[\^\/\]\+\/releases\/latest\/download\/triboon\(-\(tv\|mobile\)\)\?\\\\\.apk"\)/,
-    'updater allowlist should accept the canonical triboon.apk AND the legacy tv/mobile aliases under any github.com owner/repo (rename-safe), not a single hardcoded repo');
-  assert.doesNotMatch(android, /"\/d1same\/triboon\/releases\/latest\/download\/triboon-tv\.apk"\.equals\(path\)/,
-    'the native allowlist must not be hardcoded to the d1same/triboon repo path');
+  // The updater is intentionally pinned to the exact official stable universal APK. Package id,
+  // signer, and monotonic versionCode checks then protect the downloaded payload itself.
+  assert.match(android, /allowedAppUpdateUrl\(Uri uri\)[\s\S]+"github\.com"\.equals\(host\)[\s\S]+UpdateVerifier\.allowedGithubReleasePath\(path\)/,
+    'the Android URL gate should delegate its official release-path policy');
+  assert.match(updateVerifier, /"\/d1same\/triboon\/releases\/latest\/download\/triboon\.apk"\.equals\(path\)/,
+    'the updater must accept only the official stable universal APK path');
+  assert.doesNotMatch(updateVerifier, /triboon-\(tv\|mobile\)|\[\^\/\]\+\/\[\^\/\]\+/,
+    'legacy aliases and arbitrary GitHub repositories must remain blocked');
   // Per-profile prefs sync: prefs mirror to the account so they survive reinstall + follow devices.
   assert.match(ui, /async function loadProfilePrefs\(\) \{[\s\S]+api\(`\/api\/me\/prefs\?profile=\$\{encodeURIComponent\(S\.profile\.id\)\}`\)[\s\S]+applyServerProfilePrefs\(r\.prefs\)[\s\S]+\} else \{\s*\n\s*syncProfilePrefsUp\(\);/,
     'profile entry should pull account-synced prefs (server wins) and migrate local prefs up on first use');
@@ -3337,14 +3339,20 @@ test('Android native player: direct source and native chrome stay out of the web
     'Page-level titles (Discover / Movies / TV Shows / Preferences / Server settings) are hidden everywhere');
   assert.match(ui, /function applyRoute\(\) \{[\s\S]+switchView\(target, false\);[\s\S]+requestAnimationFrame\(\(\) => requestAnimationFrame\(\(\) => \{[\s\S]+focusContent\(\);[\s\S]+\}\)\);[\s\S]+\}/,
     'browser Back/Forward should land focus on the visible route instead of leaving a stale rail focus ring');
-  assert.match(ui, /window\.addEventListener\('hashchange', \(\) => \{[\s\S]+const parts = routeParts\(\);[\s\S]+if \(parts\[0\] === 'person' && parts\[1\]\) return openPerson\(parts\[1\], false\);[\s\S]+if \(\$\(\'person\'\)\.classList\.contains\('open'\)\) closePerson\(\);[\s\S]+if \(\$\(\'detail\'\)\.classList\.contains\('open'\) && !routeIsTitle\(\)\) return closeDetail\(\);[\s\S]+applyRoute\(\);[\s\S]+\}\);/,
-    'browser Back to a cast/person hash re-opens the cast page (person is a real history entry), leaving a person page closes it then routes, and detail-to-detail history routes instead of jumping to the original browse page');
-  // Android hardware BACK / Escape run closeDetail (NOT browser history): a detail opened from a
-  // cast page must return to that cast page, not restoreDetailReturn's stale origin.
+  assert.match(ui, /function setRoute\(hash\) \{[\s\S]+history\.pushState\(\{ triboonRoute: true, triboonIndex: routeIndex \}, '', hash\)[\s\S]+function backOneRoute\(fallback\) \{[\s\S]+Number\(state\.triboonIndex\) > 0[\s\S]+history\.back\(\)/,
+    'every visited app page is an indexed history entry and shared Back moves exactly one entry');
+  assert.match(ui, /function handleRouteTraversal\(\) \{[\s\S]+const parts = routeParts\(\);[\s\S]+if \(parts\[0\] === 'person' && parts\[1\]\) return openPerson\(parts\[1\], false\);[\s\S]+if \(\$\(\'person\'\)\.classList\.contains\('open'\)\) closePerson\(\);[\s\S]+if \(\$\(\'detail\'\)\.classList\.contains\('open'\) && !routeIsTitle\(\)\) return closeDetail\(\);[\s\S]+applyRoute\(\);[\s\S]+window\.addEventListener\('popstate', handleRouteTraversal\)/,
+    'browser Back/Forward restores the immediately targeted cast, detail, or browse route');
+  assert.match(ui, /\$\('dBack'\)\.addEventListener\('click', \(\) => backOneRoute\(closeDetail\)\)[\s\S]+\$\('pBack'\)\.addEventListener\('click', \(\) => backOneRoute\(closePerson\)\)/,
+    'visible Detail and Person Back buttons share the one-step history contract');
+  assert.match(ui, /if \(S\.view === 'person' && \$\('person'\)\.classList\.contains\('open'\)\) \{[\s\S]+document\.dispatchEvent\(new KeyboardEvent\('keydown', \{ key: 'Escape'[\s\S]+return 'ok';/,
+    'Android hardware Back leaves a Person page immediately even when focus is deep in its works grid');
+  // A direct deep-link/refresh has no earlier indexed app entry. Its fallback still returns a
+  // cast-launched detail to that cast page rather than restoreDetailReturn's stale origin.
   assert.match(ui, /S\.detailFromPerson = \(S\.view === 'person'\) \? \(S\.personId \|\| null\) : null;/,
-    'opening a detail from a cast page should remember the cast id for the hardware-Back path');
+    'opening a detail from a cast page should remember the cast id for the no-history fallback');
   assert.match(ui, /function closeDetail\(\) \{[\s\S]+const fromPerson = S\.detailFromPerson;[\s\S]+S\.detailFromPerson = null;[\s\S]+if \(fromPerson\) \{ replaceRoute\(`#\/person\/\$\{fromPerson\}`\); restorePersonFromDetail\(fromPerson\); return; \}[\s\S]+restoreDetailReturn\(\);/,
-    'hardware Back / Escape closing a cast-member detail should restore the exact cast page position (browser Back uses history instead)');
+    'the no-history fallback should restore the exact cast page position');
   assert.match(ui, /function closePerson\(\) \{[\s\S]+const originDetailAlive = \$\('detail'\)\.classList\.contains\('open'\)[\s\S]+sameDetailIdentity\(S\.detailItem, origin\.item\)[\s\S]+if \(!originDetailAlive\) \{[\s\S]+if \(origin && origin\.item\)[\s\S]+openDetail\(origin\.item, false\)[\s\S]+return restoreDetailReturn\(\);/,
     'closing a cast page should rebuild a missing or wrong underlying origin detail, then fall back to browse rather than strand blank');
   assert.match(ui, /function liveNoChannelsHtml\(errors = \[\]\) \{[\s\S]+gridMore liveEmpty focusable[\s\S]+function focusLiveGridMessage\(\) \{[\s\S]+S\.view === 'livetv' && S\.zone !== 'rail'[\s\S]+focusGrid\(0\);/,
@@ -3880,8 +3888,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android should hide the WebView and show the branded native loader before ExoPlayer prepares');
   assert.match(android, /if \("video"\.equals\(m\)\) \{[\s\S]+releaseNativePlayer\(false\);[\s\S]+enterNativeFullscreenMode\(\);[\s\S]+showNativeLoading\(title, backdropUrl\);[\s\S]+__tvNativeVideoError/,
     'native movie fallbacks should keep the Android layer up instead of revealing the WebView player between retries');
-  assert.match(android, /public void closeVideo\(\) \{[\s\S]+closeNativePlayback\(false\)/,
-    'web-side native failure cleanup should be able to close the Android video layer without using the web player');
+  assert.match(android, /public void closeVideo\(\) \{[\s\S]+closeNativePlaybackForWebSurface/,
+    'web-side native cleanup should use the fast Android-to-WebView surface handoff');
+  assert.match(android, /private void closeNativePlaybackForWebSurface\(\) \{[\s\S]+closingPlayer\.stop\(\);[\s\S]+nativePlayerLayer\.setVisibility\(View\.GONE\);[\s\S]+showWebAfterNativePlayback\(\);[\s\S]+web\.postDelayed\([\s\S]+nativePlayer == closingPlayer[\s\S]+releaseNativePlayer\(false\)/,
+    'Android should cancel the native load and reveal WebView before the potentially slow ExoPlayer release, without releasing a newer player');
   assert.match(android, /public void showVideoLoading\(String json\) \{[\s\S]+showNativeVideoLoading\(json\)/,
     'web should be able to show Android native loading before the stream URL is mounted');
   assert.match(android, /private void showNativeVideoLoading\(String json\) \{[\s\S]+enterNativeFullscreenMode\(\);[\s\S]+showNativeLoading\(title, backdropUrl\);[\s\S]+\}/,

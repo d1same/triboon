@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "local-player-controls",
+  "description": "The bundled player chrome may control only its native playback session.",
+  "windows": ["player"],
+  "local": true,
+  "permissions": [
+    "allow-windows-native-chrome-version",
+    "allow-windows-native-playback-caps",
+    "allow-windows-app-version",
+    "allow-windows-player-control",
+    "allow-windows-player-update",
+    "allow-windows-player-open-guide",
+    "allow-windows-player-close-guide",
+    "allow-windows-player-set-guide-pip-rect"
+  ]
+}

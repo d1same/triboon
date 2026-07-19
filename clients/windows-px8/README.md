@@ -1,96 +1,136 @@
-# Triboon PX8 — native Windows GPU client
+# Triboon for Windows
 
-**Status: experimental preview, not a stable release asset.** The P1 WebView
-shell has a dispatch-only CI build path and still uses web playback. A separate
-`native_client=true` dispatch builds the libmpv feature experiment, but that is a
-build artifact rather than proof of an integrated player. The web-to-native
-bridge and end-to-end GPU/hardware behavior remain unverified.
+Triboon for Windows is the production x64 desktop client for Windows 10 and
+Windows 11. It reuses the same server-hosted Triboon interface as the browser
+and Android apps, but hands video playback to a persistent native libmpv
+surface. The Windows server installer under `installer/windows/` is a separate
+product.
 
-## Why PX8 exists (and why it is NOT just "the browser")
+Public availability is a release outcome, not a source-code claim. A client is
+publishable only after the native build, automated contracts, real playback
+smokes, and the release checklist in `VERIFY.md` pass for the exact tag commit.
 
-On Windows the browser already is a capable Triboon client — Chrome/Edge hardware-decode
-H.264/HEVC/VP9/AV1 through the GPU and play everything the web player supports. PX8's native
-roadmap earns its keep only by adding things a browser cannot:
+## Runtime architecture
 
-- **True direct play** of the original file (no server remux) via libmpv.
-- **HDR / Dolby Vision passthrough** to an HDR display.
-- **Audio bitstream passthrough** — Dolby Atmos / TrueHD / DTS-HD MA sent untouched to an AVR
-  (browsers downmix to stereo; even the Android app re-encodes in most paths).
-- **Precise seeking + frame-accurate playback** on any container, using the GPU.
+1. The bundled connect page accepts and validates a Triboon server origin.
+   Only the origin is persisted; credentials and stream tokens are not stored
+   by the desktop shell.
+2. WebView2 loads the normal Triboon web UI from that exact origin. Browsing,
+   search, settings, source selection, Continue Watching, and guide state stay
+   owned by the shared web application.
+3. A narrow `window.TriboonTV` bridge is injected only for the configured
+   Triboon origin. The remote page does not receive the general Tauri API.
+4. VOD or Live TV playback opens the dedicated native player window. One
+   long-lived libmpv owner handles play, pause, seek, source replacement,
+   subtitles, audio tracks, progress, buffering, and terminal events. Episode
+   replacement reuses that surface so show details never flash between
+   episodes.
+5. Every callback carries the current playback token. Stale progress, error,
+   close, subtitle, and next-episode events from an old item are ignored by the
+   shared web state machine.
 
-If those don't matter for a given setup, the WebView2 shell (or just a browser) is the lighter
-answer. PX8 is for the home-theater tier.
+The bridge accepts only schema-bounded commands and media/subtitle URLs owned
+by the configured Triboon server. Logs and errors must redact query strings so
+`?t=<stream-token>` and other credentials cannot leak into support output.
 
-## Target architecture — reuse everything, hand off playback
+## GPU playback contract
 
-PX8 is a **Tauri v2** desktop app. It is deliberately thin, exactly like the Android TV shell:
+The client uses mpv's D3D11 renderer and requests safe automatic hardware
+decoding. NVIDIA, AMD, and Intel decoding are all supported when the installed
+driver exposes a compatible decoder; unsupported codecs or profiles fall back
+to software instead of failing playback.
 
-1. A first-run **connect screen** (`ui/connect.html`) captures the Triboon **server URL** (+ optional
-   Quick Connect code) and remembers it. One build works against any server — localhost, LAN, or
-   remote — chosen by the user (owner's decision).
-2. The Tauri **WebView2** window then loads the Triboon web UI straight from that server
-   (`http://<server>/`). All browsing, search, settings, Live TV, subtitles, Continue Watching —
-   the entire existing UI — is reused as-is. No UI is reimplemented.
-3. The target JS **bridge** (`ui/bridge.js`) mirrors the Android `TriboonTV`
-   playback contract. The current bridge is intentionally disabled
-   (`nativeChromeVersion() === 0`, `playVideo() === false`), so the web UI does
-   not yet hand normal playback to libmpv.
-4. The feature-gated Rust **libmpv** module can play a tokened URL from the
-   standalone native test. Integrating that surface with normal `/api/play`,
-   transport/progress callbacks, track selection, and web player chrome remains
-   P2 work.
+Requesting hardware decoding is not proof that it is active. The diagnostics
+panel must report mpv's runtime decoder state (including `hwdec-current`), video
+codec, renderer, dimensions, dropped frames, position, and buffer. A test may
+claim GPU decode only when `hwdec-current` reports a real hardware path while
+frames advance. CI can prove the native client compiles and packages; it cannot
+prove a GitHub runner's virtual display used a physical decoder.
 
-Target: Triboon's proven web UI plus a native GPU player, connected by a thin
-bridge and using the existing server APIs.
+HDR output is automatic where the GPU, driver, display, operating-system HDR
+setting, codec, and source all support it. Dolby Vision and lossless audio
+passthrough are hardware-chain dependent and are never universal guarantees.
+Bitstream passthrough is opt-in; the safe default is decoded PCM audio.
 
-## Prerequisites (build machine)
+The pinned libmpv build imports the Windows Vulkan loader (`vulkan-1.dll`) even
+when Triboon renders through D3D11. A current NVIDIA, AMD, or Intel graphics
+driver (or its matching Vulkan Runtime) must therefore provide
+`C:\Windows\System32\vulkan-1.dll`. Triboon does not bundle a copy of the
+driver/runtime loader. If it is absent, update the graphics driver before
+installing the client; the application cannot load libmpv without it.
 
-- **Rust** (stable) via [rustup](https://rustup.rs) → `rustc`, `cargo`
-- **Tauri CLI v2**: `cargo install tauri-cli --version "^2"` (or `npm i -g @tauri-apps/cli`)
-- **MSVC Build Tools** (Visual Studio Build Tools, "Desktop development with C++")
-- **WebView2 Runtime** — preinstalled on Windows 10/11; the installer can bundle the bootstrapper
-- **libmpv** — `libmpv-2.dll` + headers. Ship `libmpv-2.dll` next to the exe; point the
-  `libmpv2` crate at the import lib during build (see `src-tauri/build.rs`).
+## Playback parity
 
-## Build / run (once the toolchain is present)
+The Windows release gate covers the same shared contracts as Android:
+
+- direct play, remux, then transcode fallback;
+- prepared-source reuse and fast first frame;
+- pause/resume, quiet seeks/skips, buffering recovery, and source retry;
+- accurate resume and final Continue Watching checkpoints;
+- token-safe manual/autoplay next episode with no details-page flash;
+- quality, audio, subtitle version/sync/size, and episode selection;
+- native HLS/TS Live TV with ordered server fallback and rapid retuning;
+- mouse, keyboard, media keys, fullscreen, D-pad/controller, Back, and guide
+  behavior.
+
+See `docs-player-regression-map.md` P15 and `VERIFY.md` for the normative and
+live acceptance checks.
+
+## Build locally
+
+Required on Windows x64:
+
+- Node.js 24 and `npm`;
+- Rust stable for `x86_64-pc-windows-msvc`;
+- Visual Studio 2022 Build Tools with Desktop development with C++;
+- the WebView2 Runtime;
+- 7-Zip (used to inspect the NSIS payload after the build).
+
+Local and CI builds use the same fail-closed script. It downloads the immutable
+LGPL libmpv archive, verifies both its archive and DLL SHA-256, generates the
+MSVC import library, records the locked Rust dependency/license inventory, runs
+the Rust tests, builds the NSIS installer, extracts that installer with 7-Zip,
+checks the embedded application metadata, and byte-compares every required
+runtime/legal resource against the staged inputs. Tauri intentionally patches
+bundle metadata into the embedded executable, so that file is checked by unique
+name, size, x64 PE machine type, and product/file version instead of against the
+pre-bundle hash.
 
 ```powershell
-cd clients\windows-px8
-npm ci                      # locked frontend dev deps (@tauri-apps/cli, @tauri-apps/api)
-npm run tauri dev           # run against a dev build
-npm run tauri build         # → src-tauri\target\release\ + an MSI/NSIS installer
+# From the repository root. A normal PowerShell window is sufficient; the
+# script imports the installed MSVC x64 environment itself.
+powershell -ExecutionPolicy Bypass -File .\clients\windows-px8\scripts\build-package.ps1
+
+# A release build additionally creates the versioned alias and rejects a tag
+# that does not match package/Cargo/Tauri version 2.8.0.
+powershell -ExecutionPolicy Bypass -File .\clients\windows-px8\scripts\build-package.ps1 -Tag v2.8.0
 ```
 
-The default output is the web-playback preview. CI publishes PX8 only as a
-manual workflow artifact; do not attach it to a stable release until the native
-bridge and hardware matrix are complete. The Windows *server* installer remains
-a separate product under `installer\windows\`.
+The default output is `dist\windows-client\Triboon-Windows-Client.exe`; a tag
+build also emits `Triboon-Windows-Client-vX.Y.Z.exe` and proves the pair is
+byte-identical. Use `-CacheDirectory` and `-ArtifactDirectory` to relocate only
+those two build outputs. `-SkipTests` exists for packaging diagnostics, never
+for a release.
 
-## Roadmap (phased — each phase is independently shippable)
+The public installer is currently unsigned unless the owner supplies a trusted
+Windows code-signing certificate through protected CI secrets. Windows may show
+a SmartScreen warning for an unsigned release. Never place a certificate,
+private key, or password in this repository.
 
-- **P0 — scaffold (done)**: project skeleton, connect screen, bridge contract,
-  libmpv module boundary, and build docs.
-- **P1 — window + connect + web UI**: Tauri window loads the server's Triboon UI after the connect
-  screen and remembers the server; no native player yet, so playback stays in the
-  page `<video>`. Implemented as a manual dispatch preview artifact.
-- **P2 — libmpv direct play (partial experiment)**: the feature build and
-  standalone native playback test exist. Normal `playVideo` handoff, the child
-  surface/chrome relationship, play/pause/seek/stop, progress callbacks, and
-  real GPU/hardware validation remain incomplete. Continue Watching and Trakt
-  must receive checkpoints from exactly one reporter.
-- **P3 — passthrough**: `hwdec=auto` GPU decode; HDR/DV passthrough; audio bitstream passthrough
-  (`audio-spdif`), all admin/user-selectable.
-- **P4 — subtitles + tracks**: libmpv subtitle overlay driven by the existing Wyzie/OpenSubtitles
-  VTT the server serves; audio-track + quality selection through the same web menus.
-- **P5 — packaging + self-update**: signed installer, version check against the GitHub release,
-  in-place update.
+## Distribution and LGPL replacement
 
-## Server integration points available to P2
+The release publishes byte-identical versioned and stable installer names:
 
-- `POST /api/play` → returns `{ streamUrl, remuxUrl, transcodeUrl, hlsUrl, streamToken, ... }`.
-  PX8 prefers `streamUrl` (rangeable direct file) for true direct play.
-- Stream auth: the `?t=<token>` query token (works for any client IP/UA).
-- Subtitles: `/api/subtitle/...` (embedded) and the online CC endpoints already return WebVTT.
-- Watch state / Trakt: `POST /api/watch` accepts playback checkpoints. Once P2
-  is complete, the bridge must report libmpv's clock exactly as the Android
-  bridge reports ExoPlayer's, with only one active reporter.
+```text
+Triboon-Windows-Client-vX.Y.Z.exe
+Triboon-Windows-Client.exe
+```
+
+The dynamically linked LGPL libmpv runtime is not modified or statically linked
+into Triboon. Users may replace `libmpv-2.dll` in the installed application
+directory with a compatible x64 build while Triboon is stopped. The validated
+installer payload contains `libmpv-2.dll`, Triboon's `LICENSE`,
+`THIRD-PARTY-NOTICES.md`, `LIBMPV-LICENSE.LGPL`, `LIBMPV-SOURCE.md`, and the
+generated `RUST-DEPENDENCIES.md` inventory beside the executable. See
+`LIBMPV-SOURCE.md` for the exact binary hash, upstream source revisions, and
+rebuild route.

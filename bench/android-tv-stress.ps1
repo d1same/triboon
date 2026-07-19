@@ -147,7 +147,16 @@ function Invoke-CdpJson {
 const port = process.env.TRIBOON_CDP_PORT || '9223';
 const expr = process.env.TRIBOON_CDP_EXPR || '({})';
 const awaitPromise = process.env.TRIBOON_CDP_AWAIT === '1';
-const targets = await fetch(`http://127.0.0.1:${port}/json/list`).then((r) => r.json());
+const bounded = (promise, ms, label) => {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${label} timed out`)), ms); })
+  ]).finally(() => clearTimeout(timer));
+};
+const targets = await fetch(`http://127.0.0.1:${port}/json/list`, {
+  signal: AbortSignal.timeout(10000)
+}).then((r) => r.json());
 const list = Array.isArray(targets) ? targets : targets.value;
 const target = list.find((t) => t.webSocketDebuggerUrl && t.url && t.url !== 'about:blank')
   || list.find((t) => t.webSocketDebuggerUrl);
@@ -162,17 +171,22 @@ ws.onmessage = (ev) => {
   pending.delete(msg.id);
   msg.error ? p.reject(new Error(msg.error.message || JSON.stringify(msg.error))) : p.resolve(msg.result);
 };
-await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = reject; });
 const send = (method, params = {}) => new Promise((resolve, reject) => {
   const mid = ++id;
   pending.set(mid, { resolve, reject });
   ws.send(JSON.stringify({ id: mid, method, params }));
 });
-await send('Runtime.enable');
-const result = await send('Runtime.evaluate', { expression: expr, awaitPromise, returnByValue: true, timeout: 45000 });
-const value = result.result && Object.prototype.hasOwnProperty.call(result.result, 'value') ? result.result.value : result.result;
-console.log(typeof value === 'string' ? value : JSON.stringify(value || null));
-ws.close();
+try {
+  await bounded(new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = reject; }), 10000, 'CDP WebSocket open');
+  await bounded(send('Runtime.enable'), 10000, 'Runtime.enable');
+  const result = await bounded(send('Runtime.evaluate', {
+    expression: expr, awaitPromise, returnByValue: true, timeout: 45000
+  }), 55000, 'Runtime.evaluate');
+  const value = result.result && Object.prototype.hasOwnProperty.call(result.result, 'value') ? result.result.value : result.result;
+  console.log(typeof value === 'string' ? value : JSON.stringify(value || null));
+} finally {
+  try { ws.close(); } catch {}
+}
 '@ | node -
     if ($LASTEXITCODE -eq 0) { return ($raw | ConvertFrom-Json) }
     Start-Sleep -Milliseconds (650 + ($attempt * 500))
@@ -488,6 +502,37 @@ $multiLiveOpen = Invoke-CdpJson @"
   };
 })()
 "@
+# A native-surface focus handoff can consume the first synthetic OK on the emulator even though the
+# visible WebView button still owns focus. Retry once only when we are still on Live TV with that
+# exact launcher visible/focused; retain the first sample so a persistent regression is not masked.
+if (!$multiLiveOpen.ok) {
+  $multiLiveRetryReady = Invoke-CdpJson @"
+(() => {
+  const btn = document.getElementById('chMultiBtn');
+  const ready = S.view === 'livetv' && btn && btn.offsetParent !== null && !(S.multiView && S.multiView.open);
+  if (ready) focusLiveToolbar('chMultiBtn');
+  return { ok: !!ready, view: S.view, focus: document.activeElement && (document.activeElement.id || document.activeElement.className || document.activeElement.tagName) };
+})()
+"@
+  if ($multiLiveRetryReady.ok -and $multiLiveRetryReady.focus -eq 'chMultiBtn') {
+    $multiLiveFirstAttempt = $multiLiveOpen
+    $multiLiveFirstJson = $multiLiveFirstAttempt | ConvertTo-Json -Compress
+    Send-Key "DPAD_CENTER"
+    Start-Sleep -Seconds 3
+    $multiLiveOpen = Invoke-CdpJson @"
+(() => ({
+  ok: S.view === 'multiview' && !!(S.multiView && S.multiView.open) && !!document.querySelector('#multiView.open'),
+  view: S.view,
+  multiOpen: !!(S.multiView && S.multiView.open),
+  pickerOpen: !!document.querySelector('#mvPicker.open'),
+  count: S.multiView ? S.multiView.count : 0,
+  active: S.multiView ? S.multiView.active : null,
+  retriedAfterFocusedHandoff: true,
+  firstAttempt: $multiLiveFirstJson
+}))()
+"@
+  }
+}
 if (!$multiLiveOpen.ok) { Add-Failure "Live TV Multiview did not open from Android D-pad OK" }
 $multiLiveCleanup = Invoke-CdpJson @"
 (async () => {
@@ -659,11 +704,24 @@ $vodStart = Invoke-CdpJson @"
   if (!S.rows || !S.rows.length) await loadRows();
   await wait(500);
   let item = (S.rows || []).flatMap((r) => r.items || []).find((x) => x && x.key === '$VodKey');
-  if (!item && ($VodQualityRank === 4 || $VodResumeSeconds > 0)) {
-    return { ok: false, error: 'exact -VodKey is required for 4K/Continue Watching verification', key: '$VodKey' };
+  // A zero-progress QA title is correctly absent from Continue Watching. Resolve the exact key from
+  // Watchlist/watch state instead of silently playing an unrelated home card; every quality rank
+  // must test the requested fixture, not only 4K/resume runs.
+  if (!item) {
+    try {
+      const rows = await api('/api/watchlist');
+      const row = Array.isArray(rows) ? rows.find((x) => x && x.key === '$VodKey') : null;
+      if (row) item = { ...(row.meta || {}), key: row.key };
+    } catch {}
   }
-  if (!item) item = (S.rows || []).flatMap((r) => r.items || []).find((x) => x && x.type !== 'live' && x.tmdbId);
-  if (!item) return { ok: false, error: 'no VOD item found', rows: S.rows ? S.rows.length : 0 };
+  if (!item) {
+    try {
+      const rows = await api('/api/watch' + profileQ());
+      const row = Array.isArray(rows) ? rows.find((x) => x && x.key === '$VodKey') : null;
+      if (row) item = { ...(row.meta || {}), key: row.key, resume: row.position || 0, duration: row.duration || 0 };
+    } catch {}
+  }
+  if (!item) return { ok: false, error: 'exact -VodKey was not found in rows, Watchlist, or watch state', key: '$VodKey', rows: S.rows ? S.rows.length : 0 };
   const requestedResume = $VodResumeSeconds;
   const existingWatch = S.watchMap && item.key ? S.watchMap[item.key] : null;
   const duration = $VodDurationSeconds || +(existingWatch && existingWatch.duration) || +item.duration || 0;

@@ -14,6 +14,8 @@
   |
   <a href="https://github.com/d1same/triboon/releases/latest/download/triboon.apk">Android APK</a>
   |
+  <a href="https://github.com/d1same/triboon/releases/latest/download/Triboon-Windows-Client.exe">Windows client</a>
+  |
   <a href="https://github.com/d1same/triboon/releases/latest/download/Triboon-Windows-Server.exe">Windows server</a>
   |
   <a href="https://github.com/d1same/triboon/pkgs/container/triboon">Container image</a>
@@ -138,8 +140,22 @@ when the package id and signing key match and the new `versionCode` is higher.
 
 ## Windows
 
-One stable Windows server installer ships on every release. It has a fixed
-"latest" download plus a versioned copy you can pin or roll back to.
+Triboon ships separate Windows installers for watching and hosting. Both have a
+fixed "latest" download plus a versioned copy that can be pinned or rolled back.
+
+### Client (watch on a Windows PC)
+
+The native Windows 10/11 x64 client connects to an existing Triboon server and
+uses libmpv with D3D11 hardware decoding on supported NVIDIA, AMD, and Intel
+GPUs. Unsupported codecs or drivers fall back to software decoding without
+breaking playback. It includes mouse, keyboard, media-key, controller/D-pad,
+subtitle, audio-track, quality, episode, Continue Watching, and Live TV support.
+
+```text
+https://github.com/d1same/triboon/releases/latest/download/Triboon-Windows-Client.exe
+```
+
+The matching immutable filename is `Triboon-Windows-Client-vX.Y.Z.exe`.
 
 ### Server (host Triboon on Windows)
 
@@ -159,17 +175,10 @@ the installer keeps on upgrade *and* uninstall - reinstalling picks up exactly
 where you left off. Updates only replace the program files under
 `Program Files\Triboon`.
 
-### Experimental client preview
-
-The PX8/Tauri client is available only as a manual GitHub Actions preview
-artifact. It is not attached to stable releases and has no fixed latest URL.
-The current shell still uses web playback because its native playback bridge is
-not complete; the separate libmpv experiment is also preview-only.
-
-The Windows server installer and preview artifacts are currently unsigned, so
+The Windows client and server installers are currently unsigned, so
 Windows SmartScreen shows a warning on first run - choose
-**More info -> Run anyway**. Each stable release keeps this versioned server
-copy for history and rollback:
+**More info -> Run anyway**. Each stable release also keeps this versioned
+server copy for history and rollback:
 
 ```text
 Triboon-Windows-Server-vX.Y.Z.exe
@@ -308,8 +317,8 @@ repository root:
 - `web/index.html` - the single-file web UI used by browser, desktop wrapper,
   and Android WebView shell.
 - `android/` - Android TV shell with D-pad bridge and native Media3/ExoPlayer.
-- `clients/windows-px8/` - experimental Tauri/PX8 Windows preview; not a stable
-  release asset until the native playback bridge is complete.
+- `clients/windows-px8/` - Tauri/libmpv Windows client with secure remote bridge,
+  D3D11 hardware decoding, native controls, and release packaging.
 - `installer/windows/` - one-click Windows server installer (Inno Setup + service
   wrapper); build with `installer/windows/build-installer.ps1`.
 - `unraid/` - Unraid template.

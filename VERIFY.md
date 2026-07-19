@@ -18,6 +18,10 @@ setup instructions; use `README.md`, `docs-setup.md`, and
   blocker.
 - Do not claim Web Player or Android ExoPlayer coverage from code inspection
   alone.
+- Do not claim Windows GPU playback from a successful compile or requested mpv
+  option. A real Windows playback smoke must show advancing frames and a
+  hardware value from `hwdec-current`; otherwise report software fallback or
+  unverified.
 - Do not claim IPTV coverage without source/cache checks and at least one real
   channel start path.
 - Do not claim subtitles/CC coverage unless captions are selectable, visible,
@@ -66,9 +70,14 @@ changes, complete these live checks before saying the update is done:
 | Web Player VOD | Movie starts, seeks, pauses, resumes, closes, and does not show new console errors. |
 | Web Player TV episode | Correct season/episode context, resume target, Up Next behavior when relevant. |
 | Episode handoff (web + Android) | Manual Play Next, autoplay at EOF, and player episode-strip selection keep the old frame or branded player loader topmost; the TV-show details page never appears between episodes. Autoplay uses the final pre-EOF 10-second choice window and does not start another countdown at EOF. Back during Preparing cancels the pending handoff permanently; stale success/error/native callbacks cannot reopen or close a newer player. |
+| Nested page Back (web + Android) | Visit Movie A -> Related B -> Cast -> Related C. Visible Back, browser Back, Escape/Backspace, and Android/TV hardware Back unwind C -> Cast -> B -> A -> the originating browse page, one page per press. A deep-focused person filmography must leave the person page immediately; a direct deep link with no prior in-app page uses the safe origin fallback. |
 | Web Live TV | Channel starts in Triboon's web player, retunes cleanly, and shows live-specific errors instead of a generic external-player panel. |
 | Android ExoPlayer VOD | Movie or episode opens the native branded loader and ExoPlayer surface, not the web video shell; seek does not show the full startup loader. |
 | Android ExoPlayer Live TV | Native Live TV uses ExoPlayer, survives at least 20 Up/Down zaps, and logcat has no fatal/provider-loop markers. |
+| Windows native VOD | On Windows 10/11 x64, an H.264 1080p title and HEVC Main10 4K title open the dedicated libmpv surface. Start, pause/resume, seeks/skips, fullscreen, close, direct/remux/transcode fallback, and a simulated sustained stall remain responsive. Diagnostics name the actual decoder; claim GPU only when `hwdec-current` is hardware-backed while frames advance. |
+| Windows episode/resume | Saved resume opens at the correct absolute position. Manual next, autoplay at EOF, and episode-strip selection reuse the native surface without revealing details. Close/error/final checkpoint reaches Continue Watching promptly and stale token callbacks cannot change the replacement episode. |
+| Windows subtitles/audio/input | VTT selection/version/sync/size and audio-track switching do not restart or desync video. Mouse, keyboard, media keys, fullscreen, Back, and D-pad/controller navigation work at normal and high-DPI scales. |
+| Windows native Live TV | Provider HLS and TS plus server fallback start in libmpv; at least 20 rapid zaps release/replace the old stream without stale playback or fatal logs. |
 | CC/subtitles | Web and native CC choices open; recommended row is sane; captions stay in-frame; sync/version changes do not restart video or reset captions to time zero. |
 | Fast startup | A warm prepared movie or episode starts through the reuse path, not a repeated search/probe/mount/health gate. Healthy warm sources should stay near the 1-2 second target. |
 | Warm next episode | At 90 seconds remaining, the exact next S/E is prepared once. Manual/autoplay next joins that work and the prewarmed local lookup; it does not repeat the indexer/NZB/mount path. Out-of-order metadata from an older episode cannot replace the current player's next target. |
@@ -712,6 +721,27 @@ Manual checks:
 - Web captions respect mobile/TV safe areas and bounded height; with built-ins
   off, online warmup does not wait on the optional track probe.
 
+### Windows Native Client / P15
+
+```powershell
+node --test test/windows-px8-player.test.js
+node --test test/release-contract.test.js
+
+# From the repository root. This is the same locked recipe used by CI; it
+# imports MSVC, tests Rust, builds NSIS, extracts it, and byte-checks its payload.
+powershell -ExecutionPolicy Bypass -File `
+  .\clients\windows-px8\scripts\build-package.ps1 -Tag v2.8.0
+```
+
+The normal pull-request/main/tag workflow performs the locked MSVC native build.
+For a tag it must publish only the byte-identical versioned/stable installer
+pair into the final whitelist. Inspect the installed payload for
+`libmpv-2.dll`, `LICENSE`, `THIRD-PARTY-NOTICES.md`,
+`LIBMPV-LICENSE.LGPL`, `LIBMPV-SOURCE.md`, and `RUST-DEPENDENCIES.md`. Confirm
+the current graphics driver provides `C:\Windows\System32\vulkan-1.dll`; the
+pinned libmpv imports it and the installer intentionally does not bundle it. A
+CI runner does not replace the four Windows live-smoke rows above.
+
 ### Release Reproducibility / Privacy
 
 ```powershell
@@ -720,8 +750,9 @@ node --test --test-name-pattern "privacy|geolocation|proxy" test/security.test.j
 ```
 
 Confirm tag/package/Android versions agree, release assets are immutable and
-whitelisted, APK aliases are identical and release-signed, Windows dependencies
-are locked, and the final publisher cannot expose a partial release. Confirm
+whitelisted, every stable/versioned alias is identical, the APK is
+release-signed, Windows server dependencies and the LGPL libmpv archive are
+locked, and the final publisher cannot expose a partial release. Confirm
 viewer geolocation is off by default, trusted-proxy handling is explicit, and
 the Settings status reflects any environment-forced state.
 
@@ -745,6 +776,10 @@ Every final update report and PR description must include:
 - Docker image build and isolated container `/api/server` smoke result;
 - locked Windows installer build/runtime result and any elevated install,
   service, firewall, upgrade, or uninstall smoke not run, with reason;
+- Windows client MSVC/Rust/build result, installed runtime/notices inspection,
+  exact GPU/driver plus `hwdec-current`, 1080p/4K VOD, next/resume/CW,
+  subtitle/audio/input, IPTV zap, clean-install/upgrade/uninstall results, and
+  whether the installer was Authenticode-signed;
 - anything not run, with reason and risk.
 
 If any required line says `not run`, do not phrase the work as fully done.

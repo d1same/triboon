@@ -42,10 +42,21 @@ installer payload.
 The upstream projects and their authors are not affiliated with or responsible
 for Triboon.
 
-## Experimental Windows native-client artifact
+## Windows native client
 
-The dispatch-only experimental native Windows-client artifact bundles the
-`mpv-dev-lgpl-x86_64-20260713-git-e5486b96d7` development/runtime package from
-`zhongfly/mpv-winbuild`. That package is locked by URL and SHA-256 in the CI
-workflow and uses mpv's LGPL build. mpv and its bundled libraries remain under
-their respective licenses; see the [mpv copyright and license notices](https://github.com/mpv-player/mpv/blob/master/Copyright).
+Triboon for Windows dynamically loads `libmpv-2.dll` from the unmodified
+`mpv-dev-lgpl-x86_64-20260713-git-e5486b96d7` package published by
+`zhongfly/mpv-winbuild`. The archive URL and SHA-256 are locked in CI. The
+selected package is the LGPL x86-64 build; Triboon does not statically link it
+or prevent replacement with an ABI-compatible DLL.
+
+The upstream archive contains a single runtime DLL rather than separate
+codec/rendering DLLs; its enabled components remain under their respective
+licenses. The installed client carries this notice, Triboon's `LICENSE`,
+`LIBMPV-LICENSE.LGPL`, `LIBMPV-SOURCE.md`, and a generated
+`RUST-DEPENDENCIES.md` inventory for the locked Windows Cargo graph.
+`LIBMPV-SOURCE.md` records the exact archive and DLL hashes, mpv source
+revision, builder revision/run, rebuild route, runtime prerequisite, license
+links, and replacement instructions. See
+the [exact mpv copyright notice](https://github.com/mpv-player/mpv/blob/e5486b96d7d06dd148337899bfdc46bf25101663/Copyright)
+and [LGPL license](https://github.com/mpv-player/mpv/blob/e5486b96d7d06dd148337899bfdc46bf25101663/LICENSE.LGPL).
