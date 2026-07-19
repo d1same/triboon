@@ -7061,7 +7061,11 @@ function detailReturnRoute(ret) {
 }
 function replaceRoute(hash) {
   if (location.hash === hash) return;
-  try { history.replaceState(null, '', hash); }
+  try {
+    const current = history.state && history.state.triboonRoute
+      ? history.state : { triboonRoute: true, triboonIndex: Number.isFinite(routeIndex) ? routeIndex : 0 };
+    history.replaceState(current, '', hash);
+  }
   catch { setRoute(hash); }
 }
 function restoreDetailReturn() {
@@ -7863,14 +7867,14 @@ function closeDetail() {
   $('detail').classList.remove('open');
   S.detailItem = null;
   S.qualityPref = null; // visible toggle state only; per-title choices stay saved for Continue Watching.
-  // Hardware Back / Escape closing a detail that was opened from a cast page returns to that page
-  // (the browser Back button takes the history route instead — see the hashchange handler).
+  // Deep-link/refresh fallback: normal visible/keyboard/hardware Back uses backOneRoute(). When no
+  // earlier indexed app entry exists, retain the legacy cast return instead of dropping to Home.
   const fromPerson = S.detailFromPerson;
   S.detailFromPerson = null;
   if (fromPerson) { replaceRoute(`#/person/${fromPerson}`); restorePersonFromDetail(fromPerson); return; }
   restoreDetailReturn();
 }
-$('dBack').addEventListener('click', closeDetail);
+$('dBack').addEventListener('click', () => backOneRoute(closeDetail));
 $('dPlay').addEventListener('click', () => play(detailPlayTarget || S.detailItem));
 $('dSources').addEventListener('click', () => openSources(detailPlayTarget || S.detailItem));
 $('dTrailer').addEventListener('click', () => S.detailTrailer && openTrailer(S.detailTrailer));
@@ -8175,7 +8179,7 @@ function closePerson() {
   clearFocus();
   if (!restorePersonOriginDetailFocus(origin)) focusContent();
 }
-$('pBack').addEventListener('click', closePerson);
+$('pBack').addEventListener('click', () => backOneRoute(closePerson));
 $('person').addEventListener('scroll', maybeLoadMorePersonWorks, { passive: true });
 
 /* ============ player ============ */
@@ -10372,6 +10376,8 @@ function nativeSubtitleChoices() {
         choice.lang = choice.lang || info.lang || '';
         choice.url = choice.url || new URL(osSubUrl(p, choice.rel), location.origin).href;
       }
+      choice.shift = Number.isFinite(+choice.shift) ? +choice.shift : loadSubShift(choice.rel);
+      choice.size = choice.size || applySubSize();
     }
     const key = choice.rel ? 'rel:' + choice.rel : `${choice.action || ''}:${choice.lang || ''}`;
     if (!key || seen.has(key)) return;
@@ -21369,12 +21375,36 @@ document.addEventListener('click', (e) => {
 });
 
 /* ============ browser history: back button + refresh restore views ============ */
-let routeSquelch = 0;
+// Every visited app page gets a monotonically indexed same-document history entry. Details,
+// related titles, and cast/person pages can therefore use ONE Back contract on web, mobile,
+// Android, and TV: go to the immediately previous page. Direct deep links start at index 0 and
+// retain the legacy close-to-origin fallback because there is no earlier in-app page to visit.
+let routeIndex = Number(history.state && history.state.triboonRoute && history.state.triboonIndex) || 0;
+let routeBackPending = false;
+try {
+  if (!(history.state && history.state.triboonRoute)) {
+    history.replaceState({ triboonRoute: true, triboonIndex: routeIndex }, '', location.href);
+  }
+} catch {}
 let pendingLibraryRouteJob = null;
 function setRoute(hash) {
   if (location.hash === hash) return;
-  routeSquelch++;
-  location.hash = hash; // pushes a history entry; hashchange below is squelched for our own sets
+  routeIndex += 1;
+  try { history.pushState({ triboonRoute: true, triboonIndex: routeIndex }, '', hash); }
+  catch { location.hash = hash; }
+}
+function backOneRoute(fallback) {
+  const state = history.state;
+  const canGoBack = !!(state && state.triboonRoute && Number(state.triboonIndex) > 0);
+  if (canGoBack) {
+    if (routeBackPending) return true;
+    routeBackPending = true;
+    history.back();
+    setTimeout(() => { routeBackPending = false; }, 1500);
+    return true;
+  }
+  if (typeof fallback === 'function') fallback();
+  return false;
 }
 function routeParts() {
   return location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
@@ -21440,8 +21470,11 @@ async function restoreInitialRoute() {
 function routeIsTitle() {
   return /^#\/?title\/(movie|tv)\/\d+/.test(location.hash || '');
 }
-window.addEventListener('hashchange', () => {
-  if (routeSquelch > 0) { routeSquelch--; return; }
+function handleRouteTraversal() {
+  routeBackPending = false;
+  if (history.state && history.state.triboonRoute) {
+    routeIndex = Math.max(0, Number(history.state.triboonIndex) || 0);
+  }
   // Browser Back/Forward: close overlays first, then route inside the app.
   if (S.view === 'player') return closePlayer();
   // The person/cast page is a real history entry now (#/person/<id>). Back landing on it restores
@@ -21454,6 +21487,12 @@ window.addEventListener('hashchange', () => {
   if ($('person').classList.contains('open')) closePerson();
   if ($('detail').classList.contains('open') && !routeIsTitle()) return closeDetail();
   applyRoute();
+}
+window.addEventListener('popstate', handleRouteTraversal);
+window.addEventListener('hashchange', () => {
+  // Indexed pushState entries emit popstate (and may also emit hashchange); handle them once.
+  if (history.state && history.state.triboonRoute) return;
+  handleRouteTraversal();
 });
 
 function clearFocus() { document.querySelectorAll('.focus').forEach((e) => e.classList.remove('focus')); }
@@ -22862,7 +22901,7 @@ document.addEventListener('keydown', (e) => {
       }
       return;
     }
-    if (k === 'Escape' || k === 'Backspace') return closeDetail();
+    if (k === 'Escape' || k === 'Backspace') return backOneRoute(closeDetail);
     // 2D zones: ←/→ walks WITHIN a row, ↑/↓ jumps BETWEEN rows (actions → seasons →
     // episodes → cast → related) — the old linear walk made DOWN behave like RIGHT,
     // so the quality toggle and cast were unreachable without 20 presses.
@@ -23018,11 +23057,11 @@ document.addEventListener('keydown', (e) => {
   // ----- Movies / TV / Search / Library / Watchlist / Live TV / Person: poster grid -----
   if (['movies', 'tv', 'search', 'library', 'watchlist', 'livetv', 'person'].includes(S.view)) {
     if (S.view === 'person' && $('pBack').classList.contains('focus')) {
-      if (k === 'Enter') { if (!e.repeat) closePerson(); return; }
+      if (k === 'Enter') { if (!e.repeat) backOneRoute(closePerson); return; }
       if (k === 'ArrowDown' || k === 'ArrowRight') return focusGrid(S.gridIdx || 0);
       if (k === 'ArrowUp') return focusPersonBack();
       if (k === 'ArrowLeft') return enterRail();
-      if (k === 'Escape' || k === 'Backspace') return closePerson();
+      if (k === 'Escape' || k === 'Backspace') return backOneRoute(closePerson);
       return;
     }
     // TV remotes: the mic (LEFT of the field) is the page's first stop — OK talks, → types.
@@ -23070,7 +23109,7 @@ document.addEventListener('keydown', (e) => {
       return;
     }
     if (k === 'Escape' || k === 'Backspace') {
-      if (S.view === 'person') return closePerson();
+      if (S.view === 'person') return backOneRoute(closePerson);
       if (S.view === 'library' && S.localShow !== undefined) return runLocalLibrary(S.currentLib); // episodes → show list
       return enterRail();
     }
@@ -23316,11 +23355,9 @@ window.__tvBack = () => {
     return 'ok';
   }
   if (S.view === 'person' && $('person').classList.contains('open')) {
-    if (S.zone !== 'rail' && !$('pBack').classList.contains('focus') && (S.gridIdx || 0) > 0) {
-      focusGrid(0);
-    } else {
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
-    }
+    // Person is a visited PAGE, not a long-list layer. Back always returns to the immediately
+    // previous page even when focus is deep in the filmography grid.
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
     return 'ok';
   }
   const overlay = document.querySelector(

@@ -15,6 +15,7 @@ const publicMarkdown = [
   'SECURITY.md',
   'THIRD-PARTY-NOTICES.md',
   'VERIFY.md',
+  'clients/windows-px8/LIBMPV-SOURCE.md',
   'clients/windows-px8/README.md',
   'docs-android-tv-testing.md',
   'docs-app-updates.md',
@@ -34,9 +35,15 @@ test('release contract: package, Android, and CI tag versions agree', () => {
   const gradle = read('android/app/build.gradle');
   const versionName = /versionName\s*=\s*"([^"]+)"/.exec(gradle);
   const versionCode = /versionCode\s*=\s*(\d+)/.exec(gradle);
+  const clientPkg = JSON.parse(read('clients/windows-px8/package.json'));
+  const tauri = JSON.parse(read('clients/windows-px8/src-tauri/tauri.conf.json'));
+  const cargoVersion = /^version\s*=\s*"([^"]+)"/m.exec(read('clients/windows-px8/src-tauri/Cargo.toml'));
   assert.ok(/^\d+\.\d+\.\d+$/.test(pkg.version), `package version is semver: ${pkg.version}`);
   assert.strictEqual(versionName && versionName[1], pkg.version, 'Android versionName matches package.json');
   assert.ok(versionCode && Number(versionCode[1]) > 0, 'Android versionCode is a positive integer');
+  assert.strictEqual(clientPkg.version, pkg.version, 'Windows client package version matches package.json');
+  assert.strictEqual(tauri.version, pkg.version, 'Windows installer version matches package.json');
+  assert.strictEqual(cargoVersion && cargoVersion[1], pkg.version, 'Windows Rust version matches package.json');
   const ref = process.env.GITHUB_REF_NAME || '';
   const tagEvent = process.env.GITHUB_REF_TYPE === 'tag' || String(process.env.GITHUB_REF || '').startsWith('refs/tags/');
   if (tagEvent) {
@@ -122,6 +129,8 @@ test('release contract: public install and security docs stay current', () => {
   assert.match(updates, /linux\/amd64/);
   assert.match(updates, /linux\/arm64/);
   assert.match(updates, /\/api\/server/);
+  assert.match(updates, /releases\/latest\/download\/Triboon-Windows-Client\.exe/,
+    'update docs publish a stable Windows client link distinct from the server installer');
   assert.match(unraid, /<Registry>https:\/\/github\.com\/d1same\/triboon\/pkgs\/container\/triboon<\/Registry>/);
 
   assert.match(security, /security\/advisories\/new/);
@@ -169,12 +178,34 @@ test('release contract: Android verification fails fast on device and app precon
     'stress distinguishes an unreachable server from an unfinished authentication gate');
   assert.match(stress, /gateLogin[\s\S]+gateSetup[\s\S]+gateProfiles[\s\S]+gatePin/,
     'stress reports actionable login, setup, profile, and PIN preconditions');
+  assert.match(stress, /api\('\/api\/watchlist'\)[\s\S]+api\('\/api\/watch' \+ profileQ\(\)\)[\s\S]+exact -VodKey was not found/,
+    'stress resolves and requires the exact requested VOD fixture instead of silently testing an unrelated home card');
   assert.match(stress, /const candidate = document\.getElementById\('chMultiBtn'\);[\s\S]+candidate && candidate\.offsetParent !== null/,
     'stress waits for the Live TV Multiview launcher to become visible, not merely exist in the static shell');
+  assert.match(stress, /multiLiveRetryReady[\s\S]+focus -eq 'chMultiBtn'[\s\S]+retriedAfterFocusedHandoff/,
+    'stress permits only one evidence-preserving Multiview retry after confirming the launcher still owns focus');
   const bootStop = stress.indexOf("if (!$boot.ok)");
   const pageChurn = stress.indexOf('$page = Invoke-CdpJson');
   assert.ok(bootStop >= 0 && bootStop < pageChurn,
     'failed app preconditions stop stress before page, IPTV, and VOD checks can cascade');
+});
+
+test('release contract: Android in-app updates verify repository, identity, signer, and version', () => {
+  const activity = read('android/app/src/main/java/app/triboon/tv/MainActivity.java');
+  const policy = read('android/app/src/main/java/app/triboon/tv/UpdateVerifier.java');
+  assert.match(policy, /\/d1same\/triboon\/releases\/latest\/download\/triboon/,
+    'the native updater accepts stable assets only from the official repository');
+  assert.doesNotMatch(policy, /\[\^\/\]\+\/\[\^\/\]\+\/releases/,
+    'an arbitrary GitHub owner/repository cannot supply an app update');
+  assert.match(policy, /PACKAGE_NAME\s*=\s*"app\.triboon\.tv"/);
+  assert.match(policy, /RELEASE_CERT_SHA256\s*=[\s\S]+c0b1e2d90b443b07fe4ec4001496539aeb810d2bb9bba9a5f1d8781aa7e28d42/);
+  assert.match(policy, /candidateVersionCode > installedVersionCode/);
+  assert.match(activity, /GET_SIGNING_CERTIFICATES[\s\S]+getApkContentsSigners\(\)/,
+    'the downloaded archive signer is read through PackageManager');
+  assert.match(activity, /verifyDownloadedUpdate\(out\)[\s\S]+launchApkInstall\(out\)/,
+    'verification happens before Package Installer is opened');
+  assert.match(activity, /APP_UPDATE_MAX_BYTES[\s\S]+total > APP_UPDATE_MAX_BYTES/,
+    'the updater bounds a malicious or corrupt download');
 });
 
 test('release contract: local APK publishing cannot ship a debug build or overwrite assets', () => {
@@ -201,6 +232,8 @@ test('release contract: local APK publishing cannot ship a debug build or overwr
     'the built APK certificate must match the production fingerprint');
   assert.match(release, /@\('dump', 'badging', \$apk\)[\s\S]+versionName[\s\S]+-cne \$ver/,
     'the APK embedded versionName must match package.json');
+  assert.match(release, /releases\/latest\/download\/triboon\.apk[\s\S]+Stable APK signature verification[\s\S]+versionCode[\s\S]+must be greater than current stable/,
+    'the fallback requires a production-signed APK with a versionCode above the public stable APK');
   assert.ok(release.indexOf('$certOutput =') < release.indexOf('# --- stage the two published APK names'),
     'APK identity is verified before release aliases are staged');
   assert.match(release, /gh release create \$tag @files --verify-tag/);
@@ -218,7 +251,9 @@ test('release contract: tag artifacts publish only after provenance and native g
     'tag preflight binds the exact package version to current main');
   assert.match(workflow, /docker-main:[\s\S]+github\.ref == 'refs\/heads\/main'[\s\S]+type=raw,value=latest/,
     'main publishes only latest/sha images');
-  assert.match(workflow, /docker-release:[\s\S]+needs: \[release-preflight, release-apk, release-windows-server\][\s\S]+type=semver/,
+  assert.match(workflow, /docker-main:[\s\S]+needs: \[test, android, windows-client\]/,
+    'main cannot publish a container from a commit whose native Windows client does not compile');
+  assert.match(workflow, /docker-release:[\s\S]+needs: \[release-preflight, release-apk, release-windows-server, windows-client\][\s\S]+type=semver/,
     'the semver image waits for every native release artifact');
   assert.match(workflow, /docker-release:[\s\S]+Revalidate current main before publishing the immutable image[\s\S]+git rev-parse origin\/main[\s\S]+GITHUB_SHA[\s\S]+type=semver/,
     'the semver image revalidates main immediately before its publish job');
@@ -232,7 +267,9 @@ test('release contract: tag artifacts publish only after provenance and native g
     'APK verification cannot skip apksigner');
   assert.match(workflow, /EXPECTED_CERT_SHA256:\s*c0b1e2d90b443b07fe4ec4001496539aeb810d2bb9bba9a5f1d8781aa7e28d42[\s\S]+certificate SHA-256 digest: \$EXPECTED_CERT_SHA256/,
     'APK verification pins the established release signer');
-  assert.match(workflow, /cmp -s "release-assets\/triboon-\$\{TAG\}\.apk" release-assets\/triboon\.apk[\s\S]+mapfile -t actual/,
+  assert.match(workflow, /STABLE_APK_URL:\s*https:\/\/github\.com\/d1same\/triboon\/releases\/latest\/download\/triboon\.apk[\s\S]+current_certs[\s\S]+current_code[\s\S]+new_code[\s\S]+-gt "\$current_code"/,
+    'release CI compares signer, package, and monotonic versionCode with the current public APK');
+  assert.match(workflow, /cmp -s "release-assets\/triboon-\$\{TAG\}\.apk" release-assets\/triboon\.apk[\s\S]+cmp -s "release-assets\/Triboon-Windows-Client-\$\{TAG\}\.exe" release-assets\/Triboon-Windows-Client\.exe[\s\S]+mapfile -t actual/,
     'stable/versioned aliases must be identical and the publisher whitelists assets');
   assert.match(workflow, /gh release create "\$TAG" release-assets\/\* --verify-tag[\s\S]+--draft/,
     'the publisher verifies the existing tag and uploads a complete draft before publication');
@@ -243,15 +280,38 @@ test('release contract: tag artifacts publish only after provenance and native g
   for (const ref of usesRefs) {
     assert.ok(ref.startsWith('./') || /@[0-9a-f]{40}$/.test(ref), `workflow action is pinned by full commit SHA: ${ref}`);
   }
-  const nativeClient = workflow.slice(workflow.indexOf('build-windows-client-native:'));
-  assert.match(nativeClient, /MPV_BUNDLE_URL: https:\/\/github\.com\/zhongfly\/mpv-winbuild\/releases\/download\/[^\s]+\/mpv-dev-lgpl-x86_64-[^\s]+\.7z/,
-    'the experimental libmpv bundle uses an immutable release URL');
-  assert.match(nativeClient, /MPV_BUNDLE_SHA256: [0-9a-f]{64}/,
-    'the experimental libmpv bundle pins a reviewed SHA-256');
-  assert.ok(nativeClient.indexOf('Get-FileHash -Algorithm SHA256') < nativeClient.indexOf('& 7z x -y'),
+  const nativeClient = workflow.slice(workflow.indexOf('windows-client:'));
+  const windowsPackage = read('clients/windows-px8/scripts/build-package.ps1');
+  assert.match(nativeClient, /\.\\clients\\windows-px8\\scripts\\build-package\.ps1 @arguments/,
+    'CI calls the same checked-in Windows package recipe used locally');
+  assert.match(windowsPackage, /\$libMpvArchiveUrl = 'https:\/\/github\.com\/zhongfly\/mpv-winbuild\/releases\/download\/[^']+\/mpv-dev-lgpl-x86_64-[^']+\.7z'/,
+    'the production libmpv bundle uses an immutable LGPL release URL');
+  assert.match(windowsPackage, /\$libMpvArchiveSha256 = '[0-9a-f]{64}'/,
+    'the production libmpv bundle pins a reviewed SHA-256');
+  assert.match(windowsPackage, /\$libMpvDllSha256 = '[0-9a-f]{64}'/,
+    'the extracted runtime DLL has its own immutable content lock');
+  assert.ok(windowsPackage.indexOf("Assert-Sha256 -Path $archivePath") < windowsPackage.indexOf('Invoke-Checked -Command $SevenZip'),
     'libmpv is checksum-verified before extraction');
-  assert.doesNotMatch(nativeClient, /releases\/latest|gh release download/,
-    'the experimental native client never resolves a mutable latest release');
+  assert.doesNotMatch(windowsPackage, /releases\/latest|gh release download/,
+    'the production native client never resolves a mutable latest release');
+  assert.match(windowsPackage, /'test', '--locked'[\s\S]+'--features', 'player'[\s\S]+'run', 'tauri'[\s\S]+'build', '--features', 'player'/,
+    'the shared recipe tests and builds the libmpv feature with MSVC');
+  assert.match(nativeClient, /toolchain: stable-x86_64-pc-windows-msvc/,
+    'the native client never falls back to the GNU Rust target or a PATH-shadowed linker');
+  for (const resource of ['libmpv-2.dll', 'LICENSE', 'THIRD-PARTY-NOTICES.md', 'LIBMPV-SOURCE.md',
+    'LIBMPV-LICENSE.LGPL', 'RUST-DEPENDENCIES.md']) {
+    assert.ok(windowsPackage.includes(`'${resource}'`), `Windows package recipe requires ${resource}`);
+  }
+  assert.match(windowsPackage, /Test-InstallerPayload[\s\S]+Find-HashMatch[\s\S]+Get-FileHash -Algorithm SHA256/,
+    'the build extracts NSIS, validates the x64/versioned executable, and byte-checks every runtime/legal resource');
+  assert.match(windowsPackage, /cargo metadata --locked[\s\S]+--filter-platform \$rustTarget/,
+    'the installer carries a generated license inventory for the locked Windows Cargo graph');
+  assert.match(nativeClient, /name: release-windows-client[\s\S]+Triboon-Windows-Client\*\.exe/,
+    'tag builds stage the immutable Windows client pair for the final publisher');
+  assert.match(workflow, /publish-release:[\s\S]+needs: \[[^\]]*windows-client[^\]]*\]/,
+    'the final release cannot publish before the native Windows client passes');
+  assert.match(workflow, /expected=\("Triboon-Windows-Client-\$\{TAG\}\.exe" "Triboon-Windows-Client\.exe"[\s\S]+Triboon-Windows-Server[\s\S]+triboon-/,
+    'the exact release whitelist includes client, server, and Android pairs');
   assert.doesNotMatch(workflow, /--clobber/);
 });
 

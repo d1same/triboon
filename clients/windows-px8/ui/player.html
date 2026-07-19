@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>Triboon Player</title>
+  <link rel="stylesheet" href="player.css">
+</head>
+<body data-state="loading">
+  <svg class="symbols" aria-hidden="true">
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10-6.5z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M7 5h4v14H7zm6 0h4v14h-4z"/></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="M11 7V3L5 8l6 5V9c3.3 0 6 2.7 6 6 0 1.2-.4 2.4-1 3.3l1.5 1.3A8 8 0 0 0 11 7z"/><text x="9.7" y="17.4">10</text></symbol>
+    <symbol id="i-forward" viewBox="0 0 24 24"><path d="M13 7V3l6 5-6 5V9a6 6 0 0 0-5 9.3l-1.5 1.3A8 8 0 0 1 13 7z"/><text x="8.6" y="17.4">30</text></symbol>
+    <symbol id="i-next" viewBox="0 0 24 24"><path d="M6 5.5v13l9-6.5zm10 0h2v13h-2z"/></symbol>
+    <symbol id="i-cc" viewBox="0 0 24 24"><path d="M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zm4.8 4A3.2 3.2 0 1 0 11 14.6l-1.2-1.2a1.6 1.6 0 1 1 0-2.8L11 9.4A3.2 3.2 0 0 0 8.8 9zm6.4 0a3.2 3.2 0 1 0 2.2 5.6l-1.2-1.2a1.6 1.6 0 1 1 0-2.8l1.2-1.2A3.2 3.2 0 0 0 15.2 9z"/></symbol>
+    <symbol id="i-audio" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9zm12.5-.5a5 5 0 0 1 0 7l1.4 1.4a7 7 0 0 0 0-9.8zm-2.5 2a2.2 2.2 0 0 1 0 3l1.4 1.4a4.1 4.1 0 0 0 0-5.8z"/></symbol>
+    <symbol id="i-quality" viewBox="0 0 24 24"><path d="M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zm3 4v6h2v-2h2v2h2V9h-2v2H9V9zm8 0v6h2.7c1.8 0 3.3-1.3 3.3-3s-1.5-3-3.3-3zm2 2h.7c.8 0 1.3.4 1.3 1s-.5 1-1.3 1H17z"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><path d="M5 5h2v2H5zm4 0h10v2H9zM5 11h2v2H5zm4 0h10v2H9zM5 17h2v2H5zm4 0h10v2H9z"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-1 5h2v2h-2zm0 4h2v6h-2z"/></symbol>
+    <symbol id="i-guide" viewBox="0 0 24 24"><path d="M3 5h18v14H3zm2 2v4h6V7zm8 0v4h6V7zM5 13v4h6v-4zm8 0v4h6v-4z"/></symbol>
+    <symbol id="i-star" viewBox="0 0 24 24"><path d="m12 2.8 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-2.9L6.4 20l1.1-6.2L3 9.4l6.2-.9z"/></symbol>
+    <symbol id="i-fullscreen" viewBox="0 0 24 24"><path d="M4 4h6v2H6v4H4zm10 0h6v6h-2V6h-4zM4 14h2v4h4v2H4zm14 0h2v6h-6v-2h4z"/></symbol>
+    <symbol id="i-volume" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9zm11.5-.5a5 5 0 0 1 0 7l1.4 1.4a7 7 0 0 0 0-9.8z"/></symbol>
+    <symbol id="i-gpu" viewBox="0 0 24 24"><path d="M7 2h2v2h2V2h2v2h2V2h2v2h1a2 2 0 0 1 2 2v1h2v2h-2v2h2v2h-2v2h2v2h-2v1a2 2 0 0 1-2 2h-1v2h-2v-2h-2v2h-2v-2H9v2H7v-2H6a2 2 0 0 1-2-2v-1H2v-2h2v-2H2v-2h2V9H2V7h2V6a2 2 0 0 1 2-2h1zm1 6v8h8V8z"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6.5 5.1 5.5 5.5 5.5-5.5 1.4 1.4-5.5 5.5 5.5 5.5-1.4 1.4-5.5-5.5-5.5 5.5-1.4-1.4 5.5-5.5-5.5-5.5z"/></symbol>
+    <symbol id="i-min" viewBox="0 0 24 24"><path d="M5 11h14v2H5z"/></symbol>
+  </svg>
+
+  <div id="art" class="art" aria-hidden="true"></div>
+  <div class="shade" aria-hidden="true"></div>
+
+  <header id="topbar" class="topbar" data-tauri-drag-region>
+    <div class="identity" data-tauri-drag-region>
+      <div class="eyebrow"><span id="liveBadge" class="live-badge">LIVE</span><span id="episode"></span></div>
+      <h1 id="title">Triboon</h1>
+      <p id="source"></p>
+      <div id="liveEpg" class="live-epg" aria-label="Live TV schedule"></div>
+    </div>
+    <div class="top-actions">
+      <div id="gpuBadge" class="gpu-badge checking" title="Hardware decoding has not been measured yet">
+        <svg><use href="#i-gpu"/></svg><span>GPU checking</span>
+      </div>
+      <button id="minimize" class="window-button" aria-label="Minimize player" title="Minimize"><svg><use href="#i-min"/></svg></button>
+      <button id="windowClose" class="window-button close" aria-label="Close player" title="Close"><svg><use href="#i-close"/></svg></button>
+    </div>
+  </header>
+
+  <main id="surface" class="surface" tabindex="-1" aria-label="Video player">
+    <div id="loading" class="loading" role="status" aria-live="polite">
+      <div class="spinner" aria-hidden="true"></div>
+      <strong id="loadingTitle">Opening video</strong>
+      <span id="loadingStage">Preparing the player...</span>
+    </div>
+
+    <button id="centerPlay" class="center-play" aria-label="Play" title="Play or pause">
+      <svg><use id="centerPlayIcon" href="#i-play"/></svg>
+    </button>
+
+    <section id="errorCard" class="error-card" role="alert">
+      <strong>Playback stopped</strong>
+      <span id="errorText">The video could not be played.</span>
+      <div><button id="retry" class="pill primary">Try again</button><button id="errorClose" class="pill">Close</button></div>
+    </section>
+
+    <button id="upNext" class="up-next" aria-label="Play next episode">
+      <span class="up-next-kicker">UP NEXT <b id="upNextSeconds"></b></span>
+      <strong id="upNextTitle">Next episode</strong>
+      <span id="upNextSub"></span>
+      <i id="upNextProgress"></i>
+    </button>
+  </main>
+
+  <aside id="menu" class="menu" aria-hidden="true" aria-labelledby="menuTitle">
+    <div class="menu-head"><div><span id="menuKicker">PLAYER</span><h2 id="menuTitle">Options</h2></div><button id="menuClose" class="icon-button" aria-label="Close menu"><svg><use href="#i-close"/></svg></button></div>
+    <div id="menuList" class="menu-list" role="menu"></div>
+  </aside>
+
+  <aside id="stats" class="stats" aria-hidden="true" aria-labelledby="statsTitle">
+    <div class="menu-head"><div><span>PLAYBACK</span><h2 id="statsTitle">Technical details</h2></div><button id="statsClose" class="icon-button" aria-label="Close technical details"><svg><use href="#i-close"/></svg></button></div>
+    <dl id="statsList"></dl>
+    <p class="stats-note">Hardware decoding is shown only after libmpv reports the active decoder.</p>
+  </aside>
+
+  <footer id="controls" class="controls" aria-label="Playback controls">
+    <div class="timeline-wrap">
+      <div id="bufferBar" class="buffer-bar" aria-hidden="true"></div>
+      <input id="timeline" class="timeline" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek">
+      <div class="times"><span id="currentTime">0:00</span><span id="duration">0:00</span></div>
+    </div>
+    <div class="control-row">
+      <div class="control-group transport">
+        <button id="back" class="control" aria-label="Back 10 seconds" title="Back 10 seconds (J)"><svg><use href="#i-back"/></svg></button>
+        <button id="playPause" class="control primary" aria-label="Play" title="Play or pause (Space)"><svg><use id="playPauseIcon" href="#i-play"/></svg></button>
+        <button id="forward" class="control" aria-label="Forward 30 seconds" title="Forward 30 seconds (L)"><svg><use href="#i-forward"/></svg></button>
+        <button id="next" class="control optional" aria-label="Next episode" title="Next episode (N)"><svg><use href="#i-next"/></svg></button>
+      </div>
+      <div class="control-group secondary">
+        <button id="guide" class="control optional" aria-label="TV guide" title="TV guide (G)"><svg><use href="#i-guide"/></svg></button>
+        <button id="favorite" class="control optional" aria-label="Add channel to favorites" title="Favorite channel"><svg><use href="#i-star"/></svg></button>
+        <button id="episodes" class="control optional" aria-label="Episodes" title="Episodes"><svg><use href="#i-list"/></svg></button>
+        <button id="captions" class="control" aria-label="Subtitles" title="Subtitles (C)"><svg><use href="#i-cc"/></svg></button>
+        <button id="audio" class="control optional" aria-label="Audio track" title="Audio track"><svg><use href="#i-audio"/></svg></button>
+        <button id="quality" class="control optional" aria-label="Video quality" title="Video quality"><svg><use href="#i-quality"/></svg></button>
+        <button id="details" class="control" aria-label="Playback details" title="Playback details (I)"><svg><use href="#i-info"/></svg></button>
+        <div class="volume-wrap">
+          <button id="mute" class="control" aria-label="Mute" title="Mute (M)"><svg><use href="#i-volume"/></svg></button>
+          <input id="volume" type="range" min="0" max="100" value="100" aria-label="Volume">
+        </div>
+        <button id="fullscreen" class="control" aria-label="Toggle fullscreen" title="Fullscreen (F)"><svg><use href="#i-fullscreen"/></svg></button>
+      </div>
+    </div>
+  </footer>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="srStatus" class="sr-only" aria-live="polite"></div>
+  <script src="player.js"></script>
+</body>
+</html>

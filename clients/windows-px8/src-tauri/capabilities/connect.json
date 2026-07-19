@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "local-connect",
+  "description": "The bundled connect page may verify and remember one Triboon server.",
+  "windows": ["main"],
+  "local": true,
+  "permissions": [
+    "allow-connect",
+    "allow-windows-connect",
+    "allow-last-server"
+  ]
+}

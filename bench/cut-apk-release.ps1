@@ -116,7 +116,34 @@ $embeddedVersion = [regex]::Match($badging, "(?m)^package:.*\bversionName='([^']
 if (-not $embeddedVersion.Success -or $embeddedVersion.Groups[1].Value -cne $ver) {
   throw "Release APK embedded versionName does not match package.json ($ver)."
 }
-Write-Host "Verified APK embedded version and production signing certificate." -ForegroundColor Green
+$embeddedPackage = [regex]::Match($badging, "(?m)^package:\s+name='([^']+)'")
+$embeddedCode = [regex]::Match($badging, "(?m)^package:.*\bversionCode='([0-9]+)'")
+if (-not $embeddedPackage.Success -or $embeddedPackage.Groups[1].Value -cne 'app.triboon.tv') {
+  throw 'Release APK package id is not app.triboon.tv.'
+}
+if (-not $embeddedCode.Success) { throw 'Release APK versionCode is missing.' }
+
+$stableApk = Join-Path ([System.IO.Path]::GetTempPath()) "triboon-current-stable-$PID.apk"
+try {
+  Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/d1same/triboon/releases/latest/download/triboon.apk' -OutFile $stableApk
+  $stableCertOutput = Invoke-CheckedAndroidTool -Tool $apksigner -Arguments @('verify', '--verbose', '--print-certs', $stableApk) -Label 'Stable APK signature verification'
+  $stableCert = [regex]::Match($stableCertOutput, '(?im)certificate SHA-256 digest:\s*([0-9a-f]{64})\s*$')
+  if (-not $stableCert.Success -or $stableCert.Groups[1].Value.ToLowerInvariant() -ne $expectedReleaseCertSha256) {
+    throw 'Current stable APK does not match the pinned Triboon production signer.'
+  }
+  $stableBadging = Invoke-CheckedAndroidTool -Tool $aapt -Arguments @('dump', 'badging', $stableApk) -Label 'Stable APK badging inspection'
+  $stablePackage = [regex]::Match($stableBadging, "(?m)^package:\s+name='([^']+)'")
+  $stableCode = [regex]::Match($stableBadging, "(?m)^package:.*\bversionCode='([0-9]+)'")
+  if (-not $stablePackage.Success -or $stablePackage.Groups[1].Value -cne 'app.triboon.tv' -or -not $stableCode.Success) {
+    throw 'Current stable APK identity is invalid.'
+  }
+  if ([int64]$embeddedCode.Groups[1].Value -le [int64]$stableCode.Groups[1].Value) {
+    throw "Release APK versionCode $($embeddedCode.Groups[1].Value) must be greater than current stable $($stableCode.Groups[1].Value)."
+  }
+} finally {
+  Remove-Item -LiteralPath $stableApk -Force -ErrorAction SilentlyContinue
+}
+Write-Host "Verified APK package, version, higher versionCode, and production signing certificate." -ForegroundColor Green
 
 $sizeMb = [math]::Round((Get-Item $apk).Length / 1MB, 1)
 Write-Host "Built $apk ($sizeMb MB)" -ForegroundColor Green

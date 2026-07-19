@@ -6,11 +6,6 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
-    inputs:
-      native_client:
-        description: "Build the experimental libmpv native Windows client (artifact only, does not touch releases)"
-        type: boolean
-        default: false
 
 # A newer main push supersedes an older latest-image build. Release tags instead serialize and
 # remain retryable so one immutable version can never race itself or be cancelled halfway through.
@@ -103,7 +98,7 @@ jobs:
           cache-to: type=gha,mode=max
 
   docker-main:
-    needs: [test, android]
+    needs: [test, android, windows-client]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
@@ -233,8 +228,10 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
           EXPECTED_CERT_SHA256: c0b1e2d90b443b07fe4ec4001496539aeb810d2bb9bba9a5f1d8781aa7e28d42
+          STABLE_APK_URL: https://github.com/d1same/triboon/releases/latest/download/triboon.apk
         run: |
           apk=android/app/build/outputs/apk/release/app-release.apk
+          current="${RUNNER_TEMP}/triboon-current-stable.apk"
           apksigner=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)
           aapt=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)
           test -x "$apksigner" || { echo "apksigner not found"; exit 1; }
@@ -243,7 +240,23 @@ jobs:
           printf '%s\n' "$certs"
           printf '%s\n' "$certs" | grep -Fi "certificate SHA-256 digest: $EXPECTED_CERT_SHA256"
           version=${TAG#v}
-          "$aapt" dump badging "$apk" | grep -F "versionName='$version'"
+          badging=$("$aapt" dump badging "$apk")
+          printf '%s\n' "$badging" | grep -F "package: name='app.triboon.tv'"
+          printf '%s\n' "$badging" | grep -F "versionName='$version'"
+          new_code=$(printf '%s\n' "$badging" | sed -n "s/^package:.*versionCode='\([0-9][0-9]*\)'.*/\1/p")
+          test -n "$new_code" || { echo "new APK versionCode is missing"; exit 1; }
+
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --output "$current" "$STABLE_APK_URL"
+          current_certs=$("$apksigner" verify --verbose --print-certs "$current")
+          printf '%s\n' "$current_certs" | grep -Fi "certificate SHA-256 digest: $EXPECTED_CERT_SHA256"
+          current_badging=$("$aapt" dump badging "$current")
+          printf '%s\n' "$current_badging" | grep -F "package: name='app.triboon.tv'"
+          current_code=$(printf '%s\n' "$current_badging" | sed -n "s/^package:.*versionCode='\([0-9][0-9]*\)'.*/\1/p")
+          test -n "$current_code" || { echo "stable APK versionCode is missing"; exit 1; }
+          test "$new_code" -gt "$current_code" || {
+            echo "release versionCode $new_code must be greater than stable $current_code"
+            exit 1
+          }
       - name: Stage universal APK assets
         env:
           TAG: ${{ github.ref_name }}
@@ -259,46 +272,6 @@ jobs:
           path: dist/*.apk
           if-no-files-found: error
           retention-days: 2
-
-  # The PX8 shell is still a preview (web playback; its native bridge is not complete). A manual
-  # dispatch may build an artifact for QA, but release tags never advertise it as a stable client.
-  windows-client-preview:
-    needs: test
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.native_client != 'true'
-    runs-on: windows-latest
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 24
-      # windows-latest ships MSVC (VS 2022 C++ tools) + Rust, but pin the toolchain for determinism.
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
-      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
-        with:
-          workspaces: clients/windows-px8/src-tauri
-      - name: Install Tauri CLI (prebuilt, no source compile)
-        working-directory: clients/windows-px8
-        run: npm ci
-      - name: Build PX8 installer (NSIS)
-        working-directory: clients/windows-px8
-        run: npm run tauri build
-      - name: Locate installer
-        shell: bash
-        run: |
-          # Tauri NSIS output: "Triboon PX8_<ver>_x64-setup.exe" (productName has a space) — glob it.
-          setup=$(ls clients/windows-px8/src-tauri/target/release/bundle/nsis/*-setup.exe | head -1)
-          test -n "$setup" || { echo "no NSIS installer produced"; exit 1; }
-          mkdir -p dist
-          cp "$setup" dist/Triboon-Windows-Client.exe
-      # Always publish a downloadable build artifact — lets a manual dispatch produce a test .exe
-      # without attaching to (and misrepresenting) an existing release.
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: Triboon-Windows-Client-preview
-          path: dist/Triboon-Windows-Client.exe
 
   # Build the one-click Windows server installer as an immutable workflow artifact. Publishing is
   # owned by publish-release below after every required job succeeds.
@@ -337,7 +310,7 @@ jobs:
           retention-days: 2
 
   docker-release:
-    needs: [release-preflight, release-apk, release-windows-server]
+    needs: [release-preflight, release-apk, release-windows-server, windows-client]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -445,7 +418,7 @@ jobs:
           NODE
 
   publish-release:
-    needs: [release-preflight, release-apk, release-windows-server, docker-release, verify-public-container-release]
+    needs: [release-preflight, release-apk, release-windows-server, windows-client, docker-release, verify-public-container-release]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     environment: release
@@ -470,13 +443,16 @@ jobs:
           test -s release-assets/triboon.apk
           test -s "release-assets/Triboon-Windows-Server-${TAG}.exe"
           test -s release-assets/Triboon-Windows-Server.exe
+          test -s "release-assets/Triboon-Windows-Client-${TAG}.exe"
+          test -s release-assets/Triboon-Windows-Client.exe
           cmp -s "release-assets/triboon-${TAG}.apk" release-assets/triboon.apk
           cmp -s "release-assets/Triboon-Windows-Server-${TAG}.exe" release-assets/Triboon-Windows-Server.exe
+          cmp -s "release-assets/Triboon-Windows-Client-${TAG}.exe" release-assets/Triboon-Windows-Client.exe
           mapfile -t actual < <(find release-assets -maxdepth 1 -type f -printf '%f\n' | sort)
-          expected=("Triboon-Windows-Server-${TAG}.exe" "Triboon-Windows-Server.exe" "triboon-${TAG}.apk" "triboon.apk")
+          expected=("Triboon-Windows-Client-${TAG}.exe" "Triboon-Windows-Client.exe" "Triboon-Windows-Server-${TAG}.exe" "Triboon-Windows-Server.exe" "triboon-${TAG}.apk" "triboon.apk")
           mapfile -t expected < <(printf '%s\n' "${expected[@]}" | sort)
           diff -u <(printf '%s\n' "${expected[@]}") <(printf '%s\n' "${actual[@]}")
-          (cd release-assets && sha256sum "Triboon-Windows-Server-${TAG}.exe" Triboon-Windows-Server.exe "triboon-${TAG}.apk" triboon.apk > SHA256SUMS.txt)
+          (cd release-assets && sha256sum "Triboon-Windows-Client-${TAG}.exe" Triboon-Windows-Client.exe "Triboon-Windows-Server-${TAG}.exe" Triboon-Windows-Server.exe "triboon-${TAG}.apk" triboon.apk > SHA256SUMS.txt)
       - name: Publish once, only after every required artifact passed
         env:
           GH_TOKEN: ${{ github.token }}
@@ -503,15 +479,14 @@ jobs:
           gh release create "$TAG" release-assets/* --verify-tag --title "Triboon $TAG" --generate-notes --notes "$marker" --draft
           gh release edit "$TAG" --draft=false --latest
 
-  # EXPERIMENTAL native-player (libmpv) build — dispatch-only (native_client=true), artifact only, never
-  # touches a release. De-risks the libmpv toolchain (M1): fetch the mpv dev bundle, make an MSVC import
-  # lib, build the Tauri client with the `player` feature, and bundle libmpv-2.dll for the owner to test.
-  # Once it compiles + runs on a real Windows/GPU box, this folds into release-windows-client.
-  build-windows-client-native:
+  # Production Windows client gate. Every PR/main/tag run compiles the native libmpv path with
+  # MSVC; release tags additionally stage the immutable installer pair for the final publisher.
+  # Physical GPU decoding remains a documented live gate because hosted CI has no representative
+  # NVIDIA/AMD/Intel display and `hwdec=auto-safe` alone is not proof that hardware decode engaged.
+  windows-client:
     needs: test
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.native_client == 'true'
     runs-on: windows-latest
-    timeout-minutes: 40
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -520,73 +495,38 @@ jobs:
         with:
           node-version: 24
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: stable-x86_64-pc-windows-msvc
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1; puts lib.exe + MSVC on PATH
-      - name: Fetch locked libmpv dev bundle (headers + libmpv-2.dll + mpv.def)
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          workspaces: clients/windows-px8/src-tauri
+      - name: Verify Windows client and release contracts
+        run: node --test test/windows-px8-player.test.js test/release-contract.test.js
+      - name: Build, inspect, and stage the locked Windows client
         shell: pwsh
         env:
-          MPV_BUNDLE_FILE: mpv-dev-lgpl-x86_64-20260713-git-e5486b96d7.7z
-          MPV_BUNDLE_URL: https://github.com/zhongfly/mpv-winbuild/releases/download/2026-07-13-e5486b96d7/mpv-dev-lgpl-x86_64-20260713-git-e5486b96d7.7z
-          MPV_BUNDLE_SHA256: 1016b6029da77f96e3a2831d2c33107eee43f798374ba90f56dce45717ed7932
+          TAG: ${{ github.ref_name }}
         run: |
-          New-Item -ItemType Directory -Force -Path libmpv | Out-Null
-          $bundle = Join-Path (Resolve-Path libmpv) $env:MPV_BUNDLE_FILE
-          Invoke-WebRequest -Uri $env:MPV_BUNDLE_URL -OutFile $bundle
-          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $bundle).Hash.ToLowerInvariant()
-          if ($actual -cne $env:MPV_BUNDLE_SHA256) {
-            throw "libmpv checksum mismatch: expected $env:MPV_BUNDLE_SHA256, got $actual"
+          $arguments = @(
+            '-CacheDirectory', (Join-Path $env:RUNNER_TEMP 'triboon-libmpv'),
+            '-ArtifactDirectory', 'dist'
+          )
+          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $arguments += @('-Tag', $env:TAG)
           }
-          & 7z x -y $bundle "-o$(Resolve-Path libmpv)"
-          if ($LASTEXITCODE -ne 0) { throw "7z failed with exit code $LASTEXITCODE" }
-          Get-ChildItem libmpv -Recurse | Select-Object -First 60 FullName,Length
-      - name: Generate mpv import lib (robust to bundle layout)
-        shell: pwsh
-        run: |
-          $dll = Get-ChildItem -Path libmpv -Recurse -Filter libmpv-2.dll | Select-Object -First 1
-          if (-not $dll) { Write-Error "libmpv-2.dll not found in the bundle"; exit 1 }
-          $root = $dll.DirectoryName
-          "libmpv-2.dll at: $($dll.FullName)"
-          $def = Get-ChildItem -Path libmpv -Recurse -Filter mpv.def | Select-Object -First 1
-          if (-not $def) {
-            # Bundle shipped no .def — synthesize one from the DLL's exported mpv_* symbols.
-            "no mpv.def in bundle — synthesizing from DLL exports"
-            $lines = & dumpbin /exports $dll.FullName
-            $names = $lines | ForEach-Object { if ($_ -match '\s(mpv_[A-Za-z0-9_]+)\s*$') { $Matches[1] } } | Sort-Object -Unique
-            if (-not $names) { Write-Error "no mpv_* exports found in DLL"; exit 1 }
-            ("EXPORTS`n" + ($names -join "`n")) | Out-File -Encoding ascii "$root\mpv.def"
-            $def = Get-Item "$root\mpv.def"
-          }
-          "using def: $($def.FullName)"
-          & lib /def:$($def.FullName) /name:libmpv-2.dll /out:"$root\mpv.lib" /machine:X64
-          if ($LASTEXITCODE -ne 0) { Write-Error "lib.exe failed"; exit 1 }
-          Get-ChildItem $root | Select-Object Name,Length
-          # Expose the bundle root (has include\ + mpv.lib) to later steps for libmpv-sys.
-          "MPV_SOURCE=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
-      - name: Build native client (player feature)
-        working-directory: clients/windows-px8
-        # Default (pwsh) shell on purpose: a bash shell prepends Git's usr\bin, whose link.exe SHADOWS
-        # MSVC's linker and breaks the Rust build-script link. pwsh keeps MSVC's link.exe (from
-        # msvc-dev-cmd) on PATH — same as the working P1 job.
-        run: |
-          # libmpv-sys tells the linker to use mpv.lib; add its dir to LIB so MSVC's link.exe finds it
-          # regardless of the crate's emitted search path.
-          $env:LIB = "$env:MPV_SOURCE;$env:LIB"
-          Write-Host "MPV_SOURCE=$env:MPV_SOURCE"
-          # Bundle libmpv-2.dll into the installer (next to the exe) so the installed app loads it at
-          # runtime. Done via a build-only --config patch so the committed tauri.conf (P1 release) is
-          # untouched. The DLL is copied next to tauri.conf so the resource path resolves.
-          Copy-Item (Join-Path $env:MPV_SOURCE 'libmpv-2.dll') 'src-tauri\libmpv-2.dll' -Force
-          '{"bundle":{"resources":["libmpv-2.dll"]}}' | Out-File -Encoding ascii player.conf.json
-          npm ci
-          npm run tauri build -- --features player --config player.conf.json
-      - name: Stage installer + libmpv runtime DLL
-        shell: bash
-        run: |
-          setup=$(ls clients/windows-px8/src-tauri/target/release/bundle/nsis/*-setup.exe | head -1)
-          test -n "$setup" || { echo "no NSIS installer produced"; exit 1; }
-          mkdir -p dist
-          cp "$setup" dist/Triboon-Windows-Client-native.exe
-          cp libmpv/libmpv-2.dll dist/ 2>/dev/null || cp libmpv/*/libmpv-2.dll dist/ 2>/dev/null || true
+          & .\clients\windows-px8\scripts\build-package.ps1 @arguments
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         with:
-          name: Triboon-Windows-Client-native
-          path: dist/
+          name: Triboon-Windows-Client-${{ github.sha }}
+          path: dist/Triboon-Windows-Client.exe
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        with:
+          name: release-windows-client
+          path: dist/Triboon-Windows-Client*.exe
+          if-no-files-found: error
+          retention-days: 2

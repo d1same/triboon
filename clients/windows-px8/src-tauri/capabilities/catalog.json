@@ -1,0 +1,24 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "trusted-remote-catalog",
+  "description": "A configured remote Triboon catalog receives only the native playback bridge.",
+  "windows": ["main"],
+  "local": false,
+  "remote": {
+    "urls": ["http://*:*", "https://*:*"]
+  },
+  "permissions": [
+    "allow-windows-change-server",
+    "allow-windows-native-chrome-version",
+    "allow-windows-native-playback-caps",
+    "allow-windows-app-version",
+    "allow-windows-player-show-loading",
+    "allow-windows-player-play-vod",
+    "allow-windows-player-play-live",
+    "allow-windows-player-control",
+    "allow-windows-player-update",
+    "allow-windows-player-open-guide",
+    "allow-windows-player-close-guide",
+    "allow-windows-player-set-guide-pip-rect"
+  ]
+}
