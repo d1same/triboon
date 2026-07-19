@@ -508,14 +508,14 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          $arguments = @(
-            '-CacheDirectory', (Join-Path $env:RUNNER_TEMP 'triboon-libmpv'),
-            '-ArtifactDirectory', 'dist'
-          )
-          if ($env:GITHUB_REF -like 'refs/tags/v*') {
-            $arguments += @('-Tag', $env:TAG)
+          $buildParams = @{
+            CacheDirectory = Join-Path $env:RUNNER_TEMP 'triboon-libmpv'
+            ArtifactDirectory = 'dist'
           }
-          & .\clients\windows-px8\scripts\build-package.ps1 @arguments
+          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $buildParams.Tag = $env:TAG
+          }
+          & .\clients\windows-px8\scripts\build-package.ps1 @buildParams
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         with:

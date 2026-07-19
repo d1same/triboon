@@ -282,8 +282,8 @@ test('release contract: tag artifacts publish only after provenance and native g
   }
   const nativeClient = workflow.slice(workflow.indexOf('windows-client:'));
   const windowsPackage = read('clients/windows-px8/scripts/build-package.ps1');
-  assert.match(nativeClient, /\.\\clients\\windows-px8\\scripts\\build-package\.ps1 @arguments/,
-    'CI calls the same checked-in Windows package recipe used locally');
+  assert.match(nativeClient, /\$buildParams = @\{[\s\S]+CacheDirectory = Join-Path \$env:RUNNER_TEMP 'triboon-libmpv'[\s\S]+ArtifactDirectory = 'dist'[\s\S]+\$buildParams\.Tag = \$env:TAG[\s\S]+\.\\clients\\windows-px8\\scripts\\build-package\.ps1 @buildParams/,
+    'CI calls the same checked-in Windows package recipe with named parameters used locally');
   assert.match(windowsPackage, /\$libMpvArchiveUrl = 'https:\/\/github\.com\/zhongfly\/mpv-winbuild\/releases\/download\/[^']+\/mpv-dev-lgpl-x86_64-[^']+\.7z'/,
     'the production libmpv bundle uses an immutable LGPL release URL');
   assert.match(windowsPackage, /\$libMpvArchiveSha256 = '[0-9a-f]{64}'/,
