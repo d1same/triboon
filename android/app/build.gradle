@@ -76,7 +76,7 @@ tasks.matching { it.name == 'assembleRelease' || it.name == 'bundleRelease' }.co
 
 dependencies {
     def media3Version = "1.10.1"
-    compileOnly "androidx.annotation:annotation:1.9.1"
+    compileOnly "androidx.annotation:annotation:1.10.0"
     implementation "androidx.core:core:1.13.1" // FileProvider for the in-app self-update installer
     implementation "androidx.media3:media3-exoplayer:$media3Version"
     implementation "androidx.media3:media3-exoplayer-hls:$media3Version"
