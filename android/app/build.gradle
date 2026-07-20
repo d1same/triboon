@@ -83,12 +83,12 @@ dependencies {
     implementation "androidx.media3:media3-ui:$media3Version"
     // MediaSessionCompat + MediaStyle notification for the WebView-audio Music player: keeps music
     // playing in a foreground service when backgrounded and shows lock-screen/notification controls.
-    implementation "androidx.media:media:1.7.0"
+    implementation "androidx.media:media:1.8.0"
     // Google Cast (sender): cast VOD FROM the app to Chromecast/Google TV. mediarouter provides the
     // route-picker dialog (shown via a ContextThemeWrapper so the app-wide theme stays DeviceDefault);
     // appcompat is required on the compile classpath because the picker dialog extends AppCompatDialog.
     implementation "com.google.android.gms:play-services-cast-framework:21.5.0"
-    implementation "androidx.mediarouter:mediarouter:1.7.0"
+    implementation "androidx.mediarouter:mediarouter:1.8.0"
     implementation "androidx.appcompat:appcompat:1.7.0"
     testImplementation "junit:junit:4.13.2"
 }
