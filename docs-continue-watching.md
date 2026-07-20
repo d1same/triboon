@@ -89,7 +89,18 @@ flowchart LR
   seeks once ExoPlayer knows duration; remux/transcode performs one
   token-guarded server-seek remount at the computed absolute timestamp.
 - Native progress, READY state, and the loading surface must not report a false
-  zero position before that resume handoff completes.
+  zero position before that resume handoff completes. READY alone is not proof
+  that resumed frames are advancing; real playback owns that boundary.
+
+## Resume Source Recovery
+
+- Web and native playback re-check the live mount after opening. A confirmed
+  blocked source advances immediately to the next ranked release.
+- Startup without a real first frame uses the bounded player fallback ladder.
+  An established playback stall retries the same source/kind/timestamp once;
+  a second sustained stall changes release, never episode.
+- Source replacement retains the requested Continue Watching point even when
+  it occurs before the native player reports its first position callback.
 
 ## Focus Rules
 
@@ -122,4 +133,6 @@ When changing Continue Watching, verify:
 9. Pause or stop web, native direct/remux/transcode, Cast, and Multiview VOD;
    the latest position is immediately visible in Continue Watching, including
    after backgrounding or closing the app.
-10. `npm.cmd test` passes after behavior changes.
+10. Resume an episode whose saved source is now blocked: playback advances to a
+    healthy release at the same episode and timestamp without visiting details.
+11. `npm.cmd test` passes after behavior changes.

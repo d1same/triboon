@@ -310,8 +310,12 @@ function mountHasActivePlayback(mount, now = Date.now()) {
 // HEALTHY one (startup win #2). Measured: a cold start is dominated by walking PAST dead/incomplete
 // top picks one-at-a-time — racing collapses that serial tail to the fastest healthy of the top N.
 // Kept small so startup never floods the provider pool (the startup reserve covers a few parallel
-// mounts). Auto-advance stays serial (width 1) — the active source already died, no tail to race.
+// mounts). Recovery uses a narrower delayed hedge below because an active source has already died.
 const PLAY_RACE_WIDTH = 5;
+// Recovery keeps the common healthy-next-source path single-grab, but launches one delayed hedge
+// when that replacement stalls. This avoids another full 30-second mount wait after the player has
+// already declared its active release unhealthy.
+const RECOVERY_RACE_WIDTH = 2;
 // Hedge delay before speculatively mounting the next candidate in parallel. A healthy/fast top
 // pick (usually prefetched → NZB cached → mounts in well under this) commits before the hedge
 // fires, so the common case costs ZERO extra indexer grabs; only a STALLING top pick gets a
@@ -1591,8 +1595,8 @@ class Pipeline {
   }
 
   // Mount the next viable candidate in the session. width > 1 races the top N candidates'
-  // fetch+mount+health concurrently and commits the first HEALTHY one (cold-start win); width 1
-  // is the original one-at-a-time walk (auto-advance, and explicit Sources picks).
+  // fetch+mount+health concurrently and commits the first HEALTHY one (cold-start and bounded
+  // recovery hedge); width 1 is the original one-at-a-time walk used by explicit Sources picks.
   async _advance(session, mountOpts = {}, { width = 1 } = {}) {
     const attempts = [];
     const started = Date.now();
@@ -1773,7 +1777,8 @@ class Pipeline {
     // episode (session.query carries season/ep). Without this, advance() dropped it and a pack advanced
     // to the largest file (E01). Movies/single-ep are unaffected — their largest video IS the content.
     const _we = wantedEpisodeOf(session.query);
-    return this._advance(session, _we ? { ...rest, wantedEpisode: _we } : rest);
+    return this._advance(session, _we ? { ...rest, wantedEpisode: _we } : rest,
+      { width: RECOVERY_RACE_WIDTH });
   }
 }
 

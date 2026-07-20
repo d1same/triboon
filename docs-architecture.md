@@ -168,8 +168,9 @@ Rules that must not drift:
   WEB-sized/remux-to-AAC path. Low-power Android TV and older Chromecast-class
   devices also prefer AVC/H.264 for 1080p auto-picks when an AVC source is
   available, while HEVC/AV1 remain available as fallback/manual sources.
-- After ExoPlayer reaches READY, normal buffering must not remount or restart
-  a movie from the beginning.
+- ExoPlayer `STATE_READY` alone is not a rendered-playback boundary. A READY
+  player that wants playback but produces no frames remains under the bounded
+  startup watchdog; recovery always preserves the requested timestamp.
 - Continue Watching follows `docs-continue-watching.md`: one canonical Home card
   per movie/show, active progress beats next-up, and the saved 4K/1080p source
   class carries into remaining TV episodes.
@@ -268,9 +269,12 @@ Required behavior:
   seeks stay fast for other users.
 - Health checks keep the 500ms upfront gate. Background triage is lower priority
   and must never starve the segment the player is actively waiting on.
-- After web VOD has genuinely started, a waiting state with no meaningful
-  position progress for 45 seconds retries the same source, playback kind, and
-  timestamp first. Recovery must not silently advance to a different release.
+- Web and native VOD distinguish readiness from real playback. Startup without
+  a first frame is bounded at 10/18 seconds on web and 7/12 seconds on Android
+  (normal/heavy). Established stalls retry the same source, playback kind, and
+  timestamp once after 30/45 seconds. A blocked live health verdict or a second
+  sustained stall advances to the next ranked release at the same timestamp;
+  it never changes episodes. A missing server session re-mounts the same title.
 - Historical local-only Easynews benchmark evidence supports the original
   fast-start assumptions, but it is not part of a clean clone and is not a fixed
   runtime rule. Do not reintroduce hardcoded "16 warm connections" or "8-12
@@ -499,9 +503,10 @@ When changing persistence, update:
   path uses a `SurfaceView` player surface, decoder fallback, closest-sync
   seeks, seeded bandwidth, byte-bounded VOD buffers, short back buffers, live
   target-offset tuning, conservative-device HLS caps, and audio offload where
-  Android supports it. Sustained post-start VOD stalls trim UI caches and retry
-  the same source at the last trustworthy timestamp instead of silently
-  switching release or quality.
+  Android supports it. `STATE_READY` does not count as started until ExoPlayer
+  actually plays. Sustained post-start VOD stalls trim UI caches and retry the
+  same source at the last trustworthy timestamp once; a confirmed dead source
+  or repeated stall advances releases without changing episode or position.
 - Sends native capability claims to the web UI/server before source selection,
   including HDMI/ARC/eARC audio-output passthrough flags for AC3, E-AC3, E-AC3
   JOC, DTS, DTS-HD, and TrueHD. Conservative/budget device detection is allowed

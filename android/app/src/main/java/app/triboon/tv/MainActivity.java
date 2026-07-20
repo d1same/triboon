@@ -324,7 +324,8 @@ public class MainActivity extends Activity {
     private static final long NATIVE_VIDEO_STARTUP_STALL_MS = 7000L;
     private static final long NATIVE_VIDEO_HEAVY_STARTUP_STALL_MS = 12000L;
     private static final long NATIVE_VIDEO_REBUFFER_TRIM_MS = 15000L;
-    private static final long NATIVE_VIDEO_REBUFFER_RECOVERY_MS = 45000L;
+    private static final long NATIVE_VIDEO_REBUFFER_RECOVERY_MS = 30000L;
+    private static final long NATIVE_VIDEO_HEAVY_REBUFFER_RECOVERY_MS = 45000L;
     private static final long NATIVE_LIVE_STALL_RECOVERY_MS = 45000L;
     private static final long NATIVE_LIVE_STARTUP_STALL_RECOVERY_MS = 12000L;
     private static final long NATIVE_LIVE_RECOVERY_COOLDOWN_MS = 15000L;
@@ -4087,8 +4088,9 @@ public class MainActivity extends Activity {
                     updateNativeChrome();
                     if (state == Player.STATE_READY) {
                         if ("video".equals(nativeMode)) {
-                            nativeVideoStarted = true;
-                            widenNativeReadTimeoutAfterFirstFrame();
+                            // READY only proves that ExoPlayer can begin; it can still be waiting on
+                            // the resumed byte window with no rendered/advancing frame. PLAYING below
+                            // owns the established boundary used by stall recovery.
                             applyNativeStartSeekIfReady();
                             if (!nativePercentResumePending) {
                                 rememberNativeVideoPosition();
@@ -4102,7 +4104,8 @@ public class MainActivity extends Activity {
                         }
                     }
                     if (state == Player.STATE_READY && nativeLoading != null
-                            && nativeLoading.getVisibility() == View.VISIBLE && !nativePercentResumePending) {
+                            && nativeLoading.getVisibility() == View.VISIBLE && !nativePercentResumePending
+                            && (!"video".equals(nativeMode) || nativeVideoStarted || !nativePlayer.getPlayWhenReady())) {
                         nativeVideoUnhealthySinceMs = 0L;
                         hideNativeLoading();
                         if (!nativeGuideMode) showNativeChrome(true);
@@ -4149,6 +4152,12 @@ public class MainActivity extends Activity {
                         nativeVideoStarted = true;
                         widenNativeReadTimeoutAfterFirstFrame();
                         nativeVideoUnhealthySinceMs = 0L;
+                        nativeVideoMemoryTrimmedDuringBuffer = false;
+                        if (nativeLoading != null && nativeLoading.getVisibility() == View.VISIBLE
+                                && !nativePercentResumePending) {
+                            hideNativeLoading();
+                            if (!nativeGuideMode) showNativeChrome(true);
+                        }
                         if (!nativePercentResumePending) {
                             rememberNativeVideoPosition();
                             web.evaluateJavascript("window.__tvNativeVideoPlaying && __tvNativeVideoPlaying("
@@ -4507,11 +4516,22 @@ public class MainActivity extends Activity {
     private void completeNativePercentResume() {
         if (!nativePercentResumePending) return;
         nativePercentResumePending = false;
-        if (nativePlayer != null && !nativePlayer.getPlayWhenReady()) nativePlayer.play();
-        if (nativeLoading != null && nativeLoading.getVisibility() == View.VISIBLE) {
+        if (nativePlayer != null && nativePlayer.isPlaying()) {
+            // Direct percent-resume may already be playing at the resolved target when the 1s
+            // progress tick clears the pending flag. onIsPlayingChanged(true) will not fire twice,
+            // so commit that real-playing boundary here instead of leaving the loader/JS state stuck.
+            nativeVideoStarted = true;
+            widenNativeReadTimeoutAfterFirstFrame();
             nativeVideoUnhealthySinceMs = 0L;
+            nativeVideoMemoryTrimmedDuringBuffer = false;
             hideNativeLoading();
             if (!nativeGuideMode) showNativeChrome(true);
+            rememberNativeVideoPosition();
+            web.evaluateJavascript("window.__tvNativeVideoPlaying && __tvNativeVideoPlaying("
+                    + nativePosSeconds() + "," + nativeDurSeconds() + "," + nativePlaybackToken + ")", null);
+        } else if (nativePlayer != null && !nativePlayer.getPlayWhenReady()) {
+            // The eventual onIsPlayingChanged(true) callback owns the boundary in this path.
+            nativePlayer.play();
         }
     }
 
@@ -6907,17 +6927,18 @@ public class MainActivity extends Activity {
     private void updateNativeVideoWatchdog() {
         if (!"video".equals(nativeMode) || nativePlayer == null) return;
         int state = nativePlayer.getPlaybackState();
-        if (state == Player.STATE_READY) {
-            nativeVideoStarted = true;
-            widenNativeReadTimeoutAfterFirstFrame();
-            rememberNativeVideoPosition();
+        boolean wantsPlayback = nativePlayer.getPlayWhenReady()
+                && nativePlayer.getPlaybackSuppressionReason() == Player.PLAYBACK_SUPPRESSION_REASON_NONE;
+        boolean readyButNotPlaying = state == Player.STATE_READY && wantsPlayback && !nativePlayer.isPlaying();
+        if (state == Player.STATE_READY && !readyButNotPlaying) {
+            if (nativeVideoStarted) rememberNativeVideoPosition();
             nativeVideoUnhealthySinceMs = 0L;
             nativeVideoMemoryTrimmedDuringBuffer = false;
             return;
         }
         if (nativeVideoStarted) {
             boolean waitingForData = state == Player.STATE_BUFFERING
-                    || (nativePlayer.getPlayWhenReady() && !nativePlayer.isPlaying() && nativePlayer.isLoading());
+                    || readyButNotPlaying;
             boolean unhealthy = state == Player.STATE_IDLE || waitingForData;
             if (!unhealthy) {
                 nativeVideoUnhealthySinceMs = 0L;
@@ -6935,15 +6956,17 @@ public class MainActivity extends Activity {
                 Log.w(TAG, "Native VOD rebuffer still waiting after " + elapsed + "ms; trimming UI caches");
                 trimAndroidMemoryCaches(false);
             }
-            if (elapsed >= NATIVE_VIDEO_REBUFFER_RECOVERY_MS) {
+            long recoveryMs = nativeLikelyHeavyVod()
+                    ? NATIVE_VIDEO_HEAVY_REBUFFER_RECOVERY_MS
+                    : NATIVE_VIDEO_REBUFFER_RECOVERY_MS;
+            if (elapsed >= recoveryMs) {
                 Log.w(TAG, "Native VOD rebuffer stalled after " + elapsed + "ms; retrying same source");
                 notifyNativeVideoError(state == Player.STATE_IDLE ? "native player idle" : "native rebuffer stalled",
                         nativePosSeconds(), nativeDurSeconds());
             }
             return;
         }
-        boolean unhealthy = state == Player.STATE_IDLE || state == Player.STATE_BUFFERING
-                || (nativePlayer.getPlayWhenReady() && !nativePlayer.isPlaying());
+        boolean unhealthy = state == Player.STATE_IDLE || state == Player.STATE_BUFFERING || readyButNotPlaying;
         if (!unhealthy) {
             nativeVideoUnhealthySinceMs = 0L;
             return;

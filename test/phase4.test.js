@@ -285,6 +285,8 @@ test('Trakt percent-only native resume reaches direct and server-seek Android pa
     'the web remount rejects stale tokens and does not publish computed progress before replacement');
   assert.match(android, /private void startNativeProgress\(\) \{[\s\S]+applyNativeStartSeekIfReady\(\);[\s\S]+if \(!nativePercentResumePending\) \{[\s\S]+__tvNativeVideoProgress/,
     'the 1s progress driver completes a direct cached seek even without a second READY transition, while suppressing false zero progress');
+  assert.match(android, /private void completeNativePercentResume\(\) \{[\s\S]+nativePercentResumePending = false;[\s\S]+nativePlayer\.isPlaying\(\)[\s\S]+nativeVideoStarted = true;[\s\S]+hideNativeLoading\(\);[\s\S]+__tvNativeVideoPlaying/,
+    'a direct percent resume already playing at its target must commit the real-playing boundary and clear the loader');
 });
 
 test('quality toggle is a source-selection preference that survives Continue Watching', () => {
@@ -1967,13 +1969,16 @@ test('web VOD rebuffer and subtitle handoff stay bounded, fast, and mobile-safe'
   const helperStart = ui.indexOf('function clearWebRebufferRecovery()');
   const helperEnd = ui.indexOf('function stopActivePlaybackForReplacement', helperStart);
   assert.ok(helperStart >= 0 && helperEnd > helperStart, 'web rebuffer helpers should be present');
-  const helperSource = ui.slice(helperStart, helperEnd).replace('}, 45000);', '}, 5);');
+  const helperSource = ui.slice(helperStart, helperEnd)
+    .replace('if (!established) return webVodHeavy(p) ? 18000 : 10000;', 'if (!established) return 5;')
+    .replace('return webVodHeavy(p) ? 45000 : 30000;', 'return 5;');
 
   const S = { view: 'player' };
   const recovered = [];
-  const helpers = new Function('S', 'vodPlaybackStarted', 'appMs', 'recoverSamePlaybackSource',
+  const startupFailovers = [];
+  const helpers = new Function('S', 'vodPlaybackStarted', 'appMs', 'recoverSamePlaybackSource', 'failover',
     `${helperSource}\nreturn { armWebRebufferRecovery, clearWebRebufferRecovery };`)(
-    S, () => true, () => 10000, (reason) => recovered.push(reason));
+    S, (p) => !!p.started, () => 10000, (reason) => recovered.push(reason), () => startupFailovers.push('failover'));
   const playing = { started: true, usingNative: false, item: { type: 'movie' } };
   const video = { paused: false, seeking: false, readyState: 2, currentTime: 42 };
   S.playing = playing;
@@ -1990,8 +1995,17 @@ test('web VOD rebuffer and subtitle handoff stay bounded, fast, and mobile-safe'
   helpers.armWebRebufferRecovery(video, playing);
   assert.strictEqual(S._webRebufferT, null, 'paused playback does not arm a rebuffer restart');
 
-  assert.match(ui, /v\.onwaiting = \(\) => \{[\s\S]+pWait && pWait\.started\) armWebRebufferRecovery\(v, pWait\)/,
-    'the watchdog arms only after VOD has rendered a real frame');
+  video.paused = false;
+  const starting = { started: false, usingNative: false, item: { type: 'episode' } };
+  S.playing = starting;
+  video.currentTime = 0;
+  helpers.armWebRebufferRecovery(video, starting);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepStrictEqual(startupFailovers, ['failover'],
+    'a browser episode which never produces a first frame enters the startup fallback ladder');
+
+  assert.match(ui, /v\.onwaiting = \(\) => \{[\s\S]+if \(pWait\) armWebRebufferRecovery\(v, pWait\)/,
+    'the watchdog covers both startup-without-first-frame and established rebuffer stalls');
   assert.match(ui, /v\.onplaying = \(\) => \{[\s\S]+S\.playing !== playingRef[\s\S]+clearWebRebufferRecovery\(\);[\s\S]+const rebufferWatch = S\._webRebufferWatch;[\s\S]+rebufferWatch\.playing === playingRef[\s\S]+Math\.abs\(v\.currentTime - rebufferWatch\.position\) >= 0\.5\) clearWebRebufferRecovery\(\)/,
     'playing and meaningful time progress cancel the watchdog');
   assert.match(ui, /function startSource\([\s\S]+clearWebRebufferRecovery\(\);[\s\S]+function seekTo\(seconds\) \{[\s\S]+clearWebRebufferRecovery\(\);/,
@@ -2002,6 +2016,60 @@ test('web VOD rebuffer and subtitle handoff stay bounded, fast, and mobile-safe'
     'native subtitle handoff carries the saved caption-size preference');
   assert.match(ui, /#subOverlay\{[^}]+var\(--safeL\)[^}]+var\(--safeR\)[^}]+var\(--safeB\)/,
     'web captions respect phone display cutouts and bottom safe areas');
+});
+
+test('Continue Watching: a blocked live source health check advances the same playback promptly', async () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf('function startHealthPoll(id)');
+  const end = ui.indexOf('function showPlayerPlayPrompt', start);
+  assert.ok(start >= 0 && end > start, 'source-health recovery helper should be present');
+
+  const S = {
+    view: 'player',
+    playing: { mountId: 'dead-resume-mount', usingNative: true, item: { type: 'episode', resume: 1842 } },
+  };
+  const scheduled = [];
+  const cleared = [];
+  const saves = [];
+  const advances = [];
+  const toasts = [];
+  const healthNode = { innerHTML: '' };
+  let nextTimer = 1;
+  const fakeSetTimeout = (fn, ms) => { const rec = { id: nextTimer++, fn, ms, kind: 'timeout' }; scheduled.push(rec); return rec.id; };
+  const fakeSetInterval = (fn, ms) => { const rec = { id: nextTimer++, fn, ms, kind: 'interval' }; scheduled.push(rec); return rec.id; };
+  const clearTimer = (id) => cleared.push(id);
+  const startHealth = new Function('S', 'api', '$', 'saveWatch', 'toast', 'autoAdvance',
+    'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
+    `${ui.slice(start, end)}\nreturn startHealthPoll;`)(
+    S,
+    async (url) => {
+      assert.strictEqual(url, '/api/health/dead-resume-mount');
+      return { verdict: 'blocked' };
+    },
+    () => healthNode,
+    (...args) => saves.push(args),
+    (msg) => toasts.push(msg),
+    (opts) => advances.push(opts),
+    fakeSetTimeout,
+    fakeSetInterval,
+    clearTimer,
+    clearTimer,
+  );
+
+  startHealth('dead-resume-mount');
+  assert.deepStrictEqual(scheduled.map((t) => [t.kind, t.ms]), [['timeout', 1200], ['interval', 20000]],
+    'health triage gets one prompt kick and retains the bounded background interval');
+  await scheduled[0].fn();
+  assert.deepStrictEqual(saves, [[true]], 'the latest Continue Watching position is checkpointed before replacement');
+  assert.deepStrictEqual(advances, [{
+    allowMidstreamAdvance: true,
+    nativePreferred: true,
+    reason: 'source health blocked',
+  }], 'confirmed source rot advances releases while retaining native playback preference');
+  assert.strictEqual(S.healthTimer, null);
+  assert.strictEqual(S._healthKickT, null);
+  assert.ok(cleared.length >= 2, 'both scheduled health timers are cancelled before source replacement');
+  assert.match(toasts[0], /switching releases/);
 });
 
 test('Android native player: direct source and native chrome stay out of the web player', () => {
@@ -2642,8 +2710,8 @@ test('Android native player: direct source and native chrome stay out of the web
     nativeStartCursor = nativeStartFlow.indexOf(step, nativeStartCursor + 1);
     return nativeStartCursor >= 0;
   }), 'Android native movie playback should stay ordered, cancelable, and never reveal the web player shell when ExoPlayer is available');
-  assert.match(ui, /function startNativePlayerHousekeeping\(it\) \{[\s\S]+stopWebVideoElement\(\);[\s\S]+if \(S\.healthTimer\) clearInterval\(S\.healthTimer\);[\s\S]+S\.watchTimer = setInterval\(saveWatch, 10000\);[\s\S]+loadTracks\(\);[\s\S]+prepNextEpisode\(it\);[\s\S]+\}/,
-    'native playback should silence the hidden web video while still probing duration metadata');
+  assert.match(ui, /function startNativePlayerHousekeeping\(it\) \{[\s\S]+stopWebVideoElement\(\);[\s\S]+startHealthPoll\(S\.playing && S\.playing\.mountId\);[\s\S]+S\.watchTimer = setInterval\(saveWatch, 10000\);[\s\S]+loadTracks\(\);[\s\S]+prepNextEpisode\(it\);[\s\S]+\}/,
+    'native playback should silence the hidden web video while retaining source health, watch, and metadata housekeeping');
   assert.match(ui, /function homeRowsFromWatch\(cw, loading = false\) \{[\s\S]+if \(!rows\.length && loading\) \{[\s\S]+name: 'Loading home'[\s\S]+emptyLabel: 'Loading\.\.\.'[\s\S]+async function loadRows\(opts = \{\}\) \{[\s\S]+!opts\.catalogOnly && !opts\.watchReady && !hasFreshWatch[\s\S]+publishHomeRows\(homeRowsFromWatch\(cachedWatchRowsForHome\(\), true\), opts\); \/\/ Internal first paint: focus target under the splash before \/api\/watch returns\./,
     'home should render a hidden focus target before the watch-state request can freeze Android TV D-pad input');
   assert.match(ui, /function perfMark\(name, extra = \{\}\) \{[\s\S]+S\.perfMarks[\s\S]+function signalTvReady\(reason\) \{[\s\S]+TriboonTV\.appReady[\s\S]+function signalTvReadyOnce\(reason\)/,
@@ -2707,27 +2775,40 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android key bridge should not drop early D-pad keydown events during first app paint');
   assert.match(ui, /function startWebPlayerHousekeeping\(mount, it\) \{[\s\S]+v\.onerror = \(\) => \{[\s\S]+failover\(\);[\s\S]+\};[\s\S]+startHealthPoll\(mount\.id\);[\s\S]+loadTracks\(\);[\s\S]+subtitleCatalogAvailable\(it\)[\s\S]+fetch\(`\/api\/ossubs\/\$\{mount\.id\}\?\$\{subtitleRequestParams\(it, code2, mount\.streamToken\)\.toString\(\)\}`\)/,
     'web-only probes and subtitle prefetch should stay in the web playback branch and carry catalog ids; the video error handler still fails over');
+  assert.match(ui, /function startNativePlayerHousekeeping\(it\) \{[\s\S]+startHealthPoll\(S\.playing && S\.playing\.mountId\);/,
+    'native Continue Watching must run the same live source-health recheck as web playback');
+  assert.match(ui, /function startHealthPoll\(id\) \{[\s\S]+const poll = async \(\) => \{[\s\S]+p\.mountId !== id[\s\S]+h\.verdict === 'blocked'[\s\S]+autoAdvance\(\{ allowMidstreamAdvance: true, nativePreferred: !!p\.usingNative, reason: 'source health blocked' \}\)[\s\S]+S\._healthKickT = setTimeout\(poll, 1200\);[\s\S]+S\.healthTimer = setInterval\(poll, 20000\);/,
+    'blocked resume sources should advance promptly on both web and native without waiting for a media timeout');
   assert.match(ui, /async function loadTracks\(\) \{[\s\S]+if \(p\.usingNative && canUseNativeVideoPlayer\(\)\) \{[\s\S]+p\.nativeDuration = p\.duration \|\| p\.nativeDuration \|\| 0;[\s\S]+refreshNativeSubtitleChoices\(\);[\s\S]+return;[\s\S]+\}/,
     'track probing should feed native duration and subtitle choices without starting web playback');
   assert.match(ui, /function startSource\(kind, atSeconds, opts = \{\}\) \{[\s\S]+if \(p && p\.usingNative && canUseNativeVideoPlayer\(\)\) return false;/,
     'web source swaps should not run underneath native playback');
-  assert.match(ui, /function markVodPlaybackStarted\(p\) \{[\s\S]+p\.started = true;[\s\S]+function vodPlaybackStarted\(p\) \{[\s\S]+p\.nativeReady[\s\S]+function recoverSamePlaybackSource\(reason = ''\) \{[\s\S]+tryNativeVideoPlayer\(kind, at, \{ quietSeek: true \}\)[\s\S]+startSource\(kind, at, \{ quietSeek: true \}\)/,
-    'VOD playback should record the post-start boundary and recover the same source/kind after a mid-stream interruption');
+  assert.match(ui, /function markVodPlaybackStarted\(p\) \{[\s\S]+p\.started = true;[\s\S]+function vodPlaybackStarted\(p\) \{[\s\S]+p\.started \|\| p\.startedAt[\s\S]+function recoverSamePlaybackSource\(reason = ''\) \{[\s\S]+tryNativeVideoPlayer\(kind, at, \{ quietSeek: true \}\)[\s\S]+startSource\(kind, at, \{ quietSeek: true \}\)/,
+    'VOD playback should cross the post-start boundary only after real playback and retry the same source/kind once');
+  assert.doesNotMatch(ui, /function vodPlaybackStarted\(p\) \{[^}]+nativeReady/,
+    'native STATE_READY alone must not misclassify a frozen Continue Watching resume as established playback');
   assert.match(ui, /function failover\(\) \{[\s\S]+if \(vodPlaybackStarted\(p\)\) \{[\s\S]+recoverSamePlaybackSource\('playback interrupted'\);[\s\S]+return;[\s\S]+if \(!p\.usingRemux && !p\.usingTranscode/,
     'web media errors after a real VOD frame must not silently switch to remux/transcode or another release');
   // When same-source resume fails because the mount is gone (server restarted/updated/swept), re-mount
   // the SAME title on a fresh mount and resume at the current position, with backoff to ride out the
   // restart — instead of giving up. Failure-path only, so healthy playback is untouched.
-  assert.match(ui, /if \(!p\._reMounting\) reMountAndResume\(reason\);/,
-    'a gone mount should escalate to a re-mount instead of immediately showing interrupted');
+  assert.match(ui, /p\._sameSourceRecoveryKey === key[\s\S]+autoAdvance\(\{ allowMidstreamAdvance: true, nativePreferred: !!p\.usingNative, reason/,
+    'a second sustained same-source failure should advance to a different release instead of looping for minutes');
+  const sourceRecoveryBlock = ui.slice(ui.indexOf('function recoverSamePlaybackSource'), ui.indexOf('function resetVlcPanel'));
+  assert.doesNotMatch(sourceRecoveryBlock, /playNextEpisode\(/,
+    'source recovery must never enter the next-episode path');
   assert.match(ui, /async function reMountAndResume\(reason = '', attempt = 0\) \{[\s\S]+api\('\/api\/play', \{ method: 'POST', body: playbackRequestBody\(p\.item, p\.name \? \{ name: p\.name \} : null\) \}\)[\s\S]+if \(S\.playing !== p \|\| S\.view !== 'player'\) \{ p\._reMounting = false; return; \}[\s\S]+p\.mountId = r\.id;[\s\S]+startSource\(kind, at, \{ quietSeek: true \}\)[\s\S]+setTimeout\(\(\) => \{ if \(S\.playing === p && S\.view === 'player'\) reMountAndResume\(reason, attempt \+ 1\); \}, 1500 \+ attempt \* 1500\)/,
     'reMountAndResume should re-play the same title, reject stale ownership, resume at position, and retry with backoff then fall back');
-  assert.match(ui, /async function autoAdvance\(opts = \{\}\) \{[\s\S]+if \(vodPlaybackStarted\(p\) && !opts\.allowMidstreamAdvance\) \{[\s\S]+recoverSamePlaybackSource\('source failed'\);[\s\S]+return;[\s\S]+const at = currentTime\(\);/,
-    'auto-advance should remain a startup/source-failure path, not a mid-movie release switch');
-  assert.match(ui, /window\.__tvNativeVideoReady = \(pos, dur, token\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+p\.nativeReady = true;[\s\S]+markVodPlaybackStarted\(p\);[\s\S]+window\.__tvNativeVideoError = \(msg, pos, dur, token\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+if \(vodPlaybackStarted\(p\)\) \{[\s\S]+recoverSamePlaybackSource\(msg \|\| 'native playback interrupted'\);[\s\S]+return;/,
-    'native ExoPlayer errors after READY should recover the same source instead of walking the fallback ladder');
-  assert.match(android, /if \(state == Player\.STATE_READY\) \{[\s\S]+if \("video"\.equals\(nativeMode\)\) \{[\s\S]+nativeVideoStarted = true;[\s\S]+window\.__tvNativeVideoReady && __tvNativeVideoReady/,
-    'Android ExoPlayer STATE_READY should mark the web VOD session as post-start before later errors are handled');
+  assert.match(ui, /async function autoAdvance\(opts = \{\}\) \{[\s\S]+if \(vodPlaybackStarted\(p\) && !opts\.allowMidstreamAdvance\) \{[\s\S]+recoverSamePlaybackSource\('source failed'\);[\s\S]+return;[\s\S]+p\._sourceAdvancePending = true;[\s\S]+const reportedAt = Number\(currentTime\(\)\);[\s\S]+Number\(p\.item && p\.item\.resume\)[\s\S]+p\.nativePos = at;[\s\S]+p\.started = false; p\.startedAt = 0;/,
+    'source advance should coalesce callbacks, preserve an early Continue Watching timestamp, and give the replacement a fresh startup boundary');
+  assert.match(ui, /catch \(e\) \{[\s\S]+opts\.allowMidstreamAdvance && e && e\.status === 404[\s\S]+reMountAndResume\(opts\.reason/,
+    'a server restart that lost the play session should re-mount the title instead of being mistaken for source exhaustion');
+  assert.match(ui, /window\.__tvNativeVideoReady = \(pos, dur, token\) => \{[\s\S]+p\.nativeReady = true;[\s\S]+window\.__tvNativeVideoPlaying = \(pos, dur, token\) => \{[\s\S]+markVodPlaybackStarted\(p\);[\s\S]+window\.__tvNativeVideoError = \(msg, pos, dur, token\) => \{[\s\S]+if \(vodPlaybackStarted\(p\)\) \{[\s\S]+recoverSamePlaybackSource\(msg \|\| 'native playback interrupted'\);/,
+    'native playback should become established on PLAYING, not READY, while real mid-stream errors keep same-source-first recovery');
+  assert.match(android, /if \(state == Player\.STATE_READY\) \{[\s\S]+if \("video"\.equals\(nativeMode\)\) \{[\s\S]+applyNativeStartSeekIfReady\(\);[\s\S]+window\.__tvNativeVideoReady && __tvNativeVideoReady/,
+    'Android ExoPlayer STATE_READY should apply the resume seek and report readiness without claiming that frames advanced');
+  assert.doesNotMatch(android, /if \(state == Player\.STATE_READY\) \{[\s\S]{0,260}nativeVideoStarted = true;/,
+    'Android STATE_READY must not bypass the fast startup-stall path');
   assert.match(android, /else if \("live"\.equals\(nativeMode\)\) \{[\s\S]+nativeLiveStarted = true;[\s\S]+window\.__tvNativeLiveReady && __tvNativeLiveReady\(\)/,
     'Android ExoPlayer STATE_READY should commit pending Live TV PiP guide tuning only after the live surface is ready');
   assert.match(ui, /const clearReadyFrame = \(\) => \{[\s\S]+pReady\.item\.type === 'live' && v\.readyState >= 2[\s\S]+\$\(\'playerLoader\'\)\.classList\.remove\('show'\);[\s\S]+v\.onloadeddata = clearReadyFrame;[\s\S]+v\.oncanplay = clearReadyFrame;/,
@@ -4433,8 +4514,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Live TV should restart instead of staying frozen when a live stream ends quietly');
   assert.match(android, /private void recoverNativeLivePlayback\(String reason\) \{[\s\S]+if \(tryNativeLiveFallback\(\)\) return;[\s\S]+nativePlayer\.setMediaItem\(buildNativeMediaItem\(\)\);[\s\S]+nativePlayer\.prepare\(\);[\s\S]+nativePlayer\.play\(\);/,
     'native Live TV recovery should stay inside ExoPlayer and restart the active native stream');
-  assert.match(android, /private boolean nativeVideoStarted;[\s\S]+NATIVE_VIDEO_HEAVY_STARTUP_STALL_MS = 12000L[\s\S]+NATIVE_VIDEO_REBUFFER_TRIM_MS = 15000L[\s\S]+NATIVE_VIDEO_REBUFFER_RECOVERY_MS = 45000L[\s\S]+private void updateNativeVideoWatchdog\(\) \{[\s\S]+if \(state == Player\.STATE_READY\) \{[\s\S]+nativeVideoStarted = true;[\s\S]+nativeVideoUnhealthySinceMs = 0L;[\s\S]+nativeVideoMemoryTrimmedDuringBuffer = false;[\s\S]+if \(nativeVideoStarted\) \{[\s\S]+boolean waitingForData = state == Player\.STATE_BUFFERING[\s\S]+elapsed >= NATIVE_VIDEO_REBUFFER_TRIM_MS[\s\S]+trimAndroidMemoryCaches\(false\)[\s\S]+elapsed >= NATIVE_VIDEO_REBUFFER_RECOVERY_MS[\s\S]+notifyNativeVideoError\(state == Player\.STATE_IDLE \? "native player idle" : "native rebuffer stalled"[\s\S]+long startupThreshold = nativeLikelyHeavyVod\(\)[\s\S]+NATIVE_VIDEO_HEAVY_STARTUP_STALL_MS/,
-    'native movie and episode startup should fail over quickly, while sustained mid-play stalls trim memory and retry the same source');
+  assert.match(android, /private boolean nativeVideoStarted;[\s\S]+NATIVE_VIDEO_HEAVY_STARTUP_STALL_MS = 12000L[\s\S]+NATIVE_VIDEO_REBUFFER_TRIM_MS = 15000L[\s\S]+NATIVE_VIDEO_REBUFFER_RECOVERY_MS = 30000L[\s\S]+NATIVE_VIDEO_HEAVY_REBUFFER_RECOVERY_MS = 45000L[\s\S]+private void updateNativeVideoWatchdog\(\) \{[\s\S]+getPlaybackSuppressionReason\(\) == Player\.PLAYBACK_SUPPRESSION_REASON_NONE[\s\S]+boolean readyButNotPlaying = state == Player\.STATE_READY[\s\S]+if \(state == Player\.STATE_READY && !readyButNotPlaying\)[\s\S]+if \(nativeVideoStarted\)[\s\S]+long recoveryMs = nativeLikelyHeavyVod\(\)[\s\S]+NATIVE_VIDEO_HEAVY_REBUFFER_RECOVERY_MS[\s\S]+NATIVE_VIDEO_REBUFFER_RECOVERY_MS[\s\S]+long startupThreshold = nativeLikelyHeavyVod\(\)[\s\S]+NATIVE_VIDEO_HEAVY_STARTUP_STALL_MS/,
+    'native resume startup should fail over in 7-12s, while established standard/4K stalls get bounded 30s/45s recovery');
   assert.match(android, /private boolean nativeVideoErrorNotified;[\s\S]+private void notifyNativeVideoError\(String msg, long pos, long dur\) \{[\s\S]+if \(nativeVideoErrorNotified\) return;[\s\S]+nativeVideoErrorNotified = true;[\s\S]+releaseNativePlayer\(false\);/,
     'native movie and episode error reporting should be one-shot per playback attempt');
   assert.match(android, /catch \(Throwable e\) \{[\s\S]+handleNativePlaybackStartFailure\(e, mode, title, backdropUrl, loadingKind,[\s\S]+private void handleNativePlaybackStartFailure\(Throwable e,[\s\S]+trimAndroidMemoryCaches\(true\)[\s\S]+__tvNativeVideoError[\s\S]+__tvNativeLiveError/,
