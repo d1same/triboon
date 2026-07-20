@@ -9751,6 +9751,7 @@ function handleMultiViewKey(k, e) {
 function clearPlaybackTimers() {
   clearTimeout(S._waitT); clearTimeout(_nudgeT); _nudgeSum = 0; _nudgeBase = null;
   clearWebRebufferRecovery();
+  if (S._healthKickT) { clearTimeout(S._healthKickT); S._healthKickT = null; }
   if (S.upNextTimer) { clearInterval(S.upNextTimer); S.upNextTimer = null; }
   if (S.healthTimer) { clearInterval(S.healthTimer); S.healthTimer = null; }
   if (S.watchTimer) { clearInterval(S.watchTimer); S.watchTimer = null; }
@@ -9761,11 +9762,24 @@ function clearWebRebufferRecovery() {
   S._webRebufferT = null;
   S._webRebufferWatch = null;
 }
+function webVodHeavy(p) {
+  const rank = Number(p && p.sourceAttributes && p.sourceAttributes.resolutionRank);
+  const label = String((p && p.sourceAttributes && (p.sourceAttributes.resolution || p.sourceAttributes.quality)) || '');
+  return rank >= 4 || /2160|4k|uhd/i.test(label) || Number(p && p.size || 0) >= 18 * 1024 * 1024 * 1024;
+}
+function webVodStallRecoveryMs(p, established) {
+  if (!established) return webVodHeavy(p) ? 18000 : 10000;
+  return webVodHeavy(p) ? 45000 : 30000;
+}
 function armWebRebufferRecovery(v, p) {
-  if (S._webRebufferT || !v || !p || !vodPlaybackStarted(p) || p.usingNative
+  if (S._webRebufferT || !v || !p || p.usingNative
       || !p.item || p.item.type === 'live' || v.paused || v.seeking
       || (p.suppressSeekLoaderUntil && appMs() < p.suppressSeekLoaderUntil)) return;
-  const watch = { playing: p, position: Math.max(0, Number(v.currentTime) || 0) };
+  const watch = {
+    playing: p,
+    position: Math.max(0, Number(v.currentTime) || 0),
+    established: vodPlaybackStarted(p),
+  };
   S._webRebufferWatch = watch;
   S._webRebufferT = setTimeout(() => {
     S._webRebufferT = null;
@@ -9774,8 +9788,9 @@ function armWebRebufferRecovery(v, p) {
         || v.paused || v.seeking || v.readyState >= 3
         || (p.suppressSeekLoaderUntil && appMs() < p.suppressSeekLoaderUntil)
         || Math.abs((Number(v.currentTime) || 0) - watch.position) >= 0.5) return;
-    recoverSamePlaybackSource('web rebuffer stalled');
-  }, 45000);
+    if (watch.established) recoverSamePlaybackSource('web rebuffer stalled');
+    else failover();
+  }, webVodStallRecoveryMs(p, watch.established));
 }
 function stopActivePlaybackForReplacement(opts = {}) {
   if (!S.playing) return;
@@ -9802,7 +9817,9 @@ function stopActivePlaybackForReplacement(opts = {}) {
 }
 function startNativePlayerHousekeeping(it) {
   stopWebVideoElement();
-  if (S.healthTimer) clearInterval(S.healthTimer);
+  // Native ExoPlayer used to disable source triage entirely. That left a Continue Watching resume
+  // on a release which had rotted while the viewer was away waiting only on media timeouts.
+  startHealthPoll(S.playing && S.playing.mountId);
   if (S.watchTimer) clearInterval(S.watchTimer);
   S.watchTimer = setInterval(saveWatch, 10000);
   startActivityHeartbeat();
@@ -9914,7 +9931,10 @@ async function openPlayer(it, mount, opts = {}) {
     bufferGoalSec: mount.bufferGoalSec || 0, // server-side read-ahead goal → native player buffer depth
     usingRemux: false, usingTranscode: false, startOffset: 0,
     duration: knownDuration, lastSaved: 0, triedRemux: false, triedTranscode: false, mountId: mount.id,
-    tracks: null, _tracksJob: null, audioTrack: 0, subTrack: null, quality: 1080, nativePos: 0, nativeDuration: 0,
+    tracks: null, _tracksJob: null, audioTrack: 0, subTrack: null, quality: 1080,
+    // Seed native position with the requested resume point. A prompt health verdict can replace a
+    // rotten source before ExoPlayer's first callback; recovery must still start at Continue Watching.
+    nativePos: Math.max(0, Number(it.resume) || 0), nativeDuration: 0,
     nativeStartKind: playbackStartKind(mount), nativeTried: {},
     // Echoed by Android on terminal callbacks so a late STATE_ENDED from the previous ExoPlayer
     // cannot mark or auto-advance a newly-opened episode.
@@ -9977,7 +9997,7 @@ async function openPlayer(it, mount, opts = {}) {
   v.onwaiting = () => {
     if (S.playing !== playingRef || S.view !== 'player') return;
     const pWait = playingRef;
-    if (pWait && pWait.started) armWebRebufferRecovery(v, pWait);
+    if (pWait) armWebRebufferRecovery(v, pWait);
     if (S.view !== 'player' || (pWait && (pWait.started || (pWait.suppressSeekLoaderUntil && appMs() < pWait.suppressSeekLoaderUntil)))) return;
     clearTimeout(S._waitT);
     S._waitT = setTimeout(() => {
@@ -10723,11 +10743,13 @@ window.__tvNativeVideoReady = (pos, dur, token) => {
   const p = S.playing; if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
   applyNativeVideoProgress(pos, dur);
   p.nativeReady = true;
-  markVodPlaybackStarted(p);
 };
 window.__tvNativeVideoPlaying = (pos, dur, token) => {
   const p = S.playing; if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
   applyNativeVideoProgress(pos, dur);
+  // READY means ExoPlayer parsed enough media to be ready; it does not prove a frame advanced.
+  // Mark the recovery boundary only on real PLAYING so a frozen resume keeps the fast startup path.
+  markVodPlaybackStarted(p);
   cancelPauseWarmAhead();
 };
 window.__tvNativeVideoPaused = (pos, dur, token) => {
@@ -10958,7 +10980,7 @@ function markVodPlaybackStarted(p) {
   if (!p.startedAt) p.startedAt = appMs();
 }
 function vodPlaybackStarted(p) {
-  return !!(p && p.item && p.item.type !== 'live' && (p.started || p.startedAt || p.nativeReady));
+  return !!(p && p.item && p.item.type !== 'live' && (p.started || p.startedAt));
 }
 function currentPlaybackUrl(p, atSeconds = currentTime()) {
   if (!p) return '';
@@ -10975,8 +10997,8 @@ function showPlaybackInterrupted(reason = '') {
   if ($('vlcTitle')) $('vlcTitle').textContent = 'Playback interrupted';
   if (msg) {
     msg.textContent = reason
-      ? `The current source stopped responding (${reason}). Triboon kept the same release instead of changing sources.`
-      : 'The current source stopped responding. Triboon kept the same release instead of changing sources.';
+      ? `Playback stopped responding (${reason}), and Triboon could not recover a healthy release.`
+      : 'Playback stopped responding, and Triboon could not recover a healthy release.';
   }
   const url = currentPlaybackUrl(p);
   $('vlcUrl').textContent = url ? location.origin + url : '';
@@ -10990,18 +11012,23 @@ function recoverSamePlaybackSource(reason = '') {
   const at = currentTime();
   const key = `${p.mountId || p.sessionId || p.streamUrl || ''}:${kind}`;
   const now = appMs();
-  if (p._sameSourceRecoveryKey === key && now - (p._sameSourceRecoveryAt || 0) < 60000) {
+  if (p._sameSourceRecoveryKey === key && now - (p._sameSourceRecoveryAt || 0) < 120000) {
     // Same-source resume already failed once. On a CONSERVATIVE / low-power device a persistent
     // failure mid-playback is more likely an UNDECODABLE source (a 4K / high-bitrate / HEVC-Main10
     // stream the budget decoder choked on after starting, or thermal throttle) than a swept mount —
     // so escalate the ladder (direct → remux → transcode) and land on the budget-friendly transcode
     // instead of looping the same unplayable kind forever. High-end devices and genuine mount-loss
     // are untouched: they fall straight through to the re-mount path below.
-    if (p.usingNative && (clientCaps() || {}).lowPower && tryNextNativeKind(kind, at, reason || 'playback failed')) return true;
-    // Otherwise the mount is gone (server restarted / swept from memory). Re-mount the SAME title and
-    // resume from the current position instead of giving up. Failure-path only: if the re-mount can't
-    // succeed it falls back to the interrupted notice — healthy playback is never touched.
-    if (!p._reMounting) reMountAndResume(reason);
+    const decoderFailure = /decode|decoder|codec|renderer|format/i.test(String(reason || ''));
+    if (decoderFailure && p.usingNative && (clientCaps() || {}).lowPower
+        && tryNextNativeKind(kind, at, reason || 'playback failed')) return true;
+    // A normal transport stall gets one timestamp-preserving retry above. If that same source stalls
+    // again, preserve the episode and timestamp but move to the next ranked release. Session expiry
+    // is handled separately by autoAdvance's 404 re-mount path below.
+    if (!p._sourceAdvancePending) {
+      toast('Source is still stalled - switching releases...');
+      autoAdvance({ allowMidstreamAdvance: true, nativePreferred: !!p.usingNative, reason: reason || 'repeated playback stall' });
+    }
     return true;
   }
   p._sameSourceRecoveryKey = key;
@@ -11027,10 +11054,12 @@ async function reMountAndResume(reason = '', attempt = 0) {
     const r = await api('/api/play', { method: 'POST', body: playbackRequestBody(p.item, p.name ? { name: p.name } : null) });
     if (S.playing !== p || S.view !== 'player') { p._reMounting = false; return; } // user moved on / replaced playback
     // Adopt the new mount (same field set autoAdvance maps), then resume the current source kind.
-    p.sessionId = r.sessionId; p.streamUrl = r.streamUrl; p.remuxUrl = r.remuxUrl; p.transcodeUrl = r.transcodeUrl;
+    p.sessionId = r.sessionId; p.streamUrl = r.streamUrl; p.remuxUrl = r.remuxUrl; p.transcodeUrl = r.transcodeUrl; p.hlsUrl = r.hlsUrl;
     p.encoder = r.encoder; p.tracksUrl = r.tracksUrl; p.subtitleBase = r.subtitleBase; p.streamToken = r.streamToken;
-    p.mountId = r.id; p.fileName = r.name; p.size = r.size || p.size;
+    p.mountId = r.id; p.fileName = r.name; p.sourceAttributes = r.candidate && r.candidate.attributes;
+    p.size = r.size || (r.candidate && r.candidate.sizeBytes) || p.size; p.bufferGoalSec = r.bufferGoalSec || 0;
     p.triedRemux = false; p.triedTranscode = false; p.nativeTried = {};
+    p.started = false; p.startedAt = 0; p.nativePos = at; p.nativeDuration = 0;
     p._sameSourceRecoveryKey = null; p._sameSourceRecoveryAt = 0; p._reMounting = false; // fresh mount → reset guards
     if (p.usingNative && canUseNativeVideoPlayer() && tryNativeVideoPlayer(kind, at, { quietSeek: true })) return;
     p.usingNative = false;
@@ -11085,7 +11114,12 @@ async function autoAdvance(opts = {}) {
     recoverSamePlaybackSource('source failed');
     return;
   }
-  const at = currentTime();
+  if (p._sourceAdvancePending) return;
+  p._sourceAdvancePending = true;
+  const reportedAt = Number(currentTime());
+  const at = Math.max(0, Number.isFinite(reportedAt) && (reportedAt > 0 || vodPlaybackStarted(p))
+    ? reportedAt
+    : Number(p.item && p.item.resume) || 0);
   const nativePreferred = !!opts.nativePreferred || (p.usingNative && canUseNativeVideoPlayer());
   toast('Source failed — advancing to the next release…');
   try {
@@ -11097,12 +11131,15 @@ async function autoAdvance(opts = {}) {
       body: at > 0 && advDur > 0 ? { resumeFrac: Math.max(0, Math.min(0.98, at / advDur)) } : {},
     });
     if (S.playing !== p || S.view !== 'player') return;
-    p.streamUrl = r.streamUrl; p.remuxUrl = r.remuxUrl; p.transcodeUrl = r.transcodeUrl;
-    p.triedRemux = false; p.triedTranscode = false; p.mountId = r.id;
+    p.streamUrl = r.streamUrl; p.remuxUrl = r.remuxUrl; p.transcodeUrl = r.transcodeUrl; p.hlsUrl = r.hlsUrl;
+    p.encoder = r.encoder; p.fileName = r.name; p.sourceAttributes = r.candidate && r.candidate.attributes;
+    p.size = r.size || (r.candidate && r.candidate.sizeBytes) || 0; p.bufferGoalSec = r.bufferGoalSec || 0;
+    p.triedRemux = false; p.triedTranscode = false; p.usingRemux = false; p.usingTranscode = false; p.mountId = r.id;
     p.tracksUrl = r.tracksUrl; p.subtitleBase = r.subtitleBase; p.streamToken = r.streamToken;
     p.name = r.candidate ? r.candidate.name : r.name;
-    p.duration = 0; p.nativePos = at; p.nativeDuration = 0;
+    p.duration = 0; p.nativePos = at; p.nativeDuration = 0; p.started = false; p.startedAt = 0;
     p.nativeStartKind = playbackStartKind(r); p.nativeTried = {};
+    p._sameSourceRecoveryKey = null; p._sameSourceRecoveryAt = 0;
     p.tracks = null; p._tracksJob = null; p.subTrack = null; p.audioTrack = 0; p.forceAacRemux = false;
     $('pSrc').textContent = r.candidate ? r.candidate.name : r.name;
     updatePlayerMeta();
@@ -11125,12 +11162,29 @@ async function autoAdvance(opts = {}) {
     startSource(startKind, at);
   } catch (e) {
     if (S.playing !== p || S.view !== 'player') return;
+    if (opts.allowMidstreamAdvance && e && e.status === 404 && !p._reMounting) {
+      // A rolling server restart/sweep loses the session as well as the mount. Re-create the same
+      // title session; do not misreport that infrastructure case as exhausted alternate releases.
+      reMountAndResume(opts.reason || 'playback session expired');
+      return;
+    }
+    if (opts.allowMidstreamAdvance) {
+      if (nativePreferred) {
+        try { if (window.TriboonTV && window.TriboonTV.closeVideo) window.TriboonTV.closeVideo(); } catch {}
+        p.usingNative = false;
+        revealWebPlayerShell(p.item);
+      }
+      showPlaybackInterrupted((e && e.message) || 'no healthy alternate release');
+      return;
+    }
     if (nativePreferred) {
       toast('No more native-playable releases were available');
       closePlayer();
       return;
     }
     showVlcPanel();
+  } finally {
+    if (S.playing === p) p._sourceAdvancePending = false;
   }
 }
 function resetVlcPanel() {
@@ -12088,14 +12142,40 @@ async function closePlayer(opts = {}) {
 }
 function startHealthPoll(id) {
   if (S.healthTimer) clearInterval(S.healthTimer);
+  if (S._healthKickT) clearTimeout(S._healthKickT);
+  S.healthTimer = null;
+  S._healthKickT = null;
   if (!id) return; // local files / live channels have no usenet health
-  S.healthTimer = setInterval(async () => {
+  let inflight = false;
+  const poll = async () => {
+    const p = S.playing;
+    if (inflight || !p || p.mountId !== id || S.view !== 'player') return;
+    inflight = true;
     try {
       const h = await api('/api/health/' + id);
+      if (S.playing !== p || p.mountId !== id || S.view !== 'player') return;
       const cls = h.verdict === 'verified' ? 'ok' : 'warn';
       $('pHealth').innerHTML = `<span class="chip ${cls}">${h.verdict === 'verified' ? '✅' : '⚠️'} ${h.verdict}</span>`;
-    } catch {}
-  }, 20000);
+      if (h.verdict === 'blocked' && !p._sourceAdvancePending) {
+        // Confirmed source rot is not a normal rebuffer. Save the live timestamp and move straight
+        // to the next ranked release on web AND native instead of waiting for media timeouts.
+        if (S.healthTimer) clearInterval(S.healthTimer);
+        if (S._healthKickT) clearTimeout(S._healthKickT);
+        S.healthTimer = null; S._healthKickT = null;
+        saveWatch(true);
+        toast('Source failed health check - switching releases...');
+        autoAdvance({ allowMidstreamAdvance: true, nativePreferred: !!p.usingNative, reason: 'source health blocked' });
+      }
+    } catch {
+      // A transient health-route failure must never interrupt otherwise-progressing playback.
+    } finally {
+      inflight = false;
+    }
+  };
+  // Let startup/seek bytes keep priority, then re-check the live mount promptly. The health lane is
+  // lower-priority at the NNTP pool, so this cannot jump ahead of first-frame work.
+  S._healthKickT = setTimeout(poll, 1200);
+  S.healthTimer = setInterval(poll, 20000);
 }
 function showPlayerPlayPrompt(opts = {}) {
   const p = S.playing;

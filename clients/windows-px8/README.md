@@ -102,8 +102,8 @@ pre-bundle hash.
 powershell -ExecutionPolicy Bypass -File .\clients\windows-px8\scripts\build-package.ps1
 
 # A release build additionally creates the versioned alias and rejects a tag
-# that does not match package/Cargo/Tauri version 2.8.0.
-powershell -ExecutionPolicy Bypass -File .\clients\windows-px8\scripts\build-package.ps1 -Tag v2.8.0
+# that does not match package/Cargo/Tauri version 2.8.1.
+powershell -ExecutionPolicy Bypass -File .\clients\windows-px8\scripts\build-package.ps1 -Tag v2.8.1
 ```
 
 The default output is `dist\windows-client\Triboon-Windows-Client.exe`; a tag

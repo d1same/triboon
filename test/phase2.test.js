@@ -245,8 +245,8 @@ test('pipeline: a wanted episode matches a season PACK or covering RANGE (season
   ]) assert.ok(!releaseMatches(bad, w), `rejects ${bad}`);
   // advance() (auto-advance on source rot) must re-thread the wanted episode, or a season pack advances to E01.
   const pipelineSrc = require('fs').readFileSync(require('path').join(__dirname, '..', 'server', 'pipeline.js'), 'utf8');
-  assert.match(pipelineSrc, /async advance\(sessionId[\s\S]+wantedEpisodeOf\(session\.query\)[\s\S]+_advance\(session, _we \? \{ \.\.\.rest, wantedEpisode: _we \} : rest\)/,
-    'advance() re-threads the wanted episode into mountOpts so a pack keeps mounting the requested episode');
+  assert.match(pipelineSrc, /async advance\(sessionId[\s\S]+wantedEpisodeOf\(session\.query\)[\s\S]+_advance\(session, _we \? \{ \.\.\.rest, wantedEpisode: _we \} : rest,[\s\S]+\{ width: RECOVERY_RACE_WIDTH \}\)/,
+    'advance() keeps the requested pack episode while using the bounded source-recovery hedge');
 
   // Loose-file season-pack NZB: mount the WANTED episode file, not the largest. (E01 is bigger here.)
   const q = (name, bytes) => `<file subject="a &quot;${name}&quot; yEnc (1/1)"><segments><segment bytes="${bytes}" number="1">${name}@x</segment></segments></file>`;
@@ -2152,6 +2152,39 @@ test('pipeline: committing a healthy hedge cancels the stalled loser and release
     'winner commit aborts the losing mount rather than leaving startup-priority NNTP work alive');
   await new Promise((resolve) => setImmediate(resolve));
   assert.strictEqual(pipeline.prepareInflight.size, 0, 'the cancelled loser is removed from shared prepare state');
+});
+
+test('pipeline: source recovery hedges a stalled next release instead of waiting serially', async () => {
+  const pipeline = new Pipeline({
+    pool: () => null,
+    verdicts: { get: () => null, set: () => {} },
+    mounts: new Map(),
+  });
+  const calls = [];
+  pipeline._tryCandidate = (candidate) => {
+    calls.push(candidate.name);
+    if (candidate.name === 'stalled-recovery-source') return new Promise(() => {});
+    return Promise.resolve({ vf: { id: `${candidate.name}-vf`, streamable: true, size: 0 } });
+  };
+  const session = {
+    id: 'recovery-hedge', query: {}, cursor: 0, history: [],
+    candidates: [
+      { name: 'stalled-recovery-source', nzbUrl: 'https://indexer.test/recovery-stalled.nzb' },
+      { name: 'healthy-recovery-source', nzbUrl: 'https://indexer.test/recovery-healthy.nzb' },
+      { name: 'must-not-launch', nzbUrl: 'https://indexer.test/recovery-unused.nzb' },
+    ],
+  };
+  pipeline.sessions.set(session.id, session);
+
+  const t0 = Date.now();
+  const result = await pipeline.advance(session.id, { resumeFrac: 0.55 });
+  const elapsed = Date.now() - t0;
+  assert.strictEqual(result.candidate.name, 'healthy-recovery-source');
+  assert.deepStrictEqual(calls, ['stalled-recovery-source', 'healthy-recovery-source'],
+    'recovery launches one bounded hedge and stops once a healthy replacement is ready');
+  assert.ok(elapsed >= 700 && elapsed < 2200,
+    `recovery should commit the healthy hedge in about one second, not wait for the 30s mount deadline (${elapsed}ms)`);
+  assert.strictEqual(session.query.resumeFrac, 0.55, 'the replacement still warms the live resume window');
 });
 
 test('pipeline: cancelling one hedge consumer preserves another play joined to the same mount', async () => {

@@ -73,6 +73,7 @@ changes, complete these live checks before saying the update is done:
 | Nested page Back (web + Android) | Visit Movie A -> Related B -> Cast -> Related C. Visible Back, browser Back, Escape/Backspace, and Android/TV hardware Back unwind C -> Cast -> B -> A -> the originating browse page, one page per press. A deep-focused person filmography must leave the person page immediately; a direct deep link with no prior in-app page uses the safe origin fallback. |
 | Web Live TV | Channel starts in Triboon's web player, retunes cleanly, and shows live-specific errors instead of a generic external-player panel. |
 | Android ExoPlayer VOD | Movie or episode opens the native branded loader and ExoPlayer surface, not the web video shell; seek does not show the full startup loader. |
+| Continue Watching source recovery (web + Android) | Resume an episode on a source made blocked/unresponsive after the watch point was saved. A blocked health verdict advances promptly; an unknown stall retries the same source once, then selects a different ranked release. Playback remains on the same episode and absolute timestamp, never visits show details, and never invokes next episode unless EOF is reached. |
 | Android ExoPlayer Live TV | Native Live TV uses ExoPlayer, survives at least 20 Up/Down zaps, and logcat has no fatal/provider-loop markers. |
 | Windows native VOD | On Windows 10/11 x64, an H.264 1080p title and HEVC Main10 4K title open the dedicated libmpv surface. Start, pause/resume, seeks/skips, fullscreen, close, direct/remux/transcode fallback, and a simulated sustained stall remain responsive. Diagnostics name the actual decoder; claim GPU only when `hwdec-current` is hardware-backed while frames advance. |
 | Windows episode/resume | Saved resume opens at the correct absolute position. Manual next, autoplay at EOF, and episode-strip selection reuse the native surface without revealing details. Close/error/final checkpoint reaches Continue Watching promptly and stale token callbacks cannot change the replacement episode. |
@@ -689,8 +690,9 @@ Manual checks:
 - A season-pack RAR/ZIP mounts and reuses only the requested episode.
 - A stalled top candidate gets one 800ms hedge; a ready understudy waits at
   most 250ms for higher ranks and prevents additional source launches.
-- A sustained web stall retries the same source/kind/timestamp before release
-  failover.
+- A sustained web/native stall retries the same source/kind/timestamp once
+  before release failover; a confirmed blocked health verdict advances without
+  waiting, and neither path changes episode or loses the resume timestamp.
 
 ### Subtitles / CC / P11
 

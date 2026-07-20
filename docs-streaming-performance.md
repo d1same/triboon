@@ -288,11 +288,16 @@ partial range. VOD stream sockets also get a longer per-route timeout than the
 general API timeout so a provider hiccup becomes buffering/retry behavior, not
 an immediate truncated response.
 
-After web VOD has started, a `waiting` state with no meaningful position
-progress for 45 seconds triggers same-source recovery. The first recovery keeps
-the selected release, playback kind, and current timestamp; it must not silently
-advance releases because a temporary buffer drained. Playback, position
-progress, seek, source replacement, and close all cancel the pending watchdog.
+Web and Android VOD treat readiness and rendered playback separately. A startup
+that produces no first frame is bounded at 10/18 seconds on web and 7/12 seconds
+on Android for normal/heavy VOD. After playback has genuinely started, no
+meaningful position progress for 30/45 seconds triggers same-source recovery.
+That first recovery keeps the selected release, playback kind, and current
+timestamp so a temporary buffer drain does not change sources. A confirmed
+`blocked` live health verdict skips the media timeout; a second sustained stall
+advances to the next ranked release at the same timestamp. It never advances the
+episode. Playback/position progress, seek, replacement, and close cancel pending
+watchdogs, and a server-session `404` re-mounts the same title instead.
 
 Playback windows are applied when a mount is selected and rebalanced again when
 stream routes are touched or housekeeping removes mounts. That lets existing
@@ -391,9 +396,12 @@ losing hedge detaches from shared prepare state and its startup controller is
 aborted when no other play still consumes it. This releases queued/running
 startup NNTP work instead of waiting for the earlier candidate's full mount
 deadline; a concurrent play joined to that same mount remains protected. After
-an actual candidate failure the bounded walk may fill its existing race window,
-while auto-advance remains serial. Fast missing-probe and mount-deadline exits
-likewise abort their underlying startup BODY before the failure is returned.
+an actual candidate failure the bounded walk may fill its existing race window.
+Recovery auto-advance uses a narrower two-candidate delayed hedge: the usual
+healthy next release remains a single grab, while a replacement still pending
+after 800ms gets one understudy instead of another full mount-deadline wait. Fast
+missing-probe and mount-deadline exits likewise abort their underlying startup
+BODY before the failure is returned.
 
 ## Recommendation Flow
 
@@ -513,7 +521,9 @@ Before changing performance behavior, check:
    payload; its probe targets that payload, and a ready hedge cancels unused
    startup work without interrupting another joined consumer. Probe/deadline
    exits leave no startup BODY behind.
-9. Web recovery retries the same source/kind before release failover.
+9. Web/native recovery retries the same source/kind once before release
+   failover, except a confirmed blocked health verdict may advance immediately;
+   both paths retain the title/episode and timestamp.
 10. Live TV tune epochs, stable channel ids, and XMLTV worker parsing stay
     responsive during rapid zaps.
 11. Docs remain aligned: this file, `docs-architecture.md`,
