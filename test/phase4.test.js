@@ -447,8 +447,26 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   // Trailers must be ACTUAL trailers: exact TMDB type Trailer/Teaser only, the NAME screened for
   // interview/featurette/BTS words (TMDB mislabels), official + real-Trailer preferred, and BOTH
   // pick sites (detail page + trailers row) share the one picker. Null beats playing an interview.
-  assert.match(ui, /function pickBestTrailer\(results\) \{[\s\S]+const NOT_A_TRAILER = \/[\s\S]+?\(v\.type === 'Trailer' \|\| v\.type === 'Teaser'\)[\s\S]+!NOT_A_TRAILER\.test\(String\(v\.name \|\| ''\)\)[\s\S]+v\.type === 'Trailer' \? 100 : 40;[\s\S]+if \(v\.official\) s \+= 50;/,
+  assert.match(ui, /function pickBestTrailer\(results, title\) \{[\s\S]+const NOT_A_TRAILER = \/[\s\S]+?\(v\.type === 'Trailer' \|\| v\.type === 'Teaser'\)[\s\S]+!NOT_A_TRAILER\.test\(scrub\(String\(v\.name \|\| ''\)\)\)[\s\S]+v\.type === 'Trailer' \? 100 : 40;[\s\S]+if \(v\.official\) s \+= 50;/,
     'trailer selection scores exact-typed, name-screened YouTube videos (official Trailer > Teaser > nothing)');
+  // The screen must catch the common non-trailer labels TMDB mislabels as Trailer/Teaser —
+  // including abbreviations (BTS, b-roll), press material (junket, panel, sizzle, TV spot), and
+  // non-English interview/BTS words the English word-screen would miss.
+  assert.match(ui, /const NOT_A_TRAILER = \/[^\n]*bts\(\?!\\s\*:\)[^\n]*b\[ -\]\?roll[^\n]*sizzle[^\n]*tv spot[^\n]*junket[^\n]*entrevista[^\n]*bastidores[^\n]*\/i;/,
+    'the name screen covers BTS/b-roll/sizzle/TV spot/junket and non-English interview/BTS labels');
+  // The title's own name is scrubbed from the video name before screening, so a movie literally
+  // titled "The Interview" or "Reunion" keeps its real trailer; both call sites pass the title.
+  assert.match(ui, /const t = String\(title \|\| ''\)\.trim\(\)\.toLowerCase\(\);[\s\S]+?const scrub = \(name\) => \{/,
+    'the picker scrubs the title out of video names so screen words inside titles cannot false-disqualify');
+  assert.match(ui, /pickBestTrailer\(d\.videos && d\.videos\.results, it\.title\)/,
+    'the detail page passes the title into the trailer picker');
+  assert.match(ui, /pickBestTrailer\(v\.results, x\.title \|\| x\.name\)/,
+    'the trailers row passes the title into the trailer picker');
+  // Language tie-break: English (then language-less) beats other languages WITHIN a tier — the
+  // word screen only knows listed languages, so unscreenable foreign mislabels must not win when
+  // an English pick exists; weaker than official(+50) so original-language-only titles still work.
+  assert.match(ui, /const lang = String\(v\.iso_639_1 \|\| ''\)\.toLowerCase\(\);\s*if \(lang === 'en'\) s \+= 25; else if \(!lang\) s \+= 10;/,
+    'pickBestTrailer prefers English then language-neutral videos as a within-tier tie-break');
   assert.ok((ui.match(/pickBestTrailer\(/g) || []).length >= 3,
     'both trailer pick sites (detail page + trailers row) route through the shared picker');
   assert.ok(!ui.includes(".find((v) => v.site === 'YouTube' && /Trailer|Teaser/i.test(v.type))")

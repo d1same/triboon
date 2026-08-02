@@ -7191,7 +7191,7 @@ async function openDetail(it, push = true) {
       if (d.overview) $('dOverview').textContent = d.overview;
       checkAvailability(it); // the early call ran with an empty title — redo with the real one
     }
-    const tr = pickBestTrailer(d.videos && d.videos.results);
+    const tr = pickBestTrailer(d.videos && d.videos.results, it.title);
     if (tr) { S.detailTrailer = { key: tr.key, title: it.title, item: it }; $('dTrailer').style.display = ''; }
 
     // Meta line with dot separators (Plex style).
@@ -14343,19 +14343,38 @@ async function loadDiscover() {
 // Trailer slipped straight through. Rules:
 //   - YouTube only, type EXACTLY 'Trailer' or 'Teaser' (Featurette/Clip/BTS/Bloopers excluded);
 //   - the NAME is screened too — TMDB data mislabels, so interview/featurette/making-of/red
-//     carpet/etc words disqualify even a video typed 'Trailer';
+//     carpet/BTS/sizzle/junket/etc words (plus common non-English interview/BTS words, which the
+//     English screen would otherwise miss) disqualify even a video typed 'Trailer'; the title's
+//     OWN name is scrubbed out first so a movie literally called "The Interview" or "Reunion"
+//     never disqualifies its own real trailer;
 //   - among survivors: real Trailer beats Teaser, official beats fan upload, "Official Trailer"
-//     naming and higher resolution break ties.
+//     naming, English audio, and higher resolution break ties.
 // Returns null when nothing safe remains — no trailer button beats playing an interview.
-function pickBestTrailer(results) {
-  const NOT_A_TRAILER = /\b(interview|featurette|behind[ -]the[ -]scenes|making[ -]of|documentary|q\s*&\s*a|premiere|red carpet|first look|sneak peek|clip|blooper|gag reel|deleted|extended (scene|preview)|opening (scene|credits)|table read|react(s|ion)?|recap|explained|breakdown|review|press conference|featur(ing|ed)|cast (talks?|on|discuss))\b/i;
+function pickBestTrailer(results, title) {
+  const NOT_A_TRAILER = /\b(interview|featurette|behind[ -]the[ -]scenes|making[ -]of|documentary|q\s*&\s*a|premiere|red carpet|first look|sneak peek|clip|blooper|gag reel|deleted|extended (scene|preview)|opening (scene|credits)|table read|react(s|ion)?|recap|explained|breakdown|review|press conference|featur(ing|ed)|cast (talks?|on|discuss)|bts(?!\s*:)|b[ -]?roll|vignette|sizzle|tv spot|junket|panel|photocall|fan event|reunion|music video|lyric|screening|first \d+ minutes|entrevista|intervista|bastidores|detr[aá]s de c[aá]maras)\b/i;
+  // TMDB video names usually embed the title ("The Interview | Official Trailer") — remove every
+  // occurrence before screening so titles containing screen words can't false-disqualify.
+  const t = String(title || '').trim().toLowerCase();
+  const scrub = (name) => {
+    if (!t) return name;
+    let out = name, i;
+    while ((i = out.toLowerCase().indexOf(t)) !== -1) out = out.slice(0, i) + ' ' + out.slice(i + t.length);
+    return out;
+  };
   const scored = (Array.isArray(results) ? results : [])
     .filter((v) => v && v.key && v.site === 'YouTube'
       && (v.type === 'Trailer' || v.type === 'Teaser')
-      && !NOT_A_TRAILER.test(String(v.name || '')))
+      && !NOT_A_TRAILER.test(scrub(String(v.name || ''))))
     .map((v) => {
       let s = v.type === 'Trailer' ? 100 : 40;
       if (v.official) s += 50;
+      // The word screen only knows the languages listed above — a mislabeled video in any other
+      // language sails past it. Preferring English (then language-less) entries keeps such videos
+      // from winning whenever a same-tier English pick exists, and also picks the subbed English
+      // trailer over the original-language one for foreign titles. Weaker than official/type, so
+      // a foreign film whose ONLY trailers are original-language still gets one.
+      const lang = String(v.iso_639_1 || '').toLowerCase();
+      if (lang === 'en') s += 25; else if (!lang) s += 10;
       const name = String(v.name || '');
       if (/official trailer/i.test(name)) s += 30;
       else if (/trailer/i.test(name)) s += 15;
@@ -14379,7 +14398,7 @@ async function buildTrailerRow(list) {
     const type = x.media_type === 'tv' || (x.name && !x.title) ? 'tv' : 'movie';
     try {
       const v = await api(`/api/tmdb/${type}/${x.id}/videos`);
-      const tr = pickBestTrailer(v.results);
+      const tr = pickBestTrailer(v.results, x.title || x.name);
       if (!tr) return null;
       const pub = tr.published_at ? new Date(tr.published_at).getTime() : 0;
       return { ...mapTmdb(x), trailer: { key: tr.key, title: x.title || x.name }, _trailerPub: Number.isFinite(pub) ? pub : 0 };

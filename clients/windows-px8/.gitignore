@@ -5,3 +5,11 @@ node_modules/
 # bundled native runtime shipped at package time, not committed (license + size)
 src-tauri/libmpv-2.dll
 dist/
+# extra `tauri icon` outputs — tauri.conf.json references only the 5 tracked icons;
+# the Square*/StoreLogo/icns/android/ios variants are not build inputs for the Windows client
+src-tauri/icons/Square*.png
+src-tauri/icons/StoreLogo.png
+src-tauri/icons/64x64.png
+src-tauri/icons/icon.icns
+src-tauri/icons/android/
+src-tauri/icons/ios/
