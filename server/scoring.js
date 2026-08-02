@@ -165,6 +165,11 @@ const HEALTH_SCORE = {
   missing: -100000,                 // provider confirmed the article is gone
   'probe-timeout': -800,             // slow first article: skip now, demote for later
   'mount-failed': -2000, 'fetch-failed': -200, // remembered failures from the verdict cache
+  // The player declared this source dead MID-PLAYBACK (stall/rot after a clean mount+health gate)
+  // and recovery abandoned it. Without this, the next resume re-ranked the same rotten release #1
+  // and served it again ("resume keeps picking the same bad source"). Softer than mount-failed —
+  // a stall can also be the viewer's line, and the verdict-cache TTL forgives it in hours.
+  'playback-failed': -800,
 };
 
 // Score one candidate against a user policy.

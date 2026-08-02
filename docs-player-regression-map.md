@@ -278,6 +278,35 @@ them when the table is reorganized:
   `server/vfs.js` `ABORT_DRAIN_MS`, `NzbFileStream._fetchSegment`.
   Verification: the drain-to-completion, bounded-grace, skip-keeps-connections,
   and join-retry tests in `test/e2e.test.js`.
+- **P14 - resume source pinning + playback-failed demotion.** The source that actually
+  played (established ≥30s past the session's start point) is pinned in watch meta
+  (`meta.source` name+pickKey) and replayed as a pick on resume — resume must never
+  silently return to auto-pick's "original" choice after a manual Sources override, and
+  Start Over (resume 0) never pins. A recovery-advance repoints the pin at the
+  replacement and makes it re-earn the 30s. Server-side, a recovery-advance records a
+  TTL'd `playback-failed` verdict (scoring −800) for the abandoned source so a later
+  fresh play ranks it down instead of re-serving it — movies/non-episode-scoped only
+  (a release-wide verdict from one episode's stall must not blacklist a season pack's
+  healthy siblings). Code: `web/index.html` `saveWatch`, `playbackRequestBody`,
+  advance-recovery handlers; `server/pipeline.js` `advance`, `_commitMount`;
+  `server/scoring.js` `HEALTH_SCORE`. Verification: the recovery-advance demotion +
+  episode-scope tests in `test/phase2.test.js`; the pin/replay pins in
+  `test/phase4.test.js`; on-device emulator proof (pick 1080p over auto-2160p →
+  resume replays the pick).
+- **P11/P14 - native audio language.** The native player honors audio language as:
+  manual in-player pick > saved Preferences audio language > English — never a
+  hardcoded "en" (which ignored the preference and re-imposed English on every
+  server-seek player rebuild, wiping manual picks). Quiet-seek respawns keep the
+  manual pick. Server-muxed streams (remux/hls/transcode carry ONE audio track) list
+  the web-probed source tracks in the native Audio menu via the
+  `updateAudioChoices`/`audioChoices` bridge; a selection round-trips through
+  `__tvNativeVideoAudio`, which respawns the stream at position with the chosen
+  `&audio=` index (mirroring the native quality round-trip). Direct play keeps
+  ExoPlayer's real track list and in-place switching. Code: `web/index.html`
+  `nativeAudioChoices`, `refreshNativeAudioChoices`, `__tvNativeVideoAudio`, native
+  payload; `MainActivity.java` `applyNativeTrackSelectionDefaults`,
+  `applyNativeAudioChoices`, `showNativeTrackMenu`, `applyNativeTrackChoice`.
+  Verification: audio-language and audio-bridge pins in `test/phase4.test.js`.
 - **P14 - playback resource isolation.** Viewer fairness is driven only by real
   non-background `/api/stream` reads (plus a 120-second grace from range end),
   never by prepare/probe lifecycle touches; direct audiobook tracks use the same

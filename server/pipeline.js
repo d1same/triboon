@@ -1591,6 +1591,7 @@ class Pipeline {
     this.rebalancePlaybackWindows();
     this._startPlaybackWarmup(vf, vf._playWin, session.query && session.query.resumeFrac);
     session.history.push({ name: candidate.name, outcome: 'playing' });
+    session.activeCandidate = candidate; // recovery-advance demotes exactly this source
     return { session, vf, candidate, attempts };
   }
 
@@ -1777,6 +1778,17 @@ class Pipeline {
     // episode (session.query carries season/ep). Without this, advance() dropped it and a pack advanced
     // to the largest file (E01). Movies/single-ep are unaffected — their largest video IS the content.
     const _we = wantedEpisodeOf(session.query);
+    // The player has declared the ACTIVE source dead (stall/rot mid-playback). Remember that in the
+    // persistent verdict cache so the next press-play/resume ranks it DOWN instead of serving the
+    // same rotten release again — recovery used to fix only the live session, and a later resume
+    // walked straight back into the source it had just abandoned. TTL'd (VerdictCache) because a
+    // stall can also be the viewer's line, not the post. Episode-scoped sessions skip this: a
+    // release-wide verdict from one episode's stall must not blacklist a season pack's healthy
+    // siblings (the existing post-mount judgment contract).
+    if (session.activeCandidate && !_we) {
+      this._recordVerdict(session.activeCandidate, 'playback-failed', { stage: 'recovery-advance' });
+      session.activeCandidate = null;
+    }
     return this._advance(session, _we ? { ...rest, wantedEpisode: _we } : rest,
       { width: RECOVERY_RACE_WIDTH });
   }

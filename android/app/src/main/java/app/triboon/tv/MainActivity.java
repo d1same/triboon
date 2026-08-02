@@ -281,6 +281,16 @@ public class MainActivity extends Activity {
     private final java.util.ArrayList<String> nativeSubtitleChoiceActions = new java.util.ArrayList<>();
     private final java.util.ArrayList<String> nativeSubtitleChoiceLangs = new java.util.ArrayList<>();
     private final java.util.ArrayList<String> nativeSubtitleChoiceUrls = new java.util.ArrayList<>();
+    // Web-probed audio tracks for SERVER-MUXED streams (remux/transcode carry ONE audio track, so
+    // ExoPlayer's own list has nothing to switch — selections round-trip via __tvNativeVideoAudio).
+    private final java.util.ArrayList<String> nativeAudioChoiceLabels = new java.util.ArrayList<>();
+    private final java.util.ArrayList<Integer> nativeAudioChoiceIndexes = new java.util.ArrayList<>();
+    private int nativeAudioChoiceSelected = -1;
+    // Audio-language selection state: the payload carries the user's saved preference (web
+    // Preferences → Audio language); a manual in-player pick is stickier and survives the
+    // quiet-seek player rebuilds that used to silently reset audio to the hardcoded "en".
+    private String nativePreferredAudioLang = "";
+    private String nativeManualAudioLang = "";
     private final java.util.ArrayList<NativeCue> nativeSubtitleCues = new java.util.ArrayList<>();
     private final Handler nativeSubtitleHandler = new Handler(Looper.getMainLooper());
     private int nativeSubtitleLoadToken;
@@ -1456,6 +1466,12 @@ public class MainActivity extends Activity {
             public void updateSubtitleChoices(String json) {
                 if (!trustedBridgeOrigin()) return;
                 runOnUiThread(() -> updateNativeSubtitleChoices(json));
+            }
+
+            @android.webkit.JavascriptInterface
+            public void updateAudioChoices(String json) {
+                if (!trustedBridgeOrigin()) return;
+                runOnUiThread(() -> updateNativeAudioChoices(json));
             }
 
             @android.webkit.JavascriptInterface
@@ -3916,6 +3932,8 @@ public class MainActivity extends Activity {
             loadingSource = j.optString("source", "");
             boolean hasNext = j.optBoolean("hasNext", false);
             boolean hasQualityChoices = j.optBoolean("qualityChoices", false);
+            String preferredAudioLang = j.optString("preferredAudioLanguage", "");
+            org.json.JSONArray audioChoices = j.optJSONArray("audioChoices");
             boolean guide = j.optBoolean("guide", false);
             boolean quietSeek = j.optBoolean("quietSeek", false);
             boolean percentResume = j.optBoolean("percentResume", false);
@@ -4007,6 +4025,11 @@ public class MainActivity extends Activity {
             nativeLastAutoResumeSeekMs = 0L;
             nativeHasNext = hasNext;
             nativeHasQualityChoices = hasQualityChoices;
+            nativePreferredAudioLang = preferredAudioLang == null ? "" : preferredAudioLang.trim();
+            // A fresh playback adopts the saved preference; a quiet-seek respawn of the SAME
+            // playback keeps the manual in-player pick (it used to silently reset to English).
+            if (!quietSeek) nativeManualAudioLang = "";
+            applyNativeAudioChoices(audioChoices);
             nativeSubtitleShift = (float) j.optDouble("subtitleShift", nativeShiftFromUrl(subtitleUrl));
             String cleanSubtitleUrl = stripNativeQueryParam(subtitleUrl, "shift");
             ValidatedNativeUrl subtitlePin = cleanSubtitleUrl.isEmpty() ? null : validateNativePlaybackUrl(cleanSubtitleUrl);
@@ -5093,7 +5116,8 @@ public class MainActivity extends Activity {
     }
 
     private boolean nativeAudioHasOptions() {
-        return nativeSupportedTrackCount(C.TRACK_TYPE_AUDIO) > 1;
+        // Server-muxed streams expose one ExoPlayer track; the web-probed source list is the menu.
+        return nativeSupportedTrackCount(C.TRACK_TYPE_AUDIO) > 1 || nativeAudioChoiceLabels.size() > 1;
     }
 
     private void updateNativeVideoDuration(String seconds) {
@@ -5205,9 +5229,15 @@ public class MainActivity extends Activity {
 
     private void applyNativeTrackSelectionDefaults(boolean isLiveMode) {
         if (nativePlayer == null) return;
+        // Manual in-player pick > saved user preference > English. The old hardcoded "en" ignored
+        // the Preferences audio language entirely and re-imposed English on every player rebuild
+        // (server-seek respawns), wiping a manual track choice mid-movie.
+        String wantedAudioLang = !nativeManualAudioLang.isEmpty() ? nativeManualAudioLang
+                : (!nativePreferredAudioLang.isEmpty() ? nativePreferredAudioLang : "");
         androidx.media3.common.TrackSelectionParameters.Builder params =
                 nativePlayer.getTrackSelectionParameters().buildUpon()
-                        .setPreferredAudioLanguages("en")
+                        .setPreferredAudioLanguages(wantedAudioLang.isEmpty()
+                                ? new String[]{"en"} : new String[]{wantedAudioLang, "en"})
                         .setViewportSizeToPhysicalDisplaySize(true);
         if (isLiveMode && nativeConservativePlaybackDevice()) {
             params.setMaxVideoSize(1920, 1080)
@@ -5796,6 +5826,32 @@ public class MainActivity extends Activity {
         showNativeTrackMenu(C.TRACK_TYPE_TEXT);
     }
 
+    private void updateNativeAudioChoices(String json) {
+        try {
+            applyNativeAudioChoices(new org.json.JSONObject(json).optJSONArray("choices"));
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void applyNativeAudioChoices(org.json.JSONArray audioChoices) {
+        nativeAudioChoiceLabels.clear();
+        nativeAudioChoiceIndexes.clear();
+        nativeAudioChoiceSelected = -1;
+        if (audioChoices != null) {
+            for (int i = 0; i < audioChoices.length(); i++) {
+                org.json.JSONObject choice = audioChoices.optJSONObject(i);
+                if (choice == null) continue;
+                String label = choice.optString("label", "");
+                int index = choice.optInt("index", -1);
+                if (label.isEmpty() || index < 0) continue;
+                if (choice.optBoolean("selected", false)) nativeAudioChoiceSelected = index;
+                nativeAudioChoiceLabels.add(label);
+                nativeAudioChoiceIndexes.add(index);
+            }
+        }
+        updateNativeChrome();
+    }
+
     private void clearNativeSubtitleChoices() {
         nativeSubtitleChoiceRels.clear();
         nativeSubtitleChoiceLabels.clear();
@@ -6303,9 +6359,21 @@ public class MainActivity extends Activity {
             }
         }
 
+        // Server-muxed streams (remux/transcode): ExoPlayer sees ONE audio track, so the menu lists
+        // the web-probed SOURCE tracks and a pick round-trips through __tvNativeVideoAudio, which
+        // respawns the stream with the chosen track index (group == null marks a web choice).
+        if (trackType == C.TRACK_TYPE_AUDIO && nativeAudioChoiceLabels.size() > 1) {
+            for (int i = 0; i < nativeAudioChoiceLabels.size(); i++) {
+                int webIndex = nativeAudioChoiceIndexes.get(i);
+                choices.add(new NativeTrackChoice(null, webIndex, nativeAudioChoiceLabels.get(i), false,
+                        webIndex == nativeAudioChoiceSelected));
+            }
+        }
+
         for (Tracks.Group group : nativePlayer.getCurrentTracks().getGroups()) {
             if (group.getType() != trackType) continue;
             if (trackType == C.TRACK_TYPE_TEXT && nativeSubtitleChoiceRels.size() > 0) continue;
+            if (trackType == C.TRACK_TYPE_AUDIO && nativeAudioChoiceLabels.size() > 1) continue;
             for (int i = 0; i < group.length; i++) {
                 if (!group.isTrackSupported(i)) continue;
                 Format f = group.getTrackFormat(i);
@@ -6377,6 +6445,17 @@ public class MainActivity extends Activity {
 
     private void applyNativeTrackChoice(int trackType, NativeTrackChoice choice) {
         if (nativePlayer == null) return;
+        // Web-provided audio choice (server-muxed stream): the web layer owns the switch — it
+        // respawns the stream with the chosen &audio= index at the current position.
+        if (trackType == C.TRACK_TYPE_AUDIO && choice.group == null) {
+            if (web != null && choice.index >= 0) {
+                web.evaluateJavascript("window.__tvNativeVideoAudio && window.__tvNativeVideoAudio("
+                        + choice.index + "," + nativePosSeconds() + "," + nativeDurSeconds()
+                        + "," + nativePlaybackToken + ")", null);
+            }
+            showNativeChrome(false);
+            return;
+        }
         if (trackType == C.TRACK_TYPE_TEXT && "versions".equals(choice.subtitleAction)) {
             requestNativeSubtitleVersions(choice.subtitleLang);
             showNativeChrome(false);
@@ -6441,6 +6520,14 @@ public class MainActivity extends Activity {
                 nativeSubtitleShift = 0f;
                 nativeHasWyzieSubtitle = false;
                 clearNativeSubtitleOverlay();
+            }
+            // A manual DIRECT-PLAY audio pick must survive the player rebuilds that server-seek
+            // respawns cause — remember its language so the rebuilt selector re-prefers it.
+            if (trackType == C.TRACK_TYPE_AUDIO) {
+                Format picked = choice.group.getTrackFormat(choice.index);
+                if (picked != null && picked.language != null && !picked.language.isEmpty()) {
+                    nativeManualAudioLang = picked.language;
+                }
             }
             b.setTrackTypeDisabled(trackType, false)
                     .setOverrideForType(new TrackSelectionOverride(choice.group.getMediaTrackGroup(), choice.index));
@@ -7069,6 +7156,11 @@ public class MainActivity extends Activity {
         nativeHasQualityChoices = false;
         nativeCcOptionsLatch = false;
         nativeAudioOptionsLatch = false;
+        nativeAudioChoiceLabels.clear();
+        nativeAudioChoiceIndexes.clear();
+        nativeAudioChoiceSelected = -1;
+        nativePreferredAudioLang = "";
+        nativeManualAudioLang = "";
         nativeSubtitleUrl = "";
         nativeSubtitleHostHeader = "";
         nativeSubtitleLang = "";

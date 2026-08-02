@@ -2865,6 +2865,86 @@ test('pipeline: auto-advance mounts the next candidate when the current source d
   pool.close(); await mock.close(); ix.server.close(); store.close();
 });
 
+// Recovery used to fix only the LIVE session: the player abandoned a stalling source, but nothing
+// persisted, so the next resume re-ranked the same rotten release #1 and served it again. A
+// recovery-advance now records a TTL'd 'playback-failed' verdict for the abandoned source (movies
+// only — a release-wide verdict from one episode's stall must not blacklist a season pack's
+// healthy siblings, per the post-mount judgment contract).
+test('pipeline: recovery-advance demotes the abandoned movie source so the next play avoids it', async () => {
+  const pay1 = seededPayload(90 * 1024, 31);
+  const pay2 = seededPayload(90 * 1024, 32);
+  const r1 = nzbFor(writeRar4Store([{ name: 'A.mkv', data: pay1 }], { base: 'pf1' }), 30000, 'pf1');
+  const r2 = nzbFor(writeRar4Store([{ name: 'B.mkv', data: pay2 }], { base: 'pf2' }), 30000, 'pf2');
+  const articles = new Map([...r1.articles, ...r2.articles]);
+  const mock = createMockNntp({ articles });
+  const nntpPort = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 4);
+  const ix = makeMockIndexer([
+    { name: 'Movie.2024.1080p.WEB-DL.H.264-FLUX', size: 7e9, nzb: r1.nzb },
+    { name: 'Movie.2024.1080p.WEB-DL.H.264-NTb', size: 7e9, nzb: r2.nzb },
+  ]);
+  const ixPort = await ix.listen();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const verdicts = new VerdictCache(store);
+  const pipeline = new Pipeline({
+    pool: () => pool, verdicts, mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+
+  const first = await pipeline.play({ q: 'movie' }, {});
+  assert.strictEqual(first.candidate.name, 'Movie.2024.1080p.WEB-DL.H.264-FLUX');
+  const abandonedKey = nzbVerdictKey(first.candidate.nzbUrl);
+  const before = verdicts.get(abandonedKey);
+  assert.notStrictEqual(before && before.verdict, 'playback-failed',
+    'a healthy committed source starts without a playback failure verdict');
+
+  // The player declares the active source dead mid-playback → advance.
+  await pipeline.advance(first.session.id);
+  const v = verdicts.get(abandonedKey);
+  assert.ok(v && v.verdict === 'playback-failed',
+    `the abandoned source is remembered as playback-failed (got ${v && v.verdict})`);
+
+  // A completely fresh play (a later resume) now ranks the abandoned source DOWN.
+  const again = await pipeline.play({ q: 'movie' }, {});
+  assert.strictEqual(again.candidate.name, 'Movie.2024.1080p.WEB-DL.H.264-NTb',
+    'resume auto-pick prefers the replacement instead of re-serving the abandoned source');
+
+  pool.close(); await mock.close(); ix.server.close(); store.close();
+});
+
+test('pipeline: an episode-scoped recovery-advance records NO release-wide verdict (pack protection)', async () => {
+  const payA = seededPayload(90 * 1024, 41);
+  const payB = seededPayload(90 * 1024, 42);
+  const rA = nzbFor(writeRar4Store([{ name: 'Show.S01E01.mkv', data: payA }], { base: 'pe1' }), 30000, 'pe1');
+  const rB = nzbFor(writeRar4Store([{ name: 'Show.S01E01.mkv', data: payB }], { base: 'pe2' }), 30000, 'pe2');
+  const articles = new Map([...rA.articles, ...rB.articles]);
+  const mock = createMockNntp({ articles });
+  const nntpPort = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 4);
+  const ix = makeMockIndexer([
+    { name: 'Show.2024.S01E01.1080p.WEB-DL.H.264-FLUX', size: 4e9, nzb: rA.nzb },
+    { name: 'Show.2024.S01E01.1080p.WEB-DL.H.264-NTb', size: 4e9, nzb: rB.nzb },
+  ]);
+  const ixPort = await ix.listen();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const verdicts = new VerdictCache(store);
+  const pipeline = new Pipeline({
+    pool: () => pool, verdicts, mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+
+  const first = await pipeline.play({ q: 'Show 2024', season: 1, ep: 1 }, {});
+  const abandonedKey = nzbVerdictKey(first.candidate.nzbUrl);
+  await pipeline.advance(first.session.id);
+  const v = verdicts.get(abandonedKey);
+  assert.notStrictEqual(v && v.verdict, 'playback-failed',
+    'an episode-scoped advance must not write a release-wide playback-failed verdict');
+
+  pool.close(); await mock.close(); ix.server.close(); store.close();
+});
+
 test('pipeline: resume re-checks health and auto-advances when the saved source died while away', async () => {
   // Continue Watching gap: a source that mounted and streamed fine can ROT on the provider
   // before the user resumes (retention expiry / DMCA takedown). On resume the player re-checks

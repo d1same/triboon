@@ -258,11 +258,14 @@ test('Trakt percent-only native resume reaches direct and server-seek Android pa
     'nativeVideoSubtitleRel', 'nativeSubtitlePayload', 'updatePlayerMeta', 'episodePlayerMeta',
     'absoluteArtworkUrl', 'nativeMimeForKind', 'nativeQualityLabel', 'applySubSize',
     'nativeSubtitleChoices', 'nativeEpisodeChoices', 'loadSubShift', 'traktResumeFractionForItem',
+    'prefLang', 'nativeAudioChoices',
     'window', 'location', `${ui.slice(nativeStart, nativeEnd)}\nreturn tryNativeVideoPlayer;`)(
       state, () => true, (_p, at) => `/api/remux/one?start=${at}`, () => ({ blocked: false, rel: '' }),
       () => ({ rel: '', url: '', lang: '', label: '', shift: 0 }), () => {},
       (it) => ({ title: it.title, subline: '' }), () => '', () => '', () => '4K', () => 'M',
-      () => [], () => [], () => 0, traktResumeFractionForItem, window, { origin: 'http://triboon.test' });
+      () => [], () => [], () => 0, traktResumeFractionForItem,
+      () => '', () => [],
+      window, { origin: 'http://triboon.test' });
   assert.strictEqual(tryNativeVideoPlayer('direct', 0), true);
   assert.strictEqual(payloads[0].startFraction, 0.42,
     'direct ExoPlayer receives the imported fraction while seconds are unknown');
@@ -4510,8 +4513,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android native playback should retry another decoder when hardware init fails');
   assert.match(android, /private DefaultBandwidthMeter nativeBandwidthMeterForMode\(String mode\) \{[\s\S]+"live"\.equals\(mode\)[\s\S]+5_000_000L[\s\S]+12_000_000L[\s\S]+22_000_000L[\s\S]+80_000_000L[\s\S]+setInitialBitrateEstimate\(estimate\)/,
     'Android native playback should seed live and VOD bandwidth differently for budget and high-end devices');
-  assert.match(android, /private void applyNativeTrackSelectionDefaults\(boolean isLiveMode\) \{[\s\S]+setPreferredAudioLanguages\("en"\)[\s\S]+setViewportSizeToPhysicalDisplaySize\(true\)[\s\S]+params\.setMaxVideoSize\(1920, 1080\)[\s\S]+setMaxVideoBitrate\(10_000_000\)[\s\S]+AudioOffloadPreferences/,
-    'Android track selection should cap Live HLS on conservative devices and enable VOD audio offload where supported');
+  assert.match(android, /private void applyNativeTrackSelectionDefaults\(boolean isLiveMode\) \{[\s\S]+setPreferredAudioLanguages\(wantedAudioLang\.isEmpty\(\)[\s\S]+new String\[\]\{"en"\} : new String\[\]\{wantedAudioLang, "en"\}\)[\s\S]+setViewportSizeToPhysicalDisplaySize\(true\)[\s\S]+params\.setMaxVideoSize\(1920, 1080\)[\s\S]+setMaxVideoBitrate\(10_000_000\)[\s\S]+AudioOffloadPreferences/,
+    'Android track selection should honor the wanted audio language (manual/pref, then English), cap Live HLS on conservative devices, and enable VOD audio offload where supported');
   assert.match(android, /media\.setLiveConfiguration\(new MediaItem\.LiveConfiguration\.Builder\(\)[\s\S]+setTargetOffsetMs\(nativeConservativePlaybackDevice\(\) \? 8000L : 5000L\)[\s\S]+setMaxPlaybackSpeed\(1\.03f\)/,
     'native Live TV media items should carry target-offset and catch-up speed hints');
   assert.match(android, /setTargetBufferBytes\(targetBytes\)[\s\S]+setBackBuffer\(backBufferMs, false\)/,
@@ -4569,6 +4572,27 @@ test('Android native player: direct source and native chrome stay out of the web
     'closing native Live TV should let the web close callback clear stale player state before the WebView is visible');
   assert.match(android, /nativeNextBtn\.setOnClickListener\(v -> \{ if \(consumeNativeControlClick\(v\)\) playNativeNextEpisode\(\); \}\)/,
     'Next episode should ask the app to start the next item, not open the old player controls');
+  // Resume source pinning: the source that actually played (30s established) is stored in watch
+  // meta and replayed as a pick on resume — resume used to re-run auto-pick, which forgot a manual
+  // Sources choice and re-served sources the player had abandoned. A recovery replacement resets
+  // the 30s clock so a dying source never stays pinned; Start Over (resume 0) never pins.
+  assert.match(ui, /if \(!p\._resumeSourceOk && \(pos - \(Number\(p\.item\.resume\) \|\| 0\)\) >= 30\) p\._resumeSourceOk = true;[\s\S]{0,200}meta\.source = \{ name: p\.name \|\| undefined, pickKey: p\.sourcePickKey \|\| undefined \};/,
+    'saveWatch pins the playing source into watch meta only after ~30s of real playback');
+  assert.match(ui, /if \(!picked && it && it\.key && Number\(it\.resume\) > 0\) \{[\s\S]{0,220}const src = w && w\.meta && w\.meta\.source;[\s\S]{0,120}picked = \{ name: src\.name, pickKey: src\.pickKey \};/,
+    'a resume play replays the pinned source as a pick (explicit Sources picks still win)');
+  assert.match(ui, /p\.sourcePickKey = \(r\.candidate && r\.candidate\.pickKey\) \|\| null; \/\/ resume must pin the REPLACEMENT, not the dead source[\s\S]{0,120}p\._resumeSourceOk = false;/,
+    'recovery advance repoints the pin at the replacement source and makes it re-earn the 30s');
+  // Native audio language: payload carries the user's saved preference + the probed source tracks
+  // for server-muxed streams; a native pick round-trips through __tvNativeVideoAudio (respawn with
+  // the chosen &audio= index). Direct play returns [] — ExoPlayer switches its real tracks itself.
+  assert.match(ui, /preferredAudioLanguage: prefLang\('alang'\) \|\| '',\s*\n\s*audioChoices: nativeAudioChoices\(\),/,
+    'the native payload carries the saved audio-language preference and the probed audio choices');
+  assert.match(ui, /function nativeAudioChoices\(\) \{[\s\S]{0,200}currentPlayerKind\(p\) === 'direct'\) return \[\];[\s\S]{0,200}if \(audio\.length <= 1\) return \[\];/,
+    'audio choices exist only for server-muxed streams with more than one source track');
+  assert.match(ui, /window\.__tvNativeVideoAudio = \(index, pos, dur, token\) => \{[\s\S]{0,400}if \(kind === 'direct'\) return;[\s\S]{0,600}if \(!tryNativeVideoPlayer\(kind, at, \{ quietSeek: true \}\)\) \{/,
+    'the native audio round-trip respawns the current stream kind at position with the chosen track');
+  assert.match(ui, /refreshNativeAudioChoices\(\); \/\/ probe may resolve after handoff/,
+    'late track-probe results refresh the native audio menu');
   // MOVIES must never show the Next Episode button, not even grayed: hasNext is type-based from
   // web (episodes only), and the periodic chrome tick used to force the button visible for all
   // non-live playback — a movie player showed a dead "Next episode" control.
@@ -4576,6 +4600,25 @@ test('Android native player: direct source and native chrome stay out of the web
     'the chrome tick hides the native Next Episode button whenever there is no next (movies, live)');
   assert.ok(!/nativeNextBtn\.setVisibility\(isLive \? View\.GONE : View\.VISIBLE\)/.test(android),
     'the old always-visible-for-VOD next-button rule is gone');
+  // Native audio language: the hardcoded "en" preference is gone — manual pick > saved preference
+  // > English, quiet-seek respawns keep the manual pick, and server-muxed streams list the
+  // web-probed source tracks (selection round-trips through __tvNativeVideoAudio).
+  assert.match(android, /String wantedAudioLang = !nativeManualAudioLang\.isEmpty\(\) \? nativeManualAudioLang\s*\n\s*: \(!nativePreferredAudioLang\.isEmpty\(\) \? nativePreferredAudioLang : ""\);/,
+    'native track defaults prefer the manual pick, then the saved preference, then English');
+  assert.ok(!/\.setPreferredAudioLanguages\("en"\)\s*\n\s*\.setViewportSizeToPhysicalDisplaySize/.test(android),
+    'the old hardcoded English-only audio preference is gone');
+  assert.match(android, /if \(!quietSeek\) nativeManualAudioLang = "";/,
+    'a quiet-seek respawn keeps the manual audio pick; a fresh playback clears it');
+  assert.match(android, /public void updateAudioChoices\(String json\) \{\s*\n\s*if \(!trustedBridgeOrigin\(\)\) return;\s*\n\s*runOnUiThread\(\(\) -> updateNativeAudioChoices\(json\)\);/,
+    'web pushes probed audio choices over a trusted bridge like subtitles');
+  assert.match(android, /if \(trackType == C\.TRACK_TYPE_AUDIO && nativeAudioChoiceLabels\.size\(\) > 1\) \{[\s\S]{0,400}nativeAudioChoiceIndexes\.get\(i\)/,
+    'the native audio menu lists web-probed tracks for server-muxed streams');
+  assert.match(android, /if \(trackType == C\.TRACK_TYPE_AUDIO && choice\.group == null\) \{[\s\S]{0,400}window\.__tvNativeVideoAudio && window\.__tvNativeVideoAudio\(/,
+    'a web-provided audio pick routes back through the web layer to respawn the stream');
+  assert.match(android, /return nativeSupportedTrackCount\(C\.TRACK_TYPE_AUDIO\) > 1 \|\| nativeAudioChoiceLabels\.size\(\) > 1;/,
+    'the audio button enables when either ExoPlayer or the web probe offers real choices');
+  assert.match(android, /if \(picked != null && picked\.language != null && !picked\.language\.isEmpty\(\)\) \{\s*\n\s*nativeManualAudioLang = picked\.language;/,
+    'a manual direct-play audio pick records its language so player rebuilds re-prefer it');
   assert.match(android, /nativeGuideBtn = nativeButton\(R\.drawable\.ic_player_guide, "TV guide", false\)/,
     'native Live TV should expose a guide button inside Triboon chrome');
   assert.match(android, /nativeGuideBtn\.setOnClickListener\(v -> \{ if \(consumeNativeControlClick\(v\)\) openNativeLiveGuide\(\); \}\)/,

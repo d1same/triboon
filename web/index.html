@@ -6241,6 +6241,16 @@ function traktResumeFractionForItem(it) {
 }
 function playbackRequestBody(it, picked = null, qRank = qualityRankForItem(it)) {
   const ids = sourceIdentityFor(it);
+  // Resume replays the source that was actually playing (pinned in watch meta after ~30s of real
+  // playback) instead of re-running auto-pick — a manual Sources choice survives, and a source the
+  // player abandoned isn't re-served just because the ranker still likes it. The server's pick
+  // fallback chain still applies: if the pinned release can't stream anymore, it walks on and the
+  // client toasts the swap. An explicit pick (Sources drawer) always wins over the pin.
+  if (!picked && it && it.key && Number(it.resume) > 0) {
+    const w = S.watchMap && S.watchMap[it.key];
+    const src = w && w.meta && w.meta.source;
+    if (src && (src.pickKey || src.name)) picked = { name: src.name, pickKey: src.pickKey };
+  }
   const body = { q: queryFor(it), pick: picked && picked.name, pickKey: picked && picked.pickKey, caps: clientCaps() };
   if (ids.imdbid) body.imdbid = ids.imdbid;
   if (ids.tvdbid) body.tvdbid = ids.tvdbid;
@@ -9927,6 +9937,7 @@ async function openPlayer(it, mount, opts = {}) {
     transcodeUrl: mount.transcodeUrl, hlsUrl: mount.hlsUrl, encoder: mount.encoder,
     tracksUrl: mount.tracksUrl, subtitleBase: mount.subtitleBase, streamToken: mount.streamToken,
     item: it, name: sourceName, fileName: mount.name, sourceAttributes: mount.candidate && mount.candidate.attributes,
+    sourcePickKey: (mount.candidate && mount.candidate.pickKey) || null,
     size: mount.size || (mount.candidate && mount.candidate.sizeBytes) || 0,
     bufferGoalSec: mount.bufferGoalSec || 0, // server-side read-ahead goal → native player buffer depth
     usingRemux: false, usingTranscode: false, startOffset: 0,
@@ -10095,6 +10106,7 @@ async function loadTracks() {
       const appliedStartupSubtitle = await applyNativeStartupSubtitleAfterTrackProbe(p);
       if (S.playing !== p || !p.usingNative) return;
       if (!appliedStartupSubtitle) refreshNativeSubtitleChoices();
+      refreshNativeAudioChoices(); // probe may resolve after handoff — the Audio menu fills in late
       return;
     }
     updatePlayerMeta();
@@ -10456,6 +10468,34 @@ function refreshNativeSubtitleChoices() {
     window.TriboonTV.updateSubtitleChoices(JSON.stringify({ choices: nativeSubtitleChoices() }));
   } catch {}
 }
+// Audio choices for the NATIVE player on server-muxed streams. A remux/hls/transcode stream
+// carries exactly ONE audio track, so ExoPlayer's own track list has nothing to switch — the
+// native Audio menu lists the PROBED source tracks instead and round-trips a selection through
+// __tvNativeVideoAudio, which respawns the stream with the chosen &audio= index. Direct play
+// returns [] — ExoPlayer sees the real tracks there and switches natively with full fidelity.
+function nativeAudioChoices() {
+  const p = S.playing;
+  if (!p || currentPlayerKind(p) === 'direct') return [];
+  const audio = p.tracks && Array.isArray(p.tracks.audio) ? p.tracks.audio : [];
+  if (audio.length <= 1) return [];
+  const cur = Number.isFinite(Number(p.audioTrack)) ? Number(p.audioTrack) : 0;
+  return audio.map((a) => ({
+    index: a.rel,
+    label: [langName(a.lang) || a.title || `Track ${a.rel + 1}`,
+      a.codec ? String(a.codec).toUpperCase() : '', a.channels ? `${a.channels}ch` : '']
+      .filter(Boolean).join(' · '),
+    lang: langCode(a.lang) || '',
+    selected: a.rel === cur,
+  }));
+}
+function refreshNativeAudioChoices() {
+  const p = S.playing;
+  if (!p || !p.usingNative || !canUseNativeVideoPlayer()) return;
+  if (!(window.TriboonTV && window.TriboonTV.updateAudioChoices)) return; // older shells: no-op
+  try {
+    window.TriboonTV.updateAudioChoices(JSON.stringify({ choices: nativeAudioChoices() }));
+  } catch {}
+}
 function subtitleUrlForRel(p, rel, opts = {}) {
   if (typeof rel === 'string' && rel.startsWith('rs:')) return releaseSubUrl(p, rel);
   if (typeof rel === 'string' && rel.startsWith('em:')) return embeddedSubUrl(p, rel, opts);
@@ -10646,6 +10686,10 @@ function tryNativeVideoPlayer(kind, atSeconds, opts = {}) {
     bufferGoalSec: p.bufferGoalSec || 0, // ExoPlayer sizes its buffer from this (clamped to device RAM)
     playbackToken: p.playbackToken || 0,
     qualityChoices: !!p.transcodeUrl,
+    // The user's saved audio-language preference — native ExoPlayer used to hardcode "en", so a
+    // multi-audio direct-play file always started on the English track regardless of Preferences.
+    preferredAudioLanguage: prefLang('alang') || '',
+    audioChoices: nativeAudioChoices(),
     hasNext: p.item.type === 'episode',
     subtitleRel: subPayload.rel,
     subtitleUrl: subPayload.url,
@@ -10908,6 +10952,32 @@ window.__tvNativeVideoQuality = (quality, pos, dur, token) => {
     toast('Could not switch native quality');
   }
 };
+// Native audio-language switch for SERVER-MUXED streams (remux/hls/transcode carry exactly one
+// audio track, so ExoPlayer has nothing to switch): the native Audio menu round-trips here and
+// the stream respawns at the same position with the chosen &audio= index — the same dance
+// __tvNativeVideoQuality does for transcode rungs. Direct play never calls this (the native menu
+// lists ExoPlayer's real tracks there and switches in-place).
+window.__tvNativeVideoAudio = (index, pos, dur, token) => {
+  const p = S.playing;
+  if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
+  window.__tvNativeVideoProgress(pos, dur, token);
+  const kind = currentPlayerKind(p);
+  if (kind === 'direct') return;
+  const audio = p.tracks && Array.isArray(p.tracks.audio) ? p.tracks.audio : [];
+  const want = audio.find((a) => a && a.rel === +index);
+  if (!want || want.rel === p.audioTrack) return;
+  const at = currentTime();
+  const oldTrack = p.audioTrack;
+  p.usingNative = false;
+  p.audioTrack = want.rel;
+  if (!tryNativeVideoPlayer(kind, at, { quietSeek: true })) {
+    p.usingNative = true;
+    p.audioTrack = oldTrack;
+    toast('Could not switch the audio track');
+    return;
+  }
+  refreshNativeAudioChoices();
+};
 window.__tvNativeEpisodeSelect = (index, pos, dur, token) => {
   const p = S.playing;
   if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token) || !S.playerSeasonStrip) return;
@@ -11057,6 +11127,7 @@ async function reMountAndResume(reason = '', attempt = 0) {
     p.sessionId = r.sessionId; p.streamUrl = r.streamUrl; p.remuxUrl = r.remuxUrl; p.transcodeUrl = r.transcodeUrl; p.hlsUrl = r.hlsUrl;
     p.encoder = r.encoder; p.tracksUrl = r.tracksUrl; p.subtitleBase = r.subtitleBase; p.streamToken = r.streamToken;
     p.mountId = r.id; p.fileName = r.name; p.sourceAttributes = r.candidate && r.candidate.attributes;
+    p.sourcePickKey = (r.candidate && r.candidate.pickKey) || p.sourcePickKey || null;
     p.size = r.size || (r.candidate && r.candidate.sizeBytes) || p.size; p.bufferGoalSec = r.bufferGoalSec || 0;
     p.triedRemux = false; p.triedTranscode = false; p.nativeTried = {};
     p.started = false; p.startedAt = 0; p.nativePos = at; p.nativeDuration = 0;
@@ -11137,6 +11208,8 @@ async function autoAdvance(opts = {}) {
     p.triedRemux = false; p.triedTranscode = false; p.usingRemux = false; p.usingTranscode = false; p.mountId = r.id;
     p.tracksUrl = r.tracksUrl; p.subtitleBase = r.subtitleBase; p.streamToken = r.streamToken;
     p.name = r.candidate ? r.candidate.name : r.name;
+    p.sourcePickKey = (r.candidate && r.candidate.pickKey) || null; // resume must pin the REPLACEMENT, not the dead source
+    p._resumeSourceOk = false; // the replacement re-earns its 30s before it is pinned for resume
     p.duration = 0; p.nativePos = at; p.nativeDuration = 0; p.started = false; p.startedAt = 0;
     p.nativeStartKind = playbackStartKind(r); p.nativeTried = {};
     p._sameSourceRecoveryKey = null; p._sameSourceRecoveryAt = 0;
@@ -11992,6 +12065,14 @@ async function saveWatch(final, opts = {}) {
   // did not. This is the fix for "only marks watched if I watch the ENTIRE thing".
   const nearEnd = d ? pos / d > 0.92 : false;
   const watched = opts && opts.watched != null ? !!opts.watched : nearEnd;
+  // Pin the PLAYING source for resume once this session has really played ~30s past its start
+  // point — resume used to re-run auto-pick, which forgot a manual Sources choice (back to the
+  // "original" source) and happily re-served a source that had failed. A source that dies
+  // instantly never earns the pin; a recovery replacement re-earns it (see the advance path).
+  if (!p._resumeSourceOk && (pos - (Number(p.item.resume) || 0)) >= 30) p._resumeSourceOk = true;
+  if (p._resumeSourceOk && (p.name || p.sourcePickKey)) {
+    meta.source = { name: p.name || undefined, pickKey: p.sourcePickKey || undefined };
+  }
   const payload = {
     key: p.item.key, position: Math.floor(pos), duration: Math.floor(d || 0),
     watched, profile: S.profile ? S.profile.id : undefined,
