@@ -4569,6 +4569,13 @@ test('Android native player: direct source and native chrome stay out of the web
     'closing native Live TV should let the web close callback clear stale player state before the WebView is visible');
   assert.match(android, /nativeNextBtn\.setOnClickListener\(v -> \{ if \(consumeNativeControlClick\(v\)\) playNativeNextEpisode\(\); \}\)/,
     'Next episode should ask the app to start the next item, not open the old player controls');
+  // MOVIES must never show the Next Episode button, not even grayed: hasNext is type-based from
+  // web (episodes only), and the periodic chrome tick used to force the button visible for all
+  // non-live playback — a movie player showed a dead "Next episode" control.
+  assert.match(android, /if \(nativeNextBtn != null\) nativeNextBtn\.setVisibility\(isLive \|\| !nativeHasNext \? View\.GONE : View\.VISIBLE\);/,
+    'the chrome tick hides the native Next Episode button whenever there is no next (movies, live)');
+  assert.ok(!/nativeNextBtn\.setVisibility\(isLive \? View\.GONE : View\.VISIBLE\)/.test(android),
+    'the old always-visible-for-VOD next-button rule is gone');
   assert.match(android, /nativeGuideBtn = nativeButton\(R\.drawable\.ic_player_guide, "TV guide", false\)/,
     'native Live TV should expose a guide button inside Triboon chrome');
   assert.match(android, /nativeGuideBtn\.setOnClickListener\(v -> \{ if \(consumeNativeControlClick\(v\)\) openNativeLiveGuide\(\); \}\)/,

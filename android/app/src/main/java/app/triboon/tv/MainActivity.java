@@ -5135,11 +5135,13 @@ public class MainActivity extends Activity {
         if (nativeRewBtn != null) nativeRewBtn.setVisibility(isLive ? View.GONE : View.VISIBLE);
         if (nativeFwdBtn != null) nativeFwdBtn.setVisibility(isLive ? View.GONE : View.VISIBLE);
         // Live IPTV has no CC/audio/quality/next-episode choices — hide them entirely (the owner's
-        // "no need to show sound/HD on the IPTV player"); they return for movies/episodes.
+        // "no need to show sound/HD on the IPTV player"); CC/audio/quality return for
+        // movies/episodes, but Next Episode exists only for EPISODES (hasNext is type-based from
+        // web): movies must not show a grayed next button. Mirrors the chrome-build path.
         if (nativeCcBtn != null) nativeCcBtn.setVisibility(isLive ? View.GONE : View.VISIBLE);
         if (nativeAudioBtn != null) nativeAudioBtn.setVisibility(isLive ? View.GONE : View.VISIBLE);
         if (nativeQualityBtn != null) nativeQualityBtn.setVisibility(isLive ? View.GONE : View.VISIBLE);
-        if (nativeNextBtn != null) nativeNextBtn.setVisibility(isLive ? View.GONE : View.VISIBLE);
+        if (nativeNextBtn != null) nativeNextBtn.setVisibility(isLive || !nativeHasNext ? View.GONE : View.VISIBLE);
         if (nativeFavBtn != null) nativeFavBtn.setVisibility(isLive ? View.VISIBLE : View.GONE);
         if (nativeLiveBtn != null) nativeLiveBtn.setVisibility(isLive ? View.VISIBLE : View.GONE);
         renderNativeEpgStrip(); // refresh the live EPG strip (now/next advances) — hides itself for video
