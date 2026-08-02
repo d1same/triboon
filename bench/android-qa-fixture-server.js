@@ -28,8 +28,23 @@ function xml(value) {
   return String(value).replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[c]));
 }
 
+// The pipeline's stub/incomplete guard (server/pipeline.js stubFeatureReason) rejects any mounted
+// feature under 80MB outright, and under 300MB when the release NAME claims 1080p/2160p. The QA
+// releases MUST keep their 1080p/2160p tags (the stress verifies the Sources drawer keeps the two
+// quality classes separated), so media under the 300MB floor is padded with a legal MP4 `free`
+// box — every parser skips it, playback and seeking are untouched.
+const STUB_FLOOR_BYTES = 320 * 1024 * 1024; // 300MB tagged-release floor + margin
+function padToStubFloor(data) {
+  if (data.length >= STUB_FLOOR_BYTES) return data;
+  const padBytes = STUB_FLOOR_BYTES - data.length;
+  const header = Buffer.alloc(8);
+  header.writeUInt32BE(padBytes, 0);
+  header.write('free', 4, 'ascii');
+  return Buffer.concat([data, header, Buffer.alloc(padBytes - 8)]);
+}
+
 function releaseFromFile(file, name, prefix) {
-  const data = fs.readFileSync(file);
+  const data = padToStubFloor(fs.readFileSync(file));
   const articles = new Map();
   const segments = [];
   const totalParts = Math.ceil(data.length / partSize);

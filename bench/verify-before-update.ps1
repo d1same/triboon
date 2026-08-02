@@ -9,7 +9,9 @@ param(
   [int]$AndroidVodResumeSeconds = 0,
   [ValidateRange(0, 172800)]
   [int]$AndroidVodDurationSeconds = 0,
-  [string]$AndroidVodKey = "tmdb:movie:1226863"
+  # Env fallback mirrors TRIBOON_ADB_DEVICE: QA-fixture runs (bench/android-qa-fixture-server.js)
+  # must point the stress at the fixture's playable title instead of the real-server default.
+  [string]$AndroidVodKey = $(if ($env:TRIBOON_STRESS_VOD_KEY) { $env:TRIBOON_STRESS_VOD_KEY } else { "tmdb:movie:1226863" })
 )
 
 $ErrorActionPreference = "Stop"
