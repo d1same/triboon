@@ -307,7 +307,7 @@ test('vfs: playback waits temporarily widen read-ahead within the stream cap', a
   assert.ok(stats.maxSegmentWaitMs >= 5, 'wait telemetry should record the slow segment');
 });
 
-function makeRelease(name, size, partSize) {
+function makeRelease(name, size, partSize, idTag = 'triboon.test') {
   // Deterministic pseudo-random payload (seeded) so failures are reproducible.
   const data = Buffer.allocUnsafe(size);
   let seed = 0x5eed;
@@ -322,7 +322,7 @@ function makeRelease(name, size, partSize) {
     const begin = p * partSize;
     const end = Math.min(size, begin + partSize);
     const body = encodePart(data, { name, partNum: p + 1, totalParts, begin, end, totalSize: size });
-    const msgId = `seg${p + 1}@triboon.test`;
+    const msgId = `seg${p + 1}@${idTag}`;
     articles.set(msgId, body);
     segs.push(`    <segment bytes="${body.length}" number="${p + 1}">${msgId}</segment>`);
   }
@@ -336,7 +336,7 @@ ${segs.join('\n')}
   </file>
   <file poster="tester" date="1700000000" subject="repair &quot;${name}.par2&quot; yEnc (1/1)">
     <groups><group>alt.binaries.triboon</group></groups>
-    <segments><segment bytes="100" number="1">par@triboon.test</segment></segments>
+    <segments><segment bytes="100" number="1">par@${idTag}</segment></segments>
   </file>
 </nzb>`;
   return { data, articles, nzb, totalParts };
@@ -658,6 +658,73 @@ test('vfs: a live reader that joined an aborted, draining fetch retries instead 
   for await (const c of vf.read(0, vf.size)) got.push(c); // B joins the doomed fetch
   await readerA;
   assert.ok(Buffer.concat(got).equals(data), 'reader B retried the killed shared fetch and stayed byte-exact');
+  pool.close();
+  await mock.close();
+});
+
+// Multi-user fairness: the capacity contract says one saturating stream must never starve another
+// user's first frame. Two streams flooding the pool with read-ahead may not delay a third user's
+// startup beyond roughly "finish the in-flight article, then jump the queue" — if this regresses,
+// startup latency degenerates to FIFO behind every queued read-ahead article.
+test('vfs: two saturating streams cannot starve a third stream startup (multi-user fairness)', async () => {
+  const relA = makeRelease('UserA.mkv', 16 * 64 * 1024, 64 * 1024, 'user-a.test');
+  const relB = makeRelease('UserB.mkv', 16 * 64 * 1024, 64 * 1024, 'user-b.test');
+  const relC = makeRelease('UserC.mkv', 2 * 64 * 1024, 64 * 1024, 'user-c.test');
+  const articles = new Map([...relA.articles, ...relB.articles, ...relC.articles]);
+  const RTT = 150;
+  const mock = createMockNntp({ articles, latencyMs: RTT });
+  const port = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false }, 4);
+  const vfA = new VirtualFile(pool, relA.nzb, { readAhead: 8 });
+  const vfB = new VirtualFile(pool, relB.nzb, { readAhead: 8 });
+  await Promise.all([vfA.mount(), vfB.mount()]);
+  const collect = async (vf) => { const out = []; for await (const c of vf.read(0, vf.size)) out.push(c); return Buffer.concat(out); };
+  const readA = collect(vfA);
+  const readB = collect(vfB);
+  await new Promise((r) => setTimeout(r, 100)); // both streams now saturate the pool + queue
+  // User C presses play. Startup priority must jump every queued read-ahead article.
+  const t0 = Date.now();
+  const vfC = new VirtualFile(pool, relC.nzb);
+  await vfC.mount();
+  const itC = vfC.read(0, vfC.size, { priority: 'startup' });
+  const firstC = await itC.next();
+  const startupMs = Date.now() - t0;
+  assert.ok(firstC.value && firstC.value.length > 0, 'user C got a first byte');
+  // Priority path ≈ finish one in-flight article (≤1 RTT) + C's own fetch (1 RTT) + slack.
+  // FIFO starvation behind ~2×8 queued read-ahead articles on 4 connections would be ≥ 4×RTT more.
+  assert.ok(startupMs < RTT * 4, `user C startup stayed bounded under load (${startupMs}ms, RTT ${RTT}ms)`);
+  const [gotA, gotB] = await Promise.all([readA, readB]);
+  assert.ok(gotA.equals(relA.data) && gotB.equals(relB.data), 'the saturating streams still complete byte-exact');
+  pool.close();
+  await mock.close();
+});
+
+// Seek storm: five rapid skips in a row. Each skip's first byte must stay near one article fetch,
+// and the pool must never lose a connection to the aborted read-ahead left behind by the previous
+// skip (the pre-drain engine destroyed most of the pool here — the "gets laggy after skipping a
+// few times" report).
+test('vfs: a rapid seek storm keeps first-byte latency bounded and never churns connections', async () => {
+  const rel = makeRelease('SeekStorm.Test.mkv', 16 * 64 * 1024, 64 * 1024);
+  const RTT = 100;
+  const mock = createMockNntp({ articles: rel.articles, latencyMs: RTT });
+  const port = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false }, 4);
+  const vf = new VirtualFile(pool, rel.nzb, { readAhead: 4 });
+  await vf.mount();
+  const firstByteMs = [];
+  for (const seg of [5, 11, 2, 14, 8]) {
+    const ac = new AbortController();
+    const t0 = Date.now();
+    const it = vf.read(seg * 64 * 1024, vf.size, { priority: 'seek', signal: ac.signal });
+    const first = await it.next();
+    firstByteMs.push(Date.now() - t0);
+    assert.ok(first.value && first.value.length > 0, `seek to segment ${seg} produced bytes`);
+    ac.abort(); // the user immediately skips again
+  }
+  for (const ms of firstByteMs) {
+    assert.ok(ms < RTT * 6, `every skip stayed responsive (${firstByteMs.join(', ')}ms)`);
+  }
+  assert.ok(mock.connCount() <= 4, `no reconnect churn across the storm (${mock.connCount()} connects for a pool of 4)`);
   pool.close();
   await mock.close();
 });

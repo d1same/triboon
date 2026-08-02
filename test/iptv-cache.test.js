@@ -1189,6 +1189,95 @@ test('iptv: same-channel native viewers SHARE one upstream connection (fan-out);
   }
 });
 
+// The automated version of the VERIFY.md "20 rapid zaps" live smoke: one viewer zapping down a
+// playlist must honor the 1-connection zap contract the whole way — every retune closes the old
+// upstream promptly (never more than one brief handoff overlap), no upstream leaks behind the
+// storm, no reconnect churn, and the final channel still delivers live bytes.
+test('iptv: a rapid zap storm holds the 1-connection contract and leaks no upstreams', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-iptv-zapstorm-'));
+  const CHANNELS = 12;
+  let activeStreams = 0;
+  let peakActive = 0;
+  let totalConnections = 0;
+  const timers = new Set();
+  const playlist = ['#EXTM3U'];
+  for (let i = 0; i < CHANNELS; i++) {
+    playlist.push(`#EXTINF:-1 group-title="Test",Zap ${i}`);
+    playlist.push(`http://127.0.0.1:PORT/live/${i}.ts`);
+  }
+  const upstream = http.createServer((req, res) => {
+    if (req.url === '/list.m3u') {
+      res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' });
+      return res.end(playlist.join('\n').replaceAll('PORT', String(upstream.address().port)));
+    }
+    if (req.url.startsWith('/live/')) {
+      activeStreams++;
+      totalConnections++;
+      peakActive = Math.max(peakActive, activeStreams);
+      res.writeHead(200, { 'content-type': 'video/mp2t' });
+      res.write(Buffer.alloc(188, 0x47));
+      const t = setInterval(() => { if (!res.destroyed) res.write(Buffer.alloc(188, 0x47)); }, 25);
+      timers.add(t);
+      res.on('close', () => { clearInterval(t); timers.delete(t); activeStreams--; });
+      return;
+    }
+    res.writeHead(404); res.end();
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${upstream.address().port}`;
+  const openStream = (port, p) => new Promise((resolve, reject) => {
+    const req = http.get({ host: '127.0.0.1', port, path: p, headers: { 'user-agent': 'TriboonTV-test' } },
+      (res) => { res.once('data', () => resolve({ req, res })); res.on('error', () => {}); });
+    req.on('error', reject);
+  });
+  const waitFor = async (fn, ms = 4000) => {
+    const until = Date.now() + ms;
+    while (Date.now() < until) { if (fn()) return true; await new Promise((r) => setTimeout(r, 25)); }
+    return false;
+  };
+  const withSurface = (u, s) => u + (u.includes('?') ? '&' : '?') + 'surface=' + s;
+  let srv;
+  let prev = null;
+  let last = null;
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/settings',
+      { iptvMode: 'm3u', iptvUrl: `${base}/list.m3u`, epgUrl: null }, admin);
+    const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    assert.strictEqual(ch.status, 200);
+    assert.strictEqual(ch.json.channels.length, CHANNELS);
+
+    for (let i = 0; i < CHANNELS; i++) {
+      // Same surface id = the SAME TV retuning — the server must treat each open as a retune.
+      const next = await openStream(srv.port, withSurface(ch.json.channels[i].nativeUrl, 'zap0'));
+      if (prev) { try { prev.res.destroy(); prev.req.destroy(); } catch {} } // ExoPlayer drops the old stream
+      prev = next;
+      await new Promise((r) => setTimeout(r, 25)); // a fast human zap cadence
+    }
+    last = prev;
+    prev = null;
+    assert.ok(await waitFor(() => activeStreams === 1),
+      `after the storm only the final channel's upstream remains (active=${activeStreams})`);
+    assert.ok(peakActive <= 2,
+      `retunes closed the old upstream promptly — never more than one handoff overlap (peak=${peakActive})`);
+    assert.strictEqual(totalConnections, CHANNELS,
+      `each zap opened exactly one upstream — no leaks, no reconnect churn (${totalConnections} for ${CHANNELS} zaps)`);
+    await new Promise((resolve) => {
+      let n = 0;
+      const onData = () => { if (++n >= 2) { last.res.off('data', onData); resolve(); } };
+      last.res.on('data', onData);
+    });
+  } finally {
+    for (const cl of [prev, last]) {
+      if (cl) { try { cl.res.destroy(); } catch {} try { cl.req.destroy(); } catch {} }
+    }
+    if (srv) await srv.shutdown();
+    timers.forEach((t) => clearInterval(t));
+    upstream.close();
+  }
+});
+
 test('iptv: provider protection failures are dampened but recover after the configured window', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-iptv-bot-cache-'));
   let liveHits = 0;
