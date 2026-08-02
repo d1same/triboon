@@ -264,6 +264,20 @@ them when the table is reorganized:
   `NzbFileStream._fetchSegment`. Verification: the understudy, rank-grace,
   loser-cleanup, deadline/probe-cleanup, post-abort-join, and shared-consumer
   tests in `test/phase2.test.js`.
+- **P14 - abort drain preserves connections.** NNTP has no command cancel, so a
+  hard abort of an on-wire BODY destroys its connection (TCP+TLS+AUTH to
+  rebuild). Segment fetches opt in to a bounded drain (`drainMs` /
+  VFS `abortDrainMs`, default 4000 ms): when every reader has aborted (pause or
+  skip closed the range request), the in-flight article finishes into the mount
+  cache and the connection survives for the next seek — a 4K pause/skip storm
+  must never destroy the pool into a reconnect storm. Still-queued work aborts
+  instantly; the per-chunk inactivity timeout still kills true stalls; callers
+  without `drainMs` (hedge losers, STAT probes) keep hard-abort semantics; a
+  live reader joined to a fetch killed by another reader's abort retries
+  instead of truncating. Code: `server/nntp.js` `_cmd` drain timer;
+  `server/vfs.js` `ABORT_DRAIN_MS`, `NzbFileStream._fetchSegment`.
+  Verification: the drain-to-completion, bounded-grace, skip-keeps-connections,
+  and join-retry tests in `test/e2e.test.js`.
 - **P14 - playback resource isolation.** Viewer fairness is driven only by real
   non-background `/api/stream` reads (plus a 120-second grace from range end),
   never by prepare/probe lifecycle touches; direct audiobook tracks use the same

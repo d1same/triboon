@@ -547,6 +547,121 @@ test('nntp: a slow-but-alive BODY transfer completes instead of being killed mid
   await mock.close();
 });
 
+// NNTP has no command cancel — aborting an in-flight BODY used to destroy the whole connection
+// (TCP+TLS+AUTH to rebuild). A 4K pause/skip storm aborted every in-flight read-ahead article at
+// once and killed most of the pool → reconnect storm → the NEXT seek had no connections ("gets
+// laggy after skipping a few times"). With opts.drainMs, an aborted ON-WIRE transfer drains to
+// completion (article cached, connection preserved); queued work still cancels instantly, and the
+// grace bounds a slow-but-alive trickle (a true stall is killed by the inactivity timer as before).
+test('nntp: an aborted in-flight BODY with drainMs drains to completion instead of killing the connection', async () => {
+  const { articles } = makeRelease('Drain.Test.mkv', 64 * 1024, 64 * 1024);
+  const mock = createMockNntp({ articles });
+  const port = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false, commandTimeoutMs: 500 }, 1);
+  const msgId = [...articles.keys()][0];
+  mock.trickleNext(8, 60); // ~420ms slow-but-alive transfer
+  const ac = new AbortController();
+  const p = pool.body(msgId, 'readAhead', { signal: ac.signal, drainMs: 5000 });
+  await new Promise((r) => setTimeout(r, 120)); // mid-transfer
+  ac.abort();
+  const body = await p; // resolves — the transfer drained instead of dying
+  assert.ok(body && body.length > 0, 'the drained BODY resolved with the article');
+  const again = await pool.body(msgId, 'playback');
+  assert.ok(again && again.length > 0, 'the next fetch still works');
+  assert.strictEqual(mock.connCount(), 1, 'the connection survived the abort — no reconnect');
+  pool.close();
+  await mock.close();
+});
+
+test('nntp: an abort without drainMs still kills the in-flight command immediately (hedge-loser semantics)', async () => {
+  const { articles } = makeRelease('Kill.Test.mkv', 64 * 1024, 64 * 1024);
+  const mock = createMockNntp({ articles });
+  const port = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false, commandTimeoutMs: 500 }, 1);
+  const msgId = [...articles.keys()][0];
+  mock.trickleNext(8, 60);
+  const ac = new AbortController();
+  const p = pool.body(msgId, 'readAhead', { signal: ac.signal });
+  await new Promise((r) => setTimeout(r, 120));
+  const t0 = Date.now();
+  ac.abort();
+  await assert.rejects(p, (e) => e.code === 'ABORT_ERR');
+  assert.ok(Date.now() - t0 < 200, 'no drain — the abort landed immediately');
+  const again = await pool.body(msgId, 'playback');
+  assert.ok(again && again.length > 0);
+  assert.strictEqual(mock.connCount(), 2, 'the hard abort destroyed the connection (its documented cost)');
+  pool.close();
+  await mock.close();
+});
+
+test('nntp: a draining transfer that outlives its grace is still killed — drain is bounded', async () => {
+  const { articles } = makeRelease('Grace.Test.mkv', 64 * 1024, 64 * 1024);
+  const mock = createMockNntp({ articles });
+  const port = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false, commandTimeoutMs: 1000 }, 1);
+  const msgId = [...articles.keys()][0];
+  mock.trickleNext(40, 100); // ~4s trickle — far beyond the grace, but each gap beats the stall timer
+  const ac = new AbortController();
+  const p = pool.body(msgId, 'readAhead', { signal: ac.signal, drainMs: 300 });
+  await new Promise((r) => setTimeout(r, 120));
+  const t0 = Date.now();
+  ac.abort();
+  await assert.rejects(p, (e) => e.code === 'ABORT_ERR');
+  const waited = Date.now() - t0;
+  assert.ok(waited >= 250, `the drain grace ran before the kill (${waited}ms)`);
+  assert.ok(waited < 900, `the kill came from the drain grace, not the stall timer (${waited}ms)`);
+  pool.close();
+  await mock.close();
+});
+
+test('vfs: read-ahead in flight when the reader aborts drains into the cache — a skip keeps its connections', async () => {
+  const { data, articles, nzb } = makeRelease('DrainVfs.Test.mkv', 512 * 1024, 64 * 1024); // 8 segments
+  const mock = createMockNntp({ articles, latencyMs: 150 });
+  const port = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false }, 3);
+  const vf = new VirtualFile(pool, nzb, { readAhead: 4 });
+  await vf.mount();
+  const ac = new AbortController();
+  const it = vf.read(0, vf.size, { signal: ac.signal });
+  const first = await it.next(); // one chunk consumed — read-ahead for the next segments is now in flight
+  assert.ok(first.value && first.value.length > 0);
+  ac.abort(); // the "user skipped" moment
+  await new Promise((r) => setTimeout(r, 600)); // let the in-flight articles drain
+  assert.ok(vf.cache.size >= 2, `drained read-ahead landed in the cache (${vf.cache.size} segments)`);
+  const got = [];
+  for await (const c of vf.read(0, vf.size)) got.push(c);
+  assert.ok(Buffer.concat(got).equals(data), 'byte-exact after the abort');
+  assert.ok(mock.connCount() <= 3, `no reconnect churn — the pool never exceeded its size (${mock.connCount()} connects)`);
+  pool.close();
+  await mock.close();
+});
+
+// A reader can join a shared in-flight fetch whose previous (sole) consumer already aborted — the
+// drain grace widens that window from milliseconds to seconds. The joined fetch dying with
+// ABORT_ERR must NOT truncate the live reader's stream: it retries with a fresh fetch.
+test('vfs: a live reader that joined an aborted, draining fetch retries instead of truncating', async () => {
+  const { data, articles, nzb } = makeRelease('JoinAbort.Test.mkv', 128 * 1024, 64 * 1024); // 2 segments
+  const mock = createMockNntp({ articles });
+  const port = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false, commandTimeoutMs: 2000 }, 2);
+  const vf = new VirtualFile(pool, nzb, { readAhead: 0, abortDrainMs: 250 }); // short grace forces the kill
+  await vf.mount();
+  mock.trickleNext(40, 100); // segment 2's BODY dribbles ~4s — the grace will kill it first
+  const acA = new AbortController();
+  const readerA = (async () => {
+    try { for await (const c of vf.read(0, vf.size, { signal: acA.signal })) void c; } catch {}
+  })();
+  await new Promise((r) => setTimeout(r, 150)); // A's segment-2 BODY is mid-trickle
+  acA.abort();                                  // A leaves — the fetch drains, grace kill due in ~250ms
+  await new Promise((r) => setTimeout(r, 100)); // inside the drain window
+  const got = [];
+  for await (const c of vf.read(0, vf.size)) got.push(c); // B joins the doomed fetch
+  await readerA;
+  assert.ok(Buffer.concat(got).equals(data), 'reader B retried the killed shared fetch and stayed byte-exact');
+  pool.close();
+  await mock.close();
+});
+
 test('nntp: a fully stalled provider fails within the timeout budget instead of hanging', async () => {
   const { articles, nzb } = makeRelease('Dead.Test.mkv', 128 * 1024, 64 * 1024);
   const mock = createMockNntp({ articles });

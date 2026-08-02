@@ -157,8 +157,33 @@ Rules:
 - active playback bytes must beat health checks,
 - health checks must beat background read-ahead,
 - read-ahead may grow only when capacity exists,
-- cancelled readers must remove queued read-ahead and abort running BODY work
-  when no other active reader still needs that article.
+- cancelled readers must remove queued read-ahead immediately; a running BODY
+  with no remaining reader is DRAINED, not killed (see below).
+
+**Abort drain (connection preservation on pause/skip).** NNTP has no command
+cancel: the only true abort of an in-flight BODY is destroying the connection,
+which costs TCP+TLS+AUTH to rebuild plus the discarded partial transfer. Segment
+fetches therefore opt in to `drainMs` (VFS `abortDrainMs`, default 4000 ms): when
+every reader of an on-wire article has aborted (client closed its range request
+on a pause or skip), the transfer is allowed to finish — the article lands in the
+mount cache (useful for pause-resume and seek-back) and the connection survives
+for the very next seek. Without this, a 4K pause/skip storm aborted every
+in-flight read-ahead article at once and destroyed most of the pool — a
+reconnect storm that left the NEXT seek with no connections ("gets laggy after
+skipping a few times"). Bounds and exceptions:
+
+- still-QUEUED work aborts instantly (dequeue, no connection touched),
+- the drain grace bounds a slow-but-alive trickle; a genuinely stalled socket is
+  killed earlier by the per-chunk inactivity timeout (which stays an inactivity
+  timer — never a send-time deadline),
+- callers that do not pass `drainMs` keep hard-abort semantics (hedge losers,
+  STAT health probes),
+- a reader that joined a shared fetch already aborted by its previous consumer
+  must not be truncated when the grace kills it: the VFS retries such a fetch
+  for any consumer whose own signal is still live.
+
+Covered by `test/e2e.test.js` ("drains to completion", "drain is bounded",
+"a skip keeps its connections", "retries instead of truncating").
 
 **Active-player connection reserve.** Queue priority alone is insufficient:
 priority cannot preempt an in-flight BODY, so read-ahead (which can fan out up to

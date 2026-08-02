@@ -92,6 +92,7 @@ class NntpConnection {
     const ws = this.waiters; this.waiters = [];
     for (const w of ws) {
       clearTimeout(w.timer);
+      clearTimeout(w.drainTimer);
       if (typeof w.cleanupAbort === 'function') w.cleanupAbort();
       w.reject(err);
     }
@@ -116,6 +117,7 @@ class NntpConnection {
         if (!isMulti) {
           this.waiters.shift();
           clearTimeout(w.timer);
+          clearTimeout(w.drainTimer);
           if (typeof w.cleanupAbort === 'function') w.cleanupAbort();
           this.lastUsed = Date.now();
           w.resolve({ status: w.statusLine, body: null });
@@ -131,6 +133,7 @@ class NntpConnection {
           this.buf = this.buf.subarray(3);
           this.waiters.shift();
           clearTimeout(w.timer);
+          clearTimeout(w.drainTimer);
           if (typeof w.cleanupAbort === 'function') w.cleanupAbort();
           this.lastUsed = Date.now();
           w.resolve({ status: w.statusLine, body: Buffer.alloc(0) });
@@ -153,6 +156,7 @@ class NntpConnection {
       if (body[0] === 0x2e && body[1] === 0x2e) body = body.subarray(1);
       this.waiters.shift();
       clearTimeout(w.timer);
+      clearTimeout(w.drainTimer);
       if (typeof w.cleanupAbort === 'function') w.cleanupAbort();
       this.lastUsed = Date.now();
       w.resolve({ status: w.statusLine, body });
@@ -183,7 +187,22 @@ class NntpConnection {
       if (signalAborted(signal)) return reject(abortError());
       if (!this.sock || this.sock.destroyed) return reject(new Error('NNTP not connected'));
       const w = { resolve, reject, multiline, cmdName: line.split(' ')[0] };
-      w.cleanupAbort = addAbortListener(signal, () => this._fail(abortError()));
+      // NNTP has no command cancel: once a BODY is on the wire, the only way to "abort" it is to
+      // destroy the whole connection (and pay TCP+TLS+AUTH to rebuild it). For callers that opt in
+      // via opts.drainMs (segment fetches), an abort mid-transfer DRAINS instead: let the response
+      // finish and resolve normally — the article lands in the mount cache and the connection
+      // survives for the very next seek. Without drain, a pause/skip storm on a 4K stream aborted
+      // every in-flight read-ahead article and destroyed most of the pool at once (reconnect storm
+      // → the NEXT seek had no connections → "gets laggy after skipping a few times"). The grace
+      // bounds a slow-but-alive trickle; the per-chunk inactivity timer still kills true stalls.
+      w.cleanupAbort = addAbortListener(signal, () => {
+        const drainMs = opts.drainMs;
+        if (!(Number.isFinite(drainMs) && drainMs > 0)) return this._fail(abortError());
+        if (!w.drainTimer) {
+          w.drainTimer = setTimeout(() => this._fail(abortError()), drainMs);
+          if (typeof w.drainTimer.unref === 'function') w.drainTimer.unref();
+        }
+      });
       this._armWaiterTimer(w);
       this.waiters.push(w);
       this.lastUsed = Date.now();

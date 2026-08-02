@@ -9,6 +9,13 @@ const { parseNzb, pickPrimaryFile, fileNameFromSubject } = require('./nzb');
 const crypto = require('crypto');
 
 const DEFAULT_CACHE_BYTES = 128 * 1024 * 1024;
+// How long an ABORTED in-flight segment BODY may keep draining before its connection is killed.
+// NNTP can't cancel a command — killing is the only true abort, and it costs the whole connection
+// (TCP+TLS+AUTH to rebuild) plus the partial transfer. A typical article finishes in well under a
+// second, lands in the cache (useful on pause/seek-back), and keeps the connection alive for the
+// very next seek; only a slow-but-alive trickle runs into this bound (a true stall is killed
+// earlier by the per-chunk inactivity timer). See docs-streaming-performance.md.
+const ABORT_DRAIN_MS = 4000;
 const READ_WAIT_BOOST_MS = 250;
 const READ_AHEAD_BOOST_SEGMENTS = 2;
 const READ_AHEAD_BOOST_TTL_MS = 30000;
@@ -103,6 +110,7 @@ function priorityRank(priority) {
 class NzbFileStream {
   constructor(pool, fileEntry, {
     readAhead = 4, cacheSegments = 24, cacheBytes = DEFAULT_CACHE_BYTES, signal = null,
+    abortDrainMs = ABORT_DRAIN_MS,
   } = {}) {
     this.pool = pool;
     this.file = fileEntry;
@@ -128,6 +136,7 @@ class NzbFileStream {
     // stalled startup BODY cannot keep an NNTP connection at startup priority until the 30s mount
     // deadline. Normal playback reads deliberately do not inherit this signal.
     this.mountSignal = signal;
+    this.abortDrainMs = abortDrainMs;
     this.readAheadEpoch = 0;
     this.health = { verdict: 'unverified', checkedAt: null, missing: 0, sampled: 0 };
     this.playbackStats = {
@@ -275,7 +284,7 @@ class NzbFileStream {
     };
     let rec = this.inflight.get(i);
     if (rec && priorityRank(priority) < priorityRank(rec.priority) && priorityRank(priority) <= priorityRank('playback')) {
-      return this.pool.body(this.segments[i].msgId, priority, { signal })
+      return this.pool.body(this.segments[i].msgId, priority, { signal, drainMs: this.abortDrainMs })
         .then(decodeAndCache)
         .catch((e) => {
           if (signalAborted(signal) || e.code === 'ABORT_ERR') throw e;
@@ -285,7 +294,11 @@ class NzbFileStream {
     if (!rec) {
       const controller = new AbortController();
       rec = { consumers: 0, controller, priority, promise: null };
-      rec.promise = this.pool.body(this.segments[i].msgId, priority, { signal: controller.signal }).then((raw) => {
+      // drainMs: an abort of this fetch while it's ON THE WIRE lets the article finish (into the
+      // cache, connection preserved) instead of destroying the connection; a still-queued fetch is
+      // dequeued immediately either way. This is what keeps a 4K pause/skip storm from killing the
+      // whole pool's connections and lagging the next seek behind a reconnect storm.
+      rec.promise = this.pool.body(this.segments[i].msgId, priority, { signal: controller.signal, drainMs: this.abortDrainMs }).then((raw) => {
         this.inflight.delete(i);
         return decodeAndCache(raw);
       }).catch((e) => { this.inflight.delete(i); throw e; });
@@ -304,7 +317,17 @@ class NzbFileStream {
       }
     };
     let removeAbort = addAbortListener(signal, release);
-    return rec.promise.finally(release);
+    // A shared fetch can die with ABORT_ERR through no fault of THIS consumer: it joined a rec
+    // whose last previous consumer had already aborted (the drain grace widens that window from
+    // milliseconds to seconds). Swallowing that as "aborted" would silently TRUNCATE a live
+    // reader's stream mid-file — instead, a consumer whose own signal is still live retries with
+    // a fresh fetch (the settled rec has already left this.inflight).
+    return rec.promise.catch((e) => {
+      if (e && e.code === 'ABORT_ERR' && !signalAborted(signal)) {
+        return this._fetchSegment(i, priority, opts);
+      }
+      throw e;
+    }).finally(release);
   }
 
   cancelReadAhead() {
