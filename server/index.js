@@ -4936,6 +4936,33 @@ const H = {
     }
   },
 
+  // Tiny same-origin proxy for SMALL TMDB artwork so the client can canvas-read pixel colors
+  // (the ambient per-title glow): image.tmdb.org blocks cross-origin canvas reads, and the server
+  // must not learn image decoding (zero-dependency rule) — the CLIENT averages the pixels, this
+  // route only relays bytes. Locked to thumb-sized variants of a plain TMDB asset path, so it can
+  // never be used as a general fetch proxy. In-memory cache keeps repeat focus walks free.
+  artProxy: async (ctx) => {
+    const p = String(ctx.url.searchParams.get('path') || '');
+    if (!/^\/w(92|154|185)\/[A-Za-z0-9]+\.(jpg|png)$/.test(p)) {
+      return send(ctx.res, 400, { error: 'path must be a small TMDB image path (/w92/<id>.jpg)' });
+    }
+    global.__artCache = global.__artCache || new Map();
+    let hit = global.__artCache.get(p);
+    if (!hit) {
+      try {
+        const r = await fetchUrlExt(`https://image.tmdb.org/t/p${p}`, { timeoutMs: 8000, maxBytes: 512 * 1024 });
+        if (r.status !== 200) return send(ctx.res, 502, { error: `art upstream ${r.status}` });
+        hit = { body: r.body, type: p.endsWith('.png') ? 'image/png' : 'image/jpeg' };
+        if (global.__artCache.size > 500) global.__artCache.clear();
+        global.__artCache.set(p, hit);
+      } catch (e) {
+        return send(ctx.res, 502, { error: 'art upstream unreachable' });
+      }
+    }
+    ctx.res.writeHead(200, { 'content-type': hit.type, 'cache-control': 'private, max-age=86400', 'content-length': hit.body.length });
+    ctx.res.end(hit.body);
+  },
+
   tmdbProxy: async (ctx) => {
     try {
       // Restricted profiles (Kids/Teen/Family) get an authoritative catalog filter so what's shown
@@ -8552,6 +8579,7 @@ const ROUTES = [
   { m: 'POST', re: /^\/api\/play$/, auth: 'user', h: H.play },
   { m: 'POST', re: /^\/api\/prepare$/, auth: 'user', h: H.prepare },
   { m: 'POST', re: /^\/api\/advance\/(\w+)$/, auth: 'user', h: H.advance },
+  { m: 'GET', re: /^\/api\/art$/, auth: 'user', h: H.artProxy },
   { m: 'GET', re: /^\/api\/tmdb\/(.+)$/, auth: 'user', h: H.tmdbProxy },
   { m: 'GET', re: /^\/api\/audible\/search$/, auth: 'user', h: H.audibleSearch },
   { m: 'GET', re: /^\/api\/audible\/browse$/, auth: 'user', h: H.audibleBrowse },

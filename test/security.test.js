@@ -727,6 +727,29 @@ test('tmdb: login artwork is public but only exposes safe art metadata', async (
   assert.ok(!art.raw.includes('super-secret-tmdb-key'), 'server TMDB key never leaves the API');
 });
 
+test('art proxy: only small TMDB image paths pass; anything else is rejected', async () => {
+  const dataDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'triboon-art-'));
+  let srv;
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    for (const bad of [
+      '/w92/../secret.jpg',            // traversal
+      'https://evil.example/x.jpg',    // absolute URL smuggling
+      '/original/abc.jpg',             // full-size variant (bandwidth abuse)
+      '/w92/abc.svg',                  // non-raster type
+      '',                              // empty
+    ]) {
+      const r = await httpJson(srv.port, 'GET', '/api/art?path=' + encodeURIComponent(bad), null, admin);
+      assert.strictEqual(r.status, 400, `path ${JSON.stringify(bad)} must be rejected (got ${r.status})`);
+    }
+    const unauth = await httpJson(srv.port, 'GET', '/api/art?path=' + encodeURIComponent('/w92/abcDEF123.jpg'));
+    assert.strictEqual(unauth.status, 401, 'the art proxy requires auth like every user route');
+  } finally {
+    if (srv) await srv.shutdown();
+  }
+});
+
 test('tmdb: detail, discover, genre, video, and search paths all pass proxy validation', async () => {
   for (const p of [
     '/api/tmdb/movie/603?append_to_response=credits,videos',  // detail + cast + trailers

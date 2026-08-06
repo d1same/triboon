@@ -565,6 +565,29 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'poster-card captions rest invisible and reveal on hover/focus (quiet grids)');
   assert.match(ui, /\.railBtn\[data-nav="search"\],\.railBtn\[data-nav="movies"\],#navLiveTv,#navMusic\{margin-top:14px\}[\s\S]+#railAddLib\{margin-top:auto;opacity:\.7\}/,
     'the rail groups into sections and sinks Add library to the bottom');
+  // ---- v2.8.5 design contracts (owner-approved 2026-08-06) ----
+  assert.match(ui, /function splashStage\(pct\) \{[\s\S]{0,300}if \(pct > cur\) lane\.style\.width = pct \+ '%';/,
+    'the boot splash lane fills forward-only from real boot stages');
+  assert.ok(ui.includes("splashStage(40)") && ui.includes("splashStage(72)") && ui.includes("splashStage(100)"),
+    'server-answered, watch-ready, and boot-ready each advance the splash lane');
+  assert.match(ui, /@property --ambR\{syntax:'<number>';inherits:true;initial-value:193\}[\s\S]+body\{transition:--ambR 1\.2s ease/,
+    'ambient color channels are registered numeric properties so the glow crossfades');
+  assert.match(ui, /function applyAmbient\(it\) \{[\s\S]{0,400}setProperty\('--ambR', c\[0\]\)/,
+    'the focused/opened title drives the ambient color');
+  assert.ok(ui.includes('applyAmbient(it);') && /setHero\(it\) \{[\s\S]{0,300}applyAmbient\(it\);/.test(ui),
+    'hero focus and detail open both apply the per-title ambient');
+  assert.match(ui, /function wireBackdropScrollFade\(el\) \{[\s\S]{0,400}1 - el\.scrollTop \/ 360/,
+    'content scroll fades the backdrop away over the first ~360px');
+  assert.match(ui, /#hero h1,#dTitle\{height:150px;display:flex;align-items:flex-end/,
+    'hero and detail titles are fixed-height bottom-aligned slots (no row/page shifting)');
+  assert.match(ui, /#hero p,#dOverview,#dMeta,#dCrew,\.metaLine\{color:rgba\(238,233,245,\.88\)\}/,
+    'story and meta text reads near-white');
+  assert.match(ui, /#detail \.dInfo \.eyebrow\{display:none\}/,
+    'the redundant SHOW/MOVIE eyebrow above detail titles is gone');
+  assert.ok((ui.match(/setBackdrop\(it\.backdrop \|\| it\.poster\)/g) || []).length >= 7,
+    'titles without a backdrop fall back to their poster art everywhere the backdrop is set');
+  assert.match(ui, /el\.classList\.contains\('pcard'\) && el\.dataset\.relIdx !== undefined[\s\S]{0,400}openItemMenu\(rit, el\)/,
+    'related covers on the detail page open the shared hold-OK action menu like home rows');
   // Watch-write ordering (stale Continue Watching fix): server reads DERIVED from watch state
   // must never race an in-flight watch POST — the refetch used to answer from pre-save server
   // state and clobber the fresh local cache; /api/watch/next cached its stale answer under the
@@ -740,19 +763,20 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'real section switches should clear rail mode so the destination page can own focus');
   assert.match(ui, /else if \(S\.libraryPreviewOnly\) \{[\s\S]+S\.libraryPreviewOnly = false;[\s\S]+\}[\s\S]+setTimeout\(\(\) => \{ if \(S\.view === 'library'\) focusContent\(\); \}, 80\);/,
     'pressing OK on an auto-previewed attached-library rail item should enter content without reloading the page');
-  // Redesign 2026-08-05 (owner-approved full-bleed backdrop — supersedes the earlier "smaller
-  // corner accent" preference): the art sweeps most of the viewport, still capped + viewport-aware
-  // (min(vw,px)) and melted into ink by the layer mask so posters stay readable where they overlap.
-  assert.match(ui, /--bdW:min\(78vw,1500px\);[\s\S]+--bdH:min\(72vh,860px\);[\s\S]+#backdrop \.layer\{[\s\S]+width:var\(--bdW\);height:var\(--bdH\)/,
-    'desktop-browser backdrop is full-bleed but stays capped + viewport-aware (min(vw,px))');
-  assert.match(ui, /#backdrop \.layer\{[\s\S]+mask-image:linear-gradient\(90deg,transparent 0%,#000 30%,#000 100%\),linear-gradient\(180deg,#000 55%,transparent 98%\)/,
-    'the full-bleed backdrop melts into ink via left + bottom mask fades');
+  // Redesign "variant B" (owner-picked 2026-08-06 over the full-bleed first cut): the art owns
+  // the RIGHT ~58% with a LONG soft melt (no hard cut), still capped + viewport-aware.
+  assert.match(ui, /--bdW:min\(58vw,1120px\);[\s\S]+--bdH:min\(78vh,900px\);[\s\S]+#backdrop \.layer\{[\s\S]+width:var\(--bdW\);height:var\(--bdH\)/,
+    'desktop-browser backdrop owns the right ~58%, capped + viewport-aware (min(vw,px))');
+  assert.match(ui, /#backdrop \.layer\{[\s\S]+mask-image:linear-gradient\(90deg,transparent 0%,rgba\(0,0,0,\.18\) 12%,rgba\(0,0,0,\.55\) 26%,rgba\(0,0,0,\.85\) 40%,#000 54%,#000 100%\),linear-gradient\(180deg,#000 58%,rgba\(0,0,0,\.4\) 82%,transparent 98%\)/,
+    'the backdrop melts into ink via a LONG left fade + bottom fade (no hard cut)');
   assert.match(ui, /#backdrop \.layer\.show\{opacity:1;animation:bdDrift 28s ease-in-out infinite alternate\}[\s\S]+@keyframes bdDrift\{from\{transform:scale\(1\) translateY\(0\)\}to\{transform:scale\(1\.05\) translateY\(-1\.2%\)\}\}[\s\S]+@media \(prefers-reduced-motion:reduce\)\{#backdrop \.layer\.show\{animation:none\}\}/,
     'the idle backdrop drift is a slow composited transform and turns off under reduced-motion');
-  assert.match(ui, /--scrim:\s*linear-gradient\(90deg,rgba\(11,8,18,\.86\) 0%,rgba\(11,8,18,\.56\) 28%,rgba\(11,8,18,\.20\) 58%,rgba\(11,8,18,\.06\) 100%\),\s*linear-gradient\(0deg,rgba\(11,8,18,\.76\) 0%,rgba\(11,8,18,\.24\) 26%,rgba\(11,8,18,\.04\) 60%,rgba\(11,8,18,\.10\) 100%\)/,
-    'browser backdrop scrim should protect text without blacking out the artwork');
-  assert.match(ui, /body\.tv\{--bdW:min\(72vw,1300px\);--bdH:min\(64vh,700px\);--overscan:1\.5vmin\}[\s\S]+body\.shortBrowseBd\{--bdH:min\(58vh,640px\)\}[\s\S]+body\.tv\.shortBrowseBd\{--bdH:min\(50vh,560px\)\}[\s\S]+@media \(max-height:760px\)\{[\s\S]+--bdH:min\(46vh,400px\)[\s\S]+@media \(max-width:980px\)\{[\s\S]+--bdW:min\(60vw,640px\);--bdH:min\(50vh,420px\)\}[\s\S]+body\.shortBrowseBd:not\(\.tv\)\{--bdH:min\(44vh,380px\)\}/,
-    'TV, short browser, narrow browser, and poster browse viewports still tighten the full-bleed backdrop; narrow browser windows keep the :not(.tv) browse-height clamp so movies/TV pages do not dominate a small window');
+  // Variant B: left protection comes from the backdrop layer's own long melt; the scrim only
+  // guards the bottom band under rows/buttons.
+  assert.match(ui, /--scrim:linear-gradient\(0deg,rgba\(11,8,18,\.85\) 0%,rgba\(11,8,18,\.30\) 24%,rgba\(11,8,18,\.04\) 50%\)/,
+    'the bottom-only scrim protects rows without double-washing the artwork');
+  assert.match(ui, /body\.tv\{--bdW:min\(54vw,980px\);--bdH:min\(70vh,760px\);--overscan:1\.5vmin\}[\s\S]+body\.shortBrowseBd\{--bdH:min\(60vh,660px\)\}[\s\S]+body\.tv\.shortBrowseBd\{--bdH:min\(52vh,580px\)\}[\s\S]+@media \(max-height:760px\)\{[\s\S]+--bdH:min\(48vh,420px\)[\s\S]+@media \(max-width:980px\)\{[\s\S]+--bdW:min\(60vw,640px\);--bdH:min\(50vh,420px\)\}[\s\S]+body\.shortBrowseBd:not\(\.tv\)\{--bdH:min\(44vh,380px\)\}/,
+    'TV, short browser, narrow browser, and poster browse viewports still tighten the variant-B backdrop; narrow browser windows keep the :not(.tv) browse-height clamp so movies/TV pages do not dominate a small window');
   assert.match(ui, /body\.shortBrowseBd:not\(\.tv\) #bdInfo[\s\S]+-webkit-line-clamp:1[\s\S]+@media \(max-height:820px\)[\s\S]+body\.shortBrowseBd:not\(\.tv\) #bdInfo \.bdiC,[\s\S]+display:none/,
     'browser poster browse pages should compact the focused-title band without touching TV');
   assert.match(ui, /function browserBrowseCoverPx\(size\) \{[\s\S]+document\.body\.classList\.contains\('tv'\)[\s\S]+window\.innerHeight <= 820[\s\S]+return size === 'L' \? '190px'[\s\S]+const px = window\.innerWidth <= 600 \? '140px' : \(browserBrowseCoverPx\(s\) \|\| table\[s\] \|\| table\.M\);[\s\S]+const shortBrowserBrowse = document\.body\.classList\.contains\('shortBrowseBd'\) && !document\.body\.classList\.contains\('tv'\);[\s\S]+shortBrowserBrowse \? \(h <= 820 \? 128/,
@@ -2513,8 +2537,12 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.ok(ui.includes("label: 'Triboon', tone: 'near-black + gold', spotlight: true")
     && ui.includes("focus: '#D8B25A'") && ui.includes("ink: '#050506'"),
     'Triboon theme should be a near-black base with a gold high-visibility focus');
-  assert.match(ui, /body\[data-spotlight\]\{--grad:var\(--focus\)\}[\s\S]+\.railBtn[\s\S]+background:var\(--focus\)[\s\S]+\.pcard \.art[\s\S]+opacity:\.62/,
-    'spotlight themes share one body[data-spotlight] block: focus-coloured ring/fill + dimmed unfocused artwork');
+  // Redesign 2026-08-06: artwork stays FULLY OPAQUE at rest (the .62 spotlight fade read as
+  // washed-out covers/cast/episodes) — focus pops via the gold ring/fill alone.
+  assert.match(ui, /body\[data-spotlight\]\{--grad:var\(--focus\)\}[\s\S]+\.railBtn[\s\S]+background:var\(--focus\)/,
+    'spotlight themes share one body[data-spotlight] block with the focus-coloured ring/fill');
+  assert.ok(!/body\[data-spotlight\] \.pcard \.art,[\s\S]{0,300}opacity:\.62/.test(ui),
+    'the spotlight unfocused-artwork fade is gone — covers/cast/episodes render fully opaque');
   assert.match(ui, /document\.body\.toggleAttribute\('data-spotlight', !!t\.spotlight\)/,
     'applyTheme should toggle body[data-spotlight] by attribute presence (not empty dataset, which would leak the spotlight to every theme)');
   // The spotlight scale(1.05) must NOT re-introduce zoom on the wide 16/9 Music cover tiles — they
@@ -2978,8 +3006,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'detail episode and cast cards should match mouse hover highlight to D-pad focus');
   assert.match(ui, /\.seasonCard \.art\{[^}]+border:0/,
     'season artwork should not show a static border when it is not focused');
-  assert.match(ui, /\.dPoster\{[^}]+border:0/,
-    'detail poster artwork should not show a static border');
+  // Variant B (2026-08-06): the detail poster is retired — the title logo + right-anchored
+  // backdrop carry the identity, so the rule is now a plain display:none.
+  assert.match(ui, /\.dPoster\{display:none\}/,
+    'the detail poster stays retired under variant B');
   assert.match(ui, /\.castCard \.ph\{[^}]+border:0/,
     'cast photos should not show a static border when they are not focused');
   assert.match(ui, /\.personHead \.pPhoto\{[^}]+border:0/,
@@ -3173,8 +3203,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'row edge auto-scroll should be safe to attach after every render');
   assert.match(ui, /EDGE_SCROLL_SELECTORS = '\.cards,#castRow,#relatedRow,#seasonGrid,#seasonTabs,#epGrid,\.musicRail,#chCats,\.pgCats'/,
     'mouse edge auto-scroll should cover home, detail, music, Live TV, and player-guide rows');
-  assert.match(ui, /related\.forEach\(\(rit\) => row\.appendChild\(makeCard\(rit, true, \(\) => \{\}\)\)\);\s+bindEdgeScroll\(row\);/,
-    'detail related rows should rebind mouse edge auto-scroll after rendering');
+  assert.match(ui, /related\.forEach\(\(rit, i\) => \{[\s\S]{0,200}card\.dataset\.relIdx = i;[\s\S]{0,80}\}\);\s+bindEdgeScroll\(row\);/,
+    'detail related rows carry their item index for hold-OK and rebind mouse edge auto-scroll after rendering');
   assert.match(ui, /const bar = document\.createElement\('div'\); bar\.id = 'chCats';[\s\S]+bindEdgeScroll\(bar\);/,
     'Live TV categories should have mouse edge auto-scroll when rendered as a strip');
   assert.match(ui, /catList\.className = 'pgCats guideCats';[\s\S]+bindEdgeScroll\(catList\);/,

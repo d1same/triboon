@@ -33,19 +33,20 @@
   --artFocusLine:rgba(198,179,122,.30); --artFocusGlow:rgba(198,179,122,.18);
   --artFocusTileLine:rgba(198,179,122,.24); --artFocusTileBorder:rgba(198,179,122,.18); --artFocusTileGlow:rgba(198,179,122,.16);
   --success:#7CE6A0; --danger:#ff8d8d;
-  --scrim:linear-gradient(90deg,rgba(11,8,18,.86) 0%,rgba(11,8,18,.56) 28%,rgba(11,8,18,.20) 58%,rgba(11,8,18,.06) 100%),
-          linear-gradient(0deg,rgba(11,8,18,.76) 0%,rgba(11,8,18,.24) 26%,rgba(11,8,18,.04) 60%,rgba(11,8,18,.10) 100%);
+  /* Variant-B scrim: bottom protection only — the LEFT protection now comes from the backdrop
+     layer's own long melt mask, so text sits on raw ink instead of a second gradient wash. */
+  --scrim:linear-gradient(0deg,rgba(11,8,18,.85) 0%,rgba(11,8,18,.30) 24%,rgba(11,8,18,.04) 50%);
   --grad:var(--coral);
   --r:14px;
   --rail:72px;       /* sidebar width; grows on hover so content slides right (Plex push) */
   --heroLeft:clamp(4px,5vw,190px); /* resolution-adaptive title indent (home hero, page heads, backdrop info) */
   --poster:168px;    /* standardized poster cover width everywhere */
   --gut:28px;        /* content gutter — tight to the rail (owner: no dead strip by the menu) */
-  /* Full-bleed cinematic backdrop (owner-approved redesign, 2026-08-05 — supersedes the earlier
-     "smaller corner accent" preference): the art sweeps most of the viewport and MELTS into ink
-     via the layer mask below, so posters still lead where they overlap it. */
-  --bdW:min(78vw,1500px);
-  --bdH:min(72vh,860px);
+  /* Cinematic backdrop "variant B" (owner-picked 2026-08-06 over the full-bleed first cut): the
+     art owns the RIGHT ~58% and melts into ink across a LONG soft fade (no hard cut), so the
+     text column always sits on clean ink. */
+  --bdW:min(58vw,1120px);
+  --bdH:min(78vh,900px);
   --safeT:max(env(safe-area-inset-top),0px);
   --safeR:max(env(safe-area-inset-right),0px);
   --safeB:max(env(safe-area-inset-bottom),0px);
@@ -84,12 +85,12 @@ select option,select optgroup{background:var(--surface);color:var(--text)}
 
 /* ---------- living backdrop ---------- */
 /* A SMALLER image anchored to the top-right, soft-masked so it melts into the colorful base. */
-#backdrop{position:fixed;inset:0;z-index:0}
+#backdrop{position:fixed;inset:0;z-index:0;transition:opacity .3s linear} /* scroll-fade (see wireBackdropScrollFade) */
 #backdrop .layer{position:absolute;top:0;right:0;width:var(--bdW);height:var(--bdH);background-size:cover;background-position:center 20%;
   opacity:0;transition:opacity .7s ease;
-  -webkit-mask-image:linear-gradient(90deg,transparent 0%,#000 30%,#000 100%),linear-gradient(180deg,#000 55%,transparent 98%);
+  -webkit-mask-image:linear-gradient(90deg,transparent 0%,rgba(0,0,0,.18) 12%,rgba(0,0,0,.55) 26%,rgba(0,0,0,.85) 40%,#000 54%,#000 100%),linear-gradient(180deg,#000 58%,rgba(0,0,0,.4) 82%,transparent 98%);
   -webkit-mask-composite:source-in;
-          mask-image:linear-gradient(90deg,transparent 0%,#000 30%,#000 100%),linear-gradient(180deg,#000 55%,transparent 98%);
+          mask-image:linear-gradient(90deg,transparent 0%,rgba(0,0,0,.18) 12%,rgba(0,0,0,.55) 26%,rgba(0,0,0,.85) 40%,#000 54%,#000 100%),linear-gradient(180deg,#000 58%,rgba(0,0,0,.4) 82%,transparent 98%);
           mask-composite:intersect}
 #backdrop .layer.show{opacity:1;animation:bdDrift 28s ease-in-out infinite alternate}
 /* Idle drift: a barely-perceptible slow push-in that makes the page feel alive without any
@@ -97,19 +98,19 @@ select option,select optgroup{background:var(--surface);color:var(--text)}
 @keyframes bdDrift{from{transform:scale(1) translateY(0)}to{transform:scale(1.05) translateY(-1.2%)}}
 @media (prefers-reduced-motion:reduce){#backdrop .layer.show{animation:none}}
 /* TV: slightly tighter than desktop so the rows keep clear ink beneath the fade. */
-body.tv{--bdW:min(72vw,1300px);--bdH:min(64vh,700px);--overscan:1.5vmin} /* TV title-safe margin (edge→rail on the left, edge→clock on the right). Owner wanted the left menu tighter to the edge — dropped 2.5vmin(~27px@1080p) → 1.5vmin(~16px). Content still clears the rail by the gutter (content left = rail + overscan). */
-body.shortBrowseBd{--bdH:min(58vh,640px)}
-body.tv.shortBrowseBd{--bdH:min(50vh,560px)}
+body.tv{--bdW:min(54vw,980px);--bdH:min(70vh,760px);--overscan:1.5vmin} /* TV title-safe margin (edge→rail on the left, edge→clock on the right). Owner wanted the left menu tighter to the edge — dropped 2.5vmin(~27px@1080p) → 1.5vmin(~16px). Content still clears the rail by the gutter (content left = rail + overscan). */
+body.shortBrowseBd{--bdH:min(60vh,660px)}
+body.tv.shortBrowseBd{--bdH:min(52vh,580px)}
 @media (max-height:760px){
-  :root{--bdW:min(74vw,1200px);--bdH:min(64vh,520px)}
-  body.tv{--bdW:min(70vw,1100px);--bdH:min(58vh,470px)}
-  body.shortBrowseBd{--bdH:min(52vh,440px)}
-  body.tv.shortBrowseBd{--bdH:min(46vh,400px)}
+  :root{--bdW:min(56vw,900px);--bdH:min(66vh,540px)}
+  body.tv{--bdW:min(52vw,820px);--bdH:min(60vh,480px)}
+  body.shortBrowseBd{--bdH:min(54vh,460px)}
+  body.tv.shortBrowseBd{--bdH:min(48vh,420px)}
 }
 @media (min-width:1700px) and (min-height:900px){
-  :root{--bdW:min(74vw,1700px);--bdH:min(68vh,940px)}
-  body.shortBrowseBd{--bdH:min(56vh,760px)}
-  body.tv.shortBrowseBd{--bdH:min(48vh,640px)}
+  :root{--bdW:min(56vw,1280px);--bdH:min(72vh,980px)}
+  body.shortBrowseBd{--bdH:min(58vh,780px)}
+  body.tv.shortBrowseBd{--bdH:min(50vh,660px)}
 }
 @media (max-width:980px){
   /* Narrow browser windows: keep the corner art a clear accent on EVERY page. The shortBrowseBd
@@ -156,14 +157,22 @@ body.shortBrowseBd:not(.tv) #bdInfo .bdiO{font-size:14.5px;line-height:1.45;-web
 
 /* Every page keeps the HOME backdrop look — the top-right corner cutout at full strength.
    (body.fullBd now only gates the #bdInfo text overlay; the layer never goes full-bleed.) */
-/* Colorful base revealed where the backdrop fades — brand magenta→coral glows bottom-left. */
+/* PER-TITLE AMBIENT (owner-approved 2026-08-06, the Plex-style smooth color fade): the primary
+   glow color follows the focused/opened title's artwork. --ambR/G/B are REGISTERED numeric
+   properties, so the browser interpolates them — the glow literally crossfades between titles.
+   Engines without @property (none we ship to; Shield WebView ≥88 has it) just switch instantly.
+   Brand magenta stays the initial value and the fallback for grey/dark art. */
+@property --ambR{syntax:'<number>';inherits:true;initial-value:193}
+@property --ambG{syntax:'<number>';inherits:true;initial-value:59}
+@property --ambB{syntax:'<number>';inherits:true;initial-value:214}
+body{transition:--ambR 1.2s ease,--ambG 1.2s ease,--ambB 1.2s ease}
 #colorBase{position:fixed;inset:0;z-index:0;pointer-events:none;
-  background:radial-gradient(70% 70% at 12% 92%,rgba(193,59,214,.20),transparent 60%),
+  background:radial-gradient(70% 70% at 12% 92%,rgba(var(--ambR),var(--ambG),var(--ambB),.20),transparent 60%),
              radial-gradient(55% 55% at 0% 100%,rgba(251,139,60,.16),transparent 70%),
              radial-gradient(50% 60% at 100% 0%,rgba(255,198,92,.10),transparent 60%)}
 #scrim{position:fixed;inset:0;z-index:2;pointer-events:none;background:var(--scrim)}
 #colorGlow{position:fixed;inset:0;z-index:3;pointer-events:none;mix-blend-mode:screen;opacity:.9;
-  background:radial-gradient(45% 55% at 6% 96%,rgba(193,59,214,.28),transparent 62%),
+  background:radial-gradient(45% 55% at 6% 96%,rgba(var(--ambR),var(--ambG),var(--ambB),.28),transparent 62%),
              radial-gradient(40% 45% at 30% 100%,rgba(251,139,60,.18),transparent 66%)}
 
 /* ---------- rail (expands on hover) ---------- */
@@ -321,22 +330,8 @@ body[data-spotlight] .railBtn.focusable.focus svg,
 body[data-spotlight] .railBtn:focus-visible svg{color:var(--btnFocusText)}
 body[data-spotlight] .railBtn.focusable.focus::after,
 body[data-spotlight] .railBtn:focus-visible::after{width:5px;height:30px;box-shadow:0 0 16px var(--focus)}
-/* Spotlight: fade unfocused artwork so the focused cover/card/channel clearly pops. */
-body[data-spotlight] .pcard .art,
-body[data-spotlight] .card,
-body[data-spotlight] .seasonCard,
-body[data-spotlight] .epCard,
-body[data-spotlight] .castCard,
-body[data-spotlight] .chCard .chLogo,
-body[data-spotlight] .playerEpCard .peStill{opacity:.62;transition:opacity .12s}
-body[data-spotlight] .pcard.focus .art,
-body[data-spotlight] .card.focus,
-body[data-spotlight] .seasonCard.focus,
-body[data-spotlight] .epCard.focus,
-body[data-spotlight] .castCard.focus,
-body[data-spotlight] .chCard.focus .chLogo,
-body[data-spotlight] .playerEpCard.focus .peStill,
-body[data-spotlight] .playerEpCard:focus-visible .peStill{opacity:1}
+/* Artwork stays FULLY OPAQUE at rest (owner call, 2026-08-06 — the old spotlight fade to .62
+   read as washed-out covers/cast/episodes). Focus pops via the gold ring/fill alone. */
 /* In-player episode list: thick amber ring on the focused episode still (matches the rest). */
 body[data-spotlight] .playerEpCard.focus .peStill,
 body[data-spotlight] .playerEpCard:focus-visible .peStill{box-shadow:inset 0 0 0 3px var(--focus),0 0 18px var(--artFocusGlow)}
@@ -1283,14 +1278,15 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 #detail{padding:0!important;left:var(--rail)!important;overflow:hidden}
 #detail .back{position:fixed;top:22px;z-index:9;left:calc(var(--rail) + 24px);transition:left .22s ease}
 .detailScroll{position:absolute;inset:0;overflow-y:auto;padding:0 var(--gut) 50px}
-.detailHero{display:flex;gap:34px;align-items:flex-end;min-height:52vh;padding-top:6vh}
-#dCrew{font:500 13.5px "Albert Sans";color:var(--muted);margin:-6px 0 16px}
+.detailHero{display:flex;gap:34px;align-items:flex-end;min-height:44vh;padding-top:5vh} /* tighter above the logo (owner call) */
+#dCrew{font:500 13.5px "Albert Sans";color:var(--muted);margin:-6px 0 34px} /* breathing room before the Play row (owner call) */
 #dCrew b{color:var(--text);font-weight:600;margin-right:6px}
 .crewLink{color:var(--amber);cursor:pointer}
 .crewLink:hover{text-decoration:underline}
 .btn.unavail{opacity:.55;cursor:not-allowed;background:var(--btn)!important;color:var(--muted)!important}
-.dPoster{flex:0 0 clamp(180px,17vw,260px);aspect-ratio:2/3;border-radius:16px;background-size:cover;background-position:center;
-  background-color:var(--raise);border:0}
+/* Poster retired on detail pages (owner-picked variant B, 2026-08-06): the title logo + right-
+   anchored backdrop carry the identity; the text column owns the left half on clean ink. */
+.dPoster{display:none}
 .dInfo{flex:1;padding-bottom:8px;max-width:920px}
 .dInfo .eyebrow{font:700 11px "JetBrains Mono";letter-spacing:.24em;color:var(--amber);text-transform:uppercase;margin-bottom:12px}
 #dTitle{font:800 clamp(34px,4.6vw,64px)/1.02 "Sora";letter-spacing:-.02em;margin-bottom:14px;max-width:none}
@@ -1324,7 +1320,9 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 .seasonCard .art{aspect-ratio:2/3;border-radius:12px;background-size:cover;background-position:center;background-color:var(--raise);
   border:0;position:relative;transition:transform .16s,box-shadow .16s}
 .seasonCard:hover .art,.seasonCard.focus .art{transform:scale(1.04);box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 9px var(--artFocusGlow)}
-.seasonCard .epbadge{position:absolute;top:8px;right:8px;background:rgba(11,8,18,.85);color:var(--amber);font:700 12px "JetBrains Mono";padding:4px 9px;border-radius:20px}
+/* Count badge lives TOP-LEFT (same corner as poster-card ratings): top-right belongs to the
+   watched ✓ and the hover ⋯ menu, which used to pile onto the count there (owner report). */
+.seasonCard .epbadge{position:absolute;top:8px;left:8px;background:rgba(11,8,18,.85);color:var(--amber);font:700 12px "JetBrains Mono";padding:4px 9px;border-radius:20px}
 .seasonCard .seasonYear{position:absolute;left:8px;bottom:8px;background:rgba(11,8,18,.82);border:1px solid rgba(255,255,255,.18);color:#fff;font:800 12px "JetBrains Mono";padding:5px 10px;border-radius:20px;box-shadow:0 8px 18px rgba(0,0,0,.28)}
 .seasonCard .st{font:700 14px "Sora"}
 .seasonCard .sd{font:500 10.5px "JetBrains Mono";color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
@@ -1764,10 +1762,23 @@ body.mobileShell #upNext .un-cancel{width:42px;height:42px}
 @keyframes spin{to{transform:rotate(360deg)}}
 @keyframes pulseLogo{0%,100%{opacity:.85;transform:scale(1)}50%{opacity:1;transform:scale(1.05)}}
 .spinner{width:46px;height:46px;border-radius:50%;border:3px solid rgba(var(--fg),.15);border-top-color:var(--coral);animation:spin .8s linear infinite}
-#appLoader{position:fixed;inset:0;z-index:80;display:grid;place-items:center;background:var(--ink);transition:opacity .4s ease}
+/* Boot splash (owner-approved 2026-08-06): WORDMARK on slow-breathing tinted ink + one hairline
+   lane whose fill tracks REAL boot stages (splashStage). No ring/reel, no glow on the mark. */
+#appLoader{position:fixed;inset:0;z-index:80;display:grid;place-items:center;background:var(--ink);transition:opacity .4s ease;overflow:hidden}
+#appLoader::before{content:"";position:absolute;inset:-20%;
+  background:radial-gradient(46% 40% at 18% 78%,rgba(193,59,214,.16),transparent 68%),
+             radial-gradient(42% 38% at 82% 22%,rgba(251,139,60,.13),transparent 68%);
+  animation:splashTint 11s ease-in-out infinite alternate}
+@keyframes splashTint{from{transform:rotate(0deg) scale(1)}to{transform:rotate(4deg) scale(1.07)}}
+@media (prefers-reduced-motion:reduce){#appLoader::before{animation:none}}
 #appLoader.hide{opacity:0;pointer-events:none}
-#appLoader .inner{display:flex;flex-direction:column;align-items:center;gap:26px}
-#appLoader img{width:120px;height:auto;animation:pulseLogo 1.8s ease-in-out infinite;filter:none}
+#appLoader .inner{position:relative;display:flex;flex-direction:column;align-items:center;gap:26px;animation:splashIn .9s ease both}
+@keyframes splashIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+#appLoader .brandWordmarkClip{width:230px;height:64px;overflow:hidden}
+#appLoader .brandWordmark img{display:block;width:230px;height:auto;transform:translateY(-25%)}
+#appLoader .bootLaneTrack{width:150px;height:2px;border-radius:999px;background:rgba(255,255,255,.08);overflow:hidden}
+#appLoader .bootLaneTrack i{display:block;height:100%;width:12%;border-radius:999px;background:rgba(255,255,255,.5);
+  transition:width 1.1s cubic-bezier(.25,.6,.35,1)}
 #playerLoader{position:absolute;inset:0;z-index:4;display:none;place-items:center;background:#000}
 #playerLoader.show{display:grid}
 #playerLoader .cover{position:absolute;inset:0;background-size:cover;background-position:center;filter:blur(10px) brightness(.42);transform:scale(1.03)}
@@ -1783,8 +1794,10 @@ body.mobileShell #upNext .un-cancel{width:42px;height:42px}
 
 /* Watched check-mark badge on covers + episode thumbnails. */
 .wbadge{position:absolute;top:8px;right:8px;width:26px;height:26px;border-radius:50%;background:#2bbb6a;
-  display:grid;place-items:center;color:#fff;box-shadow:0 2px 8px rgba(0,0,0,.5);z-index:2}
+  display:grid;place-items:center;color:#fff;box-shadow:0 2px 8px rgba(0,0,0,.5);z-index:2;transition:opacity .15s ease}
 .wbadge svg{width:15px;height:15px}
+/* The hover ⋯ menu appears in the same corner — the watched ✓ steps aside while it is up. */
+.pcard:hover .wbadge,.seasonCard:hover .wbadge,.epCard:hover .wbadge{opacity:0}
 .pcard .art,.card,.epCard .still{position:relative}
 
 /* Related / "More like this" row reuses .cards. */
@@ -2033,21 +2046,7 @@ body.tv .ctWells{display:none}
 /* Bigger rail logo. */
 #rail .logo{width:46px;height:46px;padding-left:7px;margin-bottom:24px}
 
-/* Loader: the logo inside a thin spinning gradient ARC over a faint full track — clean and
-   modern (the film reel read as a toy). The old reel SVG stays in the markup, just hidden. */
-.filmRing{position:relative;width:150px;height:150px;display:grid;place-items:center}
-.filmRing svg.reel{display:none}
-.filmRing::after{content:"";position:absolute;inset:12px;border-radius:50%;
-  box-shadow:inset 0 0 0 2px rgba(var(--fg),.07)} /* the still track under the arc */
-.filmRing::before{content:"";position:absolute;inset:12px;border-radius:50%;
-  background:conic-gradient(from 0deg,transparent 0 64%,var(--magenta) 78%,var(--coral) 93%,var(--amber) 99%,transparent 100%);
-  -webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 4px),#000 calc(100% - 3px));
-          mask:radial-gradient(farthest-side,transparent calc(100% - 4px),#000 calc(100% - 3px));
-  animation:spin 1.1s cubic-bezier(.5,.15,.5,.85) infinite}
-.filmRing img{width:72px;height:auto;position:relative;filter:none;animation:none}
-/* The old #appLoader img rule (120px pulse + glow) outranks .filmRing by ID specificity. */
-#appLoader .filmRing img{width:72px;animation:none;filter:none}
-#appLoader .inner{gap:0}
+/* (film-ring loader retired 2026-08-06 — the boot splash is the wordmark + staged lane above) */
 
 /* Vertical row snap: scrolling home/discover lands on full rows (previous fades via --tf). */
 #rows,#discoverRows{scroll-snap-type:y mandatory}
@@ -2837,16 +2836,34 @@ body.contentTextL{
 .mSearchSongs .musicRow .mT{font-size:var(--ctMusicSearchTitle)}
 .mSearchSongs .musicRow .mA{font-size:var(--ctMusicSearchMeta)}
 body.tv #hero h1{font-size:min(var(--ctHeroTitle),42px);height:calc(39px * var(--ctLineScale))}
-/* ---------- title-logo art (hero + detail) ---------- */
-/* LAST hero/detail-title rules on purpose: .hasLogo must beat every clamp/height override above
-   (desktop clamp, mobile clamp, TV nowrap height) regardless of specificity ties. */
-#heroTitle.hasLogo,#dTitle.hasLogo,body.tv #hero h1.hasLogo,body.mobileShell #hero h1.hasLogo{
-  height:auto;-webkit-line-clamp:unset;white-space:normal;overflow:visible}
+/* ---------- FIXED-HEIGHT TITLE SLOTS (hero + detail) ---------- */
+/* LAST hero/detail-title rules on purpose so they beat every earlier clamp/height override.
+   Logo or text, long or short — the title block ALWAYS occupies the same slot with content
+   bottom-aligned, so home rows never bounce as focus moves and every detail page starts at the
+   same height (the owner's "weird spacing above" report). Text renders inside .tt (a 2-line
+   clamp); the logo image replaces it after load. */
+#hero h1,#dTitle{height:150px;display:flex;align-items:flex-end;overflow:visible;
+  -webkit-line-clamp:unset;white-space:normal}
+#dTitle{height:140px;max-width:none;margin-bottom:12px}
+#hero h1 .tt,#dTitle .tt{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 #heroTitle.hasLogo img,#dTitle.hasLogo img{max-width:min(380px,86%);max-height:150px;object-fit:contain;
   object-position:left bottom;display:block;filter:drop-shadow(0 4px 18px rgba(0,0,0,.55));animation:logoIn .3s ease}
+#dTitle.hasLogo img{max-height:140px}
+body.tv #hero h1{height:104px}
+body.tv #hero h1 .tt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;max-width:100%}
 body.tv #heroTitle.hasLogo img{max-height:104px}
+body.tv #dTitle{height:120px}
 body.tv #dTitle.hasLogo img{max-height:120px}
-body.mobileShell #heroTitle.hasLogo img{margin:0 auto;object-position:center bottom}
+body.mobileShell #hero h1{height:96px;justify-content:center}
+body.mobileShell #heroTitle.hasLogo img{margin:0 auto;object-position:center bottom;max-height:96px}
+/* Detail overview: clamp so page height (and the space above) stays consistent across titles. */
+#detail .dInfo #dOverview{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
+/* Story/meta text reads NEAR-WHITE (owner call, 2026-08-06): the muted grey washed out over
+   backdrops; true labels (row headers, captions) keep --muted. */
+#hero p,#dOverview,#dMeta,#dCrew,.metaLine{color:rgba(238,233,245,.88)}
+/* The SHOW/MOVIE eyebrow above the detail title is redundant next to the logo/title (owner call). */
+#detail .dInfo .eyebrow{display:none}
+#dMeta .rating,.metaLine .rating{color:var(--amber)}
 @keyframes logoIn{from{opacity:0}to{opacity:1}}
 body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
 
@@ -2855,53 +2872,12 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
 </head>
 <body>
 
-<div id="appLoader"><div class="inner"><div class="filmRing">
-  <svg class="reel" viewBox="0 0 100 100" aria-hidden="true">
-    <defs>
-      <linearGradient id="reelG1" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0" stop-color="#C13BD6"/><stop offset=".55" stop-color="#FB8B3C"/><stop offset="1" stop-color="#FFC65C"/>
-      </linearGradient>
-      <radialGradient id="reelGlow" cx=".5" cy=".5" r=".5">
-        <stop offset=".6" stop-color="#FB8B3C" stop-opacity="0"/>
-        <stop offset=".82" stop-color="#FB8B3C" stop-opacity=".1"/>
-        <stop offset="1" stop-color="#C13BD6" stop-opacity=".24"/>
-      </radialGradient>
-      <!-- the reel body is a SOLID disc with the hub + six spoke holes PUNCHED out -->
-      <mask id="reelBody">
-        <circle cx="50" cy="50" r="41.5" fill="#fff"/>
-        <circle cx="50" cy="50" r="19" fill="#000"/>
-        <circle cx="50" cy="19.5" r="7.6" fill="#000"/><circle cx="76.4" cy="34.75" r="7.6" fill="#000"/>
-        <circle cx="76.4" cy="65.25" r="7.6" fill="#000"/><circle cx="50" cy="80.5" r="7.6" fill="#000"/>
-        <circle cx="23.6" cy="65.25" r="7.6" fill="#000"/><circle cx="23.6" cy="34.75" r="7.6" fill="#000"/>
-      </mask>
-    </defs>
-    <!-- ambient depth wash -->
-    <circle cx="50" cy="50" r="48.5" fill="url(#reelGlow)"/>
-    <g class="spin">
-      <!-- translucent reel body (punched), then its crisp edges -->
-      <circle cx="50" cy="50" r="41.5" fill="url(#reelG1)" opacity=".14" mask="url(#reelBody)"/>
-      <circle cx="50" cy="50" r="41.5" fill="none" stroke="url(#reelG1)" stroke-width="1.5" opacity=".9"/>
-      <circle cx="50" cy="50" r="19" fill="none" stroke="url(#reelG1)" stroke-width="1.2" opacity=".55"/>
-      <g fill="none" stroke="url(#reelG1)" stroke-width="1.4" opacity=".85">
-        <circle cx="50" cy="19.5" r="7.6"/><circle cx="76.4" cy="34.75" r="7.6"/>
-        <circle cx="76.4" cy="65.25" r="7.6"/><circle cx="50" cy="80.5" r="7.6"/>
-        <circle cx="23.6" cy="65.25" r="7.6"/><circle cx="23.6" cy="34.75" r="7.6"/>
-      </g>
-      <!-- outer flange + counter-rotating sprocket perforations (film-strip feel) -->
-      <circle cx="50" cy="50" r="47.7" fill="none" stroke="url(#reelG1)" stroke-width="1.7" opacity=".95"/>
-      <circle cx="50" cy="50" r="43.9" fill="none" stroke="url(#reelG1)" stroke-width=".8" opacity=".4"/>
-      <g class="sprockets">
-        <circle cx="50" cy="50" r="45.8" fill="none" stroke="url(#reelG1)" stroke-width="2.6"
-          stroke-dasharray="2 4.79" stroke-linecap="round" opacity=".75"/>
-      </g>
-    </g>
-    <!-- static sheen: the light source stays put while the reel spins under it -->
-    <path d="M14.5 26 A47.7 47.7 0 0 1 50 2.3" fill="none" stroke="rgba(255,255,255,.55)"
-      stroke-width="1.7" stroke-linecap="round"/>
-    <path d="M85.5 74 A47.7 47.7 0 0 1 72 89.5" fill="none" stroke="rgba(255,255,255,.22)"
-      stroke-width="1.7" stroke-linecap="round"/>
-  </svg>
-  <img src="T-Logo.svg" alt="Triboon" onerror="this.onerror=null;this.src='T-Logo.png'"></div></div></div>
+<div id="appLoader"><div class="inner">
+  <!-- Boot splash (owner-approved 2026-08-06): the WORDMARK on tinted ink + one hairline lane
+       whose fill tracks REAL boot stages (splashStage). No ring, no reel — quiet and premium. -->
+  <div class="brandWordmarkClip"><div class="brandWordmark"><img src="triboon.png" alt="Triboon"></div></div>
+  <div class="bootLaneTrack"><i id="bootLane"></i></div>
+</div></div>
 
 <div id="cwMenu" class="epMenu"></div>
 <div id="colorBase"></div>
@@ -4531,6 +4507,7 @@ function clearBackdrop() {
   if (_bdTimer) { clearTimeout(_bdTimer); _bdTimer = null; } // a pending backdrop must not paint onto a just-cleared page
   _bdPendingUrl = null;
   bdCurrent = null;
+  $('backdrop').style.opacity = ''; // a fresh page starts unfaded (scroll-fade re-engages per surface)
   $('bdA').classList.remove('show'); $('bdB').classList.remove('show');
   $('bdInfo').classList.remove('show'); // the title/overview band rides the backdrop
 }
@@ -5664,6 +5641,7 @@ async function loadRows(opts = {}) {
     publishHomeRows(homeRowsFromWatch(cachedWatchRowsForHome(), true), opts); // Internal first paint: focus target under the splash before /api/watch returns.
     loadWatchState().then(() => {
       perfMark('watch-state-ready');
+      splashStage(72);
       if (S.view === 'home' && runId === S._homeLoadRun) loadRows({ ...opts, watchReady: true, preserveFocus: true });
     }).catch(() => {});
     if (!opts.catalogOnly) scheduleHomeCatalogRefresh();
@@ -6476,6 +6454,73 @@ async function titleLogoUrl(it) {
   titleLogoCache.set(key, url);
   return url;
 }
+// ---- Per-title ambient color (the Plex-style smooth glow fade) ----
+// The dominant SATURATED color of the title's artwork drives the --ambR/G/B registered
+// properties; CSS interpolates them, so the corner glow crossfades between titles. Pixels come
+// through /api/art (same-origin thumb proxy) because the TMDB CDN blocks cross-origin canvas
+// reads. Grey/dark art (no confident color) falls back to the brand magenta initial values.
+const ambientCache = new Map(); // /w92 path -> [r,g,b] | null
+async function ambientColorFor(artUrl) {
+  const m = /image\.tmdb\.org\/t\/p\/w\d+(\/[A-Za-z0-9]+\.(?:jpg|png))/.exec(String(artUrl || ''));
+  if (!m) return null;
+  const path = '/w92' + m[1];
+  if (ambientCache.has(path)) return ambientCache.get(path);
+  let color = null;
+  try {
+    const tok = tokenStore.get();
+    const r = await fetch('/api/art?path=' + encodeURIComponent(path),
+      { headers: tok ? { authorization: 'Bearer ' + tok } : {} });
+    if (r.ok) {
+      const bmp = await createImageBitmap(await r.blob());
+      const c = document.createElement('canvas'); c.width = 12; c.height = 8;
+      const x = c.getContext('2d'); x.drawImage(bmp, 0, 0, 12, 8);
+      const d = x.getImageData(0, 0, 12, 8).data;
+      let best = null, bestScore = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        const r0 = d[i], g0 = d[i + 1], b0 = d[i + 2];
+        const mx = Math.max(r0, g0, b0), mn = Math.min(r0, g0, b0);
+        const sat = mx ? (mx - mn) / mx : 0;
+        const score = sat * Math.min(mx / 255 * 1.6, 1); // saturated AND reasonably bright wins
+        if (score > bestScore) { bestScore = score; best = [r0, g0, b0]; }
+      }
+      if (best && bestScore > 0.18) color = best;
+    }
+  } catch {}
+  if (ambientCache.size > 200) ambientCache.clear();
+  ambientCache.set(path, color);
+  return color;
+}
+let _ambToken = 0;
+function applyAmbient(it) {
+  const token = ++_ambToken;
+  ambientColorFor(it && (it.backdrop || it.poster)).then((c) => {
+    if (token !== _ambToken) return;
+    const b = document.body.style;
+    if (c) { b.setProperty('--ambR', c[0]); b.setProperty('--ambG', c[1]); b.setProperty('--ambB', c[2]); }
+    else { b.removeProperty('--ambR'); b.removeProperty('--ambG'); b.removeProperty('--ambB'); }
+  });
+}
+// ---- Scroll-linked backdrop fade ----
+// Scrolling into cast/related/lower rows fades the art away so that content sits on clean ink
+// (owner call, 2026-08-06). Each scrollable content surface maps its first ~360px of scroll to
+// backdrop opacity 1→0; switching surfaces resets via setBackdrop/clearBackdrop.
+function wireBackdropScrollFade(el) {
+  if (!el || el._bdFadeWired) return;
+  el._bdFadeWired = true;
+  el.addEventListener('scroll', () => {
+    $('backdrop').style.opacity = Math.max(0, 1 - el.scrollTop / 360).toFixed(3);
+  }, { passive: true });
+}
+// Text titles render inside a .tt span (the 2-line clamp) so the h1 itself can stay a fixed-
+// height, bottom-aligned SLOT — logo and text modes occupy identical space and nothing shifts.
+function setTitleText(el, text) {
+  el.classList.remove('hasLogo');
+  el.textContent = '';
+  const span = document.createElement('span');
+  span.className = 'tt';
+  span.textContent = text || '';
+  el.appendChild(span);
+}
 function applyTitleLogo(el, it) {
   const token = (el._logoToken = (el._logoToken || 0) + 1);
   el.classList.remove('hasLogo');
@@ -6495,8 +6540,9 @@ function applyTitleLogo(el, it) {
 function setHero(it) {
   S.focusedItem = it;
   prefetchSources(it);
-  $('heroTitle').textContent = it.title;
+  setTitleText($('heroTitle'), it.title);
   applyTitleLogo($('heroTitle'), it);
+  applyAmbient(it);
   $('heroOverview').textContent = it.overview;
   loadCreditsInto($('heroCredits'), it);
   const heroKind = metaGenreLabel(it);
@@ -6506,7 +6552,7 @@ function setHero(it) {
   // a Continue Watching card resumes directly; its ✓/✕ management lives ON the card).
   $('heroBtns').style.display = 'none';
   $('heroMeta').innerHTML = metaLineHtml(it);
-  setBackdrop(it.backdrop);
+  setBackdrop(it.backdrop || it.poster);
 }
 
 /* ============ play pipeline ============ */
@@ -7239,11 +7285,12 @@ async function openDetail(it, push = true) {
   $('home').classList.remove('show'); $('searchBar').classList.remove('show');
   $('browse').classList.remove('open'); $('discover').classList.remove('open');
   $('settings').classList.remove('open'); $('prefs').classList.remove('open'); $('music').classList.remove('open');
-  setBackdrop(it.backdrop);
+  setBackdrop(it.backdrop || it.poster);
   $('dPoster').style.backgroundImage = artBackground(it.poster, it.backdrop, artFallback(it.key || it.title, 30));
   $('dKind').textContent = it.type === 'tv' ? 'Show' : 'Movie';
-  $('dTitle').textContent = it.title;
+  setTitleText($('dTitle'), it.title);
   applyTitleLogo($('dTitle'), it);
+  applyAmbient(it);
   $('dOverview').textContent = it.overview || '';
   $('dMeta').innerHTML = `<span class="rating">★ ${it.rating}</span>` + (it.year ? ` <span class="dot">·</span> ${it.year}` : '');
   $('dSeasonsWrap').style.display = 'none'; $('dCastWrap').style.display = 'none';
@@ -7279,7 +7326,7 @@ async function openDetail(it, push = true) {
   updateDetailPlayLabel(detailResume ? { label: 'Resume', target: { ...it, resume: detailResume } } : { label: 'Play', target: it });
   syncDetailButtons(it);
   syncFixMatchBtn(it); // admin, library-born items only: fix a wrong TMDB match
-  $('detail').querySelector('.detailScroll').scrollTop = 0;
+  const _ds = $('detail').querySelector('.detailScroll'); _ds.scrollTop = 0; wireBackdropScrollFade(_ds); $('backdrop').style.opacity = '';
   // Focus lands on Play immediately — without this the first D-pad press starts from stale
   // page state and can jump straight to Cast/Related instead of the action row.
   S.zone = '';
@@ -7300,9 +7347,9 @@ async function openDetail(it, push = true) {
     bootReady(); // a hash-restored detail page is a boot landing
     if (!it.title) { // route-restored page (refresh/back) — fill from TMDB
       it.title = d.title || d.name || '';
-      $('dTitle').textContent = it.title;
+      setTitleText($('dTitle'), it.title);
       applyTitleLogo($('dTitle'), it);
-      if (d.backdrop_path) { it.backdrop = img(d.backdrop_path); setBackdrop(it.backdrop); }
+      if (d.backdrop_path) { it.backdrop = img(d.backdrop_path); setBackdrop(it.backdrop || it.poster); }
       if (d.poster_path) {
         it.poster = img(d.poster_path, 'w342');
         const p = $('dPoster');
@@ -7375,7 +7422,12 @@ async function openDetail(it, push = true) {
     if (related.length) {
       $('dRelatedWrap').style.display = '';
       const row = $('relatedRow'); row.innerHTML = '';
-      related.forEach((rit) => row.appendChild(makeCard(rit, true, () => {})));
+      S.detailRelated = related; // hold-OK on a related cover resolves its item from here
+      related.forEach((rit, i) => {
+        const card = makeCard(rit, true, () => {});
+        card.dataset.relIdx = i;
+        row.appendChild(card);
+      });
       bindEdgeScroll(row);
     }
   } catch (e) {
@@ -15432,7 +15484,7 @@ function openLocalDetail(it) {
   $('dTitle').textContent = it.title;
   $('dOverview').textContent = it.overview || 'No description — add a .nfo file next to the video to fill this in.';
   const p = $('dPoster'); if (p) p.style.backgroundImage = artBackground(it.poster, it.backdrop, artFallback(it.key || it.title, 44));
-  setBackdrop(it.backdrop);
+  setBackdrop(it.backdrop || it.poster);
   const parts = [];
   if (it.rating && it.rating !== '—') parts.push(`<span class="rating">★ ${esc(it.rating)}</span>`);
   if (it.year) parts.push(esc(it.year));
@@ -15448,7 +15500,7 @@ function openLocalDetail(it) {
   $('dStartOver').style.display = resume ? '' : 'none';
   updateDetailPlayLabel(resume ? { label: 'Resume', target: { ...it, resume } } : { label: 'Play', target: it });
   syncFixMatchBtn(it); // unmatched items need this MOST — assign the right TMDB title
-  $('detail').querySelector('.detailScroll').scrollTop = 0;
+  const _ds = $('detail').querySelector('.detailScroll'); _ds.scrollTop = 0; wireBackdropScrollFade(_ds); $('backdrop').style.opacity = '';
   S.zone = '';
   requestAnimationFrame(() => { if (S.view === 'detail') applyFocus($('dPlay'), false); });
 }
@@ -15497,7 +15549,7 @@ async function openLocalShowDetail(it) {
   $('dSeasonsWrap').style.display = '';
   $('dPlay').disabled = true; $('dPlay').classList.add('unavail'); $('dPlayLabel').textContent = 'Loading';
   $('dStartOver').style.display = 'none';
-  $('detail').querySelector('.detailScroll').scrollTop = 0;
+  const _ds = $('detail').querySelector('.detailScroll'); _ds.scrollTop = 0; wireBackdropScrollFade(_ds); $('backdrop').style.opacity = '';
   syncFixMatchBtn(show);
   requestAnimationFrame(() => { if (S.view === 'detail') applyFocus($('dPlay')); });
   try {
@@ -18691,7 +18743,7 @@ const THEMES = {
     success: '#7CE6A0', danger: '#FF8D8D',
     btn: 'rgba(45,38,62,.75)', btnHover: '#E5B44E', btnSelected: 'rgba(229,180,78,.28)', btnSelectedHover: '#EEC46A', btnPrimary: '#FB8B3C', btnPrimaryHover: '#FC9E5B', btnFocusText: '#1D1408',
     artFocusLine: 'rgba(229,180,78,.90)', artFocusGlow: 'rgba(229,180,78,.38)', artFocusTileLine: 'rgba(229,180,78,.85)', artFocusTileBorder: 'rgba(229,180,78,.75)', artFocusTileGlow: 'rgba(229,180,78,.38)',
-    scrim: 'linear-gradient(90deg,rgba(11,8,18,.86) 0%,rgba(11,8,18,.56) 28%,rgba(11,8,18,.20) 58%,rgba(11,8,18,.06) 100%),linear-gradient(0deg,rgba(11,8,18,.76) 0%,rgba(11,8,18,.24) 26%,rgba(11,8,18,.04) 60%,rgba(11,8,18,.10) 100%)',
+    scrim: 'linear-gradient(0deg,rgba(11,8,18,.85) 0%,rgba(11,8,18,.30) 24%,rgba(11,8,18,.04) 50%)',
   },
   // Ocean — deep navy with a clear sky-blue accent; calm, cinema-dark, high readability.
   ocean: {
@@ -18704,7 +18756,7 @@ const THEMES = {
     success: '#7FD7A6', danger: '#E89292',
     btn: 'rgba(40,52,72,.88)', btnHover: 'rgba(54,70,96,.92)', btnSelected: 'rgba(60,80,112,.92)', btnSelectedHover: 'rgba(72,94,128,.96)', btnPrimary: '#5EA0F2', btnPrimaryHover: '#79B2F6', btnFocusText: '#EAF1FB',
     artFocusLine: 'rgba(94,160,242,.34)', artFocusGlow: 'rgba(94,160,242,.20)', artFocusTileLine: 'rgba(94,160,242,.26)', artFocusTileBorder: 'rgba(94,160,242,.20)', artFocusTileGlow: 'rgba(94,160,242,.16)',
-    scrim: 'linear-gradient(90deg,rgba(13,20,32,.86) 0%,rgba(13,20,32,.54) 28%,rgba(13,20,32,.18) 58%,rgba(13,20,32,.05) 100%),linear-gradient(0deg,rgba(13,20,32,.76) 0%,rgba(13,20,32,.24) 26%,rgba(13,20,32,.04) 60%,rgba(13,20,32,.10) 100%)',
+    scrim: 'linear-gradient(0deg,rgba(13,20,32,.85) 0%,rgba(13,20,32,.30) 24%,rgba(13,20,32,.04) 50%)',
   },
   // Graphite — carbon neutrals with a platinum-steel accent: the most understated of the three
   // (no color cast at all), tuned for living-room TVs — subdued, zero glow, quietly premium.
@@ -18718,7 +18770,7 @@ const THEMES = {
     success: '#85CDA0', danger: '#E39494',
     btn: 'rgba(39,43,48,.78)', btnHover: 'rgba(51,56,62,.90)', btnSelected: 'rgba(65,71,79,.92)', btnSelectedHover: 'rgba(77,84,93,.96)', btnPrimary: '#A8B4C0', btnPrimaryHover: '#BAC5CF', btnFocusText: '#F2F4F7',
     artFocusLine: 'rgba(168,180,192,.32)', artFocusGlow: 'rgba(168,180,192,.18)', artFocusTileLine: 'rgba(168,180,192,.25)', artFocusTileBorder: 'rgba(168,180,192,.19)', artFocusTileGlow: 'rgba(168,180,192,.15)',
-    scrim: 'linear-gradient(90deg,rgba(15,16,18,.86) 0%,rgba(15,16,18,.54) 28%,rgba(15,16,18,.18) 58%,rgba(15,16,18,.05) 100%),linear-gradient(0deg,rgba(15,16,18,.76) 0%,rgba(15,16,18,.24) 26%,rgba(15,16,18,.04) 60%,rgba(15,16,18,.10) 100%)',
+    scrim: 'linear-gradient(0deg,rgba(15,16,18,.85) 0%,rgba(15,16,18,.30) 24%,rgba(15,16,18,.04) 50%)',
   },
   // ---- LEGACY THEMES (hidden from the picker; kept resolvable so devices/profiles that saved
   // one keep their look until they re-pick — deleting these would silently restyle them) ----
@@ -18732,7 +18784,7 @@ const THEMES = {
     success: '#7FD7A6', danger: '#E89292',
     btn: 'rgba(40,52,72,.88)', btnHover: 'rgba(54,70,96,.92)', btnSelected: 'rgba(60,80,112,.92)', btnSelectedHover: 'rgba(72,94,128,.96)', btnPrimary: '#5EA0F2', btnPrimaryHover: '#79B2F6', btnFocusText: '#EAF1FB',
     artFocusLine: 'rgba(94,160,242,.34)', artFocusGlow: 'rgba(94,160,242,.20)', artFocusTileLine: 'rgba(94,160,242,.26)', artFocusTileBorder: 'rgba(94,160,242,.20)', artFocusTileGlow: 'rgba(94,160,242,.16)',
-    scrim: 'linear-gradient(90deg,rgba(13,20,32,.86) 0%,rgba(13,20,32,.54) 28%,rgba(13,20,32,.18) 58%,rgba(13,20,32,.05) 100%),linear-gradient(0deg,rgba(13,20,32,.76) 0%,rgba(13,20,32,.24) 26%,rgba(13,20,32,.04) 60%,rgba(13,20,32,.10) 100%)',
+    scrim: 'linear-gradient(0deg,rgba(13,20,32,.85) 0%,rgba(13,20,32,.30) 24%,rgba(13,20,32,.04) 50%)',
   },
   cinema: {
     label: 'Carbon Brass', tone: 'carbon + aged brass',
@@ -21901,7 +21953,7 @@ function focusCard(ri, ci, opts = {}) {
     }
   }
   const it = view.data[ri] && view.data[ri].items[ci];
-  if (it) { if (view.hasHero) setHero(it); else { S.focusedItem = it; setBackdrop(it.backdrop); setBdInfo(it); } }
+  if (it) { if (view.hasHero) setHero(it); else { S.focusedItem = it; setBackdrop(it.backdrop || it.poster); setBdInfo(it); } }
   // Resume should feel like a local file: when a resumable card (Continue Watching / next
   // episode / has a saved position) settles under focus, warm the best source all the way to a
   // MOUNTED state — not just the search. Scene TV releases are almost always multi-volume RARs,
@@ -22267,7 +22319,7 @@ function focusGrid(i) {
     const it = (S.gridItems || [])[S.gridIdx];
     if (it) {
       S.focusedItem = it;
-      if (S.view !== 'search' && S.view !== 'person') { setBackdrop(it.backdrop); setBdInfo(it); }
+      if (S.view !== 'search' && S.view !== 'person') { setBackdrop(it.backdrop || it.poster); setBdInfo(it); }
     }
     if (S.gridIdx >= count - cols * 2) {
       if (['movies', 'tv'].includes(S.view)) runBrowse(false);
@@ -22344,7 +22396,7 @@ function focusGrid(i) {
   if (it) {
     S.focusedItem = it;
     // Search is a clean full-page list — no backdrop swapping under the results.
-    if (S.view !== 'search' && S.view !== 'person' && !liveGuideRow) { setBackdrop(it.backdrop); setBdInfo(it); }
+    if (S.view !== 'search' && S.view !== 'person' && !liveGuideRow) { setBackdrop(it.backdrop || it.poster); setBdInfo(it); }
   }
   if (S.view === 'person' && S.gridIdx >= (S.gridItems || []).length - Math.max(2, gridCols() * 2)) {
     loadMorePersonWorks(false);
@@ -23249,6 +23301,17 @@ document.addEventListener('keydown', (e) => {
         }, 450);
         return;
       }
+      // Related ("More like this") covers get the SAME hold-OK action menu as home-row covers
+      // (watchlist / mark watched / details) — they used to fall straight through to click, so
+      // Android TV had no way to act on them without opening the title first (owner report).
+      if (el.classList.contains('pcard') && el.dataset.relIdx !== undefined) {
+        const rit = (S.detailRelated || [])[+el.dataset.relIdx];
+        if (rit && rit.tmdbId && ['movie', 'tv'].includes(rit.type)) {
+          S._lpEl = el;
+          S._lpTimer = setTimeout(() => { S._lpTimer = null; S._lpEl = null; openItemMenu(rit, el); }, 450);
+          return;
+        }
+      }
       el.click(); return;
     }
     // Remember the column for this row so a later return to it restores the spot (per-row memory).
@@ -23757,8 +23820,17 @@ function focusRailEnter() {
 
 /* ============ boot ============ */
 // First real content is on screen → fade the boot loader (double-rAF: after the paint).
+// Splash lane fill tracks REAL boot stages (12% css-initial → 40% server answered → 55% session
+// check → 72% watch state in → 100% boot-ready). Forward-only, so late signals can't rewind it.
+function splashStage(pct) {
+  const lane = document.getElementById('bootLane');
+  if (!lane) return;
+  const cur = parseFloat(lane.style.width) || 12;
+  if (pct > cur) lane.style.width = pct + '%';
+}
 function bootReady() {
   if (!S._booting && $('appLoader').classList.contains('hide')) return;
+  splashStage(100);
   S._booting = false;
   perfMark('boot-ready', { view: S.view });
   signalTvReadyOnce('boot-ready');
@@ -23915,11 +23987,15 @@ async function restoreSavedSession() {
   const invite = new URLSearchParams(location.search).get('invite');
   let info;
   try { info = await api('/api/server'); } catch { document.body.innerHTML = '<p style="padding:40px">Triboon server unreachable.</p>'; return; }
+  splashStage(40); // server answered — the session decision is next
   S.serverInfo = info;
   relayCastReceiverAppId();
+  wireBackdropScrollFade($('rows'));  // home rows + browse grid fade the backdrop as they scroll
+  wireBackdropScrollFade($('grid'));
   if (invite) return showGate('invite');
   if (info.needsSetup) return showGate('setup');
   if (tokenStore.get()) {
+    splashStage(55);
     if (await restoreSavedSession()) return;
   }
   showGate('login');
