@@ -5091,8 +5091,23 @@ function watchCacheKey() { return S.profile ? S.profile.id : 'default'; }
 function invalidateWatchCache() {
   S._watchAt = 0; S._watchRows = null; S._watchJob = null;
 }
+// Watch-write ordering: server reads that DERIVE from watch state (/api/watch refetch,
+// /api/watch/next) must not race an in-flight watch POST — the classic "watched half, went Home,
+// Continue Watching still shows the old spot" was a refetch answered from PRE-save server state
+// and then cached. Every watch POST registers here; derived reads await the set first.
+function trackWatchPost(job) {
+  S._pendingWatchPosts = S._pendingWatchPosts || new Set();
+  S._pendingWatchPosts.add(job);
+  job.finally(() => S._pendingWatchPosts.delete(job)).catch(() => {});
+  return job;
+}
+function watchPostsSettled() {
+  const pending = S._pendingWatchPosts ? [...S._pendingWatchPosts] : [];
+  return pending.length ? Promise.allSettled(pending) : Promise.resolve();
+}
 function upsertWatchCache(row) {
   if (!row || !row.key) return;
+  row._localAt = Date.now(); // local-clock stamp: lets a refetch know THIS row changed mid-flight
   const key = String(row.key);
   S.watchMap = S.watchMap || {};
   S.watchMap[key] = row;
@@ -5116,12 +5131,24 @@ async function loadWatchState(force) {
   if (!force && S._watchKey === key && Array.isArray(S._watchRows) && Date.now() - (S._watchAt || 0) < 10000) return S._watchRows;
   if (!force && S._watchKey === key && S._watchJob) return S._watchJob;
   S._watchKey = key;
-  S._watchJob = api('/api/watch' + profileQ()).then((rows) => {
-    S._watchRows = rows || [];
+  S._watchJob = (async () => {
+    // Never let this refetch race an in-flight watch POST: the server would answer from
+    // PRE-save state and the stale rows would CLOBBER the fresh local cache (the "went Home,
+    // Continue Watching hasn't updated" report). Waiting costs at most the POST round-trip.
+    await watchPostsSettled();
+    const fetchStart = Date.now();
+    const localRows = Array.isArray(S._watchRows) ? S._watchRows : [];
+    const rows = await api('/api/watch' + profileQ());
+    // Local rows upserted DURING the fetch are newer than the response — they win, and any the
+    // response lacks entirely are kept in front (their POST is registered and will land).
+    const localBy = new Map(localRows.filter((w) => w && w._localAt > fetchStart).map((w) => [w.key, w]));
+    const merged = (rows || []).map((w) => localBy.get(w.key) || w);
+    for (const [k, loc] of localBy) if (!merged.some((w) => w && w.key === k)) merged.unshift(loc);
+    S._watchRows = merged;
     S._watchAt = Date.now();
     S.watchMap = Object.fromEntries(S._watchRows.map((w) => [w.key, w]));
     return S._watchRows;
-  }).catch((e) => {
+  })().catch((e) => {
     S._watchRows = [];
     S.watchMap = {};
     throw e;
@@ -5290,7 +5317,11 @@ async function prepareHomeTvNext(cw, timeoutMs = HOME_NEXT_WAIT_MS) {
   }
   if (Array.isArray(S._homeTvNext)) return true;
   if (!S._homeTvNextJob) {
-    S._homeTvNextJob = api('/api/watch/next' + profileQ())
+    // Ordered behind pending watch POSTs: /api/watch/next is computed from the SERVER's watch
+    // store, so answering before the just-finished episode's save landed produced a stale
+    // next-up card that then got CACHED under the fresh fingerprint ("next episode doesn't
+    // update right away"). The HOME_NEXT_WAIT_MS race below still bounds home's first paint.
+    S._homeTvNextJob = watchPostsSettled().then(() => api('/api/watch/next' + profileQ()))
       .then((items) => {
         if (S._homeTvNextFp === fp) S._homeTvNext = items || [];
         return S._homeTvNext;
@@ -5656,7 +5687,7 @@ async function loadRows(opts = {}) {
 async function cwOp(it, body, msg, opts = {}) {
   const snap = opts.focusSnapshot || (S.view === 'home' ? homeFocusSnapshot() : null);
   try {
-    await api('/api/watch', { method: 'POST', body: { key: it.key, profile: S.profile ? S.profile.id : undefined, meta: wlMeta(it), ...body } });
+    await trackWatchPost(api('/api/watch', { method: 'POST', body: { key: it.key, profile: S.profile ? S.profile.id : undefined, meta: wlMeta(it), ...body } }));
     if (body.hidden) {
       // Durably remember the dismissal (survives the loadWatchState reload below + app restarts),
       // so the next-episode generator never regenerates this card.
@@ -5722,7 +5753,7 @@ async function markItemWatched(it, watched) {
     } catch (e) { return toast(e.message); }
   } else {
     try {
-      await api('/api/watch', { method: 'POST', body: { key: it.key, profile: S.profile ? S.profile.id : undefined, meta: wlMeta(it), ...(watched ? { watched: true, position: 0, duration: 0 } : { remove: true, unwatch: true }) } });
+      await trackWatchPost(api('/api/watch', { method: 'POST', body: { key: it.key, profile: S.profile ? S.profile.id : undefined, meta: wlMeta(it), ...(watched ? { watched: true, position: 0, duration: 0 } : { remove: true, unwatch: true }) } }));
       invalidateWatchCache();
     } catch (e) { return toast(e.message); }
     if (watched) S.watchMap[it.key] = { watched: true, position: 0, duration: 0 }; else delete S.watchMap[it.key];
@@ -7784,10 +7815,10 @@ async function setLocalEpisodeWatched(item, watched, seasonNumber) {
   if (watched) S.watchMap[item.key] = { watched: true, position: 0, duration: 0 };
   else delete S.watchMap[item.key];
   try {
-    await api('/api/watch', { method: 'POST', body: {
+    await trackWatchPost(api('/api/watch', { method: 'POST', body: {
       key: item.key, watched, unwatch: !watched || undefined, position: 0, duration: 0,
       profile: S.profile ? S.profile.id : undefined, meta: wlMeta(item),
-    } });
+    } }));
     invalidateWatchCache();
   } catch {}
   openLocalShowSeasonEpisodes(S.detailItem, seasonNumber);
@@ -7820,7 +7851,7 @@ async function setEpisodeWatched(item, ep, show, seasonNumber, watched) {
   if (watched) S.watchMap[item.key] = { watched: true, position: 0, duration: 0 };
   else delete S.watchMap[item.key];
   try {
-    await api('/api/watch', { method: 'POST', body: { key: item.key, watched, unwatch: !watched || undefined, position: 0, duration: ep.runtime ? ep.runtime * 60 : 0, profile: S.profile ? S.profile.id : undefined, meta: { title: show.title, type: 'episode', tmdbId: show.tmdbId } } });
+    await trackWatchPost(api('/api/watch', { method: 'POST', body: { key: item.key, watched, unwatch: !watched || undefined, position: 0, duration: ep.runtime ? ep.runtime * 60 : 0, profile: S.profile ? S.profile.id : undefined, meta: { title: show.title, type: 'episode', tmdbId: show.tmdbId } } }));
     invalidateWatchCache();
   } catch {}
   // Re-render to update the watched badge, then keep D-pad focus PUT: advance to the next episode
@@ -8009,7 +8040,7 @@ $('dPlayed').addEventListener('click', async () => {
   $('dPlayed').classList.toggle('on', nowWatched);
   S.watchMap[it.key] = { ...(w || {}), watched: nowWatched };
   try {
-    await api('/api/watch', { method: 'POST', body: { key: it.key, watched: nowWatched, unwatch: !nowWatched || undefined, position: 0, duration: w ? w.duration : 0, profile: S.profile ? S.profile.id : undefined, meta: wlMeta(it) } });
+    await trackWatchPost(api('/api/watch', { method: 'POST', body: { key: it.key, watched: nowWatched, unwatch: !nowWatched || undefined, position: 0, duration: w ? w.duration : 0, profile: S.profile ? S.profile.id : undefined, meta: wlMeta(it) } }));
     invalidateWatchCache();
     toast(nowWatched ? 'Marked as watched' : 'Marked unwatched');
   }
@@ -8944,7 +8975,7 @@ function saveMultiViewVodProgress(i, final = false) {
   // A final Multiview checkpoint is commonly followed immediately by Back, app background, or
   // page teardown. Keep it alive just like the main player's final save so Continue Watching does
   // not fall back to the previous ten-second interval tick.
-  const job = api('/api/watch', { method: 'POST', body: payload, keepalive: !!final }).catch(() => {});
+  const job = trackWatchPost(api('/api/watch', { method: 'POST', body: payload, keepalive: !!final })).catch(() => {});
   if (final) {
     slot._finalWatchKey = finalKey;
     slot._finalWatchAt = Date.now();
@@ -12170,7 +12201,7 @@ async function saveWatch(final, opts = {}) {
   });
   // keepalive on final saves (player close / pagehide) so the request survives the page being torn
   // down or the app backgrounding — a normal fetch would be cancelled and the last position lost.
-  const job = api('/api/watch', { method: 'POST', body: payload, keepalive: !!final }).catch(() => {});
+  const job = trackWatchPost(api('/api/watch', { method: 'POST', body: payload, keepalive: !!final })).catch(() => {});
   if (final) {
     p._finalWatchKey = finalKey;
     p._finalWatchAt = Date.now();

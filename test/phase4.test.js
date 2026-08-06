@@ -214,10 +214,11 @@ test('final watch checkpoints coalesce duplicate lifecycle beacons without hidin
   const calls = [];
   const player = { item: { key: 'tmdb:movie:77' }, lastSaved: 0 };
   const S = { playing: player, profile: { id: 'living-room' } };
-  const saveWatch = new Function('S', 'currentTime', 'totalDuration', 'wlMeta', 'upsertWatchCache', 'api',
+  const saveWatch = new Function('S', 'currentTime', 'totalDuration', 'wlMeta', 'upsertWatchCache', 'api', 'trackWatchPost',
     `${ui.slice(start, end)}\nreturn saveWatch;`)(
       S, () => 321.9, () => 3600, () => ({ title: 'Checkpoint' }), () => {},
-      async (url, opts) => { calls.push({ url, opts }); return { ok: true }; });
+      async (url, opts) => { calls.push({ url, opts }); return { ok: true }; },
+      (job) => job);
 
   const first = saveWatch(true);
   const duplicate = saveWatch(true);
@@ -564,6 +565,19 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'poster-card captions rest invisible and reveal on hover/focus (quiet grids)');
   assert.match(ui, /\.railBtn\[data-nav="search"\],\.railBtn\[data-nav="movies"\],#navLiveTv,#navMusic\{margin-top:14px\}[\s\S]+#railAddLib\{margin-top:auto;opacity:\.7\}/,
     'the rail groups into sections and sinks Add library to the bottom');
+  // Watch-write ordering (stale Continue Watching fix): server reads DERIVED from watch state
+  // must never race an in-flight watch POST — the refetch used to answer from pre-save server
+  // state and clobber the fresh local cache; /api/watch/next cached its stale answer under the
+  // fresh fingerprint. Every watch POST is tracked; both derived reads await the pending set,
+  // and rows upserted DURING a refetch win the merge.
+  assert.match(ui, /function trackWatchPost\(job\) \{[\s\S]+S\._pendingWatchPosts\.add\(job\);[\s\S]+function watchPostsSettled\(\) \{/,
+    'watch POSTs register in a pending set that derived reads can await');
+  assert.match(ui, /S\._watchJob = \(async \(\) => \{[\s\S]{0,600}await watchPostsSettled\(\);[\s\S]{0,900}const localBy = new Map\(localRows\.filter\(\(w\) => w && w\._localAt > fetchStart\)/,
+    'the /api/watch refetch waits for pending saves and lets mid-fetch local upserts win the merge');
+  assert.match(ui, /S\._homeTvNextJob = watchPostsSettled\(\)\.then\(\(\) => api\('\/api\/watch\/next' \+ profileQ\(\)\)\)/,
+    'the next-episode row fetch is ordered behind pending watch saves');
+  assert.ok((ui.match(/trackWatchPost\(api\('\/api\/watch', \{ method: 'POST'/g) || []).length >= 6,
+    'every watch POST site routes through the pending-post tracker');
   assert.doesNotMatch(ui, /resumeMode/,
     'movie/show detail Play, Continue, and Resume no longer need icon-specific state styling');
   assert.match(ui, /function captureDetailReturn\(\) \{[\s\S]+view: S\.view \|\| 'home'[\s\S]+rowIdx: S\.rowIdx \|\| 0[\s\S]+colIdx: \{ \.\.\.\(S\.colIdx \|\| \{\}\) \}[\s\S]+gridIdx: activeGridIdx\(\)[\s\S]+searchQuery: \$\('searchInput'\)\.value/,
@@ -4389,8 +4403,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Multiview hover should move active audio without stealing keyboard focus');
   assert.match(ui, /const back = el\.querySelector\('\.mvBackBtn'\);[\s\S]+const play = el\.querySelector\('\.mvPlayBtn'\);[\s\S]+const fwd = el\.querySelector\('\.mvFwdBtn'\);[\s\S]+multiViewVodSeek\(slot\(\), -10\)[\s\S]+multiViewVodTogglePlay\(slot\(\)\)[\s\S]+multiViewVodSeek\(slot\(\), 30\)/,
     'VOD Multiview transport buttons should be clickable as pane actions');
-  assert.match(ui, /function saveMultiViewVodProgress\(i, final = false\) \{[\s\S]+api\('\/api\/watch', \{ method: 'POST', body: payload, keepalive: !!final \}\)\.catch\(\(\) => \{\}\);[\s\S]+function cleanupMultiViewSlot\(i, clearItem = false\) \{[\s\S]+saveMultiViewVodProgress\(i, true\);[\s\S]+cleanupLiveMse\('multi' \+ i\);[\s\S]+v\.removeAttribute\('src'\);[\s\S]+v\.src = '';[\s\S]+if \(clearItem && S\.multiView && S\.multiView\.slots\) S\.multiView\.slots\[i\] = null;/,
-    'Multiview cleanup should keep the final VOD progress write alive, stop each pane, clear the media element, and release the pane item');
+  assert.match(ui, /function saveMultiViewVodProgress\(i, final = false\) \{[\s\S]+trackWatchPost\(api\('\/api\/watch', \{ method: 'POST', body: payload, keepalive: !!final \}\)\)\.catch\(\(\) => \{\}\);[\s\S]+function cleanupMultiViewSlot\(i, clearItem = false\) \{[\s\S]+saveMultiViewVodProgress\(i, true\);[\s\S]+cleanupLiveMse\('multi' \+ i\);[\s\S]+v\.removeAttribute\('src'\);[\s\S]+v\.src = '';[\s\S]+if \(clearItem && S\.multiView && S\.multiView\.slots\) S\.multiView\.slots\[i\] = null;/,
+    'Multiview cleanup should keep the tracked final VOD progress write alive, stop each pane, clear the media element, and release the pane item');
   assert.match(ui, /function multiViewActionButtons\(slot = multiViewActiveSlot\(\)\) \{[\s\S]+const isVod = root\.classList\.contains\('vod'\);[\s\S]+filter\(\(btn\) => isVod \|\| !btn\.classList\.contains\('mvVodOnly'\)\);/,
     'Multiview action focus should skip hidden VOD transport buttons on Live TV panes');
   assert.match(ui, /function openMultiViewActions\(slot = multiViewActiveSlot\(\)\) \{[\s\S]+S\.multiViewActionIdx = multiViewSlotIsVod\(pane\) \? 1 : 0;[\s\S]+return setMultiViewActionFocus\(S\.multiViewActionIdx\);/,
