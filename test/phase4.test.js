@@ -377,14 +377,19 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Play should compute quality before the local shortcut so selected 4K cannot be replaced by a local 1080p file');
   assert.match(ui, /catch \(e\) \{[\s\S]+if \(S\._playTicket !== playTicket \|\| S\.view !== 'player'\) return;[\s\S]+if \(localExact && !picked && \/no playable\|no \.\*candidate\|all candidates failed\/i\.test\(String\(e && e\.message \|\| ''\)\)\) \{[\s\S]+return playLocal\(localExact, \{ replacementStarted: true, nativeFirst, playTicket \}\);[\s\S]+\}/,
     'Local library files should fall back to disk playback when online source search has no playable candidate');
+  // Redesign 2026-08-06: facts lead the row (Sora), the raw release name is the quiet mono
+  // subtitle, and rows are flat/borderless with the shared gold bar for selection.
   assert.ok([
     '#srcSort button{height:34px',
     '.srcRow{position:relative;overflow:visible;width:100%;box-sizing:border-box;border-radius:13px',
     'display:flex;flex-direction:column',
     '.srcRow .srcBadges{display:flex',
-    '.srcRow .srcMeta{font:650 11.3px',
+    '.srcRow .srcMeta{font:700 13.5px "Sora"',
+    '.srcRow .name{font:600 11.5px "JetBrains Mono"',
   ].every((s) => ui.includes(s)),
-    'Sources drawer rows should be a less busy TV picker: title, badges, one compact metadata line');
+    'Sources drawer rows lead with the facts line and demote the raw release name');
+  assert.match(ui, /\.srcRow:hover,\.srcRow\.focus\{background:rgba\(255,255,255,\.11\)\}[\s\S]{0,200}\.srcRow:hover::after,\.srcRow\.focus::after\{background:var\(--focus\)\}/,
+    'source rows select with a flat brighter fill + the gold bar (same language as the left menu)');
   assert.match(ui, /const meta = \[[\s\S]+fmtAttr\(a\.source\),[\s\S]+fmtAttr\(a\.codec\),[\s\S]+audioInfo\(a\),[\s\S]+a\.group \|\| '',[\s\S]+c\.indexer \|\| 'Unknown',[\s\S]+\]\.filter\(Boolean\)\.join\(' · '\)/,
     'Sources drawer should still expose source, codec, audio, group, and indexer in the compact line');
   assert.match(ui, /<div id="srcSort"[\s\S]+data-src-sort="best" class="focusable sel"[\s\S]+data-src-sort="largest" class="focusable"[\s\S]+data-src-sort="smallest" class="focusable"[\s\S]+if \(S\.sourceSort === 'largest'\)[\s\S]+if \(S\.sourceSort === 'smallest'\)/,
@@ -570,24 +575,70 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'the boot splash lane fills forward-only from real boot stages');
   assert.ok(ui.includes("splashStage(40)") && ui.includes("splashStage(72)") && ui.includes("splashStage(100)"),
     'server-answered, watch-ready, and boot-ready each advance the splash lane');
-  assert.match(ui, /@property --ambR\{syntax:'<number>';inherits:true;initial-value:193\}[\s\S]+body\{transition:--ambR 1\.2s ease/,
+  assert.match(ui, /@property --ambR\{syntax:'<number>';inherits:true;initial-value:193\}[\s\S]+body\{transition:--ambR 2\.2s ease/,
     'ambient color channels are registered numeric properties so the glow crossfades');
-  assert.match(ui, /function applyAmbient\(it\) \{[\s\S]{0,400}setProperty\('--ambR', c\[0\]\)/,
-    'the focused/opened title drives the ambient color');
+  assert.match(ui, /function applyAmbientArt\(url\) \{[\s\S]{0,400}setProperty\('--ambR', c\[0\]\)/,
+    'the art on screen drives the ambient color');
   assert.ok(ui.includes('applyAmbient(it);') && /setHero\(it\) \{[\s\S]{0,300}applyAmbient\(it\);/.test(ui),
     'hero focus and detail open both apply the per-title ambient');
   assert.match(ui, /function wireBackdropScrollFade\(el\) \{[\s\S]{0,400}1 - el\.scrollTop \/ 360/,
     'content scroll fades the backdrop away over the first ~360px');
   assert.match(ui, /#hero h1,#dTitle\{height:150px;display:flex;align-items:flex-end/,
     'hero and detail titles are fixed-height bottom-aligned slots (no row/page shifting)');
-  assert.match(ui, /#hero p,#dOverview,#dMeta,#dCrew,\.metaLine\{color:rgba\(238,233,245,\.88\)\}/,
-    'story and meta text reads near-white');
+  assert.match(ui, /#hero p,#dOverview,#dMeta,#dCrew,\.metaLine\{color:rgba\(var\(--fg\),\.88\)\}/,
+    'story and meta text reads near-white through the --fg token');
   assert.match(ui, /#detail \.dInfo \.eyebrow\{display:none\}/,
     'the redundant SHOW/MOVIE eyebrow above detail titles is gone');
   assert.ok((ui.match(/setBackdrop\(it\.backdrop \|\| it\.poster\)/g) || []).length >= 7,
     'titles without a backdrop fall back to their poster art everywhere the backdrop is set');
   assert.match(ui, /el\.classList\.contains\('pcard'\) && el\.dataset\.relIdx !== undefined[\s\S]{0,400}openItemMenu\(rit, el\)/,
     'related covers on the detail page open the shared hold-OK action menu like home rows');
+  // ---- v2.8.6 design/UX contracts (owner audit, 2026-08-06) ----
+  assert.match(ui, /function pushLocalDetailRoute\(it\) \{[\s\S]{0,400}setRoute\(`#\/library\/\$\{libId\}\/item\/\$\{idx\}`\)/,
+    'local-library detail pages push their own history entry (Back returns to the library, not an earlier title)');
+  assert.ok(/function openLocalDetail\(it\) \{\s*\n\s*(?:\/\/[^\n]*\n\s*)*pushLocalDetailRoute\(it\);/.test(ui)
+    && /async function openLocalShowDetail\(it\) \{\s*\n\s*pushLocalDetailRoute\(it\);/.test(ui),
+    'both local detail entry points push that route');
+  assert.match(ui, /function applyAmbientArt\(url\)/,
+    'ambient colour is driven by the art URL, so every page gets it');
+  assert.match(ui, /applyAmbientArt\(u\); \/\/ the glow tracks the art on screen, on every page/,
+    'setBackdrop — the one chokepoint every surface uses — drives the ambient glow');
+  assert.match(ui, /body\{transition:--ambR 2\.2s ease/, 'the ambient fade is slow/cinematic');
+  assert.match(ui, /const buckets = new Map\(\); \/\/ hue bucket[\s\S]{0,1400}if \(top && top\.w > 1\.2\)/,
+    'ambient colour comes from a dominant-hue histogram, not the single most extreme pixel');
+  assert.match(ui, /#rail:not\(\.expanded\):not\(:hover\)\{opacity:\.62\}/,
+    'the compact rail recedes as a whole surface, not just its icons');
+  assert.match(ui, /function focusSearchMic\(\) \{[\s\S]{0,600}requestAnimationFrame\(\(\) => \{ if \(document\.activeElement !== mic && S\.view === 'search'\) land\(\); \}\)/,
+    'Search lands on the mic and re-tries once if the WebView drops the first focus');
+  assert.ok((ui.match(/focusSearchMic\(\)/g) || []).length >= 4,
+    'every search-entry path routes through the mic-landing helper');
+  assert.match(ui, /function fitRailWidth\(\) \{[\s\S]{0,1200}Math\.min\(RAIL_W_MAX, Math\.max\(RAIL_W_MIN, 60 \+ widest \+ 18\)\)/,
+    'the expanded rail is measured from its widest label and clamped');
+  assert.match(ui, /body\.tv #rail:hover,#rail\.expanded,body\.railOpen #rail\{width:var\(--railExpandedW,236px\)\}/,
+    'the rail uses the measured width with a safe fallback');
+  assert.match(ui, /if \(seasons\.length === 1\) openSeasonEpisodes\(it, seasons\[0\]\.season_number, \{ auto: true \}\);\s*\n\s*else renderSeasonGrid\(it, seasons\);/,
+    'a one-season show opens straight to its episodes; multi-season keeps the chooser');
+  assert.match(ui, /if \(opts\.auto && \(S\.detailSeasons \|\| \[\]\)\.length <= 1\) \{\s*\n\s*tabs\.style\.display = 'none';/,
+    'the single-season shortcut also hides the pointless season/all-seasons strip');
+  // The ring is a HAIRLINE accent + real elevation (a 2px saturated band read as a gold picture
+   // frame around every tile), and it is shared by every artwork surface.
+  assert.match(ui, /body \.playerEpCard\.focus \.peStill,body \.playerEpCard:focus-visible \.peStill[\s\S]{0,500}box-shadow:0 0 0 1px var\(--focusSoft\),0 4px 12px rgba\(0,0,0,\.45\) !important/,
+    'every artwork tile — including the in-player episode strip — shares one hairline focus ring');
+  assert.ok(!/box-shadow:inset 0 0 0 3px var\(--focus\),0 0 18px var\(--artFocusGlow\)/.test(ui),
+    'the old thick amber ring on in-player episode stills is gone');
+  assert.match(ui, /\.gChip,\.seasonChip,\.ghostMini,\.testBtn,#trailerWl,\s*\n\.levelPick button,\.sizePick button,\.mvActions\{border:0 !important\}/,
+    'controls across every surface lose their hairline borders (one flat pill family)');
+  assert.match(ui, /#appLoader \.brandWordmarkClip\{width:330px;height:92px/,
+    'the boot splash wordmark is the larger size');
+  // Android TV performance: live backdrop-blur on large surfaces (rail, settings panels) and the
+  // always-on backdrop drift are the expensive effects on a Shield-class GPU — TV keeps the look
+  // with opaque fills and no per-frame blur/animation. Desktop keeps the real glass.
+  assert.match(ui, /body\.tv #rail,\s*\nbody\.tv \.railBtn\.active,\s*\nbody\.tv \.panel,[\s\S]{0,200}backdrop-filter:none !important\}/,
+    'TV disables live backdrop blur on the rail, settings panels, tabs, and the back button');
+  assert.match(ui, /body\.tv #backdrop \.layer\.show\{animation:none\}/,
+    'the idle backdrop drift is held still on TV');
+  assert.match(ui, /\.cards\{display:flex;gap:14px;overflow-x:auto;padding:10px 14px;margin:0 -14px\}/,
+    'scroll rows reserve focus-shadow room (negative margin keeps alignment) so the ring never clips');
   // Watch-write ordering (stale Continue Watching fix): server reads DERIVED from watch state
   // must never race an in-flight watch POST — the refetch used to answer from pre-save server
   // state and clobber the fresh local cache; /api/watch/next cached its stale answer under the
@@ -926,6 +977,22 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'TV details opened from an added library should hydrate all local episode ownership before availability/play targets are calculated');
   assert.match(ui, /async function checkAvailability\(it\) \{[\s\S]+const hasLocal = localTitleHasPlayback\(it\);[\s\S]+if \(hasLocal && localPlaybackRankForItem\(it\) === 4\) \{[\s\S]+\$\(\'qToggle\'\)\.style\.display = 'none';[\s\S]+api\('\/api\/search\?' \+ sourceSearchQuery\(it, \{ includeQuality: false \}\)\)[\s\S]+has4k && userCanPlay4k\(\) && \(hasLower \|\| \(hasLocal && localRank !== 4\)\)[\s\S]+if \(hasLocal\) \{[\s\S]+\$\(\'dSources\'\)\.style\.display = offer \? '' : 'none';[\s\S]+return;/,
     'local-owned detail pages should still discover online 4K when the local file is lower quality, without showing unavailable');
+  // "Unplayable — no source yet" while Play WORKS: openDetail runs checkAvailability twice (once
+  // before /api/tmdb resolves imdb/tvdb, once after). The weak first pass often finds nothing, so
+  // its verdict must be (a) withheld while ids are still coming and (b) reversible by the stronger
+  // second pass. detailReq-scoped so a verdict can never leak across titles.
+  assert.match(ui, /const hadStrongIds = !!\(ids\.imdbid \|\| ids\.tvdbid\);/,
+    'availability records whether its search carried strong ids');
+  assert.match(ui, /const playable = !!\(r\.candidates && r\.candidates\.length\);/,
+    'availability records whether the search found sources');
+  assert.match(ui, /if \(playable\) \{\s*\n\s*if \(playBtn\.dataset\.availMark === String\(reqId\)\) \{[\s\S]{0,400}playBtn\.classList\.remove\('unavail'\);[\s\S]{0,300}\$\('dPlayLabel'\)\.textContent = prev;/,
+    'a later check that finds sources clears the earlier unavailable verdict and restores the label');
+  assert.match(ui, /if \(!playable && \(hadStrongIds \|\| !it\.tmdbId\)\) \{[\s\S]{0,300}playBtn\.dataset\.availMark = String\(reqId\);/,
+    'an id-less first pass never condemns a TMDB title whose ids are still resolving');
+  assert.match(ui, /\$\('dPlayLabel'\)\.textContent = playBtn\.dataset\.availPrevLabel \+ ' · no sources yet';/,
+    'the TV "no sources yet" hint rebuilds from the remembered label so it cannot stack up');
+  assert.match(ui, /delete \$\('dPlay'\)\.dataset\.availMark; delete \$\('dPlay'\)\.dataset\.availPrevLabel;/,
+    'opening a detail page starts from a clean availability verdict');
   assert.match(ui, /if \(it\._showOpen !== undefined\)[\s\S]+openLocalShowDetail\(\{ \.\.\.it, _lib: lib \}\)/,
     'unmatched local TV shows should open a details page instead of a flat episode grid');
   assert.match(ui, /async function openLocalShowDetail\(it\) \{[\s\S]+_localShow: true[\s\S]+loadAllLocalShowEpisodes\(show\._lib, show\._showOpen\)[\s\S]+S\.detailSeasons = localSeasonSummaries\(episodes\)[\s\S]+renderLocalShowSeasonGrid\(show, S\.detailSeasons\)[\s\S]+pickLocalShowPlayTarget\(show, episodes\)/,
@@ -2998,11 +3065,11 @@ test('Android native player: direct source and native chrome stay out of the web
     'focus-driven scrolling should stay smooth in browsers but use non-stacking movement on Android TV');
   assert.match(ui, /\.pcard,\.card,\.seasonCard,\.epCard,\.castCard,\.chCard,\.playerEpCard\{[\s\S]+transition:transform \.18s cubic-bezier\(\.22,1,\.36,1\),filter \.18s ease,box-shadow \.18s ease[\s\S]+\.pcard \.art,\.seasonCard \.art,\.epCard \.still,\.castCard \.ph,\.chCard \.chLogo,\.playerEpCard \.peStill\{[\s\S]+contain:paint[\s\S]+\.pcard:hover,\.pcard\.focusable\.focus,\.seasonCard:hover,\.seasonCard\.focusable\.focus,\.epCard:hover,\.epCard\.focusable\.focus,\.castCard:hover,\.castCard\.focusable\.focus\{transform:translate3d\(0,-3px,0\)/,
     'poster, episode, cast, and channel cards should animate focus with compositor-friendly transitions');
-  assert.match(ui, /\.pcard:hover \.art,\.pcard\.focus \.art,\.seasonCard:hover \.art,\.seasonCard\.focus \.art\{[\s\S]+box-shadow:0 0 0 1\.5px var\(--artFocusLine\),0 0 9px var\(--artFocusGlow\)!important\}/,
+  assert.match(ui, /\.pcard:hover \.art,\.pcard\.focus \.art,\.seasonCard:hover \.art,\.seasonCard\.focus \.art\{[\s\S]+box-shadow:0 0 0 1px var\(--focusSoft\),0 4px 12px rgba\(0,0,0,\.45\)!important\}/,
     'poster and thumbnail focus should use theme-aware thin hollow glow instead of a thick solid line');
-  assert.match(ui, /\.card:hover,\.card\.focusable\.focus\{transform:translate3d\(0,-3px,0\);box-shadow:0 0 0 1\.5px var\(--artFocusLine\),0 0 9px var\(--artFocusGlow\)\}/,
+  assert.match(ui, /\.card:hover,\.card\.focusable\.focus\{transform:translate3d\(0,-3px,0\);box-shadow:0 0 0 1px var\(--focusSoft\),0 4px 12px rgba\(0,0,0,\.45\)\}/,
     '16:9 row cards should use the same mouse hover lift and highlight as D-pad focus');
-  assert.match(ui, /\.epCard:hover,\.epCard\.focus\{box-shadow:0 0 0 1\.5px var\(--artFocusLine\),0 0 9px var\(--artFocusGlow\)\}[\s\S]+\.castCard:hover \.ph,\.castCard\.focusable\.focus \.ph\{box-shadow:0 0 0 1\.5px var\(--artFocusLine\),0 0 9px var\(--artFocusGlow\)\}/,
+  assert.match(ui, /\.epCard:hover,\.epCard\.focus\{box-shadow:0 0 0 1px var\(--focusSoft\),0 4px 12px rgba\(0,0,0,\.45\)\}[\s\S]+\.castCard:hover \.ph,\.castCard\.focusable\.focus \.ph\{box-shadow:0 0 0 1px var\(--focusSoft\),0 4px 12px rgba\(0,0,0,\.45\)\}/,
     'detail episode and cast cards should match mouse hover highlight to D-pad focus');
   assert.match(ui, /\.seasonCard \.art\{[^}]+border:0/,
     'season artwork should not show a static border when it is not focused');
@@ -3483,8 +3550,10 @@ test('Android native player: direct source and native chrome stay out of the web
   // expands via clicking the logo; navigation was already click-only.
   assert.ok(!ui.includes('railClickCollapsed'),
     'the hover-then-suppress railClickCollapsed hack is gone (hover no longer expands on desktop)');
-  assert.match(ui, /body\.tv #rail:hover,#rail\.expanded,body\.railOpen #rail\{width:236px/,
-    'the rail widens to 236px on TV hover, the .expanded class (desktop hover), or D-pad railOpen');
+  // Redesign 2026-08-06: the expanded width is MEASURED from the widest label (fitRailWidth),
+  // clamped 176–268px, with 236px kept as the pre-measurement fallback.
+  assert.match(ui, /body\.tv #rail:hover,#rail\.expanded,body\.railOpen #rail\{width:var\(--railExpandedW,236px\)\}/,
+    'the rail widens to its measured width on TV hover, the .expanded class (desktop hover), or D-pad railOpen');
   assert.match(ui, /document\.querySelectorAll\('\.railBtn\[data-nav\]'\)\.forEach\(\(b\) => b\.addEventListener\('click', \(\) => \{[\s\S]+switchView\(b\.dataset\.nav\);[\s\S]+collapseRailAfterClick\(\);[\s\S]+\}\)\)/,
     'clicking a left-menu destination navigates and collapses the rail');
   assert.match(ui, /\$\('rail'\)\.addEventListener\('mouseenter', \(\) => \{[\s\S]+if \(document\.body\.classList\.contains\('tv'\)\) return;[\s\S]+document\.body\.classList\.add\('railOpen'\);[\s\S]+\$\('rail'\)\.classList\.add\('expanded'\);/,

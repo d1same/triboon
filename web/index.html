@@ -165,7 +165,7 @@ body.shortBrowseBd:not(.tv) #bdInfo .bdiO{font-size:14.5px;line-height:1.45;-web
 @property --ambR{syntax:'<number>';inherits:true;initial-value:193}
 @property --ambG{syntax:'<number>';inherits:true;initial-value:59}
 @property --ambB{syntax:'<number>';inherits:true;initial-value:214}
-body{transition:--ambR 1.2s ease,--ambG 1.2s ease,--ambB 1.2s ease}
+body{transition:--ambR 2.2s ease,--ambG 2.2s ease,--ambB 2.2s ease} /* slow, cinematic colour drift */
 #colorBase{position:fixed;inset:0;z-index:0;pointer-events:none;
   background:radial-gradient(70% 70% at 12% 92%,rgba(var(--ambR),var(--ambG),var(--ambB),.20),transparent 60%),
              radial-gradient(55% 55% at 0% 100%,rgba(251,139,60,.16),transparent 70%),
@@ -187,6 +187,17 @@ body{transition:--ambR 1.2s ease,--ambG 1.2s ease,--ambB 1.2s ease}
   /* SAME duration + easing as the content push — different clocks made the returning
      content slide UNDER the still-wide rail on collapse. */
   transition:width .26s cubic-bezier(.22,1,.36,1),background .26s ease}
+/* Glass rail (owner call, 2026-08-06: "make the menu cooler, not a template"): a barely-there
+   frosted column — vertical ink wash + blur that lifts the page's own colour through it, one
+   hairline edge. It reads as a surface without becoming a solid slab over the artwork. */
+/* The ambient colour blobs (#colorBase/#colorGlow) sit in the bottom-left — exactly under the
+   rail — so through a purely white-tinted glass their soft edge showed as a drifting square-ish
+   patch (owner report). A themed ink base under the highlight gradient hides it while keeping the
+   panel translucent. */
+#rail{background:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.022) 42%,rgba(255,255,255,.045)),var(--soft);
+  -webkit-backdrop-filter:blur(20px) saturate(1.25);backdrop-filter:blur(20px) saturate(1.25);
+  border-right:1px solid rgba(255,255,255,.055);border-radius:0 18px 18px 0;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 18px 48px rgba(0,0,0,.32)}
 #rail.show{display:flex}
 #railMain{min-height:0;flex:1 1 auto;display:flex;flex-direction:column;align-items:stretch;gap:6px;overflow-x:hidden;overflow-y:auto;padding-bottom:4px;scroll-padding-bottom:10px;scrollbar-width:none}
 #railMain::-webkit-scrollbar{width:0;height:0}
@@ -195,7 +206,11 @@ body{transition:--ambR 1.2s ease,--ambG 1.2s ease,--ambB 1.2s ease}
    Translucent + blurred so the content stays present behind it (Plex-style). */
 /* Expanded: still NO background (owner: completely transparent) — the content pushes right,
    so labels sit over the page's own dark left gutter and stay readable. */
-body.tv #rail:hover,#rail.expanded,body.railOpen #rail{width:236px;background:none}
+/* Expanded keeps the same glass (a transparent expansion looked unfinished next to it). */
+/* Expanded width is MEASURED from the widest label (fitRailWidth) and clamped 176–268px, so the
+   menu is exactly as wide as its longest item — a long custom-library name ellipses at the cap
+   instead of stretching the menu across the screen. 236px is the pre-measurement fallback. */
+body.tv #rail:hover,#rail.expanded,body.railOpen #rail{width:var(--railExpandedW,236px)}
 /* Icons sit in a FIXED-width slot so they never move horizontally on expand/collapse;
    only the label is revealed. Slot width = collapsed inner width (84 - 2*12 padding = 60). */
 #rail .logo{width:max-content;min-width:48px;height:34px;margin:0 0 22px;flex:none;padding:0;display:flex;align-items:center;gap:10px}
@@ -203,7 +218,7 @@ body.tv #rail:hover,#rail.expanded,body.railOpen #rail{width:236px;background:no
 .railBtn{height:48px;border-radius:13px;display:flex;align-items:center;justify-content:flex-start;color:var(--muted);position:relative;padding:0;flex:none;transition:background .15s,color .15s}
 .railBtn:hover{color:var(--text);background:rgba(43,32,63,.48)}
 .railBtn svg{width:22px;height:22px;flex:none;margin:0 13px} /* fixed 13+22+13 = 48px slot, matches collapsed width */
-.railBtn .rlabel,#railUser .rlabel{max-width:0;opacity:0;overflow:hidden;white-space:nowrap;font:600 14px "Sora";transition:opacity .12s,max-width .2s}
+.railBtn .rlabel,#railUser .rlabel{max-width:0;opacity:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font:600 14px "Sora";transition:opacity .12s,max-width .2s}
 /* Wordmark next to the logo — revealed with the labels when the rail expands. */
 #rail .logo .wordmark{max-width:0;opacity:0;overflow:hidden;white-space:nowrap;
   font:800 19px "Sora";letter-spacing:-.02em;
@@ -217,7 +232,20 @@ body.tv #rail:hover .logo .wordmark,#rail.expanded .logo .wordmark,body.railOpen
   pointer-events:auto;touch-action:manipulation;-webkit-user-select:none;user-select:none}
 body.tv #rail:hover .rlabel,#rail.expanded .rlabel,body.railOpen .rlabel,
 body.tv #rail:hover #railUser .rlabel,#rail.expanded #railUser .rlabel,body.railOpen #railUser .rlabel{max-width:150px;opacity:1}
-.railBtn.active{color:var(--text);background:var(--soft)}
+/* Active item = a FLAT translucent pill. No inset light edge, no border: the top highlight read
+   as embossed/3D (owner call, 2026-08-06). Selection is carried by fill + the gold bar alone —
+   the same treatment the Sources rows use, so the two surfaces match. */
+.railBtn.active{color:var(--text);background:rgba(255,255,255,.09);border-radius:13px;box-shadow:none}
+/* COLLAPSED rail recedes as a WHOLE — the glass panel fades with its icons (fading only the
+   icons left a bright slab behind them). Hover, focus, or expanding brings the surface back. */
+#rail:not(.expanded):not(:hover){opacity:.62}
+#rail:not(.expanded):not(:hover):focus-within{opacity:1}
+#rail:not(.expanded):not(:hover) .railBtn:not(.active):not(.focus){opacity:.6}
+#rail{transition:width .26s cubic-bezier(.22,1,.36,1),background .26s ease,opacity .22s ease}
+.railBtn{transition:background .15s,color .15s,opacity .18s ease}
+#rail .railBtn:hover,#rail .railBtn.focus{opacity:1}
+/* D-pad has no hover: focusRail() adds .expanded (and body.railOpen), so entering the menu with
+   the remote restores full strength through the :not(.expanded) guard above. */
 .railBtn.active::after,.railBtn.focusable.focus::after,.railBtn:focus-visible::after{content:"";position:absolute;width:3px;height:22px;left:-12px;border-radius:4px;background:var(--focus)}
 .railBtn.focusable::before{display:none}
 .railBtn.focusable.focus,.railBtn:focus-visible{
@@ -332,9 +360,8 @@ body[data-spotlight] .railBtn.focusable.focus::after,
 body[data-spotlight] .railBtn:focus-visible::after{width:5px;height:30px;box-shadow:0 0 16px var(--focus)}
 /* Artwork stays FULLY OPAQUE at rest (owner call, 2026-08-06 — the old spotlight fade to .62
    read as washed-out covers/cast/episodes). Focus pops via the gold ring/fill alone. */
-/* In-player episode list: thick amber ring on the focused episode still (matches the rest). */
-body[data-spotlight] .playerEpCard.focus .peStill,
-body[data-spotlight] .playerEpCard:focus-visible .peStill{box-shadow:inset 0 0 0 3px var(--focus),0 0 18px var(--artFocusGlow)}
+/* (The old thick amber ring on the in-player episode still is gone — every tile now shares the
+   hairline + elevation treatment in the unified artwork-focus block below.) */
 /* Menus/overlays that hardcode a white or fixed-amber focus bg → route to the amber fill. */
 body[data-spotlight] #trackMenu button.focus,
 body[data-spotlight] .epMenu button.focus,
@@ -521,9 +548,9 @@ body[data-light="1"] .btn.primary svg{color:#F2F4F7}
 .btn.focus::before, .btn:focus-visible::before,
 button.focusable:not(.card):not(.pcard):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard).focus::before, button.focusable:not(.card):not(.pcard):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard):focus-visible::before { opacity:0 !important; }
 .btn:hover, .btn.focus, .btn:focus-visible,
-button.focusable:not(.card):not(.pcard):not(.railBtn):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard):hover,
-button.focusable:not(.card):not(.pcard):not(.railBtn):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard).focus,
-button.focusable:not(.card):not(.pcard):not(.railBtn):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard):focus-visible {
+button.focusable:not(.card):not(.pcard):not(.railBtn):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard):not(.srcRow):hover,
+button.focusable:not(.card):not(.pcard):not(.railBtn):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard):not(.srcRow).focus,
+button.focusable:not(.card):not(.pcard):not(.railBtn):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard):not(.srcRow):focus-visible {
   background: var(--btnHover) !important;
   color: var(--btnFocusText) !important;
   filter: none;
@@ -539,7 +566,7 @@ body[data-light="1"] #player,body[data-light="1"] #multiView{--fg:243,239,247}
 body[data-light="1"] #player #pGuide{--fg:18,22,28}
 #rows{display:flex;flex-direction:column;gap:16px;max-height:46vh;overflow-y:auto}
 .row h2{font:600 15px "Sora";color:var(--muted);letter-spacing:.02em;margin:0 0 10px 4px}
-.cards{display:flex;gap:14px;overflow-x:auto;padding:8px 4px}
+.cards{display:flex;gap:14px;overflow-x:auto;padding:10px 14px;margin:0 -14px} /* padding = focus-shadow room; negative margin keeps the row aligned */
 .card{flex:0 0 292px;aspect-ratio:16/9;border-radius:var(--r);background-size:cover;background-position:center;position:relative;overflow:hidden;background-color:var(--raise)}
 .card .label{position:absolute;left:0;right:0;bottom:0;padding:26px 12px 10px;font:600 13px "Sora";background:linear-gradient(0deg,rgba(11,8,18,.92),transparent);text-align:left}
 .card .pb{position:absolute;left:0;bottom:0;height:3px;background:var(--grad)}
@@ -741,27 +768,89 @@ body.tv #filterMenu{backdrop-filter:none}
 #drawer .drawerClose svg{width:16px;height:16px}
 #drawer .sub{color:var(--muted);font-size:13px;margin-bottom:18px;line-height:1.45}
 #srcSort{display:none;gap:8px;margin:-4px 0 14px;flex-wrap:wrap}
-#srcSort button{height:34px;border-radius:999px;padding:0 14px;background:var(--btn);border:1px solid rgba(255,255,255,.045);color:var(--muted);font:800 10px "JetBrains Mono";letter-spacing:.06em;text-transform:uppercase}
-#srcSort button:hover,#srcSort button.focus{background:var(--btnHover);border-color:transparent;color:var(--btnFocusText);box-shadow:inset 3px 0 0 var(--focus)}
-#srcSort button.sel{background:var(--btnSelected);border-color:transparent;color:var(--text)}
+/* Sort pills follow the same flat borderless language as the rows and the left menu. */
+#srcSort button{height:34px;border-radius:999px;padding:0 14px;background:rgba(255,255,255,.05);border:0;color:var(--muted);font:800 10px "JetBrains Mono";letter-spacing:.06em;text-transform:uppercase}
+#srcSort button:hover,#srcSort button.focus{background:var(--btnHover);color:var(--btnFocusText);box-shadow:none}
+#srcSort button.sel{background:rgba(255,255,255,.12);color:var(--text)}
 #srcSort button.sel.focus{background:var(--btnSelectedHover);color:var(--text)}
 #srcList{overflow-y:auto;display:flex;flex-direction:column;gap:9px;padding:8px 5px 14px;margin:0 -5px;min-height:0}
-.srcRow{position:relative;overflow:visible;width:100%;box-sizing:border-box;border-radius:13px;background:var(--raise);border:1px solid var(--line);padding:12px 14px;display:flex;flex-direction:column;gap:7px;text-align:left;align-items:stretch;justify-content:stretch;transition:background .15s,border-color .15s,transform .15s}
-.srcRow:hover{background:var(--surface);border-color:var(--line)}
-.srcRow .srcTop{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:12px;min-width:0;width:100%}
-.srcRow .srcTitle{min-width:0;display:flex;flex-direction:column;gap:6px}
-.srcRow .name{font:750 13.5px "Albert Sans";line-height:1.25;color:var(--text);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere}
-.srcRow .srcBadges{display:flex;align-items:flex-start;justify-content:flex-end;gap:5px;flex-wrap:wrap;max-width:190px}
-.srcRow .srcMeta{font:650 11.3px "Albert Sans";line-height:1.35;color:rgba(232,224,239,.76);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.srcRow .chip{padding:3px 7px;border-radius:999px;background:rgba(var(--fg),.07);border:1px solid rgba(var(--fg),.1);font:800 8.5px "JetBrains Mono";letter-spacing:.035em;text-transform:uppercase;color:rgba(var(--fg),.72)}
+/* Source rows (owner-approved redesign, 2026-08-06): FACTS lead — source/codec/group in Sora on
+   line one, the raw release name demoted to a single quiet mono line. Flat translucent fills, no
+   borders and no inset light edge (that read as embossed); selection = brighter fill + the gold
+   bar, exactly like the left menu's active item, so the two surfaces match. */
+.srcRow{position:relative;overflow:visible;width:100%;box-sizing:border-box;border-radius:13px;background:rgba(255,255,255,.05);border:0;padding:11px 14px;display:flex;flex-direction:column;gap:5px;text-align:left;align-items:stretch;justify-content:stretch;transition:background .15s,transform .15s}
+.srcRow::after{content:"";position:absolute;left:0;top:9px;bottom:9px;width:3px;border-radius:3px;background:transparent;transition:background .15s}
+.srcRow:hover,.srcRow.focus{background:rgba(255,255,255,.11)}
+.srcRow:hover::after,.srcRow.focus::after{background:var(--focus)}
+.srcRow .srcTop{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px;min-width:0;width:100%}
+.srcRow .srcTitle{min-width:0;display:flex;flex-direction:column;gap:2px}
+.srcRow .name{font:600 11.5px "JetBrains Mono";line-height:1.3;color:rgba(var(--fg),.6);overflow:hidden;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow-wrap:anywhere;order:2}
+.srcRow:hover .name,.srcRow.focus .name{color:rgba(var(--fg),.8)}
+.srcRow .srcBadges{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:wrap}
+.srcRow .srcMeta{font:700 13.5px "Sora";line-height:1.3;color:rgba(var(--fg),.94);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;order:1}
+.srcRow .chip{padding:4px 9px;border-radius:999px;background:rgba(var(--fg),.08);border:0;font:800 9.5px "JetBrains Mono";letter-spacing:.035em;text-transform:uppercase;color:rgba(var(--fg),.72)}
+.srcRow:hover .chip,.srcRow.focus .chip{background:rgba(var(--fg),.16);color:rgba(var(--fg),.9)}
 .srcRow .chip.auto{background:rgba(237,232,245,.9);color:#160a04;border-color:transparent}
 .srcRow .chip.ok{color:#bdf3c5;border-color:rgba(189,243,197,.2);background:rgba(58,110,69,.16)}
 .srcRow .chip.warn{color:#ffd19a;border-color:rgba(255,209,154,.22);background:rgba(116,72,37,.18)}
-.srcRow.auto{box-shadow:inset 3px 0 0 var(--focus);background:linear-gradient(135deg,var(--artFocusGlow),transparent 55%),var(--soft)}
-.srcRow.focusable::after{content:"";position:absolute;inset:-3px;border-radius:16px;border:2px solid var(--focus);opacity:0;pointer-events:none}
-.srcRow.focusable.focus::after,.srcRow:focus-visible::after{opacity:1}
+/* Auto-pick row: a flat, slightly brighter fill + the same gold bar. (Was a gradient wash with an
+   inset edge — the extra depth cue fought the flat language.) The AUTO PICK chip does the labelling. */
+.srcRow.auto{background:rgba(255,255,255,.085)}
+.srcRow.auto::after{background:var(--focus)}
+/* ONE focus affordance for the drawer: the gold left bar defined above (no 2px ring box — the
+   owner asked for no borders, and a ring plus a bar was two cues for one state). */
 .srcRow.focusable.focus{transform:none}
 
+/* ============================================================================
+   UNIFIED CONTROL + ARTWORK-FOCUS FAMILY (owner audit, 2026-08-06)
+   One language everywhere — music, movies, TV, library, search, Live TV,
+   audiobooks, player, modals — matching the detail page:
+     · controls  = flat translucent pills, NO hairline border, no inset light
+     · artwork   = ONE ring language: a clean accent outline + a soft halo,
+                   strong enough to read from the couch, never a heavy glow
+   Placed late so it settles the per-surface rules defined above.
+   ========================================================================== */
+.gChip,.seasonChip,.ghostMini,.testBtn,#trailerWl,
+.levelPick button,.sizePick button,.mvActions{border:0 !important}
+.gChip,.seasonChip,.levelPick button,.sizePick button{border-radius:999px}
+.gChip,.ghostMini,.levelPick button,.sizePick button,.seasonChip{background:rgba(255,255,255,.06)}
+/* The login/gate primary followed its own recipe — route it to the white primary like Play. */
+.gateCard .btn.primary{background:#FFFFFF!important;color:#0B0812!important;border:0!important}
+body[data-light="1"] .gateCard .btn.primary{background:#1A1E24!important;color:#F2F4F7!important}
+/* ---- artwork focus: identical ring on every tile, INCLUDING the in-player episode strip ----
+   `body ` prefixes are deliberate: several per-surface rules defined LATER also use !important,
+   and this one has to settle them all so every tile reads the same. */
+body .pcard.focus .art,body .pcard:focus-visible .art,
+body .card.focus,body .card:focus-visible,
+body .seasonCard.focus .art,body .seasonCard:focus-visible .art,
+body .epCard.focus .still,body .epCard:focus-visible .still,
+body .castCard.focus .ph,body .castCard:focus-visible .ph,
+body .chCard.focus .chLogo,body .chCard:focus-visible .chLogo,
+body .playerEpCard.focus .peStill,body .playerEpCard:focus-visible .peStill,
+body .abCard.focus .art,body .abCard:focus-visible .art,
+body .mCard.focus .art,body .mCard:focus-visible .art{
+  /* A HAIRLINE accent + real elevation — not a painted frame. The 2px saturated band read as a
+     heavy gold border around every tile (owner: "looks disgusting"); depth does the work now and
+     the accent is just enough to say "this one". */
+  box-shadow:0 0 0 1px var(--focusSoft),0 4px 12px rgba(0,0,0,.45) !important;
+  transition:box-shadow .14s ease}
+/* ---- Android TV performance profile (2026-08-06) ----
+   Real-time backdrop blur is the single most expensive effect on a Shield-class GPU: the rail and
+   the settings panels are LARGE surfaces composited over scrolling artwork, so every frame pays
+   for a full-surface blur. On TV the glass look is kept with slightly more opaque fills and NO
+   live blur — visually near-identical from the couch, materially cheaper per frame. Desktop
+   browsers (where the GPU budget is not the constraint) keep the real blur. */
+body.tv #rail,
+body.tv .railBtn.active,
+body.tv .panel,
+body.tv #setTabs button,body.tv #prefTabs button,
+body.tv #detail .back,body.tv #person .back{
+  -webkit-backdrop-filter:none !important;backdrop-filter:none !important}
+body.tv #rail{background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03) 42%,rgba(255,255,255,.05)),var(--panel)}
+body.tv .panel{background:var(--panel)}
+/* The idle backdrop drift is a composited transform, but on TV it runs behind every page for the
+   whole session — hold it still there and keep the motion for desktop. */
+body.tv #backdrop .layer.show{animation:none}
 /* ---------- player ---------- */
 #player{position:fixed;inset:0;z-index:30;background:#000;display:none}
 #player.open{display:block}
@@ -1060,12 +1149,17 @@ body.tv #vlcCopy{display:none}
 #settings .sub,#prefs .sub{color:var(--muted);margin-bottom:22px}
 #settings h1,#settings>.sub,#prefs h1,#prefs>.sub{grid-column:1/-1}
 #setTabs,#prefTabs{grid-column:1;position:sticky;top:18px;display:flex;flex-direction:column;gap:8px;margin:0;align-self:start}
+/* Settings tab rail: glass pills that match the left menu — translucent at rest so the page
+   colour shows through, frosted + light-edged when selected. */
 #setTabs button,#prefTabs button{display:grid;grid-template-columns:32px minmax(0,1fr);align-items:center;gap:12px;width:100%;
-  min-height:48px;text-align:left;background:var(--btn);border:0;
+  min-height:48px;text-align:left;background:rgba(255,255,255,.045);border:0;
+  -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
   border-radius:14px;color:var(--muted);font:700 13px "Albert Sans";padding:8px 13px;cursor:pointer;transition:background .15s,border-color .15s,color .15s,box-shadow .15s}
 #setTabs button svg,#prefTabs button svg{width:20px;height:20px;color:currentColor}
 #setTabs button:hover,#prefTabs button:hover{color:var(--text);background:var(--btnHover)}
-#setTabs button.on,#prefTabs button.on{color:var(--text);background:var(--btnSelected);border-color:transparent;box-shadow:inset 3px 0 0 var(--focus)}
+/* Flat selected tab: fill + the accent bar only (the inset top light read as embossed). */
+#setTabs button.on,#prefTabs button.on{color:var(--text);background:rgba(255,255,255,.10);border-color:transparent;
+  box-shadow:inset 3px 0 0 var(--focus)}
 /* Divider between the Preferences group and the folded-in Server settings group (column layout). */
 .prefTabDivider{margin:14px 6px 4px;padding-top:12px;border-top:1px solid var(--line);pointer-events:none}
 .prefTabDivider span{font:800 8.5px "JetBrains Mono";letter-spacing:.16em;text-transform:uppercase;color:var(--muted);padding:0 6px}
@@ -1079,9 +1173,19 @@ body.tv #vlcCopy{display:none}
 .setGrid[hidden]{display:none}
 #settings>.setGrid,#prefs>.setGrid{grid-column:2;grid-row:2;min-width:0} /* row 1 = .sub; the h1 is display:none, so content sits beside the tabs in row 2 */
 .setGrid .panel{max-width:none;margin-bottom:0}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;max-width:680px;margin-bottom:18px}
-.panel h2{font:700 16px "Sora";margin-bottom:4px}
-.panel p{color:var(--muted);font-size:13.5px;margin-bottom:14px}
+/* Settings surfaces (owner call, 2026-08-06: "make Settings look designed, not a template"):
+   frosted panels that let the page's ambient colour through, a hairline top light, one soft
+   drop — the same glass language as the rail — instead of flat bordered boxes. */
+.panel{background:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.028));
+  -webkit-backdrop-filter:blur(18px) saturate(1.2);backdrop-filter:blur(18px) saturate(1.2);
+  border:0;border-radius:18px;padding:22px 24px;max-width:680px;margin-bottom:18px;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 16px 40px rgba(0,0,0,.30)}
+.panel h2{font:700 15.5px "Sora";margin-bottom:5px;letter-spacing:.005em}
+/* Section label above the title, mono-caps like the row headers — gives each card a hierarchy. */
+.panel p{color:rgba(var(--fg),.66);font-size:13px;line-height:1.5;margin-bottom:16px}
+/* Rows inside a panel separate with hairlines rather than nested boxes. */
+.panel .settingsForm > .field + .field,.panel .settingsRow + .settingsRow{
+  border-top:1px solid rgba(255,255,255,.05);padding-top:14px}
 .setupSteps{margin:0 0 14px;padding-left:20px;color:var(--muted);font-size:13px;line-height:1.6;max-width:680px}
 .setupSteps li{margin:4px 0}
 .setupSteps b{color:var(--text)}
@@ -1254,7 +1358,7 @@ body.tv #vlcCopy{display:none}
 .pcard .art{border-radius:12px;transition:transform .16s ease,box-shadow .16s ease}
 .pcard.focusable::before{display:none}
 .pcard.focusable.focus{transform:none;box-shadow:none}
-.pcard:hover .art,.pcard.focus .art{transform:scale(1.045);box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 9px var(--artFocusGlow)}
+.pcard:hover .art,.pcard.focus .art{transform:scale(1.045);box-shadow:0 0 0 1px var(--focusSoft),0 4px 12px rgba(0,0,0,.45)}
 .cards{gap:18px;padding:10px 4px}
 #grid,#personGrid{grid-template-columns:repeat(auto-fill,minmax(var(--poster),1fr));gap:26px 18px}
 .filterBar select{cursor:pointer}
@@ -1277,6 +1381,16 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 /* ---------- detail redesign ---------- */
 #detail{padding:0!important;left:var(--rail)!important;overflow:hidden}
 #detail .back{position:fixed;top:22px;z-index:9;left:calc(var(--rail) + 24px);transition:left .22s ease}
+/* Back is a small ICON-ONLY disc (owner call, 2026-08-06): the word "Back" was redundant next to
+   a universally-understood arrow, and the pill crowded the title block. Glass to match the rail.
+   The label stays in the DOM for screen readers. */
+#detail .back,#person .back{width:40px;height:40px;padding:0;gap:0;border-radius:50%;justify-content:center;
+  background:rgba(255,255,255,.08);border:0;
+  -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.10);color:rgba(var(--fg),.86)}
+#detail .back .backLbl,#person .back .backLbl{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+#detail .back:hover,#detail .back.focus,#person .back:hover,#person .back.focus{
+  background:var(--btnHover);color:var(--btnFocusText)}
 .detailScroll{position:absolute;inset:0;overflow-y:auto;padding:0 var(--gut) 50px}
 .detailHero{display:flex;gap:34px;align-items:flex-end;min-height:44vh;padding-top:5vh} /* tighter above the logo (owner call) */
 #dCrew{font:500 13.5px "Albert Sans";color:var(--muted);margin:-6px 0 34px} /* breathing room before the Play row (owner call) */
@@ -1319,7 +1433,7 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 .seasonCard{flex:0 0 168px;text-align:left;background:none;display:flex;flex-direction:column;gap:8px}
 .seasonCard .art{aspect-ratio:2/3;border-radius:12px;background-size:cover;background-position:center;background-color:var(--raise);
   border:0;position:relative;transition:transform .16s,box-shadow .16s}
-.seasonCard:hover .art,.seasonCard.focus .art{transform:scale(1.04);box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 9px var(--artFocusGlow)}
+.seasonCard:hover .art,.seasonCard.focus .art{transform:scale(1.04);box-shadow:0 0 0 1px var(--focusSoft),0 4px 12px rgba(0,0,0,.45)}
 /* Count badge lives TOP-LEFT (same corner as poster-card ratings): top-right belongs to the
    watched ✓ and the hover ⋯ menu, which used to pile onto the count there (owner report). */
 .seasonCard .epbadge{position:absolute;top:8px;left:8px;background:rgba(11,8,18,.85);color:var(--amber);font:700 12px "JetBrains Mono";padding:4px 9px;border-radius:20px}
@@ -1340,7 +1454,7 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 #allSeasonsBtn{min-height:42px;border-radius:999px;padding:10px 18px;font:700 12px "Albert Sans",system-ui,sans-serif}
 
 /* Episode cards — single horizontal scroll row */
-#epGrid{display:flex;gap:18px;overflow-x:auto;padding:4px 2px 8px}
+#epGrid{display:flex;gap:18px;overflow-x:auto;padding:10px 14px 16px;margin:0 -14px} /* shadow room (see .cards) */
 /* Episode cards ARE homepage thumbnails now: the 292px 16:9 still with the episode name +
    SxxExx · air date · runtime ON the art (gradient label) — nothing below the card. */
 .epCard{flex:0 0 292px;border-radius:var(--r);overflow:hidden;background:var(--raise);border:0;text-align:left}
@@ -1364,7 +1478,7 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
   border:1px solid var(--line);border-radius:20px;padding:3px 9px;font:800 9.5px "JetBrains Mono";letter-spacing:.04em}
 .epCard .wdot{position:absolute;right:14px;top:16px;color:#7CE6A0;font:700 11px "JetBrains Mono"}
 .epCard.focusable::before{display:none}
-.epCard.focus{box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 9px var(--artFocusGlow)}
+.epCard.focus{box-shadow:0 0 0 1px var(--focusSoft),0 4px 12px rgba(0,0,0,.45)}
 
 /* =========================================================================
    Round 7 — UX polish: consistent gutters, generous breathing room, and
@@ -1410,8 +1524,8 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 /* Card focus ring: a touch tighter + always above siblings so it can't hide under them. */
 .pcard.focus,.card.focus,.seasonCard.focus,.epCard.focus,.castCard.focus{z-index:3}
 .pcard,.card,.seasonCard,.epCard,.castCard{position:relative}
-.epCard:hover,.epCard.focus{box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 9px var(--artFocusGlow)}
-.castCard:hover .ph,.castCard.focusable.focus .ph{box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 9px var(--artFocusGlow)}
+.epCard:hover,.epCard.focus{box-shadow:0 0 0 1px var(--focusSoft),0 4px 12px rgba(0,0,0,.45)}
+.castCard:hover .ph,.castCard.focusable.focus .ph{box-shadow:0 0 0 1px var(--focusSoft),0 4px 12px rgba(0,0,0,.45)}
 /* Ring the PHOTO only — the card-wide gradient ring + drop shadow "highlighted" the name
    text too, which read as a glitch. */
 .castCard.focusable.focus{transform:none;box-shadow:none}
@@ -1460,16 +1574,16 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
   transition:transform .18s cubic-bezier(.22,1,.36,1),filter .18s ease,box-shadow .18s ease}
 .pcard .art,.seasonCard .art,.epCard .still,.castCard .ph,.chCard .chLogo,.playerEpCard .peStill{
   transition:box-shadow .18s ease,filter .18s ease,opacity .18s ease;backface-visibility:hidden;contain:paint}
-.pcard:hover .art,.pcard.focus .art,.seasonCard:hover .art,.seasonCard.focus .art{transform:none!important;box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 9px var(--artFocusGlow)!important}
+.pcard:hover .art,.pcard.focus .art,.seasonCard:hover .art,.seasonCard.focus .art{transform:none!important;box-shadow:0 0 0 1px var(--focusSoft),0 4px 12px rgba(0,0,0,.45)!important}
 .pcard:hover,.pcard.focusable.focus,.seasonCard:hover,.seasonCard.focusable.focus,.epCard:hover,.epCard.focusable.focus,.castCard:hover,.castCard.focusable.focus{transform:translate3d(0,-3px,0)}
 /* 16:9 .card (Continue Watching, Live TV, trailers) — overflow:hidden CLIPS the ::before
    gradient ring, so these never showed a focus cue. Same coral ring as every other cover:
    box-shadow paints outside the clip. */
 .card.focusable::before{display:none}
-.card:hover,.card.focusable.focus{transform:translate3d(0,-3px,0);box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 9px var(--artFocusGlow)}
+.card:hover,.card.focusable.focus{transform:translate3d(0,-3px,0);box-shadow:0 0 0 1px var(--focusSoft),0 4px 12px rgba(0,0,0,.45)}
 .cards{gap:18px;padding:14px 10px;margin:0}
 #grid,#personGrid{padding:16px 10px 48px;margin:0}
-#seasonGrid,#epGrid{padding:12px 8px;margin:0}
+#seasonGrid,#epGrid{padding:14px;margin:0 -14px}
 #castRow{padding:12px 4px;margin:0}
 #srcList{padding:6px 4px 10px;margin:0}
 
@@ -1774,8 +1888,10 @@ body.mobileShell #upNext .un-cancel{width:42px;height:42px}
 #appLoader.hide{opacity:0;pointer-events:none}
 #appLoader .inner{position:relative;display:flex;flex-direction:column;align-items:center;gap:26px;animation:splashIn .9s ease both}
 @keyframes splashIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
-#appLoader .brandWordmarkClip{width:230px;height:64px;overflow:hidden}
-#appLoader .brandWordmark img{display:block;width:230px;height:auto;transform:translateY(-25%)}
+#appLoader .brandWordmarkClip{width:330px;height:92px;overflow:hidden} /* bigger mark (owner call) */
+#appLoader .brandWordmark img{display:block;width:330px;height:auto;transform:translateY(-25%)}
+@media (max-width:600px){#appLoader .brandWordmarkClip{width:250px;height:70px}
+  #appLoader .brandWordmark img{width:250px}}
 #appLoader .bootLaneTrack{width:150px;height:2px;border-radius:999px;background:rgba(255,255,255,.08);overflow:hidden}
 #appLoader .bootLaneTrack i{display:block;height:100%;width:12%;border-radius:999px;background:rgba(255,255,255,.5);
   transition:width 1.1s cubic-bezier(.25,.6,.35,1)}
@@ -1814,7 +1930,7 @@ body.mobileShell #upNext .un-cancel{width:42px;height:42px}
 .calItem.focusable::before{display:none}
 .calEmpty{display:flex;align-items:center;min-height:56px;width:min(460px,100%);padding:0 2px;color:rgba(var(--fg),.42);font:650 13px "Albert Sans";text-align:left}
 .calItem .pp{width:100%;aspect-ratio:2/3;border-radius:10px;background-size:cover;background-position:center;background-color:var(--raise);box-shadow:none;transition:box-shadow .18s ease,filter .18s ease}
-.calItem:hover .pp,.calItem.focus .pp{box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 9px var(--artFocusGlow);filter:saturate(1.04)}
+.calItem:hover .pp,.calItem.focus .pp{box-shadow:0 0 0 1px var(--focusSoft),0 4px 12px rgba(0,0,0,.45);filter:saturate(1.04)}
 .calItem .ci{min-width:0}
 .calItem .ct{font:750 13.5px/1.18 "Albert Sans";margin-bottom:3px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .calItem .cm{font:650 10.5px/1.2 "JetBrains Mono";color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -2102,7 +2218,7 @@ body.tv #rows,body.tv #discoverRows{scroll-snap-type:none}
    the ring is the same OUTER coral ring as every other cover/thumbnail. */
 .chCard.focusable.focus,.chGroupHead.focusable.focus,.gRow.focusable.focus{transform:none;box-shadow:none}
 .chCard.focusable::before{display:none}
-.chCard:hover .chLogo,.chCard.focus .chLogo{box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 9px var(--artFocusGlow)}
+.chCard:hover .chLogo,.chCard.focus .chLogo{box-shadow:0 0 0 1px var(--focusSoft),0 4px 12px rgba(0,0,0,.45)}
 .chGroupHead.focusable.focus{box-shadow:inset 3px 0 0 var(--focus)}
 .gRow.focusable::before{display:none}
 /* Focus rings ONLY the channel cell (same language as thumbnails) — the inset frame around
@@ -2626,7 +2742,7 @@ body:not(.tv) #settings .setGrid[data-stab="display"]{grid-template-columns:repe
 .mCover{width:100%;aspect-ratio:1/1;border-radius:8px;background:#241934 center/cover;display:grid;place-items:center;
   box-shadow:none;overflow:hidden;position:relative;transition:box-shadow .16s ease,filter .16s ease}
 .mCover.wide{aspect-ratio:16/9}
-.mCard:hover .mCover,.mCard:focus .mCover,.mCard.focus .mCover{box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 9px var(--artFocusGlow),0 14px 36px rgba(0,0,0,.34);filter:saturate(1.04)}
+.mCard:hover .mCover,.mCard:focus .mCover,.mCard.focus .mCover{box-shadow:0 0 0 1px var(--focusSoft),0 4px 12px rgba(0,0,0,.45),0 14px 36px rgba(0,0,0,.34);filter:saturate(1.04)}
 .mCover::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(255,255,255,.03),rgba(0,0,0,.22));pointer-events:none}
 .mCover svg{width:28%;height:42%;opacity:.9;z-index:1}
 .mCover.hasImg svg{display:none}
@@ -2660,7 +2776,7 @@ body:not(.tv) #settings .setGrid[data-stab="display"]{grid-template-columns:repe
 .mnQueue .musicRow:hover,.mnQueue .musicRow:focus,.mnQueue .musicRow.focus{background:rgba(var(--fg),.10);box-shadow:inset 0 0 0 1px var(--artFocusTileLine)}
 .mnQueue .musicRow.cur:hover,.mnQueue .musicRow.cur:focus,.mnQueue .musicRow.cur.focus{background:rgba(193,59,214,.24)}
 .musicRow .mThumb{width:46px;height:46px;border-radius:8px;background:#241934 center/178% auto no-repeat;flex:none;position:relative;overflow:hidden}
-.musicRow:hover .mThumb,.musicRow:focus .mThumb,.musicRow.focus .mThumb{box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 9px var(--artFocusGlow),0 10px 24px rgba(0,0,0,.28)}
+.musicRow:hover .mThumb,.musicRow:focus .mThumb,.musicRow.focus .mThumb{box-shadow:0 0 0 1px var(--focusSoft),0 4px 12px rgba(0,0,0,.45),0 10px 24px rgba(0,0,0,.28)}
 .musicRow .mThumb .mEq{position:absolute;inset:0;display:none;place-items:center;background:rgba(11,8,18,.5)}
 .musicRow.cur .mThumb .mEq{display:grid}
 .musicRow .mBody{min-width:0;flex:1}
@@ -2677,7 +2793,7 @@ body:not(.tv) #settings .setGrid[data-stab="display"]{grid-template-columns:repe
 .mArtistHit::after{content:"";position:absolute;inset:0;background:radial-gradient(circle at 90% 15%,rgba(255,198,92,.22),transparent 34%);pointer-events:none}
 .mArtistHit:hover,.mArtistHit:focus,.mArtistHit.focus{background:linear-gradient(135deg,rgba(193,59,214,.20),rgba(251,139,60,.12));border-color:rgba(255,255,255,.08);box-shadow:none}
 .mArtistArt{width:104px;height:104px;border-radius:8px;background:#241934 center/178% auto no-repeat;box-shadow:0 16px 34px rgba(0,0,0,.34),inset 0 0 0 1px rgba(255,255,255,.08);flex:none;position:relative;z-index:1}
-.mArtistHit:hover .mArtistArt,.mArtistHit:focus .mArtistArt,.mArtistHit.focus .mArtistArt{box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 9px var(--artFocusGlow),0 16px 36px rgba(0,0,0,.34)}
+.mArtistHit:hover .mArtistArt,.mArtistHit:focus .mArtistArt,.mArtistHit.focus .mArtistArt{box-shadow:0 0 0 1px var(--focusSoft),0 4px 12px rgba(0,0,0,.45),0 16px 36px rgba(0,0,0,.34)}
 .mArtistCopy{position:relative;z-index:1;min-width:0;flex:1}
 .mArtistType{font:800 11px "JetBrains Mono";letter-spacing:.18em;text-transform:uppercase;color:var(--amber);margin-bottom:8px}
 .mArtistName{font:800 clamp(26px,3vw,42px) "Sora";line-height:1.04;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -2860,7 +2976,7 @@ body.mobileShell #heroTitle.hasLogo img{margin:0 auto;object-position:center bot
 #detail .dInfo #dOverview{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
 /* Story/meta text reads NEAR-WHITE (owner call, 2026-08-06): the muted grey washed out over
    backdrops; true labels (row headers, captions) keep --muted. */
-#hero p,#dOverview,#dMeta,#dCrew,.metaLine{color:rgba(238,233,245,.88)}
+#hero p,#dOverview,#dMeta,#dCrew,.metaLine{color:rgba(var(--fg),.88)}
 /* The SHOW/MOVIE eyebrow above the detail title is redundant next to the logo/title (owner call). */
 #detail .dInfo .eyebrow{display:none}
 #dMeta .rating,.metaLine .rating{color:var(--amber)}
@@ -3035,7 +3151,7 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
 
 <section id="person">
   <button class="back focusable" id="pBack">
-    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg> Back</button>
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg><span class="backLbl">Back</span></button>
   <div class="personHead">
     <div class="pPhoto" id="pPhoto"></div>
     <div class="pInfo"><h1 id="pName"></h1><div id="pKnown"></div><p id="pBio"></p></div>
@@ -3648,7 +3764,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
 
 <section id="detail">
   <button class="back focusable" id="dBack">
-    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg> Back</button>
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg><span class="backLbl">Back</span></button>
   <div class="detailScroll">
     <div class="detailHero">
       <div class="dPoster" id="dPoster"></div>
@@ -4495,6 +4611,7 @@ function setBackdrop(url) {
     const u = _bdPendingUrl; _bdPendingUrl = null;
     if (!u || u === bdCurrent) return;
     bdCurrent = u;
+    applyAmbientArt(u); // the glow tracks the art on screen, on every page
     const showEl = bdFlip ? $('bdA') : $('bdB'), hideEl = bdFlip ? $('bdB') : $('bdA');
     bdFlip = !bdFlip;
     showEl.style.backgroundImage = artBackground(u, artFallback('backdrop:' + u, 70));
@@ -6104,7 +6221,7 @@ function sizeRowsWindow(root) {
   const gap = parseFloat(getComputedStyle(root).rowGap || getComputedStyle(root).gap) || 22;
   root.style.maxHeight = rowsWindowHeight(root, rows, n, gap) + 'px';
 }
-window.addEventListener('resize', () => { sizeRowsWindow($('rows')); sizeRowsWindow($('discoverRows')); fitLiveGuide(); fitRailToFullIcons(); });
+window.addEventListener('resize', () => { sizeRowsWindow($('rows')); sizeRowsWindow($('discoverRows')); fitLiveGuide(); fitRailToFullIcons(); fitRailWidth(); });
 function setRowsView(root, data, hasHero) { S.rowsView = { root, data, hasHero }; }
 function rowsViewForRoot(root) {
   const view = S.rowsView;
@@ -6472,18 +6589,44 @@ async function ambientColorFor(artUrl) {
       { headers: tok ? { authorization: 'Bearer ' + tok } : {} });
     if (r.ok) {
       const bmp = await createImageBitmap(await r.blob());
-      const c = document.createElement('canvas'); c.width = 12; c.height = 8;
-      const x = c.getContext('2d'); x.drawImage(bmp, 0, 0, 12, 8);
-      const d = x.getImageData(0, 0, 12, 8).data;
-      let best = null, bestScore = 0;
+      const W = 16, H = 10;
+      const c = document.createElement('canvas'); c.width = W; c.height = H;
+      const x = c.getContext('2d'); x.drawImage(bmp, 0, 0, W, H);
+      const d = x.getImageData(0, 0, W, H).data;
+      // DOMINANT-HUE extraction, not "most extreme pixel": near-black/near-white pixels are
+      // dropped (they carry no mood), the rest are bucketed by hue and weighted by saturation ×
+      // presence, and the winning bucket is AVERAGED. That tracks what the artwork actually looks
+      // like — a poster that reads red gives red even when a stray neon pixel is brighter.
+      const buckets = new Map(); // hue bucket -> { w, r, g, b }
       for (let i = 0; i < d.length; i += 4) {
         const r0 = d[i], g0 = d[i + 1], b0 = d[i + 2];
         const mx = Math.max(r0, g0, b0), mn = Math.min(r0, g0, b0);
+        const lum = mx / 255;
+        if (lum < 0.12 || lum > 0.94) continue;         // black bars / blown highlights
         const sat = mx ? (mx - mn) / mx : 0;
-        const score = sat * Math.min(mx / 255 * 1.6, 1); // saturated AND reasonably bright wins
-        if (score > bestScore) { bestScore = score; best = [r0, g0, b0]; }
+        if (sat < 0.12) continue;                        // greys carry no colour
+        let hue = 0;
+        const dlt = mx - mn;
+        if (dlt) {
+          if (mx === r0) hue = ((g0 - b0) / dlt + 6) % 6;
+          else if (mx === g0) hue = (b0 - r0) / dlt + 2;
+          else hue = (r0 - g0) / dlt + 4;
+        }
+        const key = Math.round(hue * 2); // 12 buckets around the wheel
+        const w = sat * Math.min(lum * 1.4, 1);
+        const acc = buckets.get(key) || { w: 0, r: 0, g: 0, b: 0 };
+        acc.w += w; acc.r += r0 * w; acc.g += g0 * w; acc.b += b0 * w;
+        buckets.set(key, acc);
       }
-      if (best && bestScore > 0.18) color = best;
+      let top = null;
+      for (const acc of buckets.values()) if (!top || acc.w > top.w) top = acc;
+      if (top && top.w > 1.2) {
+        let rr = top.r / top.w, gg = top.g / top.w, bb = top.b / top.w;
+        // Lift very dark dominants so the glow is visible without washing the page out.
+        const peak = Math.max(rr, gg, bb);
+        if (peak < 110) { const k = 110 / Math.max(peak, 1); rr *= k; gg *= k; bb *= k; }
+        color = [Math.min(255, rr) | 0, Math.min(255, gg) | 0, Math.min(255, bb) | 0];
+      }
     }
   } catch {}
   if (ambientCache.size > 200) ambientCache.clear();
@@ -6491,14 +6634,21 @@ async function ambientColorFor(artUrl) {
   return color;
 }
 let _ambToken = 0;
-function applyAmbient(it) {
+// Ambient follows whatever ART IS ON SCREEN. setBackdrop is the one chokepoint every surface
+// already routes through (home hero, browse/search/watchlist/library focus, discover, person,
+// detail), so driving the glow from there gives the colour fade on EVERY page for free — and it
+// always matches the exact image being shown, including the poster fallback.
+function applyAmbientArt(url) {
   const token = ++_ambToken;
-  ambientColorFor(it && (it.backdrop || it.poster)).then((c) => {
+  ambientColorFor(url).then((c) => {
     if (token !== _ambToken) return;
     const b = document.body.style;
     if (c) { b.setProperty('--ambR', c[0]); b.setProperty('--ambG', c[1]); b.setProperty('--ambB', c[2]); }
     else { b.removeProperty('--ambR'); b.removeProperty('--ambG'); b.removeProperty('--ambB'); }
   });
+}
+function applyAmbient(it) {
+  applyAmbientArt(it && (it.backdrop || it.poster));
 }
 // ---- Scroll-linked backdrop fade ----
 // Scrolling into cast/related/lower rows fades the art away so that content sits on clean ink
@@ -7301,6 +7451,7 @@ async function openDetail(it, push = true) {
   S.detailCastAll = null; S.detailCastShown = 0;
   $('dCrew').innerHTML = ''; $('dCrew').style.display = 'none';
   $('dPlay').disabled = false; $('dPlay').classList.remove('unavail'); $('dSources').style.display = '';
+  delete $('dPlay').dataset.availMark; delete $('dPlay').dataset.availPrevLabel; // fresh title, fresh availability verdict
   // Quality toggle starts HIDDEN and defaulted to 1080p — checkAvailability reveals it only
   // when this title actually has BOTH a 4K and a sub-4K version to choose between.
   $('qToggle').style.display = 'none';
@@ -7402,7 +7553,11 @@ async function openDetail(it, push = true) {
       if (seasons.length) {
         S.detailSeasons = seasons;
         $('dSeasonsWrap').style.display = '';
-        renderSeasonGrid(it, seasons);
+        // A ONE-SEASON show goes straight to its episodes (owner call): a grid holding a single
+        // season cover is a pointless extra press. Multi-season shows keep the season chooser, and
+        // a show that later gains a season gets it back automatically — this is data-driven.
+        if (seasons.length === 1) openSeasonEpisodes(it, seasons[0].season_number, { auto: true });
+        else renderSeasonGrid(it, seasons);
         pickNextUp(it, seasons);
         queueDetailPlayEpisodeFocus(it, reqId);
       }
@@ -7666,11 +7821,18 @@ async function openSeasonEpisodes(show, seasonNumber, opts = {}) {
     t.addEventListener('click', () => openSeasonEpisodes(show, s.season_number));
     tabs.appendChild(t);
   });
-  appendAllSeasonsTab(tabs, () => {
-    S.seasonReq = (S.seasonReq || 0) + 1; // invalidate a season response still in flight
-    renderSeasonGrid(show, S.detailSeasons || []);
-  }); // last tab
-  bindEdgeScroll(tabs);
+  // A single-season show has nothing to switch between: no "Season 1" chip, no "All seasons"
+  // (it would open a grid holding one cover). The strip returns the moment a second season exists.
+  if (opts.auto && (S.detailSeasons || []).length <= 1) {
+    tabs.style.display = 'none';
+    tabs.innerHTML = '';
+  } else {
+    appendAllSeasonsTab(tabs, () => {
+      S.seasonReq = (S.seasonReq || 0) + 1; // invalidate a season response still in flight
+      renderSeasonGrid(show, S.detailSeasons || []);
+    }); // last tab
+    bindEdgeScroll(tabs);
+  }
   const grid = $('epGrid'); grid.style.display = 'flex'; grid.innerHTML = '<div class="sub" style="color:var(--muted)">loading episodes…</div>';
   try {
     const season = await api(`/api/tmdb/tv/${show.tmdbId}/season/${seasonNumber}`);
@@ -7992,8 +8154,28 @@ async function checkAvailability(it) {
   // before /api/server returns, and bailing there left the toggle/Unavailable state unset.
   if (S.serverInfo && !S.serverInfo.tmdb) return;
   try {
+    const ids = sourceIdentityFor(it);
+    const hadStrongIds = !!(ids.imdbid || ids.tvdbid);
     const r = await api('/api/search?' + sourceSearchQuery(it, { includeQuality: false }));
     if (reqId !== S.detailReq) return; // user moved on
+    // "Unplayable — no source yet" while Play actually WORKS (owner report): openDetail runs this
+    // check TWICE — once immediately (title+year only, before /api/tmdb resolves imdb/tvdb) and
+    // again with the ids. The weak first pass often finds nothing, and its verdict used to be
+    // one-way, so the stronger second pass could never take it back. Now: a check that finds
+    // sources CLEARS an earlier verdict (guarded by detailReq so it can't cross titles), and an
+    // id-less pass never marks a title that is still waiting for its ids.
+    const playable = !!(r.candidates && r.candidates.length);
+    const playBtn = $('dPlay');
+    if (playable) {
+      if (playBtn.dataset.availMark === String(reqId)) {
+        delete playBtn.dataset.availMark;
+        playBtn.disabled = false;
+        playBtn.classList.remove('unavail');
+        if (!hasLocal) $('dSources').style.display = '';
+        const prev = playBtn.dataset.availPrevLabel;
+        if (prev) { $('dPlayLabel').textContent = prev; delete playBtn.dataset.availPrevLabel; }
+      }
+    }
     // The 1080p/4K toggle only exists when BOTH classes exist for this title — a title with a
     // single version (4K-less older movie, 4K-only release, 720p-only show) gets just
     // Play + Sources and plays the version it has, uncapped by the toggle.
@@ -8016,15 +8198,19 @@ async function checkAvailability(it) {
     $('qToggle').style.display = offer ? '' : 'none';
     S.qualityPref = offer ? (normalizeQualityRank(it.qualityRank) || savedQualityPref(it) || globalQualityPref() || 3) : null;
     if (offer) paintQualityToggle(S.qualityPref);
-    if (!r.candidates || !r.candidates.length) {
+    // An id-less pass on a TMDB title is only the FIRST of two checks — never let it condemn a
+    // title whose imdb/tvdb ids (and the sources they find) are still on the way.
+    if (!playable && (hadStrongIds || !it.tmdbId)) {
+      if (!playBtn.dataset.availPrevLabel) playBtn.dataset.availPrevLabel = $('dPlayLabel').textContent || 'Play';
+      playBtn.dataset.availMark = String(reqId);
       // For TV, episodes may exist even when the bare show search is empty — only hard-mark
-      // movies; shows get a soft hint.
+      // movies; shows get a soft hint (rebuilt from the remembered label so it can't stack up).
       if (it.type === 'movie') {
         $('dPlayLabel').textContent = 'Unavailable';
-        $('dPlay').disabled = true; $('dPlay').classList.add('unavail');
+        playBtn.disabled = true; playBtn.classList.add('unavail');
         $('dSources').style.display = 'none';
       } else {
-        $('dPlayLabel').textContent = ($('dPlayLabel').textContent || 'Play') + ' · no sources yet';
+        $('dPlayLabel').textContent = playBtn.dataset.availPrevLabel + ' · no sources yet';
       }
     }
   } catch { /* search down ≠ unavailable */ }
@@ -15474,6 +15660,10 @@ function mapLocal(lib, x, titleOverride) {
 }
 // Detail page for archive items TMDB doesn't know — built entirely from the NFO + local art.
 function openLocalDetail(it) {
+  // Local (unmatched) library titles push a history entry exactly like TMDB details do —
+  // without it, Back skipped this page entirely and landed on whichever title was visited
+  // BEFORE the library (owner report). Keyed by library + item so re-entry is stable.
+  pushLocalDetailRoute(it);
   captureDetailReturn();
   S.view = 'detail'; S.detailItem = it; S.detailData = null; S.detailReq = (S.detailReq || 0) + 1;
   $('bdInfo').classList.remove('show');
@@ -15517,6 +15707,7 @@ async function loadAllLocalShowEpisodes(lib, showIdx) {
   return { show, items };
 }
 async function openLocalShowDetail(it) {
+  pushLocalDetailRoute(it); // same one-Back-per-page contract as TMDB details (see openLocalDetail)
   captureDetailReturn();
   const show = { ...it, _localShow: true, type: 'local-tv' };
   const reqId = (S.detailReq = (S.detailReq || 0) + 1);
@@ -18693,6 +18884,7 @@ function applyMenuPrefs() {
     if (btn) btn.style.display = p.hidden.includes(key) ? 'none' : '';
   }
   fitRailToFullIcons(); // TV: keep the rail's visible icons WHOLE — never cut one in half at the overflow edge
+  fitRailWidth();       // library names just changed → re-measure how wide the expanded menu needs to be
 }
 // Android TV: the collapsed rail is a fixed-height scroll column (nav + libraries). When they overflow
 // it, the bottom edge used to cut ONE icon in half. Clip railMain to end right after the last FULL icon
@@ -18715,6 +18907,29 @@ function fitRailToFullIcons() {
   }
   railMain.scrollTop = prevScroll;
   if (lastFull > 0 && lastFull < avail - 1) railMain.style.maxHeight = Math.round(lastFull) + 'px';
+}
+// The expanded rail is sized to its CONTENT, not a fixed 236px slab (owner: "it doesn't need to be
+// that wide"). Measure the widest label — including user-added library names, which can be long —
+// and clamp: never narrower than the collapsed rail + a readable label, never wider than a
+// comfortable menu. Anything past the cap ellipses instead of stretching the menu across the page.
+const RAIL_W_MIN = 176, RAIL_W_MAX = 268;
+function fitRailWidth() {
+  const rail = $('rail');
+  if (!rail) return;
+  const labels = [...rail.querySelectorAll('.rlabel')].filter((el) => el.offsetParent !== null || true);
+  let widest = 0;
+  for (const el of labels) {
+    const host = el.closest('.railBtn');
+    if (host && host.offsetParent === null && !host.style.display) continue; // hidden nav item
+    const prev = el.style.maxWidth;
+    el.style.maxWidth = 'none';                    // labels are clamped to 0 when collapsed
+    widest = Math.max(widest, Math.ceil(el.scrollWidth));
+    el.style.maxWidth = prev;
+  }
+  if (!widest) return;
+  // icon slot (60) + label + right padding (18) — the same geometry the collapsed rail uses.
+  const target = Math.min(RAIL_W_MAX, Math.max(RAIL_W_MIN, 60 + widest + 18));
+  document.documentElement.style.setProperty('--railExpandedW', target + 'px');
 }
 // Professional media themes: grown-up role palettes built around calm neutrals.
 // Executive Graphite is the default: neutral surfaces, restrained accents, and shared button state tokens.
@@ -20214,6 +20429,19 @@ function syncSearchClear() {
 }
 function searchClearVisible() { return !$('searchClearBtn').hidden; }
 function focusSearchClear() { $('micBtn').blur(); $('searchInput').blur(); $('searchClearBtn').focus(); }
+// Land on the MIC when Search opens (owner: voice first on TV — it used to take two D-pad
+// presses to get there). Native .focus() inside the Android WebView occasionally does not take
+// on the first try (the button is revealed by the voice-capability check), and the remote's key
+// handling keys off document.activeElement — so verify and retry once on the next frame, and
+// paint the visual ring too since D-pad focus is class-driven.
+function focusSearchMic() {
+  const mic = $('micBtn');
+  if (!mic || mic.style.display === 'none') { $('searchInput').focus(); return false; }
+  const land = () => { try { mic.focus(); } catch {} applyFocus(mic, false); };
+  land();
+  requestAnimationFrame(() => { if (document.activeElement !== mic && S.view === 'search') land(); });
+  return true;
+}
 // One clear action shared by the mouse click, the browser element-keydown, AND the on-device global
 // D-pad handler, so all three do exactly the same thing.
 function clearSearchQuery() { $('searchInput').value = ''; syncSearchClear(); clearSearchResults({ invalidate: true }); $('searchInput').focus(); }
@@ -21735,6 +21963,16 @@ function setRoute(hash) {
   try { history.pushState({ triboonRoute: true, triboonIndex: routeIndex }, '', hash); }
   catch { location.hash = hash; }
 }
+// Local-library detail pages (unmatched movies + local-only shows) need their OWN history entry
+// so Back returns to the library grid instead of skipping to the previously-viewed title. The
+// hash is informational (the page is rebuilt from the in-memory library on restore, and falls
+// back to the library view when that state is gone), which is why it carries the library id.
+function pushLocalDetailRoute(it) {
+  const libId = (it && it._lib && it._lib.id) || (S.currentLib && S.currentLib.id) || '';
+  const idx = it && (it._showOpen !== undefined ? it._showOpen : it._idx);
+  if (!libId || idx === undefined || idx === null) return;
+  setRoute(`#/library/${libId}/item/${idx}`);
+}
 function backOneRoute(fallback) {
   const state = history.state;
   const canGoBack = !!(state && state.triboonRoute && Number(state.triboonIndex) > 0);
@@ -21784,6 +22022,9 @@ function applyRoute() {
     return openPerson(parts[1], false);
   }
   if (view === 'library' && parts[1]) {
+    // #/library/<id>/item/<idx> is a LOCAL detail page. Its content is rebuilt from the scanned
+    // library in memory, which a cold refresh does not have — so restore the library view (the
+    // page the user would Back to anyway) rather than a blank detail shell.
     if (applyLibraryRoute(parts[1])) return;
     deferLibraryRoute(parts[1]);
     return;
@@ -21876,7 +22117,7 @@ function focusContent(retried) {
   // Search lands on the MIC whenever there is no result grid to navigate. Stale text used to
   // strand focus on an empty grid after leaving/re-entering Search.
   if (S.view === 'search' && (!$('searchInput').value.trim() || !gridEls().length)) {
-    if ($('micBtn').style.display !== 'none') return $('micBtn').focus();
+    if (focusSearchMic()) return;
     return $('searchInput').focus();
   }
   // Music: results present → first row; otherwise the search field.
@@ -22774,7 +23015,7 @@ document.addEventListener('keydown', (e) => {
     if (document.body.classList.contains('tv') && (k === 'Escape' || k === 'Backspace' || (k === 'ArrowLeft' && ae.selectionStart === 0))) {
       e.preventDefault();
       ae.blur();
-      return $('micBtn').style.display !== 'none' ? $('micBtn').focus() : enterRail();
+      if (focusSearchMic()) return; return enterRail();
     }
     return;
   }
@@ -23572,7 +23813,7 @@ document.addEventListener('keydown', (e) => {
       const t = gridVert(-1);
       if (t >= 0) return focusGrid(t);
       if (S.view === 'livetv' && document.querySelector('#chBody.liveGuideShell') && cur && liveContentEls().includes(cur)) return focusLiveFilter();
-      if (S.view === 'search') return $('micBtn').style.display !== 'none' ? $('micBtn').focus() : $('searchInput').focus();
+      if (S.view === 'search') { focusSearchMic(); return; }
       if (S.view === 'person') return focusPersonBack();
       // Movies/TV/local Library: the genre filter sits above the grid — give the D-pad a stop
       // there. (Native <select> handling takes over; Escape backs out, change re-runs the view.)
@@ -23831,6 +24072,7 @@ function splashStage(pct) {
 function bootReady() {
   if (!S._booting && $('appLoader').classList.contains('hide')) return;
   splashStage(100);
+  try { fitRailWidth(); } catch {} // first measure once the rail's real labels exist
   S._booting = false;
   perfMark('boot-ready', { view: S.view });
   signalTvReadyOnce('boot-ready');
