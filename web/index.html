@@ -41,10 +41,11 @@
   --heroLeft:clamp(4px,5vw,190px); /* resolution-adaptive title indent (home hero, page heads, backdrop info) */
   --poster:168px;    /* standardized poster cover width everywhere */
   --gut:28px;        /* content gutter — tight to the rail (owner: no dead strip by the menu) */
-  /* Desktop BROWSER backdrop: kept smaller than TV so posters/icons lead and the art is an accent, not
-     the focus (owner: "more of the icons than backdrops"). TV (body.tv) + mobile set their own below. */
-  --bdW:min(40vw,720px);
-  --bdH:min(46vh,480px);
+  /* Full-bleed cinematic backdrop (owner-approved redesign, 2026-08-05 — supersedes the earlier
+     "smaller corner accent" preference): the art sweeps most of the viewport and MELTS into ink
+     via the layer mask below, so posters still lead where they overlap it. */
+  --bdW:min(78vw,1500px);
+  --bdH:min(72vh,860px);
   --safeT:max(env(safe-area-inset-top),0px);
   --safeR:max(env(safe-area-inset-right),0px);
   --safeB:max(env(safe-area-inset-bottom),0px);
@@ -84,25 +85,31 @@ select option,select optgroup{background:var(--surface);color:var(--text)}
 /* ---------- living backdrop ---------- */
 /* A SMALLER image anchored to the top-right, soft-masked so it melts into the colorful base. */
 #backdrop{position:fixed;inset:0;z-index:0}
-#backdrop .layer{position:absolute;top:0;right:0;width:var(--bdW);height:var(--bdH);background-size:cover;background-position:top center;
+#backdrop .layer{position:absolute;top:0;right:0;width:var(--bdW);height:var(--bdH);background-size:cover;background-position:center 20%;
   opacity:0;transition:opacity .7s ease;
-  -webkit-mask:radial-gradient(135% 130% at 100% 0%,#000 34%,transparent 76%);
-          mask:radial-gradient(135% 130% at 100% 0%,#000 34%,transparent 76%)}
-#backdrop .layer.show{opacity:1}
-/* TV: tighter backdrop — roughly half the screen, melting away well above the row. */
-body.tv{--bdW:min(48vw,820px);--bdH:min(50vh,460px);--overscan:1.5vmin} /* TV title-safe margin (edge→rail on the left, edge→clock on the right). Owner wanted the left menu tighter to the edge — dropped 2.5vmin(~27px@1080p) → 1.5vmin(~16px). Content still clears the rail by the gutter (content left = rail + overscan). */
-body.shortBrowseBd{--bdH:min(46vh,430px)}
-body.tv.shortBrowseBd{--bdH:min(38vh,360px)}
+  -webkit-mask-image:linear-gradient(90deg,transparent 0%,#000 30%,#000 100%),linear-gradient(180deg,#000 55%,transparent 98%);
+  -webkit-mask-composite:source-in;
+          mask-image:linear-gradient(90deg,transparent 0%,#000 30%,#000 100%),linear-gradient(180deg,#000 55%,transparent 98%);
+          mask-composite:intersect}
+#backdrop .layer.show{opacity:1;animation:bdDrift 28s ease-in-out infinite alternate}
+/* Idle drift: a barely-perceptible slow push-in that makes the page feel alive without any
+   glow/motion on controls. GPU-composited transform only; reduced-motion turns it off. */
+@keyframes bdDrift{from{transform:scale(1) translateY(0)}to{transform:scale(1.05) translateY(-1.2%)}}
+@media (prefers-reduced-motion:reduce){#backdrop .layer.show{animation:none}}
+/* TV: slightly tighter than desktop so the rows keep clear ink beneath the fade. */
+body.tv{--bdW:min(72vw,1300px);--bdH:min(64vh,700px);--overscan:1.5vmin} /* TV title-safe margin (edge→rail on the left, edge→clock on the right). Owner wanted the left menu tighter to the edge — dropped 2.5vmin(~27px@1080p) → 1.5vmin(~16px). Content still clears the rail by the gutter (content left = rail + overscan). */
+body.shortBrowseBd{--bdH:min(58vh,640px)}
+body.tv.shortBrowseBd{--bdH:min(50vh,560px)}
 @media (max-height:760px){
-  :root{--bdW:min(46vw,680px);--bdH:min(42vh,330px)}
-  body.tv{--bdW:min(44vw,620px);--bdH:min(40vh,300px)}
-  body.shortBrowseBd{--bdH:min(36vh,290px)}
-  body.tv.shortBrowseBd{--bdH:min(34vh,260px)}
+  :root{--bdW:min(74vw,1200px);--bdH:min(64vh,520px)}
+  body.tv{--bdW:min(70vw,1100px);--bdH:min(58vh,470px)}
+  body.shortBrowseBd{--bdH:min(52vh,440px)}
+  body.tv.shortBrowseBd{--bdH:min(46vh,400px)}
 }
 @media (min-width:1700px) and (min-height:900px){
-  :root{--bdW:min(40vw,820px);--bdH:min(46vh,540px)}
-  body.shortBrowseBd{--bdH:min(42vh,420px)}
-  body.tv.shortBrowseBd{--bdH:min(36vh,360px)}
+  :root{--bdW:min(74vw,1700px);--bdH:min(68vh,940px)}
+  body.shortBrowseBd{--bdH:min(56vh,760px)}
+  body.tv.shortBrowseBd{--bdH:min(48vh,640px)}
 }
 @media (max-width:980px){
   /* Narrow browser windows: keep the corner art a clear accent on EVERY page. The shortBrowseBd
@@ -110,8 +117,8 @@ body.tv.shortBrowseBd{--bdH:min(38vh,360px)}
      :not(.tv) line the movies/TV/discover pages kept a ~46vh backdrop and dominated a small window.
      Scoped :not(.tv) + width-gated, so Android TV (always >=1280w) and phones (backdrop hidden) are
      untouched. */
-  :root{--bdW:min(40vw,400px);--bdH:min(36vh,300px)}
-  body.shortBrowseBd:not(.tv){--bdH:min(33vh,280px)}
+  :root{--bdW:min(60vw,640px);--bdH:min(50vh,420px)}
+  body.shortBrowseBd:not(.tv){--bdH:min(44vh,380px)}
 }
 /* Focused-title info over the backdrop on browse/discover pages — like the home hero, but
    informational only (no buttons; clicking the cover opens it). */
@@ -209,6 +216,14 @@ body.tv #rail:hover #railUser .rlabel,#rail.expanded #railUser .rlabel,body.rail
   background:var(--soft);box-shadow:none}
 .railBtn.focusable.focus::after,.railBtn:focus-visible::after{height:24px;box-shadow:0 0 14px var(--focusSoft)}
 .railBtn.active.focusable.focus,.railBtn.active:focus-visible{background:var(--soft)}
+/* Rail grouping (owner-approved redesign, 2026-08-05): the nav reads as SECTIONS — browse
+   (search/home/watchlist/discover/calendar), video libraries (movies/tv + local libs), live,
+   audio — instead of one flat run. The admin "+ Add library" sinks to the bottom of the column
+   and dims until pointed at. TV uses tighter gaps so fitRailToFullIcons keeps every icon row. */
+.railBtn[data-nav="search"],.railBtn[data-nav="movies"],#navLiveTv,#navMusic{margin-top:14px}
+body.tv .railBtn[data-nav="search"],body.tv .railBtn[data-nav="movies"],body.tv #navLiveTv,body.tv #navMusic{margin-top:10px}
+#railAddLib{margin-top:auto;opacity:.7}
+#railAddLib:hover,#railAddLib.focus,#railAddLib:focus-visible{opacity:1}
 .railBtn .del{margin-left:auto;margin-right:12px;opacity:0;color:var(--muted);font-size:15px;width:18px;flex:none}
 body.tv #rail:hover .railBtn:hover .del,body.railOpen .railBtn:hover .del{opacity:.7}
 .railSec{font:700 10px "JetBrains Mono";letter-spacing:.16em;color:var(--muted);text-transform:uppercase;padding:16px 14px 6px;height:0;opacity:0;overflow:hidden;transition:opacity .12s;white-space:nowrap}
@@ -489,12 +504,17 @@ body.androidApp #gateArtCaption{display:none}
 .chip.zap{color:var(--onAccent);background:var(--btnPrimary);border:0}
 #hero p{color:var(--muted);max-width:54ch;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;margin-bottom:20px;line-height:1.5;height:4.5em}
 #heroBtns{display:flex;gap:12px;min-height:46px;align-items:center}
-.btn{display:flex;align-items:center;gap:10px;padding:14px 26px;border-radius:var(--r);font:600 15.5px "Albert Sans",system-ui,sans-serif;letter-spacing:.01em;border:1px solid transparent;background:var(--btn);color:var(--text)}
+.btn{display:flex;align-items:center;gap:10px;padding:13px 26px;border-radius:999px;font:600 15.5px "Albert Sans",system-ui,sans-serif;letter-spacing:.01em;border:0;background:var(--btn);color:var(--text)}
 .btn:hover{background:var(--btnHover)}
-/* Uniform buttons: the "primary" action is the SAME colour as every other button (no separate accent
-   fill) — prominence comes from position, and the focus/rollover BRIGHTENS it. */
-.btn.primary{background:var(--btn);color:var(--text);border:1px solid transparent}
-.btn.ghost{background:var(--btn);border-color:rgba(255,255,255,.045)}
+/* Button family (owner-approved "variant D", 2026-08-05): borderless dark PILLS everywhere; the
+   ONE primary action (Play) is solid WHITE with dark text at rest — the industry-standard primary —
+   and every button still takes the theme's focus/rollover fill when focused, so the D-pad
+   spotlight reads exactly as before. No borders, no glows; prominence = white + position. */
+.btn.primary{background:#FFFFFF;color:#0B0812;border:0}
+.btn.primary svg{color:#0B0812}
+body[data-light="1"] .btn.primary{background:#1A1E24;color:#F2F4F7}
+body[data-light="1"] .btn.primary svg{color:#F2F4F7}
+.btn.ghost{background:var(--btn);border:0}
 .btn svg{width:18px;height:18px}
 /* ---------- focus highlight: buttons are NEUTRAL at rest; on hover/D-pad focus they get the theme-
    tinted LIGHTER fill (--btnHover) with LIGHT text (--btnFocusText). No gradient ring, no border.
@@ -535,8 +555,13 @@ body[data-light="1"] #player #pGuide{--fg:18,22,28}
   background-color:var(--raise);position:relative;overflow:hidden}
 .pcard .art .badge{position:absolute;top:7px;left:7px;font:700 10px "JetBrains Mono";padding:3px 6px;border-radius:6px;
   background:rgba(11,8,18,.8);color:var(--amber)}
-.pcard .cap{font:600 12.5px "Albert Sans";line-height:1.25;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.pcard .sub{font:500 10.5px "JetBrains Mono";color:var(--muted)}
+/* Quiet grids (owner-approved redesign, 2026-08-05): captions rest INVISIBLE so rows read as
+   pure artwork; the hovered/focused card reveals its title+year. Cast/season/episode cards keep
+   their always-on labels — this applies to poster cards only. */
+.pcard .cap{font:600 12.5px "Albert Sans";line-height:1.25;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;opacity:0;transition:opacity .18s ease}
+.pcard .sub{font:500 10.5px "JetBrains Mono";color:var(--muted);opacity:0;transition:opacity .18s ease}
+.pcard:hover .cap,.pcard.focus .cap,.pcard:focus-visible .cap,
+.pcard:hover .sub,.pcard.focus .sub,.pcard:focus-visible .sub{opacity:1}
 .pcard.focusable.focus{transform:translateZ(0) scale(1.05)}
 
 /* ---------- browse pages (Movies / TV / Search) ---------- */
@@ -1231,7 +1256,7 @@ body.tv #vlcCopy{display:none}
 
 /* Standardized poster cards + spacing; hover/focus highlights ONLY the cover. */
 .pcard{flex:0 0 var(--poster);gap:8px}
-.pcard .art{border-radius:10px;transition:transform .16s ease,box-shadow .16s ease}
+.pcard .art{border-radius:12px;transition:transform .16s ease,box-shadow .16s ease}
 .pcard.focusable::before{display:none}
 .pcard.focusable.focus{transform:none;box-shadow:none}
 .pcard:hover .art,.pcard.focus .art{transform:scale(1.045);box-shadow:0 0 0 1.5px var(--artFocusLine),0 0 9px var(--artFocusGlow)}
@@ -1274,11 +1299,11 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 #dMeta .rating{color:var(--amber)}
 #dOverview{color:var(--muted);max-width:74ch;margin-bottom:22px;font-size:15.5px;line-height:1.6}
 #dBtns{display:flex;gap:12px;align-items:center}
-#dBtns .btn{min-height:52px;border-radius:40px;box-sizing:border-box}
+#dBtns .btn{min-height:52px;border-radius:999px;box-sizing:border-box}
 #dBtns .btn.primary{padding:14px 30px;font-weight:700}
 #dPlay{position:relative;justify-content:center;min-width:118px}
 #dPlayLabel{display:block;width:100%;text-align:center}
-.iconBtn{width:52px;height:52px;border-radius:50%;display:grid;place-items:center;background:var(--btn);border:1px solid rgba(255,255,255,.045);color:var(--text)}
+.iconBtn{width:52px;height:52px;border-radius:50%;display:grid;place-items:center;background:var(--btn);border:0;color:var(--text)}
 .iconBtn svg{width:21px;height:21px}
 .iconBtn.on{background:var(--btnSelected);color:var(--text);border-color:transparent}
 /* On-watchlist state reads at a glance: the bookmark glyph fills solid (white on dark themes)
@@ -1287,9 +1312,11 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 .detailScroll .secHead{display:flex;align-items:center;gap:16px;margin:30px 0 14px}
 .detailScroll .secHead h2{margin:0}
 .ghostMini{margin-left:auto;background:var(--btn);border:1px solid rgba(255,255,255,.045);border-radius:10px;padding:8px 14px;font:600 12px "Sora";color:var(--text)}
-.qToggle{display:flex;align-items:center;min-height:52px;box-sizing:border-box;background:var(--btn);border:1px solid rgba(255,255,255,.045);border-radius:40px;padding:4px;margin-left:6px}
-.qToggle button{height:42px;padding:0 16px;border-radius:34px;font:700 12px "JetBrains Mono";color:var(--muted)}
-.qToggle button.qon{background:var(--btnSelected);color:var(--text)}
+/* Quality toggle joins the borderless D family: dark pill shell, no hairline; the selected
+   segment is a neutral lighter fill (not the theme accent) so it reads as state, not focus. */
+.qToggle{display:flex;align-items:center;min-height:52px;box-sizing:border-box;background:var(--btn);border:0;border-radius:999px;padding:4px;margin-left:6px}
+.qToggle button{height:42px;padding:0 16px;border-radius:999px;font:700 12px "JetBrains Mono";color:var(--muted)}
+.qToggle button.qon{background:rgba(255,255,255,.16);color:var(--text)}
 
 /* Season poster cards — single horizontal scroll row */
 #seasonGrid{display:flex;gap:18px;overflow-x:auto;padding:4px 2px 8px}
@@ -1305,14 +1332,14 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 
 /* Season tabs (episode view) */
 #seasonTabs{display:flex;gap:10px;overflow-x:auto;padding:4px 2px 14px}
-.seasonTab{flex:none;min-height:42px;padding:10px 18px;border-radius:40px;background:var(--btn);border:1px solid rgba(255,255,255,.045);
+.seasonTab{flex:none;min-height:42px;padding:10px 18px;border-radius:999px;background:var(--btn);border:0;
   font:700 12px "Albert Sans",system-ui,sans-serif;letter-spacing:.01em;color:var(--text);white-space:nowrap;
   transition:background .15s,color .15s,box-shadow .15s,border-color .15s}
 .seasonTab.focusable::before{display:none!important}
-.seasonTab:hover,.seasonTab.focus{background:var(--btnHover);color:var(--btnFocusText);border-color:transparent;box-shadow:inset 3px 0 0 var(--focus),0 10px 28px rgba(0,0,0,.32)}
-.seasonTab.sel{background:var(--btnSelected);border-color:transparent;color:var(--text)}
+.seasonTab:hover,.seasonTab.focus{background:var(--btnHover);color:var(--btnFocusText);box-shadow:none}
+.seasonTab.sel{background:rgba(255,255,255,.16);color:var(--text)}
 .seasonTab.sel.focus{background:var(--btnSelectedHover);color:var(--text)}
-#allSeasonsBtn{min-height:42px;border-radius:40px;padding:10px 18px;font:700 12px "Albert Sans",system-ui,sans-serif}
+#allSeasonsBtn{min-height:42px;border-radius:999px;padding:10px 18px;font:700 12px "Albert Sans",system-ui,sans-serif}
 
 /* Episode cards — single horizontal scroll row */
 #epGrid{display:flex;gap:18px;overflow-x:auto;padding:4px 2px 8px}
@@ -1391,7 +1418,7 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
    text too, which read as a glitch. */
 .castCard.focusable.focus{transform:none;box-shadow:none}
 .castCard.focusable.focus::before{opacity:0!important}
-.seasonTab.focus{background:var(--btnHover);color:var(--btnFocusText);border-color:transparent;box-shadow:inset 3px 0 0 var(--focus),0 10px 28px rgba(0,0,0,.32)}
+.seasonTab.focus{background:var(--btnHover);color:var(--btnFocusText);box-shadow:none}
 
 /* Browse filter controls follow the same solid focus language as Details buttons. */
 .filterBar select.focusable::before{display:none!important}
@@ -2810,6 +2837,17 @@ body.contentTextL{
 .mSearchSongs .musicRow .mT{font-size:var(--ctMusicSearchTitle)}
 .mSearchSongs .musicRow .mA{font-size:var(--ctMusicSearchMeta)}
 body.tv #hero h1{font-size:min(var(--ctHeroTitle),42px);height:calc(39px * var(--ctLineScale))}
+/* ---------- title-logo art (hero + detail) ---------- */
+/* LAST hero/detail-title rules on purpose: .hasLogo must beat every clamp/height override above
+   (desktop clamp, mobile clamp, TV nowrap height) regardless of specificity ties. */
+#heroTitle.hasLogo,#dTitle.hasLogo,body.tv #hero h1.hasLogo,body.mobileShell #hero h1.hasLogo{
+  height:auto;-webkit-line-clamp:unset;white-space:normal;overflow:visible}
+#heroTitle.hasLogo img,#dTitle.hasLogo img{max-width:min(380px,86%);max-height:150px;object-fit:contain;
+  object-position:left bottom;display:block;filter:drop-shadow(0 4px 18px rgba(0,0,0,.55));animation:logoIn .3s ease}
+body.tv #heroTitle.hasLogo img{max-height:104px}
+body.tv #dTitle.hasLogo img{max-height:120px}
+body.mobileShell #heroTitle.hasLogo img{margin:0 auto;object-position:center bottom}
+@keyframes logoIn{from{opacity:0}to{opacity:1}}
 body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
 
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
@@ -6385,10 +6423,49 @@ function metaLineHtml(it, d) {
   if (cert) parts.push(esc(cert));
   return parts.length ? `<span class="metaLine">${parts.map((p, i) => i ? `<span class="dot">·</span> ${p}` : p).join(' ')}</span>` : '';
 }
+// Title-logo art (owner-approved redesign, 2026-08-05): swap the text title for the release's
+// official TMDB logo image when one exists. The TEXT renders first and simply stays for titles
+// without logo art, so nothing ever flashes empty; the logo crossfades in only after its image
+// has fully loaded. Token-guarded per element so a fast focus walk can never paint a stale logo
+// over a newer title. Lookups ride the server's 24h TMDB proxy cache + a small client cache.
+const titleLogoCache = new Map(); // "type:id" -> url | '' (misses negative-cached)
+async function titleLogoUrl(it) {
+  const type = it && (it.type === 'tv' || it.type === 'episode') ? 'tv' : 'movie';
+  const id = it && it.tmdbId;
+  if (!id) return '';
+  const key = `${type}:${id}`;
+  if (titleLogoCache.has(key)) return titleLogoCache.get(key);
+  let url = '';
+  try {
+    const imgs = await api(`/api/tmdb/${type}/${id}/images?include_image_language=en,null`);
+    const logo = (imgs.logos || []).find((l) => l.file_path && !/\.svg$/i.test(l.file_path));
+    if (logo) url = `https://image.tmdb.org/t/p/w500${logo.file_path}`;
+  } catch {}
+  if (titleLogoCache.size > 300) titleLogoCache.clear();
+  titleLogoCache.set(key, url);
+  return url;
+}
+function applyTitleLogo(el, it) {
+  const token = (el._logoToken = (el._logoToken || 0) + 1);
+  el.classList.remove('hasLogo');
+  titleLogoUrl(it).then((url) => {
+    if (!url || el._logoToken !== token) return;
+    const img = new Image();
+    img.onload = () => {
+      if (el._logoToken !== token) return;
+      img.alt = (it && it.title) || '';
+      el.textContent = '';
+      el.appendChild(img);
+      el.classList.add('hasLogo');
+    };
+    img.src = url;
+  });
+}
 function setHero(it) {
   S.focusedItem = it;
   prefetchSources(it);
   $('heroTitle').textContent = it.title;
+  applyTitleLogo($('heroTitle'), it);
   $('heroOverview').textContent = it.overview;
   loadCreditsInto($('heroCredits'), it);
   const heroKind = metaGenreLabel(it);
@@ -7135,6 +7212,7 @@ async function openDetail(it, push = true) {
   $('dPoster').style.backgroundImage = artBackground(it.poster, it.backdrop, artFallback(it.key || it.title, 30));
   $('dKind').textContent = it.type === 'tv' ? 'Show' : 'Movie';
   $('dTitle').textContent = it.title;
+  applyTitleLogo($('dTitle'), it);
   $('dOverview').textContent = it.overview || '';
   $('dMeta').innerHTML = `<span class="rating">★ ${it.rating}</span>` + (it.year ? ` <span class="dot">·</span> ${it.year}` : '');
   $('dSeasonsWrap').style.display = 'none'; $('dCastWrap').style.display = 'none';
@@ -7192,6 +7270,7 @@ async function openDetail(it, push = true) {
     if (!it.title) { // route-restored page (refresh/back) — fill from TMDB
       it.title = d.title || d.name || '';
       $('dTitle').textContent = it.title;
+      applyTitleLogo($('dTitle'), it);
       if (d.backdrop_path) { it.backdrop = img(d.backdrop_path); setBackdrop(it.backdrop); }
       if (d.poster_path) {
         it.poster = img(d.poster_path, 'w342');

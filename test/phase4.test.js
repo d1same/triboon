@@ -543,12 +543,27 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'episode resumes should inherit the show-level quality preference');
   assert.match(ui, /<div class="qToggle" id="qToggle"[\s\S]+id="dSources"[\s\S]+id="dWatchlist"/,
     'movie/show details should place the 1080p/4K toggle immediately before Sources');
-  assert.match(ui, /#dBtns \.btn\{min-height:52px;border-radius:40px;box-sizing:border-box\}[\s\S]+\.qToggle\{display:flex;align-items:center;min-height:52px;box-sizing:border-box[\s\S]+border-radius:40px[\s\S]+\.qToggle button\{height:42px[\s\S]+border-radius:34px/,
+  // Redesign 2026-08-05 (button family D): the shared curve is now the full pill (999px) for both
+  // the detail action buttons and the quality selector shell + its segments.
+  assert.match(ui, /#dBtns \.btn\{min-height:52px;border-radius:999px;box-sizing:border-box\}[\s\S]+\.qToggle\{display:flex;align-items:center;min-height:52px;box-sizing:border-box[\s\S]+border-radius:999px[\s\S]+\.qToggle button\{height:42px[\s\S]+border-radius:999px/,
     'movie/show detail action buttons and the quality selector should share matching height and curve');
   assert.match(ui, /#dPlay\{position:relative;justify-content:center;min-width:118px\}[\s\S]+#dPlayLabel\{display:block;width:100%;text-align:center\}/,
     'movie/show detail Play, Continue, and Resume text should be centered inside the whole pill');
   assert.match(ui, /<button class="btn primary focusable" id="dPlay">\s*<span id="dPlayLabel">Play<\/span><\/button>/,
     'movie/show detail Play, Continue, and Resume should be text-only, without a play icon');
+  // ---- Redesign 2026-08-05 contracts (owner-approved "variant D" + logo/backdrop/grid/rail) ----
+  assert.match(ui, /\.btn\.primary\{background:#FFFFFF;color:#0B0812;border:0\}[\s\S]+body\[data-light="1"\] \.btn\.primary\{background:#1A1E24;color:#F2F4F7\}/,
+    'the primary Play button is solid white with dark text at rest (flipped dark on light themes)');
+  assert.match(ui, /\.iconBtn\{width:52px;height:52px;border-radius:50%;display:grid;place-items:center;background:var\(--btn\);border:0;color:var\(--text\)\}/,
+    'icon buttons are borderless dark circles (button family D)');
+  assert.match(ui, /function applyTitleLogo\(el, it\) \{[\s\S]+el\._logoToken = \(el\._logoToken \|\| 0\) \+ 1[\s\S]+img\.onload = \(\) => \{[\s\S]+el\.classList\.add\('hasLogo'\);/,
+    'title-logo art loads token-guarded and only swaps in after the image has fully loaded (text stays as fallback)');
+  assert.ok((ui.match(/applyTitleLogo\(\$\('dTitle'\), it\)/g) || []).length >= 2 && ui.includes("applyTitleLogo($('heroTitle'), it)"),
+    'both detail title writes and the hero title route through the logo swap');
+  assert.match(ui, /\.pcard \.cap\{[\s\S]{0,220}opacity:0;transition:opacity \.18s ease\}[\s\S]+\.pcard:hover \.cap,\.pcard\.focus \.cap/,
+    'poster-card captions rest invisible and reveal on hover/focus (quiet grids)');
+  assert.match(ui, /\.railBtn\[data-nav="search"\],\.railBtn\[data-nav="movies"\],#navLiveTv,#navMusic\{margin-top:14px\}[\s\S]+#railAddLib\{margin-top:auto;opacity:\.7\}/,
+    'the rail groups into sections and sinks Add library to the bottom');
   assert.doesNotMatch(ui, /resumeMode/,
     'movie/show detail Play, Continue, and Resume no longer need icon-specific state styling');
   assert.match(ui, /function captureDetailReturn\(\) \{[\s\S]+view: S\.view \|\| 'home'[\s\S]+rowIdx: S\.rowIdx \|\| 0[\s\S]+colIdx: \{ \.\.\.\(S\.colIdx \|\| \{\}\) \}[\s\S]+gridIdx: activeGridIdx\(\)[\s\S]+searchQuery: \$\('searchInput'\)\.value/,
@@ -711,12 +726,19 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'real section switches should clear rail mode so the destination page can own focus');
   assert.match(ui, /else if \(S\.libraryPreviewOnly\) \{[\s\S]+S\.libraryPreviewOnly = false;[\s\S]+\}[\s\S]+setTimeout\(\(\) => \{ if \(S\.view === 'library'\) focusContent\(\); \}, 80\);/,
     'pressing OK on an auto-previewed attached-library rail item should enter content without reloading the page');
-  assert.match(ui, /--bdW:min\(40vw,720px\);[\s\S]+--bdH:min\(46vh,480px\);[\s\S]+#backdrop \.layer\{[\s\S]+width:var\(--bdW\);height:var\(--bdH\)/,
-    'desktop-browser backdrop stays capped + viewport-aware (min(vw,px), not a percentage takeover) and is deliberately smaller than TV so posters lead');
+  // Redesign 2026-08-05 (owner-approved full-bleed backdrop — supersedes the earlier "smaller
+  // corner accent" preference): the art sweeps most of the viewport, still capped + viewport-aware
+  // (min(vw,px)) and melted into ink by the layer mask so posters stay readable where they overlap.
+  assert.match(ui, /--bdW:min\(78vw,1500px\);[\s\S]+--bdH:min\(72vh,860px\);[\s\S]+#backdrop \.layer\{[\s\S]+width:var\(--bdW\);height:var\(--bdH\)/,
+    'desktop-browser backdrop is full-bleed but stays capped + viewport-aware (min(vw,px))');
+  assert.match(ui, /#backdrop \.layer\{[\s\S]+mask-image:linear-gradient\(90deg,transparent 0%,#000 30%,#000 100%\),linear-gradient\(180deg,#000 55%,transparent 98%\)/,
+    'the full-bleed backdrop melts into ink via left + bottom mask fades');
+  assert.match(ui, /#backdrop \.layer\.show\{opacity:1;animation:bdDrift 28s ease-in-out infinite alternate\}[\s\S]+@keyframes bdDrift\{from\{transform:scale\(1\) translateY\(0\)\}to\{transform:scale\(1\.05\) translateY\(-1\.2%\)\}\}[\s\S]+@media \(prefers-reduced-motion:reduce\)\{#backdrop \.layer\.show\{animation:none\}\}/,
+    'the idle backdrop drift is a slow composited transform and turns off under reduced-motion');
   assert.match(ui, /--scrim:\s*linear-gradient\(90deg,rgba\(11,8,18,\.86\) 0%,rgba\(11,8,18,\.56\) 28%,rgba\(11,8,18,\.20\) 58%,rgba\(11,8,18,\.06\) 100%\),\s*linear-gradient\(0deg,rgba\(11,8,18,\.76\) 0%,rgba\(11,8,18,\.24\) 26%,rgba\(11,8,18,\.04\) 60%,rgba\(11,8,18,\.10\) 100%\)/,
     'browser backdrop scrim should protect text without blacking out the artwork');
-  assert.match(ui, /body\.tv\{--bdW:min\(48vw,820px\);--bdH:min\(50vh,460px\);--overscan:1\.5vmin\}[\s\S]+body\.shortBrowseBd\{--bdH:min\(46vh,430px\)\}[\s\S]+body\.tv\.shortBrowseBd\{--bdH:min\(38vh,360px\)\}[\s\S]+@media \(max-height:760px\)\{[\s\S]+--bdH:min\(34vh,260px\)[\s\S]+@media \(max-width:980px\)\{[\s\S]+--bdW:min\(40vw,400px\);--bdH:min\(36vh,300px\)\}[\s\S]+body\.shortBrowseBd:not\(\.tv\)\{--bdH:min\(33vh,280px\)\}/,
-    'TV, short browser, narrow browser, and poster browse viewports should tighten backdrop size; on narrow browser windows the browse (shortBrowseBd) pages must also shrink height (:not(.tv)) so movies/TV pages do not keep a ~46vh backdrop and dominate a small window');
+  assert.match(ui, /body\.tv\{--bdW:min\(72vw,1300px\);--bdH:min\(64vh,700px\);--overscan:1\.5vmin\}[\s\S]+body\.shortBrowseBd\{--bdH:min\(58vh,640px\)\}[\s\S]+body\.tv\.shortBrowseBd\{--bdH:min\(50vh,560px\)\}[\s\S]+@media \(max-height:760px\)\{[\s\S]+--bdH:min\(46vh,400px\)[\s\S]+@media \(max-width:980px\)\{[\s\S]+--bdW:min\(60vw,640px\);--bdH:min\(50vh,420px\)\}[\s\S]+body\.shortBrowseBd:not\(\.tv\)\{--bdH:min\(44vh,380px\)\}/,
+    'TV, short browser, narrow browser, and poster browse viewports still tighten the full-bleed backdrop; narrow browser windows keep the :not(.tv) browse-height clamp so movies/TV pages do not dominate a small window');
   assert.match(ui, /body\.shortBrowseBd:not\(\.tv\) #bdInfo[\s\S]+-webkit-line-clamp:1[\s\S]+@media \(max-height:820px\)[\s\S]+body\.shortBrowseBd:not\(\.tv\) #bdInfo \.bdiC,[\s\S]+display:none/,
     'browser poster browse pages should compact the focused-title band without touching TV');
   assert.match(ui, /function browserBrowseCoverPx\(size\) \{[\s\S]+document\.body\.classList\.contains\('tv'\)[\s\S]+window\.innerHeight <= 820[\s\S]+return size === 'L' \? '190px'[\s\S]+const px = window\.innerWidth <= 600 \? '140px' : \(browserBrowseCoverPx\(s\) \|\| table\[s\] \|\| table\.M\);[\s\S]+const shortBrowserBrowse = document\.body\.classList\.contains\('shortBrowseBd'\) && !document\.body\.classList\.contains\('tv'\);[\s\S]+shortBrowserBrowse \? \(h <= 820 \? 128/,
