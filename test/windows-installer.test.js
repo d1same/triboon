@@ -139,7 +139,11 @@ test('Windows build dependencies use exact HTTPS URLs and reviewed SHA-256 locks
   }
   assert.match(dependencyLock.artifacts.node.version, /^v24\./, 'the bundled Node runtime stays on Node 24 LTS');
   assert.match(dependencyLock.artifacts.node.url, /\/dist\/v24\.\d+\.\d+\/node-v24\.\d+\.\d+-win-x64\.zip$/);
-  assert.match(dependencyLock.artifacts.ffmpeg.url, /\/packages\/ffmpeg-\d+\.\d+(?:\.\d+)?-essentials_build\.zip$/);
+  // ffmpeg comes from the publisher's PERMANENT GitHub mirror (GyanD/codexffmpeg releases):
+  // gyan.dev prunes old /packages/ builds when new ones ship (the pinned 8.0.1 zip 404'd and
+  // failed release CI), while GitHub release assets are immutable. Same artifact, same sha pin.
+  assert.match(dependencyLock.artifacts.ffmpeg.url,
+    /github\.com\/GyanD\/codexffmpeg\/releases\/download\/\d+\.\d+(?:\.\d+)?\/ffmpeg-\d+\.\d+(?:\.\d+)?-essentials_build\.zip$/);
   assert.match(dependencyLock.artifacts.ytDlp.url, /\/releases\/download\/\d{4}\.\d{2}\.\d{2}\/yt-dlp\.exe$/);
   assert.match(dependencyLock.artifacts.innoSetup.compilerSha256, /^[0-9a-f]{64}$/);
   assert.match(dependencyLock.artifacts.innoSetup.url,
