@@ -727,27 +727,24 @@ test('tmdb: login artwork is public but only exposes safe art metadata', async (
   assert.ok(!art.raw.includes('super-secret-tmdb-key'), 'server TMDB key never leaves the API');
 });
 
+// The ambient-color art proxy relays ONLY small TMDB image bytes (the CDN blocks cross-origin
+// canvas reads and the zero-dependency server must not decode images). It must never become a
+// general fetch proxy: anything but a thumb-sized plain TMDB asset path is rejected, and it is
+// auth'd like every other user route. Uses the shared suite server (booting another one here
+// would displace it for every later test).
 test('art proxy: only small TMDB image paths pass; anything else is rejected', async () => {
-  const dataDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'triboon-art-'));
-  let srv;
-  try {
-    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
-    const admin = await setupAdmin(srv.port);
-    for (const bad of [
-      '/w92/../secret.jpg',            // traversal
-      'https://evil.example/x.jpg',    // absolute URL smuggling
-      '/original/abc.jpg',             // full-size variant (bandwidth abuse)
-      '/w92/abc.svg',                  // non-raster type
-      '',                              // empty
-    ]) {
-      const r = await httpJson(srv.port, 'GET', '/api/art?path=' + encodeURIComponent(bad), null, admin);
-      assert.strictEqual(r.status, 400, `path ${JSON.stringify(bad)} must be rejected (got ${r.status})`);
-    }
-    const unauth = await httpJson(srv.port, 'GET', '/api/art?path=' + encodeURIComponent('/w92/abcDEF123.jpg'));
-    assert.strictEqual(unauth.status, 401, 'the art proxy requires auth like every user route');
-  } finally {
-    if (srv) await srv.shutdown();
+  for (const bad of [
+    '/w92/../secret.jpg',            // traversal
+    'https://evil.example/x.jpg',    // absolute URL smuggling
+    '/original/abc.jpg',             // full-size variant (bandwidth abuse)
+    '/w92/abc.svg',                  // non-raster type
+    '',                              // empty
+  ]) {
+    const r = await httpJson(srv.port, 'GET', '/api/art?path=' + encodeURIComponent(bad), null, admin);
+    assert.strictEqual(r.status, 400, `path ${JSON.stringify(bad)} must be rejected (got ${r.status})`);
   }
+  const unauth = await httpJson(srv.port, 'GET', '/api/art?path=' + encodeURIComponent('/w92/abcDEF123.jpg'));
+  assert.strictEqual(unauth.status, 401, 'the art proxy requires auth like every user route');
 });
 
 test('tmdb: detail, discover, genre, video, and search paths all pass proxy validation', async () => {
