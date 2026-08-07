@@ -3616,6 +3616,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'detail section headings hug their rows');
   assert.match(ui, /\.row h2\{margin:0 0 8px 2px\}/,
     'home row headings hug their rows too');
+  // The "Cast" label is dropped visually but its BOX stays (visibility, not display) so the cast
+  // row keeps its vertical rhythm; the related section gains breathing room (owner, 2026-08-07).
+  assert.match(ui, /#dCastWrap \.secHead h2,#dSeasonsWrap \.secHead h2\{visibility:hidden\}/,
+    'the Cast and Episodes/Seasons labels are hidden but keep their boxes (the content is its own label)');
+  assert.match(ui, /#dRelatedWrap\{margin-top:30px\}/,
+    'More like this sits clear of the cast row');
   // The collapsed rail RECEDES so focus sits on the content, and comes back to full strength when
   // entered — the shared rules own this and TV must not pin the surface to opacity:1.
   assert.match(ui, /#rail:not\(\.expanded\):not\(:hover\)\{opacity:\.62\}/,
