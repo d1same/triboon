@@ -27,6 +27,16 @@
   <a href="#unraid">Unraid</a>
 </p>
 
+## Screenshots
+
+Captured on the Android TV build against a demo library (TMDB artwork).
+
+| Home | Detail |
+|---|---|
+| ![Home — hero with title logo art and trending row](screenshots/home.jpg) | ![Detail — logo, storyline, and episode stills](screenshots/detail.jpg) |
+
+![Movies — browse grid with focused-title backdrop and logo art](screenshots/movies.jpg)
+
 ## What It Does
 
 Triboon is a Plex-polished, Stremio-style app you run yourself. The admin adds
@@ -60,8 +70,8 @@ repeating source finding, health probing, and mount work.
 - Live TV through M3U or Xtream playlists, including source-scoped caches,
   guide data, favorites, Android TV native playback, and browser remux.
 - Wyzie and optional OpenSubtitles captions, audio-track selection, subtitle
-  sync, Trakt import/export, Music, Android TV shell, and Unraid-friendly
-  Docker hosting.
+  sync, Trakt import/export, Music, Audiobooks, Android TV shell, and
+  Unraid-friendly Docker hosting.
 - Multi-user profiles, invite links, Quick Connect, profile PINs, and encrypted
   settings.
 

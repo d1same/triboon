@@ -22,8 +22,8 @@
 //   $env:TRIBOON_USER="owner"; $env:TRIBOON_PASS="..."; node bench/verify-live.js `
 //     --title "Sintel 2010|tt1727587" --title "The Bear S01E01|tt14452776|1|1"
 //
-//   node bench/verify-live.js --base http://10.1.20.11:7777 --title "Dune Part Two 2024"
-//   node bench/verify-live.js --base http://10.1.20.11:7777 --quality 4k --resume-frac 0.45 `
+//   node bench/verify-live.js --base http://192.168.1.50:7777 --title "Dune Part Two 2024"
+//   node bench/verify-live.js --base http://192.168.1.50:7777 --quality 4k --resume-frac 0.45 `
 //     --title "Dune Part Two 2024"
 //
 // A title is "query|imdbid|season|episode" — only the query is required. Pass --title repeatedly.
