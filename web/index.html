@@ -1529,16 +1529,22 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 /* Like #bdInfo, the whole block stops at the 50% line so the title/logo, the TMDB meta line, the
    credits and the storyline all clear the backdrop art — not just the storyline. #detail sits at
    `rail + overscan` and the block is inset a further 30px, so that offset comes out of the cap. */
-.dInfo{flex:1;padding-bottom:8px;padding-left:34px;
-  max-width:min(920px,calc(50vw - var(--rail) - var(--overscan) - 30px))}
+/* The 50% cap belongs on the TEXT ONLY, never on this container. Capping .dInfo itself also
+   squeezed #dBtns — Resume / Start over / the 1080p-4K quality picker and the icon actions — into
+   half the page and they came out cramped (owner, 2026-08-06). Controls need the full column; it is
+   the prose that must stop before the backdrop art. --infoCap is measured from the text's own left
+   edge (this block's padding-left included) so each text child's RIGHT edge lands on 50vw. */
+.dInfo{flex:1;padding-bottom:8px;padding-left:34px;max-width:920px;
+  --infoCap:calc(50vw - var(--rail) - var(--overscan) - 30px - 34px)}
+#dTitle,#dMeta,#dCrew,#dOverview{max-width:var(--infoCap)}
 .dInfo .eyebrow{font:700 11px "JetBrains Mono";letter-spacing:.24em;color:var(--amber);text-transform:uppercase;margin-bottom:12px}
-#dTitle{font:800 clamp(34px,4.6vw,64px)/1.02 "Sora";letter-spacing:-.02em;margin-bottom:14px;max-width:none}
+#dTitle{font:800 clamp(34px,4.6vw,64px)/1.02 "Sora";letter-spacing:-.02em;margin-bottom:14px;max-width:var(--infoCap)}
 #dMeta{display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin-bottom:16px;color:var(--muted);font:600 13.5px "Albert Sans"}
 #dMeta .dot{opacity:.5}
 #dMeta .rating{color:var(--amber)}
 /* The 50% cap lives on .dInfo (see above) so the whole block clears the artwork together; here we
    only keep a comfortable reading measure. Phones widen this to 100% in the max-width:760px block. */
-#dOverview{color:var(--muted);max-width:74ch;margin-bottom:22px;font-size:15.5px;line-height:1.6}
+#dOverview{color:var(--muted);max-width:min(74ch,var(--infoCap));margin-bottom:22px;font-size:15.5px;line-height:1.6}
 #dBtns{display:flex;gap:12px;align-items:center}
 #dBtns .btn{min-height:52px;border-radius:999px;box-sizing:border-box}
 #dBtns .btn.primary{padding:14px 30px;font-weight:700}
@@ -3091,7 +3097,9 @@ body.tv #hero h1{font-size:min(var(--ctHeroTitle),42px);height:calc(39px * var(-
    clamp); the logo image replaces it after load. */
 #hero h1,#dTitle{height:150px;display:flex;align-items:flex-end;overflow:visible;
   -webkit-line-clamp:unset;white-space:normal}
-#dTitle{height:140px;max-width:none;margin-bottom:12px}
+/* max-width stays the text cap (--infoCap, set on .dInfo) — `none` here let a long title run right
+   across the backdrop art, which is exactly what the 50% pass was for. */
+#dTitle{height:140px;max-width:var(--infoCap);margin-bottom:12px}
 #hero h1 .tt,#dTitle .tt{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 #heroTitle.hasLogo img,#dTitle.hasLogo img{max-width:min(380px,86%);max-height:150px;object-fit:contain;
   object-position:left bottom;display:block;filter:drop-shadow(0 4px 18px rgba(0,0,0,.55));animation:logoIn .3s ease}
@@ -19131,19 +19139,24 @@ const THEMES = {
     artFocusLine: 'rgba(94,160,242,.34)', artFocusGlow: 'rgba(94,160,242,.20)', artFocusTileLine: 'rgba(94,160,242,.26)', artFocusTileBorder: 'rgba(94,160,242,.20)', artFocusTileGlow: 'rgba(94,160,242,.16)',
     scrim: 'linear-gradient(0deg,rgba(13,20,32,.85) 0%,rgba(13,20,32,.30) 24%,rgba(13,20,32,.04) 50%)',
   },
-  // Graphite — carbon neutrals with a platinum-steel accent: the most understated of the three
-  // (no color cast at all), tuned for living-room TVs — subdued, zero glow, quietly premium.
+  // Graphite — TRIBOON'S EXACT PALETTE with the gold/amber family swapped for white + grey (owner,
+  // 2026-08-06). Every surface token (ink, surface, raise, text, muted, line, field, soft, panel,
+  // scrim) is byte-identical to `triboon` above, so the two themes sit on the same deep ink and
+  // only their ACCENT differs: gold there, near-white here. The magenta→coral pair (m/c) stays —
+  // that is the wordmark gradient, brand identity rather than a gold/yellow accent. Keeps
+  // spotlight:true so focus behaves identically (the focused rail item fills solid), just white
+  // instead of gold; onAccent/btnFocusText are dark so text on that fill stays readable.
   graphite: {
-    label: 'Graphite', tone: 'carbon · platinum',
-    ink: '#0F1012', surface: '#17191C', raise: '#22252A',
-    m: '#78848F', c: '#A8B4C0', a: '#D6DDE4',
-    text: '#EEF1F4', muted: '#9AA2AB', line: 'rgba(255,255,255,.07)',
-    field: 'rgba(15,16,18,.82)', soft: 'rgba(36,40,45,.62)', panel: 'rgba(20,22,25,.96)',
-    focus: '#A8B4C0', focusSoft: 'rgba(168,180,192,.26)', onAccent: '#14181D',
-    success: '#85CDA0', danger: '#E39494',
-    btn: 'rgba(39,43,48,.78)', btnHover: 'rgba(51,56,62,.90)', btnSelected: 'rgba(65,71,79,.92)', btnSelectedHover: 'rgba(77,84,93,.96)', btnPrimary: '#A8B4C0', btnPrimaryHover: '#BAC5CF', btnFocusText: '#F2F4F7',
-    artFocusLine: 'rgba(168,180,192,.32)', artFocusGlow: 'rgba(168,180,192,.18)', artFocusTileLine: 'rgba(168,180,192,.25)', artFocusTileBorder: 'rgba(168,180,192,.19)', artFocusTileGlow: 'rgba(168,180,192,.15)',
-    scrim: 'linear-gradient(0deg,rgba(15,16,18,.85) 0%,rgba(15,16,18,.30) 24%,rgba(15,16,18,.04) 50%)',
+    label: 'Graphite', tone: 'signature ink · white focus', spotlight: true,
+    ink: '#0B0812', surface: '#161020', raise: '#221934',
+    m: '#C13BD6', c: '#FB8B3C', a: '#D8DCE4',
+    text: '#F3EFF7', muted: '#9B8FAD', line: 'rgba(255,255,255,.10)',
+    field: 'rgba(11,8,18,.76)', soft: 'rgba(34,25,52,.62)', panel: 'rgba(20,14,30,.96)',
+    focus: '#EDEFF3', focusSoft: 'rgba(237,239,243,.42)', onAccent: '#14161A',
+    success: '#7CE6A0', danger: '#FF8D8D',
+    btn: 'rgba(45,38,62,.75)', btnHover: '#EDEFF3', btnSelected: 'rgba(237,239,243,.26)', btnSelectedHover: '#F6F8FA', btnPrimary: '#EDEFF3', btnPrimaryHover: '#FFFFFF', btnFocusText: '#14161A',
+    artFocusLine: 'rgba(237,239,243,.90)', artFocusGlow: 'rgba(237,239,243,.34)', artFocusTileLine: 'rgba(237,239,243,.85)', artFocusTileBorder: 'rgba(237,239,243,.70)', artFocusTileGlow: 'rgba(237,239,243,.34)',
+    scrim: 'linear-gradient(0deg,rgba(11,8,18,.85) 0%,rgba(11,8,18,.30) 24%,rgba(11,8,18,.04) 50%)',
   },
   // ---- LEGACY THEMES (hidden from the picker; kept resolvable so devices/profiles that saved
   // one keep their look until they re-pick — deleting these would silently restyle them) ----

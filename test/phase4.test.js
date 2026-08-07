@@ -2595,8 +2595,26 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.ok(ui.includes("label: 'Triboon'") && ui.includes("m: '#C13BD6', c: '#FB8B3C', a: '#FFC65C'")
     && ui.includes("ink: '#0B0812'"),
     'the Triboon theme is the brand: signature ink + magenta→coral gradient + amber');
-  assert.ok(ui.includes("label: 'Graphite'") && ui.includes("tone: 'carbon · platinum'"),
-    'the third curated theme is the understated carbon/platinum Graphite');
+  // Graphite is now TRIBOON'S EXACT PALETTE with the gold/amber family swapped for white + grey
+  // (owner, 2026-08-06) — same deep ink and the same magenta→coral wordmark gradient, so the two
+  // curated dark themes differ ONLY in accent. It keeps spotlight:true so focus behaves identically.
+  assert.ok(ui.includes("label: 'Graphite'") && ui.includes("tone: 'signature ink · white focus'"),
+    'Graphite is the white-accent twin of Triboon');
+  {
+    const block = (name) => {
+      const i = ui.indexOf('  ' + name + ': {');
+      return ui.slice(i, ui.indexOf('\n  },', i));
+    };
+    const tok = (blk) => Object.fromEntries([...blk.matchAll(/(\w+):\s*'([^']*)'/g)].map((m) => [m[1], m[2]]));
+    const tri = tok(block('triboon')), gra = tok(block('graphite'));
+    for (const k of ['ink', 'surface', 'raise', 'text', 'muted', 'line', 'field', 'soft', 'panel', 'scrim', 'btn', 'm', 'c']) {
+      assert.strictEqual(gra[k], tri[k], `Graphite must share Triboon's ${k}`);
+    }
+    assert.ok(/^#(E|F)/i.test(gra.focus) && gra.focus !== tri.focus,
+      'Graphite focus is a near-white, not Triboon gold');
+    assert.ok(!/(FFC65C|E5B44E|FB8B3C)/i.test([gra.a, gra.focus, gra.btnPrimary, gra.btnHover].join(',')),
+      'no gold/amber survives in the Graphite accent family');
+  }
   assert.ok(ui.includes("label: 'Ocean'") && ui.includes("ink: '#0D1420'") && ui.includes("c: '#5EA0F2'"),
     'the Ocean theme keeps the proven deep-navy/sky palette');
   assert.ok(ui.includes("label: 'Scarlet'") && ui.includes("c: '#E50914'")
@@ -3619,12 +3637,23 @@ test('Android native player: direct source and native chrome stay out of the web
     'the audiobook mini bar must start at the rail EDGE, not tucked under the TV menu');
   // Detail hero block sits IN from the rows beneath it, and the storyline is capped so a long
   // synopsis stops before the backdrop art instead of running across it (owner, 2026-08-06).
-  assert.match(ui, /\.dInfo\{flex:1;padding-bottom:8px;padding-left:34px;\s*max-width:min\(920px,calc\(50vw - var\(--rail\) - var\(--overscan\) - 30px\)\)\}/,
-    'the detail hero block is indented AND stops at the 50% line so title/meta/credits/storyline all clear the art');
+  // The 50% cap must sit on the TEXT children, NEVER on .dInfo itself: capping the container also
+  // squeezed #dBtns (Resume / Start over / the 1080p-4K picker / icon actions) into half the page
+  // and they came out cramped (owner, 2026-08-06 — shipped that way in v2.8.7). Controls get the
+  // full column; only prose stops before the artwork. Verified on-device: text right edge 640 of
+  // 1280 while #dBtns spans the full 886px column on a single row.
+  assert.match(ui, /\.dInfo\{flex:1;padding-bottom:8px;padding-left:34px;max-width:920px;\s*\n\s*--infoCap:calc\(50vw - var\(--rail\) - var\(--overscan\) - 30px - 34px\)\}/,
+    'the detail block keeps its full width and only exposes --infoCap for its text children');
+  assert.match(ui, /#dTitle,#dMeta,#dCrew,#dOverview\{max-width:var\(--infoCap\)\}/,
+    'only the TEXT children carry the 50% cap');
+  assert.doesNotMatch(ui, /#dBtns\{[^}]*max-width:var\(--infoCap\)/,
+    'the detail button row must never be capped to 50% — that squishes Resume/Start over/quality');
+  assert.match(ui, /#dTitle\{height:140px;max-width:var\(--infoCap\);margin-bottom:12px\}/,
+    'the later #dTitle rule must not reset max-width to none, or a long title runs across the art');
   assert.match(ui, /#detail \.dInfo\{width:100%;max-width:100%;padding-bottom:0;padding-left:0;text-align:center\}/,
     'phones drop the indent — the block is centred there');
-  assert.match(ui, /#dOverview\{color:var\(--muted\);max-width:74ch/,
-    'the storyline keeps only a reading measure — the 50% cap lives on .dInfo so the whole block clears the art together');
+  assert.match(ui, /#dOverview\{color:var\(--muted\);max-width:min\(74ch,var\(--infoCap\)\)/,
+    'the storyline takes the tighter of its reading measure and the 50% text cap');
   // Rolling over a cover shows the title's LOGO ART, like the hero and detail page do.
   assert.match(ui, /const bdT = el\.querySelector\('\.bdiT'\);\s*\n\s*setTitleText\(bdT, it\.title\);\s*\n\s*applyTitleLogo\(bdT, it\);/,
     'browse/discover rollover paints the title logo (text first so it never flashes empty)');
