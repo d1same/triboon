@@ -125,6 +125,14 @@ body.tv.shortBrowseBd{--bdH:min(52vh,580px)}
   :root{--bdW:min(60vw,640px);--bdH:min(50vh,420px)}
   body.shortBrowseBd:not(.tv){--bdH:min(44vh,380px)}
 }
+/* DETAIL pages on TV: the art runs TALLER and melts out lower. At the browse heights the backdrop's
+   bottom fade finished level with the hero text, leaving a dead ink band between the art and the
+   EPISODES/CAST rows (owner, 2026-08-07). The layer's own vertical mask (58%→98%) rides the taller
+   box, so the fade simply lands lower — nothing else moves. LAST of the --bdH definitions on
+   purpose: opening a detail from Movies/TV leaves shortBrowseBd (and the max-height:760 media
+   values) on body, and those rules tie this one on specificity — source order is the tiebreak, so
+   this must come after every one of them to win whenever a detail page is open. */
+body.tv.detailOpen{--bdH:min(96vh,1040px)}
 /* Focused-title info over the backdrop on browse/discover pages — like the home hero, but
    informational only (no buttons; clicking the cover opens it). */
 /* The whole info block STOPS at the 50% line so the title, the TMDB meta line, the credits and the
@@ -792,7 +800,9 @@ body.tv #filterMenu{backdrop-filter:none}
 #dTitle{font:800 clamp(30px,4vw,54px)/1.05 "Sora";letter-spacing:-.02em;margin-bottom:12px;max-width:60vw}
 #dMeta{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
 #dOverview{color:var(--muted);max-width:64ch;margin-bottom:22px}
-#dBtns{display:flex;gap:12px;margin-bottom:30px}
+/* Total Play-row → EPISODES/CAST gap ≈ 22px (this 14 + .dInfo pb 2 + .secHead mt 6) — the owner
+   asked for ~1/3 of the original 68px (2026-08-07). */
+#dBtns{display:flex;gap:12px;margin-bottom:14px}
 #dSections{display:flex;flex-direction:column;gap:26px}
 .dRow h2{font:600 15px "Sora";color:var(--muted);margin:0 0 12px 2px}
 #castRow{display:flex;gap:14px;overflow-x:auto;padding:6px 2px}
@@ -950,18 +960,31 @@ body .mCard.focus .art,body .mCard:focus-visible .art{
    the settings panels are LARGE surfaces composited over scrolling artwork, so every frame pays
    for a full-surface blur. On TV the glass look is kept with slightly more opaque fills and NO
    live blur — visually near-identical from the couch, materially cheaper per frame. Desktop
-   browsers (where the GPU budget is not the constraint) keep the real blur. */
-   THE RAIL IS DELIBERATELY EXEMPT (owner call on the Shield, 2026-08-06). Dropping its blur and
-   thickening its fill to --panel is what turned the menu into a flat slab — "it's very ugly,
-   it's nothing like the web based version." The glass IS the design here, and the blur is what
-   makes a translucent column read as frosted rather than see-through, so the rail keeps the real
-   backdrop-filter on TV too. The remaining surfaces below are static panels the eye rests on far
-   less, so they still trade blur for frames. */
+   browsers (where the GPU budget is not the constraint) keep the real blur.
+   NOTE (2026-08-07): in v2.8.7/v2.8.8 this comment was accidentally CLOSED a paragraph early,
+   leaving the rest as raw text ending in a stray star-slash — CSS error-recovery then consumed the entire
+   no-blur rule below as one invalid selector, so the WHOLE profile was silently VOID for two
+   releases. That, plus the rail regaining a permanent blur, is what the owner felt as "performance
+   is not snappy". If this block is ever edited again, verify the rules still MATCH on a live page
+   (rail.matches / getComputedStyle), not just that the file parses.
+   THE RAIL blurs ONLY WHILE EXPANDED. Restoring the glass in v2.8.7 put a full-height blur(20px)
+   back on the TV rail permanently, and the owner immediately felt it: "performance is not snappy,
+   it has a bit of a glitch moving around" — the compact rail sits over the artwork for the WHOLE
+   browsing session, so every frame paid for the blur. Compact now drops the live blur and deepens
+   the same ink tint a touch (so it still reads as a glass column, not bare icons — the fill is
+   what the owner's earlier "shows under the menu" complaint was actually about); the moment the
+   menu is entered/expanded the real blur comes back, which is when anyone is actually looking at
+   it. Desktop keeps the blur always. */
 body.tv .railBtn.active,
 body.tv .panel,
 body.tv #setTabs button,body.tv #prefTabs button,
 body.tv #detail .back,body.tv #person .back{
   -webkit-backdrop-filter:none !important;backdrop-filter:none !important}
+/* State classes ONLY — no :not(:hover): the TV WebView latches :hover after remote navigation
+   (documented at the collapsed-rail block), which would keep the blur alive forever. */
+body.tv:not(.railOpen) #rail:not(.expanded){
+  -webkit-backdrop-filter:none;backdrop-filter:none;
+  background-color:rgba(26,19,40,.86)} /* --soft's hue, deeper: unblurred glass still hides the art behind it */
 body.tv .panel{background:var(--panel)}
 /* The idle backdrop drift is a composited transform, but on TV it runs behind every page for the
    whole session — hold it still there and keep the motion for desktop. */
@@ -1534,7 +1557,7 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
    half the page and they came out cramped (owner, 2026-08-06). Controls need the full column; it is
    the prose that must stop before the backdrop art. --infoCap is measured from the text's own left
    edge (this block's padding-left included) so each text child's RIGHT edge lands on 50vw. */
-.dInfo{flex:1;padding-bottom:8px;padding-left:34px;max-width:920px;
+.dInfo{flex:1;padding-bottom:2px;padding-left:34px;max-width:920px;
   --infoCap:calc(50vw - var(--rail) - var(--overscan) - 30px - 34px)}
 #dTitle,#dMeta,#dCrew,#dOverview{max-width:var(--infoCap)}
 .dInfo .eyebrow{font:700 11px "JetBrains Mono";letter-spacing:.24em;color:var(--amber);text-transform:uppercase;margin-bottom:12px}
@@ -1556,7 +1579,9 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 /* On-watchlist state reads at a glance: the bookmark glyph fills solid (white on dark themes)
    instead of only the button background changing. currentColor keeps it visible on light themes. */
 #dWatchlist.on svg path,#trailerWl.on svg path{fill:currentColor}
-.detailScroll .secHead{display:flex;align-items:center;gap:16px;margin:30px 0 14px}
+/* Sections sit CLOSE under the Play row (owner, 2026-08-07: "1/3 of the size it is now") — the gap
+   was 30px secHead margin on top of the hero's ~20px of padding; ~18px total now. */
+.detailScroll .secHead{display:flex;align-items:center;gap:16px;margin:6px 0 6px} /* heading hugs its row (owner, 2026-08-07) */
 .detailScroll .secHead h2{margin:0}
 .ghostMini{margin-left:auto;background:var(--btn);border:1px solid rgba(255,255,255,.045);border-radius:10px;padding:8px 14px;font:600 12px "Sora";color:var(--text)}
 /* Quality toggle joins the borderless D family: dark pill shell, no hairline; the selected
@@ -1636,7 +1661,7 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 #discoverRows{gap:26px}
 
 /* Section header rhythm — consistent goldish labels with room above. */
-.row h2{margin:0 0 12px 2px}
+.row h2{margin:0 0 8px 2px} /* heading hugs its row, matching the detail sections (owner, 2026-08-07) */
 #discover h1,#browse .browseHead h1{letter-spacing:-.01em}
 
 /* FOCUS HIGHLIGHTS NOT CLIPPED: give every horizontal/grid scroller enough inner
@@ -4670,7 +4695,12 @@ const bgLazy = (() => {
     if (!('IntersectionObserver' in window)) return load(el);
     if (!io) io = new IntersectionObserver((entries) => {
       entries.forEach((e) => { if (e.isIntersecting) { io.unobserve(e.target); load(e.target); } });
-    }, { rootMargin: '900px 300px' });
+      // 300px of horizontal headroom was tuned for w300 stills; at the sharper w780/w500 art a
+      // card entering 300px out finishes its fetch AFTER it scrolls into view — the owner's
+      // "artwork used to show instant, now a 1-2s delay" on D-pad row scrolling (2026-08-07).
+      // ~1600px preloads several cards ahead, so the bigger files land before they are seen.
+      // Vertical stays modest; rows load a screen ahead. Still lazy: off-path art never loads.
+    }, { rootMargin: '900px 1600px' });
     io.observe(el);
   };
   api.unobserveRoot = (root) => {
@@ -7594,7 +7624,7 @@ async function openDetail(it, push = true) {
   S.view = 'detail'; S.detailItem = it; S.detailData = null; S.detailSeason = null; S.detailSeasons = null;
   S.detailColMem = {}; // fresh page → every row's per-row column memory starts at the beginning
   S.detailEpisodeAutoFocusDone = false;
-  $('detail').classList.add('open');
+  $('detail').classList.add('open'); document.body.classList.add('detailOpen');
   $('home').classList.remove('show'); $('searchBar').classList.remove('show');
   $('browse').classList.remove('open'); $('discover').classList.remove('open');
   $('settings').classList.remove('open'); $('prefs').classList.remove('open'); $('music').classList.remove('open');
@@ -8385,7 +8415,7 @@ function closeDetail() {
   // hidden detail DOM or close the next surface based on the title that is no longer open.
   S.detailReq = (S.detailReq || 0) + 1;
   S.seasonReq = (S.seasonReq || 0) + 1;
-  $('detail').classList.remove('open');
+  $('detail').classList.remove('open'); document.body.classList.remove('detailOpen');
   S.detailItem = null;
   S.qualityPref = null; // visible toggle state only; per-title choices stay saved for Continue Watching.
   // Deep-link/refresh fallback: normal visible/keyboard/hardware Back uses backOneRoute(). When no
@@ -15831,7 +15861,7 @@ function openLocalDetail(it) {
   S.view = 'detail'; S.detailItem = it; S.detailData = null; S.detailReq = (S.detailReq || 0) + 1;
   $('bdInfo').classList.remove('show');
   $('person').classList.remove('open');
-  $('detail').classList.add('open');
+  $('detail').classList.add('open'); document.body.classList.add('detailOpen');
   $('home').classList.remove('show'); $('searchBar').classList.remove('show');
   $('browse').classList.remove('open'); $('discover').classList.remove('open');
   $('dTitle').textContent = it.title;
@@ -15880,7 +15910,7 @@ async function openLocalShowDetail(it) {
   $('bdInfo').classList.remove('show');
   $('person').classList.remove('open');
   $('detail').style.visibility = '';
-  $('detail').classList.add('open');
+  $('detail').classList.add('open'); document.body.classList.add('detailOpen');
   $('home').classList.remove('show'); $('searchBar').classList.remove('show');
   $('browse').classList.remove('open'); $('discover').classList.remove('open');
   $('settings').classList.remove('open'); $('prefs').classList.remove('open'); $('music').classList.remove('open');
@@ -16106,7 +16136,7 @@ async function applyMatch(tmdbId) {
         ensureLocalMap();
         toast(tmdbId === null ? 'Now showing the folder info ✓' : 'Match fixed ✓');
         // The open detail page describes the OLD identity — land back on the library grid.
-        $('detail').classList.remove('open');
+        $('detail').classList.remove('open'); document.body.classList.remove('detailOpen');
         S.currentLib = it._lib;
         switchView('library');
       } catch { clearInterval(poll); }
@@ -22026,7 +22056,7 @@ function switchView(v, push = true, opts = {}) {
   if (prevView === 'audiobooks' && v !== 'audiobooks') { $('abDetail').classList.remove('open'); if (typeof stopAudiobook === 'function') stopAudiobook(); }
   if (typeof updateAbMini === 'function') updateAbMini();
   $('searchBar').classList.toggle('show', v === 'search');
-  $('detail').classList.remove('open'); $('person').classList.remove('open');
+  $('detail').classList.remove('open'); document.body.classList.remove('detailOpen'); $('person').classList.remove('open');
   document.querySelectorAll('.railBtn[data-nav]').forEach((b) => b.classList.toggle('active', b.dataset.nav === v));
   document.querySelectorAll('#railLibs .railBtn').forEach((b) =>
     b.classList.toggle('active', v === 'library' && S.currentLib && b.dataset.libid === S.currentLib.id));
@@ -24410,8 +24440,11 @@ async function restoreSavedSession() {
   splashStage(40); // server answered — the session decision is next
   S.serverInfo = info;
   relayCastReceiverAppId();
-  wireBackdropScrollFade($('rows'));  // home rows + browse grid fade the backdrop as they scroll
-  wireBackdropScrollFade($('grid'));
+  // The scroll-fade stays a DETAIL-page behavior only (wired to .detailScroll where detail opens).
+  // It was briefly wired to #rows/#grid too, and on a TV that killed the backdrop after ONE row:
+  // the 1-row grid window scrolls ~326px per row against the fade's 360px ramp, so row 2 sat at
+  // 9% opacity and row 3 at 0 — the owner's "backdrop only shows on the first row" (2026-08-07).
+  // Rows/grid surfaces keep their backdrop; it crossfades per focused card instead of fading out.
   if (invite) return showGate('invite');
   if (info.needsSetup) return showGate('setup');
   if (tokenStore.get()) {

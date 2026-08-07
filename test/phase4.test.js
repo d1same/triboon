@@ -3571,8 +3571,51 @@ test('Android native player: direct source and native chrome stay out of the web
   // leaving a stray sliver of artwork (owner, 2026-08-06).
   assert.match(ui, /body\.tv:not\(\.railOpen\) #rail:not\(\.expanded\)\{\s*width:calc\(72px \+ var\(--overscan\)\)!important;align-items:center;\s*\n\s*padding-left:0!important;padding-right:0!important/,
     'the collapsed TV rail centres its icons and ends exactly on the content boundary (no sliver gap)');
-  assert.doesNotMatch(ui, /body\.tv:not\(\.railOpen\) #rail:not\(\.expanded\)\{[\s\S]{0,200}background:/,
-    'the collapsed TV rail must not override the shared glass background at all (neither transparent nor an opaque slab)');
+  // The LAYOUT rule may not touch background; the PERF rule (below) deliberately deepens only
+  // background-color while dropping the live blur — unblurred glass at .62 would show the raw
+  // artwork through the menu, and permanent blur is what made the Shield "not snappy" (2026-08-07).
+  assert.doesNotMatch(ui, /body\.tv:not\(\.railOpen\) #rail:not\(\.expanded\)\{[^}]{0,300}[^-]background:/,
+    'the collapsed TV rail rules must not set a background SHORTHAND (transparent/opaque slabs both rejected; background-color in the perf rule is fine)');
+  assert.match(ui, /body\.tv:not\(\.railOpen\) #rail:not\(\.expanded\)\{\s*\n\s*-webkit-backdrop-filter:none;backdrop-filter:none;\s*\n\s*background-color:rgba\(26,19,40,\.86\)\}/,
+    'the compact TV rail drops the live blur (deepened tint keeps the glass look) — blur returns only when expanded');
+  // The perf-profile comment must stay WELL-FORMED: in v2.8.7/v2.8.8 it closed a paragraph early,
+  // the remainder became raw text ending in a stray star-slash, and CSS error-recovery consumed the
+  // entire no-blur rule as one invalid selector — the whole TV profile was silently void.
+  assert.match(ui, /it\. Desktop keeps the blur always\. \*\/\nbody\.tv \.railBtn\.active,/,
+    'the TV perf-profile comment closes immediately before its first rule (a stray close voids the whole profile)');
+  // ---- 2026-08-07 owner batch (backdrop-per-row, taller detail art, tighter sections, preload) ----
+  // The scroll-fade is a DETAIL-page behavior only. Wired to #rows/#grid it killed the backdrop
+  // after ONE row on TV (grid scrolls ~326px per row vs the 360px ramp) — "backdrop only shows on
+  // the first row".
+  assert.doesNotMatch(ui, /wireBackdropScrollFade\(\$\('rows'\)\)|wireBackdropScrollFade\(\$\('grid'\)\)/,
+    'rows/grid must never get the backdrop scroll-fade — it zeroes the art after one TV row');
+  assert.match(ui, /wireBackdropScrollFade\(_ds\)/,
+    'the detail page keeps its scroll-fade');
+  // Detail pages on TV run the art taller so its fade lands below the hero instead of leaving a
+  // dead ink band above EPISODES/CAST. Must be the LAST --bdH definition: shortBrowseBd stays on
+  // body when a detail opens from Movies/TV and ties on specificity — source order is the tiebreak.
+  assert.match(ui, /body\.tv\.detailOpen\{--bdH:min\(96vh,1040px\)\}/,
+    'TV detail pages run the backdrop tall so it melts out below the hero');
+  {
+    const lastBdH = ui.lastIndexOf('--bdH:min(');
+    assert.ok(ui.slice(lastBdH - 220, lastBdH + 40).includes('body.tv.detailOpen'),
+      'the detailOpen --bdH override must be the LAST --bdH definition or shortBrowseBd/media rules outrank it');
+  }
+  assert.match(ui, /document\.body\.classList\.add\('detailOpen'\)/,
+    'opening a detail mirrors the state onto body.detailOpen (CSS keys the taller backdrop off it)');
+  // Art preloads several cards ahead: 300px of horizontal headroom was tuned for w300 stills, and
+  // at w780/w500 a card entering 300px out finished its fetch after scrolling into view (owner:
+  // "artwork used to show instant, now a 1-2s delay").
+  assert.match(ui, /rootMargin: '900px 1600px'/,
+    'the lazy-loader preloads wide enough for the sharper art to land before it is seen');
+  // Sections hug the Play row and headings hug their rows (owner: "1/3 of the size", "cast text
+  // close to the cast row").
+  assert.match(ui, /#dBtns\{display:flex;gap:12px;margin-bottom:14px\}/,
+    'the Play row keeps only a small gap before the first section');
+  assert.match(ui, /\.detailScroll \.secHead\{display:flex;align-items:center;gap:16px;margin:6px 0 6px\}/,
+    'detail section headings hug their rows');
+  assert.match(ui, /\.row h2\{margin:0 0 8px 2px\}/,
+    'home row headings hug their rows too');
   // The collapsed rail RECEDES so focus sits on the content, and comes back to full strength when
   // entered — the shared rules own this and TV must not pin the surface to opacity:1.
   assert.match(ui, /#rail:not\(\.expanded\):not\(:hover\)\{opacity:\.62\}/,
@@ -3642,7 +3685,7 @@ test('Android native player: direct source and native chrome stay out of the web
   // and they came out cramped (owner, 2026-08-06 — shipped that way in v2.8.7). Controls get the
   // full column; only prose stops before the artwork. Verified on-device: text right edge 640 of
   // 1280 while #dBtns spans the full 886px column on a single row.
-  assert.match(ui, /\.dInfo\{flex:1;padding-bottom:8px;padding-left:34px;max-width:920px;\s*\n\s*--infoCap:calc\(50vw - var\(--rail\) - var\(--overscan\) - 30px - 34px\)\}/,
+  assert.match(ui, /\.dInfo\{flex:1;padding-bottom:2px;padding-left:34px;max-width:920px;\s*\n\s*--infoCap:calc\(50vw - var\(--rail\) - var\(--overscan\) - 30px - 34px\)\}/,
     'the detail block keeps its full width and only exposes --infoCap for its text children');
   assert.match(ui, /#dTitle,#dMeta,#dCrew,#dOverview\{max-width:var\(--infoCap\)\}/,
     'only the TEXT children carry the 50% cap');
