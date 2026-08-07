@@ -630,11 +630,17 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'controls across every surface lose their hairline borders (one flat pill family)');
   assert.match(ui, /#appLoader \.brandWordmarkClip\{width:330px;height:92px/,
     'the boot splash wordmark is the larger size');
-  // Android TV performance: live backdrop-blur on large surfaces (rail, settings panels) and the
-  // always-on backdrop drift are the expensive effects on a Shield-class GPU — TV keeps the look
-  // with opaque fills and no per-frame blur/animation. Desktop keeps the real glass.
-  assert.match(ui, /body\.tv #rail,\s*\nbody\.tv \.railBtn\.active,\s*\nbody\.tv \.panel,[\s\S]{0,200}backdrop-filter:none !important\}/,
-    'TV disables live backdrop blur on the rail, settings panels, tabs, and the back button');
+  // Android TV performance: live backdrop-blur on large surfaces and the always-on backdrop drift
+  // are the expensive effects on a Shield-class GPU, so static panels trade blur for frames.
+  // THE RAIL IS EXEMPT (owner, 2026-08-06): stripping its blur and thickening its fill turned the
+  // menu into a flat slab — "very ugly, nothing like the web based version". Blur is what makes a
+  // translucent column read as frosted instead of see-through, so the rail keeps real glass on TV.
+  assert.match(ui, /body\.tv \.railBtn\.active,\s*\nbody\.tv \.panel,[\s\S]{0,200}backdrop-filter:none !important\}/,
+    'TV drops live backdrop blur on the static panels, tabs, and the back button');
+  assert.doesNotMatch(ui, /body\.tv #rail,\s*\nbody\.tv \.railBtn\.active/,
+    'the RAIL must NOT be in the TV no-blur list — its glass is the design (owner-reverted)');
+  assert.doesNotMatch(ui, /body\.tv #rail\{background:linear-gradient\([^)]*\)[^}]*var\(--panel\)\}/,
+    'the TV rail must not be thickened to the opaque --panel fill; it keeps the shared translucent glass');
   assert.match(ui, /body\.tv #backdrop \.layer\.show\{animation:none\}/,
     'the idle backdrop drift is held still on TV');
   assert.match(ui, /\.cards\{display:flex;gap:14px;overflow-x:auto;padding:10px 14px;margin:0 -14px\}/,
@@ -1512,7 +1518,8 @@ test('next-episode metadata cannot overwrite a newer player when requests resolv
   const updates = [];
   const prepNextEpisode = new Function('S', 'updateNextEpisodeButton', 'episodeKeyParts',
     'getPlayerEpisodeContext', 'api', 'epItemOf', 'preferredQualityRankForItem', 'ensureLocalPlaybackForItem',
-    'img', 'pad2', `${ui.slice(start, end)}\nreturn prepNextEpisode;`)(
+    // STILL_W is the DPI-aware episode-still size the helper now asks img() for.
+    'img', 'pad2', 'STILL_W', `${ui.slice(start, end)}\nreturn prepNextEpisode;`)(
       S,
       () => updates.push(S.nextEp && S.nextEp.item && S.nextEp.item.key),
       (it) => ({ tmdbId: it.key, season: 1, episode: 1 }),
@@ -1522,7 +1529,8 @@ test('next-episode metadata cannot overwrite a newer player when requests resolv
       () => null,
       () => Promise.resolve(null),
       (value) => value || '',
-      (n) => String(n).padStart(2, '0'));
+      (n) => String(n).padStart(2, '0'),
+      'w780');
 
   const itemA = { key: 'episode-a', type: 'episode' };
   const itemB = { key: 'episode-b', type: 'episode' };
@@ -3534,8 +3542,120 @@ test('Android native player: direct source and native chrome stay out of the web
     'PiP guide rows should share Live TV row focus behavior');
   assert.match(ui, /body\.tv:not\(\.railOpen\) #rail:not\(\.expanded\)/,
     'Android TV should not let sticky CSS hover keep the rail expanded');
-  assert.match(ui, /body\.tv:not\(\.railOpen\) #rail:not\(\.expanded\)\{[\s\S]+width:72px!important;background:transparent!important/,
-    'collapsed Android TV rail should stay transparent and keep the app rail width');
+  // 2026-08-06 (owner, on the Shield): the collapsed TV rail used to be
+  // `background:transparent!important` — no panel at all, just floating icons. It must not set a
+  // background AT ALL now: not transparent (that was the bare-icons bug) and not an opaque --panel
+  // slab (that was the over-correction the owner rejected). Leaving it unset inherits the shared
+  // glass. Both paddings are 0 so align-items:center splits the extra --overscan width evenly and
+  // the icons sit dead-centre; the -4px trims the column a touch tighter around them.
+  // The column's right edge must EQUAL the content boundary `calc(--rail + --overscan)`. Trimming
+  // the width desyncs them and a scrolled-out cover gets sliced in open space beside the menu,
+  // leaving a stray sliver of artwork (owner, 2026-08-06).
+  assert.match(ui, /body\.tv:not\(\.railOpen\) #rail:not\(\.expanded\)\{\s*width:calc\(72px \+ var\(--overscan\)\)!important;align-items:center;\s*\n\s*padding-left:0!important;padding-right:0!important/,
+    'the collapsed TV rail centres its icons and ends exactly on the content boundary (no sliver gap)');
+  assert.doesNotMatch(ui, /body\.tv:not\(\.railOpen\) #rail:not\(\.expanded\)\{[\s\S]{0,200}background:/,
+    'the collapsed TV rail must not override the shared glass background at all (neither transparent nor an opaque slab)');
+  // The collapsed rail RECEDES so focus sits on the content, and comes back to full strength when
+  // entered — the shared rules own this and TV must not pin the surface to opacity:1.
+  assert.match(ui, /#rail:not\(\.expanded\):not\(:hover\)\{opacity:\.62\}/,
+    'the compact menu fades back when it is not the focus');
+  // ...but an OPEN PHONE DRAWER is never faded. On phones #rail IS the off-canvas menu, opened via
+  // body.mobileNav: it never gets .expanded and touch has no :hover, so both guards on the recede
+  // rules pass and a fully open drawer rendered at .62 surface x .6 items ≈ 0.37 — the owner could
+  // not read the menu items at all.
+  assert.match(ui, /body\.mobileNav #rail,\s*\nbody\.mobileNav #rail \.railBtn,\s*\nbody\.mobileNav #rail #railUser\{opacity:1!important\}/,
+    'the open phone drawer must render at full strength, never with the compact-recede fade');
+  assert.doesNotMatch(ui, /body\.tv #rail:not\(\.expanded\):not\(:hover\)\{opacity:1\}/,
+    'TV must not cancel the compact fade — the owner wants the menu to recede until entered');
+  // ...but on a REAL Android TV the shared fade is inert: the WebView latches :hover after remote
+  // navigation, and native focus can stay parked on a rail button, so :not(:hover) / :focus-within
+  // both hold the menu at full strength. Verified on the owner's Shield 2026-08-06 — the menu never
+  // greyed out while browsing. The fade must therefore ALSO be asserted from our own state classes.
+  assert.match(ui, /body\.tv:not\(\.railOpen\) #rail:not\(\.expanded\)\{[\s\S]{0,1600}opacity:\.5\s*\n\}/,
+    'the compact TV menu must fade from STATE CLASSES — :hover/:focus-within are unreliable on Android TV');
+  assert.match(ui, /body\.tv:not\(\.railOpen\) #rail:not\(\.expanded\) \.railBtn:not\(\.active\):not\(\.focus\),\s*\nbody\.tv:not\(\.railOpen\) #rail:not\(\.expanded\) #railUser\{opacity:\.6\}/,
+    'the compact TV menu icons dim from state classes too');
+  // A menu row must never SCALE on focus: #railMain is a scroller (overflow-x:hidden), so a scaled
+  // pill grows ~10px past its own container and is sliced ~5px on both sides — the owner's "goldish
+  // rollover is cut on the left and the right". `.railBtn.focusable.focus{transform:none}` is
+  // (0,3,0) and was outranked by `body[data-spotlight] .focusable.focus{scale(1.05)}` at (0,3,1).
+  assert.match(ui, /body\[data-spotlight\] \.railBtn\.focusable\.focus,body\[data-spotlight\] \.railBtn:focus-visible,\s*\nbody\[data-spotlight\] #railUser\.focusable\.focus,body\[data-spotlight\] #railUser:focus-visible\{transform:none\}/,
+    'themed focus scale must not reach the rail — a scaled pill gets clipped by railMain and looks cut');
+  // The rail tint comes from the theme token. (A sweep of all 17 themes appeared to show the rail
+  // stuck on one theme's colour; that was a MEASUREMENT artifact — #rail has `transition:background
+  // .26s`, so a synchronous read after switching returns the pre-transition value. Read after the
+  // transition settles and every theme resolves correctly. Do not "fix" this again.)
+  assert.match(ui, /#rail\{background:linear-gradient\(180deg,rgba\(255,255,255,\.055\)[^;]*,var\(--soft\);/,
+    'the rail tint comes from the themed --soft token');
+  // Collapsed section labels must LEAVE the flex flow. At height:0 they are still flex items, so
+  // railMain's 6px gap applied on both sides and every group boundary gained 6px — uneven icons.
+  assert.match(ui, /\.railSec\{[^}]*height:0;opacity:0;display:none;/,
+    'collapsed rail section labels are display:none so every icon gap is identical');
+  assert.match(ui, /body\.tv #rail:hover \.railSec,#rail\.expanded \.railSec,body\.railOpen \.railSec\{height:auto;opacity:\.7;display:block\}/,
+    'expanded rail restores the section labels');
+  // Compact icon gaps must be IDENTICAL. Rail grouping puts a 10px margin on the first item of each
+  // group; with no section labels visible those gaps read as random, and they land on arbitrary
+  // items because Live TV / Music are display:none when unconfigured. Verified on-device: compact
+  // gaps went from 16,6,6,6,16,6,16,6 to a uniform 6. #railAddLib keeps margin-top:auto (bottom pin).
+  assert.match(ui, /body\.tv:not\(\.railOpen\) #rail:not\(\.expanded\) #railMain > \*:not\(#railAddLib\)\{\s*\n\s*margin-top:0!important;margin-bottom:0!important\}/,
+    'the compact TV menu gives every icon the same gap (grouping margins only apply when expanded)');
+  // The rail is FLUSH to the TV edge and full height; --overscan moved INSIDE as padding, so the
+  // icons keep their title-safe position and `calc(--rail + --overscan)` still lands exactly on the
+  // rail's right edge — the surface changed, the layout did not.
+  assert.match(ui, /body\.tv #rail\{\s*left:var\(--safeL\);top:var\(--safeT\);bottom:var\(--safeB\);/,
+    'the Android TV rail should sit flush against the screen edge and run full height (owner: gap between the TV edge and the menu)');
+  assert.match(ui, /body\.tv #rail\{[\s\S]{0,240}padding-top:calc\(14px \+ var\(--overscan\)\);padding-bottom:calc\(18px \+ var\(--overscan\)\)/,
+    'title-safe overscan must move INSIDE the flush TV rail as padding so the icons do not shift');
+  // Found on the emulator 2026-08-06 while verifying the rail fix: #detail overrides the shared
+  // page rule with its own `left`, and that override never carried --overscan. So the whole detail
+  // column started at --rail while the TV rail's right edge is at --rail + --overscan, putting
+  // every detail row ~11px too far LEFT — cards scrolled out UNDER the menu instead of clipping at
+  // its edge. This is the row the owner actually reported (cast / related / episodes).
+  assert.match(ui, /#detail\{padding:0!important;left:calc\(var\(--rail\) \+ var\(--overscan\)\)!important/,
+    'the detail page must start at the rail EDGE (--rail + --overscan), or its rows scroll under the TV menu');
+  assert.match(ui, /#detail \.back\{position:fixed;top:22px;z-index:9;left:calc\(var\(--rail\) \+ var\(--overscan\) \+ 24px\)/,
+    'the detail Back disc must clear the TV rail too');
+  assert.match(ui, /#abMini \{ position:fixed; left:calc\(var\(--rail\) \+ var\(--overscan\)\);/,
+    'the audiobook mini bar must start at the rail EDGE, not tucked under the TV menu');
+  // Detail hero block sits IN from the rows beneath it, and the storyline is capped so a long
+  // synopsis stops before the backdrop art instead of running across it (owner, 2026-08-06).
+  assert.match(ui, /\.dInfo\{flex:1;padding-bottom:8px;padding-left:34px;\s*max-width:min\(920px,calc\(50vw - var\(--rail\) - var\(--overscan\) - 30px\)\)\}/,
+    'the detail hero block is indented AND stops at the 50% line so title/meta/credits/storyline all clear the art');
+  assert.match(ui, /#detail \.dInfo\{width:100%;max-width:100%;padding-bottom:0;padding-left:0;text-align:center\}/,
+    'phones drop the indent — the block is centred there');
+  assert.match(ui, /#dOverview\{color:var\(--muted\);max-width:74ch/,
+    'the storyline keeps only a reading measure — the 50% cap lives on .dInfo so the whole block clears the art together');
+  // Rolling over a cover shows the title's LOGO ART, like the hero and detail page do.
+  assert.match(ui, /const bdT = el\.querySelector\('\.bdiT'\);\s*\n\s*setTitleText\(bdT, it\.title\);\s*\n\s*applyTitleLogo\(bdT, it\);/,
+    'browse/discover rollover paints the title logo (text first so it never flashes empty)');
+  assert.match(ui, /#bdInfo \.bdiT\{height:132px;display:flex;align-items:flex-end;overflow:visible\}/,
+    'the rollover title uses a FIXED-height slot so the meta below does not bounce between titles');
+  assert.match(ui, /#bdInfo \.bdiT\.hasLogo img\{max-width:min\(380px,86%\);max-height:132px/,
+    'the rollover logo is sized like the hero/detail logo');
+  // Capping each CHILD's width was wrong: the block starts at `rail + 40 + heroLeft`, so a
+  // 50vw-wide child still ended ~200px past the artwork. The cap belongs on the CONTAINER, where
+  // subtracting that offset lands the right edge exactly on 50vw for title, meta, credits AND
+  // storyline together (owner, 2026-08-06 — verified on-device: all four now end at 640 of 1280).
+  assert.match(ui, /#bdInfo\{position:fixed;[\s\S]{0,160}max-width:min\(760px,calc\(50vw - var\(--rail\) - 40px - var\(--heroLeft\)\)\)/,
+    'the browse/discover info block stops at the 50% line, capping title, meta, credits and storyline at once');
+  assert.match(ui, /#bdInfo \.bdiO\{color:var\(--muted\);font-size:15\.5px;line-height:1\.6;max-width:74ch/,
+    'the browse storyline keeps only a reading measure — the container owns the 50% cap');
+  // The HOME hero is a third block with the same problem: 46vw measured from its own left edge
+  // still ran past the artwork. Width-gated because phones hide the backdrop and the hero copy.
+  assert.match(ui, /@media \(min-width:761px\)\{\s*\n\s*#hero\{max-width:min\(46vw,calc\(50vw - var\(--rail\) - var\(--overscan\) - var\(--gut\) - var\(--heroLeft\)\)\)\}/,
+    'the home hero stops at the 50% line too, so every page with a description clears the artwork');
+  // TMDB art is sized for the rendered slot x the PANEL pixel ratio. A ~292px episode card asking
+  // for w300 is 1:1 on a phone but a ~2x upscale on a 2x panel and ~3x on a 4K Shield — the owner
+  // saw this as "thumbnail quality is lower, a way optimized version". Verified on-device: episode
+  // stills went from 1.95x upscale to 0.75x. Never jump to `original` (a still is ~1MB vs 55KB).
+  assert.match(ui, /const STILL_W = _DPR >= 1\.5 \? 'w780' : 'w300';/,
+    'episode stills must scale up on high-DPI panels');
+  assert.match(ui, /const CAST_W = _DPR >= 1\.5 \? 'w342' : 'w185';/,
+    'cast photos must scale up on high-DPI panels');
+  assert.match(ui, /const POSTER_W = _DPR >= 2\.5 \? 'w500' : 'w342';/,
+    'posters already carry ~2x headroom, so they only step up on 3x panels');
+  assert.doesNotMatch(ui, /img\(ep\.still_path, 'w300'\)/,
+    'no episode still may hard-code the low-DPI size');
   assert.match(ui, /body\.tv:not\(\.railOpen\) #rail:not\(\.expanded\) \.railBtn,[\s\S]+justify-content:center/,
     'collapsed Android TV rail icons should be centered with even side spacing');
   assert.match(ui, /body\.tv:not\(\.railOpen\) #rail:not\(\.expanded\) \.railBtn svg\{margin:0!important\}/,
@@ -3550,10 +3670,21 @@ test('Android native player: direct source and native chrome stay out of the web
   // expands via clicking the logo; navigation was already click-only.
   assert.ok(!ui.includes('railClickCollapsed'),
     'the hover-then-suppress railClickCollapsed hack is gone (hover no longer expands on desktop)');
-  // Redesign 2026-08-06: the expanded width is MEASURED from the widest label (fitRailWidth),
-  // clamped 176–268px, with 236px kept as the pre-measurement fallback.
+  // Redesign 2026-08-06: the expanded width is MEASURED from the widest label (fitRailWidth).
+  // The clamp FLOOR is the old fixed 236px slab — the first cut used 176 and short labels made the
+  // menu narrower than what it replaced (owner: "put it back or make it a little bit wider").
+  // Measuring may now only ever WIDEN the menu, up to a 300px cap.
   assert.match(ui, /body\.tv #rail:hover,#rail\.expanded,body\.railOpen #rail\{width:var\(--railExpandedW,236px\)\}/,
     'the rail widens to its measured width on TV hover, the .expanded class (desktop hover), or D-pad railOpen');
+  assert.match(ui, /const RAIL_W_MIN = 236, RAIL_W_MAX = 300;/,
+    'the measured rail must never be NARROWER than the fixed 236px menu it replaced');
+  assert.match(ui, /body\.railOpen #bdInfo\{transform:translateX\(calc\(var\(--railExpandedW,236px\) - 84px\)\)\}/,
+    'the content push must TRACK the measured rail width, or a wider menu overlays the first cover');
+  // Padding must MATCH on both sides. Growing only padding-left by --overscan left the active/focus
+  // pill with ~17px on the left but ~8px on the right, where the rail's 18px rounded corner plus
+  // overflow:hidden clipped it — the owner saw the yellow highlight as cut off (2026-08-06).
+  assert.match(ui, /body\.tv #rail:hover,body\.tv #rail\.expanded,body\.tv\.railOpen #rail\{\s*width:calc\(var\(--railExpandedW,252px\) \+ var\(--overscan\)\);\s*\n\s*padding-left:calc\(12px \+ var\(--overscan\)\);padding-right:calc\(12px \+ var\(--overscan\)\)\}/,
+    'the expanded TV rail pads BOTH sides equally so the highlight pill clears the rounded corner');
   assert.match(ui, /document\.querySelectorAll\('\.railBtn\[data-nav\]'\)\.forEach\(\(b\) => b\.addEventListener\('click', \(\) => \{[\s\S]+switchView\(b\.dataset\.nav\);[\s\S]+collapseRailAfterClick\(\);[\s\S]+\}\)\)/,
     'clicking a left-menu destination navigates and collapses the rail');
   assert.match(ui, /\$\('rail'\)\.addEventListener\('mouseenter', \(\) => \{[\s\S]+if \(document\.body\.classList\.contains\('tv'\)\) return;[\s\S]+document\.body\.classList\.add\('railOpen'\);[\s\S]+\$\('rail'\)\.classList\.add\('expanded'\);/,
@@ -5121,11 +5252,11 @@ test('Artwork regression: CSS fallbacks stay cheap while URL guards reject injec
 test('Artwork regression: season and episode surfaces keep layered deterministic fallbacks', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   const seasonGrid = ui.slice(ui.indexOf('function renderSeasonGrid('), ui.indexOf('function localSeasonSummaries('));
-  assert.match(seasonGrid, /artBackgroundHtml\(img\(s\.poster_path, 'w342'\), show\.poster, show\.backdrop, artFallback\([\s\S]{0,120}:season:/,
+  assert.match(seasonGrid, /artBackgroundHtml\(img\(s\.poster_path, POSTER_W\), show\.poster, show\.backdrop, artFallback\([\s\S]{0,120}:season:/,
     'TMDB season cards should layer season poster, show art, and a stable procedural fallback');
 
   const tmdbEpisodes = ui.slice(ui.indexOf('async function openSeasonEpisodes('), ui.indexOf("document.addEventListener('click'", ui.indexOf('async function openSeasonEpisodes(')));
-  assert.match(tmdbEpisodes, /artBackgroundHtml\(img\(ep\.still_path, 'w300'\), show\.backdrop, show\.poster, artFallback\([\s\S]{0,140}:s[\s\S]{0,80}:?e/,
+  assert.match(tmdbEpisodes, /artBackgroundHtml\(img\(ep\.still_path, STILL_W\), show\.backdrop, show\.poster, artFallback\([\s\S]{0,140}:s[\s\S]{0,80}:?e/,
     'TMDB episode cards should layer the still, parent-show art, and a deterministic episode fallback');
 
   const localEpisodes = ui.slice(ui.indexOf('function openLocalShowSeasonEpisodes('), ui.indexOf('function openLocalDetail(', ui.indexOf('function openLocalShowSeasonEpisodes(')));
@@ -5138,7 +5269,7 @@ test('Artwork regression: season and episode surfaces keep layered deterministic
   const nativeEpisodes = ui.slice(ui.indexOf('function nativeEpisodeChoices()'), ui.indexOf('function canOpenPlayerEpisodes()', ui.indexOf('function nativeEpisodeChoices()')));
   assert.match(nativeEpisodes, /still: absoluteArtworkUrl\(ep\.still, ep\.backdrop, ep\.poster\)/,
     'native episode cards should receive only an absolute real URL, never a CSS gradient or relative path');
-  assert.match(nativeEpisodes, /still: img\(ep\.still_path, 'w300'\),[\s\S]+backdrop: ctx\.show\.backdrop,[\s\S]+poster: ctx\.show\.poster/,
+  assert.match(nativeEpisodes, /still: img\(ep\.still_path, STILL_W\),[\s\S]+backdrop: ctx\.show\.backdrop,[\s\S]+poster: ctx\.show\.poster/,
     'season-strip preparation should keep later show-art candidates instead of collapsing on a procedural backdrop');
   const epItem = ui.slice(ui.indexOf('function epItemOf('), ui.indexOf('const MONTHS', ui.indexOf('function epItemOf(')));
   assert.match(epItem, /backdrop: img\(ep\.still_path\) \|\| show\.backdrop,[\s\S]+poster: show\.poster/,

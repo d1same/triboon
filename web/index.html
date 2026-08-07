@@ -62,7 +62,11 @@
   body.railOpen #home,body.railOpen #discover,body.railOpen #browse,body.railOpen #detail,
   body.railOpen #person,body.railOpen #settings,body.railOpen #prefs,body.railOpen #searchBar,
   body.railOpen #music,body.railOpen #audiobooks,
-  body.railOpen #bdInfo{transform:translateX(152px)} /* #bdInfo is fixed-pos OUTSIDE the pages — without it the browse backdrop title stayed put while the grid slid. #prefs too: it used to load UNDER the expanded menu. */
+  /* The push TRACKS the expanded rail width (it was a hard-coded 152px, which was exactly
+     236 - 84 back when the menu was a fixed 236px slab). Now that the width is measured and can
+     grow to 300px for a long custom-library name, a fixed push would let the wider menu eat into
+     the first cover; deriving it keeps the same clearance at every width. */
+  body.railOpen #bdInfo{transform:translateX(calc(var(--railExpandedW,236px) - 84px))} /* #bdInfo is fixed-pos OUTSIDE the pages — without it the browse backdrop title stayed put while the grid slid. #prefs too: it used to load UNDER the expanded menu. */
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%}
@@ -123,7 +127,13 @@ body.tv.shortBrowseBd{--bdH:min(52vh,580px)}
 }
 /* Focused-title info over the backdrop on browse/discover pages — like the home hero, but
    informational only (no buttons; clicking the cover opens it). */
-#bdInfo{position:fixed;top:clamp(76px,15vh,190px);left:calc(var(--rail) + 40px + var(--heroLeft));z-index:4;max-width:760px;pointer-events:none;
+/* The whole info block STOPS at the 50% line so the title, the TMDB meta line, the credits and the
+   storyline all clear the backdrop art on every browse/discover page (owner, 2026-08-06: "make sure
+   the title, directors, TMDB line and the storyline are 50% on all pages"). Capping each child's
+   WIDTH was the wrong lever — the block starts at `rail + 40 + heroLeft`, so a 50vw-wide child
+   still ended ~200px past the artwork. Subtracting that offset makes the RIGHT EDGE land on 50vw. */
+#bdInfo{position:fixed;top:clamp(76px,15vh,190px);left:calc(var(--rail) + 40px + var(--heroLeft));z-index:4;
+  max-width:min(760px,calc(50vw - var(--rail) - 40px - var(--heroLeft)));pointer-events:none;
   opacity:0;transition:opacity .3s ease,transform .26s cubic-bezier(.22,1,.36,1)} /* transform clock matches the rail push */
 body.fullBd #bdInfo.show{opacity:1}
 #bdInfo .bdiT{font:800 clamp(34px,4.6vw,64px)/1.02 "Sora";letter-spacing:-.02em;margin-bottom:12px;
@@ -134,6 +144,8 @@ body.fullBd #bdInfo.show{opacity:1}
    it can never reflow anything. min-height keeps the block stable while the fetch lands. */
 #bdInfo .bdiC,#heroCredits{font:600 12.5px "Albert Sans";color:var(--amber);margin-bottom:8px;max-width:52ch;
   height:16px;min-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 2px 12px rgba(0,0,0,.8)}
+/* The 50% cap lives on the #bdInfo CONTAINER (see above) so it covers the title, meta, credits and
+   this storyline together; here we only keep a comfortable reading measure. */
 #bdInfo .bdiO{color:var(--muted);font-size:15.5px;line-height:1.6;max-width:74ch;display:-webkit-box;
   -webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;text-shadow:0 2px 12px rgba(0,0,0,.8)}
 @media (max-height:899px){#bdInfo{top:70px}#bdInfo .bdiO{-webkit-line-clamp:3}}
@@ -207,9 +219,10 @@ body{transition:--ambR 2.2s ease,--ambG 2.2s ease,--ambB 2.2s ease} /* slow, cin
 /* Expanded: still NO background (owner: completely transparent) — the content pushes right,
    so labels sit over the page's own dark left gutter and stay readable. */
 /* Expanded keeps the same glass (a transparent expansion looked unfinished next to it). */
-/* Expanded width is MEASURED from the widest label (fitRailWidth) and clamped 176–268px, so the
-   menu is exactly as wide as its longest item — a long custom-library name ellipses at the cap
-   instead of stretching the menu across the screen. 236px is the pre-measurement fallback. */
+/* Expanded width is MEASURED from the widest label (fitRailWidth) and clamped 236–300px: the floor
+   is the old fixed slab (measuring may widen the menu for a long custom-library name, never
+   narrow it below what shipped), the cap keeps it from stretching across the screen — anything
+   past it ellipses. 236px is also the pre-measurement fallback. */
 body.tv #rail:hover,#rail.expanded,body.railOpen #rail{width:var(--railExpandedW,236px)}
 /* Icons sit in a FIXED-width slot so they never move horizontally on expand/collapse;
    only the label is revealed. Slot width = collapsed inner width (84 - 2*12 padding = 60). */
@@ -231,7 +244,7 @@ body.tv #rail:hover .logo .wordmark,#rail.expanded .logo .wordmark,body.railOpen
   place-items:center;background:var(--panel);border:1px solid var(--line);color:var(--text);
   pointer-events:auto;touch-action:manipulation;-webkit-user-select:none;user-select:none}
 body.tv #rail:hover .rlabel,#rail.expanded .rlabel,body.railOpen .rlabel,
-body.tv #rail:hover #railUser .rlabel,#rail.expanded #railUser .rlabel,body.railOpen #railUser .rlabel{max-width:150px;opacity:1}
+body.tv #rail:hover #railUser .rlabel,#rail.expanded #railUser .rlabel,body.railOpen #railUser .rlabel{max-width:210px;opacity:1}
 /* Active item = a FLAT translucent pill. No inset light edge, no border: the top highlight read
    as embossed/3D (owner call, 2026-08-06). Selection is carried by fill + the gold bar alone —
    the same treatment the Sources rows use, so the two surfaces match. */
@@ -241,6 +254,14 @@ body.tv #rail:hover #railUser .rlabel,#rail.expanded #railUser .rlabel,body.rail
 #rail:not(.expanded):not(:hover){opacity:.62}
 #rail:not(.expanded):not(:hover):focus-within{opacity:1}
 #rail:not(.expanded):not(:hover) .railBtn:not(.active):not(.focus){opacity:.6}
+/* ...but NOT the phone drawer. On phones this same #rail IS the off-canvas menu, opened by
+   body.mobileNav — it never receives .expanded, and touch has no :hover, so BOTH guards above pass
+   and the recede styling landed on a fully OPEN menu: .62 surface x .6 items ≈ 0.37, which is why
+   the items were barely visible (owner, 2026-08-06). An open drawer is always at full strength.
+   !important because the shared rules reach (1,5,0) on the button selector. */
+body.mobileNav #rail,
+body.mobileNav #rail .railBtn,
+body.mobileNav #rail #railUser{opacity:1!important}
 #rail{transition:width .26s cubic-bezier(.22,1,.36,1),background .26s ease,opacity .22s ease}
 .railBtn{transition:background .15s,color .15s,opacity .18s ease}
 #rail .railBtn:hover,#rail .railBtn.focus{opacity:1}
@@ -251,6 +272,14 @@ body.tv #rail:hover #railUser .rlabel,#rail.expanded #railUser .rlabel,body.rail
 .railBtn.focusable.focus,.railBtn:focus-visible{
   transform:none;color:var(--text);
   background:var(--soft);box-shadow:none}
+/* A menu row must NEVER scale on focus. #railMain is a scroller (overflow-x:hidden), so a scaled
+   pill grows ~10px wider than its own container and gets sliced ~5px on BOTH sides — the owner's
+   "the goldish rollover is cut on the left and the right" (2026-08-06). The rule above already
+   says transform:none, but `body[data-spotlight] .focusable.focus{...scale(1.05)}` is (0,3,1) and
+   outranks it at (0,3,0), so the scale came back on that theme. These selectors are (0,4,1) and
+   cover every themed variant. Cards still scale on focus; only the rail is exempt. */
+body[data-spotlight] .railBtn.focusable.focus,body[data-spotlight] .railBtn:focus-visible,
+body[data-spotlight] #railUser.focusable.focus,body[data-spotlight] #railUser:focus-visible{transform:none}
 .railBtn.focusable.focus::after,.railBtn:focus-visible::after{height:24px;box-shadow:0 0 14px var(--focusSoft)}
 .railBtn.active.focusable.focus,.railBtn.active:focus-visible{background:var(--soft)}
 /* Rail grouping (owner-approved redesign, 2026-08-05): the nav reads as SECTIONS — browse
@@ -263,8 +292,12 @@ body.tv .railBtn[data-nav="search"],body.tv .railBtn[data-nav="movies"],body.tv 
 #railAddLib:hover,#railAddLib.focus,#railAddLib:focus-visible{opacity:1}
 .railBtn .del{margin-left:auto;margin-right:12px;opacity:0;color:var(--muted);font-size:15px;width:18px;flex:none}
 body.tv #rail:hover .railBtn:hover .del,body.railOpen .railBtn:hover .del{opacity:.7}
-.railSec{font:700 10px "JetBrains Mono";letter-spacing:.16em;color:var(--muted);text-transform:uppercase;padding:16px 14px 6px;height:0;opacity:0;overflow:hidden;transition:opacity .12s;white-space:nowrap}
-body.tv #rail:hover .railSec,#rail.expanded .railSec,body.railOpen .railSec{height:auto;opacity:.7}
+/* COLLAPSED section labels leave the layout entirely (display:none), they do not merely shrink to
+   height:0. A zero-height flex item is still an item, so #railMain's 6px row-gap applied on BOTH
+   sides of it and every group boundary gained an extra 6px — the icons looked unevenly spaced
+   (owner, 2026-08-06). display:none removes it from the flex flow so every icon gap is identical. */
+.railSec{font:700 10px "JetBrains Mono";letter-spacing:.16em;color:var(--muted);text-transform:uppercase;padding:16px 14px 6px;height:0;opacity:0;display:none;overflow:hidden;transition:opacity .12s;white-space:nowrap}
+body.tv #rail:hover .railSec,#rail.expanded .railSec,body.railOpen .railSec{height:auto;opacity:.7;display:block}
 #libSec{display:none!important}
 #railLibs{display:contents}
 #railAddLib{margin-bottom:0}
@@ -279,10 +312,46 @@ body.tv #rail:hover .railSec,#rail.expanded .railSec,body.railOpen .railSec{heig
 #railUser .av{width:24px;height:24px;border-radius:50%;background:var(--focus);display:grid;place-items:center;font:700 12px "Sora";color:var(--onAccent);flex:none;margin:0 12px}
 /* Android TV WebView can leave CSS :hover latched after remote navigation. On TV, the rail
    expands only from our explicit D-pad state, never from hover. Desktop keeps hover expand. */
+/* Collapsed TV rail. The fill was once `transparent!important`, which erased the panel entirely and
+   left the compact menu as bare floating icons; it is now simply NOT overridden, so it keeps the
+   shared glass (translucent + blurred + rounded) that the web build uses and the owner asked for.
+   The column is --overscan WIDER than the 72px app rail because it now reaches the screen edge.
+   Both paddings are ZERO so `align-items:center` splits that extra width evenly and the 48px icon
+   slot sits dead-centre: the first cut put the whole --overscan on the LEFT, which left the icons
+   with `overscan + 12` of space on one side and `12` on the other — visibly off-centre on the
+   Shield (owner, 2026-08-06). Even at 0 padding the icons still clear the title-safe margin.
+   The width is EXACTLY `72px + --overscan` so the column's right edge coincides with the content
+   boundary `calc(--rail + --overscan)`. A brief experiment trimmed 4px off to tighten the icons,
+   but that desynced the two edges: rows still clipped at the content boundary while the menu ended
+   4px earlier, so a scrolled-out cover was sliced in open space and the leftover sliver looked like
+   a stray piece of artwork parked next to the menu (owner, 2026-08-06). Keeping the edges identical
+   makes covers disappear exactly AT the menu, which is how the web build reads. Do not reintroduce
+   an offset here without moving the row scrollers by the same amount. */
 body.tv:not(.railOpen) #rail:not(.expanded){
-  width:72px!important;background:transparent!important;align-items:center;
-  padding-left:0!important;padding-right:0!important
+  width:calc(72px + var(--overscan))!important;align-items:center;
+  padding-left:0!important;padding-right:0!important;
+  /* The shared fade is `#rail:not(.expanded):not(:hover)` (+ a :focus-within exception). BOTH of
+     those guards fail on a real Android TV: the WebView leaves :hover LATCHED after remote
+     navigation (see the note above this block — it is why the whole collapsed-TV rail is keyed off
+     state classes), and native focus can stay parked on a rail button after the D-pad has already
+     moved to the content, keeping :focus-within true. Either one pins the menu at full strength, so
+     on the Shield the compact menu never greyed out while browsing (owner, 2026-08-06). Re-assert
+     the fade from OUR state instead: this selector is (1,3,1) so it outranks both shared rules, and
+     it stops applying the moment the rail is entered (body.railOpen / .expanded) — which is exactly
+     when the menu should come back to full strength. */
+  opacity:.5
 }
+body.tv:not(.railOpen) #rail:not(.expanded) .railBtn:not(.active):not(.focus),
+body.tv:not(.railOpen) #rail:not(.expanded) #railUser{opacity:.6}
+/* The selection accent is a 3px bar 12px to the LEFT of the button, plus a 16px glow on focus.
+   That was designed when the rail floated inset from the screen edge. Now that the column is FLUSH,
+   the bar lands ~2px from the edge and its glow reaches about -12px, so the rail's own
+   overflow:hidden sliced it and the highlight looked cut off (owner, on the Shield 2026-08-06).
+   On TV: drop the glow everywhere, and drop the BAR entirely while compact — at that width it sits
+   outside the title-safe margin anyway, and the focused item is already an unmistakable solid gold
+   pill, fully rounded and comfortably inside the column. Expanded keeps the bar, which has room. */
+body.tv .railBtn.focusable.focus::after,body.tv .railBtn:focus-visible::after{box-shadow:none}
+body.tv:not(.railOpen) #rail:not(.expanded) .railBtn::after{display:none}
 body.tv:not(.railOpen) #rail:not(.expanded) #railMain{
   width:48px!important;align-items:center
 }
@@ -298,8 +367,41 @@ body.tv:not(.railOpen) #rail:not(.expanded) #railUser .av{margin:0!important}
 body.tv:not(.railOpen) #rail:not(.expanded) .rlabel,
 body.tv:not(.railOpen) #rail:not(.expanded) #railUser .rlabel,
 body.tv:not(.railOpen) #rail:not(.expanded) .logo .wordmark{max-width:0!important;opacity:0!important}
-body.tv:not(.railOpen) #rail:not(.expanded) .railSec{height:0!important;opacity:0!important}
+body.tv:not(.railOpen) #rail:not(.expanded) .railSec{height:0!important;opacity:0!important;display:none!important}
+/* COMPACT: every icon gap is identical (owner, 2026-08-06: "make sure all the icons have the same
+   spacing"). The rail's grouping adds a 10px margin to the FIRST item of each group, which on top
+   of railMain's 6px gap makes some gaps 16px and others 6px. That grouping is only legible when the
+   section LABELS are visible; compact hides them, so the uneven gaps read as random — and they
+   genuinely land on arbitrary items, because Live TV and Music are display:none when unconfigured
+   and take their group break with them. Expanded keeps the grouping, where the labels explain it.
+   #railAddLib is excluded: its `margin-top:auto` is what pins it to the bottom of the column. */
+body.tv:not(.railOpen) #rail:not(.expanded) #railMain > *:not(#railAddLib){
+  margin-top:0!important;margin-bottom:0!important}
 body.tv:not(.railOpen) #rail:not(.expanded) .railBtn .del{opacity:0!important}
+/* ---- TV rail: flush to the edge, but the SAME GLASS as the web build (owner, 2026-08-06) ----
+   The owner reported a gap between the screen edge and the menu, AND content sliding under the
+   menu. The gap was real and is fixed here. The "content under the menu" turned out to be a
+   DIFFERENT bug: `#detail` overrode the shared page rule with `left:var(--rail)` and never carried
+   --overscan, so the whole detail column sat ~11px too far left and its rows scrolled beneath the
+   menu (fixed at the #detail rule). Making this rail an opaque square column was an OVER-CORRECTION
+   — the owner's verdict on the Shield: "it's very ugly, it's nothing like the web based version."
+   So the surface is the web build's glass again: translucent, blurred, rounded on the right, and
+   fading when it is neither focused nor expanded. Only the GEOMETRY is TV-specific — the column
+   reaches the screen edge and runs full height, with --overscan moved INSIDE as padding so the
+   icons keep their exact title-safe position and `calc(--rail + --overscan)` still lands precisely
+   on the rail's right edge. Background, blur, radius, shadow and the collapsed fade are all
+   inherited from the shared #rail rules, deliberately NOT overridden here. */
+body.tv #rail{
+  left:var(--safeL);top:var(--safeT);bottom:var(--safeB);
+  padding-top:calc(14px + var(--overscan));padding-bottom:calc(18px + var(--overscan))}
+/* Horizontal padding must MATCH on both sides. The first cut only grew padding-LEFT by --overscan,
+   so the active/focus pill ended up with ~17px of room on the left but only ~8px on the right —
+   and since the rail is rounded 18px on that side with overflow:hidden, the corner clipped the
+   pill. It read as the yellow highlight being cut off (owner, 2026-08-06). Equal padding also
+   keeps the gap wider than the 18px corner radius, so nothing can catch the rounding. */
+body.tv #rail:hover,body.tv #rail.expanded,body.tv.railOpen #rail{
+  width:calc(var(--railExpandedW,252px) + var(--overscan));
+  padding-left:calc(12px + var(--overscan));padding-right:calc(12px + var(--overscan))}
 
 /* ---------- signature: gradient focus ring ---------- */
 /* All scroll containers: suppress the UA focus outline (Chromium focuses scrollers natively;
@@ -510,6 +612,15 @@ body.androidApp #gateArtCaption{display:none}
 /* The hero floats CENTERED in the space between the top of the page and the first row,
    with a resolution-adaptive left indent — same alignment as page heads and backdrop info. */
 #hero{max-width:46vw;margin-top:auto;margin-bottom:auto;margin-left:var(--heroLeft);padding:30px 0}
+/* The home hero stops at the 50% line as well, so its title, meta, credits and description clear
+   the backdrop art exactly like the browse (#bdInfo) and detail (.dInfo) blocks do — the owner
+   asked for this on every page that carries a description. 46vw alone was measured from the hero's
+   own left edge, so the block still ran ~125px past the artwork. Everything the hero is inset by
+   (rail, overscan, gutter, heroLeft) comes out of the cap so the RIGHT edge lands on 50vw.
+   Width-gated: phones hide the backdrop and the hero copy entirely, and would be over-constrained. */
+@media (min-width:761px){
+  #hero{max-width:min(46vw,calc(50vw - var(--rail) - var(--overscan) - var(--gut) - var(--heroLeft)))}
+}
 #hero .eyebrow{font:700 11px/1 "JetBrains Mono";letter-spacing:.22em;color:var(--amber);text-transform:uppercase;margin-bottom:14px}
 #hero h1{font:800 clamp(30px,4.2vw,58px)/1.04 "Sora";letter-spacing:-.02em;margin-bottom:14px;
   height:2.08em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
@@ -840,13 +951,17 @@ body .mCard.focus .art,body .mCard:focus-visible .art{
    for a full-surface blur. On TV the glass look is kept with slightly more opaque fills and NO
    live blur — visually near-identical from the couch, materially cheaper per frame. Desktop
    browsers (where the GPU budget is not the constraint) keep the real blur. */
-body.tv #rail,
+   THE RAIL IS DELIBERATELY EXEMPT (owner call on the Shield, 2026-08-06). Dropping its blur and
+   thickening its fill to --panel is what turned the menu into a flat slab — "it's very ugly,
+   it's nothing like the web based version." The glass IS the design here, and the blur is what
+   makes a translucent column read as frosted rather than see-through, so the rail keeps the real
+   backdrop-filter on TV too. The remaining surfaces below are static panels the eye rests on far
+   less, so they still trade blur for frames. */
 body.tv .railBtn.active,
 body.tv .panel,
 body.tv #setTabs button,body.tv #prefTabs button,
 body.tv #detail .back,body.tv #person .back{
   -webkit-backdrop-filter:none !important;backdrop-filter:none !important}
-body.tv #rail{background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03) 42%,rgba(255,255,255,.05)),var(--panel)}
 body.tv .panel{background:var(--panel)}
 /* The idle backdrop drift is a composited transform, but on TV it runs behind every page for the
    whole session — hold it still there and keep the motion for desktop. */
@@ -1379,8 +1494,14 @@ body.tv #vlcCopy{display:none}
 body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-mask:none;mask:none}
 
 /* ---------- detail redesign ---------- */
-#detail{padding:0!important;left:var(--rail)!important;overflow:hidden}
-#detail .back{position:fixed;top:22px;z-index:9;left:calc(var(--rail) + 24px);transition:left .22s ease}
+/* `left` MUST carry --overscan, exactly like the shared #home/#browse/#person rule it overrides.
+   Without it the whole detail column started at --rail (72px) while the TV rail's right edge is at
+   72 + --overscan — so every detail row (episodes, cast, related) was ~11px too far LEFT and its
+   cards scrolled out UNDER the menu instead of clipping at the menu's edge. That is the owner's
+   "scrolling cast/related, part of it shows under the left menu" (2026-08-06). --overscan is 0 off
+   TV, so this is a no-op for desktop and mobile. */
+#detail{padding:0!important;left:calc(var(--rail) + var(--overscan))!important;overflow:hidden}
+#detail .back{position:fixed;top:22px;z-index:9;left:calc(var(--rail) + var(--overscan) + 24px);transition:left .22s ease}
 /* Back is a small ICON-ONLY disc (owner call, 2026-08-06): the word "Back" was redundant next to
    a universally-understood arrow, and the pill crowded the title block. Glass to match the rail.
    The label stays in the DOM for screen readers. */
@@ -1401,12 +1522,22 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 /* Poster retired on detail pages (owner-picked variant B, 2026-08-06): the title logo + right-
    anchored backdrop carry the identity; the text column owns the left half on clean ink. */
 .dPoster{display:none}
-.dInfo{flex:1;padding-bottom:8px;max-width:920px}
+/* The hero block (logo/title, meta, credits, storyline, Play row) is INDENT from the rows below it
+   (owner, 2026-08-06). It used to start on the same line as the EPISODES/CAST headings, which read
+   as flat; setting it in a little makes the artwork side breathe and gives the page a clear
+   hierarchy against the cast/related rows. Reset on phones, where the block is centred. */
+/* Like #bdInfo, the whole block stops at the 50% line so the title/logo, the TMDB meta line, the
+   credits and the storyline all clear the backdrop art — not just the storyline. #detail sits at
+   `rail + overscan` and the block is inset a further 30px, so that offset comes out of the cap. */
+.dInfo{flex:1;padding-bottom:8px;padding-left:34px;
+  max-width:min(920px,calc(50vw - var(--rail) - var(--overscan) - 30px))}
 .dInfo .eyebrow{font:700 11px "JetBrains Mono";letter-spacing:.24em;color:var(--amber);text-transform:uppercase;margin-bottom:12px}
 #dTitle{font:800 clamp(34px,4.6vw,64px)/1.02 "Sora";letter-spacing:-.02em;margin-bottom:14px;max-width:none}
 #dMeta{display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin-bottom:16px;color:var(--muted);font:600 13.5px "Albert Sans"}
 #dMeta .dot{opacity:.5}
 #dMeta .rating{color:var(--amber)}
+/* The 50% cap lives on .dInfo (see above) so the whole block clears the artwork together; here we
+   only keep a comfortable reading measure. Phones widen this to 100% in the max-width:760px block. */
 #dOverview{color:var(--muted);max-width:74ch;margin-bottom:22px;font-size:15.5px;line-height:1.6}
 #dBtns{display:flex;gap:12px;align-items:center}
 #dBtns .btn{min-height:52px;border-radius:999px;box-sizing:border-box}
@@ -1683,7 +1814,7 @@ body.tv .cwAct,body.tv .epMenuBtn,body.tv .cardMenuBtn{display:none!important}
   #detail .detailScroll{padding:0 16px 44px}
   #detail .detailHero{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:18px;min-height:0;padding-top:82px}
   #detail .dPoster{width:min(42vw,150px);flex:0 0 auto;border-radius:13px}
-  #detail .dInfo{width:100%;max-width:100%;padding-bottom:0;text-align:center}
+  #detail .dInfo{width:100%;max-width:100%;padding-bottom:0;padding-left:0;text-align:center}
   #dTitle{font-size:clamp(24px,7.8vw,34px);max-width:100%}
   #dOverview{max-width:100%;font-size:14px;margin-left:auto;margin-right:auto}
   #dCrew{max-width:100%;line-height:1.4}
@@ -2970,6 +3101,16 @@ body.tv #hero h1 .tt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;d
 body.tv #heroTitle.hasLogo img{max-height:104px}
 body.tv #dTitle{height:120px}
 body.tv #dTitle.hasLogo img{max-height:120px}
+/* Browse/discover backdrop title gets the SAME treatment as the hero and the detail page: logo art
+   when TMDB has one, text when it doesn't (owner, 2026-08-06). The slot is FIXED-height and
+   bottom-aligned for the same reason those two are — otherwise every focus move would rebound the
+   meta/credits/overview below it as titles change length and logos change aspect ratio. */
+#bdInfo .bdiT{height:132px;display:flex;align-items:flex-end;overflow:visible}
+#bdInfo .bdiT .tt{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+#bdInfo .bdiT.hasLogo img{max-width:min(380px,86%);max-height:132px;object-fit:contain;
+  object-position:left bottom;display:block;filter:drop-shadow(0 4px 18px rgba(0,0,0,.55));animation:logoIn .3s ease}
+body.tv #bdInfo .bdiT{height:112px}
+body.tv #bdInfo .bdiT.hasLogo img{max-height:112px}
 body.mobileShell #hero h1{height:96px;justify-content:center}
 body.mobileShell #heroTitle.hasLogo img{margin:0 auto;object-position:center bottom;max-height:96px}
 /* Detail overview: clamp so page height (and the space above) stays consistent across titles. */
@@ -3323,7 +3464,9 @@ body.tv .abRowScroll { padding-left:14px; scroll-padding-left:14px; }
   display:block; animation:abPulse 1.2s ease-in-out infinite; }
 @keyframes abPulse { 0%,100%{opacity:.35} 50%{opacity:.6} }
 /* Mini "now playing" bar (return-to-player affordance). */
-#abMini { position:fixed; left:var(--rail); right:0; bottom:0; z-index:30; display:none; align-items:center;
+/* left carries --overscan (0 off TV) so the bar starts at the rail's right EDGE — plain --rail
+   tucked it ~11px under the TV menu, the same class of bug as #detail. */
+#abMini { position:fixed; left:calc(var(--rail) + var(--overscan)); right:0; bottom:0; z-index:30; display:none; align-items:center;
   gap:12px; padding:10px 16px; background:var(--panel); border-top:1px solid var(--line); cursor:pointer;
   backdrop-filter:blur(12px); }
 #abMini.show { display:flex; }
@@ -5078,6 +5221,18 @@ $('prefChangeServer').addEventListener('click', () => { try { if (window.Triboon
 
 /* ============ catalog ============ */
 const img = (p, size = 'w1280') => p ? `https://image.tmdb.org/t/p/${size}${p}` : null;
+// TMDB art must be fetched for the rendered slot × the PANEL'S PIXEL RATIO, not the CSS size.
+// Episode stills were the visible offender (owner, 2026-08-06: "thumbnail quality is lower, it
+// feels like a way optimized version"): a ~292px-wide episode card asking for w300 is 1:1 on a
+// phone, a ~2x upscale on a 2x panel and ~3x on a 4K Shield. Posters were already fetched at ~2x
+// their slot (w342 for a 168px cover) so they only need a step up on 3x panels; cast photos sit
+// between. Sizes are picked one notch ABOVE the requirement rather than at `original`, which for a
+// still is ~1MB vs 55KB for w780. TMDB serves these cross-type sizes (w780 for a still, w342 for a
+// profile) even though they are not in its per-type size list — verified against real paths.
+const _DPR = (typeof devicePixelRatio === 'number' && devicePixelRatio) || 1;
+const STILL_W = _DPR >= 1.5 ? 'w780' : 'w300';
+const CAST_W = _DPR >= 1.5 ? 'w342' : 'w185';
+const POSTER_W = _DPR >= 2.5 ? 'w500' : 'w342';
 function mapTmdb(x) {
   const type = x.media_type === 'tv' || (!x.media_type && x.name) ? 'tv' : 'movie';
   return {
@@ -5088,7 +5243,7 @@ function mapTmdb(x) {
     originalLanguage: x.original_language || x.originalLanguage || '',
     overview: x.overview || '',
     backdrop: img(x.backdrop_path) || procBackdrop(260, 30, x.id),
-    poster: img(x.poster_path, 'w342') || img(x.backdrop_path, 'w342') || procBackdrop(260, 30, x.id),
+    poster: img(x.poster_path, POSTER_W) || img(x.backdrop_path, POSTER_W) || procBackdrop(260, 30, x.id),
     progress: 0,
   };
 }
@@ -7502,7 +7657,7 @@ async function openDetail(it, push = true) {
       applyTitleLogo($('dTitle'), it);
       if (d.backdrop_path) { it.backdrop = img(d.backdrop_path); setBackdrop(it.backdrop || it.poster); }
       if (d.poster_path) {
-        it.poster = img(d.poster_path, 'w342');
+        it.poster = img(d.poster_path, POSTER_W);
         const p = $('dPoster');
         if (p) p.style.backgroundImage = artBackground(it.poster, it.backdrop, artFallback(it.key || it.title, 30));
       }
@@ -7615,7 +7770,7 @@ const PERSON_WORKS_BATCH = 24;
 function castCard(c) {
   const b = document.createElement('button');
   b.className = 'castCard focusable';
-  b.innerHTML = `<div class="ph" style="background-image:${artBackgroundHtml(img(c.profile_path, 'w185'), artFallback('cast:' + c.id, 31))}"></div>` +
+  b.innerHTML = `<div class="ph" style="background-image:${artBackgroundHtml(img(c.profile_path, CAST_W), artFallback('cast:' + c.id, 31))}"></div>` +
     `<div class="nm">${esc(c.name)}</div><div class="ch">${esc(c.character || '')}</div>`;
   b.addEventListener('click', () => openPerson(c.id));
   b.addEventListener('focus', () => maybeLoadMoreCast());
@@ -7669,7 +7824,7 @@ function renderSeasonGrid(show, seasons) {
     const seasonWatched = isSeasonWatched(show.tmdbId, s.season_number, s.episode_count);
     const yearLabel = seasonYearLabel(s);
     const episodeLabel = seasonEpisodeCountLabel(s);
-    c.innerHTML = `<div class="art" style="background-image:${artBackgroundHtml(img(s.poster_path, 'w342'), show.poster, show.backdrop, artFallback((show.key || show.title) + ':season:' + s.season_number, 32))}">
+    c.innerHTML = `<div class="art" style="background-image:${artBackgroundHtml(img(s.poster_path, POSTER_W), show.poster, show.backdrop, artFallback((show.key || show.title) + ':season:' + s.season_number, 32))}">
         <span class="epbadge">${parseInt(s.episode_count, 10) || 0}</span>
         <span class="seasonYear">${esc(yearLabel)}</span>
         ${seasonWatched ? '<span class="wbadge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span>' : ''}</div>
@@ -7853,7 +8008,7 @@ async function openSeasonEpisodes(show, seasonNumber, opts = {}) {
       if (upcoming) card.classList.add('upcoming');
       const label = w && w.position > 30 && !w.watched ? 'Resume' : 'Play';
       card.innerHTML = `
-        <div class="still" style="background-image:${artBackgroundHtml(img(ep.still_path, 'w300'), show.backdrop, show.poster, artFallback((show.key || show.title) + ':s' + seasonNumber + 'e' + ep.episode_number, 34))}">
+        <div class="still" style="background-image:${artBackgroundHtml(img(ep.still_path, STILL_W), show.backdrop, show.poster, artFallback((show.key || show.title) + ':s' + seasonNumber + 'e' + ep.episode_number, 34))}">
           ${upcoming ? `<span class="pbtn upcomingTag">Airs ${esc(fmtDate(ep.air_date))}</span>` : ''}
           ${!upcoming && label === 'Resume' ? '<span class="pbtn resume">Resume</span>' : ''}
           ${!upcoming && w && w.watched ? '<span class="wbadge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span>' : ''}
@@ -11814,7 +11969,7 @@ async function prepPlayerSeasonEpisodes(it) {
           item,
           tag: `S${pad2(sNum)}E${pad2(ep.episode_number)}`,
           name: ep.name || '',
-          still: img(ep.still_path, 'w300'),
+          still: img(ep.still_path, STILL_W),
           backdrop: ctx.show.backdrop,
           poster: ctx.show.poster,
           watched: !!(w && w.watched),
@@ -11906,7 +12061,7 @@ async function prepNextEpisode(it) {
       item._localLookupComplete = true;
       return null;
     });
-    S.nextEp = { item, still: img(ep.still_path, 'w300') || ctx.show.backdrop, epName: ep.name || '', tag: `S${pad2(ns)}E${pad2(ne)}` };
+    S.nextEp = { item, still: img(ep.still_path, STILL_W) || ctx.show.backdrop, epName: ep.name || '', tag: `S${pad2(ns)}E${pad2(ne)}` };
     updateNextEpisodeButton();
     // The actual mount is warmed near the END of the episode (maybePrepareNextEpisode), not here:
     // the server search/verdict cache lives ~60s, so warming a 40-minute episode's sources on
@@ -15481,7 +15636,7 @@ async function localLibraryPage(lib, opts = {}) {
 function mergeLocalItemsInto(map, lib, items) {
   for (const x of (items || [])) {
     if (!x.streamUrl) continue;
-    const poster = x.artUrl || (x.poster ? img(x.poster, 'w342') : null) || x.thumbUrl || '';
+    const poster = x.artUrl || (x.poster ? img(x.poster, POSTER_W) : null) || x.thumbUrl || '';
     const backdrop = (x.backdrop ? img(x.backdrop) : null) || x.artUrl || x.thumbUrl || poster || '';
     const rec = {
       streamUrl: x.streamUrl, playUrl: x.playUrl, name: x.title, addedAt: x.addedAt || 0,
@@ -15502,7 +15657,7 @@ function mergeLocalItems(lib, items) {
 }
 function localRecFromPayload(x) {
   if (!x || !x.streamUrl) return null;
-  const poster = x.artUrl || (x.poster ? img(x.poster, 'w342') : null) || x.thumbUrl || '';
+  const poster = x.artUrl || (x.poster ? img(x.poster, POSTER_W) : null) || x.thumbUrl || '';
   const backdrop = (x.backdrop ? img(x.backdrop) : null) || x.artUrl || x.thumbUrl || poster || '';
   return {
     streamUrl: x.streamUrl, playUrl: x.playUrl, name: x.title, addedAt: x.addedAt || 0,
@@ -15648,7 +15803,7 @@ function mapLocal(lib, x, titleOverride) {
     _added: x.addedAt || 0, _genres: x.genres || [], _lib: lib, _idx: x.idx, _matchOv: x.matchOverride,
     _kind: x.kind,
     rating: x.rating ? Number(x.rating).toFixed(1) : '—', overview: x.overview || '',
-    poster: x.artUrl || (x.poster ? img(x.poster, 'w342') : null) || x.thumbUrl
+    poster: x.artUrl || (x.poster ? img(x.poster, POSTER_W) : null) || x.thumbUrl
       || procBackdrop(180 + (x.idx % 14) * 17, 320, (x.idx % 12) + 5),
     backdrop: (x.backdrop ? img(x.backdrop) : null) || x.thumbUrl
       || procBackdrop(180 + (x.idx % 14) * 17, 320, (x.idx % 12) + 5),
@@ -16036,7 +16191,7 @@ async function loadWatchlistView() {
         if (!current()) return;
         const m = { ...w.meta, type,
           title: isEp ? (d.name || d.title || w.meta.title) : w.meta.title,
-          poster: img(d.poster_path, 'w342') || w.meta.poster,
+          poster: img(d.poster_path, POSTER_W) || w.meta.poster,
           backdrop: img(d.backdrop_path) || w.meta.backdrop,
           overview: w.meta.overview || d.overview || '',
           rating: (w.meta.rating && w.meta.rating !== '—') ? w.meta.rating : (d.vote_average ? d.vote_average.toFixed(1) : '—') };
@@ -18912,7 +19067,10 @@ function fitRailToFullIcons() {
 // that wide"). Measure the widest label — including user-added library names, which can be long —
 // and clamp: never narrower than the collapsed rail + a readable label, never wider than a
 // comfortable menu. Anything past the cap ellipses instead of stretching the menu across the page.
-const RAIL_W_MIN = 176, RAIL_W_MAX = 268;
+// Owner, 2026-08-06: the measured menu came out NARROWER than the 236px slab it replaced (short
+// labels hit the old 176 floor), and it read as cramped on a TV. The floor is now the old fixed
+// width, so measuring can only ever make the menu WIDER — never tighter than what shipped before.
+const RAIL_W_MIN = 236, RAIL_W_MAX = 300;
 function fitRailWidth() {
   const rail = $('rail');
   if (!rail) return;
@@ -22647,7 +22805,14 @@ function focusGrid(i) {
 function setBdInfo(it) {
   const el = $('bdInfo');
   if (!it || !it.title || it._channel !== undefined || it._isHeader) { el.classList.remove('show'); return; }
-  el.querySelector('.bdiT').textContent = it.title;
+  // Rolling over a cover shows the title's LOGO ART, exactly like the detail page and the home
+  // hero (owner, 2026-08-06: "when you roll over movies it doesn't show the logo like it does in
+  // details page"). setTitleText paints the plain-text name first so the row never flashes empty,
+  // then applyTitleLogo swaps in the logo if TMDB has one — it is token-guarded, so scrolling fast
+  // can't let a previous title's logo land on the current one.
+  const bdT = el.querySelector('.bdiT');
+  setTitleText(bdT, it.title);
+  applyTitleLogo(bdT, it);
   el.querySelector('.bdiM').innerHTML = metaLineHtml(it);
   el.querySelector('.bdiO').textContent = it.overview || '';
   loadCreditsInto(el.querySelector('.bdiC'), it);
