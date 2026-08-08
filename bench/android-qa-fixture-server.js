@@ -77,6 +77,12 @@ const releases = [
   { name: 'The.Lord.of.the.Rings.The.Fellowship.of.the.Ring.2001.2160p.WEB-DL.HEVC-FLUX', size: 16_000_000_000, nzb: uhd.nzb },
   { name: 'Triboon.QA.Movie.2025.1080p.WEB-DL.DDP5.1.H.264-NTb', size: 6_000_000_000, nzb: hd.nzb },
   { name: 'Triboon.QA.Movie.2025.2160p.WEB-DL.DDP5.1.HEVC-FLUX', size: 16_000_000_000, nzb: uhd.nzb },
+  // TV episodes for the player's Up Next / auto-advance QA: a real TMDB show ("Stuart Fails to
+  // Save the Universe", 2026) whose E01/E02 have aired, so the unaired-episode gate stays out of
+  // the way. Both reuse the HD clip; title verification matches them for the show's episode
+  // queries while the LOTR movie releases keep being rejected there.
+  { name: 'Stuart.Fails.to.Save.the.Universe.S01E01.1080p.WEB-DL.DDP5.1.H.264-NTb', size: 6_000_000_000, nzb: hd.nzb },
+  { name: 'Stuart.Fails.to.Save.the.Universe.S01E02.1080p.WEB-DL.DDP5.1.H.264-NTb', size: 6_000_000_000, nzb: hd.nzb },
 ];
 
 function rss() {
