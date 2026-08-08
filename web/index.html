@@ -186,6 +186,15 @@ body.shortBrowseBd:not(.tv) #bdInfo .bdiO{font-size:14.5px;line-height:1.45;-web
 @property --ambG{syntax:'<number>';inherits:true;initial-value:59}
 @property --ambB{syntax:'<number>';inherits:true;initial-value:214}
 body{transition:--ambR 2.2s ease,--ambG 2.2s ease,--ambB 2.2s ease} /* slow, cinematic colour drift */
+/* TV: the ambient colour SNAPS instead of interpolating. Animating a registered custom property
+   that feeds a gradient is a full-screen REPAINT every frame for the whole 2.2s — after EVERY
+   D-pad focus move. Measured on the owner's Shield (2026-08-08, dumpsys gfxinfo over a 90s browse
+   journey): 57% janky frames / 19ms median / 344 slow-draw frames while browsing rows, vs 40% /
+   15ms / 28 on a page without per-focus ambient+backdrop churn — the repaint storm IS the TV
+   jank. The backdrop's own .7s crossfade is compositor-only opacity and stays, so transitions
+   still read as soft; the glow simply arrives with the art instead of chasing it. Desktop keeps
+   the cinematic drift. */
+body.tv{transition:none}
 #colorBase{position:fixed;inset:0;z-index:0;pointer-events:none;
   background:radial-gradient(70% 70% at 12% 92%,rgba(var(--ambR),var(--ambG),var(--ambB),.20),transparent 60%),
              radial-gradient(55% 55% at 0% 100%,rgba(251,139,60,.16),transparent 70%),
@@ -7684,7 +7693,24 @@ async function openDetail(it, push = true) {
   requestAnimationFrame(() => { if (S.view === 'detail') applyFocus($('dPlay')); });
 
   try {
-    const d = await api(`/api/tmdb/${it.type}/${it.tmdbId}?append_to_response=credits,videos,content_ratings,release_dates,recommendations,similar,external_ids`);
+    // The WHOLE detail body (meta, crew, cast, seasons, related) renders from this one fetch, so a
+    // single transient failure (Wi-Fi blip on a TV, a TMDB hiccup the server couldn't absorb) used
+    // to leave the page half-empty until the user backed out and reopened it — a manual retry
+    // (owner, 2026-08-08). Retry it FOR them: up to 3 attempts with short backoff, abandoned the
+    // moment a newer detail page supersedes this one. Auth/permission/not-found failures (401/403/
+    // 404) still surface immediately — retrying cannot fix those.
+    let d;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        d = await api(`/api/tmdb/${it.type}/${it.tmdbId}?append_to_response=credits,videos,content_ratings,release_dates,recommendations,similar,external_ids`);
+        break;
+      } catch (e) {
+        if (reqId !== S.detailReq) return;
+        if (attempt >= 2 || [401, 403, 404].includes(e.status)) throw e;
+        await new Promise((res) => setTimeout(res, attempt === 0 ? 600 : 1400));
+        if (reqId !== S.detailReq) return;
+      }
+    }
     if (reqId !== S.detailReq) return; // a newer detail page superseded this fetch
     S.detailData = d;
     applyExternalIds(it, d);

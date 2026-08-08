@@ -3583,6 +3583,23 @@ test('Android native player: direct source and native chrome stay out of the web
   // entire no-blur rule as one invalid selector — the whole TV profile was silently void.
   assert.match(ui, /it\. Desktop keeps the blur always\. \*\/\nbody\.tv \.railBtn\.active,/,
     'the TV perf-profile comment closes immediately before its first rule (a stray close voids the whole profile)');
+  // The ambient colour SNAPS on TV. Interpolating a registered custom property that feeds a
+  // gradient repaints the whole screen every frame for 2.2s after EVERY focus move — measured on
+  // the owner's Shield (2026-08-08): 57% janky frames browsing rows vs 40% on a churn-free page,
+  // with slow-draw frames 24% vs 13%. The backdrop's compositor-only .7s crossfade keeps
+  // transitions soft; desktop keeps the cinematic drift.
+  assert.match(ui, /body\{transition:--ambR 2\.2s ease,--ambG 2\.2s ease,--ambB 2\.2s ease\}/,
+    'desktop keeps the slow ambient colour drift');
+  assert.match(ui, /body\.tv\{transition:none\}/,
+    'TV snaps the ambient colour — the 2.2s gradient interpolation was a full-screen repaint storm on the Shield');
+  // The detail page renders its WHOLE body from one append_to_response fetch; a single transient
+  // failure used to leave cast/seasons/related empty until the user backed out and reopened —
+  // a manual retry (owner, 2026-08-08). The fetch now retries up to 3 attempts with backoff,
+  // abandoning cleanly when a newer detail supersedes it; 401/403/404 still fail fast.
+  assert.match(ui, /for \(let attempt = 0; ; attempt\+\+\) \{\s*\n\s*try \{\s*\n\s*d = await api\(`\/api\/tmdb\/\$\{it\.type\}\/\$\{it\.tmdbId\}\?append_to_response=credits/,
+    'the detail fetch retries transient failures instead of leaving the page half-empty');
+  assert.match(ui, /if \(attempt >= 2 \|\| \[401, 403, 404\]\.includes\(e\.status\)\) throw e;/,
+    'detail retries are bounded and never mask auth/not-found failures');
   // ---- 2026-08-07 owner batch (backdrop-per-row, taller detail art, tighter sections, preload) ----
   // The scroll-fade is a DETAIL-page behavior only. Wired to #rows/#grid it killed the backdrop
   // after ONE row on TV (grid scrolls ~326px per row vs the 360px ramp) — "backdrop only shows on

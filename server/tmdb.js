@@ -45,7 +45,22 @@ class TmdbProxy {
     if (hit && Date.now() - hit.at < this._ttlFor(path) && !this._externalIdsEmpty(path, hit.data)) return hit.data;
 
     const sep = path.includes('?') ? '&' : '?';
-    const r = await fetchUrl(`${this.baseUrl}${path}${sep}api_key=${key}`, { timeoutMs: 8000 });
+    // ONE retry on transient upstream failure (timeout / 5xx / reset). A single TMDB hiccup used to
+    // 500 straight through to the client, and the detail page renders its whole body (cast, crew,
+    // seasons, related) from one big append_to_response call — so the owner saw "cast and rest
+    // don't load, go back and try again" (2026-08-08). 4xx (bad key, missing title, rate-limit
+    // status) still fails fast: retrying can't fix those.
+    let r;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        r = await fetchUrl(`${this.baseUrl}${path}${sep}api_key=${key}`, { timeoutMs: 8000 });
+        if (r.status === 200 || (r.status >= 400 && r.status < 500)) break;
+        throw new Error(`tmdb upstream ${r.status}`);
+      } catch (e) {
+        if (attempt >= 1) { const err = new Error(e.message || 'tmdb upstream failed'); err.status = 502; throw err; }
+        await new Promise((res) => setTimeout(res, 350));
+      }
+    }
     if (r.status !== 200) { const e = new Error(`tmdb upstream ${r.status}`); e.status = 502; throw e; }
     let data;
     try { data = JSON.parse(r.body.toString('utf8')); }

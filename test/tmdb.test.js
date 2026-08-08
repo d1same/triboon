@@ -128,3 +128,52 @@ test('tmdb: a show-level external_ids WITH an imdb caches normally', async () =>
     await up.close();
   }
 });
+
+// One transient upstream failure (5xx/timeout) must not surface to the client: the detail page
+// renders its whole body (cast, crew, seasons, related) from a single append_to_response call, so
+// a lone hiccup used to blank those sections until the user reopened the page (owner, 2026-08-08).
+// The proxy retries ONCE; 4xx still fails fast (bad key / missing title — retrying can't fix it).
+test('tmdb: a single transient 5xx is retried and served; 4xx fails fast without a retry', async () => {
+  const up = mockTmdb();
+  const port = await up.listen();
+  try {
+    const store = memStore();
+    const tmdb = new TmdbProxy(store, () => 'test-key', `http://127.0.0.1:${port}/3`);
+
+    // 500 once, then healthy: the caller sees the DATA, upstream was hit exactly twice.
+    const flaky = '/movie/603';
+    let calls = 0;
+    up.srv.removeAllListeners('request');
+    up.srv.on('request', (req, res) => {
+      const p = req.url.split('?')[0];
+      if (p === `/3${flaky}`) {
+        calls++;
+        if (calls === 1) { res.writeHead(500); return res.end('{}'); }
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ id: 603, title: 'The Matrix' }));
+      }
+      if (p === '/3/movie/404404') { res.writeHead(404); return res.end('{}'); }
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{}');
+    });
+
+    const d = await tmdb.get(flaky);
+    assert.strictEqual(d.title, 'The Matrix', 'the retried response is served to the caller');
+    assert.strictEqual(calls, 2, 'exactly one retry after the transient 500');
+
+    // Two failures in a row → a real 502 surfaces (bounded retry, no loop).
+    calls = 0;
+    up.srv.removeAllListeners('request');
+    up.srv.on('request', (req, res) => { calls++; res.writeHead(503); res.end('{}'); });
+    await assert.rejects(() => tmdb.get('/movie/9999'), /tmdb upstream/, 'persistent upstream failure still fails');
+    assert.strictEqual(calls, 2, 'retry is bounded to one extra attempt');
+
+    // 4xx: no retry — one hit, immediate failure.
+    calls = 0;
+    up.srv.removeAllListeners('request');
+    up.srv.on('request', (req, res) => { calls++; res.writeHead(404); res.end('{}'); });
+    await assert.rejects(() => tmdb.get('/movie/404404'), /tmdb upstream 404/, '4xx surfaces as-is');
+    assert.strictEqual(calls, 1, '4xx is never retried');
+  } finally {
+    await up.close();
+  }
+});
