@@ -2827,6 +2827,33 @@ test('pipeline: a manual Sources pick is honored first, then the next-smaller re
   store.close();
 });
 
+test('pipeline: a pinned resume source leads only while playable, and never turns resume into a serial walk', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const pipeline = new Pipeline({ pool: () => null, verdicts: new VerdictCache(store), mounts: new Map(), indexers: () => [] });
+  const cands = [
+    { pickKey: 'e', sizeBytes: 40e9, score: -6000 },
+    { pickKey: 'p', sizeBytes: 20e9, score: 150 },   // the pinned source, still healthy
+    { pickKey: 'b', sizeBytes: 18e9, score: -6000 }, // next-smaller by size — must NOT be fronted for a pin
+    { pickKey: 'c', sizeBytes: 15e9, score: 200 },   // top-ranked auto
+    { pickKey: 'd', sizeBytes: 12e9, score: 100 },
+  ];
+  const healthy = pipeline._playableCandidates(cands, { pickKey: 'p', pinnedResume: true }).map((c) => c.pickKey);
+  assert.deepStrictEqual(healthy, ['p', 'c', 'd'],
+    'healthy pin resumes the same source first, then the ranked list — no manual-pick size-window detour');
+  const rotted = pipeline._playableCandidates(cands, { pickKey: 'e', pinnedResume: true }).map((c) => c.pickKey);
+  assert.deepStrictEqual(rotted, ['p', 'c', 'd'],
+    'a pin the scorer rejects (rotted since last session) is skipped outright — resume behaves like auto-pick');
+  const manual = pipeline._playableCandidates(cands, { pickKey: 'e' }).map((c) => c.pickKey);
+  assert.strictEqual(manual[0], 'e', 'a MANUAL pick keeps its explicit override even when the auto-scorer rejects it');
+  store.close();
+  // Race-width contract: a pinned resume must keep the hedged parallel walk; only explicit human
+  // picks (Sources drawer) collapse the race to a direct width-1 mount.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'pipeline.js'), 'utf8');
+  assert.match(src, /const width = \(params\.pickKey \|\| params\.pick\) && !params\.pinnedResume \? 1 : PLAY_RACE_WIDTH;/,
+    'play() keeps PLAY_RACE_WIDTH for pinned resumes and width 1 only for explicit picks');
+});
+
 test('pipeline: auto-advance mounts the next candidate when the current source dies', async () => {
   const pay1 = seededPayload(90 * 1024, 11);
   const pay2 = seededPayload(90 * 1024, 22);

@@ -283,7 +283,14 @@ them when the table is reorganized:
   (`meta.source` name+pickKey) and replayed as a pick on resume — resume must never
   silently return to auto-pick's "original" choice after a manual Sources override, and
   Start Over (resume 0) never pins. A recovery-advance repoints the pin at the
-  replacement and makes it re-earn the 30s. Server-side, a recovery-advance records a
+  replacement and makes it re-earn the 30s. A replayed pin is FLAGGED
+  (`pinnedResume: true`) so the server can tell it from a human Sources choice: the pin
+  leads the walk only while the scorer still calls it playable — a pin that rotted since
+  the last session is skipped outright, the fallback is the ranked list (never the
+  manual-pick size-window detour), the hedged `PLAY_RACE_WIDTH` walk is kept (width 1
+  stays explicit-picks-only), and the 4K-exhausted relax path applies to pinned resumes.
+  Without the flag, resume start regressed to a serial cold walk whenever the pin rotted
+  (v2.8.3–v2.8.11). Server-side, a recovery-advance records a
   TTL'd `playback-failed` verdict (scoring −800) for the abandoned source so a later
   fresh play ranks it down instead of re-serving it — movies/non-episode-scoped only
   (a release-wide verdict from one episode's stall must not blacklist a season pack's

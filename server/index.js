@@ -4845,6 +4845,7 @@ const H = {
     try {
       const { session, vf, candidate, attempts, relaxedResolution } = await pipeline.play(
         { q: body.q, imdbid: body.imdbid, tvdbid: body.tvdbid, season: body.season, ep: body.ep, pick: body.pick, pickKey: body.pickKey,
+          pinnedResume: !!body.pinnedResume,
           resumeFrac: Math.max(0, Math.min(1, Number(body.resumeFrac) || 0)) },
         policy
       );
@@ -4888,6 +4889,7 @@ const H = {
     try {
       const { vf, candidate, attempts, prepared } = await pipeline.prepare(
         { q: body.q, imdbid: body.imdbid, tvdbid: body.tvdbid, season: body.season, ep: body.ep, pick: body.pick, pickKey: body.pickKey,
+          pinnedResume: !!body.pinnedResume,
           resumeFrac: Math.max(0, Math.min(1, Number(body.resumeFrac) || 0)) },
         policy
       );

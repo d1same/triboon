@@ -6619,12 +6619,19 @@ function playbackRequestBody(it, picked = null, qRank = qualityRankForItem(it)) 
   // player abandoned isn't re-served just because the ranker still likes it. The server's pick
   // fallback chain still applies: if the pinned release can't stream anymore, it walks on and the
   // client toasts the swap. An explicit pick (Sources drawer) always wins over the pin.
+  let pinnedResume = false;
   if (!picked && it && it.key && Number(it.resume) > 0) {
     const w = S.watchMap && S.watchMap[it.key];
     const src = w && w.meta && w.meta.source;
-    if (src && (src.pickKey || src.name)) picked = { name: src.name, pickKey: src.pickKey };
+    if (src && (src.pickKey || src.name)) {
+      picked = { name: src.name, pickKey: src.pickKey };
+      // Auto-pin, not a human Sources choice: tell the server, so a pin that rotted since the
+      // last session is skipped instantly and the resume keeps the ranked parallel race.
+      pinnedResume = true;
+    }
   }
   const body = { q: queryFor(it), pick: picked && picked.name, pickKey: picked && picked.pickKey, caps: clientCaps() };
+  if (pinnedResume) body.pinnedResume = true;
   if (ids.imdbid) body.imdbid = ids.imdbid;
   if (ids.tvdbid) body.tvdbid = ids.tvdbid;
   if (ids.season != null) body.season = ids.season;

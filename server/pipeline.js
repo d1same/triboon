@@ -1466,7 +1466,9 @@ class Pipeline {
     const session = new PlaySession(params, playable);
     this.sessions.set(session.id, session);
     // Cold start races the top candidates; a single explicit Sources pick stays a direct mount.
-    const width = (params.pickKey || params.pick) ? 1 : PLAY_RACE_WIDTH;
+    // A pinned resume keeps the race: the pin leads the ranked list, but a dead pin must not turn
+    // resume into a serial one-at-a-time walk (the pre-pin behavior users knew was the raced one).
+    const width = (params.pickKey || params.pick) && !params.pinnedResume ? 1 : PLAY_RACE_WIDTH;
     try {
       return await this._advance(session, mountOpts, { width });
     } catch (e) {
@@ -1477,7 +1479,7 @@ class Pipeline {
       // that lock (NOT the maxResolutionRank hard cap) and walk only the releases we hadn't been
       // allowed to try yet. Re-search is a cache hit (raw results re-scored under the relaxed
       // policy), so this costs no network. Explicit Sources picks keep their own fallback chain.
-      if (policy.exactResolutionRank != null && !params.pickKey && !params.pick) {
+      if (policy.exactResolutionRank != null && ((!params.pickKey && !params.pick) || params.pinnedResume)) {
         const relaxed = { ...policy };
         delete relaxed.exactResolutionRank;
         const retry = await this.search(params, relaxed);
@@ -1523,6 +1525,14 @@ class Pipeline {
     const picked = candidates.find((c) => params.pickKey && c.pickKey === params.pickKey)
       || candidates.find((c) => params.pick && c.name === params.pick);
     if (!picked) return autoPlayable;
+    // A pinned resume is the source we HAPPENED to be playing, not a choice the user is owed.
+    // Front it only while the scorer still calls it playable — a pin that rotted since the last
+    // session is skipped outright, and the ranked list plays without the manual-pick size-window
+    // detour (that heuristic models a deliberate human override, which this is not).
+    if (params.pinnedResume) {
+      if (!autoPlayable.some((c) => c.pickKey === picked.pickKey)) return autoPlayable;
+      return [picked, ...autoPlayable.filter((c) => c.pickKey !== picked.pickKey)];
+    }
     // A manual Sources pick is an explicit OVERRIDE — honored FIRST even when the auto-scorer would
     // reject it (the drawer deliberately lists releases past the auto-pick size cap; without this a
     // picked 38GB UHD remux was silently dropped). The system can't know WHY it was picked, so the
@@ -1569,7 +1579,7 @@ class Pipeline {
     // Mirror play()'s relax-on-exhaustion: when every preferred-res (4K) source is dead, pre-warm
     // the fallback resolution too — so a focus pre-warm keeps resume instant even on UHD source rot,
     // not just when 4K is healthy. Cache-hit re-search re-scores the lower-res tier into playability.
-    if (!done && policy.exactResolutionRank != null && !params.pickKey && !params.pick && Date.now() - started < PREPARE_MAX_MS) {
+    if (!done && policy.exactResolutionRank != null && ((!params.pickKey && !params.pick) || params.pinnedResume) && Date.now() - started < PREPARE_MAX_MS) {
       const relaxed = { ...policy };
       delete relaxed.exactResolutionRank;
       const retry = await this.search(params, relaxed);

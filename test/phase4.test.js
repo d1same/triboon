@@ -4941,6 +4941,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'saveWatch pins the playing source into watch meta only after ~30s of real playback');
   assert.match(ui, /if \(!picked && it && it\.key && Number\(it\.resume\) > 0\) \{[\s\S]{0,220}const src = w && w\.meta && w\.meta\.source;[\s\S]{0,120}picked = \{ name: src\.name, pickKey: src\.pickKey \};/,
     'a resume play replays the pinned source as a pick (explicit Sources picks still win)');
+  assert.match(ui, /pinnedResume = true;[\s\S]{0,400}if \(pinnedResume\) body\.pinnedResume = true;/,
+    'a replayed pin is FLAGGED as a pinned resume so the server may skip a rotted pin and keep the parallel race (a manual Sources pick stays unflagged)');
   assert.match(ui, /p\.sourcePickKey = \(r\.candidate && r\.candidate\.pickKey\) \|\| null; \/\/ resume must pin the REPLACEMENT, not the dead source[\s\S]{0,120}p\._resumeSourceOk = false;/,
     'recovery advance repoints the pin at the replacement source and makes it re-earn the 30s');
   // Native audio language: payload carries the user's saved preference + the probed source tracks

@@ -94,6 +94,11 @@ flowchart LR
 
 ## Resume Source Recovery
 
+- A resume replays its pinned source flagged as `pinnedResume`: the pin plays
+  first only while the scorer still calls it playable. A pin that rotted since
+  the last session is skipped instantly and the ranked list plays with the
+  normal parallel race — resume start must never be slower than a fresh play
+  because of a dead pin.
 - Web and native playback re-check the live mount after opening. A confirmed
   blocked source advances immediately to the next ranked release.
 - Startup without a real first frame uses the bounded player fallback ladder.
