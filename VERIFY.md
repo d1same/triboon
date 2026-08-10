@@ -111,6 +111,39 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-10, v2.8.12 pinned-resume race fix + Media3 1.11.0 verification:
+
+- Version contract aligned: `package.json` 2.8.12; Android `versionName` 2.8.12
+  / `versionCode` 317; Windows client `package.json`/`tauri.conf.json`/
+  `Cargo.toml`/`Cargo.lock` 2.8.12 (the first gate run caught the Windows
+  client left at 2.8.11 — fixed, both release-contract suites re-run green).
+- Pinned-resume fix verified at every layer: new `_playableCandidates`
+  ordering test (healthy pin leads, rotted pin skipped, manual pick keeps its
+  override), race-width source contract (`PLAY_RACE_WIDTH` kept for pinned
+  resumes, width 1 explicit-picks-only), and the phase4 client contract
+  (`pinnedResume` flagged on replayed pins only). Live-page check on the boot
+  UI confirmed pinned resume sends `pickKey + pinnedResume:true`, fresh play
+  sends neither, manual pick sends `pickKey` alone.
+- `npm.cmd test` passed 454/454 on the final tree (99.4s).
+- `TRIBOON_ADB_DEVICE=emulator-5554 TRIBOON_STRESS_VOD_KEY=tmdb:movie:120
+  npm.cmd run verify:full` ran the full gate on the QA emulator rig
+  (credential-free fixture 60993/53159 + isolated QA server on 7788, fresh
+  data dir): PASS Android ExoPlayer stress smoke with Media3 1.11.0.
+  `bench/stress-results/android-tv-stress-20260810-194020.json` finished
+  `ok: true`, zero failures, zero warnings across boot, page churn, source
+  quality separation, Live TV start, native handoff, Multiview, 20-zap loop,
+  PiP, VOD start, Continue Watching, seek loop, subtitles, and log scan.
+  The only failing gate step was the version mismatch above; the Node suite
+  was re-run 454/454 after the fix while stress evidence remained valid (the
+  Windows version strings do not affect server or Android behavior).
+- Media3 1.10.1 → 1.11.0: `gradle assembleDebug testDebugUnitTest` green;
+  the stress smoke above is the on-device proof. Shield-hardware re-check
+  rides the normal post-release APK update on real hardware.
+- Unverified on this run: real-provider VOD (QA fixture only), Windows native
+  GPU playback (no client rebuild in this change set — icons and version
+  strings only), and Shield real-hardware playback (release APK arrives via
+  CI after the tag).
+
 2026-07-15, v2.7.1 public documentation, privacy, and delivery verification:
 
 - Audited every tracked public Markdown document and the live Settings copy.

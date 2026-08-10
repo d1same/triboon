@@ -3494,7 +3494,7 @@ dependencies = [
 
 [[package]]
 name = "triboon-px8"
-version = "2.8.11"
+version = "2.8.12"
 dependencies = [
  "libmpv2",
  "serde",

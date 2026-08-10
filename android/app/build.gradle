@@ -27,8 +27,8 @@ android {
         applicationId = "app.triboon.tv"
         minSdk = 23          // Media3 1.10.x requires API 23+; Shield/onn/Chromecast TV targets clear this
         targetSdk = 36
-        versionCode = 316
-        versionName = "2.8.11"
+        versionCode = 317
+        versionName = "2.8.12"
     }
 
     signingConfigs {
@@ -75,7 +75,10 @@ tasks.matching { it.name == 'assembleRelease' || it.name == 'bundleRelease' }.co
 }
 
 dependencies {
-    def media3Version = "1.10.1"
+    // 1.11.0 (Aug 2026): dynamic scheduling on by default, mfra-based fMP4 seeking when sidx is
+    // absent (helps the server remux path), and a 100ms audio-underrun debounce that stops
+    // spurious "buffering" flickers. No API breaks from 1.10.x for our usage.
+    def media3Version = "1.11.0"
     compileOnly "androidx.annotation:annotation:1.9.1"
     implementation "androidx.core:core:1.13.1" // FileProvider for the in-app self-update installer
     implementation "androidx.media3:media3-exoplayer:$media3Version"
