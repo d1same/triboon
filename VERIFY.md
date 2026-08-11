@@ -111,6 +111,33 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-10, v2.9.0 progressive seek + NNTP pipelining prototype (default OFF):
+
+- Version contract aligned: `package.json` 2.9.0; Android `versionName` 2.9.0 /
+  `versionCode` 318; all four Windows client version spots 2.9.0.
+- Progressive D-pad seek: rapid same-direction presses accelerate x1 x1 x2 x3 …
+  capped x8, pause/direction-flip resets. Verified live in the browser page
+  (burst 30/60/120/210/330; flip 120→110) and pinned by a phase4 contract.
+- NNTP pipelining prototype ships DEFAULT OFF (`TRIBOON_NNTP_PIPELINE=2..4`
+  opt-in): low-lane stacking only, stands down while any above-low work is
+  queued (the priority-inversion case is a regression test — it caught a real
+  inversion during development), per-waiter stall timers re-arm on socket
+  progress, explicit picks and default behavior byte-identical (test-proven
+  OFF path). Four new e2e tests; mock NNTP now serializes responses per socket
+  like a real server. Real-provider bench (`bench/nntp-pipelining-bench.js`)
+  is the prerequisite before anyone flips the flag.
+- `npm.cmd test` passed 458/458 on the final tree.
+- `TRIBOON_ADB_DEVICE=emulator-5554 TRIBOON_STRESS_VOD_KEY=tmdb:movie:120
+  npm.cmd run verify:full` fully green (exit 0): P9 IPTV, P14 fast VOD, P11
+  subtitles focused gates, full Node suite, isolated `/api/server` smoke,
+  Android lint/unit/debug build (vc 318, Media3 1.11.0), and the ExoPlayer
+  stress smoke `bench/stress-results/android-tv-stress-20260810-205332.json`
+  `ok: true`, zero failures, zero warnings.
+- Unverified on this run: real-provider VOD (QA fixture only), Shield real
+  hardware (release APK arrives via CI), Windows native GPU playback (no
+  client code change). Pipelining is unexercised against a real provider by
+  design — it is OFF until the owner benches it.
+
 2026-08-10, v2.8.12 pinned-resume race fix + Media3 1.11.0 verification:
 
 - Version contract aligned: `package.json` 2.8.12; Android `versionName` 2.8.12
