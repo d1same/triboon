@@ -498,6 +498,25 @@ test('triage: verdicts for healthy, degraded, and dead releases', async () => {
   await mock.close();
 });
 
+test('triage: probes retry known failures and grow coverage before re-proving proven segments', async () => {
+  const { nzb } = makeRelease('RetryMissing.Test.mkv', 512 * 1024, 64 * 1024); // 8 segments
+  const statCounts = new Map();
+  const dead = new Set(['seg1@triboon.test']); // first segment — triage always samples it
+  const pool = { stat: async (id) => { statCounts.set(id, (statCounts.get(id) || 0) + 1); return !dead.has(id); } };
+  const vf = new VirtualFile(pool, nzb);
+  const h1 = await vf.triage(6);
+  assert.strictEqual(h1.verdict, 'degraded');
+  assert.strictEqual(statCounts.size, 6, 'first triage spends its full budget');
+  const h2 = await vf.triage(6);
+  assert.strictEqual(statCounts.get('seg1@triboon.test'), 2, 're-triage retries the known failure first');
+  assert.ok(statCounts.size > 6, 're-triage grows coverage into never-sampled segments instead of re-proving the same picks');
+  assert.strictEqual(h2.verdict, 'degraded', 'the still-dead article keeps the mount degraded');
+  dead.clear(); // the article heals (another provider / late propagation)
+  const h3 = await vf.triage(6);
+  assert.strictEqual(h3.missing, 0, 'the healed failure is retried and clears');
+  assert.strictEqual(h3.verdict, 'verified', 'a healed article flips the verdict on retry');
+});
+
 // ---------- nntp reliability: dead/wedged connections must never hang playback ----------
 // The real-world failure: NAT/provider silently kills pooled connections while the user
 // browses; the next BODY is written into a dead socket. Without timeouts the mount's

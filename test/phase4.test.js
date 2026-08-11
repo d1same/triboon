@@ -4715,6 +4715,18 @@ test('Android native player: direct source and native chrome stay out of the web
     'native D-pad seek accelerates through the shared ProgressiveSeek curve');
   assert.match(android, /nativeSeekAccel\.reset\(\); \/\/ a new playback must start at the base seek step/,
     'the native seek streak resets when playback is released');
+  // Trickplay scrub previews: the seek preview fetches a stream-scoped server still, debounced
+  // past the nudge cadence, never for Live TV, and the preview hides when the real seek commits.
+  assert.ok(ui.includes('<div id="seekThumb"><img alt=""></div>'),
+    'the seek bar carries the trickplay preview element');
+  assert.match(ui, /showOsd\(\);\s*\n\s*previewSeekThumb\(target\);/,
+    'the D-pad seek preview drives the trickplay still');
+  assert.match(ui, /function previewSeekThumb\(target\) \{[\s\S]{0,200}\$\('player'\)\.classList\.contains\('live'\)\) return;/,
+    'Live TV never fetches trickplay stills');
+  assert.match(ui, /img\.src = `\$\{p\.thumbBase\}\?t=\$\{encodeURIComponent\(p\.streamToken\)\}&at=/,
+    'the thumb URL is stream-token scoped like subtitles');
+  assert.match(ui, /hideSeekThumb\(\); \/\/ the preview's job ends when the real seek commits/,
+    'the committed seek hides the preview');
   assert.match(ui, /async function renderLiveEpgStrip\(idx\) \{[\s\S]+fetchGuideBatch\(\[ch\]\)[\s\S]+paintLiveEpgStrip\(\)/,
     'live player should fetch the channel schedule and paint a top EPG strip');
   assert.match(ui, /function paintLiveEpgStrip\(\) \{[\s\S]+horizon = now \+ 2 \* 3600000[\s\S]+epgCell\$\{isNow \? ' now' : ''\}/,

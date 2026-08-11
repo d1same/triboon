@@ -198,6 +198,14 @@ function scoreRelease(candidate, policy = {}) {
       && a.resolutionRank === policy.preferResolutionRank && a.resolutionRank <= cap) {
     add(`preferred ${a.resolution}`, 400);
   }
+  // Exact-year preference: the matcher accepts ±1 (regional release-date drift), but between two
+  // otherwise-equal releases the true year must win — an adjacent-year duplicate/re-release should
+  // only play when nothing exact exists. +20 breaks same-tier ties without outranking a full
+  // resolution step (RES_LADDER spacing ≥30) or a group-tier bump.
+  if (Number.isInteger(policy.wantedYear)) {
+    const years = [...String(candidate.name || '').matchAll(/\b(19|20)\d{2}\b/g)].map((m) => +m[0]);
+    if (years.includes(policy.wantedYear)) add('exact year', 20);
+  }
 
   const src = matchOne(candidate.name, SOURCE); if (src) add(`source ${src.key}`, src.score);
   const cod = matchOne(candidate.name, CODEC); if (cod) add(`codec ${cod.key}`, cod.score);

@@ -2854,6 +2854,16 @@ test('pipeline: a pinned resume source leads only while playable, and never turn
     'play() keeps PLAY_RACE_WIDTH for pinned resumes and width 1 only for explicit picks');
 });
 
+test('scoring: the exact year outranks a ±1 twin, and only when the query carries a year', () => {
+  const twinA = { name: 'Some.Movie.2023.1080p.WEB-DL.DDP5.1.H.264-NTb', sizeBytes: 8e9 };
+  const twinB = { name: 'Some.Movie.2024.1080p.WEB-DL.DDP5.1.H.264-NTb', sizeBytes: 8e9 };
+  const ranked = rankReleases([twinA, twinB], { wantedYear: 2024 });
+  assert.strictEqual(ranked[0].name, twinB.name, 'the exact-year release leads its ±1 twin');
+  assert.ok(ranked[0].reasons.some((r) => /exact year \+20/.test(r)), 'the boost is visible in scoring reasons');
+  const neutral = rankReleases([twinA, twinB], {});
+  assert.strictEqual(neutral[0].score, neutral[1].score, 'without a wanted year the twins stay tied — no hidden penalty');
+});
+
 test('server: /api/prepare offers a device prefetch only for direct-play mounts within the owner budget', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
   assert.match(src, /const preloadMb = streamingRuntimeProfile\(\)\.devicePreloadMb;/,

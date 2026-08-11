@@ -412,15 +412,40 @@ class NzbFileStream {
     return Buffer.concat(parts).subarray(start - base, end - base);
   }
 
-  // Health triage: STAT first, last, and N random middle segments in parallel.
+  // Health triage: STAT `sampleCount` segments in parallel and verdict the sample.
+  // Retry-only-missing (SABnzbd 5.1's semantic, adapted to sampling): the probe budget is spent by
+  // PRIORITY — known failures first (a 430 can heal via another provider or late propagation),
+  // then segments never sampled, then the least-recently-proven. Repeat triages therefore retry
+  // the real failures and GROW coverage instead of re-proving the same random picks, while the
+  // budget itself is never shrunk — a wide sweep (sampleCount >= segments) still samples
+  // everything, so new mid-session rot (takedowns during playback) is found exactly as before.
   async triage(sampleCount = 6) {
-    const idxs = new Set([0, this.segments.length - 1]);
-    while (idxs.size < Math.min(sampleCount, this.segments.length)) {
-      idxs.add(Math.floor(Math.random() * this.segments.length));
+    const now = Date.now();
+    this._statOkAt = this._statOkAt || new Map(); // segment index -> last proved-at
+    this._statMissing = this._statMissing || new Set();
+    const want = Math.min(sampleCount, this.segments.length);
+    const idxs = new Set();
+    for (const i of [0, this.segments.length - 1]) if (!this._statOkAt.has(i)) idxs.add(i);
+    for (const i of this._statMissing) { if (idxs.size >= want) break; idxs.add(i); }
+    if (this._statOkAt.size + this._statMissing.size < this.segments.length) {
+      let guard = 0;
+      while (idxs.size < want && guard++ < this.segments.length * 4) {
+        const i = Math.floor(Math.random() * this.segments.length);
+        if (!this._statOkAt.has(i) && !this._statMissing.has(i)) idxs.add(i);
+      }
     }
+    if (idxs.size < want) {
+      const byAge = [...this._statOkAt.entries()].filter(([i]) => !idxs.has(i)).sort((a, b) => a[1] - b[1]);
+      for (const [i] of byAge) { if (idxs.size >= want) break; idxs.add(i); }
+    }
+    const list = [...idxs];
     const results = await Promise.all(
-      [...idxs].map((i) => this.pool.stat(this.segments[i].msgId, 'health').catch(() => false))
+      list.map((i) => this.pool.stat(this.segments[i].msgId, 'health').catch(() => false))
     );
+    results.forEach((ok, k) => {
+      if (ok) { this._statOkAt.set(list[k], now); this._statMissing.delete(list[k]); }
+      else { this._statMissing.add(list[k]); this._statOkAt.delete(list[k]); }
+    });
     const missing = results.filter((ok) => !ok).length;
     this.health = {
       verdict: missing === 0 ? 'verified' : missing >= results.length / 2 ? 'blocked' : 'degraded',

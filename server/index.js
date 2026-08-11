@@ -3681,6 +3681,7 @@ function mountPayload(vf, uid, extra = {}) {
     encoder: detectEncoder() ? detectEncoder().kind : null,
     tracksUrl: `/api/tracks/${vf.id}`,
     subtitleBase: `/api/subtitle/${vf.id}`, // + /<n>?t=<stream token>
+    thumbBase: `/api/thumb/${vf.id}`, // + ?t=<stream token>&at=<seconds> — scrub preview JPEGs
     // Multi-file audiobook: the ordered audio tracks (chapters) + the base URL to stream any track by
     // index ( `${audioBase}/<index>?t=<streamToken>` ). Absent for single-file (M4B) mounts.
     audioFiles: Array.isArray(vf.audioFiles) ? vf.audioFiles.map((t) => ({ index: t.index, name: t.name, size: t.size })) : undefined,
@@ -8129,6 +8130,46 @@ Object.assign(H, {
 
   // Embedded subtitle track → WebVTT. ffmpeg must read the whole stream (subs are interleaved),
   // so this can take a while the first time on a big release; the result is cached per track.
+  // Trickplay: one small JPEG near the requested second, from an in-memory LRU. Generation reads
+  // the mount through the local stream route at BACKGROUND priority, so scrub thumbnails can never
+  // outrank player bytes (the lane contract). Bucketed to 10s so a drag across a scene reuses
+  // frames instead of spawning ffmpeg per pixel; concurrent requests for one bucket share one job.
+  thumbAt: async (ctx) => {
+    if (!streamScopeOk(ctx, ctx.m[1])) return send(ctx.res, 401, { error: 'token not valid for this stream' });
+    const vf = mounts.get(ctx.m[1]);
+    if (!vf) return send(ctx.res, 404, { error: 'mount not found' });
+    if (!detectFfmpeg()) return send(ctx.res, 404, { error: 'ffmpeg not available' });
+    const at = Math.max(0, parseFloat(ctx.url.searchParams.get('at') || '0') || 0);
+    const bucket = Math.floor(at / 10) * 10;
+    const key = `${vf.id}:${bucket}`;
+    global.__thumbCache = global.__thumbCache || new Map();
+    global.__thumbJobs = global.__thumbJobs || new Map();
+    const cache = global.__thumbCache;
+    let buf = cache.get(key);
+    if (buf) { cache.delete(key); cache.set(key, buf); } // LRU refresh
+    else {
+      let job = global.__thumbJobs.get(key);
+      if (!job) {
+        job = (async () => {
+          const out = path.join(require('os').tmpdir(), `triboon-thumb-${key.replace(/[^a-z0-9]/gi, '_')}.jpg`);
+          const selfUrl = `http://127.0.0.1:${server.address().port}/api/stream/${vf.id}?t=${auth.streamToken(ctx.claims.uid, vf.id)}&priority=background`;
+          const ok = await makeThumb(selfUrl, out, bucket);
+          if (!ok) return null;
+          const b = fs.readFileSync(out);
+          try { fs.unlinkSync(out); } catch {}
+          while (cache.size >= 200) cache.delete(cache.keys().next().value); // ~200 thumbs ≈ a few MB
+          cache.set(key, b);
+          return b;
+        })().finally(() => global.__thumbJobs.delete(key));
+        global.__thumbJobs.set(key, job);
+      }
+      buf = await job;
+    }
+    if (!buf) return send(ctx.res, 404, { error: 'thumbnail unavailable' });
+    ctx.res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'private, max-age=3600', 'content-length': buf.length });
+    ctx.res.end(buf);
+  },
+
   subtitle: async (ctx) => {
     if (!streamScopeOk(ctx, ctx.m[1])) return send(ctx.res, 401, { error: 'token not valid for this stream' });
     const vf = mounts.get(ctx.m[1]);
@@ -8686,6 +8727,7 @@ const ROUTES = [
   { m: 'GET', re: /^\/api\/audiobook\/chapters\/(\w+)$/, auth: 'user', h: H.audiobookChapters },
   { m: 'GET', re: /^\/api\/audio\/(\w+)\/(\d+)$/, auth: 'stream', h: H.audioTrack },
   { m: 'GET', re: /^\/api\/subtitle\/(\w+)\/(\d+)$/, auth: 'stream', h: H.subtitle },
+  { m: 'GET', re: /^\/api\/thumb\/(\w+)$/, auth: 'stream', h: H.thumbAt },
   { m: 'GET', re: /^\/api\/releasesub\/(\w+)\/([a-z0-9_-]+)$/, auth: 'stream', h: H.releasesub },
   { m: 'GET', re: /^\/api\/ossubs\/(\w+)$/, auth: 'stream', h: H.ossubs },
 ];

@@ -957,6 +957,9 @@ class Pipeline {
     // episode streams from it (it's still size-SHAPED, so it stays a low-ranked fallback below singles).
     // Scoped to episode requests; movies/season-less searches never get wantedEpisode → unaffected.
     { const _we = wantedEpisodeOf(params); if (_we) policy = { ...policy, wantedEpisode: _we }; }
+    // The matcher accepts ±1 year (regional release-date drift); scoring should still PREFER the
+    // exact year so a re-release/adjacent-year duplicate never outranks the true title on a tie.
+    if (wanted && wanted.year) policy = { ...policy, wantedYear: wanted.year };
     const key = this._searchCacheKey(params);
     const titleKey = this._searchCacheKey(params, { ignoreCatalogIds: true });
     let hit = this._getFreshSearchHit(key);

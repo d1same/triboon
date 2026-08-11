@@ -1060,6 +1060,11 @@ body.nativeGuideMode #player.guideMode #video{display:none}
 #seek::before{content:"";position:absolute;left:0;right:0;top:50%;height:44px;transform:translateY(-50%)}
 #seek .fill{position:absolute;left:0;top:0;bottom:0;border-radius:4px;background:var(--grad)}
 #seek .buf{position:absolute;left:0;top:0;bottom:0;border-radius:4px;background:rgba(var(--fg),.22)}
+/* Trickplay scrub preview: a small still above the landing point while seeking. Subdued — flat
+   card, no glow; image swaps only (TV-perf safe). Hidden until a preview frame is ready. */
+#seekThumb{position:absolute;bottom:22px;transform:translateX(-50%);width:200px;aspect-ratio:16/9;border-radius:8px;overflow:hidden;background:rgba(10,8,16,.85);border:1px solid rgba(var(--fg),.18);opacity:0;pointer-events:none;transition:opacity .15s}
+#seekThumb.on{opacity:1}
+#seekThumb img{width:100%;height:100%;object-fit:cover;display:block}
 #seek .knob{position:absolute;top:50%;width:15px;height:15px;border-radius:50%;background:#fff;transform:translate(-50%,-50%);box-shadow:0 0 0 5px var(--artFocusGlow)}
 /* D-pad scrub mode: UP from the controls parks focus on the bar itself. */
 #seek.focus{height:8px;background:rgba(var(--fg),.28)}
@@ -4497,7 +4502,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
       <div class="src" id="pSrc"></div>
       <div class="seekLine">
         <span class="seekTime" id="seekElapsed">0:00</span>
-        <div id="seek"><div class="buf" id="buf"></div><div class="fill" id="fill"></div><div class="knob" id="knob"></div></div>
+        <div id="seek"><div class="buf" id="buf"></div><div class="fill" id="fill"></div><div class="knob" id="knob"></div><div id="seekThumb"><img alt=""></div></div>
         <span class="seekTime" id="seekTotal">0:00</span>
       </div>
       <div id="liveBar" class="liveOnly" aria-hidden="true">
@@ -13126,12 +13131,36 @@ function nudgeSeek(delta) {
   }
   setPlayerTimes(target, d);
   showOsd();
+  previewSeekThumb(target);
   clearTimeout(_nudgeT);
   _nudgeT = setTimeout(() => { const t = target; _nudgeSum = 0; _nudgeBase = null; seekTo(t); }, 320);
+}
+// Trickplay: show a server-rendered still above the seek bar for the previewed landing point.
+// Debounced past the nudge cadence so a rapid burst fetches one frame, not one per press; the
+// image URL carries the stream token (the thumb route is stream-scoped like subtitles).
+let _thumbT = null;
+function previewSeekThumb(target) {
+  const p = S.playing;
+  if (!p || !p.thumbBase || !p.streamToken || $('player').classList.contains('live')) return;
+  clearTimeout(_thumbT);
+  _thumbT = setTimeout(() => {
+    const el = $('seekThumb'); if (!el) return;
+    const img = el.querySelector('img');
+    img.onload = () => el.classList.add('on');
+    img.src = `${p.thumbBase}?t=${encodeURIComponent(p.streamToken)}&at=${Math.max(0, Math.floor(target))}`;
+    const d = totalDuration();
+    if (d) el.style.left = Math.min(94, Math.max(6, (target / d) * 100)) + '%';
+  }, 300);
+}
+function hideSeekThumb() {
+  clearTimeout(_thumbT);
+  const el = $('seekThumb');
+  if (el) el.classList.remove('on');
 }
 function seekTo(seconds) {
   cancelPauseWarmAhead();
   clearWebRebufferRecovery();
+  hideSeekThumb(); // the preview's job ends when the real seek commits
   const v = $('video'); const p = S.playing; if (!p) return;
   seconds = Math.max(0, seconds);
   if (p.castingActive) { // seek the TV, not the idle local element
