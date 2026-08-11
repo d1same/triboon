@@ -111,6 +111,31 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-11, v2.9.4 one-press Continue Watching resume:
+
+- Version contract aligned: `package.json` 2.9.4; Android `versionName` 2.9.4 /
+  `versionCode` 322; all four Windows client version spots 2.9.4.
+- On TV/native shells, a short press on any Continue Watching cover (movie OR
+  episode) now resumes directly — the cover IS the resume, matching the hero
+  Resume button, the episode next-up behavior, and the pre-cache warmed on
+  focus. Web browsers keep the detail-first stop (1080p/4K pick before play);
+  fresh titles still open details everywhere; Details stays on the hold-OK /
+  ⋯ card menu. Motivation: the live Shield measurement session showed a 4K
+  resume at ~3–4.5s press-to-frame, with the movie detail-page hop as the
+  last UX gap vs the browser.
+- Verified in a live page by invoking the real card factory with a CW movie
+  item under both client modes: browser → openDetail, TV shell → play, fresh
+  title → openDetail. phase4 pins the branch; docs-continue-watching.md
+  checklist gained item 5b. The Android stress drives resume
+  programmatically (asserts resume position), so its contract is unaffected.
+- `npm.cmd test` passed 461/461 on the final tree.
+- `verify:full` fully green on rerun (the harness-reinstall session-bounce
+  trap a third time — harness self-login is now scheduled work):
+  `bench/stress-results/android-tv-stress-20260811-084441.json` ok: true,
+  zero failures, zero warnings.
+- Unverified on this run: Shield real hardware (release APK via CI — owner
+  acceptance is one press on a movie CW cover resuming directly).
+
 2026-08-11, v2.9.3 Live TV favorites zap-context fix:
 
 - Version contract aligned: `package.json` 2.9.3; Android `versionName` 2.9.3 /
