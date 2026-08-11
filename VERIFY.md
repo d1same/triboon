@@ -111,6 +111,35 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-11, v2.9.3 Live TV favorites zap-context fix:
+
+- Version contract aligned: `package.json` 2.9.3; Android `versionName` 2.9.3 /
+  `versionCode` 321; all four Windows client version spots 2.9.3.
+- Owner-reported bug reproduced in a live browser session against the QA
+  fixture (32 channels, 3 favorited across the lineup): the player guide
+  auto-landed on the playing channel's home genre even when tuned from
+  ★ Favorites, and a guide pick then re-anchored the zap list to that genre.
+  Fix: every tune records its origin category (`S.liveTuneCat`, guide- or
+  page-selected); the guide reopens on that category with the old genre
+  fallback intact; and `ensurePlayerGuideChannels`' cache refresh only fills
+  an EMPTY zap list (Android WebView cache-cold no longer clobbers a live
+  favorites context). Verified live both ways: favorites tune → guide lands
+  ★ Favorites, guide pick keeps the 3-favorite list, zap walks favorites;
+  category tune → guide lands the genre, zap walks the full lineup. Zap
+  mechanics, shared live upstreams, and adjacent-channel prefetch untouched —
+  the prefetch now warms the CORRECT (favorites) neighbors.
+- Three phase4 contracts pin the tune-origin recording, guide landing, and
+  refresh guard; the older guide-landing contract was updated to the new
+  behavior (its "never a stale category" intent preserved via the fallback).
+- `npm.cmd test` passed 461/461 on the final tree.
+- `verify:full` fully green on rerun (the harness-reinstall session-bounce
+  preflight trap again — second occurrence, noted for a harness fix):
+  `bench/stress-results/android-tv-stress-20260810-233736.json` ok: true,
+  zero failures, zero warnings, including the 20-zap Live TV loop, Multiview,
+  and PiP guide checks.
+- Unverified on this run: Shield real hardware (release APK via CI — the
+  owner's favorites zap repro is the true acceptance check).
+
 2026-08-10, v2.9.2 trickplay + retry-only-missing triage + exact-year scoring:
 
 - Version contract aligned: `package.json` 2.9.2; Android `versionName` 2.9.2 /
