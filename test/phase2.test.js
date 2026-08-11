@@ -2874,6 +2874,18 @@ test('server: /api/prepare offers a device prefetch only for direct-play mounts 
     'devicePreloadMb defaults to 12MB and clamps 0..64 (0 = off)');
 });
 
+test('server: NNTP pipelining is an owner setting that rides provider opts, env as fallback', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(src, /nntpPipelineDepth: clampInt\(raw\.nntpPipelineDepth, 0, 0, 4\),/,
+    'the setting defaults OFF and clamps 0..4 (the bench curve flattens past 4)');
+  assert.match(src, /const depth = normalizeStreamingPerformance\(s\.streamingPerformance \|\| \{\}\)\.nntpPipelineDepth[\s\S]{0,120}TRIBOON_NNTP_PIPELINE/,
+    'the setting wins; the env var stays as a fallback for pre-setting deployments');
+  assert.match(src, /for \(const p of list\) p\.pipelineDepth = depth;/,
+    'the depth rides every provider\'s pool opts');
+  assert.match(src, /\[p\.host, p\.port, p\.user, p\.connections, p\.pipelineDepth \|\| 0\]/,
+    'saving the setting changes the pool key, so pools rebuild without a restart');
+});
+
 test('pipeline: auto-advance mounts the next candidate when the current source dies', async () => {
   const pay1 = seededPayload(90 * 1024, 11);
   const pay2 = seededPayload(90 * 1024, 22);

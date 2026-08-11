@@ -313,6 +313,12 @@ function envProvider() {
 function providerList() {
   const s = settings.get();
   const list = (s.providers && s.providers.length) ? normalizeProviders(s.providers) : [envProvider()].filter(Boolean);
+  // NNTP pipelining rides the provider opts so getPool()'s key change rebuilds pools when the
+  // owner saves the setting. The Streaming-performance setting wins; the TRIBOON_NNTP_PIPELINE
+  // env stays as a fallback for deployments configured before the setting existed.
+  const depth = normalizeStreamingPerformance(s.streamingPerformance || {}).nntpPipelineDepth
+    || Math.min(4, Math.max(0, parseInt(process.env.TRIBOON_NNTP_PIPELINE || '0', 10) || 0));
+  for (const p of list) p.pipelineDepth = depth;
   return list;
 }
 
@@ -337,6 +343,10 @@ function normalizeStreamingPerformance(raw = {}) {
     // TV may pull ahead of press-play (detail-open and Up Next). 0 disables. Owner-tunable so a
     // slow uplink isn't taxed by speculative fetches; the on-device LRU cap is a client concern.
     devicePreloadMb: clampInt(raw.devicePreloadMb, 12, 0, 64),
+    // NNTP pipelining depth: how many article requests each connection keeps on the wire for
+    // LOW-LANE work (read-ahead/background only; player lanes never share a socket). 0 = off.
+    // Capped at 4 — the bench curve flattens past it and deeper stacks make cancels expensive.
+    nntpPipelineDepth: clampInt(raw.nntpPipelineDepth, 0, 0, 4),
   };
 }
 
@@ -581,7 +591,7 @@ let pool = null, poolKey = '';
 function getPool() {
   const list = providerList();
   if (!list.length) { const e = new Error('no usenet provider configured'); e.status = 409; throw e; }
-  const key = JSON.stringify(list.map((p) => [p.host, p.port, p.user, p.connections]));
+  const key = JSON.stringify(list.map((p) => [p.host, p.port, p.user, p.connections, p.pipelineDepth || 0]));
   if (pool && poolKey === key) return pool;
   if (pool) pool.close();
   poolKey = key;

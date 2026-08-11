@@ -37,6 +37,7 @@ Settings -> Streaming performance owns the capacity profile:
 | Per-stream 1080p / 4K connections | Maximum article window for one active stream | Caps read-ahead so a single stream does not monopolize the pool. |
 | Startup reserve | Percentage of usable connections held back | Keeps new starts and seeks responsive. |
 | Device preload | MB of opening bytes an Android TV may pre-cache ahead of press-play (detail open + Up Next) | Direct-play mounts only; `/api/prepare` offers a tokened prefetch target within this budget, the shell stores it in a 100MB on-device LRU, and press-play buffers its first seconds from disk. 0 disables. |
+| NNTP pipelining | Article requests each provider connection keeps on the wire for read-ahead/background work | Low lanes only — startup/seek/playback/health never share a socket, and stacking stands down while player work is queued. Rides provider pool opts; saving rebuilds pools live. Bench: ~2.2x per-connection read-ahead throughput at depth 4 on a latency-dominated provider. |
 
 Provider connection limits are saved per usenet account and currently cap at
 150. A 100-connection plan should be entered as 100; Triboon still decides how
@@ -460,6 +461,7 @@ must be clearly separate because it can create provider load and noisy results.
 | 4K per-stream cap | 6-80 connections, default 20 |
 | Health probe limit | 2-12 probes, default 6 |
 | Device preload | 0-64 MB, default 12 (0 = off) |
+| NNTP pipelining | 0-4 requests per connection, default 0 (off); `TRIBOON_NNTP_PIPELINE` env is honored as a fallback when the setting is 0 |
 
 ## Casting (Chromecast / AirPlay) — Phase 2
 

@@ -4082,8 +4082,9 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
         <label class="settingsControl"><span>1080p read-ahead goal</span><input id="perfBuf1080" type="number" min="30" max="600" inputmode="numeric" placeholder="seconds"></label>
         <label class="settingsControl"><span>4K read-ahead goal</span><input id="perfBuf4k" type="number" min="30" max="360" inputmode="numeric" placeholder="seconds"></label>
       </div>
-      <div class="settingsRow">
+      <div class="settingsRow two">
         <label class="settingsControl"><span>Device preload</span><input id="perfPreload" type="number" min="0" max="64" inputmode="numeric" placeholder="MB, 0 = off"></label>
+        <label class="settingsControl"><span>NNTP pipelining</span><input id="perfPipeline" type="number" min="0" max="4" inputmode="numeric" placeholder="0 = off, up to 4"></label>
       </div>
       <div class="settingsRow">
         <label class="settingsControl"><span>1080p connections</span><input id="perfConn1080" type="number" min="4" max="60" inputmode="numeric" placeholder="per stream"></label>
@@ -21037,6 +21038,8 @@ function perfFormValues() {
     startupReservePct: parseInt($('perfReserve').value || '25', 10) || 25,
     // 0 is a real value (preload off) and an EMPTY field means "default", so no || shortcuts.
     devicePreloadMb: (() => { const v = parseInt($('perfPreload').value, 10); return Number.isFinite(v) ? Math.max(0, Math.min(64, v)) : 12; })(),
+    // Read-ahead requests each provider connection keeps on the wire (0 = classic one-at-a-time).
+    nntpPipelineDepth: (() => { const v = parseInt($('perfPipeline').value, 10); return Number.isFinite(v) ? Math.max(0, Math.min(4, v)) : 0; })(),
   };
 }
 function setPerfForm(p = {}) {
@@ -21052,6 +21055,7 @@ function setPerfForm(p = {}) {
   $('perfConn4k').value = p.maxConnPerStream4k ?? 20;
   $('perfReserve').value = p.startupReservePct ?? 25;
   $('perfPreload').value = p.devicePreloadMb ?? 12;
+  $('perfPipeline').value = p.nntpPipelineDepth ?? 0;
 }
 function perfSetApplyEnabled(on) {
   const b = $('perfApply');

@@ -427,11 +427,15 @@ class NzbFileStream {
     const idxs = new Set();
     for (const i of [0, this.segments.length - 1]) if (!this._statOkAt.has(i)) idxs.add(i);
     for (const i of this._statMissing) { if (idxs.size >= want) break; idxs.add(i); }
-    if (this._statOkAt.size + this._statMissing.size < this.segments.length) {
-      let guard = 0;
-      while (idxs.size < want && guard++ < this.segments.length * 4) {
-        const i = Math.floor(Math.random() * this.segments.length);
-        if (!this._statOkAt.has(i) && !this._statMissing.has(i)) idxs.add(i);
+    // Random sample WITHOUT replacement: guarded random draws could under-fill the budget on an
+    // unlucky run (a triage that probes 3 of its 4 slots skews the verdict math and flakes).
+    if (idxs.size < want) {
+      const unproven = [];
+      for (let i = 0; i < this.segments.length; i++) {
+        if (!this._statOkAt.has(i) && !this._statMissing.has(i) && !idxs.has(i)) unproven.push(i);
+      }
+      while (idxs.size < want && unproven.length) {
+        idxs.add(unproven.splice(Math.floor(Math.random() * unproven.length), 1)[0]);
       }
     }
     if (idxs.size < want) {
