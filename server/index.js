@@ -333,6 +333,10 @@ function normalizeStreamingPerformance(raw = {}) {
     maxConnPerStream1080: clampInt(raw.maxConnPerStream1080, 12, 4, 60),
     maxConnPerStream4k: clampInt(raw.maxConnPerStream4k, 20, 6, 80),
     healthProbeLimit: clampInt(raw.healthProbeLimit, 6, 2, 12),
+    // Device-side preload budget (MB) for the Android native pre-cache: how many opening bytes a
+    // TV may pull ahead of press-play (detail-open and Up Next). 0 disables. Owner-tunable so a
+    // slow uplink isn't taxed by speculative fetches; the on-device LRU cap is a client concern.
+    devicePreloadMb: clampInt(raw.devicePreloadMb, 12, 0, 64),
   };
 }
 
@@ -4900,11 +4904,23 @@ const H = {
         rememberMountOwner(vf, ctx.user.id);
         trimUserMounts(ctx.user.id, vf.id);
       }
+      // Native pre-cache: a prepared DIRECT-PLAY mount is offered to the client as a tokened
+      // prefetch target (the Android shell caches the opening bytes so press-play starts from
+      // disk). Direct play only: remux/transcode output is a fresh ffmpeg pipe per spawn, so its
+      // bytes can never be cache-keyed. The budget comes from Streaming performance
+      // (devicePreloadMb, 0 = off). The play-time stream URL carries a different token; the
+      // client's cache key strips the query so these prefetched bytes still hit.
+      let prefetch = null;
+      const preloadMb = streamingRuntimeProfile().devicePreloadMb;
+      if (vf && prepared && preloadMb > 0 && decidePlayback(vf.name, parseCaps(body.caps)).method === 'direct') {
+        prefetch = { id: vf.id, streamUrl: `/api/stream/${vf.id}?t=${auth.streamToken(ctx.user.id, vf.id)}`, size: vf.size, budgetMb: preloadMb };
+      }
       send(ctx.res, 200, {
         prepared: !!prepared,
         mountMs: Date.now() - t0,
         candidate: candidate ? { name: candidate.name, pickKey: candidate.pickKey, score: candidate.score, indexer: candidate.indexer } : null,
         attempts,
+        prefetch: prefetch || undefined,
       });
     } catch (e) {
       send(ctx.res, 502, { error: e.message, summary: e.summary, attempts: e.attempts || [] });

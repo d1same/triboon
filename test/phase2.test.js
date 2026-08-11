@@ -2854,6 +2854,16 @@ test('pipeline: a pinned resume source leads only while playable, and never turn
     'play() keeps PLAY_RACE_WIDTH for pinned resumes and width 1 only for explicit picks');
 });
 
+test('server: /api/prepare offers a device prefetch only for direct-play mounts within the owner budget', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(src, /const preloadMb = streamingRuntimeProfile\(\)\.devicePreloadMb;/,
+    'the prefetch offer is budgeted by the owner-tunable devicePreloadMb setting');
+  assert.match(src, /decidePlayback\(vf\.name, parseCaps\(body\.caps\)\)\.method === 'direct'/,
+    'only DIRECT-play mounts are offered for device pre-caching (remux/transcode bytes are per-spawn)');
+  assert.match(src, /devicePreloadMb: clampInt\(raw\.devicePreloadMb, 12, 0, 64\),/,
+    'devicePreloadMb defaults to 12MB and clamps 0..64 (0 = off)');
+});
+
 test('pipeline: auto-advance mounts the next candidate when the current source dies', async () => {
   const pay1 = seededPayload(90 * 1024, 11);
   const pay2 = seededPayload(90 * 1024, 22);

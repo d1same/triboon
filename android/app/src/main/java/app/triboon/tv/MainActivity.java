@@ -1552,6 +1552,13 @@ public class MainActivity extends Activity {
             public boolean castAvailable() {
                 return castHasDevices;
             }
+            // Pre-cache the opening bytes of a prepared DIRECT-PLAY stream so press-play buffers
+            // from disk. json: { url, budgetMb, size }. Best-effort — errors only log.
+            @android.webkit.JavascriptInterface
+            public void prefetchStream(String json) {
+                if (!trustedBridgeOrigin()) return;
+                handleNativePrefetch(json);
+            }
         }, "TriboonTV");
 
         addWebViewBehindOverlays();
@@ -4475,6 +4482,8 @@ public class MainActivity extends Activity {
                 && (nativeVodSeekable() || nativeServerSeekMode());
     }
 
+    private final ProgressiveSeek nativeSeekAccel = new ProgressiveSeek();
+
     private void nativeSeekBy(long deltaMs) {
         if (nativePlayer == null) return;
         long d = nativeDurationMs();
@@ -4482,6 +4491,9 @@ public class MainActivity extends Activity {
             showNativeChrome(false);
             return;
         }
+        // Progressive seek, same curve as the web player: rapid same-direction presses grow the
+        // step x1 x1 x2 x3 ... capped x8; a pause or direction flip resets to the base step.
+        deltaMs = nativeSeekAccel.step(deltaMs, android.os.SystemClock.uptimeMillis());
         long target = Math.max(0, nativeDisplayPositionMs() + deltaMs);
         if (d > 0 && d != C.TIME_UNSET) target = Math.min(d, target);
         nativeSeekToDisplayPosition(target);
@@ -5289,7 +5301,46 @@ public class MainActivity extends Activity {
                         : nativeVodReadTimeoutMs(false));
         nativeHttpDataSourceFactory = http;
         applyNativeHttpHostHeader();
-        return new DefaultMediaSourceFactory(http).setLoadErrorHandlingPolicy(nativeRemuxLoadErrorPolicy());
+        // Direct-play VOD reads through the pre-cache (read-only): if the detail page or Up Next
+        // prefetched this stream's opening bytes, the first buffer fills from disk. Remux/
+        // transcode and live never wrap — their bytes are per-spawn and must not be cache-served
+        // (the key factory would also keep them unique, but not wrapping is the primary guard).
+        androidx.media3.datasource.DataSource.Factory ds = http;
+        if ("video".equals(nativeMode) && !nativeServerSeekMode()) {
+            ds = precache().readOnlyDataSourceFactory(http);
+        }
+        return new DefaultMediaSourceFactory(ds).setLoadErrorHandlingPolicy(nativeRemuxLoadErrorPolicy());
+    }
+
+    private StreamPrecache streamPrecache;
+
+    private StreamPrecache precache() {
+        if (streamPrecache == null) {
+            streamPrecache = new StreamPrecache(getApplicationContext(), "TriboonTV/" + BuildConfig.VERSION_NAME);
+        }
+        return streamPrecache;
+    }
+
+    // Bridge entry for the web layer's prepare responses: { url, budgetMb, size }. The URL must be
+    // the configured Triboon server (never an IPTV/personal host) and a DIRECT stream path — the
+    // server only offers direct-play prefetches, but the shell re-checks both before spending
+    // bandwidth on a bridge-supplied URL.
+    private void handleNativePrefetch(String json) {
+        try {
+            org.json.JSONObject j = new org.json.JSONObject(json);
+            long budgetMb = Math.max(0, Math.min(64, j.optLong("budgetMb", 0)));
+            if (budgetMb <= 0) return;
+            String url = normalizeHttpUrl(j.optString("url", ""), false);
+            if (url.isEmpty() || !isTrustedServerUrl(url)) return;
+            String path = Uri.parse(url).getPath();
+            if (path == null || !path.startsWith("/api/stream/")) return;
+            long budget = budgetMb * 1024L * 1024L;
+            long size = Math.max(0, j.optLong("size", 0));
+            if (size > 0) budget = Math.min(budget, size);
+            precache().prefetch(url, budget);
+        } catch (Exception e) {
+            Log.w(TAG, "prefetchStream ignored: " + nativeThrowableMessage(e));
+        }
     }
 
     // A remux/transcode VOD stream is a NON-resumable pipe. ExoPlayer's default silent retry re-requests
@@ -7082,6 +7133,7 @@ public class MainActivity extends Activity {
         nativeProgress.removeCallbacksAndMessages(null);
         nativeSubtitleHandler.removeCallbacksAndMessages(null);
         nativeSubtitleLoadToken++;
+        nativeSeekAccel.reset(); // a new playback must start at the base seek step
         hideNativeLoading();
         hideNativeGuidePipReveal();
         if (nativeSheet != null) {

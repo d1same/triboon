@@ -4078,6 +4078,9 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
         <label class="settingsControl"><span>4K read-ahead goal</span><input id="perfBuf4k" type="number" min="30" max="360" inputmode="numeric" placeholder="seconds"></label>
       </div>
       <div class="settingsRow">
+        <label class="settingsControl"><span>Device preload</span><input id="perfPreload" type="number" min="0" max="64" inputmode="numeric" placeholder="MB, 0 = off"></label>
+      </div>
+      <div class="settingsRow">
         <label class="settingsControl"><span>1080p connections</span><input id="perfConn1080" type="number" min="4" max="60" inputmode="numeric" placeholder="per stream"></label>
         <label class="settingsControl"><span>4K connections</span><input id="perfConn4k" type="number" min="6" max="80" inputmode="numeric" placeholder="per stream"></label>
         <label class="settingsControl"><span>Start/seek reserve</span><input id="perfReserve" type="number" min="10" max="50" inputmode="numeric" placeholder="% of connections"></label>
@@ -6675,8 +6678,20 @@ function preparePlaybackSource(it, delay = 900) {
   if (localTitleHasPlayback(it) && localPlaybackFitsQuality(it, qRank)) return;
   clearTimeout(prepareTimer);
   prepareTimer = setTimeout(() => {
-    api('/api/prepare', { method: 'POST', body: playbackRequestBody(it, null, qRank) }).catch(() => {});
+    api('/api/prepare', { method: 'POST', body: playbackRequestBody(it, null, qRank) }).then(maybeNativePrefetch).catch(() => {});
   }, delay);
+}
+// Hand a prepared direct-play mount to the Android shell for byte pre-caching, so press-play
+// buffers its opening seconds from device storage. No-op outside the app shell or when the
+// server offered no prefetch (remux/transcode mount, devicePreloadMb 0, or an older server).
+function maybeNativePrefetch(r) {
+  const p = r && r.prefetch;
+  if (!p || !p.streamUrl) return;
+  try {
+    if (window.TriboonTV && typeof TriboonTV.prefetchStream === 'function') {
+      TriboonTV.prefetchStream(JSON.stringify({ url: new URL(p.streamUrl, location.origin).href, budgetMb: p.budgetMb || 0, size: p.size || 0 }));
+    }
+  } catch { /* prefetch is best-effort */ }
 }
 // "Directed by … · Starring …" under the focused title — the detail page's voice on every
 // page. Debounced TMDB fetch (the server proxy caches, so settled focus costs one hit).
@@ -12156,7 +12171,7 @@ function maybePrepareNextEpisode(t, d) {
   S.nextEpPrepared = true; // one shot; play()/autoplay reuses the live mount via the server's mountByUrl
   if (localTitleHasPlayback(item)) return; // local libraries are already instant — no mount to warm
   const qRank = qualityRankForItem(item);
-  api('/api/prepare', { method: 'POST', body: playbackRequestBody(item, null, qRank) }).catch(() => {});
+  api('/api/prepare', { method: 'POST', body: playbackRequestBody(item, null, qRank) }).then(maybeNativePrefetch).catch(() => {});
 }
 const UP_NEXT_COUNTDOWN_SECONDS = 10;
 // Streamed releases carry no credits-start chapter marker, so the Up Next card uses a runtime
@@ -20971,6 +20986,8 @@ function perfFormValues() {
     maxConnPerStream1080: parseInt($('perfConn1080').value || '12', 10) || 12,
     maxConnPerStream4k: parseInt($('perfConn4k').value || '20', 10) || 20,
     startupReservePct: parseInt($('perfReserve').value || '25', 10) || 25,
+    // 0 is a real value (preload off) and an EMPTY field means "default", so no || shortcuts.
+    devicePreloadMb: (() => { const v = parseInt($('perfPreload').value, 10); return Number.isFinite(v) ? Math.max(0, Math.min(64, v)) : 12; })(),
   };
 }
 function setPerfForm(p = {}) {
@@ -20985,6 +21002,7 @@ function setPerfForm(p = {}) {
   $('perfConn1080').value = p.maxConnPerStream1080 ?? 12;
   $('perfConn4k').value = p.maxConnPerStream4k ?? 20;
   $('perfReserve').value = p.startupReservePct ?? 25;
+  $('perfPreload').value = p.devicePreloadMb ?? 12;
 }
 function perfSetApplyEnabled(on) {
   const b = $('perfApply');

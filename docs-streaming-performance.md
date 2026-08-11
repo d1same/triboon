@@ -36,6 +36,7 @@ Settings -> Streaming performance owns the capacity profile:
 | 1080p / 4K read-ahead goals | Owner-facing server-side read-ahead goal | Saved as seconds, translated into bounded article windows by the engine. |
 | Per-stream 1080p / 4K connections | Maximum article window for one active stream | Caps read-ahead so a single stream does not monopolize the pool. |
 | Startup reserve | Percentage of usable connections held back | Keeps new starts and seeks responsive. |
+| Device preload | MB of opening bytes an Android TV may pre-cache ahead of press-play (detail open + Up Next) | Direct-play mounts only; `/api/prepare` offers a tokened prefetch target within this budget, the shell stores it in a 100MB on-device LRU, and press-play buffers its first seconds from disk. 0 disables. |
 
 Provider connection limits are saved per usenet account and currently cap at
 150. A 100-connection plan should be entered as 100; Triboon still decides how
@@ -458,6 +459,7 @@ must be clearly separate because it can create provider load and noisy results.
 | 1080p per-stream cap | 4-60 connections, default 12 |
 | 4K per-stream cap | 6-80 connections, default 20 |
 | Health probe limit | 2-12 probes, default 6 |
+| Device preload | 0-64 MB, default 12 (0 = off) |
 
 ## Casting (Chromecast / AirPlay) — Phase 2
 

@@ -1559,11 +1559,12 @@ test('near-end next-episode prepare fires once at the 90-second boundary', () =>
   const calls = [];
   const item = { key: 'tmdb:tv:77:s2e4', season: 2, episode: 4, qualityRank: 3 };
   const S = { nextEp: { item }, nextEpPrepared: false };
-  const maybePrepareNextEpisode = new Function('S', 'localTitleHasPlayback', 'qualityRankForItem', 'api', 'playbackRequestBody',
+  const maybePrepareNextEpisode = new Function('S', 'localTitleHasPlayback', 'qualityRankForItem', 'api', 'playbackRequestBody', 'maybeNativePrefetch',
     `${ui.slice(start, end)}\nreturn maybePrepareNextEpisode;`)(
       S, () => false, (it) => it.qualityRank,
       (url, opts) => { calls.push({ url, opts }); return Promise.resolve({ ok: true }); },
-      (it, pick, rank) => ({ key: it.key, season: it.season, episode: it.episode, pick, rank }));
+      (it, pick, rank) => ({ key: it.key, season: it.season, episode: it.episode, pick, rank }),
+      () => {} /* prefetch handoff is covered by its own contract */);
 
   maybePrepareNextEpisode(9, 100);
   assert.strictEqual(calls.length, 0, '91 seconds remaining is outside the warm window');
@@ -4697,6 +4698,23 @@ test('Android native player: direct source and native chrome stay out of the web
   // preview keeps showing the landing point before the real seek fires.
   assert.match(ui, /_nudgeStreak = \(dir === _nudgeLastDir && now - _nudgeLastAt < 700\) \? _nudgeStreak \+ 1 : 0;[\s\S]{0,120}_nudgeSum \+= delta \* Math\.min\(8, Math\.max\(1, _nudgeStreak\)\);/,
     'held/rapid seek presses should accelerate the step with a x8 cap and reset on pause or direction change');
+  // Device pre-cache: prepared direct-play mounts are offered to the Android shell so press-play
+  // buffers its opening seconds from disk. Both prepare paths (detail/CW focus + near-end Up Next)
+  // hand the offer over; the bridge call is guarded; the shell re-validates origin AND path.
+  assert.match(ui, /api\('\/api\/prepare', \{ method: 'POST', body: playbackRequestBody\(it, null, qRank\) \}\)\.then\(maybeNativePrefetch\)/,
+    'detail/CW focus prepare hands its prefetch offer to the native shell');
+  assert.match(ui, /api\('\/api\/prepare', \{ method: 'POST', body: playbackRequestBody\(item, null, qRank\) \}\)\.then\(maybeNativePrefetch\)/,
+    'the near-end Up Next prepare hands its prefetch offer to the native shell');
+  assert.match(ui, /function maybeNativePrefetch\(r\) \{[\s\S]{0,500}TriboonTV\.prefetchStream\(JSON\.stringify\(/,
+    'the prefetch bridge call is shell-guarded and JSON-typed');
+  assert.match(android, /public void prefetchStream\(String json\) \{[\s\S]{0,120}trustedBridgeOrigin\(\)[\s\S]{0,120}handleNativePrefetch\(json\);/,
+    'the shell exposes prefetchStream only to the trusted bridge origin');
+  assert.match(android, /if \(path == null \|\| !path\.startsWith\("\/api\/stream\/"\)\) return;/,
+    'the shell pre-caches only direct /api/stream/ URLs (remux pipes can never be cache-keyed)');
+  assert.match(android, /deltaMs = nativeSeekAccel\.step\(deltaMs, android\.os\.SystemClock\.uptimeMillis\(\)\);/,
+    'native D-pad seek accelerates through the shared ProgressiveSeek curve');
+  assert.match(android, /nativeSeekAccel\.reset\(\); \/\/ a new playback must start at the base seek step/,
+    'the native seek streak resets when playback is released');
   assert.match(ui, /async function renderLiveEpgStrip\(idx\) \{[\s\S]+fetchGuideBatch\(\[ch\]\)[\s\S]+paintLiveEpgStrip\(\)/,
     'live player should fetch the channel schedule and paint a top EPG strip');
   assert.match(ui, /function paintLiveEpgStrip\(\) \{[\s\S]+horizon = now \+ 2 \* 3600000[\s\S]+epgCell\$\{isNow \? ' now' : ''\}/,
