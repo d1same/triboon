@@ -3531,10 +3531,11 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.match(ui, /if \(k === 'ArrowDown'\) return focusPlayerGuideCategory\(i \+ 1, true\)/,
     'PiP guide category down should update the right-side channel guide');
   // Guide position: opening/returning to the PiP guide (when NOT mid-browse) lands on the category
-  // of the channel you're watching — "where you left off" after a tune+fullscreen+back. And the
-  // category-focus double-scroll (manual scrollTo THEN scrollIntoView) was removed.
-  assert.match(ui, /const currentCat = currentCh && currentCh\.genre && catNames\.includes\(currentCh\.genre\)[\s\S]+if \(!S\.pgCatDpadMode && currentCat\) \{[\s\S]+S\.pgLiveCat = currentCat;/,
-    'PiP guide should open on the playing channel category (not a stale one) unless actively browsing');
+  // the channel was TUNED FROM (★ Favorites stays ★ Favorites), falling back to the playing
+  // channel's genre — never a stale category. And the category-focus double-scroll
+  // (manual scrollTo THEN scrollIntoView) was removed.
+  assert.match(ui, /const currentCat = currentCh && currentCh\.genre && catNames\.includes\(currentCh\.genre\)[\s\S]+if \(!S\.pgCatDpadMode && \(tuneCat \|\| currentCat\)\) \{[\s\S]+S\.pgLiveCat = tuneCat \|\| currentCat;/,
+    'PiP guide should open on the tune-origin category, falling back to the playing channel genre, unless actively browsing');
   assert.match(ui, /no scrollIntoView here — the manual pane scrollTo above already positions the chip/,
     'PiP category focus must not double-scroll (the redundant scrollIntoView was removed)');
   assert.match(ui, /if \(!started && appended > 700000\) \{[\s\S]+started = true;[\s\S]+requestLivePlay\(\)/,
@@ -4727,6 +4728,15 @@ test('Android native player: direct source and native chrome stay out of the web
     'the thumb URL is stream-token scoped like subtitles');
   assert.match(ui, /hideSeekThumb\(\); \/\/ the preview's job ends when the real seek commits/,
     'the committed seek hides the preview');
+  // Live TV tune-origin category: a channel picked from ★ Favorites must keep navigation anchored
+  // to Favorites — the guide reopens there and zap walks the favorites list, never the channel's
+  // home genre. The channel-cache refresh must also never clobber a live zap context.
+  assert.match(ui, /S\.liveTuneCat = \(\$\('pGuide'\) && \$\('pGuide'\)\.classList\.contains\('open'\) && S\.pgLiveCat\) \? S\.pgLiveCat : S\.liveCat;/,
+    'every tune records the category it came from (guide-selected or page-selected)');
+  assert.match(ui, /const tuneCat = S\.liveTuneCat && catNames\.includes\(S\.liveTuneCat\) \? S\.liveTuneCat : null;[\s\S]{0,120}S\.pgLiveCat = tuneCat \|\| currentCat;/,
+    'the player guide lands on the tune-origin category, falling back to the channel genre');
+  assert.match(ui, /if \(!list\.length\) list = S\.liveList = \(fav\.channels \|\| \[\]\)\.map\(liveItemForPlayerGuide\)\.filter\(Boolean\);/,
+    'a channel-cache refresh only fills an EMPTY zap list — an active favorites/category context survives');
   assert.match(ui, /async function renderLiveEpgStrip\(idx\) \{[\s\S]+fetchGuideBatch\(\[ch\]\)[\s\S]+paintLiveEpgStrip\(\)/,
     'live player should fetch the channel schedule and paint a top EPG strip');
   assert.match(ui, /function paintLiveEpgStrip\(\) \{[\s\S]+horizon = now \+ 2 \* 3600000[\s\S]+epgCell\$\{isNow \? ' now' : ''\}/,

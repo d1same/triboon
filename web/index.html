@@ -17440,7 +17440,11 @@ async function ensurePlayerGuideChannels() {
       const fav = await loadLiveChannelsCombined();
       if (fav.configured && fav.channels) {
         fillLiveState(fav);
-        list = S.liveList = (fav.channels || []).map(liveItemForPlayerGuide).filter(Boolean);
+        // Refreshing the channel cache must NOT clobber a live zap context: if the player already
+        // holds a list (tuned from ★ Favorites / a category), zapping keeps walking THAT list even
+        // when the WebView's channel cache went cold (Android TV throttling). Only an empty list —
+        // no tune context at all — falls back to the full combined lineup.
+        if (!list.length) list = S.liveList = (fav.channels || []).map(liveItemForPlayerGuide).filter(Boolean);
       }
       S.liveEpg = !!fav.epg;
     } catch {}
@@ -17537,6 +17541,10 @@ async function playChannel(it, list) {
   const fromHome = ((S.rows || []).find((r) => r.items.some((x) => x._channel !== undefined)) || { items: [] })
     .items.filter((x) => x._channel !== undefined);
   S.liveList = list || (fromGrid.length ? fromGrid : fromHome);
+  // Remember the CATEGORY this tune came from (★ Favorites, a group, …): the player guide reopens
+  // there, and zapping stays inside it — picking a favorite must never re-anchor navigation to the
+  // channel's home genre. Guide tunes use the guide's selected category; page tunes use the page's.
+  S.liveTuneCat = ($('pGuide') && $('pGuide').classList.contains('open') && S.pgLiveCat) ? S.pgLiveCat : S.liveCat;
   S.liveCur = it._channel;
   if ($('pGuide') && $('pGuide').classList.contains('open')) setPlayerGuideVisualFocus(it._channel);
   try { it = await hydrateLivePlaybackUrls(it); }
@@ -17865,12 +17873,15 @@ async function renderPlayerGuideTimeline(pg, list) {
     return;
   }
   const currentCat = currentCh && currentCh.genre && catNames.includes(currentCh.genre) ? currentCh.genre : null;
-  if (!S.pgCatDpadMode && currentCat) {
-    // Opening/returning to the guide while NOT mid-browse: land on the category of the channel you're
-    // watching. The channel you just tuned is exactly "where you left off", so its category is the
-    // right spot — fixes the guide reopening on a stale/different category after a channel goes
-    // fullscreen and back. While actively scanning categories (pgCatDpadMode) we keep the browsed one.
-    S.pgLiveCat = currentCat;
+  // Opening/returning to the guide while NOT mid-browse: land on the category the playing channel
+  // was TUNED FROM — a channel picked from ★ Favorites reopens on ★ Favorites, not its home genre
+  // (the "zap leaves my favorites" bug: re-picking from the wrongly-landed genre re-anchored the
+  // zap list to it). Falls back to the channel's genre when no tune origin is known, which also
+  // fixes the guide reopening on a stale category after fullscreen-and-back. While actively
+  // scanning categories (pgCatDpadMode) the browsed one is kept.
+  const tuneCat = S.liveTuneCat && catNames.includes(S.liveTuneCat) ? S.liveTuneCat : null;
+  if (!S.pgCatDpadMode && (tuneCat || currentCat)) {
+    S.pgLiveCat = tuneCat || currentCat;
   } else if (!catNames.includes(S.pgLiveCat)) {
     S.pgLiveCat = currentCat || (catNames.includes(S.liveCat) ? S.liveCat : catNames[0]);
   }
