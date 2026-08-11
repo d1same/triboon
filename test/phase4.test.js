@@ -4737,6 +4737,11 @@ test('Android native player: direct source and native chrome stay out of the web
     'the player guide lands on the tune-origin category, falling back to the channel genre');
   assert.match(ui, /if \(!list\.length\) list = S\.liveList = \(fav\.channels \|\| \[\]\)\.map\(liveItemForPlayerGuide\)\.filter\(Boolean\);/,
     'a channel-cache refresh only fills an EMPTY zap list — an active favorites/category context survives');
+  // Continue Watching covers resume on one press (TV/native): movies now match episodes and the
+  // hero Resume button; browsers keep the detail-first quality stop; fresh titles still open
+  // details everywhere; Details stays on the hold-OK/⋯ card menu.
+  assert.match(ui, /if \(isContinueWatchingItem\(it\) && \(\+it\.resume \|\| 0\) > 0 && !it\._local\) \{[\s\S]{0,600}if \(isWebBrowserClient\(\)\) return openDetail\(detailTargetForItem\(it\)\);[\s\S]{0,80}return play\(it\);/,
+    'a Continue Watching cover with real resume plays directly on TV shells and stops at details only in web browsers');
   assert.match(ui, /async function renderLiveEpgStrip\(idx\) \{[\s\S]+fetchGuideBatch\(\[ch\]\)[\s\S]+paintLiveEpgStrip\(\)/,
     'live player should fetch the channel schedule and paint a top EPG strip');
   assert.match(ui, /function paintLiveEpgStrip\(\) \{[\s\S]+horizon = now \+ 2 \* 3600000[\s\S]+epgCell\$\{isNow \? ' now' : ''\}/,

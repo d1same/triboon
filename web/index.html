@@ -6344,6 +6344,15 @@ function makeCard(it, poster, onFocus) {
       if (!it._local && isWebBrowserClient()) return openDetail(detailTargetForItem(it));
       return it._local ? playLocal(it) : play(it); // next-up card: local if owned, otherwise normal Play
     }
+    if (isContinueWatchingItem(it) && (+it.resume || 0) > 0 && !it._local) {
+      // A Continue Watching cover IS the resume: one press picks up where you left off — movies
+      // now match episodes, the hero Resume button, and the pre-cache that warmed this exact
+      // mount on focus. Details stay one hold-OK (TV) / ⋯ (web) away on the card menu. Browsers
+      // keep the detail-first stop so the viewer can pick 1080p/4K before playing (same nuance
+      // as next-up cards); TV and native shells resume instantly.
+      if (isWebBrowserClient()) return openDetail(detailTargetForItem(it));
+      return play(it);
+    }
     if (it._showOpen !== undefined) {
       // From the home "Recently added" row the library view isn't open yet — enter it first.
       const lib = it._lib || S.currentLib;
