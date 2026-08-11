@@ -111,6 +111,38 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-10, v2.9.1 native progressive seek + device pre-cache:
+
+- Version contract aligned: `package.json` 2.9.1; Android `versionName` 2.9.1 /
+  `versionCode` 319; all four Windows client version spots 2.9.1.
+- Native progressive seek: `ProgressiveSeek.java` shares the web curve (x1 x1
+  x2 x3 … cap x8, pause/flip resets, reset on playback release); 4 JUnit
+  cases green; phase4 pins the nativeSeekBy wiring and the release reset.
+- Device pre-cache: `/api/prepare` offers a tokened prefetch for DIRECT-play
+  mounts within the new owner-tunable Streaming performance "Device preload"
+  setting (devicePreloadMb, default 12, clamp 0–64, 0 = off). Both prepare
+  paths (detail/CW focus + near-end Up Next) hand the offer to the shell;
+  the shell re-validates trusted origin AND `/api/stream/` path, caches into
+  a 100MB on-device LRU keyed WITHOUT the rotating token
+  (`StreamPrecache.java`), and direct-play reads through a READ-ONLY cache
+  wrap (remux/transcode/live never wrapped; non-direct keys keep the full
+  URL so a mis-wrap can never collide start positions). Emulator-proven
+  end-to-end: `Precache complete: 12582912B` in logcat after a detail open,
+  then a clean native play through the wrapped source (position advancing,
+  no native errors). Development caught and fixed: decidePlayback returns
+  `{method}` not `{kind}` (contract-pinned), and a NaN in the settings clamp.
+- `npm.cmd test` passed 459/459 on the final tree.
+- `TRIBOON_ADB_DEVICE=emulator-5554 TRIBOON_STRESS_VOD_KEY=tmdb:movie:120
+  npm.cmd run verify:full` fully green (exit 0) over these changes: P9 IPTV,
+  P14 fast VOD, P11 subtitles, full Node suite, isolated `/api/server`,
+  Android lint/unit/debug build, ExoPlayer stress
+  `bench/stress-results/android-tv-stress-20260810-214956.json` ok: true,
+  zero failures, zero warnings. The gate ran immediately before the version
+  bumps; version strings do not affect server or player behavior.
+- Unverified on this run: Shield real hardware (release APK arrives via CI;
+  perceived press-play speedup from the pre-cache is measured there), real
+  provider VOD (QA fixture), Windows native GPU playback (no client change).
+
 2026-08-10, v2.9.0 progressive seek + NNTP pipelining prototype (default OFF):
 
 - Version contract aligned: `package.json` 2.9.0; Android `versionName` 2.9.0 /
