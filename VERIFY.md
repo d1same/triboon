@@ -111,6 +111,27 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-11, v2.9.5 NNTP pipelining becomes a dashboard setting:
+
+- Version contract aligned: `package.json` 2.9.5; Android `versionName` 2.9.5 /
+  `versionCode` 323; all four Windows client version spots 2.9.5.
+- Streaming performance gains "NNTP pipelining" (nntpPipelineDepth, clamp 0–4,
+  default 0 = off). The depth rides provider pool opts and joins the pool key,
+  so saving the setting rebuilds pools live — no restart on any platform. The
+  `TRIBOON_NNTP_PIPELINE` env stays honored as a fallback when the setting is
+  0, so pre-setting deployments keep working. Live round-trip verified in the
+  browser: field → save 4 → server stores 4 → reloads into the field.
+- Fixed in passing: the retry-only-missing triage's random fill could
+  under-sample its probe budget on an unlucky draw (caught by an existing
+  phase2 test flaking 3 ≠ 4) — replaced with sample-without-replacement;
+  phase2 ran green three consecutive times after the fix.
+- `npm.cmd test` passed 462/462 on the final tree (new setting contract).
+- `verify:full` fully green on rerun (session-bounce trap, fourth time):
+  `bench/stress-results/android-tv-stress-20260811-093658.json` ok: true,
+  zero failures — and this stress ran with pipelining depth 4 ACTIVE against
+  the QA fixture (the QA settings carry it), doubling as a live soak.
+- docs-streaming-performance.md documents the setting in both tables.
+
 2026-08-11, v2.9.4 one-press Continue Watching resume:
 
 - Version contract aligned: `package.json` 2.9.4; Android `versionName` 2.9.4 /
