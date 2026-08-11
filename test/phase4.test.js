@@ -4692,6 +4692,11 @@ test('Android native player: direct source and native chrome stay out of the web
   // Go-live button. VOD now/next text and seek bar are hidden; OK reveals the chrome (no pause).
   assert.ok(ui.includes('#player.live #pSrc,#player.live .seekLine,#player.live #back10,#player.live #fwd30{display:none!important}'),
     'Live chrome should hide the VOD now/next line, seek bar, and ±10/30s skips');
+  // Progressive seek: rapid same-direction presses grow the step (x1 x1 x2 x3 … cap x8) and a
+  // pause or direction flip resets to x1 — long jumps become a short burst, and the debounced
+  // preview keeps showing the landing point before the real seek fires.
+  assert.match(ui, /_nudgeStreak = \(dir === _nudgeLastDir && now - _nudgeLastAt < 700\) \? _nudgeStreak \+ 1 : 0;[\s\S]{0,120}_nudgeSum \+= delta \* Math\.min\(8, Math\.max\(1, _nudgeStreak\)\);/,
+    'held/rapid seek presses should accelerate the step with a x8 cap and reset on pause or direction change');
   assert.match(ui, /async function renderLiveEpgStrip\(idx\) \{[\s\S]+fetchGuideBatch\(\[ch\]\)[\s\S]+paintLiveEpgStrip\(\)/,
     'live player should fetch the channel schedule and paint a top EPG strip');
   assert.match(ui, /function paintLiveEpgStrip\(\) \{[\s\S]+horizon = now \+ 2 \* 3600000[\s\S]+epgCell\$\{isNow \? ' now' : ''\}/,

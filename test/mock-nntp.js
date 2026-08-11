@@ -28,7 +28,11 @@ function createMockNntp({ articles, requireAuth = false, latencyMs = 0 } = {}) {
       let nl;
       while ((nl = buf.indexOf('\r\n')) !== -1) {
         const line = buf.slice(0, nl); buf = buf.slice(nl + 2);
-        const respond = (out) => setTimeout(() => { if (!sock.destroyed) sock.write(out); }, latencyMs);
+        // Responses are SERIALIZED per socket (a per-sock promise chain): real NNTP answers
+        // strictly in command order, and pipelined clients depend on that — two responses must
+        // never interleave bytes on the wire even when the first one trickles out slowly.
+        const enqueue = (fn) => { sock._sendChain = (sock._sendChain || Promise.resolve()).then(fn).catch(() => {}); };
+        const respond = (out) => enqueue(() => new Promise((done) => setTimeout(() => { if (!sock.destroyed) sock.write(out); done(); }, latencyMs)));
         const [cmd, ...rest] = line.split(' ');
         const C = cmd.toUpperCase();
         if (C === 'AUTHINFO') {
@@ -50,10 +54,16 @@ function createMockNntp({ articles, requireAuth = false, latencyMs = 0 } = {}) {
             if (state.trickle) {
               const { pieces, gapMs } = state.trickle; state.trickle = null;
               const size = Math.max(1, Math.ceil(full.length / pieces));
-              for (let p = 0; p * size < full.length; p++) {
-                const chunk = full.subarray(p * size, (p + 1) * size);
-                setTimeout(() => { if (!sock.destroyed) sock.write(chunk); }, latencyMs + p * gapMs);
-              }
+              enqueue(() => new Promise((done) => {
+                for (let p = 0; p * size < full.length; p++) {
+                  const chunk = full.subarray(p * size, (p + 1) * size);
+                  const isLast = (p + 1) * size >= full.length;
+                  setTimeout(() => {
+                    if (!sock.destroyed) sock.write(chunk);
+                    if (isLast) done();
+                  }, latencyMs + p * gapMs);
+                }
+              }));
             } else respond(full);
           } else respond('430 no such article\r\n');
         } else if (C === 'GROUP') respond('211 1 1 1 mock.group\r\n');

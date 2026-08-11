@@ -614,6 +614,84 @@ test('nntp: a draining transfer that outlives its grace is still killed — drai
   await mock.close();
 });
 
+// ---- NNTP pipelining prototype (TRIBOON_NNTP_PIPELINE / opts.pipelineDepth, default OFF) ----
+// Low-lane (readAhead/background) fetches may stack up to `depth` commands on one socket to hide
+// per-article RTT; responses map back through the connection's FIFO waiters. High lanes
+// (startup/seek/playback/health) keep the one-command-per-connection contract.
+
+test('nntp pipelining: OFF by default — a second low-lane task waits for a free connection', async () => {
+  const pool = new ProviderPool({}, 1);
+  pool.conns.push({ alive: true, lastUsed: Date.now(), close() {} });
+  let releaseFirst;
+  const first = pool.run(() => new Promise((resolve) => { releaseFirst = resolve; }), 'readAhead');
+  let secondRan = false;
+  const second = pool.run(async () => { secondRan = true; }, 'readAhead');
+  await new Promise((r) => setTimeout(r, 50));
+  assert.strictEqual(secondRan, false, 'without the flag, one command per connection stands');
+  releaseFirst();
+  await Promise.all([first, second]);
+  assert.strictEqual(secondRan, true);
+});
+
+test('nntp pipelining: low-lane work stacks up to depth on one socket; high lanes never share it', async () => {
+  const pool = new ProviderPool({ pipelineDepth: 3 }, 1);
+  pool.conns.push({ alive: true, lastUsed: Date.now(), close() {} });
+  const release = [];
+  const started = [];
+  const hold = (name) => pool.run(() => new Promise((resolve) => { started.push(name); release.push(resolve); }), name.startsWith('ra') ? 'readAhead' : 'startup');
+  const ra1 = hold('ra1');
+  const ra2 = hold('ra2');
+  const ra3 = hold('ra3');
+  const ra4 = hold('ra4');
+  const hi = hold('startup');
+  await new Promise((r) => setTimeout(r, 50));
+  // depth 3: ra1..ra3 stacked; ra4 over depth waits; startup NEVER stacks onto the low-lane socket.
+  assert.deepStrictEqual(started, ['ra1', 'ra2', 'ra3'], 'exactly depth low-lane tasks share the socket; startup does not');
+  release.splice(0).forEach((fn) => fn());
+  await new Promise((r) => setTimeout(r, 50));
+  // The freed socket goes to the QUEUED work by priority: startup first, then ra4 may stack again.
+  assert.strictEqual(started[3], 'startup', 'the freed connection served the high lane before more read-ahead');
+  release.splice(0).forEach((fn) => fn());
+  await new Promise((r) => setTimeout(r, 50));
+  assert.strictEqual(started[4], 'ra4', 'the remaining read-ahead ran once the high lane was served');
+  release.splice(0).forEach((fn) => fn());
+  await Promise.all([ra1, ra2, ra3, ra4, hi]);
+});
+
+test('nntp pipelining: two stacked BODYs on one real socket return byte-identical articles in order', async () => {
+  const { articles } = makeRelease('Pipeline.Order.mkv', 128 * 1024, 64 * 1024); // 2 segments
+  const ids = [...articles.keys()];
+  const mock = createMockNntp({ articles });
+  const port = await mock.listen();
+  const serialPool = new NntpPool({ host: '127.0.0.1', port, tls: false }, 1);
+  const expected = [await serialPool.body(ids[0], 'playback'), await serialPool.body(ids[1], 'playback')];
+  serialPool.close();
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false, pipelineDepth: 2 }, 1);
+  mock.trickleNext(4, 40); // slow FIRST body so the second genuinely queues behind it on the wire
+  const [b0, b1] = await Promise.all([pool.body(ids[0], 'readAhead'), pool.body(ids[1], 'readAhead')]);
+  assert.ok(b0.equals(expected[0]), 'first pipelined article is byte-identical to the serial fetch');
+  assert.ok(b1.equals(expected[1]), 'second pipelined article is byte-identical to the serial fetch');
+  assert.strictEqual(mock.connCount(), 2, 'serial pool + pipelined pool = two connections total; the stacked pair shared one');
+  pool.close();
+  await mock.close();
+});
+
+test('nntp pipelining: a stacked waiter survives a long healthy head transfer (timers re-arm on socket progress)', async () => {
+  const { articles } = makeRelease('Pipeline.Stall.mkv', 128 * 1024, 64 * 1024); // 2 segments
+  const ids = [...articles.keys()];
+  const mock = createMockNntp({ articles });
+  const port = await mock.listen();
+  // 120ms stall window; the head BODY trickles ~420ms. The STACKED second command would blow its
+  // send-time window if timers weren't re-armed for every queued waiter on inbound bytes.
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false, commandTimeoutMs: 120, pipelineDepth: 2 }, 1);
+  mock.trickleNext(8, 60);
+  const [b0, b1] = await Promise.all([pool.body(ids[0], 'readAhead'), pool.body(ids[1], 'readAhead')]);
+  assert.ok(b0.length > 0 && b1.length > 0, 'both stacked transfers completed');
+  assert.strictEqual(mock.connCount(), 1, 'one socket carried both — the stacked waiter was not stall-killed');
+  pool.close();
+  await mock.close();
+});
+
 test('vfs: read-ahead in flight when the reader aborts drains into the cache — a skip keeps its connections', async () => {
   const { data, articles, nzb } = makeRelease('DrainVfs.Test.mkv', 512 * 1024, 64 * 1024); // 8 segments
   const mock = createMockNntp({ articles, latencyMs: 150 });

@@ -101,10 +101,13 @@ class NntpConnection {
 
   _onData(d) {
     this.buf = this.buf.length ? Buffer.concat([this.buf, d]) : d;
-    // Progress on the in-flight command (NNTP responses are strictly FIFO, so waiters[0] is the
-    // one being answered): reset its stall timer so a slow-but-alive BODY transfer is never killed
+    // Progress on in-flight commands (NNTP responses are strictly FIFO, so waiters[0] is the one
+    // being answered): reset stall timers so a slow-but-alive BODY transfer is never killed
     // mid-flight — only a genuinely wedged socket (no bytes at all for the window) trips it.
-    if (d && d.length && this.waiters.length) this._armWaiterTimer(this.waiters[0]);
+    // EVERY queued waiter is re-armed, not just the head: with pipelining more than one command
+    // can be on the wire, and a waiter behind a long healthy transfer must not hit its send-time
+    // window while the socket is demonstrably alive (bytes flowing = progress for the whole FIFO).
+    if (d && d.length) for (const w of this.waiters) this._armWaiterTimer(w);
     while (this.waiters.length) {
       const w = this.waiters[0];
       const nl = this.buf.indexOf(0x0a);
@@ -235,6 +238,7 @@ class ProviderPool {
     this.conns = [];
     this.queue = []; // pending tasks { fn, resolve, reject, priority }
     this.busy = new Set();
+    this.inflight = new Map(); // conn -> { n, lowOnly } (pipelining bookkeeping; busy stays the 1-per-conn source of truth)
     this.connecting = 0;   // in-flight connection attempts
     this.lastErr = null;   // most recent connect failure
     this.closed = false;
@@ -389,19 +393,93 @@ class ProviderPool {
       const task = this._shiftTask();
       if (!task) break;
       if (typeof task.cleanupAbort === 'function') task.cleanupAbort();
-      this.busy.add(c);
-      task.fn(c)
-        .then(task.resolve, (e) => {
-          // An NNTP status reply (e.code = '430' etc.) is a real answer — pass it through.
-          // A connection-level failure (timeout/closed/reset) gets ONE retry on a fresh
-          // connection so a single dead socket can't sink a whole mount.
-          if (!isAbortError(e) && !task.retried && !/^\d{3}$/.test(String(e && e.code || ''))) {
-            task.retried = true;
-            this.queue.push(task);
-          } else task.reject(e);
-        })
-        .finally(() => { this.busy.delete(c); this._pump(); });
+      this._launch(c, task);
     }
+    // Opt-in NNTP pipelining (TRIBOON_NNTP_PIPELINE=2..4, default off): stack ADDITIONAL low-lane
+    // (readAhead/background) fetches onto connections already running ONLY low-lane work, up to
+    // `depth` in flight per socket. NNTP answers strictly in order (the connection's waiter FIFO
+    // maps responses back), and keeping the socket's request queue non-empty hides one RTT per
+    // article (the SABnzbd 5.0.4 / nzbfast tactic). Startup/seek/playback/health NEVER share a
+    // socket: a pipelined queue would park the player's bytes behind a read-ahead transfer
+    // (head-of-line), so high lanes keep the one-command-per-connection contract and the idle
+    // dispatch above. This pass consumes no idle connections at all, so the playback reserve is
+    // untouched — it only raises throughput on sockets read-ahead already owns.
+    // The stacking pass stands down ENTIRELY while any above-low work (startup/seek/playback/
+    // health) is queued: those tasks are waiting for a socket to fully drain, and stacking more
+    // read-ahead onto a draining socket would park them behind it — the exact priority inversion
+    // the lanes exist to prevent.
+    const depth = this._pipelineDepth();
+    if (depth > 1 && !this._hasAboveLowQueued()) {
+      for (const c of this.conns) {
+        if (!this.queue.length) break;
+        if (!c.alive) continue;
+        const st = this.inflight.get(c);
+        if (!st || !st.lowOnly) continue;
+        while (st.n < depth && this.queue.length) {
+          const task = this._shiftLowTask();
+          if (!task) break;
+          if (typeof task.cleanupAbort === 'function') task.cleanupAbort();
+          this._launch(c, task);
+        }
+      }
+    }
+  }
+
+  _hasAboveLowQueued() {
+    const lowRank = this._priorityRank('readAhead');
+    for (const t of this.queue) {
+      if (signalAborted(t.signal)) continue;
+      if (this._priorityRank(t.priority) < lowRank) return true;
+    }
+    return false;
+  }
+
+  // Run one task on a connection with in-flight bookkeeping. `busy` keeps meaning "has ≥1
+  // in-flight command" (idle/cull/reserve checks are unchanged); `inflight` carries the count and
+  // whether every command on the socket is low-lane (the only mix pipelining may stack onto).
+  _launch(c, task) {
+    const low = this._priorityRank(task.priority) >= this._priorityRank('readAhead');
+    const st = this.inflight.get(c) || { n: 0, lowOnly: true };
+    st.n++;
+    if (!low) st.lowOnly = false;
+    this.inflight.set(c, st);
+    this.busy.add(c);
+    task.fn(c)
+      .then(task.resolve, (e) => {
+        // An NNTP status reply (e.code = '430' etc.) is a real answer — pass it through.
+        // A connection-level failure (timeout/closed/reset) gets ONE retry on a fresh
+        // connection so a single dead socket can't sink a whole mount.
+        if (!isAbortError(e) && !task.retried && !/^\d{3}$/.test(String(e && e.code || ''))) {
+          task.retried = true;
+          this.queue.push(task);
+        } else task.reject(e);
+      })
+      .finally(() => {
+        const cur = this.inflight.get(c);
+        if (cur && --cur.n <= 0) { this.inflight.delete(c); this.busy.delete(c); }
+        this._pump();
+      });
+  }
+
+  // Lowest-rank low-lane task (readAhead/background) for the pipelining pass. Aborted entries are
+  // left in place for _shiftTask's normal cleanup path.
+  _shiftLowTask() {
+    const lowRank = this._priorityRank('readAhead');
+    let best = -1, rank = Infinity;
+    for (let i = 0; i < this.queue.length; i++) {
+      const t = this.queue[i];
+      if (signalAborted(t.signal)) continue;
+      const r = this._priorityRank(t.priority);
+      if (r >= lowRank && r < rank) { best = i; rank = r; }
+    }
+    return best === -1 ? null : this.queue.splice(best, 1)[0];
+  }
+
+  _pipelineDepth() {
+    const v = this.opts.pipelineDepth != null
+      ? +this.opts.pipelineDepth
+      : parseInt(process.env.TRIBOON_NNTP_PIPELINE || '0', 10);
+    return Number.isFinite(v) && v > 1 ? Math.min(4, v) : 0;
   }
 
   stat(msgId, priority = 'health', opts = {}) { return this.run((c) => c.stat(msgId, opts), priority, opts); }
