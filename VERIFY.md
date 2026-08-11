@@ -111,6 +111,37 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-10, v2.9.2 trickplay + retry-only-missing triage + exact-year scoring:
+
+- Version contract aligned: `package.json` 2.9.2; Android `versionName` 2.9.2 /
+  `versionCode` 320; all four Windows client version spots 2.9.2.
+- Trickplay scrub previews: new stream-scoped `GET /api/thumb/<mount>?t=&at=`
+  route (deny-by-default table entry, auth 'stream' like subtitles) renders a
+  480px JPEG near the requested second via ffmpeg reading the mount through
+  the local stream route at BACKGROUND priority (lane contract intact), 10s
+  buckets, shared in-flight jobs, ~200-entry LRU. Web player shows the still
+  above the seek preview (debounced past the nudge cadence, never for Live
+  TV, hidden on seek commit). LIVE-PROVEN against a real usenet 4K DV mount:
+  200 image/jpeg in 1.5s, frame visually confirmed (HDR tone-map polish noted
+  as follow-up). phase4 pins the markup, wiring, live-gate, and token scoping.
+- Retry-only-missing triage: probe budget spent by priority — known failures
+  first, then never-sampled, then least-recently-proven; budget never shrunk,
+  so wide sweeps still find mid-session takedowns (the existing rot test
+  passes unchanged). New e2e test proves failure-retry, coverage growth, and
+  heal-flips-verdict.
+- Exact-year scoring: `wantedYear` +20 breaks same-tier ties toward the true
+  year; ±1 stays accepted as fallback. phase2 test pins boost and no-year
+  neutrality.
+- `npm.cmd test` passed 461/461 on the final tree.
+- `verify:full` fully green (exit 0, all 10 steps): first run failed only at
+  the stress preflight (the harness's own reinstall bounced the app session —
+  documented rig trap, re-login + rerun); rerun passed everything with
+  `bench/stress-results/android-tv-stress-20260810-224856.json` ok: true,
+  zero failures, zero warnings.
+- Unverified on this run: Shield real hardware (release APK via CI), thumbs
+  under real multi-user load (single-user dev check only), Windows native GPU
+  playback (no client change).
+
 2026-08-10, v2.9.1 native progressive seek + device pre-cache:
 
 - Version contract aligned: `package.json` 2.9.1; Android `versionName` 2.9.1 /
