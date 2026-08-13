@@ -138,6 +138,18 @@ fails to produce a playable stream. Budgets default to feels-local targets
   native VOD start, Continue Watching resume, and seek coverage:
   `bench/stress-results/android-tv-stress-20260812-213549.json` (`ok: true`,
   requested resume 120 seconds, resume fraction 0.2, zero failures/warnings).
+- The first `v2.9.6` main CI run caught that the previously checksum-pinned
+  upstream LGPL libmpv release asset had been removed. The Windows package lock
+  now targets immutable release `2026-08-12-f4d13e1c2c`; its GitHub digest and
+  an independent local SHA-256 both matched
+  `20dffed429610b52dbb9e3d5b4124145b2a954ef3e6e8fe319cc249a5a794c51`,
+  and extracted `libmpv-2.dll` matched
+  `34bdbb5c56132fbed513fd13a9401fb729e206309e7b4c091dc3a4b70b423fd4`.
+  The locked local Windows recipe then passed all 19 Rust tests, built the
+  v2.9.6 NSIS installer, extracted it, and byte-verified the executable, DLL,
+  licenses, source/rebuild instructions, notices, and Rust inventory; the
+  unsigned local installer SHA-256 was
+  `a5c2e0403982f5b926cdca4b531e8a22dc110c98f3b0840d933a92d89fd3c2bd`.
 - Unverified on this run: real-provider playback (the local configured QA
   source was used), physical-TV behavior outside the emulator, and Windows
   native playback (unaffected by these web/verification changes).

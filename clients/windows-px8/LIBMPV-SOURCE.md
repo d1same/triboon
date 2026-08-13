@@ -8,15 +8,15 @@ DLL with a compatible build.
 
 | Item | Locked value |
 | --- | --- |
-| Archive | `mpv-dev-lgpl-x86_64-20260713-git-e5486b96d7.7z` |
-| Archive URL | `https://github.com/zhongfly/mpv-winbuild/releases/download/2026-07-13-e5486b96d7/mpv-dev-lgpl-x86_64-20260713-git-e5486b96d7.7z` |
-| SHA-256 | `1016b6029da77f96e3a2831d2c33107eee43f798374ba90f56dce45717ed7932` |
-| `libmpv-2.dll` SHA-256 | `93a3095997a4ae8028a5e772ef185600dd7b2bab5f3ba3f2d6d5c4e7d9f4bd91` |
-| Release | `https://github.com/zhongfly/mpv-winbuild/releases/tag/2026-07-13-e5486b96d7` |
-| mpv source | `https://github.com/mpv-player/mpv/commit/e5486b96d7d06dd148337899bfdc46bf25101663` |
-| Builder workflow source | `https://github.com/zhongfly/mpv-winbuild/blob/b4b1088c30e8821e012fd20052de4c2d3a8eaad4/.github/workflows/mpv.yml` |
-| Builder commit used by the published run | `b4b1088c30e8821e012fd20052de4c2d3a8eaad4` |
-| Published build run | `https://github.com/zhongfly/mpv-winbuild/actions/runs/29253959401` |
+| Archive | `mpv-dev-lgpl-x86_64-20260812-git-f4d13e1c2c.7z` |
+| Archive URL | `https://github.com/zhongfly/mpv-winbuild/releases/download/2026-08-12-f4d13e1c2c/mpv-dev-lgpl-x86_64-20260812-git-f4d13e1c2c.7z` |
+| SHA-256 | `20dffed429610b52dbb9e3d5b4124145b2a954ef3e6e8fe319cc249a5a794c51` |
+| `libmpv-2.dll` SHA-256 | `34bdbb5c56132fbed513fd13a9401fb729e206309e7b4c091dc3a4b70b423fd4` |
+| Release | `https://github.com/zhongfly/mpv-winbuild/releases/tag/2026-08-12-f4d13e1c2c` |
+| mpv source | `https://github.com/mpv-player/mpv/commit/f4d13e1c2c91f3a56e589aef9cb44cbc02e26e47` |
+| Builder workflow source | `https://github.com/zhongfly/mpv-winbuild/blob/a237017af09e72a689882afdf0adf6108c33c0fd/.github/workflows/mpv.yml` |
+| Builder commit used by the published run | `a237017af09e72a689882afdf0adf6108c33c0fd` |
+| Published build run | `https://github.com/zhongfly/mpv-winbuild/actions/runs/31594464841` |
 
 The selected archive is the baseline x86-64 LGPL variant, not the GPL or
 x86-64-v3 variant. Its release records Clang as the compiler. The Triboon
@@ -27,8 +27,8 @@ The installer includes the verbatim license text as `LIBMPV-LICENSE.LGPL`.
 mpv's copyright notices and the same LGPL text are also available in the exact
 source tree:
 
-- `https://github.com/mpv-player/mpv/blob/e5486b96d7d06dd148337899bfdc46bf25101663/Copyright`
-- `https://github.com/mpv-player/mpv/blob/e5486b96d7d06dd148337899bfdc46bf25101663/LICENSE.LGPL`
+- `https://github.com/mpv-player/mpv/blob/f4d13e1c2c91f3a56e589aef9cb44cbc02e26e47/Copyright`
+- `https://github.com/mpv-player/mpv/blob/f4d13e1c2c91f3a56e589aef9cb44cbc02e26e47/LICENSE.LGPL`
 
 The exact archive contains the mpv C headers, the MinGW import library
 `libmpv.dll.a`, and one runtime binary, `libmpv-2.dll`. It does **not** contain
@@ -50,11 +50,11 @@ renderer. Missing that loader prevents Windows from loading `libmpv-2.dll`.
 For the closest reproduction of the distributed DLL:
 
 1. Check out `zhongfly/mpv-winbuild` at
-   `b4b1088c30e8821e012fd20052de4c2d3a8eaad4`.
+   `a237017af09e72a689882afdf0adf6108c33c0fd`.
 2. Open `.github/workflows/mpv.yml` and run its `Build MPV` route with the same
-   inputs recorded by run `29253959401`: Clang compiler, `64` target, LGPL
+   inputs recorded by run `31594464841`: Clang compiler, `64` target, LGPL
    enabled, no additional mpv pull-request patches, and mpv commit
-   `e5486b96d7d06dd148337899bfdc46bf25101663`.
+   `f4d13e1c2c91f3a56e589aef9cb44cbc02e26e47`.
 3. That workflow checks out the pinned Windows build toolchain repository,
    builds the dependency graph and mpv, and emits the
    `mpv-dev-lgpl-x86_64-*` archive containing the headers, MinGW import

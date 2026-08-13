@@ -211,9 +211,9 @@ test('Windows client: LGPL runtime and honest hardware verification are document
     assert.match(doc, /software\s+fallback|falls?\s+back\s+to\s+software/i,
       'unsupported hardware decode has a safe fallback');
   }
-  assert.match(source, /e5486b96d7d06dd148337899bfdc46bf25101663/);
-  assert.match(source, /b4b1088c30e8821e012fd20052de4c2d3a8eaad4/);
-  assert.match(source, /1016b6029da77f96e3a2831d2c33107eee43f798374ba90f56dce45717ed7932/);
+  assert.match(source, /f4d13e1c2c91f3a56e589aef9cb44cbc02e26e47/);
+  assert.match(source, /a237017af09e72a689882afdf0adf6108c33c0fd/);
+  assert.match(source, /20dffed429610b52dbb9e3d5b4124145b2a954ef3e6e8fe319cc249a5a794c51/);
   assert.match(source, /replace|replacement/i);
   assert.match(license, /GNU LESSER GENERAL PUBLIC LICENSE[\s\S]+Version 2\.1/);
   assert.match(notices, /dynamically loads `libmpv-2\.dll`/);

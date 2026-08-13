@@ -45,7 +45,7 @@ for Triboon.
 ## Windows native client
 
 Triboon for Windows dynamically loads `libmpv-2.dll` from the unmodified
-`mpv-dev-lgpl-x86_64-20260713-git-e5486b96d7` package published by
+`mpv-dev-lgpl-x86_64-20260812-git-f4d13e1c2c` package published by
 `zhongfly/mpv-winbuild`. The archive URL and SHA-256 are locked in CI. The
 selected package is the LGPL x86-64 build; Triboon does not statically link it
 or prevent replacement with an ABI-compatible DLL.
@@ -58,5 +58,5 @@ licenses. The installed client carries this notice, Triboon's `LICENSE`,
 `LIBMPV-SOURCE.md` records the exact archive and DLL hashes, mpv source
 revision, builder revision/run, rebuild route, runtime prerequisite, license
 links, and replacement instructions. See
-the [exact mpv copyright notice](https://github.com/mpv-player/mpv/blob/e5486b96d7d06dd148337899bfdc46bf25101663/Copyright)
-and [LGPL license](https://github.com/mpv-player/mpv/blob/e5486b96d7d06dd148337899bfdc46bf25101663/LICENSE.LGPL).
+the [exact mpv copyright notice](https://github.com/mpv-player/mpv/blob/f4d13e1c2c91f3a56e589aef9cb44cbc02e26e47/Copyright)
+and [LGPL license](https://github.com/mpv-player/mpv/blob/f4d13e1c2c91f3a56e589aef9cb44cbc02e26e47/LICENSE.LGPL).
