@@ -125,6 +125,16 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-13, v2.9.9 publication of the 2.9.8 app:
+
+- Version contract: `package.json` 2.9.9; Android `versionName` 2.9.9 /
+  `versionCode` 327; Windows client package/Tauri/Cargo 2.9.9.
+- Same product as v2.9.8 (English-first Play, TV Search mic pin) plus the
+  public README/setup polish. The `v2.9.8` tag CI failed after `main` moved
+  during publish, so this tag is the clean GitHub/Unraid ship.
+- Live playback evidence is the v2.9.8 `verify:full` pass below. This bump
+  does not change engine, player, or IPTV code.
+
 2026-08-13, v2.9.8 English-first Play + Android TV Search mic pin:
 
 - Version contract: `package.json` 2.9.8; Android `versionName` 2.9.8 /
