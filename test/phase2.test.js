@@ -1914,6 +1914,99 @@ test('pipeline: imdb/tvdb source searches fall back to verified title search', a
   }
 });
 
+test('pipeline: branded TV alias uses a plain title search so Lioness.S01E01 WEB-DLs merge', async () => {
+  // Real incident: tvsearch+tvdbid returned 7 Special.Ops.Lioness leftovers. The short-name
+  // retry used tvsearch WITHOUT tvdbid, which those indexers treat as empty, so the 140
+  // Lioness.S01E01 NTb/FLUX rows never merged.
+  const seen = [];
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    const t = u.searchParams.get('t');
+    const q = u.searchParams.get('q') || '';
+    seen.push({ t, q, tvdbid: u.searchParams.get('tvdbid') || '', season: u.searchParams.get('season') || '' });
+    res.writeHead(200, { 'content-type': 'application/rss+xml' });
+    if (u.searchParams.get('tvdbid')) {
+      return res.end(rssFor([
+        { name: 'Special.Ops.Lioness.S01E01.1080p.WEB-DL.H.264-GRP', url: 'http://x/special', size: 3e9 },
+      ]));
+    }
+    if (t === 'tvsearch') return res.end(rssFor([]));
+    res.end(rssFor([
+      { name: 'Lioness.S01E01.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb', url: 'http://x/ntb', size: 4.7e9 },
+      { name: 'Lioness.2021.S01E01.1080p.AMZN.WEB-DL.DDP2.0.H.264-LEEQRI', url: 'http://x/wrong-year', size: 4.7e9 },
+      { name: 'The.Lion.King.S01E01.1080p.WEB-DL.H.264-GRP', url: 'http://x/wrong-show', size: 2e9 },
+    ]));
+  });
+  const ixPort = await new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
+  const pipeline = new Pipeline({
+    pool: () => null, verdicts: { get: () => null, set: () => {} }, mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+  try {
+    const r = await pipeline.search({
+      q: 'Special Ops: Lioness S01E01', tvdbid: '421590', season: 1, ep: 1,
+    });
+    assert.ok(seen.some((s) => s.t === 'tvsearch' && s.tvdbid === '421590'),
+      'catalog id still uses tvsearch');
+    assert.ok(seen.some((s) => s.t === 'search' && /^lioness\s+S01E01$/i.test(s.q) && !s.tvdbid && !s.season),
+      'short-name alias is a plain title search, not tvsearch without an id');
+    const names = r.candidates.map((c) => c.name);
+    assert.ok(names.includes('Lioness.S01E01.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb'),
+      'scene-named WEB-DLs from the title index merge into Sources');
+    assert.ok(names.includes('Special.Ops.Lioness.S01E01.1080p.WEB-DL.H.264-GRP'),
+      'the ID-tagged long name still appears');
+    assert.ok(!names.includes('The.Lion.King.S01E01.1080p.WEB-DL.H.264-GRP'),
+      'a different show still fails title verification');
+  } finally {
+    server.close();
+  }
+});
+
+test('pipeline: short catalog title still pairs tvdbid with a plain title search', async () => {
+  // TMDB now names the show "Lioness" (not "Special Ops: Lioness"), so there is no branded
+  // alias. tvsearch+tvdbid still only returns the 7 ID-tagged leftovers unless we also
+  // t=search "Lioness S01E01" and merge the WEB-DLs.
+  const seen = [];
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    const t = u.searchParams.get('t');
+    const q = u.searchParams.get('q') || '';
+    seen.push({ t, q, tvdbid: u.searchParams.get('tvdbid') || '', season: u.searchParams.get('season') || '' });
+    res.writeHead(200, { 'content-type': 'application/rss+xml' });
+    if (u.searchParams.get('tvdbid')) {
+      return res.end(rssFor([
+        { name: 'Lioness.S01E01.1080p.WEB-DL.H.264-BAWLS', url: 'http://x/bawls', size: 1.2e9 },
+      ]));
+    }
+    if (t === 'tvsearch') return res.end(rssFor([]));
+    res.end(rssFor([
+      { name: 'Lioness.S01E01.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb', url: 'http://x/ntb', size: 4.7e9 },
+      { name: 'The.Lion.King.S01E01.1080p.WEB-DL.H.264-GRP', url: 'http://x/wrong-show', size: 2e9 },
+    ]));
+  });
+  const ixPort = await new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
+  const pipeline = new Pipeline({
+    pool: () => null, verdicts: { get: () => null, set: () => {} }, mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+  try {
+    const r = await pipeline.search({ q: 'Lioness S01E01', tvdbid: '421590', season: 1, ep: 1 });
+    assert.ok(seen.some((s) => s.t === 'tvsearch' && s.tvdbid === '421590'),
+      'catalog id still uses tvsearch');
+    assert.ok(seen.some((s) => s.t === 'search' && /^lioness\s+S01E01$/i.test(s.q) && !s.tvdbid && !s.season),
+      'short catalog titles still get a plain t=search alongside tvdbid');
+    const names = r.candidates.map((c) => c.name);
+    assert.ok(names.includes('Lioness.S01E01.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb'),
+      'scene-named WEB-DLs from the title index merge into Sources');
+    assert.ok(names.includes('Lioness.S01E01.1080p.WEB-DL.H.264-BAWLS'),
+      'the ID-tagged leftover still appears');
+    assert.ok(!names.includes('The.Lion.King.S01E01.1080p.WEB-DL.H.264-GRP'),
+      'a different show still fails title verification');
+  } finally {
+    server.close();
+  }
+});
+
 test('pipeline: TV episode fallback keeps SxxEyy instead of broad show search', async () => {
   const seen = [];
   const server = http.createServer((req, res) => {
@@ -1934,13 +2027,10 @@ test('pipeline: TV episode fallback keeps SxxEyy instead of broad show search', 
   });
   try {
     const r = await pipeline.search({ q: 'House', imdbid: 'tt0412142', tvdbid: '73255', season: 3, ep: 22 });
-    assert.strictEqual(seen[0].t, 'tvsearch');
-    assert.strictEqual(seen[0].tvdbid, '73255');
-    assert.strictEqual(seen[0].q, 'House S03E22');
-    assert.strictEqual(seen.at(-1).t, 'tvsearch', 'fallback without ids remains an episode search');
-    assert.strictEqual(seen.at(-1).q, 'House S03E22');
-    assert.strictEqual(seen.at(-1).season, '3');
-    assert.strictEqual(seen.at(-1).ep, '22');
+    assert.ok(seen.some((s) => s.t === 'tvsearch' && s.tvdbid === '73255' && s.q === 'House S03E22'),
+      'catalog id still uses tvsearch');
+    assert.ok(seen.some((s) => s.t === 'search' && s.q === 'House S03E22' && !s.tvdbid),
+      'empty tvdbid still recovers via a plain title search that keeps SxxEyy');
     assert.deepStrictEqual(r.candidates.map((c) => c.name), [
       'House.S03E22.1080p.WEB-DL.H.264-NTb',
     ]);
@@ -3054,6 +3144,37 @@ test('scoring: the exact year outranks a ±1 twin, and only when the query carri
   assert.ok(ranked[0].reasons.some((r) => /exact year \+20/.test(r)), 'the boost is visible in scoring reasons');
   const neutral = rankReleases([twinA, twinB], {});
   assert.strictEqual(neutral[0].score, neutral[1].score, 'without a wanted year the twins stay tied — no hidden penalty');
+
+  // Catalog year is a RANK hint, not a hide. Lioness 2021 drops below 2023; untagged / ±1 / title-years stay.
+  const lionessYear = rankReleases([
+    { name: 'Lioness.2021.S01E01.1080p.AMZN.WEB-DL.DDP2.0.H.264-LEEQRI', sizeBytes: 4.7e9 },
+    { name: 'Lioness.2023.S01E01.1080p.AMZN.WEB-DL.DDP2.0.H.264-LEEQRI', sizeBytes: 4.7e9 },
+    { name: 'Lioness.S01E01.1080p.WEB-DL.DDP5.1.H.264-NTb', sizeBytes: 4.7e9 },
+  ], { wantedYear: 2023, originalLanguage: 'en', preferredAudioLanguage: 'en', maxResolutionRank: 3, preferResolutionRank: 3 });
+  assert.ok(lionessYear[0].name.includes('2023') || !/\b(19|20)\d{2}\b/.test(lionessYear[0].name),
+    'the 2023 or untagged Lioness leads the 2021 collision');
+  assert.ok(lionessYear.find((c) => c.name.includes('2021')),
+    'the 2021 file is still listed — year is rank-only so other shows are not hidden');
+  assert.ok(lionessYear.find((c) => c.name.includes('2021')).score > -5000,
+    'wrong-year is a demotion, not a disqualify');
+  const fromUntagged = scoreRelease(
+    { name: 'From.S01E01.1080p.WEB-DL.DDP5.1.H.264-NTb', sizeBytes: 4e9 },
+    { wantedYear: 2022, originalLanguage: 'en', preferredAudioLanguage: 'en' },
+  );
+  assert.ok(!fromUntagged.reasons.some((r) => r.startsWith('wrong year')),
+    'an untagged From episode is not punished for the show year');
+  const y1923 = scoreRelease(
+    { name: '1923.S01E01.1080p.Paramount.WEB-DL-NTb', sizeBytes: 4e9 },
+    { wantedYear: 2022, originalLanguage: 'en', preferredAudioLanguage: 'en' },
+  );
+  assert.ok(!y1923.reasons.some((r) => r.startsWith('wrong year')),
+    '1923 the show: the leading 1923 is the title, not a wrong air year');
+  const breakingAirYear = scoreRelease(
+    { name: 'Breaking.Bad.2013.S05E16.1080p.WEB-DL.H.264-NTb', sizeBytes: 3e9 },
+    { wantedYear: 2008, originalLanguage: 'en', preferredAudioLanguage: 'en' },
+  );
+  assert.ok(breakingAirYear.score > -5000,
+    'an episode tagged with its air year still plays for a 2008 series');
 });
 
 test('server: /api/prepare offers a device prefetch only for direct-play mounts within the owner budget', () => {
@@ -3826,6 +3947,82 @@ test('scoring: sample-size stubs and foreign-language dubs sink; duals stay hone
   ], { originalLanguage: 'ko', preferredAudioLanguage: 'en' });
   assert.ok(foreignWithEnglish[0].name.includes('ENGLISH'),
     'an English dub of a foreign title wins when it exists');
+
+  // Scene names almost never print "English". Untagged WEB-DLs of an English show must
+  // count as original audio so Lioness-style AMZN rips are not 80 points behind 7 tagged HEVCs.
+  const enPolicy = { originalLanguage: 'en', preferredAudioLanguage: 'en', maxResolutionRank: 3, preferResolutionRank: 3 };
+  const untagged = rankReleases([
+    { name: 'Lioness.S01E01.1080p.WEB-DL.DDP5.1.English.H.264-FLUX', sizeBytes: 4e9 },
+    { name: 'Lioness.S01E01.1080p.WEB-DL.DDP5.1.H.264-FLUX', sizeBytes: 4e9 },
+    { name: 'Lioness.S01E01.FRENCH.1080p.WEB.H265-DUB', sizeBytes: 4e9 },
+  ], enPolicy);
+  const taggedEn = untagged.find((c) => c.name.includes('English'));
+  const assumedEn = untagged.find((c) => !c.name.includes('English') && c.name.includes('FLUX'));
+  const french = untagged.find((c) => c.name.includes('FRENCH'));
+  assert.ok(taggedEn.reasons.some((r) => r.startsWith('preferred-language')),
+    'a clean English-only token still gets the preferred-language hint');
+  assert.ok(assumedEn.reasons.some((r) => r.startsWith('assumed-original-audio')),
+    'untagged English-original WEB-DL is assumed original audio, not language-unknown');
+  assert.ok(taggedEn.score > assumedEn.score,
+    'printing English still wins the tie against an otherwise identical untagged name');
+  assert.ok(assumedEn.score > french.score,
+    'untagged English-original still beats a tagged French dub');
+  assert.ok(untagged.findIndex((c) => c.name.includes('FLUX') && !c.name.includes('English')) <
+    untagged.findIndex((c) => c.name.includes('FRENCH')),
+    'the untagged WEB-DL ranks in the English pack, not with foreign dubs');
+
+  // Same names as the Lioness Sources drawer: verified French must stay under English, even
+  // when the dub is the only verified WEB and the English rows are BluRay.
+  const drawer = rankReleases([
+    { name: 'Lioness.S01E01.1080p-NONPLAYER.WEB-DL.H.264-UBWEB', sizeBytes: 1.9e9, health: 'verified' },
+    { name: 'Lioness.S01E01.FRENCH.1080p.WEB.H264-RAWLS', sizeBytes: 4.0e9, health: 'verified' },
+    { name: 'Lioness.S01E01.FRENCH.720p.WEB.H264-RAWLS', sizeBytes: 2.3e9, health: 'verified' },
+    { name: 'Lioness.2023.S01E01.1080p.BluRay.x265.HDR.DDP.5.1.English.GarQ', sizeBytes: 2.7e9 },
+    { name: 'Lioness.2023.S01E01.1080p.AMZN.WEB-DL.DDP2.0.H.264-LEEQRI', sizeBytes: 4.7e9 },
+  ], enPolicy);
+  assert.ok(drawer[0].name.includes('UBWEB') || drawer[0].name.includes('English') || drawer[0].name.includes('LEEQRI'),
+    'auto-pick stays an English 2023/untagged file');
+  assert.ok(drawer.findIndex((c) => c.name.includes('FRENCH.1080p')) >
+    drawer.findIndex((c) => c.name.includes('English') || c.name.includes('LEEQRI')),
+    'verified French 1080p stays below English BluRay/WEB-DL');
+
+  const lyingEnglish = scoreRelease(
+    { name: 'Lioness.S01E01.FRENCH.English.1080p.WEB.H265-DUB', sizeBytes: 4e9 },
+    enPolicy,
+  );
+  assert.ok(lyingEnglish.reasons.some((r) => r.startsWith('foreign-dub')),
+    'FRENCH + English without MULTi is a French dub (English is subs), not preferred-language');
+  assert.ok(!lyingEnglish.reasons.some((r) => r.startsWith('preferred-language')),
+    'the word English must not override an explicit French audio tag');
+
+  const vffEnglish = scoreRelease(
+    { name: 'Lioness.S01E01.VFF.ENGSUB.1080p.WEB.H265-YELLO', sizeBytes: 4e9 },
+    enPolicy,
+  );
+  assert.ok(vffEnglish.reasons.some((r) => r.startsWith('foreign-dub')),
+    'VFF + English subs is still a French soundtrack');
+
+  const itaEng = scoreRelease(
+    { name: 'Lioness.S01E01.ITA.ENG.1080p.AMZN.WEB-DL.DDP.H.264-MeM', sizeBytes: 4e9 },
+    enPolicy,
+  );
+  const ntb = scoreRelease(
+    { name: 'Lioness.S01E01.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb', sizeBytes: 4e9 },
+    enPolicy,
+  );
+  assert.ok(itaEng.reasons.some((r) => r.startsWith('preferred-dual-audio')),
+    'ITA.ENG is dual audio with English aboard, not a clean English WEB-DL');
+  assert.ok(ntb.score > itaEng.score,
+    'a clean unlabeled English WEB-DL auto-picks ahead of ITA.ENG (first track is often Italian)');
+
+  const koUntagged = scoreRelease(
+    { name: 'Parasite.2019.1080p.BluRay.x264-GRP', sizeBytes: 9e9 },
+    { originalLanguage: 'ko', preferredAudioLanguage: 'en' },
+  );
+  assert.ok(koUntagged.reasons.some((r) => r.startsWith('assumed-original-language')),
+    'untagged foreign-original is the original soundtrack, not a fake English dub');
+  assert.ok(!koUntagged.reasons.some((r) => r.startsWith('assumed-original-audio')),
+    'Korean-original untagged must not get the English-original audio bonus');
 });
 
 test('store: a failing flush never throws and retries once the disk recovers', () => {

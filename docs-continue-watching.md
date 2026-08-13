@@ -129,11 +129,11 @@ When changing Continue Watching, verify:
    position.
 5. Details from a Continue Watching episode opens the show details page, while
    Resume plays the exact episode.
-5b. On TV/native shells, a short press on ANY Continue Watching cover (movie or
-   episode) resumes directly — the cover IS the resume action, matching the
-   hero Resume button and the pre-cache warmed on focus. Details stay one
-   hold-OK (TV) / ⋯ (web) away on the card menu. Web browsers keep the
-   detail-first stop so the viewer can pick 1080p/4K before playing.
+5b. On every client, a short press on ANY Continue Watching cover (movie or
+   episode, including next-up) resumes directly — the cover IS the resume
+   action, matching the hero Resume button and the pre-cache warmed on focus.
+   Details stay one hold-OK (TV) / ⋯ (web) away on the card menu. Browsers
+   still apply the automatic 1080p cap unless 4K-in-browser is enabled.
 6. Trakt-imported progress still appears for every active profile without
    overwriting stronger local progress.
 7. Percent-only Trakt progress resumes on Android for both direct and

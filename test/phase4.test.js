@@ -259,13 +259,13 @@ test('Trakt percent-only native resume reaches direct and server-seek Android pa
     'nativeVideoSubtitleRel', 'nativeSubtitlePayload', 'updatePlayerMeta', 'episodePlayerMeta',
     'absoluteArtworkUrl', 'nativeMimeForKind', 'nativeQualityLabel', 'applySubSize',
     'nativeSubtitleChoices', 'nativeEpisodeChoices', 'loadSubShift', 'traktResumeFractionForItem',
-    'prefLang', 'nativeAudioChoices', 'prefAudioLang', 'audioLangKey',
+    'prefLang', 'nativeAudioChoices', 'prefAudioLang', 'audioLangKey', 'applyInitialAudioPreference',
     'window', 'location', `${ui.slice(nativeStart, nativeEnd)}\nreturn tryNativeVideoPlayer;`)(
       state, () => true, (_p, at) => `/api/remux/one?start=${at}`, () => ({ blocked: false, rel: '' }),
       () => ({ rel: '', url: '', lang: '', label: '', shift: 0 }), () => {},
       (it) => ({ title: it.title, subline: '' }), () => '', () => '', () => '4K', () => 'M',
       () => [], () => [], () => 0, traktResumeFractionForItem,
-      () => '', () => [], () => 'eng', () => 'en',
+      () => '', () => [], () => 'eng', () => 'en', () => {},
       window, { origin: 'http://triboon.test' });
   assert.strictEqual(tryNativeVideoPlayer('direct', 0), true);
   assert.strictEqual(payloads[0].startFraction, 0.42,
@@ -331,8 +331,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     '1080p and 4K choices should both be sent to /api/play as source-selection policy');
   assert.match(ui, /function mapTmdb\(x\) \{[\s\S]+originalLanguage: x\.original_language \|\| x\.originalLanguage \|\| ''/,
     'TMDB items should preserve original language for source-language scoring');
-  assert.match(ui, /function sourceSearchQuery\(it, opts = \{\}\) \{[\s\S]+originalLanguage[\s\S]+preferredAudioLanguage/,
-    'Sources searches should carry original-language and preferred-audio hints into scoring');
+  assert.match(ui, /function sourceSearchQuery\(it, opts = \{\}\) \{[\s\S]+originalLanguage[\s\S]+year[\s\S]+preferredAudioLanguage/,
+    'Sources searches should carry original-language, catalog-year, and preferred-audio hints into scoring');
   assert.match(ui, /function sourceSearchQuery\(it, opts = \{\}\) \{[\s\S]+params\.set\('caps', JSON\.stringify\(clientCaps\(\)\)\)/,
     'Sources searches should carry native device caps so source ranking matches Exo playback');
   assert.match(ui, /function prefAudioLang\(\) \{[\s\S]+prefLang\('alang'\) \|\| 'eng'/,
@@ -341,8 +341,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   assert.ok(serverForPolicy.includes('function parseCapsQuery(raw) {')
     && serverForPolicy.includes("caps: parseCapsQuery(ctx.url.searchParams.get('caps'))"),
     'Sources search should parse native device caps into the server scoring policy');
-  assert.match(serverForPolicy, /function playbackPolicyFor\(user, \{ maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage, caps: rawCaps \} = \{\}\) \{[\s\S]+policy\.originalLanguage[\s\S]+policy\.preferredAudioLanguage[\s\S]+policy\.audioPassthrough[\s\S]+policy\.lowPowerDevice/,
-    'Server playback policy should preserve language/device hints for the scorer');
+  assert.match(serverForPolicy, /function playbackPolicyFor\(user, \{ maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage, year, caps: rawCaps \} = \{\}\) \{[\s\S]+policy\.originalLanguage[\s\S]+policy\.preferredAudioLanguage[\s\S]+policy\.wantedYear[\s\S]+policy\.audioPassthrough[\s\S]+policy\.lowPowerDevice/,
+    'Server playback policy should preserve language/year/device hints for the scorer');
   assert.match(serverForPolicy, /policy\.preferredAudioLanguage = preferredAudio \|\| 'en'/,
     'Play defaults to English audio unless the owner saved a different language');
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8'), /if \(preferRank === 4\) policy\.exactResolutionRank = 4;/,
@@ -392,8 +392,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'qualityRankForItem must cap browser playback at 1080p unless 4K-in-browser is opted in');
   assert.match(ui, /function isWebBrowserClient\(\) \{ return !nativePlaybackCaps\(\); \}/,
     'a plain browser (no native ExoPlayer bridge) is the client that gets the 1080p cap');
-  assert.match(ui, /if \(!it\._local && isWebBrowserClient\(\)\) return openDetail\(detailTargetForItem\(it\)\);/,
-    'a browser Continue-Watching next-episode card opens details (to pick quality) instead of auto-playing');
+  assert.match(ui, /if \(it\._nextEp\) \{[\s\S]{0,400}return it\._local \? playLocal\(it\) : play\(it\);/,
+    'a Continue-Watching next-episode card plays immediately on every client');
   assert.match(ui, /const has4k = res\.has\('2160p'\);[\s\S]+it\._has4k = has4k;/,
     'checkAvailability must persist real 4K availability on the item so a no-4K title never requests 4K');
   assert.match(ui, /function saveGlobalQualityPref\(rank\) \{ const q = normalizeQualityRank\(rank\);/,
@@ -411,6 +411,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Play should compute quality before the local shortcut so selected 4K cannot be replaced by a local 1080p file');
   assert.match(ui, /catch \(e\) \{[\s\S]+if \(S\._playTicket !== playTicket \|\| S\.view !== 'player'\) return;[\s\S]+if \(localExact && !picked && \/no playable\|no \.\*candidate\|all candidates failed\/i\.test\(String\(e && e\.message \|\| ''\)\)\) \{[\s\S]+return playLocal\(localExact, \{ replacementStarted: true, nativeFirst, playTicket \}\);[\s\S]+\}/,
     'Local library files should fall back to disk playback when online source search has no playable candidate');
+  assert.doesNotMatch(ui, /Your pick couldn't be streamed|4K wasn’t available right now|Source failed health check|Source failed — advancing|Source is still stalled|Stream hiccup|Codec not supported — optimizing/,
+    'successful source recovery stays quiet — no error toast while the next file is already playing');
+  assert.match(ui, /toast\(`Can't play this — \$\{why\}`\)/,
+    'a hard play failure still tells the viewer when nothing could start');
   // Redesign 2026-08-06: facts lead the row (Sora), the raw release name is the quiet mono
   // subtitle, and rows are flat/borderless with the shared gold bar for selection.
   assert.ok([
@@ -460,8 +464,12 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   // Resume should feel local: settling focus on a resumable card warms the best source all the way
   // to a MOUNTED state (not just the search) — multi-volume RAR mounts cost seconds, so search-only
   // warming still left a long press-play gap (see bench/resume-latency.js).
-  assert.match(ui, /function focusCard\([\s\S]+if \(it && it\.type !== 'live' && \(it\._cw \|\| it\._nextEp \|\| \(\+it\.resume \|\| 0\) > 0\)\) preparePlaybackSource\(it\);/,
+  assert.match(ui, /function focusCard\([\s\S]+if \(!S\._booting && it && it\.type !== 'live' && \(it\._cw \|\| it\._nextEp \|\| \(\+it\.resume \|\| 0\) > 0\)\) preparePlaybackSource\(it\);/,
     'focusing a resumable Continue Watching / next-episode card should mount-warm the best source (preparePlaybackSource) so resume reuses a live mount instantly');
+  assert.match(ui, /function preparePlaybackSource\(it, delay = 900\) \{[\s\S]+if \(S\._booting\) return;/,
+    'home source prepare must not start while the Android TV splash is still up');
+  assert.match(ui, /function bootReady\(\) \{[\s\S]+S\._booting = false;[\s\S]+maybePrepareFocusedHomeCard\(\);/,
+    'after the splash drops, Home may warm the already-focused Continue Watching card');
   assert.match(ui, /if \(!opts\.catalogOnly && !opts\.watchReady && !hasFreshWatch && !opts\.preserveFocus\) \{/,
     'Continue Watching row actions should not publish an empty placeholder row while preserving focus');
   assert.match(ui, /async function cwOp\(it, body, msg, opts = \{\}\) \{[\s\S]+if \(body\.hidden\) \{[\s\S]+cwHideNext\(it\.key\);[\s\S]+removeWatchCacheKey\(it\.key\);[\s\S]+\} else if \(body\.remove\) removeWatchCacheKey\(it\.key\);[\s\S]+loadRows\(\{ preserveFocus: !!snap, focusSnapshot: snap, watchReady: true \}\);[\s\S]+loadWatchState\(true\)/,
@@ -620,8 +628,12 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'both detail title writes and the hero title route through the logo swap');
   assert.match(ui, /\.pcard \.cap\{[\s\S]{0,220}opacity:0;transition:opacity \.18s ease\}[\s\S]+\.pcard:hover \.cap,\.pcard\.focus \.cap/,
     'poster-card captions rest invisible and reveal on hover/focus (quiet grids)');
-  assert.match(ui, /\.railBtn\[data-nav="search"\],\.railBtn\[data-nav="movies"\],#navLiveTv,#navMusic\{margin-top:14px\}[\s\S]+#railAddLib\{margin-top:auto;opacity:\.7\}/,
-    'the rail groups into sections and sinks Add library to the bottom');
+  assert.match(ui, /#railMain\{[^}]*gap:6px/,
+    'every rail icon uses the same 6px gap as Movies to TV Shows');
+  assert.doesNotMatch(ui, /\.railBtn\[data-nav="search"\],\.railBtn\[data-nav="movies"\],#navLiveTv,#navMusic\{margin-top:14px\}/,
+    'the rail no longer adds extra section gaps above Search/Movies/Live/Music');
+  assert.match(ui, /#railAddLib\{margin-top:auto;opacity:\.7\}/,
+    'Add library still sinks to the bottom of the column');
   // ---- v2.8.5 design contracts (owner-approved 2026-08-06) ----
   assert.match(ui, /function splashStage\(pct\) \{[\s\S]{0,300}if \(pct > cur\) lane\.style\.width = pct \+ '%';/,
     'the boot splash lane fills forward-only from real boot stages');
@@ -739,29 +751,49 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   assert.match(ui, /const HOME_CATALOG_INITIAL = 16;[\s\S]+function homeCatalogRow\(name, path, result, kind = 'catalog', seen = null\)[\s\S]+items: all\.slice\(0, HOME_CATALOG_INITIAL\),[\s\S]+buffer: all\.slice\(HOME_CATALOG_INITIAL\)/,
     'home catalog rows keep first paint small while retaining overflow items for lazy loading');
   // De-dupe across rows so sections don't repeat the same titles (the "give us new material" ask).
-  assert.match(ui, /if \(seen\) all = all\.filter\([\s\S]+seen\.has\(k\)[\s\S]+seen\.add\(k\)/,
-    'homeCatalogRow de-dupes items already shown in an earlier row via the shared seen set');
+  assert.match(ui, /function homeCatalogDedupe\(items, seen\) \{[\s\S]+if \(!it\.tmdbId \|\| seen\.has\(k\)\) return false;[\s\S]+seen\.add\(k\)/,
+    'home catalog rows de-dupe items already shown in an earlier row via the shared seen set');
   assert.match(ui, /async function buildHomeRows\(defs\) \{[\s\S]+const seen = new Set\(\);[\s\S]+Promise\.all\(defs\.map[\s\S]+homeCatalogRow\(d\.name, d\.path, results\[i\], d\.kind \|\| 'catalog', seen\)/,
     'buildHomeRows fetches rows in parallel then builds them in order through one shared seen set');
-  // Richer, de-duped default home: Trending today + Popular/Top-rated movies + series + rotating genres.
-  assert.match(ui, /\{ name: 'Trending today', path: '\/api\/tmdb\/trending\/all\/day' \}[\s\S]+name: 'Top rated movies'[\s\S]+name: 'Top rated series'[\s\S]+g1\.name \+ ' movies'[\s\S]+g2\.name \+ ' shows'/,
-    'the unlimited home page has more diverse sections + two daily-rotating genre rows');
-  assert.match(ui, /function homeGenrePick\(offset\) \{[\s\S]+HOME_GENRE_ROWS\[/,
-    'home genre rows rotate by day for fresh material');
+  // Short Home: Trending + a Kids shelf. Popular/Top-rated/rotating-genre dumps stay off Home.
+  assert.match(ui, /\{ name: 'Trending today', path: '\/api\/tmdb\/trending\/all\/day' \}[\s\S]+name: 'Kids'[\s\S]+mix: \[[\s\S]+HOME_KIDS_MOVIE_PATH[\s\S]+HOME_KIDS_TV_PATH/,
+    'the unlimited home page keeps Trending and one mixed Kids row of movies and shows');
+  assert.match(ui, /function interleaveHomeItems\(a, b\) \{[\s\S]+function homeMixedCatalogRow\(name, lists, seen\)/,
+    'Kids movies and Kids shows are interleaved into a single Home row');
+  assert.doesNotMatch(ui, /name: 'Trending today'[\s\S]{0,400}name: 'Popular movies'[\s\S]{0,400}name: 'Top rated movies'/,
+    'unlimited Home no longer stacks Popular and Top rated under Trending');
+  assert.doesNotMatch(ui, /function homeGenrePick\(|g1\.name \+ ' movies'/,
+    'Home no longer rotates generic genre rows like Comedy shows');
+  assert.match(ui, /function homePersonalSeed\(cw\) \{[\s\S]+return \{ tmdbId, type, title \};/,
+    'Home seeds one Because you watched row from the latest Continue Watching title');
   // Movies/TV backdrop YEAR must stay atomic with the title (was overwritten by a lagging async
   // detail fetch → the focused movie showed the previous item's year).
   assert.match(ui, /const year = \(it && it\.year\) \|\| \(d \?/,
     'the backdrop year comes from the focused item first, so the async detail pass cannot swap it');
-  assert.match(ui, /el\.dataset\.key = \(it && it\.key\) \|\| '';\s*if \(!it \|\| !it\.tmdbId/,
+  assert.match(ui, /el\.dataset\.key = \(it && it\.key\) \|\| '';[\s\S]{0,280}if \(!it \|\| !cred\.tmdbId \|\| !\['movie', 'tv'\]\.includes\(cred\.type\)\) return;/,
     'loadCreditsInto stamps the invalidation key on EVERY focus so a previous poster fetch cannot paint its year on the wrong item');
+  assert.match(ui, /function loadCreditsInto\(el, it\) \{[\s\S]+const cred = certTargetForMeta\(it,[\s\S]+\/api\/tmdb\/\$\{cred\.type\}\/\$\{cred\.tmdbId\}/,
+    'Continue Watching episode cards fetch show credits and overview (episode maps to tv)');
   assert.match(ui, /function bindHomeRowLazy\(cards, root, ri\) \{[\s\S]+cards\.addEventListener\('scroll', \(\) => maybeLoadMoreHomeRow\(root, ri\), \{ passive: true \}\);[\s\S]+async function loadMoreHomeRow\(root, ri\) \{[\s\S]+api\(homeCatalogPathWithPage\(lazy\.path, page\)\)[\s\S]+appendHomeRowCards\(root, ri, added, firstNew\)/,
     'home catalog rows should append more cards on row scroll without repainting the whole page');
   assert.match(ui, /function focusCard\(ri, ci, opts = \{\}\) \{[\s\S]+maybeLoadMoreHomeRow\(view\.root, ri\);/,
     'home catalog lazy loading should also trigger from D-pad focus near the right edge');
   assert.match(ui, /function refreshHomeWhenSettled\(opts = \{\}\) \{[\s\S]+if \(S\._booting && S\.view === 'home'\) return loadRows\(\{ preserveFocus: true, background: true, \.\.\.opts \}\);[\s\S]+if \(homeBackgroundRefreshReady\(\)\) loadRows/,
     'boot-time home refresh should publish under the splash instead of waiting for visible idle focus');
-  assert.match(ui, /function homeRowsFromWatch\(cw, loading = false\) \{[\s\S]+rows\.push\(\.\.\.cachedHomeCatalogRows\(\)\);[\s\S]+if \(!rows\.length && loading\)[\s\S]+emptyLabel: 'Loading\.\.\.'[\s\S]+function homeRowsReadyForBoot\(rows\) \{[\s\S]+row\.name !== 'Loading home'[\s\S]+function publishHomeRows\(rows, opts = \{\}\) \{[\s\S]+if \(S\._homeRowsSig === sig && \$\('rows'\)\.children\.length\) \{[\s\S]+return false;[\s\S]+async function loadRows\(opts = \{\}\) \{[\s\S]+const runId = S\._homeLoadRun[\s\S]+!opts\.catalogOnly && !opts\.watchReady && !hasFreshWatch[\s\S]+publishHomeRows\(homeRowsFromWatch\(cachedWatchRowsForHome\(\), true\), opts\); \/\/ Internal first paint: focus target under the splash before \/api\/watch returns\.[\s\S]+loadWatchState\(\)\.then/,
+  assert.match(ui, /function homeRowsFromWatch\(cw, loading = false\) \{[\s\S]+const catalog = cachedHomeCatalogRows\(\);[\s\S]+if \(!rows\.length && loading\)[\s\S]+emptyLabel: 'Loading\.\.\.'[\s\S]+function homeRowsReadyForBoot\(rows\) \{[\s\S]+row\.name !== 'Loading home'[\s\S]+function publishHomeRows\(rows, opts = \{\}\) \{[\s\S]+if \(S\._homeRowsSig === sig && \$\('rows'\)\.children\.length\) \{[\s\S]+return false;[\s\S]+async function loadRows\(opts = \{\}\) \{[\s\S]+const runId = S\._homeLoadRun[\s\S]+!opts\.catalogOnly && !opts\.watchReady && !hasFreshWatch[\s\S]+publishHomeRows\(homeRowsFromWatch\(cachedWatchRowsForHome\(\), true\), opts\); \/\/ Internal first paint: focus target under the splash before \/api\/watch returns\.[\s\S]+loadWatchState\(\)\.then/,
     'home first paint should create a hidden focus placeholder but keep the splash until real rows exist');
+  assert.doesNotMatch(ui, /publishHomeRows\(homeRowsFromWatch\(cachedWatchRowsForHome\(\), true\), opts\);[\s\S]{0,280}scheduleHomePersonalRefresh/,
+    'home first paint must not fetch Because-you-watched rows before watch state or splash-ready');
+  assert.match(ui, /if \(!opts\.catalogOnly\) \{\s*scheduleHomeCatalogRefresh\(\);\s*scheduleHomePersonalRefresh\(cw\);/,
+    'personal home rows hydrate after the first real watch paint, not on the splash path');
+  assert.match(ui, /function scheduleHomePersonalRefresh\(cw\) \{[\s\S]+if \(S\._booting\) \{[\s\S]+setTimeout\(\(\) => scheduleHomePersonalRefresh\(cw\), 400\)[\s\S]+\(window\.requestIdleCallback \|\| \(\(f\) => setTimeout\(f, 400\)\)\)\(start\)/,
+    'Because-you-watched rows wait for idle and for the splash to drop');
+  assert.match(ui, /rows\.push\(\{ name: 'Because you watched ' \+ seed\.title, poster: true, items \}\)/,
+    'home can add a Because you watched row from TMDB recommendations');
+  assert.match(ui, /api\('\/api\/tmdb\/collection\/' \+ col\.id\)/,
+    'movie collections fold in after idle, from belongs_to_collection');
+  assert.match(ui, /function homeRowsFromWatch\(cw, loading = false\) \{[\s\S]+if \(cwItems\.length\) rows\.push\(\{ name: 'Continue watching', items: cwItems \}\);[\s\S]+Live TV — your channels[\s\S]+r\.name === 'Trending today'[\s\S]+rows\.push\(\.\.\.cachedHomePersonalRows\(\)\);[\s\S]+homeKidsRowName\(r\.name\)/,
+    'Home order is Continue watching, IPTV favorites, Trending today, Because you watched, then Kids');
   assert.match(ui, /const cw = opts\.watchReady \? cachedWatchRowsForHome\(\) : await loadWatchState\(\)\.catch\(\(\) => \[\]\);[\s\S]+if \(runId !== S\._homeLoadRun && !opts\.catalogOnly\) return;[\s\S]+publishHomeRows\(homeRowsFromWatch\(cw, false\), \{ preserveFocus: !!opts\.preserveFocus, focusSnapshot: opts\.focusSnapshot \}\);[\s\S]+scheduleHomeCatalogRefresh\(\);/,
     'home should refresh with real watch rows and schedule TMDB catalog refresh after first paint');
   assert.doesNotMatch(ui, /const catalogJob = loadHomeCatalogRows|rows\.push\(\.\.\.await catalogJob\)/,
@@ -2321,7 +2353,7 @@ test('Continue Watching: a blocked live source health check advances the same pl
   assert.strictEqual(S.healthTimer, null);
   assert.strictEqual(S._healthKickT, null);
   assert.ok(cleared.length >= 2, 'both scheduled health timers are cancelled before source replacement');
-  assert.match(toasts[0], /switching releases/);
+  assert.deepStrictEqual(toasts, [], 'a successful source swap stays quiet — the next release is the product, not an error toast');
 });
 
 test('Android native player: direct source and native chrome stay out of the web player', () => {
@@ -3674,7 +3706,15 @@ test('Android native player: direct source and native chrome stay out of the web
   // The column's right edge must EQUAL the content boundary `calc(--rail + --overscan)`. Trimming
   // the width desyncs them and a scrolled-out cover gets sliced in open space beside the menu,
   // leaving a stray sliver of artwork (owner, 2026-08-06).
-  assert.match(ui, /body\.tv:not\(\.railOpen\) #rail:not\(\.expanded\)\{\s*width:calc\(72px \+ var\(--overscan\)\)!important;align-items:center;\s*\n\s*padding-left:0!important;padding-right:0!important/,
+  assert.match(ui, /--rail:64px;/,
+    'collapsed desktop/TV content offset uses 64px — must stay in lockstep with #rail width and the TV compact calc');
+  assert.match(ui, /#rail\{position:fixed;[^}]*width:64px;/,
+    'the collapsed rail column itself is 64px (8px pad + 48px buttons + 8px)');
+  assert.match(ui, /body\.mobileShell\{--rail:0px\}/,
+    'phone shell must keep a 0 rail offset so the 64px collapse cannot leave a empty strip');
+  assert.match(ui, /body\.mobileShell nav#rail\{transform:translateX\(-110%\);[^}]*width:248px!important/,
+    'phone menu is an off-canvas 248px drawer, not the collapsed 64px icon rail');
+  assert.match(ui, /body\.tv:not\(\.railOpen\) #rail:not\(\.expanded\)\{\s*width:calc\(64px \+ var\(--overscan\)\)!important;align-items:center;\s*\n\s*padding-left:0!important;padding-right:0!important/,
     'the collapsed TV rail centres its icons and ends exactly on the content boundary (no sliver gap)');
   // The LAYOUT rule may not touch background; the PERF rule (below) deliberately deepens only
   // background-color while dropping the live blur — unblurred glass at .62 would show the raw
@@ -3782,12 +3822,11 @@ test('Android native player: direct source and native chrome stay out of the web
     'collapsed rail section labels are display:none so every icon gap is identical');
   assert.match(ui, /body\.tv #rail:hover \.railSec,#rail\.expanded \.railSec,body\.railOpen \.railSec\{height:auto;opacity:\.7;display:block\}/,
     'expanded rail restores the section labels');
-  // Compact icon gaps must be IDENTICAL. Rail grouping puts a 10px margin on the first item of each
-  // group; with no section labels visible those gaps read as random, and they land on arbitrary
-  // items because Live TV / Music are display:none when unconfigured. Verified on-device: compact
-  // gaps went from 16,6,6,6,16,6,16,6 to a uniform 6. #railAddLib keeps margin-top:auto (bottom pin).
-  assert.match(ui, /body\.tv:not\(\.railOpen\) #rail:not\(\.expanded\) #railMain > \*:not\(#railAddLib\)\{\s*\n\s*margin-top:0!important;margin-bottom:0!important\}/,
-    'the compact TV menu gives every icon the same gap (grouping margins only apply when expanded)');
+  // Compact icon gaps must be IDENTICAL. Grouping used to put 10–14px on Search/Movies/Live/Music
+  // so Calendar→Movies was 20px while Movies→TV was 6px. Those extra margins are gone; this rule
+  // still zeros leftovers on compact TV/desktop. #railAddLib keeps margin-top:auto (bottom pin).
+  assert.match(ui, /#rail:not\(\.expanded\):not\(:hover\) #railMain > \*:not\(#railAddLib\),\s*\nbody\.tv:not\(\.railOpen\) #rail:not\(\.expanded\) #railMain > \*:not\(#railAddLib\)\{\s*\n\s*margin-top:0!important;margin-bottom:0!important\}/,
+    'the compact menu gives every icon the same gap (no leftover section margins)');
   // The rail is FLUSH to the TV edge and full height; --overscan moved INSIDE as padding, so the
   // icons keep their title-safe position and `calc(--rail + --overscan)` still lands exactly on the
   // rail's right edge — the surface changed, the layout did not.
@@ -3878,7 +3917,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'the rail widens to its measured width on TV hover, the .expanded class (desktop hover), or D-pad railOpen');
   assert.match(ui, /const RAIL_W_MIN = 236, RAIL_W_MAX = 300;/,
     'the measured rail must never be NARROWER than the fixed 236px menu it replaced');
-  assert.match(ui, /body\.railOpen #bdInfo\{transform:translateX\(calc\(var\(--railExpandedW,236px\) - 84px\)\)\}/,
+  assert.match(ui, /body\.railOpen #bdInfo\{transform:translateX\(calc\(var\(--railExpandedW,236px\) - var\(--rail\)\)\)\}/,
     'the content push must TRACK the measured rail width, or a wider menu overlays the first cover');
   // Padding must MATCH on both sides. Growing only padding-left by --overscan left the active/focus
   // pill with ~17px on the left but ~8px on the right, where the rail's 18px rounded corner plus
@@ -4840,11 +4879,13 @@ test('Android native player: direct source and native chrome stay out of the web
     'the player guide lands on the tune-origin category, falling back to the channel genre');
   assert.match(ui, /if \(!list\.length\) list = S\.liveList = \(fav\.channels \|\| \[\]\)\.map\(liveItemForPlayerGuide\)\.filter\(Boolean\);/,
     'a channel-cache refresh only fills an EMPTY zap list — an active favorites/category context survives');
-  // Continue Watching covers resume on one press (TV/native): movies now match episodes and the
-  // hero Resume button; browsers keep the detail-first quality stop; fresh titles still open
-  // details everywhere; Details stays on the hold-OK/⋯ card menu.
-  assert.match(ui, /if \(isContinueWatchingItem\(it\) && \(\+it\.resume \|\| 0\) > 0 && !it\._local\) \{[\s\S]{0,600}if \(isWebBrowserClient\(\)\) return openDetail\(detailTargetForItem\(it\)\);[\s\S]{0,80}return play\(it\);/,
-    'a Continue Watching cover with real resume plays directly on TV shells and stops at details only in web browsers');
+  // Continue Watching covers resume on one press everywhere: movies match episodes and the
+  // hero Resume button; browsers already cap at 1080p; fresh titles still open details;
+  // Details stays on the hold-OK/⋯ card menu.
+  assert.match(ui, /if \(isContinueWatchingItem\(it\) && \(\+it\.resume \|\| 0\) > 0 && !it\._local\) \{[\s\S]{0,700}return play\(it\);/,
+    'a Continue Watching cover with real resume plays directly on every client');
+  assert.doesNotMatch(ui, /if \(isContinueWatchingItem\(it\) && \(\+it\.resume \|\| 0\) > 0 && !it\._local\) \{[\s\S]{0,700}isWebBrowserClient\(\)/,
+    'web browsers no longer stop Continue Watching at the details page');
   assert.match(ui, /async function renderLiveEpgStrip\(idx\) \{[\s\S]+fetchGuideBatch\(\[ch\]\)[\s\S]+paintLiveEpgStrip\(\)/,
     'live player should fetch the channel schedule and paint a top EPG strip');
   assert.match(ui, /function paintLiveEpgStrip\(\) \{[\s\S]+horizon = now \+ 2 \* 3600000[\s\S]+epgCell\$\{isNow \? ' now' : ''\}/,
@@ -5109,6 +5150,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'the native audio round-trip respawns the current stream kind at position with the chosen track');
   assert.match(ui, /refreshNativeAudioChoices\(\); \/\/ probe may resolve after handoff/,
     'late track-probe results refresh the native audio menu');
+  assert.match(ui, /if \(!opts\.quietSeek\) applyInitialAudioPreference\(p\);/,
+    'native remux/transcode URLs bake in the preferred audio track before handoff');
+  assert.match(ui, /function maybeApplyNativePreferredAudio\(p\) \{[\s\S]{0,350}currentPlayerKind\(p\) === 'direct'\) return;[\s\S]{0,250}window\.__tvNativeVideoAudio\(best\.rel/,
+    'late native probe quietly respawns remux onto English instead of leaving Italian track 0');
+  assert.match(ui, /p\._userPickedAudio = true;[\s\S]{0,80}p\.usingNative = false;[\s\S]{0,40}p\.audioTrack = want\.rel;/,
+    'a native Audio-menu pick is sticky and is not overwritten by the English default');
   // MOVIES must never show the Next Episode button, not even grayed: hasNext is type-based from
   // web (episodes only), and the periodic chrome tick used to force the button visible for all
   // non-live playback — a movie player showed a dead "Next episode" control.

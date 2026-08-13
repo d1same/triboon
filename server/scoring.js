@@ -168,13 +168,27 @@ function normalizeLanguageCode(raw) {
   if (!s) return '';
   return LANGUAGE_ALIASES.get(s) || s.slice(0, 2);
 }
+function releaseLanguageTags(name) {
+  const out = [];
+  const seen = new Set();
+  const re = new RegExp(LANG_TAG.source, 'gi');
+  let m;
+  while ((m = re.exec(String(name || '')))) {
+    const code = normalizeLanguageCode(m[1]);
+    if (!code || seen.has(code)) continue;
+    seen.add(code);
+    out.push(code);
+  }
+  return out;
+}
 function releaseLanguageTag(name) {
-  const m = LANG_TAG.exec(String(name || ''));
-  return m ? normalizeLanguageCode(m[1]) : '';
+  return releaseLanguageTags(name)[0] || '';
 }
 function hasEnglishAudioHint(name) {
   const n = String(name || '');
   if (VOST_TAG.test(n) && !/\b(truefrench|vff|vfq|vf2)\b/i.test(n)) return false;
+  // "English" next to a sub token is captions, not an English soundtrack.
+  if (/\b(?:eng(?:lish)?[ ._-]?subs?|subs?[ ._-]?eng(?:lish)?|engsub)\b/i.test(n) && !isDualAudio(n)) return false;
   return /\b(english|eng)\b/i.test(n) || /\b(en[ ._-]?ita|ita[ ._-]?eng)\b/i.test(n);
 }
 
@@ -224,8 +238,16 @@ function scoreRelease(candidate, policy = {}) {
   // only play when nothing exact exists. +20 breaks same-tier ties without outranking a full
   // resolution step (RES_LADDER spacing ≥30) or a group-tier bump.
   if (Number.isInteger(policy.wantedYear)) {
-    const years = [...String(candidate.name || '').matchAll(/\b(19|20)\d{2}\b/g)].map((m) => +m[0]);
+    // Leading year tokens are the TITLE (1917, 1923, 2012). Only a year AFTER the title is
+    // a scene release year (Lioness.2023, Movie.2024). Rank only — never hide.
+    const toks = String(candidate.name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/);
+    const years = [];
+    for (let i = 0; i < toks.length; i++) {
+      if (i === 0 || !/^(19|20)\d{2}$/.test(toks[i])) continue;
+      years.push(+toks[i]);
+    }
     if (years.includes(policy.wantedYear)) add('exact year', 20);
+    else if (years.length && !years.some((y) => Math.abs(y - policy.wantedYear) <= 1)) add('wrong year', -250);
   }
 
   const src = matchOne(candidate.name, SOURCE); if (src) add(`source ${src.key}`, src.score);
@@ -273,21 +295,30 @@ function scoreRelease(candidate, policy = {}) {
   // French/German dub. +400 preferred-4K used to outrun the old −150/−350 penalties.
   // VOSTFR is original audio + foreign subs, not a dub. Unlabeled MULTi is a mild hit so
   // a clean English WEB-DL still wins, but a MULTI with English aboard can still play.
+  // The word "English" is a weak hint, not proof — French/Italian dubs print it for subs
+  // or ITA.ENG duals, and Lioness YELLO/HONE names said English while the file was French.
+  // Read EVERY language token: a FRENCH/VFF/GERMAN tag without MULTi/DL is a dub even if
+  // English also appears. Untagged English-original WEB-DLs are assumed original audio
+  // (almost the same weight as a clean English token) so NTb/FLUX are not 80 points behind.
   const originalLang = normalizeLanguageCode(policy.originalLanguage);
   const preferredAudio = normalizeLanguageCode(policy.preferredAudioLanguage || 'en') || 'en';
   const dual = isDualAudio(candidate.name);
   const vost = VOST_TAG.test(candidate.name) && !/\b(truefrench|vff|vfq|vf2)\b/i.test(candidate.name);
-  const taggedLang = vost ? '' : releaseLanguageTag(candidate.name);
+  const tags = vost ? [] : releaseLanguageTags(candidate.name);
+  const taggedLang = tags[0] || '';
+  const foreignDubTags = tags.filter((t) => t !== preferredAudio && (!originalLang || t !== originalLang));
   const englishHint = hasEnglishAudioHint(candidate.name);
-  const matchesPreferred = (taggedLang && taggedLang === preferredAudio) || (preferredAudio === 'en' && englishHint);
-  const matchesOriginal = originalLang && taggedLang === originalLang && taggedLang !== preferredAudio;
+  const matchesPreferred = tags.includes(preferredAudio) || (preferredAudio === 'en' && englishHint && !foreignDubTags.length);
+  const matchesOriginal = originalLang && tags.includes(originalLang) && originalLang !== preferredAudio;
   if (vost && (!originalLang || originalLang === 'en' || originalLang === preferredAudio)) {
     add('original-audio-foreign-subs', 10);
   } else if (vost && originalLang && originalLang !== preferredAudio) {
     add('original-language', -20);
     if (preferredAudio === 'en') add('no-preferred-audio-hint', -40);
+  } else if (foreignDubTags.length && !dual) {
+    add('foreign-dub', -800);
   } else if (matchesPreferred) {
-    add(dual ? 'preferred-dual-audio' : 'preferred-language', dual ? 40 : 80);
+    add(dual ? 'preferred-dual-audio' : 'preferred-language', dual ? 40 : 60);
   } else if (matchesOriginal) {
     add(dual ? 'original-dual-audio' : 'original-language', dual ? 20 : -20);
     if (!dual && preferredAudio === 'en') add('no-preferred-audio-hint', -40);
@@ -295,6 +326,11 @@ function scoreRelease(candidate, policy = {}) {
     add(dual ? 'foreign-dual' : 'foreign-dub', dual ? -600 : -800);
   } else if (dual && !englishHint) {
     add('unlabeled-multi', -120);
+  } else if (!originalLang || originalLang === preferredAudio) {
+    add(dual ? 'assumed-original-dual' : 'assumed-original-audio', dual ? 30 : 50);
+  } else {
+    add('assumed-original-language', -20);
+    if (preferredAudio === 'en') add('no-preferred-audio-hint', -40);
   }
 
   // Admin scoring tweaks (TRaSH-style "custom formats" lite). The built-in weights are the
@@ -474,4 +510,4 @@ function rankAudiobooks(candidates, policy = {}) {
     .map(({ _i, ...c }) => c);
 }
 
-module.exports = { parseRelease, scoreRelease, rankReleases, notTheMovie, normalizeLanguageCode, releaseLanguageTag, RES, SOURCE, parseAudiobook, scoreAudiobook, rankAudiobooks, audiobookLanguage };
+module.exports = { parseRelease, scoreRelease, rankReleases, notTheMovie, normalizeLanguageCode, releaseLanguageTag, releaseLanguageTags, RES, SOURCE, parseAudiobook, scoreAudiobook, rankAudiobooks, audiobookLanguage };

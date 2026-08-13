@@ -190,6 +190,10 @@ test('Windows client: Rust owns a persistent, observable D3D11/libmpv player', (
   assert.match(player, /d3d11/i, 'Windows rendering selects D3D11');
   assert.match(player, /hwdec-current/i, 'runtime hardware decoder state is observed');
   assert.match(player, /"audioId": ui\.audio_id/, 'runtime stats expose the selected audio track');
+  assert.match(player, /fn mpv_alang\(pref: &str\) -> String \{[\s\S]{0,200}"eng,en"/,
+    'Windows libmpv prefers English audio unless the payload asks for another language');
+  assert.match(player, /mpv\.set_property\("alang", mpv_alang\(&session\.preferred_audio_language\)/,
+    'ITA.ENG files start on English because load_session sets mpv alang');
   assert.match(player, /time-pos/i, 'native progress uses mpv playback time');
   assert.match(player, /demuxer-cache|cache-duration|paused-for-cache/i, 'buffering is observable');
   assert.match(player, /playback_token|playbackToken/i, 'events carry playback identity');

@@ -125,6 +125,35 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-13, v2.9.10 Lioness title-index merge + year rank + quiet fallbacks:
+
+- Version contract: `package.json` 2.9.10; Android `versionName` 2.9.10 /
+  `versionCode` 328; Windows client package/Tauri/Cargo 2.9.10.
+- Episode searches that already have a TVDB/IMDb id also fan out a plain
+  title query, so Lioness/Lucky WEB-DLs in the title index join the ID-tagged
+  leftovers. Year is ranking-only (exact year +20, wrong year after the title
+  -250); it never hides a row. BEST sorts by score. Recovery toasts stay
+  quiet when the next file already started. Windows libmpv honors preferred
+  English audio.
+- `npm.cmd test` 565/565. `npm.cmd run verify:full -- -AndroidDevice
+  emulator-5554 -AndroidHostServerPort 7777` passed whitespace, JS syntax,
+  web parse, focused P9/P14/P11, full Node suite, isolated `/api/server`
+  2.9.10 smoke, household VOD/IPTV/overlapping Play, and Android
+  lint/native-unit/debug build. First Android stress hit the known
+  post-install CDP session-bounce; rerun
+  `bench/stress-results/android-tv-stress-20260813-193059.json` is `ok: true`
+  with zero failures/warnings (native live zaps, Weapons 1080p remux seeks,
+  CC 200).
+- Household live on `http://localhost:7777` (v2.9.10): Mario 4K
+  4061ms/3225ms/209ms/13ms (ready+first-byte SLOW, stream OK, English-HONE);
+  FROM S01E01 8789ms/129ms/429ms/26ms; overlapping Play 10ms/22ms first-byte
+  4ms/7ms; IPTV ABC then ESPN web+native first-bytes OK.
+- Left out of this ship on purpose: Because-you-watched still seeds from the
+  latest Continue Watching card (a 5-minute bounce can still name the row);
+  The Office AU can still win a 4K pick for the US show.
+- Unverified on this run: Windows native GPU/HDR, signed-in browser
+  click-through, and episode-handoff / nested Back / CW source recovery.
+
 2026-08-13, v2.9.9 publication of the 2.9.8 app:
 
 - Version contract: `package.json` 2.9.9; Android `versionName` 2.9.9 /

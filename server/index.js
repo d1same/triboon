@@ -3660,7 +3660,11 @@ function parseLanguageCode(raw) {
   const s = String(raw || '').trim().toLowerCase().replace(/[^a-z]/g, '').slice(0, 3);
   return /^[a-z]{2,3}$/.test(s) ? s : null;
 }
-function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage, caps: rawCaps } = {}) {
+function parseCatalogYear(raw) {
+  const n = parseInt(raw, 10);
+  return Number.isInteger(n) && n >= 1900 && n <= 2100 ? n : null;
+}
+function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage, year, caps: rawCaps } = {}) {
   let policy = { ...user.policy, ...sizeCaps(), ...scoringPrefs() };
   const caps = parseCaps(rawCaps || {});
   const maxRank = parseResolutionRank(maxResolutionRank);
@@ -3676,6 +3680,8 @@ function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, orig
   const preferredAudio = parseLanguageCode(preferredAudioLanguage);
   if (original) policy.originalLanguage = original;
   policy.preferredAudioLanguage = preferredAudio || 'en';
+  const wantedYear = parseCatalogYear(year);
+  if (wantedYear) policy.wantedYear = wantedYear;
   if (caps.native) {
     policy.deviceCaps = caps;
     policy.dolbyVision = !!caps.dovi;
@@ -4871,6 +4877,7 @@ const H = {
         preferResolutionRank: ctx.url.searchParams.get('preferResolutionRank'),
         originalLanguage: ctx.url.searchParams.get('originalLanguage'),
         preferredAudioLanguage: ctx.url.searchParams.get('preferredAudioLanguage'),
+        year: ctx.url.searchParams.get('year'),
         caps: parseCapsQuery(ctx.url.searchParams.get('caps')),
       })
     );

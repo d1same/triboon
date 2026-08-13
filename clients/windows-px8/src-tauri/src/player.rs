@@ -129,6 +129,8 @@ pub struct VodPayload {
     quiet_seek: bool,
     #[serde(default)]
     percent_resume: bool,
+    #[serde(default)]
+    preferred_audio_language: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -495,6 +497,7 @@ struct VodRequest {
     episode_choices: Vec<Value>,
     quiet_seek: bool,
     percent_resume: bool,
+    preferred_audio_language: String,
 }
 
 #[derive(Debug, Clone)]
@@ -576,6 +579,7 @@ fn validate_vod(payload: VodPayload, server: &str) -> Result<VodRequest, String>
         episode_choices: payload.episode_choices,
         quiet_seek: payload.quiet_seek,
         percent_resume: payload.percent_resume,
+        preferred_audio_language: payload.preferred_audio_language.chars().take(16).collect(),
     })
 }
 
@@ -1522,6 +1526,7 @@ struct NativeSession {
     duration_hint: f64,
     buffer_goal_sec: u32,
     subtitle: SubtitleRequest,
+    preferred_audio_language: String,
     ready: bool,
     start_seen: bool,
     file_loaded: bool,
@@ -1593,6 +1598,7 @@ impl NativeSession {
             duration_hint: request.duration,
             buffer_goal_sec: request.buffer_goal_sec,
             subtitle: request.subtitle,
+            preferred_audio_language: request.preferred_audio_language,
             ready: false,
             start_seen: false,
             file_loaded: false,
@@ -1635,6 +1641,7 @@ impl NativeSession {
                 size: String::new(),
                 startup: false,
             },
+            preferred_audio_language: String::new(),
             ready: false,
             start_seen: false,
             file_loaded: false,
@@ -1915,6 +1922,16 @@ fn loadfile_options(start: f64, host_header: &str) -> Option<String> {
     (!options.is_empty()).then(|| options.join(","))
 }
 
+// mpv picks the FIRST audio track unless alang is set. ITA.ENG files would start in Italian.
+fn mpv_alang(pref: &str) -> String {
+    let s = pref.trim().to_ascii_lowercase();
+    if s.is_empty() || s == "en" || s == "eng" || s == "english" {
+        "eng,en".into()
+    } else {
+        format!("{s},eng,en")
+    }
+}
+
 #[cfg(all(feature = "player", target_os = "windows"))]
 fn load_session(mpv: &libmpv2::Mpv, session: &mut NativeSession) -> Result<(), String> {
     let candidate = session
@@ -1945,6 +1962,8 @@ fn load_session(mpv: &libmpv2::Mpv, session: &mut NativeSession) -> Result<(), S
     )
     .map_err(|e| e.to_string())?;
     mpv.set_property("force-media-title", session.ui.title.as_str())
+        .map_err(|e| e.to_string())?;
+    mpv.set_property("alang", mpv_alang(&session.preferred_audio_language).as_str())
         .map_err(|e| e.to_string())?;
     let mut start = session.start;
     if session.mode == SessionMode::Vod
@@ -2938,6 +2957,9 @@ mod tests {
             Some("start=12.500,http-header-fields=Host:provider.example")
         );
         assert!(loadfile_options(0.0, "").is_none());
+        assert_eq!(mpv_alang(""), "eng,en");
+        assert_eq!(mpv_alang("en"), "eng,en");
+        assert_eq!(mpv_alang("fra"), "fra,eng,en");
     }
 
     #[test]
@@ -3060,6 +3082,7 @@ mod tests {
             episode_choices: Vec::new(),
             quiet_seek: false,
             percent_resume: false,
+            preferred_audio_language: String::new(),
         };
         let session = NativeSession::from_vod(request);
         assert_eq!(session.display_position(4.25), 124.75);

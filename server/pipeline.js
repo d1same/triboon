@@ -1074,12 +1074,19 @@ class Pipeline {
     // Start the short-title alias in parallel with the main query so Play does not wait
     // 2s + 2s when both are needed. Merge after both land; empty-result fallbacks stay serial.
     const aliasQ = shortTitleQuery(params.q, wanted);
+    const idSearch = !!(params.imdbid || params.tvdbid);
+    const season = Number(params.season);
+    const ep = Number(params.ep);
+    const episodeSearch = Number.isInteger(season) && Number.isInteger(ep) && season >= 0 && ep > 0;
+    // Branded catalog titles ("Special Ops: Lioness") need the unique half. TMDB now names that
+    // show just "Lioness", so there is no alias — but tvsearch+tvdbid still only returns the few
+    // ID-tagged Special.Ops.Lioness leftovers. Always pair an id episode search with a plain
+    // t=search of the same q so Lioness.S01E01 WEB-DLs actually show up.
+    const titleQ = aliasQ || (idSearch && episodeSearch ? params.q : '');
     let aliasP = null;
-    if (aliasQ) {
+    if (titleQ) {
       ixs.forEach((ix) => this.usage.onSearch(ix.name));
-      const aliasParams = { ...params, q: aliasQ };
-      delete aliasParams.imdbid;
-      delete aliasParams.tvdbid;
+      const aliasParams = { q: titleQ };
       aliasP = this._fanoutMeasured(ixs, aliasParams, { timeoutMs });
     }
     let { results, errors } = await this._fanoutMeasured(ixs, params, { timeoutMs });

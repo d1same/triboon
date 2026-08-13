@@ -38,7 +38,7 @@
   --scrim:linear-gradient(0deg,rgba(11,8,18,.85) 0%,rgba(11,8,18,.30) 24%,rgba(11,8,18,.04) 50%);
   --grad:var(--coral);
   --r:14px;
-  --rail:72px;       /* sidebar width; grows on hover so content slides right (Plex push) */
+  --rail:64px;       /* collapsed sidebar; grows on hover so content slides right (Plex push) */
   --heroLeft:clamp(4px,5vw,190px); /* resolution-adaptive title indent (home hero, page heads, backdrop info) */
   --poster:168px;    /* standardized poster cover width everywhere */
   --gut:28px;        /* content gutter — tight to the rail (owner: no dead strip by the menu) */
@@ -62,11 +62,9 @@
   body.railOpen #home,body.railOpen #discover,body.railOpen #browse,body.railOpen #detail,
   body.railOpen #person,body.railOpen #settings,body.railOpen #prefs,body.railOpen #searchBar,
   body.railOpen #music,body.railOpen #audiobooks,
-  /* The push TRACKS the expanded rail width (it was a hard-coded 152px, which was exactly
-     236 - 84 back when the menu was a fixed 236px slab). Now that the width is measured and can
-     grow to 300px for a long custom-library name, a fixed push would let the wider menu eat into
-     the first cover; deriving it keeps the same clearance at every width. */
-  body.railOpen #bdInfo{transform:translateX(calc(var(--railExpandedW,236px) - 84px))} /* #bdInfo is fixed-pos OUTSIDE the pages — without it the browse backdrop title stayed put while the grid slid. #prefs too: it used to load UNDER the expanded menu. */
+  /* The push TRACKS the expanded rail width minus the collapsed --rail, so the first cover
+     stays clear of the labels. */
+  body.railOpen #bdInfo{transform:translateX(calc(var(--railExpandedW,236px) - var(--rail)))} /* #bdInfo is fixed-pos OUTSIDE the pages — without it the browse backdrop title stayed put while the grid slid. #prefs too: it used to load UNDER the expanded menu. */
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%}
@@ -206,8 +204,8 @@ body.tv{transition:none}
 
 /* ---------- rail (expands on hover) ---------- */
 /* Collapsed rail: NO background at all — it lives on the ink like the rest of the page.
-   Width 72 = 12px padding + 48px buttons + 12px, so left/right spacing is symmetric. */
-#rail{position:fixed;z-index:22;left:calc(var(--safeL) + var(--overscan));top:calc(var(--safeT) + var(--overscan));bottom:calc(var(--safeB) + var(--overscan));width:72px;display:none;flex-direction:column;align-items:stretch;gap:8px;padding:14px 12px 18px;
+   Width 64 = 8px padding + 48px buttons + 8px, so left/right spacing is symmetric. */
+#rail{position:fixed;z-index:22;left:calc(var(--safeL) + var(--overscan));top:calc(var(--safeT) + var(--overscan));bottom:calc(var(--safeB) + var(--overscan));width:64px;display:none;flex-direction:column;align-items:stretch;gap:8px;padding:14px 8px 18px;
   background:none;overflow:hidden;
   /* Chromium makes scrollable containers keyboard-focusable: when native focus lands on the
      rail (or any scroller) the UA paints its own bright outline — "the menu shows borders".
@@ -230,8 +228,7 @@ body.tv{transition:none}
 #rail.show{display:flex}
 #railMain{min-height:0;flex:1 1 auto;display:flex;flex-direction:column;align-items:stretch;gap:6px;overflow-x:hidden;overflow-y:auto;padding-bottom:4px;scroll-padding-bottom:10px;scrollbar-width:none}
 #railMain::-webkit-scrollbar{width:0;height:0}
-/* Expanded = a real overlay (collapsed is 72px; var(--rail) ALSO became 72px in a restyle,
-   which silently turned expansion into a no-op — labels faded in but stayed clipped).
+/* Expanded = a real overlay (collapsed is --rail; that var must stay in sync with #rail width).
    Translucent + blurred so the content stays present behind it (Plex-style). */
 /* Expanded: still NO background (owner: completely transparent) — the content pushes right,
    so labels sit over the page's own dark left gutter and stay readable. */
@@ -242,7 +239,7 @@ body.tv{transition:none}
    past it ellipses. 236px is also the pre-measurement fallback. */
 body.tv #rail:hover,#rail.expanded,body.railOpen #rail{width:var(--railExpandedW,236px)}
 /* Icons sit in a FIXED-width slot so they never move horizontally on expand/collapse;
-   only the label is revealed. Slot width = collapsed inner width (84 - 2*12 padding = 60). */
+   only the label is revealed. Slot width = collapsed inner width (64 - 2*8 padding = 48). */
 #rail .logo{width:max-content;min-width:48px;height:34px;margin:0 0 22px;flex:none;padding:0;display:flex;align-items:center;gap:10px}
 #rail .logo img{width:34px;height:34px;flex:0 0 34px;margin:0 7px;object-fit:contain;filter:none}
 .railBtn{height:48px;border-radius:13px;display:flex;align-items:center;justify-content:flex-start;color:var(--muted);position:relative;padding:0;flex:none;transition:background .15s,color .15s}
@@ -299,12 +296,10 @@ body[data-spotlight] .railBtn.focusable.focus,body[data-spotlight] .railBtn:focu
 body[data-spotlight] #railUser.focusable.focus,body[data-spotlight] #railUser:focus-visible{transform:none}
 .railBtn.focusable.focus::after,.railBtn:focus-visible::after{height:24px;box-shadow:0 0 14px var(--focusSoft)}
 .railBtn.active.focusable.focus,.railBtn.active:focus-visible{background:var(--soft)}
-/* Rail grouping (owner-approved redesign, 2026-08-05): the nav reads as SECTIONS — browse
-   (search/home/watchlist/discover/calendar), video libraries (movies/tv + local libs), live,
-   audio — instead of one flat run. The admin "+ Add library" sinks to the bottom of the column
-   and dims until pointed at. TV uses tighter gaps so fitRailToFullIcons keeps every icon row. */
-.railBtn[data-nav="search"],.railBtn[data-nav="movies"],#navLiveTv,#navMusic{margin-top:14px}
-body.tv .railBtn[data-nav="search"],body.tv .railBtn[data-nav="movies"],body.tv #navLiveTv,body.tv #navMusic{margin-top:10px}
+/* Rail grouping used to add 14px (10px on TV) above Search/Movies/Live/Music. Combined with
+   railMain's 6px gap that made Movies→TV 6px and Calendar→Movies 20px — the icons looked randomly
+   spaced (owner, 2026-08-13: match every gap to Movies/TV). Grouping stays for expanded LABELS
+   only; the icon column itself is one even 6px rhythm. Add library still sinks to the bottom. */
 #railAddLib{margin-top:auto;opacity:.7}
 #railAddLib:hover,#railAddLib.focus,#railAddLib:focus-visible{opacity:1}
 .railBtn .del{margin-left:auto;margin-right:12px;opacity:0;color:var(--muted);font-size:15px;width:18px;flex:none}
@@ -319,7 +314,7 @@ body.tv #rail:hover .railSec,#rail.expanded .railSec,body.railOpen .railSec{heig
 #railLibs{display:contents}
 #railAddLib{margin-bottom:0}
 /* Utility footer stays visible even when libraries overflow the 720p rail. */
-#railUser{height:48px;border-radius:13px;display:flex;align-items:center;justify-content:flex-start;color:var(--muted);flex:none;padding:0;margin:0 0 10px;position:relative}
+#railUser{height:48px;border-radius:13px;display:flex;align-items:center;justify-content:flex-start;color:var(--muted);flex:none;padding:0;margin:0;position:relative}
 #railUser::before{display:none}
 #railUser:hover{color:var(--text);background:rgba(43,32,63,.48)}
 #railUser.focusable::before{top:auto;left:8px;right:8px;bottom:-6px;height:1px;padding:0;border-radius:0;background:var(--line);opacity:1;
@@ -332,20 +327,16 @@ body.tv #rail:hover .railSec,#rail.expanded .railSec,body.railOpen .railSec{heig
 /* Collapsed TV rail. The fill was once `transparent!important`, which erased the panel entirely and
    left the compact menu as bare floating icons; it is now simply NOT overridden, so it keeps the
    shared glass (translucent + blurred + rounded) that the web build uses and the owner asked for.
-   The column is --overscan WIDER than the 72px app rail because it now reaches the screen edge.
+   The column is --overscan WIDER than the 64px app rail because it now reaches the screen edge.
    Both paddings are ZERO so `align-items:center` splits that extra width evenly and the 48px icon
    slot sits dead-centre: the first cut put the whole --overscan on the LEFT, which left the icons
    with `overscan + 12` of space on one side and `12` on the other — visibly off-centre on the
    Shield (owner, 2026-08-06). Even at 0 padding the icons still clear the title-safe margin.
-   The width is EXACTLY `72px + --overscan` so the column's right edge coincides with the content
-   boundary `calc(--rail + --overscan)`. A brief experiment trimmed 4px off to tighten the icons,
-   but that desynced the two edges: rows still clipped at the content boundary while the menu ended
-   4px earlier, so a scrolled-out cover was sliced in open space and the leftover sliver looked like
-   a stray piece of artwork parked next to the menu (owner, 2026-08-06). Keeping the edges identical
-   makes covers disappear exactly AT the menu, which is how the web build reads. Do not reintroduce
-   an offset here without moving the row scrollers by the same amount. */
+   The width is EXACTLY `--rail + --overscan` so the column's right edge coincides with the content
+   boundary `calc(--rail + --overscan)`. Keep --rail and this width in lockstep so covers clip
+   at the menu instead of leaving a sliver of artwork beside it (owner, 2026-08-06). */
 body.tv:not(.railOpen) #rail:not(.expanded){
-  width:calc(72px + var(--overscan))!important;align-items:center;
+  width:calc(64px + var(--overscan))!important;align-items:center;
   padding-left:0!important;padding-right:0!important;
   /* The shared fade is `#rail:not(.expanded):not(:hover)` (+ a :focus-within exception). BOTH of
      those guards fail on a real Android TV: the WebView leaves :hover LATCHED after remote
@@ -385,13 +376,10 @@ body.tv:not(.railOpen) #rail:not(.expanded) .rlabel,
 body.tv:not(.railOpen) #rail:not(.expanded) #railUser .rlabel,
 body.tv:not(.railOpen) #rail:not(.expanded) .logo .wordmark{max-width:0!important;opacity:0!important}
 body.tv:not(.railOpen) #rail:not(.expanded) .railSec{height:0!important;opacity:0!important;display:none!important}
-/* COMPACT: every icon gap is identical (owner, 2026-08-06: "make sure all the icons have the same
-   spacing"). The rail's grouping adds a 10px margin to the FIRST item of each group, which on top
-   of railMain's 6px gap makes some gaps 16px and others 6px. That grouping is only legible when the
-   section LABELS are visible; compact hides them, so the uneven gaps read as random — and they
-   genuinely land on arbitrary items, because Live TV and Music are display:none when unconfigured
-   and take their group break with them. Expanded keeps the grouping, where the labels explain it.
-   #railAddLib is excluded: its `margin-top:auto` is what pins it to the bottom of the column. */
+/* COMPACT: every icon gap is identical (owner, 2026-08-13: match Movies→TV). Extra section
+   margins are gone from the shared rules; this still zeros any leftover item margin so a
+   hidden Live TV / Music row cannot leave a hole. #railAddLib keeps margin-top:auto. */
+#rail:not(.expanded):not(:hover) #railMain > *:not(#railAddLib),
 body.tv:not(.railOpen) #rail:not(.expanded) #railMain > *:not(#railAddLib){
   margin-top:0!important;margin-bottom:0!important}
 body.tv:not(.railOpen) #rail:not(.expanded) .railBtn .del{opacity:0!important}
@@ -5757,13 +5745,17 @@ function homeCatalogItemOk(kind, x) {
 function homeCatalogItems(result, kind) {
   return ((result && result.results) || []).filter((x) => homeCatalogItemOk(kind, x)).map(mapTmdb);
 }
+function homeCatalogDedupe(items, seen) {
+  if (!seen) return items;
+  return items.filter((it) => {
+    const k = `${it.type || ''}:${it.tmdbId}`;
+    if (!it.tmdbId || seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
 function homeCatalogRow(name, path, result, kind = 'catalog', seen = null) {
-  let all = homeCatalogItems(result, kind);
-  // De-dupe ACROSS rows: drop any title already shown in an earlier row so the sections don't keep
-  // repeating the same popular movies/shows (the "give us new material" ask). Kept titles are
-  // recorded in `seen` so later rows skip them too. Keyed by type:tmdbId (a movie and a show can
-  // share a numeric id).
-  if (seen) all = all.filter((it) => { const k = `${it.type || ''}:${it.tmdbId}`; if (!it.tmdbId || seen.has(k)) return false; seen.add(k); return true; });
+  let all = homeCatalogDedupe(homeCatalogItems(result, kind), seen);
   const page = Math.max(1, parseInt(result && result.page, 10) || 1);
   const totalPages = Math.min(HOME_CATALOG_PAGE_LIMIT, Math.max(page, parseInt(result && result.total_pages, 10) || page));
   return {
@@ -5781,32 +5773,57 @@ function homeCatalogRow(name, path, result, kind = 'catalog', seen = null) {
     },
   };
 }
-// Rotating genre rows give the home page fresh material day-to-day (de-dupe stops them repeating the
-// popular/trending rows). Genre ids are TMDB's ('|' = OR, as in the kids branch); TV genre ids
-// differ from movie ids, so both are listed.
-const HOME_GENRE_ROWS = [
-  { name: 'Action & adventure', mg: '28|12', tg: '10759' },
-  { name: 'Comedy', mg: '35', tg: '35' },
-  { name: 'Sci-fi & fantasy', mg: '878|14', tg: '10765' },
-  { name: 'Thrillers & mystery', mg: '53|9648', tg: '9648' },
-  { name: 'Drama', mg: '18', tg: '18' },
-  { name: 'Crime', mg: '80', tg: '80' },
-  { name: 'Animation', mg: '16', tg: '16' },
-  { name: 'Documentaries', mg: '99', tg: '99' },
-];
-function homeGenrePick(offset) {
-  const day = Math.floor(Date.now() / 86400000);
-  const n = HOME_GENRE_ROWS.length;
-  return HOME_GENRE_ROWS[(((day + offset) % n) + n) % n];
+function interleaveHomeItems(a, b) {
+  const left = Array.isArray(a) ? a : [];
+  const right = Array.isArray(b) ? b : [];
+  const out = [];
+  const n = Math.max(left.length, right.length);
+  for (let i = 0; i < n; i++) {
+    if (left[i]) out.push(left[i]);
+    if (right[i]) out.push(right[i]);
+  }
+  return out;
 }
+function homeMixedCatalogRow(name, lists, seen) {
+  const all = homeCatalogDedupe(interleaveHomeItems(lists[0], lists[1]), seen);
+  return {
+    name,
+    poster: true,
+    items: all.slice(0, HOME_CATALOG_INITIAL),
+    lazy: {
+      path: '',
+      kind: 'catalog',
+      page: 1,
+      totalPages: 1,
+      buffer: all.slice(HOME_CATALOG_INITIAL),
+      loading: false,
+      done: all.length <= HOME_CATALOG_INITIAL,
+    },
+  };
+}
+// Kids shelf: Family + Animation movies up to PG-13, plus TMDB's Kids TV genre (not all
+// animation TV — that list includes adult anime). Same idea as a Max Kids row on a regular profile.
+const HOME_KIDS_MOVIE_PATH = '/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=120&with_genres=16|10751';
+const HOME_KIDS_TV_PATH = '/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=40&with_genres=10762';
 // Fetch every row's first page in PARALLEL, then build rows in ORDER through ONE shared `seen` set —
 // the de-dupe is order-dependent (earlier rows win, later rows drop repeats), so it can't run inside
 // the parallel fetch. Rows that end up empty after de-dupe are dropped.
 async function buildHomeRows(defs) {
   const seen = new Set();
-  const results = await Promise.all(defs.map((d) => api(homeCatalogPathWithPage(d.path, 1)).catch(() => null)));
+  const results = await Promise.all(defs.map((d) => {
+    if (d.mix) {
+      return Promise.all(d.mix.map((m) => api(homeCatalogPathWithPage(m.path, 1)).catch(() => null)));
+    }
+    return api(homeCatalogPathWithPage(d.path, 1)).catch(() => null);
+  }));
   const rows = [];
   defs.forEach((d, i) => {
+    if (d.mix) {
+      const lists = d.mix.map((m, j) => homeCatalogItems(results[i] && results[i][j], m.kind || 'catalog'));
+      const row = homeMixedCatalogRow(d.name, lists, seen);
+      if (row.items.length) rows.push(row);
+      return;
+    }
     if (!results[i]) return;
     const row = homeCatalogRow(d.name, d.path, results[i], d.kind || 'catalog', seen);
     if (row.items.length) rows.push(row);
@@ -5819,29 +5836,38 @@ async function loadHomeCatalogRows() {
     // Kids profiles get rows BUILT for them, instead of filtering grown-up lists down.
     return buildHomeRows([
       { name: 'Family movie night', path: '/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=80&with_genres=10751' + CATALOG_Q + certParams(), kind: 'maturity' },
-      { name: 'Animation', path: '/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=80&with_genres=16' + CATALOG_Q + certParams(), kind: 'maturity' },
-      { name: 'Kids series', path: '/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=30&with_genres=10762|16' + CATALOG_Q, kind: 'maturity' },
+      {
+        name: 'Kids',
+        mix: [
+          { path: '/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=80&with_genres=16|10751' + CATALOG_Q + certParams(), kind: 'maturity' },
+          { path: '/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=30&with_genres=10762' + CATALOG_Q, kind: 'maturity' },
+        ],
+      },
     ]);
   }
   if ((S.maxLevel ?? 4) < 4) {
-    const g = homeGenrePick(0);
     return buildHomeRows([
       { name: 'Popular movies', path: '/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=100' + CATALOG_Q + certParams(), kind: 'maturity' },
-      { name: 'Top rated movies', path: '/api/tmdb/discover/movie?sort_by=vote_average.desc&vote_count.gte=400' + CATALOG_Q + certParams(), kind: 'maturity' },
-      { name: 'Popular series', path: '/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=60' + CATALOG_Q, kind: 'maturity' },
-      { name: g.name + ' movies', path: '/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=80&with_genres=' + g.mg + CATALOG_Q + certParams(), kind: 'maturity' },
+      {
+        name: 'Kids',
+        mix: [
+          { path: HOME_KIDS_MOVIE_PATH + CATALOG_Q + certParams(), kind: 'maturity' },
+          { path: HOME_KIDS_TV_PATH + CATALOG_Q, kind: 'maturity' },
+        ],
+      },
     ]);
   }
-  // Unlimited: a richer, de-duped set + two daily-rotating genre rows for fresh material.
-  const g1 = homeGenrePick(0), g2 = homeGenrePick(3);
+  // Personal rows (Continue Watching / Because you watched / Live TV) sit above this.
+  // Catalog stays short so Home feels fresh: trending, then one mixed Kids shelf.
   return buildHomeRows([
     { name: 'Trending today', path: '/api/tmdb/trending/all/day' },
-    { name: 'Popular movies', path: `/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=200&with_original_language=en${CATALOG_Q}` },
-    { name: 'Top rated movies', path: `/api/tmdb/discover/movie?sort_by=vote_average.desc&vote_count.gte=800&with_original_language=en${CATALOG_Q}` },
-    { name: 'Popular series', path: `/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=100&with_original_language=en${CATALOG_Q}` },
-    { name: 'Top rated series', path: `/api/tmdb/discover/tv?sort_by=vote_average.desc&vote_count.gte=300&with_original_language=en${CATALOG_Q}` },
-    { name: g1.name + ' movies', path: `/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=150&with_genres=${g1.mg}${CATALOG_Q}` },
-    { name: g2.name + ' shows', path: `/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=60&with_genres=${g2.tg}${CATALOG_Q}` },
+    {
+      name: 'Kids',
+      mix: [
+        { path: HOME_KIDS_MOVIE_PATH + '&certification_country=US&certification.lte=PG-13' + CATALOG_Q },
+        { path: HOME_KIDS_TV_PATH + CATALOG_Q },
+      ],
+    },
   ]);
 }
 const HOME_CATALOG_TTL = 30 * 60 * 1000;
@@ -5883,6 +5909,103 @@ function scheduleHomeCatalogRefresh() {
     });
   });
 }
+function homePersonalSeed(cw) {
+  const cards = buildCwItems(Array.isArray(cw) ? cw : []);
+  for (const it of cards) {
+    const tmdbId = +((it && it.tmdbId) || 0);
+    if (!tmdbId || (it && it.type === 'live')) continue;
+    const type = it.type === 'movie' ? 'movie' : 'tv';
+    const title = String(it.title || '').replace(/\s*—\s*S\d+E\d+.*$/i, '').trim();
+    if (!title) continue;
+    return { tmdbId, type, title };
+  }
+  return null;
+}
+function homePersonalKey(seed) {
+  return [homeCatalogKey(), seed ? `${seed.type}:${seed.tmdbId}` : 'none'].join(':');
+}
+function cachedHomePersonalRows() {
+  const seed = homePersonalSeed(cachedWatchRowsForHome());
+  const key = homePersonalKey(seed);
+  if (!seed || S._homePersonalKey !== key || !Array.isArray(S._homePersonalRows)) return [];
+  return S._homePersonalRows;
+}
+function homePersonalItemsFromTmdb(seed, recs) {
+  const seen = new Set([`${seed.type}:${seed.tmdbId}`]);
+  const items = [];
+  for (const x of recs) {
+    if (!x || !x.poster_path || x.id === seed.tmdbId || !passesMaturity(x)) continue;
+    const m = mapTmdb(x);
+    const k = `${m.type || ''}:${m.tmdbId}`;
+    if (!m.tmdbId || seen.has(k)) continue;
+    seen.add(k);
+    items.push(m);
+    if (items.length >= HOME_CATALOG_INITIAL) break;
+  }
+  return items;
+}
+async function loadHomePersonalRows(seed) {
+  if (!seed || !S.serverInfo.tmdb) return [];
+  const d = await api(`/api/tmdb/${seed.type}/${seed.tmdbId}?append_to_response=recommendations,similar`).catch(() => null);
+  if (!d) return [];
+  const recs = [...(((d.recommendations || {}).results) || []), ...(((d.similar || {}).results) || [])];
+  const rows = [];
+  const items = homePersonalItemsFromTmdb(seed, recs);
+  if (items.length >= 4) {
+    rows.push({ name: 'Because you watched ' + seed.title, poster: true, items });
+  }
+  const col = d.belongs_to_collection;
+  if (seed.type === 'movie' && col && col.id) {
+    const c = await api('/api/tmdb/collection/' + col.id).catch(() => null);
+    const parts = ((c && c.parts) || [])
+      .filter((x) => x && x.poster_path && x.id !== seed.tmdbId && passesMaturity(x))
+      .map(mapTmdb);
+    if (parts.length >= 2) {
+      rows.push({ name: col.name || 'Collection', poster: true, items: parts.slice(0, HOME_CATALOG_INITIAL) });
+    }
+  }
+  return rows;
+}
+function scheduleHomePersonalRefresh(cw) {
+  if (!S.serverInfo.tmdb) return;
+  const seed = homePersonalSeed(cw);
+  const key = homePersonalKey(seed);
+  if (!seed) {
+    if (S._homePersonalRows && S._homePersonalRows.length) {
+      S._homePersonalRows = [];
+      S._homePersonalKey = key;
+      S._homePersonalAt = Date.now();
+      refreshHomeWhenSettled({ catalogOnly: true });
+    }
+    return;
+  }
+  if (S._homePersonalKey === key && Array.isArray(S._homePersonalRows) && Date.now() - (S._homePersonalAt || 0) < HOME_CATALOG_TTL) return;
+  if (S._homePersonalScheduled) return;
+  S._homePersonalScheduled = true;
+  const start = () => {
+    S._homePersonalScheduled = false;
+    if (S._booting) {
+      setTimeout(() => scheduleHomePersonalRefresh(cw), 400);
+      return;
+    }
+    if (S._homePersonalJob && S._homePersonalKey === key) return;
+    S._homePersonalKey = key;
+    S._homePersonalJob = loadHomePersonalRows(seed)
+      .then((rows) => {
+        if (S._homePersonalKey !== key) return [];
+        S._homePersonalRows = rows || [];
+        S._homePersonalAt = Date.now();
+        if (rows.length) refreshHomeWhenSettled({ catalogOnly: true });
+        return rows;
+      })
+      .catch(() => [])
+      .finally(() => { if (S._homePersonalKey === key) S._homePersonalJob = null; });
+  };
+  (window.requestIdleCallback || ((f) => setTimeout(f, 400)))(start);
+}
+function homeKidsRowName(name) {
+  return name === 'Kids' || name === 'Family movie night';
+}
 function homeRowsFromWatch(cw, loading = false) {
   const rows = [];
   resetHomeTvNextFor(cw);
@@ -5899,9 +6022,13 @@ function homeRowsFromWatch(cw, loading = false) {
       backdrop: procBackdrop(210, 320, (i % 12) + 9), poster: null,
     })) });
   }
+  const catalog = cachedHomeCatalogRows();
+  rows.push(...catalog.filter((r) => r.name === 'Trending today'));
+  rows.push(...cachedHomePersonalRows());
+  rows.push(...catalog.filter((r) => homeKidsRowName(r.name)));
   // Recently added — from cached library items only (enrichHome warms the cache off-path).
   const ra = buildRecentlyAddedRow(); if (ra) rows.push(ra);
-  rows.push(...cachedHomeCatalogRows());
+  rows.push(...catalog.filter((r) => r.name !== 'Trending today' && !homeKidsRowName(r.name)));
   if (!rows.length && !S.serverInfo.tmdb) {
     rows.push({
       name: S.user && S.user.role === 'admin' ? 'Connect TMDB in Settings to browse the catalog' : 'Ask your admin to connect TMDB',
@@ -5988,7 +6115,10 @@ async function loadRows(opts = {}) {
   if (runId !== S._homeLoadRun && !opts.catalogOnly) return;
   perfMark(opts.catalogOnly ? 'home-catalog-render' : 'home-render');
   publishHomeRows(homeRowsFromWatch(cw, false), { preserveFocus: !!opts.preserveFocus, focusSnapshot: opts.focusSnapshot }); // First public paint waits for real rows; local/live enrichment stays off-path.
-  if (!opts.catalogOnly) scheduleHomeCatalogRefresh();
+  if (!opts.catalogOnly) {
+    scheduleHomeCatalogRefresh();
+    scheduleHomePersonalRefresh(cw);
+  }
   // Fold in the local + Live-TV-favorites rows AFTER the screen is up, on idle.
   const needLocalCacheRefresh = !S.localMap && cachedLocalLibraryItemsAvailable();
   const needEnrich = needLocalCacheRefresh || (liveTvAvailable() && S._homeLiveFav === undefined);
@@ -6376,19 +6506,16 @@ function makeCard(it, poster, onFocus) {
     onFocus && onFocus();
     if (it.trailer) return openTrailer(it.trailer, it);
     if (it._nextEp) {
-      // In a browser, land on the details page first so the viewer can pick 1080p/4K before
-      // resuming (browsers cap at 1080p by default), instead of auto-playing. The TV app keeps
-      // instant resume; a locally-owned next-up has one quality, so it just plays.
-      if (!it._local && isWebBrowserClient()) return openDetail(detailTargetForItem(it));
-      return it._local ? playLocal(it) : play(it); // next-up card: local if owned, otherwise normal Play
+      // Next-up is resume: play the episode. Details stay on hold-OK (TV) / ⋯ (web).
+      // Browsers already cap at 1080p unless 4K-in-browser is on, so they do not need a
+      // detail-first quality stop.
+      return it._local ? playLocal(it) : play(it);
     }
     if (isContinueWatchingItem(it) && (+it.resume || 0) > 0 && !it._local) {
       // A Continue Watching cover IS the resume: one press picks up where you left off — movies
-      // now match episodes, the hero Resume button, and the pre-cache that warmed this exact
-      // mount on focus. Details stay one hold-OK (TV) / ⋯ (web) away on the card menu. Browsers
-      // keep the detail-first stop so the viewer can pick 1080p/4K before playing (same nuance
-      // as next-up cards); TV and native shells resume instantly.
-      if (isWebBrowserClient()) return openDetail(detailTargetForItem(it));
+      // match episodes, the hero Resume button, and the pre-cache warmed on focus. Details stay
+      // one hold-OK (TV) / ⋯ (web) away on the card menu. Browsers already cap at 1080p unless
+      // 4K-in-browser is on, so they resume the same way as TV.
       return play(it);
     }
     if (it._showOpen !== undefined) {
@@ -6692,6 +6819,8 @@ function playbackRequestBody(it, picked = null, qRank = qualityRankForItem(it)) 
   if (ids.season != null) body.season = ids.season;
   if (ids.ep != null) body.ep = ids.ep;
   if (it && it.originalLanguage) body.originalLanguage = String(it.originalLanguage);
+  const catalogYear = parseInt(it && it.year, 10);
+  if (catalogYear >= 1900 && catalogYear <= 2100) body.year = catalogYear;
   // Age gate: the server enforces the active profile's maturity level against the title's TMDB
   // certification. Send the active profile id (server reads the STORED level from it) plus the
   // title's tmdb id + media type so the server can look up its rating.
@@ -6724,7 +6853,16 @@ function playbackRequestBody(it, picked = null, qRank = qualityRankForItem(it)) 
   if (body.resumeFrac === undefined && traktResumeFrac > 0) body.resumeFrac = traktResumeFrac;
   return body;
 }
+function maybePrepareFocusedHomeCard() {
+  if (S._booting || S.view !== 'home') return;
+  const view = S.rowsView;
+  if (!view || !view.data) return;
+  const ri = S.rowIdx || 0;
+  const it = view.data[ri] && view.data[ri].items[S.colIdx[ri] || 0];
+  if (it && it.type !== 'live' && (it._cw || it._nextEp || (+it.resume || 0) > 0)) preparePlaybackSource(it);
+}
 function preparePlaybackSource(it, delay = 900) {
+  if (S._booting) return;
   if (!it || it.type === 'live') return;
   const qRank = qualityRankForItem(it);
   if (localTitleHasPlayback(it) && localPlaybackFitsQuality(it, qRank)) return;
@@ -6766,11 +6904,13 @@ function loadCreditsInto(el, it) {
   // in-flight detail fetch would resolve and paint ITS year on the wrong item (the "previous row's
   // year" bug). Now any focus change invalidates the in-flight fetch at the guard below.
   el.dataset.key = (it && it.key) || '';
-  if (!it || !it.tmdbId || !['movie', 'tv'].includes(it.type)) return;
+  // Continue Watching episode cards are type "episode" — TMDB credits/overview live on the show.
+  const cred = certTargetForMeta(it, (it && it.key) || '');
+  if (!it || !cred.tmdbId || !['movie', 'tv'].includes(cred.type)) return;
   S._credT = setTimeout(async () => {
     try {
-      const append = it.type === 'tv' ? 'credits,content_ratings' : 'credits,release_dates';
-      const d = await api(`/api/tmdb/${it.type}/${it.tmdbId}?append_to_response=${append}`);
+      const append = cred.type === 'tv' ? 'credits,content_ratings' : 'credits,release_dates';
+      const d = await api(`/api/tmdb/${cred.type}/${cred.tmdbId}?append_to_response=${append}`);
       if (el.dataset.key !== it.key) return;
       el.textContent = creditsLine(d);
       const metaEl = el.id === 'heroCredits' ? $('heroMeta') : $('bdInfo').querySelector('.bdiM');
@@ -6820,14 +6960,15 @@ function metaLineHtml(it, d) {
   // never re-derive a different/late year onto the backdrop — the year now stays atomic with the title.
   const year = (it && it.year) || (d ? String(d.release_date || d.first_air_date || '').slice(0, 4) : '');
   if (year) parts.push(esc(year));
-  if (d && it && it.type === 'movie' && d.runtime) parts.push(`${Math.floor(d.runtime / 60)}h ${d.runtime % 60}m`);
-  if (d && it && it.type === 'tv' && d.number_of_seasons) parts.push(`${d.number_of_seasons} season${d.number_of_seasons === 1 ? '' : 's'}`);
+  const tmdbKind = (it && certTargetForMeta(it, (it && it.key) || '').type) || (it && it.type);
+  if (d && it && tmdbKind === 'movie' && d.runtime) parts.push(`${Math.floor(d.runtime / 60)}h ${d.runtime % 60}m`);
+  if (d && it && tmdbKind === 'tv' && d.number_of_seasons) parts.push(`${d.number_of_seasons} season${d.number_of_seasons === 1 ? '' : 's'}`);
   const detailGenre = d && Array.isArray(d.genres) ? d.genres.slice(0, 2).map((x) => x.name).join(' / ') : '';
   const genre = detailGenre || metaGenreLabel(it);
   if (genre) parts.push(esc(genre));
   let cert = '';
   if (d && it) {
-    try { cert = certOf(d, it.type); } catch {}
+    try { cert = certOf(d, tmdbKind); } catch {}
   }
   if (cert) parts.push(esc(cert));
   return parts.length ? `<span class="metaLine">${parts.map((p, i) => i ? `<span class="dot">·</span> ${p}` : p).join(' ')}</span>` : '';
@@ -7184,6 +7325,8 @@ function sourceSearchQuery(it, opts = {}) {
   if (ids.season != null) params.set('season', String(ids.season));
   if (ids.ep != null) params.set('ep', String(ids.ep));
   if (it.originalLanguage) params.set('originalLanguage', String(it.originalLanguage));
+  const year = parseInt(it.year, 10);
+  if (year >= 1900 && year <= 2100) params.set('year', String(year));
   const preferredAudio = prefAudioLang();
   if (preferredAudio) params.set('preferredAudioLanguage', preferredAudio);
   const qRank = opts.includeQuality === false ? null : qualityRankForItem(it);
@@ -7299,23 +7442,15 @@ async function play(it, pick, opts = {}) {
     const r = await api('/api/play', { method: 'POST', body });
     if (S._playTicket !== playTicket) return;
     if (S.view !== 'player') return; // user backed out of the loading screen
-    // Manual Sources pick: never silently swap. If the chosen release couldn't be streamed and the
-    // pipeline fell back to another, say so (the old behaviour looked like "it ignored my pick").
-    if (picked && picked.pickKey && r && r.candidate && r.candidate.pickKey && r.candidate.pickKey !== picked.pickKey) {
-      const alt = (r.candidate.name || 'another source').replace(/\.(mkv|mp4|avi)$/i, '');
-      toast(`Your pick couldn't be streamed — playing ${alt.length > 40 ? alt.slice(0, 39) + '…' : alt}. Open Sources to choose another.`);
-    } else if (!picked && r && r.relaxedResolution) {
-      // 4K was preferred but every UHD release was unavailable (rotted/removed). The server fell
-      // back to the best healthy lower-resolution release — say so rather than swapping silently.
-      toast('4K wasn’t available right now — playing the best available quality. Open Sources to choose another.');
-    }
+    // If the chosen/auto-pick release is dead, the pipeline already swapped to the next
+    // healthy file. Do not toast that — playback started, and the banner looked like an error.
     await openPlayer(it, r, { nativeFirst, playTicket });
   } catch (e) {
     // A superseded/cancelled request may reject after a newer title is already loading or
     // playing. Its failure belongs to the old ticket and must not tear down the new player.
     if (S._playTicket !== playTicket || S.view !== 'player') return;
     if (localExact && !picked && /no playable|no .*candidate|all candidates failed/i.test(String(e && e.message || ''))) {
-      toast('No matching online source - playing your library file');
+      // Library file is the successful fallback — no toast.
       return playLocal(localExact, { replacementStarted: true, nativeFirst, playTicket });
     }
     closePlayer();
@@ -7475,7 +7610,7 @@ async function openSources(it) {
       const arr = [...cands];
       if (S.sourceSort === 'largest') return arr.sort((a, b) => (sizeOf(b) - sizeOf(a)) || (b.score - a.score));
       if (S.sourceSort === 'smallest') return arr.sort((a, b) => ((sizeOf(a) || Infinity) - (sizeOf(b) || Infinity)) || (b.score - a.score));
-      return arr;
+      return arr.sort((a, b) => ((Number(b.score) || 0) - (Number(a.score) || 0)) || (sizeOf(b) - sizeOf(a)));
     };
     const syncSortButtons = () => {
       document.querySelectorAll('#srcSort button').forEach((b) => b.classList.toggle('sel', b.dataset.srcSort === S.sourceSort));
@@ -10805,6 +10940,7 @@ async function loadTracks() {
       if (S.playing !== p || !p.usingNative) return;
       if (!appliedStartupSubtitle) refreshNativeSubtitleChoices();
       refreshNativeAudioChoices(); // probe may resolve after handoff — the Audio menu fills in late
+      maybeApplyNativePreferredAudio(p);
       return;
     }
     updatePlayerMeta();
@@ -11250,8 +11386,20 @@ function preferredAudioTrackForPlayer(p) {
     .sort((a, b) => (b.channels || 0) - (a.channels || 0))[0] || null;
 }
 function applyInitialAudioPreference(p) {
+  if (!p || p._userPickedAudio) return;
   const best = preferredAudioTrackForPlayer(p);
   if (best && best.rel !== undefined) p.audioTrack = best.rel;
+}
+// Remux/hls/transcode mux ONE audio track. Direct play lets Exo/mpv pick by language;
+// server-muxed native starts on whatever &audio= was in the URL (often track 0 = Italian).
+// After the probe, quietly respawn on the preferred English track unless the user already picked.
+function maybeApplyNativePreferredAudio(p) {
+  if (!p || p._userPickedAudio || !p.usingNative || !canUseNativeVideoPlayer()) return;
+  if (currentPlayerKind(p) === 'direct') return;
+  const best = preferredAudioTrackForPlayer(p);
+  if (!best || best.rel === p.audioTrack) return;
+  if (typeof window.__tvNativeVideoAudio !== 'function') return;
+  window.__tvNativeVideoAudio(best.rel, currentTime(), p.duration || 0, p.playbackToken);
 }
 function audioDescriptorForClient(codecOrTrack) {
   if (codecOrTrack && typeof codecOrTrack === 'object') {
@@ -11344,6 +11492,7 @@ function tryNativeVideoPlayer(kind, atSeconds, opts = {}) {
   if (!['direct', 'remux', 'transcode'].includes(kind)) return false;
   const baseUrl = kind === 'remux' ? p.remuxUrl : (kind === 'transcode' ? p.transcodeUrl : p.streamUrl);
   if (!baseUrl) return false;
+  if (!opts.quietSeek) applyInitialAudioPreference(p);
   const serverSeek = kind === 'remux' || kind === 'transcode';
   const seekStart = serverSeek ? Math.max(0, Math.round((atSeconds || 0) * 1000) / 1000) : 0; // ms-precise, not floored: a resume/seek must not lose up to 1s
   let nativeUrl = baseUrl;
@@ -11435,7 +11584,6 @@ function tryNextNativeKind(failedKind, atSeconds, msg) {
   p.nativeTried[failedKind] = true;
   for (const next of nativePlaybackOrder(p, p.nativeStartKind)) {
     if (p.nativeTried[next]) continue;
-    toast(msg ? `Native ${failedKind} failed - trying ${next} (${msg})` : `Native ${failedKind} failed - trying ${next}`);
     if (tryNativeVideoPlayer(next, atSeconds)) return true;
   }
   return false;
@@ -11668,11 +11816,13 @@ window.__tvNativeVideoAudio = (index, pos, dur, token) => {
   if (!want || want.rel === p.audioTrack) return;
   const at = currentTime();
   const oldTrack = p.audioTrack;
+  p._userPickedAudio = true;
   p.usingNative = false;
   p.audioTrack = want.rel;
   if (!tryNativeVideoPlayer(kind, at, { quietSeek: true })) {
     p.usingNative = true;
     p.audioTrack = oldTrack;
+    p._userPickedAudio = false;
     toast('Could not switch the audio track');
     return;
   }
@@ -11834,14 +11984,12 @@ function recoverSamePlaybackSource(reason = '') {
     // again, preserve the episode and timestamp but move to the next ranked release. Session expiry
     // is handled separately by autoAdvance's 404 re-mount path below.
     if (!p._sourceAdvancePending) {
-      toast('Source is still stalled - switching releases...');
       autoAdvance({ allowMidstreamAdvance: true, nativePreferred: !!p.usingNative, reason: reason || 'repeated playback stall' });
     }
     return true;
   }
   p._sameSourceRecoveryKey = key;
   p._sameSourceRecoveryAt = now;
-  toast('Stream hiccup — resuming the same source…');
   if (p.usingNative && canUseNativeVideoPlayer() && tryNativeVideoPlayer(kind, at, { quietSeek: true })) return true;
   p.usingNative = false;
   return startSource(kind, at, { quietSeek: true }) || (showPlaybackInterrupted(reason), true);
@@ -11857,7 +12005,6 @@ async function reMountAndResume(reason = '', attempt = 0) {
   const at = currentTime();
   const kind = currentPlayerKind(p);
   const MAX_ATTEMPTS = 4; // ~13s total backoff — comfortably covers a fast server restart
-  if (attempt === 0) toast('Reconnecting…');
   try {
     const r = await api('/api/play', { method: 'POST', body: playbackRequestBody(p.item, p.name ? { name: p.name } : null) });
     if (S.playing !== p || S.view !== 'player') { p._reMounting = false; return; } // user moved on / replaced playback
@@ -11909,7 +12056,6 @@ function failover() {
     startSource('remux', currentTime());
   } else if (!p.usingTranscode && p.transcodeUrl && !p.triedTranscode) {
     p.triedTranscode = true;
-    toast('Codec not supported — optimizing stream on the server…');
     startSource('transcode', currentTime());
   } else if (p.sessionId) {
     autoAdvance();
@@ -11930,7 +12076,6 @@ async function autoAdvance(opts = {}) {
     ? reportedAt
     : Number(p.item && p.item.resume) || 0);
   const nativePreferred = !!opts.nativePreferred || (p.usingNative && canUseNativeVideoPlayer());
-  toast('Source failed — advancing to the next release…');
   try {
     // Tell the server WHERE we are so the replacement mount warms the resume byte window at the
     // live timestamp (not the file head) — the resume seek lands hot instead of stalling 20-30s.
@@ -13006,7 +13151,6 @@ function startHealthPoll(id) {
         if (S._healthKickT) clearTimeout(S._healthKickT);
         S.healthTimer = null; S._healthKickT = null;
         saveWatch(true);
-        toast('Source failed health check - switching releases...');
         autoAdvance({ allowMidstreamAdvance: true, nativePreferred: !!p.usingNative, reason: 'source health blocked' });
       }
     } catch {
@@ -13904,6 +14048,7 @@ function applyTrackPrefs() {
   if (p.usingNative && canUseNativeVideoPlayer()) return;
   applyStartupSubtitlePref();
   if (!p.tracks) { updateSrndBtn(); return; }
+  if (p._userPickedAudio) { updateSrndBtn(); return; }
   const wantA = audioLangKey(prefAudioLang());
   if (wantA && (p.tracks.audio || []).length > 1) {
     const cur = p.tracks.audio.find((a) => a.rel === p.audioTrack);
@@ -14517,6 +14662,7 @@ function applySubtitleTrack() {
 function setAudio(rel) {
   const p = S.playing; if (!p || p.audioTrack === rel) return;
   if (p.usingNative && canUseNativeVideoPlayer()) return;
+  p._userPickedAudio = true;
   p.audioTrack = rel;
   if (!p.remuxUrl && !p.transcodeUrl) return toast('Audio selection needs ffmpeg on the server');
   startSource(p.usingTranscode ? 'transcode' : 'remux', currentTime());
@@ -22704,7 +22850,8 @@ function focusCard(ri, ci, opts = {}) {
   // pressing OK (or resuming from the card menu) then reuses that live mount instantly. Debounced
   // to the settled card (single shared prepareTimer → only one mount in flight), and play() joins
   // an in-flight prepare rather than duplicating it. Skipped when a local copy already fits.
-  if (it && it.type !== 'live' && (it._cw || it._nextEp || (+it.resume || 0) > 0)) preparePlaybackSource(it);
+  // Never start a usenet mount under the Android TV splash — wait until bootReady.
+  if (!S._booting && it && it.type !== 'live' && (it._cw || it._nextEp || (+it.resume || 0) > 0)) preparePlaybackSource(it);
   maybeLoadMoreHomeRow(view.root, ri);
 }
 function gridEls() { return [...(S.gridRoot || $('grid')).querySelectorAll('.pcard, .card, .chCard, .chGroupHead, .gRow.focusable, .lcat, .gridMore.focusable')]; }
@@ -24608,6 +24755,7 @@ function bootReady() {
   splashStage(100);
   try { fitRailWidth(); } catch {} // first measure once the rail's real labels exist
   S._booting = false;
+  maybePrepareFocusedHomeCard();
   perfMark('boot-ready', { view: S.view });
   signalTvReadyOnce('boot-ready');
   setTimeout(() => $('appLoader').classList.add('hide'), 0);
