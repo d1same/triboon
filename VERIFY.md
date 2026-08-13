@@ -111,8 +111,10 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
-2026-08-12, immediate Continue Watching repaint + reproducible emulator route:
+2026-08-12, v2.9.6 immediate Continue Watching repaint + reproducible emulator route:
 
+- Version contract aligned: `package.json` 2.9.6; Android `versionName` 2.9.6 /
+  `versionCode` 324; all four Windows client version spots 2.9.6.
 - Returning from Details/player to Home now synchronously rebuilds Continue
   Watching from the locally-upserted watch cache before the preserved page can
   paint stale progress, then refreshes next-up data in the background while
@@ -127,10 +129,10 @@ fails to produce a playable stream. Budgets default to feels-local targets
   reset with an unlogged random password and its emulator session retained;
   owner credentials were not changed or persisted by the verification work.
 - `npm.cmd run verify:full -- -AndroidDevice emulator-5554
-  -AndroidHostServerPort 7777` passed every gate on the final tree: focused P9,
+  -AndroidHostServerPort 7777` passed every gate on the final versioned tree: focused P9,
   P14, and P11 suites; full Node suite 464/464; isolated server smoke; Android
   lint/native unit/debug build; and Android ExoPlayer stress
-  `bench/stress-results/android-tv-stress-20260812-213348.json` with `ok: true`,
+  `bench/stress-results/android-tv-stress-20260812-214755.json` with `ok: true`,
   zero failures, zero warnings, and the recorded 7782 -> 7777 route.
 - A second focused device smoke seeded a 120/600-second watch point and passed
   native VOD start, Continue Watching resume, and seek coverage:
