@@ -1,9 +1,12 @@
 # Triboon Setup Guide
 
-Step-by-step for getting the API keys and accounts Triboon uses, with links.
-After installing (Docker, Unraid, or the Windows server installer), open
-`http://<your-server>:7777`, create the owner account, then add these in
-**Settings**.
+Paste keys in **Settings**. They stay on your server.
+
+After installing (Unraid, Docker, or the Windows server installer), open
+`http://<your-server>:7777`, create the owner account, then add the services
+below. Credentials are encrypted in the data folder. They are not in the GitHub
+repo and not in the public Docker image. Secret values are not returned to
+playback clients.
 
 Complete that first-owner step only from a trusted LAN. Until an owner exists,
 the first successful setup request creates the owner account, so do not expose

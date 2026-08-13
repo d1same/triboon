@@ -5,27 +5,49 @@
 <h1 align="center">Triboon</h1>
 
 <p align="center">
-  Self-hosted streaming for movies, shows, local libraries, music, subtitles, Trakt, and Live TV.
-  Press Play and Triboon finds, mounts, and streams the best healthy source.
+  <strong>Press Play.</strong> Triboon finds a healthy source, mounts it, and starts streaming.<br>
+  Self-hosted movies, shows, local libraries, music, subtitles, Trakt, and Live TV.
 </p>
 
 <p align="center">
-  <a href="https://github.com/d1same/triboon/releases/latest">Latest release</a>
-  |
-  <a href="https://github.com/d1same/triboon/releases/latest/download/triboon.apk">Android APK</a>
-  |
-  <a href="https://github.com/d1same/triboon/releases/latest/download/Triboon-Windows-Client.exe">Windows client</a>
-  |
-  <a href="https://github.com/d1same/triboon/releases/latest/download/Triboon-Windows-Server.exe">Windows server</a>
-  |
-  <a href="https://github.com/d1same/triboon/pkgs/container/triboon">Container image</a>
-  |
-  <a href="#quick-start">Quick start</a>
-  |
-  <a href="docs-setup.md">Setup guide</a>
-  |
-  <a href="#unraid">Unraid</a>
+  <a href="https://github.com/d1same/triboon/releases/latest"><img src="https://img.shields.io/github/v/release/d1same/triboon?style=flat-square&color=e11d74&label=release" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/d1same/triboon?style=flat-square&color=111827" alt="MIT License"></a>
+  <a href="https://github.com/d1same/triboon/pkgs/container/triboon"><img src="https://img.shields.io/badge/image-ghcr.io-0ea5e9?style=flat-square" alt="Container image"></a>
+  <a href="https://github.com/d1same/triboon/releases/latest/download/triboon.apk"><img src="https://img.shields.io/badge/android-universal%20APK-3ddc84?style=flat-square" alt="Android APK"></a>
 </p>
+
+<p align="center">
+  <a href="#unraid">Unraid</a>
+  ·
+  <a href="#docker">Docker</a>
+  ·
+  <a href="https://github.com/d1same/triboon/releases/latest/download/triboon.apk">Android APK</a>
+  ·
+  <a href="https://github.com/d1same/triboon/releases/latest/download/Triboon-Windows-Client.exe">Windows client</a>
+  ·
+  <a href="https://github.com/d1same/triboon/releases/latest/download/Triboon-Windows-Server.exe">Windows server</a>
+  ·
+  <a href="docs-setup.md">Setup guide</a>
+</p>
+
+**Your keys stay on your server.** TMDB, usenet, indexer, IPTV, Trakt, and
+subtitle credentials go into Settings. They are encrypted in `/data`. They are
+not in this repo and not in the public Docker image.
+
+Example: you paste a usenet password in the dashboard. GitHub never sees it.
+The container image is just the app. Your Unraid `appdata` folder is the vault.
+
+## Get Triboon
+
+| How you host | How you watch |
+|---|---|
+| **[Unraid](#unraid)** — Community Apps / template | **Web** at `http://<server>:7777` |
+| **[Docker](#docker)** — one `docker run` | **[Android](#android)** — one APK for TV, phone, and tablet |
+| **[Windows server](#windows)** — one-click installer | **[Windows client](#windows)** — native libmpv player |
+
+You only need three things to press Play: a free [TMDB](docs-setup.md) key, a
+usenet provider, and one indexer. Subtitles, Trakt, Live TV, and music are
+optional.
 
 ## Screenshots
 
@@ -40,45 +62,55 @@ Captured on the Android TV build against a demo library (TMDB artwork).
 ## What It Does
 
 Triboon is a Plex-polished, Stremio-style app you run yourself. The admin adds
-providers, indexers, metadata, subtitles, Trakt, local folders, and optional
-IPTV playlists. Users sign in, pick a profile, browse, and press Play.
+providers and keys. Users sign in, pick a profile, browse, and press Play.
 
-Playback is built around speed:
+Playback prefers speed:
 
 ```text
 source-fit -> direct play -> remux -> transcode
 ```
 
-That means Triboon tries to choose the right source first, direct-play whenever
-the device can handle it, and only remux or transcode when the client needs
-help.
+Detail pages can warm search and prepare the first viable source, so Play
+reuses that mount instead of starting from zero.
 
-Detail pages warm search results and can prepare the first viable ranked source
-in the background, so pressing Play can reuse the prepared mount instead of
-repeating source finding, health probing, and mount work.
+- Movies and TV with TMDB metadata, seasons, watchlist, and Continue Watching.
+- Best-source search across Newznab indexers, with health checks and failover.
+- Usenet streaming from archives while they are still remote, with seeking.
+- Local libraries for owned media.
+- Live TV through M3U or Xtream playlists you already have.
+- Wyzie / OpenSubtitles captions, Trakt, Music, Audiobooks, and multi-user
+  profiles with invites and Quick Connect.
 
-## Highlights
+## Unraid
 
-- Movies and TV shows with TMDB metadata, detail pages, seasons, episodes,
-  recommendations, cast pages, watchlist, and Continue Watching.
-- Best-source search across Newznab-compatible indexers, with quality caps,
-  title verification, health checks, and automatic source failover.
-- Usenet streaming directly from archives while they are still remote, with
-  Range seeking and resume support.
-- Local libraries for owned media, with lazy loading so large folders do not
-  freeze the app.
-- Live TV through M3U or Xtream playlists, including source-scoped caches,
-  guide data, favorites, Android TV native playback, and browser remux.
-- Wyzie and optional OpenSubtitles captions, audio-track selection, subtitle
-  sync, Trakt import/export, Music, Audiobooks, Android TV shell, and
-  Unraid-friendly Docker hosting.
-- Multi-user profiles, invite links, Quick Connect, profile PINs, and encrypted
-  settings.
+This is the usual home-server path.
 
-## Quick Start
+1. Install from Community Apps, or add the
+   [Unraid template](unraid/triboon.xml) with its
+   [canonical raw URL](https://raw.githubusercontent.com/d1same/triboon/main/unraid/triboon.xml).
+2. Use image `ghcr.io/d1same/triboon:latest`.
+3. Map `/data` -> `/mnt/user/appdata/triboon`.
+4. Open `http://<unraid-ip>:7777` and create the owner account.
 
-Docker is the easiest way to run Triboon. The public image supports
-`linux/amd64` and `linux/arm64`:
+Optional: map a media share to `/media` as read-only for local libraries.
+
+Recommended environment:
+
+- `PUID` and `PGID` for your Unraid user/group
+- `UMASK`
+- `TRIBOON_SECRET` is optional. When it is unset, Triboon generates a secret
+  once and stores it in persistent `/data/secret.json`. If you provide one,
+  keep it stable: changing or losing it invalidates signed sessions and makes
+  the existing encrypted settings unreadable.
+- `TRIBOON_WYZIE_KEY` optionally supplies the server-side Wyzie Subs key without
+  storing it in the dashboard settings
+
+Package details and versioned tags:
+[public GitHub container page](https://github.com/d1same/triboon/pkgs/container/triboon).
+
+## Docker
+
+The public image supports `linux/amd64` and `linux/arm64`:
 
 ```bash
 docker run -d --name triboon --restart unless-stopped -p 7777:7777 -v triboon-data:/data ghcr.io/d1same/triboon:latest
@@ -88,13 +120,11 @@ See the [public container package](https://github.com/d1same/triboon/pkgs/contai
 for versioned image tags. The named volume is important: `/data` contains the
 generated server secret and all persistent application state.
 
-Open:
+Open `http://localhost:7777`.
 
-```text
-http://localhost:7777
-```
+## First launch
 
-Then:
+Do this on the machine that just started, before any remote exposure:
 
 1. Create the owner account immediately from a trusted LAN device.
 2. Open Settings.
@@ -119,34 +149,22 @@ Plain Node also works when Node 24+ is installed:
 node server/index.js
 ```
 
-On Windows, the one-click [Windows](#windows) installer sets this up as an
-auto-start service - no Docker or Node install required.
-
 ffmpeg is optional but strongly recommended. Without ffmpeg, some browser or
 device combinations may need external-player handoff instead of in-app remux or
 transcode.
 
-## Android APK
+## Android
 
-Triboon ships one universal APK for Android TV, phones, and tablets - the same
-binary adapts at runtime. Triboon keeps a stable APK URL for in-app updates and
-Downloader shortcuts. The full naming contract lives in
-[`docs-app-updates.md`](docs-app-updates.md).
-
-The stable download is always:
+One universal APK for Android TV, phones, and tablets — the same binary adapts
+at runtime. The stable download is always:
 
 ```text
 https://github.com/d1same/triboon/releases/latest/download/triboon.apk
 ```
 
-Each release also keeps a versioned copy for history:
-
-```text
-triboon-vX.Y.Z.apk
-```
-
-The APK filename does not control Android updates. Android accepts an update
-when the package id and signing key match and the new `versionCode` is higher.
+Each release also keeps `triboon-vX.Y.Z.apk` for history. The filename does not
+control Android updates: package id, signing key, and a higher `versionCode`
+do. Full naming contract: [`docs-app-updates.md`](docs-app-updates.md).
 
 ## Windows
 
@@ -158,8 +176,7 @@ fixed "latest" download plus a versioned copy that can be pinned or rolled back.
 The native Windows 10/11 x64 client connects to an existing Triboon server and
 uses libmpv with D3D11 hardware decoding on supported NVIDIA, AMD, and Intel
 GPUs. Unsupported codecs or drivers fall back to software decoding without
-breaking playback. It includes mouse, keyboard, media-key, controller/D-pad,
-subtitle, audio-track, quality, episode, Continue Watching, and Live TV support.
+breaking playback.
 
 ```text
 https://github.com/d1same/triboon/releases/latest/download/Triboon-Windows-Client.exe
@@ -169,61 +186,24 @@ The matching immutable filename is `Triboon-Windows-Client-vX.Y.Z.exe`.
 
 ### Server (host Triboon on Windows)
 
-A self-contained installer that bundles the Node 24 runtime, ffmpeg/ffprobe,
-yt-dlp, and alass, registers Triboon as an auto-start Windows service, and opens
-the LAN firewall on the private and domain profiles only. When it finishes you
-configure everything in the browser at `http://localhost:7777`, exactly like the
-Unraid setup - other devices reach it at `http://<pc-name-or-ip>:7777`.
+A self-contained installer that bundles Node 24, ffmpeg/ffprobe, yt-dlp, and
+alass, registers an auto-start Windows service, and opens the LAN firewall on
+the private and domain profiles only. When it finishes, configure everything in
+the browser at `http://localhost:7777` — same as Unraid. Other devices use
+`http://<pc-name-or-ip>:7777`.
 
 ```text
 https://github.com/d1same/triboon/releases/latest/download/Triboon-Windows-Server.exe
 ```
 
-Your data is safe across updates. All state (encrypted settings, users, watch
-history, library DB, thumbnails) lives in `C:\ProgramData\Triboon\data`, which
-the installer keeps on upgrade *and* uninstall - reinstalling picks up exactly
-where you left off. Updates only replace the program files under
-`Program Files\Triboon`.
+Your data is safe across updates. All state lives in
+`C:\ProgramData\Triboon\data`, which the installer keeps on upgrade *and*
+uninstall. Updates only replace program files under `Program Files\Triboon`.
 
 The Windows client and server installers are currently unsigned, so
-Windows SmartScreen shows a warning on first run - choose
-**More info -> Run anyway**. Each stable release also keeps this versioned
-server copy for history and rollback:
-
-```text
-Triboon-Windows-Server-vX.Y.Z.exe
-```
-
-## Unraid
-
-Use the published image:
-
-```text
-ghcr.io/d1same/triboon:latest
-```
-
-Package details and versioned tags are available on the
-[public GitHub container page](https://github.com/d1same/triboon/pkgs/container/triboon).
-
-Recommended mappings:
-
-- `/data` -> `/mnt/user/appdata/triboon`
-- Optional local media share -> `/media` as read-only
-
-Recommended environment:
-
-- `PUID` and `PGID` for your Unraid user/group
-- `UMASK`
-- `TRIBOON_SECRET` is optional. When it is unset, Triboon generates a secret
-  once and stores it in persistent `/data/secret.json`. If you provide one,
-  keep it stable: changing or losing it invalidates signed sessions and makes
-  the existing encrypted settings unreadable.
-- `TRIBOON_WYZIE_KEY` optionally supplies the server-side Wyzie Subs key without
-  storing it in the dashboard settings
-
-The [Unraid template](unraid/triboon.xml) uses the public image. Use its
-[canonical raw URL](https://raw.githubusercontent.com/d1same/triboon/main/unraid/triboon.xml)
-when an Unraid template-repository field needs a remote address.
+Windows SmartScreen shows a warning on first run — choose
+**More info -> Run anyway**. Each stable release also keeps
+`Triboon-Windows-Server-vX.Y.Z.exe` for history.
 
 ## Security And Privacy
 
@@ -260,46 +240,27 @@ credentials, logs, or personal media/test captures.
 
 ## Development
 
-The server intentionally keeps runtime dependencies light: Node 24 LTS and the
-standard library in `server/`, with approved external binaries such as ffmpeg
-and yt-dlp. Docker also includes `ytmusicapi` for faster YouTube Music catalog
-search/radio metadata. Public search and radio need no account. Personal
-playlists use a per-user exported YouTube `cookies.txt` session imported from
-Preferences. Triboon encrypts the cookie text in settings, then on first use
-keeps one mode-0600 temporary file per linked user for the server process
-lifetime. Replacing/unlinking the session and graceful shutdown remove it; a
-crash can leave it for host temporary-directory cleanup, so protect that
-directory too. Cookie sessions can expire and then must be re-exported. Bare
-installs can add the helper with `python -m pip install ytmusicapi==1.12.1` or
-use the slower `yt-dlp` catalog fallback. Playback resolution still uses
-`yt-dlp`.
+The server keeps runtime dependencies light: Node 24 LTS and the standard
+library in `server/`, with approved external binaries such as ffmpeg and
+yt-dlp. Docker also includes `ytmusicapi` for faster YouTube Music catalog
+search. Public search and radio need no account. Personal playlists use a
+per-user exported YouTube `cookies.txt` session imported from Preferences.
 
-Run the app locally:
+Run locally with `npm start`. To build the current checkout instead of the
+published image: `docker compose up --build`.
 
-```bash
-npm start
-```
-
-To build the current checkout in Docker instead of using the published image:
-
-```bash
-docker compose up --build
-```
-
-Run the full pre-update gate before pushing or calling a fix done:
+Before pushing or calling a fix done:
 
 ```bash
 npm.cmd run verify:full
 ```
 
-Use `npm test` for the explicitly enumerated, sequential top-level Node test
-suites by themselves. The release contract keeps that list synchronized with
-every checked-in `test/*.test.js` file and excludes fixture generators.
-`VERIFY.md` is the single
-source of truth for the full gate, including IPTV, fast VOD startup, CC, Web
-Player, and Android ExoPlayer smokes.
+`npm test` runs the enumerated sequential Node suites. [`VERIFY.md`](VERIFY.md)
+is the single source of truth for the full gate, including IPTV, fast VOD
+startup, CC, Web Player, and Android ExoPlayer smokes.
 
-Run Android lint, native JVM unit tests, and build the debug APK:
+Android lint, unit tests, and debug APK (prefer a current external Gradle
+9.5.1+; wrapper is the fallback):
 
 ```powershell
 $env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'
@@ -307,43 +268,21 @@ $env:ANDROID_HOME="$env:LOCALAPPDATA\Android\Sdk"
 gradle -p android lintDebug testDebugUnitTest assembleDebug
 ```
 
-The APK output is:
+Output: `android/app/build/outputs/apk/debug/app-debug.apk`.
 
-```text
-android/app/build/outputs/apk/debug/app-debug.apk
-```
+## Docs
 
-If a current external Gradle is not installed, use the pinned wrapper from the
-repository root:
+- [`docs-setup.md`](docs-setup.md) — first-run services, keys, and accounts
+- [`docs-architecture.md`](docs-architecture.md) — architecture and data flow
+- [`docs-streaming-performance.md`](docs-streaming-performance.md) — capacity and buffering
+- [`docs-app-updates.md`](docs-app-updates.md) — Android, Windows, container, and release publication
+- [`docs-continue-watching.md`](docs-continue-watching.md) — resume and next-up
+- [`docs-player-regression-map.md`](docs-player-regression-map.md) — player contracts
+- [`VERIFY.md`](VERIFY.md) — required pre-update verification gate
 
-```powershell
-.\android\gradlew.bat -p android lintDebug testDebugUnitTest assembleDebug
-```
-
-## Project Map
-
-- `server/` - API, auth, source search, usenet streaming, IPTV, subtitles,
-  Trakt, remux/transcode, persistence, and static serving.
-- `web/index.html` - the single-file web UI used by browser, desktop wrapper,
-  and Android WebView shell.
-- `android/` - Android TV shell with D-pad bridge and native Media3/ExoPlayer.
-- `clients/windows-px8/` - Tauri/libmpv Windows client with secure remote bridge,
-  D3D11 hardware decoding, native controls, and release packaging.
-- `installer/windows/` - one-click Windows server installer (Inno Setup + service
-  wrapper); build with `installer/windows/build-installer.ps1`.
-- `unraid/` - Unraid template.
-- [`docs-setup.md`](docs-setup.md) - first-run services, keys, and account setup.
-- [`docs-architecture.md`](docs-architecture.md) - deeper architecture and
-  data-flow notes.
-- [`docs-streaming-performance.md`](docs-streaming-performance.md) - canonical startup, buffering, provider
-  capacity, and multi-user performance contract.
-- [`docs-continue-watching.md`](docs-continue-watching.md) - resume, next-up, checkpoint, and quality-carry
-  contract.
-- [`docs-player-regression-map.md`](docs-player-regression-map.md) - player
-  behavior contracts and regression checklist.
-- [`docs-app-updates.md`](docs-app-updates.md) - Android, Windows, container,
-  and release publication contract.
-- [`VERIFY.md`](VERIFY.md) - required pre-update verification gate.
+Repo map: `server/` API and streaming, `web/index.html` UI, `android/` TV shell,
+`clients/windows-px8/` native Windows client, `installer/windows/` server
+installer, `unraid/` template.
 
 ## Legal
 
