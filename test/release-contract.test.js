@@ -178,6 +178,10 @@ test('release contract: Android verification fails fast on device and app precon
     'stress distinguishes an unreachable server from an unfinished authentication gate');
   assert.match(stress, /gateLogin[\s\S]+gateSetup[\s\S]+gateProfiles[\s\S]+gatePin/,
     'stress reports actionable login, setup, profile, and PIN preconditions');
+  assert.match(stress, /function Ensure-EmulatorServerRoute[\s\S]+127\.0\.0\.1[\s\S]+Invoke-RestMethod[\s\S]+Invoke-Adb reverse "tcp:\$devicePort" "tcp:\$HostServerPort"/,
+    'stress verifies the host Triboon server before bridging a loopback-configured emulator');
+  assert.match(verify, /AndroidHostServerPort[\s\S]+android-tv-stress\.ps1[\s\S]+-HostServerPort \$AndroidHostServerPort/,
+    'verify:full forwards the emulator host-port route into the Android stress gate');
   assert.match(stress, /api\('\/api\/watchlist'\)[\s\S]+api\('\/api\/watch' \+ profileQ\(\)\)[\s\S]+exact -VodKey was not found/,
     'stress resolves and requires the exact requested VOD fixture instead of silently testing an unrelated home card');
   assert.match(stress, /const candidate = document\.getElementById\('chMultiBtn'\);[\s\S]+candidate && candidate\.offsetParent !== null/,

@@ -19,7 +19,9 @@ param(
   [int]$VodDurationSeconds = 0,
   [string]$ApkPath = "android\app\build\outputs\apk\debug\app-debug.apk",
   [switch]$InstallApk,
-  [switch]$NoScreenshot
+  [switch]$NoScreenshot,
+  [ValidateRange(0, 65535)]
+  [int]$HostServerPort = $(if ($env:TRIBOON_ANDROID_HOST_PORT) { [int]$env:TRIBOON_ANDROID_HOST_PORT } else { 7777 })
 )
 
 $ErrorActionPreference = "Stop"
@@ -111,6 +113,46 @@ function Add-PipFailure([string]$Message) {
     Add-Warning "$Message [SKIPPED on emulator -- native-live PiP guide D-pad needs real hardware; verified on Shield]"
   } else {
     Add-Failure $Message
+  }
+}
+function Get-DebugConfiguredServerUri {
+  try {
+    $raw = ((Invoke-Adb shell run-as $Package cat shared_prefs/triboon.xml) -join "`n")
+    if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+    [xml]$prefs = $raw
+    $node = @($prefs.map.string) | Where-Object { $_.name -eq "server" } | Select-Object -First 1
+    if (!$node) { return $null }
+    $uri = $null
+    if ([System.Uri]::TryCreate([string]$node.'#text', [System.UriKind]::Absolute, [ref]$uri)) {
+      return $uri
+    }
+  } catch {
+    Add-Warning "Could not inspect the debug app's configured server; emulator routing will use the existing device setup."
+  }
+  return $null
+}
+function Ensure-EmulatorServerRoute {
+  if (!$script:isEmulator -or $HostServerPort -le 0) { return $null }
+  $configured = Get-DebugConfiguredServerUri
+  if (!$configured) { return $null }
+  $configuredHost = $configured.Host.ToLowerInvariant()
+  if (@("127.0.0.1", "localhost", "::1") -notcontains $configuredHost) { return $null }
+  $devicePort = $configured.Port
+  if ($devicePort -le 0) {
+    $devicePort = if ($configured.Scheme -eq "https") { 443 } else { 80 }
+  }
+  try {
+    $server = Invoke-RestMethod -Uri "http://127.0.0.1:$HostServerPort/api/server" -TimeoutSec 5
+    if (!$server -or !$server.version) { throw "response was not Triboon" }
+  } catch {
+    throw "Android emulator is configured for $configured, but no Triboon server is reachable on host port $HostServerPort. Start Triboon there or pass -HostServerPort 0 to manage ADB routing yourself."
+  }
+  Invoke-Adb reverse "tcp:$devicePort" "tcp:$HostServerPort" | Out-Null
+  Write-Host "Android emulator route: $configured -> host 127.0.0.1:$HostServerPort"
+  return [ordered]@{
+    configured = [string]$configured
+    devicePort = $devicePort
+    hostPort = $HostServerPort
   }
 }
 function Get-WebViewSocket {
@@ -241,6 +283,7 @@ $report = [ordered]@{
   vodQualityRank = $VodQualityRank
   vodResumeSeconds = $VodResumeSeconds
   vodDurationSeconds = $VodDurationSeconds
+  hostServerPort = $HostServerPort
   sections = [ordered]@{}
   failures = $failures
 }
@@ -249,6 +292,8 @@ if ($InstallApk) {
   $apk = Resolve-Path (Join-Path $repo $ApkPath)
   Invoke-Adb install -r $apk | Out-Host
 }
+$serverRoute = Ensure-EmulatorServerRoute
+if ($serverRoute) { $report['serverRoute'] = $serverRoute }
 
 Invoke-Adb logcat -c | Out-Null
 Invoke-Adb shell am force-stop $Package | Out-Null

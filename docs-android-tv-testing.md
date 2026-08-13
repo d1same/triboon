@@ -71,6 +71,13 @@ For an emulator talking to a Triboon server running on this Windows host, use:
 http://10.0.2.2:7777
 ```
 
+An existing QA AVD may instead retain a loopback address such as
+`http://127.0.0.1:7782` so its WebView origin and sign-in remain stable. The
+stress helper detects that debug-app preference and automatically establishes
+`adb reverse` from the saved device port to host port `7777`. Override the host
+port with `-HostServerPort <port>` or `TRIBOON_ANDROID_HOST_PORT`; pass
+`-HostServerPort 0` only when managing the route yourself.
+
 For an isolated test server that does not touch the main `data/` folder:
 
 ```powershell
@@ -149,6 +156,11 @@ Triboon server is running and reachable, and the app is signed in with a profile
 selected. The helper stops at this preflight when it sees an offline device, a
 server error page, Setup, Login, profile selection, or PIN entry; those states
 do not produce misleading page, IPTV, or VOD failures.
+
+`verify:full` and the standalone helper automatically bridge a loopback-configured
+emulator to the host Triboon server. Authentication is intentionally not
+automated: after an APK reinstall or cleared WebView data, sign in and select the
+profile once, then rerun the gate.
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\bench\android-tv-stress.ps1 `

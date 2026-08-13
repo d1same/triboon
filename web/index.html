@@ -7300,6 +7300,7 @@ function rememberPlayerReturn() {
   const livePane = document.querySelector('.liveChannelPane') || document.querySelector('#guide');
   S.playerReturn = {
     view: S.view,
+    homeFocus: S.view === 'home' ? homeFocusSnapshot() : null,
     libId: S.currentLib && S.currentLib.id,
     localShow: S.localShow,
     gridIdx: S.gridIdx || 0,
@@ -7603,6 +7604,7 @@ function captureDetailReturn() {
   const rowRoot = S.rowsView && S.rowsView.root;
   S.detailReturn = {
     view: S.view || 'home',
+    homeFocus: S.view === 'home' ? homeFocusSnapshot() : null,
     zone: S.zone || '',
     rowIdx: S.rowIdx || 0,
     colIdx: { ...(S.colIdx || {}) },
@@ -7631,9 +7633,22 @@ function replaceRoute(hash) {
 function restoreDetailReturn() {
   const ret = typeof S.detailReturn === 'string' ? { view: S.detailReturn } : (S.detailReturn || { view: 'home' });
   const view = ret.view || 'home';
+  let homeSnap = null;
   switchView(view, false, { preservePage: true, preserveSearch: true, restoreFocus: true });
+  if (view === 'home') {
+    // preservePage intentionally skips loadRows(), but watch progress may have changed while the
+    // detail/player stack was open. Rebuild synchronously from saveWatch()'s local upsert before
+    // the browser can paint the preserved (stale) row, then refresh next-up data in the background.
+    homeSnap = ret.homeFocus || {
+      zone: ret.zone || 'rows', rowIdx: ret.rowIdx || 0, colIdx: { ...(ret.colIdx || {}) },
+      heroIdx: ret.heroIdx || 0, scrollTop: ret.rowScrollTop || 0, rowScrollLeft: 0,
+    };
+    publishHomeRows(homeRowsFromWatch(cachedWatchRowsForHome(), false), { preserveFocus: true, focusSnapshot: homeSnap });
+    loadRows({ watchReady: true, preserveFocus: true, focusSnapshot: homeSnap, background: true }).catch(() => {});
+  }
   replaceRoute(detailReturnRoute(ret));
-  requestAnimationFrame(() => requestAnimationFrame(() => restoreDetailFocus(ret)));
+  requestAnimationFrame(() => requestAnimationFrame(() =>
+    view === 'home' ? restoreHomeFocus(homeSnap) : restoreDetailFocus(ret)));
 }
 function restoreDetailFocusRoots(ret) {
   if (!ret) return;
@@ -12445,11 +12460,23 @@ async function refreshPlayerRuntimeStats(force = false) {
 }
 function playerModeLabel(p = S.playing) {
   if (!p) return '';
-  if (p.usingNative) return 'ExoPlayer';
+  if (p.usingNative) return nativePlayerModeLabel();
   if (p.usingTranscode) return 'Transcode';
   if (p.usingRemux) return 'Remux';
   if (p.usingLiveMse) return 'Live remux';
   return 'Direct';
+}
+function nativePlayerTelemetryId() {
+  const caps = nativePlaybackCaps();
+  const player = String(caps && caps.player || '').toLowerCase();
+  if (player === 'libmpv') return 'libmpv';
+  try {
+    if (window.TriboonTV && TriboonTV.__triboonWindowsBridge === true) return 'libmpv';
+  } catch {}
+  return 'exo';
+}
+function nativePlayerModeLabel() {
+  return nativePlayerTelemetryId() === 'libmpv' ? 'libmpv' : 'ExoPlayer';
 }
 function playerStreamKind(p = S.playing) {
   if (!p || !p.item) return '';
@@ -12470,7 +12497,10 @@ function clientVersionLabel() {
   try {
     if (window.TriboonTV && TriboonTV.appVersion) {
       const app = JSON.parse(TriboonTV.appVersion() || '{}');
-      if (app.versionName) return `${app.tv ? 'Android TV' : 'Android app'} ${app.versionName}${app.versionCode ? ` (${app.versionCode})` : ''}`;
+      if (app.versionName) {
+        if (app.platform === 'windows') return `Windows ${app.versionName}`;
+        return `${app.tv ? 'Android TV' : 'Android app'} ${app.versionName}${app.versionCode ? ` (${app.versionCode})` : ''}`;
+      }
     }
   } catch {}
   return (S.serverInfo && S.serverInfo.version) ? `Web ${S.serverInfo.version}` : 'Web app';
@@ -12521,7 +12551,7 @@ function activityPayload(state = 'watching') {
     title: meta.title || p.item.title || 'Playing',
     subline: meta.subline || '',
     profile: S.profile ? S.profile.name || S.profile.id : '',
-    player: p.usingNative ? 'exo' : 'web',
+    player: p.usingNative ? nativePlayerTelemetryId() : 'web',
     mode: playerModeLabel(p),
     streamKind: playerStreamKind(p),
     streamLabel: playerStreamLabel(p),
@@ -12800,6 +12830,15 @@ async function closePlayer(opts = {}) {
     const cwDetailTarget = (!ret.view || ret.view === 'home') ? playbackFinishedDetailTarget(closingItem) : null;
     if (cwDetailTarget) {
       S.playerReturn = null;
+      // Direct one-press playback from a Home Continue Watching card never opened Details first,
+      // so carry its exact Home focus snapshot into the Details return contract now.
+      if (ret.homeFocus) {
+        S.detailReturn = {
+          view: 'home', homeFocus: ret.homeFocus, zone: ret.homeFocus.zone || 'rows',
+          rowIdx: ret.homeFocus.rowIdx || 0, colIdx: { ...(ret.homeFocus.colIdx || {}) },
+          heroIdx: ret.homeFocus.heroIdx || 0, rowScrollTop: ret.homeFocus.scrollTop || 0,
+        };
+      }
       // Paint the details page IMMEDIATELY — openDetail shows the panel synchronously, so the
       // homepage never flashes through. The final watch-state flush happens in the background
       // and then refreshes the visible Resume/Start Over buttons (and the open season's watched

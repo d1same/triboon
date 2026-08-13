@@ -42,6 +42,14 @@
       ? bootstrap.playbackCaps : {}),
     native: true,
   });
+  const bootstrapVersion = (bootstrap.appVersion && typeof bootstrap.appVersion === 'object')
+    ? bootstrap.appVersion : {};
+  const appVersion = Object.freeze({
+    versionName: String(bootstrapVersion.versionName || ''),
+    versionCode: Math.max(0, Number(bootstrapVersion.versionCode) || 0),
+    tv: false,
+    platform: 'windows',
+  });
 
   function invokeNative(command, args) {
     const injected = window.__TRIBOON_WINDOWS_INVOKE__;
@@ -142,6 +150,10 @@
 
     nativePlaybackCaps() {
       return JSON.stringify(playbackCaps);
+    },
+
+    appVersion() {
+      return JSON.stringify(appVersion);
     },
 
     changeServer() {

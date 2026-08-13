@@ -111,6 +111,35 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-12, immediate Continue Watching repaint + reproducible emulator route:
+
+- Returning from Details/player to Home now synchronously rebuilds Continue
+  Watching from the locally-upserted watch cache before the preserved page can
+  paint stale progress, then refreshes next-up data in the background while
+  restoring the exact focused item and scroll position. A behavioral phase4
+  regression executes the extracted return path and proves the fresh resume
+  value is published before the background load.
+- The Android stress helper now detects a debug emulator whose saved Triboon
+  origin is loopback (the QA AVD uses `127.0.0.1:7782`), verifies the host
+  Triboon server first, and establishes the required `adb reverse` route.
+  `verify:full` forwards the host port; docs cover the override and intentional
+  authentication boundary. The dedicated non-admin `qa_stress` account was
+  reset with an unlogged random password and its emulator session retained;
+  owner credentials were not changed or persisted by the verification work.
+- `npm.cmd run verify:full -- -AndroidDevice emulator-5554
+  -AndroidHostServerPort 7777` passed every gate on the final tree: focused P9,
+  P14, and P11 suites; full Node suite 464/464; isolated server smoke; Android
+  lint/native unit/debug build; and Android ExoPlayer stress
+  `bench/stress-results/android-tv-stress-20260812-213348.json` with `ok: true`,
+  zero failures, zero warnings, and the recorded 7782 -> 7777 route.
+- A second focused device smoke seeded a 120/600-second watch point and passed
+  native VOD start, Continue Watching resume, and seek coverage:
+  `bench/stress-results/android-tv-stress-20260812-213549.json` (`ok: true`,
+  requested resume 120 seconds, resume fraction 0.2, zero failures/warnings).
+- Unverified on this run: real-provider playback (the local configured QA
+  source was used), physical-TV behavior outside the emulator, and Windows
+  native playback (unaffected by these web/verification changes).
+
 2026-08-11, v2.9.5 NNTP pipelining becomes a dashboard setting:
 
 - Version contract aligned: `package.json` 2.9.5; Android `versionName` 2.9.5 /
@@ -929,8 +958,9 @@ node --test test/release-contract.test.js
 
 # From the repository root. This is the same locked recipe used by CI; it
 # imports MSVC, tests Rust, builds NSIS, extracts it, and byte-checks its payload.
+$tag = 'v' + (Get-Content .\package.json -Raw | ConvertFrom-Json).version
 powershell -ExecutionPolicy Bypass -File `
-  .\clients\windows-px8\scripts\build-package.ps1 -Tag v2.8.0
+  .\clients\windows-px8\scripts\build-package.ps1 -Tag $tag
 ```
 
 The normal pull-request/main/tag workflow performs the locked MSVC native build.

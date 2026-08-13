@@ -293,6 +293,38 @@ test('Trakt percent-only native resume reaches direct and server-seek Android pa
     'a direct percent resume already playing at its target must commit the real-playing boundary and clear the loader');
 });
 
+test('returning from Details repaints Home from the latest resume cache before background refresh', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf('function restoreDetailReturn()');
+  const end = ui.indexOf('function restoreDetailFocusRoots(', start);
+  assert.ok(start >= 0 && end > start, 'restoreDetailReturn should be extractable');
+
+  const calls = [];
+  const focus = { zone: 'rows', rowIdx: 0, colIdx: { 0: 2 }, itemKey: 'tmdb:movie:77', scrollTop: 40, rowScrollLeft: 120 };
+  const S = { detailReturn: { view: 'home', homeFocus: focus } };
+  const restoreDetailReturn = new Function(
+    'S', 'switchView', 'publishHomeRows', 'homeRowsFromWatch', 'cachedWatchRowsForHome',
+    'loadRows', 'replaceRoute', 'detailReturnRoute', 'requestAnimationFrame', 'restoreHomeFocus', 'restoreDetailFocus',
+    `${ui.slice(start, end)}\nreturn restoreDetailReturn;`,
+  )(
+    S,
+    (view, _focus, opts) => { S.view = view; calls.push(['switch', view, opts]); },
+    (rows, opts) => calls.push(['publish', rows, opts]),
+    (cw) => [{ name: 'Continue watching', items: [{ key: cw[0].key, resume: cw[0].position }] }],
+    () => [{ key: 'tmdb:movie:77', position: 777 }],
+    (opts) => { calls.push(['load', opts]); return Promise.resolve(); },
+    () => {}, () => '#/home', (fn) => { fn(); }, () => {}, () => {},
+  );
+
+  restoreDetailReturn();
+  assert.deepStrictEqual(calls.map((call) => call[0]), ['switch', 'publish', 'load'],
+    'Home should switch, synchronously publish fresh cached progress, then start its background refresh');
+  assert.strictEqual(calls[1][1][0].items[0].resume, 777,
+    'the synchronous Home repaint should use the latest locally-upserted resume position');
+  assert.strictEqual(calls[1][2].focusSnapshot, focus,
+    'the repaint should preserve the exact Continue Watching focus and scroll snapshot');
+});
+
 test('quality toggle is a source-selection preference that survives Continue Watching', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   assert.match(ui, /body\.maxResolutionRank = qRank;[\s\S]+body\.preferResolutionRank = qRank;/,
@@ -497,6 +529,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   // player teardown and the details page (owner-reported flash).
   assert.match(ui, /const cwDetailTarget = \(!ret\.view \|\| ret\.view === 'home'\) \? playbackFinishedDetailTarget\(closingItem\) : null;[\s\S]+if \(cwDetailTarget\) \{[\s\S]+const detailReady = openDetail\(cwDetailTarget\);[\s\S]+await finalWatch; await finalActivity; await loadWatchState\(true\); await detailReady;[\s\S]+syncDetailButtons\(S\.detailItem\);[\s\S]+return;/,
     'closing playback launched from Continue Watching opens the details page IMMEDIATELY (no homepage flash) and refreshes Resume/watched marks in the background');
+  assert.match(ui, /function rememberPlayerReturn\(\) \{[\s\S]+homeFocus: S\.view === 'home' \? homeFocusSnapshot\(\) : null,[\s\S]+if \(ret\.homeFocus\) \{[\s\S]+S\.detailReturn = \{[\s\S]+homeFocus: ret\.homeFocus/,
+    'one-press playback from Home should carry the exact Continue Watching focus into the Details return contract');
+  assert.match(ui, /function restoreDetailReturn\(\) \{[\s\S]+switchView\(view, false, \{ preservePage: true,[\s\S]+if \(view === 'home'\) \{[\s\S]+publishHomeRows\(homeRowsFromWatch\(cachedWatchRowsForHome\(\), false\), \{ preserveFocus: true, focusSnapshot: homeSnap \}\);[\s\S]+loadRows\(\{ watchReady: true, preserveFocus: true, focusSnapshot: homeSnap, background: true \}\)/,
+    'returning from Details should synchronously repaint preserved Home rows from the latest resume cache');
   // The in-player episode rail spans the current season PLUS the next two, so deep-diving the
   // strip can cross a season boundary without leaving the player; a stale-token re-check after
   // the extra season fetches keeps a newer playback from being clobbered by the slow one.

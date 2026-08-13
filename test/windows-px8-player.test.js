@@ -9,6 +9,8 @@ const vm = require('node:vm');
 const root = path.join(__dirname, '..');
 const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
 const bridgeSource = read('clients/windows-px8/ui/bridge.js');
+const webSource = read('web/index.html');
+const currentVersion = JSON.parse(read('package.json')).version;
 
 function loadBridge() {
   const calls = [];
@@ -23,6 +25,7 @@ function loadBridge() {
   sandbox.__TRIBOON_WINDOWS_BOOTSTRAP__ = {
     chromeVersion: 4,
     playbackCaps: { hevc: true, hwdecRequested: 'd3d11-auto-safe' },
+    appVersion: { versionName: currentVersion, versionCode: 0, tv: false, platform: 'windows' },
   };
   sandbox.__TRIBOON_WINDOWS_INVOKE__ = (command, args) => {
     calls.push({ command, args });
@@ -91,7 +94,7 @@ test('Windows client: bridge exposes Android-compatible native playback controls
   const { window, calls } = loadBridge();
   const bridge = window.TriboonTV;
   const required = [
-    'nativeChromeVersion', 'nativePlaybackCaps', 'showVideoLoading', 'playVideo', 'playLive',
+    'nativeChromeVersion', 'nativePlaybackCaps', 'appVersion', 'showVideoLoading', 'playVideo', 'playLive',
     'closeVideo', 'play', 'pause', 'resume', 'togglePlay', 'seekTo', 'seekBy', 'nextEpisode',
     'selectQuality', 'selectAudio', 'selectSubtitle', 'updateSubtitleChoices',
     'updateActiveSubtitle', 'updateVideoDuration', 'updateEpisodeChoices', 'upNext',
@@ -104,6 +107,12 @@ test('Windows client: bridge exposes Android-compatible native playback controls
   assert.strictEqual(caps.player, 'libmpv');
   assert.strictEqual(caps.hwdecRequested, 'd3d11-auto-safe');
   assert.strictEqual(caps.softwareFallback, true);
+  assert.deepStrictEqual(JSON.parse(bridge.appVersion()), {
+    versionName: currentVersion,
+    versionCode: 0,
+    tv: false,
+    platform: 'windows',
+  }, 'the existing Rust bootstrap version is exposed through the narrow bridge');
 
   assert.strictEqual(bridge.playVideo(JSON.stringify({
     url: '/api/stream/movie?t=secret', playbackToken: 91, start: 12,
@@ -119,6 +128,21 @@ test('Windows client: bridge exposes Android-compatible native playback controls
     JSON.parse(JSON.stringify(calls.at(-1))),
     { command: 'windows_player_control', args: { action: 'seek_absolute', payload: { seconds: 44 } } },
   );
+});
+
+test('Windows client: web telemetry identifies libmpv and reports the desktop version', () => {
+  assert.match(webSource,
+    /function nativePlayerTelemetryId\(\)[\s\S]+caps && caps\.player[\s\S]+player === 'libmpv'[\s\S]+return 'libmpv'/,
+    'native telemetry uses the native capability player identity');
+  assert.match(webSource,
+    /__triboonWindowsBridge === true\) return 'libmpv'/,
+    'the reviewed Windows bridge identity is a safe fallback');
+  assert.match(webSource, /if \(p\.usingNative\) return nativePlayerModeLabel\(\)/,
+    'the support mode label is platform-aware');
+  assert.match(webSource, /player: p\.usingNative \? nativePlayerTelemetryId\(\) : 'web'/,
+    'activity rows distinguish libmpv from ExoPlayer');
+  assert.match(webSource, /app\.platform === 'windows'[\s\S]+Windows/,
+    'client version labels identify the Windows desktop client');
 });
 
 test('Windows client: native events preserve playback identity and full lifecycle', () => {
