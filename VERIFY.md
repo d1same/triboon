@@ -129,10 +129,11 @@ fails to produce a playable stream. Budgets default to feels-local targets
   reset with an unlogged random password and its emulator session retained;
   owner credentials were not changed or persisted by the verification work.
 - `npm.cmd run verify:full -- -AndroidDevice emulator-5554
-  -AndroidHostServerPort 7777` passed every gate on the final versioned tree: focused P9,
+  -AndroidHostServerPort 7777` passed every gate again on the final versioned
+  tree after the libmpv lock correction: focused P9,
   P14, and P11 suites; full Node suite 464/464; isolated server smoke; Android
   lint/native unit/debug build; and Android ExoPlayer stress
-  `bench/stress-results/android-tv-stress-20260812-214755.json` with `ok: true`,
+  `bench/stress-results/android-tv-stress-20260813-072529.json` with `ok: true`,
   zero failures, zero warnings, and the recorded 7782 -> 7777 route.
 - A second focused device smoke seeded a 120/600-second watch point and passed
   native VOD start, Continue Watching resume, and seek coverage:
@@ -150,6 +151,9 @@ fails to produce a playable stream. Budgets default to feels-local targets
   licenses, source/rebuild instructions, notices, and Rust inventory; the
   unsigned local installer SHA-256 was
   `a5c2e0403982f5b926cdca4b531e8a22dc110c98f3b0840d933a92d89fd3c2bd`.
+- Docker Desktop 29.5.2 built `triboon:verify-v2.9.6` from the final tree. An
+  isolated container with a fresh disposable volume reached `healthy` and
+  `/api/server` reported version 2.9.6 / phase 4 before cleanup.
 - Unverified on this run: real-provider playback (the local configured QA
   source was used), physical-TV behavior outside the emulator, and Windows
   native playback (unaffected by these web/verification changes).
