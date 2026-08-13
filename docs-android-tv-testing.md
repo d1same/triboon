@@ -178,7 +178,7 @@ The stress helper itself verifies:
 - Home, Movies, TV Shows, Watchlist, Calendar, Discover, Live TV, and Music can be opened and backed out repeatedly.
 - Movies/TV Back first opens the section rail/menu, then returns Home on the next Back.
 - Source selection keeps the 1080p and 4K picks separated for the same title.
-- Native Live TV survives 20 Up/Down channel changes without provider-protection or fatal log markers.
+- Native Live TV starts on a video channel (radio/offline rows are skipped), then survives 20 Up/Down channel changes without provider-protection or fatal log markers.
 - Native PiP guide opens and Back returns to fullscreen without leaving the screensaver/background behind.
 - VOD survives 20 forward/rewind media-key seeks without a stuck loader.
 - VOD startup/seek remains responsive while other playback/background work is active; if this fails, review provider capacity, startup reserve, and NNTP priority lanes in `docs-streaming-performance.md`.

@@ -443,15 +443,32 @@ $liveStart = Invoke-CdpJson @"
   const j = await api('/api/iptv/channels');
   const channels = Array.isArray(j.channels) ? j.channels : [];
   S.liveChannels = channels;
-  S.liveList = channels.slice(0, Math.max(30, $LiveZaps + 4)).map(liveItemForPlayerGuide).filter(Boolean);
+  const mapped = channels.map(liveItemForPlayerGuide).filter(Boolean);
+  // Keep in sync with bench/live-channel-pick.js and android-tv-smoke.ps1.
+  const videoLike = mapped.filter((x) => !/\[radio\]|\bradio\b|offline/i.test([x.title || '', x.genre || '', x.group || ''].join(' ')));
+  const pool = videoLike.length ? videoLike : mapped;
+  S.liveList = pool.slice(0, Math.max(30, $LiveZaps + 4));
   const it = S.liveList[0];
-  if (!it) return { ok: false, error: 'no live channel', count: channels.length };
+  if (!it) return { ok: false, error: 'no live channel', count: channels.length, videoCount: videoLike.length };
   await playChannel(it, S.liveList);
-  return { ok: true, count: channels.length, start: it.title, liveCur: S.liveCur };
+  return {
+    ok: true,
+    count: channels.length,
+    videoCount: videoLike.length,
+    start: it.title,
+    liveCur: S.liveCur,
+    usedRadioFallback: videoLike.length === 0
+  };
 })()
 "@ -AwaitPromise
 $report.sections['liveStart'] = $liveStart
 if (!$liveStart.ok) { Add-Failure "Live TV did not start: $($liveStart.error)" }
+if ($liveStart.ok -and $liveStart.start -match '(?i)\[radio\]|\bradio\b' -and [int]$liveStart.videoCount -gt 0) {
+  Add-Failure "Live TV started a radio channel even though video channels were available: $($liveStart.start)"
+}
+if ($liveStart.ok -and $liveStart.usedRadioFallback) {
+  Add-Warning "Live TV playlist had no video channels; stress fell back to radio"
+}
 Start-Sleep -Seconds 6
 
 $multiNativeHandoff = Invoke-CdpJson @"

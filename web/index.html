@@ -6700,7 +6700,7 @@ function playbackRequestBody(it, picked = null, qRank = qualityRankForItem(it)) 
     body.tmdbId = it.tmdbId;
     body.mediaType = (it.type === 'tv' || it.type === 'episode' || it.season != null || /^tmdb:tv:/i.test(String(it.key || ''))) ? 'tv' : 'movie';
   }
-  const preferredAudio = prefLang('alang');
+  const preferredAudio = prefAudioLang();
   if (preferredAudio) body.preferredAudioLanguage = preferredAudio;
   if (qRank !== null) {
     body.maxResolutionRank = qRank;
@@ -7184,7 +7184,7 @@ function sourceSearchQuery(it, opts = {}) {
   if (ids.season != null) params.set('season', String(ids.season));
   if (ids.ep != null) params.set('ep', String(ids.ep));
   if (it.originalLanguage) params.set('originalLanguage', String(it.originalLanguage));
-  const preferredAudio = prefLang('alang');
+  const preferredAudio = prefAudioLang();
   if (preferredAudio) params.set('preferredAudioLanguage', preferredAudio);
   const qRank = opts.includeQuality === false ? null : qualityRankForItem(it);
   if (qRank) {
@@ -11242,11 +11242,11 @@ function selectedPlayerAudioTrack(p) {
 function preferredAudioTrackForPlayer(p) {
   const audio = p && p.tracks && Array.isArray(p.tracks.audio) ? p.tracks.audio : [];
   if (audio.length <= 1) return null;
-  const wantA = prefLang('alang');
+  const wantA = audioLangKey(prefAudioLang());
   if (!wantA) return null;
   const cur = selectedPlayerAudioTrack(p);
-  if (cur && langCode(cur.lang) === wantA) return null;
-  return audio.filter((a) => langCode(a.lang) === wantA)
+  if (cur && audioLangKey(cur.lang) === wantA) return null;
+  return audio.filter((a) => audioLangKey(a.lang) === wantA)
     .sort((a, b) => (b.channels || 0) - (a.channels || 0))[0] || null;
 }
 function applyInitialAudioPreference(p) {
@@ -11384,9 +11384,8 @@ function tryNativeVideoPlayer(kind, atSeconds, opts = {}) {
     bufferGoalSec: p.bufferGoalSec || 0, // ExoPlayer sizes its buffer from this (clamped to device RAM)
     playbackToken: p.playbackToken || 0,
     qualityChoices: !!p.transcodeUrl,
-    // The user's saved audio-language preference — native ExoPlayer used to hardcode "en", so a
-    // multi-audio direct-play file always started on the English track regardless of Preferences.
-    preferredAudioLanguage: prefLang('alang') || '',
+    // Empty preference means English. A French/German MULTI file otherwise starts on track 0.
+    preferredAudioLanguage: audioLangKey(prefAudioLang()),
     audioChoices: nativeAudioChoices(),
     hasNext: p.item.type === 'episode',
     subtitleRel: subPayload.rel,
@@ -13480,6 +13479,16 @@ function prefLang(kind) {
     return localStorage.getItem('triboon.' + kind) || '';
   } catch { return ''; }
 }
+function prefAudioLang() {
+  return prefLang('alang') || 'eng';
+}
+function audioLangKey(c) {
+  const x = langCode(c);
+  if (!x) return '';
+  if (LANG_3TO2[x]) return LANG_3TO2[x];
+  if (x.length === 2) return x;
+  return x.slice(0, 2);
+}
 function savePrefLang(kind, value) {
   try { localStorage.setItem(prefLangKey(kind), value || (kind === 'slang' ? 'off' : '')); } catch {}
   syncProfilePrefsUp();
@@ -13514,8 +13523,8 @@ function savePrefCcStyle(value) {
 function preferredAutoSubtitleLang() {
   const sub = prefLang('slang');
   if (sub && sub !== 'off') return sub;
-  const audio = prefLang('alang');
-  return audio || 'eng';
+  const audio = prefAudioLang();
+  return audioLangKey(audio) || 'en';
 }
 function osLang(c) {
   const code = langCode(c);
@@ -13895,11 +13904,11 @@ function applyTrackPrefs() {
   if (p.usingNative && canUseNativeVideoPlayer()) return;
   applyStartupSubtitlePref();
   if (!p.tracks) { updateSrndBtn(); return; }
-  const wantA = prefLang('alang');
+  const wantA = audioLangKey(prefAudioLang());
   if (wantA && (p.tracks.audio || []).length > 1) {
     const cur = p.tracks.audio.find((a) => a.rel === p.audioTrack);
-    if (!cur || langCode(cur.lang) !== wantA) {
-      const best = p.tracks.audio.filter((a) => langCode(a.lang) === wantA)
+    if (!cur || audioLangKey(cur.lang) !== wantA) {
+      const best = p.tracks.audio.filter((a) => audioLangKey(a.lang) === wantA)
         .sort((a, b) => (b.channels || 0) - (a.channels || 0))[0];
       if (best && best.rel !== p.audioTrack) setAudio(best.rel);
     }
@@ -19342,6 +19351,7 @@ function applyMenuPrefs() {
   }
   fitRailToFullIcons(); // TV: keep the rail's visible icons WHOLE — never cut one in half at the overflow edge
   fitRailWidth();       // library names just changed → re-measure how wide the expanded menu needs to be
+  lockTvRailTabIndex();
 }
 // Android TV: the collapsed rail is a fixed-height scroll column (nav + libraries). When they overflow
 // it, the bottom edge used to cut ONE icon in half. Clip railMain to end right after the last FULL icon
@@ -19980,7 +19990,7 @@ function openPrefs() { // populates the Preferences PAGE (it's a view now, not a
   const langOpts = (kind) => {
     const cur = prefLang(kind);
     const head = kind === 'alang'
-      ? '<option value="">Audio: first track (default)</option>'
+      ? `<option value="" ${!cur ? 'selected' : ''}>Audio: English (default)</option>`
       : `<option value="off" ${(!cur || cur === 'off') ? 'selected' : ''}>Subtitles: no preferred language</option>`;
     return head + Object.entries(LANG_NAMES).map(([c, n]) =>
       `<option value="${c}" ${cur === c ? 'selected' : ''}>${kind === 'alang' ? 'Audio' : 'Subtitles'}: ${n}</option>`).join('');
@@ -20895,16 +20905,35 @@ function syncSearchClear() {
 function searchClearVisible() { return !$('searchClearBtn').hidden; }
 function focusSearchClear() { $('micBtn').blur(); $('searchInput').blur(); $('searchClearBtn').focus(); }
 // Land on the MIC when Search opens (owner: voice first on TV — it used to take two D-pad
-// presses to get there). Native .focus() inside the Android WebView occasionally does not take
-// on the first try (the button is revealed by the voice-capability check), and the remote's key
-// handling keys off document.activeElement — so verify and retry once on the next frame, and
-// paint the visual ring too since D-pad focus is class-driven.
+// presses to get there). Native .focus() inside the Android WebView often does not stick:
+// the menu Search button steals native focus back a beat later, so OK-on-Search flashes
+// the mic then returns to the left menu (Up was the workaround to reach voice again).
+// Retry across the WebView restore window, and stop if the user moved to type, results, or the rail.
+let searchMicLand = 0;
+let searchMicPinUntil = 0;
+function cancelSearchMicLand() { searchMicLand += 1; searchMicPinUntil = 0; }
+function searchMicLandBusy() {
+  if (S.view !== 'search' || S.zone === 'rail') return false;
+  const ae = document.activeElement;
+  if (ae === $('searchInput') || ae === $('searchClearBtn')) return false;
+  if (document.querySelector('#grid .focus')) return false;
+  return true;
+}
 function focusSearchMic() {
   const mic = $('micBtn');
   if (!mic || mic.style.display === 'none') { $('searchInput').focus(); return false; }
-  const land = () => { try { mic.focus(); } catch {} applyFocus(mic, false); };
+  const token = ++searchMicLand;
+  searchMicPinUntil = performance.now() + 600;
+  const land = () => {
+    if (token !== searchMicLand || !searchMicLandBusy()) return;
+    try { mic.focus({ preventScroll: true }); } catch { try { mic.focus(); } catch {} }
+    applyFocus(mic, false);
+  };
   land();
-  requestAnimationFrame(() => { if (document.activeElement !== mic && S.view === 'search') land(); });
+  requestAnimationFrame(land);
+  setTimeout(land, 80);
+  setTimeout(land, 220);
+  setTimeout(land, 520);
   return true;
 }
 // One clear action shared by the mouse click, the browser element-keydown, AND the on-device global
@@ -23143,6 +23172,11 @@ function focusHero(i) {
 }
 // D-pad rail enter/leave mirrors the mouse hover behavior: body.railOpen is what PUSHES the
 // content right (the same .22s slide as desktop), .expanded widens the rail itself.
+function lockTvRailTabIndex() {
+  if (!document.body.classList.contains('tv')) return;
+  document.querySelectorAll('.railBtn').forEach((b) => { b.tabIndex = -1; });
+}
+lockTvRailTabIndex();
 function leaveRail() {
   clearTimeout(S._railPrevT); // a pending rollover preview must not fire after leaving
   S._railPreviewKey = '';
@@ -23152,6 +23186,13 @@ function leaveRail() {
   // it stuck scrolled, or the logo sits half off the top of the screen afterwards.
   $('rail').scrollTop = 0;
   if ($('railMain')) $('railMain').scrollTop = 0;
+  // Android TV WebView restores native focus to the last <button> (the Search rail item).
+  // D-pad focus is class-driven, so take the menu out of the native tab order and blur it.
+  if (document.body.classList.contains('tv')) {
+    const ae = document.activeElement;
+    if (ae && $('rail').contains(ae)) ae.blur();
+    lockTvRailTabIndex();
+  }
 }
 function collapseRailAfterClick() {
   // Picking a nav item collapses the (click-expanded) rail on desktop and clears the D-pad
@@ -23228,6 +23269,7 @@ function focusRail(i, opts = {}) {
 // Entering the rail FROM content lands on the current view's own button — slot 0 is Search
 // in the default menu order, so blindly focusing slot 0 "started from search again" every time.
 function enterRail() {
+  cancelSearchMicLand();
   blurTextEntry();
   const btns = visibleRailButtons();
   const i = btns.findIndex((b) => b.classList.contains('active'));
@@ -24499,6 +24541,20 @@ const __tvInputState = reportTvInputState;
 document.addEventListener('focusin', (e) => {
   const textEntry = e.target && /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)
     && !(e.target.tagName === 'INPUT' && /^(checkbox|radio)$/.test(e.target.type));
+  // TV: the WebView can restore native focus onto a rail <button> after Search lands on the
+  // mic. JS D-pad focus is class-driven, so bounce that steal back to the mic (or just blur).
+  if (document.body.classList.contains('tv') && S.zone !== 'rail' && e.target && $('rail').contains(e.target)) {
+    try { e.target.blur(); } catch {}
+    if (S.view === 'search' && performance.now() < searchMicPinUntil) {
+      requestAnimationFrame(() => {
+        if (!searchMicLandBusy()) return;
+        const mic = $('micBtn');
+        if (!mic || document.activeElement === mic) return;
+        try { mic.focus({ preventScroll: true }); } catch {}
+        applyFocus(mic, false);
+      });
+    }
+  }
   if (e.target && !$('rail').contains(e.target) && (S.zone !== 'rail' || textEntry)) {
     if (textEntry && S.zone === 'rail') { S.zone = ''; clearFocus(); }
     collapseStaleRail();

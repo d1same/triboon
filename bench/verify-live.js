@@ -32,12 +32,15 @@
 // repeatedly. Optional quality is 1080p or 4k (overrides --quality for that title).
 // --concurrent fires every title's Play + first-byte + seek at the same time (the multi-user
 // soak: one 1080p person and one 4K person must not starve each other).
-// With no --title flags, DEFAULT_TITLES below is used (edit it for your own library).
-// Exit code is non-zero if any title fails to produce a playable stream.
+// --iptv plays two video Live TV channels (skips radio) and checks web remux + native first bytes.
+// --cc, after each VOD Play, hits /api/ossubs?list=1 (200 or 404 is fine; 401/5xx fails).
+// With no --title flags and no --iptv, DEFAULT_TITLES below is used (edit it for your own library).
+// Exit code is non-zero if any title or IPTV channel fails to produce a playable stream.
 
 const http = require('http');
 const https = require('https');
 const { URL } = require('url');
+const { pickLiveVideoChannels } = require('./live-channel-pick');
 
 // --- edit these for your own catalog, or pass --title flags instead ---
 const DEFAULT_TITLES = [
@@ -53,7 +56,7 @@ function parseArgs(argv) {
   const out = {
     base: process.env.TRIBOON_BASE || 'http://localhost:7777', titles: [],
     token: process.env.TRIBOON_TOKEN || null, qualityRank: null, resumeFrac: null,
-    concurrent: false,
+    concurrent: false, iptv: false, cc: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -61,6 +64,8 @@ function parseArgs(argv) {
     else if (a === '--title') out.titles.push(argv[++i]);
     else if (a === '--token') out.token = argv[++i];
     else if (a === '--concurrent') out.concurrent = true;
+    else if (a === '--iptv') out.iptv = true;
+    else if (a === '--cc') out.cc = true;
     else if (a === '--4k') out.qualityRank = 4;
     else if (a === '--quality') {
       out.qualityRank = parseQuality(argv[++i]);
@@ -70,7 +75,7 @@ function parseArgs(argv) {
       if (!(out.resumeFrac > 0.02 && out.resumeFrac < 0.985)) throw new Error('--resume-frac must be between 0.02 and 0.985');
     }
   }
-  if (!out.titles.length) out.titles = DEFAULT_TITLES.slice();
+  if (!out.titles.length && !out.iptv) out.titles = DEFAULT_TITLES.slice();
   return out;
 }
 
@@ -95,7 +100,7 @@ function parseTitle(spec) {
 }
 
 // Minimal JSON + Range client (zero deps; honors http/https from the base URL).
-function request(method, urlStr, { headers = {}, body = null, rangeBytes = 0 } = {}) {
+function request(method, urlStr, { headers = {}, body = null, rangeBytes = 0, timeoutMs = 0 } = {}) {
   return new Promise((resolve, reject) => {
     const u = new URL(urlStr);
     const lib = u.protocol === 'https:' ? https : http;
@@ -107,6 +112,7 @@ function request(method, urlStr, { headers = {}, body = null, rangeBytes = 0 } =
       opts._buf = buf;
     }
     const t0 = process.hrtime.bigint();
+    let timedOut = false;
     const req = lib.request(opts, (res) => {
       let firstByteMs = null;
       let received = 0;
@@ -127,11 +133,31 @@ function request(method, urlStr, { headers = {}, body = null, rangeBytes = 0 } =
         const raw = Buffer.concat(chunks);
         let json = null;
         try { json = JSON.parse(raw.toString('utf8')); } catch {}
-        resolve({ status: res.statusCode, headers: res.headers, json, raw, firstByteMs, received,
-          totalMs: Number(process.hrtime.bigint() - t0) / 1e6 });
+        resolve({
+          status: timedOut && !res.statusCode ? 0 : res.statusCode,
+          headers: res.headers, json, raw, firstByteMs, received,
+          totalMs: Number(process.hrtime.bigint() - t0) / 1e6,
+          error: timedOut && received === 0 ? 'timeout' : null,
+        });
       }
     });
-    req.on('error', (e) => { if (e.code === 'ECONNRESET' && rangeBytes) return; reject(e); });
+    if (timeoutMs > 0) {
+      req.setTimeout(timeoutMs, () => {
+        timedOut = true;
+        req.destroy();
+      });
+    }
+    req.on('error', (e) => {
+      if (e.code === 'ECONNRESET' && (rangeBytes || timedOut)) return;
+      if (timedOut) {
+        resolve({
+          status: 0, headers: {}, json: null, raw: Buffer.alloc(0), firstByteMs: null,
+          received: 0, totalMs: Number(process.hrtime.bigint() - t0) / 1e6, error: 'timeout',
+        });
+        return;
+      }
+      reject(e);
+    });
     if (opts._buf) req.write(opts._buf);
     req.end();
   });
@@ -209,6 +235,85 @@ async function probeBytes(base, authH, job, args) {
     const h = await request('GET', `${base}/api/health/${m.id}`, { headers: authH });
     row.health = (h.json && h.json.verdict) || '?';
   } catch {}
+
+  if (args.cc) await probeCc(base, authH, job);
+}
+
+function streamTokenFromMount(m) {
+  if (!m) return '';
+  if (m.streamToken) return String(m.streamToken);
+  try {
+    return new URL(m.streamUrl, 'http://local.invalid').searchParams.get('t') || '';
+  } catch {
+    return '';
+  }
+}
+
+async function probeCc(base, authH, job) {
+  const m = job.mount;
+  if (!m || !m.id) return;
+  const t = streamTokenFromMount(m);
+  const url = `${base}/api/ossubs/${encodeURIComponent(m.id)}?list=1${t ? `&t=${encodeURIComponent(t)}` : ''}`;
+  try {
+    const r = await request('GET', url, { headers: authH, timeoutMs: 15000 });
+    job.row.cc = r.status;
+    if (r.status === 401) {
+      job.row.note += ' CC HTTP 401';
+      job.failed = true;
+    } else if (r.status !== 200 && r.status !== 404) {
+      job.row.note += ` CC HTTP ${r.status}`;
+      job.failed = true;
+    }
+  } catch (e) {
+    job.row.note += ` CC ${e.message}`;
+    job.failed = true;
+  }
+}
+
+async function firstBytes(base, authH, path, timeoutMs) {
+  const r = await request('GET', `${base}${path}`, {
+    headers: authH, rangeBytes: 2048, timeoutMs,
+  });
+  return {
+    status: r.status,
+    bytes: r.received || 0,
+    ms: r.firstByteMs != null ? r.firstByteMs : r.totalMs,
+    error: r.error || null,
+  };
+}
+
+async function probeIptv(base, authH) {
+  const ch = await request('GET', `${base}/api/iptv/channels?lean=1`, { headers: authH, timeoutMs: 20000 });
+  if (ch.status !== 200 || !ch.json) {
+    console.log(`FAIL IPTV channels HTTP ${ch.status}`);
+    return 1;
+  }
+  const list = Array.isArray(ch.json.channels) ? ch.json.channels : [];
+  const picks = pickLiveVideoChannels(list, 2);
+  console.log(`iptv configured=${!!ch.json.configured} channels=${list.length} videoPicks=${picks.length}`);
+  if (!picks.length) {
+    console.log('FAIL IPTV: no channels');
+    return 1;
+  }
+  let fails = 0;
+  for (const pick of picks) {
+    const name = pick.name || pick.title || `idx:${pick.idx}`;
+    const play = await request('GET', `${base}/api/iptv/play/${pick.idx}?cid=${encodeURIComponent(pick.id)}`, {
+      headers: authH, timeoutMs: 15000,
+    });
+    if (play.status !== 200 || !play.json || !play.json.streamUrl || !play.json.nativeUrl) {
+      console.log(`FAIL IPTV play ${name} HTTP ${play.status}`);
+      fails++;
+      continue;
+    }
+    const web = await firstBytes(base, authH, play.json.streamUrl, 12000);
+    const native = await firstBytes(base, authH, play.json.nativeUrl, 8000);
+    const webOk = web.status >= 200 && web.status < 400 && web.bytes > 0;
+    const nativeOk = native.status >= 200 && native.status < 400 && native.bytes > 0;
+    console.log(`${webOk && nativeOk ? 'OK' : 'FAIL'} IPTV ${name} web=${web.status}/${web.bytes}b/${Math.round(web.ms || 0)}ms native=${native.status}/${native.bytes}b/${Math.round(native.ms || 0)}ms`);
+    if (!webOk || !nativeOk) fails++;
+  }
+  return fails;
 }
 
 async function snapshotStatus(base, authH) {
@@ -230,7 +335,12 @@ async function snapshotStatus(base, authH) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const base = args.base.replace(/\/$/, '');
-  console.log(`\nTriboon live self-test → ${base}${args.concurrent ? '  [CONCURRENT 1080p+4K soak]' : ''}\n${'='.repeat(64)}`);
+  const tags = [
+    args.concurrent ? 'CONCURRENT soak' : '',
+    args.iptv ? 'IPTV' : '',
+    args.cc ? 'CC' : '',
+  ].filter(Boolean);
+  console.log(`\nTriboon live self-test → ${base}${tags.length ? `  [${tags.join(' + ')}]` : ''}\n${'='.repeat(64)}`);
 
   // 1) Auth: token from flag/env, else log in with TRIBOON_USER/TRIBOON_PASS.
   let token = args.token;
@@ -256,6 +366,17 @@ async function main() {
   console.log('');
 
   let hardFail = 0;
+
+  if (args.iptv) {
+    hardFail += await probeIptv(base, authH);
+    if (!args.titles.length) {
+      console.log('='.repeat(64));
+      if (hardFail) { console.error(`\n${hardFail} IPTV check(s) failed.`); process.exit(1); }
+      console.log('\nLive TV first-byte + retune produced playable streams.');
+      return;
+    }
+    console.log('');
+  }
 
   if (args.concurrent) {
     const wall0 = process.hrtime.bigint();
@@ -301,6 +422,7 @@ function line(r) {
     cell('resume', r.resume, BUDGET.resume),
   ].join('');
   let s = `${head}${body} ${r.method.padEnd(14)} health=${String(r.health).padEnd(9)}`;
+  if (r.cc != null) s += ` cc=${r.cc}`;
   if (r.source) s += `\n${' '.repeat(28)}↳ ${r.source}`;
   if (r.note) s += `\n${' '.repeat(28)}⚠ ${r.note}`;
   return s;
@@ -312,4 +434,8 @@ function legend() {
     + `health: verified/degraded/blocked from a live triage on the mounted source.`;
 }
 
-main().catch((e) => { console.error(e); process.exit(2); });
+if (require.main === module) {
+  main().catch((e) => { console.error(e); process.exit(2); });
+}
+
+module.exports = { parseArgs, parseTitle, parseQuality };

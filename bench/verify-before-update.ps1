@@ -1,6 +1,7 @@
 param(
   [string]$AndroidDevice = $env:TRIBOON_ADB_DEVICE,
   [switch]$SkipAndroidStress,
+  [switch]$SkipHouseholdLive,
   [switch]$SkipServerSmoke,
   [int]$ServerPort = 7787,
   [ValidateRange(1, 4)]
@@ -77,7 +78,35 @@ if (!$SkipAndroidStress) {
   Write-Host "Android preflight ready: $AndroidDevice"
 }
 
+$LiveBase = if ($env:TRIBOON_BASE) { $env:TRIBOON_BASE.TrimEnd('/') } else { "http://127.0.0.1:$AndroidHostServerPort" }
+function Test-HouseholdLiveAuth {
+  return (-not [string]::IsNullOrWhiteSpace($env:TRIBOON_TOKEN)) -or (
+    -not [string]::IsNullOrWhiteSpace($env:TRIBOON_USER) -and -not [string]::IsNullOrWhiteSpace($env:TRIBOON_PASS)
+  )
+}
+if (!$SkipHouseholdLive) {
+  if (!(Test-HouseholdLiveAuth)) {
+    throw "Household live preflight: set TRIBOON_USER+TRIBOON_PASS or TRIBOON_TOKEN, or pass -SkipHouseholdLive and report those smokes unverified."
+  }
+  try {
+    $liveSrv = Invoke-RestMethod -Uri "$LiveBase/api/server" -TimeoutSec 5
+    if (-not $liveSrv.version) { throw "no version from $LiveBase/api/server" }
+    Write-Host "Household live preflight ready: $LiveBase v$($liveSrv.version)"
+  } catch {
+    throw "Household live preflight: start the app at $LiveBase (node server/index.js). $($_.Exception.Message)"
+  }
+}
+
 $failures = New-Object System.Collections.Generic.List[string]
+$script:coverage = [ordered]@{
+  "Household VOD play/seek/resume/CC" = "not run"
+  "Household IPTV web+native retune" = "not run"
+  "Household overlapping Play" = "not run"
+  "Android ExoPlayer Live+VOD+CC" = "not run"
+  "Windows native GPU/HDR" = "not run (needs a real Windows PC session)"
+  "Web UI click-through" = "not automated (stream path covered by household VOD/IPTV)"
+  "Episode handoff / nested Back / CW recovery" = "not automated (still a VERIFY.md live smoke)"
+}
 
 function Add-Failure([string]$Name, [string]$Message) {
   $failures.Add("${Name}: $Message") | Out-Null
@@ -204,6 +233,37 @@ if (!$SkipServerSmoke) {
   }
 }
 
+Invoke-Gate "household VOD play/seek/resume/CC" {
+  if ($SkipHouseholdLive) {
+    throw "Household live was skipped; report VOD/CC unverified."
+  }
+  $movie = if ($env:TRIBOON_VERIFY_MOVIE) { $env:TRIBOON_VERIFY_MOVIE } else { "The Super Mario Galaxy Movie||||4k" }
+  $episode = if ($env:TRIBOON_VERIFY_EPISODE) { $env:TRIBOON_VERIFY_EPISODE } else { "FROM S01E01||||1080p" }
+  & node bench/verify-live.js --base $LiveBase --cc --resume-frac 0.45 --title $movie --title $episode
+  Assert-ExitCode "household VOD verify-live"
+  $script:coverage["Household VOD play/seek/resume/CC"] = "PASS"
+}
+
+Invoke-Gate "household IPTV first-byte + retune" {
+  if ($SkipHouseholdLive) {
+    throw "Household live was skipped; report IPTV unverified."
+  }
+  & node bench/verify-live.js --base $LiveBase --iptv
+  Assert-ExitCode "household IPTV verify-live"
+  $script:coverage["Household IPTV web+native retune"] = "PASS"
+}
+
+Invoke-Gate "household overlapping Play" {
+  if ($SkipHouseholdLive) {
+    throw "Household live was skipped; report concurrent Play unverified."
+  }
+  $movie = if ($env:TRIBOON_VERIFY_MOVIE) { $env:TRIBOON_VERIFY_MOVIE } else { "The Super Mario Galaxy Movie||||4k" }
+  $episode = if ($env:TRIBOON_VERIFY_EPISODE) { $env:TRIBOON_VERIFY_EPISODE } else { "FROM S01E01||||1080p" }
+  & node bench/verify-live.js --base $LiveBase --concurrent --title $episode --title $movie
+  Assert-ExitCode "household concurrent verify-live"
+  $script:coverage["Household overlapping Play"] = "PASS"
+}
+
 Invoke-Gate "Android lint, native unit tests, and debug build" {
   if ([string]::IsNullOrWhiteSpace($env:JAVA_HOME)) {
     $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
@@ -244,9 +304,15 @@ Invoke-Gate "Android ExoPlayer stress smoke" {
     -HostServerPort $AndroidHostServerPort `
     -NoScreenshot
   Assert-ExitCode "Android TV stress smoke"
+  $script:coverage["Android ExoPlayer Live+VOD+CC"] = "PASS"
 }
 
 Write-Host ""
+Write-Host "Live coverage:"
+foreach ($key in $script:coverage.Keys) {
+  Write-Host "  ${key}: $($script:coverage[$key])"
+}
+
 if ($failures.Count -gt 0) {
   Write-Host "Verification failed:"
   foreach ($failure in $failures) { Write-Host " - $failure" }
@@ -254,4 +320,4 @@ if ($failures.Count -gt 0) {
 }
 
 Write-Host "Automated verification passed."
-Write-Host "Complete the live smoke evidence in VERIFY.md before calling the update done."
+Write-Host "Complete any leftover 'not run' / 'not automated' rows in VERIFY.md before calling the update done."

@@ -47,8 +47,18 @@ That command runs:
 - focused subtitles/CC/P11 tests;
 - full `npm.cmd test`;
 - isolated `/api/server` runtime smoke;
+- household live smokes against the running app (`TRIBOON_USER` +
+  `TRIBOON_PASS` or `TRIBOON_TOKEN`): movie + episode play/seek/resume/CC,
+  IPTV web remux + native first-byte retune (skips radio), and overlapping
+  Play. Override titles with `TRIBOON_VERIFY_MOVIE` /
+  `TRIBOON_VERIFY_EPISODE`. `-SkipHouseholdLive` finishes as incomplete;
 - Android lint, native JVM unit tests, and debug build;
 - Android TV stress smoke when an ADB device is available or supplied.
+  Live TV start prefers a video channel and fails if it still lands on radio
+  while TV channels exist.
+
+The script prints a **Live coverage** scoreboard at the end so leftover
+Windows GPU, web click-through, and episode-handoff rows stay visible.
 
 The Android stress step is part of the full gate. If no Android device is
 available, the gate fails. If the runner explicitly skips it, the script still
@@ -84,7 +94,11 @@ changes, complete these live checks before saying the update is done:
 | Warm next episode | At 90 seconds remaining, the exact next S/E is prepared once. Manual/autoplay next joins that work and the prewarmed local lookup; it does not repeat the indexer/NZB/mount path. Out-of-order metadata from an older episode cannot replace the current player's next target. |
 
 If a live smoke cannot run, the final report must say `not run`, explain why,
-and describe the risk.
+and describe the risk. `verify:full` now runs the household stream-path
+smokes (VOD play/seek/resume/CC, IPTV retune, overlapping Play) when login
+env is set. It still cannot click the web player UI, prove Windows GPU
+decode, or walk episode-handoff / nested Back / Continue Watching source
+recovery — those rows stay owner-run.
 
 ### Guided live self-test (real provider, measured)
 
@@ -110,6 +124,49 @@ fails to produce a playable stream. Budgets default to feels-local targets
 (ready≤3s, 1stByte≤1.5s) and flag `SLOW` rather than hard-failing on timing.
 
 ### Latest Evidence
+
+2026-08-13, v2.9.8 English-first Play + Android TV Search mic pin:
+
+- Version contract: `package.json` 2.9.8; Android `versionName` 2.9.8 /
+  `versionCode` 326; Windows client package/Tauri/Cargo 2.9.8.
+- English-tagged sources beat higher-res French/German/MULTi dubs. Empty
+  Preferences audio now means English, not the first track. Owner confirmed
+  Lioness no longer opens on `FRENCH` BAWLS after the ranking restart.
+- Android TV Search: OK on the left-menu Search item keeps focus on the
+  microphone instead of bouncing back to the rail. Contract-tested; owner
+  live D-pad check is waiting on the Unraid pull.
+- `npm.cmd test` 563/563. `npm.cmd run verify:full -- -AndroidDevice
+  emulator-5554` passed whitespace, JS syntax, web parse, focused P9/P14/P11,
+  full Node suite, isolated `/api/server` 2.9.8 smoke, household VOD/IPTV/
+  overlapping Play, Android lint/native-unit/debug build, and ExoPlayer
+  stress `bench/stress-results/android-tv-stress-20260813-135258.json`
+  (`ok: true`).
+- Household live on `http://localhost:7777` (v2.9.8): Mario 4K
+  3934ms/575ms/394ms/13ms (ready SLOW, stream OK, English-HONE WEB-DL);
+  FROM S01E01 1433ms/176ms/548ms/43ms; overlapping Play 6ms/12ms; IPTV ABC
+  then ESPN web+native first-bytes OK.
+- Unverified on this run: owner Android TV Search-mic D-pad on the living-room
+  box, Windows native GPU/HDR, and signed-in browser click-through.
+
+2026-08-13, v2.9.7 final production pass (go-live gate):
+
+- `npm.cmd run verify:full -- -AndroidDevice emulator-5554` passed every
+  automated gate on the live 2.9.7 server: whitespace, JS syntax, web parse,
+  focused IPTV/P9, fast VOD/P14, subtitles/CC/P11, full Node suite 558/558,
+  isolated `/api/server` smoke, Android lint/native-unit/debug build, and
+  Android ExoPlayer stress
+  `bench/stress-results/android-tv-stress-20260813-125504.json` (`ok: true`,
+  zero failures/warnings). Stress covered Live TV start, Multiview, PiP,
+  zaps, Mario VOD start, Continue Watching, seek loop, and CC (`variants=1`).
+- Live household smokes on `http://localhost:7777` (v2.9.7, iptv=true):
+  Mario 4K play/seek/resume 930ms/158ms/5ms/36ms; FROM S01E01
+  564ms/248ms/5ms/42ms; overlapping 1080p+4K ready 1.4s/2.7s; IPTV ABC then
+  ESPN web remux + native first-bytes both OK (24,688 channels).
+- GitHub release `v2.9.7` is published with APK, both Windows installers, and
+  checksums.
+- Unverified on this run: Windows native GPU/HDR client on a real PC, and a
+  signed-in browser click-through of the web player (API + remux paths were
+  proven instead). Physical Chromecast/Android TV already passed earlier.
 
 2026-08-13, v2.9.7 overlapping Plays, kids search gate, shared web Live TV:
 

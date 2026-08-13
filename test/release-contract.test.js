@@ -57,6 +57,7 @@ test('release contract: every package verification/release entrypoint exists in 
   const required = [
     ['verify:full', 'bench/verify-before-update.ps1'],
     ['verify:live', 'bench/verify-live.js'],
+    ['live channel pick', 'bench/live-channel-pick.js'],
     ['release:apk', 'bench/cut-apk-release.ps1'],
     ['Android stress', 'bench/android-tv-stress.ps1'],
     ['Android smoke', 'bench/android-tv-smoke.ps1'],
@@ -182,6 +183,8 @@ test('release contract: Android verification fails fast on device and app precon
     'stress verifies the host Triboon server before bridging a loopback-configured emulator');
   assert.match(verify, /AndroidHostServerPort[\s\S]+android-tv-stress\.ps1[\s\S]+-HostServerPort \$AndroidHostServerPort/,
     'verify:full forwards the emulator host-port route into the Android stress gate');
+  assert.match(verify, /household IPTV first-byte \+ retune[\s\S]+verify-live\.js --base \$LiveBase --iptv/,
+    'verify:full runs household IPTV first-byte retune against the live server');
   assert.match(stress, /api\('\/api\/watchlist'\)[\s\S]+api\('\/api\/watch' \+ profileQ\(\)\)[\s\S]+exact -VodKey was not found/,
     'stress resolves and requires the exact requested VOD fixture instead of silently testing an unrelated home card');
   assert.match(stress, /const candidate = document\.getElementById\('chMultiBtn'\);[\s\S]+candidate && candidate\.offsetParent !== null/,

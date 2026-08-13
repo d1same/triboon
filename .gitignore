@@ -30,6 +30,7 @@ bench/
 bench/*
 !bench/verify-before-update.ps1
 !bench/verify-live.js
+!bench/live-channel-pick.js
 !bench/cut-apk-release.ps1
 !bench/android-tv-stress.ps1
 !bench/android-tv-smoke.ps1

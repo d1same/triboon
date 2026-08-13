@@ -56,7 +56,8 @@ const FEATURE = [
   { key: 'repack', score: 8, re: /\b(repack|rerip)\b/i },
   { key: 'proper', score: 6, re: /\bproper\b/i },
   { key: 'imax', score: 6, re: /\b(imax)\b/i },
-  { key: 'multi', score: 3, re: /\b(multi|dual[ .]?audio)\b/i },
+  // MULTI/dual is scored in the language block (English aboard vs dubbed-only). A flat
+  // bonus here used to promote French/German scene packs over untagged English WEB-DLs.
 ];
 
 // Release-group tiers (small representative list; admin-extensible in Phase 4 settings).
@@ -134,7 +135,7 @@ function parseRelease(name) {
 const LANGUAGE_ALIASES = new Map([
   ['eng', 'en'], ['english', 'en'],
   ['ger', 'de'], ['german', 'de'], ['deu', 'de'],
-  ['fre', 'fr'], ['fra', 'fr'], ['french', 'fr'], ['truefrench', 'fr'], ['vostfr', 'fr'],
+  ['fre', 'fr'], ['fra', 'fr'], ['french', 'fr'], ['truefrench', 'fr'], ['vff', 'fr'], ['vfq', 'fr'], ['vf2', 'fr'],
   ['italian', 'it'], ['ita', 'it'],
   ['spanish', 'es'], ['castellano', 'es'], ['latino', 'es'],
   ['hindi', 'hi'], ['tamil', 'ta'], ['telugu', 'te'],
@@ -144,9 +145,24 @@ const LANGUAGE_ALIASES = new Map([
   ['russian', 'ru'], ['rus', 'ru'],
   ['czech', 'cs'], ['hungarian', 'hu'],
   ['korean', 'ko'], ['japanese', 'ja'],
+  ['arabic', 'ar'], ['ara', 'ar'],
+  ['spanish', 'es'], ['castellano', 'es'], ['latino', 'es'],
+  ['hindi', 'hi'], ['tamil', 'ta'], ['telugu', 'te'],
+  ['polish', 'pl'], ['turkish', 'tr'],
+  ['swedish', 'sv'], ['norwegian', 'no'], ['danish', 'da'], ['finnish', 'fi'], ['nordic', 'nordic'],
+  ['dutch', 'nl'], ['flemish', 'nl'],
+  ['russian', 'ru'], ['rus', 'ru'],
+  ['czech', 'cs'], ['hungarian', 'hu'],
+  ['korean', 'ko'], ['japanese', 'ja'],
 ]);
-const LANG_TAG = /\b(german|french|italian|ita|spanish|castellano|latino|hindi|tamil|telugu|polish|turkish|nordic|swedish|norwegian|danish|finnish|dutch|flemish|russian|rus|czech|hungarian|korean|japanese|vostfr|truefrench)\b/i;
-const DUAL_TAG = /\b(dl|dual|multi|2audio|\d?audios|ita[ ._-]?eng|eng[ ._-]?ita)\b/i;
+const LANG_TAG = /\b(english|eng|german|ger|deu|french|fre|fra|vff|vfq|vf2|truefrench|italian|ita|spanish|castellano|latino|hindi|tamil|telugu|polish|turkish|nordic|swedish|norwegian|danish|finnish|dutch|flemish|russian|rus|czech|hungarian|korean|japanese|arabic|ara)\b/i;
+const VOST_TAG = /\b(vostfr|vost)\b/i;
+function isDualAudio(name) {
+  const n = String(name || '');
+  if (/\b(dual|multi|2audio|\d?audios|ita[ ._-]?eng|eng[ ._-]?ita)\b/i.test(n)) return true;
+  // Scene `.DL.` means dual-language. Do not treat WEB-DL / WEBDL as dual audio.
+  return /(?<!web)[._-]dl(?:[._-]|$)/i.test(n);
+}
 function normalizeLanguageCode(raw) {
   const s = String(raw || '').trim().toLowerCase().replace(/[^a-z]/g, '');
   if (!s) return '';
@@ -155,6 +171,11 @@ function normalizeLanguageCode(raw) {
 function releaseLanguageTag(name) {
   const m = LANG_TAG.exec(String(name || ''));
   return m ? normalizeLanguageCode(m[1]) : '';
+}
+function hasEnglishAudioHint(name) {
+  const n = String(name || '');
+  if (VOST_TAG.test(n) && !/\b(truefrench|vff|vfq|vf2)\b/i.test(n)) return false;
+  return /\b(english|eng)\b/i.test(n) || /\b(en[ ._-]?ita|ita[ ._-]?eng)\b/i.test(n);
 }
 
 // Streamability + health → score. Store RAR / flat = instant; compressed = playable but slow;
@@ -248,25 +269,32 @@ function scoreRelease(candidate, policy = {}) {
   // Soundtracks / bonus discs / bare music rips are never what "press play on a movie" means.
   const ntm = notTheMovie(candidate.name);
   if (ntm) add(`not-the-movie:${ntm}`, -100000);
-  // Language shaping (TRaSH "language: not original" spirit): a GERMAN.DL 2160p once beat
-  // the English 1080p on resolution alone. Dubbed-only releases sink hard; DUAL releases
-  // (DL / MULTi / ITA-ENG — original audio still aboard) take a milder hit so they stay
-  // honest fallbacks when nothing English-native exists.
-  const taggedLang = releaseLanguageTag(candidate.name);
-  if (taggedLang) {
-    const originalLang = normalizeLanguageCode(policy.originalLanguage);
-    const preferredAudio = normalizeLanguageCode(policy.preferredAudioLanguage || 'en') || 'en';
-    const dual = DUAL_TAG.test(candidate.name);
-    const matchesOriginal = originalLang && originalLang !== 'en' && taggedLang === originalLang;
-    if (matchesOriginal) {
-      add(dual && preferredAudio === 'en' ? 'original-dual-audio' : 'original-language',
-        dual && preferredAudio === 'en' ? 30 : 0);
-      if (!dual && preferredAudio === 'en') add('no-preferred-audio-hint', -40);
-    } else if (taggedLang === preferredAudio && preferredAudio !== 'en') {
-      add(dual ? 'preferred-dual-audio' : 'preferred-language', dual ? 30 : 80);
-    } else {
-      add(dual ? 'foreign-dual' : 'foreign-dub', dual ? -150 : -350);
-    }
+  // Language shaping: English (or the owner's saved audio language) beats a higher-res
+  // French/German dub. +400 preferred-4K used to outrun the old −150/−350 penalties.
+  // VOSTFR is original audio + foreign subs, not a dub. Unlabeled MULTi is a mild hit so
+  // a clean English WEB-DL still wins, but a MULTI with English aboard can still play.
+  const originalLang = normalizeLanguageCode(policy.originalLanguage);
+  const preferredAudio = normalizeLanguageCode(policy.preferredAudioLanguage || 'en') || 'en';
+  const dual = isDualAudio(candidate.name);
+  const vost = VOST_TAG.test(candidate.name) && !/\b(truefrench|vff|vfq|vf2)\b/i.test(candidate.name);
+  const taggedLang = vost ? '' : releaseLanguageTag(candidate.name);
+  const englishHint = hasEnglishAudioHint(candidate.name);
+  const matchesPreferred = (taggedLang && taggedLang === preferredAudio) || (preferredAudio === 'en' && englishHint);
+  const matchesOriginal = originalLang && taggedLang === originalLang && taggedLang !== preferredAudio;
+  if (vost && (!originalLang || originalLang === 'en' || originalLang === preferredAudio)) {
+    add('original-audio-foreign-subs', 10);
+  } else if (vost && originalLang && originalLang !== preferredAudio) {
+    add('original-language', -20);
+    if (preferredAudio === 'en') add('no-preferred-audio-hint', -40);
+  } else if (matchesPreferred) {
+    add(dual ? 'preferred-dual-audio' : 'preferred-language', dual ? 40 : 80);
+  } else if (matchesOriginal) {
+    add(dual ? 'original-dual-audio' : 'original-language', dual ? 20 : -20);
+    if (!dual && preferredAudio === 'en') add('no-preferred-audio-hint', -40);
+  } else if (taggedLang) {
+    add(dual ? 'foreign-dual' : 'foreign-dub', dual ? -600 : -800);
+  } else if (dual && !englishHint) {
+    add('unlabeled-multi', -120);
   }
 
   // Admin scoring tweaks (TRaSH-style "custom formats" lite). The built-in weights are the

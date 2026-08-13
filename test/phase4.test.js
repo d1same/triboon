@@ -259,13 +259,13 @@ test('Trakt percent-only native resume reaches direct and server-seek Android pa
     'nativeVideoSubtitleRel', 'nativeSubtitlePayload', 'updatePlayerMeta', 'episodePlayerMeta',
     'absoluteArtworkUrl', 'nativeMimeForKind', 'nativeQualityLabel', 'applySubSize',
     'nativeSubtitleChoices', 'nativeEpisodeChoices', 'loadSubShift', 'traktResumeFractionForItem',
-    'prefLang', 'nativeAudioChoices',
+    'prefLang', 'nativeAudioChoices', 'prefAudioLang', 'audioLangKey',
     'window', 'location', `${ui.slice(nativeStart, nativeEnd)}\nreturn tryNativeVideoPlayer;`)(
       state, () => true, (_p, at) => `/api/remux/one?start=${at}`, () => ({ blocked: false, rel: '' }),
       () => ({ rel: '', url: '', lang: '', label: '', shift: 0 }), () => {},
       (it) => ({ title: it.title, subline: '' }), () => '', () => '', () => '4K', () => 'M',
       () => [], () => [], () => 0, traktResumeFractionForItem,
-      () => '', () => [],
+      () => '', () => [], () => 'eng', () => 'en',
       window, { origin: 'http://triboon.test' });
   assert.strictEqual(tryNativeVideoPlayer('direct', 0), true);
   assert.strictEqual(payloads[0].startFraction, 0.42,
@@ -335,14 +335,16 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Sources searches should carry original-language and preferred-audio hints into scoring');
   assert.match(ui, /function sourceSearchQuery\(it, opts = \{\}\) \{[\s\S]+params\.set\('caps', JSON\.stringify\(clientCaps\(\)\)\)/,
     'Sources searches should carry native device caps so source ranking matches Exo playback');
-  assert.match(ui, /function playbackRequestBody\(it, picked = null, qRank = qualityRankForItem\(it\)\) \{[\s\S]+body\.originalLanguage[\s\S]+body\.preferredAudioLanguage/,
-    'Play and prepare requests should carry original-language and preferred-audio hints into source selection');
+  assert.match(ui, /function prefAudioLang\(\) \{[\s\S]+prefLang\('alang'\) \|\| 'eng'/,
+    'unset audio preference means English, not the first track');
   const serverForPolicy = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
   assert.ok(serverForPolicy.includes('function parseCapsQuery(raw) {')
     && serverForPolicy.includes("caps: parseCapsQuery(ctx.url.searchParams.get('caps'))"),
     'Sources search should parse native device caps into the server scoring policy');
   assert.match(serverForPolicy, /function playbackPolicyFor\(user, \{ maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage, caps: rawCaps \} = \{\}\) \{[\s\S]+policy\.originalLanguage[\s\S]+policy\.preferredAudioLanguage[\s\S]+policy\.audioPassthrough[\s\S]+policy\.lowPowerDevice/,
     'Server playback policy should preserve language/device hints for the scorer');
+  assert.match(serverForPolicy, /policy\.preferredAudioLanguage = preferredAudio \|\| 'en'/,
+    'Play defaults to English audio unless the owner saved a different language');
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8'), /if \(preferRank === 4\) policy\.exactResolutionRank = 4;/,
     '4K selection should be exact so fallback stays in the 4K source class');
   assert.match(serverForPolicy, /transcode: async \(ctx\) => \{[\s\S]+ctx\.user\.policy\.allowTranscode === false[\s\S]+transcoding is disabled for this account/,
@@ -658,8 +660,14 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'ambient colour comes from a dominant-hue histogram, not the single most extreme pixel');
   assert.match(ui, /#rail:not\(\.expanded\):not\(:hover\)\{opacity:\.62\}/,
     'the compact rail recedes as a whole surface, not just its icons');
-  assert.match(ui, /function focusSearchMic\(\) \{[\s\S]{0,600}requestAnimationFrame\(\(\) => \{ if \(document\.activeElement !== mic && S\.view === 'search'\) land\(\); \}\)/,
-    'Search lands on the mic and re-tries once if the WebView drops the first focus');
+  assert.match(ui, /function focusSearchMic\(\) \{[\s\S]{0,1200}searchMicPinUntil = performance\.now\(\) \+ 600[\s\S]{0,400}setTimeout\(land, 80\)[\s\S]{0,80}setTimeout\(land, 220\)[\s\S]{0,80}setTimeout\(land, 520\)/,
+    'Search lands on the mic and re-tries across the Android WebView restore window');
+  assert.match(ui, /function enterRail\(\) \{\s*\n\s*cancelSearchMicLand\(\);/,
+    'opening the left menu cancels a pending Search mic landing so Left-from-mic stays on the rail');
+  assert.match(ui, /function leaveRail\(\) \{[\s\S]+if \(ae && \$\('rail'\)\.contains\(ae\)\) ae\.blur\(\)[\s\S]+lockTvRailTabIndex\(\)/,
+    'leaving the TV rail blurs native focus and takes rail buttons out of the WebView tab order');
+  assert.match(ui, /S\.zone !== 'rail' && e\.target && \$\('rail'\)\.contains\(e\.target\)[\s\S]+searchMicPinUntil/,
+    'if the WebView restores focus onto Search in the left menu, bounce it back to the mic');
   assert.ok((ui.match(/focusSearchMic\(\)/g) || []).length >= 4,
     'every search-entry path routes through the mic-landing helper');
   assert.match(ui, /function fitRailWidth\(\) \{[\s\S]{0,1200}Math\.min\(RAIL_W_MAX, Math\.max\(RAIL_W_MIN, 60 \+ widest \+ 18\)\)/,
@@ -5093,7 +5101,7 @@ test('Android native player: direct source and native chrome stay out of the web
   // Native audio language: payload carries the user's saved preference + the probed source tracks
   // for server-muxed streams; a native pick round-trips through __tvNativeVideoAudio (respawn with
   // the chosen &audio= index). Direct play returns [] — ExoPlayer switches its real tracks itself.
-  assert.match(ui, /preferredAudioLanguage: prefLang\('alang'\) \|\| '',\s*\n\s*audioChoices: nativeAudioChoices\(\),/,
+  assert.match(ui, /preferredAudioLanguage: audioLangKey\(prefAudioLang\(\)\),\s*\n\s*audioChoices: nativeAudioChoices\(\),/,
     'the native payload carries the saved audio-language preference and the probed audio choices');
   assert.match(ui, /function nativeAudioChoices\(\) \{[\s\S]{0,200}currentPlayerKind\(p\) === 'direct'\) return \[\];[\s\S]{0,200}if \(audio\.length <= 1\) return \[\];/,
     'audio choices exist only for server-muxed streams with more than one source track');

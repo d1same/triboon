@@ -3675,7 +3675,7 @@ function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, orig
   const original = parseLanguageCode(originalLanguage);
   const preferredAudio = parseLanguageCode(preferredAudioLanguage);
   if (original) policy.originalLanguage = original;
-  if (preferredAudio) policy.preferredAudioLanguage = preferredAudio;
+  policy.preferredAudioLanguage = preferredAudio || 'en';
   if (caps.native) {
     policy.deviceCaps = caps;
     policy.dolbyVision = !!caps.dovi;

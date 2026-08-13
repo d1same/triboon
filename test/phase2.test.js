@@ -3798,6 +3798,16 @@ test('scoring: sample-size stubs and foreign-language dubs sink; duals stay hone
   assert.ok(lang.findIndex((c) => c.name.includes('DL.2160p')) < lang.findIndex((c) => c.name.includes('H265-DUB')),
     'dual ranks above dubbed-only');
 
+  const lang4kPref = rankReleases([
+    { name: 'Lioness.S01E01.FRENCH.2160p.WEB.H265-DUB', sizeBytes: 12e9 },
+    { name: 'Lioness.S01E01.GERMAN.DL.2160p.WEB.H265-VoDTv', sizeBytes: 12e9 },
+    { name: 'Lioness.S01E01.VFF.2160p.WEB.H265-DUB', sizeBytes: 12e9 },
+    { name: 'Lioness.S01E01.MULTi.1080p.WEB.H265-FRENCHPACK', sizeBytes: 8e9 },
+    { name: 'Lioness.S01E01.1080p.WEB-DL.DDP5.1.H.264-FLUX', sizeBytes: 7e9 },
+  ], { originalLanguage: 'en', preferResolutionRank: 4, maxResolutionRank: 4 });
+  assert.ok(lang4kPref[0].name.includes('FLUX'),
+    'English 1080p still beats preferred-4K French/German/VFF/MULTi');
+
   const foreignOriginal = rankReleases([
     { name: 'Parasite.2019.KOREAN.1080p.BluRay.x264-GRP', sizeBytes: 9e9 },
     { name: 'Parasite.2019.KOREAN.DL.1080p.BluRay.x264-GRP', sizeBytes: 9e9 },
@@ -3808,6 +3818,14 @@ test('scoring: sample-size stubs and foreign-language dubs sink; duals stay hone
   assert.ok(foreignOriginal.findIndex((c) => c.name.includes('KOREAN.1080p')) <
     foreignOriginal.findIndex((c) => c.name.includes('GERMAN.2160p')),
     'original-language release beats unrelated dubbed 4K for non-English originals');
+
+  const foreignWithEnglish = rankReleases([
+    { name: 'Parasite.2019.KOREAN.1080p.BluRay.x264-GRP', sizeBytes: 9e9 },
+    { name: 'Parasite.2019.ENGLISH.1080p.WEB-DL.H.264-NTb', sizeBytes: 6e9 },
+    { name: 'Parasite.2019.GERMAN.2160p.WEB.H265-DUB', sizeBytes: 12e9 },
+  ], { originalLanguage: 'ko', preferredAudioLanguage: 'en' });
+  assert.ok(foreignWithEnglish[0].name.includes('ENGLISH'),
+    'an English dub of a foreign title wins when it exists');
 });
 
 test('store: a failing flush never throws and retries once the disk recovers', () => {
