@@ -11,6 +11,7 @@ const { NntpPool, NntpConnection } = require('./nntp');
 const { mountNzb } = require('./archive');
 const { Store, VerdictCache } = require('./store');
 const { LibraryDb } = require('./library-db');
+const { parseLibraryName, pickLibraryTmdbHit, libraryItemMatchesTmdb, unboundLibraryItem } = require('./library-match');
 const { Auth, SecureSettings, RateLimiter } = require('./auth');
 const { Pipeline, mountHasActivePlayback } = require('./pipeline');
 const { TmdbProxy } = require('./tmdb');
@@ -1488,14 +1489,15 @@ function sendIptvNativeError(res, status, reason) {
   });
   res.end(body);
 }
-// ---- shared live upstream fan-out (native TS path) ----
-// ONE provider connection per (channel, variant), shared by every native viewer of that channel:
-// N televisions on the same game cost ONE upstream connection instead of N — the provider sees
-// exactly what a single-connection customer looks like, and re-joins/zap-backs within the linger
-// window start instantly off the ring buffer with no new provider handshake. Scope: continuous
-// byte streams only (TS). Playlist bodies (m3u8) are never shared — their segment fetches don't
-// flow through this proxy, so there is nothing to fan out. Web remux viewers keep per-viewer
-// upstreams for now (follow-up: tee this hub into the ts-pipe remux inputs).
+// ---- shared live upstream fan-out ----
+// ONE provider connection per (channel, variant), shared by every viewer of that channel:
+// N televisions/browsers on the same game cost ONE upstream connection instead of N — the
+// provider sees exactly what a single-connection customer looks like, and re-joins/zap-backs
+// within the linger window start instantly off the ring buffer with no new provider handshake.
+// Scope: continuous byte streams only (TS). Playlist bodies (m3u8) are never shared — their
+// segment fetches don't flow through this proxy, so there is nothing to fan out.
+// Native viewers get the TS bytes on the HTTP response. Browser remux viewers subscribe in
+// `pipe` mode: the same TS is teed into each viewer's stdin-fed ffmpeg, which remuxes to fMP4.
 const IPTV_SHARE_RING_MAX_BYTES = 3 * 1024 * 1024; // ~1-3s of a typical live TS: instant joins
 const IPTV_SHARE_LINGER_MS = 12000;                // zap-away grace before the upstream closes
 const iptvSharedHubs = new Map(); // shareKey -> hub
@@ -1516,8 +1518,15 @@ function createIptvLiveHub(shareKey, label) {
     lingerTimer: null,
     closed: false,
     joinable() { return !this.closed && (this.state === 'starting' || this.state === 'live'); },
-    subscribe(ctx, slot, subLabel) {
-      const sub = { res: ctx.res, req: ctx.req, slot, stallTimer: null, label: subLabel };
+    subscribe(ctx, slot, subLabel, opts = {}) {
+      const sub = {
+        res: ctx.res, req: ctx.req, slot, stallTimer: null, label: subLabel,
+        mode: opts.mode === 'pipe' ? 'pipe' : 'http',
+        onChunk: typeof opts.onChunk === 'function' ? opts.onChunk : null,
+        onLive: typeof opts.onLive === 'function' ? opts.onLive : null,
+        onFail: typeof opts.onFail === 'function' ? opts.onFail : null,
+        onClose: typeof opts.onClose === 'function' ? opts.onClose : null,
+      };
       this.subs.add(sub);
       if (this.lingerTimer) { clearTimeout(this.lingerTimer); this.lingerTimer = null; }
       const drop = (reason) => this.unsubscribe(sub, reason);
@@ -1527,9 +1536,16 @@ function createIptvLiveHub(shareKey, label) {
       ctx.res.once('error', () => drop('client error'));
       if (this.state === 'live') {
         try {
-          ctx.res.writeHead(this.status, this.headers);
-          for (const chunk of this.ring) ctx.res.write(chunk); // backfill → instant first frame
-          this._armStall(sub);
+          if (sub.mode === 'pipe') {
+            if (sub.onLive) sub.onLive();
+            for (const chunk of this.ring) {
+              if (sub.onChunk && sub.onChunk(chunk) !== false) this._armStall(sub);
+            }
+          } else {
+            ctx.res.writeHead(this.status, this.headers);
+            for (const chunk of this.ring) ctx.res.write(chunk); // backfill → instant first frame
+            this._armStall(sub);
+          }
         } catch { this.unsubscribe(sub, 'write failed'); }
       }
       return sub;
@@ -1538,7 +1554,11 @@ function createIptvLiveHub(shareKey, label) {
       if (!this.subs.has(sub)) return;
       this.subs.delete(sub);
       if (sub.stallTimer) { clearTimeout(sub.stallTimer); sub.stallTimer = null; }
-      try { if (!sub.res.destroyed && !sub.res.writableEnded) sub.res.destroy(); } catch {}
+      if (sub.mode === 'pipe') {
+        try { if (sub.onClose) sub.onClose(reason); } catch {}
+      } else {
+        try { if (!sub.res.destroyed && !sub.res.writableEnded) sub.res.destroy(); } catch {}
+      }
       sub.slot.done(reason);
       // Only a LIVE hub self-manages its lifecycle here — while 'starting', the opener request
       // owns cleanup (a queued joiner bailing must not close the hub under the opener's feet).
@@ -1578,8 +1598,13 @@ function createIptvLiveHub(shareKey, label) {
       else { delete this.headers['content-length']; delete this.headers['content-range']; }
       for (const sub of [...this.subs]) {
         try {
-          sub.res.writeHead(this.status, this.headers);
-          this._armStall(sub);
+          if (sub.mode === 'pipe') {
+            if (sub.onLive) sub.onLive();
+            this._armStall(sub);
+          } else {
+            sub.res.writeHead(this.status, this.headers);
+            this._armStall(sub);
+          }
         } catch { this.unsubscribe(sub, 'write failed'); }
       }
       // Headers landed but no bytes ever arrive → tear everyone down; the players re-request
@@ -1595,6 +1620,13 @@ function createIptvLiveHub(shareKey, label) {
           this.ringBytes -= this.ring.shift().length;
         }
         for (const sub of [...this.subs]) {
+          if (sub.mode === 'pipe') {
+            try {
+              // Same contract as HTTP: never pause the shared upstream for one slow remux.
+              if (sub.onChunk && sub.onChunk(chunk) !== false) this._armStall(sub);
+            } catch { this.unsubscribe(sub, 'write failed'); }
+            continue;
+          }
           if (sub.res.destroyed) { this.unsubscribe(sub, 'client closed'); continue; }
           try {
             // Never pause the shared upstream for one slow client: its socket buffers (bounded
@@ -1604,7 +1636,10 @@ function createIptvLiveHub(shareKey, label) {
         }
       });
       upstreamRes.on('end', () => {
-        for (const sub of [...this.subs]) { try { if (!sub.res.destroyed) sub.res.end(); } catch {} }
+        for (const sub of [...this.subs]) {
+          if (sub.mode === 'pipe') continue;
+          try { if (!sub.res.destroyed) sub.res.end(); } catch {}
+        }
         this.close('upstream ended');
       });
       upstreamRes.on('error', () => this.close('upstream error'));
@@ -1617,7 +1652,11 @@ function createIptvLiveHub(shareKey, label) {
       for (const sub of [...this.subs]) {
         this.subs.delete(sub);
         if (sub.stallTimer) clearTimeout(sub.stallTimer);
-        try { respond(sub.res); } catch {}
+        if (sub.mode === 'pipe') {
+          try { if (sub.onFail) sub.onFail(); } catch {}
+        } else {
+          try { respond(sub.res); } catch {}
+        }
         sub.slot.done('startup failed');
       }
     },
@@ -3174,12 +3213,14 @@ function profileLevelFor(user, profileId) {
 // lookup (keeps the common/owner case zero-latency). Otherwise fetch the title's US certification +
 // TMDB adult flag (cached by the proxy) and apply the same bar as the catalog: tier N allows cert
 // rank ≤ N (G 0 · PG 1 · PG-13 2 · R 3 · NC-17/NR 4). The hard `adult` flag always blocks below No
-// limit. Unknown/unfetchable maturity fails OPEN — the catalog + client already gate discovery, so
-// this is defense-in-depth and must not false-block on a TMDB hiccup or a title with no rating data.
+// limit. Restricted profiles MUST send a TMDB id — omitting it used to fail OPEN, which let a
+// crafted /api/play or /api/search skip the gate. Unknown/unfetchable *certification* still fails
+// OPEN so a TMDB hiccup or a title with no rating data cannot false-block.
 async function maturityAllowsPlay(level, tmdbId, mediaType) {
   if (level >= 4) return true;
   const id = parseInt(tmdbId, 10);
-  if (!id || !settings.get().tmdbKey) return true;
+  if (!id) return false;
+  if (!settings.get().tmdbKey) return true;
   const type = mediaType === 'tv' ? 'tv' : 'movie';
   let d;
   try { d = await tmdb.get(`/${type}/${id}?append_to_response=${type === 'tv' ? 'content_ratings' : 'release_dates'}`); }
@@ -4108,7 +4149,8 @@ function localItemFor(ctx, libId, idx) {
   return found;
 }
 function localItemPayload(ctx, libId, item) {
-  const { file, artFile, dir, ...rest } = item;
+  const safe = unboundLibraryItem(item);
+  const { file, artFile, dir, ...rest } = safe;
   return {
     ...rest,
     streamUrl: file ? `/api/local/${libId}/${rest.idx}?t=${auth.stableStreamToken(ctx.user.id, `local:${libId}:${rest.idx}`)}` : null,
@@ -4809,6 +4851,13 @@ const H = {
     const q = ctx.url.searchParams.get('q');
     if (!q) return send(ctx.res, 400, { error: 'q required' });
     if (throttleUserRoute(ctx, 'search', { max: 40, windowMs: 60000, lockMs: 60000 })) return;
+    // Same age gate as play/prepare: a restricted profile cannot list sources for an over-level
+    // title, and cannot omit tmdbId to skip the check (Sources always has the title identity).
+    if (!(await maturityAllowsPlay(
+      profileLevelFor(ctx.user, ctx.url.searchParams.get('profileId')),
+      ctx.url.searchParams.get('tmdbId'),
+      ctx.url.searchParams.get('mediaType')
+    ))) return maturityBlockedResponse(ctx);
     const { candidates, errors } = await pipeline.search(
       {
         q,
@@ -5839,20 +5888,34 @@ const H = {
     // the redirect / Cloudflare-IPv6 / HLS-segment failures that made channels read "unavailable" on
     // web are gone — this is the exact TS source the Android native player streams reliably. Any
     // pre-first-byte failure falls back to the legacy URL-opening loop (covers HLS-only providers).
-    const tsPipeTarget = (ch.nativeUrl && iptvNativeMime(ch.nativeUrl) === 'video/mp2t') ? ch.nativeUrl : '';
+    const tsPipeTarget = [ch.nativeUrl, ch.url].find((u) => u && iptvNativeMime(u) === 'video/mp2t') || '';
     const tsPipeRemux = async (tsTarget, onFail) => {
       liveSlot.kind = 'ts-pipe'; // Node owns the upstream socket; eviction tears it down synchronously
       let settled = false, wrote = false, up = null, ff = null, errBuf = '', idleTimer = null;
+      let hub = null, pipeSub = null, openedHub = false, handedOff = false;
+      const shareCid = ctx.url && ctx.url.searchParams ? String(ctx.url.searchParams.get('cid') || '') : '';
+      const shareKey = iptvShareKey({ idx: ch.idx }, shareCid, false);
+      const label = iptvNativeLogLabel({ idx: ch.idx, name: ch.name });
       const clearIdle = () => { if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; } };
       const cleanup = () => {
         clearIdle();
-        try { if (up) { up.removeAllListeners('error'); up.on('error', () => {}); up.destroy(); } } catch {}
+        if (!handedOff) {
+          try { if (up) { up.removeAllListeners('error'); up.on('error', () => {}); up.destroy(); } } catch {}
+        }
         try { if (ff) ff.kill('SIGKILL'); } catch {}
       };
-      const detach = () => { ctx.req.off('close', onClose); ctx.res.off('close', onClose); };
-      function onClose() { if (settled) { cleanup(); return; } settled = true; cleanup(); detach(); liveSlot.done('client closed'); }
+      const leaveHub = (reason) => {
+        if (!pipeSub || !hub || !hub.subs.has(pipeSub)) return;
+        pipeSub.onClose = null;
+        hub.unsubscribe(pipeSub, reason);
+      };
       const giveUp = (reason) => {
-        if (settled) return; settled = true; cleanup(); detach();
+        if (settled) return; settled = true;
+        leaveHub('remux fallback');
+        cleanup();
+        if (openedHub && hub && !hub.closed && hub.state === 'starting') {
+          hub.failAll((res) => { if (!res.headersSent && !res.destroyed) sendIptvNativeError(res, 503, 'live stream restarting — retry'); });
+        }
         console.error(`[iptv ts-pipe] "${ch.name}" ${reason} — falling back to URL remux`);
         onFail();
       };
@@ -5862,15 +5925,9 @@ const H = {
         idleTimer = setTimeout(() => { if (!wrote) giveUp('startup timeout'); else { try { if (ff) ff.kill('SIGKILL'); } catch {} } }, wait);
         if (idleTimer.unref) idleTimer.unref();
       };
-      ctx.req.once('close', onClose);
-      ctx.res.once('close', onClose);
-      liveSlot.setCloser(() => {
-        settled = true; cleanup(); detach();
-        try { if (ctx.req.socket && !ctx.req.socket.destroyed) ctx.req.socket.destroy(); } catch {}
-        try { if (!ctx.res.destroyed) ctx.res.destroy(); } catch {}
-      });
-      const startFfmpeg = (res) => {
-        try { ff = spawnLiveRemuxStdin({ transcodeVideo }); } catch (e) { return giveUp(`spawn failed (${e.message})`); }
+      const startFfmpeg = () => {
+        if (ff) return true;
+        try { ff = spawnLiveRemuxStdin({ transcodeVideo }); } catch (e) { giveUp(`spawn failed (${e.message})`); return false; }
         ff.on('error', (e) => giveUp(`ffmpeg error (${e.message})`));
         ff.stdin.on('error', () => {}); // EPIPE when ffmpeg is killed mid-write — expected, swallow
         ff.stderr.on('data', (d) => { if (errBuf.length < 8000) errBuf += d; });
@@ -5890,18 +5947,56 @@ const H = {
         ff.on('close', () => {
           clearIdle();
           if (settled) return;
-          if (!wrote) { settled = true; cleanup(); detach(); console.error(`[iptv ts-pipe] "${ch.name}" ffmpeg exited before output: ${sanitizeIptvFfmpegError(errBuf)}`); return onFail(); }
-          settled = true; detach();
+          if (!wrote) return giveUp('ffmpeg exited before output');
+          settled = true;
+          leaveHub('ended');
           try { ctx.res.end(); } catch {}
           liveSlot.done('ended');
         });
-        res.on('data', (c) => { if (!ff || !ff.stdin.writable) return; if (!ff.stdin.write(c)) { res.pause(); ff.stdin.once('drain', () => { try { res.resume(); } catch {} }); } });
-        res.on('end', () => { try { if (ff && ff.stdin.writable) ff.stdin.end(); } catch {} });
-        res.on('error', () => { if (!wrote) giveUp('upstream stream error'); else { try { if (ff && ff.stdin.writable) ff.stdin.end(); } catch {} } });
+        return true;
       };
+      const feed = (chunk) => {
+        if (!ff && !startFfmpeg()) return false;
+        if (!ff || !ff.stdin.writable) return false;
+        return ff.stdin.write(chunk);
+      };
+      const bindHub = (targetHub) => {
+        hub = targetHub;
+        pipeSub = targetHub.subscribe(ctx, liveSlot, `${label} remux`, {
+          mode: 'pipe',
+          onLive: () => { startFfmpeg(); },
+          onChunk: feed,
+          onFail: () => { if (!settled) giveUp('shared upstream failed'); },
+          onClose: (reason) => {
+            if (settled) { try { if (ff) ff.kill('SIGKILL'); } catch {} return; }
+            // Upstream finished: let ffmpeg drain its stdin so the last fMP4 bytes reach the
+            // browser. SIGKILL here races a short TS (the Xtream fixture ends in one write).
+            if (/upstream ended/i.test(String(reason || ''))) {
+              if (ff && ff.stdin && ff.stdin.writable) { try { ff.stdin.end(); } catch {} return; }
+              if (!wrote) return giveUp('upstream ended before output');
+            }
+            settled = true;
+            cleanup();
+            try { if (!ctx.res.destroyed && !ctx.res.writableEnded) ctx.res.destroy(); } catch {}
+          },
+        });
+      };
+      const existingHub = iptvSharedHubs.get(shareKey);
+      if (existingHub && existingHub.joinable() && !existingHub.finite) {
+        bindHub(existingHub);
+        console.log(`[iptv share] ${label} remux joined shared upstream (${existingHub.subs.size} viewer(s))`);
+        beginAttemptBudget();
+        armIdle(LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS);
+        return;
+      }
+      hub = createIptvLiveHub(shareKey, `${label} remux`);
+      iptvSharedHubs.set(shareKey, hub);
+      openedHub = true;
+      bindHub(hub);
       // Open the TS stream, following provider redirects per-hop with a fresh IPv4 pin + browser UA
       // (the .ts endpoint 302s to a CDN — the native player follows it, so we must too). The bare
-      // ffmpeg URL path is the fallback for HLS-only providers.
+      // ffmpeg URL path is the fallback for HLS-only providers. On success the hub owns the upstream
+      // so a later native or browser viewer of this channel joins instead of opening another.
       const openUpstream = (rawUrl, hop) => {
         if (settled || liveSlot.closed || ctx.res.destroyed) return;
         if (hop > 5) return giveUp('too many redirects');
@@ -5922,7 +6017,16 @@ const H = {
               return openUpstream(next, hop + 1);
             }
             if (res.statusCode !== 200) { res.resume(); return giveUp(`upstream HTTP ${res.statusCode}`); }
-            startFfmpeg(res);
+            handedOff = true;
+            const upstreamReq = up;
+            up = null;
+            const headers = {
+              'content-type': res.headers['content-type'] || 'video/mp2t',
+              'cache-control': 'no-store',
+              connection: 'close',
+              'x-accel-buffering': 'no',
+            };
+            hub.attach(res, upstreamReq, 200, headers);
           });
           up.on('error', (e) => giveUp(`upstream connect error (${e.code || e.message})`));
           up.setTimeout(Math.max(1500, startupRemaining()), () => giveUp('upstream timeout'));
@@ -6102,7 +6206,13 @@ async function performScan(lib, state, mode = 'scan') {
     // mode 'metadata' ignores the match cache (fresh lookups) but still preserves addedAt.
     const prevItems = (libraryRecord(lib.id) || { items: [] }).items;
     const prevBy = new Map(prevItems.map((it) => [it.kind === 'show' ? `show:${it.dir || ''}` : it.file, it]));
-    const reuse = (key) => { const p = prevBy.get(key); return mode !== 'metadata' && p && p.tmdbId ? p : null; };
+    const reuse = (key) => {
+      const p = prevBy.get(key);
+      if (mode === 'metadata' || !p || !p.tmdbId) return null;
+      // Stale first-hit TMDB ids (Do Sag → Return of the King) must be looked up again.
+      if (typeof p.matchOverride !== 'number' && !libraryItemMatchesTmdb(p)) return null;
+      return p;
+    };
     // Admin match override (set via POST /api/libraries/:id/match), carried across scans:
     // 'none' = never TMDB-match this item (folder/NFO info only); a number = ALWAYS match
     // that exact TMDB id (fixes "wrong cover/info" picks for good).
@@ -6112,8 +6222,10 @@ async function performScan(lib, state, mode = 'scan') {
     const keepPrev = (item, key) => {
       const p = prevBy.get(key);
       if (!p || !p.tmdbId) return;
+      if (typeof p.matchOverride !== 'number' && !libraryItemMatchesTmdb(p)) return;
       item.tmdbId = p.tmdbId; item.poster = p.poster; item.backdrop = p.backdrop;
       item.genres = p.genres || []; item.title = p.title;
+      item.originalTitle = p.originalTitle || null;
       item.overview = item.overview || p.overview; item.rating = item.rating || p.rating;
     };
     const mtimeOf = (f) => { try { return Math.round(fs.statSync(f).mtimeMs); } catch { return Date.now(); } };
@@ -6122,18 +6234,8 @@ async function performScan(lib, state, mode = 'scan') {
     const addedAtOf = (key, file) => { const p = prevBy.get(key); return (p && p.addedAt) || mtimeOf(file); };
     // TMDB genre ids — search results carry genre_ids, direct /movie/<id> fetches genres[].
     const genresOf = (hit) => hit.genre_ids || (hit.genres || []).map((g) => g.id);
-    const parseName = (label) => {
-      const clean = label.replace(/\.[a-z0-9]+$/i, '');
-      // The LAST year-shaped token is the release year — "Blade Runner 2049 (2017)" and
-      // "Wonder.Woman.1984.2020.1080p" carry a year INSIDE the title, and grabbing the FIRST one
-      // yielded title "Blade Runner" year 2049 → wrong/no TMDB match (and local-first playback
-      // silently broke for those titles). Same trailing-year rule as the usenet matcher.
-      const re = /[. (_-]+\(?((?:19|20)\d{2})\)?(?=[. )_-]|$)/g;
-      let m = null;
-      for (let h; (h = re.exec(clean));) m = h;
-      const title = (m ? clean.slice(0, m.index) : clean).replace(/[._]/g, ' ').trim();
-      return title ? { title, year: m ? m[1] : null } : { title: clean.replace(/[._]/g, ' ').trim(), year: null };
-    };
+    // Folder/file title+year parse lives in library-match.js (last year token, same as usenet).
+    const parseName = parseLibraryName;
     const lsDir = (dir) => { try { return fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; } };
     // Display titles: NFO titles often embed the year ("High Copy (2025)") — strip it.
     const cleanTitle = (t) => String(t || '').replace(/\s*\(\s*(?:19|20)\d{2}\s*\)\s*$/, '').trim();
@@ -6164,12 +6266,14 @@ async function performScan(lib, state, mode = 'scan') {
           if (d && d.id) return d;
         }
         const q = `/search/${kind}?query=${encodeURIComponent(name.title)}${name.year ? `&year=${name.year}` : ''}`;
-        let hit = ((await tmdb.get(q)).results || [])[0] || null;
+        let hit = pickLibraryTmdbHit((await tmdb.get(q)).results || [], name.title, name.year, kind);
         // Year-in-title fallback: "Blade Runner 2049.mkv" (no separate release year) parses as
         // title "Blade Runner" + year 2049 → zero results. Fold the year back into the query
         // before giving up — misses only, so the common case costs nothing extra.
         if (!hit && name.year) {
-          hit = (((await tmdb.get(`/search/${kind}?query=${encodeURIComponent(`${name.title} ${name.year}`)}`)).results) || [])[0] || null;
+          hit = pickLibraryTmdbHit(
+            (await tmdb.get(`/search/${kind}?query=${encodeURIComponent(`${name.title} ${name.year}`)}`)).results || [],
+            name.title, name.year, kind);
         }
         return hit;
       } catch { return null; }
@@ -6208,6 +6312,7 @@ async function performScan(lib, state, mode = 'scan') {
       else if (prev && (typeof ov !== 'number' || prev.tmdbId === ov)) {
         item.tmdbId = prev.tmdbId; item.poster = prev.poster; item.backdrop = prev.backdrop;
         item.genres = prev.genres || []; item.title = prev.title; // prev title is TMDB-final
+        item.originalTitle = prev.originalTitle || null;
         item.overview = item.overview || prev.overview; item.rating = item.rating || prev.rating;
       } else if (wantTmdb) lookupJobs.push(async () => {
         // A "tv"-kind library searches TV even for season-less folders (mini-series etc.).
@@ -6217,6 +6322,7 @@ async function performScan(lib, state, mode = 'scan') {
           item.tmdbId = hit.id; item.poster = hit.poster_path; item.backdrop = hit.backdrop_path;
           item.genres = genresOf(hit);
           item.title = hit.title || hit.name || item.title; // TMDB display name beats messy NFO/folder titles
+          item.originalTitle = hit.original_title || hit.original_name || null;
           item.overview = item.overview || hit.overview || ''; item.rating = item.rating || hit.vote_average || null;
         } else keepPrev(item, best.file);
       });
@@ -6238,6 +6344,7 @@ async function performScan(lib, state, mode = 'scan') {
       else if (prevShow && (typeof ovS !== 'number' || prevShow.tmdbId === ovS)) {
         show.tmdbId = prevShow.tmdbId; show.poster = prevShow.poster; show.backdrop = prevShow.backdrop;
         show.genres = prevShow.genres || []; show.title = prevShow.title;
+        show.originalTitle = prevShow.originalTitle || null;
         show.overview = show.overview || prevShow.overview; show.rating = show.rating || prevShow.rating;
       } else if (wantTmdb) lookupJobs.push(async () => {
         const hit = await tmdbLookup('tv', { title: parsed.title, year: show.year, tmdbId: typeof ovS === 'number' ? ovS : show.tmdbId });
@@ -6245,6 +6352,7 @@ async function performScan(lib, state, mode = 'scan') {
           show.tmdbId = hit.id; show.poster = hit.poster_path; show.backdrop = hit.backdrop_path;
           show.genres = genresOf(hit);
           show.title = hit.name || show.title; // TMDB display name beats messy NFO/folder titles
+          show.originalTitle = hit.original_name || hit.original_title || null;
           show.overview = show.overview || hit.overview || ''; show.rating = show.rating || hit.vote_average || null;
         } else keepPrev(show, `show:${dir}`);
         if (!show.tmdbId) return;
@@ -6290,11 +6398,13 @@ async function performScan(lib, state, mode = 'scan') {
           else if (prev && (typeof ov !== 'number' || prev.tmdbId === ov)) {
             item.tmdbId = prev.tmdbId; item.poster = prev.poster; item.backdrop = prev.backdrop;
             item.genres = prev.genres || []; item.title = prev.title;
+            item.originalTitle = prev.originalTitle || null;
             item.overview = prev.overview || ''; item.rating = prev.rating || null;
           } else if (wantTmdb) lookupJobs.push(async () => {
             const hit = await tmdbLookup(lib.kind === 'tv' ? 'tv' : 'movie', { ...parsed, tmdbId: typeof ov === 'number' ? ov : null });
             if (hit) { item.tmdbId = hit.id; item.poster = hit.poster_path; item.backdrop = hit.backdrop_path;
               item.genres = genresOf(hit);
+              item.originalTitle = hit.original_title || hit.original_name || null;
               item.overview = hit.overview || ''; item.rating = hit.vote_average || null; item.title = hit.title || hit.name || item.title; }
             else keepPrev(item, full);
           });
@@ -6498,6 +6608,7 @@ Object.assign(H, {
     if (libraryDb.available) {
       const found = libraryDb.lookup(raw, allowed);
       for (const [key, row] of Object.entries(found)) {
+        if (!libraryItemMatchesTmdb(row.item)) continue;
         out[key] = localItemPayload(ctx, row.libId, row.item);
       }
       return send(ctx.res, 200, { items: out });
@@ -6513,7 +6624,7 @@ Object.assign(H, {
           : item.kind === 'episode'
             ? `tmdb:tv:${item.tmdbId}:s${item.s}e${item.e}`
             : '';
-        if (key && wanted.has(key) && !out[key]) out[key] = localItemPayload(ctx, libId, item);
+        if (key && wanted.has(key) && !out[key] && libraryItemMatchesTmdb(item)) out[key] = localItemPayload(ctx, libId, item);
       }
     }
     send(ctx.res, 200, { items: out });
@@ -6599,10 +6710,10 @@ Object.assign(H, {
   // as movies and TV episodes mounted from Usenet.
   localPlay: async (ctx) => {
     const body = await readJson(ctx.req);
-    // Age gate — local libraries must enforce the SAME profile maturity bar as usenet play/prepare
-    // (this endpoint had none, so a Kids profile could play any file in an attached library). The
-    // item's TMDB identity comes from the SERVER-side scan record, never the client; unmatched
-    // items fail OPEN like unknown certifications (defense-in-depth, consistent with play()).
+    // Age gate — local libraries must enforce the SAME profile maturity bar as usenet play/prepare.
+    // The item's TMDB identity comes from the SERVER-side scan record, never the client. Unmatched
+    // items (no tmdbId) fail CLOSED for restricted profiles — omitting identity is how a crafted
+    // play used to skip the gate. Unknown certifications on a known id still fail OPEN.
     const level = profileLevelFor(ctx.user, body.profileId);
     if (level < 4) { // any tier below No limit (4) is age-gated; matches maturityAllowsPlay's fast path
       const found = localItemFor(ctx, ctx.m[1], ctx.m[2]);

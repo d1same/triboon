@@ -131,9 +131,15 @@ const tmdbMock = http.createServer((req, res) => {
     return res.end(JSON.stringify({ status_code: 7, status_message: 'Invalid API key' }));
   }
   res.writeHead(200, { 'content-type': 'application/json' });
+  const q = u.searchParams.get('query') || 'Mock Movie';
+  const tv = /\/search\/tv(?:\/|$)/.test(u.pathname);
   res.end(JSON.stringify({
     path: req.url,
-    results: [{ id: 1, media_type: 'movie', title: 'Mock Movie', backdrop_path: '/mock-backdrop.jpg', poster_path: '/mock-poster.jpg' }],
+    results: [{
+      id: 1, media_type: tv ? 'tv' : 'movie', title: q, name: q,
+      original_title: q, original_name: q,
+      backdrop_path: '/mock-backdrop.jpg', poster_path: '/mock-poster.jpg',
+    }],
   }));
 });
 
@@ -1125,9 +1131,9 @@ test('library scan v2: Jellyfin layout — shows/episodes, NFO info, local poste
   const movie = items.find((i) => i.kind === 'movie');
   const show = items.find((i) => i.kind === 'show');
   const eps = items.filter((i) => i.kind === 'episode');
-  // Title rule: TMDB display name when matched (mock returns "Mock Movie"); the NFO still
-  // supplies year/plot/rating, which beat the filename parse.
-  assert.strictEqual(movie.title, 'Mock Movie', 'TMDB display name wins when matched');
+  // Title rule: TMDB display name when the hit actually matches the folder (mock echoes the
+  // search query). The NFO still supplies year/plot/rating, which beat the filename parse.
+  assert.strictEqual(movie.title, 'My Film', 'TMDB display name wins over the NFO title when matched');
   assert.strictEqual(movie.year, '2021', 'NFO year kept');
   assert.strictEqual(movie.overview, 'A test plot.', 'NFO plot kept');
   assert.strictEqual(movie.rating, 7.5, 'NFO rating kept');
@@ -1210,7 +1216,7 @@ test('library scan v3: rescans keep addedAt + matches, count new files; stable c
 
   // ---- Match override: revert to folder info / force an exact id; survives rescans ----
   const movieIdx = items2.find((i) => i.kind === 'movie').idx;
-  assert.strictEqual(items2.find((i) => i.kind === 'movie').title, 'Mock Movie', 'TMDB-matched before the override');
+  assert.strictEqual(items2.find((i) => i.kind === 'movie').title, 'Reuse Film', 'TMDB-matched before the override');
   const rv = await httpJson(srv.port, 'POST', `/api/libraries/${lib.json.id}/match`, { idx: movieIdx, tmdbId: null }, admin);
   assert.strictEqual(rv.status, 202);
   for (let i = 0; i < 200; i++) {
@@ -1240,7 +1246,7 @@ test('library scan v3: rescans keep addedAt + matches, count new files; stable c
     await new Promise((r) => setTimeout(r, 50));
   }
   const m4 = (await httpJson(srv.port, 'GET', `/api/libraries/${lib.json.id}/items`, null, admin)).json.items.find((i) => i.kind === 'movie');
-  assert.strictEqual(m4.title, 'Mock Movie', 'auto: TMDB match restored');
+  assert.strictEqual(m4.title, 'Reuse Film', 'auto: TMDB match restored');
   assert.strictEqual(m4.matchOverride, undefined, 'override cleared');
 
   // Auto-scan cadence: saves, clamps, and reads back with a real trace.
@@ -2829,6 +2835,24 @@ test('play/prepare: age gate blocks a restricted profile from over-level titles 
   const spoofed = await httpJson(srv.port, 'POST', '/api/prepare', { q: 'Restricted Movie', tmdbId: 990001, mediaType: 'movie', profileId: 'no-such-profile-id' }, admin);
   assert.strictEqual(spoofed.status, 403, 'an unknown profileId fails closed to the strictest level');
   assert.strictEqual(spoofed.json.restricted, true, 'the spoofed-profile block is a maturity restriction');
+  // Omitting tmdbId used to fail OPEN, so a crafted play/search skipped the cert check entirely.
+  for (const path of ['/api/play', '/api/prepare']) {
+    const omitted = await httpJson(srv.port, 'POST', path, { q: 'Restricted Movie', profileId: kidId }, admin);
+    assert.strictEqual(omitted.status, 403, `${path} without tmdbId must not skip the kids gate: ${omitted.raw}`);
+    assert.strictEqual(omitted.json.restricted, true, `${path} flags a missing-identity play as restricted`);
+  }
+  const searchBlocked = await httpJson(srv.port, 'GET',
+    '/api/search?q=' + encodeURIComponent('Restricted Movie') + '&tmdbId=990001&mediaType=movie&profileId=' + encodeURIComponent(kidId),
+    null, admin);
+  assert.strictEqual(searchBlocked.status, 403, `search must not list sources for an R title on a kids profile: ${searchBlocked.raw}`);
+  const searchOmitted = await httpJson(srv.port, 'GET',
+    '/api/search?q=' + encodeURIComponent('Restricted Movie') + '&profileId=' + encodeURIComponent(kidId),
+    null, admin);
+  assert.strictEqual(searchOmitted.status, 403, 'search without tmdbId must not skip the kids gate');
+  const searchOk = await httpJson(srv.port, 'GET',
+    '/api/search?q=' + encodeURIComponent('Kid Movie') + '&tmdbId=990002&mediaType=movie&profileId=' + encodeURIComponent(kidId),
+    null, admin);
+  assert.notStrictEqual(searchOk.status, 403, 'search of a G title is allowed for a kids profile');
 });
 
 test('settings: a TMDB key the API rejects fails the save with an actionable error (no false "connected")', async () => {

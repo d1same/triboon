@@ -165,9 +165,8 @@ Important current Live TV decision:
   client only drops itself; a non-retune last-leave lingers ~12s so
   reconnects/zap-backs reuse the upstream). A RETUNE by the last viewer
   still closes the upstream immediately — the 1-connection zap contract is
-  unchanged. Playlist (m3u8) bodies are never share-joinable. Web remux
-  viewers still open per-viewer upstreams (follow-up: tee the shared hub
-  into the ts-pipe remux inputs).
+  unchanged. Playlist (m3u8) bodies are never share-joinable. Browser remux
+  tees the same shared TS hub into each viewer's stdin-fed ffmpeg (fMP4).
 
 Important current VOD performance decision:
 
@@ -179,19 +178,30 @@ Important current VOD performance decision:
   while keeping individual caps.
 - NNTP priority order is startup/seek, playback, health, read-ahead, background.
   Health and read-ahead must never outrank bytes needed by the active player.
+- Live concurrent 1080p + 4K Play/seek was proven 2026-08-13 with
+  `bench/verify-live.js --concurrent` (FROM 1080p + Mario 4K, first-byte 4ms/10ms).
+  Two or three overlapping Plays now share indexer fan-out and startup mount slots
+  so one title's source race cannot stall the others.
 - Future buffering changes must preserve the same capacity contract and update
   `docs-streaming-performance.md` plus player regression contract `P14`.
 
 Still open:
 
-- Broader Android hardware QA matrix for Shield, Onn, Fire TV, Chromecast,
-  Google TV, and low-memory devices.
-- Real multi-user VOD stress runs across several 1080p and 4K starts/seeks.
-- Windows ARM64 and the broader physical GPU/HDR/receiver QA matrix.
-- par2 repair and compressed RAR streaming improvements.
+- Broader Android hardware QA for Shield, Onn, Fire TV, and low-memory boxes.
+  Owner-verified Chromecast and a friend's Android TV both play fine (2026-08).
+- Windows ARM64 and the broader physical GPU/HDR/receiver QA matrix for the
+  native Windows client (Chromecast/Android TV do not cover this).
 - MDBList and richer catalog rows.
 - Intro/credit skip.
 - Release automation polish.
+
+Parked (do not re-open unless the owner asks):
+
+- par2 repair and compressed RAR streaming. Compared 2026-08-13: store-RAR
+  already streams with seeking; compressed/par2 would make Play slower (decode
+  from 0:00 or wait on repair) instead of skipping to the next healthy source.
+  Verdict cache already turtle-tags compressed so the next search does not retry
+  it. Not a source-finding or health-speed win. Leave parked.
 
 ## Hard Rules
 

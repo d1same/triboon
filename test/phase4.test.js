@@ -538,13 +538,17 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   // the extra season fetches keeps a newer playback from being clobbered by the slow one.
   assert.match(ui, /const nextSeasonNums = \(ctx\.seasons \|\| \)?[\s\S]*?\.filter\(\(n\) => Number\.isFinite\(\+n\) && \+n > ctx\.parts\.season\)[\s\S]+\.slice\(0, 2\);[\s\S]+const extraSeasons = \(await Promise\.all\(nextSeasonNums\.map[\s\S]+if \(token !== S\._playerSeasonStripToken \|\| !S\.playing \|\| !S\.playing\.item \|\| S\.playing\.item\.key !== it\.key\) return;[\s\S]+for \(const season of \[ctx\.season, \.\.\.extraSeasons\]\) \{/,
     'the player episode strip should append episodes from the next two seasons (with a post-fetch staleness re-check)');
-  assert.match(ui, /window\.__tvNativeVideoEnded = \(pos, dur, token\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+if \(finishEpisodeToNext\(\)\) return;[\s\S]+closePlayer\(\{ ended: true \}\);/,
-    'native EOF should reject stale player callbacks, hand episodes directly to Up Next, and close only a truly finished title');
+  assert.match(ui, /window\.__tvNativeVideoEnded = \(pos, dur, token\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+handleVodPlaybackEnded\(pos, dur\);/,
+    'native EOF should reject stale player callbacks and only treat a real credits ending as next-episode');
   // The web (HTMLVideo) end-of-episode path hands off to Up Next and returns WITHOUT going through
   // closePlayer — so it must save watched itself, or an auto-advanced episode is never recorded
   // watched (the "only marks watched if I watch the ENTIRE thing" bug).
-  assert.match(ui, /v\.onended = \(\) => \{[\s\S]+if \(finishEpisodeToNext\(\)\) return;[\s\S]+closePlayer\(\{ ended: true \}\);/,
-    'web episode EOF should use the same direct handoff contract and close only when no next episode exists');
+  assert.match(ui, /v\.onended = \(\) => \{[\s\S]+handleVodPlaybackEnded\(v\.currentTime, v\.duration\);/,
+    'web episode EOF should use the same genuine-EOF gate so a dead resume file cannot skip the episode');
+  assert.match(ui, /function isGenuineEpisodeEof\(p, pos, dur\) \{[\s\S]+resume > 30 && d > 0 && d \+ 8 < resume[\s\S]+d >= 45 && t >= d \* 0\.88[\s\S]+!vodPlaybackStarted\(p\)[\s\S]+playedMs < 12000/,
+    'a stub/rotten resume file that ENDED immediately is not credits');
+  assert.match(ui, /function handleVodPlaybackEnded\(pos, dur\) \{[\s\S]+isGenuineEpisodeEof\(p, pos, dur\)[\s\S]+finishEpisodeToNext\(\)[\s\S]+tryNextNativeKind\([\s\S]+autoAdvance\(\{ nativePreferred: true \}\)[\s\S]+failover\(\)/,
+    'a fake EOF must stay on this episode and try the next source, never autoplay the next episode');
   assert.ok([
     'function applyNativeVideoProgress(pos, dur, opts = {}) {',
     'const keepPrev = opts.preserveOnZero && incoming <= 1 && prev > 30;',
@@ -573,6 +577,16 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Up Next autoplay should give the user its 10-second choice window before EOF');
   assert.match(ui, /function finishEpisodeToNext\(\) \{[\s\S]+saveWatch\(true, \{ watched: true \}\);[\s\S]+if \(prefAutoplay\(\) && !S\.upNextDismissed\) \{\s+playNextEpisode\(\);[\s\S]+return true;/,
     'EOF should mark watched and advance immediately when autoplay survived the pre-EOF choice window, never start a second countdown');
+  assert.match(ui, /function pickNextUp\(show, seasons\) \{[\s\S]+updateDetailPlayLabel\([\s\S]+syncDetailSourcesTitle\(detailPlayTarget\);[\s\S]+checkAvailability\(show\);/,
+    'after next-up is known, availability searches that episode so Lucky-style show pages do not say no sources');
+  assert.match(ui, /function availabilitySearchItem\(it\) \{[\s\S]+it\.type === 'episode'[\s\S]+detailPlayTarget[\s\S]+t\.type === 'episode'/,
+    'show-page source checks must use the current episode target, not Title+Year');
+  assert.match(ui, /function openEpisodeCardMenu\(item, card, onWatch\) \{[\s\S]+\$\('cwMenu'\)[\s\S]+actionMenuButton\('sources', 'list', 'Sources'\)[\s\S]+act === 'sources'\) openSources\(item\)/,
+    'the episode ⋯ menu must float in #cwMenu so it is not clipped inside the thumbnail, and Sources is for THAT episode');
+  assert.match(ui, /function retargetDetailFromEpisodeCard\(card\) \{[\s\S]+epTarget\(S\.detailItem, s, e, resume\)[\s\S]+updateDetailPlayLabel\(\{ label: resume \? 'Resume' : 'Play', target \}\)/,
+    'focusing or hovering an episode retargets the one Sources button to that episode');
+  assert.match(ui, /function detailPlayButtonLabel\(base, target\) \{[\s\S]+episodeCodeOf\(target\)[\s\S]+`\$\{base\} \$\{code\}`/,
+    'the show Play button should name the episode it will play, e.g. Resume S01E01');
   assert.match(ui, /<button class="un-play focusable" id="unPlay">[\s\S]*?<span class="un-title" id="unTitle"><\/span>[\s\S]*?<span class="un-prog" id="unProg">/,
     'Up Next primary action is a compact pill: a play button that shows the next-episode title with a countdown progress line');
   assert.match(ui, /<button class="un-cancel focusable" id="unCancel"[\s\S]*?<\/button>\s*<\/div>/,
@@ -981,7 +995,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'browser Back from one title route to another should route to the previous detail instead of jumping to the original browse page');
   assert.match(ui, /const detailResume = resumePositionForItem\(it\);[\s\S]+updateDetailPlayLabel\(detailResume \? \{ label: 'Resume', target: \{ \.\.\.it, resume: detailResume \} \}/,
     'movie details should show Resume without the timestamp while keeping the resume position in the play target');
-  assert.match(ui, /return updateDetailPlayLabel\(\{ label: 'Resume', target: epTarget\(show, \+m\[1\], \+m\[2\], wm\[inProg\]\.position\) \}\)/,
+  assert.match(ui, /updateDetailPlayLabel\(\{ label: 'Resume', target: epTarget\(show, \+m\[1\], \+m\[2\], wm\[inProg\]\.position\) \}\)/,
     'TV show details should show Resume without the timestamp while keeping the episode resume position');
   assert.match(ui, /const rec = \{[\s\S]+streamUrl: x\.streamUrl, playUrl: x\.playUrl, name: x\.title[\s\S]+if \(localKey\) map\[localKey\] = rec;[\s\S]+map\[key\] = rec;/,
     'local-first Continue Watching entries should keep the rich local player prep URL and durable local-art fields');
@@ -1011,14 +1025,14 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'detail pages should fetch external IDs before source lookup so old/franchise titles can search by catalog identity');
   assert.match(ui, /function sourceIdentityFor\(it\) \{[\s\S]+if \(it\.imdbId\) out\.imdbid = it\.imdbId;[\s\S]+if \(it\.tvdbId\) out\.tvdbid = it\.tvdbId;[\s\S]+const ep = episodeKeyParts\(it\);[\s\S]+out\.season = ep\.season;[\s\S]+out\.ep = ep\.episode;/,
     'source lookup should preserve IMDb, TVDB, season, and episode identity when available');
-  assert.match(ui, /function sourceSearchQuery\(it, opts = \{\}\) \{[\s\S]+const ids = sourceIdentityFor\(it\);[\s\S]+params\.set\('imdbid', ids\.imdbid\);[\s\S]+params\.set\('tvdbid', ids\.tvdbid\);[\s\S]+params\.set\('season', String\(ids\.season\)\);[\s\S]+params\.set\('ep', String\(ids\.ep\)\);/,
-    'Sources drawer searches should send external identifiers instead of only a title string');
+  assert.match(ui, /function sourceSearchQuery\(it, opts = \{\}\) \{[\s\S]+const ids = sourceIdentityFor\(it\);[\s\S]+params\.set\('imdbid', ids\.imdbid\);[\s\S]+params\.set\('tvdbid', ids\.tvdbid\);[\s\S]+params\.set\('season', String\(ids\.season\)\);[\s\S]+params\.set\('ep', String\(ids\.ep\)\);[\s\S]+params\.set\('profileId'[\s\S]+params\.set\('tmdbId'[\s\S]+params\.set\('mediaType'/,
+    'Sources drawer searches should send external identifiers plus the profile/tmdb identity for the age gate');
   assert.match(ui, /const ids = sourceIdentityFor\(it\);[\s\S]+const body = \{ q: queryFor\(it\)[\s\S]+if \(ids\.imdbid\) body\.imdbid = ids\.imdbid;[\s\S]+if \(ids\.tvdbid\) body\.tvdbid = ids\.tvdbid;[\s\S]+if \(ids\.season != null\) body\.season = ids\.season;[\s\S]+if \(ids\.ep != null\) body\.ep = ids\.ep;/,
     'Play should carry the same external identity as the Sources drawer');
   assert.match(ui, /if \(it\._lib && it\._lib\.path\) \{[\s\S]+const r = it\._kind === 'show'[\s\S]+await loadAllLocalShowEpisodes\(it\._lib, it\._idx\)[\s\S]+mergeLocalItems\(it\._lib, r\.items \|\| \[\]\);[\s\S]+\}[\s\S]+checkAvailability\(it\);/,
     'TV details opened from an added library should hydrate all local episode ownership before availability/play targets are calculated');
-  assert.match(ui, /async function checkAvailability\(it\) \{[\s\S]+const hasLocal = localTitleHasPlayback\(it\);[\s\S]+if \(hasLocal && localPlaybackRankForItem\(it\) === 4\) \{[\s\S]+\$\(\'qToggle\'\)\.style\.display = 'none';[\s\S]+api\('\/api\/search\?' \+ sourceSearchQuery\(it, \{ includeQuality: false \}\)\)[\s\S]+has4k && userCanPlay4k\(\) && \(hasLower \|\| \(hasLocal && localRank !== 4\)\)[\s\S]+if \(hasLocal\) \{[\s\S]+\$\(\'dSources\'\)\.style\.display = offer \? '' : 'none';[\s\S]+return;/,
-    'local-owned detail pages should still discover online 4K when the local file is lower quality, without showing unavailable');
+  assert.match(ui, /async function checkAvailability\(it\) \{[\s\S]+const searchItem = availabilitySearchItem\(it\) \|\| it;[\s\S]+it\.type === 'tv' && !\(searchItem && searchItem\.type === 'episode'\)[\s\S]+const hasLocal = localTitleHasPlayback\(searchItem\) \|\| localTitleHasPlayback\(it\);[\s\S]+if \(hasLocal && localPlaybackRankForItem\(searchItem\) === 4\) \{[\s\S]+\$\(\'qToggle\'\)\.style\.display = 'none';[\s\S]+api\('\/api\/search\?' \+ sourceSearchQuery\(searchItem, \{ includeQuality: false \}\)\)[\s\S]+has4k && userCanPlay4k\(\) && \(hasLower \|\| \(hasLocal && localRank !== 4\)\)[\s\S]+if \(hasLocal\) \{[\s\S]+\$\(\'dSources\'\)\.style\.display = offer \? '' : 'none';[\s\S]+return;/,
+    'TV availability must search the next-up episode, not the bare show title, and still discover online 4K for local-owned titles');
   // "Unplayable — no source yet" while Play WORKS: openDetail runs checkAvailability twice (once
   // before /api/tmdb resolves imdb/tvdb, once after). The weak first pass often finds nothing, so
   // its verdict must be (a) withheld while ids are still coming and (b) reversible by the stronger
@@ -1029,7 +1043,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'availability records whether the search found sources');
   assert.match(ui, /if \(playable\) \{\s*\n\s*if \(playBtn\.dataset\.availMark === String\(reqId\)\) \{[\s\S]{0,400}playBtn\.classList\.remove\('unavail'\);[\s\S]{0,300}\$\('dPlayLabel'\)\.textContent = prev;/,
     'a later check that finds sources clears the earlier unavailable verdict and restores the label');
-  assert.match(ui, /if \(!playable && \(hadStrongIds \|\| !it\.tmdbId\)\) \{[\s\S]{0,300}playBtn\.dataset\.availMark = String\(reqId\);/,
+  assert.match(ui, /if \(!playable && \(hadStrongIds \|\| !searchItem\.tmdbId\)\) \{[\s\S]{0,300}playBtn\.dataset\.availMark = String\(reqId\);/,
     'an id-less first pass never condemns a TMDB title whose ids are still resolving');
   assert.match(ui, /\$\('dPlayLabel'\)\.textContent = playBtn\.dataset\.availPrevLabel \+ ' · no sources yet';/,
     'the TV "no sources yet" hint rebuilds from the remembered label so it cannot stack up');
@@ -1039,7 +1053,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'unmatched local TV shows should open a details page instead of a flat episode grid');
   assert.match(ui, /async function openLocalShowDetail\(it\) \{[\s\S]+_localShow: true[\s\S]+loadAllLocalShowEpisodes\(show\._lib, show\._showOpen\)[\s\S]+S\.detailSeasons = localSeasonSummaries\(episodes\)[\s\S]+renderLocalShowSeasonGrid\(show, S\.detailSeasons\)[\s\S]+pickLocalShowPlayTarget\(show, episodes\)/,
     'local-only show details should group scanned episodes into seasons before rendering episode cards');
-  assert.match(ui, /function openLocalShowSeasonEpisodes\(show, seasonNumber, opts = \{\}\) \{[\s\S]+S\.localDetailEpisodes[\s\S]+localEpisodeItemOf\(show, ep\)[\s\S]+setLocalEpisodeWatched\(item, act === 'watch', seasonNumber\)/,
+  assert.match(ui, /function openLocalShowSeasonEpisodes\(show, seasonNumber, opts = \{\}\) \{[\s\S]+S\.localDetailEpisodes[\s\S]+localEpisodeItemOf\(show, ep\)[\s\S]+bindEpisodeOptionsButton\(card, item, \(watched\) => setLocalEpisodeWatched\(item, watched, seasonNumber\)\)/,
     'local-only show seasons should open local episode cards that play and mark local episode keys');
   assert.match(ui, /function localEpisodeItemOf\(show, ep\) \{[\s\S]+q: `\$\{show\.title\} \$\{code\}`[\s\S]+season: ep\.s, episode: ep\.e/,
     'local episode playback items should preserve query and episode numbers for subtitles');
@@ -1067,6 +1081,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'long-hold season actions should bulk-mark only that season and restore focus after the season grid refreshes');
   // Season cards: HOLD-OK opens the season OPTIONS menu (open episodes / mark season / mark show /
   // watchlist) — the same menu the web ⋯ button opens — instead of a bare watched toggle.
+  assert.match(ui, /if \(el\.classList\.contains\('epCard'\)\) \{[\s\S]+typeof el\._openEpisodeMenu === 'function'[\s\S]+el\._openEpisodeMenu\(\)/,
+    'TV hold-OK on an episode card must open the floating episode menu, not a clipped in-thumbnail popup');
   assert.match(ui, /if \(el\.classList\.contains\('seasonCard'\)\) \{[\s\S]+S\._lpTimer = setTimeout\(\(\) => \{[\s\S]+const season = \(S\.detailSeasons \|\| \[\]\)\.find\(\(s\) => s\.season_number === seasonNumber\);[\s\S]+openSeasonMenu\(S\.detailItem, season, el\);[\s\S]+\}, 450\);[\s\S]+return;/,
     'TV detail season cards open the season options menu on hold-OK (mirrors the web ⋯ button)');
   assert.match(ui, /function openSeasonMenu\(show, season, card\) \{[\s\S]+actionMenuButton\('open', 'play', 'Open episodes'\)[\s\S]+actionMenuButton\('showwatch', 'check', 'Mark whole show watched'\)[\s\S]+onWl \? 'Remove show from watchlist' : 'Add show to watchlist'[\s\S]+if \(act === 'wl'\) return toggleWatchlist\(wlItem\);[\s\S]+markSeasonWatched\(show, season, watched\);/,
@@ -1219,6 +1235,21 @@ test('episode handoff stays player-to-player before local lookup and EOF never r
   assert.deepStrictEqual(dismissed.events, [['save', { watched: true }]],
     'an explicit Up Next dismiss remains sticky through EOF');
 
+  const eofStart = ui.indexOf('function isGenuineEpisodeEof(p, pos, dur)');
+  const eofEnd = ui.indexOf('function handleVodPlaybackEnded(pos, dur)', eofStart);
+  assert.ok(eofStart >= 0 && eofEnd > eofStart, 'genuine-EOF helper should be extractable');
+  const isGenuine = new Function('vodPlaybackStarted', 'appMs',
+    `${ui.slice(eofStart, eofEnd)}\nreturn isGenuineEpisodeEof;`)(
+      (p) => !!(p && (p.started || p.startedAt)), () => 20_000);
+  assert.equal(isGenuine({ item: { resume: 1200 } }, 12, 15), false,
+    'resume into a 15s stub is not the end of the episode');
+  assert.equal(isGenuine({ item: { type: 'episode' } }, 8, 8), false,
+    'an 8-second file that dies at startup is not credits');
+  assert.equal(isGenuine({ item: { type: 'episode' }, started: true, startedAt: 1 }, 100, 100), true,
+    'position at the end of a real runtime is credits even if this session just started');
+  assert.equal(isGenuine({ item: { type: 'episode' } }, 100, 100), true,
+    'older native shells that skip PLAYING still count a 100s file at 100s as EOF');
+
   const endedStart = android.indexOf('if (state == Player.STATE_ENDED && "video".equals(nativeMode))');
   const endedEnd = android.indexOf('} else if (state == Player.STATE_ENDED && "live".equals(nativeMode))', endedStart);
   const endedSource = android.slice(endedStart, endedEnd);
@@ -1266,9 +1297,10 @@ test('episode handoff stays player-to-player before local lookup and EOF never r
   const loaderState = { playing: null, view: 'player', _playTicket: 8, _nativeLoadingTicket: 8 };
   const bridgeWindow = {};
   const nativeClosed = new Function('window', 'S', 'nativePlaybackCallbackMatches', 'applyNativeVideoProgress',
-    'finishEpisodeToNext', 'closePlayer', 'revealWebPlayerShell', '$', `${closedSource}\nreturn window.__tvNativeVideoClosed;`)(
+    'finishEpisodeToNext', 'closePlayer', 'revealWebPlayerShell', '$', 'isGenuineEpisodeEof', 'handleVodPlaybackEnded',
+    `${closedSource}\nreturn window.__tvNativeVideoClosed;`)(
       bridgeWindow, loaderState, () => true, () => {}, () => false, () => closedEvents.push('close'),
-      () => {}, () => ({ classList: { remove() {} } }));
+      () => {}, () => ({ classList: { remove() {} } }), () => false, () => {});
   nativeClosed(0, 0, false, 7);
   assert.deepStrictEqual(closedEvents, [], 'a stale native-loader close token cannot cancel the current request');
   nativeClosed(0, 0, false, 8);
@@ -1289,10 +1321,12 @@ test('episode handoff stays player-to-player before local lookup and EOF never r
       () => compatEvents.push(['next']), () => compatEvents.push(['show', compatState.playing.usingNative, compatState.upNextShown]));
   const compatWindow = {};
   const compatClosed = new Function('window', 'S', 'nativePlaybackCallbackMatches', 'applyNativeVideoProgress',
-    'finishEpisodeToNext', 'closePlayer', 'revealWebPlayerShell', '$', `${closedSource}\nreturn window.__tvNativeVideoClosed;`)(
+    'finishEpisodeToNext', 'closePlayer', 'revealWebPlayerShell', '$', 'isGenuineEpisodeEof', 'handleVodPlaybackEnded',
+    `${closedSource}\nreturn window.__tvNativeVideoClosed;`)(
       compatWindow, compatState, () => true, () => {}, compatFinish, () => compatEvents.push(['close']),
       () => { compatDom.playerOpen = true; compatEvents.push(['reveal']); },
-      () => ({ classList: { remove(name) { if (name === 'show') compatDom.loaderShow = false; } } }));
+      () => ({ classList: { remove(name) { if (name === 'show') compatDom.loaderShow = false; } } }),
+      () => true, () => compatEvents.push(['fake-end']));
   compatClosed(100, 100, true, 0);
   assert.strictEqual(compatState.playing.usingNative, false,
     'an older APK that already closed Exo must transfer Up Next ownership to the WebView');
@@ -1303,6 +1337,23 @@ test('episode handoff stays player-to-player before local lookup and EOF never r
   ], 'autoplay-off on an older APK should expose a usable web Up Next card');
   assert.deepStrictEqual(compatDom, { playerOpen: true, loaderShow: false },
     'the older-APK manual Up Next card must sit in a visible web player with no loading cover');
+
+  const fakeEofEvents = [];
+  const fakeEofState = {
+    playing: { usingNative: true, playbackToken: 4, item: { resume: 1400, type: 'episode' }, sessionId: 's1' },
+    nextEp: { item: { key: 'tmdb:tv:9:s1e2' } },
+    view: 'player',
+  };
+  const fakeEofClosed = new Function('window', 'S', 'nativePlaybackCallbackMatches', 'applyNativeVideoProgress',
+    'finishEpisodeToNext', 'closePlayer', 'revealWebPlayerShell', '$', 'isGenuineEpisodeEof', 'handleVodPlaybackEnded',
+    `${closedSource}\nreturn window.__tvNativeVideoClosed;`)(
+      {}, fakeEofState, () => true, () => {}, () => fakeEofEvents.push('finish'),
+      () => fakeEofEvents.push('close'), () => fakeEofEvents.push('reveal'),
+      () => ({ classList: { remove() {} } }),
+      () => false, () => fakeEofEvents.push('advance-source'));
+  fakeEofClosed(12, 15, true, 4);
+  assert.deepStrictEqual(fakeEofEvents, ['advance-source'],
+    'a stub that ENDED during resume must stay on this episode and try the next source');
 
   const nextStartFn = ui.indexOf('function playNextEpisode()');
   const nextEndFn = ui.indexOf("$('unPlay').addEventListener", nextStartFn);
@@ -2432,7 +2483,9 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.match(ui, /const CERT_RANK = \{[^}]*'NC-17': 4, NR: 4 \};/, 'web CERT_RANK ranks NC-17/NR as the top tier (4)');
   assert.match(ui, /function levelAllows\(cert\) \{[\s\S]+if \(lvl >= 4 \|\| !cert\) return true;[\s\S]+return rank <= lvl;/, 'levelAllows: tier N allows cert rank ≤ N; No limit/unrated → allowed');
   assert.match(idxSrc, /const MATURITY_CERT_RANK = \{[^}]*'NC-17': 4, NR: 4 \};/, 'server MATURITY_CERT_RANK matches the web 5-rank scale');
-  assert.match(idxSrc, /async function maturityAllowsPlay\(level, tmdbId, mediaType\) \{\s*\n\s*if \(level >= 4\) return true;[\s\S]+return rank <= level;/, 'server play gate: No limit (4) fast-path; tier N allows cert rank ≤ N');
+  assert.match(idxSrc, /async function maturityAllowsPlay\(level, tmdbId, mediaType\) \{\s*\n\s*if \(level >= 4\) return true;[\s\S]+if \(!id\) return false;[\s\S]+return rank <= level;/, 'server play gate: No limit (4) fast-path; restricted profiles cannot omit tmdbId; tier N allows cert rank ≤ N');
+  assert.match(idxSrc, /search: async \(ctx\) => \{[\s\S]+maturityAllowsPlay\(\s*\n\s*profileLevelFor\(ctx\.user, ctx\.url\.searchParams\.get\('profileId'\)\),/,
+    'indexer search applies the same profile maturity gate as play, before any fan-out');
   // One-time v1→v2 tier migration must PRESERVE each profile's cert cap (never loosen): Teen→PG-13,
   // Family→PG-13, Adult→No limit; Kids stays 0 (now G). Guarded by a stored schema stamp (runs once).
   const authSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'auth.js'), 'utf8');
@@ -2459,6 +2512,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'the shared hub arms a PER-SUBSCRIBER stall watchdog so one dead client cannot pin or drop the shared upstream');
   assert.match(idxSrc, /if \(sub\.res\.write\(chunk\)\) this\._armStall\(sub\);/,
     'the per-subscriber watchdog is re-armed only when that client is actually draining');
+  assert.match(idxSrc, /mode: opts\.mode === 'pipe' \? 'pipe' : 'http'/,
+    'the shared hub accepts pipe subscribers so browser remux can tee the same TS into ffmpeg');
+  assert.match(idxSrc, /existingHub && existingHub\.joinable\(\) && !existingHub\.finite/,
+    'browser ts-pipe joins an already-live shared hub instead of opening a second provider connection');
+  assert.match(idxSrc, /const tsPipeTarget = \[ch\.nativeUrl, ch\.url\]\.find\(\(u\) => u && iptvNativeMime\(u\) === 'video\/mp2t'\) \|\| '';/,
+    'ts-pipe uses Xtream nativeUrl or an M3U .ts url so both source types share the hub');
   assert.match(idxSrc, /if \(\/retuned\|shutdown\/i\.test\(String\(reason \|\| ''\)\)\) return this\.close\(reason\);/,
     'a last-viewer RETUNE closes the shared upstream immediately (the 1-connection zap contract), only non-retune leaves linger');
   // NNTP failover batch (owner-approved, touches the streaming-perf contract): circuit-breaker
@@ -6459,10 +6518,17 @@ test('audit contracts: local age gate, next-episode recency, music queue, scanne
 
   // Library scanner: the LAST year-shaped token is the year (Blade Runner 2049 / Wonder Woman
   // 1984), and a zero-hit search retries with the year folded back into the title.
-  assert.match(server, /for \(let h; \(h = re\.exec\(clean\)\);\) m = h;/,
-    'parseName scans to the LAST year token, not the first');
+  const libraryMatch = fs.readFileSync(path.join(__dirname, '..', 'server', 'library-match.js'), 'utf8');
+  assert.match(libraryMatch, /for \(let h; \(h = re\.exec\(clean\)\);\) m = h;/,
+    'parseLibraryName scans to the LAST year token, not the first');
   assert.match(server, /if \(!hit && name\.year\) \{[\s\S]{0,300}\$\{name\.title\} \$\{name\.year\}/,
     'tmdbLookup folds the year back into the query when the year-filtered search misses');
+  assert.match(server, /pickLibraryTmdbHit\(/,
+    'library TMDB search verifies the hit title against the folder/file name');
+  assert.match(server, /libraryItemMatchesTmdb\(/,
+    'local-lookup refuses a stored TMDB id whose file title does not match');
+  assert.doesNotMatch(server, /\(\(await tmdb\.get\(q\)\)\.results \|\| \[\]\)\[0\]/,
+    'library search never binds results[0] without a title match');
 
   // IPTV zapping: the retune grace matches the PREVIOUS stream's teardown (Node-owned ts-pipe /
   // native-proxy sockets die synchronously → short cushion; only a killed legacy ffmpeg needs the

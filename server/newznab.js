@@ -170,13 +170,30 @@ function dedupe(results) {
 }
 
 // Parallel fan-out with per-indexer budget; indexer failures never fail the search.
-async function fanout(indexers, params, { timeoutMs = 2000 } = {}) {
-  const settled = await Promise.allSettled(
-    indexers.map((ix) => searchIndexer(ix, params, { timeoutMs }))
-  );
+// `concurrency` caps how many indexers one search hits at once. A single Play still
+// uses all indexers together. Two or three overlapping Plays pass a smaller number so
+// they share indexer sockets instead of one title occupying every HTTP slot.
+async function fanout(indexers, params, { timeoutMs = 2000, concurrency } = {}) {
+  const n = indexers.length;
+  const limit = Math.max(1, Math.min(n, concurrency == null ? n : concurrency));
+  const settled = new Array(n);
+  let next = 0;
+  const worker = async () => {
+    while (true) {
+      const i = next++;
+      if (i >= n) return;
+      try {
+        settled[i] = { status: 'fulfilled', value: await searchIndexer(indexers[i], params, { timeoutMs }) };
+      } catch (reason) {
+        settled[i] = { status: 'rejected', reason };
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: limit }, () => worker()));
   const errors = [];
   const merged = [];
   settled.forEach((s, i) => {
+    if (!s) return;
     if (s.status === 'fulfilled') merged.push(...s.value);
     else errors.push({ indexer: indexers[i].name, error: s.reason.message });
   });

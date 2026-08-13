@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const {
   parseNzb, fileNameFromSubject, pickPrimaryFile, nzbPassword,
   episodeInName, episodeLikeName, episodeSelectionError,
+  releaseNamesExactEpisode, looksLikeSplitParts,
 } = require('./nzb');
 const { NzbFileStream, SharedCacheBudget } = require('./vfs');
 const { parseRarVolumes, RAR4_SIG, RAR5_SIG } = require('./rar');
@@ -40,7 +41,67 @@ function volumeKey(name) {
   // fell through to mountFlat and streamed raw archive bytes as if they were video.
   if ((m = /^(.*\.(?:7z|zip|rar))\.(\d{2,4})$/.exec(n))) return { base: m[1], key: parseInt(m[2], 10) };
   if ((m = /^(.*)\.(rar|zip|7z)$/.exec(n))) return { base: m[1], key: 0 };
+  // Obfuscated posts often drop the container suffix entirely: hash.01 / hash.10 / hash.001
+  // instead of hash.7z.001. Lioness WEB-DLs arrived as 40 files named <md5>.10, <md5>.11, …
+  // and pickPrimaryFile treated every slice as a competing episode payload. 2-3 digit
+  // extensions only — a trailing year (2023) must not look like a volume.
+  if ((m = /^(.*)\.(\d{2,3})$/.exec(n))) return { base: m[1], key: parseInt(m[2], 10) };
   return null;
+}
+
+function fileBaseName(name) {
+  return String(name || '').split(/[/\\]/).pop();
+}
+function isArchiveVolumeName(name) {
+  const base = fileBaseName(name);
+  return !!volumeKey(base) && !VIDEO_EXT.test(base);
+}
+
+function nestedArchiveVolumes(files) {
+  const members = (files || []).filter((f) => f && f.method === 'store' && !f.encrypted && isArchiveVolumeName(f.name));
+  const ordered = orderVolumes(members.map((f) => ({ ...f, bytes: f.size })));
+  if (ordered.length >= 2) return ordered;
+  if (ordered.length === 1 && /\.(rar|zip|7z)$/i.test(fileBaseName(ordered[0].name))) return ordered;
+  return null;
+}
+
+function composeChildExtents(parentFiles, childExtents) {
+  const out = [];
+  for (const ce of childExtents || []) {
+    const parent = parentFiles[ce.vol];
+    if (!parent || !Array.isArray(parent.extents)) continue;
+    let parentPos = 0;
+    const childStart = ce.offset;
+    const childEnd = ce.offset + ce.length;
+    for (const pe of parent.extents) {
+      const peStart = parentPos;
+      const peEnd = parentPos + pe.length;
+      parentPos = peEnd;
+      const start = Math.max(childStart, peStart);
+      const end = Math.min(childEnd, peEnd);
+      if (end > start) out.push({ vol: pe.vol, offset: pe.offset + (start - peStart), length: end - start });
+    }
+  }
+  return out;
+}
+
+function sniffRawMedia(buf) {
+  if (!buf || buf.length < 4) return null;
+  if (buf[0] === 0x1a && buf[1] === 0x45 && buf[2] === 0xdf && buf[3] === 0xa3) return 'mkv';
+  if (buf.length >= 8 && buf.toString('ascii', 4, 8) === 'ftyp') return 'mp4';
+  if (buf[0] === 0x47) return 'ts';
+  return null;
+}
+
+function concatenatedVolumeInner(vols, name) {
+  const extents = [];
+  let size = 0;
+  for (let i = 0; i < vols.length; i++) {
+    const length = Number(vols[i].size) || 0;
+    extents.push({ vol: i, offset: 0, length });
+    size += length;
+  }
+  return { name, size, method: 'store', encrypted: false, extents };
 }
 
 // From a list of { name, … }, return the ordered volume files of the dominant archive set
@@ -68,10 +129,10 @@ function orderVolumes(files) {
 // Pick the playable inner file: video extension wins, then size; junk never wins. Sample
 // clips are video-extension files too ("…-sample.mkv") — they only win when NOTHING else
 // is playable, and the pipeline then refuses the mount by name.
-function pickInner(files, wantedEpisode = null) {
+function pickInner(files, wantedEpisode = null, releaseName = '') {
   const scored = files
     .map((f) => {
-      const junk = JUNK_EXT.test(f.name) || /\bsample\b/i.test(f.name);
+      const junk = JUNK_EXT.test(f.name) || /\bsample\b/i.test(f.name) || isArchiveVolumeName(f.name);
       let score = (junk ? -1 : f.size) * (VIDEO_EXT.test(f.name) ? 10 : 1);
       // A season pack may contain every episode inside one RAR/ZIP. Exact episode identity must
       // outrank file size, otherwise E01/the largest member is reused for an E05 request.
@@ -81,18 +142,37 @@ function pickInner(files, wantedEpisode = null) {
     })
     .sort((a, b) => b.score - a.score);
   if (wantedEpisode) {
-    const nonJunk = scored.filter(({ f }) => !JUNK_EXT.test(f.name) && !/\bsample\b/i.test(f.name));
+    const nonJunk = scored.filter(({ f }) => !JUNK_EXT.test(f.name) && !/\bsample\b/i.test(f.name)
+      && !isArchiveVolumeName(f.name));
     const namedVideos = nonJunk.filter(({ f }) => VIDEO_EXT.test(f.name));
     const payloads = namedVideos.length ? namedVideos : nonJunk;
     const exact = payloads.filter(({ f }) => episodeInName(f.name, wantedEpisode.s, wantedEpisode.e));
     if (exact.length === 1) return exact[0].f;
     if (exact.length > 1) {
+      if (looksLikeSplitParts(exact.map((x) => x.f.name))) {
+        throw episodeSelectionError(wantedEpisode, 'is ambiguous (multiple matching archive members)');
+      }
+      if (releaseNamesExactEpisode(releaseName, wantedEpisode.s, wantedEpisode.e)) {
+        return exact.slice().sort((a, b) => (b.f.size || 0) - (a.f.size || 0))[0].f;
+      }
       throw episodeSelectionError(wantedEpisode, 'is ambiguous (multiple matching archive members)');
     }
     // A single opaque payload member is a common obfuscation pattern and remains safe: there is no
     // competing payload to confuse it with. A named different episode or multiple opaque members
     // are not safe guesses and must make the pipeline advance to another release.
     if (payloads.length === 1 && !episodeLikeName(payloads[0].f.name)) return payloads[0].f;
+    if (releaseNamesExactEpisode(releaseName, wantedEpisode.s, wantedEpisode.e)) {
+      const usable = payloads.filter(({ f }) => !episodeLikeName(f.name)
+        || episodeInName(f.name, wantedEpisode.s, wantedEpisode.e));
+      if (usable.length === 1) return usable[0].f;
+      // A single-episode release (Lioness.S01E01) whose inner names omit SxxEyy: pick the largest
+      // video. Season packs never reach here — their release name is not an exact episode.
+      if (usable.length > 1 && !looksLikeSplitParts(usable.map((x) => x.f.name))) {
+        const videos = usable.filter(({ f }) => VIDEO_EXT.test(f.name));
+        const pool = videos.length ? videos : usable;
+        return pool.slice().sort((a, b) => (b.f.size || 0) - (a.f.size || 0))[0].f;
+      }
+    }
     if (payloads.length) {
       throw episodeSelectionError(wantedEpisode, 'is not uniquely present in this archive');
     }
@@ -174,7 +254,7 @@ class ArchiveVirtualFile {
     this.name = inner ? inner.name : vols[0].name;
     this.size = inner ? inner.size : vols.reduce((s, v) => s + v.size, 0);
     this.health = { verdict: 'unverified', checkedAt: null, missing: 0, sampled: 0 };
-    this.segmentCount = vols.reduce((s, v) => s + v.segments.length, 0);
+    this.segmentCount = vols.reduce((s, v) => s + ((v && v.segments && v.segments.length) || 0), 0);
     this.releaseSubs = releaseSubs;
     // Multi-file audiobook packed INSIDE the archive: the ordered inner audio tracks. One mount serves
     // any track by index via audioStreamAt() (a lightweight ArchiveVirtualFile over that inner file's
@@ -221,6 +301,12 @@ class ArchiveVirtualFile {
       offset += take;
       idx++;
     }
+  }
+
+  async readAt(start, len, opts = {}) {
+    const chunks = [];
+    for await (const c of this.read(start, start + len, opts)) chunks.push(c);
+    return chunks.length === 1 ? chunks[0] : Buffer.concat(chunks);
   }
 
   // Health triage across ALL volumes: first + last + random middle segments of the whole set.
@@ -322,7 +408,18 @@ async function mountNzb(pool, nzbXml, opts = {}) {
   // the header parsers read past the buffer.
   if (head.length < 8) throw new Error('archive truncated: first volume head unreadable');
   const kind = detectContainer(head);
-  if (!kind) return mountFlat(pool, nzb, opts); // named like an archive, isn't one
+  if (!kind) {
+    // Obfuscated <hash>.10/.11 slices of a raw MKV/MP4: one video split across NZB files, not an
+    // archive. Concatenate in volume order. A single stray numeric file still falls through to flat.
+    const media = sniffRawMedia(head);
+    if (media && vols.length >= 2) {
+      const inner = concatenatedVolumeInner(vols, opts.releaseName || vols[0].name);
+      return new ArchiveVirtualFile({
+        vols, inner, container: 'flat-split', method: 'store', streamable: true, tags: [], password,
+      });
+    }
+    return mountFlat(pool, nzb, opts); // named like an archive, isn't one
+  }
 
   if (kind === '7z') {
     return new ArchiveVirtualFile({
@@ -334,6 +431,17 @@ async function mountNzb(pool, nzbXml, opts = {}) {
   const parsed = kind === 'zip' ? await parseZip(vols[0]) : await parseRarVolumes(vols);
   const container = kind === 'zip' ? 'zip' : 'rar';
 
+  if (typeof opts.onParsed === 'function') {
+    opts.onParsed({
+      kind,
+      volumes: vols.map((v) => ({ name: v.name, size: v.size })),
+      headersEncrypted: !!parsed.headersEncrypted,
+      files: (parsed.files || []).map((f) => ({
+        name: f.name, size: f.size, method: f.method, encrypted: !!f.encrypted,
+      })),
+    });
+  }
+
   if (parsed.headersEncrypted) {
     return new ArchiveVirtualFile({
       vols, inner: null, container, method: null, streamable: false,
@@ -341,8 +449,19 @@ async function mountNzb(pool, nzbXml, opts = {}) {
     });
   }
 
-  const inner = pickInner(parsed.files, opts.wantedEpisode);
+  // Scene posts often wrap a RAR volume set (.rar/.r00) inside another store RAR. The outer
+  // members are 50MB slices, not the video — unwrap one nested archive so Play gets the mkv.
+  const nested = await unwrapNestedArchive(vols, parsed.files, opts);
+  if (nested && nested.unstreamable) {
+    return new ArchiveVirtualFile({
+      vols, inner: null, container: nested.container, method: null, streamable: false,
+      tags: nested.tags, password,
+    });
+  }
+
+  const inner = (nested && nested.inner) || pickInner(parsed.files, opts.wantedEpisode, opts.releaseName);
   if (!inner) throw new Error('archive contains no usable files');
+  const pickFiles = (nested && nested.files) || parsed.files;
 
   const tags = [];
   if (inner.method === 'compressed') tags.push('compressed', '🐢');
@@ -353,12 +472,51 @@ async function mountNzb(pool, nzbXml, opts = {}) {
 
   // Multi-file audiobook packed in the archive → expose every inner audio track as a playlist so the
   // client plays from track 1, not whichever single file pickInner chose (which "started mid-book").
-  const audioInner = audioInnerCandidates(parsed.files);
+  const audioInner = audioInnerCandidates(pickFiles);
   return new ArchiveVirtualFile({
-    vols, inner, container, method: inner.method, streamable, tags, password,
-    releaseSubs: releaseSubCandidates(parsed.files, inner.name),
+    vols, inner, container: (nested && nested.container) || container, method: inner.method, streamable, tags, password,
+    releaseSubs: releaseSubCandidates(pickFiles, inner.name),
     audioFiles: audioInner.length > 1 ? audioInner : null,
   });
+}
+
+async function unwrapNestedArchive(outerVols, outerFiles, opts = {}) {
+  const nestedMembers = nestedArchiveVolumes(outerFiles);
+  if (!nestedMembers) return null;
+  const wraps = nestedMembers.map((f) => new ArchiveVirtualFile({
+    vols: outerVols, inner: f, container: 'rar', method: 'store', streamable: true, tags: [],
+  }));
+  const head = await wraps[0].readAt(0, 8);
+  if (head.length < 6) return null;
+  const kind = detectContainer(head);
+  if (!kind) return null;
+  if (kind === '7z') {
+    return { unstreamable: true, container: '7z', tags: ['unsupported-container'] };
+  }
+  const parsed = kind === 'zip' ? await parseZip(wraps[0]) : await parseRarVolumes(wraps);
+  if (parsed.headersEncrypted) {
+    return { unstreamable: true, container: kind === 'zip' ? 'zip' : 'rar', tags: ['encrypted', 'headers-encrypted'] };
+  }
+  if (typeof opts.onParsed === 'function') {
+    opts.onParsed({
+      kind: 'nested-' + kind,
+      volumes: nestedMembers.map((v) => ({ name: v.name, size: v.size })),
+      headersEncrypted: false,
+      files: (parsed.files || []).map((f) => ({
+        name: f.name, size: f.size, method: f.method, encrypted: !!f.encrypted,
+      })),
+    });
+  }
+  const picked = pickInner(parsed.files, opts.wantedEpisode, opts.releaseName);
+  if (!picked) return null;
+  return {
+    container: kind === 'zip' ? 'zip' : 'rar',
+    files: parsed.files,
+    inner: {
+      ...picked,
+      extents: composeChildExtents(nestedMembers, picked.extents),
+    },
+  };
 }
 
 // Multi-file audiobooks are posted as N loose audio files (one per chapter/part). Natural-sort by
@@ -425,4 +583,4 @@ function mountFlat(pool, nzb, opts) {
   return vf.mount();
 }
 
-module.exports = { detectContainer, orderVolumes, mountNzb, ArchiveVirtualFile, audioTrackCandidates, audioInnerCandidates };
+module.exports = { detectContainer, orderVolumes, volumeKey, mountNzb, ArchiveVirtualFile, audioTrackCandidates, audioInnerCandidates };

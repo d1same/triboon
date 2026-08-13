@@ -212,7 +212,8 @@ test('title verification: short titles match only releases that ARE that title',
   // Long franchise titles must not fuzzily slide into a sibling movie.
   const fellowship = parseWantedTitle('the lord of the rings the fellowship of the ring 2001');
   const fellowshipNoYear = parseWantedTitle('the lord of the rings the fellowship of the ring');
-  for (const wanted of [fellowship, fellowshipNoYear]) {
+  const fellowshipCatalog = parseWantedTitle('the lord of the rings: the fellowship of the ring 2001');
+  for (const wanted of [fellowship, fellowshipNoYear, fellowshipCatalog]) {
     assert.ok(releaseMatches('The.Lord.of.the.Rings.The.Fellowship.of.the.Ring.2001.EXTENDED.1080p.BluRay.x264-CtrlHD', wanted),
       'accepts the exact Fellowship release');
     assert.ok(releaseMatches('Lord.of.the.Rings.Fellowship.of.the.Ring.2001.1080p.BluRay.x265-GROUP', wanted),
@@ -223,6 +224,100 @@ test('title verification: short titles match only releases that ARE that title',
       'The.Lord.of.the.Rings.The.Rings.of.Power.S01E01.1080p.WEB-DL.x264-GROUP',
     ]) assert.ok(!releaseMatches(wrong, wanted), `rejects sibling LOTR title ${wrong}`);
   }
+  assert.ok(releaseMatches('Fellowship.of.the.Ring.2001.EXTENDED.1080p.BluRay.x264-CtrlHD', fellowshipCatalog),
+    'colon catalog title still matches the short unique movie name');
+  assert.ok(!releaseMatches('Two.Towers.2002.EXTENDED.1080p.BluRay.x264-CtrlHD', fellowshipCatalog),
+    'short unique name of a SIBLING movie stays rejected');
+  const { shortTitleQuery } = require('../server/pipeline');
+  assert.ok(/fellowship of the ring 2001/i.test(shortTitleQuery(
+    'The Lord of the Rings The Fellowship of the Ring 2001', fellowshipCatalog)),
+    'indexer retry searches the unique movie name, not the shared franchise prefix');
+});
+
+test('title verification: branded catalog titles still match the short scene name', () => {
+  // Real incident: Play on Special Ops: Lioness only found 7 Special.Ops.Lioness leftovers.
+  // Indexers had 140+ Lioness.S02E01 WEB-DLs (NTb/FLUX) that the long catalog title never saw.
+  // Short-name matching is locked to colon / possessive catalog titles so "House of the Dragon"
+  // cannot collapse to a random show named Dragon.
+  const { parseWantedTitle, releaseMatches, shortTitleQuery } = require('../server/pipeline');
+  const lioness = parseWantedTitle('special ops: lioness s02e01');
+  assert.ok(lioness.branded, 'colon catalog titles are branded');
+  for (const good of [
+    'Lioness.S02E01.Beware.the.Old.Soldier.2160p.AMZN.WEB-DL.DDP5.1.H.265-FLUX',
+    'Lioness.2023.S02E01.Beware.the.Old.Soldier.2160p.AMZN.WEB-DL.DDP5.1.H.265-NTb',
+    'Special.Ops.Lioness.S02E01.Beware.the.Old.Soldier.2160p.AMZN.WEB-DL.DDP5.1.H.265-FLUX',
+    'Special Ops Lioness - S02E01 - Beware the Old Soldier - [h264-WEBDL-1080p EAC3-2.0]',
+  ]) assert.ok(releaseMatches(good, lioness), `accepts ${good}`);
+  for (const bad of [
+    'The.Lion.King.S02E01.1080p.WEB-DL.H.264-GRP',
+    'Lioness.Gone.Wild.S02E01.1080p.WEB-DL-GRP',
+    'American.Lioness.S02E01.1080p.WEB-DL-GRP',
+    'FROM.S02E01.Long.Days.Journey.Into.Night.1080p.AMZN.WEB-DL.DDP5.1.H.264-FLUX',
+    'Stranger.Things.S02E01.1080p.WEB-DL.H.264-NTb',
+  ]) assert.ok(!releaseMatches(bad, lioness), `rejects ${bad}`);
+
+  assert.strictEqual(shortTitleQuery('Special Ops Lioness S02E01', lioness), 'lioness S02E01');
+  const twd = parseWantedTitle('the walking dead s01e01');
+  assert.ok(!twd.branded);
+  assert.strictEqual(shortTitleQuery('The Walking Dead S01E01', twd), '',
+    'dropping only "the" must not fire a second indexer search');
+  const ryan = parseWantedTitle("tom clancy's jack ryan s01e01");
+  assert.ok(ryan.branded, "possessive catalog titles are branded");
+  assert.ok(releaseMatches('Jack.Ryan.S01E01.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb', ryan),
+    'Tom Clancy branded show still matches the short Jack.Ryan scene name');
+  assert.ok(shortTitleQuery("Tom Clancy's Jack Ryan S01E01", ryan).toLowerCase().startsWith('jack ryan'));
+
+  const greys = parseWantedTitle("grey's anatomy s01e01");
+  assert.ok(!greys.branded, "Grey's Anatomy is the real title, not a brand prefix");
+  assert.ok(releaseMatches('Greys.Anatomy.S01E01.1080p.WEB-DL-NTb', greys));
+  assert.ok(!releaseMatches('Anatomy.S01E01.1080p.WEB-DL-NTb', greys),
+    "Grey's Anatomy must not play a show named Anatomy");
+  assert.strictEqual(shortTitleQuery("Grey's Anatomy S01E01", greys), '');
+
+  const gambit = parseWantedTitle("the queen's gambit s01e01");
+  assert.ok(!gambit.branded);
+  assert.ok(releaseMatches('The.Queens.Gambit.S01E01.1080p.NF.WEB-DL-NTb', gambit));
+  assert.ok(!releaseMatches('Gambit.S01E01.1080p.WEB-DL-NTb', gambit),
+    "The Queen's Gambit must not play a show named Gambit");
+
+  const daredevil = parseWantedTitle("marvel's daredevil s01e01");
+  assert.ok(daredevil.branded, "Marvel's is a known brand prefix");
+  assert.ok(releaseMatches('Daredevil.S01E01.1080p.NF.WEB-DL-NTb', daredevil));
+  assert.ok(releaseMatches('Marvels.Daredevil.S01E01.1080p.NF.WEB-DL-NTb', daredevil));
+
+  const sunny = parseWantedTitle("it's always sunny in philadelphia s01e01");
+  assert.ok(!sunny.branded, "It's Always Sunny must not peel off It's as a brand");
+  assert.ok(releaseMatches('Its.Always.Sunny.in.Philadelphia.S01E01.1080p.WEB-DL-NTb', sunny));
+  assert.ok(!releaseMatches('It.S01E01.1080p.WEB-DL-NTb', sunny));
+
+  const dragon = parseWantedTitle('house of the dragon s01e01');
+  assert.ok(!dragon.branded);
+  assert.ok(releaseMatches('House.of.the.Dragon.S01E01.1080p.WEB-DL.H.264-NTb', dragon));
+  assert.ok(!releaseMatches('Dragon.S01E01.1080p.WEB-DL.H.264-NTb', dragon),
+    'House of the Dragon must not play a show named Dragon');
+  assert.strictEqual(shortTitleQuery('House of the Dragon S01E01', dragon), '');
+
+  const thrones = parseWantedTitle('game of thrones s01e01');
+  assert.ok(!releaseMatches('Thrones.S01E01.1080p.WEB-DL-GRP', thrones));
+  const witches = parseWantedTitle('a discovery of witches s01e01');
+  assert.ok(!releaseMatches('Witches.S01E01.1080p.WEB-DL-GRP', witches));
+  const materials = parseWantedTitle('his dark materials s01e01');
+  assert.ok(releaseMatches('His.Dark.Materials.S01E01.1080p.WEB-DL-GRP', materials));
+  assert.ok(!releaseMatches('Materials.S01E01.1080p.WEB-DL-GRP', materials));
+  assert.ok(!releaseMatches('Dark.Materials.S01E01.1080p.WEB-DL-GRP', materials));
+
+  const impossible = parseWantedTitle('mission: impossible 1996');
+  assert.ok(releaseMatches('Mission.Impossible.1996.1080p.BluRay.x264-GRP', impossible));
+  assert.ok(!releaseMatches('Impossible.1996.1080p.BluRay.x264-GRP', impossible),
+    'a one-word movie subtitle must not play a different film');
+  assert.strictEqual(shortTitleQuery('Mission Impossible 1996', impossible), '');
+
+  const noWay = parseWantedTitle('spider-man: no way home 2021');
+  assert.ok(releaseMatches('Spider.Man.No.Way.Home.2021.2160p.WEB-DL-GRP', noWay));
+  assert.ok(releaseMatches('No.Way.Home.2021.2160p.WEB-DL-GRP', noWay),
+    'unique movie subtitle is a valid short scene name');
+  assert.ok(!releaseMatches('Spider.Man.Homecoming.2017.2160p.WEB-DL-GRP', noWay));
+  assert.ok(!releaseMatches('Spider.Man.Far.From.Home.2019.2160p.WEB-DL-GRP', noWay));
 });
 
 test('pipeline: a wanted episode matches a season PACK or covering RANGE (season exact), and the mount picks that episode', () => {
@@ -310,6 +405,28 @@ test('pipeline: loose-pack probe and mount selection require one exact requested
   const opaquePair = parseNzb(xml(q('8f3c10a9.bin', 500), q('91ae02c4.bin', 480)));
   assert.throws(() => pickPrimaryFile(opaquePair, wanted), (e) => e && e.code === 'EPISODE_SELECTION',
     'multiple opaque payloads reject because the requested episode cannot be identified safely');
+  assert.throws(() => pickPrimaryFile(opaquePair, {
+    ...wanted,
+    releaseName: 'Show.S02E05.1080p.WEB-DL',
+  }), (e) => e && e.code === 'EPISODE_SELECTION',
+    'an exact-episode release name still must not guess among competing opaque NZB files');
+
+  const exactDupes = parseNzb(xml(
+    q('Lioness.S01E01.720p.mkv', 400),
+    q('Lioness.S01E01.1080p.mkv', 800),
+  ));
+  assert.throws(() => pickPrimaryFile(exactDupes, { wantedEpisode: { s: 1, e: 1 } }),
+    (e) => e && e.code === 'EPISODE_SELECTION',
+    'two S01E01 videos without a release name remain ambiguous');
+  assert.match(pickPrimaryFile(exactDupes, {
+    wantedEpisode: { s: 1, e: 1 },
+    releaseName: 'Lioness.2023.S01E01.1080p.WEB-DL',
+  }).subject, /1080p/i, 'an exact-episode release name may pick the largest matching video');
+  assert.throws(() => pickPrimaryFile(ambiguous, {
+    ...wanted,
+    releaseName: 'Show.S02E05.1080p.WEB-DL',
+  }), (e) => e && e.code === 'EPISODE_SELECTION',
+    'Part1/Part2 still reject even when the release already names the episode');
 });
 
 test('pipeline: an unsafe episode pack advances without poisoning release-wide health', async () => {
@@ -368,6 +485,16 @@ test('pipeline: title verification holds for year-titled movies and detached epi
   assert.ok(!releaseMatches('Avatar.2009.1080p.BluRay-GRP', y2012), '2012 rejects a different 2009 film');
   assert.ok(releaseMatches('2001.A.Space.Odyssey.1968.1080p.BluRay.x264-AMIABLE',
     parseWantedTitle('2001 a space odyssey 1968')), 'a year-first title still finds its own release');
+  // TV shows named after a year (1923) used the same swallow-as-year hole: zero title words meant
+  // ANY S01E01 matched, including Yellowstone. The digits must stay the title.
+  const y1923 = parseWantedTitle('1923 s01e01');
+  assert.deepStrictEqual(y1923.words, ['1923']);
+  assert.strictEqual(y1923.year, null);
+  assert.ok(releaseMatches('1923.S01E01.1080p.Paramount.WEB-DL-NTb', y1923));
+  for (const wrong of ['Yellowstone.S01E01.1080p.WEB-DL-NTb', '1883.S01E01.1080p.WEB-DL-NTb',
+    'The.Boys.S01E01.1080p.AMZN.WEB-DL-NTb', 'House.S01E01.1080p.WEB-DL-NTb']) {
+    assert.ok(!releaseMatches(wrong, y1923), `1923 rejects a different S01E01: ${wrong}`);
+  }
 
   // FP-2/FN-4: a DETACHED or VERBOSE episode marker matches ONLY when it names the WANTED episode.
   const boys = parseWantedTitle('the boys s02e05');
@@ -1366,6 +1493,59 @@ test('newznab: fan-out keeps the fast indexer when another times out', async () 
   }
 });
 
+test('newznab: overlapping fan-outs can cap per-search indexer concurrency', async () => {
+  let active = 0, peak = 0;
+  const server = http.createServer((req, res) => {
+    active++;
+    peak = Math.max(peak, active);
+    setTimeout(() => {
+      active--;
+      res.writeHead(200, { 'content-type': 'application/rss+xml' });
+      res.end(rssFor([{ name: 'Movie.1080p.WEB-DL-FLUX', url: 'http://x/1', size: 5e9 }]));
+    }, 50);
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  const ixs = Array.from({ length: 6 }, (_, i) => ({
+    name: `ix${i}`, url: `http://127.0.0.1:${port}`, apikey: 'k',
+  }));
+  try {
+    await Promise.all([
+      fanout(ixs, { q: 'a' }, { timeoutMs: 2000, concurrency: 2 }),
+      fanout(ixs, { q: 'b' }, { timeoutMs: 2000, concurrency: 2 }),
+      fanout(ixs, { q: 'c' }, { timeoutMs: 2000, concurrency: 2 }),
+    ]);
+    assert.ok(peak <= 6, `three capped fan-outs should share indexer sockets, peak=${peak}`);
+    assert.ok(peak >= 3, `overlapping searches should still run together, peak=${peak}`);
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+});
+
+test('newznab: a single fan-out still hits every indexer at once', async () => {
+  let active = 0, peak = 0;
+  const server = http.createServer((req, res) => {
+    active++;
+    peak = Math.max(peak, active);
+    setTimeout(() => {
+      active--;
+      res.writeHead(200, { 'content-type': 'application/rss+xml' });
+      res.end(rssFor([{ name: 'Movie.1080p.WEB-DL-FLUX', url: 'http://x/1', size: 5e9 }]));
+    }, 40);
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  const ixs = Array.from({ length: 5 }, (_, i) => ({
+    name: `ix${i}`, url: `http://127.0.0.1:${port}`, apikey: 'k',
+  }));
+  try {
+    await fanout(ixs, { q: 'movie' }, { timeoutMs: 2000 });
+    assert.strictEqual(peak, 5, `single search must keep full parallelism, peak=${peak}`);
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+});
+
 test('newznab: search timeout is a hard total budget, not a 3x trickle window', async () => {
   const trickle = http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'application/rss+xml' });
@@ -1767,6 +1947,18 @@ test('pipeline: TV episode fallback keeps SxxEyy instead of broad show search', 
   } finally {
     server.close();
   }
+});
+
+test('pipeline: obfuscated hash.NN volumes probe the first slice instead of failing episode pick', () => {
+  const { firstProbeMsgId } = require('../server/pipeline');
+  const q = (name, bytes, id) => `<file subject="a &quot;${name}&quot; yEnc (1/1)"><segments><segment bytes="${bytes}" number="1">${id}</segment></segments></file>`;
+  const xml = `<?xml version="1.0"?><nzb>${
+    q('6d39eaa050fe5efd40583b0ae2971eba.10', 44000000, 'slice-10@x')
+    + q('6d39eaa050fe5efd40583b0ae2971eba.11', 44000000, 'slice-11@x')
+    + q('6d39eaa050fe5efd40583b0ae2971eba.12', 12000000, 'slice-12@x')
+  }</nzb>`;
+  assert.strictEqual(firstProbeMsgId(xml, { wantedEpisode: { s: 1, e: 1 } }, 'Lioness.2023.S01E01.1080p.WEB-DL'),
+    'slice-10@x', 'numeric obfuscated slices are one volume set; probe the first slice');
 });
 
 test('archive: obfuscated .7z.001 split volumes are detected as unsupported, never streamed as flat', async () => {
@@ -3112,6 +3304,135 @@ test('pipeline: multi-user concurrent VOD streams stay byte-exact and never exce
   }
 });
 
+test('startup gate: a second Play is served before the first Play\'s extra hedges', async () => {
+  const { StartupGate } = require('../server/pipeline');
+  const g = new StartupGate(3);
+  const a = await g.acquire({ priority: 'play' });
+  const b = await g.acquire({ priority: 'play' });
+  const hedgeHeld = await g.acquire({ priority: 'hedge' });
+  const hedgeAc = new AbortController();
+  let secondPlay = false;
+  const playP = g.acquire({ priority: 'play' }).then((t) => { secondPlay = true; return t; });
+  const hedgeP = g.acquire({ priority: 'hedge', signal: hedgeAc.signal });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(secondPlay, false, 'gate is full until a slot is released');
+  hedgeHeld.release();
+  const c = await playP;
+  assert.equal(secondPlay, true, 'Play front-runners beat queued hedges');
+  hedgeAc.abort();
+  await assert.rejects(() => hedgeP, /aborted/);
+  a.release(); b.release(); c.release();
+  assert.equal(g.active, 0);
+});
+
+test('pipeline: three concurrent Plays all become ready without serializing', async () => {
+  const { STARTUP_SLOTS } = require('../server/pipeline');
+  const STREAMS = 3;
+  const releases = Array.from({ length: STREAMS }, (_, i) => {
+    const data = seededPayload(80 * 1024, 0xa10 + i);
+    return {
+      ...nzbFor(writeRar4Store([{ name: `Ready${i}.mkv`, data }], { base: `rdy${i}` }), 24 * 1024, `rdy${i}`),
+      name: `Ready${i}.2024.1080p.WEB-DL.H.264-NTb`,
+    };
+  });
+  const articles = new Map();
+  for (const r of releases) for (const [k, v] of r.articles) articles.set(k, v);
+  const mock = createMockNntp({ articles, latencyMs: 20 });
+  const nntpPort = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 12);
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (u.pathname === '/api') {
+      const i = Number((/Ready(\d+)/i.exec(u.searchParams.get('q') || '') || [])[1]);
+      const r = releases[i];
+      const port = server.address().port;
+      res.writeHead(200, { 'content-type': 'application/rss+xml' });
+      return res.end(rssFor([{ name: r.name, url: `http://127.0.0.1:${port}/nzb/${i}`, size: 5e9 }]));
+    }
+    const m = /^\/nzb\/(\d+)$/.exec(u.pathname);
+    if (m) { res.writeHead(200); return res.end(releases[+m[1]].nzb); }
+    res.writeHead(404); res.end();
+  });
+  const ixPort = await new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const pipeline = new Pipeline({
+    pool: () => pool, verdicts: new VerdictCache(store), mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+  try {
+    const t0 = Date.now();
+    const plays = await Promise.all(releases.map((r, i) => pipeline.play({ q: `Ready${i} 2024` })));
+    const elapsed = Date.now() - t0;
+    for (let i = 0; i < STREAMS; i++) {
+      assert.ok(plays[i].vf && plays[i].vf.streamable, `play ${i} should mount`);
+      assert.ok(plays[i].candidate.name.includes(`Ready${i}`), `play ${i} mounted its own title`);
+    }
+    assert.ok(pipeline._startupGate.peak <= STARTUP_SLOTS,
+      `startup slots peaked at ${pipeline._startupGate.peak}, cap is ${STARTUP_SLOTS}`);
+    assert.ok(elapsed < 2500, `three overlapping Plays should not serialize (${elapsed}ms)`);
+  } finally {
+    pool.close(); await mock.close(); server.close(); store.close();
+  }
+});
+
+test('pipeline: a healthy Play is not stuck behind another title\'s dead-source race', async () => {
+  const dead = Array.from({ length: 5 }, (_, i) => {
+    const data = seededPayload(48 * 1024, 0xb00 + i);
+    return {
+      ...nzbFor(writeRar4Store([{ name: `Dead${i}.mkv`, data }], { base: `dead${i}` }), 16 * 1024, `dead${i}`),
+      name: `WalkSlow.2024.2160p.UHD.BluRay.REMUX.TrueHD-FraMeSToR.${i}`,
+    };
+  });
+  const liveData = seededPayload(80 * 1024, 0xc0c);
+  const live = {
+    ...nzbFor(writeRar4Store([{ name: 'Fast.mkv', data: liveData }], { base: 'fast' }), 24 * 1024, 'fast'),
+    name: 'WalkFast.2024.1080p.WEB-DL.H.264-NTb',
+  };
+  const articles = new Map([...live.articles]);
+  const mock = createMockNntp({ articles, latencyMs: 40 });
+  for (const d of dead) for (const id of d.articles.keys()) mock.markMissing(id);
+  const nntpPort = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 4);
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    const port = server.address().port;
+    if (u.pathname === '/api') {
+      const q = (u.searchParams.get('q') || '').toLowerCase();
+      res.writeHead(200, { 'content-type': 'application/rss+xml' });
+      if (q.includes('walkslow')) {
+        return res.end(rssFor(dead.map((d, i) => ({
+          name: d.name, url: `http://127.0.0.1:${port}/nzb/d${i}`, size: 50e9,
+        }))));
+      }
+      return res.end(rssFor([{ name: live.name, url: `http://127.0.0.1:${port}/nzb/live`, size: 5e9 }]));
+    }
+    const deadHit = /^\/nzb\/d(\d+)$/.exec(u.pathname);
+    if (deadHit) { res.writeHead(200); return res.end(dead[+deadHit[1]].nzb); }
+    if (u.pathname === '/nzb/live') { res.writeHead(200); return res.end(live.nzb); }
+    res.writeHead(404); res.end();
+  });
+  const ixPort = await new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const pipeline = new Pipeline({
+    pool: () => pool, verdicts: new VerdictCache(store), mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+  try {
+    const slowP = pipeline.play({ q: 'WalkSlow 2024' }).catch((e) => e);
+    const t0 = Date.now();
+    const fast = await pipeline.play({ q: 'WalkFast 2024' });
+    const fastMs = Date.now() - t0;
+    assert.ok(fast.vf && fast.vf.streamable, 'healthy title should mount');
+    assert.ok(fast.candidate.name.includes('WalkFast'), 'healthy title mounted its own source');
+    assert.ok(fastMs < 1500, `healthy Play must not wait on the other title's dead race (${fastMs}ms)`);
+    await slowP;
+  } finally {
+    pool.close(); await mock.close(); server.close(); store.close();
+  }
+});
+
 test('pipeline: explicit pickKey mounts the chosen source before auto-pick', async () => {
   const autoPayload = seededPayload(90 * 1024, 51);
   const pickedPayload = seededPayload(90 * 1024, 52);
@@ -3321,6 +3642,14 @@ test('pipeline: summarizeAttempts turns raw fail reasons into one actionable sen
   assert.match(down, /Settings . Providers|VPN/i);
 
   assert.match(summarizeAttempts([]), /No sources were available/i);
+
+  const packs = summarizeAttempts([
+    { fail: 'episode: requested episode S02E01 is not uniquely present in this release' },
+    { fail: 'episode: requested episode S02E01 is ambiguous (multiple matching payloads)' },
+    { fail: 'provider unreachable: no usenet provider could be reached (connection/VPN/port/credentials)' },
+  ]);
+  assert.match(packs, /2 didn't contain that episode/);
+  assert.doesNotMatch(packs, /\bother\b/);
 });
 
 test('nntp: ProviderPool never opens more than its configured size, even under heavy concurrent load', async () => {

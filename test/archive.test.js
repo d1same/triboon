@@ -12,7 +12,7 @@ const { encodePart } = require('../server/yenc');
 const { seededPayload, writeRar4Store, writeRar5Store, writeZipStore } = require('./archive-fixtures');
 const { parseRarVolumes, RAR5_SIG } = require('../server/rar');
 const { parseZip } = require('../server/zip');
-const { detectContainer, orderVolumes, mountNzb, ArchiveVirtualFile } = require('../server/archive');
+const { detectContainer, orderVolumes, volumeKey, mountNzb, ArchiveVirtualFile } = require('../server/archive');
 const { parseNzb, nzbPassword } = require('../server/nzb');
 const { NntpPool } = require('../server/nntp');
 const { createMockNntp } = require('./mock-nntp');
@@ -72,6 +72,111 @@ test('archive virtual files propagate read options and cancellation to volume st
   assert.strictEqual(seen[0].opts.signal, ac.signal);
   vf.cancelReadAhead();
   assert.strictEqual(cancelCalls, 1);
+});
+
+test('archive: obfuscated hash.NN slices are one volume set, not competing files', () => {
+  const files = [];
+  for (let i = 10; i <= 12; i++) {
+    files.push({
+      name: `6d39eaa050fe5efd40583b0ae2971eba.${i}`,
+      bytes: 44e6,
+      subject: `"6d39eaa050fe5efd40583b0ae2971eba.${i}"`,
+    });
+  }
+  files.push({ name: '6d39eaa050fe5efd40583b0ae2971eba.par2', bytes: 1000 });
+  files.push({ name: 'Lioness.2023.mkv', bytes: 9e9 });
+  const vols = orderVolumes(files);
+  assert.strictEqual(vols.length, 3);
+  assert.match(vols[0].name, /\.10$/);
+  assert.match(vols[2].name, /\.12$/);
+  assert.strictEqual(volumeKey('Lioness.2023'), null, 'a trailing year is not a volume number');
+  assert.strictEqual(volumeKey('Movie.2023.mkv'), null);
+});
+
+test('archive: obfuscated hash.NN raw MKV slices concatenate into one streamable video', async () => {
+  const mkvHead = Buffer.from([0x1a, 0x45, 0xdf, 0xa3]);
+  const part1 = Buffer.concat([mkvHead, seededPayload(70 * 1024, 0xa10)]);
+  const part2 = seededPayload(55 * 1024, 0xa11);
+  const { articles, nzb } = makeArchiveNzb([
+    { name: '6d39eaa050fe5efd40583b0ae2971eba.10', data: part1 },
+    { name: '6d39eaa050fe5efd40583b0ae2971eba.11', data: part2 },
+    { name: '6d39eaa050fe5efd40583b0ae2971eba.par2', data: Buffer.from('PAR2') },
+  ], 30000, { junk: false });
+  const mock = createMockNntp({ articles });
+  const port = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false }, 4);
+  try {
+    const vf = await mountNzb(pool, nzb, {
+      wantedEpisode: { s: 1, e: 1 },
+      releaseName: 'Lioness.2023.S01E01.1080p.WEB-DL.x264-AoC',
+    });
+    assert.strictEqual(vf.container, 'flat-split');
+    assert.strictEqual(vf.streamable, true);
+    assert.strictEqual(vf.size, part1.length + part2.length);
+    const chunks = [];
+    for await (const c of vf.read(0, vf.size, { priority: 'playback' })) chunks.push(c);
+    assert.deepStrictEqual(Buffer.concat(chunks), Buffer.concat([part1, part2]));
+  } finally {
+    pool.close();
+    await mock.close();
+  }
+});
+
+test('archive: an exact-episode release name picks the largest matching inner file', async () => {
+  const small = seededPayload(40 * 1024, 0xe11);
+  const large = seededPayload(90 * 1024, 0xe12);
+  const wanted = { wantedEpisode: { s: 1, e: 1 }, releaseName: 'Lioness.2023.S01E01.1080p.WEB-DL' };
+  const packed = writeRar4Store([
+    { name: 'Lioness.S01E01.sample.mkv', data: seededPayload(12 * 1024, 0xe10) },
+    { name: 'Lioness.S01E01.720p.mkv', data: small },
+    { name: 'Lioness.S01E01.1080p.mkv', data: large },
+  ], { base: 'lioness-inners' });
+  const { articles, nzb } = makeArchiveNzb(packed, 30000, { junk: false });
+  const mock = createMockNntp({ articles });
+  const port = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false }, 4);
+  try {
+    const vf = await mountNzb(pool, nzb, wanted);
+    assert.match(vf.name, /1080p/i, 'the larger exact-episode member wins when the release already names S01E01');
+    const chunks = [];
+    for await (const c of vf.read(0, vf.size, { priority: 'playback' })) chunks.push(c);
+    assert.deepStrictEqual(Buffer.concat(chunks), large);
+  } finally {
+    pool.close();
+    await mock.close();
+  }
+});
+
+test('archive: a store RAR wrapping RAR volumes mounts the inner video, not a 50MB slice', async () => {
+  const payload = seededPayload(90 * 1024, 0xba21);
+  const innerVols = writeRar4Store(
+    [{ name: 'Lioness.S01E01.FRENCH.720p.WEB.H264-BAWLS.mkv', data: payload }],
+    { base: 'lioness.s01e01.french.720p.web.h264-bawls', naming: 'old', volSize: 28 * 1024 },
+  );
+  assert.ok(innerVols.length >= 3, 'fixture must split into .rar/.r00 slices');
+  const outer = writeRar4Store(
+    innerVols.map((v) => ({ name: `wrap/${v.name}`, data: v.data })),
+    { base: 'outer-wrap', volSize: 70 * 1024 },
+  );
+  const { articles, nzb } = makeArchiveNzb(outer, 30000, { junk: false });
+  const mock = createMockNntp({ articles });
+  const port = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false }, 4);
+  try {
+    const vf = await mountNzb(pool, nzb, {
+      wantedEpisode: { s: 1, e: 1 },
+      releaseName: 'Lioness.S01E01.FRENCH.720p.WEB.H264-BAWLS',
+    });
+    assert.match(vf.name, /\.mkv$/i);
+    assert.ok(vf.size > 80 * 1024, `mounted ${vf.size} bytes — must be the video, not one RAR slice`);
+    assert.strictEqual(vf.streamable, true);
+    const chunks = [];
+    for await (const c of vf.read(0, vf.size, { priority: 'playback' })) chunks.push(c);
+    assert.deepStrictEqual(Buffer.concat(chunks), payload);
+  } finally {
+    pool.close();
+    await mock.close();
+  }
 });
 
 test('archive episode selection rejects missing/ambiguous members but keeps one opaque payload', async () => {

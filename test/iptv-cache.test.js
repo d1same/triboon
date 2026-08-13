@@ -1189,6 +1189,105 @@ test('iptv: same-channel native viewers SHARE one upstream connection (fan-out);
   }
 });
 
+test('iptv: browser remux viewers SHARE the same upstream as native (tee into ffmpeg)', async () => {
+  // Two browsers + one native on the same channel must cost ONE provider connection. The hub
+  // fans TS to native HTTP subscribers and tees the same bytes into each remux ffmpeg stdin.
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-iptv-remux-share-'));
+  let activeStreams = 0;
+  let totalConnections = 0;
+  const timers = new Set();
+  const playlist = ['#EXTM3U'];
+  playlist.push('#EXTINF:-1 group-title="Test",Share Remux');
+  playlist.push('http://127.0.0.1:PORT/live/0.ts');
+  const upstream = http.createServer((req, res) => {
+    if (req.url === '/list.m3u') {
+      res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' });
+      return res.end(playlist.join('\n').replaceAll('PORT', String(upstream.address().port)));
+    }
+    if (req.url.startsWith('/live/')) {
+      activeStreams++;
+      totalConnections++;
+      res.writeHead(200, { 'content-type': 'video/mp2t' });
+      res.write(Buffer.alloc(188, 0x47));
+      const t = setInterval(() => { if (!res.destroyed) res.write(Buffer.alloc(188, 0x47)); }, 25);
+      timers.add(t);
+      res.on('close', () => { clearInterval(t); timers.delete(t); activeStreams--; });
+      return;
+    }
+    res.writeHead(404); res.end();
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const transcode = require('../server/transcode');
+  const originalDetect = transcode.detectFfmpeg;
+  const originalSpawn = transcode.spawnLiveRemux;
+  const originalStdin = transcode.spawnLiveRemuxStdin;
+  transcode.detectFfmpeg = () => ({ path: 'ffmpeg' });
+  transcode.spawnLiveRemux = () => {
+    const c = new EventEmitter(); c.stdout = new PassThrough(); c.stderr = new PassThrough();
+    c.kill = () => c.emit('close', 1); process.nextTick(() => c.emit('close', 1)); return c;
+  };
+  transcode.spawnLiveRemuxStdin = () => {
+    const child = new EventEmitter();
+    child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+    child.stdin.on('data', () => { if (!child.stdout.writableEnded) child.stdout.write(Buffer.from('fmp4')); });
+    child.kill = () => { try { child.stdout.end(); } catch {} if (!child.closed) { child.closed = true; child.emit('close', 0); } };
+    return child;
+  };
+  const openStream = (port, p, ua) => new Promise((resolve, reject) => {
+    const req = http.get({ host: '127.0.0.1', port, path: p, headers: { 'user-agent': ua } },
+      (res) => { res.once('data', () => resolve({ req, res })); res.on('error', () => {}); });
+    req.on('error', reject);
+  });
+  const waitFor = async (fn, ms = 4000) => {
+    const until = Date.now() + ms;
+    while (Date.now() < until) { if (fn()) return true; await new Promise((r) => setTimeout(r, 25)); }
+    return false;
+  };
+  const chunksOf = (res) => new Promise((resolve) => {
+    let n = 0;
+    const onData = () => { if (++n >= 2) { res.off('data', onData); resolve(n); } };
+    res.on('data', onData);
+  });
+  const withSurface = (u, s) => u + (u.includes('?') ? '&' : '?') + 'surface=' + s;
+  let srv;
+  const clients = [];
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/settings',
+      { iptvMode: 'm3u', iptvUrl: `http://127.0.0.1:${upstream.address().port}/list.m3u`, epgUrl: null }, admin);
+    const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    assert.strictEqual(ch.status, 200);
+    const streamUrl = ch.json.channels[0].streamUrl;
+    const nativeUrl = ch.json.channels[0].nativeUrl;
+
+    const a = await openStream(srv.port, withSurface(streamUrl, 'web0'), 'Mozilla/5.0 Chrome/120');
+    clients.push(a);
+    assert.strictEqual(a.res.headers['content-type'], 'video/mp4', 'browser remux returns fMP4');
+    const b = await openStream(srv.port, withSurface(streamUrl, 'web1'), 'Mozilla/5.0 Chrome/120');
+    clients.push(b);
+    await chunksOf(b.res);
+    assert.strictEqual(totalConnections, 1, `two browsers must share one upstream (got ${totalConnections})`);
+    assert.strictEqual(activeStreams, 1, 'exactly one provider connection is active for two remux viewers');
+
+    const c = await openStream(srv.port, withSurface(nativeUrl, 'tv0'), 'TriboonTV-test');
+    clients.push(c);
+    await chunksOf(c.res);
+    assert.ok(await waitFor(() => totalConnections === 1),
+      `native must join the remux hub, not open a second upstream (got ${totalConnections})`);
+    assert.match(String(c.res.headers['content-type'] || ''), /mp2t|octet-stream/,
+      'native still receives TS off the shared hub');
+  } finally {
+    for (const cl of clients) { try { cl.res.destroy(); } catch {} try { cl.req.destroy(); } catch {} }
+    if (srv) await srv.shutdown();
+    transcode.detectFfmpeg = originalDetect;
+    transcode.spawnLiveRemux = originalSpawn;
+    transcode.spawnLiveRemuxStdin = originalStdin;
+    timers.forEach((t) => clearInterval(t));
+    upstream.close();
+  }
+});
+
 // The automated version of the VERIFY.md "20 rapid zaps" live smoke: one viewer zapping down a
 // playlist must honor the 1-connection zap contract the whole way — every retune closes the old
 // upstream promptly (never more than one brief handoff overlap), no upstream leaks behind the

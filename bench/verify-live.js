@@ -25,8 +25,13 @@
 //   node bench/verify-live.js --base http://192.168.1.50:7777 --title "Dune Part Two 2024"
 //   node bench/verify-live.js --base http://192.168.1.50:7777 --quality 4k --resume-frac 0.45 `
 //     --title "Dune Part Two 2024"
+//   node bench/verify-live.js --concurrent --title "FROM S01E01||||1080p" `
+//     --title "The Super Mario Galaxy Movie||||4k"
 //
-// A title is "query|imdbid|season|episode" — only the query is required. Pass --title repeatedly.
+// A title is "query|imdbid|season|episode|quality" — only the query is required. Pass --title
+// repeatedly. Optional quality is 1080p or 4k (overrides --quality for that title).
+// --concurrent fires every title's Play + first-byte + seek at the same time (the multi-user
+// soak: one 1080p person and one 4K person must not starve each other).
 // With no --title flags, DEFAULT_TITLES below is used (edit it for your own library).
 // Exit code is non-zero if any title fails to produce a playable stream.
 
@@ -48,18 +53,18 @@ function parseArgs(argv) {
   const out = {
     base: process.env.TRIBOON_BASE || 'http://localhost:7777', titles: [],
     token: process.env.TRIBOON_TOKEN || null, qualityRank: null, resumeFrac: null,
+    concurrent: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--base') out.base = argv[++i];
     else if (a === '--title') out.titles.push(argv[++i]);
     else if (a === '--token') out.token = argv[++i];
+    else if (a === '--concurrent') out.concurrent = true;
     else if (a === '--4k') out.qualityRank = 4;
     else if (a === '--quality') {
-      const value = String(argv[++i] || '').toLowerCase();
-      out.qualityRank = value === '4k' || value === '2160p' || value === 'uhd' ? 4
-        : value === '1080p' || value === '1080' ? 3 : Number(value);
-      if (![1, 2, 3, 4].includes(out.qualityRank)) throw new Error('--quality must be 4k, 1080p, or rank 1-4');
+      out.qualityRank = parseQuality(argv[++i]);
+      if (!out.qualityRank) throw new Error('--quality must be 4k, 1080p, or rank 1-4');
     } else if (a === '--resume-frac') {
       out.resumeFrac = Number(argv[++i]);
       if (!(out.resumeFrac > 0.02 && out.resumeFrac < 0.985)) throw new Error('--resume-frac must be between 0.02 and 0.985');
@@ -69,12 +74,23 @@ function parseArgs(argv) {
   return out;
 }
 
+function parseQuality(value) {
+  const v = String(value || '').toLowerCase();
+  if (!v) return null;
+  if (v === '4k' || v === '2160p' || v === 'uhd') return 4;
+  if (v === '1080p' || v === '1080') return 3;
+  const n = Number(v);
+  return [1, 2, 3, 4].includes(n) ? n : null;
+}
+
 function parseTitle(spec) {
-  const [q, imdbid, season, ep] = String(spec).split('|').map((s) => (s || '').trim());
+  const [q, imdbid, season, ep, quality] = String(spec).split('|').map((s) => (s || '').trim());
   const t = { q };
   if (imdbid) t.imdbid = imdbid;
   if (season) t.season = Number(season);
   if (ep) t.ep = Number(ep);
+  const qRank = parseQuality(quality);
+  if (qRank) t.qualityRank = qRank;
   return t;
 }
 
@@ -124,10 +140,97 @@ function request(method, urlStr, { headers = {}, body = null, rangeBytes = 0 } =
 const fmt = (ms) => (ms == null ? '  —  ' : `${Math.round(ms)}ms`);
 const mark = (ms, budget) => (ms == null ? '?' : ms <= budget ? 'OK' : 'SLOW');
 
+function playBody(t, args) {
+  const body = { q: t.q };
+  if (t.imdbid) body.imdbid = t.imdbid;
+  if (t.season) body.season = t.season;
+  if (t.ep) body.ep = t.ep;
+  const qRank = t.qualityRank || args.qualityRank;
+  if (qRank) {
+    body.maxResolutionRank = qRank;
+    body.preferResolutionRank = qRank;
+  }
+  if (args.resumeFrac) body.resumeFrac = args.resumeFrac;
+  return { body, qRank };
+}
+
+async function probeTitle(base, authH, spec, args) {
+  const t = parseTitle(spec);
+  const { body, qRank } = playBody(t, args);
+  const row = { title: t.q, ready: null, firstByte: null, seekByte: null, resume: null, method: '?', health: '?', source: '', note: '', qRank };
+  try {
+    const playT0 = process.hrtime.bigint();
+    const play = await request('POST', `${base}/api/play`, { headers: authH, body });
+    row.ready = Number(process.hrtime.bigint() - playT0) / 1e6;
+    if (play.status !== 200 || !play.json || !play.json.streamUrl) {
+      row.note = `PLAY FAILED (${play.status}): ${(play.json && play.json.error) || ''}`.trim();
+      if (play.json && play.json.attempts && play.json.attempts.length) row.note += ` [${play.json.attempts.slice(0, 3).map((a) => a.fail).join('; ')}]`;
+      return { row, failed: true };
+    }
+    const m = play.json;
+    row.source = (m.candidate && m.candidate.name) || m.name || '';
+    if (qRank === 4 && !/(?:2160p|4k|uhd)/i.test(row.source)) {
+      row.note += ' requested 4K but mounted source is not labelled 2160p/4K/UHD';
+      return { row, failed: true, mount: m, body };
+    }
+    if (qRank === 3 && /(?:2160p|4k|uhd)/i.test(row.source)) {
+      row.note += ' requested 1080p but mounted a 4K-labelled source';
+      return { row, failed: true, mount: m, body };
+    }
+    row.method = (m.playback && m.playback.method) || m.method || (m.streamable ? 'direct' : 'unstreamable');
+    const needsAac = !!(m.playback && (m.playback.audioSafe || m.playback.transcodeAudio));
+    if (needsAac && /direct/.test(row.method)) row.method += '+aacSafe';
+    return { row, failed: false, mount: m, body };
+  } catch (e) {
+    row.note = `ERROR: ${e.message}`;
+    return { row, failed: true };
+  }
+}
+
+async function probeBytes(base, authH, job, args) {
+  const { row, mount: m } = job;
+  if (!m || !m.streamUrl) return;
+  const sUrl = `${base}${m.streamUrl}`;
+  const firstStart = args.resumeFrac && m.size > 200000 ? Math.floor(m.size * args.resumeFrac) : 0;
+  const fbHeaders = firstStart > 0 ? { Range: `bytes=${firstStart}-${firstStart + 65535}` } : {};
+  const fb = await request('GET', sUrl, { headers: fbHeaders, rangeBytes: 64 * 1024 });
+  row.firstByte = fb.firstByteMs;
+  if (fb.status >= 400) { row.note = `stream HTTP ${fb.status}`; job.failed = true; }
+
+  if (m.size > 200000) {
+    const seekFrac = args.resumeFrac && Math.abs(args.resumeFrac - 0.7) < 0.08 ? 0.35 : 0.7;
+    const seekStart = Math.floor(m.size * seekFrac);
+    const sk = await request('GET', sUrl, { headers: { Range: `bytes=${seekStart}-${seekStart + 65535}` }, rangeBytes: 64 * 1024 });
+    row.seekByte = sk.firstByteMs;
+    if (sk.status !== 206 && sk.status !== 200) row.note += ` seek HTTP ${sk.status}`;
+  }
+
+  try {
+    const h = await request('GET', `${base}/api/health/${m.id}`, { headers: authH });
+    row.health = (h.json && h.json.verdict) || '?';
+  } catch {}
+}
+
+async function snapshotStatus(base, authH) {
+  try {
+    const s = (await request('GET', `${base}/api/status`, { headers: authH })).json || {};
+    const nntp = s.nntp || {};
+    const pb = s.playback || {};
+    return {
+      mounts: s.mounts,
+      providers: nntp.providers,
+      totalConnections: nntp.totalConnections,
+      active: pb.active || pb.playing || pb.streams,
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const base = args.base.replace(/\/$/, '');
-  console.log(`\nTriboon live self-test → ${base}\n${'='.repeat(64)}`);
+  console.log(`\nTriboon live self-test → ${base}${args.concurrent ? '  [CONCURRENT 1080p+4K soak]' : ''}\n${'='.repeat(64)}`);
 
   // 1) Auth: token from flag/env, else log in with TRIBOON_USER/TRIBOON_PASS.
   let token = args.token;
@@ -143,78 +246,43 @@ async function main() {
   }
   const authH = { authorization: `Bearer ${token}` };
 
-  // Environment snapshot — surfaces the things that silently change behavior.
   try {
     const srv = (await request('GET', `${base}/api/server`, { headers: authH })).json || {};
     console.log(`server: v${srv.version || '?'} ffmpeg=${!!srv.ffmpeg} subSync(alass)=${!!srv.subSync} subtitles=${!!srv.opensubs} iptv=${!!srv.iptv}`);
     if (srv.needsSetup) console.log('⚠ server reports needsSetup — finish first-run setup in the dashboard before testing playback.');
   } catch {}
+  const before = await snapshotStatus(base, authH);
+  if (before) console.log(`status: mounts=${before.mounts} providers=${before.providers} cap=${before.totalConnections || '?'} conns`);
   console.log('');
 
-  const rows = [];
   let hardFail = 0;
 
-  for (const spec of args.titles) {
-    const t = parseTitle(spec);
-    if (args.qualityRank) {
-      t.maxResolutionRank = args.qualityRank;
-      t.preferResolutionRank = args.qualityRank;
+  if (args.concurrent) {
+    const wall0 = process.hrtime.bigint();
+    const jobs = await Promise.all(args.titles.map((spec) => probeTitle(base, authH, spec, args)));
+    const readyMs = Number(process.hrtime.bigint() - wall0) / 1e6;
+    await Promise.all(jobs.map((job) => (job.mount ? probeBytes(base, authH, job, args) : null)));
+    const wallMs = Number(process.hrtime.bigint() - wall0) / 1e6;
+    for (const job of jobs) {
+      if (job.failed) hardFail++;
+      console.log(line(job.row));
     }
-    if (args.resumeFrac) t.resumeFrac = args.resumeFrac;
-    const row = { title: t.q, ready: null, firstByte: null, seekByte: null, resume: null, method: '?', health: '?', source: '', note: '' };
-    try {
-      // 1. press -> ready
-      const playT0 = process.hrtime.bigint();
-      const play = await request('POST', `${base}/api/play`, { headers: authH, body: t });
-      row.ready = Number(process.hrtime.bigint() - playT0) / 1e6;
-      if (play.status !== 200 || !play.json || !play.json.streamUrl) {
-        row.note = `PLAY FAILED (${play.status}): ${(play.json && play.json.error) || ''}`.trim();
-        if (play.json && play.json.attempts && play.json.attempts.length) row.note += ` [${play.json.attempts.slice(0, 3).map((a) => a.fail).join('; ')}]`;
-        hardFail++; rows.push(row); console.log(line(row)); continue;
+    const after = await snapshotStatus(base, authH);
+    console.log(`\noverlap: both Plays returned in ${Math.round(readyMs)}ms; Play+first-byte+seek wall ${Math.round(wallMs)}ms`);
+    if (after) console.log(`status after: mounts=${after.mounts} (was ${before && before.mounts}) providers=${after.providers} cap=${after.totalConnections || '?'} conns`);
+  } else {
+    for (const spec of args.titles) {
+      const job = await probeTitle(base, authH, spec, args);
+      if (job.mount) await probeBytes(base, authH, job, args);
+      if (!job.failed && job.mount && job.body) {
+        const rT0 = process.hrtime.bigint();
+        const again = await request('POST', `${base}/api/play`, { headers: authH, body: job.body });
+        job.row.resume = Number(process.hrtime.bigint() - rT0) / 1e6;
+        if (again.json && again.json.id !== job.mount.id) job.row.note += ' (resume remounted, not reused)';
       }
-      const m = play.json;
-      row.source = (m.candidate && m.candidate.name) || m.name || '';
-      if (args.qualityRank === 4 && !/(?:2160p|4k|uhd)/i.test(row.source)) {
-        row.note += ' requested 4K but mounted source is not labelled 2160p/4K/UHD';
-        hardFail++;
-      }
-      row.method = (m.playback && m.playback.method) || m.method || (m.streamable ? 'direct' : 'unstreamable');
-      const needsAac = !!(m.playback && (m.playback.audioSafe || m.playback.transcodeAudio));
-      if (needsAac && /direct/.test(row.method)) row.method += '+aacSafe';
-
-      // 2. play -> first byte (real decoded bytes off the front of the file)
-      const sUrl = `${base}${m.streamUrl}`;
-      const firstStart = args.resumeFrac && m.size > 200000 ? Math.floor(m.size * args.resumeFrac) : 0;
-      const fbHeaders = firstStart > 0 ? { Range: `bytes=${firstStart}-${firstStart + 65535}` } : {};
-      const fb = await request('GET', sUrl, { headers: fbHeaders, rangeBytes: 64 * 1024 });
-      row.firstByte = fb.firstByteMs;
-      if (fb.status >= 400) { row.note = `stream HTTP ${fb.status}`; hardFail++; }
-
-      // 3. seek -> first byte (cold range ~70% in)
-      if (m.size > 200000) {
-        const seekFrac = args.resumeFrac && Math.abs(args.resumeFrac - 0.7) < 0.08 ? 0.35 : 0.7;
-        const seekStart = Math.floor(m.size * seekFrac);
-        const sk = await request('GET', sUrl, { headers: { Range: `bytes=${seekStart}-${seekStart + 65535}` }, rangeBytes: 64 * 1024 });
-        row.seekByte = sk.firstByteMs;
-        if (sk.status !== 206 && sk.status !== 200) row.note += ` seek HTTP ${sk.status}`;
-      }
-
-      // 4. health re-check (the resume path: /api/health runs live triage on the mount)
-      try {
-        const h = await request('GET', `${base}/api/health/${m.id}`, { headers: authH });
-        row.health = (h.json && h.json.verdict) || '?';
-      } catch {}
-
-      // 5. resume feel — a second Play should reuse the live mount (~instant)
-      const rT0 = process.hrtime.bigint();
-      const again = await request('POST', `${base}/api/play`, { headers: authH, body: t });
-      row.resume = Number(process.hrtime.bigint() - rT0) / 1e6;
-      if (again.json && again.json.id !== m.id) row.note += ' (resume remounted, not reused)';
-    } catch (e) {
-      row.note = `ERROR: ${e.message}`; hardFail++;
+      if (job.failed) hardFail++;
+      console.log(line(job.row));
     }
-    rows.push(row);
-    console.log(line(row));
   }
 
   console.log('='.repeat(64));

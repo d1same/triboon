@@ -655,18 +655,21 @@ pass counts belong in dated `VERIFY.md` evidence:
 
 Still open / future hardening:
 
-- Broader Android hardware matrix automation for Shield, Onn, Fire TV, Chromecast,
-  Google TV, and low-memory devices.
+- Broader Android hardware matrix for Shield, Onn, Fire TV, and low-memory boxes.
+  Owner-verified Chromecast and a friend's Android TV both play fine (2026-08).
 - Broader Windows hardware QA across NVIDIA, AMD, and Intel GPUs, HDR displays,
   HDMI/ARC/eARC receivers, and low-power machines. CI cannot prove physical GPU
-  decode or every home-theater chain.
-- par2 repair and compressed RAR streaming improvements.
+  decode or every home-theater chain. Chromecast/Android TV do not cover this.
 - MDBList and richer catalog rows.
 - Intro/credit skip after the playback foundation stays stable.
-- Profile-scoped server sessions for true parental-control enforcement on raw
-  `/api/search` and `/api/play`. Current catalog UI filters maturity before a
-  title is shown, but arbitrary raw NZB queries do not carry reliable ratings;
-  do not claim a hard kids boundary until profile tokens are part of route auth.
+
+Parked (do not re-open unless the owner asks):
+
+- par2 repair and compressed RAR streaming. Compared 2026-08-13: store-RAR
+  already streams with seeking; compressed/par2 would make Play slower (decode
+  from 0:00 or wait on repair) instead of skipping to the next healthy source.
+  Verdict cache already turtle-tags compressed so the next search does not retry
+  it. Not a source-finding or health-speed win. Leave parked.
 
 ## Verification Checklist For Architecture Changes
 

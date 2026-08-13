@@ -6092,6 +6092,7 @@ const ACTION_MENU_ICONS = {
   remove: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
   star: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3l-5.6 2.9 1.1-6.2L3 9.6l6.2-.9z"/></svg>',
   starOff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linejoin="round"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3l-5.6 2.9 1.1-6.2L3 9.6l6.2-.9z"/></svg>',
+  list: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>',
 };
 function actionMenuButton(act, icon, label) {
   return `<button class="focusable" data-act="${esc(act)}"><span class="menuIcon" aria-hidden="true">${ACTION_MENU_ICONS[icon] || ''}</span><span class="menuLabel">${esc(label)}</span></button>`;
@@ -6205,6 +6206,42 @@ function openSeasonMenu(show, season, card) {
     if (isLocal) return markLocalEpisodeGroupWatched(show, localEpisodes, watched, `${label} marked ${watched ? 'watched' : 'unwatched'}`);
     markSeasonWatched(show, season, watched);
   };
+}
+// Episode ⋯ / hold-OK. Must use the page-level #cwMenu (position:fixed). An in-card popup is
+// clipped by .epCard{overflow:hidden} and #epGrid's horizontal scroller — adding Sources made
+// that obvious (Mark watched sat inside the still; Play from start / Sources were cut off).
+function openEpisodeCardMenu(item, card, onWatch) {
+  if (!item || !card) return;
+  const m = $('cwMenu');
+  if (m.classList.contains('open') && S.cwReturnEl === card) { closeCwMenu(); return; }
+  const w = (S.watchMap || {})[item.key];
+  m.innerHTML =
+    actionMenuButton('start', 'play', 'Play from start') +
+    actionMenuButton('sources', 'list', 'Sources') +
+    (w && w.watched ? actionMenuButton('unwatch', 'circle', 'Mark unwatched') : actionMenuButton('watch', 'check', 'Mark watched'));
+  const r = card.getBoundingClientRect();
+  m.style.left = Math.max(8, Math.min(innerWidth - 260, r.left + 10)) + 'px';
+  m.style.top = Math.max(8, Math.min(innerHeight - 280, r.top + 10)) + 'px';
+  m.classList.add('open');
+  S.cwReturnEl = card;
+  S.cwMenuIdx = 0;
+  applyFocus(m.querySelector('button'), false);
+  m.onclick = (e) => {
+    const btn = e.target.closest && e.target.closest('button[data-act]');
+    if (!btn || !m.contains(btn)) return;
+    const act = btn.dataset.act;
+    e.stopPropagation(); closeCwMenu();
+    if (act === 'start') play(startOverItem(item));
+    else if (act === 'sources') openSources(item);
+    else if (typeof onWatch === 'function') onWatch(act === 'watch');
+  };
+}
+function bindEpisodeOptionsButton(card, item, onWatch) {
+  const btn = card.querySelector('.epMenuBtn');
+  if (!btn) return;
+  const open = (e) => { e.stopPropagation(); openEpisodeCardMenu(item, card, onWatch); };
+  btn.addEventListener('click', open);
+  card._openEpisodeMenu = () => openEpisodeCardMenu(item, card, onWatch);
 }
 function liveChannelForItem(it) {
   if (!it) return null;
@@ -7154,6 +7191,11 @@ function sourceSearchQuery(it, opts = {}) {
     params.set('maxResolutionRank', String(qRank));
     params.set('preferResolutionRank', String(qRank));
   }
+  if (S.profile && S.profile.id) params.set('profileId', S.profile.id);
+  if (it && it.tmdbId) {
+    params.set('tmdbId', String(it.tmdbId));
+    params.set('mediaType', (it.type === 'tv' || it.type === 'episode' || it.season != null || /^tmdb:tv:/i.test(String(it.key || ''))) ? 'tv' : 'movie');
+  }
   return params.toString();
 }
 function releaseResolutionRankFromName(name) {
@@ -7369,6 +7411,11 @@ async function openSources(it) {
   S.drawerReturn = null;
   if (opener && !opener.closest('#drawer')) S.drawerReturn = { el: opener, zone: S.zone, view: S.view, epoch: reqId };
   $('drawerSub').textContent = `${it.title} — auto-pick plays the top release. Choose to override.`;
+  const srcBtn = $('dSources');
+  if (srcBtn && S.view === 'detail') {
+    const code = episodeCodeOf(it);
+    if (code) srcBtn.title = `Sources for ${code}`;
+  }
   const list = $('srcList'); list.innerHTML = '<div class="sub">searching indexers…</div>';
   $('srcSort').style.display = 'none';
   $('drawer').classList.add('open'); $('drawerScrim').classList.add('open');
@@ -8139,32 +8186,15 @@ async function openSeasonEpisodes(show, seasonNumber, opts = {}) {
           <div class="label"><span class="et">${esc(ep.name || 'Episode ' + ep.episode_number)}</span>
             <span class="em">${esc(['S' + pad2(seasonNumber) + 'E' + pad2(ep.episode_number),
     ep.air_date ? fmtDate(ep.air_date) : '', ep.runtime ? ep.runtime + 'm' : ''].filter(Boolean).join(' · '))}</span></div>
-          ${upcoming ? '' : `<button class="epMenuBtn" title="Episode options">⋯</button>
-          <div class="epMenu">
-            ${actionMenuButton('start', 'play', 'Play from start')}
-            ${w && w.watched ? actionMenuButton('unwatch', 'circle', 'Mark unwatched') : actionMenuButton('watch', 'check', 'Mark watched')}
-          </div>`}
+          ${upcoming ? '' : `<button class="epMenuBtn" title="Episode options">⋯</button>`}
         </div>`;
-      const menu = card.querySelector('.epMenu');
-      if (menu) {
-        card.querySelector('.epMenuBtn').addEventListener('click', (e) => {
-          e.stopPropagation();
-          document.querySelectorAll('.epMenu.open').forEach((m) => m !== menu && m.classList.remove('open'));
-          menu.classList.toggle('open');
-        });
-        menu.addEventListener('click', (e) => {
-          const btn = e.target.closest && e.target.closest('button[data-act]');
-          if (!btn || !menu.contains(btn)) return;
-          const act = btn.dataset.act;
-          e.stopPropagation(); menu.classList.remove('open');
-          if (act === 'start') play(startOverItem(item));
-          else setEpisodeWatched(item, ep, show, seasonNumber, act === 'watch');
-        });
-      }
+      const menuBtn = card.querySelector('.epMenuBtn');
+      if (menuBtn) bindEpisodeOptionsButton(card, item, (watched) => setEpisodeWatched(item, ep, show, seasonNumber, watched));
       card.addEventListener('click', () => {
         if (upcoming) { toast(`This episode hasn’t aired yet — airs ${fmtDate(ep.air_date)}`); return; }
         play(item);
       });
+      card.addEventListener('mouseenter', () => retargetDetailFromEpisodeCard(card));
       grid.appendChild(card);
     });
     bindEdgeScroll(grid);
@@ -8266,26 +8296,10 @@ function openLocalShowSeasonEpisodes(show, seasonNumber, opts = {}) {
         <div class="label"><span class="et">${esc(localEpisodeDisplayName(ep))}</span>
           <span class="em">${esc(code)}</span></div>
         <button class="epMenuBtn" title="Episode options">⋯</button>
-        <div class="epMenu">
-          ${actionMenuButton('start', 'play', 'Play from start')}
-          ${w && w.watched ? actionMenuButton('unwatch', 'circle', 'Mark unwatched') : actionMenuButton('watch', 'check', 'Mark watched')}
-        </div>
       </div>`;
-    const menu = card.querySelector('.epMenu');
-    card.querySelector('.epMenuBtn').addEventListener('click', (e) => {
-      e.stopPropagation();
-      document.querySelectorAll('.epMenu.open').forEach((m) => m !== menu && m.classList.remove('open'));
-      menu.classList.toggle('open');
-    });
-    menu.addEventListener('click', (e) => {
-      const btn = e.target.closest && e.target.closest('button[data-act]');
-      if (!btn || !menu.contains(btn)) return;
-      const act = btn.dataset.act;
-      e.stopPropagation(); menu.classList.remove('open');
-      if (act === 'start') play(startOverItem(item));
-      else setLocalEpisodeWatched(item, act === 'watch', seasonNumber);
-    });
+    bindEpisodeOptionsButton(card, item, (watched) => setLocalEpisodeWatched(item, watched, seasonNumber));
     card.addEventListener('click', () => play(item));
+    card.addEventListener('mouseenter', () => retargetDetailFromEpisodeCard(card));
     grid.appendChild(card);
   });
   bindEdgeScroll(grid);
@@ -8353,6 +8367,44 @@ async function setEpisodeWatched(item, ep, show, seasonNumber, watched) {
 }
 
 // Main Play button for a show: figure the next-up episode across the whole series.
+function episodeCodeOf(it) {
+  const ep = episodeKeyParts(it);
+  return ep ? `S${pad2(ep.season)}E${pad2(ep.episode)}` : '';
+}
+function detailPlayButtonLabel(base, target) {
+  const code = episodeCodeOf(target);
+  return code ? `${base} ${code}` : base;
+}
+function syncDetailSourcesTitle(target) {
+  const btn = $('dSources');
+  if (!btn) return;
+  const code = episodeCodeOf(target);
+  btn.title = code ? `Sources for ${code}` : 'Sources';
+}
+function retargetDetailFromEpisodeCard(card) {
+  if (!card || !S.detailItem) return;
+  const s = parseInt(card.dataset.season, 10);
+  const e = parseInt(card.dataset.episode, 10);
+  if (!s || !e) return;
+  const w = (S.watchMap || {})[card.dataset.epKey];
+  const resume = w && w.position > 30 && !w.watched ? w.position : 0;
+  let target = null;
+  if (S.detailItem._localShow) {
+    const ep = (S.localDetailEpisodes || []).find((x) => +x.s === s && +x.e === e);
+    if (!ep) return;
+    const item = localEpisodeItemOf(S.detailItem, ep);
+    target = resume ? { ...item, resume } : item;
+  } else if (S.detailItem.type === 'tv') {
+    target = epTarget(S.detailItem, s, e, resume);
+  } else return;
+  if (detailPlayTarget && detailPlayTarget.key === target.key
+      && Number(detailPlayTarget.resume || 0) === Number(resume)) {
+    syncDetailSourcesTitle(target);
+    return;
+  }
+  updateDetailPlayLabel({ label: resume ? 'Resume' : 'Play', target });
+  syncDetailSourcesTitle(target);
+}
 function pickNextUp(show, seasons) {
   const prefix = `tmdb:tv:${show.tmdbId}:s`, wm = S.watchMap || {};
   const localEpisodes = localEpisodesForShow(show);
@@ -8360,23 +8412,27 @@ function pickNextUp(show, seasons) {
     .sort((a, b) => wm[b].updatedAt - wm[a].updatedAt)[0];
   if (inProg) {
     const m = /s(\d+)e(\d+)/.exec(inProg);
-    return updateDetailPlayLabel({ label: 'Resume', target: epTarget(show, +m[1], +m[2], wm[inProg].position) });
+    updateDetailPlayLabel({ label: 'Resume', target: epTarget(show, +m[1], +m[2], wm[inProg].position) });
+  } else {
+    const watched = Object.keys(wm).filter((k) => k.startsWith(prefix) && wm[k].watched)
+      .map((k) => { const m = /s(\d+)e(\d+)/.exec(k); return { s: +m[1], e: +m[2] }; })
+      .sort((a, b) => a.s - b.s || a.e - b.e);
+    if (localEpisodes.length) {
+      const nextLocal = localEpisodes.find((ep) => !(wm[ep.key] && wm[ep.key].watched)) || localEpisodes[localEpisodes.length - 1];
+      updateDetailPlayLabel({ label: watched.length ? 'Continue' : 'Play', target: epTarget(show, nextLocal.s, nextLocal.e, 0) });
+    } else {
+      let nextS = seasons[0].season_number, nextE = 1;
+      if (watched.length) {
+        const last = watched[watched.length - 1];
+        const sObj = seasons.find((s) => s.season_number === last.s);
+        if (sObj && last.e < sObj.episode_count) { nextS = last.s; nextE = last.e + 1; }
+        else { const idx = seasons.findIndex((s) => s.season_number === last.s); const ns = seasons[idx + 1]; if (ns) { nextS = ns.season_number; nextE = 1; } else { nextS = last.s; nextE = last.e; } }
+      }
+      updateDetailPlayLabel({ label: watched.length ? 'Continue' : 'Play', target: epTarget(show, nextS, nextE, 0) });
+    }
   }
-  const watched = Object.keys(wm).filter((k) => k.startsWith(prefix) && wm[k].watched)
-    .map((k) => { const m = /s(\d+)e(\d+)/.exec(k); return { s: +m[1], e: +m[2] }; })
-    .sort((a, b) => a.s - b.s || a.e - b.e);
-  if (localEpisodes.length) {
-    const nextLocal = localEpisodes.find((ep) => !(wm[ep.key] && wm[ep.key].watched)) || localEpisodes[localEpisodes.length - 1];
-    return updateDetailPlayLabel({ label: watched.length ? 'Continue' : 'Play', target: epTarget(show, nextLocal.s, nextLocal.e, 0) });
-  }
-  let nextS = seasons[0].season_number, nextE = 1;
-  if (watched.length) {
-    const last = watched[watched.length - 1];
-    const sObj = seasons.find((s) => s.season_number === last.s);
-    if (sObj && last.e < sObj.episode_count) { nextS = last.s; nextE = last.e + 1; }
-    else { const idx = seasons.findIndex((s) => s.season_number === last.s); const ns = seasons[idx + 1]; if (ns) { nextS = ns.season_number; nextE = 1; } else { nextS = last.s; nextE = last.e; } }
-  }
-  updateDetailPlayLabel({ label: watched.length ? 'Continue' : 'Play', target: epTarget(show, nextS, nextE, 0) });
+  syncDetailSourcesTitle(detailPlayTarget);
+  checkAvailability(show);
 }
 
 function syncDetailButtons(it) {
@@ -8400,7 +8456,8 @@ function syncDetailButtons(it) {
 let detailPlayTarget = null;
 function updateDetailPlayLabel({ label, target }) {
   detailPlayTarget = target;
-  $('dPlayLabel').textContent = label;
+  $('dPlayLabel').textContent = detailPlayButtonLabel(label, target);
+  syncDetailSourcesTitle(target);
   prefetchSources(target, 0);
   preparePlaybackSource(target, 0);
 }
@@ -8420,10 +8477,24 @@ function localTitleHasPlayback(it) {
 }
 // Availability: a title you OWN plays locally (no Sources drawer needed); a title with ZERO
 // usenet results shows an honest "Unavailable" instead of a Play button that would fail.
+function availabilitySearchItem(it) {
+  if (!it) return it;
+  if (it.type === 'episode') return it;
+  if (it.type === 'tv') {
+    const t = detailPlayTarget;
+    if (t && t.type === 'episode' && Number(t.tmdbId) === Number(it.tmdbId)) return t;
+  }
+  return it;
+}
 async function checkAvailability(it) {
   const reqId = S.detailReq;
-  const hasLocal = localTitleHasPlayback(it);
-  if (hasLocal && localPlaybackRankForItem(it) === 4) {
+  const searchItem = availabilitySearchItem(it) || it;
+  // TV show pages must search the next-up / focused episode. A bare "Title Year" query
+  // rejects every SxxEyy post (movie-vs-series guard), so Lucky looked empty even when
+  // S01E01 was sitting on usenet. pickNextUp re-calls us once the episode target exists.
+  if (it && it.type === 'tv' && !(searchItem && searchItem.type === 'episode')) return;
+  const hasLocal = localTitleHasPlayback(searchItem) || localTitleHasPlayback(it);
+  if (hasLocal && localPlaybackRankForItem(searchItem) === 4) {
     $('dSources').style.display = 'none'; // your own file — one source, no drawer
     $('qToggle').style.display = 'none';
     return;
@@ -8432,9 +8503,9 @@ async function checkAvailability(it) {
   // before /api/server returns, and bailing there left the toggle/Unavailable state unset.
   if (S.serverInfo && !S.serverInfo.tmdb) return;
   try {
-    const ids = sourceIdentityFor(it);
+    const ids = sourceIdentityFor(searchItem);
     const hadStrongIds = !!(ids.imdbid || ids.tvdbid);
-    const r = await api('/api/search?' + sourceSearchQuery(it, { includeQuality: false }));
+    const r = await api('/api/search?' + sourceSearchQuery(searchItem, { includeQuality: false }));
     if (reqId !== S.detailReq) return; // user moved on
     // "Unplayable — no source yet" while Play actually WORKS (owner report): openDetail runs this
     // check TWICE — once immediately (title+year only, before /api/tmdb resolves imdb/tvdb) and
@@ -8460,10 +8531,11 @@ async function checkAvailability(it) {
     const res = new Set((r.candidates || []).map((c) => (c.attributes || {}).resolution));
     const has4k = res.has('2160p');
     const hasLower = [...res].some((x) => x !== '2160p'); // 1080p/720p/SD/unknown
-    const localRank = localPlaybackRankForItem(it);
+    const localRank = localPlaybackRankForItem(searchItem) || localPlaybackRankForItem(it);
     // Record real 4K availability so qualityRankForItem never lets a remembered GLOBAL 4K default
     // force a 4K request (and the server's no-fallback lock) onto a title that simply has no 4K.
     it._has4k = has4k;
+    if (searchItem && searchItem !== it) searchItem._has4k = has4k;
     // A user capped below 4K must never see the 4K toggle — they can't play it (the server caps too).
     const offer = !!(r.candidates && r.candidates.length && has4k && userCanPlay4k() && (hasLower || (hasLocal && localRank !== 4)));
     if (hasLocal) {
@@ -8478,7 +8550,7 @@ async function checkAvailability(it) {
     if (offer) paintQualityToggle(S.qualityPref);
     // An id-less pass on a TMDB title is only the FIRST of two checks — never let it condemn a
     // title whose imdb/tvdb ids (and the sources they find) are still on the way.
-    if (!playable && (hadStrongIds || !it.tmdbId)) {
+    if (!playable && (hadStrongIds || !searchItem.tmdbId)) {
       if (!playBtn.dataset.availPrevLabel) playBtn.dataset.availPrevLabel = $('dPlayLabel').textContent || 'Play';
       playBtn.dataset.availMark = String(reqId);
       // For TV, episodes may exist even when the bare show search is empty — only hard-mark
@@ -8728,6 +8800,7 @@ function focusRenderedDetailEpisode(parts, scroll = true) {
   const card = grid.querySelector(`.epCard[data-season="${parts.season}"][data-episode="${parts.episode}"]`);
   if (!card) return false;
   applyFocus(card, scroll);
+  retargetDetailFromEpisodeCard(card);
   return true;
 }
 async function focusDetailPlayEpisode(show, opts = {}) {
@@ -10667,8 +10740,7 @@ async function openPlayer(it, mount, opts = {}) {
       if (!attemptLiveAutoRetune()) showLiveProviderError('The live stream ended unexpectedly');
       return;
     }
-    if (finishEpisodeToNext()) return;
-    closePlayer({ ended: true });
+    handleVodPlaybackEnded(v.currentTime, v.duration);
   };
   // The server's verdict applies on TV too: the WebView is Chromium, and Chromium CANNOT
   // decode AC3/EAC3 (verified on a real Shield: canPlayType('ec-3') = "") — a forced direct
@@ -11481,8 +11553,7 @@ window.__tvNativeVideoEnded = (pos, dur, token) => {
   const p = S.playing;
   if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
   applyNativeVideoProgress(pos, dur);
-  if (finishEpisodeToNext()) return;
-  closePlayer({ ended: true });
+  handleVodPlaybackEnded(pos, dur);
 };
 window.__tvNativeVideoClosed = (pos, dur, ended, token) => {
   const p = S.playing;
@@ -11502,15 +11573,19 @@ window.__tvNativeVideoClosed = (pos, dur, ended, token) => {
   }
   if (!nativePlaybackCallbackMatches(p, token)) return;
   applyNativeVideoProgress(pos, dur, { preserveOnZero: !ended });
-  if (ended && S.nextEp) {
-    // Compatibility with older APKs that closed Exo before sending the terminal callback. Do not
-    // restart a fresh 10-second timer; finishEpisodeToNext owns the same direct EOF contract. The
-    // native surface is already gone, so hand manual Up Next ownership back to the WebView too.
-    p.usingNative = false;
-    S.upNextShown = false;
-    revealWebPlayerShell(p.item);
-    $('playerLoader').classList.remove('show');
-    finishEpisodeToNext();
+  if (ended) {
+    if (isGenuineEpisodeEof(p, pos, dur) && S.nextEp) {
+      // Compatibility with older APKs that closed Exo before sending the terminal callback. Do not
+      // restart a fresh 10-second timer; finishEpisodeToNext owns the same direct EOF contract. The
+      // native surface is already gone, so hand manual Up Next ownership back to the WebView too.
+      p.usingNative = false;
+      S.upNextShown = false;
+      revealWebPlayerShell(p.item);
+      $('playerLoader').classList.remove('show');
+      finishEpisodeToNext();
+      return;
+    }
+    handleVodPlaybackEnded(pos, dur);
     return;
   }
   closePlayer({ ended: !!ended });
@@ -11677,6 +11752,44 @@ function markVodPlaybackStarted(p) {
 }
 function vodPlaybackStarted(p) {
   return !!(p && p.item && p.item.type !== 'live' && (p.started || p.startedAt));
+}
+// A rotten/stub resume file can READY+ENDED in a second. That is not credits — do not mark
+// the episode watched or autoplay the next one. Real EOF is near the end of a real runtime,
+// or a session that actually played for a while.
+function isGenuineEpisodeEof(p, pos, dur) {
+  if (!p || (p.item && p.item.type === 'live')) return false;
+  const d = Math.max(0, Number(dur) || Number(p.nativeDuration) || Number(p.duration) || 0);
+  const t = Math.max(0, Number(pos) || Number(p.nativePos) || 0);
+  const resume = Math.max(0, Number(p.item && p.item.resume) || Number(p.startOffset) || 0);
+  if (resume > 30 && d > 0 && d + 8 < resume) return false;
+  if (d >= 45 && t >= d * 0.88) return true;
+  if (!vodPlaybackStarted(p)) return false;
+  const playedMs = p.startedAt ? ((typeof appMs === 'function' ? appMs() : Date.now()) - p.startedAt) : 0;
+  if (playedMs < 12000) return false;
+  return d <= 0 || t >= Math.max(20, d * 0.85);
+}
+function handleVodPlaybackEnded(pos, dur) {
+  const p = S.playing;
+  if (!p || (p.item && p.item.type === 'live')) return false;
+  if (isGenuineEpisodeEof(p, pos, dur)) {
+    if (finishEpisodeToNext()) return true;
+    closePlayer({ ended: true });
+    return true;
+  }
+  const at = Math.max(0, Number(currentTime()) || Number(p.item && p.item.resume) || 0);
+  const kind = currentPlayerKind(p);
+  if (p.usingNative) {
+    if (tryNextNativeKind(kind, at, 'source ended before playback started')) return true;
+    if (p.sessionId) {
+      autoAdvance({ nativePreferred: true });
+      return true;
+    }
+    toast('Could not play this source');
+    closePlayer();
+    return true;
+  }
+  failover();
+  return true;
 }
 function currentPlaybackUrl(p, atSeconds = currentTime()) {
   if (!p) return '';
@@ -23889,8 +24002,7 @@ document.addEventListener('keydown', (e) => {
         S._lpEl = el;
         S._lpTimer = setTimeout(() => {
           S._lpTimer = null; S._lpEl = null;
-          const m = el.querySelector('.epMenu');
-          if (m) { m.classList.add('open'); applyFocus(m.querySelector('button'), false); }
+          if (typeof el._openEpisodeMenu === 'function') el._openEpisodeMenu();
         }, 450);
         return;
       }
@@ -23924,6 +24036,7 @@ document.addEventListener('keydown', (e) => {
     if (!S.detailColMem) S.detailColMem = {};
     S.detailColMem[dType(ri)] = ci;
     applyFocus(dRows[ri][ci]);
+    retargetDetailFromEpisodeCard(dRows[ri][ci]);
     // Back at the actions row → scroll the PAGE to its real top: 'nearest' scrolling only
     // makes the button visible, leaving the poster/title block stranded off-screen above.
     // (.detailScroll is the actual scroller — #detail itself is overflow:hidden.)

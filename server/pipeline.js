@@ -14,7 +14,7 @@ const { fanout, fetchUrl, normTitle } = require('./newznab');
 
 // ---- title verification ----
 // Split a search query into title words + structured parts (year, SxxEyy).
-function parseWantedTitle(q) {
+function tokenizeWanted(q) {
   const out = { words: [], year: null, s: null, e: null };
   // Catalog titles spell "&" but scene names spell "and" (Law & Order → Law.and.Order) — the "&"
   // produced NO token, so `law, order` could never consecutively match `law, and, order` and whole
@@ -38,9 +38,71 @@ function parseWantedTitle(q) {
     // normalize all punctuation to spaces), so the title was unfindable.
     for (const w of (t.replace(/['’`]/g, '').match(/[a-z0-9]+/g) || [])) out.words.push(w);
   }
-  // A query that is ONLY a year (a bare-year title with no separate release year) must still ANCHOR on
-  // that number rather than degrade to "any film ±1 year" — keep it as a title word, drop the year filter.
-  if (!out.words.length && out.year !== null && out.s === null) { out.words.push(String(out.year)); out.year = null; }
+  // A query that is ONLY a year (1917 the movie, 1923 the show) must still ANCHOR on that number.
+  // Swallowing it as the year left ZERO title words, so any same-episode release matched — including
+  // Yellowstone.S01E01 for a play of 1923. Drop the year filter; the digits ARE the title.
+  if (!out.words.length && out.year !== null) { out.words.push(String(out.year)); out.year = null; }
+  return out;
+}
+
+// Catalog titles use "Franchise: Unique name" or "Brand's Unique name". The unique half is what
+// scene names often use (Lioness.S02E01, Fellowship.of.the.Ring.2001). The shared half must NEVER
+// be enough on its own — that is how Fellowship used to play Two Towers. Apostrophes inside a word
+// (Sorcerer's Stone) are not a brand split. One-word possessives are only brands (Marvel's Daredevil),
+// never the first word of the real title (Grey's Anatomy, The Queen's Gambit, It's Always Sunny).
+const POSSESSIVE_BRANDS = new Set([
+  'marvel', 'dc', 'disney', 'pixar', 'lucasfilm', 'netflix', 'amazon', 'apple',
+  'hbo', 'bbc', 'fx', 'amc', 'syfy', 'cbs', 'nbc', 'abc', 'paramount', 'peacock',
+  'hulu', 'showtime', 'starz',
+]);
+const POSSESSIVE_PREFIX_ARTICLES = new Set(['the', 'a', 'an']);
+
+function catalogUniqueRaw(raw) {
+  const s = String(raw || '').trim();
+  const colon = s.indexOf(':');
+  if (colon >= 0) {
+    const unique = s.slice(colon + 1).trim();
+    if (unique) return unique;
+  }
+  const poss = /^((?:[A-Za-z0-9]+(?:\s+[A-Za-z0-9]+){0,2}))['’]s\s+(.+)$/i.exec(s);
+  if (!poss || !poss[2]) return '';
+  const prefixCore = String(poss[1]).toLowerCase().split(/\s+/)
+    .filter((w) => w && !POSSESSIVE_PREFIX_ARTICLES.has(w));
+  if (prefixCore.length >= 2) return poss[2].trim();
+  if (prefixCore.length === 1 && POSSESSIVE_BRANDS.has(prefixCore[0])) return poss[2].trim();
+  return '';
+}
+
+const GENERIC_ALIAS_HEAD = new Set(['part', 'chapter', 'volume', 'episode', 'season', 'book', 'act']);
+
+function aliasWordsIfSafe(full, unique) {
+  const aliasCore = titleCoreWords(unique.words);
+  const fullCore = titleCoreWords(full.words);
+  if (!aliasCore.length || aliasCore.join(' ') === fullCore.join(' ')) return [];
+  const hasEpisode = Number.isInteger(full.s) && Number.isInteger(full.e) && full.e > 0;
+  // One leftover word is only safe with a TV episode (Lioness.S02E01). Movies need two+ unique
+  // words so "Mission: Impossible" cannot play a film named Impossible, and LOTR cannot collapse
+  // to "the ring".
+  if (aliasCore.length === 1 && (!hasEpisode || aliasCore[0].length < 6)) return [];
+  // "Dune: Part Two" / "John Wick: Chapter 4" unique halves are generic. Keep the full catalog
+  // title as the match so Part.Two.2024 cannot play as Dune.
+  if (GENERIC_ALIAS_HEAD.has(aliasCore[0]) && aliasCore.length <= 2) return [];
+  return unique.words;
+}
+
+function episodeOrdinalAlias(unique) {
+  const w = unique.words || [];
+  if (w[0] === 'episode' && w[1] && /^(?:[ivxlcdm]+|\d{1,2})$/.test(w[1]) && w.length > 3) {
+    return { ...unique, words: w.slice(2) };
+  }
+  return unique;
+}
+
+function parseWantedTitle(q) {
+  const raw = String(q || '');
+  const out = tokenizeWanted(raw);
+  out.aliasWords = aliasWordsIfSafe(out, episodeOrdinalAlias(tokenizeWanted(catalogUniqueRaw(raw))));
+  out.branded = out.aliasWords.length > 0;
   return out;
 }
 // The requested episode from a play/prepare request (season+ep), or null for a movie. Threaded into
@@ -111,6 +173,41 @@ function titleWordMatches(wantedWord, releaseWord) {
   return wantedWord === releaseWord || TITLE_WORD_EQUIV.get(wantedWord) === releaseWord;
 }
 
+function titleCoreWords(words) {
+  return (words || []).filter((w) => !OPTIONAL_TITLE_ARTICLES.has(w));
+}
+
+// Extra indexer query for the unique catalog half ("Lioness S02E01", "fellowship of the ring 2001").
+function shortTitleQuery(paramsQ, wanted) {
+  const alias = (wanted && wanted.aliasWords) || [];
+  if (!alias.length) return '';
+  if (titleCoreWords(alias).length >= titleCoreWords(wanted.words).length) return '';
+  const tokens = String(paramsQ || '').split(/\s+/).filter(Boolean);
+  const tail = tokens.filter((w) => /^(S\d{2}E\d{2}|s\d{2}e\d{2}|(19|20)\d{2})$/.test(w));
+  const head = alias.slice();
+  while (head.length && OPTIONAL_TITLE_ARTICLES.has(head[0])) head.shift();
+  const q = [...head, ...tail].join(' ').trim();
+  const current = String(paramsQ || '').trim();
+  return q && q.toLowerCase() !== current.toLowerCase() ? q : '';
+}
+
+function titleWordsMatchFromStart(toks, words) {
+  let ti = 0;
+  for (let wi = 0; wi < words.length; wi++) {
+    const w = words[wi];
+    const t = toks[ti];
+    if (t === undefined) {
+      if (OPTIONAL_TITLE_ARTICLES.has(w)) continue;
+      return -1;
+    }
+    if (titleWordMatches(w, t)) { ti++; continue; }
+    const nextWanted = words[wi + 1];
+    if (OPTIONAL_TITLE_ARTICLES.has(w) && nextWanted && titleWordMatches(nextWanted, t)) continue;
+    return -1;
+  }
+  return ti;
+}
+
 // Does this release NAME actually carry the wanted title, episode, and a compatible year?
 // Three rules learned from "From S01E01" playing Stranger Things and long franchise titles:
 //  1. ANCHORED — the title starts at the FIRST token (scene convention: Title.Year/SxxEyy.tags).
@@ -122,25 +219,26 @@ function titleWordMatches(wantedWord, releaseWord) {
 //  3. STRUCTURAL BOUNDARY — the token after the title must be a year/SxxEyy/quality tag,
 //     never a plain word (From.DUSK.Till.Dawn for "From"; Walking.Dead.DARYL.DIXON for
 //     "The Walking Dead" — the spin-off/longer-title trap).
+//  4. UNIQUE CATALOG HALF — "Franchise: Unique name" may also match a release that STARTS with
+//     the unique name (Lioness.S02E01, Fellowship.of.the.Ring.2001). The shared franchise half is
+//     never enough on its own, so Two Towers cannot play for Fellowship and Dragon cannot play
+//     for House of the Dragon.
 function releaseMatches(name, wanted) {
   const norm = ' ' + String(name || '').toLowerCase().replace(/['’`]/g, '').replace(/[^a-z0-9]+/g, ' ') + ' ';
   const toks = norm.trim().split(' ');
-  let ti = 0;
-  for (let wi = 0; wi < wanted.words.length; wi++) {
-    const w = wanted.words[wi];
-    const t = toks[ti];
-    if (t === undefined) {
-      if (OPTIONAL_TITLE_ARTICLES.has(w)) continue;
-      return false;
-    }
-    if (titleWordMatches(w, t)) { ti++; continue; }
-    const nextWanted = wanted.words[wi + 1];
-    if (OPTIONAL_TITLE_ARTICLES.has(w) && nextWanted && titleWordMatches(nextWanted, t)) continue;
-    return false;
-  }
   if (wanted.words.length) {
-    const after = toks[ti];
-    if (after !== undefined && !STRUCTURAL_AFTER_TITLE.test(after)) return false;
+    const variants = [wanted.words];
+    if (wanted.aliasWords && wanted.aliasWords.length) variants.push(wanted.aliasWords);
+    let matched = false;
+    for (const words of variants) {
+      const ti = titleWordsMatchFromStart(toks, words);
+      if (ti < 0) continue;
+      const after = toks[ti];
+      if (after !== undefined && !STRUCTURAL_AFTER_TITLE.test(after)) continue;
+      matched = true;
+      break;
+    }
+    if (!matched) return false;
   }
   if (wanted.s !== null) {
     const s = wanted.s, e = wanted.e;
@@ -169,6 +267,12 @@ function releaseMatches(name, wanted) {
   if (wanted.year) {
     const years = [...norm.matchAll(/\b(19|20)\d{2}\b/g)].map((m) => +m[0]);
     if (years.length && !years.some((y) => Math.abs(y - wanted.year) <= 1)) return false;
+  }
+  // A movie query (year, no episode) must not play a TV series with the same short name.
+  // The.Batman.S01E01 has no year token, so the ±1 year check would let it through for The Batman 2022.
+  if (wanted.year && wanted.s === null
+      && /(?:^|[^a-z0-9])(?:s\d{1,2}[ ._-]?e\d{1,3}|\d{1,2}x\d{1,3})(?=$|[^a-z0-9])/i.test(String(name || ''))) {
+    return false;
   }
   return true;
 }
@@ -212,11 +316,12 @@ function bookMatches(name, wanted) {
 // which is very different from a slow connection (timeouts) the user can act on differently.
 function summarizeAttempts(attempts = []) {
   if (!attempts.length) return 'No sources were available to try for this title.';
-  const cats = { connection: 0, missing: 0, encrypted: 0, stub: 0, unsupported: 0, timeout: 0, blocked: 0, other: 0 };
+    const cats = { connection: 0, missing: 0, encrypted: 0, stub: 0, unsupported: 0, timeout: 0, blocked: 0, episode: 0, other: 0 };
   for (const a of attempts) {
     const f = String((a && a.fail) || '').toLowerCase();
     // Connection FIRST — an unreachable provider must never be mislabeled as a removed article.
     if (/unreachable|econnrefused|econnreset|etimedout|ehostunreach|enotfound|getaddrinfo|socket hang|\bauthinfo\b|too many connection|\b502\b|fetch-failed/.test(f)) cats.connection++;
+    else if (/^episode:|requested episode/.test(f)) cats.episode++;
     else if (/\b430\b|no such article|missing/.test(f)) cats.missing++;
     else if (/encrypt/.test(f)) cats.encrypted++;
     else if (/stub|incomplete|\bsample\b/.test(f)) cats.stub++;
@@ -234,6 +339,7 @@ function summarizeAttempts(attempts = []) {
   if (cats.unsupported) parts.push(`${cats.unsupported} unsupported format`);
   if (cats.timeout) parts.push(`${cats.timeout} timed out`);
   if (cats.blocked) parts.push(`${cats.blocked} failed health`);
+  if (cats.episode) parts.push(`${cats.episode} didn't contain that episode`);
   if (cats.other) parts.push(`${cats.other} other`);
   const deadSource = cats.missing + cats.encrypted + cats.stub + cats.unsupported;
   const half = Math.ceil(n / 2);
@@ -312,6 +418,10 @@ function mountHasActivePlayback(mount, now = Date.now()) {
 // Kept small so startup never floods the provider pool (the startup reserve covers a few parallel
 // mounts). Recovery uses a narrower delayed hedge below because an active source has already died.
 const PLAY_RACE_WIDTH = 5;
+// Three people can press Play at once. Each keeps one front-runner mount slot; extra
+// hedges and background /api/prepare wait behind those Plays instead of flooding NZB
+// downloads and NNTP startup work. One Play still uses leftover slots for hedges.
+const STARTUP_SLOTS = 3;
 // Recovery keeps the common healthy-next-source path single-grab, but launches one delayed hedge
 // when that replacement stalls. This avoids another full 30-second mount wait after the player has
 // already declared its active release unhealthy.
@@ -326,6 +436,65 @@ const RACE_HEDGE_MS = 800;
 // This preserves quality when the top source is milliseconds behind without turning a ready player
 // into a 30-second wait behind its mount deadline.
 const RACE_COMMIT_GRACE_MS = 250;
+
+// Fair startup limiter: Play front-runners beat hedges, hedges beat prepare.
+class StartupGate {
+  constructor(max = STARTUP_SLOTS) {
+    this.max = max;
+    this.active = 0;
+    this.peak = 0;
+    this.playWait = [];
+    this.hedgeWait = [];
+    this.prepWait = [];
+  }
+  _queue(priority) {
+    if (priority === 'prepare') return this.prepWait;
+    if (priority === 'hedge') return this.hedgeWait;
+    return this.playWait;
+  }
+  acquire({ signal, priority = 'play' } = {}) {
+    const abortErr = () => Object.assign(new Error('request aborted'), { code: 'ABORT_ERR' });
+    const ticket = () => {
+      let released = false;
+      return {
+        release: () => {
+          if (released) return;
+          released = true;
+          this.release();
+        },
+      };
+    };
+    if (signal && signal.aborted) return Promise.reject(abortErr());
+    if (this.active < this.max) {
+      this.active++;
+      this.peak = Math.max(this.peak, this.active);
+      return Promise.resolve(ticket());
+    }
+    return new Promise((resolve, reject) => {
+      const q = this._queue(priority);
+      const rec = { resolve, reject, settled: false };
+      rec.finish = (fn) => {
+        if (rec.settled) return;
+        rec.settled = true;
+        if (signal && rec.onAbort) signal.removeEventListener('abort', rec.onAbort);
+        fn();
+      };
+      rec.onAbort = () => {
+        const i = q.indexOf(rec);
+        if (i < 0) return; // already granted a slot
+        q.splice(i, 1);
+        rec.finish(() => reject(abortErr()));
+      };
+      if (signal) signal.addEventListener('abort', rec.onAbort, { once: true });
+      q.push(rec);
+    }).then(() => ticket());
+  }
+  release() {
+    const next = this.playWait.shift() || this.hedgeWait.shift() || this.prepWait.shift();
+    if (next) next.finish(() => next.resolve());
+    else this.active = Math.max(0, this.active - 1);
+  }
+}
 
 function candidateKey(candidate) {
   return crypto.createHash('sha1').update([
@@ -360,7 +529,7 @@ function firstProbeTarget(nzbXml, mountOpts = {}, candidateName = '') {
   // mountNzb will select for the requested episode; probing the largest E01 and mounting E05 can
   // otherwise reject a healthy E05 (or bless a missing one) before playback even starts.
   const firstVolume = orderVolumes(candidates)[0] || null;
-  const file = firstVolume || pickPrimaryFile(nzb, mountOpts);
+  const file = firstVolume || pickPrimaryFile(nzb, { ...mountOpts, releaseName: candidateName });
   return {
     msgId: file && file.segments && file.segments[0] && file.segments[0].msgId,
     // A missing loose-pack episode says nothing about the other members in the same NZB. Archive
@@ -457,6 +626,9 @@ class Pipeline {
     this.nzbInflight = new Map(); // nzbUrl -> Promise(xml), so Play joins detail-page prefetch
     this.prepareInflight = new Map(); // mountIdentity -> shared cancellable mount record
     this.mountByUrl = new Map();  // mountIdentity -> mount id (same selected payload reuses instantly)
+    this._startupGate = new StartupGate(STARTUP_SLOTS);
+    this._inflightAdvances = 0;
+    this._activeFanouts = 0;
     this.metrics = {
       searchCacheHits: 0,
       searchCacheMisses: 0,
@@ -535,10 +707,16 @@ class Pipeline {
   }
 
   async _fanoutMeasured(ixs, params, opts) {
+    this._activeFanouts++;
+    const competing = Math.max(1, this._activeFanouts);
+    const concurrency = competing > 1
+      ? Math.max(2, Math.ceil(ixs.length / competing))
+      : ixs.length;
     const t0 = Date.now();
     try {
-      return await fanout(ixs, params, opts);
+      return await fanout(ixs, params, { ...opts, concurrency });
     } finally {
+      this._activeFanouts = Math.max(0, this._activeFanouts - 1);
       const ms = Date.now() - t0;
       this.metrics.searchFanouts++;
       this.metrics.searchFanoutMs += ms;
@@ -893,11 +1071,34 @@ class Pipeline {
 
   async _fetchSearchHit(ixs, params, wanted, timeoutMs) {
     ixs.forEach((ix) => this.usage.onSearch(ix.name)); // a real fan-out costs one API hit per indexer
+    // Start the short-title alias in parallel with the main query so Play does not wait
+    // 2s + 2s when both are needed. Merge after both land; empty-result fallbacks stay serial.
+    const aliasQ = shortTitleQuery(params.q, wanted);
+    let aliasP = null;
+    if (aliasQ) {
+      ixs.forEach((ix) => this.usage.onSearch(ix.name));
+      const aliasParams = { ...params, q: aliasQ };
+      delete aliasParams.imdbid;
+      delete aliasParams.tvdbid;
+      aliasP = this._fanoutMeasured(ixs, aliasParams, { timeoutMs });
+    }
     let { results, errors } = await this._fanoutMeasured(ixs, params, { timeoutMs });
     // TITLE VERIFICATION — indexers return loosely-related releases; a release only
     // qualifies if its name actually contains the wanted title (and episode/year).
     // Without this, "wrong movie plays" — the #1 trust-killer.
     results = results.filter((r) => releaseMatches(r.name, wanted));
+    if (aliasP) {
+      const retry = await aliasP;
+      const verified = retry.results.filter((r) => releaseMatches(r.name, wanted));
+      if (verified.length) {
+        const seen = new Set(results.map((r) => r.nzbUrl || r.guid || r.name));
+        for (const r of verified) {
+          const k = r.nzbUrl || r.guid || r.name;
+          if (!seen.has(k)) { seen.add(k); results.push(r); }
+        }
+        if (retry.errors && retry.errors.length) errors = errors.concat(retry.errors);
+      }
+    }
     // Fallback: long branded titles ("Brand Name Subtitle SxxEyy") often index under the
     // shorter brand — retry once with a trimmed QUERY, but verify hits against the FULL
     // original title so the shorter search can never surface a different film.
@@ -1200,6 +1401,26 @@ class Pipeline {
   }
 
   async _tryCandidateFresh(candidate, mountOpts = {}) {
+    let ticket;
+    try {
+      ticket = await this._startupGate.acquire({
+        signal: mountOpts && mountOpts.signal,
+        priority: (mountOpts && mountOpts.startupPriority) || 'play',
+      });
+    } catch (e) {
+      if ((e && e.code === 'ABORT_ERR') || (mountOpts && mountOpts.signal && mountOpts.signal.aborted)) {
+        return { fail: 'cancelled: source race loser' };
+      }
+      throw e;
+    }
+    try {
+      return await this._runCandidateFresh(candidate, mountOpts);
+    } finally {
+      ticket.release();
+    }
+  }
+
+  async _runCandidateFresh(candidate, mountOpts = {}) {
     const selectionEpisodeScoped = isEpisodeCollectionName(candidate.name, mountOpts.wantedEpisode);
     const recordSelectionVerdict = (verdict, detail = {}) => {
       // Post-mount judgments describe the selected pack member. They must not blacklist every
@@ -1281,7 +1502,7 @@ class Pipeline {
       mountParentDetached = true;
     };
     const mountPromise = withDeadline(
-      mountNzb(this.pool(), xml, { ...mountOpts, signal: mountController.signal }),
+      mountNzb(this.pool(), xml, { ...mountOpts, signal: mountController.signal, releaseName: candidate.name }),
       this.mountDeadlineMs,
       'mount timeout',
     );
@@ -1561,7 +1782,7 @@ class Pipeline {
     const tryList = async (list) => {
       for (const candidate of list.slice(0, PREPARE_MAX_ATTEMPTS)) {
         if (Date.now() - started >= PREPARE_MAX_MS) break;
-        const res = await this._tryCandidate(candidate, mountOpts);
+        const res = await this._tryCandidate(candidate, { ...mountOpts, startupPriority: 'prepare' });
         if (res.vf && !res.fail) {
           res.vf._touched = Date.now();
           if (!mountHasActivePlayback(res.vf)) {
@@ -1612,6 +1833,19 @@ class Pipeline {
   // fetch+mount+health concurrently and commits the first HEALTHY one (cold-start and bounded
   // recovery hedge); width 1 is the original one-at-a-time walk used by explicit Sources picks.
   async _advance(session, mountOpts = {}, { width = 1 } = {}) {
+    this._inflightAdvances++;
+    try {
+      if (width > 1) {
+        if (this._inflightAdvances >= 3) width = 1;
+        else if (this._inflightAdvances === 2) width = Math.min(width, 2);
+      }
+      return await this._advanceBody(session, mountOpts, { width });
+    } finally {
+      this._inflightAdvances = Math.max(0, this._inflightAdvances - 1);
+    }
+  }
+
+  async _advanceBody(session, mountOpts = {}, { width = 1 } = {}) {
     const attempts = [];
     const started = Date.now();
     const budgetLeft = () => Date.now() - started < MAX_ADVANCE_MS;
@@ -1633,7 +1867,7 @@ class Pipeline {
       const results = [];          // launch order k -> { candidate, state:'pending'|'ok'|'fail', vf?, fail? }
       const inflight = new Map();  // k -> promise(resolving to k)
       let committed = 0;           // next rank index still to decide
-      const launchOne = () => {
+      const launchOne = (kind = 'hedge') => {
         if (session.cursor >= session.candidates.length || results.length >= MAX_ATTEMPTS) return false;
         const candidate = session.candidates[session.cursor++];
         const k = results.length;
@@ -1649,7 +1883,9 @@ class Pipeline {
           cleanupParent: () => parentSignal && parentSignal.removeEventListener('abort', onParentAbort),
         };
         results.push(rec);
-        inflight.set(k, this._tryCandidate(candidate, { ...mountOpts, signal: controller.signal }).then(
+        inflight.set(k, this._tryCandidate(candidate, {
+          ...mountOpts, signal: controller.signal, startupPriority: kind,
+        }).then(
           (res) => {
             Object.assign(rec, (res.vf && !res.fail)
               ? { state: 'ok', vf: res.vf }
@@ -1700,7 +1936,7 @@ class Pipeline {
         try { return await Promise.race(racers); }
         finally { if (timer) clearTimeout(timer); }
       };
-      launchOne();
+      launchOne('play');
       while (budgetLeft()) {
         // Commit the longest decided prefix, in rank order.
         while (committed < results.length && results[committed].state !== 'pending') {
@@ -1808,7 +2044,8 @@ class Pipeline {
 }
 
 module.exports = {
-  Pipeline, GATE_MS, parseWantedTitle, releaseMatches, candidateKey, nzbVerdictKey,
+  Pipeline, GATE_MS, STARTUP_SLOTS, PLAY_RACE_WIDTH, StartupGate,
+  parseWantedTitle, releaseMatches, shortTitleQuery, candidateKey, nzbVerdictKey,
   summarizeAttempts, stubFeatureReason, parseWantedBook, bookMatches,
   isNonAudioAudiobookMount, firstProbeMsgId, mountHasActivePlayback, ACTIVE_PLAYBACK_GRACE_MS,
 };

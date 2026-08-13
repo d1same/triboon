@@ -348,7 +348,10 @@ first winner, and records it in `mountByUrl` without creating a play session or
 exposing a stream URL. A later Play still performs normal auth, policy, and
 token creation, but the pipeline can reuse or join the live prepared/in-flight
 mount instead of repeating source finding, first-article probe, mount, and
-health gate. Fast home/card focus still uses cheap `/api/search` warming only;
+health gate. Two or three people pressing Play at once share indexer fan-out
+and startup mount slots: each Play keeps a front-runner, extra source hedges
+and background `/api/prepare` wait behind those Plays, and a lone Play still
+uses leftover slots to skip dead top picks. Fast home/card focus still uses cheap `/api/search` warming only;
 it does not mount every title the user scrolls past.
 
 TV playback applies the same rule late, not at episode start: once the exact

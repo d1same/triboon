@@ -89,6 +89,22 @@ function episodeSelectionError(wantedEpisode, reason) {
   err.code = 'EPISODE_SELECTION';
   return err;
 }
+
+// True when the RELEASE NAME already is this one episode (Lioness.S01E01), not a season pack
+// or a multi-episode range. Inner/obfuscated files then do not have to repeat SxxEyy.
+function releaseNamesExactEpisode(name, s, e) {
+  if (!episodeInName(name, s, e)) return false;
+  const norm = String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ');
+  const range = /\bs0?(\d{1,2})e0?(\d{1,3})\s*e0?(\d{1,3})\b/.exec(norm);
+  if (range && +range[1] === +s && +range[2] < +range[3]) return false;
+  return true;
+}
+
+function looksLikeSplitParts(names) {
+  const hits = (names || []).filter((n) => /\b(part|cd|disc|disk)[ ._-]?0*\d+\b/i.test(String(n || '')));
+  return hits.length >= 2;
+}
+
 // opts.wantedEpisode {s,e}: for a TV episode play against a loose-file SEASON PACK, pick the video file
 // that matches the requested SxxEyy instead of merely the largest — so "play S02E05" mounts E05, not
 // E01/the biggest file. Movies (no wantedEpisode) keep the original size heuristic; a single opaque
@@ -116,7 +132,15 @@ function pickPrimaryFile(nzb, opts = {}) {
     const payloads = namedVideos.length ? namedVideos : nonJunk;
     const exact = payloads.filter(({ name }) => episodeInName(name, we.s, we.e));
     if (exact.length === 1) return exact[0].f;
-    if (exact.length > 1) throw episodeSelectionError(we, 'is ambiguous (multiple matching payloads)');
+    if (exact.length > 1) {
+      if (looksLikeSplitParts(exact.map((x) => x.name))) {
+        throw episodeSelectionError(we, 'is ambiguous (multiple matching payloads)');
+      }
+      if (releaseNamesExactEpisode(opts.releaseName, we.s, we.e)) {
+        return exact.slice().sort((a, b) => b.size - a.size)[0].f;
+      }
+      throw episodeSelectionError(we, 'is ambiguous (multiple matching payloads)');
+    }
     // Obfuscated single-file posts cannot prove episode identity from the filename. Preserve the
     // long-standing fallback only when there is exactly one plausible payload and it does NOT name a
     // different episode. Anything else is unsafe to guess and must advance to another release.
@@ -145,4 +169,5 @@ function nzbPassword(xml) {
 module.exports = {
   parseNzb, pickPrimaryFile, fileNameFromSubject, nzbPassword, AUDIO_EXT,
   episodeInName, episodeLikeName, episodeSelectionError,
+  releaseNamesExactEpisode, looksLikeSplitParts,
 };
