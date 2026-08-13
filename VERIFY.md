@@ -111,6 +111,27 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-13, v2.9.7 overlapping Plays, kids search gate, shared web Live TV:
+
+- Version contract aligned: `package.json` 2.9.7; Android `versionName` 2.9.7 /
+  `versionCode` 325; all four Windows client version spots 2.9.7.
+- Two or three concurrent Plays now share indexer fan-out and a 3-slot startup
+  gate so one title's dead-source race cannot starve another Play. Kids search
+  and play are profile-gated on the server. Browser Live TV remux joins the
+  shared TS hub. Library TMDB matching no longer takes `results[0]` blindly.
+- `npm.cmd test` 558/558. `npm.cmd run verify:full -- -AndroidDevice
+  emulator-5554` passed whitespace, JS syntax, web parse, focused P9/P14/P11,
+  full Node suite, isolated `/api/server` smoke, and Android
+  lint/native-unit/debug build. The first Android ExoPlayer stress run failed
+  `VOD was not still playing after seek loop` because the emulator still spoke
+  to the leftover 2.9.6 process; after restarting `node server/index.js` onto
+  2.9.7 (`/api/server` version 2.9.7), the same stress passed
+  `bench/stress-results/android-tv-stress-20260813-123248.json` with `ok: true`,
+  zero failures, zero warnings, and the recorded 7782 -> 7777 route.
+- Live household server is now 2.9.7 on port 7777.
+- Unverified on this run: Windows native GPU/HDR playback, physical Chromecast
+  (owner already passed that separately), and a GitHub/APK/Docker publish.
+
 2026-08-12, v2.9.6 immediate Continue Watching repaint + reproducible emulator route:
 
 - Version contract aligned: `package.json` 2.9.6; Android `versionName` 2.9.6 /
