@@ -125,6 +125,28 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-14, Kids page on web/Windows (PG max) + Android rail unchanged:
+
+- Not a version bump. `package.json` stays 2.9.11. Kids is a new left-menu page on
+  browser and Windows only. Android (`body.androidApp`) keeps the old rail: no
+  Kids button, no Kids row in Preferences → Menu, `#/kids` falls back to Home.
+  Kids movies cap at PG (G on a G profile). Kids TV uses TMDB genre 10762.
+- Also in this tree: local-library search, folder-info cover revert (strip leftover
+  TMDB art, video-frame thumb), and Home Kids as one mixed movie+show shelf.
+- `npm.cmd test` 566/566. `npm.cmd run verify:full -- -AndroidDevice
+  emulator-5554 -AndroidHostServerPort 7777` passed whitespace, JS syntax,
+  web parse, focused P9/P14/P11, full Node suite, isolated `/api/server`
+  2.9.11 smoke, and household VOD/IPTV/overlapping Play. First Android
+  ExoPlayer stress failed (`VOD was not still playing after seek loop`);
+  retry `bench/android-tv-stress.ps1` passed
+  `bench/stress-results/android-tv-stress-20260814-111651.json` (`ok: true`).
+- Household live on `http://127.0.0.1:7777` (v2.9.11): Mario 4K
+  4033ms/587ms/162ms/56ms (ready SLOW, stream OK, English-HONE);
+  FROM S01E01 7546ms/448ms/293ms/1083ms (ready+resume SLOW); overlapping Play
+  2ms/4ms first-byte; IPTV ABC then ESPN web+native first-bytes OK.
+- Unverified on this run: Windows native GPU/HDR, signed-in browser
+  click-through, and episode-handoff / nested Back / CW source recovery.
+
 2026-08-13, v2.9.11 Home/Details next-episode + Up Next off + 2-minute prepare:
 
 - Version contract: `package.json` 2.9.11; Android `versionName` 2.9.11 /

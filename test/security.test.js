@@ -211,7 +211,7 @@ test('security: deny-by-default — every route declares auth; unknown routes 40
     ['GET', '/api/health/abc'], ['POST', '/api/mount'], ['GET', '/api/settings'],
     ['GET', '/api/me/iptv/sources'], ['POST', '/api/me/iptv/sources'], ['PATCH', '/api/me/iptv/sources/abc'], ['DELETE', '/api/me/iptv/sources/abc'],
     ['POST', '/api/settings'], ['POST', '/api/streaming/recommend'], ['POST', '/api/invites'], ['GET', '/api/invites'],
-    ['GET', '/api/users'], ['GET', '/api/libraries/local-lookup?key=tmdb:movie:1'], ['GET', '/api/stream/abc'], ['GET', '/api/remux/abc'],
+    ['GET', '/api/users'], ['GET', '/api/libraries/search?q=x'], ['GET', '/api/libraries/local-lookup?key=tmdb:movie:1'], ['GET', '/api/stream/abc'], ['GET', '/api/remux/abc'],
     ['GET', '/api/transcode/abc'], ['GET', '/api/hls/abc'], ['GET', '/api/hls/abc/seg00001.m4s'],
     ['GET', '/api/iptv/status'], ['POST', '/api/iptv/refresh'], ['GET', '/api/iptv/sources'], ['POST', '/api/iptv/sources'], ['PATCH', '/api/iptv/sources/abc'], ['DELETE', '/api/iptv/sources/abc'],
     ['POST', '/api/quickconnect/123456/approve'], ['GET', '/api/music/home'], ['GET', '/api/music/charts'], ['GET', '/api/music/search?q=x'], ['GET', '/api/music/radio/AAAAAAAAAAA'],
@@ -247,6 +247,7 @@ test('security: role separation — user tokens cannot reach admin routes', asyn
   // …but user routes work.
   assert.strictEqual((await httpJson(srv.port, 'GET', '/api/status', null, user)).status, 200);
   assert.strictEqual((await httpJson(srv.port, 'GET', '/api/libraries', null, user)).status, 200, 'users can READ libraries');
+  assert.strictEqual((await httpJson(srv.port, 'GET', '/api/libraries/search?q=x', null, user)).status, 200, 'users can search their libraries');
 });
 
 test('security: ?t= session tokens are rejected on non-stream routes; /api/status fingerprint is admin-only', async () => {
@@ -1186,6 +1187,8 @@ test('library scan v3: rescans keep addedAt + matches, count new files; stable c
   const again = (await httpJson(srv.port, 'GET', `/api/libraries/${lib.json.id}/items`, null, admin)).json.items;
   assert.strictEqual(again.find((i) => i.kind === 'movie').streamUrl, movie1.streamUrl, 'stream URL identical across requests');
   assert.strictEqual(again.find((i) => i.kind === 'episode').thumbUrl, ep1.thumbUrl, 'thumb URL identical across requests');
+  assert.ok(show1.thumbUrl, 'shows without their own file still get a video-frame thumb URL');
+  assert.strictEqual(again.find((i) => i.kind === 'show').thumbUrl, show1.thumbUrl, 'show thumb URL identical across requests');
 
   // TOUCH the movie (mtime changes) + drop a brand-new episode → rescan.
   await new Promise((r) => setTimeout(r, 50));
@@ -1227,6 +1230,7 @@ test('library scan v3: rescans keep addedAt + matches, count new files; stable c
   let after = (await httpJson(srv.port, 'GET', `/api/libraries/${lib.json.id}/items`, null, admin)).json.items;
   let m3 = after.find((i) => i.kind === 'movie');
   assert.strictEqual(m3.tmdbId, null, 'override "none": no TMDB identity');
+  assert.strictEqual(m3.poster, null, 'override "none": leftover TMDB poster is cleared');
   assert.strictEqual(m3.title, 'Reuse Film', 'folder title restored');
   assert.strictEqual(m3.matchOverride, 'none', 'override visible to the UI');
   // A plain rescan must NOT re-match it (the override is remembered).

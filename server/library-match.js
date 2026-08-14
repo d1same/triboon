@@ -123,7 +123,19 @@ function libraryItemMatchesTmdb(item) {
 }
 
 function unboundLibraryItem(item) {
-  if (!item || !item.tmdbId || libraryItemMatchesTmdb(item)) return item;
+  if (!item) return item;
+  // Admin "use folder/NFO info" must drop TMDB art even when a leftover poster path is
+  // still on the row — otherwise the library cover stays the wrong movie after revert.
+  if (item.matchOverride === 'none') {
+    return {
+      ...item,
+      tmdbId: null,
+      poster: null,
+      backdrop: null,
+      originalTitle: null,
+    };
+  }
+  if (!item.tmdbId || libraryItemMatchesTmdb(item)) return item;
   const parsed = parseLibraryName(libraryFileLabel(item));
   return {
     ...item,

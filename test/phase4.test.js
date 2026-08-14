@@ -738,7 +738,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'closing details should restore the previous page in place instead of rebuilding it from scratch');
   assert.match(ui, /function restoreDetailFocus\(ret\) \{[\s\S]+if \(ret\.searchQuery !== undefined && S\.view === 'search'\) \$\('searchInput'\)\.value = ret\.searchQuery;[\s\S]+return focusCard\(ret\.rowIdx \|\| 0[\s\S]+return focusGrid\(Number\.isFinite\(ret\.gridIdx\) \? ret\.gridIdx : 0\)/,
     'detail back should return focus to the same home/list/search cover');
-  assert.match(ui, /function restoreDetailFocusRoots\(ret\) \{[\s\S]+ret\.view === 'home'[\s\S]+setRowsView\(\$\('rows'\), S\.rows \|\| \[\], true\);[\s\S]+\['movies', 'tv', 'search', 'library', 'watchlist', 'livetv'\]\.includes\(ret\.view\)[\s\S]+S\.gridRoot = \$\('grid'\);[\s\S]+function restoreDetailFocus\(ret\) \{[\s\S]+restoreDetailFocusRoots\(ret\);/,
+  assert.match(ui, /function restoreDetailFocusRoots\(ret\) \{[\s\S]+ret\.view === 'home'[\s\S]+setRowsView\(\$\('rows'\), S\.rows \|\| \[\], true\);[\s\S]+\['movies', 'tv', 'kids', 'search', 'library', 'watchlist', 'livetv'\]\.includes\(ret\.view\)[\s\S]+S\.gridRoot = \$\('grid'\);[\s\S]+function restoreDetailFocus\(ret\) \{[\s\S]+restoreDetailFocusRoots\(ret\);/,
     'detail back should rebind Home/Browse focus roots before restoring saved focus');
   assert.match(ui, /function hydrateAppShellData\(\) \{[\s\S]+Promise\.allSettled\(\[[\s\S]+loadWatchState\(\),[\s\S]+loadLibraries\(\),[\s\S]+loadWatchlist\(\),[\s\S]+\]\)\.then[\s\S]+if \(S\.view === 'home'\) loadRows\(\{ watchReady: true, preserveFocus: true, background: true \}\)/,
     'startup hydration should run watch state, libraries, and watchlist after the shell is usable while reusing the first watch-state request');
@@ -758,10 +758,12 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   assert.match(ui, /async function buildHomeRows\(defs\) \{[\s\S]+const seen = new Set\(\);[\s\S]+Promise\.all\(defs\.map[\s\S]+homeCatalogRow\(d\.name, d\.path, results\[i\], d\.kind \|\| 'catalog', seen\)/,
     'buildHomeRows fetches rows in parallel then builds them in order through one shared seen set');
   // Short Home: Trending + a Kids shelf. Popular/Top-rated/rotating-genre dumps stay off Home.
-  assert.match(ui, /\{ name: 'Trending today', path: '\/api\/tmdb\/trending\/all\/day' \}[\s\S]+name: 'Kids'[\s\S]+mix: \[[\s\S]+HOME_KIDS_MOVIE_PATH[\s\S]+HOME_KIDS_TV_PATH/,
+  assert.match(ui, /\{ name: 'Trending today', path: '\/api\/tmdb\/trending\/all\/day' \}[\s\S]+name: 'Kids'[\s\S]+mix: \[[\s\S]+kidsMovieDiscoverPath\(\)[\s\S]+kidsTvDiscoverPath\(\)/,
     'the unlimited home page keeps Trending and one mixed Kids row of movies and shows');
-  assert.match(ui, /function interleaveHomeItems\(a, b\) \{[\s\S]+function homeMixedCatalogRow\(name, lists, seen\)/,
-    'Kids movies and Kids shows are interleaved into a single Home row');
+  assert.match(ui, /function interleaveHomeItems\(a, b\) \{[\s\S]+function homeMixedCatalogRow\(name, lists, seen\) \{[\s\S]+homeCatalogDedupe\(interleaveHomeItems\(lists\[0\], lists\[1\]\), new Set\(\)\)/,
+    'Kids movies and Kids shows stay in one Home row; Trending must not steal the movies');
+  assert.match(ui, /if \(\(S\.maxLevel \?\? 4\) === 0\) \{[\s\S]+return buildHomeRows\(\[\s*\{\s*name: 'Kids',\s*mix:/,
+    'a Kids profile gets one mixed Kids shelf, not a separate movie-only row that empties it');
   assert.doesNotMatch(ui, /name: 'Trending today'[\s\S]{0,400}name: 'Popular movies'[\s\S]{0,400}name: 'Top rated movies'/,
     'unlimited Home no longer stacks Popular and Top rated under Trending');
   assert.doesNotMatch(ui, /function homeGenrePick\(|g1\.name \+ ' movies'/,
@@ -942,6 +944,20 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'the bottom-only scrim protects rows without double-washing the artwork');
   assert.match(ui, /body\.tv\{--bdW:min\(54vw,980px\);--bdH:min\(70vh,760px\);--overscan:1\.5vmin\}[\s\S]+body\.shortBrowseBd\{--bdH:min\(60vh,660px\)\}[\s\S]+body\.tv\.shortBrowseBd\{--bdH:min\(52vh,580px\)\}[\s\S]+@media \(max-height:760px\)\{[\s\S]+--bdH:min\(48vh,420px\)[\s\S]+@media \(max-width:980px\)\{[\s\S]+--bdW:min\(60vw,640px\);--bdH:min\(50vh,420px\)\}[\s\S]+body\.shortBrowseBd:not\(\.tv\)\{--bdH:min\(44vh,380px\)\}/,
     'TV, short browser, narrow browser, and poster browse viewports still tighten the variant-B backdrop; narrow browser windows keep the :not(.tv) browse-height clamp so movies/TV pages do not dominate a small window');
+  assert.match(ui, /body:not\(\.tv\):not\(\.mobileShell\) #backdrop \.layer\{[\s\S]+filter:blur\([^)]+\).*brightness[\s\S]+#backdrop \.layer\.show\{opacity:\.55;animation:none\}/,
+    'desktop browser blurs the still on Home/Discover/Movies; Android TV is unchanged');
+  assert.match(ui, /body:not\(\.tv\):not\(\.mobileShell\)\.detailOpen #backdrop \.layer\{filter:none;transform:none\}[\s\S]+\.detailOpen #backdrop \.layer\.show\{opacity:1\}/,
+    'desktop Details keeps the sharp backdrop; main pages stay blurry');
+  assert.match(ui, /body:not\(\.tv\):not\(\.mobileShell\)\{--pageTop:72px\}[\s\S]+#home,[\s\S]+#discover,[\s\S]+#browse,[\s\S]+padding-top:var\(--pageTop\)!important/,
+    'desktop pages share one top padding so Home/Discover/Movies line up');
+  assert.match(ui, /body:not\(\.tv\):not\(\.mobileShell\) #bdInfo,[\s\S]+#hero\{display:none!important\}/,
+    'desktop browser hides the backdrop title overlay and keeps only the faded still; Android TV is unchanged');
+  assert.doesNotMatch(ui, /body\.tv[^{]*\{[^}]*#hero\{display:none|body\.tv #hero\{display:none|body\.tv #bdInfo\{display:none/,
+    'Android TV still shows the Home hero and browse title overlay');
+  assert.match(ui, /body\.tv #rows,body\.tv #discoverRows\{scroll-snap-type:none\}[\s\S]+function sizeRowsWindow\(root\) \{[\s\S]+if \(!document\.body\.classList\.contains\('tv'\)\) \{ root\.style\.maxHeight = ''; return; \}/,
+    'Android TV keeps the one-row Plex window; desktop free-scroll never runs on body.tv');
+  assert.match(ui, /function browserBrowseCoverPx\(size\) \{[\s\S]+document\.body\.classList\.contains\('tv'\)[\s\S]+return null;/,
+    'Android TV cover size is never overridden by the desktop browse helper');
   assert.match(ui, /body\.shortBrowseBd:not\(\.tv\) #bdInfo[\s\S]+-webkit-line-clamp:1[\s\S]+@media \(max-height:820px\)[\s\S]+body\.shortBrowseBd:not\(\.tv\) #bdInfo \.bdiC,[\s\S]+display:none/,
     'browser poster browse pages should compact the focused-title band without touching TV');
   assert.match(ui, /function browserBrowseCoverPx\(size\) \{[\s\S]+document\.body\.classList\.contains\('tv'\)[\s\S]+window\.innerHeight <= 820[\s\S]+return size === 'L' \? '190px'[\s\S]+const px = window\.innerWidth <= 600 \? '140px' : \(browserBrowseCoverPx\(s\) \|\| table\[s\] \|\| table\.M\);[\s\S]+const shortBrowserBrowse = document\.body\.classList\.contains\('shortBrowseBd'\) && !document\.body\.classList\.contains\('tv'\);[\s\S]+shortBrowserBrowse \? \(h <= 820 \? 128/,
@@ -950,9 +966,13 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'narrow browser windows (<=980, TV/phone excluded above) use compact browse covers so >=4 columns and a full second row fit under the smaller backdrop — kills the dark band that stranded posters at the bottom');
   assert.match(ui, /S\.browseLoading = false;\s*maybeFillBrowseWindow\(\);/,
     'runBrowse must trigger the fill-the-window check after every page load');
-  assert.match(ui, /function maybeFillBrowseWindow\(\)[\s\S]+document\.body\.classList\.contains\('tv'\)\) return;[\s\S]+g\.scrollHeight > g\.clientHeight \+ 8\) return;[\s\S]+S\.browsePage \|\| 0\) >= 8\) return;[\s\S]+runBrowse\(false\)/,
-    'browse pages keep auto-loading pages until the grid overflows its row window, so a 2K/4K/tall window fills instead of stranding ~1 row low with a dark band; TV-excluded and page-capped');
-  assert.match(ui, /const shortBrowseBd = v === 'discover' \|\| v === 'movies' \|\| v === 'tv' \|\| v === 'watchlist' \|\| \(v === 'library' && S\.currentLib && S\.currentLib\.path\);[\s\S]+document\.body\.classList\.toggle\('shortBrowseBd', !!shortBrowseBd\);/,
+  assert.match(ui, /function maybeFillBrowseWindow\(\)[\s\S]+document\.body\.classList\.contains\('tv'\)\) return;[\s\S]+g\.scrollHeight > g\.clientHeight \+ 8\) return;[\s\S]+S\.browsePage \|\| 0\) >= 8\) return;[\s\S]+runBrowse\(false\)[\s\S]+loadMoreLocalLibraryPage\(false\)[\s\S]+runLibrary\(false\)/,
+    'Movies, TV, and personal libraries keep loading until the grid fills the window, then lazy-load on scroll; TV is excluded');
+  assert.match(ui, /function isPosterBrowseView\(\) \{[\s\S]+watchlist', 'library'\]\.includes\(S\.view\)/,
+    'personal libraries use the same poster-browse chrome as Movies and TV');
+  assert.match(ui, /function localLibraryBatchSize\(\) \{[\s\S]+contains\('tv'\)\) return LOCAL_GRID_BATCH;[\s\S]+cols \* rows/,
+    'desktop personal libraries request enough first-page posters to fill the screen; Android TV keeps the small batch');
+  assert.match(ui, /const shortBrowseBd = v === 'discover' \|\| v === 'movies' \|\| v === 'tv' \|\| v === 'kids' \|\| v === 'watchlist' \|\| \(v === 'library' && S\.currentLib && S\.currentLib\.path\);[\s\S]+document\.body\.classList\.toggle\('shortBrowseBd', !!shortBrowseBd\);/,
     'Discover, movies, TV shows, watchlist, and attached libraries should use the shorter browse backdrop');
   assert.match(ui, /document\.body\.classList\.toggle\('fullBd', isBrowse \|\| v === 'discover'\);/,
     'Discover should show the focused-title backdrop overlay (rows pinned low) like other cover pages');
@@ -1043,7 +1063,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'returning Home with cached rows should repoint the row model and reclaim focus from hidden pages');
   assert.match(ui, /if \(\(S\.maxLevel \?\? 4\) < 4\) \{[\s\S]+renderRowsInto\(root, rows\);[\s\S]+setRowsView\(root, rows, false\);[\s\S]+if \(current\(\) && S\.zone !== 'rail'\) focusCard\(0, 0\);/,
     'restricted-profile Discover rows should focus the first card only while that request still owns the page');
-  assert.match(ui, /for \(const x of \[\.\.\.\(nowP\.results \|\| \[\]\), \.\.\.\(onAir\.results \|\| \[\]\), \.\.\.\(trend\.results \|\| \[\]\)\]\)[\s\S]+trailerCand\.push\(x\);[\s\S]+buildTrailerRow\(trailerCand\)\.then\(\(trItems\) => \{\s*if \(!current\(\) \|\| !trItems\.length\) return;[\s\S]+const focused = root\.querySelector\('\.focus'\);[\s\S]+const focusRow = focused \? parseInt\(focused\.dataset\.row[\s\S]+renderRowsInto\(root, rows, \{ resetScroll: false \}\);[\s\S]+setRowsView\(root, rows, false\);[\s\S]+if \(current\(\) && S\.zone !== 'rail'\) \{[\s\S]+focusCard\(safeRow, safeCol, \{ scroll: false, align: false \}\);/,
+  assert.match(ui, /for \(const x of \[\.\.\.tmdbPosterResults\(newM\), \.\.\.tmdbPosterResults\(newT\), \.\.\.tmdbPosterResults\(soonM\), \.\.\.tmdbPosterResults\(soonT\), \.\.\.\(trend\.results \|\| \[\]\)\]\)[\s\S]+trailerCand\.push\(x\);[\s\S]+buildTrailerRow\(trailerCand\)\.then\(\(trItems\) => \{[\s\S]+if \(!current\(\) \|\| !trItems\.length\) return;[\s\S]+const focused = root\.querySelector\('\.focus'\);[\s\S]+const focusRow = focused \? parseInt\(focused\.dataset\.row[\s\S]+renderRowsInto\(root, rows, \{ resetScroll: false \}\);[\s\S]+setRowsView\(root, rows, false\);[\s\S]+if \(current\(\) && S\.zone !== 'rail'\) \{[\s\S]+focusCard\(safeRow, safeCol, \{ scroll: false, align: false \}\);/,
     'Discover trailer hydration is freshest-first and may preserve/restore focus only while its request owns the page');
   assert.match(ui, /const pub = tr\.published_at \? new Date\(tr\.published_at\)\.getTime\(\) : 0;[\s\S]+_trailerPub[\s\S]+sort\(\(a, b\) => b\._trailerPub - a\._trailerPub\)\.slice\(0, 12\)/,
     'the trailers row is sorted newest-trailer-first (genuinely "latest"), not by trending order');
@@ -1147,8 +1167,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'the season options menu offers open/mark-season/mark-show/watchlist and routes each action correctly');
   // Web ⋯ options button: an added mouse/touch entry point to the SAME menus (posters/CW open
   // openItemMenu; season covers open openSeasonMenu); hidden on TV, which keeps long-press OK.
-  assert.match(ui, /function cardHasItemMenu\(it\) \{[\s\S]+isContinueWatchingItem\(it\) \|\| \(it\.tmdbId && \['movie', 'tv'\]\.includes\(it\.type\)\)/,
-    'the ⋯ button eligibility matches the TV long-press menu eligibility');
+  assert.match(ui, /function cardHasItemMenu\(it\) \{[\s\S]+isContinueWatchingItem\(it\) \|\| \(it\.tmdbId && \['movie', 'tv'\]\.includes\(it\.type\)\)[\s\S]+isLocalLibraryTitle\(it\)/,
+    'the ⋯ button eligibility matches the TV long-press menu eligibility, including local library covers');
   assert.match(ui, /function attachCardMenuButton\(card, host, it, onFocus\) \{[\s\S]+if \(!cardHasItemMenu\(it\)\) return;[\s\S]+btn\.className = 'cardMenuBtn';[\s\S]+openItemMenu\(it, card\);/,
     'catalog/CW covers get a ⋯ button that opens the shared item menu');
   assert.match(ui, /seasonBtn\.className = 'cardMenuBtn';[\s\S]+openSeasonMenu\(show, s, c\)/,
@@ -1216,6 +1236,44 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'watch progress should persist sanitized metadata through the shared watchlist metadata helper');
   assert.match(ui, /function openLocalDetail\(it\) \{[\s\S]+const resume = resumePositionForItem\(it\);[\s\S]+\$\(\'dStartOver\'\)\.style\.display = resume \? '' : 'none';[\s\S]+updateDetailPlayLabel\(resume \? \{ label: 'Resume', target: \{ \.\.\.it, resume \} \}/,
     'unmatched local library details should expose the same Resume and Start Over behavior');
+});
+
+test('Kids catalog stays PG-max and lives on a hideable menu page', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /function kidsCertCap\(\) \{[\s\S]+=== 0 \? 'G' : 'PG'/,
+    'Kids shelves cap at PG, or G when the profile is G');
+  assert.match(ui, /function kidsMovieDiscoverPath\(\) \{[\s\S]+HOME_KIDS_MOVIE_PATH[\s\S]+certification\.lte=\$\{encodeURIComponent\(kidsCertCap\(\)\)\}/,
+    'Kids movies use the Family+Animation list with the PG-max cert cap');
+  assert.doesNotMatch(ui, /kidsMovieDiscoverPath[\s\S]{0,180}PG-13/,
+    'Kids movie discover must not request PG-13');
+  assert.match(ui, /function kidsTvDiscoverPath\(\) \{[\s\S]+HOME_KIDS_TV_PATH \+ CATALOG_Q/,
+    'Kids TV uses the Kids genre list and does not send movie cert params');
+  assert.match(ui, /data-nav="kids"[\s\S]+<span class="rlabel">Kids<\/span>/,
+    'the left rail has a Kids page button');
+  assert.match(ui, /const MENU_DEFAULT = \[[\s\S]*'tv', 'kids', 'livetv'/,
+    'Kids is a first-class menu item after TV Shows');
+  assert.match(ui, /function menuKidsDefaultHidden\(\) \{[\s\S]+>= 4/,
+    'adult profiles hide Kids until the owner turns it on');
+  assert.match(ui, /if \(nav === 'kids' && menuKidsDefaultHidden\(\) && !hidden\.includes\('kids'\)\) hidden\.push\('kids'\)/,
+    'the first time Kids appears in saved menu prefs, adults hide it once');
+  assert.match(ui, /known: Array\.isArray\(p\.known\) \? p\.known : \(Array\.isArray\(prev\.known\) \? prev\.known : \[\.\.\.MENU_DEFAULT\]\)/,
+    'showing Kids must keep the known list so the next load does not hide it again');
+  assert.match(ui, /async function openKidsBrowse\(\) \{[\s\S]+browseTitle[\s\S]+Kids[\s\S]+runKidsBrowse\(true/,
+    'the Kids menu opens a dedicated browse page');
+  assert.match(ui, /async function runKidsBrowse\(reset, requestId\) \{[\s\S]+kidsMovieDiscoverPath\(\)[\s\S]+kidsTvDiscoverPath\(\)[\s\S]+interleaveHomeItems\(homeCatalogItems\(movies, 'maturity'\), homeCatalogItems\(shows, 'maturity'\)\)/,
+    'the Kids page interleaves PG-max movies with Kids shows');
+  assert.match(ui, /if \(v === 'kids' && !opts\.preservePage\) openKidsBrowse\(\)/,
+    'switching to Kids loads the Kids catalog');
+  assert.match(ui, /v === 'watchlist' \|\| v === 'livetv' \|\| v === 'kids'/,
+    'Kids has no genre/sort bar');
+  assert.match(ui, /function kidsUiAvailable\(\) \{[\s\S]+!document\.body\.classList\.contains\('androidApp'\)/,
+    'Kids menu is desktop/web only; the Android app keeps the old rail');
+  assert.match(ui, /else if \(nav === 'kids'\) btn\.style\.display = \(!hideByPref && kidsUiAvailable\(\)\) \? '' : 'none'/,
+    'Android never shows the Kids rail button even if a saved pref unhides it');
+  assert.match(ui, /if \(nav === 'kids' && !kidsUiAvailable\(\)\) return;/,
+    'Android Preferences → Menu does not list Kids');
+  assert.match(ui, /if \(v === 'kids' && !kidsUiAvailable\(\)\) return switchView\('home', push, opts\)/,
+    'an Android #/kids route falls back to Home');
 });
 
 test('episode handoff stays player-to-player before local lookup and EOF never restarts autoplay', () => {
@@ -2099,14 +2157,53 @@ test('local library title match modal keeps manual, folder-info, and automatic a
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   assert.match(ui, /function openMatchModal\(it\) \{[\s\S]+matchAuto'\)\.style\.display = it\._matchOv !== undefined \? '' : 'none'/,
     'match modal should expose the Automatic reset only when an override exists');
-  assert.ok(ui.includes("row.addEventListener('click', () => applyMatch(x.id));"),
-    'TMDB search result rows should apply the selected manual TMDB id');
+  assert.ok(ui.includes("row.addEventListener('click', () => applyMatch(x.id, x));"),
+    'TMDB search result rows should apply the selected manual TMDB id and its poster');
   assert.ok(ui.includes("await api(`/api/libraries/${it._lib.id}/match`, { method: 'POST', body: { idx: it._idx, tmdbId } });"),
     'match modal should send only the library item index plus selected match value');
   assert.ok(ui.includes("$('matchNone').addEventListener('click', () => applyMatch(null));"),
     'folder/NFO button should request the safe no-TMDB override');
   assert.ok(ui.includes("$('matchAuto').addEventListener('click', () => applyMatch('auto'));"),
     'Automatic button should clear the override and return to normal matching');
+  assert.match(ui, /function canUseLibraryFolderInfo\(it\) \{[\s\S]+canFixLibraryMatch\(it\) && it\.tmdbId && it\._matchOv !== 'none'/,
+    'Use library info is admin-only and hidden once the item already uses folder/NFO info');
+  assert.match(ui, /canUseLibraryFolderInfo\(it\) \? actionMenuButton\('folder', 'folder', 'Use library info'\)[\s\S]+canFixLibraryMatch\(it\) \? actionMenuButton\('match', 'list', 'Fix TMDB match'\)[\s\S]+else if \(act === 'folder'\) useLibraryFolderInfo\(it\)[\s\S]+else if \(act === 'match'\) openMatchModal\(it\)/,
+    'the library cover 3-dot menu can drop a wrong TMDB match or open Fix TMDB match');
+  assert.match(ui, /function useLibraryFolderInfo\(it\) \{[\s\S]+S\.matchItem = it;[\s\S]+applyMatch\(null\)/,
+    'Use library info reuses the existing folder-info match override');
+  assert.match(ui, /function isLocalLibraryTitle\(it\) \{[\s\S]+it\._lib && it\._lib\.path && it\._idx !== undefined && it\._kind !== 'episode'/,
+    'local library covers keep a 3-dot menu even when the TMDB match is already wrong');
+  assert.match(ui, /function bindLibrarySource\(it\) \{[\s\S]+S\.libByTmdb && it\.tmdbId && S\.libByTmdb\[`\$\{it\.type \|\| ''\}:\$\{it\.tmdbId\}`\]/,
+    'opening the wrong TMDB details page still remembers the added-library file');
+  assert.match(ui, /id="dUseLibInfo"[\s\S]+Use library info/,
+    'the TMDB details page has a labeled Use library info action, not only the wrench');
+  assert.match(ui, /function syncFixMatchBtn\(it\) \{[\s\S]+bindLibrarySource\(it\)[\s\S]+\$\('dUseLibInfo'\)[\s\S]+useLibraryFolderInfo\(it\)/,
+    'details Use library info stays wired after the page was opened from a library cover');
+  assert.match(ui, /body:not\(\.tv\)\.libGrid \.pcard \.cardMenuBtn\{opacity:\.92\}/,
+    'library covers keep the 3-dot visible so the already-wrong poster is not hover-only');
+  assert.match(ui, /function localLibraryCover\(x\) \{[\s\S]+x\.matchOverride === 'none' \|\| !x\.tmdbId[\s\S]+poster: \(x && x\.artUrl\) \|\| \(x && x\.thumbUrl\)[\s\S]+backdrop: \(x && x\.thumbUrl\) \|\| \(x && x\.artUrl\)[\s\S]+A TMDB match is supposed to change the cover[\s\S]+tmdbPoster \|\| \(x && x\.artUrl\)/,
+    'folder-info covers ignore leftover TMDB art, layer a video frame under missing poster.jpg, and a new TMDB match paints the TMDB poster');
+  assert.match(ui, /async function searchLibrary\(q\) \{[\s\S]+\/api\/libraries\/search\?q=[\s\S]+function hydrateSearchLibrary\(tmdbItems, libItems\) \{[\s\S]+it\._local = hit\._local/,
+    'search asks the local libraries and attaches owned files onto matching TMDB cards');
+  assert.match(ui, /async function doSearch\(\) \{[\s\S]+const libJob = searchLibrary\(q\)[\s\S]+\{ name: 'Library', items: lib \}/,
+    'search shows Library results above Movies so Play can hit the folder first');
+  assert.match(ui, /function paintLibraryCardCover\(idx, poster, backdrop\) \{[\s\S]+items\[i\]\.poster = poster[\s\S]+art\.style\.backgroundImage = artBackground/,
+    'a match change paints the visible library card immediately, not only the details backdrop');
+  assert.match(ui, /if \(tmdbId === null\) \{[\s\S]+folderInfoCoverFor\(it\)[\s\S]+paintLibraryCardCover\(it\._idx/,
+    'Use library info updates the library cover before the rescan finishes');
+  assert.match(ui, /switchView\('library', true, \{ preservePage: true \}\)[\s\S]+await runLocalLibrary\(it\._lib\)[\s\S]+paintLibraryCardCover\(it\._idx, mapped\.poster, mapped\.backdrop\)[\s\S]+openDetail/,
+    'picking a TMDB match reopens that title and writes the new poster back onto the library card');
+  assert.match(ui, /if \(d\.backdrop_path\) \{ it\.backdrop = img\(d\.backdrop_path\); setBackdrop\(it\.backdrop \|\| it\.poster\); \}[\s\S]+if \(d\.poster_path\) \{[\s\S]+it\.poster = img\(d\.poster_path, POSTER_W\)[\s\S]+paintLibraryCardCover\(it\._idx, it\.poster, it\.backdrop\)/,
+    'the details page writes live TMDB art back onto the library cover');
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(server, /re: \/\^\\\/api\\\/libraries\\\/search\$\/, auth: 'user', h: H\.librarySearch/,
+    'library title search is a user route so Search can find added-folder files');
+  assert.match(server, /thumbUrl: \(file \|\| item\.kind === 'show'\)/,
+    'folder-info shows still get a video-frame thumb URL from the first episode');
+  assert.match(server, /ov === 'none'\) \{\s*item\.matchOverride = 'none';[\s\S]+queueLibraryThumb\(lib\.id, idx, libraryThumbSourceFile/,
+    'Use library info starts the video-frame thumb immediately so the cover is not a color block');
+  assert.match(server, /localArt: async \(ctx\) => \{[\s\S]+queueLibraryThumb\(ctx\.m\[1\], ctx\.m\[2\], libraryThumbSourceFile/,
+    'a missing poster.jpg on the art URL still serves the video frame');
 });
 
 test('Live TV startup warm is delayed so app login and first playback stay responsive', () => {
@@ -2150,11 +2247,15 @@ test('async page loaders ignore stale shared-grid results and finish on a usable
   assert.match(browse, /let loaded = false;[\s\S]+loaded = true;[\s\S]+if \(current\(\) && loaded\) \{\s*S\.browseLoading = false;\s*maybeFillBrowseWindow\(\);/,
     'a failed browse request must not trigger the fill-window helper into an immediate retry loop');
 
+  const kids = section('async function openKidsBrowse()', 'function browseSortParam');
+  assert.match(kids, /const reqId = \(S\.kidsReq = \(S\.kidsReq \|\| 0\) \+ 1\)[\s\S]+const current = \(\) => reqId === S\.kidsReq && S\.view === 'kids'[\s\S]+if \(!current\(\)\) return;/,
+    'a slower Kids page request must not paint over a newer Kids or other grid');
+
   const library = section('async function runLibrary(reset)', '// Scanned local library');
   assert.match(library, /const current = \(\) => reqId === S\.libReq && S\.view === 'library'[\s\S]+S\.currentLib\.id === libId[\s\S]+const r = await api\(path\);\s*if \(!current\(\)\) return;/,
     'a stale smart-library response cannot overwrite another library or page');
-  assert.match(library, /S\.libLoadingReq === reqId[\s\S]+if \(S\.libLoadingReq === reqId\)/,
-    'smart-library loading state is released only by the request that owns it');
+  assert.match(library, /S\.libLoadingReq === reqId[\s\S]+if \(S\.libLoadingReq === reqId\)[\s\S]+if \(current\(\) && loaded\) maybeFillBrowseWindow\(\)/,
+    'smart-library loading state is released only by the request that owns it, then fills the window like Movies');
 
   const watchlist = section('async function loadWatchlistView()', 'async function deleteLibrary');
   assert.match(watchlist, /const reqId = \(S\.watchlistViewReq[\s\S]+await loadWatchlist\(\);\s*if \(!current\(\)\) return;/,
@@ -2191,10 +2292,20 @@ test('last-intent page, search, and detail loaders cannot paint or focus stale r
   const section = (start, end) => ui.slice(ui.indexOf(start), ui.indexOf(end, ui.indexOf(start)));
 
   const discover = section('async function loadDiscover()', 'function pickBestTrailer');
-  assert.match(discover, /const \[trend,[\s\S]+\] = await Promise\.all\([\s\S]+if \(!current\(\)\) return;[\s\S]+buildTrailerRow\(trailerCand\)\.then\(\(trItems\) => \{\s*if \(!current\(\) \|\| !trItems\.length\) return;[\s\S]+rows\.splice/,
+  assert.match(discover, /const \[newM, newT, gemM, gemT, soonM, soonT, trend\] = await Promise\.all\([\s\S]+if \(!current\(\)\) return;[\s\S]+discoverCoverItems\([\s\S]+if \(!current\(\)\) return;[\s\S]+buildTrailerRow\(trailerCand\)\.then\(\(trItems\) => \{[\s\S]+if \(!current\(\) \|\| !trItems\.length\) return;[\s\S]+rows\.unshift/,
     'Discover checks its request after the catalog fan-out and again before delayed trailers mutate rows');
   assert.match(discover, /if \(current\(\) && S\.zone !== 'rail'\) \{[\s\S]+focusCard\(safeRow, safeCol/,
     'delayed trailer completion cannot restore focus after Discover loses ownership');
+  assert.match(discover, /name: 'New movies'[\s\S]+name: 'New series'[\s\S]+Gems from[\s\S]+name: 'Upcoming movies'[\s\S]+name: 'Upcoming series'/,
+    'adult Discover mixes new titles, older gems, and separate upcoming movie/series rows');
+  assert.match(discover, /isoDateOffset\(365\)[\s\S]+tmdbDiscoverPages\(soonMoviePath, 3\)[\s\S]+tmdbDiscoverPages\(soonTvPath, 3\)[\s\S]+discoverCoverItems\(tmdbPosterResults\(soonM\), 18, \{ requireTrailer: false, scan: 60 \}\)/,
+    'upcoming rows pull three popular pages over a year and do not drop titles that lack a trailer yet');
+  assert.match(discover, /without_genres=\$\{encodeURIComponent\('10763\|10767'\)\}/,
+    'upcoming TV encodes the genre OR so the TMDB path allowlist does not reject a raw |');
+  assert.match(ui, /async function discoverCoverItems\(rawList, limit = 16, opts = \{\}\) \{[\s\S]+if \(requireTrailer && !await discoverHasTrailer[\s\S]+return it;/,
+    'Discover cover rows keep titles that have a trailer but do not set item.trailer, so OK opens Details');
+  assert.match(ui, /if \(it\.trailer\) return openTrailer\(it\.trailer, it\)/,
+    'a trailer thumbnail still plays the trailer instead of opening Details');
 
   const person = section('async function openPerson(id, push = true)', 'function detailPlayEpisodeParts');
   assert.match(person, /const reqId = \(S\.personReq = \(S\.personReq \|\| 0\) \+ 1\)[\s\S]+const current = \(\) => reqId === S\.personReq[\s\S]+const p = await api[\s\S]+if \(!current\(\)\) return;[\s\S]+requestAnimationFrame\(\(\) => \{ if \(current\(\)\) focusGrid\(0\); \}\)/,
@@ -3431,8 +3542,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'profile switches should re-check screensaver trending cache without installing duplicate idle listeners');
   assert.match(ui, /window\.__tvBack = \(\) => \{[\s\S]+if \(S\.screensaverOn\) \{[\s\S]+hideScreensaver\(true\);[\s\S]+resetScreensaverIdle\(\);[\s\S]+return 'ok';/,
     'Android TV Back should wake the screensaver instead of exiting the app');
-  assert.match(ui, /function backToBrowseSectionMenu\(\) \{[\s\S]+S\.view === 'movies' \|\| S\.view === 'tv' \|\| S\.view === 'library'[\s\S]+enterRail\(\);[\s\S]+return true;[\s\S]+\}[\s\S]+if \(backToBrowseSectionMenu\(\)\) return 'ok';[\s\S]+if \(S\.view !== 'home'\) \{/,
-    'Android TV Back should first open the section menu on Movies, TV, and added library pages before returning Home');
+  assert.match(ui, /function backToBrowseSectionMenu\(\) \{[\s\S]+S\.view === 'movies' \|\| S\.view === 'tv' \|\| S\.view === 'kids' \|\| S\.view === 'library'[\s\S]+enterRail\(\);[\s\S]+return true;[\s\S]+\}[\s\S]+if \(backToBrowseSectionMenu\(\)\) return 'ok';[\s\S]+if \(S\.view !== 'home'\) \{/,
+    'Android TV Back should first open the section menu on Movies, TV, Kids, and added library pages before returning Home');
   assert.match(ui, /\$\('appClock'\)\.classList\.add\('show'\); updateClocks\(\);\s+installScreensaverIdle\(\);/,
     'screensaver idle timer should start only after the app shell is entered');
   {
@@ -3814,8 +3925,8 @@ test('Android native player: direct source and native chrome stay out of the web
   // row keeps its vertical rhythm; the related section gains breathing room (owner, 2026-08-07).
   assert.match(ui, /#dCastWrap \.secHead h2,#dSeasonsWrap \.secHead h2\{visibility:hidden\}/,
     'the Cast and Episodes/Seasons labels are hidden but keep their boxes (the content is its own label)');
-  assert.match(ui, /#dRelatedWrap\{margin-top:30px\}/,
-    'More like this sits clear of the cast row');
+  assert.match(ui, /#dRelatedWrap\{margin-top:30px\}[\s\S]+#dRelatedWrap \.secHead\{margin-left:calc\(0px - var\(--gut\)\);padding-left:calc\(var\(--gut\) \+ 10px\)\}/,
+    'More like this sits clear of the cast row and its heading lines up with the related posters');
   // The collapsed rail RECEDES so focus sits on the content, and comes back to full strength when
   // entered — the shared rules own this and TV must not pin the surface to opacity:1.
   assert.match(ui, /#rail:not\(\.expanded\):not\(:hover\)\{opacity:\.62\}/,
@@ -4303,6 +4414,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'rail Movies should use the Lucide film icon');
   assert.match(ui, /data-nav="tv"[\s\S]+M10 7\.75a\.75\.75[\s\S]+rect width="20" height="14" x="2" y="3"/,
     'rail TV Shows should use the Lucide tv-minimal-play icon');
+  assert.match(ui, /data-nav="kids"[\s\S]+M10 16c\.5\.3 1\.2\.5 2 \.5[\s\S]+M19\.38 6\.813A9 9/,
+    'rail Kids should use the Lucide baby icon');
   assert.match(ui, /data-nav="search"[\s\S]+m21 21-4\.34-4\.34[\s\S]+circle cx="11" cy="11"/,
     'rail Search should use the Lucide search icon');
   assert.match(ui, /data-nav="livetv"[\s\S]+m17 2-5 5-5-5[\s\S]+rect width="20" height="15" x="2" y="7"/,
@@ -5293,7 +5406,7 @@ test('Android native Back dismisses Up Next before player chrome', () => {
 
 test('web browse grids stay windowed and D-pad uses logical grid indexes', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
-  assert.match(ui, /const VIRTUAL_GRID_VIEWS = new Set\(\['movies', 'tv', 'watchlist', 'library'\]\);/,
+  assert.match(ui, /const VIRTUAL_GRID_VIEWS = new Set\(\['movies', 'tv', 'kids', 'watchlist', 'library'\]\);/,
     'high-volume poster pages — including local libraries — should opt into grid virtualization');
   assert.match(ui, /if \(S\.view === 'library' && S\.localPageState && S\.localPageState\.showIdx !== undefined\) return false;/,
     'a local-library SHOW (episode) view keeps its inline affordances and must not be windowed');
@@ -5666,8 +5779,10 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'row windows should scale up on tall desktop/tablet screens while keeping phone and TV one-row safe');
   assert.match(ui, /function adaptRowWindows\(\) \{[\s\S]+document\.documentElement\.style\.setProperty\('--winRows', rowWindowCountFor\('home'[\s\S]+scheduleRowsWindowFit\(\);[\s\S]+function scheduleRowsWindowFit\(\) \{[\s\S]+requestAnimationFrame\(\(\) => \{[\s\S]+sizeRowsWindow\(\$\('rows'\)\);[\s\S]+sizeRowsWindow\(\$\('discoverRows'\)\);/,
     'viewport/page changes should remeasure visible row windows after layout settles');
-  assert.match(ui, /function sizeRowsWindow\(root\) \{[\s\S]+const isDiscover = root\.id === 'discoverRows';[\s\S]+const compactDiscover = isDiscover[\s\S]+if \(compactDiscover\) \{ root\.style\.maxHeight = ''; return; \}[\s\S]+const rowH = \(parseFloat\(getComputedStyle\(document\.documentElement\)\.getPropertyValue\('--poster'\)\) \|\| 190\) \* 1\.5 \+ 106;[\s\S]+const n = rowWindowCountFor\(isDiscover \? 'discover' : 'home', rowH, innerHeight\);/,
-    'Home and Discover should use measured responsive row counts while mobile stays compact');
+  assert.match(ui, /function sizeRowsWindow\(root\) \{[\s\S]+if \(!document\.body\.classList\.contains\('tv'\)\) \{ root\.style\.maxHeight = ''; return; \}[\s\S]+const rowH = \(parseFloat\(getComputedStyle\(document\.documentElement\)\.getPropertyValue\('--poster'\)\) \|\| 190\) \* 1\.5 \+ 106;[\s\S]+const n = rowWindowCountFor\(isDiscover \? 'discover' : 'home', rowH, innerHeight\);/,
+    'browser Home and Discover scroll freely; TV keeps the measured one-row window');
+  assert.match(ui, /body:not\(\.tv\):not\(\.mobileShell\) #rows,[\s\S]+#discoverRows\{[\s\S]+scroll-snap-type:none;[\s\S]+flex:1!important;[\s\S]+--poster:220px;/,
+    'desktop Home and Discover drop row snap and use taller covers; Android TV is unchanged');
   assert.match(ui, /#browseTitle\{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect\(0 0 0 0\);white-space:nowrap\}/,
     'Browse title may stay visually hidden while Discover title remains visible');
   assert.doesNotMatch(ui, /#browseTitle,#discoverTitle\{position:absolute;width:1px;height:1px;/,
@@ -5684,8 +5799,8 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'Android mobile shell should get the same compact Home treatment as narrow browsers');
   assert.match(ui, /body\.mobileShell #hero h1\{font-size:clamp\(24px,7\.4vw,32px\);line-height:1\.08;margin-bottom:8px;height:2\.16em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden\}/,
     'Android mobile shell Home title should use the same stable two-line height');
-  assert.match(ui, /function sizeRowsWindow\(root\) \{[\s\S]+const compactHome = root\.id === 'rows'[\s\S]+window\.innerWidth <= 600[\s\S]+document\.body\.classList\.contains\('mobileShell'\)[\s\S]+if \(compactHome\) \{ root\.style\.maxHeight = ''; return; \}/,
-    'mobile Home should not receive an inline desktop/TV row-window max-height');
+  assert.match(ui, /function sizeRowsWindow\(root\) \{[\s\S]+if \(!document\.body\.classList\.contains\('tv'\)\) \{ root\.style\.maxHeight = ''; return; \}/,
+    'mobile and desktop Home should not receive an inline TV row-window max-height');
   assert.match(ui, /let searchTimer = null, searchSeq = 0;[\s\S]+function clearSearchResults\(opts = \{\}\) \{[\s\S]+if \(opts\.invalidate\) searchSeq\+\+;[\s\S]+grid\.innerHTML = '';/,
     'Search should start blank and invalidate stale async results when cleared');
   assert.match(ui, /prevView === 'search' && v !== 'search'[\s\S]+resetSearchPage\(\);/,

@@ -34,6 +34,12 @@ test('library sqlite catalog pages and looks up local media without genre false 
     assert.strictEqual(eps.show.title, 'Test Show');
     assert.deepStrictEqual(eps.items.map((i) => `${i.s}x${i.e}`), ['1x2']);
 
+    const named = db.search('matrix', ['libA']);
+    assert.strictEqual(named.length, 1, 'title search finds the local movie');
+    assert.strictEqual(named[0].item.title, 'The Matrix');
+    assert.deepStrictEqual(db.search('matrix', ['otherLib']), [], 'search respects allowed library ids');
+    assert.deepStrictEqual(db.search('m', ['libA']), [], 'one-letter search stays empty');
+
     const found = db.lookup(['tmdb:movie:603', 'tmdb:tv:424242:s1e2'], ['libA']);
     assert.strictEqual(found['tmdb:movie:603'].item.title, 'The Matrix');
     assert.strictEqual(found['tmdb:tv:424242:s1e2'].item.title, 'Episode Two');

@@ -91,6 +91,17 @@ test('stored TMDB ids are unbound when the file/folder title does not describe t
   const forced = { ...bad, matchOverride: 122 };
   assert.strictEqual(libraryItemMatchesTmdb(forced), true, 'admin override still wins');
 
+  const leftoverArt = {
+    ...bad,
+    matchOverride: 'none',
+    poster: '/abc123.jpg',
+    backdrop: '/def456.jpg',
+  };
+  const folderOnly = unboundLibraryItem(leftoverArt);
+  assert.strictEqual(folderOnly.tmdbId, null, 'folder-info override drops the TMDB id');
+  assert.strictEqual(folderOnly.poster, null, 'folder-info override drops the leftover TMDB poster');
+  assert.strictEqual(folderOnly.backdrop, null, 'folder-info override drops the leftover TMDB backdrop');
+
   const originalOk = {
     kind: 'movie', tmdbId: 999001, title: 'Two Dogs', originalTitle: 'Do Sag',
     year: 2025, file: doSagFile,

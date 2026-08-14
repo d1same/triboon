@@ -123,6 +123,33 @@ body.tv.shortBrowseBd{--bdH:min(52vh,580px)}
   :root{--bdW:min(60vw,640px);--bdH:min(50vh,420px)}
   body.shortBrowseBd:not(.tv){--bdH:min(44vh,380px)}
 }
+/* Desktop: keep the large still, but blur + dim it so posters stay readable.
+   One shared top pad so Home / Discover / Movies start on the same line.
+   TV and the phone shell are unchanged. */
+body:not(.tv):not(.mobileShell){--pageTop:72px}
+body:not(.tv):not(.mobileShell) #backdrop .layer{
+  filter:blur(36px) brightness(.56) saturate(1.1);
+  transform:scale(1.16);
+}
+body:not(.tv):not(.mobileShell) #backdrop .layer.show{opacity:.55;animation:none}
+body:not(.tv):not(.mobileShell) #colorGlow{opacity:.34}
+/* Details: same desktop layout, but the still stays sharp so the title page can use it. */
+body:not(.tv):not(.mobileShell).detailOpen #backdrop .layer{filter:none;transform:none}
+body:not(.tv):not(.mobileShell).detailOpen #backdrop .layer.show{opacity:1}
+body:not(.tv):not(.mobileShell).detailOpen #colorGlow{opacity:.9}
+/* Desktop: no title/meta overlay on the still — that text sat on top of the rows.
+   Keep the faded image only. TV still gets the full hero / bdInfo copy. */
+body:not(.tv):not(.mobileShell) #bdInfo,
+body:not(.tv):not(.mobileShell) #hero{display:none!important}
+body:not(.tv):not(.mobileShell) #home,
+body:not(.tv):not(.mobileShell) #discover,
+body:not(.tv):not(.mobileShell) #browse,
+body:not(.tv):not(.mobileShell) #person,
+body:not(.tv):not(.mobileShell) #settings,
+body:not(.tv):not(.mobileShell) #prefs,
+body:not(.tv):not(.mobileShell) #music,
+body:not(.tv):not(.mobileShell) #audiobooks{padding-top:var(--pageTop)!important}
+body:not(.tv):not(.mobileShell) #home{justify-content:flex-start}
 /* DETAIL pages on TV: the art runs TALLER and melts out lower. At the browse heights the backdrop's
    bottom fade finished level with the hero text, leaving a dead ink band between the art and the
    EPISODES/CAST rows (owner, 2026-08-07). The layer's own vertical mask (58%→98%) rides the taller
@@ -1591,6 +1618,9 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 #dCastWrap .secHead h2,#dSeasonsWrap .secHead h2{visibility:hidden}
 /* More breathing room between the cast row and "More like this" (same owner pass). */
 #dRelatedWrap{margin-top:30px}
+/* Related covers bleed left with .cards (toward the menu). Keep the heading on that
+   same edge so "More like this" lines up with the first poster, not the old gutter. */
+#dRelatedWrap .secHead{margin-left:calc(0px - var(--gut));padding-left:calc(var(--gut) + 10px)}
 .detailScroll .secHead h2{margin:0}
 .ghostMini{margin-left:auto;background:var(--btn);border:1px solid rgba(255,255,255,.045);border-radius:10px;padding:8px 14px;font:600 12px "Sora";color:var(--text)}
 /* Quality toggle joins the borderless D family: dark pill shell, no hairline; the selected
@@ -2161,6 +2191,9 @@ body.mobileShell #upNext .un-cancel{width:42px;height:42px}
 .card:hover .cardMenuBtn,.card.focus .cardMenuBtn,
 .abCard:hover .cardMenuBtn,.abCard.focus .cardMenuBtn,
 .seasonCard:hover .cardMenuBtn,.seasonCard.focus .cardMenuBtn{opacity:1}
+/* Library covers keep ⋯ visible. A wrong TMDB match is otherwise easy to miss: only the
+   hovered poster showed the button, so the already-wrong cover looked like it had no options. */
+body:not(.tv).libGrid .pcard .cardMenuBtn{opacity:.92}
 .epMenu{position:absolute;right:10px;top:44px;z-index:5;min-width:200px;background:linear-gradient(180deg,rgba(24,26,29,.97),rgba(13,15,18,.97));border:1px solid rgba(255,255,255,.07);
   border-radius:10px;padding:6px;display:none;box-shadow:0 18px 44px rgba(0,0,0,.42)}
 .epMenu.open{display:block}
@@ -2351,6 +2384,32 @@ body.tv .ctWells{display:none}
    back down by the scroll-padding (re-creating the previous-row sliver). Let the JS scroll be
    authoritative on TV so the focused row top-aligns cleanly. */
 body.tv #rows,body.tv #discoverRows{scroll-snap-type:none}
+/* Desktop browser: mouse wheel should glide, not jump a whole row. TV stays one-row
+   Plex-style (JS scroll, snap already off). Home, Discover, and browse grids all
+   get a tall scroll list instead of a short bottom strip. */
+body:not(.tv):not(.mobileShell) #rows,
+body:not(.tv):not(.mobileShell) #discoverRows{
+  scroll-snap-type:none;
+  flex:1!important;
+  margin-top:0;
+  max-height:none;
+  --poster:220px;
+}
+body:not(.tv):not(.mobileShell) #rows .row,
+body:not(.tv):not(.mobileShell) #discoverRows .row{scroll-snap-align:none;scroll-snap-stop:normal}
+body:not(.tv):not(.mobileShell) #rows .pcard,
+body:not(.tv):not(.mobileShell) #discoverRows .pcard{flex-basis:var(--poster)}
+body:not(.tv):not(.mobileShell) #rows .trailerCard,
+body:not(.tv):not(.mobileShell) #discoverRows .trailerCard{flex:0 0 380px}
+body:not(.tv):not(.mobileShell) #browse.rowsWin #grid,
+body:not(.tv):not(.mobileShell) #personGrid{
+  flex:1!important;
+  margin-top:0;
+  max-height:none;
+}
+body:not(.tv):not(.mobileShell) #browse .browseHead{margin-top:0}
+body:not(.tv):not(.mobileShell) #browse,
+body:not(.tv):not(.mobileShell) #person{--poster:220px}
 /* Poster grids page by whole rows via focusGrid's deterministic scroll — CSS snap is NOT
    used there: mandatory snap fights programmatic smooth scrolls and strands mid-row. */
 /* Search result section headers (Movies / TV Shows / Live TV) span the whole grid. */
@@ -3288,6 +3347,8 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M7 3v18"/><path d="M3 7.5h4"/><path d="M3 12h18"/><path d="M3 16.5h4"/><path d="M17 3v18"/><path d="M17 7.5h4"/><path d="M17 16.5h4"/></svg><span class="rlabel">Movies</span></button>
   <button class="railBtn focusable" data-nav="tv" title="TV Shows">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 7.75a.75.75 0 0 1 1.14-.64l3.5 2.25a.75.75 0 0 1 0 1.28l-3.5 2.25a.75.75 0 0 1-1.14-.64v-4.5Z"/><path d="M7 21h10"/><rect width="20" height="14" x="2" y="3" rx="2"/></svg><span class="rlabel">TV Shows</span></button>
+  <button class="railBtn focusable" data-nav="kids" title="Kids" id="navKids" style="display:none">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 16c.5.3 1.2.5 2 .5s1.5-.2 2-.5"/><path d="M15 12h.01"/><path d="M19.38 6.813A9 9 0 0 1 20.8 10.2a2 2 0 0 1 0 3.6 9 9 0 0 1-17.6 0 2 2 0 0 1 0-3.6A9 9 0 0 1 12 3c2 0 3.5 1.1 3.5 2.5s-.9 2.5-2 2.5c-.8 0-1.5-.4-1.5-1"/><path d="M9 12h.01"/></svg><span class="rlabel">Kids</span></button>
   <button class="railBtn focusable" data-nav="search" title="Search">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg><span class="rlabel">Search</span></button>
   <button class="railBtn focusable" data-nav="livetv" title="Live TV" id="navLiveTv" style="display:none">
@@ -3982,6 +4043,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg></button>
           <button class="iconBtn focusable" id="dTrailer" title="Trailer" style="display:none">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10 9.5v5l4.5-2.5L10 9.5Z" fill="currentColor" stroke="none"/></svg></button>
+          <button class="btn ghost focusable" id="dUseLibInfo" style="display:none">Use library info</button>
           <button class="iconBtn focusable" id="dFixMatch" title="Fix TMDB match (library item)" style="display:none">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a4.5 4.5 0 0 0-6 6L3 18v3h3l5.7-5.7a4.5 4.5 0 0 0 6-6L14 13l-3-3z"/></svg></button>
         </div>
@@ -4932,11 +4994,12 @@ const COVER_SIZES = { S: '150px', M: '190px', L: '230px' };
 // M=155 CSS × 1.5 scale ≈ Plex's exact poster size.
 const COVER_SIZES_TV = { S: '135px', M: '155px', L: '175px' };
 function isPosterBrowseView() {
-  return ['movies', 'tv', 'watchlist'].includes(S.view)
-    || (S.view === 'library' && S.currentLib && S.currentLib.path);
+  return ['movies', 'tv', 'kids', 'watchlist', 'library'].includes(S.view);
 }
 function browserBrowseCoverPx(size) {
   if (document.body.classList.contains('tv') || window.innerWidth <= 600 || !isPosterBrowseView()) return null;
+  // Desktop browse now scrolls a tall grid. Do not shrink covers to force a 2-row window.
+  if (!document.body.classList.contains('mobileShell')) return null;
   // Narrow desktop windows: the grid stretches its few columns very wide (minmax(--poster,1fr)),
   // making one tall row that strands a dark band under the smaller backdrop. Use a compact cover so
   // >=4 columns and a full second row fit under the backdrop. Width-gated + TV/phone excluded above,
@@ -4954,6 +5017,7 @@ function applyCoverSize() {
   document.documentElement.style.setProperty('--poster', px);
   adaptRowWindows();
   scheduleVirtualGridGeometryRefresh();
+  maybeFillBrowseWindow();
   return s;
 }
 // Row windows sized from REAL geometry (viewport × poster size × header/hero space) instead
@@ -4974,6 +5038,10 @@ function adaptRowWindows() {
   const grid = $('grid'), browse = $('browse');
   if (!grid || !browse) return;
   if (!browse.classList.contains('rowsWin')) { grid.style.maxHeight = ''; return; }
+  if (!tvLayout && !phoneLayout && !document.body.classList.contains('mobileShell')) {
+    grid.style.maxHeight = '';
+    return;
+  }
   const head = browse.querySelector('.browseHead');
   const headBottom = head && head.offsetHeight ? head.getBoundingClientRect().bottom : 96;
   const shortBrowserBrowse = document.body.classList.contains('shortBrowseBd') && !document.body.classList.contains('tv');
@@ -5330,6 +5398,17 @@ function certParams() {
   // family profiles). The one caller that uses certParams() WITHOUT CATALOG_Q adds CATALOG_Q too.
   return `&certification_country=US&certification.lte=${encodeURIComponent(cert)}`;
 }
+// Kids shelves (Home row + Kids menu) never go above PG. A G profile stays at G.
+function kidsCertCap() {
+  return (S.maxLevel ?? 4) === 0 ? 'G' : 'PG';
+}
+function kidsMovieDiscoverPath() {
+  return HOME_KIDS_MOVIE_PATH
+    + `&certification_country=US&certification.lte=${encodeURIComponent(kidsCertCap())}` + CATALOG_Q;
+}
+function kidsTvDiscoverPath() {
+  return HOME_KIDS_TV_PATH + CATALOG_Q;
+}
 // TMDB's popularity-sorted lists are polluted with softcore "erotic dramas" that are NOT
 // flagged adult (TMDB's adult flag means hardcore only — these carry mainstream genre tags).
 // Three layers, applied for EVERY profile:
@@ -5384,9 +5463,8 @@ function durableArtUrl(u) {
 function freshLocalArtForKey(key) {
   const loc = S.localMap && key && S.localMap[key];
   if (!loc) return {};
-  const poster = loc.poster || loc.artUrl || loc.thumbUrl || '';
-  const backdrop = loc.backdrop || loc.artUrl || loc.thumbUrl || poster || '';
-  return { poster, backdrop };
+  const cover = localLibraryCover(loc);
+  return { poster: cover.poster || '', backdrop: cover.backdrop || cover.poster || '' };
 }
 
 /* genre lists (cached), used by Movies/TV filter chips */
@@ -5880,7 +5958,14 @@ function interleaveHomeItems(a, b) {
   return out;
 }
 function homeMixedCatalogRow(name, lists, seen) {
-  const all = homeCatalogDedupe(interleaveHomeItems(lists[0], lists[1]), seen);
+  // De-dupe only inside this row. A shared Home `seen` set would let Trending / Family
+  // movie night claim every kids movie first, leaving this shelf as TV-only.
+  const all = homeCatalogDedupe(interleaveHomeItems(lists[0], lists[1]), new Set());
+  if (seen) {
+    for (const it of all) {
+      if (it && it.tmdbId) seen.add(`${it.type || ''}:${it.tmdbId}`);
+    }
+  }
   return {
     name,
     poster: true,
@@ -5896,10 +5981,10 @@ function homeMixedCatalogRow(name, lists, seen) {
     },
   };
 }
-// Kids shelf: Family + Animation movies up to PG-13, plus TMDB's Kids TV genre (not all
+// Kids shelf: Family + Animation movies up to PG, plus TMDB's Kids TV genre (not all
 // animation TV — that list includes adult anime). Same idea as a Max Kids row on a regular profile.
-const HOME_KIDS_MOVIE_PATH = '/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=120&with_genres=16|10751';
-const HOME_KIDS_TV_PATH = '/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=40&with_genres=10762';
+const HOME_KIDS_MOVIE_PATH = '/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=80&with_genres=16|10751';
+const HOME_KIDS_TV_PATH = '/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=30&with_genres=10762';
 // Fetch every row's first page in PARALLEL, then build rows in ORDER through ONE shared `seen` set —
 // the de-dupe is order-dependent (earlier rows win, later rows drop repeats), so it can't run inside
 // the parallel fetch. Rows that end up empty after de-dupe are dropped.
@@ -5930,12 +6015,11 @@ async function loadHomeCatalogRows() {
   if ((S.maxLevel ?? 4) === 0) {
     // Kids profiles get rows BUILT for them, instead of filtering grown-up lists down.
     return buildHomeRows([
-      { name: 'Family movie night', path: '/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=80&with_genres=10751' + CATALOG_Q + certParams(), kind: 'maturity' },
       {
         name: 'Kids',
         mix: [
-          { path: '/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=80&with_genres=16|10751' + CATALOG_Q + certParams(), kind: 'maturity' },
-          { path: '/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=30&with_genres=10762' + CATALOG_Q, kind: 'maturity' },
+          { path: kidsMovieDiscoverPath(), kind: 'maturity' },
+          { path: kidsTvDiscoverPath(), kind: 'maturity' },
         ],
       },
     ]);
@@ -5946,8 +6030,8 @@ async function loadHomeCatalogRows() {
       {
         name: 'Kids',
         mix: [
-          { path: HOME_KIDS_MOVIE_PATH + CATALOG_Q + certParams(), kind: 'maturity' },
-          { path: HOME_KIDS_TV_PATH + CATALOG_Q, kind: 'maturity' },
+          { path: kidsMovieDiscoverPath(), kind: 'maturity' },
+          { path: kidsTvDiscoverPath(), kind: 'maturity' },
         ],
       },
     ]);
@@ -5959,8 +6043,8 @@ async function loadHomeCatalogRows() {
     {
       name: 'Kids',
       mix: [
-        { path: HOME_KIDS_MOVIE_PATH + '&certification_country=US&certification.lte=PG-13' + CATALOG_Q },
-        { path: HOME_KIDS_TV_PATH + CATALOG_Q },
+        { path: kidsMovieDiscoverPath() },
+        { path: kidsTvDiscoverPath() },
       ],
     },
   ]);
@@ -6318,6 +6402,7 @@ const ACTION_MENU_ICONS = {
   star: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3l-5.6 2.9 1.1-6.2L3 9.6l6.2-.9z"/></svg>',
   starOff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linejoin="round"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3l-5.6 2.9 1.1-6.2L3 9.6l6.2-.9z"/></svg>',
   list: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>',
+  folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M3 7h6l2 2h10v10H3z"/></svg>',
 };
 function actionMenuButton(act, icon, label) {
   return `<button class="focusable" data-act="${esc(act)}"><span class="menuIcon" aria-hidden="true">${ACTION_MENU_ICONS[icon] || ''}</span><span class="menuLabel">${esc(label)}</span></button>`;
@@ -6325,11 +6410,44 @@ function actionMenuButton(act, icon, label) {
 // Vertical ⋯ used by the web 3-dot options button on covers.
 const CARD_MENU_DOTS = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>';
 // A cover only shows the ⋯ button when openItemMenu has something to offer for it — the SAME
-// eligibility as the TV long-press path (Continue Watching entries, or a TMDB movie/show), so the
-// two input methods surface identical menus and nothing else grows a dead button.
+// eligibility as the TV long-press path (Continue Watching, a TMDB movie/show, or a local
+// library title), so the two input methods surface identical menus and nothing else grows a
+// dead button. Local library covers keep the button even after a wrong TMDB match, so the
+// already-wrong poster still has Use library info / Fix TMDB match.
+function isLocalLibraryTitle(it) {
+  return !!(it && it._lib && it._lib.path && it._idx !== undefined && it._kind !== 'episode');
+}
 function cardHasItemMenu(it) {
   return !!(it && !it.trailer && it._channel === undefined
-    && (isContinueWatchingItem(it) || (it.tmdbId && ['movie', 'tv'].includes(it.type))));
+    && (isContinueWatchingItem(it) || (it.tmdbId && ['movie', 'tv'].includes(it.type))
+      || isLocalLibraryTitle(it)));
+}
+function canFixLibraryMatch(it) {
+  return !!(S.user && S.user.role === 'admin' && isLocalLibraryTitle(it));
+}
+function canUseLibraryFolderInfo(it) {
+  return !!(canFixLibraryMatch(it) && it.tmdbId && it._matchOv !== 'none');
+}
+// Remember which added-library file a TMDB id came from, so the wrong details page (opened
+// from that cover, or later from Home) still knows how to revert to folder/NFO info.
+function rememberLibrarySource(it) {
+  if (!isLocalLibraryTitle(it) || !it.tmdbId) return;
+  S.libByTmdb = S.libByTmdb || {};
+  S.libByTmdb[`${it.type || ''}:${it.tmdbId}`] = {
+    _lib: it._lib, _idx: it._idx, _kind: it._kind, _matchOv: it._matchOv, _local: it._local || null,
+  };
+}
+function bindLibrarySource(it) {
+  if (!it) return it;
+  if (isLocalLibraryTitle(it)) { rememberLibrarySource(it); return it; }
+  const hit = S.libByTmdb && it.tmdbId && S.libByTmdb[`${it.type || ''}:${it.tmdbId}`];
+  if (!hit) return it;
+  it._lib = hit._lib;
+  it._idx = hit._idx;
+  it._kind = hit._kind;
+  it._matchOv = hit._matchOv;
+  if (!it._local && hit._local) it._local = hit._local;
+  return it;
 }
 // Web/touch affordance: a ⋯ button that opens the shared action menu. TV hides it (CSS) and uses
 // long-press OK instead, so this only ever adds a mouse/touch entry point to an existing menu.
@@ -6363,10 +6481,12 @@ function openItemMenu(it, card) {
     ((isCw || resumeSeconds) ? actionMenuButton('resume', 'play', resumeSeconds ? `Resume · ${fmt(resumeSeconds)}` : 'Play') : '') +
     (watched ? actionMenuButton('unwatch', 'circle', 'Mark unwatched') : actionMenuButton('watch', 'check', 'Mark watched')) +
     (it.tmdbId ? actionMenuButton('wl', onWl ? 'bookmarkOff' : 'bookmark', onWl ? 'Remove from watchlist' : 'Add to watchlist') : '') +
-    (isCw ? actionMenuButton('rm', 'remove', 'Remove from Continue Watching') : '');
+    (isCw ? actionMenuButton('rm', 'remove', 'Remove from Continue Watching') : '') +
+    (canUseLibraryFolderInfo(it) ? actionMenuButton('folder', 'folder', 'Use library info') : '') +
+    (canFixLibraryMatch(it) ? actionMenuButton('match', 'list', 'Fix TMDB match') : '');
   const r = card ? card.getBoundingClientRect() : { left: innerWidth / 2 - 120, top: innerHeight / 2 - 90, height: 0 };
   m.style.left = Math.max(8, Math.min(innerWidth - 260, r.left + 10)) + 'px';
-  m.style.top = Math.max(8, Math.min(innerHeight - 230, r.top + 10)) + 'px';
+  m.style.top = Math.max(8, Math.min(innerHeight - 280, r.top + 10)) + 'px';
   m.classList.add('open');
   S.cwMenuIdx = 0;
   applyFocus(m.querySelector('button'));
@@ -6382,6 +6502,8 @@ function openItemMenu(it, card) {
     else if (act === 'unwatch') markItemWatched(it, false);
     else if (act === 'wl') toggleWatchlist(it);
     else if (act === 'rm') removeContinueWatchingItem(it, snap);
+    else if (act === 'folder') useLibraryFolderInfo(it);
+    else if (act === 'match') openMatchModal(it);
   };
 }
 // Season options menu — the ⋯ button (web) and long-press OK (TV) on a season cover open this.
@@ -6694,12 +6816,8 @@ function sizeRowsWindow(root) {
   const rows = [...root.querySelectorAll('.row')];
   if (!rows.length) { root.style.maxHeight = ''; return; }
   const isDiscover = root.id === 'discoverRows';
-  const compactDiscover = isDiscover && !document.body.classList.contains('tv')
-    && (window.innerWidth <= 600 || document.body.classList.contains('mobileShell'));
-  if (compactDiscover) { root.style.maxHeight = ''; return; }
-  const compactHome = root.id === 'rows' && !document.body.classList.contains('tv')
-    && (window.innerWidth <= 600 || document.body.classList.contains('mobileShell'));
-  if (compactHome) { root.style.maxHeight = ''; return; }
+  // Browser Home/Discover scroll as a normal list. TV keeps the one-row window.
+  if (!document.body.classList.contains('tv')) { root.style.maxHeight = ''; return; }
   // TV: ONE row at a time (Plex-style) — its 720px layout can't fit two poster rows whole,
   // and a cut-off row above the focused one reads as broken from the couch.
   const rowH = (parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--poster')) || 190) * 1.5 + 106;
@@ -7930,7 +8048,7 @@ function restoreDetailReturn() {
 function restoreDetailFocusRoots(ret) {
   if (!ret) return;
   if (ret.view === 'home') setRowsView($('rows'), S.rows || [], true);
-  else if (['movies', 'tv', 'search', 'library', 'watchlist', 'livetv'].includes(ret.view)) S.gridRoot = $('grid');
+  else if (['movies', 'tv', 'kids', 'search', 'library', 'watchlist', 'livetv'].includes(ret.view)) S.gridRoot = $('grid');
 }
 function restoreDetailFocus(ret) {
   if (!ret || S.view !== ret.view) return focusContent();
@@ -7947,7 +8065,7 @@ function restoreDetailFocus(ret) {
     if (ret.zone === 'hero') return focusHero(ret.heroIdx || 0);
     return focusCard(ret.rowIdx || 0, (ret.colIdx && ret.colIdx[ret.rowIdx]) || 0);
   }
-  if (['movies', 'tv', 'search', 'library', 'watchlist', 'livetv'].includes(ret.view)) {
+  if (['movies', 'tv', 'kids', 'search', 'library', 'watchlist', 'livetv'].includes(ret.view)) {
     return focusGrid(Number.isFinite(ret.gridIdx) ? ret.gridIdx : 0);
   }
   focusContent();
@@ -7955,6 +8073,7 @@ function restoreDetailFocus(ret) {
 
 async function openDetail(it, push = true) {
   if (!it) return;
+  bindLibrarySource(it);
   if (!it.tmdbId || !['movie', 'tv'].includes(it.type)) return play(it); // non-TMDB cards play directly
   if (push) setRoute(`#/title/${it.type}/${it.tmdbId}`);
   $('bdInfo').classList.remove('show'); // detail page is translucent — drop the browse info text
@@ -8055,15 +8174,18 @@ async function openDetail(it, push = true) {
       it.title = d.title || d.name || '';
       setTitleText($('dTitle'), it.title);
       applyTitleLogo($('dTitle'), it);
-      if (d.backdrop_path) { it.backdrop = img(d.backdrop_path); setBackdrop(it.backdrop || it.poster); }
-      if (d.poster_path) {
-        it.poster = img(d.poster_path, POSTER_W);
-        const p = $('dPoster');
-        if (p) p.style.backgroundImage = artBackground(it.poster, it.backdrop, artFallback(it.key || it.title, 30));
-      }
       if (d.overview) $('dOverview').textContent = d.overview;
       checkAvailability(it); // the early call ran with an empty title — redo with the real one
     }
+    // Details always takes live TMDB art. The library grid used to keep the old poster because
+    // only a title-less restore path wrote these fields back onto the card.
+    if (d.backdrop_path) { it.backdrop = img(d.backdrop_path); setBackdrop(it.backdrop || it.poster); }
+    if (d.poster_path) {
+      it.poster = img(d.poster_path, POSTER_W);
+      const p = $('dPoster');
+      if (p) p.style.backgroundImage = artBackground(it.poster, it.backdrop, artFallback(it.key || it.title, 30));
+    }
+    paintLibraryCardCover(it._idx, it.poster, it.backdrop);
     const tr = pickBestTrailer(d.videos && d.videos.results, it.title);
     if (tr) { S.detailTrailer = { key: tr.key, title: it.title, item: it }; $('dTrailer').style.display = ''; }
 
@@ -15399,6 +15521,90 @@ function installScreensaverIdle() {
 }
 
 /* ============ discover (Overseerr-style rows) ============ */
+function isoDateOffset(days) {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+function discoverDaySeed() {
+  return Math.floor(Date.now() / 86400000);
+}
+function discoverGemWindow() {
+  const seed = discoverDaySeed();
+  const windows = [
+    { from: '1968-01-01', to: '1979-12-31', label: 'the 70s' },
+    { from: '1980-01-01', to: '1989-12-31', label: 'the 80s' },
+    { from: '1990-01-01', to: '1999-12-31', label: 'the 90s' },
+    { from: '2000-01-01', to: '2009-12-31', label: 'the 2000s' },
+    { from: '2010-01-01', to: '2018-12-31', label: 'the 2010s' },
+  ];
+  const w = windows[seed % windows.length];
+  return { ...w, page: 1 + (Math.floor(seed / windows.length) % 3) };
+}
+function tmdbPosterResults(r) {
+  return (r && r.results || []).filter((x) => x && x.poster_path && passesMaturity(x) && catalogOk(x));
+}
+async function discoverHasTrailer(type, id, title) {
+  const key = `${type}:${id}`;
+  const memo = S._discoverTrailerMemo || (S._discoverTrailerMemo = new Map());
+  if (memo.has(key)) return memo.get(key);
+  try {
+    const v = await api(`/api/tmdb/${type}/${id}/videos`);
+    const ok = !!pickBestTrailer(v.results, title);
+    memo.set(key, ok);
+    return ok;
+  } catch {
+    memo.set(key, false);
+    return false;
+  }
+}
+async function tmdbDiscoverPages(path, pages = 2) {
+  const qs = path.includes('?') ? '&' : '?';
+  const rs = await Promise.all(Array.from({ length: pages }, (_, i) => api(`${path}${qs}page=${i + 1}`)));
+  const seen = new Set();
+  const results = [];
+  for (const r of rs) {
+    for (const x of (r && r.results) || []) {
+      if (!x || seen.has(x.id)) continue;
+      seen.add(x.id);
+      results.push(x);
+    }
+  }
+  return { results };
+}
+// Cover rows open Details. Released rows still require a real trailer so Details
+// is never empty. Upcoming skips that gate — most announced titles have a poster
+// long before a YouTube trailer. Do NOT set item.trailer here.
+async function discoverCoverItems(rawList, limit = 16, opts = {}) {
+  const requireTrailer = opts.requireTrailer !== false;
+  rawList = (rawList || []).slice(0, opts.scan || 36);
+  const items = [];
+  const seen = new Set();
+  for (let i = 0; i < rawList.length && items.length < limit; i += 5) {
+    const hits = await Promise.all(rawList.slice(i, i + 5).map(async (x) => {
+      const it = mapTmdb(x);
+      if (!it || !it.key || isWatched(it) || seen.has(it.key)) return null;
+      const type = it.type === 'tv' ? 'tv' : 'movie';
+      if (requireTrailer && !await discoverHasTrailer(type, x.id, x.title || x.name)) return null;
+      return it;
+    }));
+    for (const it of hits) {
+      if (!it || seen.has(it.key)) continue;
+      seen.add(it.key);
+      items.push(it);
+    }
+  }
+  return items;
+}
+function interleaveDiscoverItems(a, b) {
+  const out = [];
+  const n = Math.max(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    if (a[i]) out.push(a[i]);
+    if (b[i]) out.push(b[i]);
+  }
+  return out;
+}
 async function loadDiscover() {
   const reqId = (S.discoverReq = (S.discoverReq || 0) + 1);
   const current = () => reqId === S.discoverReq && S.view === 'discover';
@@ -15420,7 +15626,7 @@ async function loadDiscover() {
         api(`/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=60${tvG}` + CATALOG_Q),
       ]);
       if (!current()) return;
-      const map20r = (r) => (r.results || []).filter((x) => x.poster_path && passesMaturity(x)).slice(0, 20).map(mapTmdb);
+      const map20r = (r) => (r.results || []).filter((x) => x.poster_path && passesMaturity(x)).map(mapTmdb).filter((it) => !isWatched(it)).slice(0, 20);
       const rows = dedupeRows([
         { name: 'Popular movies', poster: true, items: map20r(popM) },
         { name: 'Top rated movies', poster: true, items: map20r(topM) },
@@ -15438,34 +15644,50 @@ async function loadDiscover() {
     return;
   }
   try {
-    const [trend, popM, popT, topM, topT, nowP, onAir] = await Promise.all([
+    // Adult Discover is a daily mix: new releases, older gems you have not watched, and
+    // coming soon. Every cover must have a real trailer (details stays useful). Trailer
+    // thumbnails keep item.trailer so OK plays the trailer; covers do not.
+    const today = todayStr();
+    const newFrom = isoDateOffset(-150);
+    const soonTo = isoDateOffset(365);
+    const gems = discoverGemWindow();
+    const soonMoviePath = `/api/tmdb/discover/movie?sort_by=popularity.desc&primary_release_date.gte=${today}&primary_release_date.lte=${soonTo}${CATALOG_Q}`;
+    const soonTvPath = `/api/tmdb/discover/tv?sort_by=popularity.desc&first_air_date.gte=${today}&first_air_date.lte=${soonTo}&without_genres=${encodeURIComponent('10763|10767')}${CATALOG_Q}`;
+    const [newM, newT, gemM, gemT, soonM, soonT, trend] = await Promise.all([
+      api(`/api/tmdb/discover/movie?sort_by=primary_release_date.desc&vote_count.gte=20&primary_release_date.gte=${newFrom}&primary_release_date.lte=${today}${CATALOG_Q}`),
+      api(`/api/tmdb/discover/tv?sort_by=first_air_date.desc&vote_count.gte=8&first_air_date.gte=${newFrom}&first_air_date.lte=${today}${CATALOG_Q}`),
+      api(`/api/tmdb/discover/movie?sort_by=vote_average.desc&vote_count.gte=600&primary_release_date.gte=${gems.from}&primary_release_date.lte=${gems.to}&with_original_language=en&page=${gems.page}${CATALOG_Q}`),
+      api(`/api/tmdb/discover/tv?sort_by=vote_average.desc&vote_count.gte=250&first_air_date.gte=${gems.from}&first_air_date.lte=${gems.to}&with_original_language=en&page=${gems.page}${CATALOG_Q}`),
+      tmdbDiscoverPages(soonMoviePath, 3),
+      tmdbDiscoverPages(soonTvPath, 3),
       api('/api/tmdb/trending/all/week'),
-      api(`/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=200&with_original_language=en${CATALOG_Q}`),
-      api(`/api/tmdb/discover/tv?sort_by=popularity.desc&vote_count.gte=100&with_original_language=en${CATALOG_Q}`),
-      api('/api/tmdb/movie/top_rated'), api('/api/tmdb/tv/top_rated'),
-      api('/api/tmdb/movie/now_playing'), api('/api/tmdb/tv/on_the_air'),
     ]);
     if (!current()) return;
-    const map20 = (r) => (r.results || []).filter((x) => x.poster_path && passesMaturity(x) && catalogOk(x)).slice(0, 20).map(mapTmdb);
+    const [newMovies, newSeries, gemMovies, gemSeries, soonMovies, soonSeries] = await Promise.all([
+      discoverCoverItems(tmdbPosterResults(newM)),
+      discoverCoverItems(tmdbPosterResults(newT)),
+      discoverCoverItems(tmdbPosterResults(gemM)),
+      discoverCoverItems(tmdbPosterResults(gemT)),
+      discoverCoverItems(tmdbPosterResults(soonM), 18, { requireTrailer: false, scan: 60 }),
+      discoverCoverItems(tmdbPosterResults(soonT), 18, { requireTrailer: false, scan: 60 }),
+    ]);
+    if (!current()) return;
     const rows = dedupeRows([
-      { name: '🔥 Trending this week', poster: true, items: map20(trend) },
-      { name: 'Popular movies', poster: true, items: map20(popM) },
-      { name: 'Popular series', poster: true, items: map20(popT) },
-      { name: 'In theaters now', poster: true, items: map20(nowP) },
-      { name: 'On the air', poster: true, items: map20(onAir) },
-      { name: 'Top rated movies', poster: true, items: map20(topM) },
-      { name: 'Top rated series', poster: true, items: map20(topT) },
+      { name: 'New movies', poster: true, items: newMovies },
+      { name: 'New series', poster: true, items: newSeries },
+      { name: `Gems from ${gems.label}`, poster: true, items: interleaveDiscoverItems(gemMovies, gemSeries) },
+      { name: 'Upcoming movies', poster: true, items: soonMovies },
+      { name: 'Upcoming series', poster: true, items: soonSeries },
     ].filter((r) => r.items.length));
     S.discoverData = rows;
     renderRowsInto(root, rows);
     setRowsView(root, rows, false);
     bootReady();
-    // Trailers row: candidates are the FRESHEST releases first — in-theaters + on-air (their trailers
-    // are the newest drops) then trending — deduped across movie/tv. buildTrailerRow then sorts the row
-    // by actual trailer publish date, so this genuinely shows the latest trailers, not trending order.
+    // Trailer thumbnails: newest drops first (new + coming soon), then trending. buildTrailerRow
+    // sorts by trailer publish date. OK on these cards plays the trailer, not Details.
     const trailerSeen = new Set();
     const trailerCand = [];
-    for (const x of [...(nowP.results || []), ...(onAir.results || []), ...(trend.results || [])]) {
+    for (const x of [...tmdbPosterResults(newM), ...tmdbPosterResults(newT), ...tmdbPosterResults(soonM), ...tmdbPosterResults(soonT), ...(trend.results || [])]) {
       if (!x || !x.poster_path || !passesMaturity(x) || !catalogOk(x)) continue;
       const t = x.media_type === 'tv' || (x.name && !x.title) ? 'tv' : 'movie';
       const k = t + ':' + x.id;
@@ -15475,17 +15697,18 @@ async function loadDiscover() {
       if (trailerCand.length >= 20) break;
     }
     buildTrailerRow(trailerCand).then((trItems) => {
+      trItems = (trItems || []).filter((it) => it && !isWatched(it));
       if (!current() || !trItems.length) return;
       const focused = root.querySelector('.focus');
       const focusRow = focused ? parseInt(focused.dataset.row || '-1', 10) : -1;
       const focusCol = focused ? parseInt(focused.dataset.col || '0', 10) : 0;
       const row = { name: '▶ Latest trailers', items: trItems };
-      rows.splice(1, 0, row);
+      rows.unshift(row);
       renderRowsInto(root, rows, { resetScroll: false });
       setRowsView(root, rows, false);
       S.discoverData = rows;
       if (current() && S.zone !== 'rail') {
-        const wantedRow = focusRow >= 0 ? focusRow + (focusRow >= 1 ? 1 : 0) : 0;
+        const wantedRow = focusRow >= 0 ? focusRow + 1 : 0;
         const safeRow = rows[wantedRow] && rows[wantedRow].items && rows[wantedRow].items.length ? wantedRow : 0;
         const maxCol = rows[safeRow] && rows[safeRow].items ? rows[safeRow].items.length - 1 : 0;
         const safeCol = Math.max(0, Math.min(Number.isFinite(focusCol) ? focusCol : 0, maxCol));
@@ -15591,6 +15814,50 @@ async function openBrowse(type) {
   $('genreSel').innerHTML = '<option value="">All genres</option>' + gs.map((g) => `<option value="${parseInt(g.id, 10) || 0}">${esc(g.name)}</option>`).join('');
   runBrowse(true, reqId);
 }
+async function openKidsBrowse() {
+  const reqId = (S.kidsReq = (S.kidsReq || 0) + 1);
+  $('browseTitle').textContent = 'Kids';
+  setSortOptions('tmdb');
+  runKidsBrowse(true, reqId);
+}
+async function runKidsBrowse(reset, requestId) {
+  if (S.view !== 'kids') return;
+  let reqId = requestId;
+  if (reset && !Number.isFinite(reqId)) reqId = (S.kidsReq = (S.kidsReq || 0) + 1);
+  if (!Number.isFinite(reqId)) reqId = S.kidsReq || (S.kidsReq = 1);
+  if (reqId !== S.kidsReq) return;
+  if (reset) { S.kidsPage = 0; S.kidsDone = false; renderGrid([]); $('grid').innerHTML = '<div class="gridMore">loading…</div>'; }
+  if (S.kidsLoadingReq === reqId || S.kidsDone) return;
+  S.kidsLoadingReq = reqId; S.kidsLoading = true;
+  const page = (S.kidsPage || 0) + 1;
+  const current = () => reqId === S.kidsReq && S.view === 'kids';
+  let loaded = false;
+  try {
+    const [movies, shows] = await Promise.all([
+      api(kidsMovieDiscoverPath() + `&page=${page}`).catch(() => null),
+      api(kidsTvDiscoverPath() + `&page=${page}`).catch(() => null),
+    ]);
+    if (!current()) return;
+    const items = interleaveHomeItems(homeCatalogItems(movies, 'maturity'), homeCatalogItems(shows, 'maturity'));
+    if (page === 1) renderGrid(items); else appendGrid(items);
+    S.kidsPage = page;
+    const moviePages = Math.max(1, parseInt(movies && movies.total_pages, 10) || page);
+    const tvPages = Math.max(1, parseInt(shows && shows.total_pages, 10) || page);
+    if (page >= Math.min(25, Math.max(moviePages, tvPages)) || !items.length) S.kidsDone = true;
+    loaded = true;
+  } catch (e) {
+    if (current() && page === 1) {
+      $('grid').innerHTML = `<div class="gridMore focusable">Failed: ${esc(e.message)}</div>`;
+      focusAsyncGridState('kids', current);
+    }
+  } finally {
+    if (S.kidsLoadingReq === reqId) {
+      S.kidsLoadingReq = null;
+      S.kidsLoading = false;
+      if (current() && loaded) maybeFillBrowseWindow();
+    }
+  }
+}
 function browseSortParam() {
   const sort = $('sortSel').value;
   return S.browseType === 'tv' && sort.startsWith('primary_release_date') ? 'first_air_date.desc' : sort;
@@ -15649,18 +15916,37 @@ async function runBrowse(reset, requestId) {
 // bounded by browseDone + a page cap. No layout/virtualization change; TV's 1-row window fills on page 1
 // so this no-ops there.
 function maybeFillBrowseWindow() {
-  if (S.browseDone || S.browseLoading) return;
-  if (!['movies', 'tv'].includes(S.view)) return;
-  // TV is explicitly excluded: its 1-row window already overflows on page 1, and we never want to
-  // change TV loading behavior. This is a browser-only "fill the tall/high-res window" helper.
+  // TV is excluded: its 1-row window already overflows on page 1.
   if (document.body.classList.contains('tv')) return;
+  const view = S.view;
+  if (!['movies', 'tv', 'kids', 'library'].includes(view)) return;
+  const localLib = view === 'library' && S.currentLib && S.currentLib.path;
+  const localShow = localLib && S.localPageState && S.localPageState.showIdx !== undefined;
+  if (view === 'movies' || view === 'tv') {
+    if (S.browseDone || S.browseLoading) return;
+  } else if (view === 'kids') {
+    if (S.kidsDone || S.kidsLoading) return;
+  } else if (localLib) {
+    if (localShow || S.localPageLoading || !S.localPageHasMore) return;
+  } else if (S.libDone || S.libLoading) return;
   requestAnimationFrame(() => {
-    if (S.browseLoading || S.browseDone || document.body.classList.contains('tv') || !['movies', 'tv'].includes(S.view)) return;
+    if (document.body.classList.contains('tv') || S.view !== view) return;
     const g = $('grid');
     if (!g || !$('browse').classList.contains('rowsWin')) return;
-    if (g.scrollHeight > g.clientHeight + 8) return;   // already overflows the window → filled
-    if ((S.browsePage || 0) >= 8) return;              // safety cap (~160 items)
-    runBrowse(false);
+    if (g.scrollHeight > g.clientHeight + 8) return;
+    if (view === 'movies' || view === 'tv') {
+      if (S.browseLoading || S.browseDone || (S.browsePage || 0) >= 8) return;
+      runBrowse(false);
+    } else if (view === 'kids') {
+      if (S.kidsLoading || S.kidsDone || (S.kidsPage || 0) >= 8) return;
+      runKidsBrowse(false);
+    } else if (S.currentLib && S.currentLib.path) {
+      if (S.localPageLoading || !S.localPageHasMore || (S.localPageOffset || 0) >= 200) return;
+      loadMoreLocalLibraryPage(false);
+    } else {
+      if (S.libLoading || S.libDone || (S.libPage || 0) >= 8) return;
+      runLibrary(false);
+    }
   });
 }
 $('genreSel').addEventListener('change', () => {
@@ -15683,11 +15969,12 @@ $('grid').addEventListener('scroll', () => {
   scheduleVirtualGridFromScroll(g);
   if (g.scrollTop + g.clientHeight < g.scrollHeight - 700) return;
   if (['movies', 'tv'].includes(S.view)) runBrowse(false);
+  else if (S.view === 'kids') runKidsBrowse(false);
   else if (S.view === 'library' && S.currentLib && S.currentLib.path) loadMoreLocalLibraryPage(false);
   else if (S.view === 'library') runLibrary(false);
 });
 
-const VIRTUAL_GRID_VIEWS = new Set(['movies', 'tv', 'watchlist', 'library']);
+const VIRTUAL_GRID_VIEWS = new Set(['movies', 'tv', 'kids', 'watchlist', 'library']);
 const VIRTUAL_GRID_OVERSCAN_ROWS = 4;
 function mainGridRoot(root = S.gridRoot || $('grid')) { return root && root === $('grid'); }
 function shouldVirtualizeGrid(root = S.gridRoot || $('grid')) {
@@ -15851,7 +16138,7 @@ function renderGrid(items, root = $('grid')) {
   // next row peeks in and the row-above's year caption looks orphaned/clipped on Android TV.
   requestAnimationFrame(() => { if (S.gridRoot === root) adaptRowWindows(); });
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { if (S.gridRoot === root) adaptRowWindows(); }).catch(() => {});
-  if (root === $('grid') && ['movies', 'tv', 'library', 'watchlist'].includes(S.view) && S.zone !== 'rail') {
+  if (root === $('grid') && ['movies', 'tv', 'kids', 'library', 'watchlist'].includes(S.view) && S.zone !== 'rail') {
     requestAnimationFrame(() => {
       if (S.view === renderedView && S.gridRoot === root && (!S.zone || S.zone === 'grid') && !root.querySelector('.focus')) focusGrid(0);
     });
@@ -15877,6 +16164,18 @@ function appendGrid(items) {
 }
 
 const LOCAL_GRID_BATCH = 15;
+function localLibraryBatchSize() {
+  // TV keeps the small first page — one Plex row already overflows. Desktop asks for
+  // enough posters to fill the tall grid, then lazy-loads the rest on scroll.
+  if (document.body.classList.contains('tv')) return LOCAL_GRID_BATCH;
+  const g = $('grid');
+  const poster = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--poster')) || 190;
+  const w = (g && g.clientWidth) || Math.max(320, window.innerWidth - 140);
+  const h = (g && g.clientHeight) || Math.max(320, window.innerHeight - 100);
+  const cols = Math.max(3, Math.floor(w / (poster + 18)));
+  const rows = Math.max(3, Math.ceil(h / (poster * 1.5 + 52)) + 1);
+  return Math.min(80, Math.max(LOCAL_GRID_BATCH, cols * rows));
+}
 function clearLocalGridPaging() {
   S.localGridAll = null;
   S.localGridShown = 0;
@@ -15994,6 +16293,7 @@ async function loadMoreLocalLibraryPage(focusNew = false) {
     renderLocalGridFooter();
     perfMark('local-library-page-append', { shown: S.localPageOffset, total: S.localPageTotal });
     if (focusNew && S.zone === 'grid') requestAnimationFrame(() => focusGrid(firstNew));
+    maybeFillBrowseWindow();
     return true;
   } catch (e) {
     toast(e.message || 'Could not load more library items');
@@ -16192,7 +16492,7 @@ function libIconSvg(lib) {
 // separately: the server mints STABLE art URLs, so the browser's HTTP cache keeps the images.
 async function localLibraryPage(lib, opts = {}) {
   const offset = Math.max(0, opts.offset || 0);
-  const limit = Math.max(1, Math.min(500, opts.limit || LOCAL_GRID_BATCH));
+  const limit = Math.max(1, Math.min(500, opts.limit || localLibraryBatchSize()));
   const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });
   if (opts.showIdx !== undefined) params.set('showIdx', String(opts.showIdx));
   else {
@@ -16214,8 +16514,9 @@ async function localLibraryPage(lib, opts = {}) {
 function mergeLocalItemsInto(map, lib, items) {
   for (const x of (items || [])) {
     if (!x.streamUrl) continue;
-    const poster = x.artUrl || (x.poster ? img(x.poster, POSTER_W) : null) || x.thumbUrl || '';
-    const backdrop = (x.backdrop ? img(x.backdrop) : null) || x.artUrl || x.thumbUrl || poster || '';
+    const cover = localLibraryCover(x);
+    const poster = cover.poster || '';
+    const backdrop = cover.backdrop || poster || '';
     const rec = {
       streamUrl: x.streamUrl, playUrl: x.playUrl, name: x.title, addedAt: x.addedAt || 0,
       libId: lib && lib.id, artUrl: x.artUrl || '', thumbUrl: x.thumbUrl || '', poster, backdrop,
@@ -16235,8 +16536,9 @@ function mergeLocalItems(lib, items) {
 }
 function localRecFromPayload(x) {
   if (!x || !x.streamUrl) return null;
-  const poster = x.artUrl || (x.poster ? img(x.poster, POSTER_W) : null) || x.thumbUrl || '';
-  const backdrop = (x.backdrop ? img(x.backdrop) : null) || x.artUrl || x.thumbUrl || poster || '';
+  const cover = localLibraryCover(x);
+  const poster = cover.poster || '';
+  const backdrop = cover.backdrop || poster || '';
   return {
     streamUrl: x.streamUrl, playUrl: x.playUrl, name: x.title, addedAt: x.addedAt || 0,
     artUrl: x.artUrl || '', thumbUrl: x.thumbUrl || '', poster, backdrop,
@@ -16349,14 +16651,19 @@ async function runLibrary(reset) {
   S.libLoadingReq = reqId; S.libLoading = true;
   const page = (S.libPage || 0) + 1;
   let path = `/api/tmdb/discover/${lib.mediaType}?sort_by=${lib.sort}&vote_count.gte=20&page=${page}` + CATALOG_Q + certParams();
+  if (String(lib.sort || '').includes('date')) {
+    path += `&${lib.mediaType === 'tv' ? 'first_air_date' : 'primary_release_date'}.lte=${todayStr()}`;
+  }
   if (lib.genreId) path += `&with_genres=${lib.genreId}`;
+  let loaded = false;
   try {
     const r = await api(path);
     if (!current()) return;
-    const items = (r.results || []).filter((x) => x.poster_path && passesMaturity(x)).map(mapTmdb);
+    const items = (r.results || []).filter((x) => x.poster_path && passesMaturity(x) && catalogOk(x)).map(mapTmdb);
     if (page === 1) renderGrid(items); else appendGrid(items);
     S.libPage = page;
     if (page >= (r.total_pages || 1) || page >= 25) S.libDone = true;
+    loaded = true;
   } catch (e) {
     if (current() && page === 1) {
       $('grid').innerHTML = `<div class="gridMore focusable">Failed: ${esc(e.message)}</div>`;
@@ -16364,9 +16671,30 @@ async function runLibrary(reset) {
     }
   } finally {
     if (S.libLoadingReq === reqId) {
-      S.libLoadingReq = null; S.libLoading = false;
+      S.libLoadingReq = null;
+      S.libLoading = false;
+      if (current() && loaded) maybeFillBrowseWindow();
     }
   }
+}
+// Folder-info items must not keep painting the old TMDB poster after "Use library info".
+function localLibraryCover(x) {
+  const folderOnly = !!(x && (x.matchOverride === 'none' || !x.tmdbId));
+  const tmdbPoster = (!folderOnly && x && x.poster) ? img(x.poster, POSTER_W) : null;
+  const tmdbBackdrop = (!folderOnly && x && x.backdrop) ? img(x.backdrop) : null;
+  if (folderOnly) {
+    // Folder art on top; video frame underneath. A missing poster.jpg 404s and the
+    // frame shows through — same as picking "Use library info" with no NFO art.
+    return {
+      poster: (x && x.artUrl) || (x && x.thumbUrl) || null,
+      backdrop: (x && x.thumbUrl) || (x && x.artUrl) || null,
+    };
+  }
+  // A TMDB match is supposed to change the cover. Folder poster.jpg must not hide it.
+  return {
+    poster: tmdbPoster || (x && x.artUrl) || (x && x.thumbUrl) || null,
+    backdrop: tmdbBackdrop || (x && x.artUrl) || (x && x.thumbUrl) || null,
+  };
 }
 // Scanned local library: local poster.jpg or TMDB art, direct local playback. TV shows
 // render once at the top level — clicking one drills into its episode grid.
@@ -16375,21 +16703,23 @@ function mapLocal(lib, x, titleOverride) {
   // local-first playback via S.localMap; unmatched ones fall back to direct play/episode grid.
   const matched = !!x.tmdbId;
   const type = x.kind === 'show' ? 'tv' : (x.kind === 'movie' ? 'movie' : null);
-  return {
+  const cover = localLibraryCover(x);
+  const mapped = {
     key: matched && type ? `tmdb:${type}:${x.tmdbId}` : `local:${lib.id}:${x.idx}`,
     title: titleOverride || x.title, year: x.year || '', genre: lib.name,
     _added: x.addedAt || 0, _genres: x.genres || [], _lib: lib, _idx: x.idx, _matchOv: x.matchOverride,
     _kind: x.kind,
     rating: x.rating ? Number(x.rating).toFixed(1) : '—', overview: x.overview || '',
-    poster: x.artUrl || (x.poster ? img(x.poster, POSTER_W) : null) || x.thumbUrl
-      || procBackdrop(180 + (x.idx % 14) * 17, 320, (x.idx % 12) + 5),
-    backdrop: (x.backdrop ? img(x.backdrop) : null) || x.thumbUrl
-      || procBackdrop(180 + (x.idx % 14) * 17, 320, (x.idx % 12) + 5),
+    poster: cover.poster || procBackdrop(180 + (x.idx % 14) * 17, 320, (x.idx % 12) + 5),
+    backdrop: cover.backdrop || procBackdrop(180 + (x.idx % 14) * 17, 320, (x.idx % 12) + 5),
+    artUrl: x.artUrl || '', thumbUrl: x.thumbUrl || '',
     tmdbId: x.tmdbId, type: matched ? type : null,
     _local: x.streamUrl ? { streamUrl: x.streamUrl, playUrl: x.playUrl, name: titleOverride || x.title } : null,
     _episode: x.kind === 'episode',
     _showOpen: x.kind === 'show' && !matched ? x.idx : undefined,
   };
+  rememberLibrarySource(mapped);
+  return mapped;
 }
 // Detail page for archive items TMDB doesn't know — built entirely from the NFO + local art.
 function openLocalDetail(it) {
@@ -16530,8 +16860,30 @@ function mapLocalPageItems(lib, r, showIdx) {
   }
   return (r.items || []).map((x) => mapLocal(lib, x));
 }
+function paintLibraryCardCover(idx, poster, backdrop) {
+  if (idx === undefined || idx === null) return;
+  const items = S.gridItems || [];
+  const i = items.findIndex((x) => x && x._idx === idx);
+  if (i < 0) return;
+  if (poster) items[i].poster = poster;
+  if (backdrop) items[i].backdrop = backdrop || poster;
+  const root = S.gridRoot || $('grid');
+  const card = root && root.querySelector(`.pcard[data-grid="${i}"]`);
+  const art = card && card.querySelector('.art');
+  if (!art) return;
+  art.style.backgroundImage = artBackground(items[i].poster, items[i].backdrop, artFallback(items[i].key || items[i].title, 11));
+  delete art.dataset.bg;
+}
+function folderInfoCoverFor(it) {
+  const loc = (S.localMap && it && it._lib && it._idx !== undefined)
+    ? S.localMap[`local:${it._lib.id}:${it._idx}`] : null;
+  const thumb = (it && it.thumbUrl) || (loc && loc.thumbUrl) || '';
+  const art = (it && it.artUrl) || (loc && loc.artUrl) || '';
+  return { poster: thumb || art || (it && it.poster) || '', backdrop: thumb || art || (it && it.backdrop) || '' };
+}
 async function runLocalLibraryPaged(lib, showIdx, opts = {}) {
   const grid = $('grid');
+  const reqId = S.localLibReq = (S.localLibReq || 0) + 1;
   S.libDone = true; // TMDB library paging is separate from local folder paging.
   S.localShow = showIdx;
   S.libraryPreviewOnly = !!opts.preview;
@@ -16544,7 +16896,7 @@ async function runLocalLibraryPaged(lib, showIdx, opts = {}) {
     const sort = $('sortSel').value || 'added.desc';
     const genre = parseInt($('genreSel').value, 10) || 0;
     const r = await localLibraryPage(lib, { offset: 0, showIdx, sort, genre });
-    if (S.view !== 'library' || !S.currentLib || S.currentLib.id !== lib.id) return;
+    if (reqId !== S.localLibReq || S.view !== 'library' || !S.currentLib || S.currentLib.id !== lib.id) return;
     mergeLocalItems(lib, r.items || []);
     const isAdmin = S.user.role === 'admin';
     const show = r.show || null;
@@ -16591,6 +16943,7 @@ async function runLocalLibraryPaged(lib, showIdx, opts = {}) {
     }
     renderLocalGridFooter();
     perfMark('local-library-render', { shown: S.localPageOffset, total: S.localPageTotal, preview: !!opts.preview });
+    maybeFillBrowseWindow();
   } catch (e) { grid.innerHTML = `<div class="gridMore">Failed: ${esc(e.message)}</div>`; }
 }
 async function runLocalLibrary(lib, showIdx, opts = {}) {
@@ -16617,9 +16970,16 @@ async function scanLibrary(lib, mode = 'scan') {
 }
 /* ---- Fix a wrong TMDB match on a library item (admin; survives rescans) ---- */
 function syncFixMatchBtn(it) {
-  const on = !!(S.user && S.user.role === 'admin' && it && it._lib && it._idx !== undefined && it._kind !== 'episode');
+  bindLibrarySource(it);
+  const on = canFixLibraryMatch(it);
   $('dFixMatch').style.display = on ? '' : 'none';
   $('dFixMatch').onclick = on ? () => openMatchModal(it) : null;
+  const folder = canUseLibraryFolderInfo(it);
+  const folderBtn = $('dUseLibInfo');
+  if (folderBtn) {
+    folderBtn.style.display = folder ? '' : 'none';
+    folderBtn.onclick = folder ? () => useLibraryFolderInfo(it) : null;
+  }
 }
 function openMatchModal(it) {
   captureOverlayReturn('matchModal');
@@ -16651,7 +17011,7 @@ async function runMatchSearch() {
       row.innerHTML = `<div class="pp" style="background-image:${artBackgroundHtml(x.poster_path ? img(x.poster_path, 'w154') : '', artFallback((x.id || x.name || 'calendar'), 46))}"></div>
         <div class="ci"><div class="ct">${esc(x.title || x.name || '?')}</div>
         <div class="cm">${esc((x.release_date || x.first_air_date || '—').slice(0, 4))}${x.overview ? ` · ${esc(x.overview.slice(0, 90))}…` : ''}</div></div>`;
-      row.addEventListener('click', () => applyMatch(x.id));
+      row.addEventListener('click', () => applyMatch(x.id, x));
       $('matchResults').appendChild(row);
     });
   } catch (e) { if (current()) $('matchResults').innerHTML = `<div class="hint">Search failed: ${esc(e.message)}</div>`; }
@@ -16660,9 +17020,22 @@ function closeMatchModal(opts = {}) {
   S.matchSearchReq = (S.matchSearchReq || 0) + 1;
   closeFocusOverlay('matchModal', 'matchModal', opts);
 }
-async function applyMatch(tmdbId) {
+function useLibraryFolderInfo(it) {
+  if (!canUseLibraryFolderInfo(it)) return;
+  S.matchItem = it;
+  applyMatch(null);
+}
+async function applyMatch(tmdbId, pick) {
   const it = S.matchItem; if (!it) return;
   closeMatchModal();
+  // Paint the library card now. Details already fetches live TMDB art; the grid used to keep
+  // the previous poster until a later reload, which looked like "only details updated".
+  if (tmdbId === null) {
+    const cover = folderInfoCoverFor(it);
+    paintLibraryCardCover(it._idx, cover.poster, cover.backdrop);
+  } else if (pick && (pick.poster_path || pick.backdrop_path)) {
+    paintLibraryCardCover(it._idx, img(pick.poster_path, POSTER_W), img(pick.backdrop_path) || img(pick.poster_path, POSTER_W));
+  }
   toast(tmdbId === null ? 'Reverting to the folder info…' : 'Re-matching…');
   try {
     await api(`/api/libraries/${it._lib.id}/match`, { method: 'POST', body: { idx: it._idx, tmdbId } });
@@ -16673,12 +17046,26 @@ async function applyMatch(tmdbId) {
         clearInterval(poll);
         if (st.error) return toast('Failed: ' + st.error);
         delete (S.libCache || {})[it._lib.id]; S.localMap = null; // identity changed everywhere
+        if (S.libByTmdb && it.tmdbId) delete S.libByTmdb[`${it.type || ''}:${it.tmdbId}`];
         ensureLocalMap();
         toast(tmdbId === null ? 'Now showing the folder info ✓' : 'Match fixed ✓');
-        // The open detail page describes the OLD identity — land back on the library grid.
         $('detail').classList.remove('open'); document.body.classList.remove('detailOpen');
         S.currentLib = it._lib;
-        switchView('library');
+        switchView('library', true, { preservePage: true });
+        await runLocalLibrary(it._lib);
+        const mapped = (S.gridItems || []).find((x) => x && x._idx === it._idx);
+        if (mapped) paintLibraryCardCover(it._idx, mapped.poster, mapped.backdrop);
+        const picked = Number(tmdbId);
+        if (Number.isInteger(picked) && picked > 0) {
+          const hit = mapped || (S.gridItems || []).find((x) => x && +x.tmdbId === picked);
+          const type = (hit && hit.type) || (it._kind === 'show' || (it._lib && it._lib.kind === 'tv') ? 'tv' : 'movie');
+          openDetail(hit || {
+            key: `tmdb:${type}:${picked}`, tmdbId: picked, type, title: it.title,
+            poster: pick ? img(pick.poster_path, POSTER_W) : '',
+            backdrop: pick ? img(pick.backdrop_path) : '',
+            _lib: it._lib, _idx: it._idx, _kind: it._kind, _matchOv: picked,
+          });
+        }
       } catch { clearInterval(poll); }
     }, 1200);
   } catch (e) { toast('Failed: ' + e.message); }
@@ -19586,13 +19973,56 @@ $('mnSeek').addEventListener('pointerup', () => { _mnSeekDrag = false; });
 $('mnSeek').addEventListener('pointercancel', () => { _mnSeekDrag = false; });
 
 /* ============ preferences: cover size + menu hide/reorder (per device) ============ */
-const MENU_DEFAULT = ['search', 'home', 'watchlist', 'discover', 'calendar', 'movies', 'tv', 'livetv', 'music', 'audiobooks'];
-const MENU_LABELS = { search: 'Search', home: 'Home', watchlist: 'Watchlist', discover: 'Discover', calendar: 'Calendar', movies: 'Movies', tv: 'TV Shows', livetv: 'Live TV', music: 'Music', audiobooks: 'Audiobooks' };
-function menuPrefs() {
-  try { const p = JSON.parse(localStorage.getItem('triboon.menu') || 'null'); if (p && Array.isArray(p.order)) return p; } catch {}
-  return { order: [...MENU_DEFAULT], hidden: [] };
+const MENU_DEFAULT = ['search', 'home', 'watchlist', 'discover', 'calendar', 'movies', 'tv', 'kids', 'livetv', 'music', 'audiobooks'];
+const MENU_LABELS = { search: 'Search', home: 'Home', watchlist: 'Watchlist', discover: 'Discover', calendar: 'Calendar', movies: 'Movies', tv: 'TV Shows', kids: 'Kids', livetv: 'Live TV', music: 'Music', audiobooks: 'Audiobooks' };
+function kidsUiAvailable() {
+  return !document.body.classList.contains('androidApp');
 }
-function saveMenuPrefs(p) { try { localStorage.setItem('triboon.menu', JSON.stringify(p)); } catch {} }
+function menuKidsDefaultHidden() {
+  return (S.maxLevel ?? 4) >= 4;
+}
+function readMenuPrefsRaw() {
+  try { const p = JSON.parse(localStorage.getItem('triboon.menu') || 'null'); if (p && Array.isArray(p.order)) return p; } catch {}
+  return null;
+}
+function writeMenuPrefs(p) {
+  try {
+    localStorage.setItem('triboon.menu', JSON.stringify({
+      order: p.order,
+      hidden: p.hidden,
+      known: Array.isArray(p.known) ? p.known : [...MENU_DEFAULT],
+    }));
+  } catch {}
+}
+function normalizeMenuPrefs(p) {
+  const order = Array.isArray(p.order) ? p.order.slice() : [...MENU_DEFAULT];
+  const hidden = Array.isArray(p.hidden) ? p.hidden.slice() : [];
+  const known = Array.isArray(p.known) ? p.known.slice() : [];
+  let dirty = !Array.isArray(p.known);
+  for (const nav of MENU_DEFAULT) {
+    if (known.includes(nav)) continue;
+    known.push(nav);
+    dirty = true;
+    if (nav === 'kids' && menuKidsDefaultHidden() && !hidden.includes('kids')) hidden.push('kids');
+  }
+  const out = { order, hidden, known };
+  if (dirty) writeMenuPrefs(out);
+  return out;
+}
+function menuPrefs() {
+  const raw = readMenuPrefsRaw();
+  if (raw) return normalizeMenuPrefs(raw);
+  const hidden = menuKidsDefaultHidden() ? ['kids'] : [];
+  return { order: [...MENU_DEFAULT], hidden, known: [...MENU_DEFAULT] };
+}
+function saveMenuPrefs(p) {
+  const prev = readMenuPrefsRaw() || {};
+  writeMenuPrefs({
+    order: p.order,
+    hidden: p.hidden,
+    known: Array.isArray(p.known) ? p.known : (Array.isArray(prev.known) ? prev.known : [...MENU_DEFAULT]),
+  });
+}
 // Reorder + hide the rail nav buttons per user preference (search first by default).
 function applyMenuPrefs() {
   const p = menuPrefs();
@@ -19609,6 +20039,7 @@ function applyMenuPrefs() {
     if (!btn) continue;
     const hideByPref = p.hidden.includes(nav);
     if (nav === 'livetv') btn.style.display = (!hideByPref && liveTvAvailable()) ? '' : 'none';
+    else if (nav === 'kids') btn.style.display = (!hideByPref && kidsUiAvailable()) ? '' : 'none';
     else if (nav === 'music') btn.style.display = (!hideByPref && S.serverInfo && S.serverInfo.music) ? '' : 'none';
     // Audiobooks: admin can disable it globally or per-user (S.user.audiobooksAllowed); the per-device
     // hide pref still applies on top.
@@ -20759,6 +21190,7 @@ function renderMenuMgr(restore = null) {
     ...libKeys.filter((n) => !p.order.includes(n))];
   const mgr = $('menuMgr'); mgr.innerHTML = '';
   order.forEach((nav, i) => {
+    if (nav === 'kids' && !kidsUiAvailable()) return;
     if (!menuLabelFor(nav)) return;
     const row = document.createElement('div');
     row.dataset.menuKey = nav;
@@ -21144,7 +21576,7 @@ $('prefCatNone').addEventListener('click', () => {
 });
 $('prefReset').addEventListener('click', () => {
   const scrollTop = $('prefs').scrollTop;
-  saveMenuPrefs({ order: [...MENU_DEFAULT], hidden: [] });
+  saveMenuPrefs({ order: [...MENU_DEFAULT], hidden: menuKidsDefaultHidden() ? ['kids'] : [], known: [...MENU_DEFAULT] });
   renderMenuMgr();
   applyMenuPrefs();
   requestAnimationFrame(() => { $('prefs').scrollTop = scrollTop; $('prefReset').focus({ preventScroll: true }); });
@@ -21437,17 +21869,44 @@ function tmdbSearchRank(x, q) {
   if (content.length && titleWords.length && !searchWordEq(noLeadArticle[0] || titleWords[0], content[0])) score -= 1800;
   return score;
 }
+async function searchLibrary(q) {
+  if (!q || String(q).trim().length < 2) return [];
+  try {
+    const r = await api('/api/libraries/search?q=' + encodeURIComponent(String(q).trim()));
+    const libs = S.libraries || [];
+    return (r.items || []).map((x) => {
+      const lib = libs.find((l) => l.id === x.libraryId)
+        || { id: x.libraryId, name: x.libraryName || 'Library', path: true };
+      return mapLocal(lib, x);
+    }).filter((it) => it && !it._episode);
+  } catch { return []; }
+}
+function hydrateSearchLibrary(tmdbItems, libItems) {
+  if (!tmdbItems || !libItems) return;
+  for (const it of tmdbItems) {
+    const hit = libItems.find((x) => x && x.tmdbId && it.tmdbId && +x.tmdbId === +it.tmdbId
+      && (x.type || (x._kind === 'show' ? 'tv' : 'movie')) === it.type);
+    if (!hit || !hit._local) continue;
+    it._local = hit._local;
+    it._lib = hit._lib;
+    it._idx = hit._idx;
+    it._kind = hit._kind;
+    it._matchOv = hit._matchOv;
+  }
+}
 async function doSearch() {
   const q = $('searchInput').value.trim();
   const grid = $('grid');
   if (!q) { clearSearchResults({ invalidate: true }); return; }
   const seq = ++searchSeq;
   const current = () => seq === searchSeq && S.view === 'search' && $('searchInput').value.trim() === q;
+  const libJob = searchLibrary(q);
   if (S.serverInfo.tmdb) {
     try {
-      const [r, live] = await Promise.all([
+      const [r, live, lib] = await Promise.all([
         api('/api/tmdb/search/multi?query=' + encodeURIComponent(q) + '&include_adult=false'),
         searchChannels(q),
+        libJob,
       ]);
       if (!current()) return;
       // Maturity applies to SEARCH too — a kids profile must not even see the cover art.
@@ -21455,8 +21914,11 @@ async function doSearch() {
       const bySearchRank = (a, b) => tmdbSearchRank(b, q) - tmdbSearchRank(a, q);
       const movies = ok.filter((x) => x.media_type === 'movie').sort(bySearchRank).map(mapTmdb);
       const shows = ok.filter((x) => x.media_type === 'tv').sort(bySearchRank).map(mapTmdb);
-      if (movies.length || shows.length || live.length) {
+      hydrateSearchLibrary(movies, lib);
+      hydrateSearchLibrary(shows, lib);
+      if (lib.length || movies.length || shows.length || live.length) {
         return renderSearchSections([
+          { name: 'Library', items: lib },
           { name: 'Movies', items: movies },
           { name: 'TV Shows', items: shows },
           { name: 'Live TV', items: live },
@@ -21466,7 +21928,11 @@ async function doSearch() {
   }
   // Raw usenet search has no ratings at all — restricted profiles never get the fallback.
   if (!current()) return;
-  if ((S.maxLevel ?? 4) < 4) { renderGrid([]); $('grid').innerHTML = '<div class="gridMore">No results for this profile.</div>'; return; }
+  const lib = await libJob.catch(() => []);
+  if ((S.maxLevel ?? 4) < 4) {
+    if (lib.length) return renderSearchSections([{ name: 'Library', items: lib }]);
+    renderGrid([]); $('grid').innerHTML = '<div class="gridMore">No results for this profile.</div>'; return;
+  }
   // No TMDB (or no metadata hits): search indexers directly and synthesize poster cards.
   try {
     const r = await api('/api/search?q=' + encodeURIComponent(q));
@@ -21476,6 +21942,7 @@ async function doSearch() {
       rating: '—', q: c.name, overview: (c.reasons || []).join(' · '),
       poster: procBackdrop(200 + i * 12, 320, i + 3), backdrop: procBackdrop(200 + i * 12, 320, i + 3),
     }));
+    if (lib.length) return renderSearchSections([{ name: 'Library', items: lib }, { name: 'Usenet', items: cards }]);
     renderGrid(cards);
     if (!cards.length) grid.innerHTML = '<div class="gridMore">No matches.</div>';
   } catch (e) { toast('Search failed: ' + e.message); }
@@ -22580,6 +23047,7 @@ function switchView(v, push = true, opts = {}) {
   if (v === 'settings') return openServerSettings(); // Server settings folded into the account page now
   // Admin disabled audiobooks for this user → never land on the section (even via a stale route/link).
   if (v === 'audiobooks' && S.user && S.user.audiobooksAllowed === false) return switchView('home');
+  if (v === 'kids' && !kidsUiAvailable()) return switchView('home', push, opts);
   const prevView = S.view;
   hideScreensaver();
   resetScreensaverIdle();
@@ -22603,12 +23071,13 @@ function switchView(v, push = true, opts = {}) {
   clearBackdrop(); // never carry the previous page's backdrop — each view fades in its own
   if (push) setRoute(v === 'library' && S.currentLib ? `#/library/${S.currentLib.id}` : `#/${v}`);
   const onDiscover = v === 'discover' || v === 'calendar';
-  const isBrowse = ['movies', 'tv', 'search', 'library', 'watchlist', 'livetv'].includes(v);
-  const shortBrowseBd = v === 'discover' || v === 'movies' || v === 'tv' || v === 'watchlist' || (v === 'library' && S.currentLib && S.currentLib.path);
+  const isBrowse = ['movies', 'tv', 'kids', 'search', 'library', 'watchlist', 'livetv'].includes(v);
+  const shortBrowseBd = v === 'discover' || v === 'movies' || v === 'tv' || v === 'kids' || v === 'watchlist' || (v === 'library' && S.currentLib && S.currentLib.path);
   // Browse AND Discover show the focused title's backdrop info up top (rows are pinned low to
   // leave room). Calendar stays clean — it's a date list, not a cover wall.
   document.body.classList.toggle('fullBd', isBrowse || v === 'discover');
   document.body.classList.toggle('shortBrowseBd', !!shortBrowseBd);
+  document.body.classList.toggle('libGrid', v === 'library' && !!(S.currentLib && S.currentLib.path));
   applyCoverSize();
   $('home').classList.toggle('show', v === 'home');
   $('discover').classList.toggle('open', onDiscover);
@@ -22617,11 +23086,11 @@ function switchView(v, push = true, opts = {}) {
   // LOCAL libraries get the genre+sort bar (recently added / A–Z / year / rating, genres
   // from their own scan); smart views and watchlist/live keep the clean head.
   $('browse').classList.toggle('noFilter',
-    (v === 'library' && !(S.currentLib && S.currentLib.path)) || v === 'watchlist' || v === 'livetv');
+    (v === 'library' && !(S.currentLib && S.currentLib.path)) || v === 'watchlist' || v === 'livetv' || v === 'kids');
   // Two-row backdrop window applies to poster pages; Live TV keeps its full-height list.
   // Search is a FULL-PAGE results list (no backdrop band, no row window) — sectioned results
   // need the room, and the backdrop just fought the readability of a long grid.
-  $('browse').classList.toggle('rowsWin', ['movies', 'tv', 'watchlist', 'library'].includes(v));
+  $('browse').classList.toggle('rowsWin', ['movies', 'tv', 'kids', 'watchlist', 'library'].includes(v));
   if (!VIRTUAL_GRID_VIEWS.has(v)) resetGridVirtual($('grid'));
   if (!(v === 'library' && S.currentLib && S.currentLib.path)) clearLocalAdminBar();
   $('settings').classList.toggle('open', v === 'settings');
@@ -22643,6 +23112,7 @@ function switchView(v, push = true, opts = {}) {
   if (v === 'calendar' && !opts.preservePage) loadCalendar();
   if (v === 'movies' && !opts.preservePage) openBrowse('movie');
   if (v === 'tv' && !opts.preservePage) openBrowse('tv');
+  if (v === 'kids' && !opts.preservePage) openKidsBrowse();
   if (v === 'library' && !opts.preservePage) {
     if (opts.previewOnly && S.currentLib && S.currentLib.path) runLocalLibrary(S.currentLib, undefined, { preview: true });
     else runLibrary(true);
@@ -22807,8 +23277,8 @@ function applyRoute() {
     deferLibraryRoute(parts[1]);
     return;
   }
-  const KNOWN = ['home', 'movies', 'tv', 'search', 'discover', 'calendar', 'watchlist', 'livetv', 'music', 'audiobooks', 'settings', 'prefs'];
-  const target = KNOWN.includes(view) ? view : 'home';
+  const KNOWN = ['home', 'movies', 'tv', 'kids', 'search', 'discover', 'calendar', 'watchlist', 'livetv', 'music', 'audiobooks', 'settings', 'prefs'];
+  const target = (view === 'kids' && !kidsUiAvailable()) ? 'home' : (KNOWN.includes(view) ? view : 'home');
   switchView(target, false);
   requestAnimationFrame(() => requestAnimationFrame(() => {
     if (S.view === target && !document.querySelector('#detail.open,#person.open,#player.open')) focusContent();
@@ -22903,7 +23373,7 @@ function focusContent(retried) {
     const rows = musicRows();
     return rows.length ? focusMusic(0) : (chipEls().length ? focusChip(S.chipIdx || 0) : focusMusicSearch());
   }
-  if (['movies', 'tv', 'search', 'library', 'watchlist', 'livetv', 'person'].includes(S.view)) return focusGrid(S.gridIdx || 0);
+  if (['movies', 'tv', 'kids', 'search', 'library', 'watchlist', 'livetv', 'person'].includes(S.view)) return focusGrid(S.gridIdx || 0);
   const v2 = S.rowsView || { hasHero: true };
   return v2.hasHero ? focusHero(0) : focusCard(S.rowIdx, S.colIdx[S.rowIdx] || 0);
 }
@@ -23343,6 +23813,7 @@ function focusGrid(i) {
     }
     if (S.gridIdx >= count - cols * 2) {
       if (['movies', 'tv'].includes(S.view)) runBrowse(false);
+      else if (S.view === 'kids') runKidsBrowse(false);
       else if (S.view === 'library' && !(S.currentLib && S.currentLib.path)) runLibrary(false);
     }
     return;
@@ -23407,6 +23878,7 @@ function focusGrid(i) {
     // or the walk dead-ends at the bottom of page one.
     if (S.gridIdx >= els.length - cols * 2) {
       if (['movies', 'tv'].includes(S.view)) runBrowse(false);
+      else if (S.view === 'kids') runKidsBrowse(false);
       else if (S.view === 'library' && S.currentLib && S.currentLib.path) loadMoreLocalLibraryPage(false);
       else if (S.view === 'library' && !(S.currentLib && S.currentLib.path)) runLibrary(false);
     }
@@ -24448,7 +24920,7 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   // ----- Movies / TV / Search / Library / Watchlist / Live TV / Person: poster grid -----
-  if (['movies', 'tv', 'search', 'library', 'watchlist', 'livetv', 'person'].includes(S.view)) {
+  if (['movies', 'tv', 'kids', 'search', 'library', 'watchlist', 'livetv', 'person'].includes(S.view)) {
     if (S.view === 'person' && $('pBack').classList.contains('focus')) {
       if (k === 'Enter') { if (!e.repeat) backOneRoute(closePerson); return; }
       if (k === 'ArrowDown' || k === 'ArrowRight') return focusGrid(S.gridIdx || 0);
@@ -24710,7 +25182,7 @@ document.addEventListener('keyup', (e) => {
 // root it behaves exactly like Escape (close player/detail/menus, back out of views);
 // at the true root it answers 'exit' and the shell shows press-back-again-to-quit.
 function backToBrowseSectionMenu() {
-  const browseSection = S.view === 'movies' || S.view === 'tv' || S.view === 'library';
+  const browseSection = S.view === 'movies' || S.view === 'tv' || S.view === 'kids' || S.view === 'library';
   if (!browseSection || S.zone === 'rail' || document.body.classList.contains('railOpen')) return false;
   enterRail();
   return true;
@@ -24774,7 +25246,7 @@ window.__tvBack = () => {
   // before leaving the section (one Back shouldn't jump from the bottom of a long result list
   // straight out). Only when focus is in the content, not on the rail.
   if (S.zone !== 'rail') {
-    if (['movies', 'tv', 'search', 'library', 'watchlist', 'person'].includes(S.view) && (S.gridIdx || 0) > 0) {
+    if (['movies', 'tv', 'kids', 'search', 'library', 'watchlist', 'person'].includes(S.view) && (S.gridIdx || 0) > 0) {
       focusGrid(0); return 'ok';
     }
     // Row-based views (Home, Discover) use rows, not a flat grid: Back from anywhere that isn't the

@@ -4162,8 +4162,30 @@ function localItemPayload(ctx, libId, item) {
     streamUrl: file ? `/api/local/${libId}/${rest.idx}?t=${auth.stableStreamToken(ctx.user.id, `local:${libId}:${rest.idx}`)}` : null,
     playUrl: file ? `/api/local/${libId}/${rest.idx}/play` : null,
     artUrl: artFile ? `/api/local/${libId}/art/${rest.idx}?t=${auth.stableStreamToken(ctx.user.id, `art:${libId}:${rest.idx}`)}` : null,
-    thumbUrl: file ? `/api/local/${libId}/thumb/${rest.idx}?t=${auth.stableStreamToken(ctx.user.id, `thumb:${libId}:${rest.idx}`)}` : null,
+    thumbUrl: (file || item.kind === 'show')
+      ? `/api/local/${libId}/thumb/${rest.idx}?t=${auth.stableStreamToken(ctx.user.id, `thumb:${libId}:${rest.idx}`)}`
+      : null,
   };
+}
+function libraryThumbSourceFile(libId, item) {
+  if (item && item.file) return item.file;
+  if (!item || item.kind !== 'show') return null;
+  const rec = libraryRecord(libId);
+  const ep = ((rec && rec.items) || []).find((x) => x.kind === 'episode' && x.showIdx === item.idx && x.file);
+  return ep ? ep.file : null;
+}
+function queueLibraryThumb(libId, idx, sourceFile) {
+  if (!sourceFile || !detectFfmpeg()) return Promise.resolve(null);
+  const dir = path.join(DATA_DIR, 'thumbs');
+  try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+  const file = path.join(dir, `${libId}-${idx}.jpg`);
+  if (fs.existsSync(file) && fs.statSync(file).size > 0) return Promise.resolve(file);
+  if (!thumbJobs.has(file)) {
+    thumbJobs.set(file, makeThumb(sourceFile, file, 120).then((ok) => ok || makeThumb(sourceFile, file, 5))
+      .then((ok) => (ok && fs.existsSync(file) && fs.statSync(file).size > 0) ? file : null)
+      .finally(() => thumbJobs.delete(file)));
+  }
+  return thumbJobs.get(file);
 }
 function tokenizedLocalUrl(raw) {
   try {
@@ -6179,11 +6201,20 @@ const H = {
       : (b.tmdbId === null || b.tmdbId === 'none') ? 'none'
       : (Number.isInteger(+b.tmdbId) && +b.tmdbId > 0 ? +b.tmdbId : null);
     if (ov === null) return send(ctx.res, 400, { error: 'tmdbId must be a TMDB id, null for folder info, or "auto"' });
-    if (ov === 'auto') { delete item.matchOverride; item.tmdbId = null; } else item.matchOverride = ov;
+    if (ov === 'auto') {
+      delete item.matchOverride; item.tmdbId = null; item.poster = null; item.backdrop = null;
+    } else if (ov === 'none') {
+      item.matchOverride = 'none'; item.tmdbId = null; item.poster = null; item.backdrop = null;
+      queueLibraryThumb(lib.id, idx, libraryThumbSourceFile(lib.id, item));
+    } else item.matchOverride = ov;
     if (!(libraryDb.available && libraryDb.updateItem(lib.id, idx, item))) {
       store.update('libitems', {}, (s) => {
         const it = s[lib.id] && s[lib.id].items[idx];
-        if (it) { if (ov === 'auto') { delete it.matchOverride; it.tmdbId = null; } else it.matchOverride = ov; }
+        if (it) {
+          if (ov === 'auto') { delete it.matchOverride; it.tmdbId = null; it.poster = null; it.backdrop = null; }
+          else if (ov === 'none') { it.matchOverride = 'none'; it.tmdbId = null; it.poster = null; it.backdrop = null; }
+          else it.matchOverride = ov;
+        }
         return s;
       });
     }
@@ -6315,7 +6346,7 @@ async function performScan(lib, state, mode = 'scan') {
       const ov = ovOf(best.file);
       if (ov !== undefined) item.matchOverride = ov;
       const prev = ov === 'none' ? null : reuse(best.file);
-      if (ov === 'none') { item.tmdbId = null; /* folder/NFO info only — by admin decision */ }
+      if (ov === 'none') { item.tmdbId = null; item.poster = null; item.backdrop = null; }
       else if (prev && (typeof ov !== 'number' || prev.tmdbId === ov)) {
         item.tmdbId = prev.tmdbId; item.poster = prev.poster; item.backdrop = prev.backdrop;
         item.genres = prev.genres || []; item.title = prev.title; // prev title is TMDB-final
@@ -6347,7 +6378,7 @@ async function performScan(lib, state, mode = 'scan') {
       const ovS = ovOf(`show:${dir}`);
       if (ovS !== undefined) show.matchOverride = ovS;
       const prevShow = ovS === 'none' ? null : reuse(`show:${dir}`);
-      if (ovS === 'none') { show.tmdbId = null; }
+      if (ovS === 'none') { show.tmdbId = null; show.poster = null; show.backdrop = null; }
       else if (prevShow && (typeof ovS !== 'number' || prevShow.tmdbId === ovS)) {
         show.tmdbId = prevShow.tmdbId; show.poster = prevShow.poster; show.backdrop = prevShow.backdrop;
         show.genres = prevShow.genres || []; show.title = prevShow.title;
@@ -6401,7 +6432,7 @@ async function performScan(lib, state, mode = 'scan') {
           const ov = ovOf(full);
           if (ov !== undefined) item.matchOverride = ov;
           const prev = ov === 'none' ? null : reuse(full);
-          if (ov === 'none') { item.tmdbId = null; }
+          if (ov === 'none') { item.tmdbId = null; item.poster = null; item.backdrop = null; }
           else if (prev && (typeof ov !== 'number' || prev.tmdbId === ov)) {
             item.tmdbId = prev.tmdbId; item.poster = prev.poster; item.backdrop = prev.backdrop;
             item.genres = prev.genres || []; item.title = prev.title;
@@ -6603,7 +6634,41 @@ function traktSyncTick() {
 setInterval(traktSyncTick, 60000).unref();
 
 // ---------- handlers, continued ----------
+function searchLibraryRecords(query, allowedLibIds = [], limit = 24) {
+  const raw = String(query || '').trim().toLowerCase();
+  const key = String(query || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  if (raw.length < 2 && !key) return [];
+  const out = [];
+  for (const libId of allowedLibIds) {
+    const rec = libraryRecord(libId);
+    for (const item of (rec && rec.items) || []) {
+      if (!item || item.kind === 'episode') continue;
+      const blob = `${item.title || ''} ${item.originalTitle || ''} ${item.file || ''} ${item.dir || ''}`.toLowerCase();
+      const blobKey = blob.replace(/[^a-z0-9]+/g, ' ');
+      if ((key && blobKey.includes(key)) || (raw && blob.includes(raw))) out.push({ libId, item });
+      if (out.length >= limit) return out;
+    }
+  }
+  return out;
+}
+
 Object.assign(H, {
+  librarySearch: async (ctx) => {
+    const q = String(ctx.url.searchParams.get('q') || '').trim();
+    if (q.length < 2) return send(ctx.res, 200, { items: [] });
+    const allowed = allowedLocalLibraryIds(ctx);
+    const found = libraryDb.available
+      ? libraryDb.search(q, allowed, 24)
+      : searchLibraryRecords(q, allowed, 24);
+    const libs = new Map(store.read('libraries', { list: [] }).list.map((l) => [String(l.id), l]));
+    send(ctx.res, 200, {
+      items: found.map((row) => ({
+        ...localItemPayload(ctx, row.libId, row.item),
+        libraryId: row.libId,
+        libraryName: (libs.get(String(row.libId)) || {}).name || '',
+      })),
+    });
+  },
   localLookup: async (ctx) => {
     const raw = [
       ...ctx.url.searchParams.getAll('key'),
@@ -6746,20 +6811,10 @@ Object.assign(H, {
   // library costs nothing until covers actually scroll into view.
   localThumb: async (ctx) => {
     if (!streamScopeOk(ctx, `thumb:${ctx.m[1]}:${ctx.m[2]}`)) return send(ctx.res, 401, { error: 'token not valid' });
-    const found = localItemFor(ctx, ctx.m[1], ctx.m[2]);
+    const found = localLibraryItemFor(ctx, ctx.m[1], ctx.m[2]);
     if (found.error) return send(ctx.res, found.status || 404, { error: found.error });
-    const item = found.item;
-    if (!item || !item.file || !detectFfmpeg()) return send(ctx.res, 404, { error: 'no thumbnail' });
-    const dir = path.join(DATA_DIR, 'thumbs');
-    try { fs.mkdirSync(dir, { recursive: true }); } catch {}
-    const file = path.join(dir, `${ctx.m[1]}-${ctx.m[2]}.jpg`);
-    if (!fs.existsSync(file)) {
-      if (!thumbJobs.has(file)) {
-        thumbJobs.set(file, makeThumb(item.file, file, 120).then((ok) => ok || makeThumb(item.file, file, 5))
-          .finally(() => thumbJobs.delete(file)));
-      }
-      await thumbJobs.get(file);
-    }
+    const file = await queueLibraryThumb(ctx.m[1], ctx.m[2], libraryThumbSourceFile(ctx.m[1], found.item));
+    if (!file) return send(ctx.res, 404, { error: 'no thumbnail' });
     let stat;
     try { stat = fs.statSync(file); } catch { return send(ctx.res, 404, { error: 'thumbnail failed' }); }
     ctx.res.writeHead(200, { 'content-type': 'image/jpeg', 'content-length': stat.size,
@@ -6776,12 +6831,23 @@ Object.assign(H, {
     const found = localLibraryItemFor(ctx, ctx.m[1], ctx.m[2]);
     if (found.error) return send(ctx.res, found.status || 404, { error: found.error });
     const item = found.item;
-    if (!item || !item.artFile) return send(ctx.res, 404, { error: 'no art' });
+    if (item && item.artFile) {
+      try {
+        const stat = fs.statSync(item.artFile);
+        ctx.res.writeHead(200, { 'content-type': /\.png$/i.test(item.artFile) ? 'image/png' : 'image/jpeg',
+          'content-length': stat.size, 'cache-control': 'private, max-age=86400', 'x-content-type-options': 'nosniff' });
+        const rs = fs.createReadStream(item.artFile);
+        rs.on('error', () => { try { ctx.res.destroy(); } catch {} });
+        return rs.pipe(ctx.res);
+      } catch {}
+    }
+    const file = await queueLibraryThumb(ctx.m[1], ctx.m[2], libraryThumbSourceFile(ctx.m[1], item));
+    if (!file) return send(ctx.res, 404, { error: 'no art' });
     let stat;
-    try { stat = fs.statSync(item.artFile); } catch { return send(ctx.res, 404, { error: 'art missing on disk' }); }
-    ctx.res.writeHead(200, { 'content-type': /\.png$/i.test(item.artFile) ? 'image/png' : 'image/jpeg',
-      'content-length': stat.size, 'cache-control': 'private, max-age=86400', 'x-content-type-options': 'nosniff' });
-    const rs = fs.createReadStream(item.artFile);
+    try { stat = fs.statSync(file); } catch { return send(ctx.res, 404, { error: 'no art' }); }
+    ctx.res.writeHead(200, { 'content-type': 'image/jpeg', 'content-length': stat.size,
+      'cache-control': 'private, max-age=604800', 'x-content-type-options': 'nosniff' });
+    const rs = fs.createReadStream(file);
     rs.on('error', () => { try { ctx.res.destroy(); } catch {} });
     rs.pipe(ctx.res);
   },
@@ -8779,6 +8845,7 @@ const ROUTES = [
   { m: 'GET', re: /^\/api\/audiobook\/search$/, auth: 'user', h: H.audiobookSearch },
   { m: 'POST', re: /^\/api\/audiobook\/play$/, auth: 'user', h: H.audiobookPlay },
   { m: 'GET', re: /^\/api\/libraries$/, auth: 'user', h: H.librariesList },
+  { m: 'GET', re: /^\/api\/libraries\/search$/, auth: 'user', h: H.librarySearch },
   { m: 'GET', re: /^\/api\/libraries\/local-lookup$/, auth: 'user', h: H.localLookup },
   { m: 'POST', re: /^\/api\/libraries$/, auth: 'admin', h: H.libraryCreate },
   { m: 'DELETE', re: /^\/api\/libraries\/(\w+)$/, auth: 'admin', h: H.libraryDelete },

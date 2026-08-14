@@ -269,6 +269,29 @@ class LibraryDb {
     };
   }
 
+  search(query, allowedLibIds = [], limit = 24) {
+    if (!this.available || !this.db || !allowedLibIds.length) return [];
+    const raw = String(query || '').trim();
+    const key = this._titleKey(raw);
+    if (raw.length < 2) return [];
+    const libs = [...new Set(allowedLibIds.map(String))].slice(0, 40);
+    const like = `%${(key || raw.toLowerCase()).replace(/[%_]/g, '')}%`;
+    const rawLike = `%${raw.toLowerCase().replace(/[%_]/g, '')}%`;
+    const placeholders = libs.map(() => '?').join(',');
+    const rows = this.db.prepare(`
+      SELECT lib_id, payload FROM library_items
+      WHERE lib_id IN (${placeholders})
+        AND kind != 'episode'
+        AND (title_key LIKE ? OR lower(title) LIKE ? OR lower(payload) LIKE ?)
+      ORDER BY added_at DESC
+      LIMIT ?
+    `).all(...libs, like, rawLike, like, Math.max(1, Math.min(40, parseInt(limit, 10) || 24)));
+    return rows.map((row) => {
+      const item = this._parsePayload(row);
+      return item ? { libId: row.lib_id, item } : null;
+    }).filter(Boolean);
+  }
+
   lookup(keys = [], allowedLibIds = []) {
     if (!this.available || !this.db || !keys.length || !allowedLibIds.length) return {};
     const out = {};
