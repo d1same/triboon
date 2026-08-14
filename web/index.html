@@ -2107,26 +2107,35 @@ body.mobileShell #upNext .un-cancel{width:42px;height:42px}
 .calItem .cm{font:650 10.5px/1.2 "JetBrains Mono";color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .calItem .cbadge{position:absolute;top:8px;right:8px;font:800 10px "JetBrains Mono";color:var(--onAccent);background:var(--btnPrimary);padding:5px 8px;border-radius:999px;box-shadow:0 8px 18px rgba(0,0,0,.26)}
 
-/* Compact "Up next" pill (bottom-right, just above the seek bar). Translucent like the transport
-   .cbtn buttons so it never blocks the video — no frame/poster/table, just a play CTA + a dismiss
-   with a thin countdown line. */
-/* The raised base position clears the OSD transport; #player.osdHide (mirrored by showOsd/hide —
-   the usual state during credits, when this card appears) docks it near the bottom edge like
-   YouTube instead of floating mid-screen. Deliberately MONOCHROME (white/gray on translucent
-   black): an end-of-episode prompt over credits should not shout in brand colors. */
-#upNext{position:absolute;right:34px;bottom:178px;z-index:6;display:none;align-items:center;gap:8px;transition:bottom .25s ease}
+/* Compact "Up next" pill (bottom-right, just above the seek bar). Flat dark ink so credits
+   stay visible — no glass wash. A small 16:9 still sits on the left; the white play disc
+   overlays it. MONOCHROME on purpose. The play disc grows a white sweep as autoplay counts
+   down. #player.osdHide docks it near the bottom edge like YouTube. */
+#upNext{position:absolute;right:34px;bottom:178px;z-index:6;display:none;align-items:center;gap:10px;transition:bottom .25s ease}
 #player.osdHide #upNext{bottom:30px}
-#upNext.show{display:flex}
-#upNext button{border:0;cursor:pointer;color:var(--text);background:rgba(5,3,9,.42);box-shadow:0 10px 28px rgba(0,0,0,.3);
-  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);transition:background .15s,box-shadow .15s}
-#upNext button:hover,#upNext button.focus,#upNext button:focus{background:rgba(5,3,9,.62);outline:none;box-shadow:0 0 0 2px rgba(255,255,255,.92),0 12px 30px rgba(0,0,0,.42)}
-#upNext .un-play{position:relative;overflow:hidden;display:flex;align-items:center;gap:11px;max-width:322px;padding:9px 16px 9px 10px;border-radius:14px;text-align:left}
-#upNext .un-ic{flex:none;width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:#f2f2f4;color:#0a0a0c}
-#upNext .un-ic svg{width:15px;height:15px;margin-left:1px}
-#upNext .un-txt{display:flex;flex-direction:column;min-width:0;gap:1px}
+#upNext.show{display:flex;animation:unIn .28s ease both}
+@keyframes unIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){#upNext.show{animation:none}}
+#upNext button{border:1px solid rgba(255,255,255,.14);cursor:pointer;color:var(--text);background:rgba(8,6,12,.92);box-shadow:0 8px 24px rgba(0,0,0,.5);transition:background .15s,box-shadow .15s}
+#upNext button:hover,#upNext button.focus,#upNext button:focus{background:rgba(8,6,12,.96);outline:none;box-shadow:0 0 0 2px rgba(255,255,255,.92),0 8px 24px rgba(0,0,0,.5)}
+#upNext .un-play{position:relative;overflow:hidden;display:flex;align-items:center;gap:12px;max-width:400px;padding:8px 16px 8px 8px;border-radius:16px;text-align:left}
+#upNext .un-art{position:relative;flex:none;width:38px;height:38px}
+#upNext.hasThumb .un-art{width:104px;height:58px}
+#upNext .un-thumb{display:none;position:absolute;inset:0;border-radius:10px;background:#16101f center/cover no-repeat}
+#upNext.hasThumb .un-thumb{display:block}
+#upNext.hasThumb .un-thumb::after{content:"";position:absolute;inset:0;border-radius:10px;background:rgba(0,0,0,.28)}
+#upNext .un-ic{--un-cd:0%;position:absolute;inset:0;border-radius:50%;display:grid;place-items:center;background:#f2f2f4;color:#0a0a0c}
+#upNext.hasThumb .un-ic{inset:auto;left:50%;top:50%;width:28px;height:28px;transform:translate(-50%,-50%);box-shadow:0 2px 10px rgba(0,0,0,.5)}
+#upNext .un-ic::before{content:"";position:absolute;inset:-3px;border-radius:50%;background:conic-gradient(from -90deg,rgba(255,255,255,.92) var(--un-cd),transparent 0);opacity:0;pointer-events:none}
+#upNext.counting .un-ic::before{opacity:1}
+#upNext .un-ic svg{width:15px;height:15px;margin-left:1px;position:relative;z-index:1}
+#upNext.hasThumb .un-ic svg{width:12px;height:12px}
+#upNext .un-txt{display:flex;flex-direction:column;min-width:0;gap:2px}
 #upNext .un-lbl{font:700 9px "JetBrains Mono";letter-spacing:.14em;color:rgba(255,255,255,.72);text-transform:uppercase}
-#upNext .un-title{font:700 13.5px "Sora";line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#upNext .un-prog{position:absolute;left:0;right:0;bottom:0;height:2px;display:none}
+#upNext .un-title{font:700 14.5px "Sora";line-height:1.15;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#upNext .un-sub{font:600 11.5px "Albert Sans";color:rgba(255,255,255,.52);letter-spacing:.02em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#upNext .un-sub:empty{display:none}
+#upNext .un-prog{position:absolute;left:10px;right:10px;bottom:0;height:2px;display:none;border-radius:2px;overflow:hidden}
 #upNext.counting .un-prog{display:block}
 #upNext .un-prog i{display:block;height:100%;width:0;background:rgba(255,255,255,.9);transition:width 1s linear}
 #upNext .un-cancel{flex:none;width:46px;height:46px;border-radius:50%;display:grid;place-items:center;color:var(--muted)}
@@ -3830,8 +3839,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
       <div class="hint">Dialogue only auto-picks clean captions. SDH prefers captions that include [music], [door creaks], and speaker labels for the hard of hearing. Both stay available in the captions menu.</div>
     </div>
     <div class="panel"><h2>Playback</h2>
-      <p>Auto-play starts the next episode after a 10-second countdown — off shows the
-         Up&nbsp;Next card without the countdown.</p>
+      <p>Auto-play starts the next episode when this one ends. Off returns you to the show page.</p>
       <div class="sizePick" id="prefAutoplay">
         <button data-ap="1">Auto-play on</button><button data-ap="0">Auto-play off</button>
       </div>
@@ -4455,10 +4463,14 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
     <div class="loadStatus" id="plStage">Preparing</div></div></div>
   <div id="upNext">
     <button class="un-play focusable" id="unPlay">
-      <span class="un-ic"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="6 4 20 12 6 20 6 4"/></svg></span>
+      <span class="un-art" id="unArt">
+        <span class="un-thumb" id="unThumb"></span>
+        <span class="un-ic"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="6 4 20 12 6 20 6 4"/></svg></span>
+      </span>
       <span class="un-txt">
         <span class="un-lbl">Up next<span id="unCdWrap"> · <span id="unCount">10</span>s</span></span>
         <span class="un-title" id="unTitle"></span>
+        <span class="un-sub" id="unSub"></span>
       </span>
       <span class="un-prog" id="unProg"><i></i></span>
     </button>
@@ -5623,8 +5635,15 @@ async function prepareHomeTvNext(cw, timeoutMs = HOME_NEXT_WAIT_MS) {
     // update right away"). The HOME_NEXT_WAIT_MS race below still bounds home's first paint.
     S._homeTvNextJob = watchPostsSettled().then(() => api('/api/watch/next' + profileQ()))
       .then((items) => {
-        if (S._homeTvNextFp === fp) S._homeTvNext = items || [];
-        return S._homeTvNext;
+        if (S._homeTvNextFp !== fp) return S._homeTvNext;
+        const list = items || [];
+        S._homeTvNext = list;
+        const pending = S._pendingHomeNext;
+        if (pending && list.some((x) => x && (x.key === pending.key || continueWatchingIdentity(x) === continueWatchingIdentity(pending)))) {
+          S._pendingHomeNext = null;
+        }
+        maybeRepaintHomeNextUp(list);
+        return list;
       })
       .catch(() => {
         if (S._homeTvNextFp === fp) S._homeTvNext = [];
@@ -5634,6 +5653,66 @@ async function prepareHomeTvNext(cw, timeoutMs = HOME_NEXT_WAIT_MS) {
   }
   if (!timeoutMs) { await S._homeTvNextJob; return true; }
   return await Promise.race([S._homeTvNextJob.then(() => true), waitMs(timeoutMs, false)]);
+}
+function rememberPendingHomeNext(ne) {
+  const it = ne && ne.item;
+  if (!it || !it.key || !it.tmdbId) return null;
+  const title = String(it.title || ne.epName || '').replace(/\s*[—-]\s*S\d+E\d+.*$/i, '').replace(/\s+S\d+E\d+.*$/i, '').trim()
+    || String(ne.epName || 'Next episode');
+  const card = {
+    key: it.key,
+    title,
+    q: it.q || `${title} ${ne.tag || ''}`.trim(),
+    year: it.year || '',
+    genre: 'Episode',
+    rating: it.rating || '—',
+    overview: it.overview || '',
+    poster: it.poster,
+    backdrop: it.backdrop || ne.still,
+    tmdbId: it.tmdbId,
+    type: 'episode',
+    progress: 0,
+    resume: 0,
+    qualityRank: it.qualityRank,
+    updatedAt: Date.now(),
+    _nextEp: true,
+    _cw: true,
+  };
+  S._pendingHomeNext = card;
+  preparePlaybackSource(card, 0);
+  return card;
+}
+function pendingHomeNextCard(seen) {
+  const it = S._pendingHomeNext;
+  if (!it || !it.key) return null;
+  if (seen && seen.has(it.key)) return null;
+  return it;
+}
+function watchLooksFinished(w) {
+  if (!w) return false;
+  if (w.watched) return true;
+  const d = +w.duration || 0;
+  const pos = +w.position || 0;
+  return d > 0 && pos / d > 0.92;
+}
+function applyPendingDetailNext() {
+  const pending = S._pendingHomeNext;
+  const it = S.detailItem;
+  if (!pending || !it || it.type !== 'tv') return;
+  if (Number(pending.tmdbId) !== Number(it.tmdbId)) return;
+  updateDetailPlayLabel({ label: 'Continue', target: pending });
+}
+function maybeRepaintHomeNextUp(items) {
+  if (S.view !== 'home' || S._booting) return;
+  const cw = (S.rows || []).find((r) => r && r.name === 'Continue watching');
+  const have = new Set((cw && cw.items || []).map((it) => it && it.key).filter(Boolean));
+  const pendingKey = S._pendingHomeNext && S._pendingHomeNext.key;
+  const missing = (items || []).some((it) => it && it.key && !have.has(it.key));
+  if (!missing && (!pendingKey || have.has(pendingKey))) return;
+  publishHomeRows(homeRowsFromWatch(cachedWatchRowsForHome(), false), { preserveFocus: true, focusSnapshot: homeFocusSnapshot() });
+  for (const it of (items || [])) {
+    if (it && it._nextEp) preparePlaybackSource(it, 0);
+  }
 }
 // Build the Continue Watching cards from a /api/watch payload (next-episode bumps only when
 // the local map is already known — they must never force a boot-time library fetch).
@@ -5654,18 +5733,27 @@ function buildCwItems(cw) {
     resume: w.position, _traktPct: w.traktPct || 0, _cw: true, _cwSortAt: w.updatedAt || 0,
     };
   });
+  const hiddenNext = cwHiddenNextSet();
+  const seen = new Set(items.map((it) => continueWatchingIdentity(it) || it.key));
   if (Array.isArray(S._homeTvNext)) {
     // The server next-up list is cached under a fingerprint of WATCHED episodes, which doesn't
     // change when you dismiss an as-yet-unwatched next-up card — so the stale cache would re-add a
     // just-removed card. Honor the local dismissal set here (the server also strips it on refetch).
-    const hiddenNext = cwHiddenNextSet();
-    const seen = new Set(items.map((it) => continueWatchingIdentity(it) || it.key));
     for (const it of S._homeTvNext) if (it && it.key && !seen.has(it.key) && !hiddenNext.has(it.key)) {
       const id = continueWatchingIdentity(it) || it.key;
       if (seen.has(id)) continue;
       items.push(stampContinueWatchingSort({ ...it, _cw: true }, cw));
       seen.add(id);
     }
+  }
+  const pending = pendingHomeNextCard(seen);
+  if (pending && !hiddenNext.has(pending.key)) {
+    const id = continueWatchingIdentity(pending);
+    for (let i = items.length - 1; i >= 0; i--) {
+      const itemId = continueWatchingIdentity(items[i]) || items[i].key;
+      if (id && itemId === id && items[i].key !== pending.key) items.splice(i, 1);
+    }
+    items.push(stampContinueWatchingSort({ ...pending }, cw));
   }
   if (S.localMap) {
     try { items.push(...nextEpisodeBumps(cw, items).map((it) => stampContinueWatchingSort(it, cw, it._cwSortAt))); } catch {}
@@ -8382,7 +8470,7 @@ function pickLocalShowPlayTarget(show, episodes) {
   const items = (episodes || []).slice().sort((a, b) => a.s - b.s || a.e - b.e).map((ep) => localEpisodeItemOf(show, ep));
   if (!items.length) return updateDetailPlayLabel({ label: 'Play', target: show });
   const wm = S.watchMap || {};
-  const inProg = items.filter((item) => wm[item.key] && !wm[item.key].watched && wm[item.key].position > 30)
+  const inProg = items.filter((item) => wm[item.key] && !watchLooksFinished(wm[item.key]) && wm[item.key].position > 30)
     .sort((a, b) => (wm[b.key].updatedAt || 0) - (wm[a.key].updatedAt || 0))[0];
   if (inProg) {
     $('dStartOver').style.display = '';
@@ -8543,13 +8631,17 @@ function retargetDetailFromEpisodeCard(card) {
 function pickNextUp(show, seasons) {
   const prefix = `tmdb:tv:${show.tmdbId}:s`, wm = S.watchMap || {};
   const localEpisodes = localEpisodesForShow(show);
-  const inProg = Object.keys(wm).filter((k) => k.startsWith(prefix) && !wm[k].watched && wm[k].position > 30)
+  const pending = S._pendingHomeNext;
+  const pendingForShow = pending && Number(pending.tmdbId) === Number(show.tmdbId) ? pending : null;
+  const inProg = Object.keys(wm).filter((k) => k.startsWith(prefix) && !watchLooksFinished(wm[k]) && wm[k].position > 30)
     .sort((a, b) => wm[b].updatedAt - wm[a].updatedAt)[0];
   if (inProg) {
     const m = /s(\d+)e(\d+)/.exec(inProg);
     updateDetailPlayLabel({ label: 'Resume', target: epTarget(show, +m[1], +m[2], wm[inProg].position) });
+  } else if (pendingForShow) {
+    updateDetailPlayLabel({ label: 'Continue', target: pendingForShow });
   } else {
-    const watched = Object.keys(wm).filter((k) => k.startsWith(prefix) && wm[k].watched)
+    const watched = Object.keys(wm).filter((k) => k.startsWith(prefix) && watchLooksFinished(wm[k]))
       .map((k) => { const m = /s(\d+)e(\d+)/.exec(k); return { s: +m[1], e: +m[2] }; })
       .sort((a, b) => a.s - b.s || a.e - b.e);
     if (localEpisodes.length) {
@@ -11729,7 +11821,7 @@ window.__tvNativeVideoClosed = (pos, dur, ended, token) => {
       S.upNextShown = false;
       revealWebPlayerShell(p.item);
       $('playerLoader').classList.remove('show');
-      finishEpisodeToNext();
+      if (!finishEpisodeToNext()) closePlayer({ ended: true });
       return;
     }
     handleVodPlaybackEnded(pos, dur);
@@ -12449,9 +12541,9 @@ async function prepNextEpisode(it) {
     // play() reuses instantly when the user (or autoplay) advances.
   } catch {}
 }
-// Lead time before the episode end to mount the next episode so the handoff feels local. Kept
-// short so the next episode's mount does not tie up provider connections for the whole episode.
-const NEXT_EP_PREP_LEAD_SECONDS = 90;
+// Lead time before the episode end to mount the next episode so Play / autoplay feels local.
+// Two minutes is long enough to find a healthy file without holding connections for the whole show.
+const NEXT_EP_PREP_LEAD_SECONDS = 120;
 function maybePrepareNextEpisode(t, d) {
   if (!d || !S.nextEp || S.nextEpPrepared || (d - t) > NEXT_EP_PREP_LEAD_SECONDS || (d - t) <= 0) return;
   const item = S.nextEp.item; if (!item) return;
@@ -12462,11 +12554,12 @@ function maybePrepareNextEpisode(t, d) {
 }
 const UP_NEXT_COUNTDOWN_SECONDS = 10;
 // Streamed releases carry no credits-start chapter marker, so the Up Next card uses a runtime
-// heuristic instead of appearing only in the last seconds: ~3.5% of the runtime, clamped to
-// 30-90s (42-min episode → ~88s, 22-min → ~46s — about where credits typically roll). The card
-// in this early window is a MANUAL choice; the autoplay countdown arms separately, only inside
-// the true final seconds (see armUpNextCountdown), so autoplay can never eat the ending.
-function upNextEarlyWindow(d) { return Math.max(30, Math.min(90, Math.round(d * 0.035))); }
+// heuristic: ~1.8% of the runtime plus 15s, clamped to 35-55s (42-min episode → 55s, 22-min → ~39s).
+// The old 30-90s window landed in the last scene. This one is still credit-roll time, just
+// early enough to notice. The card in this window is a MANUAL choice; the autoplay countdown
+// arms separately, only inside the true final seconds (see armUpNextCountdown), so autoplay
+// can never eat the ending.
+function upNextEarlyWindow(d) { return Math.max(35, Math.min(55, Math.round(d * 0.018) + 15)); }
 // Native ExoPlayer hides the WebView, so the web #upNext overlay can't draw over the video.
 // When a v2+ shell exposes the native Up Next card, drive THAT instead — the countdown still
 // lives here (this JS keeps running while the WebView is hidden), we just render via the bridge.
@@ -12474,28 +12567,50 @@ function nativeUpNextBridge() {
   return (S.playing && S.playing.usingNative && window.TriboonTV
     && typeof window.TriboonTV.upNext === 'function') ? window.TriboonTV : null;
 }
+function upNextStillUrl(ne) {
+  if (!ne) return '';
+  return absoluteArtworkUrl(ne.still, ne.item && ne.item.backdrop, ne.item && ne.item.poster);
+}
+function setUpNextThumb(url) {
+  const root = $('upNext');
+  const thumb = $('unThumb');
+  const safe = String(url || '').trim();
+  root.classList.toggle('hasThumb', !!safe);
+  if (thumb) thumb.style.backgroundImage = safe ? ('url("' + safe.replace(/"/g, '') + '")') : '';
+}
 function pushNativeUpNext(ne, seconds, autoplay) {
   const tv = nativeUpNextBridge(); if (!tv) return;
-  try { tv.upNext(JSON.stringify({ title: ne.epName || ne.tag, sub: ne.tag, seconds, autoplay: !!autoplay })); } catch {}
+  try { tv.upNext(JSON.stringify({ title: ne.epName || ne.tag, sub: ne.tag, still: upNextStillUrl(ne), seconds, autoplay: !!autoplay })); } catch {}
 }
 function hideUpNextUi() {
   $('upNext').classList.remove('show');
   $('upNext').classList.remove('counting');
+  $('upNext').classList.remove('hasThumb');
+  setUpNextThumb('');
   if (S.upNextTimer) { clearInterval(S.upNextTimer); S.upNextTimer = null; }
   if (window.TriboonTV && typeof window.TriboonTV.upNextHide === 'function') { try { TriboonTV.upNextHide(); } catch {} }
 }
 // Thin countdown progress fill under the pill: grows left→right toward autoplay.
 function setUpNextProgress(elapsed, total) {
+  const pct = Math.max(0, Math.min(100, total ? (elapsed / total) * 100 : 0));
   const fill = $('unProg') && $('unProg').firstElementChild;
-  if (fill) fill.style.width = Math.max(0, Math.min(100, total ? (elapsed / total) * 100 : 0)) + '%';
+  if (fill) fill.style.width = pct + '%';
+  const ic = document.querySelector('#upNext .un-ic');
+  if (ic) ic.style.setProperty('--un-cd', pct + '%');
 }
 function showUpNext() {
+  // The credits card is off: each show's credits are a different length, so a clock guess
+  // kept landing in the last scene or too late. Next episode still warms in the last 2 minutes.
+  return;
   const ne = S.nextEp; if (!ne) return;
   S.upNextShown = true;
   const native = nativeUpNextBridge();
   const autoplay = prefAutoplay();
   if (!native) {
     $('unTitle').textContent = ne.epName || ne.tag || 'Next episode';
+    const sub = $('unSub');
+    if (sub) sub.textContent = (ne.tag && ne.epName && ne.tag !== ne.epName) ? ne.tag : '';
+    setUpNextThumb(upNextStillUrl(ne));
     $('upNext').classList.remove('counting');
     setUpNextProgress(0, UP_NEXT_COUNTDOWN_SECONDS);
     $('upNext').classList.add('show');
@@ -12532,6 +12647,7 @@ function armUpNextCountdown() {
   }, 1000);
 }
 function maybeShowUpNext(t, d, opts = {}) {
+  return;
   if (!d || !S.nextEp || (d - t) <= 0) return;
   if (!opts.native && $('video').paused) return;
   const remaining = d - t;
@@ -12549,15 +12665,12 @@ function finishEpisodeToNext() {
   if (!S.nextEp) return false;
   const p = S.playing;
   if (p) p._ended = true;
-  // EOF completes the choice window that was already shown during the final ten seconds. Starting
-  // another ten-second countdown here is both redundant and, on Android, used to expose details.
   saveWatch(true, { watched: true });
   if (prefAutoplay() && !S.upNextDismissed) {
     playNextEpisode();
-  } else if (!S.upNextDismissed && !S.upNextShown) {
-    showUpNext();
+    return true;
   }
-  return true;
+  return false;
 }
 function playNextEpisode() {
   const ne = S.nextEp;
@@ -12962,7 +13075,9 @@ async function saveWatch(final, opts = {}) {
   // only ever marked watched if a 10s tick happened to fire in the last ~8% — which it usually
   // did not. This is the fix for "only marks watched if I watch the ENTIRE thing".
   const nearEnd = d ? pos / d > 0.92 : false;
-  const watched = opts && opts.watched != null ? !!opts.watched : nearEnd;
+  // EOF sets p._ended before teardown. A later close/back save can see duration=0 or
+  // currentTime=0 and must not un-watch the episode we just finished.
+  const watched = opts && opts.watched != null ? !!opts.watched : (nearEnd || !!(p && p._ended));
   // Pin the PLAYING source for resume once this session has really played ~30s past its start
   // point — resume used to re-run auto-pick, which forgot a manual Sources choice (back to the
   // "original" source) and happily re-served a source that had failed. A source that dies
@@ -13032,7 +13147,10 @@ async function closePlayer(opts = {}) {
   // opts.ended => playback reached the end of the file: record it watched even if the duration
   // probe never landed (remux/transcode reports duration=0 until /api/tracks resolves), which
   // otherwise left finished movies stuck at "not watched".
-  const finalWatch = saveWatch(true, opts && opts.ended ? { watched: true } : {});
+  // finishEpisodeToNext also sets _ended before Up Next; Back from that card is closePlayer()
+  // without ended, and must keep the episode watched so Home/Details jump to the next one.
+  const finished = !!(opts && opts.ended) || !!(S.playing && S.playing._ended);
+  const finalWatch = saveWatch(true, finished ? { watched: true } : {});
   const finalActivity = stopActivityHeartbeat();
   if (canUseNativeVideoPlayer() && window.TriboonTV.closeVideo) {
     try { window.TriboonTV.closeVideo(); } catch {}
@@ -13056,6 +13174,7 @@ async function closePlayer(opts = {}) {
   closeTrackMenu({ restoreFocus: false });
   closePlayerStats();
   S.playerSeasonStrip = null;
+  if (S.nextEp) rememberPendingHomeNext(S.nextEp);
   S.nextEp = null; updateNextEpisodeButton();
   S.playing = null;
   updatePlayerControlAvailability();
@@ -13065,6 +13184,7 @@ async function closePlayer(opts = {}) {
     S.view = 'detail';
     try { await finalWatch; await finalActivity; await loadWatchState(true); } catch {}
     if (S.detailItem) syncDetailButtons(S.detailItem);
+    applyPendingDetailNext();
     if (S.detailItem && S.detailItem.type === 'tv' && S.detailSeason != null) loadSeason(S.detailItem, S.detailSeason);
     // The player owns S.zone while open, so testing for a fictional "detail" zone stranded the
     // focus ring on the now-hidden player. Always return to a visible primary detail action.
@@ -13076,6 +13196,7 @@ async function closePlayer(opts = {}) {
     S.playerReturn = null;
     try { await finalWatch; await finalActivity; await loadWatchState(true); } catch {}
     await openDetail(finishedTarget);
+    applyPendingDetailNext();
   } else {
     const ret = S.playerReturn || { view: 'home' };
     // Continue Watching (and next-episode) cards play straight from home with no detail page
@@ -13105,6 +13226,7 @@ async function closePlayer(opts = {}) {
         try { await finalWatch; await finalActivity; await loadWatchState(true); await detailReady; } catch {}
         if (S.detailItem && S.detailItem.tmdbId === cwDetailTarget.tmdbId) {
           syncDetailButtons(S.detailItem);
+          applyPendingDetailNext();
           if (S.detailItem.type === 'tv' && S.detailSeason != null) loadSeason(S.detailItem, S.detailSeason);
         }
       })();

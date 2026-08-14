@@ -125,6 +125,32 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-13, v2.9.11 Home/Details next-episode + Up Next off + 2-minute prepare:
+
+- Version contract: `package.json` 2.9.11; Android `versionName` 2.9.11 /
+  `versionCode` 329; Windows client package/Tauri/Cargo 2.9.11.
+- After an episode ends, Home and Details jump to the next episode without
+  waiting for a leave/reopen. The in-player Up Next card is off (credits
+  length is not guessable). Autoplay starts the next file; off returns to
+  the show page. `/api/prepare` for the next episode fires at 120 seconds
+  remaining.
+- `npm.cmd test` 565/565. `npm.cmd run verify:full -- -AndroidDevice
+  emulator-5554 -AndroidHostServerPort 7777` passed whitespace, JS syntax,
+  web parse, focused P9/P14/P11, full Node suite, isolated `/api/server`
+  2.9.11 smoke, household VOD/IPTV/overlapping Play, Android
+  lint/native-unit/debug build, and ExoPlayer stress
+  `bench/stress-results/android-tv-stress-20260813-223559.json` (`ok: true`,
+  zero failures/warnings).
+- Household live on `http://localhost:7777` (v2.9.11): Mario 4K
+  4033ms/144ms/615ms/13ms (ready SLOW, stream OK, English-HONE);
+  FROM S01E01 2941ms/206ms/613ms/1064ms (resume SLOW); overlapping Play
+  8ms/11ms first-byte; IPTV ABC then ESPN web+native first-bytes OK.
+- Left out of this ship on purpose: Because-you-watched still seeds from the
+  latest Continue Watching card; The Office AU can still win a 4K pick for
+  the US show.
+- Unverified on this run: Windows native GPU/HDR, signed-in browser
+  click-through, and episode-handoff / nested Back / CW source recovery.
+
 2026-08-13, v2.9.10 Lioness title-index merge + year rank + quiet fallbacks:
 
 - Version contract: `package.json` 2.9.10; Android `versionName` 2.9.10 /
