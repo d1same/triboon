@@ -888,8 +888,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'a late /api/watch/next answer must fold next-up into Home instead of waiting for the next app resume');
   assert.match(ui, /function rememberPendingHomeNext\(ne\) \{[\s\S]+S\._pendingHomeNext = card;[\s\S]+preparePlaybackSource\(card, 0\)/,
     'backing out of a finished episode should seed Home next-up from the player and prefetch that file');
-  assert.match(ui, /if \(S\.nextEp\) rememberPendingHomeNext\(S\.nextEp\);[\s\S]+S\.nextEp = null; updateNextEpisodeButton\(\)/,
-    'closePlayer must keep the already-known next episode before it clears the player handoff');
+  assert.match(ui, /if \(finished && S\.nextEp\) rememberPendingHomeNext\(S\.nextEp\);[\s\S]+else clearPendingHomeNextForItem\(closingItem\);[\s\S]+S\.nextEp = null; updateNextEpisodeButton\(\)/,
+    'closePlayer must seed Home next-up only after the current episode actually finished');
+  assert.match(ui, /function clearPendingHomeNextForItem\(item\) \{[\s\S]+S\._pendingHomeNext = null/,
+    'leaving a half-watched episode must drop pending next-up so Home stays on Continue Watching');
   assert.match(ui, /const pending = pendingHomeNextCard\(seen\);[\s\S]+items\.push\(stampContinueWatchingSort\(\{ \.\.\.pending \}, cw\)\)/,
     'Continue Watching must paint the pending next episode even when /api/watch/next is still in flight');
   assert.match(ui, /function applyPendingDetailNext\(\) \{[\s\S]+updateDetailPlayLabel\(\{ label: 'Continue', target: pending \}\)/,

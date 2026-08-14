@@ -5654,6 +5654,13 @@ async function prepareHomeTvNext(cw, timeoutMs = HOME_NEXT_WAIT_MS) {
   if (!timeoutMs) { await S._homeTvNextJob; return true; }
   return await Promise.race([S._homeTvNextJob.then(() => true), waitMs(timeoutMs, false)]);
 }
+function clearPendingHomeNextForItem(item) {
+  const pending = S._pendingHomeNext;
+  if (!pending || !item) return;
+  if (Number(pending.tmdbId) && Number(pending.tmdbId) === Number(item.tmdbId)) {
+    S._pendingHomeNext = null;
+  }
+}
 function rememberPendingHomeNext(ne) {
   const it = ne && ne.item;
   if (!it || !it.key || !it.tmdbId) return null;
@@ -13174,7 +13181,10 @@ async function closePlayer(opts = {}) {
   closeTrackMenu({ restoreFocus: false });
   closePlayerStats();
   S.playerSeasonStrip = null;
-  if (S.nextEp) rememberPendingHomeNext(S.nextEp);
+  // Next-up is only for a finished episode. A mid-watch Back still has S.nextEp
+  // (the 2-minute prepare / Play Next target) and must not steal Continue Watching.
+  if (finished && S.nextEp) rememberPendingHomeNext(S.nextEp);
+  else clearPendingHomeNextForItem(closingItem);
   S.nextEp = null; updateNextEpisodeButton();
   S.playing = null;
   updatePlayerControlAvailability();
