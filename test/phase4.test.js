@@ -960,7 +960,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Android TV cover size is never overridden by the desktop browse helper');
   assert.match(ui, /body\.shortBrowseBd:not\(\.tv\) #bdInfo[\s\S]+-webkit-line-clamp:1[\s\S]+@media \(max-height:820px\)[\s\S]+body\.shortBrowseBd:not\(\.tv\) #bdInfo \.bdiC,[\s\S]+display:none/,
     'browser poster browse pages should compact the focused-title band without touching TV');
-  assert.match(ui, /function browserBrowseCoverPx\(size\) \{[\s\S]+document\.body\.classList\.contains\('tv'\)[\s\S]+window\.innerHeight <= 820[\s\S]+return size === 'L' \? '190px'[\s\S]+const px = window\.innerWidth <= 600 \? '140px' : \(browserBrowseCoverPx\(s\) \|\| table\[s\] \|\| table\.M\);[\s\S]+const shortBrowserBrowse = document\.body\.classList\.contains\('shortBrowseBd'\) && !document\.body\.classList\.contains\('tv'\);[\s\S]+shortBrowserBrowse \? \(h <= 820 \? 128/,
+  assert.match(ui, /function browserBrowseCoverPx\(size\) \{[\s\S]+document\.body\.classList\.contains\('tv'\)[\s\S]+window\.innerHeight <= 820[\s\S]+return size === 'L' \? '190px'[\s\S]+const phoneCovers = document\.body\.classList\.contains\('mobileShell'\) \|\| window\.innerWidth <= 600;[\s\S]+const px = phoneCovers \? '140px' : \(browserBrowseCoverPx\(s\) \|\| table\[s\] \|\| table\.M\);[\s\S]+const shortBrowserBrowse = document\.body\.classList\.contains\('shortBrowseBd'\) && !document\.body\.classList\.contains\('tv'\);[\s\S]+shortBrowserBrowse \? \(h <= 820 \? 128/,
     'desktop/tablet browse pages should use compact browser poster sizing and a compact row reserve');
   assert.match(ui, /function browserBrowseCoverPx[\s\S]+window\.innerWidth <= 980\) return window\.innerHeight <= 820 \? '118px' : '138px'/,
     'narrow browser windows (<=980, TV/phone excluded above) use compact browse covers so >=4 columns and a full second row fit under the smaller backdrop — kills the dark band that stranded posters at the bottom');
@@ -1274,6 +1274,18 @@ test('Kids catalog stays PG-max and lives on a hideable menu page', () => {
     'Android Preferences → Menu does not list Kids');
   assert.match(ui, /if \(v === 'kids' && !kidsUiAvailable\(\)\) return switchView\('home', push, opts\)/,
     'an Android #/kids route falls back to Home');
+  assert.match(ui, /function menuPrefsKey\(\) \{[\s\S]+profilePrefKey\('menu'\)/,
+    'menu hide/show including Kids is stored per profile, not one device-wide owner key');
+  assert.match(ui, /hidden: \(legacy\.hidden \|\| \[\]\)\.filter\(\(n\) => n !== 'kids'\)[\s\S]+known: \(legacy\.known \|\| \[\]\)\.filter\(\(n\) => n !== 'kids'\)/,
+    'an old shared menu pref must not keep Kids hidden for the next user');
+  assert.match(ui, /function writeMenuPrefs\(p\) \{[\s\S]+localStorage\.setItem\(menuPrefsKey\(\)[\s\S]+syncProfilePrefsUp\(\)/,
+    'Kids/menu choices sync to the signed-in profile so every user keeps their own');
+  assert.match(ui, /applyServerProfilePrefs\(r\.prefs\)[\s\S]+applyMenuPrefs\(\)/,
+    'loading a profile reapplies that profile\'s Kids/menu hide list');
+  assert.match(ui, /id="prefKidsMenu"[\s\S]+data-kids="1">Show Kids[\s\S]+data-kids="0">Hide Kids/,
+    'Preferences has a Kids on/off that any user can change');
+  assert.match(ui, /function saveKidsMenuVisible\(on\) \{[\s\S]+saveMenuPrefs\(/,
+    'the Kids toggle writes this profile\'s menu prefs');
 });
 
 test('episode handoff stays player-to-player before local lookup and EOF never restarts autoplay', () => {
@@ -2748,6 +2760,9 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android top-left burger hitbox should not double-toggle taps already delivered to the burger button');
   assert.match(ui, /function androidBurgerHit\(e\) \{[\s\S]+if \(document\.body\.classList\.contains\('mobileNav'\)\) return false;[\s\S]+const burger = \$\('burger'\);/,
     'when the phone drawer is OPEN the top-left corner hit-test yields, so a tap on the profile avatar (which sits in that corner) reaches its Settings handler instead of closing the drawer');
+  assert.ok(ui.includes('body.mobileNav #railUser{padding-left:52px}')
+    && ui.includes('body.mobileShell.mobileNav #railUser{padding-left:52px}'),
+    'open phone drawer should slide the profile row right of the burger so the name is not covered');
   assert.match(ui, /\$\('burger'\)\.addEventListener\('pointerdown'[\s\S]+\$\('burger'\)\.addEventListener\('touchend'[\s\S]+Date\.now\(\) - burgerTouchAt < 500/,
     'phone burger should have pointer and touch handling with duplicate-tap protection');
   assert.match(ui, /window\.__tvBack = \(\) => \{[\s\S]+document\.body\.classList\.contains\('mobileNav'\)[\s\S]+document\.body\.classList\.remove\('mobileNav'\);[\s\S]+return 'ok';/,
@@ -2794,6 +2809,11 @@ test('Android native player: direct source and native chrome stay out of the web
     && ui.includes('body.mobileShell #person .personHead{flex-direction:column;align-items:center;gap:16px')
     && ui.includes('body.mobileShell #person .personHead .pInfo{width:100%;text-align:center}'),
     'mobile person pages should stack the profile header instead of squeezing text beside the poster');
+  assert.ok(ui.includes('#detail .detailHero{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:18px;min-height:0;padding-top:62px}')
+    && ui.includes('body.mobileShell #detail .detailHero{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:18px;min-height:0;padding-top:62px}')
+    && ui.includes('body.mobileShell #dTitle{height:auto;min-height:0;justify-content:center;margin-bottom:10px}')
+    && !ui.includes('#detail .detailHero{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:18px;min-height:0;padding-top:82px}'),
+    'phone details should drop the desktop 140px title slot and the extra 82px hero pad');
   assert.match(ui, /const DETAIL_CAST_BATCH = 20;[\s\S]+function appendCastBatch\(row\)[\s\S]+row\.addEventListener\('scroll', maybeLoadMoreCast, \{ passive: true \}\)/,
     'detail cast rows should keep the first render bounded and append more cast as the row scrolls');
   assert.match(ui, /const PERSON_WORKS_BATCH = 24;[\s\S]+\.map\(mapTmdb\);\s+renderPersonWorks\(credits\);[\s\S]+function loadMorePersonWorks\(focusNew = false\)[\s\S]+if \(start === 0\) renderGrid\(batch, \$\('personGrid'\)\);[\s\S]+else appendGrid\(batch\);/,
@@ -3532,6 +3552,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'screensaver should show cached art immediately and repaint only if fresh trending art arrives');
   assert.match(ui, /\$\('ssTitle'\)\.textContent = active\.title \|\| '';/,
     'screensaver caption should show only the title, without appending year, type, genre, or row name');
+  assert.match(ui, /if \(seen\.has\(key\) \|\| \(art && seen\.has\('art:' \+ art\)\)\) return;/,
+    'screensaver should not collect the same poster twice under different titles');
+  assert.match(ui, /if \(activeArt\) seenArt\.add\(activeArt\);[\s\S]+if \(!art \|\| seenArt\.has\(art\)\) continue;/,
+    'the right-side screensaver deck should skip the featured still and any repeated poster');
   assert.doesNotMatch(ui, /\$\('ssTitle'\)\.textContent = active\.sub \? `\$\{active\.title\}/,
     'screensaver caption should not rebuild the old title plus metadata line');
   assert.match(ui, /function noteScreensaverActivity\(e\) \{[\s\S]+if \(S\.screensaverOn\) \{[\s\S]+hideScreensaver\(true\);[\s\S]+resetScreensaverIdle\(\);[\s\S]+e\.preventDefault\(\);[\s\S]+e\.stopImmediatePropagation\(\);[\s\S]+e\.type === 'click' && S\._screensaverWakeUntil/,
@@ -5799,6 +5823,17 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'Android mobile shell should get the same compact Home treatment as narrow browsers');
   assert.match(ui, /body\.mobileShell #hero h1\{font-size:clamp\(24px,7\.4vw,32px\);line-height:1\.08;margin-bottom:8px;height:2\.16em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden\}/,
     'Android mobile shell Home title should use the same stable two-line height');
+  assert.ok(ui.includes('#rows{max-height:calc(100vh - 176px);gap:22px}')
+    && ui.includes('#discoverRows{margin-top:0;max-height:calc(100vh - 122px);gap:22px}')
+    && ui.includes('#grid,#personGrid{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 10px;padding-top:0}')
+    && ui.includes('#dSections,#calList{gap:22px}')
+    && ui.includes('body.mobileShell #rows{max-height:calc(100vh - 176px);gap:22px}')
+    && ui.includes('body.mobileShell #discoverRows{margin-top:0;max-height:calc(100vh - 122px);gap:22px}')
+    && ui.includes('body.mobileShell #grid,body.mobileShell #personGrid{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 10px}')
+    && ui.includes('body.mobileShell #dSections,body.mobileShell #calList{gap:22px}')
+    && !ui.includes('#rows{max-height:calc(100vh - 176px);gap:14px}')
+    && !ui.includes('#discoverRows{margin-top:0;max-height:calc(100vh - 122px);gap:16px}'),
+    'phone Home and Discover share a 22px row gap; Movies/TV/Kids/Library lock to two posters per row');
   assert.match(ui, /function sizeRowsWindow\(root\) \{[\s\S]+if \(!document\.body\.classList\.contains\('tv'\)\) \{ root\.style\.maxHeight = ''; return; \}/,
     'mobile and desktop Home should not receive an inline TV row-window max-height');
   assert.match(ui, /let searchTimer = null, searchSeq = 0;[\s\S]+function clearSearchResults\(opts = \{\}\) \{[\s\S]+if \(opts\.invalidate\) searchSeq\+\+;[\s\S]+grid\.innerHTML = '';/,

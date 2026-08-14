@@ -125,6 +125,29 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-14, v2.9.12 phone catalog + per-profile Kids + burger/detail chrome:
+
+- Version contract: `package.json` 2.9.12; Android `versionName` 2.9.12 /
+  `versionCode` 330; Windows client package/Tauri/Cargo 2.9.12.
+- Phone Movies/TV/Kids/Library/Search show two posters per row (desktop 190px
+  covers were stretching to one giant card). Home/Discover row gap is 22px.
+  Open-menu burger no longer sits on the profile name. Details drop the 140px
+  desktop title slot. Kids show/hide is per profile, not one device-wide switch.
+  Screensaver small tiles skip duplicate art. Android TV rail is unchanged.
+- `npm.cmd test` 566/566. `npm.cmd run verify:full -- -AndroidDevice
+  emulator-5554 -AndroidHostServerPort 7777` passed whitespace, JS syntax,
+  web parse, focused P9/P14/P11, full Node suite, isolated `/api/server`
+  2.9.12 smoke, household VOD/IPTV/overlapping Play, Android
+  lint/native-unit/debug build, and ExoPlayer stress
+  `bench/stress-results/android-tv-stress-20260814-124025.json` (`ok: true`,
+  zero failures/warnings).
+- Household live on `http://127.0.0.1:7777` (v2.9.12): Mario 4K
+  4509ms/347ms/224ms/73ms (ready SLOW, stream OK, English-HONE);
+  FROM S01E01 2698ms/90ms/187ms/9ms; overlapping Play 3ms/4ms first-byte;
+  IPTV ABC then ESPN web+native first-bytes OK.
+- Unverified on this run: Windows native GPU/HDR, signed-in browser
+  click-through, and episode-handoff / nested Back / CW source recovery.
+
 2026-08-14, Kids page on web/Windows (PG max) + Android rail unchanged:
 
 - Not a version bump. `package.json` stays 2.9.11. Kids is a new left-menu page on

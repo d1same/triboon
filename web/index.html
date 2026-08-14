@@ -1859,6 +1859,9 @@ body.tv .cwAct,body.tv .epMenuBtn,body.tv .cardMenuBtn{display:none!important}
     width:248px!important;z-index:40;box-shadow:18px 0 50px rgba(0,0,0,.5)}
   body.mobileNav nav#rail{transform:translateX(0);background:var(--panel);backdrop-filter:blur(8px)}
   body.mobileNav nav#rail .rlabel,body.mobileNav nav#rail .wordmark{max-width:150px;opacity:1}
+  /* Burger stays at top-left as the close control. Slide the profile row right so the
+     avatar + name are not under it (owner: burger sat on "owner"). */
+  body.mobileNav #railUser{padding-left:52px}
   :root{--rail:0px}
   body.railOpen{--rail:0px}
   #home,#discover,#browse,#detail,#person,#settings,#prefs,#music{padding-left:16px!important;padding-right:16px!important}
@@ -1872,17 +1875,20 @@ body.tv .cwAct,body.tv .epMenuBtn,body.tv .cardMenuBtn{display:none!important}
   #heroBtns{width:100%;justify-content:center;gap:8px;flex-wrap:nowrap}
   #heroBtns .btn{flex:1 1 0;min-width:0;max-width:178px;padding:10px 10px;font-size:12.8px;justify-content:center;white-space:nowrap}
   #heroBtns .btn svg{width:15px;height:15px;flex:0 0 auto}
-  #rows{max-height:calc(100vh - 176px);gap:14px}
+  #rows{max-height:calc(100vh - 176px);gap:22px}
   #browse.rowsWin #grid{flex:1!important;max-height:none!important;margin-top:0!important}
   #browse .browseHead{margin-left:48px;margin-top:8px;margin-bottom:12px;justify-content:flex-start;padding-right:0}
   #browse{padding-top:62px!important}
-  #grid{gap:18px 12px;padding-top:0}
+  #grid,#personGrid{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 10px;padding-top:0}
+  #grid .pcard,#personGrid .pcard{width:100%;min-width:0;flex:none}
   #discover{padding-top:62px!important}
   #discover h1{margin-left:48px;margin-bottom:10px}
-  #discoverRows{margin-top:0;max-height:calc(100vh - 122px);gap:16px}
+  #discoverRows{margin-top:0;max-height:calc(100vh - 122px);gap:22px}
+  #dSections,#calList{gap:22px}
+  .abRow{margin-bottom:22px}
   #detail .back{top:14px;left:66px!important}
   #detail .detailScroll{padding:0 16px 44px}
-  #detail .detailHero{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:18px;min-height:0;padding-top:82px}
+  #detail .detailHero{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:18px;min-height:0;padding-top:62px}
   #detail .dPoster{width:min(42vw,150px);flex:0 0 auto;border-radius:13px}
   #detail .dInfo{width:100%;max-width:100%;padding-bottom:0;padding-left:0;text-align:center}
   #dTitle{font-size:clamp(24px,7.8vw,34px);max-width:100%}
@@ -1922,6 +1928,7 @@ body.mobileShell nav#rail{transform:translateX(-110%);transition:transform .28s 
 body.mobileShell.mobileNav nav#rail{transform:translateX(0);background:var(--panel);backdrop-filter:blur(8px)}
 body.mobileShell.mobileNav nav#rail .rlabel,
 body.mobileShell.mobileNav nav#rail .wordmark{max-width:150px;opacity:1}
+body.mobileShell.mobileNav #railUser{padding-left:52px}
 body.mobileShell{--rail:0px}
 body.mobileShell.railOpen{--rail:0px}
 body.mobileShell #home,body.mobileShell #discover,body.mobileShell #browse,body.mobileShell #detail,
@@ -1949,17 +1956,21 @@ body.mobileShell #hero .meta,body.mobileShell #heroCredits,body.mobileShell #her
 body.mobileShell #heroBtns{width:100%;justify-content:center;gap:8px;flex-wrap:nowrap}
 body.mobileShell #heroBtns .btn{flex:1 1 0;min-width:0;max-width:178px;padding:10px 10px;font-size:12.8px;justify-content:center;white-space:nowrap}
 body.mobileShell #heroBtns .btn svg{width:15px;height:15px;flex:0 0 auto}
-body.mobileShell #rows{max-height:calc(100vh - 176px);gap:14px}
+body.mobileShell #rows{max-height:calc(100vh - 176px);gap:22px}
 body.mobileShell #browse.rowsWin #grid{flex:1!important;max-height:none!important;margin-top:0!important}
 body.mobileShell #browse .browseHead{margin-left:48px;margin-top:8px;margin-bottom:12px;justify-content:flex-start;padding-right:0}
 body.mobileShell #browse .filterBar{position:static;top:auto;right:auto;z-index:auto;flex-wrap:wrap;max-width:100%}
 body.mobileShell #browse .filterBar select{min-width:0}
 body.mobileShell #browse{padding-top:62px!important}
-body.mobileShell #grid{gap:18px 12px;padding-top:0}
+body.mobileShell #grid,body.mobileShell #personGrid{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 10px;padding-top:0}
+body.mobileShell #grid .pcard,body.mobileShell #personGrid .pcard{width:100%;min-width:0;flex:none}
 body.mobileShell #discover{padding-top:62px!important}
 body.mobileShell #discover h1{margin-left:48px;margin-bottom:10px}
-body.mobileShell #discoverRows{margin-top:0;max-height:calc(100vh - 122px);gap:16px}
+body.mobileShell #discoverRows{margin-top:0;max-height:calc(100vh - 122px);gap:22px}
+body.mobileShell #dSections,body.mobileShell #calList{gap:22px}
+body.mobileShell .abRow{margin-bottom:22px}
 body.mobileShell #detail .back{top:14px;left:66px!important}
+body.mobileShell #detail .detailHero{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:18px;min-height:0;padding-top:62px}
 body.mobileShell #dBtns{flex-wrap:wrap;justify-content:center;align-items:center;gap:6px;overflow:visible;max-width:100%;padding:0 0 6px}
 body.mobileShell #dBtns::-webkit-scrollbar{display:none}
 body.mobileShell #dBtns .btn{min-width:0;white-space:nowrap;justify-content:center;padding:11px 13px;font-size:12.8px}
@@ -2371,6 +2382,21 @@ body.tv .ctWells{display:none}
 .cards{gap:24px}
 #grid,#personGrid{gap:30px 22px}
 .pcard .cap{font-size:13px}
+/* Phone catalog rhythm: one 22px row gap on Home, Discover, Movies/TV/Kids/Library/
+   Search, person works, detail sections, Calendar, and audiobook shelves. The 30px
+   desktop grid gap above would otherwise win on a narrow browser. Android WebView
+   uses body.mobileShell (can be wider than 600px). TV is untouched. */
+@media (max-width:600px){
+  #rows,#discoverRows,#dSections,#calList{gap:22px}
+  #grid,#personGrid{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 10px}
+  #grid .pcard,#personGrid .pcard{width:100%;min-width:0;flex:none}
+  .abRow{margin-bottom:22px}
+}
+body.mobileShell #rows,body.mobileShell #discoverRows,
+body.mobileShell #dSections,body.mobileShell #calList{gap:22px}
+body.mobileShell #grid,body.mobileShell #personGrid{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 10px}
+body.mobileShell #grid .pcard,body.mobileShell #personGrid .pcard{width:100%;min-width:0;flex:none}
+body.mobileShell .abRow{margin-bottom:22px}
 
 /* Bigger rail logo. */
 #rail .logo{width:46px;height:46px;padding-left:7px;margin-bottom:24px}
@@ -3223,6 +3249,16 @@ body.tv #bdInfo .bdiT{height:112px}
 body.tv #bdInfo .bdiT.hasLogo img{max-height:112px}
 body.mobileShell #hero h1{height:96px;justify-content:center}
 body.mobileShell #heroTitle.hasLogo img{margin:0 auto;object-position:center bottom;max-height:96px}
+/* Phone detail must not keep the 140px desktop title slot. That empty box is the
+   "too much space above the title" on mobile web and Android phone. TV stays 120px. */
+@media (max-width:600px){
+  #dTitle{height:auto;min-height:0;justify-content:center;margin-bottom:10px}
+  #dTitle.hasLogo img{max-height:72px;margin:0 auto;object-position:center bottom}
+  #detail .detailHero{padding-top:62px;min-height:0}
+}
+body.mobileShell #dTitle{height:auto;min-height:0;justify-content:center;margin-bottom:10px}
+body.mobileShell #dTitle.hasLogo img{max-height:72px;margin:0 auto;object-position:center bottom}
+body.mobileShell #detail .detailHero{padding-top:62px;min-height:0}
 /* Detail overview: clamp so page height (and the space above) stays consistent across titles. */
 #detail .dInfo #dOverview{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
 /* Story/meta text reads NEAR-WHITE (owner call, 2026-08-06): the muted grey washed out over
@@ -3918,6 +3954,13 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
   </div>
 
   <div class="setGrid" data-ptab="menu" hidden>
+    <div class="panel" id="prefKidsPanel">
+      <h2>Kids</h2>
+      <p>Show a Kids page in your menu. This is yours — other people in the house pick their own.</p>
+      <div class="sizePick" id="prefKidsMenu">
+        <button data-kids="1">Show Kids</button><button data-kids="0">Hide Kids</button>
+      </div>
+    </div>
     <div class="panel"><h2>Menu — reorder or hide</h2>
       <p>Arrange the sidebar the way you use it; hidden items disappear from the rail.</p>
       <div id="menuMgr"></div>
@@ -5013,7 +5056,9 @@ function applyCoverSize() {
   const s = (() => { try { return localStorage.getItem('triboon.cover') || 'M'; } catch { return 'M'; } })();
   const table = document.body.classList.contains('tv') ? COVER_SIZES_TV : COVER_SIZES;
   // Phones always get compact covers — 190px posters mean ONE giant column on a 375px screen.
-  const px = window.innerWidth <= 600 ? '140px' : (browserBrowseCoverPx(s) || table[s] || table.M);
+  // Android WebView can report a CSS width over 600px, so mobileShell counts as phone too.
+  const phoneCovers = document.body.classList.contains('mobileShell') || window.innerWidth <= 600;
+  const px = phoneCovers ? '140px' : (browserBrowseCoverPx(s) || table[s] || table.M);
   document.documentElement.style.setProperty('--poster', px);
   adaptRowWindows();
   scheduleVirtualGridGeometryRefresh();
@@ -13865,6 +13910,7 @@ async function loadProfilePrefs() {
       try { applyTheme(); } catch {}                  // apply the profile's synced theme (colors follow the profile)
       try { renderThemePicker('themePick'); renderThemePicker('themePickSet'); } catch {} // reflect the applied theme in any open picker
       try { resetScreensaverIdle(); } catch {}        // re-apply the loaded screensaver delay now
+      try { applyMenuPrefs(); } catch {}              // Kids/menu hide follows this profile, not the last person on the device
     } else {
       syncProfilePrefsUp();                           // first time on this account → migrate this device's prefs up
     }
@@ -15313,8 +15359,10 @@ function pushScreensaverItem(out, seen, it, rowName = '') {
   const tile = screensaverPosterOf(it);
   if (!title || (!bg && !tile)) return;
   const key = String(it.key || it.id || title + ':' + (it.year || '')).toLowerCase();
-  if (seen.has(key)) return;
+  const art = String(tile || bg || '').toLowerCase();
+  if (seen.has(key) || (art && seen.has('art:' + art))) return;
   seen.add(key);
+  if (art) seen.add('art:' + art);
   out.push({ title, bg: bg || tile, tile: tile || bg });
 }
 function screensaverTrendingKey() {
@@ -15432,9 +15480,16 @@ function renderScreensaver() {
   setScreensaverBg($('ssBg'), active.bg);
   const deck = $('ssDeck');
   deck.innerHTML = '';
-  const count = Math.min(6, items.length);
-  for (let i = 0; i < count; i++) {
-    const it = items[(idx + i) % items.length];
+  const seenArt = new Set();
+  const activeArt = String(active.tile || active.bg || '');
+  if (activeArt) seenArt.add(activeArt);
+  let added = 0;
+  for (let step = 1; step < items.length && added < 6; step++) {
+    const it = items[(idx + step) % items.length];
+    const art = String((it && (it.tile || it.bg)) || '');
+    if (!art || seenArt.has(art)) continue;
+    seenArt.add(art);
+    added += 1;
     const tile = document.createElement('div');
     tile.className = 'ssTile';
     tile.setAttribute('aria-hidden', 'true');
@@ -19981,18 +20036,34 @@ function kidsUiAvailable() {
 function menuKidsDefaultHidden() {
   return (S.maxLevel ?? 4) >= 4;
 }
+function menuPrefsKey() {
+  return S.profile && S.profile.id ? profilePrefKey('menu') : 'triboon.menu';
+}
 function readMenuPrefsRaw() {
-  try { const p = JSON.parse(localStorage.getItem('triboon.menu') || 'null'); if (p && Array.isArray(p.order)) return p; } catch {}
+  try {
+    const scoped = JSON.parse(localStorage.getItem(menuPrefsKey()) || 'null');
+    if (scoped && Array.isArray(scoped.order)) return scoped;
+    // Old device-wide menu must not steal Kids from the next user. Keep their order; this
+    // profile decides Kids for itself.
+    const legacy = JSON.parse(localStorage.getItem('triboon.menu') || 'null');
+    if (legacy && Array.isArray(legacy.order)) {
+      return {
+        order: legacy.order,
+        hidden: (legacy.hidden || []).filter((n) => n !== 'kids'),
+        known: (legacy.known || []).filter((n) => n !== 'kids'),
+      };
+    }
+  } catch {}
   return null;
 }
 function writeMenuPrefs(p) {
-  try {
-    localStorage.setItem('triboon.menu', JSON.stringify({
-      order: p.order,
-      hidden: p.hidden,
-      known: Array.isArray(p.known) ? p.known : [...MENU_DEFAULT],
-    }));
-  } catch {}
+  const body = {
+    order: p.order,
+    hidden: p.hidden,
+    known: Array.isArray(p.known) ? p.known : [...MENU_DEFAULT],
+  };
+  try { localStorage.setItem(menuPrefsKey(), JSON.stringify(body)); } catch {}
+  syncProfilePrefsUp();
 }
 function normalizeMenuPrefs(p) {
   const order = Array.isArray(p.order) ? p.order.slice() : [...MENU_DEFAULT];
@@ -20022,6 +20093,20 @@ function saveMenuPrefs(p) {
     hidden: p.hidden,
     known: Array.isArray(p.known) ? p.known : (Array.isArray(prev.known) ? prev.known : [...MENU_DEFAULT]),
   });
+}
+function kidsMenuVisible() {
+  return kidsUiAvailable() && !menuPrefs().hidden.includes('kids');
+}
+function saveKidsMenuVisible(on) {
+  const p = menuPrefs();
+  const hidden = on ? p.hidden.filter((x) => x !== 'kids') : [...new Set([...p.hidden, 'kids'])];
+  saveMenuPrefs({ order: p.order, hidden, known: p.known || [...MENU_DEFAULT] });
+  applyMenuPrefs();
+  syncKidsMenuButtons();
+}
+function syncKidsMenuButtons() {
+  if ($('prefKidsPanel')) $('prefKidsPanel').style.display = kidsUiAvailable() ? '' : 'none';
+  syncChoiceButtons('#prefKidsMenu button', (b) => b.dataset.kids === (kidsMenuVisible() ? '1' : '0'));
 }
 // Reorder + hide the rail nav buttons per user preference (search first by default).
 function applyMenuPrefs() {
@@ -20722,6 +20807,7 @@ function openPrefs() { // populates the Preferences PAGE (it's a view now, not a
   renderProfileSessionActions();
   renderPinRows();
   renderMenuMgr();
+  syncKidsMenuButtons();
   renderTraktBox();
   renderAppUpdateBox();
   renderYtmBox();
@@ -21209,11 +21295,13 @@ function renderMenuMgr(restore = null) {
         saveMenuPrefs({ order, hidden: p.hidden });
         applyMenuPrefs();
         renderMenuMgr({ key: nav, action, scrollTop });
+        syncKidsMenuButtons();
       } else if (action === 'hide') {
         const hidden = p.hidden.includes(nav) ? p.hidden.filter((x) => x !== nav) : [...p.hidden, nav];
         saveMenuPrefs({ order, hidden });
         applyMenuPrefs();
         renderMenuMgr({ key: nav, action, scrollTop });
+        syncKidsMenuButtons();
       } else return;
     });
     mgr.appendChild(row);
@@ -21574,11 +21662,18 @@ $('prefCatAll').addEventListener('click', () => {
 $('prefCatNone').addEventListener('click', () => {
   document.querySelectorAll('#prefCatList input').forEach((c) => { c.checked = false; }); savePrefLiveCats();
 });
+$('prefKidsMenu').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-kids]');
+  if (!btn) return;
+  saveKidsMenuVisible(btn.dataset.kids === '1');
+  renderMenuMgr();
+});
 $('prefReset').addEventListener('click', () => {
   const scrollTop = $('prefs').scrollTop;
   saveMenuPrefs({ order: [...MENU_DEFAULT], hidden: menuKidsDefaultHidden() ? ['kids'] : [], known: [...MENU_DEFAULT] });
   renderMenuMgr();
   applyMenuPrefs();
+  syncKidsMenuButtons();
   requestAnimationFrame(() => { $('prefs').scrollTop = scrollTop; $('prefReset').focus({ preventScroll: true }); });
 });
 
