@@ -1769,6 +1769,105 @@ test('pipeline: prepared detail source is reused by Play without a second mount'
   assert.strictEqual(play.vf.id, prepared.vf.id, 'Play should reuse the prepared live mount');
   assert.strictEqual(indexerFanouts, 1, 'prepare and Play should reuse the warmed search');
   assert.strictEqual(pipeline.metricsSnapshot().mount.successes, 1, 'Play should not mount a second copy');
+  assert.ok(pipeline.metricsSnapshot().prepare.inflightJoins >= 1, 'Play should join the in-flight title prepare');
+
+  pool.close(); await mock.close(); server.close(); store.close();
+});
+
+test('pipeline: smash Play during prepare does not open a full-width NZB race', async () => {
+  const goodPayload = seededPayload(90 * 1024, 0xfc1);
+  const bad = nzbFor([{ name: 'Missing.mkv', data: seededPayload(40 * 1024, 0xfc2) }], 30000, 'smash-bad');
+  const good = nzbFor(writeRar4Store([{ name: 'Movie.mkv', data: goodPayload }], { base: 'smash-good' }), 30000, 'smash-good');
+  const articles = new Map([...good.articles]);
+  const mock = createMockNntp({ articles });
+  const nntpPort = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 4);
+  let nzbHits = 0;
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (u.pathname === '/api') {
+      const port = server.address().port;
+      res.writeHead(200, { 'content-type': 'application/rss+xml' });
+      return res.end(rssFor([
+        { name: 'Movie.2024.1080p.WEB-DL.DDP5.1.H.264-FLUX', url: `http://127.0.0.1:${port}/nzb/0`, size: 6e9 },
+        { name: 'Movie.2024.1080p.WEB-DL.H.264-NTb', url: `http://127.0.0.1:${port}/nzb/1`, size: 5e9 },
+        { name: 'Movie.2024.1080p.WEBRip.x264-GalaxyRG', url: `http://127.0.0.1:${port}/nzb/2`, size: 3e9 },
+        { name: 'Movie.2024.1080p.WEBRip.x264-RARBG', url: `http://127.0.0.1:${port}/nzb/3`, size: 2.5e9 },
+        { name: 'Movie.2024.1080p.WEBRip.x264-YTS', url: `http://127.0.0.1:${port}/nzb/4`, size: 1.8e9 },
+      ]));
+    }
+    const nzb = /^\/nzb\/(\d+)$/.exec(u.pathname);
+    if (nzb) {
+      nzbHits++;
+      if (nzb[1] === '0') { res.writeHead(200); return res.end(bad.nzb); }
+      setTimeout(() => {
+        if (nzb[1] === '1') { res.writeHead(200); res.end(good.nzb); }
+        else { res.writeHead(404); res.end(); }
+      }, nzb[1] === '1' ? 400 : 2000);
+      return;
+    }
+    res.writeHead(404); res.end();
+  });
+  const ixPort = await new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const pipeline = new Pipeline({
+    pool: () => pool, verdicts: new VerdictCache(store), mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+
+  const preparedP = pipeline.prepare({ q: 'Movie 2024' });
+  assert.strictEqual(pipeline.titlePrepareInflight.size, 1, 'prepare should register a title-level job before Play starts');
+  const [prepared, play] = await Promise.all([
+    preparedP,
+    pipeline.play({ q: 'Movie 2024' }),
+  ]);
+
+  assert.ok(pipeline.metricsSnapshot().prepare.inflightJoins >= 1,
+    `Play should attach to the title-level prepare job (joins=${pipeline.metricsSnapshot().prepare.inflightJoins})`);
+  assert.strictEqual(play.vf.id, prepared.vf.id, 'smash Play should join the in-flight prepare mount');
+  assert.ok(nzbHits <= 3, `smash Play must not flood extra NZBs during prepare (got ${nzbHits})`);
+  assert.strictEqual(pipeline.metricsSnapshot().mount.successes, 1, 'the healthy fallback should mount once');
+
+  pool.close(); await mock.close(); server.close(); store.close();
+});
+
+test('pipeline: Play with catalog ids joins a title-only in-flight prepare', async () => {
+  const payload = seededPayload(90 * 1024, 0xfc3);
+  const good = nzbFor(writeRar4Store([{ name: 'Movie.mkv', data: payload }], { base: 'idjoin' }), 30000, 'idjoin');
+  const articles = new Map([...good.articles]);
+  const mock = createMockNntp({ articles });
+  const nntpPort = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 4);
+  let indexerFanouts = 0;
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (u.pathname === '/api') {
+      indexerFanouts++;
+      const port = server.address().port;
+      res.writeHead(200, { 'content-type': 'application/rss+xml' });
+      return res.end(rssFor([{ name: 'Movie.2024.1080p.WEB-DL.H.264-NTb', url: `http://127.0.0.1:${port}/nzb/0`, size: 5e9 }]));
+    }
+    if (u.pathname === '/nzb/0') { res.writeHead(200); return res.end(good.nzb); }
+    res.writeHead(404); res.end();
+  });
+  const ixPort = await new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const pipeline = new Pipeline({
+    pool: () => pool, verdicts: new VerdictCache(store), mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+
+  const [prepared, play] = await Promise.all([
+    pipeline.prepare({ q: 'Movie 2024' }),
+    pipeline.play({ q: 'Movie 2024', imdbid: 'tt1234567' }),
+  ]);
+
+  assert.strictEqual(play.vf.id, prepared.vf.id, 'IMDb Play should reuse the title-only prepare mount');
+  assert.strictEqual(indexerFanouts, 1, 'id Play should join the title-only search already in flight');
+  assert.strictEqual(pipeline.metricsSnapshot().mount.successes, 1);
+  assert.ok(pipeline.metricsSnapshot().prepare.inflightJoins >= 1);
 
   pool.close(); await mock.close(); server.close(); store.close();
 });
@@ -2750,6 +2849,17 @@ test('pipeline: playback warmup warms the RESUME byte window so a Continue-Watch
   await new Promise((r) => setTimeout(r, 300));
   assert.ok(reads2.some(([f]) => f === 0) && reads2.some(([, t]) => t === size), 'no resumeFrac → classic head + tail warm');
   assert.ok(!reads2.some(([f, t]) => f > size * 0.2 && t < size * 0.8), 'no resumeFrac → no mid-file resume warm');
+
+  const reads3 = [];
+  const startOverVf = { streamable: true, size, read(from, to) { reads3.push([from, to]); return (async function* () {})(); } };
+  pipeline._startPlaybackWarmup(startOverVf, { cacheMaxBytes: 1024 * 1024 * 1024 }, 0.5);
+  await new Promise((r) => setTimeout(r, 300));
+  const resumeHead = reads3.filter(([f]) => f === 0).map(([, t]) => t);
+  assert.ok(resumeHead.some((t) => t <= 16 * 1024 * 1024), 'resume prepare warms only a small head');
+  pipeline._startPlaybackWarmup(startOverVf, { cacheMaxBytes: 1024 * 1024 * 1024 }, 0);
+  await new Promise((r) => setTimeout(r, 300));
+  assert.ok(reads3.some(([f, t]) => f === 0 && t >= 96 * 1024 * 1024),
+    'Start Over on a resume-prepared mount must expand to a full 0:00 head warm');
   store.close();
 });
 
@@ -3132,8 +3242,8 @@ test('pipeline: a pinned resume source leads only while playable, and never turn
   // Race-width contract: a pinned resume must keep the hedged parallel walk; only explicit human
   // picks (Sources drawer) collapse the race to a direct width-1 mount.
   const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'pipeline.js'), 'utf8');
-  assert.match(src, /const width = \(params\.pickKey \|\| params\.pick\) && !params\.pinnedResume \? 1 : PLAY_RACE_WIDTH;/,
-    'play() keeps PLAY_RACE_WIDTH for pinned resumes and width 1 only for explicit picks');
+  assert.match(src, /const explicitPick = \(params\.pickKey \|\| params\.pick\) && !params\.pinnedResume;[\s\S]+const width = explicitPick \? 1 : \(joiningPrepare \? 2 : PLAY_RACE_WIDTH\);/,
+    'play() keeps PLAY_RACE_WIDTH for pinned resumes, width 1 only for explicit picks, and a 2-wide join when Details prepare is already in flight');
 });
 
 test('scoring: the exact year outranks a ±1 twin, and only when the query carries a year', () => {

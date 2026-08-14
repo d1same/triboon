@@ -125,6 +125,32 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-14, v3.0.0 smash-Play join + Start Over head warm:
+
+- Version contract: `package.json` 3.0.0; Android `versionName` 3.0.0 /
+  `versionCode` 331; Windows client package/Tauri/Cargo 3.0.0.
+- Smash Play on Details joins the in-flight `/api/prepare` job (narrow
+  2-wide race) instead of a second 5-wide hunt. TV Details prepares the
+  next episode immediately, not the bare show. Start Over on a
+  resume-prepared mount expands to a full 0:00 head warm so beginning
+  playback is not a cold seek. Browser and Android TV share this path.
+- `npm.cmd test` 568/568. `npm.cmd run verify:full -- -AndroidDevice
+  emulator-5554 -AndroidHostServerPort 7777` passed whitespace, JS syntax,
+  web parse, focused P9/P14/P11, full Node suite, isolated `/api/server`
+  smoke, household VOD/IPTV/overlapping Play, Android
+  lint/native-unit/debug build, and ExoPlayer stress
+  `bench/stress-results/android-tv-stress-20260814-144808.json` (`ok: true`,
+  zero failures/warnings).
+- Household live on `http://127.0.0.1:7777`: Mario 4K
+  3935ms/523ms/129ms/13ms (ready SLOW, stream OK, English-HONE);
+  FROM S01E01 1367ms/126ms/439ms/12ms; overlapping Play 5ms/14ms ready;
+  IPTV ABC then ESPN web+native first-bytes OK.
+- Owner live: Supergirl (2026) web remux reached a picture after skipping
+  dead top picks (x265/missing/failed), then a verified 1080p WEB. That
+  wait is source rot, not the double-hunt.
+- Unverified on this run: Windows native GPU/HDR, signed-in browser
+  click-through, and episode-handoff / nested Back / CW source recovery.
+
 2026-08-14, v2.9.12 phone catalog + per-profile Kids + burger/detail chrome:
 
 - Version contract: `package.json` 2.9.12; Android `versionName` 2.9.12 /

@@ -355,8 +355,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'admin user list should expose an Allow-transcoding toggle wired to the user policy');
   assert.match(ui, /function sourceSearchQuery\(it, opts = \{\}\) \{[\s\S]+const qRank = opts\.includeQuality === false \? null : qualityRankForItem\(it\);[\s\S]+maxResolutionRank[\s\S]+preferResolutionRank/,
     'Sources, play warmup, and availability should share one query builder while allowing unfiltered quality discovery');
-  assert.match(ui, /function prefetchSources\(it, delay = 700\) \{[\s\S]+const qRank = qualityRankForItem\(it\);[\s\S]+localTitleHasPlayback\(it\) && localPlaybackFitsQuality\(it, qRank\)[\s\S]+api\('\/api\/search\?' \+ sourceSearchQuery\(it\)\)/,
-    'source warmup should skip matching local files but still warm online 4K when local playback is lower quality');
+  assert.match(ui, /function prefetchSources\(it, delay = 700\) \{[\s\S]+it\.type === 'tv' && !episodeKeyParts\(it\)[\s\S]+const qRank = qualityRankForItem\(it\);[\s\S]+localTitleHasPlayback\(it\) && localPlaybackFitsQuality\(it, qRank\)[\s\S]+api\('\/api\/search\?' \+ sourceSearchQuery\(it\)\)/,
+    'source warmup should skip matching local files and bare TV shows, but still warm online 4K when local playback is lower quality');
   assert.match(ui, /function updateDetailPlayLabel\(\{ label, target \}\) \{[\s\S]+detailPlayTarget = target;[\s\S]+prefetchSources\(target, 0\);[\s\S]+preparePlaybackSource\(target, 0\);[\s\S]+\}/,
     'movie/show details should warm and immediately prepare the exact current Play target, including TV episodes');
   assert.match(ui, /applyExternalIds\(it, d\);[\s\S]+if \(it\.imdbId \|\| it\.tvdbId\) \{[\s\S]+checkAvailability\(it\);[\s\S]+prefetchSources\(detailPlayTarget, 0\);[\s\S]+preparePlaybackSource\(detailPlayTarget, 0\);[\s\S]+\}/,
@@ -466,8 +466,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   // warming still left a long press-play gap (see bench/resume-latency.js).
   assert.match(ui, /function focusCard\([\s\S]+if \(!S\._booting && it && it\.type !== 'live' && \(it\._cw \|\| it\._nextEp \|\| \(\+it\.resume \|\| 0\) > 0\)\) preparePlaybackSource\(it\);/,
     'focusing a resumable Continue Watching / next-episode card should mount-warm the best source (preparePlaybackSource) so resume reuses a live mount instantly');
-  assert.match(ui, /function preparePlaybackSource\(it, delay = 900\) \{[\s\S]+if \(S\._booting\) return;/,
-    'home source prepare must not start while the Android TV splash is still up');
+  assert.match(ui, /function preparePlaybackSource\(it, delay = 900\) \{[\s\S]+if \(S\._booting\) return;[\s\S]+if \(S\.view === 'player'\) return;[\s\S]+it\.type === 'tv' && !episodeKeyParts\(it\)/,
+    'home source prepare must not start while the splash is up, after Play, or for a bare TV show');
   assert.match(ui, /function bootReady\(\) \{[\s\S]+S\._booting = false;[\s\S]+maybePrepareFocusedHomeCard\(\);/,
     'after the splash drops, Home may warm the already-focused Continue Watching card');
   assert.match(ui, /if \(!opts\.catalogOnly && !opts\.watchReady && !hasFreshWatch && !opts\.preserveFocus\) \{/,
@@ -1073,6 +1073,12 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'browser Back from one title route to another should route to the previous detail instead of jumping to the original browse page');
   assert.match(ui, /const detailResume = resumePositionForItem\(it\);[\s\S]+updateDetailPlayLabel\(detailResume \? \{ label: 'Resume', target: \{ \.\.\.it, resume: detailResume \} \}/,
     'movie details should show Resume without the timestamp while keeping the resume position in the play target');
+  assert.match(ui, /function earlyNextUpTarget\(show\) \{[\s\S]+return epTarget\(show, 1, 1, 0\);/,
+    'TV details should pick the next episode immediately so smash Play does not search the show like a movie');
+  assert.match(ui, /if \(it\.type === 'tv'\) \{[\s\S]+const early = earlyNextUpTarget\(it\);[\s\S]+updateDetailPlayLabel\(/,
+    'opening a show should set the episode Play target before availability and prepare');
+  assert.match(ui, /async function play\(it, pick, opts = \{\}\) \{[\s\S]+it\.type === 'tv' && !episodeKeyParts\(it\)[\s\S]+earlyNextUpTarget\(it\)/,
+    'Play on a bare TV show card should retarget to the next episode before searching');
   assert.match(ui, /updateDetailPlayLabel\(\{ label: 'Resume', target: epTarget\(show, \+m\[1\], \+m\[2\], wm\[inProg\]\.position\) \}\)/,
     'TV show details should show Resume without the timestamp while keeping the episode resume position');
   assert.match(ui, /const rec = \{[\s\S]+streamUrl: x\.streamUrl, playUrl: x\.playUrl, name: x\.title[\s\S]+if \(localKey\) map\[localKey\] = rec;[\s\S]+map\[key\] = rec;/,

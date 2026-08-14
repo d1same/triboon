@@ -1,7 +1,7 @@
 {
   "name": "triboon-windows-client",
   "private": true,
-  "version": "2.9.12",
+  "version": "3.0.0",
   "description": "Triboon native Windows GPU client (Tauri + libmpv).",
   "scripts": {
     "tauri": "tauri",

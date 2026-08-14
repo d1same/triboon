@@ -137,7 +137,10 @@ Rules that must not drift:
   slice of the ranked list in the background without creating a play session or
   stream URL. Play must reuse or join that prepared/in-flight mount and
   in-flight NZB prefetch instead of repeating source finding, first-article
-  probe, mount, or health-gate work.
+  probe, mount, or health-gate work. Smash Play while prepare is still running
+  joins that title-level job with a narrow race instead of a second full-width
+  walk. Details must not prepare a bare TV show — the Play target is the next
+  episode.
 - Prepared, in-flight, and live-mount reuse is keyed by NZB URL plus season,
   episode, and audiobook mode. Loose-file and RAR/ZIP season packs must select
   exactly one requested `SxxEyy` payload before file size is considered, and

@@ -625,6 +625,7 @@ class Pipeline {
     this.nzbCache = new Map();    // nzbUrl -> xml (small LRU; replays remount instantly)
     this.nzbInflight = new Map(); // nzbUrl -> Promise(xml), so Play joins detail-page prefetch
     this.prepareInflight = new Map(); // mountIdentity -> shared cancellable mount record
+    this.titlePrepareInflight = new Map(); // prepareJobKey -> shared title-level prepare job
     this.mountByUrl = new Map();  // mountIdentity -> mount id (same selected payload reuses instantly)
     this._startupGate = new StartupGate(STARTUP_SLOTS);
     this._inflightAdvances = 0;
@@ -657,6 +658,7 @@ class Pipeline {
       healthGateMs: 0,
       healthGateMaxMs: 0,
       windowRebalances: 0,
+      titlePrepareJoins: 0,
     };
   }
 
@@ -694,6 +696,9 @@ class Pipeline {
         failures: m.mountFailures,
         avgMs: avg(m.mountMs, m.mountAttempts),
         maxMs: m.mountMaxMs,
+      },
+      prepare: {
+        inflightJoins: m.titlePrepareJoins,
       },
       healthGate: {
         timeouts: m.healthGateTimeouts,
@@ -740,6 +745,32 @@ class Pipeline {
       episodePart(params.season),
       episodePart(params.ep),
     ]);
+  }
+
+  // Title-level prepare job: same search + quality policy. Smash Play joins this instead of
+  // opening a second full-width source race on top of the Details warmup.
+  _prepareJobKey(params, policy = {}, opts = {}) {
+    return JSON.stringify([
+      this._searchCacheKey(params, opts),
+      policy.maxResolutionRank ?? null,
+      policy.preferResolutionRank ?? null,
+      policy.exactResolutionRank ?? null,
+      policy.maxSizeGb4k ?? null,
+      policy.maxSizeGb1080 ?? null,
+      policy.sizePreferenceGB ?? null,
+      policy.lowPowerDevice ? 1 : 0,
+      policy.dolbyVision === false ? 0 : (policy.dolbyVision === true ? 1 : null),
+      policy.deviceClass || null,
+    ]);
+  }
+
+  _findTitlePrepare(params, policy = {}) {
+    const key = this._prepareJobKey(params, policy);
+    let rec = this.titlePrepareInflight.get(key);
+    if (!rec && (params.imdbid || params.tvdbid)) {
+      rec = this.titlePrepareInflight.get(this._prepareJobKey(params, policy, { ignoreCatalogIds: true }));
+    }
+    return rec || null;
   }
 
   _getFreshSearchHit(key) {
@@ -972,12 +1003,19 @@ class Pipeline {
         warm('resume', start, end);
       }
     }
-    if (vf._playbackWarmupStarted) return; // head/tail already warmed for this mount
-    vf._playbackWarmupStarted = true;
     // HEAD: a fresh start plays from the head (full warm); a resume only needs the container header
     // parsed (its body is the resume window above), so warm just a small head there to keep the cache
-    // budget close to the non-resume head+tail.
-    warm('head', 0, resuming ? Math.min(warmBytes, (big ? 16 : 8) * 1024 * 1024) : warmBytes);
+    // budget close to the non-resume head+tail. Start Over / a later 0:00 play may reuse a mount
+    // that was prepared for Resume — that mount only has the small header, so expand to a full head
+    // instead of leaving 0:00 cold.
+    const headBytes = resuming ? Math.min(warmBytes, (big ? 16 : 8) * 1024 * 1024) : warmBytes;
+    const needFullHead = !resuming && !vf._fullHeadWarmed;
+    if (vf._playbackWarmupStarted && !needFullHead) return;
+    const firstWarm = !vf._playbackWarmupStarted;
+    vf._playbackWarmupStarted = true;
+    warm('head', 0, headBytes);
+    if (!resuming) vf._fullHeadWarmed = true;
+    if (!firstWarm) return;
     // TAIL warm — the decisive fix for "plays fine, then buffers after a minute". The browser fMP4
     // remux (ffmpeg) AND Android ExoPlayer both parse the container INDEX before they can stream:
     // mkv Cues / mp4 moov, which for WEB-DL releases usually sits at the END of the file. ffmpeg
@@ -1699,7 +1737,13 @@ class Pipeline {
     // Cold start races the top candidates; a single explicit Sources pick stays a direct mount.
     // A pinned resume keeps the race: the pin leads the ranked list, but a dead pin must not turn
     // resume into a serial one-at-a-time walk (the pre-pin behavior users knew was the raced one).
-    const width = (params.pickKey || params.pick) && !params.pinnedResume ? 1 : PLAY_RACE_WIDTH;
+    const explicitPick = (params.pickKey || params.pick) && !params.pinnedResume;
+    const joiningPrepare = !explicitPick && this._findTitlePrepare(params, policy);
+    if (joiningPrepare) this.metrics.titlePrepareJoins++;
+    // Smash Play during Details prepare must join that job, not open a 5-wide race that
+    // starves the same NNTP slots the warmup already holds. One hedge is enough to skip a
+    // dead top pick; waiting on Details stays instant because the mount is already live.
+    const width = explicitPick ? 1 : (joiningPrepare ? 2 : PLAY_RACE_WIDTH);
     try {
       return await this._advance(session, mountOpts, { width });
     } catch (e) {
@@ -1781,6 +1825,24 @@ class Pipeline {
   async prepare(params, policy = {}, mountOpts = {}) {
     const _we = wantedEpisodeOf(params);
     if (_we) mountOpts = { ...mountOpts, wantedEpisode: _we }; // prewarm the SAME episode file play() will mount
+    const key = this._prepareJobKey(params, policy);
+    let existing = this.titlePrepareInflight.get(key);
+    if (!existing && (params.imdbid || params.tvdbid)) {
+      existing = this.titlePrepareInflight.get(this._prepareJobKey(params, policy, { ignoreCatalogIds: true }));
+    }
+    if (existing) {
+      this.metrics.titlePrepareJoins++;
+      return existing.promise;
+    }
+    const rec = { promise: null };
+    rec.promise = this._runPrepare(params, policy, mountOpts).finally(() => {
+      if (this.titlePrepareInflight.get(key) === rec) this.titlePrepareInflight.delete(key);
+    });
+    this.titlePrepareInflight.set(key, rec);
+    return rec.promise;
+  }
+
+  async _runPrepare(params, policy = {}, mountOpts = {}) {
     const { candidates } = await this.search(params, policy);
     const playable = this._playableCandidates(candidates, params);
     if (!playable.length) throw new Error('no playable releases found');

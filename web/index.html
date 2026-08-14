@@ -7037,6 +7037,7 @@ function renderRows(opts = {}) {
 let prefetchTimer = null;
 function prefetchSources(it, delay = 700) {
   if (!it || it.type === 'live') return;
+  if (it.type === 'tv' && !episodeKeyParts(it)) return;
   const qRank = qualityRankForItem(it);
   if (localTitleHasPlayback(it) && localPlaybackFitsQuality(it, qRank)) return;
   // The Stremio trick: search/triage warms server-side while the user reads the title,
@@ -7121,7 +7122,9 @@ function maybePrepareFocusedHomeCard() {
 }
 function preparePlaybackSource(it, delay = 900) {
   if (S._booting) return;
+  if (S.view === 'player') return;
   if (!it || it.type === 'live') return;
+  if (it.type === 'tv' && !episodeKeyParts(it)) return;
   const qRank = qualityRankForItem(it);
   if (localTitleHasPlayback(it) && localPlaybackFitsQuality(it, qRank)) return;
   clearTimeout(prepareTimer);
@@ -7658,6 +7661,10 @@ function beginPlaybackTransition(it, opts = {}) {
 async function play(it, pick, opts = {}) {
   if (!it) return;
   it = resolvePlaybackResume(it);
+  if (it.type === 'tv' && !episodeKeyParts(it)) {
+    const early = earlyNextUpTarget(it);
+    if (early) it = resolvePlaybackResume(early);
+  }
   if (!levelAllows(it.cert)) { toast(`“${it.title}” is rated ${it.cert} — not allowed on this profile`); return; }
   // Upcoming/unaired episodes have no source to find — clicking one used to fail with a generic
   // "no sources" error. Block play with a friendly notice instead. Gated centrally so every entry
@@ -8174,9 +8181,18 @@ async function openDetail(it, push = true) {
   }
   // checkAvailability must run AFTER the detailReq bump — it snapshots the id to guard its own
   // async result, and bumping afterwards orphaned every check (toggle/Unavailable never applied).
+  // Set the Play target first so TV availability/prepare search the next episode, not the show
+  // name like a movie (smash Play used to walk dead show-level hits for ~20s).
+  if (it.type === 'tv') {
+    const early = earlyNextUpTarget(it);
+    const resume = +(early && early.resume) || 0;
+    const pending = S._pendingHomeNext && Number(S._pendingHomeNext.tmdbId) === Number(it.tmdbId);
+    updateDetailPlayLabel({ label: resume ? 'Resume' : (pending ? 'Continue' : 'Play'), target: early });
+  } else {
+    const detailResume = resumePositionForItem(it);
+    updateDetailPlayLabel(detailResume ? { label: 'Resume', target: { ...it, resume: detailResume } } : { label: 'Play', target: it });
+  }
   checkAvailability(it);
-  const detailResume = resumePositionForItem(it);
-  updateDetailPlayLabel(detailResume ? { label: 'Resume', target: { ...it, resume: detailResume } } : { label: 'Play', target: it });
   syncDetailButtons(it);
   syncFixMatchBtn(it); // admin, library-born items only: fix a wrong TMDB match
   const _ds = $('detail').querySelector('.detailScroll'); _ds.scrollTop = 0; wireBackdropScrollFade(_ds); $('backdrop').style.opacity = '';
@@ -8801,6 +8817,34 @@ function retargetDetailFromEpisodeCard(card) {
   }
   updateDetailPlayLabel({ label: resume ? 'Resume' : 'Play', target });
   syncDetailSourcesTitle(target);
+}
+function earlyNextUpTarget(show) {
+  if (!show || !show.tmdbId) return null;
+  const prefix = `tmdb:tv:${show.tmdbId}:s`;
+  const wm = S.watchMap || {};
+  const pending = S._pendingHomeNext;
+  const pendingForShow = pending && Number(pending.tmdbId) === Number(show.tmdbId) && episodeKeyParts(pending)
+    ? pending : null;
+  const inProg = Object.keys(wm).filter((k) => k.startsWith(prefix) && !watchLooksFinished(wm[k]) && wm[k].position > 30)
+    .sort((a, b) => wm[b].updatedAt - wm[a].updatedAt)[0];
+  if (inProg) {
+    const m = /s(\d+)e(\d+)/.exec(inProg);
+    return epTarget(show, +m[1], +m[2], wm[inProg].position);
+  }
+  if (pendingForShow) return pendingForShow;
+  const localEpisodes = localEpisodesForShow(show);
+  const watched = Object.keys(wm).filter((k) => k.startsWith(prefix) && watchLooksFinished(wm[k]))
+    .map((k) => { const m = /s(\d+)e(\d+)/.exec(k); return { s: +m[1], e: +m[2] }; })
+    .sort((a, b) => a.s - b.s || a.e - b.e);
+  if (localEpisodes.length) {
+    const nextLocal = localEpisodes.find((ep) => !(wm[ep.key] && wm[ep.key].watched)) || localEpisodes[localEpisodes.length - 1];
+    return epTarget(show, nextLocal.s, nextLocal.e, 0);
+  }
+  if (watched.length) {
+    const last = watched[watched.length - 1];
+    return epTarget(show, last.s, last.e + 1, 0);
+  }
+  return epTarget(show, 1, 1, 0);
 }
 function pickNextUp(show, seasons) {
   const prefix = `tmdb:tv:${show.tmdbId}:s`, wm = S.watchMap || {};
