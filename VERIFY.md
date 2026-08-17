@@ -125,6 +125,20 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-17, v3.0.2 ship APK + Windows server + Windows client:
+
+- Version contract: `package.json` 3.0.2; Android `versionName` 3.0.2 /
+  `versionCode` 333; Windows client package/Tauri/Cargo 3.0.2.
+- Kids Home and the Kids page still lead with popular Family/Animation
+  movies and Kids TV, then weave in recent titles from the last 18
+  months. The mix rotates once a day so the shelf is not identical
+  every morning. The PG cap is unchanged.
+- `npm.cmd test` 569/569. Isolated `/api/server` smoke reported 3.0.2.
+  `npm.cmd run verify:full` passed household VOD/CC, IPTV ABC+ESPN
+  web+native, overlapping Play, Android lint/native-unit/`assembleDebug`,
+  and Android ExoPlayer stress on emulator-5554.
+- Windows native GPU/HDR was not run (needs a real Windows PC session).
+
 2026-08-17, v3.0.1 ship APK + Windows server + Windows client:
 
 - Version contract: `package.json` 3.0.1; Android `versionName` 3.0.1 /

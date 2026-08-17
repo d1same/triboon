@@ -768,11 +768,11 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   assert.match(ui, /async function buildHomeRows\(defs\) \{[\s\S]+const seen = new Set\(\);[\s\S]+Promise\.all\(defs\.map[\s\S]+homeCatalogRow\(d\.name, d\.path, results\[i\], d\.kind \|\| 'catalog', seen\)/,
     'buildHomeRows fetches rows in parallel then builds them in order through one shared seen set');
   // Short Home: Trending + a Kids shelf. Popular/Top-rated/rotating-genre dumps stay off Home.
-  assert.match(ui, /\{ name: 'Trending today', path: '\/api\/tmdb\/trending\/all\/day' \}[\s\S]+name: 'Kids'[\s\S]+mix: \[[\s\S]+kidsMovieDiscoverPath\(\)[\s\S]+kidsTvDiscoverPath\(\)/,
-    'the unlimited home page keeps Trending and one mixed Kids row of movies and shows');
+  assert.match(ui, /\{ name: 'Trending today', path: '\/api\/tmdb\/trending\/all\/day' \}[\s\S]+name: 'Kids'[\s\S]+kidsFresh: true[\s\S]+mix: \[[\s\S]+kidsMovieDiscoverPath\(\)[\s\S]+kidsTvDiscoverPath\(\)[\s\S]+kidsMovieFreshPath\(\)[\s\S]+kidsTvFreshPath\(\)/,
+    'the unlimited home page keeps Trending and one mixed Kids row of popular plus recent titles');
   assert.match(ui, /function interleaveHomeItems\(a, b\) \{[\s\S]+function homeMixedCatalogRow\(name, lists, seen\) \{[\s\S]+homeCatalogDedupe\(interleaveHomeItems\(lists\[0\], lists\[1\]\), new Set\(\)\)/,
     'Kids movies and Kids shows stay in one Home row; Trending must not steal the movies');
-  assert.match(ui, /if \(\(S\.maxLevel \?\? 4\) === 0\) \{[\s\S]+return buildHomeRows\(\[\s*\{\s*name: 'Kids',\s*mix:/,
+  assert.match(ui, /if \(\(S\.maxLevel \?\? 4\) === 0\) \{[\s\S]+return buildHomeRows\(\[\s*\{\s*name: 'Kids',\s*kidsFresh: true,\s*mix:/,
     'a Kids profile gets one mixed Kids shelf, not a separate movie-only row that empties it');
   assert.doesNotMatch(ui, /name: 'Trending today'[\s\S]{0,400}name: 'Popular movies'[\s\S]{0,400}name: 'Top rated movies'/,
     'unlimited Home no longer stacks Popular and Top rated under Trending');
@@ -1272,6 +1272,16 @@ test('Kids catalog stays PG-max and lives on a hideable menu page', () => {
     'Kids movie discover must not request PG-13');
   assert.match(ui, /function kidsTvDiscoverPath\(\) \{[\s\S]+HOME_KIDS_TV_PATH \+ CATALOG_Q/,
     'Kids TV uses the Kids genre list and does not send movie cert params');
+  assert.match(ui, /function kidsMovieFreshPath\(\) \{[\s\S]+primary_release_date\.desc[\s\S]+certification\.lte=\$\{encodeURIComponent\(kidsCertCap\(\)\)\}/,
+    'fresh Kids movies stay on the same PG-max Family+Animation list, sorted by recent date');
+  assert.doesNotMatch(ui, /kidsMovieFreshPath[\s\S]{0,220}PG-13/,
+    'fresh Kids movie discover must not request PG-13');
+  assert.match(ui, /function kidsTvFreshPath\(\) \{[\s\S]+first_air_date\.desc[\s\S]+with_genres=10762/,
+    'fresh Kids TV stays on the Kids genre list, sorted by recent air date');
+  assert.match(ui, /function weaveKidsPopularAndFresh\(popular, fresh\) \{[\s\S]+rotateKidsItems\(take\(popular\), 'popular', 3\)[\s\S]+rotateKidsItems\(take\(fresh\), 'fresh', 20\)/,
+    'Kids shelves keep popular titles and weave in a daily-rotated fresh set');
+  assert.match(ui, /function homeCatalogKey\(\) \{[\s\S]+todayStr\(\)/,
+    'the Home catalog cache key includes the day so Kids rotation refreshes overnight');
   assert.match(ui, /data-nav="kids"[\s\S]+<span class="rlabel">Kids<\/span>/,
     'the left rail has a Kids page button');
   assert.match(ui, /const MENU_DEFAULT = \[[\s\S]*'tv', 'kids', 'livetv'/,
@@ -1284,8 +1294,8 @@ test('Kids catalog stays PG-max and lives on a hideable menu page', () => {
     'showing Kids must keep the known list so the next load does not hide it again');
   assert.match(ui, /async function openKidsBrowse\(\) \{[\s\S]+browseTitle[\s\S]+Kids[\s\S]+runKidsBrowse\(true/,
     'the Kids menu opens a dedicated browse page');
-  assert.match(ui, /async function runKidsBrowse\(reset, requestId\) \{[\s\S]+kidsMovieDiscoverPath\(\)[\s\S]+kidsTvDiscoverPath\(\)[\s\S]+interleaveHomeItems\(homeCatalogItems\(movies, 'maturity'\), homeCatalogItems\(shows, 'maturity'\)\)/,
-    'the Kids page interleaves PG-max movies with Kids shows');
+  assert.match(ui, /async function runKidsBrowse\(reset, requestId\) \{[\s\S]+kidsMovieDiscoverPath\(\)[\s\S]+kidsTvDiscoverPath\(\)[\s\S]+kidsMovieFreshPath\(\)[\s\S]+kidsTvFreshPath\(\)[\s\S]+weaveKidsPopularAndFresh\(/,
+    'the Kids page weaves popular PG-max movies and Kids shows with recent titles');
   assert.match(ui, /if \(v === 'kids' && !opts\.preservePage\) openKidsBrowse\(\)/,
     'switching to Kids loads the Kids catalog');
   assert.match(ui, /v === 'watchlist' \|\| v === 'livetv' \|\| v === 'kids'/,

@@ -5541,6 +5541,22 @@ function kidsMovieDiscoverPath() {
 function kidsTvDiscoverPath() {
   return HOME_KIDS_TV_PATH + CATALOG_Q;
 }
+// Fresh Kids: same PG-max Family/Animation + Kids-TV lists, but recent dates so
+// Home/Kids are not the same popularity page every morning.
+function kidsFreshSince() {
+  const d = new Date();
+  d.setUTCMonth(d.getUTCMonth() - 18);
+  return d.toISOString().slice(0, 10);
+}
+function kidsMovieFreshPath() {
+  return '/api/tmdb/discover/movie?sort_by=primary_release_date.desc&vote_count.gte=10&with_genres=16|10751'
+    + `&primary_release_date.gte=${kidsFreshSince()}&primary_release_date.lte=${todayStr()}`
+    + `&certification_country=US&certification.lte=${encodeURIComponent(kidsCertCap())}` + CATALOG_Q;
+}
+function kidsTvFreshPath() {
+  return '/api/tmdb/discover/tv?sort_by=first_air_date.desc&vote_count.gte=8&with_genres=10762'
+    + `&first_air_date.gte=${kidsFreshSince()}&first_air_date.lte=${todayStr()}` + CATALOG_Q;
+}
 // TMDB's popularity-sorted lists are polluted with softcore "erotic dramas" that are NOT
 // flagged adult (TMDB's adult flag means hardcore only — these carry mainstream genre tags).
 // Three layers, applied for EVERY profile:
@@ -6113,6 +6129,65 @@ function homeMixedCatalogRow(name, lists, seen) {
     },
   };
 }
+function kidsDayShift(length, salt, maxShift) {
+  if (length <= 1) return 0;
+  const cap = Math.max(1, Math.min(maxShift, length - 1));
+  const s = `${todayStr()}|${salt}|${length}`;
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+  return (h >>> 0) % (cap + 1);
+}
+function rotateKidsItems(items, salt, maxShift) {
+  const list = Array.isArray(items) ? items.slice() : [];
+  const start = kidsDayShift(list.length, salt, maxShift);
+  return start ? list.slice(start).concat(list.slice(0, start)) : list;
+}
+function weaveKidsPopularAndFresh(popular, fresh) {
+  const seen = new Set();
+  const take = (list) => {
+    const out = [];
+    for (const it of list || []) {
+      const k = it && it.tmdbId ? `${it.type || ''}:${it.tmdbId}` : '';
+      if (!k || seen.has(k)) continue;
+      seen.add(k);
+      out.push(it);
+    }
+    return out;
+  };
+  const pop = rotateKidsItems(take(popular), 'popular', 3);
+  const neu = rotateKidsItems(take(fresh), 'fresh', 20);
+  const out = [];
+  let i = 0;
+  let j = 0;
+  while (i < pop.length || j < neu.length) {
+    if (i < pop.length) out.push(pop[i++]);
+    if (i < pop.length) out.push(pop[i++]);
+    if (j < neu.length) out.push(neu[j++]);
+  }
+  return out;
+}
+function homeKidsCatalogRow(name, popular, fresh, seen) {
+  const all = weaveKidsPopularAndFresh(popular, fresh);
+  if (seen) {
+    for (const it of all) {
+      if (it && it.tmdbId) seen.add(`${it.type || ''}:${it.tmdbId}`);
+    }
+  }
+  return {
+    name,
+    poster: true,
+    items: all.slice(0, HOME_CATALOG_INITIAL),
+    lazy: {
+      path: '',
+      kind: 'catalog',
+      page: 1,
+      totalPages: 1,
+      buffer: all.slice(HOME_CATALOG_INITIAL),
+      loading: false,
+      done: all.length <= HOME_CATALOG_INITIAL,
+    },
+  };
+}
 // Kids shelf: Family + Animation movies up to PG, plus TMDB's Kids TV genre (not all
 // animation TV — that list includes adult anime). Same idea as a Max Kids row on a regular profile.
 const HOME_KIDS_MOVIE_PATH = '/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=80&with_genres=16|10751';
@@ -6132,7 +6207,9 @@ async function buildHomeRows(defs) {
   defs.forEach((d, i) => {
     if (d.mix) {
       const lists = d.mix.map((m, j) => homeCatalogItems(results[i] && results[i][j], m.kind || 'catalog'));
-      const row = homeMixedCatalogRow(d.name, lists, seen);
+      const row = d.kidsFresh
+        ? homeKidsCatalogRow(d.name, interleaveHomeItems(lists[0], lists[1]), interleaveHomeItems(lists[2], lists[3]), seen)
+        : homeMixedCatalogRow(d.name, lists, seen);
       if (row.items.length) rows.push(row);
       return;
     }
@@ -6149,9 +6226,12 @@ async function loadHomeCatalogRows() {
     return buildHomeRows([
       {
         name: 'Kids',
+        kidsFresh: true,
         mix: [
           { path: kidsMovieDiscoverPath(), kind: 'maturity' },
           { path: kidsTvDiscoverPath(), kind: 'maturity' },
+          { path: kidsMovieFreshPath(), kind: 'maturity' },
+          { path: kidsTvFreshPath(), kind: 'maturity' },
         ],
       },
     ]);
@@ -6161,9 +6241,12 @@ async function loadHomeCatalogRows() {
       { name: 'Popular movies', path: '/api/tmdb/discover/movie?sort_by=popularity.desc&vote_count.gte=100' + CATALOG_Q + certParams(), kind: 'maturity' },
       {
         name: 'Kids',
+        kidsFresh: true,
         mix: [
           { path: kidsMovieDiscoverPath(), kind: 'maturity' },
           { path: kidsTvDiscoverPath(), kind: 'maturity' },
+          { path: kidsMovieFreshPath(), kind: 'maturity' },
+          { path: kidsTvFreshPath(), kind: 'maturity' },
         ],
       },
     ]);
@@ -6174,16 +6257,19 @@ async function loadHomeCatalogRows() {
     { name: 'Trending today', path: '/api/tmdb/trending/all/day' },
     {
       name: 'Kids',
+      kidsFresh: true,
       mix: [
         { path: kidsMovieDiscoverPath() },
         { path: kidsTvDiscoverPath() },
+        { path: kidsMovieFreshPath() },
+        { path: kidsTvFreshPath() },
       ],
     },
   ]);
 }
 const HOME_CATALOG_TTL = 30 * 60 * 1000;
 function homeCatalogKey() {
-  return [S.serverInfo && S.serverInfo.tmdb ? 'tmdb' : 'none', S.maxLevel ?? 4, S.profile ? S.profile.id : 'default'].join(':');
+  return [S.serverInfo && S.serverInfo.tmdb ? 'tmdb' : 'none', S.maxLevel ?? 4, S.profile ? S.profile.id : 'default', todayStr()].join(':');
 }
 function cachedHomeCatalogRows() {
   const key = homeCatalogKey();
@@ -16077,17 +16163,24 @@ async function runKidsBrowse(reset, requestId) {
   const current = () => reqId === S.kidsReq && S.view === 'kids';
   let loaded = false;
   try {
-    const [movies, shows] = await Promise.all([
-      api(kidsMovieDiscoverPath() + `&page=${page}`).catch(() => null),
-      api(kidsTvDiscoverPath() + `&page=${page}`).catch(() => null),
+    const [movies, shows, freshMovies, freshShows] = await Promise.all([
+      api(homeCatalogPathWithPage(kidsMovieDiscoverPath(), page)).catch(() => null),
+      api(homeCatalogPathWithPage(kidsTvDiscoverPath(), page)).catch(() => null),
+      api(homeCatalogPathWithPage(kidsMovieFreshPath(), page)).catch(() => null),
+      api(homeCatalogPathWithPage(kidsTvFreshPath(), page)).catch(() => null),
     ]);
     if (!current()) return;
-    const items = interleaveHomeItems(homeCatalogItems(movies, 'maturity'), homeCatalogItems(shows, 'maturity'));
+    const items = weaveKidsPopularAndFresh(
+      interleaveHomeItems(homeCatalogItems(movies, 'maturity'), homeCatalogItems(shows, 'maturity')),
+      interleaveHomeItems(homeCatalogItems(freshMovies, 'maturity'), homeCatalogItems(freshShows, 'maturity')),
+    );
     if (page === 1) renderGrid(items); else appendGrid(items);
     S.kidsPage = page;
     const moviePages = Math.max(1, parseInt(movies && movies.total_pages, 10) || page);
     const tvPages = Math.max(1, parseInt(shows && shows.total_pages, 10) || page);
-    if (page >= Math.min(25, Math.max(moviePages, tvPages)) || !items.length) S.kidsDone = true;
+    const freshMoviePages = Math.max(1, parseInt(freshMovies && freshMovies.total_pages, 10) || page);
+    const freshTvPages = Math.max(1, parseInt(freshShows && freshShows.total_pages, 10) || page);
+    if (page >= Math.min(25, Math.max(moviePages, tvPages, freshMoviePages, freshTvPages)) || !items.length) S.kidsDone = true;
     loaded = true;
   } catch (e) {
     if (current() && page === 1) {
