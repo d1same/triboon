@@ -125,16 +125,21 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
-2026-08-17, v3.0.1 Music now-playing center + mid-show source-swap stay:
+2026-08-17, v3.0.1 ship APK + Windows server + Windows client:
 
 - Version contract: `package.json` 3.0.1; Android `versionName` 3.0.1 /
   `versionCode` 332; Windows client package/Tauri/Cargo 3.0.1.
 - Music now-playing is a centered shrink-wrapped player. Like / Lyrics /
   Radio / Queue keep full labels. Phone title and controls sit under the
   cover. Mid-episode source swaps no longer look like credits.
-- Focused Node contracts for Music artwork/now-playing, episode handoff,
-  and lyrics/like routes passed. Full `verify:full` / APK / Windows
-  installer not rebuilt in this bump.
+- `npm.cmd test` 569/569. Isolated `/api/server` smoke reported 3.0.1.
+  Android lint/native-unit/`assembleDebug` passed on emulator-5554.
+- Household VOD/IPTV/overlapping Play and Android ExoPlayer stress were
+  not signed in (no `TRIBOON_USER`/`TRIBOON_PASS` in this session;
+  emulator stopped at login). Those live rows stay unverified.
+- Owner rule: "ship / new version / do everything" means tag `vX.Y.Z`
+  so CI publishes APK + Windows server + Windows client. A code-only
+  push is not a release.
 
 2026-08-14, v3.0.0 smash-Play join + Start Over head warm:
 

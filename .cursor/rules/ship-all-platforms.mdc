@@ -1,0 +1,22 @@
+---
+description: Shipping a version means APK + Windows server + Windows client, not a code-only push.
+alwaysApply: true
+---
+
+# Ship every platform
+
+When the owner says **ship**, **new version**, **push a version**, or **do APK / Windows / everything**:
+
+1. Bump `package.json`, Android `versionName`/`versionCode`, and all four Windows client version spots together.
+2. Run `npm.cmd run verify:full` before tagging. Do not tag on a failing gate.
+3. Commit, push `main`, then tag `vX.Y.Z` on that exact `origin/main` commit and push the tag.
+4. GitHub Actions is the publisher. The tag must produce one GitHub release with:
+   - `triboon-vX.Y.Z.apk` + `triboon.apk`
+   - `Triboon-Windows-Server-vX.Y.Z.exe` + `Triboon-Windows-Server.exe`
+   - `Triboon-Windows-Client-vX.Y.Z.exe` + `Triboon-Windows-Client.exe`
+   - `SHA256SUMS.txt`
+5. Wait until that release is published. A code push to `main` is not a release.
+
+Example: they say "push the new version." You do not stop after `git push`. You tag `v3.0.1` so CI builds the APK and both Windows installers.
+
+Do not generate a new Android keystore. Do not publish debug-signed APKs. Do not overwrite an existing release.

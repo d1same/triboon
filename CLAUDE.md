@@ -208,6 +208,10 @@ Parked (do not re-open unless the owner asks):
 - A phase is done only when tests pass and the owner has seen the demo.
 - Never weaken or delete a failing test to make it pass. Fix the code or raise
   it with the owner.
+- When the owner asks to ship, push a new version, or "do APK / Windows /
+  everything", finish the full release: bump versions, run `verify:full`,
+  push `main`, tag `vX.Y.Z` on that commit, and wait for CI to publish the
+  APK plus both Windows installers. A code-only `git push` is not a release.
 - Releases always bump `package.json` and Android versionCode/versionName
   together; the tag is `vX.Y.Z`; the GitHub release carries ONE universal APK —
   versioned `triboon-vX.Y.Z.apk` plus the stable alias `triboon.apk` (TV + phone
