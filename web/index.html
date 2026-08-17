@@ -3115,7 +3115,7 @@ body.tv .mSearchSongs .musicRow .mA{font-size:13.5px}
 body.musicPaused .mEq i{animation-play-state:paused}
 
 /* Full-screen now-playing page. Queue starts compact (hidden). */
-#musicNow{position:fixed;inset:0;z-index:70;display:none;flex-direction:column;background:var(--ink);overflow:hidden}
+#musicNow{position:fixed;inset:0;z-index:70;display:none;flex-direction:column;align-items:center;background:var(--ink);overflow:hidden}
 #musicNow.open{display:flex}
 /* Phone burger lives at the same corner as Back. Hide it while this page is open. */
 body:has(#musicNow.open) #burger{display:none!important}
@@ -3128,14 +3128,14 @@ body:has(#musicNow.open) #burger{display:none!important}
 @keyframes mnGlow{0%,100%{box-shadow:0 40px 90px rgba(0,0,0,.7),0 0 0 1px rgba(255,255,255,.05),0 0 22px rgba(193,59,214,.16)}50%{box-shadow:0 40px 90px rgba(0,0,0,.7),0 0 0 1px rgba(255,255,255,.08),0 0 42px rgba(255,198,92,.3)}}
 .mnCollapse{position:absolute;top:22px;left:24px;z-index:3;width:46px;height:46px;border-radius:50%;display:grid;place-items:center;background:var(--soft);color:var(--text)}
 .mnCollapse:hover,.mnCollapse.focus{background:var(--btnHover);color:var(--btnFocusText);outline:none;box-shadow:inset 3px 0 0 var(--focus),0 10px 28px rgba(0,0,0,.32)}
-.mnMain{position:relative;z-index:2;display:flex;align-items:center;gap:42px;padding:58px 7vw 28px;flex:1 1 auto;flex-wrap:nowrap;justify-content:center}
+.mnMain{position:relative;z-index:2;display:flex;align-items:center;justify-content:center;gap:48px;padding:58px 40px 28px;flex:1 1 auto;flex-wrap:nowrap;width:auto;max-width:min(1080px,calc(100vw - 64px));box-sizing:border-box}
 .mnCover{width:clamp(260px,28vw,420px);aspect-ratio:1;border-radius:18px;background:#241934 center/cover no-repeat;overflow:hidden;
   box-shadow:0 40px 90px rgba(0,0,0,.7),0 0 0 1px rgba(255,255,255,.05);flex:none}
 .mnCover.ytStill{background-size:178% auto}
 #musicNow.open .mnCover{animation:mnFloat 7.5s ease-in-out infinite,mnGlow 6s ease-in-out infinite}
 #musicNow.open .mnCover.mnPop{animation:mnPop .42s cubic-bezier(.2,.8,.2,1),mnFloat 7.5s ease-in-out infinite,mnGlow 6s ease-in-out infinite}
 body.musicPaused #musicNow .mnCover,body.musicPaused #musicNow .mnBg{animation-play-state:paused}
-.mnInfo{flex:1;min-width:260px;max-width:720px}
+.mnInfo{flex:none;width:min(420px,100%);min-width:0}
 .mnEyebrow{font:700 11px "JetBrains Mono";letter-spacing:.22em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
 .mnTitle{font:800 clamp(26px,3vw,42px)/1.06 "Sora";letter-spacing:0;margin-bottom:9px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .mnArtist{font:600 clamp(14px,1.35vw,19px) "Albert Sans";color:var(--amber);margin-bottom:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -3144,12 +3144,12 @@ body.musicPaused #musicNow .mnCover,body.musicPaused #musicNow .mnBg{animation-p
 .mnProg .mbBar::before{content:"";position:absolute;left:0;right:0;top:-14px;bottom:-14px}
 .mnProg .mbFill{position:relative;box-shadow:0 0 10px rgba(193,59,214,.5)}
 .mnProg .mbFill::after{content:"";position:absolute;right:-6px;top:50%;width:12px;height:12px;border-radius:50%;background:var(--amber);transform:translateY(-50%);box-shadow:0 0 0 3px rgba(255,198,92,.22)}
-.mnCtl{display:flex;align-items:center;gap:10px;flex-wrap:nowrap}
-.mnExtra{display:flex;align-items:center;gap:10px;margin-top:18px;flex-wrap:wrap}
+.mnCtl{display:flex;align-items:center;justify-content:flex-start;gap:10px;flex-wrap:nowrap}
+.mnExtra{display:flex;align-items:center;justify-content:flex-start;gap:10px;margin-top:18px;flex-wrap:wrap}
 .mnCtl .mbBtn{width:46px;height:46px}.mnCtl .mbBtn svg{width:22px;height:22px}
 .mnCtl .mbPlay{width:62px;height:62px;margin:0 4px}.mnCtl .mbPlay svg{width:29px;height:29px}
-.mnAction{min-height:46px;padding:0 16px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;gap:8px;flex:none;background:rgba(255,255,255,.06);color:var(--text);font:600 14px "Albert Sans";letter-spacing:.01em}
-.mnAction span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mnAction{min-height:46px;padding:0 16px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;gap:8px;flex:none;width:auto;min-width:max-content;white-space:nowrap;background:rgba(255,255,255,.06);color:var(--text);font:600 14px "Albert Sans";letter-spacing:.01em}
+.mnAction span{overflow:visible;white-space:nowrap}
 .mnAction svg{width:18px;height:18px;flex:none}
 .mnAction.focus,.mnAction:focus-visible{background:var(--btnHover);color:var(--btnFocusText);outline:none;box-shadow:inset 3px 0 0 var(--focus),0 10px 28px rgba(0,0,0,.32)}
 /* Shuffle/repeat/like/lyrics: muted until ON, then brand-amber. */
@@ -3161,9 +3161,9 @@ body.musicPaused #musicNow .mnCover,body.musicPaused #musicNow .mnBg{animation-p
 .mnQueue,.mnLyrics{display:block;position:relative;z-index:3;flex:0 1 34vh;width:min(820px,calc(100vw - 320px));min-height:0;overflow-y:auto;padding:14px 14px 16px;margin:0 auto 28px;border-radius:8px;background:rgba(18,13,27,.78);border:1px solid rgba(255,255,255,.08);box-shadow:0 30px 80px rgba(0,0,0,.36)}
 #musicNow.queueHidden .mnQueue{display:none}
 #musicNow:not(.lyricsOpen) .mnLyrics{display:none}
-#musicNow.queueHidden:not(.lyricsOpen) .mnMain{flex:1 1 auto;width:min(1100px,calc(100vw - 150px));margin:0 auto;padding-bottom:74px}
-#musicNow.queueHidden:not(.lyricsOpen) .mnCover{width:clamp(280px,30vw,440px)}
-#musicNow.queueHidden:not(.lyricsOpen) .mnInfo{max-width:760px}
+#musicNow.queueHidden:not(.lyricsOpen) .mnMain{flex:1 1 auto;width:auto;max-width:min(1080px,calc(100vw - 64px));margin:0 auto;padding-bottom:74px}
+#musicNow.queueHidden:not(.lyricsOpen) .mnCover{width:clamp(280px,30vw,400px)}
+#musicNow.queueHidden:not(.lyricsOpen) .mnInfo{width:min(420px,100%)}
 #musicNow:not(.queueHidden) .mnMain,#musicNow.lyricsOpen .mnMain{flex:0 0 auto;padding-bottom:16px}
 #musicNow:not(.queueHidden) .mnCover,#musicNow.lyricsOpen .mnCover{width:clamp(160px,16vw,220px)}
 .mnQueue h2,.mnLyrics h2{font:700 12px "JetBrains Mono";letter-spacing:.18em;text-transform:uppercase;color:var(--amber);margin-bottom:10px}
@@ -3181,7 +3181,7 @@ body.tv #musicNow .mnBg,body.tv #musicNow .mnCover{animation:none} /* per-frame 
 body.tv #musicNow .mnBg{filter:brightness(.32);transform:none}
 body.tv #musicNow .mnMain{padding-top:42px;padding-bottom:30px;gap:28px}
 body.tv #musicNow .mnCover{width:clamp(170px,18vw,240px)}
-body.tv #musicNow .mnInfo{max-width:520px;min-width:260px}
+body.tv #musicNow .mnInfo{width:min(440px,100%);min-width:0}
 body.tv #musicNow .mnTitle{font-size:clamp(23px,2.25vw,32px);line-height:1.04}
 body.tv #musicNow .mnArtist{margin-bottom:13px}
 body.tv #musicNow .mnProg{margin-bottom:13px}
@@ -3190,33 +3190,33 @@ body.tv #musicNow .mnCtl .mbBtn{width:42px;height:42px}
 body.tv #musicNow .mnAction{min-height:42px;padding:0 16px;font-size:13px}
 body.tv #musicNow .mnCtl .mbPlay{width:58px;height:58px}
 body.tv #musicNow .mnQueue,body.tv #musicNow .mnLyrics{width:min(780px,calc(100vw - 310px));margin-bottom:24px}
-body.tv #musicNow.queueHidden:not(.lyricsOpen) .mnMain{width:min(980px,calc(100vw - 140px));padding-bottom:52px}
+body.tv #musicNow.queueHidden:not(.lyricsOpen) .mnMain{width:auto;max-width:min(980px,calc(100vw - 80px));padding-bottom:52px}
 body.tv #musicNow.queueHidden:not(.lyricsOpen) .mnCover{width:clamp(240px,24vw,360px)}
 @media (prefers-reduced-motion:reduce){#musicNow .mnBg,#musicNow .mnCover{animation:none!important}}
 @media (max-width:900px){
-  .mnMain{flex-direction:column;align-items:center;gap:20px;padding:72px 20px 20px;text-align:center}
+  .mnMain{flex-direction:column;align-items:center;justify-content:center;gap:20px;padding:72px 20px 20px;text-align:center;width:100%;max-width:100%}
   .mnCover{width:min(280px,68vw)}
-  .mnInfo{min-width:0;width:100%;max-width:calc(100vw - 40px)}
+  .mnInfo{width:min(420px,calc(100vw - 40px));text-align:center}
   .mnTitle,.mnArtist,.mnEyebrow{text-align:center}
   .mnArtist{white-space:normal}
   .mnCtl{justify-content:center}
-  .mnExtra{display:grid;grid-template-columns:1fr 1fr;gap:8px;width:100%;max-width:420px;margin:18px auto 0}
-  .mnAction{width:100%;padding:0 12px}
+  .mnExtra{display:grid;grid-template-columns:1fr 1fr;justify-content:center;gap:8px;width:min(420px,calc(100vw - 40px));margin:18px auto 0}
+  .mnAction{width:100%;min-width:0;padding:0 12px}
   .mnQueue,.mnLyrics{width:min(520px,calc(100vw - 32px));margin:0 auto 16px;flex:1 1 38vh;max-height:none}
-  #musicNow.queueHidden:not(.lyricsOpen) .mnMain{width:100%;padding-bottom:36px}
+  #musicNow.queueHidden:not(.lyricsOpen) .mnMain{width:100%;max-width:100%;padding-bottom:36px}
   #musicNow.queueHidden:not(.lyricsOpen) .mnCover{width:min(300px,72vw)}
   #musicNow:not(.queueHidden) .mnCover,#musicNow.lyricsOpen .mnCover{width:min(168px,42vw)}
 }
-body.mobileShell #musicNow .mnMain{flex-direction:column;align-items:center;gap:20px;padding:72px 20px 20px;text-align:center}
+body.mobileShell #musicNow .mnMain{flex-direction:column;align-items:center;justify-content:center;gap:20px;padding:72px 20px 20px;text-align:center;width:100%;max-width:100%}
 body.mobileShell #musicNow .mnCover{width:min(280px,68vw)}
-body.mobileShell #musicNow .mnInfo{min-width:0;width:100%;max-width:calc(100vw - 40px)}
+body.mobileShell #musicNow .mnInfo{width:min(420px,calc(100vw - 40px));text-align:center}
 body.mobileShell #musicNow .mnTitle,body.mobileShell #musicNow .mnArtist,body.mobileShell #musicNow .mnEyebrow{text-align:center}
 body.mobileShell #musicNow .mnArtist{white-space:normal}
 body.mobileShell #musicNow .mnCtl{justify-content:center}
-body.mobileShell #musicNow .mnExtra{display:grid;grid-template-columns:1fr 1fr;gap:8px;width:100%;max-width:420px;margin:18px auto 0}
-body.mobileShell #musicNow .mnAction{width:100%;padding:0 12px}
+body.mobileShell #musicNow .mnExtra{display:grid;grid-template-columns:1fr 1fr;justify-content:center;gap:8px;width:min(420px,calc(100vw - 40px));margin:18px auto 0}
+body.mobileShell #musicNow .mnAction{width:100%;min-width:0;padding:0 12px}
 body.mobileShell #musicNow .mnQueue,body.mobileShell #musicNow .mnLyrics{width:min(520px,calc(100vw - 32px));margin:0 auto 16px;flex:1 1 38vh;max-height:none}
-body.mobileShell #musicNow.queueHidden:not(.lyricsOpen) .mnMain{width:100%;padding-bottom:36px}
+body.mobileShell #musicNow.queueHidden:not(.lyricsOpen) .mnMain{width:100%;max-width:100%;padding-bottom:36px}
 body.mobileShell #musicNow.queueHidden:not(.lyricsOpen) .mnCover{width:min(300px,72vw)}
 body.mobileShell #musicNow:not(.queueHidden) .mnCover,body.mobileShell #musicNow.lyricsOpen .mnCover{width:min(168px,42vw)}
 

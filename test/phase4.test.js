@@ -1956,8 +1956,8 @@ test('music search supports voice and TV result focus without side-note clutter'
     'the music seekbar should scrub via pointer (touch tap + drag), not click only');
   assert.match(ui, /\.mnProg \.mbBar\{height:8px;touch-action:none\}\s*\.mnProg \.mbBar::before\{content:""[^}]*top:-14px/,
     'the music seekbar needs touch-action:none and an enlarged ::before hit area for touch');
-  assert.match(ui, /\.mnInfo\{min-width:0;width:100%;max-width:calc\(100vw - 40px\)\}/,
-    'on phones the now-playing info must be viewport-capped so a long artist wraps instead of shifting the layout');
+  assert.match(ui, /\.mnInfo\{width:min\(420px,calc\(100vw - 40px\)\);text-align:center\}/,
+    'on phones the now-playing info stays centered and viewport-capped so a long artist wraps instead of shifting the layout');
   assert.match(ui, /function moveMusicSearchDown\(\) \{[\s\S]+if \(q\) \{ musicSearchAndFocusResults\(\); return; \}[\s\S]+chipEls\(\)\.length[\s\S]+musicRows\(\)\.length/,
     'Music ArrowDown should not strand focus in the input while search results load');
   // TV: scrollIntoView is unreliable inside the #musicList overflow container (the focus ring moved
@@ -5840,9 +5840,13 @@ test('Artwork regression: Music and Audiobook covers use shared sanitized fallba
     'Music now-playing cover and blurred backdrop should share sanitized deterministic artwork');
   assert.match(ui, /\.mnCover\{[^}]*center\/cover no-repeat[\s\S]+?\.mnCover\.ytStill\{background-size:178% auto\}/,
     'YouTube stills with baked-in bars should crop; square album art should not');
-  assert.match(ui, /#musicNow\{[^}]*z-index:70/,
-    'now-playing should sit above the phone menu button');
-  assert.match(ui, /\.mnExtra\{display:flex;align-items:center;gap:10px;margin-top:18px;flex-wrap:wrap\}/,
+  assert.match(ui, /#musicNow\{[^}]*z-index:70[^}]*align-items:center/,
+    'now-playing should sit above the phone menu button and center its player block');
+  assert.match(ui, /\.mnInfo\{flex:none;width:min\(420px,100%\)/,
+    'now-playing info must not stretch across the screen and leave the cover on the left');
+  assert.match(ui, /\.mnAction\{[^}]*min-width:max-content;white-space:nowrap/,
+    'like/lyrics/radio/queue labels must stay full words instead of shrinking to one letter');
+  assert.match(ui, /\.mnExtra\{display:flex;align-items:center;justify-content:flex-start;gap:10px;margin-top:18px;flex-wrap:wrap\}/,
     'like/lyrics/radio/queue keep their labels and wrap instead of shrinking');
   assert.match(ui, /body:has\(#musicNow\.open\) #burger\{display:none!important\}/,
     'phone menu button hides while now-playing is open');

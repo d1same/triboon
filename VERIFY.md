@@ -125,6 +125,17 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-17, v3.0.1 Music now-playing center + mid-show source-swap stay:
+
+- Version contract: `package.json` 3.0.1; Android `versionName` 3.0.1 /
+  `versionCode` 332; Windows client package/Tauri/Cargo 3.0.1.
+- Music now-playing is a centered shrink-wrapped player. Like / Lyrics /
+  Radio / Queue keep full labels. Phone title and controls sit under the
+  cover. Mid-episode source swaps no longer look like credits.
+- Focused Node contracts for Music artwork/now-playing, episode handoff,
+  and lyrics/like routes passed. Full `verify:full` / APK / Windows
+  installer not rebuilt in this bump.
+
 2026-08-14, v3.0.0 smash-Play join + Start Over head warm:
 
 - Version contract: `package.json` 3.0.0; Android `versionName` 3.0.0 /
