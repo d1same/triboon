@@ -339,6 +339,55 @@ elif action == "playlist":
     else:
         data = yt.get_playlist(playlist_id, limit=limit)
     print(json.dumps({"title": data.get("title") or "Playlist", "rows": data.get("tracks") or []}))
+elif action == "lyrics":
+    video_id = str(payload.get("id") or "")
+    watch = yt.get_watch_playlist(videoId=video_id, limit=1)
+    liked = None
+    tracks = watch.get("tracks") or []
+    if tracks:
+        liked = tracks[0].get("likeStatus")
+    lyrics_id = watch.get("lyrics")
+    text = None
+    source = None
+    timed = None
+    if lyrics_id:
+        data = None
+        try:
+            data = yt.get_lyrics(lyrics_id, timestamps=True)
+        except Exception:
+            try:
+                data = yt.get_lyrics(lyrics_id)
+            except Exception:
+                data = None
+        if data:
+            source = data.get("source")
+            raw = data.get("lyrics")
+            if isinstance(raw, list):
+                timed = []
+                lines = []
+                for item in raw:
+                    if isinstance(item, dict):
+                        line = str(item.get("text") or "")
+                        start = item.get("start_time")
+                        if start is None:
+                            start = item.get("startTime")
+                    else:
+                        line = str(item)
+                        start = getattr(item, "start_time", None)
+                    timed.append({"text": line, "start": float(start or 0)})
+                    if line:
+                        lines.append(line)
+                text = "\n".join(lines)
+            elif raw:
+                text = str(raw)
+    print(json.dumps({"lyrics": text, "timed": timed, "source": source, "liked": liked}))
+elif action == "rate":
+    video_id = str(payload.get("id") or "")
+    rating = str(payload.get("rating") or "INDIFFERENT")
+    if rating not in ("LIKE", "DISLIKE", "INDIFFERENT"):
+        raise SystemExit("bad rating")
+    yt.rate_song(video_id, rating)
+    print(json.dumps({"ok": True, "rating": rating}))
 else:
     raise SystemExit("unknown ytmusicapi action")
 `;
@@ -463,6 +512,50 @@ async function watchQueue(id, { limit = 25, priority = 0 } = {}) {
     playlistId: data.playlistId || null,
     tracks: (Array.isArray(data.rows) ? data.rows : []).map(normalizeYtMusicApiTrack).filter(Boolean).slice(0, n),
   };
+}
+
+const _lyricsCache = new Map();
+const LYRICS_TTL_MS = 30 * 60 * 1000;
+function lyricsCacheKey(id, cookiesPath) {
+  return `${id}:${cookiesPath ? 'linked' : 'public'}`;
+}
+async function trackLyrics(id, { cookiesPath, priority = 0 } = {}) {
+  if (!/^[\w-]{11}$/.test(String(id || ''))) throw new Error('bad track id');
+  const key = lyricsCacheKey(id, cookiesPath);
+  const hit = _lyricsCache.get(key);
+  if (hit && Date.now() < hit.expiresAt) return hit.value;
+  const browserAuth = detectYtMusicApi() ? browserAuthFromCookies(cookiesPath) : null;
+  const data = await runYtMusicApiRaw('lyrics', {
+    id,
+    ...(browserAuth ? { browserAuth } : {}),
+  }, { priority, timeoutMs: 14000 });
+  const timed = Array.isArray(data.timed)
+    ? data.timed.map((row) => ({
+      text: String((row && row.text) || ''),
+      start: Math.max(0, Number(row && row.start) || 0),
+    })).filter((row) => row.text)
+    : null;
+  const value = {
+    lyrics: String(data.lyrics || ''),
+    timed: timed && timed.length ? timed : null,
+    source: data.source || null,
+    liked: data.liked === 'LIKE',
+    likeStatus: data.liked || null,
+  };
+  _lyricsCache.set(key, { value, expiresAt: Date.now() + LYRICS_TTL_MS });
+  return value;
+}
+async function rateSong(id, liked, { cookiesPath } = {}) {
+  if (!/^[\w-]{11}$/.test(String(id || ''))) throw new Error('bad track id');
+  if (!cookiesPath) throw Object.assign(new Error('YouTube Music is not linked'), { code: 'NOT_LINKED' });
+  const browserAuth = browserAuthFromCookies(cookiesPath);
+  if (!browserAuth) throw Object.assign(new Error('YouTube Music is not linked'), { code: 'NOT_LINKED' });
+  const rating = liked ? 'LIKE' : 'INDIFFERENT';
+  await runYtMusicApiRaw('rate', { id, rating, browserAuth }, { timeoutMs: 12000 });
+  for (const [key, rec] of _lyricsCache) {
+    if (key.startsWith(id + ':') && rec && rec.value) rec.value.liked = !!liked;
+  }
+  return { liked: !!liked };
 }
 
 // A flat YouTube Music search (one fast call). Do not use generic `ytsearch`: Triboon Music
@@ -670,7 +763,7 @@ function _ytmApiQueueStats() { return { active: ytmApiActive, queued: ytmApiQueu
 
 module.exports = {
   detectYtdlp, detectYtMusicApi,
-  search, resolveStream, listPlaylists, playlistTracks, watchQueue, homeRows,
+  search, resolveStream, listPlaylists, playlistTracks, watchQueue, trackLyrics, rateSong, homeRows,
   browserAuthFromCookies,
   thumbFor, cleanTitle, _upgradeThumbUrl: upgradeThumbUrl,
   _resetDetection, _resetYtMusicApiDetection, _setYtMusicApiRunnerForTest,

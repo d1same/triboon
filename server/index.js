@@ -8479,6 +8479,35 @@ Object.assign(H, {
       });
     } catch (e) { send(ctx.res, 502, { error: 'music radio failed', detail: String(e.message).slice(0, 160) }); }
   },
+  musicLyrics: async (ctx) => {
+    if (throttleUserRoute(ctx, 'music-lyrics', { max: 40, windowMs: 60000, lockMs: 15000 })) return;
+    if (!ytmusic.detectYtMusicApi()) return send(ctx.res, 503, { error: 'ytmusicapi is not installed on the server' });
+    try {
+      const r = await ytmusic.trackLyrics(ctx.m[1], { cookiesPath: cookiesFor(ctx.user.id) });
+      send(ctx.res, 200, {
+        lyrics: r.lyrics || '',
+        timed: r.timed || null,
+        source: r.source || null,
+        liked: !!r.liked,
+      });
+    } catch (e) { send(ctx.res, 502, { error: 'lyrics failed to load', detail: String(e.message).slice(0, 160) }); }
+  },
+  musicLike: async (ctx) => {
+    if (throttleUserRoute(ctx, 'music-like', { max: 40, windowMs: 60000, lockMs: 15000 })) return;
+    if (!ytmusic.detectYtMusicApi()) return send(ctx.res, 503, { error: 'ytmusicapi is not installed on the server' });
+    const body = await readJson(ctx.req);
+    const id = String((body && body.id) || '');
+    if (!/^[\w-]{11}$/.test(id)) return send(ctx.res, 400, { error: 'id required' });
+    const cookies = cookiesFor(ctx.user.id);
+    if (!cookies) return send(ctx.res, 403, { error: 'Link YouTube Music in Preferences to like songs.' });
+    try {
+      const r = await ytmusic.rateSong(id, body.liked !== false, { cookiesPath: cookies });
+      send(ctx.res, 200, { liked: !!r.liked });
+    } catch (e) {
+      if (e && e.code === 'NOT_LINKED') return send(ctx.res, 403, { error: 'Link YouTube Music in Preferences to like songs.' });
+      send(ctx.res, 502, { error: 'could not like that track', detail: String(e.message).slice(0, 160) });
+    }
+  },
 
   // Range-proxy the audio: resolve (cached) the googlevideo URL, then pipe its bytes with the
   // client's Range header. googlevideo URLs are IP-locked to US + expire, so a 403/410 means
@@ -8891,6 +8920,8 @@ const ROUTES = [
   { m: 'GET', re: /^\/api\/music\/charts$/, auth: 'user', h: H.musicCharts },
   { m: 'GET', re: /^\/api\/music\/search$/, auth: 'user', h: H.musicSearch },
   { m: 'GET', re: /^\/api\/music\/radio\/([\w-]{11})$/, auth: 'user', h: H.musicRadio },
+  { m: 'GET', re: /^\/api\/music\/lyrics\/([\w-]{11})$/, auth: 'user', h: H.musicLyrics },
+  { m: 'POST', re: /^\/api\/music\/like$/, auth: 'user', h: H.musicLike },
   { m: 'GET', re: /^\/api\/music\/stream\/([\w-]{11})$/, auth: 'stream', h: H.musicStream },
   { m: 'GET', re: /^\/api\/music\/status$/, auth: 'user', h: H.musicStatus },
   { m: 'POST', re: /^\/api\/music\/link$/, auth: 'user', h: H.musicLink },

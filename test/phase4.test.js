@@ -498,8 +498,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   // Trailers must be ACTUAL trailers: exact TMDB type Trailer/Teaser only, the NAME screened for
   // interview/featurette/BTS words (TMDB mislabels), official + real-Trailer preferred, and BOTH
   // pick sites (detail page + trailers row) share the one picker. Null beats playing an interview.
-  assert.match(ui, /function pickBestTrailer\(results, title\) \{[\s\S]+const NOT_A_TRAILER = \/[\s\S]+?\(v\.type === 'Trailer' \|\| v\.type === 'Teaser'\)[\s\S]+!NOT_A_TRAILER\.test\(scrub\(String\(v\.name \|\| ''\)\)\)[\s\S]+v\.type === 'Trailer' \? 100 : 40;[\s\S]+if \(v\.official\) s \+= 50;/,
+  assert.match(ui, /function listPlayableTrailers\(results, title\) \{[\s\S]+const NOT_A_TRAILER = \/[\s\S]+?\(v\.type === 'Trailer' \|\| v\.type === 'Teaser'\)[\s\S]+!NOT_A_TRAILER\.test\(scrub\(String\(v\.name \|\| ''\)\)\)[\s\S]+v\.type === 'Trailer' \? 100 : 40;[\s\S]+if \(v\.official\) s \+= 50;/,
     'trailer selection scores exact-typed, name-screened YouTube videos (official Trailer > Teaser > nothing)');
+  assert.match(ui, /function pickBestTrailer\(results, title\) \{[\s\S]+const list = listPlayableTrailers\(results, title\);[\s\S]+return list\.length \? list\[0\] : null/,
+    'the best-trailer pick is the first playable trailer from the shared list');
   // The screen must catch the common non-trailer labels TMDB mislabels as Trailer/Teaser —
   // including abbreviations (BTS, b-roll), press material (junket, panel, sizzle, TV spot), and
   // non-English interview/BTS words the English word-screen would miss.
@@ -523,6 +525,14 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   assert.ok(!ui.includes(".find((v) => v.site === 'YouTube' && /Trailer|Teaser/i.test(v.type))")
     && !ui.includes(".find((r) => r.site === 'YouTube' && /Trailer|Teaser/i.test(r.type))"),
     'the old first-loose-match trailer picks are gone');
+  assert.match(ui, /id="trailerTitle"[\s\S]+id="trailerPlay"[\s\S]+function playFromTrailer\(\) \{[\s\S]+closeTrailer\(\);[\s\S]+play\(it\)/,
+    'the trailer page shows the title, a Play action, and starts the movie from there');
+  assert.ok(!ui.includes('id="trailerMore"') && !ui.includes('function loadTrailerMore'),
+    'the trailer page does not show a More videos rail');
+  assert.match(ui, /#trailer\.open::before\{animation:trailerDrift/,
+    'the trailer backdrop should drift while open');
+  assert.match(ui, /body\.tv #trailer::before\{animation:none[\s\S]+@media \(prefers-reduced-motion:reduce\)\{#trailer::before\{animation:none/,
+    'TV and reduced-motion should keep the trailer backdrop still');
   // Continue Watching plays straight from home with no detail page beneath the player. Backing
   // out (not just finishing) must land on the title's details page, not dump the user on the
   // homepage. Scoped to home-launched playback so library/Live TV returns keep their restores.
@@ -555,9 +565,9 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   // watched (the "only marks watched if I watch the ENTIRE thing" bug).
   assert.match(ui, /v\.onended = \(\) => \{[\s\S]+handleVodPlaybackEnded\(v\.currentTime, v\.duration\);/,
     'web episode EOF should use the same genuine-EOF gate so a dead resume file cannot skip the episode');
-  assert.match(ui, /function isGenuineEpisodeEof\(p, pos, dur\) \{[\s\S]+resume > 30 && d > 0 && d \+ 8 < resume[\s\S]+d >= 45 && t >= d \* 0\.88[\s\S]+!vodPlaybackStarted\(p\)[\s\S]+playedMs < 12000/,
+  assert.match(ui, /function isGenuineEpisodeEof\(p, pos, dur\) \{[\s\S]+_sourceAdvancePending[\s\S]+resume > 30 && d > 0 && d \+ 8 < resume[\s\S]+d >= 45 && t >= d \* 0\.88[\s\S]+!vodPlaybackStarted\(p\)[\s\S]+playedMs < 12000[\s\S]+d <= 0/,
     'a stub/rotten resume file that ENDED immediately is not credits');
-  assert.match(ui, /function handleVodPlaybackEnded\(pos, dur\) \{[\s\S]+isGenuineEpisodeEof\(p, pos, dur\)[\s\S]+finishEpisodeToNext\(\)[\s\S]+tryNextNativeKind\([\s\S]+autoAdvance\(\{ nativePreferred: true \}\)[\s\S]+failover\(\)/,
+  assert.match(ui, /function handleVodPlaybackEnded\(pos, dur\) \{[\s\S]+playbackSourceSwapPending\(p\)[\s\S]+isGenuineEpisodeEof\(p, pos, dur\)[\s\S]+finishEpisodeToNext\(\)[\s\S]+tryNextNativeKind\([\s\S]+autoAdvance\(\{ nativePreferred: true \}\)[\s\S]+failover\(\)/,
     'a fake EOF must stay on this episode and try the next source, never autoplay the next episode');
   assert.ok([
     'function applyNativeVideoProgress(pos, dur, opts = {}) {',
@@ -698,7 +708,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'every artwork tile — including the in-player episode strip — shares one hairline focus ring');
   assert.ok(!/box-shadow:inset 0 0 0 3px var\(--focus\),0 0 18px var\(--artFocusGlow\)/.test(ui),
     'the old thick amber ring on in-player episode stills is gone');
-  assert.match(ui, /\.gChip,\.seasonChip,\.ghostMini,\.testBtn,#trailerWl,\s*\n\.levelPick button,\.sizePick button,\.mvActions\{border:0 !important\}/,
+  assert.match(ui, /\.gChip,\.seasonChip,\.ghostMini,\.testBtn,#trailerPlay,#trailerWl,\s*\n\.levelPick button,\.sizePick button,\.mvActions\{border:0 !important\}/,
     'controls across every surface lose their hairline borders (one flat pill family)');
   assert.match(ui, /#appLoader \.brandWordmarkClip\{width:330px;height:92px/,
     'the boot splash wordmark is the larger size');
@@ -1011,6 +1021,12 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'the GLOBAL keydown handler (not just the element listener) reaches the search clear X on-device');
   assert.match(ui, /if \(S\.view === 'search' && document\.activeElement === \$\('searchClearBtn'\)\) \{[\s\S]+clearSearchQuery\(\)/,
     'the GLOBAL keydown handler activates the search clear X on-device (OK clears the query)');
+  assert.match(ui, /function focusSearchBarFromResults\(\) \{[\s\S]+cancelSearchMicLand\(\)[\s\S]+clearFocus\(\)[\s\S]+searchInput/,
+    'leaving search results must drop card focus so the field can take the remote');
+  assert.match(ui, /if \(S\.view === 'search'\) \{ focusSearchBarFromResults\(\); return; \}/,
+    'ArrowUp from the first search result row returns to the search field, not a no-op mic land');
+  assert.match(ui, /if \(S\.view === 'search' && \$\('searchInput'\)\.value\.trim\(\)\) return focusSearchBarFromResults\(\);/,
+    'Back from search results returns to the field so the query can be edited or cleared');
   assert.match(ui, /if \(inInput && S\.view === 'livetv' && ae === \$\('chSearch'\)\) \{[\s\S]+const clr = \$\('chClearBtn'\);\s*\n\s*if \(clr && !clr\.hidden\)[\s\S]+clr\.focus\(\)/,
     'the GLOBAL keydown handler reaches the Live TV clear X on-device before the Multiview jump');
   assert.match(ui, /if \(S\.view === 'livetv' && document\.activeElement === \$\('chClearBtn'\)\) \{[\s\S]+if \(k === 'Enter'\) \{ if \(!e\.repeat\) clr\.click\(\)/,
@@ -1049,7 +1065,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'backing out of the player while casting stops the TV too');
   assert.match(ui, /btn\.addEventListener\('click', \(\) => \{ try \{ v\.webkitShowPlaybackTargetPicker\(\); \}/,
     'AirPlay picker is wired for Safari/iOS VOD');
-  assert.match(ui, /if \(k === 'ArrowUp'\) return; \/\/ top of the now-playing loop/,
+  assert.match(ui, /if \(k === 'ArrowUp'\) \{[\s\S]+if \(onExtra\) return focusMusicNowControl\(\$\('mnPlay'\)\);[\s\S]+return;[\s\S]+\}/,
     'music now-playing top controls no longer fall through on ArrowUp (no focus trap)');
   // Trakt-imported resume (percent only, no position/duration) still primes the server read-ahead
   // window via resumeFrac so it doesn't cold-seek (the 20-30s resume lag).
@@ -1105,8 +1121,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'local-owned titles should not warm online source searches behind the detail page');
   assert.match(ui, /function queryFor\(it\) \{[\s\S]+if \(it\.tmdbId && \(it\.type === 'movie' \|\| it\.type === 'tv'\) && exact\) return exact;[\s\S]+return it\.q \|\| exact;/,
     'TMDB movie/show cards should play/search by the selected title and year, not a fuzzy raw search query');
-  assert.match(ui, /append_to_response=credits,videos,content_ratings,release_dates,recommendations,similar,external_ids/,
+  assert.match(ui, /append_to_response=\$\{append\}/,
     'detail pages should fetch external IDs before source lookup so old/franchise titles can search by catalog identity');
+  assert.match(ui, /credits,aggregate_credits,videos,content_ratings,release_dates,recommendations,similar,external_ids/,
+    'TV details should ask TMDB for aggregate cast so long-running shows are not stuck on 3 billed names');
   assert.match(ui, /function sourceIdentityFor\(it\) \{[\s\S]+if \(it\.imdbId\) out\.imdbid = it\.imdbId;[\s\S]+if \(it\.tvdbId\) out\.tvdbid = it\.tvdbId;[\s\S]+const ep = episodeKeyParts\(it\);[\s\S]+out\.season = ep\.season;[\s\S]+out\.ep = ep\.episode;/,
     'source lookup should preserve IMDb, TVDB, season, and episode identity when available');
   assert.match(ui, /function sourceSearchQuery\(it, opts = \{\}\) \{[\s\S]+const ids = sourceIdentityFor\(it\);[\s\S]+params\.set\('imdbid', ids\.imdbid\);[\s\S]+params\.set\('tvdbid', ids\.tvdbid\);[\s\S]+params\.set\('season', String\(ids\.season\)\);[\s\S]+params\.set\('ep', String\(ids\.ep\)\);[\s\S]+params\.set\('profileId'[\s\S]+params\.set\('tmdbId'[\s\S]+params\.set\('mediaType'/,
@@ -1153,7 +1171,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'the All-seasons tab opens the local season grid for local-only shows');
   assert.match(ui, /if \(it\._localShow && S\.localDetailEpisodes\) \{[\s\S]+markLocalEpisodeGroupWatched\(it, S\.localDetailEpisodes, nowWatched/,
     'the local-only show watched button should mark the show episode keys, not a container key');
-  assert.match(ui, /function epItemOf\(show, season, ep\) \{[\s\S]+const loc = S\.localMap && S\.localMap\[item\.key\];[\s\S]+return loc \? \{ \.\.\.item, _local: loc \} : item;/,
+  assert.match(ui, /function epItemOf\(show, season, ep\) \{[\s\S]+runtime: Number\(ep\.runtime\) \|\| 0,[\s\S]+const loc = S\.localMap && S\.localMap\[item\.key\];[\s\S]+return loc \? \{ \.\.\.item, _local: loc \} : item;/,
     'season episode cards should carry local playback when the episode exists in an added library');
   assert.match(ui, /\.seasonCard \.seasonYear\{[\s\S]+font:800 12px "JetBrains Mono"[\s\S]+border-radius:20px/,
     'TV detail season cards should show a readable season-year badge on the poster');
@@ -1385,6 +1403,14 @@ test('episode handoff stays player-to-player before local lookup and EOF never r
     'position at the end of a real runtime is credits even if this session just started');
   assert.equal(isGenuine({ item: { type: 'episode' } }, 100, 100), true,
     'older native shells that skip PLAYING still count a 100s file at 100s as EOF');
+  assert.equal(isGenuine({ item: { type: 'episode' }, started: true, startedAt: 1 }, 600, 0), false,
+    'unknown duration after a mid-episode remount is not the next episode');
+  assert.equal(isGenuine({ item: { type: 'episode', runtime: 22 }, started: true, startedAt: 1 }, 600, 700), false,
+    '12 minutes into a 22-minute sitcom is not credits even if the replacement file looks almost done');
+  assert.equal(isGenuine({ item: { type: 'episode', runtime: 22 }, started: true, startedAt: 1 }, 1260, 1320), true,
+    'near the catalog runtime of a sitcom is still credits');
+  assert.equal(isGenuine({ item: { type: 'episode' }, started: true, startedAt: 1, _sourceAdvancePending: true }, 1260, 1320), false,
+    'ended during a source swap is not the next episode');
 
   const endedStart = android.indexOf('if (state == Player.STATE_ENDED && "video".equals(nativeMode))');
   const endedEnd = android.indexOf('} else if (state == Player.STATE_ENDED && "live".equals(nativeMode))', endedStart);
@@ -1648,10 +1674,11 @@ test('stale async recovery work cannot remount, advance, or cover a replacement 
   const remountState = { playing: remountOld, view: 'player' };
   const reMountAndResume = new Function('S', 'vodPlaybackStarted', 'showPlaybackInterrupted', 'currentTime',
     'currentPlayerKind', 'toast', 'api', 'playbackRequestBody', 'canUseNativeVideoPlayer',
-    'tryNativeVideoPlayer', 'startSource', 'setTimeout', `${remountSource}\nreturn reMountAndResume;`)(
+    'tryNativeVideoPlayer', 'startSource', 'setTimeout', 'markPlaybackSourceSwap',
+    `${remountSource}\nreturn reMountAndResume;`)(
       remountState, () => true, (reason) => remountEvents.push(['interrupted', reason]), () => 90,
       () => 'direct', () => {}, () => remountGate.promise, () => ({}), () => false,
-      () => false, () => false, () => remountEvents.push(['retry']));
+      () => false, () => false, () => remountEvents.push(['retry']), () => {});
   const staleRemountJob = reMountAndResume('old mount failed');
   remountState.playing = { item: { key: 'episode-b' } };
   remountGate.reject(new Error('old request failed'));
@@ -1667,12 +1694,12 @@ test('stale async recovery work cannot remount, advance, or cover a replacement 
     'vodPlaybackStarted', 'recoverSamePlaybackSource', 'currentTime', 'canUseNativeVideoPlayer', 'toast',
     'api', '$', 'updatePlayerMeta', 'playbackStartKind', 'prepareNativeStartKindForAudio',
     'tryNativePlaybackLadder', 'startNativePlayerHousekeeping', 'closePlayer', 'revealWebPlayerShell',
-    'startWebPlayerHousekeeping', 'startSource', `${advanceSource}\nreturn autoAdvance;`)(
+    'startWebPlayerHousekeeping', 'startSource', 'markPlaybackSourceSwap', `${advanceSource}\nreturn autoAdvance;`)(
       state, () => events.push('panel'), () => false, () => events.push('recover'), () => 42,
       () => false, () => {}, apiFn, () => ({ textContent: '' }), () => events.push('meta'),
       () => 'direct', prepareFn, () => (events.push('ladder'), false), () => events.push('native-housekeeping'),
       () => events.push('close'), () => events.push('reveal'), () => events.push('web-housekeeping'),
-      () => events.push('start'));
+      () => events.push('start'), () => {});
   const advanceReply = {
     streamUrl: '/new', remuxUrl: '/new-remux', transcodeUrl: '/new-transcode', id: 'new-mount',
     tracksUrl: '/tracks', subtitleBase: '/sub', streamToken: 'stream-token', name: 'new release',
@@ -1799,6 +1826,13 @@ test('near-end next-episode prepare fires once at the 2-minute boundary', () => 
     url: '/api/prepare',
     opts: { method: 'POST', body: { key: item.key, season: 2, episode: 4, pick: null, rank: 3 } },
   }, 'prepare targets the exact next episode and inherited quality');
+  S.nextEpPrepared = false;
+  S.playing = { _sourceAdvancePending: true };
+  maybePrepareNextEpisode(80, 200);
+  assert.strictEqual(calls.length, 1, 'do not start next-ep prepare while this episode is swapping sources');
+  S.playing = { item: { runtime: 22 } };
+  maybePrepareNextEpisode(80, 200);
+  assert.strictEqual(calls.length, 1, 'a short reported duration must not warm the next episode in the middle of a sitcom');
 });
 
 test('casting Phase 3: native Android Cast sender is wired (cast from the app)', () => {
@@ -1888,10 +1922,10 @@ test('music playback stops when leaving the Music section', () => {
     'starting video playback should stop Music instead of pausing it for later resume');
   assert.doesNotMatch(ui, /S\._musicWasPlaying && S\.musicCur[\s\S]+mAudio\.play\(\)/,
     'closing video playback should not resume music after the user has left Music');
-  assert.match(ui, /mAudio\.addEventListener\('ended', \(\) => musicNext\(true\)\)/,
-    'ended tracks should route through the auto-advance path');
-  assert.match(ui, /playMusic\(q, next, \{ showQueue: \$\('musicNow'\)\.classList\.contains\('open'\), notify: !auto \}\)/,
-    'auto-advance should continue playing the next music track while keeping the queue context');
+  assert.match(ui, /mAudio\.addEventListener\('ended', \(\) => \{[\s\S]+S\._musicSwapAt[\s\S]+musicNext\(true\);[\s\S]+\}\);/,
+    'ended tracks should route through the auto-advance path without treating a src swap as the end');
+  assert.match(ui, /playMusic\(q, next, \{ notify: !auto \}\)/,
+    'auto-advance should continue the next track without forcing the compact queue open');
   assert.match(ui, /if \(auto && S\.musicRepeat === 'one'\) \{ mAudio\.currentTime = 0; safeMusicPlay\(\{ notify: false \}\); return; \}/,
     'repeat-one should restart cleanly through the safe music play path');
 });
@@ -1920,10 +1954,10 @@ test('music search supports voice and TV result focus without side-note clutter'
   // bigger touch target and no scroll-hijack; and a long artist name must not overflow/shift the page.
   assert.match(ui, /\$\('mnSeek'\)\.addEventListener\('pointerdown'[\s\S]+setPointerCapture\(e\.pointerId\)[\s\S]+mnSeekToPointer\(e\)/,
     'the music seekbar should scrub via pointer (touch tap + drag), not click only');
-  assert.match(ui, /\.mnProg \.mbBar\{height:6px;touch-action:none\}\s*\.mnProg \.mbBar::before\{content:""[^}]*top:-14px/,
+  assert.match(ui, /\.mnProg \.mbBar\{height:8px;touch-action:none\}\s*\.mnProg \.mbBar::before\{content:""[^}]*top:-14px/,
     'the music seekbar needs touch-action:none and an enlarged ::before hit area for touch');
-  assert.match(ui, /\.mnInfo\{min-width:0;width:100%;max-width:calc\(100vw - 32px\)\}/,
-    'on phones the now-playing info must be viewport-capped so a long artist truncates instead of shifting the layout');
+  assert.match(ui, /\.mnInfo\{min-width:0;width:100%;max-width:calc\(100vw - 40px\)\}/,
+    'on phones the now-playing info must be viewport-capped so a long artist wraps instead of shifting the layout');
   assert.match(ui, /function moveMusicSearchDown\(\) \{[\s\S]+if \(q\) \{ musicSearchAndFocusResults\(\); return; \}[\s\S]+chipEls\(\)\.length[\s\S]+musicRows\(\)\.length/,
     'Music ArrowDown should not strand focus in the input while search results load');
   // TV: scrollIntoView is unreliable inside the #musicList overflow container (the focus ring moved
@@ -1958,8 +1992,12 @@ test('music search supports voice and TV result focus without side-note clutter'
     'Music mic should be a real Android TV focus stop with right-to-type and left-to-menu navigation');
   assert.match(ui, /if \(S\.view === 'music'\) \{[\s\S]+if \(k === 'Escape' \|\| k === 'Backspace'\) return enterRail\(\);[\s\S]+if \(S\.zone === 'musicChips'\)/,
     'Back/Escape from Music browse should open the rail so other sections stay reachable');
-  assert.match(ui, /const rank = opts\.search \? `<div class="mRank">[\s\S]+const playGlyph = opts\.search \? '<div class="mPlayGlyph">[\s\S]+playMusic\(results, i, opts\.search \? \{ showQueue: true \} : \{\}\)/,
-    'TV search result rows should be richer and open the queue so the next songs are visible');
+  assert.match(ui, /const rank = opts\.search \? `<div class="mRank">/,
+    'TV search result rows should show a rank');
+  assert.match(ui, /const playGlyph = opts\.search \? '<div class="mPlayGlyph">/,
+    'TV search result rows should show a play glyph');
+  assert.match(ui, /row\.addEventListener\('click', \(\) => playMusic\(results, i\)\);/,
+    'search rows should start playback and keep the now-playing queue compact');
   assert.match(ui, /body\.tv \.mSearchSongs\{grid-template-columns:repeat\(2,minmax\(330px,1fr\)\)[\s\S]+body\.tv \.mSearchSongs \.musicRow\.focus[\s\S]+body\.tv \.mSearchSongs \.musicRow \.mRank,body\.tv \.mSearchSongs \.musicRow \.mPlayGlyph\{display:grid\}/,
     'TV Music search results should render as larger two-column song cards with clear focus');
 });
@@ -2822,6 +2860,23 @@ test('Android native player: direct source and native chrome stay out of the web
     'phone details should drop the desktop 140px title slot and the extra 82px hero pad');
   assert.match(ui, /const DETAIL_CAST_BATCH = 20;[\s\S]+function appendCastBatch\(row\)[\s\S]+row\.addEventListener\('scroll', maybeLoadMoreCast, \{ passive: true \}\)/,
     'detail cast rows should keep the first render bounded and append more cast as the row scrolls');
+  assert.match(ui, /function detailCastList\(d\) \{[\s\S]+aggregate_credits[\s\S]+DETAIL_CAST_MAX[\s\S]+d\.credits && d\.credits\.cast/,
+    'TV cast prefers season-wide aggregate credits so a sitcom is not reduced to three billed names');
+  const castStart = ui.indexOf('const DETAIL_CAST_MAX = 40;');
+  const castEnd = ui.indexOf('function castCard(c)', castStart);
+  assert.ok(castStart >= 0 && castEnd > castStart, 'detailCastList should be extractable');
+  const detailCastList = new Function(`${ui.slice(castStart, castEnd)}\nreturn detailCastList;`)();
+  assert.deepStrictEqual(detailCastList({ credits: { cast: [{ id: 1, name: 'Only' }] } }).map((c) => c.name), ['Only'],
+    'movies keep the regular credits list');
+  assert.deepStrictEqual(detailCastList({
+    credits: { cast: [{ id: 9, name: 'Current billed' }] },
+    aggregate_credits: { cast: [
+      { id: 2, name: 'Charlie', total_episode_count: 177, order: 2, profile_path: '/c', roles: [{ character: 'Charlie Harper', episode_count: 177 }] },
+      { id: 3, name: 'Guest', total_episode_count: 1, order: 40, roles: [{ character: 'Waiter', episode_count: 1 }] },
+      { id: 4, name: 'Alan', total_episode_count: 262, order: 1, profile_path: '/a', roles: [{ character: 'Alan Harper', episode_count: 262 }] },
+    ] },
+  }).map((c) => c.name), ['Alan', 'Charlie', 'Guest'],
+    'aggregate cast is ordered by episode count so the series regulars lead');
   assert.match(ui, /const PERSON_WORKS_BATCH = 24;[\s\S]+\.map\(mapTmdb\);\s+renderPersonWorks\(credits\);[\s\S]+function loadMorePersonWorks\(focusNew = false\)[\s\S]+if \(start === 0\) renderGrid\(batch, \$\('personGrid'\)\);[\s\S]+else appendGrid\(batch\);/,
     'person known-for pages should lazy-render all filtered credits in batches instead of slicing to a fixed cap');
   assert.match(ui, /\$\('person'\)\.addEventListener\('scroll', maybeLoadMorePersonWorks, \{ passive: true \}\);[\s\S]+if \(S\.view === 'person' && S\.gridIdx >= \(S\.gridItems \|\| \[\]\)\.length - Math\.max\(2, gridCols\(\) \* 2\)\) \{[\s\S]+loadMorePersonWorks\(false\);/,
@@ -3282,7 +3337,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'source recovery must never enter the next-episode path');
   assert.match(ui, /async function reMountAndResume\(reason = '', attempt = 0\) \{[\s\S]+api\('\/api\/play', \{ method: 'POST', body: playbackRequestBody\(p\.item, p\.name \? \{ name: p\.name \} : null\) \}\)[\s\S]+if \(S\.playing !== p \|\| S\.view !== 'player'\) \{ p\._reMounting = false; return; \}[\s\S]+p\.mountId = r\.id;[\s\S]+startSource\(kind, at, \{ quietSeek: true \}\)[\s\S]+setTimeout\(\(\) => \{ if \(S\.playing === p && S\.view === 'player'\) reMountAndResume\(reason, attempt \+ 1\); \}, 1500 \+ attempt \* 1500\)/,
     'reMountAndResume should re-play the same title, reject stale ownership, resume at position, and retry with backoff then fall back');
-  assert.match(ui, /async function autoAdvance\(opts = \{\}\) \{[\s\S]+if \(vodPlaybackStarted\(p\) && !opts\.allowMidstreamAdvance\) \{[\s\S]+recoverSamePlaybackSource\('source failed'\);[\s\S]+return;[\s\S]+p\._sourceAdvancePending = true;[\s\S]+const reportedAt = Number\(currentTime\(\)\);[\s\S]+Number\(p\.item && p\.item\.resume\)[\s\S]+p\.nativePos = at;[\s\S]+p\.started = false; p\.startedAt = 0;/,
+  assert.match(ui, /async function autoAdvance\(opts = \{\}\) \{[\s\S]+if \(vodPlaybackStarted\(p\) && !opts\.allowMidstreamAdvance\) \{[\s\S]+recoverSamePlaybackSource\('source failed'\);[\s\S]+return;[\s\S]+p\._sourceAdvancePending = true;[\s\S]+const reportedAt = Number\(currentTime\(\)\);[\s\S]+Number\(p\.item && p\.item\.resume\)[\s\S]+markPlaybackSourceSwap\(p\);[\s\S]+p\.nativePos = at;[\s\S]+p\.started = false; p\.startedAt = 0;/,
     'source advance should coalesce callbacks, preserve an early Continue Watching timestamp, and give the replacement a fresh startup boundary');
   assert.match(ui, /catch \(e\) \{[\s\S]+opts\.allowMidstreamAdvance && e && e\.status === 404[\s\S]+reMountAndResume\(opts\.reason/,
     'a server restart that lost the play session should re-mount the title instead of being mistaken for source exhaustion');
@@ -3914,7 +3969,7 @@ test('Android native player: direct source and native chrome stay out of the web
   // failure used to leave cast/seasons/related empty until the user backed out and reopened —
   // a manual retry (owner, 2026-08-08). The fetch now retries up to 3 attempts with backoff,
   // abandoning cleanly when a newer detail supersedes it; 401/403/404 still fail fast.
-  assert.match(ui, /for \(let attempt = 0; ; attempt\+\+\) \{\s*\n\s*try \{\s*\n\s*d = await api\(`\/api\/tmdb\/\$\{it\.type\}\/\$\{it\.tmdbId\}\?append_to_response=credits/,
+  assert.match(ui, /for \(let attempt = 0; ; attempt\+\+\) \{\s*\n\s*try \{[\s\S]+d = await api\(`\/api\/tmdb\/\$\{it\.type\}\/\$\{it\.tmdbId\}\?append_to_response=\$\{append\}`\)/,
     'the detail fetch retries transient failures instead of leaving the page half-empty');
   assert.match(ui, /if \(attempt >= 2 \|\| \[401, 403, 404\]\.includes\(e\.status\)\) throw e;/,
     'detail retries are bounded and never mask auth/not-found failures');
@@ -4549,20 +4604,38 @@ test('Android native player: direct source and native chrome stay out of the web
     'prefetchMusic should warm the playlists + home server caches once');
   assert.match(ui, /const navMx = \$\('navMusic'\);[\s\S]+navMx\.addEventListener\('mouseenter', prefetchMusic\);[\s\S]+navMx\.addEventListener\('focus', prefetchMusic, true\)/,
     'the Music rail button should warm the caches on hover/focus (like Live TV)');
-  assert.match(ui, /function startMusicFeed\(item\) \{[\s\S]+\/api\/music\/search\?q=' \+ encodeURIComponent\(q\) \+ '&limit=24'[\s\S]+playMusic\(rows, 0, \{ showQueue: true \}\)/,
+  assert.match(ui, /function startMusicFeed\(item\) \{[\s\S]+\/api\/music\/search\?q=' \+ encodeURIComponent\(q\) \+ '&limit=24'[\s\S]+playMusic\(rows, 0\);/,
     'Music feed cards should start generated queues instead of only opening raw search');
   assert.match(ui, /function safeMusicPlay\(opts = \{\}\) \{[\s\S]+mAudio\.play\(\)[\s\S]+toast\('Press play to start music\.'\)/,
     'Music playback should give a visible prompt when autoplay is blocked instead of silently failing');
-  assert.match(ui, /mAudio\.addEventListener\('error'[\s\S]+Track unavailable\. Skipping[\s\S]+setTimeout\(\(\) => \{ if \(S\.musicLoadFailed\) musicNext\(true\); \}/,
-    'Music should skip unavailable tracks instead of stalling the queue on a dead stream');
+  assert.match(ui, /mAudio\.addEventListener\('error'[\s\S]+mAudio\.error && mAudio\.error\.code === 1[\s\S]+Track unavailable\. Skipping[\s\S]+setTimeout\(\(\) => \{ if \(S\.musicLoadFailed\) musicNext\(true\); \}/,
+    'Music should skip unavailable tracks, but not treat a track-change abort as a failure');
+  assert.match(ui, /function playMusic\(queue, idx, opts = \{\}\) \{[\s\S]+S\._musicPlayTicket = \(S\._musicPlayTicket \|\| 0\) \+ 1;[\s\S]+S\._musicSwapAt = Date\.now\(\);[\s\S]+mAudio\.src = t\.streamUrl;/,
+    'each Play should stamp a swap time so the previous track abort cannot skip the new song');
   assert.match(ui, /function updateMusicMediaSession\(\) \{[\s\S]+new MediaMetadata\(\{[\s\S]+title: t\.title \|\| 'Music'[\s\S]+artwork: t\.thumb \?/,
     'Music playback should publish title/artwork metadata to OS and remote media surfaces');
   assert.match(ui, /function playMusic\(queue, idx, opts = \{\}\) \{[\s\S]+mAudio\.src = t\.streamUrl;[\s\S]+updateMusicMediaSession\(\);/,
     'Music should refresh media-session metadata whenever the active track changes');
   assert.match(ui, /function openMusicConnect\(\) \{[\s\S]+tries < 30[\s\S]+requestAnimationFrame\(focusConnect\)/,
     'Music connect focus should wait for Preferences rendering instead of using a fixed timer race');
-  assert.match(ui, /id="mnQueueToggle" title="Hide queue" aria-label="Hide queue"[\s\S]+function updateMusicQueueToggle\(\) \{[\s\S]+btn\.title = hidden \? 'Show queue' : 'Hide queue'[\s\S]+btn\.setAttribute\('aria-label', btn\.title\)/,
-    'Music now-playing queue control should be icon-only and use queue labels');
+  assert.match(ui, /id="mnQueueToggle" title="Show queue" aria-label="Show queue"[\s\S]+function updateMusicQueueToggle\(\) \{[\s\S]+btn\.title = hidden \? 'Show queue' : 'Hide queue'[\s\S]+btn\.setAttribute\('aria-label', btn\.title\)/,
+    'Music now-playing queue starts compact and the control uses Show/Hide queue labels');
+  assert.match(ui, /id="musicNow" class="queueHidden"[\s\S]+function musicQueueIsHidden\(\) \{ return S\.musicQueueHidden !== false; \}/,
+    'the now-playing queue should stay compact until the viewer opens it');
+  assert.match(ui, /id="mnLike" title="Like"[\s\S]+<span>Like<\/span>[\s\S]+id="mnLyrics" title="Lyrics"[\s\S]+<span>Lyrics<\/span>[\s\S]+id="mnRadio" title="Start radio"[\s\S]+<span>Radio<\/span>[\s\S]+id="mnQueueToggle"[\s\S]+<span>Queue<\/span>/,
+    'now-playing should expose labeled like, lyrics, radio, and queue actions');
+  assert.strictEqual((ui.match(/id="mnLyrics"/g) || []).length, 1,
+    'the Lyrics button id must stay unique so lyrics text cannot land on the button');
+  assert.match(ui, /id="mnLyricsBody"[\s\S]+function renderMusicLyrics\(note\) \{[\s\S]+const box = \$\('mnLyricsBody'\)/,
+    'lyrics text should render in the lyrics panel, not the Lyrics button');
+  assert.match(ui, /async function toggleMusicLike\(\) \{[\s\S]+\/api\/music\/like'[\s\S]+body: \{ id: t\.id, liked: next \}/,
+    'like should POST the current track to the server');
+  assert.match(ui, /async function startMusicRadio\(\) \{[\s\S]+\/api\/music\/radio\/' \+ encodeURIComponent\(t\.id\)[\s\S]+playMusic\(\[t, \.\.\.rest\], 0/,
+    'Start radio should replace the queue with similar tracks from the current song');
+  assert.match(ui, /function renderMusicQueue\(\) \{[\s\S]+data-qact="up"[\s\S]+data-qact="down"[\s\S]+data-qact="remove"[\s\S]+function removeMusicQueueTrack\(i\) \{[\s\S]+function moveMusicQueueTrack\(from, to\) \{/,
+    'the compact queue should let the viewer move and remove tracks');
+  assert.match(ui, /async function loadMusicLyrics\(t, opts = \{\}\) \{[\s\S]+\/api\/music\/lyrics\/' \+ encodeURIComponent\(t\.id\)[\s\S]+function syncMusicLyrics\(\)/,
+    'lyrics should load for the current track and highlight timed lines');
   assert.match(ui, /function renderYtmConnectBox\(box, st\) \{[\s\S]+Connect account[\s\S]+renderYtmPaste\(box, \{ guided: true \}\)[\s\S]+function renderYtmImportBox\(box, opts = \{\}\) \{[\s\S]+ytmOpenMusic[\s\S]+ytmPick[\s\S]+ytmShowPaste[\s\S]+api\('\/api\/music\/link'/,
     'YouTube Music linking should present a cookie-session guided setup flow (OAuth removed)');
   assert.doesNotMatch(android, /ImageButton back = nativeButton\(R\.drawable\.ic_player_back/,
@@ -5761,8 +5834,20 @@ test('Artwork regression: Music and Audiobook covers use shared sanitized fallba
     'lazy Music shelf covers should use the shared CSS sanitizer and fallback');
   assert.match(music, /const coverStyle = item\.coverUrl \? `[\s\S]{0,100}artBackgroundHtml\(item\.coverUrl, artFallback\('music-tile:/,
     'Music playlist and recommendation tiles should sanitize coverUrl with a fallback');
-  assert.match(music, /function updateMusicNow\(\)[\s\S]{0,420}mnCover[\s\S]{0,100}artBackground\(t\.thumb, artFallback\('music-now:[\s\S]{0,220}mnBg[\s\S]{0,100}artBackground\(t\.thumb, artFallback\('music-now:/,
+  assert.match(music, /function musicNowArtUrl\(url\) \{[\s\S]+googleusercontent\.com[\s\S]+w960-h960[\s\S]+maxresdefault/,
+    'now-playing should upgrade album art and YouTube stills before painting the cover');
+  assert.match(music, /function paintMusicNowArt\(url, key\) \{[\s\S]+artBackground\(src, artFallback\('music-now:' \+ key, 54\)[\s\S]+artBackground\(src, artFallback\('music-now:' \+ key, 55\)/,
     'Music now-playing cover and blurred backdrop should share sanitized deterministic artwork');
+  assert.match(ui, /\.mnCover\{[^}]*center\/cover no-repeat[\s\S]+?\.mnCover\.ytStill\{background-size:178% auto\}/,
+    'YouTube stills with baked-in bars should crop; square album art should not');
+  assert.match(ui, /#musicNow\{[^}]*z-index:70/,
+    'now-playing should sit above the phone menu button');
+  assert.match(ui, /\.mnExtra\{display:flex;align-items:center;gap:10px;margin-top:18px;flex-wrap:wrap\}/,
+    'like/lyrics/radio/queue keep their labels and wrap instead of shrinking');
+  assert.match(ui, /body:has\(#musicNow\.open\) #burger\{display:none!important\}/,
+    'phone menu button hides while now-playing is open');
+  assert.match(ui, /@media \(max-width:900px\)\{[\s\S]*\.mnExtra\{display:grid;grid-template-columns:1fr 1fr/,
+    'phone now-playing actions sit in a two-by-two grid');
   assert.match(music, /function renderMusicQueue\(\)[\s\S]{0,500}artBackgroundHtml\(t\.thumb, artFallback\('music-queue:/,
     'Music queue thumbnails should use the shared HTML-safe artwork helper');
   assert.doesNotMatch(music, /background-image\s*:\s*url\(['"]?\$\{safeUrl\([^}]+(?:thumb|cover)/i,

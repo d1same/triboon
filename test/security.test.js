@@ -215,6 +215,7 @@ test('security: deny-by-default — every route declares auth; unknown routes 40
     ['GET', '/api/transcode/abc'], ['GET', '/api/hls/abc'], ['GET', '/api/hls/abc/seg00001.m4s'],
     ['GET', '/api/iptv/status'], ['POST', '/api/iptv/refresh'], ['GET', '/api/iptv/sources'], ['POST', '/api/iptv/sources'], ['PATCH', '/api/iptv/sources/abc'], ['DELETE', '/api/iptv/sources/abc'],
     ['POST', '/api/quickconnect/123456/approve'], ['GET', '/api/music/home'], ['GET', '/api/music/charts'], ['GET', '/api/music/search?q=x'], ['GET', '/api/music/radio/AAAAAAAAAAA'],
+    ['GET', '/api/music/lyrics/AAAAAAAAAAA'], ['POST', '/api/music/like'],
   ];
   for (const [m, p] of probes) {
     assert.strictEqual((await httpJson(srv.port, m, p)).status, 401, `anon ${m} ${p}`);
@@ -2712,6 +2713,54 @@ test('music: optional ytmusicapi watch queue returns tokenized radio tracks', as
     assert.deepStrictEqual(r.json.results.map((x) => x.id), ['BBBBBBBBBBB', 'CCCCCCCCCCC']);
     assert.ok(/^\/api\/music\/stream\/BBBBBBBBBBB\?t=/.test(r.json.results[0].streamUrl));
     assert.strictEqual(r.json.results[0].duration, 181);
+  } finally {
+    ytmusic.detectYtdlp = oldDetect;
+    ytmusic._setYtMusicApiRunnerForTest(null);
+    ytmusic._resetYtMusicApiDetection();
+  }
+});
+
+test('music: lyrics and like go through ytmusicapi and stay auth-gated', async () => {
+  const ytmusic = require('../server/ytmusic');
+  const oldDetect = ytmusic.detectYtdlp;
+  try {
+    ytmusic.detectYtdlp = () => ({ cmd: ['mock-ytdlp'], version: 'test' });
+    ytmusic._setYtMusicApiRunnerForTest(async (action, body) => {
+      if (action === 'lyrics') {
+        assert.strictEqual(body.id, 'AAAAAAAAAAA');
+        return {
+          lyrics: 'hello\nworld',
+          timed: [{ text: 'hello', start: 0 }, { text: 'world', start: 12 }],
+          source: 'Musixmatch',
+          liked: 'LIKE',
+        };
+      }
+      if (action === 'rate') {
+        assert.strictEqual(body.id, 'AAAAAAAAAAA');
+        assert.strictEqual(body.rating, 'INDIFFERENT');
+        assert.ok(body.browserAuth && body.browserAuth.cookie);
+        return { ok: true, rating: 'INDIFFERENT' };
+      }
+      throw new Error('unexpected action ' + action);
+    });
+    const lyrics = await httpJson(srv.port, 'GET', '/api/music/lyrics/AAAAAAAAAAA', null, admin);
+    assert.strictEqual(lyrics.status, 200, lyrics.raw);
+    assert.strictEqual(lyrics.json.lyrics, 'hello\nworld');
+    assert.strictEqual(lyrics.json.liked, true);
+    assert.deepStrictEqual(lyrics.json.timed.map((x) => x.text), ['hello', 'world']);
+
+    const unlinked = await httpJson(srv.port, 'POST', '/api/music/like', { id: 'AAAAAAAAAAA', liked: false }, admin);
+    assert.strictEqual(unlinked.status, 403, 'like without a linked account must not write');
+
+    const cookieText = [
+      '# Netscape HTTP Cookie File',
+      ['.youtube.com', 'TRUE', '/', 'TRUE', '9999999999', '__Secure-3PAPISID', 'sapisid-value'].join('\t'),
+    ].join('\n') + '\n';
+    assert.strictEqual((await httpJson(srv.port, 'POST', '/api/music/link', { cookies: cookieText }, admin)).status, 200);
+    const liked = await httpJson(srv.port, 'POST', '/api/music/like', { id: 'AAAAAAAAAAA', liked: false }, admin);
+    assert.strictEqual(liked.status, 200, liked.raw);
+    assert.strictEqual(liked.json.liked, false);
+    await httpJson(srv.port, 'POST', '/api/music/unlink', {}, admin);
   } finally {
     ytmusic.detectYtdlp = oldDetect;
     ytmusic._setYtMusicApiRunnerForTest(null);

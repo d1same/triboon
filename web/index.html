@@ -781,9 +781,14 @@ body.tv #filterMenu{backdrop-filter:none}
 /* ---------- trailer modal ---------- */
 #trailer{position:fixed;inset:0;z-index:45;display:none;place-items:center;background:#050308;padding:28px;overflow:hidden;--trailerBackdrop:none}
 #trailer::before{content:"";position:absolute;inset:-70px;background-image:var(--trailerBackdrop);background-size:cover;background-position:center;filter:blur(34px) brightness(.72) saturate(1.2);transform:scale(1.12);opacity:.94}
+#trailer.open::before{animation:trailerDrift 28s ease-in-out infinite alternate}
 #trailer::after{content:"";position:absolute;inset:0;background:radial-gradient(circle at 50% 38%,rgba(7,5,11,.04),rgba(7,5,11,.3) 52%,rgba(7,5,11,.8) 100%),linear-gradient(180deg,rgba(5,3,9,.16),rgba(5,3,9,.72))}
+@keyframes trailerDrift{from{transform:scale(1.12) translate3d(-1.2%,-.8%,0)}to{transform:scale(1.2) translate3d(1.4%,1%,0)}}
 #trailer.open{display:grid}
-.trailerShell{position:relative;z-index:1;width:min(96vw,calc((100vh - 170px) * 16 / 9));max-width:1500px;display:flex;flex-direction:column;gap:12px}
+.trailerShell{position:relative;z-index:1;width:min(96vw,calc((100vh - 150px) * 16 / 9));max-width:1500px;display:flex;flex-direction:column;gap:12px}
+.trailerHead{min-width:0;padding:0 6px 2px}
+.trailerTitle{font:800 clamp(22px,2.6vw,36px)/1.08 "Sora";letter-spacing:-.02em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;text-shadow:0 8px 28px rgba(0,0,0,.55)}
+.trailerMeta{margin-top:6px;font:600 14px "Albert Sans";color:var(--amber);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .trailerStage{position:relative;border-radius:18px;overflow:hidden;background:#000;box-shadow:0 34px 92px rgba(0,0,0,.72);aspect-ratio:16/9}
 #trailer .box{position:absolute;inset:0;background:#000}
 #trailer iframe{width:100%;height:100%;border:0;opacity:0;transition:opacity .22s ease}
@@ -801,16 +806,19 @@ body.tv #filterMenu{backdrop-filter:none}
 #trailer .focusable::before{display:none}
 #trailer .focusable.focus,#trailer .focusable:focus-visible{transform:none}
 .trailerCtl.focus,.trailerCtl:focus-visible,.trailerBack.focus,.trailerBack:focus-visible{background:var(--btnHover);color:var(--btnFocusText);border-color:transparent;box-shadow:inset 3px 0 0 var(--focus),0 10px 28px rgba(0,0,0,.32)}
+#trailerPlay{background:var(--btnPrimary);color:var(--onAccent);border:1px solid transparent}
+#trailerPlay.focus,#trailerPlay:focus-visible{background:var(--btnPrimaryHover);color:var(--onAccent)}
 #trailerWl{background:var(--btn);border:1px solid rgba(255,255,255,.045)}
 #trailerWl.on{background:var(--btnSelected);color:var(--text);border-color:transparent;font-weight:700}
 #trailerWl.on.focus,#trailerWl.on:focus-visible{background:var(--btnSelectedHover);color:var(--text)}
-.trailerSource{color:rgba(233,225,243,.72);font:800 11px "Sora";letter-spacing:.14em;text-transform:uppercase;white-space:nowrap;text-shadow:0 2px 14px rgba(0,0,0,.78)}
+body.tv #trailer::before{animation:none;filter:brightness(.38);transform:none}
+body.tv .trailerTitle{font-size:clamp(20px,2.1vw,28px)}
+@media (prefers-reduced-motion:reduce){#trailer::before{animation:none!important}}
 @media(max-width:700px){
   #trailer{padding:14px}
   .trailerBack{left:14px;top:14px}
   .trailerShell{width:100%}
   .trailerBar{border-radius:14px}
-  .trailerSource{display:none}
   .trailerActions{width:100%;justify-content:flex-end}
   .trailerCtl{flex:1;padding:0 10px}
 }
@@ -955,7 +963,7 @@ body.tv #filterMenu{backdrop-filter:none}
                    strong enough to read from the couch, never a heavy glow
    Placed late so it settles the per-surface rules defined above.
    ========================================================================== */
-.gChip,.seasonChip,.ghostMini,.testBtn,#trailerWl,
+.gChip,.seasonChip,.ghostMini,.testBtn,#trailerPlay,#trailerWl,
 .levelPick button,.sizePick button,.mvActions{border:0 !important}
 .gChip,.seasonChip,.levelPick button,.sizePick button{border-radius:999px}
 .gChip,.ghostMini,.levelPick button,.sizePick button,.seasonChip{background:rgba(255,255,255,.06)}
@@ -2821,7 +2829,7 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
   cursor:default;opacity:.58;pointer-events:none;transform:translateZ(0)}
 
 /* Trailer controls use fill changes for focus; never draw the app-wide hollow ring. */
-#trailer .trailerCtl,#trailer .trailerBack{
+#trailer .trailerCtl,#trailer .trailerBack,#trailerPlay{
   appearance:none!important;-webkit-appearance:none!important;outline:0!important;
   -webkit-tap-highlight-color:transparent}
 #trailer .trailerCtl::before,#trailer .trailerBack::before,
@@ -3040,7 +3048,7 @@ body:not(.tv) #settings .setGrid[data-stab="display"]{grid-template-columns:repe
    so text stays readable on every theme. Scoped to .mnQueue so search rows keep their own look. */
 .mnQueue .musicRow:hover,.mnQueue .musicRow:focus,.mnQueue .musicRow.focus{background:rgba(var(--fg),.10);box-shadow:inset 0 0 0 1px var(--artFocusTileLine)}
 .mnQueue .musicRow.cur:hover,.mnQueue .musicRow.cur:focus,.mnQueue .musicRow.cur.focus{background:rgba(193,59,214,.24)}
-.musicRow .mThumb{width:46px;height:46px;border-radius:8px;background:#241934 center/178% auto no-repeat;flex:none;position:relative;overflow:hidden}
+.musicRow .mThumb{width:46px;height:46px;border-radius:8px;background:#241934 center/cover no-repeat;flex:none;position:relative;overflow:hidden}
 .musicRow:hover .mThumb,.musicRow:focus .mThumb,.musicRow.focus .mThumb{box-shadow:0 0 0 1px var(--focusSoft),0 4px 12px rgba(0,0,0,.45),0 10px 24px rgba(0,0,0,.28)}
 .musicRow .mThumb .mEq{position:absolute;inset:0;display:none;place-items:center;background:rgba(11,8,18,.5)}
 .musicRow.cur .mThumb .mEq{display:grid}
@@ -3057,7 +3065,7 @@ body:not(.tv) #settings .setGrid[data-stab="display"]{grid-template-columns:repe
 .mArtistHit{min-height:132px;padding:16px;gap:18px;background:linear-gradient(135deg,rgba(193,59,214,.20),rgba(251,139,60,.12));border:1px solid rgba(255,255,255,.08);overflow:hidden;position:relative}
 .mArtistHit::after{content:"";position:absolute;inset:0;background:radial-gradient(circle at 90% 15%,rgba(255,198,92,.22),transparent 34%);pointer-events:none}
 .mArtistHit:hover,.mArtistHit:focus,.mArtistHit.focus{background:linear-gradient(135deg,rgba(193,59,214,.20),rgba(251,139,60,.12));border-color:rgba(255,255,255,.08);box-shadow:none}
-.mArtistArt{width:104px;height:104px;border-radius:8px;background:#241934 center/178% auto no-repeat;box-shadow:0 16px 34px rgba(0,0,0,.34),inset 0 0 0 1px rgba(255,255,255,.08);flex:none;position:relative;z-index:1}
+.mArtistArt{width:104px;height:104px;border-radius:8px;background:#241934 center/cover no-repeat;box-shadow:0 16px 34px rgba(0,0,0,.34),inset 0 0 0 1px rgba(255,255,255,.08);flex:none;position:relative;z-index:1}
 .mArtistHit:hover .mArtistArt,.mArtistHit:focus .mArtistArt,.mArtistHit.focus .mArtistArt{box-shadow:0 0 0 1px var(--focusSoft),0 4px 12px rgba(0,0,0,.45),0 16px 36px rgba(0,0,0,.34)}
 .mArtistCopy{position:relative;z-index:1;min-width:0;flex:1}
 .mArtistType{font:800 11px "JetBrains Mono";letter-spacing:.18em;text-transform:uppercase;color:var(--amber);margin-bottom:8px}
@@ -3089,7 +3097,7 @@ body.tv .mSearchSongs .musicRow .mA{font-size:13.5px}
 .mbCtl{display:flex;align-items:center;gap:6px;flex:none}
 .mbBtn{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;color:var(--text)}
 .mbBtn:focus,.mnCollapse:focus{outline:none}
-.mbBtn.focusable::before,.mnCollapse.focusable::before{display:none}
+.mbBtn.focusable::before,.mnCollapse.focusable::before,.mnAction.focusable::before{display:none}
 .mbBtn svg{width:20px;height:20px}
 .mbPlay{width:46px;height:46px;background:var(--btnPrimary);color:var(--onAccent)}
 .mbPlay svg{width:24px;height:24px}
@@ -3106,42 +3114,71 @@ body.tv .mSearchSongs .musicRow .mA{font-size:13.5px}
 .mEq i:nth-child(2){animation-delay:.3s}.mEq i:nth-child(3){animation-delay:.6s}
 body.musicPaused .mEq i{animation-play-state:paused}
 
-/* Full-screen now-playing page. */
-#musicNow{position:fixed;inset:0;z-index:35;display:none;flex-direction:column;background:var(--ink);overflow:hidden}
+/* Full-screen now-playing page. Queue starts compact (hidden). */
+#musicNow{position:fixed;inset:0;z-index:70;display:none;flex-direction:column;background:var(--ink);overflow:hidden}
 #musicNow.open{display:flex}
-#musicNow .mnBg{position:absolute;inset:0;background-size:cover;background-position:center;filter:blur(60px) brightness(.4);transform:scale(1.2);opacity:.7}
+/* Phone burger lives at the same corner as Back. Hide it while this page is open. */
+body:has(#musicNow.open) #burger{display:none!important}
+#musicNow .mnBg{position:absolute;inset:0;background-size:cover;background-position:center;filter:blur(60px) brightness(.4);transform:scale(1.18);opacity:.7}
+#musicNow.open .mnBg{animation:mnDrift 28s ease-in-out infinite alternate}
 #musicNow::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(11,8,18,.5),rgba(11,8,18,.85))}
+@keyframes mnDrift{from{transform:scale(1.18) translate3d(-1.4%,-1%,0)}to{transform:scale(1.26) translate3d(1.6%,1.2%,0)}}
+@keyframes mnFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+@keyframes mnPop{from{transform:scale(.92);opacity:.55}to{transform:scale(1);opacity:1}}
+@keyframes mnGlow{0%,100%{box-shadow:0 40px 90px rgba(0,0,0,.7),0 0 0 1px rgba(255,255,255,.05),0 0 22px rgba(193,59,214,.16)}50%{box-shadow:0 40px 90px rgba(0,0,0,.7),0 0 0 1px rgba(255,255,255,.08),0 0 42px rgba(255,198,92,.3)}}
 .mnCollapse{position:absolute;top:22px;left:24px;z-index:3;width:46px;height:46px;border-radius:50%;display:grid;place-items:center;background:var(--soft);color:var(--text)}
 .mnCollapse:hover,.mnCollapse.focus{background:var(--btnHover);color:var(--btnFocusText);outline:none;box-shadow:inset 3px 0 0 var(--focus),0 10px 28px rgba(0,0,0,.32)}
-.mnMain{position:relative;z-index:2;display:flex;align-items:center;gap:42px;padding:58px 7vw 36px;flex:0 0 auto;flex-wrap:nowrap;justify-content:center}
-.mnCover{width:clamp(190px,22vw,300px);aspect-ratio:1;border-radius:14px;background:#241934 center/178% auto no-repeat;
+.mnMain{position:relative;z-index:2;display:flex;align-items:center;gap:42px;padding:58px 7vw 28px;flex:1 1 auto;flex-wrap:nowrap;justify-content:center}
+.mnCover{width:clamp(260px,28vw,420px);aspect-ratio:1;border-radius:18px;background:#241934 center/cover no-repeat;overflow:hidden;
   box-shadow:0 40px 90px rgba(0,0,0,.7),0 0 0 1px rgba(255,255,255,.05);flex:none}
-.mnInfo{flex:1;min-width:260px;max-width:620px}
+.mnCover.ytStill{background-size:178% auto}
+#musicNow.open .mnCover{animation:mnFloat 7.5s ease-in-out infinite,mnGlow 6s ease-in-out infinite}
+#musicNow.open .mnCover.mnPop{animation:mnPop .42s cubic-bezier(.2,.8,.2,1),mnFloat 7.5s ease-in-out infinite,mnGlow 6s ease-in-out infinite}
+body.musicPaused #musicNow .mnCover,body.musicPaused #musicNow .mnBg{animation-play-state:paused}
+.mnInfo{flex:1;min-width:260px;max-width:720px}
 .mnEyebrow{font:700 11px "JetBrains Mono";letter-spacing:.22em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
 .mnTitle{font:800 clamp(26px,3vw,42px)/1.06 "Sora";letter-spacing:0;margin-bottom:9px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .mnArtist{font:600 clamp(14px,1.35vw,19px) "Albert Sans";color:var(--amber);margin-bottom:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mnProg{display:flex;align-items:center;gap:14px;margin-bottom:18px}
-.mnProg .mbBar{height:6px;touch-action:none}
+.mnProg .mbBar{height:8px;touch-action:none}
 .mnProg .mbBar::before{content:"";position:absolute;left:0;right:0;top:-14px;bottom:-14px}
-.mnProg .mbFill{box-shadow:0 0 10px rgba(193,59,214,.5)}
-.mnCtl{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.mnProg .mbFill{position:relative;box-shadow:0 0 10px rgba(193,59,214,.5)}
+.mnProg .mbFill::after{content:"";position:absolute;right:-6px;top:50%;width:12px;height:12px;border-radius:50%;background:var(--amber);transform:translateY(-50%);box-shadow:0 0 0 3px rgba(255,198,92,.22)}
+.mnCtl{display:flex;align-items:center;gap:10px;flex-wrap:nowrap}
+.mnExtra{display:flex;align-items:center;gap:10px;margin-top:18px;flex-wrap:wrap}
 .mnCtl .mbBtn{width:46px;height:46px}.mnCtl .mbBtn svg{width:22px;height:22px}
 .mnCtl .mbPlay{width:62px;height:62px;margin:0 4px}.mnCtl .mbPlay svg{width:29px;height:29px}
-/* Shuffle/repeat: muted until ON, then brand-amber — the YouTube Music / Spotify cue. */
-.mnTog{color:var(--muted)}
-.mnTog svg{width:21px!important;height:21px!important}
+.mnAction{min-height:46px;padding:0 16px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;gap:8px;flex:none;background:rgba(255,255,255,.06);color:var(--text);font:600 14px "Albert Sans";letter-spacing:.01em}
+.mnAction span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mnAction svg{width:18px;height:18px;flex:none}
+.mnAction.focus,.mnAction:focus-visible{background:var(--btnHover);color:var(--btnFocusText);outline:none;box-shadow:inset 3px 0 0 var(--focus),0 10px 28px rgba(0,0,0,.32)}
+/* Shuffle/repeat/like/lyrics: muted until ON, then brand-amber. */
+.mnTog{color:var(--muted);position:relative}
+.mnCtl .mnTog svg{width:21px!important;height:21px!important}
 .mnTog.on{color:var(--amber)}
-.mnTog.on::after{content:"";position:absolute;bottom:6px;left:50%;transform:translateX(-50%);width:4px;height:4px;border-radius:50%;background:var(--amber)}
-.mnTog{position:relative}
-.mnQueueToggle{width:46px!important;border-radius:50%;padding:0;font:800 12px "Albert Sans"}
-.mnQueue{display:block;position:relative;z-index:3;flex:1 1 auto;width:min(820px,calc(100vw - 320px));min-height:0;overflow-y:auto;padding:18px 16px 20px;margin:32px auto 34px;border-radius:8px;background:rgba(18,13,27,.78);border:1px solid rgba(255,255,255,.08);box-shadow:0 30px 80px rgba(0,0,0,.36)}
-.mnQueue h2{font:700 12px "JetBrains Mono";letter-spacing:.18em;text-transform:uppercase;color:var(--amber);margin-bottom:12px}
-#mnQueueList{display:flex;flex-direction:column;gap:3px;max-width:100%}
-#musicNow.queueHidden .mnMain{flex:1 1 auto;width:min(1100px,calc(100vw - 150px));margin:0 auto;padding-bottom:74px}
-#musicNow.queueHidden .mnCover{width:clamp(230px,26vw,380px)}
-#musicNow.queueHidden .mnInfo{max-width:660px}
+.mnAction.mnTog.on{background:rgba(255,198,92,.12);color:var(--amber)}
+.mnCtl .mnTog.on::after{content:"";position:absolute;bottom:6px;left:50%;transform:translateX(-50%);width:4px;height:4px;border-radius:50%;background:var(--amber)}
+.mnQueue,.mnLyrics{display:block;position:relative;z-index:3;flex:0 1 34vh;width:min(820px,calc(100vw - 320px));min-height:0;overflow-y:auto;padding:14px 14px 16px;margin:0 auto 28px;border-radius:8px;background:rgba(18,13,27,.78);border:1px solid rgba(255,255,255,.08);box-shadow:0 30px 80px rgba(0,0,0,.36)}
 #musicNow.queueHidden .mnQueue{display:none}
-body.tv #musicNow .mnBg{filter:brightness(.32);transform:none} /* per-frame blur is brutal on the Shield GPU */
+#musicNow:not(.lyricsOpen) .mnLyrics{display:none}
+#musicNow.queueHidden:not(.lyricsOpen) .mnMain{flex:1 1 auto;width:min(1100px,calc(100vw - 150px));margin:0 auto;padding-bottom:74px}
+#musicNow.queueHidden:not(.lyricsOpen) .mnCover{width:clamp(280px,30vw,440px)}
+#musicNow.queueHidden:not(.lyricsOpen) .mnInfo{max-width:760px}
+#musicNow:not(.queueHidden) .mnMain,#musicNow.lyricsOpen .mnMain{flex:0 0 auto;padding-bottom:16px}
+#musicNow:not(.queueHidden) .mnCover,#musicNow.lyricsOpen .mnCover{width:clamp(160px,16vw,220px)}
+.mnQueue h2,.mnLyrics h2{font:700 12px "JetBrains Mono";letter-spacing:.18em;text-transform:uppercase;color:var(--amber);margin-bottom:10px}
+#mnQueueList{display:flex;flex-direction:column;gap:2px;max-width:100%}
+.mnQueue .musicRow{min-height:44px;padding:4px 6px}
+.mnQueue .mThumb{width:36px;height:36px}
+.mnQEdit{display:flex;gap:4px;flex:none;margin-left:6px}
+.mnQEdit button{width:28px;height:28px;border:0;border-radius:7px;background:rgba(var(--fg),.08);color:var(--muted);display:grid;place-items:center;padding:0;cursor:pointer}
+.mnQEdit button:hover,.mnQEdit button.focus{background:rgba(var(--fg),.16);color:var(--text)}
+.mnQEdit svg{width:14px;height:14px}
+.mnLyric{font:500 17px/1.55 "Albert Sans";color:rgba(255,255,255,.42);padding:3px 2px;transition:color .2s,transform .2s}
+.mnLyric.on{color:#fff;transform:translateX(4px)}
+.mnLyricEmpty{font:500 15px "Albert Sans";color:var(--muted);padding:8px 2px}
+body.tv #musicNow .mnBg,body.tv #musicNow .mnCover{animation:none} /* per-frame motion is brutal on the Shield GPU */
+body.tv #musicNow .mnBg{filter:brightness(.32);transform:none}
 body.tv #musicNow .mnMain{padding-top:42px;padding-bottom:30px;gap:28px}
 body.tv #musicNow .mnCover{width:clamp(170px,18vw,240px)}
 body.tv #musicNow .mnInfo{max-width:520px;min-width:260px}
@@ -3150,11 +3187,38 @@ body.tv #musicNow .mnArtist{margin-bottom:13px}
 body.tv #musicNow .mnProg{margin-bottom:13px}
 body.tv #musicNow .mnCtl{gap:8px}
 body.tv #musicNow .mnCtl .mbBtn{width:42px;height:42px}
+body.tv #musicNow .mnAction{min-height:42px;padding:0 16px;font-size:13px}
 body.tv #musicNow .mnCtl .mbPlay{width:58px;height:58px}
-body.tv #musicNow .mnQueue{width:min(780px,calc(100vw - 310px));margin-top:30px;margin-bottom:28px;padding-top:14px}
-body.tv #musicNow.queueHidden .mnMain{width:min(980px,calc(100vw - 140px));padding-bottom:52px}
-body.tv #musicNow.queueHidden .mnCover{width:clamp(210px,23vw,320px)}
-@media (max-width:900px){.mnMain{flex-direction:column;gap:22px;padding:80px 16px 26px}.mnCover{width:min(230px,55vw)}.mnInfo{min-width:0;width:100%;max-width:calc(100vw - 32px)}.mnQueue{width:min(420px,calc(100vw - 48px));margin:22px auto 28px;max-height:38vh}#musicNow.queueHidden .mnMain{width:100%;padding-bottom:52px}#musicNow.queueHidden .mnCover{width:min(260px,58vw)}}
+body.tv #musicNow .mnQueue,body.tv #musicNow .mnLyrics{width:min(780px,calc(100vw - 310px));margin-bottom:24px}
+body.tv #musicNow.queueHidden:not(.lyricsOpen) .mnMain{width:min(980px,calc(100vw - 140px));padding-bottom:52px}
+body.tv #musicNow.queueHidden:not(.lyricsOpen) .mnCover{width:clamp(240px,24vw,360px)}
+@media (prefers-reduced-motion:reduce){#musicNow .mnBg,#musicNow .mnCover{animation:none!important}}
+@media (max-width:900px){
+  .mnMain{flex-direction:column;align-items:center;gap:20px;padding:72px 20px 20px;text-align:center}
+  .mnCover{width:min(280px,68vw)}
+  .mnInfo{min-width:0;width:100%;max-width:calc(100vw - 40px)}
+  .mnTitle,.mnArtist,.mnEyebrow{text-align:center}
+  .mnArtist{white-space:normal}
+  .mnCtl{justify-content:center}
+  .mnExtra{display:grid;grid-template-columns:1fr 1fr;gap:8px;width:100%;max-width:420px;margin:18px auto 0}
+  .mnAction{width:100%;padding:0 12px}
+  .mnQueue,.mnLyrics{width:min(520px,calc(100vw - 32px));margin:0 auto 16px;flex:1 1 38vh;max-height:none}
+  #musicNow.queueHidden:not(.lyricsOpen) .mnMain{width:100%;padding-bottom:36px}
+  #musicNow.queueHidden:not(.lyricsOpen) .mnCover{width:min(300px,72vw)}
+  #musicNow:not(.queueHidden) .mnCover,#musicNow.lyricsOpen .mnCover{width:min(168px,42vw)}
+}
+body.mobileShell #musicNow .mnMain{flex-direction:column;align-items:center;gap:20px;padding:72px 20px 20px;text-align:center}
+body.mobileShell #musicNow .mnCover{width:min(280px,68vw)}
+body.mobileShell #musicNow .mnInfo{min-width:0;width:100%;max-width:calc(100vw - 40px)}
+body.mobileShell #musicNow .mnTitle,body.mobileShell #musicNow .mnArtist,body.mobileShell #musicNow .mnEyebrow{text-align:center}
+body.mobileShell #musicNow .mnArtist{white-space:normal}
+body.mobileShell #musicNow .mnCtl{justify-content:center}
+body.mobileShell #musicNow .mnExtra{display:grid;grid-template-columns:1fr 1fr;gap:8px;width:100%;max-width:420px;margin:18px auto 0}
+body.mobileShell #musicNow .mnAction{width:100%;padding:0 12px}
+body.mobileShell #musicNow .mnQueue,body.mobileShell #musicNow .mnLyrics{width:min(520px,calc(100vw - 32px));margin:0 auto 16px;flex:1 1 38vh;max-height:none}
+body.mobileShell #musicNow.queueHidden:not(.lyricsOpen) .mnMain{width:100%;padding-bottom:36px}
+body.mobileShell #musicNow.queueHidden:not(.lyricsOpen) .mnCover{width:min(300px,72vw)}
+body.mobileShell #musicNow:not(.queueHidden) .mnCover,body.mobileShell #musicNow.lyricsOpen .mnCover{width:min(168px,42vw)}
 
 @media (max-width:900px){.musicTiles{grid-template-columns:repeat(auto-fill,minmax(128px,1fr))}.musicRail{grid-auto-columns:minmax(128px,34vw)}.mSearchSongs{grid-template-columns:1fr}.mArtistName{font-size:28px}.mArtistArt{width:82px;height:82px}}
 @media (max-width:600px){#music{left:0!important}#audiobooks,#abDetail{left:0!important}.mbProg .mbT{display:none}.musicTiles{grid-template-columns:1fr}}
@@ -3820,9 +3884,9 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
   <button class="abMiniPlay focusable" id="abMiniPlay" title="Play/Pause"></button>
 </div>
 
-<!-- Full-screen now-playing page: big cover + transport + the up-next queue.
+<!-- Full-screen now-playing page: big cover + transport. Queue starts compact.
      Back returns to music browsing; the audio never stops. -->
-<div id="musicNow">
+<div id="musicNow" class="queueHidden">
   <div class="mnBg" id="mnBg"></div>
   <button class="mnCollapse focusable" id="mnCollapse" title="Back to browsing">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 6 9 12l6 6"/><path d="M10 12h10"/></svg></button>
@@ -3843,10 +3907,26 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
         <button class="mbBtn mbPlay focusable" id="mnPlay"><svg viewBox="0 0 24 24" fill="currentColor" id="mnPlayIco"><path d="M8 5v14l11-7z"/></svg></button>
         <button class="mbBtn focusable" id="mnNext"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M17 5v14h2V5h-2zm-2 7L5 5v14l10-7z"/></svg></button>
         <button class="mbBtn mnTog focusable" id="mnRepeat" title="Repeat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" id="mnRepeatIco"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg></button>
-        <button class="mbBtn mnQueueToggle focusable" id="mnQueueToggle" title="Hide queue" aria-label="Hide queue">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
+      </div>
+      <div class="mnExtra">
+        <button class="mnAction mnTog focusable" id="mnLike" title="Like" aria-label="Like">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.8 6.6a5.4 5.4 0 0 0-7.7 0L12 7.7l-1.1-1.1a5.4 5.4 0 0 0-7.7 7.7L12 23l8.8-8.7a5.4 5.4 0 0 0 0-7.7z"/></svg>
+          <span>Like</span></button>
+        <button class="mnAction mnTog focusable" id="mnLyrics" title="Lyrics" aria-label="Lyrics">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h10M4 18h7"/><path d="M16 13v6l4-2"/></svg>
+          <span>Lyrics</span></button>
+        <button class="mnAction focusable" id="mnRadio" title="Start radio" aria-label="Start radio">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="2"/><path d="M5 5a10 10 0 0 1 14 0M8.5 8.5a5 5 0 0 1 7 0M5 19a10 10 0 0 1 14 0M8.5 15.5a5 5 0 0 1 7 0"/></svg>
+          <span>Radio</span></button>
+        <button class="mnAction mnTog focusable" id="mnQueueToggle" title="Show queue" aria-label="Show queue">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/></svg>
+          <span>Queue</span></button>
       </div>
     </div>
+  </div>
+  <div class="mnLyrics" id="mnLyricsPanel">
+    <h2>Lyrics</h2>
+    <div id="mnLyricsBody"></div>
   </div>
   <div class="mnQueue">
     <h2>Up next</h2>
@@ -3862,13 +3942,20 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
     <span>Back</span>
   </button>
   <div class="trailerShell" role="dialog" aria-modal="true" aria-label="Trailer">
+    <div class="trailerHead">
+      <div class="trailerTitle" id="trailerTitle"></div>
+      <div class="trailerMeta" id="trailerMeta"></div>
+    </div>
     <div class="trailerStage">
       <div class="trailerLoading" id="trailerLoading">Loading trailer</div>
       <div class="box" id="trailerBox"></div>
     </div>
     <div class="trailerBar">
-      <div class="trailerSource">YouTube trailer</div>
       <div class="trailerActions">
+        <button id="trailerPlay" class="trailerCtl focusable" title="Play" aria-label="Play" style="display:none">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+          <span>Play</span>
+        </button>
         <button id="trailerWl" class="trailerCtl focusable" title="Add to watchlist" aria-label="Add to watchlist" style="display:none">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M6 4h12v16l-6-3.6L6 20z"/></svg>
           <span>Watchlist</span>
@@ -7992,6 +8079,7 @@ function epItemOf(show, season, ep) {
     poster: show.poster,
     qualityRank: preferredQualityRankForItem(show),
     tmdbId: show.tmdbId, imdbId: show.imdbId, tvdbId: show.tvdbId, originalLanguage: show.originalLanguage, type: 'episode', airDate: ep.air_date || '',
+    runtime: Number(ep.runtime) || 0,
     resume: (S.watchMap && S.watchMap[epKeyOf(show, season.season_number, ep.episode_number)] &&
              !S.watchMap[epKeyOf(show, season.season_number, ep.episode_number)].watched)
       ? S.watchMap[epKeyOf(show, season.season_number, ep.episode_number)].position : 0,
@@ -8211,7 +8299,10 @@ async function openDetail(it, push = true) {
     let d;
     for (let attempt = 0; ; attempt++) {
       try {
-        d = await api(`/api/tmdb/${it.type}/${it.tmdbId}?append_to_response=credits,videos,content_ratings,release_dates,recommendations,similar,external_ids`);
+        const append = it.type === 'tv'
+          ? 'credits,aggregate_credits,videos,content_ratings,release_dates,recommendations,similar,external_ids'
+          : 'credits,videos,content_ratings,release_dates,recommendations,similar,external_ids';
+        d = await api(`/api/tmdb/${it.type}/${it.tmdbId}?append_to_response=${append}`);
         break;
       } catch (e) {
         if (reqId !== S.detailReq) return;
@@ -8284,7 +8375,7 @@ async function openDetail(it, push = true) {
     $('dCrew').querySelectorAll('[data-person]').forEach((a) =>
       a.addEventListener('click', () => openPerson(+a.dataset.person)));
 
-    renderCast((d.credits && d.credits.cast) || []);
+    renderCast(detailCastList(d));
 
     if (it.type === 'tv') {
       const seasons = (d.seasons || []).filter((s) => s.season_number > 0 && s.episode_count > 0);
@@ -8348,7 +8439,27 @@ function certOf(d, type) {
 }
 
 const DETAIL_CAST_BATCH = 20;
+const DETAIL_CAST_MAX = 40;
 const PERSON_WORKS_BATCH = 24;
+
+// TV series `credits` is often just the current billed names (Two and a Half Men → 3 people).
+// `aggregate_credits` has every season; keep the regulars, not one-episode guests.
+function detailCastList(d) {
+  const agg = d && d.aggregate_credits && d.aggregate_credits.cast;
+  if (Array.isArray(agg) && agg.length) {
+    return agg.filter((c) => c && c.id && c.name)
+      .slice()
+      .sort((a, b) => (Number(b.total_episode_count) || 0) - (Number(a.total_episode_count) || 0)
+        || (Number(a.order) || 999) - (Number(b.order) || 999))
+      .slice(0, DETAIL_CAST_MAX)
+      .map((c) => {
+        const roles = Array.isArray(c.roles) ? c.roles : [];
+        const top = roles.slice().sort((x, y) => (Number(y.episode_count) || 0) - (Number(x.episode_count) || 0))[0];
+        return { id: c.id, name: c.name, profile_path: c.profile_path, character: (top && top.character) || c.character || '' };
+      });
+  }
+  return ((d && d.credits && d.credits.cast) || []).filter((c) => c && c.id && c.name);
+}
 
 function castCard(c) {
   const b = document.createElement('button');
@@ -11264,7 +11375,7 @@ function startSource(kind, atSeconds, opts = {}) {
   if (p && p.usingNative && canUseNativeVideoPlayer()) return false;
   cancelPauseWarmAhead();
   clearWebRebufferRecovery();
-  if (p) p.usingNative = false;
+  if (p) { markPlaybackSourceSwap(p); p.usingNative = false; }
   if (opts.quietSeek && p) {
     p.suppressSeekLoaderUntil = appMs() + 4500;
     clearTimeout(S._waitT);
@@ -12214,22 +12325,45 @@ function vodPlaybackStarted(p) {
 }
 // A rotten/stub resume file can READY+ENDED in a second. That is not credits — do not mark
 // the episode watched or autoplay the next one. Real EOF is near the end of a real runtime,
-// or a session that actually played for a while.
+// or a session that actually played for a while. A mid-episode source swap / remount often
+// fires ended with duration 0; that is recovery, not the next episode.
+function markPlaybackSourceSwap(p) {
+  if (!p || (p.item && p.item.type === 'live')) return;
+  const known = Math.max(0, Number(p.duration) || 0) || Math.max(0, Number(p.nativeDuration) || 0);
+  if (known > 0) p._lastKnownDuration = known;
+  if (!(p._sourceAdvancePending || p._reMounting || p._sameSourceRecoveryAt)) return;
+  p._sourceSwapAt = (typeof appMs === 'function' ? appMs() : Date.now());
+}
+function playbackSourceSwapPending(p) {
+  if (!p) return false;
+  if (p._sourceAdvancePending || p._reMounting) return true;
+  const swapAt = Number(p._sourceSwapAt || p._sameSourceRecoveryAt || 0);
+  if (!swapAt) return false;
+  const now = (typeof appMs === 'function' ? appMs() : Date.now());
+  return (now - swapAt) < 8000;
+}
 function isGenuineEpisodeEof(p, pos, dur) {
   if (!p || (p.item && p.item.type === 'live')) return false;
-  const d = Math.max(0, Number(dur) || Number(p.nativeDuration) || Number(p.duration) || 0);
+  if (p._sourceAdvancePending || p._reMounting) return false;
+  const swapAt = Number(p._sourceSwapAt || p._sameSourceRecoveryAt || 0);
+  if (swapAt && ((typeof appMs === 'function' ? appMs() : Date.now()) - swapAt) < 8000) return false;
+  const d = Math.max(0, Number(dur) || Number(p.nativeDuration) || Number(p.duration) || Number(p._lastKnownDuration) || 0);
   const t = Math.max(0, Number(pos) || Number(p.nativePos) || 0);
   const resume = Math.max(0, Number(p.item && p.item.resume) || Number(p.startOffset) || 0);
   if (resume > 30 && d > 0 && d + 8 < resume) return false;
+  const catalogSec = Math.max(0, (Number(p.item && p.item.runtime) || 0) * 60);
+  if (catalogSec >= 8 * 60 && t < catalogSec * 0.80) return false;
   if (d >= 45 && t >= d * 0.88) return true;
   if (!vodPlaybackStarted(p)) return false;
   const playedMs = p.startedAt ? ((typeof appMs === 'function' ? appMs() : Date.now()) - p.startedAt) : 0;
   if (playedMs < 12000) return false;
-  return d <= 0 || t >= Math.max(20, d * 0.85);
+  if (d <= 0) return false;
+  return t >= Math.max(20, d * 0.85);
 }
 function handleVodPlaybackEnded(pos, dur) {
   const p = S.playing;
   if (!p || (p.item && p.item.type === 'live')) return false;
+  if (playbackSourceSwapPending(p)) return true;
   if (isGenuineEpisodeEof(p, pos, dur)) {
     if (finishEpisodeToNext()) return true;
     closePlayer({ ended: true });
@@ -12300,6 +12434,7 @@ function recoverSamePlaybackSource(reason = '') {
   }
   p._sameSourceRecoveryKey = key;
   p._sameSourceRecoveryAt = now;
+  markPlaybackSourceSwap(p);
   if (p.usingNative && canUseNativeVideoPlayer() && tryNativeVideoPlayer(kind, at, { quietSeek: true })) return true;
   p.usingNative = false;
   return startSource(kind, at, { quietSeek: true }) || (showPlaybackInterrupted(reason), true);
@@ -12325,6 +12460,7 @@ async function reMountAndResume(reason = '', attempt = 0) {
     p.sourcePickKey = (r.candidate && r.candidate.pickKey) || p.sourcePickKey || null;
     p.size = r.size || (r.candidate && r.candidate.sizeBytes) || p.size; p.bufferGoalSec = r.bufferGoalSec || 0;
     p.triedRemux = false; p.triedTranscode = false; p.nativeTried = {};
+    markPlaybackSourceSwap(p);
     p.started = false; p.startedAt = 0; p.nativePos = at; p.nativeDuration = 0;
     p._sameSourceRecoveryKey = null; p._sameSourceRecoveryAt = 0; p._reMounting = false; // fresh mount → reset guards
     if (p.usingNative && canUseNativeVideoPlayer() && tryNativeVideoPlayer(kind, at, { quietSeek: true })) return;
@@ -12403,6 +12539,7 @@ async function autoAdvance(opts = {}) {
     p.name = r.candidate ? r.candidate.name : r.name;
     p.sourcePickKey = (r.candidate && r.candidate.pickKey) || null; // resume must pin the REPLACEMENT, not the dead source
     p._resumeSourceOk = false; // the replacement re-earns its 30s before it is pinned for resume
+    markPlaybackSourceSwap(p);
     p.duration = 0; p.nativePos = at; p.nativeDuration = 0; p.started = false; p.startedAt = 0;
     p.nativeStartKind = playbackStartKind(r); p.nativeTried = {};
     p._sameSourceRecoveryKey = null; p._sameSourceRecoveryAt = 0;
@@ -12764,6 +12901,10 @@ async function prepNextEpisode(it) {
 const NEXT_EP_PREP_LEAD_SECONDS = 120;
 function maybePrepareNextEpisode(t, d) {
   if (!d || !S.nextEp || S.nextEpPrepared || (d - t) > NEXT_EP_PREP_LEAD_SECONDS || (d - t) <= 0) return;
+  const p = S.playing;
+  if (p && (p._sourceAdvancePending || p._reMounting)) return;
+  const catalogSec = Math.max(0, (Number(p && p.item && p.item.runtime) || 0) * 60);
+  if (catalogSec >= 8 * 60 && t < catalogSec - NEXT_EP_PREP_LEAD_SECONDS - 30) return;
   const item = S.nextEp.item; if (!item) return;
   S.nextEpPrepared = true; // one shot; play()/autoplay reuses the live mount via the server's mountByUrl
   if (localTitleHasPlayback(item)) return; // local libraries are already instant — no mount to warm
@@ -15834,7 +15975,7 @@ async function loadDiscover() {
 //   - among survivors: real Trailer beats Teaser, official beats fan upload, "Official Trailer"
 //     naming, English audio, and higher resolution break ties.
 // Returns null when nothing safe remains — no trailer button beats playing an interview.
-function pickBestTrailer(results, title) {
+function listPlayableTrailers(results, title) {
   const NOT_A_TRAILER = /\b(interview|featurette|behind[ -]the[ -]scenes|making[ -]of|documentary|q\s*&\s*a|premiere|red carpet|first look|sneak peek|clip|blooper|gag reel|deleted|extended (scene|preview)|opening (scene|credits)|table read|react(s|ion)?|recap|explained|breakdown|review|press conference|featur(ing|ed)|cast (talks?|on|discuss)|bts(?!\s*:)|b[ -]?roll|vignette|sizzle|tv spot|junket|panel|photocall|fan event|reunion|music video|lyric|screening|first \d+ minutes|entrevista|intervista|bastidores|detr[aá]s de c[aá]maras)\b/i;
   // TMDB video names usually embed the title ("The Interview | Official Trailer") — remove every
   // occurrence before screening so titles containing screen words can't false-disqualify.
@@ -15845,7 +15986,7 @@ function pickBestTrailer(results, title) {
     while ((i = out.toLowerCase().indexOf(t)) !== -1) out = out.slice(0, i) + ' ' + out.slice(i + t.length);
     return out;
   };
-  const scored = (Array.isArray(results) ? results : [])
+  return (Array.isArray(results) ? results : [])
     .filter((v) => v && v.key && v.site === 'YouTube'
       && (v.type === 'Trailer' || v.type === 'Teaser')
       && !NOT_A_TRAILER.test(scrub(String(v.name || ''))))
@@ -15873,8 +16014,12 @@ function pickBestTrailer(results, title) {
       }
       return { v, s };
     })
-    .sort((a, b) => b.s - a.s);
-  return scored.length ? scored[0].v : null;
+    .sort((a, b) => b.s - a.s)
+    .map((row) => row.v);
+}
+function pickBestTrailer(results, title) {
+  const list = listPlayableTrailers(results, title);
+  return list.length ? list[0] : null;
 }
 async function buildTrailerRow(list) {
   // Parallel lookups — sequential fetches made the trailers row trail in seconds late.
@@ -16404,45 +16549,79 @@ async function loadMoreLocalLibraryPage(focusNew = false) {
 }
 /* ============ trailer modal ============ */
 function trailerControls() {
-  return [$('trailerBack'), $('trailerWl')]
+  return [$('trailerBack'), $('trailerPlay'), $('trailerWl')]
     .filter((el) => el && el.offsetParent !== null && getComputedStyle(el).display !== 'none');
 }
 function focusTrailerControl(idx = S.trailerCtlIdx || 0) {
   const controls = trailerControls();
   if (!controls.length) return;
+  S.zone = 'trailer';
   S.trailerCtlIdx = Math.max(0, Math.min(controls.length - 1, idx));
   applyFocus(controls[S.trailerCtlIdx], false);
+}
+function trailerItemTitle(it, tr) {
+  return (it && it.title) || (tr && tr.title) || 'Trailer';
+}
+function trailerItemYear(it) {
+  return it && it.year ? String(it.year) : '';
+}
+function trailerCanPlay(it) {
+  return !!(it && (it.tmdbId || it.key) && it.type !== 'live');
+}
+function paintTrailerWatchlist() {
+  const wl = $('trailerWl');
+  const it = S.trailerItem;
+  if (it && it.key) {
+    wl.style.display = '';
+    wl.classList.toggle('on', !!(S.watchlistMap && S.watchlistMap[it.key]));
+    wl.querySelector('span').textContent = wl.classList.contains('on') ? 'On watchlist' : 'Watchlist';
+    wl.title = wl.classList.contains('on') ? 'Remove from watchlist' : 'Add to watchlist';
+    wl.setAttribute('aria-label', wl.title);
+  } else wl.style.display = 'none';
+}
+function paintTrailerPlay() {
+  const btn = $('trailerPlay');
+  btn.style.display = trailerCanPlay(S.trailerItem) ? '' : 'none';
+}
+function setTrailerFrame(key, title) {
+  const trailerEl = $('trailer');
+  trailerEl.classList.remove('loaded');
+  const origin = encodeURIComponent(location.origin || 'http://localhost');
+  // referrerpolicy matters: with no referrer YouTube refuses to authorize many embeds.
+  $('trailerBox').innerHTML =
+    `<iframe title="${esc(title)} trailer" src="https://www.youtube.com/embed/${encodeURIComponent(key)}?autoplay=1&rel=0&playsinline=1&controls=1&modestbranding=1&iv_load_policy=3&origin=${origin}" referrerpolicy="strict-origin-when-cross-origin" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe>`;
+  const frame = $('trailerBox').querySelector('iframe');
+  if (frame) frame.addEventListener('load', () => $('trailer').classList.add('loaded'), { once: true });
+  S.trailerKey = key;
 }
 function openTrailer(tr, it) {
   if (!tr || !tr.key) return toast('Trailer is unavailable');
   S.trailerReturnEl = document.querySelector('.focus') || document.activeElement;
   S.trailerCtlIdx = 0;
-  const title = tr.title || (it && it.title) || 'Trailer';
+  const item = it || tr.item || null;
+  const title = trailerItemTitle(item, tr);
+  const year = trailerItemYear(item);
   const trailerEl = $('trailer');
-  const art = (it && (it.backdrop || it.poster)) || (tr.item && (tr.item.backdrop || tr.item.poster)) || '';
+  const art = (item && (item.backdrop || item.poster)) || '';
   const safeArt = safeUrl(art || '');
   if (safeArt) trailerEl.style.setProperty('--trailerBackdrop', `url("${safeArt}")`);
   else trailerEl.style.removeProperty('--trailerBackdrop');
-  trailerEl.classList.remove('loaded');
   trailerEl.setAttribute('aria-hidden', 'false');
-  const origin = encodeURIComponent(location.origin || 'http://localhost');
-  // referrerpolicy matters: with no referrer YouTube refuses to authorize many embeds.
-  $('trailerBox').innerHTML =
-    `<iframe title="${esc(title)} trailer" src="https://www.youtube.com/embed/${encodeURIComponent(tr.key)}?autoplay=1&rel=0&playsinline=1&controls=1&modestbranding=1&iv_load_policy=3&origin=${origin}" referrerpolicy="strict-origin-when-cross-origin" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe>`;
-  const frame = $('trailerBox').querySelector('iframe');
-  if (frame) frame.addEventListener('load', () => $('trailer').classList.add('loaded'), { once: true });
-  // Watchlist straight from the trailer.
-  S.trailerItem = it || tr.item || null;
-  const wl = $('trailerWl');
-  if (S.trailerItem && S.trailerItem.key) {
-    wl.style.display = '';
-    wl.classList.toggle('on', !!(S.watchlistMap && S.watchlistMap[S.trailerItem.key]));
-    wl.querySelector('span').textContent = wl.classList.contains('on') ? 'On watchlist' : 'Watchlist';
-    wl.title = wl.classList.contains('on') ? 'Remove from watchlist' : 'Add to watchlist';
-    wl.setAttribute('aria-label', wl.title);
-  } else wl.style.display = 'none';
+  $('trailerTitle').textContent = title;
+  $('trailerMeta').textContent = [year, item && item.genre, 'Trailer'].filter(Boolean).join('  ·  ');
+  S.trailerItem = item;
+  paintTrailerPlay();
+  paintTrailerWatchlist();
+  setTrailerFrame(tr.key, title);
   trailerEl.classList.add('open');
-  requestAnimationFrame(() => focusTrailerControl(S.trailerItem && S.trailerItem.key ? 1 : 0));
+  const start = $('trailerPlay').style.display !== 'none' ? trailerControls().indexOf($('trailerPlay')) : 0;
+  requestAnimationFrame(() => focusTrailerControl(Math.max(0, start)));
+}
+function playFromTrailer() {
+  const it = S.trailerItem;
+  if (!trailerCanPlay(it)) return;
+  closeTrailer();
+  play(it);
 }
 $('trailerWl').addEventListener('click', async () => {
   const it = S.trailerItem; if (!it) return;
@@ -16462,11 +16641,13 @@ function closeTrailer() {
   $('trailer').style.removeProperty('--trailerBackdrop');
   $('trailerBox').innerHTML = '';
   S.trailerItem = null;
+  S.trailerKey = null;
   const ret = S.trailerReturnEl && document.contains(S.trailerReturnEl) ? S.trailerReturnEl : null;
   S.trailerReturnEl = null;
   if (ret) requestAnimationFrame(() => applyFocus(ret, false));
 }
 $('trailerBack').addEventListener('click', closeTrailer);
+$('trailerPlay').addEventListener('click', playFromTrailer);
 $('trailer').addEventListener('click', (e) => { if (e.target.id === 'trailer') closeTrailer(); });
 
 /* ============ calendar — only what you're watching or have watchlisted ============ */
@@ -19227,7 +19408,7 @@ async function startMusicPlaylist(id, title, meta = {}) {
   toast(`Loading ${title}...`);
   await loadMusicPlaylistPage(true);
   const p = S.musicPlaylist;
-  if (p && p.tracks.length) playMusic(p.tracks, 0, { showQueue: true, autoplay: false });
+  if (p && p.tracks.length) playMusic(p.tracks, 0, { autoplay: false });
   else toast('That playlist looks empty.');
 }
 async function loadMusicPlaylistPage(reset = false) {
@@ -19401,7 +19582,7 @@ function renderMusicRows(results, opts = {}) {
       <div class="mArtistCopy"><div class="mArtistType">Artist</div><div class="mArtistName">${esc(artistHit.artist)}</div>
       <div class="mArtistSub">${artistTracks.length} song${artistTracks.length === 1 ? '' : 's'} from this search</div></div>
       <div class="mArtistPlay"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></div>`;
-    hero.addEventListener('click', () => playMusic(artistQueue, 0, { showQueue: true }));
+    hero.addEventListener('click', () => playMusic(artistQueue, 0));
     hero.addEventListener('mouseenter', () => pointerHover() && focusMusic(musicRows().indexOf(hero)));
     list.appendChild(hero);
   }
@@ -19421,7 +19602,7 @@ function renderMusicRows(results, opts = {}) {
     row.innerHTML = `${rank}<div class="mThumb" style="background-image:${artBackgroundHtml(t.thumb, artFallback('music:' + (t.id || t.title), 51))}"><div class="mEq"><i></i><i></i><i></i></div></div>
       <div class="mBody"><div class="mT">${esc(t.title)}</div><div class="mA">${esc(t.artist || '')}</div></div>
       <div class="mD">${t.duration ? mmss(t.duration) : ''}</div>${playGlyph}`;
-    row.addEventListener('click', () => playMusic(results, i, opts.search ? { showQueue: true } : {}));
+    row.addEventListener('click', () => playMusic(results, i));
     row.addEventListener('mouseenter', () => pointerHover() && focusMusic(musicRows().indexOf(row)));
     songWrap.appendChild(row);
   });
@@ -19439,6 +19620,12 @@ function playMusic(queue, idx, opts = {}) {
   const t = queue[idx]; if (!t) return;
   S.musicCur = t;
   S.musicLoadFailed = false;
+  S._musicPlayTicket = (S._musicPlayTicket || 0) + 1;
+  S._musicSwapAt = Date.now();
+  if (!t.streamUrl) {
+    toast('Track is missing a stream');
+    return;
+  }
   mAudio.src = t.streamUrl;
   updateMusicMediaSession();
   if (opts.autoplay !== false) safeMusicPlay({ notify: opts.notify !== false });
@@ -19446,7 +19633,7 @@ function playMusic(queue, idx, opts = {}) {
   document.body.classList.toggle('musicPaused', opts.autoplay === false);
   if (opts.autoplay === false) setPlayIcon(false);
   markMusicCur();
-  openMusicNow({ showQueue: !!opts.showQueue });
+  openMusicNow();
   prefetchNextMusicStream();
 }
 // Warm the NEXT track's googlevideo URL server-side (a tiny Range hit triggers yt-dlp resolve +
@@ -19505,7 +19692,7 @@ function musicNext(auto) {
     else if (musicQueueCanExtend(q)) { extendMusicQueueThenNext(auto); return; }
     else return; // end of queue, no repeat
   }
-  playMusic(q, next, { showQueue: $('musicNow').classList.contains('open'), notify: !auto });
+    playMusic(q, next, { notify: !auto });
 }
 // The playing queue is the current playlist's live tracks array and the playlist has more pages:
 // reaching the end means "load the next page", not "stop" — playlists used to die at track 24.
@@ -19547,7 +19734,7 @@ function closeMusicPlayer() {
   S.musicCur = null;
   S._musicWasPlaying = false;
   clearMusicMediaSession();
-  $('musicNow').classList.remove('open', 'queueOpen');
+  $('musicNow').classList.remove('open', 'queueOpen', 'lyricsOpen');
   document.body.classList.remove('musicOn', 'musicPaused');
   markMusicCur();
 }
@@ -19570,8 +19757,14 @@ mAudio.addEventListener('timeupdate', () => {
   $('mnFill').style.width = pct;
   $('mnCur').textContent = mmss(mAudio.currentTime);
   if (d && !S.musicCur?.duration) $('mnDur').textContent = mmss(d);
+  syncMusicLyrics();
 });
-mAudio.addEventListener('ended', () => musicNext(true));
+mAudio.addEventListener('ended', () => {
+  // Changing src aborts the previous track and some WebViews fire `ended` for that abort.
+  // Advancing on that fake end skips the song we just started.
+  if (Date.now() - (S._musicSwapAt || 0) < 400) return;
+  musicNext(true);
+});
 mAudio.addEventListener('play', () => { document.body.classList.remove('musicPaused'); setPlayIcon(true); nativeMusicSession(true); });
 // The fail-streak must reset on 'playing' (media actually rendering), NOT 'play' — 'play' fires on
 // every play() CALL including doomed ones, which zeroed the streak each attempt and defeated the
@@ -19581,6 +19774,10 @@ mAudio.addEventListener('playing', () => { S.musicFailStreak = 0; });
 mAudio.addEventListener('pause', () => { document.body.classList.add('musicPaused'); setPlayIcon(false); nativeMusicSession(false); });
 mAudio.addEventListener('error', () => {
   if (!S.musicCur || S.musicLoadFailed) return;
+  // MEDIA_ERR_ABORTED (code 1) fires when we change src to the next track. Treating that as a
+  // failure used to skip the new song, then the next, then the next.
+  if (mAudio.error && mAudio.error.code === 1) return;
+  if (Date.now() - (S._musicSwapAt || 0) < 400) return;
   S.musicLoadFailed = true;
   try { mAudio.pause(); } catch {}
   // Bound the auto-skip: with shuffle/repeat-all on, musicNext never reports "end of queue", so a
@@ -19722,7 +19919,7 @@ async function startMusicFeed(item) {
     const r = await api('/api/music/search?q=' + encodeURIComponent(q) + '&limit=24');
     const rows = r.results || [];
     if (!rows.length) return toast('No songs found for that mix yet.');
-    playMusic(rows, 0, { showQueue: true });
+    playMusic(rows, 0);
   } catch (e) {
     toast('Could not load mix: ' + e.message);
   }
@@ -19917,7 +20114,7 @@ function renderMusicBrowse() {
           grad: `mGrad${((i + 1) % 4) + 1}`,
           icon: 'chart',
           coverUrl: t.thumb,
-        }, 'mCard mChart', () => playMusic(tracks, i, { showQueue: true })));
+        }, 'mCard mChart', () => playMusic(tracks, i)));
       }
     });
   }
@@ -19979,12 +20176,18 @@ function restoreMusicSelection() {
   }
   return focusContent();
 }
-/* ---- Full-screen now-playing page (big cover + queue) ---- */
+/* ---- Full-screen now-playing page (big cover + compact queue) ---- */
+function musicQueueIsHidden() { return S.musicQueueHidden !== false; }
+function musicAccountLinked() {
+  return S.ytmPlaylists === 'stale' || Array.isArray(S.ytmPlaylists);
+}
 function openMusicNow(opts = {}) {
   if (!S.musicCur) return false;
   if (opts.showQueue) S.musicQueueHidden = false;
-  $('musicNow').classList.toggle('queueHidden', !!S.musicQueueHidden);
+  else if (S.musicQueueHidden == null) S.musicQueueHidden = true;
+  $('musicNow').classList.toggle('queueHidden', musicQueueIsHidden());
   updateMusicQueueToggle();
+  updateMusicLikeBtn();
   $('musicNow').classList.add('open');
   S.zone = 'musicNow';
   updateMusicNow();
@@ -19992,49 +20195,245 @@ function openMusicNow(opts = {}) {
   return true;
 }
 function closeMusicNow() {
-  $('musicNow').classList.remove('open', 'queueOpen');
+  $('musicNow').classList.remove('open', 'queueOpen', 'lyricsOpen');
   restoreMusicSelection();
 }
 function toggleMusicQueue() {
-  S.musicQueueHidden = !$('musicNow').classList.contains('queueHidden');
-  $('musicNow').classList.toggle('queueHidden', S.musicQueueHidden);
+  S.musicQueueHidden = !musicQueueIsHidden();
+  $('musicNow').classList.toggle('queueHidden', musicQueueIsHidden());
+  if (!musicQueueIsHidden()) $('musicNow').classList.remove('lyricsOpen');
   updateMusicQueueToggle();
+  updateMusicLyricsBtn();
   focusMusicNowControl($('mnQueueToggle'));
 }
+function toggleMusicLyrics() {
+  const open = !$('musicNow').classList.contains('lyricsOpen');
+  $('musicNow').classList.toggle('lyricsOpen', open);
+  if (open) {
+    S.musicQueueHidden = true;
+    $('musicNow').classList.add('queueHidden');
+    updateMusicQueueToggle();
+    loadMusicLyrics(S.musicCur);
+  }
+  updateMusicLyricsBtn();
+  focusMusicNowControl($('mnLyrics'));
+}
 function updateMusicQueueToggle() {
-  const hidden = $('musicNow').classList.contains('queueHidden') || !!S.musicQueueHidden;
+  const hidden = musicQueueIsHidden();
   const btn = $('mnQueueToggle');
   btn.title = hidden ? 'Show queue' : 'Hide queue';
   btn.setAttribute('aria-label', btn.title);
+  btn.classList.toggle('on', !hidden);
+  const label = btn.querySelector('span');
+  if (label) label.textContent = 'Queue';
+}
+function updateMusicLyricsBtn() {
+  const open = $('musicNow').classList.contains('lyricsOpen');
+  const btn = $('mnLyrics');
+  btn.classList.toggle('on', open);
+  btn.title = open ? 'Hide lyrics' : 'Lyrics';
+  btn.setAttribute('aria-label', btn.title);
+}
+function updateMusicLikeBtn() {
+  const liked = !!(S.musicCur && S.musicCur.liked);
+  const btn = $('mnLike');
+  btn.classList.toggle('on', liked);
+  btn.title = liked ? 'Unlike' : 'Like';
+  btn.setAttribute('aria-label', btn.title);
+  btn.querySelector('svg').setAttribute('fill', liked ? 'currentColor' : 'none');
+  const label = btn.querySelector('span');
+  if (label) label.textContent = liked ? 'Liked' : 'Like';
+}
+function musicNowArtUrl(url) {
+  const raw = String(url || '').trim();
+  if (!raw) return '';
+  try {
+    const u = new URL(raw, location.origin);
+    const host = u.hostname.toLowerCase();
+    if (host.endsWith('googleusercontent.com')) {
+      if (/=w\d+-h\d+/i.test(raw)) return raw.replace(/=w\d+-h\d+/i, '=w960-h960');
+      if (/=s\d+/i.test(raw)) return raw.replace(/=s\d+/i, '=w960-h960');
+    }
+    if (host.endsWith('ytimg.com')) {
+      return raw.replace(/\/(?:default|mqdefault|hqdefault|sddefault|hq720)\.(jpg|webp)(\?.*)?$/i, '/maxresdefault.$1$2');
+    }
+  } catch { /* keep the original thumb */ }
+  return raw;
+}
+function musicStillNeedsCrop(src) {
+  return /ytimg\.com\/vi\/[^/]+\/(?:default|mqdefault|hqdefault|sddefault)\./i.test(String(src || ''));
+}
+function paintMusicNowArt(url, key) {
+  const token = (S._mnArtToken = (S._mnArtToken || 0) + 1);
+  const apply = (src) => {
+    if (S._mnArtToken !== token) return;
+    $('mnCover').classList.toggle('ytStill', musicStillNeedsCrop(src));
+    $('mnCover').style.backgroundImage = artBackground(src, artFallback('music-now:' + key, 54));
+    $('mnBg').style.backgroundImage = artBackground(src, artFallback('music-now:' + key, 55));
+  };
+  const hi = musicNowArtUrl(url);
+  apply(url);
+  if (!hi || hi === url) return;
+  const probe = new Image();
+  probe.onload = () => apply(hi);
+  probe.onerror = () => apply(url);
+  probe.src = hi;
 }
 function updateMusicNow() {
   if (!$('musicNow').classList.contains('open')) return;
   const t = S.musicCur; if (!t) return;
-  $('mnCover').style.backgroundImage = artBackground(t.thumb, artFallback('music-now:' + (t.id || t.title), 54));
-  $('mnBg').style.backgroundImage = artBackground(t.thumb, artFallback('music-now:' + (t.id || t.title), 55));
+  const cover = $('mnCover');
+  cover.classList.remove('mnPop');
+  void cover.offsetWidth;
+  paintMusicNowArt(t.thumb, t.id || t.title);
+  cover.classList.add('mnPop');
   $('mnTitle').textContent = t.title;
   $('mnArtist').textContent = t.artist || '';
   $('mnDur').textContent = t.duration ? mmss(t.duration) : mmss(mAudio.duration);
+  updateMusicLikeBtn();
   renderMusicQueue();
+  if ($('musicNow').classList.contains('lyricsOpen')) loadMusicLyrics(t);
+  else loadMusicLyrics(t, { silent: true });
+}
+async function loadMusicLyrics(t, opts = {}) {
+  if (!t || !t.id) return;
+  if (S._musicLyricsId === t.id && S._musicLyricsText != null) {
+    if (!opts.silent) renderMusicLyrics();
+    return;
+  }
+  S._musicLyricsId = t.id;
+  S._musicLyricsText = null;
+  S._musicLyricsTimed = null;
+  if (!opts.silent) renderMusicLyrics('Loading lyrics…');
+  try {
+    const r = await api('/api/music/lyrics/' + encodeURIComponent(t.id));
+    if (!S.musicCur || S.musicCur.id !== t.id) return;
+    S._musicLyricsText = r.lyrics || '';
+    S._musicLyricsTimed = r.timed || null;
+    if (r.liked) t.liked = true;
+    updateMusicLikeBtn();
+    if (!opts.silent || $('musicNow').classList.contains('lyricsOpen')) renderMusicLyrics();
+  } catch {
+    if (S._musicLyricsId !== t.id) return;
+    S._musicLyricsText = '';
+    if (!opts.silent || $('musicNow').classList.contains('lyricsOpen')) renderMusicLyrics();
+  }
+}
+function renderMusicLyrics(note) {
+  const box = $('mnLyricsBody'); if (!box) return;
+  if (note) { box.innerHTML = `<div class="mnLyricEmpty">${esc(note)}</div>`; return; }
+  const timed = S._musicLyricsTimed;
+  const text = S._musicLyricsText;
+  if (timed && timed.length) {
+    box.innerHTML = timed.map((line, i) => `<div class="mnLyric" data-lyric="${i}">${esc(line.text)}</div>`).join('');
+    syncMusicLyrics();
+    return;
+  }
+  if (text) {
+    box.innerHTML = text.split(/\n+/).map((line) => `<div class="mnLyric">${esc(line)}</div>`).join('');
+    return;
+  }
+  box.innerHTML = '<div class="mnLyricEmpty">No lyrics for this track.</div>';
+}
+function syncMusicLyrics() {
+  const timed = S._musicLyricsTimed;
+  if (!timed || !timed.length || !$('musicNow').classList.contains('lyricsOpen')) return;
+  const sec = mAudio.currentTime || 0;
+  let i = 0;
+  for (let n = 0; n < timed.length; n++) if (sec >= (Number(timed[n].start) || 0)) i = n;
+  const els = $('mnLyricsBody').querySelectorAll('.mnLyric');
+  els.forEach((el, n) => el.classList.toggle('on', n === i));
+  if (els[i] && S.zone !== 'musicNowLyrics') els[i].scrollIntoView({ block: 'center', behavior: 'smooth' });
+}
+async function toggleMusicLike() {
+  const t = S.musicCur; if (!t) return;
+  if (!musicAccountLinked()) { toast('Link YouTube Music in Preferences to like songs.'); return; }
+  const next = !t.liked;
+  try {
+    await api('/api/music/like', { method: 'POST', body: { id: t.id, liked: next } });
+    t.liked = next;
+    updateMusicLikeBtn();
+    toast(next ? 'Liked' : 'Removed from Liked');
+  } catch (e) {
+    toast((e && e.message) || 'Could not like that track.');
+  }
+}
+async function startMusicRadio() {
+  const t = S.musicCur; if (!t) return;
+  toast('Starting radio…');
+  try {
+    const r = await api('/api/music/radio/' + encodeURIComponent(t.id) + '?limit=24');
+    const rest = (r.results || []).filter((x) => x.id !== t.id);
+    if (!rest.length) return toast('No similar tracks for radio yet.');
+    S.musicPlaylist = null;
+    playMusic([t, ...rest], 0, { notify: false });
+    toast('Radio from “' + t.title + '”');
+  } catch (e) {
+    toast((e && e.message) || 'Radio is not available.');
+  }
 }
 function renderMusicQueue() {
   const list = $('mnQueueList'); if (!list) return;
   const q = S.musicQueue || []; list.innerHTML = '';
   q.forEach((t, i) => {
-    const row = document.createElement('button');
+    const row = document.createElement('div');
     row.className = 'musicRow focusable' + (i === S.musicIdx ? ' cur' : ''); row.dataset.qrow = i;
     row.innerHTML = `<div class="mThumb" style="background-image:${artBackgroundHtml(t.thumb, artFallback('music-queue:' + (t.id || t.title), 56))}"><div class="mEq"><i></i><i></i><i></i></div></div>
       <div class="mBody"><div class="mT">${esc(t.title)}</div><div class="mA">${esc(t.artist || '')}</div></div>
-      <div class="mD">${t.duration ? mmss(t.duration) : ''}</div>`;
-    row.addEventListener('click', () => playMusic(S.musicQueue, i));
+      <div class="mD">${t.duration ? mmss(t.duration) : ''}</div>
+      <div class="mnQEdit">
+        <button type="button" class="focusable" data-qact="up" title="Move up" aria-label="Move up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 14l6-6 6 6"/></svg></button>
+        <button type="button" class="focusable" data-qact="down" title="Move down" aria-label="Move down"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 10l6 6 6-6"/></svg></button>
+        <button type="button" class="focusable" data-qact="remove" title="Remove" aria-label="Remove"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+      </div>`;
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('[data-qact]')) return;
+      playMusic(S.musicQueue, i);
+    });
     row.addEventListener('mouseenter', () => pointerHover() && focusQueue(i));
+    row.querySelectorAll('[data-qact]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const act = btn.dataset.qact;
+        if (act === 'up') moveMusicQueueTrack(i, i - 1);
+        else if (act === 'down') moveMusicQueueTrack(i, i + 1);
+        else if (act === 'remove') removeMusicQueueTrack(i);
+      });
+    });
     list.appendChild(row);
   });
 }
+function removeMusicQueueTrack(i) {
+  const q = S.musicQueue; if (!q || !q.length) return;
+  if (q.length <= 1) { toast('Last track in the queue'); return; }
+  const playing = i === S.musicIdx;
+  q.splice(i, 1);
+  if (S.musicIdx > i) S.musicIdx--;
+  else if (playing) return playMusic(q, Math.min(i, q.length - 1), { notify: false });
+  renderMusicQueue();
+}
+function moveMusicQueueTrack(from, to) {
+  const q = S.musicQueue; if (!q) return;
+  if (to < 0 || to >= q.length || from === to) return;
+  const [t] = q.splice(from, 1);
+  q.splice(to, 0, t);
+  if (S.musicIdx === from) S.musicIdx = to;
+  else if (from < S.musicIdx && to >= S.musicIdx) S.musicIdx--;
+  else if (from > S.musicIdx && to <= S.musicIdx) S.musicIdx++;
+  renderMusicQueue();
+  focusQueue(to);
+}
 function queueRows() { return [...$('mnQueueList').querySelectorAll('.musicRow')]; }
-function musicNowControls() {
-  return [$('mnCollapse'), $('mnShuffle'), $('mnPrev'), $('mnPlay'), $('mnNext'), $('mnRepeat'), $('mnQueueToggle')]
+function musicNowTransport() {
+  return [$('mnCollapse'), $('mnShuffle'), $('mnPrev'), $('mnPlay'), $('mnNext'), $('mnRepeat')]
     .filter((el) => el && el.offsetParent !== null);
+}
+function musicNowExtras() {
+  return [$('mnLike'), $('mnLyrics'), $('mnRadio'), $('mnQueueToggle')]
+    .filter((el) => el && el.offsetParent !== null);
+}
+function musicNowControls() {
+  return [...musicNowTransport(), ...musicNowExtras()];
 }
 function focusMusicNowControl(el) {
   S.zone = 'musicNow';
@@ -20051,6 +20450,9 @@ $('mnNext').addEventListener('click', () => musicNext());
 $('mnPrev').addEventListener('click', musicPrev);
 $('mnShuffle').addEventListener('click', toggleShuffle);
 $('mnRepeat').addEventListener('click', cycleRepeat);
+$('mnLike').addEventListener('click', toggleMusicLike);
+$('mnLyrics').addEventListener('click', toggleMusicLyrics);
+$('mnRadio').addEventListener('click', startMusicRadio);
 $('mnQueueToggle').addEventListener('click', toggleMusicQueue);
 // Music seek: pointer events so a touch TAP *or* DRAG scrubs the timeline (the old click-only
 // handler couldn't drag on the phone). setPointerCapture keeps the drag tracking off the thin bar.
@@ -21753,6 +22155,19 @@ function syncSearchClear() {
 }
 function searchClearVisible() { return !$('searchClearBtn').hidden; }
 function focusSearchClear() { $('micBtn').blur(); $('searchInput').blur(); $('searchClearBtn').focus(); }
+// Leave the result grid and put the remote on the search field. ArrowUp used to call
+// focusSearchMic(), which refuses to land while a card still has .focus — so TV could
+// never climb back up to type a new query or reach the clear (X).
+function focusSearchBarFromResults() {
+  cancelSearchMicLand();
+  clearFocus();
+  S.zone = '';
+  const input = $('searchInput');
+  if (!input) return;
+  try { input.focus({ preventScroll: true }); } catch { try { input.focus(); } catch {} }
+  const n = input.value.length;
+  try { input.setSelectionRange(n, n); } catch {}
+}
 // Land on the MIC when Search opens (owner: voice first on TV — it used to take two D-pad
 // presses to get there). Native .focus() inside the Android WebView often does not stick:
 // the menu Search button steals native focus back a beat later, so OK-on-Search flashes
@@ -24520,7 +24935,7 @@ document.addEventListener('keydown', (e) => {
     if (!controls.length) return;
     let i = controls.findIndex((el) => el.classList.contains('focus'));
     if (i === -1) i = Math.max(0, Math.min(controls.length - 1, S.trailerCtlIdx || 0));
-    if (k === 'ArrowRight' || k === 'ArrowDown') return focusTrailerControl(i + 1);
+    if (k === 'ArrowRight') return focusTrailerControl(i + 1);
     if (k === 'ArrowLeft' || k === 'ArrowUp') return focusTrailerControl(i - 1);
     if (k === 'Enter' && !e.repeat) return controls[i].click();
     return;
@@ -24549,27 +24964,65 @@ document.addEventListener('keydown', (e) => {
     else dpadCycle($('updateModal'), k);
     return;
   }
-  // Full-screen now-playing page: its own focus loop (collapse + transport row → queue list).
+  // Full-screen now-playing page: its own focus loop (collapse + transport → extras → queue/lyrics).
   if ($('musicNow').classList.contains('open')) {
     if (k === 'Escape' || k === 'Backspace') return closeMusicNow();
     if (S.zone === 'musicNowQueue') {
       const rows = queueRows(); let i = S.qRowIdx || 0;
-      if (k === 'ArrowUp') return i === 0 ? focusMusicNowControl($('mnPlay')) : focusQueue(i - 1);
+      const row = rows[i];
+      const edits = row ? [...row.querySelectorAll('[data-qact]')] : [];
+      const focused = document.querySelector('#musicNow .focus');
+      const editIdx = edits.indexOf(focused);
+      if (editIdx >= 0) {
+        if (k === 'ArrowLeft') return editIdx === 0 ? focusQueue(i) : applyFocus(edits[editIdx - 1], !S.pointer);
+        if (k === 'ArrowRight') return applyFocus(edits[Math.min(edits.length - 1, editIdx + 1)], !S.pointer);
+        if (k === 'ArrowUp') return i === 0 ? focusMusicNowControl($('mnQueueToggle')) : focusQueue(i - 1);
+        if (k === 'ArrowDown') return focusQueue(Math.min(rows.length - 1, i + 1));
+        if (k === 'Enter' && !e.repeat) { focused.click(); return; }
+        return;
+      }
+      if (k === 'ArrowRight' && edits.length) return applyFocus(edits[0], !S.pointer);
+      if (k === 'ArrowUp') return i === 0 ? focusMusicNowControl($('mnQueueToggle')) : focusQueue(i - 1);
       if (k === 'ArrowDown') return focusQueue(Math.min(rows.length - 1, i + 1));
       if (k === 'Enter' && !e.repeat) { rows[i] && rows[i].click(); return; }
       return;
     }
-    const top = musicNowControls();
-    let ci = top.indexOf(document.querySelector('#musicNow .focus')); if (ci < 0) ci = 3;
-    if (k === 'ArrowLeft') return ci > 0 ? focusMusicNowControl(top[ci - 1]) : undefined;
-    if (k === 'ArrowRight') return focusMusicNowControl(top[Math.min(top.length - 1, ci + 1)]);
-    if (k === 'ArrowUp') return; // top of the now-playing loop — stay put (don't fall through to the grid handler)
-    if (k === 'ArrowDown') {
-      const rows = queueRows();
-      if (!$('musicNow').classList.contains('queueHidden') && rows.length) return focusQueue(Math.max(0, Math.min(rows.length - 1, S.musicIdx || 0)));
+    if (S.zone === 'musicNowLyrics') {
+      if (k === 'ArrowUp') return focusMusicNowControl($('mnLyrics'));
+      if (k === 'ArrowDown') {
+        const box = $('mnLyricsPanel');
+        if (box) box.scrollTop += 72;
+        return;
+      }
       return;
     }
-    if (k === 'Enter' && !e.repeat) { (top[ci] || $('mnPlay')).click(); return; }
+    const extras = musicNowExtras();
+    const transport = musicNowTransport();
+    const focused = document.querySelector('#musicNow .focus');
+    const onExtra = extras.includes(focused);
+    let ci = (onExtra ? extras : transport).indexOf(focused);
+    if (ci < 0) ci = onExtra ? 0 : 3;
+    const row = onExtra ? extras : transport;
+    if (k === 'ArrowLeft') return ci > 0 ? focusMusicNowControl(row[ci - 1]) : undefined;
+    if (k === 'ArrowRight') return focusMusicNowControl(row[Math.min(row.length - 1, ci + 1)]);
+    if (k === 'ArrowUp') {
+      if (onExtra && extras[0] && extras[2] && extras[0].getBoundingClientRect().top !== extras[2].getBoundingClientRect().top && ci >= 2) {
+        return focusMusicNowControl(extras[ci - 2]);
+      }
+      if (onExtra) return focusMusicNowControl($('mnPlay'));
+      return;
+    }
+    if (k === 'ArrowDown') {
+      if (!onExtra) return focusMusicNowControl($('mnLike'));
+      if (extras[0] && extras[2] && extras[0].getBoundingClientRect().top !== extras[2].getBoundingClientRect().top && extras[ci + 2]) {
+        return focusMusicNowControl(extras[ci + 2]);
+      }
+      const rows = queueRows();
+      if (!$('musicNow').classList.contains('queueHidden') && rows.length) return focusQueue(Math.max(0, Math.min(rows.length - 1, S.musicIdx || 0)));
+      if ($('musicNow').classList.contains('lyricsOpen')) { S.zone = 'musicNowLyrics'; return; }
+      return;
+    }
+    if (k === 'Enter' && !e.repeat) { (focused || $('mnPlay')).click(); return; }
     return;
   }
   if ($('filterMenu') && $('filterMenu').classList.contains('open')) {
@@ -25115,6 +25568,7 @@ document.addEventListener('keydown', (e) => {
     if (k === 'Escape' || k === 'Backspace') {
       if (S.view === 'person') return backOneRoute(closePerson);
       if (S.view === 'library' && S.localShow !== undefined) return runLocalLibrary(S.currentLib); // episodes → show list
+      if (S.view === 'search' && $('searchInput').value.trim()) return focusSearchBarFromResults();
       return enterRail();
     }
     if (S.view === 'livetv' && document.querySelector('#chBody.liveGuideShell')) {
@@ -25223,7 +25677,7 @@ document.addEventListener('keydown', (e) => {
       const t = gridVert(-1);
       if (t >= 0) return focusGrid(t);
       if (S.view === 'livetv' && document.querySelector('#chBody.liveGuideShell') && cur && liveContentEls().includes(cur)) return focusLiveFilter();
-      if (S.view === 'search') { focusSearchMic(); return; }
+      if (S.view === 'search') { focusSearchBarFromResults(); return; }
       if (S.view === 'person') return focusPersonBack();
       // Movies/TV/local Library: the genre filter sits above the grid — give the D-pad a stop
       // there. (Native <select> handling takes over; Escape backs out, change re-runs the view.)
