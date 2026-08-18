@@ -125,10 +125,12 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
-2026-08-18, v3.0.5 ship APK + Windows server + Windows client:
+2026-08-18, v3.0.6 ship APK + Windows server + Windows client:
 
-- Version contract: `package.json` 3.0.5; Android `versionName` 3.0.5 /
-  `versionCode` 336; Windows client package/Tauri/Cargo 3.0.5.
+- Version contract: `package.json` 3.0.6; Android `versionName` 3.0.6 /
+  `versionCode` 337; Windows client package/Tauri/Cargo 3.0.6.
+  v3.0.5 was tagged but never published: Cargo.toml had a trailing
+  comma and the Windows client job failed. Do not reuse that tag.
 - Next Episode uses one file-based window for every show: last 2.8% of
   the playing file, floor 30s, cap 90s. TMDB runtime is only a stub
   check (file must be at least 65% of the listing). Autoplay still
