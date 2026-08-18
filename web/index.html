@@ -12461,7 +12461,10 @@ function isGenuineEpisodeEof(p, pos, dur) {
   const resume = Math.max(0, Number(p.item && p.item.resume) || Number(p.startOffset) || 0);
   if (resume > 30 && d > 0 && d + 8 < resume) return false;
   const catalogSec = Math.max(0, (Number(p.item && p.item.runtime) || 0) * 60);
-  if (catalogSec >= 8 * 60 && t < catalogSec * 0.80) return false;
+  // TMDB runtimes are rounded (22/30/45/60). The file is the episode unless it is
+  // a stub — much shorter than the listing, like a 12-min replacement of a 22-min show.
+  const fileLooksComplete = !catalogSec || catalogSec < 8 * 60 || d >= catalogSec * 0.65;
+  if (!fileLooksComplete && t < catalogSec * 0.80) return false;
   if (d >= 45 && t >= d * 0.88) return true;
   if (!vodPlaybackStarted(p)) return false;
   const playedMs = p.startedAt ? ((typeof appMs === 'function' ? appMs() : Date.now()) - p.startedAt) : 0;
@@ -13031,20 +13034,14 @@ function maybePrepareNextEpisode(t, d) {
   api('/api/prepare', { method: 'POST', body: playbackRequestBody(item, null, qRank) }).then(maybeNativePrefetch).catch(() => {});
 }
 const UP_NEXT_COUNTDOWN_SECONDS = 10;
-// Credit length tracks show length. Sitcoms stay tight so Next Episode does not land
-// in the last scene (the old 35-55s guess did). Hour dramas can come up a bit earlier.
-// Autoplay still waits for the last 10s (armUpNextCountdown).
-function episodeRuntimeMinutes(p, d) {
-  const listed = Number(p && p.item && p.item.runtime) || 0;
-  if (listed >= 8) return listed;
-  return Math.max(0, Number(d) || 0) / 60;
-}
+// One rule for every show: the file you are watching owns the chip. Last 2.8% of
+// that file, never under 30s, never over 90s. No title list, no TMDB 22/30/60
+// buckets — those labels are rounded and do not match the file. Autoplay still
+// waits for the last 10s. Actual credit markers are the later upgrade.
 function upNextLeadSeconds(p, d) {
-  const m = episodeRuntimeMinutes(p, d);
-  if (m <= 28) return 20;
-  if (m <= 48) return 32;
-  if (m <= 70) return 42;
-  return 52;
+  const fileSec = Math.max(0, Number(d) || 0);
+  if (fileSec <= 0) return 30;
+  return Math.round(Math.min(90, Math.max(30, fileSec * 0.028)));
 }
 // Native ExoPlayer hides the WebView, so the web #upNext overlay can't draw over the video.
 // When a v2+ shell exposes the native Up Next card, drive THAT instead — the countdown still

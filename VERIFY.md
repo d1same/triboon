@@ -125,6 +125,21 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-18, v3.0.5 ship APK + Windows server + Windows client:
+
+- Version contract: `package.json` 3.0.5; Android `versionName` 3.0.5 /
+  `versionCode` 336; Windows client package/Tauri/Cargo 3.0.5.
+- Next Episode uses one file-based window for every show: last 2.8% of
+  the playing file, floor 30s, cap 90s. TMDB runtime is only a stub
+  check (file must be at least 65% of the listing). Autoplay still
+  waits for the last 10s. No per-show list and no 22/30/60 minute
+  buckets.
+- `npm.cmd test` 572/572. Isolated `/api/server` smoke reported 3.0.5.
+  Household VOD/CC (Mario + FROM), IPTV ABC+ESPN web+native, and
+  overlapping Play passed. Combined `verify:full` Android ExoPlayer
+  Live+VOD+CC on emulator-5554 passed.
+- Windows native GPU/HDR was not run (needs a real Windows PC session).
+
 2026-08-17, v3.0.4 ship APK + Windows server + Windows client:
 
 - Version contract: `package.json` 3.0.4; Android `versionName` 3.0.4 /

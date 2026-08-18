@@ -613,8 +613,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'native player errors should reject stale players and preserve the last good position before fallback');
   // Smarter Up Next: show Next Episode earlier on longer shows, keep sitcoms tight.
   // Autoplay still arms only in the last 10s. The old 35-55s guess landed in the last scene.
-  assert.match(ui, /function upNextLeadSeconds\(p, d\) \{[\s\S]+if \(m <= 28\) return 20;[\s\S]+if \(m <= 48\) return 32;[\s\S]+if \(m <= 70\) return 42;[\s\S]+return 52;/,
-    'Up Next lead time follows show length: sitcom 20s, 42-min 32s, hour 42s');
+  assert.match(ui, /function upNextLeadSeconds\(p, d\) \{[\s\S]+Math\.min\(90, Math\.max\(30, fileSec \* 0\.028\)\)/,
+    'Up Next lead time is last 2.8% of the playing file for every show');
   assert.match(ui, /function maybeShowUpNext\(t, d, opts = \{\}\) \{[\s\S]+if \(remaining > upNextLeadSeconds\(p, d\) \+ 1\) return;[\s\S]+isGenuineEpisodeEof\(p, t, d\)[\s\S]+showUpNext\(\);[\s\S]+if \(remaining <= UP_NEXT_COUNTDOWN_SECONDS \+ 1\) armUpNextCountdown\(\);/,
     'Up Next appears in the runtime-based window and only starts the 10s countdown at the end');
   assert.doesNotMatch(ui, /function maybeShowUpNext\(t, d, opts = \{\}\) \{[\s\S]+upNextEarlyWindow/,
@@ -1444,15 +1444,16 @@ test('episode handoff stays player-to-player before local lookup and EOF never r
   assert.deepStrictEqual(dismissed.events, [['save', { watched: true }]],
     'an explicit Up Next dismiss remains sticky through EOF');
 
-  const leadStart = ui.indexOf('function episodeRuntimeMinutes(p, d)');
+  const leadStart = ui.indexOf('function upNextLeadSeconds(p, d)');
   const leadEnd = ui.indexOf('function nativeUpNextBridge()', leadStart);
-  assert.ok(leadStart >= 0 && leadEnd > leadStart, 'runtime-based Up Next lead helper should be extractable');
+  assert.ok(leadStart >= 0 && leadEnd > leadStart, 'file-based Up Next lead helper should be extractable');
   const upNextLeadSeconds = new Function(`${ui.slice(leadStart, leadEnd)}\nreturn upNextLeadSeconds;`)();
-  assert.equal(upNextLeadSeconds({ item: { runtime: 22 } }, 1320), 20, 'a sitcom stays at 20s so Next Episode misses the last scene');
-  assert.equal(upNextLeadSeconds({ item: { runtime: 42 } }, 2520), 32, 'a 42-minute drama can come up at 32s');
-  assert.equal(upNextLeadSeconds({ item: { runtime: 60 } }, 3600), 42, 'an hour show can come up at 42s');
-  assert.equal(upNextLeadSeconds({ item: { runtime: 90 } }, 5400), 52, 'a long special can come up at 52s');
-  assert.equal(upNextLeadSeconds({ item: {} }, 1320), 20, 'missing TMDB runtime falls back to the file length');
+  assert.equal(upNextLeadSeconds({}, 1320), 37, 'a 22-minute file uses last 2.8%');
+  assert.equal(upNextLeadSeconds({ item: { runtime: 30 } }, 1452), 41, 'TMDB listing does not change a 24-minute file window');
+  assert.equal(upNextLeadSeconds({}, 2520), 71, 'a 42-minute file uses last 2.8%');
+  assert.equal(upNextLeadSeconds({}, 3600), 90, 'an hour file caps at 90s');
+  assert.equal(upNextLeadSeconds({}, 5400), 90, 'a long file caps at 90s');
+  assert.equal(upNextLeadSeconds({}, 0), 30, 'unknown duration still gets a pressable floor');
 
   const eofStart = ui.indexOf('function isGenuineEpisodeEof(p, pos, dur)');
   const eofEnd = ui.indexOf('function handleVodPlaybackEnded(pos, dur)', eofStart);
@@ -1472,6 +1473,8 @@ test('episode handoff stays player-to-player before local lookup and EOF never r
     'unknown duration after a mid-episode remount is not the next episode');
   assert.equal(isGenuine({ item: { type: 'episode', runtime: 22 }, started: true, startedAt: 1 }, 600, 700), false,
     '12 minutes into a 22-minute sitcom is not credits even if the replacement file looks almost done');
+  assert.equal(isGenuine({ item: { type: 'episode', runtime: 30 }, started: true, startedAt: 1 }, 1407, 1452), true,
+    'a 24-minute file of a 30-minute listing still counts as credits');
   assert.equal(isGenuine({ item: { type: 'episode', runtime: 22 }, started: true, startedAt: 1 }, 1260, 1320), true,
     'near the catalog runtime of a sitcom is still credits');
   assert.equal(isGenuine({ item: { type: 'episode' }, started: true, startedAt: 1, _sourceAdvancePending: true }, 1260, 1320), false,
