@@ -369,7 +369,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'manual source selection should re-resolve the latest resume point before mounting the exact picked release');
   assert.match(ui, /function stopActivePlaybackForReplacement\(opts = \{\}\) \{[\s\S]+saveWatch\(true, S\.playing\._ended \? \{ watched: true \} : \{\}\);[\s\S]+if \(!opts\.preserveNativeSurface[\s\S]+window\.TriboonTV\.closeVideo\(\);[\s\S]+stopWebVideoElement\(\);[\s\S]+if \(!opts\.preserveGuide\) closePlayerGuide\(\{ fromNative: true \}\);[\s\S]+S\.playing = null;[\s\S]+\}/,
     'source replacement should stop active playback while allowing atomic native episode handoff and preserving forced-watched EOF');
-  assert.match(ui, /async function play\(it, pick, opts = \{\}\) \{[\s\S]+beginPlaybackTransition\(it, opts\);[\s\S]+await \(it\._localLookupPromise \|\| ensureLocalPlaybackForItem\(it\)\)[\s\S]+localExact = !picked && localPlaybackForItem\(it\)[\s\S]+playLocal\(localExact, \{ replacementStarted: true, nativeFirst, playTicket \}\)/,
+  assert.match(ui, /async function play\(it, pick, opts = \{\}\) \{[\s\S]+beginPlaybackTransition\(it, \{\s*\.\.\.opts,\s*hot: !picked && playbackIsWarmed\(it, qRank\),\s*\}\);[\s\S]+await \(playbackIsWarmed\(it, qRank\)[\s\S]+it\._localLookupPromise \|\| ensureLocalPlaybackForItem\(it\)\)[\s\S]+localExact = !picked && localPlaybackForItem\(it\)[\s\S]+playLocal\(localExact, \{ replacementStarted: true, nativeFirst, playTicket \}\)/,
     'manual source selection and local quality routing should enter one loading surface before lookup and reuse that transition');
   assert.match(ui, /const pickRank = picked \? normalizeResolutionRank\(picked\.resolutionRank\) : null;[\s\S]+const qRank = pickRank !== null \? pickRank : qualityRankForItem\(it\);[\s\S]+const body = playbackRequestBody\(it, picked, qRank\);/,
     'manual source selection should pass the picked source quality into the shared request builder');
@@ -525,8 +525,39 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   assert.ok(!ui.includes(".find((v) => v.site === 'YouTube' && /Trailer|Teaser/i.test(v.type))")
     && !ui.includes(".find((r) => r.site === 'YouTube' && /Trailer|Teaser/i.test(r.type))"),
     'the old first-loose-match trailer picks are gone');
-  assert.match(ui, /id="trailerTitle"[\s\S]+id="trailerPlay"[\s\S]+function playFromTrailer\(\) \{[\s\S]+closeTrailer\(\);[\s\S]+play\(it\)/,
-    'the trailer page shows the title, a Play action, and starts the movie from there');
+  assert.match(ui, /id="trailerTitle"[\s\S]+id="trailerPlay"[\s\S]+function playFromTrailer\(\) \{[\s\S]+trailerPlayTarget\(S\.trailerItem\)[\s\S]+play\(it\);[\s\S]+closeTrailer\(\{ keepFocus: true \}\)/,
+    'trailer Play covers with the player first so Details never flashes under a closed trailer');
+  assert.match(ui, /function trailerPlayTarget\(it\) \{[\s\S]+detailPlayTarget[\s\S]+earlyNextUpTarget/,
+    'a show trailer plays the next episode Details already prepared');
+  assert.match(ui, /function openTrailer\([\s\S]+warmTrailerPlayback\(item\)/,
+    'opening a trailer starts the usenet mount while YouTube is playing');
+  assert.match(ui, /function preparePlaybackSource\(it, delay = 900\) \{[\s\S]+startLocalPlaybackLookup\(it\);[\s\S]+if \(delay <= 0\) markPlaybackPrepared\(it, qRank\);/,
+    'details and trailer prepare mark the exact Play target so Play joins that warmup');
+  assert.match(ui, /function playFromTrailer\(\) \{[\s\S]+trailerPlayTarget\(S\.trailerItem\)[\s\S]+play\(it\);[\s\S]+closeTrailer\(\{ keepFocus: true \}\)/,
+    'trailer Play uses the details target and never returns focus to the details page');
+  assert.match(ui, /function closeTrailer\(opts = \{\}\) \{[\s\S]+if \(opts\.keepFocus \|\| S\.view === 'player'\)/,
+    'closing a trailer during Play must not steal focus back to details');
+  assert.match(ui, /function playNextEpisode\(\) \{[\s\S]+play\(ne\.item, null, \{ directHandoff: true \}\)/,
+    'Play Next keeps the player surface and joins the last-two-minute prepare');
+  assert.match(ui, /item\._preparedAt = Date\.now\(\);[\s\S]+api\('\/api\/prepare'/,
+    'the last-two-minute next-episode prepare marks that episode as already warm');
+  assert.match(ui, /hot: !picked && playbackIsWarmed\(it, qRank\)/,
+    'Play skips the cold Finding-source theater when details, trailer, or Next already prepared');
+  {
+    const start = ui.indexOf('function playbackWarmKey(it, qRank)');
+    const end = ui.indexOf('function preparePlaybackSource(it, delay = 900)');
+    assert.ok(start >= 0 && end > start, 'warm-join helpers should be extractable');
+    const helpers = new Function('S', 'sourceIdentityFor', `${ui.slice(start, end)}\nreturn { playbackWarmKey, markPlaybackPrepared, playbackIsWarmed };`)(
+      {},
+      (it) => ({ imdbid: it.imdbId, tvdbid: it.tvdbId, season: it.season, ep: it.episode })
+    );
+    const ep = { tmdbId: 9, key: 'tmdb:tv:9:s1e2', season: 1, episode: 2, imdbId: 'tt1' };
+    helpers.markPlaybackPrepared(ep, 3);
+    const clone = { ...ep, resume: 12 };
+    assert.ok(helpers.playbackIsWarmed(clone, 3), 'details/trailer/next Play stays warm after a resume clone');
+    assert.ok(!helpers.playbackIsWarmed({ tmdbId: 9, key: 'tmdb:tv:9:s1e3', season: 1, episode: 3, imdbId: 'tt1' }, 3), 'the next episode is its own warmup');
+    assert.strictEqual(helpers.playbackWarmKey(ep, 3), helpers.playbackWarmKey(clone, 3));
+  }
   assert.ok(!ui.includes('id="trailerMore"') && !ui.includes('function loadTrailerMore'),
     'the trailer page does not show a More videos rail');
   assert.match(ui, /#trailer\.open::before\{animation:trailerDrift/,
@@ -1350,25 +1381,25 @@ test('episode handoff stays player-to-player before local lookup and EOF never r
   const state = { _playTicket: 4, playing: { usingNative: true } };
   const beginPlaybackTransition = new Function('S', 'nativeVideoRequired', 'stopActivePlaybackForReplacement',
     'showNativePlayLoading', 'showPlayLoading', `${transitionSource}\nreturn beginPlaybackTransition;`)(
-      state, () => true, (opts) => calls.push(['stop', opts]), (it, ticket) => calls.push(['native', it.key, ticket]),
-      (it) => calls.push(['web', it.key]));
-  const transition = beginPlaybackTransition({ key: 'tmdb:tv:9:s1e2', type: 'episode' }, { directHandoff: true });
+      state, () => true, (opts) => calls.push(['stop', opts]), (it, ticket, hot) => calls.push(['native', it.key, ticket, !!hot]),
+      (it, hot) => calls.push(['web', it.key, !!hot]));
+  const transition = beginPlaybackTransition({ key: 'tmdb:tv:9:s1e2', type: 'episode' }, { directHandoff: true, hot: true });
   assert.deepStrictEqual(calls, [
     ['stop', { preserveNativeSurface: true }],
-    ['native', 'tmdb:tv:9:s1e2', 5],
+    ['native', 'tmdb:tv:9:s1e2', 5, true],
   ], 'a direct native handoff synchronously replaces the old surface with the next loading surface');
   assert.deepStrictEqual(transition, { nativeFirst: true, playTicket: 5 }, 'the replacement owns a fresh play token');
 
   const playSource = ui.slice(playStart, playEnd);
-  assert.ok(playSource.indexOf('beginPlaybackTransition(it, opts)') < playSource.indexOf('await (it._localLookupPromise || ensureLocalPlaybackForItem(it))'),
+  assert.ok(playSource.indexOf('beginPlaybackTransition(it, {') < playSource.indexOf('await (playbackIsWarmed(it, qRank)'),
     'the player/loading surface must become visible before a deferred local-library lookup');
   assert.match(playSource, /if \(S\._playTicket !== playTicket \|\| S\.view !== 'player'\) return;/,
     'back/cancel during that lookup should invalidate the pending episode handoff');
   assert.match(ui, /function stopActivePlaybackForReplacement\(opts = \{\}\) \{[\s\S]+if \(!opts\.preserveNativeSurface && canUseNativeVideoPlayer\(\)/,
     'the old native surface should not close before the atomic replacement loader owns the screen');
-  assert.match(ui, /item\._localLookupPromise = ensureLocalPlaybackForItem\(item\)[\s\S]+item\._localLookupComplete = true;/,
-    'next-episode local lookup should warm during the current episode and be joined at handoff');
-  assert.match(ui, /function showNativePlayLoading\(it, playTicket = 0\)[\s\S]+S\._nativeLoadingTicket = Number\(playTicket[\s\S]+playbackToken: S\._nativeLoadingTicket/,
+  assert.match(ui, /item\._localLookupPromise = ensureLocalPlaybackForItem\(item\)[\s\S]+item\._localLookupComplete = true;[\s\S]+if \(prev && prev\.key === item\.key\) \{[\s\S]+item\._preparedAt = prev\._preparedAt/,
+    'next-episode local lookup should warm during the current episode and keep that warmup if metadata refreshes');
+  assert.match(ui, /function showNativePlayLoading\(it, playTicket = 0, hot = false\)[\s\S]+S\._nativeLoadingTicket = Number\(playTicket[\s\S]+playbackToken: S\._nativeLoadingTicket[\s\S]+hot: !!hot/,
     'the branded native loader should carry the play token so Back can cancel that exact request');
 
   const playCatchStart = playSource.indexOf('} catch (e) {');
@@ -1862,6 +1893,7 @@ test('near-end next-episode prepare fires once at the 2-minute boundary', () => 
     url: '/api/prepare',
     opts: { method: 'POST', body: { key: item.key, season: 2, episode: 4, pick: null, rank: 3 } },
   }, 'prepare targets the exact next episode and inherited quality');
+  assert.ok(item._preparedAt, 'the same next-episode object stays marked warm for autoplay and Play Next');
   S.nextEpPrepared = false;
   S.playing = { _sourceAdvancePending: true };
   maybePrepareNextEpisode(80, 200);
@@ -1869,6 +1901,33 @@ test('near-end next-episode prepare fires once at the 2-minute boundary', () => 
   S.playing = { item: { runtime: 22 } };
   maybePrepareNextEpisode(80, 200);
   assert.strictEqual(calls.length, 1, 'a short reported duration must not warm the next episode in the middle of a sitcom');
+  const pipeline = fs.readFileSync(path.join(__dirname, '..', 'server', 'pipeline.js'), 'utf8');
+  assert.match(pipeline, /const TITLE_PREPARED_READY_MS = 180000;[\s\S]+_findTitlePreparedReady\([\s\S]+async play\([\s\S]+_findTitlePreparedReady\(params, policy\)[\s\S]+await this\.search\(params, policy\)/,
+    'Play Next must join a finished prepare mount before it searches indexers again');
+});
+
+test('autoplay with no Next click plays the same warmed next episode', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /function armUpNextCountdown\(\) \{[\s\S]+if \(n <= 0\) playNextEpisode\(\);/,
+    'sitting through the last 10s must call Play Next, not a second cold play path');
+  assert.match(ui, /function finishEpisodeToNext\(\) \{[\s\S]+showUpNext\(\);[\s\S]+armUpNextCountdown\(\);/,
+    'EOF without a click only arms that countdown; it does not remount a new episode');
+  const start = ui.indexOf('function playNextEpisode()');
+  const end = ui.indexOf("$('unPlay').addEventListener('click', playNextEpisode);", start);
+  assert.ok(start >= 0 && end > start, 'Play Next helper should be extractable');
+  const playCalls = [];
+  const item = { key: 'tmdb:tv:77:s2e4', season: 2, episode: 4, _preparedAt: Date.now() };
+  const S = { nextEp: { item } };
+  const playNextEpisode = new Function('S', 'updateNextEpisodeButton', 'hideUpNextUi', 'play',
+    `${ui.slice(start, end)}\nreturn playNextEpisode;`)(
+      S, () => {}, () => {}, (it, pick, opts) => playCalls.push({ it, pick, opts }));
+  playNextEpisode();
+  assert.strictEqual(playCalls.length, 1, 'autoplay/click share one handoff');
+  assert.strictEqual(playCalls[0].it, item, 'autoplay must play the prepared next-episode object');
+  assert.ok(playCalls[0].it._preparedAt, 'that object still carries the last-two-minute warmup');
+  assert.deepStrictEqual(playCalls[0].opts, { directHandoff: true },
+    'autoplay stays in the player instead of opening details');
+  assert.strictEqual(S.nextEp, null, 'the handoff is consumed once so a later ended tick cannot remount');
 });
 
 test('casting Phase 3: native Android Cast sender is wired (cast from the app)', () => {
@@ -2060,6 +2119,19 @@ test('subtitle startup preference contract: admin can toggle built-in captions',
     'native Next and dismiss share the same 36dp height');
   assert.match(android, /private void updateNativeUpNextPosition\(\) \{[\s\S]+nativeChrome\.getVisibility\(\) == View\.VISIBLE;[\s\S]+dp\(chromeUp \? 168 : 48\);/,
     'the native Up Next sits clear of the seek bar with chrome up and docks lower with chrome hidden');
+  assert.match(android, /private void triggerNativeUpNextPlay\(\) \{[\s\S]+showNativeLoading\([\s\S]+true\);[\s\S]+__upNextPlayNative/,
+    'tapping Next covers the ended frame before JS starts the next mount');
+  assert.match(android, /optBoolean\("hot", false\)[\s\S]+showNativeLoading\(title, backdropUrl, hot\)/,
+    'Android inherits the web hot-join flag so a prepared Play does not restart at Finding source');
+  assert.match(android, /private void playNativeNextEpisode\(\) \{[\s\S]+showNativeLoading\([\s\S]+__tvNativeVideoNext/,
+    'chrome Next covers immediately so the next episode cannot flash at 00:00');
+  const videoLoadingFn = android.slice(
+    android.indexOf('private void showNativeVideoLoading(String json)'),
+    android.indexOf('private void startNativePlayback(String json, String mode)'));
+  assert.doesNotMatch(videoLoadingFn, /releaseNativePlayer/,
+    'Next Episode loading must not tear down ExoPlayer first');
+  assert.match(android, /boolean keepVideoLoader = !guide && "video"\.equals\(mode\) && !quietSeek;[\s\S]+if \(keepVideoLoader\) showNativeLoading\(title, backdropUrl\);[\s\S]+releaseNativePlayer\(false, guide, keepVideoLoader\)/,
+    'the next mount keeps the branded loader up while ExoPlayer is replaced');
   assert.match(android, /updateNativeUpNextPosition\(\);\s*\n\s*nativeUpNextCard\.bringToFront\(\);\s*\n\s*nativeUpNextCard\.setVisibility\(View\.VISIBLE\);/,
     'showing the native Up Next positions it for the current chrome state first');
   assert.doesNotMatch(android, /UP NEXT ·/,
@@ -3251,7 +3323,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'Resume should be resolved from current watch state at click time, after quality changes');
   assert.match(ui, /async function play\(it, pick, opts = \{\}\) \{[\s\S]+it = resolvePlaybackResume\(it\);/,
     'playback should not rely on a stale detail target resume timestamp');
-  assert.match(ui, /const nativeFirst = nativeVideoRequired\(it\);[\s\S]+if \(nativeFirst\) showNativePlayLoading\(it, playTicket\);[\s\S]+else showPlayLoading\(it\);/,
+  assert.match(ui, /const nativeFirst = nativeVideoRequired\(it\);[\s\S]+if \(nativeFirst\) showNativePlayLoading\(it, playTicket, !!opts\.hot\);[\s\S]+else showPlayLoading\(it, !!opts\.hot\);/,
     'pressing Play on Android should immediately use the native branded loading screen, not the web player shell');
   assert.match(ui, /function nativeVideoRequired\(it\) \{[\s\S]+VOD only: movies, episodes, and local-library files use the playVideo ExoPlayer bridge[\s\S]+return !!\(it && it\.type !== 'live' && canUseNativeVideoPlayer\(\)\);[\s\S]+\}/,
     'Android movies, episodes, and local library files should require the ExoPlayer VOD bridge');
@@ -3446,7 +3518,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'web Live TV should surface provider 403/429 failures instead of showing a misleading external-player prompt');
   assert.match(ui, /p\.usingTranscode = kind === 'transcode';[\s\S]+const kind = p\.usingTranscode \? 'transcode' : \(p\.usingRemux \? 'remux' : 'direct'\);/,
     'native fallback state should distinguish direct, remux, and transcode correctly');
-  assert.match(ui, /function showNativePlayLoading\(it, playTicket = 0\) \{[\s\S]+\$\(\'player\'\)\.classList\.remove\('open', 'live', 'guideMode'\);[\s\S]+window\.TriboonTV\.showVideoLoading\(JSON\.stringify/,
+  assert.match(ui, /function showNativePlayLoading\(it, playTicket = 0, hot = false\) \{[\s\S]+\$\(\'player\'\)\.classList\.remove\('open', 'live', 'guideMode'\);[\s\S]+window\.TriboonTV\.showVideoLoading\(JSON\.stringify/,
     'Android movie playback should keep the web player closed while the native loader waits for the mount');
   assert.match(ui, /function tryNextNativeKind\(failedKind, atSeconds, msg\) \{[\s\S]+p\.nativeTried\[failedKind\] = true;[\s\S]+nativePlaybackOrder\(p, p\.nativeStartKind\)[\s\S]+tryNativeVideoPlayer\(next, atSeconds\)/,
     'native player failures should advance to the next native start kind, not the WebView player');
@@ -4747,19 +4819,19 @@ test('Android native player: direct source and native chrome stay out of the web
     'web screensaver should use the updated transparent Triboon wordmark asset');
   assert.match(ui, /#playerLoader \.loadMark\{display:grid;place-items:center\}[\s\S]+#playerLoader \.loadMark img\{[^}]*width:min\(210px,50vw\)[\s\S]+#playerLoader \.loadSteps\{[^}]*width:min\(340px,72vw\)[^}]*height:4px[\s\S]+#playerLoader \.loadStep\{[^}]*width:58%[\s\S]+#playerLoader \.loadStatus\{[\s\S]+<img src="triboon\.png" alt="Triboon">[\s\S]+<div class="loadSteps" aria-hidden="true"><span class="loadStep"><\/span><\/div>[\s\S]+<div class="loadStatus" id="plStage">Preparing<\/div>/,
     'web player loading overlay should use the full wordmark, one calm progress lane, and one simple startup status line');
-  assert.match(ui, /PLAYER_LOADING_STAGES = \['Preparing', 'Finding source', 'Mounting', 'Checking health\.\.\.', 'Starting stream'\][\s\S]+function clearPlayerLoadingStages\(\)[\s\S]+S\._stageTimers = \[650, 1400, 2200, 3000\][\s\S]+setPlayerLoadingStage\(i \+ 1\)/,
-    'web player loading status should advance through finding source, mounting, a brief health check, and stream start');
+  assert.match(ui, /PLAYER_LOADING_STAGES = \['Preparing', 'Finding source', 'Mounting', 'Checking health\.\.\.', 'Starting stream'\][\s\S]+function clearPlayerLoadingStages\(\)[\s\S]+if \(hot\) \{[\s\S]+setPlayerLoadingStage\(2\);[\s\S]+S\._stageTimers = \[500, 1100\][\s\S]+S\._stageTimers = \[650, 1400, 2200, 3000\][\s\S]+setPlayerLoadingStage\(i \+ 1\)/,
+    'web player loading status should skip Finding source after a details/trailer/next warmup');
   assert.match(android, /nativeLoading = new FrameLayout\(this\);[\s\S]+ImageView loadingMark = new ImageView\(this\);[\s\S]+loadingMark\.setImageResource\(R\.drawable\.native_loading_wordmark\);[\s\S]+loadingCenter\.addView\(loadingMark, markLp\);[\s\S]+FrameLayout loadingLane = new FrameLayout\(this\);[\s\S]+nativeLoadingLaneGlow = new View\(this\);[\s\S]+nativeLoadingStatus = new TextView\(this\);[\s\S]+nativeLoadingStatus\.setText\(R\.string\.preparing\);[\s\S]+startNativeLoadingLane\(\);/,
     'native loading overlay should use the real wordmark, a moving progress lane, and one simple startup status line');
   assert.match(android, /private ObjectAnimator nativeLoadingLaneAnimator;[\s\S]+if \(nativeLoadingLaneAnimator != null\) \{[\s\S]+nativeLoadingLaneAnimator\.cancel\(\);[\s\S]+nativeLoadingLaneAnimator = null;[\s\S]+nativeLoadingLaneAnimator = ObjectAnimator\.ofFloat\(nativeLoadingLaneGlow, "translationX", -dp\(92\), dp\(320\)\);[\s\S]+nativeLoadingLaneAnimator\.setRepeatCount\(ValueAnimator\.INFINITE\);[\s\S]+nativeLoadingLaneAnimator\.start\(\);/,
     'native loading progress lane should use one owned animation that can be stopped cleanly');
   assert.match(android, /nativeLoadingTitle\.setTextSize\(24\);[\s\S]+nativeLoadingTitle\.setMaxLines\(2\);[\s\S]+nativeLoadingTitle\.setEllipsize\(TextUtils\.TruncateAt\.END\);/,
     'native loading title should stay prominent without overflowing on TV');
-  assert.match(android, /nativeLoadingStatuses = new String\[\]\{"Preparing", "Finding source", "Mounting", "Checking health\.\.\.", "Starting stream"\}[\s\S]+startNativeLoadingStatus\(\)[\s\S]+nativeLoadingStatusTick[\s\S]+stopNativeLoadingStatus\(\)/,
-    'native loading status should show the same brief startup steps as the web loader and stop cleanly');
+  assert.match(android, /nativeLoadingStatuses = new String\[\]\{"Preparing", "Finding source", "Mounting", "Checking health\.\.\.", "Starting stream"\}[\s\S]+startNativeLoadingStatus\(boolean hot\)[\s\S]+nativeLoadingStatusIndex = hot \? 2 : 0[\s\S]+nativeLoadingStatusTick[\s\S]+stopNativeLoadingStatus\(\)/,
+    'native loading status should skip Finding source on a warmed Play and stop cleanly');
   assert.doesNotMatch(ui, /id="plMsg"|class="loadLabels"|Finding the best source|Mounting the release|Checking health & buffering|<span>Source<\/span>|<span>Health<\/span>|<span>Buffer<\/span>/,
     'web player loading overlay should stay minimal and avoid source/health/buffer status copy');
-  assert.doesNotMatch(android, /TextView loadingMark|loadingMark\.setText\("Triboon"\)|private TextView nativeLoadingStage|private TextView nativeLoadingDetail|nativeLoadingStage =|nativeLoadingDetail =|nativeLoadingStage\.|nativeLoadingDetail\.|nativeLoadingStageFor|nativeLoadingDetailFor|showNativeLoading\(title, backdropUrl,|private TextView nativeLoadingStep|loadingSteps|nativeLoadingStep\("Source"\)|nativeLoadingStep\("Health"\)|nativeLoadingStep\("Buffer"\)|Preparing native playback/,
+  assert.doesNotMatch(android, /TextView loadingMark|loadingMark\.setText\("Triboon"\)|private TextView nativeLoadingStage|private TextView nativeLoadingDetail|nativeLoadingStage =|nativeLoadingDetail =|nativeLoadingStage\.|nativeLoadingDetail\.|nativeLoadingStageFor|nativeLoadingDetailFor|private TextView nativeLoadingStep|loadingSteps|nativeLoadingStep\("Source"\)|nativeLoadingStep\("Health"\)|nativeLoadingStep\("Buffer"\)|Preparing native playback/,
     'native ExoPlayer loading overlay should stay minimal and avoid text branding plus source/health/buffer status copy');
   assert.doesNotMatch(android, /ProgressBar loadingRing|nativeLoadingRingDrawable|R\.drawable\.native_loading_ring|nativeLoadingLogoBg|ic_loading_logo/,
     'native ExoPlayer loading overlay should not show a circular ring or logo-background tile');
@@ -4794,10 +4866,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android native loading should own the screen before ExoPlayer is created');
   assert.match(ui, /async function closePlayer\(opts = \{\}\) \{[\s\S]+window\.TriboonTV\.closeVideo/,
     'closing the web player state on Android should also close any native ExoPlayer overlay');
-  assert.match(android, /state == Player\.STATE_READY[\s\S]+hideNativeLoading\(\);[\s\S]+showNativeChrome\(true\);/,
-    'native loading overlay should disappear only once Media3 reports the stream is ready');
-  assert.match(android, /private void releaseNativePlayer\(boolean notifyClosed\) \{[\s\S]+hideNativeLoading\(\);/,
-    'closing or retrying native playback should always clear the loading overlay');
+  assert.match(android, /if \("video"\.equals\(nativeMode\) && isPlaying\) \{[\s\S]+hideNativeLoading\(\);[\s\S]+showNativeChrome\(true\);/,
+    'native VOD loading stays up until ExoPlayer is actually playing, not merely READY');
+  assert.match(android, /state == Player\.STATE_READY && nativeLoading != null[\s\S]+!"video"\.equals\(nativeMode\)[\s\S]+hideNativeLoading\(\);/,
+    'native Live TV can drop the loader on READY; VOD cannot');
+  assert.match(android, /private void releaseNativePlayer\(boolean notifyClosed, boolean preserveGuideMode, boolean keepLoading\) \{[\s\S]+if \(!keepLoading\) hideNativeLoading\(\);/,
+    'closing native playback clears the loader unless a VOD remount asked to keep it');
   assert.match(android, /nativePlayerLayer\.requestFocus\(\);[\s\S]+setNativeSubtitleLift\(false\)/,
     'native chrome should auto-hide even after a control kept focus');
   assert.match(android, /setBottomPaddingFraction\(lift \? 0\.30f : 0\.08f\);[\s\S]+lift \? dp\(178\) : dp\(28\)[\s\S]+lp\.bottomMargin = lift \? dp\(206\) : dp\(82\)/,
@@ -4915,7 +4989,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'native player controls should not show success popups over playback');
   assert.match(android, /private boolean nativeVodSeekable\(\) \{[\s\S]+if \(nativePlayer == null \|\| "live"\.equals\(nativeMode\)\) return false;/,
     'live streams should not expose movie-style seeking behavior');
-  assert.match(android, /boolean reuseLivePlayer = "live"\.equals\(mode\) && "live"\.equals\(nativeMode\) && nativePlayer != null[\s\S]+if \(!reuseQuietVideo && !reuseLivePlayer\) \{[\s\S]+releaseNativePlayer\(false, guide\);[\s\S]+if \(reuseLivePlayer\) \{[\s\S]+nativePlayer\.stop\(\);[\s\S]+nativePlayer\.clearMediaItems\(\);[\s\S]+applyNativeHttpHostHeader\(\);[\s\S]+nativePlayer\.setMediaItem\(buildNativeMediaItem\(\)\);/,
+  assert.match(android, /boolean reuseLivePlayer = "live"\.equals\(mode\) && "live"\.equals\(nativeMode\) && nativePlayer != null[\s\S]+if \(!reuseQuietVideo && !reuseLivePlayer\) \{[\s\S]+releaseNativePlayer\(false, guide, keepVideoLoader\);[\s\S]+if \(reuseLivePlayer\) \{[\s\S]+nativePlayer\.stop\(\);[\s\S]+nativePlayer\.clearMediaItems\(\);[\s\S]+applyNativeHttpHostHeader\(\);[\s\S]+nativePlayer\.setMediaItem\(buildNativeMediaItem\(\)\);/,
     'native Live TV zaps should reuse ExoPlayer, refresh pinned Host headers, and explicitly release the old live source before replacing the media item');
   assert.ok([
     'private long nativePendingStartMs;',
@@ -4953,7 +5027,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android native chrome should repaint the seek bar, total time, and end clock when duration arrives later');
   assert.match(android, /boolean quietSeek = j\.optBoolean\("quietSeek", false\);[\s\S]+if \(!guide && "video"\.equals\(mode\) && !quietSeek\) \{[\s\S]+showNativeLoading\(title, backdropUrl\);[\s\S]+\}/,
     'Android native seek restarts should not bring the full preparing loader to the front');
-  assert.match(android, /boolean reuseQuietVideo = quietSeek && "video"\.equals\(mode\) && "video"\.equals\(nativeMode\) && nativePlayer != null[\s\S]+boolean reuseLivePlayer = "live"\.equals\(mode\) && "live"\.equals\(nativeMode\) && nativePlayer != null[\s\S]+if \(!reuseQuietVideo && !reuseLivePlayer\) \{[\s\S]+releaseNativePlayer\(false, guide\);[\s\S]+\} else \{[\s\S]+hideNativeLoading\(\);[\s\S]+if \(!reuseQuietVideo && !reuseLivePlayer\) \{[\s\S]+new ExoPlayer\.Builder\(this, nativeRenderersFactory\(\)\)/,
+  assert.match(android, /boolean reuseQuietVideo = quietSeek && "video"\.equals\(mode\) && "video"\.equals\(nativeMode\) && nativePlayer != null[\s\S]+boolean reuseLivePlayer = "live"\.equals\(mode\) && "live"\.equals\(nativeMode\) && nativePlayer != null[\s\S]+if \(!reuseQuietVideo && !reuseLivePlayer\) \{[\s\S]+releaseNativePlayer\(false, guide, keepVideoLoader\);[\s\S]+\} else \{[\s\S]+hideNativeLoading\(\);[\s\S]+if \(!reuseQuietVideo && !reuseLivePlayer\) \{[\s\S]+new ExoPlayer\.Builder\(this, nativeRenderersFactory\(\)\)/,
     'Android native quiet seeks and same-mode Live TV retunes should reuse ExoPlayer, while cross-mode/new players get a fresh listener and decoder fallback');
   assert.match(android, /private void applyNativeStartSeekIfReady\(\) \{[\s\S]+nativePendingStartMs <= 0L[\s\S]+nativePlayer\.getPlaybackState\(\) != Player\.STATE_READY \|\| !nativeVodSeekable\(\)[\s\S]+current >= Math\.max\(0L, target - 3000L\)[\s\S]+nativePendingStartMs = 0L[\s\S]+now - nativeStartSeekIssuedAtMs < 1200L[\s\S]+nativeSeekToDisplayPosition\(target\)/,
     'native movie resume should retry the pending start seek until ExoPlayer reports the saved position');
@@ -5507,7 +5581,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'native guide mode should keep ExoPlayer alive as a PiP without resetting focus/layout during retunes');
   assert.match(android, /else web\.postDelayed\(\(\) -> \{[\s\S]+nativeGuideMode && web != null[\s\S]+web\.requestFocus\(\);[\s\S]+\}, 40\);/,
     'native guide retunes should restore WebView focus shortly after ExoPlayer recreates its surface');
-  assert.match(android, /releaseNativePlayer\(false, guide\);[\s\S]+nativeMode = mode;/,
+  assert.match(android, /releaseNativePlayer\(false, guide, keepVideoLoader\);[\s\S]+nativeMode = mode;/,
     'native Live TV retunes from PiP should preserve guide mode while swapping ExoPlayer instances');
   assert.match(android, /if \(!guide && isLiveMode\) \{[\s\S]+enterNativeFullscreenMode\(\);[\s\S]+\}[\s\S]+if \(!guide && "video"\.equals\(mode\) && !quietSeek\)/,
     'non-guide Live TV starts should explicitly restore fullscreen ExoPlayer layout even after a PiP guide crash');

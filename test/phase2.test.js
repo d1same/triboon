@@ -1774,6 +1774,49 @@ test('pipeline: prepared detail source is reused by Play without a second mount'
   pool.close(); await mock.close(); server.close(); store.close();
 });
 
+test('pipeline: Play after a finished prepare skips a stale indexer search', async () => {
+  const payload = seededPayload(90 * 1024, 0xfa9);
+  const good = nzbFor(writeRar4Store([{ name: 'Movie.mkv', data: payload }], { base: 'ready' }), 30000, 'ready');
+  const articles = new Map([...good.articles]);
+  const mock = createMockNntp({ articles });
+  const nntpPort = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 4);
+  let indexerFanouts = 0;
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (u.pathname === '/api') {
+      indexerFanouts++;
+      const port = server.address().port;
+      res.writeHead(200, { 'content-type': 'application/rss+xml' });
+      return res.end(rssFor([{ name: 'Movie.2024.1080p.WEB-DL.H.264-NTb', url: `http://127.0.0.1:${port}/nzb/0`, size: 5e9 }]));
+    }
+    if (u.pathname === '/nzb/0') { res.writeHead(200); return res.end(good.nzb); }
+    res.writeHead(404); res.end();
+  });
+  const ixPort = await new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const pipeline = new Pipeline({
+    pool: () => pool, verdicts: new VerdictCache(store), mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+
+  const prepared = await pipeline.prepare({ q: 'Movie 2024' });
+  assert.strictEqual(prepared.prepared, true, 'next-episode prepare should leave a live mount');
+  assert.strictEqual(indexerFanouts, 1, 'prepare should search once');
+  for (const hit of pipeline.searchCache.values()) hit.at = Date.now() - 120000;
+  const joinsBefore = pipeline.metricsSnapshot().prepare.inflightJoins;
+  const play = await pipeline.play({ q: 'Movie 2024' });
+
+  assert.strictEqual(play.vf.id, prepared.vf.id, 'Play Next should reuse the finished prepare mount');
+  assert.strictEqual(indexerFanouts, 1, 'a stale 60s search cache must not force another indexer fan-out');
+  assert.ok(pipeline.metricsSnapshot().prepare.inflightJoins > joinsBefore,
+    'Play should count a ready-mount join after prepare has already finished');
+  assert.strictEqual(pipeline.metricsSnapshot().mount.successes, 1, 'Play must not remount a prepared episode');
+
+  pool.close(); await mock.close(); server.close(); store.close();
+});
+
 test('pipeline: smash Play during prepare does not open a full-width NZB race', async () => {
   const goodPayload = seededPayload(90 * 1024, 0xfc1);
   const bad = nzbFor([{ name: 'Missing.mkv', data: seededPayload(40 * 1024, 0xfc2) }], 30000, 'smash-bad');

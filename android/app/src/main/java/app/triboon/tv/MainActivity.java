@@ -3482,10 +3482,15 @@ public class MainActivity extends Activity {
     }
 
     private void showNativeLoading(String title, String backdropUrl) {
+        showNativeLoading(title, backdropUrl, false);
+    }
+
+    private void showNativeLoading(String title, String backdropUrl, boolean hot) {
         if (nativeLoading == null) return;
+        hideNativeChromeNow();
         int token = ++nativeLoadingToken;
         nativeLoadingTitle.setText(title == null || title.isEmpty() ? "Preparing stream" : title);
-        startNativeLoadingStatus();
+        startNativeLoadingStatus(hot);
         nativeLoadingBackdrop.setImageDrawable(null);
         nativeLoading.setVisibility(View.VISIBLE);
         nativeLoading.bringToFront();
@@ -3559,11 +3564,15 @@ public class MainActivity extends Activity {
     }
 
     private void startNativeLoadingStatus() {
+        startNativeLoadingStatus(false);
+    }
+
+    private void startNativeLoadingStatus(boolean hot) {
         if (nativeLoadingStatus == null) return;
         nativeProgress.removeCallbacks(nativeLoadingStatusTick);
-        nativeLoadingStatusIndex = 0;
+        nativeLoadingStatusIndex = hot ? 2 : 0;
         nativeLoadingStatus.setText(nativeLoadingStatuses[nativeLoadingStatusIndex]);
-        nativeProgress.postDelayed(nativeLoadingStatusTick, 850L);
+        nativeProgress.postDelayed(nativeLoadingStatusTick, hot ? 500L : 850L);
     }
 
     private void stopNativeLoadingStatus() {
@@ -3739,6 +3748,14 @@ public class MainActivity extends Activity {
     private void triggerNativeUpNextPlay() {
         nativeUpNextVisible = false;
         hideNativeUpNextCard();
+        // Cover the ended 00:00 surface now. Waiting on JS would flash the next episode
+        // chrome at 0:00 before /api/play has a stream.
+        if (nativeLoading != null) {
+            showNativeLoading(
+                    nativePlaybackTitle == null || nativePlaybackTitle.isEmpty() ? "Next episode" : nativePlaybackTitle,
+                    nativePlaybackBackdropUrl,
+                    true);
+        }
         if (web != null) web.evaluateJavascript("window.__upNextPlayNative && __upNextPlayNative()", null);
     }
 
@@ -3864,21 +3881,22 @@ public class MainActivity extends Activity {
         String title = "Triboon";
         String backdropUrl = "";
         long playbackToken = 0L;
+        boolean hot = false;
         try {
             org.json.JSONObject j = new org.json.JSONObject(json == null ? "{}" : json);
             title = j.optString("title", title);
             backdropUrl = j.optString("backdropUrl", "");
             playbackToken = Math.max(0L, j.optLong("playbackToken", 0L));
+            hot = j.optBoolean("hot", false);
         } catch (Exception ignored) {
         }
         try {
             setPhonePlaybackOrientation(true);
-            releaseNativePlayer(false);
             buildNativePlayerLayer();
             nativeMode = "video";
             nativePlaybackToken = playbackToken;
             enterNativeFullscreenMode();
-            showNativeLoading(title, backdropUrl);
+            showNativeLoading(title, backdropUrl, hot);
         } catch (Throwable e) {
             handleNativePlaybackStartFailure(e, "video", title, backdropUrl, "direct", "", "", 0L);
         }
@@ -3932,12 +3950,14 @@ public class MainActivity extends Activity {
             loadingStartOffsetMs = startOffsetMs;
             if (!guide) setPhonePlaybackOrientation(true);
             buildNativePlayerLayer();
+            boolean keepVideoLoader = !guide && "video".equals(mode) && !quietSeek;
+            if (keepVideoLoader) showNativeLoading(title, backdropUrl);
             boolean reuseQuietVideo = quietSeek && "video".equals(mode) && "video".equals(nativeMode) && nativePlayer != null
                     && nativePlayerView != null && nativePlayerOpen() && !guide;
             boolean reuseLivePlayer = "live".equals(mode) && "live".equals(nativeMode) && nativePlayer != null
                     && nativePlayerView != null && nativePlayerOpen() && !guide;
             if (!reuseQuietVideo && !reuseLivePlayer) {
-                releaseNativePlayer(false, guide);
+                releaseNativePlayer(false, guide, keepVideoLoader);
             } else {
                 nativeProgress.removeCallbacks(nativeHideChrome);
                 if (!percentResume) hideNativeLoading();
@@ -4115,7 +4135,7 @@ public class MainActivity extends Activity {
                     }
                     if (state == Player.STATE_READY && nativeLoading != null
                             && nativeLoading.getVisibility() == View.VISIBLE && !nativePercentResumePending
-                            && (!"video".equals(nativeMode) || nativeVideoStarted || !nativePlayer.getPlayWhenReady())) {
+                            && !"video".equals(nativeMode)) {
                         nativeVideoUnhealthySinceMs = 0L;
                         hideNativeLoading();
                         if (!nativeGuideMode) showNativeChrome(true);
@@ -6989,8 +7009,13 @@ public class MainActivity extends Activity {
         long dur = nativeDurSeconds();
         long playbackToken = nativePlaybackToken;
         if (!"video".equals(mode)) return;
-        // JS owns the atomic player-to-player handoff. It replaces this surface with the next
-        // native loading surface; closing here first would reveal the WebView/details page.
+        if (nativeLoading != null) {
+            showNativeLoading(
+                    nativePlaybackTitle == null || nativePlaybackTitle.isEmpty() ? "Next episode" : nativePlaybackTitle,
+                    nativePlaybackBackdropUrl);
+        }
+        // JS owns the atomic player-to-player handoff. Cover first so the next title
+        // cannot flash at 00:00 while /api/play is still mounting.
         web.evaluateJavascript("window.__tvNativeVideoNext && __tvNativeVideoNext("
                 + pos + "," + dur + "," + playbackToken + ")", null);
     }
@@ -7110,11 +7135,15 @@ public class MainActivity extends Activity {
     }
 
     private void releaseNativePlayer(boolean notifyClosed, boolean preserveGuideMode) {
+        releaseNativePlayer(notifyClosed, preserveGuideMode, false);
+    }
+
+    private void releaseNativePlayer(boolean notifyClosed, boolean preserveGuideMode, boolean keepLoading) {
         nativeProgress.removeCallbacksAndMessages(null);
         nativeSubtitleHandler.removeCallbacksAndMessages(null);
         nativeSubtitleLoadToken++;
         nativeSeekAccel.reset(); // a new playback must start at the base seek step
-        hideNativeLoading();
+        if (!keepLoading) hideNativeLoading();
         hideNativeGuidePipReveal();
         if (nativeSheet != null) {
             nativeSheet.setVisibility(View.GONE);

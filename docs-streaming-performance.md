@@ -346,9 +346,10 @@ ranked source in the background. Prepare reuses the same search/NZB warming
 path, walks only a small capped source slice to skip a bad top pick, mounts the
 first winner, and records it in `mountByUrl` without creating a play session or
 exposing a stream URL. A later Play still performs normal auth, policy, and
-token creation, but the pipeline can reuse or join the live prepared/in-flight
-mount instead of repeating source finding, first-article probe, mount, and
-health gate. Two or three people pressing Play at once share indexer fan-out
+token creation, but the pipeline joins the finished prepared mount (or the
+in-flight prepare) instead of repeating source finding, first-article probe, mount, and
+health gate. That join stays valid after the 60-second search cache expires, so
+Play Next in the last two minutes does not wait on a second indexer fan-out. Two or three people pressing Play at once share indexer fan-out
 and startup mount slots: each Play keeps a front-runner, extra source hedges
 and background `/api/prepare` wait behind those Plays, and a lone Play still
 uses leftover slots to skip dead top picks. Fast home/card focus still uses cheap `/api/search` warming only;
@@ -358,11 +359,12 @@ TV playback applies the same rule late, not at episode start: once the exact
 next episode is known, its cheap local-library lookup warms in the background;
 that metadata result is bound to the active playback token so a slower request
 from an older episode cannot overwrite the current next target;
-inside the final 90 seconds the client issues one exact-season/episode
-`/api/prepare`. Manual Play Next and EOF autoplay enter the replacement player
-surface synchronously, then reuse or join those local/Usenet jobs. They must not
-close the old native surface, expose show details, restart the autoplay timer,
-or launch a second source/NZB/mount walk during the handoff.
+inside the final 120 seconds the client issues one exact-season/episode
+`/api/prepare`. Details Play, trailer Play, manual Play Next, and sitting through the
+10s autoplay countdown enter the replacement player surface synchronously,
+then reuse or join those local/Usenet jobs. They must not close the old native surface, expose show
+details, restart the autoplay timer, flash a cold Finding-source theater, or
+launch a second source/NZB/mount walk during the handoff.
 
 The same playback token/identity owns every terminal and control callback during
 that replacement. Browser media events, asynchronous subtitle preflights, and

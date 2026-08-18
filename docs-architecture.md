@@ -139,8 +139,11 @@ Rules that must not drift:
   in-flight NZB prefetch instead of repeating source finding, first-article
   probe, mount, or health-gate work. Smash Play while prepare is still running
   joins that title-level job with a narrow race instead of a second full-width
-  walk. Details must not prepare a bare TV show — the Play target is the next
-  episode.
+  walk.   Details must not prepare a bare TV show — the Play target is the next
+  episode. Opening a trailer keeps preparing that same Play target so
+  trailer Play joins the live mount. Details Play, trailer Play, and
+  Play Next in the last two minutes must stay on that same warm mount:
+  no details flash, no cold Finding-source reset, no second search.
 - Prepared, in-flight, and live-mount reuse is keyed by NZB URL plus season,
   episode, and audiobook mode. Loose-file and RAR/ZIP season packs must select
   exactly one requested `SxxEyy` payload before file size is considered, and

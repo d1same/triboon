@@ -7268,6 +7268,39 @@ function maybePrepareFocusedHomeCard() {
   const it = view.data[ri] && view.data[ri].items[S.colIdx[ri] || 0];
   if (it && it.type !== 'live' && (it._cw || it._nextEp || (+it.resume || 0) > 0)) preparePlaybackSource(it);
 }
+function playbackWarmKey(it, qRank) {
+  if (!it) return '';
+  const ids = sourceIdentityFor(it);
+  const title = ids.imdbid || ids.tvdbid || it.tmdbId || it.key || '';
+  const ep = (ids.season != null && ids.ep != null) ? `s${ids.season}e${ids.ep}` : '';
+  return `${title}|${ep}|${qRank == null ? '' : qRank}`;
+}
+function markPlaybackPrepared(it, qRank) {
+  if (!it) return;
+  it._preparedAt = Date.now();
+  const key = playbackWarmKey(it, qRank);
+  if (!key) return;
+  S._preparedWarm = S._preparedWarm || {};
+  S._preparedWarm[key] = it._preparedAt;
+}
+function playbackIsWarmed(it, qRank) {
+  if (!it) return false;
+  if (it._preparedAt && (Date.now() - it._preparedAt) < 180000) return true;
+  const key = playbackWarmKey(it, qRank);
+  const at = key && S._preparedWarm && S._preparedWarm[key];
+  return !!(at && (Date.now() - at) < 180000);
+}
+function startLocalPlaybackLookup(it) {
+  if (!it || it._local || it._localLookupPromise || it._localLookupComplete) return;
+  it._localLookupPromise = ensureLocalPlaybackForItem(it).then((loc) => {
+    if (loc) it._local = loc;
+    it._localLookupComplete = true;
+    return loc;
+  }, () => {
+    it._localLookupComplete = true;
+    return null;
+  });
+}
 function preparePlaybackSource(it, delay = 900) {
   if (S._booting) return;
   if (S.view === 'player') return;
@@ -7275,8 +7308,11 @@ function preparePlaybackSource(it, delay = 900) {
   if (it.type === 'tv' && !episodeKeyParts(it)) return;
   const qRank = qualityRankForItem(it);
   if (localTitleHasPlayback(it) && localPlaybackFitsQuality(it, qRank)) return;
+  startLocalPlaybackLookup(it);
+  if (delay <= 0) markPlaybackPrepared(it, qRank);
   clearTimeout(prepareTimer);
   prepareTimer = setTimeout(() => {
+    if (delay > 0) markPlaybackPrepared(it, qRank);
     api('/api/prepare', { method: 'POST', body: playbackRequestBody(it, null, qRank) }).then(maybeNativePrefetch).catch(() => {});
   }, delay);
 }
@@ -7802,8 +7838,8 @@ function beginPlaybackTransition(it, opts = {}) {
   const preserveNativeSurface = !!opts.directHandoff && nativeFirst
     && !!(S.playing && S.playing.usingNative);
   stopActivePlaybackForReplacement({ preserveNativeSurface });
-  if (nativeFirst) showNativePlayLoading(it, playTicket);
-  else showPlayLoading(it);
+  if (nativeFirst) showNativePlayLoading(it, playTicket, !!opts.hot);
+  else showPlayLoading(it, !!opts.hot);
   return { nativeFirst, playTicket };
 }
 async function play(it, pick, opts = {}) {
@@ -7836,13 +7872,19 @@ async function play(it, pick, opts = {}) {
   // loading surface instead of looking frozen on details.
   // Begin that transition BEFORE the local-library lookup: the lookup is normally fast, but a
   // busy disk/server must never turn into ten seconds visibly parked on the show details page.
-  const { nativeFirst, playTicket } = beginPlaybackTransition(it, opts);
+  const { nativeFirst, playTicket } = beginPlaybackTransition(it, {
+    ...opts,
+    hot: !picked && playbackIsWarmed(it, qRank),
+  });
   let localExact = null;
   try {
     if (!picked && !it._local) {
+      startLocalPlaybackLookup(it);
       const loc = it._localLookupComplete
         ? (it._local || null)
-        : await (it._localLookupPromise || ensureLocalPlaybackForItem(it));
+        : await (playbackIsWarmed(it, qRank)
+          ? Promise.race([it._localLookupPromise, new Promise((resolve) => setTimeout(() => resolve(null), 50))])
+          : (it._localLookupPromise || ensureLocalPlaybackForItem(it)));
       if (S._playTicket !== playTicket || S.view !== 'player') return;
       if (loc) it = { ...it, _local: loc };
     }
@@ -7911,13 +7953,19 @@ function clearPlayerLoadingStages() {
   if (Array.isArray(S._stageTimers)) S._stageTimers.forEach((t) => clearTimeout(t));
   S._stageTimers = [];
 }
-function startPlayerLoadingStages() {
+function startPlayerLoadingStages(hot) {
   clearPlayerLoadingStages();
+  if (hot) {
+    setPlayerLoadingStage(2);
+    S._stageTimers = [500, 1100]
+      .map((delay, i) => setTimeout(() => setPlayerLoadingStage(i + 3), delay));
+    return;
+  }
   setPlayerLoadingStage(0);
   S._stageTimers = [650, 1400, 2200, 3000]
     .map((delay, i) => setTimeout(() => setPlayerLoadingStage(i + 1), delay));
 }
-function showPlayLoading(it) {
+function showPlayLoading(it, hot) {
   rememberPlayerReturn();
   S._nativeLoadingTicket = 0;
   S.view = 'player';
@@ -7928,9 +7976,9 @@ function showPlayLoading(it) {
   $('plCover').style.backgroundImage = artBackground(it.backdrop, it.poster, artFallback(it.key || it.title, 20));
   $('plTitle').textContent = it.title || '';
   $('playerLoader').classList.add('show');
-  startPlayerLoadingStages();
+  startPlayerLoadingStages(!!hot);
 }
-function showNativePlayLoading(it, playTicket = 0) {
+function showNativePlayLoading(it, playTicket = 0, hot = false) {
   rememberPlayerReturn();
   S._nativeLoadingTicket = Number(playTicket || S._playTicket || 0);
   S.view = 'player';
@@ -7944,6 +7992,7 @@ function showNativePlayLoading(it, playTicket = 0) {
       title: it.title || 'Triboon',
       backdropUrl: absoluteArtworkUrl(it.backdrop, it.poster),
       playbackToken: S._nativeLoadingTicket,
+      hot: !!hot,
     }));
   } catch {}
   clearPlayerLoadingStages();
@@ -12948,12 +12997,20 @@ async function prepNextEpisode(it) {
       item._localLookupComplete = true;
       return null;
     });
+    const prev = S.nextEp && S.nextEp.item;
+    if (prev && prev.key === item.key) {
+      if (prev._preparedAt && !item._preparedAt) item._preparedAt = prev._preparedAt;
+      if (prev._localLookupComplete) {
+        item._local = prev._local;
+        item._localLookupComplete = true;
+      }
+      if (prev._localLookupPromise && !item._localLookupComplete) item._localLookupPromise = prev._localLookupPromise;
+    }
     S.nextEp = { item, still: img(ep.still_path, STILL_W) || ctx.show.backdrop, epName: ep.name || '', tag: `S${pad2(ns)}E${pad2(ne)}` };
     updateNextEpisodeButton();
     // The actual mount is warmed near the END of the episode (maybePrepareNextEpisode), not here:
-    // the server search/verdict cache lives ~60s, so warming a 40-minute episode's sources on
-    // start is stale long before Up Next. A near-end /api/prepare leaves a LIVE mount that
-    // play() reuses instantly when the user (or autoplay) advances.
+    // a start-of-episode search would be stale long before Up Next. A near-end /api/prepare
+    // leaves a LIVE mount that play() joins even after the 60s search cache expires.
   } catch {}
 }
 // Lead time before the episode end to mount the next episode so Play / autoplay feels local.
@@ -12969,6 +13026,8 @@ function maybePrepareNextEpisode(t, d) {
   S.nextEpPrepared = true; // one shot; play()/autoplay reuses the live mount via the server's mountByUrl
   if (localTitleHasPlayback(item)) return; // local libraries are already instant — no mount to warm
   const qRank = qualityRankForItem(item);
+  item._preparedAt = Date.now();
+  if (typeof markPlaybackPrepared === 'function') markPlaybackPrepared(item, qRank);
   api('/api/prepare', { method: 'POST', body: playbackRequestBody(item, null, qRank) }).then(maybeNativePrefetch).catch(() => {});
 }
 const UP_NEXT_COUNTDOWN_SECONDS = 10;
@@ -16615,6 +16674,22 @@ function trailerItemYear(it) {
 function trailerCanPlay(it) {
   return !!(it && (it.tmdbId || it.key) && it.type !== 'live');
 }
+// Trailer Play must hit the same target Details already warmed: the next episode,
+// not the bare show. A YouTube trailer is idle usenet time — start the mount now.
+function trailerPlayTarget(it) {
+  if (!it) return null;
+  if (S.view === 'detail' && detailPlayTarget && Number(detailPlayTarget.tmdbId) === Number(it.tmdbId)) {
+    return detailPlayTarget;
+  }
+  if (it.type === 'tv' && !episodeKeyParts(it)) return earlyNextUpTarget(it) || it;
+  return it;
+}
+function warmTrailerPlayback(it) {
+  const target = trailerPlayTarget(it);
+  if (!target) return;
+  prefetchSources(target, 0);
+  preparePlaybackSource(target, 0);
+}
 function paintTrailerWatchlist() {
   const wl = $('trailerWl');
   const it = S.trailerItem;
@@ -16659,16 +16734,17 @@ function openTrailer(tr, it) {
   S.trailerItem = item;
   paintTrailerPlay();
   paintTrailerWatchlist();
+  warmTrailerPlayback(item);
   setTrailerFrame(tr.key, title);
   trailerEl.classList.add('open');
   const start = $('trailerPlay').style.display !== 'none' ? trailerControls().indexOf($('trailerPlay')) : 0;
   requestAnimationFrame(() => focusTrailerControl(Math.max(0, start)));
 }
 function playFromTrailer() {
-  const it = S.trailerItem;
+  const it = trailerPlayTarget(S.trailerItem);
   if (!trailerCanPlay(it)) return;
-  closeTrailer();
   play(it);
+  closeTrailer({ keepFocus: true });
 }
 $('trailerWl').addEventListener('click', async () => {
   const it = S.trailerItem; if (!it) return;
@@ -16682,13 +16758,17 @@ $('trailerWl').addEventListener('click', async () => {
   try { await api('/api/watchlist', { method: 'POST', body: { key: it.key, on, meta: wlMeta(it) } }); toast(on ? `"${it.title}" added to watchlist` : 'Removed from watchlist'); }
   catch (e) { toast(e.message); }
 });
-function closeTrailer() {
+function closeTrailer(opts = {}) {
   $('trailer').classList.remove('open', 'loaded');
   $('trailer').setAttribute('aria-hidden', 'true');
   $('trailer').style.removeProperty('--trailerBackdrop');
   $('trailerBox').innerHTML = '';
   S.trailerItem = null;
   S.trailerKey = null;
+  if (opts.keepFocus || S.view === 'player') {
+    S.trailerReturnEl = null;
+    return;
+  }
   const ret = S.trailerReturnEl && document.contains(S.trailerReturnEl) ? S.trailerReturnEl : null;
   S.trailerReturnEl = null;
   if (ret) requestAnimationFrame(() => applyFocus(ret, false));

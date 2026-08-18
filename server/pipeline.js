@@ -394,6 +394,9 @@ const PREPARE_MAX_ATTEMPTS = 6; // background detail prep: walk past several dea
                                 // prefetch actually PRE-MOUNTS a working source (new releases often have
                                 // 2-3 missing/unmappable variants ranked first). Bounded by PREPARE_MAX_MS.
 const PREPARE_MAX_MS = 15000;
+// Next-episode prepare starts ~120s before EOF. Search cache is only 60s, so Play Next
+// would otherwise fan out indexers again even though the mount is already live.
+const TITLE_PREPARED_READY_MS = 180000;
 const ACTIVE_PLAYBACK_GRACE_MS = 120000;
 const PREPARED_CACHE_BYTES_1080 = 96 * 1024 * 1024;
 const PREPARED_CACHE_BYTES_4K = 192 * 1024 * 1024;
@@ -626,6 +629,7 @@ class Pipeline {
     this.nzbInflight = new Map(); // nzbUrl -> Promise(xml), so Play joins detail-page prefetch
     this.prepareInflight = new Map(); // mountIdentity -> shared cancellable mount record
     this.titlePrepareInflight = new Map(); // prepareJobKey -> shared title-level prepare job
+    this.titlePreparedReady = new Map(); // prepareJobKey -> { vf, candidate, at } after prepare wins
     this.mountByUrl = new Map();  // mountIdentity -> mount id (same selected payload reuses instantly)
     this._startupGate = new StartupGate(STARTUP_SLOTS);
     this._inflightAdvances = 0;
@@ -771,6 +775,35 @@ class Pipeline {
       rec = this.titlePrepareInflight.get(this._prepareJobKey(params, policy, { ignoreCatalogIds: true }));
     }
     return rec || null;
+  }
+
+  _rememberTitlePrepared(params, policy, vf, candidate) {
+    if (!vf || !candidate) return;
+    const rec = { vf, candidate, at: Date.now() };
+    this.titlePreparedReady.set(this._prepareJobKey(params, policy), rec);
+    if (params.imdbid || params.tvdbid) {
+      this.titlePreparedReady.set(this._prepareJobKey(params, policy, { ignoreCatalogIds: true }), rec);
+    }
+  }
+
+  _findTitlePreparedReady(params, policy = {}) {
+    const keys = [this._prepareJobKey(params, policy)];
+    if (params.imdbid || params.tvdbid) {
+      keys.push(this._prepareJobKey(params, policy, { ignoreCatalogIds: true }));
+    }
+    const now = Date.now();
+    for (const key of keys) {
+      const rec = this.titlePreparedReady.get(key);
+      if (!rec) continue;
+      const live = rec.vf && rec.vf.id ? this.mounts.get(rec.vf.id) : null;
+      if (now - rec.at > TITLE_PREPARED_READY_MS || !live || !live.streamable) {
+        this.titlePreparedReady.delete(key);
+        continue;
+      }
+      rec.vf = live;
+      return rec;
+    }
+    return null;
   }
 
   _getFreshSearchHit(key) {
@@ -1720,6 +1753,14 @@ class Pipeline {
   async play(params, policy = {}, mountOpts = {}) {
     const _we = wantedEpisodeOf(params);
     if (_we) mountOpts = { ...mountOpts, wantedEpisode: _we }; // so a season pack mounts the wanted episode
+    const ready = !((params.pickKey || params.pick) && !params.pinnedResume)
+      && this._findTitlePreparedReady(params, policy);
+    if (ready) {
+      this.metrics.titlePrepareJoins++;
+      const session = new PlaySession(params, [ready.candidate]);
+      this.sessions.set(session.id, session);
+      return this._commitMount(session, ready.candidate, ready.vf, [], mountOpts);
+    }
     const { candidates } = await this.search(params, policy);
     let playable = this._playableCandidates(candidates, params);
     // 4K toggle with no 4K source: exactResolutionRank disqualifies every non-4K release, which
@@ -1860,6 +1901,7 @@ class Pipeline {
           if (candidate.name) res.vf._releaseName = candidate.name;
           this.mounts.set(res.vf.id, res.vf);
           this.mountByUrl.set(res.vf._mountIdentity || mountIdentity(candidate, mountOpts), res.vf.id);
+          this._rememberTitlePrepared(params, policy, res.vf, candidate);
           this.rebalancePlaybackWindows();
           this._startPlaybackWarmup(res.vf, res.vf._playWin, params.resumeFrac);
           return { vf: res.vf, candidate };

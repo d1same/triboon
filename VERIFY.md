@@ -125,6 +125,23 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-17, v3.0.4 ship APK + Windows server + Windows client:
+
+- Version contract: `package.json` 3.0.4; Android `versionName` 3.0.4 /
+  `versionCode` 335; Windows client package/Tauri/Cargo 3.0.4.
+- Details Play, trailer Play, Play Next, and sitting through the 10s
+  autoplay countdown join the same `/api/prepare` mount. They stay on
+  the player and skip a cold Finding-source reset. A finished prepare
+  is reused even after the 60s search cache expires. Android Next
+  covers immediately so the next title does not flash at 00:00.
+- `npm.cmd test` 572/572. Isolated `/api/server` smoke reported 3.0.4.
+  Household VOD/CC, IPTV ABC+ESPN web+native, and overlapping Play
+  passed. Isolated Android ExoPlayer Live+VOD+CC+page-churn on
+  emulator-5554 passed. Combined `verify:full` Android stress flaked
+  twice after Live TV on Movies/Discover Back. Those combined page-churn
+  rows stay unverified on this emulator session.
+- Windows native GPU/HDR was not run (needs a real Windows PC session).
+
 2026-08-17, v3.0.3 ship APK + Windows server + Windows client:
 
 - Version contract: `package.json` 3.0.3; Android `versionName` 3.0.3 /
