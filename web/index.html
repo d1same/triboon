@@ -2018,10 +2018,10 @@ body.mobileShell .volWrap{flex:0 0 auto}
 body.mobileShell #volSlider{display:none}
 body.mobileShell #trackMenu{left:12px;right:12px;bottom:84px;width:auto;min-width:0;max-height:calc(100vh - 144px);border-radius:12px}
 body.mobileShell #playerStats{left:12px;right:12px;bottom:84px;width:auto;max-height:calc(100vh - 144px);overflow:auto;border-radius:12px}
-body.mobileShell #upNext{right:12px;bottom:114px;gap:6px}
-body.mobileShell #player.osdHide #upNext{bottom:calc(16px + env(safe-area-inset-bottom))}
-body.mobileShell #upNext .un-play{max-width:calc(100vw - 80px)}
-body.mobileShell #upNext .un-cancel{width:42px;height:42px}
+body.mobileShell #upNext{right:12px;bottom:148px;gap:8px}
+body.mobileShell #player.osdHide #upNext{bottom:calc(20px + env(safe-area-inset-bottom))}
+body.mobileShell #upNext .un-play,body.mobileShell #upNext .un-ic,body.mobileShell #upNext .un-cancel{height:36px}
+body.mobileShell #upNext .un-cancel{width:36px}
 
 /* Phones: tighter guide + overlay panels, smaller channel tiles. (#guide prefix keeps these
    winning over the base rules that appear later in the sheet.) */
@@ -2156,45 +2156,28 @@ body.mobileShell #upNext .un-cancel{width:42px;height:42px}
 .calItem .cm{font:650 10.5px/1.2 "JetBrains Mono";color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .calItem .cbadge{position:absolute;top:8px;right:8px;font:800 10px "JetBrains Mono";color:var(--onAccent);background:var(--btnPrimary);padding:5px 8px;border-radius:999px;box-shadow:0 8px 18px rgba(0,0,0,.26)}
 
-/* Compact "Up next" pill (bottom-right, just above the seek bar). Flat dark ink so credits
-   stay visible — no glass wash. A small 16:9 still sits on the left; the white play disc
-   overlays it. MONOCHROME on purpose. The play disc grows a white sweep as autoplay counts
-   down. #player.osdHide docks it near the bottom edge like YouTube. */
-#upNext{position:absolute;right:34px;bottom:178px;z-index:6;display:none;align-items:center;gap:10px;transition:bottom .25s ease}
-#player.osdHide #upNext{bottom:30px}
+/* Compact Up Next: Next Episode + X, same height, text centered. Countdown is a
+   thin bar at the chip's bottom edge so it never shifts or covers the label. */
+#upNext{position:absolute;right:28px;bottom:232px;z-index:7;display:none;align-items:center;gap:8px;transition:bottom .25s ease}
+#player.osdHide #upNext{bottom:48px}
 #upNext.show{display:flex;animation:unIn .28s ease both}
 @keyframes unIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 @media (prefers-reduced-motion:reduce){#upNext.show{animation:none}}
-#upNext button{border:1px solid rgba(255,255,255,.14);cursor:pointer;color:var(--text);background:rgba(8,6,12,.92);box-shadow:0 8px 24px rgba(0,0,0,.5);transition:background .15s,box-shadow .15s}
-#upNext button:hover,#upNext button.focus,#upNext button:focus{background:rgba(8,6,12,.96);outline:none;box-shadow:0 0 0 2px rgba(255,255,255,.92),0 8px 24px rgba(0,0,0,.5)}
-#upNext .un-play{position:relative;overflow:hidden;display:flex;align-items:center;gap:12px;max-width:400px;padding:8px 16px 8px 8px;border-radius:16px;text-align:left}
-#upNext .un-art{position:relative;flex:none;width:38px;height:38px}
-#upNext.hasThumb .un-art{width:104px;height:58px}
-#upNext .un-thumb{display:none;position:absolute;inset:0;border-radius:10px;background:#16101f center/cover no-repeat}
-#upNext.hasThumb .un-thumb{display:block}
-#upNext.hasThumb .un-thumb::after{content:"";position:absolute;inset:0;border-radius:10px;background:rgba(0,0,0,.28)}
-#upNext .un-ic{--un-cd:0%;position:absolute;inset:0;border-radius:50%;display:grid;place-items:center;background:#f2f2f4;color:#0a0a0c}
-#upNext.hasThumb .un-ic{inset:auto;left:50%;top:50%;width:28px;height:28px;transform:translate(-50%,-50%);box-shadow:0 2px 10px rgba(0,0,0,.5)}
-#upNext .un-ic::before{content:"";position:absolute;inset:-3px;border-radius:50%;background:conic-gradient(from -90deg,rgba(255,255,255,.92) var(--un-cd),transparent 0);opacity:0;pointer-events:none}
-#upNext.counting .un-ic::before{opacity:1}
-#upNext .un-ic svg{width:15px;height:15px;margin-left:1px;position:relative;z-index:1}
-#upNext.hasThumb .un-ic svg{width:12px;height:12px}
-#upNext .un-txt{display:flex;flex-direction:column;min-width:0;gap:2px}
-#upNext .un-lbl{font:700 9px "JetBrains Mono";letter-spacing:.14em;color:rgba(255,255,255,.72);text-transform:uppercase}
-#upNext .un-title{font:700 14.5px "Sora";line-height:1.15;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#upNext .un-sub{font:600 11.5px "Albert Sans";color:rgba(255,255,255,.52);letter-spacing:.02em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#upNext .un-sub:empty{display:none}
-#upNext .un-prog{position:absolute;left:10px;right:10px;bottom:0;height:2px;display:none;border-radius:2px;overflow:hidden}
-#upNext.counting .un-prog{display:block}
-#upNext .un-prog i{display:block;height:100%;width:0;background:rgba(255,255,255,.9);transition:width 1s linear}
-#upNext .un-cancel{flex:none;width:46px;height:46px;border-radius:50%;display:grid;place-items:center;color:var(--muted)}
-#upNext .un-cancel:hover,#upNext .un-cancel.focus,#upNext .un-cancel:focus{color:var(--text)}
-#upNext .un-cancel svg{width:15px;height:15px}
-/* Phones (plain browser): pull in from the edge, cap the pill width, sit above the compact controls.
+#upNext button{border:0;cursor:pointer;color:var(--text);background:transparent;box-shadow:none;transition:box-shadow .15s,background .15s}
+#upNext button:hover,#upNext button.focus,#upNext button:focus{outline:none;box-shadow:0 0 0 2px #fff}
+#upNext .un-play{position:relative;height:36px;padding:0;border-radius:999px;display:grid;place-items:center}
+#upNext .un-ic{--un-cd:0%;position:relative;height:36px;padding:0 16px;border-radius:999px;display:grid;place-items:center;background:#fff;color:#111;font:650 13px/1 "Albert Sans",system-ui,sans-serif;letter-spacing:0;box-shadow:0 8px 22px rgba(0,0,0,.38)}
+#upNext .un-ic::after{content:"";position:absolute;left:14px;right:14px;bottom:5px;height:2px;border-radius:2px;background:rgba(17,17,17,.14);opacity:0;pointer-events:none}
+#upNext.counting .un-ic::after{opacity:1;background:linear-gradient(#111,#111) 0/var(--un-cd,0%) 100% no-repeat,rgba(17,17,17,.14)}
+#upNext .un-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
+#upNext .un-cancel{flex:none;width:36px;height:36px;border-radius:50%;display:grid;place-items:center;color:#ddd;background:rgba(12,10,16,.78);box-shadow:0 8px 22px rgba(0,0,0,.38)}
+#upNext .un-cancel:hover,#upNext .un-cancel.focus,#upNext .un-cancel:focus{color:#fff}
+#upNext .un-cancel svg{width:13px;height:13px}
+/* Phones (plain browser): pull in from the edge, sit above the compact controls.
    Placed AFTER the base #upNext rule so it wins on source order (the body.mobileShell twin above
    already wins by specificity in the Android shell). */
-@media (max-width:600px){#upNext{right:12px;bottom:114px;gap:6px}#upNext .un-play{max-width:calc(100vw - 80px)}#upNext .un-cancel{width:42px;height:42px}
-  #player.osdHide #upNext{bottom:calc(16px + env(safe-area-inset-bottom))}}
+@media (max-width:600px){#upNext{right:12px;bottom:148px;gap:8px}
+  #player.osdHide #upNext{bottom:calc(20px + env(safe-area-inset-bottom))}}
 
 /* Per-episode action menu (mark watched / unwatched / play from start). */
 .epCard{position:relative}
@@ -4654,19 +4637,11 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
     <div class="loadSteps" aria-hidden="true"><span class="loadStep"></span></div>
     <div class="loadStatus" id="plStage">Preparing</div></div></div>
   <div id="upNext">
-    <button class="un-play focusable" id="unPlay">
-      <span class="un-art" id="unArt">
-        <span class="un-thumb" id="unThumb"></span>
-        <span class="un-ic"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="6 4 20 12 6 20 6 4"/></svg></span>
-      </span>
-      <span class="un-txt">
-        <span class="un-lbl">Up next<span id="unCdWrap"> · <span id="unCount">10</span>s</span></span>
-        <span class="un-title" id="unTitle"></span>
-        <span class="un-sub" id="unSub"></span>
-      </span>
-      <span class="un-prog" id="unProg"><i></i></span>
+    <button class="un-play focusable" id="unPlay" title="Next episode" aria-label="Next episode">
+      <span class="un-ic">Next Episode</span>
+      <span id="unCdWrap" class="un-sr">Next in <span id="unCount">10</span>s</span>
     </button>
-    <button class="un-cancel focusable" id="unCancel" title="Dismiss next episode">
+    <button class="un-cancel focusable" id="unCancel" title="Dismiss next episode" aria-label="Dismiss next episode">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
     </button>
   </div>
@@ -12229,9 +12204,8 @@ window.__tvNativeVideoClosed = (pos, dur, ended, token) => {
   applyNativeVideoProgress(pos, dur, { preserveOnZero: !ended });
   if (ended) {
     if (isGenuineEpisodeEof(p, pos, dur) && S.nextEp) {
-      // Compatibility with older APKs that closed Exo before sending the terminal callback. Do not
-      // restart a fresh 10-second timer; finishEpisodeToNext owns the same direct EOF contract. The
-      // native surface is already gone, so hand manual Up Next ownership back to the WebView too.
+      // Compatibility with older APKs that closed Exo before sending the terminal callback. The
+      // native surface is already gone, so the web Play/X circles own the last-10s choice.
       p.usingNative = false;
       S.upNextShown = false;
       revealWebPlayerShell(p.item);
@@ -12998,13 +12972,21 @@ function maybePrepareNextEpisode(t, d) {
   api('/api/prepare', { method: 'POST', body: playbackRequestBody(item, null, qRank) }).then(maybeNativePrefetch).catch(() => {});
 }
 const UP_NEXT_COUNTDOWN_SECONDS = 10;
-// Streamed releases carry no credits-start chapter marker, so the Up Next card uses a runtime
-// heuristic: ~1.8% of the runtime plus 15s, clamped to 35-55s (42-min episode → 55s, 22-min → ~39s).
-// The old 30-90s window landed in the last scene. This one is still credit-roll time, just
-// early enough to notice. The card in this window is a MANUAL choice; the autoplay countdown
-// arms separately, only inside the true final seconds (see armUpNextCountdown), so autoplay
-// can never eat the ending.
-function upNextEarlyWindow(d) { return Math.max(35, Math.min(55, Math.round(d * 0.018) + 15)); }
+// Credit length tracks show length. Sitcoms stay tight so Next Episode does not land
+// in the last scene (the old 35-55s guess did). Hour dramas can come up a bit earlier.
+// Autoplay still waits for the last 10s (armUpNextCountdown).
+function episodeRuntimeMinutes(p, d) {
+  const listed = Number(p && p.item && p.item.runtime) || 0;
+  if (listed >= 8) return listed;
+  return Math.max(0, Number(d) || 0) / 60;
+}
+function upNextLeadSeconds(p, d) {
+  const m = episodeRuntimeMinutes(p, d);
+  if (m <= 28) return 20;
+  if (m <= 48) return 32;
+  if (m <= 70) return 42;
+  return 52;
+}
 // Native ExoPlayer hides the WebView, so the web #upNext overlay can't draw over the video.
 // When a v2+ shell exposes the native Up Next card, drive THAT instead — the countdown still
 // lives here (this JS keeps running while the WebView is hidden), we just render via the bridge.
@@ -13018,10 +13000,7 @@ function upNextStillUrl(ne) {
 }
 function setUpNextThumb(url) {
   const root = $('upNext');
-  const thumb = $('unThumb');
-  const safe = String(url || '').trim();
-  root.classList.toggle('hasThumb', !!safe);
-  if (thumb) thumb.style.backgroundImage = safe ? ('url("' + safe.replace(/"/g, '') + '")') : '';
+  if (root) root.classList.remove('hasThumb');
 }
 function pushNativeUpNext(ne, seconds, autoplay) {
   const tv = nativeUpNextBridge(); if (!tv) return;
@@ -13035,45 +13014,25 @@ function hideUpNextUi() {
   if (S.upNextTimer) { clearInterval(S.upNextTimer); S.upNextTimer = null; }
   if (window.TriboonTV && typeof window.TriboonTV.upNextHide === 'function') { try { TriboonTV.upNextHide(); } catch {} }
 }
-// Thin countdown progress fill under the pill: grows left→right toward autoplay.
 function setUpNextProgress(elapsed, total) {
   const pct = Math.max(0, Math.min(100, total ? (elapsed / total) * 100 : 0));
-  const fill = $('unProg') && $('unProg').firstElementChild;
-  if (fill) fill.style.width = pct + '%';
   const ic = document.querySelector('#upNext .un-ic');
   if (ic) ic.style.setProperty('--un-cd', pct + '%');
 }
 function showUpNext() {
-  // The credits card is off: each show's credits are a different length, so a clock guess
-  // kept landing in the last scene or too late. Next episode still warms in the last 2 minutes.
-  return;
-  const ne = S.nextEp; if (!ne) return;
-  S.upNextShown = true;
+  const ne = S.nextEp; if (!ne || S.upNextDismissed) return;
   const native = nativeUpNextBridge();
-  const autoplay = prefAutoplay();
-  if (!native) {
-    $('unTitle').textContent = ne.epName || ne.tag || 'Next episode';
-    const sub = $('unSub');
-    if (sub) sub.textContent = (ne.tag && ne.epName && ne.tag !== ne.epName) ? ne.tag : '';
-    setUpNextThumb(upNextStillUrl(ne));
-    $('upNext').classList.remove('counting');
-    setUpNextProgress(0, UP_NEXT_COUNTDOWN_SECONDS);
-    $('upNext').classList.add('show');
-    applyFocus($('unPlay')); // remote: OK plays immediately, → reaches Dismiss
+  if (!S.upNextShown) {
+    S.upNextShown = true;
+    if (!native) {
+      $('upNext').classList.remove('counting');
+      setUpNextProgress(0, UP_NEXT_COUNTDOWN_SECONDS);
+      $('upNext').classList.add('show');
+      applyFocus($('unPlay'));
+    } else {
+      pushNativeUpNext(ne, -1, false);
+    }
   }
-  if (S.upNextTimer) { clearInterval(S.upNextTimer); S.upNextTimer = null; }
-  // The countdown arms ONLY inside the true final seconds (or when the file already ended and
-  // duration is unknown), and never after an explicit dismiss. In the earlier credits window —
-  // and with the auto-play preference OFF (Stremio parity) — the card is a manual choice:
-  // no countdown, nothing plays unless the user picks it.
-  const d = totalDuration();
-  const remaining = d ? d - currentTime() : 0;
-  if (!autoplay || S.upNextDismissed || (d && remaining > UP_NEXT_COUNTDOWN_SECONDS + 1)) {
-    if (native) pushNativeUpNext(ne, -1, false);
-    else $('unCdWrap').style.display = 'none';
-    return;
-  }
-  armUpNextCountdown();
 }
 // Start (or restart) the 10s autoplay countdown on an already-visible card. No-ops when the
 // card is not up, a countdown is already running, the user dismissed the card, or auto-play is
@@ -13092,18 +13051,14 @@ function armUpNextCountdown() {
   }, 1000);
 }
 function maybeShowUpNext(t, d, opts = {}) {
-  return;
-  if (!d || !S.nextEp || (d - t) <= 0) return;
+  if (!d || !S.nextEp || S.upNextDismissed || (d - t) <= 0) return;
   if (!opts.native && $('video').paused) return;
+  const p = S.playing;
+  if (!p || playbackSourceSwapPending(p)) return;
   const remaining = d - t;
-  if (!S.upNextShown) {
-    // Surface the card at credits-start (heuristic window) as a manual choice — showUpNext
-    // itself arms the countdown when we are already inside the final seconds (seek near end).
-    if (remaining > upNextEarlyWindow(d)) return;
-    showUpNext();
-    return;
-  }
-  // Card already up from the credits window: arm autoplay only in the true final seconds.
+  if (remaining > upNextLeadSeconds(p, d) + 1) return;
+  if (!isGenuineEpisodeEof(p, t, d)) return;
+  showUpNext();
   if (remaining <= UP_NEXT_COUNTDOWN_SECONDS + 1) armUpNextCountdown();
 }
 function finishEpisodeToNext() {
@@ -13111,11 +13066,10 @@ function finishEpisodeToNext() {
   const p = S.playing;
   if (p) p._ended = true;
   saveWatch(true, { watched: true });
-  if (prefAutoplay() && !S.upNextDismissed) {
-    playNextEpisode();
-    return true;
-  }
-  return false;
+  if (S.upNextDismissed) return false;
+  showUpNext();
+  armUpNextCountdown();
+  return true;
 }
 function playNextEpisode() {
   const ne = S.nextEp;

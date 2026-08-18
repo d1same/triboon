@@ -125,6 +125,25 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-17, v3.0.3 ship APK + Windows server + Windows client:
+
+- Version contract: `package.json` 3.0.3; Android `versionName` 3.0.3 /
+  `versionCode` 334; Windows client package/Tauri/Cargo 3.0.3.
+- Next Episode is back as a small chip plus X. It shows in a runtime
+  window (sitcom ~20s, 42-min ~32s, hour ~42s, longer ~52s) of a real
+  episode end. The 10s autoplay bar sits under the words. Click and
+  D-pad work on web, Android, and Windows: Left/Right choose Next/X,
+  OK/Enter plays, Back dismisses. The chip sits above the OSD so a
+  mouse click is not swallowed by the control overlay.
+- `npm.cmd test` 570/570. Isolated `/api/server` smoke reported 3.0.3.
+  `npm.cmd run verify:full` passed household VOD/CC, IPTV ABC+ESPN
+  web+native, overlapping Play, and Android lint/native-unit/`assembleDebug`.
+  Android ExoPlayer VOD+seek+CC passed on emulator-5554 when run alone.
+  The combined Live+page-churn+VOD stress flaked twice after Live TV
+  (player closed before seeks; later Discover Back). Those combined
+  rows stay unverified on this emulator session.
+- Windows native GPU/HDR was not run (needs a real Windows PC session).
+
 2026-08-17, v3.0.2 ship APK + Windows server + Windows client:
 
 - Version contract: `package.json` 3.0.2; Android `versionName` 3.0.2 /

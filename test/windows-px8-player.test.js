@@ -203,6 +203,33 @@ test('Windows client: Rust owns a persistent, observable D3D11/libmpv player', (
     'native chrome handles keyboard/media/fullscreen controls');
 });
 
+test('Windows client: Up Next is a small Next chip plus X', () => {
+  const html = read('clients/windows-px8/ui/player.html');
+  const css = read('clients/windows-px8/ui/player.css');
+  const js = read('clients/windows-px8/ui/player.js');
+  const rust = read('clients/windows-px8/src-tauri/src/player.rs');
+  assert.match(html, /id="upNextPlay"[\s\S]+>\s*Next Episode\s*<[\s\S]+id="upNextDismiss"/,
+    'Windows Up Next is a Next Episode chip plus dismiss, not a title card');
+  assert.doesNotMatch(html, /id="upNextTitle"|id="upNextSub"|id="upNextProgress"|up-next-kicker/,
+    'Windows Up Next must not show a title, still, or kicker');
+  assert.match(css, /\.up-next-play \{ --un-cd: 0%; width: auto; padding: 0 16px/,
+    'Windows Next is a small pill, not a wide card');
+  assert.match(css, /\.up-next-dismiss \{ width: 36px/,
+    'Windows dismiss matches the Next chip height');
+  assert.match(js, /\$\('upNextPlay'\)\.addEventListener\('click', \(\) => send\('next'\)\);[\s\S]+\$\('upNextDismiss'\)\.addEventListener\('click', \(\) => send\('up_next_dismiss'\)\);/,
+    'Play starts the next episode and X dismisses without starting it');
+  assert.match(js, /function handleUpNextKey\(event\) \{[\s\S]+upNextVisible\(\)[\s\S]+ArrowLeft[\s\S]+upNextPlay[\s\S]+ArrowRight[\s\S]+upNextDismiss[\s\S]+Enter[\s\S]+upNextPlay'\)\)\.click\(\)/,
+    'Windows keyboard Left/Right chooses Next/X and Enter activates');
+  assert.match(js, /if \(upNextVisible\(\)\) \{ \$\('upNextDismiss'\)\.click\(\); return; \}/,
+    'Windows Back dismisses Next Episode instead of closing the player');
+  assert.match(css, /\.up-next \{[^}]*z-index: 19/,
+    'Windows Next chip sits above the control bar so clicks reach it');
+  assert.match(rust, /"up_next_dismiss" \| "dismiss_up_next" => Ok\(ControlAction::UpNextDismiss\)/,
+    'dismiss reaches the web owner through a typed control');
+  assert.match(rust, /ControlAction::UpNextDismiss => eval_callback\(app, "__upNextDismissNative", vec!\[\]\)/,
+    'Windows dismiss calls the same web dismiss hook as Android');
+});
+
 test('Windows client: LGPL runtime and honest hardware verification are documented', () => {
   const readme = read('clients/windows-px8/README.md');
   const source = read('clients/windows-px8/LIBMPV-SOURCE.md');

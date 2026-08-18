@@ -580,13 +580,19 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'native progress bridge should reject stale players before forwarding progress into Up Next');
   assert.match(ui, /window\.__tvNativeVideoError = \(msg, pos, dur, token\) => \{\s+const p = S\.playing;\s+if \(!p \|\| !p\.usingNative \|\| !nativePlaybackCallbackMatches\(p, token\)\) return;\s+applyNativeVideoProgress\(pos, dur, \{ preserveOnZero: true \}\);\s+const at = currentTime\(\);/,
     'native player errors should reject stale players and preserve the last good position before fallback');
-  // Two-phase Up Next: the card surfaces at credits-start (runtime-heuristic window, manual
-  // choice), and the 10s autoplay countdown arms SEPARATELY only inside the true final seconds —
-  // so the card is useful early without autoplay ever skipping the end of the episode.
-  assert.match(ui, /function maybeShowUpNext\(t, d, opts = \{\}\) \{\s+return;/,
-    'the Up Next credits card stays off because credit length is different on every show');
-  assert.match(ui, /function showUpNext\(\) \{\s+[\s\S]*?return;/,
-    'showUpNext is a no-op while the credits card is disabled');
+  // Smarter Up Next: show Next Episode earlier on longer shows, keep sitcoms tight.
+  // Autoplay still arms only in the last 10s. The old 35-55s guess landed in the last scene.
+  assert.match(ui, /function upNextLeadSeconds\(p, d\) \{[\s\S]+if \(m <= 28\) return 20;[\s\S]+if \(m <= 48\) return 32;[\s\S]+if \(m <= 70\) return 42;[\s\S]+return 52;/,
+    'Up Next lead time follows show length: sitcom 20s, 42-min 32s, hour 42s');
+  assert.match(ui, /function maybeShowUpNext\(t, d, opts = \{\}\) \{[\s\S]+if \(remaining > upNextLeadSeconds\(p, d\) \+ 1\) return;[\s\S]+isGenuineEpisodeEof\(p, t, d\)[\s\S]+showUpNext\(\);[\s\S]+if \(remaining <= UP_NEXT_COUNTDOWN_SECONDS \+ 1\) armUpNextCountdown\(\);/,
+    'Up Next appears in the runtime-based window and only starts the 10s countdown at the end');
+  assert.doesNotMatch(ui, /function maybeShowUpNext\(t, d, opts = \{\}\) \{[\s\S]+upNextEarlyWindow/,
+    'Up Next must not use the old 35-55s credits-length guess');
+  assert.match(ui, /function showUpNext\(\) \{[\s\S]+\$\('upNext'\)\.classList\.add\('show'\);[\s\S]+applyFocus\(\$\('unPlay'\)\);/,
+    'showUpNext paints the compact Next Episode chip and focuses it');
+  const showUpNextSrc = ui.slice(ui.indexOf('function showUpNext()'), ui.indexOf('function armUpNextCountdown()'));
+  assert.doesNotMatch(showUpNextSrc, /armUpNextCountdown/,
+    'showing Next Episode early must not start the 10s autoplay countdown');
   assert.match(ui, /function armUpNextCountdown\(\) \{[\s\S]+if \(!ne \|\| !S\.upNextShown \|\| S\.upNextTimer \|\| S\.upNextDismissed \|\| !prefAutoplay\(\)\) return;[\s\S]+if \(n <= 0\) playNextEpisode\(\);/,
     'the autoplay countdown must be idempotent and blocked by an explicit dismiss or the auto-play preference');
   assert.match(ui, /function dismissUpNext\(\) \{ S\.upNextDismissed = true; hideUpNextUi\(\); \}[\s\S]+\$\('unCancel'\)\.addEventListener\('click', dismissUpNext\);[\s\S]+window\.__upNextDismissNative = \(\) => dismissUpNext\(\);/,
@@ -595,8 +601,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Up Next must not start a 10-second autoplay countdown with 45 seconds still left in the episode');
   assert.match(ui, /const UP_NEXT_COUNTDOWN_SECONDS = 10;[\s\S]+function armUpNextCountdown\(\) \{[\s\S]+let n = UP_NEXT_COUNTDOWN_SECONDS;[\s\S]+if \(n <= 0\) playNextEpisode\(\);/,
     'Up Next autoplay should give the user its 10-second choice window before EOF');
-  assert.match(ui, /function finishEpisodeToNext\(\) \{[\s\S]+saveWatch\(true, \{ watched: true \}\);[\s\S]+if \(prefAutoplay\(\) && !S\.upNextDismissed\) \{\s+playNextEpisode\(\);\s+return true;[\s\S]+return false;/,
-    'EOF should mark watched and advance immediately when autoplay is on; otherwise leave the player so details can open');
+  assert.match(ui, /function finishEpisodeToNext\(\) \{[\s\S]+saveWatch\(true, \{ watched: true \}\);[\s\S]+if \(S\.upNextDismissed\) return false;[\s\S]+showUpNext\(\);[\s\S]+armUpNextCountdown\(\);[\s\S]+return true;/,
+    'EOF should mark watched, show Next Episode, and arm the last-10s countdown');
   assert.match(ui, /if \(!finishEpisodeToNext\(\)\) closePlayer\(\{ ended: true \}\);/,
     'an older APK that already closed Exo must return to details when the Up Next card is off');
   assert.match(ui, /function pickNextUp\(show, seasons\) \{[\s\S]+updateDetailPlayLabel\([\s\S]+syncDetailSourcesTitle\(detailPlayTarget\);[\s\S]+checkAvailability\(show\);/,
@@ -609,10 +615,18 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'focusing or hovering an episode retargets the one Sources button to that episode');
   assert.match(ui, /function detailPlayButtonLabel\(base, target\) \{[\s\S]+episodeCodeOf\(target\)[\s\S]+`\$\{base\} \$\{code\}`/,
     'the show Play button should name the episode it will play, e.g. Resume S01E01');
-  assert.match(ui, /<button class="un-play focusable" id="unPlay">[\s\S]*?<span class="un-title" id="unTitle"><\/span>[\s\S]*?<span class="un-prog" id="unProg">/,
-    'Up Next primary action is a compact pill: a play button that shows the next-episode title with a countdown progress line');
+  assert.match(ui, /<button class="un-play focusable" id="unPlay"[\s\S]*?<span class="un-ic">Next Episode<\/span>[\s\S]*?<button class="un-cancel focusable" id="unCancel"/,
+    'Up Next is a small Next Episode chip plus dismiss');
+  assert.doesNotMatch(ui, /id="unTitle"|id="unSub"|id="unThumb"|id="unProg"|class="un-lbl"/,
+    'compact Up Next must not show a title, still, kicker, or wide pill');
   assert.match(ui, /<button class="un-cancel focusable" id="unCancel"[\s\S]*?<\/button>\s*<\/div>/,
-    'the compact Up Next pill pairs the play button with a small dismiss (✕) control');
+    'the Next chip pairs with a small dismiss (✕) control');
+  assert.match(ui, /\$\('unPlay'\)\.addEventListener\('click', playNextEpisode\);[\s\S]+\$\('unCancel'\)\.addEventListener\('click', dismissUpNext\);/,
+    'browser Next Episode and X are clickable');
+  assert.match(ui, /if \(\$\('upNext'\)\.classList\.contains\('show'\)\) \{[\s\S]+\$\('unPlay'\), \$\('unCancel'\)[\s\S]+Escape[\s\S]+ArrowLeft[\s\S]+ArrowRight[\s\S]+Enter[\s\S]+un\[i\]\.click\(\)/,
+    'browser D-pad Left/Right chooses Next/X, OK activates, Back dismisses');
+  assert.match(ui, /#upNext\{[^}]*z-index:7/,
+    'the Next chip sits above the OSD so mouse and remote clicks reach it');
   assert.doesNotMatch(ui, /opts\.ended \? 6 : 10/,
     'the ended fallback path should not shorten the Up Next countdown');
   assert.match(ui, /saveQualityPref\(target,\s*S\.qualityPref\)[\s\S]+paintQualityToggle\(S\.qualityPref\);[\s\S]+prefetchSources\(target, 0\);[\s\S]+preparePlaybackSource\(target, 0\);/,
@@ -1378,26 +1392,36 @@ test('episode handoff stays player-to-player before local lookup and EOF never r
   assert.ok(finishStart >= 0 && finishEnd > finishStart, 'EOF handoff helper should be extractable');
   const runFinish = (S, autoplay) => {
     const events = [];
-    const finish = new Function('S', 'saveWatch', 'prefAutoplay', 'playNextEpisode', 'showUpNext',
+    const finish = new Function('S', 'saveWatch', 'prefAutoplay', 'playNextEpisode', 'showUpNext', 'armUpNextCountdown',
       `${ui.slice(finishStart, finishEnd)}\nreturn finishEpisodeToNext;`)(
         S, (_final, opts) => events.push(['save', opts]), () => autoplay,
-        () => events.push(['next']), () => events.push(['show']));
+        () => events.push(['next']), () => events.push(['show']), () => events.push(['arm']));
     return { result: finish(), events };
   };
   const autoState = { nextEp: { item: {} }, playing: {}, upNextDismissed: false, upNextShown: true };
   const auto = runFinish(autoState, true);
   assert.strictEqual(auto.result, true);
-  assert.deepStrictEqual(auto.events, [['save', { watched: true }], ['next']],
-    'autoplay advances immediately at EOF instead of arming a second ten-second wait');
+  assert.deepStrictEqual(auto.events, [['save', { watched: true }], ['show'], ['arm']],
+    'autoplay at EOF shows Next Episode and arms the last-10s countdown instead of jumping');
   assert.strictEqual(autoState.playing._ended, true, 'the completed episode remains forced-watched during teardown');
   const manual = runFinish({ nextEp: { item: {} }, playing: {}, upNextDismissed: false, upNextShown: false }, false);
-  assert.strictEqual(manual.result, false);
-  assert.deepStrictEqual(manual.events, [['save', { watched: true }]],
-    'autoplay-off ends the player instead of showing an Up Next card');
+  assert.strictEqual(manual.result, true);
+  assert.deepStrictEqual(manual.events, [['save', { watched: true }], ['show'], ['arm']],
+    'autoplay-off still shows Next Episode; the real arm helper no-ops when autoplay is off');
   const dismissed = runFinish({ nextEp: { item: {} }, playing: {}, upNextDismissed: true, upNextShown: true }, true);
   assert.strictEqual(dismissed.result, false);
   assert.deepStrictEqual(dismissed.events, [['save', { watched: true }]],
     'an explicit Up Next dismiss remains sticky through EOF');
+
+  const leadStart = ui.indexOf('function episodeRuntimeMinutes(p, d)');
+  const leadEnd = ui.indexOf('function nativeUpNextBridge()', leadStart);
+  assert.ok(leadStart >= 0 && leadEnd > leadStart, 'runtime-based Up Next lead helper should be extractable');
+  const upNextLeadSeconds = new Function(`${ui.slice(leadStart, leadEnd)}\nreturn upNextLeadSeconds;`)();
+  assert.equal(upNextLeadSeconds({ item: { runtime: 22 } }, 1320), 20, 'a sitcom stays at 20s so Next Episode misses the last scene');
+  assert.equal(upNextLeadSeconds({ item: { runtime: 42 } }, 2520), 32, 'a 42-minute drama can come up at 32s');
+  assert.equal(upNextLeadSeconds({ item: { runtime: 60 } }, 3600), 42, 'an hour show can come up at 42s');
+  assert.equal(upNextLeadSeconds({ item: { runtime: 90 } }, 5400), 52, 'a long special can come up at 52s');
+  assert.equal(upNextLeadSeconds({ item: {} }, 1320), 20, 'missing TMDB runtime falls back to the file length');
 
   const eofStart = ui.indexOf('function isGenuineEpisodeEof(p, pos, dur)');
   const eofEnd = ui.indexOf('function handleVodPlaybackEnded(pos, dur)', eofStart);
@@ -1487,10 +1511,11 @@ test('episode handoff stays player-to-player before local lookup and EOF never r
     upNextShown: true,
   };
   const compatDom = { playerOpen: false, loaderShow: true };
-  const compatFinish = new Function('S', 'saveWatch', 'prefAutoplay', 'playNextEpisode', 'showUpNext',
+  const compatFinish = new Function('S', 'saveWatch', 'prefAutoplay', 'playNextEpisode', 'showUpNext', 'armUpNextCountdown',
     `${ui.slice(finishStart, finishEnd)}\nreturn finishEpisodeToNext;`)(
       compatState, (_final, opts) => compatEvents.push(['save', opts]), () => false,
-      () => compatEvents.push(['next']), () => compatEvents.push(['show', compatState.playing.usingNative, compatState.upNextShown]));
+      () => compatEvents.push(['next']), () => compatEvents.push(['show', compatState.playing.usingNative, compatState.upNextShown]),
+      () => compatEvents.push(['arm']));
   const compatWindow = {};
   const compatClosed = new Function('window', 'S', 'nativePlaybackCallbackMatches', 'applyNativeVideoProgress',
     'finishEpisodeToNext', 'closePlayer', 'revealWebPlayerShell', '$', 'isGenuineEpisodeEof', 'handleVodPlaybackEnded',
@@ -1505,8 +1530,9 @@ test('episode handoff stays player-to-player before local lookup and EOF never r
   assert.deepStrictEqual(compatEvents, [
     ['reveal'],
     ['save', { watched: true }],
-    ['close'],
-  ], 'autoplay-off on an older APK returns to details instead of a web Up Next card');
+    ['show', false, false],
+    ['arm'],
+  ], 'an older APK that already closed Exo shows the web Next Episode chip');
   assert.deepStrictEqual(compatDom, { playerOpen: true, loaderShow: false },
     'the older-APK fallback still reveals the web shell long enough to finish the watch save');
 
@@ -2016,44 +2042,49 @@ test('subtitle startup preference contract: admin can toggle built-in captions',
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
   const playerMap = fs.readFileSync(path.join(__dirname, '..', 'docs-player-regression-map.md'), 'utf8');
   const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
-  // Native Up Next is now a compact translucent PILL (owner: "smaller, simpler, just a button,
-  // a bit transparent, above the seek bar"): a play pill (kicker + one-line title) beside a small
-  // circular dismiss — no solid card. The countdown rides in the kicker. Since the owner's follow-up
-  // ("make it black and white, don't make it too colorful; it sits too high") the pill is MONOCHROME
-  // (white play disc, muted-white kicker, white focus ring) and docks near the bottom edge while the
-  // transport chrome is hidden (the normal state during credits), lifting above the seek bar only
-  // when the chrome is up.
-  assert.match(android, /private View buildNativeUpNextCard\(\) \{[\s\S]+pill\.setBackground\(nativeUpNextPillBg\(false\)\);[\s\S]+pill\.setOnClickListener\(v -> triggerNativeUpNextPlay\(\)\);[\s\S]+nativeUpNextPlay = pill;[\s\S]+nativeUpNextDismiss = dismiss;/,
-    'the native Up Next is a translucent play pill + a small dismiss, not a solid card');
-  assert.match(android, /private GradientDrawable nativeUpNextPillBg\(boolean focused\) \{[\s\S]+0xEB08060C[\s\S]+0xF0FFFFFF/,
-    'the native pill is flat dark ink with a white (monochrome) focus ring');
-  assert.match(android, /GradientDrawable iconBg = new GradientDrawable\(\);\s*\n\s*iconBg\.setColor\(0xFFF2F2F4\);\s*\n\s*iconBg\.setShape\(GradientDrawable\.OVAL\);/,
-    'the native play disc is a solid white oval, not the brand gradient');
-  assert.match(android, /private void updateNativeUpNextPosition\(\) \{[\s\S]+nativeChrome\.getVisibility\(\) == View\.VISIBLE;[\s\S]+dp\(chromeUp \? 120 : 36\);/,
-    'the native Up Next docks low (dp36) with chrome hidden and lifts to dp120 above the seek bar with chrome up');
-  assert.match(android, /updateNativeUpNextPosition\(\);\s*\n\s*nativeUpNextCard\.setVisibility\(View\.VISIBLE\);/,
+  // Native Up Next is a small Next chip + X. No title, still, or kicker.
+  // Monochrome white chip, dark dismiss, docks low while chrome is hidden.
+  assert.match(android, /private View buildNativeUpNextCard\(\) \{[\s\S]+play\.setText\("Next Episode"\);[\s\S]+play\.setBackground\(nativeUpNextPlayBg\(false\)\);[\s\S]+play\.setOnClickListener\(v -> triggerNativeUpNextPlay\(\)\);[\s\S]+nativeUpNextPlay = play;[\s\S]+nativeUpNextDismiss = dismiss;/,
+    'the native Up Next is a Next Episode chip plus a small dismiss, not a title card');
+  assert.match(android, /play\.setOnClickListener\(v -> triggerNativeUpNextPlay\(\)\);[\s\S]+dismiss\.setOnClickListener\(v -> dismissNativeUpNext\(true\)\);/,
+    'native Next Episode and X are clickable');
+  assert.match(android, /private boolean handleNativeUpNextKey\(KeyEvent e\) \{[\s\S]+KEYCODE_DPAD_CENTER[\s\S]+nativeUpNextDismiss.hasFocus\(\)[\s\S]+dismissNativeUpNext\(true\)[\s\S]+triggerNativeUpNextPlay\(\)[\s\S]+KEYCODE_DPAD_LEFT[\s\S]+nativeUpNextPlay.requestFocus\(\)[\s\S]+KEYCODE_DPAD_RIGHT[\s\S]+nativeUpNextDismiss.requestFocus\(\)/,
+    'Android D-pad Left/Right chooses Next/X and OK activates the focused control');
+  assert.match(android, /if \(nativeUpNextVisible\) return handleNativeUpNextKey\(e\);/,
+    'native surface keys go to Next Episode while the chip is visible');
+  assert.match(android, /nativeUpNextCard\.bringToFront\(\);\s*\n\s*nativeUpNextCard\.setVisibility\(View\.VISIBLE\);/,
+    'showing Next Episode keeps the chip above chrome so taps reach it');
+  assert.match(android, /private GradientDrawable nativeUpNextPlayBg\(boolean focused\) \{[\s\S]+0xFFFFFFFF[\s\S]+nativePillBg/,
+    'the native Next chip is a solid white pill, not the brand gradient');
+  assert.match(android, /new LinearLayout\.LayoutParams\(\s*LinearLayout\.LayoutParams\.WRAP_CONTENT, dp\(36\)\)[\s\S]+new LinearLayout\.LayoutParams\(dp\(36\), dp\(36\)\)/,
+    'native Next and dismiss share the same 36dp height');
+  assert.match(android, /private void updateNativeUpNextPosition\(\) \{[\s\S]+nativeChrome\.getVisibility\(\) == View\.VISIBLE;[\s\S]+dp\(chromeUp \? 168 : 48\);/,
+    'the native Up Next sits clear of the seek bar with chrome up and docks lower with chrome hidden');
+  assert.match(android, /updateNativeUpNextPosition\(\);\s*\n\s*nativeUpNextCard\.bringToFront\(\);\s*\n\s*nativeUpNextCard\.setVisibility\(View\.VISIBLE\);/,
     'showing the native Up Next positions it for the current chrome state first');
-  assert.match(android, /nativeUpNextKicker\.setText\(autoplay && seconds >= 0 \? \("UP NEXT · " \+ seconds\) : "UP NEXT"\);/,
-    'the native countdown rides in the kicker to keep the pill a single tidy line');
-  // Web twin of the same follow-up: monochrome + dock-low-when-controls-hidden.
-  assert.match(ui, /#player\.osdHide #upNext\{bottom:30px\}/,
+  assert.doesNotMatch(android, /UP NEXT ·/,
+    'native Up Next must not draw a title/kicker line');
+  // Web twin: monochrome Play/X circles + dock-low-when-controls-hidden.
+  assert.match(ui, /#player\.osdHide #upNext\{bottom:48px\}/,
     'the web Up Next docks near the bottom edge while the OSD is hidden');
-  assert.match(ui, /#upNext \.un-ic\{[^}]*background:#f2f2f4;color:#0a0a0c\}/,
-    'the web Up Next play disc is monochrome (white disc, near-black glyph), not the brand gradient');
-  assert.match(ui, /#upNext \.un-lbl\{[^}]*color:rgba\(255,255,255,\.72\)[^}]*\}/,
-    'the web Up Next kicker is muted white, not amber');
-  assert.match(ui, /<span class="un-sub" id="unSub"><\/span>/,
-    'the web Up Next shows an episode subline under the title');
-  assert.match(android, /nativeUpNextSub = new TextView\(this\);[\s\S]+optString\("sub"/,
-    'the native Up Next shows the same episode subline as the web pill');
-  assert.match(ui, /<span class="un-thumb" id="unThumb"><\/span>/,
-    'the web Up Next has a still slot beside the play disc');
-  assert.match(ui, /function setUpNextThumb\(url\) \{[\s\S]+hasThumb[\s\S]+function showUpNext\(\) \{[\s\S]+setUpNextThumb\(upNextStillUrl\(ne\)\)/,
-    'showing Up Next paints the next episode still when TMDB has one');
-  assert.match(ui, /still: upNextStillUrl\(ne\)/,
-    'the native Up Next bridge receives the same episode still as the web pill');
-  assert.match(android, /private void applyNativeUpNextStill\(String url\) \{[\s\S]+loadNativeEpisodeStill\(nativeUpNextStill, url\)/,
-    'the native Up Next loads the episode still through the same still cache as the episode strip');
+  assert.match(ui, /#upNext \.un-ic\{[^}]*background:#fff;color:#111/,
+    'the web Next chip is monochrome (white chip, near-black text), not the brand gradient');
+  assert.match(ui, /<span class="un-ic">Next Episode<\/span>/,
+    'the web Next control says Next Episode');
+  assert.match(ui, /#upNext\.counting \.un-ic::after\{[^}]*var\(--un-cd/,
+    'the autoplay countdown is a bar under the label, not a sweep over the text');
+  assert.doesNotMatch(ui, /#upNext \.un-ic::before\{[^}]*conic-gradient/,
+    'the countdown must not paint a conic sweep over Next Episode');
+  assert.match(ui, /#upNext \.un-ic\{[^}]*height:36px;padding:0 16px[^}]*border-radius:999px/,
+    'the web Next control is a small pill, not a wide card');
+  assert.match(ui, /#upNext \.un-cancel\{[^}]*width:36px;height:36px[^}]*border-radius:50%/,
+    'the web dismiss control matches the Next chip height');
+  assert.match(ui, /function setUpNextThumb\(url\) \{[\s\S]+hasThumb/,
+    'the leftover thumb helper only clears hasThumb');
+  assert.doesNotMatch(ui, /setUpNextThumb\(upNextStillUrl/,
+    'compact Play/X circles do not load a still');
+  assert.match(android, /private void applyNativeUpNextStill\(String url\) \{[\s\S]+Compact Play\/X circles do not show a still/,
+    'the native Up Next does not load an episode still');
   assert.match(ui, /function showOsd\(\) \{\s*\n\s*\$\('osd'\)\.classList\.remove\('hide'\);\s*\n\s*\$\('player'\)\.classList\.remove\('osdHide'\);/,
     'showing the OSD lifts the Up Next card (osdHide mirror removed)');
   assert.match(ui, /\$\('osd'\)\.classList\.add\('hide'\);\s*\n\s*\$\('player'\)\.classList\.add\('osdHide'\);/,
@@ -3573,8 +3604,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'web player popup focused and selected rows should be distinct professional states');
   assert.match(ui, /#playerStats\{display:none;position:absolute;right:44px;bottom:176px[\s\S]+rgba\(24,26,29,\.96\)[\s\S]+border-radius:10px[\s\S]+backdrop-filter:blur\(14px\)/,
     'web player stats popup should match the compact graphite player sheet styling');
-  assert.match(ui, /#upNext\{position:absolute;right:34px;bottom:178px[\s\S]+#upNext button\{border:1px solid rgba\(255,255,255,\.14\);cursor:pointer;color:var\(--text\);background:rgba\(8,6,12,\.92\)[\s\S]+#upNext \.un-play\{position:relative;overflow:hidden;display:flex[\s\S]+border-radius:16px/,
-    'the compact Up Next pill sits bottom-right above the seek bar as a flat dark card');
+  assert.match(ui, /#upNext\{position:absolute;right:28px;bottom:232px[\s\S]+#upNext \.un-play\{position:relative;height:36px[\s\S]+border-radius:999px/,
+    'the compact Next chip sits clear of the seek bar');
   assert.match(ui, /\.epMenu\{position:absolute;right:10px;top:44px[\s\S]+rgba\(24,26,29,\.97\)[\s\S]+border-radius:10px[\s\S]+\.epMenu button\.focus\{background:rgba\(255,255,255,\.10\);color:var\(--text\)[\s\S]+box-shadow:inset 2px 0 0 var\(--focus\)\}/,
     'episode action popup should use the same compact neutral player menu styling');
   assert.match(ui, /function playerSurfaceClick\(e\) \{[\s\S]+closest\('#osd \.top,\.playerMetaRow,\.seekLine,\.ctl,#playerEpisodes,#trackMenu,#playerStats,#pGuide,#vlcPanel,#upNext,#playerLoader,button,a,input,select,textarea'\)[\s\S]+return true;[\s\S]+function playerSingleClick\(e\) \{[\s\S]+setTimeout\(\(\) => \{[\s\S]+togglePlay\(\);[\s\S]+\}, 320\);[\s\S]+function playerDoubleClick\(e\) \{[\s\S]+clearTimeout\(_playerSurfaceClickT\);[\s\S]+toggleFullscreen\(\);/,

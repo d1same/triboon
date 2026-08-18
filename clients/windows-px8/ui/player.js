@@ -384,17 +384,28 @@
     render();
   }
 
+  function upNextVisible() {
+    return $('upNext').classList.contains('show');
+  }
+
   function renderUpNext() {
     const next = state.upNext;
     const el = $('upNext');
-    if (!next || next.hidden) { el.classList.remove('show'); return; }
+    const play = $('upNextPlay');
+    if (!next || next.hidden) {
+      el.classList.remove('show', 'counting');
+      play.style.setProperty('--un-cd', '0%');
+      return;
+    }
+    const justShown = !el.classList.contains('show');
     el.classList.add('show');
-    $('upNextTitle').textContent = text(next.title || 'Next episode', 180);
-    $('upNextSub').textContent = text(next.sub || '', 180);
     const seconds = Math.max(0, Math.ceil(finite(next.seconds)));
-    $('upNextSeconds').textContent = next.autoplay && seconds ? `- ${seconds}s` : '';
+    const autoplay = !!next.autoplay && next.seconds >= 0;
+    el.classList.toggle('counting', autoplay);
+    $('upNextSeconds').textContent = autoplay ? String(seconds) : '';
     const total = Math.max(seconds, finite(next.totalSeconds, 10));
-    $('upNextProgress').style.width = next.autoplay ? `${Math.max(0, Math.min(100, (1 - seconds / total) * 100))}%` : '0';
+    play.style.setProperty('--un-cd', autoplay ? `${Math.max(0, Math.min(100, (1 - seconds / total) * 100))}%` : '0%');
+    if (justShown) play.focus({ preventScroll: true });
   }
 
   function renderLiveEpg() {
@@ -629,7 +640,8 @@
     $('guide').addEventListener('click', () => nativeInvoke('windows_player_open_guide', {}).catch(() => showToast('The TV guide could not be opened.')));
     $('favorite').addEventListener('click', () => send('favorite', { on: !state.favorite }));
     $('fullscreen').addEventListener('click', toggleFullscreen);
-    $('upNext').addEventListener('click', () => send('next'));
+    $('upNextPlay').addEventListener('click', () => send('next'));
+    $('upNextDismiss').addEventListener('click', () => send('up_next_dismiss'));
     $('retry').addEventListener('click', () => { setPlayback('loading'); beginLoadingStages(); send('retry'); });
     $('errorClose').addEventListener('click', requestClose);
     $('windowClose').addEventListener('click', requestClose);
@@ -677,8 +689,21 @@
   }
 
   function handleBack() {
+    if (upNextVisible()) { $('upNextDismiss').click(); return; }
     if (closePanels()) return;
     requestClose();
+  }
+
+  function handleUpNextKey(event) {
+    if (!upNextVisible()) return false;
+    if (event.key === 'ArrowLeft') { event.preventDefault(); $('upNextPlay').focus({ preventScroll: true }); return true; }
+    if (event.key === 'ArrowRight') { event.preventDefault(); $('upNextDismiss').focus({ preventScroll: true }); return true; }
+    if ((event.key === 'Enter' || event.key === ' ') && !event.repeat) {
+      event.preventDefault();
+      (document.activeElement === $('upNextDismiss') ? $('upNextDismiss') : $('upNextPlay')).click();
+      return true;
+    }
+    return true;
   }
 
   function handleKey(event) {
@@ -691,6 +716,7 @@
     if (event.key === 'Escape' || event.key === 'Backspace' || event.key === 'BrowserBack') {
       event.preventDefault(); handleBack(); return;
     }
+    if (handleUpNextKey(event)) return;
     if (isPanelOpen()) {
       if (event.key === 'ArrowDown' || event.key === 'ArrowRight') { event.preventDefault(); moveFocus(1); }
       else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') { event.preventDefault(); moveFocus(-1); }

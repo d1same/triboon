@@ -64,12 +64,15 @@
       <div><button id="retry" class="pill primary">Try again</button><button id="errorClose" class="pill">Close</button></div>
     </section>
 
-    <button id="upNext" class="up-next" aria-label="Play next episode">
-      <span class="up-next-kicker">UP NEXT <b id="upNextSeconds"></b></span>
-      <strong id="upNextTitle">Next episode</strong>
-      <span id="upNextSub"></span>
-      <i id="upNextProgress"></i>
-    </button>
+    <div id="upNext" class="up-next">
+      <button id="upNextPlay" class="up-next-play" aria-label="Next episode" title="Next episode">
+        Next Episode
+        <b id="upNextSeconds" class="up-next-sr"></b>
+      </button>
+      <button id="upNextDismiss" class="up-next-dismiss" aria-label="Dismiss next episode" title="Dismiss next episode">
+        <svg><use href="#i-close"/></svg>
+      </button>
+    </div>
   </main>
 
   <aside id="menu" class="menu" aria-hidden="true" aria-labelledby="menuTitle">

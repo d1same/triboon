@@ -3609,14 +3609,10 @@ public class MainActivity extends Activity {
         return d;
     }
 
-    // Up Next card — the native twin of the web #upNext overlay. The countdown + "what plays
-    // next" logic lives in the web layer (single source of truth, and it keeps running while the
-    // WebView is hidden behind the ExoPlayer surface); this card just renders what web pushes via
-    // TriboonTV.upNext(...) and forwards Play/Dismiss back to web.
+    // Up Next — a small Next chip + X. Countdown + next-episode choice live in the
+    // web layer; this just renders what web pushes via TriboonTV.upNext(...) and forwards
+    // Play/Dismiss back. Kept tiny so credits stay readable.
     private View buildNativeUpNextCard() {
-        // Compact "Up next" pill — the native twin of the web overlay. Frosted ink glass, a
-        // 16:9 still with a white play disc on top, episode title + SxxExx, and a circular
-        // dismiss. Monochrome on purpose so credits stay readable. Bottom-right, above the seek bar.
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(android.view.Gravity.CENTER_VERTICAL);
@@ -3625,86 +3621,36 @@ public class MainActivity extends Activity {
         row.setClipToPadding(false);
         row.setElevation(dp(12));
 
-        // The play pill — the whole pill is the focusable, clickable primary action.
-        LinearLayout pill = new LinearLayout(this);
-        pill.setOrientation(LinearLayout.HORIZONTAL);
-        pill.setGravity(android.view.Gravity.CENTER_VERTICAL);
-        pill.setPadding(dp(8), dp(8), dp(16), dp(8));
-        pill.setBackground(nativeUpNextPillBg(false));
-        pill.setFocusable(true);
-        pill.setFocusableInTouchMode(false);
-        pill.setClickable(true);
-        pill.setOnClickListener(v -> triggerNativeUpNextPlay());
-        pill.setOnFocusChangeListener((v, hasFocus) -> v.setBackground(nativeUpNextPillBg(hasFocus)));
-        pill.setOnKeyListener((v, code, e) -> handleNativeUpNextKey(e));
-
-        FrameLayout art = new FrameLayout(this);
-        ImageView still = new ImageView(this);
-        still.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        still.setVisibility(View.GONE);
-        GradientDrawable stillBg = new GradientDrawable();
-        stillBg.setColor(0xFF16101F);
-        stillBg.setCornerRadius(dp(10));
-        still.setBackground(stillBg);
-        still.setClipToOutline(true);
-        nativeUpNextStill = still;
-        art.addView(still, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-
-        ImageView icon = new ImageView(this);
-        icon.setImageResource(R.drawable.ic_player_play);
-        icon.setImageTintList(ColorStateList.valueOf(0xFF0A0A0C));
-        icon.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
-        icon.setPadding(dp(10), dp(10), dp(9), dp(10));
-        // Monochrome by design (white disc, near-black glyph): an end-of-episode prompt over
-        // credits shouldn't shout in brand colors. Matches the web #upNext .un-ic.
-        GradientDrawable iconBg = new GradientDrawable();
-        iconBg.setColor(0xFFF2F2F4);
-        iconBg.setShape(GradientDrawable.OVAL);
-        icon.setBackground(iconBg);
-        FrameLayout.LayoutParams iconLp = new FrameLayout.LayoutParams(dp(38), dp(38), android.view.Gravity.CENTER);
-        art.addView(icon, iconLp);
-        nativeUpNextPlayIcon = icon;
-        nativeUpNextArt = art;
-        LinearLayout.LayoutParams artLp = new LinearLayout.LayoutParams(dp(38), dp(38));
-        artLp.rightMargin = dp(12);
-        pill.addView(art, artLp);
-
-        LinearLayout col = new LinearLayout(this);
-        col.setOrientation(LinearLayout.VERTICAL);
+        TextView play = new TextView(this);
+        play.setText("Next Episode");
+        play.setTextColor(0xFF0A0A0C);
+        play.setTextSize(13);
+        play.setTypeface(Typeface.DEFAULT_BOLD);
+        play.setGravity(android.view.Gravity.CENTER);
+        play.setPadding(dp(16), 0, dp(16), 0);
+        play.setIncludeFontPadding(false);
+        play.setBackground(nativeUpNextPlayBg(false));
+        play.setFocusable(true);
+        play.setFocusableInTouchMode(false);
+        play.setClickable(true);
+        play.setContentDescription(getString(R.string.up_next));
+        play.setOnClickListener(v -> triggerNativeUpNextPlay());
+        play.setOnFocusChangeListener((v, hasFocus) -> v.setBackground(nativeUpNextPlayBg(hasFocus)));
+        play.setOnKeyListener((v, code, e) -> handleNativeUpNextKey(e));
+        nativeUpNextPlay = play;
+        nativeUpNextPlayIcon = null;
+        nativeUpNextArt = play;
+        nativeUpNextStill = new ImageView(this);
         nativeUpNextKicker = new TextView(this);
-        nativeUpNextKicker.setText(R.string.up_next);
-        nativeUpNextKicker.setTextColor(0xB8FFFFFF); // muted white — monochrome card, no amber
-        nativeUpNextKicker.setTextSize(9f);
-        nativeUpNextKicker.setLetterSpacing(0.14f);
-        nativeUpNextKicker.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
-        col.addView(nativeUpNextKicker);
         nativeUpNextTitle = new TextView(this);
-        nativeUpNextTitle.setTextColor(Color.WHITE);
-        nativeUpNextTitle.setTextSize(14.5f);
-        nativeUpNextTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        nativeUpNextTitle.setSingleLine(true);
-        nativeUpNextTitle.setEllipsize(TextUtils.TruncateAt.END);
-        nativeUpNextTitle.setPadding(0, dp(2), 0, 0);
-        col.addView(nativeUpNextTitle, new LinearLayout.LayoutParams(dp(220), ViewGroup.LayoutParams.WRAP_CONTENT));
         nativeUpNextSub = new TextView(this);
-        nativeUpNextSub.setTextColor(0x85FFFFFF);
-        nativeUpNextSub.setTextSize(11.5f);
-        nativeUpNextSub.setSingleLine(true);
-        nativeUpNextSub.setEllipsize(TextUtils.TruncateAt.END);
-        nativeUpNextSub.setVisibility(View.GONE);
-        col.addView(nativeUpNextSub, new LinearLayout.LayoutParams(dp(220), ViewGroup.LayoutParams.WRAP_CONTENT));
-        pill.addView(col);
+        LinearLayout.LayoutParams playLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, dp(36));
+        playLp.rightMargin = dp(8);
+        row.addView(play, playLp);
 
-        nativeUpNextPlay = pill;
-        LinearLayout.LayoutParams pillLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        pillLp.rightMargin = dp(8);
-        row.addView(pill, pillLp);
-
-        // Dismiss — a small translucent circle (✕).
         TextView dismiss = new TextView(this);
-        dismiss.setText("✕"); // ✕
+        dismiss.setText("✕");
         dismiss.setTextColor(0xFF9B8FAD);
         dismiss.setTextSize(13);
         dismiss.setTypeface(Typeface.DEFAULT_BOLD);
@@ -3720,17 +3666,18 @@ public class MainActivity extends Activity {
         });
         dismiss.setOnKeyListener((v, code, e) -> handleNativeUpNextKey(e));
         nativeUpNextDismiss = dismiss;
-        row.addView(dismiss, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        row.addView(dismiss, new LinearLayout.LayoutParams(dp(36), dp(36)));
 
         return row;
     }
 
-    // Translucent near-black like the web .cbtn transport buttons; white ring on focus (the card
-    // is deliberately monochrome — see buildNativeUpNextCard).
-    private GradientDrawable nativeUpNextPillBg(boolean focused) {
-        int fill = focused ? 0xF208060C : 0xEB08060C;
+    private GradientDrawable nativeUpNextPlayBg(boolean focused) {
         int stroke = focused ? 0xF0FFFFFF : 0x24FFFFFF;
-        return nativePillBg(fill, stroke, dp(16));
+        return nativePillBg(0xFFFFFFFF, stroke, dp(18));
+    }
+
+    private GradientDrawable nativeUpNextPillBg(boolean focused) {
+        return nativeUpNextPlayBg(focused);
     }
 
     private GradientDrawable nativeUpNextDismissBg(boolean focused) {
@@ -3747,63 +3694,19 @@ public class MainActivity extends Activity {
         ViewGroup.LayoutParams raw = nativeUpNextCard.getLayoutParams();
         if (!(raw instanceof FrameLayout.LayoutParams)) return;
         FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) raw;
-        int want = dp(chromeUp ? 120 : 36);
+        int want = dp(chromeUp ? 168 : 48);
         if (lp.bottomMargin != want) { lp.bottomMargin = want; nativeUpNextCard.setLayoutParams(lp); }
     }
 
     private void applyNativeUpNextStill(String url) {
-        if (nativeUpNextArt == null || nativeUpNextStill == null || nativeUpNextPlayIcon == null) return;
-        boolean has = url != null && !url.isEmpty();
-        ViewGroup.LayoutParams artRaw = nativeUpNextArt.getLayoutParams();
-        if (artRaw instanceof LinearLayout.LayoutParams) {
-            LinearLayout.LayoutParams artLp = (LinearLayout.LayoutParams) artRaw;
-            artLp.width = dp(has ? 104 : 38);
-            artLp.height = dp(has ? 58 : 38);
-            nativeUpNextArt.setLayoutParams(artLp);
-        }
-        ViewGroup.LayoutParams iconRaw = nativeUpNextPlayIcon.getLayoutParams();
-        if (iconRaw instanceof FrameLayout.LayoutParams) {
-            FrameLayout.LayoutParams iconLp = (FrameLayout.LayoutParams) iconRaw;
-            iconLp.width = dp(has ? 28 : 38);
-            iconLp.height = dp(has ? 28 : 38);
-            nativeUpNextPlayIcon.setLayoutParams(iconLp);
-        }
-        nativeUpNextPlayIcon.setPadding(dp(has ? 7 : 10), dp(has ? 7 : 10), dp(has ? 6 : 9), dp(has ? 7 : 10));
-        if (!has) {
-            nativeUpNextStill.setImageDrawable(null);
-            nativeUpNextStill.setVisibility(View.GONE);
-            return;
-        }
-        nativeUpNextStill.setVisibility(View.VISIBLE);
-        loadNativeEpisodeStill(nativeUpNextStill, url);
+        // Compact Play/X circles do not show a still.
     }
 
     private void showNativeUpNext(String json) {
         if (nativeUpNextCard == null || !"video".equals(nativeMode) || !nativePlayerOpen()) return;
-        String title = "";
-        String sub = "";
-        String still = "";
-        int seconds = -1;
-        boolean autoplay = false;
-        try {
-            org.json.JSONObject j = new org.json.JSONObject(json == null ? "{}" : json);
-            title = j.optString("title", "");
-            sub = j.optString("sub", "");
-            still = j.optString("still", "");
-            seconds = j.optInt("seconds", -1);
-            autoplay = j.optBoolean("autoplay", false);
-        } catch (Exception e) { return; }
-        applyNativeUpNextStill(still);
-        nativeUpNextTitle.setText(title.isEmpty() ? "Next episode" : title);
-        if (nativeUpNextSub != null) {
-            boolean showSub = !sub.isEmpty() && !sub.equals(title);
-            nativeUpNextSub.setText(showSub ? sub : "");
-            nativeUpNextSub.setVisibility(showSub ? View.VISIBLE : View.GONE);
-        }
-        // The countdown rides in the kicker ("UP NEXT · 8"), keeping the pill to a single tidy line.
-        nativeUpNextKicker.setText(autoplay && seconds >= 0 ? ("UP NEXT · " + seconds) : "UP NEXT");
         boolean wasVisible = nativeUpNextVisible;
         updateNativeUpNextPosition();
+        nativeUpNextCard.bringToFront();
         nativeUpNextCard.setVisibility(View.VISIBLE);
         nativeUpNextVisible = true;
         if (!wasVisible) {

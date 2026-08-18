@@ -647,6 +647,7 @@ enum ControlAction {
     SeekAbsolute(f64),
     SeekRelative(f64),
     Next,
+    UpNextDismiss,
     Quality(String),
     Episode(usize),
     Subtitle(SubtitleRequest),
@@ -720,6 +721,7 @@ fn parse_control(
             Ok(ControlAction::SeekRelative(value))
         }
         "next" => Ok(ControlAction::Next),
+        "up_next_dismiss" | "dismiss_up_next" => Ok(ControlAction::UpNextDismiss),
         "quality" => Ok(ControlAction::Quality(
             string_from_payload(&payload, &["quality", "value"])
                 .unwrap_or_else(|| "orig".into())
@@ -2555,6 +2557,7 @@ fn handle_control(
                 json!(active.token),
             ],
         ),
+        ControlAction::UpNextDismiss => eval_callback(app, "__upNextDismissNative", vec![]),
         ControlAction::Quality(quality) => eval_callback(
             app,
             "__tvNativeVideoQuality",
@@ -3023,6 +3026,10 @@ mod tests {
             ControlAction::SeekRelative(value) if value == 30.0
         ));
         assert!(parse_control("seek_relative", json!({"seconds": 99999}), Some(server())).is_err());
+        assert!(matches!(
+            parse_control("up_next_dismiss", Value::Null, Some(server())).unwrap(),
+            ControlAction::UpNextDismiss
+        ));
         assert!(parse_control("totally_unknown", Value::Null, Some(server())).is_err());
     }
 

@@ -8,7 +8,7 @@
     <string name="press_back_again">Press BACK again to exit</string>
     <string name="tuning_channel">Tuning channel…</string>
     <string name="preparing">Preparing</string>
-    <string name="up_next">UP NEXT</string>
+    <string name="up_next">Next Episode</string>
     <string name="ends_at">Ends at %1$s</string>
     <string name="ends_at_unknown">Ends at unavailable</string>
     <string name="live">LIVE</string>
