@@ -390,6 +390,15 @@ test('yEnc decoder can skip a prefix and still verify the full-part CRC', () => 
   assert.ok(dec.data.equals(data.subarray(7500)), 'kept bytes are the unused-prefix suffix');
 });
 
+test('yEnc skip past the decoded part returns empty instead of throwing', () => {
+  const data = Buffer.allocUnsafe(4000);
+  for (let i = 0; i < data.length; i++) data[i] = (i * 13) & 0xff;
+  const enc = encodePart(data, { name: 'x.bin', partNum: 1, totalParts: 1, begin: 0, end: data.length, totalSize: data.length });
+  const dec = decode(enc, { skipDecoded: data.length + 500 });
+  assert.ok(dec.crcOk, 'CRC still covers the whole part');
+  assert.strictEqual(dec.data.length, 0);
+});
+
 // ---------- unit: NZB ----------
 test('NZB parser extracts files/segments and primary-file picker skips par2', () => {
   const { nzb } = makeRelease('Movie.mkv', 100000, 10000);
@@ -435,6 +444,41 @@ test('e2e: mount, full stream, and 30 fuzzed range reads are byte-exact', async 
     const win = Buffer.concat(got);
     assert.ok(win.equals(data.subarray(start, start + len)), `fuzz ${i}: [${start}, +${len})`);
   }
+
+  pool.close();
+  await mock.close();
+});
+
+test('e2e: remux mid-file Range past a short yEnc part keeps streaming', async () => {
+  // The Paper froze at ~19s: remux asked for bytes=8388608, skip-decode of that
+  // article returned 0 bytes, VFS threw "read out of range", player stuck on Preparing.
+  const SIZE = 12 * 96 * 1024;
+  const PART = 96 * 1024;
+  const { data, articles, nzb } = makeRelease('Paper.Hole.mkv', SIZE, PART, 'paper.hole');
+  const hole = 10;
+  const shortEnd = hole * PART + 1000;
+  articles.set(`seg${hole + 1}@paper.hole`, encodePart(data.subarray(hole * PART, shortEnd), {
+    name: 'Paper.Hole.mkv', partNum: hole + 1, totalParts: 12,
+    begin: hole * PART, end: shortEnd, totalSize: SIZE,
+  }));
+
+  const mock = createMockNntp({ articles, requireAuth: true });
+  const port = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false, user: 'u', pass: 'p' }, 4);
+  const vf = new VirtualFile(pool, nzb, { readAhead: 1 });
+  await vf.mount();
+
+  const start = hole * PART + 5000;
+  const chunks = [];
+  await assert.doesNotReject(async () => {
+    for await (const c of vf.read(start, start + PART)) chunks.push(c);
+  }, 'mid-file Range must not throw read out of range');
+  const got = Buffer.concat(chunks);
+  assert.strictEqual(got.length, PART, 'remux still gets a full window after the short part');
+  const holeBytes = (hole + 1) * PART - start;
+  assert.ok(got.subarray(0, holeBytes).every((b) => b === 0), 'hole stays aligned with zeros');
+  assert.ok(got.subarray(holeBytes).equals(data.subarray((hole + 1) * PART, (hole + 1) * PART + (PART - holeBytes))),
+    'bytes after the hole are the next real part');
 
   pool.close();
   await mock.close();

@@ -7837,6 +7837,8 @@ function beginPlaybackTransition(it, opts = {}) {
   // closing it first (which reveals the still-open show details WebView for a frame or longer).
   const preserveNativeSurface = !!opts.directHandoff && nativeFirst
     && !!(S.playing && S.playing.usingNative);
+  const now = (typeof appMs === 'function' ? appMs() : Date.now());
+  S._handoffQuietUntil = opts.directHandoff ? now + 12000 : 0;
   stopActivePlaybackForReplacement({ preserveNativeSurface });
   if (nativeFirst) showNativePlayLoading(it, playTicket, !!opts.hot);
   else showPlayLoading(it, !!opts.hot);
@@ -12099,12 +12101,12 @@ function tryNativeVideoPlayer(kind, atSeconds, opts = {}) {
     return false;
   }
 }
-function tryNativePlaybackLadder(atSeconds, preferredKind) {
+function tryNativePlaybackLadder(atSeconds, preferredKind, opts = {}) {
   const p = S.playing;
   if (!p || !nativeVideoRequired(p.item)) return false;
   p.nativeTried = p.nativeTried || {};
   for (const kind of nativePlaybackOrder(p, preferredKind)) {
-    if (!p.nativeTried[kind] && tryNativeVideoPlayer(kind, atSeconds)) return true;
+    if (!p.nativeTried[kind] && tryNativeVideoPlayer(kind, atSeconds, opts)) return true;
   }
   return false;
 }
@@ -12526,19 +12528,16 @@ function recoverSamePlaybackSource(reason = '') {
   const at = currentTime();
   const key = `${p.mountId || p.sessionId || p.streamUrl || ''}:${kind}`;
   const now = appMs();
-  if (p._sameSourceRecoveryKey === key && now - (p._sameSourceRecoveryAt || 0) < 120000) {
-    // Same-source resume already failed once. On a CONSERVATIVE / low-power device a persistent
-    // failure mid-playback is more likely an UNDECODABLE source (a 4K / high-bitrate / HEVC-Main10
-    // stream the budget decoder choked on after starting, or thermal throttle) than a swept mount —
-    // so escalate the ladder (direct → remux → transcode) and land on the budget-friendly transcode
-    // instead of looping the same unplayable kind forever. High-end devices and genuine mount-loss
-    // are untouched: they fall straight through to the re-mount path below.
-    const decoderFailure = /decode|decoder|codec|renderer|format/i.test(String(reason || ''));
-    if (decoderFailure && p.usingNative && (clientCaps() || {}).lowPower
-        && tryNextNativeKind(kind, at, reason || 'playback failed')) return true;
-    // A normal transport stall gets one timestamp-preserving retry above. If that same source stalls
-    // again, preserve the episode and timestamp but move to the next ranked release. Session expiry
-    // is handled separately by autoAdvance's 404 re-mount path below.
+  const decoderFailure = /decode|decoder|codec|renderer|format/i.test(String(reason || ''));
+  const sourceDead = /blocked|health|missing|no such article/i.test(String(reason || ''));
+  // Next-episode startup often wobbles once (new remux, new Exo). Remounting that
+  // replayed the opening. Stay put unless the source is actually dead.
+  if (!sourceDead && S._handoffQuietUntil && now < S._handoffQuietUntil) return false;
+  if (decoderFailure && p.usingNative && (clientCaps() || {}).lowPower
+      && tryNextNativeKind(kind, at, reason || 'playback failed')) return true;
+  // A wifi blip is not a new movie. Retry the SAME file quietly first. Only a dead source
+  // (or the same file dying twice) swaps to the warmed same-quality standby.
+  if (sourceDead || (p._sameSourceRecoveryKey === key && now - (p._sameSourceRecoveryAt || 0) < 120000)) {
     if (!p._sourceAdvancePending) {
       autoAdvance({ allowMidstreamAdvance: true, nativePreferred: !!p.usingNative, reason: reason || 'repeated playback stall' });
     }
@@ -12610,8 +12609,8 @@ function failover() {
   }
   if (!p.usingRemux && !p.usingTranscode && p.remuxUrl && !p.triedRemux) {
     p.triedRemux = true;
-    toast('Direct play not supported here — remuxing on the server…');
-    startSource('remux', currentTime());
+    if (!vodPlaybackStarted(p)) toast('Direct play not supported here — remuxing on the server…');
+    startSource('remux', currentTime(), vodPlaybackStarted(p) ? { quietSeek: true } : {});
   } else if (!p.usingTranscode && p.transcodeUrl && !p.triedTranscode) {
     p.triedTranscode = true;
     startSource('transcode', currentTime());
@@ -12656,14 +12655,17 @@ async function autoAdvance(opts = {}) {
     p.nativeStartKind = playbackStartKind(r); p.nativeTried = {};
     p._sameSourceRecoveryKey = null; p._sameSourceRecoveryAt = 0;
     p.tracks = null; p._tracksJob = null; p.subTrack = null; p.audioTrack = 0; p.forceAacRemux = false;
-    $('pSrc').textContent = r.candidate ? r.candidate.name : r.name;
+    if (!opts.allowMidstreamAdvance) {
+      $('pSrc').textContent = r.candidate ? r.candidate.name : r.name;
+    }
     updatePlayerMeta();
     let startKind = playbackStartKind(r);
     if (nativePreferred) {
       startKind = await prepareNativeStartKindForAudio(startKind);
       if (S.playing !== p || S.view !== 'player') return;
     }
-    if (nativePreferred && tryNativePlaybackLadder(at, startKind)) {
+    const quiet = !!opts.allowMidstreamAdvance;
+    if (nativePreferred && tryNativePlaybackLadder(at, startKind, quiet ? { quietSeek: true } : {})) {
       startNativePlayerHousekeeping(p.item);
       return;
     }
@@ -12674,7 +12676,7 @@ async function autoAdvance(opts = {}) {
     }
     revealWebPlayerShell(p.item);
     startWebPlayerHousekeeping(r, p.item);
-    startSource(startKind, at);
+    startSource(startKind, at, quiet ? { quietSeek: true } : {});
   } catch (e) {
     if (S.playing !== p || S.view !== 'player') return;
     if (opts.allowMidstreamAdvance && e && e.status === 404 && !p._reMounting) {

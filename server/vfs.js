@@ -283,10 +283,23 @@ class NzbFileStream {
     const skipDecoded = Math.max(0, Math.floor(Number(opts.skipDecoded) || 0));
     if (skipDecoded > 0) {
       const sl = this.sliceCache.get(i);
-      if (sl && sl.from <= skipDecoded) return Promise.resolve(sl.buf.subarray(skipDecoded - sl.from));
+      if (sl && sl.from <= skipDecoded) {
+        const sliced = sl.buf.subarray(skipDecoded - sl.from);
+        if (sliced.length) return Promise.resolve(sliced);
+      }
     }
     const decodeAndCache = (raw, skip) => {
-      const dec = decode(raw, skip > 0 ? { skipDecoded: skip } : undefined);
+      let dec = decode(raw, skip > 0 ? { skipDecoded: skip } : undefined);
+      // A mid-segment skip past this article's real decoded size (short last/uneven
+      // yEnc part, or a partSize grid that drifted) used to return 0 bytes. Remux
+      // then threw "read out of range" and the player froze on Preparing.
+      if (skip > 0 && (!dec.data || dec.data.length === 0)) {
+        dec = decode(raw);
+        if (!dec.crcOk) throw new Error(`segment ${i} CRC mismatch`);
+        if (dec.size !== null) this.size = dec.size;
+        this._cachePut(i, dec.data);
+        return dec.data;
+      }
       if (!dec.crcOk) throw new Error(`segment ${i} CRC mismatch`);
       if (dec.size !== null) this.size = dec.size;
       // A malformed =ypart (begin without a valid end) would yield NaN here and poison ALL
@@ -414,8 +427,33 @@ class NzbFileStream {
       if (activePriority === 'startup' || activePriority === 'seek') activePriority = 'playback';
       if (aborted()) return;
       const startInBuf = this.cache.has(segIdx) ? from : 0;
-      const want = Math.min(data.length - startInBuf, end - offset);
-      if (want <= 0) throw new Error(`read out of range: seg ${segIdx} off ${offset}`);
+      let want = Math.min(data.length - startInBuf, end - offset);
+      if (want <= 0 && from > 0 && !this.cache.has(segIdx)) {
+        data = await this._fetchSegment(segIdx, activePriority, { signal, skipDecoded: 0 });
+        const retryFrom = this.cache.has(segIdx) ? from : 0;
+        want = Math.min(data.length - retryFrom, end - offset);
+        if (want > 0) {
+          this.playbackStats.segmentsServed++;
+          this.playbackStats.readBytes += want;
+          yield data.subarray(retryFrom, retryFrom + want);
+          offset += want;
+          continue;
+        }
+      }
+      if (want <= 0) {
+        // Short/uneven yEnc part: keep the file clock aligned so remux does not
+        // die with "read out of range" (The Paper froze at ~19s / 8MB).
+        const slotEnd = Math.min(end, this.size, (segIdx + 1) * this.partSize);
+        const hole = slotEnd - offset;
+        if (hole > 0) {
+          this.playbackStats.segmentsServed++;
+          this.playbackStats.readBytes += hole;
+          yield Buffer.alloc(hole);
+          offset += hole;
+          continue;
+        }
+        throw new Error(`read out of range: seg ${segIdx} off ${offset}`);
+      }
       this.playbackStats.segmentsServed++;
       this.playbackStats.readBytes += want;
       yield data.subarray(startInBuf, startInBuf + want);

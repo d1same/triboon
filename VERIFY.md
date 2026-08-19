@@ -125,6 +125,29 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-19, v3.0.8 ship APK + Windows server + Windows client:
+
+- Version contract: `package.json` 3.0.8; Android `versionName` 3.0.8 /
+  `versionCode` 339; Windows client package/Tauri/Cargo 3.0.8.
+- Remux mid-file Range past a short yEnc hole now keeps streaming
+  (zero-fill the rest of that part). Play joining a prepared mount
+  keeps the full ranked list. Next-episode prepare does not mount a
+  standby while the current episode is still playing. After a
+  direct episode handoff, same-file remount is quiet for 12s unless
+  the source is dead.
+- `npm.cmd test` 594/594. Isolated `/api/server` smoke reported 3.0.8.
+  `npm.cmd run verify:full -- -AndroidDevice emulator-5554
+  -AndroidHostServerPort 7777` passed whitespace, JS syntax, web parse,
+  focused P9/P14/P11, full Node suite, household VOD/CC (Mario 4K +
+  FROM 1080p), IPTV ABC+ESPN web+native, overlapping Play 29ms /
+  195ms wall, Android lint/native-unit/`assembleDebug`, and ExoPlayer
+  stress `bench/stress-results/android-tv-stress-20260819-163322.json`
+  (`ok: true`, zero failures/warnings).
+- Household Mario 4K: ready 4530ms SLOW, first-byte 1165ms, seek 350ms,
+  resume 70ms, remux, cc=200. FROM S01E01: 1567/361/411/32ms, remux,
+  cc=200.
+- Windows native GPU/HDR not run.
+
 2026-08-19, v3.0.7 ship APK + Windows server + Windows client:
 
 - Version contract: `package.json` 3.0.7; Android `versionName` 3.0.7 /

@@ -384,7 +384,7 @@ $page = Invoke-CdpJson @"
           // and only the SECOND Back returns Home (line ~22043). This is the intentional
           // "Back always reaches the menu" section contract, not a flat single-Back-to-Home view.
           window.__tvBack();
-          await wait(300);
+          await wait(650);
           const first = snap();
           if (first.view !== v || !first.railOpen) failures.push(v + ' first Back did not open section rail');
           window.__tvBack();

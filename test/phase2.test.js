@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { parseRelease, scoreRelease, rankReleases } = require('../server/scoring');
-const { parseNewznabRss, dedupe, fanout, searchIndexer } = require('../server/newznab');
+const { parseNewznabRss, dedupe, fanout, searchIndexer, normTitle } = require('../server/newznab');
 const { Store, VerdictCache } = require('../server/store');
 const {
   Pipeline, GATE_MS, nzbVerdictKey, releaseFingerprint, summarizeAttempts, stubFeatureReason, mountHasActivePlayback,
@@ -340,7 +340,7 @@ test('pipeline: a wanted episode matches a season PACK or covering RANGE (season
   ]) assert.ok(!releaseMatches(bad, w), `rejects ${bad}`);
   // advance() (auto-advance on source rot) must re-thread the wanted episode, or a season pack advances to E01.
   const pipelineSrc = require('fs').readFileSync(require('path').join(__dirname, '..', 'server', 'pipeline.js'), 'utf8');
-  assert.match(pipelineSrc, /async advance\(sessionId[\s\S]+wantedEpisodeOf\(session\.query\)[\s\S]+_advance\(session, _we \? \{ \.\.\.rest, wantedEpisode: _we \} : rest,[\s\S]+\{ width: RECOVERY_RACE_WIDTH \}\)/,
+  assert.match(pipelineSrc, /async advance\(sessionId[\s\S]+wantedEpisodeOf\(session\.query\)[\s\S]+const nextOpts = _we \? \{ \.\.\.rest, wantedEpisode: _we \} : rest;[\s\S]+_advance\(session, nextOpts,[\s\S]+\{ width: RECOVERY_RACE_WIDTH \}\)/,
     'advance() keeps the requested pack episode while using the bounded source-recovery hedge');
 
   // Loose-file season-pack NZB: mount the WANTED episode file, not the largest. (E01 is bigger here.)
@@ -3473,7 +3473,7 @@ test('pipeline: recovery-advance demotes the abandoned movie source so the next 
   pool.close(); await mock.close(); ix.server.close(); store.close();
 });
 
-test('pipeline: an episode-scoped recovery-advance records NO release-wide verdict (pack protection)', async () => {
+test('pipeline: an episode-scoped recovery-advance demotes only that NZB (pack protection)', async () => {
   const payA = seededPayload(90 * 1024, 41);
   const payB = seededPayload(90 * 1024, 42);
   const rA = nzbFor(writeRar4Store([{ name: 'Show.S01E01.mkv', data: payA }], { base: 'pe1' }), 30000, 'pe1');
@@ -3499,8 +3499,103 @@ test('pipeline: an episode-scoped recovery-advance records NO release-wide verdi
   const abandonedKey = nzbVerdictKey(first.candidate.nzbUrl);
   await pipeline.advance(first.session.id);
   const v = verdicts.get(abandonedKey);
-  assert.notStrictEqual(v && v.verdict, 'playback-failed',
-    'an episode-scoped advance must not write a release-wide playback-failed verdict');
+  assert.ok(v && v.verdict === 'playback-failed',
+    'the exact abandoned episode NZB is demoted so the next warmup skips it');
+  const titleV = verdicts.get('t:' + normTitle(first.candidate.name));
+  assert.notStrictEqual(titleV && titleV.verdict, 'playback-failed',
+    'an episode-scoped advance must not write a title-wide playback-failed verdict');
+  const again = await pipeline.play({ q: 'Show 2024', season: 1, ep: 1 }, {});
+  assert.strictEqual(again.candidate.name, 'Show.2024.S01E01.1080p.WEB-DL.H.264-NTb',
+    'the next play of this episode skips the abandoned NZB');
+
+  pool.close(); await mock.close(); ix.server.close(); store.close();
+});
+
+test('pipeline: standby prefers the same resolution so a swap does not jump 4K to 720p', () => {
+  const pipeline = new Pipeline({
+    pool: () => null, verdicts: { get() { return null; }, set() {} }, mounts: new Map(),
+    indexers: () => [],
+  });
+  const list = [
+    { pickKey: 'a', score: 100, name: 'Show.2025.2160p.WEB-DL-FLUX', attributes: { resolutionRank: 4 } },
+    { pickKey: 'b', score: 90, name: 'Show.2025.720p.WEB-DL-NTb', attributes: { resolutionRank: 2 } },
+    { pickKey: 'c', score: 80, name: 'Show.2025.2160p.WEB-DL-NTb', attributes: { resolutionRank: 4 } },
+  ];
+  const next = pipeline._pickStandbyCandidate(list, 'a', list[0]);
+  assert.strictEqual(next.pickKey, 'c', 'backup stays 4K instead of the higher-ranked 720p');
+});
+
+test('pipeline: prepare warms a standby and advance commits it without a cold walk', async () => {
+  const pay1 = seededPayload(90 * 1024, 51);
+  const pay2 = seededPayload(90 * 1024, 52);
+  const r1 = nzbFor(writeRar4Store([{ name: 'A.mkv', data: pay1 }], { base: 'sb1' }), 30000, 'sb1');
+  const r2 = nzbFor(writeRar4Store([{ name: 'B.mkv', data: pay2 }], { base: 'sb2' }), 30000, 'sb2');
+  const articles = new Map([...r1.articles, ...r2.articles]);
+  const mock = createMockNntp({ articles });
+  const nntpPort = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 4);
+  const ix = makeMockIndexer([
+    { name: 'Movie.2024.1080p.WEB-DL.H.264-FLUX', size: 7e9, nzb: r1.nzb },
+    { name: 'Movie.2024.1080p.WEB-DL.H.264-NTb', size: 7e9, nzb: r2.nzb },
+  ]);
+  const ixPort = await ix.listen();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const verdicts = new VerdictCache(store);
+  const pipeline = new Pipeline({
+    pool: () => pool, verdicts, mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+
+  const prepared = await pipeline.prepare({ q: 'movie' }, {});
+  assert.ok(prepared.prepared && prepared.vf, 'prepare mounts the first healthy source');
+  let standby = null;
+  for (let i = 0; i < 40 && !standby; i++) {
+    standby = pipeline._findTitleStandby({ q: 'movie' }, {});
+    if (!standby) await new Promise((r) => setTimeout(r, 50));
+  }
+  assert.ok(standby && standby.vf && standby.vf.id !== prepared.vf.id,
+    'Details warmup also mounts the next ranked file');
+  const first = await pipeline.play({ q: 'movie' }, {});
+  assert.ok(first.session.candidates.length >= 2,
+    'a warmed Play keeps the rest of the ranked list for instant failover');
+  const next = await pipeline.advance(first.session.id);
+  assert.strictEqual(next.vf.id, standby.vf.id,
+    'advance uses the already-warm standby instead of finding a source from scratch');
+  assert.strictEqual(next.candidate.name, 'Movie.2024.1080p.WEB-DL.H.264-NTb');
+
+  pool.close(); await mock.close(); ix.server.close(); store.close();
+});
+
+test('pipeline: next-episode prepare does not mount a standby while another episode is playing', async () => {
+  const pay1 = seededPayload(90 * 1024, 61);
+  const pay2 = seededPayload(90 * 1024, 62);
+  const r1 = nzbFor(writeRar4Store([{ name: 'A.mkv', data: pay1 }], { base: 'nx1' }), 30000, 'nx1');
+  const r2 = nzbFor(writeRar4Store([{ name: 'B.mkv', data: pay2 }], { base: 'nx2' }), 30000, 'nx2');
+  const articles = new Map([...r1.articles, ...r2.articles]);
+  const mock = createMockNntp({ articles });
+  const nntpPort = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 4);
+  const ix = makeMockIndexer([
+    { name: 'Show.2024.S01E02.1080p.WEB-DL.H.264-FLUX', size: 3e9, nzb: r1.nzb },
+    { name: 'Show.2024.S01E02.1080p.WEB-DL.H.264-NTb', size: 3e9, nzb: r2.nzb },
+  ]);
+  const ixPort = await ix.listen();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const pipeline = new Pipeline({
+    pool: () => pool, verdicts: new VerdictCache(store), mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+  pipeline.mounts.set('playing-e1', {
+    id: 'playing-e1', streamable: true, _activeStreamReads: 1, _playbackTouched: Date.now(),
+  });
+
+  const prepared = await pipeline.prepare({ q: 'Show', season: 1, ep: 2 }, {});
+  assert.ok(prepared.prepared && prepared.vf, 'the next episode still gets one warmed mount');
+  await new Promise((r) => setTimeout(r, 250));
+  assert.equal(pipeline._findTitleStandby({ q: 'Show', season: 1, ep: 2 }, {}), null,
+    'a second source must wait until the current episode is done');
 
   pool.close(); await mock.close(); ix.server.close(); store.close();
 });

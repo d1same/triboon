@@ -3381,7 +3381,7 @@ test('streaming: HTTP range reads use startup/seek lanes and keep completed rang
   const pipelineCode2 = fs.readFileSync(path.join(__dirname, '..', 'server', 'pipeline.js'), 'utf8');
   assert.match(pipelineCode2, /const TOTAL_MEM_MB = Math\.floor\(os\.totalmem\(\) \/ \(1024 \* 1024\)\);/,
     'os.totalmem() is read once at load, not per read-ahead window sizing');
-  assert.match(pipelineCode2, /_getFreshSearchHit\(key\) \{[\s\S]+this\.searchCache\.delete\(key\); this\.searchCache\.set\(key, hit\);/,
+  assert.match(pipelineCode2, /_getFreshSearchHit\(key, maxAgeMs = 60000\) \{[\s\S]+this\.searchCache\.delete\(key\); this\.searchCache\.set\(key, hit\);/,
     'the search cache is LRU (touch-on-hit) so a hot replayed title survives unrelated browses');
   assert.match(serverCode, /if \(readSignal\.aborted\) \{[\s\S]+ctx\.res\.destroy\(\);[\s\S]+return;[\s\S]+\}/,
     'aborted VOD reads should not end a short body under the original content-length');

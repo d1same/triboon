@@ -1389,6 +1389,8 @@ test('episode handoff stays player-to-player before local lookup and EOF never r
     ['native', 'tmdb:tv:9:s1e2', 5, true],
   ], 'a direct native handoff synchronously replaces the old surface with the next loading surface');
   assert.deepStrictEqual(transition, { nativeFirst: true, playTicket: 5 }, 'the replacement owns a fresh play token');
+  assert.ok(state._handoffQuietUntil > Date.now(),
+    'next-episode handoff suppresses same-file remount so the opening cannot play twice');
 
   const playSource = ui.slice(playStart, playEnd);
   assert.ok(playSource.indexOf('beginPlaybackTransition(it, {') < playSource.indexOf('await (playbackIsWarmed(it, qRank)'),
@@ -3451,14 +3453,18 @@ test('Android native player: direct source and native chrome stay out of the web
   const sourceRecoveryBlock = ui.slice(ui.indexOf('function recoverSamePlaybackSource'), ui.indexOf('function resetVlcPanel'));
   assert.doesNotMatch(sourceRecoveryBlock, /playNextEpisode\(/,
     'source recovery must never enter the next-episode path');
+  assert.match(sourceRecoveryBlock, /S\._handoffQuietUntil/,
+    'next-episode startup must not remount the opening after a one-time remux wobble');
   assert.match(ui, /async function reMountAndResume\(reason = '', attempt = 0\) \{[\s\S]+api\('\/api\/play', \{ method: 'POST', body: playbackRequestBody\(p\.item, p\.name \? \{ name: p\.name \} : null\) \}\)[\s\S]+if \(S\.playing !== p \|\| S\.view !== 'player'\) \{ p\._reMounting = false; return; \}[\s\S]+p\.mountId = r\.id;[\s\S]+startSource\(kind, at, \{ quietSeek: true \}\)[\s\S]+setTimeout\(\(\) => \{ if \(S\.playing === p && S\.view === 'player'\) reMountAndResume\(reason, attempt \+ 1\); \}, 1500 \+ attempt \* 1500\)/,
     'reMountAndResume should re-play the same title, reject stale ownership, resume at position, and retry with backoff then fall back');
   assert.match(ui, /async function autoAdvance\(opts = \{\}\) \{[\s\S]+if \(vodPlaybackStarted\(p\) && !opts\.allowMidstreamAdvance\) \{[\s\S]+recoverSamePlaybackSource\('source failed'\);[\s\S]+return;[\s\S]+p\._sourceAdvancePending = true;[\s\S]+const reportedAt = Number\(currentTime\(\)\);[\s\S]+Number\(p\.item && p\.item\.resume\)[\s\S]+markPlaybackSourceSwap\(p\);[\s\S]+p\.nativePos = at;[\s\S]+p\.started = false; p\.startedAt = 0;/,
     'source advance should coalesce callbacks, preserve an early Continue Watching timestamp, and give the replacement a fresh startup boundary');
+  assert.match(ui, /const quiet = !!opts\.allowMidstreamAdvance;[\s\S]+tryNativePlaybackLadder\(at, startKind, quiet \? \{ quietSeek: true \} : \{\}\)[\s\S]+startSource\(startKind, at, quiet \? \{ quietSeek: true \} : \{\}\)/,
+    'mid-play source swap must stay quiet so the user never sees Preparing or a loader');
   assert.match(ui, /catch \(e\) \{[\s\S]+opts\.allowMidstreamAdvance && e && e\.status === 404[\s\S]+reMountAndResume\(opts\.reason/,
     'a server restart that lost the play session should re-mount the title instead of being mistaken for source exhaustion');
   assert.match(ui, /window\.__tvNativeVideoReady = \(pos, dur, token\) => \{[\s\S]+p\.nativeReady = true;[\s\S]+window\.__tvNativeVideoPlaying = \(pos, dur, token\) => \{[\s\S]+markVodPlaybackStarted\(p\);[\s\S]+window\.__tvNativeVideoError = \(msg, pos, dur, token\) => \{[\s\S]+if \(vodPlaybackStarted\(p\)\) \{[\s\S]+recoverSamePlaybackSource\(msg \|\| 'native playback interrupted'\);/,
-    'native playback should become established on PLAYING, not READY, while real mid-stream errors keep same-source-first recovery');
+    'native playback should become established on PLAYING, not READY, while real mid-stream errors swap to the next warmed source');
   assert.match(android, /if \(state == Player\.STATE_READY\) \{[\s\S]+if \("video"\.equals\(nativeMode\)\) \{[\s\S]+applyNativeStartSeekIfReady\(\);[\s\S]+window\.__tvNativeVideoReady && __tvNativeVideoReady/,
     'Android ExoPlayer STATE_READY should apply the resume seek and report readiness without claiming that frames advanced');
   assert.doesNotMatch(android, /if \(state == Player\.STATE_READY\) \{[\s\S]{0,260}nativeVideoStarted = true;/,
@@ -3529,7 +3535,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'native auto-advance should reset native fallback order for each new source');
   assert.match(ui, /autoAdvance\(\{ nativePreferred: true \}\)/,
     'native player source failures should advance to the next release instead of closing playback');
-  assert.match(ui, /if \(nativePreferred\) \{[\s\S]+startKind = await prepareNativeStartKindForAudio\(startKind\);[\s\S]+if \(S\.playing !== p \|\| S\.view !== 'player'\) return;[\s\S]+if \(nativePreferred && tryNativePlaybackLadder\(at, startKind\)\) \{[\s\S]+startNativePlayerHousekeeping\(p\.item\);/,
+  assert.match(ui, /if \(nativePreferred\) \{[\s\S]+startKind = await prepareNativeStartKindForAudio\(startKind\);[\s\S]+if \(S\.playing !== p \|\| S\.view !== 'player'\) return;[\s\S]+if \(nativePreferred && tryNativePlaybackLadder\(at, startKind, quiet \? \{ quietSeek: true \} : \{\}\)\) \{[\s\S]+startNativePlayerHousekeeping\(p\.item\);/,
     'Android auto-advance should keep playback ownership and hand the next release back to ExoPlayer when native playback is active');
   assert.match(ui, /if \(nativePreferred\) \{\s*toast\('Native player could not start the next release'\);\s*closePlayer\(\);\s*return;\s*\}\s*revealWebPlayerShell\(p\.item\);/,
     'Android auto-advance must stop instead of falling back to the web player when ExoPlayer cannot start');

@@ -709,6 +709,7 @@ class Pipeline {
     this.prepareInflight = new Map(); // mountIdentity -> shared cancellable mount record
     this.titlePrepareInflight = new Map(); // prepareJobKey -> shared title-level prepare job
     this.titlePreparedReady = new Map(); // prepareJobKey -> { vf, candidate, at } after prepare wins
+    this.titlePreparedStandby = new Map(); // next-ranked backup mount, warmed during Details
     this.mountByUrl = new Map();  // mountIdentity -> mount id (same selected payload reuses instantly)
     this._startupGate = new StartupGate(STARTUP_SLOTS);
     this._inflightAdvances = 0;
@@ -868,6 +869,103 @@ class Pipeline {
     }
   }
 
+  _standbyKeys(params, policy = {}) {
+    const keys = [this._prepareJobKey(params, policy)];
+    if (params.imdbid || params.tvdbid) keys.push(this._prepareJobKey(params, policy, { ignoreCatalogIds: true }));
+    return keys;
+  }
+
+  _rememberTitleStandby(params, policy, vf, candidate) {
+    if (!vf || !candidate) return;
+    const rec = { vf, candidate, at: Date.now() };
+    for (const key of this._standbyKeys(params, policy)) this.titlePreparedStandby.set(key, rec);
+  }
+
+  _findTitleStandby(params, policy = {}) {
+    const now = Date.now();
+    for (const key of this._standbyKeys(params, policy)) {
+      const rec = this.titlePreparedStandby.get(key);
+      if (!rec) continue;
+      const live = rec.vf && rec.vf.id ? this.mounts.get(rec.vf.id) : null;
+      if (now - rec.at > TITLE_PREPARED_READY_MS || !live || !live.streamable) {
+        this.titlePreparedStandby.delete(key);
+        continue;
+      }
+      rec.vf = live;
+      return rec;
+    }
+    return null;
+  }
+
+  _clearTitleStandby(params, policy, pickKey) {
+    for (const key of this._standbyKeys(params, policy)) {
+      const rec = this.titlePreparedStandby.get(key);
+      if (rec && rec.candidate && rec.candidate.pickKey === pickKey) this.titlePreparedStandby.delete(key);
+    }
+  }
+
+  _hasActiveForeignPlayback(exceptVf = null) {
+    const now = Date.now();
+    const exceptId = exceptVf && exceptVf.id;
+    for (const vf of this.mounts.values()) {
+      if (!vf || (exceptId && vf.id === exceptId)) continue;
+      if (mountHasActivePlayback(vf, now)) return true;
+    }
+    return false;
+  }
+
+  _standbyResolutionRank(candidate) {
+    if (!candidate) return null;
+    const rank = candidate.attributes && Number.isInteger(candidate.attributes.resolutionRank)
+      ? candidate.attributes.resolutionRank
+      : parseRelease(candidate.name).resolutionRank;
+    return Number.isInteger(rank) ? rank : null;
+  }
+
+  _pickStandbyCandidate(playable, primaryPickKey, primary = null) {
+    const rest = (playable || []).filter((c) => c && c.pickKey && c.pickKey !== primaryPickKey && c.score > -5000);
+    if (!rest.length) return null;
+    const want = this._standbyResolutionRank(primary);
+    if (want != null) {
+      const same = rest.find((c) => this._standbyResolutionRank(c) === want);
+      if (same) return same;
+    }
+    return rest[0];
+  }
+
+  _armStandby(params, policy = {}, mountOpts = {}, playable = [], primaryPickKey, resumeFrac = 0, primary = null) {
+    const next = this._pickStandbyCandidate(playable, primaryPickKey, primary);
+    if (!next) return;
+    const existing = this._findTitleStandby(params, policy);
+    if (existing && existing.candidate && existing.candidate.pickKey === next.pickKey) {
+      if (resumeFrac) this._startPlaybackWarmup(existing.vf, existing.vf._playWin, resumeFrac);
+      return;
+    }
+    this._tryCandidate(next, { ...mountOpts, startupPriority: 'prepare' }).then((res) => {
+      if (!res || !res.vf || res.fail) return;
+      const primary = this._findTitlePreparedReady(params, policy);
+      if (primary && primary.candidate && primary.candidate.pickKey === next.pickKey) return;
+      res.vf._touched = Date.now();
+      if (!mountHasActivePlayback(res.vf)) res.vf._preparedOnly = true;
+      if (next.name) res.vf._releaseName = next.name;
+      this.mounts.set(res.vf.id, res.vf);
+      this.mountByUrl.set(res.vf._mountIdentity || mountIdentity(next, mountOpts), res.vf.id);
+      this._rememberTitleStandby(params, policy, res.vf, next);
+      this.rebalancePlaybackWindows();
+      this._startPlaybackWarmup(res.vf, res.vf._playWin, resumeFrac);
+    }).catch(() => {});
+  }
+
+  _attachStandby(session, params, policy, mountOpts = {}) {
+    if (!session || !session.candidates || session.candidates.length < 2) return;
+    const primary = session.activeCandidate && session.activeCandidate.pickKey;
+    const ready = this._findTitleStandby(params, policy);
+    if (ready && ready.candidate && ready.candidate.pickKey !== primary) {
+      session.standby = ready;
+    }
+    this._armStandby(params, policy, mountOpts, session.candidates, primary, session.query && session.query.resumeFrac, session.activeCandidate);
+  }
+
   _findTitlePreparedReady(params, policy = {}) {
     const keys = [this._prepareJobKey(params, policy)];
     if (params.imdbid || params.tvdbid) {
@@ -888,9 +986,10 @@ class Pipeline {
     return null;
   }
 
-  _getFreshSearchHit(key) {
+  _getFreshSearchHit(key, maxAgeMs = 60000) {
     const hit = this.searchCache.get(key);
-    if (!(hit && Date.now() - hit.at <= 60000)) return null;
+    if (!hit) return null;
+    if (Number.isFinite(maxAgeMs) && Date.now() - hit.at > maxAgeMs) return null;
     // LRU touch: re-insert so the eviction (delete oldest key) drops the genuinely least-recently-USED
     // entry, not the oldest-inserted. A hot replayed title survives a burst of unrelated browses.
     this.searchCache.delete(key); this.searchCache.set(key, hit);
@@ -1291,7 +1390,7 @@ class Pipeline {
   }
 
   // Search + rank only (powers the Sources drawer). Applies cached verdict adjustments.
-  async search(params, policy = {}, { timeoutMs = 2000 } = {}) {
+  async search(params, policy = {}, { timeoutMs = 2000, allowStale = false } = {}) {
     const ixs = this.indexers();
     if (!ixs.length) throw new Error('no indexers configured');
     // Scene names never carry punctuation — "Tom Clancy's Jack Ryan: Ghost War" must reach
@@ -1330,9 +1429,10 @@ class Pipeline {
     }
     const key = this._searchCacheKey(params);
     const titleKey = this._searchCacheKey(params, { ignoreCatalogIds: true });
-    let hit = this._getFreshSearchHit(key);
+    const maxAgeMs = allowStale ? Number.POSITIVE_INFINITY : 60000;
+    let hit = this._getFreshSearchHit(key, maxAgeMs);
     if (!hit && (params.imdbid || params.tvdbid)) {
-      hit = this._getFreshSearchHit(titleKey);
+      hit = this._getFreshSearchHit(titleKey, maxAgeMs);
       if (hit) this._rememberSearchHit(key, hit);
     }
     if (hit) {
@@ -1495,6 +1595,16 @@ class Pipeline {
     this.verdicts.set('t:' + normTitle(candidate.name), verdict, detail);
     const fp = DEAD_RELEASE_VERDICTS.has(verdict) && releaseFingerprint(candidate);
     if (fp) this.verdicts.set(fp, verdict, detail);
+  }
+
+  // Mid-play abandon: always demote THIS nzb so the next warmup skips it. Title/fingerprint
+  // stay movie-only so one episode stall cannot blacklist a season pack's siblings.
+  _recordPlaybackFailed(candidate, { episodeScoped = false } = {}) {
+    if (!candidate) return;
+    this.verdicts.set(nzbVerdictKey(candidate.nzbUrl), 'playback-failed', { stage: 'recovery-advance' });
+    if (!episodeScoped) {
+      this.verdicts.set('t:' + normTitle(candidate.name), 'playback-failed', { stage: 'recovery-advance' });
+    }
   }
 
   // Try one candidate: fetch NZB → mount → gate. Returns { vf } or { fail: reason }.
@@ -1863,9 +1973,20 @@ class Pipeline {
       && this._findTitlePreparedReady(params, policy);
     if (ready) {
       this.metrics.titlePrepareJoins++;
-      const session = new PlaySession(params, [ready.candidate]);
+      const { candidates } = await this.search(params, policy, { allowStale: true });
+      let playable = this._playableCandidates(candidates, params);
+      if (!playable.some((c) => c.pickKey === ready.candidate.pickKey)) {
+        playable = [ready.candidate, ...playable];
+      }
+      if (!playable.length) playable = [ready.candidate];
+      const session = new PlaySession(params, playable);
+      session.policy = policy;
+      const readyIdx = playable.findIndex((c) => c.pickKey === ready.candidate.pickKey);
+      session.cursor = readyIdx >= 0 ? readyIdx + 1 : 1;
       this.sessions.set(session.id, session);
-      return this._commitMount(session, ready.candidate, ready.vf, [], mountOpts);
+      const committed = this._commitMount(session, ready.candidate, ready.vf, [], mountOpts);
+      this._attachStandby(session, params, policy, mountOpts);
+      return committed;
     }
     const { candidates } = await this.search(params, policy);
     let playable = this._playableCandidates(candidates, params);
@@ -1893,6 +2014,7 @@ class Pipeline {
     }
     if (!playable.length) throw new Error('no playable releases found');
     const session = new PlaySession(params, playable);
+    session.policy = policy;
     this.sessions.set(session.id, session);
     // Cold start races the top candidates; a single explicit Sources pick stays a direct mount.
     // A pinned resume keeps the race: the pin leads the ranked list, but a dead pin must not turn
@@ -2014,6 +2136,11 @@ class Pipeline {
           this._rememberTitlePrepared(params, policy, res.vf, candidate);
           this.rebalancePlaybackWindows();
           this._startPlaybackWarmup(res.vf, res.vf._playWin, params.resumeFrac);
+          // Next-episode prepare runs while the current file is still playing. A second
+          // standby mount here steals NNTP slots from that last scene and can remount it.
+          if (!this._hasActiveForeignPlayback(res.vf)) {
+            this._armStandby(params, policy, mountOpts, list, candidate.pickKey, params.resumeFrac, candidate);
+          }
           return { vf: res.vf, candidate };
         }
         attempts.push({ name: candidate.name, fail: res.fail || 'prepare failed' });
@@ -2047,6 +2174,8 @@ class Pipeline {
     this._startPlaybackWarmup(vf, vf._playWin, session.query && session.query.resumeFrac);
     session.history.push({ name: candidate.name, outcome: 'playing' });
     session.activeCandidate = candidate; // recovery-advance demotes exactly this source
+    session.policy = session.policy || {};
+    this._attachStandby(session, session.query || {}, session.policy, mountOpts);
     return { session, vf, candidate, attempts };
   }
 
@@ -2255,12 +2384,19 @@ class Pipeline {
     // stall can also be the viewer's line, not the post. Episode-scoped sessions skip this: a
     // release-wide verdict from one episode's stall must not blacklist a season pack's healthy
     // siblings (the existing post-mount judgment contract).
-    if (session.activeCandidate && !_we) {
-      this._recordVerdict(session.activeCandidate, 'playback-failed', { stage: 'recovery-advance' });
+    if (session.activeCandidate) {
+      this._recordPlaybackFailed(session.activeCandidate, { episodeScoped: !!_we });
+      this._clearTitleStandby(session.query || {}, session.policy || {}, session.activeCandidate.pickKey);
       session.activeCandidate = null;
     }
-    return this._advance(session, _we ? { ...rest, wantedEpisode: _we } : rest,
-      { width: RECOVERY_RACE_WIDTH });
+    const nextOpts = _we ? { ...rest, wantedEpisode: _we } : rest;
+    const standby = session.standby && session.standby.vf && this.mounts.get(session.standby.vf.id);
+    if (standby && standby.streamable && session.standby.candidate) {
+      const committed = this._commitMount(session, session.standby.candidate, standby, [], nextOpts);
+      session.standby = null;
+      return committed;
+    }
+    return this._advance(session, nextOpts, { width: RECOVERY_RACE_WIDTH });
   }
 }
 
