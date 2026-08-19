@@ -110,7 +110,9 @@ function parseNewznabRss(xml, indexerName) {
     url = decodeEntities(url);
     items.push({
       name: title, sizeBytes: size, nzbUrl: url, indexer: indexerName,
-      pubDate, imdb: attr(b, 'imdbid') || attr(b, 'imdb'), tvdbid: attr(b, 'tvdbid'),
+      pubDate, poster: attr(b, 'poster') || '',
+      usenetDate: attr(b, 'usenetdate') || attr(b, 'usenetDate') || '',
+      imdb: attr(b, 'imdbid') || attr(b, 'imdb'), tvdbid: attr(b, 'tvdbid'),
     });
   }
   return items;
@@ -125,7 +127,9 @@ async function searchIndexer(indexer, params, { timeoutMs = 2000 } = {}) {
   u.searchParams.set('t', tvSearch ? 'tvsearch' : params.imdbid ? 'movie' : 'search');
   if (params.q) u.searchParams.set('q', params.q);
   if (params.tvdbid) u.searchParams.set('tvdbid', params.tvdbid);
-  if (params.imdbid && !tvSearch) u.searchParams.set('imdbid', String(params.imdbid).replace(/^tt/, ''));
+  // IMDb is a hint on both movie and tvsearch. Never let it flip an episode to t=movie —
+  // that was grabbing the 2024 remake (or a same-name film) instead of the catalog show.
+  if (params.imdbid) u.searchParams.set('imdbid', String(params.imdbid).replace(/^tt/, ''));
   if (params.season != null) u.searchParams.set('season', params.season);
   if (params.ep != null) u.searchParams.set('ep', params.ep);
   if (params.cat) u.searchParams.set('cat', params.cat);

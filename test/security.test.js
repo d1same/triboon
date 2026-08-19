@@ -3391,7 +3391,7 @@ test('streaming: HTTP range reads use startup/seek lanes and keep completed rang
     'mount should use the startup lane and propagate cancellation so play start cannot strand BODY work');
   assert.match(vfsCode, /async readAt\(start, len, opts = \{\}\)[\s\S]+const priority = opts\.priority \|\| 'startup';[\s\S]+this\.mount\(priority, \{ signal \}\);[\s\S]+this\._fetchSegment\(first \+ k, priority, \{ signal \}\)/,
     'header/random access reads should stay on startup and propagate mount cancellation');
-  assert.match(vfsCode, /async \*read\(start, end, opts = \{\}\) \{[\s\S]+const priority = opts\.priority \|\| 'playback';[\s\S]+let activePriority = priority;[\s\S]+priority !== 'background' && priority !== 'health' && readAheadEpoch === this\.readAheadEpoch[\s\S]+this\._fetchSegment\(segIdx, activePriority, \{ signal \}\)[\s\S]+activePriority = 'playback'/,
+  assert.match(vfsCode, /async \*read\(start, end, opts = \{\}\) \{[\s\S]+const priority = opts\.priority \|\| 'playback';[\s\S]+let activePriority = priority;[\s\S]+priority !== 'background' && priority !== 'health' && readAheadEpoch === this\.readAheadEpoch[\s\S]+this\._fetchSegment\(segIdx, activePriority, \{[\s\S]*signal[\s\S]*\}\)[\s\S]+activePriority = 'playback'/,
     'virtual file reads should pass caller priority into the first real article fetch, return to playback, and keep background readers from scheduling read-ahead');
 });
 

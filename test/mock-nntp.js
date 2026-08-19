@@ -16,7 +16,7 @@ function createMockNntp({ articles, requireAuth = false, latencyMs = 0 } = {}) {
   const sockets = new Set();
   // stallNext: swallow N STAT/BODY commands (no response — wedged socket).
   // trickle: send the NEXT BODY in `pieces` chunks `gapMs` apart — a slow-but-ALIVE transfer.
-  const state = { stallNext: 0, connCount: 0, trickle: null };
+  const state = { stallNext: 0, connCount: 0, trickle: null, bodyCounts: new Map() };
   const server = net.createServer((sock) => {
     state.connCount++;
     sockets.add(sock); sock.on('close', () => sockets.delete(sock));
@@ -41,13 +41,20 @@ function createMockNntp({ articles, requireAuth = false, latencyMs = 0 } = {}) {
           else { authed = true; respond('281 auth accepted\r\n'); }
         } else if (C === 'QUIT') { respond('205 bye\r\n'); sock.end(); }
         else if (!authed) respond('480 auth required\r\n');
-        else if ((C === 'STAT' || C === 'BODY') && state.stallNext > 0) { state.stallNext--; /* never answer — simulates a NAT-dropped socket */ }
+        else if ((C === 'STAT' || C === 'BODY') && state.stallNext > 0) {
+          if (C === 'BODY') {
+            const id = rest.join(' ').replace(/[<>]/g, '');
+            state.bodyCounts.set(id, (state.bodyCounts.get(id) || 0) + 1);
+          }
+          state.stallNext--; /* never answer — simulates a NAT-dropped socket */
+        }
         else if (C === 'STAT') {
           const id = rest.join(' ').replace(/[<>]/g, '');
           if (articles.has(id) && !missing.has(id)) respond(`223 0 <${id}>\r\n`);
           else respond('430 no such article\r\n');
         } else if (C === 'BODY') {
           const id = rest.join(' ').replace(/[<>]/g, '');
+          state.bodyCounts.set(id, (state.bodyCounts.get(id) || 0) + 1);
           if (articles.has(id) && !missing.has(id)) {
             const body = dotStuff(articles.get(id));
             const full = Buffer.concat([Buffer.from(`222 0 <${id}>\r\n`), body, Buffer.from('.\r\n')]);
@@ -75,6 +82,7 @@ function createMockNntp({ articles, requireAuth = false, latencyMs = 0 } = {}) {
   return {
     server,
     markMissing: (id) => missing.add(id),
+    bodyCount: (id) => state.bodyCounts.get(String(id).replace(/[<>]/g, '')) || 0,
     stallNext: (n) => { state.stallNext = n; },          // next n STAT/BODY commands get NO response
     trickleNext: (pieces, gapMs) => { state.trickle = { pieces, gapMs }; }, // next BODY dribbles in slowly-but-alive
     connCount: () => state.connCount,                    // total connections ever accepted

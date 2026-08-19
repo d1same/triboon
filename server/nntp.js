@@ -8,7 +8,9 @@ const tls = require('tls');
 // kill) makes a BODY wait forever, the mount's Promise.all never settles, and /api/play
 // hangs the player on "Checking health & buffering…" indefinitely.
 const CONNECT_TIMEOUT_MS = 8000;   // TCP+TLS+greeting+AUTH must complete within this
-const COMMAND_TIMEOUT_MS = 10000;  // healthy responses are ~60-250ms (bench/RESULTS.md)
+const COMMAND_TIMEOUT_MS = 8000;   // healthy responses are ~60-250ms (bench/RESULTS.md)
+const MISS_CACHE_TTL_MS = 5 * 60 * 1000; // remember a definitive 430/451 per provider; timeouts never land here
+const MISS_CACHE_MAX = 4000;
 const IDLE_RECYCLE_MS = 30000;     // idle sockets are presumed NAT-dropped — reconnect (~150ms)
 // Hedged multi-provider failover (see docs-streaming-performance.md): if an active-player BODY
 // hasn't answered within this window (queued behind other work, or a provider went slow AFTER the
@@ -38,6 +40,46 @@ function addAbortListener(signal, fn) {
   if (!signal || typeof signal.addEventListener !== 'function') return () => {};
   signal.addEventListener('abort', fn, { once: true });
   return () => signal.removeEventListener('abort', fn);
+}
+
+function isDefinitiveMiss(e) {
+  const code = String(e && e.code || '');
+  return code === '430' || code === '451';
+}
+
+function stallError(cmdName) {
+  const e = new Error(`NNTP stall timeout: ${cmdName}`);
+  e.code = 'NNTP_STALL';
+  return e;
+}
+
+// RAM-only: skip a provider that already said "no such article" for this message-id.
+// Timeouts, resets, and CRC errors must never be stored — those can heal on the next socket.
+class ArticleMissCache {
+  constructor({ ttlMs = MISS_CACHE_TTL_MS, max = MISS_CACHE_MAX } = {}) {
+    this.ttlMs = ttlMs;
+    this.max = max;
+    this.map = new Map();
+  }
+  _key(provider, msgId) {
+    const host = String(provider && provider.opts && provider.opts.host || '');
+    const port = provider && provider.opts && provider.opts.port != null ? provider.opts.port : '';
+    return `${host}:${port}|${String(msgId || '').replace(/[<>]/g, '')}`;
+  }
+  has(provider, msgId) {
+    const key = this._key(provider, msgId);
+    const exp = this.map.get(key);
+    if (exp == null) return false;
+    if (Date.now() >= exp) { this.map.delete(key); return false; }
+    return true;
+  }
+  mark(provider, msgId) {
+    if (this.map.size >= this.max) {
+      const oldest = this.map.keys().next().value;
+      if (oldest !== undefined) this.map.delete(oldest);
+    }
+    this.map.set(this._key(provider, msgId), Date.now() + this.ttlMs);
+  }
 }
 
 class NntpConnection {
@@ -179,7 +221,7 @@ class NntpConnection {
     if (!w) return;
     clearTimeout(w.timer);
     w.timer = setTimeout(
-      () => this._fail(new Error(`NNTP stall timeout: ${w.cmdName}`)),
+      () => this._fail(stallError(w.cmdName)),
       this.opts.commandTimeoutMs || COMMAND_TIMEOUT_MS
     );
   }
@@ -450,8 +492,10 @@ class ProviderPool {
         // A connection-level failure (timeout/closed/reset) gets ONE retry on a fresh
         // connection so a single dead socket can't sink a whole mount.
         if (!isAbortError(e) && !task.retried && !/^\d{3}$/.test(String(e && e.code || ''))) {
-          task.retried = true;
-          this.queue.push(task);
+          // One dead socket must not sink a solo-provider mount. With a second provider ready,
+          // leave immediately so the stall window is paid once, on the next host — not twice here.
+          if (e && e.code === 'NNTP_STALL' && this.preferPeerFailover) task.reject(e);
+          else { task.retried = true; this.queue.push(task); }
         } else task.reject(e);
       })
       .finally(() => {
@@ -517,6 +561,9 @@ class NntpPool {
     this.providers = list.map((o) => new ProviderPool(o, o.connections || size));
     this.opts = list[0];
     this.size = size;
+    this.missCache = new ArticleMissCache();
+    const preferPeerFailover = this.providers.length > 1;
+    for (const p of this.providers) p.preferPeerFailover = preferPeerFailover;
   }
 
   // Warm every provider (combined mode uses them all) — primary a bit deeper than the rest.
@@ -537,6 +584,7 @@ class NntpPool {
   async stat(msgId, priority = 'health', opts = {}) {
     let reachedAny = false; // did at least one provider actually ANSWER (vs. all connections failing)?
     for (const p of this._ordered()) {
+      if (this.missCache.has(p, msgId)) continue;
       try {
         const ok = await p.stat(msgId, priority, opts);
         reachedAny = true;            // a real answer (present, or a 430 not-found) came back
@@ -565,7 +613,13 @@ class NntpPool {
     if (ordered.length === 1 || !HEDGE_PRIORITIES.has(priority)) {
       let lastErr;
       for (const p of ordered) {
-        try { return await p.body(msgId, priority, opts); } catch (e) { if (isAbortError(e)) throw e; lastErr = e; }
+        if (this.missCache.has(p, msgId)) continue;
+        try { return await p.body(msgId, priority, opts); }
+        catch (e) {
+          if (isAbortError(e)) throw e;
+          if (isDefinitiveMiss(e)) this.missCache.mark(p, msgId);
+          lastErr = e;
+        }
       }
       throw lastErr || new Error('no usenet provider could serve the article');
     }
@@ -601,7 +655,12 @@ class NntpPool {
         if (hedgeTimer && hedgeTimer.unref) hedgeTimer.unref();
       };
       const startNext = () => {
-        if (settled || idx >= ordered.length) return;
+        if (settled) return;
+        while (idx < ordered.length && this.missCache.has(ordered[idx], msgId)) idx++;
+        if (idx >= ordered.length) {
+          if (pending === 0) settle(() => reject(lastErr || new Error('no usenet provider could serve the article')));
+          return;
+        }
         const p = ordered[idx++];
         pending++;
         const ac = new AbortController();
@@ -613,6 +672,7 @@ class NntpPool {
             if (settled) return;
             if (ac.signal.aborted && isAbortError(e)) return; // a loser we aborted on success — ignore
             if (isAbortError(e) && signalAborted(external)) return settle(() => reject(e));
+            if (isDefinitiveMiss(e)) this.missCache.mark(p, msgId);
             lastErr = e;
             startNext(); // failure advances immediately, don't wait out the hedge window
             if (pending === 0 && idx >= ordered.length) settle(() => reject(lastErr || new Error('no usenet provider could serve the article')));
@@ -646,4 +706,4 @@ class NntpPool {
   close() { for (const p of this.providers) p.close(); }
 }
 
-module.exports = { NntpConnection, NntpPool, ProviderPool };
+module.exports = { NntpConnection, NntpPool, ProviderPool, ArticleMissCache };

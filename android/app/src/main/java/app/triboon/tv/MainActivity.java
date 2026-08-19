@@ -1454,6 +1454,18 @@ public class MainActivity extends Activity {
                 runOnUiThread(() -> startNativeVideo(json));
             }
 
+            // Web OSD / nudgeSeek land here. Remux/transcode still remount via playVideo;
+            // direct play seeks the live ExoPlayer clock so rewind actually moves.
+            @android.webkit.JavascriptInterface
+            public void seekTo(String seconds) {
+                if (!trustedBridgeOrigin()) return;
+                double s = 0;
+                try { s = Double.parseDouble(seconds == null ? "0" : seconds.trim()); }
+                catch (NumberFormatException ignored) { return; }
+                long ms = Math.max(0L, Math.round(s * 1000.0));
+                runOnUiThread(() -> nativeSeekToDisplayPosition(ms));
+            }
+
             @android.webkit.JavascriptInterface
             public void showVideoLoading(String json) {
                 if (!trustedBridgeOrigin()) return;
@@ -3240,7 +3252,7 @@ public class MainActivity extends Activity {
         leftControls.addView(nativeGuideBtn);
 
         nativeRewBtn = nativeButton(R.drawable.ic_player_rewind, "Back 10 seconds", false);
-        nativeRewBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) nativeSeekBy(-10000); });
+        nativeRewBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) nativeSeekBy(-30000); });
         centerControls.addView(nativeRewBtn);
 
         nativePlayBtn = nativeButton(R.drawable.ic_player_pause, "Pause", true);
@@ -4991,7 +5003,7 @@ public class MainActivity extends Activity {
         int code = e.getKeyCode();
         if (code != KeyEvent.KEYCODE_DPAD_LEFT && code != KeyEvent.KEYCODE_DPAD_RIGHT) return false;
         if (e.getAction() == KeyEvent.ACTION_DOWN) {
-            nativeSeekBy(code == KeyEvent.KEYCODE_DPAD_RIGHT ? 30000 : -10000);
+            nativeSeekBy(code == KeyEvent.KEYCODE_DPAD_RIGHT ? 30000 : -30000);
         }
         return true;
     }
@@ -5017,7 +5029,7 @@ public class MainActivity extends Activity {
                 View current = getCurrentFocus();
                 if (nativeCanSeekVod() && (current == nativeSeek || (nativeSeekDpadMode && !isNativeControl(current)))) {
                     if (e.getAction() == KeyEvent.ACTION_DOWN) {
-                        nativeSeekBy(code == KeyEvent.KEYCODE_DPAD_RIGHT ? 30000 : -10000);
+                        nativeSeekBy(code == KeyEvent.KEYCODE_DPAD_RIGHT ? 30000 : -30000);
                     }
                     return true;
                 }
@@ -5047,7 +5059,7 @@ public class MainActivity extends Activity {
         if ((code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT)
                 && nativeCanSeekVod()) {
             nativeSeekDpadMode = true;
-            nativeSeekBy(code == KeyEvent.KEYCODE_DPAD_RIGHT ? 30000 : -10000);
+            nativeSeekBy(code == KeyEvent.KEYCODE_DPAD_RIGHT ? 30000 : -30000);
             return true;
         }
         if (code == KeyEvent.KEYCODE_DPAD_DOWN) {
@@ -7695,7 +7707,7 @@ public class MainActivity extends Activity {
                             nativeSeekBy(30000);
                             return true;
                         case KeyEvent.KEYCODE_MEDIA_REWIND:
-                            nativeSeekBy(-10000);
+                            nativeSeekBy(-30000);
                             return true;
                         case KeyEvent.KEYCODE_MEDIA_STOP:
                             if (!repeat) closeNativePlayback(true); return true;
@@ -7733,7 +7745,7 @@ public class MainActivity extends Activity {
                         nativeSeekBy(30000);
                         return true;
                     case KeyEvent.KEYCODE_MEDIA_REWIND:
-                        nativeSeekBy(-10000);
+                        nativeSeekBy(-30000);
                         return true;
                     case KeyEvent.KEYCODE_MEDIA_STOP:
                         if (!repeat) closeNativePlayback(true); return true;
@@ -7881,7 +7893,7 @@ public class MainActivity extends Activity {
                 nativeSeekBy(30000L);
                 return true;
             case "rewind":
-                nativeSeekBy(-10000L);
+                nativeSeekBy(-30000L);
                 return true;
             case "next":
                 if (nativeHasNext) playNativeNextEpisode();

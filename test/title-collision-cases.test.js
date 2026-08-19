@@ -3,9 +3,42 @@
 // Each case is a catalog query (what Play sends) plus scene names that MUST / MUST NOT match.
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
-const { parseWantedTitle, releaseMatches, shortTitleQuery } = require('../server/pipeline');
+const { parseWantedTitle, releaseMatches, catalogIdentityMatches, shortTitleQuery } = require('../server/pipeline');
 
 const CASES = [
+  {
+    id: 'office-us',
+    q: 'the office s01e01',
+    good: [
+      'The.Office.S01E01.1080p.WEB-DL-NTb',
+      'The.Office.US.S01E01.1080p.WEB-DL-NTb',
+    ],
+    bad: [
+      'The.Office.AU.S01E01.1080p.WEB-DL-NTb',
+      'The.Office.UK.S01E01.1080p.WEB-DL-NTb',
+      'The.Office.NZ.S01E01.1080p.WEB-DL-NTb',
+    ],
+  },
+  {
+    id: 'office-uk',
+    q: 'the office uk s01e01',
+    good: ['The.Office.UK.S01E01.1080p.WEB-DL-NTb'],
+    bad: ['The.Office.AU.S01E01.1080p.WEB-DL-NTb', 'The.Office.US.S01E01.1080p.WEB-DL-NTb'],
+  },
+  {
+    id: 'office-us-2005',
+    q: 'the office 2005 s01e01',
+    good: [
+      'The.Office.S01E01.1080p.WEB-DL-NTb',
+      'The.Office.US.S01E01.1080p.WEB-DL-NTb',
+      'The.Office.2005.S01E01.1080p.WEB-DL-NTb',
+    ],
+    bad: [
+      'The.Office.2024.S01E01.2160p.AMZN.WEB-DL.H265.HDR10-HONE',
+      'The Office (2024) S01E01 (1080p AMZN WEB-DL H265 SDR DDP 5.1 English - HONE)',
+      'The.Office.AU.S01E01.1080p.WEB-DL-NTb',
+    ],
+  },
   {
     id: 'from',
     q: 'from s01e01',
@@ -440,6 +473,24 @@ const CASES = [
     ],
   },
   {
+    id: 'dune-1984',
+    q: 'dune 1984',
+    good: ['Dune.1984.2160p.UHD.BluRay-x'],
+    bad: ['Dune.2021.2160p.WEB-DL-NTb', 'Dune.Part.Two.2024.2160p.WEB-DL-NTb'],
+  },
+  {
+    id: 'dune-2021',
+    q: 'dune 2021',
+    good: ['Dune.2021.2160p.WEB-DL-NTb'],
+    bad: ['Dune.1984.2160p.UHD.BluRay-x', 'Dune.Part.Two.2024.2160p.WEB-DL-NTb'],
+  },
+  {
+    id: 'battlestar-2004',
+    q: 'battlestar galactica 2004 s01e01',
+    good: ['Battlestar.Galactica.2004.S01E01.1080p.WEB-DL-NTb'],
+    bad: ['Battlestar.Galactica.1978.S01E01.1080p.WEB-DL-x', 'Battlestar.Galactica.2004.S01E02.1080p.WEB-DL-NTb'],
+  },
+  {
     id: 'wicked',
     q: 'wicked 2024',
     good: ['Wicked.2024.2160p.WEB-DL-NTb'],
@@ -592,6 +643,28 @@ describe('title collisions: close names must not play the wrong title', () => {
       }
     });
   }
+});
+
+test('office US: catalog year on an episode query rejects the 2024 remake', () => {
+  const wanted = parseWantedTitle('the office s01e01');
+  assert.equal(wanted.year, null);
+  wanted.year = 2005;
+  assert.ok(releaseMatches('The.Office.S01E01.1080p.WEB-DL-NTb', wanted));
+  assert.ok(releaseMatches('The.Office.US.S01E01.1080p.WEB-DL-NTb', wanted));
+  assert.ok(!releaseMatches('The.Office.2024.S01E01.2160p.AMZN.WEB-DL-HONE', wanted));
+  assert.ok(!releaseMatches('The Office (2024) S01E01 (1080p AMZN WEB-DL H265)', wanted));
+});
+
+test('catalog identity: tagged remake is rejected even when the filename has no year', () => {
+  const params = { imdbid: 'tt0386679' };
+  assert.ok(catalogIdentityMatches({ name: 'The.Office.S01E01.1080p.WEB-DL-NTb' }, params),
+    'untagged NZB still allowed; year/name decide');
+  assert.ok(catalogIdentityMatches({ name: 'The.Office.S01E01.1080p.WEB-DL-NTb', imdb: 'tt0386679' }, params));
+  assert.ok(catalogIdentityMatches({ name: 'The.Office.S01E01.1080p.WEB-DL-NTb', imdb: '0386679' }, params));
+  assert.ok(!catalogIdentityMatches({ name: 'The.Office.S01E01.1080p.WEB-DL-NTb', imdb: 'tt31806028' }, params),
+    '2024 remake IMDb must not play for the 2005 show');
+  assert.ok(!catalogIdentityMatches({ tvdbid: '999999' }, { tvdbid: '73255' }));
+  assert.ok(catalogIdentityMatches({ tvdbid: '73255' }, { tvdbid: '73255' }));
 });
 
 test('title collisions: short indexer query never becomes a sibling franchise prefix', () => {

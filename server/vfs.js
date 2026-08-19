@@ -126,6 +126,7 @@ class NzbFileStream {
     this.lastReadAheadBoostAt = 0;
     this.readWaitBoostMs = READ_WAIT_BOOST_MS;
     this.cache = new Map(); // segIndex -> Buffer (decoded)
+    this.sliceCache = new Map(); // segIndex -> { from, buf } suffix-only (mid-seek, not a full article)
     this.cacheOrder = [];
     this.cacheMax = cacheSegments;
     this.cacheMaxBytes = Number.isFinite(cacheBytes) && cacheBytes > 0 ? cacheBytes : DEFAULT_CACHE_BYTES;
@@ -230,6 +231,7 @@ class NzbFileStream {
   }
 
   _cachePut(i, buf) {
+    this.sliceCache.delete(i);
     if (this.cache.has(i)) return;
     if (this.cache.size === 0 && this.cacheOrder.length === 0 && this.cacheBytes !== 0) {
       this.cacheBytes = 0;
@@ -265,12 +267,26 @@ class NzbFileStream {
     }
   }
 
+  _rememberSlice(i, from, buf) {
+    this.sliceCache.set(i, { from, buf });
+    while (this.sliceCache.size > 4) {
+      const oldest = this.sliceCache.keys().next().value;
+      if (oldest === undefined) break;
+      this.sliceCache.delete(oldest);
+    }
+  }
+
   _fetchSegment(i, priority = 'playback', opts = {}) {
     if (this.cache.has(i)) return Promise.resolve(this.cache.get(i));
     const signal = opts.signal || null;
     if (signalAborted(signal)) return Promise.reject(abortError());
-    const decodeAndCache = (raw) => {
-      const dec = decode(raw);
+    const skipDecoded = Math.max(0, Math.floor(Number(opts.skipDecoded) || 0));
+    if (skipDecoded > 0) {
+      const sl = this.sliceCache.get(i);
+      if (sl && sl.from <= skipDecoded) return Promise.resolve(sl.buf.subarray(skipDecoded - sl.from));
+    }
+    const decodeAndCache = (raw, skip) => {
+      const dec = decode(raw, skip > 0 ? { skipDecoded: skip } : undefined);
       if (!dec.crcOk) throw new Error(`segment ${i} CRC mismatch`);
       if (dec.size !== null) this.size = dec.size;
       // A malformed =ypart (begin without a valid end) would yield NaN here and poison ALL
@@ -279,28 +295,33 @@ class NzbFileStream {
         const ps = dec.part.end - dec.part.begin;
         if (Number.isFinite(ps) && ps > 0) this.partSize = ps;
       }
+      if (skip > 0) {
+        this._rememberSlice(i, skip, dec.data);
+        return dec.data;
+      }
       this._cachePut(i, dec.data);
       return dec.data;
     };
     let rec = this.inflight.get(i);
     if (rec && priorityRank(priority) < priorityRank(rec.priority) && priorityRank(priority) <= priorityRank('playback')) {
       return this.pool.body(this.segments[i].msgId, priority, { signal, drainMs: this.abortDrainMs })
-        .then(decodeAndCache)
+        .then((raw) => decodeAndCache(raw, 0))
         .catch((e) => {
           if (signalAborted(signal) || e.code === 'ABORT_ERR') throw e;
           return rec.promise;
         });
     }
+    if (rec && (rec.skipDecoded || 0) > skipDecoded) rec = null;
     if (!rec) {
       const controller = new AbortController();
-      rec = { consumers: 0, controller, priority, promise: null };
+      rec = { consumers: 0, controller, priority, promise: null, skipDecoded };
       // drainMs: an abort of this fetch while it's ON THE WIRE lets the article finish (into the
       // cache, connection preserved) instead of destroying the connection; a still-queued fetch is
       // dequeued immediately either way. This is what keeps a 4K pause/skip storm from killing the
       // whole pool's connections and lagging the next seek behind a reconnect storm.
       rec.promise = this.pool.body(this.segments[i].msgId, priority, { signal: controller.signal, drainMs: this.abortDrainMs }).then((raw) => {
         this.inflight.delete(i);
-        return decodeAndCache(raw);
+        return decodeAndCache(raw, skipDecoded);
       }).catch((e) => { this.inflight.delete(i); throw e; });
       this.inflight.set(i, rec);
     }
@@ -322,7 +343,12 @@ class NzbFileStream {
     // milliseconds to seconds). Swallowing that as "aborted" would silently TRUNCATE a live
     // reader's stream mid-file — instead, a consumer whose own signal is still live retries with
     // a fresh fetch (the settled rec has already left this.inflight).
-    return rec.promise.catch((e) => {
+    return rec.promise.then((data) => {
+      if (this.cache.has(i)) return data;
+      const startedAt = rec.skipDecoded || 0;
+      if (startedAt > 0 && skipDecoded > startedAt) return data.subarray(skipDecoded - startedAt);
+      return data;
+    }).catch((e) => {
       if (e && e.code === 'ABORT_ERR' && !signalAborted(signal)) {
         return this._fetchSegment(i, priority, opts);
       }
@@ -355,6 +381,8 @@ class NzbFileStream {
       if (aborted()) return;
       this._resetExpiredAdaptiveReadAhead();
       const segIdx = this._segForOffset(offset);
+      const segStart = segIdx * this.partSize;
+      const from = offset - segStart;
       // Kick read-ahead (fire and forget).
       if (priority !== 'background' && priority !== 'health' && readAheadEpoch === this.readAheadEpoch && !aborted()) {
         for (let a = 1; a <= this.readAhead; a++) {
@@ -368,7 +396,9 @@ class NzbFileStream {
       const wasCached = this.cache.has(segIdx);
       const waitStart = Date.now();
       try {
-        data = await this._fetchSegment(segIdx, activePriority, { signal });
+        data = await this._fetchSegment(segIdx, activePriority, {
+          signal, skipDecoded: wasCached ? 0 : from,
+        });
       } catch (e) {
         if (aborted() || e.code === 'ABORT_ERR') return;
         throw e;
@@ -383,14 +413,13 @@ class NzbFileStream {
       }
       if (activePriority === 'startup' || activePriority === 'seek') activePriority = 'playback';
       if (aborted()) return;
-      const segStart = segIdx * this.partSize;
-      const from = offset - segStart;
-      const to = Math.min(data.length, end - segStart);
-      if (from >= to) throw new Error(`read out of range: seg ${segIdx} off ${offset}`);
+      const startInBuf = this.cache.has(segIdx) ? from : 0;
+      const want = Math.min(data.length - startInBuf, end - offset);
+      if (want <= 0) throw new Error(`read out of range: seg ${segIdx} off ${offset}`);
       this.playbackStats.segmentsServed++;
-      this.playbackStats.readBytes += to - from;
-      yield data.subarray(from, to);
-      offset = segStart + to;
+      this.playbackStats.readBytes += want;
+      yield data.subarray(startInBuf, startInBuf + want);
+      offset += want;
     }
   }
 

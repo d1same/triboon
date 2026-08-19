@@ -381,6 +381,15 @@ test('yEnc decoder ignores a dangling escape byte instead of reading past the li
   assert.strictEqual(dec.data.length, 0);
 });
 
+test('yEnc decoder can skip a prefix and still verify the full-part CRC', () => {
+  const data = Buffer.allocUnsafe(20000);
+  for (let i = 0; i < data.length; i++) data[i] = (i * 17) & 0xff;
+  const enc = encodePart(data, { name: 'x.bin', partNum: 1, totalParts: 1, begin: 0, end: data.length, totalSize: data.length });
+  const dec = decode(enc, { skipDecoded: 7500 });
+  assert.ok(dec.crcOk, 'CRC still covers the skipped prefix');
+  assert.ok(dec.data.equals(data.subarray(7500)), 'kept bytes are the unused-prefix suffix');
+});
+
 // ---------- unit: NZB ----------
 test('NZB parser extracts files/segments and primary-file picker skips par2', () => {
   const { nzb } = makeRelease('Movie.mkv', 100000, 10000);
@@ -536,6 +545,66 @@ test('nntp: a wedged socket times out and the command retries on a fresh connect
   assert.ok(Buffer.concat(got).equals(data), 'stream still byte-exact after a wedged socket');
   assert.ok(Date.now() - t0 < 5000, 'recovered via timeout+retry, not a hang');
 
+  pool.close();
+  await mock.close();
+});
+
+test('nntp: a 430 is remembered per provider so the next fetch skips that host', async () => {
+  const { articles } = makeRelease('MissCache.mkv', 64 * 1024, 64 * 1024);
+  const mockA = createMockNntp({ articles });
+  const mockB = createMockNntp({ articles });
+  const portA = await mockA.listen();
+  const portB = await mockB.listen();
+  const msgId = [...articles.keys()][0];
+  mockA.markMissing(msgId);
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: portA, tls: false },
+    { host: '127.0.0.1', port: portB, tls: false },
+  ], 2);
+  const first = await pool.body(msgId, 'background');
+  const second = await pool.body(msgId, 'background');
+  assert.ok(first.equals(second));
+  assert.strictEqual(mockA.bodyCount(msgId), 1, 'provider A is not asked again after its 430');
+  assert.ok(mockB.bodyCount(msgId) >= 1, 'provider B served the article');
+  pool.close();
+  await mockA.close();
+  await mockB.close();
+});
+
+test('nntp: a stall on one provider leaves immediately when another provider is up', async () => {
+  const { articles } = makeRelease('StallLeave.mkv', 64 * 1024, 64 * 1024);
+  const mockA = createMockNntp({ articles });
+  const mockB = createMockNntp({ articles });
+  const portA = await mockA.listen();
+  const portB = await mockB.listen();
+  const msgId = [...articles.keys()][0];
+  mockA.stallNext(8);
+  const pool = new NntpPool([
+    { host: '127.0.0.1', port: portA, tls: false, commandTimeoutMs: 120 },
+    { host: '127.0.0.1', port: portB, tls: false, commandTimeoutMs: 120 },
+  ], 2);
+  const t0 = Date.now();
+  const body = await pool.body(msgId, 'background');
+  assert.ok(body && body.length > 0);
+  assert.ok(Date.now() - t0 < 800, 'one stall window, then the healthy provider');
+  assert.strictEqual(mockA.bodyCount(msgId), 1, 'stalled provider is not retried when a peer exists');
+  pool.close();
+  await mockA.close();
+  await mockB.close();
+});
+
+test('vfs: a mid-segment seek skips unused yEnc prefix bytes and stays byte-exact', async () => {
+  const { data, articles, nzb } = makeRelease('SeekSkip.mkv', 200000, 50000);
+  const mock = createMockNntp({ articles });
+  const port = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port, tls: false }, 2);
+  const vf = new VirtualFile(pool, nzb);
+  await vf.mount();
+  const off = 50000 + 12000;
+  const got = [];
+  for await (const c of vf.read(off, off + 8000, { priority: 'seek' })) got.push(c);
+  assert.ok(Buffer.concat(got).equals(data.subarray(off, off + 8000)));
+  assert.strictEqual(vf.cache.has(1), false, 'prefix-skipped segment is not stored as a full article');
   pool.close();
   await mock.close();
 });

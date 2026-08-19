@@ -400,11 +400,14 @@ function scoreRelease(candidate, policy = {}) {
       const heavy4k = Math.max(0, gb - 18);
       if (heavy4k > 0) add(`device-4k-size ${gb.toFixed(1)}GB`, -Math.min(700, Math.round(heavy4k * 35)));
     }
-    // Sample/stub disqualifier: a "2160p" post weighing 68MB IS the sample, not the show —
-    // one auto-played as the real episode (-120 "suspiciously tiny" was nowhere near enough).
-    // Floors: nothing real is <80MB; nothing claiming 1080p/2160p is <300MB.
-    if (gb < 0.08 || (gb < 0.3 && a.resolutionRank >= 3 && a.resolution !== 'unknown')) {
+    // Sample/stub disqualifier: nothing real is <80MB. A labelled 1080p/4K under 300MB used
+    // to be hard-rejected, which hid short films (Sintel 4K ~180MB) and then Play relaxed to
+    // 1080p. Soft-penalize the 80–300MB band so a real-sized release still wins, but exact-4K
+    // can still try the short.
+    if (gb < 0.08) {
       add(`sample-or-stub ${(gb * 1000).toFixed(0)}MB`, -100000);
+    } else if (gb < 0.3 && a.resolutionRank >= 3 && a.resolution !== 'unknown') {
+      add(`suspiciously-small-feature ${(gb * 1000).toFixed(0)}MB`, -800);
     } else if (gb < 0.2) add('suspiciously tiny', -120);
   }
 

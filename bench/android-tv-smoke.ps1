@@ -182,18 +182,21 @@ if ($VodSmoke) {
 (async () => {
   if (!S.rows || !S.rows.length) await loadRows();
   const key = '$VodKey';
-  let item = (S.rows || []).flatMap((r) => r.items || []).find((x) => x && x.key === key);
-  if (!item) return { ok: false, error: 'vod item not found', key, rows: S.rows ? S.rows.length : 0 };
-  const existingWatch = S.watchMap && S.watchMap[key];
+  const catalog = (S.rows || []).flatMap((r) => r.items || []).filter((x) => x && x.key);
+  let item = catalog.find((x) => x.key === key);
+  if (!item) item = catalog.find((x) => x.type === 'movie' || x.type === 'episode');
+  if (!item) return { ok: false, error: 'vod item not found', key, rows: S.rows ? S.rows.length : 0, catalog: catalog.length };
+  const playKey = item.key;
+  const existingWatch = S.watchMap && S.watchMap[playKey];
   const duration = $VodDurationSeconds || +(existingWatch && existingWatch.duration) || +item.duration || 0;
   if ($VodQualityRank === 4 && $ResumeSeconds > 0 && duration <= $ResumeSeconds) {
     return { ok: false, error: '4K Continue Watching verification requires -VodDurationSeconds greater than -ResumeSeconds', duration, requestedResume: $ResumeSeconds };
   }
   S.watchMap = S.watchMap || {};
   item = { ...item, qualityRank: $VodQualityRank, resume: $ResumeSeconds, duration };
-  S.watchMap[key] = { ...(existingWatch || {}), key, position: $ResumeSeconds, duration, watched: false, meta: item };
+  S.watchMap[playKey] = { ...(existingWatch || {}), key: playKey, position: $ResumeSeconds, duration, watched: false, meta: item };
   await play(item);
-  return { ok: true, key, requestedResume: $ResumeSeconds, requestedQualityRank: $VodQualityRank,
+  return { ok: true, key: playKey, requestedKey: key, requestedResume: $ResumeSeconds, requestedQualityRank: $VodQualityRank,
     duration, resumeFrac: $ResumeSeconds > 0 && duration > 0 ? $ResumeSeconds / duration : 0, title: item.title, view: S.view };
 })()
 "@

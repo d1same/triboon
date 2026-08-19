@@ -125,6 +125,62 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-19, v3.0.7 ship APK + Windows server + Windows client:
+
+- Version contract: `package.json` 3.0.7; Android `versionName` 3.0.7 /
+  `versionCode` 338; Windows client package/Tauri/Cargo 3.0.7.
+- Catalog year + indexer IMDb/TVDB now lock remakes and same-name
+  titles. Episode Play uses TMDB year even when `q` is `Show S01E01`.
+  A tagged remake NZB is dropped even with no year in the filename.
+  Country `.AU` / `.UK` / `.NZ` / `.CA` still need an explicit ask.
+  Live: Office US mounts `The.Office.US.2005` Superfan Cut, not 2024.
+  A 20-title soak still found and played; only Office source count
+  dropped (85→56), on purpose.
+- Short labelled 4K stays playable (80MB stub floor). Explicit
+  Sources `pick`/`pickKey` mounts only that file. Native rewind is
+  30s and `seekTo` drives ExoPlayer/libmpv.
+- `npm.cmd test` 589/589. Isolated `/api/server` smoke reported 3.0.7.
+  `npm.cmd run verify:full -- -AndroidDevice emulator-5554
+  -AndroidHostServerPort 7777` passed whitespace, JS syntax, web parse,
+  focused P9/P14/P11, full Node suite, household VOD/CC (Mario 4K +
+  FROM 1080p), IPTV ABC+ESPN web+native, overlapping Play 23ms /
+  213ms wall, Android lint/native-unit/`assembleDebug`, and ExoPlayer
+  stress `bench/stress-results/android-tv-stress-20260819-145931.json`
+  (`ok: true`, zero failures/warnings).
+- Household Mario 4K: ready 4256ms SLOW, first-byte 1181ms, seek 869ms,
+  resume 46ms, remux, cc=200. FROM S01E01: 1470/512/256/14ms, remux,
+  cc=200.
+- Windows native GPU/HDR not run.
+
+2026-08-19, Play quality / pick / Office / Android rewind (not a version bump):
+
+- Short labelled 4K (Sintel ~180MB) stays playable. A 300MB hard stub
+  floor was swapping those Plays to 1080p. 68MB samples still die.
+  Indexer-lied MK2 stubs still die when billed ≥2GB and mounted <400MB.
+- A Sources `pick`/`pickKey` mounts only that file or fails. It no
+  longer walks a smaller WEB-DL (41GB Interstellar IMAX → 15.6GB).
+- `The Office` rejects `.AU` / `.UK` / `.NZ` / `.CA` unless the query
+  asked for that country. Untagged and `.US` still match.
+- Web `seekTo` drives native ExoPlayer/libmpv. Remux/transcode remount;
+  direct uses `TriboonTV.seekTo`. Native rewind step is 30s, same as
+  forward. Official `android-tv-smoke -VodSmoke` uses a Home movie or
+  episode when the default TMDB key is missing.
+- Restarted household `http://127.0.0.1:7777` on this tree (still
+  reports v3.0.6). `npm.cmd test` 582/582.
+  `npm.cmd run verify:full -- -AndroidDevice emulator-5554
+  -AndroidHostServerPort 7777` passed whitespace, JS syntax, web parse,
+  focused P9/P14/P11, full Node suite, isolated `/api/server` 3.0.6
+  smoke, household VOD/CC (Mario 4K + FROM 1080p), IPTV ABC+ESPN
+  web+native, overlapping Play, Android lint/native-unit/`assembleDebug`,
+  and ExoPlayer stress
+  `bench/stress-results/android-tv-stress-20260819-140921.json`
+  (`ok: true`, zero failures/warnings).
+- Household Mario 4K: ready 3604ms SLOW, first-byte 795ms, seek 457ms,
+  resume 12ms, remux, health=verified, cc=200. FROM S01E01: 707/265/22/7ms,
+  remux, cc=200. Overlap wall 515ms.
+- Not re-run as named titles: Sintel 4K stay-4K, Office US vs AU, explicit
+  41GB Interstellar pick. Windows native GPU/HDR not run.
+
 2026-08-18, v3.0.6 ship APK + Windows server + Windows client:
 
 - Version contract: `package.json` 3.0.6; Android `versionName` 3.0.6 /

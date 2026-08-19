@@ -12,7 +12,7 @@ const { parseRelease, scoreRelease, rankReleases } = require('../server/scoring'
 const { parseNewznabRss, dedupe, fanout, searchIndexer } = require('../server/newznab');
 const { Store, VerdictCache } = require('../server/store');
 const {
-  Pipeline, GATE_MS, nzbVerdictKey, summarizeAttempts, stubFeatureReason, mountHasActivePlayback,
+  Pipeline, GATE_MS, nzbVerdictKey, releaseFingerprint, summarizeAttempts, stubFeatureReason, mountHasActivePlayback,
   ACTIVE_PLAYBACK_GRACE_MS,
 } = require('../server/pipeline');
 const { NntpPool, ProviderPool } = require('../server/nntp');
@@ -639,7 +639,7 @@ function rssFor(items) {
   return `<?xml version="1.0"?><rss xmlns:newznab="http://www.newznab.com/DTD/2010/feeds/attributes/"><channel>
 ${items.map((i) => `<item><title>${i.name}</title><link>${i.url}</link>
 <enclosure url="${i.url}" length="${i.size}" type="application/x-nzb"/>
-<newznab:attr name="size" value="${i.size}"/></item>`).join('\n')}
+<newznab:attr name="size" value="${i.size}"/>${i.imdb ? `<newznab:attr name="imdbid" value="${i.imdb}"/>` : ''}${i.tvdbid ? `<newznab:attr name="tvdbid" value="${i.tvdbid}"/>` : ''}${i.poster ? `<newznab:attr name="poster" value="${i.poster}"/>` : ''}${i.usenetDate ? `<newznab:attr name="usenetdate" value="${i.usenetDate}"/>` : ''}</item>`).join('\n')}
 </channel></rss>`;
 }
 
@@ -668,7 +668,8 @@ test('newznab: TV episodes use tvsearch even when an IMDb id is also present', a
     assert.strictEqual(seen.searchParams.get('tvdbid'), '73255');
     assert.strictEqual(seen.searchParams.get('season'), '3');
     assert.strictEqual(seen.searchParams.get('ep'), '22');
-    assert.strictEqual(seen.searchParams.has('imdbid'), false, 'IMDb must not force movie search for an episode');
+    assert.strictEqual(seen.searchParams.get('imdbid'), '0412142', 'IMDb is a tvsearch hint');
+    assert.ok(seen.searchParams.get('t') !== 'movie', 'IMDb must not force movie search for an episode');
     assert.strictEqual(rows[0].name, 'House.S03E22.1080p.WEB-DL.H.264-NTb');
   } finally {
     await new Promise((r) => srv.close(r));
@@ -1579,6 +1580,7 @@ function makeMockIndexer(releases) {
       const port = server.address().port;
       return res.end(rssFor(releases.map((r, i) => ({
         name: r.name, url: `http://127.0.0.1:${port}/nzb/${i}`, size: r.size,
+        poster: r.poster, usenetDate: r.usenetDate,
       }))));
     }
     const m = /^\/nzb\/(\d+)$/.exec(u.pathname);
@@ -1588,7 +1590,7 @@ function makeMockIndexer(releases) {
   return { server, listen: () => new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port))) };
 }
 
-function nzbFor(volumes, partSize, prefix) {
+function nzbFor(volumes, partSize, prefix, poster = 't') {
   const articles = new Map();
   const fileXml = volumes.map((v, fi) => {
     const totalParts = Math.ceil(v.data.length / partSize) || 1;
@@ -1600,7 +1602,7 @@ function nzbFor(volumes, partSize, prefix) {
       articles.set(msgId, body);
       segs.push(`<segment bytes="${body.length}" number="${p + 1}">${msgId}</segment>`);
     }
-    return `<file poster="t" date="1" subject="[r] &quot;${v.name}&quot; yEnc (1/${totalParts})"><groups><group>a.b</group></groups><segments>${segs.join('')}</segments></file>`;
+    return `<file poster="${poster}" date="1" subject="[r] &quot;${v.name}&quot; yEnc (1/${totalParts})"><groups><group>a.b</group></groups><segments>${segs.join('')}</segments></file>`;
   }).join('');
   return { nzb: `<?xml version="1.0"?><nzb>${fileXml}</nzb>`, articles };
 }
@@ -2176,6 +2178,36 @@ test('pipeline: TV episode fallback keeps SxxEyy instead of broad show search', 
     assert.deepStrictEqual(r.candidates.map((c) => c.name), [
       'House.S03E22.1080p.WEB-DL.H.264-NTb',
     ]);
+  } finally {
+    server.close();
+  }
+});
+
+test('pipeline: catalog identity drops a tagged remake from a title-only warmup', async () => {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/rss+xml' });
+    res.end(rssFor([
+      { name: 'The.Office.S01E01.1080p.WEB-DL-NTb', url: 'http://x/us', size: 2e9, imdb: '0386679' },
+      { name: 'The.Office.S01E01.1080p.AMZN.WEB-DL-HONE', url: 'http://x/remake', size: 3e9, imdb: '31806028' },
+      { name: 'The.Office.2024.S01E01.2160p.AMZN.WEB-DL-HONE', url: 'http://x/remake-year', size: 4e9 },
+    ]));
+  });
+  const ixPort = await new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
+  const pipeline = new Pipeline({
+    pool: () => null, verdicts: { get: () => null, set: () => {} }, mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+  try {
+    const warm = await pipeline.search({ q: 'The Office', season: 1, ep: 1 }, { wantedYear: 2005 });
+    assert.ok(warm.candidates.some((c) => c.name.includes('WEB-DL-NTb')));
+    assert.ok(warm.candidates.some((c) => c.name.includes('WEB-DL-HONE')),
+      'yearless remake filename still survives a year-only warmup');
+    const play = await pipeline.search(
+      { q: 'The Office', season: 1, ep: 1, imdbid: 'tt0386679' },
+      { wantedYear: 2005 }
+    );
+    const names = play.candidates.map((c) => c.name);
+    assert.deepStrictEqual(names, ['The.Office.S01E01.1080p.WEB-DL-NTb']);
   } finally {
     server.close();
   }
@@ -3243,20 +3275,23 @@ test('pipeline: resume warmup supersession and mount cleanup abort only tracked 
   assert.strictEqual(evicted._playbackWarmupJobs.size, 0, 'cancelled jobs are removed from mount state');
 });
 
-test('pipeline: a manual Sources pick is honored first, then the next-smaller release, then the best auto-pick', () => {
+test('pipeline: a manual Sources pick is the only candidate — no silent smaller substitute', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
   const store = new Store(dir);
   const pipeline = new Pipeline({ pool: () => null, verdicts: new VerdictCache(store), mounts: new Map(), indexers: () => [] });
   const cands = [
     { pickKey: 'e', sizeBytes: 40e9, score: -6000 }, // bigger than the pick → never a fallback
     { pickKey: 'p', sizeBytes: 38e9, score: -6000 }, // over-cap manual pick (auto-scorer would reject it)
-    { pickKey: 'b', sizeBytes: 30e9, score: -6000 }, // the single next-smaller release → tried 2nd
+    { pickKey: 'b', sizeBytes: 30e9, score: -6000 },
     { pickKey: 'c', sizeBytes: 15e9, score: 200 },    // best auto-ranked (within cap)
     { pickKey: 'd', sizeBytes: 12e9, score: 100 },
   ];
   const order = pipeline._playableCandidates(cands, { pickKey: 'p' }).map((c) => c.pickKey);
-  assert.deepStrictEqual(order, ['p', 'b', 'c', 'd'],
-    'manual pick honored first (even over-cap), then ONE next-smaller by size, then best auto-ranked; a bigger-than-pick release is never a fallback');
+  assert.deepStrictEqual(order, ['p'],
+    'manual pick is the only walk item — a 41GB IMAX tap must not mount a 15GB WEB-DL');
+  const missing = pipeline._playableCandidates(cands, { pickKey: 'nope' }).map((c) => c.pickKey);
+  assert.deepStrictEqual(missing, [],
+    'an unknown pickKey does not silently fall back to auto-pick');
   const auto = pipeline._playableCandidates(cands, {}).map((c) => c.pickKey);
   assert.deepStrictEqual(auto, ['c', 'd'], 'with no manual pick, only within-cap auto-ranked releases are playable');
   store.close();
@@ -3280,7 +3315,7 @@ test('pipeline: a pinned resume source leads only while playable, and never turn
   assert.deepStrictEqual(rotted, ['p', 'c', 'd'],
     'a pin the scorer rejects (rotted since last session) is skipped outright — resume behaves like auto-pick');
   const manual = pipeline._playableCandidates(cands, { pickKey: 'e' }).map((c) => c.pickKey);
-  assert.strictEqual(manual[0], 'e', 'a MANUAL pick keeps its explicit override even when the auto-scorer rejects it');
+  assert.deepStrictEqual(manual, ['e'], 'a MANUAL pick is the only walk item even when the auto-scorer rejects it');
   store.close();
   // Race-width contract: a pinned resume must keep the hedged parallel walk; only explicit human
   // picks (Sources drawer) collapse the race to a direct width-1 mount.
@@ -3873,15 +3908,26 @@ test('pipeline: a picked SAMPLE file fails the candidate and auto-advance finds 
 test('pipeline: stubFeatureReason rejects a tiny file masquerading as a real feature (the 220MB-as-4K bug)', () => {
   // The Mortal Kombat II incident: a ~220MB file auto-played as a "2160p movie" because the indexer's
   // DECLARED size lied past scoring; only a check on the ACTUAL mounted bytes can catch it.
-  assert.ok(/stub|incomplete/i.test(stubFeatureReason(220 * 1e6, 'Mortal.Kombat.II.2026.2160p.WEB-DL.DV.HDR-Grp')),
-    '220MB is rejected for a 2160p release');
-  assert.match(stubFeatureReason(220 * 1e6, 'Movie.2024.2160p-Grp'), /2160p/);
+  assert.ok(/stub|incomplete/i.test(stubFeatureReason(220 * 1e6, 'Mortal.Kombat.II.2026.2160p.WEB-DL.DV.HDR-Grp', 8e9)),
+    '220MB is rejected when the indexer billed a feature-sized 4K');
+  assert.match(stubFeatureReason(220 * 1e6, 'Movie.2024.2160p-Grp', 8e9), /2160p/);
   assert.ok(stubFeatureReason(50 * 1e6, 'Whatever.no.res.tag'), '50MB rejected even with no resolution tag (<80MB floor)');
-  assert.ok(stubFeatureReason(150 * 1e6, 'Show.S01E01.1080p.WEB-Grp'), '150MB rejected for a 1080p claim (<300MB)');
+  assert.strictEqual(stubFeatureReason(180 * 1e6, 'Sintel.2010.4K.DM.x264-EbP', 180e6), '',
+    'a real short 4K whose listed size matches the mount is not a stub');
   // Real features pass — and an unknown size is never guessed at.
   assert.strictEqual(stubFeatureReason(8 * 1e9, 'Movie.2024.2160p.WEB-DL-Grp'), '', '8GB 2160p is a real feature');
   assert.strictEqual(stubFeatureReason(600 * 1e6, 'Movie.2024.no.res'), '', '600MB no-res file passes the 80MB floor');
   assert.strictEqual(stubFeatureReason(0, 'Movie.2024.2160p'), '', 'unknown size (0) is not flagged');
+});
+
+test('scoring: a short 4K film stays playable so exact-4K does not silently mount 1080p', () => {
+  const policy = { maxResolutionRank: 4, preferResolutionRank: 4, exactResolutionRank: 4 };
+  const short4k = scoreRelease({ name: 'Sintel.2010.4K.DM.x264-EbP', sizeBytes: 180e6 }, policy);
+  assert.ok(short4k.score > -5000, 'Sintel-sized 4K stays above the playable cut');
+  assert.ok(short4k.reasons.some((r) => /suspiciously-small-feature/.test(r)),
+    '80–300MB 4K is a soft penalty, not a sample disqualify');
+  const stub68 = scoreRelease({ name: 'Movie.2024.2160p.WEB-DL-Grp', sizeBytes: 68e6 }, policy);
+  assert.ok(stub68.score <= -5000, 'a 68MB 4K sample is still disqualified');
 });
 
 test('pipeline: summarizeAttempts turns raw fail reasons into one actionable sentence', () => {
@@ -4296,6 +4342,62 @@ test('verdict cache: NZB keys are sanitized hashes and legacy secret URLs are sc
   store.close();
 });
 
+test('pipeline: dead-release fingerprint matches the same post across indexer URLs', () => {
+  const a = {
+    sizeBytes: 5e9, poster: 'alice@usenet.test', pubDate: '1700000000',
+    nzbUrl: 'http://ix-a/get?id=1', name: 'Movie.2024.1080p-ONE',
+  };
+  const b = {
+    sizeBytes: 5e9, poster: 'alice@usenet.test', pubDate: '1700000000',
+    nzbUrl: 'http://ix-b/get?id=2', name: 'Movie.2024.1080p-TWO',
+  };
+  assert.strictEqual(releaseFingerprint(a), releaseFingerprint(b));
+  assert.ok(releaseFingerprint(a).startsWith('fp:'));
+  assert.strictEqual(releaseFingerprint({ sizeBytes: 5e9, poster: 't' }), null,
+    'fixture-style posters without @ do not fingerprint');
+});
+
+test('newznab: poster and usenetdate attrs are parsed for fingerprints', () => {
+  const xml = rssFor([{
+    name: 'Movie.2024.1080p', url: 'http://x/a.nzb', size: 4e9,
+    poster: 'bob@usenet.test', usenetDate: '1700000000',
+  }]);
+  const parsed = parseNewznabRss(xml, 'ix');
+  assert.strictEqual(parsed[0].poster, 'bob@usenet.test');
+  assert.strictEqual(parsed[0].usenetDate, '1700000000');
+  assert.ok(releaseFingerprint(parsed[0]));
+});
+
+test('pipeline: a known-dead fingerprint skips the same post on a second indexer URL', async () => {
+  const dead = nzbFor([{ name: 'Movie.mkv', data: seededPayload(50 * 1024, 1) }], 30000, 'fpdead', 'alice@usenet.test');
+  const twin = nzbFor([{ name: 'Movie.mkv', data: seededPayload(50 * 1024, 2) }], 30000, 'fptwin', 'alice@usenet.test');
+  const mock = createMockNntp({ articles: new Map() });
+  const nntpPort = await mock.listen();
+  const pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 2);
+  const ix = makeMockIndexer([
+    { name: 'Movie.2024.1080p.WEB-DL.H.264-ONE', size: 5e9, nzb: dead.nzb, poster: 'alice@usenet.test' },
+    { name: 'Movie.2024.1080p.WEB-DL.H.264-TWO', size: 5e9, nzb: twin.nzb, poster: 'alice@usenet.test' },
+  ]);
+  const ixPort = await ix.listen();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-test-'));
+  const store = new Store(dir);
+  const verdicts = new VerdictCache(store);
+  const pipeline = new Pipeline({
+    pool: () => pool, verdicts, mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+  let playErr;
+  try {
+    await pipeline.play({ q: 'movie' }, { maxResolutionRank: 3 });
+  } catch (e) { playErr = e; }
+  assert.ok(playErr, 'both copies of the dead post fail');
+  assert.ok((playErr.attempts || []).some((a) => /same usenet post already known dead/.test(a.fail)),
+    JSON.stringify(playErr.attempts));
+  const keys = Object.keys(store.read('verdicts', {}));
+  assert.ok(keys.some((k) => k.startsWith('fp:')), 'missing verdict also stored under the fingerprint');
+  pool.close(); await mock.close(); ix.server.close(); store.close();
+});
+
 test('pipeline: cheap missing-article probe skips stale NZBs past the old four-source cap', async () => {
   const goodPayload = seededPayload(100 * 1024, 0x5ca1e);
   const dead = Array.from({ length: 5 }, (_, i) =>
@@ -4325,7 +4427,7 @@ test('pipeline: cheap missing-article probe skips stale NZBs past the old four-s
   assert.ok(r.attempts.every((a) => /^missing:/.test(a.fail)), JSON.stringify(r.attempts));
   assert.ok(Date.now() - started < 5000, 'missing sources are skipped by STAT, not slow BODY mounts');
   const keys = Object.keys(store.read('verdicts', {}));
-  assert.ok(keys.every((k) => k.startsWith('nzb:') || k.startsWith('t:')), 'verdict keys do not persist raw NZB URLs');
+  assert.ok(keys.every((k) => /^(nzb:|t:|fp:)/.test(k)), 'verdict keys do not persist raw NZB URLs');
   assert.ok(!JSON.stringify(store.read('verdicts', {})).includes('secret-indexer-key'), 'verdict cache does not persist indexer secrets');
 
   pool.close(); await mock.close(); ix.server.close(); store.close();

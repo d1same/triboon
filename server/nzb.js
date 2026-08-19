@@ -18,6 +18,8 @@ function parseNzb(xml) {
     const body = fm[2];
     const subjM = /subject="([^"]*)"/i.exec(attrs);
     const subject = subjM ? decodeEntities(subjM[1]) : '';
+    const posterM = /poster="([^"]*)"/i.exec(attrs);
+    const dateM = /date="(\d+)"/i.exec(attrs);
 
     const groups = [];
     const groupRe = /<group>([\s\S]*?)<\/group>/gi;
@@ -37,7 +39,11 @@ function parseNzb(xml) {
       });
     }
     segments.sort((a, b) => a.number - b.number);
-    files.push({ subject, groups, segments });
+    files.push({
+      subject, groups, segments,
+      poster: posterM ? decodeEntities(posterM[1]) : '',
+      date: dateM ? parseInt(dateM[1], 10) : 0,
+    });
   }
   if (!files.length) throw new Error('NZB parse: no <file> entries found');
   return { files };

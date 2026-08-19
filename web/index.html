@@ -14056,6 +14056,20 @@ function seekTo(seconds) {
   p.suppressSeekLoaderUntil = appMs() + 4500;
   clearTimeout(S._waitT);
   $('playerLoader').classList.remove('show');
+  // Native ExoPlayer/libmpv owns the clock. startSource() bails when usingNative, and
+  // video.currentTime only moves the hidden web element — that is why Android rewind
+  // stayed put after a JS nudge or OSD skip.
+  if (p.usingNative && canUseNativeVideoPlayer()) {
+    const kind = currentPlayerKind(p);
+    if (kind === 'remux' || kind === 'transcode') {
+      tryNativeVideoPlayer(kind, seconds, { quietSeek: true });
+    } else if (window.TriboonTV && typeof window.TriboonTV.seekTo === 'function') {
+      try { window.TriboonTV.seekTo(String(seconds)); p.nativePos = seconds; } catch {}
+    } else {
+      tryNativeVideoPlayer('direct', seconds, { quietSeek: true });
+    }
+    showOsd(); return;
+  }
   if (p.usingTranscode) startSource('transcode', seconds, { quietSeek: true });      // server-side seek via -ss
   else if (p.usingRemux) startSource('remux', seconds, { quietSeek: true });
   else v.currentTime = seconds;

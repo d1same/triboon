@@ -2741,7 +2741,7 @@ test('Android native player: direct source and native chrome stay out of the web
   'idle/native starts self-stop while a cold music update can promote the transient service');
   assert.match(android, /static void dispatchMediaTransport\(String action\) \{[\s\S]+handleNativeMediaTransport\(action\)[\s\S]+jsMusicTransport\(action\)/,
     'service transport prefers active native VOD and falls back to WebView audio');
-  assert.match(android, /private boolean handleNativeMediaTransport\(String action\) \{[\s\S]+"video"\.equals\(nativeMode\)[\s\S]+case "fast_forward":[\s\S]+nativeSeekBy\(30000L\)[\s\S]+case "rewind":[\s\S]+nativeSeekBy\(-10000L\)/,
+  assert.match(android, /private boolean handleNativeMediaTransport\(String action\) \{[\s\S]+"video"\.equals\(nativeMode\)[\s\S]+case "fast_forward":[\s\S]+nativeSeekBy\(30000L\)[\s\S]+case "rewind":[\s\S]+nativeSeekBy\(-30000L\)/,
     'native VOD media-session transport uses the same forward and rewind intervals as the player UI');
   assert.match(android, /private void applyNativeSubtitleSize\(\) \{[\s\S]+nativeSubtitleOverlay\.setTextSize\(TypedValue\.COMPLEX_UNIT_SP, sizeSp\)[\s\S]+getSubtitleView\(\)\.setFixedTextSize\(TypedValue\.COMPLEX_UNIT_SP, sizeSp\)/,
     'Android applies the saved S/M/L size to both the Wyzie overlay and Media3 SubtitleView');
@@ -3389,7 +3389,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'server subtitle route accepts IMDb ids, resolves the EPISODE imdb from TMDB for tmdb-only TV (shows with no show imdb, e.g. Goosebumps: The Vanishing), searches Wyzie by it, and caches by the active catalog id');
   assert.match(android, /private boolean pageTvReady;[\s\S]+private final java\.util\.ArrayList<String> pendingTvKeys[\s\S]+public void appReady\(\) \{[\s\S]+pageTvReady = true;[\s\S]+flushPendingTvKeys\(\);/,
     'Android should buffer early D-pad input until the web focus model is ready');
-  assert.match(android, /private volatile String currentWebUrl[\s\S]+private boolean trustedBridgeOrigin\(\) \{[\s\S]+isTrustedServerUrl\(currentWebUrl\)[\s\S]+onPageStarted\(WebView v, String url[\s\S]+currentWebUrl = url == null \? "" : url;[\s\S]+onPageFinished\(WebView v, String url[\s\S]+currentWebUrl = url == null \? "" : url;[\s\S]+public void playVideo\(String json\) \{[\s\S]+if \(!trustedBridgeOrigin\(\)\) return;[\s\S]+startNativeVideo\(json\)/,
+  assert.match(android, /private volatile String currentWebUrl[\s\S]+private boolean trustedBridgeOrigin\(\) \{[\s\S]+isTrustedServerUrl\(currentWebUrl\)[\s\S]+onPageStarted\(WebView v, String url[\s\S]+currentWebUrl = url == null \? "" : url;[\s\S]+onPageFinished\(WebView v, String url[\s\S]+currentWebUrl = url == null \? "" : url;[\s\S]+public void playVideo\(String json\) \{[\s\S]+if \(!trustedBridgeOrigin\(\)\) return;[\s\S]+startNativeVideo\(json\)[\s\S]+public void seekTo\(String seconds\) \{[\s\S]+nativeSeekToDisplayPosition\(ms\)/,
     'Android JS bridge methods should be gated to the configured Triboon server origin without calling WebView methods on the JavaBridge thread');
   assert.match(android, /private boolean sameOrigin\(Uri a, Uri b\) \{[\s\S]+normalizedPort\(a\) != normalizedPort\(b\)[\s\S]+return ah\.equals\(bh\) \|\| \(isAndroidLoopbackAlias\(ah\) && isAndroidLoopbackAlias\(bh\)\);[\s\S]+private boolean isAndroidLoopbackAlias\(String host\) \{[\s\S]+"10\.0\.2\.2"\.equals\(h\)/,
     'Android bridge trust should allow only same-port localhost/10.0.2.2 aliases for emulator testing');
@@ -4475,13 +4475,13 @@ test('Android native player: direct source and native chrome stay out of the web
     'native VOD seekability should include server-side remux/transcode seek mode');
   assert.match(android, /boolean canSeek = !isLive && nativeCanSeekVod\(\);/,
     'native seek bar should stay focusable for remuxed or transcoded next episodes that use server-side seeking');
-  assert.match(android, /private boolean nativeSeekDpadMode;[\s\S]+nativeSeekDpadMode = true;[\s\S]+private boolean handleNativeSeekBarKey\(KeyEvent e\) \{[\s\S]+current != nativeSeek && \(!nativeSeekDpadMode \|\| isNativeControl\(current\)\)[\s\S]+nativeSeekBy\(code == KeyEvent\.KEYCODE_DPAD_RIGHT \? 30000 : -10000\)/,
+  assert.match(android, /private boolean nativeSeekDpadMode;[\s\S]+nativeSeekDpadMode = true;[\s\S]+private boolean handleNativeSeekBarKey\(KeyEvent e\) \{[\s\S]+current != nativeSeek && \(!nativeSeekDpadMode \|\| isNativeControl\(current\)\)[\s\S]+nativeSeekBy\(code == KeyEvent\.KEYCODE_DPAD_RIGHT \? 30000 : -30000\)/,
     'native D-pad seek mode should scrub only from the seek bar or video surface, never from a focused button');
   assert.match(android, /if \(nativeChrome != null && nativeChrome\.getVisibility\(\) == View\.VISIBLE\) \{[\s\S]+if \(handleNativeSeekBarKey\(e\)\) return true;[\s\S]+current == nativeSeek \|\| \(nativeSeekDpadMode && !isNativeControl\(current\)\)[\s\S]+moveNativeControlFocus\(code == KeyEvent\.KEYCODE_DPAD_LEFT \? -1 : 1\)/,
     'visible native chrome should prioritize button-row Left/Right navigation before surface seek shortcuts');
   assert.match(android, /nativeChrome\.setVisibility\(View\.GONE\);[\s\S]+parkNativeHiddenFocusOnSeek\(\);[\s\S]+setNativeSubtitleLift\(false\);[\s\S]+private void parkNativeHiddenFocusOnSeek\(\) \{[\s\S]+nativeSeekDpadMode = nativeCanSeekVod\(\);[\s\S]+nativePlayerLayer\.requestFocus\(\);[\s\S]+\}/,
     'auto-hidden native VOD chrome should park logical focus on the seek bar before returning focus to the video surface');
-  assert.match(android, /if \(\(code == KeyEvent\.KEYCODE_DPAD_LEFT \|\| code == KeyEvent\.KEYCODE_DPAD_RIGHT\)[\s\S]+&& nativeCanSeekVod\(\)\) \{[\s\S]+nativeSeekDpadMode = true;[\s\S]+nativeSeekBy\(code == KeyEvent\.KEYCODE_DPAD_RIGHT \? 30000 : -10000\);[\s\S]+return true;[\s\S]+\}/,
+  assert.match(android, /if \(\(code == KeyEvent\.KEYCODE_DPAD_LEFT \|\| code == KeyEvent\.KEYCODE_DPAD_RIGHT\)[\s\S]+&& nativeCanSeekVod\(\)\) \{[\s\S]+nativeSeekDpadMode = true;[\s\S]+nativeSeekBy\(code == KeyEvent\.KEYCODE_DPAD_RIGHT \? 30000 : -30000\);[\s\S]+return true;[\s\S]+\}/,
     'native hidden-chrome VOD Left/Right should seek instead of only revealing controls');
   assert.match(android, /if \(code == KeyEvent\.KEYCODE_DPAD_DOWN\) \{[\s\S]+if \(nativeSeekDpadMode && nativeCanSeekVod\(\)\) return focusNativeDefaultControl\(\);[\s\S]+if \(openNativeEpisodeStrip\(\)\) return true;[\s\S]+showNativeChrome\(true\);[\s\S]+return true;[\s\S]+\}/,
     'native hidden-chrome Down should return from the parked seek bar to Play/Pause before episode-strip handling');
@@ -4516,7 +4516,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'native remux/transcode seeking should restart through the web handoff instead of seeking inside a restarted segment');
   assert.match(ui, /window\.__tvNativeVideoSeek = async \(pos, dur, resume, token, percentResume\) => \{[\s\S]+nativePlaybackCallbackMatches\(p, token\)[\s\S]+if \(!percentResume\) p\.nativePos = at;[\s\S]+tryNativeVideoPlayer\(kind, at, \{ quietSeek: true, percentResume: !!percentResume \}\);[\s\S]+\};/,
     'web should quietly remount the active native source kind when Android requests an absolute seek');
-  assert.match(android, /private boolean handleNativeSeekBarKey\(KeyEvent e\) \{[\s\S]+View current = getCurrentFocus\(\);[\s\S]+current != nativeSeek && \(!nativeSeekDpadMode \|\| isNativeControl\(current\)\)[\s\S]+KEYCODE_DPAD_LEFT[\s\S]+KEYCODE_DPAD_RIGHT[\s\S]+nativeSeekBy\(code == KeyEvent\.KEYCODE_DPAD_RIGHT \? 30000 : -10000\);[\s\S]+\}/,
+  assert.match(android, /private boolean handleNativeSeekBarKey\(KeyEvent e\) \{[\s\S]+View current = getCurrentFocus\(\);[\s\S]+current != nativeSeek && \(!nativeSeekDpadMode \|\| isNativeControl\(current\)\)[\s\S]+KEYCODE_DPAD_LEFT[\s\S]+KEYCODE_DPAD_RIGHT[\s\S]+nativeSeekBy\(code == KeyEvent\.KEYCODE_DPAD_RIGHT \? 30000 : -30000\);[\s\S]+\}/,
     'focused native seek bar should scrub video with D-pad left/right while focused buttons stay in button navigation');
   assert.match(android, /if \(nativeChrome != null && nativeChrome\.getVisibility\(\) == View\.VISIBLE\) \{[\s\S]+if \(handleNativeSeekBarKey\(e\)\) return true;[\s\S]+moveNativeControlFocus/,
     'native seek bar should handle left/right before the button row moves focus');
@@ -5008,8 +5008,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native remux/transcode playback should display and save absolute movie time while seeking inside the restarted segment');
   assert.match(android, /private long nativeLastAutoResumeSeekMs;[\s\S]+nativeLastAutoResumeSeekMs = 0L;[\s\S]+private void rememberNativeVideoPosition\(\) \{[\s\S]+nativeServerSeekMode\(\)[\s\S]+nativeLastVideoDisplayMs - pos[\s\S]+backwardsBy > 5000L[\s\S]+requestNativeVideoSeek\(nativeLastVideoDisplayMs\)/,
     'native remux/transcode playback should recover same-source segment restarts at the last absolute movie time');
-  assert.match(ui, /function seekTo\(seconds\) \{[\s\S]+p\.suppressSeekLoaderUntil = appMs\(\) \+ 4500;[\s\S]+clearTimeout\(S\._waitT\);[\s\S]+\$\(\'playerLoader\'\)\.classList\.remove\(\'show\'\);[\s\S]+startSource\('transcode', seconds, \{ quietSeek: true \}\)[\s\S]+startSource\('remux', seconds, \{ quietSeek: true \}\)/,
-    'web movie/episode seeking should not show the full startup loader during repeated skips');
+  assert.match(ui, /function seekTo\(seconds\) \{[\s\S]+p\.suppressSeekLoaderUntil = appMs\(\) \+ 4500;[\s\S]+clearTimeout\(S\._waitT\);[\s\S]+\$\(\'playerLoader\'\)\.classList\.remove\(\'show\'\);[\s\S]+if \(p\.usingNative && canUseNativeVideoPlayer\(\)\) \{[\s\S]+tryNativeVideoPlayer\(kind, seconds, \{ quietSeek: true \}\)[\s\S]+window\.TriboonTV\.seekTo\(String\(seconds\)\)[\s\S]+startSource\('transcode', seconds, \{ quietSeek: true \}\)[\s\S]+startSource\('remux', seconds, \{ quietSeek: true \}\)/,
+    'web seeking must move the native player when usingNative, and must not show the full startup loader during repeated skips');
   assert.match(ui, /<canvas id="seekHold" aria-hidden="true"><\/canvas>[\s\S]+function showSeekHoldFrame\(\) \{[\s\S]+drawImage\(v, 0, 0, c\.width, c\.height\);[\s\S]+c\.classList\.add\('show'\);/,
     'web movie/episode seeking should hold the last rendered frame over remux/transcode source swaps');
   assert.match(ui, /if \(opts\.quietSeek && p\) \{[\s\S]+p\.suppressSeekLoaderUntil = appMs\(\) \+ 4500;[\s\S]+showSeekHoldFrame\(\);[\s\S]+\}/,

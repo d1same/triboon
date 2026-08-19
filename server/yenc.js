@@ -43,14 +43,19 @@ function encodePart(data, { name, partNum, totalParts, begin, end, lineLen = 128
 }
 
 // Decode one yEnc article body. Returns { data, part: {begin,end}|null, size, name, crcOk }.
-function decode(articleBuf) {
+// skipDecoded: walk-and-CRC the prefix (so crcOk stays honest) but do not keep those bytes —
+// a mid-segment seek only needs the suffix.
+function decode(articleBuf, opts = {}) {
+  const skipDecoded = Math.max(0, Math.floor(Number(opts && opts.skipDecoded) || 0));
   const text = articleBuf;
   let pos = 0;
   let meta = { begin: null, end: null, size: null, name: null };
   let pcrc = null;
   // Pre-size output generously; trimmed at the end.
-  const out = Buffer.allocUnsafe(text.length);
+  const out = Buffer.allocUnsafe(Math.max(0, text.length - skipDecoded));
   let o = 0;
+  let decoded = 0;
+  let crc = 0xffffffff;
   let inBody = false;
 
   while (pos < text.length) {
@@ -80,15 +85,16 @@ function decode(articleBuf) {
           if (i + 1 >= lineEnd) break;
           i++;
           c = (text[i] - 64) & 0xff;
-          out[o++] = (c - 42) & 0xff;
         }
-        else out[o++] = (c - 42) & 0xff;
+        const byte = (c - 42) & 0xff;
+        crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+        if (decoded++ >= skipDecoded) out[o++] = byte;
       }
     }
     pos = nl + 1;
   }
   const data = out.subarray(0, o);
-  const crcOk = pcrc === null ? true : crc32(data) === pcrc;
+  const crcOk = pcrc === null ? true : ((crc ^ 0xffffffff) >>> 0) === pcrc;
   const part = meta.begin !== null ? { begin: meta.begin, end: meta.end } : null;
   return { data, part, size: meta.size, name: meta.name, crcOk };
 }

@@ -158,9 +158,14 @@ const STRUCTURAL_AFTER_TITLE = new RegExp('^(' + [
   'complete', 'season', 'extended', 'directors', 'theatrical', 'unrated', 'uncut',
   'remastered', 'imax', 'proper', 'repack', 'internal', 'limited', 'criterion',
   'anniversary', 'edition', 'cut', 'redux', 'aka', 'intl',
-  'us', 'uk', 'au', 'nz', 'multi', 'dual', 'dubbed', 'ita', 'eng', 'french', 'german',
+  'us', 'uk', 'au', 'nz', 'ca', 'multi', 'dual', 'dubbed', 'ita', 'eng', 'french', 'german',
   'spanish', 'nordic', 'vostfr',
 ].join('|') + ')$');
+// Country/remake tags are a legal title boundary (The.Office.AU is not a longer title), but they
+// name a DIFFERENT show unless the query asked for that country. "The Office" (US, tt0386679)
+// must not play The.Office.AU. Untagged The.Office.S01E01 still matches. "The Office UK" still
+// matches The.Office.UK because the wanted words include uk.
+const COUNTRY_EDITION = new Set(['au', 'uk', 'nz', 'ca']);
 const TITLE_WORD_EQUIV = new Map([
   ['sorcerers', 'philosophers'],
   ['philosophers', 'sorcerers'],
@@ -234,6 +239,7 @@ function releaseMatches(name, wanted) {
       const ti = titleWordsMatchFromStart(toks, words);
       if (ti < 0) continue;
       const after = toks[ti];
+      if (after !== undefined && COUNTRY_EDITION.has(after) && !words.includes(after)) continue;
       if (after !== undefined && !STRUCTURAL_AFTER_TITLE.test(after)) continue;
       matched = true;
       break;
@@ -275,6 +281,33 @@ function releaseMatches(name, wanted) {
     return false;
   }
   return true;
+}
+
+// Catalog identity lock for remakes / same-name titles. Indexers often return The Office 2024
+// next to The Office 2005. If the NZB is tagged with a DIFFERENT IMDb or TVDB id than the
+// catalog title, it is the other work — reject even when the filename has no year.
+// Untagged NZBs still go through releaseMatches (name + year + country).
+function normImdb(id) {
+  const digits = String(id || '').trim().toLowerCase().replace(/^tt/, '').replace(/\D/g, '');
+  if (!digits) return '';
+  const n = parseInt(digits, 10);
+  return Number.isInteger(n) && n > 0 ? String(n) : '';
+}
+function normCatalogId(id) {
+  const n = parseInt(String(id || '').trim(), 10);
+  return Number.isInteger(n) && n > 0 ? String(n) : '';
+}
+function catalogIdentityMatches(result, params) {
+  const wantImdb = normImdb(params && params.imdbid);
+  const gotImdb = normImdb(result && (result.imdb || result.imdbid));
+  if (wantImdb && gotImdb && wantImdb !== gotImdb) return false;
+  const wantTvdb = normCatalogId(params && params.tvdbid);
+  const gotTvdb = normCatalogId(result && result.tvdbid);
+  if (wantTvdb && gotTvdb && wantTvdb !== gotTvdb) return false;
+  return true;
+}
+function releaseQualifies(result, wanted, params) {
+  return catalogIdentityMatches(result, params) && releaseMatches(result && result.name, wanted);
 }
 const { rankReleases, parseRelease, rankAudiobooks } = require('./scoring');
 const { mountNzb, orderVolumes } = require('./archive');
@@ -360,12 +393,20 @@ function summarizeAttempts(attempts = []) {
 // Is this mounted file too small to be the real feature it claims? Pure + exported so it can be unit-
 // tested without a multi-MB fixture. Mirrors scoring.js's DECLARED-size floors on the ACTUAL mounted
 // bytes: nothing real is <80MB; nothing claiming 1080p/2160p is <300MB. Returns a fail reason or ''.
-function stubFeatureReason(sizeBytes, name) {
+function stubFeatureReason(sizeBytes, name, declaredBytes) {
   const gb = (Number(sizeBytes) || 0) / 1e9;
   if (gb <= 0) return ''; // unknown size — don't guess
+  const declaredGb = (Number(declaredBytes) || 0) / 1e9;
   const rank = parseRelease(name || '').resolutionRank; // 2160p=4, 1080p=3, unknown=2
-  if (gb < 0.08 || (gb < 0.3 && rank >= 3)) {
+  // 80MB is the hard floor. A real short 4K (Sintel ~15 min) can be 180–400MB, so a flat
+  // 300MB 1080p/4K reject was swapping those Plays to 1080p. Catch the MK2-class lie instead:
+  // indexer billed a feature-sized file, but the mounted payload is a sample/stub.
+  if (gb < 0.08) {
     const forRes = rank >= 4 ? ' for a 2160p release' : rank >= 3 ? ' for a 1080p release' : '';
+    return `stub/incomplete: only ${(gb * 1000).toFixed(0)}MB${forRes}`;
+  }
+  if (declaredGb >= 2 && gb < 0.4 && rank >= 3) {
+    const forRes = rank >= 4 ? ' for a 2160p release' : ' for a 1080p release';
     return `stub/incomplete: only ${(gb * 1000).toFixed(0)}MB${forRes}`;
   }
   return '';
@@ -519,6 +560,44 @@ function nzbVerdictKey(rawUrl) {
     stable = u.href;
   } catch {}
   return 'nzb:' + crypto.createHash('sha256').update(stable).digest('hex').slice(0, 32);
+}
+
+const DEAD_RELEASE_VERDICTS = new Set(['missing', 'blocked']);
+
+// Same Usenet post under a second indexer URL: size + poster, plus usenet-day when we have it.
+// Requires a poster so two different same-size releases from the same RSS day cannot collide.
+function releaseFingerprint(candidate) {
+  const size = Number(candidate && candidate.sizeBytes);
+  const poster = String(candidate && candidate.poster || '').trim().toLowerCase();
+  if (!(size > 0) || !poster.includes('@')) return null;
+  let day = 0;
+  const rawDate = candidate.usenetDate || candidate.pubDate;
+  if (rawDate != null && rawDate !== '') {
+    const n = Number(rawDate);
+    const ms = Number.isFinite(n) && n > 0
+      ? (n < 1e12 ? n * 1000 : n)
+      : Date.parse(String(rawDate));
+    if (Number.isFinite(ms)) day = Math.floor(ms / 86400000);
+  }
+  return 'fp:' + crypto.createHash('sha256').update(`${Math.round(size)}|${poster}|${day}`).digest('hex').slice(0, 32);
+}
+
+function applyNzbFingerprintFields(candidate, xml) {
+  if (!candidate || candidate.poster) return;
+  try {
+    const nzb = parseNzb(xml);
+    const file = nzb.files && nzb.files[0];
+    if (file && file.poster) candidate.poster = file.poster;
+    if (file && file.date && !candidate.usenetDate) candidate.usenetDate = file.date;
+  } catch {}
+}
+
+function lookupVerdict(verdicts, candidate) {
+  if (!verdicts || !candidate) return null;
+  return verdicts.get(nzbVerdictKey(candidate.nzbUrl))
+    || verdicts.get('t:' + normTitle(candidate.name))
+    || (releaseFingerprint(candidate) && verdicts.get(releaseFingerprint(candidate)))
+    || null;
 }
 
 function firstProbeTarget(nzbXml, mountOpts = {}, candidateName = '') {
@@ -748,6 +827,9 @@ class Pipeline {
       opts.ignoreCatalogIds ? undefined : clean(params.tvdbid),
       episodePart(params.season),
       episodePart(params.ep),
+      // Catalog year is the remake lock (The Office 2005 vs 2024). Keep it on the key so a
+      // yearless search cannot reuse a 2005-filtered hit, or the other way around.
+      Number.isInteger(params.year) ? params.year : undefined,
     ]);
   }
 
@@ -1162,12 +1244,13 @@ class Pipeline {
     }
     let { results, errors } = await this._fanoutMeasured(ixs, params, { timeoutMs });
     // TITLE VERIFICATION — indexers return loosely-related releases; a release only
-    // qualifies if its name actually contains the wanted title (and episode/year).
-    // Without this, "wrong movie plays" — the #1 trust-killer.
-    results = results.filter((r) => releaseMatches(r.name, wanted));
+    // qualifies if its name actually contains the wanted title (and episode/year) AND
+    // any indexer IMDb/TVDB tag matches the catalog title. Wrong remake = trust-killer.
+    const qualifies = (r) => releaseQualifies(r, wanted, params);
+    results = results.filter(qualifies);
     if (aliasP) {
       const retry = await aliasP;
-      const verified = retry.results.filter((r) => releaseMatches(r.name, wanted));
+      const verified = retry.results.filter(qualifies);
       if (verified.length) {
         const seen = new Set(results.map((r) => r.nzbUrl || r.guid || r.name));
         for (const r of verified) {
@@ -1188,7 +1271,7 @@ class Pipeline {
         const simpler = [...head.slice(0, 3), ...tail].join(' ');
         ixs.forEach((ix) => this.usage.onSearch(ix.name));
         const retry = await this._fanoutMeasured(ixs, { ...params, q: simpler }, { timeoutMs });
-        const verified = retry.results.filter((r) => releaseMatches(r.name, wanted));
+        const verified = retry.results.filter(qualifies);
         if (verified.length) { results = verified; errors = retry.errors; }
       }
     }
@@ -1201,7 +1284,7 @@ class Pipeline {
       delete titleOnly.tvdbid;
       ixs.forEach((ix) => this.usage.onSearch(ix.name));
       const retry = await this._fanoutMeasured(ixs, titleOnly, { timeoutMs });
-      const verified = retry.results.filter((r) => releaseMatches(r.name, wanted));
+      const verified = retry.results.filter(qualifies);
       if (verified.length) { results = verified; errors = retry.errors; }
     }
     return { at: Date.now(), results, errors };
@@ -1232,13 +1315,19 @@ class Pipeline {
       verifyQ = `${verifyQ}${se}`.trim();
     }
     const wanted = parseWantedTitle(verifyQ);
+    // Episode Play sends year=2005 on the body, not in q ("The Office S01E01"). Without this
+    // copy, The.Office.2024 still matches the title+episode and can outrank the US original.
+    if (wanted && !wanted.year && policy.wantedYear) wanted.year = policy.wantedYear;
     // TV episode context for scoring: a whole-season PACK must not be size-cap-disqualified — only ONE
     // episode streams from it (it's still size-SHAPED, so it stays a low-ranked fallback below singles).
     // Scoped to episode requests; movies/season-less searches never get wantedEpisode → unaffected.
     { const _we = wantedEpisodeOf(params); if (_we) policy = { ...policy, wantedEpisode: _we }; }
     // The matcher accepts ±1 year (regional release-date drift); scoring should still PREFER the
     // exact year so a re-release/adjacent-year duplicate never outranks the true title on a tie.
-    if (wanted && wanted.year) policy = { ...policy, wantedYear: wanted.year };
+    if (wanted && wanted.year) {
+      policy = { ...policy, wantedYear: wanted.year };
+      params = { ...params, year: wanted.year };
+    }
     const key = this._searchCacheKey(params);
     const titleKey = this._searchCacheKey(params, { ignoreCatalogIds: true });
     let hit = this._getFreshSearchHit(key);
@@ -1270,7 +1359,10 @@ class Pipeline {
       hit = await pending;
       if (pendingKey !== key) this._rememberSearchHit(key, hit);
     }
-    const { results, errors } = hit;
+    const { errors } = hit;
+    // Re-filter on every use. Detail warmup is title-only and can cache a remake next to
+    // the original; Play with catalog year/IMDb must drop the other version from that hit.
+    const results = (hit.results || []).filter((r) => releaseQualifies(r, wanted, params));
     // Deep prefetch: warm the TOP candidate's NZB in the background while the user is still
     // looking at the title page. Track it per quality policy: warming the 1080p top pick
     // must not prevent a later 4K toggle from warming the UHD top pick too.
@@ -1295,7 +1387,7 @@ class Pipeline {
       }
     }
     const enriched = results.map((r) => {
-      const v = this.verdicts.get(nzbVerdictKey(r.nzbUrl)) || this.verdicts.get('t:' + normTitle(r.name));
+      const v = lookupVerdict(this.verdicts, r);
       return {
         ...r,
         streamClass: v?.detail?.streamClass,
@@ -1359,7 +1451,7 @@ class Pipeline {
       if (verified.length) break; // first strategy that finds real books wins
     }
     const enriched = verified.map((r) => {
-      const v = this.verdicts.get(nzbVerdictKey(r.nzbUrl)) || this.verdicts.get('t:' + normTitle(r.name));
+      const v = lookupVerdict(this.verdicts, r);
       return { ...r, health: v ? (v.verdict === 'ok' ? 'verified' : v.verdict) : undefined };
     });
     return {
@@ -1401,6 +1493,8 @@ class Pipeline {
   _recordVerdict(candidate, verdict, detail = {}) {
     this.verdicts.set(nzbVerdictKey(candidate.nzbUrl), verdict, detail);
     this.verdicts.set('t:' + normTitle(candidate.name), verdict, detail);
+    const fp = DEAD_RELEASE_VERDICTS.has(verdict) && releaseFingerprint(candidate);
+    if (fp) this.verdicts.set(fp, verdict, detail);
   }
 
   // Try one candidate: fetch NZB → mount → gate. Returns { vf } or { fail: reason }.
@@ -1408,6 +1502,11 @@ class Pipeline {
     const identity = mountIdentity(candidate, mountOpts);
     const consumerSignal = mountOpts && mountOpts.signal;
     if (consumerSignal && consumerSignal.aborted) return { fail: 'cancelled: source race loser' };
+    const fp = releaseFingerprint(candidate);
+    const deadFp = fp && this.verdicts.get(fp);
+    if (deadFp && DEAD_RELEASE_VERDICTS.has(deadFp.verdict)) {
+      return { fail: `${deadFp.verdict}: same usenet post already known dead` };
+    }
     // Live-mount reuse: replays and multi-user plays of the same release skip everything.
     const liveId = this.mountByUrl.get(identity);
     if (liveId) {
@@ -1531,6 +1630,12 @@ class Pipeline {
         return { fail: `nzb: ${e.message}` };
       }
       }
+    }
+    applyNzbFingerprintFields(candidate, xml);
+    const fpAfterNzb = releaseFingerprint(candidate);
+    const deadAfterNzb = fpAfterNzb && this.verdicts.get(fpAfterNzb);
+    if (deadAfterNzb && DEAD_RELEASE_VERDICTS.has(deadAfterNzb.verdict)) {
+      return { fail: `${deadAfterNzb.verdict}: same usenet post already known dead` };
     }
 
     // First-article STAT probe and the mount now run CONCURRENTLY (startup win #1). The probe used
@@ -1682,7 +1787,8 @@ class Pipeline {
     // Audiobooks are legitimately small (a short unabridged title at 32-64kbps can be well under the
     // video 80MB floor), so skip the video feature-size stub check for them — the audiobook scorer
     // already applied its own (much lower) pre-mount junk floor.
-    const stub = this.enforceFeatureSize && !mountOpts.audiobook && stubFeatureReason(Number(vf.size) || 0, vf.name || candidate.name || '');
+    const stub = this.enforceFeatureSize && !mountOpts.audiobook && stubFeatureReason(
+      Number(vf.size) || 0, vf.name || candidate.name || '', Number(candidate.sizeBytes) || 0);
     if (stub) {
       recordSelectionVerdict('unstreamable', { streamClass: 'stub', sizeGb: +((Number(vf.size) || 0) / 1e9).toFixed(3) });
       return { fail: stub, vf };
@@ -1763,10 +1869,23 @@ class Pipeline {
     }
     const { candidates } = await this.search(params, policy);
     let playable = this._playableCandidates(candidates, params);
+    const explicitPick = (params.pickKey || params.pick) && !params.pinnedResume;
+    if (explicitPick && !playable.length) throw new Error('picked source not found');
+    // Exact 4K (or any exact rank) with no playable match: try labelled matching-res releases
+    // that are only soft-penalized (probe-timeout, small short-film) before relaxing to 1080p.
+    // Hard disqualifies (−100000: missing, encrypted, sample <80MB, not-the-movie) stay out.
+    if (!playable.length && policy.exactResolutionRank != null && !explicitPick) {
+      playable = candidates.filter((c) => {
+        const rank = c.attributes && Number.isInteger(c.attributes.resolutionRank)
+          ? c.attributes.resolutionRank
+          : parseRelease(c.name).resolutionRank;
+        return rank === policy.exactResolutionRank && c.score > -50000;
+      });
+    }
     // 4K toggle with no 4K source: exactResolutionRank disqualifies every non-4K release, which
     // would fail the play entirely ("I toggled 4K and nothing plays"). Fall back to the best
     // available resolution instead — keep the 4K preference so UHD still wins when it exists.
-    if (!playable.length && policy.exactResolutionRank != null) {
+    if (!playable.length && policy.exactResolutionRank != null && !explicitPick) {
       const relaxed = { ...policy };
       delete relaxed.exactResolutionRank;
       const retry = await this.search(params, relaxed);
@@ -1778,7 +1897,6 @@ class Pipeline {
     // Cold start races the top candidates; a single explicit Sources pick stays a direct mount.
     // A pinned resume keeps the race: the pin leads the ranked list, but a dead pin must not turn
     // resume into a serial one-at-a-time walk (the pre-pin behavior users knew was the raced one).
-    const explicitPick = (params.pickKey || params.pick) && !params.pinnedResume;
     const joiningPrepare = !explicitPick && this._findTitlePrepare(params, policy);
     if (joiningPrepare) this.metrics.titlePrepareJoins++;
     // Smash Play during Details prepare must join that job, not open a 5-wide race that
@@ -1840,7 +1958,7 @@ class Pipeline {
     if (!params.pickKey && !params.pick) return autoPlayable;
     const picked = candidates.find((c) => params.pickKey && c.pickKey === params.pickKey)
       || candidates.find((c) => params.pick && c.name === params.pick);
-    if (!picked) return autoPlayable;
+    if (!picked) return [];
     // A pinned resume is the source we HAPPENED to be playing, not a choice the user is owed.
     // Front it only while the scorer still calls it playable — a pin that rotted since the last
     // session is skipped outright, and the ranked list plays without the manual-pick size-window
@@ -1849,18 +1967,10 @@ class Pipeline {
       if (!autoPlayable.some((c) => c.pickKey === picked.pickKey)) return autoPlayable;
       return [picked, ...autoPlayable.filter((c) => c.pickKey !== picked.pickKey)];
     }
-    // A manual Sources pick is an explicit OVERRIDE — honored FIRST even when the auto-scorer would
-    // reject it (the drawer deliberately lists releases past the auto-pick size cap; without this a
-    // picked 38GB UHD remux was silently dropped). The system can't know WHY it was picked, so the
-    // fallback never walks blindly by size: if the pick can't stream, try just the SINGLE next-
-    // smaller release (a close alternative to what they chose), then fall back to the best auto-
-    // ranked streamable release.
-    const pickedSize = Number(picked.sizeBytes) || 0;
-    const oneBelow = candidates
-      .filter((c) => c.pickKey !== picked.pickKey && (Number(c.sizeBytes) || 0) > 0 && (Number(c.sizeBytes) || 0) < pickedSize)
-      .sort((a, b) => (Number(b.sizeBytes) || 0) - (Number(a.sizeBytes) || 0))[0];
-    const seen = new Set([picked.pickKey, oneBelow && oneBelow.pickKey].filter(Boolean));
-    return [picked, ...(oneBelow ? [oneBelow] : []), ...autoPlayable.filter((c) => !seen.has(c.pickKey))];
+    // A manual Sources pick is the file they tapped. Do not substitute a smaller WEB-DL when
+    // the 41GB remux they chose is slow, over-cap, or missing from the re-search — fail instead
+    // so the drawer choice is honest.
+    return [picked];
   }
 
   async prepare(params, policy = {}, mountOpts = {}) {
@@ -2156,7 +2266,8 @@ class Pipeline {
 
 module.exports = {
   Pipeline, GATE_MS, STARTUP_SLOTS, PLAY_RACE_WIDTH, StartupGate,
-  parseWantedTitle, releaseMatches, shortTitleQuery, candidateKey, nzbVerdictKey,
+  parseWantedTitle, releaseMatches, catalogIdentityMatches, releaseQualifies, shortTitleQuery, candidateKey, nzbVerdictKey,
+  releaseFingerprint, applyNzbFingerprintFields,
   summarizeAttempts, stubFeatureReason, parseWantedBook, bookMatches,
   isNonAudioAudiobookMount, firstProbeMsgId, mountHasActivePlayback, ACTIVE_PLAYBACK_GRACE_MS,
 };
