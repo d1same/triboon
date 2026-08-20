@@ -755,8 +755,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'the single-season shortcut also hides the pointless season/all-seasons strip');
   // The ring is a HAIRLINE accent + real elevation (a 2px saturated band read as a gold picture
    // frame around every tile), and it is shared by every artwork surface.
-  assert.match(ui, /body \.playerEpCard\.focus \.peStill,body \.playerEpCard:focus-visible \.peStill[\s\S]{0,500}box-shadow:0 0 0 1px var\(--focusSoft\),0 4px 12px rgba\(0,0,0,\.45\) !important/,
-    'every artwork tile — including the in-player episode strip — shares one hairline focus ring');
+  assert.match(ui, /body \.pcard\.focus \.art,body \.pcard:focus-visible \.art[\s\S]{0,900}box-shadow:0 0 0 1px var\(--focusSoft\),0 4px 12px rgba\(0,0,0,\.45\) !important/,
+    'catalog artwork tiles share one hairline focus ring');
+  assert.match(ui, /#player #playerEpisodes \.playerEpCard\.focus \.peStill,[\s\S]+#player #playerEpisodes \.playerEpCard:focus-visible \.peStill\{box-shadow:0 0 0 2px var\(--focus\),0 10px 22px rgba\(0,0,0,\.52\) !important\}/,
+    'in-player episode focus uses a clearer 2px ring without the old thick gold frame');
   assert.ok(!/box-shadow:inset 0 0 0 3px var\(--focus\),0 0 18px var\(--artFocusGlow\)/.test(ui),
     'the old thick amber ring on in-player episode stills is gone');
   assert.match(ui, /\.gChip,\.seasonChip,\.ghostMini,\.testBtn,#trailerPlay,#trailerWl,\s*\n\.levelPick button,\.sizePick button,\.mvActions\{border:0 !important\}/,
@@ -3012,7 +3014,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'person known-for pages should lazy-render all filtered credits in batches instead of slicing to a fixed cap');
   assert.match(ui, /\$\('person'\)\.addEventListener\('scroll', maybeLoadMorePersonWorks, \{ passive: true \}\);[\s\S]+if \(S\.view === 'person' && S\.gridIdx >= \(S\.gridItems \|\| \[\]\)\.length - Math\.max\(2, gridCols\(\) \* 2\)\) \{[\s\S]+loadMorePersonWorks\(false\);/,
     'person known-for lazy loading should work for both scrolling and D-pad focus near the loaded edge');
-  assert.ok(ui.includes('id="statsBtn"') && ui.includes("return ['chGuide', 'back10', 'playPause', 'fwd30', 'nextEpBtn', 'favBtn', 'splitBtn', 'ccBtn', 'audBtn', 'srndBtn', 'qualBtn', 'castBtn', 'airplayBtn', 'muteBtn', 'fsBtn', 'statsBtn']")
+  assert.ok(ui.includes('id="statsBtn"') && ui.includes("return ['chGuide', 'aboutBtn', 'back10', 'playPause', 'fwd30', 'nextEpBtn', 'favBtn', 'splitBtn', 'ccBtn', 'audBtn', 'srndBtn', 'qualBtn', 'castBtn', 'airplayBtn', 'muteBtn', 'fsBtn', 'statsBtn']")
     && ui.includes('function collectPlayerStats()') && ui.includes('window.__tvNativeVideoStats'),
     'web player stats must be the last D-pad reachable control and accept native ExoPlayer stats');
   assert.ok(ui.includes('Server target') && ui.includes('Server read-ahead')
@@ -3630,8 +3632,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Android player handoff should receive the same episode subline as the web player');
   assert.match(ui, /episodeChoices: nativeEpisodeChoices\(\),/,
     'native Android player handoff should include the current-season episode choices');
-  assert.match(ui, /function nativeEpisodeFocusIndex\(\) \{[\s\S]+const current = st\.items\.findIndex\(\(ep\) => ep\.item && ep\.item\.key === st\.currentKey\);[\s\S]+return current >= 0 \? current : Math\.max\(0, Math\.min\(st\.items\.length - 1, st\.idx \|\| 0\)\);[\s\S]+window\.TriboonTV\.updateEpisodeChoices\(JSON\.stringify\(\{ episodes: nativeEpisodeChoices\(\), focusIndex: nativeEpisodeFocusIndex\(\) \}\)\);/,
-    'native Android episode refreshes should send an explicit current-episode focus index');
+  assert.match(ui, /function nativeEpisodeFocusIndex\(\) \{[\s\S]+const current = st\.items\.findIndex\(\(ep\) => ep\.item && ep\.item\.key === st\.currentKey\);[\s\S]+const episodeIdx = current >= 0 \? current : Math\.max\(0, Math\.min\(st\.items\.length - 1, st\.idx \|\| 0\)\);[\s\S]+return episodeIdx \+ \(playerAboutHasPeople\(\) \? 1 : 0\);[\s\S]+window\.TriboonTV\.updateEpisodeChoices\(JSON\.stringify\(\{ episodes: nativeEpisodeChoices\(\), focusIndex: nativeEpisodeFocusIndex\(\) \}\)\);/,
+    'native Android episode refreshes should offset focus for the About tile only when that title has people');
   assert.match(ui, /window\.__tvNativeEpisodeSelect = \(index, pos, dur, token\) => \{[\s\S]+S\.playerSeasonStrip\.idx = idx;[\s\S]+activatePlayerEpisode\(\);[\s\S]+\};/,
     'native episode-row selection should return through the normal web episode play path');
   assert.match(android, /private String nativePlaybackSubline = "";[\s\S]+String episodeLabel = j\.optString\("episodeLabel", ""\);[\s\S]+nativePlaybackSubline = episodeLabel == null \? "" : episodeLabel;[\s\S]+nativePlayerTitle\.setText\(title\);[\s\S]+nativePlayerTitle\.setVisibility\(View\.VISIBLE\);[\s\S]+String subline = isLiveMode \? "" : nativePlaybackSubline;[\s\S]+nativePlayerSubline\.setText\(subline\);[\s\S]+nativePlayerSubline\.setVisibility\(subline\.isEmpty\(\) \? View\.GONE : View\.VISIBLE\);/,
@@ -3654,8 +3656,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Android episode cards should show a larger still with the episode name below the image');
   assert.match(androidStrings, /<string name="watched_episode">WATCHED  %1\$s<\/string>/,
     'native Android watched labels remain localized while preserving the episode tag');
-  assert.match(android, /private GradientDrawable nativeEpisodeCardBg\(boolean focused, boolean current\) \{[\s\S]+new int\[\]\{0x00000000, 0x00000000\}[\s\S]+d\.setCornerRadius\(dp\(16\)\);[\s\S]+return d;[\s\S]+private GradientDrawable nativeEpisodeStillFrame\(boolean focused, boolean current\) \{[\s\S]+if \(focused \|\| current\) d\.setStroke\(dp\(1\), focused \? 0x88C6B37A : 0x66C6B37A\);[\s\S]+return d;/,
-    'native Android episode cards should use rounded borderless card backgrounds');
+  assert.match(android, /private GradientDrawable nativeEpisodeCardBg\(boolean focused, boolean current\) \{[\s\S]+new int\[\]\{0x00000000, 0x00000000\}[\s\S]+d\.setCornerRadius\(dp\(16\)\);[\s\S]+return d;[\s\S]+private GradientDrawable nativeEpisodeStillFrame\(boolean focused, boolean current\) \{[\s\S]+if \(focused\) d\.setStroke\(dp\(2\), 0xFFC6B37A\);[\s\S]+else if \(current\) d\.setStroke\(dp\(1\), 0x66C6B37A\);[\s\S]+return d;/,
+    'native Android episode cards should use a clearer 2dp focus ring without a thick gold frame');
   assert.match(android, /still\.setTag\("nativeEpisodeStill"\);[\s\S]+GradientDrawable stillBg = new GradientDrawable\(\);[\s\S]+stillBg\.setCornerRadius\(dp\(12\)\);[\s\S]+still\.setBackground\(stillBg\);[\s\S]+still\.setForeground\(nativeEpisodeStillFrame\(i == nativeEpisodeIndex && nativeEpisodeStripOpen, ep\.current\)\);[\s\S]+still\.setClipToOutline\(true\);/,
     'native Android episode thumbnails should clip and own the same contained hollow frame as the web player');
   assert.match(android, /public void updateEpisodeChoices\(String json\) \{[\s\S]+updateNativeEpisodeChoices\(json\)/,
@@ -3678,18 +3680,62 @@ test('Android native player: direct source and native chrome stay out of the web
     'the eager per-card still load inside the render loop is gone');
   assert.match(android, /url\.equals\(nativeStillWant\.get\(view\)\)\) view\.setImageBitmap\(finalBm\);/,
     'stale still loads must not paint recycled cards (view-wants-url identity check)');
-  assert.match(android, /if \(code == KeyEvent\.KEYCODE_DPAD_DOWN && isNativeControl\(getCurrentFocus\(\)\) && openNativeEpisodeStrip\(\)\) return true;/,
-    'native Android Down from the control row should open the episode strip when episode choices exist');
-  assert.match(ui, /if \(S\.zone === 'playerCtl' && canOpenPlayerEpisodes\(\)\) return openPlayerEpisodes\(\);/,
-    'web D-pad Down from player controls should open the episode strip for TV episode playback');
+  assert.match(android, /if \(code == KeyEvent\.KEYCODE_DPAD_DOWN && isNativeControl\(getCurrentFocus\(\)\) && openNativeEpisodeStrip\(\)\) return true;[\s\S]+if \(code == KeyEvent\.KEYCODE_DPAD_DOWN && isNativeControl\(getCurrentFocus\(\)\) && showNativeTitleInfo\(\)\) return true;/,
+    'native Android Down from the control row should open episodes first, then the About card on movies');
+  assert.match(ui, /if \(S\.zone === 'playerCtl' && canOpenPlayerEpisodes\(\)\) return openPlayerEpisodes\(\);[\s\S]+if \(S\.zone === 'playerCtl' && canOpenPlayerAbout\(\)\) return openPlayerAbout\(\);/,
+    'web D-pad Down from player controls should open the episode strip for TV episode playback, then About on movies');
+  assert.match(ui, /id="aboutBtn"[\s\S]+id="playerAbout"[\s\S]+function openPlayerAbout\(\) \{[\s\S]+function closePlayerAbout\(\)/,
+    'VOD playback should expose a dedicated About chrome button and in-player About card');
+  assert.match(ui, /#playerAbout\{position:absolute;inset:0;z-index:8[\s\S]+#player\.aboutOpen #osd\{opacity:0;pointer-events:none\}/,
+    'the About wash covers the full player and hides the control-bar shade so it cannot cut the dim');
+  assert.match(ui, /\.paPoster\{flex:0 0 180px;width:180px;height:270px/,
+    'browser About poster is large enough to read from a desktop window');
+  assert.match(ui, /function nativeEpisodeAboutChoice\(\) \{[\s\S]+about: true,[\s\S]+return playerAboutHasPeople\(\) \? \[nativeEpisodeAboutChoice\(\)\]\.concat\(eps\) : eps/,
+    'the episode strip should lead with an About tile only when the title has cast or crew');
+  assert.match(ui, /function playerAboutTmdbSpec\(it\) \{[\s\S]+const tmdbId = \+\(\(it && it\.tmdbId\) \|\| 0\);[\s\S]+if \(\(it\.type === 'movie' \|\| it\.type === 'tv'\) && tmdbId\)/,
+    'About should use a real TMDB id so unmatched library files do not invent credits');
+  assert.match(ui, /function playerAboutHasPeople\(about\) \{[\s\S]+about\.cast[\s\S]+about\.crew[\s\S]+function canOpenPlayerAbout\(\) \{[\s\S]+playerAboutHasPeople\(\)/,
+    'the About chrome button should hide when a title has no cast or crew');
+  assert.match(ui, /function openLocalDetail\(it\) \{[\s\S]+\$\('dCastWrap'\)\.style\.display = 'none'[\s\S]+\$\('dCrew'\)\.style\.display = 'none'/,
+    'unmatched in-house library details should hide Cast and crew');
+  assert.match(ui, /function renderCast\(cast\) \{[\s\S]+if \(!list\.length\) return;/,
+    'details Cast should stay hidden when TMDB returns no people');
+  assert.match(android, /nativeAboutAvailable = nativeAboutData\.optBoolean\("hasPeople"/,
+    'native About should hide the chrome button when the title has no people');
+  assert.match(android, /if \(!\"video\"\.equals\(nativeMode\) \|\| nativeAboutOverlay == null \|\| !nativeAboutAvailable\) return false/,
+    'native About should not open when the title has no cast or crew');
+  assert.match(ui, /function aboutCastNameHtml\(name\) \{[\s\S]+<br>\$\{esc\(parts\.slice\(1\)\.join\(' '\)\)\}/,
+    'About cast names should put first and last name on two lines');
+  assert.match(ui, /\.paCast\{display:flex;gap:18px[\s\S]+\.paCastItem\{width:max-content[\s\S]+\.paCastNm\{[^}]*-webkit-line-clamp:3/,
+    'About cast should use a balanced gap while names wrap in full');
+  assert.match(ui, /it\.type === 'episode' \? getPlayerEpisodeContext\(it\)[\s\S]+overview: \(ep && ep\.overview\) \|\| S\.playerAbout\.overview/,
+    'episode About should prefer that episode plot over the show overview');
+  assert.match(ui, /kicker\.textContent = about\.subline \? 'This episode' : 'About'[\s\S]+sub\.textContent = about\.subline/,
+    'episode About should label the card This episode and show SxxExx plus the episode name');
+  assert.match(android, /private static String formatNativeAboutCastName\(String name\) \{[\s\S]+parts\[0\] \+ "\\n"/,
+    'native About should split first and last name onto two lines');
+  assert.match(android, /item\.setPadding\(0, 0, dp\(16\), 0\)[\s\S]+nm\.setMaxLines\(3\);[\s\S]+WRAP_CONTENT, ViewGroup\.LayoutParams\.WRAP_CONTENT/,
+    'native About cast should use a balanced gap while names wrap in full');
+  assert.match(android, /nativeAboutKicker\.setText\(subline\.isEmpty\(\) \? "ABOUT" : "THIS EPISODE"\)/,
+    'native episode About should switch the kicker to This episode');
+  assert.match(android, /nativeAboutSubline\.setText\(subline\)/,
+    'native episode About should show the episode line');
+  assert.match(android, /nativeAboutPlot\.setMaxLines\(5\)/,
+    'native About should keep enough room for an episode storyline');
+  assert.match(android, /nativeAboutBtn = nativeButton\(R\.drawable\.ic_player_about, "About this title", false\)[\s\S]+leftControls\.addView\(nativeAboutBtn\);/,
+    'native Android should put About next to Guide, not in the stats slot');
+  assert.match(android, /if \(ep\.about\) \{[\s\S]+showNativeTitleInfo\(\);/,
+    'native Android About episode-strip tile should open the in-player About card');
+  assert.match(ui, /body\.tv \.trailerShell\{width:min\(86vw,calc\(\(100vh - 240px\) \* 16 \/ 9\)\)/,
+    'Android TV trailer stage should leave room for Play and watchlist below the video');
   assert.match(ui, /#osd::after\{[\s\S]+height:min\(42vh,380px\)[\s\S]+linear-gradient\(180deg,rgba\(0,0,0,0\) 0%[\s\S]+rgba\(0,0,0,\.56\) 100%\)/,
     'web player OSD should paint a plain black bottom controller shade without brand glow');
   assert.match(ui, /\.cbtn\{width:46px;height:46px[\s\S]+background:rgba\(5,3,9,\.4\)[\s\S]+\.cbtn:hover,\.cbtn\.focus,\.cbtn:focus\{background:rgba\(5,3,9,\.56\)/,
     'web player button circles should use more transparent black fills');
   assert.match(ui, /#osd \.ctl\{display:grid;grid-template-columns:minmax\(0,1fr\) auto minmax\(0,1fr\)/,
     'web player control row should visually pin Guide left, playback center, and secondary controls right');
-  assert.match(ui, /class="ctlGroup ctlLeft"[\s\S]+id="chGuide"[\s\S]+class="ctlGroup ctlCenter"[\s\S]+id="back10"[\s\S]+id="playPause"[\s\S]+id="fwd30"[\s\S]+id="nextEpBtn"[\s\S]+class="ctlGroup ctlRight"[\s\S]+id="ccBtn"[\s\S]+id="audBtn"[\s\S]+id="srndBtn"[\s\S]+id="qualBtn"[\s\S]+id="muteBtn"[\s\S]+id="fsBtn"[\s\S]+id="statsBtn"/,
-    'web player should mirror native Guide-left, playback-center, secondary-right button grouping with info last');
+  assert.match(ui, /class="ctlGroup ctlLeft"[\s\S]+id="chGuide"[\s\S]+id="aboutBtn"[\s\S]+class="ctlGroup ctlCenter"[\s\S]+id="back10"[\s\S]+id="playPause"[\s\S]+id="fwd30"[\s\S]+id="nextEpBtn"[\s\S]+class="ctlGroup ctlRight"[\s\S]+id="ccBtn"[\s\S]+id="audBtn"[\s\S]+id="srndBtn"[\s\S]+id="qualBtn"[\s\S]+id="muteBtn"[\s\S]+id="fsBtn"[\s\S]+id="statsBtn"/,
+    'web player should mirror native Guide-left, About beside it, playback-center, and info last');
   assert.match(ui, /#trackMenu\{display:none;position:absolute;bottom:118px;right:44px;width:min\(390px,calc\(100vw - 88px\)\);min-width:260px;max-height:min\(420px,calc\(100vh - 220px\)\);[\s\S]+rgba\(24,26,29,\.96\)[\s\S]+border-radius:10px[\s\S]+backdrop-filter:blur\(14px\)/,
     'web player CC/audio/quality popup should open near the right-side controls with compact graphite styling');
   assert.match(ui, /#trackMenu button\{display:flex;width:100%;min-height:44px;/,
@@ -3702,7 +3748,7 @@ test('Android native player: direct source and native chrome stay out of the web
     'the compact Next chip sits clear of the seek bar');
   assert.match(ui, /\.epMenu\{position:absolute;right:10px;top:44px[\s\S]+rgba\(24,26,29,\.97\)[\s\S]+border-radius:10px[\s\S]+\.epMenu button\.focus\{background:rgba\(255,255,255,\.10\);color:var\(--text\)[\s\S]+box-shadow:inset 2px 0 0 var\(--focus\)\}/,
     'episode action popup should use the same compact neutral player menu styling');
-  assert.match(ui, /function playerSurfaceClick\(e\) \{[\s\S]+closest\('#osd \.top,\.playerMetaRow,\.seekLine,\.ctl,#playerEpisodes,#trackMenu,#playerStats,#pGuide,#vlcPanel,#upNext,#playerLoader,button,a,input,select,textarea'\)[\s\S]+return true;[\s\S]+function playerSingleClick\(e\) \{[\s\S]+setTimeout\(\(\) => \{[\s\S]+togglePlay\(\);[\s\S]+\}, 320\);[\s\S]+function playerDoubleClick\(e\) \{[\s\S]+clearTimeout\(_playerSurfaceClickT\);[\s\S]+toggleFullscreen\(\);/,
+  assert.match(ui, /function playerSurfaceClick\(e\) \{[\s\S]+closest\('#osd \.top,\.playerMetaRow,\.seekLine,\.ctl,#playerEpisodes,#playerAbout,#trackMenu,#playerStats,#pGuide,#vlcPanel,#upNext,#playerLoader,button,a,input,select,textarea'\)[\s\S]+return true;[\s\S]+function playerSingleClick\(e\) \{[\s\S]+setTimeout\(\(\) => \{[\s\S]+togglePlay\(\);[\s\S]+\}, 320\);[\s\S]+function playerDoubleClick\(e\) \{[\s\S]+clearTimeout\(_playerSurfaceClickT\);[\s\S]+toggleFullscreen\(\);/,
     'web player screen clicks should toggle play, while double-click fullscreen cancels the pending pause');
   assert.match(ui, /\$\('player'\)\.addEventListener\('click', playerSingleClick\);[\s\S]+\$\('player'\)\.addEventListener\('dblclick', playerDoubleClick\);/,
     'web player should bind separate single-click and double-click surface handlers');
@@ -4119,11 +4165,11 @@ test('Android native player: direct source and native chrome stay out of the web
   // Detail pages on TV run the art taller so its fade lands below the hero instead of leaving a
   // dead ink band above EPISODES/CAST. Must be the LAST --bdH definition: shortBrowseBd stays on
   // body when a detail opens from Movies/TV and ties on specificity — source order is the tiebreak.
-  assert.match(ui, /body\.tv\.detailOpen\{--bdH:min\(96vh,1040px\)\}/,
-    'TV detail pages run the backdrop tall so it melts out below the hero');
+  assert.match(ui, /body\.detailOpen\{--bdH:min\(96vh,1040px\)\}/,
+    'detail pages run the backdrop tall so it melts out below About / Cast on TV and desktop');
   {
     const lastBdH = ui.lastIndexOf('--bdH:min(');
-    assert.ok(ui.slice(lastBdH - 220, lastBdH + 40).includes('body.tv.detailOpen'),
+    assert.ok(ui.slice(lastBdH - 220, lastBdH + 40).includes('body.detailOpen'),
       'the detailOpen --bdH override must be the LAST --bdH definition or shortBrowseBd/media rules outrank it');
   }
   assert.match(ui, /document\.body\.classList\.add\('detailOpen'\)/,
@@ -4545,8 +4591,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native player controls should keep playback centered with secondary controls on the right');
   assert.match(android, /leftControls\.addView\(nativeGuideBtn\);[\s\S]+centerControls\.addView\(nativeRewBtn\);[\s\S]+centerControls\.addView\(nativePlayBtn\);[\s\S]+centerControls\.addView\(nativeFwdBtn\);[\s\S]+centerControls\.addView\(nativeNextBtn\);[\s\S]+rightControls\.addView\(nativeCcBtn\);[\s\S]+rightControls\.addView\(nativeAudioBtn\);[\s\S]+rightControls\.addView\(nativeQualityBtn\);[\s\S]+rightControls\.addView\(nativeStatsBtn\);/,
     'native player should keep Guide left, playback centered, and CC/audio/HD before the final stats/info button');
-  assert.match(android, /return new View\[\]\{\s+nativeGuideBtn, nativeRewBtn, nativePlayBtn, nativeLiveBtn, nativeFwdBtn,\s+nativeNextBtn, nativeFavBtn, nativeCcBtn, nativeAudioBtn, nativeCastBtn, nativeQualityBtn, nativeStatsBtn\s+\};/,
-    'native player D-pad traversal (View[] — the Go-live LIVE pill is a TextView) must include nativeFavBtn, nativeLiveBtn, and the Cast button');
+  assert.match(android, /return new View\[\]\{\s+nativeGuideBtn, nativeAboutBtn, nativeRewBtn, nativePlayBtn, nativeLiveBtn, nativeFwdBtn,\s+nativeNextBtn, nativeFavBtn, nativeCcBtn, nativeAudioBtn, nativeCastBtn, nativeQualityBtn, nativeStatsBtn\s+\};/,
+    'native player D-pad traversal (View[] — the Go-live LIVE pill is a TextView) must include About, nativeFavBtn, nativeLiveBtn, and the Cast button');
   // Native live: a red "LIVE" text pill (matching the web overlay) — NOT a skip icon — that seeks to
   // the live edge. It is a TextView, which is why nativeControlButtons() is View[] not ImageButton[].
   assert.match(android, /nativeLiveBtn = new TextView\(this\);[\s\S]*?SpannableString liveLabel = new android\.text\.SpannableString\("● LIVE"\)[\s\S]*?ForegroundColorSpan\(0xFFFF5A5A\)[\s\S]*?nativeLiveBtn\.setText\(liveLabel\)[\s\S]*?nativeLiveBtn\.setBackground\(nativeButtonBg\(false, false\)\)/,

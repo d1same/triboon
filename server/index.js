@@ -5288,6 +5288,11 @@ const H = {
         : channels.filter((c) => !globalHidden.has(c.group || 'Other'));
       // ?fav=1 → only the user's favorites (the home-row widget; keeps the payload tiny).
       if (ctx.url.searchParams.get('fav')) list = list.filter((c) => favs.has(c.id));
+      // ?limit=N → first N rows after filters. Android WebView cannot JSON.parse a 20k-row
+      // playlist; Live TV start/zap only needs a short slice. Cap at 200.
+      const rawLimit = parseInt(ctx.url.searchParams.get('limit'), 10);
+      const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(200, rawLimit) : 0;
+      if (limit) list = list.slice(0, limit);
       const includeUrls = ctx.url.searchParams.get('lean') !== '1';
       send(ctx.res, 200, {
         configured: true,

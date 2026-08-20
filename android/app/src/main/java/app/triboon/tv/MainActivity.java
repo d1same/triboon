@@ -209,6 +209,7 @@ public class MainActivity extends Activity {
     private ImageButton nativeRewBtn;
     private ImageButton nativeFwdBtn;
     private ImageButton nativeGuideBtn;
+    private ImageButton nativeAboutBtn;
     private ImageButton nativeCcBtn;
     private ImageButton nativeAudioBtn;
     private ImageButton nativeQualityBtn;
@@ -230,6 +231,17 @@ public class MainActivity extends Activity {
     private View nativeUpNextPlay;    // the translucent play pill (primary action)
     private View nativeUpNextDismiss; // the small circular ✕
     private boolean nativeUpNextVisible = false;
+    private View nativeAboutOverlay;
+    private ImageView nativeAboutPoster;
+    private TextView nativeAboutKicker;
+    private TextView nativeAboutTitle;
+    private TextView nativeAboutSubline;
+    private TextView nativeAboutMeta;
+    private TextView nativeAboutPlot;
+    private LinearLayout nativeAboutCast;
+    private org.json.JSONObject nativeAboutData;
+    private boolean nativeAboutOpen = false;
+    private boolean nativeAboutAvailable = false;
     private LinearLayout nativeSheet;
     private ScrollView nativeSheetScroll;
     private LinearLayout nativeSheetRows;
@@ -1506,6 +1518,27 @@ public class MainActivity extends Activity {
             public void updateEpisodeChoices(String json) {
                 if (!trustedBridgeOrigin()) return;
                 runOnUiThread(() -> updateNativeEpisodeChoices(json));
+            }
+
+            @android.webkit.JavascriptInterface
+            public void updateTitleInfo(String json) {
+                if (!trustedBridgeOrigin()) return;
+                runOnUiThread(() -> updateNativeTitleInfo(json));
+            }
+
+            @android.webkit.JavascriptInterface
+            public void showTitleInfo(String json) {
+                if (!trustedBridgeOrigin()) return;
+                runOnUiThread(() -> {
+                    if (json != null && !json.isEmpty()) updateNativeTitleInfo(json);
+                    showNativeTitleInfo();
+                });
+            }
+
+            @android.webkit.JavascriptInterface
+            public void hideTitleInfo() {
+                if (!trustedBridgeOrigin()) return;
+                runOnUiThread(MainActivity.this::hideNativeTitleInfo);
             }
 
             @android.webkit.JavascriptInterface
@@ -3251,6 +3284,10 @@ public class MainActivity extends Activity {
         nativeGuideBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) openNativeLiveGuide(); });
         leftControls.addView(nativeGuideBtn);
 
+        nativeAboutBtn = nativeButton(R.drawable.ic_player_about, "About this title", false);
+        nativeAboutBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) showNativeTitleInfo(); });
+        leftControls.addView(nativeAboutBtn);
+
         nativeRewBtn = nativeButton(R.drawable.ic_player_rewind, "Back 10 seconds", false);
         nativeRewBtn.setOnClickListener(v -> { if (consumeNativeControlClick(v)) nativeSeekBy(-30000); });
         centerControls.addView(nativeRewBtn);
@@ -3360,6 +3397,10 @@ public class MainActivity extends Activity {
                 android.view.Gravity.BOTTOM);
         chromeLp.setMargins(0, 0, 0, dp(28));
         nativePlayerLayer.addView(nativeChrome, chromeLp);
+
+        nativeAboutOverlay = buildNativeAboutOverlay();
+        nativePlayerLayer.addView(nativeAboutOverlay, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         nativeSheet = new LinearLayout(this);
         nativeSheet.setOrientation(LinearLayout.VERTICAL);
@@ -3650,6 +3691,226 @@ public class MainActivity extends Activity {
         d.setCornerRadius(dp(10));
         d.setStroke(dp(1), 0x12FFFFFF);
         return d;
+    }
+
+    private View buildNativeAboutOverlay() {
+        FrameLayout overlay = new FrameLayout(this);
+        overlay.setVisibility(View.GONE);
+        overlay.setClickable(true);
+        overlay.setFocusable(true);
+        overlay.setFocusableInTouchMode(true);
+        overlay.setBackgroundColor(0xF00B0812);
+        overlay.setOnKeyListener((v, code, e) -> handleNativeSurfaceKey(e));
+        overlay.setOnClickListener(v -> hideNativeTitleInfo());
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setGravity(android.view.Gravity.BOTTOM);
+        card.setPadding(dp(48), dp(28), dp(48), dp(44));
+        card.setClickable(true);
+        card.setOnClickListener(v -> { /* keep the card from closing itself */ });
+
+        nativeAboutPoster = new ImageView(this);
+        nativeAboutPoster.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        GradientDrawable posterBg = new GradientDrawable();
+        posterBg.setColor(0xFF16101F);
+        posterBg.setCornerRadius(dp(8));
+        nativeAboutPoster.setBackground(posterBg);
+        nativeAboutPoster.setClipToOutline(true);
+        LinearLayout.LayoutParams posterLp = new LinearLayout.LayoutParams(dp(148), dp(222));
+        posterLp.rightMargin = dp(28);
+        card.addView(nativeAboutPoster, posterLp);
+
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+
+        nativeAboutKicker = new TextView(this);
+        nativeAboutKicker.setText("ABOUT");
+        nativeAboutKicker.setTextColor(0xE0FFCC67);
+        nativeAboutKicker.setTextSize(10);
+        nativeAboutKicker.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        nativeAboutKicker.setLetterSpacing(0.12f);
+        body.addView(nativeAboutKicker);
+
+        nativeAboutTitle = new TextView(this);
+        nativeAboutTitle.setTextColor(0xFFF3EFF7);
+        nativeAboutTitle.setTextSize(34);
+        nativeAboutTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        nativeAboutTitle.setMaxLines(2);
+        nativeAboutTitle.setPadding(0, dp(6), 0, 0);
+        body.addView(nativeAboutTitle);
+
+        nativeAboutSubline = new TextView(this);
+        nativeAboutSubline.setTextColor(0xE6FFCC67);
+        nativeAboutSubline.setTextSize(16);
+        nativeAboutSubline.setPadding(0, dp(8), 0, 0);
+        nativeAboutSubline.setVisibility(View.GONE);
+        body.addView(nativeAboutSubline);
+
+        nativeAboutMeta = new TextView(this);
+        nativeAboutMeta.setTextColor(0xDCF3EFF7);
+        nativeAboutMeta.setTextSize(13);
+        nativeAboutMeta.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        nativeAboutMeta.setPadding(0, dp(10), 0, dp(10));
+        body.addView(nativeAboutMeta);
+
+        nativeAboutPlot = new TextView(this);
+        nativeAboutPlot.setTextColor(0xC8F3EFF7);
+        nativeAboutPlot.setTextSize(17);
+        nativeAboutPlot.setMaxLines(5);
+        nativeAboutPlot.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        body.addView(nativeAboutPlot);
+
+        HorizontalScrollView castScroll = new HorizontalScrollView(this);
+        castScroll.setHorizontalScrollBarEnabled(false);
+        castScroll.setPadding(0, dp(16), 0, 0);
+        nativeAboutCast = new LinearLayout(this);
+        nativeAboutCast.setOrientation(LinearLayout.HORIZONTAL);
+        castScroll.addView(nativeAboutCast);
+        body.addView(castScroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        card.addView(body, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        overlay.addView(card, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                android.view.Gravity.BOTTOM));
+        return overlay;
+    }
+
+    private void updateNativeTitleInfo(String json) {
+        try {
+            Object parsed = new org.json.JSONTokener(json == null ? "{}" : json).nextValue();
+            nativeAboutData = parsed instanceof org.json.JSONObject
+                    ? (org.json.JSONObject) parsed
+                    : new org.json.JSONObject();
+            nativeAboutAvailable = nativeAboutData.optBoolean("hasPeople", false)
+                    || (nativeAboutData.optJSONArray("cast") != null && nativeAboutData.optJSONArray("cast").length() > 0)
+                    || (nativeAboutData.optJSONArray("crew") != null && nativeAboutData.optJSONArray("crew").length() > 0);
+            if (nativeAboutBtn != null && "video".equals(nativeMode)) {
+                nativeAboutBtn.setVisibility(nativeAboutAvailable ? View.VISIBLE : View.GONE);
+            }
+            if (!nativeAboutAvailable) hideNativeTitleInfo(false);
+            else if (nativeAboutOpen) paintNativeAbout();
+        } catch (Exception ignored) {
+            nativeAboutData = new org.json.JSONObject();
+            nativeAboutAvailable = false;
+        }
+    }
+
+    private void paintNativeAbout() {
+        if (nativeAboutTitle == null) return;
+        org.json.JSONObject d = nativeAboutData != null ? nativeAboutData : new org.json.JSONObject();
+        String title = d.optString("title", "");
+        if (title.isEmpty() && nativePlayerTitle != null) title = String.valueOf(nativePlayerTitle.getText());
+        nativeAboutTitle.setText(title);
+        String subline = d.optString("subline", "");
+        if (nativeAboutKicker != null) {
+            nativeAboutKicker.setText(subline.isEmpty() ? "ABOUT" : "THIS EPISODE");
+        }
+        if (nativeAboutSubline != null) {
+            nativeAboutSubline.setText(subline);
+            nativeAboutSubline.setVisibility(subline.isEmpty() ? View.GONE : View.VISIBLE);
+        }
+        java.util.ArrayList<String> bits = new java.util.ArrayList<>();
+        String year = d.optString("year", "");
+        String runtime = d.optString("runtime", "");
+        String cert = d.optString("cert", "");
+        String rating = d.optString("rating", "");
+        if (!year.isEmpty()) bits.add(year);
+        if (!runtime.isEmpty()) bits.add(runtime);
+        if (!cert.isEmpty()) bits.add(cert);
+        if (!rating.isEmpty()) bits.add("★ " + rating);
+        if (nativeAboutMeta != null) {
+            nativeAboutMeta.setText(android.text.TextUtils.join("   ", bits));
+            nativeAboutMeta.setVisibility(bits.isEmpty() ? View.GONE : View.VISIBLE);
+        }
+        if (nativeAboutPlot != null) nativeAboutPlot.setText(d.optString("overview", ""));
+        if (nativeAboutPoster != null) {
+            nativeAboutPoster.setImageDrawable(null);
+            String poster = d.optString("poster", "");
+            if (!poster.isEmpty()) loadNativeEpisodeStill(nativeAboutPoster, poster);
+        }
+        if (nativeAboutCast != null) {
+            nativeAboutCast.removeAllViews();
+            org.json.JSONArray cast = d.optJSONArray("cast");
+            int n = cast == null ? 0 : Math.min(6, cast.length());
+            for (int i = 0; i < n; i++) {
+                org.json.JSONObject c = cast.optJSONObject(i);
+                if (c == null) continue;
+                LinearLayout item = new LinearLayout(this);
+                item.setOrientation(LinearLayout.VERTICAL);
+                item.setPadding(0, 0, dp(16), 0);
+                item.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
+                ImageView ph = new ImageView(this);
+                ph.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                GradientDrawable phBg = new GradientDrawable();
+                phBg.setColor(0xFF1A1422);
+                phBg.setCornerRadius(dp(26));
+                ph.setBackground(phBg);
+                ph.setClipToOutline(true);
+                item.addView(ph, new LinearLayout.LayoutParams(dp(52), dp(52)));
+                String photo = c.optString("photo", "");
+                if (!photo.isEmpty()) loadNativeEpisodeStill(ph, photo);
+                TextView nm = new TextView(this);
+                nm.setText(formatNativeAboutCastName(c.optString("name", "")));
+                nm.setTextColor(0xC8F3EFF7);
+                nm.setTextSize(12);
+                nm.setMaxLines(3);
+                nm.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                nm.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
+                nm.setPadding(0, dp(6), 0, 0);
+                item.addView(nm, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+                nativeAboutCast.addView(item);
+            }
+        }
+    }
+
+    private static String formatNativeAboutCastName(String name) {
+        String raw = name == null ? "" : name.trim();
+        if (raw.isEmpty()) return "";
+        String[] parts = raw.split("\\s+");
+        if (parts.length < 2) return raw;
+        return parts[0] + "\n" + android.text.TextUtils.join(" ", java.util.Arrays.copyOfRange(parts, 1, parts.length));
+    }
+
+    private boolean showNativeTitleInfo() {
+        if (!"video".equals(nativeMode) || nativeAboutOverlay == null || !nativeAboutAvailable) return false;
+        if (nativeEpisodeStripOpen) closeNativeEpisodeStrip();
+        if (nativeSheetOpen()) hideNativeSheet();
+        showNativeChrome(false);
+        paintNativeAbout();
+        nativeAboutOverlay.setVisibility(View.VISIBLE);
+        nativeAboutOverlay.bringToFront();
+        nativeAboutOpen = true;
+        nativeAboutOverlay.requestFocus();
+        return true;
+    }
+
+    private boolean hideNativeTitleInfo() {
+        return hideNativeTitleInfo(true);
+    }
+
+    private boolean hideNativeTitleInfo(boolean restoreFocus) {
+        boolean was = nativeAboutOpen || (nativeAboutOverlay != null && nativeAboutOverlay.getVisibility() == View.VISIBLE);
+        nativeAboutOpen = false;
+        if (nativeAboutOverlay != null) nativeAboutOverlay.setVisibility(View.GONE);
+        if (was && restoreFocus && nativePlayerOpen()) focusNativeDefaultControl();
+        return was;
+    }
+
+    private boolean handleNativeAboutKey(KeyEvent e) {
+        if (!nativeAboutOpen) return false;
+        int code = e.getKeyCode();
+        if (code != KeyEvent.KEYCODE_DPAD_UP && code != KeyEvent.KEYCODE_DPAD_DOWN
+                && code != KeyEvent.KEYCODE_DPAD_LEFT && code != KeyEvent.KEYCODE_DPAD_RIGHT
+                && code != KeyEvent.KEYCODE_DPAD_CENTER && code != KeyEvent.KEYCODE_ENTER
+                && code != KeyEvent.KEYCODE_BACK) return false;
+        if (e.getAction() != KeyEvent.ACTION_DOWN) return true;
+        if (code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_DPAD_UP
+                || code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER) {
+            return hideNativeTitleInfo();
+        }
+        return true;
     }
 
     // Up Next — a small Next chip + X. Countdown + next-episode choice live in the
@@ -4260,6 +4521,8 @@ public class MainActivity extends Activity {
             nativePlayerBadge.setVisibility(chromeQuality.isEmpty() ? View.GONE : View.VISIBLE);
             if (nativeChromeQuality != null) nativeChromeQuality.setText("");
             if (nativeGuideBtn != null) nativeGuideBtn.setVisibility(View.VISIBLE);
+            if (nativeAboutBtn != null) nativeAboutBtn.setVisibility(isLiveMode || !nativeAboutAvailable ? View.GONE : View.VISIBLE);
+            if (isLiveMode) hideNativeTitleInfo(false);
             nativeNextBtn.setVisibility(hasNext ? View.VISIBLE : View.GONE);
             nativePlayerLayer.setVisibility(View.VISIBLE);
             if (!guide && isLiveMode) {
@@ -4880,7 +5143,7 @@ public class MainActivity extends Activity {
 
     private View[] nativeControlButtons() {
         return new View[]{
-                nativeGuideBtn, nativeRewBtn, nativePlayBtn, nativeLiveBtn, nativeFwdBtn,
+                nativeGuideBtn, nativeAboutBtn, nativeRewBtn, nativePlayBtn, nativeLiveBtn, nativeFwdBtn,
                 nativeNextBtn, nativeFavBtn, nativeCcBtn, nativeAudioBtn, nativeCastBtn, nativeQualityBtn, nativeStatsBtn
         };
     }
@@ -5036,6 +5299,7 @@ public class MainActivity extends Activity {
     private boolean handleNativeSurfaceKey(KeyEvent e) {
         if (!nativePlayerOpen()) return false;
         int code = e.getKeyCode();
+        if (handleNativeAboutKey(e)) return true;
         if (handleNativeSheetKey(e)) return true;
         if (handleNativeEpisodeStripKey(e)) return true;
         // The Up Next card owns the remote while it's up — otherwise OK/arrows fell through to
@@ -5066,6 +5330,7 @@ public class MainActivity extends Activity {
             if (code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN) {
                 if (e.getAction() == KeyEvent.ACTION_DOWN) {
                     if (code == KeyEvent.KEYCODE_DPAD_DOWN && isNativeControl(getCurrentFocus()) && openNativeEpisodeStrip()) return true;
+                    if (code == KeyEvent.KEYCODE_DPAD_DOWN && isNativeControl(getCurrentFocus()) && showNativeTitleInfo()) return true;
                     moveNativeVerticalFocus(code == KeyEvent.KEYCODE_DPAD_UP ? -1 : 1);
                 }
                 return true;
@@ -5090,6 +5355,7 @@ public class MainActivity extends Activity {
         if (code == KeyEvent.KEYCODE_DPAD_DOWN) {
             if (nativeSeekDpadMode && nativeCanSeekVod()) return focusNativeDefaultControl();
             if (openNativeEpisodeStrip()) return true;
+            if (showNativeTitleInfo()) return true;
             showNativeChrome(true);
             return true;
         }
@@ -5205,6 +5471,7 @@ public class MainActivity extends Activity {
         }
         boolean isVideo = "video".equals(nativeMode);
         if (nativeGuideBtn != null) nativeGuideBtn.setVisibility(View.VISIBLE);
+        if (nativeAboutBtn != null) nativeAboutBtn.setVisibility(isLive || !nativeAboutAvailable ? View.GONE : View.VISIBLE);
         if (nativeRewBtn != null) nativeRewBtn.setVisibility(isLive ? View.GONE : View.VISIBLE);
         if (nativeFwdBtn != null) nativeFwdBtn.setVisibility(isLive ? View.GONE : View.VISIBLE);
         // Live IPTV has no CC/audio/quality/next-episode choices — hide them entirely (the owner's
@@ -6069,7 +6336,8 @@ public class MainActivity extends Activity {
                             ep.optString("name", ""),
                             ep.optString("still", ""),
                             ep.optBoolean("current", false),
-                            ep.optBoolean("watched", false));
+                            ep.optBoolean("watched", false),
+                            ep.optBoolean("about", false));
                     if (item.current) nativeEpisodeIndex = nativeEpisodes.size();
                     nativeEpisodes.add(item);
                 }
@@ -6094,7 +6362,8 @@ public class MainActivity extends Activity {
         d.setShape(GradientDrawable.RECTANGLE);
         d.setColor(0x00000000);
         d.setCornerRadius(dp(12));
-        if (focused || current) d.setStroke(dp(1), focused ? 0x88C6B37A : 0x66C6B37A);
+        if (focused) d.setStroke(dp(2), 0xFFC6B37A);
+        else if (current) d.setStroke(dp(1), 0x66C6B37A);
         return d;
     }
 
@@ -6309,6 +6578,7 @@ public class MainActivity extends Activity {
 
     private boolean openNativeEpisodeStrip() {
         if (!"video".equals(nativeMode) || nativeEpisodes.isEmpty() || nativeSheetOpen()) return false;
+        if (nativeAboutOpen) hideNativeTitleInfo(false);
         showNativeChrome(false);
         renderNativeEpisodeStrip(true);
         return true;
@@ -6338,6 +6608,11 @@ public class MainActivity extends Activity {
     private void chooseNativeEpisode(int idx) {
         if (idx < 0 || idx >= nativeEpisodes.size()) return;
         NativeEpisode ep = nativeEpisodes.get(idx);
+        if (ep.about) {
+            closeNativeEpisodeStrip();
+            showNativeTitleInfo();
+            return;
+        }
         if (ep.current) {
             closeNativeEpisodeStrip();
             return;
@@ -6385,13 +6660,15 @@ public class MainActivity extends Activity {
         final String still;
         final boolean current;
         final boolean watched;
-        NativeEpisode(int index, String tag, String name, String still, boolean current, boolean watched) {
+        final boolean about;
+        NativeEpisode(int index, String tag, String name, String still, boolean current, boolean watched, boolean about) {
             this.index = index;
             this.tag = tag == null ? "" : tag;
             this.name = name == null ? "" : name;
             this.still = still == null ? "" : still;
             this.current = current;
             this.watched = watched;
+            this.about = about;
         }
     }
 
@@ -7188,6 +7465,7 @@ public class MainActivity extends Activity {
             nativeSheet.removeAllViews();
         }
         clearNativeEpisodes();
+        hideNativeTitleInfo(false);
         nativeUpNextVisible = false;
         if (nativeUpNextCard != null) nativeUpNextCard.setVisibility(View.GONE);
         if (nativeControlShade != null) nativeControlShade.setVisibility(View.GONE);
@@ -8004,6 +8282,7 @@ public class MainActivity extends Activity {
             if (nativeGuideMode) closeNativeGuideMode();
             else if (nativeUpNextVisible) dismissNativeUpNext(true);
             else if (nativeSheetOpen()) hideNativeSheet();
+            else if (nativeAboutOpen) hideNativeTitleInfo();
             else if (nativeEpisodeStripOpen) closeNativeEpisodeStrip();
             else if (!dismissNativeChromeForBack()) closeNativePlayback(true);
             return;

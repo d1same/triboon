@@ -150,14 +150,15 @@ body:not(.tv):not(.mobileShell) #prefs,
 body:not(.tv):not(.mobileShell) #music,
 body:not(.tv):not(.mobileShell) #audiobooks{padding-top:var(--pageTop)!important}
 body:not(.tv):not(.mobileShell) #home{justify-content:flex-start}
-/* DETAIL pages on TV: the art runs TALLER and melts out lower. At the browse heights the backdrop's
+/* DETAIL pages: the art runs TALLER and melts out lower. At the browse heights the backdrop's
    bottom fade finished level with the hero text, leaving a dead ink band between the art and the
-   EPISODES/CAST rows (owner, 2026-08-07). The layer's own vertical mask (58%→98%) rides the taller
-   box, so the fade simply lands lower — nothing else moves. LAST of the --bdH definitions on
-   purpose: opening a detail from Movies/TV leaves shortBrowseBd (and the max-height:760 media
-   values) on body, and those rules tie this one on specificity — source order is the tiebreak, so
-   this must come after every one of them to win whenever a detail page is open. */
-body.tv.detailOpen{--bdH:min(96vh,1040px)}
+   About / Cast rows (owner, 2026-08-07 on TV; same cut on desktop browsers 2026-08-19). The
+   layer's own vertical mask (58%→98%) rides the taller box, so the fade simply lands lower —
+   nothing else moves. LAST of the --bdH definitions on purpose: opening a detail from Movies/TV
+   leaves shortBrowseBd (and the max-height:760 media values) on body, and those rules tie this
+   one on specificity — source order is the tiebreak, so this must come after every one of them
+   to win whenever a detail page is open. */
+body.detailOpen{--bdH:min(96vh,1040px)}
 /* Focused-title info over the backdrop on browse/discover pages — like the home hero, but
    informational only (no buttons; clicking the cover opens it). */
 /* The whole info block STOPS at the 50% line so the title, the TMDB meta line, the credits and the
@@ -812,7 +813,11 @@ body.tv #filterMenu{backdrop-filter:none}
 #trailerWl.on{background:var(--btnSelected);color:var(--text);border-color:transparent;font-weight:700}
 #trailerWl.on.focus,#trailerWl.on:focus-visible{background:var(--btnSelectedHover);color:var(--text)}
 body.tv #trailer::before{animation:none;filter:brightness(.38);transform:none}
-body.tv .trailerTitle{font-size:clamp(20px,2.1vw,28px)}
+body.tv #trailer{padding:18px 28px 32px}
+body.tv .trailerShell{width:min(86vw,calc((100vh - 240px) * 16 / 9));max-width:1180px;gap:10px}
+body.tv .trailerTitle{font-size:clamp(18px,1.8vw,26px)}
+body.tv .trailerBar{min-height:52px}
+body.tv .trailerCtl{min-height:46px;padding:10px 20px;font-size:14.5px}
 @media (prefers-reduced-motion:reduce){#trailer::before{animation:none!important}}
 @media(max-width:700px){
   #trailer{padding:14px}
@@ -1248,7 +1253,37 @@ body.nativeGuideMode #player.guideMode #video{display:none}
 .playerEpCard.current .peStill{box-shadow:inset 0 0 0 1.5px var(--artFocusLine)}
 .playerEpCard.focus,.playerEpCard:focus-visible{outline:none;transform:translateY(-2px);filter:saturate(1.04)}
 .playerEpCard.focus .peStill,.playerEpCard:focus-visible .peStill{box-shadow:inset 0 0 0 1.5px var(--artFocusLine)}
+#player #playerEpisodes .playerEpCard.focus,
+#player #playerEpisodes .playerEpCard:focus-visible{transform:translateY(-3px) scale(1.03);filter:brightness(1.08) saturate(1.06)}
+#player #playerEpisodes .playerEpCard.focus .peStill,
+#player #playerEpisodes .playerEpCard:focus-visible .peStill{box-shadow:0 0 0 2px var(--focus),0 10px 22px rgba(0,0,0,.52) !important}
+.playerEpCard.about .peStill{background-color:#120e18}
+.playerEpCard.about .peStill::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;z-index:2;background:linear-gradient(180deg,#E35D8A,#F2B45C)}
 .playerEpCard.watched .peTag::after{content:"  ✓";color:#bdf3c5}
+#playerAbout{position:absolute;inset:0;z-index:8;display:none;align-items:flex-end;padding:clamp(32px,5vh,56px) clamp(48px,6vw,80px) clamp(40px,6vh,72px);background:linear-gradient(180deg,rgba(11,8,18,.55) 0%,rgba(11,8,18,.72) 36%,rgba(11,8,18,.88) 68%,rgba(11,8,18,.94) 100%)}
+#playerAbout.open{display:flex}
+#player.aboutOpen #osd{opacity:0;pointer-events:none}
+.paCard{display:flex;gap:32px;max-width:min(1100px,94vw);align-items:flex-end}
+.paPoster{flex:0 0 180px;width:180px;height:270px;border-radius:10px;background:#16101f center/cover no-repeat;box-shadow:0 22px 56px rgba(0,0,0,.62);position:relative}
+.paPoster::before{content:"";position:absolute;inset:0 auto 0 0;width:4px;border-radius:10px 0 0 10px;background:linear-gradient(180deg,#E35D8A,#F2B45C)}
+.paKicker{font:800 12px/1 "JetBrains Mono";letter-spacing:.16em;text-transform:uppercase;color:rgba(255,198,92,.88);margin-bottom:8px}
+.paTitle{font:800 clamp(36px,4.2vw,56px)/1.04 "Sora";letter-spacing:-.02em}
+.paSub{font:650 16px/1.3 "Albert Sans";color:rgba(255,198,92,.9);margin-top:8px;display:none}
+.paChips{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 16px}
+.paChip{font:700 13px/1 "JetBrains Mono";padding:7px 11px;border-radius:7px;background:rgba(255,255,255,.08);color:rgba(242,244,247,.9)}
+.paPlot{font:500 18px/1.5 "Albert Sans";color:rgba(242,244,247,.82);max-width:62ch;display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden}
+.paCast{display:flex;gap:18px;margin-top:22px;flex-wrap:wrap}
+.paCastItem{width:max-content;text-align:center}
+.paCastPh{width:56px;height:56px;border-radius:50%;background:#1a1422 center/cover no-repeat;margin:0 auto}
+.paCastNm{font:650 13.5px/1.25 "Albert Sans";margin-top:7px;color:rgba(242,244,247,.86);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;white-space:normal;word-break:break-word}
+#player.live #aboutBtn{display:none}
+body.tv #playerAbout{padding:clamp(24px,4vh,40px) 48px clamp(28px,5vh,48px)}
+body.tv .paPoster{flex-basis:148px;width:148px;height:222px}
+body.tv .paTitle{font-size:clamp(30px,3.4vw,44px)}
+body.tv .paPlot{font-size:16.5px}
+body.tv .paSub{font-size:15px}
+body.tv .paCastPh{width:48px;height:48px}
+body.tv .paCastNm{font-size:13px}
 .osdRight{display:flex;flex-direction:column;align-items:flex-end;gap:8px}
 .osdClock{display:flex;gap:14px;font:700 13px "JetBrains Mono";color:var(--text);
   background:rgba(11,8,18,.55);border:1px solid var(--line);border-radius:10px;padding:8px 13px}
@@ -4680,6 +4715,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
       <div class="ctl">
         <div class="ctlGroup ctlLeft">
           <button class="cbtn focusable" id="chGuide" title="TV guide"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12H3"/><path d="M16 6H3"/><path d="M12 18H3"/><path d="m16 12 5 3-5 3v-6Z"/></svg></button>
+          <button class="cbtn focusable" id="aboutBtn" title="About this title" aria-label="About this title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 7v10"/><path d="M6 5v14"/><rect width="12" height="18" x="10" y="3" rx="2"/></svg></button>
         </div>
         <div class="ctlGroup ctlCenter">
           <button class="cbtn focusable" id="back10" title="Back 10s" aria-label="Back 10 seconds"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v6h6"/><path d="M21 12A9 9 0 0 0 6 5.3L3 8"/></svg></button>
@@ -4709,6 +4745,19 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
       <div id="playerEpisodes"></div>
       <div id="trackMenu"></div>
       <div id="playerStats"></div>
+    </div>
+  </div>
+  <div id="playerAbout">
+    <div class="paCard">
+      <div class="paPoster" id="paPoster"></div>
+      <div class="paBody">
+        <div class="paKicker" id="paKicker">About</div>
+        <div class="paTitle" id="paTitle"></div>
+        <div class="paSub" id="paSub"></div>
+        <div class="paChips" id="paChips"></div>
+        <div class="paPlot" id="paPlot"></div>
+        <div class="paCast" id="paCast"></div>
+      </div>
     </div>
   </div>
   <div id="pGuide">
@@ -11204,6 +11253,8 @@ function stopActivePlaybackForReplacement(opts = {}) {
   if (!opts.preserveGuide) closePlayerGuide({ fromNative: true });
   hideUpNextUi();
   closePlayerEpisodes();
+  closePlayerAbout();
+  S.playerAbout = null;
   S.playerSeasonStrip = null;
   S.nextEp = null;
   S.nextEpPrepared = false;
@@ -11221,6 +11272,7 @@ function startNativePlayerHousekeeping(it) {
   startActivityHeartbeat();
   loadTracks();
   prepPlayerSeasonEpisodes(it);
+  prepPlayerAbout(it);
   prepNextEpisode(it);
 }
 function startWebPlayerHousekeeping(mount, it) {
@@ -11271,6 +11323,7 @@ function startWebPlayerHousekeeping(mount, it) {
     })();
   }
   prepPlayerSeasonEpisodes(it);
+  prepPlayerAbout(it);
   prepNextEpisode(it);
 }
 function playbackStartKind(mount) {
@@ -12382,6 +12435,7 @@ window.__tvNativeEpisodeSelect = (index, pos, dur, token) => {
   const p = S.playing;
   if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token) || !S.playerSeasonStrip) return;
   window.__tvNativeVideoProgress(pos, dur, token);
+  if (+index === -1) { closePlayerEpisodes(); openPlayerAbout(); return; }
   const idx = Math.max(0, Math.min(S.playerSeasonStrip.items.length - 1, +index || 0));
   S.playerSeasonStrip.idx = idx;
   activatePlayerEpisode();
@@ -12846,11 +12900,24 @@ function closePlayerEpisodes() {
   if (S.zone === 'playerEpisodes') S.zone = 'playerCtl';
   updateNativeEpisodeChoices();
 }
+function renderPlayerAboutTile(rail) {
+  const about = S.playerAbout || {};
+  const it = S.playing && S.playing.item;
+  const meta = it ? episodePlayerMeta(it) : { title: 'About' };
+  const b = document.createElement('button');
+  b.className = 'playerEpCard focusable about';
+  b.dataset.about = '1';
+  b.style.setProperty('--still', artBackground(about.poster, it && it.poster, about.backdrop, artFallback('about', 42)));
+  b.innerHTML = `<div class="peStill"></div><div class="peMeta"><span class="peTag">ABOUT</span><span class="peName">${esc(about.title || meta.title || 'About')}</span></div>`;
+  b.addEventListener('click', () => { closePlayerEpisodes(); openPlayerAbout(); });
+  rail.appendChild(b);
+}
 function renderPlayerEpisodes() {
   const rail = $('playerEpisodes');
   const st = S.playerSeasonStrip;
   if (!rail || !st || !st.items || !st.items.length) { closePlayerEpisodes(); return; }
   rail.innerHTML = '';
+  if (playerAboutHasPeople()) renderPlayerAboutTile(rail);
   st.items.forEach((ep, idx) => {
     const b = document.createElement('button');
     b.className = 'playerEpCard focusable' + (ep.item.key === st.currentKey ? ' current' : '') + (ep.watched ? ' watched' : '') + (ep.upcoming ? ' upcoming' : '');
@@ -12867,10 +12934,24 @@ function renderPlayerEpisodes() {
   });
   if (rail.classList.contains('open')) focusPlayerEpisode(st.idx);
 }
+function nativeEpisodeAboutChoice() {
+  const about = S.playerAbout || {};
+  const it = S.playing && S.playing.item;
+  const meta = it ? episodePlayerMeta(it) : { title: '' };
+  return {
+    about: true,
+    index: -1,
+    tag: 'ABOUT',
+    name: about.title || meta.title || 'About',
+    still: absoluteArtworkUrl(about.poster, it && it.poster),
+    current: false,
+    watched: false,
+  };
+}
 function nativeEpisodeChoices() {
   const st = S.playerSeasonStrip;
   if (!st || !st.items || !st.items.length) return [];
-  return st.items.map((ep, idx) => ({
+  const eps = st.items.map((ep, idx) => ({
     index: idx,
     tag: ep.tag,
     name: ep.name || '',
@@ -12881,12 +12962,14 @@ function nativeEpisodeChoices() {
     watched: !!ep.watched,
     upcoming: !!ep.upcoming,
   }));
+  return playerAboutHasPeople() ? [nativeEpisodeAboutChoice()].concat(eps) : eps;
 }
 function nativeEpisodeFocusIndex() {
   const st = S.playerSeasonStrip;
   if (!st || !st.items || !st.items.length) return 0;
   const current = st.items.findIndex((ep) => ep.item && ep.item.key === st.currentKey);
-  return current >= 0 ? current : Math.max(0, Math.min(st.items.length - 1, st.idx || 0));
+  const episodeIdx = current >= 0 ? current : Math.max(0, Math.min(st.items.length - 1, st.idx || 0));
+  return episodeIdx + (playerAboutHasPeople() ? 1 : 0);
 }
 function updateNativeEpisodeChoices() {
   if (!canUseNativeVideoPlayer() || !window.TriboonTV || !window.TriboonTV.updateEpisodeChoices) return;
@@ -12945,6 +13028,179 @@ async function prepPlayerSeasonEpisodes(it) {
     updateNativeEpisodeChoices();
   }
 }
+function fmtAboutRuntime(min) {
+  min = Math.round(+min || 0);
+  if (min <= 0) return '';
+  const h = Math.floor(min / 60), m = min % 60;
+  return h ? (m ? `${h}h ${m}m` : `${h}h`) : `${m}m`;
+}
+function playerAboutTmdbSpec(it) {
+  if (!it || it.type === 'live') return null;
+  const tmdbId = +((it && it.tmdbId) || 0);
+  if ((it.type === 'movie' || it.type === 'tv') && tmdbId) return { type: it.type, id: tmdbId };
+  if (it.type === 'episode') {
+    const parts = episodeKeyParts(it);
+    return parts ? { type: 'tv', id: parts.tmdbId } : null;
+  }
+  return null;
+}
+function playerAboutCrewList(d, type) {
+  const crew = (d && d.credits && d.credits.crew) || [];
+  const directors = type === 'tv' && d && (d.created_by || []).length
+    ? d.created_by : crew.filter((c) => c && c.job === 'Director');
+  const writers = crew.filter((c) => c && /^(Writer|Screenplay|Story)$/.test(c.job));
+  const seen = new Set();
+  const out = [];
+  for (const p of [...directors, ...writers]) {
+    if (!p || !p.name || seen.has(p.id || p.name)) continue;
+    seen.add(p.id || p.name);
+    out.push({ name: p.name, job: p.job || '' });
+  }
+  return out;
+}
+function playerAboutHasPeople(about) {
+  about = about || S.playerAbout;
+  if (!about) return false;
+  if ((about.cast || []).some((c) => c && String(c.name || '').trim())) return true;
+  if ((about.crew || []).some((c) => c && String(c.name || '').trim())) return true;
+  return false;
+}
+function aboutCastNameHtml(name) {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (parts.length < 2) return esc(parts[0] || '');
+  return `${esc(parts[0])}<br>${esc(parts.slice(1).join(' '))}`;
+}
+function playerAboutFromItem(it) {
+  const meta = it ? episodePlayerMeta(it) : { title: '' };
+  return {
+    title: meta.title || (it && it.title) || '',
+    subline: meta.subline || '',
+    year: (it && it.year) || '',
+    runtime: it && it.runtime ? fmtAboutRuntime(it.runtime) : '',
+    cert: (it && it.cert) || '',
+    rating: (it && it.rating && it.rating !== '—') ? String(it.rating).replace(/^TMDB\s+/i, '') : '',
+    overview: (it && it.overview) || '',
+    poster: (it && it.poster) || '',
+    backdrop: (it && it.backdrop) || '',
+    cast: [],
+    crew: [],
+    hasPeople: false,
+  };
+}
+function pushNativeTitleInfo() {
+  if (!window.TriboonTV || typeof window.TriboonTV.updateTitleInfo !== 'function') return;
+  const about = Object.assign({}, S.playerAbout || {}, { hasPeople: playerAboutHasPeople() });
+  try { window.TriboonTV.updateTitleInfo(JSON.stringify(about)); } catch {}
+}
+async function prepPlayerAbout(it) {
+  S.playerAbout = null;
+  if (!it || it.type === 'live') { syncAboutChrome(); pushNativeTitleInfo(); return; }
+  const token = (S._playerAboutToken = (S._playerAboutToken || 0) + 1);
+  S.playerAbout = playerAboutFromItem(it);
+  syncAboutChrome();
+  pushNativeTitleInfo();
+  const spec = playerAboutTmdbSpec(it);
+  if (!spec || !spec.id) return;
+  try {
+    const [d, ctx] = await Promise.all([
+      api(`/api/tmdb/${spec.type}/${spec.id}?append_to_response=credits,aggregate_credits,release_dates,content_ratings`),
+      it.type === 'episode' ? getPlayerEpisodeContext(it).catch(() => null) : null,
+    ]);
+    if (token !== S._playerAboutToken || !S.playing || !S.playing.item || S.playing.item.key !== it.key) return;
+    const parts = it.type === 'episode' ? episodeKeyParts(it) : null;
+    const ep = ctx && ctx.season && parts
+      ? (ctx.season.episodes || []).find((e) => e && +e.episode_number === parts.episode)
+      : null;
+    const epCode = parts ? `S${pad2(parts.season)}E${pad2(parts.episode)}` : '';
+    const epName = ep && ep.name ? ep.name : (S.playerAbout.subline || '').replace(/^[S0-9E]+(?:\s+[·.-]\s*)?/i, '').trim();
+    S.playerAbout = {
+      title: d.title || d.name || S.playerAbout.title,
+      subline: ep || epCode ? [epCode, epName].filter(Boolean).join(' · ') : '',
+      year: String((d.release_date || d.first_air_date || '').slice(0, 4) || S.playerAbout.year),
+      runtime: fmtAboutRuntime((ep && ep.runtime) || d.runtime || (d.episode_run_time && d.episode_run_time[0]) || it.runtime) || S.playerAbout.runtime,
+      cert: certOf(d, spec.type) || S.playerAbout.cert,
+      rating: (ep && ep.vote_average && +ep.vote_average > 0)
+        ? (+ep.vote_average).toFixed(1)
+        : ((d.vote_average && +d.vote_average > 0) ? (+d.vote_average).toFixed(1) : S.playerAbout.rating),
+      overview: (ep && ep.overview) || S.playerAbout.overview || d.overview || '',
+      poster: img(d.poster_path, POSTER_W) || S.playerAbout.poster,
+      backdrop: img((ep && ep.still_path) || d.backdrop_path) || S.playerAbout.backdrop,
+      cast: detailCastList(d).slice(0, 6).map((c) => ({
+        name: c.name,
+        character: c.character || '',
+        photo: img(c.profile_path, CAST_W) || '',
+      })),
+      crew: playerAboutCrewList(d, spec.type),
+    };
+    S.playerAbout.hasPeople = playerAboutHasPeople(S.playerAbout);
+    syncAboutChrome();
+    pushNativeTitleInfo();
+    if ($('playerAbout').classList.contains('open')) renderPlayerAbout();
+    updateNativeEpisodeChoices();
+    if (S.playerSeasonStrip && $('playerEpisodes').classList.contains('open')) renderPlayerEpisodes();
+  } catch {}
+}
+function canOpenPlayerAbout() {
+  return S.view === 'player'
+    && S.playing && S.playing.item && S.playing.item.type !== 'live'
+    && !$('player').classList.contains('live')
+    && playerAboutHasPeople();
+}
+function syncAboutChrome() {
+  const about = $('aboutBtn');
+  if (about) about.style.display = canOpenPlayerAbout() ? '' : 'none';
+  if (!playerAboutHasPeople()) closePlayerAbout();
+}
+function renderPlayerAbout() {
+  const about = S.playerAbout || playerAboutFromItem(S.playing && S.playing.item);
+  const poster = $('paPoster');
+  const kicker = $('paKicker');
+  const title = $('paTitle');
+  const sub = $('paSub');
+  const chips = $('paChips');
+  const plot = $('paPlot');
+  const cast = $('paCast');
+  if (!poster || !title || !chips || !plot || !cast) return;
+  poster.style.backgroundImage = about.poster ? `url("${about.poster}")` : '';
+  if (kicker) kicker.textContent = about.subline ? 'This episode' : 'About';
+  title.textContent = about.title || '';
+  if (sub) {
+    sub.textContent = about.subline || '';
+    sub.style.display = about.subline ? 'block' : 'none';
+  }
+  const bits = [about.year, about.runtime, about.cert, about.rating ? `★ ${about.rating}` : ''].filter(Boolean);
+  chips.innerHTML = bits.map((x) => `<span class="paChip">${esc(x)}</span>`).join('');
+  plot.textContent = about.overview || '';
+  const people = (about.cast || []).slice(0, 6);
+  cast.innerHTML = people.map((c) =>
+    `<div class="paCastItem"><div class="paCastPh" style="background-image:${c.photo ? `url(&quot;${c.photo}&quot;)` : 'none'}"></div><div class="paCastNm">${aboutCastNameHtml(c.name)}</div></div>`
+  ).join('');
+  cast.style.display = people.length ? '' : 'none';
+}
+function openPlayerAbout() {
+  if (!canOpenPlayerAbout()) return;
+  closePlayerEpisodes();
+  closePlayerStats();
+  closeTrackMenu({ restoreFocus: false });
+  if (!S.playerAbout) S.playerAbout = playerAboutFromItem(S.playing && S.playing.item);
+  if (canUseNativeVideoPlayer() && window.TriboonTV && typeof window.TriboonTV.showTitleInfo === 'function') {
+    try { window.TriboonTV.showTitleInfo(JSON.stringify(S.playerAbout || {})); } catch {}
+    return;
+  }
+  renderPlayerAbout();
+  $('playerAbout').classList.add('open');
+  $('player').classList.add('aboutOpen');
+  S.zone = 'playerAbout';
+}
+function closePlayerAbout() {
+  const el = $('playerAbout');
+  if (el) el.classList.remove('open');
+  $('player').classList.remove('aboutOpen');
+  if (canUseNativeVideoPlayer() && window.TriboonTV && typeof window.TriboonTV.hideTitleInfo === 'function') {
+    try { window.TriboonTV.hideTitleInfo(); } catch {}
+  }
+  if (S.zone === 'playerAbout') S.zone = 'playerCtl';
+}
 function canOpenPlayerEpisodes() {
   return S.view === 'player'
     && S.playing && S.playing.item && S.playing.item.type === 'episode'
@@ -12963,7 +13219,7 @@ async function openPlayerEpisodes() {
     rail.classList.add('open');
     renderPlayerEpisodes();
   }
-  focusPlayerEpisode(S.playerSeasonStrip ? S.playerSeasonStrip.idx : 0);
+  focusPlayerEpisode(nativeEpisodeFocusIndex());
 }
 function focusPlayerEpisode(i) {
   const rail = $('playerEpisodes');
@@ -12971,12 +13227,15 @@ function focusPlayerEpisode(i) {
   if (!cards.length) return;
   const idx = Math.max(0, Math.min(cards.length - 1, i));
   S.zone = 'playerEpisodes';
-  if (S.playerSeasonStrip) S.playerSeasonStrip.idx = idx;
-  applyFocus(cards[idx]);
-  cards[idx].scrollIntoView({ block: 'nearest', inline: 'center', behavior: focusScrollBehavior() });
+  const card = cards[idx];
+  if (S.playerSeasonStrip && card && !card.dataset.about) S.playerSeasonStrip.idx = +card.dataset.playerEpIdx;
+  applyFocus(card);
+  card.scrollIntoView({ block: 'nearest', inline: 'center', behavior: focusScrollBehavior() });
   showOsd();
 }
 function activatePlayerEpisode() {
+  const focused = document.querySelector('#playerEpisodes .playerEpCard.focus');
+  if (focused && focused.dataset.about) { closePlayerEpisodes(); return openPlayerAbout(); }
   const st = S.playerSeasonStrip;
   if (!st || !st.items || !st.items.length) return;
   const ep = st.items[Math.max(0, Math.min(st.items.length - 1, st.idx || 0))];
@@ -13839,7 +14098,7 @@ function updPP() {
 let _playerSurfaceClickT = null;
 function playerSurfaceClick(e) {
   if (e.button !== 0 || S.view !== 'player') return false;
-  if (e.target.closest('#osd .top,.playerMetaRow,.seekLine,.ctl,#playerEpisodes,#trackMenu,#playerStats,#pGuide,#vlcPanel,#upNext,#playerLoader,button,a,input,select,textarea')) return false;
+  if (e.target.closest('#osd .top,.playerMetaRow,.seekLine,.ctl,#playerEpisodes,#playerAbout,#trackMenu,#playerStats,#pGuide,#vlcPanel,#upNext,#playerLoader,button,a,input,select,textarea')) return false;
   return true;
 }
 function playerSingleClick(e) {
@@ -13897,6 +14156,8 @@ $('back10').addEventListener('click', () => nudgeSeek(-10));
 $('fwd30').addEventListener('click', () => nudgeSeek(30));
 $('nextEpBtn').addEventListener('click', playNextEpisode);
 $('statsBtn').addEventListener('click', togglePlayerStats);
+$('aboutBtn').addEventListener('click', () => openPlayerAbout());
+$('playerAbout').addEventListener('click', (e) => { if (e.target === $('playerAbout')) closePlayerAbout(); });
 
 // ----- Live IPTV player chrome: top EPG strip (now + next ~2h) + bottom timeshift / Go-live -----
 let _liveEpgIdx = null, _liveEpgProgs = null;
@@ -14110,7 +14371,7 @@ function showOsd() {
   S.osdTimer = setTimeout(() => {
     // An open CC/audio menu means the user is READING it — never hide it from under them
     // (3.5s is shorter than picking a subtitle on a remote). Check again in a beat.
-    if ($('trackMenu').classList.contains('open') || $('playerStats').classList.contains('open')) return showOsd();
+    if ($('trackMenu').classList.contains('open') || $('playerStats').classList.contains('open') || $('playerAbout').classList.contains('open')) return showOsd();
     $('osd').classList.add('hide');
     $('player').classList.add('osdHide'); // controls away → #upNext docks to the bottom edge
     // Fade-out RESETS the remembered control: the next OSD wake lands on play/pause, not
@@ -14126,6 +14387,7 @@ function hidePlayerOsdForBack() {
   const osd = $('osd');
   if (!player.classList.contains('open') || player.classList.contains('guideMode')) return false;
   if ($('trackMenu').classList.contains('open') || $('playerStats').classList.contains('open') || $('playerEpisodes').classList.contains('open')
+      || $('playerAbout').classList.contains('open')
       || $('pGuide').classList.contains('open') || $('upNext').classList.contains('show')
       || $('vlcPanel').classList.contains('show') || $('playerLoader').classList.contains('show')) return false;
   if (osd.classList.contains('hide')) return false;
@@ -14721,6 +14983,7 @@ function playerQualityHasOptions() {
 function updatePlayerControlAvailability() {
   const p = S.playing;
   const isLive = !!(p && p.item && p.item.type === 'live');
+  syncAboutChrome();
   ['ccBtn', 'audBtn', 'qualBtn'].forEach((id) => { const b = $(id); if (b) b.style.display = isLive ? 'none' : ''; });
   // Live has no CC/audio/surround/quality choices — hide the Sound (surround) button too, in JS,
   // so it can never reappear via applyTrackPrefs (the CSS !important rule alone was fragile).
@@ -24766,7 +25029,7 @@ function focusDrawer(i) {
   applyFocus(rows[S.drawerIdx]);
 }
 function ctlButtons() {
-  return ['chGuide', 'back10', 'playPause', 'fwd30', 'nextEpBtn', 'favBtn', 'splitBtn', 'ccBtn', 'audBtn', 'srndBtn', 'qualBtn', 'castBtn', 'airplayBtn', 'muteBtn', 'fsBtn', 'statsBtn']
+  return ['chGuide', 'aboutBtn', 'back10', 'playPause', 'fwd30', 'nextEpBtn', 'favBtn', 'splitBtn', 'ccBtn', 'audBtn', 'srndBtn', 'qualBtn', 'castBtn', 'airplayBtn', 'muteBtn', 'fsBtn', 'statsBtn']
     .map((id) => $(id)).filter((b) => b && !b.disabled && !b.classList.contains('disabled') && b.style.display !== 'none' && b.offsetParent !== null);
 }
 function focusSeek() {
@@ -25419,6 +25682,10 @@ document.addEventListener('keydown', (e) => {
       showOsd();
       return;
     }
+    if ($('playerAbout').classList.contains('open')) {
+      if (k === 'Escape' || k === 'Backspace' || k === 'ArrowUp') closePlayerAbout();
+      return;
+    }
     if ($('playerEpisodes').classList.contains('open')) {
       const cards = [...$('playerEpisodes').querySelectorAll('.playerEpCard')];
       let i = cards.findIndex((b) => b.classList.contains('focus'));
@@ -25458,6 +25725,7 @@ document.addEventListener('keydown', (e) => {
     if (k === 'ArrowDown') {
       if (S.zone === 'seek') return focusCtl(S.ctlIdx || 1);
       if (S.zone === 'playerCtl' && canOpenPlayerEpisodes()) return openPlayerEpisodes();
+      if (S.zone === 'playerCtl' && canOpenPlayerAbout()) return openPlayerAbout();
       return focusCtl(S.zone === 'playerCtl' ? S.ctlIdx : 1);
     }
     if (k === 'Enter' && !e.repeat) {
@@ -25961,6 +26229,10 @@ window.__tvBack = () => {
   if ($('pGuide') && $('pGuide').classList.contains('open')) {
     // Same two-step layer as browser Escape: channel row -> category, then category -> close.
     if (!playerGuideBackToCategory()) closePlayerGuide();
+    return 'ok';
+  }
+  if ($('playerAbout') && $('playerAbout').classList.contains('open')) {
+    closePlayerAbout();
     return 'ok';
   }
   if ($('playerStats') && $('playerStats').classList.contains('open')) {

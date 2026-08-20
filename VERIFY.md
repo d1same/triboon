@@ -125,6 +125,31 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-20, v3.0.10 ship APK + Windows server + Windows client:
+
+- Version contract: `package.json` 3.0.10; Android `versionName` 3.0.10 /
+  `versionCode` 341; Windows client package/Tauri/Cargo 3.0.10.
+- In-player About card: poster, year, runtime, rating, plot, display-only
+  cast names. Movies open it on Down. Shows keep episodes first; About is
+  a strip tile plus the VOD chrome button next to Guide. Hidden when a
+  title has no cast and no crew. Episode About uses that episode's plot.
+  Cast names wrap first/last. Lucide gallery-horizontal-end icon.
+- Android TV stress no longer pulls the full ~24k-channel playlist through
+  WebView `JSON.parse` (that returned `{}`). It starts from favorites /
+  `?limit=40` and seeds the in-page Live TV cache so Multiview can open.
+  `/api/iptv/channels?limit=N` is capped at 200.
+- `npm.cmd test` 594/594. Isolated `/api/server` smoke reported 3.0.10.
+  `verify:full` household
+  VOD/CC/IPTV/overlap + Android lint/native-unit/`assembleDebug` passed
+  against the already-up v3.0.8 process on :7777. ExoPlayer stress retried
+  after the lean/fav Live start fix:
+  `bench/stress-results/android-tv-stress-20260820-002304.json`
+  (`ok: true`, zero failures/warnings).
+- Household Mario 4K: ready 940ms, first-byte 131ms, seek 32ms, resume
+  12ms, remux, cc=200. FROM S01E01: 563/188/3/40ms, remux, cc=200.
+  IPTV ABC+ESPN web+native. Overlapping Play 15ms / 407ms wall.
+- Windows native GPU/HDR not run.
+
 2026-08-19, v3.0.9 ship APK + Windows server + Windows client:
 
 - Version contract: `package.json` 3.0.9; Android `versionName` 3.0.9 /

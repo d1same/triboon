@@ -616,6 +616,11 @@ ${url}
     await httpJson(srv.port, 'POST', '/api/iptv/fav', { id: alphaChannel.id }, admin);
     const fav = await httpJson(srv.port, 'GET', '/api/iptv/channels?fav=1', null, admin);
     assert.deepStrictEqual(fav.json.channels.map((c) => c.sourceName), ['Alpha TV']);
+    const limited = await httpJson(srv.port, 'GET', '/api/iptv/channels?lean=1&limit=1', null, admin);
+    assert.strictEqual(limited.status, 200);
+    assert.strictEqual(limited.json.configured, true);
+    assert.strictEqual(limited.json.channels.length, 1);
+    assert.strictEqual(limited.json.channels[0].streamUrl, undefined);
 
     const del = await httpJson(srv.port, 'DELETE', `/api/iptv/sources/${alpha.json.source.id}`, null, admin);
     assert.strictEqual(del.status, 200);

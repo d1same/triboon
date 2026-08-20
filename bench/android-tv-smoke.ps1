@@ -154,7 +154,7 @@ if ($LiveZap) {
 (async () => {
   const token = localStorage.getItem('triboon.token') || '';
   if (!token) return { ok: false, error: 'missing token' };
-  const j = await fetch('/api/iptv/channels', { headers: { authorization: 'Bearer ' + token } }).then((r) => r.json());
+  const j = await fetch('/api/iptv/channels?lean=1&limit=40', { headers: { authorization: 'Bearer ' + token } }).then((r) => r.json());
   const all = (j.channels || []).map(liveItemForPlayerGuide).filter(Boolean);
   const videoLike = all.filter((x) => !/\[radio\]|\bradio\b|offline/i.test([x.title || '', x.genre || '', x.group || ''].join(' ')));
   const list = (videoLike.length ? videoLike : all).slice(0, 12);

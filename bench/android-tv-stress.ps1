@@ -440,25 +440,53 @@ if (!$source.ok) { Add-Failure "Source quality search did not keep 1080p and 4K 
 
 $liveStart = Invoke-CdpJson @"
 (async () => {
-  const j = await api('/api/iptv/channels');
-  const channels = Array.isArray(j.channels) ? j.channels : [];
-  S.liveChannels = channels;
-  const mapped = channels.map(liveItemForPlayerGuide).filter(Boolean);
-  // Keep in sync with bench/live-channel-pick.js and android-tv-smoke.ps1.
-  const videoLike = mapped.filter((x) => !/\[radio\]|\bradio\b|offline/i.test([x.title || '', x.genre || '', x.group || ''].join(' ')));
-  const pool = videoLike.length ? videoLike : mapped;
-  S.liveList = pool.slice(0, Math.max(30, $LiveZaps + 4));
-  const it = S.liveList[0];
-  if (!it) return { ok: false, error: 'no live channel', count: channels.length, videoCount: videoLike.length };
-  await playChannel(it, S.liveList);
-  return {
-    ok: true,
-    count: channels.length,
-    videoCount: videoLike.length,
-    start: it.title,
-    liveCur: S.liveCur,
-    usedRadioFallback: videoLike.length === 0
-  };
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // Same lean list the UI and bench/verify-live.js use. playChannel hydrates
+  // stream URLs for the picked row; the full dump is not needed here.
+  let last = { ok: false, error: 'no live channel', count: 0, videoCount: 0 };
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      // Prefer favorites (tiny). The full household playlist is ~20k rows and
+      // Android WebView api() JSON.parse returns {}. Fall back to ?limit=40
+      // on servers that honor it.
+      let j = await api('/api/iptv/channels?lean=1&fav=1');
+      if (!Array.isArray(j.channels) || !j.channels.length) {
+        j = await api('/api/iptv/channels?lean=1&limit=40');
+      }
+      const channels = Array.isArray(j.channels) ? j.channels : [];
+      // Seed the in-page Live TV cache so later Multiview prep can scaffold
+      // chMultiBtn without re-fetching the multi-MB playlist (WebView JSON.parse
+      // of ~20k lean rows returns {}).
+      if (typeof fillLiveState === 'function') fillLiveState(j);
+      else { S.liveChannels = channels; S._liveAt = Date.now(); }
+      const mapped = channels.map(liveItemForPlayerGuide).filter(Boolean);
+      // Keep in sync with bench/live-channel-pick.js and android-tv-smoke.ps1.
+      const videoLike = mapped.filter((x) => !/\[radio\]|\bradio\b|offline/i.test([x.title || '', x.genre || '', x.group || ''].join(' ')));
+      const pool = videoLike.length ? videoLike : mapped;
+      S.liveList = pool.slice(0, Math.max(30, $LiveZaps + 4));
+      const it = S.liveList[0];
+      if (!it) {
+        last = { ok: false, error: 'no live channel', count: channels.length, videoCount: videoLike.length, configured: !!j.configured, attempt };
+        if (attempt < 3) { await wait(800); continue; }
+        return last;
+      }
+      await playChannel(it, S.liveList);
+      return {
+        ok: true,
+        count: channels.length,
+        videoCount: videoLike.length,
+        start: it.title,
+        liveCur: S.liveCur,
+        usedRadioFallback: videoLike.length === 0,
+        attempt
+      };
+    } catch (e) {
+      last = { ok: false, error: String((e && e.message) || e), attempt };
+      if (attempt < 3) { await wait(800); continue; }
+      return last;
+    }
+  }
+  return last;
 })()
 "@ -AwaitPromise
 $report.sections['liveStart'] = $liveStart
