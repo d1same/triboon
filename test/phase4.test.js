@@ -602,9 +602,11 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   // watched (the "only marks watched if I watch the ENTIRE thing" bug).
   assert.match(ui, /v\.onended = \(\) => \{[\s\S]+handleVodPlaybackEnded\(v\.currentTime, v\.duration\);/,
     'web episode EOF should use the same genuine-EOF gate so a dead resume file cannot skip the episode');
-  assert.match(ui, /function isGenuineEpisodeEof\(p, pos, dur\) \{[\s\S]+_sourceAdvancePending[\s\S]+resume > 30 && d > 0 && d \+ 8 < resume[\s\S]+d >= 45 && t >= d \* 0\.88[\s\S]+!vodPlaybackStarted\(p\)[\s\S]+playedMs < 12000[\s\S]+d <= 0/,
+  assert.match(ui, /function isGenuineEpisodeEof\(p, pos, dur\) \{[\s\S]+_sourceAdvancePending[\s\S]+resume > 30 && d > 0 && d \+ 8 < resume[\s\S]+d >= 45 && t >= d \* 0\.88[\s\S]+openedAt[\s\S]+!vodPlaybackStarted\(p\)[\s\S]+playedMs < 12000[\s\S]+d <= 0/,
     'a stub/rotten resume file that ENDED immediately is not credits');
-  assert.match(ui, /function handleVodPlaybackEnded\(pos, dur\) \{[\s\S]+playbackSourceSwapPending\(p\)[\s\S]+isGenuineEpisodeEof\(p, pos, dur\)[\s\S]+finishEpisodeToNext\(\)[\s\S]+tryNextNativeKind\([\s\S]+autoAdvance\(\{ nativePreferred: true \}\)[\s\S]+failover\(\)/,
+  assert.match(ui, /nativePos: Math.max\(0, Number\(it\.resume\) \|\| 0\), nativeDuration: 0,[\s\S]+openedAt: \(typeof appMs === 'function' \? appMs\(\) : Date.now\(\)\)/,
+    'new playback records when the session opened so a 0:00 ENDED cannot mark the title watched');
+  assert.match(ui, /function handleVodPlaybackEnded\(pos, dur\) \{[\s\S]+playbackSourceSwapPending\(p\)[\s\S]+isGenuineEpisodeEof\(p, pos, dur\)[\s\S]+finishEpisodeToNext\(\)[\s\S]+_startupEndedTries[\s\S]+tryNextNativeKind\([\s\S]+autoAdvance\(\{ nativePreferred: true \}\)[\s\S]+failover\(\)/,
     'a fake EOF must stay on this episode and try the next source, never autoplay the next episode');
   assert.ok([
     'function applyNativeVideoProgress(pos, dur, opts = {}) {',
@@ -1479,6 +1481,10 @@ test('episode handoff stays player-to-player before local lookup and EOF never r
     'position at the end of a real runtime is credits even if this session just started');
   assert.equal(isGenuine({ item: { type: 'episode' } }, 100, 100), true,
     'older native shells that skip PLAYING still count a 100s file at 100s as EOF');
+  assert.equal(isGenuine({ item: { type: 'movie' }, openedAt: 19_000, duration: 6065 }, 6065, 6065), false,
+    'ENDED at duration on a cold start is a dead source, not a finished movie');
+  assert.equal(isGenuine({ item: { type: 'movie', resume: 5800 }, openedAt: 19_000, duration: 6065 }, 6065, 6065), true,
+    'resume into the last minutes plus ENDED is still a finished movie');
   assert.equal(isGenuine({ item: { type: 'episode' }, started: true, startedAt: 1 }, 600, 0), false,
     'unknown duration after a mid-episode remount is not the next episode');
   assert.equal(isGenuine({ item: { type: 'episode', runtime: 22 }, started: true, startedAt: 1 }, 600, 700), false,
@@ -1495,6 +1501,8 @@ test('episode handoff stays player-to-player before local lookup and EOF never r
   const endedSource = android.slice(endedStart, endedEnd);
   assert.match(endedSource, /__tvNativeVideoEnded\("[\s\S]+listenerPlaybackToken/,
     'Android EOF should notify JS with the playback token while the native surface is still visible');
+  assert.match(endedSource, /nativeVideoStarted && dur > 0 \? dur : nativePosSeconds\(\)/,
+    'a cold-start ENDED must report the real position, not force pos=duration');
   assert.doesNotMatch(endedSource, /closeNativePlayback\(/,
     'Android EOF must not expose the details WebView before JS decides the next action');
   assert.match(endedSource, /window\.__tvNativeVideoEnded \? __tvNativeVideoEnded\([\s\S]+window\.__tvNativeVideoClosed\s*&&\s*__tvNativeVideoClosed\([\s\S]+true,/,
@@ -2993,8 +3001,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'phone details should drop the desktop 140px title slot and the extra 82px hero pad');
   assert.match(ui, /const DETAIL_CAST_BATCH = 20;[\s\S]+function appendCastBatch\(row\)[\s\S]+row\.addEventListener\('scroll', maybeLoadMoreCast, \{ passive: true \}\)/,
     'detail cast rows should keep the first render bounded and append more cast as the row scrolls');
-  assert.match(ui, /function detailCastList\(d\) \{[\s\S]+aggregate_credits[\s\S]+DETAIL_CAST_MAX[\s\S]+d\.credits && d\.credits\.cast/,
-    'TV cast prefers season-wide aggregate credits so a sitcom is not reduced to three billed names');
+  assert.match(ui, /function detailCastList\(d\) \{[\s\S]+d\.credits && d\.credits\.cast[\s\S]+aggregate_credits[\s\S]+DETAIL_CAST_MAX/,
+    'TV cast leads with billed credits, then aggregate fill so a sitcom is not reduced to three names');
   const castStart = ui.indexOf('const DETAIL_CAST_MAX = 40;');
   const castEnd = ui.indexOf('function castCard(c)', castStart);
   assert.ok(castStart >= 0 && castEnd > castStart, 'detailCastList should be extractable');
@@ -3002,14 +3010,25 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.deepStrictEqual(detailCastList({ credits: { cast: [{ id: 1, name: 'Only' }] } }).map((c) => c.name), ['Only'],
     'movies keep the regular credits list');
   assert.deepStrictEqual(detailCastList({
+    credits: { cast: [{ id: 2, name: 'Second', order: 1 }, { id: 1, name: 'Lead', order: 0 }] },
+  }).map((c) => c.name), ['Lead', 'Second'],
+    'TMDB order 0 is the billed lead, not a missing rank');
+  assert.deepStrictEqual(detailCastList({
     credits: { cast: [{ id: 9, name: 'Current billed' }] },
     aggregate_credits: { cast: [
       { id: 2, name: 'Charlie', total_episode_count: 177, order: 2, profile_path: '/c', roles: [{ character: 'Charlie Harper', episode_count: 177 }] },
       { id: 3, name: 'Guest', total_episode_count: 1, order: 40, roles: [{ character: 'Waiter', episode_count: 1 }] },
       { id: 4, name: 'Alan', total_episode_count: 262, order: 1, profile_path: '/a', roles: [{ character: 'Alan Harper', episode_count: 262 }] },
     ] },
-  }).map((c) => c.name), ['Alan', 'Charlie', 'Guest'],
-    'aggregate cast is ordered by episode count so the series regulars lead');
+  }).map((c) => c.name), ['Current billed', 'Alan', 'Charlie', 'Guest'],
+    'billed series names lead; aggregate fills the rest by billed order, not episode count');
+  assert.deepStrictEqual(detailCastList({
+    aggregate_credits: { cast: [
+      { id: 2, name: 'Extra', total_episode_count: 24, order: 1 },
+      { id: 1, name: 'Zoe', total_episode_count: 8, order: 0 },
+    ] },
+  }).map((c) => c.name), ['Zoe', 'Extra'],
+    'a supporting regular with more episodes cannot jump the billed lead');
   assert.match(ui, /const PERSON_WORKS_BATCH = 24;[\s\S]+\.map\(mapTmdb\);\s+renderPersonWorks\(credits\);[\s\S]+function loadMorePersonWorks\(focusNew = false\)[\s\S]+if \(start === 0\) renderGrid\(batch, \$\('personGrid'\)\);[\s\S]+else appendGrid\(batch\);/,
     'person known-for pages should lazy-render all filtered credits in batches instead of slicing to a fixed cap');
   assert.match(ui, /\$\('person'\)\.addEventListener\('scroll', maybeLoadMorePersonWorks, \{ passive: true \}\);[\s\S]+if \(S\.view === 'person' && S\.gridIdx >= \(S\.gridItems \|\| \[\]\)\.length - Math\.max\(2, gridCols\(\) \* 2\)\) \{[\s\S]+loadMorePersonWorks\(false\);/,
@@ -3686,8 +3705,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'web D-pad Down from player controls should open the episode strip for TV episode playback, then About on movies');
   assert.match(ui, /id="aboutBtn"[\s\S]+id="playerAbout"[\s\S]+function openPlayerAbout\(\) \{[\s\S]+function closePlayerAbout\(\)/,
     'VOD playback should expose a dedicated About chrome button and in-player About card');
-  assert.match(ui, /#playerAbout\{position:absolute;inset:0;z-index:8[\s\S]+#player\.aboutOpen #osd\{opacity:0;pointer-events:none\}/,
-    'the About wash covers the full player and hides the control-bar shade so it cannot cut the dim');
+  assert.match(ui, /#playerAbout\{position:absolute;inset:0;z-index:8;display:flex[\s\S]+transition:opacity \.35s[\s\S]+rgba\(0,0,0,\.62\)[\s\S]+#playerAbout\.open\{opacity:1;pointer-events:auto\}[\s\S]+#player\.aboutOpen #osd\{opacity:0;pointer-events:none\}/,
+    'About should use the same black 0.35s fade as the player OSD, not a purple pop-in wash');
+  assert.match(ui, /if \(\$\('playerAbout'\)\.classList\.contains\('open'\)\) return;/,
+    'an open About card should not keep restarting the OSD show timer');
   assert.match(ui, /\.paPoster\{flex:0 0 180px;width:180px;height:270px/,
     'browser About poster is large enough to read from a desktop window');
   assert.match(ui, /function nativeEpisodeAboutChoice\(\) \{[\s\S]+about: true,[\s\S]+return playerAboutHasPeople\(\) \? \[nativeEpisodeAboutChoice\(\)\]\.concat\(eps\) : eps/,
@@ -3704,14 +3725,34 @@ test('Android native player: direct source and native chrome stay out of the web
     'native About should hide the chrome button when the title has no people');
   assert.match(android, /if \(!\"video\"\.equals\(nativeMode\) \|\| nativeAboutOverlay == null \|\| !nativeAboutAvailable\) return false/,
     'native About should not open when the title has no cast or crew');
+  assert.match(android, /0x9E000000, 0x47000000, 0x2E000000, 0x8F000000, 0xD1000000[\s\S]+overlay\.setBackground\(nativeAboutScrim\(\)\)/,
+    'native About wash should be the same black fade family as the player control shade');
+  assert.match(android, /hideNativeChromeNow\(\);[\s\S]+paintNativeAbout\(\);[\s\S]+nativeAboutOpen = true;[\s\S]+fadeNativeAboutOverlay\(true, null\);/,
+    'opening About should hide the seek bar and title immediately, then fade the card in with the player');
+  assert.match(android, /nativeAboutOverlay\.animate\(\)\.alpha\(1f\)\.setDuration\(350\)[\s\S]+nativeAboutOverlay\.animate\(\)\.alpha\(0f\)\.setDuration\(350\)/,
+    'native About should fade in and out on the same 350ms beat as the web OSD');
   assert.match(ui, /function aboutCastNameHtml\(name\) \{[\s\S]+<br>\$\{esc\(parts\.slice\(1\)\.join\(' '\)\)\}/,
     'About cast names should put first and last name on two lines');
   assert.match(ui, /\.paCast\{display:flex;gap:18px[\s\S]+\.paCastItem\{width:max-content[\s\S]+\.paCastNm\{[^}]*-webkit-line-clamp:3/,
     'About cast should use a balanced gap while names wrap in full');
   assert.match(ui, /it\.type === 'episode' \? getPlayerEpisodeContext\(it\)[\s\S]+overview: \(ep && ep\.overview\) \|\| S\.playerAbout\.overview/,
     'episode About should prefer that episode plot over the show overview');
-  assert.match(ui, /function playerAboutCastList\(d, epCredits, seasonCredits\) \{[\s\S]+seasonCredits\.cast[\s\S]+epCredits\.guest_stars[\s\S]+\/season\/\$\{parts\.season\}\/episode\/\$\{parts\.episode\}\/credits[\s\S]+\/season\/\$\{parts\.season\}\/credits/,
-    'episode About should lead with this season regulars, then that episode billed cast and guests');
+  assert.match(ui, /function playerAboutCastList\(d, epCredits, seasonCredits\) \{[\s\S]+d\.credits\.cast[\s\S]+seasonCredits\.cast[\s\S]+epCredits\.guest_stars[\s\S]+\/season\/\$\{parts\.season\}\/episode\/\$\{parts\.episode\}\/credits[\s\S]+\/season\/\$\{parts\.season\}\/credits/,
+    'episode About should lead with show billed stars, then this season, then that episode');
+  const aboutHelpers = ui.slice(ui.indexOf('function tmdbCastOrder'), ui.indexOf('function castCard(c)'));
+  const aboutStart = ui.indexOf('function playerAboutCastList(d, epCredits, seasonCredits)');
+  const aboutEnd = ui.indexOf('function playerAboutHasPeople', aboutStart);
+  assert.ok(aboutHelpers && aboutStart >= 0 && aboutEnd > aboutStart, 'playerAboutCastList should be extractable');
+  const playerAboutCastList = new Function(`${aboutHelpers}\n${ui.slice(aboutStart, aboutEnd)}\nreturn playerAboutCastList;`)();
+  assert.deepStrictEqual(playerAboutCastList({
+    credits: { cast: [{ id: 1, name: 'Zoe', order: 0 }] },
+  }, {
+    cast: [{ id: 2, name: 'Episode billed', order: 0 }],
+    guest_stars: [{ id: 3, name: 'Guest', order: 0 }],
+  }, {
+    cast: [{ id: 4, name: 'Season regular', order: 0 }, { id: 1, name: 'Zoe', order: 7 }],
+  }).map((c) => c.name), ['Zoe', 'Season regular', 'Episode billed', 'Guest'],
+    'show billed stars stay first even when this season lists them after number 7');
   assert.match(ui, /playerAboutCastList\(d, epCredits, seasonCredits\)\.slice\(0, ABOUT_CAST_MAX\)\.map\(\(c\) => \(\{\n        name: c\.name,/,
     'About cast map must return an object literal — a stray ({) would kill the whole UI script and freeze the splash');
   assert.match(android, /Math\.min\(10, cast\.length\(\)\)/,
@@ -6195,8 +6236,27 @@ test('web shell avoids known TV paint/focus regressions', () => {
   assert.match(ui, /body\.tv \.focusable::before\{transition:none\}/,
     'TV focus ring should be instant so the previous item does not keep glowing during a D-pad move');
   // Back from anywhere deep in a Home row (e.g. Continue Watching) returns to the first item first.
-  assert.match(ui, /if \(S\.zone === 'rows' && S\.rowsView && \(\(S\.rowIdx \|\| 0\) > 0 \|\| \(S\.colIdx && \(S\.colIdx\[S\.rowIdx\] \|\| 0\) > 0\)\)\) \{\s*\n\s*focusCard\(0, 0\); return 'ok';/,
+  assert.match(ui, /if \(S\.zone === 'rows' && S\.rowsView && rowsViewBelongsToCurrentView\(\)[\s\S]+focusCard\(0, 0\); return 'ok';/,
     'hardware Back from a non-first item in Home rows should return to the first item before leaving');
+  assert.match(ui, /function rowsViewBelongsToCurrentView\(\) \{[\s\S]+S\.view === 'discover'[\s\S]+discoverRows[\s\S]+return false;/,
+    'Discover/Music Back must not treat a leftover Home rowsView as the current page');
+  assert.match(ui, /function renderRows\(opts = \{\}\) \{[\s\S]+renderRowsInto\(\$\('rows'\), S\.rows[\s\S]+if \(S\.view !== 'home'\) return;/,
+    'a late Home row paint must not steal focus after the user left Home');
+  assert.match(ui, /if \(prevView === 'home' && v !== 'home'\) S\._homeLoadRun = \(S\._homeLoadRun \|\| 0\) \+ 1;/,
+    'leaving Home cancels in-flight home loads so they cannot finish on Music');
+  assert.match(ui, /async function loadDiscover\(\) \{[\s\S]+S\.rowIdx = 0;[\s\S]+setRowsView\(\$\('discoverRows'\), \[\], false\);/,
+    'opening Discover resets row focus before the TMDB fetch so Back during load leaves the page');
+  assert.match(ui, /function loadMusic\(\) \{[\s\S]+S\.musicRowIdx = 0;/,
+    'opening Music resets the row index so the first Back opens the rail');
+  assert.match(ui, /S\.zone === 'music' && \(S\.musicRowIdx \|\| 0\) > 0 && musicRows\(\)\.length/,
+    'Music Back only returns to the first row when focus is already on a music row');
+  {
+    const tvBack = ui.slice(ui.indexOf('window.__tvBack = () => {'));
+    const musicIdx = tvBack.indexOf("S.view === 'music' && !($('musicNow')");
+    const rowsIdx = tvBack.indexOf("S.zone === 'rows' && S.rowsView && rowsViewBelongsToCurrentView()");
+    assert.ok(musicIdx >= 0 && rowsIdx >= 0 && musicIdx < rowsIdx,
+      'Music Back must run before leftover Home row reset');
+  }
   // Preferences shows when an app update is available (semver compare of current vs latest release).
   assert.match(ui, /function compareSemver\(a, b\) \{[\s\S]+const updateAvailable = !!\(curVer && latestVer && compareSemver\(curVer, latestVer\) < 0\);[\s\S]+status\.classList\.toggle\('updateAvail', updateAvailable\)/,
     'the app-update box should detect and flag when a newer release is available');

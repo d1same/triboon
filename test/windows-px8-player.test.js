@@ -128,6 +128,26 @@ test('Windows client: bridge exposes Android-compatible native playback controls
     JSON.parse(JSON.stringify(calls.at(-1))),
     { command: 'windows_player_control', args: { action: 'seek_absolute', payload: { seconds: 44 } } },
   );
+  bridge.seekBy(-20);
+  assert.deepStrictEqual(
+    JSON.parse(JSON.stringify(calls.at(-1))),
+    { command: 'windows_player_control', args: { action: 'seek_relative', payload: { seconds: -20 } } },
+  );
+});
+
+test('Windows client: About and seek stay on the shared web player contract', () => {
+  const { window } = loadBridge();
+  const playerHtml = read('clients/windows-px8/ui/player.html');
+  assert.match(webSource, /id="aboutBtn"[\s\S]+id="playerAbout"[\s\S]+function openPlayerAbout\(\)/,
+    'Windows catalog WebView uses the same in-player About card as browser and Android web');
+  assert.match(webSource, /function nudgeSeek\(delta\)/,
+    'Windows catalog seeks use the same nudgeSeek path as web and Android stress');
+  assert.match(webSource, /window\.TriboonTV\.showTitleInfo/,
+    'native About handoff is the Android/Windows showTitleInfo bridge');
+  assert.match(playerHtml, /id="back"[\s\S]+id="forward"/,
+    'Windows native chrome still has back/forth skip buttons');
+  assert.strictEqual(typeof window.TriboonTV.showTitleInfo, 'undefined',
+    'Windows native About handoff is not on the bridge yet; catalog WebView About is the current contract');
 });
 
 test('Windows client: web telemetry identifies libmpv and reports the desktop version', () => {

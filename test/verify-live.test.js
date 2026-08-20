@@ -60,4 +60,16 @@ test('verify:full household live and Android radio skip stay wired', () => {
     'Android stress prefers video channels over radio');
   assert.match(stress, /started a radio channel even though video channels were available/,
     'Android stress fails closed if Live TV still lands on radio');
+  assert.match(stress, /nudgeSeek\(\$delta\)/,
+    'Android VOD seeks must use nudgeSeek, not emulator media keys that never reach ExoPlayer');
+  assert.match(stress, /mapTmdb\(\{ \.\.\.d, media_type: parsed\[1\] \}\)/,
+    'Android stress must resolve the VOD fixture from TMDB when it is not on a shelf');
+  assert.match(stress, /return S\.view === 'player' \|\| !!p\.usingNative \|\| document\.body\.classList\.contains\('videoOpen'\)/,
+    'Android VOD ready must accept native ExoPlayer, not only #player.open');
+  assert.match(stress, /if \(typeof closePlayerGuide === 'function'\) closePlayerGuide\(\);/,
+    'PiP guide close must use JS so an emulator Back key cannot dump the later VOD');
+  assert.match(stress, /openPlayerAbout\(\);[\s\S]+closePlayerAbout\(\)[\s\S]+Player About did not open and close without killing VOD/,
+    'Android stress must open and close in-player About on a living VOD, not only pin the source text');
+  assert.match(stress, /const midResume = duration > 600 \? Math\.min\(3200, Math\.floor\(duration \* 0\.45\)\) : 0/,
+    'Android VOD stress resumes mid-file when Continue Watching is empty so emulator start-from-zero does not false-fail');
 });

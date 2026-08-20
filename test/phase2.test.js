@@ -1819,6 +1819,29 @@ test('pipeline: Play after a finished prepare skips a stale indexer search', asy
   pool.close(); await mock.close(); server.close(); store.close();
 });
 
+test('pipeline: an empty indexer fan-out does not erase a good search cache', () => {
+  const pipeline = new Pipeline({
+    pool: () => null,
+    verdicts: { get: () => null, set() {} },
+    mounts: new Map(),
+  });
+  const key = 'mario-2026';
+  pipeline._rememberSearchHit(key, {
+    at: Date.now() - 1000,
+    results: [{ name: 'The.Super.Mario.Galaxy.Movie.2026.1080p.WEBRip', nzbUrl: 'http://x/nzb' }],
+    errors: [],
+  });
+  pipeline._rememberSearchHit(key, { at: Date.now(), results: [], errors: ['throttled'] });
+  const hit = pipeline.searchCache.get(key);
+  assert.ok(hit && hit.results && hit.results.length,
+    'a throttle/empty fan-out must not clobber the last good indexer hit');
+  assert.match(hit.results[0].name, /Mario\.Galaxy/);
+  pipeline.searchCache.clear();
+  pipeline._rememberSearchHit('empty-only', { at: Date.now(), results: [], errors: ['throttled'] });
+  assert.strictEqual(pipeline.searchCache.has('empty-only'), false,
+    'an empty indexer response is not cached, so the next Play can refetch');
+});
+
 test('pipeline: smash Play during prepare does not open a full-width NZB race', async () => {
   const goodPayload = seededPayload(90 * 1024, 0xfc1);
   const bad = nzbFor([{ name: 'Missing.mkv', data: seededPayload(40 * 1024, 0xfc2) }], 30000, 'smash-bad');

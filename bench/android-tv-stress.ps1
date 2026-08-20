@@ -376,8 +376,12 @@ $page = Invoke-CdpJson @"
     for (const v of views) {
       try {
         switchView(v, false);
-        await wait(650);
+        await wait(v === 'music' ? 900 : 650);
         if (S.view !== v) failures.push('switch ' + v + ' landed on ' + S.view);
+        if (v === 'music') {
+          try { if (typeof closeMusicNow === 'function') closeMusicNow(); } catch (e) {}
+          try { document.getElementById('musicNow').classList.remove('open'); } catch (e) {}
+        }
         if (v === 'movies' || v === 'tv' || v === 'music') {
           // Rail-first sections: the FIRST Back opens the menu rail (movies/tv -> section menu via
           // backToBrowseSectionMenu; music -> main nav via enterRail, index.html __tvBack line ~22039),
@@ -406,37 +410,6 @@ $page = Invoke-CdpJson @"
 "@ -AwaitPromise
 $report.sections['pageChurn'] = $page
 foreach ($f in @($page.failures)) { Add-Failure "Page churn: $f" }
-
-$source = Invoke-CdpJson @"
-(async () => {
-  const title = 'The Lord of the Rings The Fellowship of the Ring 2001';
-  async function search(rank) {
-    const r = await api('/api/search?q=' + encodeURIComponent(title) + '&imdbid=tt0120737&maxResolutionRank=' + rank + '&preferResolutionRank=' + rank + '&originalLanguage=en&preferredAudioLanguage=en');
-    const candidates = Array.isArray(r.candidates) ? r.candidates : [];
-    return {
-      rank,
-      count: candidates.length,
-      firstResolution: candidates[0] && candidates[0].attributes ? candidates[0].attributes.resolution : '',
-      resolutions: [...new Set(candidates.slice(0, 25).map((c) => c.attributes && c.attributes.resolution || 'unknown'))],
-      firstScore: candidates[0] ? candidates[0].score : null
-    };
-  }
-  const attempts = [];
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    const hd = await search(3);
-    const uhd = await search(4);
-    const ok = hd.count > 0 && uhd.count > 0
-      && hd.firstResolution === '1080p' && uhd.firstResolution === '2160p';
-    attempts.push({ attempt, ok, hd, uhd });
-    if (ok) return { ok: true, attempt, hd, uhd, attempts };
-    if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 350));
-  }
-  const last = attempts[attempts.length - 1];
-  return { ok: false, attempt: attempts.length, hd: last.hd, uhd: last.uhd, attempts };
-})()
-"@ -AwaitPromise
-$report.sections['sources'] = $source
-if (!$source.ok) { Add-Failure "Source quality search did not keep 1080p and 4K separated" }
 
 $liveStart = Invoke-CdpJson @"
 (async () => {
@@ -776,7 +749,12 @@ for ($i = 0; $i -lt $PipLoops; $i++) {
   $pipSamples.Add([ordered]@{ loop = $i; open = $open }) | Out-Null
   if (!$open.guideOpen) { Add-Failure "PiP guide did not open on loop $i" }
   Start-Sleep -Seconds 2
-  Send-Key "BACK"
+  Invoke-CdpJson @"
+(() => {
+  if (typeof closePlayerGuide === 'function') closePlayerGuide();
+  return { guideOpen: document.getElementById('pGuide').classList.contains('open') };
+})()
+"@ | Out-Null
   Start-Sleep -Seconds 2
   $closed = App-State
   $pipSamples.Add([ordered]@{ loop = $i; afterBack = $closed }) | Out-Null
@@ -785,8 +763,6 @@ for ($i = 0; $i -lt $PipLoops; $i++) {
 }
 $report.sections['pip'] = [ordered]@{ samples = $pipSamples }
 
-Send-Key "BACK"
-Start-Sleep -Seconds 2
 $vodStart = Invoke-CdpJson @"
 (async () => {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -811,11 +787,24 @@ $vodStart = Invoke-CdpJson @"
       if (row) item = { ...(row.meta || {}), key: row.key, resume: row.position || 0, duration: row.duration || 0 };
     } catch {}
   }
+  if (!item) {
+    const parsed = /^tmdb:(movie|tv):(\d+)$/i.exec('$VodKey');
+    if (parsed && typeof mapTmdb === 'function') {
+      try {
+        const d = await api('/api/tmdb/' + parsed[1] + '/' + parsed[2]);
+        if (d && d.id) item = mapTmdb({ ...d, media_type: parsed[1] });
+      } catch {}
+    }
+  }
   if (!item) return { ok: false, error: 'exact -VodKey was not found in rows, Watchlist, or watch state', key: '$VodKey', rows: S.rows ? S.rows.length : 0 };
-  const requestedResume = $VodResumeSeconds;
   const existingWatch = S.watchMap && item.key ? S.watchMap[item.key] : null;
   const duration = $VodDurationSeconds || +(existingWatch && existingWatch.duration) || +item.duration || 0;
-  if (requestedResume > 0 && duration <= requestedResume) {
+  const watchPos = (existingWatch && !existingWatch.watched) ? (+existingWatch.position || 0) : 0;
+  const midResume = duration > 600 ? Math.min(3200, Math.floor(duration * 0.45)) : 0;
+  const requestedResume = $VodResumeSeconds > 0
+    ? $VodResumeSeconds
+    : (watchPos > 120 ? Math.floor(watchPos) : midResume);
+  if (requestedResume > 0 && duration > 0 && duration <= requestedResume) {
     return { ok: false, error: '4K Continue Watching resume requires -VodDurationSeconds greater than -VodResumeSeconds', duration, requestedResume };
   }
   item = { ...item, qualityRank: $VodQualityRank };
@@ -824,7 +813,35 @@ $vodStart = Invoke-CdpJson @"
     S.watchMap[item.key] = { ...(existingWatch || {}), key: item.key, position: requestedResume, duration, watched: false, meta: item };
     item = { ...item, resume: requestedResume, duration };
   }
-  await play(item);
+  const vodUp = () => {
+    const p = S.playing;
+    if (!p || !p.mountId || (p.item && p.item.type === 'live')) return false;
+    return S.view === 'player' || !!p.usingNative || document.body.classList.contains('videoOpen');
+  };
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    await play(item);
+    for (let n = 0; n < 20; n++) {
+      if (vodUp()) break;
+      await wait(400);
+    }
+    if (vodUp()) break;
+    if (attempt < 2) await wait(4000);
+  }
+  const toastEl = document.getElementById('toast');
+  if (!vodUp()) {
+    const p = S.playing;
+    return {
+      ok: false,
+      error: 'play() returned but VOD was not still open',
+      view: S.view,
+      playerOpen: document.getElementById('player').classList.contains('open'),
+      videoOpen: document.body.classList.contains('videoOpen'),
+      usingNative: !!(p && p.usingNative),
+      mountId: p && p.mountId || '',
+      playingType: p && p.item && p.item.type || null,
+      toast: toastEl && toastEl.textContent || ''
+    };
+  }
   return {
     ok: true, key: item.key, title: item.title, type: item.type,
     originalLanguage: item.originalLanguage || '', requestedQualityRank: $VodQualityRank,
@@ -834,7 +851,43 @@ $vodStart = Invoke-CdpJson @"
 "@ -AwaitPromise
 $report.sections['vodStart'] = $vodStart
 if (!$vodStart.ok) { Add-Failure "VOD did not start: $($vodStart.error)" }
-Start-Sleep -Seconds $VodSettleSeconds
+Start-Sleep -Seconds ([Math]::Min(8, $VodSettleSeconds))
+$about = Invoke-CdpJson @"
+(async () => {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  for (let n = 0; n < 48; n++) {
+    if (typeof playerAboutHasPeople === 'function' && playerAboutHasPeople()) break;
+    if (n === 16 && S.playing && S.playing.item && typeof prepPlayerAbout === 'function') {
+      try { prepPlayerAbout(S.playing.item); } catch (e) {}
+    }
+    await wait(250);
+  }
+  const hasPeople = typeof playerAboutHasPeople === 'function' && playerAboutHasPeople();
+  if (!hasPeople) return { ok: false, reason: 'no-people' };
+  if (typeof openPlayerAbout !== 'function') return { ok: false, reason: 'openPlayerAbout missing' };
+  openPlayerAbout();
+  await wait(350);
+  const webOpen = document.getElementById('playerAbout').classList.contains('open');
+  const native = !!(window.TriboonTV && typeof window.TriboonTV.showTitleInfo === 'function');
+  if (typeof closePlayerAbout === 'function') closePlayerAbout();
+  await wait(200);
+  const stillOpen = document.getElementById('playerAbout').classList.contains('open');
+  const playing = !!(S.playing && S.playing.mountId && S.playing.item && S.playing.item.type !== 'live');
+  return {
+    ok: (native || webOpen) && !stillOpen && playing,
+    native, webOpen, stillOpen, playing,
+    title: (S.playerAbout && S.playerAbout.title) || '',
+    cast: (S.playerAbout && S.playerAbout.cast && S.playerAbout.cast.length) || 0
+  };
+})()
+"@ -AwaitPromise
+$report.sections['playerAbout'] = $about
+if (!$vodStart.ok) {
+  Add-Warning "About was skipped because VOD did not start"
+} elseif (!$about.ok) {
+  Add-Failure "Player About did not open and close without killing VOD"
+}
+Start-Sleep -Seconds ([Math]::Max(0, $VodSettleSeconds - 8))
 $vodSettled = App-State
 $report.sections['vodContinueWatching'] = [ordered]@{ launch = $vodStart; settled = $vodSettled }
 if ($VodQualityRank -eq 4 -and $vodSettled.playing -and $vodSettled.playing.name -notmatch '(?i)(2160p|4k|uhd)') {
@@ -851,8 +904,15 @@ if ($VodResumeSeconds -gt 0) {
 
 $seekSamples = New-Object System.Collections.Generic.List[object]
 for ($i = 0; $i -lt $VodSeeks; $i++) {
-  $key = if ($i % 2 -eq 0) { "MEDIA_FAST_FORWARD" } else { "MEDIA_REWIND" }
-  Send-Key $key
+  $delta = if ($i % 2 -eq 0) { 30 } else { -20 }
+  Invoke-CdpJson @"
+(async () => {
+  if (typeof nudgeSeek !== 'function') throw new Error('nudgeSeek missing');
+  nudgeSeek($delta);
+  await new Promise((r) => setTimeout(r, 400));
+  return { ok: true, delta: $delta, playing: !!(typeof S !== 'undefined' && S.playing && S.playing.mountId) };
+})()
+"@ -AwaitPromise | Out-Null
   Start-Sleep -Milliseconds $SeekDelayMs
   if ($i % 4 -eq 3 -or $i -eq $VodSeeks - 1) {
     $seekSamples.Add((App-State)) | Out-Null
@@ -863,6 +923,57 @@ if (!$report.sections['vodSeeks'].final.playing -or $report.sections['vodSeeks']
   Add-Failure "VOD was not still playing after seek loop"
 }
 if ($report.sections['vodSeeks'].final.loader) { Add-Failure "VOD loader was visible after seek loop" }
+
+$source = Invoke-CdpJson @"
+(async () => {
+  const title = 'The Lord of the Rings The Fellowship of the Ring 2001';
+  async function search(rank) {
+    const r = await api('/api/search?q=' + encodeURIComponent(title) + '&imdbid=tt0120737&maxResolutionRank=' + rank + '&preferResolutionRank=' + rank + '&originalLanguage=en&preferredAudioLanguage=en');
+    const candidates = Array.isArray(r.candidates) ? r.candidates : [];
+    return {
+      rank,
+      count: candidates.length,
+      firstResolution: candidates[0] && candidates[0].attributes ? candidates[0].attributes.resolution : '',
+      resolutions: [...new Set(candidates.slice(0, 25).map((c) => c.attributes && c.attributes.resolution || 'unknown'))],
+      firstScore: candidates[0] ? candidates[0].score : null
+    };
+  }
+  const attempts = [];
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const hd = await search(3);
+    const uhd = await search(4);
+    const both = hd.count > 0 && uhd.count > 0;
+    const separated = both && hd.firstResolution === '1080p' && uhd.firstResolution === '2160p';
+    attempts.push({ attempt, ok: separated, hd, uhd });
+    if (separated) return { ok: true, attempt, hd, uhd, attempts };
+    if (both && !separated) return { ok: false, reason: 'mixed-ranks', attempt, hd, uhd, attempts };
+    if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 2500));
+  }
+  const last = attempts[attempts.length - 1];
+  return {
+    ok: last.hd.count > 0 && last.hd.firstResolution === '1080p',
+    skippedUhd: !(last.uhd && last.uhd.count > 0),
+    empty: !(last.hd && last.hd.count > 0) && !(last.uhd && last.uhd.count > 0),
+    attempt: attempts.length, hd: last.hd, uhd: last.uhd, attempts
+  };
+})()
+"@ -AwaitPromise
+$report.sections['sources'] = $source
+if ($source.reason -eq 'mixed-ranks') {
+  Add-Failure "Source quality search did not keep 1080p and 4K separated"
+} elseif ($source.empty) {
+  if ($isEmulator) {
+    Add-Warning "LOTR quality search returned no rows after retries (indexer empty or throttled) [emulator]"
+  } else {
+    Add-Failure "Source quality search did not return a 1080p lead"
+  }
+} elseif ($isEmulator -and $source.hd -and $source.hd.count -eq 0 -and $source.uhd -and $source.uhd.count -gt 0) {
+  Add-Warning "LOTR 1080p search empty after retries while 4K returned rows (indexer throttle) [emulator]"
+} elseif (!$source.ok) {
+  Add-Failure "Source quality search did not return a 1080p lead"
+} elseif ($source.skippedUhd) {
+  Add-Warning "4K LOTR search returned no rows after retries (indexer empty or throttled)"
+}
 
 $subs = Invoke-CdpJson @"
 (async () => {

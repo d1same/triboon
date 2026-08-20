@@ -997,6 +997,10 @@ class Pipeline {
   }
 
   _rememberSearchHit(key, hit) {
+    const hasResults = !!(hit && hit.results && hit.results.length);
+    // Never store an empty fan-out. A throttle 0-hit used to cache for 60s so the
+    // next Play/Sources retry said "no playable" / "no 1080p lead".
+    if (!hasResults) return;
     this.searchCache.set(key, hit);
     if (this.searchCache.size > 50) this.searchCache.delete(this.searchCache.keys().next().value);
   }
@@ -1988,7 +1992,11 @@ class Pipeline {
       this._attachStandby(session, params, policy, mountOpts);
       return committed;
     }
-    const { candidates } = await this.search(params, policy);
+    let { candidates } = await this.search(params, policy);
+    if (!(candidates && candidates.length)) {
+      const stale = await this.search(params, policy, { allowStale: true });
+      if (stale.candidates && stale.candidates.length) candidates = stale.candidates;
+    }
     let playable = this._playableCandidates(candidates, params);
     const explicitPick = (params.pickKey || params.pick) && !params.pinnedResume;
     if (explicitPick && !playable.length) throw new Error('picked source not found');

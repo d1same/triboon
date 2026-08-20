@@ -1260,8 +1260,9 @@ body.nativeGuideMode #player.guideMode #video{display:none}
 .playerEpCard.about .peStill{background-color:#120e18}
 .playerEpCard.about .peStill::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;z-index:2;background:linear-gradient(180deg,#E35D8A,#F2B45C)}
 .playerEpCard.watched .peTag::after{content:"  ✓";color:#bdf3c5}
-#playerAbout{position:absolute;inset:0;z-index:8;display:none;align-items:flex-end;padding:clamp(32px,5vh,56px) clamp(48px,6vw,80px) clamp(40px,6vh,72px);background:linear-gradient(180deg,rgba(11,8,18,.55) 0%,rgba(11,8,18,.72) 36%,rgba(11,8,18,.88) 68%,rgba(11,8,18,.94) 100%)}
-#playerAbout.open{display:flex}
+#playerAbout{position:absolute;inset:0;z-index:8;display:flex;align-items:flex-end;padding:clamp(32px,5vh,56px) clamp(48px,6vw,80px) clamp(40px,6vh,72px);opacity:0;pointer-events:none;transition:opacity .35s;
+  background:linear-gradient(180deg,rgba(0,0,0,.62) 0%,rgba(0,0,0,.28) 28%,rgba(0,0,0,.18) 46%,rgba(0,0,0,.56) 78%,rgba(0,0,0,.82) 100%)}
+#playerAbout.open{opacity:1;pointer-events:auto}
 #player.aboutOpen #osd{opacity:0;pointer-events:none}
 .paCard{display:flex;gap:32px;max-width:min(1100px,94vw);align-items:flex-end}
 .paPoster{flex:0 0 180px;width:180px;height:270px;border-radius:10px;background:#16101f center/cover no-repeat;box-shadow:0 22px 56px rgba(0,0,0,.62);position:relative}
@@ -6532,8 +6533,10 @@ async function loadRows(opts = {}) {
   }
   const cw = opts.watchReady ? cachedWatchRowsForHome() : await loadWatchState().catch(() => []);
   if (runId !== S._homeLoadRun && !opts.catalogOnly) return;
+  if (S.view !== 'home' && !opts.catalogOnly) return;
   if (!opts.catalogOnly) await prepareHomeTvNext(cw, HOME_NEXT_WAIT_MS);
   if (runId !== S._homeLoadRun && !opts.catalogOnly) return;
+  if (S.view !== 'home' && !opts.catalogOnly) return;
   perfMark(opts.catalogOnly ? 'home-catalog-render' : 'home-render');
   publishHomeRows(homeRowsFromWatch(cw, false), { preserveFocus: !!opts.preserveFocus, focusSnapshot: opts.focusSnapshot }); // First public paint waits for real rows; local/live enrichment stays off-path.
   if (!opts.catalogOnly) {
@@ -7069,6 +7072,13 @@ function sizeRowsWindow(root) {
 }
 window.addEventListener('resize', () => { sizeRowsWindow($('rows')); sizeRowsWindow($('discoverRows')); fitLiveGuide(); fitRailToFullIcons(); fitRailWidth(); });
 function setRowsView(root, data, hasHero) { S.rowsView = { root, data, hasHero }; }
+function rowsViewBelongsToCurrentView() {
+  const root = S.rowsView && S.rowsView.root;
+  if (!root) return false;
+  if (S.view === 'home') return root === $('rows') || root.id === 'rows';
+  if (S.view === 'discover') return root === $('discoverRows') || root.id === 'discoverRows';
+  return false;
+}
 function rowsViewForRoot(root) {
   const view = S.rowsView;
   return view && view.root === root ? view : null;
@@ -7211,6 +7221,7 @@ function restoreHomeFocus(snap) {
 function renderRows(opts = {}) {
   const snap = opts.preserveFocus ? (opts.focusSnapshot || homeFocusSnapshot()) : null;
   renderRowsInto($('rows'), S.rows, { resetScroll: !snap });
+  if (S.view !== 'home') return;
   setRowsView($('rows'), S.rows, true);
   maybeBootHomeReady(S.rows); // placeholder rows stay behind the original boot loader
   // Default focus ONLY when the user isn't in the menu: rail rollover previews render this
@@ -8622,23 +8633,41 @@ const DETAIL_CAST_BATCH = 20;
 const DETAIL_CAST_MAX = 40;
 const PERSON_WORKS_BATCH = 24;
 
-// TV series `credits` is often just the current billed names (Two and a Half Men → 3 people).
-// `aggregate_credits` has every season; keep the regulars, not one-episode guests.
+function tmdbCastOrder(a, b) {
+  const ao = Number(a && a.order);
+  const bo = Number(b && b.order);
+  return (Number.isFinite(ao) ? ao : 999) - (Number.isFinite(bo) ? bo : 999);
+}
+function mapTmdbCastPerson(c) {
+  if (!c || !c.name) return null;
+  const roles = Array.isArray(c.roles) ? c.roles : [];
+  const top = roles.slice().sort((x, y) => (Number(y.episode_count) || 0) - (Number(x.episode_count) || 0))[0];
+  return {
+    id: c.id,
+    name: c.name,
+    profile_path: c.profile_path,
+    character: c.character || (top && top.character) || '',
+  };
+}
+// Billed series/movie names first (TMDB `order`). Aggregate fills the rest so a sitcom is not
+// stuck with three names, but episode-count never jumps a supporting regular over the lead.
 function detailCastList(d) {
-  const agg = d && d.aggregate_credits && d.aggregate_credits.cast;
-  if (Array.isArray(agg) && agg.length) {
-    return agg.filter((c) => c && c.id && c.name)
-      .slice()
-      .sort((a, b) => (Number(b.total_episode_count) || 0) - (Number(a.total_episode_count) || 0)
-        || (Number(a.order) || 999) - (Number(b.order) || 999))
-      .slice(0, DETAIL_CAST_MAX)
-      .map((c) => {
-        const roles = Array.isArray(c.roles) ? c.roles : [];
-        const top = roles.slice().sort((x, y) => (Number(y.episode_count) || 0) - (Number(x.episode_count) || 0))[0];
-        return { id: c.id, name: c.name, profile_path: c.profile_path, character: (top && top.character) || c.character || '' };
-      });
-  }
-  return ((d && d.credits && d.credits.cast) || []).filter((c) => c && c.id && c.name);
+  const billed = ((d && d.credits && d.credits.cast) || [])
+    .filter((c) => c && c.name)
+    .slice()
+    .sort(tmdbCastOrder)
+    .map(mapTmdbCastPerson)
+    .filter(Boolean);
+  const seen = new Set(billed.map((c) => c.id || c.name));
+  const rest = ((d && d.aggregate_credits && d.aggregate_credits.cast) || [])
+    .filter((c) => c && c.name && !seen.has(c.id || c.name))
+    .slice()
+    .sort((a, b) => tmdbCastOrder(a, b)
+      || (Number(b.total_episode_count) || 0) - (Number(a.total_episode_count) || 0))
+    .map(mapTmdbCastPerson)
+    .filter(Boolean);
+  const out = billed.concat(rest);
+  return out.length ? out.slice(0, DETAIL_CAST_MAX) : [];
 }
 
 function castCard(c) {
@@ -11386,6 +11415,7 @@ async function openPlayer(it, mount, opts = {}) {
     // rotten source before ExoPlayer's first callback; recovery must still start at Continue Watching.
     nativePos: Math.max(0, Number(it.resume) || 0), nativeDuration: 0,
     nativeStartKind: playbackStartKind(mount), nativeTried: {},
+    openedAt: (typeof appMs === 'function' ? appMs() : Date.now()),
     // Echoed by Android on terminal callbacks so a late STATE_ENDED from the previous ExoPlayer
     // cannot mark or auto-advance a newly-opened episode.
     playbackToken: Number(opts.playTicket || S._playTicket || 0),
@@ -12539,9 +12569,24 @@ function isGenuineEpisodeEof(p, pos, dur) {
   // a stub — much shorter than the listing, like a 12-min replacement of a 22-min show.
   const fileLooksComplete = !catalogSec || catalogSec < 8 * 60 || d >= catalogSec * 0.65;
   if (!fileLooksComplete && t < catalogSec * 0.80) return false;
-  if (d >= 45 && t >= d * 0.88) return true;
+  const now = (typeof appMs === 'function' ? appMs() : Date.now());
+  const openedAt = Number(p.openedAt || 0);
+  const startedAt = Number(p.startedAt || 0);
+  const sessionMs = openedAt ? (now - openedAt) : (startedAt ? (now - startedAt) : 0);
+  const playedMs = startedAt ? (now - startedAt) : 0;
+  const resumeTail = resume > 30 && d > 0 && resume >= d * 0.80;
+  // Exo reports STATE_ENDED with pos=duration as soon as a remux header is parsed, even when
+  // no frame played. That used to mark a 100-minute movie watched at 0:00. A session clock
+  // (openedAt) rejects that; older shells with no clock keep the previous near-end shortcut.
+  if (d >= 45 && t >= d * 0.88) {
+    if (resumeTail) return true;
+    if (openedAt || startedAt) {
+      if (!vodPlaybackStarted(p) && sessionMs < 12000) return false;
+      if (vodPlaybackStarted(p) && playedMs < 12000) return false;
+    }
+    return true;
+  }
   if (!vodPlaybackStarted(p)) return false;
-  const playedMs = p.startedAt ? ((typeof appMs === 'function' ? appMs() : Date.now()) - p.startedAt) : 0;
   if (playedMs < 12000) return false;
   if (d <= 0) return false;
   return t >= Math.max(20, d * 0.85);
@@ -12555,9 +12600,22 @@ function handleVodPlaybackEnded(pos, dur) {
     closePlayer({ ended: true });
     return true;
   }
-  const at = Math.max(0, Number(currentTime()) || Number(p.item && p.item.resume) || 0);
+  const at = !vodPlaybackStarted(p)
+    ? Math.max(0, Number(p.item && p.item.resume) || Number(p.startOffset) || 0)
+    : Math.max(0, Number(currentTime()) || Number(p.item && p.item.resume) || 0);
   const kind = currentPlayerKind(p);
   if (p.usingNative) {
+    // First bytes of a remux can ENDED before PLAYING. Walking remux→transcode→direct
+    // every ~2s killed Mario from 0:00. Retry the same kind twice, then the ladder.
+    if (!vodPlaybackStarted(p) && (p._startupEndedTries || 0) < 2) {
+      p._startupEndedTries = (p._startupEndedTries || 0) + 1;
+      markPlaybackSourceSwap(p);
+      setTimeout(() => {
+        if (S.playing !== p || S.view !== 'player' || vodPlaybackStarted(p)) return;
+        tryNativeVideoPlayer(kind, at, { quietSeek: true });
+      }, 1500);
+      return true;
+    }
     if (tryNextNativeKind(kind, at, 'source ended before playback started')) return true;
     if (p.sessionId) {
       autoAdvance({ nativePreferred: true });
@@ -13068,10 +13126,11 @@ function playerAboutCrewList(d, type, epCredits) {
   return playerAboutCrewFrom(crew, createdBy);
 }
 function playerAboutCastList(d, epCredits, seasonCredits) {
+  const seriesMain = (d && d.credits && Array.isArray(d.credits.cast)) ? d.credits.cast : [];
   const billed = (epCredits && Array.isArray(epCredits.cast)) ? epCredits.cast : [];
   const seasonMain = (seasonCredits && Array.isArray(seasonCredits.cast)) ? seasonCredits.cast : [];
   const guests = (epCredits && Array.isArray(epCredits.guest_stars)) ? epCredits.guest_stars : [];
-  if (billed.length || seasonMain.length || guests.length) {
+  if (seriesMain.length || billed.length || seasonMain.length || guests.length) {
     const seen = new Set();
     const out = [];
     const add = (c) => {
@@ -13079,11 +13138,11 @@ function playerAboutCastList(d, epCredits, seasonCredits) {
       seen.add(c.id || c.name);
       out.push(c);
     };
-    const byOrder = (a, b) => (Number(a.order) || 999) - (Number(b.order) || 999);
-    // This season's regulars first so starring faces cannot be crowded out by guests.
-    seasonMain.slice().sort(byOrder).forEach(add);
-    billed.slice().sort(byOrder).forEach(add);
-    guests.slice().sort(byOrder).forEach(add);
+    // Show-level billed stars first (Joe on Lioness), then this season, then this episode.
+    seriesMain.slice().sort(tmdbCastOrder).forEach(add);
+    seasonMain.slice().sort(tmdbCastOrder).forEach(add);
+    billed.slice().sort(tmdbCastOrder).forEach(add);
+    guests.slice().sort(tmdbCastOrder).forEach(add);
     return out;
   }
   return detailCastList(d);
@@ -14403,7 +14462,8 @@ function showOsd() {
   S.osdTimer = setTimeout(() => {
     // An open CC/audio menu means the user is READING it — never hide it from under them
     // (3.5s is shorter than picking a subtitle on a remote). Check again in a beat.
-    if ($('trackMenu').classList.contains('open') || $('playerStats').classList.contains('open') || $('playerAbout').classList.contains('open')) return showOsd();
+    if ($('trackMenu').classList.contains('open') || $('playerStats').classList.contains('open')) return showOsd();
+    if ($('playerAbout').classList.contains('open')) return;
     $('osd').classList.add('hide');
     $('player').classList.add('osdHide'); // controls away → #upNext docks to the bottom edge
     // Fade-out RESETS the remembered control: the next OSD wake lands on play/pause, not
@@ -16281,6 +16341,12 @@ async function loadDiscover() {
   const reqId = (S.discoverReq = (S.discoverReq || 0) + 1);
   const current = () => reqId === S.discoverReq && S.view === 'discover';
   if (!current()) return;
+  // Discover shares S.rowIdx with Home. Reset immediately so a Back during load
+  // leaves Discover instead of "returning to the first Home card".
+  S.rowIdx = 0;
+  S.colIdx = S.colIdx || {};
+  S.colIdx[0] = 0;
+  setRowsView($('discoverRows'), [], false);
   $('calList').style.display = 'none'; $('discoverRows').style.display = '';
   const root = $('discoverRows');
   if (!S.serverInfo.tmdb) { root.innerHTML = '<div class="row"><h2>Connect TMDB in Settings to use Discover</h2></div>'; bootReady(); return; }
@@ -19813,6 +19879,7 @@ async function loadYtmPlaylists(attempt = 0) {
 }
 function loadMusic() {
   bootReady();
+  S.musicRowIdx = 0;
   if (!$('musicBrowse').children.length) renderMusicBrowse();
   if (S.musicHome === undefined) {
     S.musicHome = null;
@@ -24067,6 +24134,7 @@ function switchView(v, push = true, opts = {}) {
   resetScreensaverIdle();
   if (prevView === 'multiview' && v !== 'multiview' && S.multiView) closeMultiView({ silent: true });
   if (prevView === 'search' && v !== 'search' && !opts.preserveSearch) resetSearchPage();
+  if (prevView === 'home' && v !== 'home') S._homeLoadRun = (S._homeLoadRun || 0) + 1;
   if (v !== 'livetv') $('grid').classList.remove('liveGuideGrid');
   stopMusicWhenLeavingMusic(v);
   $('musicNow').classList.remove('open'); // the big music page is an overlay — close on any nav
@@ -26308,18 +26376,23 @@ window.__tvBack = () => {
   // before leaving the section (one Back shouldn't jump from the bottom of a long result list
   // straight out). Only when focus is in the content, not on the rail.
   if (S.zone !== 'rail') {
+    // Music first: a late Home row paint can leave zone=rows after Live TV → Home → Music.
+    // That leftover must not swallow Back (reset a Home card) or skip the rail.
+    if (S.view === 'music' && !($('musicNow') && $('musicNow').classList.contains('open'))) {
+      if (S.zone === 'music' && (S.musicRowIdx || 0) > 0 && musicRows().length) { focusMusic(0); return 'ok'; }
+      enterRail(); return 'ok'; // already at the first result → Back goes to the menu (rail), not home
+    }
     if (['movies', 'tv', 'kids', 'search', 'library', 'watchlist', 'person'].includes(S.view) && (S.gridIdx || 0) > 0) {
       focusGrid(0); return 'ok';
     }
     // Row-based views (Home, Discover) use rows, not a flat grid: Back from anywhere that isn't the
     // very first item (deep in a row OR on a lower row, e.g. scrolled across Continue Watching)
     // returns to the first item before the next Back leaves the section — matching the grid views.
-    if (S.zone === 'rows' && S.rowsView && ((S.rowIdx || 0) > 0 || (S.colIdx && (S.colIdx[S.rowIdx] || 0) > 0))) {
+    // Only when this view actually owns the row root. A leftover Home rowsView during Discover
+    // or Music used to swallow Back (focusCard 0,0 on the old Home rows).
+    if (S.zone === 'rows' && S.rowsView && rowsViewBelongsToCurrentView()
+        && ((S.rowIdx || 0) > 0 || (S.colIdx && (S.colIdx[S.rowIdx] || 0) > 0))) {
       focusCard(0, 0); return 'ok';
-    }
-    if (S.view === 'music' && !($('musicNow') && $('musicNow').classList.contains('open'))) {
-      if ((S.musicRowIdx || 0) > 0 && musicRows().length) { focusMusic(0); return 'ok'; }
-      enterRail(); return 'ok'; // already at the first result → Back goes to the menu (rail), not home
     }
   }
   if (backToBrowseSectionMenu()) return 'ok';

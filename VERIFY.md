@@ -83,6 +83,7 @@ changes, complete these live checks before saying the update is done:
 | Nested page Back (web + Android) | Visit Movie A -> Related B -> Cast -> Related C. Visible Back, browser Back, Escape/Backspace, and Android/TV hardware Back unwind C -> Cast -> B -> A -> the originating browse page, one page per press. A deep-focused person filmography must leave the person page immediately; a direct deep link with no prior in-app page uses the safe origin fallback. |
 | Web Live TV | Channel starts in Triboon's web player, retunes cleanly, and shows live-specific errors instead of a generic external-player panel. |
 | Android ExoPlayer VOD | Movie or episode opens the native branded loader and ExoPlayer surface, not the web video shell; seek does not show the full startup loader. |
+| Player About (web + Android + Windows) | From a playing movie, About opens the in-player card (not the details page), shows billed people, closes, and leaves playback running. Shows hide About. Android uses the native About overlay. Windows catalog uses the same web About card; native Windows chrome About is still unverified. |
 | Continue Watching source recovery (web + Android) | Resume an episode on a source made blocked/unresponsive after the watch point was saved. A blocked health verdict advances promptly; an unknown stall retries the same source once, then selects a different ranked release. Playback remains on the same episode and absolute timestamp, never visits show details, and never invokes next episode unless EOF is reached. |
 | Android ExoPlayer Live TV | Native Live TV uses ExoPlayer, survives at least 20 Up/Down zaps, and logcat has no fatal/provider-loop markers. |
 | Windows native VOD | On Windows 10/11 x64, an H.264 1080p title and HEVC Main10 4K title open the dedicated libmpv surface. Start, pause/resume, seeks/skips, fullscreen, close, direct/remux/transcode fallback, and a simulated sustained stall remain responsive. Diagnostics name the actual decoder; claim GPU only when `hwdec-current` is hardware-backed while frames advance. |
@@ -124,6 +125,27 @@ fails to produce a playable stream. Budgets default to feels-local targets
 (ready≤3s, 1stByte≤1.5s) and flag `SLOW` rather than hard-failing on timing.
 
 ### Latest Evidence
+
+2026-08-20, v3.0.12 ship APK + Windows server + Windows client:
+
+- Version contract: `package.json` 3.0.12; Android `versionName` 3.0.12 /
+  `versionCode` 343; Windows client package/Tauri/Cargo 3.0.12.
+- Cold 0:00 remount no longer treats Exo `ENDED` at duration as credits, so
+  Mario is not marked watched 6065/6065. Empty indexer fan-out does not
+  overwrite a good search cache. Discover Back ignores a leftover Home
+  `rowsView`. Leaving Home cancels in-flight home loads so a late row paint
+  cannot steal Music focus; first Back on Music opens the rail.
+- `npm.cmd test` 597/597. Isolated `/api/server` smoke reported 3.0.12.
+  `npm.cmd run verify:full -- -AndroidDevice emulator-5554
+  -AndroidHostServerPort 7777` passed whitespace, JS syntax, web parse,
+  focused P9/P14/P11, full Node suite, household VOD/CC, IPTV web+native
+  (24484 channels, 2 video picks), overlapping Play 23ms / 483ms wall,
+  Android lint/native-unit/`assembleDebug`, and ExoPlayer stress
+  `bench/stress-results/android-tv-stress-20260820-112454.json`
+  (`ok: true`; emulator LOTR 1080p-empty/4K-present warning only).
+- Household Mario: ready 1011ms, first-byte 161ms, seek 53ms, resume 258ms,
+  remux, cc=200. FROM S01E01: 964/117/257/104ms, remux, cc=200.
+- Windows native GPU/HDR not run.
 
 2026-08-20, v3.0.11 ship APK + Windows server + Windows client:
 

@@ -3670,6 +3670,40 @@ public class MainActivity extends Activity {
         nativeLoadingLaneAnimator.start();
     }
 
+    private GradientDrawable nativeAboutScrim() {
+        return new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{
+                0x9E000000, 0x47000000, 0x2E000000, 0x8F000000, 0xD1000000
+        });
+    }
+
+    private void fadeNativeAboutOverlay(boolean show, Runnable afterHide) {
+        if (nativeAboutOverlay == null) {
+            if (!show && afterHide != null) afterHide.run();
+            return;
+        }
+        nativeAboutOverlay.animate().cancel();
+        if (show) {
+            if (nativeAboutOverlay.getVisibility() != View.VISIBLE) nativeAboutOverlay.setAlpha(0f);
+            nativeAboutOverlay.setVisibility(View.VISIBLE);
+            nativeAboutOverlay.bringToFront();
+            nativeAboutOverlay.animate().alpha(1f).setDuration(350).withEndAction(null).start();
+            return;
+        }
+        nativeAboutOverlay.animate().alpha(0f).setDuration(350).withEndAction(() -> {
+            if (nativeAboutOverlay == null) return;
+            nativeAboutOverlay.setVisibility(View.GONE);
+            nativeAboutOverlay.setAlpha(1f);
+            if (afterHide != null) afterHide.run();
+        }).start();
+    }
+
+    private void snapNativeAboutOverlayGone() {
+        if (nativeAboutOverlay == null) return;
+        nativeAboutOverlay.animate().cancel();
+        nativeAboutOverlay.setVisibility(View.GONE);
+        nativeAboutOverlay.setAlpha(1f);
+    }
+
     private GradientDrawable nativeFade(int start, int end) {
         return new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{start, end});
     }
@@ -3699,7 +3733,7 @@ public class MainActivity extends Activity {
         overlay.setClickable(true);
         overlay.setFocusable(true);
         overlay.setFocusableInTouchMode(true);
-        overlay.setBackgroundColor(0xF00B0812);
+        overlay.setBackground(nativeAboutScrim());
         overlay.setOnKeyListener((v, code, e) -> handleNativeSurfaceKey(e));
         overlay.setOnClickListener(v -> hideNativeTitleInfo());
 
@@ -3877,11 +3911,11 @@ public class MainActivity extends Activity {
         if (!"video".equals(nativeMode) || nativeAboutOverlay == null || !nativeAboutAvailable) return false;
         if (nativeEpisodeStripOpen) closeNativeEpisodeStrip();
         if (nativeSheetOpen()) hideNativeSheet();
-        showNativeChrome(false);
+        nativeProgress.removeCallbacks(nativeHideChrome);
+        hideNativeChromeNow();
         paintNativeAbout();
-        nativeAboutOverlay.setVisibility(View.VISIBLE);
-        nativeAboutOverlay.bringToFront();
         nativeAboutOpen = true;
+        fadeNativeAboutOverlay(true, null);
         nativeAboutOverlay.requestFocus();
         return true;
     }
@@ -3892,10 +3926,22 @@ public class MainActivity extends Activity {
 
     private boolean hideNativeTitleInfo(boolean restoreFocus) {
         boolean was = nativeAboutOpen || (nativeAboutOverlay != null && nativeAboutOverlay.getVisibility() == View.VISIBLE);
-        nativeAboutOpen = false;
-        if (nativeAboutOverlay != null) nativeAboutOverlay.setVisibility(View.GONE);
-        if (was && restoreFocus && nativePlayerOpen()) focusNativeDefaultControl();
-        return was;
+        if (!was) {
+            snapNativeAboutOverlayGone();
+            nativeAboutOpen = false;
+            return false;
+        }
+        if (!restoreFocus) {
+            nativeAboutOpen = false;
+            snapNativeAboutOverlayGone();
+            return true;
+        }
+        nativeAboutOpen = true;
+        fadeNativeAboutOverlay(false, () -> {
+            nativeAboutOpen = false;
+            if (nativePlayerOpen()) focusNativeDefaultControl();
+        });
+        return true;
     }
 
     private boolean handleNativeAboutKey(KeyEvent e) {
@@ -4441,7 +4487,9 @@ public class MainActivity extends Activity {
                     if (state == Player.STATE_ENDED && "video".equals(nativeMode)) {
                         if (nativePercentResumePending) return;
                         long dur = nativeDurSeconds();
-                        long pos = dur > 0 ? dur : nativePosSeconds();
+                        // A cold start can ENDED as soon as the remux header is parsed. Forcing
+                        // pos=duration made JS treat a 0:00 death as "finished the movie".
+                        long pos = nativeVideoStarted && dur > 0 ? dur : nativePosSeconds();
                         // Keep the final frame/native Up Next layer visible until JS either starts the
                         // next episode or closes a truly-finished title. Closing first exposes the
                         // show-details WebView and used to restart a second 10-second countdown there.
