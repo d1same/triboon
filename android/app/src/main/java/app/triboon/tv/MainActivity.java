@@ -3672,7 +3672,7 @@ public class MainActivity extends Activity {
 
     private GradientDrawable nativeAboutScrim() {
         return new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{
-                0x9E000000, 0x47000000, 0x2E000000, 0x8F000000, 0xD1000000
+                0xB8000000, 0x6B000000, 0x5C000000, 0xAD000000, 0xE6000000
         });
     }
 

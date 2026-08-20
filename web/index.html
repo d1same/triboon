@@ -1260,10 +1260,10 @@ body.nativeGuideMode #player.guideMode #video{display:none}
 .playerEpCard.about .peStill{background-color:#120e18}
 .playerEpCard.about .peStill::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;z-index:2;background:linear-gradient(180deg,#E35D8A,#F2B45C)}
 .playerEpCard.watched .peTag::after{content:"  ✓";color:#bdf3c5}
-#playerAbout{position:absolute;inset:0;z-index:8;display:flex;align-items:flex-end;padding:clamp(32px,5vh,56px) clamp(48px,6vw,80px) clamp(40px,6vh,72px);opacity:0;pointer-events:none;transition:opacity .35s;
-  background:linear-gradient(180deg,rgba(0,0,0,.62) 0%,rgba(0,0,0,.28) 28%,rgba(0,0,0,.18) 46%,rgba(0,0,0,.56) 78%,rgba(0,0,0,.82) 100%)}
-#playerAbout.open{opacity:1;pointer-events:auto}
-#player.aboutOpen #osd{opacity:0;pointer-events:none}
+#playerAbout{position:absolute;inset:0;z-index:8;display:flex;align-items:flex-end;padding:clamp(32px,5vh,56px) clamp(48px,6vw,80px) clamp(148px,22vh,220px);opacity:0;pointer-events:none;transition:opacity .35s;
+  background:linear-gradient(180deg,rgba(0,0,0,.72) 0%,rgba(0,0,0,.42) 28%,rgba(0,0,0,.36) 46%,rgba(0,0,0,.68) 78%,rgba(0,0,0,.90) 100%)}
+#playerAbout.open{opacity:1;pointer-events:none}
+#playerAbout.open .paCard{pointer-events:auto}
 .paCard{display:flex;gap:32px;max-width:min(1100px,94vw);align-items:flex-end}
 .paPoster{flex:0 0 180px;width:180px;height:270px;border-radius:10px;background:#16101f center/cover no-repeat;box-shadow:0 22px 56px rgba(0,0,0,.62);position:relative}
 .paPoster::before{content:"";position:absolute;inset:0 auto 0 0;width:4px;border-radius:10px 0 0 10px;background:linear-gradient(180deg,#E35D8A,#F2B45C)}
@@ -1278,7 +1278,7 @@ body.nativeGuideMode #player.guideMode #video{display:none}
 .paCastPh{width:56px;height:56px;border-radius:50%;background:#1a1422 center/cover no-repeat;margin:0 auto}
 .paCastNm{font:650 13.5px/1.25 "Albert Sans";margin-top:7px;color:rgba(242,244,247,.86);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;white-space:normal;word-break:break-word}
 #player.live #aboutBtn{display:none}
-body.tv #playerAbout{padding:clamp(24px,4vh,40px) 48px clamp(28px,5vh,48px)}
+body.tv #playerAbout{padding:clamp(24px,4vh,40px) 48px clamp(132px,20vh,200px)}
 body.tv .paPoster{flex-basis:148px;width:148px;height:222px}
 body.tv .paTitle{font-size:clamp(30px,3.4vw,44px)}
 body.tv .paPlot{font-size:16.5px}
@@ -13282,6 +13282,7 @@ function openPlayerAbout() {
   $('playerAbout').classList.add('open');
   $('player').classList.add('aboutOpen');
   S.zone = 'playerAbout';
+  showOsd();
 }
 function closePlayerAbout() {
   const el = $('playerAbout');
@@ -14247,7 +14248,10 @@ $('back10').addEventListener('click', () => nudgeSeek(-10));
 $('fwd30').addEventListener('click', () => nudgeSeek(30));
 $('nextEpBtn').addEventListener('click', playNextEpisode);
 $('statsBtn').addEventListener('click', togglePlayerStats);
-$('aboutBtn').addEventListener('click', () => openPlayerAbout());
+$('aboutBtn').addEventListener('click', () => {
+  if ($('playerAbout').classList.contains('open')) closePlayerAbout();
+  else openPlayerAbout();
+});
 $('playerAbout').addEventListener('click', (e) => { if (e.target === $('playerAbout')) closePlayerAbout(); });
 
 // ----- Live IPTV player chrome: top EPG strip (now + next ~2h) + bottom timeshift / Go-live -----
@@ -26372,16 +26376,19 @@ window.__tvBack = () => {
     if (onContent) { focusLiveCategory(); return 'ok'; }
     if ((S.liveCatNavIdx || 0) > 0) { focusLiveCategory(0, true); return 'ok'; }
   }
-  // Two-step Back in deep content views: a non-first grid/music item returns to the FIRST item
+  // Music owns its two-step Back even when a leftover zone says "rail" but the menu is closed.
+  // That desync used to skip this block and jump Home on the first press.
+  if (S.view === 'music' && !($('musicNow') && $('musicNow').classList.contains('open'))) {
+    const railOpen = document.body.classList.contains('railOpen') || ($('rail') && $('rail').classList.contains('expanded'));
+    if (!(S.zone === 'rail' && railOpen)) {
+      if (S.zone === 'music' && (S.musicRowIdx || 0) > 0 && musicRows().length) { focusMusic(0); return 'ok'; }
+      enterRail(); return 'ok';
+    }
+  }
+  // Two-step Back in deep content views: a non-first grid item returns to the FIRST item
   // before leaving the section (one Back shouldn't jump from the bottom of a long result list
   // straight out). Only when focus is in the content, not on the rail.
   if (S.zone !== 'rail') {
-    // Music first: a late Home row paint can leave zone=rows after Live TV → Home → Music.
-    // That leftover must not swallow Back (reset a Home card) or skip the rail.
-    if (S.view === 'music' && !($('musicNow') && $('musicNow').classList.contains('open'))) {
-      if (S.zone === 'music' && (S.musicRowIdx || 0) > 0 && musicRows().length) { focusMusic(0); return 'ok'; }
-      enterRail(); return 'ok'; // already at the first result → Back goes to the menu (rail), not home
-    }
     if (['movies', 'tv', 'kids', 'search', 'library', 'watchlist', 'person'].includes(S.view) && (S.gridIdx || 0) > 0) {
       focusGrid(0); return 'ok';
     }

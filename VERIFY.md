@@ -126,6 +126,26 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-20, v3.0.13 ship APK + Windows server + Windows client:
+
+- Version contract: `package.json` 3.0.13; Android `versionName` 3.0.13 /
+  `versionCode` 344; Windows client package/Tauri/Cargo 3.0.13.
+- In-player About wash is a notch darker so opening credits stay readable.
+  Web About no longer hides the controller bar; the card sits above
+  play/seek, and About toggles closed. Music first Back opens the rail even
+  when leftover zone says rail but the menu is closed.
+- `npm.cmd test` 597/597. Isolated `/api/server` smoke reported 3.0.13.
+  `npm.cmd run verify:full -- -AndroidDevice emulator-5554
+  -AndroidHostServerPort 7777` passed whitespace, JS syntax, web parse,
+  focused P9/P14/P11, full Node suite, household VOD/CC, IPTV web+native,
+  overlapping Play 14ms / 493ms wall, Android
+  lint/native-unit/`assembleDebug`, and ExoPlayer stress
+  `bench/stress-results/android-tv-stress-20260820-122355.json`
+  (`ok: true`; emulator LOTR empty-search warning only).
+- Household Mario: ready 988ms, first-byte 225ms, seek 47ms, resume 15ms,
+  remux, cc=200. FROM S01E01: 568/35/101/67ms, remux, cc=200.
+- Windows native GPU/HDR not run.
+
 2026-08-20, v3.0.12 ship APK + Windows server + Windows client:
 
 - Version contract: `package.json` 3.0.12; Android `versionName` 3.0.12 /

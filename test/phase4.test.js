@@ -3705,8 +3705,14 @@ test('Android native player: direct source and native chrome stay out of the web
     'web D-pad Down from player controls should open the episode strip for TV episode playback, then About on movies');
   assert.match(ui, /id="aboutBtn"[\s\S]+id="playerAbout"[\s\S]+function openPlayerAbout\(\) \{[\s\S]+function closePlayerAbout\(\)/,
     'VOD playback should expose a dedicated About chrome button and in-player About card');
-  assert.match(ui, /#playerAbout\{position:absolute;inset:0;z-index:8;display:flex[\s\S]+transition:opacity \.35s[\s\S]+rgba\(0,0,0,\.62\)[\s\S]+#playerAbout\.open\{opacity:1;pointer-events:auto\}[\s\S]+#player\.aboutOpen #osd\{opacity:0;pointer-events:none\}/,
+  assert.match(ui, /#playerAbout\{position:absolute;inset:0;z-index:8;display:flex[\s\S]+transition:opacity \.35s[\s\S]+rgba\(0,0,0,\.72\)[\s\S]+#playerAbout\.open\{opacity:1;pointer-events:none\}[\s\S]+#playerAbout\.open \.paCard\{pointer-events:auto\}/,
     'About should use the same black 0.35s fade as the player OSD, not a purple pop-in wash');
+  assert.doesNotMatch(ui, /#player\.aboutOpen #osd\{opacity:0/,
+    'web About must not hide the player controller bar');
+  assert.match(ui, /\$\('player'\)\.classList\.add\('aboutOpen'\);[\s\S]+S\.zone = 'playerAbout';[\s\S]+showOsd\(\);/,
+    'opening web About should keep the OSD up so play/seek stay on screen');
+  assert.match(ui, /\$\('aboutBtn'\)\.addEventListener\('click', \(\) => \{[\s\S]+closePlayerAbout\(\);[\s\S]+else openPlayerAbout\(\);/,
+    'clicking About again should close the card without hiding the controller');
   assert.match(ui, /if \(\$\('playerAbout'\)\.classList\.contains\('open'\)\) return;/,
     'an open About card should not keep restarting the OSD show timer');
   assert.match(ui, /\.paPoster\{flex:0 0 180px;width:180px;height:270px/,
@@ -3725,8 +3731,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native About should hide the chrome button when the title has no people');
   assert.match(android, /if \(!\"video\"\.equals\(nativeMode\) \|\| nativeAboutOverlay == null \|\| !nativeAboutAvailable\) return false/,
     'native About should not open when the title has no cast or crew');
-  assert.match(android, /0x9E000000, 0x47000000, 0x2E000000, 0x8F000000, 0xD1000000[\s\S]+overlay\.setBackground\(nativeAboutScrim\(\)\)/,
-    'native About wash should be the same black fade family as the player control shade');
+  assert.match(android, /0xB8000000, 0x6B000000, 0x5C000000, 0xAD000000, 0xE6000000[\s\S]+overlay\.setBackground\(nativeAboutScrim\(\)\)/,
+    'native About wash should be a darker black fade so opening-credit text stays readable');
   assert.match(android, /hideNativeChromeNow\(\);[\s\S]+paintNativeAbout\(\);[\s\S]+nativeAboutOpen = true;[\s\S]+fadeNativeAboutOverlay\(true, null\);/,
     'opening About should hide the seek bar and title immediately, then fade the card in with the player');
   assert.match(android, /nativeAboutOverlay\.animate\(\)\.alpha\(1f\)\.setDuration\(350\)[\s\S]+nativeAboutOverlay\.animate\(\)\.alpha\(0f\)\.setDuration\(350\)/,
@@ -6256,6 +6262,8 @@ test('web shell avoids known TV paint/focus regressions', () => {
     const rowsIdx = tvBack.indexOf("S.zone === 'rows' && S.rowsView && rowsViewBelongsToCurrentView()");
     assert.ok(musicIdx >= 0 && rowsIdx >= 0 && musicIdx < rowsIdx,
       'Music Back must run before leftover Home row reset');
+    assert.match(tvBack, /const railOpen = document\.body\.classList\.contains\('railOpen'\) \|\| \(\$\('rail'\) && \$\('rail'\)\.classList\.contains\('expanded'\)\);[\s\S]+enterRail\(\); return 'ok';/,
+      'Music first Back must open the rail even when leftover zone says rail');
   }
   // Preferences shows when an app update is available (semver compare of current vs latest release).
   assert.match(ui, /function compareSemver\(a, b\) \{[\s\S]+const updateAvailable = !!\(curVer && latestVer && compareSemver\(curVer, latestVer\) < 0\);[\s\S]+status\.classList\.toggle\('updateAvail', updateAvailable\)/,
