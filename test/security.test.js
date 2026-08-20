@@ -207,7 +207,7 @@ test('security: deny-by-default — every route declares auth; unknown routes 40
     ['GET', '/api/me'], ['GET', '/api/me/security'], ['GET', '/api/app/latest'], ['POST', '/api/me/totp/setup'], ['POST', '/api/me/totp/enable'],
     ['POST', '/api/me/totp/disable'], ['POST', '/api/me/totp/recovery'], ['GET', '/api/status'], ['GET', '/api/search?q=x'],
     ['POST', '/api/play'], ['POST', '/api/advance/abc'], ['GET', '/api/tmdb/trending/all/week'],
-    ['GET', '/api/watch'], ['GET', '/api/watch/next'], ['POST', '/api/watch'], ['GET', '/api/activity'], ['POST', '/api/activity'], ['GET', '/api/mounts'],
+    ['GET', '/api/watch'], ['GET', '/api/watch/next'], ['GET', '/api/watch-stats'], ['POST', '/api/watch'], ['GET', '/api/activity'], ['POST', '/api/activity'], ['GET', '/api/mounts'],
     ['GET', '/api/health/abc'], ['POST', '/api/mount'], ['GET', '/api/settings'],
     ['GET', '/api/me/iptv/sources'], ['POST', '/api/me/iptv/sources'], ['PATCH', '/api/me/iptv/sources/abc'], ['DELETE', '/api/me/iptv/sources/abc'],
     ['POST', '/api/settings'], ['POST', '/api/streaming/recommend'], ['POST', '/api/invites'], ['GET', '/api/invites'],
@@ -291,6 +291,7 @@ test('activity: users heartbeat playback and only admins see now-watching rows',
     streamLabel: 'Transcoding',
     clientVersion: 'Android TV 1.7.26 (126)',
     deviceName: 'NVIDIA SHIELD',
+    poster: 'https://image.tmdb.org/t/p/w342/mock-poster.jpg',
     position: 600,
     duration: 6000,
     size: 42_000_000_000,
@@ -310,9 +311,10 @@ test('activity: users heartbeat playback and only admins see now-watching rows',
   assert.strictEqual(row.streamLabel, 'Transcoding');
   assert.strictEqual(row.clientVersion, 'Android TV 1.7.26 (126)');
   assert.strictEqual(row.deviceName, 'NVIDIA SHIELD', 'the reported hardware device name round-trips to admins');
+  assert.strictEqual(row.poster, 'https://image.tmdb.org/t/p/w342/mock-poster.jpg');
   assert.strictEqual(row.percent, 10);
-  assert.ok(visible.json.history.some((s) => s.title === 'The Test Movie' && s.userName === 'fam' && s.clientVersion === 'Android TV 1.7.26 (126)'),
-    'activity history keeps a compact recent watch row');
+  assert.ok(visible.json.history.some((s) => s.title === 'The Test Movie' && s.userName === 'fam' && s.poster === 'https://image.tmdb.org/t/p/w342/mock-poster.jpg'),
+    'activity history keeps a compact recent watch row with cover art');
 
   const stopped = await httpJson(srv.port, 'POST', '/api/activity', { sessionId, state: 'stopped' }, user);
   assert.strictEqual(stopped.status, 200);

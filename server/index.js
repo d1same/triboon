@@ -10,6 +10,7 @@ const path = require('path');
 const { NntpPool, NntpConnection } = require('./nntp');
 const { mountNzb } = require('./archive');
 const { Store, VerdictCache } = require('./store');
+const watchStats = require('./watch-stats');
 const { LibraryDb } = require('./library-db');
 const { parseLibraryName, pickLibraryTmdbHit, libraryItemMatchesTmdb, unboundLibraryItem } = require('./library-match');
 const { Auth, SecureSettings, RateLimiter } = require('./auth');
@@ -52,6 +53,7 @@ const store = new Store();
 // trakt tokens are deliberately NOT throttled (and their writers call flush() explicitly anyway).
 store.flushIntervals = {
   watch: 3000,             // ≤3s of playback position at risk on hard crash
+  watchStats: 3000,        // finish ledger for the Settings Dashboard
   activityHistory: 10000,  // diagnostics
   verdicts: 10000,         // 6h-TTL health cache
   'tmdb-cache': 15000,     // pure proxy cache
@@ -3898,6 +3900,51 @@ function activityUserName(uid) {
 function scrubActivityText(v, max = 160) {
   return String(v || '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, max);
 }
+function scrubActivityPoster(v) {
+  const s = String(v || '').trim().slice(0, 400);
+  if (!s || /^data:/i.test(s) || /^javascript:/i.test(s)) return '';
+  if (tokenizedLocalUrl(s)) return '';
+  return s;
+}
+function activityTitleKey(key) {
+  const k = String(key || '');
+  const ep = /^tmdb:tv:(\d+):s\d+e\d+$/i.exec(k);
+  if (ep) return `tmdb:tv:${ep[1]}`;
+  if (/:s\d+e\d+$/i.test(k)) return k.replace(/:s\d+e\d+$/i, '');
+  return k;
+}
+function watchPosterIndex() {
+  const map = new Map();
+  const all = store.read('watch', {});
+  for (const [sk, row] of Object.entries(all || {})) {
+    const poster = row && row.meta && scrubActivityPoster(row.meta.poster);
+    if (!poster) continue;
+    const i = String(sk).indexOf(':');
+    if (i < 0) continue;
+    const userId = String(sk).slice(0, i);
+    const rest = String(sk).slice(i + 1);
+    const j = rest.indexOf(':');
+    if (j < 0) continue;
+    const key = rest.slice(j + 1);
+    if (!key) continue;
+    const uidKey = `${userId}|${key}`;
+    if (!map.has(uidKey)) map.set(uidKey, poster);
+    const showKey = activityTitleKey(key);
+    if (showKey && showKey !== key) {
+      const uidShow = `${userId}|${showKey}`;
+      if (!map.has(uidShow)) map.set(uidShow, poster);
+    }
+  }
+  return map;
+}
+function withActivityPosters(rows) {
+  const idx = watchPosterIndex();
+  return (Array.isArray(rows) ? rows : []).map((row) => {
+    if (!row || row.poster) return row;
+    const poster = idx.get(`${row.userId}|${row.key}`) || idx.get(`${row.userId}|${activityTitleKey(row.key)}`) || '';
+    return poster ? { ...row, poster } : row;
+  });
+}
 function activityLooksLive(row = {}) {
   const text = `${row.type || ''} ${row.streamKind || ''} ${row.streamLabel || ''} ${row.mode || ''}`.toLowerCase();
   return text.includes('live') || String(row.key || '').startsWith('live:');
@@ -4033,6 +4080,7 @@ function normalizeActivityRow(ctx, b = {}, id, existing = {}) {
     deviceName: activityDeviceName(b, ctx.req),
     source: live ? '' : scrubActivityText(b.source || '', 220),
     fileName: live ? '' : scrubActivityText(b.fileName || '', 220),
+    poster: live ? '' : (scrubActivityPoster(b.poster) || existing.poster || ''),
     size: Math.max(0, Number(b.size || 0) || 0),
     position,
     duration,
@@ -4076,6 +4124,7 @@ function recordActivityHistory(row) {
       clientVersion: row.clientVersion,
       device: row.device,
       deviceName: row.deviceName,
+      poster: row.poster || '',
       position: row.position,
       duration: row.duration,
       percent: row.percent,
@@ -6897,12 +6946,28 @@ Object.assign(H, {
     send(ctx.res, 200, await nextWatchEpisodes(ctx.user.id, profile));
   },
 
+  watchStatsGet: async (ctx) => {
+    const range = String(ctx.url.searchParams.get('range') || 'month').toLowerCase();
+    let userId = ctx.user.id;
+    const want = String(ctx.url.searchParams.get('user') || '').trim();
+    if (want && want !== ctx.user.id) {
+      if (ctx.user.role !== 'admin') return send(ctx.res, 403, { error: 'forbidden' });
+      if (!/^[a-zA-Z0-9_-]{1,40}$/.test(want)) return send(ctx.res, 400, { error: 'bad user' });
+      const found = store.read('users', { list: [] }).list.find((u) => u && u.id === want);
+      if (!found) return send(ctx.res, 404, { error: 'user not found' });
+      userId = found.id;
+    }
+    send(ctx.res, 200, watchStats.summarize(store, userId, range));
+  },
+
   watchSet: async (ctx) => {
     const b = await readJson(ctx.req);
     if (!b.key) return send(ctx.res, 400, { error: 'key required' });
     const profile = b.profile || 'default';
     const k = `${ctx.user.id}:${profile}:${b.key}`;
+    let becameWatched = false;
     store.update('watch', {}, (all) => {
+      const prev = all[k];
       if (b.remove) { deleteWatchKeyForProfile(all, ctx.user.id, profile, b.key); return all; } // "Remove from Continue Watching"
       if (b.hidden) {
         all[k] = {
@@ -6912,12 +6977,18 @@ Object.assign(H, {
         return all;
       }
       if (profile !== 'default' && b.watched === false && b.unwatch) deleteWatchKeyForProfile(all, ctx.user.id, profile, b.key);
+      becameWatched = !!b.watched && !(prev && prev.watched);
       all[k] = {
         position: b.position || 0, duration: b.duration || 0, watched: !!b.watched,
         meta: sanitizeStoredMediaMeta(b.meta), updatedAt: nextStamp(),
       };
       return all;
     });
+    if (becameWatched) {
+      watchStats.recordFinish(store, {
+        userId: ctx.user.id, key: b.key, meta: b.meta, duration: b.duration || 0,
+      });
+    }
     if (b.remove) {
       // "Mark unwatched" on a movie removes the record AND its Trakt history; the plain
       // Continue-Watching ✕ (no unwatch flag) stays a local-only tidy-up.
@@ -6940,9 +7011,9 @@ Object.assign(H, {
     const sessions = activeActivityRows();
     const online = activeOnlineRows();
     send(ctx.res, 200, {
-      sessions,
+      sessions: withActivityPosters(sessions),
       online,
-      history: activityHistoryRows(),
+      history: withActivityPosters(activityHistoryRows()),
       activeCount: sessions.length,
       onlineCount: online.length,
       retentionDays: ACTIVITY_HISTORY_DAYS,
@@ -7058,15 +7129,24 @@ Object.assign(H, {
     const items = Array.isArray(b.items) ? b.items.slice(0, 1000) : [];
     const profile = b.profile || 'default';
     const prefix = `${ctx.user.id}:${profile}:`;
+    const newly = [];
     store.update('watch', {}, (all) => {
       for (const it of items) {
         if (!it || !it.key) continue;
         const k = prefix + it.key;
         if (b.watched === false) { deleteWatchKeyForProfile(all, ctx.user.id, profile, it.key); }
-        else { all[k] = { position: 0, duration: it.duration || 0, watched: true, meta: sanitizeStoredMediaMeta(it.meta), updatedAt: nextStamp() }; }
+        else {
+          if (!(all[k] && all[k].watched)) newly.push(it);
+          all[k] = { position: 0, duration: it.duration || 0, watched: true, meta: sanitizeStoredMediaMeta(it.meta), updatedAt: nextStamp() };
+        }
       }
       return all;
     });
+    for (const it of newly) {
+      watchStats.recordFinish(store, {
+        userId: ctx.user.id, key: it.key, meta: it.meta, duration: it.duration || 0,
+      });
+    }
     // Trakt: send the EXACT episode keys grouped per show+season — never a bare-show op. Trakt
     // expands a bare show to every season, so a season-level unwatch used to irreversibly delete
     // the user's ENTIRE Trakt history for the show (and season-watch marked the whole show).
@@ -8910,6 +8990,7 @@ const ROUTES = [
   { m: 'POST', re: /^\/api\/watchlist$/, auth: 'user', h: H.watchlistToggle },
   { m: 'GET', re: /^\/api\/watch\/next$/, auth: 'user', h: H.watchNext },
   { m: 'GET', re: /^\/api\/watch$/, auth: 'user', h: H.watchList },
+  { m: 'GET', re: /^\/api\/watch-stats$/, auth: 'user', h: H.watchStatsGet },
   { m: 'POST', re: /^\/api\/watch$/, auth: 'user', h: H.watchSet },
   { m: 'GET', re: /^\/api\/activity$/, auth: 'admin', h: H.activityList },
   { m: 'POST', re: /^\/api\/activity$/, auth: 'user', h: H.activitySet },

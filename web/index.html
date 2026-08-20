@@ -40,7 +40,8 @@
   --r:14px;
   --rail:64px;       /* collapsed sidebar; grows on hover so content slides right (Plex push) */
   --heroLeft:clamp(4px,5vw,190px); /* resolution-adaptive title indent (home hero, page heads, backdrop info) */
-  --poster:168px;    /* standardized poster cover width everywhere */
+  --poster:220px;    /* Medium cover width; Small/Large are applied in JS via the same token */
+  --thumb:calc(var(--poster) * 1.327); /* 16/9 thumbs (Continue Watching, episodes) */
   --gut:28px;        /* content gutter — tight to the rail (owner: no dead strip by the menu) */
   /* Cinematic backdrop "variant B" (owner-picked 2026-08-06 over the full-bleed first cut): the
      art owns the RIGHT ~58% and melts into ink across a LONG soft fade (no hard cut), so the
@@ -242,17 +243,12 @@ body.tv{transition:none}
   /* SAME duration + easing as the content push — different clocks made the returning
      content slide UNDER the still-wide rail on collapse. */
   transition:width .26s cubic-bezier(.22,1,.36,1),background .26s ease}
-/* Glass rail (owner call, 2026-08-06: "make the menu cooler, not a template"): a barely-there
-   frosted column — vertical ink wash + blur that lifts the page's own colour through it, one
-   hairline edge. It reads as a surface without becoming a solid slab over the artwork. */
-/* The ambient colour blobs (#colorBase/#colorGlow) sit in the bottom-left — exactly under the
-   rail — so through a purely white-tinted glass their soft edge showed as a drifting square-ish
-   patch (owner report). A themed ink base under the highlight gradient hides it while keeping the
-   panel translucent. */
-#rail{background:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.022) 42%,rgba(255,255,255,.045)),var(--soft);
-  -webkit-backdrop-filter:blur(20px) saturate(1.25);backdrop-filter:blur(20px) saturate(1.25);
-  border-right:1px solid rgba(255,255,255,.055);border-radius:0 18px 18px 0;
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 18px 48px rgba(0,0,0,.32)}
+/* Settings-style rail: no frosted slab. Icons sit on ink. A thin line on the right, bowed
+   slightly, is the only edge — same quiet spine as the Settings tab list. */
+#rail{background:none;-webkit-backdrop-filter:none;backdrop-filter:none;
+  border-right:0;border-radius:0;box-shadow:none}
+#rail::after{content:"";position:absolute;top:16px;bottom:16px;right:0;width:12px;
+  border-right:1px solid rgba(255,255,255,.14);border-radius:0 16px 16px 0;pointer-events:none}
 #rail.show{display:flex}
 #railMain{min-height:0;flex:1 1 auto;display:flex;flex-direction:column;align-items:stretch;gap:6px;overflow-x:hidden;overflow-y:auto;padding-bottom:4px;scroll-padding-bottom:10px;scrollbar-width:none}
 #railMain::-webkit-scrollbar{width:0;height:0}
@@ -290,7 +286,8 @@ body.tv #rail:hover #railUser .rlabel,#rail.expanded #railUser .rlabel,body.rail
 /* Active item = a FLAT translucent pill. No inset light edge, no border: the top highlight read
    as embossed/3D (owner call, 2026-08-06). Selection is carried by fill + the gold bar alone —
    the same treatment the Sources rows use, so the two surfaces match. */
-.railBtn.active{color:var(--text);background:rgba(255,255,255,.09);border-radius:13px;box-shadow:none}
+.railBtn.active{color:var(--text);background:transparent;border-radius:13px;box-shadow:none}
+body.tv .railBtn.active{background:rgba(255,255,255,.09)}
 /* COLLAPSED rail recedes as a WHOLE — the glass panel fades with its icons (fading only the
    icons left a bright slab behind them). Hover, focus, or expanding brings the surface back. */
 #rail:not(.expanded):not(:hover){opacity:.62}
@@ -352,9 +349,8 @@ body.tv #rail:hover .railSec,#rail.expanded .railSec,body.railOpen .railSec{heig
 #railUser .av{width:24px;height:24px;border-radius:50%;background:var(--focus);display:grid;place-items:center;font:700 12px "Sora";color:var(--onAccent);flex:none;margin:0 12px}
 /* Android TV WebView can leave CSS :hover latched after remote navigation. On TV, the rail
    expands only from our explicit D-pad state, never from hover. Desktop keeps hover expand. */
-/* Collapsed TV rail. The fill was once `transparent!important`, which erased the panel entirely and
-   left the compact menu as bare floating icons; it is now simply NOT overridden, so it keeps the
-   shared glass (translucent + blurred + rounded) that the web build uses and the owner asked for.
+/* Collapsed TV rail. Do not set transparent!important — that left bare floating icons and
+   artwork flashing through. Compact TV keeps a deep ink tint (perf rule) plus this geometry.
    The column is --overscan WIDER than the 64px app rail because it now reaches the screen edge.
    Both paddings are ZERO so `align-items:center` splits that extra width evenly and the 48px icon
    slot sits dead-centre: the first cut put the whole --overscan on the LEFT, which left the icons
@@ -521,9 +517,9 @@ body[data-spotlight] #prefs a:focus,
 body[data-spotlight] #prefs input:focus,
 body[data-spotlight] #prefs select:focus,
 body[data-spotlight] .mbBar.focus{box-shadow:0 0 0 3px var(--focus) !important}
-/* Settings/Preferences SELECTED tab: in Toomaj its fill is bright amber, but the base rules keep
-   light --text (unreadable on amber). Force a solid amber chip with dark text/icons. The hover/
-   focus (non-selected) states already use --btnFocusText, so only the .on states need this. */
+/* Settings/Preferences SELECTED tab: a text list, not a capsule. Spotlight used to force a
+   solid amber chip (readable when tabs were filled); with transparent tabs that chip is the
+   whole problem. Keep brighter type + the inset accent bar. */
 body[data-spotlight] #setTabs button.on,
 body[data-spotlight] #prefTabs button.on,
 body[data-spotlight] #setTabs button.on.focus,
@@ -532,7 +528,7 @@ body[data-spotlight] #setTabs button.on:focus,
 body[data-spotlight] #prefTabs button.on:focus,
 body[data-spotlight] #setTabs button.on:focus-visible,
 body[data-spotlight] #prefTabs button.on:focus-visible{
-  background:var(--btnSelectedHover)!important;color:var(--btnFocusText)!important}
+  background:transparent!important;color:var(--text)!important;box-shadow:inset 2px 0 0 var(--focus)!important}
 /* Theme-picker buttons are excluded from the generic dark-on-focus rule; give their label dark
    text when the amber fill is on, so the theme name/tone stays readable. */
 body[data-spotlight] #settings .setGrid button.themeChoice:hover,
@@ -690,11 +686,11 @@ body[data-light="1"] .btn.primary svg{color:#F2F4F7}
    photo/poster RING (--artFocusLine/Glow) like .card/.pcard — they must NOT get the solid
    button fill, or the whole tile (photo + name) flashes a coloured block on focus. */
 .btn.focus::before, .btn:focus-visible::before,
-button.focusable:not(.card):not(.pcard):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard).focus::before, button.focusable:not(.card):not(.pcard):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard):focus-visible::before { opacity:0 !important; }
+button.focusable:not(.card):not(.pcard):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard):not(.dashRecentItem):not(.activityNowItem):not(.userNameBtn).focus::before, button.focusable:not(.card):not(.pcard):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard):not(.dashRecentItem):not(.activityNowItem):not(.userNameBtn):focus-visible::before { opacity:0 !important; }
 .btn:hover, .btn.focus, .btn:focus-visible,
-button.focusable:not(.card):not(.pcard):not(.railBtn):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard):not(.srcRow):hover,
-button.focusable:not(.card):not(.pcard):not(.railBtn):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard):not(.srcRow).focus,
-button.focusable:not(.card):not(.pcard):not(.railBtn):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard):not(.srcRow):focus-visible {
+button.focusable:not(.card):not(.pcard):not(.railBtn):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard):not(.srcRow):not(.dashRecentItem):not(.activityNowItem):not(.userNameBtn):hover,
+button.focusable:not(.card):not(.pcard):not(.railBtn):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard):not(.srcRow):not(.dashRecentItem):not(.activityNowItem):not(.userNameBtn).focus,
+button.focusable:not(.card):not(.pcard):not(.railBtn):not(.castCard):not(.seasonCard):not(.epCard):not(.chCard):not(.playerEpCard):not(.profCard):not(.calItem):not(.mCard):not(.musicRow):not(.mArtistHit):not(.mvCat):not(.mvChannel):not(.abCard):not(.srcRow):not(.dashRecentItem):not(.activityNowItem):not(.userNameBtn):focus-visible {
   background: var(--btnHover) !important;
   color: var(--btnFocusText) !important;
   filter: none;
@@ -711,12 +707,12 @@ body[data-light="1"] #player #pGuide{--fg:18,22,28}
 #rows{display:flex;flex-direction:column;gap:16px;max-height:46vh;overflow-y:auto}
 .row h2{font:600 15px "Sora";color:var(--muted);letter-spacing:.02em;margin:0 0 10px 4px}
 .cards{display:flex;gap:14px;overflow-x:auto;padding:10px 14px;margin:0 -14px} /* padding = focus-shadow room; negative margin keeps the row aligned */
-.card{flex:0 0 292px;aspect-ratio:16/9;border-radius:var(--r);background-size:cover;background-position:center;position:relative;overflow:hidden;background-color:var(--raise)}
+.card{flex:0 0 var(--thumb);aspect-ratio:16/9;border-radius:var(--r);background-size:cover;background-position:center;position:relative;overflow:hidden;background-color:var(--raise)}
 .card .label{position:absolute;left:0;right:0;bottom:0;padding:26px 12px 10px;font:600 13px "Sora";background:linear-gradient(0deg,rgba(11,8,18,.92),transparent);text-align:left}
 .card .pb{position:absolute;left:0;bottom:0;height:3px;background:var(--grad)}
 
 /* ---------- poster cards (cover art) ---------- */
-.pcard{flex:0 0 140px;display:flex;flex-direction:column;gap:7px;text-align:left;background:none}
+.pcard{flex:0 0 var(--poster);display:flex;flex-direction:column;gap:7px;text-align:left;background:none}
 .pcard .art{width:100%;aspect-ratio:2/3;border-radius:var(--r);background-size:cover;background-position:center;
   background-color:var(--raise);position:relative;overflow:hidden}
 .pcard .art .badge{position:absolute;top:7px;left:7px;font:700 10px "JetBrains Mono";padding:3px 6px;border-radius:6px;
@@ -752,7 +748,7 @@ body[data-light="1"] #player #pGuide{--fg:18,22,28}
   transition:background .15s,color .15s,box-shadow .15s,border-color .15s}
 #filterMenuList button:hover{background:var(--btnHover)}
 #filterMenuList button.focusable::before{display:none!important}
-#filterMenuList button.focus{background:var(--btnHover);color:var(--btnFocusText);border-color:transparent;box-shadow:inset 3px 0 0 var(--focus),0 10px 28px rgba(0,0,0,.32)}
+#filterMenuList button.focus{background:var(--btnHover);color:var(--btnFocusText);border-color:transparent;box-shadow:0 10px 28px rgba(0,0,0,.32)}
 #filterMenuList button.sel{background:var(--btnSelected);color:var(--text);border-color:transparent}
 #filterMenuList button.sel.focus{background:var(--btnSelectedHover);color:var(--text)}
 #filterMenuList button .label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -762,7 +758,7 @@ body.tv #filterMenu{backdrop-filter:none}
 #genreChips{display:flex;gap:7px;flex-wrap:wrap;max-width:64vw}
 .gChip{padding:8px 13px;border-radius:11px;background:var(--btn);border:1px solid rgba(255,255,255,.045);font:600 12px "Sora";color:var(--muted)}
 .gChip.sel{background:var(--btnSelected);color:var(--text);border-color:transparent}
-#grid{flex:1;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:20px 16px;align-content:start;padding:6px 4px 30px}
+#grid{flex:1;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--poster),1fr));gap:20px 16px;align-content:start;padding:6px 4px 30px}
 #grid .pcard{flex:none}
 #browse.searchMode{padding-top:110px!important} /* clears the floating search bar incl. section headers; !important beats the unconditional #browse padding shorthand below, else results tuck under the bar */
 #browse.searchMode .browseHead{display:none}
@@ -806,7 +802,7 @@ body.tv #filterMenu{backdrop-filter:none}
 .trailerCtl::after,.trailerBack::after{display:none}
 #trailer .focusable::before{display:none}
 #trailer .focusable.focus,#trailer .focusable:focus-visible{transform:none}
-.trailerCtl.focus,.trailerCtl:focus-visible,.trailerBack.focus,.trailerBack:focus-visible{background:var(--btnHover);color:var(--btnFocusText);border-color:transparent;box-shadow:inset 3px 0 0 var(--focus),0 10px 28px rgba(0,0,0,.32)}
+.trailerCtl.focus,.trailerCtl:focus-visible,.trailerBack.focus,.trailerBack:focus-visible{background:var(--btnHover);color:var(--btnFocusText);border-color:transparent;box-shadow:0 10px 28px rgba(0,0,0,.32)}
 #trailerPlay{background:var(--btnPrimary);color:var(--onAccent);border:1px solid transparent}
 #trailerPlay.focus,#trailerPlay:focus-visible{background:var(--btnPrimaryHover);color:var(--onAccent)}
 #trailerWl{background:var(--btn);border:1px solid rgba(255,255,255,.045)}
@@ -843,8 +839,8 @@ body.tv .trailerCtl{min-height:46px;padding:10px 20px;font-size:14.5px}
 #dSections{display:flex;flex-direction:column;gap:26px}
 .dRow h2{font:600 15px "Sora";color:var(--muted);margin:0 0 12px 2px}
 #castRow{display:flex;gap:14px;overflow-x:auto;padding:6px 2px}
-.castCard{flex:0 0 132px;text-align:left;background:none}
-.castCard .ph{width:132px;height:176px;border-radius:14px;background-size:108% auto;background-position:center 12%;
+.castCard{flex:0 0 calc(var(--poster) * 0.6);text-align:left;background:none}
+.castCard .ph{width:100%;aspect-ratio:3/4;height:auto;border-radius:14px;background-size:108% auto;background-position:center 12%;
   background-color:var(--raise);margin-bottom:9px;border:0}
   /* 108% zoom-crop: TMDB headshots (always 2:3) often carry a ragged white edge on the top/
      sides of the photo itself — over-zooming a few % pushes those edges outside the card. */
@@ -856,13 +852,13 @@ body.tv .trailerCtl{min-height:46px;padding:10px 20px;font-size:14.5px}
 #person{position:fixed;inset:0;z-index:8;display:none;overflow-y:auto;padding:30px 50px 40px 116px}
 #person.open{display:block}
 .personHead{display:flex;gap:26px;align-items:flex-start;margin:18px 0 26px}
-.personHead .pPhoto{flex:0 0 200px;aspect-ratio:2/3;border-radius:18px;background-size:108% auto;background-position:center 12%;background-color:var(--raise);border:0} /* same zoom-crop as .castCard .ph */
+.personHead .pPhoto{flex:0 0 var(--poster);aspect-ratio:2/3;border-radius:18px;background-size:108% auto;background-position:center 12%;background-color:var(--raise);border:0} /* same zoom-crop as .castCard .ph */
 .personHead .pInfo{flex:1}
 .personHead h1{font:800 38px "Sora";margin-bottom:6px}
 .personHead #pKnown{font:600 12px "JetBrains Mono";color:var(--amber);text-transform:uppercase;letter-spacing:.1em;margin-bottom:14px}
 .personHead #pBio{color:var(--muted);max-width:70ch;font-size:14px;display:-webkit-box;-webkit-line-clamp:6;-webkit-box-orient:vertical;overflow:hidden}
 #person h2{font:600 15px "Sora";color:var(--muted);margin:0 0 12px 2px}
-#personGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:20px 16px;align-content:start;padding-bottom:30px}
+#personGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--poster),1fr));gap:20px 16px;align-content:start;padding-bottom:30px}
 
 /* ---------- library + fix-match modals (shared chrome) ---------- */
 #libModal,#matchModal{position:fixed;inset:0;z-index:48;display:none;place-items:center;background:rgba(5,3,9,.8);backdrop-filter:blur(6px)}
@@ -894,7 +890,7 @@ body.tv .trailerCtl{min-height:46px;padding:10px 20px;font-size:14.5px}
 #epList{display:flex;flex-direction:column;gap:12px}
 .epRow{display:flex;gap:14px;border-radius:var(--r);background:var(--surface);border:1px solid var(--line);
   padding:10px;text-align:left;align-items:center}
-.epRow .thumb{flex:0 0 200px;aspect-ratio:16/9;border-radius:10px;background-size:cover;background-position:center;
+.epRow .thumb{flex:0 0 var(--thumb);aspect-ratio:16/9;border-radius:10px;background-size:cover;background-position:center;
   background-color:var(--raise);position:relative;overflow:hidden}
 .epRow .thumb .pb{position:absolute;left:0;bottom:0;height:3px;background:var(--grad)}
 .epRow .thumb .playIc{position:absolute;inset:0;display:grid;place-items:center;opacity:0;transition:opacity .15s}
@@ -1004,14 +1000,10 @@ body .mCard.focus .art,body .mCard:focus-visible .art{
    releases. That, plus the rail regaining a permanent blur, is what the owner felt as "performance
    is not snappy". If this block is ever edited again, verify the rules still MATCH on a live page
    (rail.matches / getComputedStyle), not just that the file parses.
-   THE RAIL blurs ONLY WHILE EXPANDED. Restoring the glass in v2.8.7 put a full-height blur(20px)
-   back on the TV rail permanently, and the owner immediately felt it: "performance is not snappy,
-   it has a bit of a glitch moving around" — the compact rail sits over the artwork for the WHOLE
-   browsing session, so every frame paid for the blur. Compact now drops the live blur and deepens
-   the same ink tint a touch (so it still reads as a glass column, not bare icons — the fill is
-   what the owner's earlier "shows under the menu" complaint was actually about); the moment the
-   menu is entered/expanded the real blur comes back, which is when anyone is actually looking at
-   it. Desktop keeps the blur always. */
+   THE RAIL has no live blur. The compact TV column still uses a deep ink tint (no artwork
+   flashing through the icons) and drops backdrop-filter; desktop is ink + a curved hairline,
+   same language as Settings. Do not put a full-height blur(20px) back on the compact TV rail —
+   that made the Shield feel "not snappy". */
 body.tv .railBtn.active,
 body.tv .panel,
 body.tv #setTabs button,body.tv #prefTabs button,
@@ -1242,8 +1234,8 @@ body.nativeGuideMode #player.guideMode #video{display:none}
 #volSlider::-moz-range-thumb{width:13px;height:13px;border-radius:50%;background:#fff;border:0}
 #playerEpisodes{display:flex;max-height:0;margin-top:12px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;gap:14px;padding:0 8px;opacity:0;transform:translateY(14px) scale(.985);pointer-events:none;transition:max-height .24s cubic-bezier(.2,.8,.2,1),opacity .2s ease,transform .24s cubic-bezier(.2,.8,.2,1),padding .24s cubic-bezier(.2,.8,.2,1)}
 #playerEpisodes::-webkit-scrollbar{display:none}
-#playerEpisodes.open{max-height:196px;padding:5px 8px 20px;opacity:1;transform:translateY(0) scale(1);pointer-events:auto}
-.playerEpCard{position:relative;flex:0 0 clamp(172px,16vw,244px);height:172px;border:0;border-radius:10px;overflow:visible;background:transparent;color:#fff;text-align:left;padding:0;box-shadow:none;transition:transform .16s ease,filter .16s ease,box-shadow .16s ease}
+#playerEpisodes.open{max-height:calc(var(--thumb) * 0.5625 + 68px);padding:5px 8px 20px;opacity:1;transform:translateY(0) scale(1);pointer-events:auto}
+.playerEpCard{position:relative;flex:0 0 var(--thumb);height:auto;border:0;border-radius:10px;overflow:visible;background:transparent;color:#fff;text-align:left;padding:0;box-shadow:none;transition:transform .16s ease,filter .16s ease,box-shadow .16s ease}
 .playerEpCard.focusable::before,.playerEpCard.focusable:focus-visible::before{display:none}
 .playerEpCard .peStill{position:relative;width:100%;aspect-ratio:16/9;border-radius:10px;overflow:hidden;background:#16101f;background-image:var(--still);background-size:cover;background-position:center;filter:saturate(1.04);box-shadow:none}
 .playerEpCard .peStill::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(0,0,0,.08))}
@@ -1265,7 +1257,7 @@ body.nativeGuideMode #player.guideMode #video{display:none}
 #playerAbout.open{opacity:1;pointer-events:none}
 #playerAbout.open .paCard{pointer-events:auto}
 .paCard{display:flex;gap:32px;max-width:min(1100px,94vw);align-items:flex-end}
-.paPoster{flex:0 0 180px;width:180px;height:270px;border-radius:10px;background:#16101f center/cover no-repeat;box-shadow:0 22px 56px rgba(0,0,0,.62);position:relative}
+.paPoster{flex:0 0 var(--poster);width:var(--poster);height:calc(var(--poster) * 1.5);border-radius:10px;background:#16101f center/cover no-repeat;box-shadow:0 22px 56px rgba(0,0,0,.62);position:relative}
 .paPoster::before{content:"";position:absolute;inset:0 auto 0 0;width:4px;border-radius:10px 0 0 10px;background:linear-gradient(180deg,#E35D8A,#F2B45C)}
 .paKicker{font:800 12px/1 "JetBrains Mono";letter-spacing:.16em;text-transform:uppercase;color:rgba(255,198,92,.88);margin-bottom:8px}
 .paTitle{font:800 clamp(36px,4.2vw,56px)/1.04 "Sora";letter-spacing:-.02em}
@@ -1279,7 +1271,7 @@ body.nativeGuideMode #player.guideMode #video{display:none}
 .paCastNm{font:650 13.5px/1.25 "Albert Sans";margin-top:7px;color:rgba(242,244,247,.86);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;white-space:normal;word-break:break-word}
 #player.live #aboutBtn{display:none}
 body.tv #playerAbout{padding:clamp(24px,4vh,40px) 48px clamp(132px,20vh,200px)}
-body.tv .paPoster{flex-basis:148px;width:148px;height:222px}
+body.tv .paPoster{flex-basis:var(--poster);width:var(--poster);height:calc(var(--poster) * 1.5)}
 body.tv .paTitle{font-size:clamp(30px,3.4vw,44px)}
 body.tv .paPlot{font-size:16.5px}
 body.tv .paSub{font-size:15px}
@@ -1297,7 +1289,7 @@ body.tv .paCastNm{font-size:13px}
 #trackMenu button{display:flex;width:100%;min-height:44px;text-align:left;padding:10px 12px;border-radius:8px;font:650 13.5px/1.2 "Albert Sans";gap:10px;align-items:center;
   background:transparent;border:0;color:rgba(var(--fg),.86);transition:background .14s,box-shadow .14s,color .14s}
 #trackMenu button:hover{background:rgba(255,255,255,.07);color:var(--text)}
-#trackMenu button.focus{background:rgba(255,255,255,.10);color:var(--text);box-shadow:inset 2px 0 0 var(--focus)}
+#trackMenu button.focus{background:rgba(255,255,255,.10);color:var(--text);box-shadow:none}
 #trackMenu button.sel{color:var(--text);background:rgba(184,164,106,.18);font-weight:750}
 #trackMenu button.sel.focus{color:var(--text);background:rgba(184,164,106,.26)}
 #trackMenu button:disabled{opacity:.55;cursor:default;color:var(--muted)}
@@ -1359,22 +1351,20 @@ body.tv #vlcCopy{display:none}
 #settings h1,#prefs h1{font:800 34px "Sora";margin-bottom:6px}
 #settings .sub,#prefs .sub{color:var(--muted);margin-bottom:22px}
 #settings h1,#settings>.sub,#prefs h1,#prefs>.sub{grid-column:1/-1}
-#setTabs,#prefTabs{grid-column:1;position:sticky;top:18px;display:flex;flex-direction:column;gap:8px;margin:0;align-self:start}
-/* Settings tab rail: glass pills that match the left menu — translucent at rest so the page
-   colour shows through, frosted + light-edged when selected. */
-#setTabs button,#prefTabs button{display:grid;grid-template-columns:32px minmax(0,1fr);align-items:center;gap:12px;width:100%;
-  min-height:48px;text-align:left;background:rgba(255,255,255,.045);border:0;
-  -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
-  border-radius:14px;color:var(--muted);font:700 13px "Albert Sans";padding:8px 13px;cursor:pointer;transition:background .15s,border-color .15s,color .15s,box-shadow .15s}
-#setTabs button svg,#prefTabs button svg{width:20px;height:20px;color:currentColor}
-#setTabs button:hover,#prefTabs button:hover{color:var(--text);background:var(--btnHover)}
-/* Flat selected tab: fill + the accent bar only (the inset top light read as embossed). */
-#setTabs button.on,#prefTabs button.on{color:var(--text);background:rgba(255,255,255,.10);border-color:transparent;
-  box-shadow:inset 3px 0 0 var(--focus)}
+#setTabs,#prefTabs{grid-column:1;position:sticky;top:18px;display:flex;flex-direction:column;gap:2px;margin:0;align-self:start}
+/* Settings tab list: text + icon, no capsules. Selected = brighter type + a thin accent bar. */
+#setTabs button,#prefTabs button{display:grid;grid-template-columns:22px minmax(0,1fr);align-items:center;gap:10px;width:100%;
+  min-height:40px;text-align:left;background:transparent;border:0;
+  -webkit-backdrop-filter:none;backdrop-filter:none;
+  border-radius:8px;color:var(--muted);font:600 13.5px "Albert Sans";padding:7px 10px 7px 12px;cursor:pointer;transition:background .15s,color .15s,box-shadow .15s}
+#setTabs button svg,#prefTabs button svg{width:18px;height:18px;color:currentColor}
+#setTabs button:hover,#prefTabs button:hover{color:var(--text);background:rgba(255,255,255,.06)}
+#setTabs button.on,#prefTabs button.on{color:var(--text);background:transparent;font-weight:700;
+  box-shadow:inset 2px 0 0 var(--focus)}
 /* Divider between the Preferences group and the folded-in Server settings group (column layout). */
 .prefTabDivider{margin:14px 6px 4px;padding-top:12px;border-top:1px solid var(--line);pointer-events:none}
 .prefTabDivider span{font:800 8.5px "JetBrains Mono";letter-spacing:.16em;text-transform:uppercase;color:var(--muted);padding:0 6px}
-#setTabs button.focus,#prefTabs button.focus,#setTabs button:focus,#prefTabs button:focus{outline:none;background:var(--btnHover);box-shadow:inset 3px 0 0 var(--focus),0 10px 28px rgba(0,0,0,.28)}
+#setTabs button.focus,#prefTabs button.focus,#setTabs button:focus,#prefTabs button:focus{outline:none;background:rgba(255,255,255,.08);box-shadow:none}
 .setGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(480px,100%),1fr));gap:18px;align-items:start;max-width:2200px} /* up to 4 columns on big screens, wraps down to 1 on phones */
 .testBtn{font:700 10px "JetBrains Mono";letter-spacing:.06em;text-transform:uppercase;padding:4px 11px;margin-left:10px;cursor:pointer;
   border:1px solid rgba(255,255,255,.045);border-radius:999px;color:var(--btnPrimary);background:var(--btn);transition:background .15s,border-color .15s,color .15s}
@@ -1382,7 +1372,7 @@ body.tv #vlcCopy{display:none}
 .testBtn.ok{border-color:rgba(110,231,160,.55);color:var(--success);background:rgba(110,231,160,.1)}
 .testBtn.bad{border-color:rgba(255,141,141,.55);color:var(--danger);background:rgba(255,141,141,.1)}
 .setGrid[hidden]{display:none}
-#settings>.setGrid,#prefs>.setGrid{grid-column:2;grid-row:2;min-width:0} /* row 1 = .sub; the h1 is display:none, so content sits beside the tabs in row 2 */
+#settings>.setGrid,#prefs>.setGrid{grid-column:2;grid-row:1;min-width:0} /* h1 is hidden and there is no page subtitle, so tabs + content share row 1 */
 .setGrid .panel{max-width:none;margin-bottom:0}
 /* Settings surfaces (owner call, 2026-08-06: "make Settings look designed, not a template"):
    frosted panels that let the page's ambient colour through, a hairline top light, one soft
@@ -1455,11 +1445,44 @@ body.tv #vlcCopy{display:none}
   color:var(--muted);font:800 10.5px "JetBrains Mono";letter-spacing:.1em;text-transform:uppercase}
 .activitySectionHead span{color:var(--text);font:800 13px "Sora";letter-spacing:0;text-transform:none}
 .activitySectionHead small{color:var(--muted);font:700 10px "JetBrains Mono";white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.activityRows{display:grid;gap:7px}
-.activityPager{display:flex;align-items:center;justify-content:center;gap:14px;margin-top:2px}
-.activityPager .btn{min-width:84px;justify-content:center}
-.activityPager .btn:disabled,.activityPager .btn[disabled]{opacity:.38;pointer-events:none}
-.activityPagerInfo{color:var(--muted);font:700 11px "JetBrains Mono";white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.activityRows{display:grid;gap:10px}
+.activityNowItem{display:grid;grid-template-columns:64px minmax(0,1fr);gap:12px;align-items:center;width:100%;
+  text-align:left;background:none!important;padding:0;color:inherit;box-shadow:none!important;cursor:pointer}
+.activityNowItem.focusable::before{display:none}
+.activityNowArt{aspect-ratio:2/3;border-radius:8px;background:var(--raise) center/cover no-repeat;
+  transition:box-shadow .16s ease,transform .16s ease}
+.activityNowItem:hover,.activityNowItem.focus,.activityNowItem:focus,.activityNowItem:focus-visible,
+body[data-spotlight] .activityNowItem.focusable.focus,body[data-spotlight] .activityNowItem:focus-visible{
+  background:transparent!important;color:inherit!important;box-shadow:none!important;outline:none!important;transform:none!important}
+.activityNowItem:hover .activityNowArt,.activityNowItem.focus .activityNowArt,.activityNowItem:focus-visible .activityNowArt{
+  box-shadow:0 0 0 1px var(--focusSoft),0 4px 12px rgba(0,0,0,.45)}
+.activityNowBody{min-width:0}
+.activityNowBody .activityTitleLine{display:flex;align-items:center;gap:7px;min-width:0}
+.activityNowBody b{font:800 14px "Sora";display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.activityNowBody small{display:block;color:var(--muted);font:600 11px "Albert Sans";overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px}
+.activityUserBlock{margin:0 0 18px}
+.activityUserBlock h4{margin:0 0 10px;font:800 14px "Sora"}
+.userNameBtn{background:none!important;padding:0;margin:0;text-align:left;color:inherit;border:0;
+  font:800 15px "Albert Sans";box-shadow:none!important;cursor:pointer}
+.userNameBtn.focusable::before{display:none}
+.userNameBtn:hover,.userNameBtn.focus,.userNameBtn:focus,.userNameBtn:focus-visible{
+  background:transparent!important;color:var(--text)!important;box-shadow:none!important;outline:none!important;
+  text-decoration:underline;text-underline-offset:3px}
+.activityUserBlock .userNameBtn{font:800 14px "Sora"}
+#userPeek{padding-top:4px}
+.userPeekBack{margin:0 0 18px}
+.userCard{padding:18px 0;border-bottom:1px solid rgba(255,255,255,.06)}
+.userCard:first-child{border-top:0;margin-top:4px;padding-top:8px}
+.userCard:last-child{border-bottom:0}
+.userCardHead{display:flex;justify-content:space-between;gap:14px;align-items:center;flex-wrap:wrap}
+.userCardHead .kv{flex:1;min-width:0;border-bottom:0;padding:0}
+.userCardTools{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.userCardTools .catRow{margin:0;gap:6px;flex:none;white-space:nowrap}
+.userCardTools .cgN{font-size:12px}
+.userRecent{display:flex;gap:16px;overflow-x:auto;padding:12px 2px 2px}
+.userRecent .dashRecentItem{flex:0 0 132px}
+.userRecent .dashRecentTitle{display:block;-webkit-line-clamp:unset;overflow:visible;white-space:normal;
+  font:600 13px/1.3 "Albert Sans";margin-top:8px}
 .activityRow{display:grid;grid-template-columns:38px minmax(0,2fr) minmax(120px,1fr) minmax(96px,.62fr);gap:13px;align-items:center;
   min-height:58px;border:1px solid var(--line);border-radius:12px;padding:10px 14px;background:var(--field)}
 .activityRow.isActive{border-color:rgba(124,230,160,.22);background:var(--soft)}
@@ -1526,9 +1549,10 @@ body.tv #vlcCopy{display:none}
 }
 .panel .btn{padding:11px 18px;font-size:14px}
 @media (max-width:900px){
-  #settings.open,#prefs.open{display:block}
+  #settings.open,#prefs.open{display:block;padding-top:62px}
   #setTabs,#prefTabs{position:static;flex-direction:row;overflow-x:auto;scroll-padding:0 16px;margin-bottom:20px}
-  #setTabs button,#prefTabs button{width:auto;min-width:150px;grid-template-columns:24px minmax(0,1fr)}
+  #setTabs button,#prefTabs button{width:auto;min-width:118px;grid-template-columns:20px minmax(0,1fr);padding:7px 10px}
+  #settings .setGrid,#prefs .setGrid{border-left:0;padding-left:0;border-top:1px solid rgba(255,255,255,.10);padding-top:18px}
   /* Row layout (phones): the group divider becomes a vertical rule with side spacing. */
   .prefTabDivider{margin:0 6px;padding:0 0 0 12px;border-top:0;border-left:1px solid var(--line);align-self:stretch;flex:none}
   .prefTabDivider span{display:none}
@@ -1675,7 +1699,7 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 
 /* Season poster cards — single horizontal scroll row */
 #seasonGrid{display:flex;gap:18px;overflow-x:auto;padding:4px 2px 8px}
-.seasonCard{flex:0 0 168px;text-align:left;background:none;display:flex;flex-direction:column;gap:8px}
+.seasonCard{flex:0 0 var(--poster);text-align:left;background:none;display:flex;flex-direction:column;gap:8px}
 .seasonCard .art{aspect-ratio:2/3;border-radius:12px;background-size:cover;background-position:center;background-color:var(--raise);
   border:0;position:relative;transition:transform .16s,box-shadow .16s}
 .seasonCard:hover .art,.seasonCard.focus .art{transform:scale(1.04);box-shadow:0 0 0 1px var(--focusSoft),0 4px 12px rgba(0,0,0,.45)}
@@ -1702,7 +1726,7 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 #epGrid{display:flex;gap:18px;overflow-x:auto;padding:10px 14px 16px;margin:0 -14px} /* shadow room (see .cards) */
 /* Episode cards ARE homepage thumbnails now: the 292px 16:9 still with the episode name +
    SxxExx · air date · runtime ON the art (gradient label) — nothing below the card. */
-.epCard{flex:0 0 292px;border-radius:var(--r);overflow:hidden;background:var(--raise);border:0;text-align:left}
+.epCard{flex:0 0 var(--thumb);border-radius:var(--r);overflow:hidden;background:var(--raise);border:0;text-align:left}
 .epCard .still{aspect-ratio:16/9;background-size:cover;background-position:center;background-color:var(--raise);position:relative}
 .epCard .label{position:absolute;left:0;right:0;bottom:0;padding:28px 12px 9px;text-align:left;
   background:linear-gradient(0deg,rgba(11,8,18,.94),transparent)}
@@ -1781,13 +1805,13 @@ body.tv #rows,body.tv #discoverRows,body.tv #grid,body.tv #personGrid{-webkit-ma
 .filterBar select.focusable::before{display:none!important}
 .filterBar select.focus{
   background:var(--btnHover)!important;color:var(--btnFocusText)!important;border-color:transparent!important;
-  box-shadow:inset 3px 0 0 var(--focus),0 10px 28px rgba(0,0,0,.32);transform:translateZ(0)}
+  box-shadow:0 10px 28px rgba(0,0,0,.32);transform:translateZ(0)}
 .btn,.iconBtn,.cbtn{position:relative}
 
 @media (max-width:760px){
   :root{--gut:18px}
   #rail{width:64px} #hero{max-width:84vw}
-  #drawer{width:100vw} .card{flex-basis:180px}
+  #drawer{width:100vw} .card{flex-basis:var(--thumb)}
   .detailHero{flex-direction:column;align-items:flex-start;gap:20px;min-height:auto;padding-top:9vh}
   .dPoster{flex-basis:140px}
 }
@@ -1901,6 +1925,7 @@ body.tv .cwAct,body.tv .epMenuBtn,body.tv .cardMenuBtn{display:none!important}
   #burger{display:grid}
   nav#rail{transform:translateX(-110%);transition:transform .28s cubic-bezier(.22,1,.36,1);
     width:248px!important;z-index:40;box-shadow:18px 0 50px rgba(0,0,0,.5)}
+  nav#rail::after{display:none}
   body.mobileNav nav#rail{transform:translateX(0);background:var(--panel);backdrop-filter:blur(8px)}
   body.mobileNav nav#rail .rlabel,body.mobileNav nav#rail .wordmark{max-width:150px;opacity:1}
   /* Burger stays at top-left as the close control. Slide the profile row right so the
@@ -1969,6 +1994,7 @@ body.mobileShell nav#rail{transform:translateX(-110%);transition:transform .28s 
      and home indicator while the panel background still reaches the top and bottom edges. */
   top:0!important;bottom:0!important;
   padding-top:calc(24px + var(--safeT))!important;padding-bottom:calc(18px + var(--safeB))!important}
+body.mobileShell nav#rail::after{display:none}
 body.mobileShell.mobileNav nav#rail{transform:translateX(0);background:var(--panel);backdrop-filter:blur(8px)}
 body.mobileShell.mobileNav nav#rail .rlabel,
 body.mobileShell.mobileNav nav#rail .wordmark{max-width:150px;opacity:1}
@@ -1978,6 +2004,7 @@ body.mobileShell.railOpen{--rail:0px}
 body.mobileShell #home,body.mobileShell #discover,body.mobileShell #browse,body.mobileShell #detail,
 body.mobileShell #person,body.mobileShell #settings,body.mobileShell #prefs,body.mobileShell #music{
   padding-left:16px!important;padding-right:16px!important}
+body.mobileShell #settings,body.mobileShell #prefs{padding-top:62px!important}
 body.mobileShell #searchBar{left:16px;right:16px}
 /* Burger clearance for the three search bars on the phone shell. The fixed #burger sits at
    top:14px/left:14px (42x42). 62px is the same top offset #home/#browse/#discover already use to
@@ -2181,7 +2208,7 @@ body.mobileShell #upNext .un-cancel{width:36px}
 .calDayHead{font:800 11px "JetBrains Mono";letter-spacing:.16em;text-transform:uppercase;color:var(--focus);margin:0 0 12px 2px;display:flex;gap:10px;align-items:baseline}
 .calDayHead .rel{color:var(--muted);font-size:10.5px;letter-spacing:.1em}
 .calItems{display:flex;gap:16px;overflow-x:auto;padding:6px 4px 12px;scroll-padding-inline:50px}
-.calItem{position:relative;flex:0 0 132px;display:flex;flex-direction:column;gap:8px;background:transparent;border:0;border-radius:10px;padding:0;text-align:left;color:var(--text);transition:transform .18s cubic-bezier(.22,1,.36,1),filter .18s ease}
+.calItem{position:relative;flex:0 0 calc(var(--poster) * 0.6);display:flex;flex-direction:column;gap:8px;background:transparent;border:0;border-radius:10px;padding:0;text-align:left;color:var(--text);transition:transform .18s cubic-bezier(.22,1,.36,1),filter .18s ease}
 .calItem:hover,.calItem.focusable.focus{transform:translate3d(0,-3px,0)}
 .calItem.focusable::before{display:none}
 .calEmpty{display:flex;align-items:center;min-height:56px;width:min(460px,100%);padding:0 2px;color:rgba(var(--fg),.42);font:650 13px "Albert Sans";text-align:left}
@@ -2191,6 +2218,7 @@ body.mobileShell #upNext .un-cancel{width:36px}
 .calItem .ct{font:750 13.5px/1.18 "Albert Sans";margin-bottom:3px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .calItem .cm{font:650 10.5px/1.2 "JetBrains Mono";color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .calItem .cbadge{position:absolute;top:8px;right:8px;font:800 10px "JetBrains Mono";color:var(--onAccent);background:var(--btnPrimary);padding:5px 8px;border-radius:999px;box-shadow:0 8px 18px rgba(0,0,0,.26)}
+body.tv .castCard,body.tv .calItem{flex-basis:calc(var(--poster) * 0.85)}
 
 /* Compact Up Next: Next Episode + X, same height, text centered. Countdown is a
    thin bar at the chip's bottom edge so it never shifts or covers the label. */
@@ -2239,7 +2267,7 @@ body:not(.tv).libGrid .pcard .cardMenuBtn{opacity:.92}
   font:600 13.5px "Albert Sans";gap:10px;color:var(--text);border:1px solid transparent;
   transition:background .15s,color .15s,box-shadow .15s,border-color .15s}
 .epMenu button:hover{background:var(--btnHover);color:var(--btnFocusText)}
-.epMenu button.focus{background:rgba(255,255,255,.10);color:var(--text);border-color:transparent;box-shadow:inset 2px 0 0 var(--focus)}
+.epMenu button.focus{background:rgba(255,255,255,.10);color:var(--text);border-color:transparent;box-shadow:none}
 .epMenu button.focusable::before{display:none!important}
 .epMenu .menuIcon{width:20px;height:20px;border-radius:999px;display:grid;place-items:center;flex:0 0 20px;color:currentColor}
 .epMenu .menuIcon svg{width:18px;height:18px;display:block}
@@ -2279,12 +2307,12 @@ body.tv #hero p{-webkit-line-clamp:3;line-height:1.5;height:4.5em;margin-bottom:
 body.tv #heroCredits{height:16px;margin-bottom:6px;overflow:hidden}
 /* Long-press OK menu for Continue Watching cards — floats over the pressed card. */
 #cwMenu{position:fixed;right:auto;top:auto;z-index:75;min-width:240px}
-#cwMenu button.focus{background:var(--btnHover);color:var(--btnFocusText);border-color:transparent;box-shadow:inset 3px 0 0 var(--focus),0 10px 28px rgba(0,0,0,.32)}
+#cwMenu button.focus{background:var(--btnHover);color:var(--btnFocusText);border-color:transparent;box-shadow:0 10px 28px rgba(0,0,0,.32)}
 
 /* Maturity level chips in the profile editor. */
 .levelPick{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
 .levelPick button{padding:9px 14px;border-radius:11px;background:var(--btn);border:1px solid rgba(255,255,255,.045);font:600 12.5px "Sora";color:var(--muted)}
-.levelPick button:hover,.levelPick button.focus{background:var(--btnHover);color:var(--btnFocusText);border-color:transparent;box-shadow:inset 3px 0 0 var(--focus)}
+.levelPick button:hover,.levelPick button.focus{background:var(--btnHover);color:var(--btnFocusText);border-color:transparent;box-shadow:none}
 .levelPick button.sel{background:var(--btnSelected);color:var(--text);border-color:transparent}
 .levelPick button.sel.focus{background:var(--btnSelectedHover);color:var(--text)}
 .profCard .lock{position:absolute;top:8px;right:8px;width:28px;height:28px;border-radius:999px;display:grid;place-items:center;
@@ -2300,7 +2328,7 @@ body.tv #heroCredits{height:16px;margin-bottom:6px;overflow:hidden}
 /* Cover-size preference (settings) buttons. */
 .sizePick{display:flex;gap:8px}
 .sizePick button{padding:9px 16px;border-radius:11px;background:var(--btn);border:1px solid rgba(255,255,255,.045);font:600 13px "Sora";color:var(--muted)}
-.sizePick button:hover,.sizePick button.focus{background:var(--btnHover);color:var(--btnFocusText);border-color:transparent;box-shadow:inset 3px 0 0 var(--focus)}
+.sizePick button:hover,.sizePick button.focus{background:var(--btnHover);color:var(--btnFocusText);border-color:transparent;box-shadow:none}
 .sizePick button.sel{background:var(--btnSelected);color:var(--text);border-color:transparent}
 .sizePick button.sel.focus{background:var(--btnSelectedHover);color:var(--text)}
 
@@ -2317,8 +2345,8 @@ body.tv #heroCredits{height:16px;margin-bottom:6px;overflow:hidden}
   display:grid;grid-template-rows:auto 16px;gap:12px;padding:14px;text-align:left;position:relative;overflow:hidden;
   transition:transform .15s,border-color .15s,box-shadow .15s,background .15s}
 .themeChoice::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--preview-focus);opacity:.74}
-.themeChoice:hover,.themeChoice.focus,.themeChoice:focus,.themeChoice:focus-visible{transform:translateY(-1px);background:var(--btnHover);border-color:transparent;box-shadow:inset 3px 0 0 var(--focus),0 10px 28px rgba(0,0,0,.28);outline:none}
-.themeChoice.sel{background:var(--btnSelected);border-color:transparent;box-shadow:inset 3px 0 0 var(--focus)}
+.themeChoice:hover,.themeChoice.focus,.themeChoice:focus,.themeChoice:focus-visible{transform:translateY(-1px);background:var(--btnHover);border-color:transparent;box-shadow:0 10px 28px rgba(0,0,0,.28);outline:none}
+.themeChoice.sel{background:var(--btnSelected);border-color:transparent;box-shadow:none}
 .themeChoice.sel::after{content:"";position:absolute;left:14px;right:14px;bottom:10px;height:2px;border-radius:99px;background:var(--preview-focus);opacity:.9}
 .themeMeta{min-width:0;padding-left:2px;display:flex;flex-direction:column;gap:4px}
 .themeName{display:block;font:800 13px "Sora";color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -2370,7 +2398,7 @@ body.tv .ctWells{display:none}
 .profileActions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
 .profileAction{min-height:38px;display:inline-flex;align-items:center;gap:7px;background:var(--btn);border:1px solid rgba(255,255,255,.045);
   border-radius:10px;padding:8px 12px;font:800 12px "Sora";color:var(--text)}
-.profileAction:hover,.profileAction.focus{background:var(--btnHover);border-color:transparent;box-shadow:inset 3px 0 0 var(--focus)}
+.profileAction:hover,.profileAction.focus{background:var(--btnHover);border-color:transparent;box-shadow:none}
 .profileAction.danger{color:var(--danger)}
 .profileAction.primary{background:var(--btn);border:0;color:var(--text)}
 .profileSessionCard{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:14px;padding:14px;border:1px solid var(--line);
@@ -2404,8 +2432,8 @@ body.tv .ctWells{display:none}
 .qToggle button.qon{background:var(--btnSelected);color:var(--text)}
 .epCard .pbtn{background:var(--btn);color:var(--text)}
 
-/* Bigger default covers + breathing room. */
-:root{--poster:190px}
+/* Bigger default covers + breathing room. Medium = the size Home already showed. */
+:root{--poster:220px;--thumb:calc(var(--poster) * 1.327)}
 .cards{gap:24px}
 #grid,#personGrid{gap:30px 22px}
 .pcard .cap{font-size:13px}
@@ -2446,7 +2474,6 @@ body:not(.tv):not(.mobileShell) #discoverRows{
   flex:1!important;
   margin-top:0;
   max-height:none;
-  --poster:220px;
 }
 body:not(.tv):not(.mobileShell) #rows .row,
 body:not(.tv):not(.mobileShell) #discoverRows .row{scroll-snap-align:none;scroll-snap-stop:normal}
@@ -2462,7 +2489,7 @@ body:not(.tv):not(.mobileShell) #personGrid{
 }
 body:not(.tv):not(.mobileShell) #browse .browseHead{margin-top:0}
 body:not(.tv):not(.mobileShell) #browse,
-body:not(.tv):not(.mobileShell) #person{--poster:220px}
+body:not(.tv):not(.mobileShell) #person{/* cover size comes from --poster, not a locked 220px */}
 /* Poster grids page by whole rows via focusGrid's deterministic scroll — CSS snap is NOT
    used there: mandatory snap fights programmatic smooth scrolls and strands mid-row. */
 /* Search result section headers (Movies / TV Shows / Live TV) span the whole grid. */
@@ -2511,13 +2538,13 @@ body:not(.tv):not(.mobileShell) #person{--poster:220px}
 .chCard.focusable.focus,.chGroupHead.focusable.focus,.gRow.focusable.focus{transform:none;box-shadow:none}
 .chCard.focusable::before{display:none}
 .chCard:hover .chLogo,.chCard.focus .chLogo{box-shadow:0 0 0 1px var(--focusSoft),0 4px 12px rgba(0,0,0,.45)}
-.chGroupHead.focusable.focus{box-shadow:inset 3px 0 0 var(--focus)}
+.chGroupHead.focusable.focus{box-shadow:none;background:var(--btnHover)}
 .gRow.focusable::before{display:none}
 /* Focus rings ONLY the channel cell (same language as thumbnails) — the inset frame around
    the whole row lit up the programme text too. */
 .gRow.focusable.focus .gCh{
   background:var(--btnHover);
-  box-shadow:inset 3px 0 0 var(--focus)}
+  box-shadow:none}
 .gRow.focusable.focus .gTl{background:rgba(var(--fg),.025)}
 .chCard .chName{font:600 12.5px "Albert Sans";overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chCard .chGroup{font:500 10px "JetBrains Mono";color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -2541,7 +2568,7 @@ body:not(.tv):not(.mobileShell) #person{--poster:220px}
 .lcat.favCat{background:rgba(var(--fg),.06);border-color:var(--line);color:var(--text)}
 .lcat.favCat.sel{background:var(--btnSelected);color:var(--text);border-color:transparent}
 .lcat.focusable::before{display:none}
-.lcat.focusable.focus{transform:none;background:var(--btnHover);box-shadow:inset 3px 0 0 var(--focus);color:var(--text)}
+.lcat.focusable.focus{transform:none;background:var(--btnHover);box-shadow:none;color:var(--text)}
 .lcat.sel.focusable.focus{background:var(--btnSelectedHover);color:var(--text)}
 #chBody.liveGuideShell,.pgGuideShell.liveGuideShell{display:grid;grid-template-columns:minmax(210px,250px) minmax(0,1fr);gap:0;align-items:stretch;min-height:360px;
   background:var(--soft);border:1px solid var(--line);border-radius:16px;overflow:hidden}
@@ -2560,7 +2587,7 @@ body:not(.tv):not(.mobileShell) #person{--poster:220px}
 .liveGuideShell .lcat.favCat .catCount{color:var(--muted)}
 .liveGuideShell .lcat.favCat.sel{background:var(--btnSelected);color:var(--text)}
 .liveGuideShell .lcat.favCat.sel .catCount{color:var(--muted)}
-.liveGuideShell .lcat.focusable.focus,.liveGuideShell .lcat:focus{box-shadow:inset 3px 0 0 var(--focus);background:var(--btnHover);color:var(--text);outline:none}
+.liveGuideShell .lcat.focusable.focus,.liveGuideShell .lcat:focus{box-shadow:none;background:var(--btnHover);color:var(--text);outline:none}
 .liveGuideShell .lcat.sel.focusable.focus,.liveGuideShell .lcat.sel:focus{background:var(--btnSelectedHover);color:var(--text)}
 .liveGuideShell .lcat.favCat.focusable.focus,.liveGuideShell .lcat.favCat:focus{background:var(--btnHover);color:var(--text)}
 .liveGuideShell .lcat.favCat.sel.focusable.focus,.liveGuideShell .lcat.favCat.sel:focus{background:var(--btnSelectedHover);color:var(--text)}
@@ -2754,7 +2781,7 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
 .pgTimeline .pgBack{position:sticky;top:34px;z-index:2}
 .pgTimeline .pgBack .gTl{display:flex;align-items:center;padding:0 14px;color:var(--muted);font:700 12px "Albert Sans"}
 .pgBackTop{min-height:46px;display:flex;align-items:center;gap:12px;padding:0 14px;border:0;border-radius:0;background:var(--surface);color:var(--text);text-align:left;flex:none}
-.pgBackTop:hover,.pgBackTop:focus{outline:none;background:var(--btnHover);box-shadow:inset 3px 0 0 var(--focus)}
+.pgBackTop:hover,.pgBackTop:focus{outline:none;background:var(--btnHover);box-shadow:none}
 .pgBackTop .pgInit{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;background:var(--soft);color:var(--muted);font:800 16px "Sora";flex:none}
 .pgBackTop .pgBackCopy{min-width:0;display:flex;flex-direction:column;gap:2px}
 .pgBackTop .pgBackTitle{font:800 13px "Albert Sans";white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -2769,7 +2796,7 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
 .pgRow:nth-child(5n+3){background:rgba(var(--fg),.04)}
 .pgRow:nth-child(5n+4){background:rgba(var(--fg),.075)}
 .pgRow:nth-child(5n){background:rgba(var(--fg),.045)}
-.pgRow:hover,.pgRow:focus,.pgRow.focus{outline:none;box-shadow:inset 3px 0 0 var(--focus)}
+.pgRow:hover,.pgRow:focus,.pgRow.focus{outline:none;background:rgba(255,255,255,.07);box-shadow:none}
 .pgRow.cur{background:linear-gradient(90deg,var(--focusSoft),rgba(var(--fg),.05))}
 .pgRow.cur::after{content:"ON";position:absolute;right:10px;top:8px;font:800 8.5px "JetBrains Mono";letter-spacing:.1em;color:var(--onAccent);background:var(--btnPrimary);border-radius:999px;padding:3px 6px}
 .pgRow img{width:38px;height:38px;object-fit:contain;flex:none;border-radius:7px;background:rgba(0,0,0,.12);padding:3px}
@@ -2788,7 +2815,7 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
   background:transparent;margin-bottom:0;border-radius:0;padding:0}
 .pgTimeline .pgRow.pgTimeHead{background:var(--surface)}
 .pgTimeline .pgRow.cur .gCh{background:linear-gradient(90deg,var(--focusSoft),var(--soft))}
-.pgTimeline .pgRow.focus .gCh,.pgTimeline .pgRow.cur.focus .gCh{box-shadow:inset 3px 0 0 var(--focus)}
+.pgTimeline .pgRow.focus .gCh,.pgTimeline .pgRow.cur.focus .gCh{box-shadow:none;background:var(--btnHover)}
 .pgTimeline .pgRow .gCh,.pgTimeline .pgRow .gTl{transition:background .14s ease,box-shadow .14s ease}
 .pgTimeline .pgRow.cur::after{top:10px}
 .pgTimeline .gCh{width:210px}
@@ -2832,7 +2859,7 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
    wins over the gold .btn.primary override above. */
 .btn.focusable.focus,.iconBtn.focusable.focus,.cbtn.focusable.focus,#micBtn:focus,#musicMicBtn:focus{
   background:var(--btnHover)!important;color:var(--btnFocusText)!important;border-color:transparent!important;
-  box-shadow:inset 3px 0 0 var(--focus),0 10px 28px rgba(0,0,0,.32)!important;outline:none;transform:translateZ(0)}
+  box-shadow:0 10px 28px rgba(0,0,0,.32)!important;outline:none;transform:translateZ(0)}
 #osd .cbtn.focusable.focus,#osd .cbtn:focus,#osd .cbtn:hover{
   background:rgba(5,3,9,.56)!important;color:var(--text)!important;
   box-shadow:0 12px 30px rgba(0,0,0,.2)!important;outline:none}
@@ -2859,7 +2886,7 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
 #trailer .trailerCtl.focus,#trailer .trailerCtl:focus,#trailer .trailerCtl:focus-visible,
 #trailer .trailerBack.focus,#trailer .trailerBack:focus,#trailer .trailerBack:focus-visible{
   border-color:transparent!important;outline:0!important;transform:none!important;
-  box-shadow:inset 3px 0 0 var(--focus),0 10px 28px rgba(0,0,0,.32)!important;
+  box-shadow:0 10px 28px rgba(0,0,0,.32)!important;
   background:var(--btnHover)!important;color:var(--btnFocusText)!important;filter:none}
 #trailer .trailerBack.focus,#trailer .trailerBack:focus,#trailer .trailerBack:focus-visible{
   background:var(--btnHover)!important;color:var(--btnFocusText)!important}
@@ -2884,15 +2911,18 @@ body.tv #grid,body.tv #personGrid,body.tv #musicBrowse,body.tv #musicList{paddin
 body.tv:not(.abMiniOpen) #audiobooks{padding-bottom:0} /* audiobook cover grid scrolls inside #audiobooks; :not gate keeps the mini-player's .abGrid 80px clearance */
 
 /* ============ Settings & Preferences ============ */
-#settings .panel,#prefs .panel{box-shadow:0 18px 42px rgba(0,0,0,.16)}
+/* Right column: no cards. A spine line by the menu, hairlines between sections. */
+#settings .panel,#prefs .panel{
+  background:transparent!important;border:0;border-radius:0;box-shadow:none!important;
+  -webkit-backdrop-filter:none!important;backdrop-filter:none!important;
+  padding:22px 0 26px;margin:0;
+  border-bottom:1px solid rgba(255,255,255,.08)}
+#settings .setGrid>.panel:last-child,#prefs .setGrid>.panel:last-child{border-bottom:0;padding-bottom:8px}
 #settings .panel h2,#prefs .panel h2{font:800 17px "Sora";letter-spacing:0;color:var(--text);margin-bottom:6px}
 #settings .panel p,#prefs .panel p{font-size:13px;max-width:680px;line-height:1.5}
 #settings .kv,#prefs .kv{border-bottom:1px solid rgba(var(--fg),.06);padding:9px 0}
-#settings .setGrid,#prefs .setGrid{grid-template-columns:minmax(0,920px);gap:18px;max-width:980px}
-body:not(.tv) #settings .setGrid[data-stab="sources"],
-body:not(.tv) #settings .setGrid[data-stab="catalog"],
-body:not(.tv) #settings .setGrid[data-stab="rules"],
-body:not(.tv) #settings .setGrid[data-stab="display"]{grid-template-columns:repeat(2,minmax(0,1fr));max-width:1280px}
+#settings .setGrid,#prefs .setGrid{grid-template-columns:minmax(0,920px);gap:0 56px;max-width:980px;
+  border-left:1px solid rgba(255,255,255,.10);padding-left:34px}
 #settings .field select,#prefs .field select,#settings select,#prefs select{
   background:var(--field);border:1px solid var(--line);border-radius:12px;
   padding:12px 13px;color:var(--text);font:700 13px "Albert Sans";outline:none}
@@ -2926,30 +2956,111 @@ body:not(.tv) #settings .setGrid[data-stab="display"]{grid-template-columns:repe
 #settings .setGrid button,#prefs .setGrid button{
   transition:background .15s ease,color .15s ease,border-color .15s ease,box-shadow .15s ease,transform .15s ease}
 #setTabs button,#prefTabs button{
-  box-shadow:none!important}
+  background:transparent!important;box-shadow:none!important;border:0}
 #setTabs button:hover,#prefTabs button:hover,
 #setTabs button.focus,#prefTabs button.focus,
 #setTabs button:focus,#prefTabs button:focus,
 #setTabs button:focus-visible,#prefTabs button:focus-visible{
-  background:var(--btnHover)!important;color:var(--btnFocusText)!important;border-color:transparent!important;
-  box-shadow:inset 3px 0 0 var(--focus),0 10px 28px rgba(0,0,0,.32)!important;outline:none!important;transform:none}
+  background:rgba(255,255,255,.07)!important;color:var(--text)!important;border-color:transparent!important;
+  box-shadow:none!important;outline:none!important;transform:none}
 #setTabs button.on,#prefTabs button.on{
-  background:var(--btnSelected)!important;border-color:transparent!important;color:var(--text)!important;box-shadow:inset 3px 0 0 var(--focus)!important}
+  background:transparent!important;border-color:transparent!important;color:var(--text)!important;box-shadow:inset 2px 0 0 var(--focus)!important}
 #setTabs button.on.focus,#prefTabs button.on.focus,
 #setTabs button.on:focus,#prefTabs button.on:focus,
 #setTabs button.on:focus-visible,#prefTabs button.on:focus-visible{
-  background:var(--btnSelectedHover)!important;color:var(--text)!important;border-color:transparent!important;
-  box-shadow:inset 3px 0 0 var(--focus),0 10px 28px rgba(0,0,0,.32)!important;outline:none!important}
-#settings .setGrid button:not(.themeChoice):hover,#prefs .setGrid button:not(.themeChoice):hover,
-#settings .setGrid button:not(.themeChoice).focus,#prefs .setGrid button:not(.themeChoice).focus,
-#settings .setGrid button:not(.themeChoice):focus,#prefs .setGrid button:not(.themeChoice):focus,
-#settings .setGrid button:not(.themeChoice):focus-visible,#prefs .setGrid button:not(.themeChoice):focus-visible{
+  background:rgba(255,255,255,.08)!important;color:var(--text)!important;border-color:transparent!important;
+  box-shadow:inset 2px 0 0 var(--focus)!important;outline:none!important}
+#settings .setGrid button:not(.themeChoice):not(.dashRecentItem):not(.activityNowItem):not(.userNameBtn):hover,#prefs .setGrid button:not(.themeChoice):not(.dashRecentItem):not(.activityNowItem):not(.userNameBtn):hover,
+#settings .setGrid button:not(.themeChoice):not(.dashRecentItem):not(.activityNowItem):not(.userNameBtn).focus,#prefs .setGrid button:not(.themeChoice):not(.dashRecentItem):not(.activityNowItem):not(.userNameBtn).focus,
+#settings .setGrid button:not(.themeChoice):not(.dashRecentItem):not(.activityNowItem):not(.userNameBtn):focus,#prefs .setGrid button:not(.themeChoice):not(.dashRecentItem):not(.activityNowItem):not(.userNameBtn):focus,
+#settings .setGrid button:not(.themeChoice):not(.dashRecentItem):not(.activityNowItem):not(.userNameBtn):focus-visible,#prefs .setGrid button:not(.themeChoice):not(.dashRecentItem):not(.activityNowItem):not(.userNameBtn):focus-visible{
   background:var(--btnHover)!important;color:var(--btnFocusText)!important;border-color:transparent!important;
-  box-shadow:inset 3px 0 0 var(--focus),0 10px 28px rgba(0,0,0,.32)!important;outline:none!important;transform:none}
-#settings .setGrid button:not(.themeChoice).focus svg,#prefs .setGrid button:not(.themeChoice).focus svg,
-#settings .setGrid button:not(.themeChoice):focus svg,#prefs .setGrid button:not(.themeChoice):focus svg,
-#settings .setGrid button:not(.themeChoice):focus-visible svg,#prefs .setGrid button:not(.themeChoice):focus-visible svg{
+  box-shadow:0 10px 28px rgba(0,0,0,.32)!important;outline:none!important;transform:none}
+#settings .setGrid button:not(.themeChoice):not(.dashRecentItem):not(.activityNowItem):not(.userNameBtn).focus svg,#prefs .setGrid button:not(.themeChoice):not(.dashRecentItem):not(.activityNowItem):not(.userNameBtn).focus svg,
+#settings .setGrid button:not(.themeChoice):not(.dashRecentItem):not(.activityNowItem):not(.userNameBtn):focus svg,#prefs .setGrid button:not(.themeChoice):not(.dashRecentItem):not(.activityNowItem):not(.userNameBtn):focus svg,
+#settings .setGrid button:not(.themeChoice):not(.dashRecentItem):not(.activityNowItem):not(.userNameBtn):focus-visible svg,#prefs .setGrid button:not(.themeChoice):not(.dashRecentItem):not(.activityNowItem):not(.userNameBtn):focus-visible svg{
   color:currentColor}
+/* Joined range/size strip in Settings only — Home chips stay capsules. */
+#prefs .sizePick,#settings .sizePick{display:inline-flex;gap:0;padding:3px;background:rgba(255,255,255,.05);border-radius:10px}
+#prefs .sizePick button,#settings .sizePick button{border-radius:7px!important;background:transparent!important;box-shadow:none!important;border:0!important;color:var(--muted);font:600 13px "Albert Sans"}
+#prefs .sizePick button:hover,#settings .sizePick button:hover,
+#prefs .sizePick button.focus,#settings .sizePick button.focus,
+#prefs .sizePick button:focus,#settings .sizePick button:focus,
+#prefs .sizePick button:focus-visible,#settings .sizePick button:focus-visible{
+  background:rgba(255,255,255,.08)!important;color:var(--text)!important;box-shadow:none!important}
+#prefs .sizePick button.sel,#settings .sizePick button.sel,
+#prefs .sizePick button.sel.focus,#settings .sizePick button.sel.focus,
+#prefs .sizePick button.sel:focus,#settings .sizePick button.sel:focus{
+  background:rgba(255,255,255,.14)!important;color:var(--text)!important;box-shadow:none!important}
+
+/* Dashboard: private cinema log. Signature is the 24-hour strip, not a card grid. */
+#prefs .setGrid[data-ptab="dash"]{max-width:920px;grid-template-columns:minmax(0,1fr)}
+.dashPanel{padding:0 0 8px}
+.dashEyebrow{font:800 10px "JetBrains Mono";letter-spacing:.16em;text-transform:uppercase;color:var(--amber);margin:0 0 8px}
+.dashPanel h2{font:800 28px "Sora";letter-spacing:-.02em;margin:0 0 6px}
+.dashPanel > p{margin-bottom:18px}
+.dashHours{margin:28px 0 8px}
+.dashPeak{font:700 18px "Sora";letter-spacing:-.015em;color:var(--text);margin:0 0 16px;min-height:1.3em}
+.dashStrip{display:grid;grid-template-columns:repeat(24,minmax(0,1fr));gap:3px;align-items:end;height:92px;padding-top:4px;
+  border-bottom:1px solid rgba(255,255,255,.08)}
+.dashStrip i{display:block;width:100%;min-height:2px;border-radius:2px 2px 0 0;
+  background:linear-gradient(180deg,var(--amber),var(--coral));
+  opacity:calc(.22 + var(--p, 0) * .78);height:calc(3px + var(--p, 0) * 86px);
+  transition:height .35s ease,opacity .35s ease}
+.dashStripLabels{display:grid;grid-template-columns:repeat(24,minmax(0,1fr));margin-top:8px;
+  font:700 10px "JetBrains Mono";letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.dashStripLabels span:nth-child(2){grid-column:7}
+.dashStripLabels span:nth-child(3){grid-column:13}
+.dashStripLabels span:nth-child(4){grid-column:19}
+.dashStats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px 18px;margin:28px 0 8px;
+  padding-top:22px;border-top:1px solid rgba(255,255,255,.06)}
+.dashStats div{min-width:0}
+.dashStats b{display:block;font:800 28px "Sora";letter-spacing:-.03em;line-height:1.05;color:var(--text)}
+.dashStats span{display:block;margin-top:6px;font:700 10px "JetBrains Mono";letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.dashTop{margin-top:22px}
+.dashTop h3{font:800 10px "JetBrains Mono";letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0 0 12px}
+.dashTopList{list-style:none;margin:0;padding:0}
+.dashTopList li{display:grid;grid-template-columns:28px minmax(0,1fr) auto;align-items:center;gap:12px;padding:9px 0;
+  border-bottom:1px solid rgba(255,255,255,.05)}
+.dashTopList li:last-child{border-bottom:0}
+.dashRank{font:800 13px "JetBrains Mono";color:var(--amber)}
+.dashTitle{font:600 15px "Albert Sans";color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dashCount{font:700 11px "JetBrains Mono";letter-spacing:.04em;color:var(--muted)}
+.dashEmpty{color:var(--muted);margin:0}
+/* Trial extras (streak, weekday/weekend, recent posters). Hide with DASH_TRIAL = false. */
+.dashTrial{margin-top:22px;padding-top:22px;border-top:1px solid rgba(255,255,255,.06)}
+.dashTrialStats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px 18px;margin-bottom:22px}
+.dashTrialStats div{min-width:0}
+.dashTrialStats b{display:block;font:800 28px "Sora";letter-spacing:-.03em;line-height:1.05;color:var(--text)}
+.dashTrialStats span{display:block;margin-top:6px;font:700 10px "JetBrains Mono";letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.dashRecentHead{font:800 10px "JetBrains Mono";letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0 0 12px}
+.dashRecent{display:flex;gap:12px;overflow-x:auto;padding:6px 2px 10px}
+.dashRecentItem{flex:0 0 72px;text-align:left;background:none!important;padding:0;color:inherit;box-shadow:none!important;overflow:visible}
+.dashRecentItem.focusable::before,.dashRecentItem.focusable.focus::before,.dashRecentItem:focus::before,.dashRecentItem:focus-visible::before,
+.activityNowItem.focusable::before,.activityNowItem.focusable.focus::before,.activityNowItem:focus::before,.activityNowItem:focus-visible::before{
+  content:none!important;display:none!important;opacity:0!important}
+body[data-spotlight] .dashRecentItem.focusable.focus::before,body[data-spotlight] .dashRecentItem:focus-visible::before,
+body[data-spotlight] .activityNowItem.focusable.focus::before,body[data-spotlight] .activityNowItem:focus-visible::before{
+  content:none!important;display:none!important;opacity:0!important}
+.dashRecentArt{aspect-ratio:2/3;border-radius:8px;background:var(--raise) center/cover no-repeat;
+  transition:box-shadow .16s ease,transform .16s ease}
+.dashRecentTitle{font:600 11.5px "Albert Sans";line-height:1.25;margin-top:7px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;color:var(--text)}
+.dashRecentItem:hover,.dashRecentItem.focus,.dashRecentItem:focus,.dashRecentItem:focus-visible,
+body[data-spotlight] .dashRecentItem.focusable.focus,body[data-spotlight] .dashRecentItem:focus-visible{
+  background:transparent!important;color:inherit!important;box-shadow:none!important;outline:none!important;transform:none!important}
+.dashRecentItem:hover .dashRecentTitle,.dashRecentItem.focus .dashRecentTitle,.dashRecentItem:focus-visible .dashRecentTitle{
+  color:var(--text)!important}
+.dashRecentItem:hover .dashRecentArt,.dashRecentItem.focus .dashRecentArt,.dashRecentItem:focus .dashRecentArt,.dashRecentItem:focus-visible .dashRecentArt{
+  transform:scale(1.045);box-shadow:0 0 0 1px var(--focusSoft),0 4px 12px rgba(0,0,0,.45)}
+.dashTopHint{margin:0 0 12px;font:500 13px "Albert Sans";color:var(--muted)}
+@media (max-width:720px){
+  .dashStats{grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 14px}
+  .dashTrialStats{grid-template-columns:repeat(3,minmax(0,1fr));gap:18px 10px}
+  .dashPanel{padding:0}
+}
+@media (prefers-reduced-motion:reduce){
+  .dashStrip i{transition:none}
+}
 .sec2faBox{margin-top:14px;padding:14px;border:1px solid var(--line);border-radius:8px;background:var(--field)}
 .sec2faLabel{margin-top:10px;color:var(--muted);font:800 11px "JetBrains Mono";text-transform:uppercase;letter-spacing:.06em}
 .sec2faMono{margin-top:6px;overflow:auto;word-break:break-all;color:var(--text);font:700 12px "JetBrains Mono";line-height:1.45}
@@ -3014,9 +3125,9 @@ body:not(.tv) #settings .setGrid[data-stab="display"]{grid-template-columns:repe
 .musicShelf h2{font:800 24px "Sora";line-height:1.1}
 .musicShelfTop{display:flex;align-items:end;justify-content:space-between;gap:18px}
 .musicShelfTop .mNote{color:var(--muted);font:600 13px "Albert Sans";max-width:46ch}
-.musicTiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px}
+.musicTiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(calc(var(--poster) * 0.76),1fr));gap:14px}
 /* Compact artwork cards in a single horizontal row per shelf (was 254–304px — too big). */
-.musicRail{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(150px,168px);gap:14px;overflow-x:auto;padding:0 2px 10px;scroll-snap-type:x proximity}
+.musicRail{display:grid;grid-auto-flow:column;grid-auto-columns:calc(var(--poster) * 0.76);gap:14px;overflow-x:auto;padding:0 2px 10px;scroll-snap-type:x proximity}
 .mChip{position:relative;display:flex;text-align:left;border:1px solid rgba(255,255,255,.08);background:rgba(29,24,39,.72);color:var(--text);overflow:visible;transition:transform .16s ease,background .16s ease,border-color .16s ease}
 .mChip:hover,.mChip:focus,.mChip.focus{outline:none}
 .mChip:hover,.mChip.focus{transform:translateY(-1px)}
@@ -3053,8 +3164,8 @@ body:not(.tv) #settings .setGrid[data-stab="display"]{grid-template-columns:repe
 .mpActions{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px}
 .musicAction{height:42px;border-radius:999px;padding:0 18px;display:inline-flex;align-items:center;gap:9px;background:var(--btn);border:1px solid rgba(255,255,255,.045);color:var(--text);font:800 13px "Albert Sans"}
 .musicAction.primary{background:var(--btn);border-color:transparent;color:var(--text)}
-.musicAction:hover,.musicAction.focus{outline:none;box-shadow:inset 3px 0 0 var(--focus),0 10px 28px rgba(0,0,0,.32);background:var(--btnHover);color:var(--btnFocusText)}
-.musicAction.primary:hover,.musicAction.primary.focus{background:var(--btnPrimaryHover);color:var(--onAccent);box-shadow:inset 3px 0 0 rgba(255,255,255,.28),0 10px 28px rgba(0,0,0,.32)}
+.musicAction:hover,.musicAction.focus{outline:none;box-shadow:0 10px 28px rgba(0,0,0,.32);background:var(--btnHover);color:var(--btnFocusText)}
+.musicAction.primary:hover,.musicAction.primary.focus{background:var(--btnPrimaryHover);color:var(--onAccent);box-shadow:0 10px 28px rgba(0,0,0,.32)}
 .musicLoadMore{align-self:center;margin:18px auto 0}
 #musicList{flex:1;overflow-y:auto;padding-bottom:40px;display:flex;flex-direction:column;gap:4px}
 #musicList:empty{display:none}
@@ -3121,7 +3232,7 @@ body.tv .mSearchSongs .musicRow .mA{font-size:13.5px}
 .mbPlay{width:46px;height:46px;background:var(--btnPrimary);color:var(--onAccent)}
 .mbPlay svg{width:24px;height:24px}
 .mbBtn:hover,.mbBtn.focus{background:rgba(var(--fg),.14)}
-.mbPlay:hover,.mbPlay.focus{background:var(--btnPrimaryHover);color:var(--onAccent);box-shadow:inset 3px 0 0 rgba(255,255,255,.28),0 10px 28px rgba(0,0,0,.32)}
+.mbPlay:hover,.mbPlay.focus{background:var(--btnPrimaryHover);color:var(--onAccent);box-shadow:0 10px 28px rgba(0,0,0,.32)}
 .mbProg{display:flex;align-items:center;gap:12px;flex:1;min-width:0}
 .mbT{font:500 11.5px "JetBrains Mono";color:var(--muted);flex:none}
 .mbBar{flex:1;height:6px;border-radius:3px;background:rgba(var(--fg),.14);cursor:pointer;position:relative}
@@ -3146,7 +3257,7 @@ body:has(#musicNow.open) #burger{display:none!important}
 @keyframes mnPop{from{transform:scale(.92);opacity:.55}to{transform:scale(1);opacity:1}}
 @keyframes mnGlow{0%,100%{box-shadow:0 40px 90px rgba(0,0,0,.7),0 0 0 1px rgba(255,255,255,.05),0 0 22px rgba(193,59,214,.16)}50%{box-shadow:0 40px 90px rgba(0,0,0,.7),0 0 0 1px rgba(255,255,255,.08),0 0 42px rgba(255,198,92,.3)}}
 .mnCollapse{position:absolute;top:22px;left:24px;z-index:3;width:46px;height:46px;border-radius:50%;display:grid;place-items:center;background:var(--soft);color:var(--text)}
-.mnCollapse:hover,.mnCollapse.focus{background:var(--btnHover);color:var(--btnFocusText);outline:none;box-shadow:inset 3px 0 0 var(--focus),0 10px 28px rgba(0,0,0,.32)}
+.mnCollapse:hover,.mnCollapse.focus{background:var(--btnHover);color:var(--btnFocusText);outline:none;box-shadow:0 10px 28px rgba(0,0,0,.32)}
 .mnMain{position:relative;z-index:2;display:flex;align-items:center;justify-content:center;gap:48px;padding:58px 40px 28px;flex:1 1 auto;flex-wrap:nowrap;width:auto;max-width:min(1080px,calc(100vw - 64px));box-sizing:border-box}
 .mnCover{width:clamp(260px,28vw,420px);aspect-ratio:1;border-radius:18px;background:#241934 center/cover no-repeat;overflow:hidden;
   box-shadow:0 40px 90px rgba(0,0,0,.7),0 0 0 1px rgba(255,255,255,.05);flex:none}
@@ -3170,7 +3281,7 @@ body.musicPaused #musicNow .mnCover,body.musicPaused #musicNow .mnBg{animation-p
 .mnAction{min-height:46px;padding:0 16px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;gap:8px;flex:none;width:auto;min-width:max-content;white-space:nowrap;background:rgba(255,255,255,.06);color:var(--text);font:600 14px "Albert Sans";letter-spacing:.01em}
 .mnAction span{overflow:visible;white-space:nowrap}
 .mnAction svg{width:18px;height:18px;flex:none}
-.mnAction.focus,.mnAction:focus-visible{background:var(--btnHover);color:var(--btnFocusText);outline:none;box-shadow:inset 3px 0 0 var(--focus),0 10px 28px rgba(0,0,0,.32)}
+.mnAction.focus,.mnAction:focus-visible{background:var(--btnHover);color:var(--btnFocusText);outline:none;box-shadow:0 10px 28px rgba(0,0,0,.32)}
 /* Shuffle/repeat/like/lyrics: muted until ON, then brand-amber. */
 .mnTog{color:var(--muted);position:relative}
 .mnCtl .mnTog svg{width:21px!important;height:21px!important}
@@ -3239,7 +3350,7 @@ body.mobileShell #musicNow.queueHidden:not(.lyricsOpen) .mnMain{width:100%;max-w
 body.mobileShell #musicNow.queueHidden:not(.lyricsOpen) .mnCover{width:min(300px,72vw)}
 body.mobileShell #musicNow:not(.queueHidden) .mnCover,body.mobileShell #musicNow.lyricsOpen .mnCover{width:min(168px,42vw)}
 
-@media (max-width:900px){.musicTiles{grid-template-columns:repeat(auto-fill,minmax(128px,1fr))}.musicRail{grid-auto-columns:minmax(128px,34vw)}.mSearchSongs{grid-template-columns:1fr}.mArtistName{font-size:28px}.mArtistArt{width:82px;height:82px}}
+@media (max-width:900px){.musicTiles{grid-template-columns:repeat(auto-fill,minmax(calc(var(--poster) * 0.76),1fr))}.musicRail{grid-auto-columns:calc(var(--poster) * 0.76)}.mSearchSongs{grid-template-columns:1fr}.mArtistName{font-size:28px}.mArtistArt{width:82px;height:82px}}
 @media (max-width:600px){#music{left:0!important}#audiobooks,#abDetail{left:0!important}.mbProg .mbT{display:none}.musicTiles{grid-template-columns:1fr}}
 
 /* Content text-size preference: scoped to media/content surfaces only.
@@ -3661,7 +3772,7 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
   padding:13px 16px; color:var(--text); font:500 15px "Albert Sans"; outline:none; }
 .abHead input:focus { border-color:var(--magenta); }
 .abHint { color:var(--muted); font-size:14px; margin:2px 2px 24px; flex:none; }
-.abGrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:22px 18px; }
+.abGrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(calc(var(--poster) * 0.68),1fr)); gap:22px 18px; }
 /* Card = cover + labels; the HIGHLIGHT lives on the COVER only (like .mCard), never wrapping the
    text. The generic focus ::before is disabled so the whole button isn't ringed. */
 .abCard { cursor:pointer; background:transparent; border:0; padding:0; text-align:left; color:inherit; }
@@ -3685,13 +3796,13 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
    it), bringing the gap in line with the Movies rows. TV-only; desktop/phone rows are unchanged. */
 body.tv .abRowScroll { padding-left:14px; scroll-padding-left:14px; }
 .abRowScroll::-webkit-scrollbar { display:none; }
-.abRowScroll .abCard { flex:0 0 150px; }
-/* Pin the cover to a fixed 150px square (cards are a fixed 150px wide). Using aspect-ratio here caused
+.abRowScroll .abCard { flex:0 0 calc(var(--poster) * 0.68); }
+/* Pin the cover to a square of the card width. Using aspect-ratio here caused
    a Chromium flexbox bug: inside a width-constrained grid item, the square cover ballooned vertically
    and stretched the whole row to ~1300px (huge empty gap above the related-books row). */
-.abRowScroll .abCover { aspect-ratio:auto; height:150px; }
+.abRowScroll .abCover { aspect-ratio:auto; height:calc(var(--poster) * 0.68); }
 .abRowSkel { display:flex; gap:16px; }
-.abRowSkel i { flex:0 0 150px; height:150px; border-radius:14px; background:var(--soft); opacity:.5;
+.abRowSkel i { flex:0 0 calc(var(--poster) * 0.68); height:calc(var(--poster) * 0.68); border-radius:14px; background:var(--soft); opacity:.5;
   display:block; animation:abPulse 1.2s ease-in-out infinite; }
 @keyframes abPulse { 0%,100%{opacity:.35} 50%{opacity:.6} }
 /* Mini "now playing" bar (return-to-player affordance). */
@@ -3986,10 +4097,10 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
 
 <section id="prefs">
   <h1>Preferences</h1>
-  <div class="sub">Your personal setup — display, menu, Live TV and profiles. Saved per device or per account where it makes sense.</div>
 
   <div id="prefTabs">
-    <button data-tab="profiles" class="on focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="9" r="3"/><path d="M4 20c.8-3 2.5-5 5-5s4.2 2 5 5"/><path d="M17 10v4M15 12h4"/></svg><span>Profile &amp; Pins</span></button>
+    <button data-tab="dash" class="on focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 18V11M10 18V7M15 18v-5M20 18H4"/></svg><span>Dashboard</span></button>
+    <button data-tab="profiles" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="9" r="3"/><path d="M4 20c.8-3 2.5-5 5-5s4.2 2 5 5"/><path d="M17 10v4M15 12h4"/></svg><span>Profile &amp; Pins</span></button>
     <button data-tab="display" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="12" rx="2"/><path d="M8 21h8M12 17v4"/></svg><span>Display</span></button>
     <button data-tab="playback" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M10 8l6 4-6 4V8Z" fill="currentColor" stroke="none"/></svg><span>Playback</span></button>
     <button data-tab="menu" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 7h14M5 12h14M5 17h14"/></svg><span>Menu</span></button>
@@ -3999,15 +4110,41 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
          divider, so the avatar opens ONE menu: Preferences group · divider · Server settings group. -->
   </div>
 
-  <div class="setGrid" data-ptab="display">
-    <div class="panel"><h2>Cover size on this device</h2>
-      <p>How big poster art renders in rows and grids (saved on this device).</p>
+  <div class="setGrid" data-ptab="dash">
+    <div class="panel dashPanel">
+      <p class="dashEyebrow">This account</p>
+      <h2>Dashboard</h2>
+      <p>Finished movies and episodes for this account.</p>
+      <div class="sizePick" id="dashRange" role="tablist" aria-label="Time range">
+        <button class="focusable" data-range="week">Week</button>
+        <button class="focusable sel" data-range="month">Month</button>
+        <button class="focusable" data-range="year">Year</button>
+        <button class="focusable" data-range="all">All time</button>
+      </div>
+      <div class="dashHours">
+        <p class="dashPeak" id="dashPeak">Hours start as you finish titles.</p>
+        <div class="dashStrip" id="dashStrip" role="img" aria-label="When you finish titles, by hour"></div>
+        <div class="dashStripLabels"><span>12a</span><span>6a</span><span>12p</span><span>6p</span></div>
+      </div>
+      <div class="dashStats">
+        <div><b id="dashHoursVal">0</b><span>Hours</span></div>
+        <div><b id="dashMoviesVal">0</b><span>Movies</span></div>
+        <div><b id="dashEpisodesVal">0</b><span>Episodes</span></div>
+        <div><b id="dashShowsVal">0</b><span>Shows</span></div>
+      </div>
+      <div class="dashTrial" id="dashTrial" hidden></div>
+      <div class="dashTop" id="dashTop"></div>
+    </div>
+  </div>
+
+  <div class="setGrid" data-ptab="display" hidden>
+    <div class="panel">
+      <h2>Size on this device</h2>
+      <p>Poster and thumbnail size on Home, Movies, TV, Search, details, and the player episode row.</p>
       <div class="sizePick" id="prefCoverSize">
         <button data-sz="S">Small</button><button data-sz="M">Medium</button><button data-sz="L">Large</button>
       </div>
-    </div>
-    <div class="panel"><h2>Content text size</h2>
-      <p>Text size for movies, shows, music, Live TV and library pages. The left menu and Settings stay fixed.</p>
+      <p style="margin-top:18px">Text size for movies, shows, music, Live TV and library pages. The left menu and Settings stay fixed.</p>
       <div class="sizePick" id="prefContentTextSize">
         <button data-ts="S">Compact</button><button data-ts="M">Standard</button><button data-ts="L">Larger</button>
       </div>
@@ -4025,12 +4162,12 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
   </div>
 
   <div class="setGrid" data-ptab="playback" hidden>
-    <div class="panel"><h2>Playback languages</h2>
+    <div class="panel"><h2>Audio and captions</h2>
       <p>When a file carries your language, it's selected automatically (audio picks the best
          surround layout available in that language).</p>
       <div class="field"><select id="prefALang" style="flex:1"></select></div>
       <div class="field"><select id="prefSLang" style="flex:1"></select></div>
-      <p style="margin-top:14px">Subtitle startup behavior.</p>
+      <p style="margin-top:14px">Subtitle startup.</p>
       <div class="sizePick" id="prefSubtitleMode">
         <button data-submode="manual">Choose per title</button><button data-submode="always">Always show subtitles</button>
       </div>
@@ -4039,16 +4176,16 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
       <div class="sizePick" id="prefCcStyle">
         <button data-ccstyle="dialogue">Dialogue only</button><button data-ccstyle="sdh">Sound descriptions (SDH)</button>
       </div>
-      <div class="hint">Dialogue only auto-picks clean captions. SDH prefers captions that include [music], [door creaks], and speaker labels for the hard of hearing. Both stay available in the captions menu.</div>
+      <div class="hint">Dialogue only auto-picks clean captions. SDH prefers captions that include [music], [door creaks], and speaker labels. Both stay available in the captions menu.</div>
+      <p style="margin-top:14px">Caption size.</p>
+      <div class="sizePick" id="prefSubSize">
+        <button data-ss="S">Small</button><button data-ss="M">Medium</button><button data-ss="L">Large</button>
+      </div>
     </div>
     <div class="panel"><h2>Playback</h2>
       <p>Auto-play starts the next episode when this one ends. Off returns you to the show page.</p>
       <div class="sizePick" id="prefAutoplay">
         <button data-ap="1">Auto-play on</button><button data-ap="0">Auto-play off</button>
-      </div>
-      <p style="margin-top:14px">Subtitle size (closed captions).</p>
-      <div class="sizePick" id="prefSubSize">
-        <button data-ss="S">Small</button><button data-ss="M">Medium</button><button data-ss="L">Large</button>
       </div>
     </div>
     <div class="panel" id="prefWeb4kPanel"><h2>Web browser quality</h2>
@@ -4060,15 +4197,15 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
   </div>
 
   <div class="setGrid" data-ptab="menu" hidden>
-    <div class="panel" id="prefKidsPanel">
-      <h2>Kids</h2>
-      <p>Show a Kids page in your menu. This is yours — other people in the house pick their own.</p>
-      <div class="sizePick" id="prefKidsMenu">
-        <button data-kids="1">Show Kids</button><button data-kids="0">Hide Kids</button>
+    <div class="panel">
+      <h2>Menu</h2>
+      <p>Arrange the sidebar. Hidden items disappear from the rail.</p>
+      <div id="prefKidsPanel" style="margin-bottom:18px">
+        <p style="margin-bottom:10px">Kids page. This is yours — other people in the house pick their own.</p>
+        <div class="sizePick" id="prefKidsMenu">
+          <button data-kids="1">Show Kids</button><button data-kids="0">Hide Kids</button>
+        </div>
       </div>
-    </div>
-    <div class="panel"><h2>Menu — reorder or hide</h2>
-      <p>Arrange the sidebar the way you use it; hidden items disappear from the rail.</p>
       <div id="menuMgr"></div>
       <button class="btn ghost focusable" id="prefReset" style="margin-top:14px">Reset to default</button>
     </div>
@@ -4135,6 +4272,13 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
       </div>
       <div id="prefPins"></div>
     </div>
+    <div class="panel"><h2>App updates</h2>
+      <p>Install the latest Triboon app — one build runs on both Android TV and phone.</p>
+      <div class="field">
+        <button class="btn primary focusable" id="apkUpdate">Update app</button>
+      </div>
+      <div class="hint" id="apkUpdateStatus">Current app: checking...</div>
+    </div>
   </div>
 
   <div class="setGrid" data-ptab="connect" hidden>
@@ -4149,13 +4293,6 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
       <p>Link your Trakt account: what you watch is scrobbled automatically, and your watchlist
          stays in sync both ways.</p>
       <div id="traktBox"><div class="hint">checking…</div></div>
-    </div>
-    <div class="panel"><h2>App updates</h2>
-      <p>Install the latest Triboon app — one build runs on both Android TV and phone.</p>
-      <div class="field">
-        <button class="btn primary focusable" id="apkUpdate">Update app</button>
-      </div>
-      <div class="hint" id="apkUpdateStatus">Current app: checking...</div>
     </div>
     <div class="panel"><h2>YouTube Music</h2>
       <p>Connect your account to place <b>Liked Music and your playlists</b> at the top of the Music page.
@@ -4242,12 +4379,12 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
   <div id="setTabs">
     <button data-tab="server" class="on focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8M8 13h5"/></svg><span>Status</span></button>
     <button data-tab="activity" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h4l2-5 4 10 2-5h4"/><circle cx="19" cy="6" r="2"/></svg><span>Now Watching</span></button>
-    <button data-tab="security" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3 19 6v5c0 4.4-2.8 7.7-7 9.4-4.2-1.7-7-5-7-9.4V6l7-3Z"/><path d="m9 12 2 2 4-4"/></svg><span>Security</span></button>
     <button data-tab="sources" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h10"/><circle cx="18" cy="17" r="2"/></svg><span>Providers</span></button>
     <button data-tab="catalog" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="4" width="14" height="16" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/></svg><span>Catalog</span></button>
-    <button data-tab="livetv" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="6" width="16" height="12" rx="2"/><path d="M9 3l3 3 3-3"/></svg><span>Live TV</span></button>
-    <button data-tab="rules" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 5h12M6 12h12M6 19h12"/><path d="M9 5v14"/></svg><span>Libraries &amp; Rules</span></button>
-    <button data-tab="users" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3"/><path d="M4 19c.9-3.2 2.6-5 5-5s4.1 1.8 5 5"/><path d="M17 10v6M14 13h6"/></svg><span>Users &amp; Devices</span></button>
+    <button data-tab="rules" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 5h12M6 12h12M6 19h12"/><path d="M9 5v14"/></svg><span>Libraries</span></button>
+    <button data-tab="livetv" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="6" width="16" height="12" rx="2"/><path d="M9 3l3 3 3-3"/></svg><span>TV sources</span></button>
+    <button data-tab="users" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3"/><path d="M4 19c.9-3.2 2.6-5 5-5s4.1 1.8 5 5"/><path d="M17 10v6M14 13h6"/></svg><span>Users</span></button>
+    <button data-tab="security" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3 19 6v5c0 4.4-2.8 7.7-7 9.4-4.2-1.7-7-5-7-9.4V6l7-3Z"/><path d="m9 12 2 2 4-4"/></svg><span>Security</span></button>
     <button data-tab="display" class="focusable"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="12" rx="2"/><path d="M8 21h8M12 17v4"/></svg><span>Appearance</span></button>
   </div>
 
@@ -4255,10 +4392,8 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
   <div class="panel"><h2>Engine</h2><p>Live status from the Triboon server.</p><div id="engineStatus"><div class="kv"><span>Engine</span><span>Checking...</span></div></div></div>
 
   <div class="panel"><h2>Streaming performance</h2>
-    <p>Let Triboon size server read-ahead and connection use from your provider capacity, server network,
-       and expected simultaneous users. Auto keeps starts and seeks ahead of background read-ahead.
-       Speeds are in <strong>Mbps</strong> (megabits per second — your internet line speed, not megabytes);
-       read-ahead goals are in seconds and connections are per stream.</p>
+    <p>Triboon sizes connections from your provider, this server's network, and how many people watch
+       at once. Speeds are <strong>Mbps</strong>. Auto keeps Play and seek ahead of background download.</p>
     <div class="perfSummary" id="perfSummary" aria-live="polite">
       <div class="perfCard"><div class="k">Providers</div><div class="v">--</div><small>waiting for server</small></div>
       <div class="perfCard"><div class="k">Playback pool</div><div class="v">--</div><small>available articles</small></div>
@@ -4336,13 +4471,8 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
     <div id="activityConn" class="activityConn" hidden></div>
     <div class="activitySectionHead"><span>Watching now</span><small id="activityLiveStatus"></small></div>
     <div id="activityList" class="activityRows"><div class="hint">No one is watching right now.</div></div>
-    <div class="activitySectionHead"><span>Last 3 days</span><small id="activityHistoryStatus"></small></div>
+    <div class="activitySectionHead"><span>Recently watched</span><small id="activityHistoryStatus"></small></div>
     <div id="activityHistory" class="activityRows"><div class="hint">No recent playback.</div></div>
-    <div class="activityPager" id="activityPager" hidden>
-      <button class="btn ghost focusable" id="activityPrev">Prev</button>
-      <span class="activityPagerInfo" id="activityPagerInfo"></span>
-      <button class="btn ghost focusable" id="activityNext">Next</button>
-    </div>
     <div class="hint" id="activityStatus"></div>
   </div>
   </div>
@@ -4455,9 +4585,9 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
 
   <div class="setGrid" data-stab="rules" hidden>
   <div class="panel"><h2>Local libraries</h2>
-    <p>Library folders are re-checked automatically for new movies and episodes. Known items
-       keep their cached TMDB match, so a no-change pass costs one quick disk walk and zero
-       network. Per-library actions (scan now · refresh all metadata) live in each library's Edit panel.</p>
+    <p>Library folders are re-checked automatically for new movies and episodes. Add a folder from
+       <b>Add library</b> in the menu. Known items keep their cached TMDB match, so a no-change pass
+       is one disk walk. Scan now and refresh metadata live in each library's Edit panel.</p>
     <div class="field">
       <select id="libScanMin" style="max-width:280px">
         <option value="0">Off — scan manually only</option>
@@ -4480,21 +4610,6 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
     <button class="btn primary focusable" id="abSaveSettings">Save</button>
     <div class="hint" id="abSettingsStatus"></div>
   </div>
-
-  <div class="panel"><h2>Scoring</h2>
-    <p>Releases are ranked with built-in TRaSH-Guides-style weights tuned for instant streaming —
-       leaving everything empty keeps that recommended default. Your entries layer on top:
-       group names match the release's <b>-GROUP</b> suffix and override the built-in tiers;
-       keywords add their score to any release whose name contains them.</p>
-    <div class="field"><input id="scTrusted" placeholder="Trusted groups +50 — e.g. FLUX, NTb, FraMeSToR"></div>
-    <div class="field"><input id="scAvoid" placeholder="Avoid groups −50 — e.g. YTS, MeGusta"></div>
-    <div class="field"><textarea id="scKeywords" rows="4" placeholder="keyword = score (one per line, ±5000)&#10;Atmos = 25&#10;KORSUB = -300"></textarea></div>
-    <div class="settingsActions">
-      <button class="btn primary" id="scSave">Save scoring</button>
-      <button class="btn ghost" id="scReset">Reset to defaults</button>
-    </div>
-    <div class="hint" id="scStatus"></div>
-  </div>
   </div>
 
   <div class="setGrid" data-stab="catalog" hidden>
@@ -4503,6 +4618,19 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
     <div class="field"><input id="tmdbKey" placeholder="TMDB API key (v3)"></div>
     <div class="settingsActions"><button class="btn primary" id="tmdbSave">Save key</button></div>
     <div class="hint" id="tmdbStatus"></div>
+  </div>
+
+  <div class="panel"><h2>Scoring</h2>
+    <p>Releases are ranked for instant streaming. Leave this empty to keep the default.
+       Group names match the release <b>-GROUP</b> suffix; keywords add a score when they appear in the name.</p>
+    <div class="field"><input id="scTrusted" placeholder="Trusted groups +50 — e.g. FLUX, NTb, FraMeSToR"></div>
+    <div class="field"><input id="scAvoid" placeholder="Avoid groups −50 — e.g. YTS, MeGusta"></div>
+    <div class="field"><textarea id="scKeywords" rows="4" placeholder="keyword = score (one per line, ±5000)&#10;Atmos = 25&#10;KORSUB = -300"></textarea></div>
+    <div class="settingsActions">
+      <button class="btn primary" id="scSave">Save scoring</button>
+      <button class="btn ghost" id="scReset">Reset to defaults</button>
+    </div>
+    <div class="hint" id="scStatus"></div>
   </div>
 
   <div class="panel"><h2>Subtitles</h2>
@@ -4562,9 +4690,9 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
     <div class="hint" id="iptvSyncStatus"></div>
   </div>
 
-  <div class="panel"><h2>Live TV (IPTV)</h2>
-    <p>M3U playlist or an Xtream Codes login — a “Live TV” section appears for everyone, with
-       channel logos, groups, favorites and a now/next guide.</p>
+  <div class="panel"><h2>House playlists</h2>
+    <p>M3U or Xtream for the whole house. Everyone sees these channels, logos, and the guide.
+       Personal playlists stay under Live TV above.</p>
     <div id="iptvSourceList" style="margin:0 0 14px"></div>
     <div class="iptvAddIntro">
       <button class="btn primary focusable" id="iptvAddOpen">Add playlist</button>
@@ -4599,7 +4727,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
   </div>
 
   <div class="setGrid" data-stab="users" hidden>
-  <div class="panel"><h2>Invite a user</h2>
+  <div class="panel" id="userPeopleWrap"><h2>Invite a user</h2>
     <p>Single-use link, expires in 48h. Pick their quality cap.</p>
     <div class="field">
       <select id="invCap">
@@ -4608,15 +4736,42 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
       <button class="btn primary" id="invGo">Create invite</button>
     </div>
     <div class="hint" id="invLink"></div>
-    <div id="userList" style="margin-top:14px"></div>
+    <h3 style="font:800 15px 'Sora';margin:22px 0 4px;color:var(--text)">People</h3>
+    <p>Click a name for their status. Other people's last 3 days sit under them.</p>
+    <div id="userList" style="margin-top:8px"></div>
+  </div>
+  <div class="panel" id="userPeek" hidden>
+    <button type="button" class="btn ghost focusable userPeekBack" id="userPeekBack">Back to people</button>
+    <p class="dashEyebrow">This account</p>
+    <h2 id="userPeekName">User</h2>
+    <p>Finished movies and episodes for this account.</p>
+    <div class="sizePick" id="userPeekRange" role="tablist" aria-label="Time range">
+      <button class="focusable" data-range="week">Week</button>
+      <button class="focusable sel" data-range="month">Month</button>
+      <button class="focusable" data-range="year">Year</button>
+      <button class="focusable" data-range="all">All time</button>
+    </div>
+    <div class="dashHours">
+      <p class="dashPeak" id="userPeekPeak">Hours start as they finish titles.</p>
+      <div class="dashStrip" id="userPeekStrip" role="img" aria-label="When they finish titles, by hour"></div>
+      <div class="dashStripLabels"><span>12a</span><span>6a</span><span>12p</span><span>6p</span></div>
+    </div>
+    <div class="dashStats">
+      <div><b id="userPeekHours">0</b><span>Hours</span></div>
+      <div><b id="userPeekMovies">0</b><span>Movies</span></div>
+      <div><b id="userPeekEpisodes">0</b><span>Episodes</span></div>
+      <div><b id="userPeekShows">0</b><span>Shows</span></div>
+    </div>
+    <div class="dashTrial" id="userPeekTrial"></div>
+    <div class="dashTop" id="userPeekTop"></div>
   </div>
 
   </div>
 
   <div class="setGrid" data-stab="display" hidden>
   <div class="panel"><h2>Display defaults</h2>
-    <p>Cover-art size for poster rows and grids (saved on this device). Every user can also set
-       this — plus hide or reorder their menu — under <b>Preferences</b> in their own sidebar.</p>
+    <p>Cover-art size for posters and thumbnails on this device, including Search, details, and
+       the player episode row. Every user can also set this under Display in their own sidebar.</p>
     <div class="sizePick" id="coverSize">
       <button data-sz="S">Small</button><button data-sz="M">Medium</button><button data-sz="L">Large</button>
     </div>
@@ -5143,35 +5298,32 @@ function ensureGateArt() {
 }
 
 /* ============ gates ============ */
-const COVER_SIZES = { S: '150px', M: '190px', L: '230px' };
+const COVER_SIZES = { S: '176px', M: '220px', L: '244px' };
 // TV layout is 1280 CSS px in a fixed 16:9 (720px tall). Sized against Plex's Android TV
 // app on the same Shield: ~230 physical px posters, ONE row under a tall backdrop band.
 // M=155 CSS × 1.5 scale ≈ Plex's exact poster size.
 const COVER_SIZES_TV = { S: '135px', M: '155px', L: '175px' };
+const COVER_SIZES_PHONE = { S: '118px', M: '140px', L: '158px' };
 function isPosterBrowseView() {
   return ['movies', 'tv', 'kids', 'watchlist', 'library'].includes(S.view);
 }
 function browserBrowseCoverPx(size) {
-  if (document.body.classList.contains('tv') || window.innerWidth <= 600 || !isPosterBrowseView()) return null;
-  // Desktop browse now scrolls a tall grid. Do not shrink covers to force a 2-row window.
-  if (!document.body.classList.contains('mobileShell')) return null;
-  // Narrow desktop windows: the grid stretches its few columns very wide (minmax(--poster,1fr)),
-  // making one tall row that strands a dark band under the smaller backdrop. Use a compact cover so
-  // >=4 columns and a full second row fit under the backdrop. Width-gated + TV/phone excluded above,
-  // so Android is untouched (TV returns null; phones use the <=600 compact path).
-  if (window.innerWidth <= 980) return window.innerHeight <= 820 ? '118px' : '138px';
-  if (window.innerHeight <= 820) return size === 'L' ? '150px' : (size === 'S' ? '128px' : '136px');
-  if (window.innerHeight <= 899) return size === 'L' ? '170px' : (size === 'S' ? '136px' : '150px');
-  return size === 'L' ? '190px' : (size === 'S' ? '144px' : '168px');
+  // Cover size is the device Small/Medium/Large table on every page. Android TV
+  // must never take a desktop shrink-to-fit path (that used to override TV posters).
+  if (document.body.classList.contains('tv')) return null;
+  return null;
 }
 function applyCoverSize() {
   const s = (() => { try { return localStorage.getItem('triboon.cover') || 'M'; } catch { return 'M'; } })();
   const table = document.body.classList.contains('tv') ? COVER_SIZES_TV : COVER_SIZES;
-  // Phones always get compact covers — 190px posters mean ONE giant column on a 375px screen.
+  // Phones always get compact covers — 220px posters mean ONE giant column on a 375px screen.
   // Android WebView can report a CSS width over 600px, so mobileShell counts as phone too.
   const phoneCovers = document.body.classList.contains('mobileShell') || window.innerWidth <= 600;
-  const px = phoneCovers ? '140px' : (browserBrowseCoverPx(s) || table[s] || table.M);
+  const px = phoneCovers
+    ? (COVER_SIZES_PHONE[s] || COVER_SIZES_PHONE.M)
+    : (table[s] || table.M);
   document.documentElement.style.setProperty('--poster', px);
+  try { if (window.TriboonTV && window.TriboonTV.coverSize) window.TriboonTV.coverSize(s); } catch {}
   adaptRowWindows();
   scheduleVirtualGridGeometryRefresh();
   maybeFillBrowseWindow();
@@ -13758,6 +13910,7 @@ function activityPayload(state = 'watching') {
     streamKind: playerStreamKind(p),
     streamLabel: playerStreamLabel(p),
     clientVersion: clientVersionLabel(),
+    poster: durableArtUrl(p.item.poster) || durableArtUrl(p.item.backdrop) || '',
     source: p.name || '',
     fileName: p.fileName || '',
     size: p.size || 0,
@@ -14193,8 +14346,23 @@ function playerSurfaceClick(e) {
   if (e.target.closest('#osd .top,.playerMetaRow,.seekLine,.ctl,#playerEpisodes,#playerAbout,#trackMenu,#playerStats,#pGuide,#vlcPanel,#upNext,#playerLoader,button,a,input,select,textarea')) return false;
   return true;
 }
+function playerOverlayAwayClick(e) {
+  const onAboutCard = !!e.target.closest('.paCard');
+  const onEpisodes = !!e.target.closest('#playerEpisodes');
+  const onChrome = !!e.target.closest('#osd .top,.playerMetaRow,.seekLine,.ctl,#trackMenu,#playerStats,#pGuide,#vlcPanel,#upNext,#playerLoader,button,a,input,select,textarea');
+  if ($('playerAbout').classList.contains('open') && !onAboutCard && !onChrome) {
+    closePlayerAbout();
+    return true;
+  }
+  if ($('playerEpisodes').classList.contains('open') && !onEpisodes && !onChrome) {
+    closePlayerEpisodes();
+    return true;
+  }
+  return false;
+}
 function playerSingleClick(e) {
   showOsd();
+  if (playerOverlayAwayClick(e)) return;
   if (!playerSurfaceClick(e)) return;
   if (liveSplitEnabled()) {
     const pane = e.target === $('liveSplitVideo') ? 1 : 0;
@@ -21788,6 +21956,8 @@ function openPrefs() { // populates the Preferences PAGE (it's a view now, not a
   renderTraktBox();
   renderAppUpdateBox();
   renderYtmBox();
+  const dashOn = document.querySelector('#prefTabs button[data-tab="dash"].on');
+  if (dashOn) loadWatchDashboard();
   requestAnimationFrame(() => {
     if (S.view === 'prefs' && (!document.activeElement || document.activeElement === document.body)) focusContent();
   });
@@ -22036,7 +22206,9 @@ function activateAccountTab(b) {
   syncSectionTabs('prefTabs', b);
   document.querySelectorAll('#prefs [data-ptab]').forEach((g) => { g.hidden = isSrv || g.dataset.ptab !== key; });
   document.querySelectorAll('#prefs .setGrid[data-stab]').forEach((g) => { g.hidden = !isSrv || g.dataset.stab !== key; });
+  if (!(isSrv && key === 'users')) closeUserPeek();
   if (!isSrv && key === 'livetv') renderPrefLiveCats();
+  if (!isSrv && key === 'dash') loadWatchDashboard();
   if (isSrv && !S._srvSettingsLoaded) { S._srvSettingsLoaded = true; refreshSettings(); }
 }
 document.querySelectorAll('#prefTabs button').forEach((b) => {
@@ -22048,6 +22220,175 @@ document.querySelectorAll('#prefTabs button').forEach((b) => {
   if (document.body.classList.contains('tv')) b.addEventListener('mouseenter', run);
 });
 syncSectionTabs('prefTabs');
+S.dashRange = S.dashRange || 'month';
+const DASH_TRIAL = true;
+function dashHourLabel(h) {
+  const n = ((Number(h) % 12) + 12) % 12 || 12;
+  return `${n}${Number(h) < 12 ? 'am' : 'pm'}`;
+}
+function dashHoursText(n) {
+  const x = Number(n) || 0;
+  if (x <= 0) return '0';
+  if (x < 10) return String(Math.round(x * 10) / 10);
+  return String(Math.round(x));
+}
+function dashTopKind(t) {
+  const kind = String((t && t.kind) || '').toLowerCase();
+  if (kind === 'movie') return 'movie';
+  if (kind === 'episode' || kind === 'tv' || kind === 'show') return 'show';
+  const k = String((t && t.key) || '');
+  if (/^tmdb:movie:/i.test(k)) return 'movie';
+  if (/^tmdb:tv:/i.test(k)) return 'show';
+  return 'show';
+}
+function dashTopCountLabel(t) {
+  const n = Number(t && t.count) || 0;
+  if (dashTopKind(t) === 'movie') {
+    if (n <= 1) return 'Watched once';
+    if (n === 2) return 'Watched twice';
+    return `Watched ${n} times`;
+  }
+  return n === 1 ? '1 episode' : `${n} episodes`;
+}
+function renderDashTrial(data, el = $('dashTrial')) {
+  if (!el) return;
+  if (!DASH_TRIAL || !data) {
+    el.hidden = true;
+    el.innerHTML = '';
+    return;
+  }
+  const streak = Number(data.streak) || 0;
+  const weekday = Number(data.weekday) || 0;
+  const weekend = Number(data.weekend) || 0;
+  const recent = Array.isArray(data.recent) ? data.recent.slice(0, 10) : [];
+  const recentHtml = recent.length
+    ? `<h3 class="dashRecentHead">Just finished</h3><div class="dashRecent">${recent.map((t) => {
+        const art = artBackgroundHtml(t.poster, artFallback(t.key || t.title, 8));
+        return `<button type="button" class="dashRecentItem focusable" data-dash-key="${esc(t.key || '')}">
+          <div class="dashRecentArt" style="background-image:${art}"></div>
+          <span class="dashRecentTitle">${esc(t.title || t.key)}</span>
+        </button>`;
+      }).join('')}</div>`
+    : '';
+  el.innerHTML = `<div class="dashTrialStats">
+      <div><b>${streak}</b><span>Day streak</span></div>
+      <div><b>${weekday}</b><span>Weekdays</span></div>
+      <div><b>${weekend}</b><span>Weekend</span></div>
+    </div>${recentHtml}`;
+  el.hidden = false;
+  el.querySelectorAll('[data-dash-key]').forEach((b) => {
+    b.addEventListener('click', () => openDashRecent(b.dataset.dashKey, b.querySelector('.dashRecentTitle')?.textContent));
+  });
+}
+function openDashRecent(key, title) {
+  const movie = /^tmdb:movie:(\d+)$/i.exec(key || '');
+  const show = /^tmdb:tv:(\d+)/i.exec(key || '');
+  if (movie) return openDetail({ type: 'movie', tmdbId: +movie[1], title, key });
+  if (show) return openDetail({ type: 'tv', tmdbId: +show[1], title, key: `tmdb:tv:${show[1]}` });
+}
+function paintDashTop(data, box) {
+  if (!box) return;
+  if (!data.top || !data.top.length) {
+    box.innerHTML = '<p class="dashEmpty">Finish a movie or episode and it shows up here.</p>';
+    return;
+  }
+  box.innerHTML = `<h3>Most completed</h3><p class="dashTopHint">Shows count episodes. Movies count how many times you watched them through.</p><ol class="dashTopList">${data.top.slice(0, 10).map((t, i) =>
+    `<li><span class="dashRank">${i + 1}</span><span class="dashTitle">${esc(t.title || t.key)}</span><span class="dashCount">${esc(dashTopCountLabel(t))}</span></li>`).join('')}</ol>`;
+}
+function paintDashStrip(data, ids) {
+  const hours = Array.isArray(data.byHour) && data.byHour.length === 24 ? data.byHour : Array(24).fill(0);
+  const max = Math.max(1, ...hours);
+  if ($(ids.strip)) $(ids.strip).innerHTML = hours.map((n) => `<i style="--p:${n / max}"></i>`).join('');
+  const peak = $(ids.peak);
+  if (!peak) return;
+  if (data.ledgerEmpty) peak.textContent = 'Hours start as they finish titles.';
+  else if (data.peakHour == null) {
+    peak.textContent = data.range === 'week' ? 'No finishes this week.'
+      : data.range === 'month' ? 'No finishes this month.'
+      : data.range === 'year' ? 'No finishes this year.'
+      : 'Hours start as they finish titles.';
+  } else peak.textContent = `Most often around ${dashHourLabel(data.peakHour)}`;
+}
+function renderWatchDashboard(data) {
+  if (!data) return;
+  if ($('dashHoursVal')) $('dashHoursVal').textContent = dashHoursText(data.hours);
+  if ($('dashMoviesVal')) $('dashMoviesVal').textContent = String(data.movies || 0);
+  if ($('dashEpisodesVal')) $('dashEpisodesVal').textContent = String(data.episodes || 0);
+  if ($('dashShowsVal')) $('dashShowsVal').textContent = String(data.shows || 0);
+  paintDashStrip(data, { strip: 'dashStrip', peak: 'dashPeak' });
+  paintDashTop(data, $('dashTop'));
+  renderDashTrial(data);
+}
+async function loadWatchDashboard() {
+  const range = S.dashRange || 'month';
+  syncChoiceButtons('#dashRange button', (b) => b.dataset.range === range);
+  try {
+    renderWatchDashboard(await api('/api/watch-stats?range=' + encodeURIComponent(range)));
+  } catch (e) {
+    if ($('dashPeak')) $('dashPeak').textContent = 'Unable to load dashboard.';
+  }
+}
+document.querySelectorAll('#dashRange button').forEach((b) => b.addEventListener('click', () => {
+  S.dashRange = b.dataset.range || 'month';
+  syncChoiceButtons('#dashRange button', (x) => x === b);
+  loadWatchDashboard();
+}));
+function canPeekUsers() { return !!(S.user && S.user.role === 'admin'); }
+function renderUserPeek(data, name) {
+  if (!data) return;
+  if ($('userPeekName')) $('userPeekName').textContent = name || 'User';
+  if ($('userPeekHours')) $('userPeekHours').textContent = dashHoursText(data.hours);
+  if ($('userPeekMovies')) $('userPeekMovies').textContent = String(data.movies || 0);
+  if ($('userPeekEpisodes')) $('userPeekEpisodes').textContent = String(data.episodes || 0);
+  if ($('userPeekShows')) $('userPeekShows').textContent = String(data.shows || 0);
+  paintDashStrip(data, { strip: 'userPeekStrip', peak: 'userPeekPeak' });
+  paintDashTop(data, $('userPeekTop'));
+  renderDashTrial(data, $('userPeekTrial'));
+}
+function closeUserPeek() {
+  S.userPeekId = null;
+  S.userPeekName = '';
+  if ($('userPeek')) $('userPeek').hidden = true;
+  if ($('userPeopleWrap')) $('userPeopleWrap').hidden = false;
+}
+function openUserPeek(id, name) {
+  if (!canPeekUsers() || !id) return;
+  S.userPeekId = String(id);
+  S.userPeekName = name || 'User';
+  S.userPeekRange = S.userPeekRange || 'month';
+  if ($('userPeopleWrap')) $('userPeopleWrap').hidden = true;
+  if ($('userPeek')) $('userPeek').hidden = false;
+  if ($('userPeekName')) $('userPeekName').textContent = S.userPeekName;
+  syncChoiceButtons('#userPeekRange button', (b) => b.dataset.range === S.userPeekRange);
+  loadUserPeek();
+}
+async function loadUserPeek() {
+  const id = S.userPeekId;
+  if (!id) return;
+  try {
+    const data = await api('/api/watch-stats?range=' + encodeURIComponent(S.userPeekRange || 'month')
+      + '&user=' + encodeURIComponent(id));
+    if (S.userPeekId !== id) return;
+    renderUserPeek(data, S.userPeekName);
+  } catch (e) {
+    if ($('userPeekPeak')) $('userPeekPeak').textContent = 'Unable to load this account.';
+  }
+}
+function bindUserPeekButtons(root) {
+  if (!canPeekUsers() || !root) return;
+  root.querySelectorAll('[data-peek]').forEach((b) => {
+    b.addEventListener('click', (e) => {
+      e.preventDefault();
+      openUserPeek(b.dataset.peek, b.dataset.uname || b.textContent.trim());
+    });
+  });
+}
+if ($('userPeekBack')) $('userPeekBack').addEventListener('click', closeUserPeek);
+document.querySelectorAll('#userPeekRange button').forEach((b) => b.addEventListener('click', () => {
+  S.userPeekRange = b.dataset.range || 'month';
+  syncChoiceButtons('#userPeekRange button', (x) => x === b);
+  loadUserPeek();
+}));
 // Admin jumps here from setup / Trakt link — open the account page on the first Server-settings tab.
 function openServerSettings() {
   switchView('prefs');
@@ -23227,24 +23568,11 @@ function activityDeviceLabel(s = {}) {
   const cv = String(s.clientVersion || activityClient(s) || '');
   return cv.replace(/\s*\(\d+\)\s*$/, '').replace(/\s+\d+(?:\.\d+)+$/, '').trim() || 'Device';
 }
-const DEVICE_ICON = {
-  tv: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4.5" width="19" height="13" rx="1.5"/><path d="M8 21h8M12 17.5V21"/></svg>',
-  mobile: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6.5" y="2.5" width="11" height="19" rx="2"/><path d="M10.5 18.5h3"/></svg>',
-  desktop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="12" rx="1.5"/><path d="M8.5 20h7M12 16v4"/></svg>',
-};
 function activityDeviceKind(s = {}) {
   const v = `${s.deviceName || ''} ${s.clientVersion || ''} ${s.device || ''}`.toLowerCase();
   if (/android tv|shield|fire\s?tv|chromecast|google tv|bravia|onn|smart ?tv/.test(v)) return 'tv';
   if (/android (app|phone)|iphone|ipad|mobile|\bphone\b/.test(v)) return 'mobile';
   return 'desktop';
-}
-function activityDeviceCell(s = {}) {
-  const kind = activityDeviceKind(s);
-  const label = activityDeviceLabel(s);
-  const sub = String(s.clientVersion || '');
-  const subLine = (sub && sub !== label) ? `<small>${esc(sub)}</small>` : '';
-  return `<div class="activityClient"><span class="devIcon">${DEVICE_ICON[kind]}</span>
-      <div class="devText"><b>${esc(label)}</b>${subLine}</div></div>`;
 }
 function renderActivitySummary(sessions = [], history = [], online = []) {
   const box = $('activitySummary'); if (!box) return;
@@ -23254,26 +23582,66 @@ function renderActivitySummary(sessions = [], history = [], online = []) {
   parts.push(`<b>${online.length}</b> online`);
   box.innerHTML = parts.join('<span class="sep">·</span>');
 }
-function activityRowHtml(s = {}, active = false) {
+function activityGroupKey(s = {}) {
+  const k = String(s.key || '');
+  const ep = /^tmdb:tv:(\d+):s\d+e\d+$/i.exec(k);
+  if (ep) return `tmdb:tv:${ep[1]}`;
+  if (/:s\d+e\d+$/i.test(k)) return k.replace(/:s\d+e\d+$/i, '');
+  return k || String(s.title || '');
+}
+function activityCoverBtn(t = {}) {
+  const art = artBackgroundHtml(t.poster, artFallback(t.key || t.title, 8));
+  return `<button type="button" class="dashRecentItem focusable" data-dash-key="${esc(t.key || '')}">
+    <div class="dashRecentArt" style="background-image:${art}"></div>
+    <span class="dashRecentTitle">${esc(t.title || t.key || '')}</span>
+  </button>`;
+}
+function bindActivityCovers(root) {
+  if (!root) return;
+  root.querySelectorAll('[data-dash-key]').forEach((b) => {
+    b.addEventListener('click', () => openDashRecent(b.dataset.dashKey, b.querySelector('.dashRecentTitle')?.textContent || b.querySelector('b')?.textContent));
+  });
+}
+function activityRecentByUser(history, limit = 10) {
+  const order = [];
+  const buckets = new Map();
+  for (const s of history || []) {
+    if (!s) continue;
+    const uid = String(s.userId || s.userName || '');
+    if (!uid) continue;
+    if (!buckets.has(uid)) {
+      buckets.set(uid, { userId: s.userId, userName: s.userName || 'User', seen: new Set(), titles: [] });
+      order.push(uid);
+    }
+    const b = buckets.get(uid);
+    const gk = activityGroupKey(s);
+    if (!gk || b.seen.has(gk) || b.titles.length >= limit) continue;
+    b.seen.add(gk);
+    b.titles.push({ key: gk, title: s.title || gk, poster: s.poster || '' });
+  }
+  return order.map((id) => {
+    const row = buckets.get(id);
+    return { userId: row.userId, userName: row.userName, titles: row.titles };
+  });
+}
+function activityNowHtml(s = {}) {
   const pct = Math.max(0, Math.min(100, +s.percent || 0));
   const pos = s.duration ? `${fmt(s.position || 0)} / ${fmt(s.duration || 0)}` : (s.position ? fmt(s.position) : 'Live');
   const streamKind = activityStreamKind(s);
   const streamLabel = activityStreamLabel(s);
-  const streamBadge = (active && streamLabel) ? `<span class="activityStream ${esc(streamKind)}">${esc(streamLabel)}</span>` : '';
-  const initial = esc((String(s.userName || 'U').trim()[0] || 'U'));
-  const detail = active ? activityDetail(s) : (s.subline || s.fileName || activityTypeLabel(s));
-  const bar = active ? `<div class="activityBar" style="--pct:${pct}%"><span></span></div>` : '';
-  const metaTop = active ? pos : activityTypeLabel(s);
-  const who = esc([s.userName, detail].filter(Boolean).join(' · '));
-  const loc = s.location ? ` <span class="activityLoc">· 📍 ${esc(s.location)}</span>` : '';
-  return `<div class="activityRow${active ? ' isActive' : ' isHistory'}">
-    <div class="activityAvatar">${initial}<span class="activityDot"></span></div>
-    <div class="activityWhat">
+  const streamBadge = streamLabel ? `<span class="activityStream ${esc(streamKind)}">${esc(streamLabel)}</span>` : '';
+  const who = [s.userName, activityDeviceLabel(s)].filter(Boolean).join(' · ');
+  const loc = s.location ? ` · ${esc(s.location)}` : '';
+  const art = artBackgroundHtml(s.poster, artFallback(s.key || s.title, 8));
+  return `<button type="button" class="activityNowItem focusable" data-dash-key="${esc(activityGroupKey(s))}">
+    <div class="activityNowArt" style="background-image:${art}"></div>
+    <div class="activityNowBody">
       <div class="activityTitleLine"><b>${esc(activityTitle(s))}</b>${streamBadge}</div>
-      <small>${who}${loc}</small>${bar}</div>
-    ${activityDeviceCell(s)}
-    <div class="arMeta"><b>${esc(metaTop)}</b><small>${esc(activityTimeLabel(s, active))}</small></div>
-  </div>`;
+      <small>${esc(who)}${loc}</small>
+      <div class="activityBar" style="--pct:${pct}%"><span></span></div>
+      <small>${esc(pos)} · ${esc(activityTimeLabel(s, true))}</small>
+    </div>
+  </button>`;
 }
 function connRowHtml(p = {}) {
   const size = Math.max(0, +p.size || 0);
@@ -23307,59 +23675,52 @@ function renderActivity(payload = {}) {
   const retentionDays = Number(payload.retentionDays || 3) || 3;
   S.activityPayload = Array.isArray(payload) ? { sessions, history, retentionDays } : payload;
   const list = $('activityList'); if (!list) return;
-  const hist = $('activityHistory');
   renderActivitySummary(sessions, history, online);
   renderActivityConnections(payload.connections);
   if (!sessions.length) {
     list.innerHTML = '<div class="hint">No one is watching right now.</div>';
     $('activityLiveStatus').textContent = 'Clear';
   } else {
-    list.innerHTML = sessions.map((s) => activityRowHtml(s, true)).join('');
+    list.innerHTML = sessions.map((s) => activityNowHtml(s)).join('');
     $('activityLiveStatus').textContent = `${sessions.length} active`;
+    bindActivityCovers(list);
   }
-  S.activityHistPage = 0; // fresh payload — always start at the newest page
   renderActivityHistory();
+  paintUserRecentCovers();
   $('activityStatus').textContent = `Last checked ${new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
 }
-// The "Last 3 days" history can be long; page it so the admin never scrolls a wall of rows.
-// Paginated client-side from the cached payload — Prev/Next re-render without a network round-trip.
-const ACTIVITY_HISTORY_PAGE = 10;
 function renderActivityHistory() {
   const hist = $('activityHistory'); if (!hist) return;
   const p = S.activityPayload || {};
   const all = Array.isArray(p.history) ? p.history : [];
   const retentionDays = Number(p.retentionDays || 3) || 3;
-  const pager = $('activityPager');
-  if (!all.length) {
+  const groups = activityRecentByUser(all, 10);
+  if (!groups.length) {
     hist.innerHTML = '<div class="hint">No recent playback.</div>';
-    if (pager) pager.hidden = true;
     $('activityHistoryStatus').textContent = `${retentionDays}-day window`;
     return;
   }
-  const pages = Math.ceil(all.length / ACTIVITY_HISTORY_PAGE);
-  if (!Number.isInteger(S.activityHistPage) || S.activityHistPage < 0) S.activityHistPage = 0;
-  if (S.activityHistPage > pages - 1) S.activityHistPage = pages - 1;
-  const start = S.activityHistPage * ACTIVITY_HISTORY_PAGE;
-  const slice = all.slice(start, start + ACTIVITY_HISTORY_PAGE);
-  hist.innerHTML = slice.map((s) => activityRowHtml(s, false)).join('');
-  $('activityHistoryStatus').textContent = `${all.length} in ${retentionDays}-day window`;
-  if (!pager) return;
-  if (pages <= 1) { pager.hidden = true; return; }
-  pager.hidden = false;
-  $('activityPrev').disabled = S.activityHistPage <= 0;
-  $('activityNext').disabled = S.activityHistPage >= pages - 1;
-  $('activityPagerInfo').textContent = `Page ${S.activityHistPage + 1} of ${pages} · ${start + 1}–${start + slice.length}`;
+  hist.innerHTML = groups.map((g) =>
+    `<div class="activityUserBlock"><h4>${canPeekUsers() && g.userId
+      ? `<button type="button" class="userNameBtn focusable" data-peek="${esc(g.userId)}" data-uname="${esc(g.userName)}">${esc(g.userName)}</button>`
+      : esc(g.userName)}</h4><div class="dashRecent">${g.titles.map(activityCoverBtn).join('')}</div></div>`
+  ).join('');
+  $('activityHistoryStatus').textContent = `${groups.length} user${groups.length === 1 ? '' : 's'} · ${retentionDays}-day window`;
+  bindActivityCovers(hist);
+  bindUserPeekButtons(hist);
 }
-function activityHistGoto(delta) {
-  const cur = Number.isInteger(S.activityHistPage) ? S.activityHistPage : 0;
-  S.activityHistPage = Math.max(0, cur + delta);
-  renderActivityHistory();
-  // Keep D-pad focus sensible: if the button we're on just got disabled (hit an end), hop to the
-  // other one so focus never lands on a dead control (the settings D-pad tracks activeElement and
-  // skips disabled controls — see formCtls).
-  const prev = $('activityPrev'), next = $('activityNext');
-  if (delta < 0 && prev && prev.disabled && next && !next.disabled) next.focus({ preventScroll: true });
-  else if (delta > 0 && next && next.disabled && prev && !prev.disabled) prev.focus({ preventScroll: true });
+function paintUserRecentCovers() {
+  const groups = activityRecentByUser((S.activityPayload && S.activityPayload.history) || [], 10);
+  const byId = new Map(groups.map((g) => [String(g.userId || ''), g]));
+  document.querySelectorAll('[data-user-recent]').forEach((el) => {
+    const g = byId.get(String(el.dataset.userRecent || ''));
+    if (!g || !g.titles.length) {
+      el.innerHTML = '';
+      return;
+    }
+    el.innerHTML = g.titles.map(activityCoverBtn).join('');
+    bindActivityCovers(el);
+  });
 }
 async function refreshActivity() {
   const box = $('activityList'); if (!box) return;
@@ -23580,19 +23941,28 @@ async function refreshSettings() {
       `<label class="catRow"><input type="checkbox" data-uid="${esc(u.id)}" ${abAllowed.has(u.id) ? 'checked' : ''}>
         <span class="cgN">${esc(u.name)}</span></label>`).join('')
       || '<div class="hint">no other users yet — Audiobooks is visible to everyone</div>';
-    $('userList').innerHTML = users.map((u) =>
-      `<div class="kv"><span>${esc(u.name)} ${u.role === 'admin' ? '👑' : ''}</span>
-       <span style="display:flex;gap:8px;align-items:center">
+    const mine = S.user && String(S.user.id);
+    $('userList').innerHTML = users.map((u) => {
+      const isSelf = mine && String(u.id) === mine;
+      return `<div class="userCard">
+       <div class="userCardHead">
+       <button type="button" class="userNameBtn focusable" data-peek="${esc(u.id)}" data-uname="${esc(u.name)}">${esc(u.name)}${u.role === 'admin' ? ' 👑' : ''}</button>
+       <div class="userCardTools">
          <select data-ucap="${esc(u.id)}" style="padding:6px 28px 6px 10px;font-size:12px">
          ${[['4', '4K allowed'], ['3', '1080p cap'], ['2', '720p cap']].map(([v, l]) =>
            `<option value="${v}" ${String(u.policy.maxResolutionRank) === v ? 'selected' : ''}>${l}</option>`).join('')}
          </select>${u.role === 'admin' ? '' :
-         `<label class="catRow" style="margin:0;gap:5px" title="Allow this user to use server transcoding (off = direct/remux only)"><input type="checkbox" data-utr="${esc(u.id)}" ${u.policy.allowTranscode === false ? '' : 'checked'}><span class="cgN" style="font-size:11px">Transcode</span></label>`}${u.role === 'admin' ? '' :
+         `<label class="catRow" title="Allow this user to use server transcoding (off = direct/remux only)"><input type="checkbox" data-utr="${esc(u.id)}" ${u.policy.allowTranscode === false ? '' : 'checked'}><span class="cgN">Transcode</span></label>`}${u.role === 'admin' ? '' :
          `<button class="iconBtn" data-upw="${esc(u.id)}" data-uname="${esc(u.name)}" title="Reset password">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></button>
           <button class="iconBtn" data-udel="${esc(u.id)}" data-uname="${esc(u.name)}" title="Delete user">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m-9 0 1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/></svg></button>`}
-       </span></div>`).join('');
+       </div></div>
+       ${isSelf ? '' : `<div class="userRecent" data-user-recent="${esc(u.id)}"></div>`}
+      </div>`;
+    }).join('');
+    paintUserRecentCovers();
+    bindUserPeekButtons($('userList'));
     document.querySelectorAll('[data-ucap]').forEach((sel) => sel.addEventListener('change', async () => {
       try {
         await api(`/api/users/${sel.dataset.ucap}`, { method: 'PATCH', body: { policy: { maxResolutionRank: parseInt(sel.value, 10) } } });
@@ -24019,8 +24389,6 @@ function wireSectionRailDpad(rootId, tabsId, panelAttr) {
 wireSectionRailDpad('prefs', 'prefTabs', 'data-ptab');
 wireSectionRailDpad('settings', 'setTabs', 'data-stab');
 $('activityRefresh').addEventListener('click', refreshActivity);
-$('activityPrev').addEventListener('click', () => activityHistGoto(-1));
-$('activityNext').addEventListener('click', () => activityHistGoto(1));
 $('apkUpdate').addEventListener('click', () => openApkUpdate()); // one universal APK (triboon.apk)
 $('secPwSave').addEventListener('click', async () => {
   const oldPassword = $('secPwCurrent').value;

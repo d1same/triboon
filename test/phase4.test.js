@@ -903,7 +903,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Calendar should filter TV episodes and movie releases to the next seven days');
   assert.match(ui, /const activeDates = weekDates\.filter\(\(date\) => \(byDay\[date\] \|\| \[\]\)\.length\);[\s\S]+if \(!activeDates\.length\)[\s\S]+Nothing scheduled in the next 7 days[\s\S]+for \(const date of activeDates\)/,
     'Calendar should skip empty dates while keeping a clean weekly empty state');
-  assert.match(ui, /\.calItems\{display:flex;gap:16px;overflow-x:auto[\s\S]+\.calItem\{position:relative;flex:0 0 132px;display:flex;flex-direction:column[\s\S]+\.calItem \.pp\{width:100%;aspect-ratio:2\/3/,
+  assert.match(ui, /\.calItems\{display:flex;gap:16px;overflow-x:auto[\s\S]+\.calItem\{position:relative;flex:0 0 calc\(var\(--poster\) \* 0\.6\);display:flex;flex-direction:column[\s\S]+\.calItem \.pp\{width:100%;aspect-ratio:2\/3/,
     'Calendar should use poster-first cards instead of wide text agenda rows');
   assert.ok(ui.indexOf("actionMenuButton('info', 'info', 'Details')") < ui.indexOf("actionMenuButton('resume', 'play'"),
     'the long-press menu should default to Details, with Resume as a deliberate second action');
@@ -1022,13 +1022,13 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   assert.match(ui, /body\.tv #rows,body\.tv #discoverRows\{scroll-snap-type:none\}[\s\S]+function sizeRowsWindow\(root\) \{[\s\S]+if \(!document\.body\.classList\.contains\('tv'\)\) \{ root\.style\.maxHeight = ''; return; \}/,
     'Android TV keeps the one-row Plex window; desktop free-scroll never runs on body.tv');
   assert.match(ui, /function browserBrowseCoverPx\(size\) \{[\s\S]+document\.body\.classList\.contains\('tv'\)[\s\S]+return null;/,
-    'Android TV cover size is never overridden by the desktop browse helper');
+    'Android TV cover size is never overridden by a desktop browse helper');
   assert.match(ui, /body\.shortBrowseBd:not\(\.tv\) #bdInfo[\s\S]+-webkit-line-clamp:1[\s\S]+@media \(max-height:820px\)[\s\S]+body\.shortBrowseBd:not\(\.tv\) #bdInfo \.bdiC,[\s\S]+display:none/,
     'browser poster browse pages should compact the focused-title band without touching TV');
-  assert.match(ui, /function browserBrowseCoverPx\(size\) \{[\s\S]+document\.body\.classList\.contains\('tv'\)[\s\S]+window\.innerHeight <= 820[\s\S]+return size === 'L' \? '190px'[\s\S]+const phoneCovers = document\.body\.classList\.contains\('mobileShell'\) \|\| window\.innerWidth <= 600;[\s\S]+const px = phoneCovers \? '140px' : \(browserBrowseCoverPx\(s\) \|\| table\[s\] \|\| table\.M\);[\s\S]+const shortBrowserBrowse = document\.body\.classList\.contains\('shortBrowseBd'\) && !document\.body\.classList\.contains\('tv'\);[\s\S]+shortBrowserBrowse \? \(h <= 820 \? 128/,
-    'desktop/tablet browse pages should use compact browser poster sizing and a compact row reserve');
-  assert.match(ui, /function browserBrowseCoverPx[\s\S]+window\.innerWidth <= 980\) return window\.innerHeight <= 820 \? '118px' : '138px'/,
-    'narrow browser windows (<=980, TV/phone excluded above) use compact browse covers so >=4 columns and a full second row fit under the smaller backdrop — kills the dark band that stranded posters at the bottom');
+  assert.match(ui, /const phoneCovers = document\.body\.classList\.contains\('mobileShell'\) \|\| window\.innerWidth <= 600;[\s\S]+const px = phoneCovers\s*\? \(COVER_SIZES_PHONE\[s\] \|\| COVER_SIZES_PHONE\.M\)\s*: \(table\[s\] \|\| table\.M\);[\s\S]+const shortBrowserBrowse = document\.body\.classList\.contains\('shortBrowseBd'\) && !document\.body\.classList\.contains\('tv'\);[\s\S]+shortBrowserBrowse \? \(h <= 820 \? 128/,
+    'Home, Movies, TV, Search, and details use the same Small/Medium/Large table; phones keep their compact table');
+  assert.match(ui, /const COVER_SIZES_PHONE = \{ S: '118px', M: '140px', L: '158px' \}/,
+    'phone Small/Medium/Large stay compact so two posters still fit a narrow screen');
   assert.match(ui, /S\.browseLoading = false;\s*maybeFillBrowseWindow\(\);/,
     'runBrowse must trigger the fill-the-window check after every page load');
   assert.match(ui, /function maybeFillBrowseWindow\(\)[\s\S]+document\.body\.classList\.contains\('tv'\)\) return;[\s\S]+g\.scrollHeight > g\.clientHeight \+ 8\) return;[\s\S]+S\.browsePage \|\| 0\) >= 8\) return;[\s\S]+runBrowse\(false\)[\s\S]+loadMoreLocalLibraryPage\(false\)[\s\S]+runLibrary\(false\)/,
@@ -3042,23 +3042,22 @@ test('Android native player: direct source and native chrome stay out of the web
     'Playback stats should separate visible player buffer from Triboon server read-ahead');
   assert.ok(ui.includes('data-stab="activity"') && ui.includes("api('/api/activity')") && ui.includes('id="activityRefresh"')
     && ui.includes('id="activityHistory"') && ui.includes('id="activitySummary"')
-    && ui.includes('>Last 3 days<') && ui.includes('id="activityPager"'),
-    'admin Settings should expose a compact focusable Activity panel backed by the activity API');
+    && ui.includes('>Recently watched<') && !ui.includes('id="activityPager"'),
+    'admin Settings should expose Activity with now-watching covers and per-user recent titles, no pager');
   assert.ok(ui.includes('function playerStreamKind(') && ui.includes('streamKind: playerStreamKind(p)')
     && ui.includes('streamLabel: playerStreamLabel(p)') && ui.includes('clientVersion: clientVersionLabel()')
-    && ui.includes('function activityStreamLabel(') && ui.includes('function activityRowHtml(')
-    && ui.includes('activityStream'),
-    'Activity should show stream treatment, app version, active sessions, and a 3-day history');
-  // The 3-day history is paged (10/page) so the admin never scrolls a wall of rows — client-side
-  // over the cached payload, Prev/Next re-render with no network round-trip, focusable for D-pad.
-  assert.ok(ui.includes('id="activityPrev"') && ui.includes('id="activityNext"') && ui.includes('id="activityPagerInfo"')
-    && ui.includes('const ACTIVITY_HISTORY_PAGE = 10') && ui.includes('function renderActivityHistory(')
-    && ui.includes('function activityHistGoto('),
-    'Activity history should paginate (10/page) with focusable Prev/Next that re-render from the cached payload');
-  assert.match(ui, /function renderActivityHistory\(\)[\s\S]+Math\.ceil\(all\.length \/ ACTIVITY_HISTORY_PAGE\)[\s\S]+all\.slice\(start, start \+ ACTIVITY_HISTORY_PAGE\)[\s\S]+if \(pages <= 1\) \{ pager\.hidden = true;/,
-    'history pager hides itself when a single page covers everything and slices the current page from the cached history');
-  assert.match(ui, /\$\('activityPrev'\)\.addEventListener\('click', \(\) => activityHistGoto\(-1\)\);\s*\$\('activityNext'\)\.addEventListener\('click', \(\) => activityHistGoto\(1\)\)/,
-    'history Prev/Next buttons are wired to the client-side pager');
+    && ui.includes('function activityStreamLabel(') && ui.includes('function activityNowHtml(')
+    && ui.includes('activityStream') && ui.includes('poster: durableArtUrl(p.item.poster)'),
+    'Activity should show stream treatment, cover art, app version, and active sessions');
+  assert.ok(ui.includes('function activityRecentByUser(') && ui.includes('function paintUserRecentCovers(')
+    && ui.includes('data-user-recent=') && ui.includes('activityNowItem')
+    && ui.includes('const isSelf = mine && String(u.id) === mine')
+    && ui.includes('class="userRecent"')
+    && ui.includes('.userRecent .dashRecentTitle')
+    && !ui.includes('const ACTIVITY_HISTORY_PAGE') && !ui.includes('function activityHistGoto('),
+    'Users tab skips the signed-in admin’s own covers and shows full titles on other people’s posters');
+  assert.match(ui, /function renderActivityHistory\(\)[\s\S]+activityRecentByUser\(all, 10\)[\s\S]+activityUserBlock[\s\S]+activityCoverBtn/,
+    'recently watched groups unique titles per user into a cover row');
   // Activity shows the actual device (SHIELD, onn, Chrome…), reported by the client and parsed on the row.
   assert.ok(ui.includes('function deviceFriendlyName(') && ui.includes('deviceName: deviceFriendlyName()')
     && ui.includes('function activityDeviceLabel(') && ui.includes('function activityDeviceKind('),
@@ -3218,18 +3217,29 @@ test('Android native player: direct source and native chrome stay out of the web
     'theme picker should use restrained palette strips instead of illustrative color-picking icons');
   assert.match(ui, /\.themeChoice:hover,\.themeChoice\.focus,\.themeChoice:focus,\.themeChoice:focus-visible\{[\s\S]+outline:none/,
     'theme picker cards should react to native focus as well as D-pad focus classes');
-  assert.match(ui, /#setTabs button,#prefTabs button\{\s*box-shadow:none!important\}[\s\S]+#setTabs button:hover,#prefTabs button:hover,[\s\S]+#setTabs button:focus-visible,#prefTabs button:focus-visible\{[\s\S]+background:var\(--btnHover\)!important;color:var\(--btnFocusText\)!important[\s\S]+#setTabs button\.on\.focus,#prefTabs button\.on\.focus,[\s\S]+#setTabs button\.on:focus-visible,#prefTabs button\.on:focus-visible\{[\s\S]+background:var\(--btnSelectedHover\)!important;color:var\(--text\)!important/,
-    'Settings and Preferences side-tab menus should visibly highlight hover, keyboard focus, and D-pad focus');
-  assert.match(ui, /#setTabs button,#prefTabs button\{[\s\S]+background:var\(--btn\);border:0;/,
-    'Settings and Preferences side-tab menus should be borderless');
-  assert.match(ui, /#settings \.setGrid button:not\(\.themeChoice\):hover,#prefs \.setGrid button:not\(\.themeChoice\):hover,[\s\S]+#settings \.setGrid button:not\(\.themeChoice\):focus-visible,#prefs \.setGrid button:not\(\.themeChoice\):focus-visible\{[\s\S]+background:var\(--btnHover\)!important;color:var\(--btnFocusText\)!important/,
-    'Settings and Preferences content buttons should visibly fill on hover, keyboard focus, and D-pad focus');
+  assert.match(ui, /#setTabs button,#prefTabs button\{\s*background:transparent!important;box-shadow:none!important[\s\S]+#setTabs button:hover,#prefTabs button:hover,[\s\S]+#setTabs button:focus-visible,#prefTabs button:focus-visible\{[\s\S]+background:rgba\(255,255,255,\.07\)!important;color:var\(--text\)!important[\s\S]+#setTabs button\.on\.focus,#prefTabs button\.on\.focus,[\s\S]+#setTabs button\.on:focus-visible,#prefTabs button\.on:focus-visible\{[\s\S]+background:rgba\(255,255,255,\.08\)!important;color:var\(--text\)!important/,
+    'Settings and Preferences side tabs stay a text list on hover, keyboard focus, and D-pad focus');
+  assert.match(ui, /#setTabs button,#prefTabs button\{[\s\S]+background:transparent;border:0;/,
+    'Settings and Preferences side tabs are a borderless text list, not capsules');
+  assert.match(ui, /#settings \.setGrid button:not\(\.themeChoice\):not\(\.dashRecentItem\):not\(\.activityNowItem\):not\(\.userNameBtn\):hover,#prefs \.setGrid button:not\(\.themeChoice\):not\(\.dashRecentItem\):not\(\.activityNowItem\):not\(\.userNameBtn\):hover,[\s\S]+#settings \.setGrid button:not\(\.themeChoice\):not\(\.dashRecentItem\):not\(\.activityNowItem\):not\(\.userNameBtn\):focus-visible,#prefs \.setGrid button:not\(\.themeChoice\):not\(\.dashRecentItem\):not\(\.activityNowItem\):not\(\.userNameBtn\):focus-visible\{[\s\S]+background:var\(--btnHover\)!important;color:var\(--btnFocusText\)!important/,
+    'Settings content buttons fill on hover; Dashboard, Activity, and user-name posters keep a quiet hover');
+  assert.match(ui, /\.dashRecentItem\.focusable::before[\s\S]+content:none!important;display:none!important;opacity:0!important/,
+    'Just finished posters must not draw the full-tile gold focus frame; the cover ring is the cue');
+  assert.match(ui, /function openUserPeek\(id, name\) \{[\s\S]+\/api\/watch-stats\?range=[\s\S]+&user=[\s\S]+function bindUserPeekButtons\(root\)/,
+    'admin name clicks should open that account’s real watch-stats page, not the demo dashboard');
   assert.match(ui, /function syncSectionTabs\(tabsId, activeButton = null\) \{[\s\S]+setAttribute\('role', 'tablist'\)[\s\S]+setAttribute\('role', 'tab'\)[\s\S]+setAttribute\('aria-selected', on \? 'true' : 'false'\)[\s\S]+\}/,
     'Settings and Preferences side tabs should initialize selected state for D-pad and accessibility');
   // Server settings are folded into the Preferences page as one menu (Preferences group · divider ·
   // Server settings group; Appearance dropped). One handler drives both tab kinds, on click/focus/hover.
   assert.match(ui, /function mergeServerSettingsIntoPrefs\(\) \{[\s\S]+data-tab="display"[\s\S]+data-stab="display"[\s\S]+prefTabDivider[\s\S]+b\.dataset\.srv = b\.dataset\.tab[\s\S]+prefs\.appendChild\(p\)/,
     'Server-settings tabs + panels should be folded into the Preferences page (Appearance removed, divider added)');
+  assert.ok(ui.includes('>Libraries</span>') && !ui.includes('Libraries &amp; Rules')
+    && ui.includes('>TV sources</span>') && ui.includes('id="prefTabLive"') && ui.includes('>Live TV</span>'),
+    'admin house IPTV is TV sources; personal Live TV stays a separate tab; scoring left Libraries');
+  assert.match(ui, /data-stab="catalog" hidden>[\s\S]+<h2>Scoring<\/h2>[\s\S]+id="scSave"/,
+    'release scoring lives with Catalog (how titles are picked), not Libraries');
+  assert.match(ui, /data-ptab="profiles" hidden>[\s\S]+id="apkUpdate"[\s\S]+data-ptab="connect"/,
+    'Update app sits with Profile (this device), not Connections');
   assert.match(ui, /function activateAccountTab\(b\) \{[\s\S]+const isSrv = !!b\.dataset\.srv;[\s\S]+syncSectionTabs\('prefTabs', b\)[\s\S]+#prefs \[data-ptab\][\s\S]+#prefs \.setGrid\[data-stab\][\s\S]+refreshSettings\(\)/,
     'the unified account-tab handler shows the right pref/server panel and lazy-loads server data');
   assert.match(ui, /document\.querySelectorAll\('#prefTabs button'\)\.forEach\(\(b\) => \{[\s\S]+activateAccountTab\(b\)[\s\S]+addEventListener\('click', run\)[\s\S]+addEventListener\('focus', run\)[\s\S]+addEventListener\('mouseenter', run\)/,
@@ -3599,8 +3609,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'episode playback should split show title from season/episode metadata for the player header');
   assert.match(ui, /id="playerEpisodes"[\s\S]+id="trackMenu"/,
     'episode players should have a hidden current-season thumbnail strip below the controls');
-  assert.match(ui, /#playerEpisodes\{display:flex;max-height:0[\s\S]+transition:max-height[\s\S]+#playerEpisodes\.open\{max-height:196px;padding:5px 8px 20px[\s\S]+\.playerEpCard\{[\s\S]+clamp\(172px,16vw,244px\)[\s\S]+height:172px;border:0;border-radius:10px[\s\S]+background:transparent[\s\S]+box-shadow:none[\s\S]+\.playerEpCard\.focusable::before,\.playerEpCard\.focusable:focus-visible::before\{display:none\}[\s\S]+\.playerEpCard \.peStill\{[\s\S]+aspect-ratio:16\/9;border-radius:10px[\s\S]+box-shadow:none[\s\S]+\.playerEpCard \.peMeta\{display:flex;flex-direction:column[\s\S]+min-height:38px/,
-    'web episode strip should fit compact rounded 16:9 stills, contained focus frame, and metadata inside the player frame');
+  assert.match(ui, /#playerEpisodes\{display:flex;max-height:0[\s\S]+transition:max-height[\s\S]+#playerEpisodes\.open\{max-height:calc\(var\(--thumb\) \* 0\.5625 \+ 68px\);padding:5px 8px 20px[\s\S]+\.playerEpCard\{[\s\S]+flex:0 0 var\(--thumb\)[\s\S]+border-radius:10px[\s\S]+background:transparent[\s\S]+box-shadow:none[\s\S]+\.playerEpCard\.focusable::before,\.playerEpCard\.focusable:focus-visible::before\{display:none\}[\s\S]+\.playerEpCard \.peStill\{[\s\S]+aspect-ratio:16\/9;border-radius:10px[\s\S]+box-shadow:none[\s\S]+\.playerEpCard \.peMeta\{display:flex;flex-direction:column[\s\S]+min-height:38px/,
+    'web episode strip should fit compact rounded 16:9 stills that follow cover size');
   assert.match(ui, /\.playerEpCard\.focus \.peStill,\.playerEpCard:focus-visible \.peStill\{box-shadow:inset 0 0 0 1\.5px var\(--artFocusLine\)\}/,
     'player episode thumbnails should keep the hollow theme frame inside the still image');
   assert.match(ui, /function smoothFocusScrollOk\(\) \{[\s\S]+prefers-reduced-motion: reduce[\s\S]+return !document\.body\.classList\.contains\('tv'\);[\s\S]+\}[\s\S]+function focusScrollBehavior\(\) \{[\s\S]+smoothFocusScrollOk\(\) \? 'smooth' : 'auto'[\s\S]+\}/,
@@ -3671,8 +3681,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Android episode focus should use one throttled scroll path instead of stacking repeated smooth-scroll calls');
   assert.match(android, /card\.setOnFocusChangeListener\(\(v, hasFocus\) -> \{[\s\S]+v\.animate\(\)\.cancel\(\);[\s\S]+v\.animate\(\)\.translationY\(-dp\(3\)\)\.setDuration\(120\)\.start\(\);[\s\S]+scrollNativeEpisodeIntoView\(v\);[\s\S]+v\.animate\(\)\.translationY\(0f\)\.setDuration\(100\)\.start\(\);[\s\S]+\}\);/,
     'native Android episode cards should animate their focus lift without resizing the strip');
-  assert.match(android, /ViewGroup\.LayoutParams\.MATCH_PARENT, dp\(126\)[\s\S]+label\.setText\(ep\.watched \? getString\(R\.string\.watched_episode, ep\.tag\) : ep\.tag\);[\s\S]+TextView name = new TextView\(this\);[\s\S]+name\.setMaxLines\(2\);[\s\S]+new LinearLayout\.LayoutParams\(dp\(236\), dp\(182\)\)/,
-    'native Android episode cards should show a larger still with the episode name below the image');
+  assert.match(android, /int thumbW = nativeEpisodeThumbDp\(\);[\s\S]+int stillH = Math\.round\(thumbW \* 9f \/ 16f\);[\s\S]+ViewGroup\.LayoutParams\.MATCH_PARENT, dp\(stillH\)[\s\S]+label\.setText\(ep\.watched \? getString\(R\.string\.watched_episode, ep\.tag\) : ep\.tag\);[\s\S]+TextView name = new TextView\(this\);[\s\S]+name\.setMaxLines\(2\);[\s\S]+new LinearLayout\.LayoutParams\(dp\(thumbW\), dp\(stillH \+ 56\)\)/,
+    'native Android episode cards should show a 16:9 still that follows cover size, with the episode name below');
   assert.match(androidStrings, /<string name="watched_episode">WATCHED  %1\$s<\/string>/,
     'native Android watched labels remain localized while preserving the episode tag');
   assert.match(android, /private GradientDrawable nativeEpisodeCardBg\(boolean focused, boolean current\) \{[\s\S]+new int\[\]\{0x00000000, 0x00000000\}[\s\S]+d\.setCornerRadius\(dp\(16\)\);[\s\S]+return d;[\s\S]+private GradientDrawable nativeEpisodeStillFrame\(boolean focused, boolean current\) \{[\s\S]+if \(focused\) d\.setStroke\(dp\(2\), 0xFFC6B37A\);[\s\S]+else if \(current\) d\.setStroke\(dp\(1\), 0x66C6B37A\);[\s\S]+return d;/,
@@ -3695,6 +3705,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'stills load lazily in a window around the focused card');
   assert.match(android, /nativeEpisodeStrip\.setVisibility\(View\.GONE\);[\s\S]{0,400}return;\s*\}\s*if \(nativeEpisodes\.isEmpty\(\)\) return;/,
     'a closed episode strip builds no cards (choices refreshes during playback must be free)');
+  assert.match(android, /public void coverSize\(String size\) \{[\s\S]+applyNativeCoverSize\(v\)/,
+    'native Android should take the web cover-size setting for About and episode thumbs');
+  assert.match(android, /private int nativeEpisodeThumbDp\(\) \{[\s\S]+return 200;[\s\S]+return 260;[\s\S]+return 236;/,
+    'native episode thumbs keep the current Medium size; Small is smaller, Large is a little bigger');
   assert.ok(!android.includes('loadNativeEpisodeStill(still, ep.still);'),
     'the eager per-card still load inside the render loop is gone');
   assert.match(android, /url\.equals\(nativeStillWant\.get\(view\)\)\) view\.setImageBitmap\(finalBm\);/,
@@ -3713,10 +3727,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'opening web About should keep the OSD up so play/seek stay on screen');
   assert.match(ui, /\$\('aboutBtn'\)\.addEventListener\('click', \(\) => \{[\s\S]+closePlayerAbout\(\);[\s\S]+else openPlayerAbout\(\);/,
     'clicking About again should close the card without hiding the controller');
+  assert.match(ui, /function playerOverlayAwayClick\(e\) \{[\s\S]+closePlayerAbout\(\);[\s\S]+closePlayerEpisodes\(\);[\s\S]+if \(playerOverlayAwayClick\(e\)\) return;/,
+    'clicking the dimmed player (not the About card or controls) should close About and the episode strip');
   assert.match(ui, /if \(\$\('playerAbout'\)\.classList\.contains\('open'\)\) return;/,
     'an open About card should not keep restarting the OSD show timer');
-  assert.match(ui, /\.paPoster\{flex:0 0 180px;width:180px;height:270px/,
-    'browser About poster is large enough to read from a desktop window');
+  assert.match(ui, /\.paPoster\{flex:0 0 var\(--poster\);width:var\(--poster\);height:calc\(var\(--poster\) \* 1\.5\)/,
+    'browser About poster follows the cover-size setting');
   assert.match(ui, /function nativeEpisodeAboutChoice\(\) \{[\s\S]+about: true,[\s\S]+return playerAboutHasPeople\(\) \? \[nativeEpisodeAboutChoice\(\)\]\.concat\(eps\) : eps/,
     'the episode strip should lead with an About tile only when the title has cast or crew');
   assert.match(ui, /function playerAboutTmdbSpec\(it\) \{[\s\S]+const tmdbId = \+\(\(it && it\.tmdbId\) \|\| 0\);[\s\S]+if \(\(it\.type === 'movie' \|\| it\.type === 'tv'\) && tmdbId\)/,
@@ -3793,13 +3809,13 @@ test('Android native player: direct source and native chrome stay out of the web
     'web player CC/audio/quality popup should open near the right-side controls with compact graphite styling');
   assert.match(ui, /#trackMenu button\{display:flex;width:100%;min-height:44px;/,
     'track menu rows should meet the 44px touch target floor');
-  assert.match(ui, /#trackMenu button\.focus\{background:rgba\(255,255,255,\.10\);color:var\(--text\);box-shadow:inset 2px 0 0 var\(--focus\)\}[\s\S]+#trackMenu button\.sel\{color:var\(--text\);background:rgba\(184,164,106,\.18\)/,
+  assert.match(ui, /#trackMenu button\.focus\{background:rgba\(255,255,255,\.10\);color:var\(--text\);box-shadow:none\}[\s\S]+#trackMenu button\.sel\{color:var\(--text\);background:rgba\(184,164,106,\.18\)/,
     'web player popup focused and selected rows should be distinct professional states');
   assert.match(ui, /#playerStats\{display:none;position:absolute;right:44px;bottom:176px[\s\S]+rgba\(24,26,29,\.96\)[\s\S]+border-radius:10px[\s\S]+backdrop-filter:blur\(14px\)/,
     'web player stats popup should match the compact graphite player sheet styling');
   assert.match(ui, /#upNext\{position:absolute;right:28px;bottom:232px[\s\S]+#upNext \.un-play\{position:relative;height:36px[\s\S]+border-radius:999px/,
     'the compact Next chip sits clear of the seek bar');
-  assert.match(ui, /\.epMenu\{position:absolute;right:10px;top:44px[\s\S]+rgba\(24,26,29,\.97\)[\s\S]+border-radius:10px[\s\S]+\.epMenu button\.focus\{background:rgba\(255,255,255,\.10\);color:var\(--text\)[\s\S]+box-shadow:inset 2px 0 0 var\(--focus\)\}/,
+  assert.match(ui, /\.epMenu\{position:absolute;right:10px;top:44px[\s\S]+rgba\(24,26,29,\.97\)[\s\S]+border-radius:10px[\s\S]+\.epMenu button\.focus\{background:rgba\(255,255,255,\.10\);color:var\(--text\)[\s\S]+box-shadow:none\}/,
     'episode action popup should use the same compact neutral player menu styling');
   assert.match(ui, /function playerSurfaceClick\(e\) \{[\s\S]+closest\('#osd \.top,\.playerMetaRow,\.seekLine,\.ctl,#playerEpisodes,#playerAbout,#trackMenu,#playerStats,#pGuide,#vlcPanel,#upNext,#playerLoader,button,a,input,select,textarea'\)[\s\S]+return true;[\s\S]+function playerSingleClick\(e\) \{[\s\S]+setTimeout\(\(\) => \{[\s\S]+togglePlay\(\);[\s\S]+\}, 320\);[\s\S]+function playerDoubleClick\(e\) \{[\s\S]+clearTimeout\(_playerSurfaceClickT\);[\s\S]+toggleFullscreen\(\);/,
     'web player screen clicks should toggle play, while double-click fullscreen cancels the pending pause');
@@ -4184,11 +4200,13 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.doesNotMatch(ui, /body\.tv:not\(\.railOpen\) #rail:not\(\.expanded\)\{[^}]{0,300}[^-]background:/,
     'the collapsed TV rail rules must not set a background SHORTHAND (transparent/opaque slabs both rejected; background-color in the perf rule is fine)');
   assert.match(ui, /body\.tv:not\(\.railOpen\) #rail:not\(\.expanded\)\{\s*\n\s*-webkit-backdrop-filter:none;backdrop-filter:none;\s*\n\s*background-color:rgba\(26,19,40,\.86\)\}/,
-    'the compact TV rail drops the live blur (deepened tint keeps the glass look) — blur returns only when expanded');
+    'the compact TV rail drops live blur and keeps a deep ink tint so artwork does not flash through icons');
+  assert.match(ui, /#rail::after\{content:"";position:absolute;top:16px;bottom:16px;right:0;width:12px;[\s\S]+border-radius:0 16px 16px 0/,
+    'desktop rail uses a curved right hairline instead of a frosted slab');
   // The perf-profile comment must stay WELL-FORMED: in v2.8.7/v2.8.8 it closed a paragraph early,
   // the remainder became raw text ending in a stray star-slash, and CSS error-recovery consumed the
   // entire no-blur rule as one invalid selector — the whole TV profile was silently void.
-  assert.match(ui, /it\. Desktop keeps the blur always\. \*\/\nbody\.tv \.railBtn\.active,/,
+  assert.match(ui, /that made the Shield feel "not snappy"\. \*\/\nbody\.tv \.railBtn\.active,/,
     'the TV perf-profile comment closes immediately before its first rule (a stray close voids the whole profile)');
   // The ambient colour SNAPS on TV. Interpolating a registered custom property that feeds a
   // gradient repaints the whole screen every frame for 2.2s after EVERY focus move — measured on
@@ -4272,12 +4290,10 @@ test('Android native player: direct source and native chrome stay out of the web
   // (0,3,0) and was outranked by `body[data-spotlight] .focusable.focus{scale(1.05)}` at (0,3,1).
   assert.match(ui, /body\[data-spotlight\] \.railBtn\.focusable\.focus,body\[data-spotlight\] \.railBtn:focus-visible,\s*\nbody\[data-spotlight\] #railUser\.focusable\.focus,body\[data-spotlight\] #railUser:focus-visible\{transform:none\}/,
     'themed focus scale must not reach the rail — a scaled pill gets clipped by railMain and looks cut');
-  // The rail tint comes from the theme token. (A sweep of all 17 themes appeared to show the rail
-  // stuck on one theme's colour; that was a MEASUREMENT artifact — #rail has `transition:background
-  // .26s`, so a synchronous read after switching returns the pre-transition value. Read after the
-  // transition settles and every theme resolves correctly. Do not "fix" this again.)
-  assert.match(ui, /#rail\{background:linear-gradient\(180deg,rgba\(255,255,255,\.055\)[^;]*,var\(--soft\);/,
-    'the rail tint comes from the themed --soft token');
+  // Desktop rail matches Settings: no frosted slab. Compact TV still uses the deep ink tint
+  // in the perf rule so artwork cannot flash through the icons.
+  assert.match(ui, /#rail\{background:none;-webkit-backdrop-filter:none;backdrop-filter:none;/,
+    'desktop rail has no frosted slab — icons sit on ink');
   // Collapsed section labels must LEAVE the flex flow. At height:0 they are still flex items, so
   // railMain's 6px gap applied on both sides and every group boundary gained 6px — uneven icons.
   assert.match(ui, /\.railSec\{[^}]*height:0;opacity:0;display:none;/,
@@ -4767,8 +4783,8 @@ test('Android native player: direct source and native chrome stay out of the web
   // wrapping grid (topTiles), and the rail cards are compact (not 254–304px).
   assert.ok(!/addShelf\('Your playlists', 'topTiles'\)/.test(ui),
     'Your playlists should be a single-row rail, not a wrapping topTiles grid');
-  assert.match(ui, /\.musicRail\{display:grid;grid-auto-flow:column;grid-auto-columns:minmax\(150px,168px\)/,
-    'music rail cards should be compact (~150–168px), not oversized');
+  assert.match(ui, /\.musicRail\{display:grid;grid-auto-flow:column;grid-auto-columns:calc\(var\(--poster\) \* 0\.76\)/,
+    'music rail cards follow cover size while staying compact vs movie posters');
   // Music covers are square (playlist/album art is native square); only the generic weekly
   // video-thumbnail feeds keep 16/9 via .wide.
   assert.match(ui, /\.mCover\{width:100%;aspect-ratio:1\/1;/,
@@ -6140,8 +6156,20 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'viewport/page changes should remeasure visible row windows after layout settles');
   assert.match(ui, /function sizeRowsWindow\(root\) \{[\s\S]+if \(!document\.body\.classList\.contains\('tv'\)\) \{ root\.style\.maxHeight = ''; return; \}[\s\S]+const rowH = \(parseFloat\(getComputedStyle\(document\.documentElement\)\.getPropertyValue\('--poster'\)\) \|\| 190\) \* 1\.5 \+ 106;[\s\S]+const n = rowWindowCountFor\(isDiscover \? 'discover' : 'home', rowH, innerHeight\);/,
     'browser Home and Discover scroll freely; TV keeps the measured one-row window');
-  assert.match(ui, /body:not\(\.tv\):not\(\.mobileShell\) #rows,[\s\S]+#discoverRows\{[\s\S]+scroll-snap-type:none;[\s\S]+flex:1!important;[\s\S]+--poster:220px;/,
-    'desktop Home and Discover drop row snap and use taller covers; Android TV is unchanged');
+  assert.match(ui, /body:not\(\.tv\):not\(\.mobileShell\) #rows,[\s\S]+#discoverRows\{[\s\S]+scroll-snap-type:none;[\s\S]+flex:1!important;/,
+    'desktop Home and Discover drop row snap and scroll freely; Android TV is unchanged');
+  assert.match(ui, /const COVER_SIZES = \{ S: '176px', M: '220px', L: '244px' \}/,
+    'desktop Medium cover size matches the previous Home poster width; Small is smaller, Large is a little bigger');
+  assert.match(ui, /\.seasonCard\{flex:0 0 var\(--poster\)/,
+    'detail season posters follow the cover-size setting');
+  assert.match(ui, /\.epCard\{flex:0 0 var\(--thumb\)/,
+    'detail episode thumbs follow the cover-size setting');
+  assert.match(ui, /\.playerEpCard\{position:relative;flex:0 0 var\(--thumb\)/,
+    'in-player episode thumbs follow the cover-size setting');
+  assert.match(ui, /#grid\{flex:1;overflow-y:auto;display:grid;grid-template-columns:repeat\(auto-fill,minmax\(var\(--poster\),1fr\)\)/,
+    'Movies, TV, Search, and library grids follow the cover-size setting');
+  assert.match(ui, /try \{ if \(window\.TriboonTV && window\.TriboonTV\.coverSize\) window\.TriboonTV\.coverSize\(s\); \} catch \{\}/,
+    'Android native player receives the same Small/Medium/Large cover-size choice');
   assert.match(ui, /#browseTitle\{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect\(0 0 0 0\);white-space:nowrap\}/,
     'Browse title may stay visually hidden while Discover title remains visible');
   assert.doesNotMatch(ui, /#browseTitle,#discoverTitle\{position:absolute;width:1px;height:1px;/,
@@ -6219,8 +6247,28 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'the standalone Preferences/Settings rail buttons should be gone (folded into the avatar)');
   assert.match(ui, /\$\('railUser'\)\.addEventListener\('click', \(\) => \{[\s\S]+switchView\('prefs'\);[\s\S]+button\[data-tab="profiles"\][\s\S]+t\.click\(\)/,
     'the profile avatar should open Preferences and land on the Profile & Pins tab');
-  assert.match(ui, /<div id="prefTabs">\s*<button data-tab="profiles" class="on focusable">/,
-    'Profile & Pins should be the first, default-selected Preferences tab');
+  assert.match(ui, /<div id="prefTabs">\s*<button data-tab="dash" class="on focusable">/,
+    'Dashboard should be the first Preferences tab');
+  assert.match(ui, /data-ptab="dash"[\s\S]+id="dashRange"[\s\S]+id="dashStrip"[\s\S]+id="dashHoursVal"[\s\S]+id="dashTrial"/,
+    'Dashboard panel has a range strip, when-you-watch hours, finished counts, and trial extras');
+  assert.match(ui, /const DASH_TRIAL = true;[\s\S]+function renderDashTrial\(data/,
+    'Dashboard keeps real trial extras (streak, just finished) from watch-stats');
+  assert.doesNotMatch(ui, /DASH_DEMO|dashDemoData|dashDemoNote|Sample preview/,
+    'shipped Dashboard must not include fake sample stats');
+  assert.match(ui, /function dashTopCountLabel\(t\) \{[\s\S]+Watched once[\s\S]+Watched twice[\s\S]+1 episode[\s\S]+episodes[\s\S]+Shows count episodes\. Movies count how many times you watched them through\./,
+    'Most completed labels shows as episodes and movies as times watched, not a vague finish count');
+  assert.match(ui, /#settings>\.setGrid,#prefs>\.setGrid\{grid-column:2;grid-row:1;min-width:0\}/,
+    'Settings content sits in row 1 beside the tabs — no empty subtitle row pushing it down');
+  assert.match(ui, /function loadWatchDashboard\(\) \{[\s\S]+\/api\/watch-stats\?range=/,
+    'Dashboard loads finished-watch stats for the signed-in account');
+  assert.match(ui, /body\[data-spotlight\] #prefTabs button\.on[\s\S]+background:transparent!important;color:var\(--text\)!important/,
+    'spotlight themes keep Settings tabs as a text list, not an amber capsule');
+  assert.match(ui, /#prefs \.sizePick,#settings \.sizePick\{display:inline-flex;gap:0/,
+    'Settings size and range controls are one joined strip');
+  assert.match(ui, /#settings \.panel,#prefs \.panel\{\s*background:transparent!important[\s\S]+border-bottom:1px solid rgba\(255,255,255,\.08\)/,
+    'Settings content sits on the page with hairline separators, not frosted cards');
+  assert.match(ui, /#settings \.setGrid,#prefs \.setGrid\{[\s\S]+border-left:1px solid rgba\(255,255,255,\.10\)/,
+    'a thin spine line separates the Settings tab list from the content');
   // (The full Server-settings tab group + merge behavior is asserted above near mergeServerSettingsIntoPrefs.)
   // Sign out lives in Profile & Pins (avatar) now — the "who's watching" profile picker no longer
   // builds its own redundant Sign out button.

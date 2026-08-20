@@ -286,6 +286,7 @@ public class MainActivity extends Activity {
     private int nativeEpisodeIndex = 0;
     private boolean nativeEpisodeStripOpen = false;
     private long nativeEpisodeScrollAtMs = 0L;
+    private String nativeCoverSize = "M";
     private String nativeSubtitleUrl = "";
     private String nativeSubtitleHostHeader = "";
     private String nativeSubtitleLang = "";
@@ -1607,6 +1608,15 @@ public class MainActivity extends Activity {
             public void prefetchStream(String json) {
                 if (!trustedBridgeOrigin()) return;
                 handleNativePrefetch(json);
+            }
+
+            // Display → Size on this device. Medium keeps the current native About poster and
+            // episode-strip thumbs; Small/Large scale around that.
+            @android.webkit.JavascriptInterface
+            public void coverSize(String size) {
+                if (!trustedBridgeOrigin()) return;
+                final String v = ("S".equals(size) || "L".equals(size)) ? size : "M";
+                runOnUiThread(() -> applyNativeCoverSize(v));
             }
         }, "TriboonTV");
 
@@ -3751,7 +3761,7 @@ public class MainActivity extends Activity {
         posterBg.setCornerRadius(dp(8));
         nativeAboutPoster.setBackground(posterBg);
         nativeAboutPoster.setClipToOutline(true);
-        LinearLayout.LayoutParams posterLp = new LinearLayout.LayoutParams(dp(148), dp(222));
+        LinearLayout.LayoutParams posterLp = new LinearLayout.LayoutParams(dp(nativeCoverPosterDp()), Math.round(dp(nativeCoverPosterDp()) * 1.5f));
         posterLp.rightMargin = dp(28);
         card.addView(nativeAboutPoster, posterLp);
 
@@ -6398,6 +6408,33 @@ public class MainActivity extends Activity {
         }
     }
 
+    private int nativeCoverPosterDp() {
+        if ("S".equals(nativeCoverSize)) return 128;
+        if ("L".equals(nativeCoverSize)) return 164;
+        return 148;
+    }
+
+    private int nativeEpisodeThumbDp() {
+        if ("S".equals(nativeCoverSize)) return 200;
+        if ("L".equals(nativeCoverSize)) return 260;
+        return 236;
+    }
+
+    private void applyNativeCoverSize(String size) {
+        boolean changed = nativeCoverSize == null || !nativeCoverSize.equals(size);
+        nativeCoverSize = size == null ? "M" : size;
+        if (nativeAboutPoster != null) {
+            ViewGroup.LayoutParams lp = nativeAboutPoster.getLayoutParams();
+            if (lp != null) {
+                int w = dp(nativeCoverPosterDp());
+                lp.width = w;
+                lp.height = Math.round(w * 1.5f);
+                nativeAboutPoster.setLayoutParams(lp);
+            }
+        }
+        if (changed && nativeEpisodeStripOpen) renderNativeEpisodeStrip(true);
+    }
+
     private GradientDrawable nativeEpisodeCardBg(boolean focused, boolean current) {
         GradientDrawable d = new GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
@@ -6545,6 +6582,8 @@ public class MainActivity extends Activity {
             return;
         }
         if (nativeEpisodes.isEmpty()) return;
+        int thumbW = nativeEpisodeThumbDp();
+        int stillH = Math.round(thumbW * 9f / 16f);
         for (int i = 0; i < nativeEpisodes.size(); i++) {
             NativeEpisode ep = nativeEpisodes.get(i);
             LinearLayout card = new LinearLayout(this);
@@ -6591,7 +6630,7 @@ public class MainActivity extends Activity {
             still.setForeground(nativeEpisodeStillFrame(i == nativeEpisodeIndex && nativeEpisodeStripOpen, ep.current));
             still.setClipToOutline(true);
             card.addView(still, new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, dp(126)));
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(stillH)));
             // Stills load LAZILY around the focus (loadNativeEpisodeStillsAround) — never all at once.
 
             TextView label = new TextView(this);
@@ -6614,7 +6653,7 @@ public class MainActivity extends Activity {
             card.addView(name, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(236), dp(182));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(thumbW), dp(stillH + 56));
             lp.setMargins(0, 0, dp(14), 0);
             nativeEpisodeList.addView(card, lp);
         }
