@@ -539,6 +539,12 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'closing a trailer during Play must not steal focus back to details');
   assert.match(ui, /function playNextEpisode\(\) \{[\s\S]+play\(ne\.item, null, \{ directHandoff: true \}\)/,
     'Play Next keeps the player surface and joins the last-two-minute prepare');
+  assert.match(ui, /function playNextEpisode\(\) \{[\s\S]+if \(!ne\) \{[\s\S]+toast\('Next episode is still loading'\)[\s\S]+closePlayer\(\)/,
+    'Play Next with no next episode must leave Preparing instead of sitting there with credits audio');
+  assert.match(ui, /const PLAY_NEXT_HANDOFF_MS = 50000;[\s\S]+function armPlayHandoffWatchdog\(playTicket\) \{[\s\S]+closePlayer\(\)[\s\S]+Next episode took too long/,
+    'Play Next must give up on Preparing after 50s so the TV is not stuck until force-close');
+  assert.match(ui, /if \(opts\.directHandoff\) armPlayHandoffWatchdog\(playTicket\);[\s\S]+finally \{[\s\S]+clearPlayHandoffWatchdog\(\)/,
+    'the Play Next hang timer is armed only for episode handoff and cleared when Play finishes');
   assert.match(ui, /item\._preparedAt = Date\.now\(\);[\s\S]+api\('\/api\/prepare'/,
     'the last-two-minute next-episode prepare marks that episode as already warm');
   assert.match(ui, /hot: !picked && playbackIsWarmed\(it, qRank\)/,
@@ -1598,18 +1604,23 @@ test('episode handoff stays player-to-player before local lookup and EOF never r
     nextEp: { item: { key: 'tmdb:tv:9:s1e2', type: 'episode' } },
   };
   const nextEvents = [];
-  const playNext = new Function('S', 'updateNextEpisodeButton', 'hideUpNextUi', 'play',
+  const playNext = new Function('S', 'updateNextEpisodeButton', 'hideUpNextUi', 'play', 'toast', 'closePlayer',
     `${ui.slice(nextStartFn, nextEndFn)}\nreturn playNextEpisode;`)(
       nextState, () => nextEvents.push('button'), () => nextEvents.push('hide'),
       (item, _pick, opts) => {
         nextEvents.push(['play', item.key, opts]);
         nextState.playing = { item };
-      });
+      },
+      (msg) => nextEvents.push(['toast', msg]),
+      () => nextEvents.push('close'));
   playNext();
   playNext();
   assert.deepStrictEqual(nextEvents.filter((event) => Array.isArray(event)), [
     ['play', 'tmdb:tv:9:s1e2', { directHandoff: true }],
+    ['toast', 'Next episode is still loading'],
   ], 'queued EOF/countdown/manual triggers must consume one next episode and mount it only once');
+  assert.ok(nextEvents.includes('close'),
+    'a second Play Next with no next episode must leave Preparing instead of hanging');
 
   const openPlayerStart = ui.indexOf('async function openPlayer(');
   const webEndedStart = ui.indexOf('  v.onended = () => {', openPlayerStart);
@@ -2124,12 +2135,12 @@ test('subtitle startup preference contract: admin can toggle built-in captions',
     'native Next and dismiss share the same 36dp height');
   assert.match(android, /private void updateNativeUpNextPosition\(\) \{[\s\S]+nativeChrome\.getVisibility\(\) == View\.VISIBLE;[\s\S]+dp\(chromeUp \? 168 : 48\);/,
     'the native Up Next sits clear of the seek bar with chrome up and docks lower with chrome hidden');
-  assert.match(android, /private void triggerNativeUpNextPlay\(\) \{[\s\S]+showNativeLoading\([\s\S]+true\);[\s\S]+__upNextPlayNative/,
-    'tapping Next covers the ended frame before JS starts the next mount');
+  assert.match(android, /private void triggerNativeUpNextPlay\(\) \{[\s\S]+silenceNativeVideoForHandoff\(\);[\s\S]+showNativeLoading\([\s\S]+true\);[\s\S]+__upNextPlayNative/,
+    'tapping Next kills the old remux audio before covering with Preparing');
   assert.match(android, /optBoolean\("hot", false\)[\s\S]+showNativeLoading\(title, backdropUrl, hot\)/,
     'Android inherits the web hot-join flag so a prepared Play does not restart at Finding source');
-  assert.match(android, /private void playNativeNextEpisode\(\) \{[\s\S]+showNativeLoading\([\s\S]+__tvNativeVideoNext/,
-    'chrome Next covers immediately so the next episode cannot flash at 00:00');
+  assert.match(android, /private void playNativeNextEpisode\(\) \{[\s\S]+silenceNativeVideoForHandoff\(\);[\s\S]+showNativeLoading\([\s\S]+__tvNativeVideoNext/,
+    'chrome Next kills the old remux before covering so credits cannot play under Preparing');
   const videoLoadingFn = android.slice(
     android.indexOf('private void showNativeVideoLoading(String json)'),
     android.indexOf('private void startNativePlayback(String json, String mode)'));
@@ -2940,6 +2951,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android lifecycle focus recovery must not reset phone playback orientation while native video is open');
   assert.match(android, /private void setPhonePlaybackOrientation\(boolean active\) \{[\s\S]+SCREEN_ORIENTATION_SENSOR_LANDSCAPE[\s\S]+setRequestedOrientation\(phoneOrientationBeforePlayback\)/,
     'Android phone native playback should rotate to landscape and restore the prior shell orientation when closed');
+  assert.match(android, /private void showNativeVideoLoading\(String json\) \{[\s\S]+silenceNativeVideoForHandoff\(\);[\s\S]+showNativeLoading\(title, backdropUrl, hot\);/,
+    'JS handoff loading must mute and stop the old ExoPlayer so Play Next cannot sit on Preparing with credits audio');
   assert.match(android, /private void showNativeVideoLoading\(String json\) \{[\s\S]+setPhonePlaybackOrientation\(true\);[\s\S]+buildNativePlayerLayer\(\);/,
     'Android phones should rotate as soon as the native loading player opens, before source health finishes');
   assert.match(android, /if \(!guide\) setPhonePlaybackOrientation\(true\);[\s\S]+buildNativePlayerLayer\(\)/,

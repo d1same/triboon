@@ -202,6 +202,15 @@ before revealing that shell's Up Next UI.
 These clauses are part of the named contract rows above and must travel with
 them when the table is reorganized:
 
+- **P4 - Play Next cannot sit on Preparing.** Native Play Next and chrome Next
+  must mute and stop the current remux before covering with Preparing so credits
+  audio cannot keep playing and cannot hold provider slots. If the next episode
+  is missing, or `/api/play` has not started after 50 seconds, close the player
+  and toast instead of leaving Preparing until the app is force-closed. Code:
+  `MainActivity.java` `silenceNativeVideoForHandoff`, `triggerNativeUpNextPlay`,
+  `playNativeNextEpisode`, `showNativeVideoLoading`; `web/index.html`
+  `playNextEpisode`, `armPlayHandoffWatchdog`. Verification:
+  `test/phase4.test.js`.
 - **P5 - web rebuffer recovery.** After VOD has started, 45 seconds of
   `waiting` without meaningful position progress retries the same source,
   playback kind, and timestamp first. Playback/progress/seek/close cancels the

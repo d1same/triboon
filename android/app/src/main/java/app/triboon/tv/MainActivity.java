@@ -3563,6 +3563,28 @@ public class MainActivity extends Activity {
         return BitmapFactory.decodeByteArray(bytes, 0, bytes.length, opts);
     }
 
+    // Play Next keeps the native layer so details do not flash, but the old remux
+    // must stop immediately. Leaving it playing put credits audio under Preparing
+    // and held NNTP slots so /api/play never finished.
+    private void silenceNativeVideoForHandoff() {
+        if (nativePlayer == null || !"video".equals(nativeMode)) return;
+        try {
+            nativePlayer.setVolume(0f);
+        } catch (Throwable e) {
+            Log.w(TAG, "Native handoff mute ignored: " + nativeThrowableMessage(e));
+        }
+        try {
+            nativePlayer.pause();
+        } catch (Throwable e) {
+            Log.w(TAG, "Native handoff pause ignored: " + nativeThrowableMessage(e));
+        }
+        try {
+            nativePlayer.stop();
+        } catch (Throwable e) {
+            Log.w(TAG, "Native handoff stop ignored: " + nativeThrowableMessage(e));
+        }
+    }
+
     private void hideNativeLoading() {
         nativeLoadingToken++;
         stopNativeLoadingStatus();
@@ -3761,7 +3783,9 @@ public class MainActivity extends Activity {
         nativeUpNextVisible = false;
         hideNativeUpNextCard();
         // Cover the ended 00:00 surface now. Waiting on JS would flash the next episode
-        // chrome at 0:00 before /api/play has a stream.
+        // chrome at 0:00 before /api/play has a stream. Kill the old file first so
+        // credits audio cannot keep playing under Preparing.
+        silenceNativeVideoForHandoff();
         if (nativeLoading != null) {
             showNativeLoading(
                     nativePlaybackTitle == null || nativePlaybackTitle.isEmpty() ? "Next episode" : nativePlaybackTitle,
@@ -3908,6 +3932,7 @@ public class MainActivity extends Activity {
             nativeMode = "video";
             nativePlaybackToken = playbackToken;
             enterNativeFullscreenMode();
+            silenceNativeVideoForHandoff();
             showNativeLoading(title, backdropUrl, hot);
         } catch (Throwable e) {
             handleNativePlaybackStartFailure(e, "video", title, backdropUrl, "direct", "", "", 0L);
@@ -7021,6 +7046,7 @@ public class MainActivity extends Activity {
         long dur = nativeDurSeconds();
         long playbackToken = nativePlaybackToken;
         if (!"video".equals(mode)) return;
+        silenceNativeVideoForHandoff();
         if (nativeLoading != null) {
             showNativeLoading(
                     nativePlaybackTitle == null || nativePlaybackTitle.isEmpty() ? "Next episode" : nativePlaybackTitle,

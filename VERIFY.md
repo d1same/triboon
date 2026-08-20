@@ -125,6 +125,28 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-19, v3.0.9 ship APK + Windows server + Windows client:
+
+- Version contract: `package.json` 3.0.9; Android `versionName` 3.0.9 /
+  `versionCode` 340; Windows client package/Tauri/Cargo 3.0.9.
+- Play Next now mute/pause/stops the current native remux before
+  Preparing, so credits audio cannot hold provider slots. Missing next
+  episode or a 50s handoff hang closes the player instead of sitting
+  on Preparing until force-close.
+- `npm.cmd test` 594/594. Isolated `/api/server` smoke reported 3.0.9.
+  `npm.cmd run verify:full -- -AndroidDevice emulator-5554
+  -AndroidHostServerPort 7777` passed whitespace, JS syntax, web parse,
+  focused P9/P14/P11, full Node suite, household VOD/CC (Mario 4K +
+  FROM 1080p), IPTV ABC+ESPN web+native, overlapping Play 23ms /
+  944ms wall, Android lint/native-unit/`assembleDebug`, and ExoPlayer
+  stress `bench/stress-results/android-tv-stress-20260819-203826.json`
+  (`ok: true`, zero failures/warnings).
+- Household Mario 4K: ready 1114ms, first-byte 4651ms SLOW, seek 28ms,
+  resume 52ms, remux, cc=200. FROM S01E01: 8003ms SLOW / 5 / 2 / 735ms,
+  remux, cc=200. Household live smokes ran against the already-up
+  v3.0.8 process on :7777.
+- Windows native GPU/HDR not run.
+
 2026-08-19, v3.0.8 ship APK + Windows server + Windows client:
 
 - Version contract: `package.json` 3.0.8; Android `versionName` 3.0.8 /

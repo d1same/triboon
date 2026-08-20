@@ -7829,6 +7829,23 @@ function resumePositionForItem(it) {
 function startOverItem(it) {
   return it ? { ...it, resume: 0, _startOver: true } : it;
 }
+const PLAY_NEXT_HANDOFF_MS = 50000;
+function clearPlayHandoffWatchdog() {
+  if (S._playHandoffTimer) {
+    clearTimeout(S._playHandoffTimer);
+    S._playHandoffTimer = null;
+  }
+}
+function armPlayHandoffWatchdog(playTicket) {
+  clearPlayHandoffWatchdog();
+  S._playHandoffTimer = setTimeout(() => {
+    S._playHandoffTimer = null;
+    if (S._playTicket !== playTicket || S.view !== 'player') return;
+    if (S.playing && (S.playing.sessionId || S.playing.mountId)) return;
+    closePlayer();
+    toast('Next episode took too long — try Play again');
+  }, PLAY_NEXT_HANDOFF_MS);
+}
 function beginPlaybackTransition(it, opts = {}) {
   const nativeFirst = nativeVideoRequired(it);
   const playTicket = S._playTicket = (S._playTicket || 0) + 1;
@@ -7878,6 +7895,7 @@ async function play(it, pick, opts = {}) {
     ...opts,
     hot: !picked && playbackIsWarmed(it, qRank),
   });
+  if (opts.directHandoff) armPlayHandoffWatchdog(playTicket);
   let localExact = null;
   try {
     if (!picked && !it._local) {
@@ -7922,6 +7940,7 @@ async function play(it, pick, opts = {}) {
     const why = (e.detail && e.detail.summary) || `${e.message}${tried ? ` (${tried} tried)` : ''}`;
     toast(`Can't play this — ${why}`);
   } finally {
+    clearPlayHandoffWatchdog();
     if (S.view !== 'player') clearPlayerLoadingStages();
     btns.forEach((b) => { b.disabled = false; });
     if (S.view === 'home' && S.focusedItem) setHero(S.focusedItem);
@@ -12293,7 +12312,6 @@ window.__tvNativeVideoNext = (pos, dur, token) => {
   if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
   window.__tvNativeVideoProgress(pos, dur, token);
   saveWatch(true);
-  if (!S.nextEp) { toast('Next episode is still loading'); return; }
   playNextEpisode();
 };
 window.__tvNativeVideoQuality = (quality, pos, dur, token) => {
@@ -13131,7 +13149,13 @@ function finishEpisodeToNext() {
 }
 function playNextEpisode() {
   const ne = S.nextEp;
-  if (!ne) return;
+  if (!ne) {
+    toast('Next episode is still loading');
+    // Android already muted/stopped the remux and covered with Preparing.
+    // Leaving that screen up is the "stuck forever, force-close the app" bug.
+    closePlayer();
+    return;
+  }
   // Consume the exact handoff synchronously. A final interval tick, manual click, and media-ended
   // callback can already be queued together; only the first may start/mount this episode.
   S.nextEp = null;
@@ -13590,6 +13614,7 @@ async function closePlayer(opts = {}) {
   // checks this ticket and must not resurrect playback after the user backed out of the loader.
   S._playTicket = (S._playTicket || 0) + 1;
   S._nativeLoadingTicket = 0;
+  clearPlayHandoffWatchdog();
   cancelLiveTune('main');
   cancelLiveTune('split:0');
   cancelLiveTune('split:1');
