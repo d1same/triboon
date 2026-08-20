@@ -13044,11 +13044,12 @@ function playerAboutTmdbSpec(it) {
   }
   return null;
 }
-function playerAboutCrewList(d, type) {
-  const crew = (d && d.credits && d.credits.crew) || [];
-  const directors = type === 'tv' && d && (d.created_by || []).length
-    ? d.created_by : crew.filter((c) => c && c.job === 'Director');
-  const writers = crew.filter((c) => c && /^(Writer|Screenplay|Story)$/.test(c.job));
+const ABOUT_CAST_MAX = 10;
+function playerAboutCrewFrom(crew, createdBy) {
+  const list = Array.isArray(crew) ? crew : [];
+  const directors = (createdBy && createdBy.length)
+    ? createdBy : list.filter((c) => c && c.job === 'Director');
+  const writers = list.filter((c) => c && /^(Writer|Screenplay|Story)$/.test(c.job));
   const seen = new Set();
   const out = [];
   for (const p of [...directors, ...writers]) {
@@ -13057,6 +13058,35 @@ function playerAboutCrewList(d, type) {
     out.push({ name: p.name, job: p.job || '' });
   }
   return out;
+}
+function playerAboutCrewList(d, type, epCredits) {
+  if (epCredits && Array.isArray(epCredits.crew) && epCredits.crew.length) {
+    return playerAboutCrewFrom(epCredits.crew);
+  }
+  const crew = (d && d.credits && d.credits.crew) || [];
+  const createdBy = type === 'tv' ? (d && d.created_by) : null;
+  return playerAboutCrewFrom(crew, createdBy);
+}
+function playerAboutCastList(d, epCredits, seasonCredits) {
+  const billed = (epCredits && Array.isArray(epCredits.cast)) ? epCredits.cast : [];
+  const seasonMain = (seasonCredits && Array.isArray(seasonCredits.cast)) ? seasonCredits.cast : [];
+  const guests = (epCredits && Array.isArray(epCredits.guest_stars)) ? epCredits.guest_stars : [];
+  if (billed.length || seasonMain.length || guests.length) {
+    const seen = new Set();
+    const out = [];
+    const add = (c) => {
+      if (!c || !c.name || seen.has(c.id || c.name)) return;
+      seen.add(c.id || c.name);
+      out.push(c);
+    };
+    const byOrder = (a, b) => (Number(a.order) || 999) - (Number(b.order) || 999);
+    // This season's regulars first so starring faces cannot be crowded out by guests.
+    seasonMain.slice().sort(byOrder).forEach(add);
+    billed.slice().sort(byOrder).forEach(add);
+    guests.slice().sort(byOrder).forEach(add);
+    return out;
+  }
+  return detailCastList(d);
 }
 function playerAboutHasPeople(about) {
   about = about || S.playerAbout;
@@ -13102,12 +13132,14 @@ async function prepPlayerAbout(it) {
   const spec = playerAboutTmdbSpec(it);
   if (!spec || !spec.id) return;
   try {
-    const [d, ctx] = await Promise.all([
+    const parts = it.type === 'episode' ? episodeKeyParts(it) : null;
+    const [d, ctx, epCredits, seasonCredits] = await Promise.all([
       api(`/api/tmdb/${spec.type}/${spec.id}?append_to_response=credits,aggregate_credits,release_dates,content_ratings`),
       it.type === 'episode' ? getPlayerEpisodeContext(it).catch(() => null) : null,
+      parts ? api(`/api/tmdb/tv/${parts.tmdbId}/season/${parts.season}/episode/${parts.episode}/credits`).catch(() => null) : null,
+      parts ? api(`/api/tmdb/tv/${parts.tmdbId}/season/${parts.season}/credits`).catch(() => null) : null,
     ]);
     if (token !== S._playerAboutToken || !S.playing || !S.playing.item || S.playing.item.key !== it.key) return;
-    const parts = it.type === 'episode' ? episodeKeyParts(it) : null;
     const ep = ctx && ctx.season && parts
       ? (ctx.season.episodes || []).find((e) => e && +e.episode_number === parts.episode)
       : null;
@@ -13125,12 +13157,12 @@ async function prepPlayerAbout(it) {
       overview: (ep && ep.overview) || S.playerAbout.overview || d.overview || '',
       poster: img(d.poster_path, POSTER_W) || S.playerAbout.poster,
       backdrop: img((ep && ep.still_path) || d.backdrop_path) || S.playerAbout.backdrop,
-      cast: detailCastList(d).slice(0, 6).map((c) => ({
+      cast: playerAboutCastList(d, epCredits, seasonCredits).slice(0, ABOUT_CAST_MAX).map((c) => ({
         name: c.name,
         character: c.character || '',
         photo: img(c.profile_path, CAST_W) || '',
       })),
-      crew: playerAboutCrewList(d, spec.type),
+      crew: playerAboutCrewList(d, spec.type, epCredits),
     };
     S.playerAbout.hasPeople = playerAboutHasPeople(S.playerAbout);
     syncAboutChrome();
@@ -13171,7 +13203,7 @@ function renderPlayerAbout() {
   const bits = [about.year, about.runtime, about.cert, about.rating ? `★ ${about.rating}` : ''].filter(Boolean);
   chips.innerHTML = bits.map((x) => `<span class="paChip">${esc(x)}</span>`).join('');
   plot.textContent = about.overview || '';
-  const people = (about.cast || []).slice(0, 6);
+  const people = (about.cast || []).slice(0, ABOUT_CAST_MAX);
   cast.innerHTML = people.map((c) =>
     `<div class="paCastItem"><div class="paCastPh" style="background-image:${c.photo ? `url(&quot;${c.photo}&quot;)` : 'none'}"></div><div class="paCastNm">${aboutCastNameHtml(c.name)}</div></div>`
   ).join('');

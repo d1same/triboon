@@ -3327,7 +3327,7 @@ public class MainActivity extends Activity {
         nativeLiveBtn.setOnKeyListener((v, code, e) -> handleNativeSurfaceKey(e));
         LinearLayout.LayoutParams liveLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, dp(36));
-        liveLp.setMargins(dp(8), 0, dp(8), 0);
+        liveLp.setMargins(dp(10), 0, dp(10), 0);
         centerControls.addView(nativeLiveBtn, liveLp);
 
         nativeFwdBtn = nativeButton(R.drawable.ic_player_forward, "Forward 30 seconds", false);
@@ -3833,7 +3833,7 @@ public class MainActivity extends Activity {
         if (nativeAboutCast != null) {
             nativeAboutCast.removeAllViews();
             org.json.JSONArray cast = d.optJSONArray("cast");
-            int n = cast == null ? 0 : Math.min(6, cast.length());
+            int n = cast == null ? 0 : Math.min(10, cast.length());
             for (int i = 0; i < n; i++) {
                 org.json.JSONObject c = cast.optJSONObject(i);
                 if (c == null) continue;
@@ -4101,7 +4101,7 @@ public class MainActivity extends Activity {
         setNativeButtonIcon(b, iconRes, primary, false);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 dp(primary ? 46 : 36), dp(primary ? 46 : 36));
-        lp.rightMargin = dp(6);
+        lp.rightMargin = dp(8);
         b.setLayoutParams(lp);
         b.setOnFocusChangeListener((v, hasFocus) -> {
             v.setBackground(nativeButtonBg(hasFocus, primary));
@@ -4618,7 +4618,7 @@ public class MainActivity extends Activity {
     }
 
     private void toggleNativeChromeByTouch() {
-        if (!nativePlayerOpen() || nativeGuideMode || nativeSheetOpen() || nativeEpisodeStripOpen) return;
+        if (!nativePlayerOpen() || nativeGuideMode || nativeSheetOpen() || nativeEpisodeStripOpen || nativeAboutOpen) return;
         if (nativeChromeShowingForBack()) hideNativeChromeNow();
         else showNativeChrome(false);
     }
@@ -4633,7 +4633,7 @@ public class MainActivity extends Activity {
     private final Runnable nativeHideChrome = new Runnable() {
         @Override public void run() {
             if (!nativePlayerOpen() || nativeChrome == null) return;
-            if (nativeUserSeeking || nativeSheetOpen() || nativeEpisodeStripOpen) return;
+            if (nativeUserSeeking || nativeSheetOpen() || nativeEpisodeStripOpen || nativeAboutOpen) return;
             hideNativeChromeNow();
         }
     };
@@ -4666,6 +4666,7 @@ public class MainActivity extends Activity {
         if (e.getAction() == KeyEvent.ACTION_DOWN) {
             if (e.getRepeatCount() == 0) nativeBackConsumedChromeDown = false;
             if (!nativeGuideMode && !nativeUpNextVisible && !nativeSheetOpen() && !nativeEpisodeStripOpen
+                    && !nativeAboutOpen
                     && dismissNativeChromeForBack()) {
                 nativeBackConsumedChromeDown = true;
                 lastSystemBackAt = SystemClock.uptimeMillis();

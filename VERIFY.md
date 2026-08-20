@@ -125,6 +125,29 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-20, v3.0.11 ship APK + Windows server + Windows client:
+
+- Version contract: `package.json` 3.0.11; Android `versionName` 3.0.11 /
+  `versionCode` 342; Windows client package/Tauri/Cargo 3.0.11.
+- Android TV Back closes the in-player About/cast card first, then the
+  controller bar. Episode About leads with this season's regulars, then
+  that episode's billed cast and guests, instead of lifetime show ranking.
+  A stray `({)` in the About-cast map froze the web splash; fixed. Native
+  player buttons gained a small extra gap (8dp).
+- `npm.cmd test` 594/594. Isolated `/api/server` smoke reported 3.0.11.
+  `npm.cmd run verify:full -- -AndroidDevice emulator-5554
+  -AndroidHostServerPort 7777` passed whitespace, JS syntax, web parse,
+  focused P9/P14/P11, full Node suite, household VOD/CC, IPTV ABC+ESPN
+  web+native, overlapping Play 12ms / 1037ms wall, Android
+  lint/native-unit/`assembleDebug`, and ExoPlayer stress
+  `bench/stress-results/android-tv-stress-20260820-011047.json`
+  (`ok: true`, zero failures/warnings).
+- Household Mario 4K: ready 3641ms SLOW, first-byte 898ms, seek 1286ms,
+  resume 16ms, remux, cc=200. FROM S01E01: 2058/167/1331/9ms, remux,
+  cc=200. IPTV ABC+ESPN web+native. Live household process still reported
+  v3.0.10 until restart.
+- Windows native GPU/HDR not run.
+
 2026-08-20, v3.0.10 ship APK + Windows server + Windows client:
 
 - Version contract: `package.json` 3.0.10; Android `versionName` 3.0.10 /

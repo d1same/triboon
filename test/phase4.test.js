@@ -3710,6 +3710,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'About cast should use a balanced gap while names wrap in full');
   assert.match(ui, /it\.type === 'episode' \? getPlayerEpisodeContext\(it\)[\s\S]+overview: \(ep && ep\.overview\) \|\| S\.playerAbout\.overview/,
     'episode About should prefer that episode plot over the show overview');
+  assert.match(ui, /function playerAboutCastList\(d, epCredits, seasonCredits\) \{[\s\S]+seasonCredits\.cast[\s\S]+epCredits\.guest_stars[\s\S]+\/season\/\$\{parts\.season\}\/episode\/\$\{parts\.episode\}\/credits[\s\S]+\/season\/\$\{parts\.season\}\/credits/,
+    'episode About should lead with this season regulars, then that episode billed cast and guests');
+  assert.match(ui, /playerAboutCastList\(d, epCredits, seasonCredits\)\.slice\(0, ABOUT_CAST_MAX\)\.map\(\(c\) => \(\{\n        name: c\.name,/,
+    'About cast map must return an object literal — a stray ({) would kill the whole UI script and freeze the splash');
+  assert.match(android, /Math\.min\(10, cast\.length\(\)\)/,
+    'native About should show up to ten billed faces');
   assert.match(ui, /kicker\.textContent = about\.subline \? 'This episode' : 'About'[\s\S]+sub\.textContent = about\.subline/,
     'episode About should label the card This episode and show SxxExx plus the episode name');
   assert.match(android, /private static String formatNativeAboutCastName\(String name\) \{[\s\S]+parts\[0\] \+ "\\n"/,
@@ -4528,6 +4534,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'subtitle preference should not prevent Android native direct play; CC can hand off on demand');
   assert.match(android, /ImageButton nativeButton\(int iconRes, String label, boolean primary\)/,
     'native controls should use true image buttons so icons stay centered and unclipped');
+  assert.match(android, /lp\.rightMargin = dp\(8\);/,
+    'native player buttons should keep a small gap so icons do not sit on top of each other');
   assert.match(android, /nativeButton\(R\.drawable\.ic_player_pause, "Pause", true\)/,
     'native player should use drawable icons, not text glyph controls');
   assert.match(android, /moveNativeControlFocus\(code == KeyEvent\.KEYCODE_DPAD_LEFT \? -1 : 1\)/,
@@ -5679,8 +5687,8 @@ test('Android native Back dismisses Up Next before player chrome', () => {
     android.indexOf('private boolean handleNativeBackKey(KeyEvent e)'),
     android.indexOf('private void parkNativeHiddenFocusOnSeek()', android.indexOf('private boolean handleNativeBackKey(KeyEvent e)')),
   );
-  assert.match(keyBack, /!nativeGuideMode && !nativeUpNextVisible && !nativeSheetOpen\(\) && !nativeEpisodeStripOpen[\s\S]+dismissNativeChromeForBack\(\)/,
-    'a visible Up Next card must prevent key-down from consuming Back on the player chrome');
+  assert.match(keyBack, /!nativeGuideMode && !nativeUpNextVisible && !nativeSheetOpen\(\) && !nativeEpisodeStripOpen[\s\S]+!nativeAboutOpen[\s\S]+dismissNativeChromeForBack\(\)/,
+    'a visible Up Next or About card must prevent key-down from consuming Back on the player chrome');
 
   const systemBack = android.slice(
     android.indexOf('private void handleSystemBack()'),
@@ -5688,6 +5696,8 @@ test('Android native Back dismisses Up Next before player chrome', () => {
   );
   assert.match(systemBack, /if \(nativeGuideMode\) closeNativeGuideMode\(\);\s*\n\s*else if \(nativeUpNextVisible\) dismissNativeUpNext\(true\);\s*\n\s*else if \(nativeSheetOpen\(\)\) hideNativeSheet\(\);/,
     'Back should dismiss Up Next before sheets, chrome, or playback once key-up reaches the layer stack');
+  assert.match(systemBack, /else if \(nativeAboutOpen\) hideNativeTitleInfo\(\);\s*\n\s*else if \(nativeEpisodeStripOpen\) closeNativeEpisodeStrip\(\);\s*\n\s*else if \(!dismissNativeChromeForBack\(\)\) closeNativePlayback\(true\);/,
+    'Back should close the About/cast card before player chrome once key-up reaches the layer stack');
 });
 
 test('web browse grids stay windowed and D-pad uses logical grid indexes', () => {
