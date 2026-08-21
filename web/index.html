@@ -479,6 +479,8 @@ body[data-spotlight] .pgRow.focusable.focus,
 body[data-spotlight] .mCard.focusable.focus,
 body[data-spotlight] .musicRow.focusable.focus,
 body[data-spotlight] .mArtistHit.focusable.focus{transform:none}
+body[data-spotlight] .userNameBtn.focusable.focus,
+body[data-spotlight] .dashRecentItem.focusable.focus{transform:none}
 /* Guide keeps the one professional steel accent even on spotlight themes (no gold fill), so the
    focused channel/category label stays normal-coloured — no dark-on-fill override here. */
 /* Left menu: the focused row becomes a solid amber chip with dark text + a bold bar. */
@@ -1477,10 +1479,13 @@ body[data-spotlight] .activityNowItem.focusable.focus,body[data-spotlight] .acti
 .activityUserBlock h4{margin:0 0 10px;font:800 14px "Sora"}
 .userNameBtn{background:none!important;padding:0;margin:0;text-align:left;color:inherit;border:0;
   font:800 15px "Albert Sans";box-shadow:none!important;cursor:pointer}
-.userNameBtn.focusable::before{display:none}
-.userNameBtn:hover,.userNameBtn.focus,.userNameBtn:focus,.userNameBtn:focus-visible{
+.userNameBtn.focusable::before,.userNameBtn.focusable.focus::before,.userNameBtn:focus::before,.userNameBtn:focus-visible::before,
+body[data-spotlight] .userNameBtn.focusable.focus::before,body[data-spotlight] .userNameBtn:focus-visible::before{
+  content:none!important;display:none!important;opacity:0!important}
+.userNameBtn:hover,.userNameBtn.focus,.userNameBtn:focus,.userNameBtn:focus-visible,
+body[data-spotlight] .userNameBtn.focusable.focus,body[data-spotlight] .userNameBtn:focus-visible{
   background:transparent!important;color:var(--text)!important;box-shadow:none!important;outline:none!important;
-  text-decoration:underline;text-underline-offset:3px}
+  transform:none!important;text-decoration:underline;text-underline-offset:3px}
 .activityUserBlock .userNameBtn{font:800 14px "Sora"}
 #userPeek{padding-top:4px}
 .userPeekBack{margin:0 0 18px}
@@ -3159,10 +3164,12 @@ body.tv #prefTabs button.on:hover:not(:focus):not(.focus){opacity:.28}
 .dashRecent{display:flex;gap:12px;overflow-x:auto;padding:6px 2px 10px}
 .dashRecentItem{flex:0 0 72px;text-align:left;background:none!important;padding:0;color:inherit;box-shadow:none!important;overflow:visible}
 .dashRecentItem.focusable::before,.dashRecentItem.focusable.focus::before,.dashRecentItem:focus::before,.dashRecentItem:focus-visible::before,
-.activityNowItem.focusable::before,.activityNowItem.focusable.focus::before,.activityNowItem:focus::before,.activityNowItem:focus-visible::before{
+.activityNowItem.focusable::before,.activityNowItem.focusable.focus::before,.activityNowItem:focus::before,.activityNowItem:focus-visible::before,
+.userNameBtn.focusable::before,.userNameBtn.focusable.focus::before,.userNameBtn:focus::before,.userNameBtn:focus-visible::before{
   content:none!important;display:none!important;opacity:0!important}
 body[data-spotlight] .dashRecentItem.focusable.focus::before,body[data-spotlight] .dashRecentItem:focus-visible::before,
-body[data-spotlight] .activityNowItem.focusable.focus::before,body[data-spotlight] .activityNowItem:focus-visible::before{
+body[data-spotlight] .activityNowItem.focusable.focus::before,body[data-spotlight] .activityNowItem:focus-visible::before,
+body[data-spotlight] .userNameBtn.focusable.focus::before,body[data-spotlight] .userNameBtn:focus-visible::before{
   content:none!important;display:none!important;opacity:0!important}
 .dashRecentArt{aspect-ratio:2/3;border-radius:8px;background:var(--raise) center/cover no-repeat;
   transition:box-shadow .16s ease,transform .16s ease}
@@ -22776,6 +22783,8 @@ function openUserPeek(id, name) {
   S.userPeekId = String(id);
   S.userPeekName = name || 'User';
   S.userPeekRange = S.userPeekRange || 'month';
+  const usersTab = document.querySelector('#prefTabs [data-srv="users"], #prefTabs [data-tab="users"]');
+  if (usersTab) activateAccountTab(usersTab);
   if ($('userPeopleWrap')) $('userPeopleWrap').hidden = true;
   if ($('userPeek')) $('userPeek').hidden = false;
   if ($('userPeekName')) $('userPeekName').textContent = S.userPeekName;
@@ -24013,9 +24022,9 @@ function activityGroupKey(s = {}) {
   return k || String(s.title || '');
 }
 function activityCoverBtn(t = {}) {
-  const art = artBackgroundHtml(t.poster, artFallback(t.key || t.title, 8));
+  const art = t.poster ? artBackgroundHtml(t.poster) : '';
   return `<button type="button" class="dashRecentItem focusable" data-dash-key="${esc(t.key || '')}">
-    <div class="dashRecentArt" style="background-image:${art}"></div>
+    <div class="dashRecentArt"${art ? ` style="background-image:${art}"` : ''}></div>
     <span class="dashRecentTitle">${esc(t.title || t.key || '')}</span>
   </button>`;
 }

@@ -126,6 +126,29 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-20, v3.1.2 ship APK + Windows server + Windows client:
+
+- Version contract: `package.json` 3.1.2; Android `versionName` 3.1.2 /
+  `versionCode` 347; Windows client package/Tauri/Cargo 3.1.2.
+- Watch Activity names (moe / Toomaj / Naderi) are real buttons: click
+  jumps to Users and opens that account's watch peek. Toomaj gold/green
+  hover fill is gone on those names. Recently-watched tiles with no
+  poster stay a quiet ink square, not a yellow-green blob.
+- Android testing for this ship used the local TV emulator
+  (`emulator-5554`), not the living-room Shield.
+- `npm.cmd test` 604/604. Isolated `/api/server` smoke reported 3.1.2.
+  `npm.cmd run verify:full -- -AndroidDevice emulator-5554
+  -AndroidHostServerPort 7777` passed whitespace, JS syntax, web parse,
+  focused P9/P14/P11, full Node suite, household VOD/CC, IPTV ABC+ESPN
+  web+native (24484 channels, 2 video picks), overlapping Play 12ms /
+  128ms wall, Android lint/native-unit/`assembleDebug`, and emulator
+  ExoPlayer stress
+  `bench/stress-results/android-tv-stress-20260820-231732.json`
+  (`ok: true`).
+- Household Mario: ready 952ms, first-byte 3146ms SLOW, seek 5ms, resume
+  19ms, remux, cc=200. FROM S01E01: 526/3/1/4ms, remux, cc=200.
+- Windows native GPU/HDR not run.
+
 2026-08-20, v3.1.1 ship APK + Windows server + Windows client:
 
 - Version contract: `package.json` 3.1.1; Android `versionName` 3.1.1 /

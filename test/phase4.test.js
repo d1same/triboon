@@ -3241,8 +3241,12 @@ test('Android native player: direct source and native chrome stay out of the web
     'Settings action buttons fill on hover; size chips, Dashboard posters, and theme cards stay quiet');
   assert.match(ui, /\.dashRecentItem\.focusable::before[\s\S]+content:none!important;display:none!important;opacity:0!important/,
     'Just finished posters must not draw the full-tile gold focus frame; the cover ring is the cue');
-  assert.match(ui, /function openUserPeek\(id, name\) \{[\s\S]+\/api\/watch-stats\?range=[\s\S]+&user=[\s\S]+function bindUserPeekButtons\(root\)/,
-    'admin name clicks should open that account’s real watch-stats page, not the demo dashboard');
+  assert.match(ui, /function openUserPeek\(id, name\) \{[\s\S]+#prefTabs \[data-srv="users"\][\s\S]+activateAccountTab\(usersTab\)[\s\S]+\/api\/watch-stats\?range=[\s\S]+&user=[\s\S]+function bindUserPeekButtons\(root\)/,
+    'admin name clicks from Activity should jump to Users and open that account’s watch-stats page');
+  assert.match(ui, /body\[data-spotlight\] \.userNameBtn\.focusable\.focus::before[\s\S]+content:none!important;display:none!important/,
+    'user names must not get the Toomaj gold/green hover fill');
+  assert.match(ui, /function activityCoverBtn\(t = \{\}\) \{[\s\S]+const art = t\.poster \? artBackgroundHtml\(t\.poster\) : '';/,
+    'recently-watched covers stay quiet when there is no poster, not a yellow-green fallback blob');
   assert.match(ui, /function syncSectionTabs\(tabsId, activeButton = null\) \{[\s\S]+setAttribute\('role', 'tablist'\)[\s\S]+setAttribute\('role', 'tab'\)[\s\S]+setAttribute\('aria-selected', on \? 'true' : 'false'\)[\s\S]+\}/,
     'Settings and Preferences side tabs should initialize selected state for D-pad and accessibility');
   // Server settings are folded into the Preferences page as one menu (Preferences group · divider ·
