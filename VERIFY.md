@@ -126,6 +126,30 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-21, v3.1.3 ship APK + Windows server + Windows client:
+
+- Version contract: `package.json` 3.1.3; Android `versionName` 3.1.3 /
+  `versionCode` 348; Windows client package/Tauri/Cargo 3.1.3.
+- Live TV is an ink page like Settings: leftover Movies/TV backdrop
+  image and `#bdInfo` title text are cleared, and rail preview does not
+  paint the last movie still behind the channel list.
+- In-player IPTV guide **Back to [title]** gets a visible D-pad focus
+  fill (inset ring + gold arrow chip) via `applyFocus` / `.pgBackTop.focus`.
+- Android testing for this ship used the local TV emulator
+  (`emulator-5554`), not the living-room Shield.
+- `npm.cmd test` 604/604. Isolated `/api/server` smoke reported 3.1.3.
+  `npm.cmd run verify:full -- -AndroidDevice emulator-5554
+  -AndroidHostServerPort 7777` passed whitespace, JS syntax, web parse,
+  focused P9/P14/P11, full Node suite, household VOD/CC, IPTV
+  (24484 channels, 2 video picks), overlapping Play 18ms / 2053ms wall,
+  Android lint/native-unit/`assembleDebug`, and emulator ExoPlayer stress
+  `bench/stress-results/android-tv-stress-20260821-084849.json`
+  (`ok: true`; emulator 4K LOTR empty-search warning only).
+- Household Mario: ready 5141ms SLOW, first-byte 2635ms SLOW, seek 602ms,
+  resume 39ms, remux, cc=200. FROM S01E01: ready 2128ms, first-byte 196ms,
+  seek 1224ms, resume 10ms, remux, cc=200.
+- Windows native GPU/HDR not run.
+
 2026-08-20, v3.1.2 ship APK + Windows server + Windows client:
 
 - Version contract: `package.json` 3.1.2; Android `versionName` 3.1.2 /

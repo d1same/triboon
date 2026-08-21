@@ -1049,8 +1049,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'personal libraries use the same poster-browse chrome as Movies and TV');
   assert.match(ui, /function localLibraryBatchSize\(\) \{[\s\S]+contains\('tv'\)\) return LOCAL_GRID_BATCH;[\s\S]+cols \* rows/,
     'desktop personal libraries request enough first-page posters to fill the screen; Android TV keeps the small batch');
-  assert.match(ui, /document\.body\.classList\.toggle\('fullBd', isBrowse \|\| v === 'discover'\);/,
-    'Discover should show the focused-title backdrop overlay (rows pinned low) like other cover pages');
+  assert.match(ui, /document\.body\.classList\.toggle\('fullBd', \(isBrowse && v !== 'livetv'\) \|\| v === 'discover'\);/,
+    'Discover should show the focused-title backdrop overlay (rows pinned low) like other cover pages; Live TV stays ink');
   assert.match(ui, /let pendingLibraryRouteJob = null;[\s\S]+function applyLibraryRoute\(id\) \{[\s\S]+switchView\('library', false\);[\s\S]+function deferLibraryRoute\(id\) \{[\s\S]+loadLibraries\(\)[\s\S]+if \(parts\[0\] !== 'library' \|\| parts\[1\] !== id\) return;[\s\S]+if \(!applyLibraryRoute\(id\)\) switchView\('home', false\);[\s\S]+if \(view === 'library' && parts\[1\]\) \{[\s\S]+deferLibraryRoute\(parts\[1\]\);/,
     'library hash routes should wait for async library metadata instead of falling through to Home');
   assert.match(ui, /if \(v === 'search'\) \{ \$\('browseTitle'\)\.textContent = 'Search';[\s\S]+if \(!opts\.preserveSearch && !opts\.preservePage\) resetSearchPage\(\);/,
@@ -4549,10 +4549,20 @@ test('Android native player: direct source and native chrome stay out of the web
     'Watchlist skips a remount when the same titles are already on the grid');
   assert.match(ui, /if \(v === 'prefs' && !opts\.preservePage\) \{[\s\S]+S\._prefsPainted[\s\S]+openPrefs\(\);/,
     'Preferences keeps already-painted account rows instead of rebuilding on every visit');
-  assert.match(ui, /const inkView = v === 'prefs' \|\| v === 'settings';[\s\S]+if \(!opts\.preservePage && \(inkView \|\| !peekPageCache\(v\)\)\) clearBackdrop\(\)/,
-    'Settings and Preferences always drop the last title still so the page is clean ink');
-  assert.match(ui, /function paintRailPreviewHero\(\) \{[\s\S]+S\.view === 'prefs' \|\| S\.view === 'settings'[\s\S]+return false/,
-    'rail rollover onto Settings must not paint the last movie still behind the account page');
+  assert.match(ui, /const inkView = v === 'prefs' \|\| v === 'settings' \|\| v === 'livetv';[\s\S]+if \(!opts\.preservePage && \(inkView \|\| !peekPageCache\(v\)\)\) clearBackdrop\(\)/,
+    'Settings, Preferences, and Live TV always drop the last title still so the page is clean ink');
+  assert.match(ui, /function paintRailPreviewHero\(\) \{[\s\S]+S\.view === 'prefs' \|\| S\.view === 'settings' \|\| S\.view === 'livetv'[\s\S]+return false/,
+    'rail rollover onto Settings or Live TV must not paint the last movie still');
+  assert.match(ui, /document\.body\.classList\.toggle\('fullBd', \(isBrowse && v !== 'livetv'\) \|\| v === 'discover'\)/,
+    'Live TV is a channel list — it must not keep the Movies/TV backdrop title band');
+  assert.match(ui, /\.pgBackTop:hover,\.pgBackTop:focus,\.pgBackTop:focus-visible,\.pgBackTop\.focus\{/,
+    'Back to title in the player guide has a visible D-pad focus fill');
+  assert.match(ui, /back\.className = 'pgBackTop focusable'/,
+    'the player-guide back row is a focusable control so applyFocus can paint it');
+  assert.match(ui, /el\.classList && el\.classList\.contains\('pgBackTop'\)[\s\S]+applyFocus\(el, false\)/,
+    'D-pad onto Back to title uses applyFocus so the .focus fill is painted');
+  assert.match(ui, /#pGuide \.pgRow\.focus, #pGuide \.pgBackTop\.focus/,
+    'leaving the back row clears its focus fill so two guide rows are not selected');
   assert.match(ui, /function restoreBrowseCache\(view\) \{[\s\S]+S\._gridKind === view && \$\('grid'\)\.querySelector\('\.pcard'\)[\s\S]+renderGrid\(snap\.items\)/,
     'Movies/TV/Kids restore the last poster page without remounting covers that are already on screen');
   assert.match(ui, /async function openBrowse\(type\) \{[\s\S]+if \(restoreBrowseCache\(view\)\) return;/,
@@ -6361,8 +6371,8 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'TV Cast Known For uses the same whole-row pager as Movies');
   assert.match(ui, /async function openPerson\(id, push = true\) \{[\s\S]+\$\('detail'\)\.style\.visibility = 'hidden';[\s\S]+\$\('bdInfo'\)\.classList\.remove\('show'\);[\s\S]+S\.zone = 'grid'/,
     'opening Cast hides the Home/Movies title band but keeps the origin art');
-  assert.match(ui, /if \(S\.view !== 'search' && !liveGuideRow\) \{ setBackdrop\(it\.backdrop \|\| it\.poster\); if \(S\.view !== 'person'\) setBdInfo\(it\); \}/,
-    'Cast paints the focused Known For backdrop the same way Movies does, without the Home title band');
+  assert.match(ui, /if \(S\.view !== 'search' && S\.view !== 'livetv' && !liveGuideRow\) \{ setBackdrop\(it\.backdrop \|\| it\.poster\); if \(S\.view !== 'person'\) setBdInfo\(it\); \}/,
+    'Cast paints the focused Known For backdrop the same way Movies does, without the Home title band; Live TV stays ink');
   assert.match(ui, /const personGrid = \$\('personGrid'\);[\s\S]+personGrid\.style\.maxHeight = `\$\{Math\.ceil\(padTop \+ personH\)\}px`/,
     'TV Cast window is one card plus top pad, same as Movies');
   assert.match(ui, /body\.tv #hero\{margin-bottom:18px\}/,

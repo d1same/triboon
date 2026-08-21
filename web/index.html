@@ -472,6 +472,7 @@ body[data-spotlight] .chGroupHead.focusable.focus,
 body[data-spotlight] .gRow.focusable.focus,
 body[data-spotlight] .lcat.focusable.focus,
 body[data-spotlight] .pgRow.focusable.focus,
+body[data-spotlight] .pgBackTop.focusable.focus,
 /* Music tiles are wide 16/9 covers in overflow rails near the top edge — they were designed to
    focus with a cover ring/glow only (transform:none in the base themes). The spotlight scale above
    re-introduced a zoom by specificity, pushing the top row + rail edges off the frame. Match the
@@ -2869,7 +2870,13 @@ body.tv #pGuide{backdrop-filter:none} /* per-frame blur tanks the Shield GPU */
 .pgTimeline .pgBack{position:sticky;top:34px;z-index:2}
 .pgTimeline .pgBack .gTl{display:flex;align-items:center;padding:0 14px;color:var(--muted);font:700 12px "Albert Sans"}
 .pgBackTop{min-height:46px;display:flex;align-items:center;gap:12px;padding:0 14px;border:0;border-radius:0;background:var(--surface);color:var(--text);text-align:left;flex:none}
-.pgBackTop:hover,.pgBackTop:focus{outline:none;background:var(--btnHover);box-shadow:none}
+.pgBackTop.focusable{transform:none}
+.pgBackTop.focusable::before{display:none}
+.pgBackTop:hover,.pgBackTop:focus,.pgBackTop:focus-visible,.pgBackTop.focus{
+  outline:none;background:var(--btnHover);color:var(--text);
+  box-shadow:inset 0 0 0 2px var(--focus)}
+.pgBackTop:hover .pgInit,.pgBackTop:focus .pgInit,.pgBackTop:focus-visible .pgInit,.pgBackTop.focus .pgInit{
+  background:var(--focus);color:var(--btnFocusText)}
 .pgBackTop .pgInit{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;background:var(--soft);color:var(--muted);font:800 16px "Sora";flex:none}
 .pgBackTop .pgBackCopy{min-width:0;display:flex;flex-direction:column;gap:2px}
 .pgBackTop .pgBackTitle{font:800 13px "Albert Sans";white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -19897,7 +19904,7 @@ function playerGuideRowByChannel(channel) {
     .find((row) => String(row.dataset.guideChannel) === String(channel)) || null;
 }
 function clearPlayerGuideVisualFocus() {
-  document.querySelectorAll('#pGuide .pgRow.focus').forEach((row) => row.classList.remove('focus'));
+  document.querySelectorAll('#pGuide .pgRow.focus, #pGuide .pgBackTop.focus').forEach((row) => row.classList.remove('focus'));
 }
 function setPlayerGuideVisualFocus(channel) {
   const target = channel ?? S._pgFocusChannel ?? S.liveCur;
@@ -20177,7 +20184,7 @@ async function renderPlayerGuideTimeline(pg, list) {
   const resumeSaved = playerGuideShouldResumeVod();
   if (backTo) {
     const back = document.createElement('button');
-    back.className = 'pgBackTop';
+    back.className = 'pgBackTop focusable';
     back.dataset.pg = '1';
     back.dataset.pgBack = '1';
     back.innerHTML = `<span class="pgInit">←</span><span class="pgBackCopy"><span class="pgBackTitle">Back to ${esc(backTo.item.title)}</span>
@@ -24989,10 +24996,11 @@ function switchView(v, push = true, opts = {}) {
     } else leaveRail();
   }
   if (v === 'search') $('bdInfo').classList.remove('show'); // stale hero text bled through the results
-  // Cached Home/Movies keep their last still so the page does not flash ink. Settings and
-  // Preferences are not cover pages — always drop the previous title so they sit on clean
-  // background (owner: leftover Mario art was still showing behind the account page).
-  const inkView = v === 'prefs' || v === 'settings';
+  // Cached Home/Movies keep their last still so the page does not flash ink. Settings,
+  // Preferences, and Live TV are not cover pages — always drop the previous title so they
+  // sit on clean background (owner: leftover Mario art was still showing on Settings and
+  // the Live TV channel list).
+  const inkView = v === 'prefs' || v === 'settings' || v === 'livetv';
   if (!opts.preservePage && (inkView || !peekPageCache(v))) clearBackdrop();
   if (push) setRoute(v === 'library' && S.currentLib ? `#/library/${S.currentLib.id}` : `#/${v}`);
   const onDiscover = v === 'discover' || v === 'calendar';
@@ -25000,7 +25008,7 @@ function switchView(v, push = true, opts = {}) {
   const shortBrowseBd = !document.body.classList.contains('tv') && (v === 'discover' || v === 'movies' || v === 'tv' || v === 'kids' || v === 'watchlist' || (v === 'library' && S.currentLib && S.currentLib.path));
   // Browse AND Discover show the focused title's backdrop info up top (rows are pinned low to
   // leave room). Calendar stays clean — it's a date list, not a cover wall.
-  document.body.classList.toggle('fullBd', isBrowse || v === 'discover');
+  document.body.classList.toggle('fullBd', (isBrowse && v !== 'livetv') || v === 'discover');
   document.body.classList.toggle('shortBrowseBd', !!shortBrowseBd);
   document.body.classList.toggle('libGrid', v === 'library' && !!(S.currentLib && S.currentLib.path));
   applyCoverSize();
@@ -25820,7 +25828,7 @@ function focusGrid(i) {
     const it = (S.gridItems || [])[S.gridIdx];
     if (it) {
       S.focusedItem = it;
-      if (S.view !== 'search') { setBackdrop(it.backdrop || it.poster); if (S.view !== 'person') setBdInfo(it); }
+      if (S.view !== 'search' && S.view !== 'livetv') { setBackdrop(it.backdrop || it.poster); if (S.view !== 'person') setBdInfo(it); }
     }
     if (S.gridIdx >= count - cols * 2) {
       if (['movies', 'tv'].includes(S.view)) runBrowse(false);
@@ -25902,7 +25910,7 @@ function focusGrid(i) {
     S.focusedItem = it;
     // Search is a clean full-page list — no backdrop swapping under the results.
     // Cast keeps the focused Known For art (same fade as Movies) but not the Home title band.
-    if (S.view !== 'search' && !liveGuideRow) { setBackdrop(it.backdrop || it.poster); if (S.view !== 'person') setBdInfo(it); }
+    if (S.view !== 'search' && S.view !== 'livetv' && !liveGuideRow) { setBackdrop(it.backdrop || it.poster); if (S.view !== 'person') setBdInfo(it); }
   }
   if (S.view === 'person' && S.gridIdx >= (S.gridItems || []).length - Math.max(2, gridCols() * 2)) {
     loadMorePersonWorks(false);
@@ -25921,7 +25929,7 @@ function firstRailPreviewItem() {
 // dead poster strip with an empty hero (owner, Shield: covers sat low, no details).
 function paintRailPreviewHero() {
   if (S.zone !== 'rail') return false;
-  if (S.view === 'prefs' || S.view === 'settings') return false;
+  if (S.view === 'prefs' || S.view === 'settings' || S.view === 'livetv') return false;
   const it = firstRailPreviewItem();
   if (!it) return false;
   S.focusedItem = it;
@@ -26641,7 +26649,11 @@ document.addEventListener('keydown', (e) => {
       const multi = multiEl && !multiEl.hidden && !multiEl.disabled && multiEl.offsetParent !== null ? multiEl : null;
       const moveTo = (el) => {
         if (!el) return;
-        if (el.classList && el.classList.contains('pgCat')) {
+        if (el.classList && el.classList.contains('pgBackTop')) {
+          S.pgCatDpadMode = false;
+          clearPlayerGuideVisualFocus();
+          applyFocus(el, false);
+        } else if (el.classList && el.classList.contains('pgCat')) {
           const i = cats.indexOf(el);
           if (i >= 0) S.pgCatNavIdx = i;
           S.pgCatDpadMode = true;
