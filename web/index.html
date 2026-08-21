@@ -19555,6 +19555,7 @@ function commitNativeLivePlayback(it) {
   setNativeLiveTuningPending(null);
   S.nativeLivePending = null;
   setNativeLivePlaybackState(it);
+  $('player').classList.add('live');
   startActivityHeartbeat();
   updatePlayerMeta();
   markGuideCur();
@@ -19632,6 +19633,13 @@ function tryNativeLivePlayer(it, guide = false) {
   }
 }
 window.__tvNativeLiveClosed = () => {
+  if (S._resumingVod) {
+    S.nativeLivePending = null;
+    setNativeLiveTuningPending(null);
+    S.nativeLiveReturnView = null;
+    S.nativeGuideMode = false;
+    return;
+  }
   const wasLiveShell = !!(S.playing && S.playing.item && S.playing.item.type === 'live' && S.view === 'player');
   const returnView = S.nativeLiveReturnView || (wasLiveShell ? 'livetv' : null);
   S.nativeLivePending = null;
@@ -20038,8 +20046,31 @@ function returnToSavedVod(backTo) {
   if (!backTo || !backTo.item) return closePlayerGuide();
   const target = { ...backTo.item, resume: Math.max(0, Math.floor(backTo.resume || backTo.item.resume || 0)) };
   S.returnVod = null;
-  closePlayerGuide();
-  play(target);
+  S._resumingVod = true;
+  S.nativeGuideMode = false;
+  closePlayerGuide({ fromNative: true });
+  if (window.TriboonTV && typeof window.TriboonTV.closeVideo === 'function') {
+    try { window.TriboonTV.closeVideo(); } catch {}
+  }
+  Promise.resolve(play(target)).finally(() => { S._resumingVod = false; });
+}
+function playerGuideBackTarget() {
+  if (S.returnVod && S.returnVod.item) return S.returnVod;
+  const playing = S.playing && S.playing.item;
+  if (playing && playing.type !== 'live') return { item: playing, resume: currentTime() };
+  return null;
+}
+function playerGuideShouldResumeVod() {
+  const saved = S.returnVod;
+  if (!saved || !saved.item) return false;
+  if (S.nativeLivePending || S.nativeLivePendingCommit || S.playerGuideLivePending) return true;
+  const playing = S.playing && S.playing.item;
+  if (!playing || playing.type === 'live' || $('player').classList.contains('live')) return true;
+  return String(playing.key || '') !== String(saved.item.key || '');
+}
+function onPlayerGuideBack() {
+  if (playerGuideShouldResumeVod()) return returnToSavedVod(S.returnVod);
+  return closePlayerGuide();
 }
 function syncNativeGuidePipRect() {
   if (!S.nativeGuideMode || !window.TriboonTV || !TriboonTV.setGuidePipRect) return;
@@ -20142,18 +20173,16 @@ async function renderPlayerGuideTimeline(pg, list) {
     }).catch(() => {});
   }
 
-  const backTo = isLive ? S.returnVod : (S.playing && S.playing.item && S.playing.item.type !== 'live' ? { item: S.playing.item } : null);
+  const backTo = playerGuideBackTarget();
+  const resumeSaved = playerGuideShouldResumeVod();
   if (backTo) {
     const back = document.createElement('button');
     back.className = 'pgBackTop';
     back.dataset.pg = '1';
     back.dataset.pgBack = '1';
     back.innerHTML = `<span class="pgInit">←</span><span class="pgBackCopy"><span class="pgBackTitle">Back to ${esc(backTo.item.title)}</span>
-      <span class="pgBackSub">${isLive ? `Resume at ${fmt(Math.floor(backTo.resume || 0))}` : 'Close guide'}</span></span>`;
-    back.addEventListener('click', () => {
-      if (!isLive) return closePlayerGuide();
-      returnToSavedVod(backTo);
-    });
+      <span class="pgBackSub">${resumeSaved ? `Resume at ${fmt(Math.floor(backTo.resume || 0))}` : 'Close guide'}</span></span>`;
+    back.addEventListener('click', onPlayerGuideBack);
     lp.appendChild(back);
   }
 
@@ -20343,6 +20372,7 @@ async function renderPlayerGuideTimeline(pg, list) {
 async function togglePlayerGuide() {
   const pg = $('pGuide');
   if (pg.classList.contains('open')) return closePlayerGuide();
+  rememberVodReturn();
   const list = await ensurePlayerGuideChannels();
   if (!list.length) return toast(S.serverInfo && S.serverInfo.iptv ? 'No Live TV channels available' : 'Live TV is not set up');
   if (S.playing && S.playing.usingNative && window.TriboonTV && typeof window.TriboonTV.openGuide === 'function'
@@ -24959,7 +24989,11 @@ function switchView(v, push = true, opts = {}) {
     } else leaveRail();
   }
   if (v === 'search') $('bdInfo').classList.remove('show'); // stale hero text bled through the results
-  if (!opts.preservePage && !peekPageCache(v)) clearBackdrop(); // cached pages keep their last art instead of flashing ink
+  // Cached Home/Movies keep their last still so the page does not flash ink. Settings and
+  // Preferences are not cover pages — always drop the previous title so they sit on clean
+  // background (owner: leftover Mario art was still showing behind the account page).
+  const inkView = v === 'prefs' || v === 'settings';
+  if (!opts.preservePage && (inkView || !peekPageCache(v))) clearBackdrop();
   if (push) setRoute(v === 'library' && S.currentLib ? `#/library/${S.currentLib.id}` : `#/${v}`);
   const onDiscover = v === 'discover' || v === 'calendar';
   const isBrowse = ['movies', 'tv', 'kids', 'search', 'library', 'watchlist', 'livetv'].includes(v);
@@ -25022,9 +25056,7 @@ function switchView(v, push = true, opts = {}) {
     if (!opts.keepRail && !opts.restoreFocus) setTimeout(() => focusContent(), 60); }
   if (v === 'settings' && !opts.preservePage) refreshSettings();
   if (v === 'prefs' && !opts.preservePage) {
-    if (S._prefsPainted) {
-      if (S.zone === 'rail') paintRailPreviewHero();
-    } else {
+    if (!S._prefsPainted) {
       openPrefs();
       S._prefsPainted = true;
     }
@@ -25889,6 +25921,7 @@ function firstRailPreviewItem() {
 // dead poster strip with an empty hero (owner, Shield: covers sat low, no details).
 function paintRailPreviewHero() {
   if (S.zone !== 'rail') return false;
+  if (S.view === 'prefs' || S.view === 'settings') return false;
   const it = firstRailPreviewItem();
   if (!it) return false;
   S.focusedItem = it;

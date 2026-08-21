@@ -134,19 +134,26 @@ fails to produce a playable stream. Budgets default to feels-local targets
   jumps to Users and opens that account's watch peek. Toomaj gold/green
   hover fill is gone on those names. Recently-watched tiles with no
   poster stay a quiet ink square, not a yellow-green blob.
+- Settings / Preferences sit on clean ink — the last Home/Movies still
+  does not ride in.
+- In-player Live TV "Back to <title>" resumes the movie or show you left
+  on the first click (web, Android ExoPlayer, Windows libmpv). Opening the
+  guide from a title saves it; picking CNN no longer freezes the button
+  as Close guide.
 - Android testing for this ship used the local TV emulator
   (`emulator-5554`), not the living-room Shield.
 - `npm.cmd test` 604/604. Isolated `/api/server` smoke reported 3.1.2.
   `npm.cmd run verify:full -- -AndroidDevice emulator-5554
   -AndroidHostServerPort 7777` passed whitespace, JS syntax, web parse,
   focused P9/P14/P11, full Node suite, household VOD/CC, IPTV ABC+ESPN
-  web+native (24484 channels, 2 video picks), overlapping Play 12ms /
-  128ms wall, Android lint/native-unit/`assembleDebug`, and emulator
+  web+native (24484 channels, 2 video picks), overlapping Play 2122ms /
+  4165ms wall, Android lint/native-unit/`assembleDebug`, and emulator
   ExoPlayer stress
-  `bench/stress-results/android-tv-stress-20260820-231732.json`
+  `bench/stress-results/android-tv-stress-20260821-050323.json`
   (`ok: true`).
-- Household Mario: ready 952ms, first-byte 3146ms SLOW, seek 5ms, resume
-  19ms, remux, cc=200. FROM S01E01: 526/3/1/4ms, remux, cc=200.
+- Household Mario: ready 1034ms, first-byte 2ms, seek 1ms, resume 15ms,
+  remux, cc=200. FROM S01E01: ready 23261ms SLOW, first-byte 4ms, seek
+  1ms, resume 4ms, remux, cc=200.
 - Windows native GPU/HDR not run.
 
 2026-08-20, v3.1.1 ship APK + Windows server + Windows client:

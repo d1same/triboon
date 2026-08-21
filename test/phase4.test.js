@@ -4134,6 +4134,16 @@ test('Android native player: direct source and native chrome stay out of the web
     'native guide channel retunes should keep the web guide epoch in sync and restore row focus');
   assert.match(ui, /function rememberVodReturn\(item = S\.playing && S\.playing\.item, resume = currentTime\(\), opts = \{\}\) \{[\s\S]+if \(!item \|\| item\.type === 'live'\) return false;[\s\S]+S\.returnVod = \{ item, resume: at \};[\s\S]+return true;[\s\S]+\}/,
     'movie and episode return targets should be saved through one helper so Live TV changes do not overwrite them');
+  assert.match(ui, /function returnToSavedVod\(backTo\) \{[\s\S]+S\._resumingVod = true;[\s\S]+closePlayerGuide\(\{ fromNative: true \}\)[\s\S]+closeVideo[\s\S]+play\(target\)/,
+    'Back to movie should close native Live TV first, then resume the saved title');
+  assert.match(ui, /function playerGuideShouldResumeVod\(\) \{[\s\S]+S\.returnVod[\s\S]+nativeLivePending[\s\S]+function onPlayerGuideBack\(\) \{[\s\S]+playerGuideShouldResumeVod\(\)[\s\S]+returnToSavedVod\(S\.returnVod\)[\s\S]+closePlayerGuide\(\)/,
+    'Back to movie must read the live return target at click time, not a frozen Close-guide handler from before the channel tune');
+  assert.match(ui, /window\.__tvNativeLiveClosed = \(\) => \{[\s\S]+if \(S\._resumingVod\) \{[\s\S]+return;/,
+    'closing ExoPlayer while returning to a movie must not also close the player into Live TV');
+  assert.match(ui, /back\.addEventListener\('click', onPlayerGuideBack\)/,
+    'the PiP Back to title button should resume the saved movie or show on every player');
+  assert.match(ui, /async function togglePlayerGuide\(\) \{[\s\S]+rememberVodReturn\(\);[\s\S]+ensurePlayerGuideChannels\(\)/,
+    'opening the in-player guide from a movie or show should save that title before any Live TV tune');
   assert.match(ui, /async function closePlayer\(opts = \{\}\) \{[\s\S]+rememberVodReturn\(S\.playing && S\.playing\.item, currentTime\(\), \{ onlyMidstream: true \}\);/,
     'closing a movie or episode mid-play should keep a return target for later Live TV browsing');
   assert.match(ui, /if \(!it\) \{[\s\S]+S\.playing\.item\.type !== 'live' && S\.view === 'player'[\s\S]+rememberVodReturn\(\);[\s\S]+revealNativeGuideShell\(\);[\s\S]+return togglePlayerGuide\(\);/,
@@ -4539,6 +4549,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'Watchlist skips a remount when the same titles are already on the grid');
   assert.match(ui, /if \(v === 'prefs' && !opts\.preservePage\) \{[\s\S]+S\._prefsPainted[\s\S]+openPrefs\(\);/,
     'Preferences keeps already-painted account rows instead of rebuilding on every visit');
+  assert.match(ui, /const inkView = v === 'prefs' \|\| v === 'settings';[\s\S]+if \(!opts\.preservePage && \(inkView \|\| !peekPageCache\(v\)\)\) clearBackdrop\(\)/,
+    'Settings and Preferences always drop the last title still so the page is clean ink');
+  assert.match(ui, /function paintRailPreviewHero\(\) \{[\s\S]+S\.view === 'prefs' \|\| S\.view === 'settings'[\s\S]+return false/,
+    'rail rollover onto Settings must not paint the last movie still behind the account page');
   assert.match(ui, /function restoreBrowseCache\(view\) \{[\s\S]+S\._gridKind === view && \$\('grid'\)\.querySelector\('\.pcard'\)[\s\S]+renderGrid\(snap\.items\)/,
     'Movies/TV/Kids restore the last poster page without remounting covers that are already on screen');
   assert.match(ui, /async function openBrowse\(type\) \{[\s\S]+if \(restoreBrowseCache\(view\)\) return;/,
