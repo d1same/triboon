@@ -305,7 +305,7 @@ $report['socket'] = Connect-Devtools
 $boot = Invoke-CdpJson @"
 (async () => {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-  for (let i = 0; i < 60; i++) {
+  for (let i = 0; i < 120; i++) {
     const href = location.href;
     if (href.startsWith('chrome-error://')) {
       return { ok: false, reason: 'server-unreachable', href, cards: 0 };

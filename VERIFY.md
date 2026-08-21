@@ -126,6 +126,33 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-20, v3.1.1 ship APK + Windows server + Windows client:
+
+- Version contract: `package.json` 3.1.1; Android `versionName` 3.1.1 /
+  `versionCode` 346; Windows client package/Tauri/Cargo 3.1.1.
+- Shield TV polish: Home 1-row window sizes to the focused row so Live TV
+  no longer peeks chopped posters; Live TV search/channels sit 16px above
+  the guide; in-player About uses details-page 3:4 faces (web + native)
+  that fit all 10 billed people; Sources is a hairline list with no card
+  fill — the row you are on grows bright, no left tick (the scroller was
+  clipping it).
+- `npm.cmd test` 604/604. Isolated `/api/server` smoke reported 3.1.1.
+  `npm.cmd run verify:full -- -AndroidDevice 10.1.20.11:5555
+  -AndroidHostServerPort 7777` passed whitespace, JS syntax, web parse,
+  focused P9/P14/P11, full Node suite, household VOD/CC, IPTV ABC+ESPN
+  web+native (24484 channels, 2 video picks), overlapping Play 15ms /
+  1250ms wall, Android lint/native-unit/`assembleDebug`. A follow-up
+  Shield ExoPlayer stress (no reinstall after the debug APK was already
+  on the box) passed
+  `bench/stress-results/android-tv-stress-20260820-221954.json`
+  (`ok: true`). The same `verify:full` install+stress pass had already
+  succeeded earlier in
+  `bench/stress-results/android-tv-stress-20260820-220716.json`; a second
+  install raced Home with 0 cards, so the boot wait is now 60s.
+- Household Mario: ready 1629ms, first-byte 92ms, seek 4ms, resume 20ms,
+  remux, cc=200. FROM S01E01: 1108/24/3/64ms, remux, cc=200.
+- Windows native GPU/HDR not run.
+
 2026-08-20, v3.1.0 ship APK + Windows server + Windows client:
 
 - Version contract: `package.json` 3.1.0; Android `versionName` 3.1.0 /

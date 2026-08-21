@@ -26,6 +26,7 @@ import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
+import android.graphics.Outline;
 import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -50,6 +51,7 @@ import android.util.TypedValue;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewOutlineProvider;
 import android.view.animation.LinearInterpolator;
 import android.view.WindowManager;
 import android.window.OnBackInvokedDispatcher;
@@ -3400,7 +3402,7 @@ public class MainActivity extends Activity {
         nativeEpisodeStrip.addView(nativeEpisodeList, new HorizontalScrollView.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         nativeChrome.addView(nativeEpisodeStrip, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(198)));
+                ViewGroup.LayoutParams.MATCH_PARENT, nativeEpisodeStripHeightPx()));
 
         FrameLayout.LayoutParams chromeLp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -3761,8 +3763,8 @@ public class MainActivity extends Activity {
         posterBg.setCornerRadius(dp(8));
         nativeAboutPoster.setBackground(posterBg);
         nativeAboutPoster.setClipToOutline(true);
-        LinearLayout.LayoutParams posterLp = new LinearLayout.LayoutParams(dp(nativeCoverPosterDp()), Math.round(dp(nativeCoverPosterDp()) * 1.5f));
-        posterLp.rightMargin = dp(28);
+        LinearLayout.LayoutParams posterLp = new LinearLayout.LayoutParams(dp(nativeAboutPosterDp()), Math.round(dp(nativeAboutPosterDp()) * 1.5f));
+        posterLp.rightMargin = dp(22);
         card.addView(nativeAboutPoster, posterLp);
 
         LinearLayout body = new LinearLayout(this);
@@ -3807,6 +3809,8 @@ public class MainActivity extends Activity {
 
         HorizontalScrollView castScroll = new HorizontalScrollView(this);
         castScroll.setHorizontalScrollBarEnabled(false);
+        castScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        castScroll.setClipToPadding(true);
         castScroll.setPadding(0, dp(16), 0, 0);
         nativeAboutCast = new LinearLayout(this);
         nativeAboutCast.setOrientation(LinearLayout.HORIZONTAL);
@@ -3878,32 +3882,33 @@ public class MainActivity extends Activity {
             nativeAboutCast.removeAllViews();
             org.json.JSONArray cast = d.optJSONArray("cast");
             int n = cast == null ? 0 : Math.min(10, cast.length());
+            int face = nativeAboutCastFaceDp();
             for (int i = 0; i < n; i++) {
                 org.json.JSONObject c = cast.optJSONObject(i);
                 if (c == null) continue;
                 LinearLayout item = new LinearLayout(this);
                 item.setOrientation(LinearLayout.VERTICAL);
-                item.setPadding(0, 0, dp(16), 0);
-                item.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
+                item.setPadding(0, 0, i == n - 1 ? 0 : dp(8), 0);
+                item.setGravity(android.view.Gravity.START);
                 ImageView ph = new ImageView(this);
                 ph.setScaleType(ImageView.ScaleType.CENTER_CROP);
                 GradientDrawable phBg = new GradientDrawable();
                 phBg.setColor(0xFF1A1422);
-                phBg.setCornerRadius(dp(26));
+                phBg.setCornerRadius(dp(8));
                 ph.setBackground(phBg);
-                ph.setClipToOutline(true);
-                item.addView(ph, new LinearLayout.LayoutParams(dp(52), dp(52)));
+                clipRoundRect(ph, dp(8));
+                item.addView(ph, new LinearLayout.LayoutParams(dp(face), Math.round(dp(face) * 4f / 3f)));
                 String photo = c.optString("photo", "");
                 if (!photo.isEmpty()) loadNativeEpisodeStill(ph, photo);
                 TextView nm = new TextView(this);
                 nm.setText(formatNativeAboutCastName(c.optString("name", "")));
                 nm.setTextColor(0xC8F3EFF7);
-                nm.setTextSize(12);
-                nm.setMaxLines(3);
+                nm.setTextSize(11);
+                nm.setMaxLines(2);
                 nm.setEllipsize(android.text.TextUtils.TruncateAt.END);
-                nm.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
+                nm.setGravity(android.view.Gravity.START);
                 nm.setPadding(0, dp(6), 0, 0);
-                item.addView(nm, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+                item.addView(nm, new LinearLayout.LayoutParams(dp(face), ViewGroup.LayoutParams.WRAP_CONTENT));
                 nativeAboutCast.addView(item);
             }
         }
@@ -6408,16 +6413,61 @@ public class MainActivity extends Activity {
         }
     }
 
-    private int nativeCoverPosterDp() {
-        if ("S".equals(nativeCoverSize)) return 128;
-        if ("L".equals(nativeCoverSize)) return 164;
-        return 148;
+    private int nativeAboutPosterDp() {
+        if ("S".equals(nativeCoverSize)) return 112;
+        if ("L".equals(nativeCoverSize)) return 132;
+        return 122;
     }
 
-    private int nativeEpisodeThumbDp() {
+    private int nativeAboutCastFaceDp() {
+        float density = getResources().getDisplayMetrics().density;
+        int screenDp = Math.round(getResources().getDisplayMetrics().widthPixels / density);
+        int avail = Math.max(280, screenDp - 96 - nativeAboutPosterDp() - 22);
+        int gap = 8;
+        int n = 10;
+        return Math.max(40, Math.min(68, (avail - (n - 1) * gap) / n));
+    }
+
+    private void clipRoundRect(View v, float radiusPx) {
+        v.setOutlineProvider(new ViewOutlineProvider() {
+            @Override public void getOutline(View view, Outline outline) {
+                if (view.getWidth() <= 0 || view.getHeight() <= 0) return;
+                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), radiusPx);
+            }
+        });
+        v.setClipToOutline(true);
+        v.addOnLayoutChangeListener((view, l, t, r, b, ol, ot, or, ob) -> view.invalidateOutline());
+    }
+
+    private int nativeEpisodeThumbTargetDp() {
         if ("S".equals(nativeCoverSize)) return 200;
         if ("L".equals(nativeCoverSize)) return 260;
         return 236;
+    }
+
+    private int fitCoverDp(int availDp, int targetDp, int gapDp, String size) {
+        if (availDp < 200 || targetDp < 80) return targetDp;
+        int nFit = Math.max(1, (availDp + gapDp) / (targetDp + gapDp));
+        float slack = "S".equals(size) ? Math.max(16f, targetDp * 0.14f)
+            : "L".equals(size) ? 4f : 10f;
+        int nPlus = nFit + 1;
+        float wPlus = (availDp - (nPlus - 1) * gapDp) / (float) nPlus;
+        int n = (wPlus >= targetDp - slack && wPlus >= 96f) ? nPlus : nFit;
+        return Math.max(96, (availDp - (n - 1) * gapDp) / n);
+    }
+
+    private int nativeEpisodeThumbDp() {
+        int target = nativeEpisodeThumbTargetDp();
+        int chromePad = 34;
+        float density = getResources().getDisplayMetrics().density;
+        int availDp = Math.round(getResources().getDisplayMetrics().widthPixels / density) - chromePad * 2;
+        return fitCoverDp(availDp, target, 14, nativeCoverSize);
+    }
+
+    private int nativeEpisodeStripHeightPx() {
+        int thumbW = nativeEpisodeThumbDp();
+        int stillH = Math.round(thumbW * 9f / 16f);
+        return dp(stillH + 56 + 16);
     }
 
     private void applyNativeCoverSize(String size) {
@@ -6426,10 +6476,17 @@ public class MainActivity extends Activity {
         if (nativeAboutPoster != null) {
             ViewGroup.LayoutParams lp = nativeAboutPoster.getLayoutParams();
             if (lp != null) {
-                int w = dp(nativeCoverPosterDp());
+                int w = dp(nativeAboutPosterDp());
                 lp.width = w;
                 lp.height = Math.round(w * 1.5f);
                 nativeAboutPoster.setLayoutParams(lp);
+            }
+        }
+        if (nativeEpisodeStrip != null) {
+            ViewGroup.LayoutParams slp = nativeEpisodeStrip.getLayoutParams();
+            if (slp != null) {
+                slp.height = nativeEpisodeStripHeightPx();
+                nativeEpisodeStrip.setLayoutParams(slp);
             }
         }
         if (changed && nativeEpisodeStripOpen) renderNativeEpisodeStrip(true);
