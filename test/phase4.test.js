@@ -214,11 +214,11 @@ test('final watch checkpoints coalesce duplicate lifecycle beacons without hidin
   const calls = [];
   const player = { item: { key: 'tmdb:movie:77' }, lastSaved: 0 };
   const S = { playing: player, profile: { id: 'living-room' } };
-  const saveWatch = new Function('S', 'currentTime', 'totalDuration', 'wlMeta', 'upsertWatchCache', 'api', 'trackWatchPost',
+  const saveWatch = new Function('S', 'currentTime', 'totalDuration', 'wlMeta', 'upsertWatchCache', 'api', 'trackWatchPost', 'takePlayedSeconds', 'isGenuineEpisodeEof',
     `${ui.slice(start, end)}\nreturn saveWatch;`)(
       S, () => 321.9, () => 3600, () => ({ title: 'Checkpoint' }), () => {},
       async (url, opts) => { calls.push({ url, opts }); return { ok: true }; },
-      (job) => job);
+      (job) => job, () => 0, () => false);
 
   const first = saveWatch(true);
   const duplicate = saveWatch(true);
@@ -495,7 +495,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'episode targets created from details should inherit the current show quality preference');
   assert.match(ui, /async function prepPlayerSeasonEpisodes\(it\) \{[\s\S]+const inheritedQuality = preferredQualityRankForItem\(it\);[\s\S]+const item = inheritedQuality \? \{ \.\.\.base, qualityRank: inheritedQuality \} : base;[\s\S]+async function prepNextEpisode\(it\) \{[\s\S]+const inheritedQuality = preferredQualityRankForItem\(it\);[\s\S]+const item = inheritedQuality \? \{ \.\.\.base, qualityRank: inheritedQuality \} : base;/,
     'player episode strip and Up Next should continue the same 4K/1080p class');
-  assert.match(ui, /async function saveWatch\(final, opts = \{\}\) \{[\s\S]+const pos = currentTime\(\);[\s\S]+if \(!final && Math\.abs\(pos - p\.lastSaved\) < 5\) return;[\s\S]+const watched = opts && opts\.watched != null \? !!opts\.watched : \(nearEnd \|\| !!\(p && p\._ended\)\);[\s\S]+key: p\.item\.key, position: Math\.floor\(pos\), duration: Math\.floor\(d \|\| 0\),[\s\S]+watched, profile: S\.profile \? S\.profile\.id : undefined,[\s\S]+upsertWatchCache\(\{[\s\S]+position: payload\.position[\s\S]+api\('\/api\/watch', \{ method: 'POST', body: payload, keepalive: !!final \}\)/,
+  assert.match(ui, /async function saveWatch\(final, opts = \{\}\) \{[\s\S]+const pos = currentTime\(\);[\s\S]+if \(!final && Math\.abs\(pos - p\.lastSaved\) < 5 && playedSeconds < 1\) return;[\s\S]+const nearEnd = isGenuineEpisodeEof\(p, pos, d\);[\s\S]+const watched = opts && opts\.watched != null \? !!opts\.watched : \(nearEnd \|\| !!\(p && p\._ended\)\);[\s\S]+key: p\.item\.key, position: Math\.floor\(pos\), duration: Math\.floor\(d \|\| 0\),[\s\S]+watched, profile: S\.profile \? S\.profile\.id : undefined,[\s\S]+upsertWatchCache\(\{[\s\S]+position: payload\.position[\s\S]+api\('\/api\/watch', \{ method: 'POST', body: payload, keepalive: !!final \}\)/,
     'watch progress should save profile-scoped position immediately into the local cache and server (keepalive on final saves so close/pagehide flushes survive teardown), honoring a caller watched-override');
   assert.match(ui, /function flushPlaybackCheckpoints\(\) \{[\s\S]+if \(S\.playing\) saveWatch\(true\);[\s\S]+saveMultiViewVodProgress\(i, true\);[\s\S]+window\.__tvPlaybackBackgrounded = flushPlaybackCheckpoints;[\s\S]+window\.addEventListener\('pagehide', \(\) => \{[\s\S]+flushPlaybackCheckpoints\(\);[\s\S]+document\.addEventListener\('visibilitychange', \(\) => \{[\s\S]+document\.visibilityState === 'hidden'[\s\S]+flushPlaybackCheckpoints\(\);/,
     'pagehide, mobile visibility loss, and native backgrounding should flush main and Multiview watch positions before teardown');
@@ -622,9 +622,12 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'function applyNativeVideoProgress(pos, dur, opts = {}) {',
     'const keepPrev = opts.preserveOnZero && incoming <= 1 && prev > 30;',
     'p.nativePos = keepPrev ? prev : incoming;',
+    'applyReportedDuration(p, dur);',
     'maybeShowUpNext(p.nativePos, totalDuration(), { native: true });',
   ].every((s) => ui.includes(s)),
     'native episode playback should surface Up Next from progress before ExoPlayer reaches ended');
+  assert.match(ui, /function applyReportedDuration\(p, dur\) \{[\s\S]+incoming < prev \* 0\.85/,
+    'remux must not shrink a known longer title down to the current position');
   assert.match(ui, /window\.__tvNativeVideoProgress = \(pos, dur, token\) => \{\s+const p = S\.playing; if \(!p \|\| !p\.usingNative \|\| !nativePlaybackCallbackMatches\(p, token\)\) return;\s+applyNativeVideoProgress\(pos, dur\);/,
     'native progress bridge should reject stale players before forwarding progress into Up Next');
   assert.match(ui, /window\.__tvNativeVideoError = \(msg, pos, dur, token\) => \{\s+const p = S\.playing;\s+if \(!p \|\| !p\.usingNative \|\| !nativePlaybackCallbackMatches\(p, token\)\) return;\s+applyNativeVideoProgress\(pos, dur, \{ preserveOnZero: true \}\);\s+const at = currentTime\(\);/,
@@ -1505,14 +1508,22 @@ test('episode handoff stays player-to-player before local lookup and EOF never r
     'near the catalog runtime of a sitcom is still credits');
   assert.equal(isGenuine({ item: { type: 'episode' }, started: true, startedAt: 1, _sourceAdvancePending: true }, 1260, 1320), false,
     'ended during a source swap is not the next episode');
+  assert.equal(isGenuine({ item: { type: 'movie', runtime: 120 }, started: true, startedAt: 1 }, 2400, 2410), false,
+    '40% into a 2-hour movie is not watched even if remux duration equals position');
+  assert.equal(isGenuine({ item: { type: 'episode', runtime: 45 }, started: true, startedAt: 1 }, 1080, 1100), false,
+    '40% into a 45-minute episode is not credits even if remux says the file is done');
+  assert.equal(isGenuine({ item: { type: 'movie' }, started: true, startedAt: 1, _lastKnownDuration: 7200 }, 2400, 2410), false,
+    'a later remux-so-far duration must not beat a longer known file length');
 
   const endedStart = android.indexOf('if (state == Player.STATE_ENDED && "video".equals(nativeMode))');
   const endedEnd = android.indexOf('} else if (state == Player.STATE_ENDED && "live".equals(nativeMode))', endedStart);
   const endedSource = android.slice(endedStart, endedEnd);
   assert.match(endedSource, /__tvNativeVideoEnded\("[\s\S]+listenerPlaybackToken/,
     'Android EOF should notify JS with the playback token while the native surface is still visible');
-  assert.match(endedSource, /nativeVideoStarted && dur > 0 \? dur : nativePosSeconds\(\)/,
-    'a cold-start ENDED must report the real position, not force pos=duration');
+  assert.match(endedSource, /long pos = nativePosSeconds\(\)/,
+    'ENDED must report the real position, never force pos=duration');
+  assert.doesNotMatch(endedSource, /nativeVideoStarted && dur > 0 \? dur/,
+    'a mid-title remux ENDED after pause/resume must not teleport to the end');
   assert.doesNotMatch(endedSource, /closeNativePlayback\(/,
     'Android EOF must not expose the details WebView before JS decides the next action');
   assert.match(endedSource, /window\.__tvNativeVideoEnded \? __tvNativeVideoEnded\([\s\S]+window\.__tvNativeVideoClosed\s*&&\s*__tvNativeVideoClosed\([\s\S]+true,/,
@@ -1690,10 +1701,10 @@ test('stale async recovery work cannot remount, advance, or cover a replacement 
   const seekWindow = {};
   const callbackMatches = (p, token) => !token || !p.playbackToken || Number(token) === Number(p.playbackToken);
   const nativeSeek = new Function('window', 'S', 'appMs', '$', 'currentPlayerKind', 'fetch', 'tryNativeVideoPlayer',
-    'nativePlaybackCallbackMatches',
+    'nativePlaybackCallbackMatches', 'applyReportedDuration',
     `${seekSource}\nreturn window.__tvNativeVideoSeek;`)(
       seekWindow, seekState, () => 1000, () => ({ classList: { remove() {} } }), () => 'remux',
-      () => seekGate.promise, (...args) => seekCalls.push(args), callbackMatches);
+      () => seekGate.promise, (...args) => seekCalls.push(args), callbackMatches, () => {});
   const staleSeekJob = nativeSeek(120, 2400, true, 31);
   seekState.playing = { usingNative: true, item: { key: 'episode-b', type: 'episode' } };
   seekGate.resolve({ json: async () => ({ k: 121 }) });
@@ -2949,8 +2960,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'phone WebView should not receive TV-only CSS just because it runs inside the Android shell');
   assert.match(ui, /body\.mobileShell #backdrop \.layer\{display:none!important;opacity:0!important\}[\s\S]+body\.mobileShell #burger\{display:grid\}[\s\S]+body\.mobileShell #home\{padding:62px 16px 18px 16px!important;justify-content:flex-start\}/,
     'Android phone WebView should get the compact mobile shell even when its CSS viewport is wider than 600px');
-  assert.match(ui, /function androidBurgerHit\(e\) \{[\s\S]+const burger = \$\('burger'\);[\s\S]+burger\.contains\(e\.target\)[\s\S]+return p\.clientX <= 132 && p\.clientY <= 132;/,
-    'Android top-left burger hitbox should not double-toggle taps already delivered to the burger button');
+  assert.match(ui, /function androidBurgerHit\(e\) \{[\s\S]+const burger = \$\('burger'\);[\s\S]+burger\.contains\(e\.target\)[\s\S]+t\.closest\('button,a,input,select,textarea,label,\.focusable,#prefTabs,#setTabs,#rail,#searchBar'\)[\s\S]+return p\.clientX <= 72 && p\.clientY <= 72;/,
+    'Android burger hitbox stays on empty chrome; Settings Dashboard and other controls keep their own tap');
   assert.match(ui, /function androidBurgerHit\(e\) \{[\s\S]+if \(document\.body\.classList\.contains\('mobileNav'\)\) return false;[\s\S]+const burger = \$\('burger'\);/,
     'when the phone drawer is OPEN the top-left corner hit-test yields, so a tap on the profile avatar (which sits in that corner) reaches its Settings handler instead of closing the drawer');
   assert.ok(ui.includes('body.mobileNav #railUser{padding-left:52px}')
@@ -3231,6 +3242,10 @@ test('Android native player: direct source and native chrome stay out of the web
     'Settings and Preferences side tabs stay a text list on hover, keyboard focus, and D-pad focus');
   assert.match(ui, /#setTabs button,#prefTabs button\{opacity:\.26\}[\s\S]+#setTabs button\.on,#prefTabs button\.on\{opacity:\.28;color:var\(--muted\)!important\}[\s\S]+opacity:1;color:var\(--text\)!important\}[\s\S]+body\.tv #setTabs button:hover:not\(:focus\):not\(\.focus\)/,
     'unfocused Settings tabs gray out hard; the focused row is full strength; TV hover latch does not keep Profile lit after Right');
+  assert.match(ui, /body\.mobileShell #setTabs button,body\.mobileShell #prefTabs button,[\s\S]+body\.androidApp:not\(\.tv\) #setTabs button,body\.androidApp:not\(\.tv\) #prefTabs button\{opacity:1!important;color:var\(--text\)!important\}/,
+    'phone Settings tabs stay readable; TV recede must not leave Dashboard looking disabled');
+  assert.match(ui, /body\.mobileNav \.railBtn,body\.mobileShell\.mobileNav \.railBtn,\s*\nbody\.mobileNav #railUser,body\.mobileShell\.mobileNav #railUser\{color:var\(--text\)\}/,
+    'open phone drawer menu rows and the profile name use normal text color, not the muted compact-rail gray');
   assert.match(ui, /#settings \.ghostMini,#prefs \.ghostMini,#prefs \.profileAction,#prefs \.profileAddBtn\{\s*\n\s*min-height:44px;border-radius:10px/,
     'Add profile, Pins, and profile actions use the same 10px corner as Dashboard / Display / Playback');
   assert.match(ui, /\.menuRow\{display:flex;align-items:center;gap:10px;background:transparent;border:0;border-bottom:1px solid rgba\(var\(--fg\),\s*\.06\)/,
@@ -4650,8 +4665,8 @@ test('Android native player: direct source and native chrome stay out of the web
     assert.ok(nativeLiveFailureCursor >= 0,
       `Android Live TV should stop on native startup failure or stale APK bridge instead of falling back to the web player (missing ${step})`);
   }
-  assert.match(ui, /const LIVE_MSE_TYPES = \[[\s\S]+video\/mp4; codecs="avc1\.4d4028, mp4a\.40\.2"[\s\S]+function liveMseType\(\) \{[\s\S]+MediaSource\.isTypeSupported/,
-    'web Live TV should use MediaSource for the server fMP4 remux instead of a plain infinite video src');
+  assert.match(ui, /const LIVE_MSE_TYPES = \[[\s\S]+video\/mp4; codecs="avc1\.4d4028, mp4a\.40\.2"[\s\S]+function liveMediaSourceCtor\(\) \{[\s\S]+ManagedMediaSource[\s\S]+MediaSource[\s\S]+function liveMseType\(\) \{[\s\S]+Ctor\.isTypeSupported/,
+    'web Live TV should use MediaSource, or iPhone Managed Media Source, for the server fMP4 remux');
   assert.match(ui, /function stopWebVideoElement\(\) \{[\s\S]+cleanupLiveMse\(\);[\s\S]+v\.removeAttribute\('src'\)/,
     'leaving or replacing playback should abort the Live TV MediaSource reader before clearing the video element');
   assert.ok(startSourceBlock.includes("if (p.item && p.item.type === 'live') {")
@@ -6504,6 +6519,8 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'Settings content sits in row 1 beside the tabs — no empty subtitle row pushing it down');
   assert.match(ui, /function loadWatchDashboard\(\) \{[\s\S]+\/api\/watch-stats\?range=/,
     'Dashboard loads finished-watch stats for the signed-in account');
+  assert.match(ui, /function takePlayedSeconds\(p = S\.playing\) \{[\s\S]+payload\.playedSeconds = playedSeconds/,
+    'player progress posts actual play seconds so unfinished titles still add hours');
   assert.match(ui, /body\[data-spotlight\] #prefTabs button\.on\{[\s\S]+box-shadow:inset 2px 0 0 var\(--focus\)!important\}[\s\S]+body\[data-spotlight\] #prefTabs button\.on\.focus[\s\S]+color:var\(--text\)!important/,
     'spotlight themes keep Settings tabs as a text list; open tab stays muted until it has focus');
   assert.match(ui, /#prefs \.sizePick,#settings \.sizePick\{display:inline-flex;gap:0/,
@@ -6682,6 +6699,93 @@ test('hls variant: spawnHls copies video, emits fMP4 HLS, and refuses without an
   // so a non-Safari Mac browser (which can't play native HLS) is never routed to the m3u8.
   assert.match(ui, /function macSafariVideo\(\) \{[\s\S]+navigator\.vendor === 'Apple Computer, Inc\.'[\s\S]+!\/\\b\(CriOS\|FxiOS\|Chrome\|Chromium\|Edg\|EdgA\|OPR\|Opera\|Android\)\\b\/i\.test\(ua\)/,
     'Mac Safari is detected via the Apple vendor string with all Chromium/Gecko UAs excluded (no false positive → no broken Chrome-on-Mac)');
+});
+
+test('Android phone: Settings Dashboard tap is not the burger, and tabs stay readable', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const hitStart = ui.indexOf('function androidBurgerHit(e) {');
+  assert.ok(hitStart >= 0, 'androidBurgerHit helper must exist');
+  const hitEnd = ui.indexOf("document.addEventListener('pointerup'", hitStart);
+  assert.ok(hitEnd > hitStart, 'androidBurgerHit helper must end before the pointerup hook');
+  const makeHit = (classes) => {
+    const set = new Set(classes);
+    const doc = { body: { classList: { contains: (c) => set.has(c) } } };
+    const burger = { contains: (el) => !!(el && el.id === 'burger') };
+    const $ = (id) => (id === 'burger' ? burger : null);
+    return new Function('document', '$', `${ui.slice(hitStart, hitEnd)}\nreturn androidBurgerHit;`)(doc, $);
+  };
+  const hit = makeHit(['androidApp']);
+  const dashBtn = { closest: (sel) => (String(sel).includes('button') ? dashBtn : null) };
+  assert.equal(hit({ target: dashBtn, clientX: 24, clientY: 70 }), false,
+    'Dashboard tab tap in the old 132px corner must not open the left menu');
+  assert.equal(hit({ target: { closest: () => null }, clientX: 20, clientY: 20 }), true,
+    'empty chrome next to the burger still opens the menu');
+  assert.equal(hit({ target: { closest: () => null }, clientX: 100, clientY: 20 }), false,
+    'the fat-finger zone no longer covers the Settings tab row');
+  assert.equal(makeHit(['androidApp', 'mobileNav'])({ target: { closest: () => null }, clientX: 20, clientY: 20 }), false,
+    'open drawer does not re-hit the corner');
+  assert.match(ui, /body\.androidApp:not\(\.tv\) #setTabs button,body\.androidApp:not\(\.tv\) #prefTabs button\{opacity:1!important;color:var\(--text\)!important\}/,
+    'phone Settings tabs stay readable instead of the TV 0.26 recede');
+});
+
+test('Windows / desktop login: trim password and show lockout instead of wrong password', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(ui, /password: \$\('liPass'\)\.value\.trim\(\)/,
+    'login trims password so Windows paste/CR does not fail a good account');
+  assert.match(ui, /e && e\.status === 429[\s\S]+\$\('liErr'\)\.textContent = e\.message/,
+    'a lockout must not keep saying Invalid name or password');
+  assert.match(ui, /if \(_loginBusy\) return;/,
+    'Enter+click must not fire two logins and burn the rate limit');
+});
+
+test('iOS phone browser: login keys, video fullscreen, and Live HLS stay off Android/desktop paths', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  // Login: the TV freeze-flood swallow must not run on iPhone software-keyboard keydown.
+  assert.match(ui, /FREEZE-FLOOD GUARD[\s\S]+document\.body\.classList\.contains\('tv'\)[\s\S]+performance\.now\(\) - e\.timeStamp > 350/,
+    'freeze-flood key swallow is TV-only so iPhone software-keyboard typing is not preventDefaulted');
+  assert.match(ui, /body\.authOpen:not\(\.tv\):not\(\.androidApp\)\{overflow:auto\}/,
+    'phone-browser login may scroll above the keyboard; TV and Android app gate layout is unchanged');
+  assert.match(ui, /id="liPass"[^>]*inputmode="text"/,
+    'login password asks iOS for the text keyboard, not the AutoFill-only bar');
+  assert.match(ui, /function armIosPasswordKeyboard\(\) \{[\s\S]+iosWebkitVideo\(\)[\s\S]+autocomplete['"], ['"]off['"]/,
+    'iPhone turns off password AutoFill so the QWERTY keys appear; desktop/TV keep current-password');
+  // Fullscreen: iPhone only fullscreens the <video>; desktop/Android keep #player.requestFullscreen.
+  assert.match(ui, /function toggleFullscreen\(\) \{[\s\S]+iosWebkitVideo\(\)[\s\S]+webkitEnterFullscreen[\s\S]+\$\('player'\)\.requestFullscreen\(\)/,
+    'iPhone fullscreen uses video.webkitEnterFullscreen; desktop/Android keep player.requestFullscreen');
+  assert.match(ui, /iPhone\|iPod[\s\S]+classList\.add\('iosPhone'\)[\s\S]+osdRight[\s\S]+insertBefore\(iosFsBtn/,
+    'iPhone parks the Fullscreen control in the top-right chrome so the desktop 3-column bar cannot clip it');
+  assert.match(ui, /body\.iosPhone #osd #fsBtn\{display:grid/,
+    'iPhone Fullscreen button stays a visible 44px control in the top-right chrome');
+  assert.match(ui, /function tryNativeLivePlayer\(it, guide = false\) \{[\s\S]+canUseNativeLivePlayer\(\)[\s\S]+TriboonTV\.playLive/,
+    'Android Live TV still hands off to ExoPlayer playLive');
+  assert.match(ui, /p\.item && p\.item\.type === 'live'\) \{[\s\S]+iosWebkitVideo\(\)[\s\S]+iosLiveHlsUrl\(p\)[\s\S]+startLiveMseSource\(p\.streamUrl\)/,
+    'iPhone Live TV uses real HLS when the URL is a playlist, else the same remux desktop uses');
+  assert.match(ui, /LiveMediaSource === ManagedMediaSource[\s\S]+disableRemotePlayback = true/,
+    'iPhone Managed Media Source remux turns AirPlay off so Safari will decode');
+  const hlsStart = ui.indexOf('function liveUrlIsHls(');
+  const hlsEnd = ui.indexOf('\nfunction macSafariVideo(', hlsStart);
+  assert.ok(hlsStart >= 0 && hlsEnd > hlsStart, 'iOS Live HLS helpers should be extractable');
+  const helpers = new Function(ui.slice(hlsStart, hlsEnd) + '\nreturn { liveUrlIsHls, iosLiveHlsUrl };')();
+  assert.strictEqual(helpers.liveUrlIsHls('/api/iptv/native/3?t=x', 'application/x-mpegURL'), true);
+  assert.strictEqual(helpers.liveUrlIsHls('http://prov.example/live/1.ts', 'video/mp2t'), false);
+  assert.strictEqual(helpers.liveUrlIsHls('http://prov.example/live/1.m3u8', ''), true);
+  assert.strictEqual(helpers.iosLiveHlsUrl({
+    nativeUrl: '/api/iptv/native/3?t=a',
+    nativeMime: 'video/mp2t',
+    nativeFallbackUrl: '/api/iptv/native/3?alt=1&t=a',
+    nativeFallbackMime: 'application/x-mpegURL',
+  }), '', 'the native proxy is a byte pipe, not playable iPhone HLS');
+  assert.strictEqual(helpers.iosLiveHlsUrl({
+    nativeUrl: '/api/iptv/native/3?t=a',
+    nativeMime: 'video/mp2t',
+  }), '', 'TS-only channels must not be treated as iPhone HLS');
+  assert.strictEqual(helpers.iosLiveHlsUrl({
+    item: { _nativeUrl: '/api/iptv/native/9?t=b', _nativeMime: 'application/vnd.apple.mpegurl' },
+  }), '', 'a proxied .m3u8 mime still must not use the native byte pipe');
+  assert.strictEqual(helpers.iosLiveHlsUrl({
+    nativeUrl: 'http://prov.example/live/1.m3u8',
+    nativeMime: 'application/vnd.apple.mpegurl',
+  }), 'http://prov.example/live/1.m3u8');
 });
 
 test('hls variant: ffmpeg process lifecycle works and cleans up its temp dir', { skip: !HAS_FFMPEG }, async () => {

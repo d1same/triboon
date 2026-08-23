@@ -4670,13 +4670,14 @@ const H = {
   login: async (ctx) => {
     const { name, password } = await readJson(ctx.req);
     const uname = String(name || '').toLowerCase();
+    const pass = String(password || '').trim();
     const key = `login:${uname}:${clientIp(ctx)}`;
     const acctKey = `login-acct:${uname}`;
     // Per-(user,IP) throttle PLUS a generous per-account cap, so rotating-IP guessing against one
     // account is still bounded across IPs. Both clear on a successful login.
     if (throttled(ctx, key, { max: 10, windowMs: 15 * 60000, lockMs: 15 * 60000 })) return;
     if (uname && throttled(ctx, acctKey, { max: 40, windowMs: 15 * 60000, lockMs: 15 * 60000 })) return;
-    try { const r = auth.login(name, password); limiter.clear(key); limiter.clear(acctKey); send(ctx.res, 200, r); }
+    try { const r = auth.login(name, pass); limiter.clear(key); limiter.clear(acctKey); send(ctx.res, 200, r); }
     catch { send(ctx.res, 401, { error: 'invalid credentials' }); }
   },
 
@@ -6984,16 +6985,22 @@ Object.assign(H, {
       };
       return all;
     });
-    if (becameWatched) {
-      watchStats.recordFinish(store, {
-        userId: ctx.user.id, key: b.key, meta: b.meta, duration: b.duration || 0,
-      });
-    }
     if (b.remove) {
       // "Mark unwatched" on a movie removes the record AND its Trakt history; the plain
       // Continue-Watching ✕ (no unwatch flag) stays a local-only tidy-up.
       if (b.unwatch && trakt.status(ctx.user.id).linked) trakt.history(ctx.user.id, b.key, false);
       return send(ctx.res, 200, { ok: true });
+    }
+    const playedSeconds = Math.round(Number(b.playedSeconds) || 0);
+    if (playedSeconds > 0) {
+      watchStats.recordPlayTime(store, {
+        userId: ctx.user.id, key: b.key, meta: b.meta, playedSeconds,
+      });
+    }
+    if (becameWatched) {
+      watchStats.recordFinish(store, {
+        userId: ctx.user.id, key: b.key, meta: b.meta, duration: 0,
+      });
     }
     // Trakt sync-up (fire-and-forget; only for linked users + tmdb-keyed items):
     // real playback scrobbles; the explicit ✓ button (no playback context) and explicit
@@ -7144,7 +7151,7 @@ Object.assign(H, {
     });
     for (const it of newly) {
       watchStats.recordFinish(store, {
-        userId: ctx.user.id, key: it.key, meta: it.meta, duration: it.duration || 0,
+        userId: ctx.user.id, key: it.key, meta: it.meta, duration: 0,
       });
     }
     // Trakt: send the EXACT episode keys grouped per show+season — never a bare-show op. Trakt

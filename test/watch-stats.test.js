@@ -5,6 +5,7 @@ const assert = require('node:assert');
 const {
   classify,
   recordFinish,
+  recordPlayTime,
   summarize,
   summarizeEvents,
   DEDUPE_MS,
@@ -85,6 +86,38 @@ test('recordFinish ignores live and music keys', () => {
   assert.deepStrictEqual(store.tables.watchStats.users, {});
 });
 
+test('play time adds hours without counting a finish, and finish does not add runtime', () => {
+  const store = memStore();
+  const t0 = Date.parse('2026-08-22T21:00:00Z');
+  recordPlayTime(store, {
+    userId: 'u1', key: 'tmdb:movie:1', meta: { title: 'Dune' }, playedSeconds: 1200, at: t0,
+  });
+  const mid = summarize(store, 'u1', 'week', t0 + 1000);
+  assert.strictEqual(mid.hours, 0.3);
+  assert.strictEqual(mid.movies, 0);
+  assert.strictEqual(mid.eventCount, 0);
+  assert.strictEqual(mid.streak, 0);
+  recordFinish(store, {
+    userId: 'u1', key: 'tmdb:movie:1', meta: { title: 'Dune' }, duration: 7200, at: t0 + 2000,
+  });
+  recordPlayTime(store, {
+    userId: 'u1', key: 'tmdb:movie:1', meta: { title: 'Dune' }, playedSeconds: 600, at: t0 + 3000,
+  });
+  const done = summarize(store, 'u1', 'week', t0 + 4000);
+  assert.strictEqual(done.movies, 1);
+  assert.strictEqual(done.hours, 0.5, 'half then the rest is 30 minutes, not half plus the full 2 hours');
+  assert.strictEqual(done.eventCount, 1);
+  assert.strictEqual(done.streak, 1);
+  assert.strictEqual(store.tables.watchStats.users.u1.events.filter((e) => e.source === 'play').length, 1,
+    'play flushes for the same title within 15 minutes merge');
+});
+
+test('recordPlayTime ignores live and music keys', () => {
+  const store = memStore();
+  assert.strictEqual(recordPlayTime(store, { userId: 'u1', key: 'live:3', meta: { type: 'live' }, playedSeconds: 60 }), false);
+  assert.deepStrictEqual(store.tables.watchStats.users, {});
+});
+
 test('all-time counts can use existing watched rows when the ledger is empty', () => {
   const store = memStore({
     watch: {
@@ -131,9 +164,17 @@ test('GET /api/watch-stats is per-account and records a local finish', async () 
     const mine = await httpJson(srv.port, 'GET', '/api/watch-stats?range=week', null, admin);
     assert.strictEqual(mine.status, 200);
     assert.strictEqual(mine.json.movies, 1);
-    assert.strictEqual(mine.json.hours, 2);
+    assert.strictEqual(mine.json.hours, 0, 'mark-watched does not invent play hours');
     assert.strictEqual(mine.json.eventCount, 1);
     assert.ok(mine.json.top.some((t) => t.title === 'Fight Club'));
+
+    const played = await httpJson(srv.port, 'POST', '/api/watch', {
+      key: 'tmdb:movie:550', position: 1800, duration: 7200, playedSeconds: 1200, meta: { title: 'Fight Club' },
+    }, admin);
+    assert.strictEqual(played.status, 200);
+    const afterPlay = await httpJson(srv.port, 'GET', '/api/watch-stats?range=week', null, admin);
+    assert.strictEqual(afterPlay.json.movies, 1);
+    assert.strictEqual(afterPlay.json.hours, 0.3);
 
     const theirs = await httpJson(srv.port, 'GET', '/api/watch-stats?range=week', null, guest);
     assert.strictEqual(theirs.status, 200);

@@ -2193,10 +2193,8 @@ fn tick_session(
             session.ui.event_type = "ended".into();
             session.ui.playing = false;
             session.ui.buffering = false;
-            if session.last_duration > 0.0 {
-                session.last_position = session.last_duration;
-                session.ui.pos = session.last_duration;
-            }
+            // Keep the real clock. Forcing pos=duration made a mid-title remux EOF
+            // look like the title was finished.
             eval_callback(
                 app,
                 "__tvNativeVideoEnded",

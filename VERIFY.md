@@ -126,6 +126,86 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-23, v3.1.4 ship APK + Windows server + Windows client:
+
+- Version contract: `package.json` 3.1.4; Android `versionName` 3.1.4 /
+  `versionCode` 349; Windows client package/Tauri/Cargo 3.1.4.
+- iPhone Safari: login types, Fullscreen is on-screen, Live TV remuxes
+  TS (A&E played on TestingBot iPhone 13 session 1264397). Native
+  `/api/iptv/native` is never treated as HLS.
+- Android phone: Settings Dashboard tap is not the burger; tabs readable.
+- Windows login: password is trimmed; lockout shows the 429 text, not
+  "wrong password"; double Enter+click does not burn the limiter.
+- Dashboard hours use real play seconds. Native remux ENDED reports
+  the real clock, not forced 100%.
+- `npm.cmd run verify:full` passed on `emulator-5554` with household
+  VOD/IPTV/overlapping Play and Android ExoPlayer stress. TV emulator
+  WebView did not paint; Shield was not used for this gate.
+
+2026-08-23, real iPhone 13 Safari full pass (TestingBot, not shipped):
+
+- Device: iPhone 13 / iOS 18.5 Safari via TestingBot session 1264337
+  through the Cloudflare tunnel. Hard-reload picked up `iosPhone`.
+- Login: stayed signed in after reload. Detail (Spider-Noir) loaded.
+- Settings: owner → Dashboard stayed on Dashboard. Tabs readable.
+- VOD: Continue S01E02 played HLS (`/api/hls/...`), readyState 4,
+  1924×1040, clock advanced (17s). Portrait letterbox, frames moving.
+- Fullscreen control: before the fix, `#fsBtn` sat at x=540 on a 390px
+  phone (off the right edge). After reload it is in `.osdRight` at
+  x=221 y=14 (on screen). Landscape fullscreen already worked when the
+  owner rotated. A scripted click cannot enter iOS native fullscreen
+  (Safari needs a real finger tap).
+- Live TV: fail. A&E and Animal Planet both set
+  `/api/iptv/native/…?alt=1` and Safari said "Media failed to decode".
+  Those URLs are TS, not HLS. iPhone still has no working Live path
+  for these channels.
+- Contract test passed. Full `verify:full` not run.
+
+2026-08-23, iPhone player Fullscreen was off-screen (not shipped):
+
+- iPhone Safari is not `mobileShell`, so the player used the desktop
+  3-column bar. CC / audio / quality / mute filled the only visible
+  slice. Fullscreen sat off the right edge.
+- iPhone-only: tag `iosPhone`, move `#fsBtn` into the top-right chrome,
+  and use the compact scrolling bar. Desktop / TV / Android keep the
+  existing Fullscreen spot.
+- Contract: `iOS phone browser: login keys, video fullscreen, and Live HLS
+  stay off Android/desktop paths` should pass. Hard-reload the TestingBot
+  iPhone to pick up live HTML. Full `verify:full` not run.
+
+2026-08-23, iPhone login password hides the software keyboard (not shipped):
+
+- Name on real iPhone 13 Safari typed from the iOS keys. Password
+  focused (gold ring, Done, Paste/AutoFill) and hid the QWERTY keys.
+- iOS-only: login password uses `inputmode="text"` and turns off
+  AutoFill (`autocomplete=off`). Desktop/TV keep keychain fill.
+- Contract: `iOS phone browser: login keys, video fullscreen, and Live HLS
+  stay off Android/desktop paths` passed. Reload the TestingBot iPhone
+  to pick up live HTML. Full `verify:full` not run.
+
+2026-08-23, Android phone Settings Dashboard tap + readable tabs (not shipped):
+
+- Phone Settings Dashboard sat in the old 132px burger corner. A tap
+  opened the left menu and ate the tab click. Burger hit now ignores
+  real controls and only uses a 72px empty-chrome zone.
+- Phone Settings tabs no longer use the TV 0.26 recede. Open drawer
+  rows use normal text color. TV D-pad dimming is unchanged.
+- Contract: `Android phone: Settings Dashboard tap is not the burger,
+  and tabs stay readable`. Verify on `Triboon_Phone_API_36`.
+- Full `npm.cmd test` / `verify:full` not run for this local web change.
+
+2026-08-22, iPhone Safari/Chrome web-player gates (not shipped):
+
+- Login typing, fullscreen, and Live TV on iPhone are gated behind
+  `iosWebkitVideo()` only. Android ExoPlayer `playLive`, desktop/Windows
+  MSE remux, and `#player.requestFullscreen` are unchanged.
+- Contract: `iOS phone browser: login keys, video fullscreen, and Live HLS
+  stay off Android/desktop paths` plus D-pad auth-input and IPTV cache
+  suites passed. Real iPhone Safari/Chrome not run (no device here).
+- TS-only live channels still have no iPhone path until a live HLS remux
+  exists. BrowserStack or a cheap used iPhone is the later A-to-Z gate.
+- Full `npm.cmd test` / `verify:full` not run for this local web change.
+
 2026-08-21, v3.1.3 ship APK + Windows server + Windows client:
 
 - Version contract: `package.json` 3.1.3; Android `versionName` 3.1.3 /

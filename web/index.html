@@ -574,7 +574,7 @@ body.authOpen #gateBackdrop{display:block}
 .gateCard h1{font:850 32px "Sora";line-height:1.04;letter-spacing:0}
 .gateCard .sub{color:rgba(var(--fg),.76);font-size:15px;line-height:1.5;margin:8px 0 24px}
 .gateCard label{display:block;font:800 11px "JetBrains Mono";letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:16px 0 8px}
-.gateCard input{width:100%;min-height:54px;background:rgba(var(--fg),.08);border:0;border-radius:16px;padding:15px 16px;color:var(--text);font:700 17px "Albert Sans";outline:none;box-shadow:inset 0 0 0 1px rgba(var(--fg),.18)}
+.gateCard input{width:100%;min-height:54px;background:rgba(var(--fg),.08);border:0;border-radius:16px;padding:15px 16px;color:var(--text);font:700 17px "Albert Sans";outline:none;box-shadow:inset 0 0 0 1px rgba(var(--fg),.18);-webkit-user-select:text;user-select:text}
 .gateCard input::placeholder{color:rgba(var(--fg),.42)}
 .gateCard input:focus{box-shadow:0 0 0 3px var(--focusSoft),inset 0 0 0 1px var(--focus)}
 .gateCard .btn{width:100%;min-height:56px;justify-content:center;margin-top:24px;font-size:16px;border-radius:17px;box-shadow:0 16px 32px rgba(0,0,0,.28)}
@@ -598,6 +598,16 @@ body.androidApp .gateCard input{min-height:54px;border-radius:16px}
 body.androidApp .gateCard .btn{min-height:56px;margin-top:20px}
 body.androidApp:not(.tv) #gateLogin .alt{display:none} /* phone app types the password; TV keeps Quick Connect (no on-screen typing) */
 body.androidApp #gateArtCaption{display:none}
+/* iPhone Safari/Chrome: body overflow:hidden + a fixed gate pins the login card under the
+   software keyboard so taps look focused but keys go nowhere. Phone browsers only — TV and
+   the Android app keep their own gate layout. */
+@media (max-width:900px){
+  body.authOpen:not(.tv):not(.androidApp){overflow:auto}
+  body.authOpen:not(.tv):not(.androidApp) .gate.open{
+    overflow:auto;-webkit-overflow-scrolling:touch;align-content:start;place-items:start center;
+    padding-top:max(16px,env(safe-area-inset-top));padding-bottom:max(28px,env(safe-area-inset-bottom))}
+  body.authOpen:not(.tv):not(.androidApp) .gateCard{margin-left:0;width:min(480px,calc(100vw - 28px))}
+}
 @media (orientation:landscape) and (max-height:760px){
   body.androidApp .gateCard{width:min(560px,calc(100vw - 48px));padding:20px 24px;border-radius:24px}
   body.androidApp .gateCard .logoRow{width:180px;height:48px;margin-bottom:6px}
@@ -2134,6 +2144,32 @@ body.mobileShell #upNext{right:12px;bottom:148px;gap:8px}
 body.mobileShell #player.osdHide #upNext{bottom:calc(20px + env(safe-area-inset-bottom))}
 body.mobileShell #upNext .un-play,body.mobileShell #upNext .un-ic,body.mobileShell #upNext .un-cancel{height:36px}
 body.mobileShell #upNext .un-cancel{width:36px}
+/* iPhone Safari is not mobileShell. Same compact OSD as the Android phone
+   shell, plus Fullscreen parked in the top-right so it cannot clip away. */
+body.iosPhone #osd{padding:14px 12px calc(14px + env(safe-area-inset-bottom));gap:10px}
+body.iosPhone #osd .top{gap:10px}
+body.iosPhone #osd .topLeft{gap:8px;max-width:calc(100% - 58px);min-width:0}
+body.iosPhone .osdRight{display:flex;flex-direction:row;align-items:flex-start;gap:10px}
+body.iosPhone .osdClock{display:none}
+body.iosPhone #osd #fsBtn{display:grid;flex:0 0 44px;width:44px;height:44px}
+body.iosPhone .playerBackBtn{width:40px;height:40px;flex:0 0 40px}
+body.iosPhone .playerEpisode{font-size:11px;margin-top:3px}
+body.iosPhone .playerMetaQuality{font-size:11px;padding:4px 8px}
+body.iosPhone .seekLine{grid-template-columns:46px minmax(0,1fr) 54px;gap:8px}
+body.iosPhone .seekTime{font-size:11px}
+body.iosPhone #seek{height:8px}
+body.iosPhone #seek .knob{width:18px;height:18px}
+body.iosPhone #osd .ctl{display:flex;grid-template-columns:none;gap:8px;overflow-x:auto;overflow-y:visible;
+  justify-content:flex-start;align-items:center;padding:3px 4px 8px;margin:0 -4px;scroll-padding:0 12px;
+  scrollbar-width:none;-webkit-overflow-scrolling:touch;touch-action:pan-x}
+body.iosPhone #osd .ctl::-webkit-scrollbar{display:none}
+body.iosPhone #osd .ctlGroup{flex:0 0 auto;gap:8px}
+body.iosPhone #osd .ctlLeft,body.iosPhone #osd .ctlCenter,body.iosPhone #osd .ctlRight{justify-content:flex-start}
+body.iosPhone #player:not(.live) #chGuide{display:none}
+body.iosPhone .cbtn{width:44px;height:44px;flex:0 0 44px}
+body.iosPhone .cbtn.big{width:52px;height:52px;flex-basis:52px}
+body.iosPhone .volWrap{flex:0 0 auto}
+body.iosPhone #volSlider{display:none}
 
 /* Phones: tighter guide + overlay panels, smaller channel tiles. (#guide prefix keeps these
    winning over the base rules that appear later in the sheet.) */
@@ -3093,6 +3129,21 @@ body.tv #prefTabs button:hover:not(:focus):not(.focus){
   background:transparent!important;opacity:.26;color:var(--muted)!important}
 body.tv #setTabs button.on:hover:not(:focus):not(.focus),
 body.tv #prefTabs button.on:hover:not(:focus):not(.focus){opacity:.28}
+/* Phones have no D-pad focus and no hover. The TV recede (0.26) left Dashboard / Profile
+   looking disabled, so a tap felt dead. Keep TV dimming; on a phone the tabs stay readable. */
+@media (max-width:900px){
+  body:not(.tv) #setTabs button,body:not(.tv) #prefTabs button{opacity:1!important;color:var(--text)!important}
+  body:not(.tv) #setTabs button.on,body:not(.tv) #prefTabs button.on{opacity:1!important;color:var(--text)!important}
+}
+body.mobileShell #setTabs button,body.mobileShell #prefTabs button,
+body.androidApp:not(.tv) #setTabs button,body.androidApp:not(.tv) #prefTabs button{opacity:1!important;color:var(--text)!important}
+body.mobileShell #setTabs button.on,body.mobileShell #prefTabs button.on,
+body.androidApp:not(.tv) #setTabs button.on,body.androidApp:not(.tv) #prefTabs button.on{opacity:1!important;color:var(--text)!important}
+/* Open phone drawer: icons/labels use normal text, not the muted rail gray.
+   #railUser color is an ID rule, so it needs its own override. */
+body.mobileNav .railBtn,body.mobileShell.mobileNav .railBtn,
+body.mobileNav #railUser,body.mobileShell.mobileNav #railUser{color:var(--text)}
+body.mobileNav .railBtn.active,body.mobileShell.mobileNav .railBtn.active{color:var(--text)}
 #settings .setGrid :is(.btn,.ghostMini,.profileAction,.profileAddBtn,.testBtn,.rm):hover,
 #prefs .setGrid :is(.btn,.ghostMini,.profileAction,.profileAddBtn,.testBtn,.rm):hover,
 #settings .setGrid .menuRow button:hover,#prefs .setGrid .menuRow button:hover,
@@ -3631,8 +3682,8 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
   <div class="gateCard">
     <div class="logoRow"><img src="triboon.png" alt="Triboon"></div>
     <div class="sub">Create the server owner account. You'll configure usenet &amp; indexers next.</div>
-    <label>Name</label><input id="suName" autocomplete="username">
-    <label>Password</label><input id="suPass" type="password" autocomplete="new-password">
+    <label>Name</label><input id="suName" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <label>Password</label><input id="suPass" type="password" autocomplete="new-password" inputmode="text" enterkeyhint="go" autocapitalize="off" autocorrect="off" spellcheck="false">
     <button class="btn primary" id="suGo">Create owner account</button>
     <div class="err" id="suErr"></div>
   </div>
@@ -3642,8 +3693,8 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
   <div class="gateCard">
     <div class="logoRow"><img src="triboon.png" alt="Triboon"></div>
     <div class="sub">Sign in to your server.</div>
-    <label>Name</label><input id="liName" autocomplete="username">
-    <label>Password</label><input id="liPass" type="password" autocomplete="current-password">
+    <label>Name</label><input id="liName" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <label>Password</label><input id="liPass" type="password" autocomplete="current-password" inputmode="text" enterkeyhint="go" autocapitalize="off" autocorrect="off" spellcheck="false">
     <div id="li2fa" hidden>
       <label>Authenticator code</label><input id="liCode" inputmode="numeric" autocomplete="one-time-code" maxlength="12">
       <div class="sub">Enter the 6-digit code or a recovery code.</div>
@@ -3688,8 +3739,8 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
   <div class="gateCard">
     <div class="logoRow"><img src="triboon.png" alt="Triboon"></div>
     <div class="sub">Create your account on this Triboon server.</div>
-    <label>Name</label><input id="ivName">
-    <label>Password</label><input id="ivPass" type="password">
+    <label>Name</label><input id="ivName" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <label>Password</label><input id="ivPass" type="password" autocomplete="new-password" inputmode="text" enterkeyhint="go" autocapitalize="off" autocorrect="off" spellcheck="false">
     <button class="btn primary" id="ivGo">Join server</button>
     <div class="err" id="ivErr"></div>
   </div>
@@ -4260,7 +4311,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
         <button class="focusable" data-range="all">All time</button>
       </div>
       <div class="dashHours">
-        <p class="dashPeak" id="dashPeak">Hours start as you finish titles.</p>
+        <p class="dashPeak" id="dashPeak">Hours add as you play.</p>
         <div class="dashStrip" id="dashStrip" role="img" aria-label="When you finish titles, by hour"></div>
         <div class="dashStripLabels"><span>12a</span><span>6a</span><span>12p</span><span>6p</span></div>
       </div>
@@ -4890,7 +4941,7 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
       <button class="focusable" data-range="all">All time</button>
     </div>
     <div class="dashHours">
-      <p class="dashPeak" id="userPeekPeak">Hours start as they finish titles.</p>
+      <p class="dashPeak" id="userPeekPeak">Hours add as they play.</p>
       <div class="dashStrip" id="userPeekStrip" role="img" aria-label="When they finish titles, by hour"></div>
       <div class="dashStripLabels"><span>12a</span><span>6a</span><span>12p</span><span>6p</span></div>
     </div>
@@ -5175,6 +5226,14 @@ const $ = (id) => document.getElementById(id);
 if (/TriboonTV/.test(navigator.userAgent)) document.body.classList.add('tv');
 if (/TriboonAndroid/.test(navigator.userAgent)) document.body.classList.add('androidApp');
 if (/TriboonAndroid/.test(navigator.userAgent) && !/TriboonTV/.test(navigator.userAgent)) document.body.classList.add('mobileShell');
+// iPhone Safari is not mobileShell. The desktop 3-column OSD clips Fullscreen
+// off the right edge, so park the expand control in the top-right chrome.
+if (/iPhone|iPod/.test(navigator.userAgent)) {
+  document.body.classList.add('iosPhone');
+  const iosFsBtn = $('fsBtn');
+  const iosOsdRight = document.querySelector('#osd .osdRight');
+  if (iosFsBtn && iosOsdRight) iosOsdRight.insertBefore(iosFsBtn, iosOsdRight.firstChild);
+}
 // XSS guards: ALL remote strings (TMDB fields, indexer release names, M3U/Xtream channel
 // data, scanned-library titles, user/profile names) must pass esc() before innerHTML, and
 // remote URLs must pass safeUrl() before src/url() (blocks javascript:/data: schemes).
@@ -5817,8 +5876,28 @@ $('suGo').addEventListener('click', async () => {
 $('liGo').addEventListener('click', doLogin);
 $('liPass').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
 $('liCode').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+// iPhone: type=password + current-password opens AutoFill and hides the QWERTY keys.
+// Name still types. Password shows Done/Paste and no keyboard. iOS-only — desktop/TV keep keychain fill.
+function armIosPasswordKeyboard() {
+  if (!iosWebkitVideo()) return;
+  for (const id of ['liPass', 'suPass', 'ivPass']) {
+    const el = $(id);
+    if (!el || el.dataset.iosPwArmed) continue;
+    el.dataset.iosPwArmed = '1';
+    el.setAttribute('inputmode', 'text');
+    el.setAttribute('enterkeyhint', 'go');
+    el.setAttribute('autocomplete', 'off');
+    el.addEventListener('touchend', () => {
+      if (document.activeElement !== el) el.focus();
+    }, { passive: true });
+  }
+}
+armIosPasswordKeyboard();
 $('liBack').addEventListener('click', () => setLogin2faMode(null));
+let _loginBusy = false;
 async function doLogin() {
+  if (_loginBusy) return;
+  _loginBusy = true;
   try {
     if (S.loginChallenge) {
       const r = await api('/api/login/2fa', { method: 'POST', body: { challenge: S.loginChallenge, code: $('liCode').value.trim() } });
@@ -5827,14 +5906,20 @@ async function doLogin() {
       await enterApp();
       return;
     }
-    const r = await api('/api/login', { method: 'POST', body: { name: $('liName').value.trim(), password: $('liPass').value } });
+    // Windows WebView2 / paste often leaves a trailing space or CR. Name was already trimmed;
+    // password was sent raw, so a good password looked wrong.
+    const r = await api('/api/login', { method: 'POST', body: { name: $('liName').value.trim(), password: $('liPass').value.trim() } });
     if (r.twoFactorRequired) {
       setLogin2faMode(r.challenge);
       return;
     }
     tokenStore.set(r.token); S.user = r.user;
     await enterApp();
-  } catch (e) { $('liErr').textContent = S.loginChallenge ? 'Invalid authenticator or recovery code' : 'Invalid name or password'; }
+  } catch (e) {
+    if (S.loginChallenge) $('liErr').textContent = 'Invalid authenticator or recovery code';
+    else if (e && e.status === 429) $('liErr').textContent = e.message || 'Too many attempts — try again later';
+    else $('liErr').textContent = 'Invalid name or password';
+  } finally { _loginBusy = false; }
 }
 $('ivGo').addEventListener('click', async () => {
   const inviteToken = new URLSearchParams(location.search).get('invite');
@@ -7841,7 +7926,10 @@ function metaLineHtml(it, d) {
   const year = (it && it.year) || (d ? String(d.release_date || d.first_air_date || '').slice(0, 4) : '');
   if (year) parts.push(esc(year));
   const tmdbKind = (it && certTargetForMeta(it, (it && it.key) || '').type) || (it && it.type);
-  if (d && it && tmdbKind === 'movie' && d.runtime) parts.push(`${Math.floor(d.runtime / 60)}h ${d.runtime % 60}m`);
+  if (d && it && tmdbKind === 'movie' && d.runtime) {
+    it.runtime = Number(d.runtime) || it.runtime;
+    parts.push(`${Math.floor(d.runtime / 60)}h ${d.runtime % 60}m`);
+  }
   if (d && it && tmdbKind === 'tv' && d.number_of_seasons) parts.push(`${d.number_of_seasons} season${d.number_of_seasons === 1 ? '' : 's'}`);
   const detailGenre = d && Array.isArray(d.genres) ? d.genres.slice(0, 2).map((x) => x.name).join(' / ') : '';
   const genre = detailGenre || metaGenreLabel(it);
@@ -8089,6 +8177,33 @@ function clientCaps() {
 function iosWebkitVideo() {
   const ua = navigator.userAgent || '';
   return /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && (navigator.maxTouchPoints || 0) > 1);
+}
+// iPhone/iPad Live TV cannot use the browser MSE fMP4 remux (MediaSource is missing or broken on
+// WebKit). Safari/Chrome-on-iOS play HLS natively via <video src>. Desktop Chrome/Edge/Firefox and
+// the Windows client keep startLiveMseSource(); Android keeps TriboonTV.playLive / ExoPlayer.
+function liveUrlIsHls(url, mime) {
+  const m = String(mime || '').toLowerCase();
+  if (m.includes('mpegurl') || m.includes('m3u8')) return true;
+  return /\.m3u8(?:[?#]|$)/i.test(String(url || ''));
+}
+function iosLiveHlsUrl(p) {
+  if (!p) return '';
+  const it = p.item || {};
+  const candidates = [
+    [p.nativeUrl, p.nativeMime],
+    [it._nativeUrl, it._nativeMime],
+    [p.nativeFallbackUrl, p.nativeFallbackMime],
+    [it._nativeFallbackUrl, it._nativeFallbackMime],
+  ];
+  for (const [url, mime] of candidates) {
+    if (!url) continue;
+    // The tokened native proxy is a raw byte pipe. Xtream ".m3u8" fallbacks often
+    // still deliver MPEG-TS, and a real playlist's segments stay on the provider.
+    // Safari then reports "Media failed to decode". Skip the proxy; use remux.
+    if (/\/api\/iptv\/native\//i.test(url)) continue;
+    if (liveUrlIsHls(url, mime)) return url;
+  }
+  return '';
 }
 // Mac DESKTOP Safari. Like iOS Safari, its <video> can't consume Triboon's non-rangeable 200-streamed
 // remux pipe (same WebKit/AVFoundation byte-range requirement), so an MKV → remux plays nothing — it must
@@ -8924,7 +9039,10 @@ async function openDetail(it, push = true) {
     const parts = [`<span class="rating">★ TMDB ${(d.vote_average || 0).toFixed(1)}</span>`];
     const year = (d.release_date || d.first_air_date || '').slice(0, 4);
     if (year) parts.push(year);
-    if (it.type === 'movie' && d.runtime) parts.push(`${Math.floor(d.runtime / 60)}h ${d.runtime % 60}m`);
+    if (it.type === 'movie' && d.runtime) {
+      it.runtime = Number(d.runtime) || it.runtime;
+      parts.push(`${Math.floor(d.runtime / 60)}h ${d.runtime % 60}m`);
+    }
     if (it.type === 'tv' && d.number_of_seasons) parts.push(`${d.number_of_seasons} season${d.number_of_seasons === 1 ? '' : 's'}`);
     const g = (d.genres || []).slice(0, 2).map((x) => esc(x.name)).join(' / ');
     if (g) parts.push(g);
@@ -10137,10 +10255,16 @@ const LIVE_MSE_TYPES = [
   'video/mp4; codecs="avc1.42e01e, mp4a.40.2"',
   'video/mp4',
 ];
+function liveMediaSourceCtor() {
+  if (typeof ManagedMediaSource === 'function') return ManagedMediaSource;
+  if (typeof MediaSource === 'function') return MediaSource;
+  return null;
+}
 function liveMseType() {
-  if (!window.MediaSource) return '';
+  const Ctor = liveMediaSourceCtor();
+  if (!Ctor) return '';
   return LIVE_MSE_TYPES.find((t) => {
-    try { return MediaSource.isTypeSupported(t); } catch { return false; }
+    try { return Ctor.isTypeSupported(t); } catch { return false; }
   }) || '';
 }
 function liveMseKey(slot = 'main') {
@@ -10187,7 +10311,9 @@ function startLiveMseSource(url, opts = {}) {
   const trimAfterSec = multi ? 40 : 90;
   cleanupLiveMse(slot);
   const abort = new AbortController();
-  const ms = new MediaSource();
+  const LiveMediaSource = liveMediaSourceCtor();
+  if (!LiveMediaSource) return false;
+  const ms = new LiveMediaSource();
   const objectUrl = URL.createObjectURL(ms);
   const token = Date.now() + ':' + Math.random().toString(16).slice(2);
   const active = () => {
@@ -10217,6 +10343,10 @@ function startLiveMseSource(url, opts = {}) {
   };
   S[liveMseKey(slot)] = { abort, objectUrl, token, reader: null };
   p.usingLiveMse = true;
+  // iOS Managed Media Source will not play unless remote playback (AirPlay) is off.
+  if (typeof ManagedMediaSource === 'function' && LiveMediaSource === ManagedMediaSource) {
+    try { v.disableRemotePlayback = true; } catch {}
+  }
   v.src = objectUrl;
   if (split || multi) v.muted = true;
   const requestLivePlay = () => requestLiveMsePlay(v, { split, multi }).catch(() => {
@@ -10319,6 +10449,11 @@ function liveItemPayload(it = {}) {
     _chid: it._chid || it.id || '',
     _personal: !!(it._personal || it.personal),
     _sourceName: it._sourceName || it.sourceName || '',
+    _streamUrl: it._streamUrl || it.streamUrl || '',
+    _nativeUrl: it._nativeUrl || it.nativeUrl || '',
+    _nativeMime: it._nativeMime || it.nativeMime || '',
+    _nativeFallbackUrl: it._nativeFallbackUrl || it.nativeFallbackUrl || '',
+    _nativeFallbackMime: it._nativeFallbackMime || it.nativeFallbackMime || '',
     genre: it.genre || it.group || '',
     fav: !!it.fav,
   };
@@ -10706,6 +10841,13 @@ function saveMultiViewVodProgress(i, final = false) {
   const duration = Math.floor(slot.duration || (v && isFinite(v.duration) ? v.duration + (slot.startOffset || 0) : 0) || 0);
   const watched = duration ? pos / duration > 0.92 : false;
   slot.lastSaved = pos;
+  const vClock = multiViewSlotVideo(i);
+  const now = Date.now();
+  const running = !!(vClock && !vClock.paused && !vClock.seeking);
+  if (slot._playTickAt && running) slot._playedAcc = (slot._playedAcc || 0) + Math.max(0, (now - slot._playTickAt) / 1000);
+  slot._playTickAt = running && !final ? now : 0;
+  const playedSeconds = Math.min(4 * 3600, Math.floor(slot._playedAcc || 0));
+  slot._playedAcc = Math.max(0, (slot._playedAcc || 0) - playedSeconds);
   const payload = {
     key: slot.item.key,
     position: pos,
@@ -10714,6 +10856,7 @@ function saveMultiViewVodProgress(i, final = false) {
     profile: S.profile ? S.profile.id : undefined,
     meta: wlMeta(slot.item),
   };
+  if (playedSeconds > 0) payload.playedSeconds = playedSeconds;
   const finalKey = final ? `${payload.position}:${payload.duration}:${payload.watched ? 1 : 0}` : '';
   if (final && slot._finalWatchKey === finalKey && Date.now() - (slot._finalWatchAt || 0) < 2000) {
     return slot._finalWatchJob;
@@ -11803,6 +11946,10 @@ async function openPlayer(it, mount, opts = {}) {
   S.playing = {
     sessionId: mount.sessionId, streamUrl: mount.streamUrl, remuxUrl: mount.remuxUrl,
     transcodeUrl: mount.transcodeUrl, hlsUrl: mount.hlsUrl, encoder: mount.encoder,
+    nativeUrl: mount.nativeUrl || it._nativeUrl || '',
+    nativeMime: mount.nativeMime || it._nativeMime || '',
+    nativeFallbackUrl: mount.nativeFallbackUrl || it._nativeFallbackUrl || '',
+    nativeFallbackMime: mount.nativeFallbackMime || it._nativeFallbackMime || '',
     tracksUrl: mount.tracksUrl, subtitleBase: mount.subtitleBase, streamToken: mount.streamToken,
     item: it, name: sourceName, fileName: mount.name, sourceAttributes: mount.candidate && mount.candidate.attributes,
     sourcePickKey: (mount.candidate && mount.candidate.pickKey) || null,
@@ -11813,7 +11960,8 @@ async function openPlayer(it, mount, opts = {}) {
     tracks: null, _tracksJob: null, audioTrack: 0, subTrack: null, quality: 1080,
     // Seed native position with the requested resume point. A prompt health verdict can replace a
     // rotten source before ExoPlayer's first callback; recovery must still start at Continue Watching.
-    nativePos: Math.max(0, Number(it.resume) || 0), nativeDuration: 0,
+    nativePos: Math.max(0, Number(it.resume) || 0), nativeDuration: 0, nativePaused: true,
+    _playedAcc: 0, _playTickAt: 0,
     nativeStartKind: playbackStartKind(mount), nativeTried: {},
     openedAt: (typeof appMs === 'function' ? appMs() : Date.now()),
     // Echoed by Android on terminal callbacks so a late STATE_ENDED from the previous ExoPlayer
@@ -11862,6 +12010,7 @@ async function openPlayer(it, mount, opts = {}) {
   v.onplaying = () => {
     if (S.playing !== playingRef || S.view !== 'player') return;
     clearWebRebufferRecovery(); cancelPauseWarmAhead(); markVodPlaybackStarted(playingRef);
+    bumpPlayClock(playingRef);
     clearReadyFrame(); clearTimeout(S._waitT); $('playerLoader').classList.remove('show'); hideSeekHoldFrame();
   };
   v.onpause = () => {
@@ -11869,6 +12018,7 @@ async function openPlayer(it, mount, opts = {}) {
     // Pause is a durable user checkpoint, not just a UI state. Persist immediately for browser,
     // AirPlay, and Android-WebView playback; waiting for the 10s timer loses the last few seconds
     // when the app is backgrounded or killed right after pausing.
+    bumpPlayClock(playingRef);
     saveWatch(true);
     schedulePauseWarmAhead(playingRef); updPP();
   };
@@ -11999,12 +12149,32 @@ function startSource(kind, atSeconds, opts = {}) {
   p.usingRemux = kind === 'remux';
   p.usingTranscode = kind === 'transcode';
   p.usingLiveMse = false;
+  p.usingLiveHls = false;
   updatePlayerMeta();
   const serverSeek = p.usingRemux || p.usingTranscode;
   const seekStart = serverSeek ? Math.max(0, Math.round((atSeconds || 0) * 1000) / 1000) : 0; // ms-precise, not floored: a resume/seek must not lose up to 1s
   p.startOffset = seekStart;
   cleanupLiveMse();
   if (p.item && p.item.type === 'live') {
+    // iPhone/iPad only: play the tokened provider HLS in <video>. MSE remux stays on every
+    // other browser (desktop Chrome/Edge/Firefox, Windows WebView2). Android never reaches
+    // this function for Live TV — tryNativeLivePlayer / ExoPlayer owns that path.
+    if (iosWebkitVideo()) {
+      const hls = iosLiveHlsUrl(p);
+      if (hls) {
+        p.usingLiveHls = true;
+        v.src = hls;
+        applySubtitleTrack();
+        applyVolume();
+        requestVideoPlay(v).then(() => { cancelPauseWarmAhead(); }).catch(() => showLivePlayPrompt());
+        return true;
+      }
+      // iOS 17+ Managed Media Source can take the same fMP4 remux desktop uses.
+      // Provider "HLS" through /api/iptv/native is often TS and will not play.
+      if (startLiveMseSource(p.streamUrl)) return true;
+      showLiveProviderError('This channel has no iPhone-playable stream');
+      return true;
+    }
     if (kind === 'direct' && startLiveMseSource(p.streamUrl)) {
       applySubtitleTrack();
       return true;
@@ -12476,7 +12646,10 @@ async function fetchPlayerTracks(p, timeoutMs = 0) {
       .then((t) => {
         if (!S.playing || S.playing.tracksUrl !== p.tracksUrl) return null;
         p.tracks = t;
-        if (t && t.duration && !p.duration) p.duration = t.duration;
+        if (t && t.duration) {
+          if (!p.duration || t.duration > p.duration * 1.05) p.duration = t.duration;
+          if (t.duration > (p._lastKnownDuration || 0)) p._lastKnownDuration = t.duration;
+        }
         scheduleEmbeddedSubtitlePrewarm(p);
         return t;
       })
@@ -12623,13 +12796,40 @@ function tryNextNativeKind(failedKind, atSeconds, msg) {
   }
   return false;
 }
+function catalogRuntimeSeconds(item) {
+  return Math.max(0, (Number(item && item.runtime) || 0) * 60);
+}
+function knownPlaybackSeconds(p, dur) {
+  return Math.max(
+    0,
+    Number(dur) || 0,
+    Number(p && p.nativeDuration) || 0,
+    Number(p && p.duration) || 0,
+    Number(p && p._lastKnownDuration) || 0,
+    catalogRuntimeSeconds(p && p.item)
+  );
+}
+// Remux/fMP4 often reports "so far" as duration. Never shrink a longer known title
+// down to the current position — that made pause look like 100% watched.
+function applyReportedDuration(p, dur) {
+  const incoming = Math.max(0, Number(dur) || 0);
+  if (!p || incoming <= 0) return;
+  const prev = knownPlaybackSeconds(p, 0);
+  if (prev >= 60 && incoming < prev * 0.85) {
+    if (prev > (p._lastKnownDuration || 0)) p._lastKnownDuration = prev;
+    return;
+  }
+  if (p.usingNative) p.nativeDuration = incoming;
+  p.duration = incoming;
+  if (incoming > (p._lastKnownDuration || 0)) p._lastKnownDuration = incoming;
+}
 function applyNativeVideoProgress(pos, dur, opts = {}) {
   const p = S.playing; if (!p || !p.usingNative) return;
   const incoming = Math.max(0, +pos || 0);
   const prev = Math.max(0, +p.nativePos || 0);
   const keepPrev = opts.preserveOnZero && incoming <= 1 && prev > 30;
   p.nativePos = keepPrev ? prev : incoming;
-  if (+dur > 0) { p.nativeDuration = +dur; p.duration = +dur; }
+  applyReportedDuration(p, dur);
   maybePrepareNextEpisode(p.nativePos, totalDuration());
   maybeShowUpNext(p.nativePos, totalDuration(), { native: true });
   return p.nativePos;
@@ -12671,6 +12871,8 @@ window.__tvNativeVideoReady = (pos, dur, token) => {
 window.__tvNativeVideoPlaying = (pos, dur, token) => {
   const p = S.playing; if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
   applyNativeVideoProgress(pos, dur);
+  p.nativePaused = false;
+  bumpPlayClock(p);
   // READY means ExoPlayer parsed enough media to be ready; it does not prove a frame advanced.
   // Mark the recovery boundary only on real PLAYING so a frozen resume keeps the fast startup path.
   markVodPlaybackStarted(p);
@@ -12679,6 +12881,8 @@ window.__tvNativeVideoPlaying = (pos, dur, token) => {
 window.__tvNativeVideoPaused = (pos, dur, token) => {
   const p = S.playing; if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
   applyNativeVideoProgress(pos, dur);
+  p.nativePaused = true;
+  bumpPlayClock(p);
   // ExoPlayer reports the exact stop point here. Flush it before Android can suspend the hidden
   // WebView so Back, media-stop, Home/app background, and process death all resume accurately.
   saveWatch(true);
@@ -12697,7 +12901,7 @@ window.__tvNativeVideoSeek = async (pos, dur, resume, token, percentResume) => {
   if (!p || !p.usingNative || !p.item || p.item.type === 'live' || !nativePlaybackCallbackMatches(p, token)) return;
   const current = () => S.playing === p && S.view === 'player' && p.usingNative;
   const at = Math.max(0, +pos || 0);
-  if (+dur > 0) { p.nativeDuration = +dur; p.duration = +dur; }
+  applyReportedDuration(p, dur);
   // A percent-only startup has not resumed until the replacement stream is mounted. Do not publish
   // the computed target as observed progress before that token-guarded remount actually starts.
   if (!percentResume) p.nativePos = at;
@@ -12965,10 +13169,12 @@ function isGenuineEpisodeEof(p, pos, dur) {
   const resume = Math.max(0, Number(p.item && p.item.resume) || Number(p.startOffset) || 0);
   if (resume > 30 && d > 0 && d + 8 < resume) return false;
   const catalogSec = Math.max(0, (Number(p.item && p.item.runtime) || 0) * 60);
+  const knownLonger = Math.max(catalogSec, Number(p._lastKnownDuration) || 0);
   // TMDB runtimes are rounded (22/30/45/60). The file is the episode unless it is
   // a stub — much shorter than the listing, like a 12-min replacement of a 22-min show.
-  const fileLooksComplete = !catalogSec || catalogSec < 8 * 60 || d >= catalogSec * 0.65;
-  if (!fileLooksComplete && t < catalogSec * 0.80) return false;
+  // Remux can also report duration ≈ current position mid-title. That is not credits.
+  const fileLooksComplete = !knownLonger || knownLonger < 8 * 60 || d >= knownLonger * 0.65;
+  if (!fileLooksComplete && t < knownLonger * 0.80) return false;
   const now = (typeof appMs === 'function' ? appMs() : Date.now());
   const openedAt = Number(p.openedAt || 0);
   const startedAt = Number(p.startedAt || 0);
@@ -13602,6 +13808,8 @@ async function prepPlayerAbout(it) {
     const ep = ctx && ctx.season && parts
       ? (ctx.season.episodes || []).find((e) => e && +e.episode_number === parts.episode)
       : null;
+    const runtimeMin = Number((ep && ep.runtime) || d.runtime || (d.episode_run_time && d.episode_run_time[0]) || it.runtime) || 0;
+    if (runtimeMin > 0) S.playing.item.runtime = runtimeMin;
     const epCode = parts ? `S${pad2(parts.season)}E${pad2(parts.episode)}` : '';
     const epName = ep && ep.name ? ep.name : (S.playerAbout.subline || '').replace(/^[S0-9E]+(?:\s+[·.-]\s*)?/i, '').trim();
     S.playerAbout = {
@@ -14017,10 +14225,12 @@ function currentTime() {
 }
 function totalDuration() {
   const v = $('video'); const p = S.playing;
-  if (p && p.castingActive) return p.castDuration || p.duration || 0;
-  if (p && p.usingNative) return p.nativeDuration || p.duration || 0;
-  if (p && (p.usingRemux || p.usingTranscode)) return p.duration || 0; // fragment streams hide duration
-  return v.duration && isFinite(v.duration) ? v.duration : (p && p.duration) || 0;
+  let reported = 0;
+  if (p && p.castingActive) reported = p.castDuration || p.duration || 0;
+  else if (p && p.usingNative) reported = p.nativeDuration || p.duration || 0;
+  else if (p && (p.usingRemux || p.usingTranscode)) reported = p.duration || 0; // fragment streams hide duration
+  else reported = v.duration && isFinite(v.duration) ? v.duration : (p && p.duration) || 0;
+  return knownPlaybackSeconds(p, reported);
 }
 function rememberVodReturn(item = S.playing && S.playing.item, resume = currentTime(), opts = {}) {
   if (!item || item.type === 'live') return false;
@@ -14065,6 +14275,7 @@ function playerModeLabel(p = S.playing) {
   if (p.usingTranscode) return 'Transcode';
   if (p.usingRemux) return 'Remux';
   if (p.usingLiveMse) return 'Live remux';
+  if (p.usingLiveHls) return 'Live HLS';
   return 'Direct';
 }
 function nativePlayerTelemetryId() {
@@ -14292,21 +14503,42 @@ function togglePlayerStats() {
   }
   else closePlayerStats();
 }
+function vodClockShouldRun(p = S.playing) {
+  if (!p || !p.item || p.item.type === 'live') return false;
+  if (String(p.item.key || '').startsWith('live:')) return false;
+  if (p.castingActive) return !p.castPaused;
+  if (p.usingNative) return !p.nativePaused;
+  const v = $('video');
+  return !!(v && !v.paused && !v.seeking);
+}
+function bumpPlayClock(p = S.playing) {
+  if (!p) return;
+  const now = Date.now();
+  if (p._playTickAt && vodClockShouldRun(p)) {
+    p._playedAcc = (p._playedAcc || 0) + Math.max(0, (now - p._playTickAt) / 1000);
+  }
+  p._playTickAt = vodClockShouldRun(p) ? now : 0;
+}
+function takePlayedSeconds(p = S.playing) {
+  if (!p) return 0;
+  bumpPlayClock(p);
+  const raw = p._playedAcc || 0;
+  const sec = Math.min(4 * 3600, Math.floor(raw));
+  p._playedAcc = Math.max(0, raw - sec);
+  return sec > 0 ? sec : 0;
+}
 async function saveWatch(final, opts = {}) {
   const p = S.playing; if (!p || !p.item) return;
   if (p.item.type === 'live' || String(p.item.key || '').startsWith('live:')) return; // live TV never lands in Continue Watching
   const pos = currentTime();
-  if (!final && Math.abs(pos - p.lastSaved) < 5) return;
+  const playedSeconds = takePlayedSeconds(p);
+  if (!final && Math.abs(pos - p.lastSaved) < 5 && playedSeconds < 1) return;
   p.lastSaved = pos;
   const d = totalDuration();
   const meta = wlMeta(p.item);
-  // watched=true when: (a) the caller forces it (playback reached the end — see v.onended /
-  // native ended handoff), or (b) position crossed 92% of a known duration. The end-of-file
-  // signal is authoritative: TV auto-advance and manual "Play next" both close the current
-  // episode before a periodic tick ever lands past 92%, so without the force the episode was
-  // only ever marked watched if a 10s tick happened to fire in the last ~8% — which it usually
-  // did not. This is the fix for "only marks watched if I watch the ENTIRE thing".
-  const nearEnd = d ? pos / d > 0.92 : false;
+  // Pause always checkpoints. Do not treat "position / remux-so-far duration" as watched —
+  // remux can report duration ≈ 40% into a movie. Real EOF uses the same gate as Up Next.
+  const nearEnd = isGenuineEpisodeEof(p, pos, d);
   // EOF sets p._ended before teardown. A later close/back save can see duration=0 or
   // currentTime=0 and must not un-watch the episode we just finished.
   const watched = opts && opts.watched != null ? !!opts.watched : (nearEnd || !!(p && p._ended));
@@ -14323,10 +14555,11 @@ async function saveWatch(final, opts = {}) {
     watched, profile: S.profile ? S.profile.id : undefined,
     meta, // episodes resume + reopen
   };
+  if (playedSeconds > 0) payload.playedSeconds = playedSeconds;
   // Pause, visibility loss, pagehide, and the Android lifecycle bridge can arrive together.
   // Coalesce the same final point so one durable checkpoint does not fan out into duplicate
   // server writes or Trakt scrobbles. A watched override is part of the key, so EOF still wins.
-  const finalKey = final ? `${payload.position}:${payload.duration}:${payload.watched ? 1 : 0}` : '';
+  const finalKey = final ? `${payload.position}:${payload.duration}:${payload.watched ? 1 : 0}:${playedSeconds}` : '';
   if (final && p._finalWatchKey === finalKey && Date.now() - (p._finalWatchAt || 0) < 2000) {
     return p._finalWatchJob;
   }
@@ -16165,12 +16398,40 @@ $('muteBtn').addEventListener('click', () => {
 });
 
 /* ---- fullscreen ---- */
+// iPhone Safari/Chrome have no Fullscreen API on a DIV. They only fullscreen the <video>
+// itself (webkitEnterFullscreen). Desktop browsers and Android WebView keep #player.requestFullscreen.
+function webkitVideoFullscreenEl(v = $('video')) {
+  return v && typeof (v.webkitEnterFullscreen || v.webkitEnterFullScreen) === 'function' ? v : null;
+}
+function isPlayerFullscreen() {
+  const v = $('video');
+  return !!(document.fullscreenElement || document.webkitFullscreenElement
+    || (v && v.webkitDisplayingFullscreen));
+}
+function syncFullscreenButton() {
+  $('fsBtn').classList.toggle('on', isPlayerFullscreen());
+}
 function toggleFullscreen() {
+  const v = webkitVideoFullscreenEl();
+  if (iosWebkitVideo() && v) {
+    try {
+      if (v.webkitDisplayingFullscreen) {
+        if (typeof v.webkitExitFullscreen === 'function') v.webkitExitFullscreen();
+        else if (typeof v.webkitExitFullScreen === 'function') v.webkitExitFullScreen();
+      } else {
+        (v.webkitEnterFullscreen || v.webkitEnterFullScreen).call(v);
+      }
+    } catch {}
+    return;
+  }
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
   else $('player').requestFullscreen().catch(() => {});
 }
 $('fsBtn').addEventListener('click', toggleFullscreen);
-document.addEventListener('fullscreenchange', () => $('fsBtn').classList.toggle('on', !!document.fullscreenElement));
+document.addEventListener('fullscreenchange', syncFullscreenButton);
+document.addEventListener('webkitfullscreenchange', syncFullscreenButton);
+$('video').addEventListener('webkitbeginfullscreen', syncFullscreenButton);
+$('video').addEventListener('webkitendfullscreen', syncFullscreenButton);
 
 /* ============ Casting — Google Cast (Default Media Receiver) + AirPlay, VOD, web only ============ */
 // Receiver-pull: hand the TV an ABSOLUTE, LAN-reachable tokened stream URL and it fetches the bytes
@@ -16366,6 +16627,7 @@ window.__tvCast = (o) => {
   if (o.duration) p.castDuration = o.duration;
   const wasPaused = !!p.castPaused;
   p.castPaused = (o.state === 'paused' || o.state === 'idle');
+  bumpPlayClock(p);
   // Native Cast state is sampled repeatedly. Save on the transition, not on every paused sample.
   if (p.castPaused && !wasPaused) saveWatch(true);
   S.castDeviceName = o.device || 'TV';
@@ -19862,6 +20124,10 @@ async function playChannelWeb(it) {
   stopActivePlaybackForReplacement({ preserveGuide });
   await openPlayer(liveItemPayload(it), {
     streamUrl: it._streamUrl,
+    nativeUrl: it._nativeUrl || '',
+    nativeMime: it._nativeMime || '',
+    nativeFallbackUrl: it._nativeFallbackUrl || '',
+    nativeFallbackMime: it._nativeFallbackMime || '',
     name: it.title, container: 'live', method: 'remux', id: null, sessionId: null,
     remuxUrl: null, transcodeUrl: null, tracksUrl: null, playback: { method: 'direct' },
   }, { preserveGuide });
@@ -22765,12 +23031,12 @@ function paintDashStrip(data, ids) {
   if ($(ids.strip)) $(ids.strip).innerHTML = hours.map((n) => `<i style="--p:${n / max}"></i>`).join('');
   const peak = $(ids.peak);
   if (!peak) return;
-  if (data.ledgerEmpty) peak.textContent = 'Hours start as they finish titles.';
+  if (data.ledgerEmpty) peak.textContent = 'Hours add as you play.';
   else if (data.peakHour == null) {
     peak.textContent = data.range === 'week' ? 'No finishes this week.'
       : data.range === 'month' ? 'No finishes this month.'
       : data.range === 'year' ? 'No finishes this year.'
-      : 'Hours start as they finish titles.';
+      : 'Hours add as you play.';
   } else peak.textContent = `Most often around ${dashHourLabel(data.peakHour)}`;
 }
 function renderWatchDashboard(data) {
@@ -25098,8 +25364,12 @@ function androidBurgerHit(e) {
   if (document.body.classList.contains('mobileNav')) return false;
   const burger = $('burger');
   if (burger && (e.target === burger || burger.contains(e.target))) return false;
+  // Settings Dashboard (and the rest of #prefTabs) sit in the old 132px corner. A tap there
+  // used to open the left menu and swallow the tab click. Real controls keep their own tap.
+  const t = e.target;
+  if (t && t.closest && t.closest('button,a,input,select,textarea,label,.focusable,#prefTabs,#setTabs,#rail,#searchBar')) return false;
   const p = (e.changedTouches && e.changedTouches[0]) || e;
-  return p.clientX <= 132 && p.clientY <= 132;
+  return p.clientX <= 72 && p.clientY <= 72;
 }
 document.addEventListener('pointerup', (e) => {
   if (!androidBurgerHit(e)) return;
@@ -26299,7 +26569,14 @@ document.addEventListener('keydown', (e) => {
   // during the freeze queue up and then replay in one burst — focus "jumps around" and can
   // land on a rail item whose rollover then switches pages. A trusted key's timeStamp is its
   // HARDWARE press time; anything older than 350ms by the time we see it is freeze backlog.
-  if (e.isTrusted && performance.now() - e.timeStamp > 350) { e.preventDefault(); return; }
+  // TV remotes only. iPhone software-keyboard keydown is often >350ms late; preventDefault
+  // here swallowed login username/password. Desktop browsers never needed this guard.
+  if (document.body.classList.contains('tv') && e.isTrusted && performance.now() - e.timeStamp > 350) {
+    const aeEarly = document.activeElement;
+    const typing = aeEarly && /^(INPUT|SELECT|TEXTAREA)$/.test(aeEarly.tagName)
+      && !(aeEarly.tagName === 'INPUT' && /^(checkbox|radio)$/.test(aeEarly.type));
+    if (!typing) { e.preventDefault(); return; }
+  }
   if (e.isTrusted) { S.pointer = false; S._lastKeyAt = appMs(); } // keyboard takes over → focus moves may scroll again
   const ae = document.activeElement;
   // Checkboxes/radios don't need native key handling (no caret, no IME) — they stay in OUR

@@ -4502,9 +4502,9 @@ public class MainActivity extends Activity {
                     if (state == Player.STATE_ENDED && "video".equals(nativeMode)) {
                         if (nativePercentResumePending) return;
                         long dur = nativeDurSeconds();
-                        // A cold start can ENDED as soon as the remux header is parsed. Forcing
-                        // pos=duration made JS treat a 0:00 death as "finished the movie".
-                        long pos = nativeVideoStarted && dur > 0 ? dur : nativePosSeconds();
+                        // Always report the real clock. Forcing pos=duration after PLAYING made a
+                        // mid-title remux ENDED (pause/resume) look like the movie was finished.
+                        long pos = nativePosSeconds();
                         // Keep the final frame/native Up Next layer visible until JS either starts the
                         // next episode or closes a truly-finished title. Closing first exposes the
                         // show-details WebView and used to restart a second 10-second countdown there.

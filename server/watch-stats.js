@@ -1,9 +1,11 @@
 'use strict';
-// Durable per-account finish log for the Settings Dashboard.
-// Activity history is only ~3 days; this ledger is what "hours" and "when you watch" can trust.
-// Trakt imports must never write here — only a local finish transition (watchSet / watchBulk).
+// Durable per-account watch ledger for the Settings Dashboard.
+// Hours are actual play seconds (pause/seek do not invent time). Movies / streak / recent
+// stay finish-only. Trakt imports must never write here.
 
 const DEDUPE_MS = 6 * 60 * 60 * 1000;
+const PLAY_MERGE_MS = 15 * 60 * 1000;
+const MAX_PLAY_FLUSH = 4 * 3600;
 const MAX_EVENTS = 4000;
 const RANGES = new Set(['week', 'month', 'year', 'all']);
 
@@ -66,8 +68,8 @@ function recordFinish(store, { userId, key, meta, duration, at } = {}) {
     if (!doc.users) doc.users = {};
     const prev = doc.users[uid] || { events: [] };
     const events = Array.isArray(prev.events) ? prev.events : [];
-    const last = events.findLast ? events.findLast((e) => e && e.key === key)
-      : [...events].reverse().find((e) => e && e.key === key);
+    const last = events.findLast ? events.findLast((e) => e && e.key === key && e.source !== 'play')
+      : [...events].reverse().find((e) => e && e.key === key && e.source !== 'play');
     if (last && (now - last.at) < DEDUPE_MS) return doc;
     events.push({
       at: now,
@@ -77,7 +79,46 @@ function recordFinish(store, { userId, key, meta, duration, at } = {}) {
       duration: dur,
       title,
       poster,
+      source: 'finish',
     });
+    while (events.length > MAX_EVENTS) events.shift();
+    doc.users[uid] = { events };
+    return doc;
+  });
+  return true;
+}
+
+function recordPlayTime(store, { userId, key, meta, playedSeconds, at } = {}) {
+  const cls = classify(key, meta);
+  const played = Math.min(MAX_PLAY_FLUSH, Math.max(0, Math.round(Number(playedSeconds) || 0)));
+  if (!cls || !userId || !store || played < 1) return false;
+  const now = Number(at) || Date.now();
+  const uid = String(userId);
+  const title = clip((meta && (meta.showTitle || meta.show || meta.title || meta.name)) || '', 180);
+  const poster = clip((meta && (meta.poster || meta.art)) || '', 400);
+  store.update('watchStats', { users: {} }, (doc) => {
+    if (!doc.users) doc.users = {};
+    const prev = doc.users[uid] || { events: [] };
+    const events = Array.isArray(prev.events) ? prev.events : [];
+    const last = events.findLast ? events.findLast((e) => e && e.key === key && e.source === 'play')
+      : [...events].reverse().find((e) => e && e.key === key && e.source === 'play');
+    if (last && (now - last.at) < PLAY_MERGE_MS) {
+      last.duration = Math.max(0, Number(last.duration) || 0) + played;
+      last.at = now;
+      if (title) last.title = title;
+      if (poster) last.poster = poster;
+    } else {
+      events.push({
+        at: now,
+        key,
+        kind: cls.kind,
+        showKey: cls.showKey,
+        duration: played,
+        title,
+        poster,
+        source: 'play',
+      });
+    }
     while (events.length > MAX_EVENTS) events.shift();
     doc.users[uid] = { events };
     return doc;
@@ -146,7 +187,7 @@ function prevLocalDay(dayStart) {
 function finishStreak(events, now = Date.now()) {
   const days = new Set();
   for (const e of events || []) {
-    if (e && e.at) days.add(localDayStart(e.at));
+    if (e && e.at && e.source !== 'play') days.add(localDayStart(e.at));
   }
   if (!days.size) return 0;
   const today = localDayStart(now);
@@ -173,23 +214,30 @@ function summarizeEvents(events, range, now = Date.now()) {
   let weekday = 0;
   let weekend = 0;
   for (const e of inRange) {
-    const hour = new Date(e.at).getHours();
-    if (hour >= 0 && hour < 24) byHour[hour] += 1;
-    const day = new Date(e.at).getDay();
-    if (day === 0 || day === 6) weekend += 1;
-    else weekday += 1;
-    seconds += Math.max(0, Number(e.duration) || 0);
-    if (e.kind === 'movie') movies.add(e.key);
-    else if (e.kind === 'episode') {
-      episodes.add(e.key);
-      if (e.showKey) shows.add(e.showKey);
+    const played = Math.max(0, Number(e.duration) || 0);
+    const isPlay = e.source === 'play';
+    const isFinish = !isPlay;
+    // Hours: play-clock seconds, plus old finish rows that stored full runtime.
+    // New finish rows (source:'finish') do not add runtime — that would double-count.
+    if (isPlay || !e.source) seconds += played;
+    if (isFinish) {
+      const hour = new Date(e.at).getHours();
+      if (hour >= 0 && hour < 24) byHour[hour] += 1;
+      const day = new Date(e.at).getDay();
+      if (day === 0 || day === 6) weekend += 1;
+      else weekday += 1;
+      if (e.kind === 'movie') movies.add(e.key);
+      else if (e.kind === 'episode') {
+        episodes.add(e.key);
+        if (e.showKey) shows.add(e.showKey);
+      }
     }
     const id = e.kind === 'episode' && e.showKey ? e.showKey : e.key;
     const t = titles.get(id) || {
       key: id, title: e.title || id, kind: e.kind, count: 0, seconds: 0, poster: e.poster || '',
     };
-    t.count += 1;
-    t.seconds += Math.max(0, Number(e.duration) || 0);
+    if (isFinish) t.count += 1;
+    if (isPlay || !e.source) t.seconds += played;
     if (e.title) t.title = e.title;
     if (e.poster) t.poster = e.poster;
     titles.set(id, t);
@@ -198,8 +246,10 @@ function summarizeEvents(events, range, now = Date.now()) {
   let peakN = 0;
   byHour.forEach((n, h) => { if (n > peakN) { peakN = n; peakHour = h; } });
   if (peakN === 0) peakHour = null;
-  const top = [...titles.values()].sort((a, b) => b.count - a.count || b.seconds - a.seconds).slice(0, 10);
+  const top = [...titles.values()].filter((t) => t.count > 0)
+    .sort((a, b) => b.count - a.count || b.seconds - a.seconds).slice(0, 10);
   const recent = [...inRange]
+    .filter((e) => e && e.source !== 'play')
     .sort((a, b) => (b.at || 0) - (a.at || 0))
     .slice(0, 10)
     .map((e) => ({
@@ -222,7 +272,7 @@ function summarizeEvents(events, range, now = Date.now()) {
     streak: finishStreak(events, now),
     recent,
     top,
-    eventCount: inRange.length,
+    eventCount: inRange.filter((e) => e && e.source !== 'play').length,
     ledgerEmpty: (events || []).length === 0,
   };
 }
@@ -244,11 +294,13 @@ function summarize(store, userId, range, now = Date.now()) {
 module.exports = {
   classify,
   recordFinish,
+  recordPlayTime,
   summarize,
   summarizeEvents,
   finishStreak,
   rangeStart,
   countWatched,
   DEDUPE_MS,
+  PLAY_MERGE_MS,
   MAX_EVENTS,
 };

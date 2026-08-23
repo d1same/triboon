@@ -2511,6 +2511,23 @@ test('http server hardening: aborted request bodies and stale sockets are bounde
     'HTTP sockets should have explicit server-level timeouts and client-error cleanup');
 });
 
+test('login: trailing whitespace from Windows paste still authenticates', async () => {
+  let box = srv;
+  let own = false;
+  if (!box || !box.port) {
+    own = true;
+    box = await bootServer();
+    await setupAdmin(box.port);
+  }
+  try {
+    const spaced = await httpJson(box.port, 'POST', '/api/login', { name: 'owner', password: 'hunter22 \r' });
+    assert.strictEqual(spaced.status, 200, 'CR/space from WebView2 paste must not look like a wrong password');
+    assert.ok(spaced.json.token);
+  } finally {
+    if (own) await new Promise((r, j) => box.server.close((e) => e ? j(e) : r()));
+  }
+});
+
 test('rate limit: repeated failed logins for one account lock out with 429', async () => {
   let last;
   for (let i = 0; i < 11; i++) {

@@ -215,6 +215,8 @@ test('Windows client: Rust owns a persistent, observable D3D11/libmpv player', (
   assert.match(player, /mpv\.set_property\("alang", mpv_alang\(&session\.preferred_audio_language\)/,
     'ITA.ENG files start on English because load_session sets mpv alang');
   assert.match(player, /time-pos/i, 'native progress uses mpv playback time');
+  assert.doesNotMatch(player, /last_position = session\.last_duration/,
+    'a mid-title remux EOF must not teleport Windows progress to duration');
   assert.match(player, /demuxer-cache|cache-duration|paused-for-cache/i, 'buffering is observable');
   assert.match(player, /playback_token|playbackToken/i, 'events carry playback identity');
   assert.match(player, /redact|query\(|split\('\?'\)|set_query\(None\)/i,
