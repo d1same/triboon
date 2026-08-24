@@ -156,7 +156,7 @@ function Ensure-EmulatorServerRoute {
   }
 }
 function Get-WebViewSocket {
-  $deadline = (Get-Date).AddSeconds(25)
+  $deadline = (Get-Date).AddSeconds(45)
   do {
     try {
       $unix = Invoke-Adb shell cat /proc/net/unix
@@ -296,10 +296,12 @@ $serverRoute = Ensure-EmulatorServerRoute
 if ($serverRoute) { $report['serverRoute'] = $serverRoute }
 
 Invoke-Adb logcat -c | Out-Null
+try { Invoke-Adb shell svc power stayon true | Out-Null } catch {}
+try { Invoke-Adb shell input keyevent 224 | Out-Null } catch {}
 Invoke-Adb shell am force-stop $Package | Out-Null
 Start-Sleep -Milliseconds 500
 Invoke-Adb shell am start -n $Activity | Out-Host
-Start-Sleep -Seconds 4
+Start-Sleep -Seconds 8
 $report['socket'] = Connect-Devtools
 
 $boot = Invoke-CdpJson @"

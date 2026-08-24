@@ -14084,16 +14084,26 @@ function armUpNextCountdown() {
     if (n <= 0) playNextEpisode();
   }, 1000);
 }
+// Chip window is the playing file only. 1080p and 4K use the same last 2.8%.
+// Quiet remux seeks mark a source-swap so ENDED cannot mark the title watched —
+// that 8s guard must not hide this chip once we are actually in the credits window.
+function upNextWindowReady(p, pos, dur) {
+  if (!p || (p.item && p.item.type === 'live')) return false;
+  if (p._sourceAdvancePending || p._reMounting) return false;
+  const d = Math.max(0, Number(dur) || Number(p.nativeDuration) || Number(p.duration) || Number(p._lastKnownDuration) || 0);
+  const t = Math.max(0, Number(pos) || Number(p.nativePos) || 0);
+  if (d <= 0 || (d - t) <= 0) return false;
+  const knownLonger = Math.max(catalogRuntimeSeconds(p.item), Number(p._lastKnownDuration) || 0);
+  const fileLooksComplete = !knownLonger || knownLonger < 8 * 60 || d >= knownLonger * 0.65;
+  if (!fileLooksComplete) return false;
+  return (d - t) <= upNextLeadSeconds(p, d) + 1;
+}
 function maybeShowUpNext(t, d, opts = {}) {
-  if (!d || !S.nextEp || S.upNextDismissed || (d - t) <= 0) return;
-  if (!opts.native && $('video').paused) return;
-  const p = S.playing;
-  if (!p || playbackSourceSwapPending(p)) return;
-  const remaining = d - t;
-  if (remaining > upNextLeadSeconds(p, d) + 1) return;
-  if (!isGenuineEpisodeEof(p, t, d)) return;
+  if (!S.nextEp || S.upNextDismissed) return;
+  if (!upNextWindowReady(S.playing, t, d)) return;
   showUpNext();
-  if (remaining <= UP_NEXT_COUNTDOWN_SECONDS + 1) armUpNextCountdown();
+  const playing = opts.native || !$('video').paused;
+  if (playing && (d - t) <= UP_NEXT_COUNTDOWN_SECONDS + 1) armUpNextCountdown();
 }
 function finishEpisodeToNext() {
   if (!S.nextEp) return false;
@@ -15082,15 +15092,13 @@ function seekTo(seconds) {
   if (p.castingActive) { // seek the TV, not the idle local element
     if (_castRp && _castRpc) { try { _castRp.currentTime = seconds; _castRpc.seek(); p.castPos = seconds; } catch {} }
     else if (window.TriboonTV && TriboonTV.castControl) { try { TriboonTV.castControl('seek:' + Math.floor(seconds)); p.castPos = seconds; } catch {} }
-    showOsd(); return;
-  }
-  p.suppressSeekLoaderUntil = appMs() + 4500;
-  clearTimeout(S._waitT);
-  $('playerLoader').classList.remove('show');
-  // Native ExoPlayer/libmpv owns the clock. startSource() bails when usingNative, and
-  // video.currentTime only moves the hidden web element — that is why Android rewind
-  // stayed put after a JS nudge or OSD skip.
-  if (p.usingNative && canUseNativeVideoPlayer()) {
+  } else if (p.usingNative && canUseNativeVideoPlayer()) {
+    p.suppressSeekLoaderUntil = appMs() + 4500;
+    clearTimeout(S._waitT);
+    $('playerLoader').classList.remove('show');
+    // Native ExoPlayer/libmpv owns the clock. startSource() bails when usingNative, and
+    // video.currentTime only moves the hidden web element — that is why Android rewind
+    // stayed put after a JS nudge or OSD skip.
     const kind = currentPlayerKind(p);
     if (kind === 'remux' || kind === 'transcode') {
       tryNativeVideoPlayer(kind, seconds, { quietSeek: true });
@@ -15099,12 +15107,16 @@ function seekTo(seconds) {
     } else {
       tryNativeVideoPlayer('direct', seconds, { quietSeek: true });
     }
-    showOsd(); return;
+  } else {
+    p.suppressSeekLoaderUntil = appMs() + 4500;
+    clearTimeout(S._waitT);
+    $('playerLoader').classList.remove('show');
+    if (p.usingTranscode) startSource('transcode', seconds, { quietSeek: true });      // server-side seek via -ss
+    else if (p.usingRemux) startSource('remux', seconds, { quietSeek: true });
+    else v.currentTime = seconds;
   }
-  if (p.usingTranscode) startSource('transcode', seconds, { quietSeek: true });      // server-side seek via -ss
-  else if (p.usingRemux) startSource('remux', seconds, { quietSeek: true });
-  else v.currentTime = seconds;
   showOsd();
+  maybeShowUpNext(seconds, totalDuration(), (p.usingNative || p.castingActive) ? { native: true } : {});
 }
 function showOsd() {
   $('osd').classList.remove('hide');

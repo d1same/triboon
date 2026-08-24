@@ -31,7 +31,9 @@ const SOURCE = [
   { key: 'webrip', score: 70, re: /\bweb-?rip\b/i },
   { key: 'hdtv', score: 40, re: /\bhdtv\b/i },
   { key: 'dvd', score: 20, re: /\b(dvdrip|dvd)\b/i },
-  { key: 'cam', score: -1000, re: /\b(cam|ts|telesync|telecine|hdcam|hdts)\b/i },
+  // HC.V2 / 1080p.HC.x264 is a theater cam with burned-in subs. Do not treat a trailing
+  // -HC group (Movie.2024.1080p.WEB-DL.HEVC-HC) as a cam — that is a release-group name.
+  { key: 'cam', score: -8000, re: /\b(cam|ts|telesync|telecine|hdcam|hdts|hc[ ._-]v\d+)\b|\b(?:2160p|1080p|720p)[ ._-]hc(?:[ ._-]v\d+)?[ ._-](?:x26[45]|h\.?26[45]|avc|hevc)\b/i },
 ];
 
 // Video codecs — efficiency matters for streaming/direct-play compatibility.
@@ -74,7 +76,7 @@ const BAD_FLAGS = [
   // "HC" only means hardcoded subs when it sits next to a low source token (HC.HDRip / HC.HDTC) —
   // a bare "HC" (group fragment, unrelated token) must NOT eat a −200. korsub/hardsub/hardcoded are
   // unambiguous on their own.
-  { key: 'hardcoded-subs', score: -200, re: /\bhc[ ._-](?:hdrip|hdtc|hdcam|hdts|cam|ts|web|webrip|bdrip|dvdrip)\b|\b(?:korsub|hardsub|hardcoded)\b/i },
+  { key: 'hardcoded-subs', score: -200, re: /\bhc[ ._-](?:v\d+|hdrip|hdtc|hdcam|hdts|cam|ts|web|webrip|bdrip|dvdrip)\b|\b(?:korsub|hardsub|hardcoded)\b/i },
   { key: 'upscaled', score: -150, re: /\b(upscal|fake4k)\b/i },
   { key: 'sample', score: -1000, re: /\bsample\b/i },
 ];
@@ -194,7 +196,13 @@ function hasEnglishAudioHint(name) {
 
 // Streamability + health → score. Store RAR / flat = instant; compressed = playable but slow;
 // encrypted/unsupported = unplayable in Phase 1.
-const STREAM_SCORE = { flat: 60, store: 60, compressed: -300, encrypted: -100000, unsupported: -100000 };
+const STREAM_SCORE = {
+  flat: 60, store: 60, compressed: -300,
+  // Store-RAR extents did not map this copy. Demote it, do not treat it like 7z — the next
+  // indexer's FLUX/WEB-DL of the same name is often a healthy store post.
+  unmappable: -2000,
+  encrypted: -100000, unsupported: -100000,
+};
 const HEALTH_SCORE = {
   verified: 40, unverified: 0, degraded: -120, blocked: -100000,
   missing: -100000,                 // provider confirmed the article is gone
@@ -251,11 +259,37 @@ function scoreRelease(candidate, policy = {}) {
   }
 
   const src = matchOne(candidate.name, SOURCE); if (src) add(`source ${src.key}`, src.score);
+  // Press-play, not archive: an unverified remux is usually the pretty dead NZB (NNTP 430 /
+  // compressed). Prefer a same-res WEB-DL until health/store is proven. A verified store remux
+  // keeps the raw remux bonus so remux fans still get the file they asked for.
+  if (src && src.key === 'remux'
+      && candidate.health !== 'verified'
+      && candidate.streamClass !== 'store'
+      && candidate.streamClass !== 'flat') {
+    add('stream-first-remux', -50);
+  }
   const cod = matchOne(candidate.name, CODEC); if (cod) add(`codec ${cod.key}`, cod.score);
+  // TRaSH rejects 1080p x265 (-10000). We only soft-demote: 1080p HEVC stays a fallback when
+  // no H.264 exists (FROM MeGusta), but a same-res WEB-DL H.264 must win when both are listed.
+  if (a.codec === 'hevc' && a.resolutionRank <= 3 && a.resolution !== 'unknown') {
+    add('hevc-at-hd', -35);
+  }
   // atmos/truehd/dts-hd are scored by the device-aware passthrough block below (a +passthrough OR a
   // −unsupported verdict). Crediting them HERE too double-counted — it diluted the unsupported penalty
   // and inflated the passthrough bonus. Skip them in the flat loop; the passthrough block is authority.
-  for (const f of FEATURE) { if (f.key === 'atmos' || f.key === 'truehd' || f.key === 'dts-hd') continue; if (f.re.test(candidate.name)) add(f.key, f.score); }
+  // Dolby Vision is the same class of problem: a +18 boost made Profile-5 remuxes jump the queue
+  // on Chrome/mixed TVs. Only boost when the device said it can do DV.
+  for (const f of FEATURE) {
+    if (f.key === 'atmos' || f.key === 'truehd' || f.key === 'dts-hd') continue;
+    if (f.key === 'dovi') {
+      if (!f.re.test(candidate.name)) continue;
+      if (policy.dolbyVision === true) add('dovi', f.score);
+      else if (policy.dolbyVision === false) add('dv-compat', -30);
+      else add('dv-unverified', -8);
+      continue;
+    }
+    if (f.re.test(candidate.name)) add(f.key, f.score);
+  }
   for (const b of BAD_FLAGS) if (b.re.test(candidate.name)) add(b.key, b.score);
   const hasTrueHd = a.features.includes('truehd');
   const hasDtsHd = a.features.includes('dts-hd');

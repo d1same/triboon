@@ -578,11 +578,49 @@ test('scoring: "HC" only flags hardcoded subs next to a source token, and HDR10 
   assert.match(hcRip, /hardcoded-subs -200/, 'HC.HDRip is flagged as hardcoded subs');
   const bareHc = scoreRelease({ name: 'Movie.2023.1080p.WEB-DL.HEVC-HC' }, {}).reasons.join(' ');
   assert.doesNotMatch(bareHc, /hardcoded-subs/, 'a bare "HC" (group fragment) is NOT penalized');
+  assert.notEqual(parseRelease('Movie.2023.1080p.WEB-DL.HEVC-HC').source, 'cam', 'WEB-DL-HC group is not a cam');
   const hdr10 = scoreRelease({ name: 'Movie.2024.2160p.HDR10.WEB-DL.HEVC-x', sizeBytes: 12e9 }, { maxResolutionRank: 4 }).reasons.join(' ');
   assert.match(hdr10, /\bhdr \+10\b/, 'plain HDR10 earns the HDR credit (was missed by the old \\bhdr\\b)');
   const hdr10plus = scoreRelease({ name: 'Movie.2024.2160p.HDR10Plus.WEB-DL.HEVC-x', sizeBytes: 12e9 }, { maxResolutionRank: 4 }).reasons.join(' ');
   assert.match(hdr10plus, /hdr10plus/, 'HDR10+ earns the hdr10plus credit');
   assert.doesNotMatch(hdr10plus, /\bhdr \+10\b/, 'HDR10+ does NOT also earn the plain-HDR credit (no double-count)');
+});
+
+test('scoring: HC.V2 theater cams are not auto-playable "best" sources', () => {
+  const oak = parseRelease('The.End.of.Oak.Street.2026.1080p.HC.V2.x264-DKS');
+  assert.strictEqual(oak.source, 'cam', '1080p.HC.V2 is a cam, not an unknown WEB');
+  const scored = scoreRelease({ name: 'The.End.of.Oak.Street.2026.1080p.HC.V2.x264-DKS' }, {});
+  assert.ok(scored.score < -5000, 'auto-play skips the cam (Sources tap can still pick it)');
+  assert.match(scored.reasons.join(' '), /source cam/);
+  const ranked = rankReleases([
+    { name: 'The.End.of.Oak.Street.2026.1080p.HC.V2.x264-DKS', sizeBytes: 2e9 },
+    { name: 'The.End.of.Oak.Street.2026.1080p.WEB-DL.DDP5.1.H.264-NTb', sizeBytes: 7e9 },
+  ]);
+  assert.ok(ranked[0].name.includes('WEB-DL'), 'a real WEB-DL beats the HC.V2 cam');
+});
+
+test('scoring: press-play prefers unverified WEB-DL H.264 over remux/DV/HEVC-at-1080p', () => {
+  const fourk = rankReleases([
+    { name: 'Show.S01E01.2160p.UHD.BluRay.REMUX.DV.HDR.HEVC-FLUX', sizeBytes: 40e9 },
+    { name: 'Show.S01E01.2160p.WEB-DL.DDP5.1.HEVC-NTb', sizeBytes: 16e9 },
+  ], { maxResolutionRank: 4, exactResolutionRank: 4 });
+  assert.ok(fourk[0].name.includes('WEB-DL'), '4K toggle tries WEB-DL before an unverified remux');
+  const hd = rankReleases([
+    { name: 'Show.S01E01.1080p.HEVC.x265-MeGusta', sizeBytes: 2e9 },
+    { name: 'Show.S01E01.1080p.WEB-DL.DDP5.1.H.264-FLUX', sizeBytes: 6e9 },
+  ], { maxResolutionRank: 3 });
+  assert.ok(hd[0].name.includes('H.264-FLUX'), '1080p H.264 WEB-DL beats 1080p x265');
+  const reasons = scoreRelease({ name: 'Show.S01E01.1080p.HEVC.x265-MeGusta' }, { maxResolutionRank: 3 }).reasons.join(' ');
+  assert.match(reasons, /hevc-at-hd/);
+});
+
+test('scoring: unmappable WEB-DL stays auto-playable; 7z does not', () => {
+  const name = 'FROM.S01E01.1080p.AMZN.WEB-DL.DDP5.1.H.264-FLUX';
+  const mapped = scoreRelease({ name, streamClass: 'unmappable' });
+  assert.ok(mapped.score > -5000, 'unmappable is a demotion, not a hard skip');
+  assert.match(mapped.reasons.join(' '), /stream:unmappable/);
+  const dead = scoreRelease({ name, streamClass: 'unsupported' });
+  assert.ok(dead.score < -5000, 'true 7z/unsupported stays unplayable');
 });
 
 test('scoring: unsupported lossless audio is penalized cleanly (no dilution from a flat FEATURE credit)', () => {
@@ -1607,6 +1645,73 @@ function nzbFor(volumes, partSize, prefix, poster = 't') {
   return { nzb: `<?xml version="1.0"?><nzb>${fileXml}</nzb>`, articles };
 }
 
+test('pipeline: cached unmappable tags do not title-poison the next WEB-DL copy', async () => {
+  const ix = makeMockIndexer([
+    { name: 'Show.S01E01.1080p.AMZN.WEB-DL.DDP5.1.H.264-FLUX', size: 6e9, nzb: '<nzb/>' },
+  ]);
+  const ixPort = await ix.listen();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-unmap-'));
+  const store = new Store(dir);
+  const verdicts = new VerdictCache(store);
+  const name = 'Show.S01E01.1080p.AMZN.WEB-DL.DDP5.1.H.264-FLUX';
+  verdicts.set('t:' + normTitle(name), 'unstreamable', { streamClass: 'unsupported', tags: ['unmappable'] });
+  const pipeline = new Pipeline({
+    pool: () => { throw new Error('search-only'); },
+    verdicts, mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${ixPort}`, apikey: 'k' }],
+  });
+  try {
+    const { candidates } = await pipeline.search({ q: 'Show S01E01' }, { maxResolutionRank: 3 });
+    const hit = candidates.find((c) => c.name === name);
+    assert.ok(hit, 'FLUX is still listed');
+    assert.strictEqual(hit.streamClass, 'unmappable');
+    assert.ok(hit.score > -5000, 'unmappable FLUX stays auto-playable');
+    pipeline._recordVerdict({ name: 'Other.S01E01.1080p.WEB-DL.H.264-NTb', nzbUrl: 'http://127.0.0.1/nzb/x' },
+      'unstreamable', { streamClass: 'unmappable', tags: ['unmappable'] });
+    assert.strictEqual(verdicts.get('t:' + normTitle('Other.S01E01.1080p.WEB-DL.H.264-NTb')), null,
+      'unmappable must not write a title-wide verdict');
+    assert.ok(verdicts.get(nzbVerdictKey('http://127.0.0.1/nzb/x')), 'this NZB is still remembered');
+  } finally {
+    ix.server.close(); store.close();
+  }
+});
+
+test('pipeline: 4K search fans out a 2160p query and merges UHD hits', async () => {
+  const seen = [];
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (u.pathname !== '/api') { res.writeHead(404); return res.end(); }
+    seen.push(u.searchParams.get('q') || '');
+    const port = server.address().port;
+    const q = String(u.searchParams.get('q') || '');
+    const rows = /\b2160p\b/i.test(q)
+      ? [{ name: 'Show.S01E01.2160p.WEB-DL.HEVC-NTb', size: 16e9, id: 'uhd' }]
+      : [{ name: 'Show.S01E01.1080p.WEB-DL.H.264-FLUX', size: 6e9, id: 'hd' }];
+    res.writeHead(200, { 'content-type': 'application/rss+xml' });
+    res.end(rssFor(rows.map((r) => ({
+      name: r.name, url: `http://127.0.0.1:${port}/nzb/${r.id}`, size: r.size,
+    }))));
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-uhd-'));
+  const store = new Store(dir);
+  const verdicts = new VerdictCache(store);
+  const pipeline = new Pipeline({
+    pool: () => { throw new Error('search-only'); },
+    verdicts, mounts: new Map(),
+    indexers: () => [{ name: 'mock', url: `http://127.0.0.1:${server.address().port}`, apikey: 'k' }],
+  });
+  try {
+    const hd = await pipeline.search({ q: 'Show S01E01' }, { maxResolutionRank: 3 });
+    assert.ok(hd.candidates.every((c) => !c.name.includes('2160p')), '1080p search stays on the first page');
+    const uhd = await pipeline.search({ q: 'Show S01E01' }, { maxResolutionRank: 4, exactResolutionRank: 4 });
+    assert.ok(uhd.candidates.some((c) => c.name.includes('2160p')), '4K search merged the UHD hit');
+    assert.ok(seen.some((q) => /\b2160p\b/i.test(q)), 'indexer saw the extra 2160p query');
+  } finally {
+    server.close(); store.close();
+  }
+});
+
 test('pipeline: detail warmup and immediate Play share one indexer fan-out', async () => {
   const payload = seededPayload(90 * 1024, 0xfa5);
   const good = nzbFor(writeRar4Store([{ name: 'Movie.mkv', data: payload }], { base: 'warm' }), 30000, 'warm');
@@ -2437,10 +2542,10 @@ test('pipeline e2e: ranks, skips dead + unstreamable candidates, plays the good 
   const nntpPort = await mock.listen();
   const pool = new NntpPool({ host: '127.0.0.1', port: nntpPort, tls: false }, 6);
 
-  // Scoring must order: dead (remux, trusted) > comp (bluray) > good (webrip) so the
-  // pipeline walks all three and ends on good.
+  // Stream-first ranking: an unverified remux is no longer the default #1. A dead
+  // WEB-DL still leads, then compressed bluray, then a healthy webrip.
   const ix = makeMockIndexer([
-    { name: 'Movie.2024.1080p.BluRay.REMUX.DDP5.1-FraMeSToR', size: 9e9, nzb: dead.nzb },
+    { name: 'Movie.2024.1080p.WEB-DL.DDP5.1.H.264-FLUX', size: 6e9, nzb: dead.nzb },
     { name: 'Movie.2024.1080p.BluRay.x264.DTS-FGT', size: 8e9, nzb: comp.nzb },
     { name: 'Movie.2024.1080p.WEBRip.x264-GECKOS', size: 7e9, nzb: good.nzb },
   ]);

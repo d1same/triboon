@@ -600,6 +600,20 @@ function lookupVerdict(verdicts, candidate) {
     || null;
 }
 
+function cachedStreamClass(v) {
+  if (!v || !v.detail) return undefined;
+  const tags = v.detail.tags || [];
+  if (tags.includes('unmappable')) return 'unmappable';
+  if (tags.includes('compressed')) return 'compressed';
+  if (tags.includes('encrypted')) return 'encrypted';
+  return v.detail.streamClass;
+}
+
+function skipTitleVerdict(verdict, detail = {}) {
+  return verdict === 'unstreamable'
+    && (detail.streamClass === 'unmappable' || (detail.tags || []).includes('unmappable'));
+}
+
 function firstProbeTarget(nzbXml, mountOpts = {}, candidateName = '') {
   const nzb = parseNzb(nzbXml);
   const candidates = nzb.files.map((f) => ({
@@ -831,6 +845,8 @@ class Pipeline {
       // Catalog year is the remake lock (The Office 2005 vs 2024). Keep it on the key so a
       // yearless search cannot reuse a 2005-filtered hit, or the other way around.
       Number.isInteger(params.year) ? params.year : undefined,
+      // A 4K Play fans out an extra 2160p query. Do not reuse a 1080p-only cache hit.
+      opts.wantUhd ? 1 : undefined,
     ]);
   }
 
@@ -1325,7 +1341,7 @@ class Pipeline {
     return active.length;
   }
 
-  async _fetchSearchHit(ixs, params, wanted, timeoutMs) {
+  async _fetchSearchHit(ixs, params, wanted, timeoutMs, opts = {}) {
     ixs.forEach((ix) => this.usage.onSearch(ix.name)); // a real fan-out costs one API hit per indexer
     // Start the short-title alias in parallel with the main query so Play does not wait
     // 2s + 2s when both are needed. Merge after both land; empty-result fallbacks stay serial.
@@ -1345,6 +1361,15 @@ class Pipeline {
       const aliasParams = { q: titleQ };
       aliasP = this._fanoutMeasured(ixs, aliasParams, { timeoutMs });
     }
+    // 4K toggle: ID/title searches often fill the first page with 1080p. A parallel
+    // q-only "2160p" fan-out finds UHD WEB-DLs the id search never ranked high enough to return.
+    let uhdP = null;
+    if (opts.wantUhd && params.q && !/\b(2160p|4k|uhd)\b/i.test(params.q)) {
+      ixs.forEach((ix) => this.usage.onSearch(ix.name));
+      const uhdParams = { q: `${params.q} 2160p` };
+      if (episodeSearch) { uhdParams.season = season; uhdParams.ep = ep; }
+      uhdP = this._fanoutMeasured(ixs, uhdParams, { timeoutMs });
+    }
     let { results, errors } = await this._fanoutMeasured(ixs, params, { timeoutMs });
     // TITLE VERIFICATION — indexers return loosely-related releases; a release only
     // qualifies if its name actually contains the wanted title (and episode/year) AND
@@ -1361,6 +1386,18 @@ class Pipeline {
           if (!seen.has(k)) { seen.add(k); results.push(r); }
         }
         if (retry.errors && retry.errors.length) errors = errors.concat(retry.errors);
+      }
+    }
+    if (uhdP) {
+      const extra = await uhdP;
+      const verified = extra.results.filter(qualifies);
+      if (verified.length) {
+        const seen = new Set(results.map((r) => r.nzbUrl || r.guid || r.name));
+        for (const r of verified) {
+          const k = r.nzbUrl || r.guid || r.name;
+          if (!seen.has(k)) { seen.add(k); results.push(r); }
+        }
+        if (extra.errors && extra.errors.length) errors = errors.concat(extra.errors);
       }
     }
     // Fallback: long branded titles ("Brand Name Subtitle SxxEyy") often index under the
@@ -1431,8 +1468,9 @@ class Pipeline {
       policy = { ...policy, wantedYear: wanted.year };
       params = { ...params, year: wanted.year };
     }
-    const key = this._searchCacheKey(params);
-    const titleKey = this._searchCacheKey(params, { ignoreCatalogIds: true });
+    const wantUhd = policy.exactResolutionRank === 4 || policy.preferResolutionRank === 4;
+    const key = this._searchCacheKey(params, { wantUhd });
+    const titleKey = this._searchCacheKey(params, { ignoreCatalogIds: true, wantUhd });
     const maxAgeMs = allowStale ? Number.POSITIVE_INFINITY : 60000;
     let hit = this._getFreshSearchHit(key, maxAgeMs);
     if (!hit && (params.imdbid || params.tvdbid)) {
@@ -1451,7 +1489,7 @@ class Pipeline {
       }
       if (pending) this.metrics.searchInflightJoins++;
       if (!pending) {
-        pending = this._fetchSearchHit(ixs, params, wanted, timeoutMs)
+        pending = this._fetchSearchHit(ixs, params, wanted, timeoutMs, { wantUhd })
           .then((fresh) => {
             this._rememberSearchHit(key, fresh);
             this._rememberSearchHit(titleKey, fresh);
@@ -1494,7 +1532,7 @@ class Pipeline {
       const v = lookupVerdict(this.verdicts, r);
       return {
         ...r,
-        streamClass: v?.detail?.streamClass,
+        streamClass: cachedStreamClass(v),
         health: v ? (v.verdict === 'ok' ? 'verified' : v.verdict) : undefined,
       };
     });
@@ -1596,7 +1634,11 @@ class Pipeline {
 
   _recordVerdict(candidate, verdict, detail = {}) {
     this.verdicts.set(nzbVerdictKey(candidate.nzbUrl), verdict, detail);
-    this.verdicts.set('t:' + normTitle(candidate.name), verdict, detail);
+    // unmappable is "this NZB's extents failed", not "the release name is 7z". Title-keying
+    // it made every FLUX/NTb copy of that name unplayable for the verdict TTL.
+    if (!skipTitleVerdict(verdict, detail)) {
+      this.verdicts.set('t:' + normTitle(candidate.name), verdict, detail);
+    }
     const fp = DEAD_RELEASE_VERDICTS.has(verdict) && releaseFingerprint(candidate);
     if (fp) this.verdicts.set(fp, verdict, detail);
   }
@@ -1874,7 +1916,9 @@ class Pipeline {
 
     if (!vf.streamable) {
       const streamClass = vf.tags.includes('compressed') ? 'compressed'
-        : vf.tags.includes('encrypted') ? 'encrypted' : 'unsupported';
+        : vf.tags.includes('encrypted') ? 'encrypted'
+        : vf.tags.includes('unmappable') ? 'unmappable'
+        : 'unsupported';
       recordSelectionVerdict('unstreamable', { streamClass, tags: vf.tags });
       return { fail: `unstreamable: ${vf.tags.join(',')}`, vf };
     }

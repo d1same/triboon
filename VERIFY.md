@@ -126,6 +126,26 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-24, v3.1.5 ship — press-play sources + 4K Up Next:
+
+- Version contract: `package.json` 3.1.5; Android `versionName` 3.1.5 /
+  `versionCode` 350; Windows client package/Tauri/Cargo 3.1.5.
+- Scoring: `1080p.HC.V2` is a cam (below auto-play). Unverified remux
+  and 1080p HEVC lose to WEB-DL H.264. `unmappable` is a demotion, not
+  7z. A 4K Play fans out an extra `2160p` indexer query.
+- Oak Street: Play says no playable releases (cams only).
+- FROM S01E01 4K mounted `TEPES 2160p WEB-DL` (not MeGusta). Up Next
+  last 2.8% (83s remaining, lead 89s) on Chrome, Android TV emulator,
+  and phone emulator (remux). Owner accepted emulator as the Android
+  gate. Shield 4K not run.
+- iPhone/iPad Safari 1080p FROM Up Next proven earlier this day.
+- Windows native GPU: not run.
+- `npm.cmd run verify:full` on `emulator-5556` (TV) after wake + 45s
+  WebView wait: focused IPTV/P9 50, engine 41, pipeline 43, player 7,
+  security 21, P14 21, P11 31; full Node suite **615/615**; isolated
+  `/api/server` 3.1.5; household VOD/IPTV/overlapping Play; Android
+  ExoPlayer stress `ok: true`. Windows GPU not run.
+
 2026-08-23, v3.1.4 ship APK + Windows server + Windows client:
 
 - Version contract: `package.json` 3.1.4; Android `versionName` 3.1.4 /

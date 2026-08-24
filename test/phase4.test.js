@@ -636,8 +636,10 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   // Autoplay still arms only in the last 10s. The old 35-55s guess landed in the last scene.
   assert.match(ui, /function upNextLeadSeconds\(p, d\) \{[\s\S]+Math\.min\(90, Math\.max\(30, fileSec \* 0\.028\)\)/,
     'Up Next lead time is last 2.8% of the playing file for every show');
-  assert.match(ui, /function maybeShowUpNext\(t, d, opts = \{\}\) \{[\s\S]+if \(remaining > upNextLeadSeconds\(p, d\) \+ 1\) return;[\s\S]+isGenuineEpisodeEof\(p, t, d\)[\s\S]+showUpNext\(\);[\s\S]+if \(remaining <= UP_NEXT_COUNTDOWN_SECONDS \+ 1\) armUpNextCountdown\(\);/,
-    'Up Next appears in the runtime-based window and only starts the 10s countdown at the end');
+  assert.match(ui, /function upNextWindowReady\(p, pos, dur\) \{[\s\S]+_sourceAdvancePending[\s\S]+fileLooksComplete[\s\S]+upNextLeadSeconds\(p, d\) \+ 1/,
+    'Up Next uses the playing file window, not remux-seek false-EOF guards');
+  assert.match(ui, /function maybeShowUpNext\(t, d, opts = \{\}\) \{[\s\S]+upNextWindowReady\(S\.playing, t, d\)[\s\S]+showUpNext\(\);[\s\S]+if \(playing && \(d - t\) <= UP_NEXT_COUNTDOWN_SECONDS \+ 1\) armUpNextCountdown\(\);/,
+    'Up Next appears in the file-based window and only starts the 10s countdown at the end');
   assert.doesNotMatch(ui, /function maybeShowUpNext\(t, d, opts = \{\}\) \{[\s\S]+upNextEarlyWindow/,
     'Up Next must not use the old 35-55s credits-length guess');
   assert.match(ui, /function showUpNext\(\) \{[\s\S]+\$\('upNext'\)\.classList\.add\('show'\);[\s\S]+applyFocus\(\$\('unPlay'\)\);/,
@@ -1479,6 +1481,36 @@ test('episode handoff stays player-to-player before local lookup and EOF never r
   assert.equal(upNextLeadSeconds({}, 3600), 90, 'an hour file caps at 90s');
   assert.equal(upNextLeadSeconds({}, 5400), 90, 'a long file caps at 90s');
   assert.equal(upNextLeadSeconds({}, 0), 30, 'unknown duration still gets a pressable floor');
+
+  const catalogStart = ui.indexOf('function catalogRuntimeSeconds(item)');
+  const catalogEnd = ui.indexOf('function knownPlaybackSeconds(p, dur)', catalogStart);
+  const winStart = ui.indexOf('function upNextWindowReady(p, pos, dur)');
+  const winEnd = ui.indexOf('function maybeShowUpNext(t, d, opts = {})', winStart);
+  assert.ok(catalogStart >= 0 && catalogEnd > catalogStart && winStart >= 0 && winEnd > winStart,
+    'Up Next window helper should be extractable');
+  const upNextWindowReady = new Function(
+    `${ui.slice(catalogStart, catalogEnd)}\n${ui.slice(leadStart, leadEnd)}\n${ui.slice(winStart, winEnd)}\nreturn upNextWindowReady;`
+  )();
+  const hd = { item: { type: 'episode', runtime: 53 }, _lastKnownDuration: 3180 };
+  const uhd = { item: { type: 'episode', runtime: 53 }, _lastKnownDuration: 3180 };
+  assert.equal(upNextLeadSeconds(hd, 3180), 89, 'a 53-minute 1080p file uses last 2.8%');
+  assert.equal(upNextLeadSeconds(uhd, 3180), 89, 'the same 53-minute 4K file uses the same last 2.8%');
+  assert.equal(upNextWindowReady(hd, 3091, 3180), true, '1080p shows the chip at last 89s');
+  assert.equal(upNextWindowReady(uhd, 3091, 3180), true, '4K shows the chip at the same last 89s');
+  assert.equal(upNextWindowReady(hd, 3000, 3180), false, '3 minutes left is still too early on 1080p');
+  assert.equal(upNextWindowReady(uhd, 3000, 3180), false, '3 minutes left is still too early on 4K');
+  assert.equal(upNextWindowReady({
+    item: { type: 'episode' }, _lastKnownDuration: 3180, _sourceSwapAt: 1,
+  }, 3091, 3180), true, 'a remux seek swap must not hide the credits chip');
+  assert.equal(upNextWindowReady({
+    item: { type: 'episode', runtime: 120 }, _lastKnownDuration: 7200,
+  }, 2400, 2410), false, 'remux-so-far mid-title must not look like credits');
+  assert.equal(upNextWindowReady({
+    item: { type: 'episode' }, _sourceAdvancePending: true, _lastKnownDuration: 3180,
+  }, 3091, 3180), false, 'a real source advance still hides the chip');
+  assert.equal(upNextWindowReady({
+    item: { type: 'episode' }, _lastKnownDuration: 3600,
+  }, 3510, 3600), true, 'an hour 4K file still caps the chip at last 90s');
 
   const eofStart = ui.indexOf('function isGenuineEpisodeEof(p, pos, dur)');
   const eofEnd = ui.indexOf('function handleVodPlaybackEnded(pos, dur)', eofStart);
@@ -3468,6 +3500,8 @@ test('Android native player: direct source and native chrome stay out of the web
   // + iPadOS-as-Macintosh (touch) are detected; the flag rides forceAacRemux → audioSafe on the remux URL.
   assert.match(ui, /function iosWebkitVideo\(\) \{[\s\S]+\/iPhone\|iPad\|iPod\/\.test\(ua\)[\s\S]+\/Macintosh\/\.test\(ua\) && \(navigator\.maxTouchPoints \|\| 0\) > 1/,
     'iOS/iPadOS WebKit <video> surface is detected (Safari + Chrome/Firefox on iOS + iPadOS-as-Mac)');
+  assert.match(ui, /function upNextWindowReady\(p, pos, dur\) \{[\s\S]+upNextLeadSeconds\(p, d\) \+ 1/,
+    'iPhone, iPad, browser, and Android share the same last-2.8% Up Next window');
   assert.match(ui, /forceAacRemux: iosWebkitVideo\(\) \|\| !canUseNativeVideoPlayer\(\),/,
     'EVERY plain browser <video> (iOS + desktop) forces stereo-AAC remux (fixes AC3/EAC3 codec-error on iOS AND the silent 5.1-AAC bug on desktop); the native ExoPlayer path strips audioSafe and keeps 5.1');
   assert.match(ui, /v\.onerror = \(\) => \{[\s\S]+S\.playing !== playingRef[\s\S]+const err = v\.error, pl = playingRef;[\s\S]+console\.warn\('\[vod\] <video> error code=' \+ err\.code[\s\S]+failover\(\);/,
@@ -5272,8 +5306,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native remux/transcode playback should display and save absolute movie time while seeking inside the restarted segment');
   assert.match(android, /private long nativeLastAutoResumeSeekMs;[\s\S]+nativeLastAutoResumeSeekMs = 0L;[\s\S]+private void rememberNativeVideoPosition\(\) \{[\s\S]+nativeServerSeekMode\(\)[\s\S]+nativeLastVideoDisplayMs - pos[\s\S]+backwardsBy > 5000L[\s\S]+requestNativeVideoSeek\(nativeLastVideoDisplayMs\)/,
     'native remux/transcode playback should recover same-source segment restarts at the last absolute movie time');
-  assert.match(ui, /function seekTo\(seconds\) \{[\s\S]+p\.suppressSeekLoaderUntil = appMs\(\) \+ 4500;[\s\S]+clearTimeout\(S\._waitT\);[\s\S]+\$\(\'playerLoader\'\)\.classList\.remove\(\'show\'\);[\s\S]+if \(p\.usingNative && canUseNativeVideoPlayer\(\)\) \{[\s\S]+tryNativeVideoPlayer\(kind, seconds, \{ quietSeek: true \}\)[\s\S]+window\.TriboonTV\.seekTo\(String\(seconds\)\)[\s\S]+startSource\('transcode', seconds, \{ quietSeek: true \}\)[\s\S]+startSource\('remux', seconds, \{ quietSeek: true \}\)/,
-    'web seeking must move the native player when usingNative, and must not show the full startup loader during repeated skips');
+  assert.match(ui, /function seekTo\(seconds\) \{[\s\S]+else if \(p\.usingNative && canUseNativeVideoPlayer\(\)\) \{[\s\S]+p\.suppressSeekLoaderUntil = appMs\(\) \+ 4500;[\s\S]+clearTimeout\(S\._waitT\);[\s\S]+\$\('playerLoader'\)\.classList\.remove\('show'\);[\s\S]+tryNativeVideoPlayer\(kind, seconds, \{ quietSeek: true \}\)[\s\S]+window\.TriboonTV\.seekTo\(String\(seconds\)\)[\s\S]+startSource\('transcode', seconds, \{ quietSeek: true \}\)[\s\S]+startSource\('remux', seconds, \{ quietSeek: true \}\)[\s\S]+maybeShowUpNext\(seconds, totalDuration\(\)/,
+    'web seeking must move the native player when usingNative, keep skips quiet, and paint Up Next from the seek target');
   assert.match(ui, /<canvas id="seekHold" aria-hidden="true"><\/canvas>[\s\S]+function showSeekHoldFrame\(\) \{[\s\S]+drawImage\(v, 0, 0, c\.width, c\.height\);[\s\S]+c\.classList\.add\('show'\);/,
     'web movie/episode seeking should hold the last rendered frame over remux/transcode source swaps');
   assert.match(ui, /if \(opts\.quietSeek && p\) \{[\s\S]+p\.suppressSeekLoaderUntil = appMs\(\) \+ 4500;[\s\S]+showSeekHoldFrame\(\);[\s\S]+\}/,
