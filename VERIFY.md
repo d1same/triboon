@@ -126,6 +126,31 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-24, v3.1.6 ship — Up Next file clock + Settings tab recede:
+
+- Version contract: `package.json` 3.1.6; Android `versionName` 3.1.6 /
+  `versionCode` 351; Windows client package/Tauri/Cargo 3.1.6.
+- Next uses the playing file, not the TMDB hour. A 42-minute episode
+  in a 60-minute listing shows Next ~70s before the file ends.
+- Browser, phone, and Android phone Settings tabs recede to 46% /
+  selected 58% / focus 82%. TV keeps the hard 0.26 D-pad dim.
+- `npm.cmd run verify:full` on `emulator-5556` (TV): focused IPTV/P9 50,
+  engine 41, pipeline 43, player 7, security 21, P14 21, P11 31; full
+  Node suite **615/615**; isolated `/api/server` 3.1.6; household
+  VOD/IPTV/overlapping Play; Android ExoPlayer stress `ok: true`.
+  Windows GPU not run. Stress keeps a signed Shield install instead of
+  overwriting it with a debug APK.
+
+2026-08-24, Up Next used the TMDB hour, not the file:
+
+- A 42-minute episode in a 60-minute listing waited until EOF to show
+  Next. A file that matched the listing still showed at last 2.8%.
+- Chip + 10s countdown + next-ep prepare now use the playing file
+  clock. Seek bar can stay TMDB-padded so remux-so-far is not 100%.
+- Contract: 42-minute file / 60-minute listing shows Next ~70s before
+  the file ends. Remux-so-far mid-title still hidden. Episode handoff
+  + near-end prepare tests passed.
+
 2026-08-24, v3.1.5 ship — press-play sources + 4K Up Next:
 
 - Version contract: `package.json` 3.1.5; Android `versionName` 3.1.5 /

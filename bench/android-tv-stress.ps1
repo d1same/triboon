@@ -290,7 +290,19 @@ $report = [ordered]@{
 
 if ($InstallApk) {
   $apk = Resolve-Path (Join-Path $repo $ApkPath)
-  Invoke-Adb install -r $apk | Out-Host
+  $prevErr = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  $installOut = & $adb -s $Device install -r $apk 2>&1 | ForEach-Object { "$_" } | Out-String
+  $installCode = $LASTEXITCODE
+  $ErrorActionPreference = $prevErr
+  Write-Host $installOut
+  if ($installCode -ne 0) {
+    if ($installOut -match 'INSTALL_FAILED_UPDATE_INCOMPATIBLE') {
+      Add-Warning "debug APK signature does not match the installed app; keeping the signed install and continuing"
+    } else {
+      throw "adb failed: install -r $apk"
+    }
+  }
 }
 $serverRoute = Ensure-EmulatorServerRoute
 if ($serverRoute) { $report['serverRoute'] = $serverRoute }

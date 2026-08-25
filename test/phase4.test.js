@@ -638,7 +638,7 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'Up Next lead time is last 2.8% of the playing file for every show');
   assert.match(ui, /function upNextWindowReady\(p, pos, dur\) \{[\s\S]+_sourceAdvancePending[\s\S]+fileLooksComplete[\s\S]+upNextLeadSeconds\(p, d\) \+ 1/,
     'Up Next uses the playing file window, not remux-seek false-EOF guards');
-  assert.match(ui, /function maybeShowUpNext\(t, d, opts = \{\}\) \{[\s\S]+upNextWindowReady\(S\.playing, t, d\)[\s\S]+showUpNext\(\);[\s\S]+if \(playing && \(d - t\) <= UP_NEXT_COUNTDOWN_SECONDS \+ 1\) armUpNextCountdown\(\);/,
+  assert.match(ui, /function maybeShowUpNext\(t, d, opts = \{\}\) \{[\s\S]+upNextWindowReady\(S\.playing, t, d\)[\s\S]+showUpNext\(\);[\s\S]+playingFileSeconds\(S\.playing, d\)[\s\S]+if \(playing && \(fileD - t\) <= UP_NEXT_COUNTDOWN_SECONDS \+ 1\) armUpNextCountdown\(\);/,
     'Up Next appears in the file-based window and only starts the 10s countdown at the end');
   assert.doesNotMatch(ui, /function maybeShowUpNext\(t, d, opts = \{\}\) \{[\s\S]+upNextEarlyWindow/,
     'Up Next must not use the old 35-55s credits-length guess');
@@ -1511,6 +1511,17 @@ test('episode handoff stays player-to-player before local lookup and EOF never r
   assert.equal(upNextWindowReady({
     item: { type: 'episode' }, _lastKnownDuration: 3600,
   }, 3510, 3600), true, 'an hour 4K file still caps the chip at last 90s');
+  const hourSlot = {
+    item: { type: 'episode', runtime: 60 },
+    _reportedFileDuration: 2520,
+    duration: 3600,
+    _lastKnownDuration: 3600,
+  };
+  assert.equal(upNextLeadSeconds(hourSlot, 2520), 71, 'a 42-minute file in a 60-minute listing uses last 2.8% of the file');
+  assert.equal(upNextWindowReady(hourSlot, 2450, 3600), true,
+    'Next must appear ~70s before the file ends, even when the seek bar is padded to TMDB 60');
+  assert.equal(upNextWindowReady(hourSlot, 2300, 3600), false,
+    '3+ minutes left on that same 42-minute file is still too early');
 
   const eofStart = ui.indexOf('function isGenuineEpisodeEof(p, pos, dur)');
   const eofEnd = ui.indexOf('function handleVodPlaybackEnded(pos, dur)', eofStart);
@@ -1949,14 +1960,16 @@ test('next-episode metadata cannot overwrite a newer player when requests resolv
 
 test('near-end next-episode prepare fires once at the 2-minute boundary', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const helpersStart = ui.indexOf('function catalogRuntimeSeconds(item)');
+  const helpersEnd = ui.indexOf('function knownPlaybackSeconds(p, dur)', helpersStart);
   const start = ui.indexOf('const NEXT_EP_PREP_LEAD_SECONDS = 120;');
   const end = ui.indexOf('const UP_NEXT_COUNTDOWN_SECONDS = 10;', start);
-  assert.ok(start >= 0 && end > start, 'near-end prepare helper should be extractable');
+  assert.ok(helpersStart >= 0 && helpersEnd > helpersStart && start >= 0 && end > start, 'near-end prepare helper should be extractable');
   const calls = [];
   const item = { key: 'tmdb:tv:77:s2e4', season: 2, episode: 4, qualityRank: 3 };
   const S = { nextEp: { item }, nextEpPrepared: false };
   const maybePrepareNextEpisode = new Function('S', 'localTitleHasPlayback', 'qualityRankForItem', 'api', 'playbackRequestBody', 'maybeNativePrefetch',
-    `${ui.slice(start, end)}\nreturn maybePrepareNextEpisode;`)(
+    `${ui.slice(helpersStart, helpersEnd)}\n${ui.slice(start, end)}\nreturn maybePrepareNextEpisode;`)(
       S, () => false, (it) => it.qualityRank,
       (url, opts) => { calls.push({ url, opts }); return Promise.resolve({ ok: true }); },
       (it, pick, rank) => ({ key: it.key, season: it.season, episode: it.episode, pick, rank }),
@@ -3274,8 +3287,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Settings and Preferences side tabs stay a text list on hover, keyboard focus, and D-pad focus');
   assert.match(ui, /#setTabs button,#prefTabs button\{opacity:\.26\}[\s\S]+#setTabs button\.on,#prefTabs button\.on\{opacity:\.28;color:var\(--muted\)!important\}[\s\S]+opacity:1;color:var\(--text\)!important\}[\s\S]+body\.tv #setTabs button:hover:not\(:focus\):not\(\.focus\)/,
     'unfocused Settings tabs gray out hard; the focused row is full strength; TV hover latch does not keep Profile lit after Right');
-  assert.match(ui, /body\.mobileShell #setTabs button,body\.mobileShell #prefTabs button,[\s\S]+body\.androidApp:not\(\.tv\) #setTabs button,body\.androidApp:not\(\.tv\) #prefTabs button\{opacity:1!important;color:var\(--text\)!important\}/,
-    'phone Settings tabs stay readable; TV recede must not leave Dashboard looking disabled');
+  assert.match(ui, /body:not\(\.tv\) #setTabs button,body:not\(\.tv\) #prefTabs button\{opacity:\.46\}[\s\S]+button\.on\{opacity:\.58\}[\s\S]+button\.on:focus-visible\{opacity:\.82\}/,
+    'browser, phone, and Android phone Settings tabs recede a bit; focus stays short of full white; TV keeps 0.26');
   assert.match(ui, /body\.mobileNav \.railBtn,body\.mobileShell\.mobileNav \.railBtn,\s*\nbody\.mobileNav #railUser,body\.mobileShell\.mobileNav #railUser\{color:var\(--text\)\}/,
     'open phone drawer menu rows and the profile name use normal text color, not the muted compact-rail gray');
   assert.match(ui, /#settings \.ghostMini,#prefs \.ghostMini,#prefs \.profileAction,#prefs \.profileAddBtn\{\s*\n\s*min-height:44px;border-radius:10px/,
@@ -6758,8 +6771,8 @@ test('Android phone: Settings Dashboard tap is not the burger, and tabs stay rea
     'the fat-finger zone no longer covers the Settings tab row');
   assert.equal(makeHit(['androidApp', 'mobileNav'])({ target: { closest: () => null }, clientX: 20, clientY: 20 }), false,
     'open drawer does not re-hit the corner');
-  assert.match(ui, /body\.androidApp:not\(\.tv\) #setTabs button,body\.androidApp:not\(\.tv\) #prefTabs button\{opacity:1!important;color:var\(--text\)!important\}/,
-    'phone Settings tabs stay readable instead of the TV 0.26 recede');
+  assert.match(ui, /body:not\(\.tv\) #setTabs button,body:not\(\.tv\) #prefTabs button\{opacity:\.46\}/,
+    'Android phone Settings tabs share the browser recede, not the TV 0.26 dim and not full white');
 });
 
 test('Windows / desktop login: trim password and show lockout instead of wrong password', () => {

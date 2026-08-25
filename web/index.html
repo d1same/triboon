@@ -3129,16 +3129,17 @@ body.tv #prefTabs button:hover:not(:focus):not(.focus){
   background:transparent!important;opacity:.26;color:var(--muted)!important}
 body.tv #setTabs button.on:hover:not(:focus):not(.focus),
 body.tv #prefTabs button.on:hover:not(:focus):not(.focus){opacity:.28}
-/* Phones have no D-pad focus and no hover. The TV recede (0.26) left Dashboard / Profile
-   looking disabled, so a tap felt dead. Keep TV dimming; on a phone the tabs stay readable. */
-@media (max-width:900px){
-  body:not(.tv) #setTabs button,body:not(.tv) #prefTabs button{opacity:1!important;color:var(--text)!important}
-  body:not(.tv) #setTabs button.on,body:not(.tv) #prefTabs button.on{opacity:1!important;color:var(--text)!important}
-}
-body.mobileShell #setTabs button,body.mobileShell #prefTabs button,
-body.androidApp:not(.tv) #setTabs button,body.androidApp:not(.tv) #prefTabs button{opacity:1!important;color:var(--text)!important}
-body.mobileShell #setTabs button.on,body.mobileShell #prefTabs button.on,
-body.androidApp:not(.tv) #setTabs button.on,body.androidApp:not(.tv) #prefTabs button.on{opacity:1!important;color:var(--text)!important}
+/* Browser, phone, and Android phone share one recede. TV keeps the hard 0.26
+   D-pad dim. Focus/hover is only a bit brighter — not full white. */
+body:not(.tv) #setTabs button,body:not(.tv) #prefTabs button{opacity:.46}
+body:not(.tv) #setTabs button.on,body:not(.tv) #prefTabs button.on{opacity:.58}
+body:not(.tv) #setTabs button:hover,body:not(.tv) #prefTabs button:hover,
+body:not(.tv) #setTabs button.focus,body:not(.tv) #prefTabs button.focus,
+body:not(.tv) #setTabs button:focus,body:not(.tv) #prefTabs button:focus,
+body:not(.tv) #setTabs button:focus-visible,body:not(.tv) #prefTabs button:focus-visible,
+body:not(.tv) #setTabs button.on.focus,body:not(.tv) #prefTabs button.on.focus,
+body:not(.tv) #setTabs button.on:focus,body:not(.tv) #prefTabs button.on:focus,
+body:not(.tv) #setTabs button.on:focus-visible,body:not(.tv) #prefTabs button.on:focus-visible{opacity:.82}
 /* Open phone drawer: icons/labels use normal text, not the muted rail gray.
    #railUser color is an ID rule, so it needs its own override. */
 body.mobileNav .railBtn,body.mobileShell.mobileNav .railBtn,
@@ -12647,6 +12648,7 @@ async function fetchPlayerTracks(p, timeoutMs = 0) {
         if (!S.playing || S.playing.tracksUrl !== p.tracksUrl) return null;
         p.tracks = t;
         if (t && t.duration) {
+          noteFileDuration(p, t.duration);
           if (!p.duration || t.duration > p.duration * 1.05) p.duration = t.duration;
           if (t.duration > (p._lastKnownDuration || 0)) p._lastKnownDuration = t.duration;
         }
@@ -12799,6 +12801,39 @@ function tryNextNativeKind(failedKind, atSeconds, msg) {
 function catalogRuntimeSeconds(item) {
   return Math.max(0, (Number(item && item.runtime) || 0) * 60);
 }
+// Seek-bar duration can be TMDB-padded so remux-so-far does not look like 100%.
+// Up Next must use the file clock, or a 42-minute episode in a 60-minute slot
+// only shows Next when the file actually ends.
+function noteFileDuration(p, sec) {
+  const incoming = Math.max(0, Number(sec) || 0);
+  if (!p || incoming < 8) return;
+  const prev = Math.max(0, Number(p._reportedFileDuration) || 0);
+  if (incoming > prev + 0.5) {
+    p._reportedFileDuration = incoming;
+    p._fileDurationGrewAt = (typeof appMs === 'function' ? appMs() : Date.now());
+  } else if (!prev) {
+    p._reportedFileDuration = incoming;
+  } else {
+    p._reportedFileDuration = Math.max(prev, incoming);
+  }
+}
+function playingFileSeconds(p, dur) {
+  const catalog = catalogRuntimeSeconds(p && p.item);
+  const player = Math.max(
+    0,
+    Number(p && p._reportedFileDuration) || 0,
+    Number(p && p.nativeDuration) || 0
+  );
+  if (player >= 30) return player;
+  const incoming = Math.max(0, Number(dur) || 0);
+  const stored = Math.max(0, Number(p && p.duration) || 0);
+  const candidates = [stored, incoming].filter((n) => n >= 30);
+  if (!candidates.length) return Math.max(player, stored, incoming);
+  if (!catalog) return Math.max(player, ...candidates);
+  const unpadded = candidates.filter((n) => n < catalog * 0.92);
+  if (unpadded.length) return Math.max(player, ...unpadded);
+  return Math.max(player, ...candidates);
+}
 function knownPlaybackSeconds(p, dur) {
   return Math.max(
     0,
@@ -12814,6 +12849,7 @@ function knownPlaybackSeconds(p, dur) {
 function applyReportedDuration(p, dur) {
   const incoming = Math.max(0, Number(dur) || 0);
   if (!p || incoming <= 0) return;
+  noteFileDuration(p, incoming);
   const prev = knownPlaybackSeconds(p, 0);
   if (prev >= 60 && incoming < prev * 0.85) {
     if (prev > (p._lastKnownDuration || 0)) p._lastKnownDuration = prev;
@@ -13998,11 +14034,13 @@ async function prepNextEpisode(it) {
 // Two minutes is long enough to find a healthy file without holding connections for the whole show.
 const NEXT_EP_PREP_LEAD_SECONDS = 120;
 function maybePrepareNextEpisode(t, d) {
-  if (!d || !S.nextEp || S.nextEpPrepared || (d - t) > NEXT_EP_PREP_LEAD_SECONDS || (d - t) <= 0) return;
   const p = S.playing;
+  const fileD = playingFileSeconds(p, d);
+  if (!fileD || !S.nextEp || S.nextEpPrepared || (fileD - t) > NEXT_EP_PREP_LEAD_SECONDS || (fileD - t) <= 0) return;
   if (p && (p._sourceAdvancePending || p._reMounting)) return;
-  const catalogSec = Math.max(0, (Number(p && p.item && p.item.runtime) || 0) * 60);
-  if (catalogSec >= 8 * 60 && t < catalogSec - NEXT_EP_PREP_LEAD_SECONDS - 30) return;
+  const catalogSec = catalogRuntimeSeconds(p && p.item);
+  const fileLooksComplete = !catalogSec || catalogSec < 8 * 60 || fileD >= catalogSec * 0.65;
+  if (!fileLooksComplete) return;
   const item = S.nextEp.item; if (!item) return;
   S.nextEpPrepared = true; // one shot; play()/autoplay reuses the live mount via the server's mountByUrl
   if (localTitleHasPlayback(item)) return; // local libraries are already instant — no mount to warm
@@ -14090,11 +14128,11 @@ function armUpNextCountdown() {
 function upNextWindowReady(p, pos, dur) {
   if (!p || (p.item && p.item.type === 'live')) return false;
   if (p._sourceAdvancePending || p._reMounting) return false;
-  const d = Math.max(0, Number(dur) || Number(p.nativeDuration) || Number(p.duration) || Number(p._lastKnownDuration) || 0);
+  const d = playingFileSeconds(p, dur);
   const t = Math.max(0, Number(pos) || Number(p.nativePos) || 0);
   if (d <= 0 || (d - t) <= 0) return false;
-  const knownLonger = Math.max(catalogRuntimeSeconds(p.item), Number(p._lastKnownDuration) || 0);
-  const fileLooksComplete = !knownLonger || knownLonger < 8 * 60 || d >= knownLonger * 0.65;
+  const catalog = catalogRuntimeSeconds(p.item);
+  const fileLooksComplete = !catalog || catalog < 8 * 60 || d >= catalog * 0.65;
   if (!fileLooksComplete) return false;
   return (d - t) <= upNextLeadSeconds(p, d) + 1;
 }
@@ -14103,7 +14141,8 @@ function maybeShowUpNext(t, d, opts = {}) {
   if (!upNextWindowReady(S.playing, t, d)) return;
   showUpNext();
   const playing = opts.native || !$('video').paused;
-  if (playing && (d - t) <= UP_NEXT_COUNTDOWN_SECONDS + 1) armUpNextCountdown();
+  const fileD = playingFileSeconds(S.playing, d);
+  if (playing && (fileD - t) <= UP_NEXT_COUNTDOWN_SECONDS + 1) armUpNextCountdown();
 }
 function finishEpisodeToNext() {
   if (!S.nextEp) return false;
@@ -14889,6 +14928,11 @@ function tick() {
   if ($('player').classList.contains('live')) { updateLiveChrome(); return requestAnimationFrame(() => setTimeout(tick, 250)); }
   if (_nudgeBase !== null) { updPP(); return requestAnimationFrame(() => setTimeout(tick, 250)); } // don't fight the seek preview
   const t = currentTime(), d = totalDuration();
+  const p = S.playing;
+  if (p && !p.usingNative) {
+    const vid = $('video');
+    if (vid && isFinite(vid.duration) && vid.duration > 8) noteFileDuration(p, vid.duration);
+  }
   // Near the end of an episode → mount the next episode, then surface the Up-next card.
   maybePrepareNextEpisode(t, d);
   maybeShowUpNext(t, d);

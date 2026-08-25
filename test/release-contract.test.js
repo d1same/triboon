@@ -175,6 +175,8 @@ test('release contract: Android verification fails fast on device and app precon
   const apkInstall = stress.indexOf('if ($InstallApk)');
   assert.ok(stressReadyCall >= 0 && stressReadyCall < apkInstall,
     'standalone stress checks the exact ADB device before installing or launching');
+  assert.match(stress, /INSTALL_FAILED_UPDATE_INCOMPATIBLE[\s\S]+keeping the signed install and continuing/,
+    'stress must not fail the Shield gate by overwriting a release-signed install with a debug APK');
   assert.match(stress, /reason: 'server-unreachable'[\s\S]+reason: 'app-gate'/,
     'stress distinguishes an unreachable server from an unfinished authentication gate');
   assert.match(stress, /gateLogin[\s\S]+gateSetup[\s\S]+gateProfiles[\s\S]+gatePin/,
