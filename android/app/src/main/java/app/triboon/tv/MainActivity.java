@@ -344,6 +344,8 @@ public class MainActivity extends Activity {
     private boolean nativeVideoStarted;
     private boolean nativeVideoMemoryTrimmedDuringBuffer;
     private boolean nativeVideoErrorNotified;
+    // The same OK press that first reveals chrome must not also click Play.
+    private boolean nativeIgnoreNextPlayClick;
     private long nativeLastVideoDisplayMs;
     private long nativeLastAutoResumeSeekMs;
     private int nativeBackwardTicks;
@@ -1477,7 +1479,7 @@ public class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     if (nativePlayer == null || !nativePlayerOpen()) return;
                     if (nativePlayer.isPlaying()) nativePlayer.pause();
-                    else nativePlayer.play();
+                    else resumeNativeVideoInPlace();
                     updateNativeChrome();
                 });
             }
@@ -3338,7 +3340,7 @@ public class MainActivity extends Activity {
             if (!consumeNativeControlClick(v)) return;
             if (nativePlayer == null) return;
             if (nativePlayer.isPlaying()) nativePlayer.pause();
-            else nativePlayer.play();
+            else resumeNativeVideoInPlace();
             updateNativeChrome();
         });
         centerControls.addView(nativePlayBtn);
@@ -4340,8 +4342,11 @@ public class MainActivity extends Activity {
             buildNativePlayerLayer();
             boolean keepVideoLoader = !guide && "video".equals(mode) && !quietSeek;
             if (keepVideoLoader) showNativeLoading(title, backdropUrl);
-            boolean reuseQuietVideo = quietSeek && "video".equals(mode) && "video".equals(nativeMode) && nativePlayer != null
-                    && nativePlayerView != null && nativePlayerOpen() && !guide;
+            // quietSeek reuses the surface. Same-token + same-URL also reuses, so a pause/resume
+            // recovery cannot Release+Init a healthy ExoPlayer (that 4K rebuild is a 30s spinner).
+            boolean reuseQuietVideo = "video".equals(mode) && "video".equals(nativeMode) && nativePlayer != null
+                    && nativePlayerView != null && nativePlayerOpen() && !guide
+                    && (quietSeek || (playbackToken > 0L && playbackToken == nativePlaybackToken && url.equals(nativeUrl)));
             boolean reuseLivePlayer = "live".equals(mode) && "live".equals(nativeMode) && nativePlayer != null
                     && nativePlayerView != null && nativePlayerOpen() && !guide;
             if (!reuseQuietVideo && !reuseLivePlayer) {
@@ -4475,21 +4480,30 @@ public class MainActivity extends Activity {
                     long dur = nativeDurSeconds();
                     String m = nativeMode;
                     if ("video".equals(m)) {
+                        boolean userPaused = nativePlayer != null && !nativePlayer.getPlayWhenReady();
+                        if (userPaused && isNativeRecoverableIoError(error)) {
+                            Log.w(TAG, "Native VOD IO while paused (code " + error.errorCode
+                                    + "); keeping player, no remount");
+                            return;
+                        }
                         // Remux/transcode reconnect: the load-error policy suppressed the replay-retry, so
                         // recover by re-mounting at the CURRENT position — resume forward, no 3-min rewind.
-                        // Bounded so a truly dead source still surfaces an error and auto-advances.
-                        if (nativeServerSeekMode() && nativeVideoStarted && nativeLastVideoDisplayMs > 0L
+                        // Direct play retries the same ExoPlayer in place. Bounded so a truly dead
+                        // source still surfaces an error and auto-advances.
+                        if (nativeVideoStarted && nativeLastVideoDisplayMs > 0L
                                 && isNativeRecoverableIoError(error) && nativeAllowReconnectResume()) {
                             // Resume at the FRESH live position (not the up-to-1s-stale sample) so the
                             // reconnect lands on the true drop point, not ~1s behind it.
                             long resumeAt = nativeResumePositionMs();
-                            Log.w(TAG, "Native VOD remux stream dropped (code " + error.errorCode + ", " + msg
-                                    + "); resuming at " + resumeAt + "ms (no replay)");
-                            // Stamp the auto-resume debounce + clear the backward-tick counter so an
-                            // overlapping 1s progress tick can't fire a second seek via rememberNativeVideoPosition.
                             nativeLastAutoResumeSeekMs = SystemClock.elapsedRealtime();
                             nativeBackwardTicks = 0;
-                            requestNativeVideoSeek(resumeAt, true);
+                            if (nativeServerSeekMode()) {
+                                Log.w(TAG, "Native VOD remux stream dropped (code " + error.errorCode + ", " + msg
+                                        + "); resuming at " + resumeAt + "ms (no replay)");
+                                requestNativeVideoSeek(resumeAt, true);
+                            } else {
+                                retryNativeDirectInPlace(resumeAt);
+                            }
                             return;
                         }
                         notifyNativeVideoError(msg, pos, dur);
@@ -4531,6 +4545,10 @@ public class MainActivity extends Activity {
                     }
                     if (state == Player.STATE_ENDED && "video".equals(nativeMode)) {
                         if (nativePercentResumePending) return;
+                        if (nativePlayer != null && !nativePlayer.getPlayWhenReady()) {
+                            Log.w(TAG, "Native VOD ENDED while paused; keeping player, no remount");
+                            return;
+                        }
                         long dur = nativeDurSeconds();
                         // Always report the real clock. Forcing pos=duration after PLAYING made a
                         // mid-title remux ENDED (pause/resume) look like the movie was finished.
@@ -4933,6 +4951,38 @@ public class MainActivity extends Activity {
     private long nativeResumePositionMs() {
         long live = nativeDisplayPositionMs();
         return live > 0L ? Math.max(live, nativeLastVideoDisplayMs) : nativeLastVideoDisplayMs;
+    }
+
+    private void resumeNativeVideoInPlace() {
+        if (nativePlayer == null) return;
+        hideNativeLoading();
+        nativeVideoErrorNotified = false;
+        nativeVideoUnhealthySinceMs = 0L;
+        nativeResumeGraceUntilMs = SystemClock.elapsedRealtime() + NATIVE_VIDEO_RESUME_GRACE_MS;
+        int state = nativePlayer.getPlaybackState();
+        if ("video".equals(nativeMode) && (state == Player.STATE_IDLE || state == Player.STATE_ENDED)) {
+            long at = nativeResumePositionMs();
+            if (nativeServerSeekMode()) {
+                nativePlayer.setPlayWhenReady(true);
+                requestNativeVideoSeek(at, true);
+                return;
+            }
+            retryNativeDirectInPlace(at);
+            nativePlayer.play();
+            return;
+        }
+        nativePlayer.play();
+    }
+
+    private void retryNativeDirectInPlace(long displayMs) {
+        if (nativePlayer == null || !"video".equals(nativeMode)) return;
+        hideNativeLoading();
+        nativeVideoUnhealthySinceMs = 0L;
+        nativeResumeGraceUntilMs = SystemClock.elapsedRealtime() + NATIVE_VIDEO_RESUME_GRACE_MS;
+        Log.w(TAG, "Native VOD direct stream dropped; retrying in place at " + displayMs + "ms");
+        nativePlayer.seekTo(Math.max(0L, displayMs - nativeStartOffsetMs));
+        nativePlayer.prepare();
+        if (nativePlayer.getPlayWhenReady()) nativePlayer.play();
     }
 
     private void requestNativeVideoSeek(long displayMs) { requestNativeVideoSeek(displayMs, false, false); }
@@ -5448,10 +5498,14 @@ public class MainActivity extends Activity {
                 }
                 return true;
             }
-            if (code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER) {
-                if (e.getAction() == KeyEvent.ACTION_UP && clickNativeControlFocus()) return true;
+        if (code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER) {
+            if (nativeIgnoreNextPlayClick) {
+                if (e.getAction() == KeyEvent.ACTION_UP) nativeIgnoreNextPlayClick = false;
                 return true;
             }
+            if (e.getAction() == KeyEvent.ACTION_UP && clickNativeControlFocus()) return true;
+            return true;
+        }
         }
         if (e.getAction() != KeyEvent.ACTION_DOWN) {
             return code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN
@@ -5478,6 +5532,7 @@ public class MainActivity extends Activity {
         }
         if (code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER) {
             showNativeChrome(true);
+            nativeIgnoreNextPlayClick = true;
             return true;
         }
         return false;
@@ -6006,9 +6061,12 @@ public class MainActivity extends Activity {
         long startOffsetMs = nativeStartOffsetMs;
         long safePos = safeNativeVideoPosSeconds(pos);
         long playbackToken = nativePlaybackToken;
-        releaseNativePlayer(false);
+        // Keep ExoPlayer alive so a quiet same-source remount can reuse it. Releasing here forced
+        // a full 4K rebuild (~30s) on pause/resume IO. After a real start, do not show the
+        // circling loader — that is the "stuck on circles" the owner hit.
         enterNativeFullscreenMode();
-        showNativeLoading(title, backdropUrl);
+        if (nativeVideoStarted) hideNativeLoading();
+        else showNativeLoading(title, backdropUrl);
         web.evaluateJavascript("window.__tvNativeVideoError && __tvNativeVideoError("
                 + org.json.JSONObject.quote(msg == null || msg.isEmpty() ? "native startup stalled" : msg)
                 + "," + safePos + "," + dur + "," + playbackToken + ")", null);
@@ -7580,6 +7638,10 @@ public class MainActivity extends Activity {
 
     private void updateNativeVideoWatchdog() {
         if (!"video".equals(nativeMode) || nativePlayer == null) return;
+        if (!nativePlayer.getPlayWhenReady()) {
+            nativeVideoUnhealthySinceMs = 0L;
+            return;
+        }
         int state = nativePlayer.getPlaybackState();
         boolean wantsPlayback = nativePlayer.getPlayWhenReady()
                 && nativePlayer.getPlaybackSuppressionReason() == Player.PLAYBACK_SUPPRESSION_REASON_NONE;
@@ -8195,11 +8257,11 @@ public class MainActivity extends Activity {
                         case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
                             if (!repeat) {
                                 if (nativePlayer.isPlaying()) nativePlayer.pause();
-                                else nativePlayer.play();
+                                else resumeNativeVideoInPlace();
                             }
                             return true;
                         case KeyEvent.KEYCODE_MEDIA_PLAY:
-                            if (!repeat) nativePlayer.play(); return true;
+                            if (!repeat) resumeNativeVideoInPlace(); return true;
                         case KeyEvent.KEYCODE_MEDIA_PAUSE:
                             if (!repeat) nativePlayer.pause(); return true;
                         case KeyEvent.KEYCODE_MEDIA_FAST_FORWARD:
@@ -8233,11 +8295,11 @@ public class MainActivity extends Activity {
                     case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
                         if (!repeat) {
                             if (nativePlayer.isPlaying()) nativePlayer.pause();
-                            else nativePlayer.play();
+                            else resumeNativeVideoInPlace();
                         }
                         return true;
                     case KeyEvent.KEYCODE_MEDIA_PLAY:
-                        if (!repeat) nativePlayer.play(); return true;
+                        if (!repeat) resumeNativeVideoInPlace(); return true;
                     case KeyEvent.KEYCODE_MEDIA_PAUSE:
                         if (!repeat) nativePlayer.pause(); return true;
                     case KeyEvent.KEYCODE_MEDIA_FAST_FORWARD:
@@ -8380,10 +8442,10 @@ public class MainActivity extends Activity {
         switch (action) {
             case "toggle":
                 if (nativePlayer.isPlaying()) nativePlayer.pause();
-                else nativePlayer.play();
+                else resumeNativeVideoInPlace();
                 return true;
             case "play":
-                nativePlayer.play();
+                resumeNativeVideoInPlace();
                 return true;
             case "pause":
                 nativePlayer.pause();

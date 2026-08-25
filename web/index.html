@@ -13334,6 +13334,8 @@ function recoverSamePlaybackSource(reason = '') {
   // Next-episode startup often wobbles once (new remux, new Exo). Remounting that
   // replayed the opening. Stay put unless the source is actually dead.
   if (!sourceDead && S._handoffQuietUntil && now < S._handoffQuietUntil) return false;
+  // A user pause is not a dead source. Remounting here rebuilds 4K from scratch (~30s).
+  if (p.usingNative && p.nativePaused && !sourceDead && !decoderFailure) return false;
   if (decoderFailure && p.usingNative && (clientCaps() || {}).lowPower
       && tryNextNativeKind(kind, at, reason || 'playback failed')) return true;
   // A wifi blip is not a new movie. Retry the SAME file quietly first. A 4K remux
@@ -27295,12 +27297,12 @@ document.addEventListener('keydown', (e) => {
     else if (k === 'ArrowDown' || k === 'ArrowUp') {
       if (k === 'ArrowDown' && ri === dRows.length - 1 && focusMusicBar()) return;
       const down = k === 'ArrowDown';
-      ri = down ? Math.min(dRows.length - 1, ri + 1) : Math.max(0, ri - 1);
-      // DOWN → start the next row at the beginning (col 0); UP → restore the column last left in
-      // that row (per-row memory keyed by row type). Mirrors the home-row behaviour the owner asked
-      // for; replaces the old geometric nearest-X carry that dragged focus sideways between rows.
       if (!S.detailColMem) S.detailColMem = {};
-      ci = down ? 0 : Math.min(dRows[ri].length - 1, S.detailColMem[dType(ri)] || 0);
+      S.detailColMem[dType(ri)] = ci;
+      ri = down ? Math.min(dRows.length - 1, ri + 1) : Math.max(0, ri - 1);
+      // Restore the column last left in that row (episodes, seasons, cast, related).
+      // Example: episode 7 → Up to Season 2 → Down lands on episode 7, not episode 1.
+      ci = Math.min(dRows[ri].length - 1, S.detailColMem[dType(ri)] || 0);
     }
     else if (k === 'Enter') {
       if (e.repeat) return;

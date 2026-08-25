@@ -34,6 +34,7 @@ bench/*
 !bench/cut-apk-release.ps1
 !bench/android-tv-stress.ps1
 !bench/android-tv-smoke.ps1
+!bench/android-tv-remount.ps1
 !bench/windows-client-smoke-server.js
 !bench/android-qa-fixture-server.js
 docs-release-audit.md

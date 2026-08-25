@@ -408,6 +408,16 @@ $page = Invoke-CdpJson @"
           window.__tvBack();
           await wait(650);
           if (S.view !== 'home') failures.push(v + ' second Back did not return Home');
+        } else if (v === 'discover') {
+          // Discover is row-based: Back from a deep card returns to the first card,
+          // then the next Back leaves for Home. switchView can land off 0,0.
+          window.__tvBack();
+          await wait(650);
+          if (S.view === 'discover') {
+            window.__tvBack();
+            await wait(650);
+          }
+          if (S.view !== 'home') failures.push(v + ' Back did not return Home');
         } else if (v !== 'home') {
           window.__tvBack();
           await wait(650);

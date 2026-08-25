@@ -1569,6 +1569,8 @@ test('episode handoff stays player-to-player before local lookup and EOF never r
     'Android EOF should notify JS with the playback token while the native surface is still visible');
   assert.match(endedSource, /long pos = nativePosSeconds\(\)/,
     'ENDED must report the real position, never force pos=duration');
+  assert.match(endedSource, /ENDED while paused[\s\S]+no remount/,
+    'ENDED during a user pause must keep ExoPlayer and not rebuild');
   assert.match(endedSource, /ENDED mid-title[\s\S]+requestNativeVideoSeek\(resumeAt, true\)/,
     'a remux ENDED in the middle of a movie must remount the same source, not pick a new file');
   assert.doesNotMatch(endedSource, /nativeVideoStarted && dur > 0 \? dur/,
@@ -1603,8 +1605,8 @@ test('episode handoff stays player-to-player before local lookup and EOF never r
     assert.match(callbackTail, /listenerPlayer != nativePlayer \|\| listenerPlaybackToken != nativePlaybackToken\) return;/,
       `${callback} must ignore a released player's queued callback`);
   }
-  assert.match(android, /boolean reuseQuietVideo = quietSeek && "video"\.equals\(mode\) && "video"\.equals\(nativeMode\)/,
-    'quiet VOD remount may only reuse an existing VOD player/listener');
+  assert.match(android, /boolean reuseQuietVideo = "video"\.equals\(mode\) && "video"\.equals\(nativeMode\) && nativePlayer != null[\s\S]+quietSeek \|\| \(playbackToken > 0L && playbackToken == nativePlaybackToken && url\.equals\(nativeUrl\)\)/,
+    'quiet VOD remount and same-token pause/resume must reuse the existing ExoPlayer');
   assert.match(android, /boolean reuseLivePlayer = "live"\.equals\(mode\) && "live"\.equals\(nativeMode\)/,
     'VOD-to-guide-to-Live TV must create a live listener instead of reusing the tokened VOD listener');
 
@@ -1816,7 +1818,7 @@ test('stale async recovery work cannot remount, advance, or cover a replacement 
   assert.match(android, /requestNativeVideoSeek\(long displayMs, boolean resume\)[\s\S]+long playbackToken = nativePlaybackToken;[\s\S]+__tvNativeVideoSeek\("[\s\S]+playbackToken/,
     'Android native seeks should carry their originating playback token');
   assert.match(android, /private void notifyNativeVideoError\(String msg, long pos, long dur\)[\s\S]+long playbackToken = nativePlaybackToken;[\s\S]+__tvNativeVideoError\("[\s\S]+playbackToken/,
-    'Android native errors should retain their token across Exo release');
+    'Android native errors should retain their token without releasing ExoPlayer');
   for (const callback of [
     'chooseNativeQuality', 'chooseNativeEpisode', 'notifyNativeSubtitleSelect',
     'requestNativeSubtitleVersions', 'requestNativeSubtitleShowAll', 'applyNativeSubtitleShift',
@@ -2502,10 +2504,37 @@ test('VOD pause resume: paused players warm ahead without stealing startup or se
     'native ExoPlayer should persist pause progress without a competing read-ahead fetch');
   assert.match(ui, /function togglePlay\(\) \{[\s\S]+S\.playing\.usingNative[\s\S]+TriboonTV\.toggleVideo/,
     'OK / Space pause must talk to ExoPlayer, not a hidden web video with no src');
-  assert.match(android, /public void toggleVideo\(\) \{[\s\S]+nativePlayer\.pause\(\)[\s\S]+nativePlayer\.play\(\)/,
+  assert.match(android, /public void toggleVideo\(\) \{[\s\S]+nativePlayer\.pause\(\)[\s\S]+resumeNativeVideoInPlace\(\)/,
     'native bridge must expose pause/resume for the web OSD');
   assert.match(android, /if \("video"\.equals\(nativeMode\) && isPlaying\) \{[\s\S]+__tvNativeVideoPlaying[\s\S]+\} else if \("video"\.equals\(nativeMode\) && nativeVideoStarted[\s\S]+nativePlayer\.getPlaybackState\(\) == Player\.STATE_READY[\s\S]+!nativePlayer\.getPlayWhenReady\(\)[\s\S]+__tvNativeVideoPaused/,
     'Android should report real user pauses without treating normal buffering as paused playback');
+  assert.match(android, /nativeIgnoreNextPlayClick = true/,
+    'the first OK that opens chrome must not also click Play');
+  assert.match(android, /IO while paused[\s\S]+no remount/,
+    'a dropped HTTP range during pause must not rebuild ExoPlayer');
+  assert.match(android, /retryNativeDirectInPlace\(resumeAt\)/,
+    'direct-play IO after a real start retries the same player in place');
+  assert.match(android, /private void resumeNativeVideoInPlace\(\) \{[\s\S]+hideNativeLoading\(\);[\s\S]+STATE_IDLE \|\| state == Player\.STATE_ENDED/,
+    'Play after a crash must hide the circles and restart the same player, not a new hunt');
+  assert.match(android, /updateNativeVideoWatchdog\(\) \{[\s\S]+!nativePlayer\.getPlayWhenReady\(\)[\s\S]+nativeVideoUnhealthySinceMs = 0L;[\s\S]+return;/,
+    'the stall watchdog must ignore a user pause');
+  assert.match(ui, /function recoverSamePlaybackSource\(reason = ''\) \{[\s\S]+p\.usingNative && p\.nativePaused && !sourceDead && !decoderFailure\) return false;/,
+    'web recovery must not remount a paused native player');
+});
+
+test('VOD remount playbook: pause, seek, stall, and dead source stay on distinct paths', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
+  const playbook = fs.readFileSync(path.join(__dirname, '..', 'docs-playback-remount.md'), 'utf8');
+  assert.match(playbook, /must NOT rebuild ExoPlayer/);
+  assert.match(playbook, /Three same-source recoveries in two minutes/);
+  assert.match(playbook, /emulator-5554/);
+  assert.match(android, /private void retryNativeDirectInPlace\(long displayMs\) \{[\s\S]+nativePlayer\.seekTo[\s\S]+nativePlayer\.prepare\(\);/,
+    'direct retry must stay on the live ExoPlayer');
+  assert.match(ui, /function recoverSamePlaybackSource\(reason = ''\) \{[\s\S]+tryNativeVideoPlayer\(kind, at, \{ quietSeek: true \}\)/,
+    'a real stall still remounts the same file quietly, never a new search');
+  assert.match(ui, /if \(sourceDead \|\| recoveryCount >= 3\) \{[\s\S]+autoAdvance\(\{ allowMidstreamAdvance: true/,
+    'a new NZB is last-resort only');
 });
 
 test('async page loaders ignore stale shared-grid results and finish on a usable surface', () => {
@@ -4553,8 +4582,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'moving focus into page content should always collapse any stale rail state first');
   assert.match(ui, /const rowCol = \(ri\) => [\s\S]*?S\.colIdx\[ri\] \|\| 0[\s\S]+if \(k === 'ArrowUp'\) return S\.rowIdx === 0 \? \(view\.hasHero \? focusHero\(0\) : enterRail\(\)\)[\s\S]+: focusCard\(S\.rowIdx - 1, rowCol\(S\.rowIdx - 1\)\);[\s\S]+return focusCard\(S\.rowIdx \+ 1, 0\);/,
     'Home/Discover: DOWN starts the next row at the beginning (0); UP RESTORES the per-row remembered column (rowCol → S.colIdx[ri])');
-  assert.match(ui, /ci = down \? 0 : Math\.min\(dRows\[ri\]\.length - 1, S\.detailColMem\[dType\(ri\)\] \|\| 0\);/,
-    'Detail page: DOWN starts the next row at 0; UP restores the per-row remembered column (S.detailColMem keyed by row type)');
+  assert.match(ui, /S\.detailColMem\[dType\(ri\)\] = ci;[\s\S]+ri = down \? Math\.min\(dRows\.length - 1, ri \+ 1\) : Math\.max\(0, ri - 1\);[\s\S]+ci = Math\.min\(dRows\[ri\]\.length - 1, S\.detailColMem\[dType\(ri\)\] \|\| 0\);/,
+    'Detail page: Up and Down restore the column last left in that row so episode 7 survives a trip to the season tabs');
   assert.match(ui, /const t = \(row \+ 1\) \* cols; \/\/ DOWN[\s\S]*?if \(t < count\) return focusGrid\(saveCol\(t\)\);/,
     'Virtual grids (Movies/TV/Library): DOWN jumps to the first item of the next row');
   assert.match(ui, /const col = Math\.min\(cols - 1, gcm\[row - 1\] \|\| 0\); \/\/ restore[\s\S]*?focusGrid\(saveCol\(Math\.min\(count - 1, \(row - 1\) \* cols \+ col\)\)\);/,
@@ -5359,8 +5388,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Android native chrome should repaint the seek bar, total time, and end clock when duration arrives later');
   assert.match(android, /boolean quietSeek = j\.optBoolean\("quietSeek", false\);[\s\S]+if \(!guide && "video"\.equals\(mode\) && !quietSeek\) \{[\s\S]+showNativeLoading\(title, backdropUrl\);[\s\S]+\}/,
     'Android native seek restarts should not bring the full preparing loader to the front');
-  assert.match(android, /boolean reuseQuietVideo = quietSeek && "video"\.equals\(mode\) && "video"\.equals\(nativeMode\) && nativePlayer != null[\s\S]+boolean reuseLivePlayer = "live"\.equals\(mode\) && "live"\.equals\(nativeMode\) && nativePlayer != null[\s\S]+if \(!reuseQuietVideo && !reuseLivePlayer\) \{[\s\S]+releaseNativePlayer\(false, guide, keepVideoLoader\);[\s\S]+\} else \{[\s\S]+hideNativeLoading\(\);[\s\S]+if \(!reuseQuietVideo && !reuseLivePlayer\) \{[\s\S]+new ExoPlayer\.Builder\(this, nativeRenderersFactory\(\)\)/,
-    'Android native quiet seeks and same-mode Live TV retunes should reuse ExoPlayer, while cross-mode/new players get a fresh listener and decoder fallback');
+  assert.match(android, /boolean reuseQuietVideo = "video"\.equals\(mode\) && "video"\.equals\(nativeMode\) && nativePlayer != null[\s\S]+boolean reuseLivePlayer = "live"\.equals\(mode\) && "live"\.equals\(nativeMode\) && nativePlayer != null[\s\S]+if \(!reuseQuietVideo && !reuseLivePlayer\) \{[\s\S]+releaseNativePlayer\(false, guide, keepVideoLoader\);[\s\S]+\} else \{[\s\S]+hideNativeLoading\(\);[\s\S]+if \(!reuseQuietVideo && !reuseLivePlayer\) \{[\s\S]+new ExoPlayer\.Builder\(this, nativeRenderersFactory\(\)\)/,
+    'Android native quiet seeks, same-token pause recovery, and same-mode Live TV retunes should reuse ExoPlayer');
   assert.match(android, /private void applyNativeStartSeekIfReady\(\) \{[\s\S]+nativePendingStartMs <= 0L[\s\S]+nativePlayer\.getPlaybackState\(\) != Player\.STATE_READY \|\| !nativeVodSeekable\(\)[\s\S]+current >= Math\.max\(0L, target - 3000L\)[\s\S]+nativePendingStartMs = 0L[\s\S]+now - nativeStartSeekIssuedAtMs < 1200L[\s\S]+nativeSeekToDisplayPosition\(target\)/,
     'native movie resume should retry the pending start seek until ExoPlayer reports the saved position');
   assert.match(android, /private void zapNativeLiveChannel\(int dir\) \{[\s\S]+!"live"\.equals\(nativeMode\)[\s\S]+window\.__tvNativeLiveZap && window\.__tvNativeLiveZap\(/,
@@ -5791,8 +5820,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native Live TV recovery should stay inside ExoPlayer and restart the active native stream');
   assert.match(android, /private boolean nativeVideoStarted;[\s\S]+NATIVE_VIDEO_HEAVY_STARTUP_STALL_MS = 12000L[\s\S]+NATIVE_VIDEO_REBUFFER_TRIM_MS = 15000L[\s\S]+NATIVE_VIDEO_REBUFFER_RECOVERY_MS = 30000L[\s\S]+NATIVE_VIDEO_HEAVY_REBUFFER_RECOVERY_MS = 90000L[\s\S]+NATIVE_VIDEO_RESUME_GRACE_MS = 25000L[\s\S]+private void updateNativeVideoWatchdog\(\) \{[\s\S]+getPlaybackSuppressionReason\(\) == Player\.PLAYBACK_SUPPRESSION_REASON_NONE[\s\S]+boolean readyButNotPlaying = state == Player\.STATE_READY[\s\S]+if \(state == Player\.STATE_READY && !readyButNotPlaying\)[\s\S]+if \(nativeVideoStarted\)[\s\S]+nativeResumeGraceUntilMs[\s\S]+long recoveryMs = nativeLikelyHeavyVod\(\)[\s\S]+NATIVE_VIDEO_HEAVY_REBUFFER_RECOVERY_MS[\s\S]+NATIVE_VIDEO_REBUFFER_RECOVERY_MS[\s\S]+long startupThreshold = nativeLikelyHeavyVod\(\)[\s\S]+NATIVE_VIDEO_HEAVY_STARTUP_STALL_MS/,
     'native resume startup should fail over in 7-12s, while established 1080p/4K stalls get 30s/90s recovery plus pause-resume grace');
-  assert.match(android, /private boolean nativeVideoErrorNotified;[\s\S]+private void notifyNativeVideoError\(String msg, long pos, long dur\) \{[\s\S]+if \(nativeVideoErrorNotified\) return;[\s\S]+nativeVideoErrorNotified = true;[\s\S]+releaseNativePlayer\(false\);/,
-    'native movie and episode error reporting should be one-shot per playback attempt');
+  assert.match(android, /private boolean nativeVideoErrorNotified;[\s\S]+private void notifyNativeVideoError\(String msg, long pos, long dur\) \{[\s\S]+if \(nativeVideoErrorNotified\) return;[\s\S]+nativeVideoErrorNotified = true;[\s\S]+if \(nativeVideoStarted\) hideNativeLoading\(\);[\s\S]+else showNativeLoading\(title, backdropUrl\);/,
+    'native error reporting is one-shot and must not cover an established movie with the circling loader');
   assert.match(android, /catch \(Throwable e\) \{[\s\S]+handleNativePlaybackStartFailure\(e, mode, title, backdropUrl, loadingKind,[\s\S]+private void handleNativePlaybackStartFailure\(Throwable e,[\s\S]+trimAndroidMemoryCaches\(true\)[\s\S]+__tvNativeVideoError[\s\S]+__tvNativeLiveError/,
     'native startup should catch low-level Android player failures and report them to the web recovery ladder instead of crashing the app');
   assert.match(android, /ExoPlayer player = nativePlayer;[\s\S]+nativePlayer = null;[\s\S]+if \(player != null\) \{[\s\S]+nativePlayerView\.setPlayer\(null\);[\s\S]+player\.release\(\);/,
@@ -5806,8 +5835,11 @@ test('Android native player: direct source and native chrome stay out of the web
     '+ "," + safePos + "," + dur + "," + playbackToken + ")", null);',
   ].every((s) => android.includes(s)),
     'native movie and episode fallback should preserve the last good position if Exo reports zero during an error');
-  assert.match(android, /private void notifyNativeVideoError\(String msg, long pos, long dur\) \{[\s\S]+String title = nativePlaybackTitle;[\s\S]+String backdropUrl = nativePlaybackBackdropUrl;[\s\S]+releaseNativePlayer\(false\);[\s\S]+showNativeLoading\(title, backdropUrl\);[\s\S]+__tvNativeVideoError/,
-    'native movie and episode startup watchdog should preserve the branded loader while reporting the failure to the native ladder');
+  assert.match(android, /private void notifyNativeVideoError\(String msg, long pos, long dur\) \{[\s\S]+String title = nativePlaybackTitle;[\s\S]+String backdropUrl = nativePlaybackBackdropUrl;[\s\S]+if \(nativeVideoStarted\) hideNativeLoading\(\);[\s\S]+else showNativeLoading\(title, backdropUrl\);[\s\S]+__tvNativeVideoError/,
+    'startup errors keep the branded loader; mid-title errors must not replace the picture with circles');
+  assert.doesNotMatch(android.slice(android.indexOf('private void notifyNativeVideoError'), android.indexOf('private float nativeShiftFromUrl')),
+    /releaseNativePlayer\(/,
+    'error report must not Release ExoPlayer or a quiet remount becomes a 30s 4K rebuild');
   assert.match(server, /LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS = 12000[\s\S]+LIVE_REMUX_IDLE_TIMEOUT_MS = 45000/,
     'Live TV remux fallback should fail silent/bad channels quickly while still avoiding endless hangs');
   assert.match(server, /armIdle\(LIVE_REMUX_FIRST_BYTE_TIMEOUT_MS\);[\s\S]+ff\.stdout\.on\('data'[\s\S]+armIdle\(LIVE_REMUX_IDLE_TIMEOUT_MS\);[\s\S]+ff\.kill\('SIGKILL'\)/,

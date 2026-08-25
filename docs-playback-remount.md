@@ -1,0 +1,79 @@
+# VOD remount playbook
+
+Pause, seek, and a wifi blip must not feel like a new Play. A 4K rebuild is a ~30s spinner. A new source hunt is worse. This file is the lock so those do not come back.
+
+Example: you pause The Rookie for a minute, press Play, and sit on Preparing. That is a rebuild. The fix is: keep the same ExoPlayer.
+
+## What the user may see
+
+| What they see | What actually happened | Allowed? |
+| --- | --- | --- |
+| Instant Play after pause | `nativePlayer.play()` | Yes. Required. |
+| Short buffer, same file | In-place retry or quiet same-URL remount | Yes, after a real drop while playing |
+| ~30s Preparing, same file | `releaseNativePlayer` + new `ExoPlayer.Builder` | No, except first Play or a new episode |
+| "Finding source" / new filename | `autoAdvance` / new NZB | Only if the current release is dead or failed 3 times in 2 minutes |
+| Sources empty / "too many attempts" | 60s route throttle | Different bug. Wait one minute. |
+
+## Triggers that must NOT rebuild ExoPlayer
+
+1. User pause / resume (`toggleVideo`, Play button, media key).
+2. First OK that only opens chrome. That press must not click Play.
+3. IO / HTTP abort while `playWhenReady` is false.
+4. `STATE_ENDED` while paused.
+5. Stall watchdog while paused.
+6. `recoverSamePlaybackSource` while `nativePaused` and the source is not dead.
+7. `notifyNativeVideoError` must not `releaseNativePlayer`. A quiet remount needs the live player.
+8. After playback has started, an error must not show the circling Preparing loader. Resume uses `resumeNativeVideoInPlace` (play, or prepare+seek if IDLE/ENDED). Multiple Play presses must not rebuild.
+
+## Triggers that MAY remount the same file (quiet)
+
+- Recoverable IO while **playing** (direct: `retryNativeDirectInPlace`; remux/transcode: `__tvNativeVideoSeek` + `quietSeek`).
+- User seek on remux/transcode (`start=` URL).
+- Quality / audio change that needs a new server stream.
+- Mid-title remux `ENDED` while **playing**.
+- Remux jumped backward (stream replayed from the head) — seek back to the last good time.
+- Session/mount `404` (`reMountAndResume`) — same title, new mount, same file if it is still the pick.
+
+Reuse the existing ExoPlayer (`reuseQuietVideo` / same playback token + same URL). Do not `new ExoPlayer.Builder`.
+
+## Triggers that MAY change source
+
+- Health `blocked`.
+- Three same-source recoveries in two minutes.
+- User picked another row in Sources.
+
+Never change the episode. Never search indexers again for a pause.
+
+## How to test (now and later)
+
+Device: TV emulator `emulator-5554` (do not stop it). Living-room Shield is `10.1.20.11:5555` only when the owner asks.
+
+On a playing 1080p or 4K title, watch logcat for:
+
+```
+ExoPlayerImpl: Release
+ExoPlayerImpl: Init
+Native VOD buffer profile
+```
+
+A second `Init` / `buffer profile` during pause, resume, or a 10s seek is a failure.
+
+Manual matrix (each row: same filename, no Finding-source):
+
+1. Pause 5s, Play. Instant.
+2. Pause 60s, Play. Instant or a short buffer. No Release+Init.
+3. First OK opens chrome only. Second OK pauses.
+4. Seek +30s / -30s. Same file.
+5. Leave it playing 2 minutes. Same file.
+6. Hop to another title. New file is OK; leftover toast must clear.
+
+Automated lock: `test/phase4.test.js` (`VOD pause resume` and `VOD remount playbook`).
+
+## Do not reintroduce
+
+- `releaseNativePlayer` inside `notifyNativeVideoError`.
+- `schedulePauseWarmAhead` on native (it steals sockets from ExoPlayer).
+- Treating pause as a stall (`updateNativeVideoWatchdog` must return when `!playWhenReady`).
+- First OK clicking Play (`nativeIgnoreNextPlayClick`).
+
+Code: `MainActivity.java` (`startNativePlayback`, `onPlayerError`, `STATE_ENDED`, `notifyNativeVideoError`, `resumeNativeVideoInPlace`, `retryNativeDirectInPlace`, `handleNativeSurfaceKey`, `updateNativeVideoWatchdog`); `web/index.html` `recoverSamePlaybackSource`, `togglePlay`. Contract: `docs-player-regression-map.md` P5.

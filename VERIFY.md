@@ -126,6 +126,25 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-25, v3.1.8 ship — pause/resume keeps the same ExoPlayer:
+
+- Version contract: `package.json` 3.1.8; Android `versionName` 3.1.8 /
+  `versionCode` 353; Windows client package/Tauri/Cargo 3.1.8.
+- Pause, a dropped HTTP range, or a remux `ENDED` while paused no longer
+  releases ExoPlayer. Play resumes in place. The first OK opens chrome only.
+- Emulator `emulator-5554` remount matrix: FROM S01E10 pause 5s and 60s,
+  seek +30/−30, first OK, hop to Mutiny. Same file. No second
+  `ExoPlayerImpl: Init` / `Native VOD buffer profile`.
+- Season chips on a show keep the episode you left: episode 7, Up to
+  Season 2, Down lands on episode 7 again.
+- Discover Back is two steps when focus is not on the first card. The
+  Android stress gate now presses Back twice in that case.
+- `npm.cmd run verify:full` on `emulator-5554` (TV): focused IPTV/P9 50,
+  engine 41, pipeline 43, player 8, security 24, P11 31; full
+  Node suite **625/625**; isolated `/api/server` 3.1.8; household
+  VOD/IPTV/overlapping Play; Android ExoPlayer stress `ok: true`.
+  Windows GPU not run.
+
 2026-08-25, v3.1.7 ship — hop Play frees mounts, 4K stays on one file:
 
 - Version contract: `package.json` 3.1.7; Android `versionName` 3.1.7 /

@@ -218,6 +218,17 @@ them when the table is reorganized:
   watchdog. Code: `web/index.html` `armWebRebufferRecovery`,
   `clearWebRebufferRecovery`, `recoverSamePlaybackSource`. Verification:
   `test/phase4.test.js` `web VOD rebuffer and subtitle handoff...`.
+- **P5 - pause/resume must not rebuild.** A user pause is not a dead source.
+  Native pause/resume uses `play()`/`pause()` on the live ExoPlayer. IO or
+  `ENDED` while `playWhenReady` is false keeps that player. `notifyNativeVideoError`
+  must not `releaseNativePlayer` (a later quiet remount would become a 30s 4K
+  rebuild) and must not show the circling loader after playback has started.
+  Resume uses `resumeNativeVideoInPlace`. Same playback token + same URL reuses ExoPlayer. The first OK that
+  opens chrome must not click Play. `recoverSamePlaybackSource` no-ops while
+  native is paused unless the source is actually dead. A new NZB is only after
+  a blocked health verdict or three failures in two minutes. Playbook:
+  `docs-playback-remount.md`. Verification: `test/phase4.test.js` `VOD pause
+  resume` and `VOD remount playbook`.
 - **P6 - exact season-pack payload.** Loose-file and RAR/ZIP packs require one
   exact requested `SxxEyy` payload before size, and the loose-pack STAT probe
   targets that same file; combined episode ranges count only when they cover the
