@@ -3594,10 +3594,59 @@ function rememberMountOwner(vf, uid) {
 function sessionProtectedMountIds(now = Date.now()) {
   const protectedIds = new Set();
   for (const s of pipeline.sessions.values()) {
-    if (!s || !s.currentMountId) continue;
+    if (!s || !s.currentMountId || s.released) continue;
     if (now - (s.createdAt || 0) <= SESSION_TTL_MS) protectedIds.add(s.currentMountId);
   }
   return protectedIds;
+}
+function mountIsPreparedReady(vf, now = Date.now()) {
+  if (!vf || !vf.id) return false;
+  for (const rec of pipeline.titlePreparedReady.values()) {
+    if (rec && rec.vf && rec.vf.id === vf.id && now - (rec.at || 0) < 180000) return true;
+  }
+  return false;
+}
+function forgetPreparedMount(vf) {
+  if (!vf || !vf.id) return;
+  for (const map of [pipeline.titlePreparedReady, pipeline.titlePreparedStandby]) {
+    if (!map) continue;
+    for (const [key, rec] of map) {
+      if (rec && rec.vf && rec.vf.id === vf.id) map.delete(key);
+    }
+  }
+}
+// Leave/hop must free the previous title. A 12-hour session used to keep every smash-Play
+// mount alive, so the next cold Play ran out of provider connections.
+function evictAbandonedMount(vf, now = Date.now(), opts = {}) {
+  if (!vf || !vf.id) return false;
+  if (sessionProtectedMountIds(now).has(vf.id)) return false;
+  if (mountHasActivePlayback(vf, now)) return false;
+  if (opts.keepPrepared && mountIsPreparedReady(vf, now)) return false;
+  forgetPreparedMount(vf);
+  releaseMountResources(vf);
+  mounts.delete(vf.id);
+  for (const [url, id] of pipeline.mountByUrl) if (id === vf.id) pipeline.mountByUrl.delete(url);
+  return true;
+}
+function releasePlaySession(session, uid, opts = {}) {
+  if (!session) return { ok: false };
+  if (session.uid && uid && session.uid !== uid) return { ok: false };
+  session.released = true;
+  const vf = session.currentMountId ? mounts.get(session.currentMountId) : null;
+  pipeline.sessions.delete(session.id);
+  const evicted = evictAbandonedMount(vf, Date.now(), opts);
+  if (evicted) pipeline.rebalancePreparedWindows();
+  return { ok: true, evicted };
+}
+function releaseUserPlaySessions(uid, keepId = null) {
+  if (!uid) return [];
+  const released = [];
+  for (const [id, s] of [...pipeline.sessions]) {
+    if (!s || s.uid !== uid || id === keepId) continue;
+    releasePlaySession(s, uid);
+    released.push(id);
+  }
+  return released;
 }
 function trimUserMounts(uid, keepId = null, limit = USER_MOUNT_CAP) {
   if (!uid) return [];
@@ -3651,7 +3700,7 @@ function budgetAndroidTvCaps(caps = {}) {
   const text = [caps.manufacturer, caps.brand, caps.model, caps.device, caps.deviceClass].filter(Boolean).join(' ').toLowerCase();
   return !!(caps.lowPower || /(^|\s)(onn|walmart)(\s|$|[._-])/i.test(text)
     || /budget-android-tv/i.test(text)
-    || (caps.native && caps.ramMb > 0 && caps.ramMb <= 2600 && !/shield|nvidia/i.test(text)));
+    || (caps.native && caps.ramMb > 0 && caps.ramMb <= 4096 && !/shield|nvidia/i.test(text)));
 }
 function parseResolutionRank(raw) {
   if (raw === undefined || raw === null || raw === '') return null;
@@ -4994,6 +5043,8 @@ const H = {
       );
       if (!(await maturityAllowed)) { discardDeniedMount(session, vf); return maturityBlockedResponse(ctx); }
       session.uid = ctx.user.id;
+      session.lastSeen = Date.now();
+      releaseUserPlaySessions(ctx.user.id, session.id);
       vf._q = body.q; // remembered for online subtitle search (release names match poorly)
       vf._subQuery = episodeSubtitleQuery(body.q, body.season, body.ep);
       vf._caps = parseCaps(body.caps); session.caps = vf._caps; // hardware claims ride the session
@@ -5015,8 +5066,22 @@ const H = {
       // A maturity denial outranks a pipeline failure: a restricted profile must see "restricted",
       // not a generic playback error, whichever settled first (and it never leaks a source either way).
       if (!(await maturityAllowed)) return maturityBlockedResponse(ctx);
+      console.log('[play] fail ' + (e.message || 'error'));
       send(ctx.res, 502, { error: e.message, summary: e.summary, attempts: e.attempts || [] });
     }
+  },
+
+  playStop: async (ctx) => {
+    const body = await readJson(ctx.req).catch(() => ({}));
+    const id = String(body.sessionId || body.id || '').trim();
+    if (!id) return send(ctx.res, 400, { error: 'sessionId required' });
+    const session = pipeline.sessions.get(id);
+    if (!session || (session.uid && session.uid !== ctx.user.id)) {
+      return send(ctx.res, 200, { ok: true, evicted: false });
+    }
+    const result = releasePlaySession(session, ctx.user.id, { keepPrepared: !!body.keepPrepared });
+    console.log('[play] stop evicted=' + !!result.evicted);
+    send(ctx.res, 200, { ok: true, evicted: !!result.evicted });
   },
 
   prepare: async (ctx) => {
@@ -8951,6 +9016,7 @@ const ROUTES = [
   { m: 'GET', re: /^\/api\/status$/, auth: 'user', h: H.status },
   { m: 'GET', re: /^\/api\/search$/, auth: 'user', h: H.search },
   { m: 'POST', re: /^\/api\/play$/, auth: 'user', h: H.play },
+  { m: 'POST', re: /^\/api\/play\/stop$/, auth: 'user', h: H.playStop },
   { m: 'POST', re: /^\/api\/prepare$/, auth: 'user', h: H.prepare },
   { m: 'POST', re: /^\/api\/advance\/(\w+)$/, auth: 'user', h: H.advance },
   { m: 'GET', re: /^\/api\/art$/, auth: 'user', h: H.artProxy },
@@ -9305,7 +9371,7 @@ async function shutdown() {
 }
 
 module.exports = {
-  server, mounts, pipeline, getPool, shutdown, sweep, ROUTES, auth, settings, store,
+  server, mounts, pipeline, getPool, shutdown, sweep, releasePlaySession, releaseUserPlaySessions, ROUTES, auth, settings, store,
   warmIptvCaches, msUntilNextIptvWarm,
   normalizeIp, isPrivateIp, clientIpForGeo, geoLocate, geoCacheKey, viewerGeolocationEnabled,
 };

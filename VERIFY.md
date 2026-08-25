@@ -126,6 +126,22 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-25, v3.1.7 ship — hop Play frees mounts, 4K stays on one file:
+
+- Version contract: `package.json` 3.1.7; Android `versionName` 3.1.7 /
+  `versionCode` 352; Windows client package/Tauri/Cargo 3.1.7.
+- Leaving a title or starting another Play releases the old session so
+  the next title has provider connections. Smash Play on Details joins
+  the page warm-up. A later successful Play clears the leftover toast.
+- Shield: Mutiny and Don’t Say Good Luck joined prepare in ~3s. Return
+  of the King 4K mash/pause 30s/seek/10-minute hold kept the same
+  2160p file (recovery 0). Back then FROM started.
+- `npm.cmd run verify:full` on `emulator-5554` (TV): focused IPTV/P9 50,
+  engine 41, pipeline 43, player 7, security 24, P11 31; full
+  Node suite **624/624**; isolated `/api/server` 3.1.7; household
+  VOD/IPTV/overlapping Play; Android ExoPlayer stress `ok: true`.
+  Windows GPU not run.
+
 2026-08-24, v3.1.6 ship — Up Next file clock + Settings tab recede:
 
 - Version contract: `package.json` 3.1.6; Android `versionName` 3.1.6 /

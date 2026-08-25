@@ -686,6 +686,8 @@ class PlaySession {
     this.cursor = 0;              // next candidate index to try
     this.history = [];            // { name, outcome }
     this.createdAt = Date.now();
+    this.lastSeen = this.createdAt;
+    this.released = false;
   }
 }
 
@@ -2021,6 +2023,7 @@ class Pipeline {
       && this._findTitlePreparedReady(params, policy);
     if (ready) {
       this.metrics.titlePrepareJoins++;
+      console.log('[play] joined prepared ' + (ready.candidate && ready.candidate.name || ''));
       const { candidates } = await this.search(params, policy, { allowStale: true });
       let playable = this._playableCandidates(candidates, params);
       if (!playable.some((c) => c.pickKey === ready.candidate.pickKey)) {
@@ -2072,7 +2075,10 @@ class Pipeline {
     // A pinned resume keeps the race: the pin leads the ranked list, but a dead pin must not turn
     // resume into a serial one-at-a-time walk (the pre-pin behavior users knew was the raced one).
     const joiningPrepare = !explicitPick && this._findTitlePrepare(params, policy);
-    if (joiningPrepare) this.metrics.titlePrepareJoins++;
+    if (joiningPrepare) {
+      this.metrics.titlePrepareJoins++;
+      console.log('[play] joining prepare');
+    }
     // Smash Play during Details prepare must join that job, not open a 5-wide race that
     // starves the same NNTP slots the warmup already holds. One hedge is enough to skip a
     // dead top pick; waiting on Details stays instant because the mount is already live.

@@ -74,8 +74,12 @@ test('Windows client: remote WebView gets only the guarded Triboon bridge', () =
         'no window has a broad default, shell, filesystem, process, clipboard, or HTTP capability');
     }
   }
-  assert.match(main, /navigation_allowed[\s\S]+url\.origin\(\) == server/,
+  assert.match(main, /fn origin_from_page_url/,
+    'catalog origin checks ignore hash routes such as #/home');
+  assert.match(main, /navigation_allowed[\s\S]+origin_from_page_url\(raw\)/,
     'navigation is constrained to the configured exact origin');
+  assert.match(main, /let current = origin_from_page_url\(current\.as_str\(\)\)/,
+    'Play is allowed on hash-routed catalog pages such as #/home');
   assert.match(main, /require_catalog_origin[\s\S]+require_player_or_catalog/,
     'native commands revalidate the caller instead of trusting JavaScript');
   assert.match(main, /include_str!\("\.\.\/\.\.\/ui\/bridge\.js"\)/,
@@ -133,6 +137,105 @@ test('Windows client: bridge exposes Android-compatible native playback controls
     JSON.parse(JSON.stringify(calls.at(-1))),
     { command: 'windows_player_control', args: { action: 'seek_relative', payload: { seconds: -20 } } },
   );
+});
+
+test('Windows client: live player chrome matches the Live TV page, not an empty PiP', () => {
+  const css = read('clients/windows-px8/ui/player.css');
+  const js = read('clients/windows-px8/ui/player.js');
+  assert.match(webSource, /function windowsDesktopLiveWatchFromGuide\(\) \{[\s\S]+__triboonWindowsBridge === true/,
+    'only the Windows catalog bridge leaves the guide after a channel pick');
+  assert.match(webSource, /if \(windowsDesktopLiveWatchFromGuide\(\)\) closePlayerGuide\(\);/,
+    'picking a channel from the in-player guide opens the same fullscreen live player as the Live TV page');
+  assert.match(js, /\$\('captions'\)\.hidden = state\.mode === 'live'/,
+    'live chrome hides CC like the web Live TV player');
+  assert.match(css, /body\.live #captions,[\s\S]+body\.live #audio,[\s\S]+body\.live #quality/,
+    'live CSS hides CC/audio/quality, same as web #player.live');
+  assert.match(js, /\$\('guide'\)\.hidden = false/,
+    'Guide stays on the live control bar');
+  assert.match(js, /\$\('favorite'\)\.hidden = state\.mode !== 'live'/,
+    'Favorite stays on the live control bar');
+  const rust = read('clients/windows-px8/src-tauri/src/player.rs');
+  assert.match(rust, /windows_player_play_live[\s\S]+if request\.guide \{[\s\S]+request\.guide = false;[\s\S]+__tvNativeGuideClosed/,
+    'a guide channel pick must not start a chrome-less live session');
+});
+
+test('Windows client: Live TV guide PiP docks to the slot and can return to full screen', () => {
+  const html = read('clients/windows-px8/ui/player.html');
+  const css = read('clients/windows-px8/ui/player.css');
+  const js = read('clients/windows-px8/ui/player.js');
+  const rust = read('clients/windows-px8/src-tauri/src/player.rs');
+  const main = read('clients/windows-px8/src-tauri/src/main.rs');
+  assert.match(webSource, /function syncNativeGuidePipRect\(\) \{[\s\S]+vw: window\.innerWidth[\s\S]+vh: window\.innerHeight/,
+    'catalog still tells native the slot size and the page size for DPI scaling');
+  assert.match(webSource, /if \(S\.nativeGuideMode\) scheduleNativeGuidePipSync\(\);/,
+    'moving or resizing the catalog window re-syncs the PiP slot');
+  assert.match(webSource, /S\._pipSyncT2 = setTimeout\(syncNativeGuidePipRect, 260\)/,
+    'PiP sync retries after Windows leaves fullscreen');
+  assert.match(rust, /fn scale_guide_rect\(/,
+    'native PiP math is a testable helper, not an untested window move');
+  assert.match(rust, /fn default_slot\(/,
+    'opening the guide parks the player in the top-left slot before JS measures');
+  assert.doesNotMatch(rust, /payload\.width < 240\.0/,
+    'a real guide slot smaller than 240px must still be accepted');
+  assert.match(rust, /eval_callback\(&app, "__tvNativeGuideClosed"/,
+    'leaving PiP tells the catalog to close the guide, like Android');
+  assert.match(main, /WindowEvent::Moved\(_\) \| tauri::WindowEvent::Resized\(_\)/,
+    'dragging the catalog window keeps the mini player in the slot');
+  assert.match(html, /id="pipExpand"[\s\S]+Full screen/,
+    'PiP has a visible Full screen control');
+  assert.match(css, /body\.guide-pip \.pip-expand \{ display: inline-flex; \}/,
+    'the Full screen chip is shown only while the mini player is docked');
+  assert.match(js, /windows_player_close_guide/,
+    'Full screen / click on the mini player returns to the live player with controls');
+});
+
+test('Windows client: Guide opens Live TV, not leftover episodes', () => {
+  const html = read('clients/windows-px8/ui/player.html');
+  const css = read('clients/windows-px8/ui/player.css');
+  const js = read('clients/windows-px8/ui/player.js');
+  const guideIcon = html.slice(html.indexOf('id="i-guide"'), html.indexOf('</symbol>', html.indexOf('id="i-guide"')));
+  const listIcon = html.slice(html.indexOf('id="i-list"'), html.indexOf('</symbol>', html.indexOf('id="i-list"')));
+  assert.match(guideIcon, /m16 12 5 3-5 3v-6Z/,
+    'Guide keeps the same list+play glyph as the web #chGuide button');
+  assert.doesNotMatch(listIcon, /m16 12 5 3-5 3v-6Z/,
+    'Episodes must not reuse the IPTV Guide icon');
+  assert.match(js, /\$\('guide'\)\.hidden = false/,
+    'Guide stays visible on movies and shows, matching desktop web and Android');
+  assert.match(js, /\$\('episodes'\)\.hidden = state\.mode === 'live' \|\| !state\.episodeChoices\.length/,
+    'Live TV must not keep a leftover episode picker');
+  assert.match(js, /if \(state\.mode === 'live'\) \{\s*state\.episodeChoices = \[\];/,
+    'switching to a live channel clears the previous show episode list');
+  assert.match(js, /else if \(key === 'g'\) \{ event\.preventDefault\(\); \$\('guide'\)\.click\(\); \}/,
+    'G opens the TV guide on both live and VOD, like the desktop web player');
+  assert.match(css, /body\.live #episodes/,
+    'live CSS hides the episode button even if leftover choices arrive');
+  assert.match(webSource, /async function togglePlayerGuide\(\) \{[\s\S]+closePlayerEpisodes\(\);[\s\S]+rememberVodReturn\(\)/,
+    'opening the shared guide closes the episode strip on every client');
+});
+
+test('Windows client: native chrome matches the web player loader and transport', () => {
+  const html = read('clients/windows-px8/ui/player.html');
+  const css = read('clients/windows-px8/ui/player.css');
+  const js = read('clients/windows-px8/ui/player.js');
+  assert.match(html, /class="loadSteps"[\s\S]+id="loadingStage"/,
+    'startup uses the web load bar, not a spinning ring');
+  assert.match(html, /src="triboon.png"/, 'startup shows the Triboon wordmark');
+  assert.match(html, /id="i-back"[\s\S]+M3 2v6h6[\s\S]+id="i-forward"[\s\S]+M21 2v6h-6/,
+    'skip icons are the same stroke arrows as the web player');
+  assert.doesNotMatch(html, /<text[^>]*>10<\/text>|<text[^>]*>30<\/text>/,
+    'skip icons must not stamp 10/30 inside the glyph');
+  assert.match(html, /class="seekLine"[\s\S]+id="currentTime"[\s\S]+id="timeline"[\s\S]+id="duration"/,
+    'seek times sit on the sides of the bar like web');
+  assert.match(css, /body\[data-state="loading"\] \.loading/,
+    'the solid loader only covers startup');
+  assert.doesNotMatch(css, /data-state="buffering"\] \.loading/,
+    'mid-play cache pauses must not flash the full-page loader');
+  assert.match(css, /\.control\.primary \{ width: 58px; height: 58px; background: rgba\(5,3,9,\.4\)/,
+    'play is a dark web-style circle, not a white Windows button');
+  assert.match(js, /if \(loadingStarted\) return;/,
+    'loading status text does not restart on every session event');
+  assert.match(js, /if \(value === 'buffering' && sawFirstFrame\)/,
+    'after the first frame, buffering does not replace the picture with the loader');
 });
 
 test('Windows client: About and seek stay on the shared web player contract', () => {

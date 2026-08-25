@@ -95,6 +95,14 @@ pub(crate) fn parse_http_url(raw: &str) -> Result<HttpUrl, String> {
     })
 }
 
+/// Origin of a loaded catalog page. Hash routes such as `#/home` are the web app's
+/// Back stack, not a different host, so fragments must not fail the trust check.
+pub(crate) fn origin_from_page_url(raw: &str) -> Result<String, String> {
+    let raw = raw.trim();
+    let without_fragment = raw.split_once('#').map(|(head, _)| head).unwrap_or(raw);
+    Ok(parse_http_url(without_fragment)?.origin())
+}
+
 fn normalize_server(raw: &str) -> Result<String, String> {
     let parsed = parse_http_url(raw)?;
     if parsed.path_and_query != "/" {
@@ -251,7 +259,7 @@ pub(crate) fn require_catalog_origin(
     let current = window
         .url()
         .map_err(|_| "could not verify the calling page".to_string())?;
-    let current = parse_http_url(current.as_str())?.origin();
+    let current = origin_from_page_url(current.as_str())?;
     if current != configured {
         return Err("untrusted page".into());
     }
@@ -425,8 +433,8 @@ fn navigation_allowed(webview: &tauri::Webview, raw: &str) -> bool {
     let Some(server) = state.server_origin() else {
         return false;
     };
-    parse_http_url(raw)
-        .map(|url| url.origin() == server)
+    origin_from_page_url(raw)
+        .map(|origin| origin == server)
         .unwrap_or(false)
 }
 
@@ -455,6 +463,12 @@ fn main() {
             if let Some(main) = app.get_webview_window(CONNECT_WINDOW_LABEL) {
                 let handle = app.handle().clone();
                 main.on_window_event(move |event| {
+                    if matches!(
+                        event,
+                        tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_)
+                    ) {
+                        player::reapply_guide_pip(&handle);
+                    }
                     if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
                         if let Some(controller) = handle.try_state::<player::PlayerController>() {
                             controller.shutdown(&handle);
@@ -583,6 +597,20 @@ mod tests {
     }
 
     #[test]
+    fn catalog_page_origin_ignores_hash_routes() {
+        assert_eq!(
+            origin_from_page_url("http://127.0.0.1:7777/#/home").unwrap(),
+            "http://127.0.0.1:7777"
+        );
+        assert_eq!(
+            origin_from_page_url("http://127.0.0.1:7777/#/movie/123").unwrap(),
+            origin_from_page_url("http://127.0.0.1:7777/").unwrap()
+        );
+        assert!(origin_from_page_url("http://evil.test/#/home").unwrap() != "http://127.0.0.1:7777");
+        assert!(parse_http_url("http://127.0.0.1:7777/#/home").is_err());
+        assert!(normalize_server("http://127.0.0.1:7777/#/home").is_err());
+    }
+
     fn internal_urls_are_narrow() {
         assert!(is_internal_app_url("http://tauri.localhost/connect.html"));
         assert!(is_internal_app_url("tauri://localhost/player.html"));

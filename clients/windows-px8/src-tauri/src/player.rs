@@ -179,6 +179,65 @@ pub struct GuideRect {
     y: f64,
     width: f64,
     height: f64,
+    #[serde(default)]
+    vw: f64,
+    #[serde(default)]
+    vh: f64,
+}
+
+impl GuideRect {
+    fn default_slot(client_w: f64, client_h: f64) -> Self {
+        let pad = 24.0;
+        let width = (client_w * 0.27)
+            .clamp(260.0, 430.0)
+            .min((client_w - pad * 2.0).max(120.0));
+        let height = (width * 9.0 / 16.0).min((client_h - pad * 2.0).max(68.0));
+        Self {
+            x: pad,
+            y: pad,
+            width,
+            height,
+            vw: client_w.max(1.0),
+            vh: client_h.max(1.0),
+        }
+    }
+}
+
+fn scale_guide_rect(
+    payload: &GuideRect,
+    origin_x: f64,
+    origin_y: f64,
+    client_w: f64,
+    client_h: f64,
+) -> Option<(f64, f64, f64, f64)> {
+    if !payload.x.is_finite()
+        || !payload.y.is_finite()
+        || !payload.width.is_finite()
+        || !payload.height.is_finite()
+        || payload.width <= 1.0
+        || payload.height <= 1.0
+        || client_w <= 1.0
+        || client_h <= 1.0
+    {
+        return None;
+    }
+    let vw = if payload.vw > 1.0 { payload.vw } else { client_w };
+    let vh = if payload.vh > 1.0 { payload.vh } else { client_h };
+    let scale_x = client_w / vw;
+    let scale_y = client_h / vh;
+    let width = (payload.width * scale_x)
+        .max(120.0)
+        .min(client_w.max(120.0));
+    let height = (payload.height * scale_y)
+        .max(68.0)
+        .min(client_h.max(68.0));
+    let left = (payload.x * scale_x)
+        .max(0.0)
+        .min((client_w - width).max(0.0));
+    let top = (payload.y * scale_y)
+        .max(0.0)
+        .min((client_h - height).max(0.0));
+    Some((origin_x + left, origin_y + top, width, height))
 }
 
 fn default_title() -> String {
@@ -1052,6 +1111,7 @@ struct ActorHandle {
 pub(crate) struct PlayerController {
     actor: Mutex<Option<ActorHandle>>,
     last_ui: Arc<Mutex<PlayerUiState>>,
+    guide_pip: Arc<Mutex<Option<GuideRect>>>,
 }
 
 impl Default for PlayerController {
@@ -1059,6 +1119,7 @@ impl Default for PlayerController {
         Self {
             actor: Mutex::new(None),
             last_ui: Arc::new(Mutex::new(PlayerUiState::default())),
+            guide_pip: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -1343,7 +1404,13 @@ pub fn windows_player_play_live(
     payload: LivePayload,
 ) -> Result<(), String> {
     let server = require_catalog_origin(&window, &state)?;
-    let request = validate_live(payload, &server)?;
+    let mut request = validate_live(payload, &server)?;
+    // Opening the guide stays on windows_player_open_guide. A channel pick must play
+    // like the Live TV page: fullscreen, with the live control bar.
+    if request.guide {
+        request.guide = false;
+        eval_callback(&app, "__tvNativeGuideClosed", vec![json!(0)]);
+    }
     show_player(&app)?;
     controller.send(&app, PlayerCommand::PlayLive(request), true)
 }
@@ -1404,21 +1471,106 @@ pub fn windows_player_update(
     controller.send(&app, PlayerCommand::Update(update), false)
 }
 
+fn catalog_client_metrics(app: &tauri::AppHandle) -> Option<(f64, f64, f64, f64, f64)> {
+    let main = app.get_webview_window(CONNECT_WINDOW_LABEL)?;
+    let scale = main.scale_factor().unwrap_or(1.0).max(0.1);
+    let position = main.inner_position().ok()?;
+    let size = main.inner_size().ok()?;
+    Some((
+        position.x as f64 / scale,
+        position.y as f64 / scale,
+        size.width as f64 / scale,
+        size.height as f64 / scale,
+        scale,
+    ))
+}
+
+fn remember_guide_pip(app: &tauri::AppHandle, rect: GuideRect) {
+    if let Some(controller) = app.try_state::<PlayerController>() {
+        if let Ok(mut slot) = controller.guide_pip.lock() {
+            *slot = Some(rect);
+        }
+    }
+}
+
+fn clear_guide_pip(app: &tauri::AppHandle) {
+    if let Some(controller) = app.try_state::<PlayerController>() {
+        if let Ok(mut slot) = controller.guide_pip.lock() {
+            *slot = None;
+        }
+    }
+}
+
+fn stored_guide_pip(app: &tauri::AppHandle) -> Option<GuideRect> {
+    app.try_state::<PlayerController>()
+        .and_then(|controller| controller.guide_pip.lock().ok().and_then(|slot| slot.clone()))
+}
+
+fn apply_stored_guide_pip(app: &tauri::AppHandle) -> Result<(), String> {
+    let Some(payload) = stored_guide_pip(app) else {
+        return Ok(());
+    };
+    let Some((origin_x, origin_y, client_w, client_h, scale)) = catalog_client_metrics(app) else {
+        return Ok(());
+    };
+    let Some((x, y, width, height)) = scale_guide_rect(&payload, origin_x, origin_y, client_w, client_h)
+    else {
+        return Ok(());
+    };
+    let player = ensure_player_window(app)?;
+    let _ = player.set_fullscreen(false);
+    let _ = player.set_position(tauri::PhysicalPosition::new(
+        (x * scale).round() as i32,
+        (y * scale).round() as i32,
+    ));
+    let _ = player.set_size(tauri::PhysicalSize::new(
+        (width * scale).round().max(1.0) as u32,
+        (height * scale).round().max(1.0) as u32,
+    ));
+    let _ = player.set_always_on_top(true);
+    let _ = player.show();
+    Ok(())
+}
+
+fn schedule_guide_pip_reapply(app: tauri::AppHandle) {
+    thread::spawn(move || {
+        for _ in 0..3 {
+            thread::sleep(Duration::from_millis(90));
+            let _ = apply_stored_guide_pip(&app);
+        }
+    });
+}
+
+pub(crate) fn reapply_guide_pip(app: &tauri::AppHandle) {
+    if stored_guide_pip(app).is_none() {
+        return;
+    }
+    if let Some(player) = app.get_webview_window(PLAYER_WINDOW_LABEL) {
+        if player.is_fullscreen().unwrap_or(false) {
+            return;
+        }
+    }
+    let _ = apply_stored_guide_pip(app);
+}
+
 fn enter_guide_mode(app: &tauri::AppHandle) -> Result<(), String> {
     if let Some(main) = app.get_webview_window(CONNECT_WINDOW_LABEL) {
         main.show().map_err(|e| e.to_string())?;
+        let _ = main.unminimize();
         let _ = main.set_focus();
     }
-    if let Some(player) = app.get_webview_window(PLAYER_WINDOW_LABEL) {
-        let _ = player.set_fullscreen(false);
-        let _ = player.set_size(tauri::LogicalSize::new(480.0, 270.0));
-        let _ = player.set_position(tauri::LogicalPosition::new(24.0, 24.0));
-        let _ = player.set_always_on_top(true);
+    if stored_guide_pip(app).is_none() {
+        if let Some((_, _, client_w, client_h, _)) = catalog_client_metrics(app) {
+            remember_guide_pip(app, GuideRect::default_slot(client_w, client_h));
+        }
     }
+    apply_stored_guide_pip(app)?;
+    schedule_guide_pip_reapply(app.clone());
     Ok(())
 }
 
 fn leave_guide_mode(app: &tauri::AppHandle) -> Result<(), String> {
+    clear_guide_pip(app);
     if let Some(main) = app.get_webview_window(CONNECT_WINDOW_LABEL) {
         let _ = main.hide();
     }
@@ -1462,6 +1614,7 @@ pub fn windows_player_close_guide(
 ) -> Result<(), String> {
     require_player_or_catalog(&window, &state)?;
     leave_guide_mode(&app)?;
+    eval_callback(&app, "__tvNativeGuideClosed", vec![json!(0)]);
     controller.send(
         &app,
         PlayerCommand::Control(ControlAction::CloseGuide),
@@ -1482,31 +1635,8 @@ pub fn windows_player_set_guide_pip_rect(
             return Err("guide rectangle is invalid".into());
         }
     }
-    if payload.width < 240.0 || payload.height < 135.0 {
-        return Err("guide player rectangle is too small".into());
-    }
-    let player = ensure_player_window(&app)?;
-    let (origin_x, origin_y) = if let Some(main) = app.get_webview_window(CONNECT_WINDOW_LABEL) {
-        let scale = main.scale_factor().unwrap_or(1.0).max(0.1);
-        main.inner_position()
-            .map(|position| (position.x as f64 / scale, position.y as f64 / scale))
-            .unwrap_or((0.0, 0.0))
-    } else {
-        (0.0, 0.0)
-    };
-    let _ = player.set_fullscreen(false);
-    player
-        .set_position(tauri::LogicalPosition::new(
-            origin_x + payload.x,
-            origin_y + payload.y,
-        ))
-        .map_err(|e| e.to_string())?;
-    player
-        .set_size(tauri::LogicalSize::new(payload.width, payload.height))
-        .map_err(|e| e.to_string())?;
-    let _ = player.set_always_on_top(true);
-    let _ = player.show();
-    Ok(())
+    remember_guide_pip(&app, payload);
+    apply_stored_guide_pip(&app)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3092,5 +3222,34 @@ mod tests {
         let session = NativeSession::from_vod(request);
         assert_eq!(session.display_position(4.25), 124.75);
         assert_eq!(session.display_duration(3479.5), 3600.0);
+    }
+
+    #[test]
+    fn guide_pip_stays_inside_the_catalog_slot() {
+        let slot = GuideRect {
+            x: 24.0,
+            y: 30.0,
+            width: 320.0,
+            height: 180.0,
+            vw: 1280.0,
+            vh: 800.0,
+        };
+        let parked = scale_guide_rect(&slot, 100.0, 80.0, 1280.0, 800.0).unwrap();
+        assert_eq!(parked, (124.0, 110.0, 320.0, 180.0));
+
+        let scaled = scale_guide_rect(&slot, 0.0, 0.0, 2560.0, 1600.0).unwrap();
+        assert_eq!(scaled, (48.0, 60.0, 640.0, 360.0));
+
+        let runaway = GuideRect {
+            x: 900.0,
+            y: 400.0,
+            width: 160.0,
+            height: 90.0,
+            vw: 800.0,
+            vh: 600.0,
+        };
+        let clamped = scale_guide_rect(&runaway, 40.0, 20.0, 800.0, 600.0).unwrap();
+        assert_eq!(clamped, (680.0, 420.0, 160.0, 90.0));
+        assert!(scale_guide_rect(&slot, 0.0, 0.0, 0.0, 0.0).is_none());
     }
 }

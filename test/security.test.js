@@ -206,7 +206,7 @@ test('security: deny-by-default — every route declares auth; unknown routes 40
   const probes = [
     ['GET', '/api/me'], ['GET', '/api/me/security'], ['GET', '/api/app/latest'], ['POST', '/api/me/totp/setup'], ['POST', '/api/me/totp/enable'],
     ['POST', '/api/me/totp/disable'], ['POST', '/api/me/totp/recovery'], ['GET', '/api/status'], ['GET', '/api/search?q=x'],
-    ['POST', '/api/play'], ['POST', '/api/advance/abc'], ['GET', '/api/tmdb/trending/all/week'],
+    ['POST', '/api/play'], ['POST', '/api/play/stop'], ['POST', '/api/advance/abc'], ['GET', '/api/tmdb/trending/all/week'],
     ['GET', '/api/watch'], ['GET', '/api/watch/next'], ['GET', '/api/watch-stats'], ['POST', '/api/watch'], ['GET', '/api/activity'], ['POST', '/api/activity'], ['GET', '/api/mounts'],
     ['GET', '/api/health/abc'], ['POST', '/api/mount'], ['GET', '/api/settings'],
     ['GET', '/api/me/iptv/sources'], ['POST', '/api/me/iptv/sources'], ['PATCH', '/api/me/iptv/sources/abc'], ['DELETE', '/api/me/iptv/sources/abc'],
@@ -3306,6 +3306,48 @@ test('housekeeping sweep: cap trimming preserves paused session mounts', async (
   for (const id of ids) srv.mounts.delete(id);
   srv.mounts.delete('paused-cap-x');
   srv.pipeline.sessions.delete('paused-cap-session-x');
+});
+
+test('hop: releasing a play session evicts its idle mount', () => {
+  const now = Date.now();
+  const mk = (id) => ({ id, _touched: now, name: id, size: 1, streamable: true, tags: [] });
+  srv.mounts.set('hop-old', mk('hop-old'));
+  srv.pipeline.sessions.set('hop-sess', {
+    id: 'hop-sess', uid: 'user-a', createdAt: now, currentMountId: 'hop-old',
+  });
+  const r = srv.releasePlaySession(srv.pipeline.sessions.get('hop-sess'), 'user-a');
+  assert.ok(r.ok && r.evicted, 'leaving a title should drop its mount');
+  assert.ok(!srv.mounts.has('hop-old'));
+  assert.ok(!srv.pipeline.sessions.has('hop-sess'));
+});
+
+test('new play releases other sessions for the same user', () => {
+  const now = Date.now();
+  const mk = (id) => ({ id, _touched: now, name: id, size: 1, streamable: true, tags: [] });
+  srv.mounts.set('old-a', mk('old-a'));
+  srv.mounts.set('keep-a', mk('keep-a'));
+  srv.pipeline.sessions.set('old-s', { id: 'old-s', uid: 'user-a', createdAt: now, currentMountId: 'old-a' });
+  srv.pipeline.sessions.set('keep-s', { id: 'keep-s', uid: 'user-a', createdAt: now, currentMountId: 'keep-a' });
+  srv.releaseUserPlaySessions('user-a', 'keep-s');
+  assert.ok(srv.pipeline.sessions.has('keep-s'), 'the new play session stays');
+  assert.ok(srv.mounts.has('keep-a'), 'the new mount stays');
+  assert.ok(!srv.pipeline.sessions.has('old-s'), 'the previous title session is gone');
+  assert.ok(!srv.mounts.has('old-a'), 'the previous title mount is gone');
+  srv.pipeline.sessions.delete('keep-s');
+  srv.mounts.delete('keep-a');
+});
+
+test('back to details can keep a still-prepared mount', () => {
+  const now = Date.now();
+  const vf = { id: 'prep-keep', _touched: now, name: 'prep-keep', size: 1, streamable: true, tags: [] };
+  srv.mounts.set('prep-keep', vf);
+  srv.pipeline.titlePreparedReady.set('prep-key', { vf, at: now, candidate: { name: 'prep' } });
+  srv.pipeline.sessions.set('prep-s', { id: 'prep-s', uid: 'user-a', createdAt: now, currentMountId: 'prep-keep' });
+  const r = srv.releasePlaySession(srv.pipeline.sessions.get('prep-s'), 'user-a', { keepPrepared: true });
+  assert.ok(r.ok && !r.evicted, 'Back on the same page must not drop the warm-up');
+  assert.ok(srv.mounts.has('prep-keep'));
+  srv.mounts.delete('prep-keep');
+  srv.pipeline.titlePreparedReady.delete('prep-key');
 });
 
 test('fetchUrl: response-size cap aborts oversized bodies instead of buffering them', async () => {

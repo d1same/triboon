@@ -117,6 +117,10 @@ function decidePlayback(name, caps = {}) {
   // plays silent video. Devices with full container+audio hardware DO skip the server
   // entirely (true direct play); everything else gets the video-copy remux.
   if (isMp4 || isWebm || (isMkv && caps.mkv && caps.ac3 && caps.eac3 && losslessAudioOk)) return { method: 'direct' };
+  const is4k = /\b(2160p|4k|uhd)\b/i.test(String(name || ''));
+  // Remux copies 4K HEVC as-is. A budget box / emulator with only a software decoder
+  // will sit on "loading" forever. Transcode to 1080 there; Shield-class HEVC stays remux.
+  if (caps.lowPower && is4k && !caps.hevc && detectEncoder()) return { method: 'transcode' };
   // Usenet release names often do not expose the inner filename extension until after mount.
   // Treat that unknown container like MKV: remux first when ffmpeg is available.
   if ((isMkv || !hasKnownContainer) && detectFfmpeg()) return { method: 'remux' };

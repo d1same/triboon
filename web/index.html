@@ -5371,6 +5371,17 @@ function toast(msg) {
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(() => $('toast').classList.remove('show'), 3600);
 }
+function hideToast() {
+  if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
+  const el = $('toast');
+  if (el) el.classList.remove('show');
+  const msg = $('toastMsg');
+  if (msg) msg.textContent = '';
+}
+function releasePlaybackSession(sessionId, opts = {}) {
+  if (!sessionId) return;
+  api('/api/play/stop', { method: 'POST', body: { sessionId, keepPrepared: !!opts.keepPrepared } }).catch(() => {});
+}
 let bdFlip = false, bdCurrent = '';
 let _bdPendingUrl = null, _bdTimer = null;
 function setBackdrop(url) {
@@ -7531,7 +7542,10 @@ function sizeRowsWindow(root) {
   const gap = parseFloat(getComputedStyle(root).rowGap || getComputedStyle(root).gap) || 22;
   root.style.maxHeight = rowsWindowHeight(root, rows, n, gap) + 'px';
 }
-window.addEventListener('resize', () => { sizeRowsWindow($('rows')); sizeRowsWindow($('discoverRows')); fitLiveGuide(); fitRailToFullIcons(); fitRailWidth(); });
+window.addEventListener('resize', () => {
+  sizeRowsWindow($('rows')); sizeRowsWindow($('discoverRows')); fitLiveGuide(); fitRailToFullIcons(); fitRailWidth();
+  if (S.nativeGuideMode) scheduleNativeGuidePipSync();
+});
 function setRowsView(root, data, hasHero) { S.rowsView = { root, data, hasHero }; }
 function rowsViewBelongsToCurrentView() {
   const root = S.rowsView && S.rowsView.root;
@@ -8433,6 +8447,7 @@ async function play(it, pick, opts = {}) {
     toast(`This episode hasn’t aired yet — airs ${fmtDate(it.airDate)}`);
     return;
   }
+  hideToast();
   const picked = pick && typeof pick === 'object' ? pick : (pick ? { name: pick } : null);
   const pickRank = picked ? normalizeResolutionRank(picked.resolutionRank) : null;
   const preferredRank = pickRank !== null ? pickRank : preferredQualityRankForItem(it);
@@ -10190,6 +10205,7 @@ function revealWebPlayerShell(it) {
   tick();
 }
 function revealNativeGuideShell() {
+  closePlayerEpisodes();
   wakeScreensaverForPlayerSurface();
   stopWebVideoElement();
   document.body.classList.add('videoOpen');
@@ -11812,6 +11828,7 @@ function armWebRebufferRecovery(v, p) {
 }
 function stopActivePlaybackForReplacement(opts = {}) {
   if (!S.playing) return;
+  const leavingSessionId = S.playing.sessionId;
   saveWatch(true, S.playing._ended ? { watched: true } : {});
   stopActivityHeartbeat();
   // A direct episode handoff swaps the old Exo surface for the next native loading surface in
@@ -11831,6 +11848,7 @@ function stopActivePlaybackForReplacement(opts = {}) {
   S.playerSeasonStrip = null;
   S.nextEp = null;
   S.nextEpPrepared = false;
+  releasePlaybackSession(leavingSessionId);
   S.playing = null;
   updateNextEpisodeButton();
   updatePlayerControlAvailability();
@@ -11901,6 +11919,11 @@ function startWebPlayerHousekeeping(mount, it) {
 }
 function playbackStartKind(mount) {
   const method = mount && mount.playback && mount.playback.method;
+  const caps = (typeof clientCaps === 'function' ? clientCaps() : {}) || {};
+  const name = String((mount && mount.name) || '');
+  const is4k = /\b(2160p|4k|uhd)\b/i.test(name);
+  // A remux of 4K HEVC is still 4K HEVC. No hardware decoder → start transcode, do not spin.
+  if (caps.lowPower && is4k && !caps.hevc && mount && mount.transcodeUrl) return 'transcode';
   if (method === 'transcode' && mount.transcodeUrl) return 'transcode';
   if (method === 'remux' && mount.remuxUrl) return 'remux';
   return 'direct';
@@ -11928,6 +11951,7 @@ function updatePlayerMeta() {
   $('pQuality').style.visibility = quality ? 'visible' : 'hidden';
 }
 async function openPlayer(it, mount, opts = {}) {
+  hideToast();
   rememberPlayerReturn();
   // Music is scoped to the Music section; starting video leaves Music, so stop it fully.
   if (S.musicCur) closeMusicPlayer();
@@ -12922,7 +12946,6 @@ window.__tvNativeVideoPaused = (pos, dur, token) => {
   // ExoPlayer reports the exact stop point here. Flush it before Android can suspend the hidden
   // WebView so Back, media-stop, Home/app background, and process death all resume accurately.
   saveWatch(true);
-  schedulePauseWarmAhead(p);
 };
 window.__tvNativeVideoStats = (raw, token) => {
   const p = S.playing; if (!p || !p.usingNative || !nativePlaybackCallbackMatches(p, token)) return;
@@ -13247,9 +13270,15 @@ function handleVodPlaybackEnded(pos, dur) {
     : Math.max(0, Number(currentTime()) || Number(p.item && p.item.resume) || 0);
   const kind = currentPlayerKind(p);
   if (p.usingNative) {
+    // A remux pipe often ENDED on pause/resume or a wifi blip while the movie is
+    // still in the middle. That is the same file, not a new release.
+    if (vodPlaybackStarted(p)) {
+      recoverSamePlaybackSource('source ended mid-title');
+      return true;
+    }
     // First bytes of a remux can ENDED before PLAYING. Walking remux→transcode→direct
     // every ~2s killed Mario from 0:00. Retry the same kind twice, then the ladder.
-    if (!vodPlaybackStarted(p) && (p._startupEndedTries || 0) < 2) {
+    if ((p._startupEndedTries || 0) < 2) {
       p._startupEndedTries = (p._startupEndedTries || 0) + 1;
       markPlaybackSourceSwap(p);
       setTimeout(() => {
@@ -13307,16 +13336,20 @@ function recoverSamePlaybackSource(reason = '') {
   if (!sourceDead && S._handoffQuietUntil && now < S._handoffQuietUntil) return false;
   if (decoderFailure && p.usingNative && (clientCaps() || {}).lowPower
       && tryNextNativeKind(kind, at, reason || 'playback failed')) return true;
-  // A wifi blip is not a new movie. Retry the SAME file quietly first. Only a dead source
-  // (or the same file dying twice) swaps to the warmed same-quality standby.
-  if (sourceDead || (p._sameSourceRecoveryKey === key && now - (p._sameSourceRecoveryAt || 0) < 120000)) {
+  // A wifi blip is not a new movie. Retry the SAME file quietly first. A 4K remux
+  // can stall twice on pause/resume without the file being dead. Only a dead source
+  // or three failures in two minutes swap to another release.
+  const sameBurst = p._sameSourceRecoveryKey === key && now - (p._sameSourceRecoveryAt || 0) < 120000;
+  const recoveryCount = sameBurst ? (p._sameSourceRecoveryCount || 0) + 1 : 1;
+  p._sameSourceRecoveryKey = key;
+  p._sameSourceRecoveryAt = now;
+  p._sameSourceRecoveryCount = recoveryCount;
+  if (sourceDead || recoveryCount >= 3) {
     if (!p._sourceAdvancePending) {
       autoAdvance({ allowMidstreamAdvance: true, nativePreferred: !!p.usingNative, reason: reason || 'repeated playback stall' });
     }
     return true;
   }
-  p._sameSourceRecoveryKey = key;
-  p._sameSourceRecoveryAt = now;
   markPlaybackSourceSwap(p);
   if (p.usingNative && canUseNativeVideoPlayer() && tryNativeVideoPlayer(kind, at, { quietSeek: true })) return true;
   p.usingNative = false;
@@ -14226,7 +14259,7 @@ async function drainPauseWarmResponse(res, signal) {
   await res.arrayBuffer();
 }
 function schedulePauseWarmAhead(p = S.playing) {
-  if (!p || !p.item || p.item.type === 'live' || !p.streamUrl || !p.size) return;
+  if (!p || !p.item || p.item.type === 'live' || p.usingNative || !p.streamUrl || !p.size) return;
   const dur = totalDuration();
   if (!dur || !Number.isFinite(dur) || dur <= 0) return;
   const now = appMs();
@@ -14652,6 +14685,7 @@ async function closePlayer(opts = {}) {
   cancelLiveTune('split:0');
   cancelLiveTune('split:1');
   const closingItem = S.playing && S.playing.item;
+  const closingSessionId = S.playing && S.playing.sessionId;
   // Backing out of the player while casting stops the TV too (don't leave it playing an orphaned stream).
   if (S.playing && S.playing.castingActive && !opts._fromCast) {
     S.playing.castingActive = false;
@@ -14694,6 +14728,7 @@ async function closePlayer(opts = {}) {
   if (finished && S.nextEp) rememberPendingHomeNext(S.nextEp);
   else clearPendingHomeNextForItem(closingItem);
   S.nextEp = null; updateNextEpisodeButton();
+  releasePlaybackSession(closingSessionId, { keepPrepared: $('detail').classList.contains('open') });
   S.playing = null;
   updatePlayerControlAvailability();
   if ($('detail').classList.contains('open')) {
@@ -14852,6 +14887,11 @@ function togglePlay() {
     if (_castRpc) { try { _castRpc.playOrPause(); } catch {} }                                   // browser Cast SDK
     else if (window.TriboonTV && TriboonTV.castControl) { try { TriboonTV.castControl(S.playing.castPaused ? 'play' : 'pause'); } catch {} } // native app bridge
     updPP(); return;
+  }
+  if (S.playing && S.playing.usingNative && window.TriboonTV && typeof TriboonTV.toggleVideo === 'function') {
+    try { TriboonTV.toggleVideo(); } catch {}
+    updPP();
+    return;
   }
   const v = activePlayerVideo();
   if (!v.src) return;
@@ -19838,6 +19878,10 @@ async function toggleFav(ch, star) {
     if (S.view === 'livetv' && S.liveCat === '★ Favorites') setTimeout(renderLiveFavListKeepingFocus, 120);
   } catch (e) { toast('Favorite failed: ' + e.message); }
 }
+function windowsDesktopLiveWatchFromGuide() {
+  return !!(window.TriboonTV && window.TriboonTV.__triboonWindowsBridge === true
+    && $('pGuide') && $('pGuide').classList.contains('open'));
+}
 function canUseNativeLivePlayer() {
   // Same rule as VOD: only the shell with Triboon native chrome may use ExoPlayer.
   try {
@@ -19888,6 +19932,7 @@ function commitNativeLivePlayback(it) {
 }
 function openNativeLiveGuideShell(it, opts = {}) {
   rememberPlayerReturn();
+  closePlayerEpisodes();
   wakeScreensaverForPlayerSurface();
   stopWebVideoElement();
   document.body.classList.add('videoOpen');
@@ -20125,6 +20170,7 @@ async function playChannel(it, list) {
   // Zap speed: warm the NEIGHBORS' stream URLs in the background (a tiny token-minting GET, no
   // provider connection) so PgUp/PgDn ⏮⏭ zaps skip the serial /api/iptv/play round-trip entirely.
   prefetchAdjacentChannelUrls(it, S.liveList);
+  if (windowsDesktopLiveWatchFromGuide()) closePlayerGuide();
   const keepGuidePip = S.view === 'player' && !!($('pGuide') && $('pGuide').classList.contains('open'));
   if (keepGuidePip && S.nativeGuideMode && tryNativeLivePlayer(it, true)) {
     markGuideCur();
@@ -20418,10 +20464,12 @@ function syncNativeGuidePipRect() {
 function scheduleNativeGuidePipSync() {
   if (S._pipSyncRaf) cancelAnimationFrame(S._pipSyncRaf);
   clearTimeout(S._pipSyncT);
+  clearTimeout(S._pipSyncT2);
   S._pipSyncRaf = requestAnimationFrame(() => {
     S._pipSyncRaf = 0;
     syncNativeGuidePipRect();
     S._pipSyncT = setTimeout(syncNativeGuidePipRect, 90);
+    S._pipSyncT2 = setTimeout(syncNativeGuidePipRect, 260);
   });
 }
 async function renderPlayerGuideTimeline(pg, list) {
@@ -20701,6 +20749,7 @@ async function renderPlayerGuideTimeline(pg, list) {
 async function togglePlayerGuide() {
   const pg = $('pGuide');
   if (pg.classList.contains('open')) return closePlayerGuide();
+  closePlayerEpisodes();
   rememberVodReturn();
   const list = await ensurePlayerGuideChannels();
   if (!list.length) return toast(S.serverInfo && S.serverInfo.iptv ? 'No Live TV channels available' : 'Live TV is not set up');

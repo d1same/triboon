@@ -42,6 +42,8 @@
   let lastVolume = 100;
   let pendingSeekDelta = 0;
   let pendingSeekTimer = null;
+  let sawFirstFrame = false;
+  let loadingStarted = false;
 
   function nativeInvoke(command, args) {
     if (!invoke) return Promise.reject(new Error('native transport unavailable'));
@@ -93,6 +95,8 @@
     if (safe === state._renderedArtwork) return;
     state._renderedArtwork = safe;
     $('art').style.backgroundImage = safe ? `url(${JSON.stringify(safe)})` : '';
+    const cover = $('loadCover');
+    if (cover) cover.style.backgroundImage = safe ? `url(${JSON.stringify(safe)})` : '';
   }
 
   function formatTime(raw) {
@@ -132,8 +136,10 @@
   }
 
   function beginLoadingStages() {
+    if (loadingStarted) return;
+    loadingStarted = true;
     clearInterval(loadingTimer);
-    const stages = ['Preparing the player...', 'Opening the stream...', 'Filling the playback buffer...', 'Waiting for the first video frame...'];
+    const stages = ['Preparing', 'Opening stream', 'Filling buffer', 'Waiting for picture'];
     let index = 0;
     $('loadingStage').textContent = stages[0];
     loadingTimer = setInterval(() => {
@@ -144,11 +150,24 @@
   }
 
   function setPlayback(value) {
+    if (value === 'playing' || value === 'paused' || value === 'ready') {
+      sawFirstFrame = true;
+      loadingStarted = false;
+      clearInterval(loadingTimer);
+    }
+    if (value === 'buffering' && sawFirstFrame) {
+      state.buffering = true;
+      return;
+    }
+    if (value === state.playback) {
+      if (value === 'playing') scheduleHide();
+      return;
+    }
     state.playback = value;
     state.playing = value === 'playing';
-    state.buffering = value === 'buffering';
-    document.body.dataset.state = value;
-    if (value !== 'loading' && value !== 'buffering') clearInterval(loadingTimer);
+    state.buffering = value === 'buffering' || value === 'loading';
+    document.body.dataset.state = value === 'buffering' && !sawFirstFrame ? 'loading' : value;
+    if (value !== 'loading') clearInterval(loadingTimer);
     const paused = value === 'paused';
     const icon = paused || value === 'ready' ? '#i-play' : '#i-pause';
     $('playPauseIcon').setAttribute('href', icon);
@@ -192,11 +211,12 @@
 
   function updateOptionalControls() {
     document.body.classList.toggle('live', state.mode === 'live');
-    $('next').hidden = !state.hasNext;
-    $('episodes').hidden = !state.episodeChoices.length;
-    $('quality').hidden = !state.qualityChoices;
-    $('audio').hidden = state.audioTracks.length < 2;
-    $('guide').hidden = state.mode !== 'live';
+    $('next').hidden = state.mode === 'live' || !state.hasNext;
+    $('episodes').hidden = state.mode === 'live' || !state.episodeChoices.length;
+    $('quality').hidden = state.mode === 'live' || !state.qualityChoices;
+    $('audio').hidden = state.mode === 'live' || state.audioTracks.length < 2;
+    $('captions').hidden = state.mode === 'live';
+    $('guide').hidden = false;
     $('favorite').hidden = state.mode !== 'live';
     $('favorite').classList.toggle('favorite-on', state.favorite);
     $('favorite').setAttribute('aria-label', state.favorite ? 'Remove channel from favorites' : 'Add channel to favorites');
@@ -233,6 +253,10 @@
     state.qualityChoices = bool(session.qualityChoices ?? session.hasQualityChoices, state.qualityChoices);
     if (Array.isArray(session.subtitleChoices)) state.subtitleChoices = session.subtitleChoices;
     if (Array.isArray(session.episodeChoices)) state.episodeChoices = session.episodeChoices;
+    if (state.mode === 'live') {
+      state.episodeChoices = [];
+      state.hasNext = false;
+    }
     if (session.episodeFocusIndex !== undefined) {
       state.episodeFocusIndex = Math.max(0, finite(session.episodeFocusIndex));
     }
@@ -287,7 +311,7 @@
     } else if (kind === 'duration') {
       state.duration = Math.max(0, finite(data.seconds ?? data.duration, state.duration));
     } else if (kind === 'episode_choices') {
-      state.episodeChoices = Array.isArray(data.episodes) ? data.episodes : [];
+      state.episodeChoices = state.mode === 'live' ? [] : (Array.isArray(data.episodes) ? data.episodes : []);
       state.episodeFocusIndex = Math.max(0, finite(data.focusIndex));
     } else if (kind === 'audio_tracks') {
       state.audioTracks = Array.isArray(data.tracks) ? data.tracks : [];
@@ -332,11 +356,16 @@
     switch (type) {
       case 'loading':
       case 'session':
-        setPlayback('loading');
+        if (state.playback !== 'loading') {
+          sawFirstFrame = false;
+          loadingStarted = false;
+          setPlayback('loading');
+        }
         beginLoadingStages();
         break;
       case 'state_snapshot':
-        if (data.buffering) setPlayback('buffering');
+        if (data.buffering && !sawFirstFrame) setPlayback('loading');
+        else if (data.buffering && sawFirstFrame) setPlayback('buffering');
         else if (data.playing) setPlayback('playing');
         else setPlayback('paused');
         break;
@@ -370,7 +399,9 @@
         announce('Playback stopped');
         break;
       case 'closed':
-        setPlayback('loading');
+        sawFirstFrame = false;
+        loadingStarted = false;
+        setPlayback('idle');
         break;
       case 'live':
       case 'live_ready':
@@ -622,10 +653,19 @@
 
   function requestClose() { closePanels(); send('close'); }
 
+  function expandGuidePip() {
+    nativeInvoke('windows_player_close_guide', {}).catch(() => showToast('Could not return to full screen.'));
+  }
+
   function bindControls() {
     $('surface').addEventListener('dblclick', toggleFullscreen);
     $('surface').addEventListener('click', (event) => {
+      if (document.body.classList.contains('guide-pip')) { expandGuidePip(); return; }
       if (event.target === $('surface')) showControls(false);
+    });
+    $('pipExpand').addEventListener('click', (event) => {
+      event.stopPropagation();
+      expandGuidePip();
     });
     $('centerPlay').addEventListener('click', togglePlayback);
     $('playPause').addEventListener('click', togglePlayback);
@@ -637,12 +677,21 @@
     $('quality').addEventListener('click', openQualityMenu);
     $('episodes').addEventListener('click', openEpisodeMenu);
     $('details').addEventListener('click', openStats);
-    $('guide').addEventListener('click', () => nativeInvoke('windows_player_open_guide', {}).catch(() => showToast('The TV guide could not be opened.')));
+    $('guide').addEventListener('click', () => {
+      closePanels();
+      nativeInvoke('windows_player_open_guide', {}).catch(() => showToast('The TV guide could not be opened.'));
+    });
     $('favorite').addEventListener('click', () => send('favorite', { on: !state.favorite }));
     $('fullscreen').addEventListener('click', toggleFullscreen);
     $('upNextPlay').addEventListener('click', () => send('next'));
     $('upNextDismiss').addEventListener('click', () => send('up_next_dismiss'));
-    $('retry').addEventListener('click', () => { setPlayback('loading'); beginLoadingStages(); send('retry'); });
+    $('retry').addEventListener('click', () => {
+      sawFirstFrame = false;
+      loadingStarted = false;
+      setPlayback('loading');
+      beginLoadingStages();
+      send('retry');
+    });
     $('errorClose').addEventListener('click', requestClose);
     $('windowClose').addEventListener('click', requestClose);
     $('menuClose').addEventListener('click', closePanels);
@@ -742,7 +791,7 @@
     else if (key === 'c') { event.preventDefault(); openSubtitleMenu(); }
     else if (key === 'i') { event.preventDefault(); openStats(); }
     else if (key === 'n' && state.hasNext) { event.preventDefault(); send('next'); }
-    else if (key === 'g' && state.mode === 'live') { event.preventDefault(); $('guide').click(); }
+    else if (key === 'g') { event.preventDefault(); $('guide').click(); }
     else if (state.mode === 'live' && (event.key === 'PageUp' || key === 'mediaprevioustrack')) {
       event.preventDefault(); send('live_zap', { direction: -1 });
     }

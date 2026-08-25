@@ -340,6 +340,7 @@ public class MainActivity extends Activity {
     private long nativeLiveUnhealthySinceMs;
     private long nativeLiveLastRecoveryMs;
     private long nativeVideoUnhealthySinceMs;
+    private long nativeResumeGraceUntilMs;
     private boolean nativeVideoStarted;
     private boolean nativeVideoMemoryTrimmedDuringBuffer;
     private boolean nativeVideoErrorNotified;
@@ -354,7 +355,8 @@ public class MainActivity extends Activity {
     private static final long NATIVE_VIDEO_HEAVY_STARTUP_STALL_MS = 12000L;
     private static final long NATIVE_VIDEO_REBUFFER_TRIM_MS = 15000L;
     private static final long NATIVE_VIDEO_REBUFFER_RECOVERY_MS = 30000L;
-    private static final long NATIVE_VIDEO_HEAVY_REBUFFER_RECOVERY_MS = 45000L;
+    private static final long NATIVE_VIDEO_HEAVY_REBUFFER_RECOVERY_MS = 90000L;
+    private static final long NATIVE_VIDEO_RESUME_GRACE_MS = 25000L;
     private static final long NATIVE_LIVE_STALL_RECOVERY_MS = 45000L;
     private static final long NATIVE_LIVE_STARTUP_STALL_RECOVERY_MS = 12000L;
     private static final long NATIVE_LIVE_RECOVERY_COOLDOWN_MS = 15000L;
@@ -1467,6 +1469,17 @@ public class MainActivity extends Activity {
             public void playVideo(String json) {
                 if (!trustedBridgeOrigin()) return;
                 runOnUiThread(() -> startNativeVideo(json));
+            }
+
+            @android.webkit.JavascriptInterface
+            public void toggleVideo() {
+                if (!trustedBridgeOrigin()) return;
+                runOnUiThread(() -> {
+                    if (nativePlayer == null || !nativePlayerOpen()) return;
+                    if (nativePlayer.isPlaying()) nativePlayer.pause();
+                    else nativePlayer.play();
+                    updateNativeChrome();
+                });
             }
 
             // Web OSD / nudgeSeek land here. Remux/transcode still remount via playVideo;
@@ -2825,7 +2838,13 @@ public class MainActivity extends Activity {
             j.put("mkv", true); // ExoPlayer's Matroska extractor owns container support.
             j.put("mp4", true);
             j.put("h264", nativeDecoderAvailable("video/avc"));
-            j.put("hevc", nativeDecoderAvailable("video/hevc"));
+            // Software HEVC "supports" 4K and then melts a budget box. Same rule as AV1:
+            // conservative devices only claim HEVC when a hardware decoder exists.
+            // The TV emulator also reports a fake hardware HEVC that cannot do 4K.
+            boolean hevc = !nativeIsEmulatorDevice() && (conservative
+                    ? nativeHardwareDecoderAvailable("video/hevc")
+                    : nativeDecoderAvailable("video/hevc"));
+            j.put("hevc", hevc);
             j.put("dovi", nativeDecoderAvailable("video/dolby-vision"));
             j.put("av1", nativeHardwareDecoderAvailable("video/av01")); // HW-only: software AV1 can't do 4K on budget boxes
             j.put("vp9", nativeDecoderAvailable("video/x-vnd.on2.vp9"));
@@ -2878,11 +2897,21 @@ public class MainActivity extends Activity {
         return s.contains("onn") || s.contains("walmart");
     }
 
+    private boolean nativeIsEmulatorDevice() {
+        String s = ((Build.FINGERPRINT == null ? "" : Build.FINGERPRINT) + " "
+                + (Build.MODEL == null ? "" : Build.MODEL) + " "
+                + (Build.PRODUCT == null ? "" : Build.PRODUCT) + " "
+                + (Build.HARDWARE == null ? "" : Build.HARDWARE) + " "
+                + (Build.DEVICE == null ? "" : Build.DEVICE)).toLowerCase(Locale.US);
+        return s.contains("generic") || s.contains("emulator") || s.contains("goldfish")
+                || s.contains("ranchu") || s.contains("sdk_gphone") || s.contains("sdk_google")
+                || s.contains("android sdk");
+    }
+
     private boolean nativeConservativePlaybackDevice() {
-        if (nativeIsShieldDevice()) return false;
-        if (nativeIsOnnDevice()) return true;
-        int ram = nativeTotalRamMb();
-        return ram > 0 && ram <= 2600;
+        // Shield is the only box we size 4K RAM for. Onn, Fire, emulator, and
+        // generic 3-8GB sticks all freeze if they get a 384MB 4K buffer plus WebView.
+        return !nativeIsShieldDevice();
     }
 
     @SuppressLint("InlinedApi")
@@ -4367,6 +4396,7 @@ public class MainActivity extends Activity {
             nativeLiveLastRecoveryMs = 0L;
             nativeLiveStarted = false;
             nativeVideoUnhealthySinceMs = 0L;
+            nativeResumeGraceUntilMs = 0L;
             nativeVideoMemoryTrimmedDuringBuffer = false;
             nativeVideoErrorNotified = false;
             // Reset the reconnect budget only for a genuinely NEW mount. A quiet-seek reuse re-mount IS
@@ -4505,6 +4535,17 @@ public class MainActivity extends Activity {
                         // Always report the real clock. Forcing pos=duration after PLAYING made a
                         // mid-title remux ENDED (pause/resume) look like the movie was finished.
                         long pos = nativePosSeconds();
+                        boolean midTitle = nativeVideoStarted
+                                && (dur <= 0 || pos + 20 < Math.max(20L, (long) (dur * 0.85)));
+                        if (midTitle && nativeAllowReconnectResume()) {
+                            long resumeAt = nativeResumePositionMs();
+                            Log.w(TAG, "Native VOD ENDED mid-title at " + pos + "s/" + dur
+                                    + "s; remounting the same source at " + resumeAt + "ms");
+                            nativeLastAutoResumeSeekMs = SystemClock.elapsedRealtime();
+                            nativeBackwardTicks = 0;
+                            requestNativeVideoSeek(resumeAt, true);
+                            return;
+                        }
                         // Keep the final frame/native Up Next layer visible until JS either starts the
                         // next episode or closes a truly-finished title. Closing first exposes the
                         // show-details WebView and used to restart a second 10-second countdown there.
@@ -4532,6 +4573,14 @@ public class MainActivity extends Activity {
                 @Override public void onTracksChanged(Tracks tracks) {
                     if (listenerPlayer != nativePlayer || listenerPlaybackToken != nativePlaybackToken) return;
                     updateNativeChrome();
+                }
+
+                @Override public void onPlayWhenReadyChanged(boolean playWhenReady, int reason) {
+                    if (listenerPlayer != nativePlayer || listenerPlaybackToken != nativePlaybackToken) return;
+                    if ("video".equals(nativeMode) && playWhenReady && nativeVideoStarted) {
+                        nativeVideoUnhealthySinceMs = 0L;
+                        nativeResumeGraceUntilMs = SystemClock.elapsedRealtime() + NATIVE_VIDEO_RESUME_GRACE_MS;
+                    }
                 }
 
                 @Override public void onIsPlayingChanged(boolean isPlaying) {
@@ -7551,6 +7600,7 @@ public class MainActivity extends Activity {
                 return;
             }
             long now = SystemClock.elapsedRealtime();
+            if (nativeResumeGraceUntilMs > 0L && now < nativeResumeGraceUntilMs) return;
             if (nativeVideoUnhealthySinceMs <= 0L) {
                 nativeVideoUnhealthySinceMs = now;
                 return;
