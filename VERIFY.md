@@ -126,6 +126,22 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-25, v3.1.9 ship — stall stays on the file, 4K stop frees 1080 Play:
+
+- Version contract: `package.json` 3.1.9; Android `versionName` 3.1.9 /
+  `versionCode` 354; Windows client package/Tauri/Cargo 3.1.9.
+- A wifi/throttle stall retries the same NZB. Only health `blocked` or a
+  Sources pick changes release.
+- Stop after 4K no longer keeps that mount in the 120s viewer grace.
+  Hop evicts. Back-to-details parks it (no 4K sockets). 1080 Play drops
+  the leftover 4K warm mount. A provider 502 shrinks the pool instead of
+  opening more sockets.
+- `npm.cmd run verify:full` on `emulator-5554` (TV): focused IPTV/P9 50,
+  engine 42, pipeline 45, player 8, security 25, P11 31; full
+  Node suite **630/630**; isolated `/api/server` 3.1.9; household
+  VOD/IPTV/overlapping Play; Android ExoPlayer stress `ok: true`.
+  Windows GPU not run.
+
 2026-08-25, v3.1.8 ship — pause/resume keeps the same ExoPlayer:
 
 - Version contract: `package.json` 3.1.8; Android `versionName` 3.1.8 /

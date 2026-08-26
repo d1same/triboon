@@ -162,6 +162,16 @@ Rules:
 - cancelled readers must remove queued read-ahead immediately; a running BODY
   with no remaining reader is DRAINED, not killed (see below).
 
+**4K stop then 1080 Play (and the reverse).** An explicit `/api/play/stop` or hop
+must not keep the old stream in the 120s "still watching" grace. That grace is
+for pause/seek on a live session. After stop, either evict the mount or park it
+as prepared-only (Back on details): zero playback touch, no 4K read-ahead, no
+active-viewer share. A same-title quality change also drops the other quality's
+warm mount. Without this, leftover 4K sockets 502 the next 1080 Play and cut
+Sources fan-out in half. A live provider `502 too many connections` also shrinks
+the pool to the sockets that actually opened and halves per-stream windows for
+60s instead of opening more.
+
 **Abort drain (connection preservation on pause/skip).** NNTP has no command
 cancel: the only true abort of an in-flight BODY is destroying the connection,
 which costs TCP+TLS+AUTH to rebuild plus the discarded partial transfer. Segment
@@ -319,11 +329,11 @@ Web and Android VOD treat readiness and rendered playback separately. A startup
 that produces no first frame is bounded at 10/18 seconds on web and 7/12 seconds
 on Android for normal/heavy VOD. After playback has genuinely started, no
 meaningful position progress for 30/45 seconds triggers same-source recovery.
-That first recovery keeps the selected release, playback kind, and current
-timestamp so a temporary buffer drain does not change sources. A confirmed
-`blocked` live health verdict skips the media timeout; a second sustained stall
-advances to the next ranked release at the same timestamp. It never advances the
-episode. Playback/position progress, seek, replacement, and close cancel pending
+That recovery keeps the selected release, playback kind, and current
+timestamp so a temporary buffer drain, wifi hitch, or throttle stall does not
+change sources. A confirmed `blocked` live health verdict skips the media
+timeout and advances to the next ranked release at the same timestamp. It never
+advances the episode. Playback/position progress, seek, replacement, and close cancel pending
 watchdogs, and a server-session `404` re-mounts the same title instead.
 
 Playback windows are applied when a mount is selected and rebalanced again when

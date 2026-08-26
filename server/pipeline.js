@@ -878,13 +878,47 @@ class Pipeline {
     return rec || null;
   }
 
+  _titleIdentity(params = {}) {
+    return [params.q, params.imdbid, params.tvdbid, params.season, params.ep]
+      .map((v) => String(v || '').trim().toLowerCase()).join('|');
+  }
+
   _rememberTitlePrepared(params, policy, vf, candidate) {
     if (!vf || !candidate) return;
-    const rec = { vf, candidate, at: Date.now() };
+    const rec = { vf, candidate, at: Date.now(), titleId: this._titleIdentity(params) };
     this.titlePreparedReady.set(this._prepareJobKey(params, policy), rec);
     if (params.imdbid || params.tvdbid) {
       this.titlePreparedReady.set(this._prepareJobKey(params, policy, { ignoreCatalogIds: true }), rec);
     }
+  }
+
+  // 4K stop → 1080 Play (or the reverse) must drop the other quality's warm mount.
+  // Same title, different policy. Leaving both live splits the pool and 502s the new Play.
+  forgetMismatchedPrepared(params, policy = {}) {
+    const keepKey = this._prepareJobKey(params, policy);
+    const titleId = this._titleIdentity(params);
+    if (!titleId || titleId === '||||') return 0;
+    const keepRec = this.titlePreparedReady.get(keepKey);
+    const keepId = keepRec && keepRec.vf && keepRec.vf.id;
+    let dropped = 0;
+    for (const [key, rec] of [...this.titlePreparedReady]) {
+      if (key === keepKey) continue;
+      if ((rec && rec.titleId) !== titleId) continue;
+      this.titlePreparedReady.delete(key);
+      const vf = rec && rec.vf;
+      if (!vf || vf.id === keepId) continue;
+      let held = false;
+      for (const s of this.sessions.values()) {
+        if (s && !s.released && s.currentMountId === vf.id) { held = true; break; }
+      }
+      if (held) continue;
+      try { this.cancelPlaybackWarmups(vf); } catch {}
+      this.mounts.delete(vf.id);
+      for (const [url, id] of this.mountByUrl) if (id === vf.id) this.mountByUrl.delete(url);
+      dropped++;
+    }
+    if (dropped) this.rebalancePlaybackWindows();
+    return dropped;
   }
 
   _standbyKeys(params, policy = {}) {
@@ -1048,13 +1082,26 @@ class Pipeline {
     return pending;
   }
 
+  _streamConnCap(big, perf = {}) {
+    const configured = big ? (perf.maxConnPerStream4k || 20) : (perf.maxConnPerStream1080 || 12);
+    let pressure = 1;
+    try {
+      const pool = typeof this.pool === 'function' ? this.pool() : this.pool;
+      const providers = pool && pool.providers;
+      if (Array.isArray(providers) && providers.some((p) => p && p.capHitAt && Date.now() - p.capHitAt < 60000)) {
+        pressure = 0.5;
+      }
+    } catch {}
+    return Math.max(4, Math.floor(configured * pressure));
+  }
+
   _playbackWindowFor(vf, activeMounts, perf = this.performance() || {}) {
     const big = (vf.size || 0) > 4e9;
     const activeCount = Math.max(1, activeMounts || 1);
     const usable = perf.usableConnections || 0;
     const reserve = perf.reserveConnections || 0;
     const perStreamBudget = usable > reserve ? Math.max(4, Math.floor((usable - reserve) / activeCount)) : Infinity;
-    const configuredWindow = big ? (perf.maxConnPerStream4k || 20) : (perf.maxConnPerStream1080 || 12);
+    const configuredWindow = this._streamConnCap(big, perf);
     const readAhead = Math.max(4, Math.min(configuredWindow, perStreamBudget));
     const borrowedReserve = reserve > 2 ? Math.floor(reserve / 2) : 0;
     const adaptiveBudget = usable > reserve
@@ -2019,6 +2066,7 @@ class Pipeline {
   async play(params, policy = {}, mountOpts = {}) {
     const _we = wantedEpisodeOf(params);
     if (_we) mountOpts = { ...mountOpts, wantedEpisode: _we }; // so a season pack mounts the wanted episode
+    this.forgetMismatchedPrepared(params, policy);
     const ready = !((params.pickKey || params.pick) && !params.pinnedResume)
       && this._findTitlePreparedReady(params, policy);
     if (ready) {
@@ -2156,6 +2204,7 @@ class Pipeline {
   async prepare(params, policy = {}, mountOpts = {}) {
     const _we = wantedEpisodeOf(params);
     if (_we) mountOpts = { ...mountOpts, wantedEpisode: _we }; // prewarm the SAME episode file play() will mount
+    this.forgetMismatchedPrepared(params, policy);
     const key = this._prepareJobKey(params, policy);
     let existing = this.titlePrepareInflight.get(key);
     if (!existing && (params.imdbid || params.tvdbid)) {

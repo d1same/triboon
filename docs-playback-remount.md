@@ -11,7 +11,7 @@ Example: you pause The Rookie for a minute, press Play, and sit on Preparing. Th
 | Instant Play after pause | `nativePlayer.play()` | Yes. Required. |
 | Short buffer, same file | In-place retry or quiet same-URL remount | Yes, after a real drop while playing |
 | ~30s Preparing, same file | `releaseNativePlayer` + new `ExoPlayer.Builder` | No, except first Play or a new episode |
-| "Finding source" / new filename | `autoAdvance` / new NZB | Only if the current release is dead or failed 3 times in 2 minutes |
+| "Finding source" / new filename | `autoAdvance` / new NZB | Only if health says the current release is dead, or the user picks Sources |
 | Sources empty / "too many attempts" | 60s route throttle | Different bug. Wait one minute. |
 
 ## Triggers that must NOT rebuild ExoPlayer
@@ -38,8 +38,7 @@ Reuse the existing ExoPlayer (`reuseQuietVideo` / same playback token + same URL
 
 ## Triggers that MAY change source
 
-- Health `blocked`.
-- Three same-source recoveries in two minutes.
+- Health `blocked` (missing usenet articles, not a slow pipe).
 - User picked another row in Sources.
 
 Never change the episode. Never search indexers again for a pause.

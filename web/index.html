@@ -13338,17 +13338,14 @@ function recoverSamePlaybackSource(reason = '') {
   if (p.usingNative && p.nativePaused && !sourceDead && !decoderFailure) return false;
   if (decoderFailure && p.usingNative && (clientCaps() || {}).lowPower
       && tryNextNativeKind(kind, at, reason || 'playback failed')) return true;
-  // A wifi blip is not a new movie. Retry the SAME file quietly first. A 4K remux
-  // can stall twice on pause/resume without the file being dead. Only a dead source
-  // or three failures in two minutes swap to another release.
-  const sameBurst = p._sameSourceRecoveryKey === key && now - (p._sameSourceRecoveryAt || 0) < 120000;
-  const recoveryCount = sameBurst ? (p._sameSourceRecoveryCount || 0) + 1 : 1;
+  // A wifi blip or throttle stall is not a new movie. Retry the SAME file.
+  // Only a dead source (health blocked / missing articles) swaps NZB. Counting
+  // stalls toward a hunt made a bad pipe look like "Finding source."
   p._sameSourceRecoveryKey = key;
   p._sameSourceRecoveryAt = now;
-  p._sameSourceRecoveryCount = recoveryCount;
-  if (sourceDead || recoveryCount >= 3) {
+  if (sourceDead) {
     if (!p._sourceAdvancePending) {
-      autoAdvance({ allowMidstreamAdvance: true, nativePreferred: !!p.usingNative, reason: reason || 'repeated playback stall' });
+      autoAdvance({ allowMidstreamAdvance: true, nativePreferred: !!p.usingNative, reason: reason || 'source health blocked' });
     }
     return true;
   }

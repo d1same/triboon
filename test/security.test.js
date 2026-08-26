@@ -3321,6 +3321,41 @@ test('hop: releasing a play session evicts its idle mount', () => {
   assert.ok(!srv.pipeline.sessions.has('hop-sess'));
 });
 
+test('hop: a just-watched 4K mount is evicted even inside the 120s playback grace', () => {
+  const now = Date.now();
+  const vf = {
+    id: 'hop-hot', _touched: now, _playbackTouched: now, _activeStreamReads: 0,
+    name: '4K', size: 2e10, streamable: true, tags: [],
+  };
+  srv.mounts.set('hop-hot', vf);
+  srv.pipeline.sessions.set('hop-hot-s', {
+    id: 'hop-hot-s', uid: 'user-a', createdAt: now, currentMountId: 'hop-hot',
+  });
+  const r = srv.releasePlaySession(srv.pipeline.sessions.get('hop-hot-s'), 'user-a');
+  assert.ok(r.ok && r.evicted, 'stop after 4K must free sockets for a 1080 Play');
+  assert.ok(!srv.mounts.has('hop-hot'));
+});
+
+test('back to details parks a watched mount so it is not an active 4K viewer', () => {
+  const now = Date.now();
+  const { mountHasActivePlayback } = require('../server/pipeline');
+  const vf = {
+    id: 'park-4k', _touched: now, _playbackTouched: now, _activeStreamReads: 1,
+    name: '4K', size: 2e10, streamable: true, tags: [], _preparedOnly: false,
+  };
+  srv.mounts.set('park-4k', vf);
+  srv.pipeline.titlePreparedReady.set('park-key', { vf, at: now, candidate: { name: '4K' }, titleId: 'from||' });
+  srv.pipeline.sessions.set('park-s', { id: 'park-s', uid: 'user-a', createdAt: now, currentMountId: 'park-4k' });
+  const r = srv.releasePlaySession(srv.pipeline.sessions.get('park-s'), 'user-a', { keepPrepared: true });
+  assert.ok(r.ok && !r.evicted, 'Back on details keeps the warm file');
+  assert.ok(srv.mounts.has('park-4k'));
+  assert.strictEqual(vf._preparedOnly, true);
+  assert.strictEqual(vf._playbackTouched, 0);
+  assert.strictEqual(mountHasActivePlayback(vf, now), false, 'parked 4K must not keep a 4K connection window');
+  srv.mounts.delete('park-4k');
+  srv.pipeline.titlePreparedReady.delete('park-key');
+});
+
 test('new play releases other sessions for the same user', () => {
   const now = Date.now();
   const mk = (id) => ({ id, _touched: now, name: id, size: 1, streamable: true, tags: [] });

@@ -3617,11 +3617,28 @@ function forgetPreparedMount(vf) {
 }
 // Leave/hop must free the previous title. A 12-hour session used to keep every smash-Play
 // mount alive, so the next cold Play ran out of provider connections.
+// After an explicit stop, keep the VFS bytes for a same-quality remount but drop the
+// 120s "still watching" grace. A parked 4K mount must not keep 4K sockets, or a 1080
+// Play right after stop gets 502 too-many-connections and Sources crawls.
+function parkMountForPrepare(vf) {
+  if (!vf) return;
+  vf._preparedOnly = true;
+  vf._activeStreamReads = 0;
+  vf._playbackTouched = 0;
+  try { pipeline.cancelPlaybackWarmups(vf); } catch {}
+  try { pipeline.rebalancePreparedWindows(); } catch {}
+  try { pipeline.rebalancePlaybackWindows(); } catch {}
+}
 function evictAbandonedMount(vf, now = Date.now(), opts = {}) {
   if (!vf || !vf.id) return false;
   if (sessionProtectedMountIds(now).has(vf.id)) return false;
-  if (mountHasActivePlayback(vf, now)) return false;
-  if (opts.keepPrepared && mountIsPreparedReady(vf, now)) return false;
+  if (opts.keepPrepared) {
+    parkMountForPrepare(vf);
+    return false;
+  }
+  // Leave/hop/stop is a released session. The 120s grace is for pause/seek on a LIVE
+  // session only. Honoring it after stop left the old 4K window holding the pool.
+  if (!opts.fromSessionRelease && mountHasActivePlayback(vf, now)) return false;
   forgetPreparedMount(vf);
   releaseMountResources(vf);
   mounts.delete(vf.id);
@@ -3634,7 +3651,7 @@ function releasePlaySession(session, uid, opts = {}) {
   session.released = true;
   const vf = session.currentMountId ? mounts.get(session.currentMountId) : null;
   pipeline.sessions.delete(session.id);
-  const evicted = evictAbandonedMount(vf, Date.now(), opts);
+  const evicted = evictAbandonedMount(vf, Date.now(), { ...opts, fromSessionRelease: true });
   if (evicted) pipeline.rebalancePreparedWindows();
   return { ok: true, evicted };
 }

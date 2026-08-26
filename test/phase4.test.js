@@ -2527,14 +2527,14 @@ test('VOD remount playbook: pause, seek, stall, and dead source stay on distinct
   const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'MainActivity.java'), 'utf8');
   const playbook = fs.readFileSync(path.join(__dirname, '..', 'docs-playback-remount.md'), 'utf8');
   assert.match(playbook, /must NOT rebuild ExoPlayer/);
-  assert.match(playbook, /Three same-source recoveries in two minutes/);
+  assert.match(playbook, /Health `blocked` \(missing usenet articles, not a slow pipe\)/);
   assert.match(playbook, /emulator-5554/);
   assert.match(android, /private void retryNativeDirectInPlace\(long displayMs\) \{[\s\S]+nativePlayer\.seekTo[\s\S]+nativePlayer\.prepare\(\);/,
     'direct retry must stay on the live ExoPlayer');
   assert.match(ui, /function recoverSamePlaybackSource\(reason = ''\) \{[\s\S]+tryNativeVideoPlayer\(kind, at, \{ quietSeek: true \}\)/,
     'a real stall still remounts the same file quietly, never a new search');
-  assert.match(ui, /if \(sourceDead \|\| recoveryCount >= 3\) \{[\s\S]+autoAdvance\(\{ allowMidstreamAdvance: true/,
-    'a new NZB is last-resort only');
+  assert.match(ui, /if \(sourceDead\) \{[\s\S]+autoAdvance\(\{ allowMidstreamAdvance: true/,
+    'a new NZB is only when health says the release is dead');
 });
 
 test('async page loaders ignore stale shared-grid results and finish on a usable surface', () => {
@@ -3623,8 +3623,10 @@ test('Android native player: direct source and native chrome stay out of the web
   // When same-source resume fails because the mount is gone (server restarted/updated/swept), re-mount
   // the SAME title on a fresh mount and resume at the current position, with backoff to ride out the
   // restart — instead of giving up. Failure-path only, so healthy playback is untouched.
-  assert.match(ui, /recoveryCount >= 3[\s\S]+autoAdvance\(\{ allowMidstreamAdvance: true, nativePreferred: !!p\.usingNative, reason/,
-    'a third sustained same-source failure should advance to a different release instead of looping for minutes');
+  assert.match(ui, /if \(sourceDead\) \{[\s\S]+autoAdvance\(\{ allowMidstreamAdvance: true, nativePreferred: !!p\.usingNative, reason/,
+    'a buffer/wifi stall must stay on the same file; only a dead-source reason may change NZB');
+  assert.doesNotMatch(ui, /recoveryCount >= 3/,
+    'stall retries must not count toward a new source hunt');
   const sourceRecoveryBlock = ui.slice(ui.indexOf('function recoverSamePlaybackSource'), ui.indexOf('function resetVlcPanel'));
   assert.doesNotMatch(sourceRecoveryBlock, /playNextEpisode\(/,
     'source recovery must never enter the next-episode path');

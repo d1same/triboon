@@ -3167,6 +3167,40 @@ test('pipeline: prepared-only mounts keep a bounded speculative window without c
   assert.strictEqual(prepared.readAhead, 8);
 });
 
+test('pipeline: 4K stop then 1080 play drops the other-quality prepared mount', () => {
+  const mounts = new Map();
+  const pipeline = new Pipeline({
+    pool: () => null,
+    verdicts: { get: () => null, set: () => {} },
+    mounts,
+  });
+  const uhd = { id: 'uhd-prep', size: 2e10, streamable: true, tags: [] };
+  const hd = { id: 'hd-prep', size: 3e9, streamable: true, tags: [] };
+  mounts.set(uhd.id, uhd);
+  mounts.set(hd.id, hd);
+  const params = { q: 'From', imdbid: 'tt1' };
+  pipeline._rememberTitlePrepared(params, { exactResolutionRank: 4 }, uhd, { name: 'From.2160p', pickKey: 'u' });
+  pipeline._rememberTitlePrepared(params, { exactResolutionRank: 3 }, hd, { name: 'From.1080p', pickKey: 'h' });
+  const dropped = pipeline.forgetMismatchedPrepared(params, { exactResolutionRank: 3 });
+  assert.ok(dropped >= 1, 'the leftover 4K warm mount must go');
+  assert.ok(!mounts.has('uhd-prep'));
+  assert.ok(mounts.has('hd-prep'));
+});
+
+test('pipeline: provider 502 pressure shrinks the 4K connection window', () => {
+  const pipeline = new Pipeline({
+    pool: () => ({ providers: [{ capHitAt: Date.now() }] }),
+    verdicts: { get: () => null, set: () => {} },
+    mounts: new Map(),
+  });
+  const win = pipeline._playbackWindowFor(
+    { size: 2e10 },
+    1,
+    { usableConnections: 40, reserveConnections: 4, maxConnPerStream4k: 20, maxConnPerStream1080: 12 },
+  );
+  assert.ok(win.readAhead <= 10, 'a 502 cap hit must give the next Play fewer sockets, not more');
+});
+
 test('pipeline: many prepared 4K mounts share one RAM-derived speculative cache pool', () => {
   const now = Date.now();
   const mounts = new Map();

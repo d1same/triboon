@@ -751,6 +751,22 @@ test('nntp: a draining transfer that outlives its grace is still killed — drai
 // per-article RTT; responses map back through the connection's FIFO waiters. High lanes
 // (startup/seek/playback/health) keep the one-command-per-connection contract.
 
+test('nntp: 502 too many connections stops opening more sockets', async () => {
+  const { NntpConnection } = require('../server/nntp');
+  const orig = NntpConnection.prototype.connect;
+  NntpConnection.prototype.connect = async () => { throw new Error('502 too many connections'); };
+  try {
+    const pool = new ProviderPool({ host: 'x' }, 8);
+    pool.conns.push({ alive: true, lastUsed: Date.now(), close() {} });
+    pool._ensure(8);
+    await new Promise((r) => setTimeout(r, 30));
+    assert.ok(pool.capHitAt > 0, 'a provider 502 must be remembered');
+    assert.strictEqual(pool.size, 1, 'do not open more sockets than the provider just allowed');
+  } finally {
+    NntpConnection.prototype.connect = orig;
+  }
+});
+
 test('nntp pipelining: OFF by default — a second low-lane task waits for a free connection', async () => {
   const pool = new ProviderPool({}, 1);
   pool.conns.push({ alive: true, lastUsed: Date.now(), close() {} });

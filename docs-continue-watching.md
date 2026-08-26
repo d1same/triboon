@@ -102,8 +102,8 @@ flowchart LR
 - Web and native playback re-check the live mount after opening. A confirmed
   blocked source advances immediately to the next ranked release.
 - Startup without a real first frame uses the bounded player fallback ladder.
-  An established playback stall retries the same source/kind/timestamp once;
-  a second sustained stall changes release, never episode.
+  An established playback stall retries the same source/kind/timestamp.
+  Only a blocked health verdict changes release, never episode.
 - Source replacement retains the requested Continue Watching point even when
   it occurs before the native player reports its first position callback.
 

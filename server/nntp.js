@@ -32,6 +32,10 @@ function isAbortError(e) {
   return e && (e.code === 'ABORT_ERR' || e.name === 'AbortError');
 }
 
+function isTooManyConnections(e) {
+  return /too many connection|\b502\b/i.test(String((e && e.message) || e));
+}
+
 function signalAborted(signal) {
   return !!(signal && signal.aborted);
 }
@@ -276,7 +280,9 @@ class NntpConnection {
 class ProviderPool {
   constructor(opts, size = 8) {
     this.opts = opts;
+    this.configuredSize = size;
     this.size = size;
+    this.capHitAt = 0;
     this.conns = [];
     this.queue = []; // pending tasks { fn, resolve, reject, priority }
     this.busy = new Set();
@@ -297,6 +303,10 @@ class ProviderPool {
 
   _ensure(target = this.size) {
     if (this.closed) return;
+    if (this.capHitAt && Date.now() - this.capHitAt > 60000) {
+      this.size = this.configuredSize;
+      this.capHitAt = 0;
+    }
     if (this.down()) {
       // Half-open probe: the circuit breaker is open, but allow ONE throttled reconnect so a
       // provider that has actually recovered rejoins in seconds instead of waiting out the full
@@ -319,6 +329,10 @@ class ProviderPool {
         this.connecting--;
         this.lastErr = e;
         this.lastConnectFailAt = Date.now();
+        if (isTooManyConnections(e) && this.conns.length > 0) {
+          this.size = this.conns.length;
+          this.capHitAt = Date.now();
+        }
         // If every attempt failed and nothing is live, queued work can never run — fail it.
         if (this.connecting === 0 && this.conns.length === 0 && this.queue.length) {
           const q = this.queue; this.queue = [];
@@ -706,4 +720,4 @@ class NntpPool {
   close() { for (const p of this.providers) p.close(); }
 }
 
-module.exports = { NntpConnection, NntpPool, ProviderPool, ArticleMissCache };
+module.exports = { NntpConnection, NntpPool, ProviderPool, ArticleMissCache, isTooManyConnections };
