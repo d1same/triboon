@@ -305,6 +305,13 @@ class LibraryDb {
       else {
         m = /^tmdb:tv:(\d+):s(\d+)e(\d+)$/i.exec(key);
         if (m) rows = allForEpisode.all(parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10));
+        else {
+          m = /^local:([^:]+):(\d+)$/i.exec(key);
+          if (m && libs.has(String(m[1]))) {
+            const item = this.item(m[1], m[2]);
+            if (item) out[key] = { libId: m[1], item };
+          }
+        }
       }
       const row = rows.find((r) => libs.has(String(r.lib_id)));
       const item = this._parsePayload(row);

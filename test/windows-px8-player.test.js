@@ -179,7 +179,7 @@ test('Windows client: live player chrome matches the Live TV page, not an empty 
   assert.match(webSource, /function windowsDesktopLiveWatchFromGuide\(\) \{[\s\S]+__triboonWindowsBridge === true/,
     'only the Windows catalog bridge leaves the guide after a channel pick');
   assert.match(webSource, /if \(windowsDesktopLiveWatchFromGuide\(\)\) closePlayerGuide\(\);/,
-    'picking a channel from the in-player guide opens the same fullscreen live player as the Live TV page');
+    'picking a channel from the in-player guide opens the same full live player as the Live TV page');
   assert.match(js, /\$\('captions'\)\.hidden = state\.mode === 'live'/,
     'live chrome hides CC like the web Live TV player');
   assert.match(css, /body\.live #captions,[\s\S]+body\.live #audio,[\s\S]+body\.live #quality/,
@@ -191,6 +191,23 @@ test('Windows client: live player chrome matches the Live TV page, not an empty 
   const rust = read('clients/windows-px8/src-tauri/src/player.rs');
   assert.match(rust, /windows_player_play_live[\s\S]+if request\.guide \{[\s\S]+request\.guide = false;[\s\S]+__tvNativeGuideClosed/,
     'a guide channel pick must not start a chrome-less live session');
+});
+
+test('Windows client: VOD fullscreen does not reopen leftover guide PiP', () => {
+  const rust = read('clients/windows-px8/src-tauri/src/player.rs');
+  const js = read('clients/windows-px8/ui/player.js');
+  assert.match(rust, /fn show_player\([\s\S]+clear_guide_pip\(app\);[\s\S]+set_fullscreen\(false\)/,
+    'starting playback clears a leftover Live TV PiP slot and stays windowed');
+  assert.match(rust, /fn toggle_player_fullscreen\([\s\S]+if stored_guide_pip\(app\)\.is_some\(\) \{[\s\S]+set_fullscreen\(true\)/,
+    'the fullscreen button leaves guide PiP into exclusive fullscreen, it does not restore the leftover slot');
+  assert.match(rust, /fn leave_guide_mode\([\s\S]+restore_windowed_player/,
+    'closing the guide returns to a windowed player, not automatic exclusive fullscreen');
+  assert.match(js, /if \(document\.body\.classList\.contains\('guide-pip'\)\) \{\s*expandGuidePip\(\);/,
+    'the fullscreen icon expands guide PiP instead of shrinking the live player');
+  assert.match(js, /function canHideControls\(\) \{[\s\S]+state\.playback === 'ready'/,
+    'ready video hides chrome the same way playing does');
+  assert.match(js, /if \(Math\.abs\(x - lastMouseX\) < 3 && Math\.abs\(y - lastMouseY\) < 3\) return;/,
+    'WebView2 must not keep chrome up with zero-delta mouse events');
 });
 
 test('Windows client: Live TV guide PiP docks to the slot and can return to full screen', () => {
@@ -251,6 +268,7 @@ test('Windows client: native chrome matches the web player loader and transport'
   const html = read('clients/windows-px8/ui/player.html');
   const css = read('clients/windows-px8/ui/player.css');
   const js = read('clients/windows-px8/ui/player.js');
+  const rust = read('clients/windows-px8/src-tauri/src/player.rs');
   assert.match(html, /class="loadSteps"[\s\S]+id="loadingStage"/,
     'startup uses the web load bar, not a spinning ring');
   assert.match(html, /src="triboon.png"/, 'startup shows the Triboon wordmark');
@@ -266,10 +284,28 @@ test('Windows client: native chrome matches the web player loader and transport'
     'mid-play cache pauses must not flash the full-page loader');
   assert.match(css, /\.control\.primary \{ width: 58px; height: 58px; background: rgba\(5,3,9,\.4\)/,
     'play is a dark web-style circle, not a white Windows button');
+  assert.match(js, /PLAYER_LOADING_STAGES = \['Preparing', 'Finding source', 'Mounting', 'Checking health\.\.\.', 'Starting stream'\]/,
+    'Windows startup stages match the web player');
+  assert.match(js, /if \(hot\) \{[\s\S]+setLoadingStage\(2\);[\s\S]+\[500, 1100\][\s\S]+\[650, 1400, 2200, 3000\]/,
+    'Windows uses the same cold and hot stage timing as web');
   assert.match(js, /if \(loadingStarted\) return;/,
     'loading status text does not restart on every session event');
+  assert.match(js, /if \(\(value === 'paused' \|\| value === 'ready'\) && !sawFirstFrame\) return;/,
+    'ready or paused before the first picture must not hide or restart the load lane');
+  assert.match(css, /\.loading \{[^}]*opacity: 0;[^}]*visibility: hidden/,
+    'hiding the loader must not remount the 1.35s lane with display:none');
+  assert.match(css, /animation: loadLane 1\.35s ease-in-out infinite/,
+    'the startup lane uses the same 1.35s sweep as web');
+  assert.match(rust, /struct LoadingPayload \{[\s\S]+playback_token: u64,[\s\S]+hot: bool,/,
+    'Windows inherits the web hot-join flag so a prepared Play does not restart at Finding source');
   assert.match(js, /if \(value === 'buffering' && sawFirstFrame\)/,
     'after the first frame, buffering does not replace the picture with the loader');
+  assert.match(js, /function overlaySourceLine\(\) \{[\s\S]+looksLikeFilename\(state\.source\)/,
+    'native overlay hides .mkv filenames and keeps title plus episode');
+  assert.match(css, /--buffer,0%/,
+    'buffer and played share the same slider track so they stay aligned');
+  assert.match(js, /setProperty\('--buffer'/,
+    'buffer width is painted on the same track as the orange progress');
 });
 
 test('Windows client: About and seek stay on the shared web player contract', () => {

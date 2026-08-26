@@ -2235,7 +2235,7 @@ body.iosPhone #volSlider{display:none}
   #volSlider{display:none}
   #trackMenu{left:12px;right:12px;bottom:84px;width:auto;min-width:0;max-height:calc(100vh - 144px);border-radius:12px}
   #playerStats{left:12px;right:12px;bottom:84px;width:auto;max-height:calc(100vh - 144px);overflow:auto;border-radius:12px}
-  #chBody .chGrid{grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px}
+  #chBody .chGrid{grid-template-columns:repeat(auto-fill,minmax(var(--poster),1fr));gap:10px}
   #grid #chBar{gap:8px}
   #chBar #chSearch{width:100%}
   .card.liveCard .lcl img{max-width:90px}
@@ -2700,7 +2700,7 @@ body:not(.tv):not(.mobileShell) #person{/* cover size comes from --poster, not a
 .chGroupHead .cgChev{color:var(--amber);font-size:13px;width:14px;flex:none}
 .chGroupHead .cgName{font:700 14.5px "Sora";overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chGroupHead .cgCount{margin-left:auto;font:500 11px "JetBrains Mono";color:var(--muted);flex:none}
-.chGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:16px;margin:8px 0 16px}
+.chGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--poster),1fr));gap:16px;margin:8px 0 16px}
 /* TV-style guide (timeline) */
 #chBar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 #chCatsBtn{flex:none;background:var(--btn);border:1px solid rgba(255,255,255,.045);border-radius:12px;
@@ -2765,7 +2765,7 @@ body.tv #grid.liveTvPage #chBar{margin-bottom:0}
   scroll-padding:44px 0 56px;overscroll-behavior:contain;contain:layout paint;padding-bottom:46px}
 .liveGuideShell #guide,.liveGuideShell .guideTimeline{flex:1;min-height:0;height:100%;border-radius:0 16px 16px 0;background:transparent}
 #chBody.liveGuideShell .liveChannelPane{min-width:0;overflow-y:auto;overflow-x:hidden;height:100%;padding:14px 14px 46px;background:rgba(var(--fg),.03);border-radius:0 16px 16px 0;overscroll-behavior:contain}
-#chBody.liveGuideShell .liveChannelPane .chGrid{margin:0;grid-template-columns:repeat(auto-fill,minmax(178px,1fr));gap:14px}
+#chBody.liveGuideShell .liveChannelPane .chGrid{margin:0;grid-template-columns:repeat(auto-fill,minmax(var(--poster),1fr));gap:14px}
 #chBody.liveGuideShell .liveChannelPane .gridMore{margin:12px 0 0}
 body.tv #browse.liveTvBrowse{padding-right:0!important}
 #browse.liveTvBrowse .browseHead{display:none;margin:0}
@@ -2788,7 +2788,7 @@ body.tv .liveGuideShell #guide,body.tv .liveGuideShell .guideTimeline{height:100
   .liveGuideShell .lcat .catCount{font-size:9px}
   .liveGuideShell #guide,.liveGuideShell .guideTimeline{border-radius:0 16px 16px 0}
   #chBody.liveGuideShell .liveChannelPane{border-radius:0 16px 16px 0;padding:10px 10px 46px}
-  #chBody.liveGuideShell .liveChannelPane .chGrid{grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:10px}
+  #chBody.liveGuideShell .liveChannelPane .chGrid{grid-template-columns:repeat(auto-fill,minmax(var(--poster),1fr));gap:10px}
 }
 .gRow{display:flex;border-bottom:1px solid rgba(var(--fg),.045);min-height:58px}
 .gRow:last-child{border-bottom:0}
@@ -3326,7 +3326,7 @@ body.tv #musicBrowse{padding-bottom:0}
 .mTile{min-height:68px;border-radius:8px;padding:0 18px;align-items:center;gap:16px}
 .mTile .mIco{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.08);color:var(--muted);flex:none}
 .mTile .mIco svg{width:21px;height:21px}
-.mTile .mLbl{font:800 18px "Sora";white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mTile .mLbl{font:800 var(--ctMusicSearchTitle) "Sora";white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mCard{border-radius:8px;flex-direction:column;gap:9px;background:transparent;border-color:transparent;scroll-snap-align:start}
 .mCard:hover,.mCard.focus{box-shadow:none}
 .mCard.focusable.focus,.musicRow.focusable.focus,.mArtistHit.focusable.focus{transform:none}
@@ -3346,8 +3346,8 @@ body.tv #musicBrowse{padding-bottom:0}
 .mGrad3{background:linear-gradient(135deg,#241934,#6D3BD6 58%,#FB8B3C)}
 .mGrad4{background:linear-gradient(135deg,#14213D,#C13BD6 60%,#F3EFF7)}
 .mCover.hasImg{background-size:cover;background-position:center;background-repeat:no-repeat}
-.mCard .mLbl{font:800 14.5px "Albert Sans";line-height:1.18;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.mSub{font:600 12.5px "Albert Sans";line-height:1.25;color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.mCard .mLbl{font:800 var(--ctMusicTitle) "Albert Sans";line-height:1.18;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.mSub{font:600 var(--ctMusicMeta) "Albert Sans";line-height:1.25;color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .mPl .mCover{box-shadow:none}
 .mConnect .mCover{background:linear-gradient(135deg,rgba(193,59,214,.88),rgba(251,139,60,.86));box-shadow:none}
 .mConnect .mSub{color:rgba(var(--fg),.86)}
@@ -3555,6 +3555,7 @@ body{
   --ctEpisodeTitle:14px;--ctEpisodeCopy:13px;--ctCalendarTitle:15px;--ctCalendarMeta:12px;
   --ctLiveTitle:12.5px;--ctLiveMeta:10px;--ctLiveNow:12.5px;--ctMusicTitle:15px;--ctMusicMeta:12.5px;
   --ctMusicSearchTitle:15.5px;--ctMusicSearchMeta:13px;
+  --ctSrcTitle:13.5px;--ctSrcName:11.5px;--ctSrcChip:9.5px;
   --ctLineScale:1;
 }
 body.contentTextS{
@@ -3565,6 +3566,7 @@ body.contentTextS{
   --ctEpisodeTitle:13px;--ctEpisodeCopy:12px;--ctCalendarTitle:14px;--ctCalendarMeta:11px;
   --ctLiveTitle:11.5px;--ctLiveMeta:9.2px;--ctLiveNow:11.5px;--ctMusicTitle:14px;--ctMusicMeta:11.5px;
   --ctMusicSearchTitle:14.5px;--ctMusicSearchMeta:12px;
+  --ctSrcTitle:12.5px;--ctSrcName:10.5px;--ctSrcChip:8.8px;
   --ctLineScale:.94;
 }
 body.contentTextL{
@@ -3575,6 +3577,7 @@ body.contentTextL{
   --ctEpisodeTitle:15.5px;--ctEpisodeCopy:14px;--ctCalendarTitle:16.5px;--ctCalendarMeta:13px;
   --ctLiveTitle:14px;--ctLiveMeta:11px;--ctLiveNow:13.5px;--ctMusicTitle:16.5px;--ctMusicMeta:13.5px;
   --ctMusicSearchTitle:17px;--ctMusicSearchMeta:14px;
+  --ctSrcTitle:15px;--ctSrcName:13px;--ctSrcChip:10.5px;
   --ctLineScale:1.12;
 }
 #hero h1{font-size:var(--ctHeroTitle)}
@@ -3602,6 +3605,15 @@ body.contentTextL{
 .musicRow .mA,.musicRow .mD{font-size:var(--ctMusicMeta)}
 .mSearchSongs .musicRow .mT{font-size:var(--ctMusicSearchTitle)}
 .mSearchSongs .musicRow .mA{font-size:var(--ctMusicSearchMeta)}
+.mCard .mLbl{font-size:var(--ctMusicTitle)}
+.mTile .mLbl{font-size:var(--ctMusicSearchTitle)}
+.mCard .mSub,.mSub{font-size:var(--ctMusicMeta)}
+.musicShelfTop h2,.abRowTitle{font-size:var(--ctSection)}
+.abCard .abT{font-size:var(--ctCardTitle)}
+.abCard .abA{font-size:var(--ctCardMeta)}
+.srcRow .srcMeta{font-size:var(--ctSrcTitle)}
+.srcRow .name{font-size:var(--ctSrcName)}
+.srcRow .chip{font-size:var(--ctSrcChip)}
 body.tv #hero h1{font-size:min(var(--ctHeroTitle),42px);height:calc(39px * var(--ctLineScale))}
 /* ---------- FIXED-HEIGHT TITLE SLOTS (hero + detail) ---------- */
 /* LAST hero/detail-title rules on purpose so they beat every earlier clamp/height override.
@@ -3975,10 +3987,10 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
 .abCard:hover .abCover, .abCard:focus .abCover, .abCard.focus .abCover {
   box-shadow:0 0 0 1.5px var(--artFocusLine), 0 0 9px var(--artFocusGlow), 0 14px 36px rgba(0,0,0,.34);
   filter:saturate(1.04); }
-.abCard .abT { font:800 14px "Albert Sans"; margin:9px 2px 1px; line-height:1.2;
+.abCard .abT { font:800 var(--ctCardTitle) "Albert Sans"; margin:9px 2px 1px; line-height:1.2;
   display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
-.abCard .abA { font:600 12.5px "Albert Sans"; color:var(--muted); margin:0 2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.abRowTitle { font:800 18px "Sora"; margin:6px 2px 14px; }
+.abCard .abA { font:600 var(--ctCardMeta) "Albert Sans"; color:var(--muted); margin:0 2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.abRowTitle { font:800 var(--ctSection) "Sora"; margin:6px 2px 14px; }
 /* Discovery: horizontal cover rows, each lazy-loaded when it scrolls into view. */
 .abRow { margin:0 0 26px; }
 .abRowScroll { display:flex; gap:16px; overflow-x:auto; scroll-behavior:smooth; padding:2px 2px 8px; }
@@ -6181,10 +6193,18 @@ async function loadWatchState(force) {
     const fetchStart = Date.now();
     const localRows = Array.isArray(S._watchRows) ? S._watchRows : [];
     const rows = await api('/api/watch' + profileQ());
-    // Local rows upserted DURING the fetch are newer than the response — they win, and any the
-    // response lacks entirely are kept in front (their POST is registered and will land).
-    const localBy = new Map(localRows.filter((w) => w && w._localAt > fetchStart).map((w) => [w.key, w]));
-    const merged = (rows || []).map((w) => localBy.get(w.key) || w);
+    // A just-saved local row must beat a slower /api/watch answer. Mid-fetch upserts used to
+    // be the only winners; a native close that POSTed first then refetched still painted the
+    // old personal-library progress until the app restarted.
+    const localBy = new Map(localRows.filter((w) => w && w.key).map((w) => [w.key, w]));
+    const newerLocal = (server, loc) => {
+      if (!loc) return server;
+      const localAt = Math.max(+loc.updatedAt || 0, +loc._localAt || 0);
+      const serverAt = +server.updatedAt || 0;
+      if (loc._localAt > fetchStart) return loc;
+      return localAt >= serverAt ? loc : server;
+    };
+    const merged = (rows || []).map((w) => newerLocal(w, localBy.get(w.key)));
     for (const [k, loc] of localBy) if (!merged.some((w) => w && w.key === k)) merged.unshift(loc);
     S._watchRows = merged;
     S._watchAt = Date.now();
@@ -6458,7 +6478,8 @@ function buildCwItems(cw) {
     const art = freshLocalArtForKey(w.key);
     const poster = art.poster || durableArtUrl(w.meta.poster) || durableArtUrl(w.meta.backdrop);
     const backdrop = art.backdrop || durableArtUrl(w.meta.backdrop) || durableArtUrl(w.meta.poster);
-    return {
+    const loc = S.localMap && S.localMap[w.key];
+    const item = {
     // Continue Watching shows the SHOW title only — the "— S02E01 · Episode Name" tail
     // overflowed every card and hero (resume position already encodes where you are).
     key: w.key, title: String(w.meta.title || w.key).replace(/\s*—\s*S\d+E\d+.*$/i, ''), year: w.meta.year || '', genre: w.meta.genre || '',
@@ -6469,6 +6490,10 @@ function buildCwItems(cw) {
     progress: w.duration ? w.position / w.duration : (w.traktPct || 0) / 100,
     resume: w.position, _traktPct: w.traktPct || 0, _cw: true, _cwSortAt: w.updatedAt || 0,
     };
+    if (loc && loc.streamUrl) {
+      item._local = { streamUrl: loc.streamUrl, playUrl: loc.playUrl, name: loc.name };
+    }
+    return item;
   });
   const hiddenNext = cwHiddenNextSet();
   const seen = new Set(items.map((it) => continueWatchingIdentity(it) || it.key));
@@ -6550,6 +6575,7 @@ async function enrichHome() {
       }).catch(() => { S._homeLiveFav = null; }));
     }
     if (jobs.length) await Promise.all(jobs);
+    await warmLocalPlaybackForWatch(cachedWatchRowsForHome()).catch(() => {});
   } finally { S._enrichingHome = false; }
   // Only refresh the visible home if the user is still idle at the top (else next visit picks
   // it up — loadRows is called on every home entry and the caches are warm by then).
@@ -6978,6 +7004,20 @@ function homeRowsReadyForBoot(rows) {
 function maybeBootHomeReady(rows) {
   if (S.view !== 'home') return;
   if (homeRowsReadyForBoot(rows)) bootReady();
+}
+function paintHomeWatchNow(opts = {}) {
+  if (S.view !== 'home' || S._booting) return;
+  const snap = opts.focusSnapshot || (S.view === 'home' ? homeFocusSnapshot() : null);
+  publishHomeRows(homeRowsFromWatch(cachedWatchRowsForHome(), false), {
+    preserveFocus: true,
+    focusSnapshot: snap,
+  });
+}
+async function warmLocalPlaybackForWatch(cw) {
+  const keys = (cw || cachedWatchRowsForHome() || []).map((w) => w && w.key).filter(Boolean);
+  if (!keys.length) return;
+  await fetchLocalPlaybackKeys(keys);
+  paintHomeWatchNow();
 }
 function publishHomeRows(rows, opts = {}) {
   const sig = homeRowsSignature(rows);
@@ -7454,12 +7494,13 @@ function makeCard(it, poster, onFocus) {
       // detail-first quality stop.
       return it._local ? playLocal(it) : play(it);
     }
-    if (isContinueWatchingItem(it) && (+it.resume || 0) > 0 && !it._local) {
+    if (isContinueWatchingItem(it) && (+it.resume || 0) > 0) {
       // A Continue Watching cover IS the resume: one press picks up where you left off — movies
       // match episodes, the hero Resume button, and the pre-cache warmed on focus. Details stay
-      // one hold-OK (TV) / ⋯ (web) away on the card menu. Browsers already cap at 1080p unless
-      // 4K-in-browser is on, so they resume the same way as TV.
-      return play(it);
+      // one hold-OK (TV) / ⋯ (web) away on the card menu. Personal-library files play the disk
+      // copy; usenet titles still go through play().
+      const loc = localPlaybackForItem(it);
+      return loc ? playLocal({ ...it, _local: loc }) : play(it);
     }
     if (it._showOpen !== undefined) {
       // From the home "Recently added" row the library view isn't open yet — enter it first.
@@ -8508,7 +8549,8 @@ async function play(it, pick, opts = {}) {
   const qRank = pickRank !== null ? pickRank : qualityRankForItem(it);
   // Local-first: if this exact title/episode exists in a scanned library, play the file on
   // disk instead of searching usenet, unless the chosen quality asks for another source class.
-  if (it._local && !it.tmdbId) return playLocal(it, { directHandoff: !!opts.directHandoff }); // NFO-only archive item: file is the only source
+  const localNow = localPlaybackForItem(it);
+  if (localNow && !it.tmdbId) return playLocal({ ...it, _local: localNow }, { directHandoff: !!opts.directHandoff }); // NFO-only archive item: file is the only source
   const btns = [$('btnPlay'), $('dPlay')];
   btns.forEach((b) => { b.disabled = true; });
   // No status toasts. Pressing Play must leave the detail page immediately; Android still
@@ -12046,7 +12088,8 @@ async function openPlayer(it, mount, opts = {}) {
   $('player').classList.toggle('live', it.type === 'live'); // zap/guide controls only for live
   $('pTitle').textContent = it.title;
   const sourceName = mount.candidate ? mount.candidate.name : mount.name;
-  $('pSrc').textContent = sourceName;
+  const playerMeta = episodePlayerMeta(it);
+  $('pSrc').textContent = it.type === 'live' ? '' : (playerMeta.subline || '');
   $('pHealth').innerHTML = `<span class="chip">${mount.container}${mount.method ? '/' + mount.method : ''}</span>`;
   const watchRow = it && it.key && S.watchMap ? S.watchMap[it.key] : null;
   const knownDuration = Math.max(0, Number(it.duration || (watchRow && watchRow.duration) || 0) || 0);
@@ -12798,6 +12841,11 @@ function nativePlaybackOrder(p, preferredKind) {
     : (pref === 'transcode' ? ['transcode', 'remux'] : ['direct', 'remux', 'transcode']);
   return [...new Set(order)].filter((kind) => nativeKindAvailable(p, kind));
 }
+function nativeOverlaySource(p) {
+  if (!p || !p.item) return '';
+  if (p.item.type === 'live') return p.item.genre || p.item.group || p.item.sourceName || '';
+  return '';
+}
 function nativeMimeForKind(p, kind) {
   if (kind === 'remux' || kind === 'transcode') return 'video/mp4';
   const fileName = (p && (p.fileName || p.name)) || '';
@@ -12832,7 +12880,7 @@ function tryNativeVideoPlayer(kind, atSeconds, opts = {}) {
   const payload = {
     title: playerMeta.title || p.item.title || 'Triboon',
     episodeLabel: playerMeta.subline || '',
-    source: p.name || p.item.q || kind,
+    source: nativeOverlaySource(p),
     url: new URL(nativeUrl, location.origin).href,
     // Keep the full candidate chain until after CSS-only placeholders are filtered. Collapsing
     // with `||` first lets an opaque procedural backdrop discard a perfectly valid poster URL.
@@ -14741,6 +14789,7 @@ async function saveWatch(final, opts = {}) {
     key: payload.key, position: payload.position, duration: payload.duration,
     watched: payload.watched, meta: payload.meta, updatedAt: Date.now(),
   });
+  if (typeof paintHomeWatchNow === 'function') paintHomeWatchNow();
   // keepalive on final saves (player close / pagehide) so the request survives the page being torn
   // down or the app backgrounding — a normal fetch would be cancelled and the last position lost.
   const job = trackWatchPost(api('/api/watch', { method: 'POST', body: payload, keepalive: !!final })).catch(() => {});
@@ -14892,6 +14941,7 @@ async function closePlayer(opts = {}) {
     }
     switchView(ret.view && ret.view !== 'player' ? ret.view : 'home', false);
     S.gridIdx = ret.gridIdx || 0;
+    if (S.view === 'home') paintHomeWatchNow({ focusSnapshot: ret.homeFocus });
     // For Live TV the scaffold's restore owns focus; calling focusContent too would fight it.
     if (!(ret.view === 'livetv' && ret.live)) setTimeout(() => focusContent(), 80);
   }
@@ -18457,6 +18507,13 @@ function localLookupKeyForItem(it) {
   if (ids.season != null && ids.ep != null) return `tmdb:tv:${it.tmdbId}:s${ids.season}e${ids.ep}`;
   return '';
 }
+function localLookupKeysForItem(it) {
+  const keys = [];
+  const tmdb = localLookupKeyForItem(it);
+  if (tmdb) keys.push(tmdb);
+  if (it && it.key) keys.push(String(it.key));
+  return [...new Set(keys.filter(Boolean))];
+}
 async function fetchLocalPlaybackKeys(keys) {
   keys = [...new Set((keys || []).map(String).filter(Boolean))]
     .filter((k) => !(S.localMap && S.localMap[k])).slice(0, 100);
@@ -18472,11 +18529,13 @@ async function fetchLocalPlaybackKeys(keys) {
   return S.localMap;
 }
 async function ensureLocalPlaybackForItem(it) {
-  const key = localLookupKeyForItem(it);
-  if (!key) return null;
-  if (S.localMap && S.localMap[key]) return S.localMap[key];
-  await fetchLocalPlaybackKeys([key]);
-  return S.localMap && S.localMap[key] || null;
+  if (!it) return null;
+  const existing = localPlaybackForItem(it);
+  if (existing) return existing;
+  const keys = localLookupKeysForItem(it);
+  if (!keys.length) return null;
+  await fetchLocalPlaybackKeys(keys);
+  return localPlaybackForItem(it);
 }
 // Map of "what we already own on disk": tmdb keys → local stream URLs. Lets the regular
 // detail pages (and auto next-episode) play your archive files instead of hitting usenet.
@@ -18500,12 +18559,13 @@ function refreshLocalMapFromCachedLibraries() {
 }
 // loadRows needs the localMap (new-episode bumps) — await the boot build instead of racing it.
 function ensureLocalMap() {
-  if (S.localMap) return Promise.resolve(S.localMap);
+  if (S.localMap && Object.keys(S.localMap).length) return Promise.resolve(S.localMap);
   if (S._localMapJob) return S._localMapJob;
   const cached = refreshLocalMapFromCachedLibraries();
   if (cached) return Promise.resolve(cached);
-  S.localMap = {};
-  return Promise.resolve(S.localMap);
+  // Leave the map unset so a later library page / local-lookup can still warm it.
+  // Assigning {} here used to lock personal-library Continue Watching without art or play URLs.
+  return Promise.resolve(S.localMap || {});
 }
 async function loadLibraries() {
   let libs = [];
@@ -21213,7 +21273,14 @@ function moveMusicSearchDown() {
   if (chipEls().length) return focusChip(S.chipIdx || 0);
   if (musicRows().length) return focusMusic(0);
   if (focusMusicBar()) return;
-  S.zone = 'music'; clearFocus();
+  // Covers still loading — stay in the Music model and retry. Clearing focus here used to
+  // strand the Android TV remote with no zone and no focused cover.
+  S.zone = 'musicChips';
+  setTimeout(() => {
+    if (S.view !== 'music' || S.zone === 'rail') return;
+    if (chipEls().length) return focusChip(S.chipIdx || 0);
+    if (musicRows().length) return focusMusic(0);
+  }, 250);
 }
 function submitMusicVoiceSearch(text) {
   $('musicMicBtn').classList.remove('listening');
@@ -25720,7 +25787,11 @@ function switchView(v, push = true, opts = {}) {
   requestAnimationFrame(adaptRowWindows); // page chrome just changed — refit the row windows
   if (v === 'home' && !opts.preservePage) {
     if (peekPageCache('home')) {
-      setRowsView($('rows'), S.rows, true);
+      // IR Movies / IR TV play upserts watch while Home stays hidden. Restoring the
+      // last-painted S.rows would keep the old Continue Watching row until restart.
+      if (cachedWatchRowsForHome().length) paintHomeWatchNow();
+      else setRowsView($('rows'), S.rows, true);
+      loadRows({ preserveFocus: true, background: true }).catch(() => {});
       if (S.zone === 'rail') paintRailPreviewHero();
     } else loadRows();
   }
@@ -26003,10 +26074,21 @@ function focusContent(retried) {
     if (focusSearchMic()) return;
     return $('searchInput').focus();
   }
-  // Music: results present → first row; otherwise the search field.
+  // Music: results present → first row; browse chips → first cover. Same async retry as
+  // Audiobooks — landing before shelves render used to strand the remote on the search field.
   if (S.view === 'music') {
+    if (document.querySelector('#musicBrowse .mChip.focus, #musicList .musicRow.focus, #musicList .mArtistHit.focus')) return;
     const rows = musicRows();
-    return rows.length ? focusMusic(0) : (chipEls().length ? focusChip(S.chipIdx || 0) : focusMusicSearch());
+    if (rows.length) return focusMusic(0);
+    if (chipEls().length) return focusChip(S.chipIdx || 0);
+    const musicTries = typeof retried === 'number' ? retried : 0;
+    if (musicTries === 0) focusMusicSearch();
+    const parked = (document.activeElement === $('musicSearch') || document.activeElement === $('musicMicBtn'))
+      && !$('musicSearch').value.trim();
+    if (musicTries < 6 && (musicTries === 0 || parked)) {
+      return setTimeout(() => { if (S.view === 'music') focusContent(musicTries + 1); }, 250);
+    }
+    return focusMusicSearch();
   }
   if (['movies', 'tv', 'kids', 'search', 'library', 'watchlist', 'livetv', 'person'].includes(S.view)) return focusGrid(S.gridIdx || 0);
   const v2 = S.rowsView || { hasHero: true };
@@ -26118,6 +26200,13 @@ function applyFocus(el, scroll = true) {
   clearFocus();
   if (!el) return;
   el.classList.add('focus');
+  // TV Music/Audiobooks: pin native focus on the cover so the WebView cannot snap the caret
+  // back into the search field (arrows then die on the input). Other pages stay class-only.
+  if (document.body.classList.contains('tv') && el.tagName === 'BUTTON'
+      && (S.view === 'music' || S.view === 'audiobooks')
+      && !/musicSearch|abSearch/.test(el.id || '')) {
+    try { el.focus({ preventScroll: true }); } catch {}
+  }
   signalTvReadyOnce('focus');
   // 'nearest' on both axes: rows advance one card at a time instead of jump-centering
   // (scroll-margin/scroll-padding in CSS keep the focused card clear of edges).
@@ -27062,6 +27151,9 @@ document.addEventListener('keydown', (e) => {
       e.preventDefault();
       return k === 'Enter' ? musicSearchAndFocusResults() : moveMusicSearchDown();
     }
+    if (k === 'ArrowUp') {
+      if (document.body.classList.contains('tv')) { e.preventDefault(); return; }
+    }
     if (k === 'ArrowRight' && ae.selectionStart >= ae.value.length && musicClearVisible()) {
       e.preventDefault(); ae.blur();
       return focusMusicClear();
@@ -27070,6 +27162,13 @@ document.addEventListener('keydown', (e) => {
       e.preventDefault(); ae.blur();
       return musicMicVisible() ? focusMusicSearch() : enterRail();
     }
+    // TV remotes: never let leftover arrows fall through to the generic input swallow
+    // (that is what made Music D-pad feel dead after landing on search).
+    if (document.body.classList.contains('tv') && k.startsWith('Arrow')) {
+      e.preventDefault();
+      return moveMusicSearchDown();
+    }
+    return;
   }
   if (inInput && S.view === 'livetv' && ae === $('chSearch')) {
     if (k === 'ArrowDown') {
@@ -27706,6 +27805,9 @@ document.addEventListener('keydown', (e) => {
       return; // typing passes through
     }
     if (k === 'Escape' || k === 'Backspace') return enterRail();
+    // Recover onto browse chips even if a leftover zone (search / empty) is stale — same
+    // as Audiobooks calling abFocusEntry when AB.zone is not 'ab'.
+    if (chipEls().length && !musicRows().length && S.zone !== 'musicChips') S.zone = 'musicChips';
     if (S.zone === 'musicChips') {
       const chips = chipEls(); let i = S.chipIdx || 0;
       if (k === 'ArrowLeft') return focusChipDir(k) || enterRail();
@@ -28148,6 +28250,13 @@ document.addEventListener('focusin', (e) => {
     && !(e.target.tagName === 'INPUT' && /^(checkbox|radio)$/.test(e.target.type));
   // TV: the WebView can restore native focus onto a rail <button> after Search lands on the
   // mic. JS D-pad focus is class-driven, so bounce that steal back to the mic (or just blur).
+  if (document.body.classList.contains('tv') && textEntry
+      && ((S.view === 'music' && (S.zone === 'musicChips' || S.zone === 'music')
+        && e.target === $('musicSearch') && !$('musicSearch').value.trim())
+        || (S.view === 'audiobooks' && typeof AB === 'object' && AB.zone === 'ab'
+          && e.target === $('abSearch') && !$('abSearch').value.trim()))) {
+    try { e.target.blur(); } catch {}
+  }
   if (document.body.classList.contains('tv') && S.zone !== 'rail' && e.target && $('rail').contains(e.target)) {
     try { e.target.blur(); } catch {}
     if (S.view === 'search' && performance.now() < searchMicPinUntil) {

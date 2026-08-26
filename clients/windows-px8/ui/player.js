@@ -37,13 +37,15 @@
   let currentWindow;
   let hideTimer;
   let toastTimer;
-  let loadingTimer;
+  let loadingTimers = [];
   let timelinePreview = null;
   let lastVolume = 100;
   let pendingSeekDelta = 0;
   let pendingSeekTimer = null;
   let sawFirstFrame = false;
   let loadingStarted = false;
+  let loadingHot = false;
+  const PLAYER_LOADING_STAGES = ['Preparing', 'Finding source', 'Mounting', 'Checking health...', 'Starting stream'];
 
   function nativeInvoke(command, args) {
     if (!invoke) return Promise.reject(new Error('native transport unavailable'));
@@ -76,10 +78,19 @@
     return String(value == null ? '' : value).slice(0, max || 500);
   }
 
+  function looksLikeFilename(value) {
+    return /\.(mkv|mp4|avi|ts|m2ts|mov|m4v|webm|iso)(\b|$)/i.test(String(value || ''));
+  }
+
+  function overlaySourceLine() {
+    const source = looksLikeFilename(state.source) ? '' : state.source;
+    if (state.mode === 'live') return [source, state.qualityLabel].filter(Boolean).join('  -  ');
+    return [state.episodeLabel ? '' : source, state.qualityLabel].filter(Boolean).join('  -  ');
+  }
+
   function safeMessage(value) {
-    return text(value || 'The stream could not be played.', 240)
-      .replace(/https?:\/\/\S+/gi, 'the media stream')
-      .replace(/([?&](?:token|auth|key|password|username)=)[^&\s]+/gi, '$1[hidden]');
+    return text(value || 'The stream could not be played.', 400)
+      .replace(/([?&](?:token|auth|key|password|username|t)=)[^&\s]+/gi, '$1[hidden]');
   }
 
   function safeArtwork(value) {
@@ -135,30 +146,44 @@
     requestAnimationFrame(() => { $('srStatus').textContent = message; });
   }
 
-  function beginLoadingStages() {
+  function clearLoadingStages() {
+    loadingTimers.forEach((timer) => clearTimeout(timer));
+    loadingTimers = [];
+  }
+
+  function setLoadingStage(idx) {
+    const stage = PLAYER_LOADING_STAGES[Math.max(0, Math.min(PLAYER_LOADING_STAGES.length - 1, idx || 0))];
+    $('loadingStage').textContent = stage;
+  }
+
+  function beginLoadingStages(hot) {
     if (loadingStarted) return;
     loadingStarted = true;
-    clearInterval(loadingTimer);
-    const stages = ['Preparing', 'Opening stream', 'Filling buffer', 'Waiting for picture'];
-    let index = 0;
-    $('loadingStage').textContent = stages[0];
-    loadingTimer = setInterval(() => {
-      index = Math.min(index + 1, stages.length - 1);
-      $('loadingStage').textContent = stages[index];
-      if (index === stages.length - 1) clearInterval(loadingTimer);
-    }, 1100);
+    clearLoadingStages();
+    if (hot) {
+      setLoadingStage(2);
+      loadingTimers = [500, 1100].map((delay, i) => setTimeout(() => setLoadingStage(i + 3), delay));
+      return;
+    }
+    setLoadingStage(0);
+    loadingTimers = [650, 1400, 2200, 3000].map((delay, i) => setTimeout(() => setLoadingStage(i + 1), delay));
   }
 
   function setPlayback(value) {
-    if (value === 'playing' || value === 'paused' || value === 'ready') {
+    // Web keeps the full-page loader until onplaying. A ready/paused blip before
+    // the first picture must not hide the lane or restart the 1.35s sweep.
+    if ((value === 'paused' || value === 'ready') && !sawFirstFrame) return;
+    if (value === 'playing') {
       sawFirstFrame = true;
       loadingStarted = false;
-      clearInterval(loadingTimer);
+      loadingHot = false;
+      clearLoadingStages();
     }
     if (value === 'buffering' && sawFirstFrame) {
       state.buffering = true;
       return;
     }
+    if (value === 'buffering' && !sawFirstFrame) value = 'loading';
     if (value === state.playback) {
       if (value === 'playing') scheduleHide();
       return;
@@ -167,13 +192,13 @@
     state.playing = value === 'playing';
     state.buffering = value === 'buffering' || value === 'loading';
     document.body.dataset.state = value === 'buffering' && !sawFirstFrame ? 'loading' : value;
-    if (value !== 'loading') clearInterval(loadingTimer);
+    if (value !== 'loading') clearLoadingStages();
     const paused = value === 'paused';
     const icon = paused || value === 'ready' ? '#i-play' : '#i-pause';
     $('playPauseIcon').setAttribute('href', icon);
     $('centerPlayIcon').setAttribute('href', '#i-play');
     $('playPause').setAttribute('aria-label', paused || value === 'ready' ? 'Play' : 'Pause');
-    if (!state.playing) showControls(true);
+    if (!state.playing && value !== 'ready') showControls(true);
     else scheduleHide();
   }
 
@@ -186,6 +211,7 @@
       : 0;
     $('timeline').value = Math.round(ratio * 1000);
     $('timeline').style.setProperty('--seek', `${ratio * 100}%`);
+    $('timeline').style.setProperty('--buffer', `${Math.max(ratio, buffered) * 100}%`);
     $('timeline').disabled = !duration || state.mode === 'live';
     $('bufferBar').style.width = `${Math.max(ratio, buffered) * 100}%`;
     $('currentTime').textContent = state.mode === 'live' ? 'Live' : formatTime(position);
@@ -226,7 +252,7 @@
   function render() {
     $('title').textContent = state.title || 'Triboon';
     $('episode').textContent = state.episodeLabel || '';
-    $('source').textContent = [state.source, state.qualityLabel].filter(Boolean).join('  -  ');
+    $('source').textContent = overlaySourceLine();
     $('loadingTitle').textContent = state.title ? `Opening ${state.title}` : 'Opening video';
     setArtwork(state.backdropUrl);
     $('volume').value = state.muted ? 0 : Math.max(0, Math.min(100, state.volume));
@@ -356,12 +382,13 @@
     switch (type) {
       case 'loading':
       case 'session':
+        if (data.hot) loadingHot = true;
         if (state.playback !== 'loading') {
           sawFirstFrame = false;
           loadingStarted = false;
           setPlayback('loading');
         }
-        beginLoadingStages();
+        beginLoadingStages(loadingHot);
         break;
       case 'state_snapshot':
         if (data.buffering && !sawFirstFrame) setPlayback('loading');
@@ -401,6 +428,8 @@
       case 'closed':
         sawFirstFrame = false;
         loadingStarted = false;
+        loadingHot = false;
+        clearLoadingStages();
         setPlayback('idle');
         break;
       case 'live':
@@ -461,12 +490,16 @@
     if (forceFocus && !isPanelOpen()) setTimeout(() => $('playPause').focus({ preventScroll: true }), 0);
   }
 
+  function canHideControls() {
+    return (state.playing || state.playback === 'ready') && !isPanelOpen();
+  }
+
   function scheduleHide() {
     clearTimeout(hideTimer);
-    if (!state.playing || isPanelOpen()) return;
+    if (!canHideControls()) return;
     hideTimer = setTimeout(() => {
-      if (!isPanelOpen() && state.playing) document.body.classList.add('controls-hidden');
-    }, 3600);
+      if (canHideControls()) document.body.classList.add('controls-hidden');
+    }, 2400);
   }
 
   function isPanelOpen() {
@@ -640,14 +673,10 @@
   }
 
   async function toggleFullscreen() {
-    try {
-      if (currentWindow) {
-        const full = await currentWindow.isFullscreen();
-        await currentWindow.setFullscreen(!full);
-        showControls(false);
-        return;
-      }
-    } catch {}
+    if (document.body.classList.contains('guide-pip')) {
+      expandGuidePip();
+      return;
+    }
     send('fullscreen');
   }
 
@@ -688,8 +717,9 @@
     $('retry').addEventListener('click', () => {
       sawFirstFrame = false;
       loadingStarted = false;
+      loadingHot = false;
       setPlayback('loading');
-      beginLoadingStages();
+      beginLoadingStages(false);
       send('retry');
     });
     $('errorClose').addEventListener('click', requestClose);
@@ -872,12 +902,20 @@
 
   bindControls();
   document.addEventListener('keydown', handleKey);
-  document.addEventListener('mousemove', () => showControls(false), { passive: true });
+  let lastMouseX = -1;
+  let lastMouseY = -1;
+  document.addEventListener('mousemove', (event) => {
+    const x = event.clientX;
+    const y = event.clientY;
+    if (Math.abs(x - lastMouseX) < 3 && Math.abs(y - lastMouseY) < 3) return;
+    lastMouseX = x;
+    lastMouseY = y;
+    showControls(false);
+  }, { passive: true });
   document.addEventListener('pointerdown', () => showControls(false), { passive: true });
   setupMediaKeys();
   setupGamepad();
   setPlayback('loading');
-  beginLoadingStages();
   render();
   setupNative();
 })();

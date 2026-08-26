@@ -2730,3 +2730,52 @@ test('iptv: Xtream built-in XMLTV guide fills the timeline when per-channel EPG 
     upstream.close();
   }
 });
+
+test('iptv: native HLS proxy rewrites relative playlist URIs against the upstream URL', async () => {
+  const master = [
+    '#EXTM3U',
+    '#EXT-X-VERSION:5',
+    '#EXT-X-MEDIA:TYPE=AUDIO,URI="audio.m3u8",GROUP-ID="audio",LANGUAGE="fa",NAME="Persian",DEFAULT=YES',
+    '#EXT-X-STREAM-INF:BANDWIDTH=600000,AUDIO="audio"',
+    'video.m3u8',
+    '',
+  ].join('\n');
+  const upstream = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (u.pathname === '/list.m3u') {
+      res.writeHead(200, { 'content-type': 'audio/x-mpegurl' });
+      return res.end(`#EXTM3U\n#EXTINF:-1 tvg-id="iran",Iran International\nhttp://127.0.0.1:${upstream.address().port}/live/IRAN.m3u8\n`);
+    }
+    if (u.pathname === '/live/IRAN.m3u8') {
+      res.writeHead(200, {
+        'content-type': 'application/vnd.apple.mpegurl',
+        'content-length': Buffer.byteLength(master),
+      });
+      return res.end(master);
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${upstream.address().port}`;
+  const srv = await bootServer({ NNTP_HOST: null, TMDB_BASE: null });
+  try {
+    assert.ok(srv.rewriteIptvHlsPlaylist('#EXT-X-MEDIA:URI="audio.m3u8"\nvideo.m3u8\n', `${base}/live/IRAN.m3u8`).includes(`${base}/live/video.m3u8`));
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/settings', { iptvMode: 'm3u', iptvUrl: `${base}/list.m3u` }, admin);
+    await srv.warmIptvCaches('test');
+    const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    const iran = (ch.json.channels || []).find((c) => /Iran International/.test(c.name));
+    assert.ok(iran && iran.nativeUrl, 'Iran International native URL is present');
+    const out = await httpRaw(srv.port, iran.nativeUrl);
+    assert.strictEqual(out.status, 200, out.body.toString('utf8').slice(0, 200));
+    const body = out.body.toString('utf8');
+    assert.match(body, /#EXTM3U/);
+    assert.ok(body.includes(`${base}/live/video.m3u8`), body);
+    assert.ok(body.includes(`${base}/live/audio.m3u8`), body);
+    assert.doesNotMatch(body, /^video\.m3u8$/m);
+  } finally {
+    await srv.shutdown();
+    upstream.close();
+  }
+});

@@ -1330,6 +1330,25 @@ function iptvNativeMime(url) {
   if (/\.(?:ts|mpegts)(?:[?#]|$)/.test(u)) return 'video/mp2t';
   return '';
 }
+function resolveIptvHlsUri(uri, baseUrl) {
+  const raw = String(uri || '').trim();
+  if (!raw) return raw;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(raw) && !/^https?:/i.test(raw) && !raw.startsWith('//')) return raw;
+  try { return new URL(raw, baseUrl).href; } catch { return raw; }
+}
+function rewriteIptvHlsPlaylist(text, baseUrl) {
+  if (!baseUrl) return String(text || '');
+  return String(text || '').split(/\r?\n/).map((line) => {
+    if (!line) return line;
+    if (line[0] === '#') {
+      return line.replace(/URI=(?:"([^"]*)"|([^,]*))/gi, (match, quoted, bare) => {
+        const abs = resolveIptvHlsUri(quoted != null ? quoted : bare, baseUrl);
+        return quoted != null ? `URI="${abs}"` : `URI=${abs}`;
+      });
+    }
+    return resolveIptvHlsUri(line, baseUrl);
+  }).join('\n');
+}
 const IPTV_NATIVE_PROXY_UA = 'Mozilla/5.0 (SMART-TV; Linux) AppleWebKit/537.36 TriboonTV/1.0';
 const IPTV_PLAYBACK_USER_AGENTS = [
   IPTV_NATIVE_PROXY_UA,
@@ -1675,22 +1694,27 @@ function createIptvLiveHub(shareKey, label) {
       sub.stallTimer = setTimeout(() => this.unsubscribe(sub, 'client stalled'), LIVE_REMUX_IDLE_TIMEOUT_MS);
       if (sub.stallTimer.unref) sub.stallTimer.unref();
     },
-    attach(upstreamRes, upstreamReq, status, headers) {
+    attach(upstreamRes, upstreamReq, status, headers, opts = {}) {
       if (this.closed) { try { upstreamReq.destroy(); } catch {} return; }
       this.state = 'live';
       this.upstream = upstreamRes;
       this.upstreamReq = upstreamReq;
       this.status = status;
       this.headers = { ...headers };
+      const playlistBase = String((opts && opts.playlistBase) || '');
+      const isHls = /mpegurl/i.test(String(this.headers['content-type'] || ''));
       // FINITE bodies (an HLS playlist, a ranged response) are snapshots, not streams: the subs
       // queued during startup all get the same bytes (they arrived milliseconds apart — fine for
       // a playlist), but LATE joins are wrong (live playlists go stale in seconds), so the hub
       // leaves the share map immediately and each later viewer fetches fresh. Continuous TS keeps
       // the hub joinable and drops length headers so late joiners get an unbounded stream.
-      this.finite = !!this.headers['content-length'] || status === 206
-        || /mpegurl/i.test(String(this.headers['content-type'] || ''));
+      this.finite = !!this.headers['content-length'] || status === 206 || isHls;
       if (this.finite) iptvSharedHubs.delete(this.shareKey);
       else { delete this.headers['content-length']; delete this.headers['content-range']; }
+      if (isHls && playlistBase) {
+        this._serveHlsPlaylist(upstreamRes, status, playlistBase);
+        return;
+      }
       for (const sub of [...this.subs]) {
         try {
           if (sub.mode === 'pipe') {
@@ -1736,6 +1760,44 @@ function createIptvLiveHub(shareKey, label) {
           try { if (!sub.res.destroyed) sub.res.end(); } catch {}
         }
         this.close('upstream ended');
+      });
+      upstreamRes.on('error', () => this.close('upstream error'));
+    },
+    _serveHlsPlaylist(upstreamRes, status, playlistBase) {
+      const chunks = [];
+      let len = 0;
+      const firstByte = setTimeout(() => this.close('no first byte'), IPTV_NATIVE_FIRST_BYTE_TIMEOUT_MS);
+      if (firstByte.unref) firstByte.unref();
+      upstreamRes.on('data', (chunk) => {
+        if (this.closed) return;
+        if (!len) clearTimeout(firstByte);
+        const room = (512 * 1024) - len;
+        if (room > 0) chunks.push(chunk.length > room ? chunk.subarray(0, room) : chunk);
+        len += chunk.length;
+      });
+      upstreamRes.on('end', () => {
+        if (this.closed) return;
+        const rewritten = rewriteIptvHlsPlaylist(Buffer.concat(chunks).toString('utf8'), playlistBase);
+        const buf = Buffer.from(rewritten);
+        const headers = {
+          ...this.headers,
+          'content-type': this.headers['content-type'] || 'application/vnd.apple.mpegurl',
+          'content-length': String(buf.length),
+        };
+        for (const sub of [...this.subs]) {
+          if (sub.mode === 'pipe') {
+            try {
+              if (sub.onLive) sub.onLive();
+              if (sub.onChunk) sub.onChunk(buf);
+            } catch { this.unsubscribe(sub, 'write failed'); }
+            continue;
+          }
+          try {
+            if (!sub.res.headersSent && !sub.res.destroyed) sub.res.writeHead(status, headers);
+            if (!sub.res.destroyed) sub.res.end(buf);
+          } catch { this.unsubscribe(sub, 'write failed'); }
+        }
+        this.close('playlist sent');
       });
       upstreamRes.on('error', () => this.close('upstream error'));
     },
@@ -1785,6 +1847,9 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
     return;
   }
   const hub = createIptvLiveHub(shareKey, iptvNativeLogLabel(meta));
+  // HLS playlists are snapshots, not a TS pipe. Mark finite before the first byte so a remux
+  // opener cannot join this hub and treat the playlist as a media stream.
+  if (iptvNativeMime(target) === 'application/x-mpegURL') hub.finite = true;
   iptvSharedHubs.set(shareKey, hub);
   let handedOff = false; // once the hub owns the upstream, the solo teardown below must not touch it
   let up = null;
@@ -2014,7 +2079,7 @@ function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
       ctx.res.off('close', onClientClose);
       ctx.res.off('error', onClientClose);
       hub.subscribe(ctx, slot, label);
-      hub.attach(r, upstreamReq, r.statusCode || 200, out);
+      hub.attach(r, upstreamReq, r.statusCode || 200, out, { playlistBase: u.href });
     });
     slot.setCloser((reason) => {
       stop(reason, new Error(`live stream ${reason}`));
@@ -6956,7 +7021,8 @@ Object.assign(H, {
     if (libraryDb.available) {
       const found = libraryDb.lookup(raw, allowed);
       for (const [key, row] of Object.entries(found)) {
-        if (!libraryItemMatchesTmdb(row.item)) continue;
+        const byLocalKey = /^local:/i.test(key);
+        if (!byLocalKey && !libraryItemMatchesTmdb(row.item)) continue;
         out[key] = localItemPayload(ctx, row.libId, row.item);
       }
       return send(ctx.res, 200, { items: out });
@@ -6966,7 +7032,10 @@ Object.assign(H, {
     for (const libId of allowed) {
       const rec = all[libId];
       for (const item of (rec && rec.items) || []) {
-        if (!item || !item.tmdbId) continue;
+        if (!item) continue;
+        const localKey = `local:${libId}:${item.idx}`;
+        if (wanted.has(localKey) && !out[localKey]) out[localKey] = localItemPayload(ctx, libId, item);
+        if (!item.tmdbId) continue;
         const key = item.kind === 'movie'
           ? `tmdb:movie:${item.tmdbId}`
           : item.kind === 'episode'
@@ -9592,6 +9661,6 @@ async function shutdown() {
 
 module.exports = {
   server, mounts, pipeline, getPool, shutdown, sweep, releasePlaySession, releaseUserPlaySessions, ROUTES, auth, settings, store,
-  warmIptvCaches, msUntilNextIptvWarm,
+  warmIptvCaches, msUntilNextIptvWarm, rewriteIptvHlsPlaylist,
   normalizeIp, isPrivateIp, clientIpForGeo, geoLocate, geoCacheKey, viewerGeolocationEnabled,
 };

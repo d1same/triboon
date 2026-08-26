@@ -126,6 +126,32 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-26, v3.1.12 ship — Windows windowed play, web-paced loader, HLS live:
+
+- Version contract: `package.json` 3.1.12; Android `versionName` 3.1.12 /
+  `versionCode` 357; Windows client package/Tauri/Cargo 3.1.12.
+- Windows Play stays windowed. Exclusive fullscreen is only F / the
+  fullscreen button. Closing the guide also returns windowed.
+- Windows startup load line uses the same stages and 650/1400/2200/3000
+  timing as web (hot Play starts at Mounting). The lane no longer restarts
+  on ready/paused blips before the first picture.
+- Native overlay shows title + episode, not the `.mkv` filename. Buffer and
+  played share the same seek track.
+- Native HLS playlists rewrite relative child URIs against the upstream URL
+  so channels such as Iran International resolve instead of 404ing on
+  `127.0.0.1:7777`.
+- Personal-library Continue Watching paints the local file immediately.
+  Home art/update and chrome hide leftovers stay on the same web surface.
+- `npm.cmd run verify:full` on emulator `emulator-5554` (not the Shield):
+  IPTV/P9, CC/P11, and isolated `/api/server` 3.1.12 pass. First full-suite
+  run failed one extract (`nativeOverlaySource` missing from the Trakt
+  resume eval); after the helper was included, Node suite **656/656** and
+  the P14 focused phase4 pattern pass. Household VOD play/seek/resume/CC
+  and IPTV web+native retune pass. Overlapping Play still 404'd the FROM
+  remux while Mario 4K remuxed (same leftover-mount class as v3.1.11).
+  Android ExoPlayer stress PASS. Browser Home/Movies/Live TV/Music pages
+  load. Windows GPU not instrumented.
+
 2026-08-26, v3.1.11 ship — in-app Windows update, hide the wrong platform:
 
 - Version contract: `package.json` 3.1.11; Android `versionName` 3.1.11 /

@@ -245,9 +245,12 @@ test('Trakt percent-only native resume reaches direct and server-seek Android pa
   assert.strictEqual(traktResumeFractionForItem({ type: 'movie', _traktPct: 42, _startOver: true }), 0,
     'explicit Start Over must not reapply imported percentage progress');
 
+  const overlayStart = ui.indexOf('function nativeOverlaySource(p)');
+  const overlayEnd = ui.indexOf('function nativeMimeForKind(p, kind)', overlayStart);
   const nativeStart = ui.indexOf('function tryNativeVideoPlayer(kind, atSeconds, opts = {})');
   const nativeEnd = ui.indexOf('function tryNativePlaybackLadder(', nativeStart);
-  assert.ok(nativeStart >= 0 && nativeEnd > nativeStart, 'native payload builder should be extractable');
+  assert.ok(overlayStart >= 0 && overlayEnd > overlayStart && nativeStart >= 0 && nativeEnd > nativeStart,
+    'native payload builder should be extractable with the overlay source helper');
   const payloads = [];
   const state = { playing: {
     item: { key: 'tmdb:movie:91', type: 'movie', title: 'Percent Resume', _traktPct: 42 },
@@ -260,7 +263,7 @@ test('Trakt percent-only native resume reaches direct and server-seek Android pa
     'absoluteArtworkUrl', 'nativeMimeForKind', 'nativeQualityLabel', 'applySubSize',
     'nativeSubtitleChoices', 'nativeEpisodeChoices', 'loadSubShift', 'traktResumeFractionForItem',
     'prefLang', 'nativeAudioChoices', 'prefAudioLang', 'audioLangKey', 'applyInitialAudioPreference',
-    'window', 'location', `${ui.slice(nativeStart, nativeEnd)}\nreturn tryNativeVideoPlayer;`)(
+    'window', 'location', `${ui.slice(overlayStart, overlayEnd)}\n${ui.slice(nativeStart, nativeEnd)}\nreturn tryNativeVideoPlayer;`)(
       state, () => true, (_p, at) => `/api/remux/one?start=${at}`, () => ({ blocked: false, rel: '' }),
       () => ({ rel: '', url: '', lang: '', label: '', shift: 0 }), () => {},
       (it) => ({ title: it.title, subline: '' }), () => '', () => '', () => '4K', () => 'M',
@@ -824,8 +827,8 @@ test('quality toggle is a source-selection preference that survives Continue Wat
   // and rows upserted DURING a refetch win the merge.
   assert.match(ui, /function trackWatchPost\(job\) \{[\s\S]+S\._pendingWatchPosts\.add\(job\);[\s\S]+function watchPostsSettled\(\) \{/,
     'watch POSTs register in a pending set that derived reads can await');
-  assert.match(ui, /S\._watchJob = \(async \(\) => \{[\s\S]{0,600}await watchPostsSettled\(\);[\s\S]{0,900}const localBy = new Map\(localRows\.filter\(\(w\) => w && w\._localAt > fetchStart\)/,
-    'the /api/watch refetch waits for pending saves and lets mid-fetch local upserts win the merge');
+  assert.match(ui, /S\._watchJob = \(async \(\) => \{[\s\S]{0,600}await watchPostsSettled\(\);[\s\S]{0,1200}const newerLocal = \(server, loc\) => \{[\s\S]+if \(loc\._localAt > fetchStart\) return loc;[\s\S]+return localAt >= serverAt \? loc : server/,
+    'the /api/watch refetch waits for pending saves and lets newer local upserts win the merge');
   assert.match(ui, /S\._homeTvNextJob = watchPostsSettled\(\)\.then\(\(\) => api\('\/api\/watch\/next' \+ profileQ\(\)\)\)/,
     'the next-episode row fetch is ordered behind pending watch saves');
   assert.ok((ui.match(/trackWatchPost\(api\('\/api\/watch', \{ method: 'POST'/g) || []).length >= 6,
@@ -1353,6 +1356,18 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'watch metadata should not persist tokenized local artwork URLs that will expire');
   assert.match(ui, /const art = freshLocalArtForKey\(w\.key\);[\s\S]+poster: poster \|\| procBackdrop[\s\S]+backdrop: backdrop \|\| procBackdrop/,
     'Continue Watching should rehydrate fresh local artwork before falling back');
+  assert.match(ui, /const loc = S\.localMap && S\.localMap\[w\.key\];[\s\S]+item\._local = \{ streamUrl: loc\.streamUrl, playUrl: loc\.playUrl, name: loc\.name \}/,
+    'Continue Watching attaches the personal-library stream so a click does not usenet-search');
+  assert.match(ui, /function paintHomeWatchNow\(/,
+    'watch saves immediately repaint Home Continue Watching without an app restart');
+  assert.match(ui, /if \(v === 'home' && !opts\.preservePage\) \{[\s\S]+if \(cachedWatchRowsForHome\(\)\.length\) paintHomeWatchNow\(\);/,
+    'Home from IR Movies / IR TV rebuilds Continue Watching from the upserted watch cache');
+  assert.match(ui, /function localLookupKeysForItem\(it\) \{[\s\S]+it\.key/,
+    'local playback lookup includes unmatched local: library keys, not only TMDB ids');
+  assert.match(ui, /function ensureLocalMap\(\) \{[\s\S]+Leave the map unset/,
+    'an empty local map must not lock later personal-library warming');
+  assert.match(ui, /newerLocal\(w, localBy\.get\(w\.key\)\)/,
+    'a newer local watch upsert beats a stale /api/watch refetch');
   assert.match(ui, /const meta = wlMeta\(p\.item\);[\s\S]+meta, \/\/ episodes resume \+ reopen/,
     'watch progress should persist sanitized metadata through the shared watchlist metadata helper');
   assert.match(ui, /function openLocalDetail\(it\) \{[\s\S]+const resume = resumePositionForItem\(it\);[\s\S]+\$\(\'dStartOver\'\)\.style\.display = resume \? '' : 'none';[\s\S]+updateDetailPlayLabel\(resume \? \{ label: 'Resume', target: \{ \.\.\.it, resume \} \}/,
@@ -3256,7 +3271,7 @@ test('Android native player: direct source and native chrome stay out of the web
   assert.ok(ui.includes('id="prefContentTextSize"') && ui.includes("localStorage.setItem('triboon.textsize'")
     && ui.includes('function applyContentTextSize()'),
     'Preferences should expose a per-device content text-size picker');
-  assert.match(ui, /Content text-size preference:[\s\S]+The rail, Settings, Preferences, auth gates and player controls keep fixed geometry[\s\S]+#hero h1\{font-size:var\(--ctHeroTitle\)[\s\S]+\.pgRow \.pgName\{font-size:var\(--ctLiveTitle\)[\s\S]+\.musicRow \.mT/,
+  assert.match(ui, /Content text-size preference:[\s\S]+The rail, Settings, Preferences, auth gates and player controls keep fixed geometry[\s\S]+#hero h1\{font-size:var\(--ctHeroTitle\)[\s\S]+\.pgRow \.pgName\{font-size:var\(--ctLiveTitle\)[\s\S]+\.musicRow \.mT[\s\S]+\.mCard \.mLbl[\s\S]+\.abCard \.abT[\s\S]+\.srcRow \.srcMeta/,
     'content text size should scope to media/content pages without resizing the rail or settings chrome');
   assert.match(ui, /const THEME_TOKEN_MAP = \{[\s\S]+ink: '--ink'[\s\S]+surface: '--surface'[\s\S]+focus: '--focus'[\s\S]+scrim: '--scrim'/,
     'theme choices should remap full design roles, not only the three accent colors');
@@ -3530,6 +3545,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'native stats should report video, audio, and bandwidth estimates to the web player stats panel');
   assert.match(ui, /qualityLabel: nativeQualityLabel\(p, kind\),[\s\S]+size: p\.size \|\| 0,[\s\S]+duration: Math\.max/,
     'web-to-native player payload should include the selected movie or episode file size');
+  assert.match(ui, /function nativeOverlaySource\(p\) \{[\s\S]+p\.item\.type === 'live'[\s\S]+source: nativeOverlaySource\(p\)/,
+    'native player overlay sends live group/source, never the VOD filename');
   assert.match(ui, /rows\.push\(\['Size', fmtBytes\(p\.size \|\| native\.size\)\]\);/,
     'web player info should show the selected movie or episode file size, including native bridge fallback');
   assert.match(android, /private long nativePlaybackSizeBytes = 0L;[\s\S]+long playbackSizeBytes = Math\.max\(0L, j\.optLong\("size", 0L\)\);[\s\S]+nativePlaybackSizeBytes = playbackSizeBytes/,
@@ -4772,8 +4789,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'Discover rail preview restores the last rows instead of refetching TMDB');
   assert.match(ui, /function restoreDiscoverCache\(\) \{[\s\S]+if \(!root\.querySelector\('\[data-row\]'\)\) renderRowsInto/,
     'Discover keeps its already-painted rows instead of remounting every cover');
-  assert.match(ui, /if \(v === 'home' && !opts\.preservePage\) \{[\s\S]+peekPageCache\('home'\)[\s\S]+setRowsView\(\$\('rows'\), S\.rows, true\)[\s\S]+else loadRows\(\);/,
-    'Home keeps already-painted rows instead of reloading watch on every return');
+  assert.match(ui, /if \(v === 'home' && !opts\.preservePage\) \{[\s\S]+peekPageCache\('home'\)[\s\S]+cachedWatchRowsForHome\(\)\.length[\s\S]+paintHomeWatchNow\(\)[\s\S]+loadRows\(\{ preserveFocus: true, background: true \}\)[\s\S]+else loadRows\(\);/,
+    'returning to Home rebuilds Continue Watching from the latest watch cache, not the stale last-painted row');
   assert.match(ui, /if \(peekPageCache\('calendar'\)\) \{/,
     'Calendar keeps the last week instead of refetching TMDB on every visit');
   assert.match(ui, /if \(\$\('musicBrowse'\)\.children\.length && S\.musicHome\) \{/,
@@ -5698,9 +5715,9 @@ test('Android native player: direct source and native chrome stay out of the web
   // Continue Watching covers resume on one press everywhere: movies match episodes and the
   // hero Resume button; browsers already cap at 1080p; fresh titles still open details;
   // Details stays on the hold-OK/⋯ card menu.
-  assert.match(ui, /if \(isContinueWatchingItem\(it\) && \(\+it\.resume \|\| 0\) > 0 && !it\._local\) \{[\s\S]{0,700}return play\(it\);/,
-    'a Continue Watching cover with real resume plays directly on every client');
-  assert.doesNotMatch(ui, /if \(isContinueWatchingItem\(it\) && \(\+it\.resume \|\| 0\) > 0 && !it\._local\) \{[\s\S]{0,700}isWebBrowserClient\(\)/,
+  assert.match(ui, /if \(isContinueWatchingItem\(it\) && \(\+it\.resume \|\| 0\) > 0\) \{[\s\S]{0,700}const loc = localPlaybackForItem\(it\);[\s\S]{0,200}return loc \? playLocal\(\{ \.\.\.it, _local: loc \}\) : play\(it\);/,
+    'a Continue Watching cover with real resume plays directly on every client, including personal-library files');
+  assert.doesNotMatch(ui, /if \(isContinueWatchingItem\(it\) && \(\+it\.resume \|\| 0\) > 0\) \{[\s\S]{0,700}isWebBrowserClient\(\)/,
     'web browsers no longer stop Continue Watching at the details page');
   assert.match(ui, /async function renderLiveEpgStrip\(idx\) \{[\s\S]+fetchGuideBatch\(\[ch\]\)[\s\S]+paintLiveEpgStrip\(\)/,
     'live player should fetch the channel schedule and paint a top EPG strip');
@@ -7741,6 +7758,8 @@ test('audit contracts: local age gate, next-episode recency, music queue, scanne
     'library TMDB search verifies the hit title against the folder/file name');
   assert.match(server, /libraryItemMatchesTmdb\(/,
     'local-lookup refuses a stored TMDB id whose file title does not match');
+  assert.match(server, /const byLocalKey = \/\^local:\/i\.test\(key\);[\s\S]+if \(!byLocalKey && !libraryItemMatchesTmdb\(row\.item\)\) continue/,
+    'local-lookup still returns unmatched personal-library files by local:lib:idx');
   assert.doesNotMatch(server, /\(\(await tmdb\.get\(q\)\)\.results \|\| \[\]\)\[0\]/,
     'library search never binds results[0] without a title match');
 
@@ -7887,4 +7906,31 @@ test('app updates: Android, Windows, and other browsers each see only their own 
   const linux = visibility({ ua: 'Mozilla/5.0 X11 Linux x86_64' });
   assert.deepStrictEqual(linux, { apk: true, win: false, server: false, kind: '' },
     'a Linux browser keeps the APK download and hides Windows installers');
+});
+
+test('v3.1.12: Music/Audiobooks TV D-pad + Large text/cover on every section', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  // Music entry retries until a browse cover exists — same shape as Audiobooks/calendar.
+  // Landing on the search field first used to trap the Android TV remote (input swallow).
+  assert.match(ui, /if \(S\.view === 'music'\) \{[\s\S]+#musicBrowse \.mChip\.focus[\s\S]+chipEls\(\)\.length[\s\S]+focusChip\(S\.chipIdx \|\| 0\)[\s\S]+const parked = \(document\.activeElement === \$\('musicSearch'\)[\s\S]+focusContent\(musicTries \+ 1\)/,
+    'entering Music retries until a browse chip exists then lands on it, instead of stranding focus on search');
+  assert.match(ui, /function moveMusicSearchDown\(\) \{[\s\S]+S\.zone = 'musicChips';[\s\S]+setTimeout\(\(\) => \{[\s\S]+chipEls\(\)\.length[\s\S]+focusChip/,
+    'ArrowDown from Music search retries onto chips instead of clearing focus into an empty zone');
+  assert.match(ui, /if \(inInput && ae === \$\('musicSearch'\)\) \{[\s\S]+k === 'ArrowUp'[\s\S]+k\.startsWith\('Arrow'\)[\s\S]+moveMusicSearchDown\(\)[\s\S]+return;/,
+    'TV arrows from the Music search field stay in the page model and never fall through to the generic input swallow');
+  assert.match(ui, /if \(chipEls\(\)\.length && !musicRows\(\)\.length && S\.zone !== 'musicChips'\) S\.zone = 'musicChips';[\s\S]+if \(S\.zone === 'musicChips'\)/,
+    'Music browse arrows recover onto chips even when the leftover zone is stale');
+  assert.match(ui, /S\.view === 'music' \|\| S\.view === 'audiobooks'[\s\S]+el\.focus\(\{ preventScroll: true \}\)/,
+    'TV Music/Audiobook covers pin native focus so the WebView cannot snap the caret back into search');
+  assert.match(ui, /S\.zone === 'musicChips' \|\| S\.zone === 'music'[\s\S]+\$\('musicSearch'\)[\s\S]+AB\.zone === 'ab'[\s\S]+\$\('abSearch'\)/,
+    'TV focusin bounces a search-field steal while a Music/Audiobook cover owns the D-pad');
+  // Large text/cover: leftover hardcoded px on Music browse, Audiobooks, Sources, IPTV.
+  assert.match(ui, /--ctSrcTitle:13\.5px;--ctSrcName:11\.5px;--ctSrcChip:9\.5px/,
+    'Sources drawer text follows the content text-size tokens');
+  assert.match(ui, /\.mCard \.mLbl\{font-size:var\(--ctMusicTitle\)\}[\s\S]+\.abCard \.abT\{font-size:var\(--ctCardTitle\)\}[\s\S]+\.srcRow \.srcMeta\{font-size:var\(--ctSrcTitle\)\}/,
+    'Large text size grows Music browse titles, audiobook titles, and Sources rows');
+  assert.match(ui, /\.chGrid\{display:grid;grid-template-columns:repeat\(auto-fill,minmax\(var\(--poster\),1fr\)\)/,
+    'IPTV channel cards follow cover size instead of a locked 185px');
+  assert.match(ui, /#chBody\.liveGuideShell \.liveChannelPane \.chGrid\{margin:0;grid-template-columns:repeat\(auto-fill,minmax\(var\(--poster\),1fr\)\)/,
+    'Live TV guide channel tiles follow cover size');
 });

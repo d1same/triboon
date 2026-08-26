@@ -62,6 +62,8 @@ pub struct LoadingPayload {
     backdrop_url: String,
     #[serde(default)]
     playback_token: u64,
+    #[serde(default)]
+    hot: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -1030,6 +1032,7 @@ struct PlayerUiState {
     has_next: bool,
     has_quality_choices: bool,
     message: String,
+    hot: bool,
 }
 
 impl Default for PlayerUiState {
@@ -1076,6 +1079,7 @@ impl Default for PlayerUiState {
             has_next: false,
             has_quality_choices: false,
             message: String::new(),
+            hot: false,
         }
     }
 }
@@ -1088,6 +1092,7 @@ impl PlayerUiState {
             title: payload.title.clone(),
             backdrop_url: payload.backdrop_url.clone(),
             buffering: true,
+            hot: payload.hot,
             ..Self::default()
         }
     }
@@ -1224,7 +1229,9 @@ fn ensure_player_window(app: &tauri::AppHandle) -> Result<WebviewWindow, String>
     )
     .title("Triboon Player")
     .decorations(false)
-    .fullscreen(true)
+    .inner_size(1280.0, 800.0)
+    .min_inner_size(880.0, 560.0)
+    .fullscreen(false)
     .visible(false)
     .transparent(true)
     .on_navigation(|url| crate::is_internal_app_url(url.as_str()))
@@ -1267,10 +1274,73 @@ fn player_surface_id(_window: &WebviewWindow) -> Result<i64, String> {
     Err("native player surfaces are available only on Windows".into())
 }
 
-fn show_player(app: &tauri::AppHandle) -> Result<WebviewWindow, String> {
-    let player = ensure_player_window(app)?;
+fn player_needs_windowed_restore(player: &WebviewWindow) -> bool {
+    if player.is_fullscreen().unwrap_or(false) {
+        return true;
+    }
+    match player.inner_size() {
+        Ok(size) => size.width < 640 || size.height < 400,
+        Err(_) => true,
+    }
+}
+
+fn restore_windowed_player(app: &tauri::AppHandle, player: &WebviewWindow) {
     let _ = player.set_always_on_top(false);
-    let _ = player.set_fullscreen(true);
+    let _ = player.set_fullscreen(false);
+    if let Some(main) = app.get_webview_window(CONNECT_WINDOW_LABEL) {
+        if let (Ok(pos), Ok(size)) = (main.outer_position(), main.outer_size()) {
+            let _ = player.set_position(pos);
+            let _ = player.set_size(tauri::PhysicalSize::new(
+                size.width.max(880),
+                size.height.max(560),
+            ));
+            return;
+        }
+    }
+    let _ = player.set_size(tauri::PhysicalSize::new(1280, 800));
+}
+
+fn toggle_player_fullscreen(app: &tauri::AppHandle) -> Result<(), String> {
+    if stored_guide_pip(app).is_some() {
+        clear_guide_pip(app);
+        if let Some(main) = app.get_webview_window(CONNECT_WINDOW_LABEL) {
+            let _ = main.hide();
+        }
+        if let Some(player) = app.get_webview_window(PLAYER_WINDOW_LABEL) {
+            let _ = player.set_always_on_top(false);
+            player.set_fullscreen(true).map_err(|e| e.to_string())?;
+            player.show().map_err(|e| e.to_string())?;
+            let _ = player.set_focus();
+        }
+        return Ok(());
+    }
+    let Some(player) = app.get_webview_window(PLAYER_WINDOW_LABEL) else {
+        return Ok(());
+    };
+    let fullscreen = player.is_fullscreen().unwrap_or(false);
+    if fullscreen {
+        let _ = player.set_always_on_top(false);
+        player.set_fullscreen(false).map_err(|e| e.to_string())?;
+        restore_windowed_player(app, &player);
+    } else {
+        let _ = player.set_always_on_top(false);
+        player.set_fullscreen(true).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn show_player(app: &tauri::AppHandle) -> Result<WebviewWindow, String> {
+    // A leftover Live TV guide slot must not steal the next VOD/live session into PiP.
+    // Play stays windowed; exclusive fullscreen is only the F / fullscreen button.
+    let was_pip = stored_guide_pip(app).is_some();
+    clear_guide_pip(app);
+    let player = ensure_player_window(app)?;
+    if was_pip || player_needs_windowed_restore(&player) {
+        restore_windowed_player(app, &player);
+    } else {
+        let _ = player.set_always_on_top(false);
+        let _ = player.set_fullscreen(false);
+    }
     player.show().map_err(|e| e.to_string())?;
     let _ = player.set_focus();
     if let Some(main) = app.get_webview_window(CONNECT_WINDOW_LABEL) {
@@ -1406,7 +1476,7 @@ pub fn windows_player_play_live(
     let server = require_catalog_origin(&window, &state)?;
     let mut request = validate_live(payload, &server)?;
     // Opening the guide stays on windows_player_open_guide. A channel pick must play
-    // like the Live TV page: fullscreen, with the live control bar.
+    // like the Live TV page: the full player chrome, not a leftover PiP slot.
     if request.guide {
         request.guide = false;
         eval_callback(&app, "__tvNativeGuideClosed", vec![json!(0)]);
@@ -1433,12 +1503,7 @@ pub fn windows_player_control(
         }
         ControlAction::Close => return controller.close(&app, true),
         ControlAction::ToggleFullscreen => {
-            if let Some(player) = app.get_webview_window(PLAYER_WINDOW_LABEL) {
-                let fullscreen = player.is_fullscreen().unwrap_or(false);
-                player
-                    .set_fullscreen(!fullscreen)
-                    .map_err(|e| e.to_string())?;
-            }
+            toggle_player_fullscreen(&app)?;
             return Ok(());
         }
         ControlAction::Minimize => {
@@ -1575,8 +1640,7 @@ fn leave_guide_mode(app: &tauri::AppHandle) -> Result<(), String> {
         let _ = main.hide();
     }
     if let Some(player) = app.get_webview_window(PLAYER_WINDOW_LABEL) {
-        let _ = player.set_always_on_top(false);
-        let _ = player.set_fullscreen(true);
+        restore_windowed_player(app, &player);
         player.show().map_err(|e| e.to_string())?;
         let _ = player.set_focus();
     }
@@ -2801,10 +2865,7 @@ fn handle_control(
             }
         }
         ControlAction::ToggleFullscreen => {
-            if let Some(window) = app.get_webview_window(PLAYER_WINDOW_LABEL) {
-                let fullscreen = window.is_fullscreen().unwrap_or(false);
-                let _ = window.set_fullscreen(!fullscreen);
-            }
+            let _ = toggle_player_fullscreen(app);
         }
         ControlAction::Minimize => {
             if let Some(window) = app.get_webview_window(PLAYER_WINDOW_LABEL) {
