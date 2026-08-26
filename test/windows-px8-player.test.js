@@ -88,6 +88,31 @@ test('Windows client: remote WebView gets only the guarded Triboon bridge', () =
     'bridge injection happens only after the configured origin check');
 });
 
+test('Windows client: in-app update uses official installers only', () => {
+  const main = read('clients/windows-px8/src-tauri/src/main.rs');
+  const update = read('clients/windows-px8/src-tauri/src/update.rs');
+  const catalog = JSON.parse(read('clients/windows-px8/src-tauri/capabilities/catalog.json'));
+  const connect = JSON.parse(read('clients/windows-px8/src-tauri/capabilities/connect.json'));
+  assert.ok(catalog.permissions.includes('allow-windows-install-app-update'),
+    'the catalog capability must allow the update command');
+  assert.ok(!connect.permissions.includes('allow-windows-install-app-update'),
+    'the connect screen must not install updates');
+  assert.match(main, /fn windows_install_app_update[\s\S]+require_catalog_origin[\s\S]+allowed_windows_update_filename/,
+    'Rust re-checks catalog origin and the official installer URL');
+  assert.match(update, /\/d1same\/triboon\/releases\/latest\/download\/Triboon-Windows-Client\.exe/,
+    'only the stable Windows client alias is accepted');
+  assert.match(update, /\/d1same\/triboon\/releases\/latest\/download\/Triboon-Windows-Server\.exe/,
+    'only the stable Windows server alias is accepted');
+  assert.match(update, /SHA256SUMS\.txt/,
+    'the downloaded installer must match the official checksum file');
+  assert.doesNotMatch(update, /\/S"|\/SILENT|\/VERYSILENT/,
+    'Windows updates must open the installer UI, not a silent install');
+  assert.match(webSource, /function openWindowsUpdate\([\s\S]+installAppUpdate[\s\S]+WIN_CLIENT_URL/,
+    'the catalog uses the Windows installer path instead of the APK');
+  assert.match(webSource, /body\.windowsDesktop #apkUpdate/,
+    'the Windows desktop client hides the Android APK button');
+});
+
 test('Windows client: a saved server reconnects without another click', () => {
   const connect = read('clients/windows-px8/ui/connect.html');
   assert.match(connect, /invoke\('last_server'\)[\s\S]+form\.requestSubmit\(\)/,
@@ -98,7 +123,7 @@ test('Windows client: bridge exposes Android-compatible native playback controls
   const { window, calls } = loadBridge();
   const bridge = window.TriboonTV;
   const required = [
-    'nativeChromeVersion', 'nativePlaybackCaps', 'appVersion', 'showVideoLoading', 'playVideo', 'playLive',
+    'nativeChromeVersion', 'nativePlaybackCaps', 'appVersion', 'installAppUpdate', 'showVideoLoading', 'playVideo', 'playLive',
     'closeVideo', 'play', 'pause', 'resume', 'togglePlay', 'seekTo', 'seekBy', 'nextEpisode',
     'selectQuality', 'selectAudio', 'selectSubtitle', 'updateSubtitleChoices',
     'updateActiveSubtitle', 'updateVideoDuration', 'updateEpisodeChoices', 'upNext',
@@ -123,6 +148,15 @@ test('Windows client: bridge exposes Android-compatible native playback controls
   })), true);
   assert.strictEqual(calls.at(-1).command, 'windows_player_play_vod');
   assert.strictEqual(calls.at(-1).args.payload.playbackToken, 91);
+  assert.strictEqual(bridge.installAppUpdate(
+    'https://github.com/d1same/triboon/releases/latest/download/Triboon-Windows-Client.exe',
+  ), true);
+  assert.strictEqual(calls.at(-1).command, 'windows_install_app_update');
+  assert.strictEqual(
+    calls.at(-1).args.url,
+    'https://github.com/d1same/triboon/releases/latest/download/Triboon-Windows-Client.exe',
+  );
+
   assert.throws(() => bridge.playVideo(JSON.stringify({
     url: 'https://evil.example/movie?t=secret', playbackToken: 91,
   })), /invalid/i, 'VOD URLs cannot escape the configured server origin');

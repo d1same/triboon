@@ -1382,6 +1382,140 @@ test('iptv: a rapid zap storm holds the 1-connection contract and leaks no upstr
   }
 });
 
+test('iptv: dropping the old request before opening the next still releases the previous channel', async () => {
+  // ExoPlayer zap: stop ESPN, THEN start CNN. The old leave is "client closed" (linger),
+  // not an overlapping retune. One surface must still hold only one provider connection.
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-iptv-dropfirst-'));
+  let activeStreams = 0;
+  let totalConnections = 0;
+  const timers = new Set();
+  const playlist = ['#EXTM3U'];
+  for (let i = 0; i < 2; i++) {
+    playlist.push(`#EXTINF:-1 group-title="Test",Drop ${i}`);
+    playlist.push(`http://127.0.0.1:PORT/live/${i}.ts`);
+  }
+  const upstream = http.createServer((req, res) => {
+    if (req.url === '/list.m3u') {
+      res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' });
+      return res.end(playlist.join('\n').replaceAll('PORT', String(upstream.address().port)));
+    }
+    if (req.url.startsWith('/live/')) {
+      activeStreams++;
+      totalConnections++;
+      res.writeHead(200, { 'content-type': 'video/mp2t' });
+      res.write(Buffer.alloc(188, 0x47));
+      const t = setInterval(() => { if (!res.destroyed) res.write(Buffer.alloc(188, 0x47)); }, 25);
+      timers.add(t);
+      res.on('close', () => { clearInterval(t); timers.delete(t); activeStreams--; });
+      return;
+    }
+    res.writeHead(404); res.end();
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const openStream = (port, p) => new Promise((resolve, reject) => {
+    const req = http.get({ host: '127.0.0.1', port, path: p, headers: { 'user-agent': 'TriboonTV-test' } },
+      (res) => { res.once('data', () => resolve({ req, res })); res.on('error', () => {}); });
+    req.on('error', reject);
+  });
+  const waitFor = async (fn, ms = 2500) => {
+    const until = Date.now() + ms;
+    while (Date.now() < until) { if (fn()) return true; await new Promise((r) => setTimeout(r, 25)); }
+    return false;
+  };
+  const withSurface = (u, s) => u + (u.includes('?') ? '&' : '?') + 'surface=' + s;
+  let srv;
+  let first;
+  let second;
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/settings',
+      { iptvMode: 'm3u', iptvUrl: `http://127.0.0.1:${upstream.address().port}/list.m3u`, epgUrl: null }, admin);
+    const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    assert.strictEqual(ch.status, 200);
+    first = await openStream(srv.port, withSurface(ch.json.channels[0].nativeUrl, 'main'));
+    assert.ok(await waitFor(() => activeStreams === 1), `first channel should be live; active=${activeStreams}`);
+    try { first.res.destroy(); first.req.destroy(); } catch {}
+    assert.ok(await waitFor(() => activeStreams === 1 || activeStreams === 0),
+      'old client close may linger the hub, but must not open a second upstream');
+    second = await openStream(srv.port, withSurface(ch.json.channels[1].nativeUrl, 'main'));
+    assert.ok(await waitFor(() => activeStreams === 1),
+      `opening a different channel must close the lingering hub immediately; active=${activeStreams}`);
+    assert.strictEqual(totalConnections, 2, `one connection per channel, no leftover (${totalConnections})`);
+  } finally {
+    for (const cl of [first, second]) {
+      if (cl) { try { cl.res.destroy(); } catch {} try { cl.req.destroy(); } catch {} }
+    }
+    if (srv) await srv.shutdown();
+    timers.forEach((t) => clearInterval(t));
+    upstream.close();
+  }
+});
+
+test('iptv: same-channel reconnect within linger reuses the upstream', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-iptv-linger-rejoin-'));
+  let activeStreams = 0;
+  let totalConnections = 0;
+  const timers = new Set();
+  const playlist = ['#EXTM3U'];
+  playlist.push('#EXTINF:-1 group-title="Test",Linger Rejoin');
+  playlist.push('http://127.0.0.1:PORT/live/0.ts');
+  const upstream = http.createServer((req, res) => {
+    if (req.url === '/list.m3u') {
+      res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' });
+      return res.end(playlist.join('\n').replaceAll('PORT', String(upstream.address().port)));
+    }
+    if (req.url.startsWith('/live/')) {
+      activeStreams++;
+      totalConnections++;
+      res.writeHead(200, { 'content-type': 'video/mp2t' });
+      res.write(Buffer.alloc(188, 0x47));
+      const t = setInterval(() => { if (!res.destroyed) res.write(Buffer.alloc(188, 0x47)); }, 25);
+      timers.add(t);
+      res.on('close', () => { clearInterval(t); timers.delete(t); activeStreams--; });
+      return;
+    }
+    res.writeHead(404); res.end();
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const openStream = (port, p) => new Promise((resolve, reject) => {
+    const req = http.get({ host: '127.0.0.1', port, path: p, headers: { 'user-agent': 'TriboonTV-test' } },
+      (res) => { res.once('data', () => resolve({ req, res })); res.on('error', () => {}); });
+    req.on('error', reject);
+  });
+  const waitFor = async (fn, ms = 2500) => {
+    const until = Date.now() + ms;
+    while (Date.now() < until) { if (fn()) return true; await new Promise((r) => setTimeout(r, 25)); }
+    return false;
+  };
+  const withSurface = (u, s) => u + (u.includes('?') ? '&' : '?') + 'surface=' + s;
+  let srv;
+  let first;
+  let second;
+  try {
+    srv = await bootServer({ TRIBOON_DATA: dataDir, NNTP_HOST: null, TMDB_BASE: null });
+    const admin = await setupAdmin(srv.port);
+    await httpJson(srv.port, 'POST', '/api/settings',
+      { iptvMode: 'm3u', iptvUrl: `http://127.0.0.1:${upstream.address().port}/list.m3u`, epgUrl: null }, admin);
+    const ch = await httpJson(srv.port, 'GET', '/api/iptv/channels', null, admin);
+    first = await openStream(srv.port, withSurface(ch.json.channels[0].nativeUrl, 'main'));
+    assert.ok(await waitFor(() => activeStreams === 1));
+    try { first.res.destroy(); first.req.destroy(); } catch {}
+    await new Promise((r) => setTimeout(r, 80));
+    second = await openStream(srv.port, withSurface(ch.json.channels[0].nativeUrl, 'main'));
+    await new Promise((r) => setTimeout(r, 80));
+    assert.strictEqual(totalConnections, 1, `zap-back must reuse the lingering hub (got ${totalConnections})`);
+    assert.strictEqual(activeStreams, 1, 'exactly one provider connection after same-channel rejoin');
+  } finally {
+    for (const cl of [first, second]) {
+      if (cl) { try { cl.res.destroy(); } catch {} try { cl.req.destroy(); } catch {} }
+    }
+    if (srv) await srv.shutdown();
+    timers.forEach((t) => clearInterval(t));
+    upstream.close();
+  }
+});
+
 test('iptv: provider protection failures are dampened but recover after the configured window', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triboon-iptv-bot-cache-'));
   let liveHits = 0;

@@ -40,6 +40,19 @@ const CASES = [
     ],
   },
   {
+    id: 'mutiny-2026',
+    q: 'mutiny 2026',
+    good: [
+      'Mutiny.2026.2160p.WEB-DL.H.265-FLUX',
+      'The.Mutiny.2026.1080p.WEB-DL-NTb',
+    ],
+    bad: [
+      'Mutiny.on.the.Bounty.1962.1080p.BluRay-x',
+      'Mutiny.2019.1080p.WEB-DL-x',
+      'The.Mutiny.S01E01.1080p.WEB-DL-x',
+    ],
+  },
+  {
     id: 'from',
     q: 'from s01e01',
     good: ['FROM.S01E01.Long.Days.Journey.Into.Night.1080p.AMZN.WEB-DL.DDP5.1.H.264-FLUX'],

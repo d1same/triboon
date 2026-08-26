@@ -196,8 +196,64 @@ function shortTitleQuery(paramsQ, wanted) {
   return q && q.toLowerCase() !== current.toLowerCase() ? q : '';
 }
 
+function sanitizeIndexerQuery(q) {
+  return String(q || '').replace(/['’`]/g, '').replace(/[:&,!?./\\()\[\]\-_;]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function queryTailTokens(paramsQ) {
+  return String(paramsQ || '').split(/\s+/).filter((w) => /^(S\d{2}E\d{2}|s\d{2}e\d{2}|(19|20)\d{2})$/.test(w));
+}
+
+// Extra indexer queries from TMDB original/aka names. SEARCH only — verify still uses the
+// catalog wanted title, so "The Mutiny" cannot play Mutiny on the Bounty.
+function aliasSearchQueries(paramsQ, aliases, wanted) {
+  const current = sanitizeIndexerQuery(paramsQ);
+  const currentLc = current.toLowerCase();
+  const tail = queryTailTokens(current);
+  const seen = new Set([currentLc]);
+  const short = shortTitleQuery(current, wanted);
+  if (short) seen.add(short.toLowerCase());
+  const out = [];
+  for (const raw of aliases || []) {
+    const head = sanitizeIndexerQuery(raw);
+    if (!head) continue;
+    const hasTail = tail.some((t) => new RegExp(`\\b${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(head));
+    const q = (hasTail ? head : [...head.split(/\s+/).filter(Boolean), ...tail].join(' ')).trim();
+    const lc = q.toLowerCase();
+    if (!q || seen.has(lc)) continue;
+    seen.add(lc);
+    out.push(q);
+    if (out.length >= 2) break;
+  }
+  return out;
+}
+
+// "Mutiny 2026" often indexes as "Mutiny". Keep the year on the verifier, not the query.
+function yearlessSearchQuery(paramsQ, wanted) {
+  if (!wanted || !wanted.year) return '';
+  const current = String(paramsQ || '').trim();
+  const next = current.replace(/\b(19|20)\d{2}\b/g, ' ').replace(/\s+/g, ' ').trim();
+  return next && next.toLowerCase() !== current.toLowerCase() ? next : '';
+}
+
+function mergeQualifiedResults(results, extraResults, qualifies) {
+  const verified = (extraResults || []).filter(qualifies);
+  if (!verified.length) return results;
+  const seen = new Set(results.map((r) => r.nzbUrl || r.guid || r.name));
+  for (const r of verified) {
+    const k = r.nzbUrl || r.guid || r.name;
+    if (!seen.has(k)) { seen.add(k); results.push(r); }
+  }
+  return results;
+}
+
 function titleWordsMatchFromStart(toks, words) {
   let ti = 0;
+  // Scene names keep a leading "The" the catalog dropped ("The.Mutiny.2026" for Mutiny 2026).
+  while (ti < toks.length && OPTIONAL_TITLE_ARTICLES.has(toks[ti])
+    && words[0] && !titleWordMatches(words[0], toks[ti])) {
+    ti++;
+  }
   for (let wi = 0; wi < words.length; wi++) {
     const w = words[wi];
     const t = toks[ti];
@@ -234,6 +290,13 @@ function releaseMatches(name, wanted) {
   if (wanted.words.length) {
     const variants = [wanted.words];
     if (wanted.aliasWords && wanted.aliasWords.length) variants.push(wanted.aliasWords);
+    // TMDB original/aka of THIS title (Special Ops Lioness for catalog Lioness). Not a
+    // free "contains the word" match — the release must still start with that aka.
+    if (wanted.akaWords && wanted.akaWords.length) {
+      for (const words of wanted.akaWords) {
+        if (words && words.length) variants.push(words);
+      }
+    }
     let matched = false;
     for (const words of variants) {
       const ti = titleWordsMatchFromStart(toks, words);
@@ -1143,6 +1206,9 @@ class Pipeline {
       Number.isInteger(params.year) ? params.year : undefined,
       // A 4K Play fans out an extra 2160p query. Do not reuse a 1080p-only cache hit.
       opts.wantUhd ? 1 : undefined,
+      // Aka/original-title queries must not reuse a title-only hit that missed those files.
+      (opts.akaQueries && opts.akaQueries.length) ? opts.akaQueries.join('|') : undefined,
+      opts.widenSearch === false ? 0 : undefined,
     ]);
   }
 
@@ -1817,6 +1883,11 @@ class Pipeline {
       if (episodeSearch) { uhdParams.season = season; uhdParams.ep = ep; }
       uhdP = this._fanoutMeasured(ixs, uhdParams, { timeoutMs });
     }
+    const akaQs = opts.widenSearch === false ? [] : aliasSearchQueries(params.q, params.aliases, wanted);
+    const akaJobs = akaQs.map((q) => {
+      ixs.forEach((ix) => this.usage.onSearch(ix.name));
+      return this._fanoutMeasured(ixs, { q }, { timeoutMs });
+    });
     let { results, errors } = await this._fanoutMeasured(ixs, params, { timeoutMs });
     // TITLE VERIFICATION — indexers return loosely-related releases; a release only
     // qualifies if its name actually contains the wanted title (and episode/year) AND
@@ -1825,25 +1896,18 @@ class Pipeline {
     results = results.filter(qualifies);
     if (aliasP) {
       const retry = await aliasP;
-      const verified = retry.results.filter(qualifies);
-      if (verified.length) {
-        const seen = new Set(results.map((r) => r.nzbUrl || r.guid || r.name));
-        for (const r of verified) {
-          const k = r.nzbUrl || r.guid || r.name;
-          if (!seen.has(k)) { seen.add(k); results.push(r); }
-        }
-        if (retry.errors && retry.errors.length) errors = errors.concat(retry.errors);
-      }
+      results = mergeQualifiedResults(results, retry.results, qualifies);
+      if (retry.errors && retry.errors.length) errors = errors.concat(retry.errors);
     }
     if (uhdP) {
       const extra = await uhdP;
-      const verified = extra.results.filter(qualifies);
-      if (verified.length) {
-        const seen = new Set(results.map((r) => r.nzbUrl || r.guid || r.name));
-        for (const r of verified) {
-          const k = r.nzbUrl || r.guid || r.name;
-          if (!seen.has(k)) { seen.add(k); results.push(r); }
-        }
+      results = mergeQualifiedResults(results, extra.results, qualifies);
+      if (extra.errors && extra.errors.length) errors = errors.concat(extra.errors);
+    }
+    if (akaJobs.length) {
+      const extras = await Promise.all(akaJobs);
+      for (const extra of extras) {
+        results = mergeQualifiedResults(results, extra.results, qualifies);
         if (extra.errors && extra.errors.length) errors = errors.concat(extra.errors);
       }
     }
@@ -1874,11 +1938,22 @@ class Pipeline {
       const verified = retry.results.filter(qualifies);
       if (verified.length) { results = verified; errors = retry.errors; }
     }
+    // "Mutiny 2026" missed every file indexed as just "Mutiny". Only when the titled
+    // search is empty — a parallel yearless query on every movie splits Play/warmup.
+    if (!results.length && opts.widenSearch !== false) {
+      const yearless = yearlessSearchQuery(params.q, wanted);
+      if (yearless) {
+        ixs.forEach((ix) => this.usage.onSearch(ix.name));
+        const retry = await this._fanoutMeasured(ixs, { q: yearless }, { timeoutMs });
+        const verified = retry.results.filter(qualifies);
+        if (verified.length) { results = verified; errors = retry.errors; }
+      }
+    }
     return { at: Date.now(), results, errors };
   }
 
   // Search + rank only (powers the Sources drawer). Applies cached verdict adjustments.
-  async search(params, policy = {}, { timeoutMs = 2000, allowStale = false } = {}) {
+  async search(params, policy = {}, { timeoutMs = 2000, allowStale = false, widenSearch = true } = {}) {
     const ixs = this.indexers();
     if (!ixs.length) throw new Error('no indexers configured');
     // Scene names never carry punctuation — "Tom Clancy's Jack Ryan: Ghost War" must reach
@@ -1905,6 +1980,11 @@ class Pipeline {
     // Episode Play sends year=2005 on the body, not in q ("The Office S01E01"). Without this
     // copy, The.Office.2024 still matches the title+episode and can outrank the US original.
     if (wanted && !wanted.year && policy.wantedYear) wanted.year = policy.wantedYear;
+    if (widenSearch !== false && params.aliases && params.aliases.length) {
+      wanted.akaWords = params.aliases
+        .map((a) => parseWantedTitle(a).words)
+        .filter((words) => words && words.length);
+    }
     // TV episode context for scoring: a whole-season PACK must not be size-cap-disqualified — only ONE
     // episode streams from it (it's still size-SHAPED, so it stays a low-ranked fallback below singles).
     // Scoped to episode requests; movies/season-less searches never get wantedEpisode → unaffected.
@@ -1916,8 +1996,9 @@ class Pipeline {
       params = { ...params, year: wanted.year };
     }
     const wantUhd = policy.exactResolutionRank === 4 || policy.preferResolutionRank === 4;
-    const key = this._searchCacheKey(params, { wantUhd });
-    const titleKey = this._searchCacheKey(params, { ignoreCatalogIds: true, wantUhd });
+    const akaQueries = widenSearch === false ? [] : aliasSearchQueries(params.q, params.aliases, wanted);
+    const key = this._searchCacheKey(params, { wantUhd, akaQueries, widenSearch });
+    const titleKey = this._searchCacheKey(params, { ignoreCatalogIds: true, wantUhd, akaQueries, widenSearch });
     const maxAgeMs = allowStale ? Number.POSITIVE_INFINITY : 60000;
     let hit = this._getFreshSearchHit(key, maxAgeMs);
     if (!hit && (params.imdbid || params.tvdbid)) {
@@ -1936,7 +2017,7 @@ class Pipeline {
       }
       if (pending) this.metrics.searchInflightJoins++;
       if (!pending) {
-        pending = this._fetchSearchHit(ixs, params, wanted, timeoutMs, { wantUhd })
+        pending = this._fetchSearchHit(ixs, params, wanted, timeoutMs, { wantUhd, widenSearch })
           .then((fresh) => {
             this._rememberSearchHit(key, fresh);
             this._rememberSearchHit(titleKey, fresh);
@@ -2960,7 +3041,9 @@ class Pipeline {
 
 module.exports = {
   Pipeline, GATE_MS, STARTUP_SLOTS, PLAY_RACE_WIDTH, StartupGate,
-  parseWantedTitle, releaseMatches, catalogIdentityMatches, releaseQualifies, shortTitleQuery, candidateKey, nzbVerdictKey,
+  parseWantedTitle, releaseMatches, catalogIdentityMatches, releaseQualifies, shortTitleQuery,
+  aliasSearchQueries, yearlessSearchQuery,
+  candidateKey, nzbVerdictKey,
   releaseFingerprint, applyNzbFingerprintFields,
   summarizeAttempts, stubFeatureReason, parseWantedBook, bookMatches,
   isNonAudioAudiobookMount, firstProbeMsgId, mountHasActivePlayback, ACTIVE_PLAYBACK_GRACE_MS,

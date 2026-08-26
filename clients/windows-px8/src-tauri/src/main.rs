@@ -19,6 +19,7 @@ use std::time::Duration;
 use tauri::{Manager, State, WebviewWindow};
 
 mod player;
+mod update;
 
 const CONNECT_WINDOW_LABEL: &str = "main";
 const PLAYER_WINDOW_LABEL: &str = "player";
@@ -402,6 +403,25 @@ fn windows_app_version(
     }))
 }
 
+#[tauri::command]
+fn windows_install_app_update(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    url: String,
+) -> Result<(), String> {
+    require_catalog_origin(&window, &state)?;
+    let filename = update::allowed_windows_update_filename(&url)
+        .ok_or_else(|| "update link was blocked".to_string())?;
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (app, filename);
+        return Err("Windows updates are only available on Windows".into());
+    }
+    #[cfg(target_os = "windows")]
+    update::start_windows_update(app, url, filename)
+}
+
 fn bridge_script() -> String {
     let bootstrap = json!({
         "chromeVersion": player::native_chrome_version(),
@@ -516,6 +536,7 @@ fn main() {
             windows_native_chrome_version,
             windows_native_playback_caps,
             windows_app_version,
+            windows_install_app_update,
             player::windows_player_show_loading,
             player::windows_player_play_vod,
             player::windows_player_play_live,

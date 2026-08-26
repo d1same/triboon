@@ -107,6 +107,10 @@ web playback, while Android uses `/api/iptv/native/:idx` and ExoPlayer.
   request does not refresh huge Xtream playlists inline.
 - Native IPTV proxy has its own first-byte timeout and returns a clean player
   error instead of hanging forever.
+- One app/surface holds one IPTV provider connection. A last-leave linger
+  (~12s) is only for the same channel (ExoPlayer reconnect / zap-back). Opening
+  a different channel kills that linger immediately so ESPN does not stay open
+  under CNN. Split and Multiview panes keep separate surfaces on purpose.
 - The local HTTP server disables socket reuse for app/player requests so
   cancelled playback cannot leave half-closed sockets that make the app look
   like it is "still waking up."

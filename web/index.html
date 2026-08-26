@@ -550,6 +550,11 @@ body[data-spotlight] .themeChoice:hover .themeTone,
 body[data-spotlight] .themeChoice.focus .themeTone,
 body[data-spotlight] .themeChoice:focus-visible .themeTone{color:var(--btnFocusText)}
 #apkUpdateStatus.updateAvail{color:var(--amber);font-weight:600}
+body.windowsDesktop #apkUpdate,
+body.androidApp #winClientUpdate,
+body.androidApp #winServerUpdate,
+body.tv #winClientUpdate,
+body.tv #winServerUpdate{display:none!important}
 
 /* ---------- auth screens ---------- */
 #gateBackdrop{position:fixed;inset:0;z-index:44;display:none;overflow:hidden;background:var(--ink)}
@@ -3895,8 +3900,8 @@ body.tv #dTitle,body.tv #bdInfo .bdiT{font-size:min(var(--ctDetailTitle),44px)}
   </div>
 </div>
 
-<!-- Proactive "new version available" prompt for the Android app shell. Shown once per launch on
-     the home screen (never during playback). Update installs in-app; Later just dismisses it. -->
+<!-- Proactive "new version available" prompt for native Android / Windows shells. Shown once per
+     launch on the home screen (never during playback). Update installs in-app; Later dismisses it. -->
 <div id="updateModal">
   <div class="box">
     <h2>Update available</h2>
@@ -4460,9 +4465,11 @@ body.tv .abPbg, body.tv .abDbg { filter:brightness(.32); transform:none; } /* pe
       <div id="prefPins"></div>
     </div>
     <div class="panel"><h2>App updates</h2>
-      <p>Install the latest Triboon app — one build runs on both Android TV and phone.</p>
-      <div class="field">
-        <button class="btn primary focusable" id="apkUpdate">Update app</button>
+      <p id="appUpdateCopy">Install the latest Triboon app for this device.</p>
+      <div class="field" id="appUpdateActions" style="display:flex;flex-wrap:wrap;gap:8px">
+        <button class="btn primary focusable" id="apkUpdate">Update Android app</button>
+        <button class="btn primary focusable" id="winClientUpdate" style="display:none">Update Windows app</button>
+        <button class="btn ghost focusable" id="winServerUpdate" style="display:none">Update Windows server</button>
       </div>
       <div class="hint" id="apkUpdateStatus">Current app: checking...</div>
     </div>
@@ -5232,6 +5239,7 @@ const $ = (id) => document.getElementById(id);
 if (/TriboonTV/.test(navigator.userAgent)) document.body.classList.add('tv');
 if (/TriboonAndroid/.test(navigator.userAgent)) document.body.classList.add('androidApp');
 if (/TriboonAndroid/.test(navigator.userAgent) && !/TriboonTV/.test(navigator.userAgent)) document.body.classList.add('mobileShell');
+try { if (window.TriboonTV && window.TriboonTV.__triboonWindowsBridge === true) document.body.classList.add('windowsDesktop'); } catch {}
 // iPhone Safari is not mobileShell. The desktop 3-column OSD clips Fullscreen
 // off the right edge, so park the expand control in the top-right chrome.
 if (/iPhone|iPod/.test(navigator.userAgent)) {
@@ -5999,6 +6007,7 @@ function mapTmdb(x) {
     genre: type === 'tv' ? 'Series' : 'Movie',
     rating: x.vote_average ? x.vote_average.toFixed(1) : '—',
     originalLanguage: x.original_language || x.originalLanguage || '',
+    originalTitle: x.original_title || x.original_name || x.originalTitle || '',
     overview: x.overview || '',
     backdrop: img(x.backdrop_path) || procBackdrop(260, 30, x.id),
     poster: img(x.poster_path, POSTER_W) || img(x.backdrop_path, POSTER_W) || procBackdrop(260, 30, x.id),
@@ -7766,6 +7775,9 @@ function playbackRequestBody(it, picked = null, qRank = qualityRankForItem(it)) 
   if (ids.tvdbid) body.tvdbid = ids.tvdbid;
   if (ids.season != null) body.season = ids.season;
   if (ids.ep != null) body.ep = ids.ep;
+  const aliases = searchAliasesFor(it).concat(searchAliasesFor(S.detailItem))
+    .filter((a, i, all) => all.findIndex((x) => x.toLowerCase() === a.toLowerCase()) === i);
+  if (aliases.length) body.aliases = aliases;
   if (it && it.originalLanguage) body.originalLanguage = String(it.originalLanguage);
   const catalogYear = parseInt(it && it.year, 10);
   if (catalogYear >= 1900 && catalogYear <= 2100) body.year = catalogYear;
@@ -8156,11 +8168,26 @@ function applyExternalIds(it, d) {
   const tvdb = ext.tvdb_id || '';
   if (imdb) it.imdbId = imdb;
   if (tvdb) it.tvdbId = tvdb;
+  const orig = d.original_title || d.original_name || '';
+  if (orig) it.originalTitle = orig;
   if (detailPlayTarget && detailPlayTarget.tmdbId === it.tmdbId) {
     if (imdb) detailPlayTarget.imdbId = imdb;
     if (tvdb) detailPlayTarget.tvdbId = tvdb;
+    if (orig) detailPlayTarget.originalTitle = orig;
   }
   return it;
+}
+function searchAliasesFor(it) {
+  if (!it) return [];
+  const title = String(it.title || it.name || it.showTitle || '').trim().toLowerCase();
+  const out = [];
+  const add = (raw) => {
+    const s = String(raw || '').trim();
+    if (!s || s.toLowerCase() === title) return;
+    if (!out.some((x) => x.toLowerCase() === s.toLowerCase())) out.push(s);
+  };
+  add(it.originalTitle);
+  return out;
 }
 function sourceIdentityFor(it) {
   const out = {};
@@ -8364,6 +8391,8 @@ function sourceSearchQuery(it, opts = {}) {
   if (ids.tvdbid) params.set('tvdbid', ids.tvdbid);
   if (ids.season != null) params.set('season', String(ids.season));
   if (ids.ep != null) params.set('ep', String(ids.ep));
+  const aliases = searchAliasesFor(it);
+  if (aliases.length) params.set('aliases', aliases.join('|'));
   if (it.originalLanguage) params.set('originalLanguage', String(it.originalLanguage));
   const year = parseInt(it.year, 10);
   if (year >= 1900 && year <= 2100) params.set('year', String(year));
@@ -18485,7 +18514,7 @@ async function loadLibraries() {
   // NOTE: local-library item indexing is LAZY now (enrichHome after first paint, or play()'s
   // ensureLocalMap). Eagerly fetching every library's /items here blocked the boot — big
   // libraries return large payloads, and nothing on the first screen needs them.
-  if (S.user) applyMenuPrefs(); // re-apply per-device order/hidden to the rebuilt library buttons
+  document.querySelectorAll('.railBtn[data-libid]').forEach((b) => b.remove());
   const wrap = $('railLibs'); wrap.innerHTML = '';
   const isAdmin = S.user && S.user.role === 'admin';
   $('libSec').style.display = (libs.length || isAdmin) ? '' : 'none';
@@ -18502,6 +18531,7 @@ async function loadLibraries() {
     });
     wrap.appendChild(b);
   });
+  if (S.user) applyMenuPrefs(); // after paint so a library can sit above Home
 }
 function openLibrary(lib) {
   S.libraryPreviewOnly = false;
@@ -19618,7 +19648,7 @@ function scaffoldLiveTv(grid) {
     $('browse').classList.add('liveTvBrowse');
     S.gridRoot = grid;
     const input = $('chSearch');
-    input.placeholder = `Filter ${S.liveChannels.length} channels…`;
+    input.placeholder = `Filter ${S.liveChannels.length} channels, groups, or sources…`;
     input.value = S.liveFilter || '';
     const syncChClear = () => {
       const btn = $('chClearBtn'); if (!btn) return;
@@ -19677,6 +19707,21 @@ function scaffoldLiveTv(grid) {
     });
   } catch (e) { grid.innerHTML = `<div class="gridMore focusable">Live TV failed: ${esc(e.message)}</div>`; focusLiveGridMessage(); }
 }
+function liveChannelSearchText(ch) {
+  return [ch && ch.name, ch && ch.group, ch && (ch.sourceName || ch._sourceName)]
+    .filter(Boolean).join(' ').toLowerCase();
+}
+function liveChannelMatchesQuery(ch, q) {
+  const needle = String(q || '').toLowerCase().trim();
+  if (!needle) return true;
+  return liveChannelSearchText(ch).includes(needle);
+}
+function liveChannelSubtitle(ch) {
+  const group = String((ch && ch.group) || '').trim();
+  const source = String((ch && (ch.sourceName || ch._sourceName)) || '').trim();
+  if (source && group && group.toLowerCase().includes(source.toLowerCase())) return group;
+  return [group, source].filter(Boolean).join(' · ');
+}
 function renderLiveTvBody() {
   const body = $('chBody'); if (!body) return;
   $('grid').classList.remove('liveGuideGrid');
@@ -19691,7 +19736,7 @@ function renderLiveTvBody() {
   }
   const q = (S.liveFilter || '').toLowerCase().trim();
   if (q) {
-    const hits = S.liveChannels.filter((c) => (c.name || '').toLowerCase().includes(q));
+    const hits = S.liveChannels.filter((c) => liveChannelMatchesQuery(c, q));
     if (S.liveGuide && S.liveEpg) return renderGuide(body, hits);
     liveTvGroup(body, `Results for “${S.liveFilter.trim()}”`, hits.slice(0, 300), { open: true, extra: hits.length > 300 ? `${hits.length - 300} more — narrow the search` : '' });
     if (!hits.length) { body.innerHTML = '<div class="gridMore focusable">No channels match.</div>'; focusLiveGridMessage(); }
@@ -19964,7 +20009,7 @@ function liveTvCard(ch) {
   const logo = safeUrl(ch.logo); // channel data comes from a THIRD-PARTY playlist — escape + scheme-check everything
   card.innerHTML = `<div class="chLogo">${logo ? `<img src="${logo}" loading="lazy">` : `<span class="chInit">${esc((ch.name || '?')[0])}</span>`}
       <span class="chFav${ch.fav ? ' on' : ''}" data-chid="${esc(ch.id)}" title="Favorite">${ch.fav ? '★' : '☆'}</span></div>
-    <div class="chName">${esc(ch.name)}</div><div class="chGroup chNow" data-ch="${parseInt(ch.idx, 10) || 0}">${esc(ch.group || 'Other')}</div>`;
+    <div class="chName">${esc(ch.name)}</div><div class="chGroup chNow" data-ch="${parseInt(ch.idx, 10) || 0}">${esc(liveChannelSubtitle(ch) || 'Other')}</div>`;
   const logoImg = card.querySelector('.chLogo img');
   if (logoImg) logoImg.addEventListener('error', () => {
     const init = document.createElement('span');
@@ -22237,16 +22282,33 @@ function syncKidsMenuButtons() {
   if ($('prefKidsPanel')) $('prefKidsPanel').style.display = kidsUiAvailable() ? '' : 'none';
   syncChoiceButtons('#prefKidsMenu button', (b) => b.dataset.kids === (kidsMenuVisible() ? '1' : '0'));
 }
+function menuRailOrder(p, libKeys) {
+  return [
+    ...p.order.filter((k) => MENU_LABELS[k] || libKeys.includes(k)),
+    ...MENU_DEFAULT.filter((n) => !p.order.includes(n)),
+    ...libKeys.filter((n) => !p.order.includes(n)),
+  ];
+}
 // Reorder + hide the rail nav buttons per user preference (search first by default).
+// Libraries share that list — a local library can sit first, above Home.
 function applyMenuPrefs() {
   const p = menuPrefs();
   const railMain = $('railMain') || $('rail');
-  const firstMainNav = () => [...railMain.children].find((el) => el.matches && el.matches('.railBtn[data-nav]')) || $('libSec');
-  const order = [...p.order, ...MENU_DEFAULT.filter((n) => !p.order.includes(n))];
-  for (const nav of [...order].reverse()) {
-    const btn = railMain.querySelector(`.railBtn[data-nav="${nav}"]`);
+  const libKeys = (S.libraries || []).map((l) => 'lib:' + l.id);
+  const order = menuRailOrder(p, libKeys);
+  const firstMovable = () => [...railMain.children].find((el) =>
+    el.matches && el.matches('.railBtn[data-nav], .railBtn[data-libid]')
+  ) || $('libSec');
+  const buttonFor = (key) => {
+    if (key.startsWith('lib:')) {
+      return document.querySelector(`.railBtn[data-libid="${key.slice(4)}"]`);
+    }
+    return railMain.querySelector(`.railBtn[data-nav="${key}"]`);
+  };
+  for (const key of [...order].reverse()) {
+    const btn = buttonFor(key);
     if (!btn) continue;
-    railMain.insertBefore(btn, firstMainNav());
+    railMain.insertBefore(btn, firstMovable());
   }
   for (const nav of MENU_DEFAULT) {
     const btn = railMain.querySelector(`.railBtn[data-nav="${nav}"]`);
@@ -22260,16 +22322,8 @@ function applyMenuPrefs() {
     else if (nav === 'audiobooks') btn.style.display = (!hideByPref && (!S.user || S.user.audiobooksAllowed !== false)) ? '' : 'none';
     else btn.style.display = hideByPref ? 'none' : '';
   }
-  // Libraries: same per-device ordering + hiding, within their own rail section.
-  const railLibs = $('railLibs');
-  const libKeys = (S.libraries || []).map((l) => 'lib:' + l.id);
-  for (const key of [...p.order].reverse()) {
-    if (!key.startsWith('lib:')) continue;
-    const btn = railLibs.querySelector(`.railBtn[data-libid="${key.slice(4)}"]`);
-    if (btn) railLibs.insertBefore(btn, railLibs.firstChild);
-  }
   for (const key of libKeys) {
-    const btn = railLibs.querySelector(`.railBtn[data-libid="${key.slice(4)}"]`);
+    const btn = buttonFor(key);
     if (btn) btn.style.display = p.hidden.includes(key) ? 'none' : '';
   }
   fitRailToFullIcons(); // TV: keep the rail's visible icons WHOLE — never cut one in half at the overflow edge
@@ -22802,10 +22856,47 @@ function renderProfileSessionActions() {
   // Only the native shells expose a server switch (a plain browser can't repoint its own origin).
   $('prefChangeServer').style.display = (window.TriboonTV && typeof window.TriboonTV.changeServer === 'function') ? '' : 'none';
   $('prefSignOut').innerHTML = `${profileIcon('logout')}<span>Sign out</span>`;
+  syncAppUpdateButtons();
 }
 // One universal APK for TV + phone (the tv/mobile names were retired once all devices ran a build
-// whose updater accepts triboon.apk — see the v1.7.67 migration).
+// whose updater accepts triboon.apk — see the v1.7.67 migration). Windows uses the official
+// stable client/server installers from the same GitHub latest-download aliases.
 const APK_URL = 'https://github.com/d1same/triboon/releases/latest/download/triboon.apk';
+const WIN_CLIENT_URL = 'https://github.com/d1same/triboon/releases/latest/download/Triboon-Windows-Client.exe';
+const WIN_SERVER_URL = 'https://github.com/d1same/triboon/releases/latest/download/Triboon-Windows-Server.exe';
+function isWindowsDesktopClient() {
+  try { return !!(window.TriboonTV && window.TriboonTV.__triboonWindowsBridge === true); }
+  catch { return false; }
+}
+function isAndroidAppShell() {
+  return isTriboonAndroidShell();
+}
+function isWindowsHost() {
+  if (isAndroidAppShell()) return false;
+  return isWindowsDesktopClient() || /Windows/i.test(navigator.userAgent || '');
+}
+function nativeAppUpdateKind() {
+  if (isAndroidAppShell()) return 'android';
+  if (isWindowsDesktopClient()) return 'windows';
+  return '';
+}
+function syncAppUpdateButtons() {
+  const android = isAndroidAppShell();
+  const windows = isWindowsHost();
+  const admin = !!(S.user && S.user.role === 'admin');
+  const showApk = android || !windows;
+  const showWin = windows && !android;
+  if ($('apkUpdate')) $('apkUpdate').style.display = showApk ? '' : 'none';
+  if ($('winClientUpdate')) $('winClientUpdate').style.display = showWin ? '' : 'none';
+  if ($('winServerUpdate')) $('winServerUpdate').style.display = (showWin && admin) ? '' : 'none';
+  const copy = $('appUpdateCopy');
+  if (copy) {
+    if (android) copy.textContent = 'Install the latest Triboon app — one build runs on both Android TV and phone.';
+    else if (showWin) copy.textContent = 'Install the latest Windows app or server from the same GitHub release.';
+    else copy.textContent = 'Download the latest Triboon Android app.';
+  }
+}
+try { syncAppUpdateButtons(); } catch {}
 function compareSemver(a, b) { // returns -1 if a<b, 0 if equal, 1 if a>b (patch-level X.Y.Z)
   const pa = String(a || '').replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
   const pb = String(b || '').replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
@@ -22815,12 +22906,18 @@ function compareSemver(a, b) { // returns -1 if a<b, 0 if equal, 1 if a>b (patch
 async function renderAppUpdateBox() {
   const status = $('apkUpdateStatus');
   if (!status) return;
+  syncAppUpdateButtons();
   let current = (S.serverInfo && S.serverInfo.version) || '';
   let curVer = current; // raw X.Y.Z used for the comparison
   try {
     if (window.TriboonTV && TriboonTV.appVersion) {
       const app = JSON.parse(TriboonTV.appVersion() || '{}');
-      if (app.versionName) { current = `Android app ${app.versionName} (${app.versionCode || '?'})`; curVer = app.versionName; }
+      if (app.versionName) {
+        current = isWindowsDesktopClient()
+          ? `Windows app ${app.versionName}`
+          : `Android app ${app.versionName} (${app.versionCode || '?'})`;
+        curVer = app.versionName;
+      }
     }
   } catch {}
   let latest = '', latestVer = '';
@@ -22828,12 +22925,29 @@ async function renderAppUpdateBox() {
   if (latestVer) latest = ` Latest release: ${latestVer}.`;
   const updateAvailable = !!(curVer && latestVer && compareSemver(curVer, latestVer) < 0);
   status.classList.toggle('updateAvail', updateAvailable);
-  const btn = $('apkUpdate');
-  if (btn) btn.textContent = updateAvailable ? `Update to ${String(latestVer).replace(/^v/i, 'v')}` : 'Update app';
+  const label = updateAvailable ? `Update to ${String(latestVer).replace(/^v/i, 'v')}` : '';
+  const apk = $('apkUpdate');
+  if (apk) apk.textContent = label || 'Update Android app';
+  const win = $('winClientUpdate');
+  if (win) win.textContent = label || 'Update Windows app';
+  const stableHint = isWindowsHost()
+    ? ' Stable installer links always point to the newest release.'
+    : ' Stable APK links always point to the newest release.';
   status.textContent = (updateAvailable ? `⬆ Update available: ${latestVer}. ` : '')
-    + `${current ? 'Current: ' + current + '.' : 'Current version unknown.'}${latest} Stable APK links always point to the newest release.`;
+    + `${current ? 'Current: ' + current + '.' : 'Current version unknown.'}${latest}${stableHint}`;
+}
+function openWindowsUpdate(url) {
+  try {
+    if (isWindowsDesktopClient() && window.TriboonTV && typeof TriboonTV.installAppUpdate === 'function') {
+      TriboonTV.installAppUpdate(url);
+      toast('Downloading update…');
+      return;
+    }
+  } catch {}
+  window.open(url, '_blank', 'noopener');
 }
 function openApkUpdate() {
+  if (isWindowsHost()) { openWindowsUpdate(WIN_CLIENT_URL); return; }
   const url = APK_URL;
   try {
     // Preferred: download + install inside the app (no browser/downloader detour).
@@ -22851,10 +22965,16 @@ function openApkUpdate() {
   } catch {}
   window.open(url, '_blank', 'noopener');
 }
-// Proactive update prompt for the Android shell: once per launch, on the home screen (never mid-
-// playback), check the latest GitHub release and — if the installed APK is older — pop a modal
-// asking whether to update. Plain web has nothing to self-install (the server updates itself), so
-// this is gated to the TriboonTV shell. "Later" just closes it; it returns next launch if still behind.
+function openCurrentAppUpdate() {
+  if (isWindowsHost()) openWindowsUpdate(WIN_CLIENT_URL);
+  else openApkUpdate();
+}
+window.__triboonWindowsUpdateResult = (ok, msg) => {
+  toast(ok ? (msg || 'Installer opened') : (msg || 'Update failed'));
+};
+// Proactive update prompt for native Android / Windows shells: once per launch, on the home
+// screen (never mid-playback). Plain browsers just show the download buttons. "Later" closes
+// the modal; it returns next launch if still behind.
 let _updatePromptDone = false;
 let _lastUpdateCheck = 0;
 // Ask OUR server (it fetches GitHub once and caches) so every device doesn't burn GitHub's 60/hr
@@ -22867,7 +22987,8 @@ async function fetchLatestAppVersion() {
 }
 async function maybePromptAppUpdate() {
   if (_updatePromptDone) return;
-  if (!(window.TriboonTV && typeof TriboonTV.appVersion === 'function')) return; // Android shell only
+  if (!(window.TriboonTV && typeof TriboonTV.appVersion === 'function')) return;
+  if (!nativeAppUpdateKind()) return;
   _lastUpdateCheck = Date.now();
   let curVer = '';
   try { curVer = (JSON.parse(TriboonTV.appVersion() || '{}') || {}).versionName || ''; } catch {}
@@ -22887,7 +23008,7 @@ async function maybePromptAppUpdate() {
   requestAnimationFrame(focusGo); setTimeout(focusGo, 80);
 }
 function closeUpdateModal(opts = {}) { closeFocusOverlay('updateModal', 'updateModal', opts); }
-$('updateModalGo').addEventListener('click', () => { closeUpdateModal(); openApkUpdate(); });
+$('updateModalGo').addEventListener('click', () => { closeUpdateModal(); openCurrentAppUpdate(); });
 $('updateModalLater').addEventListener('click', closeUpdateModal);
 // TVs are rarely relaunched, so a once-at-boot check would miss new releases for days. Re-check on
 // resume, throttled to every 3h, so a long-running app still surfaces updates without a restart.
@@ -23596,9 +23717,7 @@ function renderMenuMgr(restore = null) {
   restore = restore || currentMenuMgrFocus();
   const p = menuPrefs();
   const libKeys = (S.libraries || []).map((l) => 'lib:' + l.id);
-  const order = [...p.order.filter((k) => MENU_LABELS[k] || libKeys.includes(k)),
-    ...MENU_DEFAULT.filter((n) => !p.order.includes(n)),
-    ...libKeys.filter((n) => !p.order.includes(n))];
+  const order = menuRailOrder(p, libKeys);
   const mgr = $('menuMgr'); mgr.innerHTML = '';
   order.forEach((nav, i) => {
     if (nav === 'kids' && !kidsUiAvailable()) return;
@@ -24268,10 +24387,11 @@ async function searchChannels(q) {
       else S._chSearchCache = [];
     }
     return S._chSearchCache
-      .filter((ch) => (ch.name || '').toLowerCase().includes(q.toLowerCase())).slice(0, 12)
-      .map((ch, i) => ({ key: 'live:' + ch.idx, title: ch.name, genre: ch.group || '', rating: '—',
+      .filter((ch) => liveChannelMatchesQuery(ch, q)).slice(0, 12)
+      .map((ch, i) => ({ key: 'live:' + ch.idx, title: ch.name, genre: liveChannelSubtitle(ch), rating: '—',
         _channel: ch.idx, _logo: ch.logo, _streamUrl: ch.streamUrl, _nativeUrl: ch.nativeUrl, _nativeMime: ch.nativeMime || '',
         _nativeFallbackUrl: ch.nativeFallbackUrl, _nativeFallbackMime: ch.nativeFallbackMime || '', _chid: ch.id,
+        _sourceName: ch.sourceName || '',
         backdrop: procBackdrop(210, 320, (i % 12) + 9), poster: procBackdrop(210, 320, (i % 12) + 9) }));
   } catch { return []; }
 }
@@ -25411,6 +25531,8 @@ wireSectionRailDpad('prefs', 'prefTabs', 'data-ptab');
 wireSectionRailDpad('settings', 'setTabs', 'data-stab');
 $('activityRefresh').addEventListener('click', refreshActivity);
 $('apkUpdate').addEventListener('click', () => openApkUpdate()); // one universal APK (triboon.apk)
+$('winClientUpdate').addEventListener('click', () => openWindowsUpdate(WIN_CLIENT_URL));
+$('winServerUpdate').addEventListener('click', () => openWindowsUpdate(WIN_SERVER_URL));
 $('secPwSave').addEventListener('click', async () => {
   const oldPassword = $('secPwCurrent').value;
   const newPassword = $('secPwNew').value;
@@ -25593,7 +25715,7 @@ function switchView(v, push = true, opts = {}) {
   $('searchBar').classList.toggle('show', v === 'search');
   $('detail').classList.remove('open'); document.body.classList.remove('detailOpen'); $('person').classList.remove('open');
   document.querySelectorAll('.railBtn[data-nav]').forEach((b) => b.classList.toggle('active', b.dataset.nav === v));
-  document.querySelectorAll('#railLibs .railBtn').forEach((b) =>
+  document.querySelectorAll('.railBtn[data-libid]').forEach((b) =>
     b.classList.toggle('active', v === 'library' && S.currentLib && b.dataset.libid === S.currentLib.id));
   requestAnimationFrame(adaptRowWindows); // page chrome just changed — refit the row windows
   if (v === 'home' && !opts.preservePage) {
@@ -28204,7 +28326,7 @@ async function enterAppShell() {
   perfMark('shell-route-applied', { view: S.view });
   hydrateAppShellData();
   startPresence(); // mark this device "connected" (browsing or watching) for the admin Activity screen
-  // Once the home has settled, check for a newer app version and prompt (Android shell only).
+  // Once the home has settled, check for a newer app version and prompt (native shells only).
   setTimeout(() => { maybePromptAppUpdate().catch(() => {}); }, 2500);
 }
 async function restoreSavedSession() {

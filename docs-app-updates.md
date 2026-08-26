@@ -145,9 +145,18 @@ The public release is not complete until all update surfaces are current:
 
 ## In-App Update Behavior
 
-The app update button should open only the stable GitHub latest-download link.
-Do not point the app at a versioned APK URL, because then every release would
-require a new in-app link or Downloader shortcode.
+The app update button should open only the stable GitHub latest-download link
+for **this device**. Do not point the app at a versioned APK or installer URL,
+because then every release would require a new in-app link or Downloader
+shortcode.
+
+- Android shows only the APK update. Windows client/server buttons stay hidden.
+- Windows (desktop client or a Windows browser) shows the Windows app, and the
+  Windows server for admins. The Android APK button stays hidden.
+- Mac/Linux browsers keep the APK download. Windows installers stay hidden.
+- The Windows desktop client downloads the official installer, checks it
+  against `SHA256SUMS.txt`, then opens the normal NSIS installer UI. The
+  Windows server installer is the same flow. Neither path is silent.
 
 The Android shell pins that link to the official `d1same/triboon` repository.
 Before it opens Package Installer, it parses the downloaded APK and requires

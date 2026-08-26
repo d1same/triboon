@@ -1931,13 +1931,31 @@ test('subtitles: ISO 639-2 B/T codes normalize to the 639-1 code Wyzie expects',
 });
 
 test('subtitles: alass auto-sync is gated — absent binary stays inert', () => {
-  const transcode = require('../server/transcode');
-  // On CI/dev boxes alass is not installed, so detection must be null (feature off) and
-  // spawnSubSync must refuse rather than spawn a missing binary — the auto-sync path can never
-  // run unless the sidecar is actually present.
-  assert.strictEqual(transcode.detectSubSync(), null, 'no alass binary → detection null');
-  assert.throws(() => transcode.spawnSubSync('http://x/stream', '/tmp/in.srt', '/tmp/out.srt'),
-    /alass not available/, 'spawnSubSync refuses when the binary is absent');
+  const path = require('path');
+  const prevAlass = process.env.ALASS_PATH;
+  const prevPath = process.env.PATH;
+  delete process.env.ALASS_PATH;
+  process.env.PATH = String(prevPath || '')
+    .split(path.delimiter)
+    .filter((p) => p && !/Triboon[\\/]+bin/i.test(p) && !/alass/i.test(p))
+    .join(path.delimiter);
+  const id = require.resolve('../server/transcode');
+  const prevMod = require.cache[id];
+  delete require.cache[id];
+  try {
+    const transcode = require('../server/transcode');
+    // Detection must stay off when the sidecar is not on this process path, even if a
+    // leftover ALASS_PATH from a household verify shell pointed at Program Files.
+    assert.strictEqual(transcode.detectSubSync(), null, 'no alass binary → detection null');
+    assert.throws(() => transcode.spawnSubSync('http://x/stream', '/tmp/in.srt', '/tmp/out.srt'),
+      /alass not available/, 'spawnSubSync refuses when the binary is absent');
+  } finally {
+    delete require.cache[id];
+    if (prevMod) require.cache[id] = prevMod;
+    if (prevAlass == null) delete process.env.ALASS_PATH;
+    else process.env.ALASS_PATH = prevAlass;
+    process.env.PATH = prevPath;
+  }
 });
 
 test('subtitles: subtitleLooksSynced skips sync for release/hash matches, runs it otherwise', () => {

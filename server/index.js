@@ -1376,7 +1376,7 @@ function markIptvPlaybackHot() {
 function iptvPlaybackBusy() {
   return activeIptvLiveStreams.size > 0 || Date.now() < iptvPlaybackHotUntil;
 }
-function beginIptvLiveSlot(ctx, meta = {}) {
+function beginIptvLiveSlot(ctx, meta = {}, shareKey = '') {
   markIptvPlaybackHot();
   const key = iptvLiveSlotKey(ctx);
   const prev = activeIptvLiveStreams.get(key);
@@ -1385,6 +1385,10 @@ function beginIptvLiveSlot(ctx, meta = {}) {
     replaced = true;
     prev.close('retuned');
   }
+  // ExoPlayer/web often DROP the old request before opening the next channel. That leave is
+  // "client closed" (linger), not "retuned". Kill a lingering different-channel hub so one
+  // app/surface never holds ESPN+CNN against a 1-connection provider.
+  closeIptvViewerLingerIfDifferentChannel(key, shareKey);
   const label = iptvNativeLogLabel(meta);
   const entry = {
     key,
@@ -1420,6 +1424,10 @@ function closeAllIptvLiveStreams(reason = 'shutdown') {
     if (slot && typeof slot.close === 'function') slot.close(reason);
   }
   activeIptvLiveStreams.clear();
+  for (const hub of new Set(iptvViewerLingerHubs.values())) {
+    if (hub && typeof hub.close === 'function') hub.close(reason);
+  }
+  iptvViewerLingerHubs.clear();
 }
 function iptvSafeHost(raw) {
   try { return new URL(String(raw || '')).host || 'unknown'; }
@@ -1564,8 +1572,28 @@ function sendIptvNativeError(res, status, reason) {
 // Native viewers get the TS bytes on the HTTP response. Browser remux viewers subscribe in
 // `pipe` mode: the same TS is teed into each viewer's stdin-fed ffmpeg, which remuxes to fMP4.
 const IPTV_SHARE_RING_MAX_BYTES = 3 * 1024 * 1024; // ~1-3s of a typical live TS: instant joins
-const IPTV_SHARE_LINGER_MS = 12000;                // zap-away grace before the upstream closes
+const IPTV_SHARE_LINGER_MS = 12000;                // same-channel reconnect grace before the upstream closes
 const iptvSharedHubs = new Map(); // shareKey -> hub
+const iptvViewerLingerHubs = new Map(); // slotKey -> hub (killed on a different-channel open)
+function forgetIptvViewerLinger(hub) {
+  for (const [key, held] of iptvViewerLingerHubs) {
+    if (held === hub) iptvViewerLingerHubs.delete(key);
+  }
+}
+function rememberIptvViewerLinger(slotKey, hub) {
+  if (slotKey && hub) iptvViewerLingerHubs.set(slotKey, hub);
+}
+function closeIptvViewerLingerIfDifferentChannel(slotKey, shareKey) {
+  const lingering = iptvViewerLingerHubs.get(slotKey);
+  if (!lingering) return;
+  if (shareKey && lingering.shareKey === shareKey && lingering.joinable()) return;
+  if (lingering.subs && lingering.subs.size > 0) {
+    iptvViewerLingerHubs.delete(slotKey);
+    return;
+  }
+  lingering.close('retuned');
+  iptvViewerLingerHubs.delete(slotKey);
+}
 function iptvShareKey(meta, cid, alt) {
   return `${Number.isInteger(meta.idx) ? meta.idx : 'x'}:${cid || ''}:${alt ? 1 : 0}`;
 }
@@ -1594,6 +1622,7 @@ function createIptvLiveHub(shareKey, label) {
       };
       this.subs.add(sub);
       if (this.lingerTimer) { clearTimeout(this.lingerTimer); this.lingerTimer = null; }
+      forgetIptvViewerLinger(this);
       const drop = (reason) => this.unsubscribe(sub, reason);
       slot.setCloser((reason) => drop(reason));
       ctx.req.once('close', () => drop('client closed'));
@@ -1630,10 +1659,11 @@ function createIptvLiveHub(shareKey, label) {
       if (this.subs.size === 0 && !this.closed && this.state === 'live') {
         // Last viewer left. A RETUNE (or shutdown) closes the upstream IMMEDIATELY — the viewer
         // is about to open ANOTHER channel, and on a 1-connection provider the old stream must be
-        // gone before the new one opens (today's zap contract, unchanged). Anything else (socket
-        // drop, ExoPlayer reconnect, brief app hiccup) gets a short linger so the rejoin reuses
-        // this upstream with an instant ring-buffer start instead of a fresh provider handshake.
+        // gone before the new one opens. A drop-then-open zap (ExoPlayer) is "client closed" and
+        // would linger; beginIptvLiveSlot then kills that linger if the next channel is different.
+        // Same-channel reconnects still reuse this hub off the ring buffer.
         if (/retuned|shutdown/i.test(String(reason || ''))) return this.close(reason);
+        rememberIptvViewerLinger(sub.slot && sub.slot.key, this);
         this.lingerTimer = setTimeout(() => this.close('idle (no viewers)'), IPTV_SHARE_LINGER_MS);
         if (this.lingerTimer.unref) this.lingerTimer.unref();
       }
@@ -1729,6 +1759,7 @@ function createIptvLiveHub(shareKey, label) {
       if (this.closed) return;
       this.closed = true;
       if (this.lingerTimer) clearTimeout(this.lingerTimer);
+      forgetIptvViewerLinger(this);
       iptvSharedHubs.delete(this.shareKey);
       try { if (this.upstreamReq) { this.upstreamReq.removeAllListeners('error'); this.upstreamReq.on('error', () => {}); this.upstreamReq.destroy(); } } catch {}
       for (const sub of [...this.subs]) this.unsubscribe(sub, reason);
@@ -1739,14 +1770,14 @@ function createIptvLiveHub(shareKey, label) {
 }
 
 function proxyIptvNative(ctx, target, hops = 0, meta = {}) {
-  const slot = beginIptvLiveSlot(ctx, meta);
+  const shareCid = ctx.url && ctx.url.searchParams ? String(ctx.url.searchParams.get('cid') || '') : '';
+  const shareKey = iptvShareKey(meta, shareCid, !!meta.alt);
+  const slot = beginIptvLiveSlot(ctx, meta, shareKey);
   slot.kind = 'native-proxy'; // Node owns the upstream; eviction destroys it synchronously
   // Shared fan-out: if this channel is ALREADY flowing (or starting) for another viewer, join
   // its hub — no new provider connection, ring-buffer backfill = instant start. Otherwise this
   // request becomes the hub's opener: it runs the full hardened open flow below and hands the
   // upstream to the hub on success, so late same-channel viewers join instead of re-opening.
-  const shareCid = ctx.url && ctx.url.searchParams ? String(ctx.url.searchParams.get('cid') || '') : '';
-  const shareKey = iptvShareKey(meta, shareCid, !!meta.alt);
   const existingHub = iptvSharedHubs.get(shareKey);
   if (existingHub && existingHub.joinable()) {
     existingHub.subscribe(ctx, slot, iptvNativeLogLabel(meta));
@@ -3795,6 +3826,30 @@ function parseCatalogYear(raw) {
   const n = parseInt(raw, 10);
   return Number.isInteger(n) && n >= 1900 && n <= 2100 ? n : null;
 }
+
+// Play/Sources identity: catalog q stays the verifier. originalTitle/aka names are extra
+// indexer queries only — they cannot make Mutiny on the Bounty play for Mutiny 2026.
+function playSearchParams(src = {}) {
+  const aliases = [];
+  const addAlias = (v) => {
+    const s = String(v || '').trim();
+    if (!s) return;
+    if (aliases.some((a) => a.toLowerCase() === s.toLowerCase())) return;
+    aliases.push(s);
+  };
+  addAlias(src.originalTitle);
+  const raw = src.aliases;
+  if (Array.isArray(raw)) raw.forEach(addAlias);
+  else if (raw != null && String(raw).trim()) String(raw).split('|').forEach(addAlias);
+  return {
+    q: src.q,
+    imdbid: src.imdbid || undefined,
+    tvdbid: src.tvdbid || undefined,
+    season: src.season,
+    ep: src.ep,
+    aliases: aliases.length ? aliases : undefined,
+  };
+}
 function playbackPolicyFor(user, { maxResolutionRank, preferResolutionRank, originalLanguage, preferredAudioLanguage, year, caps: rawCaps } = {}) {
   let policy = { ...user.policy, ...sizeCaps(), ...scoringPrefs() };
   const caps = parseCaps(rawCaps || {});
@@ -4731,6 +4786,8 @@ async function appLatestVersion() {
   const data = {
     latest: j.tag_name || '',
     apkUrl: apk ? apk.browser_download_url : 'https://github.com/d1same/triboon/releases/latest/download/triboon.apk',
+    windowsClientUrl: 'https://github.com/d1same/triboon/releases/latest/download/Triboon-Windows-Client.exe',
+    windowsServerUrl: 'https://github.com/d1same/triboon/releases/latest/download/Triboon-Windows-Server.exe',
     publishedAt: j.published_at || null,
   };
   _appLatestCache = { at: now, data };
@@ -5073,13 +5130,15 @@ const H = {
       ctx.url.searchParams.get('mediaType')
     ))) return maturityBlockedResponse(ctx);
     const { candidates, errors } = await pipeline.search(
-      {
+      playSearchParams({
         q,
         imdbid: ctx.url.searchParams.get('imdbid') || undefined,
         tvdbid: ctx.url.searchParams.get('tvdbid') || undefined,
         season: ctx.url.searchParams.get('season') || undefined,
         ep: ctx.url.searchParams.get('ep') || undefined,
-      },
+        originalTitle: ctx.url.searchParams.get('originalTitle') || undefined,
+        aliases: ctx.url.searchParams.get('aliases') || undefined,
+      }),
       playbackPolicyFor(ctx.user, {
         maxResolutionRank: ctx.url.searchParams.get('maxResolutionRank'),
         preferResolutionRank: ctx.url.searchParams.get('preferResolutionRank'),
@@ -5125,9 +5184,12 @@ const H = {
     // so a capped user can't smuggle UHD past their ceiling via the preference.
     try {
       const { session, vf, candidate, attempts, relaxedResolution } = await pipeline.play(
-        { q: body.q, imdbid: body.imdbid, tvdbid: body.tvdbid, season: body.season, ep: body.ep, pick: body.pick, pickKey: body.pickKey,
+        {
+          ...playSearchParams(body),
+          pick: body.pick, pickKey: body.pickKey,
           pinnedResume: !!body.pinnedResume,
-          resumeFrac: Math.max(0, Math.min(1, Number(body.resumeFrac) || 0)) },
+          resumeFrac: Math.max(0, Math.min(1, Number(body.resumeFrac) || 0)),
+        },
         policy
       );
       if (!(await maturityAllowed)) { discardDeniedMount(session, vf); return maturityBlockedResponse(ctx); }
@@ -5185,9 +5247,12 @@ const H = {
     const policy = playbackPolicyFor(ctx.user, body);
     try {
       const { vf, candidate, attempts, prepared } = await pipeline.prepare(
-        { q: body.q, imdbid: body.imdbid, tvdbid: body.tvdbid, season: body.season, ep: body.ep, pick: body.pick, pickKey: body.pickKey,
+        {
+          ...playSearchParams(body),
+          pick: body.pick, pickKey: body.pickKey,
           pinnedResume: !!body.pinnedResume,
-          resumeFrac: Math.max(0, Math.min(1, Number(body.resumeFrac) || 0)) },
+          resumeFrac: Math.max(0, Math.min(1, Number(body.resumeFrac) || 0)),
+        },
         policy
       );
       if (vf) {
@@ -5926,7 +5991,9 @@ const H = {
       if (transcodeVideo) console.log(`[iptv codec] "${ch.name}" non-H.264 source → transcoding to H.264 for the web player`);
     }
     if (ctx.res.destroyed) return;
-    const liveSlot = beginIptvLiveSlot(ctx, { idx: ch.idx, name: ch.name });
+    const shareCid = String(ctx.url.searchParams.get('cid') || '');
+    const remuxShareKey = iptvShareKey({ idx: ch.idx }, shareCid, false);
+    const liveSlot = beginIptvLiveSlot(ctx, { idx: ch.idx, name: ch.name }, remuxShareKey);
     // Overall cap bounds the whole startup; each attempt gets its own fresh first-byte budget
     // (reset via beginAttemptBudget) so a slow high-ranked source can't starve its alternates.
     // startupRemaining is the tighter of the two, so timers/redirect gates respect both.

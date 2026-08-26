@@ -16,6 +16,7 @@ fn main() {
         "windows_native_chrome_version",
         "windows_native_playback_caps",
         "windows_app_version",
+        "windows_install_app_update",
         "windows_player_show_loading",
         "windows_player_play_vod",
         "windows_player_play_live",

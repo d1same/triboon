@@ -160,6 +160,18 @@
       return invokeQuiet('windows_change_server', {});
     },
 
+    installAppUpdate(url) {
+      invokeNative('windows_install_app_update', { url: String(url || '') }).catch((err) => {
+        const msg = (err && err.message) ? err.message : String(err || 'Update failed');
+        try {
+          if (typeof window.__triboonWindowsUpdateResult === 'function') {
+            window.__triboonWindowsUpdateResult(false, msg);
+          }
+        } catch {}
+      });
+      return true;
+    },
+
     showVideoLoading(raw) {
       const payload = parsePayload(raw, 'Loading');
       return invokeQuiet('windows_player_show_loading', { payload }, () => {

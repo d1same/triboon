@@ -12,6 +12,7 @@
     "allow-windows-native-chrome-version",
     "allow-windows-native-playback-caps",
     "allow-windows-app-version",
+    "allow-windows-install-app-update",
     "allow-windows-player-show-loading",
     "allow-windows-player-play-vod",
     "allow-windows-player-play-live",

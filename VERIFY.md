@@ -126,6 +126,26 @@ fails to produce a playable stream. Budgets default to feels-local targets
 
 ### Latest Evidence
 
+2026-08-26, v3.1.11 ship — in-app Windows update, hide the wrong platform:
+
+- Version contract: `package.json` 3.1.11; Android `versionName` 3.1.11 /
+  `versionCode` 356; Windows client package/Tauri/Cargo 3.1.11.
+- Prefs → Profiles shows the installer for this device only. Android still
+  installs `triboon.apk`. Windows shows the client (and the server for
+  admins). Mac/Linux browsers keep the APK download.
+- The Windows client downloads the official GitHub latest-download exe,
+  checks `SHA256SUMS.txt`, then opens the normal installer UI. Not silent.
+- Play search can use TMDB original/aka titles as extra indexer queries.
+  The verifier stays on the catalog title.
+- One IPTV surface does not keep a leftover linger on a different channel.
+- `npm.cmd run verify:full` on emulator `emulator-5554` (not the Shield):
+  IPTV/P9, engine, pipeline, player, security focused gates pass; Node suite
+  **653/653** after isolating leftover ALASS_PATH so the absent-sidecar test
+  stays inert. Isolated `/api/server` 3.1.11. Household VOD
+  play/seek/resume/CC and IPTV web+native retune pass. Overlapping Play
+  still 404'd the FROM remux while Mario 4K remuxed (same leftover-mount
+  class as v3.1.10). Android ExoPlayer stress PASS. Windows GPU not run.
+
 2026-08-26, v3.1.10 ship — resume parks the file, trailers stay in-app:
 
 - Version contract: `package.json` 3.1.10; Android `versionName` 3.1.10 /

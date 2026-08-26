@@ -1219,8 +1219,15 @@ test('quality toggle is a source-selection preference that survives Continue Wat
     'source lookup should preserve IMDb, TVDB, season, and episode identity when available');
   assert.match(ui, /function sourceSearchQuery\(it, opts = \{\}\) \{[\s\S]+const ids = sourceIdentityFor\(it\);[\s\S]+params\.set\('imdbid', ids\.imdbid\);[\s\S]+params\.set\('tvdbid', ids\.tvdbid\);[\s\S]+params\.set\('season', String\(ids\.season\)\);[\s\S]+params\.set\('ep', String\(ids\.ep\)\);[\s\S]+params\.set\('profileId'[\s\S]+params\.set\('tmdbId'[\s\S]+params\.set\('mediaType'/,
     'Sources drawer searches should send external identifiers plus the profile/tmdb identity for the age gate');
-  assert.match(ui, /const ids = sourceIdentityFor\(it\);[\s\S]+const body = \{ q: queryFor\(it\)[\s\S]+if \(ids\.imdbid\) body\.imdbid = ids\.imdbid;[\s\S]+if \(ids\.tvdbid\) body\.tvdbid = ids\.tvdbid;[\s\S]+if \(ids\.season != null\) body\.season = ids\.season;[\s\S]+if \(ids\.ep != null\) body\.ep = ids\.ep;/,
-    'Play should carry the same external identity as the Sources drawer');
+  const serverSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  assert.match(serverSrc, /function playSearchParams\(src = \{\}\) \{[\s\S]+addAlias\(src\.originalTitle\)[\s\S]+aliases: aliases\.length \? aliases : undefined/,
+    'Play/Sources pass TMDB original/aka names as extra search queries only');
+  assert.match(ui, /const ids = sourceIdentityFor\(it\);[\s\S]+const body = \{ q: queryFor\(it\)[\s\S]+if \(ids\.imdbid\) body\.imdbid = ids\.imdbid;[\s\S]+if \(ids\.tvdbid\) body\.tvdbid = ids\.tvdbid;[\s\S]+if \(ids\.season != null\) body\.season = ids\.season;[\s\S]+if \(ids\.ep != null\) body\.ep = ids\.ep;[\s\S]+if \(aliases\.length\) body\.aliases = aliases;/,
+    'Play should carry the same external identity as the Sources drawer, plus aka aliases');
+  assert.match(ui, /function searchAliasesFor\(it\) \{[\s\S]+add\(it\.originalTitle\)/,
+    'Play/Sources send the TMDB original title as an extra indexer query');
+  assert.match(ui, /params\.set\('aliases', aliases\.join\('\|'\)\)/,
+    'Sources drawer search sends aka aliases');
   assert.match(ui, /if \(it\._lib && it\._lib\.path\) \{[\s\S]+const r = it\._kind === 'show'[\s\S]+await loadAllLocalShowEpisodes\(it\._lib, it\._idx\)[\s\S]+mergeLocalItems\(it\._lib, r\.items \|\| \[\]\);[\s\S]+\}[\s\S]+checkAvailability\(it\);/,
     'TV details opened from an added library should hydrate all local episode ownership before availability/play targets are calculated');
   assert.match(ui, /async function checkAvailability\(it\) \{[\s\S]+const searchItem = availabilitySearchItem\(it\) \|\| it;[\s\S]+it\.type === 'tv' && !\(searchItem && searchItem\.type === 'episode'\)[\s\S]+const hasLocal = localTitleHasPlayback\(searchItem\) \|\| localTitleHasPlayback\(it\);[\s\S]+if \(hasLocal && localPlaybackRankForItem\(searchItem\) === 4\) \{[\s\S]+\$\(\'qToggle\'\)\.style\.display = 'none';[\s\S]+api\('\/api\/search\?' \+ sourceSearchQuery\(searchItem, \{ includeQuality: false \}\)\)[\s\S]+has4k && userCanPlay4k\(\) && \(hasLower \|\| \(hasLocal && localRank !== 4\)\)[\s\S]+if \(hasLocal\) \{[\s\S]+\$\(\'dSources\'\)\.style\.display = offer \? '' : 'none';[\s\S]+return;/,
@@ -3057,6 +3064,8 @@ test('Android native player: direct source and native chrome stay out of the web
     'ts-pipe uses Xtream nativeUrl or an M3U .ts url so both source types share the hub');
   assert.match(idxSrc, /if \(\/retuned\|shutdown\/i\.test\(String\(reason \|\| ''\)\)\) return this\.close\(reason\);/,
     'a last-viewer RETUNE closes the shared upstream immediately (the 1-connection zap contract), only non-retune leaves linger');
+  assert.match(idxSrc, /function closeIptvViewerLingerIfDifferentChannel\(slotKey, shareKey\) \{[\s\S]+lingering\.close\('retuned'\)/,
+    'a drop-then-open zap (ExoPlayer) still kills a lingering different-channel hub so one surface stays at one connection');
   // NNTP failover batch (owner-approved, touches the streaming-perf contract): circuit-breaker
   // half-open probe + hedged multi-provider failover for active-player BODY work.
   const nntpSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'nntp.js'), 'utf8');
@@ -3438,14 +3447,25 @@ test('Android native player: direct source and native chrome stay out of the web
   });
   assert.match(ui, /b\.setAttribute\('aria-pressed', name === cur \? 'true' : 'false'\)[\s\S]+syncChoiceButtons\('#themePick \.themeChoice,#themePickSet \.themeChoice'/,
     'theme cards should expose and update pressed state with the same selected-button sync');
-  // One universal APK runs on TV and phone, so there's a single "Update app" button (not separate
-  // TV/phone buttons), pointing at the stable release link.
-  assert.ok(ui.includes('id="apkUpdate"') && ui.includes('>Update app<')
+  // One universal APK runs on TV and phone. Windows shows the official client/server
+  // installers instead. Never keep the retired tv/mobile APK names.
+  assert.ok(ui.includes('id="apkUpdate"') && ui.includes('id="winClientUpdate"') && ui.includes('id="winServerUpdate"')
     && !ui.includes('id="apkTvUpdate"') && !ui.includes('id="apkMobileUpdate"')
     && ui.includes('releases/latest/download/triboon.apk')
+    && ui.includes('releases/latest/download/Triboon-Windows-Client.exe')
+    && ui.includes('releases/latest/download/Triboon-Windows-Server.exe')
     && !ui.includes('releases/latest/download/triboon-tv.apk')
     && !ui.includes('releases/latest/download/triboon-mobile.apk'),
-    'Preferences should expose a single Update app button pointing at the one universal triboon.apk');
+    'Preferences should expose one Android APK button plus Windows client/server buttons');
+  assert.match(ui, /function syncAppUpdateButtons\(\) \{[\s\S]+isAndroidAppShell\(\)[\s\S]+isWindowsHost\(\)[\s\S]+apkUpdate[\s\S]+winClientUpdate[\s\S]+winServerUpdate/,
+    'Android hides Windows installers and Windows hides the APK');
+  {
+    const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+    assert.match(server, /windowsClientUrl: 'https:\/\/github\.com\/d1same\/triboon\/releases\/latest\/download\/Triboon-Windows-Client\.exe'/,
+      '/api/app/latest should expose the stable Windows client alias');
+    assert.match(server, /windowsServerUrl: 'https:\/\/github\.com\/d1same\/triboon\/releases\/latest\/download\/Triboon-Windows-Server\.exe'/,
+      '/api/app/latest should expose the stable Windows server alias');
+  }
   assert.match(ui, /function sectionFormConfig\(\) \{[\s\S]+S\.view === 'prefs'[\s\S]+root: \$\('prefs'\)[\s\S]+tabs: \$\('prefTabs'\)[\s\S]+panelAttr: 'data-ptab'[\s\S]+S\.view === 'settings'[\s\S]+root: \$\('settings'\)[\s\S]+tabs: \$\('setTabs'\)[\s\S]+panelAttr: 'data-stab'/,
     'Settings and Preferences should share the section-form D-pad model with separate tab/panel roots');
   assert.match(ui, /function leaveSettingsPanelToTabs\(\) \{[\s\S]+focusActiveSectionTab\(cfg\)[\s\S]+if \(k === 'Escape' \|\| k === 'Backspace'\) \{[\s\S]+leaveSettingsPanelToTabs\(\)[\s\S]+window\.__tvBack = \(\) => \{[\s\S]+S\.view === 'prefs' \|\| S\.view === 'settings'[\s\S]+leaveSettingsPanelToTabs\(\)/,
@@ -4672,6 +4692,22 @@ test('Android native player: direct source and native chrome stay out of the web
     'Live TV loading, not-configured, no-channel, and failed states should not strand focus');
   assert.match(ui, /No channels match\.<\/div>'; focusLiveGridMessage\(\);[\s\S]+Every category is hidden[\s\S]+focusLiveGridMessage\(\);[\s\S]+No channels to show - favorite some channels or use the filter[\s\S]+focusLiveGridMessage\(\);/,
     'Live TV in-page empty states should stay remote-focusable after search/category changes');
+  assert.match(ui, /function liveChannelMatchesQuery\(ch, q\) \{[\s\S]+liveChannelSearchText\(ch\)\.includes\(needle\)[\s\S]+S\.liveChannels\.filter\(\(c\) => liveChannelMatchesQuery\(c, q\)\)[\s\S]+S\._chSearchCache[\s\S]+liveChannelMatchesQuery\(ch, q\)/,
+    'Live TV filter and global channel search match name, group, and playlist source name');
+  {
+    const start = ui.indexOf('function liveChannelSearchText');
+    const end = ui.indexOf('function renderLiveTvBody', start);
+    assert.ok(start >= 0 && end > start, 'live channel search helpers stay next to the Live TV body render');
+    const helpers = new Function(`${ui.slice(start, end)}; return { liveChannelMatchesQuery, liveChannelSubtitle };`)();
+    const espn = { name: 'ESPN', group: 'Sports', sourceName: 'Sportsnet' };
+    const dup = { name: 'Shared News', group: 'Alpha TV · News', sourceName: 'Alpha TV' };
+    assert.ok(helpers.liveChannelMatchesQuery(espn, 'sportsnet'), 'playlist source name is searchable');
+    assert.ok(helpers.liveChannelMatchesQuery(espn, 'espn'), 'channel name still matches');
+    assert.strictEqual(helpers.liveChannelMatchesQuery(espn, 'cnn'), false, 'unrelated queries stay out');
+    assert.strictEqual(helpers.liveChannelSubtitle(espn), 'Sports · Sportsnet');
+    assert.strictEqual(helpers.liveChannelSubtitle(dup), 'Alpha TV · News',
+      'already-prefixed multi-source groups are not repeated');
+  }
   assert.match(ui, /const selectedCatIdx = Math\.max\(0, names\.indexOf\(S\.liveCat\)\);[\s\S]+S\.liveCatNavIdx = S\.liveCatDpadMode && Number\.isFinite\(S\.liveCatNavIdx\)[\s\S]+: selectedCatIdx;/,
     'Live TV rerenders should preserve the D-pad category focus index instead of snapping to the selected category');
   assert.match(ui, /function focusLiveCategory\(idx, select = false\) \{[\s\S]+applyFocus\(cats\[i\], false\);[\s\S]+if \(select && name && name !== S\.liveCat\) \{[\s\S]+S\.liveCat = name;[\s\S]+S\._liveCatApplyT = setTimeout\(applyLiveCatRender, 150\);[\s\S]+function applyLiveCatRender\(\) \{[\s\S]+renderLiveTvBody\(\);[\s\S]+requestAnimationFrame\(\(\) => \{[\s\S]+focusLiveCategory\(i\);[\s\S]+\}\);/,
@@ -6739,13 +6775,13 @@ test('web shell avoids known TV paint/focus regressions', () => {
   // Preferences shows when an app update is available (semver compare of current vs latest release).
   assert.match(ui, /function compareSemver\(a, b\) \{[\s\S]+const updateAvailable = !!\(curVer && latestVer && compareSemver\(curVer, latestVer\) < 0\);[\s\S]+status\.classList\.toggle\('updateAvail', updateAvailable\)/,
     'the app-update box should detect and flag when a newer release is available');
-  // Proactive update pop-up (Android shell, once per launch, never during playback).
+  // Proactive update pop-up (native Android / Windows shells, once per launch, never during playback).
   assert.ok(ui.includes('id="updateModal"') && ui.includes('id="updateModalGo"') && ui.includes('id="updateModalLater"'),
     'a proactive update modal with Update/Later buttons exists');
-  assert.match(ui, /async function maybePromptAppUpdate\(\) \{[\s\S]+if \(_updatePromptDone\) return;[\s\S]+if \(!\(window\.TriboonTV && typeof TriboonTV\.appVersion === 'function'\)\) return;[\s\S]+compareSemver\(curVer, latestVer\) >= 0\) return;[\s\S]+if \(S\.playing \|\| S\.view !== 'home'\) return;[\s\S]+_updatePromptDone = true;[\s\S]+captureOverlayReturn\('updateModal'\)[\s\S]+\$\('updateModal'\)\.classList\.add\('open'\)/,
-    'update prompt is Android-shell only, fires at most once per launch, and never interrupts playback or another page');
-  assert.match(ui, /\$\('updateModalGo'\)\.addEventListener\('click', \(\) => \{ closeUpdateModal\(\); openApkUpdate\(\); \}\)/,
-    'the pop-up Update button installs via openApkUpdate');
+  assert.match(ui, /async function maybePromptAppUpdate\(\) \{[\s\S]+if \(_updatePromptDone\) return;[\s\S]+if \(!\(window\.TriboonTV && typeof TriboonTV\.appVersion === 'function'\)\) return;[\s\S]+nativeAppUpdateKind\(\)[\s\S]+compareSemver\(curVer, latestVer\) >= 0\) return;[\s\S]+if \(S\.playing \|\| S\.view !== 'home'\) return;[\s\S]+_updatePromptDone = true;[\s\S]+captureOverlayReturn\('updateModal'\)[\s\S]+\$\('updateModal'\)\.classList\.add\('open'\)/,
+    'update prompt is native-shell only, fires at most once per launch, and never interrupts playback or another page');
+  assert.match(ui, /\$\('updateModalGo'\)\.addEventListener\('click', \(\) => \{ closeUpdateModal\(\); openCurrentAppUpdate\(\); \}\)/,
+    'the pop-up Update button installs the current device app');
   assert.match(ui, /if \(\$\('updateModal'\)\.classList\.contains\('open'\)\) \{[\s\S]+closeUpdateModal\(\);[\s\S]+dpadCycle\(\$\('updateModal'\), k\)/,
     'the update modal is D-pad navigable and closes (Later) on hardware Back/Esc');
   assert.match(ui, /hydrateAppShellData\(\);[\s\S]+maybePromptAppUpdate\(\)\.catch\(\(\) => \{\}\);/,
@@ -6814,8 +6850,12 @@ test('web shell avoids known TV paint/focus regressions', () => {
     'the native VOD progress tick drives the queued alass sync');
   assert.match(ui, /window\.__tvNativeVideoStats = \(raw, token\) => \{[\s\S]+runPendingNativeSync\(\);/,
     'the native stats tick also drives the queued alass sync (covers paused playback)');
-  assert.match(ui, /function applyMenuPrefs\(\) \{[\s\S]+const railMain = \$\('railMain'\) \|\| \$\('rail'\);[\s\S]+railMain\.querySelector\(`\.railBtn\[data-nav="\$\{nav\}"\]`\)[\s\S]+railMain\.insertBefore\(btn, firstMainNav\(\)\);/,
+  assert.match(ui, /function applyMenuPrefs\(\) \{[\s\S]+const railMain = \$\('railMain'\) \|\| \$\('rail'\);[\s\S]+railMain\.insertBefore\(btn, firstMovable\(\)\);/,
     'menu preference reordering should only move buttons inside the scrollable rail body, never pinned footer buttons');
+  assert.match(ui, /function menuRailOrder\(p, libKeys\) \{[\s\S]+p\.order\.filter[\s\S]+libKeys\.filter/,
+    'local libraries share the same menu order as Home, so they can sit first');
+  assert.match(ui, /wrap\.appendChild\(b\);[\s\S]+if \(S\.user\) applyMenuPrefs\(\);/,
+    'library buttons are painted before menu order runs so a library can sit above Home');
   assert.doesNotMatch(ui, /rail\.insertBefore\(btn/,
     'pinned rail footer must not be reordered through the old direct-rail insert path');
 });
@@ -7782,4 +7822,69 @@ test('audit contracts: local age gate, next-episode recency, music queue, scanne
     'the periodic sweep prunes expired geoCache entries');
   assert.match(server, /if \(geoCache\.size > 500\) \{/,
     'geoCache is size-capped as a backstop');
+});
+
+test('app updates: Android, Windows, and other browsers each see only their own installer', () => {
+  const vm = require('node:vm');
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const start = ui.indexOf('function isWindowsDesktopClient()');
+  const end = ui.indexOf('function compareSemver(', start);
+  assert.ok(start >= 0 && end > start, 'platform update helpers must stay next to the update box');
+  const helpers = ui.slice(start, end);
+  const android = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'app', 'triboon', 'tv', 'UpdateVerifier.java'), 'utf8');
+  assert.match(android, /"\/d1same\/triboon\/releases\/latest\/download\/triboon\.apk"\.equals\(path\)/,
+    'Android still accepts only the official APK path');
+  assert.doesNotMatch(android, /Triboon-Windows-/,
+    'Android must not accept a Windows installer');
+
+  function visibility({ ua, windowsBridge = false, admin = false }) {
+    const els = {
+      apkUpdate: { style: { display: '' } },
+      winClientUpdate: { style: { display: 'none' } },
+      winServerUpdate: { style: { display: 'none' } },
+      appUpdateCopy: { textContent: '' },
+    };
+    const sandbox = {
+      window: windowsBridge ? { TriboonTV: { __triboonWindowsBridge: true } } : {},
+      navigator: { userAgent: ua },
+      S: { user: { role: admin ? 'admin' : 'user' } },
+      isTriboonAndroidShell() { return /TriboonTV|TriboonAndroid/.test(ua); },
+      $(id) { return els[id]; },
+    };
+    vm.runInNewContext(helpers, sandbox);
+    return {
+      apk: els.apkUpdate.style.display !== 'none',
+      win: els.winClientUpdate.style.display !== 'none',
+      server: els.winServerUpdate.style.display !== 'none',
+      kind: sandbox.nativeAppUpdateKind(),
+    };
+  }
+
+  const androidTv = visibility({ ua: 'Mozilla/5.0 Linux Android 12 TriboonTV' });
+  assert.deepStrictEqual(androidTv, { apk: true, win: false, server: false, kind: 'android' },
+    'Android TV still shows only the APK');
+
+  const androidPhone = visibility({ ua: 'Mozilla/5.0 Linux Android 14 TriboonAndroid' });
+  assert.deepStrictEqual(androidPhone, { apk: true, win: false, server: false, kind: 'android' },
+    'Android phone still shows only the APK');
+
+  const androidOnWindowsWords = visibility({ ua: 'Mozilla/5.0 Windows NT 10.0 TriboonTV' });
+  assert.deepStrictEqual(androidOnWindowsWords, { apk: true, win: false, server: false, kind: 'android' },
+    'an Android shell wins even if the UA also says Windows');
+
+  const winClient = visibility({ ua: 'Mozilla/5.0 Windows NT 10.0', windowsBridge: true, admin: true });
+  assert.deepStrictEqual(winClient, { apk: false, win: true, server: true, kind: 'windows' },
+    'Windows client shows the Windows app and, for admins, the server');
+
+  const winUser = visibility({ ua: 'Mozilla/5.0 Windows NT 10.0', windowsBridge: true, admin: false });
+  assert.deepStrictEqual(winUser, { apk: false, win: true, server: false, kind: 'windows' },
+    'a non-admin Windows user does not see the server installer');
+
+  const mac = visibility({ ua: 'Mozilla/5.0 Macintosh Intel Mac OS X 14' });
+  assert.deepStrictEqual(mac, { apk: true, win: false, server: false, kind: '' },
+    'a Mac browser keeps the APK download and hides Windows installers');
+
+  const linux = visibility({ ua: 'Mozilla/5.0 X11 Linux x86_64' });
+  assert.deepStrictEqual(linux, { apk: true, win: false, server: false, kind: '' },
+    'a Linux browser keeps the APK download and hides Windows installers');
 });
